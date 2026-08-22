@@ -23,6 +23,12 @@ func run(args []string, stdout io.Writer) int {
 		return cmdWatch(rest, stdout)
 	case "mcp":
 		return cmdMCP(rest, stdout)
+	case "install":
+		return cmdInstall(rest, stdout)
+	case "hook":
+		return cmdHook(rest, stdout)
+	case "status":
+		return cmdStatus(rest, stdout)
 	case "person":
 		return cmdPerson(rest, stdout)
 	case "setup":
