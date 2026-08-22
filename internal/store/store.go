@@ -33,6 +33,22 @@ CREATE TRIGGER IF NOT EXISTS knowledge_au AFTER UPDATE ON knowledge BEGIN
   INSERT INTO knowledge_fts(knowledge_fts, rowid, title, body) VALUES('delete', old.id, old.title, old.body);
   INSERT INTO knowledge_fts(rowid, title, body) VALUES (new.id, new.title, new.body);
 END;
+CREATE TABLE IF NOT EXISTS sessions(
+  id INTEGER PRIMARY KEY,
+  harness TEXT NOT NULL, external_id TEXT NOT NULL,
+  project TEXT NOT NULL DEFAULT '', branch TEXT NOT NULL DEFAULT '', machine TEXT NOT NULL DEFAULT '',
+  cwd TEXT NOT NULL DEFAULT '', started_at TEXT NOT NULL, last_seen_at TEXT NOT NULL,
+  UNIQUE(harness, external_id));
+CREATE TABLE IF NOT EXISTS session_chunks(
+  id INTEGER PRIMARY KEY,
+  session_id INTEGER NOT NULL REFERENCES sessions(id),
+  seq INTEGER NOT NULL, role TEXT NOT NULL DEFAULT '',
+  text TEXT NOT NULL DEFAULT '', raw TEXT NOT NULL,
+  UNIQUE(session_id, seq));
+CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(text, content='session_chunks', content_rowid='id');
+CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON session_chunks BEGIN
+  INSERT INTO chunks_fts(rowid, text) VALUES (new.id, new.text);
+END;
 `
 
 func Open(path string) (*Store, error) {
