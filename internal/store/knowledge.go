@@ -86,6 +86,21 @@ func (s *Store) UpdateKnowledge(id int64, patch map[string]string) error {
 	return err
 }
 
+func (s *Store) KnowledgeByID(id int64) (Knowledge, error) {
+	rows, err := s.db.Query(`SELECT `+knowledgeCols+` FROM knowledge WHERE id = ?`, id)
+	if err != nil {
+		return Knowledge{}, err
+	}
+	ks, err := scanKnowledge(rows)
+	if err != nil {
+		return Knowledge{}, err
+	}
+	if len(ks) == 0 {
+		return Knowledge{}, sql.ErrNoRows
+	}
+	return ks[0], nil
+}
+
 func (s *Store) KnowledgeForContext(ax scope.Axes) ([]Knowledge, error) {
 	where, args := ax.UnionWhere()
 	rows, err := s.db.Query(`SELECT `+knowledgeCols+` FROM knowledge
