@@ -1,3 +1,0 @@
-{"type":"queue-operation","operation":"enqueue","timestamp":"2026-08-22T11:26:18.647Z","sessionId":"9708008b-352a-4cd7-8373-6ae9588bf511"}
-{"type":"user","cwd":"/home/user/Projects/demo","gitBranch":"main","sessionId":"9708008b-352a-4cd7-8373-6ae9588bf511","timestamp":"2026-08-22T11:26:19.622Z","message":{"role":"user","content":"fix the auth bug"}}
-{"type":"assistant","cwd":"/home/user/Projects/demo","gitBranch":"main","sessionId":"9708008b-352a-4cd7-8373-6ae9588bf511","timestamp":"2026-08-22T11:26:25.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Looking at the oauth flow now."}]}}
