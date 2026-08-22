@@ -112,11 +112,24 @@ func (s *Store) KnowledgeForContext(ax scope.Axes) ([]Knowledge, error) {
 	return scanKnowledge(rows)
 }
 
+// SearchKnowledge matches only the axes the caller set.
 func (s *Store) SearchKnowledge(q string, filter scope.Axes, limit int) ([]Knowledge, error) {
+	where, args := filter.FilterWhere()
+	return s.searchKnowledge(q, where, args, limit)
+}
+
+// SearchKnowledgeForContext searches the same union a session reads: global,
+// machine, project and their combinations. Without it, a session on a branch
+// could not find global or project-level knowledge.
+func (s *Store) SearchKnowledgeForContext(q string, ax scope.Axes, limit int) ([]Knowledge, error) {
+	where, args := ax.UnionWhere()
+	return s.searchKnowledge(q, where, args, limit)
+}
+
+func (s *Store) searchKnowledge(q, where string, args []any, limit int) ([]Knowledge, error) {
 	if limit <= 0 {
 		limit = 20
 	}
-	where, args := filter.FilterWhere()
 	args = append([]any{ftsQuery(q)}, args...)
 	args = append(args, limit)
 	rows, err := s.db.Query(`SELECT `+prefix(knowledgeCols, "k.")+`

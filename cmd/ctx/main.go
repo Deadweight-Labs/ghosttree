@@ -16,8 +16,17 @@ func run(args []string, stdout io.Writer) int {
 		return 2
 	}
 	cmd, rest := args[0], args[1:]
-	_ = rest
 	switch cmd {
+	case "serve":
+		return cmdServe(rest, stdout)
+	case "watch":
+		return cmdWatch(rest, stdout)
+	case "mcp":
+		return cmdMCP(rest, stdout)
+	case "person":
+		return cmdPerson(rest, stdout)
+	case "setup":
+		return cmdSetup(rest, stdout)
 	case "version":
 		fmt.Fprintf(stdout, "ctx %s\n", version)
 		return 0

@@ -153,7 +153,12 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 	limit := intParam(r, "limit", 20)
 	res := searchResult{Knowledge: []store.Knowledge{}, Sessions: []store.SessionHit{}}
 	if kind == "knowledge" || kind == "all" {
-		ks, err := a.st.SearchKnowledge(q, filter, limit)
+		// scope=union searches what the session would read, not an exact match.
+		search := a.st.SearchKnowledge
+		if r.URL.Query().Get("scope") == "union" {
+			search = a.st.SearchKnowledgeForContext
+		}
+		ks, err := search(q, filter, limit)
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
