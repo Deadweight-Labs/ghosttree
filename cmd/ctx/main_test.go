@@ -101,6 +101,28 @@ func failed(output, checkName string) bool {
 	return true // check never appeared at all
 }
 
+func TestReviewRejectsBadArguments(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	cases := map[string][]string{
+		"unknown subcommand": {"review", "bogus"},
+		"approve without id": {"review", "approve"},
+		"non-numeric id":     {"review", "approve", "abc"},
+	}
+	for name, args := range cases {
+		var out bytes.Buffer
+		if code := run(args, &out); code == 0 {
+			t.Errorf("%s: exit code = 0, want non-zero", name)
+		}
+		if got := out.String(); strings.Contains(got, "unknown command") {
+			t.Errorf("%s: review is not wired up: %s", name, got)
+		} else if !strings.Contains(got, "usage: ctx review") {
+			t.Errorf("%s: want review usage, got %q", name, got)
+		}
+	}
+}
+
 func TestRunUnknownCommand(t *testing.T) {
 	var out bytes.Buffer
 	if code := run([]string{"nope"}, &out); code == 0 {

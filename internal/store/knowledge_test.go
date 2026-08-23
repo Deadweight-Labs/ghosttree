@@ -58,6 +58,75 @@ func TestKnowledgeOrderingAndStatus(t *testing.T) {
 	_ = id1
 }
 
+func TestQuarantinedIsInvisibleUntilApproved(t *testing.T) {
+	s := openTest(t)
+	s.InsertKnowledge(Knowledge{Type: "note", Title: "quarantined finding about private network", Body: "b",
+		Origin: "distilled", Confidence: "quarantined"})
+	s.InsertKnowledge(Knowledge{Type: "note", Title: "staged finding about private network", Body: "b",
+		Origin: "distilled", Confidence: "staged"})
+
+	ctx, err := s.KnowledgeForContext(scope.Axes{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ctx) != 1 || ctx[0].Confidence != "staged" {
+		t.Errorf("context must show staged but hide quarantined, got %+v", ctx)
+	}
+	hits, _ := s.SearchKnowledge("private network", scope.Axes{}, 10)
+	if len(hits) != 1 {
+		t.Errorf("search returned %d hits, want 1 (quarantined excluded)", len(hits))
+	}
+}
+
+func TestContextOrdersByTrust(t *testing.T) {
+	s := openTest(t)
+	s.InsertKnowledge(Knowledge{Type: "note", Title: "c-staged", Body: "b", Origin: "distilled", Confidence: "staged"})
+	s.InsertKnowledge(Knowledge{Type: "note", Title: "b-trusted", Body: "b", Confidence: "trusted"})
+	s.InsertKnowledge(Knowledge{Type: "note", Title: "a-verified", Body: "b", Confidence: "verified"})
+	got, _ := s.KnowledgeForContext(scope.Axes{})
+	var order []string
+	for _, k := range got {
+		order = append(order, k.Title)
+	}
+	want := []string{"a-verified", "b-trusted", "c-staged"}
+	for i := range want {
+		if i >= len(order) || order[i] != want[i] {
+			t.Fatalf("order = %v, want %v", order, want)
+		}
+	}
+}
+
+func TestInsertDefaultsByOrigin(t *testing.T) {
+	s := openTest(t)
+	id, err := s.InsertKnowledge(Knowledge{Type: "note", Title: "from an agent", Body: "b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	k, _ := s.KnowledgeByID(id)
+	if k.Origin != "agent" || k.Confidence != "trusted" {
+		t.Errorf("agent default = %q/%q, want agent/trusted", k.Origin, k.Confidence)
+	}
+
+	id, err = s.InsertKnowledge(Knowledge{Type: "note", Title: "from a distiller", Body: "b", Origin: "distilled"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	k, _ = s.KnowledgeByID(id)
+	if k.Confidence != "quarantined" {
+		t.Errorf("distilled default = %q, want quarantined", k.Confidence)
+	}
+	if k.SupersededBy != 0 {
+		t.Errorf("SupersededBy = %d, want 0", k.SupersededBy)
+	}
+}
+
+func TestInsertRejectsUnknownConfidence(t *testing.T) {
+	s := openTest(t)
+	if _, err := s.InsertKnowledge(Knowledge{Type: "note", Title: "t", Body: "b", Confidence: "observation"}); err == nil {
+		t.Error("the old 'observation' value must be rejected by the CHECK")
+	}
+}
+
 func TestSearchKnowledge(t *testing.T) {
 	s := openTest(t)
 	s.InsertKnowledge(Knowledge{Type: "pitfall", Title: "ufw drops LAN", Body: "ssh only via private network", Scope: scope.Axes{Machine: "workstation-b"}})

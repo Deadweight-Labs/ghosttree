@@ -24,6 +24,16 @@ func cmdServe(args []string, stdout io.Writer) int {
 		return 1
 	}
 	defer st.Close()
+	// Open creates missing tables but never alters an existing one, so an
+	// out-of-date knowledge table would only surface as puzzling SQL errors
+	// once an agent writes. Refuse to serve instead.
+	if current, err := store.SchemaCurrent(st.DB()); err != nil {
+		fmt.Fprintf(stdout, "cannot inspect schema: %v\n", err)
+		return 1
+	} else if !current {
+		fmt.Fprintf(stdout, "database schema is out of date - run 'ctx upgrade-schema --db %s' first\n", *db)
+		return 1
+	}
 	fmt.Fprintf(stdout, "ghosttree %s listening on %s (db %s)\n", version, *listen, *db)
 	if err := http.ListenAndServe(*listen, server.New(st)); err != nil {
 		fmt.Fprintf(stdout, "serve: %v\n", err)

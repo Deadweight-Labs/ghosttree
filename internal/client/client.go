@@ -161,6 +161,28 @@ func (c *Client) Remember(k store.Knowledge, autoCtx scope.Axes) (store.Knowledg
 	return saved, err
 }
 
+// PendingEntry mirrors the server's pending payload: the entry plus the
+// evidence and recurrence a human needs in order to judge it.
+type PendingEntry struct {
+	Knowledge  store.Knowledge  `json:"knowledge"`
+	Evidence   []store.Evidence `json:"evidence"`
+	Recurrence int              `json:"recurrence"`
+}
+
+func (c *Client) Pending(limit int) ([]PendingEntry, error) {
+	q := url.Values{}
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	var out []PendingEntry
+	err := c.do("GET", "/api/knowledge/pending", q, nil, &out)
+	return out, err
+}
+
+func (c *Client) PatchKnowledge(id int64, patch map[string]string) error {
+	return c.do("PATCH", "/api/knowledge/"+strconv.FormatInt(id, 10), nil, patch, nil)
+}
+
 func (c *Client) Knowledge(ax scope.Axes) ([]store.Knowledge, error) {
 	var out []store.Knowledge
 	err := c.do("GET", "/api/knowledge", axesQuery(ax), nil, &out)

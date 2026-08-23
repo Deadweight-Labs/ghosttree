@@ -33,6 +33,10 @@ func run(args []string, stdout io.Writer) int {
 		return cmdExport(rest, stdout)
 	case "doctor":
 		return cmdDoctor(rest, stdout)
+	case "review":
+		return cmdReview(rest, stdout)
+	case "upgrade-schema":
+		return cmdUpgradeSchema(rest, stdout)
 	case "person":
 		return cmdPerson(rest, stdout)
 	case "setup":
@@ -57,6 +61,8 @@ const usage = `usage: ctx <command>
   status   show local setup state
   doctor   check the harness wiring for drift (--fix to repair)
   export   write a session's original transcript as JSONL
+  review   approve or reject distilled knowledge
+  upgrade-schema  one-off knowledge table rebuild for trust tiers
   version  print version`
 
 func main() {

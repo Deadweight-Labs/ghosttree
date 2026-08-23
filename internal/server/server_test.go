@@ -44,6 +44,78 @@ func req(t *testing.T, method, url, token string, body any) *http.Response {
 	return resp
 }
 
+func TestPendingListsUnapprovedWithEvidence(t *testing.T) {
+	srv, tok := newTestServer(t)
+	req(t, "POST", srv.URL+"/api/knowledge", tok, map[string]any{
+		"type": "pitfall", "title": "distilled claim", "body": "b",
+		"origin": "distilled", "confidence": "quarantined"})
+	req(t, "POST", srv.URL+"/api/knowledge", tok, map[string]any{
+		"type": "note", "title": "an agent wrote this", "body": "b"})
+
+	resp := req(t, "GET", srv.URL+"/api/knowledge/pending", tok, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	var pending []PendingEntry
+	json.NewDecoder(resp.Body).Decode(&pending)
+	if len(pending) != 1 {
+		t.Fatalf("pending = %d entries, want 1 (the trusted one is not pending)", len(pending))
+	}
+	if pending[0].Knowledge.Title != "distilled claim" {
+		t.Errorf("wrong entry: %+v", pending[0].Knowledge)
+	}
+}
+
+func TestApproveRaisesConfidence(t *testing.T) {
+	srv, tok := newTestServer(t)
+	req(t, "POST", srv.URL+"/api/knowledge", tok, map[string]any{
+		"type": "pitfall", "title": "distilled claim", "body": "b",
+		"origin": "distilled", "confidence": "quarantined"})
+	if resp := req(t, "PATCH", srv.URL+"/api/knowledge/1", tok,
+		map[string]string{"confidence": "verified"}); resp.StatusCode != 204 {
+		t.Fatalf("patch status = %d", resp.StatusCode)
+	}
+	resp := req(t, "GET", srv.URL+"/api/knowledge/pending", tok, nil)
+	var pending []PendingEntry
+	json.NewDecoder(resp.Body).Decode(&pending)
+	if len(pending) != 0 {
+		t.Errorf("approved entry must leave the pending list, got %+v", pending)
+	}
+}
+
+func TestBootstrapSeparatesUnconfirmed(t *testing.T) {
+	confirmed := store.Knowledge{Type: "pitfall", Title: "confirmed thing", Body: "b", Confidence: "trusted"}
+	staged := store.Knowledge{Type: "pitfall", Title: "unconfirmed thing", Body: "b", Confidence: "staged"}
+	out := renderBootstrap([]store.Knowledge{confirmed, staged}, 4000)
+
+	iConf := strings.Index(out, "confirmed thing")
+	iStaged := strings.Index(out, "unconfirmed thing")
+	if iConf < 0 || iStaged < 0 {
+		t.Fatalf("both entries must appear:\n%s", out)
+	}
+	if iConf > iStaged {
+		t.Errorf("confirmed knowledge must come first:\n%s", out)
+	}
+	if !strings.Contains(out, "Unconfirmed") {
+		t.Errorf("the staged section must be labelled as unconfirmed:\n%s", out)
+	}
+}
+
+// The budget must cut the uncertain material first, not the proven material.
+func TestBootstrapBudgetDropsStagedFirst(t *testing.T) {
+	entries := []store.Knowledge{
+		{Type: "note", Title: "trusted one", Body: strings.Repeat("x", 150), Confidence: "trusted"},
+		{Type: "note", Title: "staged one", Body: strings.Repeat("y", 150), Confidence: "staged"},
+	}
+	out := renderBootstrap(entries, 260)
+	if !strings.Contains(out, "trusted one") {
+		t.Errorf("trusted entry must survive a tight budget:\n%s", out)
+	}
+	if strings.Contains(out, "staged one") {
+		t.Errorf("staged entry should have been cut first:\n%s", out)
+	}
+}
+
 func TestRawExportReturnsNDJSON(t *testing.T) {
 	srv, tok := newTestServer(t)
 	req(t, "POST", srv.URL+"/api/sessions", tok, store.Session{

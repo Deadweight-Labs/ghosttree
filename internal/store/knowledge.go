@@ -9,22 +9,24 @@ import (
 )
 
 type Knowledge struct {
-	ID         int64      `json:"id"`
-	Type       string     `json:"type"` // pitfall|decision|note|plan
-	Title      string     `json:"title"`
-	Body       string     `json:"body"`
-	Scope      scope.Axes `json:"scope"`
-	Confidence string     `json:"confidence"` // observation|verified
-	Status     string     `json:"status"`     // active|stale|deprecated
-	Person     string     `json:"person"`
-	Harness    string     `json:"harness,omitempty"`
-	SessionRef string     `json:"session_ref,omitempty"`
-	CreatedAt  string     `json:"created_at"`
-	UpdatedAt  string     `json:"updated_at"`
+	ID           int64      `json:"id"`
+	Type         string     `json:"type"` // pitfall|decision|note|plan
+	Title        string     `json:"title"`
+	Body         string     `json:"body"`
+	Scope        scope.Axes `json:"scope"`
+	Confidence   string     `json:"confidence"`              // quarantined|staged|trusted|verified
+	Status       string     `json:"status"`                  // active|stale|deprecated|superseded
+	Origin       string     `json:"origin"`                  // agent|distilled|human
+	SupersededBy int64      `json:"superseded_by,omitempty"` // 0 = not superseded
+	Person       string     `json:"person"`
+	Harness      string     `json:"harness,omitempty"`
+	SessionRef   string     `json:"session_ref,omitempty"`
+	CreatedAt    string     `json:"created_at"`
+	UpdatedAt    string     `json:"updated_at"`
 }
 
 const knowledgeCols = `id, type, title, body, project, branch, machine,
-	confidence, status, person, harness, session_ref, created_at, updated_at`
+	confidence, status, origin, superseded_by, person, harness, session_ref, created_at, updated_at`
 
 // ftsQuery turns user input into a safe FTS5 expression: each token becomes a
 // quoted phrase joined with AND. Quoting is what keeps FTS5 operator syntax
@@ -43,25 +45,50 @@ func ftsQuery(q string) string {
 }
 
 func (s *Store) InsertKnowledge(k Knowledge) (int64, error) {
+	if k.Origin == "" {
+		k.Origin = "agent"
+	}
 	if k.Confidence == "" {
-		k.Confidence = "observation"
+		// A distilled claim starts untrusted until evidence and recurrence
+		// raise it; anything an agent or a human wrote deliberately does not.
+		if k.Origin == "distilled" {
+			k.Confidence = "quarantined"
+		} else {
+			k.Confidence = "trusted"
+		}
 	}
 	if k.Status == "" {
 		k.Status = "active"
 	}
 	ts := now()
 	res, err := s.db.Exec(`INSERT INTO knowledge(type, title, body, project, branch, machine,
-		confidence, status, person, harness, session_ref, created_at, updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		confidence, status, origin, superseded_by, person, harness, session_ref, created_at, updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		k.Type, k.Title, k.Body, k.Scope.Project, k.Scope.Branch, k.Scope.Machine,
-		k.Confidence, k.Status, k.Person, k.Harness, k.SessionRef, ts, ts)
+		k.Confidence, k.Status, k.Origin, k.SupersededBy,
+		k.Person, k.Harness, k.SessionRef, ts, ts)
 	if err != nil {
 		return 0, err
 	}
 	return res.LastInsertId()
 }
 
-var patchable = map[string]bool{"title": true, "body": true, "confidence": true, "status": true, "type": true}
+var patchable = map[string]bool{"title": true, "body": true, "confidence": true,
+	"status": true, "type": true, "origin": true, "superseded_by": true}
+
+// PendingKnowledge returns everything awaiting a human decision.
+func (s *Store) PendingKnowledge(limit int) ([]Knowledge, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := s.db.Query(`SELECT `+knowledgeCols+` FROM knowledge
+		WHERE status = 'active' AND confidence IN ('quarantined','staged')
+		ORDER BY created_at DESC, id DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	return scanKnowledge(rows)
+}
 
 func (s *Store) UpdateKnowledge(id int64, patch map[string]string) error {
 	for col := range patch {
@@ -71,7 +98,7 @@ func (s *Store) UpdateKnowledge(id int64, patch map[string]string) error {
 	}
 	var sets []string
 	var args []any
-	for _, col := range []string{"type", "title", "body", "confidence", "status"} {
+	for _, col := range []string{"type", "title", "body", "confidence", "status", "origin", "superseded_by"} {
 		if v, ok := patch[col]; ok {
 			sets = append(sets, col+" = ?")
 			args = append(args, v)
@@ -101,11 +128,15 @@ func (s *Store) KnowledgeByID(id int64) (Knowledge, error) {
 	return ks[0], nil
 }
 
+// trustOrder ranks the confidence tiers for reading. Kept as one expression so
+// every read path sorts identically.
+const trustOrder = `CASE confidence WHEN 'verified' THEN 0 WHEN 'trusted' THEN 1 ELSE 2 END`
+
 func (s *Store) KnowledgeForContext(ax scope.Axes) ([]Knowledge, error) {
 	where, args := ax.UnionWhere()
 	rows, err := s.db.Query(`SELECT `+knowledgeCols+` FROM knowledge
-		WHERE status = 'active' AND `+where+`
-		ORDER BY (confidence = 'verified') DESC, created_at DESC, id DESC`, args...)
+		WHERE status = 'active' AND confidence != 'quarantined' AND `+where+`
+		ORDER BY `+trustOrder+`, created_at DESC, id DESC`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -134,7 +165,8 @@ func (s *Store) searchKnowledge(q, where string, args []any, limit int) ([]Knowl
 	args = append(args, limit)
 	rows, err := s.db.Query(`SELECT `+prefix(knowledgeCols, "k.")+`
 		FROM knowledge_fts f JOIN knowledge k ON k.id = f.rowid
-		WHERE knowledge_fts MATCH ? AND `+where+` AND k.status != 'deprecated'
+		WHERE knowledge_fts MATCH ? AND `+where+`
+		  AND k.status != 'deprecated' AND k.confidence != 'quarantined'
 		ORDER BY f.rank LIMIT ?`, args...)
 	if err != nil {
 		return nil, err
@@ -158,7 +190,8 @@ func scanKnowledge(rows *sql.Rows) ([]Knowledge, error) {
 		var k Knowledge
 		if err := rows.Scan(&k.ID, &k.Type, &k.Title, &k.Body,
 			&k.Scope.Project, &k.Scope.Branch, &k.Scope.Machine,
-			&k.Confidence, &k.Status, &k.Person, &k.Harness, &k.SessionRef,
+			&k.Confidence, &k.Status, &k.Origin, &k.SupersededBy,
+			&k.Person, &k.Harness, &k.SessionRef,
 			&k.CreatedAt, &k.UpdatedAt); err != nil {
 			return nil, err
 		}

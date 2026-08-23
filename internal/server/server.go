@@ -31,6 +31,7 @@ func New(st *store.Store) http.Handler {
 	mux.HandleFunc("GET /api/sessions/{id}", a.readSession)
 	mux.HandleFunc("POST /api/knowledge", a.createKnowledge)
 	mux.HandleFunc("GET /api/knowledge", a.listKnowledge)
+	mux.HandleFunc("GET /api/knowledge/pending", a.pendingKnowledge)
 	mux.HandleFunc("PATCH /api/knowledge/{id}", a.patchKnowledge)
 	mux.HandleFunc("GET /api/search", a.search)
 	mux.HandleFunc("GET /api/context/bootstrap", a.bootstrap)

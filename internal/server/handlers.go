@@ -141,6 +141,36 @@ func (a *api) listKnowledge(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, ks)
 }
 
+// PendingEntry is a knowledge entry plus what a human needs to judge it.
+type PendingEntry struct {
+	Knowledge  store.Knowledge  `json:"knowledge"`
+	Evidence   []store.Evidence `json:"evidence"`
+	Recurrence int              `json:"recurrence"`
+}
+
+func (a *api) pendingKnowledge(w http.ResponseWriter, r *http.Request) {
+	ks, err := a.st.PendingKnowledge(intParam(r, "limit", 50))
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	out := []PendingEntry{}
+	for _, k := range ks {
+		ev, err := a.st.EvidenceFor(k.ID)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		n, err := a.st.Recurrence(k.ID)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		out = append(out, PendingEntry{Knowledge: k, Evidence: ev, Recurrence: n})
+	}
+	writeJSON(w, 200, out)
+}
+
 func (a *api) patchKnowledge(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathID(r)
 	if !ok {
@@ -210,8 +240,10 @@ func (a *api) bootstrap(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, renderBootstrap(entries, intParam(r, "budget", defaultBudget)))
 }
 
-// renderBootstrap builds the auto-injected context package: active entries of
-// the scope, grouped by type, verified before observation, hard char budget.
+// renderBootstrap builds the auto-injected context package. Confirmed
+// knowledge comes first and unconfirmed knowledge is fenced off in its own
+// labelled section, so a tight budget cuts the uncertain material first and an
+// agent can tell the two apart.
 func renderBootstrap(entries []store.Knowledge, budget int) string {
 	if budget <= 0 {
 		budget = defaultBudget
@@ -219,38 +251,59 @@ func renderBootstrap(entries []store.Knowledge, budget int) string {
 	if len(entries) == 0 {
 		return ""
 	}
-	byType := map[string][]store.Knowledge{}
+	var confirmed, staged []store.Knowledge
 	for _, k := range entries {
-		byType[k.Type] = append(byType[k.Type], k)
+		if k.Confidence == "staged" {
+			staged = append(staged, k)
+		} else {
+			confirmed = append(confirmed, k)
+		}
 	}
 	var b strings.Builder
 	b.WriteString("## Known context (ghosttree)\n")
-	truncated := false
-	for _, t := range []string{"decision", "pitfall", "note", "plan"} {
-		group := byType[t]
-		if len(group) == 0 {
-			continue
-		}
-		header := "\n### " + t + "\n"
-		for i, k := range group {
-			line := fmt.Sprintf("- [%s] %s — %s\n", scopeLabel(k.Scope), k.Title, truncate(oneLine(k.Body), 200))
-			if i == 0 {
-				line = header + line
-			}
-			if b.Len()+len(line) > budget {
-				truncated = true
-				break
-			}
-			b.WriteString(line)
-		}
-		if truncated {
-			break
-		}
+	truncated := writeGroups(&b, confirmed, budget, "")
+	if len(staged) > 0 && !truncated {
+		truncated = writeGroups(&b, staged, budget,
+			"\n## Unconfirmed (distilled, not yet approved — verify before relying on it)\n")
 	}
 	if truncated {
 		b.WriteString("…(truncated, use context_search for more)\n")
 	}
 	return b.String()
+}
+
+// writeGroups appends entries grouped by type and reports whether the budget
+// ran out. header is written lazily, so an empty group prints nothing.
+func writeGroups(b *strings.Builder, entries []store.Knowledge, budget int, header string) bool {
+	if len(entries) == 0 {
+		return false
+	}
+	byType := map[string][]store.Knowledge{}
+	for _, k := range entries {
+		byType[k.Type] = append(byType[k.Type], k)
+	}
+	wroteHeader := header == ""
+	for _, t := range []string{"decision", "pitfall", "note", "plan"} {
+		group := byType[t]
+		if len(group) == 0 {
+			continue
+		}
+		for i, k := range group {
+			line := fmt.Sprintf("- [%s] %s — %s\n", scopeLabel(k.Scope), k.Title, truncate(oneLine(k.Body), 200))
+			if i == 0 {
+				line = "\n### " + t + "\n" + line
+			}
+			if !wroteHeader {
+				line = header + line
+			}
+			if b.Len()+len(line) > budget {
+				return true
+			}
+			b.WriteString(line)
+			wroteHeader = true
+		}
+	}
+	return false
 }
 
 func scopeLabel(ax scope.Axes) string {
