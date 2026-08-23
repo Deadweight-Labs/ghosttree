@@ -125,30 +125,35 @@ func cmdMigrate(args []string, stdout io.Writer) int {
 			continue
 		}
 		pendingArtifacts = append(pendingArtifacts, artifact)
-		if migrate.ShouldDistill(artifact) {
-			result, err := migrate.Distill(context.Background(), model, artifact, content, titles)
-			if err != nil {
-				fmt.Fprintf(stdout, "distill %s: %v\n", artifact.Rel, err)
-				return 1
+		result, err := migrate.Distill(context.Background(), model, artifact, content, titles)
+		if err != nil {
+			fmt.Fprintf(stdout, "distill %s: %v\n", artifact.Rel, err)
+			return 1
+		}
+		for _, item := range result.Items {
+			confidence := ""
+			if item.Type == "instruction" {
+				confidence = "staged"
 			}
-			for _, item := range result.Items {
-				confidence := ""
-				if item.Type == "instruction" {
-					confidence = "staged"
-				}
-				activationRule := activation.Rule{}
-				if item.Type == "instruction" {
-					activationRule = artifact.Activation
-				}
-				candidates = append(candidates, migrationCandidate{item: item, confidence: confidence, activation: activationRule})
-				titles = append(titles, item.Title)
+			activationRule := activation.Rule{}
+			if item.Type == "instruction" {
+				activationRule = artifact.Activation
 			}
-			for _, reason := range result.Dropped {
-				dropped = append(dropped, artifact.Rel+": "+reason)
-			}
+			candidates = append(candidates, migrationCandidate{item: item, confidence: confidence, activation: activationRule})
+			titles = append(titles, item.Title)
+		}
+		for _, reason := range result.Dropped {
+			dropped = append(dropped, artifact.Rel+": "+reason)
 		}
 		if artifact.Kind == "spec" || artifact.Kind == "plan" {
 			candidates = append(candidates, migrationCandidate{item: migrate.Item{Type: "plan", Title: artifact.Rel, Body: content, Source: artifact.Rel}, status: "archived"})
+		}
+		if artifact.Kind == "plan" {
+			for _, step := range migrate.ParseSteps(content) {
+				if step.Done {
+					candidates = append(candidates, migrationCandidate{item: migrate.Item{Type: "request", Title: step.Text, Body: step.Text, Source: fmt.Sprintf("%s#%d", artifact.Rel, step.Line)}})
+				}
+			}
 		}
 	}
 	var newInstructions []migrate.InstructionCandidate

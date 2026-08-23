@@ -57,14 +57,3 @@ func TestScanFindsArtifactsAndSkipsToolState(t *testing.T) {
 		}
 	}
 }
-
-func TestOnlyRuleArtifactsAreDistilledAsCurrentKnowledge(t *testing.T) {
-	for _, tc := range []struct {
-		kind string
-		want bool
-	}{{"rules", true}, {"spec", false}, {"plan", false}} {
-		if got := ShouldDistill(Artifact{Kind: tc.kind}); got != tc.want {
-			t.Errorf("ShouldDistill(%q) = %v, want %v", tc.kind, got, tc.want)
-		}
-	}
-}

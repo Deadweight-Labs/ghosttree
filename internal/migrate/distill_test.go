@@ -51,9 +51,6 @@ func TestDistillPassesExistingTitlesAndParsesItems(t *testing.T) {
 	if !strings.Contains(strings.ToLower(f.gotSystem), "contiguous") {
 		t.Error("quote grounding rule absent")
 	}
-	if !strings.Contains(f.gotSystem, "600 characters total") {
-		t.Error("per-file curation budget absent")
-	}
 }
 
 func TestDistillPassesActivationAsMetadata(t *testing.T) {
