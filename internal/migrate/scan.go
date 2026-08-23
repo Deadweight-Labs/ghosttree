@@ -16,6 +16,11 @@ type Artifact struct {
 	Activation      activation.Rule
 }
 
+// ShouldDistill separates current agent rules from dated historical material.
+// Specs and plans are preserved verbatim as archived cold storage; turning
+// their prose or checkboxes into current instructions would erase time.
+func ShouldDistill(a Artifact) bool { return a.Kind == "rules" }
+
 func Scan(repo string) ([]Artifact, error) {
 	repo, err := filepath.Abs(repo)
 	if err != nil {

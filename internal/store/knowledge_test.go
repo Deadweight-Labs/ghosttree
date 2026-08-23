@@ -220,10 +220,11 @@ func TestSearchKnowledge(t *testing.T) {
 
 func TestNewTypesAndArchivedStatus(t *testing.T) {
 	s := openTest(t)
-	for _, typ := range []string{"instruction", "request"} {
-		if _, err := s.InsertKnowledge(Knowledge{Type: typ, Title: "t-" + typ, Body: "b"}); err != nil {
-			t.Errorf("type %q must be allowed: %v", typ, err)
-		}
+	if _, err := s.InsertKnowledge(Knowledge{Type: "instruction", Title: "t-instruction", Body: "b"}); err != nil {
+		t.Errorf("instruction must be allowed: %v", err)
+	}
+	if _, err := s.InsertKnowledge(Knowledge{Type: "request", Title: "wrong domain", Body: "b"}); err == nil {
+		t.Error("request must be rejected by the knowledge write path")
 	}
 	id, err := s.InsertKnowledge(Knowledge{Type: "plan", Title: "old spec", Body: "b", Status: "archived"})
 	if err != nil {
@@ -246,26 +247,4 @@ func mustContext(t *testing.T, s *Store) []Knowledge {
 		t.Fatal(err)
 	}
 	return ks
-}
-
-func TestRequestDoneRequiresEvidence(t *testing.T) {
-	s := openTest(t)
-	id, _ := s.InsertKnowledge(Knowledge{Type: "request", Title: "wish", Body: "b"})
-	if err := s.SetRequestState(id, "done", "", "", "robin"); err == nil {
-		t.Error("done without evidence must be rejected")
-	}
-	if err := s.SetRequestState(id, "done", "plan", "docs/p.md#42", "robin"); err != nil {
-		t.Errorf("done with evidence must work: %v", err)
-	}
-	if err := s.SetRequestState(id, "open", "", "", "robin"); err != nil {
-		t.Errorf("reopening must work: %v", err)
-	}
-}
-
-func TestRequestStateRejectsNonRequest(t *testing.T) {
-	s := openTest(t)
-	id, _ := s.InsertKnowledge(Knowledge{Type: "note", Title: "not a wish", Body: "b"})
-	if err := s.SetRequestState(id, "open", "", "", "robin"); err == nil {
-		t.Error("non-request accepted")
-	}
 }

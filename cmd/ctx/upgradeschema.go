@@ -35,7 +35,12 @@ func cmdUpgradeSchema(args []string, stdout io.Writer) int {
 		fmt.Fprintf(stdout, "type upgrade failed: %v\n", err)
 		return 1
 	}
-	if trustBackup == "" && typesBackup == "" {
+	requestBackup, err := store.UpgradeRequestDomain(*dbPath)
+	if err != nil {
+		fmt.Fprintf(stdout, "request domain upgrade failed: %v\n", err)
+		return 1
+	}
+	if trustBackup == "" && typesBackup == "" && requestBackup == "" {
 		fmt.Fprintln(stdout, "schema already current, nothing to do")
 		return 0
 	}
@@ -44,6 +49,9 @@ func cmdUpgradeSchema(args []string, stdout io.Writer) int {
 	}
 	if typesBackup != "" {
 		fmt.Fprintf(stdout, "type schema backup written to %s\n", typesBackup)
+	}
+	if requestBackup != "" {
+		fmt.Fprintf(stdout, "request domain backup written to %s\n", requestBackup)
 	}
 	fmt.Fprintln(stdout, "schema upgraded")
 	return 0

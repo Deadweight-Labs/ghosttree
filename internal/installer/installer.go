@@ -28,7 +28,13 @@ and session notes go to ghosttree via the ` + "`context_remember`" + ` MCP tool,
 into source comments. Search prior knowledge with ` + "`context_search`" + ` before
 re-deriving it. Call ` + "`context_get`" + ` again with repository-relative paths before
 working in another subtree, and with an explicit task tag for deploy, security,
-review, test or docs work.`
+review, test or docs work.
+
+For substantial feature, architecture, migration, or multi-session work, use
+` + "`request_search`" + ` before implementation. Continue a matching request and
+associate the current session, or create a request with explicit acceptance
+criteria. Trivial local fixes and routine maintenance do not require a request.
+Mark criteria and requests complete only with concrete evidence.`
 
 func section(body string) string {
 	return markerStart + "\n" + body + "\n" + markerEnd + "\n"

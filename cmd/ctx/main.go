@@ -35,6 +35,8 @@ func run(args []string, stdout io.Writer) int {
 		return cmdDoctor(rest, stdout)
 	case "review":
 		return cmdReview(rest, stdout)
+	case "request":
+		return cmdRequest(rest, stdout)
 	case "migrate":
 		return cmdMigrate(rest, stdout)
 	case "upgrade-schema":
@@ -64,6 +66,7 @@ const usage = `usage: ctx <command>
   doctor   check the harness wiring for drift (--fix to repair)
   export   write a session's original transcript as JSONL
   review   approve or reject distilled knowledge
+  request  search and manage the work ledger
   migrate  move repository agent artifacts into ghosttree
   upgrade-schema  one-off knowledge table rebuild for trust tiers
   version  print version`

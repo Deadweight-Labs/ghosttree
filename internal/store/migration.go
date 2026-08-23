@@ -34,7 +34,13 @@ func (s *Store) BeginMigration(project string, artifacts map[string]string) (int
 
 func (s *Store) CompleteMigration(id int64) error {
 	var missing int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM migration_artifacts a JOIN migration_runs r ON r.id=a.run_id WHERE a.run_id=? AND NOT EXISTS (SELECT 1 FROM migration_evidence e JOIN knowledge k ON k.id=e.knowledge_id WHERE k.project=r.project AND e.source=a.path AND e.digest=a.digest)`, id).Scan(&missing); err != nil {
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM migration_artifacts a JOIN migration_runs r ON r.id=a.run_id
+		WHERE a.run_id=? AND NOT EXISTS (
+		 SELECT 1 FROM migration_evidence e
+		 LEFT JOIN knowledge k ON k.id=e.knowledge_id
+		 LEFT JOIN requests q ON q.id=e.request_id
+		 WHERE COALESCE(k.project,q.project)=r.project AND e.source=a.path AND e.digest=a.digest
+		)`, id).Scan(&missing); err != nil {
 		return err
 	}
 	if missing != 0 {
@@ -75,29 +81,38 @@ type MigratedEntry struct {
 	RequestState, EvidenceKind, EvidenceRef string
 }
 
+type MigratedResult struct {
+	Kind string `json:"kind"`
+	ID   int64  `json:"id"`
+}
+
 // InsertMigrated atomically stores an entry, its source proof and its ledger
 // state. The stable item key makes retries after a partial run idempotent.
-func (s *Store) InsertMigrated(in MigratedEntry) (Knowledge, error) {
+func (s *Store) InsertMigrated(in MigratedEntry) (MigratedResult, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
-		return Knowledge{}, err
+		return MigratedResult{}, err
 	}
 	defer tx.Rollback()
+	var existingKind string
 	var existingID int64
-	err = tx.QueryRow(`SELECT knowledge_id FROM migration_evidence WHERE item_key=?`, in.ItemKey).Scan(&existingID)
+	err = tx.QueryRow(`SELECT CASE WHEN request_id IS NOT NULL THEN 'request' ELSE 'knowledge' END,
+		COALESCE(request_id,knowledge_id) FROM migration_evidence WHERE item_key=?`, in.ItemKey).Scan(&existingKind, &existingID)
 	if err == nil {
-		tx.Rollback()
-		return s.KnowledgeByID(existingID)
+		return MigratedResult{Kind: existingKind, ID: existingID}, nil
 	}
 	if err != sql.ErrNoRows {
-		return Knowledge{}, err
+		return MigratedResult{}, err
 	}
 	k := in.Knowledge
+	if k.Type == "request" {
+		return insertMigratedRequest(tx, in, k)
+	}
 	if err := activation.ValidateRule(k.Activation); err != nil {
-		return Knowledge{}, err
+		return MigratedResult{}, err
 	}
 	if k.Type != "instruction" && (len(k.Activation.Paths) > 0 || len(k.Activation.Tasks) > 0) {
-		return Knowledge{}, fmt.Errorf("activation requires instruction, got %s", k.Type)
+		return MigratedResult{}, fmt.Errorf("activation requires instruction, got %s", k.Type)
 	}
 	if k.Origin == "" {
 		k.Origin = "distilled"
@@ -115,32 +130,69 @@ func (s *Store) InsertMigrated(in MigratedEntry) (Knowledge, error) {
 	ts := now()
 	res, err := tx.Exec(`INSERT INTO knowledge(type,title,body,project,branch,machine,confidence,status,origin,superseded_by,person,harness,session_ref,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, k.Type, k.Title, k.Body, k.Scope.Project, k.Scope.Branch, k.Scope.Machine, k.Confidence, k.Status, k.Origin, k.SupersededBy, k.Person, k.Harness, k.SessionRef, ts, ts)
 	if err != nil {
-		return Knowledge{}, err
+		return MigratedResult{}, err
 	}
 	id, _ := res.LastInsertId()
 	for _, pattern := range k.Activation.Paths {
 		if _, err := tx.Exec(`INSERT INTO instruction_activation_path(knowledge_id,pattern) VALUES(?,?)`, id, pattern); err != nil {
-			return Knowledge{}, err
+			return MigratedResult{}, err
 		}
 	}
 	for _, task := range k.Activation.Tasks {
 		if _, err := tx.Exec(`INSERT INTO instruction_activation_task(knowledge_id,task) VALUES(?,?)`, id, task); err != nil {
-			return Knowledge{}, err
+			return MigratedResult{}, err
 		}
 	}
 	if _, err := tx.Exec(`INSERT INTO migration_evidence(knowledge_id,run_id,source,digest,item_key,quote) VALUES(?,?,?,?,?,?)`, id, in.RunID, k.SessionRef, in.Digest, in.ItemKey, in.Quote); err != nil {
-		return Knowledge{}, err
-	}
-	if k.Type == "request" {
-		if in.RequestState == "done" && in.EvidenceRef == "" {
-			return Knowledge{}, fmt.Errorf("state done requires evidence_ref")
-		}
-		if _, err := tx.Exec(`INSERT INTO request_resolution(knowledge_id,state,evidence_kind,evidence_ref,by_person,at) VALUES(?,?,?,?,?,?)`, id, in.RequestState, in.EvidenceKind, in.EvidenceRef, k.Person, ts); err != nil {
-			return Knowledge{}, err
-		}
+		return MigratedResult{}, err
 	}
 	if err := tx.Commit(); err != nil {
-		return Knowledge{}, err
+		return MigratedResult{}, err
 	}
-	return s.KnowledgeByID(id)
+	return MigratedResult{Kind: "knowledge", ID: id}, nil
+}
+
+func insertMigratedRequest(tx *sql.Tx, in MigratedEntry, k Knowledge) (MigratedResult, error) {
+	state := in.RequestState
+	if state == "" {
+		state = "open"
+	}
+	if state != "open" && state != "done" && state != "dropped" {
+		return MigratedResult{}, fmt.Errorf("invalid request state %q", state)
+	}
+	if state == "done" && in.EvidenceRef == "" {
+		return MigratedResult{}, fmt.Errorf("state done requires evidence_ref")
+	}
+	ts := now()
+	res, err := tx.Exec(`INSERT INTO requests(type,title,description,state,project,branch,machine,origin,person,session_ref,idempotency_key,created_at,updated_at)
+		VALUES('feature',?,?,?,?,?,?,'distilled',?,?,?, ?,?)`, k.Title, k.Body, state, k.Scope.Project, k.Scope.Branch, k.Scope.Machine, k.Person, k.SessionRef, in.ItemKey, ts, ts)
+	if err != nil {
+		return MigratedResult{}, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return MigratedResult{}, err
+	}
+	if _, err := tx.Exec(`INSERT INTO migration_evidence(request_id,run_id,source,digest,item_key,quote) VALUES(?,?,?,?,?,?)`, id, in.RunID, k.SessionRef, in.Digest, in.ItemKey, in.Quote); err != nil {
+		return MigratedResult{}, err
+	}
+	if state == "done" {
+		kind := in.EvidenceKind
+		if kind == "" {
+			kind = "file"
+		}
+		if _, err := tx.Exec(`INSERT INTO request_evidence(request_id,kind,ref,person,created_at) VALUES(?,?,?,?,?)`, id, kind, in.EvidenceRef, k.Person, ts); err != nil {
+			return MigratedResult{}, err
+		}
+	}
+	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at) VALUES(?,'request.migrated',?,?,?)`, id, k.Person, k.SessionRef, ts); err != nil {
+		return MigratedResult{}, err
+	}
+	if _, err := tx.Exec(`INSERT INTO search_documents(kind,domain_id,title,body,project,branch,machine) VALUES('request',?,?,?,?,?,?)`, id, k.Title, k.Body, k.Scope.Project, k.Scope.Branch, k.Scope.Machine); err != nil {
+		return MigratedResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return MigratedResult{}, err
+	}
+	return MigratedResult{Kind: "request", ID: id}, nil
 }

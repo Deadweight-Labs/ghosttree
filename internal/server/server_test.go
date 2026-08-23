@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
+	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
@@ -49,6 +50,25 @@ func TestBootstrapRejectsInvalidActivationContext(t *testing.T) {
 	resp := req(t, "GET", srv.URL+"/api/context/bootstrap?task=release", token, nil)
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestBootstrapMentionsOpenRequestsWithoutListingThem(t *testing.T) {
+	st, _ := store.Open(":memory:")
+	t.Cleanup(func() { st.Close() })
+	token, _ := st.AddPerson("test")
+	_, _ = st.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: "secret ledger title", Scope: scope.Axes{Project: "github.com/x/y"}}})
+	_, _ = st.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "change", Title: "other project", Scope: scope.Axes{Project: "github.com/a/b"}}})
+	srv := httptest.NewServer(New(st))
+	t.Cleanup(srv.Close)
+	resp := req(t, "GET", srv.URL+"/api/context/bootstrap?project=github.com/x/y", token, nil)
+	raw, _ := io.ReadAll(resp.Body)
+	out := string(raw)
+	if !strings.Contains(out, "1 open request") || !strings.Contains(out, "substantial") {
+		t.Fatalf("bootstrap missing compact ledger reminder:\n%s", out)
+	}
+	if strings.Contains(out, "secret ledger title") || strings.Contains(out, "other project") {
+		t.Fatalf("bootstrap leaked request details:\n%s", out)
 	}
 }
 

@@ -26,11 +26,17 @@ func TestInstallCodexIdempotent(t *testing.T) {
 		t.Error("existing config content must be preserved")
 	}
 	agents, _ := os.ReadFile(filepath.Join(home, ".codex", "AGENTS.md"))
+	agentRules := strings.Join(strings.Fields(strings.ToLower(string(agents))), " ")
 	if strings.Count(string(agents), "<!-- ghosttree:start -->") != 1 {
 		t.Errorf("AGENTS.md marker section wrong:\n%s", agents)
 	}
 	if !strings.Contains(string(agents), "context_get") {
 		t.Errorf("AGENTS.md must tell codex to call context_get:\n%s", agents)
+	}
+	for _, want := range []string{"request_search", "substantial", "trivial local fixes", "acceptance criteria", "evidence"} {
+		if !strings.Contains(agentRules, want) {
+			t.Errorf("AGENTS.md missing request-ledger guidance %q:\n%s", want, agents)
+		}
 	}
 	for _, want := range []string{"repository-relative paths", "deploy", "security", "review", "test", "docs"} {
 		if !strings.Contains(string(agents), want) {

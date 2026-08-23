@@ -28,6 +28,18 @@ type SearchResult struct {
 	Sessions  []store.SessionHit `json:"sessions"`
 }
 
+type APIError struct {
+	Status     int            `json:"-"`
+	Code       string         `json:"code"`
+	Message    string         `json:"message"`
+	Resolution string         `json:"resolution"`
+	Details    map[string]any `json:"details,omitempty"`
+}
+
+func (e *APIError) Error() string {
+	return fmt.Sprintf("HTTP %d: %s: %s", e.Status, e.Code, e.Message)
+}
+
 func New(cfg config.Config) *Client {
 	return &Client{cfg: cfg, http: &http.Client{Timeout: 30 * time.Second}}
 }
@@ -68,6 +80,11 @@ func (c *Client) do(method, path string, query url.Values, in, out any) error {
 		return err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		var apiErr APIError
+		if json.Unmarshal(raw, &apiErr) == nil && apiErr.Code != "" {
+			apiErr.Status = resp.StatusCode
+			return &apiErr
+		}
 		return fmt.Errorf("%s %s: %d: %s", method, path, resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
 	switch o := out.(type) {
@@ -201,13 +218,8 @@ func (c *Client) ProjectKnowledge(project string, includeArchived bool) ([]store
 	return out, err
 }
 
-func (c *Client) SetRequestState(id int64, state, kind, ref string) error {
-	body := map[string]string{"state": state, "evidence_kind": kind, "evidence_ref": ref}
-	return c.do("PUT", "/api/knowledge/"+strconv.FormatInt(id, 10)+"/request-state", nil, body, nil)
-}
-
-func (c *Client) InsertMigrated(in store.MigratedEntry) (store.Knowledge, error) {
-	var out store.Knowledge
+func (c *Client) InsertMigrated(in store.MigratedEntry) (store.MigratedResult, error) {
+	var out store.MigratedResult
 	err := c.do("POST", "/api/migrated-knowledge", nil, in, &out)
 	return out, err
 }

@@ -148,28 +148,6 @@ func (a *api) listKnowledge(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, ks)
 }
 
-func (a *api) setRequestState(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(r)
-	if !ok {
-		writeErr(w, http.StatusBadRequest, "bad knowledge id")
-		return
-	}
-	var body struct {
-		State        string `json:"state"`
-		EvidenceKind string `json:"evidence_kind"`
-		EvidenceRef  string `json:"evidence_ref"`
-	}
-	if err := readJSON(r, &body); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if err := a.st.SetRequestState(id, body.State, body.EvidenceKind, body.EvidenceRef, personOf(r)); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
 func (a *api) insertMigratedKnowledge(w http.ResponseWriter, r *http.Request) {
 	var in store.MigratedEntry
 	if err := readJSON(r, &in); err != nil {
@@ -323,9 +301,21 @@ func (a *api) bootstrap(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	openRequests, err := a.st.CountOpenRequests(axesFromQuery(r))
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 	w.WriteHeader(200)
 	fmt.Fprint(w, renderBootstrap(entries, intParam(r, "budget", defaultBudget)))
+	if openRequests > 0 {
+		plural := "request"
+		if openRequests != 1 {
+			plural = "requests"
+		}
+		fmt.Fprintf(w, "\n## Work ledger (ghosttree)\n\n%d open %s in this scope. For substantial feature, architecture, migration, or multi-session work, search the request ledger first; continue a match or create one with explicit acceptance criteria. Trivial local fixes and routine maintenance do not require a request.\n", openRequests, plural)
+	}
 }
 
 // renderBootstrap builds the auto-injected context package. Binding

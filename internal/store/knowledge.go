@@ -28,29 +28,6 @@ type Knowledge struct {
 	UpdatedAt    string          `json:"updated_at"`
 }
 
-// SetRequestState records whether a wish was fulfilled. Marking something done
-// requires evidence: a commit, a test or a plan line. Without it the claim is
-// a guess, and a guessed "done" hides work that was never finished.
-func (s *Store) SetRequestState(id int64, state, kind, ref, person string) error {
-	if state == "done" && ref == "" {
-		return fmt.Errorf("state done requires evidence_ref")
-	}
-	k, err := s.KnowledgeByID(id)
-	if err != nil {
-		return err
-	}
-	if k.Type != "request" {
-		return fmt.Errorf("knowledge %d is %q, not request", id, k.Type)
-	}
-	_, err = s.db.Exec(`INSERT INTO request_resolution(knowledge_id, state, evidence_kind, evidence_ref, by_person, at)
-		VALUES(?,?,?,?,?,?)
-		ON CONFLICT(knowledge_id) DO UPDATE SET
-		  state = excluded.state, evidence_kind = excluded.evidence_kind,
-		  evidence_ref = excluded.evidence_ref, by_person = excluded.by_person, at = excluded.at`,
-		id, state, kind, ref, person, now())
-	return err
-}
-
 const knowledgeCols = `id, type, title, body, project, branch, machine,
 	confidence, status, origin, superseded_by, person, harness, session_ref, created_at, updated_at`
 

@@ -45,6 +45,47 @@ func TestMigratedActivationPersistsAtomically(t *testing.T) {
 	}
 }
 
+func TestMigratedRequestUsesRequestDomain(t *testing.T) {
+	s := openTest(t)
+	run, err := s.BeginMigration("p", map[string]string{"PLAN.md": "digest"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, err := s.InsertMigrated(MigratedEntry{Knowledge: Knowledge{
+		Type: "request", Title: "ship ledger", Body: "Make requests usable", Scope: scope.Axes{Project: "p"}, SessionRef: "PLAN.md",
+	}, RunID: run, Digest: "digest", ItemKey: "request-1", RequestState: "open"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.ID == 0 || saved.Kind != "request" {
+		t.Fatalf("saved = %+v", saved)
+	}
+	detail, err := s.RequestByID(saved.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.Request.Title != "ship ledger" || detail.Request.State != "open" || detail.Request.Origin != "distilled" {
+		t.Fatalf("request = %+v", detail.Request)
+	}
+	var knowledgeCount int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM knowledge WHERE title='ship ledger'`).Scan(&knowledgeCount); err != nil || knowledgeCount != 0 {
+		t.Fatalf("request leaked into knowledge: count=%d err=%v", knowledgeCount, err)
+	}
+	var evidenceRequestID int64
+	if err := s.db.QueryRow(`SELECT request_id FROM migration_evidence WHERE item_key='request-1'`).Scan(&evidenceRequestID); err != nil || evidenceRequestID != saved.ID {
+		t.Fatalf("migration evidence request=%d err=%v", evidenceRequestID, err)
+	}
+	if err := s.CompleteMigration(run); err != nil {
+		t.Fatal(err)
+	}
+	retried, err := s.InsertMigrated(MigratedEntry{Knowledge: Knowledge{
+		Type: "request", Title: "ship ledger", Body: "Make requests usable", Scope: scope.Axes{Project: "p"}, SessionRef: "PLAN.md",
+	}, RunID: run, Digest: "digest", ItemKey: "request-1", RequestState: "open"})
+	if err != nil || retried.ID != saved.ID {
+		t.Fatalf("idempotent retry = %+v, %v", retried, err)
+	}
+}
+
 func TestOnlyCompletedMigrationAuthorizesExactDigest(t *testing.T) {
 	s := openTest(t)
 	pending, err := s.BeginMigration("p", map[string]string{"CLAUDE.md": "old"})

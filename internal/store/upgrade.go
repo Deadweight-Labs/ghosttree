@@ -137,10 +137,16 @@ func UpgradeSchema(path string) (string, error) {
 	return backup, nil
 }
 
-// SchemaHasNewTypes reports whether the instruction/request types are allowed.
-// SQLite does not expose CHECK constraints structurally, so this probes inside
-// a transaction that is always rolled back.
+// SchemaHasNewTypes reports whether instructions and the separated request
+// domain are available and the knowledge write path rejects requests.
 func SchemaHasNewTypes(db *sql.DB) (bool, error) {
+	var legacyRequests int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM knowledge WHERE type='request'`).Scan(&legacyRequests); err != nil {
+		return false, err
+	}
+	if legacyRequests != 0 {
+		return false, nil
+	}
 	tx, err := db.Begin()
 	if err != nil {
 		return false, err
@@ -155,6 +161,21 @@ func SchemaHasNewTypes(db *sql.DB) (bool, error) {
 	_, err = tx.Exec(`INSERT INTO knowledge(type, title, body, confidence, status, origin,
 		superseded_by, created_at, updated_at)
 		VALUES('request','probe','probe','trusted','archived','agent',0,'x','x')`)
+	if err == nil {
+		return false, nil
+	}
+	_, err = tx.Exec(`INSERT INTO requests(type,title,description,created_at,updated_at) VALUES('feature','probe','probe','x','x')`)
+	return err == nil, nil
+}
+
+func schemaAllowsInstruction(db *sql.DB) (bool, error) {
+	tx, err := db.Begin()
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	_, err = tx.Exec(`INSERT INTO knowledge(type,title,body,confidence,status,origin,superseded_by,created_at,updated_at)
+		VALUES('instruction','probe','probe','trusted','active','agent',0,'x','x')`)
 	return err == nil, nil
 }
 
@@ -176,7 +197,7 @@ func UpgradeTypes(path string) (string, error) {
 	defer db.Close()
 	db.SetMaxOpenConns(1)
 
-	current, err := SchemaHasNewTypes(db)
+	current, err := schemaAllowsInstruction(db)
 	if err != nil {
 		return "", err
 	}
@@ -245,6 +266,124 @@ func UpgradeTypes(path string) (string, error) {
 	}
 	if before != after {
 		return backup, fmt.Errorf("row count changed during upgrade: %d before, %d after (restore %s)", before, after, backup)
+	}
+	return backup, nil
+}
+
+// UpgradeRequestDomain moves legacy knowledge(type=request) rows and their
+// evidence into the dedicated request ledger, then removes request from the
+// knowledge table constraint.
+func UpgradeRequestDomain(path string) (string, error) {
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		return "", err
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(`PRAGMA busy_timeout=5000`); err != nil {
+		return "", err
+	}
+	if _, err := db.Exec(schema); err != nil {
+		return "", err
+	}
+	current, err := SchemaHasNewTypes(db)
+	if err != nil {
+		return "", err
+	}
+	if current {
+		return "", nil
+	}
+	var legacy int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM knowledge WHERE type='request'`).Scan(&legacy); err != nil {
+		return "", err
+	}
+	backup := fmt.Sprintf("%s.backup-requests-%s", path, time.Now().UTC().Format("20060102-150405.000000000"))
+	if _, err := db.Exec(`VACUUM INTO ?`, backup); err != nil {
+		return "", fmt.Errorf("backup to %s: %w", backup, err)
+	}
+	if _, err := db.Exec(`PRAGMA foreign_keys=OFF`); err != nil {
+		return backup, err
+	}
+	defer db.Exec(`PRAGMA foreign_keys=ON`)
+	tx, err := db.Begin()
+	if err != nil {
+		return backup, err
+	}
+	defer tx.Rollback()
+	steps := []string{
+		`INSERT INTO requests(id,type,title,description,state,project,branch,machine,origin,person,session_ref,created_at,updated_at)
+		 SELECT k.id,'change',k.title,k.body,COALESCE(r.state,'open'),k.project,k.branch,k.machine,k.origin,k.person,k.session_ref,k.created_at,k.updated_at
+		 FROM knowledge k LEFT JOIN request_resolution r ON r.knowledge_id=k.id WHERE k.type='request'`,
+		`INSERT INTO request_evidence(request_id,kind,ref,person,created_at)
+		 SELECT k.id,r.evidence_kind,r.evidence_ref,r.by_person,r.at
+		 FROM knowledge k JOIN request_resolution r ON r.knowledge_id=k.id
+		 WHERE k.type='request' AND r.state='done' AND r.evidence_ref!=''`,
+		`INSERT INTO request_evidence(request_id,kind,ref,person,created_at)
+		 SELECT k.id,'session',printf('session:%d#chunk:%d',e.session_id,e.chunk_seq),k.person,k.updated_at
+		 FROM knowledge k JOIN knowledge_evidence e ON e.knowledge_id=k.id WHERE k.type='request'`,
+		`INSERT INTO request_activity(request_id,kind,person,data,created_at)
+		 SELECT k.id,'evidence.migrated',k.person,e.quote,k.updated_at
+		 FROM knowledge k JOIN knowledge_evidence e ON e.knowledge_id=k.id WHERE k.type='request'`,
+		`INSERT INTO request_activity(request_id,kind,person,data,created_at)
+		 SELECT k.id,'request.migrated',k.person,k.session_ref,k.updated_at FROM knowledge k WHERE k.type='request'`,
+		`INSERT INTO search_documents(kind,domain_id,title,body,project,branch,machine)
+		 SELECT 'request',id,title,body,project,branch,machine FROM knowledge WHERE type='request'`,
+		`CREATE TABLE migration_evidence_new(
+		 id INTEGER PRIMARY KEY,
+		 knowledge_id INTEGER REFERENCES knowledge(id), request_id INTEGER REFERENCES requests(id),
+		 run_id INTEGER NOT NULL REFERENCES migration_runs(id), source TEXT NOT NULL, digest TEXT NOT NULL,
+		 item_key TEXT NOT NULL UNIQUE, quote TEXT NOT NULL DEFAULT '',
+		 CHECK((knowledge_id IS NOT NULL) != (request_id IS NOT NULL)),
+		 UNIQUE(knowledge_id), UNIQUE(request_id))`,
+		`INSERT INTO migration_evidence_new(id,knowledge_id,request_id,run_id,source,digest,item_key,quote)
+		 SELECT e.rowid,CASE WHEN k.type='request' THEN NULL ELSE e.knowledge_id END,
+		 CASE WHEN k.type='request' THEN e.knowledge_id ELSE NULL END,e.run_id,e.source,e.digest,e.item_key,e.quote
+		 FROM migration_evidence e JOIN knowledge k ON k.id=e.knowledge_id`,
+		`DROP TABLE migration_evidence`,
+		`ALTER TABLE migration_evidence_new RENAME TO migration_evidence`,
+		`DELETE FROM request_resolution WHERE knowledge_id IN (SELECT id FROM knowledge WHERE type='request')`,
+		`DELETE FROM knowledge_evidence WHERE knowledge_id IN (SELECT id FROM knowledge WHERE type='request')`,
+		`DELETE FROM instruction_activation_path WHERE knowledge_id IN (SELECT id FROM knowledge WHERE type='request')`,
+		`DELETE FROM instruction_activation_task WHERE knowledge_id IN (SELECT id FROM knowledge WHERE type='request')`,
+		`DROP TRIGGER IF EXISTS knowledge_ai`,
+		`DROP TRIGGER IF EXISTS knowledge_au`,
+		`CREATE TABLE knowledge_new(
+		 id INTEGER PRIMARY KEY,
+		 type TEXT NOT NULL CHECK(type IN ('pitfall','decision','note','plan','instruction')),
+		 title TEXT NOT NULL, body TEXT NOT NULL,
+		 project TEXT NOT NULL DEFAULT '', branch TEXT NOT NULL DEFAULT '', machine TEXT NOT NULL DEFAULT '',
+		 confidence TEXT NOT NULL DEFAULT 'trusted' CHECK(confidence IN ('quarantined','staged','trusted','verified')),
+		 status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','stale','deprecated','superseded','archived')),
+		 origin TEXT NOT NULL DEFAULT 'agent' CHECK(origin IN ('agent','distilled','human')),
+		 superseded_by INTEGER NOT NULL DEFAULT 0,
+		 person TEXT NOT NULL DEFAULT '', harness TEXT NOT NULL DEFAULT '', session_ref TEXT NOT NULL DEFAULT '',
+		 created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+		`INSERT INTO knowledge_new(id,type,title,body,project,branch,machine,confidence,status,origin,superseded_by,person,harness,session_ref,created_at,updated_at)
+		 SELECT id,type,title,body,project,branch,machine,confidence,status,origin,superseded_by,person,harness,session_ref,created_at,updated_at
+		 FROM knowledge WHERE type!='request'`,
+		`DROP TABLE knowledge`,
+		`ALTER TABLE knowledge_new RENAME TO knowledge`,
+		`CREATE TRIGGER knowledge_ai AFTER INSERT ON knowledge BEGIN
+		 INSERT INTO knowledge_fts(rowid,title,body) VALUES(new.id,new.title,new.body); END`,
+		`CREATE TRIGGER knowledge_au AFTER UPDATE ON knowledge BEGIN
+		 INSERT INTO knowledge_fts(knowledge_fts,rowid,title,body) VALUES('delete',old.id,old.title,old.body);
+		 INSERT INTO knowledge_fts(rowid,title,body) VALUES(new.id,new.title,new.body); END`,
+		`INSERT INTO knowledge_fts(knowledge_fts) VALUES('rebuild')`,
+	}
+	for _, step := range steps {
+		if _, err := tx.Exec(step); err != nil {
+			return backup, fmt.Errorf("request upgrade step failed (%.60s...): %w", step, err)
+		}
+	}
+	var moved int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM requests`).Scan(&moved); err != nil {
+		return backup, err
+	}
+	if moved < legacy {
+		return backup, fmt.Errorf("request count after upgrade is %d, expected at least %d", moved, legacy)
+	}
+	if err := tx.Commit(); err != nil {
+		return backup, err
 	}
 	return backup, nil
 }

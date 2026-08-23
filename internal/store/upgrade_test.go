@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 )
 
@@ -55,6 +56,55 @@ func makeOldDB(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func openLegacyRequestStore(t *testing.T, path string) *Store {
+	t.Helper()
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`PRAGMA foreign_keys=OFF; PRAGMA legacy_alter_table=ON;
+		DROP TRIGGER knowledge_ai; DROP TRIGGER knowledge_au;
+		ALTER TABLE knowledge RENAME TO knowledge_target;
+		CREATE TABLE knowledge(
+		 id INTEGER PRIMARY KEY,
+		 type TEXT NOT NULL CHECK(type IN ('pitfall','decision','note','plan','instruction','request')),
+		 title TEXT NOT NULL, body TEXT NOT NULL,
+		 project TEXT NOT NULL DEFAULT '', branch TEXT NOT NULL DEFAULT '', machine TEXT NOT NULL DEFAULT '',
+		 confidence TEXT NOT NULL DEFAULT 'trusted' CHECK(confidence IN ('quarantined','staged','trusted','verified')),
+		 status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','stale','deprecated','superseded','archived')),
+		 origin TEXT NOT NULL DEFAULT 'agent' CHECK(origin IN ('agent','distilled','human')),
+		 superseded_by INTEGER NOT NULL DEFAULT 0,
+		 person TEXT NOT NULL DEFAULT '', harness TEXT NOT NULL DEFAULT '', session_ref TEXT NOT NULL DEFAULT '',
+		 created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+		DROP TABLE knowledge_target;
+		CREATE TRIGGER knowledge_ai AFTER INSERT ON knowledge BEGIN
+		 INSERT INTO knowledge_fts(rowid,title,body) VALUES(new.id,new.title,new.body); END;
+		CREATE TRIGGER knowledge_au AFTER UPDATE ON knowledge BEGIN
+		 INSERT INTO knowledge_fts(knowledge_fts,rowid,title,body) VALUES('delete',old.id,old.title,old.body);
+		 INSERT INTO knowledge_fts(rowid,title,body) VALUES(new.id,new.title,new.body); END;`)
+	db.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func setLegacyRequestState(t *testing.T, s *Store, id int64, state, kind, ref, person string) {
+	t.Helper()
+	if _, err := s.db.Exec(`INSERT INTO request_resolution(knowledge_id,state,evidence_kind,evidence_ref,by_person,at) VALUES(?,?,?,?,?,?)`, id, state, kind, ref, person, now()); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestUpgradePreservesDataAndSearch(t *testing.T) {
@@ -174,5 +224,149 @@ func TestUpgradeTypesCreatesInstructionActivationTables(t *testing.T) {
 		if err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&name); err != nil {
 			t.Errorf("missing %s after upgrade: %v", table, err)
 		}
+	}
+}
+
+func TestUpgradeRequestDomainMovesLegacyRequests(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mixed.db")
+	s := openLegacyRequestStore(t, path)
+	openID, err := s.InsertKnowledge(Knowledge{Type: "request", Title: "open feature", Body: "needs a ledger", Scope: scope.Axes{Project: "github.com/x/y"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	setLegacyRequestState(t, s, openID, "open", "", "", "robin")
+	sessionID, _ := s.UpsertSession(Session{Harness: "codex", ExternalID: "legacy-proof"})
+	if err := s.AddEvidence(openID, []Evidence{{SessionID: sessionID, ChunkSeq: 7, Quote: "requested in session"}}); err != nil {
+		t.Fatal(err)
+	}
+	doneID, err := s.InsertKnowledge(Knowledge{Type: "request", Title: "done feature", Body: "already delivered", Scope: scope.Axes{Project: "github.com/x/y"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	setLegacyRequestState(t, s, doneID, "done", "commit", "abc123", "robin")
+	if _, err := s.InsertKnowledge(Knowledge{Type: "decision", Title: "keep me", Body: "knowledge remains"}); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	if _, err := UpgradeRequestDomain(path); err != nil {
+		t.Fatal(err)
+	}
+	s, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	for id, state := range map[int64]string{openID: "open", doneID: "done"} {
+		detail, err := s.RequestByID(id)
+		if err != nil {
+			t.Fatalf("request %d: %v", id, err)
+		}
+		if detail.Request.State != state {
+			t.Errorf("request %d state = %q, want %q", id, detail.Request.State, state)
+		}
+	}
+	var legacy int
+	if err := s.DB().QueryRow(`SELECT COUNT(*) FROM knowledge WHERE type='request'`).Scan(&legacy); err != nil {
+		t.Fatal(err)
+	}
+	if legacy != 0 {
+		t.Fatalf("legacy request rows = %d", legacy)
+	}
+	var evidenceRef string
+	if err := s.DB().QueryRow(`SELECT ref FROM request_evidence WHERE request_id=? AND kind='session'`, openID).Scan(&evidenceRef); err != nil {
+		t.Fatal(err)
+	}
+	if evidenceRef != "session:1#chunk:7" {
+		t.Fatalf("migrated evidence ref = %q", evidenceRef)
+	}
+	if _, err := s.InsertKnowledge(Knowledge{Type: "request", Title: "must use ledger", Body: "body"}); err == nil {
+		t.Fatal("knowledge write path still accepts requests after domain upgrade")
+	}
+	if current, err := SchemaHasNewTypes(s.DB()); err != nil || !current {
+		t.Fatalf("separated request domain reported outdated: current=%v err=%v", current, err)
+	}
+	if hits, err := s.SearchRequests(requestdomain.SearchFilter{Query: "ledger", Limit: 10}); err != nil || len(hits.Results) != 1 {
+		t.Fatalf("request search = %+v, %v", hits, err)
+	}
+}
+
+func TestUpgradeRequestDomainPreservesMigrationEvidence(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "evidence.db")
+	s := openLegacyRequestStore(t, path)
+	runID, err := s.BeginMigration("github.com/x/y", map[string]string{"AGENTS.md": "digest"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyID, err := s.InsertKnowledge(Knowledge{Type: "request", Title: "migrated request", Body: "body", Scope: scope.Axes{Project: "github.com/x/y"}, SessionRef: "AGENTS.md"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	setLegacyRequestState(t, s, legacyID, "open", "", "", "")
+	if _, err := s.db.Exec(`INSERT INTO migration_evidence(knowledge_id,run_id,source,digest,item_key,quote) VALUES(?,?,?,?,?,?)`, legacyID, runID, "AGENTS.md", "digest", "item-1", ""); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	if _, err := UpgradeRequestDomain(path); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var requestID int64
+	if err := db.QueryRow(`SELECT request_id FROM migration_evidence WHERE item_key='item-1'`).Scan(&requestID); err != nil {
+		t.Fatal(err)
+	}
+	if requestID != legacyID {
+		t.Fatalf("migration evidence request = %d, want %d", requestID, legacyID)
+	}
+	db.Close()
+	s, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.CompleteMigration(runID); err != nil {
+		t.Fatalf("converted request evidence no longer completes migration: %v", err)
+	}
+}
+
+func TestUpgradeRequestDomainUpdatesEvidenceSchemaWithoutRequests(t *testing.T) {
+	path := makeOldDB(t)
+	if _, err := UpgradeSchema(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := UpgradeTypes(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := UpgradeRequestDomain(path); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	rows, err := db.Query(`PRAGMA table_info(migration_evidence)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	found := false
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, typ string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			t.Fatal(err)
+		}
+		found = found || name == "request_id"
+	}
+	if !found {
+		t.Fatal("migration_evidence.request_id missing after upgrade")
 	}
 }

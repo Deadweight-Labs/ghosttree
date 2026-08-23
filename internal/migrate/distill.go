@@ -29,7 +29,8 @@ decision, note, pitfall, or request. An instruction must not be derivable by rea
 repo: directory layout and visible implementation details are derivable and must be
 dropped, while a required build command or a damaging-to-violate architecture rule is
 not. When uncertain, omit it and explain why in dropped. Keep all instruction bodies
-to at most 1500 characters total. Do not duplicate an existing title. Every item needs
+to at most 600 characters total; keep only the highest-value rules whose violation
+would cause wrong or unsafe work. Do not duplicate an existing title. Every item needs
 a short title, self-contained body, and one exact contiguous quote copied from
 the source. Never use ellipses and never join separate source passages.`
 

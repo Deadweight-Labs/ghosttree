@@ -16,9 +16,73 @@ CREATE TABLE IF NOT EXISTS persons(
   token_hash TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS machines(
   hostname TEXT PRIMARY KEY, first_seen TEXT NOT NULL, last_seen TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS requests(
+  id INTEGER PRIMARY KEY,
+  type TEXT NOT NULL CHECK(type IN ('feature','change','bug','investigation')),
+  title TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  state TEXT NOT NULL DEFAULT 'open' CHECK(state IN ('open','done','dropped')),
+  priority TEXT NOT NULL DEFAULT '',
+  project TEXT NOT NULL DEFAULT '', branch TEXT NOT NULL DEFAULT '', machine TEXT NOT NULL DEFAULT '',
+  origin TEXT NOT NULL DEFAULT 'agent' CHECK(origin IN ('agent','distilled','human')),
+  person TEXT NOT NULL DEFAULT '', session_ref TEXT NOT NULL DEFAULT '',
+  idempotency_key TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE UNIQUE INDEX IF NOT EXISTS requests_idempotency
+  ON requests(idempotency_key) WHERE idempotency_key != '';
+CREATE TABLE IF NOT EXISTS request_criteria(
+  id INTEGER PRIMARY KEY,
+  request_id INTEGER NOT NULL REFERENCES requests(id) ON DELETE RESTRICT,
+  number INTEGER NOT NULL,
+  description TEXT NOT NULL,
+  state TEXT NOT NULL DEFAULT 'open' CHECK(state IN ('open','met','waived')),
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  UNIQUE(request_id, number));
+CREATE TABLE IF NOT EXISTS request_evidence(
+  id INTEGER PRIMARY KEY,
+  request_id INTEGER NOT NULL REFERENCES requests(id) ON DELETE RESTRICT,
+  criterion_id INTEGER REFERENCES request_criteria(id) ON DELETE RESTRICT,
+  kind TEXT NOT NULL CHECK(kind IN ('commit','test','file','decision','session','url')),
+  ref TEXT NOT NULL, person TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS request_relations(
+  id INTEGER PRIMARY KEY,
+  request_id INTEGER NOT NULL REFERENCES requests(id) ON DELETE RESTRICT,
+  other_request_id INTEGER REFERENCES requests(id) ON DELETE RESTRICT,
+  knowledge_id INTEGER REFERENCES knowledge(id) ON DELETE RESTRICT,
+  kind TEXT NOT NULL CHECK(kind IN ('parent','related','blocks','duplicates','supersedes','knowledge','external')),
+  external_ref TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS request_work(
+  id INTEGER PRIMARY KEY,
+  request_id INTEGER NOT NULL REFERENCES requests(id) ON DELETE RESTRICT,
+  session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE RESTRICT,
+  role TEXT NOT NULL CHECK(role IN ('primary','related')),
+  state TEXT NOT NULL DEFAULT 'active' CHECK(state IN ('active','paused','completed','abandoned')),
+  started_at TEXT NOT NULL, ended_at TEXT NOT NULL DEFAULT '', summary TEXT NOT NULL DEFAULT '',
+  UNIQUE(request_id, session_id, role));
+CREATE UNIQUE INDEX IF NOT EXISTS request_work_one_primary
+  ON request_work(session_id) WHERE role='primary';
+CREATE TABLE IF NOT EXISTS request_activity(
+  id INTEGER PRIMARY KEY,
+  request_id INTEGER NOT NULL REFERENCES requests(id) ON DELETE RESTRICT,
+  kind TEXT NOT NULL, person TEXT NOT NULL DEFAULT '', data TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS search_documents(
+  id INTEGER PRIMARY KEY,
+  kind TEXT NOT NULL CHECK(kind IN ('knowledge','request')),
+  domain_id INTEGER NOT NULL,
+  title TEXT NOT NULL, body TEXT NOT NULL,
+  project TEXT NOT NULL DEFAULT '', branch TEXT NOT NULL DEFAULT '', machine TEXT NOT NULL DEFAULT '',
+  UNIQUE(kind, domain_id));
+CREATE VIRTUAL TABLE IF NOT EXISTS search_documents_fts USING fts5(title, body, content='search_documents', content_rowid='id');
+CREATE TRIGGER IF NOT EXISTS search_documents_ai AFTER INSERT ON search_documents BEGIN
+  INSERT INTO search_documents_fts(rowid,title,body) VALUES(new.id,new.title,new.body);
+END;
+CREATE TRIGGER IF NOT EXISTS search_documents_au AFTER UPDATE ON search_documents BEGIN
+  INSERT INTO search_documents_fts(search_documents_fts,rowid,title,body) VALUES('delete',old.id,old.title,old.body);
+  INSERT INTO search_documents_fts(rowid,title,body) VALUES(new.id,new.title,new.body);
+END;
 CREATE TABLE IF NOT EXISTS knowledge(
   id INTEGER PRIMARY KEY,
-  type TEXT NOT NULL CHECK(type IN ('pitfall','decision','note','plan','instruction','request')),
+  type TEXT NOT NULL CHECK(type IN ('pitfall','decision','note','plan','instruction')),
   title TEXT NOT NULL, body TEXT NOT NULL,
   project TEXT NOT NULL DEFAULT '', branch TEXT NOT NULL DEFAULT '', machine TEXT NOT NULL DEFAULT '',
   confidence TEXT NOT NULL DEFAULT 'trusted' CHECK(confidence IN ('quarantined','staged','trusted','verified')),
@@ -66,10 +130,13 @@ CREATE TABLE IF NOT EXISTS migration_artifacts(
   path TEXT NOT NULL, digest TEXT NOT NULL,
   PRIMARY KEY(run_id, path));
 CREATE TABLE IF NOT EXISTS migration_evidence(
-  knowledge_id INTEGER PRIMARY KEY REFERENCES knowledge(id),
+  id INTEGER PRIMARY KEY,
+  knowledge_id INTEGER REFERENCES knowledge(id), request_id INTEGER REFERENCES requests(id),
   run_id INTEGER NOT NULL REFERENCES migration_runs(id),
   source TEXT NOT NULL, digest TEXT NOT NULL, item_key TEXT NOT NULL UNIQUE,
-  quote TEXT NOT NULL DEFAULT '');
+  quote TEXT NOT NULL DEFAULT '',
+  CHECK((knowledge_id IS NOT NULL) != (request_id IS NOT NULL)),
+  UNIQUE(knowledge_id), UNIQUE(request_id));
 CREATE TABLE IF NOT EXISTS sessions(
   id INTEGER PRIMARY KEY,
   harness TEXT NOT NULL, external_id TEXT NOT NULL,
