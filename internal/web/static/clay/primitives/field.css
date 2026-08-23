@@ -1,0 +1,65 @@
+/* Die Feldgruppe: Label, Feld, Hinweis oder Fehler — gestapelt und verbunden.
+
+   Der Fehler wird nicht nur vorgelesen, sondern gezeigt: aria-invalid faerbt
+   den Ring. Ein Zustand, den nur die Hilfstechnik kennt, ist kein Zustand. */
+
+.clay-field-group {
+  display: grid;
+  gap: var(--clay-space-2);
+}
+
+.clay-label {
+  color: var(--clay-ink);
+  font-family: var(--clay-font-ui, system-ui, sans-serif);
+  font-size: var(--clay-text-sm);
+  font-weight: var(--clay-weight-strong);
+  line-height: var(--clay-leading-tight);
+  text-box-trim: trim-both;
+  text-box-edge: cap alphabetic;
+}
+
+.clay-hint,
+.clay-error {
+  margin: 0;
+  font-family: var(--clay-font-ui, system-ui, sans-serif);
+  font-size: var(--clay-text-xs);
+  line-height: var(--clay-leading-snug);
+}
+
+.clay-hint  { color: var(--clay-ink-soft); }
+.clay-error { color: var(--clay-danger-strong); font-weight: var(--clay-weight-strong); }
+
+/* Ein fehlerhaftes Feld traegt seinen Ring dauerhaft, nicht erst bei Fokus.
+   Er liegt deshalb buendig am Feld statt abgesetzt: ein Dauerzustand gehoert
+   zum Feld, ein Fokusring schwebt darum. Buendig kollidiert er ausserdem
+   nicht mit dem Label darueber. */
+.clay-field[aria-invalid="true"],
+.clay-textarea[aria-invalid="true"],
+.clay-select[aria-invalid="true"],
+.clay-search[aria-invalid="true"] {
+  outline: var(--clay-focus-width) solid var(--clay-danger-strong);
+  outline-offset: 0;
+}
+
+/* Groessenvarianten: die Mulde bleibt, nur das Mass waechst. */
+.clay-field-lg,
+.clay-textarea-lg,
+.clay-select-lg,
+.clay-search-lg {
+  min-block-size: var(--clay-size-lg);
+  font-size: var(--clay-text-lg);
+  padding: var(--clay-space-3) var(--clay-space-4);
+}
+
+.clay-field-sm {
+  min-block-size: var(--clay-size-sm);
+  font-size: var(--clay-text-sm);
+  padding: var(--clay-space-1) var(--clay-space-2);
+}
+
+/* Eine Feldzeile: mehrere Gruppen nebeneinander, die gemeinsam umbrechen. */
+.clay-field-reihe {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: var(--clay-space-4);
+}

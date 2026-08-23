@@ -1,0 +1,220 @@
+/* Controls sind additiv: sie ragen heraus und lassen sich druecken.
+   Der Druckzustand ist eine kleinere Zahl, kein eigenes Schattenrezept —
+   die Kantenhoehe geht dabei von selbst verloren, wie bei einem echten Objekt.
+
+   Hoehe kommt aus min-height, nicht aus Padding: nur so bleibt das Tap-Ziel
+   garantiert, egal wie eng die Dichte gestellt ist. */
+
+.clay-btn {
+  --clay-rest-h: var(--clay-e-control);
+  --clay-surface: var(--clay-c-raised);
+  border: 0;
+  border-radius: var(--clay-radius-sm);
+  color: var(--clay-ink);
+  font-family: var(--clay-font-ui, system-ui, sans-serif);
+  font-size: var(--clay-text-sm);
+  font-weight: var(--clay-weight-strong);
+  line-height: var(--clay-leading-tight);
+  text-box-trim: trim-both;
+  text-box-edge: cap alphabetic;
+  min-height: var(--clay-size-md);
+  padding-block: 0;
+  padding-inline: var(--clay-space-4);
+  display: inline-grid;
+  grid-auto-flow: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--clay-space-2);
+  cursor: pointer;
+}
+
+.clay-btn:active { --clay-h: calc(var(--clay-rest-h) * .25); }
+
+.clay-btn:disabled {
+  --clay-h: 0;
+  color: var(--clay-ink-faint);
+  cursor: default;
+}
+
+.clay-btn-primary   { --clay-surface: var(--clay-accent); color: var(--clay-accent-ink); }
+.clay-btn-danger    { --clay-surface: var(--clay-danger); color: var(--clay-danger-ink); }
+.clay-btn-secondary { --clay-surface: var(--clay-c-raised); }
+.clay-btn-ghost     { --clay-rest-h: 0; --clay-surface: transparent; }
+.clay-btn-icon      { padding-inline: 0; aspect-ratio: 1; }
+
+.clay-btn-sm { min-height: var(--clay-size-sm); font-size: var(--clay-text-xs); }
+.clay-btn-lg { min-height: var(--clay-size-lg); font-size: var(--clay-text-md); }
+
+.clay-btn:focus-visible,
+.clay-toggle:focus-visible,
+.clay-check:focus-visible,
+.clay-radio:focus-visible,
+.clay-segmented > button:focus-visible {
+  outline: var(--clay-focus-width) solid var(--clay-accent);
+  outline-offset: var(--clay-space-1);
+}
+
+/* Toggle: die Bahn ist eingemeisselt, der Knebel ragt heraus. */
+.clay-toggle {
+  --clay-rest-h: var(--clay-e-well);
+  --clay-surface: var(--clay-c-sunken);
+  border: 0;
+  border-radius: 999px;
+  block-size: var(--clay-size-sm);
+  inline-size: calc(var(--clay-size-sm) * 1.75);
+  padding: calc(var(--clay-unit) * .75);
+  cursor: pointer;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+.clay-toggle[aria-checked="true"] { --clay-surface: var(--clay-accent); }
+
+/* Der Knebel haengt an der Engine (siehe Selektorliste in engine.css) und
+   bekommt seine Tiefe damit aus derselben Rechnung wie alles andere —
+   kein handgeschriebener Schatten. */
+.clay-toggle::after {
+  --clay-rest-h: var(--clay-e-control);
+  --clay-surface: var(--clay-c-raised);
+  content: "";
+  grid-column: 1;
+  border-radius: 999px;
+  transition:
+    --clay-h var(--clay-dur) var(--clay-ease),
+    grid-column var(--clay-dur) var(--clay-ease);
+}
+
+.clay-toggle[aria-checked="true"]::after { grid-column: 2; }
+
+/* Checkbox und Radio: Mulde im Ruhezustand, erhabene Marke wenn gesetzt. */
+.clay-check, .clay-radio {
+  --clay-rest-h: var(--clay-e-well);
+  --clay-surface: var(--clay-c-sunken);
+  border: 0;
+  block-size: var(--clay-size-sm);
+  inline-size: var(--clay-size-sm);
+  cursor: pointer;
+}
+
+.clay-check { border-radius: var(--clay-radius-xs); }
+.clay-radio { border-radius: 999px; }
+
+.clay-check[aria-checked="true"],
+.clay-radio[aria-checked="true"] {
+  --clay-rest-h: var(--clay-e-control);
+  --clay-surface: var(--clay-accent);
+}
+
+/* Segmented: versenkte Schiene, erhabene Auswahl. */
+.clay-segmented {
+  --clay-rest-h: var(--clay-e-well);
+  --clay-surface: var(--clay-c-sunken);
+  border-radius: var(--clay-radius-sm);
+  padding: var(--clay-space-1);
+  display: inline-flex;
+  gap: var(--clay-space-1);
+}
+
+.clay-segmented > button {
+  --clay-rest-h: 0;
+  --clay-surface: transparent;
+  border: 0;
+  border-radius: var(--clay-radius-xs);
+  color: var(--clay-ink-soft);
+  font-family: var(--clay-font-ui, system-ui, sans-serif);
+  font-size: var(--clay-text-sm);
+  font-weight: var(--clay-weight-strong);
+  line-height: var(--clay-leading-tight);
+  text-box-trim: trim-both;
+  text-box-edge: cap alphabetic;
+  min-height: var(--clay-size-sm);
+  padding-inline: var(--clay-space-3);
+  cursor: pointer;
+}
+
+.clay-segmented > button[aria-selected="true"] {
+  --clay-rest-h: var(--clay-e-control);
+  --clay-surface: var(--clay-c-raised);
+  color: var(--clay-ink);
+}
+
+/* Slider: Bahn eingemeisselt, Knebel erhaben. */
+.clay-slider {
+  --clay-rest-h: var(--clay-e-well);
+  --clay-surface: var(--clay-c-sunken);
+  appearance: none;
+  border-radius: 999px;
+  inline-size: 100%;
+  block-size: var(--clay-space-3);
+  cursor: pointer;
+}
+
+/* Die beiden Griff-Pseudoelemente koennen NICHT in die Selektorliste der
+   Engine: ein herstellerspezifisches Pseudoelement macht die ganze Liste
+   ungueltig, und der Kern wuerde damit fuer alle ausfallen. Deshalb hier zwei
+   eigene Regeln — aber aus derselben Hoehenstufe gerechnet, damit der Griff
+   dieselbe Tiefe zeigt wie ein Knopf. */
+.clay-slider::-webkit-slider-thumb {
+  --_griff: calc(var(--clay-e-control) * 1px);
+  appearance: none;
+  inline-size: var(--clay-space-5);
+  block-size: var(--clay-space-5);
+  border-radius: 999px;
+  background: var(--clay-c-raised);
+  box-shadow:
+    0 var(--_griff) 0 var(--clay-wall-tint),
+    0 calc(var(--_griff) * 2) calc(var(--_griff) * 2) var(--clay-shadow);
+}
+
+.clay-slider::-moz-range-thumb {
+  --_griff: calc(var(--clay-e-control) * 1px);
+  border: 0;
+  inline-size: var(--clay-space-5);
+  block-size: var(--clay-space-5);
+  border-radius: 999px;
+  background: var(--clay-c-raised);
+  box-shadow:
+    0 var(--_griff) 0 var(--clay-wall-tint),
+    0 calc(var(--_griff) * 2) calc(var(--_griff) * 2) var(--clay-shadow);
+}
+
+/* Der Griff sinkt beim Anfassen, wie jeder andere Knopf auch. */
+.clay-slider:active::-webkit-slider-thumb {
+  --_griff: calc(var(--clay-e-control) * .25px);
+  translate: 0 calc(var(--clay-e-control) * .75px);
+}
+
+.clay-slider:active::-moz-range-thumb {
+  --_griff: calc(var(--clay-e-control) * .25px);
+  translate: 0 calc(var(--clay-e-control) * .75px);
+}
+
+/* Getrennte Regeln, nicht als Liste: ein herstellerspezifisches Pseudoelement,
+   das der Browser nicht kennt, macht die gesamte Selektorliste ungueltig. */
+.clay-slider::-webkit-slider-thumb {
+  transition:
+    box-shadow var(--clay-dur) var(--clay-ease),
+    translate var(--clay-dur) var(--clay-ease);
+}
+
+.clay-slider::-moz-range-thumb {
+  transition:
+    box-shadow var(--clay-dur) var(--clay-ease),
+    translate var(--clay-dur) var(--clay-ease);
+}
+
+.clay-slider:focus-visible {
+  outline: var(--clay-focus-width) solid var(--clay-accent);
+  outline-offset: var(--clay-space-1);
+}
+
+/* Tab-Bar: der Anker des Bildschirms, die Flaeche mit dem groessten Abstand
+   zum Hintergrund. */
+.clay-tabbar {
+  --clay-rest-h: var(--clay-e-plinth);
+  --clay-surface: var(--clay-ink);
+  border-radius: 999px;
+  padding: var(--clay-space-1);
+  display: inline-flex;
+  gap: var(--clay-space-1);
+}

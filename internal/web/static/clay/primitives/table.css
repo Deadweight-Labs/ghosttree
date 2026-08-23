@@ -1,0 +1,99 @@
+/* Tabelle, Leerzustand und Toolbar.
+
+   Die Tabelle ist ein Deck. Ihr Kopf ist eine versenkte Schiene — subtraktiv,
+   wie die Segmented-Bahn: was Struktur vorgibt, liegt tiefer als das, was
+   darin steht.
+
+   Zeilen heben sich bewusst NICHT beim Hover. Eine gehobene Zeile bricht die
+   Spaltenflucht, und genau die ist der Grund, warum man eine Tabelle nimmt.
+   Statt Tiefe wechselt hier die Flaeche. */
+
+.clay-table {
+  --clay-rest-h: var(--clay-e-deck);
+  --clay-surface: var(--clay-c-surface);
+  border-radius: var(--clay-radius);
+  border-collapse: separate;
+  border-spacing: 0;
+  inline-size: 100%;
+  color: var(--clay-ink);
+  font-family: var(--clay-font-ui, system-ui, sans-serif);
+  font-size: var(--clay-text-sm);
+  line-height: var(--clay-leading-snug);
+}
+
+.clay-table thead th {
+  --clay-rest-h: var(--clay-e-well);
+  --clay-surface: var(--clay-c-sunken);
+  /* Ohne das zeichnet der umlaufende Rim an jeder Zellgrenze eine senkrechte
+     Naht, und aus einer Schiene werden viele Kaestchen. */
+  --clay-well-rim: transparent;
+
+  color: var(--clay-ink-soft);
+  font-size: var(--clay-text-xs);
+  font-weight: var(--clay-weight-heading);
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  text-align: start;
+  padding: var(--clay-space-2) var(--clay-space-3);
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 1;
+}
+
+.clay-table thead th:first-child { border-start-start-radius: var(--clay-radius); }
+.clay-table thead th:last-child  { border-start-end-radius: var(--clay-radius); }
+
+.clay-table tbody td {
+  padding: var(--clay-space-2) var(--clay-space-3);
+  border-block-start: 1px solid var(--clay-line, transparent);
+}
+
+.clay-table tbody tr {
+  background: transparent;
+  transition: background-color var(--clay-dur) var(--clay-ease);
+}
+
+.clay-table tbody tr:hover,
+.clay-table tbody tr:focus-within {
+  background: var(--clay-c-raised);
+}
+
+/* Zahlen laufen rechtsbuendig und auf gleicher Breite, damit Spalten
+   untereinander vergleichbar bleiben. */
+.clay-num,
+.clay-table thead th.clay-num,
+.clay-table tbody td.clay-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-family: var(--clay-font-mono, ui-monospace, monospace);
+}
+
+/* Leerzustand: eine Mulde, in der nichts liegt. */
+.clay-empty {
+  --clay-rest-h: var(--clay-e-well);
+  --clay-surface: var(--clay-c-sunken);
+  border-radius: var(--clay-radius);
+  color: var(--clay-ink-soft);
+  font-family: var(--clay-font-ui, system-ui, sans-serif);
+  font-size: var(--clay-text-sm);
+  line-height: var(--clay-leading-normal);
+  padding: var(--clay-space-8) var(--clay-space-4);
+  display: grid;
+  gap: var(--clay-space-3);
+  place-items: center;
+  text-align: center;
+}
+
+/* Toolbar: tragender Sockel fuer gruppierte Controls. */
+.clay-toolbar {
+  --clay-rest-h: var(--clay-e-plinth);
+  --clay-surface: var(--clay-c-surface);
+  border-radius: var(--clay-radius);
+  padding: var(--clay-space-2);
+  display: flex;
+  align-items: center;
+  gap: var(--clay-space-2);
+  flex-wrap: wrap;
+}
+
+.clay-toolbar-luecke { margin-inline-start: auto; }

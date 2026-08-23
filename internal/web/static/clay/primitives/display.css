@@ -1,0 +1,57 @@
+/* Anzeigen: tragen Information, nehmen keine Eingaben entgegen. */
+
+.clay-avatar {
+  --clay-rest-h: var(--clay-e-control);
+  --clay-surface: var(--clay-c-raised);
+  border-radius: var(--clay-radius-xs);
+  color: var(--clay-ink);
+  font-family: var(--clay-font-ui, system-ui, sans-serif);
+  font-size: var(--clay-text-xs);
+  font-weight: var(--clay-weight-heading);
+  line-height: var(--clay-leading-tight);
+  text-box-trim: trim-both;
+  text-box-edge: cap alphabetic;
+  inline-size: var(--clay-size-md);
+  block-size: var(--clay-size-md);
+  display: grid;
+  place-items: center;
+}
+
+.clay-badge {
+  --clay-rest-h: 2;
+  --clay-surface: var(--clay-accent);
+  border-radius: 999px;
+  color: var(--clay-accent-ink);
+  font-family: var(--clay-font-ui, system-ui, sans-serif);
+  font-size: var(--clay-text-xs);
+  font-weight: var(--clay-weight-heading);
+  line-height: var(--clay-leading-tight);
+  text-box-trim: trim-both;
+  text-box-edge: cap alphabetic;
+  padding: var(--clay-space-1) var(--clay-space-2);
+}
+
+/* Eine Rille im Material, in der die Fuellung liegt. */
+.clay-progress {
+  --clay-rest-h: var(--clay-e-well);
+  --clay-surface: var(--clay-c-sunken);
+  --clay-progress-value: 0%;
+  border-radius: 999px;
+  block-size: var(--clay-space-3);
+  overflow: hidden;
+}
+
+/* Die Fuellung ist immer voll breit und wird nach links herausgeschoben.
+   Das animiert nur den Compositor statt bei jedem Frame das Layout neu zu
+   rechnen — und die rechte Kappe bleibt rund, statt von scaleX zur Ellipse
+   gequetscht zu werden. Die linke Kappe kappt der Track. */
+.clay-progress::before {
+  content: "";
+  display: block;
+  block-size: 100%;
+  inline-size: 100%;
+  border-radius: 999px;
+  background: var(--clay-accent);
+  translate: calc(var(--clay-progress-value) - 100%) 0;
+  transition: translate var(--clay-dur) var(--clay-ease);
+}

@@ -1,0 +1,11 @@
+/* Optische Zentrierung: Padding misst von der Versalhoehe zur Grundlinie,
+   nicht von der Metrikbox. Damit wird die Knopfhoehe schriftartunabhaengig.
+   Baseline seit August 2026; ohne Unterstuetzung rendert der Browser mit dem
+   ueblichen Halbdurchschuss — nutzbar, nur minimal weniger exakt. */
+
+.clay-text {
+  text-box-trim: trim-both;
+  text-box-edge: cap alphabetic;
+}
+
+.clay-mono { font-family: var(--clay-font-mono, ui-monospace, monospace); }

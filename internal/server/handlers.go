@@ -308,7 +308,7 @@ func (a *api) bootstrap(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 	w.WriteHeader(200)
-	fmt.Fprint(w, renderBootstrap(entries, intParam(r, "budget", defaultBudget)))
+	fmt.Fprint(w, RenderBootstrap(entries, intParam(r, "budget", defaultBudget)))
 	if openRequests > 0 {
 		plural := "request"
 		if openRequests != 1 {
@@ -321,7 +321,7 @@ func (a *api) bootstrap(w http.ResponseWriter, r *http.Request) {
 // renderBootstrap builds the auto-injected context package. Binding
 // instructions are always complete and first; other confirmed knowledge comes
 // before unconfirmed knowledge so a tight budget cuts uncertain material first.
-func renderBootstrap(entries []store.Knowledge, budget int) string {
+func RenderBootstrap(entries []store.Knowledge, budget int) string {
 	if budget <= 0 {
 		budget = defaultBudget
 	}

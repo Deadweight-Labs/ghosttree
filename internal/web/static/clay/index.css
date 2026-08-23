@@ -1,0 +1,16 @@
+/* Clay-UI-Kern. Framework-frei, ohne Build-Schritt einsetzbar.
+   Ein Theme aus @deadweight-labs/clay-ui-themes liefert die Parameter. */
+
+@import "./engine.css";
+@import "./elevation.css";
+@import "./motion.css";
+@import "./scale.css";
+@import "./shape.css";
+@import "./text.css";
+@import "./primitives/surface.css";
+@import "./primitives/control.css";
+@import "./primitives/well.css";
+@import "./primitives/display.css";
+@import "./primitives/table.css";
+@import "./primitives/field.css";
+@import "./primitives/overlay.css";

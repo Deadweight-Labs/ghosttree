@@ -1,0 +1,86 @@
+/* Clay-Engine: die gesamte Tiefenoptik wird aus einer Hoehe berechnet.
+   Ein Objekt deklariert --clay-rest-h; alles Weitere leitet sich ab. */
+
+@property --clay-h {
+  syntax: "<number>";
+  inherits: false;
+  initial-value: 0;
+}
+
+:root {
+  --clay-light-az: 0deg;
+  --clay-wall-tint: #000;
+  --clay-wall-base: 0;
+  --clay-wall-step: 0;
+  --clay-shadow: transparent;
+  --clay-shadow-drop: 0;
+  --clay-shadow-blur: 0;
+  --clay-shadow-spread: 0;
+  --clay-rim: transparent;
+  --clay-material: .7;            /* 0 = matt, 1 = glaenzend */
+  --clay-well-ink: rgba(0, 0, 0, .16);
+  --clay-well-rim: rgba(0, 0, 0, .07);
+}
+
+/* Jede Klasse, die Clay-Physik traegt. Der gemeinsame Selektor haelt das
+   Markup kurz — ein Element braucht nur seine eigene Klasse. */
+.clay,
+.clay-block, .clay-card, .clay-row, .clay-inset,
+.clay-btn, .clay-toggle, .clay-check, .clay-radio,
+.clay-segmented, .clay-segmented > button, .clay-slider, .clay-tabbar,
+.clay-toggle::after,
+.clay-field, .clay-textarea, .clay-select, .clay-search,
+.clay-avatar, .clay-badge, .clay-progress,
+.clay-table, .clay-table thead th, .clay-empty, .clay-toolbar,
+.clay-popover, .clay-modal, .clay-toast {
+  /* Scoped statt global: die Library veraendert nichts an fremdem Markup.
+     Ohne border-box laeuft jedes Feld mit inline-size: 100% plus Padding
+     ueber seinen Container hinaus. */
+  box-sizing: border-box;
+
+  --clay-rest-h: 0;
+  --clay-h: var(--clay-rest-h);
+  --clay-surface: canvas;
+
+  /* Erhebung und Vertiefung sind dieselbe Zahl mit anderem Vorzeichen. */
+  --_hoch: max(var(--clay-h), 0);
+  --_tief: max(calc(var(--clay-h) * -1), 0);
+
+  /* Wandstufen: die Flaeche wird schrittweise zum Wandton hin gemischt.
+     Das traegt auch achromatische und farbige Flaechen korrekt. */
+  --_wand-1: color-mix(in oklch, var(--clay-surface),
+    var(--clay-wall-tint) calc((var(--clay-wall-base) + var(--clay-wall-step) * 0) * 1%));
+  --_wand-2: color-mix(in oklch, var(--clay-surface),
+    var(--clay-wall-tint) calc((var(--clay-wall-base) + var(--clay-wall-step) * 1) * 1%));
+  --_wand-3: color-mix(in oklch, var(--clay-surface),
+    var(--clay-wall-tint) calc((var(--clay-wall-base) + var(--clay-wall-step) * 2) * 1%));
+
+  /* Material: matte Knete hat kaum ein Rim-Light, glaenzende Keramik ein klares. */
+  --_rim: color-mix(in srgb, transparent, var(--clay-rim)
+    calc(var(--clay-material) * 100%));
+
+  /* Weicher Streuschatten, seitlich vom Lichtazimut geneigt. */
+  --_sx: calc(sin(var(--clay-light-az)) * -1);
+  --_sy: cos(var(--clay-light-az));
+
+  /* Gewinnt ein Objekt Hoehe, steigt seine Oberseite um genau diesen Betrag —
+     der Sockel fuellt danach den Platz, den sie verlassen hat, statt in den
+     Nachbarn zu wachsen. Verliert es Hoehe, sinkt sie entsprechend.
+     In Ruhe ist der Versatz null, deshalb bleiben die Originale getroffen. */
+  position: relative;
+  translate: 0 calc((var(--clay-rest-h) - var(--clay-h)) * 1px);
+
+  background: var(--clay-surface);
+  box-shadow:
+    inset 0 calc(var(--_tief) * 0.5px) calc(var(--_tief) * 0.9px) var(--clay-well-ink),
+    inset 0 0 0 calc(var(--_tief) * 0.12px) var(--clay-well-rim),
+    inset 0 1px 0 var(--_rim),
+    0 calc(var(--_hoch) * 0.34px) 0 var(--_wand-1),
+    0 calc(var(--_hoch) * 0.67px) 0 var(--_wand-2),
+    0 calc(var(--_hoch) * 1px)    0 var(--_wand-3),
+    calc(var(--_sx) * var(--_hoch) * var(--clay-shadow-drop) * 1px)
+    calc(var(--_sy) * var(--_hoch) * var(--clay-shadow-drop) * 1px)
+    calc(var(--_hoch) * var(--clay-shadow-blur) * 1px)
+    calc(var(--_hoch) * var(--clay-shadow-spread) * 1px)
+    var(--clay-shadow);
+}

@@ -1,0 +1,21 @@
+/* Sechs benannte Hoehen. Jede Zahl ist die sichtbare Kantenhoehe in Pixeln,
+   gemessen ueber der tragenden Flaeche — nicht ueber dem Boden. Deshalb ist
+   ein Knopf auf einer Karte flacher als die Karte selbst. */
+
+:root {
+  --clay-e-ground: 0;
+  --clay-e-plinth: 5;
+  --clay-e-deck: 7;
+  --clay-e-control: 3;
+  --clay-e-floating: 10;
+  --clay-e-flying: 14;
+  --clay-e-well: -6;
+}
+
+.clay-e-ground   { --clay-rest-h: var(--clay-e-ground); }
+.clay-e-plinth   { --clay-rest-h: var(--clay-e-plinth); }
+.clay-e-deck     { --clay-rest-h: var(--clay-e-deck); }
+.clay-e-control  { --clay-rest-h: var(--clay-e-control); }
+.clay-e-floating { --clay-rest-h: var(--clay-e-floating); }
+.clay-e-flying   { --clay-rest-h: var(--clay-e-flying); }
+.clay-e-well     { --clay-rest-h: var(--clay-e-well); }

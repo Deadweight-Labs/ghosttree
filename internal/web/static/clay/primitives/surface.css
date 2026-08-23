@@ -1,0 +1,55 @@
+/* Flaechen. Was traegt, ragt heraus; was aufnimmt, ist eingemeisselt.
+   Alle Masse kommen aus der Skala — kein rohes px in diesem Verzeichnis. */
+
+.clay-block {
+  --clay-rest-h: var(--clay-e-plinth);
+  --clay-surface: var(--clay-c-surface);
+  border-radius: var(--clay-radius-lg);
+  color: var(--clay-ink);
+  padding: var(--clay-space-5);
+}
+
+.clay-card {
+  --clay-rest-h: var(--clay-e-deck);
+  --clay-surface: var(--clay-c-surface);
+  border-radius: var(--clay-radius);
+  color: var(--clay-ink);
+  padding: var(--clay-space-4);
+  font-size: var(--clay-text-md);
+  line-height: var(--clay-leading-normal);
+}
+
+/* Eine Zeile liegt zunaechst flach im Deck und hebt erst beim Zugriff ab. */
+.clay-row {
+  --clay-rest-h: 0;
+  --clay-surface: transparent;
+  border-radius: var(--clay-radius-sm);
+  color: var(--clay-ink);
+  min-height: var(--clay-size-md);
+  padding: var(--clay-space-2) var(--clay-space-3);
+  font-size: var(--clay-text-sm);
+  font-weight: var(--clay-weight-body);
+  line-height: var(--clay-leading-snug);
+  display: flex;
+  align-items: center;
+  gap: var(--clay-space-3);
+}
+
+/* Beim Abheben muss die Zeile auch ueber ihren Nachbarn liegen — sonst
+   verschwindet ihr Sockel unter der naechsten Zeile, die spaeter gemalt wird. */
+.clay-row:hover,
+.clay-row:focus-visible {
+  --clay-h: var(--clay-e-floating);
+  --clay-surface: var(--clay-c-raised);
+  z-index: 1;
+}
+
+.clay-inset {
+  --clay-rest-h: var(--clay-e-well);
+  --clay-surface: var(--clay-c-sunken);
+  border-radius: var(--clay-radius-lg);
+  color: var(--clay-ink);
+  padding: var(--clay-space-4);
+  font-size: var(--clay-text-sm);
+  line-height: var(--clay-leading-normal);
+}

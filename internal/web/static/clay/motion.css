@@ -1,0 +1,35 @@
+/* Bewegung ist ein Parameter, kein Hausstil. Die benannten Kurven sind
+   Abkuerzungen, keine Vorschriften — jeder Wert ist erlaubt, 0s auch.
+
+   Die beiden Dialekte widersprechen sich hier bewusst: SampleProject-Clay verbietet
+   Overshoot, DWL-Clay setzt ihn ein. Die Engine entscheidet den Streit nicht. */
+
+:root {
+  --clay-ease-linear: linear;
+  --clay-ease-damped: cubic-bezier(.22, 1, .36, 1);
+  --clay-ease-springy: cubic-bezier(.28, 2.1, .35, 1);
+
+  --clay-ease: var(--clay-ease-damped);
+  --clay-dur: .18s;
+}
+
+.clay,
+.clay-block, .clay-card, .clay-row, .clay-inset,
+.clay-btn, .clay-toggle, .clay-check, .clay-radio,
+.clay-segmented, .clay-segmented > button, .clay-slider, .clay-tabbar,
+.clay-toggle::after,
+.clay-field, .clay-textarea, .clay-select, .clay-search,
+.clay-avatar, .clay-badge, .clay-progress,
+.clay-table, .clay-table thead th, .clay-empty, .clay-toolbar {
+  /* Die Hoehe traegt Kante, Schatten und Versatz. Flaechen- und Textfarbe
+     laufen mit, sonst schnappt die Farbe waehrend das Material noch faehrt —
+     am deutlichsten beim Wechsel der Segmented-Auswahl. */
+  transition:
+    --clay-h var(--clay-dur) var(--clay-ease),
+    background-color var(--clay-dur) var(--clay-ease),
+    color var(--clay-dur) var(--clay-ease);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --clay-dur: 0s; }
+}

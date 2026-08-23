@@ -8,6 +8,7 @@ import (
 
 	"github.com/Deadweight-Labs/ghosttree/internal/server"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
+	"github.com/Deadweight-Labs/ghosttree/internal/web"
 )
 
 func cmdServe(args []string, stdout io.Writer) int {
@@ -41,8 +42,11 @@ func cmdServe(args []string, stdout io.Writer) int {
 		fmt.Fprintf(stdout, "database schema is out of date - run 'ctx upgrade-schema --db %s' first\n", *db)
 		return 1
 	}
-	fmt.Fprintf(stdout, "ghosttree %s listening on %s (db %s)\n", version, *listen, *db)
-	if err := http.ListenAndServe(*listen, server.New(st)); err != nil {
+	root := http.NewServeMux()
+	root.Handle("/api/", server.New(st))
+	root.Handle("/", web.New(st))
+	fmt.Fprintf(stdout, "ghosttree %s listening on %s (db %s, ui /ui/)\n", version, *listen, *db)
+	if err := http.ListenAndServe(*listen, root); err != nil {
 		fmt.Fprintf(stdout, "serve: %v\n", err)
 		return 1
 	}

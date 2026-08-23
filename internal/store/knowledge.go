@@ -262,6 +262,24 @@ func (s *Store) SearchKnowledge(q string, filter scope.Axes, limit int) ([]Knowl
 	return s.searchKnowledge(q, where, args, limit)
 }
 
+// SearchAllKnowledge is the operator view, including entries hidden from
+// agents because they are quarantined, deprecated, or archived.
+func (s *Store) SearchAllKnowledge(q string, filter scope.Axes, limit int) ([]Knowledge, error) {
+	where, args := filter.FilterWhere()
+	if limit <= 0 {
+		limit = 50
+	}
+	args = append([]any{ftsQuery(q)}, args...)
+	args = append(args, limit)
+	rows, err := s.db.Query(`SELECT `+prefix(knowledgeCols, "k.")+`
+		FROM knowledge_fts f JOIN knowledge k ON k.id=f.rowid
+		WHERE knowledge_fts MATCH ? AND `+where+` ORDER BY f.rank LIMIT ?`, args...)
+	if err != nil {
+		return nil, err
+	}
+	return s.scanKnowledge(rows)
+}
+
 // SearchKnowledgeForContext searches the same union a session reads: global,
 // machine, project and their combinations. Without it, a session on a branch
 // could not find global or project-level knowledge.

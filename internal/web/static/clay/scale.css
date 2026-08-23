@@ -1,0 +1,91 @@
+/* Das Mass-System in drei Schichten.
+
+   1. Ableitung  — vier Grundwerte, alles Weitere gerechnet.
+   2. Benannte Tokens — die abgeleiteten Werte liegen offen und sind einzeln
+      ueberschreibbar, ohne dass man die Basis anfassen muss.
+   3. Rezepte — liegen in den Primitiven und benutzen ausschliesslich Schicht 2.
+
+   Masse in rem, damit das System der Systemschriftgroesse folgt statt sie zu
+   ignorieren. Die Typo skaliert bewusst NICHT mit der Dichte: enger heisst
+   weniger Luft, nicht kleinere Schrift. */
+
+:root {
+  /* --- Schicht 1: die Grundwerte ---------------------------------------- */
+  --clay-text-base: 0.9375rem;   /* 15px — zwischen SampleProject 13–14 und DWL 16,5 */
+  --clay-ratio: 1.2;             /* modulares Verhaeltnis der Typo-Stufen */
+  --clay-unit: 0.25rem;          /* 4px Raster */
+  --clay-density-base: 1;
+  --clay-density: 1;
+  --clay-tap-min: 1.5rem;        /* Untergrenze der Klickbarkeit: 24px */
+
+  /* --- Schicht 2: Typo (dichteunabhaengig) ------------------------------ */
+  --clay-text-xs: calc(var(--clay-text-base) / var(--clay-ratio));
+  --clay-text-sm: calc((var(--clay-text-base) + var(--clay-text-xs)) / 2);
+  --clay-text-md: var(--clay-text-base);
+  --clay-text-lg: calc(var(--clay-text-base) * var(--clay-ratio));
+  --clay-text-xl: calc(var(--clay-text-lg) * var(--clay-ratio));
+  --clay-text-2xl: calc(var(--clay-text-xl) * var(--clay-ratio));
+
+  --clay-leading-tight: 1;
+  --clay-leading-snug: 1.25;
+  --clay-leading-normal: 1.45;
+  --clay-leading-relaxed: 1.65;
+
+  --clay-weight-body: 500;
+  --clay-weight-strong: 600;
+  --clay-weight-heading: 700;
+
+  --clay-icon: calc(var(--clay-unit) * 4);
+
+  /* Der Fokusring bleibt absichtlich dichteunabhaengig: er muss auch in der
+     engsten Einstellung deutlich sichtbar sein. */
+  --clay-focus-width: 2px;
+}
+
+/* --- Plattform-Voreinstellungen ---------------------------------------- */
+
+[data-clay-density="tool"] {
+  --clay-density-base: .85;      /* seriöses Werkzeug: dicht, viele Zeilen */
+  --clay-density: .85;
+  --clay-tap-min: 1.5rem;        /* 24px */
+}
+
+[data-clay-density="touch"] {
+  --clay-density-base: 1.2;      /* locker und mobil */
+  --clay-density: 1.2;
+  --clay-tap-min: 2.75rem;       /* 44px — Fingerkuppe */
+}
+
+/* --- Modifikatoren pro Komponente -------------------------------------- */
+/* Sie rechnen gegen die Voreinstellung, nicht gegen sich selbst: verschachtelt
+   verstaerken sie sich deshalb nicht ins Absurde. */
+
+.clay-tight { --clay-density: calc(var(--clay-density-base) * .8); }
+.clay-wide  { --clay-density: calc(var(--clay-density-base) * 1.25); }
+
+/* --- Schicht 2: die dichteabhaengigen Tokens --------------------------- */
+/* Eine Custom Property wird an dem Element aufgeloest, das sie deklariert —
+   der fertige Wert vererbt danach unveraendert. Eine Deklaration allein auf
+   :root wuerde also mit Dichte 1 einfrieren und spaetere Aenderungen weiter
+   unten im Baum ignorieren. Deshalb wird dieser Block in jedem Bereich neu
+   deklariert, der die Dichte veraendert. */
+
+:root,
+[data-clay-theme],
+[data-clay-density],
+.clay-tight,
+.clay-wide {
+  --clay-space-1: calc(var(--clay-unit) * 1 * var(--clay-density));
+  --clay-space-2: calc(var(--clay-unit) * 2 * var(--clay-density));
+  --clay-space-3: calc(var(--clay-unit) * 3 * var(--clay-density));
+  --clay-space-4: calc(var(--clay-unit) * 4 * var(--clay-density));
+  --clay-space-5: calc(var(--clay-unit) * 5 * var(--clay-density));
+  --clay-space-6: calc(var(--clay-unit) * 6 * var(--clay-density));
+  --clay-space-8: calc(var(--clay-unit) * 8 * var(--clay-density));
+
+  /* max() erzwingt die Untergrenze im CSS selbst — nicht erst im Test.
+     Deshalb kann kein Modifikator und keine Voreinstellung sie reissen. */
+  --clay-size-sm: max(calc(var(--clay-unit) * 8 * var(--clay-density)), var(--clay-tap-min));
+  --clay-size-md: max(calc(var(--clay-unit) * 10 * var(--clay-density)), var(--clay-tap-min));
+  --clay-size-lg: max(calc(var(--clay-unit) * 12 * var(--clay-density)), var(--clay-tap-min));
+}

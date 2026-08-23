@@ -145,7 +145,7 @@ func TestApproveRaisesConfidence(t *testing.T) {
 func TestBootstrapSeparatesUnconfirmed(t *testing.T) {
 	confirmed := store.Knowledge{Type: "pitfall", Title: "confirmed thing", Body: "b", Confidence: "trusted"}
 	staged := store.Knowledge{Type: "pitfall", Title: "unconfirmed thing", Body: "b", Confidence: "staged"}
-	out := renderBootstrap([]store.Knowledge{confirmed, staged}, 4000)
+	out := RenderBootstrap([]store.Knowledge{confirmed, staged}, 4000)
 
 	iConf := strings.Index(out, "confirmed thing")
 	iStaged := strings.Index(out, "unconfirmed thing")
@@ -166,7 +166,7 @@ func TestBootstrapBudgetDropsStagedFirst(t *testing.T) {
 		{Type: "note", Title: "trusted one", Body: strings.Repeat("x", 150), Confidence: "trusted"},
 		{Type: "note", Title: "staged one", Body: strings.Repeat("y", 150), Confidence: "staged"},
 	}
-	out := renderBootstrap(entries, 260)
+	out := RenderBootstrap(entries, 260)
 	if !strings.Contains(out, "trusted one") {
 		t.Errorf("trusted entry must survive a tight budget:\n%s", out)
 	}
@@ -182,7 +182,7 @@ func TestBootstrapPutsInstructionsFirstAndComplete(t *testing.T) {
 		{Type: "instruction", Title: "how to build", Body: long, Confidence: "verified"},
 		{Type: "instruction", Title: "unreviewed rule", Body: "b", Confidence: "staged"},
 	}
-	out := renderBootstrap(entries, 800)
+	out := RenderBootstrap(entries, 800)
 
 	iInstr := strings.Index(out, "how to build")
 	iPit := strings.Index(out, "some pitfall")

@@ -1,0 +1,46 @@
+/* Wells sind subtraktiv: was Eingaben aufnimmt, liegt in einer Mulde.
+   Nie erhaben — die Physik allein trennt Bedienen von Eingeben. */
+
+.clay-field, .clay-textarea, .clay-select, .clay-search {
+  --clay-rest-h: var(--clay-e-well);
+  --clay-surface: var(--clay-c-raised);
+  border: 0;
+  border-radius: var(--clay-radius-sm);
+  color: var(--clay-ink);
+  font-family: var(--clay-font-ui, system-ui, sans-serif);
+  font-size: var(--clay-text-md);
+  font-weight: var(--clay-weight-body);
+  line-height: var(--clay-leading-normal);
+  min-block-size: var(--clay-size-md);
+  padding: var(--clay-space-2) var(--clay-space-3);
+  inline-size: 100%;
+}
+
+.clay-textarea {
+  min-block-size: calc(var(--clay-size-lg) * 2);
+  resize: vertical;
+  field-sizing: content;
+}
+
+.clay-search {
+  border-radius: 999px;
+  padding-inline-start: var(--clay-space-8);
+}
+
+.clay-select {
+  appearance: none;
+  padding-inline-end: var(--clay-space-8);
+  cursor: pointer;
+}
+
+.clay-field::placeholder,
+.clay-textarea::placeholder,
+.clay-search::placeholder { color: var(--clay-ink-faint); }
+
+.clay-field:focus-visible,
+.clay-textarea:focus-visible,
+.clay-select:focus-visible,
+.clay-search:focus-visible {
+  outline: var(--clay-focus-width) solid var(--clay-accent);
+  outline-offset: var(--clay-space-1);
+}

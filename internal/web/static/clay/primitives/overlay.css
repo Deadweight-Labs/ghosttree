@@ -1,0 +1,112 @@
+/* Schwebende Flaechen: hoechste Stufe, grosser weicher Schatten, Scrim.
+   Positionierung und Einblenden kommen ohne JavaScript aus. */
+
+.clay-popover {
+  --clay-rest-h: var(--clay-e-floating);
+  --clay-surface: var(--clay-c-raised);
+  border: 0;
+  border-radius: var(--clay-radius);
+  color: var(--clay-ink);
+  font-size: var(--clay-text-sm);
+  line-height: var(--clay-leading-snug);
+  padding: var(--clay-space-2);
+  margin: 0;
+}
+
+@supports (position-area: block-end) {
+  .clay-popover {
+    position-anchor: var(--clay-anchor);
+    position-area: block-end;
+    position-try-fallbacks: block-start, inline-end, inline-start;
+    margin-block-start: var(--clay-space-2);
+  }
+}
+
+.clay-modal {
+  --clay-rest-h: var(--clay-e-flying);
+  --clay-surface: var(--clay-c-surface);
+  border: 0;
+  border-radius: var(--clay-radius-lg);
+  color: var(--clay-ink);
+  font-size: var(--clay-text-md);
+  line-height: var(--clay-leading-normal);
+  padding: var(--clay-space-6);
+  max-inline-size: min(35rem, calc(100vw - var(--clay-space-8)));
+}
+
+.clay-modal::backdrop { background: var(--clay-scrim, rgba(0, 0, 0, .4)); }
+
+.clay-modal-sm { max-inline-size: min(24rem, calc(100vw - var(--clay-space-8))); }
+.clay-modal-lg { max-inline-size: min(52rem, calc(100vw - var(--clay-space-8))); }
+
+/* Kopf, Rumpf, Fusszeile. Nur der Rumpf scrollt — Titel und Aktionen bleiben
+   immer sichtbar, auch bei langem Inhalt.
+
+   Zwingend an [open] gebunden: ein blankes `display: grid` schlaegt die
+   eingebaute Regel `dialog:not([open]) { display: none }` und macht damit jeden
+   geschlossenen Dialog sichtbar. */
+.clay-modal[open]:has(.clay-modal-body) {
+  padding: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  max-block-size: min(40rem, calc(100vh - var(--clay-space-8)));
+}
+
+.clay-modal-head {
+  padding: var(--clay-space-5) var(--clay-space-6) var(--clay-space-3);
+  font-size: var(--clay-text-lg);
+  font-weight: var(--clay-weight-heading);
+  line-height: var(--clay-leading-snug);
+  text-box-trim: trim-both;
+  text-box-edge: cap alphabetic;
+}
+
+.clay-modal-body {
+  padding: var(--clay-space-3) var(--clay-space-6);
+  overflow-y: auto;
+}
+
+.clay-modal-foot {
+  padding: var(--clay-space-4) var(--clay-space-6) var(--clay-space-5);
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--clay-space-3);
+  flex-wrap: wrap;
+}
+
+.clay-toast {
+  --clay-rest-h: var(--clay-e-flying);
+  --clay-surface: var(--clay-c-raised);
+  border-radius: 999px;
+  color: var(--clay-ink);
+  font-family: var(--clay-font-ui, system-ui, sans-serif);
+  font-size: var(--clay-text-sm);
+  font-weight: var(--clay-weight-strong);
+  line-height: var(--clay-leading-tight);
+  text-box-trim: trim-both;
+  text-box-edge: cap alphabetic;
+  min-block-size: var(--clay-size-md);
+  padding-inline: var(--clay-space-5);
+  display: inline-grid;
+  align-items: center;
+}
+
+/* Einblenden ohne JavaScript: allow-discrete haelt display und overlay
+   waehrend des Uebergangs am Leben. */
+.clay-modal, .clay-popover, .clay-toast {
+  opacity: 1;
+  translate: 0 0;
+  transition:
+    --clay-h var(--clay-dur) var(--clay-ease),
+    opacity var(--clay-dur) var(--clay-ease),
+    translate var(--clay-dur) var(--clay-ease),
+    display var(--clay-dur) allow-discrete,
+    overlay var(--clay-dur) allow-discrete;
+}
+
+@starting-style {
+  .clay-modal[open], .clay-popover:popover-open, .clay-toast {
+    opacity: 0;
+    translate: 0 var(--clay-space-2);
+  }
+}
