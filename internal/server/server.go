@@ -27,6 +27,7 @@ func New(st *store.Store) http.Handler {
 	mux.HandleFunc("POST /api/sessions", a.createSession)
 	mux.HandleFunc("GET /api/sessions", a.listSessions)
 	mux.HandleFunc("POST /api/sessions/{id}/chunks", a.appendChunks)
+	mux.HandleFunc("GET /api/sessions/{id}/raw", a.rawSession)
 	mux.HandleFunc("GET /api/sessions/{id}", a.readSession)
 	mux.HandleFunc("POST /api/knowledge", a.createKnowledge)
 	mux.HandleFunc("GET /api/knowledge", a.listKnowledge)

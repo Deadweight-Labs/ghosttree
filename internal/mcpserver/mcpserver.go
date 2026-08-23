@@ -33,7 +33,7 @@ type GetInput struct{}
 type RememberInput struct {
 	Type      string `json:"type" jsonschema:"pitfall, decision, note or plan"`
 	Title     string `json:"title" jsonschema:"one line summary"`
-	Body      string `json:"body" jsonschema:"the knowledge itself"`
+	Body      string `json:"body" jsonschema:"the knowledge itself; for a decision, cover why it was taken, which alternatives were rejected and what the tradeoffs are"`
 	ScopeHint string `json:"scope_hint,omitempty" jsonschema:"project, branch, machine or global; omit to use the write defaults"`
 }
 
@@ -54,7 +54,7 @@ func (s *Server) Register(srv *mcp.Server) {
 	}, s.handleGet)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "context_remember",
-		Description: "Store a pitfall, decision, note or plan in ghosttree instead of writing it into the source tree.",
+		Description: "Store a pitfall, decision, note or plan in ghosttree instead of writing it into the source tree. A decision should record why it was taken, which alternatives were rejected and what the tradeoffs are, so it can be revisited later.",
 	}, s.handleRemember)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "context_sessions",
@@ -150,7 +150,28 @@ func (s *Server) handleRemember(ctx context.Context, _ *mcp.CallToolRequest, in 
 	if err != nil {
 		return nil, nil, err
 	}
-	return textResult(fmt.Sprintf("stored #%d [%s|%s]", saved.ID, saved.Type, scopeLabel(saved.Scope))), nil, nil
+	msg := fmt.Sprintf("stored #%d [%s|%s]", saved.ID, saved.Type, scopeLabel(saved.Scope))
+	if hint := reasoningHint(saved); hint != "" {
+		msg += "\n" + hint
+	}
+	return textResult(msg), nil, nil
+}
+
+// reasoningHint nudges decisions towards why/alternatives/tradeoffs. A decision
+// that records only its outcome cannot be revisited later, because the reason
+// it was taken is exactly what a future reader needs. It stays a hint rather
+// than a rejection: a half-recorded decision beats a rejected one.
+func reasoningHint(k store.Knowledge) string {
+	if k.Type != "decision" {
+		return ""
+	}
+	body := strings.ToLower(k.Body)
+	for _, part := range []string{"why", "alternativ", "tradeoff"} {
+		if !strings.Contains(body, part) {
+			return "hint: decisions are most useful when the body covers why, alternatives and tradeoffs"
+		}
+	}
+	return ""
 }
 
 func (s *Server) handleSessions(ctx context.Context, _ *mcp.CallToolRequest, in SessionsInput) (*mcp.CallToolResult, any, error) {

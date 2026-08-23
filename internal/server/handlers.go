@@ -73,6 +73,27 @@ func (a *api) readSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, chunks)
 }
 
+// rawSession reconstructs the original transcript as newline-delimited JSON.
+// The harnesses expire their own transcripts, so this is what makes ghosttree
+// the long-term copy rather than just an index of one.
+func (a *api) rawSession(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(r)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "bad session id")
+		return
+	}
+	lines, err := a.st.SessionRaw(id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-ndjson; charset=utf-8")
+	w.WriteHeader(200)
+	for _, line := range lines {
+		fmt.Fprintln(w, line)
+	}
+}
+
 // knowledgeRequest is store.Knowledge plus the auto_scope envelope: when the
 // caller sends no scope at all, the server applies the write defaults for the
 // context it was given.

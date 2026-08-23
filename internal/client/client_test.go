@@ -40,6 +40,33 @@ func TestClientRoundtrip(t *testing.T) {
 	}
 }
 
+func TestClientRawSession(t *testing.T) {
+	st, _ := store.Open(":memory:")
+	t.Cleanup(func() { st.Close() })
+	token, _ := st.AddPerson("robin")
+	srv := httptest.NewServer(server.New(st))
+	t.Cleanup(srv.Close)
+
+	c := New(config.Config{ServerURL: srv.URL, Token: token, Machine: "workstation-a"})
+	id, err := c.UpsertSession(store.Session{Harness: "claude-code", ExternalID: "r1", StartedAt: "2026-08-23T00:00:00Z"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.AppendChunks(id, []store.Chunk{
+		{Seq: 0, Role: "user", Text: "a", Raw: `{"n":0}`},
+		{Seq: 1, Role: "assistant", Text: "b", Raw: `{"n":1}`},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := c.RawSession(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw != "{\"n\":0}\n{\"n\":1}\n" {
+		t.Errorf("raw = %q", raw)
+	}
+}
+
 func TestClientSessionsAndSearch(t *testing.T) {
 	st, _ := store.Open(":memory:")
 	t.Cleanup(func() { st.Close() })

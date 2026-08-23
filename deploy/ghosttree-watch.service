@@ -1,0 +1,11 @@
+[Unit]
+Description=ghosttree session collector
+After=network-online.target
+
+[Service]
+ExecStart=%h/.local/bin/ctx watch
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=default.target

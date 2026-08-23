@@ -1,0 +1,15 @@
+[Unit]
+Description=ghosttree context server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=ghosttree
+DynamicUser=yes
+StateDirectory=ghosttree
+; deployment host also has an open LAN interface, so bind the private network address only.
+ExecStart=/usr/local/bin/ctx serve --db /var/lib/ghosttree/ghosttree.db --listen 127.0.0.1:8474
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

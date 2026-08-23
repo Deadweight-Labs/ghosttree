@@ -140,6 +140,13 @@ func (c *Client) ReadSession(id int64, from, limit int) ([]store.Chunk, error) {
 	return out, err
 }
 
+// RawSession returns a session's original transcript as newline-delimited JSON.
+func (c *Client) RawSession(id int64) (string, error) {
+	var raw string
+	err := c.do("GET", "/api/sessions/"+strconv.FormatInt(id, 10)+"/raw", nil, nil, &raw)
+	return raw, err
+}
+
 // Remember writes a knowledge entry. When k.Scope is empty, autoCtx drives the
 // server-side write defaults.
 func (c *Client) Remember(k store.Knowledge, autoCtx scope.Axes) (store.Knowledge, error) {

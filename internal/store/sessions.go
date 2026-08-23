@@ -104,6 +104,26 @@ func (s *Store) ReadSession(id int64, fromSeq, limit int) ([]Chunk, error) {
 	return out, rows.Err()
 }
 
+// SessionRaw returns every stored JSONL line of a session in file order.
+// Deliberately unpaginated: it reconstructs the original transcript, and a
+// partial transcript is not an archive.
+func (s *Store) SessionRaw(id int64) ([]string, error) {
+	rows, err := s.db.Query(`SELECT raw FROM session_chunks WHERE session_id = ? ORDER BY seq`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		out = append(out, raw)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) SearchSessions(q string, filter scope.Axes, limit int) ([]SessionHit, error) {
 	if limit <= 0 {
 		limit = 20

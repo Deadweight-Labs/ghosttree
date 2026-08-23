@@ -118,6 +118,74 @@ func TestInstallClaudeRuleSection(t *testing.T) {
 	}
 }
 
+func failing(checks []Check) []string {
+	var names []string
+	for _, c := range checks {
+		if !c.OK {
+			names = append(names, c.Name)
+		}
+	}
+	return names
+}
+
+func TestVerifyClaudeFailsOnFreshHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	checks := VerifyClaude(home)
+	if len(checks) == 0 {
+		t.Fatal("verify must report checks, not an empty list")
+	}
+	if len(failing(checks)) != len(checks) {
+		t.Errorf("nothing is installed, so every check should fail: %+v", checks)
+	}
+	for _, c := range checks {
+		if c.Fix == "" {
+			t.Errorf("failing check %q must tell the user how to fix it", c.Name)
+		}
+	}
+}
+
+func TestVerifyClaudePassesAfterInstall(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	if _, err := InstallClaude(home); err != nil {
+		t.Fatal(err)
+	}
+	if bad := failing(VerifyClaude(home)); len(bad) != 0 {
+		t.Errorf("after install these still fail: %v", bad)
+	}
+}
+
+// The pitfall doctor exists for: with CLAUDE_CONFIG_DIR set, the installer
+// writes only there, but launchers that do not set it read ~/.claude.json and
+// see no ghosttree at all.
+func TestVerifyClaudeDetectsUnregisteredFallbackConfig(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, "cfgdir")
+	os.MkdirAll(dir, 0o755)
+	t.Setenv("CLAUDE_CONFIG_DIR", dir)
+	if _, err := InstallClaude(home); err != nil {
+		t.Fatal(err)
+	}
+	bad := failing(VerifyClaude(home))
+	if len(bad) != 1 || !strings.Contains(bad[0], "fallback") {
+		t.Errorf("want exactly the fallback config check to fail, got %v", bad)
+	}
+}
+
+func TestVerifyCodex(t *testing.T) {
+	home := t.TempDir()
+	if bad := failing(VerifyCodex(home)); len(bad) == 0 {
+		t.Error("fresh home: codex checks must fail")
+	}
+	if _, err := InstallCodex(home); err != nil {
+		t.Fatal(err)
+	}
+	if bad := failing(VerifyCodex(home)); len(bad) != 0 {
+		t.Errorf("after install these still fail: %v", bad)
+	}
+}
+
 func TestReplaceSection(t *testing.T) {
 	got := replaceSection("a\n<!-- ghosttree:start -->\nold\n<!-- ghosttree:end -->\nb\n", "new")
 	if strings.Contains(got, "old") || !strings.Contains(got, "new") {

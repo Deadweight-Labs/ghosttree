@@ -29,6 +29,10 @@ func run(args []string, stdout io.Writer) int {
 		return cmdHook(rest, stdout)
 	case "status":
 		return cmdStatus(rest, stdout)
+	case "export":
+		return cmdExport(rest, stdout)
+	case "doctor":
+		return cmdDoctor(rest, stdout)
 	case "person":
 		return cmdPerson(rest, stdout)
 	case "setup":
@@ -51,6 +55,8 @@ const usage = `usage: ctx <command>
   setup    write client config (server URL + token)
   person   manage persons/tokens (server-side)
   status   show local setup state
+  doctor   check the harness wiring for drift (--fix to repair)
+  export   write a session's original transcript as JSONL
   version  print version`
 
 func main() {

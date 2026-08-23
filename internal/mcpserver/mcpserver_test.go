@@ -112,11 +112,62 @@ func TestGetBootstrap(t *testing.T) {
 	}
 }
 
+// A decision that does not say why it was taken is a decision nobody can
+// revisit later, so storing one returns a hint instead of failing.
+func TestDecisionWithoutReasoningGetsHint(t *testing.T) {
+	c, _ := newTestClient(t)
+	s := &Server{client: c, ctxAxes: scope.Axes{Project: "github.com/x/y", Machine: "workstation-a"}}
+	res, _, err := s.handleRemember(context.Background(), nil, RememberInput{
+		Type: "decision", Title: "sqlite over postgres", Body: "it is simpler"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := text(t, res)
+	if !strings.Contains(got, "stored #") {
+		t.Errorf("hint must not replace the confirmation: %s", got)
+	}
+	for _, want := range []string{"why", "alternatives", "tradeoffs"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("hint should name %q, got: %s", want, got)
+		}
+	}
+}
+
+func TestDecisionWithReasoningGetsNoHint(t *testing.T) {
+	c, _ := newTestClient(t)
+	s := &Server{client: c, ctxAxes: scope.Axes{Project: "github.com/x/y", Machine: "workstation-a"}}
+	res, _, err := s.handleRemember(context.Background(), nil, RememberInput{
+		Type:  "decision",
+		Title: "sqlite over postgres",
+		Body: `Why: a single writer is enough for this workload.
+Alternatives: postgres, rejected because it needs a second service.
+Tradeoffs: no concurrent writers, and no network access to the data.`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := text(t, res); strings.Contains(got, "hint:") {
+		t.Errorf("structured decision should get no hint: %s", got)
+	}
+}
+
+func TestNonDecisionGetsNoHint(t *testing.T) {
+	c, _ := newTestClient(t)
+	s := &Server{client: c, ctxAxes: scope.Axes{Project: "github.com/x/y", Machine: "workstation-a"}}
+	res, _, err := s.handleRemember(context.Background(), nil, RememberInput{
+		Type: "note", Title: "ollama lives in /usr/bin", Body: "nothing structured here"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := text(t, res); strings.Contains(got, "hint:") {
+		t.Errorf("only decisions get the hint, got: %s", got)
+	}
+}
+
 func TestSessionsTool(t *testing.T) {
 	c, _ := newTestClient(t)
 	s := &Server{client: c, ctxAxes: scope.Axes{Project: "github.com/x/y", Machine: "workstation-a"}}
 	id, err := c.UpsertSession(store.Session{Harness: "codex", ExternalID: "s1",
-		Scope: scope.Axes{Project: "github.com/x/y", Branch: "old", Machine: "workstation-a"},
+		Scope:     scope.Axes{Project: "github.com/x/y", Branch: "old", Machine: "workstation-a"},
 		StartedAt: "2026-08-23T00:00:00Z"})
 	if err != nil {
 		t.Fatal(err)

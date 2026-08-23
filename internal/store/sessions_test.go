@@ -1,6 +1,7 @@
 package store
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
@@ -31,6 +32,51 @@ func TestSessionUpsertAndChunks(t *testing.T) {
 	got, _ := s.ReadSession(id, 0, 10)
 	if len(got) != 2 {
 		t.Fatalf("chunks = %d, want 2", len(got))
+	}
+}
+
+// Claude Code deletes its transcripts after 30 days, so the raw JSONL we hold
+// is the only long-term copy. Export must return every line, in file order,
+// including the ones the parser never understood.
+func TestSessionRawReturnsEveryLineInOrder(t *testing.T) {
+	s := openTest(t)
+	id, _ := s.UpsertSession(Session{Harness: "claude-code", ExternalID: "raw1", StartedAt: "2026-08-23T00:00:00Z"})
+	s.AppendChunks(id, []Chunk{
+		{Seq: 2, Role: "assistant", Text: "third", Raw: `{"n":2}`},
+		{Seq: 0, Role: "user", Text: "first", Raw: `{"n":0}`},
+		{Seq: 1, Role: "other", Text: "", Raw: `{"n":1,"type":"queue-operation"}`},
+	})
+	lines, err := s.SessionRaw(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{`{"n":0}`, `{"n":1,"type":"queue-operation"}`, `{"n":2}`}
+	if len(lines) != len(want) {
+		t.Fatalf("got %d lines, want %d: %v", len(lines), len(want), lines)
+	}
+	for i := range want {
+		if lines[i] != want[i] {
+			t.Errorf("line %d = %q, want %q", i, lines[i], want[i])
+		}
+	}
+}
+
+// ReadSession caps at 200 rows by default; an export that inherited that cap
+// would silently truncate every real session.
+func TestSessionRawIsNotCappedByReadLimit(t *testing.T) {
+	s := openTest(t)
+	id, _ := s.UpsertSession(Session{Harness: "codex", ExternalID: "raw2", StartedAt: "2026-08-23T00:00:00Z"})
+	var chunks []Chunk
+	for i := 0; i < 250; i++ {
+		chunks = append(chunks, Chunk{Seq: i, Role: "user", Text: "x", Raw: `{"i":` + strconv.Itoa(i) + `}`})
+	}
+	s.AppendChunks(id, chunks)
+	lines, err := s.SessionRaw(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lines) != 250 {
+		t.Errorf("got %d lines, want all 250", len(lines))
 	}
 }
 

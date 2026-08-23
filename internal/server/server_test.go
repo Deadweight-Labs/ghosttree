@@ -44,6 +44,35 @@ func req(t *testing.T, method, url, token string, body any) *http.Response {
 	return resp
 }
 
+func TestRawExportReturnsNDJSON(t *testing.T) {
+	srv, tok := newTestServer(t)
+	req(t, "POST", srv.URL+"/api/sessions", tok, store.Session{
+		Harness: "claude-code", ExternalID: "e1", CWD: "/x", StartedAt: "2026-08-23T00:00:00Z"})
+	req(t, "POST", srv.URL+"/api/sessions/1/chunks", tok, map[string]any{"chunks": []store.Chunk{
+		{Seq: 0, Role: "user", Text: "hello", Raw: `{"n":0}`},
+		{Seq: 1, Role: "other", Text: "", Raw: `{"n":1}`},
+	}})
+
+	resp := req(t, "GET", srv.URL+"/api/sessions/1/raw", tok, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "x-ndjson") {
+		t.Errorf("content type = %q, want x-ndjson", ct)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	if string(b) != "{\"n\":0}\n{\"n\":1}\n" {
+		t.Errorf("body = %q", b)
+	}
+}
+
+func TestRawExportRequiresAuth(t *testing.T) {
+	srv, _ := newTestServer(t)
+	if resp := req(t, "GET", srv.URL+"/api/sessions/1/raw", "", nil); resp.StatusCode != 401 {
+		t.Errorf("status = %d, want 401", resp.StatusCode)
+	}
+}
+
 func TestAuthRequired(t *testing.T) {
 	srv, _ := newTestServer(t)
 	if resp := req(t, "GET", srv.URL+"/api/knowledge", "", nil); resp.StatusCode != 401 {
