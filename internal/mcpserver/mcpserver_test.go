@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/activation"
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
@@ -109,6 +110,44 @@ func TestGetBootstrap(t *testing.T) {
 	}
 	if got := text(t, res); !strings.Contains(got, "sqlite over postgres") {
 		t.Errorf("bootstrap missing entry: %s", got)
+	}
+}
+
+func TestGetBootstrapAcceptsPathAndTask(t *testing.T) {
+	c, st := newTestClient(t)
+	id, _ := st.InsertKnowledge(store.Knowledge{Type: "instruction", Title: "core rule", Body: "b"})
+	if err := st.SetActivation(id, activation.Rule{Paths: []string{"core/**"}, Tasks: []string{"code"}}); err != nil {
+		t.Fatal(err)
+	}
+	s := NewServer(c, scope.Axes{}, activation.Context{RepoPath: "ui"})
+	res, _, err := s.handleGet(context.Background(), nil, GetInput{Paths: []string{"core/lib"}, Task: "code"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := text(t, res); !strings.Contains(got, "core rule") {
+		t.Fatalf("path/task gated instruction missing: %s", got)
+	}
+	if _, _, err := s.handleGet(context.Background(), nil, GetInput{Task: "release"}); err == nil {
+		t.Fatal("invalid task must be rejected")
+	}
+}
+
+func TestSearchRendersInstructionActivation(t *testing.T) {
+	c, st := newTestClient(t)
+	id, _ := st.InsertKnowledge(store.Knowledge{Type: "instruction", Title: "core searchable", Body: "rule"})
+	if err := st.SetActivation(id, activation.Rule{Paths: []string{"core/**"}, Tasks: []string{"review"}}); err != nil {
+		t.Fatal(err)
+	}
+	s := NewServer(c, scope.Axes{})
+	res, _, err := s.handleSearch(context.Background(), nil, SearchInput{Query: "searchable", Kind: "knowledge"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := text(t, res)
+	for _, want := range []string{"paths:core/**", "tasks:review"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("search result missing %q: %s", want, got)
+		}
 	}
 }
 

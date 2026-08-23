@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/activation"
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -13,12 +14,17 @@ import (
 )
 
 type Server struct {
-	client  *client.Client
-	ctxAxes scope.Axes
+	client         *client.Client
+	ctxAxes        scope.Axes
+	baseActivation activation.Context
 }
 
-func NewServer(c *client.Client, axes scope.Axes) *Server {
-	return &Server{client: c, ctxAxes: axes}
+func NewServer(c *client.Client, axes scope.Axes, base ...activation.Context) *Server {
+	s := &Server{client: c, ctxAxes: axes}
+	if len(base) > 0 {
+		s.baseActivation = base[0]
+	}
+	return s
 }
 
 type SearchInput struct {
@@ -28,7 +34,10 @@ type SearchInput struct {
 	Machine     string `json:"machine,omitempty" jsonschema:"restrict to a machine hostname"`
 }
 
-type GetInput struct{}
+type GetInput struct {
+	Paths []string `json:"paths,omitempty" jsonschema:"repository-relative paths currently being worked on"`
+	Task  string   `json:"task,omitempty" jsonschema:"code, review, test, deploy, security or docs"`
+}
 
 type RememberInput struct {
 	Type      string `json:"type" jsonschema:"pitfall, decision, note or plan"`
@@ -120,8 +129,16 @@ func (s *Server) handleSearch(ctx context.Context, _ *mcp.CallToolRequest, in Se
 	return textResult(out.String()), nil, nil
 }
 
-func (s *Server) handleGet(ctx context.Context, _ *mcp.CallToolRequest, _ GetInput) (*mcp.CallToolResult, any, error) {
-	md, err := s.client.Bootstrap(s.ctxAxes, 0)
+func (s *Server) handleGet(ctx context.Context, _ *mcp.CallToolRequest, in GetInput) (*mcp.CallToolResult, any, error) {
+	actx := s.baseActivation
+	actx.Paths = append([]string(nil), in.Paths...)
+	actx.Task = in.Task
+	var err error
+	actx, err = activation.NormalizeContext(actx)
+	if err != nil {
+		return nil, nil, err
+	}
+	md, err := s.client.Bootstrap(s.ctxAxes, actx, 0)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -217,7 +234,16 @@ func (s *Server) handleSessions(ctx context.Context, _ *mcp.CallToolRequest, in 
 }
 
 func renderKnowledge(k store.Knowledge) string {
-	return fmt.Sprintf("- [%s|%s|%s] %s — %s\n", k.Type, scopeLabel(k.Scope), k.Confidence, k.Title, oneLine(k.Body))
+	label := fmt.Sprintf("%s|%s|%s", k.Type, scopeLabel(k.Scope), k.Confidence)
+	if k.Type == "instruction" {
+		if len(k.Activation.Paths) > 0 {
+			label += "|paths:" + strings.Join(k.Activation.Paths, ",")
+		}
+		if len(k.Activation.Tasks) > 0 {
+			label += "|tasks:" + strings.Join(k.Activation.Tasks, ",")
+		}
+	}
+	return fmt.Sprintf("- [%s] %s — %s\n", label, k.Title, oneLine(k.Body))
 }
 
 func renderSession(se store.Session) string {

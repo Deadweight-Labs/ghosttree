@@ -128,3 +128,51 @@ func TestSchemaCurrentDetectsOldDatabase(t *testing.T) {
 		t.Error("an old database must not report a current schema")
 	}
 }
+
+func TestUpgradeTypesKeepsDataAndSearch(t *testing.T) {
+	path := makeOldDB(t)
+	if _, err := UpgradeSchema(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := UpgradeTypes(path); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.InsertKnowledge(Knowledge{Type: "instruction", Title: "build", Body: "make test"}); err != nil {
+		t.Errorf("instruction must be allowed after upgrade: %v", err)
+	}
+	for term, wantID := range map[string]int64{"private network": 1, "postgres": 5} {
+		hits, err := s.SearchKnowledge(term, scope.Axes{}, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(hits) != 1 || hits[0].ID != wantID {
+			t.Errorf("search %q returned %+v, want exactly id %d", term, hits, wantID)
+		}
+	}
+}
+
+func TestUpgradeTypesCreatesInstructionActivationTables(t *testing.T) {
+	path := makeOldDB(t)
+	if _, err := UpgradeSchema(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := UpgradeTypes(path); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, table := range []string{"instruction_activation_path", "instruction_activation_task"} {
+		var name string
+		if err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&name); err != nil {
+			t.Errorf("missing %s after upgrade: %v", table, err)
+		}
+	}
+}

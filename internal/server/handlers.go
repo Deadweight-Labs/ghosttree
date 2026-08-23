@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/activation"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
@@ -133,12 +134,94 @@ func (a *api) createKnowledge(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) listKnowledge(w http.ResponseWriter, r *http.Request) {
-	ks, err := a.st.KnowledgeForContext(axesFromQuery(r))
+	var ks []store.Knowledge
+	var err error
+	if r.URL.Query().Get("include_archived") == "1" {
+		ks, err = a.st.KnowledgeForProject(r.URL.Query().Get("project"))
+	} else {
+		ks, err = a.st.KnowledgeForContext(axesFromQuery(r))
+	}
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, 200, ks)
+}
+
+func (a *api) setRequestState(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(r)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "bad knowledge id")
+		return
+	}
+	var body struct {
+		State        string `json:"state"`
+		EvidenceKind string `json:"evidence_kind"`
+		EvidenceRef  string `json:"evidence_ref"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := a.st.SetRequestState(id, body.State, body.EvidenceKind, body.EvidenceRef, personOf(r)); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *api) insertMigratedKnowledge(w http.ResponseWriter, r *http.Request) {
+	var in store.MigratedEntry
+	if err := readJSON(r, &in); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	in.Knowledge.Person = personOf(r)
+	saved, err := a.st.InsertMigrated(in)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, saved)
+}
+
+func (a *api) beginMigration(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Project   string            `json:"project"`
+		Artifacts map[string]string `json:"artifacts"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	id, err := a.st.BeginMigration(body.Project, body.Artifacts)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int64{"id": id})
+}
+
+func (a *api) completeMigration(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(r)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "bad migration id")
+		return
+	}
+	if err := a.st.CompleteMigration(id); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *api) completedMigrationArtifacts(w http.ResponseWriter, r *http.Request) {
+	out, err := a.st.CompletedMigrationArtifacts(r.URL.Query().Get("project"))
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // PendingEntry is a knowledge entry plus what a human needs to judge it.
@@ -230,7 +313,12 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 const defaultBudget = 4000
 
 func (a *api) bootstrap(w http.ResponseWriter, r *http.Request) {
-	entries, err := a.st.KnowledgeForContext(axesFromQuery(r))
+	actx, err := activationFromQuery(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	entries, err := a.st.KnowledgeForActivatedContext(axesFromQuery(r), actx)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -240,10 +328,9 @@ func (a *api) bootstrap(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, renderBootstrap(entries, intParam(r, "budget", defaultBudget)))
 }
 
-// renderBootstrap builds the auto-injected context package. Confirmed
-// knowledge comes first and unconfirmed knowledge is fenced off in its own
-// labelled section, so a tight budget cuts the uncertain material first and an
-// agent can tell the two apart.
+// renderBootstrap builds the auto-injected context package. Binding
+// instructions are always complete and first; other confirmed knowledge comes
+// before unconfirmed knowledge so a tight budget cuts uncertain material first.
 func renderBootstrap(entries []store.Knowledge, budget int) string {
 	if budget <= 0 {
 		budget = defaultBudget
@@ -251,9 +338,11 @@ func renderBootstrap(entries []store.Knowledge, budget int) string {
 	if len(entries) == 0 {
 		return ""
 	}
-	var confirmed, staged []store.Knowledge
+	var instructions, confirmed, staged []store.Knowledge
 	for _, k := range entries {
-		if k.Confidence == "staged" {
+		if k.Type == "instruction" {
+			instructions = append(instructions, k)
+		} else if k.Confidence == "staged" {
 			staged = append(staged, k)
 		} else {
 			confirmed = append(confirmed, k)
@@ -261,15 +350,51 @@ func renderBootstrap(entries []store.Knowledge, budget int) string {
 	}
 	var b strings.Builder
 	b.WriteString("## Known context (ghosttree)\n")
-	truncated := writeGroups(&b, confirmed, budget, "")
+	if len(instructions) > 0 {
+		b.WriteString("\n### Instructions (binding)\n")
+		for _, k := range instructions {
+			mark := ""
+			if k.Confidence == "staged" || k.Confidence == "quarantined" {
+				mark = " [unconfirmed]"
+			}
+			label := scopeLabel(k.Scope)
+			if gate := activationLabel(k.Activation); gate != "" {
+				label += " | " + gate
+			}
+			fmt.Fprintf(&b, "- [%s]%s %s — %s\n", label, mark, k.Title, oneLine(k.Body))
+		}
+	}
+	// Instructions do not compete for the context budget. Preserve the same
+	// allowance for all remaining groups regardless of instruction length.
+	contentLimit := budget + b.Len()
+	truncated := writeGroups(&b, confirmed, contentLimit, "")
 	if len(staged) > 0 && !truncated {
-		truncated = writeGroups(&b, staged, budget,
+		truncated = writeGroups(&b, staged, contentLimit,
 			"\n## Unconfirmed (distilled, not yet approved — verify before relying on it)\n")
 	}
 	if truncated {
 		b.WriteString("…(truncated, use context_search for more)\n")
 	}
 	return b.String()
+}
+
+func activationFromQuery(r *http.Request) (activation.Context, error) {
+	return activation.NormalizeContext(activation.Context{
+		RepoPath: r.URL.Query().Get("repo_path"),
+		Paths:    r.URL.Query()["path"],
+		Task:     r.URL.Query().Get("task"),
+	})
+}
+
+func activationLabel(r activation.Rule) string {
+	var parts []string
+	if len(r.Paths) > 0 {
+		parts = append(parts, "paths:"+strings.Join(r.Paths, ","))
+	}
+	if len(r.Tasks) > 0 {
+		parts = append(parts, "tasks:"+strings.Join(r.Tasks, ","))
+	}
+	return strings.Join(parts, " | ")
 }
 
 // writeGroups appends entries grouped by type and reports whether the budget

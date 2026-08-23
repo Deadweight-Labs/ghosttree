@@ -26,7 +26,9 @@ const ruleText = `## ghosttree
 Code comments explain code to humans. Operational history, failed approaches
 and session notes go to ghosttree via the ` + "`context_remember`" + ` MCP tool, never
 into source comments. Search prior knowledge with ` + "`context_search`" + ` before
-re-deriving it.`
+re-deriving it. Call ` + "`context_get`" + ` again with repository-relative paths before
+working in another subtree, and with an explicit task tag for deploy, security,
+review, test or docs work.`
 
 func section(body string) string {
 	return markerStart + "\n" + body + "\n" + markerEnd + "\n"

@@ -32,6 +32,11 @@ func TestInstallCodexIdempotent(t *testing.T) {
 	if !strings.Contains(string(agents), "context_get") {
 		t.Errorf("AGENTS.md must tell codex to call context_get:\n%s", agents)
 	}
+	for _, want := range []string{"repository-relative paths", "deploy", "security", "review", "test", "docs"} {
+		if !strings.Contains(string(agents), want) {
+			t.Errorf("AGENTS.md missing refresh guidance %q:\n%s", want, agents)
+		}
+	}
 }
 
 func TestInstallClaudePreservesSettings(t *testing.T) {

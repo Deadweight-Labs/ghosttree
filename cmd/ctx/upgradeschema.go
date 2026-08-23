@@ -25,15 +25,26 @@ func cmdUpgradeSchema(args []string, stdout io.Writer) int {
 		fmt.Fprintln(stdout, upgradeUsage)
 		return 2
 	}
-	backup, err := store.UpgradeSchema(*dbPath)
+	trustBackup, err := store.UpgradeSchema(*dbPath)
 	if err != nil {
 		fmt.Fprintf(stdout, "upgrade failed: %v\n", err)
 		return 1
 	}
-	if backup == "" {
+	typesBackup, err := store.UpgradeTypes(*dbPath)
+	if err != nil {
+		fmt.Fprintf(stdout, "type upgrade failed: %v\n", err)
+		return 1
+	}
+	if trustBackup == "" && typesBackup == "" {
 		fmt.Fprintln(stdout, "schema already current, nothing to do")
 		return 0
 	}
-	fmt.Fprintf(stdout, "backup written to %s\nschema upgraded\n", backup)
+	if trustBackup != "" {
+		fmt.Fprintf(stdout, "trust schema backup written to %s\n", trustBackup)
+	}
+	if typesBackup != "" {
+		fmt.Fprintf(stdout, "type schema backup written to %s\n", typesBackup)
+	}
+	fmt.Fprintln(stdout, "schema upgraded")
 	return 0
 }

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/activation"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -153,6 +154,7 @@ func (c *Client) Remember(k store.Knowledge, autoCtx scope.Axes) (store.Knowledg
 	body := map[string]any{
 		"type": k.Type, "title": k.Title, "body": k.Body,
 		"scope": k.Scope, "confidence": k.Confidence, "status": k.Status,
+		"origin":  k.Origin,
 		"harness": k.Harness, "session_ref": k.SessionRef,
 		"auto_scope": map[string]any{"context": autoCtx},
 	}
@@ -189,6 +191,46 @@ func (c *Client) Knowledge(ax scope.Axes) ([]store.Knowledge, error) {
 	return out, err
 }
 
+func (c *Client) ProjectKnowledge(project string, includeArchived bool) ([]store.Knowledge, error) {
+	q := axesQuery(scope.Axes{Project: project})
+	if includeArchived {
+		q.Set("include_archived", "1")
+	}
+	var out []store.Knowledge
+	err := c.do("GET", "/api/knowledge", q, nil, &out)
+	return out, err
+}
+
+func (c *Client) SetRequestState(id int64, state, kind, ref string) error {
+	body := map[string]string{"state": state, "evidence_kind": kind, "evidence_ref": ref}
+	return c.do("PUT", "/api/knowledge/"+strconv.FormatInt(id, 10)+"/request-state", nil, body, nil)
+}
+
+func (c *Client) InsertMigrated(in store.MigratedEntry) (store.Knowledge, error) {
+	var out store.Knowledge
+	err := c.do("POST", "/api/migrated-knowledge", nil, in, &out)
+	return out, err
+}
+
+func (c *Client) BeginMigration(project string, artifacts map[string]string) (int64, error) {
+	var out struct {
+		ID int64 `json:"id"`
+	}
+	err := c.do("POST", "/api/migrations", nil, map[string]any{"project": project, "artifacts": artifacts}, &out)
+	return out.ID, err
+}
+
+func (c *Client) CompleteMigration(id int64) error {
+	return c.do("PUT", "/api/migrations/"+strconv.FormatInt(id, 10)+"/complete", nil, nil, nil)
+}
+
+func (c *Client) CompletedMigrationArtifacts(project string) (map[string][]string, error) {
+	q := url.Values{"project": {project}}
+	var out map[string][]string
+	err := c.do("GET", "/api/migrations", q, nil, &out)
+	return out, err
+}
+
 func (c *Client) Search(q, kind string, filter scope.Axes, limit int) (SearchResult, error) {
 	return c.search(q, kind, filter, limit, false)
 }
@@ -216,8 +258,17 @@ func (c *Client) search(q, kind string, filter scope.Axes, limit int, union bool
 	return out, err
 }
 
-func (c *Client) Bootstrap(ax scope.Axes, budget int) (string, error) {
+func (c *Client) Bootstrap(ax scope.Axes, actx activation.Context, budget int) (string, error) {
 	q := axesQuery(ax)
+	if actx.RepoPath != "" {
+		q.Set("repo_path", actx.RepoPath)
+	}
+	for _, p := range actx.Paths {
+		q.Add("path", p)
+	}
+	if actx.Task != "" {
+		q.Set("task", actx.Task)
+	}
 	if budget > 0 {
 		q.Set("budget", strconv.Itoa(budget))
 	}

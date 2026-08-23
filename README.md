@@ -40,6 +40,15 @@ everything that applies to it: global, machine, project, project+branch,
 project+machine. Writing follows defaults per entry type, so an agent only has
 to say what kind of thing it learned, not where to file it.
 
+### Conditional instructions
+
+Instructions may be gated by repository-relative path and an explicit task tag
+(`code`, `review`, `test`, `deploy`, `security`, `docs`). Session startup uses
+the current working directory. Call `context_get` again with `paths` or `task`
+before switching subtree or activity. Values within one gate dimension are OR;
+path and task dimensions combine as AND. Search still finds inactive rules and
+shows their gates.
+
 ## Usage
 
 ```bash

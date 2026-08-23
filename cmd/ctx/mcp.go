@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/activation"
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/collector"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
@@ -17,12 +18,24 @@ import (
 // currentAxes derives the session context from the working directory and the
 // configured machine name.
 func currentAxes(machine string) scope.Axes {
+	return currentGitContext(machine).axes
+}
+
+type harnessContext struct {
+	axes       scope.Axes
+	activation activation.Context
+}
+
+func currentGitContext(machine string) harnessContext {
 	cwd, err := os.Getwd()
 	if err != nil {
-		return scope.Axes{Machine: machine}
+		return harnessContext{axes: scope.Axes{Machine: machine}}
 	}
-	project, branch := collector.GitInfo(cwd)
-	return scope.Axes{Project: project, Branch: branch, Machine: machine}
+	g := collector.ResolveGitContext(cwd)
+	return harnessContext{
+		axes:       scope.Axes{Project: g.Project, Branch: g.Branch, Machine: machine},
+		activation: activation.Context{RepoPath: g.RepoPath},
+	}
 }
 
 func cmdMCP(args []string, stdout io.Writer) int {
@@ -37,7 +50,8 @@ func cmdMCP(args []string, stdout io.Writer) int {
 		fmt.Fprintf(os.Stderr, "load config: %v (run 'ctx setup' first)\n", err)
 		return 1
 	}
-	srv := mcpserver.NewServer(client.New(cfg), currentAxes(cfg.Machine))
+	hctx := currentGitContext(cfg.Machine)
+	srv := mcpserver.NewServer(client.New(cfg), hctx.axes, hctx.activation)
 	if err := mcpserver.Run(context.Background(), srv, version); err != nil {
 		fmt.Fprintf(os.Stderr, "mcp: %v\n", err)
 		return 1

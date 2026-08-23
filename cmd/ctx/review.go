@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
@@ -75,13 +76,34 @@ func listPending(c *client.Client, stdout io.Writer) int {
 		return 0
 	}
 	for _, p := range pending {
-		k := p.Knowledge
-		fmt.Fprintf(stdout, "#%-4d %-11s %-8s seen in %d session(s)  %s\n",
-			k.ID, k.Confidence, k.Type, p.Recurrence, k.Title)
-		for _, e := range p.Evidence {
-			fmt.Fprintf(stdout, "       evidence: session %d chunk %d: %s\n", e.SessionID, e.ChunkSeq, e.Quote)
-		}
+		writePendingEntry(stdout, p)
 	}
 	fmt.Fprintf(stdout, "\n%d awaiting review - approve with 'ctx review approve <id>'\n", len(pending))
 	return 0
+}
+
+func writePendingEntry(stdout io.Writer, p client.PendingEntry) {
+	k := p.Knowledge
+	fmt.Fprintf(stdout, "#%-4d %-11s %-8s seen in %d session(s)  %s\n",
+		k.ID, k.Confidence, k.Type, p.Recurrence, k.Title)
+	var scopeParts []string
+	if k.Scope.Project != "" {
+		scopeParts = append(scopeParts, "project="+k.Scope.Project)
+	}
+	if k.Scope.Branch != "" {
+		scopeParts = append(scopeParts, "branch="+k.Scope.Branch)
+	}
+	if k.Scope.Machine != "" {
+		scopeParts = append(scopeParts, "machine="+k.Scope.Machine)
+	}
+	if len(scopeParts) == 0 {
+		scopeParts = append(scopeParts, "global")
+	}
+	fmt.Fprintf(stdout, "       scope: %s\n", strings.Join(scopeParts, ", "))
+	if suffix := activationSuffix(k.Activation); suffix != "" {
+		fmt.Fprintf(stdout, "       activation: %s\n", strings.TrimPrefix(suffix, "; "))
+	}
+	for _, e := range p.Evidence {
+		fmt.Fprintf(stdout, "       evidence: session %d chunk %d: %s\n", e.SessionID, e.ChunkSeq, e.Quote)
+	}
 }

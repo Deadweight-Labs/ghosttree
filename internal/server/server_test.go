@@ -9,9 +9,48 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/activation"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
+
+func TestBootstrapActivatesInstructionsByPathAndTask(t *testing.T) {
+	st, _ := store.Open(":memory:")
+	t.Cleanup(func() { st.Close() })
+	token, _ := st.AddPerson("test")
+	root, _ := st.InsertKnowledge(store.Knowledge{Type: "instruction", Title: "root rule", Body: "root"})
+	_ = root
+	core, _ := st.InsertKnowledge(store.Knowledge{Type: "instruction", Title: "core rule", Body: "core"})
+	if err := st.SetActivation(core, activation.Rule{Paths: []string{"core/**"}, Tasks: []string{"code"}}); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(New(st))
+	t.Cleanup(srv.Close)
+
+	resp := req(t, "GET", srv.URL+"/api/context/bootstrap?repo_path=core&task=code", token, nil)
+	raw, _ := io.ReadAll(resp.Body)
+	out := string(raw)
+	if !strings.Contains(out, "root rule") || !strings.Contains(out, "core rule") {
+		t.Fatalf("active instructions missing:\n%s", out)
+	}
+	if !strings.Contains(out, "paths:core/**") || !strings.Contains(out, "tasks:code") {
+		t.Fatalf("activation labels missing:\n%s", out)
+	}
+	resp = req(t, "GET", srv.URL+"/api/context/bootstrap", token, nil)
+	raw, _ = io.ReadAll(resp.Body)
+	out = string(raw)
+	if !strings.Contains(out, "root rule") || strings.Contains(out, "core rule") {
+		t.Fatalf("missing activation context must return only ungated instructions:\n%s", out)
+	}
+}
+
+func TestBootstrapRejectsInvalidActivationContext(t *testing.T) {
+	srv, token := newTestServer(t)
+	resp := req(t, "GET", srv.URL+"/api/context/bootstrap?task=release", token, nil)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+}
 
 func newTestServer(t *testing.T) (*httptest.Server, string) {
 	t.Helper()
@@ -113,6 +152,40 @@ func TestBootstrapBudgetDropsStagedFirst(t *testing.T) {
 	}
 	if strings.Contains(out, "staged one") {
 		t.Errorf("staged entry should have been cut first:\n%s", out)
+	}
+}
+
+func TestBootstrapPutsInstructionsFirstAndComplete(t *testing.T) {
+	long := strings.Repeat("x", 600)
+	entries := []store.Knowledge{
+		{Type: "pitfall", Title: "some pitfall", Body: "b", Confidence: "trusted"},
+		{Type: "instruction", Title: "how to build", Body: long, Confidence: "verified"},
+		{Type: "instruction", Title: "unreviewed rule", Body: "b", Confidence: "staged"},
+	}
+	out := renderBootstrap(entries, 800)
+
+	iInstr := strings.Index(out, "how to build")
+	iPit := strings.Index(out, "some pitfall")
+	if iInstr < 0 {
+		t.Fatalf("instruction missing:\n%s", out)
+	}
+	if iPit >= 0 && iInstr > iPit {
+		t.Errorf("instructions must come before everything else:\n%s", out)
+	}
+	if !strings.Contains(out, long) {
+		t.Error("instruction bodies must not be truncated")
+	}
+	if !strings.Contains(out, "unreviewed rule") {
+		t.Error("a staged instruction must still be shown")
+	}
+	line := ""
+	for _, l := range strings.Split(out, "\n") {
+		if strings.Contains(l, "unreviewed rule") {
+			line = l
+		}
+	}
+	if !strings.Contains(strings.ToLower(line), "unconfirmed") {
+		t.Errorf("staged instruction must be marked on its line, got %q", line)
 	}
 }
 

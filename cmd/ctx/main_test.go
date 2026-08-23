@@ -2,10 +2,62 @@ package main
 
 import (
 	"bytes"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/activation"
+	"github.com/Deadweight-Labs/ghosttree/internal/client"
+	"github.com/Deadweight-Labs/ghosttree/internal/scope"
+	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
+
+func TestReviewActivationSeparatesScopeAndGates(t *testing.T) {
+	var out bytes.Buffer
+	writePendingEntry(&out, client.PendingEntry{Knowledge: store.Knowledge{
+		ID: 7, Type: "instruction", Title: "core rules", Confidence: "staged",
+		Scope:      scope.Axes{Project: "github.com/x/y"},
+		Activation: activation.Rule{Paths: []string{"core/**"}, Tasks: []string{"code", "review"}},
+	}})
+	got := out.String()
+	for _, want := range []string{"scope: project=github.com/x/y", "activation: paths:core/**; tasks:code,review"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("review output missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestMigrateRejectsBadArguments(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	cases := map[string][]string{"no repo": {"migrate", filepath.Join(home, "does-not-exist")}, "too many": {"migrate", ".", "."}}
+	for name, args := range cases {
+		var out bytes.Buffer
+		if code := run(args, &out); code == 0 {
+			t.Errorf("%s: exit code=0", name)
+		}
+		if strings.Contains(out.String(), "unknown command") {
+			t.Errorf("%s: migrate not wired: %s", name, out.String())
+		}
+	}
+}
+
+func TestCleanRefusesWithoutMigration(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	repo := t.TempDir()
+	os.WriteFile(filepath.Join(repo, "CLAUDE.md"), []byte("# rules"), 0o644)
+	var out bytes.Buffer
+	if code := run([]string{"migrate", "--clean", repo}, &out); code == 0 {
+		t.Error("clean without migration succeeded")
+	}
+	if _, err := os.Stat(filepath.Join(repo, "CLAUDE.md")); err != nil {
+		t.Error("source was removed")
+	}
+}
 
 func TestRunVersion(t *testing.T) {
 	var out bytes.Buffer

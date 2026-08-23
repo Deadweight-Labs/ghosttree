@@ -34,6 +34,13 @@ func cmdServe(args []string, stdout io.Writer) int {
 		fmt.Fprintf(stdout, "database schema is out of date - run 'ctx upgrade-schema --db %s' first\n", *db)
 		return 1
 	}
+	if current, err := store.SchemaHasNewTypes(st.DB()); err != nil {
+		fmt.Fprintf(stdout, "cannot inspect knowledge types: %v\n", err)
+		return 1
+	} else if !current {
+		fmt.Fprintf(stdout, "database schema is out of date - run 'ctx upgrade-schema --db %s' first\n", *db)
+		return 1
+	}
 	fmt.Fprintf(stdout, "ghosttree %s listening on %s (db %s)\n", version, *listen, *db)
 	if err := http.ListenAndServe(*listen, server.New(st)); err != nil {
 		fmt.Fprintf(stdout, "serve: %v\n", err)

@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/activation"
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/collector"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
@@ -47,9 +48,10 @@ func bootstrapContext(stdin io.Reader) string {
 	if cwd == "" {
 		cwd, _ = os.Getwd()
 	}
-	project, branch := collector.GitInfo(cwd)
+	gitCtx := collector.ResolveGitContext(cwd)
 	md, err := client.New(cfg).Bootstrap(
-		scope.Axes{Project: project, Branch: branch, Machine: cfg.Machine}, 0)
+		scope.Axes{Project: gitCtx.Project, Branch: gitCtx.Branch, Machine: cfg.Machine},
+		activation.Context{RepoPath: gitCtx.RepoPath}, 0)
 	if err != nil {
 		return ""
 	}

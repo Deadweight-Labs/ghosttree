@@ -2,10 +2,34 @@ package collector
 
 import (
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 )
+
+type GitContext struct {
+	Project  string
+	Branch   string
+	Root     string
+	RepoPath string
+}
+
+func ResolveGitContext(cwd string) GitContext {
+	project, branch := GitInfo(cwd)
+	root, err := gitOut(cwd, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return GitContext{Project: project, Branch: branch}
+	}
+	rel, err := filepath.Rel(root, cwd)
+	if err != nil {
+		return GitContext{Project: project, Branch: branch, Root: root}
+	}
+	if rel == "." {
+		rel = ""
+	}
+	return GitContext{Project: project, Branch: branch, Root: root, RepoPath: filepath.ToSlash(rel)}
+}
 
 // GitInfo derives the project and branch axes from a working directory.
 // Both are empty outside a repo or without an origin remote.
