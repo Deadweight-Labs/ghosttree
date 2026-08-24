@@ -32,6 +32,24 @@ func Digest(chunks []store.Chunk) string {
 }
 
 func Distill(ctx context.Context, model llm.Client, chunks []store.Chunk, existingTitles []string) ([]store.SessionDistilledItem, error) {
+	items, _, err := DistillWithBudget(ctx, model, chunks, existingTitles, DefaultBudget)
+	return items, err
+}
+
+// DistillWithBudget trims the transcript to the budget before sending it and
+// reports how many chunks that cost. Without a cap, a long session either
+// exceeds the context window outright or silently crosses the long-context
+// price threshold; both failures look like "this session had nothing to say".
+func DistillWithBudget(ctx context.Context, model llm.Client, chunks []store.Chunk, existingTitles []string, budget Budget) ([]store.SessionDistilledItem, int, error) {
+	sent, dropped := SelectWithinBudget(chunks, budget)
+	items, err := distill(ctx, model, sent, chunks, existingTitles)
+	return items, dropped, err
+}
+
+// quoted is the full transcript: quotes are verified against every chunk, not
+// only the ones that fit the budget, so a trimmed prompt cannot invalidate a
+// grounding that was already correct.
+func distill(ctx context.Context, model llm.Client, chunks, quoted []store.Chunk, existingTitles []string) ([]store.SessionDistilledItem, error) {
 	var transcript strings.Builder
 	for _, c := range chunks {
 		if strings.TrimSpace(c.Text) != "" {
@@ -58,7 +76,7 @@ func Distill(ctx context.Context, model llm.Client, chunks []store.Chunk, existi
 		return nil, fmt.Errorf("decode session distillation: %w", err)
 	}
 	bySeq := map[int]string{}
-	for _, c := range chunks {
+	for _, c := range quoted {
 		bySeq[c.Seq] = c.Text
 	}
 	allowed := map[string]bool{"decision": true, "note": true, "pitfall": true, "plan": true, "instruction": true}

@@ -83,6 +83,23 @@ func (s *Store) ListSessions(filter scope.Axes, limit int) ([]Session, error) {
 	return scanSessions(rows)
 }
 
+// SessionsPendingDistillation returns sessions that have never been distilled
+// and have been idle since idleBefore, oldest first. Ordering matters: the
+// distiller must drain the archive rather than revisit the newest window.
+func (s *Store) SessionsPendingDistillation(idleBefore string, limit int) ([]Session, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := s.db.Query(`SELECT `+prefix(sessionCols, "se.")+` FROM sessions se
+		WHERE se.last_seen_at < ?
+		  AND NOT EXISTS (SELECT 1 FROM session_distillations d WHERE d.session_id = se.id)
+		ORDER BY se.last_seen_at ASC, se.id ASC LIMIT ?`, idleBefore, limit)
+	if err != nil {
+		return nil, err
+	}
+	return scanSessions(rows)
+}
+
 func (s *Store) ReadSession(id int64, fromSeq, limit int) ([]Chunk, error) {
 	if limit <= 0 {
 		limit = 200

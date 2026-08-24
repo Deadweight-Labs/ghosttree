@@ -43,6 +43,8 @@ func run(args []string, stdout io.Writer) int {
 		return cmdDistillSessions(rest, stdout)
 	case "upgrade-schema":
 		return cmdUpgradeSchema(rest, stdout)
+	case "canonicalize-scopes":
+		return cmdCanonicalizeScopes(rest, stdout)
 	case "person":
 		return cmdPerson(rest, stdout)
 	case "setup":
@@ -72,6 +74,7 @@ const usage = `usage: ctx <command>
   migrate  move repository agent artifacts into ghosttree
   distill-sessions  extract quarantined knowledge from idle sessions
   upgrade-schema  one-off knowledge table rebuild for trust tiers
+  canonicalize-scopes  one-off project name backfill and duplicate merge
   version  print version`
 
 func main() {

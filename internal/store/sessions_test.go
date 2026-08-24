@@ -35,6 +35,60 @@ func TestSessionUpsertAndChunks(t *testing.T) {
 	}
 }
 
+// The distiller works a backlog, not a recent window. Selecting by newest-first
+// would pin it to the sessions it already processed and leave the archive
+// permanently out of reach, however often it runs.
+func TestPendingDistillationReturnsOldestUnprocessedFirst(t *testing.T) {
+	s := openTest(t)
+	seen := map[string]string{"old": "2026-01-01T00:00:00Z", "mid": "2026-02-01T00:00:00Z", "new": "2026-03-01T00:00:00Z"}
+	ids := map[string]int64{}
+	for name, ts := range seen {
+		id, err := s.UpsertSession(Session{Harness: "codex", ExternalID: name, StartedAt: ts})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.db.Exec(`UPDATE sessions SET last_seen_at=? WHERE id=?`, ts, id); err != nil {
+			t.Fatal(err)
+		}
+		ids[name] = id
+	}
+	// The newest session is already distilled, exactly the state a newest-first
+	// selection gets stuck in.
+	if _, err := s.db.Exec(`INSERT INTO session_distillations(session_id,digest,item_count,created_at) VALUES(?,?,?,?)`,
+		ids["new"], "d1", 0, "2026-03-02T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.SessionsPendingDistillation("2026-06-01T00:00:00Z", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("pending = %d, want 2 (the undistilled ones)", len(got))
+	}
+	if got[0].ID != ids["old"] || got[1].ID != ids["mid"] {
+		t.Errorf("order = %d,%d, want oldest first %d,%d", got[0].ID, got[1].ID, ids["old"], ids["mid"])
+	}
+}
+
+// A session still being written to must not be distilled mid-flight.
+func TestPendingDistillationExcludesSessionsNewerThanCutoff(t *testing.T) {
+	s := openTest(t)
+	id, err := s.UpsertSession(Session{Harness: "codex", ExternalID: "busy", StartedAt: "2026-08-24T09:00:00Z"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`UPDATE sessions SET last_seen_at=? WHERE id=?`, "2026-08-24T09:00:00Z", id); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.SessionsPendingDistillation("2026-08-24T08:00:00Z", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("pending = %d, want 0: session is still active", len(got))
+	}
+}
+
 // Claude Code deletes its transcripts after 30 days, so the raw JSONL we hold
 // is the only long-term copy. Export must return every line, in file order,
 // including the ones the parser never understood.

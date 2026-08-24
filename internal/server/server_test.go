@@ -45,11 +45,22 @@ func TestBootstrapActivatesInstructionsByPathAndTask(t *testing.T) {
 	}
 }
 
-func TestBootstrapRejectsInvalidActivationContext(t *testing.T) {
+// A path that escapes the repository is a safety matter and stays rejected.
+func TestBootstrapRejectsPathEscape(t *testing.T) {
 	srv, token := newTestServer(t)
-	resp := req(t, "GET", srv.URL+"/api/context/bootstrap?task=release", token, nil)
+	resp := req(t, "GET", srv.URL+"/api/context/bootstrap?path=../outside", token, nil)
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+// An unrecognised task is a wrong guess by the agent, not an attack. Failing
+// the bootstrap over it costs the session its entire context.
+func TestBootstrapToleratesUnknownTask(t *testing.T) {
+	srv, token := newTestServer(t)
+	resp := req(t, "GET", srv.URL+"/api/context/bootstrap?task=code%20review", token, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
 }
 

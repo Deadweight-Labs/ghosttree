@@ -224,6 +224,30 @@ func TestSearchKnowledge(t *testing.T) {
 	}
 }
 
+func TestKnowledgeWritesMaintainSharedProjection(t *testing.T) {
+	s := openTest(t)
+	id, err := s.InsertKnowledge(Knowledge{Type: "note", Title: "first title", Body: "first body", Scope: scope.Axes{Project: "github.com/x/y"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var title, body string
+	if err := s.DB().QueryRow(`SELECT title,body FROM search_documents WHERE kind='knowledge' AND domain_id=?`, id).Scan(&title, &body); err != nil {
+		t.Fatal(err)
+	}
+	if title != "first title" || body != "first body" {
+		t.Fatalf("projection = %q %q", title, body)
+	}
+	if err := s.UpdateKnowledge(id, map[string]string{"title": "updated title", "body": "updated body"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DB().QueryRow(`SELECT title,body FROM search_documents WHERE kind='knowledge' AND domain_id=?`, id).Scan(&title, &body); err != nil {
+		t.Fatal(err)
+	}
+	if title != "updated title" || body != "updated body" {
+		t.Fatalf("updated projection = %q %q", title, body)
+	}
+}
+
 func TestNewTypesAndArchivedStatus(t *testing.T) {
 	s := openTest(t)
 	if _, err := s.InsertKnowledge(Knowledge{Type: "instruction", Title: "t-instruction", Body: "b"}); err != nil {

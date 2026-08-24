@@ -90,6 +90,9 @@ func (s *Store) InsertKnowledge(k Knowledge) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	if _, err := tx.Exec(`INSERT INTO search_documents(kind,domain_id,title,body,project,branch,machine) VALUES('knowledge',?,?,?,?,?,?)`, id, k.Title, k.Body, k.Scope.Project, k.Scope.Branch, k.Scope.Machine); err != nil {
+		return 0, err
+	}
 	for _, pattern := range k.Activation.Paths {
 		if _, err := tx.Exec(`INSERT INTO instruction_activation_path(knowledge_id,pattern) VALUES(?,?)`, id, pattern); err != nil {
 			return 0, err
@@ -222,6 +225,10 @@ func (s *Store) UpdateKnowledge(id int64, patch map[string]string) error {
 	sets = append(sets, "updated_at = ?")
 	args = append(args, now(), id)
 	if _, err := tx.Exec(`UPDATE knowledge SET `+strings.Join(sets, ", ")+` WHERE id = ?`, args...); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE search_documents SET title=k.title,body=k.body,project=k.project,branch=k.branch,machine=k.machine
+		FROM knowledge k WHERE search_documents.kind='knowledge' AND search_documents.domain_id=k.id AND k.id=?`, id); err != nil {
 		return err
 	}
 	return tx.Commit()

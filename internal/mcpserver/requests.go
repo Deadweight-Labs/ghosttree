@@ -101,8 +101,11 @@ func (s *Server) handleRequestGet(_ context.Context, _ *mcp.CallToolRequest, in 
 }
 
 func (s *Server) handleRequestCreate(_ context.Context, _ *mcp.CallToolRequest, in RequestCreateInput) (*mcp.CallToolResult, RequestDetailOutput, error) {
+	// Project only: a backlog entry belongs to the repository, not to the
+	// branch or machine that happened to file it.
+	ax := scope.Axes{Project: s.ctxAxes.Project}
 	detail, err := s.client.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{
-		Type: in.Type, Title: in.Title, Description: in.Description, Priority: in.Priority, Scope: s.ctxAxes, Origin: "agent", SessionRef: "mcp",
+		Type: in.Type, Title: in.Title, Description: in.Description, Priority: in.Priority, Scope: ax, Origin: "agent", SessionRef: "mcp",
 	}, Criteria: in.Criteria, IdempotencyKey: in.IdempotencyKey})
 	out := RequestDetailOutput{Detail: detail}
 	return requestResult(out), out, err

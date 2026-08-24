@@ -31,7 +31,30 @@ type SearchInput struct {
 	Query       string `json:"query" jsonschema:"what to search for"`
 	Kind        string `json:"kind,omitempty" jsonschema:"knowledge, requests, sessions or all (default all)"`
 	AllBranches bool   `json:"all_branches,omitempty" jsonschema:"search across all branches of the project"`
+	Project     string `json:"project,omitempty" jsonschema:"search another project instead of the current one, given as a normalized remote like github.com/owner/repo"`
+	AllProjects bool   `json:"all_projects,omitempty" jsonschema:"search every project. Use when a problem here may already have been solved elsewhere; the default stays the current project"`
 	Machine     string `json:"machine,omitempty" jsonschema:"restrict to a machine hostname"`
+}
+
+// searchAxes resolves the project axis a search runs on. Scope separation is
+// the default; reaching past it is something the agent has to ask for, because
+// only the agent knows whether a lesson from another repo is relevant here.
+func (s *Server) searchAxes(in SearchInput) (ax scope.Axes, crossProject bool) {
+	ax = s.ctxAxes
+	switch {
+	case in.AllProjects:
+		return scope.Axes{Machine: in.Machine}, true
+	case in.Project != "":
+		// The other project's branch names mean nothing in this context.
+		return scope.Axes{Project: scope.NormalizeRemote(in.Project), Machine: in.Machine}, true
+	}
+	if in.AllBranches {
+		ax.Branch = ""
+	}
+	if in.Machine != "" {
+		ax.Machine = in.Machine
+	}
+	return ax, false
 }
 
 type GetInput struct {
@@ -47,15 +70,17 @@ type RememberInput struct {
 }
 
 type SessionsInput struct {
-	Query     string `json:"query,omitempty" jsonschema:"full text search across session transcripts"`
-	SessionID int64  `json:"session_id,omitempty" jsonschema:"read this session instead of listing"`
-	Limit     int    `json:"limit,omitempty" jsonschema:"maximum results (default 20)"`
+	Query       string `json:"query,omitempty" jsonschema:"full text search across session transcripts"`
+	SessionID   int64  `json:"session_id,omitempty" jsonschema:"read this session instead of listing"`
+	Project     string `json:"project,omitempty" jsonschema:"list or search another project's sessions, given as a normalized remote like github.com/owner/repo"`
+	AllProjects bool   `json:"all_projects,omitempty" jsonschema:"cover every project instead of the current one"`
+	Limit       int    `json:"limit,omitempty" jsonschema:"maximum results (default 20)"`
 }
 
 func (s *Server) Register(srv *mcp.Server) {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "context_search",
-		Description: "Search ghosttree knowledge and past session transcripts. Defaults to the current project, branch and machine context.",
+		Description: "Search ghosttree knowledge and past session transcripts. Defaults to the current project, branch and machine context. Set project to search another repository, or all_projects to search every one of them — worth doing when a problem here may already have been solved elsewhere.",
 	}, s.handleSearch)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "context_get",
@@ -67,7 +92,7 @@ func (s *Server) Register(srv *mcp.Server) {
 	}, s.handleRemember)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "context_sessions",
-		Description: "List or search past agent sessions, or read one session's transcript.",
+		Description: "List or search past agent sessions, or read one session's transcript. Defaults to the current project; set project or all_projects to look further.",
 	}, s.handleSessions)
 	closed := false
 	additive := false
@@ -100,15 +125,16 @@ func (s *Server) handleSearch(ctx context.Context, _ *mcp.CallToolRequest, in Se
 	limit := 20
 	var out strings.Builder
 
+	ax, crossProject := s.searchAxes(in)
+
 	if kind == "knowledge" || kind == "all" {
-		ax := s.ctxAxes
-		if in.AllBranches {
-			ax.Branch = ""
+		// The scope union is what a session reads here. Across projects that
+		// union is meaningless, so the axes are matched as given instead.
+		search := s.client.SearchUnion
+		if crossProject {
+			search = s.client.Search
 		}
-		if in.Machine != "" {
-			ax.Machine = in.Machine
-		}
-		res, err := s.client.SearchUnion(in.Query, "knowledge", ax, limit)
+		res, err := search(in.Query, "knowledge", ax, limit)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -122,7 +148,8 @@ func (s *Server) handleSearch(ctx context.Context, _ *mcp.CallToolRequest, in Se
 	if kind == "sessions" || kind == "all" {
 		// Sessions carry all three axes, so an exact filter on the full context
 		// would only ever match this very session; project is the useful scope.
-		filter := scope.Axes{Project: s.ctxAxes.Project, Machine: in.Machine}
+		// An empty project means every project, which is what all_projects asks for.
+		filter := scope.Axes{Project: ax.Project, Machine: in.Machine}
 		res, err := s.client.Search(in.Query, "sessions", filter, limit)
 		if err != nil {
 			return nil, nil, err
@@ -231,7 +258,14 @@ func (s *Server) handleSessions(ctx context.Context, _ *mcp.CallToolRequest, in 
 		}
 		return textResult(out.String()), nil, nil
 	}
+	// An empty project matches every project, which is what all_projects asks for.
 	filter := scope.Axes{Project: s.ctxAxes.Project}
+	switch {
+	case in.AllProjects:
+		filter.Project = ""
+	case in.Project != "":
+		filter.Project = scope.NormalizeRemote(in.Project)
+	}
 	if in.Query != "" {
 		res, err := s.client.Search(in.Query, "sessions", filter, limit)
 		if err != nil {

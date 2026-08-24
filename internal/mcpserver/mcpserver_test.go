@@ -117,6 +117,106 @@ func TestSearchFindsGlobalKnowledgeFromBranchContext(t *testing.T) {
 	}
 }
 
+// Scope separation is the default and must stay that way: a lesson from one
+// repo does not silently leak into another.
+func TestSearchKeepsOtherProjectsOutByDefault(t *testing.T) {
+	c, st := newTestClient(t)
+	st.InsertKnowledge(store.Knowledge{Type: "pitfall", Title: "raspi preflight hangs",
+		Body: "serial console needed", Scope: scope.Axes{Project: "github.com/x/sampleproject"}})
+	s := &Server{client: c, ctxAxes: scope.Axes{Project: "github.com/x/other", Branch: "main", Machine: "workstation-a"}}
+	res, _, err := s.handleSearch(context.Background(), nil, SearchInput{Query: "preflight"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := text(t, res); strings.Contains(got, "raspi preflight hangs") {
+		t.Errorf("another project's knowledge leaked into the default scope: %s", got)
+	}
+}
+
+// Sometimes the separation is wrong: a problem here was already solved there.
+// The agent must be able to ask for that explicitly.
+func TestSearchAllProjectsFindsKnowledgeFromAnotherProject(t *testing.T) {
+	c, st := newTestClient(t)
+	st.InsertKnowledge(store.Knowledge{Type: "pitfall", Title: "raspi preflight hangs",
+		Body: "serial console needed", Scope: scope.Axes{Project: "github.com/x/sampleproject"}})
+	s := &Server{client: c, ctxAxes: scope.Axes{Project: "github.com/x/other", Branch: "main", Machine: "workstation-a"}}
+	res, _, err := s.handleSearch(context.Background(), nil, SearchInput{Query: "preflight", AllProjects: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := text(t, res); !strings.Contains(got, "raspi preflight hangs") {
+		t.Errorf("all_projects did not reach the other project: %s", got)
+	}
+}
+
+// The session archive is the largest body of data ghosttree holds; without a
+// project axis it is unreachable from anywhere but its own repo.
+func TestSearchAllProjectsFindsSessionsFromAnotherProject(t *testing.T) {
+	c, st := newTestClient(t)
+	id, err := st.UpsertSession(store.Session{Harness: "claude-code", ExternalID: "s1",
+		Scope: scope.Axes{Project: "github.com/x/sample-project", Branch: "main", Machine: "workstation-a"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AppendChunks(id, []store.Chunk{{Seq: 0, Role: "user", Text: "the vitest suite hangs on teardown", Raw: "{}"}}); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{client: c, ctxAxes: scope.Axes{Project: "github.com/x/other", Branch: "main", Machine: "workstation-a"}}
+	res, _, err := s.handleSearch(context.Background(), nil, SearchInput{Query: "teardown", Kind: "sessions", AllProjects: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := text(t, res); !strings.Contains(got, "teardown") {
+		t.Errorf("all_projects did not reach sessions of another project: %s", got)
+	}
+}
+
+// context_sessions is the tool an agent reaches for when asking "what happened
+// here before". It must be able to look past the current repo too.
+func TestSessionsToolReachesOtherProjectsOnRequest(t *testing.T) {
+	c, st := newTestClient(t)
+	id, err := st.UpsertSession(store.Session{Harness: "claude-code", ExternalID: "s2",
+		Scope: scope.Axes{Project: "github.com/x/sample-project", Branch: "main", Machine: "workstation-a"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AppendChunks(id, []store.Chunk{{Seq: 0, Role: "user", Text: "the vitest suite hangs on teardown", Raw: "{}"}}); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{client: c, ctxAxes: scope.Axes{Project: "github.com/x/other", Branch: "main", Machine: "workstation-a"}}
+
+	res, _, err := s.handleSessions(context.Background(), nil, SessionsInput{Query: "teardown"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := text(t, res); strings.Contains(got, "teardown") {
+		t.Errorf("default scope leaked another project's sessions: %s", got)
+	}
+
+	res, _, err = s.handleSessions(context.Background(), nil, SessionsInput{Query: "teardown", AllProjects: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := text(t, res); !strings.Contains(got, "teardown") {
+		t.Errorf("all_projects did not reach the other project's sessions: %s", got)
+	}
+}
+
+// A named project is the precise form of the same need.
+func TestSearchNamedProjectOverridesContext(t *testing.T) {
+	c, st := newTestClient(t)
+	st.InsertKnowledge(store.Knowledge{Type: "pitfall", Title: "raspi preflight hangs",
+		Body: "serial console needed", Scope: scope.Axes{Project: "github.com/x/sampleproject"}})
+	s := &Server{client: c, ctxAxes: scope.Axes{Project: "github.com/x/other", Branch: "main", Machine: "workstation-a"}}
+	res, _, err := s.handleSearch(context.Background(), nil, SearchInput{Query: "preflight", Project: "github.com/x/sampleproject"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := text(t, res); !strings.Contains(got, "raspi preflight hangs") {
+		t.Errorf("named project not searched: %s", got)
+	}
+}
+
 func TestGetBootstrap(t *testing.T) {
 	c, _ := newTestClient(t)
 	s := &Server{client: c, ctxAxes: scope.Axes{Project: "github.com/x/y", Branch: "main", Machine: "workstation-a"}}
@@ -145,8 +245,13 @@ func TestGetBootstrapAcceptsPathAndTask(t *testing.T) {
 	if got := text(t, res); !strings.Contains(got, "core rule") {
 		t.Fatalf("path/task gated instruction missing: %s", got)
 	}
-	if _, _, err := s.handleGet(context.Background(), nil, GetInput{Task: "release"}); err == nil {
-		t.Fatal("invalid task must be rejected")
+	// An unrecognised task falls back to no task gating rather than failing.
+	res, _, err = s.handleGet(context.Background(), nil, GetInput{Paths: []string{"core/lib"}, Task: "release"})
+	if err != nil {
+		t.Fatalf("unknown task must not fail the context call: %v", err)
+	}
+	if got := text(t, res); strings.Contains(got, "core rule") {
+		t.Errorf("task-gated instruction served without a matching task: %s", got)
 	}
 }
 

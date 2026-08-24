@@ -175,17 +175,16 @@ func (s *Store) SearchRequests(filter requestdomain.SearchFilter) (requestdomain
 		where = append(where, `search_documents_fts MATCH ?`)
 		args = append(args, ftsQuery(filter.Query))
 	}
-	if filter.Scope.Project != "" {
-		where = append(where, `r.project=?`)
-		args = append(args, filter.Scope.Project)
-	}
-	if filter.Scope.Branch != "" {
-		where = append(where, `r.branch=?`)
-		args = append(args, filter.Scope.Branch)
-	}
-	if filter.Scope.Machine != "" {
-		where = append(where, `r.machine=?`)
-		args = append(args, filter.Scope.Machine)
+	// An unset axis on a request means "applies everywhere along it", so a
+	// caller naming a branch or machine must still see the project-wide
+	// entries. Matching exactly would hide most of the backlog.
+	for _, axis := range []struct{ col, v string }{
+		{"project", filter.Scope.Project}, {"branch", filter.Scope.Branch}, {"machine", filter.Scope.Machine},
+	} {
+		if axis.v != "" {
+			where = append(where, `(r.`+axis.col+`='' OR r.`+axis.col+`=?)`)
+			args = append(args, axis.v)
+		}
 	}
 	if filter.State != "" {
 		where = append(where, `r.state=?`)

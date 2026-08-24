@@ -5,5 +5,14 @@ After=ghosttree.service
 [Service]
 Type=oneshot
 User=ghosttree
+# The state directory is /var/lib/private/ghosttree with /var/lib/ghosttree as
+# a symlink to it, and /var/lib/private is root-only. Without the same
+# DynamicUser and StateDirectory as ghosttree.service, systemd does not mount
+# that path into this unit and opening the database fails on permissions.
+DynamicUser=yes
+StateDirectory=ghosttree
+# LoadCredential keeps the API key out of the unit and out of the state
+# directory; the distiller reads it from $CREDENTIALS_DIRECTORY.
+LoadCredential=llm-key:/etc/ghosttree/llm-key
+Environment=GHOSTTREE_LLM_CONFIG=/etc/ghosttree/llm.json
 ExecStart=/usr/local/bin/ctx distill-sessions --db /var/lib/ghosttree/ghosttree.db --idle 1h --limit 20
-

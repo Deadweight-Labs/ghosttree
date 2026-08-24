@@ -1,8 +1,11 @@
 package store
 
 import (
+	"crypto/sha256"
 	"database/sql"
 	"fmt"
+	"io"
+	"os"
 	"time"
 )
 
@@ -53,10 +56,9 @@ func UpgradeSchema(path string) (string, error) {
 	}
 
 	backup := fmt.Sprintf("%s.backup-%s", path, time.Now().UTC().Format("20060102-150405"))
-	if _, err := db.Exec(`VACUUM INTO ?`, backup); err != nil {
-		return "", fmt.Errorf("backup to %s: %w", backup, err)
+	if err := createVerifiedBackup(db, backup); err != nil {
+		return "", err
 	}
-
 	// foreign_keys can only be switched outside a transaction; inside it is a
 	// silent no-op, which would let the DROP below cascade unpredictably.
 	if _, err := db.Exec(`PRAGMA foreign_keys=OFF`); err != nil {
@@ -207,8 +209,8 @@ func UpgradeTypes(path string) (string, error) {
 	}
 
 	backup := fmt.Sprintf("%s.backup-types-%s", path, time.Now().UTC().Format("20060102-150405"))
-	if _, err := db.Exec(`VACUUM INTO ?`, backup); err != nil {
-		return "", fmt.Errorf("backup to %s: %w", backup, err)
+	if err := createVerifiedBackup(db, backup); err != nil {
+		return "", err
 	}
 	if _, err := db.Exec(`PRAGMA foreign_keys=OFF`); err != nil {
 		return backup, err
@@ -301,18 +303,9 @@ func UpgradeRequestDomain(path string) (string, error) {
 		return "", err
 	}
 	backup := fmt.Sprintf("%s.backup-requests-%s", path, time.Now().UTC().Format("20060102-150405.000000000"))
-	if _, err := db.Exec(`VACUUM INTO ?`, backup); err != nil {
-		return "", fmt.Errorf("backup to %s: %w", backup, err)
+	if err := createVerifiedBackup(db, backup); err != nil {
+		return backup, err
 	}
-	backupDB, err := sql.Open("sqlite", backup)
-	if err != nil {
-		return backup, fmt.Errorf("open backup %s: %w", backup, err)
-	}
-	if err := verifyIntegrity(backupDB); err != nil {
-		backupDB.Close()
-		return backup, fmt.Errorf("verify backup %s: %w", backup, err)
-	}
-	backupDB.Close()
 	// Only mutate the source after a consistent, readable backup exists.
 	if _, err := db.Exec(schema); err != nil {
 		return backup, err
@@ -423,6 +416,20 @@ func UpgradeRequestDomain(path string) (string, error) {
 	return backup, verifyIntegrity(db)
 }
 
+// FileSHA256 returns the stable digest used to identify an upgrade backup.
+func FileSHA256(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", h.Sum(nil)), nil
+}
+
 func verifyIntegrity(db *sql.DB) error {
 	var result string
 	if err := db.QueryRow(`PRAGMA integrity_check`).Scan(&result); err != nil {
@@ -430,6 +437,36 @@ func verifyIntegrity(db *sql.DB) error {
 	}
 	if result != "ok" {
 		return fmt.Errorf("sqlite integrity check: %s", result)
+	}
+	return nil
+}
+
+func createVerifiedBackup(db *sql.DB, backup string) error {
+	if _, err := db.Exec(`VACUUM INTO ?`, backup); err != nil {
+		return fmt.Errorf("backup to %s: %w", backup, err)
+	}
+	before, err := FileSHA256(backup)
+	if err != nil {
+		return fmt.Errorf("checksum backup %s: %w", backup, err)
+	}
+	copyDB, err := sql.Open("sqlite", backup)
+	if err != nil {
+		return fmt.Errorf("open backup %s: %w", backup, err)
+	}
+	verifyErr := verifyIntegrity(copyDB)
+	closeErr := copyDB.Close()
+	if verifyErr != nil {
+		return fmt.Errorf("verify backup %s: %w", backup, verifyErr)
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	after, err := FileSHA256(backup)
+	if err != nil {
+		return err
+	}
+	if before != after {
+		return fmt.Errorf("backup checksum changed during verification")
 	}
 	return nil
 }

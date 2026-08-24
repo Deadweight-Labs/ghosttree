@@ -61,6 +61,9 @@ func (s *Store) ApplySessionDistillation(sessionID int64, digest string, ax scop
 			return 0, err
 		}
 		id, _ := res.LastInsertId()
+		if _, err := tx.Exec(`INSERT INTO search_documents(kind,domain_id,title,body,project,branch,machine) VALUES('knowledge',?,?,?,?,?,?)`, id, item.Title, item.Body, itemScope.Project, itemScope.Branch, itemScope.Machine); err != nil {
+			return 0, err
+		}
 		if _, err := tx.Exec(`INSERT INTO knowledge_evidence(knowledge_id,session_id,chunk_seq,quote) VALUES(?,?,?,?)`, id, sessionID, item.ChunkSeq, item.Quote); err != nil {
 			return 0, err
 		}

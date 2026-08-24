@@ -5,6 +5,7 @@ import (
 	"slices"
 	"testing"
 
+	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -48,6 +49,33 @@ func TestRequestToolsRunCompleteAgentWorkflow(t *testing.T) {
 	})
 	if err != nil || completed.Detail.Request.State != "done" {
 		t.Fatalf("completed = %+v, err = %v", completed, err)
+	}
+}
+
+// A request is an intention about work, not a property of the workstation it
+// was filed from. Inheriting branch and machine from the session would hide it
+// from every scope-exact query made on a different branch or machine.
+func TestRequestCreateFilesUnderProjectOnly(t *testing.T) {
+	c, st := newTestClient(t)
+	s := &Server{client: c, ctxAxes: scope.Axes{Project: "github.com/x/y", Branch: "feature", Machine: "workstation-a"}}
+	_, created, err := s.handleRequestCreate(context.Background(), nil, RequestCreateInput{
+		Type: "bug", Title: "scoped too narrowly", Description: "...", Criteria: []string{"filed project-wide"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := created.Detail.Request.Scope; got.Branch != "" || got.Machine != "" || got.Project != "github.com/x/y" {
+		t.Fatalf("scope = %+v, want project only", got)
+	}
+	// The REST path filters axes exactly, so a scope-exact query from another
+	// machine must still see it.
+	page, err := st.SearchRequests(requestdomain.SearchFilter{
+		Scope: scope.Axes{Project: "github.com/x/y", Branch: "main", Machine: "laptop"}, State: "open"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Results) != 1 {
+		t.Fatalf("results = %d, want 1: request invisible from another branch and machine", len(page.Results))
 	}
 }
 

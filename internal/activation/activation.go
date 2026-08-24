@@ -38,8 +38,12 @@ func ValidateRule(r Rule) error {
 }
 
 func NormalizeContext(c Context) (Context, error) {
-	if c.Task != "" && !validTasks[c.Task] {
-		return Context{}, fmt.Errorf("unknown activation task %q", c.Task)
+	// The task is the agent's guess about what it is currently doing, not a
+	// stored value, and it guesses from a vocabulary it cannot see. Rejecting
+	// the guess would fail the whole context call over a label; dropping it
+	// falls back to no task gating, which is a defined state.
+	if !validTasks[c.Task] {
+		c.Task = ""
 	}
 	var err error
 	if c.RepoPath, err = normalizeRel(c.RepoPath); err != nil {

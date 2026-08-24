@@ -36,6 +36,10 @@ func TestMigratedActivationPersistsAtomically(t *testing.T) {
 	if err != nil || proof.Source != "core/AGENTS.md" || proof.Digest != "digest" || proof.ItemKey != "core" {
 		t.Fatalf("migration proof=%+v err=%v", proof, err)
 	}
+	var projected int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM search_documents WHERE kind='knowledge' AND domain_id=?`, saved.ID).Scan(&projected); err != nil || projected != 1 {
+		t.Fatalf("migration projection count=%d err=%v", projected, err)
+	}
 
 	if _, err := s.InsertMigrated(MigratedEntry{Knowledge: Knowledge{
 		Type: "note", Title: "bad", Body: "b", Scope: scope.Axes{Project: "p"}, SessionRef: "core/AGENTS.md",

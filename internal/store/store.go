@@ -159,6 +159,8 @@ CREATE TABLE IF NOT EXISTS session_distillations(
   item_count INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   PRIMARY KEY(session_id,digest));
+INSERT OR IGNORE INTO search_documents(kind,domain_id,title,body,project,branch,machine)
+  SELECT 'knowledge',id,title,body,project,branch,machine FROM knowledge;
 `
 
 func Open(path string) (*Store, error) {

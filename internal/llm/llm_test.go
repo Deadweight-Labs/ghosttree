@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -77,5 +79,62 @@ func TestOpenAIJSONModeRequestsJSONObject(t *testing.T) {
 	format, _ := got["response_format"].(map[string]any)
 	if format["type"] != "json_object" {
 		t.Errorf("response_format=%v", got["response_format"])
+	}
+}
+
+// The distiller runs as a systemd DynamicUser, which has no home directory,
+// so a configuration path that only resolves under os.UserConfigDir can never
+// be reached from the unit that needs it.
+func TestLoadConfigUsesExplicitPathWhenSet(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "llm.json")
+	if err := os.WriteFile(cfgPath, []byte(`{"format":"openai","base_url":"https://llm.example.invalid/v1","model":"test-model","api_key_file":"openai-key"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "openai-key"), []byte("sk-test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Isolate the real configuration: without this the lookup falls back to
+	// the operator's own home and a failure prints their live API key.
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "empty"))
+	t.Setenv("GHOSTTREE_LLM_CONFIG", cfgPath)
+
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig with explicit path: %v", err)
+	}
+	if cfg.Model != "test-model" {
+		t.Errorf("Model = %q, want the model from the explicit path", cfg.Model)
+	}
+	if cfg.APIKey != "sk-test" {
+		t.Errorf("APIKey did not come from the explicit path (length %d)", len(cfg.APIKey))
+	}
+}
+
+// systemd passes secrets through $CREDENTIALS_DIRECTORY rather than a file the
+// service can read directly, which keeps the key out of the state directory.
+func TestLoadConfigReadsKeyFromSystemdCredentials(t *testing.T) {
+	dir := t.TempDir()
+	creds := filepath.Join(dir, "creds")
+	if err := os.MkdirAll(creds, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := filepath.Join(dir, "llm.json")
+	if err := os.WriteFile(cfgPath, []byte(`{"format":"openai","base_url":"https://llm.example.invalid/v1","model":"test-model","credential":"llm-key"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(creds, "llm-key"), []byte("sk-cred\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "empty"))
+	t.Setenv("GHOSTTREE_LLM_CONFIG", cfgPath)
+	t.Setenv("CREDENTIALS_DIRECTORY", creds)
+
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig with credentials: %v", err)
+	}
+	if cfg.APIKey != "sk-cred" {
+		t.Errorf("APIKey did not come from $CREDENTIALS_DIRECTORY (length %d)", len(cfg.APIKey))
 	}
 }

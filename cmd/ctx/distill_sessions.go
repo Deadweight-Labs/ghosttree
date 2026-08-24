@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/llm"
-	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/sessiondistill"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
@@ -38,18 +37,14 @@ func cmdDistillSessions(args []string, stdout io.Writer) int {
 		fmt.Fprintf(stdout, "LLM config failed: %v\n", err)
 		return 1
 	}
-	sessions, err := st.ListSessions(scope.Axes{}, *limit*5)
+	cutoff := time.Now().Add(-*idle).UTC().Format(time.RFC3339Nano)
+	sessions, err := st.SessionsPendingDistillation(cutoff, *limit)
 	if err != nil {
 		fmt.Fprintf(stdout, "list sessions: %v\n", err)
 		return 1
 	}
-	cutoff := time.Now().Add(-*idle)
 	processed, inserted := 0, 0
 	for _, session := range sessions {
-		seen, err := time.Parse(time.RFC3339Nano, session.LastSeenAt)
-		if err != nil || seen.After(cutoff) {
-			continue
-		}
 		chunks, err := st.ReadSession(session.ID, 0, 5000)
 		if err != nil || len(chunks) == 0 {
 			continue
@@ -68,10 +63,15 @@ func cmdDistillSessions(args []string, stdout io.Writer) int {
 		for _, k := range existing {
 			titles = append(titles, k.Title)
 		}
-		items, err := sessiondistill.Distill(context.Background(), model, chunks, titles)
+		items, dropped, err := sessiondistill.DistillWithBudget(context.Background(), model, chunks, titles, sessiondistill.DefaultBudget)
 		if err != nil {
 			fmt.Fprintf(stdout, "session %d distill: %v\n", session.ID, err)
 			continue
+		}
+		if dropped > 0 {
+			// Say it out loud: a trimmed transcript and an uneventful one
+			// produce the same small result otherwise.
+			fmt.Fprintf(stdout, "session %d: transcript over budget, %d of %d chunks omitted\n", session.ID, dropped, len(chunks))
 		}
 		n, err := st.ApplySessionDistillation(session.ID, digest, session.Scope, items)
 		if err != nil {

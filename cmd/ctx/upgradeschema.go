@@ -45,14 +45,30 @@ func cmdUpgradeSchema(args []string, stdout io.Writer) int {
 		return 0
 	}
 	if trustBackup != "" {
-		fmt.Fprintf(stdout, "trust schema backup written to %s\n", trustBackup)
+		if !reportVerifiedBackup(stdout, "trust schema", trustBackup) {
+			return 1
+		}
 	}
 	if typesBackup != "" {
-		fmt.Fprintf(stdout, "type schema backup written to %s\n", typesBackup)
+		if !reportVerifiedBackup(stdout, "type schema", typesBackup) {
+			return 1
+		}
 	}
 	if requestBackup != "" {
-		fmt.Fprintf(stdout, "request domain backup written to %s\n", requestBackup)
+		if !reportVerifiedBackup(stdout, "request domain", requestBackup) {
+			return 1
+		}
 	}
 	fmt.Fprintln(stdout, "schema upgraded")
 	return 0
+}
+
+func reportVerifiedBackup(stdout io.Writer, label, path string) bool {
+	digest, err := store.FileSHA256(path)
+	if err != nil {
+		fmt.Fprintf(stdout, "%s backup checksum failed: %v\n", label, err)
+		return false
+	}
+	fmt.Fprintf(stdout, "%s backup written and verified: %s sha256=%s\n", label, path, digest)
+	return true
 }
