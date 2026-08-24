@@ -41,6 +41,8 @@ func run(args []string, stdout io.Writer) int {
 		return cmdMigrate(rest, stdout)
 	case "distill-sessions":
 		return cmdDistillSessions(rest, stdout)
+	case "usage":
+		return cmdUsage(rest, stdout)
 	case "upgrade-schema":
 		return cmdUpgradeSchema(rest, stdout)
 	case "canonicalize-scopes":
@@ -73,6 +75,8 @@ const usage = `usage: ctx <command>
   request  search and manage the work ledger
   migrate  move repository agent artifacts into ghosttree
   distill-sessions  extract quarantined knowledge from idle sessions
+                    (--submit/--collect for the half-price batch path)
+  usage    list knowledge nobody has used within a window
   upgrade-schema  one-off knowledge table rebuild for trust tiers
   canonicalize-scopes  one-off project name backfill and duplicate merge
   version  print version`

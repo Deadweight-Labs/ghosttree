@@ -15,4 +15,18 @@ StateDirectory=ghosttree
 # directory; the distiller reads it from $CREDENTIALS_DIRECTORY.
 LoadCredential=llm-key:/etc/ghosttree/llm-key
 Environment=GHOSTTREE_LLM_CONFIG=/etc/ghosttree/llm.json
-ExecStart=/usr/local/bin/ctx distill-sessions --db /var/lib/ghosttree/ghosttree.db --idle 1h --limit 20
+# One invocation does both halves of the asynchronous path. Collect runs first
+# so a finished batch releases its sessions before the next one is filled, and
+# so a session the model failed on rejoins the very next submission.
+#
+# --limit caps one submission, not the day: the timer runs hourly and sessions
+# already in flight are held back, so the backlog drains at up to 50 sessions
+# an hour without ever paying for the same transcript twice.
+#
+# --project confines the timer to the project the first production run was
+# measured on. Drop the flag to let it drain the whole archive — but only after
+# the quarantined items from that project have been read and judged, because
+# widening it multiplies both the bill and the cleanup. --collect is unaffected
+# either way and always ingests every finished batch.
+ExecStart=/usr/local/bin/ctx distill-sessions --db /var/lib/ghosttree/ghosttree.db \
+    --idle 1h --limit 50 --project github.com/example/sample-project --collect --submit

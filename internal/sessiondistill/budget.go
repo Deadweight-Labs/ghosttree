@@ -29,6 +29,28 @@ var DefaultBudget = Budget{MaxChars: 600_000}
 // for deciding what to send.
 func (b Budget) EstimatedTokens() int { return b.MaxChars / charsPerToken }
 
+// EstimateTokens applies the same ratio to an arbitrary amount of text, which
+// is what a dry run has to work with before anything has been sent.
+func EstimateTokens(chars int) int { return chars / charsPerToken }
+
+// Batch pricing for the configured model in USD per million tokens. Batch is
+// half the synchronous rate, which is the entire reason the asynchronous path
+// exists. Input above LongContextThresholdTokens is billed at double, and the
+// budget above is sized to stay clear of it.
+const (
+	BatchInputUSDPerMTok       = 0.10
+	BatchOutputUSDPerMTok      = 0.60
+	LongContextThresholdTokens = 272_000
+)
+
+// BatchCostUSD reports what a batch cost, or would cost. It assumes short
+// context: a prompt above the threshold is a bug in the budget, not a price
+// this function should quietly absorb.
+func BatchCostUSD(promptTokens, completionTokens int) float64 {
+	return float64(promptTokens)/1e6*BatchInputUSDPerMTok +
+		float64(completionTokens)/1e6*BatchOutputUSDPerMTok
+}
+
 // SelectWithinBudget trims a transcript to fit, returning the chunks to send
 // and how many were dropped.
 //

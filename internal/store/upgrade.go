@@ -470,3 +470,69 @@ func createVerifiedBackup(db *sql.DB, backup string) error {
 	}
 	return nil
 }
+
+// UpgradeUsageTelemetry adds the two usage columns to an existing knowledge
+// table. Unlike the earlier upgrades this needs no table rebuild — SQLite adds
+// a column with a constant default as metadata only — but it still takes a
+// verified backup first, because a 780 MB production database is not the place
+// to discover that an assumption about ALTER TABLE was wrong.
+func UpgradeUsageTelemetry(path string) (string, error) {
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		return "", err
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(`PRAGMA busy_timeout=5000`); err != nil {
+		return "", err
+	}
+	if err := verifyIntegrity(db); err != nil {
+		return "", err
+	}
+	missing, err := missingUsageColumns(db)
+	if err != nil {
+		return "", err
+	}
+	if len(missing) == 0 {
+		return "", nil
+	}
+	backup := fmt.Sprintf("%s.backup-usage-%s", path, time.Now().UTC().Format("20060102-150405.000000000"))
+	if err := createVerifiedBackup(db, backup); err != nil {
+		return backup, err
+	}
+	for _, column := range missing {
+		if _, err := db.Exec(`ALTER TABLE knowledge ADD COLUMN ` + column); err != nil {
+			return backup, err
+		}
+	}
+	return backup, nil
+}
+
+func missingUsageColumns(db *sql.DB) ([]string, error) {
+	rows, err := db.Query(`PRAGMA table_info(knowledge)`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	present := map[string]bool{}
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, typ string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			return nil, err
+		}
+		present[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	var missing []string
+	if !present["last_used_at"] {
+		missing = append(missing, `last_used_at TEXT NOT NULL DEFAULT ''`)
+	}
+	if !present["hit_count"] {
+		missing = append(missing, `hit_count INTEGER NOT NULL DEFAULT 0`)
+	}
+	return missing, nil
+}

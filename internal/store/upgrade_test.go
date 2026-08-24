@@ -382,3 +382,60 @@ func TestUpgradeRequestDomainUpdatesEvidenceSchemaWithoutRequests(t *testing.T) 
 		t.Fatal("migration_evidence.request_id missing after upgrade")
 	}
 }
+
+// The production database predates the usage columns, and it is 780 MB: the
+// upgrade has to be additive and idempotent, not a table rebuild.
+func TestUpgradeUsageTelemetryIsAdditiveAndIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "legacy.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The knowledge table as it stood before this change, with a row in it.
+	if _, err := db.Exec(`CREATE TABLE knowledge(
+		id INTEGER PRIMARY KEY, type TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL,
+		project TEXT NOT NULL DEFAULT '', branch TEXT NOT NULL DEFAULT '', machine TEXT NOT NULL DEFAULT '',
+		confidence TEXT NOT NULL DEFAULT 'trusted', status TEXT NOT NULL DEFAULT 'active',
+		origin TEXT NOT NULL DEFAULT 'agent', superseded_by INTEGER NOT NULL DEFAULT 0,
+		person TEXT NOT NULL DEFAULT '', harness TEXT NOT NULL DEFAULT '', session_ref TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+		INSERT INTO knowledge(type,title,body,created_at,updated_at)
+		  VALUES('note','kept','body','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z');`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	backup, err := UpgradeUsageTelemetry(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if backup == "" {
+		t.Fatal("upgrade reported nothing to do on a legacy table")
+	}
+	// Running it again must be a no-op, not a second backup.
+	again, err := UpgradeUsageTelemetry(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again != "" {
+		t.Fatalf("second upgrade wrote backup %q, want a no-op", again)
+	}
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	hits, lastUsed, err := s.KnowledgeUsage(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hits != 0 || lastUsed != "" {
+		t.Fatalf("existing row got usage %d/%q, want the zero defaults", hits, lastUsed)
+	}
+	var title string
+	if err := s.db.QueryRow(`SELECT title FROM knowledge WHERE id=1`).Scan(&title); err != nil || title != "kept" {
+		t.Fatalf("existing row lost: title=%q err=%v", title, err)
+	}
+}

@@ -3,6 +3,20 @@ package requestledger
 
 import "fmt"
 
+// MaxMutationResponseBytes is what one ledger mutation may answer with.
+//
+// The number is taken from what the tools actually return, not from a
+// technical maximum. A criterion update carries an id, a number, a state and a
+// count: measured at 121 bytes, and creation — the one reply that must list
+// the new criterion ids — at 257. A kilobyte leaves room for a request with
+// many criteria and still refuses the old behaviour, which answered every
+// mutation with the whole request: 3862 bytes for the first criterion on a
+// five-criterion request, and 4837 by the fourth, because the activity list
+// grows with each call. That is the part that matters. The cost of using the
+// ledger carefully rose the more carefully it was used, which made neglecting
+// it the cheaper option.
+const MaxMutationResponseBytes = 1024
+
 type Trace struct {
 	Name                string `json:"name"`
 	Substantial         bool   `json:"substantial"`

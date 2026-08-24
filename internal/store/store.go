@@ -90,6 +90,7 @@ CREATE TABLE IF NOT EXISTS knowledge(
   origin TEXT NOT NULL DEFAULT 'agent' CHECK(origin IN ('agent','distilled','human')),
   superseded_by INTEGER NOT NULL DEFAULT 0,
   person TEXT NOT NULL DEFAULT '', harness TEXT NOT NULL DEFAULT '', session_ref TEXT NOT NULL DEFAULT '',
+  last_used_at TEXT NOT NULL DEFAULT '', hit_count INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS instruction_activation_path(
   knowledge_id INTEGER NOT NULL REFERENCES knowledge(id) ON DELETE CASCADE,
@@ -159,6 +160,20 @@ CREATE TABLE IF NOT EXISTS session_distillations(
   item_count INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   PRIMARY KEY(session_id,digest));
+CREATE TABLE IF NOT EXISTS distill_batches(
+  id INTEGER PRIMARY KEY,
+  provider_batch_id TEXT NOT NULL UNIQUE,
+  state TEXT NOT NULL CHECK(state IN ('open','collected','failed')),
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS distill_batch_items(
+  batch_id INTEGER NOT NULL REFERENCES distill_batches(id) ON DELETE CASCADE,
+  custom_id TEXT NOT NULL,
+  session_id INTEGER NOT NULL REFERENCES sessions(id),
+  digest TEXT NOT NULL,
+  prompt_tokens INTEGER NOT NULL DEFAULT 0,
+  completion_tokens INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(batch_id, custom_id));
+CREATE INDEX IF NOT EXISTS distill_batch_items_session ON distill_batch_items(session_id);
 INSERT OR IGNORE INTO search_documents(kind,domain_id,title,body,project,branch,machine)
   SELECT 'knowledge',id,title,body,project,branch,machine FROM knowledge;
 `

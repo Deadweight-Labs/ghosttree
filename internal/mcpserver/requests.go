@@ -33,6 +33,44 @@ type RequestDetailOutput struct {
 	Detail requestdomain.Detail `json:"detail"`
 }
 
+// CriterionRef is a criterion reduced to what an agent acts on: the id it will
+// pass back, the number it reads in prose, and the state it is in now. The
+// description is already in the request the agent just read.
+type CriterionRef struct {
+	State  string `json:"state"`
+	ID     int64  `json:"id"`
+	Number int    `json:"number"`
+}
+
+// RequestChangeOutput is what a mutation answers with. Returning the whole
+// request instead — description, every criterion, every piece of evidence, the
+// entire activity list — charges the agent for each status update out of the
+// context it needs for the work itself. That makes neglecting the ledger the
+// cheaper option, which is the opposite of what the ledger is for. Anyone who
+// wants the full picture calls request_get, which exists for exactly that.
+type RequestChangeOutput struct {
+	State        string         `json:"state"`
+	Changed      string         `json:"changed"`
+	Criterion    *CriterionRef  `json:"criterion,omitempty"`
+	Criteria     []CriterionRef `json:"criteria,omitempty"`
+	RequestID    int64          `json:"request_id"`
+	OpenCriteria int            `json:"open_criteria"`
+}
+
+func changeOutput(detail requestdomain.Detail, changed string, criterionID int64) RequestChangeOutput {
+	out := RequestChangeOutput{RequestID: detail.Request.ID, State: detail.Request.State, Changed: changed}
+	for _, c := range detail.Criteria {
+		if c.State == "open" {
+			out.OpenCriteria++
+		}
+		if c.ID == criterionID {
+			ref := CriterionRef{ID: c.ID, Number: c.Number, State: c.State}
+			out.Criterion = &ref
+		}
+	}
+	return out
+}
+
 type RequestCreateInput struct {
 	Type           string   `json:"type" jsonschema:"feature, change, bug, or investigation"`
 	Title          string   `json:"title" jsonschema:"concise desired outcome"`
@@ -100,14 +138,20 @@ func (s *Server) handleRequestGet(_ context.Context, _ *mcp.CallToolRequest, in 
 	return requestResult(out), out, err
 }
 
-func (s *Server) handleRequestCreate(_ context.Context, _ *mcp.CallToolRequest, in RequestCreateInput) (*mcp.CallToolResult, RequestDetailOutput, error) {
+func (s *Server) handleRequestCreate(_ context.Context, _ *mcp.CallToolRequest, in RequestCreateInput) (*mcp.CallToolResult, RequestChangeOutput, error) {
 	// Project only: a backlog entry belongs to the repository, not to the
 	// branch or machine that happened to file it.
 	ax := scope.Axes{Project: s.ctxAxes.Project}
 	detail, err := s.client.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{
 		Type: in.Type, Title: in.Title, Description: in.Description, Priority: in.Priority, Scope: ax, Origin: "agent", SessionRef: "mcp",
 	}, Criteria: in.Criteria, IdempotencyKey: in.IdempotencyKey})
-	out := RequestDetailOutput{Detail: detail}
+	out := changeOutput(detail, "created", 0)
+	// Creation is the one mutation that has to list its criteria: their ids
+	// exist nowhere else yet, and without them the next step is a request_get
+	// that this reply just saved.
+	for _, c := range detail.Criteria {
+		out.Criteria = append(out.Criteria, CriterionRef{ID: c.ID, Number: c.Number, State: c.State})
+	}
 	return requestResult(out), out, err
 }
 
@@ -145,7 +189,7 @@ func (s *Server) handleRequestFinishWork(_ context.Context, _ *mcp.CallToolReque
 	return requestResult(out), out, err
 }
 
-func (s *Server) handleRequestProgress(_ context.Context, _ *mcp.CallToolRequest, in RequestProgressInput) (*mcp.CallToolResult, RequestDetailOutput, error) {
+func (s *Server) handleRequestProgress(_ context.Context, _ *mcp.CallToolRequest, in RequestProgressInput) (*mcp.CallToolResult, RequestChangeOutput, error) {
 	evidence := requestdomain.Evidence{Kind: in.EvidenceKind, Ref: in.EvidenceRef}
 	var err error
 	switch in.Action {
@@ -165,9 +209,9 @@ func (s *Server) handleRequestProgress(_ context.Context, _ *mcp.CallToolRequest
 		err = fmt.Errorf("unknown request progress action %q; use criterion_add, criterion_met, criterion_waive, complete, drop, or relation_add", in.Action)
 	}
 	if err != nil {
-		return nil, RequestDetailOutput{}, err
+		return nil, RequestChangeOutput{}, err
 	}
 	detail, err := s.client.GetRequest(in.RequestID)
-	out := RequestDetailOutput{Detail: detail}
+	out := changeOutput(detail, in.Action, in.CriterionID)
 	return requestResult(out), out, err
 }

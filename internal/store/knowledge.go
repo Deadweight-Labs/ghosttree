@@ -306,6 +306,12 @@ func (s *Store) knowledgeForActivatedContext(ax scope.Axes, ctx activation.Conte
 			out = append(out, k)
 		}
 	}
+	// Only the agent-facing path records use. The preview exists so an operator
+	// can inspect staged material, and inspection that marks its subject as
+	// recently used destroys the signal it was opened to read.
+	if !includeStaged {
+		s.recordKnowledgeUse(out)
+	}
 	return out, nil
 }
 
@@ -365,7 +371,12 @@ func (s *Store) searchKnowledge(q, where string, args []any, limit int) ([]Knowl
 	if err != nil {
 		return nil, err
 	}
-	return s.scanKnowledge(rows)
+	ks, err := s.scanKnowledge(rows)
+	if err != nil {
+		return nil, err
+	}
+	s.recordKnowledgeUse(ks)
+	return ks, nil
 }
 
 // prefix qualifies a column list with a table alias.

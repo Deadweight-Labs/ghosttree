@@ -1,0 +1,126 @@
+package store
+
+import (
+	"testing"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/scope"
+)
+
+func idleSession(t *testing.T, s *Store, external, project, lastSeen string) int64 {
+	t.Helper()
+	id, err := s.UpsertSession(Session{Harness: "codex", ExternalID: external,
+		Scope: scope.Axes{Project: project}, StartedAt: lastSeen})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`UPDATE sessions SET last_seen_at=? WHERE id=?`, lastSeen, id); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// A session whose distillation is in flight must not be submitted again. The
+// batch window is up to 24 hours and the timer runs hourly, so without this the
+// same transcript is submitted — and paid for — a dozen times over before its
+// first result ever lands.
+func TestPendingDistillationExcludesSessionsInAnOpenBatch(t *testing.T) {
+	s := openTest(t)
+	id := idleSession(t, s, "a", "p", "2026-01-01T00:00:00Z")
+
+	batchID, err := s.RecordDistillBatch("batch_1", []DistillBatchItem{{CustomID: "s1", SessionID: id, Digest: "d"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.SessionsPendingDistillation(scope.Axes{}, "2026-06-01T00:00:00Z", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("pending = %d, want 0: the session is already in flight", len(got))
+	}
+
+	// Closing the batch releases the session again. An item the model failed on
+	// leaves no distillation row behind, and a permanently withheld session
+	// would be lost silently rather than retried.
+	if err := s.CloseDistillBatch(batchID, "collected"); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.SessionsPendingDistillation(scope.Axes{}, "2026-06-01T00:00:00Z", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("pending = %d, want 1: a collected batch must not withhold a session forever", len(got))
+	}
+}
+
+// The first production run is deliberately confined to one project, so the
+// selection has to be filterable rather than "whatever is oldest".
+func TestPendingDistillationFiltersByProject(t *testing.T) {
+	s := openTest(t)
+	idleSession(t, s, "a", "github.com/x/sample-project", "2026-01-01T00:00:00Z")
+	idleSession(t, s, "b", "github.com/x/other", "2026-01-02T00:00:00Z")
+
+	got, err := s.SessionsPendingDistillation(scope.Axes{Project: "github.com/x/sample-project"}, "2026-06-01T00:00:00Z", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Scope.Project != "github.com/x/sample-project" {
+		t.Fatalf("pending = %+v, want only the sample-project session", got)
+	}
+}
+
+func TestDistillBatchRoundtripRecordsUsage(t *testing.T) {
+	s := openTest(t)
+	first := idleSession(t, s, "a", "p", "2026-01-01T00:00:00Z")
+	second := idleSession(t, s, "b", "p", "2026-01-02T00:00:00Z")
+
+	batchID, err := s.RecordDistillBatch("batch_1", []DistillBatchItem{
+		{CustomID: "s1", SessionID: first, Digest: "d1"},
+		{CustomID: "s2", SessionID: second, Digest: "d2"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	open, err := s.OpenDistillBatches()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(open) != 1 || open[0].ProviderID != "batch_1" || open[0].ID != batchID {
+		t.Fatalf("open batches = %+v, want the one just recorded", open)
+	}
+	items, err := s.DistillBatchItems(batchID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 || items[0].SessionID != first || items[0].Digest != "d1" {
+		t.Fatalf("items = %+v, want both sessions with their submission digests", items)
+	}
+
+	// The provider's own count is the only exact figure; it is what the cost
+	// report is built from, so it has to survive the collect step.
+	if err := s.RecordDistillBatchUsage(batchID, "s1", 120_000, 400); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RecordDistillBatchUsage(batchID, "s2", 80_000, 200); err != nil {
+		t.Fatal(err)
+	}
+	prompt, completion, err := s.DistillBatchUsage(batchID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prompt != 200_000 || completion != 600 {
+		t.Fatalf("usage = %d/%d, want 200000/600", prompt, completion)
+	}
+
+	if err := s.CloseDistillBatch(batchID, "collected"); err != nil {
+		t.Fatal(err)
+	}
+	open, err = s.OpenDistillBatches()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(open) != 0 {
+		t.Fatalf("open batches after collect = %d, want 0", len(open))
+	}
+}

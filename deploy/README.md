@@ -25,9 +25,35 @@ ssh <host> 'sudo systemctl enable --now ghosttree'
 curl -s http://<private-host>:8474/api/health
 ```
 
-Session distillation is deliberately a separate timer. Install and enable it
-only after the `ghosttree` service account has a readable LLM configuration and
-API-key file; generated items remain quarantined until review.
+## Session distillation
+
+Distillation is deliberately a separate timer, and it spends money, so it is
+enabled last. The unit reads its provider configuration from
+`/etc/ghosttree/llm.json` and its key from a systemd credential, which keeps
+the secret out of both the unit file and the state directory:
+
+```bash
+sudo install -d -m755 /etc/ghosttree
+sudo tee /etc/ghosttree/llm.json >/dev/null <<'JSON'
+{"format":"openai","base_url":"https://llm.example.invalid/v1","model":"test-model","credential":"llm-key"}
+JSON
+sudo install -m600 /dev/stdin /etc/ghosttree/llm-key <<<'sk-...'
+```
+
+The command has two halves because the batch endpoint answers up to 24 hours
+later, in a different process run. `--submit` sends what is pending and records
+the batch; `--collect` ingests whatever has finished. The unit calls both, and
+`--dry-run` prices a submission before it happens:
+
+```bash
+sudo systemctl stop ghosttree     # never write the database while it runs
+sudo -u '#63386' /usr/local/bin/ctx distill-sessions \
+     --db /var/lib/private/ghosttree/ghosttree.db \
+     --project github.com/<owner>/<repo> --limit 50 --submit --dry-run
+```
+
+Enable the timer only after one measured run: generated items are quarantined
+until review, but the bill is not.
 
 ```bash
 sudo cp deploy/ghosttree-distill.{service,timer} /etc/systemd/system/

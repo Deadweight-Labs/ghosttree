@@ -40,7 +40,12 @@ func cmdUpgradeSchema(args []string, stdout io.Writer) int {
 		fmt.Fprintf(stdout, "request domain upgrade failed: %v\n", err)
 		return 1
 	}
-	if trustBackup == "" && typesBackup == "" && requestBackup == "" {
+	usageBackup, err := store.UpgradeUsageTelemetry(*dbPath)
+	if err != nil {
+		fmt.Fprintf(stdout, "usage telemetry upgrade failed: %v\n", err)
+		return 1
+	}
+	if trustBackup == "" && typesBackup == "" && requestBackup == "" && usageBackup == "" {
 		fmt.Fprintln(stdout, "schema already current, nothing to do")
 		return 0
 	}
@@ -56,6 +61,11 @@ func cmdUpgradeSchema(args []string, stdout io.Writer) int {
 	}
 	if requestBackup != "" {
 		if !reportVerifiedBackup(stdout, "request domain", requestBackup) {
+			return 1
+		}
+	}
+	if usageBackup != "" {
+		if !reportVerifiedBackup(stdout, "usage telemetry", usageBackup) {
 			return 1
 		}
 	}

@@ -138,3 +138,47 @@ func TestLoadConfigReadsKeyFromSystemdCredentials(t *testing.T) {
 		t.Errorf("APIKey did not come from $CREDENTIALS_DIRECTORY (length %d)", len(cfg.APIKey))
 	}
 }
+
+// The same configuration has to serve both callers. The service receives the
+// key as a systemd credential; an operator running the identical command by
+// hand has no $CREDENTIALS_DIRECTORY, and forcing a second configuration file
+// for that case invites the two to drift apart and the manual run to use a key
+// nobody remembers writing.
+func TestLoadConfigFallsBackFromCredentialToFile(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "llm.json")
+	if err := os.WriteFile(cfgPath, []byte(`{"format":"openai","base_url":"https://llm.example.invalid/v1","model":"test-model","credential":"llm-key","api_key_file":"llm-key"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "llm-key"), []byte("sk-file\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "empty"))
+	t.Setenv("GHOSTTREE_LLM_CONFIG", cfgPath)
+	t.Setenv("CREDENTIALS_DIRECTORY", "")
+
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig outside a unit: %v", err)
+	}
+	if cfg.APIKey != "sk-file" {
+		t.Errorf("APIKey did not fall back to the file (length %d)", len(cfg.APIKey))
+	}
+}
+
+// Without a named fallback there is nothing to fall back to, and guessing a
+// path is how the wrong key gets used silently.
+func TestLoadConfigFailsWhenCredentialIsUnavailableAndNoFileNamed(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "llm.json")
+	if err := os.WriteFile(cfgPath, []byte(`{"format":"openai","base_url":"https://llm.example.invalid/v1","model":"test-model","credential":"llm-key"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "empty"))
+	t.Setenv("GHOSTTREE_LLM_CONFIG", cfgPath)
+	t.Setenv("CREDENTIALS_DIRECTORY", "")
+
+	if _, err := LoadConfig(); err == nil {
+		t.Fatal("LoadConfig accepted an unreachable credential with no named fallback")
+	}
+}

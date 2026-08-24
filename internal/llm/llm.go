@@ -75,17 +75,24 @@ func LoadConfig() (Config, error) {
 // loadAPIKey prefers a systemd credential, which keeps the secret out of both
 // the unit file and the state directory, and falls back to a file next to the
 // configuration for interactive use.
+//
+// Outside a unit there is no $CREDENTIALS_DIRECTORY, and an operator running
+// the same command by hand needs the same configuration to work. The fallback
+// is only taken when the file is named explicitly: guessing a path is how the
+// wrong key gets used without anyone noticing.
 func loadAPIKey(cfg Config, configDir string) (string, error) {
 	if cfg.Credential != "" {
 		dir := os.Getenv("CREDENTIALS_DIRECTORY")
-		if dir == "" {
-			return "", fmt.Errorf("credential %q requested but $CREDENTIALS_DIRECTORY is unset", cfg.Credential)
+		if dir == "" && cfg.APIKeyFile == "" {
+			return "", fmt.Errorf("credential %q requested but $CREDENTIALS_DIRECTORY is unset and no api_key_file is named", cfg.Credential)
 		}
-		raw, err := os.ReadFile(filepath.Join(dir, cfg.Credential))
-		if err != nil {
-			return "", err
+		if dir != "" {
+			raw, err := os.ReadFile(filepath.Join(dir, cfg.Credential))
+			if err != nil {
+				return "", err
+			}
+			return strings.TrimSpace(string(raw)), nil
 		}
-		return strings.TrimSpace(string(raw)), nil
 	}
 	keyPath := cfg.APIKeyFile
 	if keyPath == "" {

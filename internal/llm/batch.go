@@ -30,9 +30,13 @@ type BatchRequest struct {
 // to send.
 type BatchResult struct {
 	Content          string
+	Error            string
 	PromptTokens     int
 	CompletionTokens int
-	Error            string
+	// Truncated means the model ran into the output cap. The content is then a
+	// fragment, and a fragment of JSON does not decode — which is
+	// indistinguishable from a bad answer unless it is said outright.
+	Truncated bool
 }
 
 // BatchStatusReport describes a batch in flight. Done covers every terminal
@@ -199,6 +203,7 @@ func (c *httpClient) CollectBatch(ctx context.Context, batchID string) (map[stri
 						Message struct {
 							Content string `json:"content"`
 						} `json:"message"`
+						FinishReason string `json:"finish_reason"`
 					} `json:"choices"`
 					Usage struct {
 						PromptTokens     int `json:"prompt_tokens"`
@@ -229,6 +234,7 @@ func (c *httpClient) CollectBatch(ctx context.Context, batchID string) (map[stri
 			result.Error = "response has no choices"
 		default:
 			result.Content = entry.Response.Body.Choices[0].Message.Content
+			result.Truncated = entry.Response.Body.Choices[0].FinishReason == "length"
 		}
 		out[entry.CustomID] = result
 	}

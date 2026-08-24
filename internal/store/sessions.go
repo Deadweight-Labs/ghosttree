@@ -86,18 +86,46 @@ func (s *Store) ListSessions(filter scope.Axes, limit int) ([]Session, error) {
 // SessionsPendingDistillation returns sessions that have never been distilled
 // and have been idle since idleBefore, oldest first. Ordering matters: the
 // distiller must drain the archive rather than revisit the newest window.
-func (s *Store) SessionsPendingDistillation(idleBefore string, limit int) ([]Session, error) {
+//
+// Sessions sitting in an open batch are held back. Their result is up to 24
+// hours away and no distillation row exists yet, so without this an hourly
+// timer would resubmit — and pay for — the same transcript all day.
+func (s *Store) SessionsPendingDistillation(filter scope.Axes, idleBefore string, limit int) ([]Session, error) {
 	if limit <= 0 {
 		limit = 50
 	}
-	rows, err := s.db.Query(`SELECT `+prefix(sessionCols, "se.")+` FROM sessions se
-		WHERE se.last_seen_at < ?
-		  AND NOT EXISTS (SELECT 1 FROM session_distillations d WHERE d.session_id = se.id)
-		ORDER BY se.last_seen_at ASC, se.id ASC LIMIT ?`, idleBefore, limit)
+	where, args := filter.FilterWhere()
+	args = append(args, idleBefore, limit)
+	rows, err := s.db.Query(`SELECT `+sessionCols+` FROM sessions
+		WHERE `+where+` AND last_seen_at < ?
+		  AND NOT EXISTS (SELECT 1 FROM session_distillations d WHERE d.session_id = sessions.id)
+		  AND NOT EXISTS (SELECT 1 FROM distill_batch_items i
+		                  JOIN distill_batches b ON b.id = i.batch_id
+		                  WHERE i.session_id = sessions.id AND b.state = 'open')
+		ORDER BY last_seen_at ASC, id ASC LIMIT ?`, args...)
 	if err != nil {
 		return nil, err
 	}
 	return scanSessions(rows)
+}
+
+// SessionByID reads one session. The batch collector needs the scope hours
+// after submission, and reads it fresh rather than from its own record: a
+// scope that was re-canonicalized in the meantime should file the result under
+// the corrected project, not the one that was current at submission time.
+func (s *Store) SessionByID(id int64) (Session, error) {
+	rows, err := s.db.Query(`SELECT `+sessionCols+` FROM sessions WHERE id = ?`, id)
+	if err != nil {
+		return Session{}, err
+	}
+	found, err := scanSessions(rows)
+	if err != nil {
+		return Session{}, err
+	}
+	if len(found) == 0 {
+		return Session{}, sql.ErrNoRows
+	}
+	return found[0], nil
 }
 
 func (s *Store) ReadSession(id int64, fromSeq, limit int) ([]Chunk, error) {

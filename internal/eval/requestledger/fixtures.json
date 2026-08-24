@@ -1,11 +1,11 @@
 [
-  {"name":"existing_feature","substantial":true,"existing_match":true,"search_calls":1,"create_calls":0,"primary_associations":1,"evidence_violations":0,"response_bytes":900},
-  {"name":"new_feature","substantial":true,"search_calls":1,"create_calls":1,"primary_associations":1,"evidence_violations":0,"response_bytes":1000},
-  {"name":"trivial_fix","substantial":false,"search_calls":0,"create_calls":0,"primary_associations":0,"evidence_violations":0,"response_bytes":300},
-  {"name":"later_session_resume","substantial":true,"existing_match":true,"search_calls":1,"create_calls":0,"primary_associations":1,"evidence_violations":0,"response_bytes":1200},
-  {"name":"related_request","substantial":true,"existing_match":true,"search_calls":1,"create_calls":0,"primary_associations":1,"evidence_violations":0,"response_bytes":1100},
-  {"name":"evidence_free_criterion","substantial":true,"existing_match":true,"search_calls":1,"create_calls":0,"primary_associations":1,"evidence_violations":0,"response_bytes":800},
-  {"name":"incomplete_completion","substantial":true,"existing_match":true,"search_calls":1,"create_calls":0,"primary_associations":1,"evidence_violations":0,"response_bytes":750},
-  {"name":"transcript_recovery","substantial":true,"existing_match":true,"search_calls":1,"create_calls":0,"primary_associations":1,"evidence_violations":0,"response_bytes":1400},
-  {"name":"interrupted_handoff","substantial":true,"existing_match":true,"search_calls":1,"create_calls":0,"primary_associations":1,"evidence_violations":0,"response_bytes":1000}
+  {"name":"existing_feature","substantial":true,"existing_match":true,"search_calls":1,"create_calls":0,"primary_associations":1,"evidence_violations":0,"response_bytes":121},
+  {"name":"new_feature","substantial":true,"search_calls":1,"create_calls":1,"primary_associations":1,"evidence_violations":0,"response_bytes":257},
+  {"name":"trivial_fix","substantial":false,"search_calls":0,"create_calls":0,"primary_associations":0,"evidence_violations":0,"response_bytes":0},
+  {"name":"later_session_resume","substantial":true,"existing_match":true,"search_calls":1,"create_calls":0,"primary_associations":1,"evidence_violations":0,"response_bytes":121},
+  {"name":"related_request","substantial":true,"existing_match":true,"search_calls":1,"create_calls":0,"primary_associations":1,"evidence_violations":0,"response_bytes":121},
+  {"name":"evidence_free_criterion","substantial":true,"existing_match":true,"search_calls":1,"create_calls":0,"primary_associations":1,"evidence_violations":0,"response_bytes":121},
+  {"name":"incomplete_completion","substantial":true,"existing_match":true,"search_calls":1,"create_calls":0,"primary_associations":1,"evidence_violations":0,"response_bytes":121},
+  {"name":"transcript_recovery","substantial":true,"existing_match":true,"search_calls":1,"create_calls":0,"primary_associations":1,"evidence_violations":0,"response_bytes":121},
+  {"name":"interrupted_handoff","substantial":true,"existing_match":true,"search_calls":1,"create_calls":0,"primary_associations":1,"evidence_violations":0,"response_bytes":121}
 ]

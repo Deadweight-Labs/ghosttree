@@ -58,7 +58,7 @@ func TestPendingDistillationReturnsOldestUnprocessedFirst(t *testing.T) {
 		ids["new"], "d1", 0, "2026-03-02T00:00:00Z"); err != nil {
 		t.Fatal(err)
 	}
-	got, err := s.SessionsPendingDistillation("2026-06-01T00:00:00Z", 10)
+	got, err := s.SessionsPendingDistillation(scope.Axes{}, "2026-06-01T00:00:00Z", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +80,7 @@ func TestPendingDistillationExcludesSessionsNewerThanCutoff(t *testing.T) {
 	if _, err := s.db.Exec(`UPDATE sessions SET last_seen_at=? WHERE id=?`, "2026-08-24T09:00:00Z", id); err != nil {
 		t.Fatal(err)
 	}
-	got, err := s.SessionsPendingDistillation("2026-08-24T08:00:00Z", 10)
+	got, err := s.SessionsPendingDistillation(scope.Axes{}, "2026-08-24T08:00:00Z", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
