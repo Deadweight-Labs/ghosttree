@@ -169,7 +169,7 @@ func cmdMigrate(args []string, stdout io.Writer) int {
 		return 1
 	}
 	if conflict != nil {
-		fmt.Fprintf(stdout, "instruction budget exceeded for repo_path=%s task=%s: %d/1500\n", conflict.Context.RepoPath, conflict.Context.Task, conflict.Chars)
+		fmt.Fprintf(stdout, "instruction budget exceeded for repo_path=%s: %d/1500\n", conflict.Context.RepoPath, conflict.Chars)
 		for _, title := range conflict.Titles {
 			item := byTitle[title]
 			fmt.Fprintf(stdout, "- %s (%d%s)\n", title, len([]rune(item.Body)), activationSuffix(item.Activation))
@@ -222,10 +222,13 @@ func cmdMigrate(args []string, stdout io.Writer) int {
 			}
 		}
 		paths := append([]string(nil), c.activation.Paths...)
-		tasks := append([]string(nil), c.activation.Tasks...)
 		sort.Strings(paths)
-		sort.Strings(tasks)
-		key := contentDigest([]byte(strings.Join([]string{project, source, digests[source], c.item.Type, c.item.Title, c.item.Body, ref, strings.Join(paths, "\x1f"), strings.Join(tasks, "\x1f")}, "\x00")))
+		// The empty field is where the task gate used to contribute. It stays so
+		// the digest recipe is unchanged: no instruction ever carried a task, so
+		// the join was always empty, and altering the recipe would give every
+		// already-migrated item a new key — which is precisely how one
+		// repository ended up in the ledger three times.
+		key := contentDigest([]byte(strings.Join([]string{project, source, digests[source], c.item.Type, c.item.Title, c.item.Body, ref, strings.Join(paths, "\x1f"), ""}, "\x00")))
 		_, err := api.InsertMigrated(store.MigratedEntry{Knowledge: k, RunID: runID, Digest: digests[source], Quote: c.item.Quote, ItemKey: key, RequestState: state, EvidenceKind: kind, EvidenceRef: ref})
 		if err != nil {
 			fmt.Fprintf(stdout, "store %s: %v\n", c.item.Title, err)
@@ -251,9 +254,6 @@ func activationSuffix(rule activation.Rule) string {
 	var parts []string
 	if len(rule.Paths) > 0 {
 		parts = append(parts, "paths:"+strings.Join(rule.Paths, ","))
-	}
-	if len(rule.Tasks) > 0 {
-		parts = append(parts, "tasks:"+strings.Join(rule.Tasks, ","))
 	}
 	if len(parts) == 0 {
 		return ""

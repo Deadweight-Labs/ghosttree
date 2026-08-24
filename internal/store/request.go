@@ -452,16 +452,25 @@ func (s *Store) StartRequestWork(requestID, sessionID int64, role, person string
 	err := s.db.QueryRow(`SELECT id,request_id,session_id,role,state,started_at,ended_at,summary FROM request_work WHERE request_id=? AND session_id=? AND role=?`, requestID, sessionID, role).Scan(
 		&existing.ID, &existing.RequestID, &existing.SessionID, &existing.Role, &existing.State, &existing.StartedAt, &existing.EndedAt, &existing.Summary)
 	if err == nil {
-		return existing, nil, nil
+		if existing.State == "active" {
+			return existing, nil, nil
+		}
+		// Resuming is what picking the request up again means. Leaving the row
+		// finished would show a session with no active work while it works.
+		return s.resumeRequestWork(existing, person)
 	}
 	if err != sql.ErrNoRows {
 		return requestdomain.Work{}, nil, err
 	}
 	if role == "primary" {
 		var currentRequest int64
-		err := s.db.QueryRow(`SELECT request_id FROM request_work WHERE session_id=? AND role='primary' LIMIT 1`, sessionID).Scan(&currentRequest)
+		// Only active work blocks. A finished primary that still held the slot
+		// forced every later task in the same session into role=related, which
+		// quietly falsified every reading of what a session mainly worked on.
+		err := s.db.QueryRow(`SELECT request_id FROM request_work
+			WHERE session_id=? AND role='primary' AND state='active' LIMIT 1`, sessionID).Scan(&currentRequest)
 		if err == nil {
-			return requestdomain.Work{}, nil, requestdomain.NewRuleError("primary_exists", fmt.Sprintf("session already has primary request REQ-%d", currentRequest), "finish or abandon the existing primary work before starting another", []string{fmt.Sprintf("REQ-%d", currentRequest)})
+			return requestdomain.Work{}, nil, requestdomain.NewRuleError("primary_exists", fmt.Sprintf("session is already working on REQ-%d", currentRequest), "finish or abandon that work before starting another", []string{fmt.Sprintf("REQ-%d", currentRequest)})
 		}
 		if err != sql.ErrNoRows {
 			return requestdomain.Work{}, nil, err
@@ -498,6 +507,41 @@ func (s *Store) StartRequestWork(requestID, sessionID int64, role, person string
 		return requestdomain.Work{}, nil, err
 	}
 	return requestdomain.Work{ID: id, RequestID: requestID, SessionID: sessionID, Role: role, State: "active", StartedAt: ts}, warnings, nil
+}
+
+// resumeRequestWork puts a finished association back to active. The handoff
+// summary is kept: it describes the stretch that ended, and overwriting it
+// would erase the one record of why the work was put down.
+func (s *Store) resumeRequestWork(work requestdomain.Work, person string) (requestdomain.Work, []string, error) {
+	if work.Role == "primary" {
+		var blocking int64
+		err := s.db.QueryRow(`SELECT request_id FROM request_work
+			WHERE session_id=? AND role='primary' AND state='active' AND id<>? LIMIT 1`, work.SessionID, work.ID).Scan(&blocking)
+		if err == nil {
+			return requestdomain.Work{}, nil, requestdomain.NewRuleError("primary_exists", fmt.Sprintf("session is already working on REQ-%d", blocking), "finish or abandon that work before resuming another", []string{fmt.Sprintf("REQ-%d", blocking)})
+		}
+		if err != sql.ErrNoRows {
+			return requestdomain.Work{}, nil, err
+		}
+	}
+	ts := now()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return requestdomain.Work{}, nil, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`UPDATE request_work SET state='active', ended_at='' WHERE id=?`, work.ID); err != nil {
+		return requestdomain.Work{}, nil, err
+	}
+	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at) VALUES(?,'work.resumed',?,?,?)`,
+		work.RequestID, person, fmt.Sprintf("session:%d role:%s from:%s", work.SessionID, work.Role, work.State), ts); err != nil {
+		return requestdomain.Work{}, nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return requestdomain.Work{}, nil, err
+	}
+	work.State, work.EndedAt = "active", ""
+	return work, nil, nil
 }
 
 func (s *Store) FinishRequestWork(workID int64, state, summary, person string) (requestdomain.Work, error) {

@@ -89,3 +89,26 @@ func TestParseFailsWhenNoItemGrounds(t *testing.T) {
 		t.Fatal("a reply with no grounded item was accepted")
 	}
 }
+
+// A transcript over budget must degrade, not fail. The old path concatenated
+// everything and the session was logged as an error and skipped — permanently,
+// and silently, since nothing distinguished "too long" from "nothing to say".
+func TestOversizedTranscriptStillYieldsItems(t *testing.T) {
+	chunks := []store.Chunk{
+		{Seq: 0, Role: "user", Text: "Make the retry loop stop hammering the queue."},
+		{Seq: 1, Role: "tool", Text: strings.Repeat("x", 40_000)},
+		{Seq: 2, Role: "tool", Text: strings.Repeat("y", 40_000)},
+		{Seq: 3, Role: "assistant", Text: "The retry loop was removed because the queue already redelivers."},
+	}
+	reply := `{"items":[{"type":"decision","title":"Drop the retry loop","body":"The queue redelivers on its own.","chunk_seq":3,"quote":"the queue already redelivers"}]}`
+	items, dropped, err := DistillWithBudget(context.Background(), fakeModel{reply}, chunks, nil, Budget{MaxChars: 50_000})
+	if err != nil {
+		t.Fatalf("oversized transcript failed instead of degrading: %v", err)
+	}
+	if dropped == 0 {
+		t.Fatal("nothing was reported as dropped, so the budget did not bite")
+	}
+	if len(items) != 1 {
+		t.Fatalf("items = %+v, want the one grounded in the surviving chunk", items)
+	}
+}

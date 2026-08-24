@@ -2,17 +2,16 @@ package activation
 
 import "testing"
 
-func TestMatchesUsesOrWithinAndAcrossDimensions(t *testing.T) {
-	rule := Rule{Paths: []string{"core/**", "shared/**"}, Tasks: []string{"code", "review"}}
+func TestMatchesAcceptsAnyOfTheGatedPaths(t *testing.T) {
+	rule := Rule{Paths: []string{"core/**", "shared/**"}}
 	cases := []struct {
 		ctx  Context
 		want bool
 	}{
-		{Context{RepoPath: "core", Task: "code"}, true},
-		{Context{Paths: []string{"shared/x.ex"}, Task: "review"}, true},
-		{Context{RepoPath: "core/lib/x.ex", Task: "code"}, true},
-		{Context{RepoPath: "ui", Task: "code"}, false},
-		{Context{RepoPath: "core", Task: "deploy"}, false},
+		{Context{RepoPath: "core"}, true},
+		{Context{Paths: []string{"shared/x.ex"}}, true},
+		{Context{RepoPath: "core/lib/x.ex"}, true},
+		{Context{RepoPath: "ui"}, false},
 		{Context{}, false},
 	}
 	for _, tc := range cases {
@@ -22,8 +21,16 @@ func TestMatchesUsesOrWithinAndAcrossDimensions(t *testing.T) {
 	}
 }
 
+// An instruction with no gate at all is unconditional, which is what an empty
+// rule has always meant.
+func TestUngatedRuleMatchesEverything(t *testing.T) {
+	if !Matches(Rule{}, Context{}) {
+		t.Error("an ungated instruction stopped applying")
+	}
+}
+
 func TestValidateRejectsUnsafeRules(t *testing.T) {
-	bad := []Rule{{Paths: []string{"/etc/**"}}, {Paths: []string{"../other/**"}}, {Paths: []string{"[broken"}}, {Tasks: []string{"release"}}}
+	bad := []Rule{{Paths: []string{"/etc/**"}}, {Paths: []string{"../other/**"}}, {Paths: []string{"[broken"}}}
 	for _, rule := range bad {
 		if err := ValidateRule(rule); err == nil {
 			t.Errorf("ValidateRule(%+v) accepted unsafe rule", rule)
@@ -31,9 +38,7 @@ func TestValidateRejectsUnsafeRules(t *testing.T) {
 	}
 }
 
-// Path escapes are a safety matter and stay rejected. The task, however, is
-// the agent's own guess about what it is currently doing, and a wrong guess
-// must not end the session.
+// Path escapes are a safety matter and stay rejected.
 func TestNormalizeContextRejectsEscapes(t *testing.T) {
 	for _, ctx := range []Context{{RepoPath: "../x"}, {Paths: []string{"/tmp/x"}}} {
 		if _, err := NormalizeContext(ctx); err == nil {
@@ -42,24 +47,15 @@ func TestNormalizeContextRejectsEscapes(t *testing.T) {
 	}
 }
 
-// A Codex session died on `unknown activation task "code review"` while no
-// stored instruction used task gating at all. An unrecognised task now reads
-// as no task, which is an already defined state.
-func TestNormalizeContextDropsUnknownTaskInsteadOfFailing(t *testing.T) {
-	got, err := NormalizeContext(Context{Task: "code review", RepoPath: "internal"})
+// The task gate is gone, so a caller that still sends one cannot be harmed by
+// it. This is the case that killed a Codex session on `unknown activation task
+// "code review"` when no stored instruction used task gating at all.
+func TestContextWithoutTaskGateNormalizesCleanly(t *testing.T) {
+	got, err := NormalizeContext(Context{RepoPath: "internal"})
 	if err != nil {
-		t.Fatalf("unknown task must not fail the call: %v", err)
-	}
-	if got.Task != "" {
-		t.Errorf("Task = %q, want it dropped", got.Task)
+		t.Fatalf("normalizing a plain context failed: %v", err)
 	}
 	if got.RepoPath != "internal" {
-		t.Errorf("RepoPath = %q, want the rest of the context kept", got.RepoPath)
-	}
-}
-
-func TestUngatedRuleAlwaysMatches(t *testing.T) {
-	if !Matches(Rule{}, Context{}) {
-		t.Error("ungated instruction must match")
+		t.Errorf("RepoPath = %q, want it kept", got.RepoPath)
 	}
 }

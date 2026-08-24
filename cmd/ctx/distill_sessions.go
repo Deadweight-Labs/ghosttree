@@ -22,7 +22,8 @@ func cmdDistillSessions(args []string, stdout io.Writer) int {
 	project := fs.String("project", "", "restrict to one project (canonical remote)")
 	submit := fs.Bool("submit", false, "send pending sessions as one batch job")
 	collect := fs.Bool("collect", false, "ingest results of finished batch jobs")
-	dryRun := fs.Bool("dry-run", false, "with --submit: report size and cost without sending")
+	dryRun := fs.Bool("dry-run", false, "with --submit or --reprocess-version: report without changing anything")
+	reprocess := fs.String("reprocess-version", "", "put sessions distilled under this prompt version back in the queue")
 	if fs.Parse(args) != nil || *idle <= 0 || *limit <= 0 {
 		return 2
 	}
@@ -32,6 +33,19 @@ func cmdDistillSessions(args []string, stdout io.Writer) int {
 		return 1
 	}
 	defer st.Close()
+	filter := scope.CanonicalAxes(scope.Axes{Project: *project})
+	cutoff := time.Now().Add(-*idle).UTC().Format(time.RFC3339Nano)
+
+	// Releasing runs before anything else, so one invocation can release and
+	// resubmit; it never happens as a side effect of bumping the version. It
+	// also runs before the provider is configured, because deciding what to
+	// redo is a question about the database and should work on a machine that
+	// holds no API key.
+	if *reprocess != "" {
+		if code := releaseForReprocessing(st, *reprocess, filter, *dryRun, stdout); code != 0 || *dryRun {
+			return code
+		}
+	}
 	cfg, err := llm.LoadConfig()
 	if err != nil {
 		fmt.Fprintf(stdout, "LLM config failed: %v\n", err)
@@ -42,9 +56,6 @@ func cmdDistillSessions(args []string, stdout io.Writer) int {
 		fmt.Fprintf(stdout, "LLM config failed: %v\n", err)
 		return 1
 	}
-	filter := scope.CanonicalAxes(scope.Axes{Project: *project})
-	cutoff := time.Now().Add(-*idle).UTC().Format(time.RFC3339Nano)
-
 	if !*submit && !*collect {
 		return distillSynchronously(st, model, filter, cutoff, *limit, stdout)
 	}
@@ -61,14 +72,41 @@ func cmdDistillSessions(args []string, stdout io.Writer) int {
 		}
 	}
 	if *submit {
-		return submitBatch(st, batch, filter, cutoff, *limit, *dryRun, stdout)
+		return submitBatch(st, batch, filter, cutoff, cfg.Model, *limit, *dryRun, stdout)
 	}
 	return 0
 }
 
-func submitBatch(st *store.Store, client llm.BatchClient, filter scope.Axes, cutoff string, limit int, dryRun bool, stdout io.Writer) int {
+// releaseForReprocessing is what actually costs money later, so it says how
+// much before it does anything. Bumping PromptVersion alone changes nothing;
+// this is the deliberate act that puts already-processed sessions back.
+func releaseForReprocessing(st *store.Store, version string, filter scope.Axes, dryRun bool, stdout io.Writer) int {
+	if version == sessiondistill.PromptVersion {
+		fmt.Fprintf(stdout, "refusing to release %q: that is the current prompt version, so every session would be redone immediately\n", version)
+		return 2
+	}
+	affected, err := st.ReleaseDistillations(version, filter, dryRun)
+	if err != nil {
+		fmt.Fprintf(stdout, "release: %v\n", err)
+		return 1
+	}
+	scopeLabel := "all projects"
+	if filter.Project != "" {
+		scopeLabel = filter.Project
+	}
+	if dryRun {
+		fmt.Fprintf(stdout, "would release %d sessions distilled under %q in %s for reprocessing as %q\n",
+			affected, version, scopeLabel, sessiondistill.PromptVersion)
+		return 0
+	}
+	fmt.Fprintf(stdout, "released %d sessions distilled under %q in %s; they will be resubmitted as %q\n",
+		affected, version, scopeLabel, sessiondistill.PromptVersion)
+	return 0
+}
+
+func submitBatch(st *store.Store, client llm.BatchClient, filter scope.Axes, cutoff, model string, limit int, dryRun bool, stdout io.Writer) int {
 	report, err := sessiondistill.SubmitBatch(context.Background(), st, client, sessiondistill.SubmitOptions{
-		Filter: filter, IdleBefore: cutoff, Limit: limit,
+		Filter: filter, IdleBefore: cutoff, Limit: limit, Model: model,
 		Budget: sessiondistill.DefaultBudget, DryRun: dryRun,
 	})
 	if err != nil {
@@ -79,6 +117,10 @@ func submitBatch(st *store.Store, client llm.BatchClient, filter scope.Axes, cut
 		// Say it out loud: a trimmed transcript and an uneventful one produce
 		// the same small result otherwise.
 		fmt.Fprintf(stdout, "%d sessions over budget, %d chunks omitted\n", report.TrimmedSessions, report.DroppedChunks)
+	}
+	if report.SkippedWithoutProject > 0 {
+		fmt.Fprintf(stdout, "%d sessions skipped: they ran outside a repository and have no project to file findings under\n",
+			report.SkippedWithoutProject)
 	}
 	if report.Sessions == 0 {
 		fmt.Fprintf(stdout, "nothing to submit\n")
@@ -129,14 +171,24 @@ func distillSynchronously(st *store.Store, model llm.Client, filter scope.Axes, 
 		fmt.Fprintf(stdout, "list sessions: %v\n", err)
 		return 1
 	}
-	processed, inserted := 0, 0
+	// The synchronous path gets no usage figures back from Complete, so what it
+	// spends is invisible to `ctx cost`. Saying so beats a cost report that
+	// silently omits a share of the bill.
+	fmt.Fprintf(stdout, "note: the synchronous path reports no token usage and is not counted by 'ctx cost'\n")
+	processed, inserted, skipped := 0, 0, 0
 	for _, session := range sessions {
+		// Same rule as the batch path: findings from a session that ran outside
+		// a repository have no project to belong to.
+		if session.Scope.Project == "" {
+			skipped++
+			continue
+		}
 		chunks, err := st.ReadSession(session.ID, 0, 5000)
 		if err != nil || len(chunks) == 0 {
 			continue
 		}
 		digest := sessiondistill.Digest(chunks)
-		exists, err := st.SessionDistillationExists(session.ID, digest)
+		exists, err := st.SessionDistillationExists(session.ID, digest, sessiondistill.PromptVersion)
 		if err != nil || exists {
 			continue
 		}
@@ -159,7 +211,7 @@ func distillSynchronously(st *store.Store, model llm.Client, filter scope.Axes, 
 			// produce the same small result otherwise.
 			fmt.Fprintf(stdout, "session %d: transcript over budget, %d of %d chunks omitted\n", session.ID, dropped, len(chunks))
 		}
-		n, err := st.ApplySessionDistillation(session.ID, digest, session.Scope, items)
+		n, err := st.ApplySessionDistillation(session.ID, digest, sessiondistill.PromptVersion, session.Scope, items)
 		if err != nil {
 			fmt.Fprintf(stdout, "session %d persist: %v\n", session.ID, err)
 			continue
@@ -169,6 +221,9 @@ func distillSynchronously(st *store.Store, model llm.Client, filter scope.Axes, 
 		if processed >= limit {
 			break
 		}
+	}
+	if skipped > 0 {
+		fmt.Fprintf(stdout, "%d sessions skipped: they ran outside a repository and have no project to file findings under\n", skipped)
 	}
 	fmt.Fprintf(stdout, "distilled %d sessions into %d quarantined knowledge items\n", processed, inserted)
 	return 0

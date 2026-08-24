@@ -15,26 +15,26 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
-func TestBootstrapActivatesInstructionsByPathAndTask(t *testing.T) {
+func TestBootstrapActivatesInstructionsByPath(t *testing.T) {
 	st, _ := store.Open(":memory:")
 	t.Cleanup(func() { st.Close() })
 	token, _ := st.AddPerson("test")
 	root, _ := st.InsertKnowledge(store.Knowledge{Type: "instruction", Title: "root rule", Body: "root"})
 	_ = root
 	core, _ := st.InsertKnowledge(store.Knowledge{Type: "instruction", Title: "core rule", Body: "core"})
-	if err := st.SetActivation(core, activation.Rule{Paths: []string{"core/**"}, Tasks: []string{"code"}}); err != nil {
+	if err := st.SetActivation(core, activation.Rule{Paths: []string{"core/**"}}); err != nil {
 		t.Fatal(err)
 	}
 	srv := httptest.NewServer(New(st))
 	t.Cleanup(srv.Close)
 
-	resp := req(t, "GET", srv.URL+"/api/context/bootstrap?repo_path=core&task=code", token, nil)
+	resp := req(t, "GET", srv.URL+"/api/context/bootstrap?repo_path=core", token, nil)
 	raw, _ := io.ReadAll(resp.Body)
 	out := string(raw)
 	if !strings.Contains(out, "root rule") || !strings.Contains(out, "core rule") {
 		t.Fatalf("active instructions missing:\n%s", out)
 	}
-	if !strings.Contains(out, "paths:core/**") || !strings.Contains(out, "tasks:code") {
+	if !strings.Contains(out, "paths:core/**") {
 		t.Fatalf("activation labels missing:\n%s", out)
 	}
 	resp = req(t, "GET", srv.URL+"/api/context/bootstrap", token, nil)

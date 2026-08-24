@@ -191,10 +191,13 @@ type PendingEntry struct {
 	Recurrence        int                      `json:"recurrence"`
 }
 
-func (c *Client) Pending(limit int) ([]PendingEntry, error) {
+func (c *Client) Pending(project string, limit int) ([]PendingEntry, error) {
 	q := url.Values{}
 	if limit > 0 {
 		q.Set("limit", strconv.Itoa(limit))
+	}
+	if project != "" {
+		q.Set("project", project)
 	}
 	var out []PendingEntry
 	err := c.do("GET", "/api/knowledge/pending", q, nil, &out)
@@ -280,9 +283,6 @@ func (c *Client) Bootstrap(ax scope.Axes, actx activation.Context, budget int) (
 	}
 	for _, p := range actx.Paths {
 		q.Add("path", p)
-	}
-	if actx.Task != "" {
-		q.Set("task", actx.Task)
 	}
 	if budget > 0 {
 		q.Set("budget", strconv.Itoa(budget))

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"io"
 	"strconv"
@@ -10,15 +11,34 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
 )
 
-const reviewUsage = `usage: ctx review [approve|reject] [<id>...]
+const reviewUsage = `usage: ctx review [--project <remote>] [--limit <n>]
+       ctx review approve|reject <id>...
 
   ctx review                list knowledge awaiting a decision
   ctx review approve <id>   mark it verified, so it reads as confirmed
-  ctx review reject <id>    deprecate it, so it stops being served`
+  ctx review reject <id>    deprecate it, so it stops being served
+
+--project narrows the queue to one repository. A distiller run produces
+several hundred findings, and judging them is easier one repository at a time
+than in a stream that jumps between them.`
 
 func cmdReview(args []string, stdout io.Writer) int {
 	// Arguments are validated before the config is loaded, so a typo reads as
 	// a usage error rather than as a missing configuration.
+	fs := flag.NewFlagSet("review", flag.ContinueOnError)
+	fs.SetOutput(stdout)
+	projectFlag := fs.String("project", "", "only list findings of one project")
+	limitFlag := fs.Int("limit", 50, "maximum entries to list")
+	// The flags only apply to listing; approve and reject take bare ids, so
+	// parsing stops at the first non-flag argument.
+	if len(args) > 0 && strings.HasPrefix(args[0], "-") {
+		if fs.Parse(args) != nil {
+			return 2
+		}
+		args = fs.Args()
+	}
+	project, limit := *projectFlag, *limitFlag
+
 	var action string
 	var ids []int64
 	if len(args) > 0 {
@@ -49,7 +69,7 @@ func cmdReview(args []string, stdout io.Writer) int {
 	c := client.New(cfg)
 
 	if action == "" {
-		return listPending(c, stdout)
+		return listPending(c, project, limit, stdout)
 	}
 	patch := map[string]string{"confidence": "verified", "status": "active"}
 	if action == "reject" {
@@ -65,8 +85,8 @@ func cmdReview(args []string, stdout io.Writer) int {
 	return 0
 }
 
-func listPending(c *client.Client, stdout io.Writer) int {
-	pending, err := c.Pending(50)
+func listPending(c *client.Client, project string, limit int, stdout io.Writer) int {
+	pending, err := c.Pending(project, limit)
 	if err != nil {
 		fmt.Fprintf(stdout, "cannot read pending knowledge: %v\n", err)
 		return 1
@@ -100,6 +120,11 @@ func writePendingEntry(stdout io.Writer, p client.PendingEntry) {
 		scopeParts = append(scopeParts, "global")
 	}
 	fmt.Fprintf(stdout, "       scope: %s\n", strings.Join(scopeParts, ", "))
+	// The claim, not just its source. Deciding whether a quote supports a
+	// finding is impossible while only one of the two is on screen.
+	for line := range strings.SplitSeq(strings.TrimSpace(k.Body), "\n") {
+		fmt.Fprintf(stdout, "       %s\n", line)
+	}
 	if suffix := activationSuffix(k.Activation); suffix != "" {
 		fmt.Fprintf(stdout, "       activation: %s\n", strings.TrimPrefix(suffix, "; "))
 	}

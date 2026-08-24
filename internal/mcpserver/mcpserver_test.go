@@ -231,34 +231,36 @@ func TestGetBootstrap(t *testing.T) {
 	}
 }
 
-func TestGetBootstrapAcceptsPathAndTask(t *testing.T) {
+// The path gate is the one that survived: a path is objectively determinable
+// from the working directory, unlike a task label the agent has to guess.
+func TestGetBootstrapAppliesThePathGate(t *testing.T) {
 	c, st := newTestClient(t)
 	id, _ := st.InsertKnowledge(store.Knowledge{Type: "instruction", Title: "core rule", Body: "b"})
-	if err := st.SetActivation(id, activation.Rule{Paths: []string{"core/**"}, Tasks: []string{"code"}}); err != nil {
+	if err := st.SetActivation(id, activation.Rule{Paths: []string{"core/**"}}); err != nil {
 		t.Fatal(err)
 	}
 	s := NewServer(c, scope.Axes{}, activation.Context{RepoPath: "ui"})
-	res, _, err := s.handleGet(context.Background(), nil, GetInput{Paths: []string{"core/lib"}, Task: "code"})
+	res, _, err := s.handleGet(context.Background(), nil, GetInput{Paths: []string{"core/lib"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := text(t, res); !strings.Contains(got, "core rule") {
-		t.Fatalf("path/task gated instruction missing: %s", got)
+		t.Fatalf("path-gated instruction missing when the path matches: %s", got)
 	}
-	// An unrecognised task falls back to no task gating rather than failing.
-	res, _, err = s.handleGet(context.Background(), nil, GetInput{Paths: []string{"core/lib"}, Task: "release"})
+	// A context outside the gated paths must not receive it.
+	res, _, err = s.handleGet(context.Background(), nil, GetInput{Paths: []string{"docs/readme.md"}})
 	if err != nil {
-		t.Fatalf("unknown task must not fail the context call: %v", err)
+		t.Fatal(err)
 	}
 	if got := text(t, res); strings.Contains(got, "core rule") {
-		t.Errorf("task-gated instruction served without a matching task: %s", got)
+		t.Errorf("path-gated instruction served outside its paths: %s", got)
 	}
 }
 
 func TestSearchRendersInstructionActivation(t *testing.T) {
 	c, st := newTestClient(t)
 	id, _ := st.InsertKnowledge(store.Knowledge{Type: "instruction", Title: "core searchable", Body: "rule", Status: "active", Confidence: "trusted", Origin: "distilled", SessionRef: "AGENTS.md"})
-	if err := st.SetActivation(id, activation.Rule{Paths: []string{"core/**"}, Tasks: []string{"review"}}); err != nil {
+	if err := st.SetActivation(id, activation.Rule{Paths: []string{"core/**"}}); err != nil {
 		t.Fatal(err)
 	}
 	s := NewServer(c, scope.Axes{})
@@ -267,7 +269,7 @@ func TestSearchRendersInstructionActivation(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := text(t, res)
-	for _, want := range []string{"status:active", "confidence:trusted", "activation:paths:core/**;tasks:review", "source:AGENTS.md"} {
+	for _, want := range []string{"status:active", "confidence:trusted", "activation:paths:core/**", "source:AGENTS.md"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("search result missing %q: %s", want, got)
 		}

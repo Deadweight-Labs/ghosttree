@@ -20,9 +20,15 @@ type Budget struct {
 	MaxChars int
 }
 
-// DefaultBudget targets ~200k estimated tokens, leaving a wide margin under
-// the threshold for the character estimate to be wrong in.
-var DefaultBudget = Budget{MaxChars: 600_000}
+// DefaultBudget is sized from the archive rather than from a round number.
+// Measured over 1838 sessions on 2026-08-24: the largest transcript is 696110
+// characters and only one session exceeds half a million. 750k characters
+// estimates to 250k tokens at the conservative ratio and comes to roughly 214k
+// at the ~3.5 chars per token the first two production batches actually
+// billed — under the threshold either way, and above every transcript that
+// exists. Nothing in the archive is trimmed at this size, which matters because
+// trimming drops the middle of exactly the long sessions that hold the most.
+var DefaultBudget = Budget{MaxChars: 750_000}
 
 // EstimatedTokens converts the character budget using the conservative ratio.
 // The real figure comes back from the API in usage.prompt_tokens; this is only

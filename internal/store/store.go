@@ -59,8 +59,12 @@ CREATE TABLE IF NOT EXISTS request_work(
   state TEXT NOT NULL DEFAULT 'active' CHECK(state IN ('active','paused','completed','abandoned')),
   started_at TEXT NOT NULL, ended_at TEXT NOT NULL DEFAULT '', summary TEXT NOT NULL DEFAULT '',
   UNIQUE(request_id, session_id, role));
-CREATE UNIQUE INDEX IF NOT EXISTS request_work_one_primary
-  ON request_work(session_id) WHERE role='primary';
+-- One primary at a time, not one per session ever. A session that works a
+-- backlog has several main tasks in sequence, and the state column is what
+-- makes finishing one mean anything.
+CREATE UNIQUE INDEX IF NOT EXISTS request_work_one_active_primary
+  ON request_work(session_id) WHERE role='primary' AND state='active';
+DROP INDEX IF EXISTS request_work_one_primary;
 CREATE TABLE IF NOT EXISTS request_activity(
   id INTEGER PRIMARY KEY,
   request_id INTEGER NOT NULL REFERENCES requests(id) ON DELETE RESTRICT,
@@ -96,10 +100,9 @@ CREATE TABLE IF NOT EXISTS instruction_activation_path(
   knowledge_id INTEGER NOT NULL REFERENCES knowledge(id) ON DELETE CASCADE,
   pattern TEXT NOT NULL,
   PRIMARY KEY(knowledge_id, pattern));
-CREATE TABLE IF NOT EXISTS instruction_activation_task(
-  knowledge_id INTEGER NOT NULL REFERENCES knowledge(id) ON DELETE CASCADE,
-  task TEXT NOT NULL CHECK(task IN ('code','review','test','deploy','security','docs')),
-  PRIMARY KEY(knowledge_id, task));
+-- The task gate is gone: see internal/activation. Dropped here so a database
+-- that has it does not keep a table nothing reads.
+DROP TABLE IF EXISTS instruction_activation_task;
 CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(title, body, content='knowledge', content_rowid='id');
 CREATE TRIGGER IF NOT EXISTS knowledge_ai AFTER INSERT ON knowledge BEGIN
   INSERT INTO knowledge_fts(rowid, title, body) VALUES (new.id, new.title, new.body);
@@ -154,22 +157,33 @@ CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(text, content='session_
 CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON session_chunks BEGIN
   INSERT INTO chunks_fts(rowid, text) VALUES (new.id, new.text);
 END;
+-- prompt_version is part of the identity, not a note beside it. Keyed on the
+-- transcript alone, a session was retired against whichever prompt happened to
+-- reach it first, and no later improvement could ever touch it again.
 CREATE TABLE IF NOT EXISTS session_distillations(
   session_id INTEGER NOT NULL REFERENCES sessions(id),
   digest TEXT NOT NULL,
+  prompt_version TEXT NOT NULL DEFAULT '',
   item_count INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
-  PRIMARY KEY(session_id,digest));
+  PRIMARY KEY(session_id,digest,prompt_version));
+-- model is recorded per batch, not read from configuration at report time: a
+-- price change must not retroactively restate what an earlier batch cost.
 CREATE TABLE IF NOT EXISTS distill_batches(
   id INTEGER PRIMARY KEY,
   provider_batch_id TEXT NOT NULL UNIQUE,
   state TEXT NOT NULL CHECK(state IN ('open','collected','failed')),
+  model TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+-- prompt_version is recorded here as well as on the distillation, because
+-- releasing a session for reprocessing deletes the distillation row — and with
+-- it the only record of which prompt that spend belonged to.
 CREATE TABLE IF NOT EXISTS distill_batch_items(
   batch_id INTEGER NOT NULL REFERENCES distill_batches(id) ON DELETE CASCADE,
   custom_id TEXT NOT NULL,
   session_id INTEGER NOT NULL REFERENCES sessions(id),
   digest TEXT NOT NULL,
+  prompt_version TEXT NOT NULL DEFAULT '',
   prompt_tokens INTEGER NOT NULL DEFAULT 0,
   completion_tokens INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY(batch_id, custom_id));

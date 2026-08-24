@@ -96,8 +96,13 @@ func (s *Store) SessionsPendingDistillation(filter scope.Axes, idleBefore string
 	}
 	where, args := filter.FilterWhere()
 	args = append(args, idleBefore, limit)
+	// project != '' belongs in SQL, not in the caller's loop. Findings from a
+	// session that ran outside a repository have nowhere to be filed, and
+	// discarding them after the LIMIT shrinks the window unpredictably: the
+	// oldest sessions are largely project-less, so a run asking for 100
+	// candidates skipped 98 and submitted 2.
 	rows, err := s.db.Query(`SELECT `+sessionCols+` FROM sessions
-		WHERE `+where+` AND last_seen_at < ?
+		WHERE `+where+` AND last_seen_at < ? AND project != ''
 		  AND NOT EXISTS (SELECT 1 FROM session_distillations d WHERE d.session_id = sessions.id)
 		  AND NOT EXISTS (SELECT 1 FROM distill_batch_items i
 		                  JOIN distill_batches b ON b.id = i.batch_id

@@ -186,8 +186,7 @@ CREATE TABLE IF NOT EXISTS request_resolution(knowledge_id INTEGER PRIMARY KEY R
 CREATE TABLE IF NOT EXISTS migration_runs(id INTEGER PRIMARY KEY, project TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('pending','complete')), created_at TEXT NOT NULL, completed_at TEXT NOT NULL DEFAULT '');
 CREATE TABLE IF NOT EXISTS migration_artifacts(run_id INTEGER NOT NULL REFERENCES migration_runs(id), path TEXT NOT NULL, digest TEXT NOT NULL, PRIMARY KEY(run_id,path));
 CREATE TABLE IF NOT EXISTS migration_evidence(knowledge_id INTEGER PRIMARY KEY REFERENCES knowledge(id), run_id INTEGER NOT NULL REFERENCES migration_runs(id), source TEXT NOT NULL, digest TEXT NOT NULL, item_key TEXT NOT NULL UNIQUE, quote TEXT NOT NULL DEFAULT '');
-CREATE TABLE IF NOT EXISTS instruction_activation_path(knowledge_id INTEGER NOT NULL REFERENCES knowledge(id) ON DELETE CASCADE, pattern TEXT NOT NULL, PRIMARY KEY(knowledge_id,pattern));
-CREATE TABLE IF NOT EXISTS instruction_activation_task(knowledge_id INTEGER NOT NULL REFERENCES knowledge(id) ON DELETE CASCADE, task TEXT NOT NULL CHECK(task IN ('code','review','test','deploy','security','docs')), PRIMARY KEY(knowledge_id,task));`
+CREATE TABLE IF NOT EXISTS instruction_activation_path(knowledge_id INTEGER NOT NULL REFERENCES knowledge(id) ON DELETE CASCADE, pattern TEXT NOT NULL, PRIMARY KEY(knowledge_id,pattern));`
 
 // UpgradeTypes extends the knowledge type and status constraints. It writes a
 // backup before rebuilding the table and preserves ids used by the FTS index.
@@ -356,7 +355,6 @@ func UpgradeRequestDomain(path string) (string, error) {
 		`DELETE FROM request_resolution WHERE knowledge_id IN (SELECT id FROM knowledge WHERE type='request')`,
 		`DELETE FROM knowledge_evidence WHERE knowledge_id IN (SELECT id FROM knowledge WHERE type='request')`,
 		`DELETE FROM instruction_activation_path WHERE knowledge_id IN (SELECT id FROM knowledge WHERE type='request')`,
-		`DELETE FROM instruction_activation_task WHERE knowledge_id IN (SELECT id FROM knowledge WHERE type='request')`,
 		`DROP TRIGGER IF EXISTS knowledge_ai`,
 		`DROP TRIGGER IF EXISTS knowledge_au`,
 		`CREATE TABLE knowledge_new(
@@ -535,4 +533,128 @@ func missingUsageColumns(db *sql.DB) ([]string, error) {
 		missing = append(missing, `hit_count INTEGER NOT NULL DEFAULT 0`)
 	}
 	return missing, nil
+}
+
+// UpgradeDistillationVersion widens the session_distillations key to include
+// the prompt version. Existing rows are labelled v1, which is what they are:
+// every distillation that exists predates versioning and was produced by the
+// original prompt. Leaving them empty would have been more literal and less
+// useful — an empty version cannot be named on a command line without
+// colliding with "flag not given".
+//
+// The primary key changes, so this is a table rebuild rather than an added
+// column. The table is small (one row per processed session), so the rebuild is
+// cheap even on the production database.
+func UpgradeDistillationVersion(path string) (string, error) {
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		return "", err
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(`PRAGMA busy_timeout=5000`); err != nil {
+		return "", err
+	}
+	if err := verifyIntegrity(db); err != nil {
+		return "", err
+	}
+	has, err := hasDistillationVersionColumn(db)
+	if err != nil {
+		return "", err
+	}
+	if has {
+		// A database upgraded by an earlier build of this command carries
+		// empty versions. Naming them is idempotent and needs no backup.
+		if _, err := db.Exec(`UPDATE session_distillations SET prompt_version='v1' WHERE prompt_version=''`); err != nil {
+			return "", err
+		}
+		// Same shape: the batch table gained a model column after the fact.
+		// ALTER TABLE ADD COLUMN with a constant default is metadata only.
+		if err := addColumnIfMissing(db, "distill_batches", "model", `TEXT NOT NULL DEFAULT ''`); err != nil {
+			return "", err
+		}
+		if err := addColumnIfMissing(db, "distill_batch_items", "prompt_version", `TEXT NOT NULL DEFAULT ''`); err != nil {
+			return "", err
+		}
+		return "", nil
+	}
+	backup := fmt.Sprintf("%s.backup-distillversion-%s", path, time.Now().UTC().Format("20060102-150405.000000000"))
+	if err := createVerifiedBackup(db, backup); err != nil {
+		return backup, err
+	}
+	// Only mutate the source after a consistent, readable backup exists.
+	if _, err := db.Exec(`PRAGMA foreign_keys=OFF`); err != nil {
+		return backup, err
+	}
+	defer db.Exec(`PRAGMA foreign_keys=ON`)
+	tx, err := db.Begin()
+	if err != nil {
+		return backup, err
+	}
+	defer tx.Rollback()
+	for _, stmt := range []string{
+		`CREATE TABLE session_distillations_new(
+			session_id INTEGER NOT NULL REFERENCES sessions(id),
+			digest TEXT NOT NULL,
+			prompt_version TEXT NOT NULL DEFAULT '',
+			item_count INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL,
+			PRIMARY KEY(session_id,digest,prompt_version))`,
+		`INSERT INTO session_distillations_new(session_id,digest,prompt_version,item_count,created_at)
+			SELECT session_id,digest,'v1',item_count,created_at FROM session_distillations`,
+		`DROP TABLE session_distillations`,
+		`ALTER TABLE session_distillations_new RENAME TO session_distillations`,
+	} {
+		if _, err := tx.Exec(stmt); err != nil {
+			return backup, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return backup, err
+	}
+	return backup, nil
+}
+
+func hasDistillationVersionColumn(db *sql.DB) (bool, error) {
+	rows, err := db.Query(`PRAGMA table_info(session_distillations)`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, typ string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			return false, err
+		}
+		if name == "prompt_version" {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+// addColumnIfMissing is idempotent by inspection rather than by catching an
+// error, so a genuine failure is not mistaken for "already there".
+func addColumnIfMissing(db *sql.DB, table, column, definition string) error {
+	rows, err := db.Query(`SELECT name FROM pragma_table_info(?)`, table)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return err
+		}
+		if name == column {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = db.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + column + ` ` + definition)
+	return err
 }

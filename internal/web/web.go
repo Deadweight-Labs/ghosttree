@@ -109,7 +109,7 @@ func (a *app) knowledgePage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) reviewPage(w http.ResponseWriter, r *http.Request) {
-	entries, err := a.store.PendingKnowledge(50)
+	entries, err := a.store.PendingKnowledge("", 50)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return

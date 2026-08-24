@@ -1,6 +1,7 @@
 package store
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
@@ -27,7 +28,7 @@ func TestPendingDistillationExcludesSessionsInAnOpenBatch(t *testing.T) {
 	s := openTest(t)
 	id := idleSession(t, s, "a", "p", "2026-01-01T00:00:00Z")
 
-	batchID, err := s.RecordDistillBatch("batch_1", []DistillBatchItem{{CustomID: "s1", SessionID: id, Digest: "d"}})
+	batchID, err := s.RecordDistillBatch("batch_1", "m", []DistillBatchItem{{CustomID: "s1", SessionID: id, Digest: "d"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +76,7 @@ func TestDistillBatchRoundtripRecordsUsage(t *testing.T) {
 	first := idleSession(t, s, "a", "p", "2026-01-01T00:00:00Z")
 	second := idleSession(t, s, "b", "p", "2026-01-02T00:00:00Z")
 
-	batchID, err := s.RecordDistillBatch("batch_1", []DistillBatchItem{
+	batchID, err := s.RecordDistillBatch("batch_1", "m", []DistillBatchItem{
 		{CustomID: "s1", SessionID: first, Digest: "d1"},
 		{CustomID: "s2", SessionID: second, Digest: "d2"},
 	})
@@ -122,5 +123,31 @@ func TestDistillBatchRoundtripRecordsUsage(t *testing.T) {
 	}
 	if len(open) != 0 {
 		t.Fatalf("open batches after collect = %d, want 0", len(open))
+	}
+}
+
+// Filtering after the LIMIT shrinks the window unpredictably — the same shape of
+// bug that once pinned the distiller to the newest hundred sessions. Measured in
+// production: the oldest sessions are mostly project-less, so a run asking for
+// 100 skipped 98 of them in Go and submitted 2.
+func TestPendingDistillationFillsTheLimitWithEligibleSessions(t *testing.T) {
+	s := openTest(t)
+	for i := range 5 {
+		idleSession(t, s, "homeless"+strconv.Itoa(i), "", "2026-01-0"+strconv.Itoa(i+1)+"T00:00:00Z")
+	}
+	for i := range 3 {
+		idleSession(t, s, "housed"+strconv.Itoa(i), "github.com/x/y", "2026-02-0"+strconv.Itoa(i+1)+"T00:00:00Z")
+	}
+	got, err := s.SessionsPendingDistillation(scope.Axes{}, "2026-06-01T00:00:00Z", 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("pending = %d, want the limit filled with sessions that can actually be distilled", len(got))
+	}
+	for _, session := range got {
+		if session.Scope.Project == "" {
+			t.Fatalf("selection returned a project-less session: %+v", session)
+		}
 	}
 }

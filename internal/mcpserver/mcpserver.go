@@ -59,7 +59,6 @@ func (s *Server) searchAxes(in SearchInput) (ax scope.Axes, crossProject bool) {
 
 type GetInput struct {
 	Paths []string `json:"paths,omitempty" jsonschema:"repository-relative paths currently being worked on"`
-	Task  string   `json:"task,omitempty" jsonschema:"code, review, test, deploy, security or docs"`
 }
 
 type RememberInput struct {
@@ -180,7 +179,6 @@ func (s *Server) handleSearch(ctx context.Context, _ *mcp.CallToolRequest, in Se
 func (s *Server) handleGet(ctx context.Context, _ *mcp.CallToolRequest, in GetInput) (*mcp.CallToolResult, any, error) {
 	actx := s.baseActivation
 	actx.Paths = append([]string(nil), in.Paths...)
-	actx.Task = in.Task
 	var err error
 	actx, err = activation.NormalizeContext(actx)
 	if err != nil {
@@ -294,9 +292,6 @@ func renderKnowledge(k store.Knowledge) string {
 		var activationParts []string
 		if len(k.Activation.Paths) > 0 {
 			activationParts = append(activationParts, "paths:"+strings.Join(k.Activation.Paths, ","))
-		}
-		if len(k.Activation.Tasks) > 0 {
-			activationParts = append(activationParts, "tasks:"+strings.Join(k.Activation.Tasks, ","))
 		}
 		if len(activationParts) > 0 {
 			activationLabel = strings.Join(activationParts, ";")

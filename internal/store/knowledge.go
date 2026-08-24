@@ -53,7 +53,7 @@ func (s *Store) InsertKnowledge(k Knowledge) (int64, error) {
 	if err := activation.ValidateRule(k.Activation); err != nil {
 		return 0, err
 	}
-	if k.Type != "instruction" && (len(k.Activation.Paths) > 0 || len(k.Activation.Tasks) > 0) {
+	if k.Type != "instruction" && len(k.Activation.Paths) > 0 {
 		return 0, fmt.Errorf("activation requires instruction, got %s", k.Type)
 	}
 	if k.Origin == "" {
@@ -98,11 +98,6 @@ func (s *Store) InsertKnowledge(k Knowledge) (int64, error) {
 			return 0, err
 		}
 	}
-	for _, task := range k.Activation.Tasks {
-		if _, err := tx.Exec(`INSERT INTO instruction_activation_task(knowledge_id,task) VALUES(?,?)`, id, task); err != nil {
-			return 0, err
-		}
-	}
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
@@ -127,18 +122,11 @@ func (s *Store) SetActivation(id int64, rule activation.Rule) error {
 	if typ != "instruction" {
 		return fmt.Errorf("knowledge %d is %q, not instruction", id, typ)
 	}
-	for _, table := range []string{"instruction_activation_path", "instruction_activation_task"} {
-		if _, err := tx.Exec(`DELETE FROM `+table+` WHERE knowledge_id = ?`, id); err != nil {
-			return err
-		}
+	if _, err := tx.Exec(`DELETE FROM instruction_activation_path WHERE knowledge_id = ?`, id); err != nil {
+		return err
 	}
 	for _, pattern := range rule.Paths {
 		if _, err := tx.Exec(`INSERT INTO instruction_activation_path(knowledge_id, pattern) VALUES(?,?)`, id, pattern); err != nil {
-			return err
-		}
-	}
-	for _, task := range rule.Tasks {
-		if _, err := tx.Exec(`INSERT INTO instruction_activation_task(knowledge_id, task) VALUES(?,?)`, id, task); err != nil {
 			return err
 		}
 	}
@@ -148,14 +136,18 @@ func (s *Store) SetActivation(id int64, rule activation.Rule) error {
 var patchable = map[string]bool{"title": true, "body": true, "confidence": true,
 	"status": true, "type": true, "origin": true, "superseded_by": true}
 
-// PendingKnowledge returns everything awaiting a human decision.
-func (s *Store) PendingKnowledge(limit int) ([]Knowledge, error) {
+// PendingKnowledge lists what awaits a decision. project narrows the queue:
+// a flat list is fine for eleven entries and unusable at the several hundred a
+// full distiller run produces, and judging findings is easier one repository at
+// a time than in a stream that jumps between them.
+func (s *Store) PendingKnowledge(project string, limit int) ([]Knowledge, error) {
 	if limit <= 0 {
 		limit = 50
 	}
 	rows, err := s.db.Query(`SELECT `+knowledgeCols+` FROM knowledge
-		WHERE (status = 'active' AND confidence IN ('quarantined','staged')) OR status = 'stale'
-		ORDER BY created_at DESC, id DESC LIMIT ?`, limit)
+		WHERE ((status = 'active' AND confidence IN ('quarantined','staged')) OR status = 'stale')
+		  AND (? = '' OR project = ?)
+		ORDER BY created_at DESC, id DESC LIMIT ?`, project, project, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -213,9 +205,7 @@ func (s *Store) UpdateKnowledge(id int64, patch map[string]string) error {
 	}
 	if typ, ok := patch["type"]; ok && typ != "instruction" {
 		var gates int
-		if err := tx.QueryRow(`SELECT
-			(SELECT COUNT(*) FROM instruction_activation_path WHERE knowledge_id=?) +
-			(SELECT COUNT(*) FROM instruction_activation_task WHERE knowledge_id=?)`, id, id).Scan(&gates); err != nil {
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM instruction_activation_path WHERE knowledge_id=?`, id).Scan(&gates); err != nil {
 			return err
 		}
 		if gates > 0 {
@@ -424,23 +414,7 @@ func (s *Store) scanKnowledge(rows *sql.Rows) ([]Knowledge, error) {
 		if err := pathRows.Close(); err != nil {
 			return nil, err
 		}
-		taskRows, err := s.db.Query(`SELECT task FROM instruction_activation_task WHERE knowledge_id = ? ORDER BY task`, out[i].ID)
-		if err != nil {
-			return nil, err
-		}
-		for taskRows.Next() {
-			var task string
-			if err := taskRows.Scan(&task); err != nil {
-				taskRows.Close()
-				return nil, err
-			}
-			out[i].Activation.Tasks = append(out[i].Activation.Tasks, task)
-		}
-		if err := taskRows.Close(); err != nil {
-			return nil, err
-		}
 		sort.Strings(out[i].Activation.Paths)
-		sort.Strings(out[i].Activation.Tasks)
 	}
 	return out, nil
 }

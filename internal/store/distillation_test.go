@@ -11,15 +11,15 @@ func TestApplySessionDistillationIsGroundedAtomicAndIdempotent(t *testing.T) {
 	sessionID, _ := s.UpsertSession(Session{Harness: "codex", ExternalID: "distill", Scope: scope.Axes{Project: "p"}})
 	_ = s.AppendChunks(sessionID, []Chunk{{Seq: 4, Role: "assistant", Text: "We chose SQLite because one writer is enough.", Raw: `{}`}})
 	items := []SessionDistilledItem{{Type: "decision", Title: "SQLite is sufficient", Body: "One writer is enough.", Quote: "chose SQLite", ChunkSeq: 4}}
-	n, err := s.ApplySessionDistillation(sessionID, "digest", scope.Axes{Project: "p"}, items)
+	n, err := s.ApplySessionDistillation(sessionID, "digest", "v1", scope.Axes{Project: "p"}, items)
 	if err != nil || n != 1 {
 		t.Fatalf("inserted=%d err=%v", n, err)
 	}
-	n, err = s.ApplySessionDistillation(sessionID, "digest", scope.Axes{Project: "p"}, items)
+	n, err = s.ApplySessionDistillation(sessionID, "digest", "v1", scope.Axes{Project: "p"}, items)
 	if err != nil || n != 0 {
 		t.Fatalf("retry inserted=%d err=%v", n, err)
 	}
-	pending, _ := s.PendingKnowledge(10)
+	pending, _ := s.PendingKnowledge("", 10)
 	if len(pending) != 1 || pending[0].Confidence != "quarantined" {
 		t.Fatalf("pending=%+v", pending)
 	}
@@ -28,10 +28,10 @@ func TestApplySessionDistillationIsGroundedAtomicAndIdempotent(t *testing.T) {
 		t.Fatalf("evidence=%+v", evidence)
 	}
 	bad := []SessionDistilledItem{{Type: "note", Title: "hallucinated", Body: "x", Quote: "not in transcript", ChunkSeq: 4}}
-	if _, err := s.ApplySessionDistillation(sessionID, "other", scope.Axes{Project: "p"}, bad); err == nil {
+	if _, err := s.ApplySessionDistillation(sessionID, "other", "v1", scope.Axes{Project: "p"}, bad); err == nil {
 		t.Fatal("ungrounded item accepted")
 	}
-	if exists, _ := s.SessionDistillationExists(sessionID, "other"); exists {
+	if exists, _ := s.SessionDistillationExists(sessionID, "other", "v1"); exists {
 		t.Fatal("failed distillation was checkpointed")
 	}
 }

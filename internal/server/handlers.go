@@ -219,7 +219,7 @@ type PendingEntry struct {
 }
 
 func (a *api) pendingKnowledge(w http.ResponseWriter, r *http.Request) {
-	ks, err := a.st.PendingKnowledge(intParam(r, "limit", 50))
+	ks, err := a.st.PendingKnowledge(r.URL.Query().Get("project"), intParam(r, "limit", 50))
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -417,7 +417,6 @@ func activationFromQuery(r *http.Request) (activation.Context, error) {
 	return activation.NormalizeContext(activation.Context{
 		RepoPath: r.URL.Query().Get("repo_path"),
 		Paths:    r.URL.Query()["path"],
-		Task:     r.URL.Query().Get("task"),
 	})
 }
 
@@ -425,9 +424,6 @@ func activationLabel(r activation.Rule) string {
 	var parts []string
 	if len(r.Paths) > 0 {
 		parts = append(parts, "paths:"+strings.Join(r.Paths, ","))
-	}
-	if len(r.Tasks) > 0 {
-		parts = append(parts, "tasks:"+strings.Join(r.Tasks, ","))
 	}
 	return strings.Join(parts, " | ")
 }

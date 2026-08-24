@@ -10,6 +10,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
+	"github.com/Deadweight-Labs/ghosttree/internal/sessiondistill"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
@@ -18,10 +19,10 @@ func TestReviewActivationSeparatesScopeAndGates(t *testing.T) {
 	writePendingEntry(&out, client.PendingEntry{Knowledge: store.Knowledge{
 		ID: 7, Type: "instruction", Title: "core rules", Confidence: "staged",
 		Scope:      scope.Axes{Project: "github.com/x/y"},
-		Activation: activation.Rule{Paths: []string{"core/**"}, Tasks: []string{"code", "review"}},
+		Activation: activation.Rule{Paths: []string{"core/**"}},
 	}})
 	got := out.String()
-	for _, want := range []string{"scope: project=github.com/x/y", "activation: paths:core/**; tasks:code,review"} {
+	for _, want := range []string{"scope: project=github.com/x/y", "activation: paths:core/**"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("review output missing %q:\n%s", want, got)
 		}
@@ -198,5 +199,26 @@ func TestRunUnknownCommand(t *testing.T) {
 	var out bytes.Buffer
 	if code := run([]string{"nope"}, &out); code == 0 {
 		t.Error("unknown command should return non-zero")
+	}
+}
+
+// Releasing the current version would put every processed session back in the
+// queue at once, which is the blind reprocessing the version exists to prevent.
+func TestDistillSessionsRefusesToReleaseTheCurrentPromptVersion(t *testing.T) {
+	dir := t.TempDir()
+	// Isolate the configuration: without this the lookup falls back to the
+	// operator's own home and a failure prints their live API key.
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "empty"))
+	t.Setenv("GHOSTTREE_LLM_CONFIG", filepath.Join(dir, "absent.json"))
+	var out bytes.Buffer
+	code := cmdDistillSessions([]string{
+		"--db", filepath.Join(dir, "t.db"),
+		"--reprocess-version", sessiondistill.PromptVersion, "--dry-run",
+	}, &out)
+	if code == 0 {
+		t.Fatalf("releasing the current version was accepted: %s", out.String())
+	}
+	if !strings.Contains(out.String(), "current prompt version") {
+		t.Fatalf("output does not explain the refusal: %s", out.String())
 	}
 }

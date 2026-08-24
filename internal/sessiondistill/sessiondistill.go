@@ -33,6 +33,23 @@ summary message restates what the session already did, so mining it repeatedly
 yields the same fact under different titles. Prefer no item over a weak one; an
 empty list is a correct answer and the usual one.`
 
+// PromptVersion names the extraction rules a distillation was produced under.
+// It is bumped by hand, not derived from a hash of the prompt: a version that
+// changed itself would put the whole archive back in the queue on every
+// wording tweak, and every re-submission is paid for. Bumping it only marks
+// past work as belonging to an older generation; `--reprocess-version` is what
+// actually releases those sessions.
+//
+// v1 — the original rules. Measured on 100 sample-project sessions: 45 items, mostly
+//
+//	changelog entries and prompt text mistaken for instruction.
+//
+// v2 — asks for what a reader of the finished repository could not recover,
+//
+//	rules out text the session was drafting, caps items per transcript and
+//	per chunk.
+const PromptVersion = "v2"
+
 // MaxItemsPerChunk and MaxItemsPerSession bound what one transcript may yield.
 // The prompt asks for the same limits, and this enforces them: on the first
 // production run seven of nine items came from one 7287-character summary
@@ -152,9 +169,23 @@ func Parse(raw string, quoted []store.Chunk) ([]store.SessionDistilledItem, erro
 		kept = append(kept, item)
 	}
 	// Nothing grounding at all is a different thing from a partial result: the
-	// model spoke and none of it can be traced to the transcript.
+	// model spoke and none of it can be traced to the transcript. The first
+	// offending quote goes into the message, because "grounding failed" without
+	// the quote leaves nothing to tell a paraphrase from a wrong chunk number
+	// from an encoding problem — and the reply itself is not kept anywhere.
 	if len(kept) == 0 && len(result.Items) > 0 {
-		return nil, fmt.Errorf("none of the %d items quote their chunk", len(result.Items))
+		return nil, fmt.Errorf("none of the %d items quote their chunk; first was chunk %d %q",
+			len(result.Items), result.Items[0].ChunkSeq, ellipsis(result.Items[0].Quote, 120))
 	}
 	return kept, nil
+}
+
+// ellipsis truncates on a rune boundary. Quotes are German and cutting mid-rune
+// would put mojibake in the journal, which is the opposite of a diagnostic.
+func ellipsis(s string, max int) string {
+	runes := []rune(s)
+	if len(runes) <= max {
+		return s
+	}
+	return string(runes[:max]) + "…"
 }

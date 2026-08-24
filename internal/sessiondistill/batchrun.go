@@ -16,9 +16,12 @@ const maxChunksPerSession = 5000
 type SubmitOptions struct {
 	Filter     scope.Axes
 	IdleBefore string
-	Budget     Budget
-	Limit      int
-	DryRun     bool
+	// Model is recorded with the batch so a later price change stays
+	// attributable and cannot retroactively restate an earlier bill.
+	Model  string
+	Budget Budget
+	Limit  int
+	DryRun bool
 }
 
 type SubmitReport struct {
@@ -28,6 +31,9 @@ type SubmitReport struct {
 	EstimatedTokens int
 	TrimmedSessions int
 	DroppedChunks   int
+	// SkippedWithoutProject counts sessions held back because they ran outside
+	// a repository. Reported rather than silent: it is a quarter of the archive.
+	SkippedWithoutProject int
 }
 
 type CollectReport struct {
@@ -65,6 +71,15 @@ func SubmitBatch(ctx context.Context, st *store.Store, client llm.BatchClient, o
 	if err != nil {
 		return report, err
 	}
+	// Sessions without a project are excluded by the selection itself, so the
+	// limit is filled with work that can be done. Counting them separately is
+	// what keeps a quarter of the archive from silently disappearing.
+	skipped, err := st.CountPendingWithoutProject(opts.IdleBefore)
+	if err != nil {
+		return report, err
+	}
+	report.SkippedWithoutProject = skipped
+
 	titlesByProject := map[string][]string{}
 	reqs := []llm.BatchRequest{}
 	items := []store.DistillBatchItem{}
@@ -77,7 +92,7 @@ func SubmitBatch(ctx context.Context, st *store.Store, client llm.BatchClient, o
 			continue
 		}
 		digest := Digest(chunks)
-		exists, err := st.SessionDistillationExists(session.ID, digest)
+		exists, err := st.SessionDistillationExists(session.ID, digest, PromptVersion)
 		if err != nil {
 			return report, err
 		}
@@ -107,7 +122,8 @@ func SubmitBatch(ctx context.Context, st *store.Store, client llm.BatchClient, o
 			CustomID: customID, System: system, User: user,
 			MaxTokens: MaxOutputTokens, JSONMode: true,
 		})
-		items = append(items, store.DistillBatchItem{CustomID: customID, SessionID: session.ID, Digest: digest})
+		items = append(items, store.DistillBatchItem{
+			CustomID: customID, SessionID: session.ID, Digest: digest, PromptVersion: PromptVersion})
 	}
 	report.Sessions = len(reqs)
 	report.EstimatedTokens = EstimateTokens(report.PromptChars)
@@ -118,7 +134,7 @@ func SubmitBatch(ctx context.Context, st *store.Store, client llm.BatchClient, o
 	if err != nil {
 		return report, err
 	}
-	if _, err := st.RecordDistillBatch(providerID, items); err != nil {
+	if _, err := st.RecordDistillBatch(providerID, opts.Model, items); err != nil {
 		// The batch is already running and will be billed. Losing the record
 		// means it can never be collected, so this is a hard failure worth
 		// surfacing with the id needed to recover by hand.
@@ -216,12 +232,12 @@ func ingestBatch(st *store.Store, batch store.DistillBatch, results map[string]l
 			// forever.
 			report.Failed++
 			report.note("session %d: %v", item.SessionID, err)
-			if _, err := st.ApplySessionDistillation(item.SessionID, item.Digest, session.Scope, nil); err != nil {
+			if _, err := st.ApplySessionDistillation(item.SessionID, item.Digest, PromptVersion, session.Scope, nil); err != nil {
 				return err
 			}
 			continue
 		}
-		n, err := st.ApplySessionDistillation(item.SessionID, item.Digest, session.Scope, parsed)
+		n, err := st.ApplySessionDistillation(item.SessionID, item.Digest, PromptVersion, session.Scope, parsed)
 		if err != nil {
 			return err
 		}

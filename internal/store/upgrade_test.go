@@ -219,7 +219,7 @@ func TestUpgradeTypesCreatesInstructionActivationTables(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	for _, table := range []string{"instruction_activation_path", "instruction_activation_task"} {
+	for _, table := range []string{"instruction_activation_path"} {
 		var name string
 		if err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&name); err != nil {
 			t.Errorf("missing %s after upgrade: %v", table, err)

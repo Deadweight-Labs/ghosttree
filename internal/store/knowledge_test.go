@@ -15,7 +15,7 @@ func TestInstructionActivationPersistsAndFiltersContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rule := activation.Rule{Paths: []string{"packages/web/**"}, Tasks: []string{"code", "test"}}
+	rule := activation.Rule{Paths: []string{"packages/web/**"}}
 	if err := s.SetActivation(id, rule); err != nil {
 		t.Fatal(err)
 	}
@@ -24,18 +24,18 @@ func TestInstructionActivationPersistsAndFiltersContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(k.Activation.Paths) != 1 || k.Activation.Paths[0] != "packages/web/**" || len(k.Activation.Tasks) != 2 {
+	if len(k.Activation.Paths) != 1 || k.Activation.Paths[0] != "packages/web/**" {
 		t.Fatalf("activation did not round-trip: %+v", k.Activation)
 	}
 
-	miss, err := s.KnowledgeForActivatedContext(scope.Axes{}, activation.Context{RepoPath: "packages/api", Task: "code"})
+	miss, err := s.KnowledgeForActivatedContext(scope.Axes{}, activation.Context{RepoPath: "packages/api"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(miss) != 0 {
 		t.Fatalf("non-matching context returned %+v", miss)
 	}
-	hit, err := s.KnowledgeForActivatedContext(scope.Axes{}, activation.Context{RepoPath: "packages/web/src", Task: "test"})
+	hit, err := s.KnowledgeForActivatedContext(scope.Axes{}, activation.Context{RepoPath: "packages/web/src"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,18 +47,18 @@ func TestInstructionActivationPersistsAndFiltersContext(t *testing.T) {
 func TestSetActivationRejectsNonInstructionAndReplacesAtomically(t *testing.T) {
 	s := openTest(t)
 	noteID, _ := s.InsertKnowledge(Knowledge{Type: "note", Title: "note", Body: "b"})
-	if err := s.SetActivation(noteID, activation.Rule{Tasks: []string{"code"}}); err == nil {
+	if err := s.SetActivation(noteID, activation.Rule{Paths: []string{"any/**"}}); err == nil {
 		t.Fatal("activation on non-instruction must fail")
 	}
 	id, _ := s.InsertKnowledge(Knowledge{Type: "instruction", Title: "rule", Body: "b"})
-	if err := s.SetActivation(id, activation.Rule{Paths: []string{"old/**"}, Tasks: []string{"code"}}); err != nil {
+	if err := s.SetActivation(id, activation.Rule{Paths: []string{"old/**"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetActivation(id, activation.Rule{Paths: []string{"new/**"}, Tasks: []string{"test"}}); err != nil {
+	if err := s.SetActivation(id, activation.Rule{Paths: []string{"new/**"}}); err != nil {
 		t.Fatal(err)
 	}
 	k, _ := s.KnowledgeByID(id)
-	if len(k.Activation.Paths) != 1 || k.Activation.Paths[0] != "new/**" || len(k.Activation.Tasks) != 1 || k.Activation.Tasks[0] != "test" {
+	if len(k.Activation.Paths) != 1 || k.Activation.Paths[0] != "new/**" {
 		t.Fatalf("replacement left stale gates: %+v", k.Activation)
 	}
 }
@@ -73,7 +73,7 @@ func TestGeneralWritesMaintainActivationInvariant(t *testing.T) {
 	if len(k.Activation.Paths) != 1 {
 		t.Fatalf("insert lost activation: %+v", k)
 	}
-	if _, err := s.InsertKnowledge(Knowledge{Type: "note", Title: "bad", Body: "b", Activation: activation.Rule{Tasks: []string{"code"}}}); err == nil {
+	if _, err := s.InsertKnowledge(Knowledge{Type: "note", Title: "bad", Body: "b", Activation: activation.Rule{Paths: []string{"core/**"}}}); err == nil {
 		t.Fatal("non-instruction activation accepted")
 	}
 	if err := s.UpdateKnowledge(id, map[string]string{"type": "note"}); err == nil {
@@ -318,7 +318,7 @@ func TestApplyStalenessMarksOldPlansButNotDurableKnowledge(t *testing.T) {
 	if stale.Status != "stale" || durable.Status != "active" {
 		t.Fatalf("plan=%s decision=%s", stale.Status, durable.Status)
 	}
-	pending, _ := s.PendingKnowledge(10)
+	pending, _ := s.PendingKnowledge("", 10)
 	if len(pending) != 1 || pending[0].ID != plan {
 		t.Fatalf("stale plan missing from review: %+v", pending)
 	}

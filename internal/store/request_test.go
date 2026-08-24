@@ -254,3 +254,58 @@ func TestFinishWorkRequiresHandoffAndRequestSearchFindsTranscript(t *testing.T) 
 		t.Fatalf("hits = %+v", page.Results)
 	}
 }
+
+// A session that works a backlog has several main tasks in sequence. The guard
+// against two primaries was written as "one per session, ever" rather than "one
+// at a time", so the second request onwards was forced into role=related and
+// every later reading of "what did this session mainly work on" was wrong.
+// Measured in session 1828: REQ-74 was completed, and starting REQ-84 as primary
+// was still refused, naming the finished request as the blocker.
+func TestFinishedPrimaryWorkFreesTheSessionForTheNextOne(t *testing.T) {
+	s := openTest(t)
+	a, _ := s.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: "first task"}})
+	b, _ := s.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "change", Title: "second task"}})
+	first, second := a.Request.ID, b.Request.ID
+	sessionID, _ := s.UpsertSession(Session{Harness: "codex", ExternalID: "backlog"})
+
+	work, _, err := s.StartRequestWork(first, sessionID, "primary", "robin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An active primary still blocks a second one: the rule is one at a time.
+	if _, _, err := s.StartRequestWork(second, sessionID, "primary", "robin"); requestdomain.Code(err) != "primary_exists" {
+		t.Fatalf("second concurrent primary was accepted: %v", err)
+	}
+	if _, err := s.FinishRequestWork(work.ID, "completed", "done", "robin"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.StartRequestWork(second, sessionID, "primary", "robin"); err != nil {
+		t.Fatalf("finished primary still blocks the next one: %v", err)
+	}
+}
+
+// Pausing and resuming the same request in one session is the normal shape of
+// long work, not a constraint violation.
+func TestPausedPrimaryWorkCanBeResumed(t *testing.T) {
+	s := openTest(t)
+	created, _ := s.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: "long task"}})
+	id := created.Request.ID
+	sessionID, _ := s.UpsertSession(Session{Harness: "codex", ExternalID: "resumed"})
+	work, _, err := s.StartRequestWork(id, sessionID, "primary", "robin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.FinishRequestWork(work.ID, "paused", "back later", "robin"); err != nil {
+		t.Fatal(err)
+	}
+	resumed, _, err := s.StartRequestWork(id, sessionID, "primary", "robin")
+	if err != nil {
+		t.Fatalf("resuming paused work failed: %v", err)
+	}
+	if resumed.ID != work.ID {
+		t.Fatalf("resume created work %d, want the existing %d", resumed.ID, work.ID)
+	}
+	if resumed.State != "active" {
+		t.Fatalf("resumed work is %q, want active: a session with no active primary while it works reads as idle", resumed.State)
+	}
+}

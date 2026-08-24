@@ -43,7 +43,10 @@ func TestPendingDistillationReturnsOldestUnprocessedFirst(t *testing.T) {
 	seen := map[string]string{"old": "2026-01-01T00:00:00Z", "mid": "2026-02-01T00:00:00Z", "new": "2026-03-01T00:00:00Z"}
 	ids := map[string]int64{}
 	for name, ts := range seen {
-		id, err := s.UpsertSession(Session{Harness: "codex", ExternalID: name, StartedAt: ts})
+		// The fixture needs a project: selection deliberately skips sessions
+		// that ran outside a repository, and this test is about ordering.
+		id, err := s.UpsertSession(Session{Harness: "codex", ExternalID: name,
+			Scope: scope.Axes{Project: "github.com/x/y"}, StartedAt: ts})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -73,7 +76,8 @@ func TestPendingDistillationReturnsOldestUnprocessedFirst(t *testing.T) {
 // A session still being written to must not be distilled mid-flight.
 func TestPendingDistillationExcludesSessionsNewerThanCutoff(t *testing.T) {
 	s := openTest(t)
-	id, err := s.UpsertSession(Session{Harness: "codex", ExternalID: "busy", StartedAt: "2026-08-24T09:00:00Z"})
+	id, err := s.UpsertSession(Session{Harness: "codex", ExternalID: "busy",
+		Scope: scope.Axes{Project: "github.com/x/y"}, StartedAt: "2026-08-24T09:00:00Z"})
 	if err != nil {
 		t.Fatal(err)
 	}

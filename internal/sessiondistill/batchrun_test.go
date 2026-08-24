@@ -2,6 +2,7 @@ package sessiondistill
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -102,7 +103,7 @@ func TestSubmitThenCollectAppliesResultsExactlyOnce(t *testing.T) {
 		t.Fatalf("usage = %d/%d, want the provider's own count 4321/120",
 			collected.PromptTokens, collected.CompletionTokens)
 	}
-	if exists, _ := st.SessionDistillationExists(id, Digest(mustChunks(t, st, id))); !exists {
+	if exists, _ := st.SessionDistillationExists(id, Digest(mustChunks(t, st, id)), PromptVersion); !exists {
 		t.Fatal("collected session was not marked as distilled")
 	}
 
@@ -268,5 +269,28 @@ func TestCollectNamesTheReasonAnItemFailed(t *testing.T) {
 	}
 	if len(report.Failures) != 1 || !strings.Contains(report.Failures[0], "quote their chunk") {
 		t.Fatalf("failures = %v, want the grounding failure named", report.Failures)
+	}
+}
+
+// A session that ran outside a repository has no project for its findings to
+// belong to. Filing them machine-wide would put one repository's details into
+// every other project's bootstrap, which is worse than not having them — and it
+// is 432 of 1838 sessions, so the mistake would not stay small.
+func TestSubmitSkipsSessionsWithoutAProject(t *testing.T) {
+	st := openStore(t)
+	seedSession(t, st, "homeless", "", "some transcript outside any repo")
+	kept := seedSession(t, st, "housed", "github.com/x/y", "a transcript inside a repo")
+
+	client := &fakeBatch{}
+	report, err := SubmitBatch(context.Background(), st, client, SubmitOptions{
+		IdleBefore: "2030-01-01T00:00:00Z", Limit: 10, Budget: DefaultBudget})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Sessions != 1 || report.SkippedWithoutProject != 1 {
+		t.Fatalf("report = %+v, want one submitted and one skipped as project-less", report)
+	}
+	if len(client.submitted) != 1 || !strings.Contains(client.submitted[0].CustomID, fmt.Sprint(kept)) {
+		t.Fatalf("submitted %+v, want only the session that has a project", client.submitted)
 	}
 }

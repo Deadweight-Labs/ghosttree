@@ -45,7 +45,12 @@ func cmdUpgradeSchema(args []string, stdout io.Writer) int {
 		fmt.Fprintf(stdout, "usage telemetry upgrade failed: %v\n", err)
 		return 1
 	}
-	if trustBackup == "" && typesBackup == "" && requestBackup == "" && usageBackup == "" {
+	distillBackup, err := store.UpgradeDistillationVersion(*dbPath)
+	if err != nil {
+		fmt.Fprintf(stdout, "distillation version upgrade failed: %v\n", err)
+		return 1
+	}
+	if trustBackup == "" && typesBackup == "" && requestBackup == "" && usageBackup == "" && distillBackup == "" {
 		fmt.Fprintln(stdout, "schema already current, nothing to do")
 		return 0
 	}
@@ -66,6 +71,11 @@ func cmdUpgradeSchema(args []string, stdout io.Writer) int {
 	}
 	if usageBackup != "" {
 		if !reportVerifiedBackup(stdout, "usage telemetry", usageBackup) {
+			return 1
+		}
+	}
+	if distillBackup != "" {
+		if !reportVerifiedBackup(stdout, "distillation version", distillBackup) {
 			return 1
 		}
 	}

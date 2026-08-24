@@ -23,10 +23,13 @@ Environment=GHOSTTREE_LLM_CONFIG=/etc/ghosttree/llm.json
 # already in flight are held back, so the backlog drains at up to 50 sessions
 # an hour without ever paying for the same transcript twice.
 #
-# --project confines the timer to the project the first production run was
-# measured on. Drop the flag to let it drain the whole archive — but only after
-# the quarantined items from that project have been read and judged, because
-# widening it multiplies both the bill and the cleanup. --collect is unaffected
-# either way and always ingests every finished batch.
+# The project restriction that held this to one measured repository is gone.
+# Prompt v2 was compared against v1 on the same 100 sessions: failures fell from
+# 27 to 5, the sample judged useful went from 1-in-5 to 4-in-5, and the two
+# categories that made v1 output actively misleading — instruction items lifted
+# out of prompt text the session was drafting, and one summary message shredded
+# into seven near-identical findings — are gone entirely. Roughly 1400 sessions
+# carry a project; at the measured $0.00056 each, draining the archive costs
+# well under a dollar.
 ExecStart=/usr/local/bin/ctx distill-sessions --db /var/lib/ghosttree/ghosttree.db \
-    --idle 1h --limit 50 --project github.com/example/sample-project --collect --submit
+    --idle 1h --limit 100 --collect --submit

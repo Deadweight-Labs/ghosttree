@@ -126,7 +126,7 @@ func (s *Store) InsertMigrated(in MigratedEntry) (MigratedResult, error) {
 	if err := activation.ValidateRule(k.Activation); err != nil {
 		return MigratedResult{}, err
 	}
-	if k.Type != "instruction" && (len(k.Activation.Paths) > 0 || len(k.Activation.Tasks) > 0) {
+	if k.Type != "instruction" && len(k.Activation.Paths) > 0 {
 		return MigratedResult{}, fmt.Errorf("activation requires instruction, got %s", k.Type)
 	}
 	if k.Origin == "" {
@@ -153,11 +153,6 @@ func (s *Store) InsertMigrated(in MigratedEntry) (MigratedResult, error) {
 	}
 	for _, pattern := range k.Activation.Paths {
 		if _, err := tx.Exec(`INSERT INTO instruction_activation_path(knowledge_id,pattern) VALUES(?,?)`, id, pattern); err != nil {
-			return MigratedResult{}, err
-		}
-	}
-	for _, task := range k.Activation.Tasks {
-		if _, err := tx.Exec(`INSERT INTO instruction_activation_task(knowledge_id,task) VALUES(?,?)`, id, task); err != nil {
 			return MigratedResult{}, err
 		}
 	}

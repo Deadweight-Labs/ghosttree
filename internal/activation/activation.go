@@ -1,5 +1,15 @@
 // Package activation matches conditional instructions against deterministic
-// repository path and task context.
+// repository path context.
+//
+// There was a second gate on a task label — code, review, test and so on — and
+// it was removed. A path is objectively determinable: the server sees the
+// working directory and the files. A task is the agent's guess about what it is
+// currently doing, from a vocabulary it cannot see, and in a real session it is
+// several of them at once. A gate whose key has to be guessed does not filter
+// reliably, it filters at random. It also cost a session: a Codex run ended on
+// `unknown activation task "code review"` from a strict enum, and across the
+// whole archive not one of 25 instructions ever used the gate, while 17 use the
+// path gate.
 package activation
 
 import (
@@ -10,22 +20,13 @@ import (
 
 type Rule struct {
 	Paths []string `json:"paths,omitempty"`
-	Tasks []string `json:"tasks,omitempty"`
 }
 type Context struct {
 	RepoPath string   `json:"repo_path,omitempty"`
 	Paths    []string `json:"paths,omitempty"`
-	Task     string   `json:"task,omitempty"`
 }
 
-var validTasks = map[string]bool{"code": true, "review": true, "test": true, "deploy": true, "security": true, "docs": true}
-
 func ValidateRule(r Rule) error {
-	for _, task := range r.Tasks {
-		if !validTasks[task] {
-			return fmt.Errorf("unknown activation task %q", task)
-		}
-	}
 	for _, pattern := range r.Paths {
 		if err := validateRel(pattern); err != nil {
 			return fmt.Errorf("activation path %q: %w", pattern, err)
@@ -38,13 +39,6 @@ func ValidateRule(r Rule) error {
 }
 
 func NormalizeContext(c Context) (Context, error) {
-	// The task is the agent's guess about what it is currently doing, not a
-	// stored value, and it guesses from a vocabulary it cannot see. Rejecting
-	// the guess would fail the whole context call over a label; dropping it
-	// falls back to no task gating, which is a defined state.
-	if !validTasks[c.Task] {
-		c.Task = ""
-	}
 	var err error
 	if c.RepoPath, err = normalizeRel(c.RepoPath); err != nil {
 		return Context{}, err
@@ -69,18 +63,6 @@ func Matches(r Rule, c Context) bool {
 				}
 			}
 			if matched {
-				break
-			}
-		}
-		if !matched {
-			return false
-		}
-	}
-	if len(r.Tasks) > 0 {
-		matched := false
-		for _, task := range r.Tasks {
-			if c.Task == task {
-				matched = true
 				break
 			}
 		}

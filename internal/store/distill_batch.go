@@ -20,12 +20,16 @@ type DistillBatch struct {
 // transcript that grew in the meantime is still recorded against what was
 // actually sent.
 type DistillBatchItem struct {
-	CustomID  string `json:"custom_id"`
-	Digest    string `json:"digest"`
-	SessionID int64  `json:"session_id"`
+	CustomID string `json:"custom_id"`
+	Digest   string `json:"digest"`
+	// PromptVersion is kept here as well as on the resulting distillation:
+	// releasing a session for reprocessing deletes that row, and with it the
+	// only record of which prompt the money was spent on.
+	PromptVersion string `json:"prompt_version"`
+	SessionID     int64  `json:"session_id"`
 }
 
-func (s *Store) RecordDistillBatch(providerID string, items []DistillBatchItem) (int64, error) {
+func (s *Store) RecordDistillBatch(providerID, model string, items []DistillBatchItem) (int64, error) {
 	if providerID == "" || len(items) == 0 {
 		return 0, fmt.Errorf("batch needs a provider id and at least one item")
 	}
@@ -35,8 +39,8 @@ func (s *Store) RecordDistillBatch(providerID string, items []DistillBatchItem) 
 	}
 	defer tx.Rollback()
 	ts := now()
-	res, err := tx.Exec(`INSERT INTO distill_batches(provider_batch_id,state,created_at,updated_at)
-		VALUES(?,'open',?,?)`, providerID, ts, ts)
+	res, err := tx.Exec(`INSERT INTO distill_batches(provider_batch_id,state,model,created_at,updated_at)
+		VALUES(?,'open',?,?,?)`, providerID, model, ts, ts)
 	if err != nil {
 		return 0, err
 	}
@@ -45,8 +49,8 @@ func (s *Store) RecordDistillBatch(providerID string, items []DistillBatchItem) 
 		return 0, err
 	}
 	for _, item := range items {
-		if _, err := tx.Exec(`INSERT INTO distill_batch_items(batch_id,custom_id,session_id,digest)
-			VALUES(?,?,?,?)`, id, item.CustomID, item.SessionID, item.Digest); err != nil {
+		if _, err := tx.Exec(`INSERT INTO distill_batch_items(batch_id,custom_id,session_id,digest,prompt_version)
+			VALUES(?,?,?,?,?)`, id, item.CustomID, item.SessionID, item.Digest, item.PromptVersion); err != nil {
 			return 0, err
 		}
 	}
@@ -76,7 +80,7 @@ func (s *Store) OpenDistillBatches() ([]DistillBatch, error) {
 }
 
 func (s *Store) DistillBatchItems(batchID int64) ([]DistillBatchItem, error) {
-	rows, err := s.db.Query(`SELECT custom_id, session_id, digest FROM distill_batch_items
+	rows, err := s.db.Query(`SELECT custom_id, session_id, digest, prompt_version FROM distill_batch_items
 		WHERE batch_id = ? ORDER BY session_id`, batchID)
 	if err != nil {
 		return nil, err
@@ -85,7 +89,7 @@ func (s *Store) DistillBatchItems(batchID int64) ([]DistillBatchItem, error) {
 	out := []DistillBatchItem{}
 	for rows.Next() {
 		var i DistillBatchItem
-		if err := rows.Scan(&i.CustomID, &i.SessionID, &i.Digest); err != nil {
+		if err := rows.Scan(&i.CustomID, &i.SessionID, &i.Digest, &i.PromptVersion); err != nil {
 			return nil, err
 		}
 		out = append(out, i)
@@ -114,4 +118,17 @@ func (s *Store) CloseDistillBatch(batchID int64, state string) error {
 	}
 	_, err := s.db.Exec(`UPDATE distill_batches SET state=?, updated_at=? WHERE id=?`, state, now(), batchID)
 	return err
+}
+
+// CountPendingWithoutProject counts idle, undistilled sessions held back for
+// having no project. The selection filters them in SQL so the limit is filled
+// with work that can actually be done; this is what keeps the number visible
+// instead of leaving it as the gap between two other counts.
+func (s *Store) CountPendingWithoutProject(idleBefore string) (int, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM sessions
+		WHERE last_seen_at < ? AND project = ''
+		  AND NOT EXISTS (SELECT 1 FROM session_distillations d WHERE d.session_id = sessions.id)`,
+		idleBefore).Scan(&n)
+	return n, err
 }
