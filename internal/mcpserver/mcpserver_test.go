@@ -9,6 +9,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
+	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/server"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -54,6 +55,23 @@ func TestRememberAndSearchTools(t *testing.T) {
 	}
 	if got := text(t, res); !strings.Contains(got, "flaky sfu test") {
 		t.Errorf("search result missing entry: %s", got)
+	}
+}
+
+func TestGeneralSearchLabelsRequestDomain(t *testing.T) {
+	c, st := newTestClient(t)
+	_, err := st.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: "searchable ledger", Scope: scope.Axes{Project: "github.com/x/y"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{client: c, ctxAxes: scope.Axes{Project: "github.com/x/y"}}
+	res, _, err := s.handleSearch(context.Background(), nil, SearchInput{Query: "searchable"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := text(t, res)
+	if !strings.Contains(got, "[request|status=open|type=feature|source=ledger]") {
+		t.Fatalf("request provenance missing: %s", got)
 	}
 }
 
@@ -134,7 +152,7 @@ func TestGetBootstrapAcceptsPathAndTask(t *testing.T) {
 
 func TestSearchRendersInstructionActivation(t *testing.T) {
 	c, st := newTestClient(t)
-	id, _ := st.InsertKnowledge(store.Knowledge{Type: "instruction", Title: "core searchable", Body: "rule"})
+	id, _ := st.InsertKnowledge(store.Knowledge{Type: "instruction", Title: "core searchable", Body: "rule", Status: "active", Confidence: "trusted", Origin: "distilled", SessionRef: "AGENTS.md"})
 	if err := st.SetActivation(id, activation.Rule{Paths: []string{"core/**"}, Tasks: []string{"review"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +162,7 @@ func TestSearchRendersInstructionActivation(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := text(t, res)
-	for _, want := range []string{"paths:core/**", "tasks:review"} {
+	for _, want := range []string{"status:active", "confidence:trusted", "activation:paths:core/**;tasks:review", "source:AGENTS.md"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("search result missing %q: %s", want, got)
 		}

@@ -24,14 +24,16 @@ type sessions struct {
 }
 
 func newSessions() *sessions { return &sessions{values: map[string]browserSession{}} }
-func (s *sessions) create(person string) string {
+func (s *sessions) create(person string) (string, error) {
 	raw := make([]byte, 32)
-	_, _ = rand.Read(raw)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
 	id := hex.EncodeToString(raw)
 	s.mu.Lock()
 	s.values[id] = browserSession{person: person, expires: time.Now().Add(30 * 24 * time.Hour)}
 	s.mu.Unlock()
-	return id
+	return id, nil
 }
 func (s *sessions) get(id string) (string, bool) {
 	s.mu.Lock()
@@ -71,7 +73,13 @@ func (a *app) loginSubmit(w http.ResponseWriter, r *http.Request) {
 		a.render(w, "login", pageData{Title: "Login", Error: "Invalid token"})
 		return
 	}
-	id := a.sessions.create(person)
+	id, err := a.sessions.create(person)
+	if err != nil {
+		http.Error(w, "could not create secure session", http.StatusInternalServerError)
+		return
+	}
+	// Secure is intentionally omitted because the supported private network deployment
+	// currently serves plain HTTP. HttpOnly and SameSite still constrain access.
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: id, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: 30 * 24 * 60 * 60})
 	next := r.FormValue("next")
 	if !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") {

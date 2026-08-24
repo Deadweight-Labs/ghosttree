@@ -39,6 +39,8 @@ func run(args []string, stdout io.Writer) int {
 		return cmdRequest(rest, stdout)
 	case "migrate":
 		return cmdMigrate(rest, stdout)
+	case "distill-sessions":
+		return cmdDistillSessions(rest, stdout)
 	case "upgrade-schema":
 		return cmdUpgradeSchema(rest, stdout)
 	case "person":
@@ -68,6 +70,7 @@ const usage = `usage: ctx <command>
   review   approve or reject distilled knowledge
   request  search and manage the work ledger
   migrate  move repository agent artifacts into ghosttree
+  distill-sessions  extract quarantined knowledge from idle sessions
   upgrade-schema  one-off knowledge table rebuild for trust tiers
   version  print version`
 

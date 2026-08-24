@@ -14,6 +14,7 @@ import (
 
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
+	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
@@ -24,8 +25,9 @@ type Client struct {
 }
 
 type SearchResult struct {
-	Knowledge []store.Knowledge  `json:"knowledge"`
-	Sessions  []store.SessionHit `json:"sessions"`
+	Knowledge []store.Knowledge         `json:"knowledge"`
+	Sessions  []store.SessionHit        `json:"sessions"`
+	Requests  []requestdomain.SearchHit `json:"requests"`
 }
 
 type APIError struct {
@@ -183,9 +185,10 @@ func (c *Client) Remember(k store.Knowledge, autoCtx scope.Axes) (store.Knowledg
 // PendingEntry mirrors the server's pending payload: the entry plus the
 // evidence and recurrence a human needs in order to judge it.
 type PendingEntry struct {
-	Knowledge  store.Knowledge  `json:"knowledge"`
-	Evidence   []store.Evidence `json:"evidence"`
-	Recurrence int              `json:"recurrence"`
+	Knowledge         store.Knowledge          `json:"knowledge"`
+	Evidence          []store.Evidence         `json:"evidence"`
+	MigrationEvidence *store.MigrationEvidence `json:"migration_evidence,omitempty"`
+	Recurrence        int                      `json:"recurrence"`
 }
 
 func (c *Client) Pending(limit int) ([]PendingEntry, error) {

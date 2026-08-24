@@ -142,21 +142,16 @@ func TestApproveRaisesConfidence(t *testing.T) {
 	}
 }
 
-func TestBootstrapSeparatesUnconfirmed(t *testing.T) {
+func TestBootstrapExcludesStagedUnlessPreviewed(t *testing.T) {
 	confirmed := store.Knowledge{Type: "pitfall", Title: "confirmed thing", Body: "b", Confidence: "trusted"}
 	staged := store.Knowledge{Type: "pitfall", Title: "unconfirmed thing", Body: "b", Confidence: "staged"}
 	out := RenderBootstrap([]store.Knowledge{confirmed, staged}, 4000)
-
-	iConf := strings.Index(out, "confirmed thing")
-	iStaged := strings.Index(out, "unconfirmed thing")
-	if iConf < 0 || iStaged < 0 {
-		t.Fatalf("both entries must appear:\n%s", out)
+	if !strings.Contains(out, "confirmed thing") || strings.Contains(out, "unconfirmed thing") {
+		t.Fatalf("binding bootstrap leaked staged knowledge:\n%s", out)
 	}
-	if iConf > iStaged {
-		t.Errorf("confirmed knowledge must come first:\n%s", out)
-	}
-	if !strings.Contains(out, "Unconfirmed") {
-		t.Errorf("the staged section must be labelled as unconfirmed:\n%s", out)
+	preview := RenderBootstrapPreview([]store.Knowledge{confirmed, staged}, 4000)
+	if !strings.Contains(preview, "unconfirmed thing") || !strings.Contains(preview, "Unconfirmed preview") {
+		t.Fatalf("explicit preview omitted staged knowledge:\n%s", preview)
 	}
 }
 
@@ -195,16 +190,17 @@ func TestBootstrapPutsInstructionsFirstAndComplete(t *testing.T) {
 	if !strings.Contains(out, long) {
 		t.Error("instruction bodies must not be truncated")
 	}
-	if !strings.Contains(out, "unreviewed rule") {
-		t.Error("a staged instruction must still be shown")
+	if strings.Contains(out, "unreviewed rule") {
+		t.Error("a staged instruction must not be binding")
 	}
+	out = RenderBootstrapPreview(entries, 800)
 	line := ""
 	for _, l := range strings.Split(out, "\n") {
 		if strings.Contains(l, "unreviewed rule") {
 			line = l
 		}
 	}
-	if !strings.Contains(strings.ToLower(line), "unconfirmed") {
+	if !strings.Contains(strings.ToLower(line), "preview only") {
 		t.Errorf("staged instruction must be marked on its line, got %q", line)
 	}
 }

@@ -153,6 +153,12 @@ CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(text, content='session_
 CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON session_chunks BEGIN
   INSERT INTO chunks_fts(rowid, text) VALUES (new.id, new.text);
 END;
+CREATE TABLE IF NOT EXISTS session_distillations(
+  session_id INTEGER NOT NULL REFERENCES sessions(id),
+  digest TEXT NOT NULL,
+  item_count INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(session_id,digest));
 `
 
 func Open(path string) (*Store, error) {

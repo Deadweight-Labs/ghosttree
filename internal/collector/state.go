@@ -11,9 +11,10 @@ import (
 // it only advances after the server confirmed the upload, so a failed or
 // offline run replays the same lines on the next sweep.
 type fileState struct {
-	Offset    int64 `json:"offset"`
-	SessionID int64 `json:"session_id"`
-	Seq       int   `json:"seq"`
+	Offset          int64 `json:"offset"`
+	SessionID       int64 `json:"session_id"`
+	Seq             int   `json:"seq"`
+	MetadataVersion int   `json:"metadata_version,omitempty"`
 }
 
 type State struct {

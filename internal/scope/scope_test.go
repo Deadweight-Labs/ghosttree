@@ -18,6 +18,14 @@ func TestNormalizeRemote(t *testing.T) {
 	}
 }
 
+func TestCanonicalAxesNormalizesEveryClientBoundaryValue(t *testing.T) {
+	got := CanonicalAxes(Axes{Project: " git@GitHub.com:Deadweight-Labs/Ghosttree.git ", Branch: " main ", Machine: "LAPTOP"})
+	want := Axes{Project: "github.com/deadweight-labs/ghosttree", Branch: "main", Machine: "laptop"}
+	if got != want {
+		t.Fatalf("axes=%+v want=%+v", got, want)
+	}
+}
+
 func TestUnionWhere(t *testing.T) {
 	sql, args := Axes{Project: "github.com/x/y", Branch: "main", Machine: "workstation-a"}.UnionWhere()
 	want := `((project = '' AND branch = '' AND machine = '') OR (project = '' AND branch = '' AND machine = ?) OR (project = ? AND branch = '' AND machine = '') OR (project = ? AND branch = ? AND machine = '') OR (project = ? AND branch = '' AND machine = ?))`

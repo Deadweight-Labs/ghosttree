@@ -25,6 +25,16 @@ ssh <host> 'sudo systemctl enable --now ghosttree'
 curl -s http://<private-host>:8474/api/health
 ```
 
+Session distillation is deliberately a separate timer. Install and enable it
+only after the `ghosttree` service account has a readable LLM configuration and
+API-key file; generated items remain quarantined until review.
+
+```bash
+sudo cp deploy/ghosttree-distill.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now ghosttree-distill.timer
+```
+
 To add a person later, stop the service, run `person add` against
 `/var/lib/private/ghosttree/ghosttree.db`, then start it again.
 

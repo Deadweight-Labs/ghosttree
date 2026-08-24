@@ -1,7 +1,9 @@
 package store
 
 import (
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
@@ -146,8 +148,12 @@ func TestQuarantinedIsInvisibleUntilApproved(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(ctx) != 1 || ctx[0].Confidence != "staged" {
-		t.Errorf("context must show staged but hide quarantined, got %+v", ctx)
+	if len(ctx) != 0 {
+		t.Errorf("binding context must hide staged and quarantined, got %+v", ctx)
+	}
+	preview, err := s.KnowledgeForActivatedPreview(scope.Axes{}, activation.Context{})
+	if err != nil || len(preview) != 1 || preview[0].Confidence != "staged" {
+		t.Errorf("explicit preview=%+v err=%v", preview, err)
 	}
 	hits, _ := s.SearchKnowledge("private network", scope.Axes{}, 10)
 	if len(hits) != 1 {
@@ -165,7 +171,7 @@ func TestContextOrdersByTrust(t *testing.T) {
 	for _, k := range got {
 		order = append(order, k.Title)
 	}
-	want := []string{"a-verified", "b-trusted", "c-staged"}
+	want := []string{"a-verified", "b-trusted"}
 	for i := range want {
 		if i >= len(order) || order[i] != want[i] {
 			t.Fatalf("order = %v, want %v", order, want)
@@ -235,8 +241,11 @@ func TestNewTypesAndArchivedStatus(t *testing.T) {
 			t.Error("archived entry must not appear in KnowledgeForContext")
 		}
 	}
-	if hits, _ := s.SearchKnowledge("spec", scope.Axes{}, 10); len(hits) != 1 {
-		t.Errorf("archived entry must still be searchable, got %d hits", len(hits))
+	if hits, _ := s.SearchKnowledge("spec", scope.Axes{}, 10); len(hits) != 0 {
+		t.Errorf("agent search must hide archived entries, got %d hits", len(hits))
+	}
+	if hits, _ := s.SearchAllKnowledge("spec", scope.Axes{}, 10); len(hits) != 1 {
+		t.Errorf("operator search must retain archived entries, got %d hits", len(hits))
 	}
 }
 
@@ -247,4 +256,46 @@ func mustContext(t *testing.T, s *Store) []Knowledge {
 		t.Fatal(err)
 	}
 	return ks
+}
+
+func TestSupersessionIsAtomicAndConsolidatesCorrectionChains(t *testing.T) {
+	s := openTest(t)
+	a, _ := s.InsertKnowledge(Knowledge{Type: "note", Title: "v1", Body: "old"})
+	b, _ := s.InsertKnowledge(Knowledge{Type: "note", Title: "v2", Body: "newer"})
+	c, _ := s.InsertKnowledge(Knowledge{Type: "note", Title: "v3", Body: "current"})
+	if err := s.UpdateKnowledge(a, map[string]string{"superseded_by": fmt.Sprint(b)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateKnowledge(b, map[string]string{"superseded_by": fmt.Sprint(c)}); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []int64{a, b} {
+		got, _ := s.KnowledgeByID(id)
+		if got.Status != "superseded" || got.SupersededBy != c {
+			t.Errorf("#%d=%+v", id, got)
+		}
+	}
+	if err := s.UpdateKnowledge(c, map[string]string{"superseded_by": fmt.Sprint(a)}); err == nil {
+		t.Fatal("supersession cycle accepted")
+	}
+}
+
+func TestApplyStalenessMarksOldPlansButNotDurableKnowledge(t *testing.T) {
+	s := openTest(t)
+	plan, _ := s.InsertKnowledge(Knowledge{Type: "plan", Title: "old rollout", Body: "steps"})
+	decision, _ := s.InsertKnowledge(Knowledge{Type: "decision", Title: "old decision", Body: "why"})
+	_, _ = s.db.Exec(`UPDATE knowledge SET updated_at='2026-01-01T00:00:00Z' WHERE id IN (?,?)`, plan, decision)
+	n, err := s.ApplyStaleness(time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC), 90*24*time.Hour)
+	if err != nil || n != 1 {
+		t.Fatalf("applied=%d err=%v", n, err)
+	}
+	stale, _ := s.KnowledgeByID(plan)
+	durable, _ := s.KnowledgeByID(decision)
+	if stale.Status != "stale" || durable.Status != "active" {
+		t.Fatalf("plan=%s decision=%s", stale.Status, durable.Status)
+	}
+	pending, _ := s.PendingKnowledge(10)
+	if len(pending) != 1 || pending[0].ID != plan {
+		t.Fatalf("stale plan missing from review: %+v", pending)
+	}
 }

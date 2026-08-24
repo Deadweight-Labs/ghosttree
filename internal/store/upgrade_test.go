@@ -249,8 +249,17 @@ func TestUpgradeRequestDomainMovesLegacyRequests(t *testing.T) {
 	}
 	s.Close()
 
-	if _, err := UpgradeRequestDomain(path); err != nil {
+	backup, err := UpgradeRequestDomain(path)
+	if err != nil {
 		t.Fatal(err)
+	}
+	backupDB, err := sql.Open("sqlite", backup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backupDB.Close()
+	if current, err := SchemaHasNewTypes(backupDB); err != nil || current {
+		t.Fatalf("backup is not the legacy pre-upgrade schema: current=%v err=%v", current, err)
 	}
 	s, err = Open(path)
 	if err != nil {
@@ -289,6 +298,9 @@ func TestUpgradeRequestDomainMovesLegacyRequests(t *testing.T) {
 	}
 	if hits, err := s.SearchRequests(requestdomain.SearchFilter{Query: "ledger", Limit: 10}); err != nil || len(hits.Results) != 1 {
 		t.Fatalf("request search = %+v, %v", hits, err)
+	}
+	if hits, err := s.SearchKnowledge("remains", scope.Axes{}, 10); err != nil || len(hits) != 1 {
+		t.Fatalf("knowledge search after request migration = %+v, %v", hits, err)
 	}
 }
 

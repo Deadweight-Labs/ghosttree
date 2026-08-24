@@ -11,6 +11,13 @@ type Axes struct {
 	Machine string `json:"machine,omitempty"`
 }
 
+func CanonicalAxes(a Axes) Axes {
+	a.Project = NormalizeRemote(a.Project)
+	a.Branch = strings.TrimSpace(a.Branch)
+	a.Machine = strings.ToLower(strings.TrimSpace(a.Machine))
+	return a
+}
+
 // NormalizeRemote canonicalizes a git remote URL to host/owner/repo, lowercase.
 func NormalizeRemote(remote string) string {
 	r := strings.TrimSpace(remote)

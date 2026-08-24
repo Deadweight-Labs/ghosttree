@@ -1,11 +1,13 @@
 package server
 
 import (
+	"database/sql"
 	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
+	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
@@ -20,6 +22,7 @@ func (a *api) createSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "harness and external_id are required")
 		return
 	}
+	s.Scope = scope.CanonicalAxes(s.Scope)
 	id, err := a.st.UpsertSession(s)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
@@ -112,6 +115,10 @@ func (a *api) createKnowledge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	k := req.Knowledge
+	k.Scope = scope.CanonicalAxes(k.Scope)
+	if req.AutoScope != nil {
+		req.AutoScope.Context = scope.CanonicalAxes(req.AutoScope.Context)
+	}
 	if k.Type == "" || k.Title == "" {
 		writeErr(w, http.StatusBadRequest, "type and title are required")
 		return
@@ -137,7 +144,7 @@ func (a *api) listKnowledge(w http.ResponseWriter, r *http.Request) {
 	var ks []store.Knowledge
 	var err error
 	if r.URL.Query().Get("include_archived") == "1" {
-		ks, err = a.st.KnowledgeForProject(r.URL.Query().Get("project"))
+		ks, err = a.st.KnowledgeForProject(scope.NormalizeRemote(r.URL.Query().Get("project")))
 	} else {
 		ks, err = a.st.KnowledgeForContext(axesFromQuery(r))
 	}
@@ -155,6 +162,7 @@ func (a *api) insertMigratedKnowledge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.Knowledge.Person = personOf(r)
+	in.Knowledge.Scope = scope.CanonicalAxes(in.Knowledge.Scope)
 	saved, err := a.st.InsertMigrated(in)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
@@ -172,7 +180,7 @@ func (a *api) beginMigration(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	id, err := a.st.BeginMigration(body.Project, body.Artifacts)
+	id, err := a.st.BeginMigration(scope.NormalizeRemote(body.Project), body.Artifacts)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
@@ -194,7 +202,7 @@ func (a *api) completeMigration(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) completedMigrationArtifacts(w http.ResponseWriter, r *http.Request) {
-	out, err := a.st.CompletedMigrationArtifacts(r.URL.Query().Get("project"))
+	out, err := a.st.CompletedMigrationArtifacts(scope.NormalizeRemote(r.URL.Query().Get("project")))
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -204,9 +212,10 @@ func (a *api) completedMigrationArtifacts(w http.ResponseWriter, r *http.Request
 
 // PendingEntry is a knowledge entry plus what a human needs to judge it.
 type PendingEntry struct {
-	Knowledge  store.Knowledge  `json:"knowledge"`
-	Evidence   []store.Evidence `json:"evidence"`
-	Recurrence int              `json:"recurrence"`
+	Knowledge         store.Knowledge          `json:"knowledge"`
+	Evidence          []store.Evidence         `json:"evidence"`
+	MigrationEvidence *store.MigrationEvidence `json:"migration_evidence,omitempty"`
+	Recurrence        int                      `json:"recurrence"`
 }
 
 func (a *api) pendingKnowledge(w http.ResponseWriter, r *http.Request) {
@@ -227,7 +236,15 @@ func (a *api) pendingKnowledge(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		out = append(out, PendingEntry{Knowledge: k, Evidence: ev, Recurrence: n})
+		proof, proofErr := a.st.MigrationEvidenceForKnowledge(k.ID)
+		var migrationProof *store.MigrationEvidence
+		if proofErr == nil {
+			migrationProof = &proof
+		} else if proofErr != sql.ErrNoRows {
+			writeErr(w, http.StatusInternalServerError, proofErr.Error())
+			return
+		}
+		out = append(out, PendingEntry{Knowledge: k, Evidence: ev, MigrationEvidence: migrationProof, Recurrence: n})
 	}
 	writeJSON(w, 200, out)
 }
@@ -251,8 +268,9 @@ func (a *api) patchKnowledge(w http.ResponseWriter, r *http.Request) {
 }
 
 type searchResult struct {
-	Knowledge []store.Knowledge  `json:"knowledge"`
-	Sessions  []store.SessionHit `json:"sessions"`
+	Knowledge []store.Knowledge         `json:"knowledge"`
+	Sessions  []store.SessionHit        `json:"sessions"`
+	Requests  []requestdomain.SearchHit `json:"requests"`
 }
 
 func (a *api) search(w http.ResponseWriter, r *http.Request) {
@@ -263,7 +281,7 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 	}
 	filter := axesFromQuery(r)
 	limit := intParam(r, "limit", 20)
-	res := searchResult{Knowledge: []store.Knowledge{}, Sessions: []store.SessionHit{}}
+	res := searchResult{Knowledge: []store.Knowledge{}, Sessions: []store.SessionHit{}, Requests: []requestdomain.SearchHit{}}
 	if kind == "knowledge" || kind == "all" {
 		// scope=union searches what the session would read, not an exact match.
 		search := a.st.SearchKnowledge
@@ -284,6 +302,14 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		res.Sessions = hits
+	}
+	if kind == "requests" || kind == "all" {
+		page, err := a.st.SearchRequests(requestdomain.SearchFilter{Query: q, Scope: scope.Axes{Project: filter.Project}, Limit: limit})
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		res.Requests = page.Results
 	}
 	writeJSON(w, 200, res)
 }
@@ -322,6 +348,16 @@ func (a *api) bootstrap(w http.ResponseWriter, r *http.Request) {
 // instructions are always complete and first; other confirmed knowledge comes
 // before unconfirmed knowledge so a tight budget cuts uncertain material first.
 func RenderBootstrap(entries []store.Knowledge, budget int) string {
+	return renderBootstrap(entries, budget, false)
+}
+
+// RenderBootstrapPreview includes staged entries, clearly separated from the
+// binding context. It is for operator inspection, never automatic injection.
+func RenderBootstrapPreview(entries []store.Knowledge, budget int) string {
+	return renderBootstrap(entries, budget, true)
+}
+
+func renderBootstrap(entries []store.Knowledge, budget int, includeStaged bool) string {
 	if budget <= 0 {
 		budget = defaultBudget
 	}
@@ -330,10 +366,12 @@ func RenderBootstrap(entries []store.Knowledge, budget int) string {
 	}
 	var instructions, confirmed, staged []store.Knowledge
 	for _, k := range entries {
-		if k.Type == "instruction" {
+		if k.Confidence == "staged" {
+			if includeStaged {
+				staged = append(staged, k)
+			}
+		} else if k.Type == "instruction" {
 			instructions = append(instructions, k)
-		} else if k.Confidence == "staged" {
-			staged = append(staged, k)
 		} else {
 			confirmed = append(confirmed, k)
 		}
@@ -343,15 +381,11 @@ func RenderBootstrap(entries []store.Knowledge, budget int) string {
 	if len(instructions) > 0 {
 		b.WriteString("\n### Instructions (binding)\n")
 		for _, k := range instructions {
-			mark := ""
-			if k.Confidence == "staged" || k.Confidence == "quarantined" {
-				mark = " [unconfirmed]"
-			}
 			label := scopeLabel(k.Scope)
 			if gate := activationLabel(k.Activation); gate != "" {
 				label += " | " + gate
 			}
-			fmt.Fprintf(&b, "- [%s]%s %s — %s\n", label, mark, k.Title, oneLine(k.Body))
+			fmt.Fprintf(&b, "- [%s] %s — %s\n", label, k.Title, oneLine(k.Body))
 		}
 	}
 	// Instructions do not compete for the context budget. Preserve the same
@@ -359,13 +393,24 @@ func RenderBootstrap(entries []store.Knowledge, budget int) string {
 	contentLimit := budget + b.Len()
 	truncated := writeGroups(&b, confirmed, contentLimit, "")
 	if len(staged) > 0 && !truncated {
-		truncated = writeGroups(&b, staged, contentLimit,
-			"\n## Unconfirmed (distilled, not yet approved — verify before relying on it)\n")
+		truncated = writePreviewGroup(&b, staged, contentLimit)
 	}
 	if truncated {
 		b.WriteString("…(truncated, use context_search for more)\n")
 	}
 	return b.String()
+}
+
+func writePreviewGroup(b *strings.Builder, entries []store.Knowledge, limit int) bool {
+	b.WriteString("\n## Unconfirmed preview (not binding; approve before agent delivery)\n")
+	for _, k := range entries {
+		line := fmt.Sprintf("- [preview only | %s] %s — %s\n", scopeLabel(k.Scope), k.Title, oneLine(k.Body))
+		if b.Len()+len(line) > limit {
+			return true
+		}
+		b.WriteString(line)
+	}
+	return false
 }
 
 func activationFromQuery(r *http.Request) (activation.Context, error) {

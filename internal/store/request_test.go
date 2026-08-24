@@ -99,6 +99,39 @@ func TestRequestCanCompleteAfterCriterionEvidence(t *testing.T) {
 	}
 }
 
+func TestTerminalRequestRejectsFurtherLifecycleMutations(t *testing.T) {
+	s := openTest(t)
+	detail, err := s.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: "terminal"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof := requestdomain.Evidence{Kind: "test", Ref: "go test", Person: "robin"}
+	if err := s.CompleteRequest(detail.Request.ID, proof); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddCriterion(detail.Request.ID, "late", "robin"); requestdomain.Code(err) != "request_terminal" {
+		t.Fatalf("late criterion error = %v", err)
+	}
+	if err := s.CompleteRequest(detail.Request.ID, proof); requestdomain.Code(err) != "request_terminal" {
+		t.Fatalf("repeat completion error = %v", err)
+	}
+	if err := s.DropRequest(detail.Request.ID, "changed mind", "robin"); requestdomain.Code(err) != "request_terminal" {
+		t.Fatalf("done-to-dropped error = %v", err)
+	}
+}
+
+func TestDroppedRequestCannotComplete(t *testing.T) {
+	s := openTest(t)
+	detail, _ := s.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: "dropped"}})
+	if err := s.DropRequest(detail.Request.ID, "obsolete", "robin"); err != nil {
+		t.Fatal(err)
+	}
+	err := s.CompleteRequest(detail.Request.ID, requestdomain.Evidence{Kind: "test", Ref: "go test"})
+	if requestdomain.Code(err) != "request_terminal" {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestCreateRequestIsIdempotentWithKey(t *testing.T) {
 	s := openTest(t)
 	in := requestdomain.CreateInput{Request: requestdomain.Request{Type: "change", Title: "same"}, IdempotencyKey: "session-1-task"}

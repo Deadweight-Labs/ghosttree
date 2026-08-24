@@ -78,11 +78,11 @@ func personOf(r *http.Request) string {
 
 func axesFromQuery(r *http.Request) scope.Axes {
 	q := r.URL.Query()
-	return scope.Axes{
+	return scope.CanonicalAxes(scope.Axes{
 		Project: q.Get("project"),
 		Branch:  q.Get("branch"),
 		Machine: q.Get("machine"),
-	}
+	})
 }
 
 func intParam(r *http.Request, name string, def int) int {

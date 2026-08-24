@@ -28,6 +28,16 @@ func TestReviewActivationSeparatesScopeAndGates(t *testing.T) {
 	}
 }
 
+func TestReviewPrintsMigrationEvidence(t *testing.T) {
+	var out bytes.Buffer
+	writePendingEntry(&out, client.PendingEntry{Knowledge: store.Knowledge{ID: 8, Type: "decision", Title: "migrated", Confidence: "quarantined"}, MigrationEvidence: &store.MigrationEvidence{RunID: 3, Source: "AGENTS.md", Digest: "abc", ItemKey: "item", Quote: "keep this"}})
+	for _, want := range []string{"migration: AGENTS.md sha256:abc", "run 3", "source quote: keep this"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("review output missing %q:\n%s", want, out.String())
+		}
+	}
+}
+
 func TestMigrateRejectsBadArguments(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -40,6 +50,15 @@ func TestMigrateRejectsBadArguments(t *testing.T) {
 		}
 		if strings.Contains(out.String(), "unknown command") {
 			t.Errorf("%s: migrate not wired: %s", name, out.String())
+		}
+	}
+}
+
+func TestDistillSessionsRejectsUnsafeScheduleArguments(t *testing.T) {
+	for _, args := range [][]string{{"distill-sessions", "--idle", "0s"}, {"distill-sessions", "--limit", "0"}} {
+		var out bytes.Buffer
+		if code := run(args, &out); code != 2 {
+			t.Errorf("args=%v code=%d output=%s", args, code, out.String())
 		}
 	}
 }

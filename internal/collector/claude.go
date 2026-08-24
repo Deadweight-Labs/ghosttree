@@ -36,7 +36,67 @@ func ParseClaudeLine(line []byte) ParsedLine {
 	if l.Message == nil {
 		return ParsedLine{}
 	}
+	if toolText := claudeToolResultText(l.Message.Content); toolText != "" {
+		return ParsedLine{Role: "tool", Text: toolText}
+	}
 	return ParsedLine{Role: l.Message.Role, Text: contentText(l.Message.Content, "text")}
+}
+
+func claudeToolResultText(raw json.RawMessage) string {
+	var blocks []struct {
+		Type    string          `json:"type"`
+		Content json.RawMessage `json:"content"`
+	}
+	if json.Unmarshal(raw, &blocks) != nil {
+		return ""
+	}
+	var parts []string
+	for _, block := range blocks {
+		if block.Type == "tool_result" {
+			if text := structuredResultText(block.Content); text != "" {
+				parts = append(parts, text)
+			}
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+func structuredResultText(raw json.RawMessage) string {
+	var value any
+	if len(raw) == 0 || json.Unmarshal(raw, &value) != nil {
+		return ""
+	}
+	var parts []string
+	collectResultStrings(value, "", &parts)
+	text := strings.Join(parts, "\n")
+	const maxToolText = 64 * 1024
+	if len(text) > maxToolText {
+		text = text[:maxToolText] + "\n…(tool result truncated)"
+	}
+	return text
+}
+
+func collectResultStrings(value any, key string, parts *[]string) {
+	switch v := value.(type) {
+	case string:
+		if strings.TrimSpace(v) != "" {
+			*parts = append(*parts, v)
+		}
+	case []any:
+		for _, item := range v {
+			collectResultStrings(item, key, parts)
+		}
+	case map[string]any:
+		if kind, _ := v["type"].(string); kind == "image" || kind == "audio" {
+			return
+		}
+		allowed := map[string]bool{"text": true, "output": true, "content": true, "stdout": true, "stderr": true, "result": true, "error": true, "message": true, "title": true, "url": true, "path": true, "ref": true, "summary": true}
+		for _, name := range []string{"title", "message", "text", "stdout", "stderr", "output", "result", "content", "summary", "path", "url", "ref", "error"} {
+			if child, ok := v[name]; ok && (key == "" || allowed[name]) {
+				collectResultStrings(child, name, parts)
+			}
+		}
+	}
 }
 
 // contentText decodes the two shapes both harnesses use: a plain string, or an

@@ -12,7 +12,7 @@ import (
 
 func TestRequestToolsRunCompleteAgentWorkflow(t *testing.T) {
 	c, st := newTestClient(t)
-	s := &Server{client: c, ctxAxes: scope.Axes{Project: "github.com/x/y"}}
+	s := &Server{client: c, ctxAxes: scope.Axes{Project: "github.com/x/y", Branch: "feature", Machine: "workstation-a"}}
 	_, created, err := s.handleRequestCreate(context.Background(), nil, RequestCreateInput{
 		Type: "feature", Title: "agent ledger", Description: "associate work", Criteria: []string{"workflow passes"},
 	})
@@ -22,8 +22,13 @@ func TestRequestToolsRunCompleteAgentWorkflow(t *testing.T) {
 	if created.Detail.Request.State != "open" || len(created.Detail.Criteria) != 1 {
 		t.Fatalf("created = %+v", created)
 	}
-	sessionID, _ := st.UpsertSession(store.Session{Harness: "codex", ExternalID: "mcp-work"})
-	_, started, err := s.handleRequestStartWork(context.Background(), nil, RequestStartWorkInput{RequestID: created.Detail.Request.ID, SessionID: sessionID, Role: "primary"})
+	_, _ = st.UpsertSession(store.Session{Harness: "codex", ExternalID: "mcp-work", Scope: s.ctxAxes})
+	otherBranch := &Server{client: c, ctxAxes: scope.Axes{Project: "github.com/x/y", Branch: "other", Machine: "workstation-a"}}
+	_, found, err := otherBranch.handleRequestSearch(context.Background(), nil, RequestSearchInput{Query: "agent ledger"})
+	if err != nil || len(found.Page.Results) != 1 {
+		t.Fatalf("project-wide search=%+v err=%v", found, err)
+	}
+	_, started, err := s.handleRequestStartWork(context.Background(), nil, RequestStartWorkInput{RequestID: created.Detail.Request.ID, Role: "primary"})
 	if err != nil {
 		t.Fatal(err)
 	}

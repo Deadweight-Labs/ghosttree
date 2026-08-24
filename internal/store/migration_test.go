@@ -32,6 +32,10 @@ func TestMigratedActivationPersistsAtomically(t *testing.T) {
 	if err != nil || len(got.Activation.Paths) != 1 || got.Activation.Paths[0] != "core/**" {
 		t.Fatalf("reloaded=%+v err=%v", got, err)
 	}
+	proof, err := s.MigrationEvidenceForKnowledge(saved.ID)
+	if err != nil || proof.Source != "core/AGENTS.md" || proof.Digest != "digest" || proof.ItemKey != "core" {
+		t.Fatalf("migration proof=%+v err=%v", proof, err)
+	}
 
 	if _, err := s.InsertMigrated(MigratedEntry{Knowledge: Knowledge{
 		Type: "note", Title: "bad", Body: "b", Scope: scope.Axes{Project: "p"}, SessionRef: "core/AGENTS.md",

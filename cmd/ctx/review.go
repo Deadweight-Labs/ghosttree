@@ -51,7 +51,7 @@ func cmdReview(args []string, stdout io.Writer) int {
 	if action == "" {
 		return listPending(c, stdout)
 	}
-	patch := map[string]string{"confidence": "verified"}
+	patch := map[string]string{"confidence": "verified", "status": "active"}
 	if action == "reject" {
 		patch = map[string]string{"status": "deprecated"}
 	}
@@ -105,5 +105,11 @@ func writePendingEntry(stdout io.Writer, p client.PendingEntry) {
 	}
 	for _, e := range p.Evidence {
 		fmt.Fprintf(stdout, "       evidence: session %d chunk %d: %s\n", e.SessionID, e.ChunkSeq, e.Quote)
+	}
+	if e := p.MigrationEvidence; e != nil {
+		fmt.Fprintf(stdout, "       migration: %s sha256:%s (run %d, item %s)\n", e.Source, e.Digest, e.RunID, e.ItemKey)
+		if e.Quote != "" {
+			fmt.Fprintf(stdout, "       source quote: %s\n", e.Quote)
+		}
 	}
 }

@@ -1,6 +1,10 @@
 package collector
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/scope"
+)
 
 type codexLine struct {
 	Type    string `json:"type"`
@@ -8,8 +12,13 @@ type codexLine struct {
 		Type      string          `json:"type"`
 		Role      string          `json:"role"`
 		Content   json.RawMessage `json:"content"`
+		Output    json.RawMessage `json:"output"`
 		SessionID string          `json:"session_id"`
 		CWD       string          `json:"cwd"`
+		Git       *struct {
+			RepositoryURL string `json:"repository_url"`
+			Branch        string `json:"branch"`
+		} `json:"git"`
 	} `json:"payload"`
 }
 
@@ -18,7 +27,13 @@ func ParseCodexLine(line []byte) ParsedLine {
 	if err := json.Unmarshal(line, &l); err != nil || l.Payload == nil {
 		return ParsedLine{}
 	}
-	if l.Type != "response_item" || l.Payload.Type != "message" {
+	if l.Type != "response_item" {
+		return ParsedLine{}
+	}
+	if l.Payload.Type == "function_call_output" || l.Payload.Type == "custom_tool_call_output" {
+		return ParsedLine{Role: "tool", Text: structuredResultText(l.Payload.Output)}
+	}
+	if l.Payload.Type != "message" {
 		return ParsedLine{}
 	}
 	return ParsedLine{
@@ -27,15 +42,18 @@ func ParseCodexLine(line []byte) ParsedLine {
 	}
 }
 
-func CodexSessionMeta(firstLines [][]byte) (externalID, cwd string) {
+func CodexSessionMeta(firstLines [][]byte) (externalID, cwd, project, branch string) {
 	for _, line := range firstLines {
 		var l codexLine
 		if err := json.Unmarshal(line, &l); err != nil || l.Payload == nil {
 			continue
 		}
 		if l.Type == "session_meta" {
-			return l.Payload.SessionID, l.Payload.CWD
+			if l.Payload.Git != nil {
+				project, branch = scope.NormalizeRemote(l.Payload.Git.RepositoryURL), l.Payload.Git.Branch
+			}
+			return l.Payload.SessionID, l.Payload.CWD, project, branch
 		}
 	}
-	return "", ""
+	return "", "", "", ""
 }

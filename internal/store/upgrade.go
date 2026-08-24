@@ -283,7 +283,7 @@ func UpgradeRequestDomain(path string) (string, error) {
 	if _, err := db.Exec(`PRAGMA busy_timeout=5000`); err != nil {
 		return "", err
 	}
-	if _, err := db.Exec(schema); err != nil {
+	if err := verifyIntegrity(db); err != nil {
 		return "", err
 	}
 	current, err := SchemaHasNewTypes(db)
@@ -291,6 +291,9 @@ func UpgradeRequestDomain(path string) (string, error) {
 		return "", err
 	}
 	if current {
+		if _, err := db.Exec(schema); err != nil {
+			return "", err
+		}
 		return "", nil
 	}
 	var legacy int
@@ -300,6 +303,19 @@ func UpgradeRequestDomain(path string) (string, error) {
 	backup := fmt.Sprintf("%s.backup-requests-%s", path, time.Now().UTC().Format("20060102-150405.000000000"))
 	if _, err := db.Exec(`VACUUM INTO ?`, backup); err != nil {
 		return "", fmt.Errorf("backup to %s: %w", backup, err)
+	}
+	backupDB, err := sql.Open("sqlite", backup)
+	if err != nil {
+		return backup, fmt.Errorf("open backup %s: %w", backup, err)
+	}
+	if err := verifyIntegrity(backupDB); err != nil {
+		backupDB.Close()
+		return backup, fmt.Errorf("verify backup %s: %w", backup, err)
+	}
+	backupDB.Close()
+	// Only mutate the source after a consistent, readable backup exists.
+	if _, err := db.Exec(schema); err != nil {
+		return backup, err
 	}
 	if _, err := db.Exec(`PRAGMA foreign_keys=OFF`); err != nil {
 		return backup, err
@@ -326,6 +342,9 @@ func UpgradeRequestDomain(path string) (string, error) {
 		 FROM knowledge k JOIN knowledge_evidence e ON e.knowledge_id=k.id WHERE k.type='request'`,
 		`INSERT INTO request_activity(request_id,kind,person,data,created_at)
 		 SELECT k.id,'request.migrated',k.person,k.session_ref,k.updated_at FROM knowledge k WHERE k.type='request'`,
+		`DELETE FROM search_documents`,
+		`INSERT INTO search_documents(kind,domain_id,title,body,project,branch,machine)
+		 SELECT 'knowledge',id,title,body,project,branch,machine FROM knowledge WHERE type!='request'`,
 		`INSERT INTO search_documents(kind,domain_id,title,body,project,branch,machine)
 		 SELECT 'request',id,title,body,project,branch,machine FROM knowledge WHERE type='request'`,
 		`CREATE TABLE migration_evidence_new(
@@ -375,15 +394,42 @@ func UpgradeRequestDomain(path string) (string, error) {
 			return backup, fmt.Errorf("request upgrade step failed (%.60s...): %w", step, err)
 		}
 	}
-	var moved int
-	if err := tx.QueryRow(`SELECT COUNT(*) FROM requests`).Scan(&moved); err != nil {
+	var mapped int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM requests r WHERE EXISTS (SELECT 1 FROM search_documents d WHERE d.kind='request' AND d.domain_id=r.id)`).Scan(&mapped); err != nil {
 		return backup, err
 	}
-	if moved < legacy {
-		return backup, fmt.Errorf("request count after upgrade is %d, expected at least %d", moved, legacy)
+	if mapped != legacy {
+		return backup, fmt.Errorf("request mappings after upgrade are %d, expected exactly %d", mapped, legacy)
 	}
+	var missingKnowledge int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM knowledge k WHERE NOT EXISTS (SELECT 1 FROM search_documents d WHERE d.kind='knowledge' AND d.domain_id=k.id)`).Scan(&missingKnowledge); err != nil {
+		return backup, err
+	}
+	if missingKnowledge != 0 {
+		return backup, fmt.Errorf("%d knowledge rows are absent from search projection", missingKnowledge)
+	}
+	rows, err := tx.Query(`PRAGMA foreign_key_check`)
+	if err != nil {
+		return backup, err
+	}
+	if rows.Next() {
+		rows.Close()
+		return backup, fmt.Errorf("foreign key check failed before commit")
+	}
+	rows.Close()
 	if err := tx.Commit(); err != nil {
 		return backup, err
 	}
-	return backup, nil
+	return backup, verifyIntegrity(db)
+}
+
+func verifyIntegrity(db *sql.DB) error {
+	var result string
+	if err := db.QueryRow(`PRAGMA integrity_check`).Scan(&result); err != nil {
+		return err
+	}
+	if result != "ok" {
+		return fmt.Errorf("sqlite integrity check: %s", result)
+	}
+	return nil
 }

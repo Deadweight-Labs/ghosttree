@@ -104,7 +104,11 @@ func TestRequestsRenderCriteriaEvidenceAndEscapeHTML(t *testing.T) {
 
 func TestOperatorSectionsUseStoredData(t *testing.T) {
 	srv, st, token := testWeb(t)
-	_, err := st.InsertKnowledge(store.Knowledge{Type: "decision", Title: "SQLite stays", Body: "Single writer", Scope: scope.Axes{Project: "p"}, Origin: "distilled", Confidence: "quarantined"})
+	runID, err := st.BeginMigration("p", map[string]string{"AGENTS.md": "digest-proof"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = st.InsertMigrated(store.MigratedEntry{Knowledge: store.Knowledge{Type: "decision", Title: "SQLite stays", Body: "Single writer", Scope: scope.Axes{Project: "p"}, Origin: "distilled", Confidence: "quarantined", SessionRef: "AGENTS.md"}, RunID: runID, Digest: "digest-proof", ItemKey: "sqlite", Quote: "use sqlite"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,5 +138,9 @@ func TestOperatorSectionsUseStoredData(t *testing.T) {
 		if resp.StatusCode != 200 || !strings.Contains(got, want) {
 			t.Errorf("%s: status=%d missing %q in %s", path, resp.StatusCode, want, got)
 		}
+	}
+	resp, _ := client.Get(srv.URL + "/ui/review")
+	if got := body(t, resp); !strings.Contains(got, "digest-proof") || !strings.Contains(got, "use sqlite") {
+		t.Errorf("review omitted migration proof: %s", got)
 	}
 }

@@ -37,12 +37,16 @@ func parserFor(harness string) func([]byte) ParsedLine {
 // The offset only advances after the server accepted a batch.
 func SyncFile(path, harness string, up Uploader, st *State, machine string) error {
 	fs := st.file(path)
-	if fs.SessionID == 0 {
+	if fs.SessionID == 0 || fs.MetadataVersion < 1 {
 		id, err := registerSession(path, harness, up, machine)
 		if err != nil {
 			return err
 		}
 		fs.SessionID = id
+		fs.MetadataVersion = 1
+		if err := st.Save(); err != nil {
+			return err
+		}
 	}
 	f, err := os.Open(path)
 	if err != nil {
@@ -103,17 +107,16 @@ func registerSession(path, harness string, up Uploader, machine string) (int64, 
 	if err != nil {
 		return 0, err
 	}
-	var externalID, cwd, branch string
+	var externalID, cwd, project, branch string
 	if harness == "codex" {
-		externalID, cwd = CodexSessionMeta(head)
+		externalID, cwd, project, branch = CodexSessionMeta(head)
 	} else {
 		externalID, cwd, branch = ClaudeSessionMeta(path, head)
 	}
 	if externalID == "" {
 		externalID = strings.TrimSuffix(filepath.Base(path), ".jsonl")
 	}
-	project := ""
-	if cwd != "" {
+	if project == "" && cwd != "" {
 		p, b := GitInfo(cwd)
 		project = p
 		if branch == "" {

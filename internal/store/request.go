@@ -251,12 +251,12 @@ func (s *Store) AddCriterion(requestID int64, description, person string) (reque
 	if err := tx.QueryRow(`SELECT COALESCE(MAX(number),0)+1 FROM request_criteria WHERE request_id=?`, requestID).Scan(&number); err != nil {
 		return requestdomain.Criterion{}, err
 	}
-	var exists int
-	if err := tx.QueryRow(`SELECT COUNT(*) FROM requests WHERE id=?`, requestID).Scan(&exists); err != nil {
+	var requestState string
+	if err := tx.QueryRow(`SELECT state FROM requests WHERE id=?`, requestID).Scan(&requestState); err != nil {
 		return requestdomain.Criterion{}, err
 	}
-	if exists == 0 {
-		return requestdomain.Criterion{}, sql.ErrNoRows
+	if requestState != "open" {
+		return requestdomain.Criterion{}, terminalRequestError(requestID, requestState)
 	}
 	ts := now()
 	res, err := tx.Exec(`INSERT INTO request_criteria(request_id,number,description,state,created_at,updated_at) VALUES(?,?,?,'open',?,?)`, requestID, number, description, ts, ts)
@@ -289,8 +289,15 @@ func (s *Store) SetCriterionState(id int64, state string, evidence requestdomain
 	}
 	defer tx.Rollback()
 	var requestID int64
-	if err := tx.QueryRow(`SELECT request_id FROM request_criteria WHERE id=?`, id).Scan(&requestID); err != nil {
+	var requestState, criterionState string
+	if err := tx.QueryRow(`SELECT c.request_id,r.state,c.state FROM request_criteria c JOIN requests r ON r.id=c.request_id WHERE c.id=?`, id).Scan(&requestID, &requestState, &criterionState); err != nil {
 		return err
+	}
+	if requestState != "open" {
+		return terminalRequestError(requestID, requestState)
+	}
+	if criterionState != "open" {
+		return requestdomain.NewRuleError("criterion_terminal", "acceptance criterion is already resolved", "do not record the same transition twice", nil)
 	}
 	ts := now()
 	if _, err := tx.Exec(`UPDATE request_criteria SET state=?,updated_at=? WHERE id=?`, state, ts, id); err != nil {
@@ -310,7 +317,19 @@ func (s *Store) CompleteRequest(id int64, evidence requestdomain.Evidence) error
 	if err := requestdomain.ValidateEvidence(evidence); err != nil {
 		return err
 	}
-	rows, err := s.db.Query(`SELECT number FROM request_criteria WHERE request_id=? AND state='open' ORDER BY number`, id)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var requestState string
+	if err := tx.QueryRow(`SELECT state FROM requests WHERE id=?`, id).Scan(&requestState); err != nil {
+		return err
+	}
+	if requestState != "open" {
+		return terminalRequestError(id, requestState)
+	}
+	rows, err := tx.Query(`SELECT number FROM request_criteria WHERE request_id=? AND state='open' ORDER BY number`, id)
 	if err != nil {
 		return err
 	}
@@ -329,18 +348,13 @@ func (s *Store) CompleteRequest(id int64, evidence requestdomain.Evidence) error
 	if len(open) > 0 {
 		return requestdomain.NewRuleError("open_criteria", fmt.Sprintf("request REQ-%d cannot be completed", id), "satisfy or waive the remaining criteria", open)
 	}
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
 	ts := now()
-	res, err := tx.Exec(`UPDATE requests SET state='done',updated_at=? WHERE id=?`, ts, id)
+	res, err := tx.Exec(`UPDATE requests SET state='done',updated_at=? WHERE id=? AND state='open' AND NOT EXISTS (SELECT 1 FROM request_criteria WHERE request_id=? AND state='open')`, ts, id, id)
 	if err != nil {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n != 1 {
-		return sql.ErrNoRows
+		return requestdomain.NewRuleError("request_not_completable", fmt.Sprintf("request REQ-%d changed while completing", id), "reload the request and resolve its current criteria", nil)
 	}
 	if _, err := tx.Exec(`INSERT INTO request_evidence(request_id,kind,ref,person,created_at) VALUES(?,?,?,?,?)`, id, evidence.Kind, evidence.Ref, evidence.Person, ts); err != nil {
 		return err
@@ -361,17 +375,25 @@ func (s *Store) DropRequest(id int64, reason, person string) error {
 	}
 	defer tx.Rollback()
 	ts := now()
-	res, err := tx.Exec(`UPDATE requests SET state='dropped',updated_at=? WHERE id=?`, ts, id)
+	res, err := tx.Exec(`UPDATE requests SET state='dropped',updated_at=? WHERE id=? AND state='open'`, ts, id)
 	if err != nil {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n != 1 {
-		return sql.ErrNoRows
+		var state string
+		if scanErr := tx.QueryRow(`SELECT state FROM requests WHERE id=?`, id).Scan(&state); scanErr != nil {
+			return scanErr
+		}
+		return terminalRequestError(id, state)
 	}
 	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at) VALUES(?,'request.dropped',?,?,?)`, id, person, reason, ts); err != nil {
 		return err
 	}
 	return tx.Commit()
+}
+
+func terminalRequestError(id int64, state string) error {
+	return requestdomain.NewRuleError("request_terminal", fmt.Sprintf("request REQ-%d is already %s", id, state), "terminal requests cannot be changed; create or reopen a separate request", nil)
 }
 
 func (s *Store) AddRequestRelation(requestID int64, relation requestdomain.Relation, person string) (requestdomain.Relation, error) {

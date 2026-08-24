@@ -86,6 +86,21 @@ type MigratedResult struct {
 	ID   int64  `json:"id"`
 }
 
+type MigrationEvidence struct {
+	RunID   int64  `json:"run_id"`
+	Source  string `json:"source"`
+	Digest  string `json:"digest"`
+	ItemKey string `json:"item_key"`
+	Quote   string `json:"quote"`
+}
+
+func (s *Store) MigrationEvidenceForKnowledge(id int64) (MigrationEvidence, error) {
+	var proof MigrationEvidence
+	err := s.db.QueryRow(`SELECT run_id,source,digest,item_key,quote FROM migration_evidence WHERE knowledge_id=?`, id).
+		Scan(&proof.RunID, &proof.Source, &proof.Digest, &proof.ItemKey, &proof.Quote)
+	return proof, err
+}
+
 // InsertMigrated atomically stores an entry, its source proof and its ledger
 // state. The stable item key makes retries after a partial run idempotent.
 func (s *Store) InsertMigrated(in MigratedEntry) (MigratedResult, error) {

@@ -13,7 +13,7 @@ func TestRequestAPICreateSearchAndRejectIncompleteCompletion(t *testing.T) {
 	srv, token := newTestServer(t)
 	resp := req(t, "POST", srv.URL+"/api/requests", token, map[string]any{
 		"type": "feature", "title": "request ledger", "description": "associate sessions",
-		"project": "github.com/x/y", "criteria": []string{"search works"},
+		"project": "git@GitHub.com:X/Y.git", "criteria": []string{"search works"},
 	})
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("create status = %d", resp.StatusCode)
@@ -24,6 +24,9 @@ func TestRequestAPICreateSearchAndRejectIncompleteCompletion(t *testing.T) {
 	}
 	if created.Request.State != "open" || len(created.Criteria) != 1 {
 		t.Fatalf("created = %+v", created)
+	}
+	if created.Request.Scope.Project != "github.com/x/y" {
+		t.Fatalf("server did not canonicalize project: %+v", created.Request.Scope)
 	}
 
 	resp = req(t, "GET", srv.URL+"/api/requests/search?q=sessions&project=github.com/x/y", token, nil)

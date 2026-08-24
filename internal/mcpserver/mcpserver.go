@@ -29,7 +29,7 @@ func NewServer(c *client.Client, axes scope.Axes, base ...activation.Context) *S
 
 type SearchInput struct {
 	Query       string `json:"query" jsonschema:"what to search for"`
-	Kind        string `json:"kind,omitempty" jsonschema:"knowledge, sessions or all (default all)"`
+	Kind        string `json:"kind,omitempty" jsonschema:"knowledge, requests, sessions or all (default all)"`
 	AllBranches bool   `json:"all_branches,omitempty" jsonschema:"search across all branches of the project"`
 	Machine     string `json:"machine,omitempty" jsonschema:"restrict to a machine hostname"`
 }
@@ -76,7 +76,7 @@ func (s *Server) Register(srv *mcp.Server) {
 	mcp.AddTool(srv, &mcp.Tool{Name: "request_create", Description: "Create a ledger entry for substantial work when request_search found no match. Include observable acceptance criteria; do not use for trivial local fixes.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleRequestCreate)
 	mcp.AddTool(srv, &mcp.Tool{Name: "request_start_work", Description: "Associate a Ghosttree session with an existing request as its primary task or as related work. Repeating the same association is safe.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, IdempotentHint: true, OpenWorldHint: &closed}}, s.handleRequestStartWork)
 	mcp.AddTool(srv, &mcp.Tool{Name: "request_finish_work", Description: "End a session's work association with a paused, completed, or abandoned outcome and a concise handoff. This does not complete the request.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, IdempotentHint: true, OpenWorldHint: &closed}}, s.handleRequestFinishWork)
-	mcp.AddTool(srv, &mcp.Tool{Name: "request_record_progress", Description: "Record evidenced request progress: add or satisfy criteria, complete or drop the request, or add a relation. Completion without evidence or with open criteria is rejected.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, IdempotentHint: true, OpenWorldHint: &closed}}, s.handleRequestProgress)
+	mcp.AddTool(srv, &mcp.Tool{Name: "request_record_progress", Description: "Record evidenced request progress: add or satisfy criteria, complete or drop the request, or add a relation. Completion without evidence or with open criteria is rejected.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleRequestProgress)
 }
 
 func Run(ctx context.Context, s *Server, version string) error {
@@ -131,6 +131,19 @@ func (s *Server) handleSearch(ctx context.Context, _ *mcp.CallToolRequest, in Se
 			out.WriteString("\n## sessions\n")
 			for _, h := range res.Sessions {
 				out.WriteString(renderHit(h))
+			}
+		}
+	}
+	if kind == "requests" || kind == "all" {
+		filter := scope.Axes{Project: s.ctxAxes.Project}
+		res, err := s.client.Search(in.Query, "requests", filter, limit)
+		if err != nil {
+			return nil, nil, err
+		}
+		if len(res.Requests) > 0 {
+			out.WriteString("\n## requests\n")
+			for _, h := range res.Requests {
+				fmt.Fprintf(&out, "- [request|status=%s|type=%s|source=ledger] REQ-%d %s — %s\n", h.Request.State, h.Request.Type, h.Request.ID, h.Request.Title, h.MatchReason)
 			}
 		}
 	}
@@ -242,15 +255,24 @@ func (s *Server) handleSessions(ctx context.Context, _ *mcp.CallToolRequest, in 
 }
 
 func renderKnowledge(k store.Knowledge) string {
-	label := fmt.Sprintf("%s|%s|%s", k.Type, scopeLabel(k.Scope), k.Confidence)
+	activationLabel := "none"
 	if k.Type == "instruction" {
+		var activationParts []string
 		if len(k.Activation.Paths) > 0 {
-			label += "|paths:" + strings.Join(k.Activation.Paths, ",")
+			activationParts = append(activationParts, "paths:"+strings.Join(k.Activation.Paths, ","))
 		}
 		if len(k.Activation.Tasks) > 0 {
-			label += "|tasks:" + strings.Join(k.Activation.Tasks, ",")
+			activationParts = append(activationParts, "tasks:"+strings.Join(k.Activation.Tasks, ","))
+		}
+		if len(activationParts) > 0 {
+			activationLabel = strings.Join(activationParts, ";")
 		}
 	}
+	source := k.SessionRef
+	if source == "" {
+		source = k.Origin
+	}
+	label := fmt.Sprintf("type:%s|scope:%s|status:%s|confidence:%s|activation:%s|source:%s", k.Type, scopeLabel(k.Scope), k.Status, k.Confidence, activationLabel, source)
 	return fmt.Sprintf("- [%s] %s — %s\n", label, k.Title, oneLine(k.Body))
 }
 

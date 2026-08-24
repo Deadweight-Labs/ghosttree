@@ -30,7 +30,7 @@ func (a *api) createRequest(w http.ResponseWriter, r *http.Request) {
 	detail, err := a.st.CreateRequest(requestdomain.CreateInput{
 		Request: requestdomain.Request{
 			Type: body.Type, Title: body.Title, Description: body.Description, Priority: body.Priority,
-			Scope:  scope.Axes{Project: body.Project, Branch: body.Branch, Machine: body.Machine},
+			Scope:  scope.CanonicalAxes(scope.Axes{Project: body.Project, Branch: body.Branch, Machine: body.Machine}),
 			Origin: body.Origin, Person: personOf(r), SessionRef: body.SessionRef,
 		},
 		Criteria: body.Criteria, IdempotencyKey: body.IdempotencyKey,

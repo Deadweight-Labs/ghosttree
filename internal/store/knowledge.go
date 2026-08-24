@@ -4,7 +4,9 @@ import (
 	"database/sql"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
@@ -149,7 +151,7 @@ func (s *Store) PendingKnowledge(limit int) ([]Knowledge, error) {
 		limit = 50
 	}
 	rows, err := s.db.Query(`SELECT `+knowledgeCols+` FROM knowledge
-		WHERE status = 'active' AND confidence IN ('quarantined','staged')
+		WHERE (status = 'active' AND confidence IN ('quarantined','staged')) OR status = 'stale'
 		ORDER BY created_at DESC, id DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
@@ -165,13 +167,13 @@ func (s *Store) UpdateKnowledge(id int64, patch map[string]string) error {
 	}
 	var sets []string
 	var args []any
-	for _, col := range []string{"type", "title", "body", "confidence", "status", "origin", "superseded_by"} {
+	for _, col := range []string{"type", "title", "body", "confidence", "status", "origin"} {
 		if v, ok := patch[col]; ok {
 			sets = append(sets, col+" = ?")
 			args = append(args, v)
 		}
 	}
-	if len(sets) == 0 {
+	if len(sets) == 0 && patch["superseded_by"] == "" {
 		return nil
 	}
 	tx, err := s.db.Begin()
@@ -179,6 +181,33 @@ func (s *Store) UpdateKnowledge(id int64, patch map[string]string) error {
 		return err
 	}
 	defer tx.Rollback()
+	if raw, ok := patch["superseded_by"]; ok {
+		target, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || target == 0 || target == id {
+			return fmt.Errorf("invalid superseded_by %q", raw)
+		}
+		seen := map[int64]bool{id: true}
+		for {
+			if seen[target] {
+				return fmt.Errorf("supersession would create a cycle")
+			}
+			seen[target] = true
+			var next int64
+			if err := tx.QueryRow(`SELECT superseded_by FROM knowledge WHERE id=?`, target).Scan(&next); err != nil {
+				return err
+			}
+			if next == 0 {
+				break
+			}
+			target = next
+		}
+		ts := now()
+		if _, err := tx.Exec(`WITH RECURSIVE ancestors(id) AS (
+			SELECT ? UNION ALL SELECT k.id FROM knowledge k JOIN ancestors a ON k.superseded_by=a.id
+		) UPDATE knowledge SET status='superseded',superseded_by=?,updated_at=? WHERE id IN (SELECT id FROM ancestors)`, id, target, ts); err != nil {
+			return err
+		}
+	}
 	if typ, ok := patch["type"]; ok && typ != "instruction" {
 		var gates int
 		if err := tx.QueryRow(`SELECT
@@ -196,6 +225,21 @@ func (s *Store) UpdateKnowledge(id int64, patch map[string]string) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+// ApplyStaleness marks time-sensitive plans stale after they have gone
+// untouched for maxAge. Durable decisions, pitfalls, and instructions never
+// expire merely because time passed.
+func (s *Store) ApplyStaleness(at time.Time, maxAge time.Duration) (int64, error) {
+	if maxAge <= 0 {
+		return 0, fmt.Errorf("staleness max age must be positive")
+	}
+	cutoff := at.UTC().Add(-maxAge).Format(time.RFC3339Nano)
+	res, err := s.db.Exec(`UPDATE knowledge SET status='stale',updated_at=? WHERE type='plan' AND status='active' AND updated_at<?`, at.UTC().Format(time.RFC3339Nano), cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 func (s *Store) KnowledgeByID(id int64) (Knowledge, error) {
@@ -222,13 +266,25 @@ func (s *Store) KnowledgeForContext(ax scope.Axes) ([]Knowledge, error) {
 }
 
 func (s *Store) KnowledgeForActivatedContext(ax scope.Axes, ctx activation.Context) ([]Knowledge, error) {
+	return s.knowledgeForActivatedContext(ax, ctx, false)
+}
+
+func (s *Store) KnowledgeForActivatedPreview(ax scope.Axes, ctx activation.Context) ([]Knowledge, error) {
+	return s.knowledgeForActivatedContext(ax, ctx, true)
+}
+
+func (s *Store) knowledgeForActivatedContext(ax scope.Axes, ctx activation.Context, includeStaged bool) ([]Knowledge, error) {
 	ctx, err := activation.NormalizeContext(ctx)
 	if err != nil {
 		return nil, err
 	}
 	where, args := ax.UnionWhere()
+	confidenceWhere := `confidence IN ('trusted','verified')`
+	if includeStaged {
+		confidenceWhere = `confidence != 'quarantined'`
+	}
 	rows, err := s.db.Query(`SELECT `+knowledgeCols+` FROM knowledge
-		WHERE status = 'active' AND confidence != 'quarantined' AND `+where+`
+		WHERE status = 'active' AND `+confidenceWhere+` AND `+where+`
 		ORDER BY `+trustOrder+`, created_at DESC, id DESC`, args...)
 	if err != nil {
 		return nil, err
@@ -297,7 +353,7 @@ func (s *Store) searchKnowledge(q, where string, args []any, limit int) ([]Knowl
 	rows, err := s.db.Query(`SELECT `+prefix(knowledgeCols, "k.")+`
 		FROM knowledge_fts f JOIN knowledge k ON k.id = f.rowid
 		WHERE knowledge_fts MATCH ? AND `+where+`
-		  AND k.status != 'deprecated' AND k.confidence != 'quarantined'
+		  AND k.status = 'active' AND k.confidence != 'quarantined'
 		ORDER BY f.rank LIMIT ?`, args...)
 	if err != nil {
 		return nil, err

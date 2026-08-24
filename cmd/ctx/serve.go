@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/server"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -40,6 +41,10 @@ func cmdServe(args []string, stdout io.Writer) int {
 		return 1
 	} else if !current {
 		fmt.Fprintf(stdout, "database schema is out of date - run 'ctx upgrade-schema --db %s' first\n", *db)
+		return 1
+	}
+	if _, err := st.ApplyStaleness(time.Now(), 90*24*time.Hour); err != nil {
+		fmt.Fprintf(stdout, "apply knowledge staleness: %v\n", err)
 		return 1
 	}
 	root := http.NewServeMux()

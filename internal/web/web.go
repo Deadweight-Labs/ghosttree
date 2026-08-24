@@ -2,11 +2,13 @@
 package web
 
 import (
+	"database/sql"
 	"embed"
 	"html/template"
 	"net/http"
 	"strconv"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/activation"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/server"
@@ -31,6 +33,13 @@ type pageData struct {
 	Chunks               []store.Chunk
 	SessionID            int64
 	Project, Preview     string
+	Review               []reviewEntry
+}
+type reviewEntry struct {
+	Knowledge         store.Knowledge
+	Evidence          []store.Evidence
+	MigrationEvidence *store.MigrationEvidence
+	Recurrence        int
 }
 
 func New(st *store.Store) http.Handler {
@@ -84,7 +93,7 @@ func (a *app) requestPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) knowledgePage(w http.ResponseWriter, r *http.Request) {
-	q, project := r.URL.Query().Get("q"), r.URL.Query().Get("project")
+	q, project := r.URL.Query().Get("q"), scope.NormalizeRemote(r.URL.Query().Get("project"))
 	var entries []store.Knowledge
 	var err error
 	if q != "" {
@@ -105,11 +114,33 @@ func (a *app) reviewPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	a.render(w, "review", pageData{Title: "Review", Person: personOf(r), Knowledge: entries})
+	items := make([]reviewEntry, 0, len(entries))
+	for _, k := range entries {
+		evidence, err := a.store.EvidenceFor(k.ID)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		recurrence, err := a.store.Recurrence(k.ID)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		proof, err := a.store.MigrationEvidenceForKnowledge(k.ID)
+		var migrationProof *store.MigrationEvidence
+		if err == nil {
+			migrationProof = &proof
+		} else if err != sql.ErrNoRows {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		items = append(items, reviewEntry{Knowledge: k, Evidence: evidence, MigrationEvidence: migrationProof, Recurrence: recurrence})
+	}
+	a.render(w, "review", pageData{Title: "Review", Person: personOf(r), Review: items})
 }
 
 func (a *app) sessionsPage(w http.ResponseWriter, r *http.Request) {
-	entries, err := a.store.ListSessions(scope.Axes{Project: r.URL.Query().Get("project")}, 50)
+	entries, err := a.store.ListSessions(scope.Axes{Project: scope.NormalizeRemote(r.URL.Query().Get("project"))}, 50)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
@@ -132,11 +163,22 @@ func (a *app) sessionPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) contextPage(w http.ResponseWriter, r *http.Request) {
-	project := r.URL.Query().Get("project")
-	entries, err := a.store.KnowledgeForContext(scope.Axes{Project: project})
+	project := scope.NormalizeRemote(r.URL.Query().Get("project"))
+	preview := r.URL.Query().Get("preview") == "1"
+	var entries []store.Knowledge
+	var err error
+	if preview {
+		entries, err = a.store.KnowledgeForActivatedPreview(scope.Axes{Project: project}, activation.Context{})
+	} else {
+		entries, err = a.store.KnowledgeForContext(scope.Axes{Project: project})
+	}
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	a.render(w, "context", pageData{Title: "Agent Context", Person: personOf(r), Project: project, Preview: server.RenderBootstrap(entries, 12000)})
+	output := server.RenderBootstrap(entries, 12000)
+	if preview {
+		output = server.RenderBootstrapPreview(entries, 12000)
+	}
+	a.render(w, "context", pageData{Title: "Agent Context", Person: personOf(r), Project: project, Preview: output})
 }

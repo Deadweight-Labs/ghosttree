@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
+	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -42,7 +44,7 @@ type RequestCreateInput struct {
 
 type RequestStartWorkInput struct {
 	RequestID int64  `json:"request_id" jsonschema:"request to work on"`
-	SessionID int64  `json:"session_id" jsonschema:"current Ghosttree session identifier"`
+	SessionID int64  `json:"session_id,omitempty" jsonschema:"current Ghosttree session identifier; omit to associate the newest matching active session"`
 	Role      string `json:"role,omitempty" jsonschema:"primary or related; defaults to primary"`
 }
 
@@ -81,7 +83,7 @@ func (s *Server) handleRequestSearch(_ context.Context, _ *mcp.CallToolRequest, 
 	if state == "" {
 		state = "open"
 	}
-	page, err := s.client.SearchRequests(requestdomain.SearchFilter{Scope: s.ctxAxes, Query: in.Query, State: state, Type: in.Type, Cursor: in.Cursor, Limit: in.Limit})
+	page, err := s.client.SearchRequests(requestdomain.SearchFilter{Scope: scope.Axes{Project: s.ctxAxes.Project}, Query: in.Query, State: state, Type: in.Type, Cursor: in.Cursor, Limit: in.Limit})
 	out := RequestSearchOutput{Page: page}
 	return requestResult(out), out, err
 }
@@ -111,7 +113,25 @@ func (s *Server) handleRequestStartWork(_ context.Context, _ *mcp.CallToolReques
 	if role == "" {
 		role = "primary"
 	}
-	work, warnings, err := s.client.StartRequestWork(in.RequestID, in.SessionID, role)
+	sessionID := in.SessionID
+	if sessionID == 0 {
+		sessions, err := s.client.Sessions(scope.Axes{Project: s.ctxAxes.Project}, 20)
+		if err != nil {
+			return nil, RequestWorkOutput{}, err
+		}
+		cutoff := time.Now().Add(-30 * time.Minute)
+		for _, candidate := range sessions {
+			seen, err := time.Parse(time.RFC3339Nano, candidate.LastSeenAt)
+			if err == nil && seen.After(cutoff) && (s.ctxAxes.Branch == "" || candidate.Scope.Branch == s.ctxAxes.Branch) && (s.ctxAxes.Machine == "" || candidate.Scope.Machine == s.ctxAxes.Machine) {
+				sessionID = candidate.ID
+				break
+			}
+		}
+		if sessionID == 0 {
+			return nil, RequestWorkOutput{}, fmt.Errorf("no recently active session matches this project, branch, and machine; sync the collector or provide session_id")
+		}
+	}
+	work, warnings, err := s.client.StartRequestWork(in.RequestID, sessionID, role)
 	out := RequestWorkOutput{Work: work, Warnings: warnings}
 	return requestResult(out), out, err
 }
