@@ -206,3 +206,51 @@ func TestReplaceSection(t *testing.T) {
 		t.Errorf("surrounding content damaged: %q", got)
 	}
 }
+
+// Other tools keep hooks in the same file — a lease daemon on SessionEnd, an
+// approval bridge on PreToolUse, a WebFetch guard. Installing must add to that
+// list, never replace it.
+func TestInstallKeepsForeignHooks(t *testing.T) {
+	home := t.TempDir()
+	settings := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settings), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	existing := `{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"bash /opt/session-lease/lease.sh"}]}],` +
+		`"PreToolUse":[{"matcher":"WebFetch","hooks":[{"type":"command","command":"exit 2"}]}]}}`
+	if err := os.WriteFile(settings, []byte(existing), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InstallClaude(home); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(raw)
+	for _, want := range []string{
+		"session-lease/lease.sh", "WebFetch",
+		"ctx hook session-start", "ctx hook user-prompt-submit",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("%q missing after install:\n%s", want, got)
+		}
+	}
+}
+
+// Installing twice must not stack duplicates of either hook.
+func TestInstallHooksAreIdempotent(t *testing.T) {
+	home := t.TempDir()
+	for range 2 {
+		if _, err := InstallClaude(home); err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw, _ := os.ReadFile(filepath.Join(home, ".claude", "settings.json"))
+	for _, cmd := range []string{"ctx hook session-start", "ctx hook user-prompt-submit"} {
+		if n := strings.Count(string(raw), cmd); n != 1 {
+			t.Errorf("%q registered %d times, want 1", cmd, n)
+		}
+	}
+}

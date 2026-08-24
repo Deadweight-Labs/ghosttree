@@ -93,11 +93,31 @@ func openLegacyRequestStore(t *testing.T, path string) *Store {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The table above reproduces the CHECK constraints the request-domain
+	// upgrade has to rewrite, which is what these tests are about. The purely
+	// additive columns are a separate step of the same command, and leaving
+	// them out here would only mean the current write path cannot fill the
+	// fixture.
+	finishAdditiveUpgrades(t, path)
 	s, err = Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return s
+}
+
+// finishAdditiveUpgrades runs the tail of what `ctx upgrade-schema` runs. A
+// database that got only some of the steps still opens, and its reads then fail
+// on a missing column — which reaches the caller as an empty result, not as an
+// error. Tests that read must do so on the fully upgraded database.
+func finishAdditiveUpgrades(t *testing.T, path string) {
+	t.Helper()
+	if _, err := UpgradeUsageTelemetry(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AddedColumns(path); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func setLegacyRequestState(t *testing.T, s *Store, id int64, state, kind, ref, person string) {
@@ -112,6 +132,7 @@ func TestUpgradePreservesDataAndSearch(t *testing.T) {
 	if _, err := UpgradeSchema(path); err != nil {
 		t.Fatal(err)
 	}
+	finishAdditiveUpgrades(t, path)
 	s, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
@@ -158,9 +179,15 @@ func TestUpgradeIsIdempotent(t *testing.T) {
 	if backup != "" {
 		t.Errorf("a no-op run must not write a backup, got %q", backup)
 	}
+	// Asserting on the fully upgraded database is what keeps this test about
+	// idempotence instead of about the missing-column trap.
+	finishAdditiveUpgrades(t, path)
 	s, _ := Open(path)
 	defer s.Close()
-	ks, _ := s.KnowledgeForContext(scope.Axes{Project: "github.com/x/y"})
+	ks, err := s.KnowledgeForContext(scope.Axes{Project: "github.com/x/y"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(ks) != 2 {
 		t.Errorf("entries after two upgrade runs = %d, want 2", len(ks))
 	}
@@ -187,6 +214,7 @@ func TestUpgradeTypesKeepsDataAndSearch(t *testing.T) {
 	if _, err := UpgradeTypes(path); err != nil {
 		t.Fatal(err)
 	}
+	finishAdditiveUpgrades(t, path)
 	s, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
@@ -261,6 +289,9 @@ func TestUpgradeRequestDomainMovesLegacyRequests(t *testing.T) {
 	if current, err := SchemaHasNewTypes(backupDB); err != nil || current {
 		t.Fatalf("backup is not the legacy pre-upgrade schema: current=%v err=%v", current, err)
 	}
+	// The rebuild above carries only the columns the legacy table had, so the
+	// additive step runs after it — the order `ctx upgrade-schema` uses.
+	finishAdditiveUpgrades(t, path)
 	s, err = Open(path)
 	if err != nil {
 		t.Fatal(err)
@@ -437,5 +468,37 @@ func TestUpgradeUsageTelemetryIsAdditiveAndIdempotent(t *testing.T) {
 	var title string
 	if err := s.db.QueryRow(`SELECT title FROM knowledge WHERE id=1`).Scan(&title); err != nil || title != "kept" {
 		t.Fatalf("existing row lost: title=%q err=%v", title, err)
+	}
+}
+
+// An upgrade that says "nothing to do" while it changed the schema is how
+// someone later debugging an empty column concludes the column was never added.
+func TestAddedColumnsNamesWhatItAddedAndIsIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "legacy.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE distill_batches(id INTEGER PRIMARY KEY, provider_batch_id TEXT, state TEXT, created_at TEXT, updated_at TEXT);
+		CREATE TABLE distill_batch_items(batch_id INTEGER, custom_id TEXT, session_id INTEGER, digest TEXT);
+		CREATE TABLE knowledge(id INTEGER PRIMARY KEY, type TEXT, title TEXT, body TEXT, created_at TEXT, updated_at TEXT);`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	added, err := AddedColumns(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(added) != 3 {
+		t.Fatalf("added = %v, want every missing column named", added)
+	}
+	again, err := AddedColumns(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(again) != 0 {
+		t.Fatalf("second run reported %v, want nothing added", again)
 	}
 }

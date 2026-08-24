@@ -5,6 +5,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/redact"
 )
 
 func lines(t *testing.T, path string) [][]byte {
@@ -84,5 +86,100 @@ func TestGitInfoOutsideRepo(t *testing.T) {
 	project, branch := GitInfo(t.TempDir())
 	if project != "" || branch != "" {
 		t.Errorf("outside a repo both axes must be empty, got %q %q", project, branch)
+	}
+}
+
+// A transcript that records only what a tool returned cannot answer which tool
+// was called. Measuring ghosttree's own adoption had to fall back on grepping
+// for the string "context_search", which counts a session discussing the tool
+// the same as one using it.
+func TestParseClaudeKeepsToolCalls(t *testing.T) {
+	line := []byte(`{"type":"assistant","message":{"role":"assistant","content":[
+		{"type":"text","text":"Checking what is known here."},
+		{"type":"tool_use","name":"mcp__ghosttree__context_search","input":{"query":"ufw drops lan"}}]}}`)
+	p := ParseClaudeLine(line)
+	if p.Role != "assistant" {
+		t.Fatalf("role = %q", p.Role)
+	}
+	if !strings.Contains(p.Text, "Checking what is known here.") {
+		t.Errorf("assistant prose lost: %q", p.Text)
+	}
+	if !strings.Contains(p.Text, "mcp__ghosttree__context_search") {
+		t.Errorf("tool name missing: %q", p.Text)
+	}
+	if !strings.Contains(p.Text, "ufw drops lan") {
+		t.Errorf("tool arguments missing: %q", p.Text)
+	}
+}
+
+// A call with no prose around it still has to be recorded.
+func TestParseClaudeKeepsToolCallWithoutText(t *testing.T) {
+	line := []byte(`{"type":"assistant","message":{"role":"assistant","content":[
+		{"type":"tool_use","name":"Bash","input":{"command":"go test ./..."}}]}}`)
+	p := ParseClaudeLine(line)
+	if p.Role != "assistant" || !strings.Contains(p.Text, "Bash") {
+		t.Errorf("bare tool call: %+v", p)
+	}
+}
+
+// A Write call carries a whole file. The name is the signal; the payload is
+// already in the repository.
+func TestParseClaudeTruncatesHugeToolArguments(t *testing.T) {
+	huge := strings.Repeat("x", 20000)
+	line := []byte(`{"type":"assistant","message":{"role":"assistant","content":[
+		{"type":"tool_use","name":"Write","input":{"content":"` + huge + `"}}]}}`)
+	p := ParseClaudeLine(line)
+	if !strings.Contains(p.Text, "Write") {
+		t.Fatalf("tool name lost: %.120q", p.Text)
+	}
+	if len(p.Text) > 2000 {
+		t.Errorf("tool arguments not truncated: %d bytes", len(p.Text))
+	}
+}
+
+// A tool result still parses as a tool line; adding calls must not change that.
+func TestParseClaudeStillSeparatesToolResults(t *testing.T) {
+	line := []byte(`{"type":"user","message":{"role":"user","content":[
+		{"type":"tool_result","content":[{"type":"text","text":"PASS"}]}]}}`)
+	if p := ParseClaudeLine(line); p.Role != "tool" || !strings.Contains(p.Text, "PASS") {
+		t.Errorf("tool result: %+v", p)
+	}
+}
+
+// Codex records the call as its own line, so the same blind spot exists there.
+func TestParseCodexKeepsToolCalls(t *testing.T) {
+	line := []byte(`{"type":"response_item","payload":{"type":"function_call","name":"exec_command",
+		"arguments":"{\"cmd\":\"go test ./...\",\"workdir\":\"/home/user\"}"}}`)
+	p := ParseCodexLine(line)
+	if p.Role != "tool" {
+		t.Fatalf("role = %q, want tool", p.Role)
+	}
+	if !strings.Contains(p.Text, "exec_command") || !strings.Contains(p.Text, "go test ./...") {
+		t.Errorf("call not archived: %q", p.Text)
+	}
+}
+
+func TestParseCodexKeepsCustomToolCalls(t *testing.T) {
+	line := []byte(`{"type":"response_item","payload":{"type":"custom_tool_call","name":"context_search","input":"ufw"}}`)
+	if p := ParseCodexLine(line); !strings.Contains(p.Text, "context_search") {
+		t.Errorf("custom call not archived: %+v", p)
+	}
+}
+
+// Tool arguments are the one place a credential reaches a transcript as an
+// argument rather than as prose — an export command, a curl header. They go
+// through the same redaction as everything else because the collector redacts
+// ParsedLine.Text, but archiving a new kind of content is exactly when that is
+// worth proving rather than assuming.
+func TestToolCallArgumentsAreRedacted(t *testing.T) {
+	secret := "sk-ant-" + strings.Repeat("A", 40)
+	line := []byte(`{"type":"assistant","message":{"role":"assistant","content":[
+		{"type":"tool_use","name":"Bash","input":{"command":"export ANTHROPIC_API_KEY=` + secret + `"}}]}}`)
+	got := redact.Redact(ParseClaudeLine(line).Text)
+	if strings.Contains(got, secret) {
+		t.Fatalf("credential survived into the archive: %q", got)
+	}
+	if !strings.Contains(got, "Bash") {
+		t.Errorf("redaction must not cost the tool name: %q", got)
 	}
 }

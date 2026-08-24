@@ -49,6 +49,8 @@ func run(args []string, stdout io.Writer) int {
 		return cmdUpgradeSchema(rest, stdout)
 	case "canonicalize-scopes":
 		return cmdCanonicalizeScopes(rest, stdout)
+	case "unbind-branch":
+		return cmdUnbindBranch(rest, stdout)
 	case "person":
 		return cmdPerson(rest, stdout)
 	case "setup":
@@ -83,6 +85,7 @@ const usage = `usage: ctx <command>
   cost     report LLM spend and forecast the remaining backlog
   upgrade-schema  one-off knowledge table rebuild for trust tiers
   canonicalize-scopes  one-off project name backfill and duplicate merge
+  unbind-branch  lift knowledge filed against a branch to its project
   version  print version`
 
 func main() {

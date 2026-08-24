@@ -26,28 +26,65 @@ type Knowledge struct {
 	Person       string          `json:"person"`
 	Harness      string          `json:"harness,omitempty"`
 	SessionRef   string          `json:"session_ref,omitempty"`
-	CreatedAt    string          `json:"created_at"`
-	UpdatedAt    string          `json:"updated_at"`
+	// ObservedAt is when the entry was seen; CreatedAt is when it was written
+	// down. For anything a person or an agent typed the two coincide. For a
+	// distilled entry they do not, and the difference is what tells a reader
+	// whether "as of today" in the body means today.
+	ObservedAt string `json:"observed_at,omitempty"`
+	CreatedAt  string `json:"created_at"`
+	UpdatedAt  string `json:"updated_at"`
 }
 
 const knowledgeCols = `id, type, title, body, project, branch, machine,
-	confidence, status, origin, superseded_by, person, harness, session_ref, created_at, updated_at`
+	confidence, status, origin, superseded_by, person, harness, session_ref,
+	observed_at, created_at, updated_at`
 
 // ftsQuery turns user input into a safe FTS5 expression: each token becomes a
-// quoted phrase joined with AND. Quoting is what keeps FTS5 operator syntax
-// (NEAR, ^, *, column filters) out of user input.
+// quoted phrase, and the phrases are joined with OR. Quoting is what keeps FTS5
+// operator syntax (NEAR, ^, *, column filters) out of user input.
+//
+// They used to be joined with AND, which required every word of a query to
+// appear in one document. Measured on 2026-08-24: "Ghost Tree Parallelbaum
+// Bootstrap Auslöser Rückfallweg" found nothing because the terms live in two
+// entries, while "Parallelbaum" alone found one immediately. An empty result is
+// indistinguishable from "there is nothing", so the caller concludes the archive
+// is empty rather than that the query was too narrow — and stops asking.
+//
+// OR needs the ranking to do the work instead, which bm25 already does: a
+// document matching four of five terms outranks one matching one. What OR
+// cannot survive is ordinary words, which match everything and drown the signal.
+// Those are dropped first, and a query left with nothing but ordinary words is
+// not a search at all — see isListingQuery.
 func ftsQuery(q string) string {
-	var terms []string
-	for _, f := range strings.Fields(q) {
-		if f = strings.ReplaceAll(f, `"`, ""); f != "" {
-			terms = append(terms, `"`+f+`"`)
-		}
-	}
+	terms := searchTerms(q)
 	if len(terms) == 0 {
 		return `""`
 	}
-	return strings.Join(terms, " AND ")
+	for i, t := range terms {
+		terms[i] = `"` + t + `"`
+	}
+	return strings.Join(terms, " OR ")
 }
+
+// searchTerms keeps the words of a query that carry intent.
+func searchTerms(q string) []string {
+	var terms []string
+	for f := range strings.FieldsSeq(strings.ToLower(q)) {
+		f = strings.Trim(strings.ReplaceAll(f, `"`, ""), ".,;:!?()[]{}")
+		if f == "" || commonWords[f] || len([]rune(f)) < 2 {
+			continue
+		}
+		terms = append(terms, f)
+	}
+	return terms
+}
+
+// isListingQuery reports that a query asks to see what there is rather than to
+// find something specific. "was ist noch zu tun" contains no word about the
+// subject matter, and answering it with whichever entry happens to contain all
+// five words is worse than answering it with the list — which is what `gh issue
+// list` does when given no argument.
+func isListingQuery(q string) bool { return len(searchTerms(q)) == 0 }
 
 func (s *Store) InsertKnowledge(k Knowledge) (int64, error) {
 	if err := activation.ValidateRule(k.Activation); err != nil {
@@ -77,12 +114,17 @@ func (s *Store) InsertKnowledge(k Knowledge) (int64, error) {
 		return 0, err
 	}
 	defer tx.Rollback()
+	if k.ObservedAt == "" {
+		// Nobody is reporting an older sighting here: the writer is looking at
+		// the thing as they write it.
+		k.ObservedAt = ts
+	}
 	res, err := tx.Exec(`INSERT INTO knowledge(type, title, body, project, branch, machine,
-		confidence, status, origin, superseded_by, person, harness, session_ref, created_at, updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		confidence, status, origin, superseded_by, person, harness, session_ref, observed_at, created_at, updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		k.Type, k.Title, k.Body, k.Scope.Project, k.Scope.Branch, k.Scope.Machine,
 		k.Confidence, k.Status, k.Origin, k.SupersededBy,
-		k.Person, k.Harness, k.SessionRef, ts, ts)
+		k.Person, k.Harness, k.SessionRef, k.ObservedAt, ts, ts)
 	if err != nil {
 		return 0, err
 	}
@@ -133,8 +175,11 @@ func (s *Store) SetActivation(id int64, rule activation.Rule) error {
 	return tx.Commit()
 }
 
+// observed_at is patchable so that reconfirming an entry is something a reader
+// can say. Editing the text is not the same statement — a typo fix is not a
+// claim that the content is still true — so nothing infers it from an update.
 var patchable = map[string]bool{"title": true, "body": true, "confidence": true,
-	"status": true, "type": true, "origin": true, "superseded_by": true}
+	"status": true, "type": true, "origin": true, "superseded_by": true, "observed_at": true}
 
 // PendingKnowledge lists what awaits a decision. project narrows the queue:
 // a flat list is fine for eleven entries and unusable at the several hundred a
@@ -162,7 +207,7 @@ func (s *Store) UpdateKnowledge(id int64, patch map[string]string) error {
 	}
 	var sets []string
 	var args []any
-	for _, col := range []string{"type", "title", "body", "confidence", "status", "origin"} {
+	for _, col := range []string{"type", "title", "body", "confidence", "status", "origin", "observed_at"} {
 		if v, ok := patch[col]; ok {
 			sets = append(sets, col+" = ?")
 			args = append(args, v)
@@ -224,15 +269,27 @@ func (s *Store) UpdateKnowledge(id int64, patch map[string]string) error {
 	return tx.Commit()
 }
 
-// ApplyStaleness marks time-sensitive plans stale after they have gone
-// untouched for maxAge. Durable decisions, pitfalls, and instructions never
-// expire merely because time passed.
+// observationTime is how old an entry's content is. The fallback matters on a
+// database whose backfill has not run yet: an empty observed_at would sort and
+// age as the beginning of time, so it defers to the column that was used
+// before rather than declaring the whole archive ancient.
+const observationTime = `COALESCE(NULLIF(observed_at,''), updated_at)`
+
+// ApplyStaleness marks time-sensitive plans stale once what they describe is
+// older than maxAge. Durable decisions, pitfalls, and instructions never expire
+// merely because time passed.
+//
+// The clock is the observation, not the last write. updated_at was the rule
+// until 2026-08-24 and the distiller pushed it to the run time on every entry
+// it filed — so a plan from a June session looked like it had been touched
+// today. Editing an entry no longer resets its age either; saying it is still
+// current is a separate act, and PATCH observed_at is how it is said.
 func (s *Store) ApplyStaleness(at time.Time, maxAge time.Duration) (int64, error) {
 	if maxAge <= 0 {
 		return 0, fmt.Errorf("staleness max age must be positive")
 	}
 	cutoff := at.UTC().Add(-maxAge).Format(time.RFC3339Nano)
-	res, err := s.db.Exec(`UPDATE knowledge SET status='stale',updated_at=? WHERE type='plan' AND status='active' AND updated_at<?`, at.UTC().Format(time.RFC3339Nano), cutoff)
+	res, err := s.db.Exec(`UPDATE knowledge SET status='stale',updated_at=? WHERE type='plan' AND status='active' AND `+observationTime+`<?`, at.UTC().Format(time.RFC3339Nano), cutoff)
 	if err != nil {
 		return 0, err
 	}
@@ -258,6 +315,26 @@ func (s *Store) KnowledgeByID(id int64) (Knowledge, error) {
 // every read path sorts identically.
 const trustOrder = `CASE confidence WHEN 'verified' THEN 0 WHEN 'trusted' THEN 1 ELSE 2 END`
 
+// corroboration counts the independent sessions that back an entry, with a
+// floor of one for anything a person or an agent chose to write down. Counting
+// raw would rank every hand-written entry below every distilled one, because
+// only distillation leaves transcript evidence — and "nobody quoted a chunk for
+// it" is not the same as "nobody vouched for it".
+const corroboration = `MAX(
+	(SELECT COUNT(DISTINCT session_id) FROM knowledge_evidence e WHERE e.knowledge_id = knowledge.id),
+	CASE origin WHEN 'distilled' THEN 0 ELSE 1 END)`
+
+// deliveryOrder is what the bootstrap sorts by once the scope has been matched.
+// created_at was the whole rule until 2026-08-24, which meant a budget-limited
+// bootstrap shipped whatever the last distiller run had produced: releasing 136
+// distilled items displaced the one entry in the archive with a measured effect.
+// Recency is a tiebreaker, not a ranking.
+//
+// The tiebreaker reads observed_at, not created_at: the distiller files a June
+// session and yesterday's in one batch, so created_at DESC ranked them by
+// processing order, which says nothing about the entries.
+const deliveryOrder = trustOrder + `, ` + corroboration + ` DESC, search_hits DESC, ` + observationTime + ` DESC, id DESC`
+
 func (s *Store) KnowledgeForContext(ax scope.Axes) ([]Knowledge, error) {
 	return s.KnowledgeForActivatedContext(ax, activation.Context{})
 }
@@ -282,7 +359,7 @@ func (s *Store) knowledgeForActivatedContext(ax scope.Axes, ctx activation.Conte
 	}
 	rows, err := s.db.Query(`SELECT `+knowledgeCols+` FROM knowledge
 		WHERE status = 'active' AND `+confidenceWhere+` AND `+where+`
-		ORDER BY `+trustOrder+`, created_at DESC, id DESC`, args...)
+		ORDER BY `+deliveryOrder, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -365,7 +442,7 @@ func (s *Store) searchKnowledge(q, where string, args []any, limit int) ([]Knowl
 	if err != nil {
 		return nil, err
 	}
-	s.recordKnowledgeUse(ks)
+	s.recordKnowledgeSearchHit(ks)
 	return ks, nil
 }
 
@@ -387,7 +464,7 @@ func (s *Store) scanKnowledge(rows *sql.Rows) ([]Knowledge, error) {
 			&k.Scope.Project, &k.Scope.Branch, &k.Scope.Machine,
 			&k.Confidence, &k.Status, &k.Origin, &k.SupersededBy,
 			&k.Person, &k.Harness, &k.SessionRef,
-			&k.CreatedAt, &k.UpdatedAt); err != nil {
+			&k.ObservedAt, &k.CreatedAt, &k.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, k)
@@ -417,4 +494,52 @@ func (s *Store) scanKnowledge(rows *sql.Rows) ([]Knowledge, error) {
 		sort.Strings(out[i].Activation.Paths)
 	}
 	return out, nil
+}
+
+// KnowledgeTitlesForPrompt lists the titles a distillation prompt should treat
+// as already covered.
+//
+// Two exclusions, both learnt the hard way. Archived items are gone from the
+// tree and have no business telling the model a finding is taken. And items
+// evidenced by a session in this very submission must be left out: the prompt
+// asks the model not to restate what exists, while reprocessing archives the
+// previous run's items for those same sessions — so including them means the
+// model declines to re-derive a finding that is about to be retired. That
+// combination archived 67 sample-project items, among them a committed session
+// token and three SSRF findings, and replaced them with 38 covering none of the
+// same ground.
+//
+// Items from other sessions still suppress. That is what the list is for.
+//
+// Each line carries its id, because suppressing a repeat is only half of what
+// the list is for. The other half is letting the model say which entry a
+// finding belongs to, so the same defect under a second name becomes evidence
+// rather than a second entry.
+//
+// The exclusion is by authorship, matching what reprocessing actually retires.
+// Keyed on evidence it would also hide entries these sessions merely
+// corroborated — entries that are not going anywhere and that the model should
+// still be able to point at.
+func (s *Store) KnowledgeTitlesForPrompt(project string, excludeSessions []int64) ([]string, error) {
+	query := `SELECT '#' || k.id || ' ' || k.title FROM knowledge k
+		WHERE k.project = ? AND k.status = 'active'`
+	args := []any{project}
+	for _, id := range excludeSessions {
+		query += ` AND k.session_ref NOT LIKE ?`
+		args = append(args, "session:"+strconv.FormatInt(id, 10)+"#%")
+	}
+	rows, err := s.db.Query(query+` ORDER BY k.id`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var title string
+		if err := rows.Scan(&title); err != nil {
+			return nil, err
+		}
+		out = append(out, title)
+	}
+	return out, rows.Err()
 }

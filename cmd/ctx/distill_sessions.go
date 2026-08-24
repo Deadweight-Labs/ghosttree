@@ -21,6 +21,7 @@ func cmdDistillSessions(args []string, stdout io.Writer) int {
 	limit := fs.Int("limit", 20, "maximum sessions per run")
 	project := fs.String("project", "", "restrict to one project (canonical remote)")
 	submit := fs.Bool("submit", false, "send pending sessions as one batch job")
+	requests := fs.Bool("requests", false, "read the person's messages for wishes instead of the transcript for knowledge")
 	collect := fs.Bool("collect", false, "ingest results of finished batch jobs")
 	dryRun := fs.Bool("dry-run", false, "with --submit or --reprocess-version: report without changing anything")
 	reprocess := fs.String("reprocess-version", "", "put sessions distilled under this prompt version back in the queue")
@@ -72,7 +73,7 @@ func cmdDistillSessions(args []string, stdout io.Writer) int {
 		}
 	}
 	if *submit {
-		return submitBatch(st, batch, filter, cutoff, cfg.Model, *limit, *dryRun, stdout)
+		return submitBatch(st, batch, filter, cutoff, cfg.Model, *limit, *dryRun, *requests, stdout)
 	}
 	return 0
 }
@@ -104,10 +105,10 @@ func releaseForReprocessing(st *store.Store, version string, filter scope.Axes, 
 	return 0
 }
 
-func submitBatch(st *store.Store, client llm.BatchClient, filter scope.Axes, cutoff, model string, limit int, dryRun bool, stdout io.Writer) int {
+func submitBatch(st *store.Store, client llm.BatchClient, filter scope.Axes, cutoff, model string, limit int, dryRun, requests bool, stdout io.Writer) int {
 	report, err := sessiondistill.SubmitBatch(context.Background(), st, client, sessiondistill.SubmitOptions{
 		Filter: filter, IdleBefore: cutoff, Limit: limit, Model: model,
-		Budget: sessiondistill.DefaultBudget, DryRun: dryRun,
+		Budget: sessiondistill.DefaultBudget, DryRun: dryRun, Requests: requests,
 	})
 	if err != nil {
 		fmt.Fprintf(stdout, "submit: %v\n", err)
@@ -166,7 +167,7 @@ func collectBatches(st *store.Store, client llm.BatchClient, stdout io.Writer) i
 }
 
 func distillSynchronously(st *store.Store, model llm.Client, filter scope.Axes, cutoff string, limit int, stdout io.Writer) int {
-	sessions, err := st.SessionsPendingDistillation(filter, cutoff, limit)
+	sessions, err := st.SessionsPendingDistillation(filter, cutoff, sessiondistill.PromptVersion, limit)
 	if err != nil {
 		fmt.Fprintf(stdout, "list sessions: %v\n", err)
 		return 1

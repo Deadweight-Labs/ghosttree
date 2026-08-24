@@ -28,7 +28,17 @@ func NewServer(c *client.Client, axes scope.Axes, base ...activation.Context) *S
 }
 
 type SearchInput struct {
-	Query       string `json:"query" jsonschema:"what to search for"`
+	// Optional, because a targeted read names an id and has nothing to search
+	// for. It was required until a probe agent tried to follow the tool's own
+	// instruction — "pass knowledge_id" — and got
+	// `required: missing properties: ["query"]` back from schema validation,
+	// before the handler ever ran. The handler tests below called the function
+	// directly and never saw it.
+	Query string `json:"query,omitempty" jsonschema:"what to search for. Omit only when reading one entry by knowledge_id"`
+	// The id comes back on every knowledge hit, so reading one entry in full is
+	// a second call rather than a guess. Same shape as session_id on
+	// context_sessions: list or search, or name one and read it whole.
+	KnowledgeID int64  `json:"knowledge_id,omitempty" jsonschema:"read this knowledge entry in full instead of searching. The id is on every hit; use it when a snippet is not enough, for instance for a stored plan or spec"`
 	Kind        string `json:"kind,omitempty" jsonschema:"knowledge, requests, sessions or all (default all)"`
 	AllBranches bool   `json:"all_branches,omitempty" jsonschema:"search across all branches of the project"`
 	Project     string `json:"project,omitempty" jsonschema:"search another project instead of the current one, given as a normalized remote like github.com/owner/repo"`
@@ -65,7 +75,7 @@ type RememberInput struct {
 	Type      string `json:"type" jsonschema:"pitfall, decision, note or plan"`
 	Title     string `json:"title" jsonschema:"one line summary"`
 	Body      string `json:"body" jsonschema:"the knowledge itself; for a decision, cover why it was taken, which alternatives were rejected and what the tradeoffs are"`
-	ScopeHint string `json:"scope_hint,omitempty" jsonschema:"project, branch, machine or global; omit to use the write defaults"`
+	ScopeHint string `json:"scope_hint" jsonschema:"where this belongs — required, because it is a judgement nobody else can make for you: project, branch, machine or global.\nThe question that separates project from branch: does this stop being true once the branch is merged or abandoned? A migration in flight, a temporary flag, a workaround for something only this branch broke — that is branch. Anything that outlives the branch is project, and most things do.\nA branch entry is read by this branch and by every branch cut from it afterwards, never by a sibling. Machine is for facts about the box you are standing on, global for facts about how you work anywhere."`
 }
 
 type SessionsInput struct {
@@ -79,7 +89,7 @@ type SessionsInput struct {
 func (s *Server) Register(srv *mcp.Server) {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "context_search",
-		Description: "Search ghosttree knowledge and past session transcripts. Defaults to the current project, branch and machine context. Set project to search another repository, or all_projects to search every one of them — worth doing when a problem here may already have been solved elsewhere.",
+		Description: "Search ghosttree knowledge and past session transcripts, or read one knowledge entry in full. Hits are snippets and carry an id; pass knowledge_id to get that entry's whole body back verbatim, which is how stored plans, specs and other long documents are read. Defaults to the current project, branch and machine context. Set project to search another repository, or all_projects to search every one of them — worth doing when a problem here may already have been solved elsewhere.",
 	}, s.handleSearch)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "context_get",
@@ -95,12 +105,12 @@ func (s *Server) Register(srv *mcp.Server) {
 	}, s.handleSessions)
 	closed := false
 	additive := false
-	mcp.AddTool(srv, &mcp.Tool{Name: "request_search", Description: "Search the current project's work ledger using the user's task description before substantial feature, architecture, migration, or multi-session work.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closed}}, s.handleRequestSearch)
+	mcp.AddTool(srv, &mcp.Tool{Name: "request_search", Description: "List or search the current project's work ledger. Works like listing issues: call it with no query to see what is open, or name a subject to narrow. A question that names no subject — \"what is left to do\" — returns the list rather than guessing. Answers with a compact list; call request_get for one entry's full text. Use it before substantial feature, architecture, migration, or multi-session work.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closed}}, s.handleRequestSearch)
 	mcp.AddTool(srv, &mcp.Tool{Name: "request_get", Description: "Get a request's requirements, open acceptance criteria, relations, and latest work handoff. Use detailed format only when history and all evidence are needed.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closed}}, s.handleRequestGet)
 	mcp.AddTool(srv, &mcp.Tool{Name: "request_create", Description: "Create a ledger entry for substantial work when request_search found no match. Include observable acceptance criteria; do not use for trivial local fixes.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleRequestCreate)
 	mcp.AddTool(srv, &mcp.Tool{Name: "request_start_work", Description: "Associate a Ghosttree session with an existing request as its primary task or as related work. Repeating the same association is safe.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, IdempotentHint: true, OpenWorldHint: &closed}}, s.handleRequestStartWork)
 	mcp.AddTool(srv, &mcp.Tool{Name: "request_finish_work", Description: "End a session's work association with a paused, completed, or abandoned outcome and a concise handoff. This does not complete the request.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, IdempotentHint: true, OpenWorldHint: &closed}}, s.handleRequestFinishWork)
-	mcp.AddTool(srv, &mcp.Tool{Name: "request_record_progress", Description: "Record evidenced request progress: add or satisfy criteria, complete or drop the request, or add a relation. Completion without evidence or with open criteria is rejected. Answers with what changed and how many criteria remain — call request_get for the full picture.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleRequestProgress)
+	mcp.AddTool(srv, &mcp.Tool{Name: "request_record_progress", Description: "Record evidenced request progress: add or satisfy criteria, complete or drop the request, add or remove a relation, or correct what the request says. Completion without evidence or with open criteria is rejected. A correction and a relation removal each need a reason, which goes into the activity list — nothing changes silently. Answers with what changed and how many criteria remain — call request_get for the full picture.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleRequestProgress)
 }
 
 func Run(ctx context.Context, s *Server, version string) error {
@@ -117,6 +127,18 @@ func textResult(s string) *mcp.CallToolResult {
 }
 
 func (s *Server) handleSearch(ctx context.Context, _ *mcp.CallToolRequest, in SearchInput) (*mcp.CallToolResult, any, error) {
+	if in.KnowledgeID != 0 {
+		k, err := s.client.KnowledgeByID(in.KnowledgeID)
+		if err != nil {
+			return nil, nil, err
+		}
+		return textResult(renderKnowledgeFull(k)), nil, nil
+	}
+	// Neither an id nor words: nothing to answer, and saying so beats returning
+	// the whole archive or an empty list that reads like "there is nothing".
+	if strings.TrimSpace(in.Query) == "" {
+		return nil, nil, fmt.Errorf("give a query to search for, or a knowledge_id to read one entry in full")
+	}
 	kind := in.Kind
 	if kind == "" {
 		kind = "all"
@@ -139,8 +161,16 @@ func (s *Server) handleSearch(ctx context.Context, _ *mcp.CallToolRequest, in Se
 		}
 		if len(res.Knowledge) > 0 {
 			out.WriteString("## knowledge\n")
+			shortened := false
 			for _, k := range res.Knowledge {
 				out.WriteString(renderKnowledge(k))
+				shortened = shortened || len([]rune(oneLine(k.Body))) > snippetChars
+			}
+			// Only said when something was actually held back. A pointer to the
+			// rest on a hit that already showed all of it is noise, and a
+			// shortened hit that says nothing is the entry lying about its size.
+			if shortened {
+				out.WriteString("(an entry ending in … is shortened; call context_search with knowledge_id=<id> for its full text)\n")
 			}
 		}
 	}
@@ -197,10 +227,18 @@ func (s *Server) handleRemember(ctx context.Context, _ *mcp.CallToolRequest, in 
 	}
 	k := store.Knowledge{Type: in.Type, Title: in.Title, Body: in.Body, Harness: "mcp"}
 	autoCtx := s.ctxAxes
+	// Placement is asked for rather than defaulted. A default put everything on
+	// the branch and stranded 127 entries; the correction put everything on the
+	// project, which is right more often and still nobody's decision. Where a
+	// thing belongs is a judgement about how long it stays true, and only the
+	// writer is in a position to make it.
 	switch in.ScopeHint {
 	case "project":
 		k.Scope = scope.Axes{Project: s.ctxAxes.Project}
 	case "branch":
+		if s.ctxAxes.Branch == "" {
+			return nil, nil, fmt.Errorf("scope_hint branch, but this session is not on a named branch; use project or machine")
+		}
 		k.Scope = scope.Axes{Project: s.ctxAxes.Project, Branch: s.ctxAxes.Branch}
 	case "machine":
 		k.Scope = scope.Axes{Machine: s.ctxAxes.Machine}
@@ -208,6 +246,11 @@ func (s *Server) handleRemember(ctx context.Context, _ *mcp.CallToolRequest, in 
 		// Empty scope plus empty context: the server's write defaults resolve
 		// to global rather than filling anything in.
 		autoCtx = scope.Axes{}
+	case "":
+		return nil, nil, fmt.Errorf("scope_hint is required: project, branch, machine or global. " +
+			"Ask whether this stops being true once the branch is merged or abandoned — if yes it is branch, otherwise project")
+	default:
+		return nil, nil, fmt.Errorf("unknown scope_hint %q; use project, branch, machine or global", in.ScopeHint)
 	}
 	saved, err := s.client.Remember(k, autoCtx)
 	if err != nil {
@@ -286,7 +329,13 @@ func (s *Server) handleSessions(ctx context.Context, _ *mcp.CallToolRequest, in 
 	return textResult(out.String()), nil, nil
 }
 
-func renderKnowledge(k store.Knowledge) string {
+// snippetChars is what a hit shows of a body. Long enough to tell two entries
+// apart, short enough that twenty hits stay readable — the archive holds plans
+// of nine thousand characters, and a search that returned them whole was how a
+// single query came to fifty-six thousand.
+const snippetChars = 280
+
+func knowledgeLabel(k store.Knowledge) string {
 	activationLabel := "none"
 	if k.Type == "instruction" {
 		var activationParts []string
@@ -301,8 +350,28 @@ func renderKnowledge(k store.Knowledge) string {
 	if source == "" {
 		source = k.Origin
 	}
-	label := fmt.Sprintf("type:%s|scope:%s|status:%s|confidence:%s|activation:%s|source:%s", k.Type, scopeLabel(k.Scope), k.Status, k.Confidence, activationLabel, source)
-	return fmt.Sprintf("- [%s] %s — %s\n", label, k.Title, oneLine(k.Body))
+	return fmt.Sprintf("type:%s|scope:%s|status:%s|confidence:%s|activation:%s|source:%s",
+		k.Type, scopeLabel(k.Scope), k.Status, k.Confidence, activationLabel, source)
+}
+
+func renderKnowledge(k store.Knowledge) string {
+	body := oneLine(k.Body)
+	if len([]rune(body)) > snippetChars {
+		body = string([]rune(body)[:snippetChars]) + "…"
+	}
+	return fmt.Sprintf("- #%d [%s] %s — %s\n", k.ID, knowledgeLabel(k), k.Title, body)
+}
+
+// renderKnowledgeFull answers the other question: not "which entries are there"
+// but "what does this one say". The body goes out untouched — the newlines,
+// bullets and fenced blocks it was written with are the entry, not decoration
+// around it.
+func renderKnowledgeFull(k store.Knowledge) string {
+	header := fmt.Sprintf("# #%d %s\n[%s]", k.ID, k.Title, knowledgeLabel(k))
+	if k.ObservedAt != "" {
+		header += " observed:" + k.ObservedAt
+	}
+	return header + "\n\n" + k.Body + "\n"
 }
 
 func renderSession(se store.Session) string {

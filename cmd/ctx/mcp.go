@@ -33,7 +33,7 @@ func currentGitContext(machine string) harnessContext {
 	}
 	g := collector.ResolveGitContext(cwd)
 	return harnessContext{
-		axes:       scope.Axes{Project: g.Project, Branch: g.Branch, Machine: machine},
+		axes:       scope.Axes{Project: g.Project, Branch: g.Branch, Lineage: g.Lineage, Machine: machine},
 		activation: activation.Context{RepoPath: g.RepoPath},
 	}
 }

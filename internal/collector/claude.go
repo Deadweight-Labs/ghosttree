@@ -39,7 +39,60 @@ func ParseClaudeLine(line []byte) ParsedLine {
 	if toolText := claudeToolResultText(l.Message.Content); toolText != "" {
 		return ParsedLine{Role: "tool", Text: toolText}
 	}
-	return ParsedLine{Role: l.Message.Role, Text: contentText(l.Message.Content, "text")}
+	text := contentText(l.Message.Content, "text")
+	if calls := claudeToolCallText(l.Message.Content); calls != "" {
+		if text != "" {
+			text += "\n"
+		}
+		text += calls
+	}
+	return ParsedLine{Role: l.Message.Role, Text: text}
+}
+
+// maxToolCallArgs caps how much of a call's arguments is archived. The name is
+// the signal — it says which tool was reached for — while the arguments are
+// context, and a Write call carries a whole file whose content is already in
+// the repository.
+const maxToolCallArgs = 600
+
+// claudeToolCallText renders the tool_use blocks of one assistant turn.
+//
+// Without this the archive records what a tool returned but not which tool was
+// called, so no query can answer how often a tool was used. Measuring
+// ghosttree's own adoption had to fall back on grepping transcripts for the
+// string "context_search", which counts a session that discusses the tool the
+// same as one that calls it.
+func claudeToolCallText(raw json.RawMessage) string {
+	var blocks []struct {
+		Type  string          `json:"type"`
+		Name  string          `json:"name"`
+		Input json.RawMessage `json:"input"`
+	}
+	if json.Unmarshal(raw, &blocks) != nil {
+		return ""
+	}
+	var parts []string
+	for _, b := range blocks {
+		if b.Type != "tool_use" || b.Name == "" {
+			continue
+		}
+		line := "[tool call: " + b.Name + "]"
+		if args := strings.TrimSpace(string(b.Input)); args != "" && args != "{}" && args != "null" {
+			line += " " + truncateRunes(args, maxToolCallArgs)
+		}
+		parts = append(parts, line)
+	}
+	return strings.Join(parts, "\n")
+}
+
+// truncateRunes cuts on a rune boundary. Arguments are frequently German and a
+// cut mid-rune would put mojibake into the search index.
+func truncateRunes(s string, max int) string {
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max]) + "…"
 }
 
 func claudeToolResultText(raw json.RawMessage) string {

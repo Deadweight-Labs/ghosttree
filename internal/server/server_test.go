@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -167,10 +168,11 @@ func TestBootstrapExcludesStagedUnlessPreviewed(t *testing.T) {
 }
 
 // The budget must cut the uncertain material first, not the proven material.
+// Both are pitfalls because only pushed types reach the budget at all.
 func TestBootstrapBudgetDropsStagedFirst(t *testing.T) {
 	entries := []store.Knowledge{
-		{Type: "note", Title: "trusted one", Body: strings.Repeat("x", 150), Confidence: "trusted"},
-		{Type: "note", Title: "staged one", Body: strings.Repeat("y", 150), Confidence: "staged"},
+		{Type: "pitfall", Title: "trusted one", Body: strings.Repeat("x", 150), Confidence: "trusted"},
+		{Type: "pitfall", Title: "staged one", Body: strings.Repeat("y", 150), Confidence: "staged"},
 	}
 	out := RenderBootstrap(entries, 260)
 	if !strings.Contains(out, "trusted one") {
@@ -268,13 +270,21 @@ func TestKnowledgeAutoScopeAndBootstrap(t *testing.T) {
 	}
 	var saved store.Knowledge
 	json.NewDecoder(resp.Body).Decode(&saved)
-	if saved.Scope.Project != "github.com/x/y" || saved.Scope.Branch != "main" || saved.Scope.Machine != "" {
+	// The branch of the writing session is deliberately not carried over: a
+	// pitfall found on main is not a property of main.
+	if saved.Scope.Project != "github.com/x/y" || saved.Scope.Branch != "" || saved.Scope.Machine != "" {
 		t.Errorf("auto scope wrong: %+v", saved.Scope)
 	}
 	resp = req(t, "GET", srv.URL+"/api/context/bootstrap?project=github.com/x/y&branch=main&machine=workstation-a", tok, nil)
 	b, _ := io.ReadAll(resp.Body)
 	if !strings.Contains(string(b), "sequence ids collide") {
 		t.Errorf("bootstrap missing entry: %s", b)
+	}
+	// And it reaches a different branch, which is the point of the change.
+	resp = req(t, "GET", srv.URL+"/api/context/bootstrap?project=github.com/x/y&branch=feat/other&machine=workstation-a", tok, nil)
+	b, _ = io.ReadAll(resp.Body)
+	if !strings.Contains(string(b), "sequence ids collide") {
+		t.Errorf("entry did not survive a branch switch: %s", b)
 	}
 }
 
@@ -333,5 +343,117 @@ func TestPatchAndListSessions(t *testing.T) {
 	json.NewDecoder(resp.Body).Decode(&chunks)
 	if len(chunks) != 0 {
 		t.Errorf("chunks = %+v", chunks)
+	}
+}
+
+// Machine- and global-scoped knowledge is bounded by construction: there is one
+// machine and one world, and neither grows when a repository is added. Project
+// knowledge is unbounded. Letting the unbounded set crowd out the bounded one
+// is how releasing 136 distilled items removed the two machine notes that were
+// the only entries in the archive with a measured effect.
+func TestBootstrapReservesRoomForBroadScope(t *testing.T) {
+	var entries []store.Knowledge
+	for i := 0; i < 40; i++ {
+		entries = append(entries, store.Knowledge{
+			Type: "pitfall", Title: fmt.Sprintf("project note %d", i), Body: strings.Repeat("p", 120),
+			Scope: scope.Axes{Project: "github.com/x/y"}, Confidence: "trusted",
+		})
+	}
+	// Same type as the project entries and last in rank order, so only scope
+	// can save it.
+	entries = append(entries, store.Knowledge{
+		Type: "pitfall", Title: "machine wide truth", Body: strings.Repeat("m", 120),
+		Scope: scope.Axes{Machine: "workstation-a"}, Confidence: "trusted",
+	})
+	out := RenderBootstrap(entries, 1200)
+	if !strings.Contains(out, "machine wide truth") {
+		t.Errorf("machine-scoped entry was crowded out by project knowledge:\n%s", out)
+	}
+	if !strings.Contains(out, "truncated") {
+		t.Fatalf("test needs a budget that actually truncates:\n%s", out)
+	}
+}
+
+// A pitfall stops a mistake that is about to happen; a decision explains one
+// already made. When the budget cuts, it must cut the explanation.
+func TestBootstrapPrefersPitfallsOverDecisions(t *testing.T) {
+	var entries []store.Knowledge
+	for i := 0; i < 20; i++ {
+		entries = append(entries, store.Knowledge{
+			Type: "decision", Title: fmt.Sprintf("decision %d", i), Body: strings.Repeat("d", 120),
+			Confidence: "trusted",
+		})
+	}
+	entries = append(entries, store.Knowledge{
+		Type: "pitfall", Title: "the trap", Body: strings.Repeat("t", 120), Confidence: "trusted",
+	})
+	out := RenderBootstrap(entries, 900)
+	if !strings.Contains(out, "the trap") {
+		t.Errorf("pitfall must outrank decisions under a tight budget:\n%s", out)
+	}
+}
+
+// The bootstrap is pushed into every session in every project, so it may only
+// carry what changes behaviour before anyone thinks to ask. A pitfall qualifies:
+// nobody searches for a mistake they do not know they are about to make. An
+// inventory of the local Ollama models does not — it is reference material, and
+// you know when you need it. Measured on 2026-08-24: that note had been
+// delivered 62 times and matched a search zero times.
+func TestBootstrapPushesPitfallsAndIndexesTheRest(t *testing.T) {
+	entries := []store.Knowledge{
+		{Type: "instruction", Title: "german docs", Body: "b", Confidence: "trusted"},
+		{Type: "pitfall", Title: "dead binary in PATH", Body: "b", Confidence: "trusted"},
+		{Type: "note", Title: "ollama inventory", Body: "b", Confidence: "trusted"},
+		{Type: "decision", Title: "sqlite over postgres", Body: "b", Confidence: "trusted"},
+		{Type: "decision", Title: "no migration framework", Body: "b", Confidence: "trusted"},
+		{Type: "plan", Title: "distiller piece 3", Body: "b", Confidence: "trusted"},
+	}
+	out := RenderBootstrap(entries, 4000)
+
+	for _, want := range []string{"german docs", "dead binary in PATH"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("%q must be pushed:\n%s", want, out)
+		}
+	}
+	for _, unwanted := range []string{"ollama inventory", "sqlite over postgres", "distiller piece 3"} {
+		if strings.Contains(out, unwanted) {
+			t.Errorf("%q is reference material and must not be pushed:\n%s", unwanted, out)
+		}
+	}
+	// Withholding without saying so would hide the knowledge instead of
+	// deferring it: the agent has to learn that there is something to search for.
+	if !strings.Contains(out, "2 decisions") || !strings.Contains(out, "1 note") || !strings.Contains(out, "1 plan") {
+		t.Errorf("held-back knowledge must be announced by kind and count:\n%s", out)
+	}
+	if !strings.Contains(out, "context_search") {
+		t.Errorf("the index must name the way to reach it:\n%s", out)
+	}
+}
+
+// Nothing held back means nothing to announce.
+func TestBootstrapOmitsTheIndexWhenEverythingWasPushed(t *testing.T) {
+	out := RenderBootstrap([]store.Knowledge{
+		{Type: "pitfall", Title: "only a pitfall", Body: "b", Confidence: "trusted"},
+	}, 4000)
+	if strings.Contains(out, "context_search for") {
+		t.Errorf("empty index must not be printed:\n%s", out)
+	}
+}
+
+// Broad and project knowledge are written in two passes so the bounded set gets
+// its reserve, but they are one list to the reader. A type heading per pass made
+// the same heading appear twice.
+func TestBootstrapWritesEachTypeHeadingOnce(t *testing.T) {
+	out := RenderBootstrap([]store.Knowledge{
+		{Type: "pitfall", Title: "machine one", Body: "b", Scope: scope.Axes{Machine: "workstation-a"}, Confidence: "trusted"},
+		{Type: "pitfall", Title: "project one", Body: "b", Scope: scope.Axes{Project: "github.com/x/y"}, Confidence: "trusted"},
+	}, 4000)
+	if n := strings.Count(out, "### pitfall"); n != 1 {
+		t.Errorf("heading appears %d times, want 1:\n%s", n, out)
+	}
+	for _, want := range []string{"machine one", "project one"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("%q missing:\n%s", want, out)
+		}
 	}
 }

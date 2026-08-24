@@ -90,12 +90,16 @@ func (s *Store) ListSessions(filter scope.Axes, limit int) ([]Session, error) {
 // Sessions sitting in an open batch are held back. Their result is up to 24
 // hours away and no distillation row exists yet, so without this an hourly
 // timer would resubmit — and pay for — the same transcript all day.
-func (s *Store) SessionsPendingDistillation(filter scope.Axes, idleBefore string, limit int) ([]Session, error) {
+// promptVersion scopes the queue to one generation of one mode. Without it a
+// session distilled for knowledge counts as done for wishes too — two modes
+// read the same transcripts for different things, and the first to run would
+// take the whole archive off the second one's queue.
+func (s *Store) SessionsPendingDistillation(filter scope.Axes, idleBefore, promptVersion string, limit int) ([]Session, error) {
 	if limit <= 0 {
 		limit = 50
 	}
 	where, args := filter.FilterWhere()
-	args = append(args, idleBefore, limit)
+	args = append(args, idleBefore, promptVersion, promptVersion, limit)
 	// project != '' belongs in SQL, not in the caller's loop. Findings from a
 	// session that ran outside a repository have nowhere to be filed, and
 	// discarding them after the LIMIT shrinks the window unpredictably: the
@@ -103,10 +107,12 @@ func (s *Store) SessionsPendingDistillation(filter scope.Axes, idleBefore string
 	// candidates skipped 98 and submitted 2.
 	rows, err := s.db.Query(`SELECT `+sessionCols+` FROM sessions
 		WHERE `+where+` AND last_seen_at < ? AND project != ''
-		  AND NOT EXISTS (SELECT 1 FROM session_distillations d WHERE d.session_id = sessions.id)
+		  AND NOT EXISTS (SELECT 1 FROM session_distillations d
+		                  WHERE d.session_id = sessions.id AND d.prompt_version = ?)
 		  AND NOT EXISTS (SELECT 1 FROM distill_batch_items i
 		                  JOIN distill_batches b ON b.id = i.batch_id
-		                  WHERE i.session_id = sessions.id AND b.state = 'open')
+		                  WHERE i.session_id = sessions.id AND b.state = 'open'
+		                    AND i.prompt_version = ?)
 		ORDER BY last_seen_at ASC, id ASC LIMIT ?`, args...)
 	if err != nil {
 		return nil, err

@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"strconv"
 	"strings"
 
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
@@ -156,6 +157,10 @@ func (s *Store) RequestByID(id int64) (requestdomain.Detail, error) {
 	return d, nil
 }
 
+// snippetChars bounds the description a search hit carries. Enough to tell two
+// requests apart, short enough that a page of them stays readable.
+const snippetChars = 200
+
 func (s *Store) SearchRequests(filter requestdomain.SearchFilter) (requestdomain.SearchPage, error) {
 	limit := filter.Limit
 	if limit <= 0 {
@@ -164,13 +169,21 @@ func (s *Store) SearchRequests(filter requestdomain.SearchFilter) (requestdomain
 	if limit > 25 {
 		limit = 25
 	}
-	query := `SELECT r.id,r.type,r.title,r.description,r.state,r.priority,r.project,r.branch,r.machine,r.origin,r.person,r.session_ref,r.created_at,r.updated_at,
+	// substr, not the full column: a search page is a list, and a list shows a
+	// snippet. Sending every description in full made twenty-four requests
+	// exceed what a tool result may return, and it is no better for a card or a
+	// terminal row. GetRequest answers with the whole text.
+	query := `SELECT r.id,r.type,r.title,substr(r.description,1,` + strconv.Itoa(snippetChars) + `),r.state,r.priority,r.project,r.branch,r.machine,r.origin,r.person,r.session_ref,r.created_at,r.updated_at,
 		(SELECT COUNT(*) FROM request_criteria c WHERE c.request_id=r.id AND c.state='open'),
 		COALESCE((SELECT w.summary FROM request_work w WHERE w.request_id=r.id AND w.summary!='' ORDER BY w.id DESC LIMIT 1),'')
 		FROM requests r`
 	var where []string
 	var args []any
-	if strings.TrimSpace(filter.Query) != "" {
+	// A query of nothing but ordinary words asks to see the backlog, not to
+	// find one entry in it. Matching it would answer "was ist noch zu tun" with
+	// whichever request happens to contain all five words — measured on
+	// 2026-08-24: one of twenty-four, effectively at random.
+	if !isListingQuery(filter.Query) {
 		query += ` JOIN search_documents d ON d.kind='request' AND d.domain_id=r.id JOIN search_documents_fts f ON f.rowid=d.id`
 		where = append(where, `search_documents_fts MATCH ?`)
 		args = append(args, ftsQuery(filter.Query))

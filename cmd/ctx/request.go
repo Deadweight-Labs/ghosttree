@@ -215,9 +215,37 @@ func writeRequestCLIResult(stdout io.Writer, jsonMode bool, data any, warnings [
 		_ = json.NewEncoder(stdout).Encode(requestEnvelope{OK: true, Data: data, Warnings: warnings})
 		return 0
 	}
+	// A list is read, not parsed. Printing the page as indented JSON put 68,617
+	// characters on the terminal for twenty-four requests, which is the same
+	// failure the tool result had and for the same reason: a listing carried
+	// every description in full.
+	if page, ok := data.(requestdomain.SearchPage); ok {
+		writeRequestTable(stdout, page)
+		return 0
+	}
 	b, _ := json.MarshalIndent(data, "", "  ")
 	fmt.Fprintln(stdout, string(b))
 	return 0
+}
+
+func writeRequestTable(stdout io.Writer, page requestdomain.SearchPage) {
+	if len(page.Results) == 0 {
+		fmt.Fprintln(stdout, "no matching requests")
+		return
+	}
+	for _, hit := range page.Results {
+		priority := hit.Request.Priority
+		if priority == "" {
+			priority = "—"
+		}
+		fmt.Fprintf(stdout, "%-8s %-14s %-8s %-8s %2d AC  %s\n",
+			hit.Request.HumanID(), hit.Request.Type, priority, hit.Request.State,
+			hit.OpenCriteria, hit.Request.Title)
+	}
+	fmt.Fprintf(stdout, "\n%d requests — 'ctx request show <id>' for one of them\n", len(page.Results))
+	if page.NextCursor != "" {
+		fmt.Fprintf(stdout, "more with --cursor %s\n", page.NextCursor)
+	}
 }
 
 func writeRequestCLIError(stdout io.Writer, jsonMode bool, code int, err error) int {

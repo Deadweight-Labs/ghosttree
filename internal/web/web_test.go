@@ -112,7 +112,9 @@ func TestOperatorSectionsUseStoredData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.InsertKnowledge(store.Knowledge{Type: "note", Title: "SQLite runtime", Body: "Visible agent context", Scope: scope.Axes{Project: "p"}, Confidence: "trusted"}); err != nil {
+	// A pitfall, because the agent context view renders what is actually
+	// delivered and only pushed types appear there.
+	if _, err := st.InsertKnowledge(store.Knowledge{Type: "pitfall", Title: "SQLite runtime", Body: "Visible agent context", Scope: scope.Axes{Project: "p"}, Confidence: "trusted"}); err != nil {
 		t.Fatal(err)
 	}
 	sessionID, err := st.UpsertSession(store.Session{Harness: "codex", ExternalID: "run-1", Scope: scope.Axes{Project: "p"}})

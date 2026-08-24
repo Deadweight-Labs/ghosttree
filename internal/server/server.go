@@ -40,9 +40,12 @@ func New(st *store.Store) http.Handler {
 	mux.HandleFunc("POST /api/requests/{id}/complete", a.completeRequest)
 	mux.HandleFunc("POST /api/requests/{id}/drop", a.dropRequest)
 	mux.HandleFunc("POST /api/requests/{id}/relations", a.addRequestRelation)
+	mux.HandleFunc("PATCH /api/requests/{id}", a.correctRequest)
+	mux.HandleFunc("DELETE /api/request-relations/{id}", a.removeRequestRelation)
 	mux.HandleFunc("POST /api/knowledge", a.createKnowledge)
 	mux.HandleFunc("GET /api/knowledge", a.listKnowledge)
 	mux.HandleFunc("GET /api/knowledge/pending", a.pendingKnowledge)
+	mux.HandleFunc("GET /api/knowledge/{id}", a.getKnowledge)
 	mux.HandleFunc("PATCH /api/knowledge/{id}", a.patchKnowledge)
 	mux.HandleFunc("POST /api/migrated-knowledge", a.insertMigratedKnowledge)
 	mux.HandleFunc("GET /api/migrations", a.completedMigrationArtifacts)
@@ -50,6 +53,7 @@ func New(st *store.Store) http.Handler {
 	mux.HandleFunc("PUT /api/migrations/{id}/complete", a.completeMigration)
 	mux.HandleFunc("GET /api/search", a.search)
 	mux.HandleFunc("GET /api/context/bootstrap", a.bootstrap)
+	mux.HandleFunc("GET /api/context/relevant", a.relevant)
 	return a.auth(mux)
 }
 
@@ -82,6 +86,7 @@ func axesFromQuery(r *http.Request) scope.Axes {
 		Project: q.Get("project"),
 		Branch:  q.Get("branch"),
 		Machine: q.Get("machine"),
+		Lineage: q["lineage"],
 	})
 }
 

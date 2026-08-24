@@ -57,11 +57,11 @@ func TestPendingDistillationReturnsOldestUnprocessedFirst(t *testing.T) {
 	}
 	// The newest session is already distilled, exactly the state a newest-first
 	// selection gets stuck in.
-	if _, err := s.db.Exec(`INSERT INTO session_distillations(session_id,digest,item_count,created_at) VALUES(?,?,?,?)`,
-		ids["new"], "d1", 0, "2026-03-02T00:00:00Z"); err != nil {
+	if _, err := s.db.Exec(`INSERT INTO session_distillations(session_id,digest,prompt_version,item_count,created_at) VALUES(?,?,?,?,?)`,
+		ids["new"], "d1", "v1", 0, "2026-03-02T00:00:00Z"); err != nil {
 		t.Fatal(err)
 	}
-	got, err := s.SessionsPendingDistillation(scope.Axes{}, "2026-06-01T00:00:00Z", 10)
+	got, err := s.SessionsPendingDistillation(scope.Axes{}, "2026-06-01T00:00:00Z", "v1", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestPendingDistillationExcludesSessionsNewerThanCutoff(t *testing.T) {
 	if _, err := s.db.Exec(`UPDATE sessions SET last_seen_at=? WHERE id=?`, "2026-08-24T09:00:00Z", id); err != nil {
 		t.Fatal(err)
 	}
-	got, err := s.SessionsPendingDistillation(scope.Axes{}, "2026-08-24T08:00:00Z", 10)
+	got, err := s.SessionsPendingDistillation(scope.Axes{}, "2026-08-24T08:00:00Z", "v1", 10)
 	if err != nil {
 		t.Fatal(err)
 	}

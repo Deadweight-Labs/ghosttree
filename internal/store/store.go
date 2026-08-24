@@ -95,6 +95,11 @@ CREATE TABLE IF NOT EXISTS knowledge(
   superseded_by INTEGER NOT NULL DEFAULT 0,
   person TEXT NOT NULL DEFAULT '', harness TEXT NOT NULL DEFAULT '', session_ref TEXT NOT NULL DEFAULT '',
   last_used_at TEXT NOT NULL DEFAULT '', hit_count INTEGER NOT NULL DEFAULT 0,
+  search_hits INTEGER NOT NULL DEFAULT 0,
+  -- When the entry was seen, as opposed to when it was written down. The
+  -- distiller works a backlog: a finding from a June session is filed today,
+  -- and created_at alone makes every one of them look like today's news.
+  observed_at TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS instruction_activation_path(
   knowledge_id INTEGER NOT NULL REFERENCES knowledge(id) ON DELETE CASCADE,
@@ -111,6 +116,13 @@ CREATE TRIGGER IF NOT EXISTS knowledge_au AFTER UPDATE ON knowledge BEGIN
   INSERT INTO knowledge_fts(knowledge_fts, rowid, title, body) VALUES('delete', old.id, old.title, old.body);
   INSERT INTO knowledge_fts(rowid, title, body) VALUES (new.id, new.title, new.body);
 END;
+CREATE TABLE IF NOT EXISTS request_sightings(
+  id INTEGER PRIMARY KEY,
+  request_id INTEGER NOT NULL REFERENCES requests(id) ON DELETE CASCADE,
+  session_id INTEGER NOT NULL REFERENCES sessions(id),
+  chunk_seq INTEGER NOT NULL,
+  quote TEXT NOT NULL DEFAULT '',
+  UNIQUE(request_id, session_id, chunk_seq));
 CREATE TABLE IF NOT EXISTS knowledge_evidence(
   id INTEGER PRIMARY KEY,
   knowledge_id INTEGER NOT NULL REFERENCES knowledge(id),

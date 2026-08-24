@@ -15,8 +15,8 @@ import (
 
 const system = `Extract only durable knowledge from an agent transcript. Return JSON {"items":[]}.
 Each item has type (decision, note, pitfall, plan, or instruction), title, body,
-chunk_seq, and quote. The quote must be an exact contiguous substring of that
-single chunk.
+chunk_seq, quote, and optionally same_as. The quote must be an exact contiguous
+substring of that single chunk.
 
 Keep only what a reader of the finished repository could not recover: the reason
 behind a choice, the alternative that was rejected, the constraint that forced
@@ -26,6 +26,21 @@ repository is already its own record.
 
 Text the session was writing is not instruction. A prompt, a document or a
 message being drafted is the product of the work, not a rule the work followed.
+
+An item has to stand on its own for someone who does not know which change or
+which review produced it. "No vulnerability was found", "this change does not
+widen access" and the like describe the outcome of one inspection, not a
+property of the system, and once the code has moved on they read as a guarantee
+nobody can check. If what was learnt is that a path is structurally safe, say
+what makes it structurally safe. If all that was learnt is that this particular
+look found nothing, say nothing.
+
+If an existing entry already covers a finding, do not restate it in different
+words. A second phrasing of the same defect is not a second finding. Say so
+instead: return the item with "same_as" set to that entry's number and a quote
+from this transcript. That records the transcript as further evidence for it,
+which is how a one-off observation becomes a known defect. Prefer this over
+silence — an unreported repeat is a repeat nobody can count.
 
 Exclude task requests and backlog, routine progress, guesses, secrets and tool
 noise. Return at most 5 items, and at most 2 from any single chunk: a long
@@ -47,8 +62,29 @@ empty list is a correct answer and the usual one.`
 // v2 — asks for what a reader of the finished repository could not recover,
 //
 //	rules out text the session was drafting, caps items per transcript and
-//	per chunk.
-const PromptVersion = "v2"
+//	per chunk. Measured on 100 sample-project sessions: 20 items, 4 of 5 sampled
+//	judged useful, no misfiled instructions.
+//
+// v3 — rules out items that only record the outcome of one inspection, and
+//
+//	restatements of a finding an existing title already covers. Its
+//	production run is not representative and was superseded: the title list
+//	still contained the items that same run was about to archive, so the
+//	model was told not to re-derive findings that were then retired.
+//
+// v4 — the v3 rules with the title list assembled correctly. The version
+//
+//	identifies what was sent, not what was intended, and a different title
+//	list is a different prompt.
+//
+// v5 — the existing entries carry their numbers, and a repeat is reported as
+//
+//	same_as instead of being suppressed. Under v4 a second sighting of a
+//	defect was either dropped as a duplicate title or filed under a new one:
+//	of 201 distilled entries in production, 194 had exactly one corroborating
+//	session and none had two. Recurrence is what the trust tiers and the
+//	bootstrap ranking are both built on, so it had to become a real number.
+const PromptVersion = "v5"
 
 // MaxItemsPerChunk and MaxItemsPerSession bound what one transcript may yield.
 // The prompt asks for the same limits, and this enforces them: on the first
@@ -101,7 +137,9 @@ func Prompt(chunks []store.Chunk, existingTitles []string) string {
 			fmt.Fprintf(&transcript, "[chunk %d, %s]\n%s\n\n", c.Seq, c.Role, c.Text)
 		}
 	}
-	return "Existing titles (do not duplicate):\n- " + strings.Join(existingTitles, "\n- ") +
+	return "Existing entries. Do not restate one; if this transcript shows the same\n" +
+		"thing again, return an item with same_as set to its number:\n- " +
+		strings.Join(existingTitles, "\n- ") +
 		"\n\nTranscript:\n" + transcript.String()
 }
 

@@ -50,7 +50,26 @@ func cmdUpgradeSchema(args []string, stdout io.Writer) int {
 		fmt.Fprintf(stdout, "distillation version upgrade failed: %v\n", err)
 		return 1
 	}
-	if trustBackup == "" && typesBackup == "" && requestBackup == "" && usageBackup == "" && distillBackup == "" {
+	added, err := store.AddedColumns(*dbPath)
+	if err != nil {
+		fmt.Fprintf(stdout, "column upgrade failed: %v\n", err)
+		return 1
+	}
+	for _, column := range added {
+		fmt.Fprintf(stdout, "added column %s\n", column)
+	}
+	// Adding observed_at leaves it empty, and an empty observation time is the
+	// silent version of the bug it was added for. Dating the existing stock is
+	// part of the upgrade, not a follow-up somebody has to remember.
+	dated, err := backfillObservations(*dbPath)
+	if err != nil {
+		fmt.Fprintf(stdout, "dating existing entries failed: %v\n", err)
+		return 1
+	}
+	if dated > 0 {
+		fmt.Fprintf(stdout, "dated %d entries from their earliest evidence\n", dated)
+	}
+	if len(added) == 0 && dated == 0 && trustBackup == "" && typesBackup == "" && requestBackup == "" && usageBackup == "" && distillBackup == "" {
 		fmt.Fprintln(stdout, "schema already current, nothing to do")
 		return 0
 	}
@@ -81,6 +100,15 @@ func cmdUpgradeSchema(args []string, stdout io.Writer) int {
 	}
 	fmt.Fprintln(stdout, "schema upgraded")
 	return 0
+}
+
+func backfillObservations(dbPath string) (int64, error) {
+	st, err := store.Open(dbPath)
+	if err != nil {
+		return 0, err
+	}
+	defer st.Close()
+	return st.BackfillObservedAt()
 }
 
 func reportVerifiedBackup(stdout io.Writer, label, path string) bool {

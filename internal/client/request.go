@@ -86,6 +86,22 @@ func (c *Client) DropRequest(requestID int64, reason string) error {
 		map[string]string{"reason": reason}, nil)
 }
 
+// CorrectRequest changes what a request says and records why. The reason
+// travels with the change rather than beside it, so a correction cannot be made
+// silently.
+func (c *Client) CorrectRequest(requestID int64, patch map[string]string, reason string) error {
+	body := struct {
+		Patch  map[string]string `json:"patch"`
+		Reason string            `json:"reason"`
+	}{Patch: patch, Reason: reason}
+	return c.do("PATCH", "/api/requests/"+strconv.FormatInt(requestID, 10), nil, body, nil)
+}
+
+func (c *Client) RemoveRequestRelation(relationID int64, reason string) error {
+	return c.do("DELETE", "/api/request-relations/"+strconv.FormatInt(relationID, 10), nil,
+		map[string]string{"reason": reason}, nil)
+}
+
 func (c *Client) AddRequestRelation(requestID int64, relation requestdomain.Relation) (requestdomain.Relation, error) {
 	var out requestdomain.Relation
 	err := c.do("POST", "/api/requests/"+strconv.FormatInt(requestID, 10)+"/relations", nil, relation, &out)

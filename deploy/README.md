@@ -32,34 +32,65 @@ enabled last. The unit reads its provider configuration from
 `/etc/ghosttree/llm.json` and its key from a systemd credential, which keeps
 the secret out of both the unit file and the state directory:
 
+`api_key_file` is listed alongside the credential so the same configuration
+works when run by hand, where there is no `$CREDENTIALS_DIRECTORY`:
+
 ```bash
 sudo install -d -m755 /etc/ghosttree
 sudo tee /etc/ghosttree/llm.json >/dev/null <<'JSON'
-{"format":"openai","base_url":"https://llm.example.invalid/v1","model":"test-model","credential":"llm-key"}
+{"format":"openai","base_url":"https://llm.example.invalid/v1","model":"test-model",
+ "credential":"llm-key","api_key_file":"/etc/ghosttree/llm-key"}
 JSON
-sudo install -m600 /dev/stdin /etc/ghosttree/llm-key <<<'sk-...'
+sudo install -m640 -o root -g ghosttree /dev/stdin /etc/ghosttree/llm-key <<<'sk-...'
 ```
 
-The command has two halves because the batch endpoint answers up to 24 hours
-later, in a different process run. `--submit` sends what is pending and records
-the batch; `--collect` ingests whatever has finished. The unit calls both, and
-`--dry-run` prices a submission before it happens:
+### Running a command by hand
+
+Not with `sudo -u ghosttree`, and not with `setpriv` either. The service user is
+a DynamicUser: it exists for NSS only while the unit runs, `sudo` will not
+resolve it by number, and the state directory lives under `/var/lib/private`,
+which is root-only — the path only becomes reachable through the bind mount
+systemd sets up for the unit. Rebuild that identity transiently instead:
 
 ```bash
-sudo systemctl stop ghosttree     # never write the database while it runs
-sudo -u '#63386' /usr/local/bin/ctx distill-sessions \
-     --db /var/lib/private/ghosttree/ghosttree.db \
-     --project github.com/<owner>/<repo> --limit 50 --submit --dry-run
+sudo systemd-run --pipe --wait --collect --quiet \
+  -p DynamicUser=yes -p User=ghosttree -p StateDirectory=ghosttree \
+  -p LoadCredential=llm-key:/etc/ghosttree/llm-key \
+  -p Environment=GHOSTTREE_LLM_CONFIG=/etc/ghosttree/llm.json \
+  /usr/local/bin/ctx <command> --db /var/lib/ghosttree/ghosttree.db ...
 ```
 
-Enable the timer only after one measured run: generated items are quarantined
-until review, but the bill is not.
+`-p User=ghosttree` alongside `DynamicUser=yes` is what matters: systemd derives
+the uid from the user name, not from the unit name, so the transient unit gets
+the same uid as `ghosttree.service`. Without it the uid differs and starting the
+transient unit rewrites the state directory's ownership, which breaks the
+server. Reading needs none of this:
+`sudo sqlite3 -readonly "file:/var/lib/private/ghosttree/ghosttree.db?immutable=1"`.
+
+### The two halves
+
+The batch endpoint answers up to 24 hours later, in a different process run.
+`--submit` sends what is pending and records the batch; `--collect` ingests
+whatever has finished. The unit calls both, collect first. `--dry-run` prices a
+submission before it happens, and `--project` confines it to one repository.
+
+`ctx cost` reports what has been billed and forecasts the rest. It covers the
+batch path only — the synchronous path and `ctx migrate` never see a token
+count.
+
+Improving the extraction prompt means bumping `sessiondistill.PromptVersion`.
+That alone changes nothing about work already done; `--reprocess-version <old>`
+is the deliberate act that puts those sessions back in the queue, and it refuses
+to release the current version.
 
 ```bash
 sudo cp deploy/ghosttree-distill.{service,timer} /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now ghosttree-distill.timer
 ```
+
+Generated items are quarantined until review, but the bill is not: measure one
+project before letting the timer loose on the whole archive.
 
 To add a person later, stop the service, run `person add` against
 `/var/lib/private/ghosttree/ghosttree.db`, then start it again.

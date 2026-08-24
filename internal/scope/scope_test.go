@@ -21,7 +21,7 @@ func TestNormalizeRemote(t *testing.T) {
 func TestCanonicalAxesNormalizesEveryClientBoundaryValue(t *testing.T) {
 	got := CanonicalAxes(Axes{Project: " git@GitHub.com:Deadweight-Labs/Ghosttree.git ", Branch: " main ", Machine: "LAPTOP"})
 	want := Axes{Project: "github.com/deadweight-labs/ghosttree", Branch: "main", Machine: "laptop"}
-	if got != want {
+	if !got.Same(want) {
 		t.Fatalf("axes=%+v want=%+v", got, want)
 	}
 }
@@ -57,16 +57,23 @@ func TestFilterWhere(t *testing.T) {
 	}
 }
 
-func TestDefaultAxes(t *testing.T) {
+// Until 2026-08-24 pitfalls, notes and plans defaulted to project+branch, and
+// only decisions got the plain project. That was the wrong way round. Reads
+// match a branch exactly, so a pitfall learnt on one branch was invisible on
+// every other one and outlived the branch that named it: sixteen entries in
+// this repository, including "ctx mcp per Shell-Pipe testen schlägt fehl", were
+// stranded on v0 while the work had moved to main. A branch is a statement
+// about unfinished work, not a validity range for what was learnt.
+func TestDefaultAxesDoesNotBindToABranch(t *testing.T) {
 	ctx := Axes{Project: "p", Branch: "b", Machine: "m"}
-	if got := DefaultAxes("pitfall", ctx); got != (Axes{Project: "p", Branch: "b"}) {
-		t.Errorf("pitfall = %+v", got)
+	for _, entryType := range []string{"pitfall", "note", "plan", "decision", "instruction"} {
+		if got := DefaultAxes(entryType, ctx); !got.Same(Axes{Project: "p"}) {
+			t.Errorf("%s = %+v, want project scope only", entryType, got)
+		}
 	}
-	if got := DefaultAxes("decision", ctx); got != (Axes{Project: "p"}) {
-		t.Errorf("decision = %+v", got)
-	}
-	// No project context: falls back to machine scope for pitfalls (env findings).
-	if got := DefaultAxes("pitfall", Axes{Machine: "m"}); got != (Axes{Machine: "m"}) {
+	// No project context: everything an agent learns outside a repository is
+	// about the machine it is standing on.
+	if got := DefaultAxes("pitfall", Axes{Machine: "m"}); !got.Same(Axes{Machine: "m"}) {
 		t.Errorf("no-project pitfall = %+v", got)
 	}
 }

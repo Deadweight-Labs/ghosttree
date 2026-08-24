@@ -143,7 +143,7 @@ func (s *Store) InsertMigrated(in MigratedEntry) (MigratedResult, error) {
 		k.Status = "active"
 	}
 	ts := now()
-	res, err := tx.Exec(`INSERT INTO knowledge(type,title,body,project,branch,machine,confidence,status,origin,superseded_by,person,harness,session_ref,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, k.Type, k.Title, k.Body, k.Scope.Project, k.Scope.Branch, k.Scope.Machine, k.Confidence, k.Status, k.Origin, k.SupersededBy, k.Person, k.Harness, k.SessionRef, ts, ts)
+	res, err := tx.Exec(`INSERT INTO knowledge(type,title,body,project,branch,machine,confidence,status,origin,superseded_by,person,harness,session_ref,observed_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, k.Type, k.Title, k.Body, k.Scope.Project, k.Scope.Branch, k.Scope.Machine, k.Confidence, k.Status, k.Origin, k.SupersededBy, k.Person, k.Harness, k.SessionRef, ts, ts, ts)
 	if err != nil {
 		return MigratedResult{}, err
 	}

@@ -227,6 +227,52 @@ func (a *api) addRequestRelation(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, saved)
 }
 
+func (a *api) correctRequest(w http.ResponseWriter, r *http.Request) {
+	requestID, ok := pathID(r)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "bad request id")
+		return
+	}
+	var body struct {
+		Patch  map[string]string `json:"patch"`
+		Reason string            `json:"reason"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := a.st.UpdateRequest(requestID, body.Patch, personOf(r), body.Reason); err != nil {
+		writeRequestError(w, err)
+		return
+	}
+	detail, err := a.st.RequestByID(requestID)
+	if err != nil {
+		writeRequestError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
+func (a *api) removeRequestRelation(w http.ResponseWriter, r *http.Request) {
+	relationID, ok := pathID(r)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "bad relation id")
+		return
+	}
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := a.st.RemoveRequestRelation(relationID, personOf(r), body.Reason); err != nil {
+		writeRequestError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func writeRequestError(w http.ResponseWriter, err error) {
 	var rule *requestdomain.RuleError
 	if errors.As(err, &rule) {

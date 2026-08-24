@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
@@ -20,8 +21,70 @@ type RequestSearchInput struct {
 	ResponseFormat string `json:"response_format,omitempty" jsonschema:"concise or detailed; defaults to concise"`
 }
 
+// RequestSearchOutput is a list to choose from, not the backlog itself.
+//
+// It used to carry every hit in full. Twenty-four requests came to 64,462
+// characters and exceeded what a tool result may return, so the first thing a
+// fresh agent does — see what is open — failed outright. The descriptions are
+// long because they carry problem, evidence, trade-off and approach, which is
+// what makes them worth having; the fix is not to write less but to send the
+// list and let request_get answer for one entry. Same reasoning as REQ-83,
+// which fixed the mutation replies and left the search path alone.
 type RequestSearchOutput struct {
-	Page requestdomain.SearchPage `json:"page"`
+	Results    []RequestListItem `json:"results"`
+	NextCursor string            `json:"next_cursor,omitempty"`
+	// Truncated says the list was cut. A shortened answer that looks complete
+	// is worse than a short one.
+	Truncated bool `json:"truncated,omitempty"`
+}
+
+// RequestListItem carries what it takes to pick one and nothing else.
+type RequestListItem struct {
+	ID           int64  `json:"id"`
+	Type         string `json:"type"`
+	Title        string `json:"title"`
+	State        string `json:"state"`
+	Priority     string `json:"priority,omitempty"`
+	OpenCriteria int    `json:"open_criteria"`
+	// Handoff is the last thing somebody said when they stopped working on it.
+	// One line, because "where did this get to" is the question that decides
+	// whether to pick it up.
+	Handoff string `json:"handoff,omitempty"`
+}
+
+// maxListChars bounds the whole answer. It is enforced while building the list
+// rather than checked afterwards, because a check that fires after serialising
+// has already produced the thing it was meant to prevent.
+const maxListChars = 6000
+
+func listFromPage(page requestdomain.SearchPage) RequestSearchOutput {
+	out := RequestSearchOutput{Results: []RequestListItem{}, NextCursor: page.NextCursor}
+	size := 0
+	for _, hit := range page.Results {
+		item := RequestListItem{
+			ID: hit.Request.ID, Type: hit.Request.Type, Title: hit.Request.Title,
+			State: hit.Request.State, Priority: hit.Request.Priority,
+			OpenCriteria: hit.OpenCriteria, Handoff: firstLine(hit.LatestHandoff, 160),
+		}
+		size += len(item.Title) + len(item.Handoff) + 64
+		if size > maxListChars && len(out.Results) > 0 {
+			out.Truncated = true
+			break
+		}
+		out.Results = append(out.Results, item)
+	}
+	return out
+}
+
+// firstLine keeps a handoff to one readable line, cut on a rune boundary.
+func firstLine(s string, max int) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	if r := []rune(s); len(r) > max {
+		return string(r[:max]) + "…"
+	}
+	return s
 }
 
 type RequestGetInput struct {
@@ -99,16 +162,35 @@ type RequestFinishWorkInput struct {
 
 type RequestProgressInput struct {
 	RequestID      int64  `json:"request_id" jsonschema:"request being updated"`
-	Action         string `json:"action" jsonschema:"criterion_add, criterion_met, criterion_waive, complete, drop, or relation_add"`
+	Action         string `json:"action" jsonschema:"criterion_add, criterion_met, criterion_waive, complete, drop, relation_add, relation_remove, or correct"`
 	CriterionID    int64  `json:"criterion_id,omitempty" jsonschema:"criterion for met or waive"`
-	Description    string `json:"description,omitempty" jsonschema:"new criterion description"`
+	Description    string `json:"description,omitempty" jsonschema:"new criterion description for criterion_add; the replacement description for correct"`
 	EvidenceKind   string `json:"evidence_kind,omitempty" jsonschema:"commit, test, file, decision, session, or url"`
 	EvidenceRef    string `json:"evidence_ref,omitempty" jsonschema:"concrete evidence reference"`
-	Reason         string `json:"reason,omitempty" jsonschema:"reason for dropping a request"`
-	RelationKind   string `json:"relation_kind,omitempty" jsonschema:"parent, related, blocks, duplicates, supersedes, knowledge, or external"`
-	OtherRequestID int64  `json:"other_request_id,omitempty"`
+	Reason         string `json:"reason,omitempty" jsonschema:"why: required for drop, for correct, and for relation_remove"`
+	Title          string `json:"title,omitempty" jsonschema:"replacement title for correct"`
+	Type           string `json:"type,omitempty" jsonschema:"replacement type for correct: feature, change, bug, or investigation"`
+	Priority       string `json:"priority,omitempty" jsonschema:"replacement priority for correct"`
+	RelationID     int64  `json:"relation_id,omitempty" jsonschema:"relation to remove; request_get lists every relation with its id. Pass request_id alongside it — that is the request the edge hangs off"`
+	RelationKind   string `json:"relation_kind,omitempty" jsonschema:"parent, related, blocks, duplicates, supersedes, knowledge, or external. The edge is read subject first: request_id <kind> other_request_id. \"blocks\" therefore means request_id blocks other_request_id — the one named in request_id is the one that has to be finished first. Same for parent: request_id is the child, other_request_id is the parent."`
+	OtherRequestID int64  `json:"other_request_id,omitempty" jsonschema:"the object of the relation, read after the kind: request_id <kind> other_request_id"`
 	KnowledgeID    int64  `json:"knowledge_id,omitempty"`
 	ExternalRef    string `json:"external_ref,omitempty"`
+}
+
+// correctionPatch collects the replacement values a correct action carries.
+// Only the fields actually given are sent, so naming one does not blank the
+// others.
+func (in RequestProgressInput) correctionPatch() map[string]string {
+	patch := map[string]string{}
+	for field, value := range map[string]string{
+		"title": in.Title, "description": in.Description, "type": in.Type, "priority": in.Priority,
+	} {
+		if value != "" {
+			patch[field] = value
+		}
+	}
+	return patch
 }
 
 func requestResult(v any) *mcp.CallToolResult {
@@ -122,7 +204,7 @@ func (s *Server) handleRequestSearch(_ context.Context, _ *mcp.CallToolRequest, 
 		state = "open"
 	}
 	page, err := s.client.SearchRequests(requestdomain.SearchFilter{Scope: scope.Axes{Project: s.ctxAxes.Project}, Query: in.Query, State: state, Type: in.Type, Cursor: in.Cursor, Limit: in.Limit})
-	out := RequestSearchOutput{Page: page}
+	out := listFromPage(page)
 	return requestResult(out), out, err
 }
 
@@ -191,6 +273,9 @@ func (s *Server) handleRequestFinishWork(_ context.Context, _ *mcp.CallToolReque
 
 func (s *Server) handleRequestProgress(_ context.Context, _ *mcp.CallToolRequest, in RequestProgressInput) (*mcp.CallToolResult, RequestChangeOutput, error) {
 	evidence := requestdomain.Evidence{Kind: in.EvidenceKind, Ref: in.EvidenceRef}
+	if in.Action == "relation_remove" && in.RelationID == 0 {
+		return nil, RequestChangeOutput{}, fmt.Errorf("relation_remove needs relation_id; request_get lists each relation with its id")
+	}
 	var err error
 	switch in.Action {
 	case "criterion_add":
@@ -205,8 +290,12 @@ func (s *Server) handleRequestProgress(_ context.Context, _ *mcp.CallToolRequest
 		err = s.client.DropRequest(in.RequestID, in.Reason)
 	case "relation_add":
 		_, err = s.client.AddRequestRelation(in.RequestID, requestdomain.Relation{Kind: in.RelationKind, OtherRequestID: in.OtherRequestID, KnowledgeID: in.KnowledgeID, ExternalRef: in.ExternalRef})
+	case "relation_remove":
+		err = s.client.RemoveRequestRelation(in.RelationID, in.Reason)
+	case "correct":
+		err = s.client.CorrectRequest(in.RequestID, in.correctionPatch(), in.Reason)
 	default:
-		err = fmt.Errorf("unknown request progress action %q; use criterion_add, criterion_met, criterion_waive, complete, drop, or relation_add", in.Action)
+		err = fmt.Errorf("unknown request progress action %q; use criterion_add, criterion_met, criterion_waive, complete, drop, relation_add, relation_remove, or correct", in.Action)
 	}
 	if err != nil {
 		return nil, RequestChangeOutput{}, err

@@ -2,6 +2,7 @@ package sessiondistill
 
 import (
 	"context"
+	"strings"
 	"fmt"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/llm"
@@ -22,6 +23,26 @@ type SubmitOptions struct {
 	Budget Budget
 	Limit  int
 	DryRun bool
+	// Requests reads the person's messages for wishes instead of the whole
+	// transcript for knowledge. The two modes share everything except what they
+	// read, what they ask and where the answer lands.
+	Requests bool
+}
+
+// The custom id carries the mode. Collecting happens in a different process
+// from submitting, possibly days later, and the batch row would otherwise have
+// to say which apply path its results belong to — a schema change on a table
+// that exists in production, to encode something the id can carry for free.
+const (
+	knowledgePrefix = "session-"
+	requestPrefix   = "wish-"
+)
+
+func version(requests bool) string {
+	if requests {
+		return RequestPromptVersion
+	}
+	return PromptVersion
 }
 
 type SubmitReport struct {
@@ -67,7 +88,7 @@ func (r *CollectReport) note(format string, args ...any) {
 // in progress from work not yet started.
 func SubmitBatch(ctx context.Context, st *store.Store, client llm.BatchClient, opts SubmitOptions) (SubmitReport, error) {
 	var report SubmitReport
-	sessions, err := st.SessionsPendingDistillation(opts.Filter, opts.IdleBefore, opts.Limit)
+	sessions, err := st.SessionsPendingDistillation(opts.Filter, opts.IdleBefore, version(opts.Requests), opts.Limit)
 	if err != nil {
 		return report, err
 	}
@@ -80,6 +101,14 @@ func SubmitBatch(ctx context.Context, st *store.Store, client llm.BatchClient, o
 	}
 	report.SkippedWithoutProject = skipped
 
+	// The whole submission is known before any prompt is built, and it has to
+	// be: the titles a session is told not to repeat must exclude every item
+	// this same run will archive, which is every item evidenced by any session
+	// in the submission.
+	submitted := make([]int64, 0, len(sessions))
+	for _, session := range sessions {
+		submitted = append(submitted, session.ID)
+	}
 	titlesByProject := map[string][]string{}
 	reqs := []llm.BatchRequest{}
 	items := []store.DistillBatchItem{}
@@ -92,7 +121,7 @@ func SubmitBatch(ctx context.Context, st *store.Store, client llm.BatchClient, o
 			continue
 		}
 		digest := Digest(chunks)
-		exists, err := st.SessionDistillationExists(session.ID, digest, PromptVersion)
+		exists, err := st.SessionDistillationExists(session.ID, digest, version(opts.Requests))
 		if err != nil {
 			return report, err
 		}
@@ -101,29 +130,41 @@ func SubmitBatch(ctx context.Context, st *store.Store, client llm.BatchClient, o
 		}
 		titles, ok := titlesByProject[session.Scope.Project]
 		if !ok {
-			existing, err := st.KnowledgeForProject(session.Scope.Project)
+			if opts.Requests {
+				titles, err = st.RequestTitlesForPrompt(session.Scope.Project)
+			} else {
+				titles, err = st.KnowledgeTitlesForPrompt(session.Scope.Project, submitted)
+			}
 			if err != nil {
 				return report, err
 			}
-			for _, k := range existing {
-				titles = append(titles, k.Title)
-			}
 			titlesByProject[session.Scope.Project] = titles
 		}
-		sent, dropped := SelectWithinBudget(chunks, opts.Budget)
-		user := Prompt(sent, titles)
-		if dropped > 0 {
-			report.TrimmedSessions++
-			report.DroppedChunks += dropped
+		sysPrompt, user, customID := system, "", fmt.Sprintf("%s%d", knowledgePrefix, session.ID)
+		if opts.Requests {
+			said := UserChunks(chunks)
+			if len(said) == 0 {
+				continue
+			}
+			sent, _ := SelectWithinBudget(said, opts.Budget)
+			sysPrompt = requestSystem
+			user = RequestPrompt(sent, titles)
+			customID = fmt.Sprintf("%s%d", requestPrefix, session.ID)
+		} else {
+			sent, dropped := SelectWithinBudget(chunks, opts.Budget)
+			user = Prompt(sent, titles)
+			if dropped > 0 {
+				report.TrimmedSessions++
+				report.DroppedChunks += dropped
+			}
 		}
-		report.PromptChars += len(user) + len(system)
-		customID := fmt.Sprintf("session-%d", session.ID)
+		report.PromptChars += len(user) + len(sysPrompt)
 		reqs = append(reqs, llm.BatchRequest{
-			CustomID: customID, System: system, User: user,
+			CustomID: customID, System: sysPrompt, User: user,
 			MaxTokens: MaxOutputTokens, JSONMode: true,
 		})
 		items = append(items, store.DistillBatchItem{
-			CustomID: customID, SessionID: session.ID, Digest: digest, PromptVersion: PromptVersion})
+			CustomID: customID, SessionID: session.ID, Digest: digest, PromptVersion: version(opts.Requests)})
 	}
 	report.Sessions = len(reqs)
 	report.EstimatedTokens = EstimateTokens(report.PromptChars)
@@ -222,6 +263,28 @@ func ingestBatch(st *store.Store, batch store.DistillBatch, results map[string]l
 			report.Failed++
 			report.Truncated++
 			report.note("session %d: reply truncated at the output cap, left in the backlog", item.SessionID)
+			continue
+		}
+		if strings.HasPrefix(item.CustomID, requestPrefix) {
+			wishes, err := ParseRequests(result.Content, chunks)
+			if err != nil {
+				report.Failed++
+				report.note("session %d: %v", item.SessionID, err)
+				if _, err := st.ApplyRequestDistillation(item.SessionID, item.Digest, RequestPromptVersion, session.Scope, nil); err != nil {
+					return err
+				}
+				continue
+			}
+			n, err := st.ApplyRequestDistillation(item.SessionID, item.Digest, RequestPromptVersion, session.Scope, wishes)
+			if err != nil {
+				// A wish that cannot be traced back to the person is not a
+				// partial result to salvage. The session returns to the backlog.
+				report.Failed++
+				report.note("session %d: %v", item.SessionID, err)
+				continue
+			}
+			report.Sessions++
+			report.Items += n
 			continue
 		}
 		parsed, err := Parse(result.Content, chunks)

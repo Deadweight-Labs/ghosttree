@@ -1,6 +1,7 @@
 package store
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
@@ -189,5 +190,60 @@ func TestCostByVersionSurvivesRelease(t *testing.T) {
 	}
 	if len(rows) != 1 || rows[0].Group != "v1" || rows[0].PromptTokens != 5000 {
 		t.Fatalf("by version after release = %+v, want the v1 spend still attributed", rows)
+	}
+}
+
+// The prompt is given the project's existing titles and told not to repeat
+// them, and reprocessing archives the previous run's items for the same
+// session. Together they delete findings: the model correctly declines to
+// restate what exists, and then what exists is retired with nothing in its
+// place. Measured on sample-project, where a reprocess archived 67 items —
+// including a committed session token and three SSRF findings — and replaced
+// them with 38 that covered none of the same ground.
+func TestTitlesForPromptExcludeTheSessionsBeingReprocessed(t *testing.T) {
+	s := openTest(t)
+	reprocessed := billedSession(t, s, "a", "p", "2026-08-01T00:00:00Z")
+	untouched := billedSession(t, s, "b", "p", "2026-08-01T00:00:00Z")
+	if _, err := s.ApplySessionDistillation(reprocessed, "d1", "v1", scope.Axes{Project: "p"},
+		[]SessionDistilledItem{{Type: "pitfall", Title: "Its own earlier finding", Body: "b", ChunkSeq: 1, Quote: "some transcript"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ApplySessionDistillation(untouched, "d2", "v1", scope.Axes{Project: "p"},
+		[]SessionDistilledItem{{Type: "pitfall", Title: "Another session's finding", Body: "b", ChunkSeq: 1, Quote: "some transcript"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	titles, err := s.KnowledgeTitlesForPrompt("p", []int64{reprocessed})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Each line carries its id, so the model can name the entry a finding
+	// belongs to instead of only being told the title is taken.
+	if len(titles) != 1 || !strings.HasSuffix(titles[0], " Another session's finding") {
+		t.Fatalf("titles = %v, want only the finding this run will not archive", titles)
+	}
+	if !strings.HasPrefix(titles[0], "#") {
+		t.Errorf("title line %q carries no id for same_as", titles[0])
+	}
+}
+
+// An archived item is not in the tree any more, so it has no business telling
+// the model that a finding is already covered.
+func TestTitlesForPromptSkipArchivedItems(t *testing.T) {
+	s := openTest(t)
+	id := billedSession(t, s, "a", "p", "2026-08-01T00:00:00Z")
+	if _, err := s.ApplySessionDistillation(id, "d1", "v1", scope.Axes{Project: "p"},
+		[]SessionDistilledItem{{Type: "pitfall", Title: "Retired", Body: "b", ChunkSeq: 1, Quote: "some transcript"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`UPDATE knowledge SET status='archived' WHERE title='Retired'`); err != nil {
+		t.Fatal(err)
+	}
+	titles, err := s.KnowledgeTitlesForPrompt("p", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(titles) != 0 {
+		t.Fatalf("titles = %v, want archived items left out", titles)
 	}
 }

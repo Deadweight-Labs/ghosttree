@@ -136,7 +136,7 @@ func TestReleaseDistillationsIsScopedAndCounted(t *testing.T) {
 	if exists, _ := s.SessionDistillationExists(other, "digest", "v1"); !exists {
 		t.Fatal("release reached outside the project it was scoped to")
 	}
-	pending, err := s.SessionsPendingDistillation(scope.Axes{Project: "p"}, "2030-01-01T00:00:00Z", 10)
+	pending, err := s.SessionsPendingDistillation(scope.Axes{Project: "p"}, "2030-01-01T00:00:00Z", "v1", 10)
 	if err != nil {
 		t.Fatal(err)
 	}

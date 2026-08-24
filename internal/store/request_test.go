@@ -1,6 +1,7 @@
 package store
 
 import (
+	"strings"
 	"testing"
 
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
@@ -307,5 +308,41 @@ func TestPausedPrimaryWorkCanBeResumed(t *testing.T) {
 	}
 	if resumed.State != "active" {
 		t.Fatalf("resumed work is %q, want active: a session with no active primary while it works reads as idle", resumed.State)
+	}
+}
+
+// A search page is a list. It used to carry every description in full, so
+// twenty-four requests came to 64,462 characters — past what a tool result may
+// return, and past what a card or a terminal row can show. The snippet is what
+// a list wants; the whole text belongs to the single-request view.
+func TestSearchPageCarriesASnippetNotTheWholeDescription(t *testing.T) {
+	s := openTest(t)
+	long := strings.Repeat("Ausführliche Begründung mit Beleg und Abwägung. ", 80)
+	if _, err := s.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{
+		Type: "bug", Title: "Langer Befund", Description: long,
+		Scope: scope.Axes{Project: "p"}}}); err != nil {
+		t.Fatal(err)
+	}
+	page, err := s.SearchRequests(requestdomain.SearchFilter{Scope: scope.Axes{Project: "p"}, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Results) != 1 {
+		t.Fatalf("results = %d", len(page.Results))
+	}
+	got := page.Results[0].Request.Description
+	if len([]rune(got)) > 240 {
+		t.Errorf("snippet is %d runes, want a snippet", len([]rune(got)))
+	}
+	if !strings.HasPrefix(got, "Ausführliche Begründung") {
+		t.Errorf("snippet lost its beginning: %.60q", got)
+	}
+	// The full text stays reachable where it belongs.
+	detail, err := s.RequestByID(page.Results[0].Request.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(detail.Request.Description) != len(long) {
+		t.Errorf("detail description = %d chars, want the full %d", len(detail.Request.Description), len(long))
 	}
 }

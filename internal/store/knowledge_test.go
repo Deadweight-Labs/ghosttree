@@ -308,7 +308,7 @@ func TestApplyStalenessMarksOldPlansButNotDurableKnowledge(t *testing.T) {
 	s := openTest(t)
 	plan, _ := s.InsertKnowledge(Knowledge{Type: "plan", Title: "old rollout", Body: "steps"})
 	decision, _ := s.InsertKnowledge(Knowledge{Type: "decision", Title: "old decision", Body: "why"})
-	_, _ = s.db.Exec(`UPDATE knowledge SET updated_at='2026-01-01T00:00:00Z' WHERE id IN (?,?)`, plan, decision)
+	_, _ = s.db.Exec(`UPDATE knowledge SET observed_at='2026-01-01T00:00:00Z' WHERE id IN (?,?)`, plan, decision)
 	n, err := s.ApplyStaleness(time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC), 90*24*time.Hour)
 	if err != nil || n != 1 {
 		t.Fatalf("applied=%d err=%v", n, err)
@@ -322,4 +322,97 @@ func TestApplyStalenessMarksOldPlansButNotDurableKnowledge(t *testing.T) {
 	if len(pending) != 1 || pending[0].ID != plan {
 		t.Fatalf("stale plan missing from review: %+v", pending)
 	}
+}
+
+// A bootstrap that ranks by recency delivers whatever the last distiller run
+// produced. Corroboration is the signal that separates a systemic defect from
+// a one-off observation, and it must outrank being new.
+func TestContextRanksByCorroborationNotRecency(t *testing.T) {
+	s := openTest(t)
+	sessions := testSessions(t, s, 4)
+	old, _ := s.InsertKnowledge(Knowledge{Type: "note", Title: "corroborated", Body: "b",
+		Origin: "distilled", Confidence: "trusted"})
+	if err := s.AddEvidence(old, []Evidence{
+		{SessionID: sessions[0], ChunkSeq: 1}, {SessionID: sessions[1], ChunkSeq: 1}, {SessionID: sessions[2], ChunkSeq: 1},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fresh, _ := s.InsertKnowledge(Knowledge{Type: "note", Title: "newest", Body: "b",
+		Origin: "distilled", Confidence: "trusted"})
+	if err := s.AddEvidence(fresh, []Evidence{{SessionID: sessions[3], ChunkSeq: 1}}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.KnowledgeForContext(scope.Axes{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Title != "corroborated" {
+		t.Fatalf("order = %v, want corroborated first", titles(got))
+	}
+}
+
+// A deliberately written entry has no transcript evidence and would rank below
+// every distilled item if corroboration were counted raw. Writing something
+// down on purpose is worth one observation, not zero.
+func TestHandWrittenKnowledgeCountsAsOneObservation(t *testing.T) {
+	s := openTest(t)
+	written, _ := s.InsertKnowledge(Knowledge{Type: "note", Title: "written", Body: "b",
+		Origin: "agent", Confidence: "trusted"})
+	distilled, _ := s.InsertKnowledge(Knowledge{Type: "note", Title: "distilled", Body: "b",
+		Origin: "distilled", Confidence: "trusted"})
+	if err := s.AddEvidence(distilled, []Evidence{{SessionID: testSessions(t, s, 1)[0], ChunkSeq: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	s.recordKnowledgeSearchHit([]Knowledge{{ID: written}})
+
+	got, _ := s.KnowledgeForContext(scope.Axes{})
+	if len(got) != 2 || got[0].Title != "written" {
+		t.Fatalf("order = %v, want written first: equal corroboration, more search hits", titles(got))
+	}
+}
+
+// Ranking by delivery would be circular: an entry that fits the budget is
+// delivered, which raises its rank, which keeps it in the budget. Only a search
+// hit says an agent went looking and this answered.
+func TestDeliveryDoesNotRaiseRank(t *testing.T) {
+	s := openTest(t)
+	delivered, _ := s.InsertKnowledge(Knowledge{Type: "note", Title: "delivered", Body: "b", Confidence: "trusted"})
+	searched, _ := s.InsertKnowledge(Knowledge{Type: "note", Title: "searched", Body: "b", Confidence: "trusted"})
+	for i := 0; i < 5; i++ {
+		s.recordKnowledgeUse([]Knowledge{{ID: delivered}})
+	}
+	s.recordKnowledgeSearchHit([]Knowledge{{ID: searched}})
+
+	got, _ := s.KnowledgeForContext(scope.Axes{})
+	if len(got) != 2 || got[0].Title != "searched" {
+		t.Fatalf("order = %v, want searched first despite five deliveries of the other", titles(got))
+	}
+}
+
+// testSessions creates n distinct sessions, because evidence references them
+// and recurrence counts them.
+func testSessions(t *testing.T, s *Store, n int) []int64 {
+	t.Helper()
+	out := make([]int64, n)
+	for i := range out {
+		id, err := s.UpsertSession(Session{
+			Harness:    "claude-code",
+			ExternalID: fmt.Sprintf("sess-%d-%d", len(out), i),
+			StartedAt:  "2026-08-23T00:00:00Z",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		out[i] = id
+	}
+	return out
+}
+
+func titles(ks []Knowledge) []string {
+	out := make([]string, len(ks))
+	for i, k := range ks {
+		out[i] = k.Title
+	}
+	return out
 }

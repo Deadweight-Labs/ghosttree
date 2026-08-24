@@ -123,7 +123,7 @@ func (a *api) createKnowledge(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "type and title are required")
 		return
 	}
-	if k.Scope == (scope.Axes{}) && req.AutoScope != nil {
+	if k.Scope.IsGlobal() && req.AutoScope != nil {
 		k.Scope = scope.DefaultAxes(k.Type, req.AutoScope.Context)
 	}
 	k.Person = personOf(r)
@@ -249,6 +249,28 @@ func (a *api) pendingKnowledge(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, out)
 }
 
+// getKnowledge answers with one entry and its untouched body. Every other read
+// path abbreviates: the bootstrap folds against a budget, a search hit shows a
+// snippet. Somewhere the whole thing has to come back the way it went in, or
+// storing a long document is a promise the archive does not keep.
+func (a *api) getKnowledge(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(r)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "bad knowledge id")
+		return
+	}
+	k, err := a.st.KnowledgeByID(id)
+	if err == sql.ErrNoRows {
+		writeErr(w, http.StatusNotFound, "no such knowledge entry")
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, 200, k)
+}
+
 func (a *api) patchKnowledge(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathID(r)
 	if !ok {
@@ -344,6 +366,37 @@ func (a *api) bootstrap(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// maxRelevantEntries caps what one prompt may pull in. Three is enough to
+// answer a sentence and few enough that a wrong guess stays cheap.
+const maxRelevantEntries = 3
+
+// relevant answers with knowledge the text gives a reason to deliver, or with
+// nothing at all — which is the usual case, and is an empty body rather than an
+// error.
+func (a *api) relevant(w http.ResponseWriter, r *http.Request) {
+	limit := intParam(r, "limit", maxRelevantEntries)
+	if limit > maxRelevantEntries {
+		limit = maxRelevantEntries
+	}
+	entries, err := a.st.RelevantKnowledge(r.URL.Query().Get("q"), axesFromQuery(r), limit)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+	w.WriteHeader(200)
+	if len(entries) == 0 {
+		return
+	}
+	// A different heading from the bootstrap on purpose. This arrived because of
+	// what was just said, and a reader who cannot tell the two apart cannot judge
+	// why it is in front of them.
+	fmt.Fprint(w, "## Possibly relevant to what you just said (ghosttree)\n\n")
+	for _, k := range entries {
+		fmt.Fprintf(w, "- [%s|%s] %s — %s\n", k.Type, scopeLabel(k.Scope), k.Title, truncate(oneLine(k.Body), 400))
+	}
+}
+
 // renderBootstrap builds the auto-injected context package. Binding
 // instructions are always complete and first; other confirmed knowledge comes
 // before unconfirmed knowledge so a tight budget cuts uncertain material first.
@@ -365,6 +418,7 @@ func renderBootstrap(entries []store.Knowledge, budget int, includeStaged bool) 
 		return ""
 	}
 	var instructions, confirmed, staged []store.Knowledge
+	held := map[string]int{}
 	for _, k := range entries {
 		if k.Confidence == "staged" {
 			if includeStaged {
@@ -372,8 +426,10 @@ func renderBootstrap(entries []store.Knowledge, budget int, includeStaged bool) 
 			}
 		} else if k.Type == "instruction" {
 			instructions = append(instructions, k)
-		} else {
+		} else if pushedTypes[k.Type] {
 			confirmed = append(confirmed, k)
+		} else {
+			held[k.Type]++
 		}
 	}
 	var b strings.Builder
@@ -391,14 +447,58 @@ func renderBootstrap(entries []store.Knowledge, budget int, includeStaged bool) 
 	// Instructions do not compete for the context budget. Preserve the same
 	// allowance for all remaining groups regardless of instruction length.
 	contentLimit := budget + b.Len()
-	truncated := writeGroups(&b, confirmed, contentLimit, "")
+	broad, projectScoped := splitByScopeBreadth(confirmed)
+	// Global and machine knowledge is bounded by construction: adding a
+	// repository does not add machine facts. Project knowledge is unbounded and
+	// will always win a straight contest, which is how a distiller release
+	// displaced the two machine notes that were the only entries with a
+	// measured effect. Broad knowledge therefore goes first, and its ceiling
+	// applies only while there is project knowledge to protect. Whatever the
+	// reserve does not use stays available to the project.
+	broadLimit := contentLimit
+	if len(projectScoped) > 0 {
+		broadLimit = min(b.Len()+budget/broadScopeReserveDivisor, contentLimit)
+	}
+	// The two passes exist for the reserve, not for the reader: one shared set
+	// of headings keeps them from looking like two separate sections.
+	headings := map[string]bool{}
+	truncated := writeGroups(&b, broad, broadLimit, "", headings)
+	truncated = writeGroups(&b, projectScoped, contentLimit, "", headings) || truncated
 	if len(staged) > 0 && !truncated {
 		truncated = writePreviewGroup(&b, staged, contentLimit)
 	}
 	if truncated {
 		b.WriteString("…(truncated, use context_search for more)\n")
 	}
+	writeHeldIndex(&b, held)
 	return b.String()
+}
+
+// writeHeldIndex names what was deliberately not sent. Withholding silently
+// would not defer the knowledge, it would hide it: an agent cannot search for a
+// kind of material it has no reason to think exists. A line of counts costs
+// almost nothing and turns the omission into an invitation.
+func writeHeldIndex(b *strings.Builder, held map[string]int) {
+	if len(held) == 0 {
+		return
+	}
+	var parts []string
+	for _, t := range []string{"decision", "note", "plan"} {
+		n := held[t]
+		if n == 0 {
+			continue
+		}
+		label := t
+		if n != 1 {
+			label += "s"
+		}
+		parts = append(parts, fmt.Sprintf("%d %s", n, label))
+	}
+	if len(parts) == 0 {
+		return
+	}
+	fmt.Fprintf(b, "\nAlso in scope, not shown: %s. These answer questions you will "+
+		"know you have — use context_search for them.\n", strings.Join(parts, ", "))
 }
 
 func writePreviewGroup(b *strings.Builder, entries []store.Knowledge, limit int) bool {
@@ -428,9 +528,50 @@ func activationLabel(r activation.Rule) string {
 	return strings.Join(parts, " | ")
 }
 
+// pushedTypes decides what the bootstrap carries into every session, as opposed
+// to what waits to be asked for.
+//
+// The test is not importance, it is whether the reader could know to look. A
+// pitfall fires before a mistake nobody has made yet, so it cannot be searched
+// for: not knowing about it is precisely the condition it addresses.
+// Instructions bind whether or not anyone reads them, so they have to arrive
+// with the session too.
+//
+// Everything else is reference. A decision explains why something is the way it
+// is, which you want when you are about to change that thing; a note records how
+// things stand; a plan records where work got to. In each case the moment of
+// need is recognisable from inside the work, and search reaches them.
+//
+// Measured on 2026-08-24, which is what settled it: the two machine-scoped
+// entries in the archive had each been delivered 62 times that day and matched
+// a search zero times. One of them, an inventory of the local Ollama models,
+// went into every session of every project — a fact about one workstation that
+// changes nothing until somebody picks a local model.
+var pushedTypes = map[string]bool{"pitfall": true}
+
+// broadScopeReserveDivisor bounds what global and machine knowledge may take of
+// the content budget. A quarter is enough for the handful of facts that hold
+// everywhere and small enough that a project keeps most of its own allowance.
+const broadScopeReserveDivisor = 4
+
+// splitByScopeBreadth separates knowledge that holds regardless of repository
+// from knowledge about one repository.
+func splitByScopeBreadth(entries []store.Knowledge) (broad, projectScoped []store.Knowledge) {
+	for _, k := range entries {
+		if k.Scope.Project == "" {
+			broad = append(broad, k)
+		} else {
+			projectScoped = append(projectScoped, k)
+		}
+	}
+	return broad, projectScoped
+}
+
 // writeGroups appends entries grouped by type and reports whether the budget
 // ran out. header is written lazily, so an empty group prints nothing.
-func writeGroups(b *strings.Builder, entries []store.Knowledge, budget int, header string) bool {
+// headings is shared across calls so a type printed by one pass is not printed
+// again by the next.
+func writeGroups(b *strings.Builder, entries []store.Knowledge, budget int, header string, headings map[string]bool) bool {
 	if len(entries) == 0 {
 		return false
 	}
@@ -439,14 +580,17 @@ func writeGroups(b *strings.Builder, entries []store.Knowledge, budget int, head
 		byType[k.Type] = append(byType[k.Type], k)
 	}
 	wroteHeader := header == ""
-	for _, t := range []string{"decision", "pitfall", "note", "plan"} {
+	// Pitfalls first: one stops a mistake that is about to be made, while a
+	// decision explains one already made. Under a budget the explanation is
+	// what can wait for a search.
+	for _, t := range []string{"pitfall", "decision", "note", "plan"} {
 		group := byType[t]
 		if len(group) == 0 {
 			continue
 		}
-		for i, k := range group {
+		for _, k := range group {
 			line := fmt.Sprintf("- [%s] %s — %s\n", scopeLabel(k.Scope), k.Title, truncate(oneLine(k.Body), 200))
-			if i == 0 {
+			if !headings[t] {
 				line = "\n### " + t + "\n" + line
 			}
 			if !wroteHeader {
@@ -456,7 +600,7 @@ func writeGroups(b *strings.Builder, entries []store.Knowledge, budget int, head
 				return true
 			}
 			b.WriteString(line)
-			wroteHeader = true
+			wroteHeader, headings[t] = true, true
 		}
 	}
 	return false

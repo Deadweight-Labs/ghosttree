@@ -32,7 +32,7 @@ func TestRequestToolsRunCompleteAgentWorkflow(t *testing.T) {
 	_, _ = st.UpsertSession(store.Session{Harness: "codex", ExternalID: "mcp-work", Scope: s.ctxAxes})
 	otherBranch := &Server{client: c, ctxAxes: scope.Axes{Project: "github.com/x/y", Branch: "other", Machine: "workstation-a"}}
 	_, found, err := otherBranch.handleRequestSearch(context.Background(), nil, RequestSearchInput{Query: "agent ledger"})
-	if err != nil || len(found.Page.Results) != 1 {
+	if err != nil || len(found.Results) != 1 {
 		t.Fatalf("project-wide search=%+v err=%v", found, err)
 	}
 	_, started, err := s.handleRequestStartWork(context.Background(), nil, RequestStartWorkInput{RequestID: created.RequestID, Role: "primary"})

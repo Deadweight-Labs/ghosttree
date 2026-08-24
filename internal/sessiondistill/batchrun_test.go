@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/llm"
+	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
@@ -174,7 +175,7 @@ func TestCollectIsolatesFailedItems(t *testing.T) {
 	if report.Sessions != 1 || report.Failed != 1 {
 		t.Fatalf("collect report = %+v, want one applied and one failed", report)
 	}
-	pending, err := st.SessionsPendingDistillation(scope.Axes{}, "2030-01-01T00:00:00Z", 10)
+	pending, err := st.SessionsPendingDistillation(scope.Axes{}, "2030-01-01T00:00:00Z", PromptVersion, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +241,7 @@ func TestCollectKeepsTruncatedSessionsInTheBacklog(t *testing.T) {
 	if len(report.Failures) != 1 || !strings.Contains(report.Failures[0], "truncated") {
 		t.Fatalf("failures = %v, want a reason naming the truncation", report.Failures)
 	}
-	pending, err := st.SessionsPendingDistillation(scope.Axes{}, "2030-01-01T00:00:00Z", 10)
+	pending, err := st.SessionsPendingDistillation(scope.Axes{}, "2030-01-01T00:00:00Z", PromptVersion, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,5 +293,56 @@ func TestSubmitSkipsSessionsWithoutAProject(t *testing.T) {
 	}
 	if len(client.submitted) != 1 || !strings.Contains(client.submitted[0].CustomID, fmt.Sprint(kept)) {
 		t.Fatalf("submitted %+v, want only the session that has a project", client.submitted)
+	}
+}
+
+// Two modes, one batch machinery. The custom id carries which one, because
+// collecting happens in another process and the batch row would otherwise need
+// a column to say where its answers belong.
+func TestRequestsModeSubmitsWishesAndCollectsIntoTheLedger(t *testing.T) {
+	st := openStore(t)
+	id, err := st.UpsertSession(store.Session{Harness: "claude-code", ExternalID: "s",
+		Scope: scope.Axes{Project: "p"}, StartedAt: "2026-08-01T00:00:00Z"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AppendChunks(id, []store.Chunk{
+		{Seq: 1, Role: "user", Text: "und exportieren als csv wär auch nice", Raw: "{}"},
+		{Seq: 2, Role: "assistant", Text: "Ich baue dir gern einen Export.", Raw: "{}"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	client := &fakeBatch{}
+	report, err := SubmitBatch(context.Background(), st, client, SubmitOptions{
+		IdleBefore: "2030-01-01T00:00:00Z", Limit: 10, Model: "m",
+		Budget: DefaultBudget, Requests: true,
+	})
+	if err != nil || report.Sessions != 1 {
+		t.Fatalf("submit report=%+v err=%v", report, err)
+	}
+	if got := client.submitted[0].CustomID; !strings.HasPrefix(got, requestPrefix) {
+		t.Fatalf("custom id = %q, want the wish prefix so collect can dispatch", got)
+	}
+	// Only the person's words are sent; the agent's offer to build it is not a
+	// requirement.
+	if user := client.submitted[0].User; strings.Contains(user, "Ich baue dir gern") {
+		t.Errorf("the agent's own message was sent as a wish:\n%s", user)
+	}
+
+	client.status = llm.BatchStatusReport{Done: true, Total: 1, Completed: 1}
+	client.results = map[string]llm.BatchResult{
+		client.submitted[0].CustomID: {Content: `{"items":[{"type":"feature","title":"CSV-Export",
+			"body":"Export als CSV gewünscht.","chunk_seq":1,"quote":"exportieren als csv"}]}`},
+	}
+	collected, err := CollectBatches(context.Background(), st, client)
+	if err != nil {
+		t.Fatalf("collect err=%v report=%+v", err, collected)
+	}
+	if collected.Items != 1 {
+		t.Fatalf("collected = %+v, want one ledger entry", collected)
+	}
+	page, _ := st.SearchRequests(requestdomain.SearchFilter{Scope: scope.Axes{Project: "p"}, Limit: 10})
+	if len(page.Results) != 1 || page.Results[0].Request.Title != "CSV-Export" {
+		t.Fatalf("ledger = %+v", page.Results)
 	}
 }

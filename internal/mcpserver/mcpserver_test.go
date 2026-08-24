@@ -45,7 +45,7 @@ func TestRememberAndSearchTools(t *testing.T) {
 	c, _ := newTestClient(t)
 	s := &Server{client: c, ctxAxes: scope.Axes{Project: "github.com/x/y", Branch: "main", Machine: "workstation-a"}}
 	_, _, err := s.handleRemember(context.Background(), nil, RememberInput{
-		Type: "pitfall", Title: "flaky sfu test", Body: "retry helps", ScopeHint: ""})
+		Type: "pitfall", Title: "flaky sfu test", Body: "retry helps", ScopeHint: "project"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestScopeHintGlobal(t *testing.T) {
 		t.Fatal(err)
 	}
 	ks, _ := st.KnowledgeForContext(scope.Axes{})
-	if len(ks) != 1 || ks[0].Scope != (scope.Axes{}) {
+	if len(ks) != 1 || !ks[0].Scope.IsGlobal() {
 		t.Errorf("global hint: %+v", ks)
 	}
 }
@@ -221,13 +221,23 @@ func TestGetBootstrap(t *testing.T) {
 	c, _ := newTestClient(t)
 	s := &Server{client: c, ctxAxes: scope.Axes{Project: "github.com/x/y", Branch: "main", Machine: "workstation-a"}}
 	s.handleRemember(context.Background(), nil, RememberInput{
-		Type: "decision", Title: "sqlite over postgres", Body: "single writer is enough"})
+		Type: "pitfall", Title: "sequence ids collide", Body: "upstream is not concurrency-safe", ScopeHint: "project"})
+	s.handleRemember(context.Background(), nil, RememberInput{
+		Type: "decision", Title: "sqlite over postgres", Body: "single writer is enough", ScopeHint: "project"})
 	res, _, err := s.handleGet(context.Background(), nil, GetInput{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := text(t, res); !strings.Contains(got, "sqlite over postgres") {
-		t.Errorf("bootstrap missing entry: %s", got)
+	got := text(t, res)
+	if !strings.Contains(got, "sequence ids collide") {
+		t.Errorf("bootstrap missing the pitfall it must push: %s", got)
+	}
+	// The decision is reference material and is announced rather than sent.
+	if strings.Contains(got, "single writer is enough") {
+		t.Errorf("bootstrap pushed a decision body: %s", got)
+	}
+	if !strings.Contains(got, "1 decision") {
+		t.Errorf("bootstrap did not announce the held-back decision: %s", got)
 	}
 }
 
@@ -282,7 +292,7 @@ func TestDecisionWithoutReasoningGetsHint(t *testing.T) {
 	c, _ := newTestClient(t)
 	s := &Server{client: c, ctxAxes: scope.Axes{Project: "github.com/x/y", Machine: "workstation-a"}}
 	res, _, err := s.handleRemember(context.Background(), nil, RememberInput{
-		Type: "decision", Title: "sqlite over postgres", Body: "it is simpler"})
+		Type: "decision", Title: "sqlite over postgres", Body: "it is simpler", ScopeHint: "project"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -305,7 +315,7 @@ func TestDecisionWithReasoningGetsNoHint(t *testing.T) {
 		Title: "sqlite over postgres",
 		Body: `Why: a single writer is enough for this workload.
 Alternatives: postgres, rejected because it needs a second service.
-Tradeoffs: no concurrent writers, and no network access to the data.`})
+Tradeoffs: no concurrent writers, and no network access to the data.`, ScopeHint: "project"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +328,7 @@ func TestNonDecisionGetsNoHint(t *testing.T) {
 	c, _ := newTestClient(t)
 	s := &Server{client: c, ctxAxes: scope.Axes{Project: "github.com/x/y", Machine: "workstation-a"}}
 	res, _, err := s.handleRemember(context.Background(), nil, RememberInput{
-		Type: "note", Title: "ollama lives in /usr/bin", Body: "nothing structured here"})
+		Type: "note", Title: "ollama lives in /usr/bin", Body: "nothing structured here", ScopeHint: "project"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -352,5 +362,61 @@ func TestSessionsTool(t *testing.T) {
 	}
 	if got := text(t, res); !strings.Contains(got, "keeps dropping") {
 		t.Errorf("session read: %s", got)
+	}
+}
+
+// Branch scope is the exception the default no longer applies. It has to keep
+// working, because "this only holds while the migration is in flight" is a real
+// thing to want to say — it just is not the normal case.
+func TestScopeHintBranchStillNarrows(t *testing.T) {
+	c, st := newTestClient(t)
+	s := &Server{client: c, ctxAxes: scope.Axes{Project: "github.com/x/y", Branch: "feat/migration", Machine: "workstation-a"}}
+	if _, _, err := s.handleRemember(context.Background(), nil, RememberInput{
+		Type: "pitfall", Title: "dual write window", Body: "...", ScopeHint: "branch"}); err != nil {
+		t.Fatal(err)
+	}
+	ks, _ := st.KnowledgeForContext(scope.Axes{Project: "github.com/x/y", Branch: "feat/migration"})
+	if len(ks) != 1 || ks[0].Scope.Branch != "feat/migration" {
+		t.Fatalf("branch hint: %+v", ks)
+	}
+	if other, _ := st.KnowledgeForContext(scope.Axes{Project: "github.com/x/y", Branch: "main"}); len(other) != 0 {
+		t.Errorf("branch-scoped entry leaked to another branch: %+v", other)
+	}
+}
+
+// Placement is a judgement, and the tool asks for it. A default put everything
+// on the branch and stranded 127 entries; the correction put everything on the
+// project, which is right more often and still nobody's decision.
+func TestRememberRefusesToPlaceAnEntryOnItsOwn(t *testing.T) {
+	c, _ := newTestClient(t)
+	s := &Server{client: c, ctxAxes: scope.Axes{Project: "github.com/x/y", Branch: "feat/whatever", Machine: "workstation-a"}}
+	_, _, err := s.handleRemember(context.Background(), nil, RememberInput{
+		Type: "pitfall", Title: "stale binary in PATH", Body: "..."})
+	if err == nil {
+		t.Fatal("an entry was filed without anyone saying where it belongs")
+	}
+	// The refusal has to carry the test, or it just costs a round trip.
+	for _, want := range []string{"required", "merged or abandoned"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error does not say %q: %v", want, err)
+		}
+	}
+	if _, _, err := s.handleRemember(context.Background(), nil, RememberInput{
+		Type: "pitfall", Title: "stale binary in PATH", Body: "...", ScopeHint: "sonstwo"}); err == nil {
+		t.Error("an unknown placement was accepted")
+	}
+}
+
+// Choosing project must still mean every branch, not the writing one.
+func TestProjectPlacementReachesEveryBranch(t *testing.T) {
+	c, st := newTestClient(t)
+	s := &Server{client: c, ctxAxes: scope.Axes{Project: "github.com/x/y", Branch: "feat/whatever", Machine: "workstation-a"}}
+	if _, _, err := s.handleRemember(context.Background(), nil, RememberInput{
+		Type: "pitfall", Title: "stale binary in PATH", Body: "...", ScopeHint: "project"}); err != nil {
+		t.Fatal(err)
+	}
+	ks, _ := st.KnowledgeForContext(scope.Axes{Project: "github.com/x/y", Branch: "main"})
+	if len(ks) != 1 || ks[0].Scope.Branch != "" {
+		t.Errorf("project placement should reach every branch, got %+v", ks)
 	}
 }

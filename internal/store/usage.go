@@ -13,6 +13,18 @@ import "strings"
 // A failure here is dropped on purpose. This is a counter beside a read path,
 // and no read should fail because its bookkeeping did.
 func (s *Store) recordKnowledgeUse(ks []Knowledge) {
+	s.bumpUsage(ks, "")
+}
+
+// recordKnowledgeSearchHit additionally counts the entry as an answer someone
+// went looking for. Only this counter may rank the bootstrap: hit_count also
+// counts delivery, and delivery is what the ranking decides, so ranking by it
+// would keep whatever already fits the budget in the budget forever.
+func (s *Store) recordKnowledgeSearchHit(ks []Knowledge) {
+	s.bumpUsage(ks, ", search_hits = search_hits + 1")
+}
+
+func (s *Store) bumpUsage(ks []Knowledge, extra string) {
 	if len(ks) == 0 {
 		return
 	}
@@ -23,7 +35,7 @@ func (s *Store) recordKnowledgeUse(ks []Knowledge) {
 		placeholders[i] = "?"
 		args = append(args, k.ID)
 	}
-	s.db.Exec(`UPDATE knowledge SET last_used_at = ?, hit_count = hit_count + 1
+	s.db.Exec(`UPDATE knowledge SET last_used_at = ?, hit_count = hit_count + 1`+extra+`
 		WHERE id IN (`+strings.Join(placeholders, ",")+`)`, args...)
 }
 

@@ -28,11 +28,11 @@ func TestPendingDistillationExcludesSessionsInAnOpenBatch(t *testing.T) {
 	s := openTest(t)
 	id := idleSession(t, s, "a", "p", "2026-01-01T00:00:00Z")
 
-	batchID, err := s.RecordDistillBatch("batch_1", "m", []DistillBatchItem{{CustomID: "s1", SessionID: id, Digest: "d"}})
+	batchID, err := s.RecordDistillBatch("batch_1", "m", []DistillBatchItem{{CustomID: "s1", SessionID: id, Digest: "d", PromptVersion: "v1"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := s.SessionsPendingDistillation(scope.Axes{}, "2026-06-01T00:00:00Z", 10)
+	got, err := s.SessionsPendingDistillation(scope.Axes{}, "2026-06-01T00:00:00Z", "v1", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestPendingDistillationExcludesSessionsInAnOpenBatch(t *testing.T) {
 	if err := s.CloseDistillBatch(batchID, "collected"); err != nil {
 		t.Fatal(err)
 	}
-	got, err = s.SessionsPendingDistillation(scope.Axes{}, "2026-06-01T00:00:00Z", 10)
+	got, err = s.SessionsPendingDistillation(scope.Axes{}, "2026-06-01T00:00:00Z", "v1", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func TestPendingDistillationFiltersByProject(t *testing.T) {
 	idleSession(t, s, "a", "github.com/x/sample-project", "2026-01-01T00:00:00Z")
 	idleSession(t, s, "b", "github.com/x/other", "2026-01-02T00:00:00Z")
 
-	got, err := s.SessionsPendingDistillation(scope.Axes{Project: "github.com/x/sample-project"}, "2026-06-01T00:00:00Z", 10)
+	got, err := s.SessionsPendingDistillation(scope.Axes{Project: "github.com/x/sample-project"}, "2026-06-01T00:00:00Z", "v1", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +138,7 @@ func TestPendingDistillationFillsTheLimitWithEligibleSessions(t *testing.T) {
 	for i := range 3 {
 		idleSession(t, s, "housed"+strconv.Itoa(i), "github.com/x/y", "2026-02-0"+strconv.Itoa(i+1)+"T00:00:00Z")
 	}
-	got, err := s.SessionsPendingDistillation(scope.Axes{}, "2026-06-01T00:00:00Z", 3)
+	got, err := s.SessionsPendingDistillation(scope.Axes{}, "2026-06-01T00:00:00Z", "v1", 3)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,5 +149,31 @@ func TestPendingDistillationFillsTheLimitWithEligibleSessions(t *testing.T) {
 		if session.Scope.Project == "" {
 			t.Fatalf("selection returned a project-less session: %+v", session)
 		}
+	}
+}
+
+// Two modes read the same transcripts for different things. Keyed on the
+// session alone, whichever ran first would take the whole archive off the
+// other's queue: the first requests run found 1 eligible session in a project
+// with 89, because the knowledge run had already been there.
+func TestPendingDistillationIsPerPromptVersion(t *testing.T) {
+	s := openTest(t)
+	id := idleSession(t, s, "a", "p", "2026-01-01T00:00:00Z")
+	if _, err := s.ApplySessionDistillation(id, "d", "v5", scope.Axes{Project: "p"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	done, err := s.SessionsPendingDistillation(scope.Axes{}, "2026-06-01T00:00:00Z", "v5", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(done) != 0 {
+		t.Fatalf("pending under its own version = %d, want 0", len(done))
+	}
+	other, err := s.SessionsPendingDistillation(scope.Axes{}, "2026-06-01T00:00:00Z", "req-v1", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(other) != 1 {
+		t.Fatalf("pending under the other mode = %d, want 1", len(other))
 	}
 }

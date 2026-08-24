@@ -46,6 +46,26 @@ func New(cfg config.Config) *Client {
 	return &Client{cfg: cfg, http: &http.Client{Timeout: 30 * time.Second}}
 }
 
+// NewWithTimeout is for callers that sit in front of a person waiting. The
+// relevance hook runs between pressing enter and the model seeing the prompt, so
+// a server that is merely slow has to look the same as one that is absent.
+func NewWithTimeout(cfg config.Config, d time.Duration) *Client {
+	return &Client{cfg: cfg, http: &http.Client{Timeout: d}}
+}
+
+// Relevant returns knowledge the text gives a reason to deliver. An empty
+// result is the usual answer.
+func (c *Client) Relevant(text string, ax scope.Axes, limit int) (string, error) {
+	q := axesQuery(ax)
+	q.Set("q", text)
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	var md string
+	err := c.do("GET", "/api/context/relevant", q, nil, &md)
+	return md, err
+}
+
 func (c *Client) Machine() string { return c.cfg.Machine }
 
 // do performs a request; out may be a *string to capture a raw text body.
@@ -110,6 +130,11 @@ func axesQuery(ax scope.Axes) url.Values {
 	}
 	if ax.Machine != "" {
 		q.Set("machine", ax.Machine)
+	}
+	// Repeated rather than joined: a branch name may contain anything a ref
+	// allows, and inventing a separator is inventing a way to split wrongly.
+	for _, ancestor := range ax.Lineage {
+		q.Add("lineage", ancestor)
 	}
 	return q
 }
@@ -206,6 +231,14 @@ func (c *Client) Pending(project string, limit int) ([]PendingEntry, error) {
 
 func (c *Client) PatchKnowledge(id int64, patch map[string]string) error {
 	return c.do("PATCH", "/api/knowledge/"+strconv.FormatInt(id, 10), nil, patch, nil)
+}
+
+// KnowledgeByID fetches one entry with its body intact, for the case where
+// somebody asked for exactly this entry rather than for an overview.
+func (c *Client) KnowledgeByID(id int64) (store.Knowledge, error) {
+	var out store.Knowledge
+	err := c.do("GET", "/api/knowledge/"+strconv.FormatInt(id, 10), nil, nil, &out)
+	return out, err
 }
 
 func (c *Client) Knowledge(ax scope.Axes) ([]store.Knowledge, error) {

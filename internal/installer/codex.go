@@ -12,13 +12,8 @@ command = "ctx"
 args = ["mcp"]
 `
 
-// codexRule adds the session-start instruction: codex has no hook mechanism,
-// so it has to be told to fetch the context itself.
-const codexRule = ruleText + `
-
-At session start call the ` + "`context_get`" + ` tool once to load project context.`
-
 func InstallCodex(home string) ([]Change, error) {
+	h := harnessNamed("codex")
 	var changes []Change
 
 	cfgPath := filepath.Join(home, ".codex", "config.toml")
@@ -28,11 +23,50 @@ func InstallCodex(home string) ([]Change, error) {
 	}
 	changes = append(changes, c)
 
-	c, err = writeMarkerFile(filepath.Join(home, ".codex", "AGENTS.md"), codexRule)
+	// Codex reads the same hook shape as Claude Code from its own file. The
+	// section it used to get instead — "call context_get yourself at session
+	// start" — was written on the assumption that it had no hooks.
+	hookChanges, err := installHooks(h, home)
+	changes = append(changes, hookChanges...)
+	if err != nil {
+		return changes, err
+	}
+
+	c, err = writeMarkerFile(h.RulePath(home), ruleFor(h))
 	if err != nil {
 		return changes, err
 	}
 	return append(changes, c), nil
+}
+
+// installHooks registers every event-bearing channel the harness declares.
+func installHooks(h Harness, home string) ([]Change, error) {
+	if h.HooksPath == nil {
+		return nil, nil
+	}
+	path := h.HooksPath(home)
+	var changes []Change
+	for _, channel := range h.Channels {
+		event, command, ok := hookCommandFor(channel)
+		if !ok {
+			continue
+		}
+		c, err := addHook(path, event, command)
+		if err != nil {
+			return changes, err
+		}
+		changes = append(changes, c)
+	}
+	return changes, nil
+}
+
+func harnessNamed(name string) Harness {
+	for _, h := range Harnesses() {
+		if h.Name == name {
+			return h
+		}
+	}
+	return Harness{Name: name}
 }
 
 func appendCodexMCP(path string) (Change, error) {

@@ -14,6 +14,12 @@ type SessionDistilledItem struct {
 	Body     string `json:"body"`
 	Quote    string `json:"quote"`
 	ChunkSeq int    `json:"chunk_seq"`
+	// SameAs names an entry this finding already belongs to. The model is given
+	// the project's entries with their ids and answers "this is #42 again"
+	// instead of inventing a second title for one defect. That is what makes
+	// recurrence a real number: the quote becomes further evidence for #42
+	// rather than a new entry nobody can tell apart from it.
+	SameAs int64 `json:"same_as,omitempty"`
 }
 
 func (s *Store) SessionDistillationExists(sessionID int64, digest, promptVersion string) (bool, error) {
@@ -58,15 +64,26 @@ func (s *Store) ApplySessionDistillation(sessionID int64, digest, promptVersion 
 		if item.Quote == "" || !strings.Contains(chunkText, item.Quote) {
 			return 0, sql.ErrNoRows
 		}
-		var duplicate int
-		if err := tx.QueryRow(`SELECT COUNT(*) FROM knowledge WHERE project=? AND lower(title)=lower(?) AND status='active'`, itemScope.Project, item.Title).Scan(&duplicate); err != nil {
+		// A finding that already exists is corroboration, not noise. Dropping it
+		// silently was what kept every entry at recurrence one, and recurrence is
+		// what the trust model and the bootstrap ranking are both built on.
+		if existing, err := existingEntryFor(tx, itemScope.Project, item); err != nil {
 			return 0, err
-		}
-		if duplicate != 0 {
+		} else if existing != 0 {
+			if _, err := tx.Exec(`INSERT OR IGNORE INTO knowledge_evidence(knowledge_id,session_id,chunk_seq,quote)
+				VALUES(?,?,?,?)`, existing, sessionID, item.ChunkSeq, item.Quote); err != nil {
+				return 0, err
+			}
+			if err := refreshObservedAt(tx, existing); err != nil {
+				return 0, err
+			}
 			continue
 		}
-		res, err := tx.Exec(`INSERT INTO knowledge(type,title,body,project,branch,machine,confidence,status,origin,session_ref,created_at,updated_at)
-			VALUES(?,?,?,?,?,?,'quarantined','active','distilled',?,?,?)`, item.Type, item.Title, item.Body, itemScope.Project, itemScope.Branch, itemScope.Machine, "session:"+strconv.FormatInt(sessionID, 10)+"#"+strconv.Itoa(item.ChunkSeq), ts, ts)
+		// observed_at starts at the run time and is corrected to the session's
+		// own start once the evidence row exists, a few lines down. No entry is
+		// left with an empty one even if a future path forgets the evidence.
+		res, err := tx.Exec(`INSERT INTO knowledge(type,title,body,project,branch,machine,confidence,status,origin,session_ref,observed_at,created_at,updated_at)
+			VALUES(?,?,?,?,?,?,'quarantined','active','distilled',?,?,?,?)`, item.Type, item.Title, item.Body, itemScope.Project, itemScope.Branch, itemScope.Machine, "session:"+strconv.FormatInt(sessionID, 10)+"#"+strconv.Itoa(item.ChunkSeq), ts, ts, ts)
 		if err != nil {
 			return 0, err
 		}
@@ -75,6 +92,9 @@ func (s *Store) ApplySessionDistillation(sessionID int64, digest, promptVersion 
 			return 0, err
 		}
 		if _, err := tx.Exec(`INSERT INTO knowledge_evidence(knowledge_id,session_id,chunk_seq,quote) VALUES(?,?,?,?)`, id, sessionID, item.ChunkSeq, item.Quote); err != nil {
+			return 0, err
+		}
+		if err := refreshObservedAt(tx, id); err != nil {
 			return 0, err
 		}
 		inserted++
@@ -89,6 +109,38 @@ func (s *Store) ApplySessionDistillation(sessionID int64, digest, promptVersion 
 	return inserted, nil
 }
 
+// existingEntryFor finds the entry a finding belongs to, or 0 if it is new.
+//
+// Two ways in, because they catch different halves. An exact title is
+// mechanical and certain but only recognises the same words. The model's own
+// judgement, passed as same_as, is what recognises the same defect under a
+// different name — "Redirect validation occurs after the request" and
+// "Redirected fetches permit SSRF" were two entries for one bug.
+//
+// same_as is checked against the project rather than trusted outright: a model
+// that names an id from another project, or one that no longer exists, gets a
+// new entry instead of writing evidence somewhere nobody expects it.
+func existingEntryFor(tx *sql.Tx, project string, item SessionDistilledItem) (int64, error) {
+	if item.SameAs != 0 {
+		var id int64
+		err := tx.QueryRow(`SELECT id FROM knowledge WHERE id=? AND project=? AND status='active'`,
+			item.SameAs, project).Scan(&id)
+		if err == nil {
+			return id, nil
+		}
+		if err != sql.ErrNoRows {
+			return 0, err
+		}
+	}
+	var id int64
+	err := tx.QueryRow(`SELECT id FROM knowledge WHERE project=? AND lower(title)=lower(?) AND status='active'
+		ORDER BY id LIMIT 1`, project, item.Title).Scan(&id)
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
+	return id, err
+}
+
 // archiveEarlierQuarantinedItems retires what an earlier run made of this
 // session. It runs before the insert so a new item may reuse a title the old
 // run occupied — otherwise the duplicate guard would silently drop the better
@@ -96,13 +148,25 @@ func (s *Store) ApplySessionDistillation(sessionID int64, digest, promptVersion 
 //
 // The condition is the items themselves, not a distillation row: releasing a
 // session for reprocessing deletes its row, so a check against the row would
-// find no earlier run in exactly the case reprocessing exists for. Any active
-// quarantined item already evidenced by this session is by definition from an
-// earlier run, because the current one inserts inside this transaction.
+// find no earlier run in exactly the case reprocessing exists for.
+//
+// Authorship, not evidence, decides what may be retired. A session that merely
+// corroborated somebody else's finding also has an evidence row against it, and
+// keying on evidence would let one session's rerun archive another session's
+// entry. session_ref records who wrote it.
+//
+// The session's evidence on entries it did not write is dropped instead, so a
+// rerun re-states its corroboration rather than counting it twice.
 func archiveEarlierQuarantinedItems(tx *sql.Tx, sessionID int64) error {
-	_, err := tx.Exec(`UPDATE knowledge SET status='archived', updated_at=?
+	authored := "session:" + strconv.FormatInt(sessionID, 10) + "#%"
+	if _, err := tx.Exec(`UPDATE knowledge SET status='archived', updated_at=?
 		WHERE status='active' AND confidence='quarantined' AND origin='distilled'
-		  AND id IN (SELECT knowledge_id FROM knowledge_evidence WHERE session_id=?)`, now(), sessionID)
+		  AND session_ref LIKE ?`, now(), authored); err != nil {
+		return err
+	}
+	_, err := tx.Exec(`DELETE FROM knowledge_evidence
+		WHERE session_id=? AND knowledge_id IN (
+			SELECT id FROM knowledge WHERE session_ref NOT LIKE ?)`, sessionID, authored)
 	return err
 }
 

@@ -3,10 +3,12 @@ package installer
 import (
 	"os"
 	"path/filepath"
-	"strings"
 )
 
-const hookCommand = "ctx hook session-start"
+const (
+	hookCommand       = "ctx hook session-start"
+	promptHookCommand = "ctx hook user-prompt-submit"
+)
 
 // ClaudeConfigDir resolves where Claude Code keeps its user config. Verified on
 // Claude Code 2.1.234: MCP servers live in <dir>/.claude.json, not in
@@ -23,29 +25,33 @@ func ClaudeUserConfigPath(home string) string {
 }
 
 func InstallClaude(home string) ([]Change, error) {
-	var changes []Change
+	h := harnessNamed("claude")
 
-	settings := filepath.Join(home, ".claude", "settings.json")
-	c, err := addSessionStartHook(settings)
+	// Both event channels at once. They are separate on purpose: session-start
+	// says what holds for the whole session, user-prompt-submit says what the
+	// last sentence gave a reason to mention.
+	changes, err := installHooks(h, home)
+	if err != nil {
+		return changes, err
+	}
+
+	c, err := registerClaudeMCP(ClaudeUserConfigPath(home))
 	if err != nil {
 		return changes, err
 	}
 	changes = append(changes, c)
 
-	c, err = registerClaudeMCP(ClaudeUserConfigPath(home))
-	if err != nil {
-		return changes, err
-	}
-	changes = append(changes, c)
-
-	c, err = writeMarkerFile(filepath.Join(home, ".claude", "CLAUDE.md"), ruleText)
+	c, err = writeMarkerFile(h.RulePath(home), ruleFor(h))
 	if err != nil {
 		return changes, err
 	}
 	return append(changes, c), nil
 }
 
-func addSessionStartHook(path string) (Change, error) {
+// addHook appends to whatever is already registered for an event. Other tools
+// keep hooks here too — a lease daemon, an approval bridge — and replacing the
+// list would silently disarm them.
+func addHook(path, event, command string) (Change, error) {
 	settings, err := readJSONFile(path)
 	if err != nil {
 		return Change{}, err
@@ -54,23 +60,26 @@ func addSessionStartHook(path string) (Change, error) {
 	if hooks == nil {
 		hooks = map[string]any{}
 	}
-	entries, _ := hooks["SessionStart"].([]any)
+	entries, _ := hooks[event].([]any)
 	for _, e := range entries {
 		entry, _ := e.(map[string]any)
 		inner, _ := entry["hooks"].([]any)
 		for _, h := range inner {
 			hm, _ := h.(map[string]any)
-			if cmd, _ := hm["command"].(string); strings.Contains(cmd, "ctx hook") {
+			// Matched on the exact command, not on "ctx hook": the two events
+			// run different subcommands and one must not be mistaken for the
+			// other, or installing the second would look like a no-op.
+			if cmd, _ := hm["command"].(string); cmd == command {
 				return Change{Path: path, Action: "unchanged"}, nil
 			}
 		}
 	}
 	entries = append(entries, map[string]any{
-		"hooks": []any{map[string]any{"type": "command", "command": hookCommand}},
+		"hooks": []any{map[string]any{"type": "command", "command": command}},
 	})
-	hooks["SessionStart"] = entries
+	hooks[event] = entries
 	settings["hooks"] = hooks
-	return Change{Path: path, Action: "hook added"}, writeJSONFile(path, settings)
+	return Change{Path: path, Action: event + " hook added"}, writeJSONFile(path, settings)
 }
 
 func registerClaudeMCP(path string) (Change, error) {

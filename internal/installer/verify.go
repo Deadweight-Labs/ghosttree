@@ -20,15 +20,13 @@ type Check struct {
 // still reads what we wrote: config files get rewritten by other tools, homes
 // get migrated, CLAUDE_CONFIG_DIR appears.
 func VerifyClaude(home string) []Check {
+	h := harnessNamed("claude")
 	userCfg := ClaudeUserConfigPath(home)
-	checks := []Check{
-		fileCheck("claude mcp registration", userCfg, `"ghosttree"`,
-			"run 'ctx install claude'"),
-		fileCheck("claude session-start hook", filepath.Join(home, ".claude", "settings.json"), hookCommand,
-			"run 'ctx install claude'"),
-		fileCheck("claude rule section", filepath.Join(home, ".claude", "CLAUDE.md"), markerStart,
-			"run 'ctx install claude'"),
-	}
+	checks := []Check{fileCheck("claude mcp registration", userCfg, `"ghosttree"`,
+		"run 'ctx install claude'")}
+	checks = append(checks, channelChecks(h, home)...)
+	checks = append(checks, fileCheck("claude rule section", h.RulePath(home), markerStart,
+		"run 'ctx install claude'"))
 
 	// Claude Code reads CLAUDE_CONFIG_DIR/.claude.json when the variable is
 	// set and ~/.claude.json when it is not. Launchers differ, so a home that
@@ -42,12 +40,35 @@ func VerifyClaude(home string) []Check {
 }
 
 func VerifyCodex(home string) []Check {
-	return []Check{
-		fileCheck("codex mcp registration", filepath.Join(home, ".codex", "config.toml"), "[mcp_servers.ghosttree]",
-			"run 'ctx install codex'"),
-		fileCheck("codex rule section", filepath.Join(home, ".codex", "AGENTS.md"), markerStart,
-			"run 'ctx install codex'"),
+	h := harnessNamed("codex")
+	checks := []Check{fileCheck("codex mcp registration", filepath.Join(home, ".codex", "config.toml"),
+		"[mcp_servers.ghosttree]", "run 'ctx install codex'")}
+	checks = append(checks, channelChecks(h, home)...)
+	return append(checks, fileCheck("codex rule section", h.RulePath(home), markerStart,
+		"run 'ctx install codex'"))
+}
+
+// channelChecks asks what the harness is capable of, not what happens to be in
+// its config. A check built from the file finds nothing to complain about when
+// ghosttree never wired the channel at all — which is how Codex showed two
+// green ticks for 482 sessions while its session-start channel stood open and
+// unused. Iterating the declared channels means an unserved one is a failing
+// check with a name, not an absence nobody looks for.
+func channelChecks(h Harness, home string) []Check {
+	if h.HooksPath == nil {
+		return nil
 	}
+	path := h.HooksPath(home)
+	var checks []Check
+	for _, channel := range h.Channels {
+		_, command, ok := hookCommandFor(channel)
+		if !ok {
+			continue
+		}
+		checks = append(checks, fileCheck(h.Name+" "+string(channel)+" hook", path, command,
+			"run 'ctx install "+h.Name+"' — this harness can fire the event and nothing is answering it"))
+	}
+	return checks
 }
 
 func fileCheck(name, path, needle, fix string) Check {

@@ -532,6 +532,12 @@ func missingUsageColumns(db *sql.DB) ([]string, error) {
 	if !present["hit_count"] {
 		missing = append(missing, `hit_count INTEGER NOT NULL DEFAULT 0`)
 	}
+	// search_hits is separate from hit_count on purpose. hit_count answers
+	// "was this ever put in front of an agent" and counts delivery; ranking by
+	// it would be circular, because delivery is what the ranking decides.
+	if !present["search_hits"] {
+		missing = append(missing, `search_hits INTEGER NOT NULL DEFAULT 0`)
+	}
 	return missing, nil
 }
 
@@ -566,14 +572,6 @@ func UpgradeDistillationVersion(path string) (string, error) {
 		// A database upgraded by an earlier build of this command carries
 		// empty versions. Naming them is idempotent and needs no backup.
 		if _, err := db.Exec(`UPDATE session_distillations SET prompt_version='v1' WHERE prompt_version=''`); err != nil {
-			return "", err
-		}
-		// Same shape: the batch table gained a model column after the fact.
-		// ALTER TABLE ADD COLUMN with a constant default is metadata only.
-		if err := addColumnIfMissing(db, "distill_batches", "model", `TEXT NOT NULL DEFAULT ''`); err != nil {
-			return "", err
-		}
-		if err := addColumnIfMissing(db, "distill_batch_items", "prompt_version", `TEXT NOT NULL DEFAULT ''`); err != nil {
 			return "", err
 		}
 		return "", nil
@@ -629,6 +627,78 @@ func hasDistillationVersionColumn(db *sql.DB) (bool, error) {
 			return false, err
 		}
 		if name == "prompt_version" {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+// AddedColumns applies the schema's purely additive column changes and names
+// the ones it actually added. ALTER TABLE ADD COLUMN with a constant default is
+// metadata only, so this needs no backup — but it does need to be reported. An
+// upgrade that says "nothing to do" while it changed the schema is how someone
+// later debugging an empty column concludes the column was never added.
+func AddedColumns(path string) ([]string, error) {
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(`PRAGMA busy_timeout=5000`); err != nil {
+		return nil, err
+	}
+	var added []string
+	for _, c := range []struct{ table, column, definition string }{
+		{"distill_batches", "model", `TEXT NOT NULL DEFAULT ''`},
+		{"distill_batch_items", "prompt_version", `TEXT NOT NULL DEFAULT ''`},
+		{"knowledge", "observed_at", `TEXT NOT NULL DEFAULT ''`},
+	} {
+		// A table that does not exist yet needs no column added: Open creates it
+		// from the current schema, with the column already in it.
+		exists, err := hasTable(db, c.table)
+		if err != nil {
+			return added, err
+		}
+		if !exists {
+			continue
+		}
+		before, err := hasColumn(db, c.table, c.column)
+		if err != nil {
+			return added, err
+		}
+		if before {
+			continue
+		}
+		if err := addColumnIfMissing(db, c.table, c.column, c.definition); err != nil {
+			return added, err
+		}
+		added = append(added, c.table+"."+c.column)
+	}
+	return added, nil
+}
+
+func hasTable(db *sql.DB, table string) (bool, error) {
+	var name string
+	err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&name)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+func hasColumn(db *sql.DB, table, column string) (bool, error) {
+	rows, err := db.Query(`SELECT name FROM pragma_table_info(?)`, table)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return false, err
+		}
+		if name == column {
 			return true, nil
 		}
 	}
