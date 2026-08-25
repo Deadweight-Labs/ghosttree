@@ -66,7 +66,7 @@ func TestEveryEntryBecomesAReadableFileInItsPlace(t *testing.T) {
 // Wissen, das eine Sitzung liest.
 func TestArchivedDocumentsGoToDocsNotToKnowledge(t *testing.T) {
 	got := docsByPath(Build(sampleInput()))
-	path := "docs/2026-08-22-99-docs-superpowers-specs-2026-08-22-thing-design-md.md"
+	path := "docs/2026-08-22-99-2026-08-22-thing-design.md"
 	if _, ok := got[path]; !ok {
 		t.Fatalf("archived document is not under docs/: %v", keys(got))
 	}
@@ -89,10 +89,10 @@ func TestEveryFileSaysItIsAProjection(t *testing.T) {
 		if i := strings.Index(head, "\n\n"); i > 0 {
 			head = head[:i]
 		}
-		if !strings.Contains(d.Body, "Projektion aus ghosttree") {
+		if !strings.Contains(d.Body, "Projection from ghosttree") {
 			t.Errorf("%s does not say it is a projection", d.Path)
 		}
-		if !strings.Contains(d.Body, "verschwinden beim nächsten") {
+		if !strings.Contains(d.Body, "lost on the next write") {
 			t.Errorf("%s does not say local edits are lost: %s", d.Path, head)
 		}
 	}
@@ -114,24 +114,125 @@ func TestKnowledgeCarriesItsScopeAlongAllThreeAxes(t *testing.T) {
 	}
 }
 
-// Der Index ist der Einstieg — und seine wichtigste Aufgabe ist zu sagen, was
-// hier NICHT steht. Ein halb gefüllter Spiegel, der sich wie ein vollständiger
-// liest, ist schlimmer als keiner.
-func TestIndexNamesWhatIsNotMirrored(t *testing.T) {
-	index := docsByPath(Build(sampleInput()))["INDEX.md"]
-	for _, want := range []string{
-		"Sitzungsprotokolle", // nicht gespiegelt
-		"quarantän",          // nicht gespiegelt
-		"3 Wissenseinträge",
-		"1 Dokument",
-		"github.com/x/y",
-	} {
-		if !strings.Contains(strings.ToLower(index), strings.ToLower(want)) {
-			t.Errorf("INDEX.md does not mention %q:\n%s", want, index)
+func TestKnowledgeMirrorCarriesTheSameProvenanceAsBootstrap(t *testing.T) {
+	in := sampleInput()
+	in.Knowledge[0].Person = "robin"
+	in.Knowledge[0].Origin = "human"
+	in.Knowledge[0].Confidence = "verified"
+	in.Knowledge[0].ConfirmedBy = "philipp"
+	body := docsByPath(Build(in))["knowledge/pitfall/42-null-treffer-sehen-aus-wie-gibt-es-nicht.md"]
+	if !strings.Contains(body, "by robin") || !strings.Contains(body, "confirmed by philipp") {
+		t.Fatalf("mirror lacks provenance:\n%s", body)
+	}
+}
+
+// Der Index darf sich nicht als vollständig ausgeben — das war und bleibt die
+// Anforderung. NUR DIE FORM HAT GEWECHSELT: bis zum 2026-08-25 stand dort eine
+// Liste "Was hier NICHT steht" mit vier Punkten. Der Einwand des Betreibers,
+// und er trägt: eine Abwesenheitsliste ist schwer zu verwerten, und "hier steht
+// kein X" liest sich für ein kleines Modell leicht als "X gibt es nicht".
+// Dieselbe Ehrlichkeit steckt jetzt in den Zahlen und in einem Satz darüber,
+// was die Werkzeuge mehr sehen.
+func TestIndexIsAnInventoryThatDoesNotPretendToBeComplete(t *testing.T) {
+	in := sampleInput()
+	in.TreeDescribed, in.TreePaths = 39, 264
+	index := docsByPath(Build(in))["INDEX.md"]
+
+	for _, want := range []string{"3 entries", "39 of 264", "1 of 12", "github.com/x/y"} {
+		if !strings.Contains(index, want) {
+			t.Errorf("INDEX.md does not state the inventory %q:\n%s", want, index)
 		}
 	}
-	if !strings.Contains(index, "1 von 12") {
-		t.Errorf("INDEX.md must say how many finished requests it holds back:\n%s", index)
+	// Wo mehr liegt, muss dastehen — sonst liest sich der Auszug wie das Ganze.
+	for _, want := range []string{"context_sessions", "context_search", "request_get", "sees more"} {
+		if !strings.Contains(index, want) {
+			t.Errorf("INDEX.md does not say where more is to be had (%q):\n%s", want, index)
+		}
+	}
+	// Und der werkzeuglose Weg steht vorn, weil dieses Verzeichnis für
+	// Umgebungen ohne Werkzeug gebaut ist.
+	if strings.Index(index, "grep") > strings.Index(index, "context_search") {
+		t.Errorf("the toolless way must come before the tool:\n%s", index)
+	}
+}
+
+// Der ausgelieferte Text ist Englisch, weil ihn Modelle lesen — kleine am
+// zuverlässigsten. Was in den Einträgen steht, bleibt in seiner Sprache.
+func TestTheMirrorScaffoldingIsEnglish(t *testing.T) {
+	for _, d := range Build(sampleInput()) {
+		for _, german := range []string{"Wissenseinträge", "Kaltlager", "Übergabe", "Projektion",
+			"Wird erwähnt von", "beobachtet", "Was hier NICHT steht"} {
+			if strings.Contains(d.Body, german) {
+				t.Errorf("%s still carries German scaffolding %q", d.Path, german)
+			}
+		}
+	}
+}
+
+// Ein Spiegel ohne Stand ist die gefährlichste Fassung von sich selbst: er
+// sieht frisch aus, egal wie alt er ist. Auf einer Umgebung ohne Hook schreibt
+// ihn niemand von allein — dort ist das Datum die einzige Warnung.
+func TestIndexSaysWhenItWasWritten(t *testing.T) {
+	in := sampleInput()
+	in.At = "2026-08-25T09:30:00Z"
+	index := docsByPath(Build(in))["INDEX.md"]
+	if !strings.Contains(index, "2026-08-25T09:30:00Z") {
+		t.Fatalf("INDEX.md does not say how old it is:\n%s", index)
+	}
+	if !strings.Contains(index, "ctx mirror") {
+		t.Fatalf("INDEX.md does not say how to refresh itself:\n%s", index)
+	}
+}
+
+// Der Titel eines migrierten Dokuments IST sein Pfad im Repo. Ungekürzt ergibt
+// das Dateinamen wie
+// docs/2026-08-25-1360-docs-superpowers-plans-2026-08-23-ghosttree-v0-md.md —
+// zwei Daten, ein doppelter Pfad, und der eigentliche Name ganz hinten. Ein
+// opencode-Agent nannte das beim Dogfooding "kryptische Prefix-Nummern, die
+// Dateinamen allein sagen nichts".
+func TestDocumentFileNamesKeepTheNameNotThePath(t *testing.T) {
+	in := sampleInput()
+	in.Archived[0].Title = "docs/superpowers/plans/2026-08-23-ghosttree-v0.md"
+	got := docsByPath(Build(in))
+	var path string
+	for p := range got {
+		if strings.HasPrefix(p, "docs/") {
+			path = p
+		}
+	}
+	if strings.Contains(path, "superpowers") || strings.Contains(path, "plans") {
+		t.Errorf("the document path repeats its directories: %s", path)
+	}
+	if !strings.Contains(path, "ghosttree-v0") {
+		t.Errorf("the document path lost the name that identifies it: %s", path)
+	}
+	body := got[path]
+	if !strings.Contains(body, "docs/superpowers/plans/2026-08-23-ghosttree-v0.md") {
+		t.Errorf("the full original path must stay readable inside the file:\n%s", body)
+	}
+}
+
+// Gefunden beim Dogfooding am 2026-08-25: ein opencode-Agent las "tree/ — eine
+// Beschreibung je Datei und je Verzeichnis dieses Repos" als Zusage auf
+// Vollständigkeit und zählte die vielen "(keine Beschreibung)" anschliessend als
+// Mangel. Tatsächlich sind es 39 von 264 Pfaden — genau der halb gefüllte
+// Spiegel, der sich wie ein voller liest, gegen den dieser Index antritt.
+func TestIndexSaysHowFullTheGhostTreeIs(t *testing.T) {
+	in := sampleInput()
+	in.TreeDescribed, in.TreePaths = 39, 264
+	index := docsByPath(Build(in))["INDEX.md"]
+	if !strings.Contains(index, "39 of 264") {
+		t.Fatalf("INDEX.md claims a complete tree instead of counting it:\n%s", index)
+	}
+}
+
+// Der Spiegel ist für die gebaut, die kein Werkzeug haben — eine Harness ohne
+// MCP und ohne Hooks. Sie ausschliesslich auf context_search zu verweisen, ist
+// der Verweis auf genau das, was ihnen fehlt.
+func TestIndexShowsTheWayThatWorksWithoutTheTool(t *testing.T) {
+	index := docsByPath(Build(sampleInput()))["INDEX.md"]
+	if !strings.Contains(index, "grep") {
+		t.Fatalf("INDEX.md offers no toolless way to search:\n%s", index)
 	}
 }
 
@@ -144,7 +245,7 @@ func TestBacklinksAreDerivedFromMentionsAndSaySo(t *testing.T) {
 	if !strings.Contains(mentioned, "#42") {
 		t.Errorf("entry 43 is mentioned by 42 and must say so:\n%s", mentioned)
 	}
-	if !strings.Contains(mentioned, "abgeleitet") {
+	if !strings.Contains(mentioned, "derived from mentions") {
 		t.Errorf("a backlink must be marked as derived, not as a curated relation:\n%s", mentioned)
 	}
 	fromRequest := got["knowledge/pitfall/42-null-treffer-sehen-aus-wie-gibt-es-nicht.md"]

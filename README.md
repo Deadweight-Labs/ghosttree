@@ -23,7 +23,10 @@ One Go binary, `ctx`, plays four roles:
 - `ctx install claude|codex` — wires the harnesses up: MCP registration, a
   SessionStart hook that injects known context, and a rule section telling the
   agent to store operational history in ghosttree rather than in source
-  comments.
+  comments. It also installs two onboarding skills — one that sets a machine
+  up, one that walks a repository into the tree — from a single source embedded
+  in the binary, into whichever directory that harness reads skills from. A
+  skill you have edited yourself is kept and reported, not overwritten.
 
 ### Scope axes
 
@@ -42,12 +45,14 @@ to say what kind of thing it learned, not where to file it.
 
 ### Conditional instructions
 
-Instructions may be gated by repository-relative path and an explicit task tag
-(`code`, `review`, `test`, `deploy`, `security`, `docs`). Session startup uses
-the current working directory. Call `context_get` again with `paths` or `task`
-before switching subtree or activity. Values within one gate dimension are OR;
-path and task dimensions combine as AND. Search still finds inactive rules and
+Instructions may be gated by repository-relative path. Session startup uses the
+current working directory; call `context_get` again with `paths` before working
+in another subtree. Several paths are OR. Search still finds inactive rules and
 shows their gates.
+
+The task gate that used to sit next to the path gate is gone (measured: 17 path
+gates against 0 task gates over 25 instructions). A path is objectively
+determinable and the server sees it; a task is a self-assessment nobody makes.
 
 ## Usage
 

@@ -23,6 +23,15 @@ func currentAxes(machine string) scope.Axes {
 	return currentGitContext(machine).axes
 }
 
+func currentSessionRef() string {
+	for _, key := range []string{"CODEX_SESSION_ID", "CODEX_THREAD_ID", "CLAUDE_CODE_SESSION_ID", "OPENCODE_SESSION_ID"} {
+		if ref := os.Getenv(key); ref != "" {
+			return ref
+		}
+	}
+	return ""
+}
+
 type harnessContext struct {
 	axes       scope.Axes
 	activation activation.Context
@@ -105,6 +114,7 @@ func cmdMCP(args []string, stdout io.Writer) int {
 	hctx := currentGitContext(cfg.Machine)
 	c := client.New(cfg)
 	srv := mcpserver.NewServer(c, hctx.axes, hctx.activation)
+	srv.SetSessionRef(currentSessionRef())
 	srv.SetRepoRoot(hctx.root)
 	srv.SetAfterWrite(debounce(treeSettle, func() {
 		home, err := os.UserHomeDir()

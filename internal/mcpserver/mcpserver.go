@@ -31,12 +31,18 @@ type Server struct {
 	// asynchron behandelt werden und parallel hier ankommen können.
 	mentionedMu sync.Mutex
 	mentioned   map[string]bool
+	// sessionRef ist die external_id der Sitzung, die diesen MCP-Prozess hält.
+	// Ohne sie könnte eine Suche den gerade hochgeladenen Prompt als Beleg für
+	// sich selbst zurückgeben.
+	sessionRef string
 }
 
 // SetRepoRoot wird von cmd/ctx/mcp.go aus dem aufgelösten Git-Kontext gesetzt.
 func (s *Server) SetRepoRoot(root string) { s.repoRoot = root }
 
 func (s *Server) SetAfterWrite(f func()) { s.afterWrite = f }
+
+func (s *Server) SetSessionRef(ref string) { s.sessionRef = ref }
 
 func NewServer(c *client.Client, axes scope.Axes, base ...activation.Context) *Server {
 	s := &Server{client: c, ctxAxes: axes}
@@ -114,7 +120,7 @@ func (s *Server) Register(srv *mcp.Server) {
 	}, s.handleSearch)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "context_get",
-		Description: "Get the context package for the current project, branch and machine: what is already known here.",
+		Description: "Get the context package for the current project, branch and machine. With repository-relative paths, return the descriptions of those paths and their ancestor directories instead of repeating the general bootstrap.",
 	}, s.handleGet)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "context_remember",
@@ -126,7 +132,7 @@ func (s *Server) Register(srv *mcp.Server) {
 	}, s.handleSessions)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "context_describe_file",
-		Description: "Describe what a file or directory does, stored against its repository-relative path instead of as a comment in the source. Use it whenever you would otherwise write an explanatory comment, and whenever you create a file. The description is what a later reader — including a small model that cannot hold the file in context — needs to understand this path without reading it. Ghost descriptions are browsable as real files under .ghosttree/tree/.",
+		Description: "Describe what a file or directory does, stored against its repository-relative path instead of as a comment in the source. Use it whenever you would otherwise write an explanatory comment, and whenever you create a file. The description is what a later reader — including a small model that cannot hold the file in context — needs to understand this path without reading it. Ghost descriptions are browsable as real files under .ghosttree/tree/. If you have read the path and there is nothing to say that is not already in the code, pass nothing_to_say instead of writing a description that restates the source — an empty entry costs nothing, a restatement costs trust in every other description.",
 	}, s.handleDescribe)
 	closed := false
 	additive := false
@@ -135,8 +141,13 @@ func (s *Server) Register(srv *mcp.Server) {
 		Description: "Read how a path's description CHANGED — sentence by sentence, newest change first, the way you would read a diff. Not two versions side by side for you to compare: the removed sentences carry a -, the new ones a +, everything that stayed is counted and left out. The file's own history is in git; this is the history of the understanding, and it exists nowhere else. Use it when a description reads as if it no longer matches the code, when you suspect a good description was overwritten, or when you want to know how a component's purpose drifted. Pass full:true only when the exact wording of an old version is what you need — it costs the full text of every version.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closed},
 	}, s.handleFileHistory)
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "context_regression_cover",
+		Description: "Say which test keeps a fixed defect from coming back — or that none does. ghosttree is not what prevents a regression; a test is. A pitfall only helps while somebody reads it. Call this after fixing a bug you recorded: state=covered with the test that would catch its return, state=uncovered when no such test exists and could, state=not_applicable when there is nothing to test here (a pitfall about a tool's behaviour is not a regression candidate — say so rather than leaving it blank, or a considered decision reads as an open task). Call it with no arguments to list the fixes nothing guards, together with how many pitfalls nobody has judged yet.",
+		Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed},
+	}, s.handleRegressionCover)
 	mcp.AddTool(srv, &mcp.Tool{Name: "request_search", Description: "List or search the current project's work ledger. Works like listing issues: call it with no query to see what is open, or name a subject to narrow. A question that names no subject — \"what is left to do\" — returns the list rather than guessing. Answers with a compact list; call request_get for one entry's full text. Use it before substantial feature, architecture, migration, or multi-session work.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closed}}, s.handleRequestSearch)
-	mcp.AddTool(srv, &mcp.Tool{Name: "request_get", Description: "Get a request's requirements, open acceptance criteria, relations, and latest work handoff. Use detailed format only when history and all evidence are needed.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closed}}, s.handleRequestGet)
+	mcp.AddTool(srv, &mcp.Tool{Name: "request_get", Description: "Get one request as readable text with its original paragraphs. Concise includes the request, description, criteria, relations, and latest work; it omits activity, older work, and criterion evidence. Use response_format=detailed for the complete history and all evidence.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closed}}, s.handleRequestGet)
 	mcp.AddTool(srv, &mcp.Tool{Name: "request_create", Description: "Create a ledger entry for substantial work when request_search found no match. Include observable acceptance criteria; do not use for trivial local fixes.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleRequestCreate)
 	mcp.AddTool(srv, &mcp.Tool{Name: "request_start_work", Description: "Associate a Ghosttree session with an existing request as its primary task or as related work. Repeating the same association is safe.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, IdempotentHint: true, OpenWorldHint: &closed}}, s.handleRequestStartWork)
 	mcp.AddTool(srv, &mcp.Tool{Name: "request_finish_work", Description: "End a session's work association with a paused, completed, or abandoned outcome and a concise handoff. This does not complete the request.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, IdempotentHint: true, OpenWorldHint: &closed}}, s.handleRequestFinishWork)
@@ -156,6 +167,34 @@ func textResult(s string) *mcp.CallToolResult {
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: s}}}
 }
 
+// searchLimit ist die Zahl der Treffer je Bereich. Sie ist nicht das Problem —
+// eine Liste muss enden. Das Problem war, dass sie schwieg: genau zwanzig
+// Treffer sehen aus wie "das ist alles", und der Leser schliesst aus der Form
+// auf den Bestand. Derselbe Fehlschluss wie bei null Treffern (#732), gefunden
+// am 2026-08-25 von einem Codex-Prüflauf.
+const searchLimit = 20
+
+// limitNote sagt, dass eine Liste am Anschlag endet — und nur dann.
+func limitNote(shown, limit int) string {
+	if shown < limit {
+		return ""
+	}
+	return fmt.Sprintf("(cut at %d; there may be more — narrow the query, or call context_search with kind set to one area)\n", limit)
+}
+
+func withoutSession(hits []store.SessionHit, externalID string) []store.SessionHit {
+	if externalID == "" {
+		return hits
+	}
+	out := hits[:0]
+	for _, hit := range hits {
+		if hit.Session.ExternalID != externalID {
+			out = append(out, hit)
+		}
+	}
+	return out
+}
+
 func (s *Server) handleSearch(ctx context.Context, _ *mcp.CallToolRequest, in SearchInput) (*mcp.CallToolResult, any, error) {
 	if in.KnowledgeID != 0 {
 		k, err := s.client.KnowledgeByID(in.KnowledgeID)
@@ -169,14 +208,29 @@ func (s *Server) handleSearch(ctx context.Context, _ *mcp.CallToolRequest, in Se
 	if strings.TrimSpace(in.Query) == "" {
 		return nil, nil, fmt.Errorf("give a query to search for, or a knowledge_id to read one entry in full")
 	}
+	ax, crossProject := s.searchAxes(in)
+	if (in.Kind == "" || in.Kind == "all" || in.Kind == "requests") && store.ClassifySearch(in.Query) == store.SearchInterrupted {
+		threads, err := s.client.InterruptedWork(ax, s.sessionRef)
+		if err != nil {
+			return nil, nil, err
+		}
+		var out strings.Builder
+		out.WriteString("## interrupted work (exact state, not full-text matches)\n")
+		for _, thread := range threads {
+			fmt.Fprintf(&out, "- REQ-%d %s", thread.RequestID, thread.Title)
+			if thread.Handoff != "" {
+				fmt.Fprintf(&out, " — handoff: %s", thread.Handoff)
+			}
+			out.WriteByte('\n')
+		}
+		return textResult(out.String()), nil, nil
+	}
 	kind := in.Kind
 	if kind == "" {
 		kind = "all"
 	}
-	limit := 20
+	limit := searchLimit
 	var out strings.Builder
-
-	ax, crossProject := s.searchAxes(in)
 
 	if kind == "knowledge" || kind == "all" {
 		// The scope union is what a session reads here. Across projects that
@@ -202,6 +256,7 @@ func (s *Server) handleSearch(ctx context.Context, _ *mcp.CallToolRequest, in Se
 			if shortened {
 				out.WriteString("(an entry ending in … is shortened; call context_search with knowledge_id=<id> for its full text)\n")
 			}
+			out.WriteString(limitNote(len(res.Knowledge), limit))
 		}
 	}
 	if kind == "sessions" || kind == "all" {
@@ -209,15 +264,17 @@ func (s *Server) handleSearch(ctx context.Context, _ *mcp.CallToolRequest, in Se
 		// would only ever match this very session; project is the useful scope.
 		// An empty project means every project, which is what all_projects asks for.
 		filter := scope.Axes{Project: ax.Project, Machine: in.Machine}
-		res, err := s.client.Search(in.Query, "sessions", filter, limit)
+		res, err := s.client.SearchExcludingSession(in.Query, "sessions", filter, s.sessionRef, limit)
 		if err != nil {
 			return nil, nil, err
 		}
+		res.Sessions = withoutSession(res.Sessions, s.sessionRef)
 		if len(res.Sessions) > 0 {
 			out.WriteString("\n## sessions\n")
 			for _, h := range res.Sessions {
 				out.WriteString(renderHit(h))
 			}
+			out.WriteString(limitNote(len(res.Sessions), limit))
 		}
 	}
 	if kind == "requests" || kind == "all" {
@@ -231,6 +288,7 @@ func (s *Server) handleSearch(ctx context.Context, _ *mcp.CallToolRequest, in Se
 			for _, h := range res.Requests {
 				fmt.Fprintf(&out, "- [request|status=%s|type=%s|source=ledger] REQ-%d %s — %s\n", h.Request.State, h.Request.Type, h.Request.ID, h.Request.Title, h.MatchReason)
 			}
+			out.WriteString(limitNote(len(res.Requests), limit))
 		}
 	}
 	if kind == "files" || kind == "all" {
@@ -253,16 +311,60 @@ func (s *Server) handleSearch(ctx context.Context, _ *mcp.CallToolRequest, in Se
 func (s *Server) handleGet(ctx context.Context, _ *mcp.CallToolRequest, in GetInput) (*mcp.CallToolResult, any, error) {
 	actx := s.baseActivation
 	actx.Paths = append([]string(nil), in.Paths...)
-	var err error
-	actx, err = activation.NormalizeContext(actx)
+	normalized, err := activation.NormalizeContext(actx)
 	if err != nil {
 		return nil, nil, err
 	}
-	md, err := s.client.Bootstrap(s.ctxAxes, actx, 0, "")
+	if len(in.Paths) > 0 {
+		ghosts, err := s.client.GhostTree(s.ctxAxes.Project, "")
+		if err != nil {
+			return nil, nil, err
+		}
+		return textResult(renderGhostContext(ghosts, normalized.Paths)), nil, nil
+	}
+	md, err := s.client.Bootstrap(s.ctxAxes, normalized, 0, "")
 	if err != nil {
 		return nil, nil, err
 	}
 	return textResult(md), nil, nil
+}
+
+func renderGhostContext(ghosts []store.GhostFile, paths []string) string {
+	byPath := make(map[string]store.GhostFile, len(ghosts))
+	for _, g := range ghosts {
+		byPath[g.Path] = g
+	}
+
+	var out strings.Builder
+	out.WriteString("## What is known about the requested paths\n\n")
+	seen := make(map[string]bool)
+	for _, target := range paths {
+		targetGhost, targetExists := byPath[target]
+		targetDescribed := targetExists && strings.TrimSpace(targetGhost.Description) != ""
+		for _, candidate := range append(store.ParentPaths(target), target) {
+			if seen[candidate] {
+				continue
+			}
+			seen[candidate] = true
+			g, ok := byPath[candidate]
+			if !ok || strings.TrimSpace(g.Description) == "" {
+				continue
+			}
+			name := g.Path
+			if name == "" {
+				name = "(Repo-Wurzel)"
+			}
+			fmt.Fprintf(&out, "### %s\n%s\n\n", name, strings.TrimRight(g.Description, "\n"))
+		}
+		if !targetDescribed {
+			name := target
+			if name == "" {
+				name = "(Repo-Wurzel)"
+			}
+			fmt.Fprintf(&out, "### %s\nNo description for this path.\n\n", name)
+		}
+	}
+	return out.String()
 }
 
 func (s *Server) handleRemember(ctx context.Context, _ *mcp.CallToolRequest, in RememberInput) (*mcp.CallToolResult, any, error) {
@@ -352,10 +454,11 @@ func (s *Server) handleSessions(ctx context.Context, _ *mcp.CallToolRequest, in 
 		filter.Project = scope.NormalizeRemote(in.Project)
 	}
 	if in.Query != "" {
-		res, err := s.client.Search(in.Query, "sessions", filter, limit)
+		res, err := s.client.SearchExcludingSession(in.Query, "sessions", filter, s.sessionRef, limit)
 		if err != nil {
 			return nil, nil, err
 		}
+		res.Sessions = withoutSession(res.Sessions, s.sessionRef)
 		var out strings.Builder
 		for _, h := range res.Sessions {
 			out.WriteString(renderHit(h))
@@ -394,8 +497,12 @@ func knowledgeLabel(k store.Knowledge) string {
 	if source == "" {
 		source = k.Origin
 	}
-	return fmt.Sprintf("type:%s|scope:%s|status:%s|confidence:%s|activation:%s|source:%s",
+	label := fmt.Sprintf("type:%s|scope:%s|status:%s|confidence:%s|activation:%s|source:%s",
 		k.Type, scopeLabel(k.Scope), k.Status, k.Confidence, activationLabel, source)
+	if provenance := store.KnowledgeProvenance(k); provenance != "" {
+		label += "|" + provenance
+	}
+	return label
 }
 
 func renderKnowledge(k store.Knowledge) string {

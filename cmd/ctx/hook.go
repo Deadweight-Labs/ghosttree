@@ -7,7 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
+	"unicode"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
@@ -137,25 +139,23 @@ func bootstrapContext(stdin io.Reader) string {
 // wer bloss liest, wird nicht behelligt.
 var writingTools = map[string]bool{"Edit": true, "Write": true, "NotebookEdit": true}
 
+const (
+	maxMentionedTokens = 256
+	maxPathWords       = 8
+	maxGhostTargets    = 32
+)
+
 // ghostContext beantwortet einen Werkzeugaufruf mit dem, was über diesen Pfad
 // bekannt ist. Wie der Prompt-Hook: kurzer Timeout, Schweigen im Zweifel, und
 // niemals ein Fehler nach aussen.
 func ghostContext(stdin io.Reader) string {
 	var in struct {
-		SessionID string `json:"session_id"`
-		CWD       string `json:"cwd"`
-		ToolName  string `json:"tool_name"`
-		ToolInput struct {
-			FilePath     string `json:"file_path"`
-			NotebookPath string `json:"notebook_path"`
-		} `json:"tool_input"`
+		SessionID string          `json:"session_id"`
+		CWD       string          `json:"cwd"`
+		ToolName  string          `json:"tool_name"`
+		ToolInput json.RawMessage `json:"tool_input"`
 	}
-	json.NewDecoder(stdin).Decode(&in)
-	target := in.ToolInput.FilePath
-	if target == "" {
-		target = in.ToolInput.NotebookPath
-	}
-	if target == "" {
+	if err := json.NewDecoder(stdin).Decode(&in); err != nil {
 		return ""
 	}
 	cfg, err := config.Load()
@@ -170,9 +170,267 @@ func ghostContext(stdin io.Reader) string {
 	if gitCtx.Project == "" || gitCtx.Root == "" {
 		return ""
 	}
+	targets := toolPaths(in.ToolInput, cwd, gitCtx.Root)
+	if len(targets) == 0 {
+		return ""
+	}
+
+	contexts := make([]string, len(targets))
+	var wg sync.WaitGroup
+	for i, target := range targets {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			contexts[i] = ghostContextForPath(cfg, gitCtx, in.SessionID, in.ToolName, target)
+		}()
+	}
+	wg.Wait()
+	return strings.Join(contexts, "\n")
+}
+
+func toolPaths(raw json.RawMessage, cwd, root string) []string {
+	var direct struct {
+		FilePath     string `json:"file_path"`
+		NotebookPath string `json:"notebook_path"`
+	}
+	if err := json.Unmarshal(raw, &direct); err == nil {
+		if direct.FilePath != "" {
+			if rel, ok := repositoryRelativePath(direct.FilePath, cwd, root); ok {
+				if !safeExistingPath(rel, root, false) {
+					if _, err := os.Lstat(filepath.Join(root, filepath.FromSlash(rel))); err == nil {
+						return nil
+					}
+				}
+				return []string{rel}
+			}
+			return nil
+		}
+		if direct.NotebookPath != "" {
+			if rel, ok := repositoryRelativePath(direct.NotebookPath, cwd, root); ok {
+				if !safeExistingPath(rel, root, false) {
+					if _, err := os.Lstat(filepath.Join(root, filepath.FromSlash(rel))); err == nil {
+						return nil
+					}
+				}
+				return []string{rel}
+			}
+			return nil
+		}
+	}
+
+	var source string
+	if err := json.Unmarshal(raw, &source); err != nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var paths []string
+	remainingTokens := maxMentionedTokens
+	for _, scope := range codexExecScopes(source, cwd, root) {
+		words := sourceWords(scope.source)
+		if len(words) > remainingTokens {
+			words = words[:remainingTokens]
+		}
+		remainingTokens -= len(words)
+		phrases := pathPhrases(words)
+		for _, candidate := range phrases {
+			rel, ok := repositoryRelativePath(candidate, scope.base, root)
+			if !ok || rel == ".ghosttree" || strings.HasPrefix(rel, ".ghosttree/") || seen[rel] {
+				continue
+			}
+			if !safeExistingPath(rel, root, true) {
+				continue
+			}
+			seen[rel] = true
+			paths = append(paths, rel)
+			if len(paths) == maxGhostTargets {
+				return paths
+			}
+		}
+		if remainingTokens == 0 {
+			break
+		}
+	}
+	return paths
+}
+
+type execScope struct {
+	source string
+	base   string
+}
+
+func codexExecScopes(source, cwd, root string) []execScope {
+	var bases []string
+	seen := map[string]bool{}
+	for _, value := range keyedStringValues(source, "workdir") {
+		base := value
+		if !filepath.IsAbs(base) {
+			base = filepath.Join(cwd, base)
+		}
+		base = filepath.Clean(base)
+		if seen[base] || !canonicalPathInside(base, root) {
+			continue
+		}
+		if info, err := os.Stat(base); err == nil && info.IsDir() {
+			seen[base] = true
+			bases = append(bases, base)
+		}
+	}
+	if strings.Count(source, "exec_command") <= 1 && len(bases) <= 1 {
+		base := cwd
+		if len(bases) == 1 {
+			base = bases[0]
+		}
+		return []execScope{{source: source, base: base}}
+	}
+
+	var scopes []execScope
+	for start := strings.Index(source, "exec_command"); start >= 0; {
+		rest := source[start+len("exec_command"):]
+		next := strings.Index(rest, "exec_command")
+		end := len(source)
+		if next >= 0 {
+			end = start + len("exec_command") + next
+		}
+		segment := source[start:end]
+		commands := keyedStringValues(segment, "cmd")
+		workdirs := keyedStringValues(segment, "workdir")
+		if len(commands) > 0 {
+			base := cwd
+			if len(workdirs) > 0 {
+				base = workdirs[0]
+				if !filepath.IsAbs(base) {
+					base = filepath.Join(cwd, base)
+				}
+				base = filepath.Clean(base)
+			}
+			if canonicalPathInside(base, root) {
+				scopes = append(scopes, execScope{source: commands[0], base: base})
+			}
+		}
+		if next < 0 {
+			break
+		}
+		start = end
+	}
+	return scopes
+}
+
+func keyedStringValues(source, key string) []string {
+	var values []string
+	for offset := 0; offset < len(source); {
+		rel := strings.Index(source[offset:], key)
+		if rel < 0 {
+			break
+		}
+		start := offset + rel
+		endKey := start + len(key)
+		if start > 0 && (source[start-1] == '_' || unicode.IsLetter(rune(source[start-1]))) {
+			offset = endKey
+			continue
+		}
+		pos := endKey
+		for pos < len(source) && unicode.IsSpace(rune(source[pos])) {
+			pos++
+		}
+		if pos >= len(source) || source[pos] != ':' {
+			offset = endKey
+			continue
+		}
+		pos++
+		for pos < len(source) && unicode.IsSpace(rune(source[pos])) {
+			pos++
+		}
+		value, end, ok := sourceStringAt(source, pos)
+		if ok {
+			values = append(values, value)
+			offset = end
+			continue
+		}
+		offset = endKey
+	}
+	return values
+}
+
+func sourceStringAt(source string, start int) (string, int, bool) {
+	if start >= len(source) || source[start] != '\'' && source[start] != '"' && source[start] != '`' {
+		return "", start, false
+	}
+	quote := source[start]
+	var b strings.Builder
+	escaped := false
+	for i := start + 1; i < len(source); i++ {
+		c := source[i]
+		if escaped {
+			b.WriteByte(c)
+			escaped = false
+			continue
+		}
+		if c == '\\' {
+			escaped = true
+			continue
+		}
+		if c == quote {
+			return b.String(), i + 1, true
+		}
+		b.WriteByte(c)
+	}
+	return "", start, false
+}
+
+func sourceWords(source string) []string {
+	return strings.FieldsFunc(source, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r) && !strings.ContainsRune("._/-", r)
+	})
+}
+
+func pathPhrases(words []string) []string {
+	var phrases []string
+	for end := range words {
+		for count := 1; count <= maxPathWords && count <= end+1; count++ {
+			phrases = append(phrases, strings.Join(words[end-count+1:end+1], " "))
+		}
+	}
+	return phrases
+}
+
+func safeExistingPath(rel, root string, regular bool) bool {
+	abs := filepath.Join(root, filepath.FromSlash(rel))
+	info, err := os.Stat(abs)
+	if err != nil || regular && !info.Mode().IsRegular() {
+		return false
+	}
+	return canonicalPathInside(abs, root)
+}
+
+func canonicalPathInside(path, root string) bool {
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return false
+	}
+	realPath, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(realRoot, realPath)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func repositoryRelativePath(target, cwd, root string) (string, bool) {
 	abs := target
 	if !filepath.IsAbs(abs) {
 		abs = filepath.Join(cwd, target)
+	}
+	rel, err := filepath.Rel(root, abs)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return filepath.ToSlash(rel), true
+}
+
+func ghostContextForPath(cfg config.Config, gitCtx collector.GitContext, sessionID, toolName, target string) string {
+	abs := target
+	if !filepath.IsAbs(abs) {
+		abs = filepath.Join(gitCtx.Root, target)
 	}
 	rel, err := filepath.Rel(gitCtx.Root, abs)
 	if err != nil || strings.HasPrefix(rel, "..") {
@@ -191,7 +449,7 @@ func ghostContext(stdin io.Reader) string {
 	// (REQ-179). Erkannt wird der Umzug jetzt beim Baumschreiben.
 	sha, blob, lines, _ := ghost.HashFile(abs)
 
-	sessionKey := "claude:" + in.SessionID
+	sessionKey := "claude:" + sessionID
 	entries, err := client.NewWithTimeout(cfg, relevanceTimeout).
 		GhostsForPath(gitCtx.Project, rel, sessionKey)
 	if err != nil {
@@ -239,7 +497,7 @@ func ghostContext(stdin io.Reader) string {
 	// Deshalb wird beim Schreiben nachgesehen, statt aus dem Schweigen zu
 	// schliessen. Eine zweite Runde, aber nur bei Schreibwerkzeugen und nur,
 	// wenn der Pfad nicht ohnehin schon in der Auslieferung stand.
-	if writingTools[in.ToolName] && !describedTarget {
+	if writingTools[toolName] && !describedTarget {
 		if g, ok := describedNow(cfg, gitCtx.Project, rel); ok {
 			describedTarget = true
 			changed, reachable := ghost.ChangedLines(gitCtx.Root, g.GitBlob, blob)
@@ -260,14 +518,14 @@ func ghostContext(stdin io.Reader) string {
 			priorVersions = n
 		}
 	}
-	return renderGhostDelivery(entries, fresh, writingTools[in.ToolName], describedTarget, rel, priorVersions)
+	return renderGhostDelivery(entries, fresh, writingTools[toolName], describedTarget, rel, priorVersions)
 }
 
 func pluralVersions(n int) string {
 	if n == 1 {
-		return "1 frühere Fassung"
+		return "1 earlier version"
 	}
-	return fmt.Sprintf("%d frühere Fassungen", n)
+	return fmt.Sprintf("%d earlier versions", n)
 }
 
 // describedNow fragt gezielt nach einem einzelnen Pfad, ohne die
@@ -289,7 +547,7 @@ func describedNow(cfg config.Config, project, rel string) (store.GhostFile, bool
 func renderGhostDelivery(entries []store.GhostFile, fresh map[string]ghost.Freshness, writing, describedTarget bool, target string, priorVersions int) string {
 	var b strings.Builder
 	if len(entries) > 0 {
-		b.WriteString("## Ghost-Dateien zu diesem Pfad\n\n")
+		b.WriteString("## What is known about this path\n\n")
 		for _, g := range entries {
 			name := g.Path
 			if name == "" {
@@ -306,7 +564,7 @@ func renderGhostDelivery(entries []store.GhostFile, fresh map[string]ghost.Fresh
 			// sie gezielt; sie ungefragt mitzuliefern wäre genau das
 			// Kontextrauschen, gegen das die Entdopplung antritt.
 			if g.Path == target && priorVersions > 0 {
-				fmt.Fprintf(&b, "(%s — `context_file_history`, falls die aktuelle Beschreibung nicht mehr passt)\n\n",
+				fmt.Fprintf(&b, "(%s — `context_file_history` if the current description no longer fits)\n\n",
 					pluralVersions(priorVersions))
 			}
 		}
@@ -314,9 +572,9 @@ func renderGhostDelivery(entries []store.GhostFile, fresh map[string]ghost.Fresh
 	if writing {
 		switch {
 		case !describedTarget:
-			fmt.Fprintf(&b, "Diese Datei hat keine Ghost-Datei. Wenn beim Ändern ein erklärender Kommentar entstehen würde, schreib ihn stattdessen mit `context_describe_file` an den Pfad %s.\n", target)
+			fmt.Fprintf(&b, "This path has no description. If your change would produce an explanatory comment, write it to %s with `context_describe_file` instead.\n", target)
 		case fresh[target].State == "stale" || fresh[target].State == "unknown":
-			fmt.Fprintf(&b, "Die Beschreibung von %s ist veraltet. Aktualisiere sie nach der Änderung mit `context_describe_file`.\n", target)
+			fmt.Fprintf(&b, "The description of %s is out of date. Update it after your change with `context_describe_file`.\n", target)
 		}
 	}
 	return b.String()

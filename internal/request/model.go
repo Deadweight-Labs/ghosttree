@@ -85,6 +85,20 @@ type Detail struct {
 	Relations []Relation  `json:"relations"`
 	Work      []Work      `json:"work"`
 	Activity  []Activity  `json:"activity"`
+	// Sightings ist bei einem destillierten Eintrag das, was die Beschreibung
+	// nicht sein kann: der Wortlaut. Leer bei allem, was ein Mensch geschrieben
+	// hat — dort ist die Beschreibung selbst die Quelle.
+	Sightings []Sighting `json:"sightings,omitempty"`
+}
+
+// Sighting ist eine Stelle, an der jemand den Wunsch geäussert hat: das Zitat
+// und genug Adresse, um es im Transkript wiederzufinden.
+type Sighting struct {
+	SessionID int64  `json:"session_id"`
+	ChunkSeq  int    `json:"chunk_seq"`
+	Quote     string `json:"quote"`
+	At        string `json:"at,omitempty"`
+	Harness   string `json:"harness,omitempty"`
 }
 
 type CreateInput struct {
@@ -99,7 +113,13 @@ type SearchFilter struct {
 	Type   string
 	Query  string
 	Cursor string
-	Limit  int
+	// FullDescription gibt die Beschreibung ungekürzt zurück. Für eine
+	// Trefferliste falsch — 24 volle Beschreibungen sprengen jedes Werkzeuglimit
+	// —, für den Dateispiegel notwendig: der gibt sich nicht als Liste aus,
+	// sondern als das Dokument selbst, und ein Text, der mitten im Wort endet,
+	// sieht dort nicht gekürzt aus, sondern beschädigt.
+	FullDescription bool
+	Limit           int
 }
 
 type SearchHit struct {
@@ -107,6 +127,10 @@ type SearchHit struct {
 	OpenCriteria  int     `json:"open_criteria"`
 	LatestHandoff string  `json:"latest_handoff,omitempty"`
 	MatchReason   string  `json:"match_reason,omitempty"`
+	// Sightings zählt die unabhängigen Sessions, in denen der Wunsch fiel. Ein
+	// Eintrag aus vier Sessions ist eine Anforderung, die nicht gebaut wird;
+	// einer aus einer war vielleicht lautes Denken. Null für Handgeschriebenes.
+	Sightings int `json:"sightings,omitempty"`
 }
 
 type SearchPage struct {

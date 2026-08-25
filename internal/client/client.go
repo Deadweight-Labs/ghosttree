@@ -236,6 +236,24 @@ func (c *Client) PatchKnowledge(id int64, patch map[string]string) error {
 	return c.do("PATCH", "/api/knowledge/"+strconv.FormatInt(id, 10), nil, patch, nil)
 }
 
+// SetRegressionCover records what guards a fixed defect: the test that would
+// catch its return, or that none exists, or that there is nothing to test here.
+func (c *Client) SetRegressionCover(id int64, state, test string) error {
+	body := map[string]string{"state": state, "test": test}
+	return c.do("PUT", "/api/knowledge/"+strconv.FormatInt(id, 10)+"/regression", nil, body, nil)
+}
+
+// RegressionGaps returns the fixes nothing guards, and how many entries nobody
+// has judged yet. The second number keeps a short list from reading as all-clear.
+func (c *Client) RegressionGaps(ax scope.Axes) ([]store.Knowledge, int, error) {
+	var out struct {
+		Gaps       []store.Knowledge `json:"gaps"`
+		Unreviewed int               `json:"unreviewed"`
+	}
+	err := c.do("GET", "/api/knowledge/regression-gaps", axesQuery(ax), nil, &out)
+	return out.Gaps, out.Unreviewed, err
+}
+
 // KnowledgeByID fetches one entry with its body intact, for the case where
 // somebody asked for exactly this entry rather than for an overview.
 func (c *Client) KnowledgeByID(id int64) (store.Knowledge, error) {
@@ -286,16 +304,20 @@ func (c *Client) CompletedMigrationArtifacts(project string) (map[string][]strin
 }
 
 func (c *Client) Search(q, kind string, filter scope.Axes, limit int) (SearchResult, error) {
-	return c.search(q, kind, filter, limit, false)
+	return c.search(q, kind, filter, "", limit, false)
+}
+
+func (c *Client) SearchExcludingSession(q, kind string, filter scope.Axes, session string, limit int) (SearchResult, error) {
+	return c.search(q, kind, filter, session, limit, false)
 }
 
 // SearchUnion searches knowledge along the scope union of the given context
 // instead of matching the axes exactly.
 func (c *Client) SearchUnion(q, kind string, ax scope.Axes, limit int) (SearchResult, error) {
-	return c.search(q, kind, ax, limit, true)
+	return c.search(q, kind, ax, "", limit, true)
 }
 
-func (c *Client) search(q, kind string, filter scope.Axes, limit int, union bool) (SearchResult, error) {
+func (c *Client) search(q, kind string, filter scope.Axes, excludeSession string, limit int, union bool) (SearchResult, error) {
 	query := axesQuery(filter)
 	query.Set("q", q)
 	if union {
@@ -304,11 +326,24 @@ func (c *Client) search(q, kind string, filter scope.Axes, limit int, union bool
 	if kind != "" {
 		query.Set("kind", kind)
 	}
+	if excludeSession != "" {
+		query.Set("exclude_session", excludeSession)
+	}
 	if limit > 0 {
 		query.Set("limit", strconv.Itoa(limit))
 	}
 	var out SearchResult
 	err := c.do("GET", "/api/search", query, nil, &out)
+	return out, err
+}
+
+func (c *Client) InterruptedWork(ax scope.Axes, excludeSession string) ([]store.InterruptedThread, error) {
+	q := axesQuery(ax)
+	if excludeSession != "" {
+		q.Set("session", excludeSession)
+	}
+	var out []store.InterruptedThread
+	err := c.do("GET", "/api/context/interrupted", q, nil, &out)
 	return out, err
 }
 
@@ -426,5 +461,21 @@ func (c *Client) SearchGhosts(q string, project string, limit int) ([]store.Ghos
 	}
 	var out []store.GhostFile
 	err := c.do("GET", "/api/ghosts/search", v, nil, &out)
+	return out, err
+}
+
+// PutGhostReview meldet, dass ein Pfad angesehen und absichtlich nicht
+// beschrieben wurde. Der Blob muss mitkommen: ohne ihn gälte die Entscheidung
+// jeder künftigen Fassung der Datei.
+func (c *Client) PutGhostReview(r store.GhostReview) error {
+	return c.do("POST", "/api/ghosts/reviews", nil, r, nil)
+}
+
+func (c *Client) GhostReviews(project, prefix string) ([]store.GhostReview, error) {
+	q := url.Values{}
+	q.Set("project", project)
+	q.Set("prefix", prefix)
+	var out []store.GhostReview
+	err := c.do("GET", "/api/ghosts/reviews", q, nil, &out)
 	return out, err
 }

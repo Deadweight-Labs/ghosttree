@@ -37,8 +37,9 @@ func cmdDoctor(args []string, stdout io.Writer) int {
 
 	if *fix {
 		for name, install := range map[string]func(string) ([]installer.Change, error){
-			"claude": installer.InstallClaude,
-			"codex":  installer.InstallCodex,
+			"claude":   installer.InstallClaude,
+			"codex":    installer.InstallCodex,
+			"opencode": installer.InstallOpencode,
 		} {
 			if _, err := install(home); err != nil {
 				fmt.Fprintf(stdout, "fix %s: %v\n", name, err)
@@ -48,6 +49,7 @@ func cmdDoctor(args []string, stdout io.Writer) int {
 	}
 
 	checks := append(installer.VerifyClaude(home), installer.VerifyCodex(home)...)
+	checks = append(checks, installer.VerifyOpencode(home)...)
 	checks = append(checks, binaryCheck())
 	checks = append(checks, configChecks()...)
 	checks = append(checks, ghostChecks()...)

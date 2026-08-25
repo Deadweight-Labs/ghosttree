@@ -27,8 +27,7 @@ Code comments explain code to humans. Operational history, failed approaches
 and session notes belong in ghosttree via the ` + "`context_remember`" + ` MCP tool
 rather than in source comments. Search prior knowledge with ` + "`context_search`" + `
 before re-deriving it. Call ` + "`context_get`" + ` again with repository-relative paths
-before working in another subtree, and with an explicit task tag for deploy,
-security, review, test or docs work.
+before working in another subtree.
 
 What a file or directory DOES belongs in its ghost file. Whenever you are about
 to write an explanatory comment that serves later readers more than the person
@@ -36,11 +35,16 @@ in front of you — and whenever you create a file — put that text at the path
 instead, with ` + "`context_describe_file`" + `. This replaces the comment; it does not
 forbid it.
 
-The ghost tree mirrors this repository under ` + "`.ghosttree/tree/`" + `: one ` + "`.md`" + ` per
-file, a ` + "`__dir.md`" + ` per directory. It is browsable with ls, cat and grep, and
-reading a directory level there is the cheapest way to understand an unfamiliar
-part of the codebase before opening any source file. It is a projection —
-editing it changes nothing.
+What ghosttree knows about this repository is also on disk, under ` + "`.ghosttree/`" + `:
+` + "`.ghosttree/tree/`" + ` holds one ` + "`.md`" + ` per file and a ` + "`__dir.md`" + ` per directory,
+` + "`.ghosttree/knowledge/`" + ` holds the pitfalls, decisions and notes a session here
+would be given, ` + "`.ghosttree/requests/`" + ` holds the work ledger split into open
+and done, and ` + "`.ghosttree/docs/`" + ` holds plans and specs in full. Start at ` + "`.ghosttree/INDEX.md`" + `, which also names what
+is deliberately NOT mirrored there. Reading it with ls, cat and grep costs no
+tool call and is the cheapest way into an unfamiliar part of the codebase —
+` + "`grep -ril \"topic\" .ghosttree/knowledge/`" + ` before ` + "`context_search`" + `. It is a
+projection: editing it changes nothing, and it is only as fresh as its last
+write, which the index states.
 
 For substantial feature, architecture, migration, or multi-session work, use
 ` + "`request_search`" + ` before implementation. Continue a matching request and

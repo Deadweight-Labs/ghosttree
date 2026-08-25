@@ -2,6 +2,7 @@ package store
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -41,6 +42,82 @@ func TestInstructionActivationPersistsAndFiltersContext(t *testing.T) {
 	}
 	if len(hit) != 1 || hit[0].ID != id {
 		t.Fatalf("matching context returned %+v", hit)
+	}
+}
+
+func TestKnowledgeKeepsAndReadsThePersonWhoVerifiedIt(t *testing.T) {
+	s := openTest(t)
+	id, err := s.InsertKnowledge(Knowledge{Type: "note", Title: "two people", Body: "b", Person: "robin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateKnowledge(id, map[string]string{"confidence": "verified", "confirmed_by": "philipp"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.KnowledgeByID(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Person != "robin" || got.ConfirmedBy != "philipp" {
+		t.Fatalf("provenance = person %q, confirmed_by %q, want robin/philipp", got.Person, got.ConfirmedBy)
+	}
+}
+
+func TestKnowledgeUpdateKeepsOriginalAuthorAndRecordsLastEditor(t *testing.T) {
+	s := openTest(t)
+	id, err := s.InsertKnowledge(Knowledge{Type: "note", Title: "original", Body: "b", Person: "robin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateKnowledgeBy(id, map[string]string{"title": "corrected"}, "philipp"); err != nil {
+		t.Fatal(err)
+	}
+
+	current, err := s.KnowledgeByID(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Person != "robin" || current.LastModifiedBy != "philipp" || current.Title != "corrected" {
+		t.Fatalf("current provenance = author %q, last editor %q, title %q", current.Person, current.LastModifiedBy, current.Title)
+	}
+
+	history, err := s.KnowledgeHistory(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 1 || history[0].Title != "original" || history[0].Person != "robin" || history[0].ChangedBy != "philipp" {
+		t.Fatalf("history = %+v, want original authored by robin and replaced by philipp", history)
+	}
+}
+
+func TestOpeningExistingKnowledgeDatabaseAddsHistoryProvenance(t *testing.T) {
+	db := t.TempDir() + "/knowledge.db"
+	first, err := Open(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := first.InsertKnowledge(Knowledge{Type: "note", Title: "before restart", Body: "b", Person: "robin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.DB().Exec(`ALTER TABLE knowledge DROP COLUMN last_modified_by`); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := Open(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { second.Close() })
+	if err := second.UpdateKnowledgeBy(id, map[string]string{"body": "after restart"}, "philipp"); err != nil {
+		t.Fatal(err)
+	}
+	history, err := second.KnowledgeHistory(id)
+	if err != nil || len(history) != 1 {
+		t.Fatalf("history after reopening = %+v, err=%v", history, err)
 	}
 }
 
@@ -415,4 +492,20 @@ func titles(ks []Knowledge) []string {
 		out[i] = k.Title
 	}
 	return out
+}
+
+// Die Historie allein reicht nicht: der Eintrag, den eine Sitzung liest, muss
+// selbst sagen, dass jemand anderes ihn umgeschrieben hat. Sonst behält er den
+// fremden Namen und liest sich als dessen Aussage — genau der Befund, aus dem
+// REQ-181 entstand, nur im aktuellen Stand statt im Verlauf.
+func TestProvenanceNamesTheEditorNotOnlyTheAuthor(t *testing.T) {
+	fremd := KnowledgeProvenance(Knowledge{Person: "robin", LastModifiedBy: "philipp"})
+	if !strings.Contains(fremd, "by robin") || !strings.Contains(fremd, "last edited by philipp") {
+		t.Errorf("provenance = %q, want both names", fremd)
+	}
+	// Wer seinen eigenen Eintrag nachbessert, erzeugt keine zweite Zeile.
+	eigen := KnowledgeProvenance(Knowledge{Person: "robin", LastModifiedBy: "robin"})
+	if strings.Contains(eigen, "last edited") {
+		t.Errorf("provenance = %q, want no editor line when author and editor are the same", eigen)
+	}
 }

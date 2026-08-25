@@ -35,12 +35,16 @@ func run(args []string, stdout io.Writer) int {
 		return cmdDoctor(rest, stdout)
 	case "review":
 		return cmdReview(rest, stdout)
+	case "regression":
+		return cmdRegression(rest, stdout)
 	case "request":
 		return cmdRequest(rest, stdout)
 	case "ghost":
 		return cmdGhost(rest, stdout)
 	case "migrate":
 		return cmdMigrate(rest, stdout)
+	case "mirror":
+		return cmdMirror(rest, stdout)
 	case "distill-sessions":
 		return cmdDistillSessions(rest, stdout)
 	case "usage":
@@ -71,16 +75,18 @@ const usage = `usage: ctx <command>
   serve    run the ghosttree server
   watch    run the session collector daemon
   mcp      run the MCP server (stdio)
-  install  set up a harness (claude|codex)
+  install  set up a harness (claude|codex|opencode)
   setup    write client config (server URL + token)
   person   manage persons/tokens (server-side)
   status   show local setup state
   doctor   check the harness wiring for drift (--fix to repair)
   export   write a session's original transcript as JSONL
   review   approve or reject distilled knowledge
+  regression  say which test guards a fixed defect, and list the fixes none does
   request  search and manage the work ledger
   ghost    read earlier versions of a path's description
   migrate  move repository agent artifacts into ghosttree
+  mirror   write .ghosttree/ for a repository (harnesses without hooks)
   distill-sessions  extract quarantined knowledge from idle sessions
                     (--submit/--collect for the half-price batch path,
                      --reprocess-version to redo work of an older prompt)

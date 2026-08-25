@@ -6,6 +6,21 @@ import (
 	"time"
 )
 
+func TestCurrentSessionRefUsesHarnessEnvironment(t *testing.T) {
+	t.Setenv("CODEX_SESSION_ID", "codex-current")
+	t.Setenv("CODEX_THREAD_ID", "")
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "claude-parent")
+	if got := currentSessionRef(); got != "codex-current" {
+		t.Fatalf("currentSessionRef() = %q, want codex-current", got)
+	}
+
+	t.Setenv("CODEX_SESSION_ID", "")
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "claude-current")
+	if got := currentSessionRef(); got != "claude-current" {
+		t.Fatalf("currentSessionRef() = %q, want claude-current", got)
+	}
+}
+
 // Der Fall, den ein externer Review gefunden hat: timer.Stop() greift nicht
 // mehr, wenn der Timer schon gefeuert hat. Dauert f laenger als die Ruhezeit,
 // startet der naechste Termin einen zweiten Lauf NEBEN dem ersten — und weil

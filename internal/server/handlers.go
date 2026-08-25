@@ -274,6 +274,56 @@ func (a *api) getKnowledge(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, k)
 }
 
+func (a *api) knowledgeHistory(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(r)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "bad knowledge id")
+		return
+	}
+	history, err := a.st.KnowledgeHistory(id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, history)
+}
+
+// setRegressionCover trägt ein, womit ein Eintrag abgesichert ist. Eigener
+// Endpunkt statt eines Feldes in patchKnowledge: eine Aussage ÜBER den Text ist
+// keine Korrektur des Textes und darf keine neue Fassung in der Historie
+// anlegen.
+func (a *api) setRegressionCover(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(r)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "bad knowledge id")
+		return
+	}
+	var in struct {
+		State string `json:"state"`
+		Test  string `json:"test"`
+	}
+	if err := readJSON(r, &in); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := a.st.SetRegressionCover(id, in.State, in.Test); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *api) regressionGaps(w http.ResponseWriter, r *http.Request) {
+	gaps, unreviewed, err := a.st.RegressionGaps(axesFromQuery(r))
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	// Die Zahl der Unbeurteilten reist mit: eine kurze Lückenliste ohne sie
+	// liest sich als Entwarnung, obwohl niemand hingesehen hat.
+	writeJSON(w, http.StatusOK, map[string]any{"gaps": gaps, "unreviewed": unreviewed})
+}
+
 func (a *api) patchKnowledge(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathID(r)
 	if !ok {
@@ -285,7 +335,17 @@ func (a *api) patchKnowledge(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := a.st.UpdateKnowledge(id, patch); err != nil {
+	// Der Token ist die einzige vertrauenswürdige Quelle für den Bestätiger;
+	// ein mitgesendeter Name darf keine fremde Freigabe vortäuschen.
+	delete(patch, "confirmed_by")
+	if confidence, ok := patch["confidence"]; ok {
+		if confidence == "verified" {
+			patch["confirmed_by"] = personOf(r)
+		} else {
+			patch["confirmed_by"] = ""
+		}
+	}
+	if err := a.st.UpdateKnowledgeBy(id, patch, personOf(r)); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -321,7 +381,7 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 		res.Knowledge = ks
 	}
 	if kind == "sessions" || kind == "all" {
-		hits, err := a.st.SearchSessions(q, filter, limit)
+		hits, err := a.st.SearchSessions(q, filter, r.URL.Query().Get("exclude_session"), limit)
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
@@ -375,6 +435,17 @@ func (a *api) bootstrap(w http.ResponseWriter, r *http.Request) {
 		r.URL.Query().Get("session"), maxInterruptedThreads); err == nil {
 		fmt.Fprint(w, renderInterrupted(threads, time.Now().UTC()))
 	}
+}
+
+func (a *api) interrupted(w http.ResponseWriter, r *http.Request) {
+	threads, err := a.st.InterruptedWork(axesFromQuery(r),
+		time.Now().UTC().Add(-interruptedWindow).Format(time.RFC3339),
+		r.URL.Query().Get("session"), maxInterruptedThreads)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, threads)
 }
 
 // maxRelevantEntries caps what one prompt may pull in. Three is enough to
@@ -600,7 +671,11 @@ func writeGroups(b *strings.Builder, entries []store.Knowledge, budget int, head
 			continue
 		}
 		for _, k := range group {
-			line := fmt.Sprintf("- [%s] %s — %s\n", scopeLabel(k.Scope), k.Title, truncate(oneLine(k.Body), 200))
+			label := scopeLabel(k.Scope)
+			if provenance := store.KnowledgeProvenance(k); provenance != "" {
+				label += " | " + provenance
+			}
+			line := fmt.Sprintf("- [%s] %s — %s\n", label, k.Title, truncate(oneLine(k.Body), 200))
 			if !headings[t] {
 				line = "\n### " + t + "\n" + line
 			}

@@ -3,6 +3,9 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -52,6 +55,31 @@ func callTool(t *testing.T, session *mcp.ClientSession, name string, args map[st
 		}
 	}
 	return sb.String(), res.IsError
+}
+
+func TestContextGetWithPathsReturnsGhostContextOverTheWire(t *testing.T) {
+	c, st := newTestClient(t)
+	project := "github.com/x/y"
+	for _, g := range []store.GhostFile{
+		{Project: project, Path: "internal", Kind: "dir", Description: "der innere Bauplan"},
+		{Project: project, Path: "internal/mcpserver", Kind: "dir", Description: "die MCP-Werkzeuge"},
+	} {
+		if _, err := st.PutGhostFile(g); err != nil {
+			t.Fatal(err)
+		}
+	}
+	session := connect(t, &Server{client: c, ctxAxes: scope.Axes{Project: project}})
+
+	got, failed := callTool(t, session, "context_get",
+		map[string]any{"paths": []string{"internal/mcpserver/mcpserver.go"}})
+	if failed {
+		t.Fatalf("Pfadkontext wurde am MCP-Draht abgewiesen: %s", got)
+	}
+	for _, want := range []string{"der innere Bauplan", "die MCP-Werkzeuge"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("MCP-Antwort fehlt %q: %s", want, got)
+		}
+	}
 }
 
 func TestReadingOneEntryNeedsNothingButItsID(t *testing.T) {
@@ -106,6 +134,37 @@ func TestSearchingByWordsStillWorksOverTheWire(t *testing.T) {
 	}
 	if !strings.Contains(got, "knowledge_id") {
 		t.Errorf("a shortened hit does not point at the full text: %.300s", got)
+	}
+}
+
+func TestCurrentSessionDoesNotComeBackAsEvidenceOverTheWire(t *testing.T) {
+	c, st := newTestClient(t)
+	project := "github.com/x/y"
+	for _, externalID := range []string{"current-session", "older-session"} {
+		id, err := st.UpsertSession(store.Session{Harness: "codex", ExternalID: externalID,
+			Scope: scope.Axes{Project: project}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := st.AppendChunks(id, []store.Chunk{{Seq: 0, Role: "user", Text: "eigenbeleg", Raw: "{}"}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	session := connect(t, &Server{client: c, ctxAxes: scope.Axes{Project: project}, sessionRef: "current-session"})
+
+	for tool, args := range map[string]map[string]any{
+		"context_search":   {"query": "eigenbeleg", "kind": "sessions"},
+		"context_sessions": {"query": "eigenbeleg"},
+	} {
+		got, failed := callTool(t, session, tool, args)
+		if failed {
+			t.Fatalf("%s failed: %s", tool, got)
+		}
+		// Die Werkzeugausgabe nennt bewusst die interne numerische ID, nicht die
+		// external_id. #1 ist die aktuelle und #2 die frühere echte Sitzung.
+		if strings.Contains(got, "- #1 ") || !strings.Contains(got, "- #2 ") {
+			t.Fatalf("%s: current session leaked or earlier evidence vanished: %s", tool, got)
+		}
 	}
 }
 
@@ -276,5 +335,92 @@ func TestBootstrapOverTheWireInheritsFromTheParentBranch(t *testing.T) {
 	}
 	if strings.Contains(got, "auf feat-y") {
 		t.Errorf("a sibling branch leaked into the bootstrap: %s", got)
+	}
+}
+
+// gitRepoWithFile baut ein winziges, versioniertes Repo. Ghost-Schreibpfade
+// brauchen es: trackedInRepo weist ab, was `git ls-files` nicht kennt, und ein
+// Test ohne echtes Repo pruefte damit einen Weg, den es in Wirklichkeit nicht
+// gibt.
+func gitRepoWithFile(t *testing.T, name, content string) string {
+	t.Helper()
+	repo := t.TempDir()
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run("init")
+	if err := os.WriteFile(filepath.Join(repo, name), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", name)
+	run("commit", "-m", "i")
+	return repo
+}
+
+// Der Aufruf, den die Werkzeugbeschreibung verspricht, muss die
+// Schemapruefung passieren — nicht nur den Handler erreichen. Genau hier stand
+// schon einmal ein Pflichtfeld, waehrend die Beschreibung zum Weglassen
+// aufforderte: vier gruene Tests, ein fuer Agenten unbenutzbares Werkzeug
+// (#846).
+func TestDescribeFileAcceptsNothingToSayWithoutDescription(t *testing.T) {
+	c, st := newTestClient(t)
+	project := "github.com/x/y"
+	repo := gitRepoWithFile(t, "foo.go", "package foo\n")
+	session := connect(t, &Server{client: c, ctxAxes: scope.Axes{Project: project}, repoRoot: repo})
+
+	got, failed := callTool(t, session, "context_describe_file",
+		map[string]any{"path": "foo.go", "nothing_to_say": true})
+	if failed {
+		t.Fatalf("nothing_to_say ohne description muss ein gueltiger Aufruf sein: %s", got)
+	}
+	if !strings.Contains(got, "nichts zu sagen") {
+		t.Errorf("die Antwort soll den Zustand bestaetigen, got %q", got)
+	}
+
+	reviews, err := st.GhostReviewsUnder(project, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reviews) != 1 || reviews[0].Path != "foo.go" {
+		t.Fatalf("want one review on foo.go, got %+v", reviews)
+	}
+	// Der Blob ist der ganze Zweck: ohne ihn gaelte die Entscheidung jeder
+	// kuenftigen Fassung der Datei.
+	if reviews[0].GitBlob == "" {
+		t.Error("das Review muss an den git-Blob gebunden sein")
+	}
+}
+
+func TestDescribeFileStillRequiresOneOfBoth(t *testing.T) {
+	c, _ := newTestClient(t)
+	repo := gitRepoWithFile(t, "foo.go", "package foo\n")
+	session := connect(t, &Server{client: c, ctxAxes: scope.Axes{Project: "p"}, repoRoot: repo})
+
+	// Weder Beschreibung noch nothing_to_say: ein leerer Aufruf wuerde einen
+	// Pfad still als erledigt buchen, ohne dass jemand hingesehen hat.
+	got, failed := callTool(t, session, "context_describe_file", map[string]any{"path": "foo.go"})
+	if !failed {
+		t.Fatalf("ein Aufruf ohne beides muss abgewiesen werden, got %q", got)
+	}
+}
+
+func TestDescribeFileRefusesBothAtOnce(t *testing.T) {
+	c, _ := newTestClient(t)
+	repo := gitRepoWithFile(t, "foo.go", "package foo\n")
+	session := connect(t, &Server{client: c, ctxAxes: scope.Axes{Project: "p"}, repoRoot: repo})
+
+	// Beides zugleich ist keine Kleinigkeit: der Aufrufer meint zwei
+	// verschiedene Dinge, und stillschweigend eins davon zu waehlen hiesse,
+	// entweder eine Beschreibung zu verwerfen oder einen Review zu erfinden.
+	got, failed := callTool(t, session, "context_describe_file",
+		map[string]any{"path": "foo.go", "description": "etwas", "nothing_to_say": true})
+	if !failed {
+		t.Fatalf("beides zugleich muss abgewiesen werden, got %q", got)
 	}
 }

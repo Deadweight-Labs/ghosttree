@@ -12,18 +12,24 @@ import (
 
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
+	"github.com/Deadweight-Labs/ghosttree/internal/ghost"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
 // fakeGhostServer beantwortet genau die zwei Anfragen, die WriteTree stellt.
 // Ein echter Store dahinter würde nichts zusätzlich prüfen: was hier zählt, ist
 // was auf Platte landet, nicht wie die Antwort zustande kam.
-func fakeGhostServer(t *testing.T, described map[string]string) (*client.Client, func()) {
+func fakeGhostServer(t *testing.T, described map[string]string, reviews ...store.GhostReview) (*client.Client, func()) {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/health":
 			w.Write([]byte(`{"ok":true}`))
+		case "/api/ghosts/reviews":
+			if reviews == nil {
+				reviews = []store.GhostReview{}
+			}
+			json.NewEncoder(w).Encode(reviews)
 		case "/api/ghosts/tree":
 			out := []store.GhostFile{}
 			for path, desc := range described {
@@ -99,4 +105,65 @@ func TestWriteTreeStaysSilentWithoutARepository(t *testing.T) {
 	if called {
 		t.Fatal("a session outside a repository must not ask the server for a tree")
 	}
+}
+
+// Der Weg von Ende zu Ende: ein gespeichertes Review, dessen Blob zur Datei im
+// Repo passt, muss den Pfad von der Arbeitsliste nehmen — und ein Review auf
+// eine inzwischen geaenderte Fassung darf das nicht.
+func TestWriteTreeCarriesReviewedEmptyAndExpiresItOnChange(t *testing.T) {
+	repo := newRepo(t)
+	blob := blobOf(t, repo, "internal/store/store.go")
+
+	c, stop := fakeGhostServer(t, nil,
+		store.GhostReview{Path: "internal/store/store.go", GitBlob: blob},
+		store.GhostReview{Path: "internal/store/knowledge.go", GitBlob: "ein alter blob"})
+	defer stop()
+
+	if err := WriteTree(c, "p", repo, t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := os.ReadFile(filepath.Join(repo, ".ghosttree", "tree", "internal", "store", "__dir.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(dir)
+	if !strings.Contains(body, "Angesehen, nichts zu sagen: store.go") {
+		t.Errorf("das passende Review fehlt in seiner Gruppe:\n%s", body)
+	}
+	if !strings.Contains(body, "Noch nicht beschrieben: knowledge.go") {
+		t.Errorf("ein Review auf eine alte Fassung muss den Pfad wieder freigeben:\n%s", body)
+	}
+}
+
+// Ein Server ohne den Review-Endpunkt darf den Baum nicht verhindern. Waehrend
+// eines Rollouts ist genau das der Normalfall: neues Binary hier, alter Server
+// dort (#11).
+func TestWriteTreeSurvivesAServerWithoutReviews(t *testing.T) {
+	repo := newRepo(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/ghosts/tree":
+			w.Write([]byte(`[]`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	c := client.New(config.Config{ServerURL: srv.URL, Token: "t"})
+
+	if err := WriteTree(c, "p", repo, t.TempDir()); err != nil {
+		t.Fatalf("ein fehlender Review-Endpunkt darf den Baum nicht aufhalten: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repo, ".ghosttree", "tree", "internal", "store", "__dir.md")); err != nil {
+		t.Fatalf("der Baum muss trotzdem dastehen: %v", err)
+	}
+}
+
+func blobOf(t *testing.T, repo, rel string) string {
+	t.Helper()
+	_, blob, _, err := ghost.HashFile(filepath.Join(repo, filepath.FromSlash(rel)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return blob
 }

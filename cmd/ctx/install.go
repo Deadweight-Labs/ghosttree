@@ -10,7 +10,7 @@ import (
 
 func cmdInstall(args []string, stdout io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stdout, "usage: ctx install claude|codex")
+		fmt.Fprintln(stdout, "usage: ctx install claude|codex|opencode")
 		return 2
 	}
 	home, err := os.UserHomeDir()
@@ -24,8 +24,10 @@ func cmdInstall(args []string, stdout io.Writer) int {
 		changes, err = installer.InstallClaude(home)
 	case "codex":
 		changes, err = installer.InstallCodex(home)
+	case "opencode":
+		changes, err = installer.InstallOpencode(home)
 	default:
-		fmt.Fprintln(stdout, "usage: ctx install claude|codex")
+		fmt.Fprintln(stdout, "usage: ctx install claude|codex|opencode")
 		return 2
 	}
 	for _, c := range changes {

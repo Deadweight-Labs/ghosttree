@@ -23,7 +23,7 @@ func TestBuildDocsShowsUndescribedEntriesInsteadOfHidingThem(t *testing.T) {
 		"internal/store/knowledge.go": {Path: "internal/store/knowledge.go", Kind: "file",
 			Description: "Lese- und Schreibpfade", DescribedAt: "2026-08-24T10:00:00Z", Person: "robin"},
 	}
-	docs := BuildDocs(entries, described, nil)
+	docs := BuildDocs(entries, described, nil, nil)
 	if len(docs) != len(entries) {
 		t.Fatalf("every entry gets a file, got %d for %d entries", len(docs), len(entries))
 	}
@@ -47,7 +47,7 @@ func TestBuildDocsPutsTheProvenanceInTheHeader(t *testing.T) {
 		[]Entry{{Path: "a.go", Kind: "file"}},
 		map[string]store.GhostFile{"a.go": {Path: "a.go", Kind: "file", Description: "text",
 			DescribedAt: "2026-08-24T10:00:00Z", Person: "robin"}},
-		nil,
+		nil, nil,
 	)
 	body := docs[0].Body
 	for _, want := range []string{"a.go", "2026-08-24", "robin"} {
@@ -77,7 +77,7 @@ func TestDirDocListsItsChildrenAndSeparatesDescribedFromNot(t *testing.T) {
 		"internal/store/ghost.go": {Path: "internal/store/ghost.go", Kind: "file",
 			Description: "Die Datenbankseite der Dateibeschreibungen.\n\nZweiter Absatz, der nicht in die Zeile gehoert."},
 	}
-	body := docBody(t, BuildDocs(entries, described, nil), "internal/store/__dir.md")
+	body := docBody(t, BuildDocs(entries, described, nil, nil), "internal/store/__dir.md")
 
 	if !strings.Contains(body, "ghost.go") || !strings.Contains(body, "Die Datenbankseite") {
 		t.Fatalf("ein beschriebenes Kind wird mit seinem Einzeiler genannt:\n%s", body)
@@ -109,7 +109,7 @@ func TestIncidentalFilesGetNoOwnDocButAreStillNamed(t *testing.T) {
 		{Path: "internal/store/ghost_test.go", Kind: "file"},
 		{Path: "internal/store/upgrade_test.go", Kind: "file"},
 	}
-	docs := BuildDocs(entries, nil, nil)
+	docs := BuildDocs(entries, nil, nil, nil)
 	for _, d := range docs {
 		if strings.Contains(d.Path, "_test.go") {
 			t.Fatalf("eine Testdatei bekommt keine eigene Ghost-Datei: %s", d.Path)
@@ -134,7 +134,7 @@ func TestADescribedIncidentalFileKeepsItsOwnDoc(t *testing.T) {
 		"internal/store/ghost_test.go": {Path: "internal/store/ghost_test.go", Kind: "file",
 			Description: "haelt die Auslieferungsregel fest"},
 	}
-	body := docBody(t, BuildDocs(entries, described, nil), "internal/store/ghost_test.go.md")
+	body := docBody(t, BuildDocs(entries, described, nil, nil), "internal/store/ghost_test.go.md")
 	if !strings.Contains(body, "haelt die Auslieferungsregel fest") {
 		t.Fatalf("die Beschreibung muss im Baum ankommen:\n%s", body)
 	}
@@ -157,7 +157,7 @@ func TestBuildDocsShowsStalenessInsteadOfClaimingFreshness(t *testing.T) {
 		"a.go": {State: "stale", Percent: 60},
 		"b.go": {State: "fresh"},
 	}
-	docs := BuildDocs(entries, described, fresh)
+	docs := BuildDocs(entries, described, fresh, nil)
 	if !strings.Contains(docBody(t, docs, "a.go.md"), "VERALTET") {
 		t.Fatal("eine veraltete Beschreibung muss es im Baum sagen")
 	}
@@ -183,4 +183,55 @@ func docPaths(docs []Doc) []string {
 		out = append(out, d.Path)
 	}
 	return out
+}
+
+// Ein angesehener Pfad darf nicht auf der Arbeitsliste stehen bleiben. Sonst
+// liest ihn jeder weitere Bestandslauf erneut, verwirft ihn erneut, und
+// "wiederaufnehmbar" waere eine falsche Zusage.
+func TestReviewedEmptyIsItsOwnGroupAndNotUndescribed(t *testing.T) {
+	entries := []Entry{
+		{Path: "", Kind: "dir"},
+		{Path: "a.go", Kind: "file"},
+		{Path: "b.go", Kind: "file"},
+	}
+	docs := BuildDocs(entries, nil, nil, map[string]bool{"a.go": true})
+	root := docBody(t, docs, "__dir.md")
+
+	if !strings.Contains(root, "Angesehen, nichts zu sagen: a.go") {
+		t.Errorf("das angesehene Kind fehlt in seiner eigenen Gruppe:\n%s", root)
+	}
+	if strings.Contains(root, "Noch nicht beschrieben: a.go") {
+		t.Error("ein angesehener Pfad darf nicht auf der Arbeitsliste bleiben")
+	}
+	if !strings.Contains(root, "Noch nicht beschrieben: b.go") {
+		t.Error("ein nicht angesehener Pfad muss auf der Arbeitsliste bleiben")
+	}
+}
+
+// Beschrieben schlaegt angesehen: wer nach einem Review doch etwas zu sagen
+// hatte, hat den Pfad damit erledigt.
+func TestDescribedBeatsReviewedEmpty(t *testing.T) {
+	entries := []Entry{{Path: "", Kind: "dir"}, {Path: "a.go", Kind: "file"}}
+	described := map[string]store.GhostFile{"a.go": {Path: "a.go", Kind: "file", Description: "doch etwas"}}
+	root := docBody(t, BuildDocs(entries, described, nil, map[string]bool{"a.go": true}), "__dir.md")
+	if strings.Contains(root, "Angesehen, nichts zu sagen") {
+		t.Errorf("eine beschriebene Datei gehoert in die beschriebene Gruppe:\n%s", root)
+	}
+	if !strings.Contains(root, "doch etwas") {
+		t.Errorf("die Beschreibung fehlt:\n%s", root)
+	}
+}
+
+// Die eigene Datei eines angesehenen Pfades darf nicht lesen wie die eines
+// unberuehrten — sonst fordert sie zu einer Arbeit auf, die jemand schon
+// bewusst nicht getan hat.
+func TestReviewedEmptyDocSaysSoInsteadOfAskingForADescription(t *testing.T) {
+	entries := []Entry{{Path: "", Kind: "dir"}, {Path: "a.go", Kind: "file"}}
+	body := docBody(t, BuildDocs(entries, nil, nil, map[string]bool{"a.go": true}), "a.go.md")
+	if strings.Contains(body, "(keine Beschreibung)") {
+		t.Errorf("ein angesehener Pfad darf nicht wie ein unberuehrter lesen:\n%s", body)
+	}
+	if !strings.Contains(body, "angesehen, nichts zu sagen") {
+		t.Errorf("der Zustand muss dastehen:\n%s", body)
+	}
 }

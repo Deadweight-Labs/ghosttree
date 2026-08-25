@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/ghost"
@@ -55,16 +56,48 @@ func WriteMirror(c *client.Client, ax scope.Axes, repoRoot string) error {
 		return err
 	}
 
+	// Wie voll der Baum daneben ist. Fehlschlagen darf das: eine Zahl weniger im
+	// Index ist hinnehmbar, ein nicht geschriebener Spiegel nicht.
+	described, paths := treeFill(c, project, repoRoot)
+
 	docs := mirror.Build(mirror.Input{
-		Project:   project,
-		Machine:   c.Machine(),
-		Knowledge: knowledge,
-		Archived:  archived,
-		Requests:  append(open, done...),
-		DoneShown: len(done),
-		DoneTotal: doneTotal,
+		Project:       project,
+		Machine:       c.Machine(),
+		Knowledge:     knowledge,
+		Archived:      archived,
+		Requests:      append(open, done...),
+		DoneShown:     len(done),
+		DoneTotal:     doneTotal,
+		TreeDescribed: described,
+		TreePaths:     paths,
+		At:            time.Now().UTC().Format(time.RFC3339),
 	})
 	return writeMirrorDocs(filepath.Join(repoRoot, ".ghosttree"), repoRoot, docs)
+}
+
+// treeFill zählt, zu wie vielen Pfaden des Repos eine Beschreibung vorliegt.
+// Beide Zahlen sind 0, wenn eine davon nicht zu haben ist — eine halbe Angabe
+// ("39 von 0") wäre schlechter als gar keine.
+func treeFill(c *client.Client, project, repoRoot string) (described, paths int) {
+	entries, err := ghost.RepoEntries(repoRoot)
+	if err != nil {
+		return 0, 0
+	}
+	stored, err := c.GhostTree(project, "")
+	if err != nil {
+		return 0, 0
+	}
+	known := make(map[string]bool, len(stored))
+	for _, g := range stored {
+		known[g.Path] = true
+	}
+	for _, e := range entries {
+		paths++
+		if known[e.Path] {
+			described++
+		}
+	}
+	return described, paths
 }
 
 // requestPage holt eine Zustandsseite des Ledgers. limit 0 heisst: alles, denn
@@ -75,8 +108,12 @@ func requestPage(c *client.Client, project, state string, limit int) ([]requestd
 	cursor := ""
 	total := 0
 	for {
+		// FullDescription, weil der Spiegel das Dokument zeigt und nicht die
+		// Trefferliste: eine Beschreibung, die nach 200 Zeichen mitten im Wort
+		// endet, liest sich dort nicht als gekürzt, sondern als beschädigt.
 		page, err := c.SearchRequests(requestdomain.SearchFilter{
 			Scope: scope.Axes{Project: project}, State: state, Limit: 25, Cursor: cursor,
+			FullDescription: true,
 		})
 		if err != nil {
 			return nil, 0, err

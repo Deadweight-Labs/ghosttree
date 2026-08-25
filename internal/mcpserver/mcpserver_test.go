@@ -171,6 +171,18 @@ func TestSearchAllProjectsFindsSessionsFromAnotherProject(t *testing.T) {
 	}
 }
 
+func TestSessionHitsDropEveryChunkFromTheCurrentSession(t *testing.T) {
+	hits := []store.SessionHit{
+		{Session: store.Session{ID: 1, ExternalID: "current"}, Seq: 1},
+		{Session: store.Session{ID: 2, ExternalID: "earlier"}, Seq: 2},
+		{Session: store.Session{ID: 1, ExternalID: "current"}, Seq: 3},
+	}
+	got := withoutSession(hits, "current")
+	if len(got) != 1 || got[0].Session.ExternalID != "earlier" {
+		t.Fatalf("withoutSession = %+v, want only earlier", got)
+	}
+}
+
 // context_sessions is the tool an agent reaches for when asking "what happened
 // here before". It must be able to look past the current repo too.
 func TestSessionsToolReachesOtherProjectsOnRequest(t *testing.T) {
@@ -217,6 +229,38 @@ func TestSearchNamedProjectOverridesContext(t *testing.T) {
 	}
 }
 
+func TestInterruptedSearchHonorsNamedProject(t *testing.T) {
+	c, st := newTestClient(t)
+	project := "github.com/x/sampleproject"
+	detail, err := st.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{
+		Type: "bug", Title: "Liegengebliebener Fremdprojekt-Faden", Scope: scope.Axes{Project: project},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionID, err := st.UpsertSession(store.Session{Harness: "codex", ExternalID: "old", Scope: scope.Axes{Project: project}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	work, _, err := st.StartRequestWork(detail.Request.ID, sessionID, "primary", "robin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.FinishRequestWork(work.ID, "paused", "weiter im Fremdprojekt", "robin"); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{client: c, ctxAxes: scope.Axes{Project: "github.com/x/other"}}
+	res, _, err := s.handleSearch(context.Background(), nil, SearchInput{
+		Query: "unfinished work", Kind: "requests", Project: project,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := text(t, res); !strings.Contains(got, "Liegengebliebener Fremdprojekt-Faden") {
+		t.Fatalf("named project was ignored for interrupted work: %s", got)
+	}
+}
+
 func TestGetBootstrap(t *testing.T) {
 	c, _ := newTestClient(t)
 	s := &Server{client: c, ctxAxes: scope.Axes{Project: "github.com/x/y", Branch: "main", Machine: "workstation-a"}}
@@ -241,16 +285,101 @@ func TestGetBootstrap(t *testing.T) {
 	}
 }
 
-// The path gate is the one that survived: a path is objectively determinable
-// from the working directory, unlike a task label the agent has to guess.
-func TestGetBootstrapAppliesThePathGate(t *testing.T) {
+func TestGetWithPathsReturnsDescriptionsAndAncestorsWithoutBootstrap(t *testing.T) {
+	c, st := newTestClient(t)
+	project := "github.com/x/y"
+	for _, g := range []store.GhostFile{
+		{Project: project, Path: "", Kind: "dir", Description: "Beschreibung der Wurzel"},
+		{Project: project, Path: "internal", Kind: "dir", Description: "Beschreibung von internal"},
+		{Project: project, Path: "internal/mcpserver", Kind: "dir", Description: "Beschreibung des MCP-Verzeichnisses"},
+		{Project: project, Path: "internal/mcpserver/mcpserver.go", Description: "Beschreibung des MCP-Servers"},
+		{Project: project, Path: "internal/store", Kind: "dir", Description: "Beschreibung des Store-Verzeichnisses"},
+		{Project: project, Path: "internal/store/ghost.go", Description: "Beschreibung des Ghost-Stores"},
+		{Project: project, Path: "docs", Kind: "dir", Description: "Beschreibung der Dokumentation"},
+	} {
+		if _, err := st.PutGhostFile(g); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := st.InsertKnowledge(store.Knowledge{
+		Type: "pitfall", Title: "allgemeiner Bootstrap", Body: "darf nicht erneut erscheinen",
+		Scope: scope.Axes{Project: project},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	s := NewServer(c, scope.Axes{Project: project})
+	res, _, err := s.handleGet(context.Background(), nil, GetInput{Paths: []string{
+		"internal/mcpserver/mcpserver.go",
+		"internal/store/ghost.go",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := text(t, res)
+	for _, want := range []string{
+		"Beschreibung der Wurzel",
+		"Beschreibung von internal",
+		"Beschreibung des MCP-Verzeichnisses",
+		"Beschreibung des MCP-Servers",
+		"Beschreibung des Store-Verzeichnisses",
+		"Beschreibung des Ghost-Stores",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Pfadkontext fehlt %q: %s", want, got)
+		}
+	}
+	if count := strings.Count(got, "Beschreibung der Wurzel"); count != 1 {
+		t.Errorf("gemeinsamer Vorfahr erscheint %d-mal, want 1: %s", count, got)
+	}
+	for _, unwanted := range []string{"allgemeiner Bootstrap", "Beschreibung der Dokumentation"} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("gezielter Pfadkontext enthält %q: %s", unwanted, got)
+		}
+	}
+}
+
+func TestGetWithDifferentPathsReturnsDifferentText(t *testing.T) {
+	c, st := newTestClient(t)
+	project := "github.com/x/y"
+	if _, err := st.PutGhostFile(store.GhostFile{
+		Project: project, Path: "", Kind: "dir", Description: "gemeinsame Wurzel",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s := NewServer(c, scope.Axes{Project: project})
+
+	core, _, err := s.handleGet(context.Background(), nil, GetInput{Paths: []string{"core/file.go"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	docs, _, err := s.handleGet(context.Background(), nil, GetInput{Paths: []string{"docs/readme.md"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	coreText, docsText := text(t, core), text(t, docs)
+	if coreText == docsText {
+		t.Fatalf("verschiedene Pfade liefern denselben Text: %s", coreText)
+	}
+	if !strings.Contains(coreText, "core/file.go") || !strings.Contains(coreText, "No description for this path") || strings.Contains(coreText, "docs/readme.md") {
+		t.Errorf("Kernabfrage ist nicht gezielt: %s", coreText)
+	}
+	if !strings.Contains(docsText, "docs/readme.md") || !strings.Contains(docsText, "No description for this path") || strings.Contains(docsText, "core/file.go") {
+		t.Errorf("Dokumentationsabfrage ist nicht gezielt: %s", docsText)
+	}
+}
+
+// Ohne explizite Pfade bleibt context_get der Bootstrap-Zugang. Die gezielte
+// Pfadanfrage liefert seit REQ-183 stattdessen Ghost-Beschreibungen, damit der
+// allgemeine Bootstrap nicht ein zweites Mal im Gespräch landet.
+func TestGetBootstrapAppliesTheRepoPathGate(t *testing.T) {
 	c, st := newTestClient(t)
 	id, _ := st.InsertKnowledge(store.Knowledge{Type: "instruction", Title: "core rule", Body: "b"})
 	if err := st.SetActivation(id, activation.Rule{Paths: []string{"core/**"}}); err != nil {
 		t.Fatal(err)
 	}
-	s := NewServer(c, scope.Axes{}, activation.Context{RepoPath: "ui"})
-	res, _, err := s.handleGet(context.Background(), nil, GetInput{Paths: []string{"core/lib"}})
+	s := NewServer(c, scope.Axes{}, activation.Context{RepoPath: "core/lib"})
+	res, _, err := s.handleGet(context.Background(), nil, GetInput{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,7 +387,8 @@ func TestGetBootstrapAppliesThePathGate(t *testing.T) {
 		t.Fatalf("path-gated instruction missing when the path matches: %s", got)
 	}
 	// A context outside the gated paths must not receive it.
-	res, _, err = s.handleGet(context.Background(), nil, GetInput{Paths: []string{"docs/readme.md"}})
+	s = NewServer(c, scope.Axes{}, activation.Context{RepoPath: "docs"})
+	res, _, err = s.handleGet(context.Background(), nil, GetInput{})
 	if err != nil {
 		t.Fatal(err)
 	}

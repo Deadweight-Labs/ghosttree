@@ -47,6 +47,9 @@ func (a *api) searchRequests(w http.ResponseWriter, r *http.Request) {
 	page, err := a.st.SearchRequests(requestdomain.SearchFilter{
 		Scope: axesFromQuery(r), Query: q.Get("q"), State: q.Get("state"),
 		Type: q.Get("type"), Cursor: q.Get("cursor"), Limit: intParam(r, "limit", 10),
+		// Nur für Aufrufer, die den ganzen Text zeigen — der Dateispiegel. Eine
+		// Trefferliste bleibt eine Trefferliste.
+		FullDescription: q.Get("full") == "1",
 	})
 	if err != nil {
 		writeRequestError(w, err)

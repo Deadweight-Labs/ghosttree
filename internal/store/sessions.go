@@ -180,19 +180,19 @@ func (s *Store) SessionRaw(id int64) ([]string, error) {
 	return out, rows.Err()
 }
 
-func (s *Store) SearchSessions(q string, filter scope.Axes, limit int) ([]SessionHit, error) {
+func (s *Store) SearchSessions(q string, filter scope.Axes, excludeSession string, limit int) ([]SessionHit, error) {
 	if limit <= 0 {
 		limit = 20
 	}
 	where, args := filter.FilterWhere()
-	args = append([]any{ftsQuery(q)}, args...)
+	args = append([]any{ftsQuery(q), excludeSession, excludeSession}, args...)
 	args = append(args, limit)
 	rows, err := s.db.Query(`SELECT `+prefix(sessionCols, "se.")+`, c.seq,
 		snippet(chunks_fts, 0, '', '', '…', 12)
 		FROM chunks_fts f
 		JOIN session_chunks c ON c.id = f.rowid
 		JOIN sessions se ON se.id = c.session_id
-		WHERE chunks_fts MATCH ? AND `+where+`
+		WHERE chunks_fts MATCH ? AND (? = '' OR se.external_id != ?) AND `+where+`
 		ORDER BY f.rank LIMIT ?`, args...)
 	if err != nil {
 		return nil, err

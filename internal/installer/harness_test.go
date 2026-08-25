@@ -125,8 +125,13 @@ func TestARuleSectionAsksForWhatDoesNotArriveByItself(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(b), "At session start call the") {
+	// Auf den Inhalt geprüft, nicht auf einen Satzanfang: die Aufforderung darf
+	// umformuliert werden, sie darf nur nicht verschwinden.
+	if !strings.Contains(string(b), "call `context_get` once") {
 		t.Errorf("codex must keep being asked while its hook context does not arrive:\n%s", b)
+	}
+	if !strings.Contains(string(b), ".ghosttree/INDEX.md") {
+		t.Errorf("a harness without push must also be pointed at the mirror on disk:\n%s", b)
 	}
 	if !strings.Contains(string(b), "context_remember") {
 		t.Errorf("the shared rule text is missing:\n%s", b)
@@ -139,23 +144,41 @@ func TestARuleSectionAsksForWhatDoesNotArriveByItself(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(b), "At session start call the") {
-		t.Errorf("claude delivers session-start context and must not be asked again:\n%s", b)
+	// UMGEKEHRT seit dem 2026-08-25: auch Claude bekommt den Absatz. Er ist
+	// selbstprüfend formuliert ("falls kein Kontext erschien"), also für eine
+	// Umgebung mit Push eine Bedingung mit leerem Vorderglied — und er muss hier
+	// stehen, weil opencode dieselbe Datei liest, sobald es keine eigene globale
+	// AGENTS.md gibt. Ein Text, der von "dieser Umgebung" spricht, wäre in einer
+	// geteilten Datei für einen der beiden Leser falsch.
+	if !strings.Contains(string(b), "If no ghosttree context appeared") {
+		t.Errorf("a shared rule file must serve its reader without push too:\n%s", b)
+	}
+	if strings.Contains(string(b), "No context is pushed into this harness") {
+		t.Errorf("the section must not claim something false about a harness that has push:\n%s", b)
 	}
 }
 
 // Registering a channel is not the same claim as delivering through it, and
 // conflating the two is how a wired-but-silent hook would look like success.
+//
+// Codex' session-start stand hier bis zum 2026-08-25 als NICHT ausliefernd, mit
+// der Auflage "bis ein Transkript es zeigt". Das Transkript gibt es jetzt: nach
+// der Freigabe über /hooks steht der Bootstrap im Rollout als response_item mit
+// role "developer", und die Sitzung beantwortet daraus eine Frage, die nur so
+// zu beantworten war. Der Test hält deshalb die neue Lage fest — und
+// gleichzeitig die alte Regel an dem Kanal, der weiter unbelegt ist.
 func TestWiringAChannelIsNotClaimingItDelivers(t *testing.T) {
 	codex := harnessNamed("codex")
-	if !codex.Serves(ChannelSessionStart) {
-		t.Error("codex session-start must still be wired: the contract is correct and costs nothing")
+	for _, c := range []Channel{ChannelSessionStart, ChannelUserPrompt, ChannelMCP} {
+		if !codex.Serves(c) || !codex.DeliversContext(c) {
+			t.Errorf("codex %s is measured as delivering since 2026-08-25", c)
+		}
 	}
-	if codex.DeliversContext(ChannelSessionStart) {
-		t.Error("codex session-start must not be claimed as delivering until a transcript shows it")
+	if !codex.Serves(ChannelPreToolUse) {
+		t.Error("pre-tool-use stays wired: it is trusted and costs nothing")
 	}
-	if !codex.DeliversContext(ChannelMCP) {
-		t.Error("mcp is the channel that does work for codex")
+	if codex.DeliversContext(ChannelPreToolUse) {
+		t.Error("pre-tool-use delivered no ghost description in a real session; an unmeasured channel does not belong in Delivers")
 	}
 }
 
@@ -192,6 +215,12 @@ func TestDoctorReportsAnUnservedChannelAsAGap(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, c := range VerifyCodex(home) {
+		// Die Freigabe kann der Installer nicht erteilen: sie ist ein Schritt des
+		// Menschen in Codex' eigener Oberfläche. Dass sie danach weiter offen
+		// steht, ist die Aussage des Checks und kein Fehlschlag dieses Tests.
+		if strings.Contains(c.Name, "trust") {
+			continue
+		}
 		if !c.OK {
 			t.Errorf("check %q still failing after install: %s", c.Name, c.Detail)
 		}
@@ -250,6 +279,118 @@ func TestPreToolUseHookIsWiredWithAMatcher(t *testing.T) {
 	if !found {
 		t.Fatal("the ghosttree PreToolUse hook was not written")
 	}
+}
+
+// Codex bekommt keinen Matcher, und eine Installation, die noch einen trägt,
+// verliert ihn. Beide zuvor eingetragenen Werte — Claudes Werkzeugnamen und das
+// später gemessene `exec` — führten dazu, dass Codex den Hook wegfilterte und
+// gar nicht erst startete (#1449). Der Fall mit vorhandenem Matcher steht hier
+// mit im Test, weil jede bestehende Installation genau so aussieht.
+func TestCodexPreToolUseCarriesNoMatcher(t *testing.T) {
+	for _, old := range []string{
+		`{"hooks":{"PreToolUse":[{"matcher":"Read|Edit|Write|NotebookEdit","hooks":[{"type":"command","command":"ctx hook pre-tool-use"}]}]}}`,
+		`{"hooks":{"PreToolUse":[{"matcher":"exec","hooks":[{"type":"command","command":"ctx hook pre-tool-use"}]}]}}`,
+	} {
+		home := t.TempDir()
+		path := filepath.Join(home, ".codex", "hooks.json")
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(old), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := InstallCodex(home); err != nil {
+			t.Fatal(err)
+		}
+		settings, err := readJSONFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hooks, _ := settings["hooks"].(map[string]any)
+		groups, _ := hooks["PreToolUse"].([]any)
+		found := false
+		for _, g := range groups {
+			group, _ := g.(map[string]any)
+			inner, _ := group["hooks"].([]any)
+			for _, h := range inner {
+				hm, _ := h.(map[string]any)
+				if hm["command"] != preToolHookCommand {
+					continue
+				}
+				found = true
+				if matcher, ok := group["matcher"].(string); ok && matcher != "" {
+					t.Fatalf("a matcher keeps Codex from running the hook at all; got %q (was %s)", matcher, old)
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("the ghosttree PreToolUse hook was not written (was %s)", old)
+		}
+	}
+}
+
+func TestUpdatingAMatcherDoesNotRetargetForeignHandlers(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".codex", "hooks.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	shared := `{"hooks":{"PreToolUse":[{"matcher":"Read","hooks":[{"type":"command","command":"foreign-read-hook"},{"type":"command","command":"ctx hook pre-tool-use"}]}]}}`
+	if err := os.WriteFile(path, []byte(shared), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InstallCodex(home); err != nil {
+		t.Fatal(err)
+	}
+	settings, err := readJSONFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hooks, _ := settings["hooks"].(map[string]any)
+	groups, _ := hooks["PreToolUse"].([]any)
+	want := map[string]string{"foreign-read-hook": "Read", preToolHookCommand: ""}
+	for _, g := range groups {
+		group, _ := g.(map[string]any)
+		matcher, _ := group["matcher"].(string)
+		inner, _ := group["hooks"].([]any)
+		for _, h := range inner {
+			hm, _ := h.(map[string]any)
+			command, _ := hm["command"].(string)
+			if expected, ok := want[command]; ok && matcher == expected {
+				delete(want, command)
+			}
+		}
+	}
+	if len(want) != 0 {
+		t.Fatalf("matchers changed for the wrong handlers: still want %v in %#v", want, groups)
+	}
+}
+
+func TestDoctorRejectsAWrongHookMatcher(t *testing.T) {
+	home := t.TempDir()
+	if _, err := InstallCodex(home); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(home, ".codex", "hooks.json")
+	settings, err := readJSONFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hooks := settings["hooks"].(map[string]any)
+	groups := hooks["PreToolUse"].([]any)
+	groups[0].(map[string]any)["matcher"] = "Read|Edit|Write|NotebookEdit"
+	if err := writeJSONFile(path, settings); err != nil {
+		t.Fatal(err)
+	}
+	for _, check := range VerifyCodex(home) {
+		if check.Name == "codex pre-tool-use hook" {
+			if check.OK {
+				t.Fatal("doctor must reject a hook whose command exists behind the wrong matcher")
+			}
+			return
+		}
+	}
+	t.Fatal("pre-tool-use check missing")
 }
 
 func TestWiringPreToolUseKeepsForeignHooks(t *testing.T) {

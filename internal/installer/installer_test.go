@@ -38,9 +38,18 @@ func TestInstallCodexIdempotent(t *testing.T) {
 			t.Errorf("AGENTS.md missing request-ledger guidance %q:\n%s", want, agents)
 		}
 	}
-	for _, want := range []string{"repository-relative paths", "deploy", "security", "review", "test", "docs"} {
+	for _, want := range []string{"repository-relative paths", "another subtree"} {
 		if !strings.Contains(string(agents), want) {
 			t.Errorf("AGENTS.md missing refresh guidance %q:\n%s", want, agents)
+		}
+	}
+	// Die Task-Tags standen hier bis zum 2026-08-25, obwohl das Task-Gate längst
+	// gestrichen war (Entscheidung #150, gemessen: 17 Pfad-Gates gegen 0
+	// Task-Gates). Ein Codex-Prüflauf hat es gefunden: der Regeltext, der in JEDE
+	// Sitzung geht, wies Agenten auf eine API, die es nicht mehr gibt.
+	for _, gone := range []string{"task tag", "explicit task"} {
+		if strings.Contains(string(agents), gone) {
+			t.Errorf("the rule text still promises the removed task gate (%q):\n%s", gone, agents)
 		}
 	}
 }
@@ -250,7 +259,16 @@ func TestVerifyCodex(t *testing.T) {
 	if _, err := InstallCodex(home); err != nil {
 		t.Fatal(err)
 	}
-	if bad := failing(VerifyCodex(home)); len(bad) != 0 {
+	// Alles ausser der Vertrauensbestätigung: die erteilt ein Mensch in Codex'
+	// Oberfläche über /hooks, und genau deshalb gibt es dafür einen eigenen
+	// Check — installiert ist nicht dasselbe wie betriebsbereit.
+	var bad []string
+	for _, c := range failing(VerifyCodex(home)) {
+		if !strings.Contains(c, "trust") {
+			bad = append(bad, c)
+		}
+	}
+	if len(bad) != 0 {
 		t.Errorf("after install these still fail: %v", bad)
 	}
 }

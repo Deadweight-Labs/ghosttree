@@ -187,10 +187,11 @@ var commonWords = map[string]bool{
 	"do": true, "does": true, "need": true, "want": true, "must": true, "left": true,
 	"about": true, "after": true, "all": true, "and": true, "any": true, "are": true,
 	"but": true, "can": true, "for": true, "from": true, "get": true, "has": true,
-	"have": true, "how": true, "into": true, "its": true, "just": true, "like": true,
+	"have": true, "how": true, "into": true, "is": true, "its": true, "just": true, "like": true,
 	"make": true, "more": true, "not": true, "now": true, "one": true, "only": true,
 	"out": true, "please": true, "should": true, "some": true, "than": true, "that": true,
 	"the": true, "their": true, "them": true, "then": true, "there": true, "these": true,
 	"they": true, "this": true, "were": true, "what": true, "when": true,
 	"which": true, "will": true, "with": true, "would": true, "you": true, "your": true,
+	"to": true,
 }

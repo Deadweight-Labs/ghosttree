@@ -93,13 +93,23 @@ CREATE TABLE IF NOT EXISTS knowledge(
   status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','stale','deprecated','superseded','archived')),
   origin TEXT NOT NULL DEFAULT 'agent' CHECK(origin IN ('agent','distilled','human')),
   superseded_by INTEGER NOT NULL DEFAULT 0,
-  person TEXT NOT NULL DEFAULT '', harness TEXT NOT NULL DEFAULT '', session_ref TEXT NOT NULL DEFAULT '',
+  person TEXT NOT NULL DEFAULT '', confirmed_by TEXT NOT NULL DEFAULT '', harness TEXT NOT NULL DEFAULT '', session_ref TEXT NOT NULL DEFAULT '',
+  last_modified_by TEXT NOT NULL DEFAULT '',
   last_used_at TEXT NOT NULL DEFAULT '', hit_count INTEGER NOT NULL DEFAULT 0,
   search_hits INTEGER NOT NULL DEFAULT 0,
   -- When the entry was seen, as opposed to when it was written down. The
   -- distiller works a backlog: a finding from a June session is filed today,
   -- and created_at alone makes every one of them look like today's news.
   observed_at TEXT NOT NULL DEFAULT '',
+  -- Womit ein behobener Fehler abgesichert ist, nicht nur was kaputt war. Ein
+  -- Pitfall hilft, solange ein Agent ihn liest; ein Test hilft immer. Vier
+  -- Zustände, weil der leere einer davon ist: '' hat niemand beurteilt,
+  -- 'covered' nennt den Test, 'uncovered' ist die belegte Lücke, und
+  -- 'not_applicable' ist die Entscheidung, dass hier nichts zu testen war.
+  -- Ohne den vierten sähe eine bewusste Entscheidung aus wie eine offene
+  -- Aufgabe — und das trifft die Mehrheit der Einträge.
+  regression_state TEXT NOT NULL DEFAULT '',
+  regression_test TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS instruction_activation_path(
   knowledge_id INTEGER NOT NULL REFERENCES knowledge(id) ON DELETE CASCADE,
@@ -284,6 +294,31 @@ CREATE TABLE IF NOT EXISTS ghost_deliveries(
   path TEXT NOT NULL,
   at TEXT NOT NULL,
   PRIMARY KEY(session_key, project, path));
+-- Angesehen und absichtlich nicht beschrieben. Ohne diesen Zustand kann der
+-- Baum "noch nie angesehen" nicht von "angesehen, nichts zu sagen"
+-- unterscheiden, und jeder weitere Bestandslauf liest dieselben verworfenen
+-- Dateien erneut — womit "wiederaufnehmbar" eine falsche Zusage wäre.
+--
+-- Eigene Tabelle und nicht eine Spalte auf ghost_files: eine neue Pflichtspalte
+-- entsteht auf einer bestehenden Datenbank nicht von selbst und liesse jede
+-- Abfrage, die sie nennt, still leer laufen (#432). Neue Tabellen entstehen bei
+-- jedem Open(). Muster und Schlüssel wie ghost_deliveries.
+CREATE TABLE IF NOT EXISTS ghost_reviews(
+  project TEXT NOT NULL,
+  path TEXT NOT NULL,
+  -- git hash-object der angesehenen Fassung. Die Entscheidung "nichts zu sagen"
+  -- galt dieser Fassung; ändert die Datei sich, ist der Pfad wieder Kandidat.
+  git_blob TEXT NOT NULL,
+  person TEXT NOT NULL DEFAULT '',
+  at TEXT NOT NULL,
+  PRIMARY KEY(project, path));
+CREATE TABLE IF NOT EXISTS knowledge_versions(
+  id INTEGER PRIMARY KEY,
+  knowledge_id INTEGER NOT NULL,
+  type TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL,
+  person TEXT NOT NULL DEFAULT '', changed_by TEXT NOT NULL DEFAULT '', changed_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS knowledge_versions_entry
+  ON knowledge_versions(knowledge_id, changed_at DESC, id DESC);
 INSERT OR IGNORE INTO search_documents(kind,domain_id,title,body,project,branch,machine)
   SELECT 'knowledge',id,title,body,project,branch,machine FROM knowledge;
 `
@@ -303,7 +338,97 @@ func Open(path string) (*Store, error) {
 	if _, err := db.Exec(schema); err != nil {
 		return nil, err
 	}
+	if err := ensureKnowledgeConfirmedBy(db); err != nil {
+		return nil, err
+	}
+	if err := ensureKnowledgeLastModifiedBy(db); err != nil {
+		return nil, err
+	}
+	// Ohne diese beiden liefert jede Abfrage, die sie nennt, auf einer
+	// bestehenden Datenbank einen Fehler statt eines Ergebnisses — CREATE TABLE
+	// IF NOT EXISTS ist dort ein No-op.
+	if err := ensureKnowledgeColumn(db, "regression_state"); err != nil {
+		return nil, err
+	}
+	if err := ensureKnowledgeColumn(db, "regression_test"); err != nil {
+		return nil, err
+	}
 	return &Store{db: db}, nil
+}
+
+// ensureKnowledgeColumn ergänzt eine Textspalte mit leerem Vorgabewert, falls
+// sie fehlt. Nur für genau diese Form: eine Spalte mit Vorgabewert lässt sich
+// nachträglich anfügen, eine Pflichtspalte ohne nicht.
+func ensureKnowledgeColumn(db *sql.DB, name string) error {
+	rows, err := db.Query(`PRAGMA table_info(knowledge)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notNull, pk int
+		var column, typ string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &column, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		if column == name {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = db.Exec(`ALTER TABLE knowledge ADD COLUMN ` + name + ` TEXT NOT NULL DEFAULT ''`)
+	return err
+}
+
+func ensureKnowledgeLastModifiedBy(db *sql.DB) error {
+	rows, err := db.Query(`PRAGMA table_info(knowledge)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notNull, pk int
+		var name, typ string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		if name == "last_modified_by" {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = db.Exec(`ALTER TABLE knowledge ADD COLUMN last_modified_by TEXT NOT NULL DEFAULT ''`)
+	return err
+}
+
+func ensureKnowledgeConfirmedBy(db *sql.DB) error {
+	rows, err := db.Query(`PRAGMA table_info(knowledge)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notNull, pk int
+		var name, typ string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		if name == "confirmed_by" {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = db.Exec(`ALTER TABLE knowledge ADD COLUMN confirmed_by TEXT NOT NULL DEFAULT ''`)
+	return err
 }
 
 func (s *Store) Close() error { return s.db.Close() }

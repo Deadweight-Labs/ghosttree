@@ -31,12 +31,28 @@ func InstallCodex(home string) ([]Change, error) {
 	if err != nil {
 		return changes, err
 	}
+	// Ein geänderter Hook hat seine Freigabe verloren, ob wir es hinschreiben
+	// oder nicht — Codex bindet sie an einen Hash der Definition. Der veraltete
+	// Eintrag bliebe sonst stehen und liesse den Doctor grün melden für etwas,
+	// das nicht mehr läuft.
+	for _, c := range hookChanges {
+		if strings.Contains(c.Action, "updated") {
+			if err := dropStaleCodexTrust(cfgPath, h.HooksPath(home)); err != nil {
+				return changes, err
+			}
+			break
+		}
+	}
 
-	c, err = writeMarkerFile(h.RulePath(home), ruleFor(h))
+	c, err = writeMarkerFile(h.RulePath(home), ruleForPath(h, h.RulePath(home)))
 	if err != nil {
 		return changes, err
 	}
-	return append(changes, c), nil
+	changes = append(changes, c)
+
+	sc, err := installSkills(h, home)
+	changes = append(changes, sc...)
+	return changes, err
 }
 
 // installHooks registers every event-bearing channel the harness declares.
@@ -47,7 +63,7 @@ func installHooks(h Harness, home string) ([]Change, error) {
 	path := h.HooksPath(home)
 	var changes []Change
 	for _, channel := range h.Channels {
-		event, command, matcher, ok := hookCommandFor(channel)
+		event, command, matcher, ok := h.hookCommandFor(channel)
 		if !ok {
 			continue
 		}

@@ -42,11 +42,15 @@ func InstallClaude(home string) ([]Change, error) {
 	}
 	changes = append(changes, c)
 
-	c, err = writeMarkerFile(h.RulePath(home), ruleFor(h))
+	c, err = writeMarkerFile(h.RulePath(home), ruleForPath(h, h.RulePath(home)))
 	if err != nil {
 		return changes, err
 	}
-	return append(changes, c), nil
+	changes = append(changes, c)
+
+	sc, err := installSkills(h, home)
+	changes = append(changes, sc...)
+	return changes, err
 }
 
 // addHook appends to whatever is already registered for an event. Other tools
@@ -65,13 +69,33 @@ func addHook(path, event, command, matcher string) (Change, error) {
 	for _, e := range entries {
 		entry, _ := e.(map[string]any)
 		inner, _ := entry["hooks"].([]any)
-		for _, h := range inner {
+		for handlerIndex, h := range inner {
 			hm, _ := h.(map[string]any)
 			// Matched on the exact command, not on "ctx hook": the two events
 			// run different subcommands and one must not be mistaken for the
 			// other, or installing the second would look like a no-op.
 			if cmd, _ := hm["command"].(string); cmd == command {
-				return Change{Path: path, Action: "unchanged"}, nil
+				current, _ := entry["matcher"].(string)
+				if current == matcher {
+					return Change{Path: path, Action: "unchanged"}, nil
+				}
+				if len(inner) > 1 {
+					entry["hooks"] = append(inner[:handlerIndex:handlerIndex], inner[handlerIndex+1:]...)
+					separate := map[string]any{
+						"hooks": []any{h},
+					}
+					if matcher != "" {
+						separate["matcher"] = matcher
+					}
+					entries = append(entries, separate)
+				} else if matcher == "" {
+					delete(entry, "matcher")
+				} else {
+					entry["matcher"] = matcher
+				}
+				hooks[event] = entries
+				settings["hooks"] = hooks
+				return Change{Path: path, Action: event + " hook matcher updated"}, writeJSONFile(path, settings)
 			}
 		}
 	}

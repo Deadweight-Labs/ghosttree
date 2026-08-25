@@ -128,3 +128,36 @@ CLAUDE_CONFIG_DIR= ctx install claude
 1. Share the host in the private network admin console.
 2. `ctx person add <name>` for a second token (see the stop/start note above).
 3. They run `ctx setup` and `ctx install` on their machine.
+
+## From a local single-machine server to a networked host
+
+`ghosttree-setup` can start a server on the machine you are already working on:
+a database under `~/.local/share/ghosttree/`, `ctx serve` bound to loopback,
+`ctx person add` for a token. That is a complete ghosttree for one machine, and
+it is the right first step when nobody has a host yet.
+
+Moving it to a host later is logically not a migration — it is the same SQLite
+file, and the schema creates itself on open. It is also **not a `cp`**.
+
+A running SQLite database in WAL mode is more than one file: recent writes sit
+in a sidecar journal that has not been folded back yet. Copying `ghosttree.db`
+on its own gives you a snapshot missing them, and it will look fine until it
+does not. Two correct ways:
+
+```bash
+# stop it, then copy
+systemctl --user stop ghosttree
+cp ~/.local/share/ghosttree/ghosttree.db /tmp/
+
+# or snapshot it while it runs — the same mechanism ctx uses before a schema rebuild
+sqlite3 ~/.local/share/ghosttree/ghosttree.db "VACUUM INTO '/tmp/ghosttree.db'"
+```
+
+Then follow **Server** above, putting the copied file in place before the first
+start (the same ownership caveat applies: no root-owned writes into the state
+directory while the service runs). Afterwards point every machine at the new
+URL with `ctx setup` and stop the local service. Nothing else changes.
+
+There is deliberately no skill for this step. It configures a host nobody in
+the session has inspected, over ssh, and that is not a risk any amount of
+onboarding convenience pays for.

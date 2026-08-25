@@ -7,37 +7,69 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 )
 
 type Knowledge struct {
-	ID           int64           `json:"id"`
-	Type         string          `json:"type"` // pitfall|decision|note|plan
-	Title        string          `json:"title"`
-	Body         string          `json:"body"`
-	Scope        scope.Axes      `json:"scope"`
-	Activation   activation.Rule `json:"activation,omitempty"`
-	Confidence   string          `json:"confidence"`              // quarantined|staged|trusted|verified
-	Status       string          `json:"status"`                  // active|stale|deprecated|superseded
-	Origin       string          `json:"origin"`                  // agent|distilled|human
-	SupersededBy int64           `json:"superseded_by,omitempty"` // 0 = not superseded
-	Person       string          `json:"person"`
-	Harness      string          `json:"harness,omitempty"`
-	SessionRef   string          `json:"session_ref,omitempty"`
+	ID             int64           `json:"id"`
+	Type           string          `json:"type"` // pitfall|decision|note|plan
+	Title          string          `json:"title"`
+	Body           string          `json:"body"`
+	Scope          scope.Axes      `json:"scope"`
+	Activation     activation.Rule `json:"activation,omitempty"`
+	Confidence     string          `json:"confidence"`              // quarantined|staged|trusted|verified
+	Status         string          `json:"status"`                  // active|stale|deprecated|superseded
+	Origin         string          `json:"origin"`                  // agent|distilled|human
+	SupersededBy   int64           `json:"superseded_by,omitempty"` // 0 = not superseded
+	Person         string          `json:"person"`
+	ConfirmedBy    string          `json:"confirmed_by,omitempty"`
+	LastModifiedBy string          `json:"last_modified_by,omitempty"`
+	Harness        string          `json:"harness,omitempty"`
+	SessionRef     string          `json:"session_ref,omitempty"`
 	// ObservedAt is when the entry was seen; CreatedAt is when it was written
 	// down. For anything a person or an agent typed the two coincide. For a
 	// distilled entry they do not, and the difference is what tells a reader
 	// whether "as of today" in the body means today.
 	ObservedAt string `json:"observed_at,omitempty"`
-	CreatedAt  string `json:"created_at"`
-	UpdatedAt  string `json:"updated_at"`
+	// RegressionState sagt, womit ein behobener Fehler abgesichert ist. Ein
+	// Pitfall hilft, solange ein Agent ihn liest; ein Test hilft immer. Leer
+	// heisst, niemand hat es beurteilt — was etwas anderes ist als
+	// "not_applicable", die ausgesprochene Entscheidung, dass hier nichts zu
+	// testen war. Siehe RegressionStates.
+	RegressionState string `json:"regression_state,omitempty"`
+	RegressionTest  string `json:"regression_test,omitempty"`
+	CreatedAt       string `json:"created_at"`
+	UpdatedAt       string `json:"updated_at"`
+}
+
+// KnowledgeProvenance is the compact attribution shared by every read view.
+// An empty person changes nothing, while a verified entry without its confirmer
+// is deliberately not given a guessed one.
+func KnowledgeProvenance(k Knowledge) string {
+	var parts []string
+	if k.Person != "" {
+		parts = append(parts, "by "+k.Person)
+	}
+	// Wer zuletzt geändert hat, gehört an dieselbe Stelle wie der Urheber —
+	// sonst behält ein Eintrag den fremden Namen und liest sich als dessen
+	// Aussage, obwohl jemand anderes ihn umgeschrieben hat. Genau der Befund,
+	// aus dem REQ-181 entstand; ihn nur in der Historie festzuhalten hiesse, ihn
+	// dort zu verstecken, wo niemand nachsieht.
+	if k.LastModifiedBy != "" && k.LastModifiedBy != k.Person {
+		parts = append(parts, "last edited by "+k.LastModifiedBy)
+	}
+	if k.Confidence == "verified" && k.ConfirmedBy != "" {
+		parts = append(parts, "confirmed by "+k.ConfirmedBy)
+	}
+	return strings.Join(parts, "; ")
 }
 
 const knowledgeCols = `id, type, title, body, project, branch, machine,
-	confidence, status, origin, superseded_by, person, harness, session_ref,
-	observed_at, created_at, updated_at`
+	confidence, status, origin, superseded_by, person, confirmed_by, last_modified_by, harness, session_ref,
+	observed_at, regression_state, regression_test, created_at, updated_at`
 
 // ftsQuery turns user input into a safe FTS5 expression: each token becomes a
 // quoted phrase, and the phrases are joined with OR. Quoting is what keeps FTS5
@@ -86,6 +118,65 @@ func searchTerms(q string) []string {
 // list` does when given no argument.
 func isListingQuery(q string) bool { return len(searchTerms(q)) == 0 }
 
+type SearchIntent string
+
+const (
+	SearchFullText    SearchIntent = "full_text"
+	SearchInventory   SearchIntent = "inventory"
+	SearchInterrupted SearchIntent = "interrupted_work"
+)
+
+// ClassifySearch trennt eine Suche nach einem Gegenstand von Fragen nach dem
+// Zustand des Arbeitsbestands. Diese Grenze wird absichtlich an einer festen
+// Stichprobe echter Anfragen geprüft: FTS kann Ähnlichkeit liefern, aber nicht
+// beantworten, ob eine Arbeit offen oder unterbrochen ist.
+func ClassifySearch(q string) SearchIntent {
+	words := queryWords(q)
+	workContext := hasWord(words, "arbeit", "arbeiten", "gearbeitet", "work", "worked", "working", "faden", "auftrag", "task")
+	explicitState := hasWord(words, "unterbrochen", "liegengeblieben", "unfertig", "unfinished", "interrupted")
+	unfinishedPhrase := hasWord(words, "nicht", "ohne", "not", "never") &&
+		hasWord(words, "fertig", "abgeschlossen", "ende", "finished", "done")
+	leftOff := words["leave"] && words["off"]
+	if (workContext && (explicitState || unfinishedPhrase)) || leftOff {
+		return SearchInterrupted
+	}
+	terms := searchTerms(q)
+	if len(terms) == 0 {
+		return SearchInventory
+	}
+	for _, term := range terms {
+		if !inventoryWords[term] {
+			return SearchFullText
+		}
+	}
+	return SearchInventory
+}
+
+func queryWords(q string) map[string]bool {
+	words := map[string]bool{}
+	for _, word := range strings.FieldsFunc(strings.ToLower(q), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	}) {
+		words[word] = true
+	}
+	return words
+}
+
+func hasWord(words map[string]bool, candidates ...string) bool {
+	for _, candidate := range candidates {
+		if words[candidate] {
+			return true
+		}
+	}
+	return false
+}
+
+var inventoryWords = map[string]bool{
+	"aufgaben": true, "aufträge": true, "bestand": true, "offen": true, "offene": true,
+	"offenen": true, "übrig": true, "zeige": true, "zeig": true, "liste": true,
+	"list": true, "open": true, "tasks": true, "work": true,
+}
+
 func (s *Store) InsertKnowledge(k Knowledge) (int64, error) {
 	if err := activation.ValidateRule(k.Activation); err != nil {
 		return 0, err
@@ -120,11 +211,11 @@ func (s *Store) InsertKnowledge(k Knowledge) (int64, error) {
 		k.ObservedAt = ts
 	}
 	res, err := tx.Exec(`INSERT INTO knowledge(type, title, body, project, branch, machine,
-		confidence, status, origin, superseded_by, person, harness, session_ref, observed_at, created_at, updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		confidence, status, origin, superseded_by, person, confirmed_by, last_modified_by, harness, session_ref, observed_at, created_at, updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		k.Type, k.Title, k.Body, k.Scope.Project, k.Scope.Branch, k.Scope.Machine,
 		k.Confidence, k.Status, k.Origin, k.SupersededBy,
-		k.Person, k.Harness, k.SessionRef, k.ObservedAt, ts, ts)
+		k.Person, k.ConfirmedBy, k.Person, k.Harness, k.SessionRef, k.ObservedAt, ts, ts)
 	if err != nil {
 		return 0, err
 	}
@@ -179,7 +270,8 @@ func (s *Store) SetActivation(id int64, rule activation.Rule) error {
 // can say. Editing the text is not the same statement — a typo fix is not a
 // claim that the content is still true — so nothing infers it from an update.
 var patchable = map[string]bool{"title": true, "body": true, "confidence": true,
-	"status": true, "type": true, "origin": true, "superseded_by": true, "observed_at": true}
+	"status": true, "type": true, "origin": true, "superseded_by": true, "observed_at": true,
+	"confirmed_by": true}
 
 // PendingKnowledge lists what awaits a decision. project narrows the queue:
 // a flat list is fine for eleven entries and unusable at the several hundred a
@@ -200,6 +292,13 @@ func (s *Store) PendingKnowledge(project string, limit int) ([]Knowledge, error)
 }
 
 func (s *Store) UpdateKnowledge(id int64, patch map[string]string) error {
+	return s.UpdateKnowledgeBy(id, patch, "")
+}
+
+// UpdateKnowledgeBy archives the current version before applying a correction.
+// The author remains on the live entry, while the authenticated editor is
+// recorded both on the new head and on the archived version it replaced.
+func (s *Store) UpdateKnowledgeBy(id int64, patch map[string]string, editor string) error {
 	for col := range patch {
 		if !patchable[col] {
 			return fmt.Errorf("field %q is not patchable", col)
@@ -207,7 +306,7 @@ func (s *Store) UpdateKnowledge(id int64, patch map[string]string) error {
 	}
 	var sets []string
 	var args []any
-	for _, col := range []string{"type", "title", "body", "confidence", "status", "origin", "observed_at"} {
+	for _, col := range []string{"type", "title", "body", "confidence", "status", "origin", "observed_at", "confirmed_by"} {
 		if v, ok := patch[col]; ok {
 			sets = append(sets, col+" = ?")
 			args = append(args, v)
@@ -221,6 +320,10 @@ func (s *Store) UpdateKnowledge(id int64, patch map[string]string) error {
 		return err
 	}
 	defer tx.Rollback()
+	ts := now()
+	if err := archiveKnowledgeTx(tx, id, editor, ts); err != nil {
+		return err
+	}
 	if raw, ok := patch["superseded_by"]; ok {
 		target, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil || target == 0 || target == id {
@@ -241,7 +344,6 @@ func (s *Store) UpdateKnowledge(id int64, patch map[string]string) error {
 			}
 			target = next
 		}
-		ts := now()
 		if _, err := tx.Exec(`WITH RECURSIVE ancestors(id) AS (
 			SELECT ? UNION ALL SELECT k.id FROM knowledge k JOIN ancestors a ON k.superseded_by=a.id
 		) UPDATE knowledge SET status='superseded',superseded_by=?,updated_at=? WHERE id IN (SELECT id FROM ancestors)`, id, target, ts); err != nil {
@@ -258,7 +360,12 @@ func (s *Store) UpdateKnowledge(id int64, patch map[string]string) error {
 		}
 	}
 	sets = append(sets, "updated_at = ?")
-	args = append(args, now(), id)
+	args = append(args, ts)
+	if editor != "" {
+		sets = append(sets, "last_modified_by = ?")
+		args = append(args, editor)
+	}
+	args = append(args, id)
 	if _, err := tx.Exec(`UPDATE knowledge SET `+strings.Join(sets, ", ")+` WHERE id = ?`, args...); err != nil {
 		return err
 	}
@@ -267,6 +374,46 @@ func (s *Store) UpdateKnowledge(id int64, patch map[string]string) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+// KnowledgeVersion is a complete prior version of an entry. ChangedBy says
+// who caused this version to be replaced; Person remains its original author.
+type KnowledgeVersion struct {
+	ID          int64  `json:"id"`
+	KnowledgeID int64  `json:"knowledge_id"`
+	Type        string `json:"type"`
+	Title       string `json:"title"`
+	Body        string `json:"body"`
+	Person      string `json:"person"`
+	ChangedBy   string `json:"changed_by"`
+	ChangedAt   string `json:"changed_at"`
+}
+
+func archiveKnowledgeTx(tx *sql.Tx, id int64, editor, changedAt string) error {
+	_, err := tx.Exec(`INSERT INTO knowledge_versions
+		(knowledge_id,type,title,body,person,changed_by,changed_at)
+		SELECT id,type,title,body,person,?,? FROM knowledge WHERE id=?`,
+		editor, changedAt, id)
+	return err
+}
+
+func (s *Store) KnowledgeHistory(id int64) ([]KnowledgeVersion, error) {
+	rows, err := s.db.Query(`SELECT id,knowledge_id,type,title,body,person,changed_by,changed_at
+		FROM knowledge_versions WHERE knowledge_id=? ORDER BY changed_at DESC, id DESC`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []KnowledgeVersion
+	for rows.Next() {
+		var v KnowledgeVersion
+		if err := rows.Scan(&v.ID, &v.KnowledgeID, &v.Type, &v.Title, &v.Body,
+			&v.Person, &v.ChangedBy, &v.ChangedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
 }
 
 // observationTime is how old an entry's content is. The fallback matters on a
@@ -463,8 +610,8 @@ func (s *Store) scanKnowledge(rows *sql.Rows) ([]Knowledge, error) {
 		if err := rows.Scan(&k.ID, &k.Type, &k.Title, &k.Body,
 			&k.Scope.Project, &k.Scope.Branch, &k.Scope.Machine,
 			&k.Confidence, &k.Status, &k.Origin, &k.SupersededBy,
-			&k.Person, &k.Harness, &k.SessionRef,
-			&k.ObservedAt, &k.CreatedAt, &k.UpdatedAt); err != nil {
+			&k.Person, &k.ConfirmedBy, &k.LastModifiedBy, &k.Harness, &k.SessionRef,
+			&k.ObservedAt, &k.RegressionState, &k.RegressionTest, &k.CreatedAt, &k.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, k)

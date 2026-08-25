@@ -74,7 +74,7 @@ func TestWriteMirrorPutsKnowledgeDocsAndLedgerOnDisk(t *testing.T) {
 	for _, rel := range []string{
 		"INDEX.md",
 		"knowledge/pitfall/42-fallstrick.md",
-		"docs/2026-08-22-99-docs-specs-thing-md.md",
+		"docs/2026-08-22-99-thing.md",
 		"requests/open/REQ-177-offener-faden.md",
 	} {
 		if _, err := os.Stat(filepath.Join(repo, ".ghosttree", rel)); err != nil {

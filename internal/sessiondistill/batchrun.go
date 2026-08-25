@@ -2,8 +2,8 @@ package sessiondistill
 
 import (
 	"context"
-	"strings"
 	"fmt"
+	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/llm"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"

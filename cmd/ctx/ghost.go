@@ -54,7 +54,24 @@ func WriteTree(c *client.Client, project, repoRoot, home string) error {
 		return err
 	}
 	return ghost.Materialize(ghost.TreeRoot(repoRoot, project, home),
-		ghost.BuildDocs(entries, described, treeFreshness(repoRoot, described)))
+		ghost.BuildDocs(entries, described, treeFreshness(repoRoot, described),
+			reviewedEmpty(c, project, repoRoot)))
+}
+
+// reviewedEmpty holt die Pfade, die jemand angesehen und absichtlich nicht
+// beschrieben hat, und behält nur die, deren Datei sich seitdem nicht geändert
+// hat. Der Blob-Vergleich braucht die echten Dateien und kann deshalb nur hier
+// stattfinden.
+//
+// Ein Fehler ist wie überall in diesem Pfad kein Grund, den Baum ausfallen zu
+// lassen: ein Baum ohne die vierte Gruppe ist unvollständig, ein fehlender Baum
+// ist unbrauchbar.
+func reviewedEmpty(c *client.Client, project, repoRoot string) map[string]bool {
+	reviews, err := c.GhostReviews(project, "")
+	if err != nil {
+		return nil
+	}
+	return ghost.ReviewedEmpty(repoRoot, reviews)
 }
 
 // treeFreshness rechnet den Zustand jeder Beschreibung — und nur der

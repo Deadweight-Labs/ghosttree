@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -148,6 +149,115 @@ func TestPreToolUseHookSurvivesADeadServer(t *testing.T) {
 	}
 	if ctx != "" {
 		t.Fatalf("dead server must yield an empty context, got %q", ctx)
+	}
+}
+
+func TestPreToolUseUnderstandsCodexExecInput(t *testing.T) {
+	repo := newRepo(t)
+	if err := os.MkdirAll(filepath.Join(repo, "internal", "mirror"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "internal", "mirror", "mirror.go"), []byte("package mirror\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("path") != "internal/mirror/mirror.go" {
+			w.Write([]byte(`[]`))
+			return
+		}
+		w.Write([]byte(`[{"path":"internal/mirror/mirror.go","kind":"file","description":"baut den lesbaren Spiegel"}]`))
+	}))
+	defer srv.Close()
+	withConfig(t, srv.URL)
+
+	payload, err := json.Marshal(map[string]any{
+		"session_id": "codex-session",
+		"cwd":        repo,
+		"tool_name":  "exec",
+		"tool_input": `const commands = ["rg -n mirror internal/store/store.go internal/mirror/mirror.go"];
+for (const cmd of commands) await tools.exec_command({cmd, workdir:"` + repo + `"});`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if code := cmdHookWith(bytes.NewReader(payload), []string{"pre-tool-use"}, &out); code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	_, ctx := decodeHook(t, &out)
+	if !strings.Contains(ctx, "baut den lesbaren Spiegel") {
+		t.Fatalf("Codex' exec-Payload muss die Beschreibung aller erwähnten Repo-Pfade liefern, got %q", ctx)
+	}
+}
+
+func TestToolPathsKeepsDirectPathsRelativeToTheWorkingDirectory(t *testing.T) {
+	repo := newRepo(t)
+	raw := json.RawMessage(`{"file_path":"store/knowledge.go"}`)
+	got := toolPaths(raw, filepath.Join(repo, "internal"), repo)
+	if len(got) != 1 || got[0] != "internal/store/knowledge.go" {
+		t.Fatalf("paths = %v", got)
+	}
+}
+
+func TestToolPathsFindsCodexFilesAcrossInputShapes(t *testing.T) {
+	repo := newRepo(t)
+	for _, name := range []string{"README.md", "release notes.md"} {
+		if err := os.WriteFile(filepath.Join(repo, name), []byte(name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	source := `await tools.exec_command({cmd:"cat README.md 'release notes.md'",workdir:"` + repo + `"});
+await tools.exec_command({cmd:"cat store/knowledge.go",workdir:"` + filepath.Join(repo, "internal") + `"});`
+	got := toolPaths(json.RawMessage(strconv.Quote(source)), repo, repo)
+	want := map[string]bool{
+		"README.md":                   true,
+		"release notes.md":            true,
+		"internal/store/knowledge.go": true,
+	}
+	for _, path := range got {
+		delete(want, path)
+	}
+	if len(want) != 0 {
+		t.Fatalf("paths = %v, missing %v", got, want)
+	}
+}
+
+func TestToolPathsAssociatesEachCommandWithItsOwnWorkingDirectory(t *testing.T) {
+	repo := newRepo(t)
+	for _, name := range []string{"README.md", "internal/README.md"} {
+		if err := os.WriteFile(filepath.Join(repo, name), []byte(name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	source := `await tools.exec_command({cmd:"cat README.md"});
+await tools.exec_command({cmd:"cat store/store.go",workdir:"` + filepath.Join(repo, "internal") + `"});`
+	got := toolPaths(json.RawMessage(strconv.Quote(source)), repo, repo)
+	want := map[string]bool{"README.md": true, "internal/store/store.go": true}
+	for _, path := range got {
+		if !want[path] {
+			t.Fatalf("unmentioned file %q delivered from paths %v", path, got)
+		}
+		delete(want, path)
+	}
+	if len(want) != 0 {
+		t.Fatalf("paths = %v, missing %v", got, want)
+	}
+}
+
+func TestToolPathsRejectsSymlinksOutsideTheRepository(t *testing.T) {
+	repo := newRepo(t)
+	outside := filepath.Join(t.TempDir(), "outside.go")
+	if err := os.WriteFile(outside, []byte("secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(repo, "internal", "store", "outside.go")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+	source := strconv.Quote(`cat internal/store/outside.go`)
+	if got := toolPaths(json.RawMessage(source), repo, repo); len(got) != 0 {
+		t.Fatalf("a repository symlink must not escape the hook boundary, got %v", got)
 	}
 }
 

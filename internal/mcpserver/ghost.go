@@ -15,8 +15,15 @@ import (
 )
 
 type DescribeInput struct {
-	Path        string `json:"path" jsonschema:"repository-relative path of the file or directory this describes; \".\" for the repository root"`
-	Description string `json:"description" jsonschema:"what this file or directory does — purpose, invariants, what went wrong here before, what it hangs together with. No length limit; this is the text that would otherwise become a header comment"`
+	Path string `json:"path" jsonschema:"repository-relative path of the file or directory this describes; \".\" for the repository root"`
+	// omitempty ist hier keine Kosmetik. Ohne es steht das Feld als Pflichtfeld
+	// im generierten Schema, und der nothing_to_say-Aufruf, den die
+	// Werkzeugbeschreibung verspricht, würde vom SDK abgewiesen, bevor der
+	// Handler ihn sieht — derselbe Fehler, der context_search einmal vier grüne
+	// Tests und ein für Agenten unbenutzbares Werkzeug bescherte (#846). Dass
+	// eins von beiden dasein muss, prüft deshalb der Handler.
+	Description  string `json:"description,omitempty" jsonschema:"what this file or directory does — purpose, invariants, what went wrong here before, what it hangs together with. No length limit; this is the text that would otherwise become a header comment"`
+	NothingToSay bool   `json:"nothing_to_say,omitempty" jsonschema:"set this instead of description when you have read the path and there is nothing to record that is not already in the code. It notes that the path was looked at, bound to the current contents, so later passes skip it until the file changes. Preferable to a description that restates the source: an empty entry costs nothing, a restatement costs trust in every other description"`
 }
 
 // normalizeGhostPath nimmt entgegen, was ein Agent tippt, und lässt nur zu, was
@@ -46,8 +53,16 @@ func normalizeGhostPath(p string) (string, error) {
 }
 
 func (s *Server) handleDescribe(ctx context.Context, _ *mcp.CallToolRequest, in DescribeInput) (*mcp.CallToolResult, any, error) {
-	if strings.TrimSpace(in.Description) == "" {
-		return nil, nil, fmt.Errorf("description is required — this is the text that would otherwise become a comment")
+	hasText := strings.TrimSpace(in.Description) != ""
+	switch {
+	case !hasText && !in.NothingToSay:
+		return nil, nil, fmt.Errorf("either description or nothing_to_say is required — " +
+			"the description is the text that would otherwise become a comment")
+	case hasText && in.NothingToSay:
+		// Beides zugleich meint zwei verschiedene Dinge. Stillschweigend eins zu
+		// wählen hiesse, entweder eine Beschreibung zu verwerfen oder einen
+		// Review zu erfinden.
+		return nil, nil, fmt.Errorf("description and nothing_to_say are mutually exclusive")
 	}
 	rel, err := normalizeGhostPath(in.Path)
 	if err != nil {
@@ -65,6 +80,29 @@ func (s *Server) handleDescribe(ctx context.Context, _ *mcp.CallToolRequest, in 
 		if err := trackedInRepo(s.repoRoot, rel); err != nil {
 			return nil, nil, err
 		}
+	}
+
+	if in.NothingToSay {
+		// Nur für Dateien. Ein Verzeichnis hat keinen Blob, an den die
+		// Entscheidung sich binden liesse, und "nichts zu sagen" ist dort auch
+		// selten wahr: was ein Verzeichnis zusammenhält, steht in keiner seiner
+		// Dateien.
+		if info.IsDir() {
+			return nil, nil, fmt.Errorf("nothing_to_say is for files; a directory has no blob to bind the decision to, " +
+				"and what holds a directory together is in none of its files")
+		}
+		_, blob, _, err := ghost.HashFile(full)
+		if err != nil {
+			return nil, nil, err
+		}
+		if err := s.client.PutGhostReview(store.GhostReview{
+			Project: s.ctxAxes.Project, Path: rel, GitBlob: blob}); err != nil {
+			return nil, nil, err
+		}
+		if s.afterWrite != nil {
+			s.afterWrite()
+		}
+		return textResult(fmt.Sprintf("vermerkt: %s — angesehen, nichts zu sagen", rel)), nil, nil
 	}
 
 	g := store.GhostFile{Project: s.ctxAxes.Project, Path: rel, Description: in.Description, Harness: "mcp"}

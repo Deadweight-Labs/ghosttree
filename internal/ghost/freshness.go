@@ -163,9 +163,9 @@ func (f Freshness) Label() string {
 	case "stale":
 		return fmt.Sprintf("VERALTET (%d %% der Zeilen geändert) — Beschreibung prüfen", f.Percent)
 	case "dirchanged":
-		return "Kinderliste geändert — Beschreibung prüfen"
+		return "contents changed — check the description"
 	case "unknown":
-		return "geändert, Umfang unbekannt — Beschreibung prüfen"
+		return "changed, extent unknown — check the description"
 	}
 	return ""
 }

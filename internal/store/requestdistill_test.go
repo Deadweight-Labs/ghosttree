@@ -67,6 +67,75 @@ func TestTheSameWishTwiceRaisesItsSightings(t *testing.T) {
 	}
 }
 
+// Bei einem handgeschriebenen Eintrag IST die Beschreibung die Quelle; bei einem
+// destillierten ist sie die Zusammenfassung eines Modells. Erst das wörtliche
+// Zitat trennt "die KI behauptet, ich hätte das gewollt" von "hier steht, was ich
+// gesagt habe" — und ohne Session und Zeitpunkt lässt es sich nicht nachschlagen.
+func TestRequestDetailCarriesTheWordsThatProducedIt(t *testing.T) {
+	s := openTest(t)
+	wishSession(t, s, "a", "und exportieren als csv wär auch nice", []DistilledRequest{{
+		Type: "feature", Title: "CSV-Export", Body: "Der Nutzer möchte exportieren können.",
+		Quote: "exportieren als csv", ChunkSeq: 1}})
+
+	page, _ := s.SearchRequests(requestFilter("p"))
+	if len(page.Results) != 1 {
+		t.Fatalf("ledger = %d entries, want one", len(page.Results))
+	}
+	detail, err := s.RequestByID(page.Results[0].Request.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(detail.Sightings) != 1 {
+		t.Fatalf("sightings = %+v, want the one quote the entry came from", detail.Sightings)
+	}
+	got := detail.Sightings[0]
+	if got.Quote != "exportieren als csv" {
+		t.Errorf("quote = %q, want what was actually said", got.Quote)
+	}
+	if got.SessionID == 0 || got.At == "" {
+		t.Errorf("sighting = %+v, want session and time so the transcript can be found", got)
+	}
+}
+
+// Ein Wunsch aus vier Sessions ist etwas anderes als einer, der einmal nebenbei
+// fiel. Im Ledger sahen beide bislang gleich aus, und die Zahl steht schon in der
+// Datenbank — sie kam nur nie bis zur Liste.
+func TestTheCompactListNamesHowOftenAWishWasVoiced(t *testing.T) {
+	s := openTest(t)
+	item := DistilledRequest{Type: "feature", Title: "CSV-Export", Body: "b", Quote: "export", ChunkSeq: 1}
+	wishSession(t, s, "a", "export wär nice", []DistilledRequest{item})
+	wishSession(t, s, "b", "wann kommt der export", []DistilledRequest{item})
+
+	page, _ := s.SearchRequests(requestFilter("p"))
+	if len(page.Results) != 1 {
+		t.Fatalf("ledger = %d entries, want one", len(page.Results))
+	}
+	if page.Results[0].Sightings != 2 {
+		t.Errorf("sightings in the compact list = %d, want 2 independent sessions",
+			page.Results[0].Sightings)
+	}
+}
+
+// Für handgeschriebene Requests ändert sich nichts: sie haben keine Sichtungen,
+// und eine Null darf dort nicht wie ein verlorener Beleg aussehen.
+func TestAHandWrittenRequestHasNoSightings(t *testing.T) {
+	s := openTest(t)
+	created, err := s.CreateRequest(requestdomain.CreateInput{
+		Request:  requestdomain.Request{Type: "feature", Title: "Von Hand", Description: "d", Scope: scope.Axes{Project: "p"}},
+		Criteria: []string{"messbar"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail, err := s.RequestByID(created.Request.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(detail.Sightings) != 0 {
+		t.Errorf("sightings = %+v, want none for a request a person wrote", detail.Sightings)
+	}
+}
+
 // A wish nobody voiced would become work somebody does.
 func TestUngroundedWishIsRejectedWholesale(t *testing.T) {
 	s := openTest(t)

@@ -36,6 +36,9 @@ func (c *Client) SearchRequests(filter requestdomain.SearchFilter) (requestdomai
 	if filter.Limit > 0 {
 		q.Set("limit", strconv.Itoa(filter.Limit))
 	}
+	if filter.FullDescription {
+		q.Set("full", "1")
+	}
 	var out requestdomain.SearchPage
 	err := c.do("GET", "/api/requests/search", q, nil, &out)
 	return out, err

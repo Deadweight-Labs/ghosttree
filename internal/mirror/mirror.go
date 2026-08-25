@@ -36,9 +36,20 @@ type Input struct {
 	Requests  []requestdomain.SearchHit // offene und die jüngsten erledigten
 	DoneShown int                       // wie viele erledigte Aufträge im Spiegel stehen
 	DoneTotal int                       // wie viele es insgesamt gibt
+
+	// Wie voll der Ghost-Baum ist. Ungezählt liest sich "eine Beschreibung je
+	// Datei" als Zusage, und die vielen unbeschriebenen Pfade wirken dann wie
+	// ein Mangel des Baums statt wie sein Füllstand.
+	TreeDescribed int
+	TreePaths     int
+
+	// At ist der Zeitpunkt dieses Durchlaufs. Ohne ihn sieht der Spiegel frisch
+	// aus, egal wie alt er ist — und auf einer Umgebung ohne Hook schreibt ihn
+	// niemand von allein.
+	At string
 }
 
-const projectionNote = "Projektion aus ghosttree. Änderungen an dieser Datei verschwinden beim nächsten Neuschreiben."
+const projectionNote = "Projection from ghosttree. Edits to this file are lost on the next write."
 
 // Build erzeugt den ganzen Spiegel. Reine Funktion: sie liest keine Datei und
 // schreibt keine, damit der Inhalt ohne Dateisystem prüfbar bleibt.
@@ -79,8 +90,11 @@ func knowledgeBody(k store.Knowledge, mentionedBy []string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# #%d %s\n\n", k.ID, k.Title)
 	fmt.Fprintf(&b, "%s | %s | %s", scopeLabel(k.Scope), k.Type, k.Confidence)
+	if provenance := store.KnowledgeProvenance(k); provenance != "" {
+		fmt.Fprintf(&b, " | %s", provenance)
+	}
 	if k.ObservedAt != "" {
-		fmt.Fprintf(&b, " | beobachtet %s", k.ObservedAt)
+		fmt.Fprintf(&b, " | observed %s", k.ObservedAt)
 	}
 	b.WriteString("\n\n")
 	b.WriteString(strings.TrimRight(k.Body, "\n"))
@@ -98,13 +112,26 @@ func documentPath(k store.Knowledge) string {
 	if day == "" {
 		day = "ohne-datum"
 	}
-	return fmt.Sprintf("docs/%s-%d-%s.md", day, k.ID, slug(k.Title))
+	return fmt.Sprintf("docs/%s-%d-%s.md", day, k.ID, slug(documentName(k.Title)))
+}
+
+// documentName kürzt den Titel eines migrierten Dokuments auf das, was ihn
+// unterscheidet. Der Titel IST dort der Repo-Pfad, und ungekürzt entsteht ein
+// Dateiname, der seine Verzeichnisse und sein Datum zweimal trägt und den
+// eigentlichen Namen ganz hinten. Der vollständige Pfad bleibt in der Datei
+// stehen — verloren geht nichts, nur die Wiederholung.
+func documentName(title string) string {
+	name := title
+	if i := strings.LastIndex(name, "/"); i >= 0 {
+		name = name[i+1:]
+	}
+	return strings.TrimSuffix(name, ".md")
 }
 
 func documentBody(k store.Knowledge, mentionedBy []string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# #%d %s\n\n", k.ID, k.Title)
-	fmt.Fprintf(&b, "%s | %s | %s — Kaltlager: wird nicht in Sitzungen ausgeliefert, ist aber vollständig lesbar\n\n",
+	fmt.Fprintf(&b, "%s | %s | %s — cold storage: not delivered into sessions, readable in full here\n\n",
 		scopeLabel(k.Scope), k.Type, k.Status)
 	b.WriteString(strings.TrimRight(k.Body, "\n"))
 	b.WriteString("\n")
@@ -127,40 +154,72 @@ func requestBody(hit requestdomain.SearchHit, mentionedBy []string) string {
 	fmt.Fprintf(&b, "# REQ-%d %s\n\n", r.ID, r.Title)
 	fmt.Fprintf(&b, "%s | %s | %s", scopeLabel(r.Scope), r.Type, r.State)
 	if r.Priority != "" {
-		fmt.Fprintf(&b, " | Priorität %s", r.Priority)
+		fmt.Fprintf(&b, " | priority %s", r.Priority)
 	}
 	if hit.OpenCriteria > 0 {
-		fmt.Fprintf(&b, " | %d offene Kriterien", hit.OpenCriteria)
+		fmt.Fprintf(&b, " | %d open criteria", hit.OpenCriteria)
 	}
 	b.WriteString("\n\n")
 	b.WriteString(strings.TrimRight(r.Description, "\n"))
 	b.WriteString("\n")
 	if hit.LatestHandoff != "" {
-		fmt.Fprintf(&b, "\n## Letzte Übergabe\n\n%s\n", strings.TrimRight(hit.LatestHandoff, "\n"))
+		fmt.Fprintf(&b, "\n## Last handoff\n\n%s\n", strings.TrimRight(hit.LatestHandoff, "\n"))
 	}
 	// Der Spiegel zeigt die Beschreibung, nicht die Kriterien mit ihren Belegen:
 	// die hängen an Zuständen, die sich im Lauf einer Sitzung ändern, und ein
 	// veralteter Haken ist schlimmer als gar keiner.
-	fmt.Fprintf(&b, "\nKriterien, Belege und Verlauf: `request_get %d`\n", r.ID)
+	fmt.Fprintf(&b, "\nCriteria, evidence and history: `request_get %d`\n", r.ID)
 	b.WriteString(backlinkSection(mentionedBy))
 	b.WriteString(footer())
 	return b.String()
 }
 
+// index ist der Einstieg, und er ist bewusst eine Bestandsliste und keine
+// Abwesenheitsliste.
+//
+// Bis zum 2026-08-25 stand hier ein Abschnitt "Was hier NICHT steht" mit vier
+// Punkten. Der Einwand des Betreibers, und er trägt: eine Liste von
+// Abwesenheiten ist schwer zu verwerten, kostet Platz, und "hier steht kein X"
+// liest sich für ein kleines Modell leicht als "X gibt es nicht". Was gebraucht
+// wird, ist der Bestand mit Zahlen, der Weg zum Suchen — und ein Satz, der sagt,
+// wo mehr liegt. Die Ehrlichkeit steckt in den Zahlen: "descriptions for 39 of
+// 264 paths" sagt dasselbe wie ein Absatz über Unvollständigkeit, nur kürzer.
+//
+// Englisch, weil das der Text ist, den Modelle lesen — kleine am
+// zuverlässigsten. Was in den Einträgen steht, bleibt in seiner Sprache.
+// plural hält die Zahl und ihr Wort zusammen. "1 plans" ist eine Kleinigkeit,
+// aber es ist die Sorte Kleinigkeit, an der ein Leser merkt, dass hier eine
+// Maschine schreibt und niemand hinsieht.
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
+}
+
 func index(in Input, knowledgeCount int) string {
 	var b strings.Builder
-	b.WriteString("# .ghosttree — was hier bekannt ist\n\n")
-	fmt.Fprintf(&b, "Projekt %s, Maschine %s.\n\n", in.Project, in.Machine)
-	fmt.Fprintf(&b, "- `knowledge/` — %d Wissenseinträge: genau die Vereinigung aus Projekt, Zweig, Maschine und global, die eine Sitzung in diesem Repo liest\n", knowledgeCount)
-	fmt.Fprintf(&b, "- `docs/` — %d Dokumente: Pläne und Spezifikationen im Volltext, Kaltlager\n", len(in.Archived))
-	fmt.Fprintf(&b, "- `requests/` — offene Aufträge und %d von %d erledigten\n", in.DoneShown, in.DoneTotal)
-	b.WriteString("- `tree/` — eine Beschreibung je Datei und je Verzeichnis dieses Repos\n\n")
-	b.WriteString("## Was hier NICHT steht\n\n")
-	b.WriteString("- Sitzungsprotokolle. Mehrere hundert Megabyte, und sie haben trotz Schwärzung nichts in einem Repo-Verzeichnis zu suchen — sie stehen über `context_sessions` zur Verfügung.\n")
-	b.WriteString("- Quarantänisiertes und ungeprüftes Wissen. Ein Dateisystem hat keine Vertrauensstufen; nebeneinander sähe Ungeprüftes aus wie Geprüftes. Der Spiegel zeigt, was ausgeliefert würde, der Rest bleibt Sache von `ctx review`.\n")
-	b.WriteString("- Abgelöstes und veraltetes Wissen, aus demselben Grund.\n")
-	b.WriteString("- Kriterien und Belege der Aufträge: sie ändern sich im Lauf einer Sitzung, und ein veralteter Haken wäre schlimmer als keiner.\n\n")
-	b.WriteString("Wer mehr braucht, fragt das Werkzeug: `context_search`, `request_get`, `context_sessions`.\n")
+	b.WriteString("# .ghosttree — what is known here\n\n")
+	fmt.Fprintf(&b, "Project %s, machine %s.\n", in.Project, in.Machine)
+	if in.At != "" {
+		fmt.Fprintf(&b, "Written %s — refresh with `ctx mirror`.\n", in.At)
+	}
+	b.WriteString("\n")
+	fmt.Fprintf(&b, "- `knowledge/` — %d entries: pitfalls, decisions and notes. Exactly what a session in this repository is given.\n", knowledgeCount)
+	fmt.Fprintf(&b, "- `docs/` — %d %s, in full.\n", len(in.Archived), plural(len(in.Archived), "plan or specification", "plans and specifications"))
+	fmt.Fprintf(&b, "- `requests/open/` and `requests/done/` — the work ledger; %d of %d finished ones are kept here.\n", in.DoneShown, in.DoneTotal)
+	fmt.Fprintf(&b, "- `tree/` — descriptions for %d of %d paths in this repository, one file each.\n\n",
+		in.TreeDescribed, in.TreePaths)
+
+	// Der werkzeuglose Weg zuerst: dieses Verzeichnis ist für Umgebungen ohne
+	// MCP und ohne Hooks gebaut, und die haben kein context_search.
+	b.WriteString("## How to search\n\n")
+	b.WriteString("    grep -ril \"topic\" .ghosttree/knowledge/        # what is known about it\n")
+	b.WriteString("    grep -l \"## Last handoff\" .ghosttree/requests/open/*.md   # what was started\n")
+	b.WriteString("    ls .ghosttree/requests/open/                   # what is open\n")
+	b.WriteString("    cat .ghosttree/tree/<path>.md                  # what a file does\n\n")
+	b.WriteString("Each file names its scope, its type and who wrote it. Entry `#42` is `knowledge/*/42-*.md`; `REQ-7` is `requests/*/REQ-7-*.md`.\n\n")
+	b.WriteString("Where ghosttree is available as a tool, it sees more than this directory: session transcripts (`context_sessions`), unreviewed and superseded knowledge (`context_search`), and the criteria and evidence behind each request (`request_get`).\n")
 	b.WriteString(footer())
 	return b.String()
 }
@@ -173,8 +232,8 @@ func backlinkSection(mentionedBy []string) string {
 	if len(mentionedBy) == 0 {
 		return ""
 	}
-	return "\n## Wird erwähnt von\n\n" + strings.Join(mentionedBy, "\n") +
-		"\n\n(abgeleitet aus den Nennungen in den Texten, keine gepflegte Beziehung)\n"
+	return "\n## Mentioned by\n\n" + strings.Join(mentionedBy, "\n") +
+		"\n\n(derived from mentions in the texts, not a curated relation)\n"
 }
 
 func mentionKey(prefix string, id int64) string { return prefix + strconv.FormatInt(id, 10) }

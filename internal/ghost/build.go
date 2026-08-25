@@ -61,15 +61,21 @@ func RepoEntries(repoRoot string) ([]Entry, error) {
 // Beschreibung darf nirgends verschwinden.
 //
 // fresh darf nil sein; dann trägt keine Beschreibung eine Anmerkung.
-func BuildDocs(entries []Entry, described map[string]store.GhostFile, fresh map[string]Freshness) []Doc {
-	kids := childIndex(entries, described)
+//
+// reviewedEmpty sind die Pfade, die jemand angesehen und absichtlich nicht
+// beschrieben hat und deren Datei sich seitdem nicht geändert hat — gerechnet
+// von ReviewedEmpty, weil dafür die echten Dateien nötig sind. Darf nil sein.
+// Ohne diese Menge stünde ein verworfener Pfad wieder unter "noch nicht
+// beschrieben", und jeder weitere Bestandslauf läse ihn erneut.
+func BuildDocs(entries []Entry, described map[string]store.GhostFile, fresh map[string]Freshness, reviewedEmpty map[string]bool) []Doc {
+	kids := childIndex(entries, described, reviewedEmpty)
 	docs := make([]Doc, 0, len(entries))
 	for _, e := range entries {
 		g, ok := described[e.Path]
 		if e.Kind == "file" && !ok && IsIncidental(e.Path) {
 			continue
 		}
-		body := renderDoc(e, g, ok, fresh[e.Path])
+		body := renderDoc(e, g, ok, fresh[e.Path], reviewedEmpty[e.Path])
 		if e.Kind == "dir" {
 			body = renderContents(body, kids[e.Path])
 		}
@@ -85,17 +91,18 @@ const treeFooter = "---\nProjektion aus ghosttree. Änderungen an dieser Datei v
 // ihren Einzeiler gleich mit: ein Nachschlagen über den Basisnamen griffe bei
 // zwei gleichnamigen Dateien in verschiedenen Verzeichnissen daneben.
 type children struct {
-	dirs        []string
-	described   []describedChild
-	undescribed []string
-	incidental  []string
+	dirs          []string
+	described     []describedChild
+	undescribed   []string
+	reviewedEmpty []string
+	incidental    []string
 }
 
 type describedChild struct{ name, summary string }
 
 // childIndex ordnet jeden Eintrag seinem Elternverzeichnis zu. Nur direkte
 // Kinder: sonst wiederholte die Wurzel den gesamten Baum.
-func childIndex(entries []Entry, described map[string]store.GhostFile) map[string]*children {
+func childIndex(entries []Entry, described map[string]store.GhostFile, reviewedEmpty map[string]bool) map[string]*children {
 	idx := map[string]*children{}
 	at := func(dir string) *children {
 		if idx[dir] == nil {
@@ -118,9 +125,13 @@ func childIndex(entries []Entry, described map[string]store.GhostFile) map[strin
 		case e.Kind == "dir":
 			c.dirs = append(c.dirs, name+"/")
 		case described[e.Path].Description != "":
+			// Beschrieben schlägt angesehen: wer nach einem Review doch etwas zu
+			// sagen hatte, hat den Pfad damit erledigt.
 			c.described = append(c.described, describedChild{name, summarize(described[e.Path].Description)})
 		case IsIncidental(e.Path):
 			c.incidental = append(c.incidental, name)
+		case reviewedEmpty[e.Path]:
+			c.reviewedEmpty = append(c.reviewedEmpty, name)
 		default:
 			c.undescribed = append(c.undescribed, name)
 		}
@@ -158,10 +169,21 @@ func renderContents(body string, c *children) string {
 		sort.Strings(c.undescribed)
 		fmt.Fprintf(&b, "Noch nicht beschrieben: %s\n\n", strings.Join(c.undescribed, ", "))
 	}
+	// Neben der Arbeitsliste und nicht neben dem Beiläufigen, und das ist
+	// Absicht: wächst diese Gruppe schneller als die beschriebene, steht der
+	// Kritiker zu scharf — und das sieht nur, wer beide nebeneinander liest.
+	if len(c.reviewedEmpty) > 0 {
+		sort.Strings(c.reviewedEmpty)
+		fmt.Fprintf(&b, "Angesehen, nichts zu sagen: %s\n\n", strings.Join(c.reviewedEmpty, ", "))
+	}
 	if len(c.incidental) > 0 {
 		sort.Strings(c.incidental)
-		fmt.Fprintf(&b, "%d beiläufige Dateien, nicht einzeln geführt: %s\n\n",
-			len(c.incidental), strings.Join(c.incidental, ", "))
+		noun := "incidental files"
+		if len(c.incidental) == 1 {
+			noun = "incidental file"
+		}
+		fmt.Fprintf(&b, "%d %s, not tracked individually: %s\n\n",
+			len(c.incidental), noun, strings.Join(c.incidental, ", "))
 	}
 	return b.String()
 }
@@ -179,7 +201,7 @@ func summarize(description string) string {
 	return line
 }
 
-func renderDoc(e Entry, g store.GhostFile, described bool, f Freshness) string {
+func renderDoc(e Entry, g store.GhostFile, described bool, f Freshness, reviewedEmpty bool) string {
 	name := e.Path
 	if name == "" {
 		name = "(Repo-Wurzel)"
@@ -187,8 +209,13 @@ func renderDoc(e Entry, g store.GhostFile, described bool, f Freshness) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s\n\n", name)
 	if !described {
+		if reviewedEmpty {
+			b.WriteString("(angesehen, nichts zu sagen)\n\n")
+			b.WriteString("Someone read this path and decided there is nothing to record that is not already in the code. That decision is bound to the current contents: change the file and it becomes a candidate again.\n\n")
+			return b.String()
+		}
 		b.WriteString("(keine Beschreibung)\n\n")
-		b.WriteString("Diese Datei hat noch keine Ghost-Datei. Wer sie als Nächstes anfasst, kann eine über `context_describe_file` schreiben.\n\n")
+		b.WriteString("No description for this path yet. Whoever touches it next can write one with `context_describe_file`.\n\n")
 		return b.String()
 	}
 	date := g.DescribedAt

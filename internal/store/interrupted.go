@@ -7,11 +7,14 @@ import (
 // InterruptedThread ist eine angefangene und nicht zu Ende gebrachte Arbeit an
 // einem offenen Auftrag.
 type InterruptedThread struct {
-	RequestID int64  `json:"request_id"`
-	Title     string `json:"title"`
-	Handoff   string `json:"handoff"`
-	Since     string `json:"since"`
-	Derived   bool   `json:"derived"`
+	RequestID    int64  `json:"request_id"`
+	Type         string `json:"type"`
+	Title        string `json:"title"`
+	Priority     string `json:"priority,omitempty"`
+	OpenCriteria int    `json:"open_criteria"`
+	Handoff      string `json:"handoff"`
+	Since        string `json:"since"`
+	Derived      bool   `json:"derived"`
 }
 
 // InterruptedWork beantwortet, woran hier zuletzt gearbeitet wurde, ohne dass
@@ -35,7 +38,9 @@ func (s *Store) InterruptedWork(ax scope.Axes, idleBefore, excludeSession string
 	scopeWhere, args := ax.UnionWhere()
 	// Der Scope steht in einer Unterabfrage, weil sessions und requests beide
 	// eine Spalte project tragen und UnionWhere sie unqualifiziert nennt.
-	query := `SELECT r.id, r.title, COALESCE(w.summary,''), w.state,
+	query := `SELECT r.id, r.type, r.title, r.priority,
+		(SELECT COUNT(*) FROM request_criteria c WHERE c.request_id=r.id AND c.state='open'),
+		COALESCE(w.summary,''), w.state,
 		MAX(CASE WHEN w.state='paused' THEN w.ended_at ELSE se.last_seen_at END) AS since
 		FROM request_work w
 		JOIN sessions se ON se.id = w.session_id
@@ -55,7 +60,7 @@ func (s *Store) InterruptedWork(ax scope.Axes, idleBefore, excludeSession string
 	for rows.Next() {
 		var t InterruptedThread
 		var state string
-		if err := rows.Scan(&t.RequestID, &t.Title, &t.Handoff, &state, &t.Since); err != nil {
+		if err := rows.Scan(&t.RequestID, &t.Type, &t.Title, &t.Priority, &t.OpenCriteria, &t.Handoff, &state, &t.Since); err != nil {
 			return nil, err
 		}
 		t.Derived = state == "active"

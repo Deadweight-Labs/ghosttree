@@ -98,6 +98,42 @@ func TestQueryWithoutContentWordsIsAListing(t *testing.T) {
 	}
 }
 
+// Die Stichprobe besteht aus Anfragen, die in den Prüfläufen zu #732 und
+// #1432 tatsächlich gestellt wurden, ergänzt um ihre englischen Entsprechungen.
+// Vierzehn von vierzehn müssen an der beabsichtigten Rolle landen; in der
+// ursprünglichen Zwölferstichprobe erreichte die alte Grenze nur zehn von zwölf
+// (83,3 %). Zwei Negativfälle sichern zusätzlich gegen Überklassifikation ab.
+func TestSearchIntentMeasuredAgainstRealQueries(t *testing.T) {
+	tests := []struct {
+		query string
+		want  SearchIntent
+	}{
+		{"zuletzt gearbeitet nicht fertig", SearchInterrupted},
+		{"woran wurde hier zuletzt gearbeitet, ohne dass es zu Ende gebracht wurde?", SearchInterrupted},
+		{"what work was left unfinished?", SearchInterrupted},
+		{"where did we leave off?", SearchInterrupted},
+		{"was ist noch zu tun", SearchInventory},
+		{"what is left to do", SearchInventory},
+		{"zeig mir die offenen Aufgaben", SearchInventory},
+		{"list the open work", SearchInventory},
+		{"Parallelbaum", SearchFullText},
+		{"Warum behält ein laufender Prozess den alten Inode?", SearchFullText},
+		{"Ghost Tree Parallelbaum Bootstrap Auslöser Rückfallweg", SearchFullText},
+		{"ctx mcp per Shell-Pipe testen", SearchFullText},
+		{"Warum wurde die Netzwerkverbindung unterbrochen?", SearchFullText},
+		{"Wie wird ein fertiger Request abgeschlossen?", SearchFullText},
+	}
+	correct := 0
+	for _, tt := range tests {
+		if got := ClassifySearch(tt.query); got != tt.want {
+			t.Errorf("ClassifySearch(%q) = %q, want %q (terms=%v)", tt.query, got, tt.want, searchTerms(tt.query))
+		} else {
+			correct++
+		}
+	}
+	t.Logf("Trefferquote der Intent-Grenze: %d/%d = %.1f%%", correct, len(tests), 100*float64(correct)/float64(len(tests)))
+}
+
 func knowledgeTitles(ks []Knowledge) []string {
 	out := make([]string, len(ks))
 	for i, k := range ks {

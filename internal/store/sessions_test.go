@@ -142,15 +142,37 @@ func TestSearchSessions(t *testing.T) {
 	s := openTest(t)
 	id, _ := s.UpsertSession(Session{Harness: "codex", ExternalID: "x1", Scope: scope.Axes{Project: "github.com/x/y"}, StartedAt: "2026-08-23T00:00:00Z"})
 	s.AppendChunks(id, []Chunk{{Seq: 0, Role: "user", Text: "the livekit sfu drops connections", Raw: "{}"}})
-	hits, err := s.SearchSessions("livekit", scope.Axes{}, 10)
+	hits, err := s.SearchSessions("livekit", scope.Axes{}, "", 10)
 	if err != nil || len(hits) != 1 {
 		t.Fatalf("hits = %v, err = %v", hits, err)
 	}
 	if hits[0].Session.ExternalID != "x1" || hits[0].Snippet == "" {
 		t.Errorf("bad hit: %+v", hits[0])
 	}
-	if hits, _ := s.SearchSessions("livekit", scope.Axes{Project: "github.com/other/z"}, 10); len(hits) != 0 {
+	if hits, _ := s.SearchSessions("livekit", scope.Axes{Project: "github.com/other/z"}, "", 10); len(hits) != 0 {
 		t.Error("project filter must exclude")
+	}
+}
+
+func TestSearchSessionsExcludesTheAskingSession(t *testing.T) {
+	s := openTest(t)
+	for _, externalID := range []string{"current", "earlier"} {
+		id, err := s.UpsertSession(Session{Harness: "codex", ExternalID: externalID,
+			Scope: scope.Axes{Project: "github.com/x/y"}, StartedAt: "2026-08-23T00:00:00Z"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.AppendChunks(id, []Chunk{{Seq: 0, Role: "user", Text: "selbstbeleg suchwort", Raw: "{}"}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	hits, err := s.SearchSessions("selbstbeleg", scope.Axes{Project: "github.com/x/y"}, "current", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 1 || hits[0].Session.ExternalID != "earlier" {
+		t.Fatalf("hits = %+v, want only the earlier session", hits)
 	}
 }
 

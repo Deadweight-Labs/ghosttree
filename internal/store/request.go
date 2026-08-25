@@ -154,6 +154,29 @@ func (s *Store) RequestByID(id int64) (requestdomain.Detail, error) {
 	if err := workRows.Err(); err != nil {
 		return d, err
 	}
+	// Der Wortlaut zuletzt, und über einen Join, weil die Sichtung selbst keinen
+	// Zeitstempel trägt: sie erbt ihn von der Sitzung, in der sie fiel. Ohne
+	// Sitzung und Zeitpunkt wäre das Zitat nicht nachschlagbar, und genau das
+	// Nachschlagen ist sein Zweck.
+	sightingRows, err := s.db.Query(`SELECT rs.session_id, rs.chunk_seq, rs.quote,
+			COALESCE(se.started_at,''), COALESCE(se.harness,'')
+		FROM request_sightings rs LEFT JOIN sessions se ON se.id=rs.session_id
+		WHERE rs.request_id=? ORDER BY se.started_at, rs.session_id, rs.chunk_seq`, id)
+	if err != nil {
+		return d, err
+	}
+	defer sightingRows.Close()
+	for sightingRows.Next() {
+		var sighting requestdomain.Sighting
+		if err := sightingRows.Scan(&sighting.SessionID, &sighting.ChunkSeq, &sighting.Quote,
+			&sighting.At, &sighting.Harness); err != nil {
+			return d, err
+		}
+		d.Sightings = append(d.Sightings, sighting)
+	}
+	if err := sightingRows.Err(); err != nil {
+		return d, err
+	}
 	return d, nil
 }
 
@@ -173,9 +196,14 @@ func (s *Store) SearchRequests(filter requestdomain.SearchFilter) (requestdomain
 	// snippet. Sending every description in full made twenty-four requests
 	// exceed what a tool result may return, and it is no better for a card or a
 	// terminal row. GetRequest answers with the whole text.
-	query := `SELECT r.id,r.type,r.title,substr(r.description,1,` + strconv.Itoa(snippetChars) + `),r.state,r.priority,r.project,r.branch,r.machine,r.origin,r.person,r.session_ref,r.created_at,r.updated_at,
+	description := "substr(r.description,1," + strconv.Itoa(snippetChars) + ")"
+	if filter.FullDescription {
+		description = "r.description"
+	}
+	query := `SELECT r.id,r.type,r.title,` + description + `,r.state,r.priority,r.project,r.branch,r.machine,r.origin,r.person,r.session_ref,r.created_at,r.updated_at,
 		(SELECT COUNT(*) FROM request_criteria c WHERE c.request_id=r.id AND c.state='open'),
-		COALESCE((SELECT w.summary FROM request_work w WHERE w.request_id=r.id AND w.summary!='' ORDER BY w.id DESC LIMIT 1),'')
+		COALESCE((SELECT w.summary FROM request_work w WHERE w.request_id=r.id AND w.summary!='' ORDER BY w.id DESC LIMIT 1),''),
+		(SELECT COUNT(DISTINCT g.session_id) FROM request_sightings g WHERE g.request_id=r.id)
 		FROM requests r`
 	var where []string
 	var args []any
@@ -183,7 +211,7 @@ func (s *Store) SearchRequests(filter requestdomain.SearchFilter) (requestdomain
 	// find one entry in it. Matching it would answer "was ist noch zu tun" with
 	// whichever request happens to contain all five words — measured on
 	// 2026-08-24: one of twenty-four, effectively at random.
-	if !isListingQuery(filter.Query) {
+	if ClassifySearch(filter.Query) == SearchFullText {
 		query += ` JOIN search_documents d ON d.kind='request' AND d.domain_id=r.id JOIN search_documents_fts f ON f.rowid=d.id`
 		where = append(where, `search_documents_fts MATCH ?`)
 		args = append(args, ftsQuery(filter.Query))
@@ -225,7 +253,7 @@ func (s *Store) SearchRequests(filter requestdomain.SearchFilter) (requestdomain
 	for rows.Next() {
 		var hit requestdomain.SearchHit
 		r := &hit.Request
-		if err := rows.Scan(&r.ID, &r.Type, &r.Title, &r.Description, &r.State, &r.Priority, &r.Scope.Project, &r.Scope.Branch, &r.Scope.Machine, &r.Origin, &r.Person, &r.SessionRef, &r.CreatedAt, &r.UpdatedAt, &hit.OpenCriteria, &hit.LatestHandoff); err != nil {
+		if err := rows.Scan(&r.ID, &r.Type, &r.Title, &r.Description, &r.State, &r.Priority, &r.Scope.Project, &r.Scope.Branch, &r.Scope.Machine, &r.Origin, &r.Person, &r.SessionRef, &r.CreatedAt, &r.UpdatedAt, &hit.OpenCriteria, &hit.LatestHandoff, &hit.Sightings); err != nil {
 			return page, err
 		}
 		if filter.Query != "" {

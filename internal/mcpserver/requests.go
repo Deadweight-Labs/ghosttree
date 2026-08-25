@@ -9,16 +9,16 @@ import (
 
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
+	"github.com/Deadweight-Labs/ghosttree/internal/store"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 type RequestSearchInput struct {
-	Query          string `json:"query" jsonschema:"the current task or outcome to match against the request ledger"`
-	State          string `json:"state,omitempty" jsonschema:"open, done, or dropped; defaults to open"`
-	Type           string `json:"type,omitempty" jsonschema:"feature, change, bug, or investigation"`
-	Cursor         string `json:"cursor,omitempty" jsonschema:"opaque cursor from a previous result"`
-	Limit          int    `json:"limit,omitempty" jsonschema:"maximum results, default 10 and maximum 25"`
-	ResponseFormat string `json:"response_format,omitempty" jsonschema:"concise or detailed; defaults to concise"`
+	Query  string `json:"query" jsonschema:"the current task or outcome to match against the request ledger"`
+	State  string `json:"state,omitempty" jsonschema:"open, done, or dropped; defaults to open"`
+	Type   string `json:"type,omitempty" jsonschema:"feature, change, bug, or investigation"`
+	Cursor string `json:"cursor,omitempty" jsonschema:"opaque cursor from a previous result"`
+	Limit  int    `json:"limit,omitempty" jsonschema:"maximum results, default 10 and maximum 25"`
 }
 
 // RequestSearchOutput is a list to choose from, not the backlog itself.
@@ -31,8 +31,9 @@ type RequestSearchInput struct {
 // list and let request_get answer for one entry. Same reasoning as REQ-83,
 // which fixed the mutation replies and left the search path alone.
 type RequestSearchOutput struct {
-	Results    []RequestListItem `json:"results"`
-	NextCursor string            `json:"next_cursor,omitempty"`
+	Results        []RequestListItem `json:"results"`
+	Interpretation string            `json:"interpretation"`
+	NextCursor     string            `json:"next_cursor,omitempty"`
 	// Truncated says the list was cut. A shortened answer that looks complete
 	// is worse than a short one.
 	Truncated bool `json:"truncated,omitempty"`
@@ -50,6 +51,9 @@ type RequestListItem struct {
 	// One line, because "where did this get to" is the question that decides
 	// whether to pick it up.
 	Handoff string `json:"handoff,omitempty"`
+	// Sightings counts the independent sessions that voiced this wish. Absent
+	// for anything a person wrote by hand, where the description is the source.
+	Sightings int `json:"sightings,omitempty"`
 }
 
 // maxListChars bounds the whole answer. It is enforced while building the list
@@ -65,6 +69,7 @@ func listFromPage(page requestdomain.SearchPage) RequestSearchOutput {
 			ID: hit.Request.ID, Type: hit.Request.Type, Title: hit.Request.Title,
 			State: hit.Request.State, Priority: hit.Request.Priority,
 			OpenCriteria: hit.OpenCriteria, Handoff: firstLine(hit.LatestHandoff, 160),
+			Sightings: hit.Sightings,
 		}
 		size += len(item.Title) + len(item.Handoff) + 64
 		if size > maxListChars && len(out.Results) > 0 {
@@ -198,26 +203,147 @@ func requestResult(v any) *mcp.CallToolResult {
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(raw)}}}
 }
 
+func requestDetailResult(detail requestdomain.Detail, concise bool) *mcp.CallToolResult {
+	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: renderRequestDetail(detail, concise)}}}
+}
+
+// countSessions zählt die unabhängigen Sitzungen, nicht die Zitate: zwei Sätze
+// aus derselben Sitzung sind ein Mal geäussert, nicht zwei.
+func countSessions(sightings []requestdomain.Sighting) int {
+	seen := map[int64]bool{}
+	for _, sighting := range sightings {
+		seen[sighting.SessionID] = true
+	}
+	return len(seen)
+}
+
+func pluralSessions(n int) string {
+	if n == 1 {
+		return "1 session"
+	}
+	return fmt.Sprintf("%d separate sessions", n)
+}
+
+func renderRequestDetail(detail requestdomain.Detail, concise bool) string {
+	var b strings.Builder
+	r := detail.Request
+	fmt.Fprintf(&b, "# %s — %s\n", r.HumanID(), r.Title)
+	fmt.Fprintf(&b, "type:%s state:%s", r.Type, r.State)
+	if r.Priority != "" {
+		fmt.Fprintf(&b, " priority:%s", r.Priority)
+	}
+	b.WriteString("\n\nDescription\n\n")
+	b.WriteString(r.Description)
+	// Direkt unter der Beschreibung, weil das der Punkt ist, an dem sie beurteilt
+	// wird: bei einem destillierten Eintrag ist sie Modelltext, und erst der
+	// Wortlaut daneben trennt "die KI behauptet das" von "das wurde gesagt". Auch
+	// in der knappen Form — sie sind kurz, und ohne sie kostet jede Beurteilung
+	// einen Griff ins Transkript. Handgeschriebene Einträge haben keine.
+	if len(detail.Sightings) > 0 {
+		fmt.Fprintf(&b, "\n\nVoiced in %s\n", pluralSessions(countSessions(detail.Sightings)))
+		for _, sighting := range detail.Sightings {
+			fmt.Fprintf(&b, "- session %d", sighting.SessionID)
+			if sighting.At != "" {
+				fmt.Fprintf(&b, " (%s)", sighting.At)
+			}
+			fmt.Fprintf(&b, ": %q\n", sighting.Quote)
+		}
+	}
+	b.WriteString("\nCriteria\n")
+	for _, criterion := range detail.Criteria {
+		fmt.Fprintf(&b, "- %s [%s] %s\n", criterion.HumanID(), criterion.State, criterion.Description)
+		if concise {
+			continue
+		}
+		for _, evidence := range criterion.Evidence {
+			fmt.Fprintf(&b, "  - evidence %s: %s\n", evidence.Kind, evidence.Ref)
+		}
+	}
+	if len(detail.Relations) > 0 {
+		b.WriteString("\nRelations\n")
+		for _, relation := range detail.Relations {
+			fmt.Fprintf(&b, "- #%d %s", relation.ID, relation.Kind)
+			if relation.OtherRequestID != 0 {
+				fmt.Fprintf(&b, " REQ-%d", relation.OtherRequestID)
+			}
+			if relation.KnowledgeID != 0 {
+				fmt.Fprintf(&b, " knowledge #%d", relation.KnowledgeID)
+			}
+			if relation.ExternalRef != "" {
+				fmt.Fprintf(&b, " %s", relation.ExternalRef)
+			}
+			b.WriteByte('\n')
+		}
+	}
+	if len(detail.Work) > 0 {
+		b.WriteString("\nWork\n")
+		for _, work := range detail.Work {
+			fmt.Fprintf(&b, "- #%d %s %s", work.ID, work.Role, work.State)
+			if work.Summary != "" {
+				fmt.Fprintf(&b, " — %s", work.Summary)
+			}
+			b.WriteByte('\n')
+		}
+	}
+	if concise {
+		b.WriteString("\nconcise omits activity, older work, and criterion evidence; use response_format=detailed for the full history.\n")
+		return b.String()
+	}
+	if len(detail.Activity) > 0 {
+		b.WriteString("\nActivity\n")
+		for _, activity := range detail.Activity {
+			fmt.Fprintf(&b, "- %s %s", activity.Kind, activity.Data)
+			if activity.Person != "" {
+				fmt.Fprintf(&b, " (%s)", activity.Person)
+			}
+			b.WriteByte('\n')
+		}
+	}
+	return b.String()
+}
+
 func (s *Server) handleRequestSearch(_ context.Context, _ *mcp.CallToolRequest, in RequestSearchInput) (*mcp.CallToolResult, RequestSearchOutput, error) {
 	state := in.State
 	if state == "" {
 		state = "open"
 	}
-	page, err := s.client.SearchRequests(requestdomain.SearchFilter{Scope: scope.Axes{Project: s.ctxAxes.Project}, Query: in.Query, State: state, Type: in.Type, Cursor: in.Cursor, Limit: in.Limit})
+	intent := store.ClassifySearch(in.Query)
+	if intent == store.SearchInterrupted {
+		threads, err := s.client.InterruptedWork(scope.Axes{Project: s.ctxAxes.Project}, s.sessionRef)
+		out := RequestSearchOutput{Results: []RequestListItem{}, Interpretation: string(store.SearchInterrupted)}
+		for _, thread := range threads {
+			out.Results = append(out.Results, RequestListItem{ID: thread.RequestID, Type: thread.Type,
+				Title: thread.Title, State: "open", Priority: thread.Priority,
+				OpenCriteria: thread.OpenCriteria, Handoff: firstLine(thread.Handoff, 160)})
+		}
+		return requestResult(out), out, err
+	}
+	query := in.Query
+	interpretation := "full_text_search"
+	if intent == store.SearchInventory {
+		query = ""
+		interpretation = "open_request_inventory"
+	}
+	page, err := s.client.SearchRequests(requestdomain.SearchFilter{Scope: scope.Axes{Project: s.ctxAxes.Project}, Query: query, State: state, Type: in.Type, Cursor: in.Cursor, Limit: in.Limit})
 	out := listFromPage(page)
+	out.Interpretation = interpretation
 	return requestResult(out), out, err
 }
 
 func (s *Server) handleRequestGet(_ context.Context, _ *mcp.CallToolRequest, in RequestGetInput) (*mcp.CallToolResult, RequestDetailOutput, error) {
 	detail, err := s.client.GetRequest(in.RequestID)
-	if in.ResponseFormat != "detailed" {
+	concise := in.ResponseFormat != "detailed"
+	if concise {
 		detail.Activity = nil
 		if len(detail.Work) > 1 {
 			detail.Work = detail.Work[:1]
 		}
+		for i := range detail.Criteria {
+			detail.Criteria[i].Evidence = nil
+		}
 	}
 	out := RequestDetailOutput{Detail: detail}
-	return requestResult(out), out, err
+	return requestDetailResult(detail, concise), out, err
 }
 
 func (s *Server) handleRequestCreate(_ context.Context, _ *mcp.CallToolRequest, in RequestCreateInput) (*mcp.CallToolResult, RequestChangeOutput, error) {
