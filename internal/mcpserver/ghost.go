@@ -200,7 +200,8 @@ func looksBinary(path string) (bool, error) {
 
 type HistoryInput struct {
 	Path  string `json:"path" jsonschema:"repository-relative path whose earlier descriptions to read; \".\" for the repository root"`
-	Limit int    `json:"limit,omitempty" jsonschema:"how many versions to return, newest first; omit for all"`
+	Limit int    `json:"limit,omitempty" jsonschema:"how many earlier versions to consider, newest first; omit for all"`
+	Full  bool   `json:"full,omitempty" jsonschema:"return each earlier version in full instead of what changed between them; costs far more context, so ask for it only when the wording of an old version is the point"`
 }
 
 func (s *Server) handleFileHistory(ctx context.Context, _ *mcp.CallToolRequest, in HistoryInput) (*mcp.CallToolResult, any, error) {
@@ -208,37 +209,14 @@ func (s *Server) handleFileHistory(ctx context.Context, _ *mcp.CallToolRequest, 
 	if err != nil {
 		return nil, nil, err
 	}
-	versions, err := s.client.GhostHistory(s.ctxAxes.Project, rel, in.Limit)
+	// Die Kette statt der blossen Historie: der Nachfolger der neuesten
+	// abgelösten Fassung ist die Beschreibung, die heute gilt, und ohne sie
+	// gäbe es bei genau einer Vorfassung nichts zu vergleichen.
+	chain, err := s.client.GhostChain(s.ctxAxes.Project, rel, in.Limit)
 	if err != nil {
 		return nil, nil, err
 	}
-	name := rel
-	if name == "" {
-		name = "(Repo-Wurzel)"
-	}
-	if len(versions) == 0 {
-		return textResult(fmt.Sprintf("%s: keine früheren Fassungen — die aktuelle Beschreibung ist die erste.", name)), nil, nil
-	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "## Frühere Fassungen von %s\n\n", name)
-	// Voller Text je Fassung, nicht geplättet: wer hier fragt, will genau das
-	// lesen, was einmal dastand. Die Trefferlisten sind der Ort für Einzeiler.
-	for _, v := range versions {
-		fmt.Fprintf(&b, "### %s bis %s", shortDate(v.DescribedAt), shortDate(v.ReplacedAt))
-		if v.Person != "" {
-			fmt.Fprintf(&b, ", von %s", v.Person)
-		}
-		if v.Reason != "" && v.Reason != "ersetzt" {
-			fmt.Fprintf(&b, " [%s]", v.Reason)
-		}
-		if v.LineCount > 0 {
-			fmt.Fprintf(&b, " — beschriebener Stand: %d Zeilen", v.LineCount)
-		}
-		b.WriteString("\n")
-		b.WriteString(strings.TrimRight(v.Description, "\n"))
-		b.WriteString("\n\n")
-	}
-	return textResult(b.String()), nil, nil
+	return textResult(renderHistory(rel, chain, in.Full)), nil, nil
 }
 
 func shortDate(ts string) string {

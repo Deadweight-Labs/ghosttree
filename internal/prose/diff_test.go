@@ -83,3 +83,37 @@ func TestDotsInsideIdentifiersAndNumbersDoNotSplit(t *testing.T) {
 		t.Fatalf("zwei Sätze erwartet, got %d: %q", len(got), got)
 	}
 }
+
+// Eine Ellipse ist kein Satzende. An einer echten Beschreibung aufgefallen:
+// "archiveGhostFile ist ein INSERT ... SELECT und tut nichts, wenn ..." zerfiel
+// mitten im SQL in zwei Bruchstuecke, und der Diff meldete beide als geaendert.
+func TestAnEllipsisIsNotASentenceEnd(t *testing.T) {
+	text := "Das ist ein INSERT ... SELECT und tut nichts. Danach ist Schluss."
+	got := Sentences(text)
+	if len(got) != 2 {
+		t.Fatalf("zwei Saetze erwartet, got %d: %q", len(got), got)
+	}
+	if !strings.Contains(got[0], "INSERT ... SELECT und tut nichts.") {
+		t.Errorf("das SQL wurde zerschnitten: %q", got[0])
+	}
+}
+
+// Befunde eines externen Pruef-Agenten am 2026-08-25, beide an der
+// Satztrennung. Eine Ziffer als Satzanfang zuzulassen kostet mehr, als sie
+// bringt: "Abb. 1", "Nr. 5", "Kapitel 3. 2 Punkte" zerfallen daran, waehrend
+// ein Satz, der wirklich mit einer Zahl beginnt, in Prosa kaum vorkommt.
+func TestANumberDoesNotOpenASentence(t *testing.T) {
+	got := Sentences("Abb. 1 zeigt den Ablauf. Danach ist Schluss.")
+	if len(got) != 2 {
+		t.Fatalf("zwei Saetze erwartet, got %d: %q", len(got), got)
+	}
+}
+
+// Und die Abkuerzung mit innerem Punkt: "z. B." wurde erkannt, "z.B." nicht —
+// dieselbe Abkuerzung, zwei Ergebnisse.
+func TestAbbreviationsWithAnInnerDotAreRecognisedToo(t *testing.T) {
+	got := Sentences("Das gilt z.B. Verzeichnisse trifft es auch. Ende.")
+	if len(got) != 2 {
+		t.Fatalf("zwei Saetze erwartet, got %d: %q", len(got), got)
+	}
+}

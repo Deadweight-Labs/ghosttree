@@ -69,3 +69,35 @@ func TestUnchangedIsRecognisable(t *testing.T) {
 		t.Error("ein geänderter Satz ist keine Unveränderung")
 	}
 }
+
+// Der Numerus der Kappungszeile. "und 1 Satz weitere" stand so in der echten
+// Ausgabe; heute kann der Rest nie eins sein, aber die Zeile bleibt eine
+// Zeichenkette mit einer Zahl darin und geht damit wieder falsch, sobald sie
+// jemand anfasst.
+func TestTheCappingLineIsGrammatical(t *testing.T) {
+	out := Render(Diff("", satzfolge("Neu", maxRun+3)))
+	if strings.Contains(out, "Satz weitere") {
+		t.Errorf("falscher Numerus:\n%s", out)
+	}
+	if !strings.Contains(out, "und 3 weitere Sätze") {
+		t.Errorf("erwartet wird \"und 3 weitere Sätze\":\n%s", out)
+	}
+}
+
+// Befund eines externen Pruef-Agenten am 2026-08-25: "die Bloecke verstecken
+// Kontext und Teile des Warum — der eine weitere Satz bleibt unsichtbar".
+// Er hat recht: einen einzigen Satz zu verschweigen kostet fast so viel Platz
+// wie ihn zu zeigen und nimmt dem Leser eine Begruendung weg.
+func TestASingleSentenceIsShownRatherThanHidden(t *testing.T) {
+	out := Render(Diff("", satzfolge("Neu", maxRun+1)))
+	if strings.Contains(out, "weiterer Satz") {
+		t.Errorf("ein einzelner Satz wird gezeigt, nicht gezaehlt:\n%s", out)
+	}
+	if !strings.Contains(out, "Satz Nummer "+string(rune('a'+maxRun))) {
+		t.Errorf("der letzte Satz fehlt:\n%s", out)
+	}
+	// Zwei sind wieder eine Menge und werden gekappt.
+	if !strings.Contains(Render(Diff("", satzfolge("Neu", maxRun+2))), "und 2 weitere Sätze") {
+		t.Error("ab zwei versteckten Saetzen wird gekappt")
+	}
+}

@@ -132,7 +132,7 @@ func (s *Server) Register(srv *mcp.Server) {
 	additive := false
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "context_file_history",
-		Description: "Read the earlier descriptions of a path — what this file was understood to do before, and when that changed. The file's own history is in git; this is the history of the understanding, and it exists nowhere else. Use it when a description reads as if it no longer matches the code, when you suspect a good description was overwritten, or when you want to know how a component's purpose drifted. Each entry carries the code state it described, so you can see which version of the file its author had in front of them.",
+		Description: "Read how a path's description CHANGED — sentence by sentence, newest change first, the way you would read a diff. Not two versions side by side for you to compare: the removed sentences carry a -, the new ones a +, everything that stayed is counted and left out. The file's own history is in git; this is the history of the understanding, and it exists nowhere else. Use it when a description reads as if it no longer matches the code, when you suspect a good description was overwritten, or when you want to know how a component's purpose drifted. Pass full:true only when the exact wording of an old version is what you need — it costs the full text of every version.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closed},
 	}, s.handleFileHistory)
 	mcp.AddTool(srv, &mcp.Tool{Name: "request_search", Description: "List or search the current project's work ledger. Works like listing issues: call it with no query to see what is open, or name a subject to narrow. A question that names no subject — \"what is left to do\" — returns the list rather than guessing. Answers with a compact list; call request_get for one entry's full text. Use it before substantial feature, architecture, migration, or multi-session work.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closed}}, s.handleRequestSearch)
@@ -258,7 +258,7 @@ func (s *Server) handleGet(ctx context.Context, _ *mcp.CallToolRequest, in GetIn
 	if err != nil {
 		return nil, nil, err
 	}
-	md, err := s.client.Bootstrap(s.ctxAxes, actx, 0)
+	md, err := s.client.Bootstrap(s.ctxAxes, actx, 0, "")
 	if err != nil {
 		return nil, nil, err
 	}

@@ -96,7 +96,7 @@ func TestClientSessionsAndSearch(t *testing.T) {
 	if err != nil || len(chunks) != 1 || chunks[0].Text == "" {
 		t.Fatalf("chunks = %+v err = %v", chunks, err)
 	}
-	md, err := c.Bootstrap(scope.Axes{Machine: "workstation-a"}, activation.Context{}, 0)
+	md, err := c.Bootstrap(scope.Axes{Machine: "workstation-a"}, activation.Context{}, 0, "")
 	if err != nil {
 		t.Fatal(err)
 	}

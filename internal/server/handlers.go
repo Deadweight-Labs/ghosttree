@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
@@ -365,6 +366,14 @@ func (a *api) bootstrap(w http.ResponseWriter, r *http.Request) {
 			plural = "requests"
 		}
 		fmt.Fprintf(w, "\n## Work ledger (ghosttree)\n\n%d open %s in this scope. For substantial feature, architecture, migration, or multi-session work, search the request ledger first; continue a match or create one with explicit acceptance criteria. Trivial local fixes and routine maintenance do not require a request.\n", openRequests, plural)
+	}
+	// Der Zähler sagt, dass es etwas gibt; erst diese Zeile sagt, dass etwas
+	// angefangen und liegengeblieben ist. Ein Fehler kostet nur die Auskunft:
+	// der Bootstrap ist bis hierhin schon geschrieben.
+	if threads, err := a.st.InterruptedWork(axesFromQuery(r),
+		time.Now().UTC().Add(-interruptedWindow).Format(time.RFC3339),
+		r.URL.Query().Get("session"), maxInterruptedThreads); err == nil {
+		fmt.Fprint(w, renderInterrupted(threads, time.Now().UTC()))
 	}
 }
 

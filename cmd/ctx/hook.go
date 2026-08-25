@@ -113,7 +113,7 @@ func bootstrapContext(stdin io.Reader) string {
 	gitCtx := collector.ResolveGitContext(cwd)
 	md, err := client.New(cfg).Bootstrap(
 		scope.Axes{Project: gitCtx.Project, Branch: gitCtx.Branch, Lineage: gitCtx.Lineage, Machine: cfg.Machine},
-		activation.Context{RepoPath: gitCtx.RepoPath}, 0)
+		activation.Context{RepoPath: gitCtx.RepoPath}, 0, in.SessionID)
 	if err != nil {
 		return ""
 	}

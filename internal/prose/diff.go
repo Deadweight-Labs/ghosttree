@@ -55,6 +55,11 @@ func splitLine(line string) []string {
 		if i+1 >= len(r) || !unicode.IsSpace(r[i+1]) {
 			continue
 		}
+		// Eine Ellipse ist kein Satzende. "INSERT ... SELECT" zerfiel sonst
+		// mitten im SQL, und der Diff meldete beide Bruchstücke als geändert.
+		if i > 0 && (r[i-1] == '.' || r[i-1] == '…') {
+			continue
+		}
 		k := i + 1
 		for k < len(r) && unicode.IsSpace(r[k]) {
 			k++
@@ -71,16 +76,24 @@ func splitLine(line string) []string {
 	return out
 }
 
+// opensSentence lässt bewusst keine Ziffer zu. "Abb. 1", "Nr. 5", "Kapitel 3. 2
+// Punkte" zerfielen sonst mitten in der Angabe, während ein Satz, der wirklich
+// mit einer Zahl beginnt, in Prosa kaum vorkommt.
 func opensSentence(c rune) bool {
-	return unicode.IsUpper(c) || unicode.IsDigit(c) || strings.ContainsRune("„\"'(«[—-–", c)
+	return unicode.IsUpper(c) || strings.ContainsRune("„\"'(«[—-–", c)
 }
 
+// isAbbrev nimmt das Wort vor dem Punkt. Einbuchstabig heisst Abkürzung ("z. B."),
+// und ein kurzes Wort mit innerem Punkt ebenfalls ("z.B.", "d.h.") — sonst wäre
+// dieselbe Abkürzung je nach Schreibweise mal eine und mal keine.
 func isAbbrev(before []rune) bool {
 	word := string(before)
 	if i := strings.LastIndexAny(word, " \t"); i >= 0 {
 		word = word[i+1:]
 	}
-	return len([]rune(word)) == 1 || abbrev[word]
+	r := []rune(word)
+	return len(r) == 1 || abbrev[word] ||
+		(len(r) <= 4 && strings.Contains(word, "."))
 }
 
 // diffSentences ist ein gewöhnlicher LCS-Vergleich. Bei ein paar Dutzend

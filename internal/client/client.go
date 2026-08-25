@@ -312,8 +312,14 @@ func (c *Client) search(q, kind string, filter scope.Axes, limit int, union bool
 	return out, err
 }
 
-func (c *Client) Bootstrap(ax scope.Axes, actx activation.Context, budget int) (string, error) {
+// session ist die Kennung der fragenden Sitzung. Sie dient dem Server allein
+// dazu, ihren eigenen angefangenen Faden nicht als unterbrochen zu melden; leer
+// heisst, dass der Aufrufer sie nicht kennt.
+func (c *Client) Bootstrap(ax scope.Axes, actx activation.Context, budget int, session string) (string, error) {
 	q := axesQuery(ax)
+	if session != "" {
+		q.Set("session", session)
+	}
 	if actx.RepoPath != "" {
 		q.Set("repo_path", actx.RepoPath)
 	}

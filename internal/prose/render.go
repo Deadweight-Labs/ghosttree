@@ -65,15 +65,18 @@ func Render(changes []Change) string {
 		if op == Added {
 			sign = "+"
 		}
+		// Bliebe genau ein Satz übrig, wird er gezeigt: ihn zu verschweigen
+		// kostet fast so viel Platz wie ihn zu zeigen und nimmt dem Leser eine
+		// Begründung weg. Befund eines externen Prüf-Agenten.
 		shown := run
-		if len(shown) > maxRun {
+		if len(shown) > maxRun+1 {
 			shown = run[:maxRun]
 		}
 		for _, c := range shown {
 			fmt.Fprintf(&b, "%s %s\n", sign, c.Text)
 		}
 		if rest := len(run) - len(shown); rest > 0 {
-			fmt.Fprintf(&b, "%s … und %s weitere\n", sign, zaehl(rest))
+			fmt.Fprintf(&b, "%s … und %d weitere Sätze\n", sign, rest)
 		}
 		i = j
 	}
