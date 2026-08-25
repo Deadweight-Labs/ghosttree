@@ -6,8 +6,9 @@ import (
 )
 
 const (
-	hookCommand       = "ctx hook session-start"
-	promptHookCommand = "ctx hook user-prompt-submit"
+	hookCommand        = "ctx hook session-start"
+	promptHookCommand  = "ctx hook user-prompt-submit"
+	preToolHookCommand = "ctx hook pre-tool-use"
 )
 
 // ClaudeConfigDir resolves where Claude Code keeps its user config. Verified on
@@ -51,7 +52,7 @@ func InstallClaude(home string) ([]Change, error) {
 // addHook appends to whatever is already registered for an event. Other tools
 // keep hooks here too — a lease daemon, an approval bridge — and replacing the
 // list would silently disarm them.
-func addHook(path, event, command string) (Change, error) {
+func addHook(path, event, command, matcher string) (Change, error) {
 	settings, err := readJSONFile(path)
 	if err != nil {
 		return Change{}, err
@@ -74,9 +75,16 @@ func addHook(path, event, command string) (Change, error) {
 			}
 		}
 	}
-	entries = append(entries, map[string]any{
+	entry := map[string]any{
 		"hooks": []any{map[string]any{"type": "command", "command": command}},
-	})
+	}
+	// Der Matcher hält ctx aus jedem Bash-Aufruf heraus. Ohne ihn feuert
+	// PreToolUse auf jedem Werkzeug, und ein Prozessstart je Aufruf ist ein
+	// spürbarer Preis für eine Antwort, die es meistens nicht gibt.
+	if matcher != "" {
+		entry["matcher"] = matcher
+	}
+	entries = append(entries, entry)
 	hooks[event] = entries
 	settings["hooks"] = hooks
 	return Change{Path: path, Action: event + " hook added"}, writeJSONFile(path, settings)

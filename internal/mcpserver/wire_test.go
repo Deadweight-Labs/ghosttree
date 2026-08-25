@@ -183,6 +183,50 @@ func TestThePlacementQuestionIsInTheSchema(t *testing.T) {
 	t.Fatal("context_remember is not registered")
 }
 
+// all_branches promised width and delivered a blind spot: clearing the branch
+// removes every branch clause, so the flag returned strictly fewer entries than
+// the default and none of the branch-scoped ones. A probe agent reached for it
+// to check whether a hidden entry existed at all, and would have been told no.
+func TestAllBranchesWidensInsteadOfBlanking(t *testing.T) {
+	c, st := newTestClient(t)
+	for title, branch := range map[string]string{
+		"Zweigwissen develop": "develop",
+		"Zweigwissen feat-y":  "feat/y",
+	} {
+		if _, err := st.InsertKnowledge(store.Knowledge{
+			Type: "note", Title: title, Body: "b", Confidence: "trusted",
+			Scope: scope.Axes{Project: "github.com/x/y", Branch: branch},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	session := connect(t, &Server{client: c, ctxAxes: scope.Axes{
+		Project: "github.com/x/y", Branch: "feat/x", Lineage: []string{"develop"},
+	}})
+
+	// The default still respects the line: ancestor yes, sibling no.
+	got, failed := callTool(t, session, "context_search",
+		map[string]any{"query": "Zweigwissen", "kind": "knowledge"})
+	if failed {
+		t.Fatalf("search failed: %s", got)
+	}
+	if !strings.Contains(got, "Zweigwissen develop") || strings.Contains(got, "Zweigwissen feat-y") {
+		t.Errorf("default search does not follow the chain: %s", got)
+	}
+
+	// Asking for every branch has to show the sibling too.
+	got, failed = callTool(t, session, "context_search",
+		map[string]any{"query": "Zweigwissen", "kind": "knowledge", "all_branches": true})
+	if failed {
+		t.Fatalf("all_branches search failed: %s", got)
+	}
+	for _, want := range []string{"Zweigwissen develop", "Zweigwissen feat-y"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("all_branches did not reveal %q: %s", want, got)
+		}
+	}
+}
+
 func TestFullTextRetrievalCarriesTheObservationTime(t *testing.T) {
 	c, st := newTestClient(t)
 	id, err := st.InsertKnowledge(store.Knowledge{

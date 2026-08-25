@@ -25,7 +25,7 @@ func VerifyClaude(home string) []Check {
 	checks := []Check{fileCheck("claude mcp registration", userCfg, `"ghosttree"`,
 		"run 'ctx install claude'")}
 	checks = append(checks, channelChecks(h, home)...)
-	checks = append(checks, fileCheck("claude rule section", h.RulePath(home), markerStart,
+	checks = append(checks, ruleSectionCheck(h, "claude rule section", h.RulePath(home),
 		"run 'ctx install claude'"))
 
 	// Claude Code reads CLAUDE_CONFIG_DIR/.claude.json when the variable is
@@ -44,7 +44,7 @@ func VerifyCodex(home string) []Check {
 	checks := []Check{fileCheck("codex mcp registration", filepath.Join(home, ".codex", "config.toml"),
 		"[mcp_servers.ghosttree]", "run 'ctx install codex'")}
 	checks = append(checks, channelChecks(h, home)...)
-	return append(checks, fileCheck("codex rule section", h.RulePath(home), markerStart,
+	return append(checks, ruleSectionCheck(h, "codex rule section", h.RulePath(home),
 		"run 'ctx install codex'"))
 }
 
@@ -61,7 +61,7 @@ func channelChecks(h Harness, home string) []Check {
 	path := h.HooksPath(home)
 	var checks []Check
 	for _, channel := range h.Channels {
-		_, command, ok := hookCommandFor(channel)
+		_, command, _, ok := hookCommandFor(channel)
 		if !ok {
 			continue
 		}
@@ -69,6 +69,52 @@ func channelChecks(h Harness, home string) []Check {
 			"run 'ctx install "+h.Name+"' — this harness can fire the event and nothing is answering it"))
 	}
 	return checks
+}
+
+// ruleSectionCheck vergleicht den Inhalt des Regelabschnitts, nicht bloss seine
+// Anwesenheit.
+//
+// Der Grund ist ein eigener Fehlschlag (Pitfall #1238): nach einer Änderung an
+// ruleText trug jede schon eingerichtete Maschine weiter den alten Text, und
+// fileCheck — das nur nach markerStart sucht — meldete dafür einen grünen
+// Haken. Der veraltete Satz wurde jeder Sitzung als Anweisung mitgegeben und
+// beschrieb eine Dateiform, die es nicht mehr gab. Genau die Art Drift, für die
+// doctor gebaut ist, und die einzige, die es nicht sah.
+//
+// Verglichen wird nur zwischen den Markern. Was davor und dahinter steht,
+// gehört anderen Werkzeugen und geht uns nichts an.
+//
+// Verglichen wird gegen ruleFor(h) und nicht gegen ruleText: eine Umgebung, bei
+// der der Sitzungsbeginn nachweislich nichts ausliefert, bekommt einen Absatz
+// mehr. Gegen ruleText zu prüfen erklärte genau diese Umgebungen für dauerhaft
+// veraltet.
+func ruleSectionCheck(h Harness, name, path, fix string) Check {
+	c := Check{Name: name, Fix: fix, Detail: path}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		c.Detail = path + " (missing)"
+		return c
+	}
+	got, ok := extractSection(string(b))
+	switch {
+	case !ok:
+		c.Detail = path + " (no ghosttree entry)"
+	case strings.TrimSpace(got) != strings.TrimSpace(ruleFor(h)):
+		c.Detail = path + " (rule text is outdated)"
+	default:
+		c.OK = true
+	}
+	return c
+}
+
+// extractSection gibt zurück, was zwischen den Markern steht.
+func extractSection(content string) (string, bool) {
+	start := strings.Index(content, markerStart)
+	end := strings.Index(content, markerEnd)
+	if start < 0 || end <= start {
+		return "", false
+	}
+	return content[start+len(markerStart) : end], true
 }
 
 func fileCheck(name, path, needle, fix string) Check {

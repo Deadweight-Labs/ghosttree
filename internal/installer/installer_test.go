@@ -167,6 +167,64 @@ func TestVerifyClaudePassesAfterInstall(t *testing.T) {
 	}
 }
 
+// Pitfall #1238: doctor prüfte nur, OB die Marker dastehen, nicht WAS
+// dazwischen steht. Nach einer Änderung an ruleText trug jede Maschine weiter
+// den alten Text — und doctor, das genau für diese Art Drift gebaut ist, zeigte
+// einen grünen Haken.
+func TestVerifyClaudeDetectsAnOutdatedRuleText(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	if _, err := InstallClaude(home); err != nil {
+		t.Fatal(err)
+	}
+	path := harnessNamed("claude").RulePath(home)
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := strings.Replace(string(b), "context_remember", "context_veraltet", 1)
+	if stale == string(b) {
+		t.Fatal("der Testtext muss den Regelabschnitt wirklich verändern")
+	}
+	if err := os.WriteFile(path, []byte(stale), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	bad := failing(VerifyClaude(home))
+	if len(bad) != 1 || !strings.Contains(bad[0], "rule section") {
+		t.Fatalf("want exactly the rule section check to fail, got %v", bad)
+	}
+
+	// Und wieder grün, sobald der Installer ihn ersetzt hat.
+	if _, err := InstallClaude(home); err != nil {
+		t.Fatal(err)
+	}
+	if bad := failing(VerifyClaude(home)); len(bad) != 0 {
+		t.Fatalf("nach dem Neuinstallieren muss es wieder passen: %v", bad)
+	}
+}
+
+// Fremder Text um den Abschnitt herum ist der Normalfall — in CLAUDE.md steht
+// auch anderer Leute Werkzeug. Nur der Abschnitt zwischen den Markern zählt.
+func TestRuleSectionCheckIgnoresWhatIsAroundIt(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	if _, err := InstallClaude(home); err != nil {
+		t.Fatal(err)
+	}
+	path := harnessNamed("claude").RulePath(home)
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append([]byte("# Meine eigenen Regeln\n\nNicht anfassen.\n\n"), b...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if bad := failing(VerifyClaude(home)); len(bad) != 0 {
+		t.Fatalf("fremder Text daneben ist kein Drift: %v", bad)
+	}
+}
+
 // The pitfall doctor exists for: with CLAUDE_CONFIG_DIR set, the installer
 // writes only there, but launchers that do not set it read ~/.claude.json and
 // see no ghosttree at all.
@@ -252,5 +310,20 @@ func TestInstallHooksAreIdempotent(t *testing.T) {
 		if n := strings.Count(string(raw), cmd); n != 1 {
 			t.Errorf("%q registered %d times, want 1", cmd, n)
 		}
+	}
+}
+
+// Kriterium 6 von REQ-98: die Regel verbietet keinen Kommentar mehr, sie nennt
+// einen Ort. Solange es keinen Alternativort gab, war der Kommentar der einzige
+// mögliche Platz, und ihn zu verbieten hiess, die Information zu vernichten.
+func TestRuleTextNamesTheAlternativePlaceInsteadOfForbiddingComments(t *testing.T) {
+	if !strings.Contains(ruleText, "context_describe_file") {
+		t.Fatal("the rule must name the tool that replaces the comment")
+	}
+	if !strings.Contains(ruleText, ".ghosttree/tree/") {
+		t.Fatal("the rule must say where the tree is browsable")
+	}
+	if strings.Contains(ruleText, "never into source comments") {
+		t.Fatal("the blanket prohibition must be gone; the rule redirects instead of forbidding")
 	}
 }

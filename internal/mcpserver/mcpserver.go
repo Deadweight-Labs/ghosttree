@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
@@ -17,7 +18,25 @@ type Server struct {
 	client         *client.Client
 	ctxAxes        scope.Axes
 	baseActivation activation.Context
+	// repoRoot ist das Arbeitsverzeichnis der Repo-Wurzel. Ghost-Dateien
+	// brauchen die echte Datei, um ihren Zustand festzuhalten — der Agent soll
+	// die Frische nicht behaupten können.
+	repoRoot string
+	// afterWrite schreibt den Baum neu. Als Rückruf, weil das Schreiben in
+	// cmd/ctx sitzt und mcpserver nicht von main abhängen darf.
+	afterWrite func()
+	// mentioned sind die Pfade, auf die dieser Prozess schon hingewiesen hat.
+	// Der Prozess ist die Sitzung, deshalb reicht der Hauptspeicher; siehe
+	// firstMentionOf. Unter einem Schloss, weil Werkzeugaufrufe im go-sdk
+	// asynchron behandelt werden und parallel hier ankommen können.
+	mentionedMu sync.Mutex
+	mentioned   map[string]bool
 }
+
+// SetRepoRoot wird von cmd/ctx/mcp.go aus dem aufgelösten Git-Kontext gesetzt.
+func (s *Server) SetRepoRoot(root string) { s.repoRoot = root }
+
+func (s *Server) SetAfterWrite(f func()) { s.afterWrite = f }
 
 func NewServer(c *client.Client, axes scope.Axes, base ...activation.Context) *Server {
 	s := &Server{client: c, ctxAxes: axes}
@@ -39,7 +58,7 @@ type SearchInput struct {
 	// a second call rather than a guess. Same shape as session_id on
 	// context_sessions: list or search, or name one and read it whole.
 	KnowledgeID int64  `json:"knowledge_id,omitempty" jsonschema:"read this knowledge entry in full instead of searching. The id is on every hit; use it when a snippet is not enough, for instance for a stored plan or spec"`
-	Kind        string `json:"kind,omitempty" jsonschema:"knowledge, requests, sessions or all (default all)"`
+	Kind        string `json:"kind,omitempty" jsonschema:"knowledge, requests, sessions, files or all (default all). \"files\" searches the per-file and per-directory descriptions of this repository — use it to find a file by what it does rather than by what it is called"`
 	AllBranches bool   `json:"all_branches,omitempty" jsonschema:"search across all branches of the project"`
 	Project     string `json:"project,omitempty" jsonschema:"search another project instead of the current one, given as a normalized remote like github.com/owner/repo"`
 	AllProjects bool   `json:"all_projects,omitempty" jsonschema:"search every project. Use when a problem here may already have been solved elsewhere; the default stays the current project"`
@@ -59,7 +78,9 @@ func (s *Server) searchAxes(in SearchInput) (ax scope.Axes, crossProject bool) {
 		return scope.Axes{Project: scope.NormalizeRemote(in.Project), Machine: in.Machine}, true
 	}
 	if in.AllBranches {
-		ax.Branch = ""
+		// Not ax.Branch = "": that removes every branch clause and hides the
+		// branch-scoped entries this flag exists to reveal.
+		ax.AnyBranch = true
 	}
 	if in.Machine != "" {
 		ax.Machine = in.Machine
@@ -103,8 +124,17 @@ func (s *Server) Register(srv *mcp.Server) {
 		Name:        "context_sessions",
 		Description: "List or search past agent sessions, or read one session's transcript. Defaults to the current project; set project or all_projects to look further.",
 	}, s.handleSessions)
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "context_describe_file",
+		Description: "Describe what a file or directory does, stored against its repository-relative path instead of as a comment in the source. Use it whenever you would otherwise write an explanatory comment, and whenever you create a file. The description is what a later reader — including a small model that cannot hold the file in context — needs to understand this path without reading it. Ghost descriptions are browsable as real files under .ghosttree/tree/.",
+	}, s.handleDescribe)
 	closed := false
 	additive := false
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "context_file_history",
+		Description: "Read the earlier descriptions of a path — what this file was understood to do before, and when that changed. The file's own history is in git; this is the history of the understanding, and it exists nowhere else. Use it when a description reads as if it no longer matches the code, when you suspect a good description was overwritten, or when you want to know how a component's purpose drifted. Each entry carries the code state it described, so you can see which version of the file its author had in front of them.",
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closed},
+	}, s.handleFileHistory)
 	mcp.AddTool(srv, &mcp.Tool{Name: "request_search", Description: "List or search the current project's work ledger. Works like listing issues: call it with no query to see what is open, or name a subject to narrow. A question that names no subject — \"what is left to do\" — returns the list rather than guessing. Answers with a compact list; call request_get for one entry's full text. Use it before substantial feature, architecture, migration, or multi-session work.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closed}}, s.handleRequestSearch)
 	mcp.AddTool(srv, &mcp.Tool{Name: "request_get", Description: "Get a request's requirements, open acceptance criteria, relations, and latest work handoff. Use detailed format only when history and all evidence are needed.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closed}}, s.handleRequestGet)
 	mcp.AddTool(srv, &mcp.Tool{Name: "request_create", Description: "Create a ledger entry for substantial work when request_search found no match. Include observable acceptance criteria; do not use for trivial local fixes.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleRequestCreate)
@@ -200,6 +230,20 @@ func (s *Server) handleSearch(ctx context.Context, _ *mcp.CallToolRequest, in Se
 			out.WriteString("\n## requests\n")
 			for _, h := range res.Requests {
 				fmt.Fprintf(&out, "- [request|status=%s|type=%s|source=ledger] REQ-%d %s — %s\n", h.Request.State, h.Request.Type, h.Request.ID, h.Request.Title, h.MatchReason)
+			}
+		}
+	}
+	if kind == "files" || kind == "all" {
+		// Der Ghost-Baum ist projektgebunden: ein Pfad ist nur im Repo
+		// eindeutig, zu dem er gehört.
+		res, err := s.client.SearchGhosts(in.Query, ax.Project, limit)
+		if err != nil {
+			return nil, nil, err
+		}
+		if len(res) > 0 {
+			out.WriteString("\n## files\n")
+			for _, g := range res {
+				out.WriteString(renderGhostHit(g))
 			}
 		}
 	}

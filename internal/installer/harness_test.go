@@ -211,3 +211,65 @@ func TestBothHarnessesWireTheSameChannels(t *testing.T) {
 		}
 	}
 }
+
+func TestPreToolUseHookIsWiredWithAMatcher(t *testing.T) {
+	home := t.TempDir()
+	if _, err := InstallClaude(home); err != nil {
+		t.Fatal(err)
+	}
+	settings, err := readJSONFile(filepath.Join(home, ".claude", "settings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hooks, _ := settings["hooks"].(map[string]any)
+	groups, _ := hooks["PreToolUse"].([]any)
+	if len(groups) == 0 {
+		t.Fatal("PreToolUse must be wired")
+	}
+	found := false
+	for _, g := range groups {
+		group, _ := g.(map[string]any)
+		matcher, _ := group["matcher"].(string)
+		inner, _ := group["hooks"].([]any)
+		for _, h := range inner {
+			hm, _ := h.(map[string]any)
+			if cmd, _ := hm["command"].(string); cmd == preToolHookCommand {
+				found = true
+				// Ohne Matcher startet ctx bei jedem Bash-Aufruf mit.
+				if matcher == "" {
+					t.Fatal("the PreToolUse hook must carry a matcher, or it spawns on every Bash call")
+				}
+				for _, tool := range []string{"Read", "Edit", "Write", "NotebookEdit"} {
+					if !strings.Contains(matcher, tool) {
+						t.Fatalf("matcher %q does not cover %s", matcher, tool)
+					}
+				}
+			}
+		}
+	}
+	if !found {
+		t.Fatal("the ghosttree PreToolUse hook was not written")
+	}
+}
+
+func TestWiringPreToolUseKeepsForeignHooks(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	foreign := `{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"session-lease-lease.sh"}]}]}}`
+	if err := os.WriteFile(path, []byte(foreign), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InstallClaude(home); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "session-lease-lease.sh") {
+		t.Fatal("a foreign PreToolUse hook must survive installation")
+	}
+}

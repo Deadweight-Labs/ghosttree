@@ -47,11 +47,11 @@ func installHooks(h Harness, home string) ([]Change, error) {
 	path := h.HooksPath(home)
 	var changes []Change
 	for _, channel := range h.Channels {
-		event, command, ok := hookCommandFor(channel)
+		event, command, matcher, ok := hookCommandFor(channel)
 		if !ok {
 			continue
 		}
-		c, err := addHook(path, event, command)
+		c, err := addHook(path, event, command, matcher)
 		if err != nil {
 			return changes, err
 		}

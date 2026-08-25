@@ -54,6 +54,12 @@ func New(st *store.Store) http.Handler {
 	mux.HandleFunc("GET /api/search", a.search)
 	mux.HandleFunc("GET /api/context/bootstrap", a.bootstrap)
 	mux.HandleFunc("GET /api/context/relevant", a.relevant)
+	mux.HandleFunc("POST /api/ghosts", a.putGhost)
+	mux.HandleFunc("GET /api/ghosts", a.ghostsForPath)
+	mux.HandleFunc("GET /api/ghosts/tree", a.ghostTree)
+	mux.HandleFunc("GET /api/ghosts/history", a.ghostHistory)
+	mux.HandleFunc("POST /api/ghosts/move", a.ghostsMove)
+	mux.HandleFunc("GET /api/ghosts/search", a.searchGhosts)
 	return a.auth(mux)
 }
 
@@ -83,10 +89,11 @@ func personOf(r *http.Request) string {
 func axesFromQuery(r *http.Request) scope.Axes {
 	q := r.URL.Query()
 	return scope.CanonicalAxes(scope.Axes{
-		Project: q.Get("project"),
-		Branch:  q.Get("branch"),
-		Machine: q.Get("machine"),
-		Lineage: q["lineage"],
+		Project:   q.Get("project"),
+		Branch:    q.Get("branch"),
+		Machine:   q.Get("machine"),
+		Lineage:   q["lineage"],
+		AnyBranch: q.Get("any_branch") == "1",
 	})
 }
 

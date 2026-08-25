@@ -200,6 +200,90 @@ CREATE TABLE IF NOT EXISTS distill_batch_items(
   completion_tokens INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY(batch_id, custom_id));
 CREATE INDEX IF NOT EXISTS distill_batch_items_session ON distill_batch_items(session_id);
+-- Ghost-Dateien: eine Beschreibung je Pfad. Eigene Tabelle statt eines Typs in
+-- knowledge, weil ein neuer Typ dort in sechs bestehenden Lesepfaden wieder
+-- ausgeschlossen werden müsste und Vergessen nicht knallt, sondern still
+-- Dateibeschreibungen in den Bootstrap kippt.
+CREATE TABLE IF NOT EXISTS ghost_files(
+  id INTEGER PRIMARY KEY,
+  project TEXT NOT NULL,
+  -- Repo-relativ und normalisiert; die Wurzel ist der leere String.
+  path TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK(kind IN ('file','dir')),
+  description TEXT NOT NULL,
+  -- Bei kind='file' der SHA-256 des Inhalts, bei kind='dir' der SHA-256 über
+  -- die sortierte Liste der direkten Kinder. Ein Verzeichnis hat keinen Inhalt,
+  -- es hat Kinder — sein Zweck ändert sich nicht, weil eine Funktion darin
+  -- umgeschrieben wurde.
+  content_sha TEXT NOT NULL DEFAULT '',
+  -- git hash-object, nur bei kind='file'. Trägt den Diff gegen die beschriebene
+  -- Fassung und die Erkennung von Umbenennungen.
+  git_blob TEXT NOT NULL DEFAULT '',
+  line_count INTEGER NOT NULL DEFAULT 0,
+  person TEXT NOT NULL DEFAULT '', harness TEXT NOT NULL DEFAULT '',
+  session_ref TEXT NOT NULL DEFAULT '',
+  described_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  UNIQUE(project, path));
+CREATE INDEX IF NOT EXISTS ghost_files_blob ON ghost_files(project, git_blob);
+CREATE VIRTUAL TABLE IF NOT EXISTS ghost_files_fts
+  USING fts5(path, description, content='ghost_files', content_rowid='id');
+CREATE TRIGGER IF NOT EXISTS ghost_files_ai AFTER INSERT ON ghost_files BEGIN
+  INSERT INTO ghost_files_fts(rowid,path,description) VALUES(new.id,new.path,new.description);
+END;
+CREATE TRIGGER IF NOT EXISTS ghost_files_au AFTER UPDATE ON ghost_files BEGIN
+  INSERT INTO ghost_files_fts(ghost_files_fts,rowid,path,description) VALUES('delete',old.id,old.path,old.description);
+  INSERT INTO ghost_files_fts(rowid,path,description) VALUES(new.id,new.path,new.description);
+END;
+CREATE TRIGGER IF NOT EXISTS ghost_files_ad AFTER DELETE ON ghost_files BEGIN
+  INSERT INTO ghost_files_fts(ghost_files_fts,rowid,path,description) VALUES('delete',old.id,old.path,old.description);
+END;
+-- Jede Fassung, die von einer neueren abgelöst wurde. Die Datei selbst hat ihre
+-- Historie in git; diese Tabelle ist die Historie der BESCHREIBUNG, und die
+-- steht nirgendwo sonst.
+--
+-- Ursprünglich war ausdrücklich keine vorgesehen, mit der Begründung, eine alte
+-- Beschreibung eines dreimal umgeschriebenen Codes sei schlimmer als keine. Das
+-- gilt weiter für die AUSLIEFERUNG — ausgeliefert wird nur die aktuelle
+-- Fassung. Es gilt nicht für die Aufbewahrung: ein Beschreiben ist ein Upsert
+-- ohne Rückfrage, und es gab zwei Wege, auf denen eine gute Beschreibung still
+-- verschwand (der Hook forderte beim zweiten Ändern eine neue an, obwohl es
+-- eine gab; eine Dateikopie hängte die Beschreibung des Originals auf sich um).
+-- Ohne Aufbewahrung ist beides unwiederbringlich.
+--
+-- Kein Fremdschlüssel auf ghost_files: der Eintrag überlebt absichtlich, wenn
+-- die Datei und ihre Beschreibung längst weg sind. Genau dann ist er wertvoll.
+CREATE TABLE IF NOT EXISTS ghost_file_versions(
+  id INTEGER PRIMARY KEY,
+  project TEXT NOT NULL,
+  path TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'file',
+  description TEXT NOT NULL,
+  -- Der Codestand, den diese Fassung beschrieb. Damit ist später zu sehen,
+  -- welche Fassung der Datei jemand vor sich hatte, als er das schrieb.
+  content_sha TEXT NOT NULL DEFAULT '',
+  git_blob TEXT NOT NULL DEFAULT '',
+  line_count INTEGER NOT NULL DEFAULT 0,
+  person TEXT NOT NULL DEFAULT '', harness TEXT NOT NULL DEFAULT '',
+  session_ref TEXT NOT NULL DEFAULT '',
+  -- Wann diese Fassung geschrieben wurde, und wann sie abgelöst wurde.
+  described_at TEXT NOT NULL, replaced_at TEXT NOT NULL,
+  -- Warum sie nicht mehr gilt: 'ersetzt' (neu beschrieben) oder 'verschoben'
+  -- (der Pfad wanderte). Ein Umzug ist keine neue Erkenntnis, aber er soll
+  -- nachvollziehbar sein.
+  reason TEXT NOT NULL DEFAULT 'ersetzt');
+CREATE INDEX IF NOT EXISTS ghost_file_versions_path
+  ON ghost_file_versions(project, path, replaced_at DESC);
+-- Was in dieser Session schon gesagt wurde: ausgelieferte Beschreibungen UND
+-- ausgesprochene Aufforderungen. Auf den Pfad geschlüsselt statt auf die
+-- Eintrags-Id, weil eine Aufforderung einen Pfad meint, für den es noch keinen
+-- Eintrag gibt. Kein Fremdschlüssel auf sessions: der Hook feuert, bevor der
+-- Collector die Session angelegt haben muss.
+CREATE TABLE IF NOT EXISTS ghost_deliveries(
+  session_key TEXT NOT NULL,
+  project TEXT NOT NULL,
+  path TEXT NOT NULL,
+  at TEXT NOT NULL,
+  PRIMARY KEY(session_key, project, path));
 INSERT OR IGNORE INTO search_documents(kind,domain_id,title,body,project,branch,machine)
   SELECT 'knowledge',id,title,body,project,branch,machine FROM knowledge;
 `

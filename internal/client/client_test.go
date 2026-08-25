@@ -104,3 +104,37 @@ func TestClientSessionsAndSearch(t *testing.T) {
 		t.Errorf("no knowledge yet, bootstrap should be empty: %q", md)
 	}
 }
+
+// Die Kette geht ueber dieselbe Route wie die Historie und unterscheidet sich
+// nur im Kopf. Genau dieser Kopf ist der Unterschied zwischen "was stand da
+// mal" und "was hat sich geaendert" — er darf beim Durchreichen nicht
+// verlorengehen.
+func TestClientGhostChainCarriesTheCurrentVersion(t *testing.T) {
+	st, _ := store.Open(":memory:")
+	t.Cleanup(func() { st.Close() })
+	token, _ := st.AddPerson("robin")
+	srv := httptest.NewServer(server.New(st))
+	t.Cleanup(srv.Close)
+
+	c := New(config.Config{ServerURL: srv.URL, Token: token, Machine: "workstation-a"})
+	g := store.GhostFile{Project: "p", Path: "a.go", Kind: "file", Description: "erste Fassung"}
+	if _, err := c.PutGhost(g); err != nil {
+		t.Fatal(err)
+	}
+	g.Description = "zweite Fassung"
+	if _, err := c.PutGhost(g); err != nil {
+		t.Fatal(err)
+	}
+
+	chain, err := c.GhostChain("p", "a.go", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chain) != 2 || chain[0].Description != "zweite Fassung" || chain[1].Description != "erste Fassung" {
+		t.Fatalf("Kette = %+v", chain)
+	}
+	hist, err := c.GhostHistory("p", "a.go", 0)
+	if err != nil || len(hist) != 1 {
+		t.Fatalf("die Historie bleibt ohne Kopf: %+v (%v)", hist, err)
+	}
+}

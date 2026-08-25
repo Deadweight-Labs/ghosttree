@@ -457,3 +457,123 @@ func TestBootstrapWritesEachTypeHeadingOnce(t *testing.T) {
 		}
 	}
 }
+
+func TestGhostEndpointsStoreAndDeliver(t *testing.T) {
+	srv, token := newTestServer(t)
+
+	res := req(t, "POST", srv.URL+"/api/ghosts", token, map[string]any{
+		"project": "p", "path": "internal/store/knowledge.go", "kind": "file",
+		"description": "Lese- und Schreibpfade", "content_sha": "sha1",
+		"git_blob": "blob1", "line_count": 545,
+	})
+	if res.StatusCode != 200 {
+		t.Fatalf("POST /api/ghosts: %d", res.StatusCode)
+	}
+	res.Body.Close()
+
+	var got []store.GhostFile
+	res = req(t, "GET", srv.URL+"/api/ghosts?project=p&path=internal/store/knowledge.go&session=claude:s1", token, nil)
+	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if len(got) != 1 || got[0].Description != "Lese- und Schreibpfade" {
+		t.Fatalf("delivery returned %+v", got)
+	}
+
+	// Zweiter Aufruf derselben Session: schon gesagt.
+	res = req(t, "GET", srv.URL+"/api/ghosts?project=p&path=internal/store/knowledge.go&session=claude:s1", token, nil)
+	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if len(got) != 0 {
+		t.Fatalf("the same path must not be delivered twice in one session: %+v", got)
+	}
+}
+
+// Eine Route, die nicht registriert ist, ist still kaputt: der Client bekommt
+// 404 und schluckt es, weil die Auskunft eine Zugabe ist.
+func TestGhostHistoryAndMoveEndpoints(t *testing.T) {
+	srv, token := newTestServer(t)
+	put := func(path, desc string) {
+		t.Helper()
+		res := req(t, "POST", srv.URL+"/api/ghosts", token, map[string]any{
+			"project": "p", "path": path, "kind": "file", "description": desc})
+		if res.StatusCode != 200 {
+			t.Fatalf("POST /api/ghosts: %d", res.StatusCode)
+		}
+		res.Body.Close()
+	}
+	put("alt.go", "die erste Fassung")
+	put("alt.go", "die zweite Fassung")
+
+	var versions []store.GhostVersion
+	res := req(t, "GET", srv.URL+"/api/ghosts/history?project=p&path=alt.go", token, nil)
+	if err := json.NewDecoder(res.Body).Decode(&versions); err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if len(versions) != 1 || versions[0].Description != "die erste Fassung" {
+		t.Fatalf("die verdraengte Fassung muss abrufbar sein: %+v", versions)
+	}
+
+	// Wer den Unterschied sehen will, braucht zur abgeloesten Fassung ihren
+	// Nachfolger — und der steht nicht in der Historie, sondern ist die
+	// aktuelle Beschreibung.
+	res = req(t, "GET", srv.URL+"/api/ghosts/history?project=p&path=alt.go&chain=1", token, nil)
+	if err := json.NewDecoder(res.Body).Decode(&versions); err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if len(versions) != 2 || versions[0].Description != "die zweite Fassung" {
+		t.Fatalf("die Kette beginnt bei der aktuellen Fassung: %+v", versions)
+	}
+
+	// Der Hook holt nur die Zahl.
+	var counted struct {
+		Count int `json:"count"`
+	}
+	res = req(t, "GET", srv.URL+"/api/ghosts/history?project=p&path=alt.go&count=1", token, nil)
+	if err := json.NewDecoder(res.Body).Decode(&counted); err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if counted.Count != 1 {
+		t.Fatalf("count = %d, want 1", counted.Count)
+	}
+
+	res = req(t, "POST", srv.URL+"/api/ghosts/move", token,
+		map[string]any{"project": "p", "from": "alt.go", "to": "neu.go"})
+	if res.StatusCode != 200 {
+		t.Fatalf("POST /api/ghosts/move: %d", res.StatusCode)
+	}
+	res.Body.Close()
+
+	res = req(t, "GET", srv.URL+"/api/ghosts/history?project=p&path=neu.go", token, nil)
+	if err := json.NewDecoder(res.Body).Decode(&versions); err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if len(versions) != 2 {
+		t.Fatalf("die Historie zieht mit um, plus Umzugsvermerk: %+v", versions)
+	}
+}
+
+func TestGhostSearchEndpointFindsByDescription(t *testing.T) {
+	srv, token := newTestServer(t)
+	res := req(t, "POST", srv.URL+"/api/ghosts", token, map[string]any{
+		"project": "p", "path": "a.go", "kind": "file", "description": "Rangfolge nach Vertrauen",
+	})
+	res.Body.Close()
+
+	res = req(t, "GET", srv.URL+"/api/ghosts/search?q=Vertrauen&project=p", token, nil)
+	var got []store.GhostFile
+	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if len(got) != 1 || got[0].Path != "a.go" {
+		t.Fatalf("search returned %+v", got)
+	}
+}

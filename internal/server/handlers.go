@@ -2,8 +2,10 @@ package server
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
@@ -634,4 +636,106 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return string(r[:n]) + "…"
+}
+
+func (a *api) putGhost(w http.ResponseWriter, r *http.Request) {
+	var g store.GhostFile
+	if err := readJSON(r, &g); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if g.Project == "" {
+		writeErr(w, http.StatusBadRequest, "project is required")
+		return
+	}
+	g.Person = personOf(r)
+	id, err := a.st.PutGhostFile(g)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]int64{"id": id})
+}
+
+// ghostsForPath ist der Auslieferungspfad. Er hat einen Nebeneffekt — er merkt
+// sich, was gesagt wurde — und ist deshalb bewusst nicht als reines GET zu
+// lesen. Ein zweiter Umlauf zum Quittieren wäre sauberer und passt nicht in das
+// 900-ms-Budget des Hooks.
+func (a *api) ghostsForPath(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	entries, err := a.st.GhostFilesForDelivery(q.Get("project"), q.Get("path"), q.Get("session"))
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, 200, entries)
+}
+
+// ghostsMove hängt eine Beschreibung samt Historie auf einen neuen Pfad. Die
+// Entscheidung, DASS es ein Umzug ist, fällt auf der Client-Seite: nur dort
+// liegt die Dateiliste, an der Verschiebung und Kopie zu unterscheiden sind.
+func (a *api) ghostsMove(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Project string `json:"project"`
+		From    string `json:"from"`
+		To      string `json:"to"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := a.st.MoveGhostFile(in.Project, in.From, in.To); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]string{"from": in.From, "to": in.To})
+}
+
+func (a *api) ghostHistory(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	// Der Hook will nur die Zahl. Den ganzen Text zu übertragen, um ihn dann
+	// zu zählen, wäre auf einem Pfad mit 900-ms-Budget die falsche Rechnung.
+	if q.Get("count") != "" {
+		n, err := a.st.GhostHistoryCount(q.Get("project"), q.Get("path"))
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, 200, map[string]int{"count": n})
+		return
+	}
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	read := a.st.GhostFileHistory
+	// Die Kette nimmt die aktuelle Fassung als Kopf dazu. Ohne sie hat die
+	// neueste abgeloeste Fassung keinen Nachfolger, und genau der Vergleich
+	// mit ihm ist die Frage, die jemand an eine Historie stellt.
+	if q.Get("chain") != "" {
+		read = a.st.GhostFileChain
+	}
+	versions, err := read(q.Get("project"), q.Get("path"), limit)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, 200, versions)
+}
+
+func (a *api) ghostTree(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	entries, err := a.st.GhostFilesUnder(q.Get("project"), q.Get("prefix"))
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, 200, entries)
+}
+
+func (a *api) searchGhosts(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	entries, err := a.st.SearchGhostFiles(q.Get("q"), q.Get("project"), intParam(r, "limit", 20))
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, 200, entries)
 }

@@ -21,6 +21,10 @@ const (
 	// ChannelUserPrompt fires per prompt: what the last sentence gave a reason
 	// to mention.
 	ChannelUserPrompt Channel = "user-prompt-submit"
+	// ChannelPreToolUse feuert vor einem Werkzeugaufruf und trägt den Pfad, den
+	// der Aufruf anfasst: der einzige Kanal, über den eine Dateibeschreibung
+	// genau dann ankommt, wenn sie zählt.
+	ChannelPreToolUse Channel = "pre-tool-use"
 	// ChannelMCP is the pull side. Every harness ghosttree supports has it, and
 	// it is the only channel that answers a question rather than anticipating
 	// one.
@@ -56,8 +60,8 @@ func Harnesses() []Harness {
 	return []Harness{
 		{
 			Name:      "claude",
-			Channels:  []Channel{ChannelSessionStart, ChannelUserPrompt, ChannelMCP},
-			Delivers:  []Channel{ChannelSessionStart, ChannelUserPrompt, ChannelMCP},
+			Channels:  []Channel{ChannelSessionStart, ChannelUserPrompt, ChannelPreToolUse, ChannelMCP},
+			Delivers:  []Channel{ChannelSessionStart, ChannelUserPrompt, ChannelPreToolUse, ChannelMCP},
 			HooksPath: func(home string) string { return filepath.Join(home, ".claude", "settings.json") },
 			RulePath:  func(home string) string { return filepath.Join(home, ".claude", "CLAUDE.md") },
 		},
@@ -76,8 +80,13 @@ func Harnesses() []Harness {
 			// this harness is already wired. What must not happen is treating
 			// them as delivery — hence the empty event list below and the rule
 			// section that keeps asking for context_get.
-			Name:      "codex",
-			Channels:  []Channel{ChannelSessionStart, ChannelUserPrompt, ChannelMCP},
+			Name: "codex",
+			// PreToolUse steht NICHT in Delivers. Codex dokumentiert
+			// additionalContext für dieses Ereignis, aber ein nicht über /hooks
+			// freigegebener Hook wird übersprungen — und unsere Einträge sind
+			// nicht freigegeben (Wissenseintrag #859). Registrieren ist nicht
+			// Ausliefern; das gehört gemessen, bevor es hier steht. REQ-160.
+			Channels:  []Channel{ChannelSessionStart, ChannelUserPrompt, ChannelPreToolUse, ChannelMCP},
 			Delivers:  []Channel{ChannelMCP},
 			HooksPath: func(home string) string { return filepath.Join(home, ".codex", "hooks.json") },
 			RulePath:  func(home string) string { return filepath.Join(home, ".codex", "AGENTS.md") },
@@ -92,14 +101,16 @@ func (h Harness) Serves(c Channel) bool { return slices.Contains(h.Channels, c) 
 func (h Harness) DeliversContext(c Channel) bool { return slices.Contains(h.Delivers, c) }
 
 // hookCommandFor names the subcommand that serves a channel.
-func hookCommandFor(c Channel) (event, command string, ok bool) {
+func hookCommandFor(c Channel) (event, command, matcher string, ok bool) {
 	switch c {
 	case ChannelSessionStart:
-		return "SessionStart", hookCommand, true
+		return "SessionStart", hookCommand, "", true
 	case ChannelUserPrompt:
-		return "UserPromptSubmit", promptHookCommand, true
+		return "UserPromptSubmit", promptHookCommand, "", true
+	case ChannelPreToolUse:
+		return "PreToolUse", preToolHookCommand, "Read|Edit|Write|NotebookEdit", true
 	}
-	return "", "", false
+	return "", "", "", false
 }
 
 // ruleFor builds the harness's markdown section. A harness whose session-start

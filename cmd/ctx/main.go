@@ -37,6 +37,8 @@ func run(args []string, stdout io.Writer) int {
 		return cmdReview(rest, stdout)
 	case "request":
 		return cmdRequest(rest, stdout)
+	case "ghost":
+		return cmdGhost(rest, stdout)
 	case "migrate":
 		return cmdMigrate(rest, stdout)
 	case "distill-sessions":
@@ -77,6 +79,7 @@ const usage = `usage: ctx <command>
   export   write a session's original transcript as JSONL
   review   approve or reject distilled knowledge
   request  search and manage the work ledger
+  ghost    read earlier versions of a path's description
   migrate  move repository agent artifacts into ghosttree
   distill-sessions  extract quarantined knowledge from idle sessions
                     (--submit/--collect for the half-price batch path,

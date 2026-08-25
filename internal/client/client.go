@@ -136,6 +136,9 @@ func axesQuery(ax scope.Axes) url.Values {
 	for _, ancestor := range ax.Lineage {
 		q.Add("lineage", ancestor)
 	}
+	if ax.AnyBranch {
+		q.Set("any_branch", "1")
+	}
 	return q
 }
 
@@ -323,4 +326,99 @@ func (c *Client) Bootstrap(ax scope.Axes, actx activation.Context, budget int) (
 	var md string
 	err := c.do("GET", "/api/context/bootstrap", q, nil, &md)
 	return md, err
+}
+
+func (c *Client) PutGhost(g store.GhostFile) (int64, error) {
+	var out struct {
+		ID int64 `json:"id"`
+	}
+	err := c.do("POST", "/api/ghosts", nil, g, &out)
+	return out.ID, err
+}
+
+// GhostsForPath liefert die Beschreibung dieses Pfades und die seiner
+// Vorfahren, jede einmal je Session.
+//
+// Der git-Blob reiste hier einmal mit, damit eine verschobene Datei ihre
+// Beschreibung behält. Das ist entfallen: der Server kann Verschiebung und
+// Kopie nicht unterscheiden, weil er die Repositorien nicht hat, und hängte
+// deshalb bei einer Dateikopie die Beschreibung des Originals um (REQ-179).
+// Der Umzug wird jetzt beim Baumschreiben erkannt, wo die Dateiliste vorliegt.
+func (c *Client) GhostsForPath(project, path, sessionKey string) ([]store.GhostFile, error) {
+	q := url.Values{}
+	q.Set("project", project)
+	q.Set("path", path)
+	q.Set("session", sessionKey)
+	var out []store.GhostFile
+	err := c.do("GET", "/api/ghosts", q, nil, &out)
+	return out, err
+}
+
+// MoveGhost hängt eine Beschreibung samt ihrer Historie auf einen neuen Pfad.
+// Aufgerufen wird das nur aus dem Baumschreiben, nach ghost.DetectMoves.
+func (c *Client) MoveGhost(project, from, to string) error {
+	body := map[string]string{"project": project, "from": from, "to": to}
+	return c.do("POST", "/api/ghosts/move", nil, body, nil)
+}
+
+// GhostHistoryCount ist die Zahl ohne den Text — der Hook nennt nur, DASS es
+// Vorfassungen gibt.
+func (c *Client) GhostHistoryCount(project, path string) (int, error) {
+	q := url.Values{}
+	q.Set("project", project)
+	q.Set("path", path)
+	q.Set("count", "1")
+	var out struct {
+		Count int `json:"count"`
+	}
+	err := c.do("GET", "/api/ghosts/history", q, nil, &out)
+	return out.Count, err
+}
+
+// GhostHistory liefert die abgelösten Fassungen eines Pfades, neueste zuerst.
+func (c *Client) GhostHistory(project, path string, limit int) ([]store.GhostVersion, error) {
+	return c.ghostVersions(project, path, limit, false)
+}
+
+// GhostChain liefert dasselbe mit der aktuellen Fassung an der Spitze. Wer den
+// Unterschied zwischen zwei Fassungen zeigen will, braucht sie: der Nachfolger
+// der neuesten abgelösten Fassung ist die Beschreibung, die heute gilt.
+func (c *Client) GhostChain(project, path string, limit int) ([]store.GhostVersion, error) {
+	return c.ghostVersions(project, path, limit, true)
+}
+
+func (c *Client) ghostVersions(project, path string, limit int, chain bool) ([]store.GhostVersion, error) {
+	q := url.Values{}
+	q.Set("project", project)
+	q.Set("path", path)
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	if chain {
+		q.Set("chain", "1")
+	}
+	var out []store.GhostVersion
+	err := c.do("GET", "/api/ghosts/history", q, nil, &out)
+	return out, err
+}
+
+func (c *Client) GhostTree(project, prefix string) ([]store.GhostFile, error) {
+	q := url.Values{}
+	q.Set("project", project)
+	q.Set("prefix", prefix)
+	var out []store.GhostFile
+	err := c.do("GET", "/api/ghosts/tree", q, nil, &out)
+	return out, err
+}
+
+func (c *Client) SearchGhosts(q string, project string, limit int) ([]store.GhostFile, error) {
+	v := url.Values{}
+	v.Set("q", q)
+	v.Set("project", project)
+	if limit > 0 {
+		v.Set("limit", strconv.Itoa(limit))
+	}
+	var out []store.GhostFile
+	err := c.do("GET", "/api/ghosts/search", v, nil, &out)
+	return out, err
 }

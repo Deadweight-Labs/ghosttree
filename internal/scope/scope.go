@@ -20,6 +20,14 @@ type Axes struct {
 	// ghost tree grows the way the git tree does, and a branch keeps what it
 	// was cut from.
 	Lineage []string `json:"lineage,omitempty"`
+	// AnyBranch drops the branch constraint instead of narrowing it, for the
+	// caller who deliberately wants to look past their own line.
+	//
+	// It exists because clearing Branch does the opposite. With no branch there
+	// are no branch clauses at all, so "search every branch" returned strictly
+	// fewer entries than the default and none of the branch-scoped ones — the
+	// flag promised width and delivered a blind spot.
+	AnyBranch bool `json:"any_branch,omitempty"`
 }
 
 func CanonicalAxes(a Axes) Axes {
@@ -93,11 +101,18 @@ func (a Axes) UnionWhere() (string, []any) {
 		args = append(args, a.Machine)
 	}
 	if a.Project != "" {
-		clauses = append(clauses, `(project = ? AND branch = '' AND machine = '')`)
-		args = append(args, a.Project)
-		for _, branch := range a.readableBranches() {
-			clauses = append(clauses, `(project = ? AND branch = ? AND machine = '')`)
-			args = append(args, a.Project, branch)
+		if a.AnyBranch {
+			// One clause instead of an enumeration: every branch of this
+			// project, plus the unbranched entries it subsumes.
+			clauses = append(clauses, `(project = ? AND machine = '')`)
+			args = append(args, a.Project)
+		} else {
+			clauses = append(clauses, `(project = ? AND branch = '' AND machine = '')`)
+			args = append(args, a.Project)
+			for _, branch := range a.readableBranches() {
+				clauses = append(clauses, `(project = ? AND branch = ? AND machine = '')`)
+				args = append(args, a.Project, branch)
+			}
 		}
 		if a.Machine != "" {
 			clauses = append(clauses, `(project = ? AND branch = '' AND machine = ?)`)

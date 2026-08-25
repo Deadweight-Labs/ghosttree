@@ -24,11 +24,23 @@ const (
 const ruleText = `## ghosttree
 
 Code comments explain code to humans. Operational history, failed approaches
-and session notes go to ghosttree via the ` + "`context_remember`" + ` MCP tool, never
-into source comments. Search prior knowledge with ` + "`context_search`" + ` before
-re-deriving it. Call ` + "`context_get`" + ` again with repository-relative paths before
-working in another subtree, and with an explicit task tag for deploy, security,
-review, test or docs work.
+and session notes belong in ghosttree via the ` + "`context_remember`" + ` MCP tool
+rather than in source comments. Search prior knowledge with ` + "`context_search`" + `
+before re-deriving it. Call ` + "`context_get`" + ` again with repository-relative paths
+before working in another subtree, and with an explicit task tag for deploy,
+security, review, test or docs work.
+
+What a file or directory DOES belongs in its ghost file. Whenever you are about
+to write an explanatory comment that serves later readers more than the person
+in front of you — and whenever you create a file — put that text at the path
+instead, with ` + "`context_describe_file`" + `. This replaces the comment; it does not
+forbid it.
+
+The ghost tree mirrors this repository under ` + "`.ghosttree/tree/`" + `: one ` + "`.md`" + ` per
+file, a ` + "`__dir.md`" + ` per directory. It is browsable with ls, cat and grep, and
+reading a directory level there is the cheapest way to understand an unfamiliar
+part of the codebase before opening any source file. It is a projection —
+editing it changes nothing.
 
 For substantial feature, architecture, migration, or multi-session work, use
 ` + "`request_search`" + ` before implementation. Continue a matching request and
