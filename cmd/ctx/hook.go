@@ -123,6 +123,12 @@ func bootstrapContext(stdin io.Reader) string {
 	if home, err := os.UserHomeDir(); err == nil {
 		_ = WriteTree(client.New(cfg), gitCtx.Project, gitCtx.Root, home)
 	}
+	// Derselbe Gedanke für Wissen, Dokumente und den Ledger: wer nachsehen will,
+	// soll nicht erst ein Werkzeug aufrufen müssen — und auf einer Harness ohne
+	// MCP und ohne Hooks ist das der einzige Kanal, der überhaupt trägt.
+	_ = WriteMirror(client.New(cfg),
+		scope.Axes{Project: gitCtx.Project, Branch: gitCtx.Branch, Lineage: gitCtx.Lineage, Machine: cfg.Machine},
+		gitCtx.Root)
 	return md
 }
 

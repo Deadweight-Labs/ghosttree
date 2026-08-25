@@ -167,3 +167,24 @@ func DefaultAxes(entryType string, ctx Axes) Axes {
 	}
 	return Axes{Project: ctx.Project}
 }
+
+// Label ist die menschenlesbare Form der Achsen: "projekt@zweig machine:name",
+// und "global" für einen Eintrag, der überall gilt. Stand dreimal wortgleich in
+// server, mcpserver und mirror, bevor es hierher kam.
+func (a Axes) Label() string {
+	var parts []string
+	if a.Project != "" {
+		p := a.Project
+		if a.Branch != "" {
+			p += "@" + a.Branch
+		}
+		parts = append(parts, p)
+	}
+	if a.Machine != "" {
+		parts = append(parts, "machine:"+a.Machine)
+	}
+	if len(parts) == 0 {
+		return "global"
+	}
+	return strings.Join(parts, " ")
+}

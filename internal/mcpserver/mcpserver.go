@@ -427,22 +427,6 @@ func renderHit(h store.SessionHit) string {
 		h.Session.Scope.Project, h.Session.Scope.Branch, h.Session.LastSeenAt, oneLine(h.Snippet))
 }
 
-func scopeLabel(ax scope.Axes) string {
-	var parts []string
-	if ax.Project != "" {
-		p := ax.Project
-		if ax.Branch != "" {
-			p += "@" + ax.Branch
-		}
-		parts = append(parts, p)
-	}
-	if ax.Machine != "" {
-		parts = append(parts, "machine:"+ax.Machine)
-	}
-	if len(parts) == 0 {
-		return "global"
-	}
-	return strings.Join(parts, " ")
-}
+func scopeLabel(ax scope.Axes) string { return ax.Label() }
 
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }

@@ -58,6 +58,119 @@ func TestScanFindsArtifactsAndSkipsToolState(t *testing.T) {
 	}
 }
 
+// Ein eingebetteter Arbeitsbaum ist ein zweiter Checkout desselben Repos, kein
+// Fundus. Gefunden am 2026-08-25 an SampleProxy: dort liegt unter
+// .claude/worktrees/release-0.5.0 ein vollständiger Checkout, und der Scan
+// destillierte dessen CLAUDE.md ein zweites Mal — bezahlt, doppelt abgelegt,
+// und beim Bereinigen hätte er eine Datei aus einem fremden Arbeitsbaum
+// entfernt. Der Grund, warum die .git-Regel nicht griff: in einem Worktree ist
+// .git eine DATEI, kein Verzeichnis.
+func TestScanDoesNotDescendIntoAnEmbeddedWorktreeOrRepository(t *testing.T) {
+	repo := t.TempDir()
+	write := func(rel, body string) {
+		p := filepath.Join(repo, rel)
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		os.WriteFile(p, []byte(body), 0o644)
+	}
+	write("CLAUDE.md", "# eigene Regeln")
+	write(".claude/worktrees/release-0.5.0/.git", "gitdir: /somewhere/.git/worktrees/release-0.5.0")
+	write(".claude/worktrees/release-0.5.0/CLAUDE.md", "# dieselbe Datei, zweiter Checkout")
+	write(".claude/worktrees/release-0.5.0/docs/superpowers/plans/2026-01-02-thing.md", "# plan")
+	write("third-party/forked-repo/.git/config", "[core]")
+	write("third-party/forked-repo/AGENTS.md", "# fremde Regeln")
+
+	got, err := Scan(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := map[string]bool{}
+	for _, a := range got {
+		found[a.Rel] = true
+	}
+	if !found["CLAUDE.md"] {
+		t.Fatalf("the repository's own rules must still be found: %+v", got)
+	}
+	for _, rel := range []string{
+		".claude/worktrees/release-0.5.0/CLAUDE.md",
+		".claude/worktrees/release-0.5.0/docs/superpowers/plans/2026-01-02-thing.md",
+		"third-party/forked-repo/AGENTS.md",
+	} {
+		if found[rel] {
+			t.Errorf("scanned into an embedded checkout: %s", rel)
+		}
+	}
+}
+
+// "spec" steckt als Zeichenfolge auch in "perspective". Gefunden am 2026-08-25:
+// .superpowers/brainstorm/.../forced-perspective.html wurde als Spezifikation
+// erkannt und als Volltext archiviert — eine HTML-Datei aus einem
+// Brainstorm-Verzeichnis. Erkannt wird deshalb an Wortgrenzen, und nur an
+// Markdown: ein Plan ist ein Text, kein gerendertes Artefakt.
+func TestScanDoesNotMistakePerspectiveForASpec(t *testing.T) {
+	repo := t.TempDir()
+	write := func(rel string) {
+		p := filepath.Join(repo, rel)
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		os.WriteFile(p, []byte("# x"), 0o644)
+	}
+	for _, rel := range []string{
+		".superpowers/brainstorm/1/content/forced-perspective.html",
+		"docs/planning-tool.png",
+		"docs/superpowers/specs/2026-01-01-thing-design.md",
+		"docs/superpowers/plans/2026-01-02-thing.md",
+		"docs/2026-01-03-spec-of-something.md",
+	} {
+		write(rel)
+	}
+	got, err := Scan(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := map[string]string{}
+	for _, a := range got {
+		found[a.Rel] = a.Kind
+	}
+	for _, rel := range []string{".superpowers/brainstorm/1/content/forced-perspective.html", "docs/planning-tool.png"} {
+		if kind, ok := found[rel]; ok {
+			t.Errorf("%s was taken for a %s", rel, kind)
+		}
+	}
+	for rel, want := range map[string]string{
+		"docs/superpowers/specs/2026-01-01-thing-design.md": "spec",
+		"docs/superpowers/plans/2026-01-02-thing.md":        "plan",
+		"docs/2026-01-03-spec-of-something.md":              "spec",
+	} {
+		if found[rel] != want {
+			t.Errorf("%s = %q, want %q", rel, found[rel], want)
+		}
+	}
+}
+
+// Ein Verzeichnis, in das der Nutzer nicht hineinsehen darf, geht die Migration
+// nichts an. Gefunden am 2026-08-25 an NurBlindspot: data/postgres gehört einem
+// Containernutzer, und der ganze Repo-Lauf brach daran ab, statt das eine
+// Verzeichnis auszulassen.
+func TestScanSkipsWhatItMayNotRead(t *testing.T) {
+	repo := t.TempDir()
+	os.WriteFile(filepath.Join(repo, "CLAUDE.md"), []byte("# rules"), 0o644)
+	locked := filepath.Join(repo, "data", "postgres")
+	if err := os.MkdirAll(locked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(locked, 0o755) })
+
+	got, err := Scan(repo)
+	if err != nil {
+		t.Fatalf("an unreadable directory must not fail the whole scan: %v", err)
+	}
+	if len(got) != 1 || got[0].Rel != "CLAUDE.md" {
+		t.Fatalf("artifacts = %+v, want the repository's own rules", got)
+	}
+}
+
 func TestOnlyRuleArtifactsAreDistilledAsCurrentKnowledge(t *testing.T) {
 	for _, tc := range []struct {
 		kind string

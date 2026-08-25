@@ -318,6 +318,15 @@ func cleanMigrated(repo, project string, artifacts []migrate.Artifact, api *clie
 			return 1
 		}
 	}
+	// Ein leergeräumtes docs/superpowers/specs/ ist immer noch ein sichtbarer
+	// Rest, und sichtbar sein ist genau das, was hier weg soll. Fehler werden
+	// geschluckt: die Dateien sind bereits gesichert und entfernt, ein
+	// gebliebenes leeres Verzeichnis ist kein Grund, den Lauf rot zu machen.
+	rels := make([]string, 0, len(artifacts))
+	for _, a := range artifacts {
+		rels = append(rels, a.Rel)
+	}
+	_ = migrate.PruneEmptyDirs(repo, rels)
 	fmt.Fprintf(stdout, "removed %d artifacts; backup: %s\n", len(artifacts), backup)
 	return 0
 }

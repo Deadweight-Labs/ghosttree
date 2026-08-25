@@ -96,7 +96,18 @@ const tmpSuffix = ".tmp"
 // Millisekunden existiert: bricht ein Durchlauf mittendrin ab, bleibt es liegen,
 // und dann stünde es im `git status` von jemandem, der von seiner Existenz nie
 // erfahren hat.
-var excludeLines = []string{".ghosttree/tree/", ".ghosttree/tree" + tmpSuffix + "/"}
+// Seit REQ-175 liegen neben dem Baum auch Wissen, Dokumente und der Ledger
+// dort — jedes mit seinem Bauverzeichnis daneben, und INDEX.md als einzige
+// Datei direkt darunter. Aufgezählt statt pauschal: der Grund von oben gilt
+// weiter, und was hier fehlt, fällt beim ersten `git status` auf, statt still
+// zu verschwinden.
+var excludeLines = []string{
+	".ghosttree/tree/", ".ghosttree/tree" + tmpSuffix + "/",
+	".ghosttree/knowledge/", ".ghosttree/knowledge" + tmpSuffix + "/",
+	".ghosttree/docs/", ".ghosttree/docs" + tmpSuffix + "/",
+	".ghosttree/requests/", ".ghosttree/requests" + tmpSuffix + "/",
+	".ghosttree/INDEX.md",
+}
 
 // EnsureExcluded trägt den Baum in .git/info/exclude ein, nicht in .gitignore:
 // so ändert ghosttree keine versionierte Datei. Punktverzeichnisse werden von
