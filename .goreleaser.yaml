@@ -1,0 +1,64 @@
+version: 2
+project_name: ghosttree
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - id: ctx
+    main: ./cmd/ctx
+    binary: ctx
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - ids: [ctx]
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+
+checksum:
+  name_template: checksums.txt
+
+source:
+  enabled: true
+
+sboms:
+  - id: archives
+    artifacts: archive
+  - id: source
+    artifacts: source
+
+signs:
+  - id: checksums
+    cmd: cosign
+    artifacts: checksum
+    signature: "${artifact}.sigstore.json"
+    args:
+      - sign-blob
+      - "--bundle=${signature}"
+      - "${artifact}"
+      - --yes
+    output: true
+
+changelog:
+  use: git
+  sort: asc
+  filters:
+    exclude:
+      - "^chore"
+      - "^test"
+
+release:
+  prerelease: auto

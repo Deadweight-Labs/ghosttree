@@ -71,11 +71,11 @@ func TestRequestSearchAnswersInterruptedWorkInsteadOfFTSGuess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	work, _, err := st.StartRequestWork(detail.Request.ID, sessionID, "primary", "robin")
+	work, _, err := st.StartRequestWork(detail.Request.ID, sessionID, "primary", "alice")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.FinishRequestWork(work.ID, "paused", "Tests fehlen noch", "robin"); err != nil {
+	if _, err := st.FinishRequestWork(work.ID, "paused", "Tests fehlen noch", "alice"); err != nil {
 		t.Fatal(err)
 	}
 	for _, title := range []string{"Zuletzt ausgelieferte Version", "Fertig gebaute Suche"} {

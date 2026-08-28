@@ -197,9 +197,8 @@ func TestCostByVersionSurvivesRelease(t *testing.T) {
 // them, and reprocessing archives the previous run's items for the same
 // session. Together they delete findings: the model correctly declines to
 // restate what exists, and then what exists is retired with nothing in its
-// place. Measured on sample-project, where a reprocess archived 67 items —
-// including a committed session token and three SSRF findings — and replaced
-// them with 38 that covered none of the same ground.
+// place. This was reproduced on a real project where reprocessing retired
+// findings without restoring their substance.
 func TestTitlesForPromptExcludeTheSessionsBeingReprocessed(t *testing.T) {
 	s := openTest(t)
 	reprocessed := billedSession(t, s, "a", "p", "2026-08-01T00:00:00Z")

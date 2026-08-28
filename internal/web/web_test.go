@@ -21,7 +21,7 @@ func testWeb(t *testing.T) (*httptest.Server, *store.Store, string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	token, err := st.AddPerson("robin")
+	token, err := st.AddPerson("alice")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestRequestsRenderCriteriaEvidenceAndEscapeHTML(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SetCriterionState(detail.Criteria[0].ID, "met", requestdomain.Evidence{Kind: "test", Ref: "go test ./...", Person: "robin"}); err != nil {
+	if err := st.SetCriterionState(detail.Criteria[0].ID, "met", requestdomain.Evidence{Kind: "test", Ref: "go test ./...", Person: "alice"}); err != nil {
 		t.Fatal(err)
 	}
 	client := login(t, srv, token)

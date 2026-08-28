@@ -59,15 +59,15 @@ func TestPendingDistillationExcludesSessionsInAnOpenBatch(t *testing.T) {
 // selection has to be filterable rather than "whatever is oldest".
 func TestPendingDistillationFiltersByProject(t *testing.T) {
 	s := openTest(t)
-	idleSession(t, s, "a", "github.com/x/sample-project", "2026-01-01T00:00:00Z")
+	idleSession(t, s, "a", "github.com/x/example-project", "2026-01-01T00:00:00Z")
 	idleSession(t, s, "b", "github.com/x/other", "2026-01-02T00:00:00Z")
 
-	got, err := s.SessionsPendingDistillation(scope.Axes{Project: "github.com/x/sample-project"}, "2026-06-01T00:00:00Z", "v1", 10)
+	got, err := s.SessionsPendingDistillation(scope.Axes{Project: "github.com/x/example-project"}, "2026-06-01T00:00:00Z", "v1", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0].Scope.Project != "github.com/x/sample-project" {
-		t.Fatalf("pending = %+v, want only the sample-project session", got)
+	if len(got) != 1 || got[0].Scope.Project != "github.com/x/example-project" {
+		t.Fatalf("pending = %+v, want only the example-project session", got)
 	}
 }
 

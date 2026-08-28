@@ -7,8 +7,8 @@ import (
 
 func TestNormalizeRemote(t *testing.T) {
 	cases := map[string]string{
-		"git@github.com:Example/sample-project.git":              "github.com/example/sample-project",
-		"https://github.com/Example/sample-project":              "github.com/example/sample-project",
+		"git@github.com:Example/sample-project.git":        "github.com/example/sample-project",
+		"https://github.com/Example/sample-project":        "github.com/example/sample-project",
 		"https://github.com/Deadweight-Labs/ghosttree.git": "github.com/deadweight-labs/ghosttree",
 	}
 	for in, want := range cases {

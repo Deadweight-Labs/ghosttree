@@ -6,13 +6,17 @@ import (
 )
 
 func TestRedact(t *testing.T) {
+	githubToken := "ghp_" + "AbCdEfGhIjKlMnOpQrStUvWxYz1234567890"
+	githubOAuth := "gho_" + "AbCdEfGhIjKlMnOpQrStUvWxYz1234567890"
+	awsKey := "AKIA" + "IOSFODNN7EXAMPLE"
+	privateKey := "-----BEGIN OPENSSH " + "PRIVATE KEY-----\nb3BlbnNzaA==\n-----END OPENSSH " + "PRIVATE KEY-----"
 	cases := []struct{ in, label string }{
 		{"key is sk-ant-api03-AbCdEfGh123456789012345678901234", "anthropic"},
-		{"token ghp_AbCdEfGhIjKlMnOpQrStUvWxYz1234567890", "github"},
-		{"oauth gho_AbCdEfGhIjKlMnOpQrStUvWxYz1234567890", "github"},
-		{"aws AKIAIOSFODNN7EXAMPLE", "aws"},
+		{"token " + githubToken, "github"},
+		{"oauth " + githubOAuth, "github"},
+		{"aws " + awsKey, "aws"},
 		{"jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U", "jwt"},
-		{"-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaA==\n-----END OPENSSH PRIVATE KEY-----", "privatekey"},
+		{privateKey, "privatekey"},
 		{"slack xoxb-fake-token-for-testing-0", "slack"},
 	}
 	for _, c := range cases {
@@ -31,12 +35,12 @@ func TestRedactLeavesNormalTextAlone(t *testing.T) {
 }
 
 func TestFindSecretsReportsLabelAndLineWithoutChangingText(t *testing.T) {
-	in := "safe first line\ntoken ghp_AbCdEfGhIjKlMnOpQrStUvWxYz1234567890\n"
+	in := "safe first line\ntoken ghp_" + "AbCdEfGhIjKlMnOpQrStUvWxYz1234567890\n"
 	matches := FindSecrets(in)
 	if len(matches) != 1 || matches[0].Label != "github" || matches[0].Line != 2 {
 		t.Fatalf("matches = %+v", matches)
 	}
-	if in != "safe first line\ntoken ghp_AbCdEfGhIjKlMnOpQrStUvWxYz1234567890\n" {
+	if in != "safe first line\ntoken ghp_"+"AbCdEfGhIjKlMnOpQrStUvWxYz1234567890\n" {
 		t.Fatal("secret detection modified its input")
 	}
 }

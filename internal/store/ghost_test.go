@@ -6,7 +6,7 @@ func TestPutGhostFileRoundTripsAndReplaces(t *testing.T) {
 	s := openTest(t)
 	g := GhostFile{Project: "p", Path: "internal/store/knowledge.go", Kind: "file",
 		Description: "Lese- und Schreibpfade für Wissenseinträge",
-		ContentSHA:  "sha1", GitBlob: "blob1", LineCount: 545, Person: "robin"}
+		ContentSHA:  "sha1", GitBlob: "blob1", LineCount: 545, Person: "alice"}
 	if _, err := s.PutGhostFile(g); err != nil {
 		t.Fatal(err)
 	}

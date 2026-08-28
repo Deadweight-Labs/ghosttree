@@ -10,9 +10,9 @@ import (
 func testkette() []store.GhostVersion {
 	rest := "\n\nZwei Feinheiten, die man sonst falsch baut. Erstens der Ast: der Vergleich haengt einen Schraegstrich an, sonst zieht ein Praefix das Nachbarverzeichnis mit. Zweitens die Auslieferung: sie gibt den Pfad UND seine Vorfahren zurueck, aber jeden nur einmal je Sitzung."
 	return []store.GhostVersion{
-		{Path: "a.go", Person: "robin", DescribedAt: "2026-08-25T09:00:00Z", LineCount: 269,
+		{Path: "a.go", Person: "alice", DescribedAt: "2026-08-25T09:00:00Z", LineCount: 269,
 			Description: "Ein zweites Beschreiben ersetzt das erste — die verdraengte Fassung wandert in die Historie." + rest},
-		{Path: "a.go", Person: "robin", DescribedAt: "2026-08-24T09:00:00Z", ReplacedAt: "2026-08-25T09:00:00Z", Reason: "ersetzt",
+		{Path: "a.go", Person: "alice", DescribedAt: "2026-08-24T09:00:00Z", ReplacedAt: "2026-08-25T09:00:00Z", Reason: "ersetzt",
 			Description: "Ein zweites Beschreiben ersetzt das erste — es gibt bewusst keine Fassungshistorie." + rest},
 	}
 }
@@ -33,7 +33,7 @@ func TestTerminalHistoryShowsTheDifference(t *testing.T) {
 	if !strings.Contains(out, "+ Ein zweites Beschreiben ersetzt das erste — die verdraengte Fassung") {
 		t.Errorf("der neue Satz fehlt:\n%s", out)
 	}
-	if !strings.Contains(out, "2026-08-25") || !strings.Contains(out, "robin") {
+	if !strings.Contains(out, "2026-08-25") || !strings.Contains(out, "alice") {
 		t.Errorf("Zeitpunkt und Person fehlen:\n%s", out)
 	}
 }

@@ -12,7 +12,7 @@ func initRepo(t *testing.T, dir string) {
 	// A commit is needed for rev-parse to name a branch: an unborn HEAD has none.
 	for _, args := range [][]string{
 		{"init", "-q", "-b", "main"},
-		{"remote", "add", "origin", "https://github.com/example/sample-project.git"},
+		{"remote", "add", "origin", "https://github.com/example/example-project.git"},
 		{"-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "root"},
 	} {
 		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
@@ -30,10 +30,10 @@ func initRepo(t *testing.T, dir string) {
 func TestGitContextWalksUpFromARemovedWorktree(t *testing.T) {
 	repo := t.TempDir()
 	initRepo(t, repo)
-	gone := filepath.Join(repo, ".claude", "worktrees", "sample-project-durchstich")
+	gone := filepath.Join(repo, ".claude", "worktrees", "example-project-durchstich")
 
 	got := ResolveGitContext(gone)
-	if got.Project != "github.com/example/sample-project" {
+	if got.Project != "github.com/example/example-project" {
 		t.Errorf("project = %q, want the repository above the removed worktree", got.Project)
 	}
 	// The worktree's branch died with the directory. The parent is on some
@@ -60,7 +60,7 @@ func TestGitContextUnchangedForALiveCheckout(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := ResolveGitContext(sub)
-	if got.Project != "github.com/example/sample-project" || got.Branch != "main" {
+	if got.Project != "github.com/example/example-project" || got.Branch != "main" {
 		t.Errorf("live checkout = %+v, want project and branch", got)
 	}
 	if got.RepoPath != "internal/store" {

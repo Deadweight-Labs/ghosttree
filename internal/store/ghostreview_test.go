@@ -5,7 +5,7 @@ import "testing"
 func TestPutGhostReviewRoundTripsAndReplaces(t *testing.T) {
 	s := openTest(t)
 	if err := s.PutGhostReview(GhostReview{
-		Project: "p", Path: "internal/store/foo.go", GitBlob: "blob1", Person: "robin"}); err != nil {
+		Project: "p", Path: "internal/store/foo.go", GitBlob: "blob1", Person: "alice"}); err != nil {
 		t.Fatal(err)
 	}
 	got, err := s.GhostReviewsUnder("p", "internal/store")

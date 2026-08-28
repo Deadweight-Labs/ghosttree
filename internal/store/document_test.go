@@ -18,7 +18,7 @@ func newDocStore(t *testing.T) *Store {
 func TestPushRevisionIsAtomic(t *testing.T) {
 	s := newDocStore(t)
 	d, err := s.CreateDocument(Document{
-		Project: "p", Slug: "a", Kind: "spec", Title: "A", Person: "robin",
+		Project: "p", Slug: "a", Kind: "spec", Title: "A", Person: "alice",
 	}, "eins\n", "erste")
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -34,7 +34,7 @@ func TestPushRevisionIsAtomic(t *testing.T) {
 		 VALUES(?,?,?,?,?,?,?)`, d.ID, 2, "kollision", "x", "", "", now()); err != nil {
 		t.Fatalf("vorbereitender insert: %v", err)
 	}
-	if _, err := s.PushRevision(d.ID, 1, "zwei\n", "zweite", "robin"); err == nil {
+	if _, err := s.PushRevision(d.ID, 1, "zwei\n", "zweite", "alice"); err == nil {
 		t.Fatal("push haette scheitern muessen")
 	}
 	got, err := s.DocumentByID(d.ID)
@@ -49,10 +49,10 @@ func TestPushRevisionIsAtomic(t *testing.T) {
 func TestPushRevisionRejectsStaleBase(t *testing.T) {
 	s := newDocStore(t)
 	d, _ := s.CreateDocument(Document{Project: "p", Slug: "a", Kind: "spec", Title: "A"}, "eins\n", "")
-	if _, err := s.PushRevision(d.ID, 1, "zwei\n", "", "robin"); err != nil {
+	if _, err := s.PushRevision(d.ID, 1, "zwei\n", "", "alice"); err != nil {
 		t.Fatalf("erster push: %v", err)
 	}
-	_, err := s.PushRevision(d.ID, 1, "drei\n", "", "philipp")
+	_, err := s.PushRevision(d.ID, 1, "drei\n", "", "bob")
 	if err != ErrRevisionConflict {
 		t.Fatalf("erwartet ErrRevisionConflict, bekam %v", err)
 	}
@@ -95,7 +95,7 @@ func TestSlugIsUniquePerProjectAcrossStatus(t *testing.T) {
 func TestDocumentRevisionsOmitBody(t *testing.T) {
 	s := newDocStore(t)
 	d, _ := s.CreateDocument(Document{Project: "p", Slug: "a", Kind: "spec", Title: "A"}, "eins\n", "erste")
-	if _, err := s.PushRevision(d.ID, 1, "zwei\n", "zweite", "robin"); err != nil {
+	if _, err := s.PushRevision(d.ID, 1, "zwei\n", "zweite", "alice"); err != nil {
 		t.Fatalf("push: %v", err)
 	}
 	revs, err := s.DocumentRevisions(d.ID)

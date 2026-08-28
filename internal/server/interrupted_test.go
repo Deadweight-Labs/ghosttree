@@ -27,12 +27,12 @@ func interruptedFixture(t *testing.T, st *store.Store, title, externalID string,
 	if err != nil {
 		t.Fatal(err)
 	}
-	work, _, err := st.StartRequestWork(created.Request.ID, sessionID, "primary", "robin")
+	work, _, err := st.StartRequestWork(created.Request.ID, sessionID, "primary", "alice")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if handoff != "" {
-		if _, err := st.FinishRequestWork(work.ID, "paused", handoff, "robin"); err != nil {
+		if _, err := st.FinishRequestWork(work.ID, "paused", handoff, "alice"); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -262,7 +262,7 @@ func TestUpgradeRequestDomainMovesLegacyRequests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	setLegacyRequestState(t, s, openID, "open", "", "", "robin")
+	setLegacyRequestState(t, s, openID, "open", "", "", "alice")
 	sessionID, _ := s.UpsertSession(Session{Harness: "codex", ExternalID: "legacy-proof"})
 	if err := s.AddEvidence(openID, []Evidence{{SessionID: sessionID, ChunkSeq: 7, Quote: "requested in session"}}); err != nil {
 		t.Fatal(err)
@@ -271,7 +271,7 @@ func TestUpgradeRequestDomainMovesLegacyRequests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	setLegacyRequestState(t, s, doneID, "done", "commit", "abc123", "robin")
+	setLegacyRequestState(t, s, doneID, "done", "commit", "abc123", "alice")
 	if _, err := s.InsertKnowledge(Knowledge{Type: "decision", Title: "keep me", Body: "knowledge remains"}); err != nil {
 		t.Fatal(err)
 	}

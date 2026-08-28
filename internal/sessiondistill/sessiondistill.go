@@ -55,14 +55,14 @@ empty list is a correct answer and the usual one.`
 // past work as belonging to an older generation; `--reprocess-version` is what
 // actually releases those sessions.
 //
-// v1 — the original rules. Measured on 100 sample-project sessions: 45 items, mostly
+// v1 — the original rules. Measured on 100 example-project sessions: 45 items, mostly
 //
 //	changelog entries and prompt text mistaken for instruction.
 //
 // v2 — asks for what a reader of the finished repository could not recover,
 //
 //	rules out text the session was drafting, caps items per transcript and
-//	per chunk. Measured on 100 sample-project sessions: 20 items, 4 of 5 sampled
+//	per chunk. Measured on 100 example-project sessions: 20 items, 4 of 5 sampled
 //	judged useful, no misfiled instructions.
 //
 // v3 — rules out items that only record the outcome of one inspection, and

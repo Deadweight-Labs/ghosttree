@@ -116,12 +116,12 @@ func TestKnowledgeCarriesItsScopeAlongAllThreeAxes(t *testing.T) {
 
 func TestKnowledgeMirrorCarriesTheSameProvenanceAsBootstrap(t *testing.T) {
 	in := sampleInput()
-	in.Knowledge[0].Person = "robin"
+	in.Knowledge[0].Person = "alice"
 	in.Knowledge[0].Origin = "human"
 	in.Knowledge[0].Confidence = "verified"
-	in.Knowledge[0].ConfirmedBy = "philipp"
+	in.Knowledge[0].ConfirmedBy = "bob"
 	body := docsByPath(Build(in))["knowledge/pitfall/42-null-treffer-sehen-aus-wie-gibt-es-nicht.md"]
-	if !strings.Contains(body, "by robin") || !strings.Contains(body, "confirmed by philipp") {
+	if !strings.Contains(body, "by alice") || !strings.Contains(body, "confirmed by bob") {
 		t.Fatalf("mirror lacks provenance:\n%s", body)
 	}
 }

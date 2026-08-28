@@ -34,7 +34,7 @@ func fakeGhostServer(t *testing.T, described map[string]string, reviews ...store
 			out := []store.GhostFile{}
 			for path, desc := range described {
 				out = append(out, store.GhostFile{Project: r.URL.Query().Get("project"), Path: path,
-					Kind: "file", Description: desc, DescribedAt: "2026-08-24T10:00:00Z", Person: "robin"})
+					Kind: "file", Description: desc, DescribedAt: "2026-08-24T10:00:00Z", Person: "alice"})
 			}
 			json.NewEncoder(w).Encode(out)
 		default:

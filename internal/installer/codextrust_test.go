@@ -140,9 +140,8 @@ func TestCodexTrustRequiresNonEmptyHashAndEnabledState(t *testing.T) {
 	}
 }
 
-// Fremde Hooks vor unserem verschieben den Gruppenindex — auf workstation-a steht
-// session-lease in Gruppe 0 und ghosttree in Gruppe 1. Wer den Index festverdrahtet,
-// prüft die Freigabe eines fremden Hooks.
+// Fremde Hooks vor unserem verschieben den Gruppenindex. Wer den Index
+// festverdrahtet, prüft die Freigabe eines fremden Hooks.
 func TestTheTrustCheckFindsOurOwnGroupNotTheFirstOne(t *testing.T) {
 	home := t.TempDir()
 	hooks := filepath.Join(home, ".codex", "hooks.json")

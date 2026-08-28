@@ -24,8 +24,8 @@ type InterruptedThread struct {
 // entweder hat jemand die Arbeit ausdrücklich pausiert und eine Übergabe
 // hinterlassen, oder die Sitzung ist einfach still geworden. Der zweite Fall
 // ist der häufigere, weil niemand daran denkt, einen Zustand zu setzen — er
-// wird deshalb aus last_seen_at abgeleitet, so wie session-lease eine alt
-// gewordene Lease liest, statt auf eine Abmeldung zu warten.
+// wird deshalb wie eine Lease aus last_seen_at und einem Zeitfenster
+// abgeleitet, statt auf eine Abmeldung zu warten.
 //
 // idleBefore ist der Zeitpunkt, vor dem eine Sitzung als still gilt.
 // excludeSession ist die external_id der fragenden Sitzung: eine

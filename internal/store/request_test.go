@@ -68,7 +68,7 @@ func TestRequestCompletionRequiresSatisfiedEvidencedCriteria(t *testing.T) {
 	if detail.Request.State != "open" || len(detail.Criteria) != 2 {
 		t.Fatalf("detail = %+v", detail)
 	}
-	if err := s.CompleteRequest(detail.Request.ID, requestdomain.Evidence{Kind: "commit", Ref: "abc", Person: "robin"}); requestdomain.Code(err) != "open_criteria" {
+	if err := s.CompleteRequest(detail.Request.ID, requestdomain.Evidence{Kind: "commit", Ref: "abc", Person: "alice"}); requestdomain.Code(err) != "open_criteria" {
 		t.Fatalf("complete error = %v", err)
 	}
 	if err := s.SetCriterionState(detail.Criteria[0].ID, "met", requestdomain.Evidence{}); requestdomain.Code(err) != "evidence_required" {
@@ -84,11 +84,11 @@ func TestRequestCanCompleteAfterCriterionEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	proof := requestdomain.Evidence{Kind: "test", Ref: "go test ./...", Person: "robin"}
+	proof := requestdomain.Evidence{Kind: "test", Ref: "go test ./...", Person: "alice"}
 	if err := s.SetCriterionState(detail.Criteria[0].ID, "met", proof); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CompleteRequest(detail.Request.ID, requestdomain.Evidence{Kind: "commit", Ref: "abc", Person: "robin"}); err != nil {
+	if err := s.CompleteRequest(detail.Request.ID, requestdomain.Evidence{Kind: "commit", Ref: "abc", Person: "alice"}); err != nil {
 		t.Fatal(err)
 	}
 	got, err := s.RequestByID(detail.Request.ID)
@@ -106,17 +106,17 @@ func TestTerminalRequestRejectsFurtherLifecycleMutations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	proof := requestdomain.Evidence{Kind: "test", Ref: "go test", Person: "robin"}
+	proof := requestdomain.Evidence{Kind: "test", Ref: "go test", Person: "alice"}
 	if err := s.CompleteRequest(detail.Request.ID, proof); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.AddCriterion(detail.Request.ID, "late", "robin"); requestdomain.Code(err) != "request_terminal" {
+	if _, err := s.AddCriterion(detail.Request.ID, "late", "alice"); requestdomain.Code(err) != "request_terminal" {
 		t.Fatalf("late criterion error = %v", err)
 	}
 	if err := s.CompleteRequest(detail.Request.ID, proof); requestdomain.Code(err) != "request_terminal" {
 		t.Fatalf("repeat completion error = %v", err)
 	}
-	if err := s.DropRequest(detail.Request.ID, "changed mind", "robin"); requestdomain.Code(err) != "request_terminal" {
+	if err := s.DropRequest(detail.Request.ID, "changed mind", "alice"); requestdomain.Code(err) != "request_terminal" {
 		t.Fatalf("done-to-dropped error = %v", err)
 	}
 }
@@ -124,7 +124,7 @@ func TestTerminalRequestRejectsFurtherLifecycleMutations(t *testing.T) {
 func TestDroppedRequestCannotComplete(t *testing.T) {
 	s := openTest(t)
 	detail, _ := s.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: "dropped"}})
-	if err := s.DropRequest(detail.Request.ID, "obsolete", "robin"); err != nil {
+	if err := s.DropRequest(detail.Request.ID, "obsolete", "alice"); err != nil {
 		t.Fatal(err)
 	}
 	err := s.CompleteRequest(detail.Request.ID, requestdomain.Evidence{Kind: "test", Ref: "go test"})
@@ -152,7 +152,7 @@ func TestCreateRequestIsIdempotentWithKey(t *testing.T) {
 func TestAddCriterionUsesNextStableNumber(t *testing.T) {
 	s := openTest(t)
 	detail, _ := s.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: "ledger"}, Criteria: []string{"first"}})
-	criterion, err := s.AddCriterion(detail.Request.ID, "second", "robin")
+	criterion, err := s.AddCriterion(detail.Request.ID, "second", "alice")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +181,7 @@ func TestSearchRequestsReturnsScopedFTSHit(t *testing.T) {
 func TestDropRequestRecordsReason(t *testing.T) {
 	s := openTest(t)
 	detail, _ := s.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: "ledger"}})
-	if err := s.DropRequest(detail.Request.ID, "no longer wanted", "robin"); err != nil {
+	if err := s.DropRequest(detail.Request.ID, "no longer wanted", "alice"); err != nil {
 		t.Fatal(err)
 	}
 	got, err := s.RequestByID(detail.Request.ID)
@@ -197,7 +197,7 @@ func TestAddRequestRelationAppearsInDetail(t *testing.T) {
 	s := openTest(t)
 	a, _ := s.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: "a"}})
 	b, _ := s.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "change", Title: "b"}})
-	_, err := s.AddRequestRelation(a.Request.ID, requestdomain.Relation{Kind: "related", OtherRequestID: b.Request.ID}, "robin")
+	_, err := s.AddRequestRelation(a.Request.ID, requestdomain.Relation{Kind: "related", OtherRequestID: b.Request.ID}, "alice")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,15 +218,15 @@ func TestSessionHasOnePrimaryRequestAndStartIsIdempotent(t *testing.T) {
 	}
 	a, _ := s.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: "a"}})
 	b, _ := s.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "change", Title: "b"}})
-	first, _, err := s.StartRequestWork(a.Request.ID, sessionID, "primary", "robin")
+	first, _, err := s.StartRequestWork(a.Request.ID, sessionID, "primary", "alice")
 	if err != nil {
 		t.Fatal(err)
 	}
-	retry, _, err := s.StartRequestWork(a.Request.ID, sessionID, "primary", "robin")
+	retry, _, err := s.StartRequestWork(a.Request.ID, sessionID, "primary", "alice")
 	if err != nil || retry.ID != first.ID {
 		t.Fatalf("retry = %+v, err = %v", retry, err)
 	}
-	if _, _, err := s.StartRequestWork(b.Request.ID, sessionID, "primary", "robin"); requestdomain.Code(err) != "primary_exists" {
+	if _, _, err := s.StartRequestWork(b.Request.ID, sessionID, "primary", "alice"); requestdomain.Code(err) != "primary_exists" {
 		t.Fatalf("second primary error = %v", err)
 	}
 }
@@ -236,11 +236,11 @@ func TestFinishWorkRequiresHandoffAndRequestSearchFindsTranscript(t *testing.T) 
 	sessionID, _ := s.UpsertSession(Session{Harness: "codex", ExternalID: "work-2"})
 	_ = s.AppendChunks(sessionID, []Chunk{{Seq: 3, Role: "assistant", Text: "the migration checksum now matches", Raw: `{}`}})
 	detail, _ := s.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "change", Title: "migration"}})
-	work, _, _ := s.StartRequestWork(detail.Request.ID, sessionID, "primary", "robin")
-	if _, err := s.FinishRequestWork(work.ID, "paused", "", "robin"); requestdomain.Code(err) != "summary_required" {
+	work, _, _ := s.StartRequestWork(detail.Request.ID, sessionID, "primary", "alice")
+	if _, err := s.FinishRequestWork(work.ID, "paused", "", "alice"); requestdomain.Code(err) != "summary_required" {
 		t.Fatalf("missing summary error = %v", err)
 	}
-	finished, err := s.FinishRequestWork(work.ID, "paused", "schema copied; deploy remains", "robin")
+	finished, err := s.FinishRequestWork(work.ID, "paused", "schema copied; deploy remains", "alice")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,18 +269,18 @@ func TestFinishedPrimaryWorkFreesTheSessionForTheNextOne(t *testing.T) {
 	first, second := a.Request.ID, b.Request.ID
 	sessionID, _ := s.UpsertSession(Session{Harness: "codex", ExternalID: "backlog"})
 
-	work, _, err := s.StartRequestWork(first, sessionID, "primary", "robin")
+	work, _, err := s.StartRequestWork(first, sessionID, "primary", "alice")
 	if err != nil {
 		t.Fatal(err)
 	}
 	// An active primary still blocks a second one: the rule is one at a time.
-	if _, _, err := s.StartRequestWork(second, sessionID, "primary", "robin"); requestdomain.Code(err) != "primary_exists" {
+	if _, _, err := s.StartRequestWork(second, sessionID, "primary", "alice"); requestdomain.Code(err) != "primary_exists" {
 		t.Fatalf("second concurrent primary was accepted: %v", err)
 	}
-	if _, err := s.FinishRequestWork(work.ID, "completed", "done", "robin"); err != nil {
+	if _, err := s.FinishRequestWork(work.ID, "completed", "done", "alice"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.StartRequestWork(second, sessionID, "primary", "robin"); err != nil {
+	if _, _, err := s.StartRequestWork(second, sessionID, "primary", "alice"); err != nil {
 		t.Fatalf("finished primary still blocks the next one: %v", err)
 	}
 }
@@ -292,14 +292,14 @@ func TestPausedPrimaryWorkCanBeResumed(t *testing.T) {
 	created, _ := s.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: "long task"}})
 	id := created.Request.ID
 	sessionID, _ := s.UpsertSession(Session{Harness: "codex", ExternalID: "resumed"})
-	work, _, err := s.StartRequestWork(id, sessionID, "primary", "robin")
+	work, _, err := s.StartRequestWork(id, sessionID, "primary", "alice")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.FinishRequestWork(work.ID, "paused", "back later", "robin"); err != nil {
+	if _, err := s.FinishRequestWork(work.ID, "paused", "back later", "alice"); err != nil {
 		t.Fatal(err)
 	}
-	resumed, _, err := s.StartRequestWork(id, sessionID, "primary", "robin")
+	resumed, _, err := s.StartRequestWork(id, sessionID, "primary", "alice")
 	if err != nil {
 		t.Fatalf("resuming paused work failed: %v", err)
 	}

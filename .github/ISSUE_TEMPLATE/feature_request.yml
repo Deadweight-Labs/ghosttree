@@ -1,0 +1,42 @@
+name: Feature request
+description: Propose a concrete improvement to Ghosttree
+title: "proposal: "
+labels: ["proposal", "triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Describe the workflow or failure mode before suggesting an interface.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: What should a user be able to observe when this is done?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Include existing commands or workarounds you tried.
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Expected scope
+      options:
+        - Small compatible change
+        - New compatible capability
+        - Storage or API design change
+        - Unsure
+    validations:
+      required: true
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Contribution
+      options:
+        - label: I understand that accepted code contributions require the project CLA.
+          required: true

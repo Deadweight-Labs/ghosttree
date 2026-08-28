@@ -1,0 +1,71 @@
+name: Bug report
+description: Report reproducible behavior that is wrong or unsafe
+title: "bug: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve Ghosttree. Remove tokens, private source, and transcript content before posting.
+  - type: input
+    id: version
+    attributes:
+      label: Ghosttree version
+      description: Paste `ctx version` or the commit hash.
+      placeholder: v0.1.0-rc.1
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Server or API
+        - Collector
+        - MCP tools
+        - Harness installation or hooks
+        - Documents or migration
+        - Request ledger or knowledge
+        - Web interface
+        - Build, CI, or release
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: What happened?
+      description: Include the exact error and the smallest useful context.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Give a short sequence that another person can run.
+      placeholder: |
+        1. Run ...
+        2. Configure ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Operating system, architecture, Go version if built locally, and affected harness.
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety check
+      options:
+        - label: I removed credentials, private source, and sensitive transcript content.
+          required: true
+        - label: This is not an undisclosed security vulnerability.
+          required: true

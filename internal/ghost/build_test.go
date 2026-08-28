@@ -21,7 +21,7 @@ func TestBuildDocsShowsUndescribedEntriesInsteadOfHidingThem(t *testing.T) {
 	}
 	described := map[string]store.GhostFile{
 		"internal/store/knowledge.go": {Path: "internal/store/knowledge.go", Kind: "file",
-			Description: "Lese- und Schreibpfade", DescribedAt: "2026-08-24T10:00:00Z", Person: "robin"},
+			Description: "Lese- und Schreibpfade", DescribedAt: "2026-08-24T10:00:00Z", Person: "alice"},
 	}
 	docs := BuildDocs(entries, described, nil, nil)
 	if len(docs) != len(entries) {
@@ -46,11 +46,11 @@ func TestBuildDocsPutsTheProvenanceInTheHeader(t *testing.T) {
 	docs := BuildDocs(
 		[]Entry{{Path: "a.go", Kind: "file"}},
 		map[string]store.GhostFile{"a.go": {Path: "a.go", Kind: "file", Description: "text",
-			DescribedAt: "2026-08-24T10:00:00Z", Person: "robin"}},
+			DescribedAt: "2026-08-24T10:00:00Z", Person: "alice"}},
 		nil, nil,
 	)
 	body := docs[0].Body
-	for _, want := range []string{"a.go", "2026-08-24", "robin"} {
+	for _, want := range []string{"a.go", "2026-08-24", "alice"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("header is missing %q:\n%s", want, body)
 		}

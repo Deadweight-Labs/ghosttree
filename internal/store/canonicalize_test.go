@@ -13,11 +13,11 @@ import (
 func TestCanonicalizeScopesRewritesStoredSpellings(t *testing.T) {
 	s := openTest(t)
 	if _, err := s.InsertKnowledge(Knowledge{Type: "pitfall", Title: "serial console needed",
-		Body: "b", Scope: scope.Axes{Project: "github.com/Example/SampleProject"}}); err != nil {
+		Body: "b", Scope: scope.Axes{Project: "github.com/Example/Project"}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.UpsertSession(Session{Harness: "codex", ExternalID: "s1",
-		Scope: scope.Axes{Project: "github.com/Example/SampleProject", Branch: "main"}}); err != nil {
+		Scope: scope.Axes{Project: "github.com/Example/Project", Branch: "main"}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -25,14 +25,14 @@ func TestCanonicalizeScopesRewritesStoredSpellings(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ks, err := s.SearchKnowledge("console", scope.Axes{Project: "github.com/example/sampleproject"}, 10)
+	ks, err := s.SearchKnowledge("console", scope.Axes{Project: "github.com/example/project"}, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(ks) != 1 {
 		t.Errorf("knowledge under canonical project = %d, want 1", len(ks))
 	}
-	sessions, err := s.ListSessions(scope.Axes{Project: "github.com/example/sampleproject"}, 10)
+	sessions, err := s.ListSessions(scope.Axes{Project: "github.com/example/project"}, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,14 +46,14 @@ func TestCanonicalizeScopesRewritesStoredSpellings(t *testing.T) {
 func TestCanonicalizeScopesAppliesProjectAliases(t *testing.T) {
 	s := openTest(t)
 	if _, err := s.InsertKnowledge(Knowledge{Type: "pitfall", Title: "serial console needed",
-		Body: "b", Scope: scope.Axes{Project: "github.com/Deadweight-Labs/SampleProject"}}); err != nil {
+		Body: "b", Scope: scope.Axes{Project: "github.com/Old-Owner/Project"}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.CanonicalizeScopes(map[string]string{
-		"github.com/deadweight-labs/sampleproject": "github.com/example/sampleproject"}); err != nil {
+		"github.com/old-owner/project": "github.com/example/project"}); err != nil {
 		t.Fatal(err)
 	}
-	ks, _ := s.SearchKnowledge("console", scope.Axes{Project: "github.com/example/sampleproject"}, 10)
+	ks, _ := s.SearchKnowledge("console", scope.Axes{Project: "github.com/example/project"}, 10)
 	if len(ks) != 1 {
 		t.Errorf("aliased knowledge = %d, want 1", len(ks))
 	}
@@ -65,14 +65,14 @@ func TestCanonicalizeScopesRewritesSearchProjection(t *testing.T) {
 	s := openTest(t)
 	if _, err := s.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{
 		Type: "change", Title: "raspi preflight", Description: "verify checksums",
-		Scope: scope.Axes{Project: "github.com/Example/SampleProject"}}}); err != nil {
+		Scope: scope.Axes{Project: "github.com/Example/Project"}}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.CanonicalizeScopes(nil); err != nil {
 		t.Fatal(err)
 	}
 	page, err := s.SearchRequests(requestdomain.SearchFilter{
-		Query: "preflight", Scope: scope.Axes{Project: "github.com/example/sampleproject"}, State: "open"})
+		Query: "preflight", Scope: scope.Axes{Project: "github.com/example/project"}, State: "open"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestCanonicalizeScopesRewritesSearchProjection(t *testing.T) {
 // reference, and reports what it removed.
 func TestCanonicalizeScopesMergesDuplicateRequests(t *testing.T) {
 	s := openTest(t)
-	for _, project := range []string{"github.com/Deadweight-Labs/SampleProject", "github.com/Example/SampleProject", "github.com/example/sampleproject"} {
+	for _, project := range []string{"github.com/Old-Owner/Project", "github.com/Example/Project", "github.com/example/project"} {
 		if _, err := s.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{
 			Type: "change", Title: "Sieben-Tage-Appliance-Soak", Description: "soak the appliance",
 			Scope: scope.Axes{Project: project}}}); err != nil {
@@ -94,7 +94,7 @@ func TestCanonicalizeScopesMergesDuplicateRequests(t *testing.T) {
 		}
 	}
 	report, err := s.CanonicalizeScopes(map[string]string{
-		"github.com/deadweight-labs/sampleproject": "github.com/example/sampleproject"})
+		"github.com/old-owner/project": "github.com/example/project"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestCanonicalizeScopesMergesDuplicateRequests(t *testing.T) {
 		t.Errorf("merged = %d, want 2", report.RequestsMerged)
 	}
 	page, _ := s.SearchRequests(requestdomain.SearchFilter{
-		Scope: scope.Axes{Project: "github.com/example/sampleproject"}, State: "open"})
+		Scope: scope.Axes{Project: "github.com/example/project"}, State: "open"})
 	if len(page.Results) != 1 {
 		t.Fatalf("open requests after merge = %d, want 1", len(page.Results))
 	}
@@ -142,7 +142,7 @@ func TestCanonicalizeScopesKeepsDistinctRequests(t *testing.T) {
 	for _, desc := range []string{"verify checksums", "release the installer"} {
 		if _, err := s.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{
 			Type: "change", Title: "Raspi-Preflight", Description: desc,
-			Scope: scope.Axes{Project: "github.com/example/sampleproject"}}}); err != nil {
+			Scope: scope.Axes{Project: "github.com/example/project"}}}); err != nil {
 			t.Fatal(err)
 		}
 	}

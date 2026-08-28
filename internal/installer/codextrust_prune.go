@@ -25,8 +25,8 @@ import (
 // eines vorhandenen Eintrags nicht getroffen, und Codex' interne
 // Serialisierung nachzubauen hiesse, sie mitpflegen zu müssen.
 //
-// Fremde Freigaben bleiben unangetastet. Another tool hält welche in derselben
-// Datei; sie zu entfernen hiesse, fremdes Werkzeug still zu entwaffnen — und
+// Fremde Freigaben bleiben unangetastet. Andere Werkzeuge halten welche in
+// derselben Datei; sie zu entfernen hiesse, fremdes Werkzeug still zu entwaffnen — und
 // den Menschen für einen Hook um Freigabe zu bitten, an dem sich nichts
 // geändert hat.
 func dropStaleCodexTrust(cfgPath, hooksPath string) error {

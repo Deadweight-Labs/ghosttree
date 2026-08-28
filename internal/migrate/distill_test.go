@@ -113,9 +113,9 @@ func TestDistillRetriesUngroundedModelOutput(t *testing.T) {
 }
 
 func TestGroundQuoteRestoresSourceMarkdownMarkers(t *testing.T) {
-	content := "Verifikation: **CHECKPOINT mit Alice** — Zielnummer bestätigen."
-	got, ok := groundQuote(content, "CHECKPOINT mit Alice — Zielnummer bestätigen.")
-	if !ok || got != "**CHECKPOINT mit Alice** — Zielnummer bestätigen." {
+	content := "Verification: **CHECKPOINT with operator** — confirm target number."
+	got, ok := groundQuote(content, "CHECKPOINT with operator — confirm target number.")
+	if !ok || got != "**CHECKPOINT with operator** — confirm target number." {
 		t.Fatalf("got=%q ok=%v", got, ok)
 	}
 }

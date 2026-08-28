@@ -15,7 +15,7 @@ func ledgerEntry(t *testing.T, st *store.Store, title, description string) int64
 	t.Helper()
 	detail, err := st.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{
 		Type: "bug", Title: title, Description: description,
-		Scope: scope.Axes{Project: "github.com/x/y"}, Person: "robin",
+		Scope: scope.Axes{Project: "github.com/x/y"}, Person: "alice",
 	}, Criteria: []string{"eins"}})
 	if err != nil {
 		t.Fatal(err)

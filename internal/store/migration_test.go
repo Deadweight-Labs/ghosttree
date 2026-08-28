@@ -193,7 +193,7 @@ func TestImportDocumentIsAtomicAndIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	in := MigratedDocument{
-		Document: Document{Project: "p", Slug: "design", Kind: "spec", Title: "Design", Person: "robin"},
+		Document: Document{Project: "p", Slug: "design", Kind: "spec", Title: "Design", Person: "alice"},
 		RunID:    run, Source: "docs/design.md", Digest: Digest(body), Body: body, Message: "import",
 	}
 	first, err := s.ImportDocument(in)

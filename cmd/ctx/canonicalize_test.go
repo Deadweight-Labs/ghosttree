@@ -18,7 +18,7 @@ func TestCanonicalizeScopesRewritesAndBacksUp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, project := range []string{"github.com/Example/SampleProject", "github.com/example/sampleproject"} {
+	for _, project := range []string{"github.com/Example/Project", "github.com/example/project"} {
 		if _, err := s.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{
 			Type: "change", Title: "soak", Description: "seven days",
 			Scope: scope.Axes{Project: project}}}); err != nil {
@@ -41,7 +41,7 @@ func TestCanonicalizeScopesRewritesAndBacksUp(t *testing.T) {
 	}
 	defer s.Close()
 	page, err := s.SearchRequests(requestdomain.SearchFilter{
-		Scope: scope.Axes{Project: "github.com/example/sampleproject"}, State: "open"})
+		Scope: scope.Axes{Project: "github.com/example/project"}, State: "open"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,13 +60,13 @@ func TestCanonicalizeScopesReadsAliasFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := s.InsertKnowledge(store.Knowledge{Type: "pitfall", Title: "serial console",
-		Body: "b", Scope: scope.Axes{Project: "github.com/Deadweight-Labs/SampleProject"}}); err != nil {
+		Body: "b", Scope: scope.Axes{Project: "github.com/Old-Owner/Project"}}); err != nil {
 		t.Fatal(err)
 	}
 	s.Close()
 
 	aliases := filepath.Join(dir, "aliases.json")
-	if err := os.WriteFile(aliases, []byte(`{"github.com/deadweight-labs/sampleproject":"github.com/example/sampleproject"}`), 0o644); err != nil {
+	if err := os.WriteFile(aliases, []byte(`{"github.com/old-owner/project":"github.com/new-owner/project"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
@@ -76,7 +76,7 @@ func TestCanonicalizeScopesReadsAliasFile(t *testing.T) {
 
 	s, _ = store.Open(path)
 	defer s.Close()
-	ks, _ := s.SearchKnowledge("console", scope.Axes{Project: "github.com/example/sampleproject"}, 10)
+	ks, _ := s.SearchKnowledge("console", scope.Axes{Project: "github.com/new-owner/project"}, 10)
 	if len(ks) != 1 {
 		t.Errorf("aliased knowledge = %d, want 1", len(ks))
 	}
@@ -90,7 +90,7 @@ func TestCanonicalizeScopesDryRunLeavesDataUntouched(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := s.InsertKnowledge(store.Knowledge{Type: "pitfall", Title: "serial console",
-		Body: "b", Scope: scope.Axes{Project: "github.com/Example/SampleProject"}}); err != nil {
+		Body: "b", Scope: scope.Axes{Project: "github.com/Example/Project"}}); err != nil {
 		t.Fatal(err)
 	}
 	s.Close()
@@ -101,7 +101,7 @@ func TestCanonicalizeScopesDryRunLeavesDataUntouched(t *testing.T) {
 	}
 	s, _ = store.Open(path)
 	defer s.Close()
-	ks, _ := s.SearchKnowledge("console", scope.Axes{Project: "github.com/Example/SampleProject"}, 10)
+	ks, _ := s.SearchKnowledge("console", scope.Axes{Project: "github.com/Example/Project"}, 10)
 	if len(ks) != 1 {
 		t.Errorf("dry run modified the database: %d rows left on the old spelling, want 1", len(ks))
 	}

@@ -1,6 +1,6 @@
 // Package ghost rechnet die Frische einer Beschreibung und schreibt den
-// Ghost-Baum auf Platte. Beides gehört auf den Client: der Server läuft auf
-// deployment host und hat die Repositorien nicht.
+// Ghost-Baum auf Platte. Beides gehört auf den Client, weil nur er die
+// Repositorien hat.
 package ghost
 
 import (

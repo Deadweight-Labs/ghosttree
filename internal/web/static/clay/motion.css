@@ -1,8 +1,9 @@
 /* Bewegung ist ein Parameter, kein Hausstil. Die benannten Kurven sind
    Abkuerzungen, keine Vorschriften — jeder Wert ist erlaubt, 0s auch.
 
-   Die beiden Dialekte widersprechen sich hier bewusst: SampleProject-Clay verbietet
-   Overshoot, DWL-Clay setzt ihn ein. Die Engine entscheidet den Streit nicht. */
+   Die beiden Varianten widersprechen sich hier bewusst: die kompakte Variante
+   verbietet Overshoot, die andere setzt ihn ein. Die Engine entscheidet den
+   Streit nicht. */
 
 :root {
   --clay-ease-linear: linear;

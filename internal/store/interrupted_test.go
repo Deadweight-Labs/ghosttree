@@ -28,7 +28,7 @@ func openThread(t *testing.T, s *Store, title, externalID string) (int64, int64)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.StartRequestWork(created.Request.ID, sessionID, "primary", "robin"); err != nil {
+	if _, _, err := s.StartRequestWork(created.Request.ID, sessionID, "primary", "alice"); err != nil {
 		t.Fatal(err)
 	}
 	return created.Request.ID, sessionID
@@ -104,7 +104,7 @@ func TestPausedWorkIsInterruptedAndCarriesItsHandoff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.FinishRequestWork(detail.Work[0].ID, "paused", "Schema steht, Rollout fehlt", "robin"); err != nil {
+	if _, err := s.FinishRequestWork(detail.Work[0].ID, "paused", "Schema steht, Rollout fehlt", "alice"); err != nil {
 		t.Fatal(err)
 	}
 	silentSince(t, s, sessionID, "2026-08-24T20:00:00Z")
@@ -129,7 +129,7 @@ func TestFinishedWorkAndClosedRequestsAreNotThreads(t *testing.T) {
 	s := openTest(t)
 	requestID, sessionID := openThread(t, s, "erledigt", "done")
 	detail, _ := s.RequestByID(requestID)
-	if _, err := s.FinishRequestWork(detail.Work[0].ID, "completed", "fertig", "robin"); err != nil {
+	if _, err := s.FinishRequestWork(detail.Work[0].ID, "completed", "fertig", "alice"); err != nil {
 		t.Fatal(err)
 	}
 	silentSince(t, s, sessionID, "2026-08-24T20:00:00Z")

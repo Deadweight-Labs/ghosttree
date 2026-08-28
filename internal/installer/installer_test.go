@@ -300,7 +300,7 @@ func TestInstallKeepsForeignHooks(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(settings), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	existing := `{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"bash /opt/session-lease/lease.sh"}]}],` +
+	existing := `{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"bash /opt/example/session-lease.sh"}]}],` +
 		`"PreToolUse":[{"matcher":"WebFetch","hooks":[{"type":"command","command":"exit 2"}]}]}}`
 	if err := os.WriteFile(settings, []byte(existing), 0o644); err != nil {
 		t.Fatal(err)
@@ -314,7 +314,7 @@ func TestInstallKeepsForeignHooks(t *testing.T) {
 	}
 	got := string(raw)
 	for _, want := range []string{
-		"session-lease/lease.sh", "WebFetch",
+		"example/session-lease.sh", "WebFetch",
 		"ctx hook session-start", "ctx hook user-prompt-submit",
 	} {
 		if !strings.Contains(got, want) {

@@ -41,7 +41,9 @@ func newTestState(dir string) *State {
 func TestSyncFileIncremental(t *testing.T) {
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "abc.jsonl")
-	os.WriteFile(fp, []byte(`{"type":"user","cwd":"/tmp","gitBranch":"","sessionId":"abc","message":{"role":"user","content":"secret is ghp_AbCdEfGhIjKlMnOpQrStUvWxYz1234567890"}}`+"\n"), 0o644)
+	githubToken := "ghp_" + "AbCdEfGhIjKlMnOpQrStUvWxYz1234567890"
+	line := `{"type":"user","cwd":"/tmp","gitBranch":"","sessionId":"abc","message":{"role":"user","content":"secret is ` + githubToken + `"}}`
+	os.WriteFile(fp, []byte(line+"\n"), 0o644)
 	st := newTestState(dir)
 	up := &fakeUp{}
 	if err := SyncFile(fp, "claude-code", up, st, "workstation-a"); err != nil {

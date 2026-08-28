@@ -59,7 +59,7 @@ func TestScanFindsArtifactsAndSkipsToolState(t *testing.T) {
 }
 
 // Ein eingebetteter Arbeitsbaum ist ein zweiter Checkout desselben Repos, kein
-// Fundus. Gefunden am 2026-08-25 an SampleProxy: dort liegt unter
+// Fundus. Gefunden am 2026-08-25 an ExampleProxy: dort liegt unter
 // .claude/worktrees/release-0.5.0 ein vollständiger Checkout, und der Scan
 // destillierte dessen CLAUDE.md ein zweites Mal — bezahlt, doppelt abgelegt,
 // und beim Bereinigen hätte er eine Datei aus einem fremden Arbeitsbaum
@@ -181,7 +181,7 @@ func TestScanIncludesEveryMarkdownDocumentUnderDocs(t *testing.T) {
 }
 
 // Ein Verzeichnis, in das der Nutzer nicht hineinsehen darf, geht die Migration
-// nichts an. Gefunden am 2026-08-25 an NurBlindspot: data/postgres gehört einem
+// nichts an. Gefunden am 2026-08-25 an ExampleBlindspot: data/postgres gehört einem
 // Containernutzer, und der ganze Repo-Lauf brach daran ab, statt das eine
 // Verzeichnis auszulassen.
 func TestScanSkipsWhatItMayNotRead(t *testing.T) {

@@ -20,7 +20,7 @@ func TestRequestCLIJSONSearchWritesOneDocument(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	st, _ := store.Open(":memory:")
 	t.Cleanup(func() { st.Close() })
-	token, _ := st.AddPerson("robin")
+	token, _ := st.AddPerson("alice")
 	srv := httptest.NewServer(server.New(st))
 	t.Cleanup(srv.Close)
 	if err := config.Save(config.Config{ServerURL: srv.URL, Token: token}); err != nil {
@@ -62,7 +62,7 @@ func TestRequestCLIWorkLifecycle(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	st, _ := store.Open(":memory:")
 	t.Cleanup(func() { st.Close() })
-	token, _ := st.AddPerson("robin")
+	token, _ := st.AddPerson("alice")
 	srv := httptest.NewServer(server.New(st))
 	t.Cleanup(srv.Close)
 	_ = config.Save(config.Config{ServerURL: srv.URL, Token: token})

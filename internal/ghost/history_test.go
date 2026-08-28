@@ -11,8 +11,8 @@ import (
 // heute gilt; das muss der Leser sehen, sonst weiss er nicht, wo er steht.
 func TestAChainOfThreeVersionsHasTwoSteps(t *testing.T) {
 	chain := []store.GhostVersion{
-		{Description: "dritte Fassung.", Person: "robin"},
-		{Description: "zweite Fassung.", Person: "robin", ReplacedAt: "2026-08-25T09:00:00Z"},
+		{Description: "dritte Fassung.", Person: "alice"},
+		{Description: "zweite Fassung.", Person: "alice", ReplacedAt: "2026-08-25T09:00:00Z"},
 		{Description: "erste Fassung.", Person: "alex", ReplacedAt: "2026-08-24T09:00:00Z"},
 	}
 

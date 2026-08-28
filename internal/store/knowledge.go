@@ -652,9 +652,8 @@ func (s *Store) scanKnowledge(rows *sql.Rows) ([]Knowledge, error) {
 // asks the model not to restate what exists, while reprocessing archives the
 // previous run's items for those same sessions — so including them means the
 // model declines to re-derive a finding that is about to be retired. That
-// combination archived 67 sample-project items, among them a committed session
-// token and three SSRF findings, and replaced them with 38 covering none of the
-// same ground.
+// On a real project, that combination retired findings without restoring their
+// substance.
 //
 // Items from other sessions still suppress. That is what the list is for.
 //

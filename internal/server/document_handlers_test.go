@@ -27,9 +27,9 @@ func TestPushRevisionConflictReturns409WithHead(t *testing.T) {
 	srv, token, st := newDocumentServer(t)
 
 	d, _ := st.CreateDocument(store.Document{
-		Project: "p", Slug: "a", Kind: "spec", Title: "A", Person: "robin",
+		Project: "p", Slug: "a", Kind: "spec", Title: "A", Person: "alice",
 	}, "eins\n", "erste")
-	if _, err := st.PushRevision(d.ID, 1, "zwei\n", "zweite", "philipp"); err != nil {
+	if _, err := st.PushRevision(d.ID, 1, "zwei\n", "zweite", "bob"); err != nil {
 		t.Fatalf("vorbereitender push: %v", err)
 	}
 
@@ -48,7 +48,7 @@ func TestPushRevisionConflictReturns409WithHead(t *testing.T) {
 		At      string `json:"at"`
 	}
 	json.NewDecoder(res.Body).Decode(&out)
-	if out.Head != 2 || out.Person != "philipp" || out.Message != "zweite" {
+	if out.Head != 2 || out.Person != "bob" || out.Message != "zweite" {
 		t.Fatalf("konfliktantwort unvollstaendig: %+v", out)
 	}
 	if out.At == "" {
@@ -138,7 +138,7 @@ func TestCreateAndPatchDocumentRejectUnsafeSlugs(t *testing.T) {
 
 func TestDocumentWritesRejectSecretsInsteadOfRewritingThem(t *testing.T) {
 	srv, token, st := newDocumentServer(t)
-	secret := "token ghp_AbCdEfGhIjKlMnOpQrStUvWxYz1234567890"
+	secret := "token ghp_" + "AbCdEfGhIjKlMnOpQrStUvWxYz1234567890"
 	res := req(t, "POST", srv.URL+"/api/documents", token, map[string]any{
 		"project": "p", "slug": "secret", "kind": "spec", "title": "Secret", "body": secret,
 	})

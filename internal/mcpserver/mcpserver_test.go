@@ -23,7 +23,7 @@ func newTestClient(t *testing.T) (*client.Client, *store.Store) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	token, _ := st.AddPerson("robin")
+	token, _ := st.AddPerson("alice")
 	srv := httptest.NewServer(server.New(st))
 	t.Cleanup(srv.Close)
 	return client.New(config.Config{ServerURL: srv.URL, Token: token, Machine: "workstation-a"}), st
@@ -122,7 +122,7 @@ func TestSearchFindsGlobalKnowledgeFromBranchContext(t *testing.T) {
 func TestSearchKeepsOtherProjectsOutByDefault(t *testing.T) {
 	c, st := newTestClient(t)
 	st.InsertKnowledge(store.Knowledge{Type: "pitfall", Title: "raspi preflight hangs",
-		Body: "serial console needed", Scope: scope.Axes{Project: "github.com/x/sampleproject"}})
+		Body: "serial console needed", Scope: scope.Axes{Project: "github.com/x/project"}})
 	s := &Server{client: c, ctxAxes: scope.Axes{Project: "github.com/x/other", Branch: "main", Machine: "workstation-a"}}
 	res, _, err := s.handleSearch(context.Background(), nil, SearchInput{Query: "preflight"})
 	if err != nil {
@@ -138,7 +138,7 @@ func TestSearchKeepsOtherProjectsOutByDefault(t *testing.T) {
 func TestSearchAllProjectsFindsKnowledgeFromAnotherProject(t *testing.T) {
 	c, st := newTestClient(t)
 	st.InsertKnowledge(store.Knowledge{Type: "pitfall", Title: "raspi preflight hangs",
-		Body: "serial console needed", Scope: scope.Axes{Project: "github.com/x/sampleproject"}})
+		Body: "serial console needed", Scope: scope.Axes{Project: "github.com/x/project"}})
 	s := &Server{client: c, ctxAxes: scope.Axes{Project: "github.com/x/other", Branch: "main", Machine: "workstation-a"}}
 	res, _, err := s.handleSearch(context.Background(), nil, SearchInput{Query: "preflight", AllProjects: true})
 	if err != nil {
@@ -154,7 +154,7 @@ func TestSearchAllProjectsFindsKnowledgeFromAnotherProject(t *testing.T) {
 func TestSearchAllProjectsFindsSessionsFromAnotherProject(t *testing.T) {
 	c, st := newTestClient(t)
 	id, err := st.UpsertSession(store.Session{Harness: "claude-code", ExternalID: "s1",
-		Scope: scope.Axes{Project: "github.com/x/sample-project", Branch: "main", Machine: "workstation-a"}})
+		Scope: scope.Axes{Project: "github.com/x/example-project", Branch: "main", Machine: "workstation-a"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +188,7 @@ func TestSessionHitsDropEveryChunkFromTheCurrentSession(t *testing.T) {
 func TestSessionsToolReachesOtherProjectsOnRequest(t *testing.T) {
 	c, st := newTestClient(t)
 	id, err := st.UpsertSession(store.Session{Harness: "claude-code", ExternalID: "s2",
-		Scope: scope.Axes{Project: "github.com/x/sample-project", Branch: "main", Machine: "workstation-a"}})
+		Scope: scope.Axes{Project: "github.com/x/example-project", Branch: "main", Machine: "workstation-a"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,9 +218,9 @@ func TestSessionsToolReachesOtherProjectsOnRequest(t *testing.T) {
 func TestSearchNamedProjectOverridesContext(t *testing.T) {
 	c, st := newTestClient(t)
 	st.InsertKnowledge(store.Knowledge{Type: "pitfall", Title: "raspi preflight hangs",
-		Body: "serial console needed", Scope: scope.Axes{Project: "github.com/x/sampleproject"}})
+		Body: "serial console needed", Scope: scope.Axes{Project: "github.com/x/project"}})
 	s := &Server{client: c, ctxAxes: scope.Axes{Project: "github.com/x/other", Branch: "main", Machine: "workstation-a"}}
-	res, _, err := s.handleSearch(context.Background(), nil, SearchInput{Query: "preflight", Project: "github.com/x/sampleproject"})
+	res, _, err := s.handleSearch(context.Background(), nil, SearchInput{Query: "preflight", Project: "github.com/x/project"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +231,7 @@ func TestSearchNamedProjectOverridesContext(t *testing.T) {
 
 func TestInterruptedSearchHonorsNamedProject(t *testing.T) {
 	c, st := newTestClient(t)
-	project := "github.com/x/sampleproject"
+	project := "github.com/x/project"
 	detail, err := st.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{
 		Type: "bug", Title: "Liegengebliebener Fremdprojekt-Faden", Scope: scope.Axes{Project: project},
 	}})
@@ -242,11 +242,11 @@ func TestInterruptedSearchHonorsNamedProject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	work, _, err := st.StartRequestWork(detail.Request.ID, sessionID, "primary", "robin")
+	work, _, err := st.StartRequestWork(detail.Request.ID, sessionID, "primary", "alice")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.FinishRequestWork(work.ID, "paused", "weiter im Fremdprojekt", "robin"); err != nil {
+	if _, err := st.FinishRequestWork(work.ID, "paused", "weiter im Fremdprojekt", "alice"); err != nil {
 		t.Fatal(err)
 	}
 	s := &Server{client: c, ctxAxes: scope.Axes{Project: "github.com/x/other"}}

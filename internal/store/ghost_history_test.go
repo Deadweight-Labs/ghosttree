@@ -10,7 +10,7 @@ import (
 // vergleichen: die abgeloeste Fassung haette keinen Nachfolger.
 func TestTheChainStartsAtTheCurrentDescription(t *testing.T) {
 	s := openTest(t)
-	g := GhostFile{Project: "p", Path: "a.go", Kind: "file", Person: "robin",
+	g := GhostFile{Project: "p", Path: "a.go", Kind: "file", Person: "alice",
 		Description: "die erste Fassung", ContentSHA: "sha1", LineCount: 10}
 	if _, err := s.PutGhostFile(g); err != nil {
 		t.Fatal(err)
@@ -74,7 +74,7 @@ func TestAnUndescribedPathHasAnEmptyChain(t *testing.T) {
 // die versehentlich ueberschrieben wurde, unwiederbringlich.
 func TestReplacingADescriptionKeepsTheOldOne(t *testing.T) {
 	s := openTest(t)
-	first := GhostFile{Project: "p", Path: "a.go", Kind: "file", Person: "robin",
+	first := GhostFile{Project: "p", Path: "a.go", Kind: "file", Person: "alice",
 		Description: "die erste Fassung", ContentSHA: "sha1", GitBlob: "blob1", LineCount: 10}
 	if _, err := s.PutGhostFile(first); err != nil {
 		t.Fatal(err)
@@ -109,7 +109,7 @@ func TestReplacingADescriptionKeepsTheOldOne(t *testing.T) {
 	if hist[0].ContentSHA != "sha1" || hist[0].GitBlob != "blob1" || hist[0].LineCount != 10 {
 		t.Fatalf("der beschriebene Codestand fehlt: %+v", hist[0])
 	}
-	if hist[0].Person != "robin" || hist[0].DescribedAt == "" || hist[0].ReplacedAt == "" {
+	if hist[0].Person != "alice" || hist[0].DescribedAt == "" || hist[0].ReplacedAt == "" {
 		t.Fatalf("Herkunft und Zeitraum fehlen: %+v", hist[0])
 	}
 	if hist[0].Reason != "ersetzt" {

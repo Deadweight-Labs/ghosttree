@@ -47,29 +47,29 @@ func TestInstructionActivationPersistsAndFiltersContext(t *testing.T) {
 
 func TestKnowledgeKeepsAndReadsThePersonWhoVerifiedIt(t *testing.T) {
 	s := openTest(t)
-	id, err := s.InsertKnowledge(Knowledge{Type: "note", Title: "two people", Body: "b", Person: "robin"})
+	id, err := s.InsertKnowledge(Knowledge{Type: "note", Title: "two people", Body: "b", Person: "alice"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.UpdateKnowledge(id, map[string]string{"confidence": "verified", "confirmed_by": "philipp"}); err != nil {
+	if err := s.UpdateKnowledge(id, map[string]string{"confidence": "verified", "confirmed_by": "bob"}); err != nil {
 		t.Fatal(err)
 	}
 	got, err := s.KnowledgeByID(id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Person != "robin" || got.ConfirmedBy != "philipp" {
-		t.Fatalf("provenance = person %q, confirmed_by %q, want robin/philipp", got.Person, got.ConfirmedBy)
+	if got.Person != "alice" || got.ConfirmedBy != "bob" {
+		t.Fatalf("provenance = person %q, confirmed_by %q, want alice/bob", got.Person, got.ConfirmedBy)
 	}
 }
 
 func TestKnowledgeUpdateKeepsOriginalAuthorAndRecordsLastEditor(t *testing.T) {
 	s := openTest(t)
-	id, err := s.InsertKnowledge(Knowledge{Type: "note", Title: "original", Body: "b", Person: "robin"})
+	id, err := s.InsertKnowledge(Knowledge{Type: "note", Title: "original", Body: "b", Person: "alice"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.UpdateKnowledgeBy(id, map[string]string{"title": "corrected"}, "philipp"); err != nil {
+	if err := s.UpdateKnowledgeBy(id, map[string]string{"title": "corrected"}, "bob"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -77,7 +77,7 @@ func TestKnowledgeUpdateKeepsOriginalAuthorAndRecordsLastEditor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if current.Person != "robin" || current.LastModifiedBy != "philipp" || current.Title != "corrected" {
+	if current.Person != "alice" || current.LastModifiedBy != "bob" || current.Title != "corrected" {
 		t.Fatalf("current provenance = author %q, last editor %q, title %q", current.Person, current.LastModifiedBy, current.Title)
 	}
 
@@ -85,8 +85,8 @@ func TestKnowledgeUpdateKeepsOriginalAuthorAndRecordsLastEditor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(history) != 1 || history[0].Title != "original" || history[0].Person != "robin" || history[0].ChangedBy != "philipp" {
-		t.Fatalf("history = %+v, want original authored by robin and replaced by philipp", history)
+	if len(history) != 1 || history[0].Title != "original" || history[0].Person != "alice" || history[0].ChangedBy != "bob" {
+		t.Fatalf("history = %+v, want original authored by alice and replaced by bob", history)
 	}
 }
 
@@ -96,7 +96,7 @@ func TestOpeningExistingKnowledgeDatabaseAddsHistoryProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	id, err := first.InsertKnowledge(Knowledge{Type: "note", Title: "before restart", Body: "b", Person: "robin"})
+	id, err := first.InsertKnowledge(Knowledge{Type: "note", Title: "before restart", Body: "b", Person: "alice"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func TestOpeningExistingKnowledgeDatabaseAddsHistoryProvenance(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { second.Close() })
-	if err := second.UpdateKnowledgeBy(id, map[string]string{"body": "after restart"}, "philipp"); err != nil {
+	if err := second.UpdateKnowledgeBy(id, map[string]string{"body": "after restart"}, "bob"); err != nil {
 		t.Fatal(err)
 	}
 	history, err := second.KnowledgeHistory(id)
@@ -175,7 +175,7 @@ func TestKnowledgeContextUnion(t *testing.T) {
 	mk("project-only", scope.Axes{Project: "github.com/x/y"})
 	mk("proj-branch", scope.Axes{Project: "github.com/x/y", Branch: "feat"})
 	mk("proj-machine", scope.Axes{Project: "github.com/x/y", Machine: "workstation-a"})
-	mk("other-machine", scope.Axes{Machine: "workstation-b"})
+	mk("other-machine", scope.Axes{Machine: "server-a"})
 	mk("other-branch", scope.Axes{Project: "github.com/x/y", Branch: "main"})
 
 	got, err := s.KnowledgeForContext(scope.Axes{Project: "github.com/x/y", Branch: "feat", Machine: "workstation-a"})
@@ -289,15 +289,15 @@ func TestInsertRejectsUnknownConfidence(t *testing.T) {
 
 func TestSearchKnowledge(t *testing.T) {
 	s := openTest(t)
-	s.InsertKnowledge(Knowledge{Type: "pitfall", Title: "ufw drops LAN", Body: "ssh only via private network", Scope: scope.Axes{Machine: "workstation-b"}})
+	s.InsertKnowledge(Knowledge{Type: "pitfall", Title: "ufw drops LAN", Body: "ssh only via private network", Scope: scope.Axes{Machine: "server-a"}})
 	s.InsertKnowledge(Knowledge{Type: "note", Title: "unrelated", Body: "nothing"})
 	got, err := s.SearchKnowledge("private network", scope.Axes{}, 10)
-	if err != nil || len(got) != 1 || got[0].Scope.Machine != "workstation-b" {
+	if err != nil || len(got) != 1 || got[0].Scope.Machine != "server-a" {
 		t.Fatalf("got %v err %v", got, err)
 	}
 	got, _ = s.SearchKnowledge("private network", scope.Axes{Machine: "workstation-a"}, 10)
 	if len(got) != 0 {
-		t.Errorf("machine filter must exclude workstation-b entry")
+		t.Errorf("machine filter must exclude server-a entry")
 	}
 }
 
@@ -499,12 +499,12 @@ func titles(ks []Knowledge) []string {
 // fremden Namen und liest sich als dessen Aussage — genau der Befund, aus dem
 // REQ-181 entstand, nur im aktuellen Stand statt im Verlauf.
 func TestProvenanceNamesTheEditorNotOnlyTheAuthor(t *testing.T) {
-	fremd := KnowledgeProvenance(Knowledge{Person: "robin", LastModifiedBy: "philipp"})
-	if !strings.Contains(fremd, "by robin") || !strings.Contains(fremd, "last edited by philipp") {
+	fremd := KnowledgeProvenance(Knowledge{Person: "alice", LastModifiedBy: "bob"})
+	if !strings.Contains(fremd, "by alice") || !strings.Contains(fremd, "last edited by bob") {
 		t.Errorf("provenance = %q, want both names", fremd)
 	}
 	// Wer seinen eigenen Eintrag nachbessert, erzeugt keine zweite Zeile.
-	eigen := KnowledgeProvenance(Knowledge{Person: "robin", LastModifiedBy: "robin"})
+	eigen := KnowledgeProvenance(Knowledge{Person: "alice", LastModifiedBy: "alice"})
 	if strings.Contains(eigen, "last edited") {
 		t.Errorf("provenance = %q, want no editor line when author and editor are the same", eigen)
 	}

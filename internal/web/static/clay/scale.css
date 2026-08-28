@@ -11,7 +11,7 @@
 
 :root {
   /* --- Schicht 1: die Grundwerte ---------------------------------------- */
-  --clay-text-base: 0.9375rem;   /* 15px — zwischen SampleProject 13–14 und DWL 16,5 */
+  --clay-text-base: 0.9375rem;   /* 15px between compact and spacious variants */
   --clay-ratio: 1.2;             /* modulares Verhaeltnis der Typo-Stufen */
   --clay-unit: 0.25rem;          /* 4px Raster */
   --clay-density-base: 1;

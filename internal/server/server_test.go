@@ -140,14 +140,14 @@ func TestPendingListsUnapprovedWithEvidence(t *testing.T) {
 func TestApprovingKnowledgeRecordsTheAuthenticatedConfirmer(t *testing.T) {
 	st, _ := store.Open(":memory:")
 	t.Cleanup(func() { st.Close() })
-	philipp, _ := st.AddPerson("philipp")
-	id, err := st.InsertKnowledge(store.Knowledge{Type: "note", Title: "claim", Body: "b", Person: "robin", Confidence: "staged"})
+	bob, _ := st.AddPerson("bob")
+	id, err := st.InsertKnowledge(store.Knowledge{Type: "note", Title: "claim", Body: "b", Person: "alice", Confidence: "staged"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	srv := httptest.NewServer(New(st))
 	t.Cleanup(srv.Close)
-	resp := req(t, "PATCH", srv.URL+"/api/knowledge/"+fmt.Sprint(id), philipp, map[string]string{"confidence": "verified", "confirmed_by": "robin"})
+	resp := req(t, "PATCH", srv.URL+"/api/knowledge/"+fmt.Sprint(id), bob, map[string]string{"confidence": "verified", "confirmed_by": "alice"})
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("status = %d, want 204", resp.StatusCode)
 	}
@@ -155,41 +155,41 @@ func TestApprovingKnowledgeRecordsTheAuthenticatedConfirmer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.ConfirmedBy != "philipp" {
-		t.Fatalf("confirmed_by = %q, want authenticated person philipp", got.ConfirmedBy)
+	if got.ConfirmedBy != "bob" {
+		t.Fatalf("confirmed_by = %q, want authenticated person bob", got.ConfirmedBy)
 	}
 }
 
 func TestTwoPeopleKnowledgePatchShowsBothAuthorAndLastEditor(t *testing.T) {
 	st, _ := store.Open(":memory:")
 	t.Cleanup(func() { st.Close() })
-	robin, _ := st.AddPerson("robin")
-	philipp, _ := st.AddPerson("philipp")
+	alice, _ := st.AddPerson("alice")
+	bob, _ := st.AddPerson("bob")
 	srv := httptest.NewServer(New(st))
 	t.Cleanup(srv.Close)
 
-	created := req(t, "POST", srv.URL+"/api/knowledge", robin, map[string]string{
-		"type": "note", "title": "Alice schreibt", "body": "b",
+	created := req(t, "POST", srv.URL+"/api/knowledge", alice, map[string]string{
+		"type": "note", "title": "Alice writes", "body": "b",
 	})
 	var entry store.Knowledge
 	if err := json.NewDecoder(created.Body).Decode(&entry); err != nil {
 		t.Fatal(err)
 	}
-	if resp := req(t, "PATCH", srv.URL+"/api/knowledge/"+fmt.Sprint(entry.ID), philipp,
-		map[string]string{"title": "Bob korrigiert"}); resp.StatusCode != http.StatusNoContent {
+	if resp := req(t, "PATCH", srv.URL+"/api/knowledge/"+fmt.Sprint(entry.ID), bob,
+		map[string]string{"title": "Bob edits"}); resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("patch status = %d, want 204", resp.StatusCode)
 	}
-	resp := req(t, "GET", srv.URL+"/api/knowledge/"+fmt.Sprint(entry.ID), philipp, nil)
+	resp := req(t, "GET", srv.URL+"/api/knowledge/"+fmt.Sprint(entry.ID), bob, nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("get status = %d, want 200", resp.StatusCode)
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&entry); err != nil {
 		t.Fatal(err)
 	}
-	if entry.Person != "robin" || entry.LastModifiedBy != "philipp" {
-		t.Fatalf("provenance = author %q, last editor %q, want robin/philipp", entry.Person, entry.LastModifiedBy)
+	if entry.Person != "alice" || entry.LastModifiedBy != "bob" {
+		t.Fatalf("provenance = author %q, last editor %q, want alice/bob", entry.Person, entry.LastModifiedBy)
 	}
-	history := req(t, "GET", srv.URL+"/api/knowledge/"+fmt.Sprint(entry.ID)+"/history", philipp, nil)
+	history := req(t, "GET", srv.URL+"/api/knowledge/"+fmt.Sprint(entry.ID)+"/history", bob, nil)
 	if history.StatusCode != http.StatusOK {
 		t.Fatalf("history status = %d, want 200", history.StatusCode)
 	}
@@ -197,19 +197,19 @@ func TestTwoPeopleKnowledgePatchShowsBothAuthorAndLastEditor(t *testing.T) {
 	if err := json.NewDecoder(history.Body).Decode(&versions); err != nil {
 		t.Fatal(err)
 	}
-	if len(versions) != 1 || versions[0].Title != "Alice schreibt" || versions[0].ChangedBy != "philipp" {
-		t.Fatalf("history = %+v, want Alice's version replaced by philipp", versions)
+	if len(versions) != 1 || versions[0].Title != "Alice writes" || versions[0].ChangedBy != "bob" {
+		t.Fatalf("history = %+v, want Alice's version replaced by Bob", versions)
 	}
 }
 
 func TestBootstrapNamesAuthorAndConfirmerWhenTheyChangeTheMeaning(t *testing.T) {
 	out := RenderBootstrap([]store.Knowledge{
-		{Type: "pitfall", Title: "human", Body: "b", Origin: "human", Person: "robin", Confidence: "trusted", Status: "active"},
-		{Type: "pitfall", Title: "agent", Body: "b", Origin: "agent", Person: "philipp", Confidence: "trusted", Status: "active"},
+		{Type: "pitfall", Title: "human", Body: "b", Origin: "human", Person: "alice", Confidence: "trusted", Status: "active"},
+		{Type: "pitfall", Title: "agent", Body: "b", Origin: "agent", Person: "bob", Confidence: "trusted", Status: "active"},
 		{Type: "pitfall", Title: "distilled", Body: "b", Origin: "distilled", Confidence: "trusted", Status: "active"},
-		{Type: "pitfall", Title: "verified", Body: "b", Origin: "agent", Person: "robin", ConfirmedBy: "philipp", Confidence: "verified", Status: "active"},
+		{Type: "pitfall", Title: "verified", Body: "b", Origin: "agent", Person: "alice", ConfirmedBy: "bob", Confidence: "verified", Status: "active"},
 	}, 12000)
-	for _, want := range []string{"by robin", "by philipp", "confirmed by philipp"} {
+	for _, want := range []string{"by alice", "by bob", "confirmed by bob"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("bootstrap lacks %q:\n%s", want, out)
 		}

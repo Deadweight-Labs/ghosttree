@@ -12,7 +12,7 @@ func makeRequest(t *testing.T, s *Store, title, description string) int64 {
 	t.Helper()
 	detail, err := s.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{
 		Type: "bug", Title: title, Description: description, Priority: "mittel",
-		Scope: scope.Axes{Project: "github.com/x/y"}, Person: "robin",
+		Scope: scope.Axes{Project: "github.com/x/y"}, Person: "alice",
 	}, Criteria: []string{"erstes Kriterium"}})
 	if err != nil {
 		t.Fatal(err)
@@ -27,7 +27,7 @@ func TestADescriptionCanBeCorrected(t *testing.T) {
 	err := s.UpdateRequest(id, map[string]string{
 		"title":       "Richtiger Titel",
 		"description": "Die Begründung ist gestrichen, weil die Messung wertlos war.",
-	}, "robin", "Messung lag vor der Einführung des Werkzeugs")
+	}, "alice", "Messung lag vor der Einführung des Werkzeugs")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestACorrectionPullsTheSearchProjectionWithIt(t *testing.T) {
 
 	if err := s.UpdateRequest(id, map[string]string{
 		"description": "Ersetzt durch eine belegte Fassung: Nachweis.",
-	}, "robin", "Beleg nachgereicht"); err != nil {
+	}, "alice", "Beleg nachgereicht"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -78,10 +78,10 @@ func TestACorrectionIsVisibleAndCannotBeSilent(t *testing.T) {
 	s := openTest(t)
 	id := makeRequest(t, s, "Titel", "Beschreibung")
 
-	if err := s.UpdateRequest(id, map[string]string{"description": "Neue Beschreibung"}, "robin", ""); err == nil {
+	if err := s.UpdateRequest(id, map[string]string{"description": "Neue Beschreibung"}, "alice", ""); err == nil {
 		t.Error("a correction without a reason was accepted")
 	}
-	if err := s.UpdateRequest(id, map[string]string{"description": "Neue Beschreibung"}, "robin", "die alte war falsch"); err != nil {
+	if err := s.UpdateRequest(id, map[string]string{"description": "Neue Beschreibung"}, "alice", "die alte war falsch"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -109,10 +109,10 @@ func TestOnlyTheTextFieldsAreCorrectable(t *testing.T) {
 	s := openTest(t)
 	id := makeRequest(t, s, "Titel", "Beschreibung")
 
-	if err := s.UpdateRequest(id, map[string]string{"state": "done"}, "robin", "Abkürzung"); err == nil {
+	if err := s.UpdateRequest(id, map[string]string{"state": "done"}, "alice", "Abkürzung"); err == nil {
 		t.Error("state was changed through the correction path, bypassing the evidence rule")
 	}
-	if err := s.UpdateRequest(id, map[string]string{"type": "erfindung"}, "robin", "warum auch immer"); err == nil {
+	if err := s.UpdateRequest(id, map[string]string{"type": "erfindung"}, "alice", "warum auch immer"); err == nil {
 		t.Error("an invalid type was accepted")
 	}
 }
@@ -123,14 +123,14 @@ func TestAFinishedRequestCanStillBeCorrected(t *testing.T) {
 	s := openTest(t)
 	id := makeRequest(t, s, "Titel", "Beschreibung")
 	detail, _ := s.RequestByID(id)
-	if err := s.SetCriterionState(detail.Criteria[0].ID, "waived", requestdomain.Evidence{Kind: "decision", Ref: "nicht nötig", Person: "robin"}); err != nil {
+	if err := s.SetCriterionState(detail.Criteria[0].ID, "waived", requestdomain.Evidence{Kind: "decision", Ref: "nicht nötig", Person: "alice"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CompleteRequest(id, requestdomain.Evidence{Kind: "commit", Ref: "abc123", Person: "robin"}); err != nil {
+	if err := s.CompleteRequest(id, requestdomain.Evidence{Kind: "commit", Ref: "abc123", Person: "alice"}); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := s.UpdateRequest(id, map[string]string{"description": "Korrigiert nach Abschluss"}, "robin", "Zahl war falsch"); err != nil {
+	if err := s.UpdateRequest(id, map[string]string{"description": "Korrigiert nach Abschluss"}, "alice", "Zahl war falsch"); err != nil {
 		t.Fatalf("a finished request refused a correction: %v", err)
 	}
 }
@@ -141,11 +141,11 @@ func TestAWrongRelationCanBeUndone(t *testing.T) {
 	b := makeRequest(t, s, "REQ B", "b")
 
 	// The direction is the whole point: this says A blocks B.
-	relation, err := s.AddRequestRelation(a, requestdomain.Relation{Kind: "blocks", OtherRequestID: b}, "robin")
+	relation, err := s.AddRequestRelation(a, requestdomain.Relation{Kind: "blocks", OtherRequestID: b}, "alice")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RemoveRequestRelation(relation.ID, "robin", "Richtung war verdreht"); err != nil {
+	if err := s.RemoveRequestRelation(relation.ID, "alice", "Richtung war verdreht"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -173,14 +173,14 @@ func TestAWrongRelationCanBeUndone(t *testing.T) {
 		}
 	}
 	// Setting it the right way round afterwards must work.
-	if _, err := s.AddRequestRelation(b, requestdomain.Relation{Kind: "blocks", OtherRequestID: a}, "robin"); err != nil {
+	if _, err := s.AddRequestRelation(b, requestdomain.Relation{Kind: "blocks", OtherRequestID: a}, "alice"); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestRemovingAnUnknownRelationSaysSo(t *testing.T) {
 	s := openTest(t)
-	if err := s.RemoveRequestRelation(4711, "robin", "Tippfehler"); err == nil {
+	if err := s.RemoveRequestRelation(4711, "alice", "Tippfehler"); err == nil {
 		t.Error("removing a relation that does not exist reported success")
 	}
 }

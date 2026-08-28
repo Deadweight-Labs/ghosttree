@@ -20,8 +20,8 @@ func kette() []store.GhostVersion {
 	neu := "Die Identitaet ist das Paar aus Projekt und Pfad. Ein zweites Beschreiben ersetzt das erste — die verdraengte Fassung wandert in die Historie. Ausgeliefert wird nur die aktuelle." + gemeinsam
 	alt := "Die Identitaet ist das Paar aus Projekt und Pfad. Ein zweites Beschreiben ersetzt das erste — es gibt bewusst keine Fassungshistorie. Ausgeliefert wird nur die aktuelle." + gemeinsam
 	return []store.GhostVersion{
-		{Path: "a.go", Description: neu, Person: "robin", DescribedAt: "2026-08-25T09:00:00Z"},
-		{Path: "a.go", Description: alt, Person: "robin", DescribedAt: "2026-08-24T09:00:00Z",
+		{Path: "a.go", Description: neu, Person: "alice", DescribedAt: "2026-08-25T09:00:00Z"},
+		{Path: "a.go", Description: alt, Person: "alice", DescribedAt: "2026-08-24T09:00:00Z",
 			ReplacedAt: "2026-08-25T09:00:00Z", Reason: "ersetzt"},
 	}
 }

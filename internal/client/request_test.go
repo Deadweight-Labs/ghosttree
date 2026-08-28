@@ -14,7 +14,7 @@ import (
 func TestRequestClientRoundtripAndStructuredError(t *testing.T) {
 	st, _ := store.Open(":memory:")
 	t.Cleanup(func() { st.Close() })
-	token, _ := st.AddPerson("robin")
+	token, _ := st.AddPerson("alice")
 	srv := httptest.NewServer(server.New(st))
 	t.Cleanup(srv.Close)
 	c := New(config.Config{ServerURL: srv.URL, Token: token})

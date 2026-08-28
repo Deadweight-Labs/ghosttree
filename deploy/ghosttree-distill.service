@@ -15,21 +15,7 @@ StateDirectory=ghosttree
 # directory; the distiller reads it from $CREDENTIALS_DIRECTORY.
 LoadCredential=llm-key:/etc/ghosttree/llm-key
 Environment=GHOSTTREE_LLM_CONFIG=/etc/ghosttree/llm.json
-# One invocation does both halves of the asynchronous path. Collect runs first
-# so a finished batch releases its sessions before the next one is filled, and
-# so a session the model failed on rejoins the very next submission.
-#
-# --limit caps one submission, not the day: the timer runs hourly and sessions
-# already in flight are held back, so the backlog drains at up to 50 sessions
-# an hour without ever paying for the same transcript twice.
-#
-# The project restriction that held this to one measured repository is gone.
-# Prompt v2 was compared against v1 on the same 100 sessions: failures fell from
-# 27 to 5, the sample judged useful went from 1-in-5 to 4-in-5, and the two
-# categories that made v1 output actively misleading — instruction items lifted
-# out of prompt text the session was drafting, and one summary message shredded
-# into seven near-identical findings — are gone entirely. Roughly 1400 sessions
-# carry a project; at the measured $0.00056 each, draining the archive costs
-# well under a dollar.
+# Collect completed batches before submitting more work. The limit applies to
+# one submission; tune it after measuring your provider's cost and results.
 ExecStart=/usr/local/bin/ctx distill-sessions --db /var/lib/ghosttree/ghosttree.db \
     --idle 1h --limit 100 --collect --submit

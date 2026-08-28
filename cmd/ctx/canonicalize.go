@@ -20,7 +20,7 @@ Writes a verified backup first. Run it once, with the server stopped.
 --aliases takes a JSON object mapping an old canonical project to its current
 one, for repositories that changed owner:
 
-  {"github.com/deadweight-labs/sampleproject": "github.com/example/sampleproject"}`
+  {"github.com/old-owner/project": "github.com/new-owner/project"}`
 
 func cmdCanonicalizeScopes(args []string, stdout io.Writer) int {
 	fs := flag.NewFlagSet("canonicalize-scopes", flag.ContinueOnError)

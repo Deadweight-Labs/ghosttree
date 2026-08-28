@@ -330,7 +330,7 @@ func configChecks() []installer.Check {
 		return append(checks, installer.Check{
 			Name:   "server reachable",
 			Detail: fmt.Sprintf("%s: %v", cfg.ServerURL, err),
-			Fix:    "check the server is running and the private network is up",
+			Fix:    "check the server URL, network path, and running service",
 		})
 	}
 	return append(checks, installer.Check{Name: "server reachable", OK: true, Detail: cfg.ServerURL})

@@ -1,5 +1,5 @@
 // Package server exposes the ghosttree store over a small REST API.
-// The perimeter is the private network; bearer tokens only carry provenance.
+// Deployments provide the network perimeter; bearer tokens carry provenance.
 package server
 
 import (

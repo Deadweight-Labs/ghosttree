@@ -16,7 +16,7 @@ import (
 func TestClientRoundtrip(t *testing.T) {
 	st, _ := store.Open(":memory:")
 	t.Cleanup(func() { st.Close() })
-	token, _ := st.AddPerson("robin")
+	token, _ := st.AddPerson("alice")
 	srv := httptest.NewServer(server.New(st))
 	t.Cleanup(srv.Close)
 
@@ -45,7 +45,7 @@ func TestClientRoundtrip(t *testing.T) {
 func TestDocumentClientRoundTrip(t *testing.T) {
 	st, _ := store.Open(":memory:")
 	t.Cleanup(func() { st.Close() })
-	token, _ := st.AddPerson("robin")
+	token, _ := st.AddPerson("alice")
 	srv := httptest.NewServer(server.New(st))
 	t.Cleanup(srv.Close)
 	c := New(config.Config{ServerURL: srv.URL, Token: token})
@@ -85,7 +85,7 @@ func TestDocumentClientRoundTrip(t *testing.T) {
 func TestDocumentClientDecodesRevisionConflict(t *testing.T) {
 	st, _ := store.Open(":memory:")
 	t.Cleanup(func() { st.Close() })
-	token, _ := st.AddPerson("robin")
+	token, _ := st.AddPerson("alice")
 	srv := httptest.NewServer(server.New(st))
 	t.Cleanup(srv.Close)
 	c := New(config.Config{ServerURL: srv.URL, Token: token})
@@ -104,7 +104,7 @@ func TestDocumentClientDecodesRevisionConflict(t *testing.T) {
 	if !errors.As(err, &conflict) {
 		t.Fatalf("error = %T %v, want *ConflictError", err, err)
 	}
-	if conflict.HeadRevision != 2 || conflict.Person != "robin" || conflict.Message != "winner" || conflict.At == "" {
+	if conflict.HeadRevision != 2 || conflict.Person != "alice" || conflict.Message != "winner" || conflict.At == "" {
 		t.Fatalf("conflict = %+v", conflict)
 	}
 }
@@ -112,7 +112,7 @@ func TestDocumentClientDecodesRevisionConflict(t *testing.T) {
 func TestClientRawSession(t *testing.T) {
 	st, _ := store.Open(":memory:")
 	t.Cleanup(func() { st.Close() })
-	token, _ := st.AddPerson("robin")
+	token, _ := st.AddPerson("alice")
 	srv := httptest.NewServer(server.New(st))
 	t.Cleanup(srv.Close)
 
@@ -139,7 +139,7 @@ func TestClientRawSession(t *testing.T) {
 func TestClientSessionsAndSearch(t *testing.T) {
 	st, _ := store.Open(":memory:")
 	t.Cleanup(func() { st.Close() })
-	token, _ := st.AddPerson("robin")
+	token, _ := st.AddPerson("alice")
 	srv := httptest.NewServer(server.New(st))
 	t.Cleanup(srv.Close)
 	c := New(config.Config{ServerURL: srv.URL, Token: token, Machine: "workstation-a"})
@@ -180,7 +180,7 @@ func TestClientSessionsAndSearch(t *testing.T) {
 func TestClientGhostChainCarriesTheCurrentVersion(t *testing.T) {
 	st, _ := store.Open(":memory:")
 	t.Cleanup(func() { st.Close() })
-	token, _ := st.AddPerson("robin")
+	token, _ := st.AddPerson("alice")
 	srv := httptest.NewServer(server.New(st))
 	t.Cleanup(srv.Close)
 

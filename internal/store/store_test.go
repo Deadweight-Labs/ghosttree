@@ -14,7 +14,7 @@ func openTest(t *testing.T) *Store {
 
 func TestPersonRoundtrip(t *testing.T) {
 	s := openTest(t)
-	tok, err := s.AddPerson("robin")
+	tok, err := s.AddPerson("alice")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -22,13 +22,13 @@ func TestPersonRoundtrip(t *testing.T) {
 		t.Errorf("token length = %d, want 64 hex chars", len(tok))
 	}
 	name, ok := s.Authenticate(tok)
-	if !ok || name != "robin" {
+	if !ok || name != "alice" {
 		t.Errorf("Authenticate = %q, %v", name, ok)
 	}
 	if _, ok := s.Authenticate("deadbeef"); ok {
 		t.Error("bogus token must not authenticate")
 	}
-	if _, err := s.AddPerson("robin"); err == nil {
+	if _, err := s.AddPerson("alice"); err == nil {
 		t.Error("duplicate person must error")
 	}
 }

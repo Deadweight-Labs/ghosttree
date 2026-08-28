@@ -71,15 +71,15 @@ func TestInstallCodexWiresItsHooks(t *testing.T) {
 	}
 }
 
-// Another tool keeps its lease hooks in this very file. Replacing the list would
-// silently disarm them.
+// Other tools may keep lifecycle hooks in this file. Replacing the list would
+// silently disable them.
 func TestInstallCodexKeepsForeignHooks(t *testing.T) {
 	home := t.TempDir()
 	path := filepath.Join(home, ".codex", "hooks.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	existing := `{"description":"Global lifecycle hooks.","hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"bash /home/user/Projects/session-lease/hooks/nw-codex-lease.sh","timeout":5}]}]}}`
+	existing := `{"description":"Global lifecycle hooks.","hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"bash /opt/example/hooks/session-lease.sh","timeout":5}]}]}}`
 	if err := os.WriteFile(path, []byte(existing), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +93,7 @@ func TestInstallCodexKeepsForeignHooks(t *testing.T) {
 	}
 	var foundForeign, foundOurs bool
 	for _, cmd := range got {
-		foundForeign = foundForeign || strings.Contains(cmd, "nw-codex-lease.sh")
+		foundForeign = foundForeign || strings.Contains(cmd, "/opt/example/hooks/session-lease.sh")
 		foundOurs = foundOurs || cmd == hookCommand+" --harness codex"
 	}
 	if !foundForeign || !foundOurs {
@@ -398,7 +398,7 @@ func TestWiringPreToolUseKeepsForeignHooks(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	foreign := `{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"session-lease-lease.sh"}]}]}}`
+	foreign := `{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"foreign-session-lease.sh"}]}]}}`
 	if err := os.WriteFile(path, []byte(foreign), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -409,7 +409,7 @@ func TestWiringPreToolUseKeepsForeignHooks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(b), "session-lease-lease.sh") {
+	if !strings.Contains(string(b), "foreign-session-lease.sh") {
 		t.Fatal("a foreign PreToolUse hook must survive installation")
 	}
 }

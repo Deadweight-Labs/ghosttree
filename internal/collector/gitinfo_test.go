@@ -33,10 +33,10 @@ func TestResolveGitContext(t *testing.T) {
 // repository ended up in the ledger three times under three spellings.
 func TestGitInfoReturnsTheSameProjectForEverySpellingOfTheRemote(t *testing.T) {
 	spellings := []string{
-		"https://github.com/Example/SampleProject.git",
-		"https://github.com/example/sampleproject",
-		"git@github.com:Example/SampleProject.git",
-		"ssh://github.com/example/SampleProject/",
+		"https://github.com/Example/Project.git",
+		"https://github.com/example/project",
+		"git@github.com:Example/Project.git",
+		"ssh://github.com/example/project/",
 	}
 	var seen string
 	for _, remote := range spellings {
@@ -50,7 +50,7 @@ func TestGitInfoReturnsTheSameProjectForEverySpellingOfTheRemote(t *testing.T) {
 			}
 		}
 		project, _ := GitInfo(repo)
-		if project != "github.com/example/sampleproject" {
+		if project != "github.com/example/project" {
 			t.Fatalf("remote %q gave project %q, want the canonical name", remote, project)
 		}
 		if seen != "" && project != seen {
