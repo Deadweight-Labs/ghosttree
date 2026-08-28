@@ -14,20 +14,29 @@ import (
 // Ersatzweg auf ~/.claude/CLAUDE.md nehmen und damit alles, was dort sonst noch
 // steht.
 func InstallOpencode(home string) ([]Change, error) {
+	selected, _ := ResolveComponents("opencode", nil)
+	return installOpencodeSelected(home, selected)
+}
+
+func installOpencodeSelected(home string, selected ComponentSet) ([]Change, error) {
 	h := harnessNamed("opencode")
 	var changes []Change
 
-	c, err := registerOpencodeMCP(filepath.Join(home, ".config", "opencode", "opencode.json"))
-	if err != nil {
-		return changes, err
+	if selected[ComponentMCP] {
+		c, err := registerOpencodeMCP(filepath.Join(home, ".config", "opencode", "opencode.json"))
+		if err != nil {
+			return changes, err
+		}
+		changes = append(changes, c)
 	}
-	changes = append(changes, c)
-
-	c, err = writeMarkerFile(h.RulePath(home), ruleForPath(h, h.RulePath(home)))
-	if err != nil {
-		return changes, err
+	if selected[ComponentRules] {
+		c, err := writeMarkerFile(h.RulePath(home), ruleForPath(h, h.RulePath(home)))
+		if err != nil {
+			return changes, err
+		}
+		changes = append(changes, c)
 	}
-	return append(changes, c), nil
+	return changes, nil
 }
 
 // registerOpencodeMCP trägt den Server unter dem Schlüssel `mcp` ein, in der
@@ -43,14 +52,19 @@ func registerOpencodeMCP(path string) (Change, error) {
 	if servers == nil {
 		servers = map[string]any{}
 	}
-	if _, ok := servers["ghosttree"]; ok {
+	want := opencodeMCPEntry()
+	if jsonValuesEqual(servers["ghosttree"], want) {
 		return Change{Path: path, Action: "unchanged"}, nil
 	}
-	servers["ghosttree"] = map[string]any{
+	servers["ghosttree"] = want
+	cfg["mcp"] = servers
+	return Change{Path: path, Action: "mcp server registered"}, writeJSONFile(path, cfg)
+}
+
+func opencodeMCPEntry() map[string]any {
+	return map[string]any{
 		"type":    "local",
 		"command": []any{"ctx", "mcp"},
 		"enabled": true,
 	}
-	cfg["mcp"] = servers
-	return Change{Path: path, Action: "mcp server registered"}, writeJSONFile(path, cfg)
 }

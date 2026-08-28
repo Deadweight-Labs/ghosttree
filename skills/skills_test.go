@@ -128,3 +128,180 @@ func TestFilesRejectsPathEscapes(t *testing.T) {
 		}
 	}
 }
+
+// Die vierte Regel ist die, die im ersten echten Pilotlauf nicht angekommen
+// ist: 29 Dateien gelesen, 29 beschrieben, kein einziges "nichts zu sagen".
+// Sie stand damals als Fussnote zwischen drei nummerierten Regeln.
+func TestWritingNothingIsAFullRuleNotAFootnote(t *testing.T) {
+	ref := string(mustFiles(t, "ghosttree-onboard-repo")["references/inventory-run.md"])
+	if !strings.Contains(ref, "The run MAY write nothing at all for a file") {
+		t.Error("writing nothing must stand among the numbered rules, not beside them")
+	}
+	if !strings.Contains(ref, "nothing_to_say") {
+		t.Error("the rule needs the tool that carries it out")
+	}
+	// Null Verwerfungen und null Schweigen sind Warnsignale, keine Ergebnisse.
+	if !strings.Contains(ref, "Zero `nothing_to_say`") {
+		t.Error("the halt must read a count of zero as a warning")
+	}
+}
+
+// Die Schwelle nennt jetzt ihren Zweck. Ohne ihn liest sie sich mechanisch, und
+// im Pilotlauf war das mechanisch Richtige nachweislich das Falsche: ein nicht
+// geteiltes Paket aus sechs Backends lieferte Beschreibungen, die aufeinander
+// Bezug nahmen.
+func TestTheUnitOfWorkExplainsItselfBeforeItLimits(t *testing.T) {
+	ref := string(mustFiles(t, "ghosttree-onboard-repo")["references/inventory-run.md"])
+	for _, must := range []string{"so that siblings are read together", "where you start weighing"} {
+		if !strings.Contains(ref, must) {
+			t.Errorf("inventory-run.md lost %q — the threshold is a judgement, not a rule", must)
+		}
+	}
+}
+
+// Eine Kompaktierung behaelt die Anweisung und verliert die Ausnahmen. Die
+// Datei liegt auf der Platte; sie erneut zu lesen kostet einen Werkzeugaufruf.
+func TestTheRunSurvivesACompaction(t *testing.T) {
+	ref := string(mustFiles(t, "ghosttree-onboard-repo")["references/inventory-run.md"])
+	if !strings.Contains(ref, "interrupted or compacted") {
+		t.Error("the run must tell a resumed session to re-read its own rules")
+	}
+}
+
+// Ohne origin gibt es keine Projektachse — und der Abbruch kam bisher erst
+// mitten in Phase 1 aus ctx migrate.
+func TestPreconditionsAreCheckedBeforePhaseOne(t *testing.T) {
+	md := string(mustFiles(t, "ghosttree-onboard-repo")["SKILL.md"])
+	for _, must := range []string{"git remote get-url origin", "collector"} {
+		if !strings.Contains(md, must) {
+			t.Errorf("SKILL.md must check %q up front", must)
+		}
+	}
+}
+
+// "Weiss niemand" ist ein Fakt ueber den Zustand und gehoert in den Baum. Eine
+// Liste offener Fragen in einer Chatnachricht ist morgen weg.
+func TestUnansweredQuestionsGetAHome(t *testing.T) {
+	ref := string(mustFiles(t, "ghosttree-onboard-repo")["references/acceptance.md"])
+	if !strings.Contains(ref, "cannot answer either") || !strings.Contains(ref, "`note`") {
+		t.Error("acceptance.md must say WHERE unanswered questions go, not just that they are kept")
+	}
+	// Was man selbst lesen kann, fragt man nicht.
+	if !strings.Contains(ref, "Does the code do X?") {
+		t.Error("acceptance.md must separate what the reader can answer from what only the operator can")
+	}
+}
+
+// Ein kaltes Repo hat kein Gedaechtnis, das man stuetzen koennte.
+func TestTheInterviewAsksHowColdTheRepositoryIs(t *testing.T) {
+	ref := string(mustFiles(t, "ghosttree-onboard-repo")["references/interview.md"])
+	for _, must := range []string{"git log -1 --format=%cr", "PRIMARY", "already answered"} {
+		if !strings.Contains(ref, must) {
+			t.Errorf("interview.md lost %q", must)
+		}
+	}
+}
+
+func mustFiles(t *testing.T, name string) map[string][]byte {
+	t.Helper()
+	f, err := Files(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+// Die drei Verbote muessen in SKILL.md selbst stehen, nicht nur in den
+// Referenzdateien. Am 2026-08-26 uebernahm ein Lauf nach einer Kompaktierung
+// alle 18 offenen Issues in den Ledger — das Verbot stand in migration.md, die
+// er in dieser Phase nicht mehr gelesen hatte. Ein Verbot ist genau das, was
+// eine Zusammenfassung zuerst verliert.
+func TestTheThreeProhibitionsAreInTheFileEverySessionReads(t *testing.T) {
+	md := string(mustFiles(t, "ghosttree-onboard-repo")["SKILL.md"])
+	for _, must := range []string{
+		"Never import an issue tracker wholesale",
+		"Never invent Context",
+		"Never delete without a separate consent",
+	} {
+		if !strings.Contains(md, must) {
+			t.Errorf("SKILL.md lost the prohibition %q", must)
+		}
+	}
+	// Ueberstimmen ist erlaubt, stilles Ueberstimmen nicht.
+	if !strings.Contains(md, "SAY SO first") {
+		t.Error("an override must be spoken, otherwise nobody can tell it from a mistake")
+	}
+	if !strings.Contains(md, "After an interruption or a compaction") {
+		t.Error("SKILL.md must tell a resumed session to re-read its phase reference")
+	}
+}
+
+// Ein Gate, das der Betreiber nicht ueberstimmen kann, waere falsch gebaut —
+// eines, das unbemerkt faellt, auch.
+func TestTheGateCanBeOverruledButNotSilently(t *testing.T) {
+	ref := string(mustFiles(t, "ghosttree-onboard-repo")["references/inventory-run.md"])
+	for _, must := range []string{"can overrule this", "WITH THE MEASURED NUMBERS", "belongs to ANOTHER project"} {
+		if !strings.Contains(ref, must) {
+			t.Errorf("inventory-run.md lost %q", must)
+		}
+	}
+}
+
+// "Komplett autonom durchlaufen" entfernt den Halt — und der Halt war die
+// einzige Stelle, an der die Verwerfungsquoten ueberhaupt angesehen wurden.
+// Autonomie nimmt das Gespraech weg, nicht die Pruefung.
+func TestAutonomousRunsStillCheckAndReportTheNumbers(t *testing.T) {
+	ref := string(mustFiles(t, "ghosttree-onboard-repo")["references/inventory-run.md"])
+	if !strings.Contains(ref, "told you to run autonomously") {
+		t.Fatal("the run has no story for autonomous operation")
+	}
+	for _, must := range []string{
+		"Autonomy removes the\nCONVERSATION, not the CHECK",
+		"compute the three numbers anyway",
+		"report all of it at the end",
+	} {
+		if !strings.Contains(ref, must) {
+			t.Errorf("the autonomous path lost %q", must)
+		}
+	}
+}
+
+// Am 2026-08-26 lieferte ein Leser vier Context-Zeilen mit einer echten
+// Eintragsnummer fuer Fakten, die dort nicht stehen. Eine Anwesenheitspruefung
+// haette alle vier durchgelassen — und zitierte Erfindung ist glaubwuerdiger
+// als eine ehrliche Beschreibung ohne Context.
+func TestTheCriticVerifiesTheCitationNotItsPresence(t *testing.T) {
+	ref := string(mustFiles(t, "ghosttree-onboard-repo")["references/inventory-run.md"])
+	if !strings.Contains(ref, "Does the source actually say this?") {
+		t.Fatal("the critic must open the entry, not count the number")
+	}
+	if !strings.Contains(ref, "cheap to catch") {
+		t.Error("the reason the citation rule works belongs next to the check it enables")
+	}
+}
+
+// Die Anweisung "nach einer Unterbrechung erneut lesen" stand zuerst nur in
+// der Datei, die man dafuer erneut lesen muesste — eine Sitzung, die sie
+// verloren hat, erfaehrt nie, dass es sie gibt. Was ueberlebt, ist der
+// Request: unterbrochene Arbeit wird bei Sitzungsbeginn ungefragt geliefert.
+func TestTheResumeHintLivesWhereItComesBackOnItsOwn(t *testing.T) {
+	md := string(mustFiles(t, "ghosttree-onboard-repo")["SKILL.md"])
+	if !strings.Contains(md, "Put a resume line in its description") {
+		t.Fatal("the resume hint must be parked on the ledger entry, not only in this file")
+	}
+	// Ein Zeiger, keine Kopie: zwei Fassungen driften, und die Kopie waere die
+	// komprimierte.
+	if !strings.Contains(md, "A pointer and not a copy") {
+		t.Error("the reason it is a pointer belongs next to it")
+	}
+}
+
+func TestOnboardingPublishesLongFormDocumentsOutsideGit(t *testing.T) {
+	files := mustFiles(t, "ghosttree-onboard-repo")
+	joined := string(files["SKILL.md"]) + string(files["references/migration.md"])
+	for _, want := range []string{"ctx doc import", ".ghosttree/edit/", "must not be committed"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("document lifecycle guidance is missing %q", want)
+		}
+	}
+}

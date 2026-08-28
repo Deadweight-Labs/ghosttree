@@ -29,3 +29,14 @@ func TestRedactLeavesNormalTextAlone(t *testing.T) {
 		t.Errorf("false positive: %q -> %q", in, got)
 	}
 }
+
+func TestFindSecretsReportsLabelAndLineWithoutChangingText(t *testing.T) {
+	in := "safe first line\ntoken ghp_AbCdEfGhIjKlMnOpQrStUvWxYz1234567890\n"
+	matches := FindSecrets(in)
+	if len(matches) != 1 || matches[0].Label != "github" || matches[0].Line != 2 {
+		t.Fatalf("matches = %+v", matches)
+	}
+	if in != "safe first line\ntoken ghp_AbCdEfGhIjKlMnOpQrStUvWxYz1234567890\n" {
+		t.Fatal("secret detection modified its input")
+	}
+}

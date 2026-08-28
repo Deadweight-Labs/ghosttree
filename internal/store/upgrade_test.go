@@ -378,6 +378,63 @@ func TestUpgradeRequestDomainPreservesMigrationEvidence(t *testing.T) {
 	}
 }
 
+func TestUpgradeDocumentEvidenceAddsDocumentArm(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-document-evidence.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`PRAGMA foreign_keys=OFF;
+		ALTER TABLE migration_evidence RENAME TO migration_evidence_current;
+		CREATE TABLE migration_evidence(
+		 id INTEGER PRIMARY KEY,
+		 knowledge_id INTEGER REFERENCES knowledge(id), request_id INTEGER REFERENCES requests(id),
+		 run_id INTEGER NOT NULL REFERENCES migration_runs(id), source TEXT NOT NULL, digest TEXT NOT NULL,
+		 item_key TEXT NOT NULL UNIQUE, quote TEXT NOT NULL DEFAULT '',
+		 CHECK((knowledge_id IS NOT NULL) != (request_id IS NOT NULL)),
+		 UNIQUE(knowledge_id), UNIQUE(request_id));
+		DROP TABLE migration_evidence_current;`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	backup, err := UpgradeDocumentEvidence(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if backup == "" {
+		t.Fatal("schema rebuild did not create a backup")
+	}
+	db, err = sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	columns := map[string]bool{}
+	rows, err := db.Query(`PRAGMA table_info(migration_evidence)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, typ string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			t.Fatal(err)
+		}
+		columns[name] = true
+	}
+	rows.Close()
+	if !columns["document_id"] || !columns["revision"] {
+		t.Fatalf("columns after upgrade = %+v", columns)
+	}
+}
+
 func TestUpgradeRequestDomainUpdatesEvidenceSchemaWithoutRequests(t *testing.T) {
 	path := makeOldDB(t)
 	if _, err := UpgradeSchema(path); err != nil {

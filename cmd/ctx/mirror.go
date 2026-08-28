@@ -10,7 +10,6 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/mirror"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
-	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
 // doneRequestsShown begrenzt, wie viel Erledigtes im Spiegel steht. Der Ledger
@@ -37,15 +36,17 @@ func WriteMirror(c *client.Client, ax scope.Axes, repoRoot string) error {
 	if err != nil {
 		return err
 	}
-	all, err := c.ProjectKnowledge(project, true)
+	documentHeaders, err := c.Documents(project, "", true)
 	if err != nil {
 		return err
 	}
-	var archived []store.Knowledge
-	for _, k := range all {
-		if k.Status == "archived" {
-			archived = append(archived, k)
+	documents := make([]mirror.PublishedDocument, 0, len(documentHeaders))
+	for _, document := range documentHeaders {
+		revision, err := c.DocumentRevision(document.ID, document.HeadRevision)
+		if err != nil {
+			return err
 		}
+		documents = append(documents, mirror.PublishedDocument{Document: document, Body: revision.Body})
 	}
 	open, _, err := requestPage(c, project, "open", 0)
 	if err != nil {
@@ -64,7 +65,7 @@ func WriteMirror(c *client.Client, ax scope.Axes, repoRoot string) error {
 		Project:       project,
 		Machine:       c.Machine(),
 		Knowledge:     knowledge,
-		Archived:      archived,
+		Documents:     documents,
 		Requests:      append(open, done...),
 		DoneShown:     len(done),
 		DoneTotal:     doneTotal,

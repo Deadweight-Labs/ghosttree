@@ -54,6 +54,14 @@ func TestInstallCodexIdempotent(t *testing.T) {
 	}
 }
 
+func TestInstalledRulesKeepPlansAndSpecsOutOfGit(t *testing.T) {
+	for _, want := range []string{"ctx doc import", ".ghosttree/edit/", "never commit specs or plans"} {
+		if !strings.Contains(ruleText, want) {
+			t.Errorf("ruleText missing %q", want)
+		}
+	}
+}
+
 func TestInstallClaudePreservesSettings(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
@@ -141,7 +149,7 @@ func TestInstallClaudeRuleSection(t *testing.T) {
 func failing(checks []Check) []string {
 	var names []string
 	for _, c := range checks {
-		if !c.OK {
+		if !c.OK && !c.Unverified {
 			names = append(names, c.Name)
 		}
 	}

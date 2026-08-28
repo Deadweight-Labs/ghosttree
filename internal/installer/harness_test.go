@@ -8,6 +8,18 @@ import (
 	"testing"
 )
 
+func TestInstalledHookCommandsNameTheirHarness(t *testing.T) {
+	for _, name := range []string{"claude", "codex"} {
+		h := harnessNamed(name)
+		for _, channel := range []Channel{ChannelSessionStart, ChannelUserPrompt, ChannelPreToolUse} {
+			_, command, _, ok := h.hookCommandFor(channel)
+			if !ok || !strings.HasSuffix(command, " --harness "+name) {
+				t.Errorf("%s/%s command = %q", name, channel, command)
+			}
+		}
+	}
+}
+
 func readHooks(t *testing.T, path string) map[string]any {
 	t.Helper()
 	b, err := os.ReadFile(path)
@@ -49,8 +61,8 @@ func TestInstallCodexWiresItsHooks(t *testing.T) {
 	}
 	hooks := readHooks(t, filepath.Join(home, ".codex", "hooks.json"))
 	for event, want := range map[string]string{
-		"SessionStart":     hookCommand,
-		"UserPromptSubmit": promptHookCommand,
+		"SessionStart":     hookCommand + " --harness codex",
+		"UserPromptSubmit": promptHookCommand + " --harness codex",
 	} {
 		got := commandsFor(t, hooks, event)
 		if len(got) != 1 || got[0] != want {
@@ -82,7 +94,7 @@ func TestInstallCodexKeepsForeignHooks(t *testing.T) {
 	var foundForeign, foundOurs bool
 	for _, cmd := range got {
 		foundForeign = foundForeign || strings.Contains(cmd, "nw-codex-lease.sh")
-		foundOurs = foundOurs || cmd == hookCommand
+		foundOurs = foundOurs || cmd == hookCommand+" --harness codex"
 	}
 	if !foundForeign || !foundOurs {
 		t.Errorf("commands = %v, want both", got)
@@ -160,25 +172,12 @@ func TestARuleSectionAsksForWhatDoesNotArriveByItself(t *testing.T) {
 
 // Registering a channel is not the same claim as delivering through it, and
 // conflating the two is how a wired-but-silent hook would look like success.
-//
-// Codex' session-start stand hier bis zum 2026-08-25 als NICHT ausliefernd, mit
-// der Auflage "bis ein Transkript es zeigt". Das Transkript gibt es jetzt: nach
-// der Freigabe über /hooks steht der Bootstrap im Rollout als response_item mit
-// role "developer", und die Sitzung beantwortet daraus eine Frage, die nur so
-// zu beantworten war. Der Test hält deshalb die neue Lage fest — und
-// gleichzeitig die alte Regel an dem Kanal, der weiter unbelegt ist.
 func TestWiringAChannelIsNotClaimingItDelivers(t *testing.T) {
 	codex := harnessNamed("codex")
-	for _, c := range []Channel{ChannelSessionStart, ChannelUserPrompt, ChannelMCP} {
+	for _, c := range []Channel{ChannelSessionStart, ChannelUserPrompt, ChannelPreToolUse, ChannelMCP} {
 		if !codex.Serves(c) || !codex.DeliversContext(c) {
-			t.Errorf("codex %s is measured as delivering since 2026-08-25", c)
+			t.Errorf("codex %s is measured as delivering", c)
 		}
-	}
-	if !codex.Serves(ChannelPreToolUse) {
-		t.Error("pre-tool-use stays wired: it is trusted and costs nothing")
-	}
-	if codex.DeliversContext(ChannelPreToolUse) {
-		t.Error("pre-tool-use delivered no ghost description in a real session; an unmeasured channel does not belong in Delivers")
 	}
 }
 
@@ -262,7 +261,7 @@ func TestPreToolUseHookIsWiredWithAMatcher(t *testing.T) {
 		inner, _ := group["hooks"].([]any)
 		for _, h := range inner {
 			hm, _ := h.(map[string]any)
-			if cmd, _ := hm["command"].(string); cmd == preToolHookCommand {
+			if cmd, _ := hm["command"].(string); cmd == preToolHookCommand+" --harness claude" {
 				found = true
 				// Ohne Matcher startet ctx bei jedem Bash-Aufruf mit.
 				if matcher == "" {
@@ -314,7 +313,7 @@ func TestCodexPreToolUseCarriesNoMatcher(t *testing.T) {
 			inner, _ := group["hooks"].([]any)
 			for _, h := range inner {
 				hm, _ := h.(map[string]any)
-				if hm["command"] != preToolHookCommand {
+				if hm["command"] != preToolHookCommand+" --harness codex" {
 					continue
 				}
 				found = true
@@ -348,7 +347,7 @@ func TestUpdatingAMatcherDoesNotRetargetForeignHandlers(t *testing.T) {
 	}
 	hooks, _ := settings["hooks"].(map[string]any)
 	groups, _ := hooks["PreToolUse"].([]any)
-	want := map[string]string{"foreign-read-hook": "Read", preToolHookCommand: ""}
+	want := map[string]string{"foreign-read-hook": "Read", preToolHookCommand + " --harness codex": ""}
 	for _, g := range groups {
 		group, _ := g.(map[string]any)
 		matcher, _ := group["matcher"].(string)

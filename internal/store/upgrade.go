@@ -342,13 +342,14 @@ func UpgradeRequestDomain(path string) (string, error) {
 		`CREATE TABLE migration_evidence_new(
 		 id INTEGER PRIMARY KEY,
 		 knowledge_id INTEGER REFERENCES knowledge(id), request_id INTEGER REFERENCES requests(id),
+		 document_id INTEGER REFERENCES documents(id), revision INTEGER NOT NULL DEFAULT 0,
 		 run_id INTEGER NOT NULL REFERENCES migration_runs(id), source TEXT NOT NULL, digest TEXT NOT NULL,
 		 item_key TEXT NOT NULL UNIQUE, quote TEXT NOT NULL DEFAULT '',
-		 CHECK((knowledge_id IS NOT NULL) != (request_id IS NOT NULL)),
-		 UNIQUE(knowledge_id), UNIQUE(request_id))`,
-		`INSERT INTO migration_evidence_new(id,knowledge_id,request_id,run_id,source,digest,item_key,quote)
+		 CHECK((knowledge_id IS NOT NULL) + (request_id IS NOT NULL) + (document_id IS NOT NULL) = 1),
+		 UNIQUE(knowledge_id), UNIQUE(request_id), UNIQUE(document_id,revision))`,
+		`INSERT INTO migration_evidence_new(id,knowledge_id,request_id,document_id,revision,run_id,source,digest,item_key,quote)
 		 SELECT e.rowid,CASE WHEN k.type='request' THEN NULL ELSE e.knowledge_id END,
-		 CASE WHEN k.type='request' THEN e.knowledge_id ELSE NULL END,e.run_id,e.source,e.digest,e.item_key,e.quote
+		 CASE WHEN k.type='request' THEN e.knowledge_id ELSE NULL END,NULL,0,e.run_id,e.source,e.digest,e.item_key,e.quote
 		 FROM migration_evidence e JOIN knowledge k ON k.id=e.knowledge_id`,
 		`DROP TABLE migration_evidence`,
 		`ALTER TABLE migration_evidence_new RENAME TO migration_evidence`,
@@ -408,6 +409,80 @@ func UpgradeRequestDomain(path string) (string, error) {
 		return backup, fmt.Errorf("foreign key check failed before commit")
 	}
 	rows.Close()
+	if err := tx.Commit(); err != nil {
+		return backup, err
+	}
+	return backup, verifyIntegrity(db)
+}
+
+func UpgradeDocumentEvidence(path string) (string, error) {
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		return "", err
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(`PRAGMA busy_timeout=5000`); err != nil {
+		return "", err
+	}
+	rows, err := db.Query(`PRAGMA table_info(migration_evidence)`)
+	if err != nil {
+		return "", err
+	}
+	current := false
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, typ string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			rows.Close()
+			return "", err
+		}
+		if name == "document_id" {
+			current = true
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return "", err
+	}
+	if current {
+		return "", nil
+	}
+	if err := verifyIntegrity(db); err != nil {
+		return "", err
+	}
+	backup := fmt.Sprintf("%s.backup-document-evidence-%s", path, time.Now().UTC().Format("20060102-150405.000000000"))
+	if err := createVerifiedBackup(db, backup); err != nil {
+		return "", err
+	}
+	if _, err := db.Exec(`PRAGMA foreign_keys=OFF`); err != nil {
+		return backup, err
+	}
+	defer db.Exec(`PRAGMA foreign_keys=ON`)
+	tx, err := db.Begin()
+	if err != nil {
+		return backup, err
+	}
+	defer tx.Rollback()
+	steps := []string{
+		`CREATE TABLE migration_evidence_new(
+		 id INTEGER PRIMARY KEY,
+		 knowledge_id INTEGER REFERENCES knowledge(id), request_id INTEGER REFERENCES requests(id),
+		 document_id INTEGER REFERENCES documents(id), revision INTEGER NOT NULL DEFAULT 0,
+		 run_id INTEGER NOT NULL REFERENCES migration_runs(id), source TEXT NOT NULL, digest TEXT NOT NULL,
+		 item_key TEXT NOT NULL UNIQUE, quote TEXT NOT NULL DEFAULT '',
+		 CHECK((knowledge_id IS NOT NULL) + (request_id IS NOT NULL) + (document_id IS NOT NULL) = 1),
+		 UNIQUE(knowledge_id), UNIQUE(request_id), UNIQUE(document_id,revision))`,
+		`INSERT INTO migration_evidence_new(id,knowledge_id,request_id,document_id,revision,run_id,source,digest,item_key,quote)
+		 SELECT id,knowledge_id,request_id,NULL,0,run_id,source,digest,item_key,quote FROM migration_evidence`,
+		`DROP TABLE migration_evidence`,
+		`ALTER TABLE migration_evidence_new RENAME TO migration_evidence`,
+	}
+	for _, step := range steps {
+		if _, err := tx.Exec(step); err != nil {
+			return backup, fmt.Errorf("document evidence upgrade step failed: %w", err)
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return backup, err
 	}

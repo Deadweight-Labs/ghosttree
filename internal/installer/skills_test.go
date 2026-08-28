@@ -234,3 +234,34 @@ func TestSkillCheckIsRedWhenNothingIsInstalled(t *testing.T) {
 		t.Errorf("the finding must say what is wrong, got %q", c.Detail)
 	}
 }
+
+func TestSkillCheckRequiresManifestOwnership(t *testing.T) {
+	home := isolate(t)
+	h := harnessFor(t, "codex")
+	if _, err := installSkills(h, home); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(manifestPath()); err != nil {
+		t.Fatal(err)
+	}
+	c := skillCheck(h, "codex skills", home, "fix")
+	if c.OK || !strings.Contains(c.Detail, "manifest") {
+		t.Fatalf("missing ownership manifest passed: %+v", c)
+	}
+}
+
+func TestSkillCheckRejectsInvalidFrontmatter(t *testing.T) {
+	home := isolate(t)
+	h := harnessFor(t, "claude")
+	if _, err := installSkills(h, home); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(h.SkillsRoot(home), "ghosttree-setup", "SKILL.md")
+	if err := os.WriteFile(target, []byte("name: no-frontmatter\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := skillCheck(h, "claude skills", home, "fix")
+	if c.OK || !strings.Contains(c.Detail, "frontmatter") {
+		t.Fatalf("invalid frontmatter finding = %+v", c)
+	}
+}

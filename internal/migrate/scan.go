@@ -99,6 +99,9 @@ func Scan(repo string) ([]Artifact, error) {
 		// gehört nicht als Volltext in den Baum.
 		underDocs := strings.HasSuffix(lower, ".md") &&
 			(strings.HasPrefix(rel, "docs/") || strings.HasPrefix(rel, ".superpowers/"))
+		if strings.HasSuffix(lower, ".md") && strings.HasPrefix(rel, "docs/") {
+			kind = "other"
+		}
 		if underDocs && (namesTopic(lower, "spec") || strings.Contains(rel, "/specs/")) {
 			kind = "spec"
 		}

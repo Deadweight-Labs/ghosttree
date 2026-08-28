@@ -24,15 +24,22 @@ What its scanner actually covers:
 
 - six rule filenames: `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.cursorrules`,
   `.windsurfrules`, `CONVENTIONS.md`
-- `.md` files under `docs/` or `.superpowers/` whose name contains "spec" or
-  "plan"
+- every `.md` file under `docs/`
+- specs and plans under `.superpowers/`
+
+Long-form documents are stored byte-for-byte in the document domain rather
+than distilled into knowledge. For a file outside those scanner roots, use:
+
+    ctx doc import <file> --kind spec|plan|investigation|report|other
+
+Use `.ghosttree/edit/` for new work. These internal documents must not be
+committed; publish them with `ctx doc push` instead.
 
 What it therefore misses, and what you should go looking for by hand:
 
 - a `README` with a gotchas, caveats or troubleshooting section
 - architecture decision records - `doc/adr/`, `docs/decisions/`, `adr/`
 - `NOTES.md`, `HACKING.md`, `CONTRIBUTING.md`, `docs/architecture.md`
-- `docs/*.md` that happen not to have "spec" or "plan" in the filename
 - long comment blocks in the source that explain operations rather than code -
   deployment steps, a workaround and why, an ordering that must not change
 

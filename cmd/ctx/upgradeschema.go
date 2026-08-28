@@ -40,6 +40,11 @@ func cmdUpgradeSchema(args []string, stdout io.Writer) int {
 		fmt.Fprintf(stdout, "request domain upgrade failed: %v\n", err)
 		return 1
 	}
+	documentBackup, err := store.UpgradeDocumentEvidence(*dbPath)
+	if err != nil {
+		fmt.Fprintf(stdout, "document evidence upgrade failed: %v\n", err)
+		return 1
+	}
 	usageBackup, err := store.UpgradeUsageTelemetry(*dbPath)
 	if err != nil {
 		fmt.Fprintf(stdout, "usage telemetry upgrade failed: %v\n", err)
@@ -69,7 +74,7 @@ func cmdUpgradeSchema(args []string, stdout io.Writer) int {
 	if dated > 0 {
 		fmt.Fprintf(stdout, "dated %d entries from their earliest evidence\n", dated)
 	}
-	if len(added) == 0 && dated == 0 && trustBackup == "" && typesBackup == "" && requestBackup == "" && usageBackup == "" && distillBackup == "" {
+	if len(added) == 0 && dated == 0 && trustBackup == "" && typesBackup == "" && requestBackup == "" && documentBackup == "" && usageBackup == "" && distillBackup == "" {
 		fmt.Fprintln(stdout, "schema already current, nothing to do")
 		return 0
 	}
@@ -85,6 +90,11 @@ func cmdUpgradeSchema(args []string, stdout io.Writer) int {
 	}
 	if requestBackup != "" {
 		if !reportVerifiedBackup(stdout, "request domain", requestBackup) {
+			return 1
+		}
+	}
+	if documentBackup != "" {
+		if !reportVerifiedBackup(stdout, "document evidence", documentBackup) {
 			return 1
 		}
 	}

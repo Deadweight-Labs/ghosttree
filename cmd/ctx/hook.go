@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/collector"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
 	"github.com/Deadweight-Labs/ghosttree/internal/ghost"
+	"github.com/Deadweight-Labs/ghosttree/internal/hookstate"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
@@ -41,8 +43,16 @@ func cmdHookWith(stdin io.Reader, args []string, stdout io.Writer) int {
 		fmt.Fprintln(stdout, hookUsage)
 		return 2
 	}
+	eventArg := args[0]
+	fs := flag.NewFlagSet("hook", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	harness := fs.String("harness", "", "calling harness")
+	if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 0 {
+		fmt.Fprintln(stdout, hookUsage)
+		return 2
+	}
 	var out sessionStartOutput
-	switch args[0] {
+	switch eventArg {
 	case "session-start":
 		out.HookSpecificOutput.HookEventName = "SessionStart"
 		out.HookSpecificOutput.AdditionalContext = bootstrapContext(stdin)
@@ -56,13 +66,16 @@ func cmdHookWith(stdin io.Reader, args []string, stdout io.Writer) int {
 		fmt.Fprintln(stdout, hookUsage)
 		return 2
 	}
+	if (*harness == "claude" || *harness == "codex") && os.Getenv("GHOSTTREE_HOOK_SYNTHETIC") != "1" {
+		_ = hookstate.Record(*harness, out.HookSpecificOutput.HookEventName)
+	}
 	json.NewEncoder(stdout).Encode(out)
 	return 0
 }
 
-const hookUsage = `usage: ctx hook session-start
-       ctx hook user-prompt-submit
-       ctx hook pre-tool-use`
+const hookUsage = `usage: ctx hook session-start [--harness claude|codex]
+       ctx hook user-prompt-submit [--harness claude|codex]
+       ctx hook pre-tool-use [--harness claude|codex]`
 
 // relevanceTimeout is short because this hook sits between the keystroke and
 // the answer. Knowledge that arrives late is worse than knowledge that does not
@@ -137,7 +150,7 @@ func bootstrapContext(stdin io.Reader) string {
 // writingTools sind die Werkzeuge, bei denen der Agent ohnehin gerade den Urge
 // zum erklärenden Kommentar hat. Nur dort wird nach einer Beschreibung gefragt;
 // wer bloss liest, wird nicht behelligt.
-var writingTools = map[string]bool{"Edit": true, "Write": true, "NotebookEdit": true}
+var writingTools = map[string]bool{"Edit": true, "Write": true, "NotebookEdit": true, "apply_patch": true}
 
 const (
 	maxMentionedTokens = 256
@@ -218,8 +231,13 @@ func toolPaths(raw json.RawMessage, cwd, root string) []string {
 		}
 	}
 
+	var command struct {
+		Command string `json:"command"`
+	}
 	var source string
-	if err := json.Unmarshal(raw, &source); err != nil {
+	if err := json.Unmarshal(raw, &command); err == nil && command.Command != "" {
+		source = command.Command
+	} else if err := json.Unmarshal(raw, &source); err != nil {
 		return nil
 	}
 	seen := map[string]bool{}

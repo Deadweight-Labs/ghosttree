@@ -10,11 +10,49 @@ time you describe files, you should already know what this project knows.
 
 ## Before you start
 
-Check that `ghosttree-setup` is finished on this machine, including its third
-proof - a fresh session receiving context. If it is not, stop and say so. Half
-of this skill against a broken install produces work nobody can find later.
+Three checks, in this order. Each of them fails later and more confusingly if
+you skip it now.
 
-Then open one ledger entry for the whole job, with one criterion per phase:
+**1. Is `ghosttree-setup` finished here**, including its third proof - a fresh
+session receiving context? If not, stop and say so. Half of this skill against a
+broken install produces work nobody can find later.
+
+**2. Does this repository have an `origin` remote?**
+
+    git remote get-url origin
+
+ghosttree derives the project axis from it. Without one there is no project,
+nothing to hang knowledge or descriptions on, and `ctx migrate` refuses outright
+with "repository has no origin remote". Stop here and say what the options are:
+add a remote, or accept that this repository cannot be onboarded yet. Do not
+start phase 1 and discover it there.
+
+**3. Has the collector seen this session yet?**
+
+`request_start_work` needs a session the collector has already uploaded, and
+`ctx watch` lags by design at the beginning of a session. If linking fails,
+that is expected: note that you will attach the session later and carry on. It
+is not a reason to stop, and it is not a broken install.
+
+Then open one ledger entry for the whole job, with one criterion per phase.
+
+Long-form specifications, plans, investigations and reports belong in
+`.ghosttree/edit/` and are published with `ctx doc push`. Existing files enter
+through `ctx doc import`. Internal working documents must not be committed to
+the repository; the generated `.ghosttree/docs/` tree is a disposable
+projection, not an editing surface.
+
+**Put a resume line in its description**, word for word:
+
+    On resuming: re-read SKILL.md (three prohibitions) and the reference for
+    the current phase before continuing.
+
+That line is not decoration. This skill spans hours and its context WILL be
+compacted at least once; when that happens, the instruction to re-read lives in
+the file you have stopped reading, and cannot reach you. The ledger entry can:
+interrupted work is pushed into a session unasked, so a pointer parked there
+comes back on its own. A pointer and not a copy of the rules — two copies drift,
+and the copy would be the one that got compacted.
 
     request_create
       title: "Onboard <repository> into ghosttree"
@@ -70,10 +108,36 @@ deliberately left alone is not read again until the file changes. It shows up in
 `.ghosttree/tree/**/__dir.md` as its own group, next to the work list. Watch that
 group - if it grows faster than the described one, the criteria are too strict.
 
-## What this skill does not do
+## Three rules that hold everywhere in this skill
 
-- Import an issue tracker. The ledger must not become a second copy of one.
-- Delete anything automatically. `ctx migrate --clean` is its own step with its
-  own consent.
-- Run the full inventory over an entire repository while REQ-198 is open. See
-  `references/inventory-run.md`.
+These are here, in the file every session reads, and not only in the reference
+that covers their phase. A summary keeps instructions and drops their edge
+cases, so anything that must survive an interruption belongs where it cannot be
+summarised away.
+
+**1. Never import an issue tracker wholesale.** Not "import fewer", not "import
+the good ones" — take entries over ONE AT A TIME, each with a stated reason why
+it belongs in ghosttree rather than where it already is. If the count of new
+ledger entries matches the count of open issues, you have built a mirror, and a
+mirror makes both copies untrustworthy: close the issue and the ledger entry
+lives on, and nobody can tell which one is current. What belongs here is what
+someone EXPLAINED, not what someone OPENED.
+
+**2. Never invent Context.** A description may carry non-obvious knowledge only
+when that knowledge was handed to you, with its entry number. What you think you
+see in the code and cannot source is a question, not a sentence in the tree.
+
+**3. Never delete without a separate consent.** `ctx migrate --clean` is its own
+step, asked for on its own.
+
+If the operator instructs you to do any of these anyway, that instruction wins —
+they know their repository. But SAY SO first, in one sentence, naming which rule
+you are setting aside and why. A rule that falls silently teaches nobody
+anything, and the next session cannot tell an override from a mistake.
+
+## After an interruption or a compaction
+
+Re-read the reference for the phase you are in before continuing — the files are
+on disk and re-reading one costs a single tool call. The three rules above are
+what a summary erodes first, and each of them is a rule about what NOT to do,
+which is exactly the kind that disappears when text gets compressed.

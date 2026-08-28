@@ -158,11 +158,12 @@ CREATE TABLE IF NOT EXISTS migration_artifacts(
 CREATE TABLE IF NOT EXISTS migration_evidence(
   id INTEGER PRIMARY KEY,
   knowledge_id INTEGER REFERENCES knowledge(id), request_id INTEGER REFERENCES requests(id),
+  document_id INTEGER REFERENCES documents(id), revision INTEGER NOT NULL DEFAULT 0,
   run_id INTEGER NOT NULL REFERENCES migration_runs(id),
   source TEXT NOT NULL, digest TEXT NOT NULL, item_key TEXT NOT NULL UNIQUE,
   quote TEXT NOT NULL DEFAULT '',
-  CHECK((knowledge_id IS NOT NULL) != (request_id IS NOT NULL)),
-  UNIQUE(knowledge_id), UNIQUE(request_id));
+  CHECK((knowledge_id IS NOT NULL) + (request_id IS NOT NULL) + (document_id IS NOT NULL) = 1),
+  UNIQUE(knowledge_id), UNIQUE(request_id), UNIQUE(document_id,revision));
 CREATE TABLE IF NOT EXISTS sessions(
   id INTEGER PRIMARY KEY,
   harness TEXT NOT NULL, external_id TEXT NOT NULL,
@@ -321,6 +322,28 @@ CREATE INDEX IF NOT EXISTS knowledge_versions_entry
   ON knowledge_versions(knowledge_id, changed_at DESC, id DESC);
 INSERT OR IGNORE INTO search_documents(kind,domain_id,title,body,project,branch,machine)
   SELECT 'knowledge',id,title,body,project,branch,machine FROM knowledge;
+CREATE TABLE IF NOT EXISTS documents(
+  id INTEGER PRIMARY KEY,
+  project TEXT NOT NULL,
+  slug TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK(kind IN ('spec','plan','investigation','report','other')),
+  title TEXT NOT NULL,
+  head_revision INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','archived')),
+  person TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(project,slug));
+CREATE TABLE IF NOT EXISTS document_revisions(
+  id INTEGER PRIMARY KEY,
+  document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  revision INTEGER NOT NULL,
+  body TEXT NOT NULL,
+  digest TEXT NOT NULL,
+  message TEXT NOT NULL DEFAULT '',
+  person TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  UNIQUE(document_id,revision));
 `
 
 func Open(path string) (*Store, error) {

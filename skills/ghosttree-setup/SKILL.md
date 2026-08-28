@@ -37,8 +37,17 @@ it.
 **A server already exists** - you have a URL and a token:
 
     ctx setup --server <url> --token <token>
-    ctx install claude          # and/or: ctx install codex
+    ctx install claude          # and/or: codex, opencode
     ctx watch --once            # import the transcripts already on this machine
+
+Install only what is needed when repairing one channel:
+
+    ctx install codex --only hooks
+    ctx install claude --only mcp --only skills
+
+Codex hook definitions require one-time acceptance. After installing or
+changing them, run `/hooks`, trust the ghosttree entries, and use a fresh
+session.
 
 **No server yet** - read `references/local-server.md`. It starts a local one on
 this machine in a few commands, and explains what a later move to a networked
@@ -54,7 +63,8 @@ Read `references/verification.md` before you report success. In short: three
 pieces of proof, and passing commands are not one of them.
 
 1. `ctx status` shows a connection and a body of knowledge.
-2. `ctx doctor` is quiet.
+2. `ctx doctor` shows no `FAIL`; every claim it can prove is `OK`, and anything
+   requiring a future real harness event is explicitly `UNVERIFIED`.
 3. In a FRESH session, the MCP tools are there and the session-start hook
    delivered something.
 
@@ -74,6 +84,11 @@ open. The next session on this machine gets it back automatically as
 interrupted work, which is the whole point: an onboarding skill that ends with
 "remember to check X later" and leaves no trace is asking a human to be the
 database.
+
+For a focused repair, use the matching proof instead of rerunning everything:
+
+    ctx doctor codex --only mcp
+    ctx doctor claude --only hooks --fix
 
 ## What this skill does not do
 

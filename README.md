@@ -7,26 +7,26 @@ CLAUDE.md, AGENTS.md, plan markdown and the kind of comment that documents an
 agent's afternoon rather than the code. Self-hosted, harness-neutral, invisible
 on GitHub.
 
-Status: V0, built in the open.
-
 ## How it works
 
-One Go binary, `ctx`, plays four roles:
+One Go binary, `ctx`, serves the whole local side:
 
 - `ctx serve` — the server: SQLite with FTS5 behind a small REST API, bearer
   token per person, meant to sit on a private network (a private network here).
 - `ctx watch` — the collector: tails Claude Code and Codex transcripts, redacts
   credentials before anything leaves the machine, uploads incrementally and
   replays whatever an outage left behind.
-- `ctx mcp` — the MCP server agents talk to: `context_search`, `context_get`,
-  `context_remember`, `context_sessions`.
-- `ctx install claude|codex` — wires the harnesses up: MCP registration, a
-  SessionStart hook that injects known context, and a rule section telling the
-  agent to store operational history in ghosttree rather than in source
-  comments. It also installs two onboarding skills — one that sets a machine
-  up, one that walks a repository into the tree — from a single source embedded
-  in the binary, into whichever directory that harness reads skills from. A
-  skill you have edited yourself is kept and reported, not overwritten.
+- `ctx mcp` — the MCP server agents talk to. Its tools cover context and search,
+  file descriptions and their history, regression coverage, session lookup,
+  and the request ledger.
+- `ctx install claude|codex|opencode` — wires each harness independently.
+  Claude and Codex support `mcp`, `hooks`, `rules`, and `skills`; OpenCode
+  supports `mcp` and `rules`. Repeat `--only` to install individual components.
+  Existing configuration and locally edited skills are preserved.
+- `ctx doctor` — verifies exact configuration and runnable behavior. It can
+  scope checks and repairs by harness and component, performs a real MCP stdio
+  handshake plus `context_get`, executes synthetic hook probes, and reports
+  separately whether a real harness invocation has been observed.
 
 ### Scope axes
 
@@ -65,10 +65,21 @@ ctx person add <name> --db /var/lib/ghosttree/ghosttree.db   # prints a token on
 ctx setup --server http://<host>:8474 --token <token>
 ctx install claude
 ctx install codex
+ctx install opencode
+ctx install codex --only hooks
+ctx install claude --only mcp --only skills
 ctx watch --once        # import existing transcripts
 ctx watch               # or run as a user service, see deploy/
 ctx status
+ctx doctor
+ctx doctor codex --only mcp
+ctx doctor claude --only hooks --fix
 ```
+
+Doctor reports `OK`, `FAIL`, or `UNVERIFIED`. `UNVERIFIED` means the local
+configuration or synthetic path can be checked, but only a real future harness
+event can supply the remaining evidence. After changing Codex hooks, run
+`/hooks`, trust the ghosttree entries, and start a fresh session.
 
 See `deploy/` for the systemd units and the deployment notes.
 
@@ -84,8 +95,5 @@ Dependencies: `modernc.org/sqlite`, `github.com/modelcontextprotocol/go-sdk`,
 `github.com/fsnotify/fsnotify`. Everything else is the standard library, and
 the binary builds with `CGO_ENABLED=0`.
 
-## Scope of V0
-
-Not here yet: the distiller (AI-side consolidation, dedup, staleness), a web
-UI, adapters beyond Claude Code and Codex, embeddings. Redaction is a regex
-baseline, not a guarantee, which is why session data stays on private infra.
+Redaction is a regex baseline, not a guarantee, which is why session data stays
+on private infrastructure.

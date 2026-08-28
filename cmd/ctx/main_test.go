@@ -9,6 +9,7 @@ import (
 
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
+	"github.com/Deadweight-Labs/ghosttree/internal/installer"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/sessiondistill"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -159,6 +160,166 @@ func TestDoctorFixInstallsHarnesses(t *testing.T) {
 	for _, name := range []string{"claude mcp registration", "codex rule section"} {
 		if failed(after.String(), name) {
 			t.Errorf("after --fix, %q should pass:\n%s", name, after.String())
+		}
+	}
+}
+
+func TestInstallAcceptsRepeatedOnlyAfterHarness(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+
+	var out bytes.Buffer
+	if code := run([]string{"install", "codex", "--only", "mcp", "--only", "hooks"}, &out); code != 0 {
+		t.Fatalf("exit code = %d:\n%s", code, out.String())
+	}
+	if _, err := os.Stat(filepath.Join(home, ".codex", "AGENTS.md")); !os.IsNotExist(err) {
+		t.Fatalf("rules were installed outside selection: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".agents", "skills")); !os.IsNotExist(err) {
+		t.Fatalf("skills were installed outside selection: %v", err)
+	}
+}
+
+func TestInstallRejectsUnsupportedComponent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+
+	var out bytes.Buffer
+	if code := run([]string{"install", "opencode", "--only", "hooks"}, &out); code != 2 {
+		t.Fatalf("exit code = %d, want 2:\n%s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "mcp, rules") {
+		t.Fatalf("supported components missing:\n%s", out.String())
+	}
+}
+
+func TestDoctorAcceptsHarnessAndOnlyAfterIt(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+
+	var out bytes.Buffer
+	run([]string{"doctor", "codex", "--only", "hooks"}, &out)
+	got := out.String()
+	if strings.Contains(got, "claude ") || strings.Contains(got, "opencode ") || strings.Contains(got, "codex mcp") {
+		t.Fatalf("doctor ignored selected scope:\n%s", got)
+	}
+	if !strings.Contains(got, "codex session-start hook") {
+		t.Fatalf("selected hooks missing:\n%s", got)
+	}
+}
+
+func TestDoctorPrintsUnverifiedWithoutFailingForIt(t *testing.T) {
+	checks := []installer.Check{{Name: "observed activity", Unverified: true, Detail: "no real event yet"}}
+	var out bytes.Buffer
+	if ok := printDoctorChecks(&out, checks); !ok {
+		t.Fatal("UNVERIFIED must not make Doctor fail")
+	}
+	if !strings.Contains(out.String(), "UNVERIFIED") {
+		t.Fatalf("output = %q", out.String())
+	}
+}
+
+func TestDoctorReportsCheckedInSpecsAndPlans(t *testing.T) {
+	root := t.TempDir()
+	for _, rel := range []string{
+		"docs/superpowers/specs/design.md",
+		"docs/team/plans/release.md",
+		"docs/architecture.md",
+	} {
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("# document\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check := checkedInDocumentCheck(root)
+	if check.OK || !strings.Contains(check.Detail, "2") || !strings.Contains(check.Fix, "ctx doc import") {
+		t.Fatalf("check = %+v", check)
+	}
+}
+
+func TestDoctorOnlyHooksWithoutHarnessSkipsUnsupportedHarnesses(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	var out bytes.Buffer
+	run([]string{"doctor", "--only", "hooks"}, &out)
+	got := out.String()
+	if strings.Contains(got, "does not support") || strings.Contains(got, "opencode ") {
+		t.Fatalf("all-harness hook scope included unsupported opencode:\n%s", got)
+	}
+	for _, want := range []string{"claude session-start hook", "codex session-start hook"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestDoctorOnlyCollectorRunsNoHarnessChecks(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	var out bytes.Buffer
+	run([]string{"doctor", "--only", "collector"}, &out)
+	got := out.String()
+	if !strings.Contains(got, "collector") {
+		t.Fatalf("collector checks missing:\n%s", got)
+	}
+	for _, unwanted := range []string{"claude mcp", "claude session", "codex mcp", "codex session", "opencode mcp", "client config"} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("collector-only output contains %q:\n%s", unwanted, got)
+		}
+	}
+}
+
+func TestDoctorScopedFixLeavesUnselectedComponentUntouched(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_STATE_HOME", filepath.Join(home, ".state"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	selected := installer.ComponentSet{installer.ComponentMCP: true, installer.ComponentRules: true}
+	if _, err := installer.InstallSelected("codex", home, selected); err != nil {
+		t.Fatal(err)
+	}
+	mcpPath := filepath.Join(home, ".codex", "config.toml")
+	if err := os.WriteFile(mcpPath, []byte("[mcp_servers.ghosttree]\ncommand = \"wrong\"\nargs = [\"mcp\"]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rulePath := filepath.Join(home, ".codex", "AGENTS.md")
+	if err := os.WriteFile(rulePath, []byte("outdated\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	run([]string{"doctor", "codex", "--only", "rules", "--fix"}, &out)
+	if !installer.HasMarker(rulePath) {
+		t.Fatalf("selected rule was not repaired:\n%s", out.String())
+	}
+	raw, _ := os.ReadFile(mcpPath)
+	if !strings.Contains(string(raw), `command = "wrong"`) {
+		t.Fatalf("unselected MCP config was changed:\n%s", raw)
+	}
+}
+
+func TestCodexInstallNamesHooksAndScopedDoctorNextSteps(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	var out bytes.Buffer
+	if code := run([]string{"install", "codex", "--only", "hooks"}, &out); code != 0 {
+		t.Fatalf("exit = %d: %s", code, out.String())
+	}
+	for _, want := range []string{"/hooks", "fresh", "ctx doctor codex --only hooks"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("install output missing %q:\n%s", want, out.String())
 		}
 	}
 }

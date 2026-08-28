@@ -106,11 +106,30 @@ install -m755 dist/ctx-linux-amd64 ~/.local/bin/ctx
 ctx setup --server http://<private-host>:8474 --token <token>
 ctx install claude
 ctx install codex
+ctx install opencode           # when this client uses OpenCode
 ctx watch --once          # first import, takes a while on a large history
 cp deploy/ghosttree-watch.service ~/.config/systemd/user/
 systemctl --user enable --now ghosttree-watch
 ctx status
+ctx doctor
 ```
+
+Each harness can also be installed and checked component by component. Repeat
+`--only` when selecting several components:
+
+```bash
+ctx install codex --only hooks
+ctx install claude --only mcp --only skills
+ctx doctor codex --only mcp
+ctx doctor claude --only hooks --fix
+```
+
+Doctor reports `OK`, `FAIL`, and `UNVERIFIED`; the last state is reserved for
+evidence only a real future harness event can provide. It performs a real MCP
+stdio handshake and `context_get`, and separates exact hook installation,
+synthetic runnability, and observed real activity. After changing Codex hooks,
+start Codex, use `/hooks` to trust the ghosttree entries, and verify again from
+a fresh session.
 
 Claude Code reads MCP servers from `$CLAUDE_CONFIG_DIR/.claude.json`, falling
 back to `~/.claude.json` — **not** from `settings.json`, which ignores an

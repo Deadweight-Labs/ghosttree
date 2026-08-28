@@ -12,10 +12,12 @@ import (
 // Check is one inspected piece of harness wiring. Fix is filled in even when
 // OK, so callers can show what a passing check is guarding.
 type Check struct {
-	Name   string `json:"name"`
-	OK     bool   `json:"ok"`
-	Detail string `json:"detail"`
-	Fix    string `json:"fix"`
+	Name       string    `json:"name"`
+	Component  Component `json:"component,omitempty"`
+	OK         bool      `json:"ok"`
+	Unverified bool      `json:"unverified,omitempty"`
+	Detail     string    `json:"detail"`
+	Fix        string    `json:"fix"`
 }
 
 // VerifyClaude reports whether Claude Code is still wired to ghosttree.
@@ -25,35 +27,47 @@ type Check struct {
 func VerifyClaude(home string) []Check {
 	h := harnessNamed("claude")
 	userCfg := ClaudeUserConfigPath(home)
-	checks := []Check{fileCheck("claude mcp registration", userCfg, `"ghosttree"`,
-		"run 'ctx install claude'")}
+	mcpCheck := jsonEntryCheck("claude mcp registration", userCfg, "mcpServers", claudeMCPEntry(), "run 'ctx install claude'")
+	mcpCheck.Component = ComponentMCP
+	checks := []Check{mcpCheck}
 	checks = append(checks, channelChecks(h, home)...)
-	checks = append(checks, ruleSectionCheck(h, "claude rule section", h.RulePath(home),
-		"run 'ctx install claude'"))
-	checks = append(checks, skillCheck(h, "claude skills", home, "run 'ctx install claude'"))
+	rule := ruleSectionCheck(h, "claude rule section", h.RulePath(home), "run 'ctx install claude'")
+	rule.Component = ComponentRules
+	checks = append(checks, rule)
+	skill := skillCheck(h, "claude skills", home, "run 'ctx install claude'")
+	skill.Component = ComponentSkills
+	checks = append(checks, skill)
 
 	// Claude Code reads CLAUDE_CONFIG_DIR/.claude.json when the variable is
 	// set and ~/.claude.json when it is not. Launchers differ, so a home that
 	// only has one of them registered works in one terminal and silently has
 	// no ghosttree in another.
 	if fallback := filepath.Join(home, ".claude.json"); fallback != userCfg {
-		checks = append(checks, fileCheck("claude fallback config", fallback, `"ghosttree"`,
-			"run 'CLAUDE_CONFIG_DIR= ctx install claude' so launchers that ignore CLAUDE_CONFIG_DIR find it too"))
+		fallbackCheck := jsonEntryCheck("claude fallback config", fallback, "mcpServers", claudeMCPEntry(),
+			"run 'CLAUDE_CONFIG_DIR= ctx install claude' so launchers that ignore CLAUDE_CONFIG_DIR find it too")
+		fallbackCheck.Component = ComponentMCP
+		checks = append(checks, fallbackCheck)
 	}
 	return checks
 }
 
 func VerifyCodex(home string) []Check {
 	h := harnessNamed("codex")
-	checks := []Check{fileCheck("codex mcp registration", filepath.Join(home, ".codex", "config.toml"),
-		"[mcp_servers.ghosttree]", "run 'ctx install codex'")}
+	mcpCheck := codexMCPCheck(filepath.Join(home, ".codex", "config.toml"), "run 'ctx install codex'")
+	mcpCheck.Component = ComponentMCP
+	checks := []Check{mcpCheck}
 	checks = append(checks, channelChecks(h, home)...)
 	// Nach dem Kanalcheck, weil er die Frage danach beantwortet: der Eintrag ist
 	// da — läuft er auch?
-	checks = append(checks, codexTrustCheck(home))
-	checks = append(checks, ruleSectionCheck(h, "codex rule section", h.RulePath(home),
-		"run 'ctx install codex'"))
-	return append(checks, skillCheck(h, "codex skills", home, "run 'ctx install codex'"))
+	trust := codexTrustCheck(home)
+	trust.Component = ComponentHooks
+	checks = append(checks, trust)
+	rule := ruleSectionCheck(h, "codex rule section", h.RulePath(home), "run 'ctx install codex'")
+	rule.Component = ComponentRules
+	checks = append(checks, rule)
+	skill := skillCheck(h, "codex skills", home, "run 'ctx install codex'")
+	skill.Component = ComponentSkills
+	return append(checks, skill)
 }
 
 // skillCheck answers two questions in this order: are the skills there at all,
@@ -96,6 +110,37 @@ func skillCheck(h Harness, name, home, fix string) Check {
 		return c
 	}
 
+	manifest := readManifest()
+	var unowned, invalidFrontmatter []string
+	for _, skill := range skills.Names() {
+		files, err := skills.Files(skill)
+		if err != nil {
+			return c
+		}
+		for rel := range files {
+			target := filepath.Join(root, skill, filepath.FromSlash(rel))
+			if manifest[target] == "" {
+				unowned = append(unowned, skill+"/"+rel)
+			}
+			if rel == "SKILL.md" {
+				raw, err := os.ReadFile(target)
+				if err != nil || !validSkillFrontmatter(raw) {
+					invalidFrontmatter = append(invalidFrontmatter, skill+"/"+rel)
+				}
+			}
+		}
+	}
+	if len(invalidFrontmatter) > 0 {
+		sort.Strings(invalidFrontmatter)
+		c.Detail = root + " (invalid SKILL.md frontmatter: " + strings.Join(invalidFrontmatter, ", ") + ")"
+		return c
+	}
+	if len(unowned) > 0 {
+		sort.Strings(unowned)
+		c.Detail = root + " (ownership manifest missing: " + strings.Join(unowned, ", ") + ")"
+		return c
+	}
+
 	drift := SkillDrift(h, home)
 	if len(drift) == 0 {
 		c.OK = true
@@ -109,6 +154,19 @@ func skillCheck(h Harness, name, home, fix string) Check {
 	return c
 }
 
+func validSkillFrontmatter(raw []byte) bool {
+	text := strings.ReplaceAll(string(raw), "\r\n", "\n")
+	if !strings.HasPrefix(text, "---\n") {
+		return false
+	}
+	end := strings.Index(text[4:], "\n---\n")
+	if end < 0 {
+		return false
+	}
+	frontmatter := "\n" + text[4:4+end] + "\n"
+	return strings.Contains(frontmatter, "\nname:") && strings.Contains(frontmatter, "\ndescription:")
+}
+
 // VerifyOpencode prüft die einzige Verbindung, die es hier gibt. Kein
 // Kanalcheck, weil opencode keine Hooks hat — und keine erfundene Prüfung, die
 // dauerhaft rot stünde für etwas, das die Umgebung nicht anbietet.
@@ -120,13 +178,45 @@ func skillCheck(h Harness, name, home, fix string) Check {
 func VerifyOpencode(home string) []Check {
 	h := harnessNamed("opencode")
 	rulePath := h.RulePath(home)
-	return []Check{
-		fileCheck("opencode mcp registration",
-			filepath.Join(home, ".config", "opencode", "opencode.json"),
-			`"ghosttree"`, "run 'ctx install opencode'"),
-		ruleSectionCheck(h, "opencode rule section ("+filepath.Base(rulePath)+")", rulePath,
-			"run 'ctx install opencode'"),
+	mcpCheck := jsonEntryCheck("opencode mcp registration",
+		filepath.Join(home, ".config", "opencode", "opencode.json"),
+		"mcp", opencodeMCPEntry(), "run 'ctx install opencode'")
+	mcpCheck.Component = ComponentMCP
+	rule := ruleSectionCheck(h, "opencode rule section ("+filepath.Base(rulePath)+")", rulePath, "run 'ctx install opencode'")
+	rule.Component = ComponentRules
+	return []Check{mcpCheck, rule}
+}
+
+func jsonEntryCheck(name, path, container string, want map[string]any, fix string) Check {
+	c := Check{Name: name, Detail: path, Fix: fix}
+	cfg, err := readJSONFile(path)
+	if err != nil {
+		c.Detail = path + " (missing or invalid)"
+		return c
 	}
+	entries, _ := cfg[container].(map[string]any)
+	if !jsonValuesEqual(entries["ghosttree"], want) {
+		c.Detail = path + " (ghosttree entry missing or outdated)"
+		return c
+	}
+	c.OK = true
+	return c
+}
+
+func codexMCPCheck(path, fix string) Check {
+	c := Check{Name: "codex mcp registration", Detail: path, Fix: fix}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		c.Detail = path + " (missing)"
+		return c
+	}
+	ranges := codexOwnedTableRanges(string(raw))
+	if len(ranges) != 1 || strings.TrimSpace(string(raw)[ranges[0][0]:ranges[0][1]]) != strings.TrimSpace(codexMCPSection) {
+		c.Detail = path + " (ghosttree table missing, duplicate, or outdated)"
+		return c
+	}
+	c.OK = true
+	return c
 }
 
 // channelChecks asks what the harness is capable of, not what happens to be in
@@ -146,8 +236,10 @@ func channelChecks(h Harness, home string) []Check {
 		if !ok {
 			continue
 		}
-		checks = append(checks, hookCheck(h.Name+" "+string(channel)+" hook", path, event, command, matcher,
-			"run 'ctx install "+h.Name+"' — this harness can fire the event and nothing is answering it"))
+		check := hookCheck(h.Name+" "+string(channel)+" hook", path, event, command, matcher,
+			"run 'ctx install "+h.Name+"' — this harness can fire the event and nothing is answering it")
+		check.Component = ComponentHooks
+		checks = append(checks, check)
 	}
 	return checks
 }

@@ -204,8 +204,45 @@ func (a *api) completeMigration(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (a *api) insertDocumentMigration(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(r)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "bad migration id")
+		return
+	}
+	var body struct {
+		Source     string `json:"source"`
+		Digest     string `json:"digest"`
+		DocumentID int64  `json:"document_id"`
+		Revision   int    `json:"revision"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if body.Source == "" || body.Digest == "" || body.DocumentID == 0 || body.Revision < 1 {
+		writeErr(w, http.StatusBadRequest, "source, digest, document_id and revision are required")
+		return
+	}
+	if err := a.st.InsertDocumentMigration(id, body.Source, body.Digest, body.DocumentID, body.Revision); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (a *api) completedMigrationArtifacts(w http.ResponseWriter, r *http.Request) {
 	out, err := a.st.CompletedMigrationArtifacts(scope.NormalizeRemote(r.URL.Query().Get("project")))
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (a *api) completedDocumentArtifacts(w http.ResponseWriter, r *http.Request) {
+	project := scope.NormalizeRemote(r.URL.Query().Get("project"))
+	out, err := a.st.CompletedDocumentArtifacts(project)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return

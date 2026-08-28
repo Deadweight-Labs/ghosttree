@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 
+	docwork "github.com/Deadweight-Labs/ghosttree/internal/doc"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -26,13 +27,18 @@ type Doc struct {
 	Body string
 }
 
+type PublishedDocument struct {
+	Document store.Document
+	Body     string
+}
+
 // Input ist alles, was der Spiegel zeigt. Was hier nicht steht, wird auch nicht
 // geschrieben — Sitzungsprotokolle etwa werden gar nicht erst geholt.
 type Input struct {
 	Project   string
 	Machine   string
-	Knowledge []store.Knowledge         // die Scope-Vereinigung, die eine Sitzung hier liest
-	Archived  []store.Knowledge         // Dokumente: Pläne und Specs als Kaltlager
+	Knowledge []store.Knowledge // die Scope-Vereinigung, die eine Sitzung hier liest
+	Documents []PublishedDocument
 	Requests  []requestdomain.SearchHit // offene und die jüngsten erledigten
 	DoneShown int                       // wie viele erledigte Aufträge im Spiegel stehen
 	DoneTotal int                       // wie viele es insgesamt gibt
@@ -55,15 +61,15 @@ const projectionNote = "Projection from ghosttree. Edits to this file are lost o
 // schreibt keine, damit der Inhalt ohne Dateisystem prüfbar bleibt.
 func Build(in Input) []Doc {
 	knowledge := deliverable(in.Knowledge)
-	mentions := backlinks(knowledge, in.Archived, in.Requests)
+	mentions := backlinks(knowledge, in.Requests)
 
-	docs := make([]Doc, 0, len(knowledge)+len(in.Archived)+len(in.Requests)+1)
+	docs := make([]Doc, 0, len(knowledge)+len(in.Documents)+len(in.Requests)+1)
 	for _, k := range knowledge {
 		path := fmt.Sprintf("knowledge/%s/%d-%s.md", k.Type, k.ID, slug(k.Title))
 		docs = append(docs, Doc{Path: path, Body: knowledgeBody(k, mentions[mentionKey("#", k.ID)])})
 	}
-	for _, k := range in.Archived {
-		docs = append(docs, Doc{Path: documentPath(k), Body: documentBody(k, mentions[mentionKey("#", k.ID)])})
+	for _, document := range in.Documents {
+		docs = append(docs, Doc{Path: documentPath(document), Body: documentBody(document)})
 	}
 	for _, hit := range in.Requests {
 		docs = append(docs, Doc{Path: requestPath(hit.Request), Body: requestBody(hit, mentions[mentionKey("REQ-", hit.Request.ID)])})
@@ -104,38 +110,25 @@ func knowledgeBody(k store.Knowledge, mentionedBy []string) string {
 	return b.String()
 }
 
-func documentPath(k store.Knowledge) string {
-	day := k.ObservedAt
+func documentPath(p PublishedDocument) string {
+	day := p.Document.CreatedAt
 	if len(day) >= 10 {
 		day = day[:10]
 	}
 	if day == "" {
 		day = "ohne-datum"
 	}
-	return fmt.Sprintf("docs/%s-%d-%s.md", day, k.ID, slug(documentName(k.Title)))
-}
-
-// documentName kürzt den Titel eines migrierten Dokuments auf das, was ihn
-// unterscheidet. Der Titel IST dort der Repo-Pfad, und ungekürzt entsteht ein
-// Dateiname, der seine Verzeichnisse und sein Datum zweimal trägt und den
-// eigentlichen Namen ganz hinten. Der vollständige Pfad bleibt in der Datei
-// stehen — verloren geht nichts, nur die Wiederholung.
-func documentName(title string) string {
-	name := title
-	if i := strings.LastIndex(name, "/"); i >= 0 {
-		name = name[i+1:]
+	dir, err := docwork.KindDir(p.Document.Kind)
+	if err != nil {
+		dir = "other"
 	}
-	return strings.TrimSuffix(name, ".md")
+	return fmt.Sprintf("docs/%s/%s-%s.md", dir, day, slug(p.Document.Slug))
 }
 
-func documentBody(k store.Knowledge, mentionedBy []string) string {
+func documentBody(p PublishedDocument) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "# #%d %s\n\n", k.ID, k.Title)
-	fmt.Fprintf(&b, "%s | %s | %s — cold storage: not delivered into sessions, readable in full here\n\n",
-		scopeLabel(k.Scope), k.Type, k.Status)
-	b.WriteString(strings.TrimRight(k.Body, "\n"))
+	b.WriteString(strings.TrimRight(p.Body, "\n"))
 	b.WriteString("\n")
-	b.WriteString(backlinkSection(mentionedBy))
 	b.WriteString(footer())
 	return b.String()
 }
@@ -206,7 +199,8 @@ func index(in Input, knowledgeCount int) string {
 	}
 	b.WriteString("\n")
 	fmt.Fprintf(&b, "- `knowledge/` — %d entries: pitfalls, decisions and notes. Exactly what a session in this repository is given.\n", knowledgeCount)
-	fmt.Fprintf(&b, "- `docs/` — %d %s, in full.\n", len(in.Archived), plural(len(in.Archived), "plan or specification", "plans and specifications"))
+	fmt.Fprintf(&b, "- `docs/` — %d %s, in full. This is a generated projection; local edits are overwritten.\n", len(in.Documents), plural(len(in.Documents), "document", "documents"))
+	b.WriteString("- `edit/` — local document worktree. Edit these files and publish them with `ctx doc push`; the mirror never writes here.\n")
 	fmt.Fprintf(&b, "- `requests/open/` and `requests/done/` — the work ledger; %d of %d finished ones are kept here.\n", in.DoneShown, in.DoneTotal)
 	fmt.Fprintf(&b, "- `tree/` — descriptions for %d of %d paths in this repository, one file each.\n\n",
 		in.TreeDescribed, in.TreePaths)
@@ -239,10 +233,10 @@ func backlinkSection(mentionedBy []string) string {
 func mentionKey(prefix string, id int64) string { return prefix + strconv.FormatInt(id, 10) }
 
 // backlinks sammelt für jeden nennbaren Eintrag die Texte, die ihn nennen.
-func backlinks(knowledge, archived []store.Knowledge, requests []requestdomain.SearchHit) map[string][]string {
+func backlinks(knowledge []store.Knowledge, requests []requestdomain.SearchHit) map[string][]string {
 	type source struct{ label, text string }
 	var sources []source
-	for _, k := range append(append([]store.Knowledge{}, knowledge...), archived...) {
+	for _, k := range knowledge {
 		sources = append(sources, source{fmt.Sprintf("- #%d %s", k.ID, k.Title), k.Title + "\n" + k.Body})
 	}
 	for _, hit := range requests {
@@ -250,7 +244,7 @@ func backlinks(knowledge, archived []store.Knowledge, requests []requestdomain.S
 		sources = append(sources, source{fmt.Sprintf("- REQ-%d %s", r.ID, r.Title), r.Title + "\n" + r.Description + "\n" + hit.LatestHandoff})
 	}
 	var targets []string
-	for _, k := range append(append([]store.Knowledge{}, knowledge...), archived...) {
+	for _, k := range knowledge {
 		targets = append(targets, mentionKey("#", k.ID))
 	}
 	for _, hit := range requests {

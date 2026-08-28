@@ -2,7 +2,15 @@
 // the machine. It is a baseline filter, not a guarantee.
 package redact
 
-import "regexp"
+import (
+	"regexp"
+	"strings"
+)
+
+type SecretMatch struct {
+	Label string
+	Line  int
+}
 
 var patterns = []struct {
 	label string
@@ -22,4 +30,17 @@ func Redact(s string) string {
 		s = p.re.ReplaceAllString(s, "[REDACTED:"+p.label+"]")
 	}
 	return s
+}
+
+func FindSecrets(s string) []SecretMatch {
+	var matches []SecretMatch
+	for _, pattern := range patterns {
+		for _, location := range pattern.re.FindAllStringIndex(s, -1) {
+			matches = append(matches, SecretMatch{
+				Label: pattern.label,
+				Line:  strings.Count(s[:location[0]], "\n") + 1,
+			})
+		}
+	}
+	return matches
 }

@@ -7,13 +7,38 @@ see but could not source: a special case with no visible reason, an ordering
 that looks arbitrary, a check that guards against something no longer obvious.
 Under the three rules those could not go into a description. They go here.
 
-Collect them and bring them to the operator as a list. This is the part an
-interview does not produce, because the question does not occur to anyone until
-they have looked at the code.
+**Answer what you can yourself first.** There are two kinds of question in that
+pile, and only one of them belongs to the operator:
+
+- *Does the code do X?* - answerable by reading. Go and read. "Is there really a
+  re-check under the lock" is a question about the file, not about history.
+- *Why does it do X?* - not answerable by reading, ever. That one is theirs.
+
+Bringing someone a list padded with questions you could have answered wastes the
+only attention you get.
+
+Then bring the rest as a list. This is the part an interview does not produce,
+because the question does not occur to anyone until they have looked at the
+code.
 
 The answers become knowledge with `context_remember`. After that - and only
 after that - they may be added as Context to the affected description, with the
 new entry number attached.
+
+## When the operator cannot answer either
+
+Expect this, especially on a cold repository. "No idea" is a legitimate answer
+and it arrives more often than not.
+
+**Do not let the questions evaporate.** Write them into the tree as a single
+`note`, naming the paths they concern and stating plainly that nobody has
+answered them yet. That the answer is unknown is itself a fact worth having:
+the next person who trips over the same odd construct starts from "someone
+already noticed this and could not explain it" instead of from zero, and does
+not spend an afternoon rediscovering the question.
+
+A list of open questions living only in a chat message is gone tomorrow. That
+is the one outcome that makes the tree read as more complete than it is.
 
 ## The four states, again
 

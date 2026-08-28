@@ -105,6 +105,7 @@ var excludeLines = []string{
 	".ghosttree/tree/", ".ghosttree/tree" + tmpSuffix + "/",
 	".ghosttree/knowledge/", ".ghosttree/knowledge" + tmpSuffix + "/",
 	".ghosttree/docs/", ".ghosttree/docs" + tmpSuffix + "/",
+	".ghosttree/edit/", ".ghosttree/edit" + tmpSuffix + "/",
 	".ghosttree/requests/", ".ghosttree/requests" + tmpSuffix + "/",
 	".ghosttree/INDEX.md",
 }

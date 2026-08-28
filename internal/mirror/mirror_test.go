@@ -26,8 +26,8 @@ func sampleInput() Input {
 			{ID: 43, Type: "decision", Title: "Auslöser sind der Hauptkanal", Body: "Der Bootstrap ist der Rückfallweg.", Confidence: "verified", Status: "active", Scope: scope.Axes{Machine: "workstation-a"}},
 			{ID: 44, Type: "note", Title: "Ollama-Inventar", Body: "Karte hat 24 GB.", Confidence: "trusted", Status: "active"},
 		},
-		Archived: []store.Knowledge{
-			{ID: 99, Type: "plan", Title: "docs/superpowers/specs/2026-08-22-thing-design.md", Body: "# Spec\n\nZeile zwei.", Status: "archived", ObservedAt: "2026-08-22T09:00:00Z"},
+		Documents: []PublishedDocument{
+			{Document: store.Document{ID: 99, Project: "github.com/x/y", Slug: "thing-design", Kind: "spec", Title: "Thing design", HeadRevision: 1, Status: "active", CreatedAt: "2026-08-22T09:00:00Z"}, Body: "# Spec\n\nZeile zwei."},
 		},
 		Requests: []requestdomain.SearchHit{
 			{Request: requestdomain.Request{ID: 177, Type: "feature", Title: "Ein offener Faden meldet sich von selbst", Description: "Beschreibung mit #42.", State: "open", Priority: "hoch"}, OpenCriteria: 6},
@@ -64,15 +64,15 @@ func TestEveryEntryBecomesAReadableFileInItsPlace(t *testing.T) {
 
 // Ein Dokument gehört nicht zwischen die Fallstricke: es ist Kaltlager, kein
 // Wissen, das eine Sitzung liest.
-func TestArchivedDocumentsGoToDocsNotToKnowledge(t *testing.T) {
+func TestPublishedDocumentsGoToDocsNotToKnowledge(t *testing.T) {
 	got := docsByPath(Build(sampleInput()))
-	path := "docs/2026-08-22-99-2026-08-22-thing-design.md"
+	path := "docs/specs/2026-08-22-thing-design.md"
 	if _, ok := got[path]; !ok {
-		t.Fatalf("archived document is not under docs/: %v", keys(got))
+		t.Fatalf("published document is not under docs/: %v", keys(got))
 	}
 	for p := range got {
 		if strings.HasPrefix(p, "knowledge/") && strings.Contains(p, "99-") {
-			t.Errorf("archived document leaked into knowledge/: %s", p)
+			t.Errorf("published document leaked into knowledge/: %s", p)
 		}
 	}
 	if !strings.Contains(got[path], "# Spec\n\nZeile zwei.") {
@@ -192,7 +192,7 @@ func TestIndexSaysWhenItWasWritten(t *testing.T) {
 // Dateinamen allein sagen nichts".
 func TestDocumentFileNamesKeepTheNameNotThePath(t *testing.T) {
 	in := sampleInput()
-	in.Archived[0].Title = "docs/superpowers/plans/2026-08-23-ghosttree-v0.md"
+	in.Documents[0] = PublishedDocument{Document: store.Document{ID: 99, Project: "github.com/x/y", Slug: "ghosttree-v0", Kind: "plan", Title: "Ghosttree v0", HeadRevision: 1, Status: "active", CreatedAt: "2026-08-23T09:00:00Z"}, Body: "# Ghosttree v0\n"}
 	got := docsByPath(Build(in))
 	var path string
 	for p := range got {
@@ -200,15 +200,15 @@ func TestDocumentFileNamesKeepTheNameNotThePath(t *testing.T) {
 			path = p
 		}
 	}
-	if strings.Contains(path, "superpowers") || strings.Contains(path, "plans") {
-		t.Errorf("the document path repeats its directories: %s", path)
+	if strings.Contains(path, "superpowers") || strings.Count(path, "plans/") != 1 {
+		t.Errorf("the document path repeats legacy directories: %s", path)
 	}
 	if !strings.Contains(path, "ghosttree-v0") {
 		t.Errorf("the document path lost the name that identifies it: %s", path)
 	}
 	body := got[path]
-	if !strings.Contains(body, "docs/superpowers/plans/2026-08-23-ghosttree-v0.md") {
-		t.Errorf("the full original path must stay readable inside the file:\n%s", body)
+	if !strings.Contains(body, "# Ghosttree v0") {
+		t.Errorf("the document body must stay readable inside the file:\n%s", body)
 	}
 }
 

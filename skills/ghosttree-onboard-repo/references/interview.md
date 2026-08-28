@@ -4,7 +4,30 @@ This phase produces the only material the inventory run is allowed to use for
 the Context part of a description. Skip it and the run can produce Synopsis and
 nothing else - which is an honest result, but a much thinner one.
 
-## First: git archaeology, as a memory aid
+## First: how cold is this repository?
+
+Ask before you plan the phase, because the answer changes which source is
+primary:
+
+    git log -1 --format=%cr        # when was the last commit
+
+**Warm** - worked on within the last few weeks. The operator remembers. Git
+archaeology is a memory aid: a few findings to prompt them, then the interview
+carries the phase.
+
+**Cold** - months untouched. The operator will answer "no idea, too long ago",
+and that is not evasion, it is the truth. Here the archaeology is the PRIMARY
+source and the order reverses: dig first, lay out what you found in detail,
+and ask them to confirm or correct rather than to recall. "This path was fixed
+four times, twice with a revert - does that ring a bell?" is answerable when
+"what has gone wrong here repeatedly?" is not.
+
+On a cold repository, expect thin results and say so plainly at the end. A
+phase 3 that produced two entries out of five axes is an honest outcome for a
+repository nobody has touched since spring. Padding it is the only failure
+available here.
+
+## Git archaeology
 
 You are not looking for facts here. You are looking for prompts - things that
 will make the operator remember something they stopped noticing years ago.
@@ -36,6 +59,13 @@ in the code?"
 ## Then: the interview
 
 Five axes. Ask them one at a time, and follow up.
+
+**Drop the ones the earlier phases already answered.** If `docs/qa/` spelled out
+the environment traps in phase 1, do not ask "what would somebody new get wrong
+on their second day" - you already have that answer, in more detail than anyone
+recalls on the spot. Asking anyway spends the operator's patience on ground you
+have covered, and patience is the scarce resource in this phase. Say which axes
+you are skipping and why; it shows the earlier phases did their job.
 
 1. What has gone wrong here more than once?
 2. Which decision do you find yourself explaining over and over?

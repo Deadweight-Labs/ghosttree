@@ -191,6 +191,68 @@ for (const cmd of commands) await tools.exec_command({cmd, workdir:"` + repo + `
 	}
 }
 
+func TestPreToolUseUnderstandsCurrentCodexBashObject(t *testing.T) {
+	repo := newRepo(t)
+	if err := os.MkdirAll(filepath.Join(repo, "internal", "mirror"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "internal", "mirror", "mirror.go"), []byte("package mirror\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile("testdata/codex-pretool-bash-0.150.1.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatal(err)
+	}
+	payload["cwd"] = repo
+	payload["session_id"] = "codex-bash"
+	raw, _ = json.Marshal(payload)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`[{"path":"internal/mirror/mirror.go","kind":"file","description":"aktuelle Codex-Bash-Datei"}]`))
+	}))
+	defer srv.Close()
+	withConfig(t, srv.URL)
+
+	var out bytes.Buffer
+	if code := cmdHookWith(bytes.NewReader(raw), []string{"pre-tool-use"}, &out); code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	_, ctx := decodeHook(t, &out)
+	if !strings.Contains(ctx, "aktuelle Codex-Bash-Datei") {
+		t.Fatalf("current Codex payload delivered no description: %q", ctx)
+	}
+	if strings.Contains(ctx, "context_describe_file") {
+		t.Fatalf("Bash must not be treated as a write: %q", ctx)
+	}
+}
+
+func TestApplyPatchObjectIsAWrite(t *testing.T) {
+	if !writingTools["apply_patch"] {
+		t.Fatal("apply_patch must be classified as a writing tool")
+	}
+	repo := newRepo(t)
+	raw := json.RawMessage(`{"command":"*** Begin Patch\n*** Update File: internal/store/store.go\n*** End Patch"}`)
+	got := toolPaths(raw, repo, repo)
+	if len(got) != 1 || got[0] != "internal/store/store.go" {
+		t.Fatalf("paths = %v", got)
+	}
+}
+
+func TestHookAcceptsHarnessFlagAfterEvent(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	var out bytes.Buffer
+	if code := cmdHookWith(strings.NewReader(`{"cwd":"/tmp"}`), []string{"session-start", "--harness", "codex"}, &out); code != 0 {
+		t.Fatalf("exit = %d: %s", code, out.String())
+	}
+	if event, _ := decodeHook(t, &out); event != "SessionStart" {
+		t.Fatalf("event = %q", event)
+	}
+}
+
 func TestToolPathsKeepsDirectPathsRelativeToTheWorkingDirectory(t *testing.T) {
 	repo := newRepo(t)
 	raw := json.RawMessage(`{"file_path":"store/knowledge.go"}`)

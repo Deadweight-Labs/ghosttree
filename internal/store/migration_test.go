@@ -127,3 +127,135 @@ func TestOnlyCompletedMigrationAuthorizesExactDigest(t *testing.T) {
 		}
 	}
 }
+
+func TestDocumentMigrationEvidenceRequiresExactStoredRevision(t *testing.T) {
+	s := openTest(t)
+	body := "# Design\r\n\ttab 🌳\n"
+	document, err := s.CreateDocument(Document{Project: "p", Slug: "design", Kind: "spec", Title: "Design"}, body, "import")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := s.BeginMigration("p", map[string]string{"docs/design.md": Digest(body)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.InsertDocumentMigration(run, "docs/design.md", Digest(body), document.ID, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CompleteMigration(run); err != nil {
+		t.Fatal(err)
+	}
+	proven, err := s.CompletedDocumentArtifacts("p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(proven["docs/design.md"]) != 1 || proven["docs/design.md"][0] != Digest(body) {
+		t.Fatalf("proof = %+v", proven)
+	}
+	if proven["docs/design.md"][0] == Digest("changed") {
+		t.Fatal("a different file digest was authorized")
+	}
+	if _, err := s.db.Exec(`DELETE FROM document_revisions WHERE document_id=? AND revision=1`, document.ID); err != nil {
+		t.Fatal(err)
+	}
+	proven, err = s.CompletedDocumentArtifacts("p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(proven) != 0 {
+		t.Fatalf("proof survived missing revision: %+v", proven)
+	}
+}
+
+func TestDocumentMigrationEvidenceRejectsMismatchedRevision(t *testing.T) {
+	s := openTest(t)
+	document, err := s.CreateDocument(Document{Project: "p", Slug: "design", Kind: "spec", Title: "Design"}, "stored", "import")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := s.BeginMigration("p", map[string]string{"docs/design.md": Digest("source")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.InsertDocumentMigration(run, "docs/design.md", Digest("source"), document.ID, 1); err == nil {
+		t.Fatal("evidence accepted a revision with different bytes")
+	}
+	if err := s.CompleteMigration(run); err == nil {
+		t.Fatal("run completed without valid revision evidence")
+	}
+}
+
+func TestImportDocumentIsAtomicAndIdempotent(t *testing.T) {
+	s := openTest(t)
+	body := "# Design\r\n\ttab 🌳\n"
+	run, err := s.BeginMigration("p", map[string]string{"docs/design.md": Digest(body)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := MigratedDocument{
+		Document: Document{Project: "p", Slug: "design", Kind: "spec", Title: "Design", Person: "robin"},
+		RunID:    run, Source: "docs/design.md", Digest: Digest(body), Body: body, Message: "import",
+	}
+	first, err := s.ImportDocument(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.ImportDocument(in)
+	if err != nil || second.ID != first.ID {
+		t.Fatalf("retry = %+v, %v; first = %+v", second, err, first)
+	}
+	var documents, revisions, evidence int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM documents`).Scan(&documents); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM document_revisions`).Scan(&revisions); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM migration_evidence`).Scan(&evidence); err != nil {
+		t.Fatal(err)
+	}
+	if documents != 1 || revisions != 1 || evidence != 1 {
+		t.Fatalf("rows after retry: documents=%d revisions=%d evidence=%d", documents, revisions, evidence)
+	}
+	if err := s.CompleteMigration(run); err != nil {
+		t.Fatal(err)
+	}
+
+	badRun, err := s.BeginMigration("p", map[string]string{"docs/bad.md": Digest("expected")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad := MigratedDocument{
+		Document: Document{Project: "p", Slug: "bad", Kind: "spec", Title: "Bad"},
+		RunID:    badRun, Source: "docs/bad.md", Digest: Digest("expected"), Body: "different",
+	}
+	if _, err := s.ImportDocument(bad); err == nil {
+		t.Fatal("import accepted body whose digest differs from the artifact")
+	}
+	if _, err := s.DocumentBySlug("p", "bad"); err == nil {
+		t.Fatal("failed import left a document behind")
+	}
+}
+
+func TestBeginMigrationReusesMatchingPendingRun(t *testing.T) {
+	s := openTest(t)
+	artifacts := map[string]string{"docs/a.md": "one", "docs/b.md": "two"}
+	first, err := s.BeginMigration("p", artifacts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.BeginMigration("p", artifacts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second != first {
+		t.Fatalf("matching retry created run %d; want pending run %d", second, first)
+	}
+	different, err := s.BeginMigration("p", map[string]string{"docs/a.md": "changed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if different == first {
+		t.Fatal("different artifacts reused the pending run")
+	}
+}

@@ -25,11 +25,12 @@ func mirrorServer(t *testing.T, askedSessions *bool) *httptest.Server {
 		case strings.HasPrefix(r.URL.Path, "/api/sessions"):
 			*askedSessions = true
 			w.Write([]byte(`[]`))
-		case r.URL.Path == "/api/knowledge" && r.URL.Query().Get("include_archived") == "1":
+		case r.URL.Path == "/api/documents":
 			json.NewEncoder(w).Encode([]map[string]any{
-				{"id": 99, "type": "plan", "title": "docs/specs/thing.md", "body": "# Spec", "status": "archived", "observed_at": "2026-08-22T09:00:00Z"},
-				{"id": 42, "type": "pitfall", "title": "Fallstrick", "body": "Text", "status": "active", "confidence": "trusted"},
+				{"id": 99, "project": "github.com/x/y", "slug": "thing", "kind": "spec", "title": "Thing", "head_revision": 1, "status": "active", "created_at": "2026-08-22T09:00:00Z"},
 			})
+		case r.URL.Path == "/api/documents/99/revisions/1":
+			json.NewEncoder(w).Encode(map[string]any{"document_id": 99, "revision": 1, "body": "# Spec", "digest": "digest"})
 		case r.URL.Path == "/api/knowledge":
 			json.NewEncoder(w).Encode([]map[string]any{
 				{"id": 42, "type": "pitfall", "title": "Fallstrick", "body": "Text", "status": "active", "confidence": "trusted"},
@@ -74,7 +75,7 @@ func TestWriteMirrorPutsKnowledgeDocsAndLedgerOnDisk(t *testing.T) {
 	for _, rel := range []string{
 		"INDEX.md",
 		"knowledge/pitfall/42-fallstrick.md",
-		"docs/2026-08-22-99-thing.md",
+		"docs/specs/2026-08-22-thing.md",
 		"requests/open/REQ-177-offener-faden.md",
 	} {
 		if _, err := os.Stat(filepath.Join(repo, ".ghosttree", rel)); err != nil {

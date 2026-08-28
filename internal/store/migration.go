@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
 )
@@ -13,6 +14,31 @@ func (s *Store) BeginMigration(project string, artifacts map[string]string) (int
 		return 0, err
 	}
 	defer tx.Rollback()
+	rows, err := tx.Query(`SELECT id FROM migration_runs WHERE project=? AND state='pending' ORDER BY id`, project)
+	if err != nil {
+		return 0, err
+	}
+	var pending []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		pending = append(pending, id)
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+	for _, id := range pending {
+		stored, err := migrationArtifactsTx(tx, id)
+		if err != nil {
+			return 0, err
+		}
+		if equalArtifacts(stored, artifacts) {
+			return id, nil
+		}
+	}
 	res, err := tx.Exec(`INSERT INTO migration_runs(project,state,created_at) VALUES(?,'pending',?)`, project, now())
 	if err != nil {
 		return 0, err
@@ -32,6 +58,35 @@ func (s *Store) BeginMigration(project string, artifacts map[string]string) (int
 	return id, nil
 }
 
+func migrationArtifactsTx(tx *sql.Tx, runID int64) (map[string]string, error) {
+	rows, err := tx.Query(`SELECT path,digest FROM migration_artifacts WHERE run_id=?`, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var path, digest string
+		if err := rows.Scan(&path, &digest); err != nil {
+			return nil, err
+		}
+		out[path] = digest
+	}
+	return out, rows.Err()
+}
+
+func equalArtifacts(left, right map[string]string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for path, digest := range left {
+		if right[path] != digest {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *Store) CompleteMigration(id int64) error {
 	var missing int
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM migration_artifacts a JOIN migration_runs r ON r.id=a.run_id
@@ -39,7 +94,10 @@ func (s *Store) CompleteMigration(id int64) error {
 		 SELECT 1 FROM migration_evidence e
 		 LEFT JOIN knowledge k ON k.id=e.knowledge_id
 		 LEFT JOIN requests q ON q.id=e.request_id
-		 WHERE COALESCE(k.project,q.project)=r.project AND e.source=a.path AND e.digest=a.digest
+		 LEFT JOIN documents d ON d.id=e.document_id
+		 LEFT JOIN document_revisions dr ON dr.document_id=e.document_id AND dr.revision=e.revision
+		 WHERE COALESCE(k.project,q.project,d.project)=r.project AND e.source=a.path AND e.digest=a.digest
+		 AND (e.document_id IS NULL OR dr.digest=e.digest)
 		)`, id).Scan(&missing); err != nil {
 		return err
 	}
@@ -55,6 +113,115 @@ func (s *Store) CompleteMigration(id int64) error {
 		return fmt.Errorf("pending migration run %d not found", id)
 	}
 	return nil
+}
+
+func (s *Store) InsertDocumentMigration(runID int64, source, digest string, documentID int64, revision int) error {
+	res, err := s.db.Exec(`INSERT INTO migration_evidence(document_id,revision,run_id,source,digest,item_key)
+		SELECT d.id,dr.revision,r.id,a.path,a.digest,?
+		FROM migration_runs r
+		JOIN migration_artifacts a ON a.run_id=r.id AND a.path=? AND a.digest=?
+		JOIN documents d ON d.id=? AND d.project=r.project
+		JOIN document_revisions dr ON dr.document_id=d.id AND dr.revision=? AND dr.digest=a.digest
+		WHERE r.id=? AND r.state='pending'`,
+		fmt.Sprintf("document:%d:%d:%s", documentID, revision, digest), source, digest, documentID, revision, runID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n != 1 {
+		return fmt.Errorf("document migration evidence does not match the pending artifact and stored revision")
+	}
+	return nil
+}
+
+type MigratedDocument struct {
+	Document Document `json:"document"`
+	RunID    int64    `json:"run_id"`
+	Source   string   `json:"source"`
+	Digest   string   `json:"digest"`
+	Body     string   `json:"body"`
+	Message  string   `json:"message"`
+}
+
+func (s *Store) ImportDocument(in MigratedDocument) (Document, error) {
+	if Digest(in.Body) != in.Digest {
+		return Document{}, fmt.Errorf("document body does not match migration digest")
+	}
+	itemKey := "document-import:" + Digest(strings.Join([]string{in.Document.Project, in.Source, in.Digest}, "\x00"))
+	tx, err := s.db.Begin()
+	if err != nil {
+		return Document{}, err
+	}
+	defer tx.Rollback()
+	var existingID int64
+	err = tx.QueryRow(`SELECT document_id FROM migration_evidence WHERE item_key=?`, itemKey).Scan(&existingID)
+	if err == nil {
+		d, err := scanDocument(tx.QueryRow(`SELECT `+documentColumns+` FROM documents WHERE id=?`, existingID))
+		return d, err
+	}
+	if err != sql.ErrNoRows {
+		return Document{}, err
+	}
+	var valid int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM migration_runs r JOIN migration_artifacts a ON a.run_id=r.id
+		WHERE r.id=? AND r.project=? AND r.state='pending' AND a.path=? AND a.digest=?`,
+		in.RunID, in.Document.Project, in.Source, in.Digest).Scan(&valid); err != nil {
+		return Document{}, err
+	}
+	if valid != 1 {
+		return Document{}, fmt.Errorf("document import does not match a pending migration artifact")
+	}
+	d := in.Document
+	if d.Status == "" {
+		d.Status = "active"
+	}
+	ts := now()
+	res, err := tx.Exec(`INSERT INTO documents(project,slug,kind,title,head_revision,status,person,created_at,updated_at)
+		VALUES(?,?,?,?,1,?,?,?,?)`, d.Project, d.Slug, d.Kind, d.Title, d.Status, d.Person, ts, ts)
+	if err != nil {
+		return Document{}, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return Document{}, err
+	}
+	if err := insertRevisionTx(tx, id, 1, in.Body, in.Message, d.Person, ts); err != nil {
+		return Document{}, err
+	}
+	if _, err := tx.Exec(`INSERT INTO migration_evidence(document_id,revision,run_id,source,digest,item_key)
+		VALUES(?,1,?,?,?,?)`, id, in.RunID, in.Source, in.Digest, itemKey); err != nil {
+		return Document{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Document{}, err
+	}
+	d.ID, d.HeadRevision, d.CreatedAt, d.UpdatedAt = id, 1, ts, ts
+	return d, nil
+}
+
+func (s *Store) CompletedDocumentArtifacts(project string) (map[string][]string, error) {
+	rows, err := s.db.Query(`SELECT e.source,e.digest
+		FROM migration_evidence e
+		JOIN migration_runs r ON r.id=e.run_id
+		JOIN documents d ON d.id=e.document_id
+		JOIN document_revisions dr ON dr.document_id=e.document_id AND dr.revision=e.revision AND dr.digest=e.digest
+		WHERE r.project=? AND r.state='complete' AND d.project=? AND e.document_id IS NOT NULL`, project, project)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string][]string{}
+	for rows.Next() {
+		var source, digest string
+		if err := rows.Scan(&source, &digest); err != nil {
+			return nil, err
+		}
+		out[source] = append(out[source], digest)
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) CompletedMigrationArtifacts(project string) (map[string][]string, error) {

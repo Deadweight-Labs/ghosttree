@@ -62,7 +62,7 @@ func setMatcherOnPreToolUseHook(settings map[string]any, matcher string) bool {
 		inner, _ := group["hooks"].([]any)
 		for _, h := range inner {
 			hm, _ := h.(map[string]any)
-			if hm["command"] == preToolHookCommand {
+			if hm["command"] == preToolHookCommand+" --harness codex" {
 				group["matcher"] = matcher
 				return true
 			}
@@ -109,6 +109,34 @@ func TestChangingAHookDropsItsStaleTrustEntry(t *testing.T) {
 	}
 	if trust := findCheck(VerifyCodex(home), "trust"); trust == nil || trust.OK {
 		t.Errorf("after changing the hook the check must ask for a new confirmation: %+v", trust)
+	}
+}
+
+func TestCodexTrustRequiresNonEmptyHashAndEnabledState(t *testing.T) {
+	for _, body := range []string{
+		`trusted_hash = ""`,
+		"trusted_hash = \"sha256:abc\"\nenabled = false",
+		`trusted_hash = 123`,
+		"trusted_hash = \"sha256:abc\"\nenabled = \"false\"",
+		"trusted_hash = \"sha256:abc\"\nenabled = false\nenabled = true",
+		"trusted_hash = \"sha256:abc\"\nthis is not toml",
+	} {
+		home := t.TempDir()
+		if _, err := InstallCodex(home); err != nil {
+			t.Fatal(err)
+		}
+		hooks := filepath.Join(home, ".codex", "hooks.json")
+		cfg := filepath.Join(home, ".codex", "config.toml")
+		raw, _ := os.ReadFile(cfg)
+		for header := range ghosttreeTrustSections(hooks) {
+			raw = append(raw, []byte("\n"+header+"\n"+body+"\n")...)
+		}
+		if err := os.WriteFile(cfg, raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if trust := codexTrustCheck(home); trust.OK {
+			t.Fatalf("invalid trust state passed for %q: %+v", body, trust)
+		}
 	}
 }
 

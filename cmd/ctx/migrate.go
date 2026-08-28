@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
@@ -70,6 +71,10 @@ func cmdMigrate(args []string, stdout io.Writer) int {
 		fmt.Fprintf(stdout, "scan failed: %v\n", err)
 		return 1
 	}
+	if err := validateDocumentArtifacts(artifacts); err != nil {
+		fmt.Fprintf(stdout, "scan failed: %v\n", err)
+		return 1
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintf(stdout, "no config (%s) - run 'ctx setup'\n", config.Path())
@@ -79,20 +84,44 @@ func cmdMigrate(args []string, stdout io.Writer) int {
 	if *clean {
 		return cleanMigrated(repo, project, artifacts, api, stdout)
 	}
-	llmCfg, err := llm.LoadConfig()
+	completed, err := api.CompletedMigrationArtifacts(project)
 	if err != nil {
-		fmt.Fprintf(stdout, "LLM config failed: %v\n", err)
+		fmt.Fprintf(stdout, "load migration history: %v\n", err)
 		return 1
 	}
-	model, err := llm.New(llmCfg)
+	completedDocuments, err := api.CompletedDocumentArtifacts(project)
 	if err != nil {
-		fmt.Fprintf(stdout, "LLM config failed: %v\n", err)
+		fmt.Fprintf(stdout, "load document migration history: %v\n", err)
 		return 1
 	}
-	existing, err := api.ProjectKnowledge(project, true)
-	if err != nil {
-		fmt.Fprintf(stdout, "load existing knowledge: %v\n", err)
-		return 1
+	needsLLM := false
+	for _, artifact := range artifacts {
+		if !migrate.ShouldDistill(artifact) {
+			continue
+		}
+		raw, readErr := os.ReadFile(artifact.Path)
+		if readErr != nil {
+			fmt.Fprintf(stdout, "read %s: %v\n", artifact.Rel, readErr)
+			return 1
+		}
+		if !containsString(completed[artifact.Rel], contentDigest(raw)) {
+			needsLLM = true
+			break
+		}
+	}
+	var model llm.Client
+	var existing []store.Knowledge
+	if needsLLM {
+		model, err = migrationModel(true)
+		if err != nil {
+			fmt.Fprintf(stdout, "LLM config failed: %v\n", err)
+			return 1
+		}
+		existing, err = api.ProjectKnowledge(project, true)
+		if err != nil {
+			fmt.Fprintf(stdout, "load existing knowledge: %v\n", err)
+			return 1
+		}
 	}
 	titles := make([]string, 0, len(existing))
 	var existingInstructions []migrate.InstructionCandidate
@@ -104,13 +133,9 @@ func cmdMigrate(args []string, stdout io.Writer) int {
 	}
 	var candidates []migrationCandidate
 	var dropped []string
-	completed, err := api.CompletedMigrationArtifacts(project)
-	if err != nil {
-		fmt.Fprintf(stdout, "load migration history: %v\n", err)
-		return 1
-	}
 	digests := map[string]string{}
 	var pendingArtifacts []migrate.Artifact
+	var documentArtifacts []migrate.Artifact
 	for _, artifact := range artifacts {
 		raw, err := os.ReadFile(artifact.Path)
 		if err != nil {
@@ -120,7 +145,11 @@ func cmdMigrate(args []string, stdout io.Writer) int {
 		content := string(raw)
 		digest := contentDigest(raw)
 		digests[artifact.Rel] = digest
-		if containsString(completed[artifact.Rel], digest) {
+		proofs := completed[artifact.Rel]
+		if artifact.Kind != "rules" {
+			proofs = completedDocuments[artifact.Rel]
+		}
+		if containsString(proofs, digest) {
 			fmt.Fprintf(stdout, "already migrated: %s\n", artifact.Rel)
 			continue
 		}
@@ -147,8 +176,8 @@ func cmdMigrate(args []string, stdout io.Writer) int {
 				dropped = append(dropped, artifact.Rel+": "+reason)
 			}
 		}
-		if artifact.Kind == "spec" || artifact.Kind == "plan" {
-			candidates = append(candidates, migrationCandidate{item: migrate.Item{Type: "plan", Title: artifact.Rel, Body: content, Source: artifact.Rel}, status: "archived"})
+		if artifact.Kind != "rules" {
+			documentArtifacts = append(documentArtifacts, artifact)
 		}
 	}
 	var newInstructions []migrate.InstructionCandidate
@@ -179,6 +208,9 @@ func cmdMigrate(args []string, stdout io.Writer) int {
 	for _, c := range candidates {
 		fmt.Fprintf(stdout, "%s %s <- %s\n", c.item.Type, c.item.Title, c.item.Source)
 	}
+	for _, artifact := range documentArtifacts {
+		fmt.Fprintf(stdout, "document %s <- %s\n", artifact.Kind, artifact.Rel)
+	}
 	for _, reason := range dropped {
 		fmt.Fprintf(stdout, "dropped: %s\n", reason)
 	}
@@ -197,6 +229,9 @@ func cmdMigrate(args []string, stdout io.Writer) int {
 	for _, c := range candidates {
 		covered[sourceFile(c.item.Source)] = true
 	}
+	for _, artifact := range documentArtifacts {
+		covered[artifact.Rel] = true
+	}
 	for source := range runArtifacts {
 		if !covered[source] {
 			fmt.Fprintf(stdout, "migration refused: %s produced no persisted knowledge; keep the source file\n", source)
@@ -209,9 +244,6 @@ func cmdMigrate(args []string, stdout io.Writer) int {
 		return 1
 	}
 	for _, c := range candidates {
-		if c.status == "archived" && c.confidence == "" {
-			c.confidence = "trusted"
-		}
 		k := store.Knowledge{Type: c.item.Type, Title: c.item.Title, Body: c.item.Body, Scope: scope.Axes{Project: project}, Activation: c.activation, Confidence: c.confidence, Status: c.status, Origin: "distilled", SessionRef: sourceFile(c.item.Source)}
 		source := sourceFile(c.item.Source)
 		state, kind, ref := "", "", ""
@@ -235,12 +267,66 @@ func cmdMigrate(args []string, stdout io.Writer) int {
 			return 1
 		}
 	}
+	for _, artifact := range documentArtifacts {
+		raw, err := os.ReadFile(artifact.Path)
+		if err != nil {
+			fmt.Fprintf(stdout, "read %s: %v\n", artifact.Rel, err)
+			return 1
+		}
+		body := string(raw)
+		_, err = api.ImportDocument(store.MigratedDocument{
+			Document: store.Document{Project: project, Slug: migrationDocumentSlug(artifact.Rel), Kind: artifact.Kind, Title: docTitle(body, artifact.Rel)},
+			RunID:    runID, Source: artifact.Rel, Digest: digests[artifact.Rel], Body: body, Message: "import " + artifact.Rel,
+		})
+		if err != nil {
+			fmt.Fprintf(stdout, "store document %s: %v\n", artifact.Rel, err)
+			return 1
+		}
+	}
 	if err := api.CompleteMigration(runID); err != nil {
 		fmt.Fprintf(stdout, "complete migration: %v\n", err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "migrated %d entries from %d artifacts\n", len(candidates), len(artifacts))
+	fmt.Fprintf(stdout, "migrated %d knowledge entries and %d documents from %d artifacts\n", len(candidates), len(documentArtifacts), len(artifacts))
 	return 0
+}
+
+func migrationModel(needed bool) (llm.Client, error) {
+	if !needed {
+		return nil, nil
+	}
+	cfg, err := llm.LoadConfig()
+	if err != nil {
+		return nil, err
+	}
+	return llm.New(cfg)
+}
+
+func migrationDocumentSlug(rel string) string {
+	name := strings.TrimSuffix(filepath.Base(rel), filepath.Ext(rel))
+	return strings.TrimSpace(name)
+}
+
+func validateDocumentArtifacts(artifacts []migrate.Artifact) error {
+	seen := map[string]string{}
+	for _, artifact := range artifacts {
+		if artifact.Kind == "rules" {
+			continue
+		}
+		raw, err := os.ReadFile(artifact.Path)
+		if err != nil {
+			return fmt.Errorf("read %s: %w", artifact.Rel, err)
+		}
+		if !utf8.Valid(raw) {
+			return fmt.Errorf("%s is not valid UTF-8; nothing was migrated", artifact.Rel)
+		}
+		slug := migrationDocumentSlug(artifact.Rel)
+		if previous := seen[slug]; previous != "" {
+			return fmt.Errorf("document slug %q collides for %s and %s", slug, previous, artifact.Rel)
+		}
+		seen[slug] = artifact.Rel
+	}
+	return nil
 }
 
 func sourceFile(source string) string {
@@ -267,6 +353,11 @@ func cleanMigrated(repo, project string, artifacts []migrate.Artifact, api *clie
 		fmt.Fprintf(stdout, "verify migration: %v\n", err)
 		return 1
 	}
+	completedDocuments, err := api.CompletedDocumentArtifacts(project)
+	if err != nil {
+		fmt.Fprintf(stdout, "verify document migration: %v\n", err)
+		return 1
+	}
 	var missing []string
 	for _, a := range artifacts {
 		raw, err := os.ReadFile(a.Path)
@@ -274,7 +365,11 @@ func cleanMigrated(repo, project string, artifacts []migrate.Artifact, api *clie
 			fmt.Fprintf(stdout, "verify %s: %v\n", a.Rel, err)
 			return 1
 		}
-		if !containsString(completed[a.Rel], contentDigest(raw)) {
+		proofs := completed[a.Rel]
+		if a.Kind != "rules" {
+			proofs = completedDocuments[a.Rel]
+		}
+		if !containsString(proofs, contentDigest(raw)) {
 			missing = append(missing, a.Rel)
 		}
 	}

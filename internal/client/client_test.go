@@ -1,6 +1,7 @@
 package client
 
 import (
+	"errors"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -38,6 +39,73 @@ func TestClientRoundtrip(t *testing.T) {
 	}
 	if _, err := bad.Knowledge(ctx); err == nil || !strings.Contains(err.Error(), "401") {
 		t.Errorf("wrong token: err = %v, want 401", err)
+	}
+}
+
+func TestDocumentClientRoundTrip(t *testing.T) {
+	st, _ := store.Open(":memory:")
+	t.Cleanup(func() { st.Close() })
+	token, _ := st.AddPerson("robin")
+	srv := httptest.NewServer(server.New(st))
+	t.Cleanup(srv.Close)
+	c := New(config.Config{ServerURL: srv.URL, Token: token})
+
+	d, err := c.CreateDocument(store.Document{
+		Project: "github.com/x/y", Slug: "architecture", Kind: "spec", Title: "Architecture",
+	}, "one\r\n\ttwo 🌳\n", "initial")
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed, err := c.Documents("github.com/x/y", "spec", false)
+	if err != nil || len(listed) != 1 || listed[0].ID != d.ID {
+		t.Fatalf("documents = %+v, err = %v", listed, err)
+	}
+	got, err := c.Document(d.ID)
+	if err != nil || got.Slug != d.Slug {
+		t.Fatalf("document = %+v, err = %v", got, err)
+	}
+	updated, err := c.PushDocumentRevision(d.ID, 1, "two\n", "second")
+	if err != nil || updated.HeadRevision != 2 {
+		t.Fatalf("push = %+v, err = %v", updated, err)
+	}
+	revs, err := c.DocumentRevisions(d.ID)
+	if err != nil || len(revs) != 2 || revs[0].Body != "" {
+		t.Fatalf("revisions = %+v, err = %v", revs, err)
+	}
+	rev, err := c.DocumentRevision(d.ID, 1)
+	if err != nil || rev.Body != "one\r\n\ttwo 🌳\n" {
+		t.Fatalf("revision = %+v, err = %v", rev, err)
+	}
+	patched, err := c.PatchDocument(d.ID, map[string]string{"slug": "design"})
+	if err != nil || patched.Slug != "design" {
+		t.Fatalf("patch = %+v, err = %v", patched, err)
+	}
+}
+
+func TestDocumentClientDecodesRevisionConflict(t *testing.T) {
+	st, _ := store.Open(":memory:")
+	t.Cleanup(func() { st.Close() })
+	token, _ := st.AddPerson("robin")
+	srv := httptest.NewServer(server.New(st))
+	t.Cleanup(srv.Close)
+	c := New(config.Config{ServerURL: srv.URL, Token: token})
+
+	d, err := c.CreateDocument(store.Document{
+		Project: "p", Slug: "a", Kind: "spec", Title: "A",
+	}, "one", "initial")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.PushDocumentRevision(d.ID, 1, "two", "winner"); err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.PushDocumentRevision(d.ID, 1, "three", "stale")
+	var conflict *ConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("error = %T %v, want *ConflictError", err, err)
+	}
+	if conflict.HeadRevision != 2 || conflict.Person != "robin" || conflict.Message != "winner" || conflict.At == "" {
+		t.Fatalf("conflict = %+v", conflict)
 	}
 }
 

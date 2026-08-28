@@ -38,6 +38,17 @@ type APIError struct {
 	Details    map[string]any `json:"details,omitempty"`
 }
 
+type ConflictError struct {
+	HeadRevision int    `json:"head_revision"`
+	Person       string `json:"person"`
+	At           string `json:"at"`
+	Message      string `json:"message"`
+}
+
+func (e *ConflictError) Error() string {
+	return fmt.Sprintf("revision conflict: head is %d by %s at %s", e.HeadRevision, e.Person, e.At)
+}
+
 func (e *APIError) Error() string {
 	return fmt.Sprintf("HTTP %d: %s: %s", e.Status, e.Code, e.Message)
 }
@@ -102,6 +113,12 @@ func (c *Client) do(method, path string, query url.Values, in, out any) error {
 		return err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		if resp.StatusCode == http.StatusConflict {
+			var conflict ConflictError
+			if json.Unmarshal(raw, &conflict) == nil && conflict.HeadRevision > 0 {
+				return &conflict
+			}
+		}
 		var apiErr APIError
 		if json.Unmarshal(raw, &apiErr) == nil && apiErr.Code != "" {
 			apiErr.Status = resp.StatusCode
@@ -118,6 +135,62 @@ func (c *Client) do(method, path string, query url.Values, in, out any) error {
 	default:
 		return json.Unmarshal(raw, out)
 	}
+}
+
+func (c *Client) CreateDocument(d store.Document, body, message string) (store.Document, error) {
+	in := struct {
+		store.Document
+		Body    string `json:"body"`
+		Message string `json:"message"`
+	}{Document: d, Body: body, Message: message}
+	var out store.Document
+	err := c.do("POST", "/api/documents", nil, in, &out)
+	return out, err
+}
+
+func (c *Client) Documents(project, kind string, includeArchived bool) ([]store.Document, error) {
+	q := url.Values{"project": {project}}
+	if kind != "" {
+		q.Set("kind", kind)
+	}
+	if includeArchived {
+		q.Set("include_archived", "1")
+	}
+	var out []store.Document
+	err := c.do("GET", "/api/documents", q, nil, &out)
+	return out, err
+}
+
+func (c *Client) Document(id int64) (store.Document, error) {
+	var out store.Document
+	err := c.do("GET", "/api/documents/"+strconv.FormatInt(id, 10), nil, nil, &out)
+	return out, err
+}
+
+func (c *Client) PatchDocument(id int64, patch map[string]string) (store.Document, error) {
+	var out store.Document
+	err := c.do("PATCH", "/api/documents/"+strconv.FormatInt(id, 10), nil, patch, &out)
+	return out, err
+}
+
+func (c *Client) PushDocumentRevision(id int64, base int, body, message string) (store.Document, error) {
+	in := map[string]any{"base_revision": base, "body": body, "message": message}
+	var out store.Document
+	err := c.do("PUT", "/api/documents/"+strconv.FormatInt(id, 10)+"/revisions", nil, in, &out)
+	return out, err
+}
+
+func (c *Client) DocumentRevisions(id int64) ([]store.DocumentRevision, error) {
+	var out []store.DocumentRevision
+	err := c.do("GET", "/api/documents/"+strconv.FormatInt(id, 10)+"/revisions", nil, nil, &out)
+	return out, err
+}
+
+func (c *Client) DocumentRevision(id int64, revision int) (store.DocumentRevision, error) {
+	var out store.DocumentRevision
+	path := "/api/documents/" + strconv.FormatInt(id, 10) + "/revisions/" + strconv.Itoa(revision)
+	err := c.do("GET", path, nil, nil, &out)
+	return out, err
 }
 
 func axesQuery(ax scope.Axes) url.Values {
@@ -300,6 +373,26 @@ func (c *Client) CompletedMigrationArtifacts(project string) (map[string][]strin
 	q := url.Values{"project": {project}}
 	var out map[string][]string
 	err := c.do("GET", "/api/migrations", q, nil, &out)
+	return out, err
+}
+
+func (c *Client) InsertDocumentMigration(runID int64, source, digest string, documentID int64, revision int) error {
+	body := map[string]any{
+		"source": source, "digest": digest, "document_id": documentID, "revision": revision,
+	}
+	return c.do("POST", "/api/migrations/"+strconv.FormatInt(runID, 10)+"/documents", nil, body, nil)
+}
+
+func (c *Client) ImportDocument(in store.MigratedDocument) (store.Document, error) {
+	var out store.Document
+	err := c.do("POST", "/api/migrations/"+strconv.FormatInt(in.RunID, 10)+"/documents/import", nil, in, &out)
+	return out, err
+}
+
+func (c *Client) CompletedDocumentArtifacts(project string) (map[string][]string, error) {
+	q := url.Values{"project": {project}}
+	var out map[string][]string
+	err := c.do("GET", "/api/migrations/documents", q, nil, &out)
 	return out, err
 }
 

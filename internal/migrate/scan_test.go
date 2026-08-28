@@ -146,6 +146,40 @@ func TestScanDoesNotMistakePerspectiveForASpec(t *testing.T) {
 	}
 }
 
+func TestScanIncludesEveryMarkdownDocumentUnderDocs(t *testing.T) {
+	repo := t.TempDir()
+	for _, rel := range []string{
+		"docs/architecture.md",
+		"docs/evaluations/2026-08-24-reliability-roadmap.md",
+		"docs/operations/request-ledger-rollout.md",
+	} {
+		path := filepath.Join(repo, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("# Document\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	artifacts, err := Scan(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, artifact := range artifacts {
+		got[artifact.Rel] = artifact.Kind
+	}
+	for _, rel := range []string{
+		"docs/architecture.md",
+		"docs/evaluations/2026-08-24-reliability-roadmap.md",
+		"docs/operations/request-ledger-rollout.md",
+	} {
+		if got[rel] == "" {
+			t.Errorf("%s was missed: %+v", rel, got)
+		}
+	}
+}
+
 // Ein Verzeichnis, in das der Nutzer nicht hineinsehen darf, geht die Migration
 // nichts an. Gefunden am 2026-08-25 an NurBlindspot: data/postgres gehört einem
 // Containernutzer, und der ganze Repo-Lauf brach daran ab, statt das eine

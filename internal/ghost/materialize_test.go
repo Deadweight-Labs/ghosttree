@@ -69,6 +69,11 @@ func TestEnsureExcludedIsIdempotentAndNarrow(t *testing.T) {
 			t.Fatalf("%q muss genau einmal dastehen, war %d mal:\n%s", want, n, b)
 		}
 	}
+	for _, want := range []string{".ghosttree/edit/", ".ghosttree/edit" + tmpSuffix + "/"} {
+		if countLines(string(b), want) != 1 {
+			t.Fatalf("document worktree exclusion %q missing:\n%s", want, b)
+		}
+	}
 	// Das Bauverzeichnis ist ein Geschwister von tree/ und faellt deshalb NICHT
 	// unter dessen Ausschluss. Bleibt es nach einem Abbruch liegen, stuende es
 	// sonst im git status.

@@ -41,6 +41,8 @@ func run(args []string, stdout io.Writer) int {
 		return cmdRequest(rest, stdout)
 	case "ghost":
 		return cmdGhost(rest, stdout)
+	case "doc":
+		return cmdDoc(rest, stdout)
 	case "migrate":
 		return cmdMigrate(rest, stdout)
 	case "mirror":
@@ -85,6 +87,7 @@ const usage = `usage: ctx <command>
   regression  say which test guards a fixed defect, and list the fixes none does
   request  search and manage the work ledger
   ghost    read earlier versions of a path's description
+  doc      write, publish, and read long-form documents
   migrate  move repository agent artifacts into ghosttree
   mirror   write .ghosttree/ for a repository (harnesses without hooks)
   distill-sessions  extract quarantined knowledge from idle sessions

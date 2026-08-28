@@ -4,8 +4,10 @@ package installer
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 )
 
@@ -39,12 +41,18 @@ What ghosttree knows about this repository is also on disk, under ` + "`.ghosttr
 ` + "`.ghosttree/tree/`" + ` holds one ` + "`.md`" + ` per file and a ` + "`__dir.md`" + ` per directory,
 ` + "`.ghosttree/knowledge/`" + ` holds the pitfalls, decisions and notes a session here
 would be given, ` + "`.ghosttree/requests/`" + ` holds the work ledger split into open
-and done, and ` + "`.ghosttree/docs/`" + ` holds plans and specs in full. Start at ` + "`.ghosttree/INDEX.md`" + `, which also names what
+and done, ` + "`.ghosttree/docs/`" + ` holds the generated document projection, and
+` + "`.ghosttree/edit/`" + ` is the writable document worktree. Start at ` + "`.ghosttree/INDEX.md`" + `, which also names what
 is deliberately NOT mirrored there. Reading it with ls, cat and grep costs no
 tool call and is the cheapest way into an unfamiliar part of the codebase —
 ` + "`grep -ril \"topic\" .ghosttree/knowledge/`" + ` before ` + "`context_search`" + `. It is a
 projection: editing it changes nothing, and it is only as fresh as its last
 write, which the index states.
+
+Long-form specifications, plans, investigations and reports belong in the
+document worktree. Create or import them with ` + "`ctx doc new`" + ` and
+` + "`ctx doc import`" + `, publish revisions with ` + "`ctx doc push`" + `, and keep
+the source tree clean; never commit specs or plans as internal working files.
 
 For substantial feature, architecture, migration, or multi-session work, use
 ` + "`request_search`" + ` before implementation. Continue a matching request and
@@ -93,11 +101,23 @@ func writeMarkerFile(path, body string) (Change, error) {
 }
 
 func writeAtomic(path string, data []byte, perm os.FileMode) error {
+	if info, err := os.Stat(path); err == nil {
+		perm = info.Mode().Perm()
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
 	tmp := path + ".ghosttree.tmp"
 	if err := os.WriteFile(tmp, data, perm); err != nil {
 		return err
 	}
+	if err := os.Chmod(tmp, perm); err != nil {
+		return err
+	}
 	return os.Rename(tmp, path)
+}
+
+func jsonValuesEqual(left, right any) bool {
+	return reflect.DeepEqual(left, right)
 }
 
 // readJSONFile returns an empty object for a missing file so callers can merge

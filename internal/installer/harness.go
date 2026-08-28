@@ -37,7 +37,8 @@ const (
 // this harness offer" — the installer wires them, the doctor checks them, and
 // the rule section compensates for the ones that are missing.
 type Harness struct {
-	Name string
+	Name       string
+	Components []Component
 	// Channels are the routes ghosttree registers for this harness.
 	Channels []Channel
 	// Delivers is the subset that measurably reaches the model, and it is a
@@ -70,6 +71,7 @@ func Harnesses() []Harness {
 	return []Harness{
 		{
 			Name:       "claude",
+			Components: append([]Component(nil), componentOrder...),
 			Channels:   []Channel{ChannelSessionStart, ChannelUserPrompt, ChannelPreToolUse, ChannelMCP},
 			Delivers:   []Channel{ChannelSessionStart, ChannelUserPrompt, ChannelPreToolUse, ChannelMCP},
 			HooksPath:  func(home string) string { return filepath.Join(home, ".claude", "settings.json") },
@@ -94,17 +96,17 @@ func Harnesses() []Harness {
 			// entry, doctor found it, and all of that was true while nothing
 			// happened. See #794 and #859.
 			//
-			// PreToolUse stays out of Delivers until a post-fix transcript shows
-			// the description in the model context. The cause before this fix is
-			// measured: Codex groups reads behind `exec` and puts JavaScript source
-			// in tool_input, while the old adapter matched Claude's tool names and
-			// expected file_path. Wiring and parsing are covered by tests; neither
-			// substitutes for the missing end-to-end delivery evidence.
-			Name:      "codex",
-			Channels:  []Channel{ChannelSessionStart, ChannelUserPrompt, ChannelPreToolUse, ChannelMCP},
-			Delivers:  []Channel{ChannelSessionStart, ChannelUserPrompt, ChannelMCP},
-			HooksPath: func(home string) string { return filepath.Join(home, ".codex", "hooks.json") },
-			RulePath:  func(home string) string { return filepath.Join(home, ".codex", "AGENTS.md") },
+			// PreToolUse was measured end to end on Codex 0.150.1: a fresh session
+			// used Bash to read internal/mirror/mirror.go without MCP, and answered
+			// with the description delivered only by this hook. Current Codex sends
+			// tool_name Bash and tool_input.command; older raw-string exec payloads
+			// remain supported by the adapter.
+			Name:       "codex",
+			Components: append([]Component(nil), componentOrder...),
+			Channels:   []Channel{ChannelSessionStart, ChannelUserPrompt, ChannelPreToolUse, ChannelMCP},
+			Delivers:   []Channel{ChannelSessionStart, ChannelUserPrompt, ChannelPreToolUse, ChannelMCP},
+			HooksPath:  func(home string) string { return filepath.Join(home, ".codex", "hooks.json") },
+			RulePath:   func(home string) string { return filepath.Join(home, ".codex", "AGENTS.md") },
 			// The documented user location is $HOME/.agents/skills, next to
 			// .agents/skills scanned upwards from the working directory and
 			// /etc/codex/skills machine-wide. Measured on the development
@@ -125,11 +127,12 @@ func Harnesses() []Harness {
 			// JS-Artefakt auszuliefern wäre eine eigene Entscheidung. Bis dahin
 			// gilt: kein Hook-Pfad, kein Push-Kanal, und der Rückfallweg trägt
 			// allein. Recherchiert an opencode.ai/docs, Wissen #1427.
-			Name:      "opencode",
-			Channels:  []Channel{ChannelMCP},
-			Delivers:  []Channel{ChannelMCP},
-			HooksPath: nil,
-			RulePath:  opencodeRulePath,
+			Name:       "opencode",
+			Components: []Component{ComponentMCP, ComponentRules},
+			Channels:   []Channel{ChannelMCP},
+			Delivers:   []Channel{ChannelMCP},
+			HooksPath:  nil,
+			RulePath:   opencodeRulePath,
 		},
 	}
 }
@@ -164,9 +167,9 @@ func (h Harness) DeliversContext(c Channel) bool { return slices.Contains(h.Deli
 func (h Harness) hookCommandFor(c Channel) (event, command, matcher string, ok bool) {
 	switch c {
 	case ChannelSessionStart:
-		return "SessionStart", hookCommand, "", true
+		return "SessionStart", hookCommand + " --harness " + h.Name, "", true
 	case ChannelUserPrompt:
-		return "UserPromptSubmit", promptHookCommand, "", true
+		return "UserPromptSubmit", promptHookCommand + " --harness " + h.Name, "", true
 	case ChannelPreToolUse:
 		// Codex bekommt bewusst KEINEN Matcher. `exec` stand hier, weil das
 		// Rollout-Protokoll Lesezugriffe so bündelt — nur filtert Codex damit
@@ -183,9 +186,9 @@ func (h Harness) hookCommandFor(c Channel) (event, command, matcher string, ok b
 		// Nutzdaten, ob ein Pfad vorkommt, und schweigt sonst — die Filterung
 		// sitzt damit dort, wo sie überprüfbar ist.
 		if h.Name == "codex" {
-			return "PreToolUse", preToolHookCommand, "", true
+			return "PreToolUse", preToolHookCommand + " --harness " + h.Name, "", true
 		}
-		return "PreToolUse", preToolHookCommand, "Read|Edit|Write|NotebookEdit", true
+		return "PreToolUse", preToolHookCommand + " --harness " + h.Name, "Read|Edit|Write|NotebookEdit", true
 	}
 	return "", "", "", false
 }

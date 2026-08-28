@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -73,8 +74,8 @@ func untrustedCodexHooks(hooksPath, cfgPath string) []string {
 				if !strings.HasPrefix(h.Command, "ctx hook ") {
 					continue
 				}
-				key := fmt.Sprintf("%s:%s:%d:%d", hooksPath, snakeEvent(event), gi, hi)
-				if !strings.Contains(string(cfg), key) {
+				header := fmt.Sprintf("[hooks.state.%q]", fmt.Sprintf("%s:%s:%d:%d", hooksPath, snakeEvent(event), gi, hi))
+				if !validCodexTrustSection(string(cfg), header) {
 					missing = append(missing, event)
 				}
 			}
@@ -84,6 +85,79 @@ func untrustedCodexHooks(hooksPath, cfgPath string) []string {
 		return nil
 	}
 	return missing
+}
+
+func validCodexTrustSection(content, header string) bool {
+	bodies := tomlSectionBodies(content, header)
+	if len(bodies) != 1 {
+		return false
+	}
+	values := map[string]string{}
+	for _, line := range strings.Split(bodies[0], "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			return false
+		}
+		key := strings.TrimSpace(parts[0])
+		if key != "trusted_hash" && key != "enabled" {
+			return false
+		}
+		if _, duplicate := values[key]; duplicate {
+			return false
+		}
+		values[key] = strings.TrimSpace(strings.SplitN(parts[1], "#", 2)[0])
+	}
+	hash, ok := quotedTOMLString(values["trusted_hash"])
+	if !ok || hash == "" {
+		return false
+	}
+	enabled := values["enabled"]
+	return enabled == "" || enabled == "true"
+}
+
+func quotedTOMLString(raw string) (string, bool) {
+	if len(raw) < 2 {
+		return "", false
+	}
+	if raw[0] == '\'' && raw[len(raw)-1] == '\'' {
+		return raw[1 : len(raw)-1], true
+	}
+	if raw[0] != '"' || raw[len(raw)-1] != '"' {
+		return "", false
+	}
+	value, err := strconv.Unquote(raw)
+	return value, err == nil
+}
+
+func tomlSectionBodies(content, header string) []string {
+	lines := strings.SplitAfter(content, "\n")
+	var bodies []string
+	var current strings.Builder
+	inSection := false
+	flush := func() {
+		if inSection {
+			bodies = append(bodies, current.String())
+			current.Reset()
+		}
+	}
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		isTable := strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]")
+		if isTable {
+			flush()
+			inSection = trimmed == header
+			continue
+		}
+		if inSection {
+			current.WriteString(line)
+		}
+	}
+	flush()
+	return bodies
 }
 
 // snakeEvent übersetzt SessionStart in session_start — die Schreibweise, in der

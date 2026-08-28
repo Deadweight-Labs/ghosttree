@@ -26,9 +26,29 @@ fresh install is fine; an error is not.
 
     ctx doctor
 
-Quiet means: hooks registered where the harness looks for them, MCP registered,
-rule text present and not drifted, and no orphaned ghost descriptions. Anything
-it prints is a finding, not a warning to skim past.
+Every row is evidence and has one of three states:
+
+- `OK`: Doctor inspected or exercised the claimed path.
+- `FAIL`: required configuration or execution is broken; the command exits
+  nonzero.
+- `UNVERIFIED`: only a later real harness event can prove the remaining claim;
+  it stays visible without pretending to be a failure or a success.
+
+Doctor compares the complete owned MCP entry, starts its configured stdio
+process, performs initialization and `tools/list`, and calls `context_get`.
+Hooks are checked separately for exact installation, a synthetic runnable
+probe, and observed real activity. Rules, skills, trust state, collector state,
+binary, client, server, and ghost tree have their own rows.
+
+Use a narrow check when only one harness or component changed:
+
+    ctx doctor codex --only mcp
+    ctx doctor codex --only hooks
+    ctx doctor opencode --only rules
+
+`--fix` never expands that scope. For Codex hooks, a repair can invalidate the
+stored trust because Codex hashes the definition. Run `/hooks`, trust the new
+ghosttree entries, and start a fresh session.
 
 ## Proof 3 - context actually arrives
 
