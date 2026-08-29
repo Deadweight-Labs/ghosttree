@@ -28,7 +28,7 @@ func TestOpenCreatesPrivateDatabase(t *testing.T) {
 
 func TestOpenTightensExistingDatabasePermissions(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ghosttree.db")
-	if err := os.WriteFile(path, nil, 0o644); err != nil {
+	if err := os.WriteFile(path, nil, 0o400); err != nil {
 		t.Fatal(err)
 	}
 	st, err := Open(path)
@@ -50,6 +50,23 @@ func TestPrepareDatabaseFilesTightensExistingSidecars(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertPrivateDatabase(t, path)
+}
+
+func TestOpenRejectsDirectoryWithoutChangingItsMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ghosttree.db")
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(path); err == nil {
+		t.Fatal("Open accepted a directory as a database")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o755 {
+		t.Fatalf("directory mode = %04o, want 0755", got)
+	}
 }
 
 func assertPrivateDatabase(t *testing.T, path string) {

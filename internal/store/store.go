@@ -3,6 +3,7 @@ package store
 
 import (
 	"database/sql"
+	"fmt"
 	"os"
 	"time"
 
@@ -387,23 +388,57 @@ func prepareDatabaseFiles(path string) error {
 	if path == ":memory:" {
 		return nil
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return err
-	}
-	if err := f.Chmod(0o600); err != nil {
-		_ = f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
+	if err := ensurePrivateDatabaseFile(path); err != nil {
 		return err
 	}
 	for _, suffix := range []string{"-wal", "-shm"} {
-		if err := os.Chmod(path+suffix, 0o600); err != nil && !os.IsNotExist(err) {
+		if err := tightenExistingDatabaseFile(path + suffix); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func ensurePrivateDatabaseFile(path string) error {
+	for attempt := 0; attempt < 3; attempt++ {
+		info, err := os.Stat(path)
+		if err == nil {
+			if !info.Mode().IsRegular() {
+				return fmt.Errorf("database path %s is not a regular file", path)
+			}
+			return os.Chmod(path, 0o600)
+		}
+		if !os.IsNotExist(err) {
+			return err
+		}
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+		if os.IsExist(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if err := f.Chmod(0o600); err != nil {
+			_ = f.Close()
+			return err
+		}
+		return f.Close()
+	}
+	return fmt.Errorf("database path %s changed while opening", path)
+}
+
+func tightenExistingDatabaseFile(path string) error {
+	info, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("database sidecar %s is not a regular file", path)
+	}
+	return os.Chmod(path, 0o600)
 }
 
 // ensureKnowledgeColumn ergänzt eine Textspalte mit leerem Vorgabewert, falls
