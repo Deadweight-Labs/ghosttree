@@ -19,6 +19,8 @@ import (
 
 var releaseSnapshotName = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*))?(\+([0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*))?$`)
 
+func IsReleaseSnapshotName(name string) bool { return releaseSnapshotName.MatchString(name) }
+
 func ResolveSnapshotGit(repoRoot, name string, allowDirty bool) (snapshot.GitProvenance, error) {
 	var result snapshot.GitProvenance
 	objectFormat, err := gitOut(repoRoot, "rev-parse", "--show-object-format")
@@ -41,7 +43,7 @@ func ResolveSnapshotGit(repoRoot, name string, allowDirty bool) (snapshot.GitPro
 		branch = stringPointer(branchName)
 	}
 
-	isRelease := releaseSnapshotName.MatchString(name)
+	isRelease := IsReleaseSnapshotName(name)
 	if isRelease {
 		tagRef := "refs/tags/" + name
 		tagCommit, tagErr := gitOut(repoRoot, "rev-parse", "--verify", tagRef+"^{commit}")

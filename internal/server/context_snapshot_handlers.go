@@ -1,0 +1,162 @@
+package server
+
+import (
+	"context"
+	"crypto/sha256"
+	"errors"
+	"fmt"
+	"net/http"
+	"strconv"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/collector"
+	"github.com/Deadweight-Labs/ghosttree/internal/snapshot"
+)
+
+func (a *api) createContextSnapshot(w http.ResponseWriter, r *http.Request) {
+	var input snapshot.CreateInput
+	if err := readJSON(r, &input); err != nil {
+		writeSnapshotRuleError(w, http.StatusBadRequest, &snapshot.RuleError{Code: "snapshot_invalid_input"})
+		return
+	}
+	principal := principalOf(r)
+	access, err := a.st.ContextSnapshotAccess(principal.ID, input.Project)
+	if err != nil {
+		writeSnapshotError(w, err)
+		return
+	}
+	if !access.Read || !access.Create {
+		writeSnapshotRuleError(w, http.StatusForbidden, &snapshot.RuleError{Code: "snapshot_access_forbidden"})
+		return
+	}
+	// Crossing the HTTP trust boundary makes provenance client-reported even
+	// when the caller resolved it with Ghosttree's own Git implementation.
+	input.Git.MetadataSource = "client-reported"
+	if collector.IsReleaseSnapshotName(input.Name) && !access.ReleaseBind {
+		writeSnapshotRuleError(w, http.StatusForbidden, &snapshot.RuleError{Code: "snapshot_release_binding_forbidden"})
+		return
+	}
+	input.ActorID = principal.ID
+	input.ActorLabel = &principal.Label
+	result, err := a.st.CreateContextSnapshot(r.Context(), input, a.snapshotLimits, func(context.Context) (snapshot.GitProvenance, error) { return input.Git, nil })
+	if err != nil {
+		writeSnapshotError(w, err)
+		return
+	}
+	if a.snapshotMirror != nil {
+		if err := a.snapshotMirror.Rebuild(r.Context(), input.Project); err != nil {
+			result.Warnings = append(result.Warnings, snapshot.Warning{Code: "snapshot_mirror_degraded", Message: err.Error()})
+		}
+	}
+	response := struct {
+		Snapshot snapshot.Head      `json:"snapshot"`
+		Counts   map[string]int64   `json:"counts"`
+		Created  bool               `json:"created"`
+		Warnings []snapshot.Warning `json:"warnings"`
+	}{result.Snapshot, result.Snapshot.Counts, result.Created, result.Warnings}
+	status := http.StatusOK
+	if result.Created {
+		status = http.StatusCreated
+	}
+	writeJSON(w, status, response)
+}
+
+func (a *api) listContextSnapshots(w http.ResponseWriter, r *http.Request) {
+	project := r.URL.Query().Get("project")
+	if !a.requireSnapshotRead(w, r, project) {
+		return
+	}
+	page, err := a.st.ListContextSnapshots(r.Context(), snapshot.ListFilter{Project: project, Cursor: r.URL.Query().Get("cursor"), Limit: intParam(r, "limit", 100)})
+	if err != nil {
+		writeSnapshotError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page)
+}
+
+func (a *api) getContextSnapshot(w http.ResponseWriter, r *http.Request) {
+	project := r.URL.Query().Get("project")
+	if !a.requireSnapshotRead(w, r, project) {
+		return
+	}
+	head, counts, err := a.st.ContextSnapshot(r.Context(), project, r.PathValue("name"))
+	if err != nil {
+		writeSnapshotError(w, err)
+		return
+	}
+	response := struct {
+		Snapshot snapshot.Head    `json:"snapshot"`
+		Counts   map[string]int64 `json:"counts"`
+	}{head, counts}
+	canonical, err := snapshot.MarshalCanonical(response)
+	if err != nil {
+		writeSnapshotError(w, err)
+		return
+	}
+	etag := sha256.Sum256(canonical)
+	w.Header().Set("ETag", `"`+fmt.Sprintf("%x", etag[:])+`"`)
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (a *api) contextSnapshotEntries(w http.ResponseWriter, r *http.Request) {
+	project := r.URL.Query().Get("project")
+	if !a.requireSnapshotRead(w, r, project) {
+		return
+	}
+	filter := snapshot.EntryFilter{Domain: r.URL.Query().Get("domain"), Key: r.URL.Query().Get("key"), Cursor: r.URL.Query().Get("cursor"), Limit: intParam(r, "limit", 100)}
+	if filter.Key != "" && filter.Domain == "" {
+		writeSnapshotRuleError(w, http.StatusBadRequest, &snapshot.RuleError{Code: "snapshot_invalid_filter"})
+		return
+	}
+	page, err := a.st.ContextSnapshotEntries(r.Context(), project, r.PathValue("name"), filter)
+	if err != nil {
+		writeSnapshotError(w, err)
+		return
+	}
+	if page.Exact != nil {
+		w.Header().Set("ETag", `"`+page.Exact.PayloadDigest.String()+`"`)
+	}
+	writeJSON(w, http.StatusOK, page)
+}
+
+func (a *api) requireSnapshotRead(w http.ResponseWriter, r *http.Request, project string) bool {
+	access, err := a.st.ContextSnapshotAccess(principalOf(r).ID, project)
+	if err != nil {
+		writeSnapshotError(w, err)
+		return false
+	}
+	if !access.Read {
+		writeSnapshotRuleError(w, http.StatusForbidden, &snapshot.RuleError{Code: "snapshot_access_forbidden"})
+		return false
+	}
+	return true
+}
+
+var snapshotStatusByCode = map[string]int{
+	"snapshot_invalid_input": 400, "snapshot_invalid_filter": 400, "snapshot_invalid_cursor": 400,
+	"snapshot_access_forbidden": 403, "snapshot_release_binding_forbidden": 403,
+	"snapshot_not_found": 404, "snapshot_entry_not_found": 404,
+	"snapshot_name_conflict": 409, "snapshot_tag_mismatch": 409, "snapshot_dirty_worktree": 409, "snapshot_git_changed": 409,
+	"snapshot_limit_exceeded": 422, "unsupported_snapshot_schema": 422,
+	"snapshot_store_busy": 503, "snapshot_storage_exhausted": 507,
+	"snapshot_integrity_error": 500,
+}
+
+func writeSnapshotError(w http.ResponseWriter, err error) {
+	var rule *snapshot.RuleError
+	if errors.As(err, &rule) {
+		status := snapshotStatusByCode[rule.Code]
+		if status == 0 {
+			status = http.StatusInternalServerError
+		}
+		writeSnapshotRuleError(w, status, rule)
+		return
+	}
+	writeJSON(w, http.StatusInternalServerError, map[string]any{"code": "snapshot_internal_error", "message": err.Error(), "retryable": false})
+}
+
+func writeSnapshotRuleError(w http.ResponseWriter, status int, rule *snapshot.RuleError) {
+	if rule.Retryable {
+		w.Header().Set("Retry-After", strconv.Itoa(1))
+	}
+	writeJSON(w, status, rule)
+}

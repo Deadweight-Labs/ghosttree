@@ -46,6 +46,10 @@ func New(st *store.Store, options ...Option) http.Handler {
 	mux.HandleFunc("GET /api/whoami", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, principalOf(r))
 	})
+	mux.HandleFunc("POST /api/context-snapshots", a.createContextSnapshot)
+	mux.HandleFunc("GET /api/context-snapshots", a.listContextSnapshots)
+	mux.HandleFunc("GET /api/context-snapshots/{name}", a.getContextSnapshot)
+	mux.HandleFunc("GET /api/context-snapshots/{name}/entries", a.contextSnapshotEntries)
 	mux.HandleFunc("POST /api/sessions", a.createSession)
 	mux.HandleFunc("GET /api/sessions", a.listSessions)
 	mux.HandleFunc("POST /api/sessions/{id}/chunks", a.appendChunks)
