@@ -290,7 +290,11 @@ func captureGhosts(ctx context.Context, q snapshotQueryer, project string) ([]sn
 			return nil, err
 		}
 		p.Person = actor(id, label)
-		e, err := snapshotEntry("ghost", p.Path, p)
+		prefix := "file/"
+		if p.Kind == "dir" {
+			prefix = "directory/"
+		}
+		e, err := snapshotEntry("ghost", prefix+p.Path, p)
 		if err != nil {
 			return nil, err
 		}

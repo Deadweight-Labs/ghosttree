@@ -48,7 +48,7 @@ func TestCaptureContextIncludesAllFiveDomainsAndExcludesOtherProjects(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"document:spec", "ghost:a.go", "ghost-review:b.go", "knowledge:1", "request:4"}
+	want := []string{"document:spec", "ghost:file/a.go", "ghost-review:b.go", "knowledge:1", "request:4"}
 	if len(entries) != len(want) {
 		t.Fatalf("entries=%d, want %d: %+v", len(entries), len(want), entries)
 	}
