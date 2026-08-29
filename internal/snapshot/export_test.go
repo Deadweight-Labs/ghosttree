@@ -90,6 +90,24 @@ func TestExportV1RejectsNonCanonicalPayload(t *testing.T) {
 	}
 }
 
+func TestVerifyExportRejectsUnknownSnapshotSchemaAndInvalidProjection(t *testing.T) {
+	entries := exportFixtureEntries(t)
+	head := exportFixtureHead(entries)
+	counts := map[string]int64{"knowledge": 2}
+	var out bytes.Buffer
+	if err := WriteExport(&out, head, counts, entries, nil); err != nil {
+		t.Fatal(err)
+	}
+	unknown := bytes.Replace(out.Bytes(), []byte(`"schema_version":1`), []byte(`"schema_version":2`), 1)
+	if _, err := VerifyExport(bytes.NewReader(unknown)); !isRuleCode(err, "unsupported_snapshot_schema") {
+		t.Fatalf("unknown schema error = %v", err)
+	}
+	key := "a"
+	if err := WriteExport(&bytes.Buffer{}, head, counts, entries, &ExportFilter{Domain: "ghost", Key: &key}); !isRuleCode(err, "snapshot_invalid_filter") {
+		t.Fatalf("projection mismatch error = %v", err)
+	}
+}
+
 func exportFixtureEntries(t *testing.T) []Entry {
 	t.Helper()
 	payloads := []struct{ key, raw string }{{"z", `{"v":2}`}, {"a", `{"raw":"<>& "}`}}

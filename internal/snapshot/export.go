@@ -34,6 +34,9 @@ func WriteExport(dst io.Writer, head Head, counts map[string]int64, entries []En
 	if head.SchemaVersion != SchemaVersion {
 		return &RuleError{Code: "unsupported_snapshot_schema"}
 	}
+	if err := validateExportFilter(filter, entries); err != nil {
+		return err
+	}
 	ordered := append([]Entry(nil), entries...)
 	sort.Slice(ordered, func(i, j int) bool {
 		if ordered[i].Domain != ordered[j].Domain {
@@ -80,10 +83,34 @@ func VerifyExport(src io.Reader) (Verification, error) {
 		return Verification{}, &RuleError{Code: "unsupported_snapshot_schema"}
 	}
 	head := headFromExportV1(envelope.Snapshot)
+	if head.SchemaVersion != SchemaVersion {
+		return Verification{}, &RuleError{Code: "unsupported_snapshot_schema"}
+	}
+	if err := validateExportFilter(envelope.Filter, envelope.Entries); err != nil {
+		return Verification{}, err
+	}
 	if err := verifyEntries(head, envelope.Counts, envelope.Entries, envelope.Filter == nil); err != nil {
 		return Verification{}, err
 	}
 	return Verification{SnapshotName: head.Name, EntryCount: int64(len(envelope.Entries)), Full: envelope.Filter == nil, Digest: head.ContentDigest}, nil
+}
+
+func validateExportFilter(filter *ExportFilter, entries []Entry) error {
+	if filter == nil {
+		return nil
+	}
+	if filter.Domain == "" || (filter.Key != nil && *filter.Key == "") {
+		return &RuleError{Code: "snapshot_invalid_filter"}
+	}
+	for _, entry := range entries {
+		if entry.Domain != filter.Domain || (filter.Key != nil && entry.Key != *filter.Key) {
+			return &RuleError{Code: "snapshot_invalid_filter"}
+		}
+	}
+	if filter.Key != nil && len(entries) != 1 {
+		return &RuleError{Code: "snapshot_invalid_filter"}
+	}
+	return nil
 }
 
 func verifyEntries(head Head, counts map[string]int64, entries []Entry, full bool) error {
