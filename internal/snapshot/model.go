@@ -157,13 +157,21 @@ type Warning struct {
 }
 
 type RuleError struct {
-	Code            string `json:"code"`
-	Retryable       bool   `json:"retryable"`
-	ExistingDigest  string `json:"existing_digest,omitempty"`
-	RequestedDigest string `json:"requested_digest,omitempty"`
+	Code            string         `json:"code"`
+	Message         string         `json:"message,omitempty"`
+	Resolution      string         `json:"resolution,omitempty"`
+	Details         map[string]any `json:"details,omitempty"`
+	Retryable       bool           `json:"retryable"`
+	ExistingDigest  string         `json:"existing_digest,omitempty"`
+	RequestedDigest string         `json:"requested_digest,omitempty"`
 }
 
-func (e *RuleError) Error() string { return e.Code }
+func (e *RuleError) Error() string {
+	if e.Message != "" {
+		return e.Code + ": " + e.Message
+	}
+	return e.Code
+}
 
 type Limits struct {
 	MaxEntryPayloadBytes    int64
