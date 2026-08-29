@@ -6,7 +6,12 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
-- Keep SQLite databases and their WAL sidecars owner-readable only.
+No changes yet.
+
+## 0.1.0-rc.3 — 2026-08-29
+
+- Reject symlinked SQLite database and sidecar paths before changing file
+  permissions.
 
 ## 0.1.0-rc.2 — 2026-08-29
 
