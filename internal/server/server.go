@@ -24,6 +24,9 @@ func New(st *store.Store) http.Handler {
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	})
+	mux.HandleFunc("GET /api/whoami", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, principalOf(r))
+	})
 	mux.HandleFunc("POST /api/sessions", a.createSession)
 	mux.HandleFunc("GET /api/sessions", a.listSessions)
 	mux.HandleFunc("POST /api/sessions/{id}/chunks", a.appendChunks)
@@ -88,17 +91,21 @@ func (a *api) auth(next http.Handler) http.Handler {
 			return
 		}
 		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		person, ok := a.st.Authenticate(strings.TrimSpace(token))
+		principal, ok := a.st.AuthenticatePrincipal(strings.TrimSpace(token))
 		if !ok {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), personKey{}, person)))
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), personKey{}, principal)))
 	})
 }
 
 func personOf(r *http.Request) string {
-	p, _ := r.Context().Value(personKey{}).(string)
+	return principalOf(r).Label
+}
+
+func principalOf(r *http.Request) store.Principal {
+	p, _ := r.Context().Value(personKey{}).(store.Principal)
 	return p
 }
 

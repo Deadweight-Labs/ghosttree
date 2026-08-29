@@ -17,6 +17,13 @@ const schema = `
 CREATE TABLE IF NOT EXISTS persons(
   id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL,
   token_hash TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS context_snapshot_access(
+  person_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE RESTRICT,
+  project TEXT NOT NULL,
+  can_read INTEGER NOT NULL CHECK(can_read IN (0,1)),
+  can_create INTEGER NOT NULL CHECK(can_create IN (0,1)),
+  can_release_bind INTEGER NOT NULL CHECK(can_release_bind IN (0,1)),
+  PRIMARY KEY(person_id, project));
 CREATE TABLE IF NOT EXISTS machines(
   hostname TEXT PRIMARY KEY, first_seen TEXT NOT NULL, last_seen TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS requests(

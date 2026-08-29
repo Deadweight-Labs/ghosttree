@@ -97,6 +97,35 @@ func newTestServer(t *testing.T) (*httptest.Server, string) {
 	return srv, token
 }
 
+func TestWhoAmIReturnsAuthenticatedStablePrincipal(t *testing.T) {
+	st, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	token, err := st.AddPerson("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(New(st))
+	t.Cleanup(srv.Close)
+
+	resp := req(t, "GET", srv.URL+"/api/whoami", token, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	var got store.Principal
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != "person:1" || got.Label != "alice" {
+		t.Fatalf("principal = %#v", got)
+	}
+	if resp := req(t, "GET", srv.URL+"/api/whoami", "bad-token", nil); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated status = %d", resp.StatusCode)
+	}
+}
+
 func req(t *testing.T, method, url, token string, body any) *http.Response {
 	t.Helper()
 	var r io.Reader

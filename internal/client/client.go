@@ -79,6 +79,12 @@ func (c *Client) Relevant(text string, ax scope.Axes, limit int) (string, error)
 
 func (c *Client) Machine() string { return c.cfg.Machine }
 
+func (c *Client) WhoAmI() (store.Principal, error) {
+	var principal store.Principal
+	err := c.do("GET", "/api/whoami", nil, nil, &principal)
+	return principal, err
+}
+
 // do performs a request; out may be a *string to capture a raw text body.
 func (c *Client) do(method, path string, query url.Values, in, out any) error {
 	u := strings.TrimSuffix(c.cfg.ServerURL, "/") + path
