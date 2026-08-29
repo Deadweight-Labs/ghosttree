@@ -4,11 +4,28 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
+	"unicode/utf8"
+
+	"modernc.org/sqlite"
 )
+
+func init() {
+	sqlite.MustRegisterDeterministicScalarFunction("ghosttree_valid_utf8", 1, func(_ *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
+		if len(args) != 1 {
+			return int64(0), nil
+		}
+		value, ok := args[0].(string)
+		if !ok || !utf8.ValidString(value) {
+			return int64(0), nil
+		}
+		return int64(1), nil
+	})
+}
 
 const contextSnapshotInvariantVersion = 1
 
@@ -54,7 +71,7 @@ const contextSnapshotsTableSQL = `CREATE TABLE IF NOT EXISTS context_snapshots(
 const contextSnapshotEntriesTableSQL = `CREATE TABLE IF NOT EXISTS context_snapshot_entries(
   snapshot_id INTEGER NOT NULL REFERENCES context_snapshots(id) ON DELETE RESTRICT,
   domain TEXT COLLATE BINARY NOT NULL CHECK(typeof(domain)='text' AND length(CAST(domain AS BLOB)) BETWEEN 1 AND 32 AND domain GLOB '[A-Za-z0-9]*' AND domain NOT GLOB '*[^A-Za-z0-9._-]*'),
-  entry_key TEXT COLLATE BINARY NOT NULL CHECK(typeof(entry_key)='text' AND length(CAST(entry_key AS BLOB)) BETWEEN 1 AND 4096),
+  entry_key TEXT COLLATE BINARY NOT NULL CHECK(typeof(entry_key)='text' AND ghosttree_valid_utf8(entry_key)=1 AND length(CAST(entry_key AS BLOB)) BETWEEN 1 AND 4096),
   payload BLOB NOT NULL CHECK(typeof(payload)='blob'),
   payload_digest BLOB NOT NULL CHECK(typeof(payload_digest)='blob' AND length(payload_digest)=32),
   payload_size INTEGER NOT NULL CHECK(payload_size>=0 AND payload_size=length(payload)),
@@ -99,6 +116,9 @@ BEGIN SELECT RAISE(ABORT,'context snapshot entries are immutable'); END`,
 }
 
 func EnsureContextSnapshotSchema(db *sql.DB) error {
+	if err := requireSnapshotSingleConnection(db); err != nil {
+		return err
+	}
 	if _, err := db.Exec(`PRAGMA foreign_keys=ON; PRAGMA recursive_triggers=ON`); err != nil {
 		return err
 	}
@@ -133,6 +153,9 @@ func EnsureContextSnapshotSchema(db *sql.DB) error {
 }
 
 func ContextSnapshotSchemaCurrent(db *sql.DB) (bool, error) {
+	if err := requireSnapshotSingleConnection(db); err != nil {
+		return false, err
+	}
 	var foreignKeys, recursiveTriggers int
 	if err := db.QueryRow(`PRAGMA foreign_keys`).Scan(&foreignKeys); err != nil {
 		return false, err
@@ -196,6 +219,10 @@ func ContextSnapshotSchemaCurrent(db *sql.DB) (bool, error) {
 		}
 		actualTriggers[name] = definition
 	}
+	if err := triggerRows.Err(); err != nil {
+		triggerRows.Close()
+		return false, err
+	}
 	if err := triggerRows.Close(); err != nil {
 		return false, err
 	}
@@ -216,6 +243,9 @@ func ContextSnapshotSchemaCurrent(db *sql.DB) (bool, error) {
 }
 
 func ProbeContextSnapshotSchema(ctx context.Context, db *sql.DB) error {
+	if err := requireSnapshotSingleConnection(db); err != nil {
+		return err
+	}
 	current, err := ContextSnapshotSchemaCurrent(db)
 	if err != nil {
 		return err
@@ -223,52 +253,53 @@ func ProbeContextSnapshotSchema(ctx context.Context, db *sql.DB) error {
 	if !current {
 		return errors.New("context snapshot schema invariant mismatch")
 	}
-	before, err := contextSnapshotCounts(ctx, db)
-	if err != nil {
-		return err
-	}
-	conn, err := db.Conn(ctx)
-	if err != nil {
-		return err
-	}
-	if _, err := conn.ExecContext(ctx, `SAVEPOINT snapshot_probe`); err != nil {
-		conn.Close()
-		return err
-	}
-	probeErr := exerciseContextSnapshotSchema(ctx, conn)
-	background := context.Background()
-	_, rollbackErr := conn.ExecContext(background, `ROLLBACK TO snapshot_probe`)
-	_, releaseErr := conn.ExecContext(background, `RELEASE snapshot_probe`)
-	closeErr := conn.Close()
-	if probeErr != nil {
-		return probeErr
-	}
-	if rollbackErr != nil {
-		return fmt.Errorf("rollback snapshot probe: %w", rollbackErr)
-	}
-	if releaseErr != nil {
-		return fmt.Errorf("release snapshot probe: %w", releaseErr)
-	}
-	if closeErr != nil {
-		return fmt.Errorf("close snapshot probe connection: %w", closeErr)
-	}
-	after, err := contextSnapshotCounts(background, db)
-	if err != nil {
-		return err
-	}
-	if after != before {
-		return fmt.Errorf("snapshot probe changed table counts: %v -> %v", before, after)
+	return probeContextSnapshotSchema(ctx, db, exerciseContextSnapshotSchema)
+}
+
+func requireSnapshotSingleConnection(db *sql.DB) error {
+	if maximum := db.Stats().MaxOpenConnections; maximum != 1 {
+		return fmt.Errorf("context snapshot schema requires MaxOpenConns=1, got %d", maximum)
 	}
 	return nil
 }
 
-func exerciseContextSnapshotSchema(ctx context.Context, conn *sql.Conn) error {
+type snapshotProbeExecer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+func probeContextSnapshotSchema(ctx context.Context, db *sql.DB, exercise func(context.Context, snapshotProbeExecer) error) error {
+	before, err := contextSnapshotCounts(ctx, db)
+	if err != nil {
+		return err
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	probeErr := exercise(ctx, tx)
+	background := context.Background()
+	rollbackErr := tx.Rollback()
+	after, countErr := contextSnapshotCounts(background, db)
+	var cleanup []error
+	if rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+		cleanup = append(cleanup, fmt.Errorf("rollback snapshot probe: %w", rollbackErr))
+	}
+	if countErr != nil {
+		cleanup = append(cleanup, fmt.Errorf("count after snapshot probe rollback: %w", countErr))
+	} else if after != before {
+		cleanup = append(cleanup, fmt.Errorf("snapshot probe changed table counts: %v -> %v", before, after))
+	}
+	cleanup = append(cleanup, probeErr)
+	return errors.Join(cleanup...)
+}
+
+func exerciseContextSnapshotSchema(ctx context.Context, tx snapshotProbeExecer) error {
 	var random [12]byte
 	if _, err := rand.Read(random[:]); err != nil {
 		return err
 	}
 	name := "probe-" + hex.EncodeToString(random[:])
-	result, err := conn.ExecContext(ctx, snapshotProbeHeadInsertSQL, "__ghosttree_snapshot_probe__", name)
+	result, err := tx.ExecContext(ctx, snapshotProbeHeadInsertSQL, "__ghosttree_snapshot_probe__", name)
 	if err != nil {
 		return err
 	}
@@ -276,18 +307,18 @@ func exerciseContextSnapshotSchema(ctx context.Context, conn *sql.Conn) error {
 	if err != nil {
 		return err
 	}
-	if _, err := conn.ExecContext(ctx, `INSERT INTO context_snapshot_entries(snapshot_id,domain,entry_key,payload,payload_digest,payload_size) VALUES(?,?,?,?,zeroblob(32),2)`, id, "ghost", "file/probe", []byte(`{}`)); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO context_snapshot_entries(snapshot_id,domain,entry_key,payload,payload_digest,payload_size) VALUES(?,?,?,?,zeroblob(32),2)`, id, "ghost", "file/probe", []byte(`{}`)); err != nil {
 		return err
 	}
 	for _, statement := range []string{
 		`UPDATE context_snapshot_entries SET payload=x'00' WHERE snapshot_id=?`,
 		`DELETE FROM context_snapshot_entries WHERE snapshot_id=?`,
 	} {
-		if err := expectSnapshotProbeFailure(ctx, conn, statement, id); err != nil {
+		if err := expectSnapshotProbeFailure(ctx, tx, statement, id); err != nil {
 			return err
 		}
 	}
-	if _, err := conn.ExecContext(ctx, `UPDATE context_snapshots SET state='sealed',content_digest=zeroblob(32),entry_count=1,payload_bytes_total=2,counts_json=x'7b7d' WHERE id=?`, id); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE context_snapshots SET state='sealed',content_digest=zeroblob(32),entry_count=1,payload_bytes_total=2,counts_json=x'7b7d' WHERE id=?`, id); err != nil {
 		return err
 	}
 	for _, statement := range []string{
@@ -295,7 +326,7 @@ func exerciseContextSnapshotSchema(ctx context.Context, conn *sql.Conn) error {
 		`DELETE FROM context_snapshots WHERE id=?`,
 		`INSERT INTO context_snapshot_entries(snapshot_id,domain,entry_key,payload,payload_digest,payload_size) VALUES(?,'ghost','file/late',x'7b7d',zeroblob(32),2)`,
 	} {
-		if err := expectSnapshotProbeFailure(ctx, conn, statement, id); err != nil {
+		if err := expectSnapshotProbeFailure(ctx, tx, statement, id); err != nil {
 			return err
 		}
 	}
@@ -304,8 +335,8 @@ func exerciseContextSnapshotSchema(ctx context.Context, conn *sql.Conn) error {
 
 const snapshotProbeHeadInsertSQL = `INSERT INTO context_snapshots(project,name,schema_version,state,content_digest,git_object_format,git_commit,git_ref,git_branch,git_dirty,git_worktree_fingerprint_version,git_worktree_fingerprint,allow_dirty_used,git_metadata_source,message,actor_id,actor_label,session_ref,created_at,entry_count,payload_bytes_total,counts_json) VALUES(?,?,1,'building',NULL,'sha1','0000000000000000000000000000000000000000',NULL,NULL,0,NULL,NULL,0,'server-verified',NULL,'probe',NULL,NULL,'1970-01-01T00:00:00Z',0,0,NULL)`
 
-func expectSnapshotProbeFailure(ctx context.Context, conn *sql.Conn, statement string, args ...any) error {
-	if _, err := conn.ExecContext(ctx, statement, args...); err == nil {
+func expectSnapshotProbeFailure(ctx context.Context, tx snapshotProbeExecer, statement string, args ...any) error {
+	if _, err := tx.ExecContext(ctx, statement, args...); err == nil {
 		return fmt.Errorf("snapshot invariant probe unexpectedly succeeded: %s", statement)
 	}
 	return nil

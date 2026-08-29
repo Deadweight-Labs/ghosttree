@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"reflect"
 	"sort"
@@ -94,6 +95,7 @@ func TestSnapshotSchemaRejectsEveryMutationPath(t *testing.T) {
 	}
 	id := insertBuildingSnapshot(t, db, "v1")
 	assertSnapshotStatementFails(t, db, `INSERT INTO context_snapshot_entries(snapshot_id,domain,entry_key,payload,payload_digest,payload_size) VALUES(?,?,?,'{}','12345678901234567890123456789012',2)`, id, "ghost", "file/text-storage")
+	assertSnapshotStatementFails(t, db, `INSERT INTO context_snapshot_entries(snapshot_id,domain,entry_key,payload,payload_digest,payload_size) VALUES(?,'ghost',CAST(x'ff' AS TEXT),x'7b7d',zeroblob(32),2)`, id)
 	if _, err := db.Exec(`INSERT INTO context_snapshot_entries(snapshot_id,domain,entry_key,payload,payload_digest,payload_size) VALUES(?,?,?,?,zeroblob(32),2)`, id, "ghost", "file/a", []byte(`{}`)); err != nil {
 		t.Fatal(err)
 	}
@@ -178,6 +180,29 @@ func TestSnapshotSchemaCurrentRequiresIndexAndConnectionPragmas(t *testing.T) {
 	}
 }
 
+func TestSnapshotSchemaAPIsRequireSingleConnectionPool(t *testing.T) {
+	unbounded, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unbounded.Close()
+	if err := EnsureContextSnapshotSchema(unbounded); err == nil {
+		t.Fatal("EnsureContextSnapshotSchema accepted an unbounded connection pool")
+	}
+
+	db := openSnapshotSchemaTestDB(t)
+	if err := EnsureContextSnapshotSchema(db); err != nil {
+		t.Fatal(err)
+	}
+	db.SetMaxOpenConns(2)
+	if _, err := ContextSnapshotSchemaCurrent(db); err == nil {
+		t.Fatal("ContextSnapshotSchemaCurrent accepted MaxOpenConns=2")
+	}
+	if err := ProbeContextSnapshotSchema(context.Background(), db); err == nil {
+		t.Fatal("ProbeContextSnapshotSchema accepted MaxOpenConns=2")
+	}
+}
+
 func TestSnapshotProbeAlwaysRollsBackOnSuccessAndFailure(t *testing.T) {
 	db := openSnapshotSchemaTestDB(t)
 	if err := EnsureContextSnapshotSchema(db); err != nil {
@@ -200,6 +225,27 @@ func TestSnapshotProbeAlwaysRollsBackOnSuccessAndFailure(t *testing.T) {
 	}
 	if after := allTableCounts(t, db); !reflect.DeepEqual(after, before) {
 		t.Fatalf("failing probe changed counts: %v -> %v", before, after)
+	}
+}
+
+func TestSnapshotProbeRollsBackErrorAfterInsert(t *testing.T) {
+	db := openSnapshotSchemaTestDB(t)
+	if err := EnsureContextSnapshotSchema(db); err != nil {
+		t.Fatal(err)
+	}
+	before := allTableCounts(t, db)
+	probeFailure := errors.New("injected failure after probe insert")
+	err := probeContextSnapshotSchema(context.Background(), db, func(ctx context.Context, tx snapshotProbeExecer) error {
+		if _, err := tx.ExecContext(ctx, snapshotProbeHeadInsertSQL, "__ghosttree_snapshot_probe__", "probe-injected-failure"); err != nil {
+			return err
+		}
+		return probeFailure
+	})
+	if !errors.Is(err, probeFailure) {
+		t.Fatalf("probe error = %v, want %v", err, probeFailure)
+	}
+	if after := allTableCounts(t, db); !reflect.DeepEqual(after, before) {
+		t.Fatalf("failed post-insert probe changed counts: %v -> %v", before, after)
 	}
 }
 
