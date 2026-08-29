@@ -110,7 +110,6 @@ var excludeLines = []string{
 	".ghosttree/requests/", ".ghosttree/requests" + tmpSuffix + "/",
 	".ghosttree/snapshots/INDEX.md", ".ghosttree/snapshots/.INDEX.md.tmp-*",
 	".ghosttree/INDEX.md",
-	".ghosttree/snapshots/INDEX.md",
 }
 
 // IsGeneratedPath reports whether path is hidden from ordinary Git status.
