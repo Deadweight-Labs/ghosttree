@@ -25,6 +25,10 @@ func init() {
 		}
 		return int64(1), nil
 	})
+	sqlite.RegisterConnectionHook(func(conn sqlite.ExecQuerierContext, _ string) error {
+		_, err := conn.ExecContext(context.Background(), `PRAGMA foreign_keys=ON; PRAGMA recursive_triggers=ON`, nil)
+		return err
+	})
 }
 
 const contextSnapshotInvariantVersion = 1

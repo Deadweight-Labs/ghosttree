@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -203,28 +204,68 @@ func TestSnapshotSchemaAPIsRequireSingleConnectionPool(t *testing.T) {
 	}
 }
 
+func TestSnapshotSchemaPragmasSurvivePhysicalConnectionRecycling(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "recycled.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.SetMaxOpenConns(1)
+	defer db.Close()
+	if err := EnsureContextSnapshotSchema(db); err != nil {
+		t.Fatal(err)
+	}
+	insertBuildingSnapshot(t, db, "recycled")
+
+	// Closing every idle connection forces every statement below onto a newly
+	// opened physical modernc connection.
+	db.SetMaxIdleConns(0)
+	for _, pragma := range []string{"foreign_keys", "recursive_triggers"} {
+		var enabled int
+		if err := db.QueryRow(`PRAGMA ` + pragma).Scan(&enabled); err != nil {
+			t.Fatal(err)
+		}
+		if enabled != 1 {
+			t.Fatalf("PRAGMA %s = %d after connection recycling, want 1", pragma, enabled)
+		}
+	}
+	assertSnapshotStatementFails(t, db, `INSERT OR REPLACE`+snapshotHeadInsertSQL[len("INSERT"):], "p", "recycled")
+}
+
 func TestSnapshotProbeAlwaysRollsBackOnSuccessAndFailure(t *testing.T) {
 	db := openSnapshotSchemaTestDB(t)
 	if err := EnsureContextSnapshotSchema(db); err != nil {
 		t.Fatal(err)
 	}
+	seedID := insertBuildingSnapshot(t, db, "sequence-seed")
+	if _, err := db.Exec(`UPDATE context_snapshots SET state='sealed',content_digest=zeroblob(32),entry_count=0,payload_bytes_total=0,counts_json=x'7b7d' WHERE id=?`, seedID); err != nil {
+		t.Fatal(err)
+	}
 	before := allTableCounts(t, db)
+	beforeSequence := snapshotSequence(t, db)
 	if err := ProbeContextSnapshotSchema(context.Background(), db); err != nil {
 		t.Fatal(err)
 	}
 	if after := allTableCounts(t, db); !reflect.DeepEqual(after, before) {
 		t.Fatalf("successful probe changed counts: %v -> %v", before, after)
 	}
+	if afterSequence := snapshotSequence(t, db); afterSequence != beforeSequence {
+		t.Fatalf("successful probe changed sqlite_sequence: %d -> %d", beforeSequence, afterSequence)
+	}
 
 	if _, err := db.Exec(`DROP TRIGGER context_snapshot_entry_delete`); err != nil {
 		t.Fatal(err)
 	}
 	before = allTableCounts(t, db)
+	beforeSequence = snapshotSequence(t, db)
 	if err := ProbeContextSnapshotSchema(context.Background(), db); err == nil {
 		t.Fatal("probe accepted stale schema")
 	}
 	if after := allTableCounts(t, db); !reflect.DeepEqual(after, before) {
 		t.Fatalf("failing probe changed counts: %v -> %v", before, after)
+	}
+	if afterSequence := snapshotSequence(t, db); afterSequence != beforeSequence {
+		t.Fatalf("failing probe changed sqlite_sequence: %d -> %d", beforeSequence, afterSequence)
 	}
 }
 
@@ -306,4 +347,13 @@ func allTableCounts(t *testing.T, db *sql.DB) map[string]int64 {
 		counts[table] = count
 	}
 	return counts
+}
+
+func snapshotSequence(t *testing.T, db *sql.DB) int64 {
+	t.Helper()
+	var sequence int64
+	if err := db.QueryRow(`SELECT seq FROM sqlite_sequence WHERE name='context_snapshots'`).Scan(&sequence); err != nil {
+		t.Fatal(err)
+	}
+	return sequence
 }
