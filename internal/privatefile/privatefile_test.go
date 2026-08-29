@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestWriteSyncedNoFollowRejectsSymlinkDestination(t *testing.T) {
+func TestWriteSyncedNoFollowRejectsStaticSymlinkDestination(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "target")
 	path := filepath.Join(dir, "INDEX.md")
@@ -27,7 +27,7 @@ func TestWriteSyncedNoFollowRejectsSymlinkDestination(t *testing.T) {
 	}
 }
 
-func TestWriteSyncedNoFollowRejectsSymlinkDirectory(t *testing.T) {
+func TestWriteSyncedNoFollowRejectsStaticSymlinkDirectory(t *testing.T) {
 	root := t.TempDir()
 	realDir := filepath.Join(root, "real")
 	linkedDir := filepath.Join(root, "linked")
@@ -142,6 +142,42 @@ func TestWriteFailureLeavesNoTemporaryFile(t *testing.T) {
 	}
 	if len(matches) != 0 {
 		t.Fatalf("temporary files remain after failure: %v", matches)
+	}
+}
+
+func TestWritePreservesLegacySymlinkedDirectoryBehavior(t *testing.T) {
+	root := t.TempDir()
+	realDir := filepath.Join(root, "real")
+	linkedDir := filepath.Join(root, "linked")
+	if err := os.Mkdir(realDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realDir, linkedDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := Write(filepath.Join(linkedDir, "config"), []byte("legacy")); err != nil {
+		t.Fatal(err)
+	}
+	assertFile(t, filepath.Join(realDir, "config"), "legacy", 0o600)
+}
+
+func TestWritePreservesLegacySymlinkDestinationReplacement(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target")
+	output := filepath.Join(dir, "output")
+	if err := os.WriteFile(target, []byte("target"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, output); err != nil {
+		t.Fatal(err)
+	}
+	if err := Write(output, []byte("replacement")); err != nil {
+		t.Fatal(err)
+	}
+	assertFile(t, output, "replacement", 0o600)
+	b, err := os.ReadFile(target)
+	if err != nil || string(b) != "target" {
+		t.Fatalf("symlink target changed: %q, %v", b, err)
 	}
 }
 

@@ -6,7 +6,10 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
+	"runtime"
+	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/ghost"
 	"github.com/Deadweight-Labs/ghosttree/internal/privatefile"
@@ -91,6 +94,7 @@ func requireRealDirectory(path string, create bool) error {
 func listAll(ctx context.Context, lister SnapshotLister, project string) ([]snapshot.Head, error) {
 	var heads []snapshot.Head
 	cursor := ""
+	seen := map[string]struct{}{cursor: {}}
 	for {
 		page, err := lister.ListContextSnapshots(ctx, snapshot.ListFilter{Project: project, Cursor: cursor, Limit: listPageSize})
 		if err != nil {
@@ -100,10 +104,11 @@ func listAll(ctx context.Context, lister SnapshotLister, project string) ([]snap
 		if page.NextCursor == "" {
 			return heads, nil
 		}
-		if page.NextCursor == cursor {
-			return nil, fmt.Errorf("snapshot list returned a non-advancing cursor")
+		if _, duplicate := seen[page.NextCursor]; duplicate {
+			return nil, fmt.Errorf("snapshot list returned a repeated cursor")
 		}
 		cursor = page.NextCursor
+		seen[cursor] = struct{}{}
 	}
 }
 
@@ -112,6 +117,19 @@ func projectLockPath(repoRoot string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	sum := sha256.Sum256([]byte(filepath.Clean(repoRoot)))
-	return filepath.Join(cache, "ghosttree", "snapshot-mirror-locks", hex.EncodeToString(sum[:])+".lock"), nil
+	identity, err := canonicalLockIdentity(repoRoot)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(cache, "ghosttree", "snapshot-mirror-locks", lockIDForIdentity(identity, runtime.GOOS == "windows")+".lock"), nil
+}
+
+func lockIDForIdentity(identity string, caseInsensitive bool) string {
+	if caseInsensitive {
+		identity = strings.ToLower(path.Clean(strings.ReplaceAll(identity, `\`, "/")))
+	} else {
+		identity = filepath.Clean(identity)
+	}
+	sum := sha256.Sum256([]byte(identity))
+	return hex.EncodeToString(sum[:])
 }

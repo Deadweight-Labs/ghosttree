@@ -29,6 +29,25 @@ type pagedLister struct {
 	calls []snapshot.ListFilter
 }
 
+type cyclingLister struct{}
+
+func (cyclingLister) ListContextSnapshots(_ context.Context, filter snapshot.ListFilter) (snapshot.SnapshotPage, error) {
+	switch filter.Cursor {
+	case "":
+		return snapshot.SnapshotPage{NextCursor: "a"}, nil
+	case "a":
+		return snapshot.SnapshotPage{NextCursor: "b"}, nil
+	default:
+		return snapshot.SnapshotPage{NextCursor: "a"}, nil
+	}
+}
+
+func TestListAllRejectsCursorCycles(t *testing.T) {
+	if _, err := listAll(context.Background(), cyclingLister{}, "project"); err == nil {
+		t.Fatal("cursor cycle accepted")
+	}
+}
+
 func (l *pagedLister) ListContextSnapshots(_ context.Context, filter snapshot.ListFilter) (snapshot.SnapshotPage, error) {
 	l.calls = append(l.calls, filter)
 	if filter.Cursor == "" {
@@ -78,6 +97,25 @@ func TestRebuildRejectsSymlinkedSnapshotDirectoryWithoutChangingTarget(t *testin
 	}
 	if _, err := os.Stat(filepath.Join(external, "INDEX.md")); !os.IsNotExist(err) {
 		t.Fatalf("external target changed: %v", err)
+	}
+}
+
+func TestProjectLockPathResolvesRepositoryAliases(t *testing.T) {
+	realRepo := t.TempDir()
+	alias := filepath.Join(t.TempDir(), "repo-alias")
+	if err := os.Symlink(realRepo, alias); err != nil {
+		t.Fatal(err)
+	}
+	realLock, err := projectLockPath(realRepo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aliasLock, err := projectLockPath(alias)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if realLock != aliasLock {
+		t.Fatalf("repository aliases use different locks: %q != %q", realLock, aliasLock)
 	}
 }
 

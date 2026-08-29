@@ -40,3 +40,15 @@ func acquireProjectLock(ctx context.Context, repoRoot string) (func(), error) {
 		}
 	}
 }
+
+func canonicalLockIdentity(repoRoot string) (string, error) {
+	abs, err := filepath.Abs(repoRoot)
+	if err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Clean(resolved), nil
+}

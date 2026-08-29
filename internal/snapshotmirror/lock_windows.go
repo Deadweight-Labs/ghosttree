@@ -42,3 +42,32 @@ func acquireProjectLock(ctx context.Context, repoRoot string) (func(), error) {
 		}
 	}
 }
+
+func canonicalLockIdentity(repoRoot string) (string, error) {
+	abs, err := filepath.Abs(repoRoot)
+	if err != nil {
+		return "", err
+	}
+	pathUTF16, err := windows.UTF16PtrFromString(abs)
+	if err != nil {
+		return "", err
+	}
+	handle, err := windows.CreateFile(pathUTF16, 0,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+		nil, windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
+	if err != nil {
+		return "", err
+	}
+	defer windows.CloseHandle(handle)
+	buffer := make([]uint16, 512)
+	for {
+		n, err := windows.GetFinalPathNameByHandle(handle, &buffer[0], uint32(len(buffer)), 0)
+		if err != nil {
+			return "", err
+		}
+		if n < uint32(len(buffer)) {
+			return windows.UTF16ToString(buffer[:n]), nil
+		}
+		buffer = make([]uint16, n+1)
+	}
+}

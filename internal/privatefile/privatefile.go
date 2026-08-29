@@ -10,7 +10,37 @@ import (
 )
 
 func Write(path string, data []byte) error {
-	return WriteSyncedNoFollow(path, data, 0o600)
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	keep := false
+	defer func() {
+		if !keep {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	keep = true
+	return nil
 }
 
 type fileOperations struct {
@@ -45,8 +75,10 @@ var (
 
 // WriteSyncedNoFollow writes data through a private inode in the destination
 // directory, flushes it, atomically replaces the destination, and flushes the
-// directory entry. Existing symlink destinations and symlinked directory
-// components are rejected.
+// directory entry. It rejects symlink destinations and directory components
+// observed during validation. Callers must prevent concurrent namespace
+// mutation; the path-based portable implementation is not a dirfd/handle-
+// relative defense against an active rename race.
 func WriteSyncedNoFollow(path string, data []byte, mode fs.FileMode) (err error) {
 	writeOpsMu.Lock()
 	ops := writeOps
