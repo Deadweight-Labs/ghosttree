@@ -131,3 +131,48 @@ func TestCreateContextSnapshotRejectsInvalidHeadBeforeSQLite(t *testing.T) {
 		}
 	}
 }
+
+func TestCreateSnapshotRollsBackEveryInjectedPhase(t *testing.T) {
+	for _, phase := range []string{"after_head", "after_capture", "after_entries", "after_reread", "before_seal", "before_commit"} {
+		t.Run(phase, func(t *testing.T) {
+			s, err := Open(t.TempDir() + "/snapshot.db")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			s.snapshotFault = func(got string) error {
+				if got == phase {
+					return errors.New("injected " + phase)
+				}
+				return nil
+			}
+			in := snapshotCreateInput()
+			if _, err := s.CreateContextSnapshot(context.Background(), in, snapshot.DefaultLimits(), func(context.Context) (snapshot.GitProvenance, error) { return in.Git, nil }); err == nil {
+				t.Fatal("expected injected failure")
+			}
+			var heads, entries int
+			if err := s.DB().QueryRow(`SELECT count(*),(SELECT count(*) FROM context_snapshot_entries) FROM context_snapshots`).Scan(&heads, &entries); err != nil {
+				t.Fatal(err)
+			}
+			if heads != 0 || entries != 0 {
+				t.Fatalf("phase %s left heads=%d entries=%d", phase, heads, entries)
+			}
+		})
+	}
+}
+
+func TestSnapshotSQLiteErrorsAreTyped(t *testing.T) {
+	for _, tc := range []struct {
+		message, code string
+		retryable     bool
+	}{
+		{"database is locked (SQLITE_BUSY)", "snapshot_store_busy", true},
+		{"database or disk is full (SQLITE_FULL)", "snapshot_storage_exhausted", false},
+	} {
+		err := mapSnapshotSQLiteError(errors.New(tc.message))
+		var rule *snapshot.RuleError
+		if !errors.As(err, &rule) || rule.Code != tc.code || rule.Retryable != tc.retryable {
+			t.Fatalf("%q -> %#v", tc.message, err)
+		}
+	}
+}

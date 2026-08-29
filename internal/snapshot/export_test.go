@@ -3,6 +3,7 @@ package snapshot
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -77,6 +78,37 @@ func TestVerifyExportRejectsCorruption(t *testing.T) {
 	corrupt := bytes.Replace(out.Bytes(), []byte(`"raw":"<>& "`), []byte(`"raw":"changed"`), 1)
 	if _, err := VerifyExport(bytes.NewReader(corrupt)); !isRuleCode(err, "snapshot_integrity_error") {
 		t.Fatalf("corrupt payload error = %v", err)
+	}
+}
+
+func TestVerifyExportRejectsAggregateCorruptionMatrix(t *testing.T) {
+	entries := exportFixtureEntries(t)
+	head := exportFixtureHead(entries)
+	counts := map[string]int64{"knowledge": 2}
+	var out bytes.Buffer
+	if err := WriteExport(&out, head, counts, entries, nil); err != nil {
+		t.Fatal(err)
+	}
+	valid := out.Bytes()
+	zeroDigest := strings.Repeat("0", 64)
+	cases := map[string][]byte{
+		"payload":        bytes.Replace(valid, []byte(`"raw":"<>& "`), []byte(`"raw":"changed"`), 1),
+		"payload_size":   bytes.Replace(valid, []byte(fmt.Sprintf(`"payload_size":%d`, entries[0].PayloadSize)), []byte(`"payload_size":999`), 1),
+		"payload_digest": bytes.Replace(valid, []byte(entries[0].PayloadDigest.String()), []byte(zeroDigest), 1),
+		"counts":         bytes.Replace(valid, []byte(`"knowledge":2`), []byte(`"knowledge":3`), 1),
+		"entry_count":    bytes.Replace(valid, []byte(`"entry_count":2`), []byte(`"entry_count":3`), 1),
+		"payload_total":  bytes.Replace(valid, []byte(fmt.Sprintf(`"payload_bytes_total":%d`, head.PayloadBytesTotal)), []byte(`"payload_bytes_total":999`), 1),
+		"content_digest": bytes.Replace(valid, []byte(head.ContentDigest.String()), []byte(zeroDigest), 1),
+	}
+	for name, raw := range cases {
+		t.Run(name, func(t *testing.T) {
+			if bytes.Equal(raw, valid) {
+				t.Fatal("mutation did not change fixture")
+			}
+			if _, err := VerifyExport(bytes.NewReader(raw)); !isRuleCode(err, "snapshot_integrity_error") {
+				t.Fatalf("error=%v", err)
+			}
+		})
 	}
 }
 

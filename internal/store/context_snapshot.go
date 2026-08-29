@@ -62,12 +62,18 @@ func (s *Store) CreateContextSnapshot(ctx context.Context, in snapshot.CreateInp
 			return result, err
 		}
 	}
+	if err := s.failSnapshot("after_head"); err != nil {
+		return result, err
+	}
 
 	entries, err := captureContextEntries(ctx, conn, in.Project)
 	if err != nil {
 		return result, err
 	}
 	if err := validateSnapshotEntries(entries, limits); err != nil {
+		return result, err
+	}
+	if err := s.failSnapshot("after_capture"); err != nil {
 		return result, err
 	}
 	summaries := make([]snapshot.EntrySummary, 0, len(entries))
@@ -84,6 +90,9 @@ func (s *Store) CreateContextSnapshot(ctx context.Context, in snapshot.CreateInp
 		}
 	}
 	digest := snapshot.ContentDigest(snapshot.SchemaVersion, summaries)
+	if err := s.failSnapshot("after_entries"); err != nil {
+		return result, err
+	}
 	gitAfter, err := recheck(ctx)
 	if err != nil {
 		return result, err
@@ -119,12 +128,18 @@ func (s *Store) CreateContextSnapshot(ctx context.Context, in snapshot.CreateInp
 	if err != nil {
 		return result, err
 	}
+	if err := s.failSnapshot("after_reread"); err != nil {
+		return result, err
+	}
 	storedDigest := snapshot.ContentDigest(snapshot.SchemaVersion, storedSummaries)
 	if storedDigest != digest || storedTotal != payloadTotal || !equalCounts(storedCounts, counts) {
 		return result, &snapshot.RuleError{Code: "snapshot_integrity_error"}
 	}
 	countsJSON, err := snapshot.MarshalCanonical(storedCounts)
 	if err != nil {
+		return result, err
+	}
+	if err := s.failSnapshot("before_seal"); err != nil {
 		return result, err
 	}
 	res, err := conn.ExecContext(ctx, `UPDATE context_snapshots SET state='sealed',content_digest=?,entry_count=?,payload_bytes_total=?,counts_json=? WHERE id=? AND state='building'`, storedDigest[:], len(storedSummaries), storedTotal, countsJSON, snapshotID)
@@ -138,6 +153,9 @@ func (s *Store) CreateContextSnapshot(ctx context.Context, in snapshot.CreateInp
 	if n != 1 {
 		return result, &snapshot.RuleError{Code: "snapshot_integrity_error"}
 	}
+	if err := s.failSnapshot("before_commit"); err != nil {
+		return result, err
+	}
 	if _, err = conn.ExecContext(ctx, "COMMIT"); err != nil {
 		return result, mapSnapshotSQLiteError(err)
 	}
@@ -145,6 +163,13 @@ func (s *Store) CreateContextSnapshot(ctx context.Context, in snapshot.CreateInp
 	result.Snapshot = snapshot.Head{ID: snapshotID, Project: in.Project, Name: in.Name, SchemaVersion: snapshot.SchemaVersion, State: "sealed", ContentDigest: storedDigest, GitObjectFormat: in.Git.ObjectFormat, GitCommit: in.Git.Commit, GitRef: in.Git.Ref, GitBranch: in.Git.Branch, GitDirty: in.Git.Dirty, GitWorktreeFingerprintVersion: in.Git.WorktreeFingerprintVersion, GitWorktreeFingerprint: in.Git.WorktreeFingerprint, AllowDirtyUsed: in.Git.AllowDirtyUsed, GitMetadataSource: in.Git.MetadataSource, Message: in.Message, ActorID: in.ActorID, ActorLabel: in.ActorLabel, SessionRef: in.SessionRef, CreatedAt: createdAt, EntryCount: int64(len(storedSummaries)), PayloadBytesTotal: storedTotal, Counts: storedCounts}
 	result.Created = true
 	return result, nil
+}
+
+func (s *Store) failSnapshot(phase string) error {
+	if s.snapshotFault == nil {
+		return nil
+	}
+	return s.snapshotFault(phase)
 }
 
 func validateSnapshotCreateInput(in snapshot.CreateInput, l snapshot.Limits) error {

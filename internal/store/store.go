@@ -11,7 +11,10 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-type Store struct{ db *sql.DB }
+type Store struct {
+	db            *sql.DB
+	snapshotFault func(string) error
+}
 
 const schema = `
 CREATE TABLE IF NOT EXISTS persons(
