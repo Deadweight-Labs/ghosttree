@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"database/sql"
 	"flag"
 	"fmt"
 	"io"
@@ -43,6 +45,10 @@ func cmdServe(args []string, stdout io.Writer) int {
 		fmt.Fprintf(stdout, "database schema is out of date - run 'ctx upgrade-schema --db %s' first\n", *db)
 		return 1
 	}
+	if err := serveSnapshotSchemaReady(context.Background(), st.DB()); err != nil {
+		fmt.Fprintf(stdout, "context snapshot schema is not ready: %v\n", err)
+		return 1
+	}
 	if _, err := st.ApplyStaleness(time.Now(), 90*24*time.Hour); err != nil {
 		fmt.Fprintf(stdout, "apply knowledge staleness: %v\n", err)
 		return 1
@@ -56,6 +62,17 @@ func cmdServe(args []string, stdout io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+func serveSnapshotSchemaReady(ctx context.Context, db *sql.DB) error {
+	current, err := store.ContextSnapshotSchemaCurrent(db)
+	if err != nil {
+		return err
+	}
+	if !current {
+		return fmt.Errorf("database schema is out of date")
+	}
+	return store.ProbeContextSnapshotSchema(ctx, db)
 }
 
 func newHTTPServer(addr string, handler http.Handler) *http.Server {

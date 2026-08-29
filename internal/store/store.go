@@ -360,7 +360,7 @@ func Open(path string) (*Store, error) {
 	db.SetMaxOpenConns(1)
 	// busy_timeout covers the second process case (ctx person add against a
 	// running server) that WAL alone does not.
-	if _, err := db.Exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;`); err != nil {
+	if _, err := db.Exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA recursive_triggers=ON; PRAGMA busy_timeout=5000;`); err != nil {
 		return nil, err
 	}
 	if _, err := db.Exec(schema); err != nil {
@@ -379,6 +379,9 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	if err := ensureKnowledgeColumn(db, "regression_test"); err != nil {
+		return nil, err
+	}
+	if err := EnsureContextSnapshotSchema(db); err != nil {
 		return nil, err
 	}
 	return &Store{db: db}, nil
