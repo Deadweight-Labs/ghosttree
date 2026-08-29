@@ -35,13 +35,35 @@ The first planned promotion is `v0.1.0-rc.1`, followed by `v0.1.0`.
 
 Additional candidates increment `N`; an RC tag is never reused.
 
+### Release-named context marks
+
+When recording a Ghosttree context snapshot with the release tag as its name,
+create the local tag first and verify the exact checkout rather than relying on
+a branch name:
+
+```bash
+test -z "$(git status --porcelain=v1)"
+test "$(git rev-parse 'refs/tags/vX.Y.Z-rc.N^{commit}')" = \
+     "$(git rev-parse 'HEAD^{commit}')"
+ctx snapshot create vX.Y.Z-rc.N -m 'Release context mark'
+ctx snapshot verify vX.Y.Z-rc.N
+```
+
+Annotated tags are peeled to their commit for this comparison. A tag mismatch
+must not be bypassed; `--allow-dirty` overrides only the dirty-worktree refusal
+and is not part of the normal release path. The snapshot timestamp records when
+the mark was actually created and does not claim that Ghosttree data travelled
+back in time with the Git checkout.
+
 ## Final release
 
 1. Confirm the chosen release-candidate commit is green and approved.
 2. Merge `release/X.Y.Z` into `main` by pull request.
 3. Create the annotated tag `vX.Y.Z` on the resulting `main` commit.
-4. Push the tag and verify archives, checksums, SBOMs, and signatures.
-5. Merge `main` back into `dev` and remove the release branch.
+4. If a release-named context mark is required, perform the clean-checkout and
+   peeled-tag checks above, then create and verify it.
+5. Push the tag and verify archives, checksums, SBOMs, and signatures.
+6. Merge `main` back into `dev` and remove the release branch.
 
 Stable release artifacts are built only from final tags. A failed publication
 is corrected with a new tag and version.

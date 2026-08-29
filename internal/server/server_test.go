@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,8 +14,36 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
+	"github.com/Deadweight-Labs/ghosttree/internal/snapshot"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
+
+type testSnapshotMirror struct{}
+
+func (testSnapshotMirror) Rebuild(context.Context, string) error { return nil }
+
+func TestAPIContextSnapshotOptionsHaveFiniteDefaultsAndAllowInjection(t *testing.T) {
+	st, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	a := newAPI(st)
+	if a.snapshotLimits != snapshot.DefaultLimits() {
+		t.Fatalf("default limits = %#v", a.snapshotLimits)
+	}
+
+	limits := snapshot.DefaultLimits()
+	limits.MaxEntryPayloadBytes = 17
+	mirror := testSnapshotMirror{}
+	a = newAPI(st, WithContextSnapshotLimits(limits), WithSnapshotMirror(mirror))
+	if a.snapshotLimits != limits {
+		t.Fatalf("injected limits = %#v", a.snapshotLimits)
+	}
+	if a.snapshotMirror == nil {
+		t.Fatal("snapshot mirror was not injected")
+	}
+}
 
 func TestBootstrapActivatesInstructionsByPath(t *testing.T) {
 	st, _ := store.Open(":memory:")

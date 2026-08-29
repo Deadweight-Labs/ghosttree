@@ -11,15 +11,34 @@ import (
 	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
+	"github.com/Deadweight-Labs/ghosttree/internal/snapshot"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
-type api struct{ st *store.Store }
+type SnapshotMirror interface {
+	Rebuild(context.Context, string) error
+}
+
+type Option func(*api)
+
+func WithContextSnapshotLimits(limits snapshot.Limits) Option {
+	return func(a *api) { a.snapshotLimits = limits }
+}
+
+func WithSnapshotMirror(mirror SnapshotMirror) Option {
+	return func(a *api) { a.snapshotMirror = mirror }
+}
+
+type api struct {
+	st             *store.Store
+	snapshotLimits snapshot.Limits
+	snapshotMirror SnapshotMirror
+}
 
 type personKey struct{}
 
-func New(st *store.Store) http.Handler {
-	a := &api{st: st}
+func New(st *store.Store, options ...Option) http.Handler {
+	a := newAPI(st, options...)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]bool{"ok": true})
@@ -80,6 +99,16 @@ func New(st *store.Store) http.Handler {
 	mux.HandleFunc("GET /api/documents/{id}/revisions", a.documentRevisions)
 	mux.HandleFunc("GET /api/documents/{id}/revisions/{rev}", a.documentRevision)
 	return a.auth(mux)
+}
+
+func newAPI(st *store.Store, options ...Option) *api {
+	a := &api{st: st, snapshotLimits: snapshot.DefaultLimits()}
+	for _, option := range options {
+		if option != nil {
+			option(a)
+		}
+	}
+	return a
 }
 
 // auth lets /api/health through unauthenticated so probes and setup checks
