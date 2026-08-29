@@ -128,12 +128,16 @@ func snapshotGitDirty(repoRoot string) (bool, error) {
 			pos = end + 1
 		}
 		for _, path := range paths {
-			if !ghost.IsGeneratedPath(path) {
+			if !ghost.IsFingerprintGeneratedPath(path) {
 				return true, nil
 			}
 		}
 	}
-	return false, nil
+	drafts, err := ignoredDocumentDraftPaths(repoRoot)
+	if err != nil {
+		return false, err
+	}
+	return len(drafts) != 0, nil
 }
 
 func snapshotWorktreeManifest(repoRoot string) ([]byte, error) {
@@ -152,7 +156,7 @@ func snapshotWorktreeManifest(repoRoot string) ([]byte, error) {
 		return nil, err
 	}
 	for _, record := range indexRecords {
-		if !ghost.IsGeneratedPath(record.path) {
+		if !ghost.IsFingerprintGeneratedPath(record.path) {
 			writeManifestRecord(&manifest, "index", record.path, record.data)
 		}
 	}
@@ -162,14 +166,21 @@ func snapshotWorktreeManifest(repoRoot string) ([]byte, error) {
 		return nil, err
 	}
 	for _, path := range splitNullPaths(untrackedRaw) {
-		if !ghost.IsGeneratedPath(path) {
+		if !ghost.IsFingerprintGeneratedPath(path) {
 			paths[path] = struct{}{}
 		}
+	}
+	drafts, err := ignoredDocumentDraftPaths(repoRoot)
+	if err != nil {
+		return nil, err
+	}
+	for _, path := range drafts {
+		paths[path] = struct{}{}
 	}
 
 	orderedPaths := make([]string, 0, len(paths))
 	for path := range paths {
-		if !ghost.IsGeneratedPath(path) {
+		if !ghost.IsFingerprintGeneratedPath(path) {
 			orderedPaths = append(orderedPaths, path)
 		}
 	}
@@ -184,7 +195,7 @@ func snapshotWorktreeManifest(repoRoot string) ([]byte, error) {
 
 	orderedSubmodules := make([]string, 0, len(submodules))
 	for path := range submodules {
-		if !ghost.IsGeneratedPath(path) {
+		if !ghost.IsFingerprintGeneratedPath(path) {
 			orderedSubmodules = append(orderedSubmodules, path)
 		}
 	}
@@ -205,6 +216,14 @@ func snapshotWorktreeManifest(repoRoot string) ([]byte, error) {
 		writeManifestRecord(&manifest, "submodule", path, data)
 	}
 	return manifest.Bytes(), nil
+}
+
+func ignoredDocumentDraftPaths(repoRoot string) ([]string, error) {
+	raw, err := gitBytes(repoRoot, "ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", ".ghosttree/edit")
+	if err != nil {
+		return nil, err
+	}
+	return splitNullPaths(raw), nil
 }
 
 type snapshotIndexRecord struct {

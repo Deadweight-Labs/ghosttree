@@ -111,8 +111,9 @@ var excludeLines = []string{
 	".ghosttree/snapshots/INDEX.md",
 }
 
-// IsGeneratedPath reports whether path is an exact Ghosttree-owned projection.
-// User-owned files elsewhere under .ghosttree remain visible to Git policy.
+// IsGeneratedPath reports whether path is hidden from ordinary Git status.
+// This list includes the user-owned document worktree and is deliberately
+// broader than the paths omitted from a context-snapshot fingerprint.
 func IsGeneratedPath(path string) bool {
 	path = strings.TrimPrefix(filepath.ToSlash(filepath.Clean(path)), "./")
 	for _, pattern := range excludeLines {
@@ -123,6 +124,54 @@ func IsGeneratedPath(path string) bool {
 		}
 	}
 	return false
+}
+
+var fingerprintGeneratedTrees = []string{
+	".ghosttree/tree",
+	".ghosttree/tree" + tmpSuffix,
+	".ghosttree/knowledge",
+	".ghosttree/knowledge" + tmpSuffix,
+	".ghosttree/docs",
+	".ghosttree/docs" + tmpSuffix,
+	".ghosttree/requests",
+	".ghosttree/requests" + tmpSuffix,
+}
+
+var fingerprintGeneratedFiles = []string{
+	".ghosttree/INDEX.md",
+	".ghosttree/snapshots/INDEX.md",
+}
+
+const fingerprintSnapshotTempPrefix = ".ghosttree/snapshots/.INDEX.md.tmp-"
+
+// IsFingerprintGeneratedPath is the narrow allowlist of bytes Ghosttree can
+// regenerate. In particular, .ghosttree/edit is user-authored and never
+// belongs here even though ordinary Git status hides it.
+func IsFingerprintGeneratedPath(path string) bool {
+	path = strings.TrimPrefix(filepath.ToSlash(filepath.Clean(path)), "./")
+	for _, tree := range fingerprintGeneratedTrees {
+		if path == tree || strings.HasPrefix(path, tree+"/") {
+			return true
+		}
+	}
+	for _, file := range fingerprintGeneratedFiles {
+		if path == file {
+			return true
+		}
+	}
+	if !strings.HasPrefix(path, fingerprintSnapshotTempPrefix) {
+		return false
+	}
+	suffix := strings.TrimPrefix(path, fingerprintSnapshotTempPrefix)
+	if suffix == "" {
+		return false
+	}
+	for _, char := range suffix {
+		if char < '0' || char > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // EnsureExcluded trägt den Baum in .git/info/exclude ein, nicht in .gitignore:

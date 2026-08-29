@@ -114,6 +114,35 @@ func TestGeneratedPathRegistryIsExactAndKeepsOperatorFilesRelevant(t *testing.T)
 	}
 }
 
+func TestFingerprintGeneratedPathsAreSeparateFromGitExclusions(t *testing.T) {
+	for _, path := range []string{
+		".ghosttree/tree/internal/x.md",
+		".ghosttree/knowledge/note/1.md",
+		".ghosttree/docs/specs/x.md",
+		".ghosttree/requests/open/REQ-1.md",
+		".ghosttree/INDEX.md",
+		".ghosttree/snapshots/INDEX.md",
+		".ghosttree/snapshots/.INDEX.md.tmp-123",
+	} {
+		if !IsFingerprintGeneratedPath(path) {
+			t.Fatalf("regenerable path %q not excluded from fingerprint", path)
+		}
+	}
+	for _, path := range []string{
+		".ghosttree/edit/draft.md",
+		".ghosttree/edit.tmp/draft.md",
+		".ghosttree/operator-note",
+		".ghosttree/snapshots/operator.md",
+		".ghosttree/snapshots/INDEX.md.backup",
+		".ghosttree/snapshots/.INDEX.md.tmp-operator",
+		".ghosttree/snapshots/.INDEX.md.tmp-",
+	} {
+		if IsFingerprintGeneratedPath(path) {
+			t.Fatalf("operator path %q excluded from fingerprint", path)
+		}
+	}
+}
+
 // Zaehlt ganze Zeilen, nicht Vorkommen: ".ghosttree/tree/" steckt als
 // Zeichenkette auch in ".ghosttree/tree/x", und danach ist gefragt, wie oft der
 // Eintrag dasteht.
