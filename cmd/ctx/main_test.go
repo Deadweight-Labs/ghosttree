@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"fmt"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,8 +11,10 @@ import (
 
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
+	"github.com/Deadweight-Labs/ghosttree/internal/config"
 	"github.com/Deadweight-Labs/ghosttree/internal/installer"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
+	"github.com/Deadweight-Labs/ghosttree/internal/server"
 	"github.com/Deadweight-Labs/ghosttree/internal/sessiondistill"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
@@ -125,6 +129,50 @@ func TestExportAcceptsFlagAfterSessionID(t *testing.T) {
 	run([]string{"export", "1137", "-o", filepath.Join(home, "x.jsonl")}, &out)
 	if strings.Contains(out.String(), "usage: ctx export") {
 		t.Errorf("flag after session id must parse, got:\n%s", out.String())
+	}
+}
+
+func TestExportFileIsPrivate(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	st, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	token, err := st.AddPerson("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(server.New(st))
+	t.Cleanup(srv.Close)
+	if err := config.Save(config.Config{ServerURL: srv.URL, Token: token}); err != nil {
+		t.Fatal(err)
+	}
+	c := client.New(config.Config{ServerURL: srv.URL, Token: token})
+	id, err := c.UpsertSession(store.Session{Harness: "codex", ExternalID: "private-export"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.AppendChunks(id, []store.Chunk{{Seq: 0, Raw: `{"secret":"transcript"}`}}); err != nil {
+		t.Fatal(err)
+	}
+
+	outPath := filepath.Join(home, "session.jsonl")
+	if err := os.WriteFile(outPath, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if code := run([]string{"export", fmt.Sprint(id), "-o", outPath}, &out); code != 0 {
+		t.Fatalf("code = %d, output = %s", code, out.String())
+	}
+	info, err := os.Stat(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("export mode = %04o, want 0600", got)
 	}
 }
 

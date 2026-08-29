@@ -4,7 +4,7 @@ on:
   push:
     branches: [dev, main, "release/**", "hotfix/**"]
   pull_request:
-    branches: [dev, main]
+    branches: [dev, main, "release/**"]
 
 permissions:
   contents: read
@@ -31,7 +31,8 @@ jobs:
           case "$BASE:$HEAD" in
             dev:*) ;;
             main:release/*|main:hotfix/*) ;;
-            *) echo "Pull requests target dev; only release/* and hotfix/* target main."; exit 1 ;;
+            release/*:*) ;;
+            *) echo "Pull requests target dev or release/*; only release/* and hotfix/* target main."; exit 1 ;;
           esac
           printf '%s\n' "$PR_TITLE" | grep -Eq '^(feat|fix|docs|test|build|ci|chore|refactor|perf|revert)(\([a-z0-9._-]+\))?!?: .+'
           if [ "$ACTOR" = "dependabot[bot]" ]; then

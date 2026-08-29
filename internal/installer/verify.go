@@ -276,23 +276,8 @@ func hookCheck(name, path, event, command, matcher, fix string) Check {
 	return c
 }
 
-// ruleSectionCheck vergleicht den Inhalt des Regelabschnitts, nicht bloss seine
-// Anwesenheit.
-//
-// Der Grund ist ein eigener Fehlschlag (Pitfall #1238): nach einer Änderung an
-// ruleText trug jede schon eingerichtete Maschine weiter den alten Text, und
-// fileCheck — das nur nach markerStart sucht — meldete dafür einen grünen
-// Haken. Der veraltete Satz wurde jeder Sitzung als Anweisung mitgegeben und
-// beschrieb eine Dateiform, die es nicht mehr gab. Genau die Art Drift, für die
-// doctor gebaut ist, und die einzige, die es nicht sah.
-//
-// Verglichen wird nur zwischen den Markern. Was davor und dahinter steht,
-// gehört anderen Werkzeugen und geht uns nichts an.
-//
-// Verglichen wird gegen ruleForPath(h, path) und nicht gegen ruleText: eine Umgebung, bei
-// der der Sitzungsbeginn nachweislich nichts ausliefert, bekommt einen Absatz
-// mehr. Gegen ruleText zu prüfen erklärte genau diese Umgebungen für dauerhaft
-// veraltet.
+// ruleSectionCheck compares only the managed section and accounts for
+// path-specific harness behavior.
 func ruleSectionCheck(h Harness, name, path, fix string) Check {
 	c := Check{Name: name, Fix: fix, Detail: path}
 	b, err := os.ReadFile(path)
@@ -320,18 +305,4 @@ func extractSection(content string) (string, bool) {
 		return "", false
 	}
 	return content[start+len(markerStart) : end], true
-}
-
-func fileCheck(name, path, needle, fix string) Check {
-	c := Check{Name: name, Fix: fix, Detail: path}
-	b, err := os.ReadFile(path)
-	switch {
-	case err != nil:
-		c.Detail = path + " (missing)"
-	case !strings.Contains(string(b), needle):
-		c.Detail = path + " (no ghosttree entry)"
-	default:
-		c.OK = true
-	}
-	return c
 }

@@ -5,8 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"net/http"
-	"net/url"
-	"strings"
 	"sync"
 	"time"
 )
@@ -57,7 +55,7 @@ func (a *app) requirePerson(next http.Handler) http.Handler {
 				return
 			}
 		}
-		http.Redirect(w, r, "/ui/login?next="+url.QueryEscape(r.URL.RequestURI()), http.StatusSeeOther)
+		http.Redirect(w, r, "/ui/login", http.StatusSeeOther)
 	})
 }
 func (a *app) loginPage(w http.ResponseWriter, r *http.Request) {
@@ -81,11 +79,7 @@ func (a *app) loginSubmit(w http.ResponseWriter, r *http.Request) {
 	// Secure is intentionally omitted because the supported private network deployment
 	// currently serves plain HTTP. HttpOnly and SameSite still constrain access.
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: id, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: 30 * 24 * 60 * 60})
-	next := r.FormValue("next")
-	if !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") {
-		next = "/ui/requests"
-	}
-	http.Redirect(w, r, next, http.StatusSeeOther)
+	http.Redirect(w, r, "/ui/requests", http.StatusSeeOther)
 }
 func (a *app) logout(w http.ResponseWriter, r *http.Request) {
 	if cookie, err := r.Cookie(sessionCookie); err == nil {

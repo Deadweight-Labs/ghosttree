@@ -51,9 +51,20 @@ func cmdServe(args []string, stdout io.Writer) int {
 	root.Handle("/api/", server.New(st))
 	root.Handle("/", web.New(st))
 	fmt.Fprintf(stdout, "ghosttree %s listening on %s (db %s, ui /ui/)\n", version, *listen, *db)
-	if err := http.ListenAndServe(*listen, root); err != nil {
+	if err := newHTTPServer(*listen, root).ListenAndServe(); err != nil {
 		fmt.Fprintf(stdout, "serve: %v\n", err)
 		return 1
 	}
 	return 0
+}
+
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      5 * time.Minute,
+		IdleTimeout:       2 * time.Minute,
+	}
 }
