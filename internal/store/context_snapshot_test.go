@@ -51,6 +51,9 @@ func TestCreateSnapshotSealsAndRetriesIdempotently(t *testing.T) {
 	if second.Created || second.Snapshot.ID != first.Snapshot.ID || second.Snapshot.ContentDigest != first.Snapshot.ContentDigest {
 		t.Fatalf("second=%+v first=%+v", second, first)
 	}
+	if len(second.Snapshot.Counts) != 5 || second.Snapshot.Counts["knowledge"] != first.Snapshot.Counts["knowledge"] {
+		t.Fatalf("idempotent retry lost counts: %+v", second.Snapshot.Counts)
+	}
 	var heads, entries int
 	if err := s.DB().QueryRow(`SELECT count(*),(SELECT count(*) FROM context_snapshot_entries) FROM context_snapshots`).Scan(&heads, &entries); err != nil {
 		t.Fatal(err)

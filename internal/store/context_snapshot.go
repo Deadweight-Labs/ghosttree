@@ -282,11 +282,11 @@ func sameDigestPtr(a, b *snapshot.Digest) bool {
 
 func loadContextSnapshotHead(ctx context.Context, q snapshotQueryer, project, name string) (snapshot.Head, bool, error) {
 	var h snapshot.Head
-	var content, worktree []byte
+	var content, worktree, countsRaw []byte
 	var ref, branch, message, label, session sql.NullString
 	var fpv sql.NullInt64
 	var dirty, allow int
-	err := q.QueryRowContext(ctx, `SELECT id,project,name,schema_version,state,content_digest,git_object_format,git_commit,git_ref,git_branch,git_dirty,git_worktree_fingerprint_version,git_worktree_fingerprint,allow_dirty_used,git_metadata_source,message,actor_id,actor_label,session_ref,created_at,entry_count,payload_bytes_total,counts_json FROM context_snapshots WHERE project=? AND name=?`, project, name).Scan(&h.ID, &h.Project, &h.Name, &h.SchemaVersion, &h.State, &content, &h.GitObjectFormat, &h.GitCommit, &ref, &branch, &dirty, &fpv, &worktree, &allow, &h.GitMetadataSource, &message, &h.ActorID, &label, &session, &h.CreatedAt, &h.EntryCount, &h.PayloadBytesTotal, new([]byte))
+	err := q.QueryRowContext(ctx, `SELECT id,project,name,schema_version,state,content_digest,git_object_format,git_commit,git_ref,git_branch,git_dirty,git_worktree_fingerprint_version,git_worktree_fingerprint,allow_dirty_used,git_metadata_source,message,actor_id,actor_label,session_ref,created_at,entry_count,payload_bytes_total,counts_json FROM context_snapshots WHERE project=? AND name=?`, project, name).Scan(&h.ID, &h.Project, &h.Name, &h.SchemaVersion, &h.State, &content, &h.GitObjectFormat, &h.GitCommit, &ref, &branch, &dirty, &fpv, &worktree, &allow, &h.GitMetadataSource, &message, &h.ActorID, &label, &session, &h.CreatedAt, &h.EntryCount, &h.PayloadBytesTotal, &countsRaw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return h, false, nil
 	}
@@ -309,6 +309,9 @@ func loadContextSnapshotHead(ctx context.Context, q snapshotQueryer, project, na
 		var d snapshot.Digest
 		copy(d[:], worktree)
 		h.GitWorktreeFingerprint = &d
+	}
+	if snapshot.ValidateCanonical(countsRaw) != nil || json.Unmarshal(countsRaw, &h.Counts) != nil || snapshot.ValidateHeadV1(h, h.Counts) != nil {
+		return snapshot.Head{}, false, &snapshot.RuleError{Code: "snapshot_integrity_error"}
 	}
 	return h, true, nil
 }
