@@ -204,17 +204,30 @@ func TestSnapshotSchemaAPIsRequireSingleConnectionPool(t *testing.T) {
 	}
 }
 
-func TestSnapshotSchemaPragmasSurvivePhysicalConnectionRecycling(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "recycled.db")
-	db, err := sql.Open("sqlite", path)
+func TestOrdinarySQLiteConnectionsKeepDriverDefaults(t *testing.T) {
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "ordinary.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	db.SetMaxOpenConns(1)
 	defer db.Close()
-	if err := EnsureContextSnapshotSchema(db); err != nil {
+	var foreignKeys int
+	if err := db.QueryRow(`PRAGMA foreign_keys`).Scan(&foreignKeys); err != nil {
 		t.Fatal(err)
 	}
+	if foreignKeys != 0 {
+		t.Fatalf("ordinary sqlite connection foreign_keys=%d, want driver default 0", foreignKeys)
+	}
+}
+
+func TestSnapshotSchemaPragmasSurvivePhysicalConnectionRecycling(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "recycled.db")
+	st, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	db := st.DB()
 	insertBuildingSnapshot(t, db, "recycled")
 
 	// Closing every idle connection forces every statement below onto a newly

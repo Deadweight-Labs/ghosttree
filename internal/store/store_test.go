@@ -44,6 +44,21 @@ INSERT INTO ghost_files(project,path,kind,description,content_sha,described_at,u
 	}
 }
 
+func TestStoreSQLiteDSNPreservesMemoryPathsAndQueries(t *testing.T) {
+	for _, test := range []struct {
+		path string
+		want string
+	}{
+		{":memory:", "file::memory:?_pragma=foreign_keys(1)&_pragma=recursive_triggers(1)"},
+		{"/tmp/ghosttree.db", "/tmp/ghosttree.db?_pragma=foreign_keys(1)&_pragma=recursive_triggers(1)"},
+		{"file:/tmp/ghosttree.db?mode=rwc&cache=private", "file:/tmp/ghosttree.db?mode=rwc&cache=private&_pragma=foreign_keys(1)&_pragma=recursive_triggers(1)"},
+	} {
+		if got := storeSQLiteDSN(test.path); got != test.want {
+			t.Errorf("storeSQLiteDSN(%q) = %q, want %q", test.path, got, test.want)
+		}
+	}
+}
+
 func legacyDomainFingerprint(t *testing.T, db *sql.DB) (int, string) {
 	t.Helper()
 	var knowledgeTitle, knowledgeBody, ghostPath, ghostDescription string

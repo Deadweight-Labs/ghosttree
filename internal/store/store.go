@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -352,7 +353,7 @@ func Open(path string) (*Store, error) {
 	if err := prepareDatabaseFiles(path); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite", storeSQLiteDSN(path))
 	if err != nil {
 		return nil, err
 	}
@@ -385,6 +386,20 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	return &Store{db: db}, nil
+}
+
+func storeSQLiteDSN(path string) string {
+	if path == ":memory:" {
+		path = "file::memory:"
+	}
+	separator := "?"
+	if strings.Contains(path, "?") {
+		separator = "&"
+	}
+	if strings.HasSuffix(path, "?") || strings.HasSuffix(path, "&") {
+		separator = ""
+	}
+	return path + separator + "_pragma=foreign_keys(1)&_pragma=recursive_triggers(1)"
 }
 
 func prepareDatabaseFiles(path string) error {
