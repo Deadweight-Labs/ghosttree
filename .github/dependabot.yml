@@ -7,7 +7,7 @@ updates:
       day: monday
     open-pull-requests-limit: 5
     target-branch: dev
-    labels: ["dependencies", "go"]
+    labels: ["dependencies", "go", "release: patch"]
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
@@ -15,4 +15,4 @@ updates:
       day: monday
     open-pull-requests-limit: 5
     target-branch: dev
-    labels: ["dependencies", "ci"]
+    labels: ["dependencies", "ci", "release: patch"]

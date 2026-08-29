@@ -23,6 +23,7 @@ jobs:
         env:
           BASE: ${{ github.base_ref }}
           HEAD: ${{ github.head_ref }}
+          ACTOR: ${{ github.actor }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
@@ -33,6 +34,9 @@ jobs:
             *) echo "Pull requests target dev; only release/* and hotfix/* target main."; exit 1 ;;
           esac
           printf '%s\n' "$PR_TITLE" | grep -Eq '^(feat|fix|docs|test|build|ci|chore|refactor|perf|revert)(\([a-z0-9._-]+\))?!?: .+'
+          if [ "$ACTOR" = "dependabot[bot]" ]; then
+            exit 0
+          fi
           test "$(printf '%s\n' "$PR_BODY" | grep -Ec "^- \[[xX]\] \`(major|minor|patch|none)\`")" -eq 1
           printf '%s\n' "$PR_BODY" | grep -Eq '^- \[[xX]\] I have read and agree to the .*Contributor License Agreement'
 
@@ -71,5 +75,5 @@ jobs:
       - uses: DavidAnson/markdownlint-cli2-action@992badcdf24e3b8eb7e87ff9287fe931bcb00c6e # v20.0.0
       - uses: lycheeverse/lychee-action@885c65f3dc543b57c898c8099f4e08c8afd178a2 # v2.6.1
         with:
-          args: --no-progress --exclude-mail README.md CONTRIBUTING.md SECURITY.md RELEASING.md CLA.md COMMUNITY-GRANT.md COMMERCIAL.md
+          args: --no-progress README.md CONTRIBUTING.md SECURITY.md RELEASING.md CLA.md COMMUNITY-GRANT.md COMMERCIAL.md
           fail: true

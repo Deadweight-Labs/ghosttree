@@ -44,12 +44,17 @@ func cmdRequest(args []string, stdout io.Writer) int {
 		fmt.Fprintln(stdout, requestUsage)
 		return 2
 	}
+	sub, rest := args[0], args[1:]
+	switch sub {
+	case "list", "search", "show", "create", "start", "pause", "complete-work", "abandon", "ac", "done":
+	default:
+		return requestCLIUsage(stdout)
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		return writeRequestCLIError(stdout, jsonMode, 1, err)
 	}
 	c := client.New(cfg)
-	sub, rest := args[0], args[1:]
 	switch sub {
 	case "list":
 		if len(rest) != 0 {
