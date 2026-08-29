@@ -119,6 +119,15 @@ func (a *api) contextSnapshotEntries(w http.ResponseWriter, r *http.Request) {
 	}
 	if page.Exact != nil {
 		w.Header().Set("ETag", `"`+page.Exact.PayloadDigest.String()+`"`)
+		raw, err := snapshot.MarshalCanonical(page)
+		if err != nil {
+			writeSnapshotError(w, err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(append(raw, '\n'))
+		return
 	}
 	writeJSON(w, http.StatusOK, page)
 }

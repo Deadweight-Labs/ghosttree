@@ -268,7 +268,7 @@ func snapshotUsageError(stdout io.Writer, err error) int {
 func snapshotCommandError(stdout io.Writer, err error) int {
 	var rule *snapshot.RuleError
 	if errors.As(err, &rule) {
-		fmt.Fprintln(stdout, rule.Code)
+		fmt.Fprintln(stdout, rule.Error())
 		return 1
 	}
 	fmt.Fprintln(stdout, err)

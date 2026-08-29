@@ -128,7 +128,7 @@ func verifyEntries(head Head, counts map[string]int64, entries []Entry, full boo
 		}
 		if head.SchemaVersion == SchemaVersion {
 			if err := ValidateCanonical(entry.Payload); err != nil {
-				return integrityError(err)
+				return integrityError(fmt.Errorf("%s/%s: %w", entry.Domain, entry.Key, err))
 			}
 		}
 		if int64(len(entry.Payload)) != entry.PayloadSize || EntryDigest(entry.Payload) != entry.PayloadDigest {
@@ -187,5 +187,5 @@ func copyCounts(counts map[string]int64) map[string]int64 {
 }
 
 func integrityError(cause error) error {
-	return &RuleError{Code: "snapshot_integrity_error", Retryable: false}
+	return &RuleError{Code: "snapshot_integrity_error", Message: cause.Error(), Retryable: false}
 }
