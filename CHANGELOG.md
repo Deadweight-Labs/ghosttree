@@ -8,6 +8,10 @@ Versioning, with pre-1.0 compatibility rules described in
 
 - Keep SQLite databases and their WAL sidecars owner-readable only.
 
+## 0.1.0-rc.2 — 2026-08-29
+
+- Keep SQLite databases and their WAL sidecars owner-readable only.
+
 ## 0.1.0-rc.1 — 2026-08-29
 
 - Initial source-available preview.

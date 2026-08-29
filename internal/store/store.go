@@ -3,6 +3,7 @@ package store
 
 import (
 	"database/sql"
+	"fmt"
 	"os"
 	"time"
 
@@ -387,23 +388,73 @@ func prepareDatabaseFiles(path string) error {
 	if path == ":memory:" {
 		return nil
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return err
-	}
-	if err := f.Chmod(0o600); err != nil {
-		_ = f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
+	if err := ensurePrivateDatabaseFile(path); err != nil {
 		return err
 	}
 	for _, suffix := range []string{"-wal", "-shm"} {
-		if err := os.Chmod(path+suffix, 0o600); err != nil && !os.IsNotExist(err) {
+		if err := tightenExistingDatabaseFile(path + suffix); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func ensurePrivateDatabaseFile(path string) error {
+	for attempt := 0; attempt < 3; attempt++ {
+		info, err := os.Lstat(path)
+		if err == nil {
+			if !info.Mode().IsRegular() {
+				return fmt.Errorf("database path %q is not a regular file", path)
+			}
+			return chmodRegularFile(path, info, "database path")
+		}
+		if !os.IsNotExist(err) {
+			return err
+		}
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+		if os.IsExist(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if err := f.Chmod(0o600); err != nil {
+			_ = f.Close()
+			return err
+		}
+		return f.Close()
+	}
+	return fmt.Errorf("database path %q changed while opening", path)
+}
+
+func tightenExistingDatabaseFile(path string) error {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("database sidecar %q is not a regular file", path)
+	}
+	return chmodRegularFile(path, info, "database sidecar")
+}
+
+func chmodRegularFile(path string, expected os.FileInfo, kind string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	actual, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if !actual.Mode().IsRegular() || !os.SameFile(expected, actual) {
+		return fmt.Errorf("%s %q changed while opening", kind, path)
+	}
+	return f.Chmod(0o600)
 }
 
 // ensureKnowledgeColumn ergänzt eine Textspalte mit leerem Vorgabewert, falls
