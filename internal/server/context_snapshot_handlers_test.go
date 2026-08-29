@@ -33,6 +33,7 @@ func TestContextSnapshotHTTPCreateReadAndActorOverride(t *testing.T) {
 	srv := httptest.NewServer(New(st))
 	t.Cleanup(srv.Close)
 	in := snapshot.CreateInput{Project: "p", Name: "baseline+one", ActorID: "forged", Git: snapshot.GitProvenance{ObjectFormat: "sha1", Commit: strings.Repeat("a", 40), MetadataSource: "client-reported"}}
+	in.GitRecheck = &in.Git
 	resp := req(t, "POST", srv.URL+"/api/context-snapshots", token, in)
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("create status=%d", resp.StatusCode)
@@ -71,6 +72,7 @@ func TestContextSnapshotHTTPAccessFiltersAndTypedErrors(t *testing.T) {
 	srv := httptest.NewServer(New(st))
 	t.Cleanup(srv.Close)
 	in := snapshot.CreateInput{Project: "p", Name: "v1.2.3", Git: snapshot.GitProvenance{ObjectFormat: "sha1", Commit: strings.Repeat("b", 40), MetadataSource: "client-reported"}}
+	in.GitRecheck = &in.Git
 	resp := req(t, "POST", srv.URL+"/api/context-snapshots", token, in)
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("release status=%d", resp.StatusCode)
@@ -102,6 +104,7 @@ func TestContextSnapshotHTTPMirrorFailureIsWarningAfterCommit(t *testing.T) {
 	srv := httptest.NewServer(New(st, WithSnapshotMirror(mirror)))
 	t.Cleanup(srv.Close)
 	in := snapshot.CreateInput{Project: "p", Name: "baseline", Git: snapshot.GitProvenance{ObjectFormat: "sha1", Commit: strings.Repeat("c", 40), MetadataSource: "client-reported"}}
+	in.GitRecheck = &in.Git
 	resp := req(t, "POST", srv.URL+"/api/context-snapshots", token, in)
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("status=%d", resp.StatusCode)

@@ -236,7 +236,8 @@ func clientSnapshotFixture() (snapshot.Head, []snapshot.Entry) {
 		{Domain: "request", Key: "REQ-2", Payload: json.RawMessage(`{"b":[2,3]}`), PayloadSize: 11},
 	}
 	summaries := make([]snapshot.EntrySummary, len(entries))
-	counts := map[string]int64{"knowledge": 1, "request": 1}
+	counts, _ := snapshot.NewCounts(snapshot.SchemaVersion)
+	counts["knowledge"], counts["request"] = 1, 1
 	var total int64
 	for i := range entries {
 		entries[i].PayloadDigest = snapshot.EntryDigest(entries[i].Payload)

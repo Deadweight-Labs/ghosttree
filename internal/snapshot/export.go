@@ -31,8 +31,8 @@ type exportEnvelopeV1 struct {
 }
 
 func WriteExport(dst io.Writer, head Head, counts map[string]int64, entries []Entry, filter *ExportFilter) error {
-	if head.SchemaVersion != SchemaVersion {
-		return &RuleError{Code: "unsupported_snapshot_schema"}
+	if err := ValidateHeadV1(head, counts); err != nil {
+		return err
 	}
 	if err := validateExportFilter(filter, entries); err != nil {
 		return err
@@ -83,8 +83,8 @@ func VerifyExport(src io.Reader) (Verification, error) {
 		return Verification{}, &RuleError{Code: "unsupported_snapshot_schema"}
 	}
 	head := headFromExportV1(envelope.Snapshot)
-	if head.SchemaVersion != SchemaVersion {
-		return Verification{}, &RuleError{Code: "unsupported_snapshot_schema"}
+	if err := ValidateHeadV1(head, envelope.Counts); err != nil {
+		return Verification{}, err
 	}
 	if err := validateExportFilter(envelope.Filter, envelope.Entries); err != nil {
 		return Verification{}, err

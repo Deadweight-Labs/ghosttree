@@ -100,7 +100,9 @@ func snapshotCLIHead() (snapshot.Head, snapshot.Entry) {
 	payload := json.RawMessage(`{"value":1}`)
 	entry := snapshot.Entry{Domain: "knowledge", Key: "k", Payload: payload, PayloadDigest: snapshot.EntryDigest(payload), PayloadSize: int64(len(payload))}
 	summary := snapshot.EntrySummary{Domain: entry.Domain, Key: entry.Key, PayloadDigest: entry.PayloadDigest, PayloadSize: entry.PayloadSize}
-	head := snapshot.Head{Project: "github.com/deadweight-labs/ghosttree", Name: "mark", SchemaVersion: 1, State: "sealed", GitObjectFormat: "sha1", GitCommit: strings.Repeat("a", 40), GitMetadataSource: "server-verified", ActorID: "person:1", CreatedAt: "2026-08-30T00:00:00Z", EntryCount: 1, PayloadBytesTotal: entry.PayloadSize, Counts: map[string]int64{"knowledge": 1}}
+	counts, _ := snapshot.NewCounts(1)
+	counts["knowledge"] = 1
+	head := snapshot.Head{Project: "github.com/deadweight-labs/ghosttree", Name: "mark", SchemaVersion: 1, State: "sealed", GitObjectFormat: "sha1", GitCommit: strings.Repeat("a", 40), GitMetadataSource: "server-verified", ActorID: "person:1", CreatedAt: "2026-08-30T00:00:00Z", EntryCount: 1, PayloadBytesTotal: entry.PayloadSize, Counts: counts}
 	head.ContentDigest = snapshot.ContentDigest(1, []snapshot.EntrySummary{summary})
 	return head, entry
 }

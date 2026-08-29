@@ -91,6 +91,8 @@ func RecheckSnapshotGit(repoRoot, name string, expected snapshot.GitProvenance) 
 	return nil
 }
 
+func SnapshotGitEqual(a, b snapshot.GitProvenance) bool { return sameSnapshotGit(a, b) }
+
 func sameSnapshotGit(a, b snapshot.GitProvenance) bool {
 	return a.ObjectFormat == b.ObjectFormat &&
 		a.Commit == b.Commit &&

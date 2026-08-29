@@ -31,13 +31,18 @@ func (a *api) createContextSnapshot(w http.ResponseWriter, r *http.Request) {
 	// Crossing the HTTP trust boundary makes provenance client-reported even
 	// when the caller resolved it with Ghosttree's own Git implementation.
 	input.Git.MetadataSource = "client-reported"
+	if input.GitRecheck == nil {
+		writeSnapshotRuleError(w, http.StatusBadRequest, &snapshot.RuleError{Code: "snapshot_invalid_input"})
+		return
+	}
+	input.GitRecheck.MetadataSource = "client-reported"
 	if collector.IsReleaseSnapshotName(input.Name) && !access.ReleaseBind {
 		writeSnapshotRuleError(w, http.StatusForbidden, &snapshot.RuleError{Code: "snapshot_release_binding_forbidden"})
 		return
 	}
 	input.ActorID = principal.ID
 	input.ActorLabel = &principal.Label
-	result, err := a.st.CreateContextSnapshot(r.Context(), input, a.snapshotLimits, func(context.Context) (snapshot.GitProvenance, error) { return input.Git, nil })
+	result, err := a.st.CreateContextSnapshot(r.Context(), input, a.snapshotLimits, func(context.Context) (snapshot.GitProvenance, error) { return *input.GitRecheck, nil })
 	if err != nil {
 		writeSnapshotError(w, err)
 		return

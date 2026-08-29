@@ -68,7 +68,9 @@ func insertSealedReadFixture(t *testing.T, st *Store, name string) {
 		t.Fatal(err)
 	}
 	content := snapshot.ContentDigest(1, []snapshot.EntrySummary{{Domain: "knowledge", Key: "k", PayloadDigest: digest, PayloadSize: int64(len(payload))}})
-	counts, _ := snapshot.MarshalCanonical(map[string]int64{"knowledge": 1})
+	countsMap, _ := snapshot.NewCounts(1)
+	countsMap["knowledge"] = 1
+	counts, _ := snapshot.MarshalCanonical(countsMap)
 	if _, err := st.db.Exec(`UPDATE context_snapshots SET state='sealed',content_digest=?,entry_count=1,payload_bytes_total=?,counts_json=? WHERE id=?`, content[:], len(payload), counts, id); err != nil {
 		t.Fatal(err)
 	}

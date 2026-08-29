@@ -12,7 +12,7 @@ import (
 func TestExportV1IsClosedCanonicalAndByteExact(t *testing.T) {
 	entries := exportFixtureEntries(t)
 	head := exportFixtureHead(entries)
-	counts := map[string]int64{"document": 0, "ghost": 0, "instruction": 0, "knowledge": 2, "request": 0}
+	counts := exportFixtureCounts()
 
 	var first, second bytes.Buffer
 	if err := WriteExport(&first, head, counts, entries, nil); err != nil {
@@ -70,7 +70,7 @@ func TestExportV1IsClosedCanonicalAndByteExact(t *testing.T) {
 func TestVerifyExportRejectsCorruption(t *testing.T) {
 	entries := exportFixtureEntries(t)
 	head := exportFixtureHead(entries)
-	counts := map[string]int64{"knowledge": 2}
+	counts := exportFixtureCounts()
 	var out bytes.Buffer
 	if err := WriteExport(&out, head, counts, entries, nil); err != nil {
 		t.Fatal(err)
@@ -84,7 +84,7 @@ func TestVerifyExportRejectsCorruption(t *testing.T) {
 func TestVerifyExportRejectsAggregateCorruptionMatrix(t *testing.T) {
 	entries := exportFixtureEntries(t)
 	head := exportFixtureHead(entries)
-	counts := map[string]int64{"knowledge": 2}
+	counts := exportFixtureCounts()
 	var out bytes.Buffer
 	if err := WriteExport(&out, head, counts, entries, nil); err != nil {
 		t.Fatal(err)
@@ -125,7 +125,7 @@ func TestExportV1RejectsNonCanonicalPayload(t *testing.T) {
 func TestVerifyExportRejectsUnknownSnapshotSchemaAndInvalidProjection(t *testing.T) {
 	entries := exportFixtureEntries(t)
 	head := exportFixtureHead(entries)
-	counts := map[string]int64{"knowledge": 2}
+	counts := exportFixtureCounts()
 	var out bytes.Buffer
 	if err := WriteExport(&out, head, counts, entries, nil); err != nil {
 		t.Fatal(err)
@@ -154,6 +154,12 @@ func exportFixtureEntries(t *testing.T) []Entry {
 	return entries
 }
 
+func exportFixtureCounts() map[string]int64 {
+	counts, _ := NewCounts(1)
+	counts["knowledge"] = 2
+	return counts
+}
+
 func exportFixtureHead(entries []Entry) Head {
 	summaries := make([]EntrySummary, len(entries))
 	var total int64
@@ -161,7 +167,7 @@ func exportFixtureHead(entries []Entry) Head {
 		summaries[i] = EntrySummary{Domain: entry.Domain, Key: entry.Key, PayloadDigest: entry.PayloadDigest, PayloadSize: entry.PayloadSize}
 		total += entry.PayloadSize
 	}
-	return Head{ID: 77, Project: "p", Name: "n", SchemaVersion: 1, State: "sealed", ContentDigest: ContentDigest(1, summaries), GitObjectFormat: "sha1", GitCommit: strings.Repeat("a", 40), GitDirty: false, GitMetadataSource: "server", ActorID: "person:1", CreatedAt: "2026-08-29T00:00:00Z", EntryCount: int64(len(entries)), PayloadBytesTotal: total}
+	return Head{ID: 77, Project: "p", Name: "n", SchemaVersion: 1, State: "sealed", ContentDigest: ContentDigest(1, summaries), GitObjectFormat: "sha1", GitCommit: strings.Repeat("a", 40), GitDirty: false, GitMetadataSource: "server-verified", ActorID: "person:1", CreatedAt: "2026-08-29T00:00:00Z", EntryCount: int64(len(entries)), PayloadBytesTotal: total}
 }
 
 func isRuleCode(err error, code string) bool {

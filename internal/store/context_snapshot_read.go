@@ -152,10 +152,13 @@ func scanSnapshotHead(row snapshotScanner) (snapshot.Head, map[string]int64, err
 		head.GitWorktreeFingerprint = &value
 	}
 	counts := make(map[string]int64)
-	if !json.Valid(countsRaw) || json.Unmarshal(countsRaw, &counts) != nil {
+	if snapshot.ValidateCanonical(countsRaw) != nil || json.Unmarshal(countsRaw, &counts) != nil {
 		return snapshot.Head{}, nil, integrityStoreError("invalid counts")
 	}
 	head.Counts = counts
+	if err := snapshot.ValidateHeadV1(head, counts); err != nil {
+		return snapshot.Head{}, nil, err
+	}
 	return head, counts, nil
 }
 

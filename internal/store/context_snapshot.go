@@ -77,7 +77,10 @@ func (s *Store) CreateContextSnapshot(ctx context.Context, in snapshot.CreateInp
 		return result, err
 	}
 	summaries := make([]snapshot.EntrySummary, 0, len(entries))
-	counts := make(map[string]int64)
+	counts, err := snapshot.NewCounts(snapshot.SchemaVersion)
+	if err != nil {
+		return result, err
+	}
 	var payloadTotal int64
 	for _, entry := range entries {
 		summaries = append(summaries, snapshot.EntrySummary{Domain: entry.Domain, Key: entry.Key, PayloadDigest: entry.PayloadDigest, PayloadSize: entry.PayloadSize})
@@ -323,7 +326,10 @@ func readStoredSnapshotEntries(ctx context.Context, q snapshotQueryer, id int64)
 	}
 	defer rows.Close()
 	var out []snapshot.EntrySummary
-	counts := map[string]int64{}
+	counts, err := snapshot.NewCounts(snapshot.SchemaVersion)
+	if err != nil {
+		return nil, nil, 0, err
+	}
 	var total int64
 	for rows.Next() {
 		var e snapshot.EntrySummary

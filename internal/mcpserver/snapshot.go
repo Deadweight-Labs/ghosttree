@@ -42,10 +42,14 @@ func (s *Server) handleSnapshotCreate(ctx context.Context, _ *mcp.CallToolReques
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := collector.RecheckSnapshotGit(s.repoRoot, in.Name, git); err != nil {
+	rechecked, err := collector.ResolveSnapshotGit(s.repoRoot, in.Name, in.AllowDirty)
+	if err != nil || !collector.SnapshotGitEqual(git, rechecked) {
+		return nil, nil, &snapshot.RuleError{Code: "snapshot_git_changed", Retryable: true}
+	}
+	if err := collector.RecheckSnapshotGit(s.repoRoot, in.Name, rechecked); err != nil {
 		return nil, nil, err
 	}
-	input := snapshot.CreateInput{Project: s.ctxAxes.Project, Name: in.Name, Git: git}
+	input := snapshot.CreateInput{Project: s.ctxAxes.Project, Name: in.Name, Git: git, GitRecheck: &rechecked}
 	if in.Message != "" {
 		input.Message = &in.Message
 	}
