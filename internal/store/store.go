@@ -3,6 +3,7 @@ package store
 
 import (
 	"database/sql"
+	"os"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -347,6 +348,9 @@ CREATE TABLE IF NOT EXISTS document_revisions(
 `
 
 func Open(path string) (*Store, error) {
+	if err := prepareDatabaseFiles(path); err != nil {
+		return nil, err
+	}
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, err
@@ -377,6 +381,29 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	return &Store{db: db}, nil
+}
+
+func prepareDatabaseFiles(path string) error {
+	if path == ":memory:" {
+		return nil
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return err
+	}
+	if err := f.Chmod(0o600); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	for _, suffix := range []string{"-wal", "-shm"} {
+		if err := os.Chmod(path+suffix, 0o600); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
 }
 
 // ensureKnowledgeColumn ergänzt eine Textspalte mit leerem Vorgabewert, falls
