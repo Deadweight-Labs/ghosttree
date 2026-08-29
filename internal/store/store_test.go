@@ -69,6 +69,58 @@ func TestOpenRejectsDirectoryWithoutChangingItsMode(t *testing.T) {
 	}
 }
 
+func TestOpenRejectsDatabaseSymlinkWithoutChangingTargetMode(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.db")
+	if err := os.WriteFile(target, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(target, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "ghosttree.db")
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(path); err == nil {
+		t.Fatal("Open accepted a symlink as a database")
+	}
+	assertMode(t, target, 0o644)
+}
+
+func TestPrepareDatabaseFilesRejectsSidecarSymlinkWithoutChangingTargetMode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ghosttree.db")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(dir, "target.wal")
+	if err := os.WriteFile(target, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(target, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, path+"-wal"); err != nil {
+		t.Fatal(err)
+	}
+	if err := prepareDatabaseFiles(path); err == nil {
+		t.Fatal("prepareDatabaseFiles accepted a symlink as a sidecar")
+	}
+	assertMode(t, target, 0o644)
+}
+
+func assertMode(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != want {
+		t.Fatalf("%s mode = %04o, want %04o", filepath.Base(path), got, want)
+	}
+}
+
 func assertPrivateDatabase(t *testing.T, path string) {
 	t.Helper()
 	for _, file := range []string{path, path + "-wal", path + "-shm"} {

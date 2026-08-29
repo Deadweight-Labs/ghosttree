@@ -401,12 +401,12 @@ func prepareDatabaseFiles(path string) error {
 
 func ensurePrivateDatabaseFile(path string) error {
 	for attempt := 0; attempt < 3; attempt++ {
-		info, err := os.Stat(path)
+		info, err := os.Lstat(path)
 		if err == nil {
 			if !info.Mode().IsRegular() {
-				return fmt.Errorf("database path %s is not a regular file", path)
+				return fmt.Errorf("database path %q is not a regular file", path)
 			}
-			return os.Chmod(path, 0o600)
+			return chmodRegularFile(path, info, "database path")
 		}
 		if !os.IsNotExist(err) {
 			return err
@@ -424,11 +424,11 @@ func ensurePrivateDatabaseFile(path string) error {
 		}
 		return f.Close()
 	}
-	return fmt.Errorf("database path %s changed while opening", path)
+	return fmt.Errorf("database path %q changed while opening", path)
 }
 
 func tightenExistingDatabaseFile(path string) error {
-	info, err := os.Stat(path)
+	info, err := os.Lstat(path)
 	if os.IsNotExist(err) {
 		return nil
 	}
@@ -436,9 +436,25 @@ func tightenExistingDatabaseFile(path string) error {
 		return err
 	}
 	if !info.Mode().IsRegular() {
-		return fmt.Errorf("database sidecar %s is not a regular file", path)
+		return fmt.Errorf("database sidecar %q is not a regular file", path)
 	}
-	return os.Chmod(path, 0o600)
+	return chmodRegularFile(path, info, "database sidecar")
+}
+
+func chmodRegularFile(path string, expected os.FileInfo, kind string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	actual, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if !actual.Mode().IsRegular() || !os.SameFile(expected, actual) {
+		return fmt.Errorf("%s %q changed while opening", kind, path)
+	}
+	return f.Chmod(0o600)
 }
 
 // ensureKnowledgeColumn ergänzt eine Textspalte mit leerem Vorgabewert, falls
