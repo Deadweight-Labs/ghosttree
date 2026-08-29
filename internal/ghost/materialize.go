@@ -108,6 +108,21 @@ var excludeLines = []string{
 	".ghosttree/edit/", ".ghosttree/edit" + tmpSuffix + "/",
 	".ghosttree/requests/", ".ghosttree/requests" + tmpSuffix + "/",
 	".ghosttree/INDEX.md",
+	".ghosttree/snapshots/INDEX.md",
+}
+
+// IsGeneratedPath reports whether path is an exact Ghosttree-owned projection.
+// User-owned files elsewhere under .ghosttree remain visible to Git policy.
+func IsGeneratedPath(path string) bool {
+	path = strings.TrimPrefix(filepath.ToSlash(filepath.Clean(path)), "./")
+	for _, pattern := range excludeLines {
+		isTree := strings.HasSuffix(pattern, "/")
+		pattern = strings.TrimSuffix(pattern, "/")
+		if path == pattern || (isTree && strings.HasPrefix(path, pattern+"/")) {
+			return true
+		}
+	}
+	return false
 }
 
 // EnsureExcluded trägt den Baum in .git/info/exclude ein, nicht in .gitignore:

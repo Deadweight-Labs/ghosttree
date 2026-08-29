@@ -74,6 +74,9 @@ func TestEnsureExcludedIsIdempotentAndNarrow(t *testing.T) {
 			t.Fatalf("document worktree exclusion %q missing:\n%s", want, b)
 		}
 	}
+	if countLines(string(b), ".ghosttree/snapshots/INDEX.md") != 1 {
+		t.Fatalf("snapshot index exclusion missing:\n%s", b)
+	}
 	// Das Bauverzeichnis ist ein Geschwister von tree/ und faellt deshalb NICHT
 	// unter dessen Ausschluss. Bleibt es nach einem Abbruch liegen, stuende es
 	// sonst im git status.
@@ -86,6 +89,27 @@ func TestEnsureExcludedIsIdempotentAndNarrow(t *testing.T) {
 	for _, line := range strings.Split(string(b), "\n") {
 		if strings.TrimSpace(line) == ".ghosttree/" {
 			t.Fatal("excluding the whole directory would hide a future config.toml")
+		}
+	}
+}
+
+func TestGeneratedPathRegistryIsExactAndKeepsOperatorFilesRelevant(t *testing.T) {
+	for _, path := range []string{
+		".ghosttree/tree/internal/x.md",
+		".ghosttree/snapshots/INDEX.md",
+		".ghosttree/INDEX.md",
+	} {
+		if !IsGeneratedPath(path) {
+			t.Fatalf("generated path %q not registered", path)
+		}
+	}
+	for _, path := range []string{
+		".ghosttree/snapshots/operator.md",
+		".ghosttree/operator-note",
+		".ghosttree/INDEX.md.backup",
+	} {
+		if IsGeneratedPath(path) {
+			t.Fatalf("operator path %q treated as generated", path)
 		}
 	}
 }
