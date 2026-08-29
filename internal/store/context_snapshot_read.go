@@ -90,7 +90,7 @@ func (s *Store) ContextSnapshotEntries(ctx context.Context, project, name string
 			return snapshot.EntryPage{}, &snapshot.RuleError{Code: "snapshot_invalid_cursor"}
 		}
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT domain,entry_key,payload_digest,payload_size FROM context_snapshot_entries WHERE snapshot_id=? AND (?='' OR domain=?) AND (?='' OR domain>? OR (domain=? AND entry_key>?)) ORDER BY domain,entry_key LIMIT ?`, snapshotID, filter.Domain, filter.Domain, startDomain, startDomain, startKey, limit+1)
+	rows, err := s.db.QueryContext(ctx, `SELECT domain,entry_key,payload_digest,payload_size FROM context_snapshot_entries WHERE snapshot_id=? AND (?='' OR domain=?) AND (?='' OR domain>? OR (domain=? AND entry_key>?)) ORDER BY domain,entry_key LIMIT ?`, snapshotID, filter.Domain, filter.Domain, startDomain, startDomain, startDomain, startKey, limit+1)
 	if err != nil {
 		return snapshot.EntryPage{}, err
 	}
