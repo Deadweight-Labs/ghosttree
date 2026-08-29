@@ -283,6 +283,54 @@ func TestWorktreeFingerprintIncludesIgnoredDocumentDraftLifecycle(t *testing.T) 
 	}
 }
 
+func TestWorktreeFingerprintIncludesIgnoredTemporaryDocumentWorktreeLifecycle(t *testing.T) {
+	repo := newSnapshotGitRepo(t, "sha1")
+	if err := ghost.EnsureExcluded(repo); err != nil {
+		t.Fatal(err)
+	}
+	draft := filepath.Join(repo, ".ghosttree", "edit.tmp", "snapshot-spec.md")
+	writeSnapshotFile(t, draft, "first\n")
+	if out, err := exec.Command("git", "-C", repo, "status", "--porcelain=v1").CombinedOutput(); err != nil {
+		t.Fatal(err)
+	} else if len(out) != 0 {
+		t.Fatalf("test precondition: temporary draft should be hidden by info/exclude, status=%q", out)
+	}
+	created := snapshotFingerprint(t, repo)
+	writeSnapshotFile(t, draft, "second\n")
+	modified := snapshotFingerprint(t, repo)
+	if created == modified {
+		t.Fatal("modified ignored temporary draft did not change fingerprint")
+	}
+	if err := os.Remove(draft); err != nil {
+		t.Fatal(err)
+	}
+	clean, err := ResolveSnapshotGit(repo, "checkpoint", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if clean.Dirty || clean.WorktreeFingerprint != nil {
+		t.Fatalf("removing temporary draft did not return to clean provenance: %+v", clean)
+	}
+	expected := clean
+	expected.Dirty = true
+	expected.WorktreeFingerprintVersion = uint32Pointer(snapshot.WorktreeFingerprintVersion)
+	expected.WorktreeFingerprint = &modified
+	if err := RecheckSnapshotGit(repo, "checkpoint", expected); err == nil {
+		t.Fatal("deleted ignored temporary draft was not detected as provenance change")
+	}
+
+	writeSnapshotFile(t, draft, "tracked baseline\n")
+	gitSnapshot(t, repo, "add", "-f", ".ghosttree/edit.tmp/snapshot-spec.md")
+	gitSnapshot(t, repo, "commit", "-m", "track temporary draft fixture")
+	if err := os.Remove(draft); err != nil {
+		t.Fatal(err)
+	}
+	deleted := snapshotFingerprint(t, repo)
+	if deleted == created || deleted == modified {
+		t.Fatal("deleted tracked temporary draft collided with another draft state")
+	}
+}
+
 func TestWorktreeFingerprintKeepsOtherGhosttreeOperatorPathsRelevant(t *testing.T) {
 	repo := newSnapshotGitRepo(t, "sha1")
 	paths := []string{

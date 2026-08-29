@@ -133,7 +133,7 @@ func snapshotGitDirty(repoRoot string) (bool, error) {
 			}
 		}
 	}
-	drafts, err := ignoredDocumentDraftPaths(repoRoot)
+	drafts, err := ignoredDocumentWorktreePaths(repoRoot)
 	if err != nil {
 		return false, err
 	}
@@ -170,7 +170,7 @@ func snapshotWorktreeManifest(repoRoot string) ([]byte, error) {
 			paths[path] = struct{}{}
 		}
 	}
-	drafts, err := ignoredDocumentDraftPaths(repoRoot)
+	drafts, err := ignoredDocumentWorktreePaths(repoRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -218,8 +218,8 @@ func snapshotWorktreeManifest(repoRoot string) ([]byte, error) {
 	return manifest.Bytes(), nil
 }
 
-func ignoredDocumentDraftPaths(repoRoot string) ([]string, error) {
-	raw, err := gitBytes(repoRoot, "ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", ".ghosttree/edit")
+func ignoredDocumentWorktreePaths(repoRoot string) ([]string, error) {
+	raw, err := gitBytes(repoRoot, "ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", ".ghosttree/edit", ".ghosttree/edit.tmp")
 	if err != nil {
 		return nil, err
 	}
