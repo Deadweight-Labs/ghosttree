@@ -6,8 +6,10 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
-- Prepare the first public release candidate.
+No changes yet.
 
-## 0.1.0-rc.1 — planned
+## 0.1.0-rc.1 — 2026-08-29
 
 - Initial source-available preview.
+- Keep exported transcripts and saved credentials owner-readable only.
+- Reject non-local login return targets and bound HTTP server timeouts.

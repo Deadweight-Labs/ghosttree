@@ -80,6 +80,29 @@ func TestShellAuthAndNavigation(t *testing.T) {
 	}
 }
 
+func TestLoginUsesFixedReturnTarget(t *testing.T) {
+	srv, _, token := testWeb(t)
+	client := &http.Client{CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
+	for _, next := range []string{
+		`/ui/knowledge`,
+		`/\evil.example`,
+		`/%5cevil.example`,
+		`/%2fevil.example`,
+		`/%2F%2Fevil.example`,
+		`//evil.example`,
+		`https://evil.example`,
+	} {
+		resp, err := client.PostForm(srv.URL+"/ui/login", url.Values{"token": {token}, "next": {next}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if got := resp.Header.Get("Location"); got != "/ui/requests" {
+			t.Errorf("next %q redirected to %q", next, got)
+		}
+	}
+}
+
 func TestRequestsRenderCriteriaEvidenceAndEscapeHTML(t *testing.T) {
 	srv, st, token := testWeb(t)
 	detail, err := st.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: `<script>alert(1)</script>`, Description: "Useful ledger", Scope: scope.Axes{Project: "p"}}, Criteria: []string{"observable result"}})
