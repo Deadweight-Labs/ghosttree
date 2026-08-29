@@ -2,6 +2,7 @@ package ghost
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -107,6 +108,7 @@ var excludeLines = []string{
 	".ghosttree/docs/", ".ghosttree/docs" + tmpSuffix + "/",
 	".ghosttree/edit/", ".ghosttree/edit" + tmpSuffix + "/",
 	".ghosttree/requests/", ".ghosttree/requests" + tmpSuffix + "/",
+	".ghosttree/snapshots/INDEX.md", ".ghosttree/snapshots/.INDEX.md.tmp-*",
 	".ghosttree/INDEX.md",
 	".ghosttree/snapshots/INDEX.md",
 }
@@ -179,7 +181,7 @@ func IsFingerprintGeneratedPath(path string) bool {
 // git nicht automatisch ignoriert — .claude/ und .env stehen ohne Eintrag
 // genauso im git status.
 func EnsureExcluded(repoRoot string) error {
-	path := filepath.Join(repoRoot, ".git", "info", "exclude")
+	path := excludePath(repoRoot)
 	old, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
 		return err
@@ -205,4 +207,19 @@ func EnsureExcluded(repoRoot string) error {
 		content += "\n"
 	}
 	return os.WriteFile(path, []byte(content+strings.Join(missing, "\n")+"\n"), 0o644)
+}
+
+func excludePath(repoRoot string) string {
+	out, err := exec.Command("git", "-C", repoRoot, "rev-parse", "--git-path", "info/exclude").Output()
+	if err != nil {
+		return filepath.Join(repoRoot, ".git", "info", "exclude")
+	}
+	path := strings.TrimSpace(string(out))
+	if path == "" {
+		return filepath.Join(repoRoot, ".git", "info", "exclude")
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(repoRoot, path)
+	}
+	return filepath.Clean(path)
 }

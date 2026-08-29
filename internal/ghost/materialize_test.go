@@ -2,10 +2,59 @@ package ghost
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestEnsureExcludedWorksFromLinkedWorktree(t *testing.T) {
+	mainRepo := filepath.Join(t.TempDir(), "main")
+	linked := filepath.Join(t.TempDir(), "linked")
+	if err := os.Mkdir(mainRepo, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"init", "-q"}, {"config", "user.email", "t@example.com"}, {"config", "user.name", "t"}} {
+		if out, err := exec.Command("git", append([]string{"-C", mainRepo}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(mainRepo, "seed"), []byte("seed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "-C", mainRepo, "add", "seed").CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v: %s", err, out)
+	}
+	if out, err := exec.Command("git", "-C", mainRepo, "commit", "-qm", "seed").CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v: %s", err, out)
+	}
+	if out, err := exec.Command("git", "-C", mainRepo, "worktree", "add", "--detach", linked).CombinedOutput(); err != nil {
+		t.Fatalf("git worktree add: %v: %s", err, out)
+	}
+	if err := EnsureExcluded(linked); err != nil {
+		t.Fatal(err)
+	}
+	excludePath := strings.TrimSpace(commandOutput(t, "git", "-C", linked, "rev-parse", "--git-path", "info/exclude"))
+	if !filepath.IsAbs(excludePath) {
+		excludePath = filepath.Join(linked, excludePath)
+	}
+	b, err := os.ReadFile(excludePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), ".ghosttree/snapshots/INDEX.md") {
+		t.Fatalf("snapshot exclusion absent from common exclude file:\n%s", b)
+	}
+}
+
+func commandOutput(t *testing.T, name string, args ...string) string {
+	t.Helper()
+	out, err := exec.Command(name, args...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s %v: %v: %s", name, args, err, out)
+	}
+	return string(out)
+}
 
 func TestMaterializeWritesTheTreeAndRemovesWhatIsGone(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "tree")
@@ -74,8 +123,13 @@ func TestEnsureExcludedIsIdempotentAndNarrow(t *testing.T) {
 			t.Fatalf("document worktree exclusion %q missing:\n%s", want, b)
 		}
 	}
-	if countLines(string(b), ".ghosttree/snapshots/INDEX.md") != 1 {
-		t.Fatalf("snapshot index exclusion missing:\n%s", b)
+	for _, want := range []string{
+		".ghosttree/snapshots/INDEX.md",
+		".ghosttree/snapshots/.INDEX.md.tmp-*",
+	} {
+		if countLines(string(b), want) != 1 {
+			t.Fatalf("snapshot mirror exclusion %q missing:\n%s", want, b)
+		}
 	}
 	// Das Bauverzeichnis ist ein Geschwister von tree/ und faellt deshalb NICHT
 	// unter dessen Ausschluss. Bleibt es nach einem Abbruch liegen, stuende es

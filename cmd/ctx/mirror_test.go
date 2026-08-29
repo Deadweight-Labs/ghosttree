@@ -144,6 +144,28 @@ func TestWriteMirrorLeavesTheGhostTreeAlone(t *testing.T) {
 	}
 }
 
+func TestWriteMirrorLeavesTheSnapshotIndexAlone(t *testing.T) {
+	asked := false
+	srv := mirrorServer(t, &asked)
+	withConfig(t, srv.URL)
+	repo := gitRepo(t)
+	path := filepath.Join(repo, ".ghosttree", "snapshots", "INDEX.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("snapshot index"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ := config.Load()
+	if err := WriteMirror(client.New(cfg), scope.Axes{Project: "github.com/x/y"}, repo); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil || string(b) != "snapshot index" {
+		t.Fatalf("current-state mirror changed snapshots: %q, %v", b, err)
+	}
+}
+
 // Der Spiegel ist eine Projektion und gehört nicht in die Versionsverwaltung —
 // und ebensowenig in den git status von jemandem, der ihn nicht erwartet.
 func TestTheMirrorStaysOutOfGitStatus(t *testing.T) {
