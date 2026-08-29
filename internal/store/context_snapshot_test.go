@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/snapshot"
@@ -105,5 +106,28 @@ func TestCreateSnapshotLimitFailureRollsBack(t *testing.T) {
 	}
 	if n != 0 {
 		t.Fatalf("heads=%d", n)
+	}
+}
+
+func TestCreateContextSnapshotRejectsInvalidHeadBeforeSQLite(t *testing.T) {
+	s, err := Open(t.TempDir() + "/snapshot.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	valid := snapshot.CreateInput{Project: "p", Name: "ok", ActorID: "person:1", Git: snapshot.GitProvenance{ObjectFormat: "sha1", Commit: strings.Repeat("a", 40), MetadataSource: "client-reported"}}
+	tests := []snapshot.CreateInput{
+		func() snapshot.CreateInput { v := valid; v.Name = "bad/name"; return v }(),
+		func() snapshot.CreateInput { v := valid; v.Name = strings.Repeat("a", 129); return v }(),
+		func() snapshot.CreateInput { v := valid; v.Git.ObjectFormat = "md5"; return v }(),
+		func() snapshot.CreateInput { v := valid; v.Git.Commit = "ABC"; return v }(),
+		func() snapshot.CreateInput { v := valid; v.Git.MetadataSource = "invented"; return v }(),
+		func() snapshot.CreateInput { v := valid; v.Git.Dirty = true; return v }(),
+	}
+	for _, input := range tests {
+		_, err := s.CreateContextSnapshot(context.Background(), input, snapshot.DefaultLimits(), func(context.Context) (snapshot.GitProvenance, error) { return input.Git, nil })
+		if snapshotCode(err) != "snapshot_invalid_input" {
+			t.Fatalf("input %+v error=%v", input, err)
+		}
 	}
 }

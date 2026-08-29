@@ -148,7 +148,7 @@ func (s *Store) CreateContextSnapshot(ctx context.Context, in snapshot.CreateInp
 }
 
 func validateSnapshotCreateInput(in snapshot.CreateInput, l snapshot.Limits) error {
-	if in.Project == "" || in.Name == "" || in.ActorID == "" || !utf8.ValidString(in.Project+in.Name+in.ActorID) {
+	if in.Project == "" || !validSnapshotName(in.Name) || in.ActorID == "" || !utf8.ValidString(in.Project+in.ActorID) || !validSnapshotGit(in.Git) {
 		return &snapshot.RuleError{Code: "snapshot_invalid_input"}
 	}
 	fields := []struct {
@@ -161,6 +161,46 @@ func validateSnapshotCreateInput(in snapshot.CreateInput, l snapshot.Limits) err
 		}
 	}
 	return nil
+}
+
+func validSnapshotName(name string) bool {
+	if len(name) < 1 || len(name) > 128 {
+		return false
+	}
+	for i, b := range []byte(name) {
+		alnum := b >= 'A' && b <= 'Z' || b >= 'a' && b <= 'z' || b >= '0' && b <= '9'
+		if !alnum && (i == 0 || b != '.' && b != '_' && b != '+' && b != '-') {
+			return false
+		}
+	}
+	return true
+}
+
+func validSnapshotGit(g snapshot.GitProvenance) bool {
+	length := 0
+	switch g.ObjectFormat {
+	case "sha1":
+		length = 40
+	case "sha256":
+		length = 64
+	default:
+		return false
+	}
+	if len(g.Commit) != length {
+		return false
+	}
+	for _, b := range []byte(g.Commit) {
+		if !((b >= '0' && b <= '9') || (b >= 'a' && b <= 'f')) {
+			return false
+		}
+	}
+	if g.MetadataSource != "server-verified" && g.MetadataSource != "client-reported" {
+		return false
+	}
+	if !g.Dirty {
+		return g.WorktreeFingerprintVersion == nil && g.WorktreeFingerprint == nil && !g.AllowDirtyUsed
+	}
+	return g.WorktreeFingerprintVersion != nil && *g.WorktreeFingerprintVersion == snapshot.WorktreeFingerprintVersion && g.WorktreeFingerprint != nil
 }
 func validateSnapshotEntries(entries []snapshot.Entry, l snapshot.Limits) error {
 	if limitExceeded(int64(len(entries)), l.MaxEntriesPerSnapshot) {
