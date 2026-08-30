@@ -9,7 +9,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"unicode/utf8"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
@@ -78,6 +77,28 @@ func TestAuditLogsRequestsWithoutSensitiveInputs(t *testing.T) {
 	}
 }
 
+func TestAuditDoesNotLogBodyValuesFromHandlerErrors(t *testing.T) {
+	var logs bytes.Buffer
+	h, token := newAuditHandler(t, &logs)
+	const bodySecret = "BODY_DERIVED_MISSING_PATH"
+	r := httptest.NewRequest(http.MethodPost, "/api/ghosts/move", strings.NewReader(
+		`{"project":"audit","from":"`+bodySecret+`","to":"destination.go"}`,
+	))
+	r.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusBadRequest)
+	}
+	if strings.Contains(logs.String(), bodySecret) {
+		t.Fatalf("body-derived error value leaked into audit log: %s", logs.String())
+	}
+	events := decodeAuditEvents(t, &logs)
+	if len(events) != 1 || events[0]["error_class"] != "client" {
+		t.Fatalf("events = %#v", events)
+	}
+}
+
 func TestAuditCountsBytesAndDefaultsStatusToOK(t *testing.T) {
 	var logs bytes.Buffer
 	st, err := store.Open(":memory:")
@@ -126,7 +147,7 @@ func TestAuditLogsExactlyOnceForUnauthorizedAndAuthenticatedNotFound(t *testing.
 	}
 }
 
-func TestAuditTruncatesErrorMessagesTo512Runes(t *testing.T) {
+func TestAuditReplacesRawErrorsWithBoundedMessage(t *testing.T) {
 	var logs bytes.Buffer
 	st, err := store.Open(":memory:")
 	if err != nil {
@@ -141,8 +162,8 @@ func TestAuditTruncatesErrorMessagesTo512Runes(t *testing.T) {
 	})).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/api/test", nil))
 	event := decodeAuditEvents(t, &logs)[0]
 	got, _ := event["error_message"].(string)
-	if utf8.RuneCountInString(got) != 512 || !strings.HasPrefix(message, got) {
-		t.Fatalf("message runes = %d", utf8.RuneCountInString(got))
+	if got != "client" || strings.Contains(logs.String(), message) {
+		t.Fatalf("error_message = %q, logs = %s", got, logs.String())
 	}
 }
 
