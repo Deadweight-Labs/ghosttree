@@ -155,8 +155,8 @@ func TestContextSnapshotHTTPCreateAllowsMaximumMetadata(t *testing.T) {
 	}
 
 	raisedLimits := snapshot.DefaultLimits()
-	raisedLimits.MaxCanonicalHeadBytes = 128 << 10
-	raisedLimits.MaxMessageBytes = 70 << 10
+	raisedLimits.MaxCanonicalHeadBytes = 512 << 10
+	raisedLimits.MaxMessageBytes = 400 << 10
 	raisedServer := httptest.NewServer(New(st, WithContextSnapshotLimits(raisedLimits)))
 	t.Cleanup(raisedServer.Close)
 	raisedMessage := strings.Repeat("z", int(raisedLimits.MaxMessageBytes))
@@ -182,6 +182,45 @@ func TestContextSnapshotHTTPCreateAllowsMaximumMetadata(t *testing.T) {
 	if raisedResponse.StatusCode != http.StatusCreated {
 		responseBody, _ := io.ReadAll(raisedResponse.Body)
 		t.Fatalf("raised status=%d body=%s request_bytes=%d", raisedResponse.StatusCode, responseBody, len(raisedBody))
+	}
+}
+
+func TestContextSnapshotHTTPCreateAllowsHTMLEscapedMetadataWithinHeadLimit(t *testing.T) {
+	st, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	token, _ := st.AddPerson("html-client")
+	project := strings.Repeat("<", 12_000)
+	if err := st.SetContextSnapshotAccess("html-client", project, true, true, false); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(New(st))
+	t.Cleanup(srv.Close)
+
+	git := snapshot.GitProvenance{ObjectFormat: "sha1", Commit: strings.Repeat("d", 40), MetadataSource: "client-reported"}
+	input := snapshot.CreateInput{Project: project, Name: "html-escaped-metadata", Git: git, GitRecheck: &git}
+	body, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if int64(len(body)) <= 2*snapshot.DefaultLimits().MaxCanonicalHeadBytes {
+		t.Fatalf("HTML-escaped body=%d does not exercise the old envelope", len(body))
+	}
+	request, err := http.NewRequest(http.MethodPost, srv.URL+"/api/context-snapshots", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusCreated {
+		responseBody, _ := io.ReadAll(response.Body)
+		t.Fatalf("status=%d body=%s request_bytes=%d", response.StatusCode, responseBody, len(body))
 	}
 }
 

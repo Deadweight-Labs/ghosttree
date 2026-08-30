@@ -84,11 +84,12 @@ func contextSnapshotCreateBodyLimit(limits snapshot.Limits) int64 {
 	if headLimit <= 0 {
 		headLimit = snapshot.DefaultLimits().MaxCanonicalHeadBytes
 	}
+	const maxJSONEscapeExpansionTimesGitCopies = 12
 	const maxInt64 = 1<<63 - 1
-	if headLimit > maxInt64/2 {
+	if headLimit > maxInt64/maxJSONEscapeExpansionTimesGitCopies {
 		return maxInt64
 	}
-	return 2 * headLimit
+	return maxJSONEscapeExpansionTimesGitCopies * headLimit
 }
 
 func (a *api) listContextSnapshots(w http.ResponseWriter, r *http.Request) {
