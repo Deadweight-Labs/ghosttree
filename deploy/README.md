@@ -42,6 +42,34 @@ portable logical-byte calculation.
 Do not bind directly to a public interface. Use a private network or a TLS
 reverse proxy with suitable access controls.
 
+### Audit logs and metrics
+
+Every non-probe API request emits one structured JSON `http_request` event to
+stderr, which systemd captures in journald for collection by Alloy/Loki. The
+event includes the actor, request ID, method, matched route, concrete path,
+remote IP, status, duration, byte counts, and a bounded error class. It never
+includes request or response bodies, query parameters, bearer tokens, or
+authorization headers. `/api/health` and `/metrics` are excluded from audit
+events.
+
+Prometheus metrics are available at `/metrics` without authentication so that
+vmagent can scrape them. This endpoint has the same network exposure as the
+server itself and must therefore remain restricted to the Tailnet or another
+trusted private network. HTTP metric labels are deliberately bounded to method,
+matched route, status, and error class; actor, request ID, remote IP, concrete
+path, project, and slug are never labels.
+
+Add this exact scrape job to the vmagent configuration when the Ghosttree
+Tailnet address is `100.96.254.9:8474`:
+
+```yaml
+  - job_name: ghosttree
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['100.96.254.9:8474']
+        labels: {site: home, host: apps}
+```
+
 ```bash
 make build-all
 scp dist/ctx-linux-amd64 deploy/ghosttree.service <host>:/tmp/

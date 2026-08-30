@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -47,7 +48,7 @@ func cmdServe(args []string, stdout io.Writer) int {
 		return 1
 	}
 	defer st.Close()
-	return runServer(st, cfg, stdout)
+	return runServer(st, cfg, stdout, os.Stderr)
 }
 
 func parseServeConfig(args []string, output io.Writer) (serveConfig, error) {
@@ -135,7 +136,7 @@ func parseSnapshotRoots(values []string) (map[string]string, error) {
 	return roots, nil
 }
 
-func runServer(st *store.Store, cfg serveConfig, stdout io.Writer) int {
+func runServer(st *store.Store, cfg serveConfig, stdout, stderr io.Writer) int {
 	// Open creates missing tables but never alters an existing one, so an
 	// out-of-date knowledge table would only surface as puzzling SQL errors
 	// once an agent writes. Refuse to serve instead.
@@ -161,19 +162,30 @@ func runServer(st *store.Store, cfg serveConfig, stdout io.Writer) int {
 		fmt.Fprintf(stdout, "apply knowledge staleness: %v\n", err)
 		return 1
 	}
-	root := http.NewServeMux()
-	options := []server.Option{server.WithContextSnapshotLimits(cfg.SnapshotLimits)}
-	if len(cfg.SnapshotRoots) > 0 {
-		options = append(options, server.WithSnapshotMirror(&rootedSnapshotMirror{source: st, roots: cfg.SnapshotRoots}))
-	}
-	root.Handle("/api/", server.New(st, options...))
-	root.Handle("/", web.New(st))
 	fmt.Fprintf(stdout, "ghosttree %s listening on %s (db %s, ui /ui/)\n", version, cfg.Listen, cfg.DB)
-	if err := newHTTPServer(cfg.Listen, root).ListenAndServe(); err != nil {
+	if err := newHTTPServer(cfg.Listen, buildServerHandler(st, cfg, stderr)).ListenAndServe(); err != nil {
 		fmt.Fprintf(stdout, "serve: %v\n", err)
 		return 1
 	}
 	return 0
+}
+
+func buildServerHandler(st *store.Store, cfg serveConfig, stderr io.Writer) http.Handler {
+	root := http.NewServeMux()
+	logger := slog.New(slog.NewJSONHandler(stderr, nil))
+	options := []server.Option{
+		server.WithContextSnapshotLimits(cfg.SnapshotLimits),
+		server.WithLogger(logger),
+		server.WithBuildVersion(version),
+	}
+	if len(cfg.SnapshotRoots) > 0 {
+		options = append(options, server.WithSnapshotMirror(&rootedSnapshotMirror{source: st, roots: cfg.SnapshotRoots}))
+	}
+	apiHandler := server.New(st, options...)
+	root.Handle("/api/", apiHandler)
+	root.Handle("/metrics", apiHandler)
+	root.Handle("/", web.New(st))
+	return root
 }
 
 type rootedSnapshotMirror struct {
