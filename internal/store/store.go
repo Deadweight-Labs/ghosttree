@@ -13,8 +13,20 @@ import (
 
 type Store struct {
 	db            *sql.DB
+	path          string
 	snapshotFault func(string) error
 }
+
+type OpenOptions struct {
+	MaxOpenConns int
+}
+
+type RuntimeStats struct {
+	DB                                sql.DBStats
+	DatabaseBytes, WALBytes, SHMBytes int64
+}
+
+const initialFileMaxOpenConns = 1
 
 const schema = `
 CREATE TABLE IF NOT EXISTS persons(
@@ -360,6 +372,21 @@ CREATE TABLE IF NOT EXISTS document_revisions(
 `
 
 func Open(path string) (*Store, error) {
+	maxOpenConns := initialFileMaxOpenConns
+	if sqliteFilePath(path) == "" {
+		maxOpenConns = 1
+	}
+	return OpenWithOptions(path, OpenOptions{MaxOpenConns: maxOpenConns})
+}
+
+func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
+	if options.MaxOpenConns <= 0 {
+		return nil, fmt.Errorf("max open connections must be positive")
+	}
+	dbPath := sqliteFilePath(path)
+	if dbPath == "" {
+		options.MaxOpenConns = 1
+	}
 	if err := prepareDatabaseFiles(path); err != nil {
 		return nil, err
 	}
@@ -367,35 +394,49 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Single writer: serialize access instead of hitting SQLITE_BUSY.
 	db.SetMaxOpenConns(1)
-	// busy_timeout covers the second process case (ctx person add against a
-	// running server) that WAL alone does not.
-	if _, err := db.Exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA recursive_triggers=ON; PRAGMA busy_timeout=5000;`); err != nil {
-		return nil, err
+	db.SetMaxIdleConns(1)
+	if dbPath != "" {
+		var journal string
+		if err := db.QueryRow(`PRAGMA journal_mode=WAL`).Scan(&journal); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+		if strings.ToLower(journal) != "wal" {
+			_ = db.Close()
+			return nil, fmt.Errorf("sqlite journal mode = %q, want wal", journal)
+		}
 	}
 	if _, err := db.Exec(schema); err != nil {
+		_ = db.Close()
 		return nil, err
 	}
 	if err := ensureKnowledgeConfirmedBy(db); err != nil {
+		_ = db.Close()
 		return nil, err
 	}
 	if err := ensureKnowledgeLastModifiedBy(db); err != nil {
+		_ = db.Close()
 		return nil, err
 	}
 	// Ohne diese beiden liefert jede Abfrage, die sie nennt, auf einer
 	// bestehenden Datenbank einen Fehler statt eines Ergebnisses — CREATE TABLE
 	// IF NOT EXISTS ist dort ein No-op.
 	if err := ensureKnowledgeColumn(db, "regression_state"); err != nil {
+		_ = db.Close()
 		return nil, err
 	}
 	if err := ensureKnowledgeColumn(db, "regression_test"); err != nil {
+		_ = db.Close()
 		return nil, err
 	}
 	if err := EnsureContextSnapshotSchema(db); err != nil {
+		_ = db.Close()
 		return nil, err
 	}
-	return &Store{db: db}, nil
+	db.SetMaxOpenConns(options.MaxOpenConns)
+	db.SetMaxIdleConns(options.MaxOpenConns)
+	return &Store{db: db, path: dbPath}, nil
 }
 
 func storeSQLiteDSN(path string) string {
@@ -409,7 +450,15 @@ func storeSQLiteDSN(path string) string {
 	if strings.HasSuffix(path, "?") || strings.HasSuffix(path, "&") {
 		separator = ""
 	}
-	return path + separator + "_pragma=foreign_keys(1)&_pragma=recursive_triggers(1)"
+	return path + separator + "_pragma=foreign_keys(1)&_pragma=recursive_triggers(1)&_pragma=busy_timeout(5000)&_pragma=synchronous(FULL)"
+}
+
+func sqliteFilePath(path string) string {
+	if path == ":memory:" || strings.HasPrefix(path, "file::memory:") {
+		return ""
+	}
+	path, _, _ = strings.Cut(path, "?")
+	return strings.TrimPrefix(path, "file:")
 }
 
 func prepareDatabaseFiles(path string) error {
@@ -561,6 +610,28 @@ func ensureKnowledgeConfirmedBy(db *sql.DB) error {
 }
 
 func (s *Store) Close() error { return s.db.Close() }
+
+func (s *Store) RuntimeStats() RuntimeStats {
+	stats := RuntimeStats{DB: s.db.Stats()}
+	if s.path == "" {
+		return stats
+	}
+	stats.DatabaseBytes = fileBytes(s.path)
+	stats.WALBytes = fileBytes(s.path + "-wal")
+	stats.SHMBytes = fileBytes(s.path + "-shm")
+	return stats
+}
+
+func fileBytes(path string) int64 {
+	if path == "" {
+		return 0
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return info.Size()
+}
 
 // DB exposes the connection for schema inspection at startup.
 func (s *Store) DB() *sql.DB { return s.db }
