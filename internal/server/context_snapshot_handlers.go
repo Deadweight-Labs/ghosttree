@@ -3,8 +3,10 @@ package server
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 
@@ -13,8 +15,20 @@ import (
 )
 
 func (a *api) createContextSnapshot(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, contextSnapshotCreateBodyLimit(a.snapshotLimits))
+	body, err := io.ReadAll(r.Body)
+	r.Body.Close()
+	if err != nil {
+		var maxBytesError *http.MaxBytesError
+		if errors.As(err, &maxBytesError) {
+			writeSnapshotRuleError(w, http.StatusRequestEntityTooLarge, &snapshot.RuleError{Code: "snapshot_request_too_large"})
+			return
+		}
+		writeSnapshotRuleError(w, http.StatusBadRequest, &snapshot.RuleError{Code: "snapshot_invalid_input"})
+		return
+	}
 	var input snapshot.CreateInput
-	if err := readJSON(r, &input); err != nil {
+	if err := json.Unmarshal(body, &input); err != nil {
 		writeSnapshotRuleError(w, http.StatusBadRequest, &snapshot.RuleError{Code: "snapshot_invalid_input"})
 		return
 	}
@@ -63,6 +77,18 @@ func (a *api) createContextSnapshot(w http.ResponseWriter, r *http.Request) {
 		status = http.StatusCreated
 	}
 	writeJSON(w, status, response)
+}
+
+func contextSnapshotCreateBodyLimit(limits snapshot.Limits) int64 {
+	headLimit := limits.MaxCanonicalHeadBytes
+	if headLimit <= 0 {
+		headLimit = snapshot.DefaultLimits().MaxCanonicalHeadBytes
+	}
+	const maxInt64 = 1<<63 - 1
+	if headLimit > maxInt64/2 {
+		return maxInt64
+	}
+	return 2 * headLimit
 }
 
 func (a *api) listContextSnapshots(w http.ResponseWriter, r *http.Request) {
@@ -147,7 +173,8 @@ func (a *api) requireSnapshotRead(w http.ResponseWriter, r *http.Request, projec
 
 var snapshotStatusByCode = map[string]int{
 	"snapshot_invalid_input": 400, "snapshot_invalid_filter": 400, "snapshot_invalid_cursor": 400,
-	"snapshot_access_forbidden": 403, "snapshot_release_binding_forbidden": 403,
+	"snapshot_request_too_large": 413,
+	"snapshot_access_forbidden":  403, "snapshot_release_binding_forbidden": 403,
 	"snapshot_not_found": 404, "snapshot_entry_not_found": 404,
 	"snapshot_name_conflict": 409, "snapshot_tag_mismatch": 409, "snapshot_dirty_worktree": 409, "snapshot_git_changed": 409,
 	"snapshot_limit_exceeded": 422, "unsupported_snapshot_schema": 422,
