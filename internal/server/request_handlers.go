@@ -283,6 +283,7 @@ func writeRequestError(w http.ResponseWriter, err error) {
 		if rule.ErrorCode == "open_criteria" || rule.ErrorCode == "primary_exists" || rule.ErrorCode == "work_not_active" {
 			status = http.StatusConflict
 		}
+		recordResponseError(w, classifyRequestError(status, "", err.Error()), err.Error())
 		writeJSON(w, status, map[string]any{
 			"code": rule.ErrorCode, "message": rule.Message, "resolution": rule.Resolution,
 			"details": map[string]any{"ids": rule.IDs},
@@ -290,8 +291,10 @@ func writeRequestError(w http.ResponseWriter, err error) {
 		return
 	}
 	if errors.Is(err, sql.ErrNoRows) {
+		recordResponseError(w, "not_found", err.Error())
 		writeJSON(w, http.StatusNotFound, map[string]string{"code": "not_found", "message": "request resource not found", "resolution": "check the identifier"})
 		return
 	}
+	recordResponseError(w, classifyRequestError(http.StatusInternalServerError, "", err.Error()), err.Error())
 	writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "internal", "message": "request operation failed", "resolution": "retry or inspect server logs"})
 }
