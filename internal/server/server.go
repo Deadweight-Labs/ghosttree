@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -42,6 +43,18 @@ func WithOperationIDGenerator(generator OperationIDGenerator) Option {
 	return func(a *api) { a.operationIDGenerator = generator }
 }
 
+func WithLogger(logger *slog.Logger) Option {
+	return func(a *api) { a.logger = logger }
+}
+
+func WithBuildVersion(version string) Option {
+	return func(a *api) { a.buildVersion = version }
+}
+
+func withRequestIDGenerator(generator requestIDGenerator) Option {
+	return func(a *api) { a.requestIDGenerator = generator }
+}
+
 func withSnapshotErrorLogger(logger snapshotErrorLogger) Option {
 	return func(a *api) { a.snapshotErrorLogger = logger }
 }
@@ -52,6 +65,10 @@ type api struct {
 	snapshotMirror       SnapshotMirror
 	operationIDGenerator OperationIDGenerator
 	snapshotErrorLogger  snapshotErrorLogger
+	logger               *slog.Logger
+	buildVersion         string
+	requestIDGenerator   requestIDGenerator
+	metrics              *metricsRegistry
 }
 
 type personKey struct{}
@@ -62,6 +79,7 @@ func New(st *store.Store, options ...Option) http.Handler {
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	})
+	mux.Handle("GET /metrics", a.metrics)
 	mux.HandleFunc("GET /api/whoami", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, principalOf(r))
 	})
@@ -121,7 +139,7 @@ func New(st *store.Store, options ...Option) http.Handler {
 	mux.HandleFunc("PUT /api/documents/{id}/revisions", a.pushDocumentRevision)
 	mux.HandleFunc("GET /api/documents/{id}/revisions", a.documentRevisions)
 	mux.HandleFunc("GET /api/documents/{id}/revisions/{rev}", a.documentRevision)
-	return a.auth(mux)
+	return a.telemetry(a.auth(a.captureRoute(mux)))
 }
 
 func newAPI(st *store.Store, options ...Option) *api {
@@ -149,6 +167,16 @@ func newAPI(st *store.Store, options ...Option) *api {
 			log.Printf("snapshot_internal_error operation_id=%q error=%q operation_id_error=%q", operationID, err, generatorErr)
 		}
 	}
+	if a.logger == nil {
+		a.logger = discardLogger()
+	}
+	if a.buildVersion == "" {
+		a.buildVersion = "unknown"
+	}
+	if a.requestIDGenerator == nil {
+		a.requestIDGenerator = randomOperationID
+	}
+	a.metrics = newMetricsRegistry(st, a.buildVersion)
 	return a
 }
 
@@ -166,19 +194,20 @@ func fallbackOperationID() string {
 	return fmt.Sprintf("fallback-%x-%x", time.Now().UnixNano(), fallbackOperationIDCounter.Add(1))
 }
 
-// auth lets /api/health through unauthenticated so probes and setup checks
-// work before a token exists.
 func (a *api) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/health" {
+		if r.URL.Path == "/api/health" || r.URL.Path == "/metrics" {
 			next.ServeHTTP(w, r)
 			return
 		}
 		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 		principal, ok := a.st.AuthenticatePrincipal(strings.TrimSpace(token))
 		if !ok {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			writeErr(w, http.StatusUnauthorized, "unauthorized")
 			return
+		}
+		if record := requestRecordFromContext(r.Context()); record != nil {
+			record.actor = principal.Label
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), personKey{}, principal)))
 	})
@@ -227,6 +256,7 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 }
 
 func writeErr(w http.ResponseWriter, code int, msg string) {
+	recordResponseError(w, classifyRequestError(code, "", msg), msg)
 	writeJSON(w, code, map[string]string{"error": msg})
 }
 

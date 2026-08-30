@@ -225,6 +225,7 @@ func (a *api) logSnapshotError(err error) string {
 }
 
 func writeSnapshotRuleError(w http.ResponseWriter, status int, rule *snapshot.RuleError) {
+	recordResponseError(w, classifyRequestError(status, "", rule.Error()), rule.Error())
 	if rule.Retryable {
 		w.Header().Set("Retry-After", strconv.Itoa(1))
 	}
