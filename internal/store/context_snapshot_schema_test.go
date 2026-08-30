@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/snapshot"
 	_ "modernc.org/sqlite"
 )
 
@@ -89,6 +90,115 @@ func TestSnapshotSchemaIsAdditiveAndCurrent(t *testing.T) {
 	}
 }
 
+func TestSnapshotSchemaMigratesV1AndBackfillsSealedLogicalSize(t *testing.T) {
+	db := openSnapshotSchemaTestDB(t)
+	id, wantLogical := seedV1SealedSnapshot(t, db, false)
+
+	if err := EnsureContextSnapshotSchema(db); err != nil {
+		t.Fatal(err)
+	}
+	var version, gotLogical int64
+	if err := db.QueryRow(`SELECT version FROM context_snapshot_invariants WHERE singleton=1`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT sealed_logical_bytes FROM context_snapshots WHERE id=?`, id).Scan(&gotLogical); err != nil {
+		t.Fatal(err)
+	}
+	if version != contextSnapshotInvariantVersion || gotLogical != wantLogical {
+		t.Fatalf("version=%d logical=%d, want version=%d logical=%d", version, gotLogical, contextSnapshotInvariantVersion, wantLogical)
+	}
+	if current, err := ContextSnapshotSchemaCurrent(db); err != nil || !current {
+		t.Fatalf("current=%v err=%v", current, err)
+	}
+	assertSnapshotStatementFails(t, db, `UPDATE context_snapshots SET sealed_logical_bytes=sealed_logical_bytes+1 WHERE id=?`, id)
+}
+
+func TestSnapshotSchemaMigrationRejectsCorruptV1Payload(t *testing.T) {
+	db := openSnapshotSchemaTestDB(t)
+	seedV1SealedSnapshot(t, db, true)
+
+	if err := EnsureContextSnapshotSchema(db); err == nil {
+		t.Fatal("migration accepted a historical payload whose digest is corrupt")
+	}
+	var version int64
+	if err := db.QueryRow(`SELECT version FROM context_snapshot_invariants WHERE singleton=1`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != 1 {
+		t.Fatalf("failed migration changed invariant version to %d", version)
+	}
+	var columns int
+	if err := db.QueryRow(`SELECT count(*) FROM pragma_table_info('context_snapshots') WHERE name='sealed_logical_bytes'`).Scan(&columns); err != nil {
+		t.Fatal(err)
+	}
+	if columns != 0 {
+		t.Fatal("failed migration left sealed_logical_bytes behind")
+	}
+	current, err := contextSnapshotSchemaDefinitionsMatch(context.Background(), db, 1, contextSnapshotsTableV1SQL, contextSnapshotTriggerV1SQL)
+	if err != nil || !current {
+		t.Fatalf("failed migration did not restore v1 schema: current=%v err=%v", current, err)
+	}
+}
+
+func seedV1SealedSnapshot(t *testing.T, db *sql.DB, corruptDigest bool) (int64, int64) {
+	t.Helper()
+	if _, err := db.Exec(contextSnapshotInvariantTableSQL); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(contextSnapshotsTableV1SQL); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(contextSnapshotEntriesTableSQL); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(contextSnapshotsProjectIndexSQL); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO context_snapshot_invariants(singleton,version) VALUES(1,1)`); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range snapshotTriggerNames() {
+		if _, err := db.Exec(contextSnapshotTriggerV1SQL[name]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	id := insertBuildingSnapshot(t, db, "legacy")
+	payload := []byte(`{}`)
+	digest := snapshot.EntryDigest(payload)
+	storedDigest := digest[:]
+	if corruptDigest {
+		storedDigest = make([]byte, len(digest))
+	}
+	if _, err := db.Exec(`INSERT INTO context_snapshot_entries(snapshot_id,domain,entry_key,payload,payload_digest,payload_size) VALUES(?,?,?,?,?,?)`, id, "ghost", "file/a", payload, storedDigest, len(payload)); err != nil {
+		t.Fatal(err)
+	}
+	summary := []snapshot.EntrySummary{{Domain: "ghost", Key: "file/a", PayloadDigest: digest, PayloadSize: int64(len(payload))}}
+	contentDigest := snapshot.ContentDigest(snapshot.SchemaVersion, summary)
+	counts, err := snapshot.NewCounts(snapshot.SchemaVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	counts["ghost"] = 1
+	countsJSON, err := snapshot.MarshalCanonical(counts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE context_snapshots SET state='sealed',content_digest=?,entry_count=1,payload_bytes_total=?,counts_json=? WHERE id=?`, contentDigest[:], len(payload), countsJSON, id); err != nil {
+		t.Fatal(err)
+	}
+	headBytes, err := snapshot.MarshalCanonical(snapshotHeadFingerprintV1{
+		Project: "p", Name: "legacy", SchemaVersion: snapshot.SchemaVersion,
+		Git:     snapshot.GitProvenance{ObjectFormat: "sha1", Commit: "0000000000000000000000000000000000000000", Branch: stringPointer("dev"), MetadataSource: "server-verified"},
+		ActorID: "actor", CreatedAt: "2026-08-29T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id, snapshot.LogicalSize(headBytes, summary)
+}
+
+func stringPointer(value string) *string { return &value }
+
 func TestSnapshotSchemaRejectsEveryMutationPath(t *testing.T) {
 	db := openSnapshotSchemaTestDB(t)
 	if err := EnsureContextSnapshotSchema(db); err != nil {
@@ -103,8 +213,9 @@ func TestSnapshotSchemaRejectsEveryMutationPath(t *testing.T) {
 	assertSnapshotStatementFails(t, db, `UPDATE context_snapshot_entries SET payload=x'00' WHERE snapshot_id=?`, id)
 	assertSnapshotStatementFails(t, db, `DELETE FROM context_snapshot_entries WHERE snapshot_id=?`, id)
 	assertSnapshotStatementFails(t, db, `UPDATE context_snapshots SET message='changed' WHERE id=?`, id)
+	assertSnapshotStatementFails(t, db, `UPDATE context_snapshots SET state='sealed',content_digest=zeroblob(32),entry_count=1,payload_bytes_total=2,counts_json=? WHERE id=?`, []byte(`{"ghost":1}`), id)
 
-	if _, err := db.Exec(`UPDATE context_snapshots SET state='sealed',content_digest=zeroblob(32),entry_count=1,payload_bytes_total=2,counts_json=? WHERE id=?`, []byte(`{"ghost":1}`), id); err != nil {
+	if _, err := db.Exec(`UPDATE context_snapshots SET state='sealed',content_digest=zeroblob(32),entry_count=1,payload_bytes_total=2,counts_json=?,sealed_logical_bytes=2 WHERE id=?`, []byte(`{"ghost":1}`), id); err != nil {
 		t.Fatalf("seal: %v", err)
 	}
 	assertSnapshotStatementFails(t, db, `UPDATE context_snapshots SET message='changed' WHERE id=?`, id)
@@ -114,7 +225,7 @@ func TestSnapshotSchemaRejectsEveryMutationPath(t *testing.T) {
 	assertSnapshotStatementFails(t, db, `INSERT OR REPLACE`+snapshotHeadInsertSQL[len("INSERT"):], "p", "v1")
 
 	textHead := insertBuildingSnapshot(t, db, "text-head")
-	assertSnapshotStatementFails(t, db, `UPDATE context_snapshots SET state='sealed',content_digest='12345678901234567890123456789012',entry_count=0,payload_bytes_total=0,counts_json='{}' WHERE id=?`, textHead)
+	assertSnapshotStatementFails(t, db, `UPDATE context_snapshots SET state='sealed',content_digest='12345678901234567890123456789012',entry_count=0,payload_bytes_total=0,counts_json='{}',sealed_logical_bytes=0 WHERE id=?`, textHead)
 }
 
 func TestSnapshotSchemaDetectsObsoleteTriggerAndCommittedBuilding(t *testing.T) {
@@ -251,7 +362,7 @@ func TestSnapshotProbeAlwaysRollsBackOnSuccessAndFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	seedID := insertBuildingSnapshot(t, db, "sequence-seed")
-	if _, err := db.Exec(`UPDATE context_snapshots SET state='sealed',content_digest=zeroblob(32),entry_count=0,payload_bytes_total=0,counts_json=x'7b7d' WHERE id=?`, seedID); err != nil {
+	if _, err := db.Exec(`UPDATE context_snapshots SET state='sealed',content_digest=zeroblob(32),entry_count=0,payload_bytes_total=0,counts_json=x'7b7d',sealed_logical_bytes=0 WHERE id=?`, seedID); err != nil {
 		t.Fatal(err)
 	}
 	before := allTableCounts(t, db)

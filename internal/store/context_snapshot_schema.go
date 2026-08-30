@@ -11,6 +11,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/snapshot"
 	"modernc.org/sqlite"
 )
 
@@ -27,13 +28,13 @@ func init() {
 	})
 }
 
-const contextSnapshotInvariantVersion = 1
+const contextSnapshotInvariantVersion = 2
 
 const contextSnapshotInvariantTableSQL = `CREATE TABLE IF NOT EXISTS context_snapshot_invariants(
   singleton INTEGER PRIMARY KEY CHECK(singleton=1),
   version INTEGER NOT NULL CHECK(version>0))`
 
-const contextSnapshotsTableSQL = `CREATE TABLE IF NOT EXISTS context_snapshots(
+const contextSnapshotsTableV1SQL = `CREATE TABLE IF NOT EXISTS context_snapshots(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   project TEXT COLLATE BINARY NOT NULL CHECK(typeof(project)='text'),
   name TEXT COLLATE BINARY NOT NULL CHECK(typeof(name)='text'),
@@ -68,6 +69,10 @@ const contextSnapshotsTableSQL = `CREATE TABLE IF NOT EXISTS context_snapshots(
     (git_dirty=1 AND git_worktree_fingerprint_version=1 AND typeof(git_worktree_fingerprint)='blob' AND length(git_worktree_fingerprint)=32)),
   CHECK(allow_dirty_used=0 OR git_dirty=1))`
 
+const contextSnapshotLogicalSizeColumnSQL = `sealed_logical_bytes INTEGER CHECK(sealed_logical_bytes IS NULL OR (typeof(sealed_logical_bytes)='integer' AND sealed_logical_bytes>=0))`
+
+var contextSnapshotsTableSQL = strings.Replace(contextSnapshotsTableV1SQL, "  UNIQUE(project,name),", "  "+contextSnapshotLogicalSizeColumnSQL+",\n  UNIQUE(project,name),", 1)
+
 const contextSnapshotEntriesTableSQL = `CREATE TABLE IF NOT EXISTS context_snapshot_entries(
   snapshot_id INTEGER NOT NULL REFERENCES context_snapshots(id) ON DELETE RESTRICT,
   domain TEXT COLLATE BINARY NOT NULL CHECK(typeof(domain)='text' AND length(CAST(domain AS BLOB)) BETWEEN 1 AND 32 AND domain GLOB '[A-Za-z0-9]*' AND domain NOT GLOB '*[^A-Za-z0-9._-]*'),
@@ -79,7 +84,7 @@ const contextSnapshotEntriesTableSQL = `CREATE TABLE IF NOT EXISTS context_snaps
 
 const contextSnapshotsProjectIndexSQL = `CREATE INDEX IF NOT EXISTS context_snapshots_project_id ON context_snapshots(project,id DESC)`
 
-var contextSnapshotTriggerSQL = map[string]string{
+var contextSnapshotTriggerV1SQL = map[string]string{
 	"context_snapshot_head_insert": `CREATE TRIGGER IF NOT EXISTS context_snapshot_head_insert
 BEFORE INSERT ON context_snapshots
 WHEN NEW.state!='building' OR NEW.content_digest IS NOT NULL OR NEW.counts_json IS NOT NULL OR NEW.entry_count!=0 OR NEW.payload_bytes_total!=0
@@ -115,6 +120,34 @@ BEFORE DELETE ON context_snapshot_entries
 BEGIN SELECT RAISE(ABORT,'context snapshot entries are immutable'); END`,
 }
 
+var contextSnapshotTriggerSQL = map[string]string{
+	"context_snapshot_head_insert": `CREATE TRIGGER IF NOT EXISTS context_snapshot_head_insert
+BEFORE INSERT ON context_snapshots
+WHEN NEW.state!='building' OR NEW.content_digest IS NOT NULL OR NEW.counts_json IS NOT NULL OR NEW.entry_count!=0 OR NEW.payload_bytes_total!=0 OR NEW.sealed_logical_bytes IS NOT NULL
+BEGIN SELECT RAISE(ABORT,'context snapshot must start as an empty building head'); END`,
+	"context_snapshot_head_update": `CREATE TRIGGER IF NOT EXISTS context_snapshot_head_update
+BEFORE UPDATE ON context_snapshots
+WHEN NOT (
+  OLD.state='building' AND NEW.state='sealed' AND
+  NEW.id IS OLD.id AND NEW.project IS OLD.project AND NEW.name IS OLD.name AND
+  NEW.schema_version IS OLD.schema_version AND
+  NEW.git_object_format IS OLD.git_object_format AND NEW.git_commit IS OLD.git_commit AND
+  NEW.git_ref IS OLD.git_ref AND NEW.git_branch IS OLD.git_branch AND NEW.git_dirty IS OLD.git_dirty AND
+  NEW.git_worktree_fingerprint_version IS OLD.git_worktree_fingerprint_version AND
+  NEW.git_worktree_fingerprint IS OLD.git_worktree_fingerprint AND
+  NEW.allow_dirty_used IS OLD.allow_dirty_used AND NEW.git_metadata_source IS OLD.git_metadata_source AND
+  NEW.message IS OLD.message AND NEW.actor_id IS OLD.actor_id AND NEW.actor_label IS OLD.actor_label AND
+  NEW.session_ref IS OLD.session_ref AND NEW.created_at IS OLD.created_at AND
+  NEW.content_digest IS NOT NULL AND length(NEW.content_digest)=32 AND NEW.counts_json IS NOT NULL AND
+  NEW.entry_count>=0 AND NEW.payload_bytes_total>=0 AND
+  typeof(NEW.sealed_logical_bytes)='integer' AND NEW.sealed_logical_bytes>=0)
+BEGIN SELECT RAISE(ABORT,'context snapshot head is immutable'); END`,
+	"context_snapshot_head_delete":  contextSnapshotTriggerV1SQL["context_snapshot_head_delete"],
+	"context_snapshot_entry_insert": contextSnapshotTriggerV1SQL["context_snapshot_entry_insert"],
+	"context_snapshot_entry_update": contextSnapshotTriggerV1SQL["context_snapshot_entry_update"],
+	"context_snapshot_entry_delete": contextSnapshotTriggerV1SQL["context_snapshot_entry_delete"],
+}
+
 func EnsureContextSnapshotSchema(db *sql.DB) error {
 	if err := requireSnapshotSingleConnection(db); err != nil {
 		return err
@@ -125,7 +158,7 @@ func EnsureContextSnapshotSchema(db *sql.DB) error {
 	if _, err := db.Exec(contextSnapshotInvariantTableSQL); err != nil {
 		return err
 	}
-	if _, err := db.Exec(contextSnapshotsTableSQL); err != nil {
+	if _, err := db.Exec(contextSnapshotsTableV1SQL); err != nil {
 		return err
 	}
 	if _, err := db.Exec(contextSnapshotEntriesTableSQL); err != nil {
@@ -134,12 +167,27 @@ func EnsureContextSnapshotSchema(db *sql.DB) error {
 	if _, err := db.Exec(contextSnapshotsProjectIndexSQL); err != nil {
 		return err
 	}
-	if _, err := db.Exec(`INSERT OR IGNORE INTO context_snapshot_invariants(singleton,version) VALUES(1,?)`, contextSnapshotInvariantVersion); err != nil {
+	if _, err := db.Exec(`INSERT OR IGNORE INTO context_snapshot_invariants(singleton,version) VALUES(1,1)`); err != nil {
 		return err
 	}
-	for _, name := range snapshotTriggerNames() {
-		if _, err := db.Exec(contextSnapshotTriggerSQL[name]); err != nil {
+	var version int
+	if err := db.QueryRow(`SELECT version FROM context_snapshot_invariants WHERE singleton=1`).Scan(&version); err != nil {
+		return err
+	}
+	if version == 1 {
+		for _, name := range snapshotTriggerNames() {
+			if _, err := db.Exec(contextSnapshotTriggerV1SQL[name]); err != nil {
+				return err
+			}
+		}
+		if err := migrateContextSnapshotSchemaV1(db); err != nil {
 			return err
+		}
+	} else if version == contextSnapshotInvariantVersion {
+		for _, name := range snapshotTriggerNames() {
+			if _, err := db.Exec(contextSnapshotTriggerSQL[name]); err != nil {
+				return err
+			}
 		}
 	}
 	current, err := ContextSnapshotSchemaCurrent(db)
@@ -152,40 +200,119 @@ func EnsureContextSnapshotSchema(db *sql.DB) error {
 	return nil
 }
 
-func ContextSnapshotSchemaCurrent(db *sql.DB) (bool, error) {
-	if err := requireSnapshotSingleConnection(db); err != nil {
-		return false, err
+func migrateContextSnapshotSchemaV1(db *sql.DB) (err error) {
+	conn, err := db.Conn(context.Background())
+	if err != nil {
+		return err
 	}
-	var foreignKeys, recursiveTriggers int
-	if err := db.QueryRow(`PRAGMA foreign_keys`).Scan(&foreignKeys); err != nil {
-		return false, err
+	defer conn.Close()
+	if _, err := conn.ExecContext(context.Background(), `BEGIN IMMEDIATE`); err != nil {
+		return err
 	}
-	if err := db.QueryRow(`PRAGMA recursive_triggers`).Scan(&recursiveTriggers); err != nil {
-		return false, err
-	}
-	if foreignKeys != 1 || recursiveTriggers != 1 {
-		return false, nil
-	}
-
-	var version, rows int
-	if err := db.QueryRow(`SELECT COALESCE(MAX(version),0),count(*) FROM context_snapshot_invariants WHERE singleton=1`).Scan(&version, &rows); err != nil {
-		if strings.Contains(err.Error(), "no such table") {
-			return false, nil
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
 		}
-		return false, err
+	}()
+
+	current, err := contextSnapshotSchemaDefinitionsMatch(context.Background(), conn, 1, contextSnapshotsTableV1SQL, contextSnapshotTriggerV1SQL)
+	if err != nil {
+		return err
 	}
-	if rows != 1 || version != contextSnapshotInvariantVersion {
-		return false, nil
+	if !current {
+		return errors.New("context snapshot v1 schema invariant mismatch")
+	}
+	if _, err := conn.ExecContext(context.Background(), `DROP TRIGGER context_snapshot_head_update`); err != nil {
+		return err
+	}
+	if _, err := conn.ExecContext(context.Background(), `ALTER TABLE context_snapshots ADD COLUMN `+contextSnapshotLogicalSizeColumnSQL); err != nil {
+		return err
 	}
 
+	rows, err := conn.QueryContext(context.Background(), `SELECT project,name FROM context_snapshots WHERE state='sealed' ORDER BY id`)
+	if err != nil {
+		return err
+	}
+	type identity struct{ project, name string }
+	var identities []identity
+	for rows.Next() {
+		var v identity
+		if err := rows.Scan(&v.project, &v.name); err != nil {
+			rows.Close()
+			return err
+		}
+		identities = append(identities, v)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, v := range identities {
+		h, found, err := loadContextSnapshotHead(context.Background(), conn, v.project, v.name)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return &snapshot.RuleError{Code: "snapshot_integrity_error"}
+		}
+		entries, counts, payloadTotal, err := readStoredSnapshotEntries(context.Background(), conn, h.ID)
+		if err != nil {
+			return err
+		}
+		if snapshot.ContentDigest(h.SchemaVersion, entries) != h.ContentDigest || payloadTotal != h.PayloadBytesTotal || !equalCounts(counts, h.Counts) {
+			return &snapshot.RuleError{Code: "snapshot_integrity_error"}
+		}
+		logical, err := contextSnapshotLogicalSize(h, entries)
+		if err != nil {
+			return err
+		}
+		if _, err := conn.ExecContext(context.Background(), `UPDATE context_snapshots SET sealed_logical_bytes=? WHERE id=? AND state='sealed' AND sealed_logical_bytes IS NULL`, logical, h.ID); err != nil {
+			return err
+		}
+	}
+	for _, name := range snapshotTriggerNames() {
+		if _, err := conn.ExecContext(context.Background(), `DROP TRIGGER IF EXISTS `+name); err != nil {
+			return err
+		}
+		if _, err := conn.ExecContext(context.Background(), contextSnapshotTriggerSQL[name]); err != nil {
+			return err
+		}
+	}
+	if _, err := conn.ExecContext(context.Background(), `UPDATE context_snapshot_invariants SET version=? WHERE singleton=1 AND version=1`, contextSnapshotInvariantVersion); err != nil {
+		return err
+	}
+	if _, err := conn.ExecContext(context.Background(), `COMMIT`); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
+
+type snapshotSchemaQueryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func contextSnapshotSchemaDefinitionsMatch(ctx context.Context, q snapshotSchemaQueryer, version int, headSQL string, triggers map[string]string) (bool, error) {
+	var gotVersion, rows int
+	if err := q.QueryRowContext(ctx, `SELECT COALESCE(MAX(version),0),count(*) FROM context_snapshot_invariants WHERE singleton=1`).Scan(&gotVersion, &rows); err != nil {
+		return false, err
+	}
+	if rows != 1 || gotVersion != version {
+		return false, nil
+	}
 	expectedTables := map[string]string{
 		"context_snapshot_invariants": contextSnapshotInvariantTableSQL,
-		"context_snapshots":           contextSnapshotsTableSQL,
+		"context_snapshots":           headSQL,
 		"context_snapshot_entries":    contextSnapshotEntriesTableSQL,
 	}
 	for name, expected := range expectedTables {
 		var actual string
-		if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type='table' AND name=?`, name).Scan(&actual); err != nil {
+		if err := q.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type='table' AND name=?`, name).Scan(&actual); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return false, nil
 			}
@@ -196,7 +323,7 @@ func ContextSnapshotSchemaCurrent(db *sql.DB) (bool, error) {
 		}
 	}
 	var actualIndex string
-	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type='index' AND name='context_snapshots_project_id'`).Scan(&actualIndex); err != nil {
+	if err := q.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type='index' AND name='context_snapshots_project_id'`).Scan(&actualIndex); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return false, nil
 		}
@@ -205,9 +332,8 @@ func ContextSnapshotSchemaCurrent(db *sql.DB) (bool, error) {
 	if normalizeSnapshotSQL(actualIndex) != normalizeSnapshotSQL(contextSnapshotsProjectIndexSQL) {
 		return false, nil
 	}
-
 	actualTriggers := make(map[string]string)
-	triggerRows, err := db.Query(`SELECT name,sql FROM sqlite_master WHERE type='trigger' AND tbl_name IN ('context_snapshots','context_snapshot_entries')`)
+	triggerRows, err := q.QueryContext(ctx, `SELECT name,sql FROM sqlite_master WHERE type='trigger' AND tbl_name IN ('context_snapshots','context_snapshot_entries')`)
 	if err != nil {
 		return false, err
 	}
@@ -226,20 +352,51 @@ func ContextSnapshotSchemaCurrent(db *sql.DB) (bool, error) {
 	if err := triggerRows.Close(); err != nil {
 		return false, err
 	}
-	if len(actualTriggers) != len(contextSnapshotTriggerSQL) {
+	if len(actualTriggers) != len(triggers) {
 		return false, nil
 	}
-	for name, expected := range contextSnapshotTriggerSQL {
+	for name, expected := range triggers {
 		if normalizeSnapshotSQL(actualTriggers[name]) != normalizeSnapshotSQL(expected) {
 			return false, nil
 		}
 	}
-
 	var building int
-	if err := db.QueryRow(`SELECT count(*) FROM context_snapshots WHERE state='building'`).Scan(&building); err != nil {
+	if err := q.QueryRowContext(ctx, `SELECT count(*) FROM context_snapshots WHERE state='building'`).Scan(&building); err != nil {
 		return false, err
 	}
 	return building == 0, nil
+}
+
+func ContextSnapshotSchemaCurrent(db *sql.DB) (bool, error) {
+	if err := requireSnapshotSingleConnection(db); err != nil {
+		return false, err
+	}
+	var foreignKeys, recursiveTriggers int
+	if err := db.QueryRow(`PRAGMA foreign_keys`).Scan(&foreignKeys); err != nil {
+		return false, err
+	}
+	if err := db.QueryRow(`PRAGMA recursive_triggers`).Scan(&recursiveTriggers); err != nil {
+		return false, err
+	}
+	if foreignKeys != 1 || recursiveTriggers != 1 {
+		return false, nil
+	}
+
+	current, err := contextSnapshotSchemaDefinitionsMatch(context.Background(), db, contextSnapshotInvariantVersion, contextSnapshotsTableSQL, contextSnapshotTriggerSQL)
+	if err != nil {
+		if strings.Contains(err.Error(), "no such table") {
+			return false, nil
+		}
+		return false, err
+	}
+	if !current {
+		return false, nil
+	}
+	var missingLogicalSize int
+	if err := db.QueryRow(`SELECT count(*) FROM context_snapshots WHERE state='sealed' AND sealed_logical_bytes IS NULL`).Scan(&missingLogicalSize); err != nil {
+		return false, err
+	}
+	return missingLogicalSize == 0, nil
 }
 
 func ProbeContextSnapshotSchema(ctx context.Context, db *sql.DB) error {
@@ -318,11 +475,12 @@ func exerciseContextSnapshotSchema(ctx context.Context, tx snapshotProbeExecer) 
 			return err
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE context_snapshots SET state='sealed',content_digest=zeroblob(32),entry_count=1,payload_bytes_total=2,counts_json=x'7b7d' WHERE id=?`, id); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE context_snapshots SET state='sealed',content_digest=zeroblob(32),entry_count=1,payload_bytes_total=2,counts_json=x'7b7d',sealed_logical_bytes=2 WHERE id=?`, id); err != nil {
 		return err
 	}
 	for _, statement := range []string{
 		`UPDATE context_snapshots SET message='changed' WHERE id=?`,
+		`UPDATE context_snapshots SET sealed_logical_bytes=3 WHERE id=?`,
 		`DELETE FROM context_snapshots WHERE id=?`,
 		`INSERT INTO context_snapshot_entries(snapshot_id,domain,entry_key,payload,payload_digest,payload_size) VALUES(?,'ghost','file/late',x'7b7d',zeroblob(32),2)`,
 	} {

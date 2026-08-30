@@ -107,6 +107,17 @@ func (s *Store) CreateContextSnapshot(ctx context.Context, in snapshot.CreateInp
 		if existing.SchemaVersion != snapshot.SchemaVersion || existing.ContentDigest != digest || !headMatchesGit(existing, in.Git) {
 			return result, &snapshot.RuleError{Code: "snapshot_name_conflict", ExistingDigest: existing.ContentDigest.String(), RequestedDigest: digest.String()}
 		}
+		headBytes, err := contextSnapshotCanonicalHead(existing)
+		if err != nil {
+			return result, err
+		}
+		var logical int64
+		if err := conn.QueryRowContext(ctx, `SELECT sealed_logical_bytes FROM context_snapshots WHERE id=? AND state='sealed'`, existing.ID).Scan(&logical); err != nil {
+			return result, err
+		}
+		if limitExceeded(int64(len(headBytes)), limits.MaxCanonicalHeadBytes) || limitExceeded(logical, limits.MaxSnapshotLogicalBytes) {
+			return result, &snapshot.RuleError{Code: "snapshot_limit_exceeded"}
+		}
 		if _, err = conn.ExecContext(ctx, "COMMIT"); err != nil {
 			return result, mapSnapshotSQLiteError(err)
 		}
@@ -145,7 +156,7 @@ func (s *Store) CreateContextSnapshot(ctx context.Context, in snapshot.CreateInp
 	if err := s.failSnapshot("before_seal"); err != nil {
 		return result, err
 	}
-	res, err := conn.ExecContext(ctx, `UPDATE context_snapshots SET state='sealed',content_digest=?,entry_count=?,payload_bytes_total=?,counts_json=? WHERE id=? AND state='building'`, storedDigest[:], len(storedSummaries), storedTotal, countsJSON, snapshotID)
+	res, err := conn.ExecContext(ctx, `UPDATE context_snapshots SET state='sealed',content_digest=?,entry_count=?,payload_bytes_total=?,counts_json=?,sealed_logical_bytes=? WHERE id=? AND state='building'`, storedDigest[:], len(storedSummaries), storedTotal, countsJSON, logical, snapshotID)
 	if err != nil {
 		return result, mapSnapshotSQLiteError(err)
 	}
@@ -362,6 +373,20 @@ func equalCounts(a, b map[string]int64) bool {
 	}
 	return true
 }
+
+func contextSnapshotLogicalSize(h snapshot.Head, entries []snapshot.EntrySummary) (int64, error) {
+	headBytes, err := contextSnapshotCanonicalHead(h)
+	if err != nil {
+		return 0, err
+	}
+	return snapshot.LogicalSize(headBytes, entries), nil
+}
+
+func contextSnapshotCanonicalHead(h snapshot.Head) ([]byte, error) {
+	git := snapshot.GitProvenance{ObjectFormat: h.GitObjectFormat, Commit: h.GitCommit, Ref: h.GitRef, Branch: h.GitBranch, Dirty: h.GitDirty, WorktreeFingerprintVersion: h.GitWorktreeFingerprintVersion, WorktreeFingerprint: h.GitWorktreeFingerprint, AllowDirtyUsed: h.AllowDirtyUsed, MetadataSource: h.GitMetadataSource}
+	return snapshot.MarshalCanonical(snapshotHeadFingerprintV1{Project: h.Project, Name: h.Name, SchemaVersion: h.SchemaVersion, Git: git, Message: h.Message, ActorID: h.ActorID, ActorLabel: h.ActorLabel, SessionRef: h.SessionRef, CreatedAt: h.CreatedAt})
+}
+
 func checkSnapshotAggregateQuotas(ctx context.Context, q snapshotQueryer, project string, growth int64, l snapshot.Limits) error {
 	var projectCount, storeCount int64
 	if err := q.QueryRowContext(ctx, `SELECT count(*) FROM context_snapshots WHERE project=? AND state='sealed'`, project).Scan(&projectCount); err != nil {
@@ -384,52 +409,11 @@ func checkSnapshotAggregateQuotas(ctx context.Context, q snapshotQueryer, projec
 }
 
 func snapshotLogicalTotals(ctx context.Context, q snapshotQueryer, project string) (int64, int64, error) {
-	rows, err := q.QueryContext(ctx, `SELECT project,name FROM context_snapshots WHERE state='sealed' ORDER BY id`)
-	if err != nil {
+	var projectTotal, storeTotal sql.NullInt64
+	if err := q.QueryRowContext(ctx, `SELECT sum(CASE WHEN project=? THEN sealed_logical_bytes ELSE 0 END),sum(sealed_logical_bytes) FROM context_snapshots WHERE state='sealed'`, project).Scan(&projectTotal, &storeTotal); err != nil {
 		return 0, 0, err
 	}
-	type identity struct{ project, name string }
-	var identities []identity
-	for rows.Next() {
-		var v identity
-		if err := rows.Scan(&v.project, &v.name); err != nil {
-			rows.Close()
-			return 0, 0, err
-		}
-		identities = append(identities, v)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return 0, 0, err
-	}
-	if err := rows.Close(); err != nil {
-		return 0, 0, err
-	}
-	var projectTotal, storeTotal int64
-	for _, v := range identities {
-		h, found, err := loadContextSnapshotHead(ctx, q, v.project, v.name)
-		if err != nil {
-			return 0, 0, err
-		}
-		if !found {
-			return 0, 0, &snapshot.RuleError{Code: "snapshot_integrity_error"}
-		}
-		entries, _, _, err := readStoredSnapshotEntries(ctx, q, h.ID)
-		if err != nil {
-			return 0, 0, err
-		}
-		git := snapshot.GitProvenance{ObjectFormat: h.GitObjectFormat, Commit: h.GitCommit, Ref: h.GitRef, Branch: h.GitBranch, Dirty: h.GitDirty, WorktreeFingerprintVersion: h.GitWorktreeFingerprintVersion, WorktreeFingerprint: h.GitWorktreeFingerprint, AllowDirtyUsed: h.AllowDirtyUsed, MetadataSource: h.GitMetadataSource}
-		headBytes, err := snapshot.MarshalCanonical(snapshotHeadFingerprintV1{Project: h.Project, Name: h.Name, SchemaVersion: h.SchemaVersion, Git: git, Message: h.Message, ActorID: h.ActorID, ActorLabel: h.ActorLabel, SessionRef: h.SessionRef, CreatedAt: h.CreatedAt})
-		if err != nil {
-			return 0, 0, err
-		}
-		logical := snapshot.LogicalSize(headBytes, entries)
-		storeTotal += logical
-		if h.Project == project {
-			projectTotal += logical
-		}
-	}
-	return projectTotal, storeTotal, nil
+	return projectTotal.Int64, storeTotal.Int64, nil
 }
 func mapSnapshotSQLiteError(err error) error {
 	if err == nil {

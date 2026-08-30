@@ -71,7 +71,9 @@ func insertSealedReadFixture(t *testing.T, st *Store, name string) {
 	countsMap, _ := snapshot.NewCounts(1)
 	countsMap["knowledge"] = 1
 	counts, _ := snapshot.MarshalCanonical(countsMap)
-	if _, err := st.db.Exec(`UPDATE context_snapshots SET state='sealed',content_digest=?,entry_count=1,payload_bytes_total=?,counts_json=? WHERE id=?`, content[:], len(payload), counts, id); err != nil {
+	headBytes, _ := snapshot.MarshalCanonical(snapshotHeadFingerprintV1{Project: "p", Name: name, SchemaVersion: 1, Git: snapshot.GitProvenance{ObjectFormat: "sha1", Commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", MetadataSource: "server-verified"}, ActorID: "person:1", CreatedAt: "2026-08-29T00:00:00Z"})
+	logical := snapshot.LogicalSize(headBytes, []snapshot.EntrySummary{{Domain: "knowledge", Key: "k", PayloadDigest: digest, PayloadSize: int64(len(payload))}})
+	if _, err := st.db.Exec(`UPDATE context_snapshots SET state='sealed',content_digest=?,entry_count=1,payload_bytes_total=?,counts_json=?,sealed_logical_bytes=? WHERE id=?`, content[:], len(payload), counts, logical, id); err != nil {
 		t.Fatal(err)
 	}
 }
