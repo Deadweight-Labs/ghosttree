@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 )
 
 type SnapshotAccess struct {
@@ -15,7 +17,7 @@ type SnapshotAccess struct {
 
 func (s *Store) SetContextSnapshotAccess(person, project string, read, create, releaseBind bool) error {
 	person = strings.TrimSpace(person)
-	project = strings.TrimSpace(project)
+	project = scope.NormalizeRemote(project)
 	if person == "" {
 		return fmt.Errorf("person is required")
 	}
@@ -37,6 +39,31 @@ func (s *Store) SetContextSnapshotAccess(person, project string, read, create, r
 			return fmt.Errorf("person %q not found", person)
 		}
 		return err
+	}
+	rows, err := tx.Query(`SELECT project FROM context_snapshot_access WHERE person_id=?`, personID)
+	if err != nil {
+		return err
+	}
+	var aliases []string
+	for rows.Next() {
+		var stored string
+		if err := rows.Scan(&stored); err != nil {
+			rows.Close()
+			return err
+		}
+		if stored != project && scope.NormalizeRemote(stored) == project {
+			aliases = append(aliases, stored)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	for _, alias := range aliases {
+		if _, err := tx.Exec(`DELETE FROM context_snapshot_access WHERE person_id=? AND project=?`, personID, alias); err != nil {
+			return err
+		}
 	}
 	_, err = tx.Exec(`INSERT INTO context_snapshot_access(
 		person_id, project, can_read, can_create, can_release_bind)
@@ -60,7 +87,7 @@ func (s *Store) ContextSnapshotAccess(principalID, project string) (SnapshotAcce
 	if err != nil {
 		return SnapshotAccess{}, err
 	}
-	project = strings.TrimSpace(project)
+	project = scope.NormalizeRemote(project)
 	if project == "" {
 		return SnapshotAccess{}, fmt.Errorf("project is required")
 	}

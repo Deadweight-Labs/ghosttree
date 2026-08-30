@@ -9,6 +9,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/snapshot"
 )
 
@@ -49,9 +50,11 @@ func (s *Store) CreateContextSnapshot(ctx context.Context, in snapshot.CreateInp
 	}
 	createdAt := now()
 	var snapshotID int64
+	schemaVersion := snapshot.SchemaVersion
 	if found {
 		snapshotID = existing.ID
 		createdAt = existing.CreatedAt
+		schemaVersion = existing.SchemaVersion
 	} else {
 		res, err := conn.ExecContext(ctx, `INSERT INTO context_snapshots(project,name,schema_version,state,git_object_format,git_commit,git_ref,git_branch,git_dirty,git_worktree_fingerprint_version,git_worktree_fingerprint,allow_dirty_used,git_metadata_source,message,actor_id,actor_label,session_ref,created_at) VALUES(?,?,?,'building',?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, in.Project, in.Name, snapshot.SchemaVersion, in.Git.ObjectFormat, in.Git.Commit, in.Git.Ref, in.Git.Branch, in.Git.Dirty, in.Git.WorktreeFingerprintVersion, digestBytes(in.Git.WorktreeFingerprint), in.Git.AllowDirtyUsed, in.Git.MetadataSource, in.Message, in.ActorID, in.ActorLabel, in.SessionRef, createdAt)
 		if err != nil {
@@ -66,18 +69,15 @@ func (s *Store) CreateContextSnapshot(ctx context.Context, in snapshot.CreateInp
 		return result, err
 	}
 
-	entries, err := captureContextEntries(ctx, conn, in.Project)
+	entries, err := captureContextEntries(ctx, conn, in.Project, schemaVersion, limits)
 	if err != nil {
-		return result, err
-	}
-	if err := validateSnapshotEntries(entries, limits); err != nil {
 		return result, err
 	}
 	if err := s.failSnapshot("after_capture"); err != nil {
 		return result, err
 	}
 	summaries := make([]snapshot.EntrySummary, 0, len(entries))
-	counts, err := snapshot.NewCounts(snapshot.SchemaVersion)
+	counts, err := snapshot.NewCounts(schemaVersion)
 	if err != nil {
 		return result, err
 	}
@@ -92,7 +92,7 @@ func (s *Store) CreateContextSnapshot(ctx context.Context, in snapshot.CreateInp
 			}
 		}
 	}
-	digest := snapshot.ContentDigest(snapshot.SchemaVersion, summaries)
+	digest := snapshot.ContentDigest(schemaVersion, summaries)
 	if err := s.failSnapshot("after_entries"); err != nil {
 		return result, err
 	}
@@ -104,8 +104,8 @@ func (s *Store) CreateContextSnapshot(ctx context.Context, in snapshot.CreateInp
 		return result, &snapshot.RuleError{Code: "snapshot_git_changed", Retryable: true}
 	}
 	if found {
-		if existing.SchemaVersion != snapshot.SchemaVersion || existing.ContentDigest != digest || !headMatchesGit(existing, in.Git) {
-			return result, &snapshot.RuleError{Code: "snapshot_name_conflict", ExistingDigest: existing.ContentDigest.String(), RequestedDigest: digest.String()}
+		if existing.SchemaVersion != schemaVersion || existing.ContentDigest != digest || !headMatchesGit(existing, in.Git) {
+			return result, &snapshot.RuleError{Code: "snapshot_name_conflict", ExistingDigest: existing.ContentDigest.String(), RequestedDigest: digest.String(), ExistingGitCommit: existing.GitCommit, RequestedGitCommit: in.Git.Commit}
 		}
 		headBytes, err := contextSnapshotCanonicalHead(existing)
 		if err != nil {
@@ -127,7 +127,7 @@ func (s *Store) CreateContextSnapshot(ctx context.Context, in snapshot.CreateInp
 		return result, nil
 	}
 
-	headBytes, err := snapshot.MarshalCanonical(snapshotHeadFingerprintV1{Project: in.Project, Name: in.Name, SchemaVersion: snapshot.SchemaVersion, Git: in.Git, Message: in.Message, ActorID: in.ActorID, ActorLabel: in.ActorLabel, SessionRef: in.SessionRef, CreatedAt: createdAt})
+	headBytes, err := snapshot.MarshalCanonical(snapshotHeadFingerprintV1{Project: in.Project, Name: in.Name, SchemaVersion: schemaVersion, Git: in.Git, Message: in.Message, ActorID: in.ActorID, ActorLabel: in.ActorLabel, SessionRef: in.SessionRef, CreatedAt: createdAt})
 	if err != nil {
 		return result, err
 	}
@@ -138,14 +138,14 @@ func (s *Store) CreateContextSnapshot(ctx context.Context, in snapshot.CreateInp
 	if err := checkSnapshotAggregateQuotas(ctx, conn, in.Project, logical, limits); err != nil {
 		return result, err
 	}
-	storedSummaries, storedCounts, storedTotal, err := readStoredSnapshotEntries(ctx, conn, snapshotID)
+	storedSummaries, storedCounts, storedTotal, err := readStoredSnapshotEntries(ctx, conn, snapshotID, schemaVersion)
 	if err != nil {
 		return result, err
 	}
 	if err := s.failSnapshot("after_reread"); err != nil {
 		return result, err
 	}
-	storedDigest := snapshot.ContentDigest(snapshot.SchemaVersion, storedSummaries)
+	storedDigest := snapshot.ContentDigest(schemaVersion, storedSummaries)
 	if storedDigest != digest || storedTotal != payloadTotal || !equalCounts(storedCounts, counts) {
 		return result, &snapshot.RuleError{Code: "snapshot_integrity_error"}
 	}
@@ -174,7 +174,7 @@ func (s *Store) CreateContextSnapshot(ctx context.Context, in snapshot.CreateInp
 		return result, mapSnapshotSQLiteError(err)
 	}
 	committed = true
-	result.Snapshot = snapshot.Head{ID: snapshotID, Project: in.Project, Name: in.Name, SchemaVersion: snapshot.SchemaVersion, State: "sealed", ContentDigest: storedDigest, GitObjectFormat: in.Git.ObjectFormat, GitCommit: in.Git.Commit, GitRef: in.Git.Ref, GitBranch: in.Git.Branch, GitDirty: in.Git.Dirty, GitWorktreeFingerprintVersion: in.Git.WorktreeFingerprintVersion, GitWorktreeFingerprint: in.Git.WorktreeFingerprint, AllowDirtyUsed: in.Git.AllowDirtyUsed, GitMetadataSource: in.Git.MetadataSource, Message: in.Message, ActorID: in.ActorID, ActorLabel: in.ActorLabel, SessionRef: in.SessionRef, CreatedAt: createdAt, EntryCount: int64(len(storedSummaries)), PayloadBytesTotal: storedTotal, Counts: storedCounts}
+	result.Snapshot = snapshot.Head{ID: snapshotID, Project: in.Project, Name: in.Name, SchemaVersion: schemaVersion, State: "sealed", ContentDigest: storedDigest, GitObjectFormat: in.Git.ObjectFormat, GitCommit: in.Git.Commit, GitRef: in.Git.Ref, GitBranch: in.Git.Branch, GitDirty: in.Git.Dirty, GitWorktreeFingerprintVersion: in.Git.WorktreeFingerprintVersion, GitWorktreeFingerprint: in.Git.WorktreeFingerprint, AllowDirtyUsed: in.Git.AllowDirtyUsed, GitMetadataSource: in.Git.MetadataSource, Message: in.Message, ActorID: in.ActorID, ActorLabel: in.ActorLabel, SessionRef: in.SessionRef, CreatedAt: createdAt, EntryCount: int64(len(storedSummaries)), PayloadBytesTotal: storedTotal, Counts: storedCounts}
 	result.Created = true
 	return result, nil
 }
@@ -187,7 +187,7 @@ func (s *Store) failSnapshot(phase string) error {
 }
 
 func validateSnapshotCreateInput(in snapshot.CreateInput, l snapshot.Limits) error {
-	if in.Project == "" || !validSnapshotName(in.Name) || in.ActorID == "" || !utf8.ValidString(in.Project+in.ActorID) || !validSnapshotGit(in.Git) {
+	if in.Project == "" || in.Project != scope.NormalizeRemote(in.Project) || !validSnapshotName(in.Name) || in.ActorID == "" || !utf8.ValidString(in.Project+in.ActorID) || !validSnapshotGit(in.Git) {
 		return &snapshot.RuleError{Code: "snapshot_invalid_input"}
 	}
 	fields := []struct {
@@ -240,22 +240,6 @@ func validSnapshotGit(g snapshot.GitProvenance) bool {
 		return g.WorktreeFingerprintVersion == nil && g.WorktreeFingerprint == nil && !g.AllowDirtyUsed
 	}
 	return g.WorktreeFingerprintVersion != nil && *g.WorktreeFingerprintVersion == snapshot.WorktreeFingerprintVersion && g.WorktreeFingerprint != nil
-}
-func validateSnapshotEntries(entries []snapshot.Entry, l snapshot.Limits) error {
-	if limitExceeded(int64(len(entries)), l.MaxEntriesPerSnapshot) {
-		return &snapshot.RuleError{Code: "snapshot_limit_exceeded"}
-	}
-	var total int64
-	for _, e := range entries {
-		if limitExceeded(e.PayloadSize, l.MaxEntryPayloadBytes) {
-			return &snapshot.RuleError{Code: "snapshot_limit_exceeded"}
-		}
-		total += e.PayloadSize
-	}
-	if limitExceeded(total, l.MaxSnapshotPayloadBytes) {
-		return &snapshot.RuleError{Code: "snapshot_limit_exceeded"}
-	}
-	return nil
 }
 func limitExceeded(value, limit int64) bool { return limit >= 0 && value > limit }
 func digestBytes(d *snapshot.Digest) any {
@@ -321,7 +305,7 @@ func loadContextSnapshotHead(ctx context.Context, q snapshotQueryer, project, na
 		copy(d[:], worktree)
 		h.GitWorktreeFingerprint = &d
 	}
-	if snapshot.ValidateCanonical(countsRaw) != nil || json.Unmarshal(countsRaw, &h.Counts) != nil || snapshot.ValidateHeadV1(h, h.Counts) != nil {
+	if snapshot.ValidateCanonical(countsRaw) != nil || json.Unmarshal(countsRaw, &h.Counts) != nil || snapshot.ValidateHead(h, h.Counts) != nil {
 		return snapshot.Head{}, false, &snapshot.RuleError{Code: "snapshot_integrity_error"}
 	}
 	return h, true, nil
@@ -333,14 +317,14 @@ func nullStringPtr(v sql.NullString) *string {
 	s := v.String
 	return &s
 }
-func readStoredSnapshotEntries(ctx context.Context, q snapshotQueryer, id int64) ([]snapshot.EntrySummary, map[string]int64, int64, error) {
+func readStoredSnapshotEntries(ctx context.Context, q snapshotQueryer, id int64, schemaVersion uint32) ([]snapshot.EntrySummary, map[string]int64, int64, error) {
 	rows, err := q.QueryContext(ctx, `SELECT domain,entry_key,payload,payload_digest,payload_size FROM context_snapshot_entries WHERE snapshot_id=? ORDER BY domain,entry_key`, id)
 	if err != nil {
 		return nil, nil, 0, err
 	}
 	defer rows.Close()
 	var out []snapshot.EntrySummary
-	counts, err := snapshot.NewCounts(snapshot.SchemaVersion)
+	counts, err := snapshot.NewCounts(schemaVersion)
 	if err != nil {
 		return nil, nil, 0, err
 	}

@@ -4,11 +4,16 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/snapshot"
@@ -21,6 +26,10 @@ type SnapshotMirror interface {
 
 type Option func(*api)
 
+type OperationIDGenerator func() (string, error)
+
+type snapshotErrorLogger func(operationID string, err, generatorErr error)
+
 func WithContextSnapshotLimits(limits snapshot.Limits) Option {
 	return func(a *api) { a.snapshotLimits = limits }
 }
@@ -29,10 +38,20 @@ func WithSnapshotMirror(mirror SnapshotMirror) Option {
 	return func(a *api) { a.snapshotMirror = mirror }
 }
 
+func WithOperationIDGenerator(generator OperationIDGenerator) Option {
+	return func(a *api) { a.operationIDGenerator = generator }
+}
+
+func withSnapshotErrorLogger(logger snapshotErrorLogger) Option {
+	return func(a *api) { a.snapshotErrorLogger = logger }
+}
+
 type api struct {
-	st             *store.Store
-	snapshotLimits snapshot.Limits
-	snapshotMirror SnapshotMirror
+	st                   *store.Store
+	snapshotLimits       snapshot.Limits
+	snapshotMirror       SnapshotMirror
+	operationIDGenerator OperationIDGenerator
+	snapshotErrorLogger  snapshotErrorLogger
 }
 
 type personKey struct{}
@@ -106,13 +125,45 @@ func New(st *store.Store, options ...Option) http.Handler {
 }
 
 func newAPI(st *store.Store, options ...Option) *api {
-	a := &api{st: st, snapshotLimits: snapshot.DefaultLimits()}
+	a := &api{
+		st: st, snapshotLimits: snapshot.DefaultLimits(),
+		operationIDGenerator: randomOperationID,
+		snapshotErrorLogger: func(operationID string, err, generatorErr error) {
+			if generatorErr != nil {
+				log.Printf("snapshot_internal_error operation_id=%q error=%q operation_id_error=%q", operationID, err, generatorErr)
+				return
+			}
+			log.Printf("snapshot_internal_error operation_id=%q error=%q", operationID, err)
+		},
+	}
 	for _, option := range options {
 		if option != nil {
 			option(a)
 		}
 	}
+	if a.operationIDGenerator == nil {
+		a.operationIDGenerator = randomOperationID
+	}
+	if a.snapshotErrorLogger == nil {
+		a.snapshotErrorLogger = func(operationID string, err, generatorErr error) {
+			log.Printf("snapshot_internal_error operation_id=%q error=%q operation_id_error=%q", operationID, err, generatorErr)
+		}
+	}
 	return a
+}
+
+func randomOperationID() (string, error) {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(raw[:]), nil
+}
+
+var fallbackOperationIDCounter atomic.Uint64
+
+func fallbackOperationID() string {
+	return fmt.Sprintf("fallback-%x-%x", time.Now().UnixNano(), fallbackOperationIDCounter.Add(1))
 }
 
 // auth lets /api/health through unauthenticated so probes and setup checks

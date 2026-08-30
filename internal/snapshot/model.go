@@ -9,7 +9,9 @@ import (
 )
 
 const (
-	SchemaVersion              uint32 = 1
+	SchemaVersionV1            uint32 = 1
+	SchemaVersionV2            uint32 = 2
+	SchemaVersion              uint32 = SchemaVersionV2
 	ExportVersion              uint32 = 1
 	WorktreeFingerprintVersion uint32 = 1
 )
@@ -158,13 +160,15 @@ type Warning struct {
 }
 
 type RuleError struct {
-	Code            string         `json:"code"`
-	Message         string         `json:"message,omitempty"`
-	Resolution      string         `json:"resolution,omitempty"`
-	Details         map[string]any `json:"details,omitempty"`
-	Retryable       bool           `json:"retryable"`
-	ExistingDigest  string         `json:"existing_digest,omitempty"`
-	RequestedDigest string         `json:"requested_digest,omitempty"`
+	Code               string         `json:"code"`
+	Message            string         `json:"message,omitempty"`
+	Resolution         string         `json:"resolution,omitempty"`
+	Details            map[string]any `json:"details,omitempty"`
+	Retryable          bool           `json:"retryable"`
+	ExistingDigest     string         `json:"existing_digest,omitempty"`
+	RequestedDigest    string         `json:"requested_digest,omitempty"`
+	ExistingGitCommit  string         `json:"existing_git_commit"`
+	RequestedGitCommit string         `json:"requested_git_commit"`
 }
 
 func (e *RuleError) Error() string {

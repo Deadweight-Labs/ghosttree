@@ -3,10 +3,47 @@ package snapshot
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
 	"reflect"
 	"testing"
 	"time"
 )
+
+type failAfterWriter struct {
+	remaining       int
+	err             error
+	failed          bool
+	writesAfterFail int
+}
+
+type shortWriter struct{}
+
+func (shortWriter) Write(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	return len(p) - 1, nil
+}
+
+func (w *failAfterWriter) Write(p []byte) (int, error) {
+	if w.failed {
+		w.writesAfterFail++
+		return 0, w.err
+	}
+	if w.remaining == 0 {
+		w.failed = true
+		return 0, w.err
+	}
+	if len(p) > w.remaining {
+		n := w.remaining
+		w.remaining = 0
+		w.failed = true
+		return n, w.err
+	}
+	w.remaining -= len(p)
+	return len(p), nil
+}
 
 func TestCanonicalJSONV1Golden(t *testing.T) {
 	got, err := MarshalCanonical(map[string]any{"z": int64(2), "a": "<\n", "n": nil})
@@ -15,6 +52,36 @@ func TestCanonicalJSONV1Golden(t *testing.T) {
 	}
 	if string(got) != `{"a":"<\n","n":null,"z":2}` {
 		t.Fatalf("%q", got)
+	}
+}
+
+func TestWriteCanonicalMatchesMarshalAndStopsAfterWriterError(t *testing.T) {
+	value := map[string]any{"z": int64(2), "a": "payload", "n": nil}
+	want, err := MarshalCanonical(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := WriteCanonical(&out, value); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(out.Bytes(), want) {
+		t.Fatalf("WriteCanonical=%q, MarshalCanonical=%q", out.Bytes(), want)
+	}
+
+	writeErr := errors.New("writer full")
+	failing := &failAfterWriter{remaining: 5, err: writeErr}
+	if err := WriteCanonical(failing, value); !errors.Is(err, writeErr) {
+		t.Fatalf("WriteCanonical error=%v, want %v", err, writeErr)
+	}
+	if failing.writesAfterFail != 0 {
+		t.Fatalf("encoder attempted %d writes after the first writer error", failing.writesAfterFail)
+	}
+	if _, err := io.WriteString(failing, "x"); !errors.Is(err, writeErr) {
+		t.Fatalf("test writer did not preserve failure: %v", err)
+	}
+	if err := WriteCanonical(shortWriter{}, value); !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("short writer error=%v, want io.ErrShortWrite", err)
 	}
 }
 

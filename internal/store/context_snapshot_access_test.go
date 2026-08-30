@@ -130,6 +130,34 @@ func TestContextSnapshotAccessIdenticalWriteIsNoOp(t *testing.T) {
 	}
 }
 
+func TestContextSnapshotAccessCanonicalizesAndCleansAliasRows(t *testing.T) {
+	s := openTest(t)
+	if _, err := s.AddPerson("alice"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`INSERT INTO context_snapshot_access(person_id,project,can_read,can_create,can_release_bind)
+		VALUES(1,' HTTPS://GitHub.com/Example/Repo.git ',1,0,0)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetContextSnapshotAccess("alice", "git@github.com:Example/Repo.git", true, true, false); err != nil {
+		t.Fatal(err)
+	}
+	for _, project := range []string{"github.com/example/repo", "https://github.com/Example/Repo.git", " git@github.com:Example/Repo.git "} {
+		access, err := s.ContextSnapshotAccess("person:1", project)
+		if err != nil || access != (SnapshotAccess{Read: true, Create: true}) {
+			t.Fatalf("project %q access=%+v err=%v", project, access, err)
+		}
+	}
+	var count int
+	var stored string
+	if err := s.db.QueryRow(`SELECT count(*),min(project) FROM context_snapshot_access WHERE person_id=1`).Scan(&count, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 || stored != "github.com/example/repo" {
+		t.Fatalf("rows=%d stored=%q", count, stored)
+	}
+}
+
 func TestContextSnapshotAccessRestrictsPersonDeletion(t *testing.T) {
 	s := openTest(t)
 	if _, err := s.AddPerson("alice"); err != nil {

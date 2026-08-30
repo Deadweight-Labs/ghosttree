@@ -173,8 +173,8 @@ func seedV1SealedSnapshot(t *testing.T, db *sql.DB, corruptDigest bool) (int64, 
 		t.Fatal(err)
 	}
 	summary := []snapshot.EntrySummary{{Domain: "ghost", Key: "file/a", PayloadDigest: digest, PayloadSize: int64(len(payload))}}
-	contentDigest := snapshot.ContentDigest(snapshot.SchemaVersion, summary)
-	counts, err := snapshot.NewCounts(snapshot.SchemaVersion)
+	contentDigest := snapshot.ContentDigest(snapshot.SchemaVersionV1, summary)
+	counts, err := snapshot.NewCounts(snapshot.SchemaVersionV1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +187,7 @@ func seedV1SealedSnapshot(t *testing.T, db *sql.DB, corruptDigest bool) (int64, 
 		t.Fatal(err)
 	}
 	headBytes, err := snapshot.MarshalCanonical(snapshotHeadFingerprintV1{
-		Project: "p", Name: "legacy", SchemaVersion: snapshot.SchemaVersion,
+		Project: "p", Name: "legacy", SchemaVersion: snapshot.SchemaVersionV1,
 		Git:     snapshot.GitProvenance{ObjectFormat: "sha1", Commit: "0000000000000000000000000000000000000000", Branch: stringPointer("dev"), MetadataSource: "server-verified"},
 		ActorID: "actor", CreatedAt: "2026-08-29T00:00:00Z",
 	})

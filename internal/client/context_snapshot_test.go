@@ -101,12 +101,14 @@ func TestContextSnapshotClientMapsTask8ErrorsToRuleError(t *testing.T) {
 				writeClientSnapshotJSON(t, w, map[string]any{
 					"code": tc.code, "message": "message", "resolution": "resolution",
 					"details": map[string]any{"existing_digest": "abc"}, "retryable": tc.retryable,
+					"existing_digest": "old-digest", "requested_digest": "new-digest",
+					"existing_git_commit": "old-commit", "requested_git_commit": "new-commit",
 				})
 			}))
 			t.Cleanup(srv.Close)
 			_, err := New(config.Config{ServerURL: srv.URL}).ContextSnapshots(context.Background(), snapshot.ListFilter{Project: "p"})
 			var rule *snapshot.RuleError
-			if !errors.As(err, &rule) || rule.Code != tc.code || rule.Retryable != tc.retryable || rule.Message != "message" || rule.Resolution != "resolution" || rule.Details["existing_digest"] != "abc" {
+			if !errors.As(err, &rule) || rule.Code != tc.code || rule.Retryable != tc.retryable || rule.Message != "message" || rule.Resolution != "resolution" || rule.Details["existing_digest"] != "abc" || rule.ExistingDigest != "old-digest" || rule.RequestedDigest != "new-digest" || rule.ExistingGitCommit != "old-commit" || rule.RequestedGitCommit != "new-commit" {
 				t.Fatalf("error = %#v (%T), want structured %s", err, err, tc.code)
 			}
 		})

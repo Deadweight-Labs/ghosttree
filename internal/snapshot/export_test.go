@@ -130,7 +130,7 @@ func TestVerifyExportRejectsUnknownSnapshotSchemaAndInvalidProjection(t *testing
 	if err := WriteExport(&out, head, counts, entries, nil); err != nil {
 		t.Fatal(err)
 	}
-	unknown := bytes.Replace(out.Bytes(), []byte(`"schema_version":1`), []byte(`"schema_version":2`), 1)
+	unknown := bytes.Replace(out.Bytes(), []byte(`"schema_version":1`), []byte(`"schema_version":3`), 1)
 	if _, err := VerifyExport(bytes.NewReader(unknown)); !isRuleCode(err, "unsupported_snapshot_schema") {
 		t.Fatalf("unknown schema error = %v", err)
 	}

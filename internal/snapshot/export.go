@@ -31,7 +31,7 @@ type exportEnvelopeV1 struct {
 }
 
 func WriteExport(dst io.Writer, head Head, counts map[string]int64, entries []Entry, filter *ExportFilter) error {
-	if err := ValidateHeadV1(head, counts); err != nil {
+	if err := ValidateHead(head, counts); err != nil {
 		return err
 	}
 	if err := validateExportFilter(filter, entries); err != nil {
@@ -83,7 +83,7 @@ func VerifyExport(src io.Reader) (Verification, error) {
 		return Verification{}, &RuleError{Code: "unsupported_snapshot_schema"}
 	}
 	head := headFromExportV1(envelope.Snapshot)
-	if err := ValidateHeadV1(head, envelope.Counts); err != nil {
+	if err := ValidateHead(head, envelope.Counts); err != nil {
 		return Verification{}, err
 	}
 	if err := validateExportFilter(envelope.Filter, envelope.Entries); err != nil {
@@ -126,7 +126,7 @@ func verifyEntries(head Head, counts map[string]int64, entries []Entry, full boo
 		if !json.Valid(entry.Payload) {
 			return integrityError(fmt.Errorf("invalid payload JSON"))
 		}
-		if head.SchemaVersion == SchemaVersion {
+		if supportedSchemaVersion(head.SchemaVersion) {
 			if err := ValidateCanonical(entry.Payload); err != nil {
 				return integrityError(fmt.Errorf("%s/%s: %w", entry.Domain, entry.Key, err))
 			}

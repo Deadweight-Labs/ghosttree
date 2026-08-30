@@ -7,13 +7,20 @@ import (
 
 func TestNormalizeRemote(t *testing.T) {
 	cases := map[string]string{
-		"git@github.com:Example/sample-project.git":        "github.com/example/sample-project",
-		"https://github.com/Example/sample-project":        "github.com/example/sample-project",
-		"https://github.com/Deadweight-Labs/ghosttree.git": "github.com/deadweight-labs/ghosttree",
+		"git@github.com:Example/sample-project.git":           "github.com/example/sample-project",
+		"https://github.com/Example/sample-project":           "github.com/example/sample-project",
+		"https://github.com/Deadweight-Labs/ghosttree.git":    "github.com/deadweight-labs/ghosttree",
+		" http://WWW.GitHub.com/Example/sample-project.git/ ": "github.com/example/sample-project",
+		"ssh://git@github.com/Example/sample-project.git":     "github.com/example/sample-project",
+		"git://github.com/Example/sample-project/":            "github.com/example/sample-project",
+		"github.com/example/sample-project":                   "github.com/example/sample-project",
 	}
 	for in, want := range cases {
 		if got := NormalizeRemote(in); got != want {
 			t.Errorf("NormalizeRemote(%q) = %q, want %q", in, got, want)
+		}
+		if got := NormalizeRemote(want); got != want {
+			t.Errorf("NormalizeRemote output %q is not stable: got %q", want, got)
 		}
 	}
 }

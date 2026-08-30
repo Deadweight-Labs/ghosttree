@@ -11,6 +11,7 @@ import (
 	"strconv"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/collector"
+	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/snapshot"
 )
 
@@ -32,10 +33,14 @@ func (a *api) createContextSnapshot(w http.ResponseWriter, r *http.Request) {
 		writeSnapshotRuleError(w, http.StatusBadRequest, &snapshot.RuleError{Code: "snapshot_invalid_input"})
 		return
 	}
+	if !validSnapshotProject(input.Project) {
+		writeSnapshotRuleError(w, http.StatusBadRequest, &snapshot.RuleError{Code: "snapshot_invalid_input"})
+		return
+	}
 	principal := principalOf(r)
 	access, err := a.st.ContextSnapshotAccess(principal.ID, input.Project)
 	if err != nil {
-		writeSnapshotError(w, err)
+		a.writeSnapshotError(w, err)
 		return
 	}
 	if !access.Read || !access.Create {
@@ -58,7 +63,7 @@ func (a *api) createContextSnapshot(w http.ResponseWriter, r *http.Request) {
 	input.ActorLabel = &principal.Label
 	result, err := a.st.CreateContextSnapshot(r.Context(), input, a.snapshotLimits, func(context.Context) (snapshot.GitProvenance, error) { return *input.GitRecheck, nil })
 	if err != nil {
-		writeSnapshotError(w, err)
+		a.writeSnapshotError(w, err)
 		return
 	}
 	if a.snapshotMirror != nil {
@@ -99,7 +104,7 @@ func (a *api) listContextSnapshots(w http.ResponseWriter, r *http.Request) {
 	}
 	page, err := a.st.ListContextSnapshots(r.Context(), snapshot.ListFilter{Project: project, Cursor: r.URL.Query().Get("cursor"), Limit: intParam(r, "limit", 100)})
 	if err != nil {
-		writeSnapshotError(w, err)
+		a.writeSnapshotError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, page)
@@ -112,7 +117,7 @@ func (a *api) getContextSnapshot(w http.ResponseWriter, r *http.Request) {
 	}
 	head, counts, err := a.st.ContextSnapshot(r.Context(), project, r.PathValue("name"))
 	if err != nil {
-		writeSnapshotError(w, err)
+		a.writeSnapshotError(w, err)
 		return
 	}
 	response := struct {
@@ -121,7 +126,7 @@ func (a *api) getContextSnapshot(w http.ResponseWriter, r *http.Request) {
 	}{head, counts}
 	canonical, err := snapshot.MarshalCanonical(response)
 	if err != nil {
-		writeSnapshotError(w, err)
+		a.writeSnapshotError(w, err)
 		return
 	}
 	etag := sha256.Sum256(canonical)
@@ -141,14 +146,14 @@ func (a *api) contextSnapshotEntries(w http.ResponseWriter, r *http.Request) {
 	}
 	page, err := a.st.ContextSnapshotEntries(r.Context(), project, r.PathValue("name"), filter)
 	if err != nil {
-		writeSnapshotError(w, err)
+		a.writeSnapshotError(w, err)
 		return
 	}
 	if page.Exact != nil {
 		w.Header().Set("ETag", `"`+page.Exact.PayloadDigest.String()+`"`)
 		raw, err := snapshot.MarshalCanonical(page)
 		if err != nil {
-			writeSnapshotError(w, err)
+			a.writeSnapshotError(w, err)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -160,9 +165,13 @@ func (a *api) contextSnapshotEntries(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) requireSnapshotRead(w http.ResponseWriter, r *http.Request, project string) bool {
+	if !validSnapshotProject(project) {
+		writeSnapshotRuleError(w, http.StatusBadRequest, &snapshot.RuleError{Code: "snapshot_invalid_input"})
+		return false
+	}
 	access, err := a.st.ContextSnapshotAccess(principalOf(r).ID, project)
 	if err != nil {
-		writeSnapshotError(w, err)
+		a.writeSnapshotError(w, err)
 		return false
 	}
 	if !access.Read {
@@ -170,6 +179,10 @@ func (a *api) requireSnapshotRead(w http.ResponseWriter, r *http.Request, projec
 		return false
 	}
 	return true
+}
+
+func validSnapshotProject(project string) bool {
+	return project != "" && project == scope.NormalizeRemote(project)
 }
 
 var snapshotStatusByCode = map[string]int{
@@ -183,17 +196,27 @@ var snapshotStatusByCode = map[string]int{
 	"snapshot_integrity_error": 500,
 }
 
-func writeSnapshotError(w http.ResponseWriter, err error) {
+func (a *api) writeSnapshotError(w http.ResponseWriter, err error) {
 	var rule *snapshot.RuleError
 	if errors.As(err, &rule) {
 		status := snapshotStatusByCode[rule.Code]
-		if status == 0 {
-			status = http.StatusInternalServerError
+		if status != 0 && status != http.StatusInternalServerError {
+			writeSnapshotRuleError(w, status, rule)
+			return
 		}
-		writeSnapshotRuleError(w, status, rule)
-		return
 	}
-	writeJSON(w, http.StatusInternalServerError, map[string]any{"code": "snapshot_internal_error", "message": err.Error(), "retryable": false})
+	operationID, generatorErr := a.operationIDGenerator()
+	if generatorErr != nil || operationID == "" {
+		if generatorErr == nil {
+			generatorErr = errors.New("operation ID generator returned an empty ID")
+		}
+		operationID = fallbackOperationID()
+	}
+	a.snapshotErrorLogger(operationID, err, generatorErr)
+	writeSnapshotRuleError(w, http.StatusInternalServerError, &snapshot.RuleError{
+		Code: "snapshot_internal_error", Message: "internal snapshot operation failed",
+		Details: map[string]any{"operation_id": operationID},
+	})
 }
 
 func writeSnapshotRuleError(w http.ResponseWriter, status int, rule *snapshot.RuleError) {

@@ -259,7 +259,7 @@ func migrateContextSnapshotSchemaV1(db *sql.DB) (err error) {
 		if !found {
 			return &snapshot.RuleError{Code: "snapshot_integrity_error"}
 		}
-		entries, counts, payloadTotal, err := readStoredSnapshotEntries(context.Background(), conn, h.ID)
+		entries, counts, payloadTotal, err := readStoredSnapshotEntries(context.Background(), conn, h.ID, h.SchemaVersion)
 		if err != nil {
 			return err
 		}

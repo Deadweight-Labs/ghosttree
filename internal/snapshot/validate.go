@@ -6,21 +6,25 @@ import (
 	"unicode/utf8"
 )
 
-var schemaV1Domains = [...]string{"document", "ghost", "ghost-review", "knowledge", "request"}
+var snapshotDomains = [...]string{"document", "ghost", "ghost-review", "knowledge", "request"}
+
+func supportedSchemaVersion(schemaVersion uint32) bool {
+	return schemaVersion == SchemaVersionV1 || schemaVersion == SchemaVersionV2
+}
 
 func NewCounts(schemaVersion uint32) (map[string]int64, error) {
-	if schemaVersion != SchemaVersion {
+	if !supportedSchemaVersion(schemaVersion) {
 		return nil, &RuleError{Code: "unsupported_snapshot_schema"}
 	}
-	counts := make(map[string]int64, len(schemaV1Domains))
-	for _, domain := range schemaV1Domains {
+	counts := make(map[string]int64, len(snapshotDomains))
+	for _, domain := range snapshotDomains {
 		counts[domain] = 0
 	}
 	return counts, nil
 }
 
-func ValidateHeadV1(head Head, counts map[string]int64) error {
-	if head.SchemaVersion != SchemaVersion {
+func ValidateHead(head Head, counts map[string]int64) error {
+	if !supportedSchemaVersion(head.SchemaVersion) {
 		return &RuleError{Code: "unsupported_snapshot_schema"}
 	}
 	if head.Project == "" || head.ActorID == "" || head.State != "sealed" || !validSnapshotName(head.Name) || !utf8.ValidString(head.Project+head.ActorID) {
@@ -30,11 +34,11 @@ func ValidateHeadV1(head Head, counts map[string]int64) error {
 	if err != nil || created.Location() != time.UTC || !strings.HasSuffix(head.CreatedAt, "Z") || head.EntryCount < 0 || head.PayloadBytesTotal < 0 || !validGitProvenance(head) {
 		return &RuleError{Code: "snapshot_integrity_error"}
 	}
-	if len(counts) != len(schemaV1Domains) {
+	if len(counts) != len(snapshotDomains) {
 		return &RuleError{Code: "snapshot_integrity_error"}
 	}
 	var total int64
-	for _, domain := range schemaV1Domains {
+	for _, domain := range snapshotDomains {
 		count, ok := counts[domain]
 		if !ok || count < 0 {
 			return &RuleError{Code: "snapshot_integrity_error"}

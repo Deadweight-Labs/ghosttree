@@ -23,11 +23,15 @@ var (
 
 func MarshalCanonical(value any) ([]byte, error) {
 	var out bytes.Buffer
-	encoder := canonicalEncoder{out: &out, active: make(map[canonicalVisit]bool)}
-	if err := encoder.write(reflect.ValueOf(value)); err != nil {
+	if err := WriteCanonical(&out, value); err != nil {
 		return nil, err
 	}
 	return out.Bytes(), nil
+}
+
+func WriteCanonical(out io.Writer, value any) error {
+	encoder := canonicalEncoder{out: out, active: make(map[canonicalVisit]bool)}
+	return encoder.write(reflect.ValueOf(value))
 }
 
 func ValidateCanonical(raw []byte) error {
@@ -63,26 +67,47 @@ type canonicalVisit struct {
 }
 
 type canonicalEncoder struct {
-	out    *bytes.Buffer
+	out    io.Writer
 	active map[canonicalVisit]bool
+}
+
+func (e *canonicalEncoder) writeBytes(value []byte) error {
+	n, err := e.out.Write(value)
+	if err == nil && n != len(value) {
+		return io.ErrShortWrite
+	}
+	return err
+}
+
+func (e *canonicalEncoder) writeLiteral(value string) error {
+	n, err := io.WriteString(e.out, value)
+	if err == nil && n != len(value) {
+		return io.ErrShortWrite
+	}
+	return err
+}
+
+func (e *canonicalEncoder) writeByte(value byte) error {
+	return e.writeBytes([]byte{value})
+}
+
+func (e *canonicalEncoder) writeRune(value rune) error {
+	return e.writeLiteral(string(value))
 }
 
 func (e *canonicalEncoder) write(value reflect.Value) error {
 	if !value.IsValid() {
-		e.out.WriteString("null")
-		return nil
+		return e.writeLiteral("null")
 	}
 	if value.Kind() == reflect.Interface {
 		if value.IsNil() {
-			e.out.WriteString("null")
-			return nil
+			return e.writeLiteral("null")
 		}
 		return e.write(value.Elem())
 	}
 	if value.Kind() == reflect.Pointer {
 		if value.IsNil() {
-			e.out.WriteString("null")
-			return nil
+			return e.writeLiteral("null")
 		}
 		return e.withVisit(value, func() error { return e.write(value.Elem()) })
 	}
@@ -94,8 +119,7 @@ func (e *canonicalEncoder) write(value reflect.Value) error {
 		if err := ValidateCanonical(raw); err != nil {
 			return fmt.Errorf("raw JSON: %w", err)
 		}
-		e.out.Write(raw)
-		return nil
+		return e.writeBytes(raw)
 	}
 	if value.Type() == numberType {
 		return e.writeNumber(value.Interface().(json.Number).String())
@@ -110,19 +134,18 @@ func (e *canonicalEncoder) write(value reflect.Value) error {
 
 	switch value.Kind() {
 	case reflect.Bool:
-		e.out.WriteString(strconv.FormatBool(value.Bool()))
+		return e.writeLiteral(strconv.FormatBool(value.Bool()))
 	case reflect.String:
 		return e.writeString(value.String())
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		e.out.WriteString(strconv.FormatInt(value.Int(), 10))
+		return e.writeLiteral(strconv.FormatInt(value.Int(), 10))
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
-		e.out.WriteString(strconv.FormatUint(value.Uint(), 10))
+		return e.writeLiteral(strconv.FormatUint(value.Uint(), 10))
 	case reflect.Float32, reflect.Float64:
 		return fmt.Errorf("canonical JSON does not permit floating-point values")
 	case reflect.Slice:
 		if value.IsNil() {
-			e.out.WriteString("null")
-			return nil
+			return e.writeLiteral("null")
 		}
 		return e.withVisit(value, func() error { return e.writeArray(value) })
 	case reflect.Array:
@@ -132,8 +155,7 @@ func (e *canonicalEncoder) write(value reflect.Value) error {
 			return fmt.Errorf("canonical JSON object key type is %s, want string", value.Type().Key())
 		}
 		if value.IsNil() {
-			e.out.WriteString("null")
-			return nil
+			return e.writeLiteral("null")
 		}
 		return e.withVisit(value, func() error { return e.writeMap(value) })
 	case reflect.Struct:
@@ -141,7 +163,6 @@ func (e *canonicalEncoder) write(value reflect.Value) error {
 	default:
 		return fmt.Errorf("canonical JSON does not support %s", value.Kind())
 	}
-	return nil
 }
 
 func (e *canonicalEncoder) writeNumber(value string) error {
@@ -159,11 +180,9 @@ func (e *canonicalEncoder) writeNumber(value string) error {
 		}
 	}
 	if negative && digits == "0" {
-		e.out.WriteByte('0')
-		return nil
+		return e.writeByte('0')
 	}
-	e.out.WriteString(value)
-	return nil
+	return e.writeLiteral(value)
 }
 
 func (e *canonicalEncoder) withVisit(value reflect.Value, write func() error) error {
@@ -179,40 +198,48 @@ func (e *canonicalEncoder) withVisit(value reflect.Value, write func() error) er
 }
 
 func (e *canonicalEncoder) writeArray(value reflect.Value) error {
-	e.out.WriteByte('[')
+	if err := e.writeByte('['); err != nil {
+		return err
+	}
 	for i := 0; i < value.Len(); i++ {
 		if i > 0 {
-			e.out.WriteByte(',')
+			if err := e.writeByte(','); err != nil {
+				return err
+			}
 		}
 		if err := e.write(value.Index(i)); err != nil {
 			return err
 		}
 	}
-	e.out.WriteByte(']')
-	return nil
+	return e.writeByte(']')
 }
 
 func (e *canonicalEncoder) writeMap(value reflect.Value) error {
 	keys := value.MapKeys()
 	sort.Slice(keys, func(i, j int) bool { return keys[i].String() < keys[j].String() })
-	e.out.WriteByte('{')
+	if err := e.writeByte('{'); err != nil {
+		return err
+	}
 	for i, key := range keys {
 		if !utf8.ValidString(key.String()) {
 			return fmt.Errorf("canonical JSON object key is not valid UTF-8")
 		}
 		if i > 0 {
-			e.out.WriteByte(',')
+			if err := e.writeByte(','); err != nil {
+				return err
+			}
 		}
 		if err := e.writeString(key.String()); err != nil {
 			return err
 		}
-		e.out.WriteByte(':')
+		if err := e.writeByte(':'); err != nil {
+			return err
+		}
 		if err := e.write(value.MapIndex(key)); err != nil {
 			return err
 		}
 	}
-	e.out.WriteByte('}')
-	return nil
+	return e.writeByte('}')
 }
 
 type canonicalField struct {
@@ -246,54 +273,82 @@ func (e *canonicalEncoder) writeStruct(value reflect.Value) error {
 		fields = append(fields, canonicalField{name: name, value: fieldValue})
 	}
 	sort.Slice(fields, func(i, j int) bool { return fields[i].name < fields[j].name })
-	e.out.WriteByte('{')
+	if err := e.writeByte('{'); err != nil {
+		return err
+	}
 	for i, field := range fields {
 		if i > 0 {
-			e.out.WriteByte(',')
+			if err := e.writeByte(','); err != nil {
+				return err
+			}
 		}
 		if err := e.writeString(field.name); err != nil {
 			return err
 		}
-		e.out.WriteByte(':')
+		if err := e.writeByte(':'); err != nil {
+			return err
+		}
 		if err := e.write(field.value); err != nil {
 			return err
 		}
 	}
-	e.out.WriteByte('}')
-	return nil
+	return e.writeByte('}')
 }
 
 func (e *canonicalEncoder) writeString(value string) error {
 	if !utf8.ValidString(value) {
 		return fmt.Errorf("canonical JSON string is not valid UTF-8")
 	}
-	e.out.WriteByte('"')
+	if err := e.writeByte('"'); err != nil {
+		return err
+	}
 	for _, r := range value {
 		switch r {
 		case '"', '\\':
-			e.out.WriteByte('\\')
-			e.out.WriteRune(r)
+			if err := e.writeByte('\\'); err != nil {
+				return err
+			}
+			if err := e.writeRune(r); err != nil {
+				return err
+			}
 		case '\b':
-			e.out.WriteString(`\b`)
+			if err := e.writeLiteral(`\b`); err != nil {
+				return err
+			}
 		case '\t':
-			e.out.WriteString(`\t`)
+			if err := e.writeLiteral(`\t`); err != nil {
+				return err
+			}
 		case '\n':
-			e.out.WriteString(`\n`)
+			if err := e.writeLiteral(`\n`); err != nil {
+				return err
+			}
 		case '\f':
-			e.out.WriteString(`\f`)
+			if err := e.writeLiteral(`\f`); err != nil {
+				return err
+			}
 		case '\r':
-			e.out.WriteString(`\r`)
+			if err := e.writeLiteral(`\r`); err != nil {
+				return err
+			}
 		default:
 			if r < 0x20 {
 				const hexDigits = "0123456789abcdef"
-				e.out.WriteString(`\u00`)
-				e.out.WriteByte(hexDigits[byte(r)>>4])
-				e.out.WriteByte(hexDigits[byte(r)&0x0f])
+				if err := e.writeLiteral(`\u00`); err != nil {
+					return err
+				}
+				if err := e.writeByte(hexDigits[byte(r)>>4]); err != nil {
+					return err
+				}
+				if err := e.writeByte(hexDigits[byte(r)&0x0f]); err != nil {
+					return err
+				}
 			} else {
-				e.out.WriteRune(r)
+				if err := e.writeRune(r); err != nil {
+					return err
+				}
 			}
 		}
 	}
-	e.out.WriteByte('"')
-	return nil
+	return e.writeByte('"')
 }

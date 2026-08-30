@@ -156,7 +156,7 @@ func scanSnapshotHead(row snapshotScanner) (snapshot.Head, map[string]int64, err
 		return snapshot.Head{}, nil, integrityStoreError("invalid counts")
 	}
 	head.Counts = counts
-	if err := snapshot.ValidateHeadV1(head, counts); err != nil {
+	if err := snapshot.ValidateHead(head, counts); err != nil {
 		return snapshot.Head{}, nil, err
 	}
 	return head, counts, nil

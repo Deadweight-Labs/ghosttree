@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -20,6 +21,50 @@ type failingSnapshotMirror struct{ calls int }
 func (m *failingSnapshotMirror) Rebuild(context.Context, string) error {
 	m.calls++
 	return errors.New("disk unavailable")
+}
+
+func TestContextSnapshotHTTPRejectsProjectAliasesBeforeDependencies(t *testing.T) {
+	closedStore, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := closedStore.Close(); err != nil {
+		t.Fatal(err)
+	}
+	mirror := &failingSnapshotMirror{}
+	a := newAPI(closedStore, WithSnapshotMirror(mirror))
+	git := snapshot.GitProvenance{ObjectFormat: "sha1", Commit: strings.Repeat("a", 40), MetadataSource: "client-reported"}
+	createBody, err := json.Marshal(snapshot.CreateInput{Project: " HTTPS://GitHub.com/Example/Repo.git ", Name: "alias", Git: git, GitRecheck: &git})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name    string
+		request *http.Request
+		handle  func(http.ResponseWriter, *http.Request)
+	}{
+		{name: "create", request: httptest.NewRequest(http.MethodPost, "/api/context-snapshots", bytes.NewReader(createBody)), handle: a.createContextSnapshot},
+		{name: "list", request: httptest.NewRequest(http.MethodGet, "/api/context-snapshots?project=+HTTPS%3A%2F%2FGitHub.com%2FExample%2FRepo.git+", nil), handle: a.listContextSnapshots},
+		{name: "head", request: httptest.NewRequest(http.MethodGet, "/api/context-snapshots/n?project=+HTTPS%3A%2F%2FGitHub.com%2FExample%2FRepo.git+", nil), handle: a.getContextSnapshot},
+		{name: "entries", request: httptest.NewRequest(http.MethodGet, "/api/context-snapshots/n/entries?project=+HTTPS%3A%2F%2FGitHub.com%2FExample%2FRepo.git+", nil), handle: a.contextSnapshotEntries},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.request.SetPathValue("name", "n")
+			tc.request = tc.request.WithContext(context.WithValue(tc.request.Context(), personKey{}, store.Principal{ID: "person:1", Label: "closed"}))
+			recorder := httptest.NewRecorder()
+			tc.handle(recorder, tc.request)
+			var rule snapshot.RuleError
+			if err := json.Unmarshal(recorder.Body.Bytes(), &rule); err != nil {
+				t.Fatal(err)
+			}
+			if recorder.Code != http.StatusBadRequest || rule.Code != "snapshot_invalid_input" {
+				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+		})
+	}
+	if mirror.calls != 0 {
+		t.Fatalf("mirror called %d times", mirror.calls)
+	}
 }
 
 func TestContextSnapshotHTTPCreateRejectsOversizedBodyBeforeAccessOrStore(t *testing.T) {
@@ -331,5 +376,92 @@ func TestContextSnapshotHTTPStatusContract(t *testing.T) {
 		if snapshotStatusByCode[code] != status {
 			t.Fatalf("%s=%d want %d", code, snapshotStatusByCode[code], status)
 		}
+	}
+}
+
+func TestSnapshotInternalErrorIsOpaqueAndCorrelated(t *testing.T) {
+	internalErr := errors.New("secret sqlite path /srv/private.db")
+	var loggedID string
+	var loggedErr, loggedGeneratorErr error
+	a := newAPI(nil,
+		WithOperationIDGenerator(func() (string, error) { return "operation-fixed", nil }),
+		withSnapshotErrorLogger(func(operationID string, err, generatorErr error) {
+			loggedID, loggedErr, loggedGeneratorErr = operationID, err, generatorErr
+		}),
+	)
+	recorder := httptest.NewRecorder()
+	a.writeSnapshotError(recorder, internalErr)
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d", recorder.Code)
+	}
+	var response snapshot.RuleError
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != "snapshot_internal_error" || response.Message != "internal snapshot operation failed" || response.Details["operation_id"] != "operation-fixed" {
+		t.Fatalf("response=%+v", response)
+	}
+	if strings.Contains(recorder.Body.String(), "secret sqlite") || loggedID != "operation-fixed" || !errors.Is(loggedErr, internalErr) || loggedGeneratorErr != nil {
+		t.Fatalf("body=%s logged_id=%q logged_err=%v generator_err=%v", recorder.Body.String(), loggedID, loggedErr, loggedGeneratorErr)
+	}
+}
+
+func TestSnapshotInternalErrorUsesCorrelatedFallbackWhenIDGenerationFails(t *testing.T) {
+	generatorErr := errors.New("random source unavailable")
+	var loggedID string
+	var loggedGeneratorErr error
+	a := newAPI(nil,
+		WithOperationIDGenerator(func() (string, error) { return "", generatorErr }),
+		withSnapshotErrorLogger(func(operationID string, _, gotGeneratorErr error) {
+			loggedID, loggedGeneratorErr = operationID, gotGeneratorErr
+		}),
+	)
+	recorder := httptest.NewRecorder()
+	a.writeSnapshotError(recorder, errors.New("internal"))
+	var response snapshot.RuleError
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	operationID, _ := response.Details["operation_id"].(string)
+	if recorder.Code != http.StatusInternalServerError || operationID == "" || operationID != loggedID || !errors.Is(loggedGeneratorErr, generatorErr) {
+		t.Fatalf("status=%d response=%+v logged_id=%q generator_err=%v", recorder.Code, response, loggedID, loggedGeneratorErr)
+	}
+}
+
+func TestSnapshotErrorRecognizesWrappedRuleError(t *testing.T) {
+	a := newAPI(nil)
+	recorder := httptest.NewRecorder()
+	a.writeSnapshotError(recorder, fmt.Errorf("wrapped: %w", &snapshot.RuleError{
+		Code: "snapshot_name_conflict", ExistingDigest: "old", RequestedDigest: "new",
+		ExistingGitCommit: "aaa", RequestedGitCommit: "bbb",
+	}))
+	var response snapshot.RuleError
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if recorder.Code != http.StatusConflict || response.ExistingGitCommit != "aaa" || response.RequestedGitCommit != "bbb" {
+		t.Fatalf("status=%d response=%+v", recorder.Code, response)
+	}
+}
+
+func TestSnapshotErrorMakesUnknownAndIntegrityRuleErrorsOpaque(t *testing.T) {
+	for _, code := range []string{"snapshot_future_internal", "snapshot_integrity_error"} {
+		t.Run(code, func(t *testing.T) {
+			var logged error
+			a := newAPI(nil,
+				WithOperationIDGenerator(func() (string, error) { return "operation-rule", nil }),
+				withSnapshotErrorLogger(func(_ string, err, _ error) { logged = err }),
+			)
+			cause := fmt.Errorf("wrapped: %w", &snapshot.RuleError{Code: code, Message: "secret internal detail", Details: map[string]any{"path": "/private"}})
+			recorder := httptest.NewRecorder()
+			a.writeSnapshotError(recorder, cause)
+			var response snapshot.RuleError
+			if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+				t.Fatal(err)
+			}
+			if recorder.Code != http.StatusInternalServerError || response.Code != "snapshot_internal_error" || response.Details["operation_id"] != "operation-rule" || strings.Contains(recorder.Body.String(), "secret internal detail") || !errors.Is(logged, cause) {
+				t.Fatalf("status=%d response=%+v body=%s logged=%v", recorder.Code, response, recorder.Body.String(), logged)
+			}
+		})
 	}
 }
