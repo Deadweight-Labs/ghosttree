@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-	"unicode/utf8"
 )
 
 type requestIDGenerator func() (string, error)
@@ -56,7 +55,7 @@ func (w *observedResponse) recordError(class, message string) {
 		return
 	}
 	w.record.errorClass = classifyRequestError(w.status, class, message)
-	w.record.errorMessage = truncateRunes(message, 512)
+	w.record.errorMessage = w.record.errorClass
 }
 
 type observedBody struct {
@@ -208,14 +207,6 @@ func classifyRequestError(status int, class, message string) string {
 	default:
 		return "client"
 	}
-}
-
-func truncateRunes(value string, limit int) string {
-	if limit < 0 || utf8.RuneCountInString(value) <= limit {
-		return value
-	}
-	runes := []rune(value)
-	return string(runes[:limit])
 }
 
 func discardLogger() *slog.Logger {
