@@ -103,7 +103,7 @@ type requestCriterionV1 struct {
 }
 type requestEvidenceV1 struct {
 	ID          int64           `json:"id"`
-	CriterionID int64           `json:"criterion_id"`
+	CriterionID int64           `json:"criterion_id,omitempty"`
 	Kind        string          `json:"kind"`
 	Ref         string          `json:"ref"`
 	Person      snapshotActorV1 `json:"person"`
@@ -156,6 +156,7 @@ type requestPayloadV1 struct {
 	CreatedAt   string               `json:"created_at"`
 	UpdatedAt   string               `json:"updated_at"`
 	Criteria    []requestCriterionV1 `json:"criteria"`
+	Evidence    []requestEvidenceV1  `json:"evidence"`
 	Relations   []requestRelationV1  `json:"relations"`
 	Activity    []requestActivityV1  `json:"activity"`
 	Sightings   []requestSightingV1  `json:"sightings"`
@@ -423,6 +424,29 @@ func captureRequestLists(ctx context.Context, q snapshotQueryer, p *requestPaylo
 	cr.Close()
 	if p.Criteria == nil {
 		p.Criteria = []requestCriterionV1{}
+	}
+	er, err := q.QueryContext(ctx, `SELECT e.id,e.kind,e.ref,e.person,pe.id,e.created_at FROM request_evidence e LEFT JOIN persons pe ON pe.name=e.person WHERE e.request_id=? AND e.criterion_id IS NULL ORDER BY e.id`, p.ID)
+	if err != nil {
+		return err
+	}
+	for er.Next() {
+		var e requestEvidenceV1
+		var label string
+		var id sql.NullInt64
+		if err := er.Scan(&e.ID, &e.Kind, &e.Ref, &label, &id, &e.CreatedAt); err != nil {
+			er.Close()
+			return err
+		}
+		e.Person = actor(id, label)
+		p.Evidence = append(p.Evidence, e)
+	}
+	if err := er.Err(); err != nil {
+		er.Close()
+		return err
+	}
+	er.Close()
+	if p.Evidence == nil {
+		p.Evidence = []requestEvidenceV1{}
 	}
 	rr, err := q.QueryContext(ctx, `SELECT id,COALESCE(other_request_id,0),COALESCE(knowledge_id,0),kind,external_ref,created_at FROM request_relations WHERE request_id=? ORDER BY id`, p.ID)
 	if err != nil {
