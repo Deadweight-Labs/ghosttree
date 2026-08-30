@@ -151,6 +151,7 @@ func TestGeneratedPathRegistryIsExactAndKeepsOperatorFilesRelevant(t *testing.T)
 	for _, path := range []string{
 		".ghosttree/tree/internal/x.md",
 		".ghosttree/snapshots/INDEX.md",
+		".ghosttree/snapshots/.INDEX.md.tmp-123",
 		".ghosttree/INDEX.md",
 	} {
 		if !IsGeneratedPath(path) {
@@ -159,6 +160,7 @@ func TestGeneratedPathRegistryIsExactAndKeepsOperatorFilesRelevant(t *testing.T)
 	}
 	for _, path := range []string{
 		".ghosttree/snapshots/operator.md",
+		".ghosttree/snapshots/.INDEX.md.tmp-operator",
 		".ghosttree/operator-note",
 		".ghosttree/INDEX.md.backup",
 	} {

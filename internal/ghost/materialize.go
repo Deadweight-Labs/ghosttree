@@ -124,7 +124,7 @@ func IsGeneratedPath(path string) bool {
 			return true
 		}
 	}
-	return false
+	return isSnapshotIndexTempPath(path)
 }
 
 var fingerprintGeneratedTrees = []string{
@@ -160,6 +160,10 @@ func IsFingerprintGeneratedPath(path string) bool {
 			return true
 		}
 	}
+	return isSnapshotIndexTempPath(path)
+}
+
+func isSnapshotIndexTempPath(path string) bool {
 	if !strings.HasPrefix(path, fingerprintSnapshotTempPrefix) {
 		return false
 	}
