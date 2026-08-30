@@ -4,6 +4,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -26,7 +27,7 @@ type RuntimeStats struct {
 	DatabaseBytes, WALBytes, SHMBytes int64
 }
 
-const initialFileMaxOpenConns = 1
+const defaultFileMaxOpenConns = 1
 
 const schema = `
 CREATE TABLE IF NOT EXISTS persons(
@@ -372,7 +373,7 @@ CREATE TABLE IF NOT EXISTS document_revisions(
 `
 
 func Open(path string) (*Store, error) {
-	maxOpenConns := initialFileMaxOpenConns
+	maxOpenConns := defaultFileMaxOpenConns
 	if sqliteFilePath(path) == "" {
 		maxOpenConns = 1
 	}
@@ -387,8 +388,10 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 	if dbPath == "" {
 		options.MaxOpenConns = 1
 	}
-	if err := prepareDatabaseFiles(path); err != nil {
-		return nil, err
+	if dbPath != "" {
+		if err := prepareDatabaseFiles(dbPath); err != nil {
+			return nil, err
+		}
 	}
 	db, err := sql.Open("sqlite", storeSQLiteDSN(path))
 	if err != nil {
@@ -457,7 +460,13 @@ func sqliteFilePath(path string) string {
 	if path == ":memory:" || strings.HasPrefix(path, "file::memory:") {
 		return ""
 	}
-	path, _, _ = strings.Cut(path, "?")
+	path, rawQuery, _ := strings.Cut(path, "?")
+	if strings.HasPrefix(path, "file:") {
+		query, err := url.ParseQuery(rawQuery)
+		if err == nil && strings.EqualFold(query.Get("mode"), "memory") {
+			return ""
+		}
+	}
 	return strings.TrimPrefix(path, "file:")
 }
 

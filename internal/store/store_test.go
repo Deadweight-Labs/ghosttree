@@ -133,6 +133,22 @@ func TestRuntimeStatsForMemoryStoreHasNoFileSizes(t *testing.T) {
 	}
 }
 
+func TestOpenPinsMemoryModeURIWithoutFilesystemSideEffects(t *testing.T) {
+	filePath := filepath.Join(t.TempDir(), "shared-memory.db")
+	s, err := OpenWithOptions("file:"+filePath+"?mode=memory&cache=shared", OpenOptions{MaxOpenConns: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	stats := s.RuntimeStats()
+	if stats.DB.MaxOpenConnections != 1 || stats.DatabaseBytes != 0 || stats.WALBytes != 0 || stats.SHMBytes != 0 {
+		t.Fatalf("stats = %+v", stats)
+	}
+	if _, err := os.Stat(filePath); !os.IsNotExist(err) {
+		t.Fatalf("memory URI created %q: %v", filePath, err)
+	}
+}
+
 func legacyDomainFingerprint(t *testing.T, db *sql.DB) (int, string) {
 	t.Helper()
 	var knowledgeTitle, knowledgeBody, ghostPath, ghostDescription string
