@@ -5,21 +5,30 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
 func TestWriteSyncedNoFollowRejectsStaticSymlinkDestination(t *testing.T) {
-	dir := t.TempDir()
+	root := t.TempDir()
+	dir := filepath.Join(root, "real")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(root, "alias")
+	if err := os.Symlink(dir, alias); err != nil {
+		t.Fatal(err)
+	}
 	target := filepath.Join(dir, "target")
-	path := filepath.Join(dir, "INDEX.md")
+	path := filepath.Join(alias, "INDEX.md")
 	if err := os.WriteFile(target, []byte("target"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(target, path); err != nil {
 		t.Fatal(err)
 	}
-	if err := WriteSyncedNoFollow(path, []byte("replacement"), 0o600); err == nil {
-		t.Fatal("symlink destination accepted")
+	if err := WriteSyncedNoFollow(path, []byte("replacement"), 0o600); err == nil || !strings.Contains(err.Error(), "destination") {
+		t.Fatalf("symlink destination error=%v", err)
 	}
 	b, err := os.ReadFile(target)
 	if err != nil || string(b) != "target" {
@@ -27,7 +36,7 @@ func TestWriteSyncedNoFollowRejectsStaticSymlinkDestination(t *testing.T) {
 	}
 }
 
-func TestWriteSyncedNoFollowRejectsStaticSymlinkDirectory(t *testing.T) {
+func TestWriteSyncedNoFollowAllowsSymlinkedDirectoryAncestor(t *testing.T) {
 	root := t.TempDir()
 	realDir := filepath.Join(root, "real")
 	linkedDir := filepath.Join(root, "linked")
@@ -37,11 +46,12 @@ func TestWriteSyncedNoFollowRejectsStaticSymlinkDirectory(t *testing.T) {
 	if err := os.Symlink(realDir, linkedDir); err != nil {
 		t.Fatal(err)
 	}
-	if err := WriteSyncedNoFollow(filepath.Join(linkedDir, "INDEX.md"), []byte("index"), 0o600); err == nil {
-		t.Fatal("symlinked destination directory accepted")
+	if err := WriteSyncedNoFollow(filepath.Join(linkedDir, "INDEX.md"), []byte("index"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(realDir, "INDEX.md")); !os.IsNotExist(err) {
-		t.Fatalf("write escaped through directory symlink: %v", err)
+	assertFile(t, filepath.Join(realDir, "INDEX.md"), "index", 0o600)
+	if matches, err := filepath.Glob(filepath.Join(realDir, ".INDEX.md.tmp-*")); err != nil || len(matches) != 0 {
+		t.Fatalf("temporary files=%v err=%v", matches, err)
 	}
 }
 

@@ -65,6 +65,22 @@ func TestSnapshotCommandExportIsStdoutPureAndRejectsSymlinkOutput(t *testing.T) 
 	if body, _ := os.ReadFile(target); string(body) != "keep" {
 		t.Fatalf("symlink target changed: %q", body)
 	}
+
+	realDir := t.TempDir()
+	alias := filepath.Join(t.TempDir(), "output-alias")
+	if err := os.Symlink(realDir, alias); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(alias, "export.json")
+	out.Reset()
+	diagnostics.Reset()
+	if code := cmdSnapshot([]string{"export", head.Name, "-o", output, repo}, &out, &diagnostics); code != 0 {
+		t.Fatalf("symlink-ancestor export exit=%d out=%q diagnostics=%q", code, out.String(), diagnostics.String())
+	}
+	body, err := os.ReadFile(filepath.Join(realDir, "export.json"))
+	if err != nil || !json.Valid(bytes.TrimSuffix(body, []byte{'\n'})) {
+		t.Fatalf("export body=%q err=%v", body, err)
+	}
 }
 
 func snapshotCLIRepo(t *testing.T) string {

@@ -100,6 +100,30 @@ func TestRebuildRejectsSymlinkedSnapshotDirectoryWithoutChangingTarget(t *testin
 	}
 }
 
+func TestRebuildAllowsSymlinkedRepositoryAncestor(t *testing.T) {
+	root := t.TempDir()
+	realParent := filepath.Join(root, "real")
+	if err := os.Mkdir(realParent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(root, "alias")
+	if err := os.Symlink(realParent, alias); err != nil {
+		t.Fatal(err)
+	}
+	realRepo := filepath.Join(realParent, "repo")
+	if err := os.Mkdir(realRepo, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	repoThroughAlias := filepath.Join(alias, "repo")
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	if err := Rebuild(context.Background(), staticLister{heads: []snapshot.Head{{Name: "mark"}}}, repoThroughAlias, "project"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(realRepo, ".ghosttree", "snapshots", "INDEX.md")); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestProjectLockPathResolvesRepositoryAliases(t *testing.T) {
 	realRepo := t.TempDir()
 	alias := filepath.Join(t.TempDir(), "repo-alias")

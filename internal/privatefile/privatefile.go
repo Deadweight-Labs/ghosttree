@@ -75,10 +75,10 @@ var (
 
 // WriteSyncedNoFollow writes data through a private inode in the destination
 // directory, flushes it, atomically replaces the destination, and flushes the
-// directory entry. It rejects symlink destinations and directory components
-// observed during validation. Callers must prevent concurrent namespace
-// mutation; the path-based portable implementation is not a dirfd/handle-
-// relative defense against an active rename race.
+// directory entry. It resolves the existing destination directory once and
+// rejects a symlink at the final filename. Callers must prevent concurrent
+// namespace mutation; the path-based portable implementation is not a
+// dirfd/handle-relative defense against an active rename race.
 func WriteSyncedNoFollow(path string, data []byte, mode fs.FileMode) (err error) {
 	writeOpsMu.Lock()
 	ops := writeOps
@@ -86,10 +86,11 @@ func WriteSyncedNoFollow(path string, data []byte, mode fs.FileMode) (err error)
 	if mode&^fs.FileMode(0o777) != 0 {
 		return fmt.Errorf("privatefile: invalid mode %v", mode)
 	}
-	dir := filepath.Dir(path)
-	if err := rejectSymlinkPath(dir); err != nil {
+	dir, err := filepath.EvalSymlinks(filepath.Dir(path))
+	if err != nil {
 		return err
 	}
+	path = filepath.Join(dir, filepath.Base(path))
 
 	var old []byte
 	var oldMode fs.FileMode
@@ -118,6 +119,9 @@ func WriteSyncedNoFollow(path string, data []byte, mode fs.FileMode) (err error)
 		}
 		oldMode, hadOld = info.Mode().Perm(), true
 	} else if !os.IsNotExist(openErr) {
+		if info, statErr := os.Lstat(path); statErr == nil && info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("privatefile: destination is a symlink: %s", path)
+		}
 		return openErr
 	}
 
@@ -159,50 +163,6 @@ func WriteSyncedNoFollow(path string, data []byte, mode fs.FileMode) (err error)
 		return fmt.Errorf("sync destination directory: %w", err)
 	}
 	return nil
-}
-
-func rejectSymlinkPath(path string) error {
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return err
-	}
-	volume := filepath.VolumeName(abs)
-	current := string(filepath.Separator)
-	if volume != "" {
-		current = volume + string(filepath.Separator)
-	}
-	rel := stringsTrimVolume(abs, volume)
-	for _, component := range splitPath(rel) {
-		current = filepath.Join(current, component)
-		info, err := os.Lstat(current)
-		if err != nil {
-			return err
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("privatefile: directory path contains symlink: %s", current)
-		}
-		if !info.IsDir() {
-			return fmt.Errorf("privatefile: directory component is not a directory: %s", current)
-		}
-	}
-	return nil
-}
-
-func stringsTrimVolume(path, volume string) string {
-	path = path[len(volume):]
-	return filepath.Clean(path)
-}
-
-func splitPath(path string) []string {
-	var out []string
-	for path != "." && path != string(filepath.Separator) && path != "" {
-		dir, base := filepath.Split(path)
-		if base != "" {
-			out = append([]string{base}, out...)
-		}
-		path = filepath.Clean(dir)
-	}
-	return out
 }
 
 func restore(path string, old []byte, oldMode fs.FileMode, hadOld bool) error {
