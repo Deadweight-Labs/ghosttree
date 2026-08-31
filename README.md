@@ -68,8 +68,8 @@ happens.
 - Versioned documents with local drafts, optimistic concurrency, byte-preserved
   UTF-8 revisions, history, diff, rename, archive, and provenance-backed import.
 - Immutable named snapshots that materialize a consistent project-context
-  state, bind it to observed Git provenance, and remain independently
-  exportable and verifiable after live context changes.
+  state, bind their recorded Git provenance and entries into one digest, and
+  remain independently exportable and verifiable after live context changes.
 - A read-only web interface for operators.
 
 Run `ctx` or `ctx <command>` without arguments to see the available command
@@ -154,6 +154,14 @@ It does not reconstruct context from an old Git checkout: `created_at` is the
 real creation time, while the Git fields record the observed checkout. A
 release-style name requires the local tag, its peeled commit to equal `HEAD`,
 and normally a clean worktree.
+
+Snapshot schema 3 binds the immutable metadata head and every ordered entry
+digest into `content_digest`. A complete export can therefore detect changes to
+either provenance metadata or payloads. A domain/key-filtered export is only a
+projection: it verifies each included payload but does not claim to prove the
+snapshot-wide digest. For remote creates, CLI and MCP observe Git locally just
+before the request and the server records the source as `client-reported`; the
+server does not have the checkout and cannot repeat that observation itself.
 
 Sealed snapshots have no update, delete, or redaction API. Treat messages and
 all snapshotted context as permanent, keep secrets out, and use `show` before

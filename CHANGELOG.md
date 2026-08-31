@@ -12,6 +12,10 @@ Versioning, with pre-1.0 compatibility rules described in
 - Add authenticated REST, CLI, and bounded MCP snapshot creation and reads,
   canonical export verification, Git/release provenance, per-project grants,
   finite resource budgets, and a regenerable locked metadata mirror.
+- Bind schema-3 snapshot metadata and entries into one digest, make projection
+  verification explicitly partial, reject misleading release-like names, and
+  label remote Git provenance as client-reported without a fictitious server
+  recheck.
 - Add additive snapshot-schema startup checks without historical backfill;
   existing live context and session data remain unchanged.
 

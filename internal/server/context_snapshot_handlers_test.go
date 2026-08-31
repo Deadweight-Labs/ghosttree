@@ -337,6 +337,37 @@ func TestContextSnapshotHTTPAccessFiltersAndTypedErrors(t *testing.T) {
 	}
 }
 
+func TestContextSnapshotHTTPCreateWithoutProjectGrantIsForbidden(t *testing.T) {
+	st, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	token, _ := st.AddPerson("denied")
+	srv := httptest.NewServer(New(st))
+	t.Cleanup(srv.Close)
+	git := snapshot.GitProvenance{ObjectFormat: "sha1", Commit: strings.Repeat("d", 40), MetadataSource: "client-reported"}
+	resp := req(t, "POST", srv.URL+"/api/context-snapshots", token, snapshot.CreateInput{Project: "p", Name: "checkpoint", Git: git})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status=%d, want 403", resp.StatusCode)
+	}
+	var rule snapshot.RuleError
+	if err := json.NewDecoder(resp.Body).Decode(&rule); err != nil {
+		t.Fatal(err)
+	}
+	if rule.Code != "snapshot_access_forbidden" {
+		t.Fatalf("code=%q", rule.Code)
+	}
+	var heads int
+	if err := st.DB().QueryRow(`SELECT count(*) FROM context_snapshots`).Scan(&heads); err != nil {
+		t.Fatal(err)
+	}
+	if heads != 0 {
+		t.Fatalf("forbidden create left %d heads", heads)
+	}
+}
+
 func TestContextSnapshotHTTPRejectsNonCanonicalReleaseLikeNames(t *testing.T) {
 	st, err := store.Open(":memory:")
 	if err != nil {
