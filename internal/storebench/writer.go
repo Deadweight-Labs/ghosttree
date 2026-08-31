@@ -15,11 +15,11 @@ var (
 )
 
 type QueueConfig struct {
-	MaxOperations   int
-	MaxBytes        int64
-	MaxBatch        int
-	GatherWindow    time.Duration
-	ReadConnections int
+	MaxOperations   int           `json:"max_operations"`
+	MaxBytes        int64         `json:"max_bytes"`
+	MaxBatch        int           `json:"max_batch"`
+	GatherWindow    time.Duration `json:"gather_window_ns"`
+	ReadConnections int           `json:"read_connections"`
 }
 
 type batchExecutor func(context.Context, []Operation) []error
@@ -27,6 +27,18 @@ type batchExecutor func(context.Context, []Operation) []error
 type writeRequest struct {
 	operation Operation
 	result    chan error
+	accepted  time.Time
+}
+
+type writerStats struct {
+	Batches                 int64
+	BatchedOperations       int64
+	QueueWait               DurationSummary
+	BatchSize               ValueSummary
+	MaximumDepth            int
+	MaximumBytes            int64
+	MaximumOutstanding      int
+	MaximumOutstandingBytes int64
 }
 
 type writer struct {
@@ -34,13 +46,21 @@ type writer struct {
 	execute batchExecutor
 	queue   chan *writeRequest
 
-	mu                 sync.Mutex
-	closed             bool
-	reservedOperations int
-	reservedBytes      int64
-	wg                 sync.WaitGroup
-	batches            atomic.Int64
-	batchedOperations  atomic.Int64
+	mu                      sync.Mutex
+	closed                  bool
+	reservedOperations      int
+	reservedBytes           int64
+	queuedOperations        int
+	queuedBytes             int64
+	maximumDepth            int
+	maximumBytes            int64
+	maximumOutstanding      int
+	maximumOutstandingBytes int64
+	queueWaitSamples        []int64
+	batchSizeSamples        []int64
+	wg                      sync.WaitGroup
+	batches                 atomic.Int64
+	batchedOperations       atomic.Int64
 }
 
 func newWriter(config QueueConfig, execute batchExecutor) *writer {
@@ -57,7 +77,7 @@ func (w *writer) Submit(ctx context.Context, operation Operation) error {
 	if operation.PayloadBytes < 0 {
 		return fmt.Errorf("payload bytes must not be negative")
 	}
-	request := &writeRequest{operation: operation, result: make(chan error, 1)}
+	request := &writeRequest{operation: operation, result: make(chan error, 1), accepted: time.Now()}
 	w.mu.Lock()
 	if w.closed {
 		w.mu.Unlock()
@@ -69,6 +89,20 @@ func (w *writer) Submit(ctx context.Context, operation Operation) error {
 	}
 	w.reservedOperations++
 	w.reservedBytes += operation.PayloadBytes
+	w.queuedOperations++
+	w.queuedBytes += operation.PayloadBytes
+	if w.queuedOperations > w.maximumDepth {
+		w.maximumDepth = w.queuedOperations
+	}
+	if w.queuedBytes > w.maximumBytes {
+		w.maximumBytes = w.queuedBytes
+	}
+	if w.reservedOperations > w.maximumOutstanding {
+		w.maximumOutstanding = w.reservedOperations
+	}
+	if w.reservedBytes > w.maximumOutstandingBytes {
+		w.maximumOutstandingBytes = w.reservedBytes
+	}
 	w.queue <- request
 	w.mu.Unlock()
 	select {
@@ -90,8 +124,17 @@ func (w *writer) Close() error {
 	return nil
 }
 
-func (w *writer) stats() (int64, int64) {
-	return w.batches.Load(), w.batchedOperations.Load()
+func (w *writer) stats() writerStats {
+	w.mu.Lock()
+	waits := append([]int64(nil), w.queueWaitSamples...)
+	batchSizes := append([]int64(nil), w.batchSizeSamples...)
+	stats := writerStats{Batches: w.batches.Load(), BatchedOperations: w.batchedOperations.Load(),
+		MaximumDepth: w.maximumDepth, MaximumBytes: w.maximumBytes,
+		MaximumOutstanding: w.maximumOutstanding, MaximumOutstandingBytes: w.maximumOutstandingBytes}
+	w.mu.Unlock()
+	stats.QueueWait = summarizeDurations(waits)
+	stats.BatchSize = summarizeValues(batchSizes)
+	return stats
 }
 
 func (w *writer) run() {
@@ -102,6 +145,9 @@ func (w *writer) run() {
 		carry = nil
 		if !ok {
 			request, ok = <-w.queue
+			if ok {
+				w.markDequeued(request)
+			}
 		}
 		if !ok {
 			return
@@ -111,6 +157,7 @@ func (w *writer) run() {
 			group, carry = w.gatherChunks(group)
 		}
 		operations := make([]Operation, len(group))
+		w.recordExecutionStart(group, time.Now())
 		for i, item := range group {
 			operations[i] = item.operation
 		}
@@ -140,6 +187,7 @@ func (w *writer) gatherChunks(group []*writeRequest) ([]*writeRequest, *writeReq
 			if !ok {
 				return group, nil
 			}
+			w.markDequeued(next)
 			if next.operation.Kind != ChunksAppend {
 				return group, next
 			}
@@ -166,6 +214,7 @@ func (w *writer) gatherChunks(group []*writeRequest) ([]*writeRequest, *writeReq
 			if !ok {
 				return group, nil
 			}
+			w.markDequeued(next)
 			if next.operation.Kind != ChunksAppend {
 				return group, next
 			}
@@ -175,6 +224,22 @@ func (w *writer) gatherChunks(group []*writeRequest) ([]*writeRequest, *writeReq
 		}
 	}
 	return group, nil
+}
+
+func (w *writer) markDequeued(request *writeRequest) {
+	w.mu.Lock()
+	w.queuedOperations--
+	w.queuedBytes -= request.operation.PayloadBytes
+	w.mu.Unlock()
+}
+
+func (w *writer) recordExecutionStart(group []*writeRequest, started time.Time) {
+	w.mu.Lock()
+	for _, request := range group {
+		w.queueWaitSamples = append(w.queueWaitSamples, nonNegative(started.Sub(request.accepted).Nanoseconds()))
+	}
+	w.batchSizeSamples = append(w.batchSizeSamples, int64(len(group)))
+	w.mu.Unlock()
 }
 
 func (w *writer) complete(request *writeRequest, err error) {

@@ -88,12 +88,18 @@ func (b *queuedSQLite) Verify(ctx context.Context, expected Expected) error {
 func (b *queuedSQLite) Stats() BackendStats {
 	writable := b.core.store.RuntimeStats()
 	readers := b.reader.DB().Stats()
-	batches, operations := b.writer.stats()
-	return BackendStats{MaxOpenConnections: writable.DB.MaxOpenConnections + readers.MaxOpenConnections,
-		WaitCount:      writable.DB.WaitCount + readers.WaitCount,
-		WaitDurationNS: writable.DB.WaitDuration.Nanoseconds() + readers.WaitDuration.Nanoseconds(),
-		DatabaseBytes:  writable.DatabaseBytes, WALBytes: writable.WALBytes, SHMBytes: writable.SHMBytes,
-		Batches: batches, BatchedOperations: operations}
+	writerStats := b.writer.stats()
+	config := b.writer.config
+	return BackendStats{Engine: "sqlite", EngineVersion: sqliteVersion(b.core.store), QueueConfig: &config,
+		MaxOpenConnections: writable.DB.MaxOpenConnections + readers.MaxOpenConnections,
+		WaitCount:          writable.DB.WaitCount + readers.WaitCount,
+		WaitDurationNS:     writable.DB.WaitDuration.Nanoseconds() + readers.WaitDuration.Nanoseconds(),
+		DatabaseBytes:      writable.DatabaseBytes, WALBytes: writable.WALBytes, SHMBytes: writable.SHMBytes,
+		Batches: writerStats.Batches, BatchedOperations: writerStats.BatchedOperations,
+		WriterQueueWait: writerStats.QueueWait, WriterBatchSize: writerStats.BatchSize,
+		WriterQueueDepthMax: writerStats.MaximumDepth, WriterQueueBytesMax: writerStats.MaximumBytes,
+		WriterOutstandingMax:      writerStats.MaximumOutstanding,
+		WriterOutstandingBytesMax: writerStats.MaximumOutstandingBytes}
 }
 
 func (b *queuedSQLite) Close() error {

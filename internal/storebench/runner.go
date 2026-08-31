@@ -206,7 +206,7 @@ func makeReport(backend Backend, workload Workload, config RunConfig, samples ma
 	kinds := make(map[Kind]KindReport, len(samples))
 	for kind, values := range samples {
 		kinds[kind] = KindReport{Operations: len(values.total), Errors: values.errors,
-			Queue: summarizeDurations(values.queue), Execution: summarizeDurations(values.execution), Total: summarizeDurations(values.total)}
+			SchedulerWait: summarizeDurations(values.queue), Execution: summarizeDurations(values.execution), Total: summarizeDurations(values.total)}
 	}
 	duration := finished.Sub(started)
 	throughput := 0.0
@@ -217,6 +217,16 @@ func makeReport(backend Backend, workload Workload, config RunConfig, samples ma
 		Config: config, StartedAt: started.UTC().Format(time.RFC3339Nano), FinishedAt: finished.UTC().Format(time.RFC3339Nano),
 		DurationNS: duration.Nanoseconds(), Throughput: throughput, Operations: len(workload.Operations), Errors: operationErrors,
 		Kinds: kinds, BackendStats: backend.Stats()}
+}
+
+func summarizeValues(samples []int64) ValueSummary {
+	if len(samples) == 0 {
+		return ValueSummary{}
+	}
+	values := append([]int64(nil), samples...)
+	sort.Slice(values, func(i, j int) bool { return values[i] < values[j] })
+	return ValueSummary{Count: len(values), P50: nearestRank(values, 0.50), P95: nearestRank(values, 0.95),
+		P99: nearestRank(values, 0.99), Max: values[len(values)-1]}
 }
 
 func summarizeDurations(samples []int64) DurationSummary {

@@ -95,7 +95,7 @@ func (g *generator) sessions(project string, projectNumber int, scale Scale) {
 			payloadBytes += int64(len(chunk.Text) + len(chunk.Raw))
 		}
 		appendID := g.add(ChunksAppend, payloadBytes, []string{createID}, ChunksAppendPayload{Session: logicalID, Chunks: chunks})
-		g.add(SessionRead, 0, []string{appendID}, SessionReadPayload{Session: logicalID})
+		g.add(SessionRead, 0, []string{appendID}, SessionReadPayload{Session: logicalID, Chunks: chunks})
 		indexed := make(map[int]ChunkPayload, len(chunks))
 		for _, chunk := range chunks {
 			indexed[chunk.Seq] = chunk
@@ -106,8 +106,10 @@ func (g *generator) sessions(project string, projectNumber int, scale Scale) {
 
 func (g *generator) ghosts(project string, projectNumber int, scale Scale) {
 	last := ""
+	paths := make([]string, 0, scale.GhostFiles)
 	for n := range scale.GhostFiles {
 		path := fmt.Sprintf("packages/pkg-%04d/internal/file-%06d.go", n/100, n)
+		paths = append(paths, path)
 		description := g.body(scale.GhostBodyBytes)
 		payload := GhostPutPayload{Project: project, Path: path, Description: description,
 			ContentSHA: digest(description), LineCount: 1 + len(description)/80}
@@ -115,11 +117,12 @@ func (g *generator) ghosts(project string, projectNumber int, scale Scale) {
 		g.expected.Ghosts[project+"\x00"+path] = ExpectedGhost{Project: project, Path: path,
 			DescriptionDigest: digest(description), DescriptionBytes: len(description)}
 		if scale.ReadEvery > 0 && (n+1)%scale.ReadEvery == 0 {
-			g.add(GhostRead, 0, []string{last}, GhostReadPayload{Project: project, Path: path})
+			g.add(GhostRead, 0, []string{last}, GhostReadPayload{Project: project, Path: path,
+				DescriptionDigest: digest(description), ContentSHA: payload.ContentSHA, LineCount: payload.LineCount})
 		}
 	}
 	if last != "" {
-		g.add(GhostTree, 0, []string{last}, GhostTreePayload{Project: project, Prefix: "packages"})
+		g.add(GhostTree, 0, []string{last}, GhostTreePayload{Project: project, Prefix: "packages", ExpectedPaths: paths})
 	}
 	_ = projectNumber
 }
@@ -140,7 +143,9 @@ func (g *generator) documents(project string, projectNumber int, scale Scale) {
 			})
 			digests = append(digests, digest(body))
 		}
-		g.add(DocumentRead, 0, []string{previous}, DocumentReadPayload{Document: logicalID, Revision: len(digests)})
+		g.add(DocumentRead, 0, []string{previous}, DocumentReadPayload{
+			Document: logicalID, Revision: len(digests), Digest: digests[len(digests)-1],
+		})
 		g.expected.Documents[logicalID] = ExpectedDocument{Project: project, Slug: logicalID, RevisionDigests: digests}
 	}
 }
@@ -158,7 +163,7 @@ func (g *generator) migration(project string, projectNumber int, scale Scale) {
 	beginID := g.add(MigrationBegin, int64(scale.MigrationArtifacts*64), nil, MigrationBeginPayload{
 		LogicalID: logicalID, Project: project, Artifacts: artifacts,
 	})
-	g.add(MigrationRead, 0, []string{beginID}, MigrationReadPayload{Project: project})
+	g.add(MigrationRead, 0, []string{beginID}, MigrationReadPayload{Project: project, Artifacts: artifacts})
 	g.expected.Migrations[logicalID] = ExpectedMigration{Project: project, Artifacts: artifacts}
 }
 
