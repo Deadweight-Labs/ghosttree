@@ -199,11 +199,11 @@ func (r Report) WriteMarkdown(w io.Writer) error {
 	}
 
 	fmt.Fprint(w, "## Gepaarte Effekte\n\n")
-	fmt.Fprintln(w, "| Kontrast | Aufgaben | Effekt | 95 % KI |")
-	fmt.Fprintln(w, "|---|---|---|---|")
+	fmt.Fprintln(w, "| Kontrast | Metrik | Aufgaben | Effekt | 95 % KI |")
+	fmt.Fprintln(w, "|---|---|---|---|---|")
 	for _, e := range r.Effects {
-		fmt.Fprintf(w, "| %s − %s | %d | %+.3f | [%.2f, %.2f] |\n",
-			e.Treatment, e.Control, e.Tasks, e.Mean, e.LowerCI, e.UpperCI)
+		fmt.Fprintf(w, "| %s − %s | %s | %d | %+.3f | [%+.3f, %+.3f] |\n",
+			e.Treatment, e.Control, e.Metric, e.Tasks, e.Mean, e.LowerCI, e.UpperCI)
 	}
 
 	writeGroups := func(title string, groups []GroupSummary) {

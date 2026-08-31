@@ -94,3 +94,36 @@ func TestPairedBootstrapWidensWithVariance(t *testing.T) {
 		t.Fatalf("a noisier task set must widen the interval: tight=%+v wide=%+v", tight, wide)
 	}
 }
+
+func TestPairedBootstrapMetricMeasuresEffortToo(t *testing.T) {
+	// Beide Arme antworten gleich gut; der Unterschied liegt allein im
+	// Aufwand. Eine Auswertung, die nur die Trefferquote kennt, sieht hier
+	// nichts — und uebersieht genau das Ergebnis.
+	records := []RunRecord{
+		{TaskID: "t1", Arm: ArmGhosttree, Score: Score{FactRecall: 1},
+			Transcript: Transcript{Turns: 3, CostUSD: 0.05}},
+		{TaskID: "t1", Arm: ArmBare, Score: Score{FactRecall: 1},
+			Transcript: Transcript{Turns: 11, CostUSD: 0.17}},
+		{TaskID: "t2", Arm: ArmGhosttree, Score: Score{FactRecall: 1},
+			Transcript: Transcript{Turns: 4, CostUSD: 0.06}},
+		{TaskID: "t2", Arm: ArmBare, Score: Score{FactRecall: 1},
+			Transcript: Transcript{Turns: 10, CostUSD: 0.15}},
+	}
+
+	recall := PairedBootstrapMetric(records, ArmGhosttree, ArmBare, MetricFactRecall, 1, 500)
+	if recall.Mean != 0 {
+		t.Fatalf("recall is identical here, want 0, got %.3f", recall.Mean)
+	}
+
+	turns := PairedBootstrapMetric(records, ArmGhosttree, ArmBare, MetricTurns, 1, 500)
+	if turns.Mean >= 0 {
+		t.Fatalf("ghosttree needed fewer turns, so the effect must be negative: %.3f", turns.Mean)
+	}
+	if turns.Metric != "turns" {
+		t.Fatalf("the effect must name its metric, got %q", turns.Metric)
+	}
+	cost := PairedBootstrapMetric(records, ArmGhosttree, ArmBare, MetricCostUSD, 1, 500)
+	if cost.Mean >= 0 {
+		t.Fatalf("ghosttree was cheaper, so the effect must be negative: %.3f", cost.Mean)
+	}
+}

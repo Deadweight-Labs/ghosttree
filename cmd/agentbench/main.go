@@ -149,10 +149,7 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 
 	report := agentbench.BuildReport(campaign, records)
 	report.Isolation = isolation
-	if len(campaign.Arms) >= 2 {
-		report.Effects = append(report.Effects, agentbench.PairedBootstrap(
-			records, agentbench.ArmGhosttree, agentbench.ArmClaudeNative, campaign.Seed, 10000))
-	}
+	report.Effects = contrastsAgainstGhosttree(records, campaign)
 	// Auch ein abgebrochener Lauf bekommt seine Ausgabe: die wenigen
 	// Datensaetze sagen, woran es lag, und ohne sie muesste man den Abbruch
 	// nachstellen, um ihn zu verstehen.
@@ -189,10 +186,7 @@ func regradeRun(campaign agentbench.Campaign, tasks []agentbench.Task, runDir, o
 		return err
 	}
 	report := agentbench.BuildReport(campaign, regraded)
-	if len(campaign.Arms) >= 2 {
-		report.Effects = append(report.Effects, agentbench.PairedBootstrap(
-			regraded, agentbench.ArmGhosttree, agentbench.ArmClaudeNative, campaign.Seed, 10000))
-	}
+	report.Effects = contrastsAgainstGhosttree(regraded, campaign)
 	if outDir == "" {
 		outDir = runDir
 	}
@@ -201,6 +195,27 @@ func regradeRun(campaign agentbench.Campaign, tasks []agentbench.Task, runDir, o
 	}
 	fmt.Fprintf(stdout, "regraded %d runs from %s into %s\n", len(regraded), runDir, outDir)
 	return writeOutputs(report, outDir)
+}
+
+// contrastsAgainstGhosttree pairs the treatment against every control arm the
+// campaign actually ran. A fixed contrast against claude-native produced an
+// empty table whenever that arm was not part of the run — the report looked
+// complete and said nothing.
+func contrastsAgainstGhosttree(records []agentbench.RunRecord, campaign agentbench.Campaign) []agentbench.PairedEffect {
+	var effects []agentbench.PairedEffect
+	for _, arm := range campaign.Arms {
+		if arm == agentbench.ArmGhosttree {
+			continue
+		}
+		for _, metric := range agentbench.DefaultMetrics {
+			effect := agentbench.PairedBootstrapMetric(
+				records, agentbench.ArmGhosttree, arm, metric, campaign.Seed, 10000)
+			if effect.Tasks > 0 {
+				effects = append(effects, effect)
+			}
+		}
+	}
+	return effects
 }
 
 type runtimeOptions struct {

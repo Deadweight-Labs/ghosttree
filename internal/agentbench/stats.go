@@ -7,6 +7,7 @@ import (
 )
 
 type PairedEffect struct {
+	Metric    string  `json:"metric"`
 	Treatment ArmName `json:"treatment"`
 	Control   ArmName `json:"control"`
 	Tasks     int     `json:"tasks"`
@@ -16,7 +17,31 @@ type PairedEffect struct {
 	Draws     int     `json:"draws"`
 }
 
+// Metric is what a contrast is measured in. Recall alone cannot answer whether
+// a memory is worth having: two arms can reach the same answer, and the
+// difference lies entirely in how many turns and how much money it took.
+type Metric struct {
+	Name string
+	Of   func(RunRecord) float64
+}
+
+var (
+	MetricFactRecall = Metric{"fact_recall", func(r RunRecord) float64 { return r.Score.FactRecall }}
+	MetricPrecision  = Metric{"claim_precision", func(r RunRecord) float64 { return r.Score.ClaimPrecision }}
+	MetricCostUSD    = Metric{"cost_usd", func(r RunRecord) float64 { return r.Transcript.CostUSD }}
+	MetricTurns      = Metric{"turns", func(r RunRecord) float64 { return float64(r.Transcript.Turns) }}
+	MetricToolCalls  = Metric{"tool_calls", func(r RunRecord) float64 { return float64(r.Transcript.ToolCalls) }}
+)
+
+// DefaultMetrics are reported for every contrast. Cost and turns are signed the
+// same way as recall — a negative value means the treatment needed less.
+var DefaultMetrics = []Metric{MetricFactRecall, MetricPrecision, MetricTurns, MetricCostUSD}
+
 func PairedBootstrap(records []RunRecord, treatment, control ArmName, seed uint64, draws int) PairedEffect {
+	return PairedBootstrapMetric(records, treatment, control, MetricFactRecall, seed, draws)
+}
+
+func PairedBootstrapMetric(records []RunRecord, treatment, control ArmName, metric Metric, seed uint64, draws int) PairedEffect {
 	perTask := map[string]map[ArmName][]float64{}
 	for _, record := range records {
 		if record.Failure != FailureNone {
@@ -28,7 +53,7 @@ func PairedBootstrap(records []RunRecord, treatment, control ArmName, seed uint6
 		if perTask[record.TaskID] == nil {
 			perTask[record.TaskID] = map[ArmName][]float64{}
 		}
-		perTask[record.TaskID][record.Arm] = append(perTask[record.TaskID][record.Arm], record.Score.FactRecall)
+		perTask[record.TaskID][record.Arm] = append(perTask[record.TaskID][record.Arm], metric.Of(record))
 	}
 
 	var ids []string
@@ -39,7 +64,7 @@ func PairedBootstrap(records []RunRecord, treatment, control ArmName, seed uint6
 	}
 	sort.Strings(ids)
 
-	effect := PairedEffect{Treatment: treatment, Control: control, Tasks: len(ids), Draws: draws}
+	effect := PairedEffect{Metric: metric.Name, Treatment: treatment, Control: control, Tasks: len(ids), Draws: draws}
 	if len(ids) == 0 {
 		return effect
 	}
