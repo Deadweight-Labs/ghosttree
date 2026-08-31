@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/agentbench"
@@ -28,7 +29,11 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 	armList := flags.String("arms", "claude-native,ghosttree", "comma-separated arms")
 	outDir := flags.String("out", "", "directory for transcripts, JSONL and the report")
 	repoSource := flags.String("repo", "", "repository checkout on the campaign commit")
+	ghostTree := flags.String("ghost-tree", "", "pinned .ghosttree mirror for the ghosttree arm")
 	binary := flags.String("agent-binary", "claude", "agent CLI to invoke")
+	runtimeName := flags.String("runtime", "docker", "docker or local; local is not a valid campaign")
+	image := flags.String("image", "agentbench:dev", "container image for the docker runtime")
+	network := flags.String("network", "", "docker network; empty uses the Docker default")
 	dryRun := flags.Bool("dry-run", false, "validate and print the plan without running agents")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -75,11 +80,28 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 
-	agent, err := prepareAgent(campaign, *repoSource, *binary, *outDir)
+	runtime, err := selectRuntime(*runtimeName, *image, *network)
 	if err != nil {
 		return err
 	}
-	records, err := agentbench.Run(context.Background(), campaign, tasks, agent)
+	if slices.Contains(campaign.Arms, agentbench.ArmGhosttree) && *ghostTree == "" {
+		return fmt.Errorf("--ghost-tree is required when the ghosttree arm runs; without it that arm measures an empty tree")
+	}
+	agents := &armAgents{
+		campaign: campaign, repoSource: *repoSource, binary: *binary,
+		outDir: *outDir, runtime: runtime, ghostTree: *ghostTree,
+		prepared: map[agentbench.ArmName]agentbench.Agent{},
+	}
+	// Alle Arme werden vor dem ersten Lauf gebaut und geprueft: ein
+	// Leakage-Befund im dritten Arm soll die Kampagne stoppen, bevor Tokens
+	// in den ersten beiden verbrannt sind.
+	for _, arm := range campaign.Arms {
+		if _, err := agents.For(arm); err != nil {
+			return err
+		}
+	}
+
+	records, err := agentbench.Run(context.Background(), campaign, tasks, agents)
 	if err != nil {
 		return err
 	}
@@ -92,26 +114,68 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 	return writeOutputs(report, *outDir)
 }
 
-// prepareAgent builds one workspace per campaign and refuses to run when the
-// leakage check finds anything the arm is not entitled to. A finding blocks
-// the campaign rather than annotating it.
-func prepareAgent(campaign agentbench.Campaign, repoSource, binary, outDir string) (agentbench.Agent, error) {
-	arm := campaign.Arms[0]
-	workspace, err := agentbench.PrepareWorkspace(filepath.Join(outDir, "workspace"), arm,
-		agentbench.WorkspaceSpec{RepoSource: repoSource})
+func selectRuntime(name, image, network string) (agentbench.Runtime, error) {
+	switch name {
+	case "docker":
+		if image == "" {
+			return nil, fmt.Errorf("--image is required for the docker runtime")
+		}
+		return agentbench.DockerRuntime{
+			Image: image, Network: network,
+			PassEnv: []string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"},
+		}, nil
+	case "local":
+		// Auf der Wirtsmaschine erbt jeder Arm die global installierten
+		// Agent-Regeln und Werkzeuge. Fuer eine Kampagne ist das keine
+		// gueltige Messung, nur zum Nachsehen eines einzelnen Laufs.
+		return agentbench.LocalRuntime{}, nil
+	default:
+		return nil, fmt.Errorf("unknown runtime %q, want docker or local", name)
+	}
+}
+
+// armAgents builds one workspace per arm and refuses to hand out an agent
+// whose arm sees anything it is not entitled to. A leakage finding stops the
+// campaign rather than annotating it.
+type armAgents struct {
+	campaign   agentbench.Campaign
+	repoSource string
+	binary     string
+	outDir     string
+	runtime    agentbench.Runtime
+	ghostTree  string
+	prepared   map[agentbench.ArmName]agentbench.Agent
+}
+
+func (a *armAgents) For(arm agentbench.ArmName) (agentbench.Agent, error) {
+	if agent, ok := a.prepared[arm]; ok {
+		return agent, nil
+	}
+	spec := agentbench.WorkspaceSpec{RepoSource: a.repoSource}
+	if arm == agentbench.ArmGhosttree {
+		spec.GhostTreeSource = a.ghostTree
+	}
+	workspace, err := agentbench.PrepareWorkspace(
+		filepath.Join(a.outDir, "workspaces", string(arm)), arm, spec)
 	if err != nil {
 		return nil, err
 	}
-	allowed := agentbench.AllowedSurface{
+	if findings := agentbench.CheckLeakage(workspace, arm, allowedFor(arm)); len(findings) > 0 {
+		return nil, fmt.Errorf("leakage check failed for arm %q: %+v", arm, findings)
+	}
+	agent := agentbench.NewClaudeCodeAgent(a.binary, workspace,
+		filepath.Join(a.outDir, "raw", string(arm)), a.runtime)
+	a.prepared[arm] = agent
+	return agent, nil
+}
+
+func allowedFor(arm agentbench.ArmName) agentbench.AllowedSurface {
+	return agentbench.AllowedSurface{
 		GhostTree:  arm == agentbench.ArmGhosttree,
 		ClaudeMD:   arm != agentbench.ArmBare,
 		AutoMemory: arm == agentbench.ArmClaudeNative,
 		MemoryDir:  arm == agentbench.ArmClaudeMem || arm == agentbench.ArmAgentMemory,
 	}
-	if findings := agentbench.CheckLeakage(workspace, arm, allowed); len(findings) > 0 {
-		return nil, fmt.Errorf("leakage check failed for arm %q: %+v", arm, findings)
-	}
-	return agentbench.NewClaudeCodeAgent(binary, workspace, filepath.Join(outDir, "raw")), nil
 }
 
 func writeOutputs(report agentbench.Report, outDir string) error {

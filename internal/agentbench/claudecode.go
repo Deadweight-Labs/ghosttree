@@ -5,18 +5,21 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 )
 
 type streamEvent struct {
 	Type    string `json:"type"`
 	Result  string `json:"result"`
+	IsError bool   `json:"is_error"`
 	Message struct {
 		Content []struct {
 			Type string `json:"type"`
@@ -54,6 +57,9 @@ func parseStreamJSON(r io.Reader) (Transcript, error) {
 			transcript.Output = event.Result
 			transcript.InputTokens = event.Usage.InputTokens
 			transcript.OutputTokens = event.Usage.OutputTokens
+			if event.IsError {
+				transcript.AgentError = event.Result
+			}
 		}
 	}
 	return transcript, scanner.Err()
@@ -87,10 +93,14 @@ type ClaudeCodeAgent struct {
 	binary    string
 	workspace Workspace
 	rawDir    string
+	runtime   Runtime
 }
 
-func NewClaudeCodeAgent(binary string, ws Workspace, rawDir string) *ClaudeCodeAgent {
-	return &ClaudeCodeAgent{binary: binary, workspace: ws, rawDir: rawDir}
+func NewClaudeCodeAgent(binary string, ws Workspace, rawDir string, runtime Runtime) *ClaudeCodeAgent {
+	if runtime == nil {
+		runtime = LocalRuntime{}
+	}
+	return &ClaudeCodeAgent{binary: binary, workspace: ws, rawDir: rawDir, runtime: runtime}
 }
 
 func (a *ClaudeCodeAgent) Run(ctx context.Context, inv Invocation) (Transcript, error) {
@@ -99,7 +109,8 @@ func (a *ClaudeCodeAgent) Run(ctx context.Context, inv Invocation) (Transcript, 
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
-	args := []string{
+	argv := []string{
+		a.binary,
 		"-p", inv.Task.Prompt + "\n\n" + closingFormInstruction(inv.Task),
 		"--output-format", "stream-json", "--verbose",
 		"--model", inv.Config.ModelID,
@@ -107,12 +118,9 @@ func (a *ClaudeCodeAgent) Run(ctx context.Context, inv Invocation) (Transcript, 
 		"--max-turns", fmt.Sprint(inv.Config.MaxTurns),
 	}
 	started := time.Now()
-	cmd := exec.CommandContext(ctx, a.binary, args...)
-	cmd.Dir = a.workspace.Repo
-	cmd.Env = envSlice(a.workspace.Env)
-	out, err := cmd.Output()
+	out, err := a.runtime.Command(ctx, a.workspace, inv.Arm, argv).Output()
 	if err != nil {
-		return Transcript{}, err
+		return Transcript{}, errors.New(describeExecErrorWithOutput(err, out))
 	}
 	transcript, err := parseStreamJSON(bytes.NewReader(out))
 	if err != nil {
@@ -121,6 +129,46 @@ func (a *ClaudeCodeAgent) Run(ctx context.Context, inv Invocation) (Transcript, 
 	transcript.Duration = time.Since(started)
 	transcript.RawPath, err = writeRaw(a.rawDir, inv, out)
 	return transcript, err
+}
+
+// describeExecError keeps the process's stderr in the failure message. A bare
+// "exit status 1" cannot be told apart from a missing credential, a broken
+// image or a timeout — and across hundreds of runs that difference decides
+// whether a campaign is repairable or wasted.
+// describeExecErrorWithOutput falls back to stdout: Claude Code writes its
+// diagnosis into the stream-json on stdout, so a failed run whose stderr is
+// empty would otherwise reduce to "exit status 1".
+func describeExecErrorWithOutput(err error, stdout []byte) string {
+	described := describeExecError(err)
+	if strings.Contains(described, ": ") {
+		return described
+	}
+	// Das stream-json traegt die Ursache im result-Feld; nur wenn das fehlt,
+	// wird das Rohende angehaengt.
+	if transcript, parseErr := parseStreamJSON(bytes.NewReader(stdout)); parseErr == nil && transcript.Output != "" {
+		return described + ": " + transcript.Output
+	}
+	if tail := strings.TrimSpace(string(stdout)); tail != "" {
+		const limit = 1500
+		if len(tail) > limit {
+			tail = tail[len(tail)-limit:]
+		}
+		return described + ": " + tail
+	}
+	return described
+}
+
+func describeExecError(err error) string {
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || len(exitErr.Stderr) == 0 {
+		return err.Error()
+	}
+	stderr := strings.TrimSpace(string(exitErr.Stderr))
+	const limit = 1500
+	if len(stderr) > limit {
+		stderr = stderr[:limit] + " ... (gekuerzt)"
+	}
+	return err.Error() + ": " + stderr
 }
 
 func writeRaw(dir string, inv Invocation, raw []byte) (string, error) {

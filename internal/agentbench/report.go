@@ -101,6 +101,37 @@ func summarise(records []RunRecord, key func(RunRecord) string) []GroupSummary {
 	return out
 }
 
+// writeProvenance names, for every arm, the exact state that was measured.
+// Without it the report answers "ghosttree won" but not "which tree" — and
+// the second question is the one a sceptic asks first.
+func (r Report) writeProvenance(w io.Writer) error {
+	if len(r.Campaign.Arms) == 0 {
+		return nil
+	}
+	fmt.Fprint(w, "## Gemessene Zustände\n\n")
+	fmt.Fprintln(w, "| Arm | Snapshot | Datenbank-Hash | Sessions | Werkzeug | Verdichtungsmodell |")
+	fmt.Fprintln(w, "|---|---|---|---|---|---|")
+	for _, arm := range r.Campaign.Arms {
+		build, ok := r.Campaign.Builds[arm]
+		if !ok {
+			fmt.Fprintf(w, "| %s | — | — | — | — | — |\n", arm)
+			continue
+		}
+		fmt.Fprintf(w, "| %s | %s | %s | %d | %s | %s |\n",
+			arm, orDash(build.SnapshotName), orDash(build.DatabaseSHA256),
+			build.SourceSessionCount, orDash(build.ToolVersion), orDash(build.SummarizerModel))
+	}
+	fmt.Fprintln(w)
+	return nil
+}
+
+func orDash(value string) string {
+	if value == "" {
+		return "—"
+	}
+	return value
+}
+
 func (r Report) WriteJSONL(w io.Writer) error {
 	encoder := json.NewEncoder(w)
 	for _, record := range r.Records {
@@ -118,6 +149,10 @@ func (r Report) WriteMarkdown(w io.Writer) error {
 	if _, err := fmt.Fprintf(w, "Commit `%s`, Cutoff %s, Modell `%s`.\n\n",
 		r.Campaign.RepoCommit, r.Campaign.KnowledgeCutoff.Format("2006-01-02T15:04:05Z"),
 		r.Campaign.Agent.ModelID); err != nil {
+		return err
+	}
+
+	if err := r.writeProvenance(w); err != nil {
 		return err
 	}
 

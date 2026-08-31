@@ -14,7 +14,10 @@ type Invocation struct {
 }
 
 type Transcript struct {
-	Output       string        `json:"-"`
+	Output string `json:"-"`
+	// AgentError carries the agent's own error result. A run that failed for
+	// the agent's own reasons must not be scored as an abstention.
+	AgentError   string        `json:"agent_error,omitempty"`
 	RawPath      string        `json:"raw_path"`
 	ToolCalls    int           `json:"tool_calls"`
 	FilesRead    int           `json:"files_read"`

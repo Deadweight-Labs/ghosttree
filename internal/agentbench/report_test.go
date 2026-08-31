@@ -85,3 +85,40 @@ func TestWriteJSONLEmitsOneLinePerRecord(t *testing.T) {
 		t.Fatalf("want two JSONL lines, got %d:\n%s", len(lines), buf.String())
 	}
 }
+
+func TestWriteMarkdownNamesEveryArmsMemoryBuild(t *testing.T) {
+	campaign := Campaign{
+		Name: "pilot", RepoCommit: "a1b2c3d",
+		Arms: []ArmName{ArmGhosttree, ArmClaudeNative},
+		Builds: map[ArmName]MemoryBuild{
+			ArmGhosttree: {
+				SnapshotName: "pilot-2026-08-31", DatabaseSHA256: "abc123",
+				SourceSessionCount: 184, ToolVersion: "0.2.0",
+			},
+			ArmClaudeNative: {DatabaseSHA256: "def456", SummarizerModel: "claude-opus-5"},
+		},
+	}
+	var buf bytes.Buffer
+	if err := (Report{Campaign: campaign}).WriteMarkdown(&buf); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	// Ohne diese Angaben ist die Frage "welchen Baum hast du gemessen"
+	// unbeantwortbar, und der Bericht belegt nichts.
+	for _, want := range []string{"pilot-2026-08-31", "abc123", "def456", "claude-opus-5", "184"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("report must state %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestWriteMarkdownReportsAnArmWithoutABuild(t *testing.T) {
+	campaign := Campaign{Name: "pilot", Arms: []ArmName{ArmBare}}
+	var buf bytes.Buffer
+	if err := (Report{Campaign: campaign}).WriteMarkdown(&buf); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "bare") {
+		t.Fatalf("an arm without a memory build must still be listed:\n%s", buf.String())
+	}
+}

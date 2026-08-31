@@ -63,7 +63,7 @@ func TestRunRecordsAProductFailureWithoutAborting(t *testing.T) {
 		Arms: []ArmName{ArmGhosttree}, Repetitions: 1, Seed: 1,
 	}
 	agent := NewFakeAgent(nil) // liefert fuer jede Aufgabe einen Fehler
-	records, err := Run(context.Background(), campaign, []Task{pilotTask("t1")}, agent)
+	records, err := Run(context.Background(), campaign, []Task{pilotTask("t1")}, SameAgent(agent))
 	if err != nil {
 		t.Fatalf("Run must not abort on a single failure: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestRunMarksAMissingFormAsScoringFailure(t *testing.T) {
 		Arms: []ArmName{ArmGhosttree}, Repetitions: 1, Seed: 1,
 	}
 	agent := NewFakeAgent(map[string]string{"t1": "ich habe gearbeitet, aber kein Formular"})
-	records, err := Run(context.Background(), campaign, []Task{pilotTask("t1")}, agent)
+	records, err := Run(context.Background(), campaign, []Task{pilotTask("t1")}, SameAgent(agent))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestRunProducesOneRecordPerBlockCell(t *testing.T) {
 	answer := "```agentbench-form\n{\"slots\":{\"s\":{\"string\":\"x\"}}}\n```"
 	agent := NewFakeAgent(map[string]string{"t1": answer, "t2": answer})
 
-	records, err := Run(context.Background(), campaign, tasks, agent)
+	records, err := Run(context.Background(), campaign, tasks, SameAgent(agent))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func TestRunProducesOneRecordPerBlockCell(t *testing.T) {
 
 func TestRunRefusesACampaignThatFailsValidation(t *testing.T) {
 	campaign := Campaign{RepoCommit: "c"} // kein Cutoff
-	if _, err := Run(context.Background(), campaign, nil, NewFakeAgent(nil)); err == nil {
+	if _, err := Run(context.Background(), campaign, nil, SameAgent(NewFakeAgent(nil))); err == nil {
 		t.Fatal("Run must refuse an invalid campaign instead of producing numbers")
 	}
 }

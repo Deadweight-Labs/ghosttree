@@ -140,3 +140,45 @@ func TestCheckLeakageReportsAnUnsetPath(t *testing.T) {
 		t.Fatalf("an unset PATH inherits the host PATH and must be reported: %+v", findings)
 	}
 }
+
+func TestPrepareWorkspaceGivesTheGhosttreeArmItsTree(t *testing.T) {
+	treeSource := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(treeSource, "tree"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(treeSource, "INDEX.md"), []byte("index"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, err := PrepareWorkspace(t.TempDir(), ArmGhosttree, WorkspaceSpec{
+		RepoSource: repoWithTree(t), GhostTreeSource: treeSource,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Der Arm, der ohne Baum nichts misst, muss ihn bekommen — und zwar den
+	// mitgegebenen Stand, nicht den zufaellig im Repo liegenden.
+	body, err := os.ReadFile(filepath.Join(ws.Repo, ".ghosttree", "INDEX.md"))
+	if err != nil {
+		t.Fatalf("the ghosttree arm must receive its tree: %v", err)
+	}
+	if string(body) != "index" {
+		t.Fatalf("the tree must come from the pinned source, got %q", body)
+	}
+}
+
+func TestPrepareWorkspaceRefusesATreeForAnotherArm(t *testing.T) {
+	treeSource := t.TempDir()
+	if err := os.WriteFile(filepath.Join(treeSource, "INDEX.md"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := PrepareWorkspace(t.TempDir(), ArmClaudeNative, WorkspaceSpec{
+		RepoSource: repoWithTree(t), GhostTreeSource: treeSource,
+	})
+
+	if err == nil {
+		t.Fatal("handing a ghost tree to a non-ghosttree arm is a configuration error, not a silent no-op")
+	}
+}
