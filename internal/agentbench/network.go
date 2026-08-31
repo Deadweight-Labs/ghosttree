@@ -3,6 +3,7 @@ package agentbench
 import (
 	"context"
 	"fmt"
+	"net"
 	"os/exec"
 	"strings"
 	"time"
@@ -115,8 +116,8 @@ func waitForProxy(ctx context.Context, spec NetworkSpec) error {
 		// Geprueft wird der ganze Weg durch den Proxy nach draussen, nicht nur
 		// ein offener Port: ein Proxy, der annimmt und dann nichts weiterleitet,
 		// bestuende den Porttest.
-		probe := fmt.Sprintf("curl -s -o /dev/null -m 5 -x http://%s:3128 https://%s/",
-			spec.ProxyName, spec.Allowed[0])
+		probe := fmt.Sprintf("curl -s -o /dev/null -m 5 -x http://%s:3128 %s",
+			spec.ProxyName, probeURLFor(spec.Allowed[0]))
 		cmd := exec.CommandContext(ctx, "docker", "run", "--rm", "--network", spec.Name,
 			"--entrypoint", "sh", spec.ProxyImage, "-c", probe)
 		out, err := cmd.CombinedOutput()
@@ -131,6 +132,20 @@ func waitForProxy(ctx context.Context, spec NetworkSpec) error {
 		}
 	}
 	return fmt.Errorf("proxy %q did not come up on the sealed network: %v", spec.ProxyName, last)
+}
+
+// probeURLFor turns an allowlist entry into something curl can fetch. A bare
+// IP is reached over http: a private gateway rarely carries a certificate for
+// its own address, and requiring https there would fail the wait loop on a
+// perfectly good proxy.
+func probeURLFor(entry string) string {
+	if strings.Contains(entry, "://") {
+		return entry
+	}
+	if net.ParseIP(entry) != nil {
+		return "http://" + entry
+	}
+	return "https://" + entry + "/"
 }
 
 func dockerHas(ctx context.Context, kind, name string) bool {

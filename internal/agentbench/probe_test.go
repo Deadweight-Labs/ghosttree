@@ -94,7 +94,7 @@ func TestEvaluateProbeReportsAnEmptyProbe(t *testing.T) {
 
 func TestProbeScriptCoversEveryKnownTool(t *testing.T) {
 	for _, tool := range probedTools {
-		if !strings.Contains(probeScript, tool) {
+		if !strings.Contains(probeScriptFor(ProbeSpec{}), tool) {
 			t.Fatalf("the probe script must look for %q", tool)
 		}
 	}
@@ -104,7 +104,7 @@ func TestCheckRuntimeLeakageRunsTheProbeThroughTheRuntime(t *testing.T) {
 	ws := Workspace{Root: t.TempDir(), Env: map[string]string{"PATH": "/usr/bin:/bin"}}
 	ws.Repo = ws.Root
 
-	findings, err := CheckRuntimeLeakage(context.Background(), LocalRuntime{}, ws, ArmBare, AllowedSurface{})
+	findings, err := CheckRuntimeLeakage(context.Background(), LocalRuntime{}, ws, ArmBare, AllowedSurface{}, ProbeSpec{})
 	if err != nil {
 		t.Fatalf("the probe must run: %v", err)
 	}

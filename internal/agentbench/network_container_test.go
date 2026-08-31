@@ -37,7 +37,7 @@ func TestSealedNetworkLetsTheModelThroughAndNothingElse(t *testing.T) {
 	}
 
 	runtime := DockerRuntime{Image: agent, Network: sealed.Name, ProxyURL: sealed.ProxyURL}
-	findings, err := CheckRuntimeLeakage(ctx, runtime, containerWorkspace(t), ArmBare, AllowedSurface{})
+	findings, err := CheckRuntimeLeakage(ctx, runtime, containerWorkspace(t), ArmBare, AllowedSurface{}, ProbeSpec{})
 	if err != nil {
 		t.Fatalf("probe: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestUnsealedNetworkIsDetected(t *testing.T) {
 	runtime := DockerRuntime{Image: dockerImage(t)}
 
 	findings, err := CheckRuntimeLeakage(context.Background(), runtime,
-		containerWorkspace(t), ArmBare, AllowedSurface{})
+		containerWorkspace(t), ArmBare, AllowedSurface{}, ProbeSpec{})
 	if err != nil {
 		t.Fatalf("probe: %v", err)
 	}

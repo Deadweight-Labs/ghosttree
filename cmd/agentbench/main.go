@@ -40,6 +40,8 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 		"comma-separated hosts the sealed network may reach")
 	allowOpenNetwork := flags.Bool("allow-open-network", false,
 		"accept runs that can reach the open internet; never right for a campaign")
+	modelURL := flags.String("model-url", "https://api.anthropic.com/",
+		"URL the probe expects to reach; must match the endpoint the agent talks to")
 	dryRun := flags.Bool("dry-run", false, "validate and print the plan without running agents")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -105,6 +107,7 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	probeSpec := agentbench.ProbeSpec{ModelURL: *modelURL}
 	if !isolation.Sealed && !*allowOpenNetwork {
 		return fmt.Errorf("the runs would reach the open internet; seal the network or pass --allow-open-network " +
 			"and accept that the report calls the numbers unsealed")
@@ -126,7 +129,7 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 		findings, err := agentbench.CheckRuntimeLeakage(ctx, runtime,
-			agents.workspaces[arm], arm, allowedFor(arm, *allowOpenNetwork))
+			agents.workspaces[arm], arm, allowedFor(arm, *allowOpenNetwork), probeSpec)
 		if err != nil {
 			return fmt.Errorf("runtime probe for arm %q: %w", arm, err)
 		}
@@ -167,7 +170,7 @@ func selectRuntime(ctx context.Context, opts runtimeOptions) (agentbench.Runtime
 		}
 		runtime := agentbench.DockerRuntime{
 			Image: opts.image, Network: opts.network,
-			PassEnv: agentbench.ModelCredentialVars,
+			PassEnv: append(append([]string{}, agentbench.ModelCredentialVars...), agentbench.ModelConfigVars...),
 		}
 		isolation := agentbench.Isolation{Runtime: "docker", Image: opts.image, Network: opts.network}
 		if opts.seal {

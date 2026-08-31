@@ -10,7 +10,13 @@ import (
 // forwarded into the container by name, so the credential reaches the agent
 // without mounting the host home — which carries the global agent rules and
 // the auto-memory and would contaminate every arm at once.
-var ModelCredentialVars = []string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"}
+var ModelCredentialVars = []string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN"}
+
+// ModelConfigVars are forwarded alongside the credential but are not secrets
+// and not identities. ANTHROPIC_BASE_URL points the agent at a gateway instead
+// of the vendor API; without it a campaign configured for a gateway would
+// silently talk to the vendor with a token the vendor does not know.
+var ModelConfigVars = []string{"ANTHROPIC_BASE_URL"}
 
 // RequireModelCredential fails before the first run rather than during it.
 // Without a credential every run ends in "Not logged in", and a campaign that
@@ -27,9 +33,10 @@ func RequireModelCredential(lookup func(string) (string, bool)) (string, error) 
 		return found[0], nil
 	case 0:
 		return "", fmt.Errorf(
-			"no model credential in the environment: set %s (an API key) or %s (from `claude setup-token`); "+
-				"without it every run fails with \"Not logged in\"",
-			ModelCredentialVars[0], ModelCredentialVars[1])
+			"no model credential in the environment: set one of %s; "+
+				"without it every run fails with \"Not logged in\" (an API key, a token from "+
+				"`claude setup-token`, or a gateway token alongside ANTHROPIC_BASE_URL)",
+			strings.Join(ModelCredentialVars, ", "))
 	default:
 		// Zwei gesetzte Variablen sind kein Komfort, sondern eine offene
 		// Frage: welche der beiden Identitaeten die Kampagne benutzt hat,

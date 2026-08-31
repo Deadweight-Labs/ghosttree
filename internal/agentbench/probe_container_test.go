@@ -33,7 +33,7 @@ func TestProbeInsideContainerHidesForeignToolsFromBare(t *testing.T) {
 	runtime := DockerRuntime{Image: dockerImage(t)}
 
 	findings, err := CheckRuntimeLeakage(context.Background(), runtime,
-		containerWorkspace(t), ArmBare, AllowedSurface{})
+		containerWorkspace(t), ArmBare, AllowedSurface{}, ProbeSpec{})
 	if err != nil {
 		t.Fatalf("probe: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestProbeInsideContainerGrantsGhosttreeItsTool(t *testing.T) {
 	runtime := DockerRuntime{Image: dockerImage(t)}
 
 	findings, err := CheckRuntimeLeakage(context.Background(), runtime,
-		containerWorkspace(t), ArmGhosttree, AllowedSurface{GhostTree: true})
+		containerWorkspace(t), ArmGhosttree, AllowedSurface{GhostTree: true}, ProbeSpec{})
 	if err != nil {
 		t.Fatalf("probe: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestProbeInsideContainerCatchesAToolTheArmMayNotHave(t *testing.T) {
 	// bewertet: genau der Fehler, den ein falsch gesetztes AGENTBENCH_ARM
 	// erzeugen wuerde.
 	out, err := runtime.Command(context.Background(), containerWorkspace(t),
-		ArmGhosttree, []string{"sh", "-c", probeScript}).Output()
+		ArmGhosttree, []string{"sh", "-c", probeScriptFor(ProbeSpec{})}).Output()
 	if err != nil {
 		t.Fatalf("probe: %v", err)
 	}

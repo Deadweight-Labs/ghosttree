@@ -17,15 +17,37 @@ var probedTools = []string{"ctx", "claude-mem", "agentmemory", "cognee", "mem0"}
 // are not leaks and are filtered by name.
 var probedProcesses = []string{"claude-mem", "agentmemory", "cognee", "ctx"}
 
-// probeForbiddenHost is the host the probe expects NOT to reach. Any host
-// outside the allowlist would do; example.com is stable, cheap and answers
-// 200 when it is reachable, so a seal that fails shows up as a plain success.
-const probeForbiddenHost = "example.com"
+// probeForbiddenURL is what the probe expects NOT to reach. Any host outside
+// the allowlist would do; example.com is stable, cheap and answers 200 when it
+// is reachable, so a seal that fails shows up as a plain success.
+const probeForbiddenURL = "https://example.com/"
+
+// ProbeSpec names the two endpoints the network part of the probe judges by.
+// The model endpoint cannot be hard-coded: a campaign may run against the
+// vendor API or against a gateway on a private address, and a probe that
+// checks the wrong one either passes a sealed-off campaign or fails a good
+// one.
+type ProbeSpec struct {
+	ModelURL     string
+	ForbiddenURL string
+}
+
+func (s ProbeSpec) withDefaults() ProbeSpec {
+	if s.ModelURL == "" {
+		s.ModelURL = "https://api.anthropic.com/"
+	}
+	if s.ForbiddenURL == "" {
+		s.ForbiddenURL = probeForbiddenURL
+	}
+	return s
+}
 
 // probeScript reports what the agent would find, not what the harness
 // believes it prepared. Every line is `kind field...`; unknown kinds are
 // ignored so the script can grow ahead of the evaluation.
-const probeScript = `
+func probeScriptFor(spec ProbeSpec) string {
+	spec = spec.withDefaults()
+	return `
 printf 'path %s\n' "$PATH"
 printf 'home %s\n' "$HOME"
 printf 'cwd %s\n' "$(pwd)"
@@ -75,26 +97,27 @@ for d in / /etc /usr/bin /usr/local/bin /opt /opt/arm /opt/arm/common/bin \
 done
 
 probe_net() {
-  code=$(curl -s -o /dev/null -m 8 -w '%{http_code}' "https://$2/" 2>/dev/null) || code=000
+  code=$(curl -s -o /dev/null -m 10 -w '%{http_code}' "$2" 2>/dev/null) || code=000
   [ -n "$code" ] || code=000
   printf 'net %s %s %s\n' "$1" "$2" "$code"
 }
 if command -v curl >/dev/null 2>&1; then
-  probe_net forbidden ` + probeForbiddenHost + `
-  probe_net model api.anthropic.com
+  probe_net forbidden ` + spec.ForbiddenURL + `
+  probe_net model ` + spec.ModelURL + `
 else
   printf 'netfail curl-missing\n'
 fi
 exit 0
 `
+}
 
 // CheckRuntimeLeakage runs the probe where the agent will run. The filesystem
 // check in CheckLeakage cannot see this: a tool on the PATH, a worker left
 // running, an MCP server the arm is not entitled to, a writable system
 // directory or an open route to the internet are all invisible from outside
 // the container.
-func CheckRuntimeLeakage(ctx context.Context, runtime Runtime, ws Workspace, arm ArmName, allowed AllowedSurface) ([]LeakageFinding, error) {
-	out, err := runtime.Command(ctx, ws, arm, []string{"sh", "-c", probeScript}).Output()
+func CheckRuntimeLeakage(ctx context.Context, runtime Runtime, ws Workspace, arm ArmName, allowed AllowedSurface, spec ProbeSpec) ([]LeakageFinding, error) {
+	out, err := runtime.Command(ctx, ws, arm, []string{"sh", "-c", probeScriptFor(spec)}).Output()
 	if err != nil {
 		return nil, fmt.Errorf("probe for arm %q: %w", arm, err)
 	}
