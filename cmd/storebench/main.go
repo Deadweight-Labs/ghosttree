@@ -28,7 +28,7 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 	flags.SetOutput(stderr)
 	backendName := flags.String("backend", "current", "current or queued")
 	dbPath := flags.String("db", "", "new SQLite database path")
-	presetName := flags.String("preset", "small", "small, medium, or monorepo")
+	presetName := flags.String("preset", "small", "production-sample, small, medium, or monorepo")
 	seed := flags.Uint64("seed", 1, "deterministic workload seed")
 	concurrency := flags.Int("concurrency", 4, "maximum concurrent operations")
 	arrivalMultiplier := flags.Float64("arrival-multiplier", 1, "arrival rate multiplier")
