@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -55,18 +54,13 @@ func (a *api) createContextSnapshot(w http.ResponseWriter, r *http.Request) {
 	// Crossing the HTTP trust boundary makes provenance client-reported even
 	// when the caller resolved it with Ghosttree's own Git implementation.
 	input.Git.MetadataSource = "client-reported"
-	if input.GitRecheck == nil {
-		writeSnapshotRuleError(w, http.StatusBadRequest, &snapshot.RuleError{Code: "snapshot_invalid_input"})
-		return
-	}
-	input.GitRecheck.MetadataSource = "client-reported"
 	if nameClass == collector.SnapshotNameRelease && !access.ReleaseBind {
 		writeSnapshotRuleError(w, http.StatusForbidden, &snapshot.RuleError{Code: "snapshot_release_binding_forbidden"})
 		return
 	}
 	input.ActorID = principal.ID
 	input.ActorLabel = &principal.Label
-	result, err := a.st.CreateContextSnapshot(r.Context(), input, a.snapshotLimits, func(context.Context) (snapshot.GitProvenance, error) { return *input.GitRecheck, nil })
+	result, err := a.st.CreateContextSnapshot(r.Context(), input, a.snapshotLimits, nil)
 	if err != nil {
 		a.writeSnapshotError(w, err)
 		return
@@ -94,12 +88,12 @@ func contextSnapshotCreateBodyLimit(limits snapshot.Limits) int64 {
 	if headLimit <= 0 {
 		headLimit = snapshot.DefaultLimits().MaxCanonicalHeadBytes
 	}
-	const maxJSONEscapeExpansionTimesGitCopies = 12
+	const maxJSONEscapeExpansion = 6
 	const maxInt64 = 1<<63 - 1
-	if headLimit > maxInt64/maxJSONEscapeExpansionTimesGitCopies {
+	if headLimit > maxInt64/maxJSONEscapeExpansion {
 		return maxInt64
 	}
-	return maxJSONEscapeExpansionTimesGitCopies * headLimit
+	return maxJSONEscapeExpansion * headLimit
 }
 
 func (a *api) listContextSnapshots(w http.ResponseWriter, r *http.Request) {

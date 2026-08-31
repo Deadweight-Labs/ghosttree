@@ -179,6 +179,21 @@ func TestExportHeadV2HasClosedFieldSet(t *testing.T) {
 	}
 }
 
+func TestCreateInputDoesNotPreserveFictitiousGitRecheck(t *testing.T) {
+	raw := []byte(`{"git":{"allow_dirty_used":false,"git_branch":null,"git_commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","git_dirty":false,"git_metadata_source":"client-reported","git_object_format":"sha1","git_ref":null,"git_worktree_fingerprint":null,"git_worktree_fingerprint_version":null},"git_recheck":{"allow_dirty_used":false,"git_branch":null,"git_commit":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","git_dirty":false,"git_metadata_source":"client-reported","git_object_format":"sha1","git_ref":null,"git_worktree_fingerprint":null,"git_worktree_fingerprint_version":null},"name":"n","project":"p"}`)
+	var input CreateInput
+	if err := json.Unmarshal(raw, &input); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, []byte(`"git_recheck"`)) {
+		t.Fatalf("create input preserves fictitious server recheck: %s", encoded)
+	}
+}
+
 func TestEntryPageSeparatesSummariesFromExactPayload(t *testing.T) {
 	summaryPage := EntryPage{Entries: []EntrySummary{{Domain: "ghost", Key: "file/a"}}}
 	summaryJSON, err := json.Marshal(summaryPage)

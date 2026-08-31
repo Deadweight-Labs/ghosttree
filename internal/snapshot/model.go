@@ -124,14 +124,13 @@ type EntrySummary struct {
 }
 
 type CreateInput struct {
-	Project    string         `json:"project"`
-	Name       string         `json:"name"`
-	Git        GitProvenance  `json:"git"`
-	Message    *string        `json:"message"`
-	ActorID    string         `json:"actor_id"`
-	ActorLabel *string        `json:"actor_label"`
-	SessionRef *string        `json:"session_ref"`
-	GitRecheck *GitProvenance `json:"git_recheck,omitempty"`
+	Project    string        `json:"project"`
+	Name       string        `json:"name"`
+	Git        GitProvenance `json:"git"`
+	Message    *string       `json:"message"`
+	ActorID    string        `json:"actor_id"`
+	ActorLabel *string       `json:"actor_label"`
+	SessionRef *string       `json:"session_ref"`
 }
 
 type CreateResult struct {

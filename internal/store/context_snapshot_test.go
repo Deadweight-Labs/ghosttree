@@ -87,6 +87,30 @@ func snapshotCreateInput() snapshot.CreateInput {
 	return snapshot.CreateInput{Project: "p", Name: "release-1", Git: snapshot.GitProvenance{ObjectFormat: "sha1", Commit: "0123456789012345678901234567890123456789", MetadataSource: "server-verified"}, ActorID: "person:1"}
 }
 
+func TestCreateSnapshotDetectsChangedObservedGitAfterCapture(t *testing.T) {
+	s, err := Open(t.TempDir() + "/snapshot-git-observation.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	in := snapshotCreateInput()
+	changed := in.Git
+	changed.Commit = strings.Repeat("b", 40)
+	_, err = s.CreateContextSnapshot(context.Background(), in, snapshot.DefaultLimits(), func(context.Context) (snapshot.GitProvenance, error) {
+		return changed, nil
+	})
+	if snapshotCode(err) != "snapshot_git_changed" {
+		t.Fatalf("error=%v", err)
+	}
+	var heads int
+	if err := s.DB().QueryRow(`SELECT count(*) FROM context_snapshots`).Scan(&heads); err != nil {
+		t.Fatal(err)
+	}
+	if heads != 0 {
+		t.Fatalf("changed Git left %d snapshot heads", heads)
+	}
+}
+
 func TestCreateSnapshotSealsAndRetriesIdempotently(t *testing.T) {
 	s, err := Open(t.TempDir() + "/snapshot.db")
 	if err != nil {

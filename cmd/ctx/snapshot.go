@@ -67,7 +67,7 @@ func snapshotCreate(args []string, stdout, diagnostics io.Writer) int {
 		return snapshotCommandError(stdout, &snapshot.RuleError{Code: "snapshot_git_changed", Retryable: true})
 	}
 	message := optionalString(values["-m"])
-	result, err := c.CreateContextSnapshot(context.Background(), snapshot.CreateInput{Project: project, Name: positionals[0], Git: provenance, GitRecheck: &rechecked, Message: message})
+	result, err := c.CreateContextSnapshot(context.Background(), snapshot.CreateInput{Project: project, Name: positionals[0], Git: provenance, Message: message})
 	if err != nil {
 		return snapshotCommandError(stdout, err)
 	}

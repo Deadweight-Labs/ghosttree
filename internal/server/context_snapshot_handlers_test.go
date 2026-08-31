@@ -34,7 +34,7 @@ func TestContextSnapshotHTTPRejectsProjectAliasesBeforeDependencies(t *testing.T
 	mirror := &failingSnapshotMirror{}
 	a := newAPI(closedStore, WithSnapshotMirror(mirror))
 	git := snapshot.GitProvenance{ObjectFormat: "sha1", Commit: strings.Repeat("a", 40), MetadataSource: "client-reported"}
-	createBody, err := json.Marshal(snapshot.CreateInput{Project: " HTTPS://GitHub.com/Example/Repo.git ", Name: "alias", Git: git, GitRecheck: &git})
+	createBody, err := json.Marshal(snapshot.CreateInput{Project: " HTTPS://GitHub.com/Example/Repo.git ", Name: "alias", Git: git})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestContextSnapshotHTTPCreateRejectsOversizedBodyBeforeAccessOrStore(t *tes
 	if bodyLimit <= 0 {
 		t.Fatalf("body limit=%d", bodyLimit)
 	}
-	body := []byte(`{"project":"p","name":"oversized","git":{"git_object_format":"sha1","git_commit":"` + strings.Repeat("a", 40) + `","git_dirty":false,"allow_dirty_used":false,"git_metadata_source":"client-reported"},"git_recheck":{"git_object_format":"sha1","git_commit":"` + strings.Repeat("a", 40) + `","git_dirty":false,"allow_dirty_used":false,"git_metadata_source":"client-reported"}}` + strings.Repeat(" ", int(bodyLimit)))
+	body := []byte(`{"project":"p","name":"oversized","git":{"git_object_format":"sha1","git_commit":"` + strings.Repeat("a", 40) + `","git_dirty":false,"allow_dirty_used":false,"git_metadata_source":"client-reported"}}` + strings.Repeat(" ", int(bodyLimit)))
 	for _, token := range []string{deniedToken, authorizedToken} {
 		request, err := http.NewRequest(http.MethodPost, srv.URL+"/api/context-snapshots", bytes.NewReader(body))
 		if err != nil {
@@ -148,7 +148,7 @@ func TestContextSnapshotHTTPCreateAllowsMaximumMetadata(t *testing.T) {
 	gitRef := strings.Repeat("r", int(limits.MaxGitRefBytes))
 	gitBranch := strings.Repeat("b", int(limits.MaxGitBranchBytes))
 	git := snapshot.GitProvenance{ObjectFormat: "sha1", Commit: strings.Repeat("a", 40), Ref: &gitRef, Branch: &gitBranch, MetadataSource: "client-reported"}
-	input := snapshot.CreateInput{Project: "p", Name: "maximum-metadata", Git: git, GitRecheck: &git, Message: &message, ActorID: actorID, ActorLabel: &actorLabel, SessionRef: &sessionRef}
+	input := snapshot.CreateInput{Project: "p", Name: "maximum-metadata", Git: git, Message: &message, ActorID: actorID, ActorLabel: &actorLabel, SessionRef: &sessionRef}
 	body, err := json.Marshal(input)
 	if err != nil {
 		t.Fatal(err)
@@ -176,7 +176,7 @@ func TestContextSnapshotHTTPCreateAllowsMaximumMetadata(t *testing.T) {
 	escapedGitRef := strings.Repeat(escaped, int(limits.MaxGitRefBytes))
 	escapedGitBranch := strings.Repeat(escaped, int(limits.MaxGitBranchBytes))
 	escapedGit := snapshot.GitProvenance{ObjectFormat: "sha1", Commit: strings.Repeat("b", 40), Ref: &escapedGitRef, Branch: &escapedGitBranch, MetadataSource: "client-reported"}
-	escapedInput := snapshot.CreateInput{Project: "p", Name: "escaped-metadata", Git: escapedGit, GitRecheck: &escapedGit, Message: &escapedMessage, ActorID: escapedActorID, ActorLabel: &escapedActorLabel, SessionRef: &escapedSessionRef}
+	escapedInput := snapshot.CreateInput{Project: "p", Name: "escaped-metadata", Git: escapedGit, Message: &escapedMessage, ActorID: escapedActorID, ActorLabel: &escapedActorLabel, SessionRef: &escapedSessionRef}
 	escapedBody, err := json.Marshal(escapedInput)
 	if err != nil {
 		t.Fatal(err)
@@ -206,7 +206,7 @@ func TestContextSnapshotHTTPCreateAllowsMaximumMetadata(t *testing.T) {
 	t.Cleanup(raisedServer.Close)
 	raisedMessage := strings.Repeat("z", int(raisedLimits.MaxMessageBytes))
 	raisedGit := snapshot.GitProvenance{ObjectFormat: "sha1", Commit: strings.Repeat("c", 40), MetadataSource: "client-reported"}
-	raisedInput := snapshot.CreateInput{Project: "p", Name: "raised-metadata-limit", Git: raisedGit, GitRecheck: &raisedGit, Message: &raisedMessage}
+	raisedInput := snapshot.CreateInput{Project: "p", Name: "raised-metadata-limit", Git: raisedGit, Message: &raisedMessage}
 	raisedBody, err := json.Marshal(raisedInput)
 	if err != nil {
 		t.Fatal(err)
@@ -245,7 +245,7 @@ func TestContextSnapshotHTTPCreateAllowsHTMLEscapedMetadataWithinHeadLimit(t *te
 	t.Cleanup(srv.Close)
 
 	git := snapshot.GitProvenance{ObjectFormat: "sha1", Commit: strings.Repeat("d", 40), MetadataSource: "client-reported"}
-	input := snapshot.CreateInput{Project: project, Name: "html-escaped-metadata", Git: git, GitRecheck: &git}
+	input := snapshot.CreateInput{Project: project, Name: "html-escaped-metadata", Git: git}
 	body, err := json.Marshal(input)
 	if err != nil {
 		t.Fatal(err)
@@ -282,7 +282,6 @@ func TestContextSnapshotHTTPCreateReadAndActorOverride(t *testing.T) {
 	srv := httptest.NewServer(New(st))
 	t.Cleanup(srv.Close)
 	in := snapshot.CreateInput{Project: "p", Name: "baseline+one", ActorID: "forged", Git: snapshot.GitProvenance{ObjectFormat: "sha1", Commit: strings.Repeat("a", 40), MetadataSource: "client-reported"}}
-	in.GitRecheck = &in.Git
 	resp := req(t, "POST", srv.URL+"/api/context-snapshots", token, in)
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("create status=%d", resp.StatusCode)
@@ -291,7 +290,7 @@ func TestContextSnapshotHTTPCreateReadAndActorOverride(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
 		t.Fatal(err)
 	}
-	if created.Snapshot.ActorID == "forged" || created.Snapshot.ActorID == "" || created.Snapshot.ActorLabel == nil || *created.Snapshot.ActorLabel != "alice" {
+	if created.Snapshot.ActorID == "forged" || created.Snapshot.ActorID == "" || created.Snapshot.ActorLabel == nil || *created.Snapshot.ActorLabel != "alice" || created.Snapshot.GitMetadataSource != "client-reported" {
 		t.Fatalf("actor not server-owned: %+v", created.Snapshot)
 	}
 	resp = req(t, "POST", srv.URL+"/api/context-snapshots", token, in)
@@ -321,7 +320,6 @@ func TestContextSnapshotHTTPAccessFiltersAndTypedErrors(t *testing.T) {
 	srv := httptest.NewServer(New(st))
 	t.Cleanup(srv.Close)
 	in := snapshot.CreateInput{Project: "p", Name: "v1.2.3", Git: snapshot.GitProvenance{ObjectFormat: "sha1", Commit: strings.Repeat("b", 40), MetadataSource: "client-reported"}}
-	in.GitRecheck = &in.Git
 	resp := req(t, "POST", srv.URL+"/api/context-snapshots", token, in)
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("release status=%d", resp.StatusCode)
@@ -354,7 +352,7 @@ func TestContextSnapshotHTTPRejectsNonCanonicalReleaseLikeNames(t *testing.T) {
 	git := snapshot.GitProvenance{ObjectFormat: "sha1", Commit: strings.Repeat("b", 40), MetadataSource: "client-reported"}
 	for _, name := range []string{"V1.2.3", "1.2.3", "v1.2", "v1.2.3.0", "v01.2.3"} {
 		t.Run(name, func(t *testing.T) {
-			in := snapshot.CreateInput{Project: "p", Name: name, Git: git, GitRecheck: &git}
+			in := snapshot.CreateInput{Project: "p", Name: name, Git: git}
 			resp := req(t, "POST", srv.URL+"/api/context-snapshots", token, in)
 			defer resp.Body.Close()
 			if resp.StatusCode != http.StatusBadRequest {
@@ -385,7 +383,6 @@ func TestContextSnapshotHTTPMirrorFailureIsWarningAfterCommit(t *testing.T) {
 	srv := httptest.NewServer(New(st, WithSnapshotMirror(mirror)))
 	t.Cleanup(srv.Close)
 	in := snapshot.CreateInput{Project: "p", Name: "baseline", Git: snapshot.GitProvenance{ObjectFormat: "sha1", Commit: strings.Repeat("c", 40), MetadataSource: "client-reported"}}
-	in.GitRecheck = &in.Git
 	resp := req(t, "POST", srv.URL+"/api/context-snapshots", token, in)
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("status=%d", resp.StatusCode)

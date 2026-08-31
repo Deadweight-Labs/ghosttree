@@ -13,7 +13,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/snapshot"
 )
 
-func (s *Store) CreateContextSnapshot(ctx context.Context, in snapshot.CreateInput, limits snapshot.Limits, recheck func(context.Context) (snapshot.GitProvenance, error)) (result snapshot.CreateResult, err error) {
+func (s *Store) CreateContextSnapshot(ctx context.Context, in snapshot.CreateInput, limits snapshot.Limits, observeGitAfterCapture func(context.Context) (snapshot.GitProvenance, error)) (result snapshot.CreateResult, err error) {
 	if err := validateSnapshotCreateInput(in, limits); err != nil {
 		return result, err
 	}
@@ -94,12 +94,14 @@ func (s *Store) CreateContextSnapshot(ctx context.Context, in snapshot.CreateInp
 	if err := s.failSnapshot("after_entries"); err != nil {
 		return result, err
 	}
-	gitAfter, err := recheck(ctx)
-	if err != nil {
-		return result, err
-	}
-	if !sameGitProvenance(in.Git, gitAfter) {
-		return result, &snapshot.RuleError{Code: "snapshot_git_changed", Retryable: true}
+	if observeGitAfterCapture != nil {
+		gitAfter, err := observeGitAfterCapture(ctx)
+		if err != nil {
+			return result, err
+		}
+		if !sameGitProvenance(in.Git, gitAfter) {
+			return result, &snapshot.RuleError{Code: "snapshot_git_changed", Retryable: true}
+		}
 	}
 	if found {
 		if existing.SchemaVersion != schemaVersion || existing.ContentDigest != digest || !headMatchesGit(existing, in.Git) {

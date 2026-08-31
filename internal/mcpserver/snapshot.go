@@ -49,7 +49,7 @@ func (s *Server) handleSnapshotCreate(ctx context.Context, _ *mcp.CallToolReques
 	if err := collector.RecheckSnapshotGit(s.repoRoot, in.Name, rechecked); err != nil {
 		return nil, nil, err
 	}
-	input := snapshot.CreateInput{Project: s.ctxAxes.Project, Name: in.Name, Git: git, GitRecheck: &rechecked}
+	input := snapshot.CreateInput{Project: s.ctxAxes.Project, Name: in.Name, Git: git}
 	if in.Message != "" {
 		input.Message = &in.Message
 	}
