@@ -52,3 +52,51 @@ func TestParseFormAcceptsAnEmptySlotMap(t *testing.T) {
 		t.Fatal("Slots must never be nil, callers index into it")
 	}
 }
+
+func TestParseFormAcceptsBareValues(t *testing.T) {
+	// Genau die Form, in der die Agenten im ersten Piloten geantwortet haben.
+	output := "fertig\n```agentbench-form\n" +
+		`{"slots":{"still_open":true,"impl_file":"internal/notifier/webhook/webhook.go","count":3}}` +
+		"\n```"
+
+	form, err := ParseForm(output)
+	if err != nil {
+		t.Fatalf("a bare value is a valid answer: %v", err)
+	}
+	if form.Slots["still_open"].Boolean == nil || !*form.Slots["still_open"].Boolean {
+		t.Fatalf("bare true must land in Boolean: %+v", form.Slots["still_open"])
+	}
+	if form.Slots["impl_file"].Path == nil ||
+		*form.Slots["impl_file"].Path != "internal/notifier/webhook/webhook.go" {
+		t.Fatalf("a bare string must be readable as a path: %+v", form.Slots["impl_file"])
+	}
+	if form.Slots["count"].Integer == nil || *form.Slots["count"].Integer != 3 {
+		t.Fatalf("a bare number must land in Integer: %+v", form.Slots["count"])
+	}
+}
+
+func TestParseFormStillAcceptsTheTypedForm(t *testing.T) {
+	output := "```agentbench-form\n" +
+		`{"slots":{"f":{"boolean":false},"g":{"path":"a/b.go"}}}` + "\n```"
+
+	form, err := ParseForm(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if form.Slots["f"].Boolean == nil || *form.Slots["f"].Boolean {
+		t.Fatalf("the documented form must keep working: %+v", form.Slots["f"])
+	}
+	if form.Slots["g"].Path == nil || *form.Slots["g"].Path != "a/b.go" {
+		t.Fatalf("the documented form must keep working: %+v", form.Slots["g"])
+	}
+}
+
+func TestParseFormTreatsNullAsAbstention(t *testing.T) {
+	form, err := ParseForm("```agentbench-form\n" + `{"slots":{"f":null}}` + "\n```")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !form.Slots["f"].IsAbstention() {
+		t.Fatalf("an explicit null is a withheld answer, not an error: %+v", form.Slots["f"])
+	}
+}
