@@ -35,6 +35,66 @@ func TestSessionUpsertAndChunks(t *testing.T) {
 	}
 }
 
+func TestAppendChunkBatchesCommitsMultipleSessionsOnce(t *testing.T) {
+	s := openTest(t)
+	first, err := s.UpsertSession(Session{Harness: "codex", ExternalID: "batch-first"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.UpsertSession(Session{Harness: "codex", ExternalID: "batch-second"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	batches := []ChunkBatch{
+		{SessionID: first, Chunks: []Chunk{{Seq: 0, Role: "user", Text: "a", Raw: "{}"}}},
+		{SessionID: second, Chunks: []Chunk{{Seq: 0, Role: "user", Text: "b", Raw: "{}"}}},
+	}
+	if err := s.AppendChunkBatches(batches); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AppendChunkBatches(batches); err != nil {
+		t.Fatal(err)
+	}
+	for _, sessionID := range []int64{first, second} {
+		chunks, err := s.ReadSession(sessionID, 0, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(chunks) != 1 {
+			t.Fatalf("session %d chunks = %d, want 1", sessionID, len(chunks))
+		}
+	}
+}
+
+func TestAppendChunkBatchesRollsBackEverySessionOnError(t *testing.T) {
+	s := openTest(t)
+	first, err := s.UpsertSession(Session{Harness: "codex", ExternalID: "rollback-first"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.UpsertSession(Session{Harness: "codex", ExternalID: "rollback-second"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = s.AppendChunkBatches([]ChunkBatch{
+		{SessionID: first, Chunks: []Chunk{{Seq: 0, Role: "user", Text: "before", Raw: "{}"}}},
+		{SessionID: 1 << 60, Chunks: []Chunk{{Seq: 0, Role: "user", Text: "invalid", Raw: "{}"}}},
+		{SessionID: second, Chunks: []Chunk{{Seq: 0, Role: "user", Text: "after", Raw: "{}"}}},
+	})
+	if err == nil {
+		t.Fatal("batch with an unknown session succeeded")
+	}
+	for _, sessionID := range []int64{first, second} {
+		chunks, readErr := s.ReadSession(sessionID, 0, 10)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if len(chunks) != 0 {
+			t.Fatalf("session %d retained %d chunks after rollback", sessionID, len(chunks))
+		}
+	}
+}
+
 // The distiller works a backlog, not a recent window. Selecting by newest-first
 // would pin it to the sessions it already processed and leave the archive
 // permanently out of reach, however often it runs.
