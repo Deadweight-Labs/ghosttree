@@ -339,6 +339,38 @@ func TestContextSnapshotHTTPAccessFiltersAndTypedErrors(t *testing.T) {
 	}
 }
 
+func TestContextSnapshotHTTPRejectsNonCanonicalReleaseLikeNames(t *testing.T) {
+	st, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	token, _ := st.AddPerson("writer")
+	if err := st.SetContextSnapshotAccess("writer", "p", true, true, false); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(New(st))
+	t.Cleanup(srv.Close)
+	git := snapshot.GitProvenance{ObjectFormat: "sha1", Commit: strings.Repeat("b", 40), MetadataSource: "client-reported"}
+	for _, name := range []string{"V1.2.3", "1.2.3", "v1.2", "v1.2.3.0", "v01.2.3"} {
+		t.Run(name, func(t *testing.T) {
+			in := snapshot.CreateInput{Project: "p", Name: name, Git: git, GitRecheck: &git}
+			resp := req(t, "POST", srv.URL+"/api/context-snapshots", token, in)
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("status=%d, want 400", resp.StatusCode)
+			}
+			var rule snapshot.RuleError
+			if err := json.NewDecoder(resp.Body).Decode(&rule); err != nil {
+				t.Fatal(err)
+			}
+			if rule.Code != "snapshot_invalid_input" {
+				t.Fatalf("code=%q", rule.Code)
+			}
+		})
+	}
+}
+
 func TestContextSnapshotHTTPMirrorFailureIsWarningAfterCommit(t *testing.T) {
 	st, err := store.Open(":memory:")
 	if err != nil {

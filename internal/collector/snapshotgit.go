@@ -18,8 +18,29 @@ import (
 )
 
 var releaseSnapshotName = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*))?(\+([0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*))?$`)
+var releaseLikeSnapshotName = regexp.MustCompile(`(?i)^v?[0-9]+(?:\.[0-9]+)+.*$`)
 
-func IsReleaseSnapshotName(name string) bool { return releaseSnapshotName.MatchString(name) }
+type SnapshotNameClass uint8
+
+const (
+	SnapshotNameOrdinary SnapshotNameClass = iota
+	SnapshotNameRelease
+	SnapshotNameInvalidReleaseLike
+)
+
+func ClassifySnapshotName(name string) SnapshotNameClass {
+	if releaseSnapshotName.MatchString(name) {
+		return SnapshotNameRelease
+	}
+	if releaseLikeSnapshotName.MatchString(name) {
+		return SnapshotNameInvalidReleaseLike
+	}
+	return SnapshotNameOrdinary
+}
+
+func IsReleaseSnapshotName(name string) bool {
+	return ClassifySnapshotName(name) == SnapshotNameRelease
+}
 
 func ResolveSnapshotGit(repoRoot, name string, allowDirty bool) (snapshot.GitProvenance, error) {
 	var result snapshot.GitProvenance
@@ -43,7 +64,11 @@ func ResolveSnapshotGit(repoRoot, name string, allowDirty bool) (snapshot.GitPro
 		branch = stringPointer(branchName)
 	}
 
-	isRelease := IsReleaseSnapshotName(name)
+	nameClass := ClassifySnapshotName(name)
+	if nameClass == SnapshotNameInvalidReleaseLike {
+		return result, &snapshot.RuleError{Code: "snapshot_invalid_input"}
+	}
+	isRelease := nameClass == SnapshotNameRelease
 	if isRelease {
 		tagRef := "refs/tags/" + name
 		tagCommit, tagErr := gitOut(repoRoot, "rev-parse", "--verify", tagRef+"^{commit}")

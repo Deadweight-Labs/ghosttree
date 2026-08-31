@@ -53,6 +53,26 @@ func TestSnapshotGitReleaseTagsAndDeterministicRefs(t *testing.T) {
 	}
 }
 
+func TestSnapshotNameClassificationFailsClosedForReleaseLikeNames(t *testing.T) {
+	cases := map[string]SnapshotNameClass{
+		"v1.2.3":      SnapshotNameRelease,
+		"v1.2.3-rc.2": SnapshotNameRelease,
+		"checkpoint":  SnapshotNameOrdinary,
+		"V1.2.3":      SnapshotNameInvalidReleaseLike,
+		"1.2.3":       SnapshotNameInvalidReleaseLike,
+		"v1.2":        SnapshotNameInvalidReleaseLike,
+		"v1.2.3.0":    SnapshotNameInvalidReleaseLike,
+		"v01.2.3":     SnapshotNameInvalidReleaseLike,
+	}
+	for name, want := range cases {
+		t.Run(name, func(t *testing.T) {
+			if got := ClassifySnapshotName(name); got != want {
+				t.Fatalf("ClassifySnapshotName(%q)=%v, want %v", name, got, want)
+			}
+		})
+	}
+}
+
 func TestSnapshotGitRejectsReleaseMismatchAndDirtyTree(t *testing.T) {
 	repo := newSnapshotGitRepo(t, "sha1")
 	_, err := ResolveSnapshotGit(repo, "v1.0.0", false)

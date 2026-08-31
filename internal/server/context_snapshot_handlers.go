@@ -37,6 +37,11 @@ func (a *api) createContextSnapshot(w http.ResponseWriter, r *http.Request) {
 		writeSnapshotRuleError(w, http.StatusBadRequest, &snapshot.RuleError{Code: "snapshot_invalid_input"})
 		return
 	}
+	nameClass := collector.ClassifySnapshotName(input.Name)
+	if nameClass == collector.SnapshotNameInvalidReleaseLike {
+		writeSnapshotRuleError(w, http.StatusBadRequest, &snapshot.RuleError{Code: "snapshot_invalid_input"})
+		return
+	}
 	principal := principalOf(r)
 	access, err := a.st.ContextSnapshotAccess(principal.ID, input.Project)
 	if err != nil {
@@ -55,7 +60,7 @@ func (a *api) createContextSnapshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	input.GitRecheck.MetadataSource = "client-reported"
-	if collector.IsReleaseSnapshotName(input.Name) && !access.ReleaseBind {
+	if nameClass == collector.SnapshotNameRelease && !access.ReleaseBind {
 		writeSnapshotRuleError(w, http.StatusForbidden, &snapshot.RuleError{Code: "snapshot_release_binding_forbidden"})
 		return
 	}
