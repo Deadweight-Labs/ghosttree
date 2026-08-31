@@ -20,7 +20,7 @@ func verifySQLite(ctx context.Context, st *store.Store, sessions, documents, mig
 		if err != nil {
 			return fmt.Errorf("session %s: %w", logical, err)
 		}
-		if got.ExternalID != want.ExternalID || got.Scope.Project != want.Project {
+		if got.Harness != want.Harness || got.ExternalID != want.ExternalID || got.Scope.Project != want.Project {
 			return fmt.Errorf("session %s: identity mismatch", logical)
 		}
 		chunks, err := st.ReadSession(id, 0, len(want.Chunks)+1)
@@ -48,6 +48,9 @@ func verifySQLite(ctx context.Context, st *store.Store, sessions, documents, mig
 		if gotDigest := digest(got.Description); gotDigest != want.DescriptionDigest {
 			return fmt.Errorf("ghost %s: digest got %s want %s", logical, gotDigest, want.DescriptionDigest)
 		}
+		if got.ContentSHA != want.ContentSHA || got.LineCount != want.LineCount {
+			return fmt.Errorf("ghost %s: content metadata mismatch", logical)
+		}
 	}
 	for logical, want := range expected.Documents {
 		id, ok := documents[logical]
@@ -58,7 +61,7 @@ func verifySQLite(ctx context.Context, st *store.Store, sessions, documents, mig
 		if err != nil {
 			return fmt.Errorf("document %s: %w", logical, err)
 		}
-		if got.Project != want.Project || got.Slug != want.Slug || got.HeadRevision != len(want.RevisionDigests) {
+		if got.Project != want.Project || got.Slug != want.Slug || got.HeadRevision != len(want.RevisionDigests) || got.Status != want.Status {
 			return fmt.Errorf("document %s: head mismatch", logical)
 		}
 		for index, wantDigest := range want.RevisionDigests {
@@ -83,8 +86,18 @@ func verifySQLite(ctx context.Context, st *store.Store, sessions, documents, mig
 		if err := compareArtifacts(logical, got, want.Artifacts); err != nil {
 			return err
 		}
+		var state string
+		if err := st.DB().QueryRowContext(ctx, `SELECT state FROM migration_runs WHERE id=?`, runID).Scan(&state); err != nil {
+			return fmt.Errorf("migration %s state: %w", logical, err)
+		}
+		if state != want.State {
+			return fmt.Errorf("migration %s state got %s want %s", logical, state, want.State)
+		}
 	}
-	return verifyTableCounts(ctx, st, expected)
+	if err := verifyTableCounts(ctx, st, expected); err != nil {
+		return err
+	}
+	return verifySQLiteIntegrity(ctx, st)
 }
 
 func migrationArtifacts(ctx context.Context, st *store.Store, runID int64) (map[string]string, error) {
@@ -136,4 +149,33 @@ func verifyTableCounts(ctx context.Context, st *store.Store, expected Expected) 
 		}
 	}
 	return nil
+}
+
+func verifySQLiteIntegrity(ctx context.Context, st *store.Store) error {
+	foreignKeys, err := st.DB().QueryContext(ctx, `PRAGMA foreign_key_check`)
+	if err != nil {
+		return err
+	}
+	if foreignKeys.Next() {
+		_ = foreignKeys.Close()
+		return fmt.Errorf("foreign key check failed")
+	}
+	if err := foreignKeys.Close(); err != nil {
+		return err
+	}
+	quick, err := st.DB().QueryContext(ctx, `PRAGMA quick_check`)
+	if err != nil {
+		return err
+	}
+	defer quick.Close()
+	for quick.Next() {
+		var result string
+		if err := quick.Scan(&result); err != nil {
+			return err
+		}
+		if result != "ok" {
+			return fmt.Errorf("sqlite quick check failed: %s", result)
+		}
+	}
+	return quick.Err()
 }

@@ -36,6 +36,44 @@ func TestQueuedSQLiteMatchesCurrentSemantics(t *testing.T) {
 	}
 }
 
+func TestCurrentAndQueuedSQLiteProduceEquivalentRunSummaries(t *testing.T) {
+	workload, expected := Generate(117, Scale{Projects: 1, Sessions: 8, ChunksPerSession: 4,
+		GhostFiles: 12, GhostBodyBytes: 128, Documents: 3, DocumentRevisions: 2,
+		DocumentBodyBytes: 256, MigrationArtifacts: 8, ReadEvery: 3})
+	current, err := OpenCurrentSQLite(filepath.Join(t.TempDir(), "current.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer current.Close()
+	queued, err := OpenQueuedSQLite(filepath.Join(t.TempDir(), "queued.db"), QueueConfig{
+		MaxOperations: 64, MaxBytes: 1 << 20, MaxBatch: 8,
+		GatherWindow: time.Millisecond, ReadConnections: 3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer queued.Close()
+	config := RunConfig{Concurrency: 8, ArrivalMultiplier: 10, RunID: "equivalence"}
+	currentReport, err := Run(context.Background(), current, workload, expected, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queuedReport, err := Run(context.Background(), queued, workload, expected, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if currentReport.Operations != queuedReport.Operations || currentReport.Errors != 0 || queuedReport.Errors != 0 ||
+		currentReport.VerificationError != "" || queuedReport.VerificationError != "" {
+		t.Fatalf("current=%+v queued=%+v", currentReport, queuedReport)
+	}
+	for kind, currentKind := range currentReport.Kinds {
+		queuedKind, ok := queuedReport.Kinds[kind]
+		if !ok || currentKind.Operations != queuedKind.Operations || currentKind.Errors != queuedKind.Errors {
+			t.Fatalf("kind %s: current=%+v queued=%+v", kind, currentKind, queuedKind)
+		}
+	}
+}
+
 func TestQueuedSQLiteBatchesSynchronizedChunkBurst(t *testing.T) {
 	workload, expected := Generate(18, Scale{Projects: 1, Sessions: 6, ChunksPerSession: 2})
 	backend, err := OpenQueuedSQLite(filepath.Join(t.TempDir(), "ghosttree.db"), QueueConfig{

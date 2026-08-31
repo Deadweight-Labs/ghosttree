@@ -136,6 +136,7 @@ type Expected struct {
 }
 
 type ExpectedSession struct {
+	Harness    string               `json:"harness"`
 	ExternalID string               `json:"external_id"`
 	Project    string               `json:"project"`
 	Chunks     map[int]ChunkPayload `json:"chunks"`
@@ -146,15 +147,19 @@ type ExpectedGhost struct {
 	Path              string `json:"path"`
 	DescriptionDigest string `json:"description_digest"`
 	DescriptionBytes  int    `json:"description_bytes"`
+	ContentSHA        string `json:"content_sha"`
+	LineCount         int    `json:"line_count"`
 }
 
 type ExpectedDocument struct {
 	Project         string   `json:"project"`
 	Slug            string   `json:"slug"`
 	RevisionDigests []string `json:"revision_digests"`
+	Status          string   `json:"status"`
 }
 
 type ExpectedMigration struct {
 	Project   string     `json:"project"`
 	Artifacts []Artifact `json:"artifacts"`
+	State     string     `json:"state"`
 }
