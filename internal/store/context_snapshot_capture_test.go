@@ -168,7 +168,7 @@ func TestCaptureStopsBeforeLaterDomainsAfterPayloadLimit(t *testing.T) {
 	limits := snapshot.DefaultLimits()
 	limits.MaxEntryPayloadBytes = 64
 	queryer := &rejectQueriesAfterDocuments{db: s.DB()}
-	if _, err := captureContextEntries(context.Background(), queryer, "p", snapshot.SchemaVersionV2, limits); snapshotCode(err) != "snapshot_limit_exceeded" {
+	if _, err := captureContextEntries(context.Background(), queryer, "p", snapshot.SchemaVersion, limits); snapshotCode(err) != "snapshot_limit_exceeded" {
 		t.Fatalf("capture error=%v", err)
 	}
 	if queryer.laterCalled {
@@ -257,7 +257,7 @@ func TestCaptureContextIncludesAllFiveDomainsAndExcludesOtherProjects(t *testing
 	}
 }
 
-func TestCaptureDocumentKeyKeepsV1SlugAndUsesV2PersistentID(t *testing.T) {
+func TestCaptureDocumentKeyUsesV3PersistentID(t *testing.T) {
 	s, err := Open(t.TempDir() + "/document-schema.db")
 	if err != nil {
 		t.Fatal(err)
@@ -271,20 +271,12 @@ func TestCaptureDocumentKeyKeepsV1SlugAndUsesV2PersistentID(t *testing.T) {
 	`); err != nil {
 		t.Fatal(err)
 	}
-	for _, tc := range []struct {
-		version uint32
-		wantKey string
-	}{
-		{version: snapshot.SchemaVersionV1, wantKey: "mutable-slug"},
-		{version: snapshot.SchemaVersionV2, wantKey: "4711"},
-	} {
-		entries, err := captureContextEntries(context.Background(), s.DB(), "p", tc.version, snapshot.DefaultLimits())
-		if err != nil {
-			t.Fatalf("schema %d: %v", tc.version, err)
-		}
-		if len(entries) != 1 || entries[0].Domain != "document" || entries[0].Key != tc.wantKey {
-			t.Fatalf("schema %d entries=%+v", tc.version, entries)
-		}
+	entries, err := captureContextEntries(context.Background(), s.DB(), "p", snapshot.SchemaVersion, snapshot.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Domain != "document" || entries[0].Key != "4711" {
+		t.Fatalf("entries=%+v", entries)
 	}
 }
 

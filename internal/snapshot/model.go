@@ -9,9 +9,7 @@ import (
 )
 
 const (
-	SchemaVersionV1            uint32 = 1
-	SchemaVersionV2            uint32 = 2
-	SchemaVersion              uint32 = SchemaVersionV2
+	SchemaVersion              uint32 = 3
 	ExportVersion              uint32 = 1
 	WorktreeFingerprintVersion uint32 = 1
 )
@@ -45,6 +43,18 @@ type GitProvenance struct {
 	WorktreeFingerprint        *Digest `json:"git_worktree_fingerprint"`
 	AllowDirtyUsed             bool    `json:"allow_dirty_used"`
 	MetadataSource             string  `json:"git_metadata_source"`
+}
+
+type DigestHead struct {
+	Project       string        `json:"project"`
+	Name          string        `json:"name"`
+	SchemaVersion uint32        `json:"schema_version"`
+	Git           GitProvenance `json:"git"`
+	Message       *string       `json:"message"`
+	ActorID       string        `json:"actor_id"`
+	ActorLabel    *string       `json:"actor_label"`
+	SessionRef    *string       `json:"session_ref"`
+	CreatedAt     string        `json:"created_at"`
 }
 
 type Head struct {

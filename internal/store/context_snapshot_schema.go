@@ -263,7 +263,8 @@ func migrateContextSnapshotSchemaV1(db *sql.DB) (err error) {
 		if err != nil {
 			return err
 		}
-		if snapshot.ContentDigest(h.SchemaVersion, entries) != h.ContentDigest || payloadTotal != h.PayloadBytesTotal || !equalCounts(counts, h.Counts) {
+		contentDigest, digestErr := snapshot.ContentDigest(snapshot.DigestHeadFromHead(h), entries)
+		if digestErr != nil || contentDigest != h.ContentDigest || payloadTotal != h.PayloadBytesTotal || !equalCounts(counts, h.Counts) {
 			return &snapshot.RuleError{Code: "snapshot_integrity_error"}
 		}
 		logical, err := contextSnapshotLogicalSize(h, entries)
@@ -491,7 +492,7 @@ func exerciseContextSnapshotSchema(ctx context.Context, tx snapshotProbeExecer) 
 	return nil
 }
 
-const snapshotProbeHeadInsertSQL = `INSERT INTO context_snapshots(project,name,schema_version,state,content_digest,git_object_format,git_commit,git_ref,git_branch,git_dirty,git_worktree_fingerprint_version,git_worktree_fingerprint,allow_dirty_used,git_metadata_source,message,actor_id,actor_label,session_ref,created_at,entry_count,payload_bytes_total,counts_json) VALUES(?,?,1,'building',NULL,'sha1','0000000000000000000000000000000000000000',NULL,NULL,0,NULL,NULL,0,'server-verified',NULL,'probe',NULL,NULL,'1970-01-01T00:00:00Z',0,0,NULL)`
+const snapshotProbeHeadInsertSQL = `INSERT INTO context_snapshots(project,name,schema_version,state,content_digest,git_object_format,git_commit,git_ref,git_branch,git_dirty,git_worktree_fingerprint_version,git_worktree_fingerprint,allow_dirty_used,git_metadata_source,message,actor_id,actor_label,session_ref,created_at,entry_count,payload_bytes_total,counts_json) VALUES(?,?,3,'building',NULL,'sha1','0000000000000000000000000000000000000000',NULL,NULL,0,NULL,NULL,0,'server-verified',NULL,'probe',NULL,NULL,'1970-01-01T00:00:00Z',0,0,NULL)`
 
 func expectSnapshotProbeFailure(ctx context.Context, tx snapshotProbeExecer, statement string, args ...any) error {
 	if _, err := tx.ExecContext(ctx, statement, args...); err == nil {

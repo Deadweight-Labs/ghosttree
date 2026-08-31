@@ -11,45 +11,8 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/snapshot"
 )
 
-func TestCreateSnapshotRetriesExistingV1WithV1CaptureSemantics(t *testing.T) {
-	s, err := Open(t.TempDir() + "/snapshot-v1.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	if _, err := s.DB().Exec(`
-		INSERT INTO documents(id,project,slug,kind,title,head_revision,status,created_at,updated_at)
-		VALUES(4711,'p','old-slug','spec','Spec',1,'active','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z');
-		INSERT INTO document_revisions(document_id,revision,body,digest,message,created_at)
-		VALUES(4711,1,'doc','digest','message','2026-01-01T00:00:00Z');
-	`); err != nil {
-		t.Fatal(err)
-	}
-	in := snapshotCreateInput()
-	insertSealedV1Snapshot(t, s, in)
-	var before []byte
-	if err := s.DB().QueryRow(`SELECT payload FROM context_snapshot_entries WHERE entry_key='old-slug'`).Scan(&before); err != nil {
-		t.Fatal(err)
-	}
-
-	result, err := s.CreateContextSnapshot(context.Background(), in, snapshot.DefaultLimits(), func(context.Context) (snapshot.GitProvenance, error) { return in.Git, nil })
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Created || result.Snapshot.SchemaVersion != snapshot.SchemaVersionV1 {
-		t.Fatalf("retry result=%+v", result)
-	}
-	var after []byte
-	if err := s.DB().QueryRow(`SELECT payload FROM context_snapshot_entries WHERE entry_key='old-slug'`).Scan(&after); err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(before, after) {
-		t.Fatal("v1 retry changed stored payload bytes")
-	}
-}
-
-func TestCreateSnapshotV2DocumentIdentitySurvivesSlugChange(t *testing.T) {
-	s, err := Open(t.TempDir() + "/snapshot-v2.db")
+func TestCreateSnapshotV3DocumentIdentitySurvivesSlugChange(t *testing.T) {
+	s, err := Open(t.TempDir() + "/snapshot-v3.db")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +31,7 @@ func TestCreateSnapshotV2DocumentIdentitySurvivesSlugChange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.Snapshot.SchemaVersion != snapshot.SchemaVersionV2 {
+	if first.Snapshot.SchemaVersion != snapshot.SchemaVersion {
 		t.Fatalf("first schema=%d", first.Snapshot.SchemaVersion)
 	}
 	oldEntry := exactSnapshotEntry(t, s, in.Name, "4711")
@@ -110,42 +73,6 @@ func exactSnapshotEntry(t *testing.T, s *Store, name, key string) snapshot.Entry
 		t.Fatalf("snapshot %s has no document/%s", name, key)
 	}
 	return *page.Exact
-}
-
-func insertSealedV1Snapshot(t *testing.T, s *Store, in snapshot.CreateInput) {
-	t.Helper()
-	createdAt := "2026-01-02T00:00:00Z"
-	entries, err := captureContextEntries(context.Background(), s.DB(), in.Project, snapshot.SchemaVersionV1, snapshot.DefaultLimits())
-	if err != nil {
-		t.Fatal(err)
-	}
-	result, err := s.DB().Exec(`INSERT INTO context_snapshots(project,name,schema_version,state,git_object_format,git_commit,git_dirty,allow_dirty_used,git_metadata_source,actor_id,created_at)
-		VALUES(?,?,1,'building',?,?,0,0,?,?,?)`, in.Project, in.Name, in.Git.ObjectFormat, in.Git.Commit, in.Git.MetadataSource, in.ActorID, createdAt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	id, err := result.LastInsertId()
-	if err != nil {
-		t.Fatal(err)
-	}
-	summaries := make([]snapshot.EntrySummary, 0, len(entries))
-	counts, _ := snapshot.NewCounts(snapshot.SchemaVersionV1)
-	var total int64
-	for _, entry := range entries {
-		if _, err := s.DB().Exec(`INSERT INTO context_snapshot_entries(snapshot_id,domain,entry_key,payload,payload_digest,payload_size) VALUES(?,?,?,?,?,?)`, id, entry.Domain, entry.Key, []byte(entry.Payload), entry.PayloadDigest[:], entry.PayloadSize); err != nil {
-			t.Fatal(err)
-		}
-		summaries = append(summaries, snapshot.EntrySummary{Domain: entry.Domain, Key: entry.Key, PayloadDigest: entry.PayloadDigest, PayloadSize: entry.PayloadSize})
-		counts[entry.Domain]++
-		total += entry.PayloadSize
-	}
-	digest := snapshot.ContentDigest(snapshot.SchemaVersionV1, summaries)
-	countsJSON, _ := snapshot.MarshalCanonical(counts)
-	headBytes, _ := snapshot.MarshalCanonical(snapshotHeadFingerprintV1{Project: in.Project, Name: in.Name, SchemaVersion: snapshot.SchemaVersionV1, Git: in.Git, ActorID: in.ActorID, CreatedAt: createdAt})
-	logical := snapshot.LogicalSize(headBytes, summaries)
-	if _, err := s.DB().Exec(`UPDATE context_snapshots SET state='sealed',content_digest=?,entry_count=?,payload_bytes_total=?,counts_json=?,sealed_logical_bytes=? WHERE id=?`, digest[:], len(entries), total, countsJSON, logical, id); err != nil {
-		t.Fatal(err)
-	}
 }
 
 func snapshotCode(err error) string {

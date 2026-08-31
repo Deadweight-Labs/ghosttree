@@ -13,18 +13,6 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/snapshot"
 )
 
-type snapshotHeadFingerprintV1 struct {
-	Project       string                 `json:"project"`
-	Name          string                 `json:"name"`
-	SchemaVersion uint32                 `json:"schema_version"`
-	Git           snapshot.GitProvenance `json:"git"`
-	Message       *string                `json:"message"`
-	ActorID       string                 `json:"actor_id"`
-	ActorLabel    *string                `json:"actor_label"`
-	SessionRef    *string                `json:"session_ref"`
-	CreatedAt     string                 `json:"created_at"`
-}
-
 func (s *Store) CreateContextSnapshot(ctx context.Context, in snapshot.CreateInput, limits snapshot.Limits, recheck func(context.Context) (snapshot.GitProvenance, error)) (result snapshot.CreateResult, err error) {
 	if err := validateSnapshotCreateInput(in, limits); err != nil {
 		return result, err
@@ -65,6 +53,13 @@ func (s *Store) CreateContextSnapshot(ctx context.Context, in snapshot.CreateInp
 			return result, err
 		}
 	}
+	digestHead := snapshot.DigestHead{
+		Project: in.Project, Name: in.Name, SchemaVersion: schemaVersion, Git: in.Git,
+		Message: in.Message, ActorID: in.ActorID, ActorLabel: in.ActorLabel, SessionRef: in.SessionRef, CreatedAt: createdAt,
+	}
+	if found {
+		digestHead = snapshot.DigestHeadFromHead(existing)
+	}
 	if err := s.failSnapshot("after_head"); err != nil {
 		return result, err
 	}
@@ -92,7 +87,10 @@ func (s *Store) CreateContextSnapshot(ctx context.Context, in snapshot.CreateInp
 			}
 		}
 	}
-	digest := snapshot.ContentDigest(schemaVersion, summaries)
+	digest, err := snapshot.ContentDigest(digestHead, summaries)
+	if err != nil {
+		return result, err
+	}
 	if err := s.failSnapshot("after_entries"); err != nil {
 		return result, err
 	}
@@ -127,7 +125,7 @@ func (s *Store) CreateContextSnapshot(ctx context.Context, in snapshot.CreateInp
 		return result, nil
 	}
 
-	headBytes, err := snapshot.MarshalCanonical(snapshotHeadFingerprintV1{Project: in.Project, Name: in.Name, SchemaVersion: schemaVersion, Git: in.Git, Message: in.Message, ActorID: in.ActorID, ActorLabel: in.ActorLabel, SessionRef: in.SessionRef, CreatedAt: createdAt})
+	headBytes, err := snapshot.MarshalCanonical(digestHead)
 	if err != nil {
 		return result, err
 	}
@@ -145,7 +143,10 @@ func (s *Store) CreateContextSnapshot(ctx context.Context, in snapshot.CreateInp
 	if err := s.failSnapshot("after_reread"); err != nil {
 		return result, err
 	}
-	storedDigest := snapshot.ContentDigest(schemaVersion, storedSummaries)
+	storedDigest, err := snapshot.ContentDigest(digestHead, storedSummaries)
+	if err != nil {
+		return result, err
+	}
 	if storedDigest != digest || storedTotal != payloadTotal || !equalCounts(storedCounts, counts) {
 		return result, &snapshot.RuleError{Code: "snapshot_integrity_error"}
 	}
@@ -367,8 +368,7 @@ func contextSnapshotLogicalSize(h snapshot.Head, entries []snapshot.EntrySummary
 }
 
 func contextSnapshotCanonicalHead(h snapshot.Head) ([]byte, error) {
-	git := snapshot.GitProvenance{ObjectFormat: h.GitObjectFormat, Commit: h.GitCommit, Ref: h.GitRef, Branch: h.GitBranch, Dirty: h.GitDirty, WorktreeFingerprintVersion: h.GitWorktreeFingerprintVersion, WorktreeFingerprint: h.GitWorktreeFingerprint, AllowDirtyUsed: h.AllowDirtyUsed, MetadataSource: h.GitMetadataSource}
-	return snapshot.MarshalCanonical(snapshotHeadFingerprintV1{Project: h.Project, Name: h.Name, SchemaVersion: h.SchemaVersion, Git: git, Message: h.Message, ActorID: h.ActorID, ActorLabel: h.ActorLabel, SessionRef: h.SessionRef, CreatedAt: h.CreatedAt})
+	return snapshot.MarshalCanonical(snapshot.DigestHeadFromHead(h))
 }
 
 func checkSnapshotAggregateQuotas(ctx context.Context, q snapshotQueryer, project string, growth int64, l snapshot.Limits) error {

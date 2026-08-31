@@ -141,7 +141,11 @@ func verifyEntries(head Head, counts map[string]int64, entries []Entry, full boo
 	if !full {
 		return nil
 	}
-	if head.EntryCount != int64(len(entries)) || head.PayloadBytesTotal != total || ContentDigest(head.SchemaVersion, summaries) != head.ContentDigest {
+	if head.EntryCount != int64(len(entries)) || head.PayloadBytesTotal != total {
+		return integrityError(fmt.Errorf("snapshot aggregate mismatch"))
+	}
+	digest, err := ContentDigest(DigestHeadFromHead(head), summaries)
+	if err != nil || digest != head.ContentDigest {
 		return integrityError(fmt.Errorf("snapshot aggregate mismatch"))
 	}
 	for domain, count := range counts {

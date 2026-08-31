@@ -130,7 +130,7 @@ func TestVerifyExportRejectsUnknownSnapshotSchemaAndInvalidProjection(t *testing
 	if err := WriteExport(&out, head, counts, entries, nil); err != nil {
 		t.Fatal(err)
 	}
-	unknown := bytes.Replace(out.Bytes(), []byte(`"schema_version":1`), []byte(`"schema_version":3`), 1)
+	unknown := bytes.Replace(out.Bytes(), []byte(`"schema_version":3`), []byte(`"schema_version":4`), 1)
 	if _, err := VerifyExport(bytes.NewReader(unknown)); !isRuleCode(err, "unsupported_snapshot_schema") {
 		t.Fatalf("unknown schema error = %v", err)
 	}
@@ -155,7 +155,7 @@ func exportFixtureEntries(t *testing.T) []Entry {
 }
 
 func exportFixtureCounts() map[string]int64 {
-	counts, _ := NewCounts(1)
+	counts, _ := NewCounts(SchemaVersion)
 	counts["knowledge"] = 2
 	return counts
 }
@@ -167,7 +167,13 @@ func exportFixtureHead(entries []Entry) Head {
 		summaries[i] = EntrySummary{Domain: entry.Domain, Key: entry.Key, PayloadDigest: entry.PayloadDigest, PayloadSize: entry.PayloadSize}
 		total += entry.PayloadSize
 	}
-	return Head{ID: 77, Project: "p", Name: "n", SchemaVersion: 1, State: "sealed", ContentDigest: ContentDigest(1, summaries), GitObjectFormat: "sha1", GitCommit: strings.Repeat("a", 40), GitDirty: false, GitMetadataSource: "server-verified", ActorID: "person:1", CreatedAt: "2026-08-29T00:00:00Z", EntryCount: int64(len(entries)), PayloadBytesTotal: total}
+	head := Head{ID: 77, Project: "p", Name: "n", SchemaVersion: SchemaVersion, State: "sealed", GitObjectFormat: "sha1", GitCommit: strings.Repeat("a", 40), GitDirty: false, GitMetadataSource: "server-verified", ActorID: "person:1", CreatedAt: "2026-08-29T00:00:00Z", EntryCount: int64(len(entries)), PayloadBytesTotal: total}
+	digest, err := ContentDigest(DigestHeadFromHead(head), summaries)
+	if err != nil {
+		panic(err)
+	}
+	head.ContentDigest = digest
+	return head
 }
 
 func isRuleCode(err error, code string) bool {

@@ -9,7 +9,7 @@ import (
 var snapshotDomains = [...]string{"document", "ghost", "ghost-review", "knowledge", "request"}
 
 func supportedSchemaVersion(schemaVersion uint32) bool {
-	return schemaVersion == SchemaVersionV1 || schemaVersion == SchemaVersionV2
+	return schemaVersion == SchemaVersion
 }
 
 func NewCounts(schemaVersion uint32) (map[string]int64, error) {

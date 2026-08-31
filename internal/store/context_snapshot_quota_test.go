@@ -64,7 +64,7 @@ func TestSnapshotRetryStillEnforcesCanonicalHeadLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	headBytes, err := snapshot.MarshalCanonical(snapshotHeadFingerprintV1{Project: in.Project, Name: in.Name, SchemaVersion: snapshot.SchemaVersion, Git: in.Git, Message: in.Message, ActorID: in.ActorID, ActorLabel: in.ActorLabel, SessionRef: in.SessionRef, CreatedAt: first.Snapshot.CreatedAt})
+	headBytes, err := snapshot.MarshalCanonical(snapshot.DigestHead{Project: in.Project, Name: in.Name, SchemaVersion: snapshot.SchemaVersion, Git: in.Git, Message: in.Message, ActorID: in.ActorID, ActorLabel: in.ActorLabel, SessionRef: in.SessionRef, CreatedAt: first.Snapshot.CreatedAt})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestSnapshotAggregateQuotaAddsAllSealedLogicalSizes(t *testing.T) {
 		t.Fatalf("first=%d project=%d store=%d", firstProject, projectTotal, storeTotal)
 	}
 	in.Name = "release-3"
-	headBytes, err := snapshot.MarshalCanonical(snapshotHeadFingerprintV1{Project: in.Project, Name: in.Name, SchemaVersion: snapshot.SchemaVersion, Git: in.Git, ActorID: in.ActorID, CreatedAt: "2026-08-30T00:00:00Z"})
+	headBytes, err := snapshot.MarshalCanonical(snapshot.DigestHead{Project: in.Project, Name: in.Name, SchemaVersion: snapshot.SchemaVersion, Git: in.Git, ActorID: in.ActorID, CreatedAt: "2026-08-30T00:00:00Z"})
 	if err != nil {
 		t.Fatal(err)
 	}

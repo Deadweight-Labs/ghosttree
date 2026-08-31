@@ -59,7 +59,7 @@ func insertSealedReadFixture(t *testing.T, st *Store, name string) {
 	t.Helper()
 	payload := []byte(`{"v":1}`)
 	digest := snapshot.EntryDigest(payload)
-	result, err := st.db.Exec(`INSERT INTO context_snapshots(project,name,schema_version,state,git_object_format,git_commit,git_dirty,allow_dirty_used,git_metadata_source,actor_id,created_at) VALUES(?,?,1,'building','sha1',?,0,0,'server-verified','person:1','2026-08-29T00:00:00Z')`, "p", name, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	result, err := st.db.Exec(`INSERT INTO context_snapshots(project,name,schema_version,state,git_object_format,git_commit,git_dirty,allow_dirty_used,git_metadata_source,actor_id,created_at) VALUES(?,?,3,'building','sha1',?,0,0,'server-verified','person:1','2026-08-29T00:00:00Z')`, "p", name, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,11 +67,15 @@ func insertSealedReadFixture(t *testing.T, st *Store, name string) {
 	if _, err := st.db.Exec(`INSERT INTO context_snapshot_entries(snapshot_id,domain,entry_key,payload,payload_digest,payload_size) VALUES(?,?,?,?,?,?)`, id, "knowledge", "k", payload, digest[:], len(payload)); err != nil {
 		t.Fatal(err)
 	}
-	content := snapshot.ContentDigest(1, []snapshot.EntrySummary{{Domain: "knowledge", Key: "k", PayloadDigest: digest, PayloadSize: int64(len(payload))}})
-	countsMap, _ := snapshot.NewCounts(1)
+	digestHead := snapshot.DigestHead{Project: "p", Name: name, SchemaVersion: snapshot.SchemaVersion, Git: snapshot.GitProvenance{ObjectFormat: "sha1", Commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", MetadataSource: "server-verified"}, ActorID: "person:1", CreatedAt: "2026-08-29T00:00:00Z"}
+	content, err := snapshot.ContentDigest(digestHead, []snapshot.EntrySummary{{Domain: "knowledge", Key: "k", PayloadDigest: digest, PayloadSize: int64(len(payload))}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	countsMap, _ := snapshot.NewCounts(snapshot.SchemaVersion)
 	countsMap["knowledge"] = 1
 	counts, _ := snapshot.MarshalCanonical(countsMap)
-	headBytes, _ := snapshot.MarshalCanonical(snapshotHeadFingerprintV1{Project: "p", Name: name, SchemaVersion: 1, Git: snapshot.GitProvenance{ObjectFormat: "sha1", Commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", MetadataSource: "server-verified"}, ActorID: "person:1", CreatedAt: "2026-08-29T00:00:00Z"})
+	headBytes, _ := snapshot.MarshalCanonical(digestHead)
 	logical := snapshot.LogicalSize(headBytes, []snapshot.EntrySummary{{Domain: "knowledge", Key: "k", PayloadDigest: digest, PayloadSize: int64(len(payload))}})
 	if _, err := st.db.Exec(`UPDATE context_snapshots SET state='sealed',content_digest=?,entry_count=1,payload_bytes_total=?,counts_json=?,sealed_logical_bytes=? WHERE id=?`, content[:], len(payload), counts, logical, id); err != nil {
 		t.Fatal(err)

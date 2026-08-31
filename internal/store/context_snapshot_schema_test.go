@@ -173,8 +173,16 @@ func seedV1SealedSnapshot(t *testing.T, db *sql.DB, corruptDigest bool) (int64, 
 		t.Fatal(err)
 	}
 	summary := []snapshot.EntrySummary{{Domain: "ghost", Key: "file/a", PayloadDigest: digest, PayloadSize: int64(len(payload))}}
-	contentDigest := snapshot.ContentDigest(snapshot.SchemaVersionV1, summary)
-	counts, err := snapshot.NewCounts(snapshot.SchemaVersionV1)
+	digestHead := snapshot.DigestHead{
+		Project: "p", Name: "legacy", SchemaVersion: snapshot.SchemaVersion,
+		Git:     snapshot.GitProvenance{ObjectFormat: "sha1", Commit: "0000000000000000000000000000000000000000", Branch: stringPointer("dev"), MetadataSource: "server-verified"},
+		ActorID: "actor", CreatedAt: "2026-08-29T00:00:00Z",
+	}
+	contentDigest, err := snapshot.ContentDigest(digestHead, summary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	counts, err := snapshot.NewCounts(snapshot.SchemaVersion)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,11 +194,7 @@ func seedV1SealedSnapshot(t *testing.T, db *sql.DB, corruptDigest bool) (int64, 
 	if _, err := db.Exec(`UPDATE context_snapshots SET state='sealed',content_digest=?,entry_count=1,payload_bytes_total=?,counts_json=? WHERE id=?`, contentDigest[:], len(payload), countsJSON, id); err != nil {
 		t.Fatal(err)
 	}
-	headBytes, err := snapshot.MarshalCanonical(snapshotHeadFingerprintV1{
-		Project: "p", Name: "legacy", SchemaVersion: snapshot.SchemaVersionV1,
-		Git:     snapshot.GitProvenance{ObjectFormat: "sha1", Commit: "0000000000000000000000000000000000000000", Branch: stringPointer("dev"), MetadataSource: "server-verified"},
-		ActorID: "actor", CreatedAt: "2026-08-29T00:00:00Z",
-	})
+	headBytes, err := snapshot.MarshalCanonical(digestHead)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -414,7 +418,7 @@ func TestSnapshotProbeRollsBackErrorAfterInsert(t *testing.T) {
 	}
 }
 
-const snapshotHeadInsertSQL = `INSERT INTO context_snapshots(project,name,schema_version,state,content_digest,git_object_format,git_commit,git_ref,git_branch,git_dirty,git_worktree_fingerprint_version,git_worktree_fingerprint,allow_dirty_used,git_metadata_source,message,actor_id,actor_label,session_ref,created_at,entry_count,payload_bytes_total,counts_json) VALUES(?,?,1,'building',NULL,'sha1','0000000000000000000000000000000000000000',NULL,'dev',0,NULL,NULL,0,'server-verified',NULL,'actor',NULL,NULL,'2026-08-29T00:00:00Z',0,0,NULL)`
+const snapshotHeadInsertSQL = `INSERT INTO context_snapshots(project,name,schema_version,state,content_digest,git_object_format,git_commit,git_ref,git_branch,git_dirty,git_worktree_fingerprint_version,git_worktree_fingerprint,allow_dirty_used,git_metadata_source,message,actor_id,actor_label,session_ref,created_at,entry_count,payload_bytes_total,counts_json) VALUES(?,?,3,'building',NULL,'sha1','0000000000000000000000000000000000000000',NULL,'dev',0,NULL,NULL,0,'server-verified',NULL,'actor',NULL,NULL,'2026-08-29T00:00:00Z',0,0,NULL)`
 
 func insertBuildingSnapshot(t *testing.T, db *sql.DB, name string) int64 {
 	t.Helper()

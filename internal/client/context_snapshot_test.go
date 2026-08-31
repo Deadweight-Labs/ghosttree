@@ -251,7 +251,7 @@ func clientSnapshotFixture() (snapshot.Head, []snapshot.Entry) {
 		GitObjectFormat: "sha1", GitCommit: strings.Repeat("a", 40), GitMetadataSource: "server-verified",
 		ActorID: "person:1", CreatedAt: "2026-08-30T00:00:00Z", EntryCount: int64(len(entries)), PayloadBytesTotal: total, Counts: counts,
 	}
-	head.ContentDigest = snapshot.ContentDigest(head.SchemaVersion, summaries)
+	head.ContentDigest, _ = snapshot.ContentDigest(snapshot.DigestHeadFromHead(head), summaries)
 	return head, entries
 }
 
