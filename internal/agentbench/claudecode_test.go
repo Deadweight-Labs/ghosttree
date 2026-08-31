@@ -2,6 +2,7 @@ package agentbench
 
 import (
 	"errors"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -178,5 +179,29 @@ func TestDescribeExecErrorPrefersTheResultFieldOverRawJSON(t *testing.T) {
 	}
 	if strings.Contains(described, `"subtype"`) {
 		t.Fatalf("raw JSON must not be pasted when a result field exists: %q", described)
+	}
+}
+
+func TestWriteRawKeepsEveryRepetition(t *testing.T) {
+	dir := t.TempDir()
+	task := Task{ID: "np-01"}
+
+	first, err := writeRaw(dir, Invocation{Task: task, Arm: ArmGhosttree, Repetition: 1}, []byte("a"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := writeRaw(dir, Invocation{Task: task, Arm: ArmGhosttree, Repetition: 2}, []byte("b"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if first == second {
+		// Sonst ueberschreibt die zweite Wiederholung die erste, und genau die
+		// Streuung zwischen beiden ist der Grund, ueberhaupt zu wiederholen.
+		t.Fatalf("repetitions must not share a file name: %s", first)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 2 {
+		t.Fatalf("want two transcripts, got %d (%v)", len(entries), err)
 	}
 }

@@ -238,6 +238,18 @@ func (a *armAgents) For(arm agentbench.ArmName) (agentbench.Agent, error) {
 	if arm == agentbench.ArmGhosttree {
 		spec.GhostTreeSource = a.ghostTree
 	}
+	// Die CLAUDE.md des Projekts ist die Baseline aller erweiterten Arme —
+	// die echte, nicht eine nachgebaute. PrepareWorkspace entfernt sie
+	// zuerst und schreibt sie nur fuer berechtigte Arme zurueck, damit der
+	// bare-Arm sie garantiert nicht sieht.
+	if arm != agentbench.ArmBare {
+		md, err := os.ReadFile(filepath.Join(a.repoSource, "CLAUDE.md"))
+		if err == nil {
+			spec.ClaudeMD = string(md)
+		} else if !os.IsNotExist(err) {
+			return nil, err
+		}
+	}
 	workspace, err := agentbench.PrepareWorkspace(
 		filepath.Join(a.outDir, "workspaces", string(arm)), arm, spec)
 	if err != nil {

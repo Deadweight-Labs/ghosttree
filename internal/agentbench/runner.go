@@ -119,7 +119,7 @@ func runOne(ctx context.Context, campaign Campaign, task Task, arm ArmName, repe
 		record.FailureMsg = err.Error()
 		return record
 	}
-	transcript, err := agent.Run(ctx, Invocation{Task: task, Arm: arm, Config: campaign.Agent})
+	transcript, err := agent.Run(ctx, Invocation{Task: task, Arm: arm, Config: campaign.Agent, Repetition: repetition})
 	if err != nil {
 		record.Failure = FailureProduct
 		record.FailureMsg = err.Error()

@@ -34,6 +34,10 @@ type GroupSummary struct {
 	ClaimPrecision float64 `json:"claim_precision"`
 	ContradictRate float64 `json:"contradiction_rate"`
 	AbstentionRate float64 `json:"abstention_rate"`
+	// Aufwand je Lauf. Ein Gedaechtnis, das die Trefferquote wenig hebt und
+	// die Rechnung stark, ist ein anderes Produkt als eines, das beides hebt.
+	Turns   float64 `json:"turns"`
+	CostUSD float64 `json:"cost_usd"`
 }
 
 // Isolation records how tightly the runs were fenced in. It belongs in the
@@ -74,6 +78,7 @@ func summarise(records []RunRecord, key func(RunRecord) string) []GroupSummary {
 	type bucket struct {
 		runs                                   int
 		recall, precision, contradict, abstain float64
+		turns, cost                            float64
 	}
 	buckets := map[string]map[ArmName]*bucket{}
 	for _, record := range records {
@@ -93,6 +98,8 @@ func summarise(records []RunRecord, key func(RunRecord) string) []GroupSummary {
 		b.precision += record.Score.ClaimPrecision
 		b.contradict += record.Score.ContradictRate
 		b.abstain += record.Score.AbstentionRate
+		b.turns += float64(record.Transcript.Turns)
+		b.cost += record.Transcript.CostUSD
 	}
 	var out []GroupSummary
 	for group, arms := range buckets {
@@ -102,6 +109,7 @@ func summarise(records []RunRecord, key func(RunRecord) string) []GroupSummary {
 				Group: group, Arm: arm, Runs: b.runs,
 				FactRecall: b.recall / n, ClaimPrecision: b.precision / n,
 				ContradictRate: b.contradict / n, AbstentionRate: b.abstain / n,
+				Turns: b.turns / n, CostUSD: b.cost / n,
 			})
 		}
 	}
@@ -200,11 +208,12 @@ func (r Report) WriteMarkdown(w io.Writer) error {
 
 	writeGroups := func(title string, groups []GroupSummary) {
 		fmt.Fprintf(w, "\n## %s\n\n", title)
-		fmt.Fprintln(w, "| Gruppe | Arm | Läufe | Treffer | Präzision | Widerspruch | Enthaltung |")
-		fmt.Fprintln(w, "|---|---|---|---|---|---|---|")
+		fmt.Fprintln(w, "| Gruppe | Arm | Läufe | Treffer | Präzision | Widerspruch | Enthaltung | Züge | USD |")
+		fmt.Fprintln(w, "|---|---|---|---|---|---|---|---|---|")
 		for _, g := range groups {
-			fmt.Fprintf(w, "| %s | %s | %d | %.3f | %.3f | %.3f | %.3f |\n",
-				g.Group, g.Arm, g.Runs, g.FactRecall, g.ClaimPrecision, g.ContradictRate, g.AbstentionRate)
+			fmt.Fprintf(w, "| %s | %s | %d | %.3f | %.3f | %.3f | %.3f | %.1f | %.3f |\n",
+				g.Group, g.Arm, g.Runs, g.FactRecall, g.ClaimPrecision, g.ContradictRate,
+				g.AbstentionRate, g.Turns, g.CostUSD)
 		}
 	}
 	writeGroups("Nach Expositionsklasse", r.ByExposure)

@@ -103,3 +103,33 @@ func TestGradeIgnoresSlotsTheTaskNeverAskedFor(t *testing.T) {
 		t.Fatalf("an invented slot must not enter the denominator: %+v", score)
 	}
 }
+
+func TestGradeAcceptsEquivalentPathSpellings(t *testing.T) {
+	task := Task{Facts: []FactSlot{{ID: "f", Type: SlotPath, Weight: 1,
+		Accepted: []string{"internal/shared/proxymodel/wire.go"}}}}
+
+	for _, spelling := range []string{
+		"internal/shared/proxymodel/wire.go",
+		"./internal/shared/proxymodel/wire.go",
+		"/internal/shared/proxymodel/wire.go",
+		"  internal/shared/proxymodel/wire.go  ",
+	} {
+		value := spelling
+		form := ResponseForm{Slots: map[string]SlotValue{"f": {Path: &value}}}
+		if got := Grade(task, form); got.FactRecall != 1 {
+			t.Fatalf("spelling %q must count as the same path, got %.2f", spelling, got.FactRecall)
+		}
+	}
+}
+
+func TestGradeStillRejectsADifferentPath(t *testing.T) {
+	task := Task{Facts: []FactSlot{{ID: "f", Type: SlotPath, Weight: 1,
+		Accepted: []string{"internal/shared/proxymodel/wire.go"}}}}
+	other := "internal/shared/proxymodel/model.go"
+
+	form := ResponseForm{Slots: map[string]SlotValue{"f": {Path: &other}}}
+
+	if got := Grade(task, form); got.FactRecall != 0 {
+		t.Fatalf("a different file must not score: %.2f", got.FactRecall)
+	}
+}

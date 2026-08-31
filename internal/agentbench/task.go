@@ -73,14 +73,29 @@ func (t Task) Validate() error {
 		if slot.Weight <= 0 {
 			return fmt.Errorf("task %q slot %q: weight must be positive", t.ID, slot.ID)
 		}
-		if err := slot.validateExpectation(t.ID); err != nil {
+		if err := slot.validateExpectation(t.ID, t.Category); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (s FactSlot) validateExpectation(taskID string) error {
+func (s FactSlot) validateExpectation(taskID string, category Category) error {
+	// Eine Negativkontrolle hat per Definition keine richtige Antwort: gefragt
+	// wird nach etwas, das es nicht gibt, und gemessen wird, ob der Agent sich
+	// enthaelt statt zu erfinden. Sie braucht deshalb keine akzeptierten Werte,
+	// wohl aber die plausiblen Erfindungen — ohne sie zaehlte eine erfundene
+	// Antwort nur als falsch statt als Widerspruch, und die Kategorie koennte
+	// gar nichts messen.
+	if category == CategoryNegative {
+		if len(s.Accepted) > 0 {
+			return fmt.Errorf("task %q slot %q: a negative control must not have accepted values", taskID, s.ID)
+		}
+		if len(s.Contradicts) == 0 {
+			return fmt.Errorf("task %q slot %q: a negative control needs the plausible inventions in contradicts", taskID, s.ID)
+		}
+		return nil
+	}
 	switch s.Type {
 	case SlotPath, SlotString:
 		if len(s.Accepted) == 0 {

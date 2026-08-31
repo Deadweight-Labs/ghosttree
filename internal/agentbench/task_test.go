@@ -87,3 +87,32 @@ func TestLoadTasksRejectsAnInvalidFile(t *testing.T) {
 		t.Fatal("expected an invalid task file to fail the load")
 	}
 }
+
+func TestValidateAcceptsANegativeControlWithoutAcceptedValues(t *testing.T) {
+	task := Task{ID: "n", Repo: "r", Commit: "c", Prompt: "p", Category: CategoryNegative,
+		Facts: []FactSlot{{ID: "s", Type: SlotPath, Weight: 1,
+			Contradicts: []string{"internal/provider/route53/route53.go"}}}}
+
+	if err := task.Validate(); err != nil {
+		t.Fatalf("a negative control has no right answer by construction: %v", err)
+	}
+}
+
+func TestValidateRefusesANegativeControlWithoutContradictions(t *testing.T) {
+	task := Task{ID: "n", Repo: "r", Commit: "c", Prompt: "p", Category: CategoryNegative,
+		Facts: []FactSlot{{ID: "s", Type: SlotPath, Weight: 1}}}
+
+	if err := task.Validate(); err == nil {
+		t.Fatal("without the plausible inventions the category measures nothing")
+	}
+}
+
+func TestValidateRefusesANegativeControlWithAnAnswer(t *testing.T) {
+	task := Task{ID: "n", Repo: "r", Commit: "c", Prompt: "p", Category: CategoryNegative,
+		Facts: []FactSlot{{ID: "s", Type: SlotPath, Weight: 1,
+			Accepted: []string{"internal/provider/route53.go"}, Contradicts: []string{"x"}}}}
+
+	if err := task.Validate(); err == nil {
+		t.Fatal("a negative control with a right answer is not a negative control")
+	}
+}

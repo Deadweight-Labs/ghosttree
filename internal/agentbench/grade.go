@@ -49,7 +49,7 @@ func Grade(task Task, form ResponseForm) Score {
 func (s FactSlot) matches(v SlotValue) bool {
 	switch s.Type {
 	case SlotPath:
-		return v.Path != nil && containsFold(s.Accepted, *v.Path)
+		return v.Path != nil && containsFold(normalisePaths(s.Accepted), normalisePath(*v.Path))
 	case SlotString:
 		return v.String != nil && containsFold(s.Accepted, *v.String)
 	case SlotInteger:
@@ -66,11 +66,30 @@ func (s FactSlot) contradicts(v SlotValue) bool {
 	}
 	switch {
 	case v.Path != nil:
-		return containsFold(s.Contradicts, *v.Path)
+		return containsFold(normalisePaths(s.Contradicts), normalisePath(*v.Path))
 	case v.String != nil:
 		return containsFold(s.Contradicts, *v.String)
 	}
 	return false
+}
+
+// normalisePath removes the differences between two spellings of the same
+// path. "./internal/x.go", "internal/x.go" and "/internal/x.go" name the same
+// file, and an agent that knows the answer should not lose the point to a
+// leading dot. The normalisation is fixed and mechanical — no model decides
+// what counts as the same path.
+func normalisePath(path string) string {
+	path = strings.TrimSpace(strings.ReplaceAll(path, `\`, "/"))
+	path = strings.TrimPrefix(path, "./")
+	return strings.TrimPrefix(path, "/")
+}
+
+func normalisePaths(paths []string) []string {
+	out := make([]string, len(paths))
+	for i, p := range paths {
+		out[i] = normalisePath(p)
+	}
+	return out
 }
 
 func containsFold(candidates []string, value string) bool {

@@ -30,6 +30,8 @@ type streamEvent struct {
 		InputTokens  int `json:"input_tokens"`
 		OutputTokens int `json:"output_tokens"`
 	} `json:"usage"`
+	NumTurns int     `json:"num_turns"`
+	CostUSD  float64 `json:"total_cost_usd"`
 }
 
 func parseStreamJSON(r io.Reader) (Transcript, error) {
@@ -57,6 +59,8 @@ func parseStreamJSON(r io.Reader) (Transcript, error) {
 			transcript.Output = event.Result
 			transcript.InputTokens = event.Usage.InputTokens
 			transcript.OutputTokens = event.Usage.OutputTokens
+			transcript.Turns = event.NumTurns
+			transcript.CostUSD = event.CostUSD
 			if event.IsError {
 				transcript.AgentError = event.Result
 			}
@@ -192,6 +196,10 @@ func writeRaw(dir string, inv Invocation, raw []byte) (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	path := filepath.Join(dir, fmt.Sprintf("%s--%s.jsonl", inv.Task.ID, inv.Arm))
+	repetition := inv.Repetition
+	if repetition < 1 {
+		repetition = 1
+	}
+	path := filepath.Join(dir, fmt.Sprintf("%s--%s--r%d.jsonl", inv.Task.ID, inv.Arm, repetition))
 	return path, os.WriteFile(path, raw, 0o644)
 }
