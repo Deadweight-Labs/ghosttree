@@ -60,6 +60,7 @@ type Report struct {
 	ByCategory []GroupSummary  `json:"by_category"`
 	Effects    []PairedEffect  `json:"effects"`
 	Failures   map[Failure]int `json:"failures"`
+	Suspect    []TaskSuspicion `json:"suspect_tasks,omitempty"`
 }
 
 func BuildReport(campaign Campaign, records []RunRecord) Report {
@@ -69,6 +70,7 @@ func BuildReport(campaign Campaign, records []RunRecord) Report {
 			report.Failures[record.Failure]++
 		}
 	}
+	report.Suspect = SuspectTasks(records, campaign.Arms)
 	report.ByExposure = summarise(records, func(r RunRecord) string { return string(r.Exposure.Class()) })
 	report.ByCategory = summarise(records, func(r RunRecord) string { return string(r.Category) })
 	return report
@@ -218,6 +220,18 @@ func (r Report) WriteMarkdown(w io.Writer) error {
 	}
 	writeGroups("Nach Expositionsklasse", r.ByExposure)
 	writeGroups("Nach Kategorie", r.ByCategory)
+
+	if len(r.Suspect) > 0 {
+		fmt.Fprint(w, "\n## Verdächtige Aufgaben\n\n")
+		fmt.Fprint(w, "Jeder Arm hat null erreicht. Einstimmigkeit über Arme hinweg, die sich sonst "+
+			"unterscheiden, ist ein Hinweis auf die Aufgabe, nicht auf die Arme — die Ground Truth "+
+			"gehört geprüft, bevor diese Zeilen in eine Zahl eingehen.\n\n")
+		fmt.Fprintln(w, "| Aufgabe | Läufe | Arme | Treffer |")
+		fmt.Fprintln(w, "|---|---|---|---|")
+		for _, s := range r.Suspect {
+			fmt.Fprintf(w, "| %s | %d | %d | %.3f |\n", s.TaskID, s.Runs, s.Arms, s.Recall)
+		}
+	}
 
 	if len(r.Failures) > 0 {
 		fmt.Fprint(w, "\n## Fehler\n\n")
