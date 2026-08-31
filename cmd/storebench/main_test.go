@@ -71,6 +71,45 @@ func TestPrepareDatabasePathDoesNotDeleteReplacementFile(t *testing.T) {
 	}
 }
 
+func TestPrepareDatabasePathRefusesExistingSQLiteSidecars(t *testing.T) {
+	for _, suffix := range []string{"-wal", "-shm"} {
+		t.Run(suffix, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "reserved.db")
+			sidecar := path + suffix
+			if err := os.WriteFile(sidecar, []byte("keep"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, _, err := prepareDatabasePath(path, false)
+			if err == nil || !strings.Contains(err.Error(), sidecar) {
+				t.Fatalf("error = %v, want sidecar path", err)
+			}
+			raw, readErr := os.ReadFile(sidecar)
+			if readErr != nil || string(raw) != "keep" {
+				t.Fatalf("sidecar changed: %q %v", raw, readErr)
+			}
+		})
+	}
+}
+
+func TestPrepareDatabasePathNeverDeletesUntrackedSidecar(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "reserved.db")
+	_, cleanup, err := prepareDatabasePath(path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sidecar := path + "-wal"
+	if err := os.WriteFile(sidecar, []byte("untracked"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := cleanup(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(sidecar)
+	if err != nil || string(raw) != "untracked" {
+		t.Fatalf("untracked sidecar changed: %q %v", raw, err)
+	}
+}
+
 func TestRunCommandWritesVerifiedSmallReport(t *testing.T) {
 	dir := t.TempDir()
 	reportPath := filepath.Join(dir, "report.json")

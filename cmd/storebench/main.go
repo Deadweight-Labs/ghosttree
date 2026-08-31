@@ -163,6 +163,14 @@ func prepareDatabasePath(requested string, keep bool) (string, func() error, err
 	if !info.IsDir() {
 		return "", nil, fmt.Errorf("database parent %q is not a directory", parent)
 	}
+	for _, suffix := range []string{"-wal", "-shm"} {
+		sidecar := absolute + suffix
+		if info, err := os.Lstat(sidecar); err == nil {
+			return "", nil, fmt.Errorf("database sidecar %q already exists as %s", sidecar, info.Mode())
+		} else if !os.IsNotExist(err) {
+			return "", nil, err
+		}
+	}
 	file, err := os.OpenFile(absolute, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		if os.IsExist(err) {
@@ -192,13 +200,10 @@ func prepareDatabasePath(requested string, keep bool) (string, func() error, err
 		if !os.SameFile(owned, current) {
 			return nil
 		}
-		var cleanupErr error
-		for _, suffix := range []string{"", "-wal", "-shm"} {
-			if err := os.Remove(absolute + suffix); err != nil && !os.IsNotExist(err) {
-				cleanupErr = errors.Join(cleanupErr, err)
-			}
+		if err := os.Remove(absolute); err != nil && !os.IsNotExist(err) {
+			return err
 		}
-		return cleanupErr
+		return nil
 	}, nil
 }
 

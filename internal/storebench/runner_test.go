@@ -2,6 +2,7 @@ package storebench
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -92,6 +93,53 @@ func TestRunStartsDependentOperationOnlyAfterPredecessorCompletes(t *testing.T) 
 	close(releaseA)
 	if id := <-started; id != "b" {
 		t.Fatalf("next operation = %s, want b", id)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGeneratedGhostTreeWaitsForEveryGhostWrite(t *testing.T) {
+	workload, expected := Generate(91, Scale{Projects: 1, GhostFiles: 2, GhostBodyBytes: 16})
+	for i := range workload.Operations {
+		workload.Operations[i].At = 0
+	}
+	firstStarted := make(chan struct{})
+	secondFinished := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	treeStarted := make(chan struct{}, 1)
+	backend := &fakeBackend{execute: func(_ context.Context, operation Operation) error {
+		switch payload := operation.Payload.(type) {
+		case GhostPutPayload:
+			if strings.HasSuffix(payload.Path, "000000.go") {
+				close(firstStarted)
+				<-releaseFirst
+			} else {
+				close(secondFinished)
+			}
+		case GhostTreePayload:
+			treeStarted <- struct{}{}
+		}
+		return nil
+	}}
+	done := make(chan error, 1)
+	go func() {
+		_, err := Run(context.Background(), backend, workload, expected,
+			RunConfig{Concurrency: 2, ArrivalMultiplier: 1, RunID: "ghost-barrier"})
+		done <- err
+	}()
+	<-firstStarted
+	<-secondFinished
+	select {
+	case <-treeStarted:
+		t.Fatal("ghost tree started before every ghost write completed")
+	default:
+	}
+	close(releaseFirst)
+	select {
+	case <-treeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("ghost tree did not start after all writes completed")
 	}
 	if err := <-done; err != nil {
 		t.Fatal(err)

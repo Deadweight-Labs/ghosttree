@@ -107,6 +107,7 @@ func (g *generator) sessions(project string, projectNumber int, scale Scale) {
 func (g *generator) ghosts(project string, projectNumber int, scale Scale) {
 	last := ""
 	paths := make([]string, 0, scale.GhostFiles)
+	puts := make([]string, 0, scale.GhostFiles)
 	for n := range scale.GhostFiles {
 		path := fmt.Sprintf("packages/pkg-%04d/internal/file-%06d.go", n/100, n)
 		paths = append(paths, path)
@@ -114,6 +115,7 @@ func (g *generator) ghosts(project string, projectNumber int, scale Scale) {
 		payload := GhostPutPayload{Project: project, Path: path, Description: description,
 			ContentSHA: digest(description), LineCount: 1 + len(description)/80}
 		last = g.add(GhostPut, int64(len(description)), nil, payload)
+		puts = append(puts, last)
 		g.expected.Ghosts[project+"\x00"+path] = ExpectedGhost{Project: project, Path: path,
 			DescriptionDigest: digest(description), DescriptionBytes: len(description),
 			ContentSHA: payload.ContentSHA, LineCount: payload.LineCount}
@@ -123,7 +125,7 @@ func (g *generator) ghosts(project string, projectNumber int, scale Scale) {
 		}
 	}
 	if last != "" {
-		g.add(GhostTree, 0, []string{last}, GhostTreePayload{Project: project, Prefix: "packages", ExpectedPaths: paths})
+		g.add(GhostTree, 0, puts, GhostTreePayload{Project: project, Prefix: "packages", ExpectedPaths: paths})
 	}
 	_ = projectNumber
 }
