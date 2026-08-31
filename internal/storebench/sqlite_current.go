@@ -28,12 +28,16 @@ func OpenCurrentSQLite(path string) (Backend, error) {
 func (b *currentSQLite) Name() string { return "sqlite_current" }
 
 func (b *currentSQLite) Execute(ctx context.Context, operation Operation) error {
+	return b.executeOn(ctx, b.store, operation)
+}
+
+func (b *currentSQLite) executeOn(ctx context.Context, st *store.Store, operation Operation) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	switch payload := operation.Payload.(type) {
 	case SessionUpsertPayload:
-		id, err := b.store.UpsertSession(store.Session{Harness: "storebench", ExternalID: payload.ExternalID,
+		id, err := st.UpsertSession(store.Session{Harness: "storebench", ExternalID: payload.ExternalID,
 			Scope: scope.Axes{Project: payload.Project}})
 		if err == nil {
 			b.setID(b.sessions, payload.LogicalID, id)
@@ -48,19 +52,19 @@ func (b *currentSQLite) Execute(ctx context.Context, operation Operation) error 
 		for i, chunk := range payload.Chunks {
 			chunks[i] = store.Chunk{Seq: chunk.Seq, Role: chunk.Role, Text: chunk.Text, Raw: chunk.Raw}
 		}
-		return b.store.AppendChunks(id, chunks)
+		return st.AppendChunks(id, chunks)
 	case GhostPutPayload:
-		_, err := b.store.PutGhostFile(store.GhostFile{Project: payload.Project, Path: payload.Path, Kind: "file",
+		_, err := st.PutGhostFile(store.GhostFile{Project: payload.Project, Path: payload.Path, Kind: "file",
 			Description: payload.Description, ContentSHA: payload.ContentSHA, LineCount: payload.LineCount})
 		return err
 	case GhostReadPayload:
-		_, err := b.store.GhostFileByPath(payload.Project, payload.Path)
+		_, err := st.GhostFileByPath(payload.Project, payload.Path)
 		return err
 	case GhostTreePayload:
-		_, err := b.store.GhostFilesUnder(payload.Project, payload.Prefix)
+		_, err := st.GhostFilesUnder(payload.Project, payload.Prefix)
 		return err
 	case DocumentCreatePayload:
-		document, err := b.store.CreateDocument(store.Document{Project: payload.Project, Slug: payload.Slug,
+		document, err := st.CreateDocument(store.Document{Project: payload.Project, Slug: payload.Slug,
 			Kind: "spec", Title: payload.Title, Person: "storebench"}, payload.Body, "benchmark create")
 		if err == nil {
 			b.setID(b.documents, payload.LogicalID, document.ID)
@@ -71,27 +75,27 @@ func (b *currentSQLite) Execute(ctx context.Context, operation Operation) error 
 		if err != nil {
 			return err
 		}
-		_, err = b.store.PushRevision(id, payload.Base, payload.Body, "benchmark revision", "storebench")
+		_, err = st.PushRevision(id, payload.Base, payload.Body, "benchmark revision", "storebench")
 		return err
 	case DocumentReadPayload:
 		id, err := b.id(b.documents, payload.Document)
 		if err != nil {
 			return err
 		}
-		_, err = b.store.DocumentRevision(id, payload.Revision)
+		_, err = st.DocumentRevision(id, payload.Revision)
 		return err
 	case MigrationBeginPayload:
 		artifacts := make(map[string]string, len(payload.Artifacts))
 		for _, artifact := range payload.Artifacts {
 			artifacts[artifact.Path] = artifact.Digest
 		}
-		id, err := b.store.BeginMigration(payload.Project, artifacts)
+		id, err := st.BeginMigration(payload.Project, artifacts)
 		if err == nil {
 			b.setID(b.migrations, payload.LogicalID, id)
 		}
 		return err
 	case MigrationReadPayload:
-		rows, err := b.store.DB().QueryContext(ctx, `SELECT a.path,a.digest FROM migration_artifacts a JOIN migration_runs r ON r.id=a.run_id WHERE r.project=?`, payload.Project)
+		rows, err := st.DB().QueryContext(ctx, `SELECT a.path,a.digest FROM migration_artifacts a JOIN migration_runs r ON r.id=a.run_id WHERE r.project=?`, payload.Project)
 		if err != nil {
 			return err
 		}
@@ -101,7 +105,7 @@ func (b *currentSQLite) Execute(ctx context.Context, operation Operation) error 
 		if err != nil {
 			return err
 		}
-		_, err = b.store.SessionByID(id)
+		_, err = st.SessionByID(id)
 		return err
 	default:
 		return fmt.Errorf("unsupported %s payload %T", operation.Kind, operation.Payload)
