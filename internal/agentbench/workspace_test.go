@@ -182,3 +182,42 @@ func TestPrepareWorkspaceRefusesATreeForAnotherArm(t *testing.T) {
 		t.Fatal("handing a ghost tree to a non-ghosttree arm is a configuration error, not a silent no-op")
 	}
 }
+
+func TestCheckLeakageRefusesAWorkspaceThatSwallowsTheHostHome(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no host home to test against")
+	}
+	// Der Container mountet Root nach /work. Waere das der Heimatordner,
+	// saehe jeder Arm das globale CLAUDE.md und die Auto-Memory.
+	ws := Workspace{Root: home, Repo: filepath.Join(home, "repo"), Home: filepath.Join(home, "home"),
+		Env: map[string]string{"PATH": "/usr/bin", "HOME": filepath.Join(home, "home")}}
+
+	findings := CheckLeakage(ws, ArmBare, AllowedSurface{})
+
+	var caught bool
+	for _, f := range findings {
+		if f.Kind == "host_home" {
+			caught = true
+		}
+	}
+	if !caught {
+		t.Fatalf("a workspace containing the host home must be refused: %+v", findings)
+	}
+}
+
+func TestCheckLeakageAcceptsAWorkspaceBelowTheHostHome(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no host home to test against")
+	}
+	root := filepath.Join(home, "runs", "pilot", "ws-bare")
+	ws := Workspace{Root: root, Repo: filepath.Join(root, "repo"), Home: filepath.Join(root, "home"),
+		Env: map[string]string{"PATH": "/usr/bin", "HOME": filepath.Join(root, "home")}}
+
+	for _, f := range CheckLeakage(ws, ArmBare, AllowedSurface{}) {
+		if f.Kind == "host_home" {
+			t.Fatalf("a directory inside the home is the normal place to run: %+v", f)
+		}
+	}
+}

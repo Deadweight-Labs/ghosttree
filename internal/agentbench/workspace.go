@@ -25,6 +25,15 @@ type Workspace struct {
 }
 
 func PrepareWorkspace(root string, arm ArmName, spec WorkspaceSpec) (Workspace, error) {
+	// Ein wiederverwendeter Arbeitsbereich traegt die Reste des vorigen Laufs:
+	// Dateien, die der Agent angelegt hat, und im schlimmsten Fall den Baum
+	// eines anderen Arms. os.CopyFS meldet das als "file exists" — eine
+	// Meldung, aus der niemand den Grund liest.
+	if entries, err := os.ReadDir(root); err == nil && len(entries) > 0 {
+		return Workspace{}, fmt.Errorf(
+			"workspace %s already exists and is not empty; a campaign never reuses one, "+
+				"because it would carry the previous run's files into this one", root)
+	}
 	ws := Workspace{
 		Root: root,
 		Repo: filepath.Join(root, "repo"),

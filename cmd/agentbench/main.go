@@ -33,7 +33,13 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 	binary := flags.String("agent-binary", "claude", "agent CLI to invoke")
 	runtimeName := flags.String("runtime", "docker", "docker or local; local is not a valid campaign")
 	image := flags.String("image", "agentbench:dev", "container image for the docker runtime")
-	network := flags.String("network", "", "docker network; empty uses the Docker default")
+	network := flags.String("network", "", "docker network; ignored when the network is sealed")
+	seal := flags.Bool("seal-network", true, "run inside an internal network whose only way out is the allowlisted proxy")
+	proxyImage := flags.String("proxy-image", "agentbench-proxy:dev", "container image for the sealing proxy")
+	domains := flags.String("allowed-domains", strings.Join(agentbench.DefaultAllowedDomains, ","),
+		"comma-separated hosts the sealed network may reach")
+	allowOpenNetwork := flags.Bool("allow-open-network", false,
+		"accept runs that can reach the open internet; never right for a campaign")
 	dryRun := flags.Bool("dry-run", false, "validate and print the plan without running agents")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -76,13 +82,32 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 	if *repoSource == "" {
 		return fmt.Errorf("--repo is required for a real run")
 	}
+	// Der Zugangsdaten-Test steht vor allem anderen: fehlt er, endet jeder
+	// einzelne Lauf in "Not logged in", und das faellt sonst erst nach
+	// Stunden auf.
+	credential, err := agentbench.RequireModelCredential(agentbench.EnvLookup)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "model credential: %s (value never logged, never on a command line)\n", credential)
+	if err := requireEmptyOutDir(*outDir); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(*outDir, 0o755); err != nil {
 		return err
 	}
 
-	runtime, err := selectRuntime(*runtimeName, *image, *network)
+	ctx := context.Background()
+	runtime, isolation, err := selectRuntime(ctx, runtimeOptions{
+		name: *runtimeName, image: *image, network: *network,
+		seal: *seal, proxyImage: *proxyImage, domains: splitList(*domains),
+	})
 	if err != nil {
 		return err
+	}
+	if !isolation.Sealed && !*allowOpenNetwork {
+		return fmt.Errorf("the runs would reach the open internet; seal the network or pass --allow-open-network " +
+			"and accept that the report calls the numbers unsealed")
 	}
 	if slices.Contains(campaign.Arms, agentbench.ArmGhosttree) && *ghostTree == "" {
 		return fmt.Errorf("--ghost-tree is required when the ghosttree arm runs; without it that arm measures an empty tree")
@@ -90,7 +115,8 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 	agents := &armAgents{
 		campaign: campaign, repoSource: *repoSource, binary: *binary,
 		outDir: *outDir, runtime: runtime, ghostTree: *ghostTree,
-		prepared: map[agentbench.ArmName]agentbench.Agent{},
+		prepared:   map[agentbench.ArmName]agentbench.Agent{},
+		workspaces: map[agentbench.ArmName]agentbench.Workspace{},
 	}
 	// Alle Arme werden vor dem ersten Lauf gebaut und geprueft: ein
 	// Leakage-Befund im dritten Arm soll die Kampagne stoppen, bevor Tokens
@@ -99,39 +125,92 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 		if _, err := agents.For(arm); err != nil {
 			return err
 		}
+		findings, err := agentbench.CheckRuntimeLeakage(ctx, runtime,
+			agents.workspaces[arm], arm, allowedFor(arm, *allowOpenNetwork))
+		if err != nil {
+			return fmt.Errorf("runtime probe for arm %q: %w", arm, err)
+		}
+		if len(findings) > 0 {
+			return fmt.Errorf("runtime probe failed for arm %q: %+v", arm, findings)
+		}
+		fmt.Fprintf(stdout, "arm %s: workspace prepared, probe clean\n", arm)
 	}
 
-	records, err := agentbench.Run(context.Background(), campaign, tasks, agents)
-	if err != nil {
-		return err
-	}
+	records, runErr := agentbench.Run(ctx, campaign, tasks, agents)
 
 	report := agentbench.BuildReport(campaign, records)
+	report.Isolation = isolation
 	if len(campaign.Arms) >= 2 {
 		report.Effects = append(report.Effects, agentbench.PairedBootstrap(
 			records, agentbench.ArmGhosttree, agentbench.ArmClaudeNative, campaign.Seed, 10000))
 	}
-	return writeOutputs(report, *outDir)
+	// Auch ein abgebrochener Lauf bekommt seine Ausgabe: die wenigen
+	// Datensaetze sagen, woran es lag, und ohne sie muesste man den Abbruch
+	// nachstellen, um ihn zu verstehen.
+	if err := writeOutputs(report, *outDir); err != nil {
+		return err
+	}
+	return runErr
 }
 
-func selectRuntime(name, image, network string) (agentbench.Runtime, error) {
-	switch name {
+type runtimeOptions struct {
+	name, image, network, proxyImage string
+	seal                             bool
+	domains                          []string
+}
+
+func selectRuntime(ctx context.Context, opts runtimeOptions) (agentbench.Runtime, agentbench.Isolation, error) {
+	switch opts.name {
 	case "docker":
-		if image == "" {
-			return nil, fmt.Errorf("--image is required for the docker runtime")
+		if opts.image == "" {
+			return nil, agentbench.Isolation{}, fmt.Errorf("--image is required for the docker runtime")
 		}
-		return agentbench.DockerRuntime{
-			Image: image, Network: network,
-			PassEnv: []string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"},
-		}, nil
+		runtime := agentbench.DockerRuntime{
+			Image: opts.image, Network: opts.network,
+			PassEnv: agentbench.ModelCredentialVars,
+		}
+		isolation := agentbench.Isolation{Runtime: "docker", Image: opts.image, Network: opts.network}
+		if opts.seal {
+			sealed, err := agentbench.EnsureSealedNetwork(ctx, agentbench.NetworkSpec{
+				ProxyImage: opts.proxyImage, Allowed: opts.domains,
+			})
+			if err != nil {
+				return nil, agentbench.Isolation{}, err
+			}
+			runtime.Network, runtime.ProxyURL = sealed.Name, sealed.ProxyURL
+			isolation.Network, isolation.AllowedDomains, isolation.Sealed = sealed.Name, sealed.Allowed, true
+		}
+		return runtime, isolation, nil
 	case "local":
 		// Auf der Wirtsmaschine erbt jeder Arm die global installierten
 		// Agent-Regeln und Werkzeuge. Fuer eine Kampagne ist das keine
 		// gueltige Messung, nur zum Nachsehen eines einzelnen Laufs.
-		return agentbench.LocalRuntime{}, nil
+		return agentbench.LocalRuntime{}, agentbench.Isolation{Runtime: "local"}, nil
 	default:
-		return nil, fmt.Errorf("unknown runtime %q, want docker or local", name)
+		return nil, agentbench.Isolation{}, fmt.Errorf("unknown runtime %q, want docker or local", opts.name)
 	}
+}
+
+// requireEmptyOutDir keeps two campaigns from sharing an output directory.
+// Their JSONL and their report would land in the same files, and the mix
+// would look like one campaign with contradictory numbers.
+func requireEmptyOutDir(dir string) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) == 0 {
+		return nil
+	}
+	return fmt.Errorf("--out %s is not empty; a campaign writes into a fresh directory "+
+		"so its report and transcripts cannot be mixed with another run's", dir)
+}
+
+func splitList(list string) []string {
+	var out []string
+	for _, item := range strings.Split(list, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			out = append(out, item)
+		}
+	}
+	return out
 }
 
 // armAgents builds one workspace per arm and refuses to hand out an agent
@@ -145,6 +224,7 @@ type armAgents struct {
 	runtime    agentbench.Runtime
 	ghostTree  string
 	prepared   map[agentbench.ArmName]agentbench.Agent
+	workspaces map[agentbench.ArmName]agentbench.Workspace
 }
 
 func (a *armAgents) For(arm agentbench.ArmName) (agentbench.Agent, error) {
@@ -160,21 +240,23 @@ func (a *armAgents) For(arm agentbench.ArmName) (agentbench.Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	if findings := agentbench.CheckLeakage(workspace, arm, allowedFor(arm)); len(findings) > 0 {
+	if findings := agentbench.CheckLeakage(workspace, arm, allowedFor(arm, false)); len(findings) > 0 {
 		return nil, fmt.Errorf("leakage check failed for arm %q: %+v", arm, findings)
 	}
 	agent := agentbench.NewClaudeCodeAgent(a.binary, workspace,
 		filepath.Join(a.outDir, "raw", string(arm)), a.runtime)
 	a.prepared[arm] = agent
+	a.workspaces[arm] = workspace
 	return agent, nil
 }
 
-func allowedFor(arm agentbench.ArmName) agentbench.AllowedSurface {
+func allowedFor(arm agentbench.ArmName, openNetwork bool) agentbench.AllowedSurface {
 	return agentbench.AllowedSurface{
-		GhostTree:  arm == agentbench.ArmGhosttree,
-		ClaudeMD:   arm != agentbench.ArmBare,
-		AutoMemory: arm == agentbench.ArmClaudeNative,
-		MemoryDir:  arm == agentbench.ArmClaudeMem || arm == agentbench.ArmAgentMemory,
+		GhostTree:   arm == agentbench.ArmGhosttree,
+		ClaudeMD:    arm != agentbench.ArmBare,
+		AutoMemory:  arm == agentbench.ArmClaudeNative,
+		MemoryDir:   arm == agentbench.ArmClaudeMem || arm == agentbench.ArmAgentMemory,
+		OpenNetwork: openNetwork,
 	}
 }
 

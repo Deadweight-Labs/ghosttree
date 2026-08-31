@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 type AllowedSurface struct {
@@ -11,12 +12,27 @@ type AllowedSurface struct {
 	ClaudeMD   bool
 	AutoMemory bool
 	MemoryDir  bool
+	// OpenNetwork suppresses the finding that the run can reach hosts beyond
+	// the model endpoint. It is never right for a campaign — an arm that can
+	// research on the web compensates for a missing memory — and exists so a
+	// single exploratory run can be made without a sealed network.
+	OpenNetwork bool
 }
 
 type LeakageFinding struct {
 	Arm    ArmName `json:"arm"`
 	Kind   string  `json:"kind"`
 	Detail string  `json:"detail"`
+}
+
+// pathContains reports whether sub lies at or below root. Both are cleaned
+// first, so a trailing slash or a "." segment does not decide the answer.
+func pathContains(root, sub string) bool {
+	root, sub = filepath.Clean(root), filepath.Clean(sub)
+	if root == sub {
+		return true
+	}
+	return strings.HasPrefix(sub, root+string(filepath.Separator))
 }
 
 func CheckLeakage(ws Workspace, arm ArmName, allowed AllowedSurface) []LeakageFinding {
@@ -46,6 +62,12 @@ func CheckLeakage(ws Workspace, arm ArmName, allowed AllowedSurface) []LeakageFi
 	}
 	if !allowed.MemoryDir && exists(ws.Home, ".memory") {
 		report("memory_dir", "the home directory contains a memory state")
+	}
+	// Der Wirtsheimatordner traegt die globalen Agentenregeln und die
+	// Auto-Memory. Liegt er innerhalb des Arbeitsbereichs, mountet der
+	// Container ihn nach /work und alle Arme sehen ihn auf einen Schlag.
+	if home, err := os.UserHomeDir(); err == nil && ws.Root != "" && pathContains(ws.Root, home) {
+		report("host_home", fmt.Sprintf("the workspace root %s contains the host home %s", ws.Root, home))
 	}
 	if ws.Env["PATH"] == "" {
 		report("path", "PATH is unset, so the host PATH would be inherited")

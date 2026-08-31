@@ -36,8 +36,21 @@ type GroupSummary struct {
 	AbstentionRate float64 `json:"abstention_rate"`
 }
 
+// Isolation records how tightly the runs were fenced in. It belongs in the
+// report because a number produced without a seal means something different
+// from the same number produced with one, and the difference is not visible
+// in the number.
+type Isolation struct {
+	Runtime        string   `json:"runtime"`
+	Image          string   `json:"image,omitempty"`
+	Network        string   `json:"network,omitempty"`
+	AllowedDomains []string `json:"allowed_domains,omitempty"`
+	Sealed         bool     `json:"sealed"`
+}
+
 type Report struct {
 	Campaign   Campaign        `json:"campaign"`
+	Isolation  Isolation       `json:"isolation"`
 	Records    []RunRecord     `json:"-"`
 	ByExposure []GroupSummary  `json:"by_exposure"`
 	ByCategory []GroupSummary  `json:"by_category"`
@@ -125,6 +138,25 @@ func (r Report) writeProvenance(w io.Writer) error {
 	return nil
 }
 
+// writeIsolation says in one paragraph whether the run could reach the open
+// internet. An unsealed campaign is not worthless, but every claim from it
+// carries the caveat, so the caveat is printed next to the numbers.
+func (r Report) writeIsolation(w io.Writer) {
+	fmt.Fprint(w, "## Abschottung\n\n")
+	fmt.Fprintf(w, "Laufzeit `%s`", r.Isolation.Runtime)
+	if r.Isolation.Image != "" {
+		fmt.Fprintf(w, ", Abbild `%s`", r.Isolation.Image)
+	}
+	if r.Isolation.Sealed {
+		fmt.Fprintf(w, ", internes Netz `%s`, erreichbar nur: %v.\n\n",
+			r.Isolation.Network, r.Isolation.AllowedDomains)
+		return
+	}
+	fmt.Fprint(w, ", **ohne Netzabdichtung**. Die Läufe konnten das offene Netz erreichen; "+
+		"ein Arm kann fehlendes Gedächtnis durch Recherche ersetzt haben. "+
+		"Effekte aus diesem Lauf sind Untergrenzen mit unbekanntem Rauschanteil.\n\n")
+}
+
 func orDash(value string) string {
 	if value == "" {
 		return "—"
@@ -151,6 +183,8 @@ func (r Report) WriteMarkdown(w io.Writer) error {
 		r.Campaign.Agent.ModelID); err != nil {
 		return err
 	}
+
+	r.writeIsolation(w)
 
 	if err := r.writeProvenance(w); err != nil {
 		return err

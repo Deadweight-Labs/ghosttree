@@ -88,3 +88,33 @@ func TestContainerAgentUsesTheRuntime(t *testing.T) {
 		t.Fatal("the agent must carry a runtime so container and local runs share one path")
 	}
 }
+
+func TestDockerRuntimeRoutesThroughTheSealingProxy(t *testing.T) {
+	runtime := DockerRuntime{Image: "agentbench:dev", Network: "agentbench-sealed",
+		ProxyURL: "http://agentbench-proxy:3128"}
+
+	cmd := runtime.Command(context.Background(), Workspace{Root: "/runs/ws"}, ArmBare, []string{"claude"})
+
+	joined := strings.Join(cmd.Args, " ")
+	for _, want := range []string{
+		"--network agentbench-sealed",
+		"-e HTTPS_PROXY=http://agentbench-proxy:3128",
+		// Kleinschreibung ebenfalls: curl und viele Node-Bibliotheken lesen
+		// nur die eine oder nur die andere Form.
+		"-e https_proxy=http://agentbench-proxy:3128",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("a sealed run must be routed through the proxy, missing %q:\n%s", want, joined)
+		}
+	}
+}
+
+func TestDockerRuntimeWithoutASealSetsNoProxy(t *testing.T) {
+	runtime := DockerRuntime{Image: "agentbench:dev"}
+
+	cmd := runtime.Command(context.Background(), Workspace{Root: "/runs/ws"}, ArmBare, []string{"claude"})
+
+	if strings.Contains(strings.Join(cmd.Args, " "), "PROXY") {
+		t.Fatalf("an unsealed run must not pretend to be proxied:\n%v", cmd.Args)
+	}
+}

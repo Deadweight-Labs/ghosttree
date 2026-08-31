@@ -94,13 +94,24 @@ type ClaudeCodeAgent struct {
 	workspace Workspace
 	rawDir    string
 	runtime   Runtime
+	redactor  Redactor
 }
 
 func NewClaudeCodeAgent(binary string, ws Workspace, rawDir string, runtime Runtime) *ClaudeCodeAgent {
 	if runtime == nil {
 		runtime = LocalRuntime{}
 	}
-	return &ClaudeCodeAgent{binary: binary, workspace: ws, rawDir: rawDir, runtime: runtime}
+	return &ClaudeCodeAgent{
+		binary: binary, workspace: ws, rawDir: rawDir, runtime: runtime,
+		redactor: RedactorFromEnv(ModelCredentialVars...),
+	}
+}
+
+// WithRedactor replaces the credential redactor. The default already covers
+// the model credentials; this exists for a campaign that forwards more.
+func (a *ClaudeCodeAgent) WithRedactor(r Redactor) *ClaudeCodeAgent {
+	a.redactor = r
+	return a
 }
 
 func (a *ClaudeCodeAgent) Run(ctx context.Context, inv Invocation) (Transcript, error) {
@@ -119,8 +130,11 @@ func (a *ClaudeCodeAgent) Run(ctx context.Context, inv Invocation) (Transcript, 
 	}
 	started := time.Now()
 	out, err := a.runtime.Command(ctx, a.workspace, inv.Arm, argv).Output()
+	// Redigiert wird vor jeder weiteren Verwendung: die Rohausgabe wandert in
+	// die veroeffentlichten Transkripte und in Fehlermeldungen.
+	out = a.redactor.Bytes(out)
 	if err != nil {
-		return Transcript{}, errors.New(describeExecErrorWithOutput(err, out))
+		return Transcript{}, errors.New(a.redactor.String(describeExecErrorWithOutput(err, out)))
 	}
 	transcript, err := parseStreamJSON(bytes.NewReader(out))
 	if err != nil {

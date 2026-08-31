@@ -114,3 +114,124 @@ func TestCheckRuntimeLeakageRunsTheProbeThroughTheRuntime(t *testing.T) {
 		t.Fatalf("the probe produced no output at all: %+v", findings)
 	}
 }
+
+func TestEvaluateProbeReportsAnMCPServerTheArmMayNotSee(t *testing.T) {
+	probe := "path /usr/bin\nhome /work/home\ncwd /work/repo\n" +
+		"mcp /work/home/.claude.json ghosttree\n"
+
+	findings := evaluateProbe(ArmBare, AllowedSurface{}, probe)
+
+	if !contains(kinds(findings), "mcp_server") {
+		t.Fatalf("an MCP server is a tool the arm did not earn: %+v", findings)
+	}
+}
+
+func TestEvaluateProbeAcceptsGhosttreesOwnMCPServer(t *testing.T) {
+	probe := "path /usr/bin\nhome /work/home\ncwd /work/repo\n" +
+		"mcp /work/home/.claude.json ghosttree\n"
+
+	findings := evaluateProbe(ArmGhosttree, AllowedSurface{GhostTree: true}, probe)
+
+	if contains(kinds(findings), "mcp_server") {
+		t.Fatalf("the ghosttree arm is entitled to its own server: %+v", findings)
+	}
+}
+
+func TestEvaluateProbeReportsAWritableToolDirectory(t *testing.T) {
+	// Ein beschreibbares /opt/arm hiesse: der Agent kann die Allowlist
+	// aendern, die seinen Arm definiert.
+	probe := "path /usr/bin\nhome /work/home\ncwd /work/repo\nwritable /opt/arm\n"
+
+	findings := evaluateProbe(ArmGhosttree, AllowedSurface{GhostTree: true}, probe)
+
+	if !contains(kinds(findings), "writable_path") {
+		t.Fatalf("a writable tool directory breaks the arm boundary: %+v", findings)
+	}
+}
+
+func TestEvaluateProbeAcceptsAWritableWorkspace(t *testing.T) {
+	probe := "path /usr/bin\nhome /work/home\ncwd /work/repo\n" +
+		"writable /work/home\nwritable /work/repo/sub\nwritable /tmp\n"
+
+	findings := evaluateProbe(ArmBare, AllowedSurface{}, probe)
+
+	if contains(kinds(findings), "writable_path") {
+		t.Fatalf("the agent must be able to work: %+v", findings)
+	}
+}
+
+func TestEvaluateProbeReportsAnOpenNetwork(t *testing.T) {
+	probe := "path /usr/bin\nhome /work/home\ncwd /work/repo\n" +
+		"net forbidden example.com 200\nnet model api.anthropic.com 401\n"
+
+	findings := evaluateProbe(ArmBare, AllowedSurface{}, probe)
+
+	if !contains(kinds(findings), "network_open") {
+		t.Fatalf("a run that reaches the open web can research its way around a missing memory: %+v", findings)
+	}
+}
+
+func TestEvaluateProbeAcceptsASealedNetwork(t *testing.T) {
+	// 403 ist die Antwort des Proxys auf eine nicht gelistete Domain.
+	probe := "path /usr/bin\nhome /work/home\ncwd /work/repo\n" +
+		"net forbidden example.com 403\nnet model api.anthropic.com 401\n"
+
+	findings := evaluateProbe(ArmBare, AllowedSurface{}, probe)
+
+	if len(findings) != 0 {
+		t.Fatalf("a sealed network that reaches the model is exactly right: %+v", findings)
+	}
+}
+
+func TestEvaluateProbeReportsAnUnreachableModel(t *testing.T) {
+	probe := "path /usr/bin\nhome /work/home\ncwd /work/repo\n" +
+		"net forbidden example.com 000\nnet model api.anthropic.com 000\n"
+
+	findings := evaluateProbe(ArmBare, AllowedSurface{}, probe)
+
+	if !contains(kinds(findings), "model_unreachable") {
+		t.Fatalf("a seal that also blocks the model fails every run: %+v", findings)
+	}
+}
+
+func TestEvaluateProbeReportsAMissingProbeTool(t *testing.T) {
+	probe := "path /usr/bin\nhome /work/home\ncwd /work/repo\nmcpfail jq-missing\n"
+
+	findings := evaluateProbe(ArmBare, AllowedSurface{}, probe)
+
+	if !contains(kinds(findings), "probe_failed") {
+		t.Fatalf("a probe that could not look is not a probe that found nothing: %+v", findings)
+	}
+}
+
+func TestEvaluateProbeIgnoresDockersOwnResolver(t *testing.T) {
+	// 127.0.0.11 ist Dockers eingebetteter DNS. Meldete die Sonde ihn,
+	// scheiterte jede Kampagne an ihrer eigenen Pruefung.
+	probe := "path /usr/bin\nhome /work/home\ncwd /work/repo\nport 127.0.0.11:36557\n"
+
+	findings := evaluateProbe(ArmBare, AllowedSurface{}, probe)
+
+	if contains(kinds(findings), "open_port") {
+		t.Fatalf("the platform's resolver is not a memory worker: %+v", findings)
+	}
+}
+
+func TestEvaluateProbeStillReportsALocalWorkerPort(t *testing.T) {
+	probe := "path /usr/bin\nhome /work/home\ncwd /work/repo\nport 127.0.0.1:8765\n"
+
+	findings := evaluateProbe(ArmBare, AllowedSurface{}, probe)
+
+	if !contains(kinds(findings), "open_port") {
+		t.Fatalf("a worker on loopback must still be caught: %+v", findings)
+	}
+}
+
+func TestEvaluateProbeReportsAMissingProcessTool(t *testing.T) {
+	probe := "path /usr/bin\nhome /work/home\ncwd /work/repo\nprocfail ps-missing\n"
+
+	findings := evaluateProbe(ArmBare, AllowedSurface{}, probe)
+
+	if !contains(kinds(findings), "probe_failed") {
+		t.Fatalf("a probe without ps found no processes because it could not look: %+v", findings)
+	}
+}

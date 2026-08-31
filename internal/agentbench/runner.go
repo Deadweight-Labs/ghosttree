@@ -2,6 +2,7 @@ package agentbench
 
 import (
 	"context"
+	"fmt"
 	"math/rand/v2"
 	"time"
 )
@@ -56,15 +57,51 @@ func SameAgent(agent Agent) AgentFor {
 	return AgentForFunc(func(ArmName) (Agent, error) { return agent, nil })
 }
 
+// startupFailureLimit is how many opening runs may fail before the campaign
+// gives up. An expired credential, a broken image or an unreachable model
+// fails every run alike; without this a campaign spends its whole wall clock
+// producing the same error several hundred times.
+const startupFailureLimit = 3
+
+// startupGuard watches only the opening runs. Once anything has succeeded the
+// campaign is viable and later failures are data, not a reason to stop.
+type startupGuard struct {
+	succeeded bool
+	failures  int
+	lastMsg   string
+}
+
+func (g *startupGuard) observe(record RunRecord) error {
+	if record.Failure == FailureNone {
+		g.succeeded = true
+		return nil
+	}
+	if g.succeeded {
+		return nil
+	}
+	g.failures++
+	g.lastMsg = record.FailureMsg
+	if g.failures >= startupFailureLimit {
+		return fmt.Errorf("the first %d runs all failed and none succeeded; last error: %s",
+			g.failures, g.lastMsg)
+	}
+	return nil
+}
+
 func Run(ctx context.Context, campaign Campaign, tasks []Task, agents AgentFor) ([]RunRecord, error) {
 	if err := campaign.Validate(tasks); err != nil {
 		return nil, err
 	}
 	var records []RunRecord
+	var guard startupGuard
 	for repetition := 1; repetition <= campaign.Repetitions; repetition++ {
 		for taskIndex, task := range tasks {
 			for _, arm := range blockOrder(campaign.Seed, taskIndex, repetition, campaign.Arms) {
-				records = append(records, runOne(ctx, campaign, task, arm, repetition, agents))
+				record := runOne(ctx, campaign, task, arm, repetition, agents)
+				records = append(records, record)
+				if err := guard.observe(record); err != nil {
+					return records, err
+				}
 			}
 		}
 	}

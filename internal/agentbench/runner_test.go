@@ -119,3 +119,47 @@ func TestRunRefusesACampaignThatFailsValidation(t *testing.T) {
 		t.Fatal("Run must refuse an invalid campaign instead of producing numbers")
 	}
 }
+
+func TestRunStopsWhenEveryOpeningRunFails(t *testing.T) {
+	campaign := Campaign{
+		RepoCommit: "c", KnowledgeCutoff: time.Unix(1, 0).UTC(),
+		Arms: []ArmName{ArmGhosttree}, Repetitions: 1, Seed: 1,
+	}
+	tasks := []Task{pilotTask("t1"), pilotTask("t2"), pilotTask("t3"),
+		pilotTask("t4"), pilotTask("t5")}
+	// Ein abgelaufener Zugang trifft jeden Lauf gleich; ohne Abbruch
+	// produziert die Kampagne denselben Fehler hundertfach.
+	agent := NewFakeAgent(nil)
+
+	records, err := Run(context.Background(), campaign, tasks, SameAgent(agent))
+
+	if err == nil {
+		t.Fatal("a campaign whose every run fails must stop, not finish")
+	}
+	if len(records) != startupFailureLimit {
+		t.Fatalf("want %d records before the stop, got %d", startupFailureLimit, len(records))
+	}
+}
+
+func TestRunKeepsGoingOnceSomethingSucceeded(t *testing.T) {
+	campaign := Campaign{
+		RepoCommit: "c", KnowledgeCutoff: time.Unix(1, 0).UTC(),
+		Arms: []ArmName{ArmGhosttree}, Repetitions: 1, Seed: 1,
+	}
+	answer := "```agentbench-form\n{\"slots\":{\"s\":{\"string\":\"x\"}}}\n```"
+	// Nur die erste Aufgabe gelingt; danach scheitert alles. Das ist Datenlage,
+	// kein Grund zum Abbruch — sonst verloere man jede Kampagne, in der ein Arm
+	// systematisch nichts liefert.
+	agent := NewFakeAgent(map[string]string{"t1": answer})
+	tasks := []Task{pilotTask("t1"), pilotTask("t2"), pilotTask("t3"),
+		pilotTask("t4"), pilotTask("t5")}
+
+	records, err := Run(context.Background(), campaign, tasks, SameAgent(agent))
+
+	if err != nil {
+		t.Fatalf("later failures are data, not an abort: %v", err)
+	}
+	if len(records) != len(tasks) {
+		t.Fatalf("want a record per task, got %d", len(records))
+	}
+}

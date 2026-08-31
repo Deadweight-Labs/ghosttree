@@ -32,11 +32,14 @@ func (LocalRuntime) Command(ctx context.Context, ws Workspace, _ ArmName, argv [
 // exist inside the container.
 type DockerRuntime struct {
 	Image string
-	// Network is passed to docker run. Empty means Docker's default. A run
-	// still needs to reach the model endpoint, so full isolation is not
-	// available here; restricting outbound traffic to that endpoint needs a
-	// proxy or firewall outside this process.
+	// Network is passed to docker run. Empty means Docker's default, which
+	// gives the run the full internet. EnsureSealedNetwork returns the name of
+	// an internal network instead, which has no route out at all.
 	Network string
+	// ProxyURL is the only way out of that internal network. Set together with
+	// Network it seals the run to the allowed domains; set alone it does
+	// nothing, because Docker's default network reaches everything anyway.
+	ProxyURL string
 	// PassEnv names host variables forwarded by name only. The value is never
 	// placed on the command line, where every ps would show it.
 	PassEnv []string
@@ -52,6 +55,12 @@ func (d DockerRuntime) Command(ctx context.Context, ws Workspace, arm ArmName, a
 		"-e", "AGENTBENCH_ARM=" + string(arm), "--user", d.user()}
 	if d.Network != "" {
 		args = append(args, "--network", d.Network)
+	}
+	if d.ProxyURL != "" {
+		args = append(args,
+			"-e", "HTTPS_PROXY="+d.ProxyURL, "-e", "https_proxy="+d.ProxyURL,
+			"-e", "HTTP_PROXY="+d.ProxyURL, "-e", "http_proxy="+d.ProxyURL,
+			"-e", "NO_PROXY=localhost,127.0.0.1", "-e", "no_proxy=localhost,127.0.0.1")
 	}
 	for _, name := range d.PassEnv {
 		args = append(args, "-e", name)

@@ -1,7 +1,10 @@
 FROM debian:trixie-slim
 
+# procps und iproute2 sind fuer den Agenten unnoetig, aber die Sonde braucht
+# ps und ss. Ohne sie meldet sie keine Prozesse und keine Ports — und das
+# liest sich wie ein sauberer Befund, statt wie eine Pruefung, die nie lief.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates git curl jq nodejs npm \
+      ca-certificates git curl jq nodejs npm procps iproute2 \
     && rm -rf /var/lib/apt/lists/*
 
 # Die Agenten-CLI liegt unter /opt/arm/common und ist damit fuer jeden Arm
