@@ -100,7 +100,7 @@ func (g *generator) sessions(project string, projectNumber int, scale Scale) {
 		for _, chunk := range chunks {
 			indexed[chunk.Seq] = chunk
 		}
-		g.expected.Sessions[logicalID] = ExpectedSession{ExternalID: "bench-" + logicalID, Project: project, Chunks: indexed}
+		g.expected.Sessions[logicalID] = ExpectedSession{Harness: "storebench", ExternalID: "bench-" + logicalID, Project: project, Chunks: indexed}
 	}
 }
 
@@ -115,7 +115,8 @@ func (g *generator) ghosts(project string, projectNumber int, scale Scale) {
 			ContentSHA: digest(description), LineCount: 1 + len(description)/80}
 		last = g.add(GhostPut, int64(len(description)), nil, payload)
 		g.expected.Ghosts[project+"\x00"+path] = ExpectedGhost{Project: project, Path: path,
-			DescriptionDigest: digest(description), DescriptionBytes: len(description)}
+			DescriptionDigest: digest(description), DescriptionBytes: len(description),
+			ContentSHA: payload.ContentSHA, LineCount: payload.LineCount}
 		if scale.ReadEvery > 0 && (n+1)%scale.ReadEvery == 0 {
 			g.add(GhostRead, 0, []string{last}, GhostReadPayload{Project: project, Path: path,
 				DescriptionDigest: digest(description), ContentSHA: payload.ContentSHA, LineCount: payload.LineCount})
@@ -146,7 +147,7 @@ func (g *generator) documents(project string, projectNumber int, scale Scale) {
 		g.add(DocumentRead, 0, []string{previous}, DocumentReadPayload{
 			Document: logicalID, Revision: len(digests), Digest: digests[len(digests)-1],
 		})
-		g.expected.Documents[logicalID] = ExpectedDocument{Project: project, Slug: logicalID, RevisionDigests: digests}
+		g.expected.Documents[logicalID] = ExpectedDocument{Project: project, Slug: logicalID, RevisionDigests: digests, Status: "active"}
 	}
 }
 
@@ -164,7 +165,7 @@ func (g *generator) migration(project string, projectNumber int, scale Scale) {
 		LogicalID: logicalID, Project: project, Artifacts: artifacts,
 	})
 	g.add(MigrationRead, 0, []string{beginID}, MigrationReadPayload{Project: project, Artifacts: artifacts})
-	g.expected.Migrations[logicalID] = ExpectedMigration{Project: project, Artifacts: artifacts}
+	g.expected.Migrations[logicalID] = ExpectedMigration{Project: project, Artifacts: artifacts, State: "pending"}
 }
 
 func (g *generator) add(kind Kind, payloadBytes int64, dependencies []string, payload any) string {

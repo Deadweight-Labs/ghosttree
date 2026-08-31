@@ -106,6 +106,60 @@ func TestCurrentSQLiteReportsPreciseVerificationMismatch(t *testing.T) {
 	}
 }
 
+func TestCurrentSQLiteVerificationChecksStoredMetadata(t *testing.T) {
+	mutations := []string{
+		`UPDATE sessions SET harness='wrong'`,
+		`UPDATE ghost_files SET content_sha='wrong', line_count=line_count+1`,
+		`UPDATE documents SET status='archived'`,
+		`UPDATE migration_runs SET state='complete'`,
+	}
+	for _, mutation := range mutations {
+		t.Run(mutation, func(t *testing.T) {
+			workload, expected := Generate(81, Scale{Projects: 1, Sessions: 1, ChunksPerSession: 1,
+				GhostFiles: 1, GhostBodyBytes: 16, Documents: 1, DocumentRevisions: 1,
+				DocumentBodyBytes: 16, MigrationArtifacts: 1})
+			backend, err := OpenCurrentSQLite(filepath.Join(t.TempDir(), "ghosttree.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer backend.Close()
+			for _, operation := range workload.Operations {
+				if err := backend.Execute(context.Background(), operation); err != nil {
+					t.Fatal(err)
+				}
+			}
+			current := backend.(*currentSQLite)
+			if _, err := current.store.DB().Exec(mutation); err != nil {
+				t.Fatal(err)
+			}
+			if err := backend.Verify(context.Background(), expected); err == nil {
+				t.Fatal("verification accepted corrupted metadata")
+			}
+		})
+	}
+}
+
+func TestCurrentSQLiteVerificationRunsForeignKeyCheck(t *testing.T) {
+	backend, err := OpenCurrentSQLite(filepath.Join(t.TempDir(), "ghosttree.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backend.Close()
+	current := backend.(*currentSQLite)
+	if _, err := current.store.DB().Exec(`PRAGMA foreign_keys=OFF`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := current.store.DB().Exec(`INSERT INTO session_chunks(session_id,seq,role,text,raw) VALUES(999,0,'user','','')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := current.store.DB().Exec(`PRAGMA foreign_keys=ON`); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.Verify(context.Background(), Expected{}); err == nil || !strings.Contains(err.Error(), "foreign key") {
+		t.Fatalf("verification error = %v, want foreign key failure", err)
+	}
+}
+
 func TestCurrentSQLiteRetriesRemainIdempotent(t *testing.T) {
 	workload, expected := Generate(9, Scale{Projects: 1, Sessions: 2, ChunksPerSession: 3, MigrationArtifacts: 4})
 	backend, err := OpenCurrentSQLite(filepath.Join(t.TempDir(), "ghosttree.db"))
