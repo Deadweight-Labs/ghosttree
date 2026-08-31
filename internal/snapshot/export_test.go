@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func TestExportV1IsClosedCanonicalAndByteExact(t *testing.T) {
+func TestExportV2IsClosedCanonicalAndByteExact(t *testing.T) {
 	entries := exportFixtureEntries(t)
 	head := exportFixtureHead(entries)
 	counts := exportFixtureCounts()
@@ -112,7 +112,57 @@ func TestVerifyExportRejectsAggregateCorruptionMatrix(t *testing.T) {
 	}
 }
 
-func TestExportV1RejectsNonCanonicalPayload(t *testing.T) {
+func TestVerifyExportRejectsHeadCorruption(t *testing.T) {
+	entries := exportFixtureEntries(t)
+	head := exportFixtureHead(entries)
+	counts := exportFixtureCounts()
+	var out bytes.Buffer
+	if err := WriteExport(&out, head, counts, entries, nil); err != nil {
+		t.Fatal(err)
+	}
+	valid := out.Bytes()
+	cases := map[string][]byte{
+		"project":         bytes.Replace(valid, []byte(`"project":"p"`), []byte(`"project":"q"`), 1),
+		"name":            bytes.Replace(valid, []byte(`"name":"n"`), []byte(`"name":"m"`), 1),
+		"git commit":      bytes.Replace(valid, []byte(strings.Repeat("a", 40)), []byte(strings.Repeat("b", 40)), 1),
+		"git ref":         bytes.Replace(valid, []byte(`"git_ref":null`), []byte(`"git_ref":"refs/heads/main"`), 1),
+		"git branch":      bytes.Replace(valid, []byte(`"git_branch":null`), []byte(`"git_branch":"main"`), 1),
+		"metadata source": bytes.Replace(valid, []byte(`"git_metadata_source":"server-verified"`), []byte(`"git_metadata_source":"client-reported"`), 1),
+		"message":         bytes.Replace(valid, []byte(`"message":null`), []byte(`"message":"changed"`), 1),
+		"actor id":        bytes.Replace(valid, []byte(`"actor_id":"person:1"`), []byte(`"actor_id":"person:2"`), 1),
+		"actor label":     bytes.Replace(valid, []byte(`"actor_label":null`), []byte(`"actor_label":"changed"`), 1),
+		"session ref":     bytes.Replace(valid, []byte(`"session_ref":null`), []byte(`"session_ref":"changed"`), 1),
+		"created at":      bytes.Replace(valid, []byte(`"created_at":"2026-08-29T00:00:00Z"`), []byte(`"created_at":"2026-08-29T00:00:01Z"`), 1),
+	}
+	for name, raw := range cases {
+		t.Run(name, func(t *testing.T) {
+			if bytes.Equal(raw, valid) {
+				t.Fatal("mutation did not change fixture")
+			}
+			if _, err := VerifyExport(bytes.NewReader(raw)); !isRuleCode(err, "snapshot_integrity_error") {
+				t.Fatalf("error=%v", err)
+			}
+		})
+	}
+}
+
+func TestVerifyProjectedExportDoesNotReturnDigest(t *testing.T) {
+	entries := exportFixtureEntries(t)
+	head := exportFixtureHead(entries)
+	var out bytes.Buffer
+	if err := WriteExport(&out, head, exportFixtureCounts(), entries, &ExportFilter{Domain: "knowledge"}); err != nil {
+		t.Fatal(err)
+	}
+	verification, err := VerifyExport(bytes.NewReader(out.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verification.Full || verification.Digest != nil {
+		t.Fatalf("projection claims verified digest: %+v", verification)
+	}
+}
+
+func TestExportV2RejectsNonCanonicalPayload(t *testing.T) {
 	entry := Entry{Domain: "knowledge", Key: "x", Payload: json.RawMessage(`{"b":1,"a":2}`)}
 	entry.PayloadDigest = EntryDigest(entry.Payload)
 	entry.PayloadSize = int64(len(entry.Payload))

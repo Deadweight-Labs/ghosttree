@@ -161,10 +161,10 @@ func TestValidateCanonicalAcceptsOnlyExactCanonicalBytes(t *testing.T) {
 	}
 }
 
-func TestExportHeadV1HasClosedFieldSet(t *testing.T) {
-	typ := reflect.TypeOf(ExportHeadV1{})
+func TestExportHeadV2HasClosedFieldSet(t *testing.T) {
+	typ := reflect.TypeOf(ExportHeadV2{})
 	if typ.NumField() != 20 {
-		t.Fatalf("ExportHeadV1 has %d fields, want 20", typ.NumField())
+		t.Fatalf("ExportHeadV2 has %d fields, want 20", typ.NumField())
 	}
 	want := []string{
 		"project", "name", "schema_version", "content_digest", "git_object_format",

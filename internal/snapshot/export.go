@@ -8,7 +8,7 @@ import (
 	"sort"
 )
 
-const ExportMediaType = "application/vnd.ghosttree.context-snapshot+json;version=1"
+const ExportMediaType = "application/vnd.ghosttree.context-snapshot+json;version=2"
 
 type ExportFilter struct {
 	Domain string  `json:"domain"`
@@ -19,15 +19,15 @@ type Verification struct {
 	SnapshotName string
 	EntryCount   int64
 	Full         bool
-	Digest       Digest
+	Digest       *Digest
 }
 
-type exportEnvelopeV1 struct {
+type exportEnvelopeV2 struct {
 	Counts        map[string]int64 `json:"counts"`
 	Entries       []Entry          `json:"entries"`
 	ExportVersion uint32           `json:"export_version"`
 	Filter        *ExportFilter    `json:"filter"`
-	Snapshot      ExportHeadV1     `json:"snapshot"`
+	Snapshot      ExportHeadV2     `json:"snapshot"`
 }
 
 func WriteExport(dst io.Writer, head Head, counts map[string]int64, entries []Entry, filter *ExportFilter) error {
@@ -48,9 +48,9 @@ func WriteExport(dst io.Writer, head Head, counts map[string]int64, entries []En
 		return err
 	}
 
-	envelope := exportEnvelopeV1{
+	envelope := exportEnvelopeV2{
 		Counts: copyCounts(counts), Entries: ordered, ExportVersion: ExportVersion,
-		Filter: filter, Snapshot: exportHeadV1(head),
+		Filter: filter, Snapshot: exportHeadV2(head),
 	}
 	raw, err := MarshalCanonical(envelope)
 	if err != nil {
@@ -73,7 +73,7 @@ func VerifyExport(src io.Reader) (Verification, error) {
 	if err := ValidateCanonical(canonical); err != nil {
 		return Verification{}, integrityError(err)
 	}
-	var envelope exportEnvelopeV1
+	var envelope exportEnvelopeV2
 	decoder := json.NewDecoder(bytes.NewReader(canonical))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&envelope); err != nil {
@@ -82,7 +82,7 @@ func VerifyExport(src io.Reader) (Verification, error) {
 	if envelope.ExportVersion != ExportVersion {
 		return Verification{}, &RuleError{Code: "unsupported_snapshot_schema"}
 	}
-	head := headFromExportV1(envelope.Snapshot)
+	head := headFromExportV2(envelope.Snapshot)
 	if err := ValidateHead(head, envelope.Counts); err != nil {
 		return Verification{}, err
 	}
@@ -92,7 +92,12 @@ func VerifyExport(src io.Reader) (Verification, error) {
 	if err := verifyEntries(head, envelope.Counts, envelope.Entries, envelope.Filter == nil); err != nil {
 		return Verification{}, err
 	}
-	return Verification{SnapshotName: head.Name, EntryCount: int64(len(envelope.Entries)), Full: envelope.Filter == nil, Digest: head.ContentDigest}, nil
+	verification := Verification{SnapshotName: head.Name, EntryCount: int64(len(envelope.Entries)), Full: envelope.Filter == nil}
+	if verification.Full {
+		digest := head.ContentDigest
+		verification.Digest = &digest
+	}
+	return verification, nil
 }
 
 func validateExportFilter(filter *ExportFilter, entries []Entry) error {
@@ -160,8 +165,8 @@ func verifyEntries(head Head, counts map[string]int64, entries []Entry, full boo
 	return nil
 }
 
-func exportHeadV1(head Head) ExportHeadV1 {
-	return ExportHeadV1{
+func exportHeadV2(head Head) ExportHeadV2 {
+	return ExportHeadV2{
 		Project: head.Project, Name: head.Name, SchemaVersion: head.SchemaVersion, ContentDigest: head.ContentDigest,
 		GitObjectFormat: head.GitObjectFormat, GitCommit: head.GitCommit, GitRef: head.GitRef, GitBranch: head.GitBranch,
 		GitDirty: head.GitDirty, GitWorktreeFingerprintVersion: head.GitWorktreeFingerprintVersion,
@@ -171,7 +176,7 @@ func exportHeadV1(head Head) ExportHeadV1 {
 	}
 }
 
-func headFromExportV1(head ExportHeadV1) Head {
+func headFromExportV2(head ExportHeadV2) Head {
 	return Head{
 		Project: head.Project, Name: head.Name, SchemaVersion: head.SchemaVersion, State: "sealed", ContentDigest: head.ContentDigest,
 		GitObjectFormat: head.GitObjectFormat, GitCommit: head.GitCommit, GitRef: head.GitRef, GitBranch: head.GitBranch,

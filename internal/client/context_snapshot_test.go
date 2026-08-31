@@ -164,7 +164,7 @@ func TestContextSnapshotClientExportsStableRawPayloadAcrossPages(t *testing.T) {
 		t.Fatalf("summary cursors = %#v", summaryCursors)
 	}
 	verification, err := c.VerifyContextSnapshot(context.Background(), "project+a", head.Name)
-	if err != nil || verification.Digest != head.ContentDigest || !verification.Full || verification.EntryCount != 2 {
+	if err != nil || verification.Digest == nil || *verification.Digest != head.ContentDigest || !verification.Full || verification.EntryCount != 2 {
 		t.Fatalf("verification = %+v, err=%v", verification, err)
 	}
 }

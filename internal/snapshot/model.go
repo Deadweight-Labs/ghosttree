@@ -10,7 +10,7 @@ import (
 
 const (
 	SchemaVersion              uint32 = 3
-	ExportVersion              uint32 = 1
+	ExportVersion              uint32 = 2
 	WorktreeFingerprintVersion uint32 = 1
 )
 
@@ -83,9 +83,9 @@ type Head struct {
 	Counts                        map[string]int64 `json:"counts"`
 }
 
-// ExportHeadV1 is deliberately closed rather than embedding Head. Any field
+// ExportHeadV2 is deliberately closed rather than embedding Head. Any field
 // change requires a new export version.
-type ExportHeadV1 struct {
+type ExportHeadV2 struct {
 	Project                       string  `json:"project"`
 	Name                          string  `json:"name"`
 	SchemaVersion                 uint32  `json:"schema_version"`
