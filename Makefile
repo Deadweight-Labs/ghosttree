@@ -22,4 +22,10 @@ verify: fmt-check tidy-check
 	go test -race -count=1 ./...
 	$(MAKE) build-all
 
-.PHONY: build build-all test fmt-check tidy-check verify
+storebench-small:
+	@set -eu; task_dir=$$(mktemp -d); \
+	go run ./cmd/storebench --backend=current --preset=small --output=$$task_dir/current.json; \
+	go run ./cmd/storebench --backend=queued --preset=small --output=$$task_dir/queued.json; \
+	echo "reports: $$task_dir"
+
+.PHONY: build build-all test fmt-check tidy-check verify storebench-small
