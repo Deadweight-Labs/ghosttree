@@ -44,6 +44,10 @@ func IsReleaseSnapshotName(name string) bool {
 
 func ResolveSnapshotGit(repoRoot, name string, allowDirty bool) (snapshot.GitProvenance, error) {
 	var result snapshot.GitProvenance
+	nameClass := ClassifySnapshotName(name)
+	if nameClass == SnapshotNameInvalidReleaseLike {
+		return result, &snapshot.RuleError{Code: "snapshot_invalid_input"}
+	}
 	objectFormat, err := gitOut(repoRoot, "rev-parse", "--show-object-format")
 	if err != nil {
 		return result, err
@@ -64,10 +68,6 @@ func ResolveSnapshotGit(repoRoot, name string, allowDirty bool) (snapshot.GitPro
 		branch = stringPointer(branchName)
 	}
 
-	nameClass := ClassifySnapshotName(name)
-	if nameClass == SnapshotNameInvalidReleaseLike {
-		return result, &snapshot.RuleError{Code: "snapshot_invalid_input"}
-	}
 	isRelease := nameClass == SnapshotNameRelease
 	if isRelease {
 		tagRef := "refs/tags/" + name

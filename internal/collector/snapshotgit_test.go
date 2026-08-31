@@ -73,6 +73,14 @@ func TestSnapshotNameClassificationFailsClosedForReleaseLikeNames(t *testing.T) 
 	}
 }
 
+func TestResolveSnapshotGitRejectsInvalidReleaseLikeNameBeforeRepositoryAccess(t *testing.T) {
+	_, err := ResolveSnapshotGit(t.TempDir()+"/missing", "V1.2.3", false)
+	var rule *snapshot.RuleError
+	if !errors.As(err, &rule) || rule.Code != "snapshot_invalid_input" {
+		t.Fatalf("error=%v, want snapshot_invalid_input", err)
+	}
+}
+
 func TestSnapshotGitRejectsReleaseMismatchAndDirtyTree(t *testing.T) {
 	repo := newSnapshotGitRepo(t, "sha1")
 	_, err := ResolveSnapshotGit(repo, "v1.0.0", false)

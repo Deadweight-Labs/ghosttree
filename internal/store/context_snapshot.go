@@ -57,9 +57,6 @@ func (s *Store) CreateContextSnapshot(ctx context.Context, in snapshot.CreateInp
 		Project: in.Project, Name: in.Name, SchemaVersion: schemaVersion, Git: in.Git,
 		Message: in.Message, ActorID: in.ActorID, ActorLabel: in.ActorLabel, SessionRef: in.SessionRef, CreatedAt: createdAt,
 	}
-	if found {
-		digestHead = snapshot.DigestHeadFromHead(existing)
-	}
 	if err := s.failSnapshot("after_head"); err != nil {
 		return result, err
 	}

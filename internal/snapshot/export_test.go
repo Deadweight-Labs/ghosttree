@@ -121,12 +121,35 @@ func TestVerifyExportRejectsHeadCorruption(t *testing.T) {
 		t.Fatal(err)
 	}
 	valid := out.Bytes()
+	mutateHead := func(changes ...[2]string) []byte {
+		raw := valid
+		for _, change := range changes {
+			raw = bytes.Replace(raw, []byte(change[0]), []byte(change[1]), 1)
+		}
+		return raw
+	}
+	fingerprint := strings.Repeat("0", 64)
 	cases := map[string][]byte{
-		"project":         bytes.Replace(valid, []byte(`"project":"p"`), []byte(`"project":"q"`), 1),
-		"name":            bytes.Replace(valid, []byte(`"name":"n"`), []byte(`"name":"m"`), 1),
-		"git commit":      bytes.Replace(valid, []byte(strings.Repeat("a", 40)), []byte(strings.Repeat("b", 40)), 1),
-		"git ref":         bytes.Replace(valid, []byte(`"git_ref":null`), []byte(`"git_ref":"refs/heads/main"`), 1),
-		"git branch":      bytes.Replace(valid, []byte(`"git_branch":null`), []byte(`"git_branch":"main"`), 1),
+		"project":    bytes.Replace(valid, []byte(`"project":"p"`), []byte(`"project":"q"`), 1),
+		"name":       bytes.Replace(valid, []byte(`"name":"n"`), []byte(`"name":"m"`), 1),
+		"git commit": bytes.Replace(valid, []byte(strings.Repeat("a", 40)), []byte(strings.Repeat("b", 40)), 1),
+		"git object format": mutateHead(
+			[2]string{`"git_object_format":"sha1"`, `"git_object_format":"sha256"`},
+			[2]string{strings.Repeat("a", 40), strings.Repeat("a", 64)},
+		),
+		"git ref":    bytes.Replace(valid, []byte(`"git_ref":null`), []byte(`"git_ref":"refs/heads/main"`), 1),
+		"git branch": bytes.Replace(valid, []byte(`"git_branch":null`), []byte(`"git_branch":"main"`), 1),
+		"git dirty and fingerprint": mutateHead(
+			[2]string{`"git_dirty":false`, `"git_dirty":true`},
+			[2]string{`"git_worktree_fingerprint_version":null`, `"git_worktree_fingerprint_version":1`},
+			[2]string{`"git_worktree_fingerprint":null`, `"git_worktree_fingerprint":"` + fingerprint + `"`},
+		),
+		"allow dirty used": mutateHead(
+			[2]string{`"git_dirty":false`, `"git_dirty":true`},
+			[2]string{`"git_worktree_fingerprint_version":null`, `"git_worktree_fingerprint_version":1`},
+			[2]string{`"git_worktree_fingerprint":null`, `"git_worktree_fingerprint":"` + fingerprint + `"`},
+			[2]string{`"allow_dirty_used":false`, `"allow_dirty_used":true`},
+		),
 		"metadata source": bytes.Replace(valid, []byte(`"git_metadata_source":"server-verified"`), []byte(`"git_metadata_source":"client-reported"`), 1),
 		"message":         bytes.Replace(valid, []byte(`"message":null`), []byte(`"message":"changed"`), 1),
 		"actor id":        bytes.Replace(valid, []byte(`"actor_id":"person:1"`), []byte(`"actor_id":"person:2"`), 1),
@@ -148,9 +171,13 @@ func TestVerifyExportRejectsHeadCorruption(t *testing.T) {
 
 func TestVerifyProjectedExportDoesNotReturnDigest(t *testing.T) {
 	entries := exportFixtureEntries(t)
+	entries[1].Domain = "ghost"
 	head := exportFixtureHead(entries)
+	counts := exportFixtureCounts()
+	counts["knowledge"] = 1
+	counts["ghost"] = 1
 	var out bytes.Buffer
-	if err := WriteExport(&out, head, exportFixtureCounts(), entries, &ExportFilter{Domain: "knowledge"}); err != nil {
+	if err := WriteExport(&out, head, counts, entries[:1], &ExportFilter{Domain: "knowledge"}); err != nil {
 		t.Fatal(err)
 	}
 	verification, err := VerifyExport(bytes.NewReader(out.Bytes()))

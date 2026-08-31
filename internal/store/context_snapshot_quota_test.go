@@ -68,7 +68,6 @@ func TestSnapshotRetryStillEnforcesCanonicalHeadLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	in.Message = nil
 	limits := snapshot.DefaultLimits()
 	limits.MaxCanonicalHeadBytes = int64(len(headBytes))
 	if _, err := s.CreateContextSnapshot(context.Background(), in, limits, recheck); err != nil {
@@ -97,7 +96,6 @@ func TestSnapshotRetryStillEnforcesLogicalSizeLimit(t *testing.T) {
 	if err := s.DB().QueryRow(`SELECT sealed_logical_bytes FROM context_snapshots WHERE project=? AND name=?`, in.Project, in.Name).Scan(&storedLogical); err != nil {
 		t.Fatal(err)
 	}
-	in.Message = nil
 	limits := snapshot.DefaultLimits()
 	limits.MaxSnapshotLogicalBytes = storedLogical
 	if _, err := s.CreateContextSnapshot(context.Background(), in, limits, recheck); err != nil {

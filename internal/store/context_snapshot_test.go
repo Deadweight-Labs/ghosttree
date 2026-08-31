@@ -153,6 +153,44 @@ func TestCreateSnapshotSealsAndRetriesIdempotently(t *testing.T) {
 	}
 }
 
+func TestCreateSnapshotRetryRejectsChangedDigestHeadMetadata(t *testing.T) {
+	mutations := map[string]func(*snapshot.CreateInput){
+		"message": func(in *snapshot.CreateInput) {
+			value := "changed message"
+			in.Message = &value
+		},
+		"actor_id": func(in *snapshot.CreateInput) {
+			in.ActorID = "changed-actor"
+		},
+		"actor_label": func(in *snapshot.CreateInput) {
+			value := "Changed Actor"
+			in.ActorLabel = &value
+		},
+		"session_ref": func(in *snapshot.CreateInput) {
+			value := "changed-session"
+			in.SessionRef = &value
+		},
+	}
+
+	for name, mutate := range mutations {
+		t.Run(name, func(t *testing.T) {
+			s, err := Open(t.TempDir() + "/snapshot.db")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			in := snapshotCreateInput()
+			if _, err := s.CreateContextSnapshot(context.Background(), in, snapshot.DefaultLimits(), nil); err != nil {
+				t.Fatal(err)
+			}
+			mutate(&in)
+			if _, err := s.CreateContextSnapshot(context.Background(), in, snapshot.DefaultLimits(), nil); snapshotCode(err) != "snapshot_name_conflict" {
+				t.Fatalf("error=%v, want snapshot_name_conflict", err)
+			}
+		})
+	}
+}
+
 func TestCreateSnapshotNameConflictPrecedesQuota(t *testing.T) {
 	s, err := Open(t.TempDir() + "/snapshot.db")
 	if err != nil {
