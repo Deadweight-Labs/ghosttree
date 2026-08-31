@@ -58,11 +58,28 @@ func (b *currentSQLite) executeOn(ctx context.Context, st *store.Store, operatio
 			Description: payload.Description, ContentSHA: payload.ContentSHA, LineCount: payload.LineCount})
 		return err
 	case GhostReadPayload:
-		_, err := st.GhostFileByPath(payload.Project, payload.Path)
-		return err
+		ghost, err := st.GhostFileByPath(payload.Project, payload.Path)
+		if err != nil {
+			return err
+		}
+		if digest(ghost.Description) != payload.DescriptionDigest || ghost.ContentSHA != payload.ContentSHA || ghost.LineCount != payload.LineCount {
+			return fmt.Errorf("ghost %s read result mismatch", payload.Path)
+		}
+		return nil
 	case GhostTreePayload:
-		_, err := st.GhostFilesUnder(payload.Project, payload.Prefix)
-		return err
+		ghosts, err := st.GhostFilesUnder(payload.Project, payload.Prefix)
+		if err != nil {
+			return err
+		}
+		if len(ghosts) != len(payload.ExpectedPaths) {
+			return fmt.Errorf("ghost tree returned %d paths, want %d", len(ghosts), len(payload.ExpectedPaths))
+		}
+		for i, ghost := range ghosts {
+			if ghost.Path != payload.ExpectedPaths[i] {
+				return fmt.Errorf("ghost tree path %d = %q, want %q", i, ghost.Path, payload.ExpectedPaths[i])
+			}
+		}
+		return nil
 	case DocumentCreatePayload:
 		document, err := st.CreateDocument(store.Document{Project: payload.Project, Slug: payload.Slug,
 			Kind: "spec", Title: payload.Title, Person: "storebench"}, payload.Body, "benchmark create")
@@ -82,8 +99,14 @@ func (b *currentSQLite) executeOn(ctx context.Context, st *store.Store, operatio
 		if err != nil {
 			return err
 		}
-		_, err = st.DocumentRevision(id, payload.Revision)
-		return err
+		revision, err := st.DocumentRevision(id, payload.Revision)
+		if err != nil {
+			return err
+		}
+		if revision.Revision != payload.Revision || revision.Digest != payload.Digest || digest(revision.Body) != payload.Digest {
+			return fmt.Errorf("document %s revision %d read result mismatch", payload.Document, payload.Revision)
+		}
+		return nil
 	case MigrationBeginPayload:
 		artifacts := make(map[string]string, len(payload.Artifacts))
 		for _, artifact := range payload.Artifacts {
@@ -99,14 +122,41 @@ func (b *currentSQLite) executeOn(ctx context.Context, st *store.Store, operatio
 		if err != nil {
 			return err
 		}
-		return rows.Close()
+		got := map[string]string{}
+		for rows.Next() {
+			var path, value string
+			if err := rows.Scan(&path, &value); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			got[path] = value
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		return compareArtifacts(payload.Project, got, payload.Artifacts)
 	case SessionReadPayload:
 		id, err := b.id(b.sessions, payload.Session)
 		if err != nil {
 			return err
 		}
-		_, err = st.SessionByID(id)
-		return err
+		chunks, err := st.ReadSession(id, 0, len(payload.Chunks)+1)
+		if err != nil {
+			return err
+		}
+		if len(chunks) != len(payload.Chunks) {
+			return fmt.Errorf("session %s returned %d chunks, want %d", payload.Session, len(chunks), len(payload.Chunks))
+		}
+		for i, chunk := range chunks {
+			want := payload.Chunks[i]
+			if chunk.Seq != want.Seq || chunk.Role != want.Role || chunk.Text != want.Text || chunk.Raw != want.Raw {
+				return fmt.Errorf("session %s chunk %d read result mismatch", payload.Session, i)
+			}
+		}
+		return nil
 	default:
 		return fmt.Errorf("unsupported %s payload %T", operation.Kind, operation.Payload)
 	}
@@ -118,9 +168,18 @@ func (b *currentSQLite) Verify(ctx context.Context, expected Expected) error {
 
 func (b *currentSQLite) Stats() BackendStats {
 	stats := b.store.RuntimeStats()
-	return BackendStats{MaxOpenConnections: stats.DB.MaxOpenConnections, WaitCount: stats.DB.WaitCount,
+	return BackendStats{Engine: "sqlite", EngineVersion: sqliteVersion(b.store),
+		MaxOpenConnections: stats.DB.MaxOpenConnections, WaitCount: stats.DB.WaitCount,
 		WaitDurationNS: stats.DB.WaitDuration.Nanoseconds(), DatabaseBytes: stats.DatabaseBytes,
 		WALBytes: stats.WALBytes, SHMBytes: stats.SHMBytes}
+}
+
+func sqliteVersion(st *store.Store) string {
+	var version string
+	if err := st.DB().QueryRow(`SELECT sqlite_version()`).Scan(&version); err != nil {
+		return "unknown"
+	}
+	return version
 }
 
 func (b *currentSQLite) Close() error { return b.store.Close() }

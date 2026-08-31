@@ -9,6 +9,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
+	"runtime/debug"
 	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/storebench"
@@ -35,6 +37,7 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 	batch := flags.Int("batch", 64, "maximum chunk operations per transaction")
 	gatherWindow := flags.Duration("gather-window", 2*time.Millisecond, "chunk batch gathering window")
 	readConnections := flags.Int("read-connections", 3, "read-only SQLite connections")
+	repetition := flags.Int("repetition", 1, "one-based repetition number")
 	output := flags.String("output", "", "new JSON report path")
 	keepDB := flags.Bool("keep-db", false, "retain the generated database")
 	if err := flags.Parse(args); err != nil {
@@ -45,6 +48,9 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 	}
 	if *backendName != "current" && *backendName != "queued" {
 		return fmt.Errorf("unknown backend %q", *backendName)
+	}
+	if *repetition <= 0 {
+		return fmt.Errorf("repetition must be positive")
 	}
 	scale, err := storebench.Preset(*presetName)
 	if err != nil {
@@ -92,7 +98,9 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 	runID := fmt.Sprintf("%s-%s-%d-%d", *backendName, *presetName, *seed, time.Now().UnixNano())
 	report, runErr := storebench.Run(context.Background(), backend, workload, expected, storebench.RunConfig{
 		Concurrency: *concurrency, ArrivalMultiplier: *arrivalMultiplier, RunID: runID,
+		Preset: *presetName, Repetition: *repetition,
 	})
+	report.Environment = runEnvironment()
 	writeErr := writeReport(*output, report)
 	closeErr := backend.Close()
 	cleanupErr := cleanup()
@@ -101,6 +109,27 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 			*output, report.Backend, report.Operations, report.Errors, report.Throughput)
 	}
 	return errors.Join(runErr, writeErr, closeErr, cleanupErr)
+}
+
+func runEnvironment() storebench.RunEnvironment {
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		host = "unknown"
+	}
+	commit, modified := "unknown", false
+	if info, ok := debug.ReadBuildInfo(); ok {
+		for _, setting := range info.Settings {
+			switch setting.Key {
+			case "vcs.revision":
+				if setting.Value != "" {
+					commit = setting.Value
+				}
+			case "vcs.modified":
+				modified = setting.Value == "true"
+			}
+		}
+	}
+	return storebench.RunEnvironment{Host: host, GoVersion: runtime.Version(), GitCommit: commit, GitModified: modified}
 }
 
 func prepareDatabasePath(requested string, keep bool) (string, func() error, error) {
@@ -134,8 +163,33 @@ func prepareDatabasePath(requested string, keep bool) (string, func() error, err
 	if !info.IsDir() {
 		return "", nil, fmt.Errorf("database parent %q is not a directory", parent)
 	}
+	file, err := os.OpenFile(absolute, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		if os.IsExist(err) {
+			return "", nil, fmt.Errorf("database path %q already exists", absolute)
+		}
+		return "", nil, err
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(absolute)
+		return "", nil, err
+	}
+	owned, err := os.Lstat(absolute)
+	if err != nil {
+		return "", nil, err
+	}
 	return absolute, func() error {
 		if keep {
+			return nil
+		}
+		current, err := os.Lstat(absolute)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		if !os.SameFile(owned, current) {
 			return nil
 		}
 		var cleanupErr error

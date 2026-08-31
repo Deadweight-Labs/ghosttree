@@ -33,6 +33,44 @@ func TestRunCommandRefusesExistingDatabase(t *testing.T) {
 	}
 }
 
+func TestPrepareDatabasePathAtomicallyReservesRequestedFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "reserved.db")
+	got, cleanup, err := prepareDatabasePath(path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != path {
+		t.Fatalf("path = %q, want %q", got, path)
+	}
+	if _, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600); !os.IsExist(err) {
+		t.Fatalf("competing create = %v, want existence error", err)
+	}
+	if err := cleanup(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPrepareDatabasePathDoesNotDeleteReplacementFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "reserved.db")
+	_, cleanup, err := prepareDatabasePath(path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("replacement"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := cleanup(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil || string(raw) != "replacement" {
+		t.Fatalf("replacement changed: %q %v", raw, err)
+	}
+}
+
 func TestRunCommandWritesVerifiedSmallReport(t *testing.T) {
 	dir := t.TempDir()
 	reportPath := filepath.Join(dir, "report.json")
@@ -55,6 +93,13 @@ func TestRunCommandWritesVerifiedSmallReport(t *testing.T) {
 	}
 	if report.Backend != "sqlite_queued" || report.Operations == 0 || report.Errors != 0 || report.VerificationError != "" {
 		t.Fatalf("report = %+v", report)
+	}
+	if report.Config.Preset != "small" || report.Config.Repetition != 1 || report.Environment.Host == "" ||
+		report.Environment.GoVersion == "" || report.Environment.GitCommit == "" {
+		t.Fatalf("reproducibility metadata = config %+v environment %+v", report.Config, report.Environment)
+	}
+	if report.BackendStats.Engine != "sqlite" || report.BackendStats.EngineVersion == "" || report.BackendStats.QueueConfig == nil {
+		t.Fatalf("backend metadata = %+v", report.BackendStats)
 	}
 	if !strings.Contains(stdout.String(), reportPath) {
 		t.Fatalf("stdout = %q, want report path", stdout.String())

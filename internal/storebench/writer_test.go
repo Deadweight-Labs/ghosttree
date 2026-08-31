@@ -103,6 +103,83 @@ func TestWriterCoalescesAdjacentChunkOperations(t *testing.T) {
 		t.Fatalf("batch size = %d, want 3", len(got))
 	}
 	wg.Wait()
+	stats := w.stats()
+	if stats.BatchSize.Count == 0 || stats.BatchSize.Max < 3 {
+		t.Fatalf("batch size stats = %+v", stats.BatchSize)
+	}
+}
+
+func TestWriterRecordsAdmissionWaitAndMaximumDepth(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	w := newWriter(QueueConfig{MaxOperations: 3, MaxBytes: 100, MaxBatch: 1}, func(_ context.Context, operations []Operation) []error {
+		if operations[0].ID == "first" {
+			close(started)
+			<-release
+		}
+		return make([]error, len(operations))
+	})
+	defer w.Close()
+	firstDone := make(chan error, 1)
+	secondDone := make(chan error, 1)
+	thirdDone := make(chan error, 1)
+	go func() {
+		firstDone <- w.Submit(context.Background(), Operation{ID: "first", Kind: GhostPut, PayloadBytes: 10})
+	}()
+	<-started
+	go func() {
+		secondDone <- w.Submit(context.Background(), Operation{ID: "second", Kind: GhostPut, PayloadBytes: 20})
+	}()
+	go func() {
+		thirdDone <- w.Submit(context.Background(), Operation{ID: "third", Kind: GhostPut, PayloadBytes: 30})
+	}()
+	deadline := time.Now().Add(time.Second)
+	for {
+		w.mu.Lock()
+		reserved := w.reservedOperations
+		w.mu.Unlock()
+		if reserved == 3 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("second operation was not admitted")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(release)
+	if err := <-firstDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-secondDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-thirdDone; err != nil {
+		t.Fatal(err)
+	}
+	stats := w.stats()
+	if stats.QueueWait.Count != 3 || stats.QueueWait.MaxNS <= 0 || stats.MaximumDepth != 2 ||
+		stats.MaximumBytes != 50 || stats.MaximumOutstanding != 3 || stats.MaximumOutstandingBytes != 60 {
+		t.Fatalf("writer stats = %+v", stats)
+	}
+}
+
+func TestWriterWithZeroGatherWindowExecutesLoneChunkImmediately(t *testing.T) {
+	started := make(chan struct{})
+	w := newWriter(QueueConfig{MaxOperations: 1, MaxBytes: 100, MaxBatch: 8, GatherWindow: 0}, func(_ context.Context, operations []Operation) []error {
+		close(started)
+		return make([]error, len(operations))
+	})
+	defer w.Close()
+	done := make(chan error, 1)
+	go func() { done <- w.Submit(context.Background(), Operation{ID: "chunk", Kind: ChunksAppend}) }()
+	select {
+	case <-started:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("zero gather window waited for another submission")
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestWriterCloseDrainsAcceptedAndRejectsNew(t *testing.T) {

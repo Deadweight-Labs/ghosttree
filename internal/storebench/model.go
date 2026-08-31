@@ -74,13 +74,17 @@ type GhostPutPayload struct {
 }
 
 type GhostReadPayload struct {
-	Project string `json:"project"`
-	Path    string `json:"path"`
+	Project           string `json:"project"`
+	Path              string `json:"path"`
+	DescriptionDigest string `json:"description_digest"`
+	ContentSHA        string `json:"content_sha"`
+	LineCount         int    `json:"line_count"`
 }
 
 type GhostTreePayload struct {
-	Project string `json:"project"`
-	Prefix  string `json:"prefix"`
+	Project       string   `json:"project"`
+	Prefix        string   `json:"prefix"`
+	ExpectedPaths []string `json:"expected_paths"`
 }
 
 type DocumentCreatePayload struct {
@@ -100,6 +104,7 @@ type DocumentPushPayload struct {
 type DocumentReadPayload struct {
 	Document string `json:"document"`
 	Revision int    `json:"revision"`
+	Digest   string `json:"digest"`
 }
 
 type Artifact struct {
@@ -114,11 +119,13 @@ type MigrationBeginPayload struct {
 }
 
 type MigrationReadPayload struct {
-	Project string `json:"project"`
+	Project   string     `json:"project"`
+	Artifacts []Artifact `json:"artifacts"`
 }
 
 type SessionReadPayload struct {
-	Session string `json:"session"`
+	Session string         `json:"session"`
+	Chunks  []ChunkPayload `json:"chunks"`
 }
 
 type Expected struct {
