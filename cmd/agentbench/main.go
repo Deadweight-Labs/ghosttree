@@ -43,6 +43,8 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 	modelURL := flags.String("model-url", "https://api.anthropic.com/",
 		"URL the probe expects to reach; must match the endpoint the agent talks to")
 	dryRun := flags.Bool("dry-run", false, "validate and print the plan without running agents")
+	regrade := flags.String("regrade", "",
+		"score an existing run directory again from its raw transcripts instead of running agents")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -69,6 +71,10 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 	}
 	if campaign.Repetitions <= 0 {
 		return fmt.Errorf("campaign %q: repetitions must be positive", campaign.Name)
+	}
+
+	if *regrade != "" {
+		return regradeRun(campaign, tasks, *regrade, *outDir, stdout)
 	}
 
 	planned := len(tasks) * len(campaign.Arms) * campaign.Repetitions
@@ -154,6 +160,47 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	return runErr
+}
+
+// regradeRun re-scores a finished campaign. The transcripts are the evidence
+// and stay untouched; only the judgement changes. Without this a wrong list of
+// accepted spellings would cost a whole campaign to fix — and the corrected
+// numbers would carry fresh sampling noise, so they could not be compared with
+// the ones they replace.
+func regradeRun(campaign agentbench.Campaign, tasks []agentbench.Task, runDir, outDir string, stdout io.Writer) error {
+	raw, err := os.ReadFile(filepath.Join(runDir, "runs.jsonl"))
+	if err != nil {
+		return err
+	}
+	var records []agentbench.RunRecord
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var record agentbench.RunRecord
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			return fmt.Errorf("%s/runs.jsonl: %w", runDir, err)
+		}
+		records = append(records, record)
+	}
+
+	regraded, err := agentbench.Regrade(records, tasks)
+	if err != nil {
+		return err
+	}
+	report := agentbench.BuildReport(campaign, regraded)
+	if len(campaign.Arms) >= 2 {
+		report.Effects = append(report.Effects, agentbench.PairedBootstrap(
+			regraded, agentbench.ArmGhosttree, agentbench.ArmClaudeNative, campaign.Seed, 10000))
+	}
+	if outDir == "" {
+		outDir = runDir
+	}
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "regraded %d runs from %s into %s\n", len(regraded), runDir, outDir)
+	return writeOutputs(report, outDir)
 }
 
 type runtimeOptions struct {
