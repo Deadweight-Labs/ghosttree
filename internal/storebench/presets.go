@@ -4,6 +4,10 @@ import "fmt"
 
 func Preset(name string) (Scale, error) {
 	switch name {
+	case "production-sample":
+		return Scale{Projects: 1, Sessions: 4, ChunksPerSession: 20, ChunkBodyBytes: 512,
+			GhostFiles: 50, GhostBodyBytes: 2 << 10, Documents: 8, DocumentRevisions: 3,
+			DocumentBodyBytes: 64 << 10, MigrationArtifacts: 50, ReadEvery: 10}, nil
 	case "small":
 		return Scale{Projects: 1, Sessions: 8, ChunksPerSession: 8, ChunkBodyBytes: 256,
 			GhostFiles: 50, GhostBodyBytes: 512, Documents: 5, DocumentRevisions: 2,
