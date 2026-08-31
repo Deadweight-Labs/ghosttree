@@ -168,10 +168,21 @@ func (b *currentSQLite) Verify(ctx context.Context, expected Expected) error {
 
 func (b *currentSQLite) Stats() BackendStats {
 	stats := b.store.RuntimeStats()
-	return BackendStats{Engine: "sqlite", EngineVersion: sqliteVersion(b.store),
+	return BackendStats{Engine: "sqlite", EngineVersion: sqliteVersion(b.store), Settings: sqliteSettings(b.store),
 		MaxOpenConnections: stats.DB.MaxOpenConnections, WaitCount: stats.DB.WaitCount,
 		WaitDurationNS: stats.DB.WaitDuration.Nanoseconds(), DatabaseBytes: stats.DatabaseBytes,
 		WALBytes: stats.WALBytes, SHMBytes: stats.SHMBytes}
+}
+
+func sqliteSettings(st *store.Store) map[string]string {
+	settings := map[string]string{}
+	for _, name := range []string{"journal_mode", "synchronous", "busy_timeout"} {
+		var value string
+		if err := st.DB().QueryRow(`PRAGMA ` + name).Scan(&value); err == nil {
+			settings[name] = value
+		}
+	}
+	return settings
 }
 
 func sqliteVersion(st *store.Store) string {
