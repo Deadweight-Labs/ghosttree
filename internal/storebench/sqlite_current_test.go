@@ -75,7 +75,8 @@ func TestCurrentSQLiteExecutesAndVerifiesGeneratedWorkload(t *testing.T) {
 	if err := backend.Verify(ctx, expected); err != nil {
 		t.Fatal(err)
 	}
-	if stats := backend.Stats(); stats.MaxOpenConnections != 1 || stats.DatabaseBytes == 0 {
+	if stats := backend.Stats(); stats.MaxOpenConnections != 1 || stats.DatabaseBytes == 0 ||
+		stats.Settings["journal_mode"] != "wal" || stats.Settings["synchronous"] != "2" || stats.Settings["busy_timeout"] != "5000" {
 		t.Fatalf("stats = %+v", stats)
 	}
 }

@@ -90,7 +90,7 @@ func (b *queuedSQLite) Stats() BackendStats {
 	readers := b.reader.DB().Stats()
 	writerStats := b.writer.stats()
 	config := b.writer.config
-	return BackendStats{Engine: "sqlite", EngineVersion: sqliteVersion(b.core.store), QueueConfig: &config,
+	return BackendStats{Engine: "sqlite", EngineVersion: sqliteVersion(b.core.store), Settings: sqliteSettings(b.core.store), QueueConfig: &config,
 		MaxOpenConnections: writable.DB.MaxOpenConnections + readers.MaxOpenConnections,
 		WaitCount:          writable.DB.WaitCount + readers.WaitCount,
 		WaitDurationNS:     writable.DB.WaitDuration.Nanoseconds() + readers.WaitDuration.Nanoseconds(),
