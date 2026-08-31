@@ -108,6 +108,54 @@ func TestOpenWithOptionsAppliesEveryConnectionPragma(t *testing.T) {
 	}
 }
 
+func TestOpenReadOnlyUsesBoundedPoolAndRejectsWrites(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ghosttree.db")
+	writable, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writable.PutGhostFile(GhostFile{Project: "bench", Path: "a.go", Description: "seed"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writable.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	readOnly, err := OpenReadOnly(path, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer readOnly.Close()
+	if got := readOnly.DB().Stats().MaxOpenConnections; got != 3 {
+		t.Fatalf("max = %d, want 3", got)
+	}
+	if _, err := readOnly.GhostFileByPath("bench", "a.go"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readOnly.PutGhostFile(GhostFile{Project: "bench", Path: "b.go"}); err == nil {
+		t.Fatal("write through read-only store succeeded")
+	}
+}
+
+func TestOpenReadOnlyRejectsInvalidConfiguration(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		path string
+		max  int
+	}{
+		{"memory", ":memory:", 1},
+		{"memory URI", "file::memory:", 1},
+		{"zero pool", filepath.Join(t.TempDir(), "ghosttree.db"), 0},
+		{"negative pool", filepath.Join(t.TempDir(), "ghosttree.db"), -1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := OpenReadOnly(test.path, test.max); err == nil {
+				t.Fatal("OpenReadOnly accepted invalid configuration")
+			}
+		})
+	}
+}
+
 func TestRuntimeStatsReportsPoolAndSQLiteFiles(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ghosttree.db")
 	s, err := OpenWithOptions(path, OpenOptions{MaxOpenConns: 2})

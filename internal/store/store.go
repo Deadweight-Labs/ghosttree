@@ -380,6 +380,36 @@ func Open(path string) (*Store, error) {
 	return OpenWithOptions(path, OpenOptions{MaxOpenConns: maxOpenConns})
 }
 
+func OpenReadOnly(path string, maxOpenConns int) (*Store, error) {
+	if maxOpenConns <= 0 {
+		return nil, fmt.Errorf("max open connections must be positive")
+	}
+	dbPath := sqliteFilePath(path)
+	if dbPath == "" {
+		return nil, fmt.Errorf("read-only store requires a file-backed database")
+	}
+	info, err := os.Lstat(dbPath)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("database path %q is not a regular file", dbPath)
+	}
+	dsn := (&url.URL{Scheme: "file", Path: dbPath}).String() +
+		"?mode=ro&_pragma=foreign_keys(1)&_pragma=recursive_triggers(1)&_pragma=busy_timeout(5000)"
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(maxOpenConns)
+	db.SetMaxIdleConns(maxOpenConns)
+	if err := db.Ping(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return &Store{db: db}, nil
+}
+
 func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 	if options.MaxOpenConns <= 0 {
 		return nil, fmt.Errorf("max open connections must be positive")
