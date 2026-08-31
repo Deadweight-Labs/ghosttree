@@ -5,17 +5,28 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
 )
 
-type Store struct{ db *sql.DB }
+type Store struct {
+	db            *sql.DB
+	snapshotFault func(string) error
+}
 
 const schema = `
 CREATE TABLE IF NOT EXISTS persons(
   id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL,
   token_hash TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS context_snapshot_access(
+  person_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE RESTRICT,
+  project TEXT NOT NULL,
+  can_read INTEGER NOT NULL CHECK(can_read IN (0,1)),
+  can_create INTEGER NOT NULL CHECK(can_create IN (0,1)),
+  can_release_bind INTEGER NOT NULL CHECK(can_release_bind IN (0,1)),
+  PRIMARY KEY(person_id, project));
 CREATE TABLE IF NOT EXISTS machines(
   hostname TEXT PRIMARY KEY, first_seen TEXT NOT NULL, last_seen TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS requests(
@@ -352,7 +363,7 @@ func Open(path string) (*Store, error) {
 	if err := prepareDatabaseFiles(path); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite", storeSQLiteDSN(path))
 	if err != nil {
 		return nil, err
 	}
@@ -360,7 +371,7 @@ func Open(path string) (*Store, error) {
 	db.SetMaxOpenConns(1)
 	// busy_timeout covers the second process case (ctx person add against a
 	// running server) that WAL alone does not.
-	if _, err := db.Exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;`); err != nil {
+	if _, err := db.Exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA recursive_triggers=ON; PRAGMA busy_timeout=5000;`); err != nil {
 		return nil, err
 	}
 	if _, err := db.Exec(schema); err != nil {
@@ -381,7 +392,24 @@ func Open(path string) (*Store, error) {
 	if err := ensureKnowledgeColumn(db, "regression_test"); err != nil {
 		return nil, err
 	}
+	if err := EnsureContextSnapshotSchema(db); err != nil {
+		return nil, err
+	}
 	return &Store{db: db}, nil
+}
+
+func storeSQLiteDSN(path string) string {
+	if path == ":memory:" {
+		path = "file::memory:"
+	}
+	separator := "?"
+	if strings.Contains(path, "?") {
+		separator = "&"
+	}
+	if strings.HasSuffix(path, "?") || strings.HasSuffix(path, "&") {
+		separator = ""
+	}
+	return path + separator + "_pragma=foreign_keys(1)&_pragma=recursive_triggers(1)"
 }
 
 func prepareDatabaseFiles(path string) error {

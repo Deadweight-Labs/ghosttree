@@ -17,6 +17,28 @@ create `/etc/ghosttree/server.env` before starting it:
 GHOSTTREE_LISTEN=<private-address>:8474
 ```
 
+The sample unit also sets every snapshot resource limit to a finite default.
+`server.env` may lower or raise these values for a measured deployment, but no
+value may be zero or negative:
+
+| Environment variable | Serve flag | Default |
+| --- | --- | ---: |
+| `GHOSTTREE_SNAPSHOT_MAX_ENTRY_BYTES` | `--snapshot-max-entry-bytes` | 4,194,304 |
+| `GHOSTTREE_SNAPSHOT_MAX_ENTRIES` | `--snapshot-max-entries` | 20,000 |
+| `GHOSTTREE_SNAPSHOT_MAX_PAYLOAD_BYTES` | `--snapshot-max-payload-bytes` | 134,217,728 |
+| `GHOSTTREE_SNAPSHOT_MAX_HEAD_BYTES` | `--snapshot-max-head-bytes` | 32,768 |
+| `GHOSTTREE_SNAPSHOT_MAX_LOGICAL_BYTES` | `--snapshot-max-logical-bytes` | 167,772,160 |
+| `GHOSTTREE_SNAPSHOT_MAX_PROJECT_COUNT` | `--snapshot-max-project-count` | 1,000 |
+| `GHOSTTREE_SNAPSHOT_MAX_PROJECT_BYTES` | `--snapshot-max-project-bytes` | 8,589,934,592 |
+| `GHOSTTREE_SNAPSHOT_MAX_STORE_COUNT` | `--snapshot-max-store-count` | 10,000 |
+| `GHOSTTREE_SNAPSHOT_MAX_STORE_BYTES` | `--snapshot-max-store-bytes` | 68,719,476,736 |
+
+Counts stop attacks made from many empty snapshots; logical-byte limits include
+canonical head metadata, domains, keys, digests, and payloads. Values exactly
+at a limit are accepted. Capacity planning must also leave space for SQLite
+indexes, WAL files, and backups because those are intentionally not part of the
+portable logical-byte calculation.
+
 Do not bind directly to a public interface. Use a private network or a TLS
 reverse proxy with suitable access controls.
 
@@ -55,6 +77,67 @@ sudo systemd-run --pipe --wait --collect --quiet \
 Stop `ghosttree.service` first for schema upgrades or commands that require
 exclusive access. Keep and verify the backup printed by `ctx upgrade-schema`
 before restarting the server.
+
+## Context snapshots
+
+Snapshot rows are immutable and have no ordinary deletion or redaction path.
+Before enabling creates, verify backup and restore procedures, choose finite
+budgets based on measured project sizes, and grant only the required project
+capabilities:
+
+```bash
+sudo systemctl stop ghosttree
+sudo systemd-run --pipe --wait --collect --quiet \
+  -p DynamicUser=yes -p User=ghosttree -p StateDirectory=ghosttree \
+  /usr/local/bin/ctx person snapshot-access <person-name> \
+    --project github.com/owner/repository --read --create \
+    --db /var/lib/ghosttree/ghosttree.db
+sudo systemctl start ghosttree
+```
+
+Add `--release-bind` only when that identity must create SemVer release marks.
+Use the read-only `snapshot-access show` form to confirm the stored tuple.
+
+The server can rebuild repository-local snapshot indexes only for explicitly
+mapped roots. Every mapping is repeatable, canonicalized by project, and must
+name an existing absolute real directory rather than a symlink:
+
+```text
+--snapshot-root github.com/owner/one=/srv/projects/one
+--snapshot-root github.com/owner/two=/srv/projects/two
+```
+
+For the sample systemd unit, add a drop-in that clears and restates `ExecStart`
+with the unit's existing database, listen, and nine finite limit arguments,
+then append the required `--snapshot-root` arguments. Run
+`systemctl daemon-reload` and inspect `systemctl show ghosttree.service
+--property=ExecStart` before restarting. The service identity must be able to
+write `.ghosttree/snapshots/` in every mapped repository.
+
+A mirror failure does not roll back an already sealed database snapshot. The
+client reports `snapshot_mirror_degraded`; repair it from that repository with:
+
+```bash
+ctx snapshot mirror rebuild
+```
+
+Retry `snapshot_store_busy` and the explicitly retryable
+`snapshot_git_changed` only after re-reading the current state. A
+`snapshot_storage_exhausted`/HTTP 507 response means the SQLite or filesystem
+store is full; free or provision space and verify the database before retrying.
+Limit errors require choosing a smaller durable context or deliberately
+changing a finite deployment budget, never disabling the budget.
+
+### Existing database rollout
+
+Back up the SQLite database and its WAL state before installing a
+snapshot-capable binary. On first open Ghosttree adds snapshot tables, indexes,
+checks, and immutability triggers; it does not rewrite live Knowledge, Ghost,
+document, request, or session rows and performs no historical backfill. The
+server refuses startup if trigger definitions are stale, a committed
+`building` snapshot exists, or the rollback-only invariant probe fails. Keep
+the old binary and verified backup available until startup, health, snapshot
+create, export, and verify have all succeeded.
 
 ## Session distillation
 

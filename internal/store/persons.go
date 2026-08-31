@@ -4,7 +4,13 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"strconv"
 )
+
+type Principal struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+}
 
 func (s *Store) AddPerson(name string) (string, error) {
 	raw := make([]byte, 32)
@@ -22,11 +28,20 @@ func (s *Store) AddPerson(name string) (string, error) {
 }
 
 func (s *Store) Authenticate(token string) (string, bool) {
+	principal, ok := s.AuthenticatePrincipal(token)
+	return principal.Label, ok
+}
+
+func (s *Store) AuthenticatePrincipal(token string) (Principal, bool) {
 	sum := sha256.Sum256([]byte(token))
+	var id int64
 	var name string
-	err := s.db.QueryRow(`SELECT name FROM persons WHERE token_hash = ?`,
-		hex.EncodeToString(sum[:])).Scan(&name)
-	return name, err == nil
+	err := s.db.QueryRow(`SELECT id, name FROM persons WHERE token_hash = ?`,
+		hex.EncodeToString(sum[:])).Scan(&id, &name)
+	if err != nil {
+		return Principal{}, false
+	}
+	return Principal{ID: "person:" + strconv.FormatInt(id, 10), Label: name}, true
 }
 
 func (s *Store) TouchMachine(hostname string) {

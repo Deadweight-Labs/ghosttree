@@ -116,10 +116,15 @@ func GitInfo(cwd string) (project, branch string) {
 }
 
 func gitOut(cwd string, args ...string) (string, error) {
+	out, err := gitBytes(cwd, args...)
+	return strings.TrimSpace(string(out)), err
+}
+
+func gitBytes(cwd string, args ...string) ([]byte, error) {
 	cmd := exec.Command("git", append([]string{"-C", cwd}, args...)...)
 	out, err := cmd.Output()
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return strings.TrimSpace(string(out)), nil
+	return out, nil
 }
