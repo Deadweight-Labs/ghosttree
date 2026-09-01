@@ -13,6 +13,13 @@ type WorkspaceSpec struct {
 	// The tree that happens to sit in RepoSource is never used: it is whatever
 	// the checkout carried, not the snapshot the campaign declared.
 	GhostTreeSource string
+	// ClaudeDirSource is the .claude directory the arm is entitled to. It
+	// belongs to the same surface as CLAUDE.md: hand-kept markdown the project
+	// really carries. Deleting it unconditionally would take the claudemd arm
+	// exactly the baseline the comparison is against — Robcord keeps a
+	// 1825-line .claude/wiki, and a control arm measured without it flatters
+	// the treatment.
+	ClaudeDirSource string
 	MemorySource    string
 	AllowedPath     string
 }
@@ -62,8 +69,19 @@ func PrepareWorkspace(root string, arm ArmName, spec WorkspaceSpec) (Workspace, 
 			return Workspace{}, err
 		}
 	}
-	if err := os.RemoveAll(filepath.Join(ws.Repo, ".claude")); err != nil {
+	// Wie beim Ghost-Baum: was der Checkout mitbrachte, fliegt immer raus, und
+	// nur der berechtigte Arm bekommt danach den fixierten Stand zurueck.
+	claudeDir := filepath.Join(ws.Repo, ".claude")
+	if err := os.RemoveAll(claudeDir); err != nil {
 		return Workspace{}, err
+	}
+	if spec.ClaudeDirSource != "" {
+		if arm == ArmBare {
+			return Workspace{}, fmt.Errorf("arm %q was handed a .claude directory it is not entitled to", arm)
+		}
+		if err := os.CopyFS(claudeDir, os.DirFS(spec.ClaudeDirSource)); err != nil {
+			return Workspace{}, err
+		}
 	}
 	claudeMD := filepath.Join(ws.Repo, "CLAUDE.md")
 	if err := os.RemoveAll(claudeMD); err != nil {

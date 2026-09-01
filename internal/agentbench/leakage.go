@@ -54,8 +54,11 @@ func CheckLeakage(ws Workspace, arm ArmName, allowed AllowedSurface) []LeakageFi
 	if !allowed.ClaudeMD && exists(ws.Repo, "AGENTS.md") {
 		report("agents_md", "the workspace contains AGENTS.md")
 	}
-	if exists(ws.Repo, ".claude", "rules") {
-		report("rules", "the workspace contains .claude/rules")
+	// .claude/ im Repository gehoert zur selben Oberflaeche wie CLAUDE.md:
+	// handgepflegte Markdown-Anleitung. Ein Arm, der die eine sehen darf,
+	// darf auch die andere sehen — der bare-Arm keins von beidem.
+	if !allowed.ClaudeMD && exists(ws.Repo, ".claude") {
+		report("claude_dir", "the workspace contains .claude")
 	}
 	if !allowed.AutoMemory && exists(ws.Home, ".claude", "projects") {
 		report("auto_memory", "the home directory contains Claude auto-memory")

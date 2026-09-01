@@ -381,6 +381,16 @@ func (a *armAgents) For(arm agentbench.ArmName) (agentbench.Agent, error) {
 		} else if !os.IsNotExist(err) {
 			return nil, err
 		}
+		// Ein handgepflegtes .claude/wiki gehoert zur selben Baseline. Ohne
+		// es zu geben, misst der Kontrollarm weniger, als das Projekt
+		// tatsaechlich hat, und der Vorsprung des Behandlungsarms waere
+		// teilweise nur der geloeschte Ordner.
+		claudeDir := filepath.Join(a.repoSource, ".claude")
+		if info, err := os.Stat(claudeDir); err == nil && info.IsDir() {
+			spec.ClaudeDirSource = claudeDir
+		} else if err != nil && !os.IsNotExist(err) {
+			return nil, err
+		}
 	}
 	dir := filepath.Join(a.outDir, "workspaces", string(arm))
 	if a.rebuild {

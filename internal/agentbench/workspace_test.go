@@ -221,3 +221,61 @@ func TestCheckLeakageAcceptsAWorkspaceBelowTheHostHome(t *testing.T) {
 		}
 	}
 }
+
+// TestPrepareWorkspaceGivesTheMarkdownArmItsClaudeDirectory guards the control
+// arm's honest baseline. Robcord keeps a hand-written .claude/wiki of 1825
+// lines that nobody generated; deleting it would measure a repository poorer
+// than the one that exists, and the treatment arm would look better for it.
+func TestPrepareWorkspaceGivesTheMarkdownArmItsClaudeDirectory(t *testing.T) {
+	src := repoWithTree(t)
+	wiki := filepath.Join(src, ".claude", "wiki")
+	if err := os.MkdirAll(wiki, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wiki, "arch.md"), []byte("handgeschrieben"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, err := PrepareWorkspace(t.TempDir(), ArmClaudeMD, WorkspaceSpec{
+		RepoSource: src, ClaudeDirSource: filepath.Join(src, ".claude"),
+	})
+	if err != nil {
+		t.Fatalf("PrepareWorkspace: %v", err)
+	}
+	body, err := os.ReadFile(filepath.Join(ws.Repo, ".claude", "wiki", "arch.md"))
+	if err != nil || string(body) != "handgeschrieben" {
+		t.Fatalf("the markdown arm must keep its .claude directory: %v", err)
+	}
+	if findings := CheckLeakage(ws, ArmClaudeMD, AllowedSurface{ClaudeMD: true}); len(findings) > 0 {
+		t.Fatalf("an entitled .claude directory is not a leak: %+v", findings)
+	}
+}
+
+func TestPrepareWorkspaceRefusesAClaudeDirectoryForBare(t *testing.T) {
+	src := repoWithTree(t)
+	if err := os.MkdirAll(filepath.Join(src, ".claude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := PrepareWorkspace(t.TempDir(), ArmBare, WorkspaceSpec{
+		RepoSource: src, ClaudeDirSource: filepath.Join(src, ".claude"),
+	})
+	if err == nil {
+		t.Fatal("the bare arm must not be handed a .claude directory")
+	}
+}
+
+// TestPrepareWorkspaceStripsTheClaudeDirectoryWhenNoneIsGranted keeps the
+// default honest: what the checkout carried never survives by accident.
+func TestPrepareWorkspaceStripsTheClaudeDirectoryWhenNoneIsGranted(t *testing.T) {
+	src := repoWithTree(t)
+	if err := os.MkdirAll(filepath.Join(src, ".claude", "rules"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := PrepareWorkspace(t.TempDir(), ArmBare, WorkspaceSpec{RepoSource: src})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(ws.Repo, ".claude")); !os.IsNotExist(err) {
+		t.Fatal("without an explicit grant the checkout's .claude must go")
+	}
+}
