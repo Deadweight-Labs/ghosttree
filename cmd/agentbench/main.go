@@ -45,6 +45,8 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 	dryRun := flags.Bool("dry-run", false, "validate and print the plan without running agents")
 	regrade := flags.String("regrade", "",
 		"score an existing run directory again from its raw transcripts instead of running agents")
+	resume := flags.Bool("resume", false,
+		"continue an interrupted campaign in --out: keep what is recorded, recover what only exists as a transcript, run the rest")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -98,8 +100,10 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	fmt.Fprintf(stdout, "model credential: %s (value never logged, never on a command line)\n", credential)
-	if err := requireEmptyOutDir(*outDir); err != nil {
-		return err
+	if !*resume {
+		if err := requireEmptyOutDir(*outDir); err != nil {
+			return err
+		}
 	}
 	if err := os.MkdirAll(*outDir, 0o755); err != nil {
 		return err
@@ -124,6 +128,7 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 	agents := &armAgents{
 		campaign: campaign, repoSource: *repoSource, binary: *binary,
 		outDir: *outDir, runtime: runtime, ghostTree: *ghostTree,
+		rebuild:    *resume,
 		prepared:   map[agentbench.ArmName]agentbench.Agent{},
 		workspaces: map[agentbench.ArmName]agentbench.Workspace{},
 	}
@@ -145,11 +150,31 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintf(stdout, "arm %s: workspace prepared, probe clean\n", arm)
 	}
 
-	records, runErr := agentbench.Run(ctx, campaign, tasks, agents)
+	journal, err := agentbench.OpenRunJournal(filepath.Join(*outDir, "runs.jsonl"))
+	if err != nil {
+		return err
+	}
+	if *resume {
+		recovered, err := recoverOrphans(campaign, tasks, journal, filepath.Join(*outDir, "raw"))
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "resuming: %d runs already recorded, %d recovered from transcripts, %d to go\n",
+			len(journal.Records())-recovered, recovered, planned-len(journal.Records()))
+	}
 
-	report := agentbench.BuildReport(campaign, records)
+	_, runErr := agentbench.Run(ctx, campaign, tasks, agents, journal)
+	if err := journal.Close(); err != nil {
+		return err
+	}
+	// Ausgewertet wird, was im Journal steht, nicht was dieser Aufruf
+	// erzeugt hat: bei einer fortgesetzten Kampagne ist das zweite nur das
+	// letzte Stueck.
+	all := journal.Records()
+
+	report := agentbench.BuildReport(campaign, all)
 	report.Isolation = isolation
-	report.Effects = contrastsAgainstGhosttree(records, campaign)
+	report.Effects = contrastsAgainstGhosttree(all, campaign)
 	// Auch ein abgebrochener Lauf bekommt seine Ausgabe: die wenigen
 	// Datensaetze sagen, woran es lag, und ohne sie muesste man den Abbruch
 	// nachstellen, um ihn zu verstehen.
@@ -159,6 +184,30 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 	return runErr
 }
 
+// recoverOrphans takes the transcripts of runs whose record never reached the
+// journal and turns them back into records. This is the case a crash leaves
+// behind: the agent writes its transcript per run, so the evidence is complete
+// while the ledger is empty. Without this the resumed campaign would pay for
+// those runs a second time.
+func recoverOrphans(campaign agentbench.Campaign, tasks []agentbench.Task,
+	journal *agentbench.RunJournal, rawDir string) (int, error) {
+	recovered, err := agentbench.RecoverFromTranscripts(campaign, tasks, rawDir)
+	if err != nil {
+		return 0, err
+	}
+	var count int
+	for _, record := range recovered {
+		if journal.Done(record.TaskID, record.Arm, record.Repetition) {
+			continue
+		}
+		if err := journal.Emit(record); err != nil {
+			return count, err
+		}
+		count++
+	}
+	return count, nil
+}
+
 // regradeRun re-scores a finished campaign. The transcripts are the evidence
 // and stay untouched; only the judgement changes. Without this a wrong list of
 // accepted spellings would cost a whole campaign to fix — and the corrected
@@ -166,6 +215,16 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 // the ones they replace.
 func regradeRun(campaign agentbench.Campaign, tasks []agentbench.Task, runDir, outDir string, stdout io.Writer) error {
 	raw, err := os.ReadFile(filepath.Join(runDir, "runs.jsonl"))
+	// Ohne Journal wird aus den Transkripten gebaut. Ein abgestuerzter Lauf
+	// hat genau diese Form: die Evidenz vollstaendig, die Urteile weg.
+	if os.IsNotExist(err) {
+		records, err := agentbench.RecoverFromTranscripts(campaign, tasks, filepath.Join(runDir, "raw"))
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "no runs.jsonl in %s; recovered %d runs from the transcripts\n", runDir, len(records))
+		return writeRegraded(campaign, records, runDir, outDir, stdout)
+	}
 	if err != nil {
 		return err
 	}
@@ -185,15 +244,20 @@ func regradeRun(campaign agentbench.Campaign, tasks []agentbench.Task, runDir, o
 	if err != nil {
 		return err
 	}
-	report := agentbench.BuildReport(campaign, regraded)
-	report.Effects = contrastsAgainstGhosttree(regraded, campaign)
+	return writeRegraded(campaign, regraded, runDir, outDir, stdout)
+}
+
+func writeRegraded(campaign agentbench.Campaign, records []agentbench.RunRecord,
+	runDir, outDir string, stdout io.Writer) error {
+	report := agentbench.BuildReport(campaign, records)
+	report.Effects = contrastsAgainstGhosttree(records, campaign)
 	if outDir == "" {
 		outDir = runDir
 	}
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "regraded %d runs from %s into %s\n", len(regraded), runDir, outDir)
+	fmt.Fprintf(stdout, "regraded %d runs from %s into %s\n", len(records), runDir, outDir)
 	return writeOutputs(report, outDir)
 }
 
@@ -286,8 +350,14 @@ type armAgents struct {
 	repoSource string
 	binary     string
 	outDir     string
-	runtime    agentbench.Runtime
-	ghostTree  string
+	runtime   agentbench.Runtime
+	ghostTree string
+	// rebuild throws an existing workspace away instead of refusing it. A
+	// resumed campaign starts its arms from the checkout again, which is
+	// exactly the state the campaign began in — the alternative would be to
+	// hand the resumed segment a workspace that earlier runs had already
+	// walked through.
+	rebuild    bool
 	prepared   map[agentbench.ArmName]agentbench.Agent
 	workspaces map[agentbench.ArmName]agentbench.Workspace
 }
@@ -312,8 +382,13 @@ func (a *armAgents) For(arm agentbench.ArmName) (agentbench.Agent, error) {
 			return nil, err
 		}
 	}
-	workspace, err := agentbench.PrepareWorkspace(
-		filepath.Join(a.outDir, "workspaces", string(arm)), arm, spec)
+	dir := filepath.Join(a.outDir, "workspaces", string(arm))
+	if a.rebuild {
+		if err := os.RemoveAll(dir); err != nil {
+			return nil, err
+		}
+	}
+	workspace, err := agentbench.PrepareWorkspace(dir, arm, spec)
 	if err != nil {
 		return nil, err
 	}

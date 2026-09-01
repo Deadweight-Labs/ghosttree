@@ -153,6 +153,15 @@ func (r Report) writeProvenance(w io.Writer) error {
 // carries the caveat, so the caveat is printed next to the numbers.
 func (r Report) writeIsolation(w io.Writer) {
 	fmt.Fprint(w, "## Abschottung\n\n")
+	// Eine Nachbewertung kennt die Abschottung nicht: sie liest Transkripte,
+	// keine Laufzeitumgebung. Das Fehlen als "offenes Netz" zu drucken waere
+	// eine falsche Aussage ueber einen Lauf, der abgedichtet war — und zwar
+	// eine, die den Bericht schlechter macht, als gar nichts zu sagen.
+	if r.Isolation.Runtime == "" && !r.Isolation.Sealed {
+		fmt.Fprint(w, "Nicht aufgezeichnet. Dieser Bericht entstand aus vorhandenen Transkripten; "+
+			"wie die Läufe abgeschottet waren, steht im Bericht des Laufs, der sie erzeugt hat.\n\n")
+		return
+	}
 	fmt.Fprintf(w, "Laufzeit `%s`", r.Isolation.Runtime)
 	if r.Isolation.Image != "" {
 		fmt.Fprintf(w, ", Abbild `%s`", r.Isolation.Image)

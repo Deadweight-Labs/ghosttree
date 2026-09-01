@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 )
@@ -68,7 +69,26 @@ func EnsureSealedNetwork(ctx context.Context, spec NetworkSpec) (SealedNetwork, 
 		}
 	}
 
-	if !dockerHas(ctx, "container", spec.ProxyName) {
+	if err := ensureProxy(ctx, spec); err != nil {
+		return SealedNetwork{}, err
+	}
+	if err := waitForProxy(ctx, spec); err != nil {
+		return SealedNetwork{}, err
+	}
+	return sealed, nil
+}
+
+// ensureProxy brings the proxy into the state a campaign needs, which is not
+// the same as bringing it into existence.
+//
+// A reboot leaves the container behind, stopped. Checking only whether it
+// exists then reports a ready seal and the campaign dies in the wait loop with
+// "could not resolve proxy" — a message about names that is really about a
+// container nobody started. What has to hold is: it exists, it runs, and it
+// hangs in the sealed network.
+func ensureProxy(ctx context.Context, spec NetworkSpec) error {
+	state, err := dockerInspect(ctx, "container", spec.ProxyName, "{{.State.Running}}")
+	if err != nil {
 		// Der Proxy startet im Standardnetz (dort hat er Internetzugang) und
 		// wird danach zusaetzlich ins interne Netz gehaengt. Umgekehrt ginge es
 		// nicht: ein Container im internen Netz kann keine Namen aufloesen.
@@ -76,16 +96,24 @@ func EnsureSealedNetwork(ctx context.Context, spec NetworkSpec) (SealedNetwork, 
 			"--restart", "unless-stopped",
 			"-e", "AGENTBENCH_ALLOWED_DOMAINS="+strings.Join(spec.Allowed, " "),
 			spec.ProxyImage); err != nil {
-			return SealedNetwork{}, err
+			return err
 		}
-		if err := dockerRun(ctx, "network", "connect", spec.Name, spec.ProxyName); err != nil {
-			return SealedNetwork{}, err
+		return dockerRun(ctx, "network", "connect", spec.Name, spec.ProxyName)
+	}
+	if state != "true" {
+		if err := dockerRun(ctx, "start", spec.ProxyName); err != nil {
+			return err
 		}
 	}
-	if err := waitForProxy(ctx, spec); err != nil {
-		return SealedNetwork{}, err
+	attached, err := dockerInspect(ctx, "container", spec.ProxyName,
+		"{{range $name, $_ := .NetworkSettings.Networks}}{{$name}} {{end}}")
+	if err != nil {
+		return err
 	}
-	return sealed, nil
+	if !slices.Contains(strings.Fields(attached), spec.Name) {
+		return dockerRun(ctx, "network", "connect", spec.Name, spec.ProxyName)
+	}
+	return nil
 }
 
 // TeardownSealedNetwork removes the proxy and the network. A campaign does not
@@ -151,6 +179,17 @@ func probeURLFor(entry string) string {
 func dockerHas(ctx context.Context, kind, name string) bool {
 	out, err := exec.CommandContext(ctx, "docker", kind, "inspect", name).Output()
 	return err == nil && len(out) > 0
+}
+
+// dockerInspect reads one field. An error means the object is not there — the
+// caller distinguishes "missing" from "not in the wanted state" by whether it
+// gets an error or a value.
+func dockerInspect(ctx context.Context, kind, name, format string) (string, error) {
+	out, err := exec.CommandContext(ctx, "docker", kind, "inspect", "-f", format, name).Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 func dockerRun(ctx context.Context, args ...string) error {

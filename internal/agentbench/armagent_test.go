@@ -32,7 +32,7 @@ func TestRunUsesAnAgentPerArm(t *testing.T) {
 	records, err := Run(context.Background(), campaign, []Task{pilotTask("t1")},
 		AgentForFunc(func(arm ArmName) (Agent, error) {
 			return armRecordingAgent{arm: arm, seen: &seen}, nil
-		}))
+		}), nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestRunReportsAnArmThatCannotBePrepared(t *testing.T) {
 	records, err := Run(context.Background(), campaign, []Task{pilotTask("t1")},
 		AgentForFunc(func(ArmName) (Agent, error) {
 			return nil, fmt.Errorf("leakage check failed")
-		}))
+		}), nil)
 	if err != nil {
 		t.Fatalf("a preparation error is per-arm, not fatal for the campaign: %v", err)
 	}

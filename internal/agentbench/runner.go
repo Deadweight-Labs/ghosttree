@@ -88,7 +88,22 @@ func (g *startupGuard) observe(record RunRecord) error {
 	return nil
 }
 
-func Run(ctx context.Context, campaign Campaign, tasks []Task, agents AgentFor) ([]RunRecord, error) {
+// RunLedger takes each record the moment it exists and says which runs are
+// already made. A campaign that keeps its records only in memory loses every
+// judgement to a crash, and a campaign that cannot skip what it already did
+// cannot be resumed at all.
+type RunLedger interface {
+	Emit(RunRecord) error
+	Done(taskID string, arm ArmName, repetition int) bool
+}
+
+// Run executes the plan and returns the records this call produced. On a
+// resumed campaign that is the new segment only; the full set lives in the
+// ledger.
+//
+// A nil ledger is allowed and means the records exist only in memory — right
+// for a test, never for a campaign that costs money.
+func Run(ctx context.Context, campaign Campaign, tasks []Task, agents AgentFor, ledger RunLedger) ([]RunRecord, error) {
 	if err := campaign.Validate(tasks); err != nil {
 		return nil, err
 	}
@@ -97,8 +112,20 @@ func Run(ctx context.Context, campaign Campaign, tasks []Task, agents AgentFor) 
 	for repetition := 1; repetition <= campaign.Repetitions; repetition++ {
 		for taskIndex, task := range tasks {
 			for _, arm := range blockOrder(campaign.Seed, taskIndex, repetition, campaign.Arms) {
+				if ledger != nil && ledger.Done(task.ID, arm, repetition) {
+					continue
+				}
 				record := runOne(ctx, campaign, task, arm, repetition, agents)
 				records = append(records, record)
+				if ledger != nil {
+					// Ein Datensatz, der nicht auf die Platte kommt, ist
+					// verlorene Rechenzeit: die Kampagne bricht ab, statt
+					// weiter Geld fuer Ergebnisse auszugeben, die niemand
+					// mehr lesen kann.
+					if err := ledger.Emit(record); err != nil {
+						return records, fmt.Errorf("recording the run for %q/%s: %w", task.ID, arm, err)
+					}
+				}
 				if err := guard.observe(record); err != nil {
 					return records, err
 				}
