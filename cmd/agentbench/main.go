@@ -48,6 +48,8 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 		"score an existing run directory again from its raw transcripts instead of running agents")
 	resume := flags.Bool("resume", false,
 		"continue an interrupted campaign in --out: keep what is recorded, recover what only exists as a transcript, run the rest")
+	overrideTasks := flags.Bool("tasks-override", false,
+		"regrade against --tasks instead of the task set the run recorded; only correct for an annotation that does not change scoring")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -77,7 +79,7 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 	}
 
 	if *regrade != "" {
-		return regradeRun(campaign, tasks, *regrade, *outDir, stdout)
+		return regradeRun(campaign, tasks, *regrade, *outDir, *overrideTasks, stdout)
 	}
 
 	planned := len(tasks) * len(campaign.Arms) * campaign.Repetitions
@@ -230,10 +232,21 @@ func recoverOrphans(campaign agentbench.Campaign, tasks []agentbench.Task,
 // accepted spellings would cost a whole campaign to fix — and the corrected
 // numbers would carry fresh sampling noise, so they could not be compared with
 // the ones they replace.
-func regradeRun(campaign agentbench.Campaign, tasks []agentbench.Task, runDir, outDir string, stdout io.Writer) error {
-	tasks, err := taskSetFor(runDir, tasks, stdout)
-	if err != nil {
-		return err
+func regradeRun(campaign agentbench.Campaign, tasks []agentbench.Task,
+	runDir, outDir string, override bool, stdout io.Writer) error {
+	if override {
+		// Ausdruecklich und laut: der festgeschriebene Satz wird uebergangen.
+		// Richtig ist das nur fuer eine Annotation, die an der Bewertung nichts
+		// aendert — etwa die Herkunftsmarkierung. Wer damit eine akzeptierte
+		// Schreibweise nachschiebt, veroeffentlicht andere Zahlen zu denselben
+		// Transkripten.
+		fmt.Fprintf(stdout, "--tasks-override: scoring against --tasks, not against %s/%s\n",
+			runDir, taskSetFile)
+	} else {
+		var err error
+		if tasks, err = taskSetFor(runDir, tasks, stdout); err != nil {
+			return err
+		}
 	}
 	raw, err := os.ReadFile(filepath.Join(runDir, "runs.jsonl"))
 	// Ohne Journal wird aus den Transkripten gebaut. Ein abgestuerzter Lauf

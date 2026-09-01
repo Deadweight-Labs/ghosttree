@@ -60,7 +60,8 @@ func RecoverFromTranscripts(campaign Campaign, tasks []Task, rawDir string) ([]R
 		skeletons = append(skeletons, RunRecord{
 			Campaign: campaign.Name, TaskID: task.ID, Repo: task.Repo, Arm: arm,
 			Repetition: repetition, Category: task.Category, Exposure: task.Exposure,
-			Transcript: Transcript{RawPath: path},
+			DevelopmentData: task.DevelopmentData,
+			Transcript:      Transcript{RawPath: path},
 		})
 		return nil
 	})

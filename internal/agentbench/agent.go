@@ -29,8 +29,8 @@ type Transcript struct {
 	// does not have the answer. Counted as a product failure it would drop out
 	// of the scoring — removing the hardest cases and flattering the arm that
 	// gave up.
-	MaxTurnsExceeded bool `json:"max_turns_exceeded,omitempty"`
-	RawPath    string `json:"raw_path"`
+	MaxTurnsExceeded bool   `json:"max_turns_exceeded,omitempty"`
+	RawPath          string `json:"raw_path"`
 	// Turns and CostUSD answer the question a recall number alone cannot:
 	// what the answer cost. A memory that raises recall by a little and the
 	// bill by a lot is a different product from one that raises both.

@@ -57,13 +57,19 @@ type FactSlot struct {
 }
 
 type Task struct {
-	ID       string     `json:"id"`
-	Repo     string     `json:"repo"`
-	Commit   string     `json:"commit"`
-	Prompt   string     `json:"prompt"`
-	Category Category   `json:"category"`
-	Exposure Exposure   `json:"exposure"`
-	Facts    []FactSlot `json:"facts"`
+	ID       string   `json:"id"`
+	Repo     string   `json:"repo"`
+	Commit   string   `json:"commit"`
+	Prompt   string   `json:"prompt"`
+	Category Category `json:"category"`
+	Exposure Exposure `json:"exposure"`
+	// DevelopmentData marks a task whose wording or ground truth was corrected
+	// after seeing what the arms answered. Those corrections were right — a key
+	// that rejects a true answer is wrong — but they were made with the answers
+	// in view, and a task tuned that way cannot also serve as confirmation.
+	// Reported separately, never silently mixed into one number.
+	DevelopmentData bool       `json:"development_data,omitempty"`
+	Facts           []FactSlot `json:"facts"`
 }
 
 func (t Task) Validate() error {

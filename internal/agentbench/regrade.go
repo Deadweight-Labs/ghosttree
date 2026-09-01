@@ -36,6 +36,10 @@ func Regrade(records []RunRecord, tasks []Task) ([]RunRecord, error) {
 			out = append(out, record)
 			continue
 		}
+		// Die Herkunftsmarkierung kommt aus der Aufgabendefinition, nicht aus
+		// dem alten Datensatz: sie kann sich aendern, ohne dass sich an der
+		// Bewertung etwas aendert.
+		record.DevelopmentData = task.DevelopmentData
 		if record.Transcript.RawPath == "" {
 			return nil, fmt.Errorf("run %q/%s has no raw transcript to regrade from",
 				record.TaskID, record.Arm)

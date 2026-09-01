@@ -116,9 +116,12 @@ type Report struct {
 	ByExposure []GroupSummary  `json:"by_exposure"`
 	ByCategory []GroupSummary  `json:"by_category"`
 	BySource   []SourceSummary `json:"by_source"`
-	Effects    []PairedEffect  `json:"effects"`
-	Failures   map[Failure]int `json:"failures"`
-	Suspect    []TaskSuspicion `json:"suspect_tasks,omitempty"`
+	// ByProvenance trennt Aufgaben, deren Ground Truth nach dem Anblick der
+	// Antworten korrigiert wurde, von denen, bei denen das nicht passiert ist.
+	ByProvenance []GroupSummary  `json:"by_provenance"`
+	Effects      []PairedEffect  `json:"effects"`
+	Failures     map[Failure]int `json:"failures"`
+	Suspect      []TaskSuspicion `json:"suspect_tasks,omitempty"`
 }
 
 func BuildReport(campaign Campaign, records []RunRecord) Report {
@@ -132,6 +135,12 @@ func BuildReport(campaign Campaign, records []RunRecord) Report {
 	report.ByExposure = summarise(records, func(r RunRecord) string { return string(r.Exposure.Class()) })
 	report.ByCategory = summarise(records, func(r RunRecord) string { return string(r.Category) })
 	report.BySource = summariseBySource(records, campaign.Arms)
+	report.ByProvenance = summarise(records, func(r RunRecord) string {
+		if r.DevelopmentData {
+			return "entwickelt"
+		}
+		return "zurueckgehalten"
+	})
 	return report
 }
 
@@ -292,6 +301,13 @@ func (r Report) WriteMarkdown(w io.Writer) error {
 	}
 	writeGroups("Nach Expositionsklasse", r.ByExposure)
 	writeGroups("Nach Kategorie", r.ByCategory)
+	if len(r.ByProvenance) > 1 {
+		fmt.Fprint(w, "\n_\"entwickelt\" heißt: Wortlaut oder Ground Truth wurden korrigiert, "+
+			"nachdem die Antworten der Arme vorlagen. Die Korrekturen waren richtig — ein Schlüssel, "+
+			"der eine wahre Antwort ablehnt, ist falsch —, aber sie entstanden mit den Antworten vor "+
+			"Augen. \"zurueckgehalten\" heißt: das ist hier nicht passiert._\n")
+		writeGroups("Nach Datenherkunft", r.ByProvenance)
+	}
 
 	if len(r.BySource) > 0 {
 		fmt.Fprint(w, "\n## Nach Wissensquelle\n\n")

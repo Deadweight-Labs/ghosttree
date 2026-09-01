@@ -18,18 +18,22 @@ const (
 )
 
 type RunRecord struct {
-	Campaign   string     `json:"campaign"`
-	TaskID     string     `json:"task_id"`
-	Repo       string     `json:"repo"`
-	Arm        ArmName    `json:"arm"`
-	Repetition int        `json:"repetition"`
-	Category   Category   `json:"category"`
-	Exposure   Exposure   `json:"exposure"`
-	Score      Score      `json:"score"`
-	Transcript Transcript `json:"transcript"`
-	Failure    Failure    `json:"failure,omitempty"`
-	FailureMsg string     `json:"failure_message,omitempty"`
-	StartedAt  time.Time  `json:"started_at"`
+	Campaign   string   `json:"campaign"`
+	TaskID     string   `json:"task_id"`
+	Repo       string   `json:"repo"`
+	Arm        ArmName  `json:"arm"`
+	Repetition int      `json:"repetition"`
+	Category   Category `json:"category"`
+	Exposure   Exposure `json:"exposure"`
+	// DevelopmentData traegt die Aufgabe in den Datensatz, damit der Bericht
+	// entwickelte von zurueckgehaltenen Aufgaben trennen kann, ohne die
+	// Aufgabendefinitionen noch einmal lesen zu muessen.
+	DevelopmentData bool       `json:"development_data,omitempty"`
+	Score           Score      `json:"score"`
+	Transcript      Transcript `json:"transcript"`
+	Failure         Failure    `json:"failure,omitempty"`
+	FailureMsg      string     `json:"failure_message,omitempty"`
+	StartedAt       time.Time  `json:"started_at"`
 }
 
 func blockOrder(seed uint64, taskIndex, repetition int, arms []ArmName) []ArmName {
@@ -160,6 +164,7 @@ func runOne(ctx context.Context, campaign Campaign, task Task, arm ArmName, repe
 	record := RunRecord{
 		Campaign: campaign.Name, TaskID: task.ID, Repo: task.Repo, Arm: arm,
 		Repetition: repetition, Category: task.Category, Exposure: task.Exposure,
+		DevelopmentData: task.DevelopmentData,
 	}
 	agent, err := agents.For(arm)
 	if err != nil {
