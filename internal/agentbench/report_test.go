@@ -122,3 +122,32 @@ func TestWriteMarkdownReportsAnArmWithoutABuild(t *testing.T) {
 		t.Fatalf("an arm without a memory build must still be listed:\n%s", buf.String())
 	}
 }
+
+// TestReportSeparatesDevelopmentFromHeldOutTasks guards the line criterion 650
+// asks for: a task whose ground truth was corrected after seeing the answers
+// cannot also serve as confirmation, and a single number that mixes both hides
+// exactly that.
+func TestReportSeparatesDevelopmentFromHeldOutTasks(t *testing.T) {
+	campaign := Campaign{Name: "c", Arms: []ArmName{ArmBare, ArmGhosttree}}
+	records := []RunRecord{
+		{TaskID: "alt", Arm: ArmBare, DevelopmentData: true, Score: Score{FactRecall: 1}},
+		{TaskID: "alt", Arm: ArmGhosttree, DevelopmentData: true, Score: Score{FactRecall: 1}},
+		{TaskID: "neu", Arm: ArmBare, Score: Score{FactRecall: 0}},
+		{TaskID: "neu", Arm: ArmGhosttree, Score: Score{FactRecall: 1}},
+	}
+	report := BuildReport(campaign, records)
+
+	byGroup := map[string]map[ArmName]float64{}
+	for _, g := range report.ByProvenance {
+		if byGroup[g.Group] == nil {
+			byGroup[g.Group] = map[ArmName]float64{}
+		}
+		byGroup[g.Group][g.Arm] = g.FactRecall
+	}
+	if len(byGroup) != 2 {
+		t.Fatalf("both provenances must appear: %+v", byGroup)
+	}
+	if byGroup["entwickelt"][ArmBare] != 1 || byGroup["zurueckgehalten"][ArmBare] != 0 {
+		t.Fatalf("the split must not average across provenances: %+v", byGroup)
+	}
+}
