@@ -53,7 +53,7 @@ func SuspectTasks(records []RunRecord, arms []ArmName) []TaskSuspicion {
 		a.negative = record.Category == CategoryNegative
 	}
 
-	out := convergedRejections(records, arms)
+	out := append(convergedRejections(records, arms), slotsNobodyGotRight(records, arms)...)
 	for id, a := range byTask {
 		// Nur wenn wirklich jeder Arm angetreten ist: fehlt einer, ist die
 		// Einstimmigkeit kein Argument.
@@ -77,7 +77,19 @@ func SuspectTasks(records []RunRecord, arms []ArmName) []TaskSuspicion {
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].TaskID < out[j].TaskID })
-	return out
+	// Eine Aufgabe wird einmal gemeldet. Die Regeln ueberlappen sich — bei
+	// z-03 greifen zwei —, und zweimal dieselbe Zeile im Bericht liest sich
+	// wie zwei Befunde.
+	deduped := out[:0]
+	seenTask := map[string]bool{}
+	for _, s := range out {
+		if seenTask[s.TaskID] {
+			continue
+		}
+		seenTask[s.TaskID] = true
+		deduped = append(deduped, s)
+	}
+	return deduped
 }
 
 // convergedRejections finds tasks where differently equipped arms independently
@@ -157,6 +169,83 @@ func convergedRejections(records []RunRecord, arms []ArmName) []TaskSuspicion {
 			TaskID: key.task, Runs: runsPerTask[key.task], Arms: len(byArm),
 			Reason: fmt.Sprintf("%d arms independently answered %q for slot %q and the key rejects it; "+
 				"check whether the question has a second true answer", len(byArm), spelling[key], key.slot),
+		})
+	}
+	return out
+}
+
+// slotsNobodyGotRight flags a slot that every arm answered and every arm got
+// wrong.
+//
+// It is the per-slot form of the unanimous-zero rule, and it catches what the
+// converged-rejection rule misses: arms that all fail the same slot with
+// *different* answers. Asked through which route a listed workspace invite is
+// revoked, `bare` answered "DELETE /api/invites/by-id/{id}" and the other two
+// "DELETE /api/workspaces/{workspaceId}/proxy/api/invites/by-id/{id}". Both are
+// true; the key listed only the bare path and rejected all three. No arm scored
+// zero on the task, so neither older rule saw anything.
+//
+// The condition is strict on purpose: every arm that ran the task must have a
+// rejected claim for that slot. One arm getting it right means the question can
+// be answered as asked, and then a miss is a miss.
+func slotsNobodyGotRight(records []RunRecord, arms []ArmName) []TaskSuspicion {
+	if len(arms) < 2 {
+		return nil
+	}
+	type slotKey struct{ task, slot string }
+	missed := map[slotKey]map[ArmName]bool{}
+	said := map[slotKey]string{}
+	armsOnTask := map[string]map[ArmName]bool{}
+	runs := map[string]int{}
+	negative := map[string]bool{}
+
+	for _, record := range records {
+		if record.Failure != FailureNone {
+			continue
+		}
+		runs[record.TaskID]++
+		negative[record.TaskID] = record.Category == CategoryNegative
+		if armsOnTask[record.TaskID] == nil {
+			armsOnTask[record.TaskID] = map[ArmName]bool{}
+		}
+		armsOnTask[record.TaskID][record.Arm] = true
+		for _, rejected := range record.Score.Rejected {
+			key := slotKey{record.TaskID, rejected.Slot}
+			if missed[key] == nil {
+				missed[key] = map[ArmName]bool{}
+				said[key] = rejected.Value
+			}
+			missed[key][record.Arm] = true
+		}
+	}
+
+	keys := make([]slotKey, 0, len(missed))
+	for key := range missed {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].task != keys[j].task {
+			return keys[i].task < keys[j].task
+		}
+		return keys[i].slot < keys[j].slot
+	})
+
+	seen := map[string]bool{}
+	var out []TaskSuspicion
+	for _, key := range keys {
+		// Auf der Negativkontrolle ist jede Antwort eine Ablehnung — das ist
+		// der Zweck der Aufgabe, kein Hinweis auf den Schluessel.
+		if negative[key.task] || seen[key.task] {
+			continue
+		}
+		if len(missed[key]) < len(armsOnTask[key.task]) || len(missed[key]) < 2 {
+			continue
+		}
+		seen[key.task] = true
+		out = append(out, TaskSuspicion{
+			TaskID: key.task, Runs: runs[key.task], Arms: len(missed[key]),
+			Reason: fmt.Sprintf("no arm got slot %q right (one answer was %q); a slot every arm misses "+
+				"is more likely a narrow key than a hard question", key.slot, said[key]),
 		})
 	}
 	return out

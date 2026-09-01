@@ -136,3 +136,43 @@ func TestSuspectTasksLeavesTheNegativeControlAlone(t *testing.T) {
 		t.Fatalf("the negative control scoring zero is the design, not a fault: %+v", found)
 	}
 }
+
+// TestSuspectTasksFindsASlotNobodyGotRight is the z-03 case: asked through
+// which route a listed invite is revoked, one arm gave the bare path and two
+// the full proxy-prefixed one. All three are true, the key listed one, and no
+// arm scored zero — so neither older rule saw anything.
+func TestSuspectTasksFindsASlotNobodyGotRight(t *testing.T) {
+	arms := []ArmName{ArmBare, ArmClaudeMD, ArmGhosttree}
+	miss := func(value string) Score {
+		return Score{FactRecall: 0.4, Rejected: []RejectedClaim{
+			{Slot: "revoke_route", Type: SlotString, Value: value}}}
+	}
+	records := []RunRecord{
+		{TaskID: "z-03", Arm: ArmBare, Score: miss("DELETE /api/invites/by-id/{id}")},
+		{TaskID: "z-03", Arm: ArmClaudeMD, Score: miss("DELETE /api/workspaces/{w}/proxy/api/invites/by-id/{id}")},
+		{TaskID: "z-03", Arm: ArmGhosttree, Score: miss("DELETE /api/workspaces/{w}/proxy/api/invites/by-id/{id}")},
+	}
+	found := SuspectTasks(records, arms)
+	if len(found) != 1 {
+		t.Fatalf("the task must be reported exactly once, not once per rule: %+v", found)
+	}
+	if !strings.Contains(found[0].Reason, "revoke_route") {
+		t.Fatalf("the reason must name the slot: %q", found[0].Reason)
+	}
+}
+
+// TestSuspectTasksIgnoresASlotOneArmGotRight keeps the rule from firing on a
+// merely hard question. If one arm answered it as asked, the key is fine.
+func TestSuspectTasksIgnoresASlotOneArmGotRight(t *testing.T) {
+	arms := []ArmName{ArmBare, ArmClaudeMD, ArmGhosttree}
+	records := []RunRecord{
+		{TaskID: "z-09", Arm: ArmBare, Score: Score{FactRecall: 1}},
+		{TaskID: "z-09", Arm: ArmClaudeMD, Score: Score{FactRecall: 0,
+			Rejected: []RejectedClaim{{Slot: "s", Type: SlotString, Value: "falsch-a"}}}},
+		{TaskID: "z-09", Arm: ArmGhosttree, Score: Score{FactRecall: 0,
+			Rejected: []RejectedClaim{{Slot: "s", Type: SlotString, Value: "falsch-b"}}}},
+	}
+	if found := SuspectTasks(records, arms); len(found) != 0 {
+		t.Fatalf("one arm answering as asked means the key is fine: %+v", found)
+	}
+}
