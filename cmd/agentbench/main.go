@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
@@ -151,6 +152,21 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintf(stdout, "arm %s: workspace prepared, probe clean\n", arm)
 	}
 
+	if *resume {
+		// Eine fortgesetzte Kampagne muss dieselben Fragen stellen. Sonst
+		// stuenden im selben Journal Antworten auf zwei verschiedene
+		// Aufgabensaetze, und keine Zeile sagte, welche zu welchem gehoert.
+		if err := requireSameTaskSet(tasks, *outDir); err != nil {
+			return err
+		}
+	}
+	// Der Aufgabensatz gehoert zum Lauf, nicht zum Verzeichnis, aus dem er
+	// geladen wurde. Ohne diese Kopie rechnet eine spaetere Nachbewertung
+	// gegen die inzwischen geaenderten Aufgaben — dieselben Transkripte,
+	// andere Zahlen, und nichts sagt, dass sich etwas verschoben hat.
+	if err := writeTaskSet(tasks, *outDir); err != nil {
+		return err
+	}
 	journal, err := agentbench.OpenRunJournal(filepath.Join(*outDir, "runs.jsonl"))
 	if err != nil {
 		return err
@@ -215,6 +231,10 @@ func recoverOrphans(campaign agentbench.Campaign, tasks []agentbench.Task,
 // numbers would carry fresh sampling noise, so they could not be compared with
 // the ones they replace.
 func regradeRun(campaign agentbench.Campaign, tasks []agentbench.Task, runDir, outDir string, stdout io.Writer) error {
+	tasks, err := taskSetFor(runDir, tasks, stdout)
+	if err != nil {
+		return err
+	}
 	raw, err := os.ReadFile(filepath.Join(runDir, "runs.jsonl"))
 	// Ohne Journal wird aus den Transkripten gebaut. Ein abgestuerzter Lauf
 	// hat genau diese Form: die Evidenz vollstaendig, die Urteile weg.
@@ -456,6 +476,63 @@ func writeOutputs(report agentbench.Report, outDir string) error {
 	}
 	defer markdown.Close()
 	return report.WriteMarkdown(markdown)
+}
+
+const taskSetFile = "tasks.json"
+
+// writeTaskSet pins the questions a run was actually asked. A task file edited
+// afterwards would otherwise re-score the same transcripts to different
+// numbers, with nothing on disk saying that anything moved.
+func writeTaskSet(tasks []agentbench.Task, outDir string) error {
+	raw, err := json.MarshalIndent(tasks, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(outDir, taskSetFile), raw, 0o644)
+}
+
+// requireSameTaskSet refuses to continue a campaign with different questions.
+// The comparison is over the marshalled definitions, so a changed accepted
+// spelling counts as a change — it is one.
+func requireSameTaskSet(tasks []agentbench.Task, outDir string) error {
+	previous, err := os.ReadFile(filepath.Join(outDir, taskSetFile))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	current, err := json.MarshalIndent(tasks, "", "  ")
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(bytes.TrimSpace(previous), bytes.TrimSpace(current)) {
+		return fmt.Errorf(
+			"the task set in %s/%s differs from --tasks; a resumed campaign must ask the same questions. "+
+				"Start a new run directory, or regrade the old one against its own %s",
+			outDir, taskSetFile, taskSetFile)
+	}
+	return nil
+}
+
+// taskSetFor prefers the copy a run left behind over whatever --tasks points at
+// today. A regrade that silently used a newer question would be the quietest
+// way imaginable to publish a wrong number.
+func taskSetFor(runDir string, fallback []agentbench.Task, stdout io.Writer) ([]agentbench.Task, error) {
+	raw, err := os.ReadFile(filepath.Join(runDir, taskSetFile))
+	if os.IsNotExist(err) {
+		return fallback, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var pinned []agentbench.Task
+	if err := json.Unmarshal(raw, &pinned); err != nil {
+		return nil, fmt.Errorf("%s/%s: %w", runDir, taskSetFile, err)
+	}
+	fmt.Fprintf(stdout, "using the %d tasks recorded in %s/%s, not --tasks\n",
+		len(pinned), runDir, taskSetFile)
+	return pinned, nil
 }
 
 func loadCampaign(path string) (agentbench.Campaign, error) {
