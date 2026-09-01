@@ -42,6 +42,18 @@ type FactSlot struct {
 	ExpectedInt  *int     `json:"expected_int,omitempty"`
 	ExpectedBool *bool    `json:"expected_bool,omitempty"`
 	Contradicts  []string `json:"contradicts,omitempty"`
+	// OnlyInMemory marks a fact that cannot be established from the repository
+	// — not from the code, not from the git history. Whether a piece of work is
+	// still open in the ledger is such a fact.
+	//
+	// These two kinds of fact answer two different questions and must not be
+	// added up. On a fact that is in the repository, every arm can in principle
+	// find it, and a difference measures how well a memory guides the search.
+	// On a fact that is only in the memory, an arm without it scores zero by
+	// construction, and the difference measures something else entirely: what
+	// it is worth to have written the thing down at all. A headline number that
+	// mixes both is unreadable, and a critic is right to say so.
+	OnlyInMemory bool `json:"only_in_memory,omitempty"`
 }
 
 type Task struct {

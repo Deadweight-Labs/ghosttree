@@ -23,19 +23,46 @@ type PairedEffect struct {
 type Metric struct {
 	Name string
 	Of   func(RunRecord) float64
+	// Applies excludes runs the metric says nothing about. A task with no
+	// memory-only fact has no memory recall — counting it as zero would not be
+	// a bad score but a made-up one, and it would drag every contrast on that
+	// metric toward the middle. A nil Applies means every run counts.
+	Applies func(RunRecord) bool
 }
 
+func (m Metric) applies(r RunRecord) bool { return m.Applies == nil || m.Applies(r) }
+
 var (
-	MetricFactRecall = Metric{"fact_recall", func(r RunRecord) float64 { return r.Score.FactRecall }}
-	MetricPrecision  = Metric{"claim_precision", func(r RunRecord) float64 { return r.Score.ClaimPrecision }}
-	MetricCostUSD    = Metric{"cost_usd", func(r RunRecord) float64 { return r.Transcript.CostUSD }}
-	MetricTurns      = Metric{"turns", func(r RunRecord) float64 { return float64(r.Transcript.Turns) }}
-	MetricToolCalls  = Metric{"tool_calls", func(r RunRecord) float64 { return float64(r.Transcript.ToolCalls) }}
+	MetricFactRecall = Metric{Name: "fact_recall", Of: func(r RunRecord) float64 { return r.Score.FactRecall }}
+	MetricPrecision  = Metric{Name: "claim_precision", Of: func(r RunRecord) float64 { return r.Score.ClaimPrecision }}
+	MetricCostUSD    = Metric{Name: "cost_usd", Of: func(r RunRecord) float64 { return r.Transcript.CostUSD }}
+	MetricTurns      = Metric{Name: "turns", Of: func(r RunRecord) float64 { return float64(r.Transcript.Turns) }}
+	MetricToolCalls  = Metric{Name: "tool_calls", Of: func(r RunRecord) float64 { return float64(r.Transcript.ToolCalls) }}
+
+	// MetricRepoRecall ist der ehrliche Wettstreit: die Antwort steht im
+	// Repository, jeder Arm koennte sie finden, gemessen wird, ob ein
+	// Gedaechtnis die Suche besser fuehrt.
+	MetricRepoRecall = Metric{
+		Name:    "repo_recall",
+		Of:      func(r RunRecord) float64 { return r.Score.RepoRecall },
+		Applies: func(r RunRecord) bool { return r.Score.RepoWeight > 0 },
+	}
+	// MetricMemoryRecall misst die andere Frage: was es wert war, die Sache
+	// aufzuschreiben. Ein Arm ohne Gedaechtnis erreicht hier null, und das ist
+	// kein Versagen, sondern die Bauart.
+	MetricMemoryRecall = Metric{
+		Name:    "memory_recall",
+		Of:      func(r RunRecord) float64 { return r.Score.MemoryRecall },
+		Applies: func(r RunRecord) bool { return r.Score.MemoryWeight > 0 },
+	}
 )
 
 // DefaultMetrics are reported for every contrast. Cost and turns are signed the
 // same way as recall — a negative value means the treatment needed less.
-var DefaultMetrics = []Metric{MetricFactRecall, MetricPrecision, MetricTurns, MetricCostUSD}
+var DefaultMetrics = []Metric{
+	MetricFactRecall, MetricRepoRecall, MetricMemoryRecall,
+	MetricPrecision, MetricTurns, MetricCostUSD,
+}
 
 func PairedBootstrap(records []RunRecord, treatment, control ArmName, seed uint64, draws int) PairedEffect {
 	return PairedBootstrapMetric(records, treatment, control, MetricFactRecall, seed, draws)
@@ -48,6 +75,9 @@ func PairedBootstrapMetric(records []RunRecord, treatment, control ArmName, metr
 			continue
 		}
 		if record.Arm != treatment && record.Arm != control {
+			continue
+		}
+		if !metric.applies(record) {
 			continue
 		}
 		if perTask[record.TaskID] == nil {

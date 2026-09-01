@@ -13,6 +13,17 @@ type Score struct {
 	ClaimPrecision float64 `json:"claim_precision"`
 	ContradictRate float64 `json:"contradiction_rate"`
 	AbstentionRate float64 `json:"abstention_rate"`
+	// Die Trefferquote getrennt nach Wissensquelle. RepoRecall misst, wie gut
+	// ein Gedaechtnis die Suche fuehrt — dort kann jeder Arm die Antwort
+	// finden. MemoryRecall misst etwas anderes: was es wert ist, die Sache
+	// ueberhaupt aufgeschrieben zu haben. Zusammengezaehlt ergeben die beiden
+	// eine Zahl, die keine Frage beantwortet.
+	RepoWeight   int     `json:"repo_weight"`
+	RepoEarned   int     `json:"repo_earned"`
+	RepoRecall   float64 `json:"repo_recall"`
+	MemoryWeight int     `json:"memory_weight"`
+	MemoryEarned int     `json:"memory_earned"`
+	MemoryRecall float64 `json:"memory_recall"`
 	// Rejected keeps what the agent actually said where the key said no. It
 	// costs a few bytes per run and buys the only cheap check there is against
 	// the dominant threat to this benchmark: a wrong ground truth. Two arms
@@ -31,6 +42,11 @@ func Grade(task Task, form ResponseForm) Score {
 	score := Score{TotalSlots: len(task.Facts)}
 	for _, slot := range task.Facts {
 		score.TotalWeight += slot.Weight
+		if slot.OnlyInMemory {
+			score.MemoryWeight += slot.Weight
+		} else {
+			score.RepoWeight += slot.Weight
+		}
 		value, present := form.Slots[slot.ID]
 		if !present || value.IsAbstention() {
 			continue
@@ -39,6 +55,11 @@ func Grade(task Task, form ResponseForm) Score {
 		if slot.matches(value) {
 			score.CorrectSlots++
 			score.EarnedWeight += slot.Weight
+			if slot.OnlyInMemory {
+				score.MemoryEarned += slot.Weight
+			} else {
+				score.RepoEarned += slot.Weight
+			}
 			continue
 		}
 		if slot.contradicts(value) {
@@ -48,6 +69,12 @@ func Grade(task Task, form ResponseForm) Score {
 	}
 	if score.TotalWeight > 0 {
 		score.FactRecall = float64(score.EarnedWeight) / float64(score.TotalWeight)
+	}
+	if score.RepoWeight > 0 {
+		score.RepoRecall = float64(score.RepoEarned) / float64(score.RepoWeight)
+	}
+	if score.MemoryWeight > 0 {
+		score.MemoryRecall = float64(score.MemoryEarned) / float64(score.MemoryWeight)
 	}
 	if score.AnsweredSlots > 0 {
 		score.ClaimPrecision = float64(score.CorrectSlots) / float64(score.AnsweredSlots)

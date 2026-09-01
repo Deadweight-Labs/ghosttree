@@ -40,6 +40,63 @@ type GroupSummary struct {
 	CostUSD float64 `json:"cost_usd"`
 }
 
+// SourceSummary splits an arm's recall by where the answer could be found.
+//
+// It exists because the two halves answer different questions and a single
+// number that adds them up answers neither. On facts that stand in the
+// repository, every arm can find the answer and a difference says how well a
+// memory guides the search. On facts that stand only in the memory, an arm
+// without one scores zero by construction, and the difference says what it was
+// worth to write the thing down. A sceptic who suspects the second is being
+// sold as the first is right to look, and this table is where they look.
+type SourceSummary struct {
+	Arm ArmName `json:"arm"`
+	// Runs zaehlt nur Laeufe, in denen die jeweilige Klasse ueberhaupt
+	// vorkommt — eine Aufgabe ohne Gedaechtnis-Fakt hat keine
+	// Gedaechtnis-Trefferquote, auch keine von null.
+	RepoRuns     int     `json:"repo_runs"`
+	RepoRecall   float64 `json:"repo_recall"`
+	MemoryRuns   int     `json:"memory_runs"`
+	MemoryRecall float64 `json:"memory_recall"`
+}
+
+func summariseBySource(records []RunRecord, arms []ArmName) []SourceSummary {
+	byArm := map[ArmName]*SourceSummary{}
+	for _, record := range records {
+		if record.Failure != FailureNone {
+			continue
+		}
+		s := byArm[record.Arm]
+		if s == nil {
+			s = &SourceSummary{Arm: record.Arm}
+			byArm[record.Arm] = s
+		}
+		if record.Score.RepoWeight > 0 {
+			s.RepoRuns++
+			s.RepoRecall += record.Score.RepoRecall
+		}
+		if record.Score.MemoryWeight > 0 {
+			s.MemoryRuns++
+			s.MemoryRecall += record.Score.MemoryRecall
+		}
+	}
+	var out []SourceSummary
+	for _, arm := range arms {
+		s, ok := byArm[arm]
+		if !ok {
+			continue
+		}
+		if s.RepoRuns > 0 {
+			s.RepoRecall /= float64(s.RepoRuns)
+		}
+		if s.MemoryRuns > 0 {
+			s.MemoryRecall /= float64(s.MemoryRuns)
+		}
+		out = append(out, *s)
+	}
+	return out
+}
+
 // Isolation records how tightly the runs were fenced in. It belongs in the
 // report because a number produced without a seal means something different
 // from the same number produced with one, and the difference is not visible
@@ -58,6 +115,7 @@ type Report struct {
 	Records    []RunRecord     `json:"-"`
 	ByExposure []GroupSummary  `json:"by_exposure"`
 	ByCategory []GroupSummary  `json:"by_category"`
+	BySource   []SourceSummary `json:"by_source"`
 	Effects    []PairedEffect  `json:"effects"`
 	Failures   map[Failure]int `json:"failures"`
 	Suspect    []TaskSuspicion `json:"suspect_tasks,omitempty"`
@@ -73,6 +131,7 @@ func BuildReport(campaign Campaign, records []RunRecord) Report {
 	report.Suspect = SuspectTasks(records, campaign.Arms)
 	report.ByExposure = summarise(records, func(r RunRecord) string { return string(r.Exposure.Class()) })
 	report.ByCategory = summarise(records, func(r RunRecord) string { return string(r.Category) })
+	report.BySource = summariseBySource(records, campaign.Arms)
 	return report
 }
 
@@ -229,6 +288,20 @@ func (r Report) WriteMarkdown(w io.Writer) error {
 	}
 	writeGroups("Nach Expositionsklasse", r.ByExposure)
 	writeGroups("Nach Kategorie", r.ByCategory)
+
+	if len(r.BySource) > 0 {
+		fmt.Fprint(w, "\n## Nach Wissensquelle\n\n")
+		fmt.Fprint(w, "Zwei Fragen, die nicht zusammengezählt werden dürfen. Links steht die Antwort im "+
+			"Repository und jeder Arm könnte sie finden — gemessen wird, ob ein Gedächtnis die Suche besser "+
+			"führt. Rechts steht sie nur im Gedächtnis; ein Arm ohne eines erreicht dort null, und das ist "+
+			"keine Schwäche, sondern die Bauart.\n\n")
+		fmt.Fprintln(w, "| Arm | Läufe (im Repo) | Treffer (im Repo) | Läufe (nur Gedächtnis) | Treffer (nur Gedächtnis) |")
+		fmt.Fprintln(w, "|---|---|---|---|---|")
+		for _, s := range r.BySource {
+			fmt.Fprintf(w, "| %s | %d | %.3f | %d | %.3f |\n",
+				s.Arm, s.RepoRuns, s.RepoRecall, s.MemoryRuns, s.MemoryRecall)
+		}
+	}
 
 	if len(r.Suspect) > 0 {
 		fmt.Fprint(w, "\n## Verdächtige Aufgaben\n\n")
