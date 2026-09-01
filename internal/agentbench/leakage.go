@@ -60,6 +60,9 @@ func CheckLeakage(ws Workspace, arm ArmName, allowed AllowedSurface) []LeakageFi
 	if !allowed.ClaudeMD && exists(ws.Repo, ".claude") {
 		report("claude_dir", "the workspace contains .claude")
 	}
+	// Vor dem ersten Lauf ist schon das Verzeichnis verdaechtig; waehrend der
+	// Kampagne legt Claude Code es selbst an und laesst es leer. Geprueft wird
+	// darum, ob Inhalt darin steht — siehe CheckHomeDrift.
 	if !allowed.AutoMemory && exists(ws.Home, ".claude", "projects") {
 		report("auto_memory", "the home directory contains Claude auto-memory")
 	}
@@ -80,5 +83,36 @@ func CheckLeakage(ws Workspace, arm ArmName, allowed AllowedSurface) []LeakageFi
 	} else if ws.Home != "" && ws.Env["HOME"] != ws.Home {
 		report("home", fmt.Sprintf("HOME points outside the workspace: %s", ws.Env["HOME"]))
 	}
+	return findings
+}
+
+// CheckHomeDrift asks whether the arm's last run left something behind that its
+// next run would read.
+//
+// One workspace and one HOME serve all of an arm's runs, so a memory written
+// during run 3 is context for run 4. An arm that accumulates notes across tasks
+// stops being the arm it is named after — `bare` would slowly turn into
+// `claude-native` — and the numbers would still look plausible.
+//
+// It checks for content, not for the directory. Claude Code creates
+// ~/.claude/projects/<project>/memory itself and leaves it empty; in 72 pilot
+// runs that is exactly what happened. Treating the empty directory as a finding
+// would stop every campaign for nothing.
+func CheckHomeDrift(ws Workspace, arm ArmName, allowed AllowedSurface) []LeakageFinding {
+	if allowed.AutoMemory || ws.Home == "" {
+		return nil
+	}
+	var findings []LeakageFinding
+	root := filepath.Join(ws.Home, ".claude", "projects")
+	_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || entry.IsDir() || filepath.Base(filepath.Dir(path)) != "memory" {
+			return nil
+		}
+		findings = append(findings, LeakageFinding{
+			Arm: arm, Kind: "auto_memory_written",
+			Detail: "the run left a memory behind that the arm's next run would read: " + path,
+		})
+		return nil
+	})
 	return findings
 }

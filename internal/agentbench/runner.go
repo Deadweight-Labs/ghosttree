@@ -47,6 +47,18 @@ type AgentFor interface {
 	For(arm ArmName) (Agent, error)
 }
 
+// AfterRunChecker is checked after every run when the AgentFor implements it.
+//
+// A campaign hands each arm one workspace and one HOME for all of its runs, so
+// anything an agent leaves behind is visible to the arm's next run. In 72 pilot
+// runs no agent wrote a memory — the directories were created and stayed empty
+// — but nothing prevented it. An arm that quietly accumulates notes across
+// tasks stops being the arm it is named after, and by the time the numbers look
+// odd the campaign is spent.
+type AfterRunChecker interface {
+	AfterRun(arm ArmName) error
+}
+
 type AgentForFunc func(arm ArmName) (Agent, error)
 
 func (f AgentForFunc) For(arm ArmName) (Agent, error) { return f(arm) }
@@ -128,6 +140,15 @@ func Run(ctx context.Context, campaign Campaign, tasks []Task, agents AgentFor, 
 				}
 				if err := guard.observe(record); err != nil {
 					return records, err
+				}
+				// Eine Verunreinigung ist kein Ergebnis eines Laufs, sondern
+				// das Ende der Gueltigkeit dieses Arms: jeder folgende Lauf
+				// saehe, was der Agent hinterlassen hat. Also abbrechen —
+				// fortsetzen kann die Kampagne danach, das Journal steht.
+				if checker, ok := agents.(AfterRunChecker); ok {
+					if err := checker.AfterRun(arm); err != nil {
+						return records, fmt.Errorf("after the run for %q/%s: %w", task.ID, arm, err)
+					}
 				}
 			}
 		}

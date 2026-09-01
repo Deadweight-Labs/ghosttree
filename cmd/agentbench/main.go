@@ -128,9 +128,10 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 	agents := &armAgents{
 		campaign: campaign, repoSource: *repoSource, binary: *binary,
 		outDir: *outDir, runtime: runtime, ghostTree: *ghostTree,
-		rebuild:    *resume,
-		prepared:   map[agentbench.ArmName]agentbench.Agent{},
-		workspaces: map[agentbench.ArmName]agentbench.Workspace{},
+		rebuild:     *resume,
+		openNetwork: *allowOpenNetwork,
+		prepared:    map[agentbench.ArmName]agentbench.Agent{},
+		workspaces:  map[agentbench.ArmName]agentbench.Workspace{},
 	}
 	// Alle Arme werden vor dem ersten Lauf gebaut und geprueft: ein
 	// Leakage-Befund im dritten Arm soll die Kampagne stoppen, bevor Tokens
@@ -350,16 +351,19 @@ type armAgents struct {
 	repoSource string
 	binary     string
 	outDir     string
-	runtime   agentbench.Runtime
-	ghostTree string
+	runtime    agentbench.Runtime
+	ghostTree  string
 	// rebuild throws an existing workspace away instead of refusing it. A
 	// resumed campaign starts its arms from the checkout again, which is
 	// exactly the state the campaign began in — the alternative would be to
 	// hand the resumed segment a workspace that earlier runs had already
 	// walked through.
-	rebuild    bool
-	prepared   map[agentbench.ArmName]agentbench.Agent
-	workspaces map[agentbench.ArmName]agentbench.Workspace
+	rebuild bool
+	// openNetwork wird fuer die Nachpruefung nach jedem Lauf gebraucht: die
+	// erlaubte Oberflaeche eines Arms haengt daran.
+	openNetwork bool
+	prepared    map[agentbench.ArmName]agentbench.Agent
+	workspaces  map[agentbench.ArmName]agentbench.Workspace
 }
 
 func (a *armAgents) For(arm agentbench.ArmName) (agentbench.Agent, error) {
@@ -410,6 +414,20 @@ func (a *armAgents) For(arm agentbench.ArmName) (agentbench.Agent, error) {
 	a.prepared[arm] = agent
 	a.workspaces[arm] = workspace
 	return agent, nil
+}
+
+// AfterRun is called by the runner after every run. It asks the cheap question
+// that a shared HOME makes necessary: did this run leave something behind that
+// the arm's next run would read?
+func (a *armAgents) AfterRun(arm agentbench.ArmName) error {
+	ws, ok := a.workspaces[arm]
+	if !ok {
+		return nil
+	}
+	if findings := agentbench.CheckHomeDrift(ws, arm, allowedFor(arm, a.openNetwork)); len(findings) > 0 {
+		return fmt.Errorf("arm %q is no longer the arm it is named after: %+v", arm, findings)
+	}
+	return nil
 }
 
 func allowedFor(arm agentbench.ArmName, openNetwork bool) agentbench.AllowedSurface {
