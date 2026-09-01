@@ -134,9 +134,7 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 	agents := &armAgents{
 		campaign: campaign, repoSource: *repoSource, binary: *binary,
 		outDir: *outDir, runtime: runtime, ghostTree: *ghostTree, claudeDir: *claudeDir,
-		rebuild:     *resume,
 		openNetwork: *allowOpenNetwork,
-		prepared:    map[agentbench.ArmName]agentbench.Agent{},
 		workspaces:  map[agentbench.ArmName]agentbench.Workspace{},
 	}
 	// Alle Arme werden vor dem ersten Lauf gebaut und geprueft: ein
@@ -394,23 +392,25 @@ type armAgents struct {
 	// Repository — ohne diesen Weg misst der Kontrollarm ein ärmeres
 	// Projekt, als es gibt.
 	claudeDir string
-	// rebuild throws an existing workspace away instead of refusing it. A
-	// resumed campaign starts its arms from the checkout again, which is
-	// exactly the state the campaign began in — the alternative would be to
-	// hand the resumed segment a workspace that earlier runs had already
-	// walked through.
-	rebuild bool
 	// openNetwork wird fuer die Nachpruefung nach jedem Lauf gebraucht: die
 	// erlaubte Oberflaeche eines Arms haengt daran.
 	openNetwork bool
-	prepared    map[agentbench.ArmName]agentbench.Agent
 	workspaces  map[agentbench.ArmName]agentbench.Workspace
 }
 
+// For builds the arm's workspace fresh for every run.
+//
+// The first version built one workspace per arm and reused it for all of that
+// arm's runs. Nothing an agent wrote was ever found there in more than two
+// hundred runs — but nothing prevented it either: the agents run with
+// acceptEdits, and a file written during run 3 would be context for run 4. That
+// correlates repetitions and quietly favours whichever arm the block order puts
+// first.
+//
+// Rebuilding costs a directory copy — under a second against a run of half a
+// minute — and buys the property the design claims: every run starts from the
+// same state. The reused workspace was a shortcut, not a decision.
 func (a *armAgents) For(arm agentbench.ArmName) (agentbench.Agent, error) {
-	if agent, ok := a.prepared[arm]; ok {
-		return agent, nil
-	}
 	spec := agentbench.WorkspaceSpec{RepoSource: a.repoSource}
 	if arm == agentbench.ArmGhosttree {
 		spec.GhostTreeSource = a.ghostTree
@@ -445,10 +445,8 @@ func (a *armAgents) For(arm agentbench.ArmName) (agentbench.Agent, error) {
 		}
 	}
 	dir := filepath.Join(a.outDir, "workspaces", string(arm))
-	if a.rebuild {
-		if err := os.RemoveAll(dir); err != nil {
-			return nil, err
-		}
+	if err := os.RemoveAll(dir); err != nil {
+		return nil, err
 	}
 	workspace, err := agentbench.PrepareWorkspace(dir, arm, spec)
 	if err != nil {
@@ -459,7 +457,6 @@ func (a *armAgents) For(arm agentbench.ArmName) (agentbench.Agent, error) {
 	}
 	agent := agentbench.NewClaudeCodeAgent(a.binary, workspace,
 		filepath.Join(a.outDir, "raw", string(arm)), a.runtime)
-	a.prepared[arm] = agent
 	a.workspaces[arm] = workspace
 	return agent, nil
 }

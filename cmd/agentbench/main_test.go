@@ -120,3 +120,41 @@ func TestRunCommandRequiresACampaign(t *testing.T) {
 		t.Fatal("a run without a campaign file must be refused")
 	}
 }
+
+// TestArmAgentsRebuildsTheWorkspacePerRun guards the property the design
+// claims: every run starts from the same state. The first version cached one
+// workspace per arm, so a file an agent wrote during run 3 was context for run
+// 4 — which correlates repetitions and favours whichever arm the block order
+// puts first. It never happened in more than two hundred runs; nothing
+// prevented it either.
+func TestArmAgentsRebuildsTheWorkspacePerRun(t *testing.T) {
+	source := t.TempDir()
+	if err := os.WriteFile(filepath.Join(source, "main.go"), []byte("package main"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := t.TempDir()
+	agents := &armAgents{
+		repoSource: source, outDir: out, binary: "claude",
+		runtime:    agentbench.LocalRuntime{},
+		workspaces: map[agentbench.ArmName]agentbench.Workspace{},
+	}
+
+	if _, err := agents.For(agentbench.ArmBare); err != nil {
+		t.Fatal(err)
+	}
+	// Ein Agent hinterlaesst etwas im Arbeitsbereich.
+	debris := filepath.Join(agents.workspaces[agentbench.ArmBare].Repo, "scratch.txt")
+	if err := os.WriteFile(debris, []byte("vom vorigen Lauf"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := agents.For(agentbench.ArmBare); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(debris); !os.IsNotExist(err) {
+		t.Fatal("the next run must not see what the previous one left behind")
+	}
+	if _, err := os.Stat(filepath.Join(agents.workspaces[agentbench.ArmBare].Repo, "main.go")); err != nil {
+		t.Fatalf("the repository itself must be there again: %v", err)
+	}
+}
