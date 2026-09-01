@@ -232,13 +232,14 @@ func (r Report) WriteMarkdown(w io.Writer) error {
 
 	if len(r.Suspect) > 0 {
 		fmt.Fprint(w, "\n## Verdächtige Aufgaben\n\n")
-		fmt.Fprint(w, "Jeder Arm hat null erreicht. Einstimmigkeit über Arme hinweg, die sich sonst "+
-			"unterscheiden, ist ein Hinweis auf die Aufgabe, nicht auf die Arme — die Ground Truth "+
-			"gehört geprüft, bevor diese Zeilen in eine Zahl eingehen.\n\n")
-		fmt.Fprintln(w, "| Aufgabe | Läufe | Arme | Treffer |")
-		fmt.Fprintln(w, "|---|---|---|---|")
+		fmt.Fprint(w, "Übereinstimmung über Arme hinweg, die sich sonst unterscheiden, ist ein Hinweis "+
+			"auf die Aufgabe, nicht auf die Arme — sei es, dass alle null erreichen, oder dass mehrere "+
+			"dieselbe Antwort geben, die der Schlüssel ablehnt. Die Ground Truth gehört geprüft, bevor "+
+			"diese Zeilen in eine Zahl eingehen.\n\n")
+		fmt.Fprintln(w, "| Aufgabe | Läufe | Arme | Treffer | Grund |")
+		fmt.Fprintln(w, "|---|---|---|---|---|")
 		for _, s := range r.Suspect {
-			fmt.Fprintf(w, "| %s | %d | %d | %.3f |\n", s.TaskID, s.Runs, s.Arms, s.Recall)
+			fmt.Fprintf(w, "| %s | %d | %d | %.3f | %s |\n", s.TaskID, s.Runs, s.Arms, s.Recall, s.Reason)
 		}
 	}
 

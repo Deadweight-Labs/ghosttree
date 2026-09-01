@@ -13,6 +13,18 @@ type Score struct {
 	ClaimPrecision float64 `json:"claim_precision"`
 	ContradictRate float64 `json:"contradiction_rate"`
 	AbstentionRate float64 `json:"abstention_rate"`
+	// Rejected keeps what the agent actually said where the key said no. It
+	// costs a few bytes per run and buys the only cheap check there is against
+	// the dominant threat to this benchmark: a wrong ground truth. Two arms
+	// that independently name the same rejected answer are saying something
+	// about the question, not about their memory.
+	Rejected []RejectedClaim `json:"rejected,omitempty"`
+}
+
+// RejectedClaim is one answer the grader did not accept.
+type RejectedClaim struct {
+	Slot  string `json:"slot"`
+	Value string `json:"value"`
 }
 
 func Grade(task Task, form ResponseForm) Score {
@@ -32,6 +44,7 @@ func Grade(task Task, form ResponseForm) Score {
 		if slot.contradicts(value) {
 			score.Contradictions++
 		}
+		score.Rejected = append(score.Rejected, RejectedClaim{Slot: slot.ID, Value: value.plain()})
 	}
 	if score.TotalWeight > 0 {
 		score.FactRecall = float64(score.EarnedWeight) / float64(score.TotalWeight)

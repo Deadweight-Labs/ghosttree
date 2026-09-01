@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 )
 
@@ -19,6 +20,22 @@ type SlotValue struct {
 
 func (v SlotValue) IsAbstention() bool {
 	return v.Path == nil && v.String == nil && v.Integer == nil && v.Boolean == nil
+}
+
+// plain renders the value for a human reading the report. A bare string fills
+// both String and Path, so String is read first and the two never disagree.
+func (v SlotValue) plain() string {
+	switch {
+	case v.String != nil:
+		return *v.String
+	case v.Path != nil:
+		return *v.Path
+	case v.Integer != nil:
+		return strconv.Itoa(*v.Integer)
+	case v.Boolean != nil:
+		return strconv.FormatBool(*v.Boolean)
+	}
+	return ""
 }
 
 // UnmarshalJSON accepts the bare value as well as the typed wrapper. The

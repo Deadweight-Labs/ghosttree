@@ -1,6 +1,10 @@
 package agentbench
 
-import "sort"
+import (
+	"fmt"
+	"sort"
+	"strings"
+)
 
 // TaskSuspicion flags a task whose ground truth is more likely wrong than the
 // agents are.
@@ -47,7 +51,7 @@ func SuspectTasks(records []RunRecord, arms []ArmName) []TaskSuspicion {
 		a.arms[record.Arm] = true
 	}
 
-	var out []TaskSuspicion
+	out := convergedRejections(records, arms)
 	for id, a := range byTask {
 		// Nur wenn wirklich jeder Arm angetreten ist: fehlt einer, ist die
 		// Einstimmigkeit kein Argument.
@@ -64,5 +68,80 @@ func SuspectTasks(records []RunRecord, arms []ArmName) []TaskSuspicion {
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].TaskID < out[j].TaskID })
+	return out
+}
+
+// convergedRejections finds tasks where differently equipped arms independently
+// gave the same answer the key rejects.
+//
+// It catches the case unanimity misses. Asked which function keeps two hosts'
+// adopted proxy configuration from colliding in the central store, the bare arm
+// named AdoptedArtifactID — the expected answer — while the other two both
+// named GetConfigArtifactByTarget and pointed at a UNIQUE(agent_id, target_kind,
+// target_path) constraint. That is a second, equally true answer to a question
+// that admitted only one. Scored as written it reads as "memory made the agent
+// worse", which is not what happened.
+//
+// Two arms are enough. They differ in what they know and search separately; the
+// same rejected string from both is far more likely to be a real answer the key
+// does not list than the same mistake made twice.
+func convergedRejections(records []RunRecord, arms []ArmName) []TaskSuspicion {
+	if len(arms) < 2 {
+		return nil
+	}
+	type claim struct{ task, slot, value string }
+	sayers := map[claim]map[ArmName]bool{}
+	// Gruppiert wird kleingeschrieben, berichtet wird, wie es dastand: die
+	// Meldung soll zitieren, was der Agent gesagt hat.
+	spelling := map[claim]string{}
+	runsPerTask := map[string]int{}
+	for _, record := range records {
+		if record.Failure != FailureNone {
+			continue
+		}
+		runsPerTask[record.TaskID]++
+		for _, rejected := range record.Score.Rejected {
+			said := strings.TrimSpace(rejected.Value)
+			key := claim{record.TaskID, rejected.Slot, strings.ToLower(said)}
+			if sayers[key] == nil {
+				sayers[key] = map[ArmName]bool{}
+				spelling[key] = said
+			}
+			sayers[key][record.Arm] = true
+		}
+	}
+
+	// Ueber eine Map zu laufen waere hier nicht harmlos: bei mehreren
+	// uebereinstimmenden Antworten zur selben Aufgabe entschiede der Zufall,
+	// welche im Bericht steht, und zwei Auswertungen desselben Laufs
+	// widersprechen sich.
+	keys := make([]claim, 0, len(sayers))
+	for key := range sayers {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].task != keys[j].task {
+			return keys[i].task < keys[j].task
+		}
+		if keys[i].slot != keys[j].slot {
+			return keys[i].slot < keys[j].slot
+		}
+		return keys[i].value < keys[j].value
+	})
+
+	seen := map[string]bool{}
+	var out []TaskSuspicion
+	for _, key := range keys {
+		byArm := sayers[key]
+		if len(byArm) < 2 || key.value == "" || seen[key.task] {
+			continue
+		}
+		seen[key.task] = true
+		out = append(out, TaskSuspicion{
+			TaskID: key.task, Runs: runsPerTask[key.task], Arms: len(byArm),
+			Reason: fmt.Sprintf("%d arms independently answered %q for slot %q and the key rejects it; "+
+				"check whether the question has a second true answer", len(byArm), spelling[key], key.slot),
+		})
+	}
 	return out
 }
