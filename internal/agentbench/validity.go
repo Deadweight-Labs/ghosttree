@@ -32,9 +32,10 @@ type TaskSuspicion struct {
 // the same amount and dilutes every contrast toward zero.
 func SuspectTasks(records []RunRecord, arms []ArmName) []TaskSuspicion {
 	type agg struct {
-		runs   int
-		recall float64
-		arms   map[ArmName]bool
+		runs     int
+		recall   float64
+		arms     map[ArmName]bool
+		negative bool
 	}
 	byTask := map[string]*agg{}
 	for _, record := range records {
@@ -49,6 +50,7 @@ func SuspectTasks(records []RunRecord, arms []ArmName) []TaskSuspicion {
 		a.runs++
 		a.recall += record.Score.FactRecall
 		a.arms[record.Arm] = true
+		a.negative = record.Category == CategoryNegative
 	}
 
 	out := convergedRejections(records, arms)
@@ -56,6 +58,13 @@ func SuspectTasks(records []RunRecord, arms []ArmName) []TaskSuspicion {
 		// Nur wenn wirklich jeder Arm angetreten ist: fehlt einer, ist die
 		// Einstimmigkeit kein Argument.
 		if len(a.arms) < len(arms) || len(arms) < 2 {
+			continue
+		}
+		// Auf einer Negativkontrolle ist die einstimmige Null das Ziel: die
+		// Frage hat keine Antwort, und jeder Arm soll sich enthalten. Sie hier
+		// zu melden hiesse, den Erfolg des Versuchsaufbaus als Fehler zu
+		// drucken.
+		if a.negative {
 			continue
 		}
 		mean := a.recall / float64(a.runs)
@@ -101,6 +110,13 @@ func convergedRejections(records []RunRecord, arms []ArmName) []TaskSuspicion {
 		}
 		runsPerTask[record.TaskID]++
 		for _, rejected := range record.Score.Rejected {
+			// Nur Antworten aus einem grossen Wertevorrat. Zwei Arme, die
+			// denselben Dateipfad nennen, haben etwas gefunden; zwei Arme, die
+			// "false" sagen, haben sich per Muenzwurf getroffen — bei einem
+			// Boolean liegt genau das in der Haelfte aller Faelle vor.
+			if rejected.Type != SlotString && rejected.Type != SlotPath {
+				continue
+			}
 			said := strings.TrimSpace(rejected.Value)
 			key := claim{record.TaskID, rejected.Slot, strings.ToLower(said)}
 			if sayers[key] == nil {

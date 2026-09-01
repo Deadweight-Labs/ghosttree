@@ -55,9 +55,18 @@ func Regrade(records []RunRecord, tasks []Task) ([]RunRecord, error) {
 		record.Transcript.CostUSD = transcript.CostUSD
 		record.Transcript.ToolCalls = transcript.ToolCalls
 		record.Transcript.FilesRead = transcript.FilesRead
+		record.Transcript.MaxTurnsExceeded = transcript.MaxTurnsExceeded
 
 		form, err := ParseForm(transcript.Output)
 		if err != nil {
+			// Erschoepftes Zugbudget ist eine Enthaltung, kein Bewertungsfehler
+			// — siehe runOne.
+			if transcript.MaxTurnsExceeded {
+				record.Failure, record.FailureMsg = FailureNone, ""
+				record.Score = Grade(task, ResponseForm{Slots: map[string]SlotValue{}})
+				out = append(out, record)
+				continue
+			}
 			record.Failure = FailureScoring
 			record.FailureMsg = err.Error()
 			record.Score = Score{}

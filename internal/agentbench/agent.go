@@ -23,6 +23,13 @@ type Transcript struct {
 	// AgentError carries the agent's own error result. A run that failed for
 	// the agent's own reasons must not be scored as an abstention.
 	AgentError string `json:"agent_error,omitempty"`
+	// MaxTurnsExceeded says the agent spent its whole turn budget without
+	// delivering an answer. That is an outcome, not a fault: it is what
+	// "searched and did not find" looks like, and it happens to the arm that
+	// does not have the answer. Counted as a product failure it would drop out
+	// of the scoring — removing the hardest cases and flattering the arm that
+	// gave up.
+	MaxTurnsExceeded bool `json:"max_turns_exceeded,omitempty"`
 	RawPath    string `json:"raw_path"`
 	// Turns and CostUSD answer the question a recall number alone cannot:
 	// what the answer cost. A memory that raises recall by a little and the

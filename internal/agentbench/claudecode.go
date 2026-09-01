@@ -18,6 +18,7 @@ import (
 
 type streamEvent struct {
 	Type    string `json:"type"`
+	Subtype string `json:"subtype"`
 	Result  string `json:"result"`
 	IsError bool   `json:"is_error"`
 	Message struct {
@@ -61,7 +62,15 @@ func parseStreamJSON(r io.Reader) (Transcript, error) {
 			transcript.OutputTokens = event.Usage.OutputTokens
 			transcript.Turns = event.NumTurns
 			transcript.CostUSD = event.CostUSD
-			if event.IsError {
+			// Ein erschoepftes Zugbudget ist kein Fehler des Werkzeugs,
+			// sondern das Ergebnis des Laufs: der Agent hat sein Budget
+			// verbraucht und nichts geliefert. Als Produktfehler gezaehlt
+			// faellt er aus der Wertung — und zwar genau dort, wo ein Arm die
+			// Antwort nicht hat. Das entfernt die schwersten Faelle aus dem
+			// Vergleich und verzerrt ihn zugunsten des Arms, der aufgab.
+			if event.Subtype == "error_max_turns" {
+				transcript.MaxTurnsExceeded = true
+			} else if event.IsError {
 				transcript.AgentError = event.Result
 			}
 		}
@@ -137,16 +146,26 @@ func (a *ClaudeCodeAgent) Run(ctx context.Context, inv Invocation) (Transcript, 
 	// Redigiert wird vor jeder weiteren Verwendung: die Rohausgabe wandert in
 	// die veroeffentlichten Transkripte und in Fehlermeldungen.
 	out = a.redactor.Bytes(out)
-	if err != nil {
-		return Transcript{}, errors.New(a.redactor.String(describeExecErrorWithOutput(err, out)))
+	// Geschrieben wird immer, auch bei Exit ungleich null. Ein Lauf, der mit
+	// erschoepftem Zugbudget endet, liefert ein vollstaendiges Transkript und
+	// beendet sich trotzdem mit 1; es wegzuwerfen hiess, genau die Faelle nicht
+	// nachlesen zu koennen, an denen ein Arm gescheitert ist.
+	rawPath, writeErr := writeRaw(a.rawDir, inv, out)
+	if writeErr != nil {
+		return Transcript{}, writeErr
 	}
-	transcript, err := parseStreamJSON(bytes.NewReader(out))
-	if err != nil {
-		return Transcript{}, err
-	}
+	transcript, parseErr := parseStreamJSON(bytes.NewReader(out))
+	transcript.RawPath = rawPath
 	transcript.Duration = time.Since(started)
-	transcript.RawPath, err = writeRaw(a.rawDir, inv, out)
-	return transcript, err
+	if parseErr != nil {
+		return transcript, parseErr
+	}
+	// Das erschoepfte Budget hat der Parser schon erkannt; der Exitcode sagt
+	// darueber nichts, was das Transkript nicht besser saegte.
+	if err != nil && !transcript.MaxTurnsExceeded {
+		return transcript, errors.New(a.redactor.String(describeExecErrorWithOutput(err, out)))
+	}
+	return transcript, nil
 }
 
 // describeExecError keeps the process's stderr in the failure message. A bare

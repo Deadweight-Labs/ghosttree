@@ -205,3 +205,26 @@ func TestWriteRawKeepsEveryRepetition(t *testing.T) {
 		t.Fatalf("want two transcripts, got %d (%v)", len(entries), err)
 	}
 }
+
+// TestExhaustedTurnBudgetIsAnOutcomeNotAFault holds the line the pilot found:
+// four runs died on np-11, all of them arms without the ledger, all of them
+// searching until the budget ran out. Counted as product failures they dropped
+// out of the scoring — removing exactly the cases where an arm did not have the
+// answer, which flatters the arm that gave up.
+func TestExhaustedTurnBudgetIsAnOutcomeNotAFault(t *testing.T) {
+	stream := `{"type":"result","subtype":"error_max_turns","is_error":true,"num_turns":20,` +
+		`"result":"Reached max turns"}` + "\n"
+	transcript, err := parseStreamJSON(strings.NewReader(stream))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !transcript.MaxTurnsExceeded {
+		t.Fatal("an exhausted turn budget must be recognised as such")
+	}
+	if transcript.AgentError != "" {
+		t.Fatalf("it is not an agent error: %q", transcript.AgentError)
+	}
+	if transcript.Turns != 20 {
+		t.Fatalf("the effort still counts: %d", transcript.Turns)
+	}
+}

@@ -69,7 +69,7 @@ func TestSuspectTasksIgnoresFailedRuns(t *testing.T) {
 func TestSuspectTasksFindsArmsThatAgreeOnARejectedAnswer(t *testing.T) {
 	arms := []ArmName{ArmBare, ArmClaudeMD, ArmGhosttree}
 	rejected := Score{FactRecall: 0, Rejected: []RejectedClaim{
-		{Slot: "func_name", Value: "GetConfigArtifactByTarget"},
+		{Slot: "func_name", Type: SlotString, Value: "GetConfigArtifactByTarget"},
 	}}
 	records := []RunRecord{
 		{TaskID: "np-08", Arm: ArmBare, Score: Score{FactRecall: 1}},
@@ -94,9 +94,45 @@ func TestSuspectTasksIgnoresASingleArmsRejectedAnswer(t *testing.T) {
 		{TaskID: "np-09", Arm: ArmBare, Score: Score{FactRecall: 1}},
 		{TaskID: "np-09", Arm: ArmClaudeMD, Score: Score{FactRecall: 1}},
 		{TaskID: "np-09", Arm: ArmGhosttree, Score: Score{FactRecall: 0,
-			Rejected: []RejectedClaim{{Slot: "f", Value: "irgendwas"}}}},
+			Rejected: []RejectedClaim{{Slot: "f", Type: SlotString, Value: "irgendwas"}}}},
 	}
 	if found := SuspectTasks(records, arms); len(found) != 0 {
 		t.Fatalf("one arm being wrong is not a suspicious task: %+v", found)
+	}
+}
+
+// TestSuspectTasksIgnoresTwoArmsAgreeingOnABoolean keeps the convergence rule
+// from firing on a coin flip. Asked whether work on the webhook is still open,
+// the two arms without a ledger both guessed "false" — with two possible values
+// they agree half the time by chance, and the question was fine.
+func TestSuspectTasksIgnoresTwoArmsAgreeingOnABoolean(t *testing.T) {
+	arms := []ArmName{ArmBare, ArmClaudeMD, ArmGhosttree}
+	guessed := Score{FactRecall: 0.4, Rejected: []RejectedClaim{
+		{Slot: "still_open", Type: SlotBoolean, Value: "false"},
+	}}
+	records := []RunRecord{
+		{TaskID: "np-05", Arm: ArmBare, Score: guessed},
+		{TaskID: "np-05", Arm: ArmClaudeMD, Score: guessed},
+		{TaskID: "np-05", Arm: ArmGhosttree, Score: Score{FactRecall: 1}},
+	}
+	if found := SuspectTasks(records, arms); len(found) != 0 {
+		t.Fatalf("agreement on one of two possible values is not evidence: %+v", found)
+	}
+}
+
+// TestSuspectTasksLeavesTheNegativeControlAlone: there the unanimous zero is the
+// point. Every arm abstains because the question has no answer, and reporting
+// that as suspicious would print the design working as a defect.
+func TestSuspectTasksLeavesTheNegativeControlAlone(t *testing.T) {
+	arms := []ArmName{ArmBare, ArmClaudeMD, ArmGhosttree}
+	var records []RunRecord
+	for _, arm := range arms {
+		records = append(records, RunRecord{
+			TaskID: "np-07", Arm: arm, Category: CategoryNegative,
+			Score: Score{FactRecall: 0, AbstentionRate: 1},
+		})
+	}
+	if found := SuspectTasks(records, arms); len(found) != 0 {
+		t.Fatalf("the negative control scoring zero is the design, not a fault: %+v", found)
 	}
 }

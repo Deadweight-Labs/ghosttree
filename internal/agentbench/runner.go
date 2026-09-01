@@ -181,6 +181,15 @@ func runOne(ctx context.Context, campaign Campaign, task Task, arm ArmName, repe
 	}
 	form, err := ParseForm(transcript.Output)
 	if err != nil {
+		// Wer sein Zugbudget verbraucht und nichts liefert, hat sich der
+		// Antwort enthalten. Das ist das Ergebnis des Laufs und gehoert
+		// gewertet — es trifft den Arm, der die Antwort nicht hat, und ihn aus
+		// der Wertung zu nehmen hiesse, ihm sein schlechtestes Ergebnis zu
+		// erlassen.
+		if transcript.MaxTurnsExceeded {
+			record.Score = Grade(task, ResponseForm{Slots: map[string]SlotValue{}})
+			return record
+		}
 		record.Failure = FailureScoring
 		record.FailureMsg = err.Error()
 		return record

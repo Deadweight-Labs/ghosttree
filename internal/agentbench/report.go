@@ -191,7 +191,11 @@ func (r Report) writeProvenance(w io.Writer) error {
 		return nil
 	}
 	fmt.Fprint(w, "## Gemessene Zustände\n\n")
-	fmt.Fprintln(w, "| Arm | Snapshot | Datenbank-Hash | Sessions | Werkzeug | Verdichtungsmodell |")
+	// "Werkzeug beim Bauen", nicht "Werkzeug im Lauf": hier steht, womit der
+	// Zustand hergestellt wurde. Im Container laeuft kein ctx — der Arm liest
+	// den Spiegel auf der Platte. Die alte Ueberschrift las sich wie das
+	// Gegenteil und behauptete damit ein Werkzeug, das gar nicht dabei war.
+	fmt.Fprintln(w, "| Arm | Snapshot | Datenbank-Hash | Sessions | Werkzeug beim Bauen | Verdichtungsmodell |")
 	fmt.Fprintln(w, "|---|---|---|---|---|---|")
 	for _, arm := range r.Campaign.Arms {
 		build, ok := r.Campaign.Builds[arm]

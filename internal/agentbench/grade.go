@@ -32,10 +32,14 @@ type Score struct {
 	Rejected []RejectedClaim `json:"rejected,omitempty"`
 }
 
-// RejectedClaim is one answer the grader did not accept.
+// RejectedClaim is one answer the grader did not accept. The slot's type comes
+// along because it decides how much agreement between two arms is worth: two
+// arms naming the same file path have found something, two arms saying "false"
+// have agreed by coin flip.
 type RejectedClaim struct {
-	Slot  string `json:"slot"`
-	Value string `json:"value"`
+	Slot  string   `json:"slot"`
+	Type  SlotType `json:"type"`
+	Value string   `json:"value"`
 }
 
 func Grade(task Task, form ResponseForm) Score {
@@ -65,7 +69,8 @@ func Grade(task Task, form ResponseForm) Score {
 		if slot.contradicts(value) {
 			score.Contradictions++
 		}
-		score.Rejected = append(score.Rejected, RejectedClaim{Slot: slot.ID, Value: value.plain()})
+		score.Rejected = append(score.Rejected,
+			RejectedClaim{Slot: slot.ID, Type: slot.Type, Value: value.plain()})
 	}
 	if score.TotalWeight > 0 {
 		score.FactRecall = float64(score.EarnedWeight) / float64(score.TotalWeight)
