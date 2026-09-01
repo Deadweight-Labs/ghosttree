@@ -31,6 +31,9 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 	outDir := flags.String("out", "", "directory for transcripts, JSONL and the report")
 	repoSource := flags.String("repo", "", "repository checkout on the campaign commit")
 	ghostTree := flags.String("ghost-tree", "", "pinned .ghosttree mirror for the ghosttree arm")
+	claudeDir := flags.String("claude-dir", "",
+		"hand-kept .claude directory for the arms entitled to repo markdown; defaults to the checkout's own. "+
+			"Needed when the wiki lives one level above the measured repository, as in a monorepo")
 	binary := flags.String("agent-binary", "claude", "agent CLI to invoke")
 	runtimeName := flags.String("runtime", "docker", "docker or local; local is not a valid campaign")
 	image := flags.String("image", "agentbench:dev", "container image for the docker runtime")
@@ -130,7 +133,7 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 	}
 	agents := &armAgents{
 		campaign: campaign, repoSource: *repoSource, binary: *binary,
-		outDir: *outDir, runtime: runtime, ghostTree: *ghostTree,
+		outDir: *outDir, runtime: runtime, ghostTree: *ghostTree, claudeDir: *claudeDir,
 		rebuild:     *resume,
 		openNetwork: *allowOpenNetwork,
 		prepared:    map[agentbench.ArmName]agentbench.Agent{},
@@ -386,6 +389,11 @@ type armAgents struct {
 	outDir     string
 	runtime    agentbench.Runtime
 	ghostTree  string
+	// claudeDir überschreibt das .claude des Checkouts. In einem Monorepo
+	// liegt das handgepflegte Wiki eine Ebene über dem gemessenen
+	// Repository — ohne diesen Weg misst der Kontrollarm ein ärmeres
+	// Projekt, als es gibt.
+	claudeDir string
 	// rebuild throws an existing workspace away instead of refusing it. A
 	// resumed campaign starts its arms from the checkout again, which is
 	// exactly the state the campaign began in — the alternative would be to
@@ -422,11 +430,18 @@ func (a *armAgents) For(arm agentbench.ArmName) (agentbench.Agent, error) {
 		// es zu geben, misst der Kontrollarm weniger, als das Projekt
 		// tatsaechlich hat, und der Vorsprung des Behandlungsarms waere
 		// teilweise nur der geloeschte Ordner.
-		claudeDir := filepath.Join(a.repoSource, ".claude")
-		if info, err := os.Stat(claudeDir); err == nil && info.IsDir() {
-			spec.ClaudeDirSource = claudeDir
+		source := a.claudeDir
+		if source == "" {
+			source = filepath.Join(a.repoSource, ".claude")
+		}
+		if info, err := os.Stat(source); err == nil && info.IsDir() {
+			spec.ClaudeDirSource = source
 		} else if err != nil && !os.IsNotExist(err) {
 			return nil, err
+		} else if err != nil && a.claudeDir != "" {
+			// Ausdruecklich genannt und nicht da: das ist ein Tippfehler,
+			// kein Grund, den Kontrollarm still aermer zu machen.
+			return nil, fmt.Errorf("--claude-dir %s does not exist", a.claudeDir)
 		}
 	}
 	dir := filepath.Join(a.outDir, "workspaces", string(arm))

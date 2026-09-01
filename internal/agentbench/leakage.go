@@ -45,8 +45,13 @@ func CheckLeakage(ws Workspace, arm ArmName, allowed AllowedSurface) []LeakageFi
 		return err == nil
 	}
 
-	if !allowed.GhostTree && exists(ws.Repo, ".ghosttree") {
-		report("ghost_tree", "the workspace contains .ghosttree")
+	// Ueberall gesucht, nicht nur an der Wurzel: In einem Monorepo liegt je
+	// Unterrepository ein eigener Baum, und ein verschachteltes Gedaechtnis
+	// ist genauso ein Gedaechtnis.
+	if !allowed.GhostTree {
+		if hit := findDirNamed(ws.Repo, ".ghosttree"); hit != "" {
+			report("ghost_tree", "the workspace contains a ghost tree at "+hit)
+		}
 	}
 	if !allowed.ClaudeMD && exists(ws.Repo, "CLAUDE.md") {
 		report("claude_md", "the workspace contains CLAUDE.md")
@@ -57,8 +62,10 @@ func CheckLeakage(ws Workspace, arm ArmName, allowed AllowedSurface) []LeakageFi
 	// .claude/ im Repository gehoert zur selben Oberflaeche wie CLAUDE.md:
 	// handgepflegte Markdown-Anleitung. Ein Arm, der die eine sehen darf,
 	// darf auch die andere sehen — der bare-Arm keins von beidem.
-	if !allowed.ClaudeMD && exists(ws.Repo, ".claude") {
-		report("claude_dir", "the workspace contains .claude")
+	if !allowed.ClaudeMD {
+		if hit := findDirNamed(ws.Repo, ".claude"); hit != "" {
+			report("claude_dir", "the workspace contains a .claude directory at "+hit)
+		}
 	}
 	// Vor dem ersten Lauf ist schon das Verzeichnis verdaechtig; waehrend der
 	// Kampagne legt Claude Code es selbst an und laesst es leer. Geprueft wird

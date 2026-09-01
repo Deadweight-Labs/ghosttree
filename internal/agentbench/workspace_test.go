@@ -279,3 +279,62 @@ func TestPrepareWorkspaceStripsTheClaudeDirectoryWhenNoneIsGranted(t *testing.T)
 		t.Fatal("without an explicit grant the checkout's .claude must go")
 	}
 }
+
+// TestPrepareWorkspaceStripsNestedMemories is the monorepo case. Robcord holds
+// six repositories side by side, each with its own ghost tree; emptying only the
+// top level would have handed every arm — including bare — five complete
+// memories, and the leakage check, which also looked only at the top, would
+// have called that clean.
+func TestPrepareWorkspaceStripsNestedMemories(t *testing.T) {
+	src := repoWithTree(t)
+	for _, dir := range []string{
+		filepath.Join(src, "sub-a", ".ghosttree", "tree"),
+		filepath.Join(src, "sub-b", ".claude", "wiki"),
+	} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "x.md"), []byte("geheim"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ws, err := PrepareWorkspace(t.TempDir(), ArmBare, WorkspaceSpec{RepoSource: src})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, gone := range []string{
+		filepath.Join(ws.Repo, "sub-a", ".ghosttree"),
+		filepath.Join(ws.Repo, "sub-b", ".claude"),
+	} {
+		if _, err := os.Stat(gone); !os.IsNotExist(err) {
+			t.Fatalf("a nested memory survived: %s", gone)
+		}
+	}
+	if findings := CheckLeakage(ws, ArmBare, AllowedSurface{}); len(findings) > 0 {
+		t.Fatalf("nothing should be left to find: %+v", findings)
+	}
+}
+
+// TestCheckLeakageFindsANestedGhostTree proves the check itself, not just the
+// cleanup: a tree two levels down must be reported, or the guard is decorative.
+func TestCheckLeakageFindsANestedGhostTree(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	if err := os.MkdirAll(filepath.Join(repo, "sub", ".ghosttree", "tree"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ws := Workspace{Root: root, Repo: repo, Home: filepath.Join(root, "home"),
+		Env: map[string]string{"PATH": "/usr/bin", "HOME": filepath.Join(root, "home")}}
+
+	findings := CheckLeakage(ws, ArmBare, AllowedSurface{})
+	var caught bool
+	for _, f := range findings {
+		if f.Kind == "ghost_tree" {
+			caught = true
+		}
+	}
+	if !caught {
+		t.Fatalf("a nested ghost tree must be reported: %+v", findings)
+	}
+}

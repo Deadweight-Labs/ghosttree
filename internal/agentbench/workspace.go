@@ -60,8 +60,13 @@ func PrepareWorkspace(root string, arm ArmName, spec WorkspaceSpec) (Workspace, 
 	}
 	// Der Baum aus dem Checkout fliegt immer raus; der ghosttree-Arm bekommt
 	// danach den fixierten Stand, nicht den zufaellig mitgekommenen.
+	//
+	// Gesucht wird ueberall, nicht nur an der Wurzel: Ein Monorepo traegt je
+	// Unterrepository einen eigenen Baum (Robcord hat sechs). Nur die Wurzel
+	// zu leeren hiesse, jedem Arm — auch bare — fuenf vollstaendige
+	// Ghost-Baeume mitzugeben, und die Leckpruefung faende nichts.
 	ghostTree := filepath.Join(ws.Repo, ".ghosttree")
-	if err := os.RemoveAll(ghostTree); err != nil {
+	if err := removeDirsNamed(ws.Repo, ".ghosttree"); err != nil {
 		return Workspace{}, err
 	}
 	if spec.GhostTreeSource != "" {
@@ -72,7 +77,7 @@ func PrepareWorkspace(root string, arm ArmName, spec WorkspaceSpec) (Workspace, 
 	// Wie beim Ghost-Baum: was der Checkout mitbrachte, fliegt immer raus, und
 	// nur der berechtigte Arm bekommt danach den fixierten Stand zurueck.
 	claudeDir := filepath.Join(ws.Repo, ".claude")
-	if err := os.RemoveAll(claudeDir); err != nil {
+	if err := removeDirsNamed(ws.Repo, ".claude"); err != nil {
 		return Workspace{}, err
 	}
 	if spec.ClaudeDirSource != "" {
@@ -106,4 +111,61 @@ func PrepareWorkspace(root string, arm ArmName, spec WorkspaceSpec) (Workspace, 
 	ws.Env["PATH"] = path
 	ws.Env["AGENTBENCH_ARM"] = string(arm)
 	return ws, nil
+}
+
+// removeDirsNamed deletes every directory with this name below root, not only
+// the one at the top. A monorepo carries one memory per sub-repository; taking
+// only the top one away leaves the rest in place for every arm, and the leakage
+// check — which also looked only at the root — would call that clean.
+//
+// .git is skipped: a repository may well have an object path that looks like
+// the name being removed, and the history is deliberately left intact.
+func removeDirsNamed(root, name string) error {
+	var found []string
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() {
+			return nil
+		}
+		if entry.Name() == ".git" {
+			return filepath.SkipDir
+		}
+		if entry.Name() == name {
+			found = append(found, path)
+			return filepath.SkipDir
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	for _, path := range found {
+		if err := os.RemoveAll(path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// findDirNamed reports the first directory with this name below root, or "".
+// The leakage check uses it for the same reason PrepareWorkspace uses
+// removeDirsNamed: a nested memory is still a memory.
+func findDirNamed(root, name string) string {
+	var hit string
+	_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || !entry.IsDir() {
+			return nil //nolint:nilerr // ein unlesbarer Pfad ist kein Fund
+		}
+		if entry.Name() == ".git" {
+			return filepath.SkipDir
+		}
+		if entry.Name() == name {
+			hit = path
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	return hit
 }
