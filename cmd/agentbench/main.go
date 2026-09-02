@@ -198,7 +198,7 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 	// Auch ein abgebrochener Lauf bekommt seine Ausgabe: die wenigen
 	// Datensaetze sagen, woran es lag, und ohne sie muesste man den Abbruch
 	// nachstellen, um ihn zu verstehen.
-	if err := writeOutputs(report, *outDir); err != nil {
+	if err := writeOutputs(report, *outDir, filepath.Join(*outDir, "raw")); err != nil {
 		return err
 	}
 	return runErr
@@ -293,7 +293,7 @@ func writeRegraded(campaign agentbench.Campaign, records []agentbench.RunRecord,
 		return err
 	}
 	fmt.Fprintf(stdout, "regraded %d runs from %s into %s\n", len(records), runDir, outDir)
-	return writeOutputs(report, outDir)
+	return writeOutputs(report, outDir, filepath.Join(runDir, "raw"))
 }
 
 // contrastsAgainstGhosttree pairs the treatment against every control arm the
@@ -485,7 +485,11 @@ func allowedFor(arm agentbench.ArmName, openNetwork bool) agentbench.AllowedSurf
 	}
 }
 
-func writeOutputs(report agentbench.Report, outDir string) error {
+// writeOutputs schreibt Datensaetze, Bericht und Transkript-Manifest. rawDir
+// ist das Verzeichnis der Transkripte, aus denen die Zahlen stammen — beim Lauf
+// das eigene raw/, bei einer Nachbewertung das des Quelllaufs. Ein Manifest
+// ueber ein leeres Verzeichnis belegt nichts.
+func writeOutputs(report agentbench.Report, outDir, rawDir string) error {
 	jsonl, err := os.Create(filepath.Join(outDir, "runs.jsonl"))
 	if err != nil {
 		return err
@@ -500,7 +504,26 @@ func writeOutputs(report agentbench.Report, outDir string) error {
 		return err
 	}
 	defer markdown.Close()
-	return report.WriteMarkdown(markdown)
+	if err := report.WriteMarkdown(markdown); err != nil {
+		return err
+	}
+	return writeTranscriptManifest(outDir, rawDir)
+}
+
+const manifestFile = "transcripts.sha256"
+
+// writeTranscriptManifest keeps the promise the campaign makes about private
+// repositories: the transcripts stay closed, their digests do not. A reviewer
+// who later receives the transcripts can check they are the ones the numbers
+// came from, without anyone having to publish the source they contain.
+func writeTranscriptManifest(outDir, rawDir string) error {
+	manifest, err := os.Create(filepath.Join(outDir, manifestFile))
+	if err != nil {
+		return err
+	}
+	defer manifest.Close()
+	_, err = agentbench.WriteTranscriptManifest(manifest, filepath.Dir(rawDir), rawDir)
+	return err
 }
 
 const taskSetFile = "tasks.json"
