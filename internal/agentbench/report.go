@@ -125,6 +125,9 @@ type Report struct {
 	// Delegation says how much of each arm's work ran inside a subagent, where
 	// no turn budget could see it.
 	Delegation []DelegationSummary `json:"delegation,omitempty"`
+	// Usage says whether an arm opened its own material at all. It is the only
+	// section built from what the agents did rather than from means.
+	Usage []MemoryUsage `json:"memory_usage,omitempty"`
 }
 
 func BuildReport(campaign Campaign, records []RunRecord) Report {
@@ -136,6 +139,7 @@ func BuildReport(campaign Campaign, records []RunRecord) Report {
 	}
 	report.Suspect = SuspectTasks(records, campaign.Arms)
 	report.Delegation = SummariseDelegation(records, campaign.Arms)
+	report.Usage = SummariseMemoryUsage(records)
 	report.ByExposure = summarise(records, func(r RunRecord) string { return string(r.Exposure.Class()) })
 	report.ByCategory = summarise(records, func(r RunRecord) string { return string(r.Category) })
 	report.BySource = summariseBySource(records, campaign.Arms)
@@ -337,6 +341,27 @@ func (r Report) WriteMarkdown(w io.Writer) error {
 		fmt.Fprintln(w, "|---|---|---|---|---|")
 		for _, s := range r.Suspect {
 			fmt.Fprintf(w, "| %s | %d | %d | %.3f | %s |\n", s.TaskID, s.Runs, s.Arms, s.Recall, s.Reason)
+		}
+	}
+
+	if len(r.Usage) > 0 {
+		fmt.Fprint(w, "\n## Wird das Werkzeug benutzt?\n\n")
+		fmt.Fprint(w, "Jede andere Tabelle sagt, *wo* ein Unterschied auftritt. Diese sagt, ob der Arm "+
+			"sein eigenes Material überhaupt aufgeschlagen hat — gezählt werden Werkzeugaufrufe, die "+
+			"einen Pfad des jeweiligen Gedächtnisses nennen. Ein Vorteil, dessen Werkzeug nie "+
+			"aufgeschlagen wird, hat keinen Mechanismus.\n\n"+
+			"Aufgeführt sind nur Arme, deren Material aktiv geöffnet werden muss. CLAUDE.md und die "+
+			"Claude-eigene Auto-Memory lädt das Harness selbst in den Kontext; für sie sagt das "+
+			"Ausbleiben eines Werkzeugaufrufs nichts.\n\n")
+		fmt.Fprintln(w, "| Arm | Kategorie | Läufe mit Zugriff |")
+		fmt.Fprintln(w, "|---|---|---|")
+		for _, u := range r.Usage {
+			fmt.Fprintf(w, "| %s | %s | %d/%d |\n", u.Arm, u.Category, u.Touched, u.Runs)
+		}
+		if idle := UsageWithoutMechanism(r.Usage); len(idle) > 0 {
+			fmt.Fprintf(w, "\n**Kein einziger Zugriff: %s.** Was dieser Arm gewinnt oder verliert, "+
+				"geht nicht auf sein Gedächtnis zurück — er hat es nicht geöffnet. Effekte auf ihn "+
+				"gehören als Zahl berichtet und nicht als Wirkung ausgelegt.\n", armList(idle))
 		}
 	}
 
