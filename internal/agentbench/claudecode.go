@@ -31,8 +31,12 @@ type streamEvent struct {
 		InputTokens  int `json:"input_tokens"`
 		OutputTokens int `json:"output_tokens"`
 	} `json:"usage"`
-	NumTurns int     `json:"num_turns"`
-	CostUSD  float64 `json:"total_cost_usd"`
+	// ParentToolUseID is set on every event a subagent produced. It is the only
+	// way to tell delegated work from the main agent's own, and the two are
+	// budgeted differently.
+	ParentToolUseID string  `json:"parent_tool_use_id"`
+	NumTurns        int     `json:"num_turns"`
+	CostUSD         float64 `json:"total_cost_usd"`
 }
 
 func parseStreamJSON(r io.Reader) (Transcript, error) {
@@ -51,6 +55,9 @@ func parseStreamJSON(r io.Reader) (Transcript, error) {
 		for _, block := range event.Message.Content {
 			if block.Type == "tool_use" {
 				transcript.ToolCalls++
+				if event.ParentToolUseID != "" {
+					transcript.DelegatedToolCalls++
+				}
 				if block.Name == "Read" {
 					transcript.FilesRead++
 				}
@@ -140,6 +147,9 @@ func (a *ClaudeCodeAgent) Run(ctx context.Context, inv Invocation) (Transcript, 
 		"--model", inv.Config.ModelID,
 		"--permission-mode", inv.Config.PermissionMode,
 		"--max-turns", fmt.Sprint(inv.Config.MaxTurns),
+	}
+	if len(inv.Config.DisallowedTools) > 0 {
+		argv = append(argv, "--disallowedTools", strings.Join(inv.Config.DisallowedTools, ","))
 	}
 	started := time.Now()
 	out, err := a.runtime.Command(ctx, a.workspace, inv.Arm, argv).Output()

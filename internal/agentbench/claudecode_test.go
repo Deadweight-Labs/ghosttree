@@ -31,6 +31,55 @@ func TestParseStreamJSONCountsToolCallsAndTokens(t *testing.T) {
 	}
 }
 
+// Der echte Fall aus run-zentrale-b6: der bare-Arm ruft Agent auf, und alles
+// danach traegt parent_tool_use_id. Claude Code zaehlt dem Hauptagenten zwei
+// Zuege an, waehrend der Subagent unbegrenzt weiterarbeitet — gemessen wurden
+// 2 Zuege bei 17 Werkzeugaufrufen. Wird die delegierte Arbeit nicht getrennt
+// erfasst, liest sich genau dieser Lauf als der sparsamste der Kampagne.
+func TestParseStreamJSONSeparatesDelegatedWork(t *testing.T) {
+	stream := `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Agent"}]}}
+{"type":"assistant","parent_tool_use_id":"toolu_01AHVK","message":{"content":[{"type":"tool_use","name":"Bash"}]}}
+{"type":"assistant","parent_tool_use_id":"toolu_01AHVK","message":{"content":[{"type":"tool_use","name":"Read"}]}}
+{"type":"result","subtype":"success","num_turns":2,"result":"fertig"}
+`
+	tr, err := parseStreamJSON(strings.NewReader(stream))
+	if err != nil {
+		t.Fatalf("parseStreamJSON: %v", err)
+	}
+	if tr.ToolCalls != 3 {
+		t.Fatalf("delegierte Aufrufe sind Aufwand und zaehlen mit: want 3, got %d", tr.ToolCalls)
+	}
+	if tr.DelegatedToolCalls != 2 {
+		t.Fatalf("delegated tool calls: want 2, got %d", tr.DelegatedToolCalls)
+	}
+	if tr.Turns != 2 {
+		t.Fatalf("turns kommen weiter vom Ergebnis-Ereignis: want 2, got %d", tr.Turns)
+	}
+	if tr.Turns >= tr.ToolCalls {
+		t.Fatal("der Sinn der Trennung ist, dass Zuege und Aufrufe auseinanderlaufen duerfen")
+	}
+}
+
+func TestDelegationImbalanceIsReportedWhenArmsDifferSharply(t *testing.T) {
+	// Robcord-Zentrale bei Budget 6: bare delegierte in 5 von 12 Laeufen,
+	// ghosttree in keinem. Ab da messen die Zugzahlen der beiden Arme nicht
+	// mehr dasselbe.
+	summaries := []DelegationSummary{
+		{Arm: ArmBare, Runs: 5, RunsTotal: 12},
+		{Arm: ArmGhosttree, Runs: 0, RunsTotal: 12},
+	}
+	if !DelegationImbalanced(summaries) {
+		t.Fatal("eine Schieflage von 5/12 gegen 0/12 muss gemeldet werden")
+	}
+	even := []DelegationSummary{
+		{Arm: ArmBare, Runs: 1, RunsTotal: 12},
+		{Arm: ArmGhosttree, Runs: 0, RunsTotal: 12},
+	}
+	if DelegationImbalanced(even) {
+		t.Fatal("ein einzelner Lauf Unterschied ist keine Schieflage")
+	}
+}
+
 func TestParseStreamJSONSurvivesForeignLines(t *testing.T) {
 	stream := "not json at all\n" +
 		`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read"}]}}` + "\n" +

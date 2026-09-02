@@ -119,9 +119,12 @@ type Report struct {
 	// ByProvenance trennt Aufgaben, deren Ground Truth nach dem Anblick der
 	// Antworten korrigiert wurde, von denen, bei denen das nicht passiert ist.
 	ByProvenance []GroupSummary  `json:"by_provenance"`
-	Effects      []PairedEffect  `json:"effects"`
-	Failures     map[Failure]int `json:"failures"`
-	Suspect      []TaskSuspicion `json:"suspect_tasks,omitempty"`
+	Effects  []PairedEffect  `json:"effects"`
+	Failures map[Failure]int `json:"failures"`
+	Suspect  []TaskSuspicion `json:"suspect_tasks,omitempty"`
+	// Delegation says how much of each arm's work ran inside a subagent, where
+	// no turn budget could see it.
+	Delegation []DelegationSummary `json:"delegation,omitempty"`
 }
 
 func BuildReport(campaign Campaign, records []RunRecord) Report {
@@ -132,6 +135,7 @@ func BuildReport(campaign Campaign, records []RunRecord) Report {
 		}
 	}
 	report.Suspect = SuspectTasks(records, campaign.Arms)
+	report.Delegation = SummariseDelegation(records, campaign.Arms)
 	report.ByExposure = summarise(records, func(r RunRecord) string { return string(r.Exposure.Class()) })
 	report.ByCategory = summarise(records, func(r RunRecord) string { return string(r.Category) })
 	report.BySource = summariseBySource(records, campaign.Arms)
@@ -333,6 +337,25 @@ func (r Report) WriteMarkdown(w io.Writer) error {
 		fmt.Fprintln(w, "|---|---|---|---|---|")
 		for _, s := range r.Suspect {
 			fmt.Fprintf(w, "| %s | %d | %d | %.3f | %s |\n", s.TaskID, s.Runs, s.Arms, s.Recall, s.Reason)
+		}
+	}
+
+	if len(r.Delegation) > 0 {
+		fmt.Fprint(w, "\n## Delegation\n\n")
+		fmt.Fprint(w, "Ein Subagent bringt sein eigenes Zugbudget mit; seine Arbeit zählt gegen "+
+			"`--max-turns` nicht. Wo die Spalten \"Züge\" und \"Werkzeugaufrufe\" auseinanderlaufen, "+
+			"misst die Zugzahl nicht den Aufwand.\n\n")
+		fmt.Fprintln(w, "| Arm | Läufe mit Delegation | Züge | Werkzeugaufrufe | davon delegiert |")
+		fmt.Fprintln(w, "|---|---|---|---|---|")
+		for _, d := range r.Delegation {
+			fmt.Fprintf(w, "| %s | %d/%d | %.2f | %.2f | %.2f |\n",
+				d.Arm, d.Runs, d.RunsTotal, d.MeanTurns, d.MeanToolCalls, d.MeanDelegated)
+		}
+		if DelegationImbalanced(r.Delegation) {
+			fmt.Fprint(w, "\n**Die Arme delegieren unterschiedlich oft.** Ihre Zugzahlen sind damit "+
+				"nicht vergleichbar, und ein Zugbudget bindet sie unterschiedlich stark. Für den "+
+				"Aufwand gilt hier die Spalte Werkzeugaufrufe; ein Budgetversuch braucht "+
+				"`disallowed_tools: [\"Agent\"]`.\n")
 		}
 	}
 

@@ -58,6 +58,7 @@ func Regrade(records []RunRecord, tasks []Task) ([]RunRecord, error) {
 		record.Transcript.Turns = transcript.Turns
 		record.Transcript.CostUSD = transcript.CostUSD
 		record.Transcript.ToolCalls = transcript.ToolCalls
+		record.Transcript.DelegatedToolCalls = transcript.DelegatedToolCalls
 		record.Transcript.FilesRead = transcript.FilesRead
 		record.Transcript.MaxTurnsExceeded = transcript.MaxTurnsExceeded
 

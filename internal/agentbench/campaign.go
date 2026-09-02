@@ -41,6 +41,19 @@ type AgentConfig struct {
 	MaxInputTokens  int    `json:"max_input_tokens"`
 	MaxOutputTokens int    `json:"max_output_tokens"`
 	TimeoutSeconds  int    `json:"timeout_seconds"`
+	// DisallowedTools are passed to the CLI as --disallowedTools.
+	//
+	// It exists for one reason: a subagent runs on its own turn budget, so
+	// "Agent" turns --max-turns from a limit into a suggestion. An arm that
+	// delegates does an unbounded amount of work inside one counted turn, and
+	// the arms do not delegate equally often — on Robcord-Zentrale at budget 6,
+	// `bare` delegated in 5 of 12 runs and `ghosttree` in none. Any campaign
+	// that treats the turn budget as an independent variable has to name
+	// "Agent" here, or it is not varying what it thinks it is.
+	//
+	// It stays a campaign field rather than a constant so that the decision is
+	// in the published record next to the budget it protects.
+	DisallowedTools []string `json:"disallowed_tools,omitempty"`
 }
 
 type Campaign struct {

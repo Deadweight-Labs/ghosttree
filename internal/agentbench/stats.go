@@ -59,9 +59,19 @@ var (
 
 // DefaultMetrics are reported for every contrast. Cost and turns are signed the
 // same way as recall — a negative value means the treatment needed less.
+//
+// Turns and tool calls are both reported because they disagree, and the
+// disagreement is the point. A turn is what Claude Code counts against
+// --max-turns; a subagent runs on its own budget, so an agent that delegates
+// does an unbounded amount of work inside a single turn. On Robcord-Zentrale at
+// budget 6, `bare` delegated in 5 of 12 runs and `ghosttree` in none: measured
+// in turns `bare` looked cheaper, measured in tool calls it did twice the work
+// (8.58 against 4.17). Turns measure what the budget constrains, tool calls
+// measure what the agent actually did — reporting only the first would have
+// published a comparison an arm could win by delegating.
 var DefaultMetrics = []Metric{
 	MetricFactRecall, MetricRepoRecall, MetricMemoryRecall,
-	MetricPrecision, MetricTurns, MetricCostUSD,
+	MetricPrecision, MetricTurns, MetricToolCalls, MetricCostUSD,
 }
 
 func PairedBootstrap(records []RunRecord, treatment, control ArmName, seed uint64, draws int) PairedEffect {
