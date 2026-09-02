@@ -184,7 +184,7 @@ func runOne(ctx context.Context, campaign Campaign, task Task, arm ArmName, repe
 		record.FailureMsg = transcript.AgentError
 		return record
 	}
-	form, err := ParseForm(transcript.Output)
+	form, err := FormFrom(transcript)
 	if err != nil {
 		// Wer sein Zugbudget verbraucht und nichts liefert, hat sich der
 		// Antwort enthalten. Das ist das Ergebnis des Laufs und gehoert

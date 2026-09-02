@@ -25,6 +25,7 @@ type streamEvent struct {
 		Content []struct {
 			Type string `json:"type"`
 			Name string `json:"name"`
+			Text string `json:"text"`
 		} `json:"content"`
 	} `json:"message"`
 	Usage struct {
@@ -61,6 +62,20 @@ func parseStreamJSON(r io.Reader) (Transcript, error) {
 				if block.Name == "Read" {
 					transcript.FilesRead++
 				}
+			}
+			// Das Abschlussformular wird festgehalten, sobald es auftaucht, und
+			// nicht erst am Ende gesucht. Ein Agent, der delegiert hat, liefert
+			// sein Formular ab und kommentiert danach noch das Ergebnis des
+			// Subagenten — die Schlussausgabe traegt dann kein Formular mehr,
+			// obwohl die Antwort vollstaendig dasteht. In run-budget40 hat das
+			// zwei richtige ghosttree-Antworten aus der Wertung geworfen.
+			//
+			// Nur der Hauptagent zaehlt: Ein Subagent, der ein Formular
+			// ausfuellt, hat den Auftrag nicht bekommen, und seine Antwort ist
+			// nicht die des Laufs.
+			if block.Type == "text" && event.ParentToolUseID == "" &&
+				strings.Contains(block.Text, formFence) {
+				transcript.FormText = block.Text
 			}
 		}
 		if event.Type == "result" {

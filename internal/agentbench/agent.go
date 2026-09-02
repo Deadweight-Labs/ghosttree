@@ -20,6 +20,18 @@ type Invocation struct {
 
 type Transcript struct {
 	Output string `json:"-"`
+	// FormText is the last closing form the main agent emitted, kept apart
+	// from Output because the two can differ.
+	//
+	// Output is the run's final message. An agent that delegated hands in its
+	// form, then gets the subagent's result back and comments on it — and the
+	// final message carries no form at all. Scoring only the final message
+	// threw away two correct ghosttree answers in run-budget40, both of which
+	// named the right function and the right file.
+	//
+	// Empty when the agent never emitted one, which is what a genuine
+	// abstention looks like.
+	FormText string `json:"-"`
 	// AgentError carries the agent's own error result. A run that failed for
 	// the agent's own reasons must not be scored as an abstention.
 	AgentError string `json:"agent_error,omitempty"`

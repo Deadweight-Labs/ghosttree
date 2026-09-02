@@ -100,3 +100,46 @@ func TestParseFormTreatsNullAsAbstention(t *testing.T) {
 		t.Fatalf("an explicit null is a withheld answer, not an error: %+v", form.Slots["f"])
 	}
 }
+
+// Der Fall aus run-budget40: Der Agent gibt sein Formular ab, bekommt danach
+// das Ergebnis eines Subagenten zurueck und kommentiert es. Die Schlussausgabe
+// traegt kein Formular mehr — die Antwort stand aber vollstaendig da. Zwei
+// richtige ghosttree-Antworten sind so aus der Wertung gefallen.
+func TestFormFromFallsBackToAnEarlierFormWhenTheLastWordIsProse(t *testing.T) {
+	transcript := Transcript{
+		Output:   "The background agent's findings match what I already verified — no changes needed.",
+		FormText: "```agentbench-form\n{\"slots\": {\"func_name\": {\"string\": \"AdoptedArtifactID\"}}}\n```",
+	}
+
+	form, err := FormFrom(transcript)
+	if err != nil {
+		t.Fatalf("das Formular stand im Strom: %v", err)
+	}
+	if got := form.Slots["func_name"].String; got == nil || *got != "AdoptedArtifactID" {
+		t.Fatalf("Slot nicht gelesen: %+v", form.Slots)
+	}
+}
+
+// Die Reihenfolge ist nicht beliebig: Korrigiert ein Agent seine Antwort, gilt
+// das letzte Wort. Der frueher gesehene Block kommt nur zum Zug, wenn die
+// Schlussausgabe ueberhaupt keines traegt.
+func TestFormFromPrefersTheFinalMessage(t *testing.T) {
+	transcript := Transcript{
+		Output:   "```agentbench-form\n{\"slots\": {\"func_name\": {\"string\": \"richtig\"}}}\n```",
+		FormText: "```agentbench-form\n{\"slots\": {\"func_name\": {\"string\": \"verworfen\"}}}\n```",
+	}
+
+	form, err := FormFrom(transcript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := form.Slots["func_name"].String; got == nil || *got != "richtig" {
+		t.Fatalf("die Schlussausgabe hat Vorrang: %+v", form.Slots)
+	}
+}
+
+func TestFormFromReportsNoFormWhenTheAgentNeverGaveOne(t *testing.T) {
+	if _, err := FormFrom(Transcript{Output: "Ich habe nichts gefunden."}); !errors.Is(err, ErrNoForm) {
+		t.Fatalf("eine echte Enthaltung bleibt eine Enthaltung: %v", err)
+	}
+}

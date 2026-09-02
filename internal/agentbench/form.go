@@ -97,6 +97,23 @@ type ResponseForm struct {
 
 var ErrNoForm = errors.New("agent output contains no complete agentbench-form block")
 
+// FormFrom reads the closing form of a run, from wherever the agent left it.
+//
+// It prefers the final message and falls back to the last form seen earlier in
+// the stream. The order matters: if an agent revises its answer, the last word
+// is the final message, and only when that carries no form at all does an
+// earlier one count. That case is not exotic — an agent that delegated hands in
+// its form, then comments on the subagent's result, and the final message is
+// prose. Scoring only the final message threw away two correct answers in
+// run-budget40.
+func FormFrom(transcript Transcript) (ResponseForm, error) {
+	form, err := ParseForm(transcript.Output)
+	if err == nil || transcript.FormText == "" {
+		return form, err
+	}
+	return ParseForm(transcript.FormText)
+}
+
 func ParseForm(agentOutput string) (ResponseForm, error) {
 	start := strings.LastIndex(agentOutput, formFence)
 	if start < 0 {
