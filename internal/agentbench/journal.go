@@ -85,12 +85,31 @@ func (j *RunJournal) load() error {
 			return fmt.Errorf("%s line %d is not a run record: %w", j.path, line, err)
 		}
 		j.records = append(j.records, record)
-		j.done[keyOf(record)] = true
+		j.done[keyOf(record)] = !unattempted(record)
 	}
 	return scanner.Err()
 }
 
-// Done answers whether this run is already recorded.
+// unattempted reports whether the run never produced an answer at all.
+//
+// It draws the one line along which a resume may re-run something. A recorded
+// run is normally final, and that is deliberate: re-rolling a run whose result
+// has been seen is how a campaign gets talked into the number its author
+// wanted. But a run that died before the model ever answered has no result to
+// see. Four runs across two campaigns ended as "API Error: 503
+// auth_unavailable" from the gateway, with no transcript, no turn and no token
+// — nothing about the arm was measured, and keeping the empty record only
+// costs the campaign a data point.
+//
+// The test is the transcript, not the error text: an error message can be
+// argued about, an absent transcript cannot. If there is a transcript, the run
+// happened and stands, however badly it went.
+func unattempted(record RunRecord) bool {
+	return record.Failure == FailureProduct && record.Transcript.RawPath == ""
+}
+
+// Done answers whether this run is already recorded. A run that never got as
+// far as an answer does not count as recorded — see unattempted.
 func (j *RunJournal) Done(taskID string, arm ArmName, repetition int) bool {
 	return j.done[runKey{task: taskID, arm: arm, rep: repetition}]
 }
@@ -110,13 +129,34 @@ func (j *RunJournal) Emit(record RunRecord) error {
 		return err
 	}
 	j.records = append(j.records, record)
-	j.done[keyOf(record)] = true
+	// Dieselbe Regel wie beim Laden, damit "erledigt" waehrend der Kampagne
+	// nicht etwas anderes heisst als nach einem Neustart.
+	j.done[keyOf(record)] = !unattempted(record)
 	return nil
 }
 
 // Records returns everything the journal holds — resumed and fresh alike. This
 // is the set the report is built from, not the return value of a single Run
 // call, which only knows about its own segment.
-func (j *RunJournal) Records() []RunRecord { return j.records }
+// Records returns one record per run, the newest wins.
+//
+// Deduplication is needed because of the one case in which a resume runs
+// something twice: a run that died before the model answered (see
+// unattempted). The journal is append-only, so the failed line stays on disk as
+// the trace of the outage it was — but the report must see the run once, and
+// see the attempt that produced an answer.
+func (j *RunJournal) Records() []RunRecord {
+	latest := make(map[runKey]int, len(j.records))
+	for i, record := range j.records {
+		latest[keyOf(record)] = i
+	}
+	out := make([]RunRecord, 0, len(latest))
+	for i, record := range j.records {
+		if latest[keyOf(record)] == i {
+			out = append(out, record)
+		}
+	}
+	return out
+}
 
 func (j *RunJournal) Close() error { return j.file.Close() }

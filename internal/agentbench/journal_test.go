@@ -102,6 +102,10 @@ func TestResumedCampaignDoesNotPayForFinishedRunsAgain(t *testing.T) {
 // TestJournalKeepsAFailedRunFailed guards the tempting shortcut. Re-rolling a
 // failed run until it works selects for the runs that happened to succeed, and
 // how often an arm fails is itself a result.
+//
+// Die Zusage haengt am Transkript, nicht am Fehlertext: Wo eines vorliegt, ist
+// das Ergebnis gesehen und steht fest. Der einzige Lauf, der wiederholt werden
+// darf, ist der, der nie eine Antwort erzeugt hat — siehe unattempted.
 func TestJournalKeepsAFailedRunFailed(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "runs.jsonl")
 	journal, err := OpenRunJournal(path)
@@ -111,6 +115,7 @@ func TestJournalKeepsAFailedRunFailed(t *testing.T) {
 	if err := journal.Emit(RunRecord{
 		TaskID: "t1", Arm: ArmBare, Repetition: 1,
 		Failure: FailureProduct, FailureMsg: "timeout",
+		Transcript: Transcript{RawPath: "/raw/t1.jsonl"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -149,5 +154,102 @@ func TestRecoverFromTranscriptsRebuildsWhatACrashLost(t *testing.T) {
 	}
 	if got.Category != task.Category {
 		t.Fatalf("the task definition must fill in what the transcript cannot: %+v", got)
+	}
+}
+
+// Vier Laeufe ueber zwei Kampagnen endeten als "API Error: 503
+// auth_unavailable" des Gateways: kein Transkript, kein Zug, kein Token. Ueber
+// den Arm wurde nichts gemessen, und den leeren Datensatz zu behalten kostet
+// die Kampagne nur einen Messpunkt.
+func TestJournalRerunsARunThatNeverGotAnAnswer(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "runs.jsonl")
+	journal, err := OpenRunJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outage := RunRecord{
+		TaskID: "np-01", Arm: ArmBare, Repetition: 1,
+		Failure:        FailureProduct,
+		FailureMsg: "exit status 1: API Error: 503 auth_unavailable",
+	}
+	if err := journal.Emit(outage); err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	resumed, err := OpenRunJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resumed.Close()
+	if resumed.Done("np-01", ArmBare, 1) {
+		t.Fatal("ein Lauf ohne Transkript hat nichts gemessen und gehoert wiederholt")
+	}
+}
+
+// Die Gegenprobe, und die wichtigere Zusage: Ein Lauf, dessen Ergebnis
+// vorliegt, wird nicht neu gewuerfelt — so redet man eine Kampagne zu der Zahl,
+// die man sehen wollte.
+func TestJournalNeverRerunsARunThatProducedATranscript(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "runs.jsonl")
+	journal, err := OpenRunJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range []RunRecord{
+		{TaskID: "np-01", Arm: ArmBare, Repetition: 1, Failure: FailureProduct,
+			FailureMsg: "exit status 1", Transcript: Transcript{RawPath: "/raw/np-01.jsonl"}},
+		{TaskID: "np-02", Arm: ArmBare, Repetition: 1, Failure: FailureScoring,
+			Transcript: Transcript{RawPath: "/raw/np-02.jsonl"}},
+		{TaskID: "np-03", Arm: ArmBare, Repetition: 1,
+			Transcript: Transcript{RawPath: "/raw/np-03.jsonl"}},
+	} {
+		if err := journal.Emit(record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	resumed, err := OpenRunJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resumed.Close()
+	for _, id := range []string{"np-01", "np-02", "np-03"} {
+		if !resumed.Done(id, ArmBare, 1) {
+			t.Fatalf("%s hat ein Transkript und steht damit fest", id)
+		}
+	}
+}
+
+// Wird ein Ausfall wiederholt, steht die Fehlzeile weiter in der Datei — das
+// Journal haengt nur an. Der Bericht muss den Lauf trotzdem einmal sehen, und
+// zwar den Versuch, der eine Antwort erzeugt hat.
+func TestJournalRecordsKeepsOnlyTheLatestAttemptPerRun(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "runs.jsonl")
+	journal, err := OpenRunJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+	if err := journal.Emit(RunRecord{TaskID: "np-01", Arm: ArmBare, Repetition: 1,
+		Failure: FailureProduct, FailureMsg: "503"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.Emit(RunRecord{TaskID: "np-01", Arm: ArmBare, Repetition: 1,
+		Transcript: Transcript{RawPath: "/raw/np-01.jsonl"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	records := journal.Records()
+	if len(records) != 1 {
+		t.Fatalf("ein Lauf, ein Datensatz: %+v", records)
+	}
+	if records[0].Failure != FailureNone {
+		t.Fatalf("der geglueckte Versuch gilt: %+v", records[0])
 	}
 }
