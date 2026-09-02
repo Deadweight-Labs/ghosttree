@@ -321,10 +321,19 @@ func (r Report) WriteMarkdown(w io.Writer) error {
 	writeGroups("Nach Expositionsklasse", r.ByExposure)
 	writeGroups("Nach Kategorie", r.ByCategory)
 	if len(r.ByProvenance) > 1 {
-		fmt.Fprint(w, "\n_\"entwickelt\" heißt: Wortlaut oder Ground Truth wurden korrigiert, "+
-			"nachdem die Antworten der Arme vorlagen. Die Korrekturen waren richtig — ein Schlüssel, "+
-			"der eine wahre Antwort ablehnt, ist falsch —, aber sie entstanden mit den Antworten vor "+
-			"Augen. \"zurueckgehalten\" heißt: das ist hier nicht passiert._\n")
+		// Die Fussnote nennt das Kriterium, nach dem markiert wurde, nicht das
+		// schaerfere, das man gern haette. Auf NurProxy tragen 12 von 17
+		// Aufgaben die Marke, korrigiert wurden aber nur vier — die uebrigen
+		// acht liefen im Piloten, an dem der Aufbau justiert wurde. Die Marke
+		// so zu erklaeren, als hiesse sie "korrigiert", behauptete eine
+		// Genauigkeit, die die Daten nicht haben.
+		fmt.Fprint(w, "\n_\"entwickelt\" heißt: Die Aufgabe war sichtbar, während an Aufbau, Wortlaut "+
+			"oder Ground Truth noch gearbeitet wurde — sei es, weil sie im Piloten lief, sei es, weil "+
+			"ihr Schlüssel nach dem Anblick der Antworten korrigiert wurde. Die Korrekturen waren "+
+			"richtig — ein Schlüssel, der eine wahre Antwort ablehnt, ist falsch —, aber sie entstanden "+
+			"mit den Antworten vor Augen. \"zurueckgehalten\" heißt: nichts davon ist hier passiert. "+
+			"Markiert wird im Zweifel als entwickelt; das ist die Richtung, die den Effekt kleiner "+
+			"aussehen lässt._\n")
 		writeGroups("Nach Datenherkunft", r.ByProvenance)
 	}
 
