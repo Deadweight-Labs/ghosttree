@@ -200,3 +200,20 @@ func dockerRun(ctx context.Context, args ...string) error {
 	}
 	return nil
 }
+
+// ImageDigest returns the content digest behind an image reference.
+//
+// The tag alone does not identify what ran: "agentbench:dev" names whatever
+// was built last, and a campaign reproduced next month could run on a different
+// image with nothing in either report saying so. The digest is stable.
+//
+// A missing digest is not an error. Docker may be absent for a local run, and
+// the report simply prints the tag it has — refusing to write a report over a
+// missing provenance field would be worse than a report that says less.
+func ImageDigest(ctx context.Context, image string) string {
+	id, err := dockerInspect(ctx, "image", image, "{{.Id}}")
+	if err != nil {
+		return ""
+	}
+	return id
+}

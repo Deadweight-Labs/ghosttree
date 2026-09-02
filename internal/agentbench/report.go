@@ -102,8 +102,13 @@ func summariseBySource(records []RunRecord, arms []ArmName) []SourceSummary {
 // from the same number produced with one, and the difference is not visible
 // in the number.
 type Isolation struct {
-	Runtime        string   `json:"runtime"`
-	Image          string   `json:"image,omitempty"`
+	Runtime string `json:"runtime"`
+	Image   string `json:"image,omitempty"`
+	// ImageID is the digest behind the tag. A tag is a moving name — the
+	// campaign that ran on "agentbench:dev" and the one someone reproduces
+	// next month can be two different images with nothing saying so. The
+	// digest is what actually ran.
+	ImageID        string   `json:"image_id,omitempty"`
 	Network        string   `json:"network,omitempty"`
 	AllowedDomains []string `json:"allowed_domains,omitempty"`
 	Sealed         bool     `json:"sealed"`
@@ -245,6 +250,12 @@ func (r Report) writeIsolation(w io.Writer) {
 	fmt.Fprintf(w, "Laufzeit `%s`", r.Isolation.Runtime)
 	if r.Isolation.Image != "" {
 		fmt.Fprintf(w, ", Abbild `%s`", r.Isolation.Image)
+		// Der Digest steht dabei, weil der Tag ihn nicht ersetzt: "dev" ist
+		// morgen vielleicht ein anderes Abbild, und dann sagt der Bericht
+		// nicht mehr, worauf die Zahlen entstanden sind.
+		if r.Isolation.ImageID != "" {
+			fmt.Fprintf(w, " (`%s`)", r.Isolation.ImageID)
+		}
 	}
 	if r.Isolation.Sealed {
 		fmt.Fprintf(w, ", internes Netz `%s`, erreichbar nur: %v.\n\n",

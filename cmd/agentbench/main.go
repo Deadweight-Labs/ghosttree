@@ -333,7 +333,8 @@ func selectRuntime(ctx context.Context, opts runtimeOptions) (agentbench.Runtime
 			Image: opts.image, Network: opts.network,
 			PassEnv: append(append([]string{}, agentbench.ModelCredentialVars...), agentbench.ModelConfigVars...),
 		}
-		isolation := agentbench.Isolation{Runtime: "docker", Image: opts.image, Network: opts.network}
+		isolation := agentbench.Isolation{Runtime: "docker", Image: opts.image,
+			ImageID: agentbench.ImageDigest(ctx, opts.image), Network: opts.network}
 		if opts.seal {
 			sealed, err := agentbench.EnsureSealedNetwork(ctx, agentbench.NetworkSpec{
 				ProxyImage: opts.proxyImage, Allowed: opts.domains,

@@ -151,3 +151,37 @@ func TestReportSeparatesDevelopmentFromHeldOutTasks(t *testing.T) {
 		t.Fatalf("the split must not average across provenances: %+v", byGroup)
 	}
 }
+
+// Ein Tag ist ein wandernder Name. Die Kampagne, die auf "agentbench:dev" lief,
+// und die, die jemand naechsten Monat nachstellt, koennen zwei verschiedene
+// Abbilder sein, ohne dass ein Bericht das sagt.
+func TestWriteIsolationNamesTheImageDigestNotJustTheTag(t *testing.T) {
+	report := Report{Isolation: Isolation{
+		Runtime: "docker", Image: "agentbench:dev",
+		ImageID: "sha256:abc123", Network: "agentbench-sealed",
+		AllowedDomains: []string{"10.0.0.1"}, Sealed: true,
+	}}
+
+	var out strings.Builder
+	report.writeIsolation(&out)
+
+	for _, want := range []string{"agentbench:dev", "sha256:abc123", "agentbench-sealed"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("Abschottung nennt %q nicht:\n%s", want, out.String())
+		}
+	}
+}
+
+// Fehlt der Digest — kein Docker, lokaler Lauf —, schreibt der Bericht, was er
+// hat. Einen Bericht wegen eines fehlenden Herkunftsfelds zu verweigern waere
+// schlimmer als ein Bericht, der weniger sagt.
+func TestWriteIsolationSurvivesAMissingDigest(t *testing.T) {
+	report := Report{Isolation: Isolation{Runtime: "docker", Image: "agentbench:dev", Sealed: true}}
+
+	var out strings.Builder
+	report.writeIsolation(&out)
+
+	if !strings.Contains(out.String(), "agentbench:dev") {
+		t.Fatalf("ohne Digest bleibt der Tag stehen:\n%s", out.String())
+	}
+}
