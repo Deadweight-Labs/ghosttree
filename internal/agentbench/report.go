@@ -119,9 +119,9 @@ type Report struct {
 	// ByProvenance trennt Aufgaben, deren Ground Truth nach dem Anblick der
 	// Antworten korrigiert wurde, von denen, bei denen das nicht passiert ist.
 	ByProvenance []GroupSummary  `json:"by_provenance"`
-	Effects  []PairedEffect  `json:"effects"`
-	Failures map[Failure]int `json:"failures"`
-	Suspect  []TaskSuspicion `json:"suspect_tasks,omitempty"`
+	Effects      []PairedEffect  `json:"effects"`
+	Failures     map[Failure]int `json:"failures"`
+	Suspect      []TaskSuspicion `json:"suspect_tasks,omitempty"`
 	// Delegation says how much of each arm's work ran inside a subagent, where
 	// no turn budget could see it.
 	Delegation []DelegationSummary `json:"delegation,omitempty"`

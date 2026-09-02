@@ -48,11 +48,11 @@ type Transcript struct {
 	// spent 2 counted turns and made 17 tool calls, 15 of them delegated; a
 	// `ghosttree` run on the same task made 6 calls and was cut off at the
 	// budget. Without this number the first run reads as the cheaper one.
-	DelegatedToolCalls int `json:"delegated_tool_calls,omitempty"`
-	FilesRead          int `json:"files_read"`
-	InputTokens  int           `json:"input_tokens"`
-	OutputTokens int           `json:"output_tokens"`
-	Duration     time.Duration `json:"duration_ns"`
+	DelegatedToolCalls int           `json:"delegated_tool_calls,omitempty"`
+	FilesRead          int           `json:"files_read"`
+	InputTokens        int           `json:"input_tokens"`
+	OutputTokens       int           `json:"output_tokens"`
+	Duration           time.Duration `json:"duration_ns"`
 }
 
 type Agent interface {
