@@ -6,6 +6,20 @@ import (
 	"testing"
 )
 
+// ghostTreeSource is the pinned tree the ghosttree arm is entitled to — the
+// snapshot the campaign declared, never the one the checkout happened to carry.
+func ghostTreeSource(t *testing.T) string {
+	t.Helper()
+	src := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(src, "tree"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "tree", "a.md"), []byte("fixierter baum"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return src
+}
+
 // repoWithTree builds a source repository that already carries the artefacts a
 // wrongly prepared arm would inherit.
 func repoWithTree(t *testing.T) string {
@@ -46,7 +60,10 @@ func TestPrepareWorkspaceStripsTreeAndRulesForBare(t *testing.T) {
 }
 
 func TestPrepareWorkspaceWritesTheReconstructedClaudeMD(t *testing.T) {
-	ws, err := PrepareWorkspace(t.TempDir(), ArmClaudeNative, WorkspaceSpec{
+	// claudemd, nicht claude-native: Gemessen wird hier die CLAUDE.md, und
+	// claude-native ohne Auto-Memory ist ein Arm, den PrepareWorkspace zu
+	// Recht ablehnt.
+	ws, err := PrepareWorkspace(t.TempDir(), ArmClaudeMD, WorkspaceSpec{
 		RepoSource: repoWithTree(t),
 		ClaudeMD:   "rekonstruierte regeln",
 	})
@@ -64,7 +81,9 @@ func TestPrepareWorkspaceWritesTheReconstructedClaudeMD(t *testing.T) {
 
 func TestPrepareWorkspaceIsolatesHomeFromTheHost(t *testing.T) {
 	root := t.TempDir()
-	ws, err := PrepareWorkspace(root, ArmGhosttree, WorkspaceSpec{RepoSource: repoWithTree(t)})
+	// Die HOME-Abschottung gilt fuer jeden Arm; bare braucht dafuer nichts
+	// mitgeliefert zu bekommen.
+	ws, err := PrepareWorkspace(root, ArmBare, WorkspaceSpec{RepoSource: repoWithTree(t)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +100,9 @@ func TestPrepareWorkspaceCopiesTheMemoryState(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(memory, "state.db"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	ws, err := PrepareWorkspace(t.TempDir(), ArmGhosttree, WorkspaceSpec{
+	// .memory gehoert claude-mem und agentmemory; ghosttree bekommt seinen
+	// Zustand als Baum im Repository, nicht als Verzeichnis im Heimatordner.
+	ws, err := PrepareWorkspace(t.TempDir(), ArmClaudeMem, WorkspaceSpec{
 		RepoSource: repoWithTree(t), MemorySource: memory,
 	})
 	if err != nil {
@@ -89,6 +110,32 @@ func TestPrepareWorkspaceCopiesTheMemoryState(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(ws.Home, ".memory", "state.db")); err != nil {
 		t.Fatalf("memory state was not copied in: %v", err)
+	}
+}
+
+// Die Leckpruefung schuetzt vor zu viel, diese vor zu wenig — und zu wenig ist
+// der leisere Fehler: Ein claude-native ohne Auto-Memory scheitert nicht, er
+// wird zum claudemd-Arm mit anderem Namen. Die Kampagne liefe durch, und der
+// Bericht druckte die Zahlen unter der Ueberschrift des Primaerkontrasts.
+func TestPrepareWorkspaceRefusesATreatmentArmWithoutItsMemory(t *testing.T) {
+	for _, arm := range []ArmName{ArmClaudeNative, ArmClaudeMem, ArmAgentMemory} {
+		_, err := PrepareWorkspace(t.TempDir(), arm, WorkspaceSpec{RepoSource: repoWithTree(t)})
+		if err == nil {
+			t.Fatalf("arm %q ohne Gedaechtnis muss abgelehnt werden", arm)
+		}
+	}
+	if _, err := PrepareWorkspace(t.TempDir(), ArmGhosttree, WorkspaceSpec{
+		RepoSource: repoWithTree(t),
+	}); err == nil {
+		t.Fatal("ghosttree ohne fixierten Baum muss abgelehnt werden")
+	}
+	// Die unbehandelten Arme brauchen nichts und duerfen nicht blockiert werden.
+	for _, arm := range []ArmName{ArmBare, ArmClaudeMD} {
+		if _, err := PrepareWorkspace(t.TempDir(), arm, WorkspaceSpec{
+			RepoSource: repoWithTree(t),
+		}); err != nil {
+			t.Fatalf("arm %q braucht kein Gedaechtnis: %v", arm, err)
+		}
 	}
 }
 
@@ -111,7 +158,7 @@ func TestCheckLeakageFindsForeignMemoryInBareArm(t *testing.T) {
 
 func TestCheckLeakageAcceptsAnEntitledSurface(t *testing.T) {
 	ws, err := PrepareWorkspace(t.TempDir(), ArmGhosttree, WorkspaceSpec{
-		RepoSource: repoWithTree(t), ClaudeMD: "regeln",
+		RepoSource: repoWithTree(t), ClaudeMD: "regeln", GhostTreeSource: ghostTreeSource(t),
 	})
 	if err != nil {
 		t.Fatal(err)

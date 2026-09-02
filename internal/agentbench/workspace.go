@@ -55,6 +55,14 @@ func PrepareWorkspace(root string, arm ArmName, spec WorkspaceSpec) (Workspace, 
 	if spec.GhostTreeSource != "" && arm != ArmGhosttree {
 		return Workspace{}, fmt.Errorf("arm %q was handed a ghost tree it is not entitled to", arm)
 	}
+	// Die Gegenrichtung derselben Pruefung, und die gefaehrlichere: Ein Arm
+	// ohne sein Gedaechtnis scheitert nicht, er wird still zu einem anderen
+	// Arm. `claude-native` ohne Auto-Memory ist `claudemd` mit einem anderen
+	// Namen — die Kampagne laeuft durch, der Bericht nennt den Primaerkontrast
+	// beim Namen, und gemessen wurde etwas anderes.
+	if err := requireMemory(arm, spec); err != nil {
+		return Workspace{}, err
+	}
 	if err := os.CopyFS(ws.Repo, os.DirFS(spec.RepoSource)); err != nil {
 		return Workspace{}, err
 	}
@@ -111,6 +119,35 @@ func PrepareWorkspace(root string, arm ArmName, spec WorkspaceSpec) (Workspace, 
 	ws.Env["PATH"] = path
 	ws.Env["AGENTBENCH_ARM"] = string(arm)
 	return ws, nil
+}
+
+// requireMemory refuses to prepare a workspace for an arm whose whole point is
+// a memory it was not given.
+//
+// The leakage check guards one direction — an arm must not see more than it is
+// entitled to. This guards the other, and it catches the quieter failure. Too
+// much, and a finding blocks the campaign; too little, and nothing complains:
+// `claude-native` without an auto-memory is `claudemd` under a different name.
+// It would produce plausible numbers, and the report would print them under the
+// heading of the primary contrast.
+//
+// The check is deliberately dumb — is there a source at all — because it has to
+// hold before the first container starts. Whether the memory is any good is a
+// question for the provenance table, not for this function.
+func requireMemory(arm ArmName, spec WorkspaceSpec) error {
+	switch arm {
+	case ArmGhosttree:
+		if spec.GhostTreeSource == "" {
+			return fmt.Errorf("arm %q has no ghost tree; it would run as an unequipped arm "+
+				"under the name of the treatment", arm)
+		}
+	case ArmClaudeNative, ArmClaudeMem, ArmAgentMemory:
+		if spec.MemorySource == "" {
+			return fmt.Errorf("arm %q has no memory state; without one it is the claudemd arm "+
+				"under a different name, and the contrast against it would be measuring nothing", arm)
+		}
+	}
+	return nil
 }
 
 // removeDirsNamed deletes every directory with this name below root, not only
