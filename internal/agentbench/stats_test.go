@@ -1,6 +1,7 @@
 package agentbench
 
 import (
+	"fmt"
 	"math"
 	"testing"
 )
@@ -125,5 +126,46 @@ func TestPairedBootstrapMetricMeasuresEffortToo(t *testing.T) {
 	cost := PairedBootstrapMetric(records, ArmGhosttree, ArmBare, MetricCostUSD, 1, 500)
 	if cost.Mean >= 0 {
 		t.Fatalf("ghosttree was cheaper, so the effect must be negative: %.3f", cost.Mean)
+	}
+}
+
+// Die Nullprobe des Verfahrens: Ein Arm gegen sich selbst muss exakt null
+// ergeben, mit einem Intervall der Breite null. Faellt das anders aus, ist
+// jedes andere Intervall in diesem Bericht ebenfalls falsch, und keine noch so
+// sorgfaeltige Aufgabe rettet es.
+func TestPairedBootstrapOfAnArmAgainstItselfIsExactlyZero(t *testing.T) {
+	var records []RunRecord
+	for i, recall := range []float64{0.1, 0.9, 0.4, 1.0, 0.0, 0.55} {
+		records = append(records, RunRecord{
+			TaskID: fmt.Sprintf("t%d", i), Arm: ArmGhosttree, Repetition: 1,
+			Score: Score{FactRecall: recall}, Transcript: Transcript{Turns: i + 1},
+		})
+	}
+
+	for _, metric := range []Metric{MetricFactRecall, MetricTurns} {
+		effect := PairedBootstrapMetric(records, ArmGhosttree, ArmGhosttree, metric, 7, 2000)
+		if effect.Mean != 0 || effect.LowerCI != 0 || effect.UpperCI != 0 {
+			t.Fatalf("%s gegen sich selbst: want 0 [0,0], got %.6f [%.6f, %.6f]",
+				metric.Name, effect.Mean, effect.LowerCI, effect.UpperCI)
+		}
+	}
+}
+
+// Ein konstanter Abstand auf jeder Aufgabe hat keine Streuung: Der Bootstrap
+// muss ihn exakt treffen und darf kein Intervall darum erfinden.
+func TestPairedBootstrapOfAConstantShiftHasNoInterval(t *testing.T) {
+	var records []RunRecord
+	for i, recall := range []float64{0.1, 0.9, 0.4, 0.0} {
+		id := fmt.Sprintf("t%d", i)
+		records = append(records,
+			RunRecord{TaskID: id, Arm: ArmBare, Repetition: 1, Score: Score{FactRecall: recall}},
+			RunRecord{TaskID: id, Arm: ArmGhosttree, Repetition: 1, Score: Score{FactRecall: recall + 0.25}})
+	}
+
+	effect := PairedBootstrapMetric(records, ArmGhosttree, ArmBare, MetricFactRecall, 7, 2000)
+
+	if math.Abs(effect.Mean-0.25) > 1e-9 || math.Abs(effect.UpperCI-effect.LowerCI) > 1e-9 {
+		t.Fatalf("konstanter Abstand: want 0.25 ohne Intervall, got %.9f [%.9f, %.9f]",
+			effect.Mean, effect.LowerCI, effect.UpperCI)
 	}
 }
