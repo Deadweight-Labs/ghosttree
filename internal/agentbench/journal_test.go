@@ -169,7 +169,7 @@ func TestJournalRerunsARunThatNeverGotAnAnswer(t *testing.T) {
 	}
 	outage := RunRecord{
 		TaskID: "np-01", Arm: ArmBare, Repetition: 1,
-		Failure:        FailureProduct,
+		Failure:    FailureProduct,
 		FailureMsg: "exit status 1: API Error: 503 auth_unavailable",
 	}
 	if err := journal.Emit(outage); err != nil {
