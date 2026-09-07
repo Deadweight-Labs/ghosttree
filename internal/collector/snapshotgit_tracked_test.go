@@ -103,3 +103,64 @@ func TestTrackedGeneratedDeletedSubmoduleRetainsWorktreeChanges(t *testing.T) {
 		t.Fatal("staged submodule deletion hid remaining worktree changes")
 	}
 }
+
+func TestTrackedGeneratedRemovedSubmoduleRecreatedDirectory(t *testing.T) {
+	repo := newSnapshotGitRepo(t, "sha1")
+	child := newSnapshotGitRepo(t, "sha1")
+	path := ".ghosttree/tree/sub"
+	gitSnapshot(t, repo, "-c", "protocol.file.allow=always", "submodule", "add", child, path)
+	gitSnapshot(t, repo, "commit", "-am", "submodule")
+	gitSnapshot(t, repo, "rm", path)
+	if err := os.MkdirAll(filepath.Join(repo, path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeSnapshotFile(t, filepath.Join(repo, path, "owned.txt"), "one")
+	before, err := ResolveSnapshotGit(repo, "checkpoint", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeSnapshotFile(t, filepath.Join(repo, path, "owned.txt"), "two")
+	after, err := ResolveSnapshotGit(repo, "checkpoint", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.WorktreeFingerprint == nil || after.WorktreeFingerprint == nil {
+		t.Fatal("missing fingerprint")
+	}
+	if *before.WorktreeFingerprint == *after.WorktreeFingerprint {
+		t.Fatal("recreated submodule directory changes invisible")
+	}
+}
+func TestTrackedGeneratedSubmoduleWorktreeChanges(t *testing.T) {
+	repo := newSnapshotGitRepo(t, "sha1")
+	child := newSnapshotGitRepo(t, "sha1")
+	path := ".ghosttree/tree/sub"
+	gitSnapshot(t, repo, "-c", "protocol.file.allow=always", "submodule", "add", child, path)
+	gitSnapshot(t, repo, "commit", "-am", "submodule")
+	writeSnapshotFile(t, filepath.Join(repo, path, "tracked.txt"), "one")
+	before := snapshotFingerprint(t, repo)
+	writeSnapshotFile(t, filepath.Join(repo, path, "tracked.txt"), "two")
+	after := snapshotFingerprint(t, repo)
+	if before == after {
+		t.Fatal("tracked submodule content changes invisible")
+	}
+}
+
+func TestTrackedGeneratedRemovedSubmoduleSymlinkToParent(t *testing.T) {
+	repo := newSnapshotGitRepo(t, "sha1")
+	child := newSnapshotGitRepo(t, "sha1")
+	path := ".ghosttree/tree/sub"
+	gitSnapshot(t, repo, "-c", "protocol.file.allow=always", "submodule", "add", child, path)
+	gitSnapshot(t, repo, "commit", "-am", "submodule")
+	gitSnapshot(t, repo, "rm", path)
+	before := snapshotFingerprint(t, repo)
+	if err := os.MkdirAll(filepath.Dir(filepath.Join(repo, path)), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(repo, filepath.Join(repo, path)); err != nil {
+		t.Fatal(err)
+	}
+	if after := snapshotFingerprint(t, repo); after == before {
+		t.Fatal("submodule replacement symlink did not affect fingerprint")
+	}
+}
