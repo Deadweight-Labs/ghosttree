@@ -6,7 +6,14 @@ import (
 	"sync"
 )
 
-var ErrWriterClosed = errors.New("store writer closed")
+var (
+	ErrWriterClosed         = errors.New("store writer closed")
+	ErrWriterOperationsFull = errors.New("store writer operations full; retry later")
+	ErrWriterBytesFull      = errors.New("store writer bytes full; retry later")
+	ErrWriterOversized      = errors.New("store writer operation exceeds byte limit")
+	ErrWriterInvalidConfig  = errors.New("invalid store writer configuration")
+	ErrWriterInvalidPayload = errors.New("invalid store writer payload size")
+)
 
 type WriterConfig struct {
 	MaxOperations   int
@@ -20,9 +27,10 @@ func DefaultWriterConfig() WriterConfig {
 }
 
 type writerRequest struct {
-	next *writerRequest
-	run  func() error
-	done chan error
+	next  *writerRequest
+	run   func() error
+	done  chan error
+	bytes int64
 }
 
 type runtimeWriter struct {
@@ -31,10 +39,16 @@ type runtimeWriter struct {
 	head, tail *writerRequest
 	closed     bool
 	done       chan struct{}
+	cfg        WriterConfig
+	operations int
+	bytes      int64
 }
 
 func newRuntimeWriter(cfg WriterConfig) (*runtimeWriter, error) {
-	w := &runtimeWriter{done: make(chan struct{})}
+	if cfg.MaxOperations <= 0 || cfg.MaxBytes <= 0 || cfg.MaxBatch <= 0 || cfg.ReadConnections <= 0 {
+		return nil, ErrWriterInvalidConfig
+	}
+	w := &runtimeWriter{done: make(chan struct{}), cfg: cfg}
 	w.ready = sync.NewCond(&w.mu)
 	go w.work()
 	return w, nil
@@ -46,7 +60,24 @@ func (w *runtimeWriter) admit(ctx context.Context, bytes int64, run func() error
 	if w.closed {
 		return nil, ErrWriterClosed
 	}
-	r := &writerRequest{run: run, done: make(chan error, 1)}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if bytes < 0 {
+		return nil, ErrWriterInvalidPayload
+	}
+	if bytes > w.cfg.MaxBytes {
+		return nil, ErrWriterOversized
+	}
+	if w.operations >= w.cfg.MaxOperations {
+		return nil, ErrWriterOperationsFull
+	}
+	if bytes > w.cfg.MaxBytes-w.bytes {
+		return nil, ErrWriterBytesFull
+	}
+	r := &writerRequest{run: run, done: make(chan error, 1), bytes: bytes}
+	w.operations++
+	w.bytes += bytes
 	if w.tail == nil {
 		w.head = r
 	} else {
@@ -83,7 +114,13 @@ func (w *runtimeWriter) work() {
 			w.tail = nil
 		}
 		w.mu.Unlock()
-		r.done <- r.run()
+		err := r.run()
+		r.run = nil
+		w.mu.Lock()
+		w.operations--
+		w.bytes -= r.bytes
+		w.mu.Unlock()
+		r.done <- err
 	}
 }
 
