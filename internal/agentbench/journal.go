@@ -146,12 +146,16 @@ func (j *RunJournal) Emit(record RunRecord) error {
 // the trace of the outage it was — but the report must see the run once, and
 // see the attempt that produced an answer.
 func (j *RunJournal) Records() []RunRecord {
-	latest := make(map[runKey]int, len(j.records))
-	for i, record := range j.records {
+	return latestRunRecords(j.records)
+}
+
+func latestRunRecords(records []RunRecord) []RunRecord {
+	latest := make(map[runKey]int, len(records))
+	for i, record := range records {
 		latest[keyOf(record)] = i
 	}
 	out := make([]RunRecord, 0, len(latest))
-	for i, record := range j.records {
+	for i, record := range records {
 		if latest[keyOf(record)] == i {
 			out = append(out, record)
 		}

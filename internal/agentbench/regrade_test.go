@@ -88,3 +88,27 @@ func TestRegradeRefusesARunWithoutATranscript(t *testing.T) {
 		t.Fatal("without evidence there is nothing to regrade from")
 	}
 }
+
+func TestRecoveryPreservesProductFailure(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "bare")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "t1--bare--r1.jsonl")
+	raw := `{"type":"assistant","message":{"content":[{"type":"text","text":` + mustJSON(t, answering("x")) + `}]}}` + "\n" +
+		`{"type":"result","subtype":"error_during_execution","is_error":true,"result":"provider disconnected","num_turns":4}` + "\n"
+	if err := os.WriteFile(path, []byte(raw), 0644); err != nil {
+		t.Fatal(err)
+	}
+	records, err := RecoverFromTranscripts(journalCampaign(ArmBare), []Task{pilotTask("t1")}, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("records=%d", len(records))
+	}
+	if records[0].Failure != FailureProduct {
+		t.Fatalf("product failure recovered as successful measurement: failure=%q recall=%v turns=%v", records[0].Failure, records[0].Score.FactRecall, records[0].Transcript.Turns)
+	}
+}

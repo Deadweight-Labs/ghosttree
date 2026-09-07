@@ -158,3 +158,107 @@ func TestArmAgentsRebuildsTheWorkspacePerRun(t *testing.T) {
 		t.Fatalf("the repository itself must be there again: %v", err)
 	}
 }
+
+func TestFinalOutputsPreserveDurableJournal(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "runs.jsonl")
+	journal, err := agentbench.OpenRunJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failure := agentbench.RunRecord{TaskID: "t1", Arm: agentbench.ArmBare, Repetition: 1, Failure: agentbench.FailureProduct, FailureMsg: "503"}
+	success := agentbench.RunRecord{TaskID: "t1", Arm: agentbench.ArmBare, Repetition: 1, Transcript: agentbench.Transcript{RawPath: "raw/t1.jsonl"}}
+	for _, r := range []agentbench.RunRecord{failure, success} {
+		if err := journal.Emit(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := agentbench.BuildReport(agentbench.Campaign{Arms: []agentbench.ArmName{agentbench.ArmBare}}, journal.Records())
+	if err := writeOutputs(report, dir, filepath.Join(dir, "raw")); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatalf("report output rewrote durable source journal: before=%d records after=%d records", bytes.Count(before, []byte("\n")), bytes.Count(after, []byte("\n")))
+	}
+}
+
+func TestRegradeDoesNotDoubleCountRetriedRun(t *testing.T) {
+	campaignPath, taskDir, _ := writeCampaign(t)
+	campaign, err := loadCampaign(campaignPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	campaign.Arms = []agentbench.ArmName{agentbench.ArmBare}
+	tasks, err := agentbench.LoadTasks(taskDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	rawPath := filepath.Join(dir, "raw", "bare", "t1--bare--r1.jsonl")
+	if err := os.MkdirAll(filepath.Dir(rawPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	event := map[string]any{"type": "result", "subtype": "success", "result": "```agentbench-form\n{\"slots\":{\"tolerance\":60}}\n```"}
+	raw, err := json.Marshal(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(rawPath, raw, 0644); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := agentbench.OpenRunJournal(filepath.Join(dir, "runs.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range []agentbench.RunRecord{
+		{TaskID: "t1", Arm: agentbench.ArmBare, Repetition: 1, Failure: agentbench.FailureProduct, FailureMsg: "503"},
+		{TaskID: "t1", Arm: agentbench.ArmBare, Repetition: 1, Transcript: agentbench.Transcript{RawPath: rawPath}},
+	} {
+		if err := journal.Emit(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+	out := t.TempDir()
+	var stdout bytes.Buffer
+	if err := regradeRun(campaign, tasks, dir, out, false, &stdout); err != nil {
+		t.Fatal(err)
+	}
+	output, err := os.ReadFile(filepath.Join(out, "runs.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := bytes.Count(output, []byte("\n")); n != 1 {
+		t.Fatalf("one retried run became %d records during regrade", n)
+	}
+	original, err := os.ReadFile(filepath.Join(dir, "runs.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := regradeRun(campaign, tasks, dir, "", false, &stdout); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(filepath.Join(dir, "runs.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(original, after) {
+		t.Fatal("in-place regrade overwrote the source journal")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "regraded.jsonl")); err != nil {
+		t.Fatal(err)
+	}
+}

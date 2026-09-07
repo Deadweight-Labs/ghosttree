@@ -24,7 +24,7 @@ func Regrade(records []RunRecord, tasks []Task) ([]RunRecord, error) {
 	}
 
 	out := make([]RunRecord, 0, len(records))
-	for _, record := range records {
+	for _, record := range latestRunRecords(records) {
 		task, ok := byID[record.TaskID]
 		if !ok {
 			return nil, fmt.Errorf("run for task %q has no task definition", record.TaskID)
@@ -61,6 +61,13 @@ func Regrade(records []RunRecord, tasks []Task) ([]RunRecord, error) {
 		record.Transcript.DelegatedToolCalls = transcript.DelegatedToolCalls
 		record.Transcript.FilesRead = transcript.FilesRead
 		record.Transcript.MaxTurnsExceeded = transcript.MaxTurnsExceeded
+		record.Transcript.AgentError = transcript.AgentError
+		if transcript.AgentError != "" {
+			record.Failure, record.FailureMsg = FailureProduct, transcript.AgentError
+			record.Score = Score{}
+			out = append(out, record)
+			continue
+		}
 
 		form, err := FormFrom(transcript)
 		if err != nil {

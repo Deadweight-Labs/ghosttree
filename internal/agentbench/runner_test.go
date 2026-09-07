@@ -2,6 +2,8 @@ package agentbench
 
 import (
 	"context"
+	"errors"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -161,5 +163,20 @@ func TestRunKeepsGoingOnceSomethingSucceeded(t *testing.T) {
 	}
 	if len(records) != len(tasks) {
 		t.Fatalf("want a record per task, got %d", len(records))
+	}
+}
+
+type failedTranscriptAgent struct{ path string }
+
+func (a failedTranscriptAgent) Run(context.Context, Invocation) (Transcript, error) {
+	return Transcript{RawPath: a.path, Turns: 4, ToolCalls: 3, AgentError: "provider disconnected"}, errors.New("exit status 1")
+}
+
+func TestRunOnePreservesTranscriptOnProcessError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "recorded.jsonl")
+	task := pilotTask("t1")
+	record := runOne(context.Background(), journalCampaign(ArmBare), task, ArmBare, 1, SameAgent(failedTranscriptAgent{path}))
+	if record.Transcript.RawPath != path {
+		t.Fatalf("attempted run lost transcript: %+v; resume sees unattempted=%v", record, unattempted(record))
 	}
 }

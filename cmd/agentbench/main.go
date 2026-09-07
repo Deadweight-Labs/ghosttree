@@ -292,6 +292,21 @@ func writeRegraded(campaign agentbench.Campaign, records []agentbench.RunRecord,
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return err
 	}
+	source, err := os.Stat(runDir)
+	if err != nil {
+		return err
+	}
+	destination, err := os.Stat(outDir)
+	if err != nil {
+		return err
+	}
+	name := "runs.jsonl"
+	if os.SameFile(source, destination) {
+		name = "regraded.jsonl"
+	}
+	if err := writeRunRecords(report, filepath.Join(outDir, name)); err != nil {
+		return err
+	}
 	fmt.Fprintf(stdout, "regraded %d runs from %s into %s\n", len(records), runDir, outDir)
 	return writeOutputs(report, outDir, filepath.Join(runDir, "raw"))
 }
@@ -486,20 +501,26 @@ func allowedFor(arm agentbench.ArmName, openNetwork bool) agentbench.AllowedSurf
 	}
 }
 
-// writeOutputs schreibt Datensaetze, Bericht und Transkript-Manifest. rawDir
-// ist das Verzeichnis der Transkripte, aus denen die Zahlen stammen — beim Lauf
-// das eigene raw/, bei einer Nachbewertung das des Quelllaufs. Ein Manifest
-// ueber ein leeres Verzeichnis belegt nichts.
-func writeOutputs(report agentbench.Report, outDir, rawDir string) error {
-	jsonl, err := os.Create(filepath.Join(outDir, "runs.jsonl"))
+func writeRunRecords(report agentbench.Report, path string) error {
+	jsonl, err := os.CreateTemp(filepath.Dir(path), ".regraded-*.jsonl")
 	if err != nil {
 		return err
 	}
+	defer os.Remove(jsonl.Name())
 	defer jsonl.Close()
 	if err := report.WriteJSONL(jsonl); err != nil {
 		return err
 	}
+	if err := jsonl.Sync(); err != nil {
+		return err
+	}
+	if err := jsonl.Close(); err != nil {
+		return err
+	}
+	return os.Rename(jsonl.Name(), path)
+}
 
+func writeOutputs(report agentbench.Report, outDir, rawDir string) error {
 	markdown, err := os.Create(filepath.Join(outDir, "report.md"))
 	if err != nil {
 		return err
