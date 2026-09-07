@@ -8,8 +8,17 @@ User=ghosttree
 DynamicUser=yes
 StateDirectory=ghosttree
 Environment=GHOSTTREE_LISTEN=127.0.0.1:8474
+Environment=GHOSTTREE_SNAPSHOT_MAX_ENTRY_BYTES=4194304
+Environment=GHOSTTREE_SNAPSHOT_MAX_ENTRIES=20000
+Environment=GHOSTTREE_SNAPSHOT_MAX_PAYLOAD_BYTES=134217728
+Environment=GHOSTTREE_SNAPSHOT_MAX_HEAD_BYTES=32768
+Environment=GHOSTTREE_SNAPSHOT_MAX_LOGICAL_BYTES=167772160
+Environment=GHOSTTREE_SNAPSHOT_MAX_PROJECT_COUNT=1000
+Environment=GHOSTTREE_SNAPSHOT_MAX_PROJECT_BYTES=8589934592
+Environment=GHOSTTREE_SNAPSHOT_MAX_STORE_COUNT=10000
+Environment=GHOSTTREE_SNAPSHOT_MAX_STORE_BYTES=68719476736
 EnvironmentFile=-/etc/ghosttree/server.env
-ExecStart=/usr/local/bin/ctx serve --db /var/lib/ghosttree/ghosttree.db --listen ${GHOSTTREE_LISTEN}
+ExecStart=/usr/local/bin/ctx serve --db /var/lib/ghosttree/ghosttree.db --listen ${GHOSTTREE_LISTEN} --snapshot-max-entry-bytes ${GHOSTTREE_SNAPSHOT_MAX_ENTRY_BYTES} --snapshot-max-entries ${GHOSTTREE_SNAPSHOT_MAX_ENTRIES} --snapshot-max-payload-bytes ${GHOSTTREE_SNAPSHOT_MAX_PAYLOAD_BYTES} --snapshot-max-head-bytes ${GHOSTTREE_SNAPSHOT_MAX_HEAD_BYTES} --snapshot-max-logical-bytes ${GHOSTTREE_SNAPSHOT_MAX_LOGICAL_BYTES} --snapshot-max-project-count ${GHOSTTREE_SNAPSHOT_MAX_PROJECT_COUNT} --snapshot-max-project-bytes ${GHOSTTREE_SNAPSHOT_MAX_PROJECT_BYTES} --snapshot-max-store-count ${GHOSTTREE_SNAPSHOT_MAX_STORE_COUNT} --snapshot-max-store-bytes ${GHOSTTREE_SNAPSHOT_MAX_STORE_BYTES}
 Restart=on-failure
 
 [Install]

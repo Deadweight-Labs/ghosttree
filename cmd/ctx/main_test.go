@@ -95,6 +95,86 @@ func TestRunVersion(t *testing.T) {
 	}
 }
 
+func TestPersonWhoAmIPrintsStablePrincipal(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	st, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	token, err := st.AddPerson("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(server.New(st))
+	t.Cleanup(srv.Close)
+	if err := config.Save(config.Config{ServerURL: srv.URL, Token: token}); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	if code := run([]string{"person", "whoami"}, &out); code != 0 {
+		t.Fatalf("exit=%d output=%s", code, out.String())
+	}
+	if got := out.String(); !strings.Contains(got, "person:1") || !strings.Contains(got, "alice") {
+		t.Fatalf("output = %q", got)
+	}
+}
+
+func TestPersonSnapshotAccessCLIWritesAndShowsTuple(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "ghosttree.db")
+	st, err := store.Open(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddPerson("alice"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	args := []string{"person", "snapshot-access", "alice", "--project", "project-a", "--read", "--create", "--db", db}
+	if code := run(args, &out); code != 0 {
+		t.Fatalf("write exit=%d output=%s", code, out.String())
+	}
+	for _, want := range []string{"person:1", "alice", "project=project-a", "read=true", "create=true", "release-bind=false"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("write output missing %q: %s", want, out.String())
+		}
+	}
+
+	out.Reset()
+	if code := run([]string{"person", "snapshot-access", "show", "alice", "--project", "project-a", "--db", db}, &out); code != 0 {
+		t.Fatalf("show exit=%d output=%s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "read=true") || !strings.Contains(out.String(), "create=true") {
+		t.Fatalf("show output = %q", out.String())
+	}
+}
+
+func TestPersonSnapshotAccessCLIRejectsInvalidReleaseGrant(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "ghosttree.db")
+	st, err := store.Open(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddPerson("alice"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	code := run([]string{"person", "snapshot-access", "alice", "--project", "p", "--release-bind", "--db", db}, &out)
+	if code == 0 || !strings.Contains(out.String(), "release-bind") {
+		t.Fatalf("exit=%d output=%q", code, out.String())
+	}
+}
+
 func TestExportRejectsBadArguments(t *testing.T) {
 	cases := map[string][]string{
 		"no session id":    {"export"},
