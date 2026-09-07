@@ -72,3 +72,17 @@ func TestVollFlagIsParsedRegardlessOfPosition(t *testing.T) {
 		t.Error("ohne Flagge darf --voll nicht gelten")
 	}
 }
+
+func TestTerminalHistoryKeepsArchivedOnlyVersionVisible(t *testing.T) {
+	chain := []store.GhostVersion{{Path: "gone.go", Description: "retained archived words", ReplacedAt: "2026-09-07T00:00:00Z", Reason: "archiviert: removed; bestätigt von operator"}}
+	for _, full := range []bool{false, true} {
+		var b strings.Builder
+		printHistory(&b, "gone.go", chain, full)
+		if !strings.Contains(b.String(), "archiviert") || strings.Contains(b.String(), "keine früheren Fassungen") || strings.Contains(b.String(), "aktuelle Fassung") {
+			t.Fatalf("archived-only history: %s", &b)
+		}
+		if full && !strings.Contains(b.String(), chain[0].Description) {
+			t.Fatalf("lost last archived text: %s", &b)
+		}
+	}
+}

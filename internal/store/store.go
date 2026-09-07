@@ -310,6 +310,36 @@ CREATE TABLE IF NOT EXISTS ghost_file_versions(
   reason TEXT NOT NULL DEFAULT 'ersetzt');
 CREATE INDEX IF NOT EXISTS ghost_file_versions_path
   ON ghost_file_versions(project, path, replaced_at DESC);
+CREATE TABLE IF NOT EXISTS ghost_archive_receipts(
+  project TEXT NOT NULL,
+  path TEXT NOT NULL,
+  token TEXT NOT NULL,
+  person TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  at TEXT NOT NULL,
+  PRIMARY KEY(project,path,token));
+CREATE TABLE IF NOT EXISTS ghost_path_revisions(
+  project TEXT NOT NULL,
+  path TEXT NOT NULL,
+  revision INTEGER NOT NULL CHECK(revision>0),
+  PRIMARY KEY(project,path));
+INSERT OR IGNORE INTO ghost_path_revisions(project,path,revision)
+  SELECT project,path,1 FROM ghost_files;
+CREATE TRIGGER IF NOT EXISTS ghost_path_revision_insert AFTER INSERT ON ghost_files BEGIN
+  INSERT INTO ghost_path_revisions(project,path,revision) VALUES(new.project,new.path,1)
+    ON CONFLICT(project,path) DO UPDATE SET revision=revision+1;
+END;
+CREATE TRIGGER IF NOT EXISTS ghost_path_revision_delete AFTER DELETE ON ghost_files BEGIN
+  INSERT INTO ghost_path_revisions(project,path,revision) VALUES(old.project,old.path,1)
+    ON CONFLICT(project,path) DO UPDATE SET revision=revision+1;
+END;
+CREATE TRIGGER IF NOT EXISTS ghost_path_revision_update AFTER UPDATE ON ghost_files BEGIN
+  INSERT INTO ghost_path_revisions(project,path,revision) VALUES(old.project,old.path,1)
+    ON CONFLICT(project,path) DO UPDATE SET revision=revision+1;
+  INSERT INTO ghost_path_revisions(project,path,revision)
+    SELECT new.project,new.path,1 WHERE new.project!=old.project OR new.path!=old.path
+    ON CONFLICT(project,path) DO UPDATE SET revision=revision+1;
+END;
 -- Was in dieser Session schon gesagt wurde: ausgelieferte Beschreibungen UND
 -- ausgesprochene Aufforderungen. Auf den Pfad geschlüsselt statt auf die
 -- Eintrags-Id, weil eine Aufforderung einen Pfad meint, für den es noch keinen

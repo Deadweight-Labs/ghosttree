@@ -1,6 +1,7 @@
 package ghost
 
 import (
+	"fmt"
 	"path/filepath"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -27,6 +28,15 @@ import (
 // demselben Inhalt sind eine Verdopplung, und ein Ziel, das schon eine
 // Beschreibung hat, wird nicht überschrieben.
 func DetectMoves(repoRoot string, entries []Entry, described map[string]store.GhostFile) map[string]string {
+	moves, _ := detectMoves(repoRoot, entries, described, false)
+	return moves
+}
+
+func DetectMovesStrict(repoRoot string, entries []Entry, described map[string]store.GhostFile) (map[string]string, error) {
+	return detectMoves(repoRoot, entries, described, true)
+}
+
+func detectMoves(repoRoot string, entries []Entry, described map[string]store.GhostFile, strict bool) (map[string]string, error) {
 	live := make(map[string]bool, len(entries))
 	for _, e := range entries {
 		live[e.Path] = true
@@ -42,7 +52,7 @@ func DetectMoves(repoRoot string, entries []Entry, described map[string]store.Gh
 		orphans = append(orphans, g)
 	}
 	if len(orphans) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	// Nur unbeschriebene Dateien kommen als Ziel infrage — ein beschriebenes
@@ -57,6 +67,9 @@ func DetectMoves(repoRoot string, entries []Entry, described map[string]store.Gh
 		}
 		_, blob, _, err := HashFile(filepath.Join(repoRoot, filepath.FromSlash(e.Path)))
 		if err != nil {
+			if strict {
+				return nil, fmt.Errorf("Verschiebungen nicht vollständig prüfbar (%s): %w", e.Path, err)
+			}
 			continue
 		}
 		byBlob[blob] = append(byBlob[blob], e.Path)
@@ -81,7 +94,7 @@ func DetectMoves(repoRoot string, entries []Entry, described map[string]store.Gh
 		moves[g.Path] = cands[0]
 	}
 	if len(moves) == 0 {
-		return nil
+		return nil, nil
 	}
-	return moves
+	return moves, nil
 }

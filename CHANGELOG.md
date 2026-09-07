@@ -6,6 +6,11 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Bound automatic hook context to 24,000 Unicode characters per session, with
+  a visible cutoff notice and local output accounting in `ctx doctor`.
+- Add explicit archival of confirmed-deleted file descriptions, preserving
+  their full history and preventing stale confirmations from removing newer
+  descriptions. Doctor now names the repair command.
 - Preserve agentbench failure transcripts and the append-only run journal;
   recovery retains product failures and regrading counts each run once.
   In-place regrading writes derived records to `regraded.jsonl`.

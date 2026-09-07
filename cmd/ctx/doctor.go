@@ -15,6 +15,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/collector"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
 	"github.com/Deadweight-Labs/ghosttree/internal/ghost"
+	"github.com/Deadweight-Labs/ghosttree/internal/hookbudget"
 	"github.com/Deadweight-Labs/ghosttree/internal/installer"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
@@ -72,7 +73,7 @@ func cmdDoctor(args []string, stdout io.Writer) int {
 	return 1
 }
 
-var sharedDoctorOrder = []string{"binary", "client", "server", "collector", "tree"}
+var sharedDoctorOrder = []string{"binary", "client", "server", "collector", "tree", "budget"}
 
 func resolveDoctorScope(harness string, only []string) ([]string, map[string]installer.ComponentSet, map[string]bool, error) {
 	harnesses := []string{"claude", "codex", "opencode"}
@@ -168,6 +169,8 @@ func selectedSharedChecks(selected map[string]bool, home string) []installer.Che
 				}
 			}
 			checks = append(checks, ghostChecks()...)
+		case "budget":
+			checks = append(checks, hookBudgetChecks()...)
 		}
 	}
 	return checks
@@ -371,6 +374,9 @@ func ghostChecks() []installer.Check {
 			files = append(files, e.Path)
 		}
 	}
+	if len(files) == 0 {
+		return []installer.Check{{Name: "ghost tree", Unverified: true, Detail: "leere Git-Dateiliste; Zustand der Beschreibungen unbekannt"}}
+	}
 	stored, err := c.GhostTree(gitCtx.Project, "")
 	if err != nil {
 		return nil
@@ -402,25 +408,10 @@ func ghostChecks() []installer.Check {
 	return []installer.Check{{
 		Name:   "ghost tree",
 		Detail: fmt.Sprintf("%d Beschreibungen ohne Datei: %s", len(orphans), strings.Join(shown, ", ")),
-		Fix:    "die Pfade prüfen — verschoben, umbenannt oder wirklich weg. Sie bleiben in der Datenbank und verschwinden beim nächsten Neuschreiben aus dem Baum",
+		Fix:    "ctx ghost archive <pfad> zeigt eine Vorschau; wirklich gelöschte Pfade mit --reason <grund> --confirm-deleted archivieren. ctx mirror erkennt Umzüge, löscht aber keine Beschreibungen",
 	}}
 }
 
-// describedBulk nennt die Textmenge, die hinter den Beschreibungen steckt.
-//
-// Der Grund ist der Preis, den niemand sieht: der PreToolUse-Hook liefert beim
-// Anfassen einer Datei deren Beschreibung samt der ihrer Vorfahren ungefragt
-// aus. Es gibt dafür keine Obergrenze und keine Kürzung.
-//
-// Der Nenner ist dabei die SITZUNG und nicht der einzelne Zugriff: jeder
-// betrachtete Pfad landet in ghost_deliveries und wird in derselben Sitzung
-// nicht zweimal geliefert. Gemessen am 2026-08-26 gegen die Produktionsdaten
-// bei 20 % Abdeckung: je Sitzung 18.054 Zeichen im Schnitt und 39.752 im
-// schlechtesten Fall, je Auslieferung 1.128 im Schnitt. Volle Abdeckung
-// verdoppelt das mindestens (REQ-198).
-//
-// Diese Zeile macht die Grössenordnung sichtbar, bevor jemand sie am
-// Kontextfenster bemerkt.
 func describedBulk(stored []store.GhostFile) string {
 	total, largest := 0, 0
 	for _, g := range stored {
@@ -431,6 +422,32 @@ func describedBulk(stored []store.GhostFile) string {
 		}
 	}
 	return fmt.Sprintf("%s Beschreibungstext, größte %s", humanBytes(total), humanBytes(largest))
+}
+
+func hookBudgetChecks() []installer.Check {
+	receipts, err := hookbudget.Recent()
+	if err != nil {
+		return []installer.Check{{Name: "context budget", Detail: err.Error(), Fix: "lokale Budgetdateien prüfen; nicht löschen, da dies die Sitzungsgrenze zurücksetzen würde"}}
+	}
+	if len(receipts) == 0 {
+		return []installer.Check{{Name: "context budget", Unverified: true,
+			Detail: fmt.Sprintf("%d Zeichen je Sitzung; keine lokalen Ausgabebelege, bisherige Ausgabe unbekannt", hookbudget.Limit)}}
+	}
+	checks := []installer.Check{{Name: "context budget", OK: true,
+		Detail: fmt.Sprintf("%d Unicode-Zeichen je Sitzung für alle drei Hooks; lokale stdout-Belege, frühere Ausgabe vor Zählbeginn unbekannt", hookbudget.Limit)}}
+	if len(receipts) > 5 {
+		receipts = receipts[:5]
+	}
+	for _, r := range receipts {
+		pending := r.ReservedChars - r.EmittedChars
+		detail := fmt.Sprintf("%d/%d Zeichen ausgegeben; %d unbestätigt reserviert; seit %s",
+			r.EmittedChars, hookbudget.Limit, pending, r.StartedAt.Format("2006-01-02 15:04:05Z07:00"))
+		if r.Exhausted {
+			detail += "; weitere automatische Ausgabe gesperrt"
+		}
+		checks = append(checks, installer.Check{Name: "context budget " + r.SessionHash[:8], OK: true, Unverified: pending > 0, Detail: detail})
+	}
+	return checks
 }
 
 func humanBytes(n int) string {

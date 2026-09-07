@@ -129,6 +129,8 @@ func New(st *store.Store, options ...Option) http.Handler {
 	mux.HandleFunc("GET /api/ghosts/tree", a.ghostTree)
 	mux.HandleFunc("GET /api/ghosts/history", a.ghostHistory)
 	mux.HandleFunc("POST /api/ghosts/move", a.ghostsMove)
+	mux.HandleFunc("POST /api/ghosts/archive", a.archiveGhosts)
+	mux.HandleFunc("GET /api/ghosts/archive-candidate", a.ghostArchiveCandidate)
 	mux.HandleFunc("GET /api/ghosts/search", a.searchGhosts)
 	mux.HandleFunc("POST /api/ghosts/reviews", a.putGhostReview)
 	mux.HandleFunc("GET /api/ghosts/reviews", a.ghostReviews)
