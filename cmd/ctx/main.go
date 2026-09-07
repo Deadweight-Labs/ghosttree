@@ -88,7 +88,7 @@ const usage = `usage: ctx <command>
   review   approve or reject distilled knowledge
   regression  say which test guards a fixed defect, and list the fixes none does
   request  search and manage the work ledger
-  ghost    read earlier versions of a path's description
+  ghost    read description history or archive confirmed-deleted paths
   doc      write, publish, and read long-form documents
   migrate  move repository agent artifacts into ghosttree
   mirror   write .ghosttree/ for a repository (harnesses without hooks)

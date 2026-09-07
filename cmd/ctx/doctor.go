@@ -374,6 +374,9 @@ func ghostChecks() []installer.Check {
 			files = append(files, e.Path)
 		}
 	}
+	if len(files) == 0 {
+		return []installer.Check{{Name: "ghost tree", Unverified: true, Detail: "leere Git-Dateiliste; Zustand der Beschreibungen unbekannt"}}
+	}
 	stored, err := c.GhostTree(gitCtx.Project, "")
 	if err != nil {
 		return nil
@@ -405,7 +408,7 @@ func ghostChecks() []installer.Check {
 	return []installer.Check{{
 		Name:   "ghost tree",
 		Detail: fmt.Sprintf("%d Beschreibungen ohne Datei: %s", len(orphans), strings.Join(shown, ", ")),
-		Fix:    "die Pfade prüfen — verschoben, umbenannt oder wirklich weg. Sie bleiben in der Datenbank und verschwinden beim nächsten Neuschreiben aus dem Baum",
+		Fix:    "ctx ghost archive <pfad> zeigt eine Vorschau; wirklich gelöschte Pfade mit --reason <grund> --confirm-deleted archivieren. ctx mirror erkennt Umzüge, löscht aber keine Beschreibungen",
 	}}
 }
 

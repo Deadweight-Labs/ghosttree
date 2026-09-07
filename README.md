@@ -91,6 +91,14 @@ hashed session identity under `$XDG_STATE_HOME/ghosttree/context-budget` (defaul
 `~/.local/state/ghosttree/context-budget`). Missing session identity or unreadable
 accounting state suppresses automatic context. Explicit retrieval still works.
 
+Descriptions for removed paths stay active until a move is resolved or deletion
+is explicitly confirmed. Preview selected paths with `ctx ghost archive <path>`;
+archive them with `ctx ghost archive <path> --reason "why it was removed"
+--confirm-deleted`. Selection is exact and never recursive, including directories.
+The command refuses live paths and detectable moves; `ctx mirror` resolves
+unambiguous moves first. Archived text remains available through
+`ctx ghost history <path> --voll` and `context_file_history`.
+
 ## Quick start
 
 Ghosttree is designed for a private network. The example below keeps the server

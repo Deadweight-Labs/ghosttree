@@ -17,9 +17,11 @@ import (
 )
 
 const ghostUsage = `usage: ctx ghost history <pfad> [anzahl] [--voll]
+       ctx ghost archive <pfad>... [--reason <grund> --confirm-deleted]
 
   history   was sich an der Beschreibung eines Pfades geändert hat, neueste zuerst
-  --voll    statt der Änderung den Wortlaut jeder früheren Fassung`
+  --voll    statt der Änderung den Wortlaut jeder früheren Fassung
+  archive   ausgewählte gelöschte Pfade archivieren; ohne Bestätigung nur Vorschau`
 
 // cmdGhost ist die Terminalseite der Dateibeschreibungen — für den Menschen,
 // unabhängig davon, ob gerade ein Agent läuft. Bisher gibt es nur die Historie:
@@ -33,6 +35,8 @@ func cmdGhost(args []string, stdout io.Writer) int {
 	switch args[0] {
 	case "history":
 		return ghostHistory(args[1:], stdout)
+	case "archive":
+		return ghostArchive(args[1:], stdout)
 	default:
 		fmt.Fprintln(stdout, ghostUsage)
 		return 2
@@ -105,12 +109,17 @@ func printHistory(stdout io.Writer, name string, chain []store.GhostVersion, vol
 	if name == "" {
 		name = "(Repo-Wurzel)"
 	}
-	if len(chain) < 2 {
+	archived := len(chain) > 0 && chain[0].ReplacedAt != ""
+	if len(chain) == 0 || (len(chain) == 1 && !archived) {
 		fmt.Fprintf(stdout, "%s: keine früheren Fassungen\n", name)
 		return
 	}
 	if voll {
-		for _, v := range chain[1:] {
+		versions := chain
+		if !archived {
+			versions = chain[1:]
+		}
+		for _, v := range versions {
 			fmt.Fprintf(stdout, "%s bis %s", shortDay(v.DescribedAt), shortDay(v.ReplacedAt))
 			if v.Person != "" {
 				fmt.Fprintf(stdout, "  %s", v.Person)
