@@ -1,8 +1,10 @@
 package store
 
 import (
+	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 )
@@ -247,5 +249,52 @@ func TestListSessions(t *testing.T) {
 	one, _ := s.ListSessions(scope.Axes{Project: "github.com/x/y"}, 10)
 	if len(one) != 1 || one[0].ExternalID != "x1" {
 		t.Errorf("filtered = %+v", one)
+	}
+}
+
+func TestAppendChunksWaitsForExternalWriter(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "db.sqlite")
+	a, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	b, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	id, err := a.UpsertSession(Session{Harness: "codex", ExternalID: "a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.AppendChunks(id, []Chunk{{Seq: 1, Role: "user", Text: "warm", Raw: "{}"}}); err != nil {
+		t.Fatal(err)
+	}
+	var busy int
+	if err := a.DB().QueryRow(`PRAGMA busy_timeout`).Scan(&busy); err != nil || busy < 1000 {
+		t.Fatalf("busy_timeout=%d err=%v", busy, err)
+	}
+	if _, err := b.DB().Exec(`BEGIN IMMEDIATE`); err != nil {
+		t.Fatal(err)
+	}
+	defer b.DB().Exec(`ROLLBACK`)
+	done := make(chan error, 1)
+	go func() { done <- a.AppendChunks(id, []Chunk{{Seq: 0, Role: "user", Text: "a", Raw: "{}"}}) }()
+	select {
+	case err := <-done:
+		t.Fatalf("AppendChunks returned before external writer released lock: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if _, err := b.DB().Exec(`ROLLBACK`); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("append did not resume after writer rollback")
 	}
 }

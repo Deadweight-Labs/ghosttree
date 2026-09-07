@@ -66,15 +66,20 @@ func (s *Store) AppendChunkBatches(batches []ChunkBatch) error {
 	}
 	defer tx.Rollback()
 	sessions := make(map[int64]struct{}, len(batches))
+	ts := now()
 	for _, batch := range batches {
 		if _, ok := sessions[batch.SessionID]; ok {
 			continue
 		}
-		var exists bool
-		if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM sessions WHERE id=?)`, batch.SessionID).Scan(&exists); err != nil {
+		result, err := tx.Exec(`UPDATE sessions SET last_seen_at = ? WHERE id = ?`, ts, batch.SessionID)
+		if err != nil {
 			return err
 		}
-		if !exists {
+		matched, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if matched == 0 {
 			return sql.ErrNoRows
 		}
 		sessions[batch.SessionID] = struct{}{}
@@ -89,12 +94,6 @@ func (s *Store) AppendChunkBatches(batches []ChunkBatch) error {
 			if _, err := stmt.Exec(batch.SessionID, c.Seq, c.Role, c.Text, c.Raw); err != nil {
 				return err
 			}
-		}
-	}
-	ts := now()
-	for sessionID := range sessions {
-		if _, err := tx.Exec(`UPDATE sessions SET last_seen_at = ? WHERE id = ?`, ts, sessionID); err != nil {
-			return err
 		}
 	}
 	return tx.Commit()
