@@ -154,6 +154,10 @@ It does not reconstruct context from an old Git checkout: `created_at` is the
 real creation time, while the Git fields record the observed checkout. A
 release-style name requires the local tag, its peeled commit to equal `HEAD`,
 and normally a clean worktree.
+Ordinary names such as `2026.08.31-baseline`, `1.0-draft`, and `v2.0-plan`
+do not require a release tag. Tracked files under generated `.ghosttree/`
+directories still count as dirty and contribute to the worktree fingerprint;
+only untracked generated output is excluded.
 
 Snapshot schema 3 binds the immutable metadata head and every ordered entry
 digest into `content_digest`. A complete export can therefore detect changes to
@@ -174,7 +178,10 @@ Sealed snapshots have no update, delete, or redaction API. Treat messages and
 all snapshotted context as permanent, keep secrets out, and use `show` before
 `export` so large historical payloads enter a tool or model context only when
 deliberately requested. The generated `.ghosttree/snapshots/INDEX.md` contains
-metadata only; payloads remain in the server store.
+metadata only, including the Git metadata source, schema version, and digest
+scope; payloads remain in the server store. A failed mirror refresh does not
+undo a committed snapshot. Its warning includes an operation ID that operators
+can correlate with the server log.
 
 ## Privacy and security
 

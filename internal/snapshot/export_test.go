@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -78,6 +79,41 @@ func TestVerifyExportRejectsCorruption(t *testing.T) {
 	corrupt := bytes.Replace(out.Bytes(), []byte(`"raw":"<>& "`), []byte(`"raw":"changed"`), 1)
 	if _, err := VerifyExport(bytes.NewReader(corrupt)); !isRuleCode(err, "snapshot_integrity_error") {
 		t.Fatalf("corrupt payload error = %v", err)
+	}
+}
+
+func TestProjectedExportRejectsImpossibleAggregateBounds(t *testing.T) {
+	entries := exportFixtureEntries(t)
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Key < entries[j].Key })
+	for _, kind := range []string{"domain", "entry-count", "payload-bytes"} {
+		t.Run(kind, func(t *testing.T) {
+			head := exportFixtureHead(entries)
+			counts := exportFixtureCounts()
+			switch kind {
+			case "domain":
+				counts["ghost"] = counts["knowledge"]
+				counts["knowledge"] = 0
+			case "entry-count":
+				for domain := range counts {
+					counts[domain] = 0
+				}
+				head.EntryCount = 0
+			case "payload-bytes":
+				head.PayloadBytesTotal = 0
+			}
+			filter := &ExportFilter{Domain: "knowledge"}
+			var out bytes.Buffer
+			if err := WriteExport(&out, head, counts, entries, filter); err == nil {
+				t.Error("writer accepted impossible projection bounds")
+			}
+			raw, err := MarshalCanonical(exportEnvelopeV2{Counts: counts, Entries: entries, ExportVersion: ExportVersion, Filter: filter, Snapshot: exportHeadV2(head)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := VerifyExport(bytes.NewReader(append(raw, '\n'))); !isRuleCode(err, "snapshot_integrity_error") {
+				t.Fatalf("verification error=%v", err)
+			}
+		})
 	}
 }
 

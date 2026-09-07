@@ -146,6 +146,14 @@ func verifyEntries(head Head, counts map[string]int64, entries []Entry, full boo
 		summaries[i] = EntrySummary{Domain: entry.Domain, Key: entry.Key, PayloadDigest: entry.PayloadDigest, PayloadSize: entry.PayloadSize}
 	}
 	if !full {
+		if int64(len(entries)) > head.EntryCount || total > head.PayloadBytesTotal {
+			return integrityError(fmt.Errorf("projection exceeds snapshot aggregates"))
+		}
+		for domain, count := range derivedCounts {
+			if count > counts[domain] {
+				return integrityError(fmt.Errorf("projection exceeds count for %s", domain))
+			}
+		}
 		return nil
 	}
 	if head.EntryCount != int64(len(entries)) || head.PayloadBytesTotal != total {

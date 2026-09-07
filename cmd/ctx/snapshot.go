@@ -62,9 +62,8 @@ func snapshotCreate(args []string, stdout, diagnostics io.Writer) int {
 	if err != nil {
 		return snapshotCommandError(stdout, err)
 	}
-	rechecked, err := collector.ResolveSnapshotGit(repo, positionals[0], flags["--allow-dirty"])
-	if err != nil || !collector.SnapshotGitEqual(provenance, rechecked) {
-		return snapshotCommandError(stdout, &snapshot.RuleError{Code: "snapshot_git_changed", Retryable: true})
+	if err := collector.RecheckSnapshotGit(repo, positionals[0], provenance); err != nil {
+		return snapshotCommandError(stdout, err)
 	}
 	message := optionalString(values["-m"])
 	result, err := c.CreateContextSnapshot(context.Background(), snapshot.CreateInput{Project: project, Name: positionals[0], Git: provenance, Message: message})

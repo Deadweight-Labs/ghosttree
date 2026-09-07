@@ -30,6 +30,13 @@ func RenderIndex(heads []snapshot.Head) []byte {
 			fmt.Fprintf(&b, " (`%s`)", markdownCode(*head.GitRef))
 		}
 		b.WriteByte('\n')
+		fmt.Fprintf(&b, "- Git source: %s\n", markdownText(head.GitMetadataSource))
+		fmt.Fprintf(&b, "- Schema: %d\n", head.SchemaVersion)
+		if head.SchemaVersion >= 3 {
+			b.WriteString("- Digest scope: metadata and entries\n")
+		} else {
+			b.WriteString("- Digest scope: entries only\n")
+		}
 		fmt.Fprintf(&b, "- Dirty: %s\n", yesNo(head.GitDirty))
 		fmt.Fprintf(&b, "- Digest: `%s`\n", head.ContentDigest.String())
 		fmt.Fprintf(&b, "- Counts: %s\n", renderCounts(head.Counts))

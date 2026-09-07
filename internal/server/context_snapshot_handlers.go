@@ -67,7 +67,8 @@ func (a *api) createContextSnapshot(w http.ResponseWriter, r *http.Request) {
 	}
 	if a.snapshotMirror != nil {
 		if err := a.snapshotMirror.Rebuild(r.Context(), input.Project); err != nil {
-			result.Warnings = append(result.Warnings, snapshot.Warning{Code: "snapshot_mirror_degraded", Message: err.Error()})
+			operationID := a.logSnapshotError(err)
+			result.Warnings = append(result.Warnings, snapshot.Warning{Code: "snapshot_mirror_degraded", Message: "snapshot committed; mirror rebuild failed (operation " + operationID + ")"})
 		}
 	}
 	response := struct {
@@ -204,6 +205,14 @@ func (a *api) writeSnapshotError(w http.ResponseWriter, err error) {
 			return
 		}
 	}
+	operationID := a.logSnapshotError(err)
+	writeSnapshotRuleError(w, http.StatusInternalServerError, &snapshot.RuleError{
+		Code: "snapshot_internal_error", Message: "internal snapshot operation failed",
+		Details: map[string]any{"operation_id": operationID},
+	})
+}
+
+func (a *api) logSnapshotError(err error) string {
 	operationID, generatorErr := a.operationIDGenerator()
 	if generatorErr != nil || operationID == "" {
 		if generatorErr == nil {
@@ -212,10 +221,7 @@ func (a *api) writeSnapshotError(w http.ResponseWriter, err error) {
 		operationID = fallbackOperationID()
 	}
 	a.snapshotErrorLogger(operationID, err, generatorErr)
-	writeSnapshotRuleError(w, http.StatusInternalServerError, &snapshot.RuleError{
-		Code: "snapshot_internal_error", Message: "internal snapshot operation failed",
-		Details: map[string]any{"operation_id": operationID},
-	})
+	return operationID
 }
 
 func writeSnapshotRuleError(w http.ResponseWriter, status int, rule *snapshot.RuleError) {

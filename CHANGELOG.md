@@ -8,7 +8,11 @@ Versioning, with pre-1.0 compatibility rules described in
 
 - Preserve schema-1/2 snapshots across upgrades and retries; verification now
   states whether the historical digest binds the metadata head.
-
+- Include tracked generated files and submodules in snapshot Git provenance,
+  preserve actual Git recheck errors, and accept ordinary dotted-date and draft
+  names. The metadata index displays the Git source and digest scope.
+- Reject impossible aggregate bounds in projected snapshot exports and return
+  mirror warnings with a logged operation ID instead of private server paths.
 - Add immutable named context snapshots spanning project Knowledge, Ghost
   files and reviews, document heads, and complete request details from one
   atomic SQLite view.

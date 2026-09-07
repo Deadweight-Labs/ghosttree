@@ -16,10 +16,16 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
-type failingSnapshotMirror struct{ calls int }
+type failingSnapshotMirror struct {
+	calls int
+	err   error
+}
 
 func (m *failingSnapshotMirror) Rebuild(context.Context, string) error {
 	m.calls++
+	if m.err != nil {
+		return m.err
+	}
 	return errors.New("disk unavailable")
 }
 
@@ -400,6 +406,82 @@ func TestContextSnapshotHTTPRejectsNonCanonicalReleaseLikeNames(t *testing.T) {
 	}
 }
 
+func TestContextSnapshotHTTPOrdinaryNamesCreateAndRetryWithoutReleaseGrant(t *testing.T) {
+	st, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	token, err := st.AddPerson("writer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetContextSnapshotAccess("writer", "p", true, true, false); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(New(st))
+	t.Cleanup(srv.Close)
+	git := snapshot.GitProvenance{ObjectFormat: "sha1", Commit: strings.Repeat("b", 40), MetadataSource: "client-reported"}
+	for _, name := range []string{"2026.08.31-baseline", "2026.08.31", "1.0-draft", "v2.0-plan"} {
+		t.Run(name, func(t *testing.T) {
+			input := snapshot.CreateInput{Project: "p", Name: name, Git: git}
+			for _, status := range []int{http.StatusCreated, http.StatusOK} {
+				response := req(t, http.MethodPost, srv.URL+"/api/context-snapshots", token, input)
+				body, err := io.ReadAll(response.Body)
+				response.Body.Close()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if response.StatusCode != status {
+					t.Fatalf("status=%d want=%d body=%s", response.StatusCode, status, body)
+				}
+			}
+		})
+	}
+}
+
+func TestContextSnapshotHTTPReadDenialCoversEveryReadShape(t *testing.T) {
+	st, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	token, err := st.AddPerson("reader")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetContextSnapshotAccess("reader", "p", false, false, false); err != nil {
+		t.Fatal(err)
+	}
+	input := snapshot.CreateInput{Project: "p", Name: "secret", ActorID: "person:1", Git: snapshot.GitProvenance{ObjectFormat: "sha1", Commit: strings.Repeat("a", 40), MetadataSource: "client-reported"}}
+	if _, err := st.CreateContextSnapshot(context.Background(), input, snapshot.DefaultLimits(), nil); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(New(st))
+	t.Cleanup(srv.Close)
+	for _, path := range []string{
+		"?project=p",
+		"/secret?project=p",
+		"/secret/entries?project=p",
+		"/secret/entries?project=p&domain=knowledge",
+		"/secret/entries?project=p&domain=knowledge&key=1",
+		"/missing?project=p",
+		"/missing/entries?project=p&key=invalid-without-domain",
+	} {
+		t.Run(path, func(t *testing.T) {
+			response := req(t, http.MethodGet, srv.URL+"/api/context-snapshots"+path, token, nil)
+			defer response.Body.Close()
+			var rule snapshot.RuleError
+			if err := json.NewDecoder(response.Body).Decode(&rule); err != nil {
+				t.Fatal(err)
+			}
+			if response.StatusCode != http.StatusForbidden || rule.Code != "snapshot_access_forbidden" {
+				t.Fatalf("status=%d rule=%+v", response.StatusCode, rule)
+			}
+		})
+	}
+}
+
 func TestContextSnapshotHTTPMirrorFailureIsWarningAfterCommit(t *testing.T) {
 	st, err := store.Open(":memory:")
 	if err != nil {
@@ -410,8 +492,10 @@ func TestContextSnapshotHTTPMirrorFailureIsWarningAfterCommit(t *testing.T) {
 	if err := st.SetContextSnapshotAccess("alice", "p", true, true, false); err != nil {
 		t.Fatal(err)
 	}
-	mirror := &failingSnapshotMirror{}
-	srv := httptest.NewServer(New(st, WithSnapshotMirror(mirror)))
+	mirror := &failingSnapshotMirror{err: errors.New("cannot write /srv/private-repository/.ghosttree/snapshots/INDEX.md")}
+	var loggedID string
+	var loggedErr error
+	srv := httptest.NewServer(New(st, WithSnapshotMirror(mirror), WithOperationIDGenerator(func() (string, error) { return "mirror-operation", nil }), withSnapshotErrorLogger(func(id string, err, generatorErr error) { loggedID, loggedErr = id, err })))
 	t.Cleanup(srv.Close)
 	in := snapshot.CreateInput{Project: "p", Name: "baseline", Git: snapshot.GitProvenance{ObjectFormat: "sha1", Commit: strings.Repeat("c", 40), MetadataSource: "client-reported"}}
 	resp := req(t, "POST", srv.URL+"/api/context-snapshots", token, in)
@@ -424,6 +508,9 @@ func TestContextSnapshotHTTPMirrorFailureIsWarningAfterCommit(t *testing.T) {
 	}
 	if mirror.calls != 1 || len(result.Warnings) != 1 || result.Warnings[0].Code != "snapshot_mirror_degraded" {
 		t.Fatalf("mirror=%d warnings=%+v", mirror.calls, result.Warnings)
+	}
+	if strings.Contains(result.Warnings[0].Message, "/srv/") || !strings.Contains(result.Warnings[0].Message, "mirror-operation") || loggedID != "mirror-operation" || !errors.Is(loggedErr, mirror.err) {
+		t.Fatalf("warning=%+v log=%s/%v", result.Warnings, loggedID, loggedErr)
 	}
 	if _, _, err := st.ContextSnapshot(context.Background(), "p", "baseline"); err != nil {
 		t.Fatalf("snapshot was not committed: %v", err)

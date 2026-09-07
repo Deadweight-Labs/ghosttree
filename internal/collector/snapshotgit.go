@@ -12,13 +12,14 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/ghost"
 	"github.com/Deadweight-Labs/ghosttree/internal/snapshot"
 )
 
 var releaseSnapshotName = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*))?(\+([0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*))?$`)
-var releaseLikeSnapshotName = regexp.MustCompile(`(?i)^v?[0-9]+(?:\.[0-9]+)+.*$`)
+var releaseLikeSnapshotName = regexp.MustCompile(`(?i)^v?(?:[0-9]+(?:\.[0-9]+){2,}.*|[0-9]+\.[0-9]+)$`)
 
 type SnapshotNameClass uint8
 
@@ -31,6 +32,11 @@ const (
 func ClassifySnapshotName(name string) SnapshotNameClass {
 	if releaseSnapshotName.MatchString(name) {
 		return SnapshotNameRelease
+	}
+	if len(name) >= 10 && (len(name) == 10 || name[10] == '-' || name[10] == '_') {
+		if _, err := time.Parse("2006.01.02", name[:10]); err == nil {
+			return SnapshotNameOrdinary
+		}
 	}
 	if releaseLikeSnapshotName.MatchString(name) {
 		return SnapshotNameInvalidReleaseLike
@@ -110,7 +116,10 @@ func ResolveSnapshotGit(repoRoot, name string, allowDirty bool) (snapshot.GitPro
 
 func RecheckSnapshotGit(repoRoot, name string, expected snapshot.GitProvenance) error {
 	current, err := ResolveSnapshotGit(repoRoot, name, true)
-	if err != nil || !sameSnapshotGit(current, expected) {
+	if err != nil {
+		return err
+	}
+	if !sameSnapshotGit(current, expected) {
 		return &snapshot.RuleError{Code: "snapshot_git_changed", Retryable: true}
 	}
 	return nil
@@ -157,7 +166,7 @@ func snapshotGitDirty(repoRoot string) (bool, error) {
 			pos = end + 1
 		}
 		for _, path := range paths {
-			if !ghost.IsFingerprintGeneratedPath(path) {
+			if record[0] != '?' || record[1] != '?' || !ghost.IsFingerprintGeneratedPath(path) {
 				return true, nil
 			}
 		}
@@ -185,8 +194,20 @@ func snapshotWorktreeManifest(repoRoot string) ([]byte, error) {
 		return nil, err
 	}
 	for _, record := range indexRecords {
-		if !ghost.IsFingerprintGeneratedPath(record.path) {
-			writeManifestRecord(&manifest, "index", record.path, record.data)
+		writeManifestRecord(&manifest, "index", record.path, record.data)
+	}
+	headRaw, err := gitBytes(repoRoot, "ls-tree", "-r", "-z", "HEAD")
+	if err != nil {
+		return nil, err
+	}
+	for _, record := range splitNullPaths(headRaw) {
+		metadata, path, ok := strings.Cut(record, "\t")
+		if !ok {
+			return nil, errors.New("invalid git tree record")
+		}
+		paths[path] = struct{}{}
+		if strings.HasPrefix(metadata, "160000 commit ") {
+			submodules[path] = struct{}{}
 		}
 	}
 
@@ -209,9 +230,7 @@ func snapshotWorktreeManifest(repoRoot string) ([]byte, error) {
 
 	orderedPaths := make([]string, 0, len(paths))
 	for path := range paths {
-		if !ghost.IsFingerprintGeneratedPath(path) {
-			orderedPaths = append(orderedPaths, path)
-		}
+		orderedPaths = append(orderedPaths, path)
 	}
 	sort.Slice(orderedPaths, func(i, j int) bool { return orderedPaths[i] < orderedPaths[j] })
 	for _, path := range orderedPaths {
@@ -224,9 +243,7 @@ func snapshotWorktreeManifest(repoRoot string) ([]byte, error) {
 
 	orderedSubmodules := make([]string, 0, len(submodules))
 	for path := range submodules {
-		if !ghost.IsFingerprintGeneratedPath(path) {
-			orderedSubmodules = append(orderedSubmodules, path)
-		}
+		orderedSubmodules = append(orderedSubmodules, path)
 	}
 	sort.Slice(orderedSubmodules, func(i, j int) bool { return orderedSubmodules[i] < orderedSubmodules[j] })
 	for _, path := range orderedSubmodules {

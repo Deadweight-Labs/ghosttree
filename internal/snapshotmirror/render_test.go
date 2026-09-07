@@ -54,3 +54,18 @@ func digest(b byte) snapshot.Digest {
 	}
 	return d
 }
+
+func TestRenderIndexStatesProvenanceAndLegacyDigestScope(t *testing.T) {
+	ref := "refs/tags/v1.2.3"
+	legacy := snapshot.Head{Name: "release-v1.2.3", SchemaVersion: 2, GitRef: &ref, GitMetadataSource: "client-reported"}
+	got := string(RenderIndex([]snapshot.Head{legacy}))
+	for _, want := range []string{"Git source: client-reported", "Schema: 2", "Digest scope: entries only"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in %s", want, got)
+		}
+	}
+	legacy.SchemaVersion = 3
+	if got := string(RenderIndex([]snapshot.Head{legacy})); !strings.Contains(got, "Digest scope: metadata and entries") {
+		t.Fatal(got)
+	}
+}
