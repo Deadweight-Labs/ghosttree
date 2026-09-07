@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -247,21 +248,54 @@ func snapshotWorktreeManifest(repoRoot string) ([]byte, error) {
 	}
 	sort.Slice(orderedSubmodules, func(i, j int) bool { return orderedSubmodules[i] < orderedSubmodules[j] })
 	for _, path := range orderedSubmodules {
-		data := []byte("unavailable")
 		subRoot := filepath.Join(repoRoot, filepath.FromSlash(path))
-		if head, headErr := gitOut(subRoot, "rev-parse", "--verify", "HEAD^{commit}"); headErr == nil {
-			nested, nestedErr := snapshotWorktreeManifest(subRoot)
-			if nestedErr != nil {
-				return nil, nestedErr
-			}
-			var framed bytes.Buffer
-			writeLengthBytes(&framed, []byte(strings.ToLower(head)))
-			writeLengthBytes(&framed, nested)
-			data = framed.Bytes()
+		data, err := snapshotSubmoduleRecord(subRoot)
+		if err != nil {
+			return nil, err
 		}
 		writeManifestRecord(&manifest, "submodule", path, data)
 	}
 	return manifest.Bytes(), nil
+}
+
+func snapshotSubmoduleRecord(root string) ([]byte, error) {
+	info, err := os.Lstat(root)
+	if errors.Is(err, os.ErrNotExist) || (err == nil && !info.IsDir()) {
+		return []byte("unavailable"), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if prefix, err := gitOut(root, "rev-parse", "--show-prefix"); err == nil && prefix == "" {
+		if head, err := gitOut(root, "rev-parse", "--verify", "HEAD^{commit}"); err == nil {
+			nested, err := snapshotWorktreeManifest(root)
+			if err != nil {
+				return nil, err
+			}
+			var framed bytes.Buffer
+			writeLengthBytes(&framed, []byte(strings.ToLower(head)))
+			writeLengthBytes(&framed, nested)
+			return framed.Bytes(), nil
+		}
+	}
+	var data bytes.Buffer
+	writeLengthBytes(&data, []byte("directory"))
+	err = filepath.WalkDir(root, func(path string, _ fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		record, err := worktreePathRecord(path)
+		if err != nil {
+			return err
+		}
+		writeManifestRecord(&data, "worktree", filepath.ToSlash(rel), record)
+		return nil
+	})
+	return data.Bytes(), err
 }
 
 func ignoredDocumentWorktreePaths(repoRoot string) ([]string, error) {
