@@ -37,8 +37,13 @@ func ContentDigest(head DigestHead, entries []EntrySummary) (Digest, error) {
 	})
 
 	digest := sha256.New()
-	digest.Write(contentDigestPrefix)
-	writeFramedBytes(digest, canonicalHead)
+	if head.SchemaVersion == 1 || head.SchemaVersion == 2 {
+		digest.Write([]byte("ghosttree-context-snapshot\x00"))
+		writeUint32(digest, head.SchemaVersion)
+	} else {
+		digest.Write(contentDigestPrefix)
+		writeFramedBytes(digest, canonicalHead)
+	}
 	for _, entry := range ordered {
 		writeFramedString(digest, entry.Domain)
 		writeFramedString(digest, entry.Key)

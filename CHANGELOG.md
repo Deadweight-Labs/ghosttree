@@ -6,6 +6,9 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Preserve schema-1/2 snapshots across upgrades and retries; verification now
+  states whether the historical digest binds the metadata head.
+
 - Add immutable named context snapshots spanning project Knowledge, Ghost
   files and reviews, document heads, and complete request details from one
   atomic SQLite view.

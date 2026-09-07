@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -101,7 +102,15 @@ func (s *Store) CreateContextSnapshot(ctx context.Context, in snapshot.CreateInp
 		}
 	}
 	if found {
-		if existing.SchemaVersion != schemaVersion || existing.ContentDigest != digest || !headMatchesGit(existing, in.Git) {
+		existingHeadBytes, err := contextSnapshotCanonicalHead(existing)
+		if err != nil {
+			return result, err
+		}
+		requestedHeadBytes, err := snapshot.MarshalCanonical(digestHead)
+		if err != nil {
+			return result, err
+		}
+		if existing.SchemaVersion != schemaVersion || existing.ContentDigest != digest || !headMatchesGit(existing, in.Git) || !bytes.Equal(existingHeadBytes, requestedHeadBytes) {
 			return result, &snapshot.RuleError{Code: "snapshot_name_conflict", ExistingDigest: existing.ContentDigest.String(), RequestedDigest: digest.String(), ExistingGitCommit: existing.GitCommit, RequestedGitCommit: in.Git.Commit}
 		}
 		headBytes, err := contextSnapshotCanonicalHead(existing)

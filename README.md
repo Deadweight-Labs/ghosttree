@@ -163,6 +163,13 @@ snapshot-wide digest. For remote creates, CLI and MCP observe Git locally just
 before the request and the server records the source as `client-reported`; the
 server does not have the checkout and cannot repeat that observation itself.
 
+Existing schema-1 and schema-2 snapshots remain readable and exportable with
+their original bytes and digests. Their historical digest covers entries, not
+the metadata head. Verification reports `Full: true` for a complete export and
+`HeadBound: false` for that older guarantee; full schema-3 verification reports
+`HeadBound: true`. Filtered exports always report `HeadBound: false` and no
+verified snapshot digest. New snapshots use schema 3.
+
 Sealed snapshots have no update, delete, or redaction API. Treat messages and
 all snapshotted context as permanent, keep secrets out, and use `show` before
 `export` so large historical payloads enter a tool or model context only when

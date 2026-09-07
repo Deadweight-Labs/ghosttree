@@ -429,10 +429,13 @@ func captureDocuments(ctx context.Context, q snapshotQueryer, project string, sc
 			return err
 		}
 		p.Person, p.RevisionPerson = actor(pid, pl), actor(rid, rl)
-		if schemaVersion != snapshot.SchemaVersion || p.ID <= 0 {
+		if schemaVersion < 1 || schemaVersion > snapshot.SchemaVersion || p.ID <= 0 {
 			return &snapshot.RuleError{Code: "snapshot_invalid_payload"}
 		}
 		key := fmt.Sprint(p.ID)
+		if schemaVersion == 1 {
+			key = p.Slug
+		}
 		if err := collector.add("document", key, func(w io.Writer) error {
 			return snapshot.WriteCanonical(w, p)
 		}); err != nil {

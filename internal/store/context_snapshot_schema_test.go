@@ -162,7 +162,14 @@ func seedV1SealedSnapshot(t *testing.T, db *sql.DB, corruptDigest bool) (int64, 
 			t.Fatal(err)
 		}
 	}
-	id := insertBuildingSnapshot(t, db, "legacy")
+	res, err := db.Exec(strings.Replace(snapshotHeadInsertSQL, "?,?,3,", "?,?,1,", 1), "p", "legacy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
 	payload := []byte(`{}`)
 	digest := snapshot.EntryDigest(payload)
 	storedDigest := digest[:]
@@ -174,18 +181,12 @@ func seedV1SealedSnapshot(t *testing.T, db *sql.DB, corruptDigest bool) (int64, 
 	}
 	summary := []snapshot.EntrySummary{{Domain: "ghost", Key: "file/a", PayloadDigest: digest, PayloadSize: int64(len(payload))}}
 	digestHead := snapshot.DigestHead{
-		Project: "p", Name: "legacy", SchemaVersion: snapshot.SchemaVersion,
+		Project: "p", Name: "legacy", SchemaVersion: 1,
 		Git:     snapshot.GitProvenance{ObjectFormat: "sha1", Commit: "0000000000000000000000000000000000000000", Branch: stringPointer("dev"), MetadataSource: "server-verified"},
 		ActorID: "actor", CreatedAt: "2026-08-29T00:00:00Z",
 	}
-	contentDigest, err := snapshot.ContentDigest(digestHead, summary)
-	if err != nil {
-		t.Fatal(err)
-	}
-	counts, err := snapshot.NewCounts(snapshot.SchemaVersion)
-	if err != nil {
-		t.Fatal(err)
-	}
+	contentDigest := legacyFixtureDigest(1, summary)
+	counts := map[string]int64{"document": 0, "ghost": 0, "ghost-review": 0, "knowledge": 0, "request": 0}
 	counts["ghost"] = 1
 	countsJSON, err := snapshot.MarshalCanonical(counts)
 	if err != nil {

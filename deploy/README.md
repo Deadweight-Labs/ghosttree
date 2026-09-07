@@ -139,6 +139,16 @@ server refuses startup if trigger definitions are stale, a committed
 the old binary and verified backup available until startup, health, snapshot
 create, export, and verify have all succeeded.
 
+Snapshots created by earlier development binaries using payload schema 1 or 2
+are preserved and readable. The database invariant upgrade may add derived
+logical-size metadata after verifying the historical entry digest; it does not
+change the sealed snapshot's identity, payload, creation time, or digest.
+The current binary creates schema 3 and reports `HeadBound: false` when
+verifying older snapshots because their digests did not bind provenance.
+Do not recreate or rehash historical snapshots to make them appear to carry
+the newer guarantee. Unsupported future schemas and actual corruption remain
+errors, rather than being silently omitted from listings.
+
 ## Session distillation
 
 Distillation is a separate timer because it calls a model provider and may cost

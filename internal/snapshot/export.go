@@ -19,6 +19,7 @@ type Verification struct {
 	SnapshotName string
 	EntryCount   int64
 	Full         bool
+	HeadBound    bool
 	Digest       *Digest
 }
 
@@ -79,7 +80,7 @@ func VerifyExport(src io.Reader) (Verification, error) {
 	if err := decoder.Decode(&envelope); err != nil {
 		return Verification{}, integrityError(err)
 	}
-	if envelope.ExportVersion != ExportVersion {
+	if envelope.ExportVersion != ExportVersion && !(envelope.ExportVersion == 1 && envelope.Snapshot.SchemaVersion >= 1 && envelope.Snapshot.SchemaVersion <= 2) {
 		return Verification{}, &RuleError{Code: "unsupported_snapshot_schema"}
 	}
 	head := headFromExportV2(envelope.Snapshot)
@@ -96,6 +97,7 @@ func VerifyExport(src io.Reader) (Verification, error) {
 	if verification.Full {
 		digest := head.ContentDigest
 		verification.Digest = &digest
+		verification.HeadBound = head.SchemaVersion >= 3
 	}
 	return verification, nil
 }
