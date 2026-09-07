@@ -4,6 +4,11 @@
 
     ctx migrate --dry-run <repo>
 
+This is a local inventory with document preflight checks. It needs no client or
+LLM configuration and makes no network calls or writes. It lists candidates,
+skipped Markdown files with reasons, and directory boundaries it did not inspect.
+It does not check previous migration records or preview distilled rule entries.
+
 Go through the candidates with the operator before writing anything. Then:
 
     ctx migrate <repo>
@@ -15,10 +20,13 @@ Cleaning up is a separate command, run separately, with its own consent:
 It only removes files whose migration provenance exists. Do not run it in the
 same breath as the migration itself, and never without asking.
 
-## Phase 1b: the files it does not see, which is most of them
+## Phase 1b: review exclusions and material outside the scan
 
-This is the part that matters, because the gap is invisible. `ctx migrate`
-reports success either way.
+Read the skipped-file and unscanned-boundary sections before treating migration
+as complete. The report names excluded dependency directories, managed
+`.ghosttree` state, embedded checkouts, and inaccessible paths without claiming
+to have inspected their contents. Symlinks and special-file candidates are not
+read. The same report appears before normal migration and cleanup.
 
 What its scanner actually covers:
 
@@ -35,13 +43,18 @@ than distilled into knowledge. For a file outside those scanner roots, use:
 Use `.ghosttree/edit/` for new work. These internal documents must not be
 committed; publish them with `ctx doc push` instead.
 
-What it therefore misses, and what you should go looking for by hand:
+Material to review separately:
 
 - a `README` with a gotchas, caveats or troubleshooting section
-- architecture decision records - `doc/adr/`, `docs/decisions/`, `adr/`
-- `NOTES.md`, `HACKING.md`, `CONTRIBUTING.md`, `docs/architecture.md`
+- architecture decision records outside `docs/`, such as `doc/adr/` and `adr/`
+- root-level `NOTES.md`, `HACKING.md`, and `CONTRIBUTING.md`
 - long comment blocks in the source that explain operations rather than code -
   deployment steps, a workaround and why, an ordering that must not change
+
+Files such as `docs/architecture.md`, `docs/ENGINEERING.md`, and
+`docs/qa/25-fixtures-and-gotchas.md` are already document candidates. Their
+contents are preserved; useful operational knowledge can still be extracted
+through the manual review below.
 
 Read them, propose entries, let the operator decide, write with
 `context_remember`. Only after that may the passages leave the repository, and

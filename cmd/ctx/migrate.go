@@ -24,8 +24,10 @@ import (
 
 const migrateUsage = `usage: ctx migrate [--dry-run|--clean] <repo>
 
-Distill repository agent artifacts into ghosttree. Cleanup is a separate,
-guarded operation and only removes files whose migration provenance exists.`
+Import documents and distill repository agent rules into ghosttree.
+--dry-run reports local candidates, skipped files and unscanned boundaries;
+it requires no client or LLM configuration and makes no network calls or writes.
+Cleanup is separate and only removes files whose migration provenance exists.`
 
 type migrationCandidate struct {
 	item       migrate.Item
@@ -37,7 +39,7 @@ type migrationCandidate struct {
 func cmdMigrate(args []string, stdout io.Writer) int {
 	fs := flag.NewFlagSet("migrate", flag.ContinueOnError)
 	fs.SetOutput(stdout)
-	dryRun := fs.Bool("dry-run", false, "show candidates without writing them")
+	dryRun := fs.Bool("dry-run", false, "inspect local selection without network, models or writes")
 	clean := fs.Bool("clean", false, "remove artifacts already proven migrated")
 	fs.Usage = func() { fmt.Fprintln(stdout, migrateUsage) }
 	rest, repoArg := splitLeadingOperand(args)
@@ -66,14 +68,20 @@ func cmdMigrate(args []string, stdout io.Writer) int {
 		fmt.Fprintln(stdout, "repository has no origin remote; cannot derive project scope")
 		return 1
 	}
-	artifacts, err := migrate.Scan(repo)
+	report, err := migrate.ScanWithReport(repo)
+	printMigrationScan(stdout, report)
 	if err != nil {
 		fmt.Fprintf(stdout, "scan failed: %v\n", err)
 		return 1
 	}
+	artifacts := report.Artifacts
 	if err := validateDocumentArtifacts(artifacts); err != nil {
 		fmt.Fprintf(stdout, "scan failed: %v\n", err)
 		return 1
+	}
+	if *dryRun {
+		fmt.Fprintln(stdout, "Dry run: local inventory only; migration history and rule distillation were not evaluated. No writes.")
+		return 0
 	}
 	cfg, err := config.Load()
 	if err != nil {
@@ -214,15 +222,12 @@ func cmdMigrate(args []string, stdout io.Writer) int {
 	for _, reason := range dropped {
 		fmt.Fprintf(stdout, "dropped: %s\n", reason)
 	}
-	if *dryRun {
-		return 0
-	}
 	runArtifacts := map[string]string{}
 	for _, a := range pendingArtifacts {
 		runArtifacts[a.Rel] = digests[a.Rel]
 	}
 	if len(runArtifacts) == 0 {
-		fmt.Fprintln(stdout, "all artifacts already migrated")
+		fmt.Fprintln(stdout, "all selected artifacts already migrated")
 		return 0
 	}
 	covered := map[string]bool{}
@@ -287,8 +292,28 @@ func cmdMigrate(args []string, stdout io.Writer) int {
 		fmt.Fprintf(stdout, "complete migration: %v\n", err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "migrated %d knowledge entries and %d documents from %d artifacts\n", len(candidates), len(documentArtifacts), len(artifacts))
+	fmt.Fprintf(stdout, "migrated %d knowledge entries and %d documents from %d pending artifacts; skipped files and unscanned boundaries are listed above\n", len(candidates), len(documentArtifacts), len(pendingArtifacts))
 	return 0
+}
+
+func printMigrationScan(stdout io.Writer, report migrate.ScanResult) {
+	fmt.Fprintf(stdout, "Migration scan: %d candidates, %d skipped files, %d unscanned boundaries\n", len(report.Artifacts), len(report.Skipped), len(report.Unscanned))
+	for _, a := range report.Artifacts {
+		if migrate.ShouldDistill(a) {
+			fmt.Fprintf(stdout, "candidate rules: %s\n", a.Rel)
+		} else {
+			fmt.Fprintf(stdout, "candidate document (%s): %s\n", a.Kind, a.Rel)
+		}
+	}
+	for _, e := range report.Skipped {
+		fmt.Fprintf(stdout, "skipped %s: %s\n", e.Rel, e.Reason)
+	}
+	for _, e := range report.Unscanned {
+		fmt.Fprintf(stdout, "unscanned %s: %s\n", e.Rel, e.Reason)
+	}
+	if len(report.Skipped)+len(report.Unscanned) > 0 {
+		fmt.Fprintln(stdout, "Review exclusions separately; use ctx doc import <file> --kind other for a selected document outside these roots.")
+	}
 }
 
 func migrationModel(needed bool) (llm.Client, error) {
