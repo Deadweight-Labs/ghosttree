@@ -37,6 +37,9 @@ type SessionHit struct {
 const sessionCols = `id, harness, external_id, project, branch, machine, cwd, started_at, last_seen_at`
 
 func (s *Store) UpsertSession(sess Session) (int64, error) {
+	if s.writer != nil {
+		return queueValue(s, []any{sess}, func(d *Store) (int64, error) { return d.UpsertSession(sess) })
+	}
 	if sess.StartedAt == "" {
 		sess.StartedAt = now()
 	}
@@ -53,10 +56,16 @@ func (s *Store) UpsertSession(sess Session) (int64, error) {
 }
 
 func (s *Store) AppendChunks(sessionID int64, chunks []Chunk) error {
+	if s.writer != nil {
+		return queueWrite(s, []any{sessionID, chunks}, func(d *Store) error { return d.AppendChunks(sessionID, chunks) })
+	}
 	return s.AppendChunkBatches([]ChunkBatch{{SessionID: sessionID, Chunks: chunks}})
 }
 
 func (s *Store) AppendChunkBatches(batches []ChunkBatch) error {
+	if s.writer != nil {
+		return queueWrite(s, []any{batches}, func(d *Store) error { return d.AppendChunkBatches(batches) })
+	}
 	if len(batches) == 0 {
 		return nil
 	}
