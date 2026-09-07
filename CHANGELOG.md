@@ -6,6 +6,9 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Make migration dry runs local and free of model calls. Report selected files,
+  skipped Markdown with reasons, and unscanned repository boundaries before
+  migration or cleanup.
 - Bound automatic hook context to 24,000 Unicode characters per session, with
   a visible cutoff notice and local output accounting in `ctx doctor`.
 - Add explicit archival of confirmed-deleted file descriptions, preserving

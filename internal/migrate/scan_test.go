@@ -3,10 +3,88 @@ package migrate
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
 )
+
+func TestScanReportExplainsSelectedSkippedAndUnscannedPaths(t *testing.T) {
+	repo := t.TempDir()
+	for _, rel := range []string{"CLAUDE.md", "docs/ENGINEERING.md", "docs/qa/25-fixtures-and-gotchas.md", "CONTRIBUTING.md", ".superpowers/progress.md", "vendor/pkg/README.md", ".ghosttree/edit/plans/example.md", "nested/.git", "nested/docs/hidden.md"} {
+		p := filepath.Join(repo, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("# content\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	outside := filepath.Join(t.TempDir(), "secret.md")
+	if err := os.WriteFile(outside, []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(repo, "docs", "linked.md")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Dir(outside), filepath.Join(repo, "linked-directory")); err != nil {
+		t.Fatal(err)
+	}
+	report, err := ScanWithReport(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected := map[string]string{}
+	for _, a := range report.Artifacts {
+		selected[a.Rel] = a.Kind
+	}
+	if len(selected) != 3 || selected["CLAUDE.md"] != "rules" || selected["docs/ENGINEERING.md"] != "other" || selected["docs/qa/25-fixtures-and-gotchas.md"] != "other" {
+		t.Fatalf("selected: %+v", selected)
+	}
+	skipped := map[string]string{}
+	for _, e := range report.Skipped {
+		skipped[e.Rel] = e.Reason
+	}
+	for _, rel := range []string{"CONTRIBUTING.md", ".superpowers/progress.md", "docs/linked.md"} {
+		if skipped[rel] == "" {
+			t.Errorf("missing reason for %s: %+v", rel, skipped)
+		}
+	}
+	if !strings.Contains(skipped["docs/linked.md"], "symbolic link") {
+		t.Errorf("symlink reason = %q", skipped["docs/linked.md"])
+	}
+	if len(skipped) != 3 {
+		t.Fatalf("unexpected skipped files: %+v", skipped)
+	}
+	boundaries := map[string]string{}
+	for _, e := range report.Unscanned {
+		boundaries[e.Rel] = e.Reason
+	}
+	for _, rel := range []string{"vendor", ".ghosttree", "nested", "linked-directory"} {
+		if boundaries[rel] == "" {
+			t.Errorf("unreported scan boundary %s: %+v", rel, boundaries)
+		}
+	}
+}
+
+func TestScanReportNamesUnreadableDirectories(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can read mode000 directories")
+	}
+	repo := t.TempDir()
+	locked := filepath.Join(repo, "locked")
+	if err := os.Mkdir(locked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o700) })
+	report, err := ScanWithReport(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Unscanned) != 1 || report.Unscanned[0].Rel != "locked" || !strings.Contains(report.Unscanned[0].Reason, "permission") {
+		t.Fatalf("unscanned: %+v", report.Unscanned)
+	}
+}
 
 func TestScanFindsArtifactsAndSkipsToolState(t *testing.T) {
 	repo := t.TempDir()
