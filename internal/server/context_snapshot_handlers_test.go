@@ -21,6 +21,26 @@ type failingSnapshotMirror struct {
 	err   error
 }
 
+func TestContextSnapshotBusyErrorCountsAsSQLiteBusy(t *testing.T) {
+	st, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	a := newAPI(st)
+	handler := a.telemetry(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		a.writeSnapshotError(w, &snapshot.RuleError{Code: "snapshot_store_busy", Retryable: true})
+	}))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/context-snapshots", nil))
+	if response.Code != http.StatusServiceUnavailable || response.Header().Get("Retry-After") != "1" {
+		t.Fatalf("status=%d headers=%v", response.Code, response.Header())
+	}
+	if got := a.metrics.snapshot().errors; got["sqlite_busy"] != 1 || got["server"] != 0 {
+		t.Fatalf("busy snapshot classified as %v", got)
+	}
+}
+
 func (m *failingSnapshotMirror) Rebuild(context.Context, string) error {
 	m.calls++
 	if m.err != nil {

@@ -72,6 +72,9 @@ func verifySQLite(ctx context.Context, st *store.Store, sessions, documents, mig
 			if revision.Digest != wantDigest {
 				return fmt.Errorf("document %s revision %d: digest got %s want %s", logical, index+1, revision.Digest, wantDigest)
 			}
+			if gotDigest := digest(revision.Body); gotDigest != wantDigest {
+				return fmt.Errorf("document %s revision %d: body digest got %s want %s", logical, index+1, gotDigest, wantDigest)
+			}
 		}
 	}
 	for logical, want := range expected.Migrations {
