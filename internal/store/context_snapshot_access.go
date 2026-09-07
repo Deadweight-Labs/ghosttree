@@ -96,9 +96,24 @@ func (s *Store) ContextSnapshotAccess(principalID, project string) (SnapshotAcce
 		FROM context_snapshot_access WHERE person_id=? AND project=?`, personID, project).
 		Scan(&access.Read, &access.Create, &access.ReleaseBind)
 	if err == sql.ErrNoRows {
-		return SnapshotAccess{}, nil
+		return defaultSnapshotAccess(), nil
 	}
 	return access, err
+}
+
+// defaultSnapshotAccess applies where no row was ever written. Reading and
+// creating are allowed, because a snapshot only contains data the person can
+// already read: ghost files, knowledge and requests carry no per-person ACL of
+// their own. A gate stricter than the access to the originals protects nothing
+// and only stops the feature from being used — which is exactly what happened:
+// snapshots shipped and stayed unreachable until someone wrote a row by hand
+// against the production database.
+//
+// release_bind stays off. Binding a snapshot to a release tag is the one
+// operation with an effect outside this person's own work, so it remains an
+// explicit grant.
+func defaultSnapshotAccess() SnapshotAccess {
+	return SnapshotAccess{Read: true, Create: true}
 }
 
 func (s *Store) PrincipalByName(name string) (Principal, bool) {

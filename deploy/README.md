@@ -42,6 +42,34 @@ portable logical-byte calculation.
 Do not bind directly to a public interface. Use a private network or a TLS
 reverse proxy with suitable access controls.
 
+### Audit logs and metrics
+
+Every non-probe API request emits one structured JSON `http_request` event to
+stderr, which systemd captures in journald for collection by Alloy/Loki. The
+event includes the actor, request ID, method, matched route, concrete path,
+remote IP, status, duration, byte counts, and a bounded error class. It never
+includes request or response bodies, query parameters, bearer tokens, or
+authorization headers. `/api/health` and `/metrics` are excluded from audit
+events.
+
+Prometheus metrics are available at `/metrics` without authentication so that
+vmagent can scrape them. This endpoint has the same network exposure as the
+server itself and must therefore remain restricted to the Tailnet or another
+trusted private network. HTTP metric labels are deliberately bounded to method,
+matched route, status, and error class; actor, request ID, remote IP, concrete
+path, project, and slug are never labels.
+
+Add this exact scrape job to the vmagent configuration when the Ghosttree
+Tailnet address is `100.96.254.9:8474`:
+
+```yaml
+  - job_name: ghosttree
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['100.96.254.9:8474']
+        labels: {site: home, host: apps}
+```
+
 ```bash
 make build-all
 scp dist/ctx-linux-amd64 deploy/ghosttree.service <host>:/tmp/
@@ -81,9 +109,10 @@ before restarting the server.
 ## Context snapshots
 
 Snapshot rows are immutable and have no ordinary deletion or redaction path.
-Before enabling creates, verify backup and restore procedures, choose finite
-budgets based on measured project sizes, and grant only the required project
-capabilities:
+Authenticated identities default to read and create access when no explicit
+project access row exists. Release binding defaults to denied. Verify backup
+and restore procedures and choose finite budgets based on measured project
+sizes. Set an explicit row to override the default for a person and project:
 
 ```bash
 sudo systemctl stop ghosttree
@@ -97,6 +126,8 @@ sudo systemctl start ghosttree
 
 Add `--release-bind` only when that identity must create SemVer release marks.
 Use the read-only `snapshot-access show` form to confirm the stored tuple.
+To revoke all access, run the write form with no `--read`, `--create`, or
+`--release-bind` flags; the explicit denial takes precedence over the default.
 
 The server can rebuild repository-local snapshot indexes only for explicitly
 mapped roots. Every mapping is repeatable, canonicalized by project, and must

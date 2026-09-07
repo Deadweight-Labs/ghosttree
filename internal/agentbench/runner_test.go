@@ -1,0 +1,182 @@
+package agentbench
+
+import (
+	"context"
+	"errors"
+	"path/filepath"
+	"slices"
+	"testing"
+	"time"
+)
+
+func pilotTask(id string) Task {
+	return Task{
+		ID: id, Repo: "NurProxy", Commit: "c", Prompt: "p", Category: CategoryLocalization,
+		Facts: []FactSlot{{ID: "s", Type: SlotString, Weight: 1, Accepted: []string{"x"}}},
+	}
+}
+
+func TestBlockOrderIsDeterministic(t *testing.T) {
+	arms := []ArmName{ArmClaudeNative, ArmGhosttree, ArmOracle}
+	first := blockOrder(7, 0, 1, arms)
+	again := blockOrder(7, 0, 1, arms)
+	if !slices.Equal(first, again) {
+		t.Fatalf("same seed must give the same order: %v vs %v", first, again)
+	}
+	if len(first) != len(arms) {
+		t.Fatalf("permutation lost arms: %v", first)
+	}
+	for _, arm := range arms {
+		if !slices.Contains(first, arm) {
+			t.Fatalf("permutation dropped %q: %v", arm, first)
+		}
+	}
+}
+
+func TestBlockOrderVariesAcrossBlocks(t *testing.T) {
+	arms := []ArmName{ArmClaudeNative, ArmGhosttree, ArmOracle}
+	base := blockOrder(7, 0, 1, arms)
+	varied := false
+	for i := 1; i < 20; i++ {
+		if !slices.Equal(base, blockOrder(7, i, 1, arms)) {
+			varied = true
+			break
+		}
+	}
+	if !varied {
+		t.Fatal("orders never vary across blocks; provider drift would favour one arm")
+	}
+}
+
+func TestBlockOrderDoesNotMutateTheInput(t *testing.T) {
+	arms := []ArmName{ArmClaudeNative, ArmGhosttree, ArmOracle}
+	original := slices.Clone(arms)
+	for i := 0; i < 20; i++ {
+		blockOrder(3, i, 1, arms)
+	}
+	if !slices.Equal(arms, original) {
+		t.Fatalf("blockOrder shuffled the caller's slice: %v", arms)
+	}
+}
+
+func TestRunRecordsAProductFailureWithoutAborting(t *testing.T) {
+	campaign := Campaign{
+		RepoCommit: "c", KnowledgeCutoff: time.Unix(1, 0).UTC(),
+		Arms: []ArmName{ArmGhosttree}, Repetitions: 1, Seed: 1,
+	}
+	agent := NewFakeAgent(nil) // liefert fuer jede Aufgabe einen Fehler
+	records, err := Run(context.Background(), campaign, []Task{pilotTask("t1")}, SameAgent(agent), nil)
+	if err != nil {
+		t.Fatalf("Run must not abort on a single failure: %v", err)
+	}
+	if len(records) != 1 || records[0].Failure != FailureProduct {
+		t.Fatalf("expected one product failure, got %+v", records)
+	}
+}
+
+func TestRunMarksAMissingFormAsScoringFailure(t *testing.T) {
+	campaign := Campaign{
+		RepoCommit: "c", KnowledgeCutoff: time.Unix(1, 0).UTC(),
+		Arms: []ArmName{ArmGhosttree}, Repetitions: 1, Seed: 1,
+	}
+	agent := NewFakeAgent(map[string]string{"t1": "ich habe gearbeitet, aber kein Formular"})
+	records, err := Run(context.Background(), campaign, []Task{pilotTask("t1")}, SameAgent(agent), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if records[0].Failure != FailureScoring {
+		t.Fatalf("a missing form is a scoring failure, got %q", records[0].Failure)
+	}
+}
+
+func TestRunProducesOneRecordPerBlockCell(t *testing.T) {
+	campaign := Campaign{
+		RepoCommit: "c", KnowledgeCutoff: time.Unix(1, 0).UTC(),
+		Arms: []ArmName{ArmClaudeNative, ArmGhosttree}, Repetitions: 3, Seed: 5,
+	}
+	tasks := []Task{pilotTask("t1"), pilotTask("t2")}
+	answer := "```agentbench-form\n{\"slots\":{\"s\":{\"string\":\"x\"}}}\n```"
+	agent := NewFakeAgent(map[string]string{"t1": answer, "t2": answer})
+
+	records, err := Run(context.Background(), campaign, tasks, SameAgent(agent), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 2*2*3 {
+		t.Fatalf("want 12 records (2 arms x 2 tasks x 3 repetitions), got %d", len(records))
+	}
+	for _, record := range records {
+		if record.Failure != FailureNone {
+			t.Fatalf("unexpected failure: %+v", record)
+		}
+		if record.Score.FactRecall != 1 {
+			t.Fatalf("scored run should be perfect: %+v", record.Score)
+		}
+	}
+}
+
+func TestRunRefusesACampaignThatFailsValidation(t *testing.T) {
+	campaign := Campaign{RepoCommit: "c"} // kein Cutoff
+	if _, err := Run(context.Background(), campaign, nil, SameAgent(NewFakeAgent(nil)), nil); err == nil {
+		t.Fatal("Run must refuse an invalid campaign instead of producing numbers")
+	}
+}
+
+func TestRunStopsWhenEveryOpeningRunFails(t *testing.T) {
+	campaign := Campaign{
+		RepoCommit: "c", KnowledgeCutoff: time.Unix(1, 0).UTC(),
+		Arms: []ArmName{ArmGhosttree}, Repetitions: 1, Seed: 1,
+	}
+	tasks := []Task{pilotTask("t1"), pilotTask("t2"), pilotTask("t3"),
+		pilotTask("t4"), pilotTask("t5")}
+	// Ein abgelaufener Zugang trifft jeden Lauf gleich; ohne Abbruch
+	// produziert die Kampagne denselben Fehler hundertfach.
+	agent := NewFakeAgent(nil)
+
+	records, err := Run(context.Background(), campaign, tasks, SameAgent(agent), nil)
+
+	if err == nil {
+		t.Fatal("a campaign whose every run fails must stop, not finish")
+	}
+	if len(records) != startupFailureLimit {
+		t.Fatalf("want %d records before the stop, got %d", startupFailureLimit, len(records))
+	}
+}
+
+func TestRunKeepsGoingOnceSomethingSucceeded(t *testing.T) {
+	campaign := Campaign{
+		RepoCommit: "c", KnowledgeCutoff: time.Unix(1, 0).UTC(),
+		Arms: []ArmName{ArmGhosttree}, Repetitions: 1, Seed: 1,
+	}
+	answer := "```agentbench-form\n{\"slots\":{\"s\":{\"string\":\"x\"}}}\n```"
+	// Nur die erste Aufgabe gelingt; danach scheitert alles. Das ist Datenlage,
+	// kein Grund zum Abbruch — sonst verloere man jede Kampagne, in der ein Arm
+	// systematisch nichts liefert.
+	agent := NewFakeAgent(map[string]string{"t1": answer})
+	tasks := []Task{pilotTask("t1"), pilotTask("t2"), pilotTask("t3"),
+		pilotTask("t4"), pilotTask("t5")}
+
+	records, err := Run(context.Background(), campaign, tasks, SameAgent(agent), nil)
+
+	if err != nil {
+		t.Fatalf("later failures are data, not an abort: %v", err)
+	}
+	if len(records) != len(tasks) {
+		t.Fatalf("want a record per task, got %d", len(records))
+	}
+}
+
+type failedTranscriptAgent struct{ path string }
+
+func (a failedTranscriptAgent) Run(context.Context, Invocation) (Transcript, error) {
+	return Transcript{RawPath: a.path, Turns: 4, ToolCalls: 3, AgentError: "provider disconnected"}, errors.New("exit status 1")
+}
+
+func TestRunOnePreservesTranscriptOnProcessError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "recorded.jsonl")
+	task := pilotTask("t1")
+	record := runOne(context.Background(), journalCampaign(ArmBare), task, ArmBare, 1, SameAgent(failedTranscriptAgent{path}))
+	if record.Transcript.RawPath != path {
+		t.Fatalf("attempted run lost transcript: %+v; resume sees unattempted=%v", record, unattempted(record))
+	}
+}

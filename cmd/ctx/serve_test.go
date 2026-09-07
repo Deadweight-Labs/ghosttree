@@ -4,17 +4,195 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/snapshot"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 	_ "modernc.org/sqlite"
 )
+
+func TestServerRootExposesMetricsOutsideAPIAndIncludesVersion(t *testing.T) {
+	st, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	root := buildServerHandler(st, serveConfig{SnapshotLimits: snapshot.DefaultLimits()}, io.Discard)
+	rr := httptest.NewRecorder()
+	root.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d", rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), `ghosttree_build_info{version="`+version+`"} 1`) {
+		t.Fatalf("body = %s", rr.Body.String())
+	}
+}
+
+func TestServerConcurrentTelemetrySmoke(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "ghosttree.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	token, err := st.AddPerson("smoke-actor")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var logs bytes.Buffer
+	srv := httptest.NewServer(buildServerHandler(st, serveConfig{SnapshotLimits: snapshot.DefaultLimits()}, &logs))
+	t.Cleanup(srv.Close)
+
+	const pairs = 8
+	const secret = "SMOKE_BODY_SECRET"
+	var wg sync.WaitGroup
+	errs := make(chan error, pairs*2)
+	for i := range pairs {
+		wg.Add(2)
+		go func(i int) {
+			defer wg.Done()
+			body, err := json.Marshal(map[string]any{
+				"project": "smoke", "path": "file-" + strconv.Itoa(i), "kind": "file",
+				"description": secret,
+			})
+			if err != nil {
+				errs <- err
+				return
+			}
+			req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/ghosts", bytes.NewReader(body))
+			if err != nil {
+				errs <- err
+				return
+			}
+			req.Header.Set("Authorization", "Bearer "+token)
+			resp, err := srv.Client().Do(req)
+			if err != nil {
+				errs <- err
+				return
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				errs <- fmt.Errorf("write %d status = %d", i, resp.StatusCode)
+			}
+		}(i)
+		go func() {
+			defer wg.Done()
+			req, err := http.NewRequest(http.MethodGet, srv.URL+"/api/whoami", nil)
+			if err != nil {
+				errs <- err
+				return
+			}
+			req.Header.Set("Authorization", "Bearer "+token)
+			resp, err := srv.Client().Do(req)
+			if err != nil {
+				errs <- err
+				return
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				errs <- fmt.Errorf("read status = %d", resp.StatusCode)
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Error(err)
+		}
+	}
+	if t.Failed() {
+		return
+	}
+
+	metricsResponse, err := srv.Client().Get(srv.URL + "/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer metricsResponse.Body.Close()
+	metricsBody, err := io.ReadAll(metricsResponse.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metricsResponse.StatusCode != http.StatusOK {
+		t.Fatalf("metrics status = %d", metricsResponse.StatusCode)
+	}
+	if got := sumPrometheusMetric(t, string(metricsBody), "ghosttree_http_requests_total"); got != pairs*2 {
+		t.Fatalf("request total = %d, want %d\n%s", got, pairs*2, metricsBody)
+	}
+	for _, name := range []string{"ghosttree_db_wait_count_total", "ghosttree_db_wait_duration_seconds_total"} {
+		if _, ok := prometheusScalar(t, string(metricsBody), name); !ok {
+			t.Fatalf("missing numeric metric %s\n%s", name, metricsBody)
+		}
+	}
+
+	lines := bytes.Split(bytes.TrimSpace(logs.Bytes()), []byte("\n"))
+	if len(lines) != pairs*2 {
+		t.Fatalf("audit lines = %d, want %d\n%s", len(lines), pairs*2, logs.String())
+	}
+	if bytes.Contains(logs.Bytes(), []byte(secret)) {
+		t.Fatalf("audit log leaked request body marker: %s", logs.String())
+	}
+	for _, line := range lines {
+		var event map[string]any
+		if err := json.Unmarshal(line, &event); err != nil {
+			t.Fatalf("invalid JSON audit line %q: %v", line, err)
+		}
+		if event["event"] != "http_request" {
+			t.Fatalf("unexpected audit event: %#v", event)
+		}
+	}
+}
+
+func sumPrometheusMetric(t *testing.T, body, name string) uint64 {
+	t.Helper()
+	var total uint64
+	for _, line := range strings.Split(body, "\n") {
+		if !strings.HasPrefix(line, name+"{") && !strings.HasPrefix(line, name+" ") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			t.Fatalf("invalid metric line %q", line)
+		}
+		value, err := strconv.ParseUint(fields[1], 10, 64)
+		if err != nil {
+			t.Fatalf("invalid counter %q: %v", line, err)
+		}
+		total += value
+	}
+	return total
+}
+
+func prometheusScalar(t *testing.T, body, name string) (float64, bool) {
+	t.Helper()
+	for _, line := range strings.Split(body, "\n") {
+		if !strings.HasPrefix(line, name+" ") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			t.Fatalf("invalid metric line %q", line)
+		}
+		value, err := strconv.ParseFloat(fields[1], 64)
+		if err != nil {
+			t.Fatalf("invalid scalar %q: %v", line, err)
+		}
+		return value, true
+	}
+	return 0, false
+}
 
 func TestServeSnapshotLimitsUseExactFiniteDefaults(t *testing.T) {
 	cfg, err := parseServeConfig(nil, &bytes.Buffer{})

@@ -6,6 +6,12 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Preserve agentbench failure transcripts and the append-only run journal;
+  recovery retains product failures and regrading counts each run once.
+  In-place regrading writes derived records to `regraded.jsonl`.
+- Allow authenticated users to read and create ordinary snapshots without a
+  manual project grant. Explicit denials remain effective; binding a release
+  name still requires its own grant.
 - Preserve schema-1/2 snapshots across upgrades and retries; verification now
   states whether the historical digest binds the metadata head.
 - Include tracked generated files and submodules in snapshot Git provenance,

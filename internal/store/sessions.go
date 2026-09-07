@@ -23,6 +23,11 @@ type Chunk struct {
 	Raw  string `json:"raw"`  // full redacted JSONL line
 }
 
+type ChunkBatch struct {
+	SessionID int64
+	Chunks    []Chunk
+}
+
 type SessionHit struct {
 	Session Session `json:"session"`
 	Seq     int     `json:"seq"`
@@ -48,23 +53,48 @@ func (s *Store) UpsertSession(sess Session) (int64, error) {
 }
 
 func (s *Store) AppendChunks(sessionID int64, chunks []Chunk) error {
+	return s.AppendChunkBatches([]ChunkBatch{{SessionID: sessionID, Chunks: chunks}})
+}
+
+func (s *Store) AppendChunkBatches(batches []ChunkBatch) error {
+	if len(batches) == 0 {
+		return nil
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	sessions := make(map[int64]struct{}, len(batches))
+	ts := now()
+	for _, batch := range batches {
+		if _, ok := sessions[batch.SessionID]; ok {
+			continue
+		}
+		result, err := tx.Exec(`UPDATE sessions SET last_seen_at = ? WHERE id = ?`, ts, batch.SessionID)
+		if err != nil {
+			return err
+		}
+		matched, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if matched == 0 {
+			return sql.ErrNoRows
+		}
+		sessions[batch.SessionID] = struct{}{}
+	}
 	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO session_chunks(session_id, seq, role, text, raw) VALUES(?,?,?,?,?)`)
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
-	for _, c := range chunks {
-		if _, err := stmt.Exec(sessionID, c.Seq, c.Role, c.Text, c.Raw); err != nil {
-			return err
+	for _, batch := range batches {
+		for _, c := range batch.Chunks {
+			if _, err := stmt.Exec(batch.SessionID, c.Seq, c.Role, c.Text, c.Raw); err != nil {
+				return err
+			}
 		}
-	}
-	if _, err := tx.Exec(`UPDATE sessions SET last_seen_at = ? WHERE id = ?`, now(), sessionID); err != nil {
-		return err
 	}
 	return tx.Commit()
 }

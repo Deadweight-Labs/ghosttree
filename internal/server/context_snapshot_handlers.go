@@ -225,6 +225,11 @@ func (a *api) logSnapshotError(err error) string {
 }
 
 func writeSnapshotRuleError(w http.ResponseWriter, status int, rule *snapshot.RuleError) {
+	class := classifyRequestError(status, "", rule.Error())
+	if rule.Code == "snapshot_store_busy" {
+		class = "sqlite_busy"
+	}
+	recordResponseError(w, class, rule.Error())
 	if rule.Retryable {
 		w.Header().Set("Retry-After", strconv.Itoa(1))
 	}

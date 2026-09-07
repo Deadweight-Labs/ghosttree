@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -49,13 +50,150 @@ func TestStoreSQLiteDSNPreservesMemoryPathsAndQueries(t *testing.T) {
 		path string
 		want string
 	}{
-		{":memory:", "file::memory:?_pragma=foreign_keys(1)&_pragma=recursive_triggers(1)"},
-		{"/tmp/ghosttree.db", "/tmp/ghosttree.db?_pragma=foreign_keys(1)&_pragma=recursive_triggers(1)"},
-		{"file:/tmp/ghosttree.db?mode=rwc&cache=private", "file:/tmp/ghosttree.db?mode=rwc&cache=private&_pragma=foreign_keys(1)&_pragma=recursive_triggers(1)"},
+		{":memory:", "file::memory:?_pragma=foreign_keys(1)&_pragma=recursive_triggers(1)&_pragma=busy_timeout(5000)&_pragma=synchronous(FULL)"},
+		{"/tmp/ghosttree.db", "/tmp/ghosttree.db?_pragma=foreign_keys(1)&_pragma=recursive_triggers(1)&_pragma=busy_timeout(5000)&_pragma=synchronous(FULL)"},
+		{"file:/tmp/ghosttree.db?mode=rwc&cache=private", "file:/tmp/ghosttree.db?mode=rwc&cache=private&_pragma=foreign_keys(1)&_pragma=recursive_triggers(1)&_pragma=busy_timeout(5000)&_pragma=synchronous(FULL)"},
 	} {
 		if got := storeSQLiteDSN(test.path); got != test.want {
 			t.Errorf("storeSQLiteDSN(%q) = %q, want %q", test.path, got, test.want)
 		}
+	}
+}
+
+func TestOpenWithOptionsAppliesEveryConnectionPragma(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ghosttree.db")
+	s, err := OpenWithOptions(path, OpenOptions{MaxOpenConns: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	if got := s.DB().Stats().MaxOpenConnections; got != 4 {
+		t.Fatalf("max = %d", got)
+	}
+	ctx := context.Background()
+	conns := make([]*sql.Conn, 0, 4)
+	for range 4 {
+		conn, err := s.DB().Conn(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		conns = append(conns, conn)
+	}
+	defer func() {
+		for _, conn := range conns {
+			_ = conn.Close()
+		}
+	}()
+	for i, conn := range conns {
+		var fk, recursive, busy, synchronous int
+		var journal string
+		if err := conn.QueryRowContext(ctx, `PRAGMA foreign_keys`).Scan(&fk); err != nil {
+			t.Fatal(err)
+		}
+		if err := conn.QueryRowContext(ctx, `PRAGMA recursive_triggers`).Scan(&recursive); err != nil {
+			t.Fatal(err)
+		}
+		if err := conn.QueryRowContext(ctx, `PRAGMA busy_timeout`).Scan(&busy); err != nil {
+			t.Fatal(err)
+		}
+		if err := conn.QueryRowContext(ctx, `PRAGMA synchronous`).Scan(&synchronous); err != nil {
+			t.Fatal(err)
+		}
+		if err := conn.QueryRowContext(ctx, `PRAGMA journal_mode`).Scan(&journal); err != nil {
+			t.Fatal(err)
+		}
+		if fk != 1 || recursive != 1 || busy != 5000 || synchronous != 2 || journal != "wal" {
+			t.Fatalf("conn %d: fk=%d recursive=%d busy=%d sync=%d journal=%s", i, fk, recursive, busy, synchronous, journal)
+		}
+	}
+}
+
+func TestOpenReadOnlyUsesBoundedPoolAndRejectsWrites(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ghosttree.db")
+	writable, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writable.PutGhostFile(GhostFile{Project: "bench", Path: "a.go", Description: "seed"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writable.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	readOnly, err := OpenReadOnly(path, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer readOnly.Close()
+	if got := readOnly.DB().Stats().MaxOpenConnections; got != 3 {
+		t.Fatalf("max = %d, want 3", got)
+	}
+	if _, err := readOnly.GhostFileByPath("bench", "a.go"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readOnly.PutGhostFile(GhostFile{Project: "bench", Path: "b.go"}); err == nil {
+		t.Fatal("write through read-only store succeeded")
+	}
+}
+
+func TestOpenReadOnlyRejectsInvalidConfiguration(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		path string
+		max  int
+	}{
+		{"memory", ":memory:", 1},
+		{"memory URI", "file::memory:", 1},
+		{"zero pool", filepath.Join(t.TempDir(), "ghosttree.db"), 0},
+		{"negative pool", filepath.Join(t.TempDir(), "ghosttree.db"), -1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := OpenReadOnly(test.path, test.max); err == nil {
+				t.Fatal("OpenReadOnly accepted invalid configuration")
+			}
+		})
+	}
+}
+
+func TestRuntimeStatsReportsPoolAndSQLiteFiles(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ghosttree.db")
+	s, err := OpenWithOptions(path, OpenOptions{MaxOpenConns: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	stats := s.RuntimeStats()
+	if stats.DB.MaxOpenConnections != 2 || stats.DatabaseBytes <= 0 {
+		t.Fatalf("stats = %+v", stats)
+	}
+}
+
+func TestRuntimeStatsForMemoryStoreHasNoFileSizes(t *testing.T) {
+	s, err := OpenWithOptions(":memory:", OpenOptions{MaxOpenConns: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	stats := s.RuntimeStats()
+	if stats.DB.MaxOpenConnections != 1 || stats.DatabaseBytes != 0 || stats.WALBytes != 0 || stats.SHMBytes != 0 {
+		t.Fatalf("stats = %+v", stats)
+	}
+}
+
+func TestOpenPinsMemoryModeURIWithoutFilesystemSideEffects(t *testing.T) {
+	filePath := filepath.Join(t.TempDir(), "shared-memory.db")
+	s, err := OpenWithOptions("file:"+filePath+"?mode=memory&cache=shared", OpenOptions{MaxOpenConns: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	stats := s.RuntimeStats()
+	if stats.DB.MaxOpenConnections != 1 || stats.DatabaseBytes != 0 || stats.WALBytes != 0 || stats.SHMBytes != 0 {
+		t.Fatalf("stats = %+v", stats)
+	}
+	if _, err := os.Stat(filePath); !os.IsNotExist(err) {
+		t.Fatalf("memory URI created %q: %v", filePath, err)
 	}
 }
 

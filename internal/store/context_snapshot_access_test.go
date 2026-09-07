@@ -39,9 +39,40 @@ func TestAuthenticatePrincipalUsesStablePersonID(t *testing.T) {
 	}
 }
 
-func TestContextSnapshotAccessDeniesByDefaultAndStoresCapabilities(t *testing.T) {
+// TestContextSnapshotAccessDefaultsToReadAndCreate locks the rule that a
+// project nobody has written a row for is usable. The previous default denied
+// everything, and the effect was that snapshots shipped and could not be used
+// at all until somebody edited the production database by hand.
+func TestContextSnapshotAccessDefaultsToReadAndCreate(t *testing.T) {
 	s := openTest(t)
 	if _, err := s.AddPerson("alice"); err != nil {
+		t.Fatal(err)
+	}
+
+	access, err := s.ContextSnapshotAccess("person:1", "never-configured")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !access.Read || !access.Create {
+		t.Fatalf("a project without a row must be usable: %#v", access)
+	}
+	// Release-Bind wirkt ueber die eigene Arbeit hinaus und bleibt eine
+	// ausdrueckliche Vergabe.
+	if access.ReleaseBind {
+		t.Fatalf("release-bind must never be granted by default: %#v", access)
+	}
+}
+
+// TestContextSnapshotAccessRevocationStillBites is the other half of the same
+// rule: if an explicit row could not take access away, the default would not
+// be a default but a hole.
+func TestContextSnapshotAccessRevocationStillBites(t *testing.T) {
+	s := openTest(t)
+	if _, err := s.AddPerson("alice"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.SetContextSnapshotAccess("alice", "project-a", false, false, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -50,7 +81,14 @@ func TestContextSnapshotAccessDeniesByDefaultAndStoresCapabilities(t *testing.T)
 		t.Fatal(err)
 	}
 	if access != (SnapshotAccess{}) {
-		t.Fatalf("missing row granted access: %#v", access)
+		t.Fatalf("an explicit denial must override the default: %#v", access)
+	}
+}
+
+func TestContextSnapshotAccessStoresCapabilities(t *testing.T) {
+	s := openTest(t)
+	if _, err := s.AddPerson("alice"); err != nil {
+		t.Fatal(err)
 	}
 
 	cases := []SnapshotAccess{
@@ -70,9 +108,14 @@ func TestContextSnapshotAccessDeniesByDefaultAndStoresCapabilities(t *testing.T)
 			t.Fatalf("access = %#v, want %#v", got, want)
 		}
 	}
+	// Die Vergabe gilt genau fuer ihr Projekt. Ein anderes Projekt faellt
+	// nicht auf die Vergabe zurueck, sondern auf den Default.
 	other, err := s.ContextSnapshotAccess("person:1", "project-b")
-	if err != nil || other != (SnapshotAccess{}) {
-		t.Fatalf("other project = %#v, %v", other, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other != defaultSnapshotAccess() {
+		t.Fatalf("another project must fall back to the default, got %#v", other)
 	}
 }
 
