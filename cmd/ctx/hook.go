@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/collector"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
 	"github.com/Deadweight-Labs/ghosttree/internal/ghost"
+	"github.com/Deadweight-Labs/ghosttree/internal/hookbudget"
 	"github.com/Deadweight-Labs/ghosttree/internal/hookstate"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -52,16 +54,17 @@ func cmdHookWith(stdin io.Reader, args []string, stdout io.Writer) int {
 		return 2
 	}
 	var out sessionStartOutput
+	var render func(io.Reader) string
 	switch eventArg {
 	case "session-start":
 		out.HookSpecificOutput.HookEventName = "SessionStart"
-		out.HookSpecificOutput.AdditionalContext = bootstrapContext(stdin)
+		render = bootstrapContext
 	case "user-prompt-submit":
 		out.HookSpecificOutput.HookEventName = "UserPromptSubmit"
-		out.HookSpecificOutput.AdditionalContext = relevantContext(stdin)
+		render = relevantContext
 	case "pre-tool-use":
 		out.HookSpecificOutput.HookEventName = "PreToolUse"
-		out.HookSpecificOutput.AdditionalContext = ghostContext(stdin)
+		render = ghostContext
 	default:
 		fmt.Fprintln(stdout, hookUsage)
 		return 2
@@ -69,7 +72,23 @@ func cmdHookWith(stdin io.Reader, args []string, stdout io.Writer) int {
 	if (*harness == "claude" || *harness == "codex") && os.Getenv("GHOSTTREE_HOOK_SYNTHETIC") != "1" {
 		_ = hookstate.Record(*harness, out.HookSpecificOutput.HookEventName)
 	}
-	json.NewEncoder(stdout).Encode(out)
+	var identity struct {
+		SessionID string `json:"session_id"`
+	}
+	raw, err := io.ReadAll(io.LimitReader(stdin, (4<<20)+1))
+	attempted := false
+	if err == nil && len(raw) <= 4<<20 && json.Unmarshal(raw, &identity) == nil &&
+		strings.TrimSpace(identity.SessionID) != "" && len(identity.SessionID) <= 4096 {
+		text := render(bytes.NewReader(raw))
+		_ = hookbudget.Deliver(identity.SessionID, text, func(bounded string) error {
+			out.HookSpecificOutput.AdditionalContext = bounded
+			attempted = true
+			return json.NewEncoder(stdout).Encode(out)
+		})
+	}
+	if !attempted {
+		json.NewEncoder(stdout).Encode(out)
+	}
 	return 0
 }
 
