@@ -178,15 +178,13 @@ func prepareDatabasePath(requested string, keep bool) (string, func() error, err
 		}
 		return "", nil, err
 	}
-	if err := file.Close(); err != nil {
-		_ = os.Remove(absolute)
-		return "", nil, err
-	}
-	owned, err := os.Lstat(absolute)
+	owned, err := file.Stat()
 	if err != nil {
+		_ = file.Close()
 		return "", nil, err
 	}
-	return absolute, func() error {
+	return absolute, func() (result error) {
+		defer func() { result = errors.Join(result, file.Close()) }()
 		if keep {
 			return nil
 		}
