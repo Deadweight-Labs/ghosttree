@@ -124,9 +124,11 @@ ctx doc import path/to/design.md --kind spec --slug storage-redesign --clean
 
 ### Marking a project-context state
 
-Snapshot access is denied until an operator grants it for the exact canonical
-project. Run the write command against the server database while the service is
-stopped or through the maintenance procedure documented in `deploy/`:
+Authenticated users can read and create ordinary snapshots when their exact
+canonical project has no explicit access row. An explicit row overrides that
+default, including a denial. Release binding always needs an explicit grant.
+Run access changes against the server database while the service is stopped
+or through the maintenance procedure documented in `deploy/`:
 
 ```bash
 ctx person snapshot-access <person-name> \
@@ -136,7 +138,9 @@ ctx person snapshot-access show <person-name> \
 ```
 
 Use `--release-bind` as well only for an identity that may bind release-style
-names such as `v1.2.3`. In a configured repository, the complete user command
+names such as `v1.2.3`. To deny all snapshot access, run the write command with
+the person, project, and database but omit all three capability flags.
+In a configured repository, the complete user command
 surface is:
 
 ```bash

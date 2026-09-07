@@ -109,9 +109,10 @@ before restarting the server.
 ## Context snapshots
 
 Snapshot rows are immutable and have no ordinary deletion or redaction path.
-Before enabling creates, verify backup and restore procedures, choose finite
-budgets based on measured project sizes, and grant only the required project
-capabilities:
+Authenticated identities default to read and create access when no explicit
+project access row exists. Release binding defaults to denied. Verify backup
+and restore procedures and choose finite budgets based on measured project
+sizes. Set an explicit row to override the default for a person and project:
 
 ```bash
 sudo systemctl stop ghosttree
@@ -125,6 +126,8 @@ sudo systemctl start ghosttree
 
 Add `--release-bind` only when that identity must create SemVer release marks.
 Use the read-only `snapshot-access show` form to confirm the stored tuple.
+To revoke all access, run the write form with no `--read`, `--create`, or
+`--release-bind` flags; the explicit denial takes precedence over the default.
 
 The server can rebuild repository-local snapshot indexes only for explicitly
 mapped roots. Every mapping is repeatable, canonicalized by project, and must

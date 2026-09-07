@@ -343,13 +343,16 @@ func TestContextSnapshotHTTPAccessFiltersAndTypedErrors(t *testing.T) {
 	}
 }
 
-func TestContextSnapshotHTTPCreateWithoutProjectGrantIsForbidden(t *testing.T) {
+func TestContextSnapshotHTTPExplicitlyDeniedCreateIsForbidden(t *testing.T) {
 	st, err := store.Open(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
 	token, _ := st.AddPerson("denied")
+	if err := st.SetContextSnapshotAccess("denied", "p", false, false, false); err != nil {
+		t.Fatal(err)
+	}
 	srv := httptest.NewServer(New(st))
 	t.Cleanup(srv.Close)
 	git := snapshot.GitProvenance{ObjectFormat: "sha1", Commit: strings.Repeat("d", 40), MetadataSource: "client-reported"}
@@ -371,6 +374,43 @@ func TestContextSnapshotHTTPCreateWithoutProjectGrantIsForbidden(t *testing.T) {
 	}
 	if heads != 0 {
 		t.Fatalf("forbidden create left %d heads", heads)
+	}
+}
+
+func TestContextSnapshotHTTPDefaultAccessAllowsOrdinarySnapshots(t *testing.T) {
+	st, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	token, err := st.AddPerson("reader")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(New(st))
+	t.Cleanup(srv.Close)
+	input := snapshot.CreateInput{Project: "p", Name: "checkpoint", Git: snapshot.GitProvenance{ObjectFormat: "sha1", Commit: strings.Repeat("a", 40), MetadataSource: "client-reported"}}
+	response := req(t, http.MethodPost, srv.URL+"/api/context-snapshots", token, input)
+	response.Body.Close()
+	if response.StatusCode != http.StatusCreated {
+		t.Fatalf("ordinary create status=%d", response.StatusCode)
+	}
+	for _, path := range []string{"?project=p", "/checkpoint?project=p", "/checkpoint/entries?project=p"} {
+		response := req(t, http.MethodGet, srv.URL+"/api/context-snapshots"+path, token, nil)
+		response.Body.Close()
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("read %s status=%d", path, response.StatusCode)
+		}
+	}
+	input.Name = "v1.2.3"
+	response = req(t, http.MethodPost, srv.URL+"/api/context-snapshots", token, input)
+	defer response.Body.Close()
+	var rule snapshot.RuleError
+	if err := json.NewDecoder(response.Body).Decode(&rule); err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusForbidden || rule.Code != "snapshot_release_binding_forbidden" {
+		t.Fatalf("release status=%d rule=%+v", response.StatusCode, rule)
 	}
 }
 
