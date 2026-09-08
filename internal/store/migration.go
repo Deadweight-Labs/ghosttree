@@ -9,6 +9,11 @@ import (
 )
 
 func (s *Store) BeginMigration(project string, artifacts map[string]string) (int64, error) {
+	if s.writer != nil {
+		return queueValue(s, []any{project, artifacts}, func(d *Store, p []any) (int64, error) {
+			return d.BeginMigration(p[0].(string), p[1].(map[string]string))
+		})
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return 0, err
@@ -88,6 +93,9 @@ func equalArtifacts(left, right map[string]string) bool {
 }
 
 func (s *Store) CompleteMigration(id int64) error {
+	if s.writer != nil {
+		return queueWrite(s, []any{id}, func(d *Store, p []any) error { return d.CompleteMigration(p[0].(int64)) })
+	}
 	var missing int
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM migration_artifacts a JOIN migration_runs r ON r.id=a.run_id
 		WHERE a.run_id=? AND NOT EXISTS (
@@ -116,6 +124,11 @@ func (s *Store) CompleteMigration(id int64) error {
 }
 
 func (s *Store) InsertDocumentMigration(runID int64, source, digest string, documentID int64, revision int) error {
+	if s.writer != nil {
+		return queueWrite(s, []any{runID, source, digest, documentID, revision}, func(d *Store, p []any) error {
+			return d.InsertDocumentMigration(p[0].(int64), p[1].(string), p[2].(string), p[3].(int64), p[4].(int))
+		})
+	}
 	res, err := s.db.Exec(`INSERT INTO migration_evidence(document_id,revision,run_id,source,digest,item_key)
 		SELECT d.id,dr.revision,r.id,a.path,a.digest,?
 		FROM migration_runs r
@@ -149,6 +162,9 @@ type MigratedDocument struct {
 func (s *Store) ImportDocument(in MigratedDocument) (Document, error) {
 	if Digest(in.Body) != in.Digest {
 		return Document{}, fmt.Errorf("document body does not match migration digest")
+	}
+	if s.writer != nil {
+		return queueValue(s, []any{in}, func(d *Store, p []any) (Document, error) { return d.ImportDocument(p[0].(MigratedDocument)) })
 	}
 	itemKey := "document-import:" + Digest(strings.Join([]string{in.Document.Project, in.Source, in.Digest}, "\x00"))
 	tx, err := s.db.Begin()
@@ -271,6 +287,9 @@ func (s *Store) MigrationEvidenceForKnowledge(id int64) (MigrationEvidence, erro
 // InsertMigrated atomically stores an entry, its source proof and its ledger
 // state. The stable item key makes retries after a partial run idempotent.
 func (s *Store) InsertMigrated(in MigratedEntry) (MigratedResult, error) {
+	if s.writer != nil {
+		return queueValue(s, []any{in}, func(d *Store, p []any) (MigratedResult, error) { return d.InsertMigrated(p[0].(MigratedEntry)) })
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return MigratedResult{}, err

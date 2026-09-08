@@ -47,6 +47,11 @@ func Digest(body string) string {
 }
 
 func (s *Store) CreateDocument(d Document, body, message string) (Document, error) {
+	if s.writer != nil {
+		return queueValue(s, []any{d, body, message}, func(direct *Store, p []any) (Document, error) {
+			return direct.CreateDocument(p[0].(Document), p[1].(string), p[2].(string))
+		})
+	}
 	ts := now()
 	if d.Status == "" {
 		d.Status = "active"
@@ -80,6 +85,11 @@ func (s *Store) CreateDocument(d Document, body, message string) (Document, erro
 // scheitert, und der Kopf zeigt fortan auf eine Revision, die niemand lesen
 // kann.
 func (s *Store) PushRevision(id int64, base int, body, message, person string) (Document, error) {
+	if s.writer != nil {
+		return queueValue(s, []any{id, base, body, message, person}, func(d *Store, p []any) (Document, error) {
+			return d.PushRevision(p[0].(int64), p[1].(int), p[2].(string), p[3].(string), p[4].(string))
+		})
+	}
 	ts := now()
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -214,6 +224,9 @@ func (s *Store) PatchDocument(id int64, patch map[string]string) error {
 	}
 	if len(sets) == 0 {
 		return nil
+	}
+	if s.writer != nil {
+		return queueWrite(s, []any{id, patch}, func(d *Store, p []any) error { return d.PatchDocument(p[0].(int64), p[1].(map[string]string)) })
 	}
 	sets = append(sets, "updated_at=?")
 	args = append(args, now(), id)
