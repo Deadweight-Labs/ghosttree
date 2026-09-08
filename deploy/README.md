@@ -17,6 +17,13 @@ create `/etc/ghosttree/server.env` before starting it:
 GHOSTTREE_LISTEN=<private-address>:8474
 ```
 
+Use the server's address on the trusted private network, such as NetBird, in
+the listen setting, client configuration and monitoring target. After changing
+the client URL, restart the collector and reconnect running MCP servers: they
+read the configuration when the process starts. Verify health from a client on
+that network; a probe of the server's own VPN address can be subject to different
+network policies.
+
 The sample unit also sets every snapshot resource limit to a finite default.
 `server.env` may lower or raise these values for a measured deployment, but no
 value may be zero or negative:
@@ -54,19 +61,19 @@ events.
 
 Prometheus metrics are available at `/metrics` without authentication so that
 vmagent can scrape them. This endpoint has the same network exposure as the
-server itself and must therefore remain restricted to the Tailnet or another
-trusted private network. HTTP metric labels are deliberately bounded to method,
+server itself and must therefore remain restricted to a trusted private network.
+HTTP metric labels are deliberately bounded to method,
 matched route, status, and error class; actor, request ID, remote IP, concrete
 path, project, and slug are never labels.
 
-Add this exact scrape job to the vmagent configuration when the Ghosttree
-Tailnet address is `100.96.254.9:8474`:
+Add a scrape job to vmagent using the same private address. The monitoring host
+needs network access to the server's TCP port 8474:
 
 ```yaml
   - job_name: ghosttree
     metrics_path: /metrics
     static_configs:
-      - targets: ['100.96.254.9:8474']
+      - targets: ['<private-address>:8474']
         labels: {site: home, host: apps}
 ```
 
