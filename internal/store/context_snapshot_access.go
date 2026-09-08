@@ -90,6 +90,9 @@ func (s *Store) SetContextSnapshotAccess(person, project string, read, create, r
 }
 
 func (s *Store) ContextSnapshotAccess(principalID, project string) (SnapshotAccess, error) {
+	if s.reader != nil {
+		return s.reader.ContextSnapshotAccess(principalID, project)
+	}
 	personID, err := parsePersonPrincipalID(principalID)
 	if err != nil {
 		return SnapshotAccess{}, err
@@ -124,6 +127,9 @@ func defaultSnapshotAccess() SnapshotAccess {
 }
 
 func (s *Store) PrincipalByName(name string) (Principal, bool) {
+	if s.reader != nil {
+		return s.reader.PrincipalByName(name)
+	}
 	var id int64
 	var label string
 	err := s.db.QueryRow(`SELECT id, name FROM persons WHERE name=?`, strings.TrimSpace(name)).Scan(&id, &label)

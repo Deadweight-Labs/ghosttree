@@ -40,6 +40,46 @@ func TestRuntimeGhostMutationsUseAdmission(t *testing.T) {
 			if err := s.db.QueryRow("SELECT (SELECT COUNT(*) FROM ghost_deliveries)+(SELECT COUNT(*) FROM ghost_reviews)+(SELECT COUNT(*) FROM ghost_file_versions)").Scan(&n); err != nil || n != 0 {
 				t.Fatalf("rejected side effects=%d err=%v", n, err)
 			}
+			switch op {
+			case "put":
+				_, err = s.PutGhostFile(GhostFile{Project: "p", Path: "old.go", Description: "accepted"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				g, err := s.GhostFileByPath("p", "old.go")
+				if err != nil || g.Description != "accepted" {
+					t.Fatalf("put result: %+v %v", g, err)
+				}
+				return
+			case "move":
+				if err := s.MoveGhostFile("p", "old.go", "new.go"); err != nil {
+					t.Fatal(err)
+				}
+				g, err := s.GhostFileByPath("p", "new.go")
+				if err != nil || g.Description != original.Description {
+					t.Fatalf("move result: %+v %v", g, err)
+				}
+				return
+			case "delivery":
+				gs, err := s.GhostFilesForDelivery("p", "old.go", "session")
+				if err != nil || len(gs) != 1 {
+					t.Fatalf("delivery result: %+v %v", gs, err)
+				}
+				gs, err = s.GhostFilesForDelivery("p", "old.go", "session")
+				if err != nil || len(gs) != 0 {
+					t.Fatalf("delivery retry: %+v %v", gs, err)
+				}
+				return
+			case "review":
+				if err := s.PutGhostReview(GhostReview{Project: "p", Path: "old.go", GitBlob: "blob"}); err != nil {
+					t.Fatal(err)
+				}
+				rs, err := s.GhostReviewsUnder("p", "")
+				if err != nil || len(rs) != 1 || rs[0].GitBlob != "blob" {
+					t.Fatalf("review result: %+v %v", rs, err)
+				}
+				return
+			}
 			out, err := s.ArchiveGhostFiles(in)
 			if err != nil || len(out.Archived) != 1 {
 				t.Fatalf("archive after release: %+v %v", out, err)

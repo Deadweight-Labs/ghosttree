@@ -10,6 +10,9 @@ import (
 // of what it returns was never a deliberate choice — it is the branch whichever
 // session happened to write the entry was standing on.
 func (s *Store) BranchBoundKnowledge() ([]Knowledge, error) {
+	if s.reader != nil {
+		return s.reader.BranchBoundKnowledge()
+	}
 	rows, err := s.db.Query(`SELECT ` + knowledgeCols + ` FROM knowledge
 		WHERE status = 'active' AND branch != ''
 		ORDER BY project, branch, id`)

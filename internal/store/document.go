@@ -136,10 +136,16 @@ func scanDocument(row interface{ Scan(...any) error }) (Document, error) {
 }
 
 func (s *Store) DocumentByID(id int64) (Document, error) {
+	if s.reader != nil {
+		return s.reader.DocumentByID(id)
+	}
 	return scanDocument(s.db.QueryRow(`SELECT `+documentColumns+` FROM documents WHERE id=?`, id))
 }
 
 func (s *Store) DocumentRevision(id int64, revision int) (DocumentRevision, error) {
+	if s.reader != nil {
+		return s.reader.DocumentRevision(id, revision)
+	}
 	var r DocumentRevision
 	err := s.db.QueryRow(`SELECT id,document_id,revision,body,digest,message,person,created_at
 		FROM document_revisions WHERE document_id=? AND revision=?`, id, revision).
@@ -148,11 +154,17 @@ func (s *Store) DocumentRevision(id int64, revision int) (DocumentRevision, erro
 }
 
 func (s *Store) DocumentBySlug(project, slug string) (Document, error) {
+	if s.reader != nil {
+		return s.reader.DocumentBySlug(project, slug)
+	}
 	return scanDocument(s.db.QueryRow(`SELECT `+documentColumns+`
 		FROM documents WHERE project=? AND slug=?`, project, slug))
 }
 
 func (s *Store) Documents(project, kind string, includeArchived bool) ([]Document, error) {
+	if s.reader != nil {
+		return s.reader.Documents(project, kind, includeArchived)
+	}
 	q := `SELECT ` + documentColumns + ` FROM documents WHERE project=?`
 	args := []any{project}
 	if kind != "" {
@@ -183,6 +195,9 @@ func (s *Store) Documents(project, kind string, includeArchived bool) ([]Documen
 // Fassungen soll nicht zwanzig Dokumente in den Speicher ziehen. Wer den Text
 // einer Fassung braucht, holt sie mit DocumentRevision einzeln.
 func (s *Store) DocumentRevisions(id int64) ([]DocumentRevision, error) {
+	if s.reader != nil {
+		return s.reader.DocumentRevisions(id)
+	}
 	rows, err := s.db.Query(`SELECT id,document_id,revision,digest,message,person,created_at
 		FROM document_revisions WHERE document_id=? ORDER BY revision DESC`, id)
 	if err != nil {

@@ -48,6 +48,9 @@ func archiveGhostFileTx(tx *sql.Tx, project, path, at, reason string) error {
 // GhostFileHistory liefert die abgelösten Fassungen eines Pfades, neueste
 // zuerst. limit <= 0 heisst: alle.
 func (s *Store) GhostFileHistory(project, path string, limit int) ([]GhostVersion, error) {
+	if s.reader != nil {
+		return s.reader.GhostFileHistory(project, path, limit)
+	}
 	query := `SELECT ` + versionCols + ` FROM ghost_file_versions
 		WHERE project=? AND path=? ORDER BY replaced_at DESC, id DESC`
 	args := []any{project, path}
@@ -83,6 +86,9 @@ func (s *Store) GhostFileHistory(project, path string, limit int) ([]GhostVersio
 // Ein unbeschriebener Pfad hat eine leere Kette und keinen Fehler: das ist eine
 // Antwort und keine Störung.
 func (s *Store) GhostFileChain(project, path string, limit int) ([]GhostVersion, error) {
+	if s.reader != nil {
+		return s.reader.GhostFileChain(project, path, limit)
+	}
 	hist, err := s.GhostFileHistory(project, path, limit)
 	if err != nil {
 		return nil, err
@@ -107,6 +113,9 @@ func (s *Store) GhostFileChain(project, path string, limit int) ([]GhostVersion,
 // nur, DASS es Vorfassungen gibt — den Text dorthin zu kippen wäre genau das
 // Kontextrauschen, gegen das die Entdopplung antritt.
 func (s *Store) GhostHistoryCount(project, path string) (int, error) {
+	if s.reader != nil {
+		return s.reader.GhostHistoryCount(project, path)
+	}
 	var n int
 	err := s.db.QueryRow(`SELECT COUNT(*) FROM ghost_file_versions WHERE project=? AND path=?`,
 		project, path).Scan(&n)

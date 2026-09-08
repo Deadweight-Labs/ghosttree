@@ -42,6 +42,9 @@ func (s *Store) bumpUsage(ks []Knowledge, extra string) {
 // KnowledgeUsage reports how often one entry has been delivered or hit, and
 // when that last happened.
 func (s *Store) KnowledgeUsage(id int64) (hits int, lastUsed string, err error) {
+	if s.reader != nil {
+		return s.reader.KnowledgeUsage(id)
+	}
 	err = s.db.QueryRow(`SELECT hit_count, last_used_at FROM knowledge WHERE id = ?`, id).Scan(&hits, &lastUsed)
 	return hits, lastUsed, err
 }
@@ -50,6 +53,9 @@ func (s *Store) KnowledgeUsage(id int64) (hits int, lastUsed string, err error) 
 // used before the cutoff — the entries a usage-based staleness rule would act
 // on, and the ones a ranked bootstrap would drop first.
 func (s *Store) KnowledgeUnusedSince(cutoff string) ([]Knowledge, error) {
+	if s.reader != nil {
+		return s.reader.KnowledgeUnusedSince(cutoff)
+	}
 	rows, err := s.db.Query(`SELECT `+knowledgeCols+` FROM knowledge
 		WHERE status = 'active' AND (last_used_at = '' OR last_used_at < ?)
 		ORDER BY hit_count ASC, last_used_at ASC, id ASC`, cutoff)

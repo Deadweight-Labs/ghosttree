@@ -31,11 +31,17 @@ func (s *Store) AddPerson(name string) (string, error) {
 }
 
 func (s *Store) Authenticate(token string) (string, bool) {
+	if s.reader != nil {
+		return s.reader.Authenticate(token)
+	}
 	principal, ok := s.AuthenticatePrincipal(token)
 	return principal.Label, ok
 }
 
 func (s *Store) AuthenticatePrincipal(token string) (Principal, bool) {
+	if s.reader != nil {
+		return s.reader.AuthenticatePrincipal(token)
+	}
 	sum := sha256.Sum256([]byte(token))
 	var id int64
 	var name string

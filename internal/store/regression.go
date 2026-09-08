@@ -63,6 +63,9 @@ func validRegressionState(state string) bool {
 // Beiwerk: ohne sie liest sich eine kurze Lückenliste als Entwarnung, während
 // der Bestand in Wahrheit grösstenteils unangesehen ist.
 func (s *Store) RegressionGaps(ax scope.Axes) ([]Knowledge, int, error) {
+	if s.reader != nil {
+		return s.reader.RegressionGaps(ax)
+	}
 	where, args := ax.UnionWhere()
 	rows, err := s.db.Query(`SELECT id,type,title,body,project,branch,machine,confidence,status,origin,
 		person,confirmed_by,last_modified_by,harness,session_ref,observed_at,

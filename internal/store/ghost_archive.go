@@ -51,6 +51,9 @@ type GhostArchiveCandidate struct {
 }
 
 func (s *Store) PrepareGhostArchive(project, path string) (GhostArchiveCandidate, error) {
+	if s.reader != nil {
+		return s.reader.PrepareGhostArchive(project, path)
+	}
 	if strings.TrimSpace(project) == "" {
 		return GhostArchiveCandidate{}, ErrGhostArchiveInvalid
 	}

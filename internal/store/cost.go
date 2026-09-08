@@ -34,6 +34,9 @@ type CostRow struct {
 // as a free session would understate the per-session average and with it every
 // forecast built on it.
 func (s *Store) DistillCost(groupBy, since string) ([]CostRow, error) {
+	if s.reader != nil {
+		return s.reader.DistillCost(groupBy, since)
+	}
 	group := ""
 	switch groupBy {
 	case "":
@@ -80,6 +83,9 @@ func (s *Store) DistillCost(groupBy, since string) ([]CostRow, error) {
 // itself — no project means no distillation, so such a session must not appear
 // in a forecast of what the backlog will cost.
 func (s *Store) PendingDistillationSize(filter scope.Axes, idleBefore string) (sessions, chars int, err error) {
+	if s.reader != nil {
+		return s.reader.PendingDistillationSize(filter, idleBefore)
+	}
 	where, args := filter.FilterWhere()
 	args = append(args, idleBefore)
 	err = s.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(size),0) FROM (
@@ -98,6 +104,9 @@ func (s *Store) PendingDistillationSize(filter scope.Axes, idleBefore string) (s
 // characters-per-token ratio for this corpus — which is what a forecast needs.
 // The pre-flight estimator is deliberately pessimistic and would overstate it.
 func (s *Store) BilledTranscriptChars(since string) (int, error) {
+	if s.reader != nil {
+		return s.reader.BilledTranscriptChars(since)
+	}
 	var chars int
 	err := s.db.QueryRow(`SELECT COALESCE(SUM(size),0) FROM (
 		SELECT (SELECT COALESCE(SUM(length(c.text)),0) FROM session_chunks c WHERE c.session_id = i.session_id) AS size

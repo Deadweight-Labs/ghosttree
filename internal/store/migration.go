@@ -219,6 +219,9 @@ func (s *Store) ImportDocument(in MigratedDocument) (Document, error) {
 }
 
 func (s *Store) CompletedDocumentArtifacts(project string) (map[string][]string, error) {
+	if s.reader != nil {
+		return s.reader.CompletedDocumentArtifacts(project)
+	}
 	rows, err := s.db.Query(`SELECT e.source,e.digest
 		FROM migration_evidence e
 		JOIN migration_runs r ON r.id=e.run_id
@@ -241,6 +244,9 @@ func (s *Store) CompletedDocumentArtifacts(project string) (map[string][]string,
 }
 
 func (s *Store) CompletedMigrationArtifacts(project string) (map[string][]string, error) {
+	if s.reader != nil {
+		return s.reader.CompletedMigrationArtifacts(project)
+	}
 	rows, err := s.db.Query(`SELECT a.path,a.digest FROM migration_artifacts a JOIN migration_runs r ON r.id=a.run_id WHERE r.project=? AND r.state='complete'`, project)
 	if err != nil {
 		return nil, err
@@ -278,6 +284,9 @@ type MigrationEvidence struct {
 }
 
 func (s *Store) MigrationEvidenceForKnowledge(id int64) (MigrationEvidence, error) {
+	if s.reader != nil {
+		return s.reader.MigrationEvidenceForKnowledge(id)
+	}
 	var proof MigrationEvidence
 	err := s.db.QueryRow(`SELECT run_id,source,digest,item_key,quote FROM migration_evidence WHERE knowledge_id=?`, id).
 		Scan(&proof.RunID, &proof.Source, &proof.Digest, &proof.ItemKey, &proof.Quote)

@@ -114,6 +114,9 @@ func (s *Store) AppendChunkBatches(batches []ChunkBatch) error {
 }
 
 func (s *Store) ListSessions(filter scope.Axes, limit int) ([]Session, error) {
+	if s.reader != nil {
+		return s.reader.ListSessions(filter, limit)
+	}
 	if limit <= 0 {
 		limit = 50
 	}
@@ -139,6 +142,9 @@ func (s *Store) ListSessions(filter scope.Axes, limit int) ([]Session, error) {
 // read the same transcripts for different things, and the first to run would
 // take the whole archive off the second one's queue.
 func (s *Store) SessionsPendingDistillation(filter scope.Axes, idleBefore, promptVersion string, limit int) ([]Session, error) {
+	if s.reader != nil {
+		return s.reader.SessionsPendingDistillation(filter, idleBefore, promptVersion, limit)
+	}
 	if limit <= 0 {
 		limit = 50
 	}
@@ -169,6 +175,9 @@ func (s *Store) SessionsPendingDistillation(filter scope.Axes, idleBefore, promp
 // scope that was re-canonicalized in the meantime should file the result under
 // the corrected project, not the one that was current at submission time.
 func (s *Store) SessionByID(id int64) (Session, error) {
+	if s.reader != nil {
+		return s.reader.SessionByID(id)
+	}
 	rows, err := s.db.Query(`SELECT `+sessionCols+` FROM sessions WHERE id = ?`, id)
 	if err != nil {
 		return Session{}, err
@@ -184,6 +193,9 @@ func (s *Store) SessionByID(id int64) (Session, error) {
 }
 
 func (s *Store) ReadSession(id int64, fromSeq, limit int) ([]Chunk, error) {
+	if s.reader != nil {
+		return s.reader.ReadSession(id, fromSeq, limit)
+	}
 	if limit <= 0 {
 		limit = 200
 	}
@@ -208,6 +220,9 @@ func (s *Store) ReadSession(id int64, fromSeq, limit int) ([]Chunk, error) {
 // Deliberately unpaginated: it reconstructs the original transcript, and a
 // partial transcript is not an archive.
 func (s *Store) SessionRaw(id int64) ([]string, error) {
+	if s.reader != nil {
+		return s.reader.SessionRaw(id)
+	}
 	rows, err := s.db.Query(`SELECT raw FROM session_chunks WHERE session_id = ? ORDER BY seq`, id)
 	if err != nil {
 		return nil, err
@@ -225,6 +240,9 @@ func (s *Store) SessionRaw(id int64) ([]string, error) {
 }
 
 func (s *Store) SearchSessions(q string, filter scope.Axes, excludeSession string, limit int) ([]SessionHit, error) {
+	if s.reader != nil {
+		return s.reader.SearchSessions(q, filter, excludeSession, limit)
+	}
 	if limit <= 0 {
 		limit = 20
 	}

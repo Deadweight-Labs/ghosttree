@@ -23,6 +23,9 @@ type SessionDistilledItem struct {
 }
 
 func (s *Store) SessionDistillationExists(sessionID int64, digest, promptVersion string) (bool, error) {
+	if s.reader != nil {
+		return s.reader.SessionDistillationExists(sessionID, digest, promptVersion)
+	}
 	var exists int
 	err := s.db.QueryRow(`SELECT COUNT(*) FROM session_distillations
 		WHERE session_id=? AND digest=? AND prompt_version=?`, sessionID, digest, promptVersion).Scan(&exists)

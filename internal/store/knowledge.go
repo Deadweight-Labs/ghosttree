@@ -284,6 +284,9 @@ var patchable = map[string]bool{"title": true, "body": true, "confidence": true,
 // full distiller run produces, and judging findings is easier one repository at
 // a time than in a stream that jumps between them.
 func (s *Store) PendingKnowledge(project string, limit int) ([]Knowledge, error) {
+	if s.reader != nil {
+		return s.reader.PendingKnowledge(project, limit)
+	}
 	if limit <= 0 {
 		limit = 50
 	}
@@ -412,6 +415,9 @@ func archiveKnowledgeTx(tx *sql.Tx, id int64, editor, changedAt string) error {
 }
 
 func (s *Store) KnowledgeHistory(id int64) ([]KnowledgeVersion, error) {
+	if s.reader != nil {
+		return s.reader.KnowledgeHistory(id)
+	}
 	rows, err := s.db.Query(`SELECT id,knowledge_id,type,title,body,person,changed_by,changed_at
 		FROM knowledge_versions WHERE knowledge_id=? ORDER BY changed_at DESC, id DESC`, id)
 	if err != nil {
@@ -463,6 +469,9 @@ func (s *Store) ApplyStaleness(at time.Time, maxAge time.Duration) (int64, error
 }
 
 func (s *Store) KnowledgeByID(id int64) (Knowledge, error) {
+	if s.reader != nil {
+		return s.reader.KnowledgeByID(id)
+	}
 	rows, err := s.db.Query(`SELECT `+knowledgeCols+` FROM knowledge WHERE id = ?`, id)
 	if err != nil {
 		return Knowledge{}, err
@@ -510,6 +519,9 @@ func (s *Store) KnowledgeForActivatedContext(ax scope.Axes, ctx activation.Conte
 }
 
 func (s *Store) KnowledgeForActivatedPreview(ax scope.Axes, ctx activation.Context) ([]Knowledge, error) {
+	if s.reader != nil {
+		return s.reader.KnowledgeForActivatedPreview(ax, ctx)
+	}
 	return s.knowledgeForActivatedContext(ax, ctx, true)
 }
 
@@ -551,6 +563,9 @@ func (s *Store) knowledgeForActivatedContext(ax scope.Axes, ctx activation.Conte
 // KnowledgeForProject returns every entry for a project, including archived
 // cold storage. It is used to verify migration provenance before cleanup.
 func (s *Store) KnowledgeForProject(project string) ([]Knowledge, error) {
+	if s.reader != nil {
+		return s.reader.KnowledgeForProject(project)
+	}
 	rows, err := s.db.Query(`SELECT `+knowledgeCols+` FROM knowledge WHERE project = ? ORDER BY id`, project)
 	if err != nil {
 		return nil, err
@@ -567,6 +582,9 @@ func (s *Store) SearchKnowledge(q string, filter scope.Axes, limit int) ([]Knowl
 // SearchAllKnowledge is the operator view, including entries hidden from
 // agents because they are quarantined, deprecated, or archived.
 func (s *Store) SearchAllKnowledge(q string, filter scope.Axes, limit int) ([]Knowledge, error) {
+	if s.reader != nil {
+		return s.reader.SearchAllKnowledge(q, filter, limit)
+	}
 	where, args := filter.FilterWhere()
 	if limit <= 0 {
 		limit = 50
@@ -686,6 +704,9 @@ func (s *Store) scanKnowledge(rows *sql.Rows) ([]Knowledge, error) {
 // corroborated — entries that are not going anywhere and that the model should
 // still be able to point at.
 func (s *Store) KnowledgeTitlesForPrompt(project string, excludeSessions []int64) ([]string, error) {
+	if s.reader != nil {
+		return s.reader.KnowledgeTitlesForPrompt(project, excludeSessions)
+	}
 	query := `SELECT '#' || k.id || ' ' || k.title FROM knowledge k
 		WHERE k.project = ? AND k.status = 'active'`
 	args := []any{project}

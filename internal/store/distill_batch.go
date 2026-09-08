@@ -66,6 +66,9 @@ func (s *Store) RecordDistillBatch(providerID, model string, items []DistillBatc
 }
 
 func (s *Store) OpenDistillBatches() ([]DistillBatch, error) {
+	if s.reader != nil {
+		return s.reader.OpenDistillBatches()
+	}
 	rows, err := s.db.Query(`SELECT b.id, b.provider_batch_id, b.state, b.created_at,
 		(SELECT COUNT(*) FROM distill_batch_items i WHERE i.batch_id = b.id)
 		FROM distill_batches b WHERE b.state = 'open' ORDER BY b.id`)
@@ -85,6 +88,9 @@ func (s *Store) OpenDistillBatches() ([]DistillBatch, error) {
 }
 
 func (s *Store) DistillBatchItems(batchID int64) ([]DistillBatchItem, error) {
+	if s.reader != nil {
+		return s.reader.DistillBatchItems(batchID)
+	}
 	rows, err := s.db.Query(`SELECT custom_id, session_id, digest, prompt_version FROM distill_batch_items
 		WHERE batch_id = ? ORDER BY session_id`, batchID)
 	if err != nil {
@@ -117,6 +123,9 @@ func (s *Store) RecordDistillBatchUsage(batchID int64, customID string, prompt, 
 }
 
 func (s *Store) DistillBatchUsage(batchID int64) (prompt, completion int, err error) {
+	if s.reader != nil {
+		return s.reader.DistillBatchUsage(batchID)
+	}
 	err = s.db.QueryRow(`SELECT COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0)
 		FROM distill_batch_items WHERE batch_id=?`, batchID).Scan(&prompt, &completion)
 	return prompt, completion, err
@@ -138,6 +147,9 @@ func (s *Store) CloseDistillBatch(batchID int64, state string) error {
 // with work that can actually be done; this is what keeps the number visible
 // instead of leaving it as the gap between two other counts.
 func (s *Store) CountPendingWithoutProject(idleBefore string) (int, error) {
+	if s.reader != nil {
+		return s.reader.CountPendingWithoutProject(idleBefore)
+	}
 	var n int
 	err := s.db.QueryRow(`SELECT COUNT(*) FROM sessions
 		WHERE last_seen_at < ? AND project = ''

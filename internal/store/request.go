@@ -75,6 +75,9 @@ func (s *Store) CreateRequest(in requestdomain.CreateInput) (requestdomain.Detai
 }
 
 func (s *Store) RequestByID(id int64) (requestdomain.Detail, error) {
+	if s.reader != nil {
+		return s.reader.RequestByID(id)
+	}
 	var d requestdomain.Detail
 	r := &d.Request
 	err := s.db.QueryRow(`SELECT id,type,title,description,state,priority,project,branch,machine,origin,person,session_ref,idempotency_key,created_at,updated_at FROM requests WHERE id=?`, id).Scan(
@@ -191,6 +194,9 @@ func (s *Store) RequestByID(id int64) (requestdomain.Detail, error) {
 const snippetChars = 200
 
 func (s *Store) SearchRequests(filter requestdomain.SearchFilter) (requestdomain.SearchPage, error) {
+	if s.reader != nil {
+		return s.reader.SearchRequests(filter)
+	}
 	limit := filter.Limit
 	if limit <= 0 {
 		limit = 10
@@ -278,6 +284,9 @@ func (s *Store) SearchRequests(filter requestdomain.SearchFilter) (requestdomain
 }
 
 func (s *Store) CountOpenRequests(ax scope.Axes) (int, error) {
+	if s.reader != nil {
+		return s.reader.CountOpenRequests(ax)
+	}
 	where, args := ax.UnionWhere()
 	var count int
 	err := s.db.QueryRow(`SELECT COUNT(*) FROM requests WHERE state='open' AND `+where, args...).Scan(&count)
@@ -674,6 +683,9 @@ func (s *Store) FinishRequestWork(workID int64, state, summary, person string) (
 }
 
 func (s *Store) SearchRequestSessions(requestID int64, query string, limit int, cursor string) (requestdomain.SessionPage, error) {
+	if s.reader != nil {
+		return s.reader.SearchRequestSessions(requestID, query, limit, cursor)
+	}
 	if limit <= 0 {
 		limit = 20
 	}

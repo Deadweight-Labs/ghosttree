@@ -32,6 +32,9 @@ type InterruptedThread struct {
 // wiederaufgenommene Sitzung feuert session-start ein zweites Mal, und ihr
 // eigener Faden ist nicht der, den sie sucht.
 func (s *Store) InterruptedWork(ax scope.Axes, idleBefore, excludeSession string, limit int) ([]InterruptedThread, error) {
+	if s.reader != nil {
+		return s.reader.InterruptedWork(ax, idleBefore, excludeSession, limit)
+	}
 	if limit <= 0 {
 		limit = 3
 	}

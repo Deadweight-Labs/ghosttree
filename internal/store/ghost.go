@@ -81,6 +81,9 @@ func (s *Store) PutGhostFile(g GhostFile) (int64, error) {
 }
 
 func (s *Store) GhostFileByPath(project, path string) (GhostFile, error) {
+	if s.reader != nil {
+		return s.reader.GhostFileByPath(project, path)
+	}
 	rows, err := s.db.Query(`SELECT `+ghostCols+` FROM ghost_files WHERE project=? AND path=?`, project, path)
 	if err != nil {
 		return GhostFile{}, err
@@ -99,6 +102,9 @@ func (s *Store) GhostFileByPath(project, path string) (GhostFile, error) {
 // Der Vergleich hängt ein "/" an, damit internal/store nicht internal/server
 // mitnimmt — ein reines LIKE 'internal/store%' täte genau das.
 func (s *Store) GhostFilesUnder(project, prefix string) ([]GhostFile, error) {
+	if s.reader != nil {
+		return s.reader.GhostFilesUnder(project, prefix)
+	}
 	query := `SELECT ` + ghostCols + ` FROM ghost_files WHERE project=?`
 	args := []any{project}
 	if prefix != "" {
@@ -116,6 +122,9 @@ func (s *Store) GhostFilesUnder(project, prefix string) ([]GhostFile, error) {
 // beim übrigen Wissen: ftsQuery verbindet die aussagekräftigen Terme mit OR und
 // überlässt die Rangfolge bm25.
 func (s *Store) SearchGhostFiles(q, project string, limit int) ([]GhostFile, error) {
+	if s.reader != nil {
+		return s.reader.SearchGhostFiles(q, project, limit)
+	}
 	if limit <= 0 {
 		limit = 20
 	}
@@ -222,6 +231,9 @@ func (s *Store) GhostFilesForDelivery(project, path, sessionKey string) ([]Ghost
 // mehr", und der Unterschied entscheidet, ob ein doctor-Lauf ausserhalb eines
 // Repos den ganzen Baum als Müll ausweist.
 func (s *Store) OrphanGhostFiles(project string, existing []string) ([]GhostFile, error) {
+	if s.reader != nil {
+		return s.reader.OrphanGhostFiles(project, existing)
+	}
 	if len(existing) == 0 {
 		return nil, nil
 	}
