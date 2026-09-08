@@ -33,11 +33,13 @@ type SearchResult struct {
 }
 
 type APIError struct {
-	Status     int            `json:"-"`
-	Code       string         `json:"code"`
-	Message    string         `json:"message"`
-	Resolution string         `json:"resolution"`
-	Details    map[string]any `json:"details,omitempty"`
+	Status            int            `json:"-"`
+	Code              string         `json:"code"`
+	Message           string         `json:"message"`
+	Resolution        string         `json:"resolution"`
+	Details           map[string]any `json:"details,omitempty"`
+	Retryable         bool           `json:"retryable"`
+	RetryAfterSeconds int            `json:"retry_after_seconds,omitempty"`
 }
 
 type ConflictError struct {
@@ -151,6 +153,10 @@ func (c *Client) doContext(ctx context.Context, method, path string, query url.V
 		var apiErr APIError
 		if json.Unmarshal(raw, &apiErr) == nil && apiErr.Code != "" {
 			apiErr.Status = resp.StatusCode
+			apiErr.RetryAfterSeconds = 0
+			if seconds, err := strconv.Atoi(resp.Header.Get("Retry-After")); err == nil && seconds > 0 {
+				apiErr.RetryAfterSeconds = seconds
+			}
 			return &apiErr
 		}
 		return fmt.Errorf("%s %s: %d: %s", method, path, resp.StatusCode, strings.TrimSpace(string(raw)))

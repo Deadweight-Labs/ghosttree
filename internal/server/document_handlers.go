@@ -29,7 +29,7 @@ type createDocumentRequest struct {
 func (a *api) createDocument(w http.ResponseWriter, r *http.Request) {
 	var req createDocumentRequest
 	if err := readJSON(r, &req); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
 	d := req.Document
@@ -39,17 +39,17 @@ func (a *api) createDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := docwork.ValidateSlug(d.Slug); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
 	if err := validateDocumentBody(req.Body); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
 	d.Person = personOf(r)
 	saved, err := a.st.CreateDocument(d, req.Body, req.Message)
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
 	writeJSON(w, 200, saved)
@@ -63,7 +63,7 @@ func (a *api) importDocumentMigration(w http.ResponseWriter, r *http.Request) {
 	}
 	var in store.MigratedDocument
 	if err := readJSON(r, &in); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
 	in.RunID = runID
@@ -74,16 +74,16 @@ func (a *api) importDocumentMigration(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := docwork.ValidateSlug(in.Document.Slug); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
 	if err := validateDocumentBody(in.Body); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
 	saved, err := a.st.ImportDocument(in)
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, saved)
@@ -97,11 +97,11 @@ func (a *api) pushDocumentRevision(w http.ResponseWriter, r *http.Request) {
 	}
 	var req documentRevisionRequest
 	if err := readJSON(r, &req); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
 	if err := validateDocumentBody(req.Body); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
 	saved, err := a.st.PushRevision(id, req.BaseRevision, req.Body, req.Message, personOf(r))
@@ -110,7 +110,7 @@ func (a *api) pushDocumentRevision(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
 	writeJSON(w, 200, saved)
@@ -164,7 +164,7 @@ func (a *api) patchDocument(w http.ResponseWriter, r *http.Request) {
 	}
 	var patch map[string]string
 	if err := readJSON(r, &patch); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
 	if _, ok := patch["body"]; ok {
@@ -173,7 +173,7 @@ func (a *api) patchDocument(w http.ResponseWriter, r *http.Request) {
 	}
 	if slug, ok := patch["slug"]; ok {
 		if err := docwork.ValidateSlug(slug); err != nil {
-			writeErr(w, http.StatusBadRequest, err.Error())
+			writeStoreError(w, http.StatusBadRequest, err)
 			return
 		}
 	}
@@ -182,12 +182,12 @@ func (a *api) patchDocument(w http.ResponseWriter, r *http.Request) {
 		if err == sql.ErrNoRows {
 			status = http.StatusNotFound
 		}
-		writeErr(w, status, err.Error())
+		writeStoreError(w, status, err)
 		return
 	}
 	d, err := a.st.DocumentByID(id)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, 200, d)
@@ -197,7 +197,7 @@ func (a *api) listDocuments(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	ds, err := a.st.Documents(scope.NormalizeRemote(q.Get("project")), q.Get("kind"), q.Get("include_archived") == "1")
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
 	if slug := q.Get("slug"); slug != "" {
@@ -217,7 +217,7 @@ func (a *api) getDocument(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	d, err := a.st.DocumentByID(id)
 	if err != nil {
-		writeErr(w, http.StatusNotFound, err.Error())
+		writeStoreError(w, http.StatusNotFound, err)
 		return
 	}
 	writeJSON(w, 200, d)
@@ -227,7 +227,7 @@ func (a *api) documentRevisions(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	revs, err := a.st.DocumentRevisions(id)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, 200, revs)
@@ -242,7 +242,7 @@ func (a *api) documentRevision(w http.ResponseWriter, r *http.Request) {
 	}
 	rev, err := a.st.DocumentRevision(id, n)
 	if err != nil {
-		writeErr(w, http.StatusNotFound, err.Error())
+		writeStoreError(w, http.StatusNotFound, err)
 		return
 	}
 	writeJSON(w, 200, rev)

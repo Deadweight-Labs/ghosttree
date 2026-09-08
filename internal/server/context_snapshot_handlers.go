@@ -197,6 +197,9 @@ var snapshotStatusByCode = map[string]int{
 }
 
 func (a *api) writeSnapshotError(w http.ResponseWriter, err error) {
+	if writeWriterError(w, err, true) {
+		return
+	}
 	var rule *snapshot.RuleError
 	if errors.As(err, &rule) {
 		status := snapshotStatusByCode[rule.Code]

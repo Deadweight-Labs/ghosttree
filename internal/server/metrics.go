@@ -257,7 +257,7 @@ func boundedMethod(method string) string {
 
 func boundedErrorClass(class string) bool {
 	switch class {
-	case "auth", "not_found", "client", "server", "sqlite_busy":
+	case "auth", "not_found", "client", "server", "sqlite_busy", "writer_busy":
 		return true
 	default:
 		return false
