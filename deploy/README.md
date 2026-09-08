@@ -49,6 +49,38 @@ portable logical-byte calculation.
 Do not bind directly to a public interface. Use a private network or a TLS
 reverse proxy with suitable access controls.
 
+### Runtime writer
+
+File-backed runtime stores admit domain writes into one bounded FIFO and use a
+separate read-only pool. Active operations count against both limits. A write
+succeeds only after its commit. Only adjacent pending chunk operations share a
+transaction, with no gathering delay.
+
+| Environment variable | Serve flag | Default |
+| --- | --- | ---: |
+| `GHOSTTREE_WRITER_MAX_OPERATIONS` | `--writer-max-operations` | 1,024 |
+| `GHOSTTREE_WRITER_MAX_BYTES` | `--writer-max-bytes` | 268,435,456 |
+| `GHOSTTREE_WRITER_MAX_BATCH` | `--writer-max-batch` | 64 |
+| `GHOSTTREE_WRITER_READ_CONNECTIONS` | `--writer-read-connections` | 3 |
+
+These values must be positive. The byte limit must be at least the snapshot
+logical-byte limit. Snapshot creation also reserves bounded capture scratch
+space; raising snapshot limits may require raising the writer byte budget.
+The byte budget covers owned inputs and reserved capture space, not total RSS.
+
+Saturation returns HTTP 503, `writer_busy`, `retryable: true` and
+`Retry-After: 1`. Closed admission returns `writer_closed`. Snapshot endpoints
+preserve `snapshot_store_busy`. Clients expose retry metadata without
+replaying writes automatically; resolve ambiguous outcomes using the operation's
+existing sequence, revision or idempotency identity before retrying.
+
+SIGINT and SIGTERM stop new HTTP connections and allow active handlers up to
+five minutes to finish, then drain accepted writer work before closing SQLite.
+The sample unit allows 330 seconds in total. If this deadline is exceeded,
+systemd can terminate the process; unfinished operations have no success ACK.
+The writer makes no new schema or file-format change, so a rollback restores
+the saved binary and service configuration without a database migration.
+
 ### Audit logs and metrics
 
 Every non-probe API request emits one structured JSON `http_request` event to
@@ -65,6 +97,14 @@ server itself and must therefore remain restricted to a trusted private network.
 HTTP metric labels are deliberately bounded to method,
 matched route, status, and error class; actor, request ID, remote IP, concrete
 path, project, and slug are never labels.
+
+`ghosttree_writer_*` exposes queue operations and reserved bytes, high-water
+marks, admission/completion/rejection counts, per-kind bookkeeping drops, fixed
+histograms for queue wait, domain execution through commit or rollback, and
+chunk batch size, plus drain and worker state. Commit duration includes the
+whole domain operation, not just the SQLite commit call; best-effort accounting
+transactions are excluded. `ghosttree_reader_*` reports read-pool waits and
+connections. Metrics keep fixed labels and buckets without retaining requests.
 
 Add a scrape job to vmagent using the same private address. The monitoring host
 needs network access to the server's TCP port 8474:
@@ -146,7 +186,7 @@ name an existing absolute real directory rather than a symlink:
 ```
 
 For the sample systemd unit, add a drop-in that clears and restates `ExecStart`
-with the unit's existing database, listen, and nine finite limit arguments,
+with the unit's existing database, listen, snapshot and writer limit arguments,
 then append the required `--snapshot-root` arguments. Run
 `systemctl daemon-reload` and inspect `systemctl show ghosttree.service
 --property=ExecStart` before restarting. The service identity must be able to

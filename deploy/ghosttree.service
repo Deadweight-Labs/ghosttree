@@ -17,8 +17,13 @@ Environment=GHOSTTREE_SNAPSHOT_MAX_PROJECT_COUNT=1000
 Environment=GHOSTTREE_SNAPSHOT_MAX_PROJECT_BYTES=8589934592
 Environment=GHOSTTREE_SNAPSHOT_MAX_STORE_COUNT=10000
 Environment=GHOSTTREE_SNAPSHOT_MAX_STORE_BYTES=68719476736
+Environment=GHOSTTREE_WRITER_MAX_OPERATIONS=1024
+Environment=GHOSTTREE_WRITER_MAX_BYTES=268435456
+Environment=GHOSTTREE_WRITER_MAX_BATCH=64
+Environment=GHOSTTREE_WRITER_READ_CONNECTIONS=3
 EnvironmentFile=-/etc/ghosttree/server.env
-ExecStart=/usr/local/bin/ctx serve --db /var/lib/ghosttree/ghosttree.db --listen ${GHOSTTREE_LISTEN} --snapshot-max-entry-bytes ${GHOSTTREE_SNAPSHOT_MAX_ENTRY_BYTES} --snapshot-max-entries ${GHOSTTREE_SNAPSHOT_MAX_ENTRIES} --snapshot-max-payload-bytes ${GHOSTTREE_SNAPSHOT_MAX_PAYLOAD_BYTES} --snapshot-max-head-bytes ${GHOSTTREE_SNAPSHOT_MAX_HEAD_BYTES} --snapshot-max-logical-bytes ${GHOSTTREE_SNAPSHOT_MAX_LOGICAL_BYTES} --snapshot-max-project-count ${GHOSTTREE_SNAPSHOT_MAX_PROJECT_COUNT} --snapshot-max-project-bytes ${GHOSTTREE_SNAPSHOT_MAX_PROJECT_BYTES} --snapshot-max-store-count ${GHOSTTREE_SNAPSHOT_MAX_STORE_COUNT} --snapshot-max-store-bytes ${GHOSTTREE_SNAPSHOT_MAX_STORE_BYTES}
+ExecStart=/usr/local/bin/ctx serve --db /var/lib/ghosttree/ghosttree.db --listen ${GHOSTTREE_LISTEN} --snapshot-max-entry-bytes ${GHOSTTREE_SNAPSHOT_MAX_ENTRY_BYTES} --snapshot-max-entries ${GHOSTTREE_SNAPSHOT_MAX_ENTRIES} --snapshot-max-payload-bytes ${GHOSTTREE_SNAPSHOT_MAX_PAYLOAD_BYTES} --snapshot-max-head-bytes ${GHOSTTREE_SNAPSHOT_MAX_HEAD_BYTES} --snapshot-max-logical-bytes ${GHOSTTREE_SNAPSHOT_MAX_LOGICAL_BYTES} --snapshot-max-project-count ${GHOSTTREE_SNAPSHOT_MAX_PROJECT_COUNT} --snapshot-max-project-bytes ${GHOSTTREE_SNAPSHOT_MAX_PROJECT_BYTES} --snapshot-max-store-count ${GHOSTTREE_SNAPSHOT_MAX_STORE_COUNT} --snapshot-max-store-bytes ${GHOSTTREE_SNAPSHOT_MAX_STORE_BYTES} --writer-max-operations ${GHOSTTREE_WRITER_MAX_OPERATIONS} --writer-max-bytes ${GHOSTTREE_WRITER_MAX_BYTES} --writer-max-batch ${GHOSTTREE_WRITER_MAX_BATCH} --writer-read-connections ${GHOSTTREE_WRITER_READ_CONNECTIONS}
+TimeoutStopSec=330
 Restart=on-failure
 
 [Install]

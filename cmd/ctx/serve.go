@@ -9,8 +9,10 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
@@ -26,6 +28,7 @@ type serveConfig struct {
 	Listen         string
 	SnapshotLimits snapshot.Limits
 	SnapshotRoots  map[string]string
+	Writer         store.WriterConfig
 }
 
 type snapshotRootValues []string
@@ -42,23 +45,34 @@ func cmdServe(args []string, stdout io.Writer) int {
 		fmt.Fprintf(stdout, "serve configuration: %v\n", err)
 		return 2
 	}
-	st, err := store.Open(cfg.DB)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	st, err := store.OpenRuntime(cfg.DB, cfg.Writer)
 	if err != nil {
 		fmt.Fprintf(stdout, "open db: %v\n", err)
 		return 1
 	}
 	defer st.Close()
-	return runServer(st, cfg, stdout, os.Stderr)
+	code := runServer(ctx, st, cfg, stdout, os.Stderr)
+	if err := st.Close(); err != nil {
+		fmt.Fprintf(stdout, "close store: %v\n", err)
+		return 1
+	}
+	return code
 }
 
 func parseServeConfig(args []string, output io.Writer) (serveConfig, error) {
 	limits := snapshot.DefaultLimits()
-	cfg := serveConfig{SnapshotLimits: limits}
+	cfg := serveConfig{SnapshotLimits: limits, Writer: store.DefaultWriterConfig()}
 	var roots snapshotRootValues
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(output)
 	fs.StringVar(&cfg.DB, "db", "ghosttree.db", "path to the sqlite database")
 	fs.StringVar(&cfg.Listen, "listen", "127.0.0.1:8474", "listen address")
+	fs.IntVar(&cfg.Writer.MaxOperations, "writer-max-operations", cfg.Writer.MaxOperations, "maximum accepted unfinished writer operations")
+	fs.Int64Var(&cfg.Writer.MaxBytes, "writer-max-bytes", cfg.Writer.MaxBytes, "maximum reserved writer payload bytes including active work")
+	fs.IntVar(&cfg.Writer.MaxBatch, "writer-max-batch", cfg.Writer.MaxBatch, "maximum contiguous chunk operations per commit")
+	fs.IntVar(&cfg.Writer.ReadConnections, "writer-read-connections", cfg.Writer.ReadConnections, "read-only pool connection limit")
 	fs.Int64Var(&cfg.SnapshotLimits.MaxEntryPayloadBytes, "snapshot-max-entry-bytes", limits.MaxEntryPayloadBytes, "maximum payload bytes per snapshot entry")
 	fs.Int64Var(&cfg.SnapshotLimits.MaxEntriesPerSnapshot, "snapshot-max-entries", limits.MaxEntriesPerSnapshot, "maximum entries per snapshot")
 	fs.Int64Var(&cfg.SnapshotLimits.MaxSnapshotPayloadBytes, "snapshot-max-payload-bytes", limits.MaxSnapshotPayloadBytes, "maximum payload bytes per snapshot")
@@ -77,6 +91,12 @@ func parseServeConfig(args []string, output io.Writer) (serveConfig, error) {
 	}
 	if err := validateSnapshotLimits(cfg.SnapshotLimits); err != nil {
 		return serveConfig{}, err
+	}
+	if cfg.Writer.MaxOperations <= 0 || cfg.Writer.MaxBytes <= 0 || cfg.Writer.MaxBatch <= 0 || cfg.Writer.ReadConnections <= 0 {
+		return serveConfig{}, fmt.Errorf("writer limits must be positive finite values")
+	}
+	if cfg.Writer.MaxBytes < cfg.SnapshotLimits.MaxSnapshotLogicalBytes {
+		return serveConfig{}, fmt.Errorf("--writer-max-bytes must be at least --snapshot-max-logical-bytes")
 	}
 	parsedRoots, err := parseSnapshotRoots(roots)
 	if err != nil {
@@ -136,7 +156,7 @@ func parseSnapshotRoots(values []string) (map[string]string, error) {
 	return roots, nil
 }
 
-func runServer(st *store.Store, cfg serveConfig, stdout, stderr io.Writer) int {
+func runServer(ctx context.Context, st *store.Store, cfg serveConfig, stdout, stderr io.Writer) int {
 	// Open creates missing tables but never alters an existing one, so an
 	// out-of-date knowledge table would only surface as puzzling SQL errors
 	// once an agent writes. Refuse to serve instead.
@@ -162,8 +182,12 @@ func runServer(st *store.Store, cfg serveConfig, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "apply knowledge staleness: %v\n", err)
 		return 1
 	}
+	if ctx.Err() != nil {
+		return 0
+	}
 	fmt.Fprintf(stdout, "ghosttree %s listening on %s (db %s, ui /ui/)\n", version, cfg.Listen, cfg.DB)
-	if err := newHTTPServer(cfg.Listen, buildServerHandler(st, cfg, stderr)).ListenAndServe(); err != nil {
+	slog.New(slog.NewJSONHandler(stderr, nil)).Info("writer_config", "max_operations", cfg.Writer.MaxOperations, "max_bytes", cfg.Writer.MaxBytes, "max_batch", cfg.Writer.MaxBatch, "read_connections", cfg.Writer.ReadConnections)
+	if err := serveUntilCanceled(ctx, newHTTPServer(cfg.Listen, buildServerHandler(st, cfg, stderr))); err != nil {
 		fmt.Fprintf(stdout, "serve: %v\n", err)
 		return 1
 	}
