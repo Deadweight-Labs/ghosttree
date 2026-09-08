@@ -511,10 +511,16 @@ const corroboration = `MAX(
 const deliveryOrder = trustOrder + `, ` + corroboration + ` DESC, search_hits DESC, ` + observationTime + ` DESC, id DESC`
 
 func (s *Store) KnowledgeForContext(ax scope.Axes) ([]Knowledge, error) {
+	if s.reader != nil {
+		return s.reader.KnowledgeForContext(ax)
+	}
 	return s.KnowledgeForActivatedContext(ax, activation.Context{})
 }
 
 func (s *Store) KnowledgeForActivatedContext(ax scope.Axes, ctx activation.Context) ([]Knowledge, error) {
+	if s.reader != nil {
+		return s.reader.KnowledgeForActivatedContext(ax, ctx)
+	}
 	return s.knowledgeForActivatedContext(ax, ctx, false)
 }
 
@@ -575,6 +581,9 @@ func (s *Store) KnowledgeForProject(project string) ([]Knowledge, error) {
 
 // SearchKnowledge matches only the axes the caller set.
 func (s *Store) SearchKnowledge(q string, filter scope.Axes, limit int) ([]Knowledge, error) {
+	if s.reader != nil {
+		return s.reader.SearchKnowledge(q, filter, limit)
+	}
 	where, args := filter.FilterWhere()
 	return s.searchKnowledge(q, where, args, limit)
 }
@@ -604,6 +613,9 @@ func (s *Store) SearchAllKnowledge(q string, filter scope.Axes, limit int) ([]Kn
 // machine, project and their combinations. Without it, a session on a branch
 // could not find global or project-level knowledge.
 func (s *Store) SearchKnowledgeForContext(q string, ax scope.Axes, limit int) ([]Knowledge, error) {
+	if s.reader != nil {
+		return s.reader.SearchKnowledgeForContext(q, ax, limit)
+	}
 	where, args := ax.UnionWhere()
 	return s.searchKnowledge(q, where, args, limit)
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 )
 
 var (
@@ -44,6 +45,9 @@ type runtimeWriter struct {
 	operations                                     int
 	bytes                                          int64
 	chunkWrite                                     func([]ChunkBatch) error
+	bestEffortWrite                                func(int, bestEffortBatch) error
+	bestEffort                                     [bestEffortKinds]bestEffortBatch
+	bestEffortDrops                                [bestEffortKinds]atomic.Uint64
 	batches, batchedOperations, fallbackOperations uint64
 }
 
@@ -108,8 +112,15 @@ func (w *runtimeWriter) work() {
 	defer close(w.done)
 	for {
 		w.mu.Lock()
-		for w.head == nil && !w.closed {
+		for w.head == nil && w.nextBestEffort() < 0 && !w.closed {
 			w.ready.Wait()
+		}
+		if kind := w.nextBestEffort(); w.head == nil && kind >= 0 {
+			w.bestEffort[kind].active = true
+			batch := w.bestEffort[kind]
+			w.mu.Unlock()
+			w.runBestEffort(kind, batch)
+			continue
 		}
 		if w.head == nil {
 			w.mu.Unlock()

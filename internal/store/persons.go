@@ -54,6 +54,10 @@ func (s *Store) AuthenticatePrincipal(token string) (Principal, bool) {
 }
 
 func (s *Store) TouchMachine(hostname string) {
+	if s.bookkeeper != nil {
+		s.bookkeeper.coalesceMachine(hostname)
+		return
+	}
 	s.db.Exec(`INSERT INTO machines(hostname, first_seen, last_seen) VALUES(?,?,?)
 	           ON CONFLICT(hostname) DO UPDATE SET last_seen = excluded.last_seen`,
 		hostname, now(), now())

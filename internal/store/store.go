@@ -18,6 +18,7 @@ type Store struct {
 	path          string
 	snapshotFault func(string) error
 	writer        *runtimeWriter
+	bookkeeper    *runtimeWriter
 	reader        *Store
 	closeOnce     sync.Once
 	closeErr      error

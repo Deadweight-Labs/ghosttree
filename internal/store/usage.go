@@ -28,6 +28,10 @@ func (s *Store) bumpUsage(ks []Knowledge, extra string) {
 	if len(ks) == 0 {
 		return
 	}
+	if s.bookkeeper != nil {
+		s.bookkeeper.coalesceUsage(ks, extra != "")
+		return
+	}
 	placeholders := make([]string, len(ks))
 	args := make([]any, 0, len(ks)+1)
 	args = append(args, now())
