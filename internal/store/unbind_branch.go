@@ -30,6 +30,9 @@ func (s *Store) UnbindBranchScope(ids []int64, dry bool) ([]Knowledge, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
+	if s.writer != nil {
+		return queueValue(s, []any{ids, dry}, func(d *Store, p []any) ([]Knowledge, error) { return d.UnbindBranchScope(p[0].([]int64), p[1].(bool)) })
+	}
 	placeholders := make([]string, len(ids))
 	args := make([]any, len(ids))
 	for i, id := range ids {
