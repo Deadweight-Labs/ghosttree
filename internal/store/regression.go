@@ -33,6 +33,9 @@ func (s *Store) SetRegressionCover(id int64, state, test string) error {
 	if state != "covered" {
 		test = ""
 	}
+	if s.writer != nil {
+		return queueWrite(s, []any{id, state, test}, func(d *Store, p []any) error { return d.SetRegressionCover(p[0].(int64), p[1].(string), p[2].(string)) })
+	}
 	// Bewusst nicht über UpdateKnowledge: das archiviert vor jeder Änderung die
 	// bisherige Fassung. Womit ein Eintrag abgesichert ist, ist eine Aussage
 	// ÜBER den Text und nicht der Text — eine neue Fassung anzulegen, weil

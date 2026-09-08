@@ -3,6 +3,7 @@ package store
 import (
 	"math"
 	"reflect"
+	"time"
 )
 
 type payloadCounter struct {
@@ -46,6 +47,9 @@ func (c *payloadCounter) references(v reflect.Value, depth int) error {
 	c.nodes++
 	if depth > 64 || c.nodes > 1<<20 {
 		return ErrWriterInvalidPayload
+	}
+	if isWriterUTCTime(v) {
+		return nil
 	}
 	switch v.Kind() {
 	case reflect.String:
@@ -120,6 +124,10 @@ func (c *payloadCounter) references(v reflect.Value, depth int) error {
 		return ErrWriterInvalidPayload
 	}
 	return nil
+}
+
+func isWriterUTCTime(v reflect.Value) bool {
+	return v.Type() == reflect.TypeFor[time.Time]() && v.CanInterface() && v.Interface().(time.Time).Location() == time.UTC
 }
 
 func payloadHasReferences(t reflect.Type) bool {

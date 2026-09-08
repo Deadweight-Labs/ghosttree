@@ -23,6 +23,9 @@ func (w *runtimeWriter) admitOwned(ctx context.Context, payload []any, run func(
 }
 
 func cloneWriterValue(v reflect.Value) reflect.Value {
+	if isWriterUTCTime(v) {
+		return v
+	}
 	switch v.Kind() {
 	case reflect.String:
 		return reflect.ValueOf(strings.Clone(v.String())).Convert(v.Type())

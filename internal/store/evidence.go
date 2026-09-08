@@ -9,6 +9,9 @@ type Evidence struct {
 }
 
 func (s *Store) AddEvidence(knowledgeID int64, ev []Evidence) error {
+	if s.writer != nil {
+		return queueWrite(s, []any{knowledgeID, ev}, func(d *Store, p []any) error { return d.AddEvidence(p[0].(int64), p[1].([]Evidence)) })
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
