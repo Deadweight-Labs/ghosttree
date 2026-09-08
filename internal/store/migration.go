@@ -2,8 +2,10 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
 )
@@ -52,20 +54,57 @@ func (s *Store) BeginMigration(project string, artifacts map[string]string) (int
 	if err != nil {
 		return 0, err
 	}
-	stmt, err := tx.Prepare(`INSERT INTO migration_artifacts(run_id,path,digest) VALUES(?,?,?)`)
-	if err != nil {
+	if err := insertMigrationArtifactsTx(tx, id, artifacts); err != nil {
 		return 0, err
-	}
-	defer stmt.Close()
-	for path, digest := range artifacts {
-		if _, err := stmt.Exec(id, path, digest); err != nil {
-			return 0, err
-		}
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
 	return id, nil
+}
+
+func insertMigrationArtifactsTx(tx *sql.Tx, id int64, artifacts map[string]string) error {
+	if migrationArtifactsFitJSON(artifacts) {
+		encoded, err := json.Marshal(artifacts)
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(`INSERT INTO migration_artifacts(run_id,path,digest) SELECT ?,key,value FROM json_each(?)`, id, string(encoded))
+		return err
+	}
+	stmt, err := tx.Prepare(`INSERT INTO migration_artifacts(run_id,path,digest) VALUES(?,?,?)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for path, digest := range artifacts {
+		if _, err := stmt.Exec(id, path, digest); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func migrationArtifactsFitJSON(artifacts map[string]string) bool {
+	remaining := (4 << 20) - 2
+	for path, digest := range artifacts {
+		if remaining < 6 {
+			return false
+		}
+		remaining -= 6
+		if len(path) > remaining/6 {
+			return false
+		}
+		remaining -= 6 * len(path)
+		if len(digest) > remaining/6 {
+			return false
+		}
+		remaining -= 6 * len(digest)
+		if !utf8.ValidString(path) || !utf8.ValidString(digest) {
+			return false
+		}
+	}
+	return len(artifacts) != 0
 }
 
 func migrationArtifactsTx(tx *sql.Tx, runID int64) (map[string]string, error) {

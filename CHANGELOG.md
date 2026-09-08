@@ -11,6 +11,8 @@ Versioning, with pre-1.0 compatibility rules described in
   saturation errors, expose writer metrics, and drain accepted writes on shutdown.
 - Reduce CPU spent checking document bodies for known secret formats while
   preserving detection rules and reported line numbers.
+- Reduce writer time spent starting large migrations by inserting artifact sets
+  together, with bounded temporary encoding and byte-preserving fallback.
 - Make migration dry runs local and free of model calls. Report selected files,
   skipped Markdown with reasons, and unscanned repository boundaries before
   migration or cleanup.
