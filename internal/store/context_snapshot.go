@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"unicode/utf8"
 
@@ -17,6 +18,15 @@ import (
 func (s *Store) CreateContextSnapshot(ctx context.Context, in snapshot.CreateInput, limits snapshot.Limits, observeGitAfterCapture func(context.Context) (snapshot.GitProvenance, error)) (result snapshot.CreateResult, err error) {
 	if err := validateSnapshotCreateInput(in, limits); err != nil {
 		return result, err
+	}
+	if s.writer != nil {
+		reserve, err := snapshotWriterReserve(limits)
+		if err != nil {
+			return result, err
+		}
+		return queueContextValue(ctx, s, []any{in, limits}, reserve, func(d *Store, p []any) (snapshot.CreateResult, error) {
+			return d.CreateContextSnapshot(ctx, p[0].(snapshot.CreateInput), p[1].(snapshot.Limits), observeGitAfterCapture)
+		})
 	}
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
@@ -85,6 +95,8 @@ func (s *Store) CreateContextSnapshot(ctx context.Context, in snapshot.CreateInp
 			}
 		}
 	}
+	clear(entries)
+	entries = nil
 	digest, err := snapshot.ContentDigest(digestHead, summaries)
 	if err != nil {
 		return result, err
@@ -144,6 +156,8 @@ func (s *Store) CreateContextSnapshot(ctx context.Context, in snapshot.CreateInp
 	if err := checkSnapshotAggregateQuotas(ctx, conn, in.Project, logical, limits); err != nil {
 		return result, err
 	}
+	clear(summaries)
+	summaries = nil
 	storedSummaries, storedCounts, storedTotal, err := readStoredSnapshotEntries(ctx, conn, snapshotID, schemaVersion)
 	if err != nil {
 		return result, err
@@ -193,6 +207,33 @@ func (s *Store) failSnapshot(phase string) error {
 		return nil
 	}
 	return s.snapshotFault(phase)
+}
+
+func snapshotWriterReserve(l snapshot.Limits) (int64, error) {
+	for _, n := range []int64{l.MaxSnapshotPayloadBytes, l.MaxSnapshotLogicalBytes, l.MaxCanonicalHeadBytes, l.MaxEntriesPerSnapshot, l.MaxEntryPayloadBytes} {
+		if n < 0 {
+			return 0, ErrWriterInvalidPayload
+		}
+	}
+	c := payloadCounter{}
+	if err := c.add(uint64(max(l.MaxSnapshotPayloadBytes, l.MaxSnapshotLogicalBytes))); err != nil {
+		return 0, err
+	}
+	if err := c.add(uint64(l.MaxCanonicalHeadBytes)); err != nil {
+		return 0, err
+	}
+	for range 16 {
+		if err := c.add(uint64(l.MaxEntryPayloadBytes)); err != nil {
+			return 0, err
+		}
+	}
+	if l.MaxEntriesPerSnapshot > math.MaxInt64/512 {
+		return 0, ErrWriterInvalidPayload
+	}
+	if err := c.add(uint64(l.MaxEntriesPerSnapshot * 512)); err != nil {
+		return 0, err
+	}
+	return c.bytes, nil
 }
 
 func validateSnapshotCreateInput(in snapshot.CreateInput, l snapshot.Limits) error {

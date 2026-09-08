@@ -33,8 +33,12 @@ func (s *Store) direct() *Store {
 }
 
 func queueValue[T any](s *Store, payload []any, fn func(*Store, []any) (T, error)) (T, error) {
+	return queueContextValue(context.Background(), s, payload, 0, fn)
+}
+
+func queueContextValue[T any](ctx context.Context, s *Store, payload []any, reserve int64, fn func(*Store, []any) (T, error)) (T, error) {
 	var result T
-	r, err := s.writer.admitOwned(context.Background(), payload, func(owned []any) error {
+	r, err := s.writer.admitOwnedReserved(ctx, payload, reserve, func(owned []any) error {
 		var inner error
 		result, inner = fn(s.direct(), owned)
 		return inner

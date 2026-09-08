@@ -2,15 +2,24 @@ package store
 
 import (
 	"context"
+	"math"
 	"reflect"
 	"strings"
 )
 
 func (w *runtimeWriter) admitOwned(ctx context.Context, payload []any, run func([]any) error) (*writerRequest, error) {
+	return w.admitOwnedReserved(ctx, payload, 0, run)
+}
+
+func (w *runtimeWriter) admitOwnedReserved(ctx context.Context, payload []any, reserve int64, run func([]any) error) (*writerRequest, error) {
 	size, err := referencedPayloadBytes(payload...)
 	if err != nil {
 		return nil, err
 	}
+	if reserve < 0 || reserve > math.MaxInt64-size {
+		return nil, ErrWriterInvalidPayload
+	}
+	size += reserve
 	return w.admitPrepared(ctx, size, func(r *writerRequest) {
 		owned := make([]any, len(payload))
 		for i, value := range payload {
