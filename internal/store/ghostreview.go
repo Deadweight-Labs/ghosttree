@@ -19,6 +19,9 @@ type GhostReview struct {
 }
 
 func (s *Store) PutGhostReview(r GhostReview) error {
+	if s.writer != nil {
+		return queueWrite(s, []any{r}, func(d *Store, p []any) error { return d.PutGhostReview(p[0].(GhostReview)) })
+	}
 	at := r.At
 	if at == "" {
 		at = now()

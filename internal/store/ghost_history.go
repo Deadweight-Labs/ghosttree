@@ -121,6 +121,11 @@ func (s *Store) GhostHistoryCount(project, path string) (int, error) {
 // aber er soll nachvollziehbar sein: wer in einem Jahr fragt, warum die
 // Beschreibung eines Pfades älter ist als der Pfad, findet hier die Antwort.
 func (s *Store) MoveGhostFile(project, from, to string) error {
+	if s.writer != nil {
+		return queueWrite(s, []any{project, from, to}, func(d *Store, p []any) error {
+			return d.MoveGhostFile(p[0].(string), p[1].(string), p[2].(string))
+		})
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err

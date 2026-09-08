@@ -120,6 +120,11 @@ func (s *Store) ArchiveGhostFiles(in GhostArchiveInput) (GhostArchiveResult, err
 			return out, fmt.Errorf("%w: expected token required for %q", ErrGhostArchiveInvalid, target.Path)
 		}
 	}
+	if s.writer != nil {
+		return queueValue(s, []any{in}, func(d *Store, p []any) (GhostArchiveResult, error) {
+			return d.ArchiveGhostFiles(p[0].(GhostArchiveInput))
+		})
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return out, err

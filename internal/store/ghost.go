@@ -37,6 +37,9 @@ const ghostCols = `id, project, path, kind, description, content_sha, git_blob,
 // verschwand. Ohne Aufbewahrung ist das unwiederbringlich; mit ihr kostet es
 // eine Abfrage.
 func (s *Store) PutGhostFile(g GhostFile) (int64, error) {
+	if s.writer != nil {
+		return queueValue(s, []any{g}, func(d *Store, p []any) (int64, error) { return d.PutGhostFile(p[0].(GhostFile)) })
+	}
 	if g.Kind == "" {
 		g.Kind = "file"
 	}
@@ -167,6 +170,11 @@ func ParentPaths(path string) []string {
 // existierenden Originals auf die Kopie um (REQ-179). Die Erkennung sitzt jetzt
 // in ghost.DetectMoves, wo die vollständige Dateiliste vorliegt.
 func (s *Store) GhostFilesForDelivery(project, path, sessionKey string) ([]GhostFile, error) {
+	if s.writer != nil {
+		return queueValue(s, []any{project, path, sessionKey}, func(d *Store, p []any) ([]GhostFile, error) {
+			return d.GhostFilesForDelivery(p[0].(string), p[1].(string), p[2].(string))
+		})
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, err
