@@ -27,21 +27,24 @@ func DefaultWriterConfig() WriterConfig {
 }
 
 type writerRequest struct {
-	next  *writerRequest
-	run   func() error
-	done  chan error
-	bytes int64
+	next   *writerRequest
+	run    func() error
+	done   chan error
+	bytes  int64
+	chunks *ChunkBatch
 }
 
 type runtimeWriter struct {
-	mu         sync.Mutex
-	ready      *sync.Cond
-	head, tail *writerRequest
-	closed     bool
-	done       chan struct{}
-	cfg        WriterConfig
-	operations int
-	bytes      int64
+	mu                                             sync.Mutex
+	ready                                          *sync.Cond
+	head, tail                                     *writerRequest
+	closed                                         bool
+	done                                           chan struct{}
+	cfg                                            WriterConfig
+	operations                                     int
+	bytes                                          int64
+	chunkWrite                                     func([]ChunkBatch) error
+	batches, batchedOperations, fallbackOperations uint64
 }
 
 func newRuntimeWriter(cfg WriterConfig) (*runtimeWriter, error) {
@@ -112,21 +115,40 @@ func (w *runtimeWriter) work() {
 			w.mu.Unlock()
 			return
 		}
-		r := w.head
-		w.head = r.next
-		r.next = nil
-		if w.head == nil {
-			w.tail = nil
+		r := w.pop()
+		group := []*writerRequest{r}
+		if r.chunks != nil {
+			for len(group) < w.cfg.MaxBatch && w.head != nil && w.head.chunks != nil {
+				group = append(group, w.pop())
+			}
 		}
 		w.mu.Unlock()
-		err := r.run()
-		r.run = nil
-		w.mu.Lock()
-		w.operations--
-		w.bytes -= r.bytes
-		w.mu.Unlock()
-		r.done <- err
+		if r.chunks != nil {
+			w.writeChunkGroup(group)
+		} else {
+			w.complete(r, r.run())
+		}
 	}
+}
+
+func (w *runtimeWriter) pop() *writerRequest {
+	r := w.head
+	w.head = r.next
+	r.next = nil
+	if w.head == nil {
+		w.tail = nil
+	}
+	return r
+}
+
+func (w *runtimeWriter) complete(r *writerRequest, err error) {
+	r.run = nil
+	r.chunks = nil
+	w.mu.Lock()
+	w.operations--
+	w.bytes -= r.bytes
+	w.mu.Unlock()
+	r.done <- err
 }
 
 func (w *runtimeWriter) close() {

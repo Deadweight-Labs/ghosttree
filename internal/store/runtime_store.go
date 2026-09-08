@@ -24,6 +24,7 @@ func OpenRuntime(path string, cfg WriterConfig) (*Store, error) {
 		_ = s.Close()
 		return nil, err
 	}
+	s.writer.chunkWrite = func(batches []ChunkBatch) error { return s.direct().AppendChunkBatches(batches) }
 	return s, nil
 }
 

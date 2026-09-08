@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
@@ -57,7 +58,11 @@ func (s *Store) UpsertSession(sess Session) (int64, error) {
 
 func (s *Store) AppendChunks(sessionID int64, chunks []Chunk) error {
 	if s.writer != nil {
-		return queueWrite(s, []any{sessionID, chunks}, func(d *Store, p []any) error { return d.AppendChunks(p[0].(int64), p[1].([]Chunk)) })
+		r, err := s.writer.admitChunks(context.Background(), ChunkBatch{SessionID: sessionID, Chunks: chunks})
+		if err != nil {
+			return err
+		}
+		return <-r.done
 	}
 	return s.AppendChunkBatches([]ChunkBatch{{SessionID: sessionID, Chunks: chunks}})
 }
