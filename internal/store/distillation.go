@@ -33,6 +33,11 @@ func (s *Store) SessionDistillationExists(sessionID int64, digest, promptVersion
 // transcript digest under the same prompt version is a no-op, and every quote
 // is rechecked against its chunk.
 func (s *Store) ApplySessionDistillation(sessionID int64, digest, promptVersion string, ax scope.Axes, items []SessionDistilledItem) (int, error) {
+	if s.writer != nil {
+		return queueValue(s, []any{sessionID, digest, promptVersion, ax, items}, func(d *Store, p []any) (int, error) {
+			return d.ApplySessionDistillation(p[0].(int64), p[1].(string), p[2].(string), p[3].(scope.Axes), p[4].([]SessionDistilledItem))
+		})
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return 0, err
@@ -175,6 +180,11 @@ func archiveEarlierQuarantinedItems(tx *sql.Tx, sessionID int64) error {
 // bumping a version must not silently re-submit the whole archive, because
 // every re-submission is paid for.
 func (s *Store) ReleaseDistillations(promptVersion string, filter scope.Axes, dryRun bool) (int, error) {
+	if s.writer != nil {
+		return queueValue(s, []any{promptVersion, filter, dryRun}, func(d *Store, p []any) (int, error) {
+			return d.ReleaseDistillations(p[0].(string), p[1].(scope.Axes), p[2].(bool))
+		})
+	}
 	where, args := filter.FilterWhere()
 	args = append([]any{promptVersion}, args...)
 	query := `SELECT COUNT(*) FROM session_distillations d

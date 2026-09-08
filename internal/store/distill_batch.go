@@ -33,6 +33,11 @@ func (s *Store) RecordDistillBatch(providerID, model string, items []DistillBatc
 	if providerID == "" || len(items) == 0 {
 		return 0, fmt.Errorf("batch needs a provider id and at least one item")
 	}
+	if s.writer != nil {
+		return queueValue(s, []any{providerID, model, items}, func(d *Store, p []any) (int64, error) {
+			return d.RecordDistillBatch(p[0].(string), p[1].(string), p[2].([]DistillBatchItem))
+		})
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return 0, err
@@ -101,6 +106,11 @@ func (s *Store) DistillBatchItems(batchID int64) ([]DistillBatchItem, error) {
 // A local character estimate decides what to send; only this figure says what
 // it cost.
 func (s *Store) RecordDistillBatchUsage(batchID int64, customID string, prompt, completion int) error {
+	if s.writer != nil {
+		return queueWrite(s, []any{batchID, customID, prompt, completion}, func(d *Store, p []any) error {
+			return d.RecordDistillBatchUsage(p[0].(int64), p[1].(string), p[2].(int), p[3].(int))
+		})
+	}
 	_, err := s.db.Exec(`UPDATE distill_batch_items SET prompt_tokens=?, completion_tokens=?
 		WHERE batch_id=? AND custom_id=?`, prompt, completion, batchID, customID)
 	return err
@@ -115,6 +125,9 @@ func (s *Store) DistillBatchUsage(batchID int64) (prompt, completion int, err er
 func (s *Store) CloseDistillBatch(batchID int64, state string) error {
 	if state != "collected" && state != "failed" {
 		return fmt.Errorf("invalid terminal batch state %q", state)
+	}
+	if s.writer != nil {
+		return queueWrite(s, []any{batchID, state}, func(d *Store, p []any) error { return d.CloseDistillBatch(p[0].(int64), p[1].(string)) })
 	}
 	_, err := s.db.Exec(`UPDATE distill_batches SET state=?, updated_at=? WHERE id=?`, state, now(), batchID)
 	return err
