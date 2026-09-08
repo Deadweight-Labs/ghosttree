@@ -52,8 +52,13 @@ func (s *Store) BeginMigration(project string, artifacts map[string]string) (int
 	if err != nil {
 		return 0, err
 	}
+	stmt, err := tx.Prepare(`INSERT INTO migration_artifacts(run_id,path,digest) VALUES(?,?,?)`)
+	if err != nil {
+		return 0, err
+	}
+	defer stmt.Close()
 	for path, digest := range artifacts {
-		if _, err := tx.Exec(`INSERT INTO migration_artifacts(run_id,path,digest) VALUES(?,?,?)`, id, path, digest); err != nil {
+		if _, err := stmt.Exec(id, path, digest); err != nil {
 			return 0, err
 		}
 	}
