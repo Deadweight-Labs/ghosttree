@@ -37,7 +37,7 @@ func TestUserPromptSubmitHookDeliversRelevantKnowledge(t *testing.T) {
 	withConfig(t, srv.URL)
 
 	var out bytes.Buffer
-	stdin := strings.NewReader(`{"prompt":"welches modell in ollama","cwd":"/tmp"}`)
+	stdin := strings.NewReader(`{"prompt":"welches modell in ollama","cwd":"/tmp","session_id":"relevant-session"}`)
 	if code := cmdHookWith(stdin, []string{"user-prompt-submit"}, &out); code != 0 {
 		t.Fatalf("exit = %d", code)
 	}
@@ -62,7 +62,7 @@ func TestUserPromptSubmitHookSurvivesADeadServer(t *testing.T) {
 
 	var out bytes.Buffer
 	started := time.Now()
-	stdin := strings.NewReader(`{"prompt":"anything","cwd":"/tmp"}`)
+	stdin := strings.NewReader(`{"prompt":"anything","cwd":"/tmp","session_id":"dead-server-session"}`)
 	if code := cmdHookWith(stdin, []string{"user-prompt-submit"}, &out); code != 0 {
 		t.Fatalf("exit = %d, a hook must never fail the turn", code)
 	}

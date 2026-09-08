@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/privatefile"
 )
 
 type Config struct {
@@ -44,6 +46,5 @@ func Save(c Config) error {
 	if err != nil {
 		return err
 	}
-	// The token is a credential: keep the file owner-only.
-	return os.WriteFile(p, append(b, '\n'), 0o600)
+	return privatefile.Write(p, append(b, '\n'))
 }

@@ -13,7 +13,7 @@ import (
 func (a *api) putGhostReview(w http.ResponseWriter, r *http.Request) {
 	var in store.GhostReview
 	if err := readJSON(r, &in); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
 	if in.Project == "" {
@@ -26,7 +26,7 @@ func (a *api) putGhostReview(w http.ResponseWriter, r *http.Request) {
 	}
 	in.Person = personOf(r)
 	if err := a.st.PutGhostReview(in); err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, 200, map[string]string{"path": in.Path})
@@ -40,7 +40,7 @@ func (a *api) ghostReviews(w http.ResponseWriter, r *http.Request) {
 	}
 	out, err := a.st.GhostReviewsUnder(q.Get("project"), q.Get("prefix"))
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
 	if out == nil {

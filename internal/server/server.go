@@ -4,26 +4,89 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
+	"github.com/Deadweight-Labs/ghosttree/internal/snapshot"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
-type api struct{ st *store.Store }
+type SnapshotMirror interface {
+	Rebuild(context.Context, string) error
+}
+
+type Option func(*api)
+
+type OperationIDGenerator func() (string, error)
+
+type snapshotErrorLogger func(operationID string, err, generatorErr error)
+
+func WithContextSnapshotLimits(limits snapshot.Limits) Option {
+	return func(a *api) { a.snapshotLimits = limits }
+}
+
+func WithSnapshotMirror(mirror SnapshotMirror) Option {
+	return func(a *api) { a.snapshotMirror = mirror }
+}
+
+func WithOperationIDGenerator(generator OperationIDGenerator) Option {
+	return func(a *api) { a.operationIDGenerator = generator }
+}
+
+func WithLogger(logger *slog.Logger) Option {
+	return func(a *api) { a.logger = logger }
+}
+
+func WithBuildVersion(version string) Option {
+	return func(a *api) { a.buildVersion = version }
+}
+
+func withRequestIDGenerator(generator requestIDGenerator) Option {
+	return func(a *api) { a.requestIDGenerator = generator }
+}
+
+func withSnapshotErrorLogger(logger snapshotErrorLogger) Option {
+	return func(a *api) { a.snapshotErrorLogger = logger }
+}
+
+type api struct {
+	st                   *store.Store
+	snapshotLimits       snapshot.Limits
+	snapshotMirror       SnapshotMirror
+	operationIDGenerator OperationIDGenerator
+	snapshotErrorLogger  snapshotErrorLogger
+	logger               *slog.Logger
+	buildVersion         string
+	requestIDGenerator   requestIDGenerator
+	metrics              *metricsRegistry
+}
 
 type personKey struct{}
 
-func New(st *store.Store) http.Handler {
-	a := &api{st: st}
+func New(st *store.Store, options ...Option) http.Handler {
+	a := newAPI(st, options...)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	})
+	mux.Handle("GET /metrics", a.metrics)
+	mux.HandleFunc("GET /api/whoami", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, principalOf(r))
+	})
+	mux.HandleFunc("POST /api/context-snapshots", a.createContextSnapshot)
+	mux.HandleFunc("GET /api/context-snapshots", a.listContextSnapshots)
+	mux.HandleFunc("GET /api/context-snapshots/{name}", a.getContextSnapshot)
+	mux.HandleFunc("GET /api/context-snapshots/{name}/entries", a.contextSnapshotEntries)
 	mux.HandleFunc("POST /api/sessions", a.createSession)
 	mux.HandleFunc("GET /api/sessions", a.listSessions)
 	mux.HandleFunc("POST /api/sessions/{id}/chunks", a.appendChunks)
@@ -66,6 +129,8 @@ func New(st *store.Store) http.Handler {
 	mux.HandleFunc("GET /api/ghosts/tree", a.ghostTree)
 	mux.HandleFunc("GET /api/ghosts/history", a.ghostHistory)
 	mux.HandleFunc("POST /api/ghosts/move", a.ghostsMove)
+	mux.HandleFunc("POST /api/ghosts/archive", a.archiveGhosts)
+	mux.HandleFunc("GET /api/ghosts/archive-candidate", a.ghostArchiveCandidate)
 	mux.HandleFunc("GET /api/ghosts/search", a.searchGhosts)
 	mux.HandleFunc("POST /api/ghosts/reviews", a.putGhostReview)
 	mux.HandleFunc("GET /api/ghosts/reviews", a.ghostReviews)
@@ -76,29 +141,86 @@ func New(st *store.Store) http.Handler {
 	mux.HandleFunc("PUT /api/documents/{id}/revisions", a.pushDocumentRevision)
 	mux.HandleFunc("GET /api/documents/{id}/revisions", a.documentRevisions)
 	mux.HandleFunc("GET /api/documents/{id}/revisions/{rev}", a.documentRevision)
-	return a.auth(mux)
+	return a.telemetry(a.auth(a.captureRoute(mux)))
 }
 
-// auth lets /api/health through unauthenticated so probes and setup checks
-// work before a token exists.
+func newAPI(st *store.Store, options ...Option) *api {
+	a := &api{
+		st: st, snapshotLimits: snapshot.DefaultLimits(),
+		operationIDGenerator: randomOperationID,
+		snapshotErrorLogger: func(operationID string, err, generatorErr error) {
+			if generatorErr != nil {
+				log.Printf("snapshot_internal_error operation_id=%q error=%q operation_id_error=%q", operationID, err, generatorErr)
+				return
+			}
+			log.Printf("snapshot_internal_error operation_id=%q error=%q", operationID, err)
+		},
+	}
+	for _, option := range options {
+		if option != nil {
+			option(a)
+		}
+	}
+	if a.operationIDGenerator == nil {
+		a.operationIDGenerator = randomOperationID
+	}
+	if a.snapshotErrorLogger == nil {
+		a.snapshotErrorLogger = func(operationID string, err, generatorErr error) {
+			log.Printf("snapshot_internal_error operation_id=%q error=%q operation_id_error=%q", operationID, err, generatorErr)
+		}
+	}
+	if a.logger == nil {
+		a.logger = discardLogger()
+	}
+	if a.buildVersion == "" {
+		a.buildVersion = "unknown"
+	}
+	if a.requestIDGenerator == nil {
+		a.requestIDGenerator = randomOperationID
+	}
+	a.metrics = newMetricsRegistry(st, a.buildVersion)
+	return a
+}
+
+func randomOperationID() (string, error) {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(raw[:]), nil
+}
+
+var fallbackOperationIDCounter atomic.Uint64
+
+func fallbackOperationID() string {
+	return fmt.Sprintf("fallback-%x-%x", time.Now().UnixNano(), fallbackOperationIDCounter.Add(1))
+}
+
 func (a *api) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/health" {
+		if r.URL.Path == "/api/health" || r.URL.Path == "/metrics" {
 			next.ServeHTTP(w, r)
 			return
 		}
 		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		person, ok := a.st.Authenticate(strings.TrimSpace(token))
+		principal, ok := a.st.AuthenticatePrincipal(strings.TrimSpace(token))
 		if !ok {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			writeErr(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), personKey{}, person)))
+		if record := requestRecordFromContext(r.Context()); record != nil {
+			record.actor = principal.Label
+		}
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), personKey{}, principal)))
 	})
 }
 
 func personOf(r *http.Request) string {
-	p, _ := r.Context().Value(personKey{}).(string)
+	return principalOf(r).Label
+}
+
+func principalOf(r *http.Request) store.Principal {
+	p, _ := r.Context().Value(personKey{}).(store.Principal)
 	return p
 }
 
@@ -136,6 +258,7 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 }
 
 func writeErr(w http.ResponseWriter, code int, msg string) {
+	recordResponseError(w, classifyRequestError(code, "", msg), msg)
 	writeJSON(w, code, map[string]string{"error": msg})
 }
 

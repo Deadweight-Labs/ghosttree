@@ -30,6 +30,9 @@ type DistilledRequest struct {
 // Dropped requests are included: somebody decided against them, and the model
 // re-proposing what was rejected is worse than it staying quiet.
 func (s *Store) RequestTitlesForPrompt(project string) ([]string, error) {
+	if s.reader != nil {
+		return s.reader.RequestTitlesForPrompt(project)
+	}
 	rows, err := s.db.Query(`SELECT '#' || id || ' [' || state || '] ' || title
 		FROM requests WHERE project = ? ORDER BY id`, project)
 	if err != nil {
@@ -55,6 +58,11 @@ func (s *Store) RequestTitlesForPrompt(project string) ([]string, error) {
 // ledger with conditions nobody agreed to. What the model can do is record that
 // something was asked for, and quote where.
 func (s *Store) ApplyRequestDistillation(sessionID int64, digest, promptVersion string, ax scope.Axes, items []DistilledRequest) (int, error) {
+	if s.writer != nil {
+		return queueValue(s, []any{sessionID, digest, promptVersion, ax, items}, func(d *Store, p []any) (int, error) {
+			return d.ApplyRequestDistillation(p[0].(int64), p[1].(string), p[2].(string), p[3].(scope.Axes), p[4].([]DistilledRequest))
+		})
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return 0, err
@@ -143,6 +151,9 @@ func existingRequestFor(tx *sql.Tx, project string, item DistilledRequest) (int6
 // mentioned once may have been thinking aloud; one mentioned in four sessions
 // is a requirement that keeps not getting built.
 func (s *Store) RequestSightings(requestID int64) (int, error) {
+	if s.reader != nil {
+		return s.reader.RequestSightings(requestID)
+	}
 	var n int
 	err := s.db.QueryRow(`SELECT COUNT(DISTINCT session_id) FROM request_sightings WHERE request_id=?`,
 		requestID).Scan(&n)
@@ -152,6 +163,9 @@ func (s *Store) RequestSightings(requestID int64) (int, error) {
 // RequestQuotes returns what was actually said, so a person judging a distilled
 // entry reads the words rather than the model's summary of them.
 func (s *Store) RequestQuotes(requestID int64) ([]Evidence, error) {
+	if s.reader != nil {
+		return s.reader.RequestQuotes(requestID)
+	}
 	rows, err := s.db.Query(`SELECT session_id, chunk_seq, quote FROM request_sightings
 		WHERE request_id=? ORDER BY session_id, chunk_seq`, requestID)
 	if err != nil {

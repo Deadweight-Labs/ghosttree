@@ -47,6 +47,8 @@ func run(args []string, stdout io.Writer) int {
 		return cmdMigrate(rest, stdout)
 	case "mirror":
 		return cmdMirror(rest, stdout)
+	case "snapshot":
+		return cmdSnapshot(rest, stdout, os.Stderr)
 	case "distill-sessions":
 		return cmdDistillSessions(rest, stdout)
 	case "usage":
@@ -86,10 +88,11 @@ const usage = `usage: ctx <command>
   review   approve or reject distilled knowledge
   regression  say which test guards a fixed defect, and list the fixes none does
   request  search and manage the work ledger
-  ghost    read earlier versions of a path's description
+  ghost    read description history or archive confirmed-deleted paths
   doc      write, publish, and read long-form documents
   migrate  move repository agent artifacts into ghosttree
   mirror   write .ghosttree/ for a repository (harnesses without hooks)
+  snapshot create, inspect, export, verify, and mirror immutable context marks
   distill-sessions  extract quarantined knowledge from idle sessions
                     (--submit/--collect for the half-price batch path,
                      --reprocess-version to redo work of an older prompt)

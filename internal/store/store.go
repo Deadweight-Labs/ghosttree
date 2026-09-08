@@ -3,17 +3,51 @@ package store
 
 import (
 	"database/sql"
+	"fmt"
+	"net/url"
+	"os"
+	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
 )
 
-type Store struct{ db *sql.DB }
+type Store struct {
+	db            *sql.DB
+	path          string
+	snapshotFault func(string) error
+	writer        *runtimeWriter
+	bookkeeper    *runtimeWriter
+	reader        *Store
+	closeOnce     sync.Once
+	closeErr      error
+}
+
+type OpenOptions struct {
+	MaxOpenConns int
+}
+
+type RuntimeStats struct {
+	Writer                            WriterStats
+	Reader                            sql.DBStats
+	DB                                sql.DBStats
+	DatabaseBytes, WALBytes, SHMBytes int64
+}
+
+const defaultFileMaxOpenConns = 1
 
 const schema = `
 CREATE TABLE IF NOT EXISTS persons(
   id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL,
   token_hash TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS context_snapshot_access(
+  person_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE RESTRICT,
+  project TEXT NOT NULL,
+  can_read INTEGER NOT NULL CHECK(can_read IN (0,1)),
+  can_create INTEGER NOT NULL CHECK(can_create IN (0,1)),
+  can_release_bind INTEGER NOT NULL CHECK(can_release_bind IN (0,1)),
+  PRIMARY KEY(person_id, project));
 CREATE TABLE IF NOT EXISTS machines(
   hostname TEXT PRIMARY KEY, first_seen TEXT NOT NULL, last_seen TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS requests(
@@ -284,6 +318,36 @@ CREATE TABLE IF NOT EXISTS ghost_file_versions(
   reason TEXT NOT NULL DEFAULT 'ersetzt');
 CREATE INDEX IF NOT EXISTS ghost_file_versions_path
   ON ghost_file_versions(project, path, replaced_at DESC);
+CREATE TABLE IF NOT EXISTS ghost_archive_receipts(
+  project TEXT NOT NULL,
+  path TEXT NOT NULL,
+  token TEXT NOT NULL,
+  person TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  at TEXT NOT NULL,
+  PRIMARY KEY(project,path,token));
+CREATE TABLE IF NOT EXISTS ghost_path_revisions(
+  project TEXT NOT NULL,
+  path TEXT NOT NULL,
+  revision INTEGER NOT NULL CHECK(revision>0),
+  PRIMARY KEY(project,path));
+INSERT OR IGNORE INTO ghost_path_revisions(project,path,revision)
+  SELECT project,path,1 FROM ghost_files;
+CREATE TRIGGER IF NOT EXISTS ghost_path_revision_insert AFTER INSERT ON ghost_files BEGIN
+  INSERT INTO ghost_path_revisions(project,path,revision) VALUES(new.project,new.path,1)
+    ON CONFLICT(project,path) DO UPDATE SET revision=revision+1;
+END;
+CREATE TRIGGER IF NOT EXISTS ghost_path_revision_delete AFTER DELETE ON ghost_files BEGIN
+  INSERT INTO ghost_path_revisions(project,path,revision) VALUES(old.project,old.path,1)
+    ON CONFLICT(project,path) DO UPDATE SET revision=revision+1;
+END;
+CREATE TRIGGER IF NOT EXISTS ghost_path_revision_update AFTER UPDATE ON ghost_files BEGIN
+  INSERT INTO ghost_path_revisions(project,path,revision) VALUES(old.project,old.path,1)
+    ON CONFLICT(project,path) DO UPDATE SET revision=revision+1;
+  INSERT INTO ghost_path_revisions(project,path,revision)
+    SELECT new.project,new.path,1 WHERE new.project!=old.project OR new.path!=old.path
+    ON CONFLICT(project,path) DO UPDATE SET revision=revision+1;
+END;
 -- Was in dieser Session schon gesagt wurde: ausgelieferte Beschreibungen UND
 -- ausgesprochene Aufforderungen. Auf den Pfad geschlüsselt statt auf die
 -- Eintrags-Id, weil eine Aufforderung einen Pfad meint, für den es noch keinen
@@ -347,36 +411,203 @@ CREATE TABLE IF NOT EXISTS document_revisions(
 `
 
 func Open(path string) (*Store, error) {
-	db, err := sql.Open("sqlite", path)
+	if sqliteFilePath(path) == "" {
+		return OpenWithOptions(path, OpenOptions{MaxOpenConns: 1})
+	}
+	return OpenRuntime(path, DefaultWriterConfig())
+}
+
+func OpenReadOnly(path string, maxOpenConns int) (*Store, error) {
+	if maxOpenConns <= 0 {
+		return nil, fmt.Errorf("max open connections must be positive")
+	}
+	dbPath := sqliteFilePath(path)
+	if dbPath == "" {
+		return nil, fmt.Errorf("read-only store requires a file-backed database")
+	}
+	info, err := os.Lstat(dbPath)
 	if err != nil {
 		return nil, err
 	}
-	// Single writer: serialize access instead of hitting SQLITE_BUSY.
-	db.SetMaxOpenConns(1)
-	// busy_timeout covers the second process case (ctx person add against a
-	// running server) that WAL alone does not.
-	if _, err := db.Exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;`); err != nil {
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("database path %q is not a regular file", dbPath)
+	}
+	dsn := (&url.URL{Scheme: "file", Path: dbPath}).String() +
+		"?mode=ro&_pragma=foreign_keys(1)&_pragma=recursive_triggers(1)&_pragma=busy_timeout(5000)"
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
 		return nil, err
 	}
+	db.SetMaxOpenConns(maxOpenConns)
+	db.SetMaxIdleConns(maxOpenConns)
+	if err := db.Ping(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return &Store{db: db}, nil
+}
+
+func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
+	if options.MaxOpenConns <= 0 {
+		return nil, fmt.Errorf("max open connections must be positive")
+	}
+	dbPath := sqliteFilePath(path)
+	if dbPath == "" {
+		options.MaxOpenConns = 1
+	}
+	if dbPath != "" {
+		if err := prepareDatabaseFiles(dbPath); err != nil {
+			return nil, err
+		}
+	}
+	db, err := sql.Open("sqlite", storeSQLiteDSN(path))
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	if dbPath != "" {
+		var journal string
+		if err := db.QueryRow(`PRAGMA journal_mode=WAL`).Scan(&journal); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+		if strings.ToLower(journal) != "wal" {
+			_ = db.Close()
+			return nil, fmt.Errorf("sqlite journal mode = %q, want wal", journal)
+		}
+	}
 	if _, err := db.Exec(schema); err != nil {
+		_ = db.Close()
 		return nil, err
 	}
 	if err := ensureKnowledgeConfirmedBy(db); err != nil {
+		_ = db.Close()
 		return nil, err
 	}
 	if err := ensureKnowledgeLastModifiedBy(db); err != nil {
+		_ = db.Close()
 		return nil, err
 	}
 	// Ohne diese beiden liefert jede Abfrage, die sie nennt, auf einer
 	// bestehenden Datenbank einen Fehler statt eines Ergebnisses — CREATE TABLE
 	// IF NOT EXISTS ist dort ein No-op.
 	if err := ensureKnowledgeColumn(db, "regression_state"); err != nil {
+		_ = db.Close()
 		return nil, err
 	}
 	if err := ensureKnowledgeColumn(db, "regression_test"); err != nil {
+		_ = db.Close()
 		return nil, err
 	}
-	return &Store{db: db}, nil
+	if err := EnsureContextSnapshotSchema(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	db.SetMaxOpenConns(options.MaxOpenConns)
+	db.SetMaxIdleConns(options.MaxOpenConns)
+	return &Store{db: db, path: dbPath}, nil
+}
+
+func storeSQLiteDSN(path string) string {
+	if path == ":memory:" {
+		path = "file::memory:"
+	}
+	separator := "?"
+	if strings.Contains(path, "?") {
+		separator = "&"
+	}
+	if strings.HasSuffix(path, "?") || strings.HasSuffix(path, "&") {
+		separator = ""
+	}
+	return path + separator + "_pragma=foreign_keys(1)&_pragma=recursive_triggers(1)&_pragma=busy_timeout(5000)&_pragma=synchronous(FULL)"
+}
+
+func sqliteFilePath(path string) string {
+	if path == ":memory:" || strings.HasPrefix(path, "file::memory:") {
+		return ""
+	}
+	path, rawQuery, _ := strings.Cut(path, "?")
+	if strings.HasPrefix(path, "file:") {
+		query, err := url.ParseQuery(rawQuery)
+		if err == nil && strings.EqualFold(query.Get("mode"), "memory") {
+			return ""
+		}
+	}
+	return strings.TrimPrefix(path, "file:")
+}
+
+func prepareDatabaseFiles(path string) error {
+	if path == ":memory:" {
+		return nil
+	}
+	if err := ensurePrivateDatabaseFile(path); err != nil {
+		return err
+	}
+	for _, suffix := range []string{"-wal", "-shm"} {
+		if err := tightenExistingDatabaseFile(path + suffix); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ensurePrivateDatabaseFile(path string) error {
+	for attempt := 0; attempt < 3; attempt++ {
+		info, err := os.Lstat(path)
+		if err == nil {
+			if !info.Mode().IsRegular() {
+				return fmt.Errorf("database path %q is not a regular file", path)
+			}
+			return chmodRegularFile(path, info, "database path")
+		}
+		if !os.IsNotExist(err) {
+			return err
+		}
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+		if os.IsExist(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if err := f.Chmod(0o600); err != nil {
+			_ = f.Close()
+			return err
+		}
+		return f.Close()
+	}
+	return fmt.Errorf("database path %q changed while opening", path)
+}
+
+func tightenExistingDatabaseFile(path string) error {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("database sidecar %q is not a regular file", path)
+	}
+	return chmodRegularFile(path, info, "database sidecar")
+}
+
+func chmodRegularFile(path string, expected os.FileInfo, kind string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	actual, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if !actual.Mode().IsRegular() || !os.SameFile(expected, actual) {
+		return fmt.Errorf("%s %q changed while opening", kind, path)
+	}
+	return f.Chmod(0o600)
 }
 
 // ensureKnowledgeColumn ergänzt eine Textspalte mit leerem Vorgabewert, falls
@@ -454,7 +685,48 @@ func ensureKnowledgeConfirmedBy(db *sql.DB) error {
 	return err
 }
 
-func (s *Store) Close() error { return s.db.Close() }
+func (s *Store) Close() error {
+	s.closeOnce.Do(func() {
+		if s.writer != nil {
+			s.writer.close()
+		}
+		if s.reader != nil {
+			s.closeErr = s.reader.Close()
+		}
+		if err := s.db.Close(); s.closeErr == nil {
+			s.closeErr = err
+		}
+	})
+	return s.closeErr
+}
+
+func (s *Store) RuntimeStats() RuntimeStats {
+	stats := RuntimeStats{DB: s.db.Stats()}
+	if s.writer != nil {
+		stats.Writer = s.writer.stats()
+	}
+	if s.reader != nil {
+		stats.Reader = s.reader.db.Stats()
+	}
+	if s.path == "" {
+		return stats
+	}
+	stats.DatabaseBytes = fileBytes(s.path)
+	stats.WALBytes = fileBytes(s.path + "-wal")
+	stats.SHMBytes = fileBytes(s.path + "-shm")
+	return stats
+}
+
+func fileBytes(path string) int64 {
+	if path == "" {
+		return 0
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return info.Size()
+}
 
 // DB exposes the connection for schema inspection at startup.
 func (s *Store) DB() *sql.DB { return s.db }

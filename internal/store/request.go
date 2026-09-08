@@ -21,6 +21,12 @@ func (s *Store) CreateRequest(in requestdomain.CreateInput) (requestdomain.Detai
 	if r.Origin == "" {
 		r.Origin = "agent"
 	}
+	if s.writer != nil {
+		return queueValue(s, []any{in}, func(d *Store, p []any) (requestdomain.Detail, error) {
+			return d.CreateRequest(p[0].(requestdomain.CreateInput))
+		})
+	}
+
 	tx, err := s.db.Begin()
 	if err != nil {
 		return requestdomain.Detail{}, err
@@ -69,6 +75,9 @@ func (s *Store) CreateRequest(in requestdomain.CreateInput) (requestdomain.Detai
 }
 
 func (s *Store) RequestByID(id int64) (requestdomain.Detail, error) {
+	if s.reader != nil {
+		return s.reader.RequestByID(id)
+	}
 	var d requestdomain.Detail
 	r := &d.Request
 	err := s.db.QueryRow(`SELECT id,type,title,description,state,priority,project,branch,machine,origin,person,session_ref,idempotency_key,created_at,updated_at FROM requests WHERE id=?`, id).Scan(
@@ -185,6 +194,9 @@ func (s *Store) RequestByID(id int64) (requestdomain.Detail, error) {
 const snippetChars = 200
 
 func (s *Store) SearchRequests(filter requestdomain.SearchFilter) (requestdomain.SearchPage, error) {
+	if s.reader != nil {
+		return s.reader.SearchRequests(filter)
+	}
 	limit := filter.Limit
 	if limit <= 0 {
 		limit = 10
@@ -272,6 +284,9 @@ func (s *Store) SearchRequests(filter requestdomain.SearchFilter) (requestdomain
 }
 
 func (s *Store) CountOpenRequests(ax scope.Axes) (int, error) {
+	if s.reader != nil {
+		return s.reader.CountOpenRequests(ax)
+	}
 	where, args := ax.UnionWhere()
 	var count int
 	err := s.db.QueryRow(`SELECT COUNT(*) FROM requests WHERE state='open' AND `+where, args...).Scan(&count)
@@ -282,6 +297,12 @@ func (s *Store) AddCriterion(requestID int64, description, person string) (reque
 	if strings.TrimSpace(description) == "" {
 		return requestdomain.Criterion{}, requestdomain.NewRuleError("criterion_required", "acceptance criterion cannot be empty", "describe an observable outcome", nil)
 	}
+	if s.writer != nil {
+		return queueValue(s, []any{requestID, description, person}, func(d *Store, p []any) (requestdomain.Criterion, error) {
+			return d.AddCriterion(p[0].(int64), p[1].(string), p[2].(string))
+		})
+	}
+
 	tx, err := s.db.Begin()
 	if err != nil {
 		return requestdomain.Criterion{}, err
@@ -323,6 +344,12 @@ func (s *Store) SetCriterionState(id int64, state string, evidence requestdomain
 	if err := requestdomain.ValidateEvidence(evidence); err != nil {
 		return err
 	}
+	if s.writer != nil {
+		return queueWrite(s, []any{id, state, evidence}, func(d *Store, p []any) error {
+			return d.SetCriterionState(p[0].(int64), p[1].(string), p[2].(requestdomain.Evidence))
+		})
+	}
+
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -357,6 +384,10 @@ func (s *Store) CompleteRequest(id int64, evidence requestdomain.Evidence) error
 	if err := requestdomain.ValidateEvidence(evidence); err != nil {
 		return err
 	}
+	if s.writer != nil {
+		return queueWrite(s, []any{id, evidence}, func(d *Store, p []any) error { return d.CompleteRequest(p[0].(int64), p[1].(requestdomain.Evidence)) })
+	}
+
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -409,6 +440,10 @@ func (s *Store) DropRequest(id int64, reason, person string) error {
 	if strings.TrimSpace(reason) == "" {
 		return requestdomain.NewRuleError("reason_required", "dropping a request requires a reason", "explain why the requested outcome is no longer wanted", nil)
 	}
+	if s.writer != nil {
+		return queueWrite(s, []any{id, reason, person}, func(d *Store, p []any) error { return d.DropRequest(p[0].(int64), p[1].(string), p[2].(string)) })
+	}
+
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -461,6 +496,12 @@ func (s *Store) AddRequestRelation(requestID int64, relation requestdomain.Relat
 	if relation.KnowledgeID != 0 {
 		knowledge = relation.KnowledgeID
 	}
+	if s.writer != nil {
+		return queueValue(s, []any{requestID, relation, person}, func(d *Store, p []any) (requestdomain.Relation, error) {
+			return d.AddRequestRelation(p[0].(int64), p[1].(requestdomain.Relation), p[2].(string))
+		})
+	}
+
 	tx, err := s.db.Begin()
 	if err != nil {
 		return requestdomain.Relation{}, err
@@ -489,6 +530,18 @@ func (s *Store) StartRequestWork(requestID, sessionID int64, role, person string
 	if role != "primary" && role != "related" {
 		return requestdomain.Work{}, nil, requestdomain.NewRuleError("invalid_work_role", "work role must be primary or related", "choose primary or related", nil)
 	}
+	if s.writer != nil {
+		type result struct {
+			work     requestdomain.Work
+			warnings []string
+		}
+		out, err := queueValue(s, []any{requestID, sessionID, role, person}, func(d *Store, p []any) (result, error) {
+			work, warnings, err := d.StartRequestWork(p[0].(int64), p[1].(int64), p[2].(string), p[3].(string))
+			return result{work: work, warnings: warnings}, err
+		})
+		return out.work, out.warnings, err
+	}
+
 	var existing requestdomain.Work
 	err := s.db.QueryRow(`SELECT id,request_id,session_id,role,state,started_at,ended_at,summary FROM request_work WHERE request_id=? AND session_id=? AND role=?`, requestID, sessionID, role).Scan(
 		&existing.ID, &existing.RequestID, &existing.SessionID, &existing.Role, &existing.State, &existing.StartedAt, &existing.EndedAt, &existing.Summary)
@@ -592,6 +645,12 @@ func (s *Store) FinishRequestWork(workID int64, state, summary, person string) (
 	if strings.TrimSpace(summary) == "" {
 		return requestdomain.Work{}, requestdomain.NewRuleError("summary_required", "finishing work requires a handoff summary", "record what changed, what remains, and the next useful step", nil)
 	}
+	if s.writer != nil {
+		return queueValue(s, []any{workID, state, summary, person}, func(d *Store, p []any) (requestdomain.Work, error) {
+			return d.FinishRequestWork(p[0].(int64), p[1].(string), p[2].(string), p[3].(string))
+		})
+	}
+
 	var current requestdomain.Work
 	err := s.db.QueryRow(`SELECT id,request_id,session_id,role,state,started_at,ended_at,summary FROM request_work WHERE id=?`, workID).Scan(
 		&current.ID, &current.RequestID, &current.SessionID, &current.Role, &current.State, &current.StartedAt, &current.EndedAt, &current.Summary)
@@ -624,6 +683,9 @@ func (s *Store) FinishRequestWork(workID int64, state, summary, person string) (
 }
 
 func (s *Store) SearchRequestSessions(requestID int64, query string, limit int, cursor string) (requestdomain.SessionPage, error) {
+	if s.reader != nil {
+		return s.reader.SearchRequestSessions(requestID, query, limit, cursor)
+	}
 	if limit <= 0 {
 		limit = 20
 	}

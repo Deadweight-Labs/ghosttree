@@ -24,7 +24,7 @@ func (a *api) createRequest(w http.ResponseWriter, r *http.Request) {
 		Criteria       []string `json:"criteria"`
 	}
 	if err := readJSON(r, &body); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
 	detail, err := a.st.CreateRequest(requestdomain.CreateInput{
@@ -83,7 +83,7 @@ func (a *api) completeRequest(w http.ResponseWriter, r *http.Request) {
 		EvidenceRef  string `json:"evidence_ref"`
 	}
 	if err := readJSON(r, &body); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
 	err := a.st.CompleteRequest(id, requestdomain.Evidence{Kind: body.EvidenceKind, Ref: body.EvidenceRef, Person: personOf(r)})
@@ -110,7 +110,7 @@ func (a *api) startRequestWork(w http.ResponseWriter, r *http.Request) {
 		Role      string `json:"role"`
 	}
 	if err := readJSON(r, &body); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
 	work, warnings, err := a.st.StartRequestWork(requestID, body.SessionID, body.Role, personOf(r))
@@ -132,7 +132,7 @@ func (a *api) finishRequestWork(w http.ResponseWriter, r *http.Request) {
 		Summary string `json:"summary"`
 	}
 	if err := readJSON(r, &body); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
 	work, err := a.st.FinishRequestWork(workID, body.State, body.Summary, personOf(r))
@@ -153,7 +153,7 @@ func (a *api) addRequestCriterion(w http.ResponseWriter, r *http.Request) {
 		Description string `json:"description"`
 	}
 	if err := readJSON(r, &body); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
 	criterion, err := a.st.AddCriterion(requestID, body.Description, personOf(r))
@@ -176,7 +176,7 @@ func (a *api) setRequestCriterion(w http.ResponseWriter, r *http.Request) {
 		EvidenceRef  string `json:"evidence_ref"`
 	}
 	if err := readJSON(r, &body); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
 	if err := a.st.SetCriterionState(criterionID, body.State, requestdomain.Evidence{Kind: body.EvidenceKind, Ref: body.EvidenceRef, Person: personOf(r)}); err != nil {
@@ -196,7 +196,7 @@ func (a *api) dropRequest(w http.ResponseWriter, r *http.Request) {
 		Reason string `json:"reason"`
 	}
 	if err := readJSON(r, &body); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
 	if err := a.st.DropRequest(requestID, body.Reason, personOf(r)); err != nil {
@@ -219,7 +219,7 @@ func (a *api) addRequestRelation(w http.ResponseWriter, r *http.Request) {
 	}
 	var relation requestdomain.Relation
 	if err := readJSON(r, &relation); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
 	saved, err := a.st.AddRequestRelation(requestID, relation, personOf(r))
@@ -241,7 +241,7 @@ func (a *api) correctRequest(w http.ResponseWriter, r *http.Request) {
 		Reason string            `json:"reason"`
 	}
 	if err := readJSON(r, &body); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
 	if err := a.st.UpdateRequest(requestID, body.Patch, personOf(r), body.Reason); err != nil {
@@ -266,7 +266,7 @@ func (a *api) removeRequestRelation(w http.ResponseWriter, r *http.Request) {
 		Reason string `json:"reason"`
 	}
 	if err := readJSON(r, &body); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
 	if err := a.st.RemoveRequestRelation(relationID, personOf(r), body.Reason); err != nil {
@@ -277,12 +277,16 @@ func (a *api) removeRequestRelation(w http.ResponseWriter, r *http.Request) {
 }
 
 func writeRequestError(w http.ResponseWriter, err error) {
+	if writeWriterError(w, err, false) {
+		return
+	}
 	var rule *requestdomain.RuleError
 	if errors.As(err, &rule) {
 		status := http.StatusBadRequest
 		if rule.ErrorCode == "open_criteria" || rule.ErrorCode == "primary_exists" || rule.ErrorCode == "work_not_active" {
 			status = http.StatusConflict
 		}
+		recordResponseError(w, classifyRequestError(status, "", err.Error()), err.Error())
 		writeJSON(w, status, map[string]any{
 			"code": rule.ErrorCode, "message": rule.Message, "resolution": rule.Resolution,
 			"details": map[string]any{"ids": rule.IDs},
@@ -290,8 +294,10 @@ func writeRequestError(w http.ResponseWriter, err error) {
 		return
 	}
 	if errors.Is(err, sql.ErrNoRows) {
+		recordResponseError(w, "not_found", err.Error())
 		writeJSON(w, http.StatusNotFound, map[string]string{"code": "not_found", "message": "request resource not found", "resolution": "check the identifier"})
 		return
 	}
+	recordResponseError(w, classifyRequestError(http.StatusInternalServerError, "", err.Error()), err.Error())
 	writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "internal", "message": "request operation failed", "resolution": "retry or inspect server logs"})
 }

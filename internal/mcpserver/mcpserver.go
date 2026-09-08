@@ -24,7 +24,8 @@ type Server struct {
 	repoRoot string
 	// afterWrite schreibt den Baum neu. Als Rückruf, weil das Schreiben in
 	// cmd/ctx sitzt und mcpserver nicht von main abhängen darf.
-	afterWrite func()
+	afterWrite    func()
+	afterSnapshot func(context.Context, string) error
 	// mentioned sind die Pfade, auf die dieser Prozess schon hingewiesen hat.
 	// Der Prozess ist die Sitzung, deshalb reicht der Hauptspeicher; siehe
 	// firstMentionOf. Unter einem Schloss, weil Werkzeugaufrufe im go-sdk
@@ -41,6 +42,8 @@ type Server struct {
 func (s *Server) SetRepoRoot(root string) { s.repoRoot = root }
 
 func (s *Server) SetAfterWrite(f func()) { s.afterWrite = f }
+
+func (s *Server) SetAfterSnapshot(f func(context.Context, string) error) { s.afterSnapshot = f }
 
 func (s *Server) SetSessionRef(ref string) { s.sessionRef = ref }
 
@@ -114,6 +117,11 @@ type SessionsInput struct {
 }
 
 func (s *Server) Register(srv *mcp.Server) {
+	closed := false
+	additive := false
+	mcp.AddTool(srv, &mcp.Tool{Name: "context_snapshot_create", Description: "Create an immutable named snapshot of the bound project's durable context and observed Git state.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, IdempotentHint: true, OpenWorldHint: &closed}}, s.handleSnapshotCreate)
+	mcp.AddTool(srv, &mcp.Tool{Name: "context_snapshot_list", Description: "List immutable context snapshot metadata for the bound project, with an opaque cursor and a maximum limit of 100.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closed}}, s.handleSnapshotList)
+	mcp.AddTool(srv, &mcp.Tool{Name: "context_snapshot_get", Description: "Read one snapshot safely: no filter returns only head and counts, domain returns at most 100 summaries, and domain plus key returns exactly one payload.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closed}}, s.handleSnapshotGet)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "context_search",
 		Description: "Search ghosttree knowledge and past session transcripts, or read one knowledge entry in full. Hits are snippets and carry an id; pass knowledge_id to get that entry's whole body back verbatim, which is how stored plans, specs and other long documents are read. Defaults to the current project, branch and machine context. Set project to search another repository, or all_projects to search every one of them — worth doing when a problem here may already have been solved elsewhere.",
@@ -134,8 +142,6 @@ func (s *Server) Register(srv *mcp.Server) {
 		Name:        "context_describe_file",
 		Description: "Describe what a file or directory does, stored against its repository-relative path instead of as a comment in the source. Use it whenever you would otherwise write an explanatory comment, and whenever you create a file. The description is what a later reader — including a small model that cannot hold the file in context — needs to understand this path without reading it. Ghost descriptions are browsable as real files under .ghosttree/tree/. If you have read the path and there is nothing to say that is not already in the code, pass nothing_to_say instead of writing a description that restates the source — an empty entry costs nothing, a restatement costs trust in every other description.",
 	}, s.handleDescribe)
-	closed := false
-	additive := false
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "context_file_history",
 		Description: "Read how a path's description CHANGED — sentence by sentence, newest change first, the way you would read a diff. Not two versions side by side for you to compare: the removed sentences carry a -, the new ones a +, everything that stayed is counted and left out. The file's own history is in git; this is the history of the understanding, and it exists nowhere else. Use it when a description reads as if it no longer matches the code, when you suspect a good description was overwritten, or when you want to know how a component's purpose drifted. Pass full:true only when the exact wording of an old version is what you need — it costs the full text of every version.",

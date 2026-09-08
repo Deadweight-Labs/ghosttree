@@ -19,7 +19,8 @@ func renderHistory(name string, chain []store.GhostVersion, full bool) string {
 	if name == "" {
 		name = "(Repo-Wurzel)"
 	}
-	if len(chain) < 2 {
+	archived := len(chain) > 0 && chain[0].ReplacedAt != ""
+	if len(chain) == 0 || (len(chain) == 1 && !archived) {
 		return fmt.Sprintf("%s: keine früheren Fassungen — die aktuelle Beschreibung ist die erste.", name)
 	}
 	if full {
@@ -54,7 +55,11 @@ func renderHistory(name string, chain []store.GhostVersion, full bool) string {
 func renderVerbatim(name string, chain []store.GhostVersion) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "## Frühere Fassungen von %s\n\n", name)
-	for _, v := range chain[1:] {
+	versions := chain
+	if len(chain) > 0 && chain[0].ReplacedAt == "" {
+		versions = chain[1:]
+	}
+	for _, v := range versions {
 		fmt.Fprintf(&b, "### %s bis %s", shortDate(v.DescribedAt), shortDate(v.ReplacedAt))
 		if v.Person != "" {
 			fmt.Fprintf(&b, ", von %s", v.Person)

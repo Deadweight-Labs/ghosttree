@@ -26,6 +26,9 @@ func refreshObservedAt(tx *sql.Tx, id int64) error {
 // Only empty values are filled, so a rerun is a no-op and a reconfirmation set
 // by hand is not overwritten.
 func (s *Store) BackfillObservedAt() (int64, error) {
+	if s.writer != nil {
+		return queueValue(s, nil, func(d *Store, _ []any) (int64, error) { return d.BackfillObservedAt() })
+	}
 	res, err := s.db.Exec(`UPDATE knowledge
 		SET observed_at = COALESCE(` + observedFromEvidence + `, created_at)
 		WHERE observed_at = ''`)

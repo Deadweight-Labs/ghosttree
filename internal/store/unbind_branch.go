@@ -10,6 +10,9 @@ import (
 // of what it returns was never a deliberate choice — it is the branch whichever
 // session happened to write the entry was standing on.
 func (s *Store) BranchBoundKnowledge() ([]Knowledge, error) {
+	if s.reader != nil {
+		return s.reader.BranchBoundKnowledge()
+	}
 	rows, err := s.db.Query(`SELECT ` + knowledgeCols + ` FROM knowledge
 		WHERE status = 'active' AND branch != ''
 		ORDER BY project, branch, id`)
@@ -29,6 +32,9 @@ func (s *Store) BranchBoundKnowledge() ([]Knowledge, error) {
 func (s *Store) UnbindBranchScope(ids []int64, dry bool) ([]Knowledge, error) {
 	if len(ids) == 0 {
 		return nil, nil
+	}
+	if s.writer != nil {
+		return queueValue(s, []any{ids, dry}, func(d *Store, p []any) ([]Knowledge, error) { return d.UnbindBranchScope(p[0].([]int64), p[1].(bool)) })
 	}
 	placeholders := make([]string, len(ids))
 	args := make([]any, len(ids))

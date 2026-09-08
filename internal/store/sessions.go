@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
@@ -23,6 +24,11 @@ type Chunk struct {
 	Raw  string `json:"raw"`  // full redacted JSONL line
 }
 
+type ChunkBatch struct {
+	SessionID int64
+	Chunks    []Chunk
+}
+
 type SessionHit struct {
 	Session Session `json:"session"`
 	Seq     int     `json:"seq"`
@@ -32,6 +38,9 @@ type SessionHit struct {
 const sessionCols = `id, harness, external_id, project, branch, machine, cwd, started_at, last_seen_at`
 
 func (s *Store) UpsertSession(sess Session) (int64, error) {
+	if s.writer != nil {
+		return queueValue(s, []any{sess}, func(d *Store, p []any) (int64, error) { return d.UpsertSession(p[0].(Session)) })
+	}
 	if sess.StartedAt == "" {
 		sess.StartedAt = now()
 	}
@@ -48,28 +57,66 @@ func (s *Store) UpsertSession(sess Session) (int64, error) {
 }
 
 func (s *Store) AppendChunks(sessionID int64, chunks []Chunk) error {
+	if s.writer != nil {
+		r, err := s.writer.admitChunks(context.Background(), ChunkBatch{SessionID: sessionID, Chunks: chunks})
+		if err != nil {
+			return err
+		}
+		return <-r.done
+	}
+	return s.AppendChunkBatches([]ChunkBatch{{SessionID: sessionID, Chunks: chunks}})
+}
+
+func (s *Store) AppendChunkBatches(batches []ChunkBatch) error {
+	if s.writer != nil {
+		return queueWrite(s, []any{batches}, func(d *Store, p []any) error { return d.AppendChunkBatches(p[0].([]ChunkBatch)) })
+	}
+	if len(batches) == 0 {
+		return nil
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	sessions := make(map[int64]struct{}, len(batches))
+	ts := now()
+	for _, batch := range batches {
+		if _, ok := sessions[batch.SessionID]; ok {
+			continue
+		}
+		result, err := tx.Exec(`UPDATE sessions SET last_seen_at = ? WHERE id = ?`, ts, batch.SessionID)
+		if err != nil {
+			return err
+		}
+		matched, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if matched == 0 {
+			return sql.ErrNoRows
+		}
+		sessions[batch.SessionID] = struct{}{}
+	}
 	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO session_chunks(session_id, seq, role, text, raw) VALUES(?,?,?,?,?)`)
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
-	for _, c := range chunks {
-		if _, err := stmt.Exec(sessionID, c.Seq, c.Role, c.Text, c.Raw); err != nil {
-			return err
+	for _, batch := range batches {
+		for _, c := range batch.Chunks {
+			if _, err := stmt.Exec(batch.SessionID, c.Seq, c.Role, c.Text, c.Raw); err != nil {
+				return err
+			}
 		}
-	}
-	if _, err := tx.Exec(`UPDATE sessions SET last_seen_at = ? WHERE id = ?`, now(), sessionID); err != nil {
-		return err
 	}
 	return tx.Commit()
 }
 
 func (s *Store) ListSessions(filter scope.Axes, limit int) ([]Session, error) {
+	if s.reader != nil {
+		return s.reader.ListSessions(filter, limit)
+	}
 	if limit <= 0 {
 		limit = 50
 	}
@@ -95,6 +142,9 @@ func (s *Store) ListSessions(filter scope.Axes, limit int) ([]Session, error) {
 // read the same transcripts for different things, and the first to run would
 // take the whole archive off the second one's queue.
 func (s *Store) SessionsPendingDistillation(filter scope.Axes, idleBefore, promptVersion string, limit int) ([]Session, error) {
+	if s.reader != nil {
+		return s.reader.SessionsPendingDistillation(filter, idleBefore, promptVersion, limit)
+	}
 	if limit <= 0 {
 		limit = 50
 	}
@@ -125,6 +175,9 @@ func (s *Store) SessionsPendingDistillation(filter scope.Axes, idleBefore, promp
 // scope that was re-canonicalized in the meantime should file the result under
 // the corrected project, not the one that was current at submission time.
 func (s *Store) SessionByID(id int64) (Session, error) {
+	if s.reader != nil {
+		return s.reader.SessionByID(id)
+	}
 	rows, err := s.db.Query(`SELECT `+sessionCols+` FROM sessions WHERE id = ?`, id)
 	if err != nil {
 		return Session{}, err
@@ -140,6 +193,9 @@ func (s *Store) SessionByID(id int64) (Session, error) {
 }
 
 func (s *Store) ReadSession(id int64, fromSeq, limit int) ([]Chunk, error) {
+	if s.reader != nil {
+		return s.reader.ReadSession(id, fromSeq, limit)
+	}
 	if limit <= 0 {
 		limit = 200
 	}
@@ -164,6 +220,9 @@ func (s *Store) ReadSession(id int64, fromSeq, limit int) ([]Chunk, error) {
 // Deliberately unpaginated: it reconstructs the original transcript, and a
 // partial transcript is not an archive.
 func (s *Store) SessionRaw(id int64) ([]string, error) {
+	if s.reader != nil {
+		return s.reader.SessionRaw(id)
+	}
 	rows, err := s.db.Query(`SELECT raw FROM session_chunks WHERE session_id = ? ORDER BY seq`, id)
 	if err != nil {
 		return nil, err
@@ -181,6 +240,9 @@ func (s *Store) SessionRaw(id int64) ([]string, error) {
 }
 
 func (s *Store) SearchSessions(q string, filter scope.Axes, excludeSession string, limit int) ([]SessionHit, error) {
+	if s.reader != nil {
+		return s.reader.SearchSessions(q, filter, excludeSession, limit)
+	}
 	if limit <= 0 {
 		limit = 20
 	}

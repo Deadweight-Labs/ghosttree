@@ -19,6 +19,9 @@ type RelevanceProbe struct {
 // archive already holds every prompt ever typed at this tool, so the sample is
 // free and honest, and it has to be re-run as the corpus grows.
 func (s *Store) ProbeRelevance(sample, limit int) ([]RelevanceProbe, error) {
+	if s.reader != nil {
+		return s.reader.ProbeRelevance(sample, limit)
+	}
 	if sample <= 0 {
 		sample = 200
 	}

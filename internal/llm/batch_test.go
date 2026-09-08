@@ -14,7 +14,6 @@ import (
 // the client through a full submit-poll-collect cycle.
 type fakeBatchAPI struct {
 	uploaded    string
-	uploadedFor string
 	status      string
 	requestBody string
 	results     string

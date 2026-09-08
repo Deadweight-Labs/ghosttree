@@ -17,8 +17,105 @@ create `/etc/ghosttree/server.env` before starting it:
 GHOSTTREE_LISTEN=<private-address>:8474
 ```
 
+Use the server's address on the trusted private network, such as NetBird, in
+the listen setting, client configuration and monitoring target. After changing
+the client URL, restart the collector and reconnect running MCP servers: they
+read the configuration when the process starts. Verify health from a client on
+that network; a probe of the server's own VPN address can be subject to different
+network policies.
+
+The sample unit also sets every snapshot resource limit to a finite default.
+`server.env` may lower or raise these values for a measured deployment, but no
+value may be zero or negative:
+
+| Environment variable | Serve flag | Default |
+| --- | --- | ---: |
+| `GHOSTTREE_SNAPSHOT_MAX_ENTRY_BYTES` | `--snapshot-max-entry-bytes` | 4,194,304 |
+| `GHOSTTREE_SNAPSHOT_MAX_ENTRIES` | `--snapshot-max-entries` | 20,000 |
+| `GHOSTTREE_SNAPSHOT_MAX_PAYLOAD_BYTES` | `--snapshot-max-payload-bytes` | 134,217,728 |
+| `GHOSTTREE_SNAPSHOT_MAX_HEAD_BYTES` | `--snapshot-max-head-bytes` | 32,768 |
+| `GHOSTTREE_SNAPSHOT_MAX_LOGICAL_BYTES` | `--snapshot-max-logical-bytes` | 167,772,160 |
+| `GHOSTTREE_SNAPSHOT_MAX_PROJECT_COUNT` | `--snapshot-max-project-count` | 1,000 |
+| `GHOSTTREE_SNAPSHOT_MAX_PROJECT_BYTES` | `--snapshot-max-project-bytes` | 8,589,934,592 |
+| `GHOSTTREE_SNAPSHOT_MAX_STORE_COUNT` | `--snapshot-max-store-count` | 10,000 |
+| `GHOSTTREE_SNAPSHOT_MAX_STORE_BYTES` | `--snapshot-max-store-bytes` | 68,719,476,736 |
+
+Counts stop attacks made from many empty snapshots; logical-byte limits include
+canonical head metadata, domains, keys, digests, and payloads. Values exactly
+at a limit are accepted. Capacity planning must also leave space for SQLite
+indexes, WAL files, and backups because those are intentionally not part of the
+portable logical-byte calculation.
+
 Do not bind directly to a public interface. Use a private network or a TLS
 reverse proxy with suitable access controls.
+
+### Runtime writer
+
+File-backed runtime stores admit domain writes into one bounded FIFO and use a
+separate read-only pool. Active operations count against both limits. A write
+succeeds only after its commit. Only adjacent pending chunk operations share a
+transaction, with no gathering delay.
+
+| Environment variable | Serve flag | Default |
+| --- | --- | ---: |
+| `GHOSTTREE_WRITER_MAX_OPERATIONS` | `--writer-max-operations` | 1,024 |
+| `GHOSTTREE_WRITER_MAX_BYTES` | `--writer-max-bytes` | 268,435,456 |
+| `GHOSTTREE_WRITER_MAX_BATCH` | `--writer-max-batch` | 64 |
+| `GHOSTTREE_WRITER_READ_CONNECTIONS` | `--writer-read-connections` | 3 |
+
+These values must be positive. The byte limit must be at least the snapshot
+logical-byte limit. Snapshot creation also reserves bounded capture scratch
+space; raising snapshot limits may require raising the writer byte budget.
+The byte budget covers owned inputs and reserved capture space, not total RSS.
+
+Saturation returns HTTP 503, `writer_busy`, `retryable: true` and
+`Retry-After: 1`. Closed admission returns `writer_closed`. Snapshot endpoints
+preserve `snapshot_store_busy`. Clients expose retry metadata without
+replaying writes automatically; resolve ambiguous outcomes using the operation's
+existing sequence, revision or idempotency identity before retrying.
+
+SIGINT and SIGTERM stop new HTTP connections and allow active handlers up to
+five minutes to finish, then drain accepted writer work before closing SQLite.
+The sample unit allows 330 seconds in total. If this deadline is exceeded,
+systemd can terminate the process; unfinished operations have no success ACK.
+The writer makes no new schema or file-format change, so a rollback restores
+the saved binary and service configuration without a database migration.
+
+### Audit logs and metrics
+
+Every non-probe API request emits one structured JSON `http_request` event to
+stderr, which systemd captures in journald for collection by Alloy/Loki. The
+event includes the actor, request ID, method, matched route, concrete path,
+remote IP, status, duration, byte counts, and a bounded error class. It never
+includes request or response bodies, query parameters, bearer tokens, or
+authorization headers. `/api/health` and `/metrics` are excluded from audit
+events.
+
+Prometheus metrics are available at `/metrics` without authentication so that
+vmagent can scrape them. This endpoint has the same network exposure as the
+server itself and must therefore remain restricted to a trusted private network.
+HTTP metric labels are deliberately bounded to method,
+matched route, status, and error class; actor, request ID, remote IP, concrete
+path, project, and slug are never labels.
+
+`ghosttree_writer_*` exposes queue operations and reserved bytes, high-water
+marks, admission/completion/rejection counts, per-kind bookkeeping drops, fixed
+histograms for queue wait, domain execution through commit or rollback, and
+chunk batch size, plus drain and worker state. Commit duration includes the
+whole domain operation, not just the SQLite commit call; best-effort accounting
+transactions are excluded. `ghosttree_reader_*` reports read-pool waits and
+connections. Metrics keep fixed labels and buckets without retaining requests.
+
+Add a scrape job to vmagent using the same private address. The monitoring host
+needs network access to the server's TCP port 8474:
+
+```yaml
+  - job_name: ghosttree
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['<private-address>:8474']
+        labels: {site: home, host: apps}
+```
 
 ```bash
 make build-all
@@ -55,6 +152,80 @@ sudo systemd-run --pipe --wait --collect --quiet \
 Stop `ghosttree.service` first for schema upgrades or commands that require
 exclusive access. Keep and verify the backup printed by `ctx upgrade-schema`
 before restarting the server.
+
+## Context snapshots
+
+Snapshot rows are immutable and have no ordinary deletion or redaction path.
+Authenticated identities default to read and create access when no explicit
+project access row exists. Release binding defaults to denied. Verify backup
+and restore procedures and choose finite budgets based on measured project
+sizes. Set an explicit row to override the default for a person and project:
+
+```bash
+sudo systemctl stop ghosttree
+sudo systemd-run --pipe --wait --collect --quiet \
+  -p DynamicUser=yes -p User=ghosttree -p StateDirectory=ghosttree \
+  /usr/local/bin/ctx person snapshot-access <person-name> \
+    --project github.com/owner/repository --read --create \
+    --db /var/lib/ghosttree/ghosttree.db
+sudo systemctl start ghosttree
+```
+
+Add `--release-bind` only when that identity must create SemVer release marks.
+Use the read-only `snapshot-access show` form to confirm the stored tuple.
+To revoke all access, run the write form with no `--read`, `--create`, or
+`--release-bind` flags; the explicit denial takes precedence over the default.
+
+The server can rebuild repository-local snapshot indexes only for explicitly
+mapped roots. Every mapping is repeatable, canonicalized by project, and must
+name an existing absolute real directory rather than a symlink:
+
+```text
+--snapshot-root github.com/owner/one=/srv/projects/one
+--snapshot-root github.com/owner/two=/srv/projects/two
+```
+
+For the sample systemd unit, add a drop-in that clears and restates `ExecStart`
+with the unit's existing database, listen, snapshot and writer limit arguments,
+then append the required `--snapshot-root` arguments. Run
+`systemctl daemon-reload` and inspect `systemctl show ghosttree.service
+--property=ExecStart` before restarting. The service identity must be able to
+write `.ghosttree/snapshots/` in every mapped repository.
+
+A mirror failure does not roll back an already sealed database snapshot. The
+client reports `snapshot_mirror_degraded`; repair it from that repository with:
+
+```bash
+ctx snapshot mirror rebuild
+```
+
+Retry `snapshot_store_busy` and the explicitly retryable
+`snapshot_git_changed` only after re-reading the current state. A
+`snapshot_storage_exhausted`/HTTP 507 response means the SQLite or filesystem
+store is full; free or provision space and verify the database before retrying.
+Limit errors require choosing a smaller durable context or deliberately
+changing a finite deployment budget, never disabling the budget.
+
+### Existing database rollout
+
+Back up the SQLite database and its WAL state before installing a
+snapshot-capable binary. On first open Ghosttree adds snapshot tables, indexes,
+checks, and immutability triggers; it does not rewrite live Knowledge, Ghost,
+document, request, or session rows and performs no historical backfill. The
+server refuses startup if trigger definitions are stale, a committed
+`building` snapshot exists, or the rollback-only invariant probe fails. Keep
+the old binary and verified backup available until startup, health, snapshot
+create, export, and verify have all succeeded.
+
+Snapshots created by earlier development binaries using payload schema 1 or 2
+are preserved and readable. The database invariant upgrade may add derived
+logical-size metadata after verifying the historical entry digest; it does not
+change the sealed snapshot's identity, payload, creation time, or digest.
+The current binary creates schema 3 and reports `HeadBound: false` when
+verifying older snapshots because their digests did not bind provenance.
+Do not recreate or rehash historical snapshots to make them appear to carry
+the newer guarantee. Unsupported future schemas and actual corruption remain
+errors, rather than being silently omitted from listings.
 
 ## Session distillation
 

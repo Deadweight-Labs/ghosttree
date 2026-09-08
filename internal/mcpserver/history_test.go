@@ -7,6 +7,19 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
+func TestMCPHistoryKeepsArchivedOnlyVersionVisible(t *testing.T) {
+	chain := []store.GhostVersion{{Path: "gone.go", Description: "retained archived words", ReplacedAt: "2026-09-07T00:00:00Z", Reason: "archiviert: removed; bestätigt von operator"}}
+	for _, full := range []bool{false, true} {
+		out := renderHistory("gone.go", chain, full)
+		if !strings.Contains(out, "archiviert") || strings.Contains(out, "keine früheren Fassungen") || strings.Contains(out, "aktuelle Fassung") {
+			t.Fatalf("archived-only: %s", out)
+		}
+		if full && !strings.Contains(out, chain[0].Description) {
+			t.Fatalf("lost archive: %s", out)
+		}
+	}
+}
+
 // Zwei Fassungen, die sich in genau einem Satz unterscheiden. Bisher wurden
 // beide vollstaendig ausgeliefert und der Agent durfte sie selbst vergleichen —
 // er konnte es, aber die Arbeit haette das Werkzeug tun sollen (REQ-180).

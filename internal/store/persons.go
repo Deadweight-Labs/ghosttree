@@ -4,9 +4,18 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"strconv"
 )
 
+type Principal struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+}
+
 func (s *Store) AddPerson(name string) (string, error) {
+	if s.writer != nil {
+		return queueValue(s, []any{name}, func(d *Store, p []any) (string, error) { return d.AddPerson(p[0].(string)) })
+	}
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return "", err
@@ -22,14 +31,33 @@ func (s *Store) AddPerson(name string) (string, error) {
 }
 
 func (s *Store) Authenticate(token string) (string, bool) {
+	if s.reader != nil {
+		return s.reader.Authenticate(token)
+	}
+	principal, ok := s.AuthenticatePrincipal(token)
+	return principal.Label, ok
+}
+
+func (s *Store) AuthenticatePrincipal(token string) (Principal, bool) {
+	if s.reader != nil {
+		return s.reader.AuthenticatePrincipal(token)
+	}
 	sum := sha256.Sum256([]byte(token))
+	var id int64
 	var name string
-	err := s.db.QueryRow(`SELECT name FROM persons WHERE token_hash = ?`,
-		hex.EncodeToString(sum[:])).Scan(&name)
-	return name, err == nil
+	err := s.db.QueryRow(`SELECT id, name FROM persons WHERE token_hash = ?`,
+		hex.EncodeToString(sum[:])).Scan(&id, &name)
+	if err != nil {
+		return Principal{}, false
+	}
+	return Principal{ID: "person:" + strconv.FormatInt(id, 10), Label: name}, true
 }
 
 func (s *Store) TouchMachine(hostname string) {
+	if s.bookkeeper != nil {
+		s.bookkeeper.coalesceMachine(hostname)
+		return
+	}
 	s.db.Exec(`INSERT INTO machines(hostname, first_seen, last_seen) VALUES(?,?,?)
 	           ON CONFLICT(hostname) DO UPDATE SET last_seen = excluded.last_seen`,
 		hostname, now(), now())

@@ -17,6 +17,16 @@ type Artifact struct {
 	Activation      activation.Rule
 }
 
+type ScanExclusion struct {
+	Rel, Reason string
+}
+
+type ScanResult struct {
+	Artifacts []Artifact
+	Skipped   []ScanExclusion
+	Unscanned []ScanExclusion
+}
+
 // ShouldDistill separates current agent rules from dated historical material.
 // Specs and plans are preserved verbatim as archived cold storage; turning
 // their prose or checkboxes into current instructions would erase time.
@@ -48,31 +58,38 @@ func boundary(name string, i int) bool {
 }
 
 func Scan(repo string) ([]Artifact, error) {
+	report, err := ScanWithReport(repo)
+	return report.Artifacts, err
+}
+
+func ScanWithReport(repo string) (ScanResult, error) {
+	var out ScanResult
 	repo, err := filepath.Abs(repo)
 	if err != nil {
-		return nil, err
+		return out, err
 	}
 	rules := map[string]bool{"CLAUDE.md": true, "AGENTS.md": true, "GEMINI.md": true, ".cursorrules": true, ".windsurfrules": true, "CONVENTIONS.md": true}
-	var out []Artifact
 	err = filepath.WalkDir(repo, func(path string, d fs.DirEntry, walkErr error) error {
+		rel, err := filepath.Rel(repo, path)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
 		if walkErr != nil {
 			// Was der Nutzer nicht lesen darf, geht die Migration nichts an —
 			// ein Datenverzeichnis eines Containers etwa. Daran den ganzen
 			// Repo-Lauf scheitern zu lassen, kostet die echten Artefakte
 			// desselben Repos mit.
 			if os.IsPermission(walkErr) {
+				out.Unscanned = append(out.Unscanned, ScanExclusion{rel, "permission denied; contents not inspected"})
 				return nil
 			}
 			return walkErr
 		}
-		rel, err := filepath.Rel(repo, path)
-		if err != nil {
-			return err
-		}
-		rel = filepath.ToSlash(rel)
 		if d.IsDir() {
-			excluded := map[string]bool{".git": true, "vendor": true, "node_modules": true, "deps": true, "_build": true}
-			if rel != "." && excluded[d.Name()] {
+			excluded := map[string]string{".git": "Git metadata", ".ghosttree": "managed ghosttree state", "vendor": "dependency directory", "node_modules": "dependency directory", "deps": "dependency directory", "_build": "build output"}
+			if reason := excluded[d.Name()]; rel != "." && reason != "" {
+				out.Unscanned = append(out.Unscanned, ScanExclusion{rel, reason + "; contents not inspected"})
 				return fs.SkipDir
 			}
 			// Ein Verzeichnis mit eigenem .git ist ein anderer Checkout —
@@ -84,6 +101,13 @@ func Scan(repo string) ([]Artifact, error) {
 			// eine Datei ist.
 			if rel != "." {
 				if _, err := os.Stat(filepath.Join(path, ".git")); err == nil {
+					out.Unscanned = append(out.Unscanned, ScanExclusion{rel, "embedded repository or worktree; contents not inspected"})
+					return fs.SkipDir
+				} else if !os.IsNotExist(err) {
+					if !os.IsPermission(err) {
+						return err
+					}
+					out.Unscanned = append(out.Unscanned, ScanExclusion{rel, "permission denied checking repository boundary; contents not inspected"})
 					return fs.SkipDir
 				}
 			}
@@ -109,11 +133,32 @@ func Scan(repo string) ([]Artifact, error) {
 			kind = "plan"
 		}
 		if kind == "" {
+			if d.Type()&os.ModeSymlink != 0 {
+				out.Unscanned = append(out.Unscanned, ScanExclusion{rel, "symbolic link; target not inspected"})
+			} else if strings.HasSuffix(lower, ".md") {
+				reason := "outside document roots and not a recognized agent rule filename"
+				if strings.HasPrefix(rel, ".superpowers/") {
+					reason = ".superpowers Markdown is selected only when classified as a spec or plan"
+				}
+				out.Skipped = append(out.Skipped, ScanExclusion{rel, reason})
+			}
+			return nil
+		}
+		if d.Type()&os.ModeSymlink != 0 {
+			out.Skipped = append(out.Skipped, ScanExclusion{rel, "symbolic link; target not inspected"})
 			return nil
 		}
 		info, err := d.Info()
 		if err != nil {
+			if os.IsPermission(err) {
+				out.Unscanned = append(out.Unscanned, ScanExclusion{rel, "permission denied reading file metadata"})
+				return nil
+			}
 			return err
+		}
+		if !info.Mode().IsRegular() {
+			out.Skipped = append(out.Skipped, ScanExclusion{rel, "not a regular file; contents not inspected"})
+			return nil
 		}
 		a := Artifact{Path: path, Rel: rel, Kind: kind, Size: info.Size()}
 		if kind == "rules" {
@@ -122,9 +167,11 @@ func Scan(repo string) ([]Artifact, error) {
 				a.Activation.Paths = []string{parent + "/**"}
 			}
 		}
-		out = append(out, a)
+		out.Artifacts = append(out.Artifacts, a)
 		return nil
 	})
-	sort.Slice(out, func(i, j int) bool { return out[i].Rel < out[j].Rel })
+	sort.Slice(out.Artifacts, func(i, j int) bool { return out.Artifacts[i].Rel < out.Artifacts[j].Rel })
+	sort.Slice(out.Skipped, func(i, j int) bool { return out.Skipped[i].Rel < out.Skipped[j].Rel })
+	sort.Slice(out.Unscanned, func(i, j int) bool { return out.Unscanned[i].Rel < out.Unscanned[j].Rel })
 	return out, err
 }

@@ -33,6 +33,11 @@ func (s *Store) RecordDistillBatch(providerID, model string, items []DistillBatc
 	if providerID == "" || len(items) == 0 {
 		return 0, fmt.Errorf("batch needs a provider id and at least one item")
 	}
+	if s.writer != nil {
+		return queueValue(s, []any{providerID, model, items}, func(d *Store, p []any) (int64, error) {
+			return d.RecordDistillBatch(p[0].(string), p[1].(string), p[2].([]DistillBatchItem))
+		})
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return 0, err
@@ -61,6 +66,9 @@ func (s *Store) RecordDistillBatch(providerID, model string, items []DistillBatc
 }
 
 func (s *Store) OpenDistillBatches() ([]DistillBatch, error) {
+	if s.reader != nil {
+		return s.reader.OpenDistillBatches()
+	}
 	rows, err := s.db.Query(`SELECT b.id, b.provider_batch_id, b.state, b.created_at,
 		(SELECT COUNT(*) FROM distill_batch_items i WHERE i.batch_id = b.id)
 		FROM distill_batches b WHERE b.state = 'open' ORDER BY b.id`)
@@ -80,6 +88,9 @@ func (s *Store) OpenDistillBatches() ([]DistillBatch, error) {
 }
 
 func (s *Store) DistillBatchItems(batchID int64) ([]DistillBatchItem, error) {
+	if s.reader != nil {
+		return s.reader.DistillBatchItems(batchID)
+	}
 	rows, err := s.db.Query(`SELECT custom_id, session_id, digest, prompt_version FROM distill_batch_items
 		WHERE batch_id = ? ORDER BY session_id`, batchID)
 	if err != nil {
@@ -101,12 +112,20 @@ func (s *Store) DistillBatchItems(batchID int64) ([]DistillBatchItem, error) {
 // A local character estimate decides what to send; only this figure says what
 // it cost.
 func (s *Store) RecordDistillBatchUsage(batchID int64, customID string, prompt, completion int) error {
+	if s.writer != nil {
+		return queueWrite(s, []any{batchID, customID, prompt, completion}, func(d *Store, p []any) error {
+			return d.RecordDistillBatchUsage(p[0].(int64), p[1].(string), p[2].(int), p[3].(int))
+		})
+	}
 	_, err := s.db.Exec(`UPDATE distill_batch_items SET prompt_tokens=?, completion_tokens=?
 		WHERE batch_id=? AND custom_id=?`, prompt, completion, batchID, customID)
 	return err
 }
 
 func (s *Store) DistillBatchUsage(batchID int64) (prompt, completion int, err error) {
+	if s.reader != nil {
+		return s.reader.DistillBatchUsage(batchID)
+	}
 	err = s.db.QueryRow(`SELECT COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0)
 		FROM distill_batch_items WHERE batch_id=?`, batchID).Scan(&prompt, &completion)
 	return prompt, completion, err
@@ -115,6 +134,9 @@ func (s *Store) DistillBatchUsage(batchID int64) (prompt, completion int, err er
 func (s *Store) CloseDistillBatch(batchID int64, state string) error {
 	if state != "collected" && state != "failed" {
 		return fmt.Errorf("invalid terminal batch state %q", state)
+	}
+	if s.writer != nil {
+		return queueWrite(s, []any{batchID, state}, func(d *Store, p []any) error { return d.CloseDistillBatch(p[0].(int64), p[1].(string)) })
 	}
 	_, err := s.db.Exec(`UPDATE distill_batches SET state=?, updated_at=? WHERE id=?`, state, now(), batchID)
 	return err
@@ -125,6 +147,9 @@ func (s *Store) CloseDistillBatch(batchID int64, state string) error {
 // with work that can actually be done; this is what keeps the number visible
 // instead of leaving it as the gap between two other counts.
 func (s *Store) CountPendingWithoutProject(idleBefore string) (int, error) {
+	if s.reader != nil {
+		return s.reader.CountPendingWithoutProject(idleBefore)
+	}
 	var n int
 	err := s.db.QueryRow(`SELECT COUNT(*) FROM sessions
 		WHERE last_seen_at < ? AND project = ''

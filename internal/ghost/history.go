@@ -27,6 +27,9 @@ type Step struct {
 // wird deshalb als Ereignis ausgegeben und beim Vergleichen übersprungen.
 func HistorySteps(chain []store.GhostVersion) []Step {
 	var steps []Step
+	if len(chain) > 0 && chain[0].ReplacedAt != "" && strings.HasPrefix(chain[0].Reason, "archiviert:") {
+		steps = append(steps, Step{At: chain[0].ReplacedAt, Event: chain[0].Reason})
+	}
 	for i, v := range chain {
 		if v.Reason == "verschoben" {
 			steps = append(steps, Step{At: v.ReplacedAt, Event: strings.Trim(v.Description, "()")})
@@ -39,7 +42,7 @@ func HistorySteps(chain []store.GhostVersion) []Step {
 		steps = append(steps, Step{
 			At:      vor.ReplacedAt,
 			Person:  v.Person,
-			Current: i == 0,
+			Current: i == 0 && v.ReplacedAt == "",
 			Lines:   v.LineCount,
 			Changes: prose.Diff(vor.Description, v.Description),
 		})

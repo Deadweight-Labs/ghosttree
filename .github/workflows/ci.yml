@@ -4,7 +4,7 @@ on:
   push:
     branches: [dev, main, "release/**", "hotfix/**"]
   pull_request:
-    branches: [dev, main]
+    branches: [dev, main, "release/**"]
 
 permissions:
   contents: read
@@ -31,7 +31,8 @@ jobs:
           case "$BASE:$HEAD" in
             dev:*) ;;
             main:release/*|main:hotfix/*) ;;
-            *) echo "Pull requests target dev; only release/* and hotfix/* target main."; exit 1 ;;
+            release/*:*) ;;
+            *) echo "Pull requests target dev or release/*; only release/* and hotfix/* target main."; exit 1 ;;
           esac
           printf '%s\n' "$PR_TITLE" | grep -Eq '^(feat|fix|docs|test|build|ci|chore|refactor|perf|revert)(\([a-z0-9._-]+\))?!?: .+'
           if [ "$ACTOR" = "dependabot[bot]" ]; then
@@ -44,8 +45,8 @@ jobs:
     name: Go quality
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
@@ -71,9 +72,9 @@ jobs:
     name: Markdown
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: DavidAnson/markdownlint-cli2-action@992badcdf24e3b8eb7e87ff9287fe931bcb00c6e # v20.0.0
-      - uses: lycheeverse/lychee-action@885c65f3dc543b57c898c8099f4e08c8afd178a2 # v2.6.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: DavidAnson/markdownlint-cli2-action@21c1be1b93ad9ed58fa840aacc3f279cde2a72ff # v24.2.0
+      - uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
         with:
           args: --no-progress README.md CONTRIBUTING.md SECURITY.md RELEASING.md CLA.md COMMUNITY-GRANT.md COMMERCIAL.md
           fail: true

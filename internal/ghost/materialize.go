@@ -2,6 +2,7 @@ package ghost
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -107,7 +108,75 @@ var excludeLines = []string{
 	".ghosttree/docs/", ".ghosttree/docs" + tmpSuffix + "/",
 	".ghosttree/edit/", ".ghosttree/edit" + tmpSuffix + "/",
 	".ghosttree/requests/", ".ghosttree/requests" + tmpSuffix + "/",
+	".ghosttree/snapshots/INDEX.md", ".ghosttree/snapshots/.INDEX.md.tmp-*",
 	".ghosttree/INDEX.md",
+}
+
+// IsGeneratedPath reports whether path is hidden from ordinary Git status.
+// This list includes the user-owned document worktree and is deliberately
+// broader than the paths omitted from a context-snapshot fingerprint.
+func IsGeneratedPath(path string) bool {
+	path = strings.TrimPrefix(filepath.ToSlash(filepath.Clean(path)), "./")
+	for _, pattern := range excludeLines {
+		isTree := strings.HasSuffix(pattern, "/")
+		pattern = strings.TrimSuffix(pattern, "/")
+		if path == pattern || (isTree && strings.HasPrefix(path, pattern+"/")) {
+			return true
+		}
+	}
+	return isSnapshotIndexTempPath(path)
+}
+
+var fingerprintGeneratedTrees = []string{
+	".ghosttree/tree",
+	".ghosttree/tree" + tmpSuffix,
+	".ghosttree/knowledge",
+	".ghosttree/knowledge" + tmpSuffix,
+	".ghosttree/docs",
+	".ghosttree/docs" + tmpSuffix,
+	".ghosttree/requests",
+	".ghosttree/requests" + tmpSuffix,
+}
+
+var fingerprintGeneratedFiles = []string{
+	".ghosttree/INDEX.md",
+	".ghosttree/snapshots/INDEX.md",
+}
+
+const fingerprintSnapshotTempPrefix = ".ghosttree/snapshots/.INDEX.md.tmp-"
+
+// IsFingerprintGeneratedPath is the narrow allowlist of bytes Ghosttree can
+// regenerate. In particular, .ghosttree/edit is user-authored and never
+// belongs here even though ordinary Git status hides it.
+func IsFingerprintGeneratedPath(path string) bool {
+	path = strings.TrimPrefix(filepath.ToSlash(filepath.Clean(path)), "./")
+	for _, tree := range fingerprintGeneratedTrees {
+		if path == tree || strings.HasPrefix(path, tree+"/") {
+			return true
+		}
+	}
+	for _, file := range fingerprintGeneratedFiles {
+		if path == file {
+			return true
+		}
+	}
+	return isSnapshotIndexTempPath(path)
+}
+
+func isSnapshotIndexTempPath(path string) bool {
+	if !strings.HasPrefix(path, fingerprintSnapshotTempPrefix) {
+		return false
+	}
+	suffix := strings.TrimPrefix(path, fingerprintSnapshotTempPrefix)
+	if suffix == "" {
+		return false
+	}
+	for _, char := range suffix {
+		if char < '0' || char > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // EnsureExcluded trägt den Baum in .git/info/exclude ein, nicht in .gitignore:
@@ -115,7 +184,7 @@ var excludeLines = []string{
 // git nicht automatisch ignoriert — .claude/ und .env stehen ohne Eintrag
 // genauso im git status.
 func EnsureExcluded(repoRoot string) error {
-	path := filepath.Join(repoRoot, ".git", "info", "exclude")
+	path := excludePath(repoRoot)
 	old, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
 		return err
@@ -141,4 +210,19 @@ func EnsureExcluded(repoRoot string) error {
 		content += "\n"
 	}
 	return os.WriteFile(path, []byte(content+strings.Join(missing, "\n")+"\n"), 0o644)
+}
+
+func excludePath(repoRoot string) string {
+	out, err := exec.Command("git", "-C", repoRoot, "rev-parse", "--git-path", "info/exclude").Output()
+	if err != nil {
+		return filepath.Join(repoRoot, ".git", "info", "exclude")
+	}
+	path := strings.TrimSpace(string(out))
+	if path == "" {
+		return filepath.Join(repoRoot, ".git", "info", "exclude")
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(repoRoot, path)
+	}
+	return filepath.Clean(path)
 }

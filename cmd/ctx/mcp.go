@@ -15,6 +15,8 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
 	"github.com/Deadweight-Labs/ghosttree/internal/mcpserver"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
+	"github.com/Deadweight-Labs/ghosttree/internal/snapshot"
+	"github.com/Deadweight-Labs/ghosttree/internal/snapshotmirror"
 )
 
 // currentAxes derives the session context from the working directory and the
@@ -116,6 +118,9 @@ func cmdMCP(args []string, stdout io.Writer) int {
 	srv := mcpserver.NewServer(c, hctx.axes, hctx.activation)
 	srv.SetSessionRef(currentSessionRef())
 	srv.SetRepoRoot(hctx.root)
+	srv.SetAfterSnapshot(func(ctx context.Context, project string) error {
+		return snapshotmirror.Rebuild(ctx, mcpSnapshotLister{client: c}, hctx.root, project)
+	})
 	srv.SetAfterWrite(debounce(treeSettle, func() {
 		home, err := os.UserHomeDir()
 		if err != nil {
@@ -131,4 +136,10 @@ func cmdMCP(args []string, stdout io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+type mcpSnapshotLister struct{ client *client.Client }
+
+func (l mcpSnapshotLister) ListContextSnapshots(ctx context.Context, filter snapshot.ListFilter) (snapshot.SnapshotPage, error) {
+	return l.client.ContextSnapshots(ctx, filter)
 }

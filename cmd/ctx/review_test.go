@@ -117,6 +117,7 @@ func withConfig(t *testing.T, serverURL string) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(home, ".local", "state"))
 	dir := filepath.Join(home, ".config", "ghosttree")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)

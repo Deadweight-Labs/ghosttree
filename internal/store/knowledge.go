@@ -184,6 +184,9 @@ func (s *Store) InsertKnowledge(k Knowledge) (int64, error) {
 	if k.Type != "instruction" && len(k.Activation.Paths) > 0 {
 		return 0, fmt.Errorf("activation requires instruction, got %s", k.Type)
 	}
+	if s.writer != nil {
+		return queueValue(s, []any{k}, func(d *Store, p []any) (int64, error) { return d.InsertKnowledge(p[0].(Knowledge)) })
+	}
 	if k.Origin == "" {
 		k.Origin = "agent"
 	}
@@ -243,6 +246,9 @@ func (s *Store) SetActivation(id int64, rule activation.Rule) error {
 	if err := activation.ValidateRule(rule); err != nil {
 		return err
 	}
+	if s.writer != nil {
+		return queueWrite(s, []any{id, rule}, func(d *Store, p []any) error { return d.SetActivation(p[0].(int64), p[1].(activation.Rule)) })
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -278,6 +284,9 @@ var patchable = map[string]bool{"title": true, "body": true, "confidence": true,
 // full distiller run produces, and judging findings is easier one repository at
 // a time than in a stream that jumps between them.
 func (s *Store) PendingKnowledge(project string, limit int) ([]Knowledge, error) {
+	if s.reader != nil {
+		return s.reader.PendingKnowledge(project, limit)
+	}
 	if limit <= 0 {
 		limit = 50
 	}
@@ -292,6 +301,9 @@ func (s *Store) PendingKnowledge(project string, limit int) ([]Knowledge, error)
 }
 
 func (s *Store) UpdateKnowledge(id int64, patch map[string]string) error {
+	if s.writer != nil {
+		return queueWrite(s, []any{id, patch}, func(d *Store, p []any) error { return d.UpdateKnowledge(p[0].(int64), p[1].(map[string]string)) })
+	}
 	return s.UpdateKnowledgeBy(id, patch, "")
 }
 
@@ -314,6 +326,11 @@ func (s *Store) UpdateKnowledgeBy(id int64, patch map[string]string, editor stri
 	}
 	if len(sets) == 0 && patch["superseded_by"] == "" {
 		return nil
+	}
+	if s.writer != nil {
+		return queueWrite(s, []any{id, patch, editor}, func(d *Store, p []any) error {
+			return d.UpdateKnowledgeBy(p[0].(int64), p[1].(map[string]string), p[2].(string))
+		})
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -398,6 +415,9 @@ func archiveKnowledgeTx(tx *sql.Tx, id int64, editor, changedAt string) error {
 }
 
 func (s *Store) KnowledgeHistory(id int64) ([]KnowledgeVersion, error) {
+	if s.reader != nil {
+		return s.reader.KnowledgeHistory(id)
+	}
 	rows, err := s.db.Query(`SELECT id,knowledge_id,type,title,body,person,changed_by,changed_at
 		FROM knowledge_versions WHERE knowledge_id=? ORDER BY changed_at DESC, id DESC`, id)
 	if err != nil {
@@ -435,6 +455,11 @@ func (s *Store) ApplyStaleness(at time.Time, maxAge time.Duration) (int64, error
 	if maxAge <= 0 {
 		return 0, fmt.Errorf("staleness max age must be positive")
 	}
+	if s.writer != nil {
+		return queueValue(s, []any{at.UTC(), maxAge}, func(d *Store, p []any) (int64, error) {
+			return d.ApplyStaleness(p[0].(time.Time), p[1].(time.Duration))
+		})
+	}
 	cutoff := at.UTC().Add(-maxAge).Format(time.RFC3339Nano)
 	res, err := s.db.Exec(`UPDATE knowledge SET status='stale',updated_at=? WHERE type='plan' AND status='active' AND `+observationTime+`<?`, at.UTC().Format(time.RFC3339Nano), cutoff)
 	if err != nil {
@@ -444,6 +469,9 @@ func (s *Store) ApplyStaleness(at time.Time, maxAge time.Duration) (int64, error
 }
 
 func (s *Store) KnowledgeByID(id int64) (Knowledge, error) {
+	if s.reader != nil {
+		return s.reader.KnowledgeByID(id)
+	}
 	rows, err := s.db.Query(`SELECT `+knowledgeCols+` FROM knowledge WHERE id = ?`, id)
 	if err != nil {
 		return Knowledge{}, err
@@ -483,14 +511,23 @@ const corroboration = `MAX(
 const deliveryOrder = trustOrder + `, ` + corroboration + ` DESC, search_hits DESC, ` + observationTime + ` DESC, id DESC`
 
 func (s *Store) KnowledgeForContext(ax scope.Axes) ([]Knowledge, error) {
+	if s.reader != nil {
+		return s.reader.KnowledgeForContext(ax)
+	}
 	return s.KnowledgeForActivatedContext(ax, activation.Context{})
 }
 
 func (s *Store) KnowledgeForActivatedContext(ax scope.Axes, ctx activation.Context) ([]Knowledge, error) {
+	if s.reader != nil {
+		return s.reader.KnowledgeForActivatedContext(ax, ctx)
+	}
 	return s.knowledgeForActivatedContext(ax, ctx, false)
 }
 
 func (s *Store) KnowledgeForActivatedPreview(ax scope.Axes, ctx activation.Context) ([]Knowledge, error) {
+	if s.reader != nil {
+		return s.reader.KnowledgeForActivatedPreview(ax, ctx)
+	}
 	return s.knowledgeForActivatedContext(ax, ctx, true)
 }
 
@@ -532,6 +569,9 @@ func (s *Store) knowledgeForActivatedContext(ax scope.Axes, ctx activation.Conte
 // KnowledgeForProject returns every entry for a project, including archived
 // cold storage. It is used to verify migration provenance before cleanup.
 func (s *Store) KnowledgeForProject(project string) ([]Knowledge, error) {
+	if s.reader != nil {
+		return s.reader.KnowledgeForProject(project)
+	}
 	rows, err := s.db.Query(`SELECT `+knowledgeCols+` FROM knowledge WHERE project = ? ORDER BY id`, project)
 	if err != nil {
 		return nil, err
@@ -541,6 +581,9 @@ func (s *Store) KnowledgeForProject(project string) ([]Knowledge, error) {
 
 // SearchKnowledge matches only the axes the caller set.
 func (s *Store) SearchKnowledge(q string, filter scope.Axes, limit int) ([]Knowledge, error) {
+	if s.reader != nil {
+		return s.reader.SearchKnowledge(q, filter, limit)
+	}
 	where, args := filter.FilterWhere()
 	return s.searchKnowledge(q, where, args, limit)
 }
@@ -548,6 +591,9 @@ func (s *Store) SearchKnowledge(q string, filter scope.Axes, limit int) ([]Knowl
 // SearchAllKnowledge is the operator view, including entries hidden from
 // agents because they are quarantined, deprecated, or archived.
 func (s *Store) SearchAllKnowledge(q string, filter scope.Axes, limit int) ([]Knowledge, error) {
+	if s.reader != nil {
+		return s.reader.SearchAllKnowledge(q, filter, limit)
+	}
 	where, args := filter.FilterWhere()
 	if limit <= 0 {
 		limit = 50
@@ -567,6 +613,9 @@ func (s *Store) SearchAllKnowledge(q string, filter scope.Axes, limit int) ([]Kn
 // machine, project and their combinations. Without it, a session on a branch
 // could not find global or project-level knowledge.
 func (s *Store) SearchKnowledgeForContext(q string, ax scope.Axes, limit int) ([]Knowledge, error) {
+	if s.reader != nil {
+		return s.reader.SearchKnowledgeForContext(q, ax, limit)
+	}
 	where, args := ax.UnionWhere()
 	return s.searchKnowledge(q, where, args, limit)
 }
@@ -667,6 +716,9 @@ func (s *Store) scanKnowledge(rows *sql.Rows) ([]Knowledge, error) {
 // corroborated — entries that are not going anywhere and that the model should
 // still be able to point at.
 func (s *Store) KnowledgeTitlesForPrompt(project string, excludeSessions []int64) ([]string, error) {
+	if s.reader != nil {
+		return s.reader.KnowledgeTitlesForPrompt(project, excludeSessions)
+	}
 	query := `SELECT '#' || k.id || ' ' || k.title FROM knowledge k
 		WHERE k.project = ? AND k.status = 'active'`
 	args := []any{project}

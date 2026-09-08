@@ -3,6 +3,7 @@ package client
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
+	"github.com/Deadweight-Labs/ghosttree/internal/snapshot"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
@@ -31,11 +33,13 @@ type SearchResult struct {
 }
 
 type APIError struct {
-	Status     int            `json:"-"`
-	Code       string         `json:"code"`
-	Message    string         `json:"message"`
-	Resolution string         `json:"resolution"`
-	Details    map[string]any `json:"details,omitempty"`
+	Status            int            `json:"-"`
+	Code              string         `json:"code"`
+	Message           string         `json:"message"`
+	Resolution        string         `json:"resolution"`
+	Details           map[string]any `json:"details,omitempty"`
+	Retryable         bool           `json:"retryable"`
+	RetryAfterSeconds int            `json:"retry_after_seconds,omitempty"`
 }
 
 type ConflictError struct {
@@ -79,8 +83,18 @@ func (c *Client) Relevant(text string, ax scope.Axes, limit int) (string, error)
 
 func (c *Client) Machine() string { return c.cfg.Machine }
 
+func (c *Client) WhoAmI() (store.Principal, error) {
+	var principal store.Principal
+	err := c.do("GET", "/api/whoami", nil, nil, &principal)
+	return principal, err
+}
+
 // do performs a request; out may be a *string to capture a raw text body.
 func (c *Client) do(method, path string, query url.Values, in, out any) error {
+	return c.doContext(context.Background(), method, path, query, in, out)
+}
+
+func (c *Client) doContext(ctx context.Context, method, path string, query url.Values, in, out any) error {
 	u := strings.TrimSuffix(c.cfg.ServerURL, "/") + path
 	if len(query) > 0 {
 		u += "?" + query.Encode()
@@ -93,7 +107,7 @@ func (c *Client) do(method, path string, query url.Values, in, out any) error {
 		}
 		body = bytes.NewReader(b)
 	}
-	req, err := http.NewRequest(method, u, body)
+	req, err := http.NewRequestWithContext(ctx, method, u, body)
 	if err != nil {
 		return err
 	}
@@ -114,14 +128,35 @@ func (c *Client) do(method, path string, query url.Values, in, out any) error {
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		if resp.StatusCode == http.StatusConflict {
-			var conflict ConflictError
-			if json.Unmarshal(raw, &conflict) == nil && conflict.HeadRevision > 0 {
-				return &conflict
+			var fields map[string]json.RawMessage
+			if json.Unmarshal(raw, &fields) == nil {
+				if _, legacyDocumentConflict := fields["head_revision"]; legacyDocumentConflict {
+					var conflict ConflictError
+					if json.Unmarshal(raw, &conflict) == nil {
+						return &conflict
+					}
+				}
+			}
+		}
+		if strings.HasPrefix(path, "/api/context-snapshots") {
+			var rule snapshot.RuleError
+			if json.Unmarshal(raw, &rule) == nil && rule.Code != "" {
+				if rule.ExistingDigest == "" {
+					rule.ExistingDigest, _ = rule.Details["existing_digest"].(string)
+				}
+				if rule.RequestedDigest == "" {
+					rule.RequestedDigest, _ = rule.Details["requested_digest"].(string)
+				}
+				return &rule
 			}
 		}
 		var apiErr APIError
 		if json.Unmarshal(raw, &apiErr) == nil && apiErr.Code != "" {
 			apiErr.Status = resp.StatusCode
+			apiErr.RetryAfterSeconds = 0
+			if seconds, err := strconv.Atoi(resp.Header.Get("Retry-After")); err == nil && seconds > 0 {
+				apiErr.RetryAfterSeconds = seconds
+			}
 			return &apiErr
 		}
 		return fmt.Errorf("%s %s: %d: %s", method, path, resp.StatusCode, strings.TrimSpace(string(raw)))

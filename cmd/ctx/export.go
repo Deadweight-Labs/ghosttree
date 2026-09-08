@@ -4,12 +4,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"os"
 	"strconv"
 	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
+	"github.com/Deadweight-Labs/ghosttree/internal/privatefile"
 )
 
 const exportUsage = `usage: ctx export <session-id> [-o file]
@@ -67,7 +67,7 @@ func cmdExport(args []string, stdout io.Writer) int {
 		fmt.Fprint(stdout, raw)
 		return 0
 	}
-	if err := os.WriteFile(*out, []byte(raw), 0o644); err != nil {
+	if err := privatefile.Write(*out, []byte(raw)); err != nil {
 		fmt.Fprintf(stdout, "write %s: %v\n", *out, err)
 		return 1
 	}

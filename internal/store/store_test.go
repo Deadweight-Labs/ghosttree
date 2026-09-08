@@ -1,6 +1,218 @@
 package store
 
-import "testing"
+import (
+	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestOpenAddsSnapshotSchemaWithoutChangingLegacyRows(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(schema); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+INSERT INTO knowledge(type,title,body,project,confidence,status,origin,created_at,updated_at) VALUES('note','legacy knowledge','byte-exact body','p','trusted','active','human','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z');
+INSERT INTO ghost_files(project,path,kind,description,content_sha,described_at,updated_at) VALUES('p','README.md','file','legacy ghost','abc','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	beforeCount, beforeDigest := legacyDomainFingerprint(t, db)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	afterCount, afterDigest := legacyDomainFingerprint(t, st.DB())
+	if afterCount != beforeCount || afterDigest != beforeDigest {
+		t.Fatalf("legacy domains changed: count %d -> %d, digest %s -> %s", beforeCount, afterCount, beforeDigest, afterDigest)
+	}
+	if current, err := ContextSnapshotSchemaCurrent(st.DB()); err != nil || !current {
+		t.Fatalf("snapshot schema current=%v err=%v", current, err)
+	}
+}
+
+func TestStoreSQLiteDSNPreservesMemoryPathsAndQueries(t *testing.T) {
+	for _, test := range []struct {
+		path string
+		want string
+	}{
+		{":memory:", "file::memory:?_pragma=foreign_keys(1)&_pragma=recursive_triggers(1)&_pragma=busy_timeout(5000)&_pragma=synchronous(FULL)"},
+		{"/tmp/ghosttree.db", "/tmp/ghosttree.db?_pragma=foreign_keys(1)&_pragma=recursive_triggers(1)&_pragma=busy_timeout(5000)&_pragma=synchronous(FULL)"},
+		{"file:/tmp/ghosttree.db?mode=rwc&cache=private", "file:/tmp/ghosttree.db?mode=rwc&cache=private&_pragma=foreign_keys(1)&_pragma=recursive_triggers(1)&_pragma=busy_timeout(5000)&_pragma=synchronous(FULL)"},
+	} {
+		if got := storeSQLiteDSN(test.path); got != test.want {
+			t.Errorf("storeSQLiteDSN(%q) = %q, want %q", test.path, got, test.want)
+		}
+	}
+}
+
+func TestOpenWithOptionsAppliesEveryConnectionPragma(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ghosttree.db")
+	s, err := OpenWithOptions(path, OpenOptions{MaxOpenConns: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	if got := s.DB().Stats().MaxOpenConnections; got != 4 {
+		t.Fatalf("max = %d", got)
+	}
+	ctx := context.Background()
+	conns := make([]*sql.Conn, 0, 4)
+	for range 4 {
+		conn, err := s.DB().Conn(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		conns = append(conns, conn)
+	}
+	defer func() {
+		for _, conn := range conns {
+			_ = conn.Close()
+		}
+	}()
+	for i, conn := range conns {
+		var fk, recursive, busy, synchronous int
+		var journal string
+		if err := conn.QueryRowContext(ctx, `PRAGMA foreign_keys`).Scan(&fk); err != nil {
+			t.Fatal(err)
+		}
+		if err := conn.QueryRowContext(ctx, `PRAGMA recursive_triggers`).Scan(&recursive); err != nil {
+			t.Fatal(err)
+		}
+		if err := conn.QueryRowContext(ctx, `PRAGMA busy_timeout`).Scan(&busy); err != nil {
+			t.Fatal(err)
+		}
+		if err := conn.QueryRowContext(ctx, `PRAGMA synchronous`).Scan(&synchronous); err != nil {
+			t.Fatal(err)
+		}
+		if err := conn.QueryRowContext(ctx, `PRAGMA journal_mode`).Scan(&journal); err != nil {
+			t.Fatal(err)
+		}
+		if fk != 1 || recursive != 1 || busy != 5000 || synchronous != 2 || journal != "wal" {
+			t.Fatalf("conn %d: fk=%d recursive=%d busy=%d sync=%d journal=%s", i, fk, recursive, busy, synchronous, journal)
+		}
+	}
+}
+
+func TestOpenReadOnlyUsesBoundedPoolAndRejectsWrites(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ghosttree.db")
+	writable, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writable.PutGhostFile(GhostFile{Project: "bench", Path: "a.go", Description: "seed"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writable.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	readOnly, err := OpenReadOnly(path, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer readOnly.Close()
+	if got := readOnly.DB().Stats().MaxOpenConnections; got != 3 {
+		t.Fatalf("max = %d, want 3", got)
+	}
+	if _, err := readOnly.GhostFileByPath("bench", "a.go"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readOnly.PutGhostFile(GhostFile{Project: "bench", Path: "b.go"}); err == nil {
+		t.Fatal("write through read-only store succeeded")
+	}
+}
+
+func TestOpenReadOnlyRejectsInvalidConfiguration(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		path string
+		max  int
+	}{
+		{"memory", ":memory:", 1},
+		{"memory URI", "file::memory:", 1},
+		{"zero pool", filepath.Join(t.TempDir(), "ghosttree.db"), 0},
+		{"negative pool", filepath.Join(t.TempDir(), "ghosttree.db"), -1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := OpenReadOnly(test.path, test.max); err == nil {
+				t.Fatal("OpenReadOnly accepted invalid configuration")
+			}
+		})
+	}
+}
+
+func TestRuntimeStatsReportsPoolAndSQLiteFiles(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ghosttree.db")
+	s, err := OpenWithOptions(path, OpenOptions{MaxOpenConns: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	stats := s.RuntimeStats()
+	if stats.DB.MaxOpenConnections != 2 || stats.DatabaseBytes <= 0 {
+		t.Fatalf("stats = %+v", stats)
+	}
+}
+
+func TestRuntimeStatsForMemoryStoreHasNoFileSizes(t *testing.T) {
+	s, err := OpenWithOptions(":memory:", OpenOptions{MaxOpenConns: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	stats := s.RuntimeStats()
+	if stats.DB.MaxOpenConnections != 1 || stats.DatabaseBytes != 0 || stats.WALBytes != 0 || stats.SHMBytes != 0 {
+		t.Fatalf("stats = %+v", stats)
+	}
+}
+
+func TestOpenPinsMemoryModeURIWithoutFilesystemSideEffects(t *testing.T) {
+	filePath := filepath.Join(t.TempDir(), "shared-memory.db")
+	s, err := OpenWithOptions("file:"+filePath+"?mode=memory&cache=shared", OpenOptions{MaxOpenConns: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	stats := s.RuntimeStats()
+	if stats.DB.MaxOpenConnections != 1 || stats.DatabaseBytes != 0 || stats.WALBytes != 0 || stats.SHMBytes != 0 {
+		t.Fatalf("stats = %+v", stats)
+	}
+	if _, err := os.Stat(filePath); !os.IsNotExist(err) {
+		t.Fatalf("memory URI created %q: %v", filePath, err)
+	}
+}
+
+func legacyDomainFingerprint(t *testing.T, db *sql.DB) (int, string) {
+	t.Helper()
+	var knowledgeTitle, knowledgeBody, ghostPath, ghostDescription string
+	if err := db.QueryRow(`SELECT title,body FROM knowledge ORDER BY id LIMIT 1`).Scan(&knowledgeTitle, &knowledgeBody); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT path,description FROM ghost_files ORDER BY id LIMIT 1`).Scan(&ghostPath, &ghostDescription); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := db.QueryRow(`SELECT (SELECT count(*) FROM knowledge)+(SELECT count(*) FROM ghost_files)`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256([]byte(knowledgeTitle + "\x00" + knowledgeBody + "\x00" + ghostPath + "\x00" + ghostDescription))
+	return count, hex.EncodeToString(sum[:])
+}
 
 func openTest(t *testing.T) *Store {
 	t.Helper()
@@ -10,6 +222,124 @@ func openTest(t *testing.T) *Store {
 	}
 	t.Cleanup(func() { s.Close() })
 	return s
+}
+
+func TestOpenCreatesPrivateDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ghosttree.db")
+	st, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	assertPrivateDatabase(t, path)
+}
+
+func TestOpenTightensExistingDatabasePermissions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ghosttree.db")
+	if err := os.WriteFile(path, nil, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	st, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	assertPrivateDatabase(t, path)
+}
+
+func TestPrepareDatabaseFilesTightensExistingSidecars(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ghosttree.db")
+	for _, file := range []string{path, path + "-wal", path + "-shm"} {
+		if err := os.WriteFile(file, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := prepareDatabaseFiles(path); err != nil {
+		t.Fatal(err)
+	}
+	assertPrivateDatabase(t, path)
+}
+
+func TestOpenRejectsDirectoryWithoutChangingItsMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ghosttree.db")
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(path); err == nil {
+		t.Fatal("Open accepted a directory as a database")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o755 {
+		t.Fatalf("directory mode = %04o, want 0755", got)
+	}
+}
+
+func TestOpenRejectsDatabaseSymlinkWithoutChangingTargetMode(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.db")
+	if err := os.WriteFile(target, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(target, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "ghosttree.db")
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(path); err == nil {
+		t.Fatal("Open accepted a symlink as a database")
+	}
+	assertMode(t, target, 0o644)
+}
+
+func TestPrepareDatabaseFilesRejectsSidecarSymlinkWithoutChangingTargetMode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ghosttree.db")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(dir, "target.wal")
+	if err := os.WriteFile(target, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(target, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, path+"-wal"); err != nil {
+		t.Fatal(err)
+	}
+	if err := prepareDatabaseFiles(path); err == nil {
+		t.Fatal("prepareDatabaseFiles accepted a symlink as a sidecar")
+	}
+	assertMode(t, target, 0o644)
+}
+
+func assertMode(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != want {
+		t.Fatalf("%s mode = %04o, want %04o", filepath.Base(path), got, want)
+	}
+}
+
+func assertPrivateDatabase(t *testing.T, path string) {
+	t.Helper()
+	for _, file := range []string{path, path + "-wal", path + "-shm"} {
+		info, err := os.Stat(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != 0o600 {
+			t.Fatalf("%s mode = %04o, want 0600", filepath.Base(file), got)
+		}
+	}
 }
 
 func TestPersonRoundtrip(t *testing.T) {

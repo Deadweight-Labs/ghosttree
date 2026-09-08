@@ -63,7 +63,8 @@ func canonicalLineage(branch string, lineage []string) []string {
 
 // NormalizeRemote canonicalizes a git remote URL to host/owner/repo, lowercase.
 func NormalizeRemote(remote string) string {
-	r := strings.TrimSpace(remote)
+	r := strings.ToLower(strings.TrimSpace(remote))
+	r = strings.TrimSuffix(r, "/")
 	r = strings.TrimSuffix(r, ".git")
 	for _, p := range []string{"https://", "http://", "ssh://", "git://"} {
 		r = strings.TrimPrefix(r, p)
@@ -71,7 +72,7 @@ func NormalizeRemote(remote string) string {
 	r = strings.TrimPrefix(r, "git@")
 	r = strings.Replace(r, ":", "/", 1)
 	r = strings.TrimPrefix(r, "www.")
-	return strings.ToLower(strings.TrimSuffix(r, "/"))
+	return strings.TrimSuffix(r, "/")
 }
 
 // IsGlobal reports that nothing narrows this placement — the entry applies

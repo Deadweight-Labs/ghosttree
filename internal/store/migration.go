@@ -2,13 +2,20 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
 )
 
 func (s *Store) BeginMigration(project string, artifacts map[string]string) (int64, error) {
+	if s.writer != nil {
+		return queueValue(s, []any{project, artifacts}, func(d *Store, p []any) (int64, error) {
+			return d.BeginMigration(p[0].(string), p[1].(map[string]string))
+		})
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return 0, err
@@ -47,15 +54,57 @@ func (s *Store) BeginMigration(project string, artifacts map[string]string) (int
 	if err != nil {
 		return 0, err
 	}
-	for path, digest := range artifacts {
-		if _, err := tx.Exec(`INSERT INTO migration_artifacts(run_id,path,digest) VALUES(?,?,?)`, id, path, digest); err != nil {
-			return 0, err
-		}
+	if err := insertMigrationArtifactsTx(tx, id, artifacts); err != nil {
+		return 0, err
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
 	return id, nil
+}
+
+func insertMigrationArtifactsTx(tx *sql.Tx, id int64, artifacts map[string]string) error {
+	if migrationArtifactsFitJSON(artifacts) {
+		encoded, err := json.Marshal(artifacts)
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(`INSERT INTO migration_artifacts(run_id,path,digest) SELECT ?,key,value FROM json_each(?)`, id, string(encoded))
+		return err
+	}
+	stmt, err := tx.Prepare(`INSERT INTO migration_artifacts(run_id,path,digest) VALUES(?,?,?)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for path, digest := range artifacts {
+		if _, err := stmt.Exec(id, path, digest); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func migrationArtifactsFitJSON(artifacts map[string]string) bool {
+	remaining := (4 << 20) - 2
+	for path, digest := range artifacts {
+		if remaining < 6 {
+			return false
+		}
+		remaining -= 6
+		if len(path) > remaining/6 {
+			return false
+		}
+		remaining -= 6 * len(path)
+		if len(digest) > remaining/6 {
+			return false
+		}
+		remaining -= 6 * len(digest)
+		if !utf8.ValidString(path) || !utf8.ValidString(digest) {
+			return false
+		}
+	}
+	return len(artifacts) != 0
 }
 
 func migrationArtifactsTx(tx *sql.Tx, runID int64) (map[string]string, error) {
@@ -88,6 +137,9 @@ func equalArtifacts(left, right map[string]string) bool {
 }
 
 func (s *Store) CompleteMigration(id int64) error {
+	if s.writer != nil {
+		return queueWrite(s, []any{id}, func(d *Store, p []any) error { return d.CompleteMigration(p[0].(int64)) })
+	}
 	var missing int
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM migration_artifacts a JOIN migration_runs r ON r.id=a.run_id
 		WHERE a.run_id=? AND NOT EXISTS (
@@ -116,6 +168,11 @@ func (s *Store) CompleteMigration(id int64) error {
 }
 
 func (s *Store) InsertDocumentMigration(runID int64, source, digest string, documentID int64, revision int) error {
+	if s.writer != nil {
+		return queueWrite(s, []any{runID, source, digest, documentID, revision}, func(d *Store, p []any) error {
+			return d.InsertDocumentMigration(p[0].(int64), p[1].(string), p[2].(string), p[3].(int64), p[4].(int))
+		})
+	}
 	res, err := s.db.Exec(`INSERT INTO migration_evidence(document_id,revision,run_id,source,digest,item_key)
 		SELECT d.id,dr.revision,r.id,a.path,a.digest,?
 		FROM migration_runs r
@@ -149,6 +206,9 @@ type MigratedDocument struct {
 func (s *Store) ImportDocument(in MigratedDocument) (Document, error) {
 	if Digest(in.Body) != in.Digest {
 		return Document{}, fmt.Errorf("document body does not match migration digest")
+	}
+	if s.writer != nil {
+		return queueValue(s, []any{in}, func(d *Store, p []any) (Document, error) { return d.ImportDocument(p[0].(MigratedDocument)) })
 	}
 	itemKey := "document-import:" + Digest(strings.Join([]string{in.Document.Project, in.Source, in.Digest}, "\x00"))
 	tx, err := s.db.Begin()
@@ -203,6 +263,9 @@ func (s *Store) ImportDocument(in MigratedDocument) (Document, error) {
 }
 
 func (s *Store) CompletedDocumentArtifacts(project string) (map[string][]string, error) {
+	if s.reader != nil {
+		return s.reader.CompletedDocumentArtifacts(project)
+	}
 	rows, err := s.db.Query(`SELECT e.source,e.digest
 		FROM migration_evidence e
 		JOIN migration_runs r ON r.id=e.run_id
@@ -225,6 +288,9 @@ func (s *Store) CompletedDocumentArtifacts(project string) (map[string][]string,
 }
 
 func (s *Store) CompletedMigrationArtifacts(project string) (map[string][]string, error) {
+	if s.reader != nil {
+		return s.reader.CompletedMigrationArtifacts(project)
+	}
 	rows, err := s.db.Query(`SELECT a.path,a.digest FROM migration_artifacts a JOIN migration_runs r ON r.id=a.run_id WHERE r.project=? AND r.state='complete'`, project)
 	if err != nil {
 		return nil, err
@@ -262,6 +328,9 @@ type MigrationEvidence struct {
 }
 
 func (s *Store) MigrationEvidenceForKnowledge(id int64) (MigrationEvidence, error) {
+	if s.reader != nil {
+		return s.reader.MigrationEvidenceForKnowledge(id)
+	}
 	var proof MigrationEvidence
 	err := s.db.QueryRow(`SELECT run_id,source,digest,item_key,quote FROM migration_evidence WHERE knowledge_id=?`, id).
 		Scan(&proof.RunID, &proof.Source, &proof.Digest, &proof.ItemKey, &proof.Quote)
@@ -271,6 +340,9 @@ func (s *Store) MigrationEvidenceForKnowledge(id int64) (MigrationEvidence, erro
 // InsertMigrated atomically stores an entry, its source proof and its ledger
 // state. The stable item key makes retries after a partial run idempotent.
 func (s *Store) InsertMigrated(in MigratedEntry) (MigratedResult, error) {
+	if s.writer != nil {
+		return queueValue(s, []any{in}, func(d *Store, p []any) (MigratedResult, error) { return d.InsertMigrated(p[0].(MigratedEntry)) })
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return MigratedResult{}, err
