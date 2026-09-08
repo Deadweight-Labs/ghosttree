@@ -31,21 +31,21 @@ func (s *Store) direct() *Store {
 	return &Store{db: s.db, path: s.path, snapshotFault: s.snapshotFault}
 }
 
-func queueValue[T any](s *Store, payload []any, fn func(*Store) (T, error)) (T, error) {
+func queueValue[T any](s *Store, payload []any, fn func(*Store, []any) (T, error)) (T, error) {
 	var result T
-	size, err := referencedPayloadBytes(payload...)
+	r, err := s.writer.admitOwned(context.Background(), payload, func(owned []any) error {
+		var inner error
+		result, inner = fn(s.direct(), owned)
+		return inner
+	})
 	if err != nil {
 		return result, err
 	}
-	err = s.writer.submit(context.Background(), size, func() error {
-		var inner error
-		result, inner = fn(s.direct())
-		return inner
-	})
+	err = <-r.done
 	return result, err
 }
 
-func queueWrite(s *Store, payload []any, fn func(*Store) error) error {
-	_, err := queueValue(s, payload, func(d *Store) (struct{}, error) { return struct{}{}, fn(d) })
+func queueWrite(s *Store, payload []any, fn func(*Store, []any) error) error {
+	_, err := queueValue(s, payload, func(d *Store, owned []any) (struct{}, error) { return struct{}{}, fn(d, owned) })
 	return err
 }

@@ -60,15 +60,14 @@ func (c *payloadCounter) references(v reflect.Value, depth int) error {
 		}
 		return c.references(e, depth+1)
 	case reflect.Slice:
-		if err := c.backing(v.Cap(), v.Type().Elem().Size()); err != nil {
+		if err := c.backing(v.Len(), v.Type().Elem().Size()); err != nil {
 			return err
 		}
 		if !payloadHasReferences(v.Type().Elem()) {
 			return nil
 		}
-		all := v.Slice(0, v.Cap())
-		for i := 0; i < all.Len(); i++ {
-			if err := c.references(all.Index(i), depth+1); err != nil {
+		for i := 0; i < v.Len(); i++ {
+			if err := c.references(v.Index(i), depth+1); err != nil {
 				return err
 			}
 		}
@@ -83,11 +82,17 @@ func (c *payloadCounter) references(v reflect.Value, depth int) error {
 		}
 	case reflect.Struct:
 		for i := 0; i < v.NumField(); i++ {
+			if v.Type().Field(i).PkgPath != "" {
+				return ErrWriterInvalidPayload
+			}
 			if err := c.references(v.Field(i), depth+1); err != nil {
 				return err
 			}
 		}
 	case reflect.Map:
+		if v.Type().Key().Kind() != reflect.String || v.Type().Elem().Kind() != reflect.String {
+			return ErrWriterInvalidPayload
+		}
 		if v.IsNil() {
 			return nil
 		}

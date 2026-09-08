@@ -242,3 +242,50 @@ func TestRuntimeWriterReleasesReservationsAndTypedErrors(t *testing.T) {
 		t.Fatalf("config: %v", err)
 	}
 }
+
+func TestRuntimeWriterAdmissionRacesClose(t *testing.T) {
+	for attempt := 0; attempt < 20; attempt++ {
+		w, err := newRuntimeWriter(DefaultWriterConfig())
+		if err != nil {
+			t.Fatal(err)
+		}
+		release := holdRuntimeWriter(t, w, 0)
+		start := make(chan struct{})
+		var submitters, closers sync.WaitGroup
+		accepted := make(chan *writerRequest, 32)
+		var committed atomic.Int64
+		for i := 0; i < cap(accepted); i++ {
+			submitters.Add(1)
+			go func() {
+				defer submitters.Done()
+				<-start
+				r, err := w.admit(context.Background(), 1, func() error { committed.Add(1); return nil })
+				if err == nil {
+					accepted <- r
+				} else if !errors.Is(err, ErrWriterClosed) {
+					t.Errorf("admission race: %v", err)
+				}
+			}()
+		}
+		for i := 0; i < 4; i++ {
+			closers.Add(1)
+			go func() { defer closers.Done(); <-start; w.close() }()
+		}
+		close(start)
+		submitters.Wait()
+		close(accepted)
+		release()
+		closers.Wait()
+		var acknowledged int64
+		for r := range accepted {
+			if err := <-r.done; err != nil {
+				t.Fatal(err)
+			}
+			acknowledged++
+		}
+		if committed.Load() != acknowledged {
+			t.Fatalf("committed=%d acknowledged=%d", committed.Load(), acknowledged)
+		}
+		w.close()
+	}
+}

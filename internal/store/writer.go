@@ -55,6 +55,10 @@ func newRuntimeWriter(cfg WriterConfig) (*runtimeWriter, error) {
 }
 
 func (w *runtimeWriter) admit(ctx context.Context, bytes int64, run func() error) (*writerRequest, error) {
+	return w.admitPrepared(ctx, bytes, func(r *writerRequest) { r.run = run })
+}
+
+func (w *runtimeWriter) admitPrepared(ctx context.Context, bytes int64, prepare func(*writerRequest)) (*writerRequest, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.closed {
@@ -75,9 +79,10 @@ func (w *runtimeWriter) admit(ctx context.Context, bytes int64, run func() error
 	if bytes > w.cfg.MaxBytes-w.bytes {
 		return nil, ErrWriterBytesFull
 	}
-	r := &writerRequest{run: run, done: make(chan error, 1), bytes: bytes}
+	r := &writerRequest{done: make(chan error, 1), bytes: bytes}
 	w.operations++
 	w.bytes += bytes
+	prepare(r)
 	if w.tail == nil {
 		w.head = r
 	} else {

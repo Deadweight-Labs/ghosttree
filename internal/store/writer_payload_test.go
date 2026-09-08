@@ -7,22 +7,22 @@ import (
 	"testing"
 )
 
-func TestReferencedPayloadRetainsNestedBackingStorage(t *testing.T) {
+func TestReferencedPayloadCountsCompactVisibleOwnership(t *testing.T) {
 	body := strings.Repeat("x", 1024)
 	type nested struct {
-		Items map[string][]*Chunk
+		Items [][]*Chunk
 		Raw   []byte
 	}
 	backing := make([]byte, 2, 4096)
-	payload := nested{Items: map[string][]*Chunk{"repeated": {{Raw: body}, {Raw: body}}}, Raw: backing}
+	payload := nested{Items: [][]*Chunk{{{Raw: body}, {Raw: body}}}, Raw: backing}
 	size, err := referencedPayloadBytes(payload)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if size < 4096+2*1024 {
+	if size < 2+2*1024 {
 		t.Fatalf("retained bytes undercounted: %d", size)
 	}
-	w, err := newRuntimeWriter(WriterConfig{MaxOperations: 2, MaxBytes: 4096, MaxBatch: 1, ReadConnections: 1})
+	w, err := newRuntimeWriter(WriterConfig{MaxOperations: 2, MaxBytes: 2048, MaxBatch: 1, ReadConnections: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,8 +32,8 @@ func TestReferencedPayloadRetainsNestedBackingStorage(t *testing.T) {
 	}
 	stringsWithSpare := []string{"small", body}
 	size, err = referencedPayloadBytes(stringsWithSpare[:1])
-	if err != nil || size < 1024 {
-		t.Fatalf("spare capacity references ignored: size=%d err=%v", size, err)
+	if err != nil || size >= 1024 {
+		t.Fatalf("unpassed spare capacity was traversed: size=%d err=%v", size, err)
 	}
 }
 

@@ -38,7 +38,7 @@ const sessionCols = `id, harness, external_id, project, branch, machine, cwd, st
 
 func (s *Store) UpsertSession(sess Session) (int64, error) {
 	if s.writer != nil {
-		return queueValue(s, []any{sess}, func(d *Store) (int64, error) { return d.UpsertSession(sess) })
+		return queueValue(s, []any{sess}, func(d *Store, p []any) (int64, error) { return d.UpsertSession(p[0].(Session)) })
 	}
 	if sess.StartedAt == "" {
 		sess.StartedAt = now()
@@ -57,14 +57,14 @@ func (s *Store) UpsertSession(sess Session) (int64, error) {
 
 func (s *Store) AppendChunks(sessionID int64, chunks []Chunk) error {
 	if s.writer != nil {
-		return queueWrite(s, []any{sessionID, chunks}, func(d *Store) error { return d.AppendChunks(sessionID, chunks) })
+		return queueWrite(s, []any{sessionID, chunks}, func(d *Store, p []any) error { return d.AppendChunks(p[0].(int64), p[1].([]Chunk)) })
 	}
 	return s.AppendChunkBatches([]ChunkBatch{{SessionID: sessionID, Chunks: chunks}})
 }
 
 func (s *Store) AppendChunkBatches(batches []ChunkBatch) error {
 	if s.writer != nil {
-		return queueWrite(s, []any{batches}, func(d *Store) error { return d.AppendChunkBatches(batches) })
+		return queueWrite(s, []any{batches}, func(d *Store, p []any) error { return d.AppendChunkBatches(p[0].([]ChunkBatch)) })
 	}
 	if len(batches) == 0 {
 		return nil
