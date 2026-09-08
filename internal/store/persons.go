@@ -13,6 +13,9 @@ type Principal struct {
 }
 
 func (s *Store) AddPerson(name string) (string, error) {
+	if s.writer != nil {
+		return queueValue(s, []any{name}, func(d *Store, p []any) (string, error) { return d.AddPerson(p[0].(string)) })
+	}
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return "", err

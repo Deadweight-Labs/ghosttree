@@ -16,6 +16,7 @@ type SnapshotAccess struct {
 }
 
 func (s *Store) SetContextSnapshotAccess(person, project string, read, create, releaseBind bool) error {
+
 	person = strings.TrimSpace(person)
 	project = scope.NormalizeRemote(project)
 	if person == "" {
@@ -26,6 +27,12 @@ func (s *Store) SetContextSnapshotAccess(person, project string, read, create, r
 	}
 	if releaseBind && (!read || !create) {
 		return fmt.Errorf("release-bind requires both read and create access")
+	}
+
+	if s.writer != nil {
+		return queueWrite(s, []any{person, project, read, create, releaseBind}, func(d *Store, p []any) error {
+			return d.SetContextSnapshotAccess(p[0].(string), p[1].(string), p[2].(bool), p[3].(bool), p[4].(bool))
+		})
 	}
 
 	tx, err := s.db.Begin()
