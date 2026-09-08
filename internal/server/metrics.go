@@ -157,6 +157,7 @@ func (m *metricsRegistry) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 	}
 
 	writeDBMetrics(w, runtimeStats)
+	writeWriterMetrics(w, runtimeStats)
 	writeMetricHeader(w, "ghosttree_build_info", "Ghosttree build information.", "gauge")
 	fmt.Fprintf(w, "ghosttree_build_info{version=\"%s\"} 1\n", escapeLabel(m.version))
 }

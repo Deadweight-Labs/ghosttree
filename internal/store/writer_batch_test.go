@@ -95,6 +95,9 @@ func TestRuntimePublicChunksBatchAt64WithoutWaitingForMore(t *testing.T) {
 	s.writer.mu.Lock()
 	batches := s.writer.batches
 	s.writer.mu.Unlock()
+	if stats := s.writer.stats(); stats.BatchSize.Count != 2 || stats.BatchSize.Sum != 66 || stats.BatchSize.Buckets[7] != 2 {
+		t.Fatalf("batch histogram=%+v", stats.BatchSize)
+	}
 	if batches != 2 {
 		t.Fatalf("public chunks produced %d groups, want 64+2", batches)
 	}
@@ -147,6 +150,9 @@ func TestRuntimeChunkBatchRollbackAndIsolatedRetry(t *testing.T) {
 	s.writer.mu.Lock()
 	fallback := s.writer.fallbackOperations
 	s.writer.mu.Unlock()
+	if stats := s.writer.stats(); stats.CommitErrors != 2 || stats.FallbackOperations != 3 {
+		t.Fatalf("fallback metrics=%+v", stats)
+	}
 	if fallback != 3 {
 		t.Fatalf("fallback requests=%d", fallback)
 	}

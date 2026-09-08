@@ -14,10 +14,10 @@ func (w *runtimeWriter) admitOwned(ctx context.Context, payload []any, run func(
 func (w *runtimeWriter) admitOwnedReserved(ctx context.Context, payload []any, reserve int64, run func([]any) error) (*writerRequest, error) {
 	size, err := referencedPayloadBytes(payload...)
 	if err != nil {
-		return nil, err
+		return nil, w.reject(err)
 	}
 	if reserve < 0 || reserve > math.MaxInt64-size {
-		return nil, ErrWriterInvalidPayload
+		return nil, w.reject(ErrWriterInvalidPayload)
 	}
 	size += reserve
 	return w.admitPrepared(ctx, size, func(r *writerRequest) {

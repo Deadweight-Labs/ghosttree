@@ -22,7 +22,7 @@ func (s *Store) CreateContextSnapshot(ctx context.Context, in snapshot.CreateInp
 	if s.writer != nil {
 		reserve, err := snapshotWriterReserve(limits)
 		if err != nil {
-			return result, err
+			return result, s.writer.reject(err)
 		}
 		return queueContextValue(ctx, s, []any{in, limits}, reserve, func(d *Store, p []any) (snapshot.CreateResult, error) {
 			return d.CreateContextSnapshot(ctx, p[0].(snapshot.CreateInput), p[1].(snapshot.Limits), observeGitAfterCapture)

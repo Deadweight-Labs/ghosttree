@@ -29,6 +29,8 @@ type OpenOptions struct {
 }
 
 type RuntimeStats struct {
+	Writer                            WriterStats
+	Reader                            sql.DBStats
 	DB                                sql.DBStats
 	DatabaseBytes, WALBytes, SHMBytes int64
 }
@@ -700,6 +702,12 @@ func (s *Store) Close() error {
 
 func (s *Store) RuntimeStats() RuntimeStats {
 	stats := RuntimeStats{DB: s.db.Stats()}
+	if s.writer != nil {
+		stats.Writer = s.writer.stats()
+	}
+	if s.reader != nil {
+		stats.Reader = s.reader.db.Stats()
+	}
 	if s.path == "" {
 		return stats
 	}

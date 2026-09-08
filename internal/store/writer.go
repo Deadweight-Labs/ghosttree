@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 var (
@@ -28,14 +29,20 @@ func DefaultWriterConfig() WriterConfig {
 }
 
 type writerRequest struct {
-	next   *writerRequest
-	run    func() error
-	done   chan error
-	bytes  int64
-	chunks *ChunkBatch
+	enqueued time.Time
+	next     *writerRequest
+	run      func() error
+	done     chan error
+	bytes    int64
+	chunks   *ChunkBatch
 }
 
 type runtimeWriter struct {
+	metrics                                        WriterStats
+	running                                        bool
+	activeOperations                               int
+	activeBytes                                    int64
+	drainStarted                                   time.Time
 	mu                                             sync.Mutex
 	ready                                          *sync.Cond
 	head, tail                                     *writerRequest
@@ -55,7 +62,7 @@ func newRuntimeWriter(cfg WriterConfig) (*runtimeWriter, error) {
 	if cfg.MaxOperations <= 0 || cfg.MaxBytes <= 0 || cfg.MaxBatch <= 0 || cfg.ReadConnections <= 0 {
 		return nil, ErrWriterInvalidConfig
 	}
-	w := &runtimeWriter{done: make(chan struct{}), cfg: cfg}
+	w := &runtimeWriter{done: make(chan struct{}), cfg: cfg, running: true}
 	w.ready = sync.NewCond(&w.mu)
 	go w.work()
 	return w, nil
@@ -69,27 +76,31 @@ func (w *runtimeWriter) admitPrepared(ctx context.Context, bytes int64, prepare 
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.closed {
-		return nil, ErrWriterClosed
+		return nil, w.rejectLocked(ErrWriterClosed)
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, w.rejectLocked(err)
 	}
 	if bytes < 0 {
-		return nil, ErrWriterInvalidPayload
+		return nil, w.rejectLocked(ErrWriterInvalidPayload)
 	}
 	if bytes > w.cfg.MaxBytes {
-		return nil, ErrWriterOversized
+		return nil, w.rejectLocked(ErrWriterOversized)
 	}
 	if w.operations >= w.cfg.MaxOperations {
-		return nil, ErrWriterOperationsFull
+		return nil, w.rejectLocked(ErrWriterOperationsFull)
 	}
 	if bytes > w.cfg.MaxBytes-w.bytes {
-		return nil, ErrWriterBytesFull
+		return nil, w.rejectLocked(ErrWriterBytesFull)
 	}
 	r := &writerRequest{done: make(chan error, 1), bytes: bytes}
 	w.operations++
 	w.bytes += bytes
+	w.metrics.Admitted++
+	w.metrics.OperationsHighWater = max(w.metrics.OperationsHighWater, w.operations)
+	w.metrics.BytesHighWater = max(w.metrics.BytesHighWater, w.bytes)
 	prepare(r)
+	r.enqueued = time.Now()
 	if w.tail == nil {
 		w.head = r
 	} else {
@@ -109,7 +120,15 @@ func (w *runtimeWriter) submit(ctx context.Context, bytes int64, run func() erro
 }
 
 func (w *runtimeWriter) work() {
-	defer close(w.done)
+	defer func() {
+		w.mu.Lock()
+		w.running = false
+		if w.closed {
+			w.metrics.DrainDuration = time.Since(w.drainStarted)
+		}
+		w.mu.Unlock()
+		close(w.done)
+	}()
 	for {
 		w.mu.Lock()
 		for w.head == nil && w.nextBestEffort() < 0 && !w.closed {
@@ -137,13 +156,19 @@ func (w *runtimeWriter) work() {
 		if r.chunks != nil {
 			w.writeChunkGroup(group)
 		} else {
-			w.complete(r, r.run())
+			started := time.Now()
+			err := r.run()
+			w.observeCommit(started, err)
+			w.complete(r, err)
 		}
 	}
 }
 
 func (w *runtimeWriter) pop() *writerRequest {
 	r := w.head
+	w.activeOperations++
+	w.activeBytes += r.bytes
+	w.metrics.QueueWait.observe(time.Since(r.enqueued).Seconds(), WriterDurationBuckets())
 	w.head = r.next
 	r.next = nil
 	if w.head == nil {
@@ -157,6 +182,12 @@ func (w *runtimeWriter) complete(r *writerRequest, err error) {
 	r.chunks = nil
 	w.mu.Lock()
 	w.operations--
+	w.activeOperations--
+	w.activeBytes -= r.bytes
+	w.metrics.Completed++
+	if err != nil {
+		w.metrics.Failed++
+	}
 	w.bytes -= r.bytes
 	w.mu.Unlock()
 	r.done <- err
@@ -164,6 +195,10 @@ func (w *runtimeWriter) complete(r *writerRequest, err error) {
 
 func (w *runtimeWriter) close() {
 	w.mu.Lock()
+	if !w.closed {
+		w.drainStarted = time.Now()
+		w.metrics.DrainCount++
+	}
 	w.closed = true
 	w.ready.Broadcast()
 	w.mu.Unlock()
