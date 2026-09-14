@@ -246,8 +246,19 @@ func threadIsDormant(t Thread) bool {
 // draußen, solange niemand ausdrücklich danach fragt — sie sind nicht weg,
 // nur nicht im Weg.
 func (s *Store) SearchThreads(project, query string, includeArchived bool, limit int) ([]Thread, error) {
+	return s.SearchThreadsFor(project, query, "", includeArchived, limit)
+}
+
+// SearchThreadsFor filtert zusätzlich nach Sichtbarkeit.
+//
+// Ohne diesen Weg wäre die Grenze aus MayReadThread eine Prüfung, die
+// niemand aufruft: ein aus einem privaten Gespräch übernommenes Thema stünde
+// mit Titel in der Liste, und der Titel ist oft schon die Auskunft. Ein
+// leerer Fragender sieht nur unbeschränkte Themen — das ist die sichere
+// Richtung für Aufrufer, die keine Identität mitbringen.
+func (s *Store) SearchThreadsFor(project, query, asker string, includeArchived bool, limit int) ([]Thread, error) {
 	if s.reader != nil {
-		return s.reader.SearchThreads(project, query, includeArchived, limit)
+		return s.reader.SearchThreadsFor(project, query, asker, includeArchived, limit)
 	}
 	if limit <= 0 || limit > 200 {
 		limit = 50
@@ -262,6 +273,11 @@ func (s *Store) SearchThreads(project, query string, includeArchived bool, limit
 		sql += ` AND (title LIKE ? OR question LIKE ?)`
 		args = append(args, "%"+q+"%", "%"+q+"%")
 	}
+	// Beschränkte Themen nur für ihre Berechtigten. Der NOT EXISTS-Zweig ist
+	// der Normalfall: ein Thema ohne Sichtbarkeitszeile gehört dem Projekt.
+	sql += ` AND (NOT EXISTS(SELECT 1 FROM thread_visibility v WHERE v.thread_id=threads.id)
+		OR EXISTS(SELECT 1 FROM thread_visibility v WHERE v.thread_id=threads.id AND v.member_external_id=?))`
+	args = append(args, asker)
 	sql += ` ORDER BY updated_at DESC, id DESC LIMIT ?`
 	args = append(args, limit)
 
@@ -321,14 +337,24 @@ func (s *Store) ThreadLinks(threadID int64) ([]ThreadLink, error) {
 // Das ist der Grund, warum ein Thread mehrfach verlinkt sein darf und
 // trotzdem einer bleibt.
 func (s *Store) ThreadsForObject(kind, id string) ([]Thread, error) {
+	return s.ThreadsForObjectAs(kind, id, "")
+}
+
+// ThreadsForObjectAs beantwortet dieselbe Frage mit Sichtbarkeitsgrenze. Ein
+// beschränktes Thema darf auch nicht über den Umweg "welche Diskussionen
+// hängen an diesem Pitfall" auftauchen — Spec §9 nennt Verknüpfungen
+// ausdrücklich als Leckweg.
+func (s *Store) ThreadsForObjectAs(kind, id, asker string) ([]Thread, error) {
 	if s.reader != nil {
-		return s.reader.ThreadsForObject(kind, id)
+		return s.reader.ThreadsForObjectAs(kind, id, asker)
 	}
 	rows, err := s.db.Query(`SELECT t.id,t.project,t.title,t.question,t.state,t.archived,t.person,
 			t.created_at,t.updated_at,COALESCE(t.resolved_at,'')
 		FROM threads t JOIN thread_links l ON l.thread_id=t.id
 		WHERE l.object_kind=? AND l.object_id=?
-		ORDER BY t.updated_at DESC, t.id DESC`, kind, id)
+		  AND (NOT EXISTS(SELECT 1 FROM thread_visibility v WHERE v.thread_id=t.id)
+		    OR EXISTS(SELECT 1 FROM thread_visibility v WHERE v.thread_id=t.id AND v.member_external_id=?))
+		ORDER BY t.updated_at DESC, t.id DESC`, kind, id, asker)
 	if err != nil {
 		return nil, err
 	}

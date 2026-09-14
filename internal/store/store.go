@@ -469,6 +469,21 @@ CREATE TABLE IF NOT EXISTS thread_links(
   created_at TEXT NOT NULL,
   PRIMARY KEY(thread_id,object_kind,object_id,object_revision));
 CREATE INDEX IF NOT EXISTS thread_links_object ON thread_links(object_kind,object_id);
+CREATE TABLE IF NOT EXISTS thread_sources(
+  thread_id INTEGER NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  source_kind TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  room_key TEXT NOT NULL DEFAULT '',
+  author TEXT NOT NULL DEFAULT '',
+  author_kind TEXT NOT NULL DEFAULT '',
+  body TEXT NOT NULL,
+  original_at TEXT NOT NULL DEFAULT '',
+  copied_at TEXT NOT NULL,
+  PRIMARY KEY(thread_id,source_kind,source_id));
+CREATE TABLE IF NOT EXISTS thread_visibility(
+  thread_id INTEGER NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  member_external_id TEXT NOT NULL,
+  PRIMARY KEY(thread_id,member_external_id));
 CREATE TABLE IF NOT EXISTS thread_summaries(
   thread_id INTEGER NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
   revision INTEGER NOT NULL,
