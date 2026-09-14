@@ -136,3 +136,82 @@ func TestEnsuringARoomTwiceKeepsOneRoom(t *testing.T) {
 		t.Fatalf("want 3 members after two ensures, got %v", members)
 	}
 }
+
+// AC-11 von REQ-350: eine neue Session erbt NICHTS automatisch, und ein
+// ausdrücklicher Handoff überträgt genau das Benannte. Der Punkt stammt aus
+// v1 §5 und fehlt in v2 — siehe Wissenseintrag #2077.
+func TestANewSessionInheritsNothingWithoutAnExplicitHandoff(t *testing.T) {
+	s := openTest(t)
+	key := RoomKeyForDirect([]string{"sess-alt", "sess-partner"})
+	if err := s.EnsureCoordRoom(CoordRoom{Key: key, Kind: RoomDirect,
+		Members: []string{"sess-alt", "sess-partner"}}); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+
+	// Die Nachfolgesession sieht zunächst nichts.
+	ok, err := s.MayReadCoordRoom(key, "sess-neu")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("a new session must not inherit an old session's inbox")
+	}
+
+	moved, err := s.HandoffCoordRooms("sess-alt", "sess-neu", []string{key})
+	if err != nil {
+		t.Fatalf("handoff: %v", err)
+	}
+	if moved != 1 {
+		t.Fatalf("want 1 room handed off, got %d", moved)
+	}
+	ok, err = s.MayReadCoordRoom(key, "sess-neu")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("after an explicit handoff the successor must be able to read")
+	}
+
+	// Die alte Session bleibt Teilnehmerin ihres eigenen Verlaufs.
+	ok, err = s.MayReadCoordRoom(key, "sess-alt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("a handoff adds a member, it does not evict the one who wrote the history")
+	}
+}
+
+// Ein Handoff ist kein Weg, sich Zugang zu verschaffen: was der Übergebende
+// selbst nicht lesen darf, kann er nicht weiterreichen.
+func TestAHandoffCannotGrantRoomsTheSenderCannotRead(t *testing.T) {
+	s := openTest(t)
+	fremd := RoomKeyForDirect([]string{"sess-x", "sess-y"})
+	if err := s.EnsureCoordRoom(CoordRoom{Key: fremd, Kind: RoomDirect,
+		Members: []string{"sess-x", "sess-y"}}); err != nil {
+		t.Fatal(err)
+	}
+	moved, err := s.HandoffCoordRooms("sess-aussen", "sess-komplize", []string{fremd})
+	if err != nil {
+		t.Fatalf("handoff: %v", err)
+	}
+	if moved != 0 {
+		t.Fatalf("a non-member must not be able to hand a room on, moved %d", moved)
+	}
+	ok, err := s.MayReadCoordRoom(fremd, "sess-komplize")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("the room leaked through a handoff by a non-member")
+	}
+}
+
+// Eine Session an sich selbst zu übergeben ist immer ein Fehler im Aufrufer
+// und wird abgewiesen, statt als erfolgreicher Handoff durchzugehen.
+func TestAHandoffToItselfIsRejected(t *testing.T) {
+	s := openTest(t)
+	if _, err := s.HandoffCoordRooms("sess-a", "sess-a", nil); err == nil {
+		t.Fatal("a handoff to itself must be rejected")
+	}
+}

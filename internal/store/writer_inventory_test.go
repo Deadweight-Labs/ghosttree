@@ -76,6 +76,7 @@ var writerMethodClasses = map[string]string{
 	"GhostFilesUnder":               "read",
 	"GhostHistoryCount":             "read",
 	"GhostReviewsUnder":             "read",
+	"HandoffCoordRooms":             "write",
 	"ImportDocument":                "write",
 	"InsertDocumentMigration":       "write",
 	"InsertKnowledge":               "write",

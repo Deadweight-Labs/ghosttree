@@ -223,3 +223,56 @@ func (s *Store) CoordAgentOwner(externalID string) (string, bool, error) {
 	}
 	return person, true, nil
 }
+
+// HandoffCoordRooms überträgt ausgewählte private Räume von einer Session auf
+// eine andere. Das ist der ausdrückliche Handoff aus v1 §5 — und der Grund,
+// warum es ihn braucht, steht im selben Absatz: eine neue Session erbt die
+// Inbox einer beendeten NICHT automatisch.
+//
+// Automatisches Erben wäre die naheliegende Bequemlichkeit und der falsche
+// Weg: eine Session-Referenz ist keine Person, und wer morgen unter neuer
+// Referenz startet, hat keinen Anspruch auf die vertraulichen Gespräche von
+// gestern. Wer sie braucht, benennt sie.
+//
+// Übertragen heißt HINZUFÜGEN, nicht Verschieben: die alte Session bleibt
+// Teilnehmerin ihres eigenen Verlaufs. Ihn ihr zu nehmen, würde die Historie
+// unlesbar machen, in der sie geschrieben hat.
+func (s *Store) HandoffCoordRooms(from, to string, roomKeys []string) (int, error) {
+	if from == "" || to == "" {
+		return 0, fmt.Errorf("handoff needs both a source and a target session")
+	}
+	if from == to {
+		return 0, fmt.Errorf("a session cannot hand off to itself")
+	}
+	if s.writer != nil {
+		return queueValue(s, []any{from, to, roomKeys}, func(d *Store, p []any) (int, error) {
+			return d.HandoffCoordRooms(p[0].(string), p[1].(string), p[2].([]string))
+		})
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	at := now()
+	moved := 0
+	for _, key := range roomKeys {
+		// Nur was der Übergebende selbst lesen darf. Sonst wäre der Handoff
+		// ein Weg, sich Zugang zu einem fremden Raum zu verschaffen, indem
+		// man ihn einfach nennt.
+		var member int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM coord_room_members
+			WHERE room_key=? AND member_external_id=?`, key, from).Scan(&member); err != nil {
+			return 0, err
+		}
+		if member == 0 {
+			continue
+		}
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO coord_room_members(room_key,member_external_id,joined_at)
+			VALUES(?,?,?)`, key, to, at); err != nil {
+			return 0, err
+		}
+		moved++
+	}
+	return moved, tx.Commit()
+}
