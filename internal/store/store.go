@@ -449,6 +449,20 @@ CREATE INDEX IF NOT EXISTS coord_messages_destination
   ON coord_messages(destination_kind,destination_id,id);
 CREATE UNIQUE INDEX IF NOT EXISTS coord_messages_origin
   ON coord_messages(origin_event_id) WHERE origin_event_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS coord_deliveries(
+  message_id INTEGER NOT NULL,
+  recipient_external_id TEXT NOT NULL,
+  state TEXT NOT NULL,
+  rank INTEGER NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(message_id,recipient_external_id));
+CREATE TABLE IF NOT EXISTS coord_cursors(
+  agent_external_id TEXT NOT NULL,
+  destination_kind TEXT NOT NULL,
+  destination_id TEXT NOT NULL,
+  last_message_id INTEGER NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(agent_external_id,destination_kind,destination_id));
 CREATE TABLE IF NOT EXISTS coord_message_mentions(
   message_id INTEGER NOT NULL REFERENCES coord_messages(id) ON DELETE CASCADE,
   mentioned_external_id TEXT NOT NULL,
