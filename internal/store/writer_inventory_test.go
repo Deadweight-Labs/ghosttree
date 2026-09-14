@@ -141,6 +141,7 @@ var writerMethodClasses = map[string]string{
 	"SearchRequests":                "read",
 	"SearchThreads":                 "read",
 	"SearchThreadsFor":              "read",
+	"SplitThread":                   "write",
 	"StandingInstructions":          "read",
 	"SearchSessions":                "read",
 	"SessionByID":                   "read",

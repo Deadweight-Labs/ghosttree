@@ -184,3 +184,103 @@ func (s *Store) MayReadThread(threadID int64, agentExternalID string) (bool, err
 	}
 	return member > 0, nil
 }
+
+// SplitThread trennt eine Abschweifung in ein eigenes Thema ab.
+//
+// Spec §B5: "Abschweifungen können explizit abgespalten werden. Der neue
+// Thread erhält Leitfrage, ausgewählte Quellen und eine Rückreferenz. Alte
+// Links bleiben auflösbar; keine stillschweigende Umschreibung historischer
+// Aussagen."
+//
+// Daraus folgen zwei Entscheidungen, die man leicht andersherum trifft:
+//
+// 1. DIE BEITRÄGE WERDEN KOPIERT, NICHT VERSCHOBEN. Wer sie verschöbe, machte
+// den alten Verlauf unlesbar — dort stünde eine Antwort ohne ihre Frage, und
+// jeder Permalink auf einen verschobenen Beitrag zeigte ins Leere. Der
+// Ursprung behält seine Geschichte; das neue Thema bekommt eine Kopie und
+// eine Rückreferenz.
+//
+// 2. DER SCHNITT IST AUSDRÜCKLICH. §B5 verlangt "automatisch erkennen und
+// vorschlagen: ja. Unbemerkt Diskussionen umsortieren: nein." Es gibt hier
+// keinen Schwellwert, ab dem etwas von selbst zerfällt.
+func (s *Store) SplitThread(sourceID int64, sequences []int64, t Thread, by string) (PromoteResult, error) {
+	if len(sequences) == 0 {
+		return PromoteResult{}, fmt.Errorf("splitting needs at least one post")
+	}
+	if strings.TrimSpace(t.Title) == "" {
+		return PromoteResult{}, fmt.Errorf("a split thread needs its own question as a title")
+	}
+	if s.writer != nil {
+		return queueValue(s, []any{sourceID, sequences, t, by}, func(d *Store, p []any) (PromoteResult, error) {
+			return d.SplitThread(p[0].(int64), p[1].([]int64), p[2].(Thread), p[3].(string))
+		})
+	}
+
+	source, err := s.ThreadByID(sourceID)
+	if err != nil {
+		return PromoteResult{}, err
+	}
+	if t.Project == "" {
+		t.Project = source.Project
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return PromoteResult{}, err
+	}
+	defer tx.Rollback()
+
+	ts := now()
+	res, err := tx.Exec(`INSERT INTO threads(project,title,question,state,archived,person,created_at,updated_at)
+		VALUES(?,?,?,'open',0,?,?,?)`, t.Project, t.Title, t.Question, by, ts, ts)
+	if err != nil {
+		return PromoteResult{}, err
+	}
+	newID, err := res.LastInsertId()
+	if err != nil {
+		return PromoteResult{}, err
+	}
+
+	// Die Sichtbarkeit wird geerbt. Ein Schnitt darf kein Weg sein, einen
+	// beschränkten Verlauf in ein offenes Thema zu heben.
+	if _, err := tx.Exec(`INSERT OR IGNORE INTO thread_visibility(thread_id,member_external_id)
+		SELECT ?, member_external_id FROM thread_visibility WHERE thread_id=?`,
+		newID, sourceID); err != nil {
+		return PromoteResult{}, err
+	}
+
+	out := PromoteResult{ThreadID: newID}
+	dest := ThreadDestinationID(sourceID)
+	for _, seq := range sequences {
+		var body, sender, authorKind, createdAt string
+		err := tx.QueryRow(`SELECT body,sender_external_id,author_kind,created_at
+			FROM coord_messages WHERE destination_kind='discussion' AND destination_id=? AND sequence=?`,
+			dest, seq).Scan(&body, &sender, &authorKind, &createdAt)
+		if err != nil {
+			out.Skipped = append(out.Skipped, fmt.Sprintf("#%d (not in THR-%d)", seq, sourceID))
+			continue
+		}
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO thread_sources(
+				thread_id,source_kind,source_id,room_key,author,author_kind,body,original_at,copied_at)
+			VALUES(?,'thread_post',?,?,?,?,?,?,?)`,
+			newID, fmt.Sprintf("THR-%d#%d", sourceID, seq), dest, sender, authorKind,
+			body, createdAt, ts); err != nil {
+			return PromoteResult{}, err
+		}
+		out.Copied++
+	}
+	if out.Copied == 0 {
+		return PromoteResult{}, fmt.Errorf("none of those posts are in THR-%d", sourceID)
+	}
+
+	// Beide Richtungen verlinken: von hier kam es, dorthin ging es. Eine
+	// einseitige Referenz lässt den Ursprung so aussehen, als sei die
+	// Abschweifung im Sand verlaufen.
+	for _, l := range []struct{ from, to int64 }{{newID, sourceID}, {sourceID, newID}} {
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO thread_links(thread_id,object_kind,object_id,object_revision,created_at)
+			VALUES(?,'thread',?,'',?)`, l.from, strconv.FormatInt(l.to, 10), ts); err != nil {
+			return PromoteResult{}, err
+		}
+	}
+	return out, tx.Commit()
+}

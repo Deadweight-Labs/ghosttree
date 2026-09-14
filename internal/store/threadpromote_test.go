@@ -242,3 +242,133 @@ func TestARestrictedThreadDoesNotLeakThroughAnObjectLink(t *testing.T) {
 		t.Fatalf("a member must reach it from the object, got %d", len(member))
 	}
 }
+
+func threadWithPosts(t *testing.T, s *Store, title string, bodies ...string) int64 {
+	t.Helper()
+	id, err := s.CreateThread(Thread{Project: "p", Title: title})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dest := ThreadDestinationID(id)
+	for i, b := range bodies {
+		if _, err := s.AppendCoordMessage(CoordMessage{
+			DestinationKind: DestinationDiscussion, DestinationID: dest,
+			SenderExternalID: "sess-a", ClientID: dest + string(rune('a'+i)), Body: b}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return id
+}
+
+// §B5: eine Abschweifung wird abgetrennt, und alte Links bleiben auflösbar.
+// Die Beiträge werden KOPIERT, nicht verschoben — wer sie verschöbe, machte
+// den alten Verlauf unlesbar: dort stünde eine Antwort ohne ihre Frage.
+func TestSplittingCopiesAndLeavesTheOriginalIntact(t *testing.T) {
+	s := openTest(t)
+	src := threadWithPosts(t, s, "Pagination",
+		"wie paginieren wir?", "cursor-basiert", "übrigens: Mandanten-Auth ist kaputt")
+
+	res, err := s.SplitThread(src, []int64{3},
+		Thread{Title: "Authentifizierung zwischen Mandanten"}, "robin")
+	if err != nil {
+		t.Fatalf("split: %v", err)
+	}
+	if res.Copied != 1 {
+		t.Fatalf("want 1 copied, got %d (%v)", res.Copied, res.Skipped)
+	}
+
+	// Der Ursprung behält alle drei Beiträge.
+	posts, err := s.CoordMessagesSince(DestinationDiscussion, ThreadDestinationID(src), 0, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 3 {
+		t.Fatalf("splitting must not empty the original, got %d posts", len(posts))
+	}
+
+	// Und das neue Thema trägt die Quelle wörtlich.
+	sources, err := s.ThreadSources(res.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sources) != 1 || !strings.Contains(sources[0].Body, "Mandanten-Auth") {
+		t.Fatalf("the split post must be carried over verbatim: %+v", sources)
+	}
+	if !strings.Contains(sources[0].ID, "THR-") {
+		t.Errorf("the source must name where it came from: %q", sources[0].ID)
+	}
+}
+
+// Beide Richtungen verlinkt: eine einseitige Referenz lässt den Ursprung so
+// aussehen, als sei die Abschweifung im Sand verlaufen.
+func TestSplittingLinksBothDirections(t *testing.T) {
+	s := openTest(t)
+	src := threadWithPosts(t, s, "Ursprung", "eins", "abschweifung")
+	res, err := s.SplitThread(src, []int64{2}, Thread{Title: "Abzweig"}, "robin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	forward, err := s.ThreadsForObject("thread", ThreadDestinationID(res.ThreadID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(forward) != 1 || forward[0].ID != src {
+		t.Fatalf("the origin must point at the branch: %+v", forward)
+	}
+	back, err := s.ThreadsForObject("thread", ThreadDestinationID(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(back) != 1 || back[0].ID != res.ThreadID {
+		t.Fatalf("the branch must point back at its origin: %+v", back)
+	}
+}
+
+// Ein Schnitt ist kein Weg, einen beschränkten Verlauf in ein offenes Thema
+// zu heben.
+func TestSplittingInheritsRestrictedVisibility(t *testing.T) {
+	s := openTest(t)
+	room := RoomKeyForDirect([]string{"sess-a", "sess-b"})
+	if err := s.EnsureCoordRoom(CoordRoom{Key: room, Kind: RoomDirect,
+		Members: []string{"sess-a", "sess-b"}}); err != nil {
+		t.Fatal(err)
+	}
+	ids := roomWithMessages(t, s, room, "vertraulich")
+	promoted, err := s.PromoteMessagesToThread(room, ids, Thread{Project: "p", Title: "Privat"}, "robin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AppendCoordMessage(CoordMessage{
+		DestinationKind: DestinationDiscussion, DestinationID: ThreadDestinationID(promoted.ThreadID),
+		SenderExternalID: "sess-a", ClientID: "p1", Body: "auch vertraulich"}); err != nil {
+		t.Fatal(err)
+	}
+
+	split, err := s.SplitThread(promoted.ThreadID, []int64{1}, Thread{Title: "Abzweig"}, "robin")
+	if err != nil {
+		t.Fatalf("split: %v", err)
+	}
+	ok, err := s.MayReadThread(split.ThreadID, "sess-fremd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("splitting lifted a restricted history into an open thread")
+	}
+}
+
+// Ein Beitrag, der nicht im Ursprung steht, wird übersprungen und benannt.
+func TestSplittingSkipsPostsFromElsewhere(t *testing.T) {
+	s := openTest(t)
+	src := threadWithPosts(t, s, "Ursprung", "eins")
+	if _, err := s.SplitThread(src, []int64{99}, Thread{Title: "Nichts"}, "robin"); err == nil {
+		t.Fatal("splitting only unknown posts must fail rather than create an empty thread")
+	}
+	res, err := s.SplitThread(src, []int64{1, 99}, Thread{Title: "Teilweise"}, "robin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Copied != 1 || len(res.Skipped) != 1 {
+		t.Fatalf("a skipped post must be reported: copied %d skipped %v", res.Copied, res.Skipped)
+	}
+}
