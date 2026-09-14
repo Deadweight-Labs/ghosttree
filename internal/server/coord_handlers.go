@@ -14,6 +14,33 @@ func validDestinationKind(kind string) bool {
 	return kind == store.DestinationRoom || kind == store.DestinationDiscussion
 }
 
+// mayActAs schließt die Lücke zwischen Authentifizierung und Autorisierung.
+//
+// Ein Token weist eine PERSON aus; Räume gehören SESSIONS. Ohne diese Prüfung
+// könnte jeder Tokeninhaber eine fremde Session-Referenz in Query oder Rumpf
+// schreiben und damit deren private Räume lesen oder in sie schreiben — der
+// Tokeninhaber ist nicht dasselbe wie der Teilnehmer.
+//
+// Eine noch nicht angemeldete Referenz wird durchgelassen: sie gehört
+// niemandem, und sie kann auch niemandem etwas wegnehmen, weil
+// Raummitgliedschaft an angemeldeten Sessions hängt. Sobald sich eine Session
+// anmeldet, gehört ihre Referenz ihrer Person.
+//
+// Was hier ausdrücklich NICHT getrennt wird: zwei Sessions derselben Person.
+// Spec §9 hält fest, dass Prozesse unter demselben Systemnutzer ohne weitere
+// Isolation keine belastbare Sicherheitsgrenze sind. Die Grenze verläuft
+// zwischen Personen, und das ist eine bewusste Entscheidung, keine Lücke.
+func (a *api) mayActAs(r *http.Request, externalID string) (bool, error) {
+	owner, registered, err := a.st.CoordAgentOwner(externalID)
+	if err != nil {
+		return false, err
+	}
+	if !registered || owner == "" {
+		return true, nil
+	}
+	return owner == personOf(r), nil
+}
+
 // sendCoordMessage nimmt einen Beitrag von einem Agenten an.
 //
 // Herkunft wird hier gesetzt und nicht gelesen: über diesen Weg kommen
@@ -38,6 +65,16 @@ func (a *api) sendCoordMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.DestinationID == "" || in.SenderExternalID == "" || in.ClientID == "" {
 		writeErr(w, http.StatusBadRequest, "destination_id, sender_external_id and client_id are required")
+		return
+	}
+	// Zuerst: gehört die behauptete Absender-Session überhaupt zu diesem
+	// Token? Sonst wäre die Raumprüfung darunter wertlos — man gäbe einfach
+	// die Referenz eines Mitglieds an.
+	if ok, err := a.mayActAs(r, in.SenderExternalID); err != nil {
+		writeStoreError(w, http.StatusInternalServerError, err)
+		return
+	} else if !ok {
+		writeErr(w, http.StatusForbidden, "that session belongs to someone else")
 		return
 	}
 	// Die Zugriffsgrenze wird auf dem Schreibweg genauso geprüft wie auf dem
@@ -87,6 +124,13 @@ func (a *api) coordInbox(w http.ResponseWriter, r *http.Request) {
 	// direkte Abruf ist der offensichtlichste dieser Wege.
 	if kind == store.DestinationRoom {
 		asker := q.Get("agent_external_id")
+		if ok, err := a.mayActAs(r, asker); err != nil {
+			writeStoreError(w, http.StatusInternalServerError, err)
+			return
+		} else if !ok {
+			writeErr(w, http.StatusForbidden, "that session belongs to someone else")
+			return
+		}
 		if ok, err := a.st.MayReadCoordRoom(q.Get("destination_id"), asker); err != nil {
 			writeStoreError(w, http.StatusInternalServerError, err)
 			return
@@ -216,6 +260,13 @@ func (a *api) coordRooms(w http.ResponseWriter, r *http.Request) {
 	agent := r.URL.Query().Get("agent_external_id")
 	if agent == "" {
 		writeErr(w, http.StatusBadRequest, "agent_external_id is required")
+		return
+	}
+	if ok, err := a.mayActAs(r, agent); err != nil {
+		writeStoreError(w, http.StatusInternalServerError, err)
+		return
+	} else if !ok {
+		writeErr(w, http.StatusForbidden, "that session belongs to someone else")
 		return
 	}
 	out, err := a.st.CoordRoomsFor(agent)

@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -135,5 +136,69 @@ func TestAnUnknownRoomIsRefusedRatherThanServedEmpty(t *testing.T) {
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusForbidden {
 		t.Fatalf("want 403 for an unknown room, got %d", res.StatusCode)
+	}
+}
+
+// Ein Token weist eine PERSON aus, ein Raum gehört SESSIONS. Ohne die
+// Zuordnung dazwischen könnte Philipps Token Robins Session-Referenz angeben
+// und damit dessen private Räume lesen oder in sie schreiben.
+//
+// Was hier ausdrücklich NICHT getrennt wird: zwei Sessions derselben Person.
+// Spec §9 hält fest, dass Prozesse unter demselben Systemnutzer ohne weitere
+// Isolation keine belastbare Sicherheitsgrenze sind.
+// twoPersonServer baut einen Server mit zwei getrennten Personen. Die
+// vorhandene Hilfe gibt den Store nicht heraus und kann deshalb keine zweite
+// Person anlegen — und ohne zwei Personen lässt sich die einzige Grenze, die
+// hier wirklich existiert, nicht prüfen.
+func twoPersonServer(t *testing.T) (*httptest.Server, string, string) {
+	t.Helper()
+	st, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	robin, _ := st.AddPerson("robin")
+	philipp, _ := st.AddPerson("philipp")
+	srv := httptest.NewServer(New(st))
+	t.Cleanup(srv.Close)
+	return srv, robin, philipp
+}
+
+func TestOneTokenCannotActAsAnotherPersonsSession(t *testing.T) {
+	srv, robinToken, philippToken := twoPersonServer(t)
+
+	room := store.RoomKeyForProject("github.com/x/y")
+	res := req(t, "POST", srv.URL+"/api/coord/agents", robinToken, store.CoordAgent{
+		ExternalID: "sess-robin", Provider: "claude", RoomKey: room, DisplayName: "Robin-A"})
+	res.Body.Close()
+
+	// Philipps Token gibt Robins Session-Referenz an — beim Schreiben ...
+	res = req(t, "POST", srv.URL+"/api/coord/messages", philippToken, store.CoordMessage{
+		DestinationKind: store.DestinationRoom, DestinationID: room,
+		SenderExternalID: "sess-robin", ClientID: "c-1", Body: "in fremdem Namen"})
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusForbidden {
+		t.Errorf("writing as another person's session: want 403, got %d", res.StatusCode)
+	}
+
+	// ... beim Lesen ...
+	res2 := req(t, "GET", srv.URL+"/api/coord/messages?destination_kind=room&destination_id="+room+"&agent_external_id=sess-robin", philippToken, nil)
+	defer res2.Body.Close()
+	if res2.StatusCode != http.StatusForbidden {
+		t.Errorf("reading as another person's session: want 403, got %d", res2.StatusCode)
+	}
+
+	// ... und beim Auflisten fremder privater Räume.
+	res3 := req(t, "GET", srv.URL+"/api/coord/rooms?agent_external_id=sess-robin", philippToken, nil)
+	defer res3.Body.Close()
+	if res3.StatusCode != http.StatusForbidden {
+		t.Errorf("listing another person's rooms: want 403, got %d", res3.StatusCode)
+	}
+
+	// Robin selbst darf natürlich.
+	res4 := req(t, "GET", srv.URL+"/api/coord/rooms?agent_external_id=sess-robin", robinToken, nil)
+	defer res4.Body.Close()
+	if res4.StatusCode != http.StatusOK {
+		t.Errorf("the owner must still be allowed: got %d", res4.StatusCode)
 	}
 }

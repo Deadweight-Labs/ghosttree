@@ -2,7 +2,9 @@ package store
 
 import (
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -192,4 +194,32 @@ func (s *Store) CoordRoomsFor(agentExternalID string) ([]CoordRoom, error) {
 		out[i].Members = members
 	}
 	return out, nil
+}
+
+// CoordAgentOwner nennt die Person, der eine angemeldete Session gehört.
+//
+// Das ist der fehlende Schritt zwischen Authentifizierung und Autorisierung:
+// ein Token weist eine PERSON aus, ein Raum gehört SESSIONS. Ohne diese
+// Zuordnung könnte jeder Tokeninhaber eine fremde Session-Referenz angeben
+// und damit deren private Räume lesen — ein Tokeninhaber ist nicht dasselbe
+// wie der Teilnehmer.
+//
+// Dass mehrere Sessions derselben Person einander nicht abschotten, ist
+// dagegen bewusst so: Spec §9 hält fest, dass Prozesse unter demselben
+// Systemnutzer ohne weitere Isolation keine belastbare Sicherheitsgrenze
+// sind. Die Grenze, die hier gezogen wird, verläuft zwischen PERSONEN.
+func (s *Store) CoordAgentOwner(externalID string) (string, bool, error) {
+	if s.reader != nil {
+		return s.reader.CoordAgentOwner(externalID)
+	}
+	var person string
+	err := s.db.QueryRow(`SELECT COALESCE(person,'') FROM coord_agents WHERE external_id=?`,
+		externalID).Scan(&person)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", false, nil
+	case err != nil:
+		return "", false, err
+	}
+	return person, true, nil
 }
