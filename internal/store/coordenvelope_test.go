@@ -129,3 +129,37 @@ func TestRoomAndDiscussionAreSeparateDestinations(t *testing.T) {
 		t.Fatalf("a discussion post leaked into a room with the same id: %+v", got)
 	}
 }
+
+// v1 §12: "Ein Link auf einen veränderlichen Head bleibt als solcher
+// erkennbar und ist kein Beleg des damaligen Wortlauts." Eine Referenz auf
+// Wissenseintrag #2071 zeigt auf einen Head, der sich morgen ändert; eine auf
+// Dokument 360 rev 1 nicht. Wer das nicht unterscheidet, zitiert später einen
+// Text, den nie jemand geschrieben hat.
+func TestReferenceDistinguishesPinnedRevisionFromMutableHead(t *testing.T) {
+	s := openTest(t)
+	room := RoomKeyForProject("p")
+	id, err := s.AppendCoordMessage(CoordMessage{
+		DestinationKind: DestinationRoom, DestinationID: room,
+		SenderExternalID: "sess-a", ClientID: "c-1", Body: "siehe beides",
+		Refs: []CoordRef{
+			{Kind: "knowledge", ID: "2071"},
+			{Kind: "document", ID: "360", Revision: "1"},
+		}})
+	if err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	refs, err := s.CoordMessageRefs(id)
+	if err != nil {
+		t.Fatalf("refs: %v", err)
+	}
+	byKind := map[string]CoordRef{}
+	for _, r := range refs {
+		byKind[r.Kind] = r
+	}
+	if !byKind["knowledge"].MutableHead {
+		t.Error("a reference without a revision points at a mutable head and must say so")
+	}
+	if byKind["document"].MutableHead {
+		t.Error("a reference pinned to revision 1 must not be reported as a mutable head")
+	}
+}

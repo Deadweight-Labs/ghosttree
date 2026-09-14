@@ -68,9 +68,19 @@ type CoordMessage struct {
 // CoordRef verbindet eine Nachricht mit einem bestehenden Ghosttree-Objekt.
 // Ohne das ist eine Abstimmung nur Text; damit ist sie der Weg zurück zu der
 // Entscheidung, dem Auftrag oder dem Beleg, um den es ging.
+//
+// Revision unterscheidet zwei Arten von Verweis, und die Unterscheidung ist
+// nicht kosmetisch: eine Referenz auf einen Wissenseintrag zeigt auf einen
+// Head, der sich morgen ändert; eine auf Dokument 360 rev 1 nicht. Wer beides
+// gleich behandelt, zitiert später einen Text, den nie jemand geschrieben hat.
+// Leere Revision heißt veränderlicher Head — und das wird ausgewiesen, statt
+// den Verweis als Beleg des damaligen Wortlauts auszugeben.
 type CoordRef struct {
-	Kind string `json:"kind"`
-	ID   string `json:"id"`
+	Kind     string `json:"kind"`
+	ID       string `json:"id"`
+	Revision string `json:"revision,omitempty"`
+	// MutableHead ist abgeleitet und wird nicht gespeichert.
+	MutableHead bool `json:"mutable_head,omitempty"`
 }
 
 // AppendCoordMessage speichert einen Beitrag, bevor irgendjemand seinen
@@ -128,8 +138,8 @@ func (s *Store) AppendCoordMessage(m CoordMessage) (int64, error) {
 		return 0, err
 	}
 	for _, r := range m.Refs {
-		if _, err := tx.Exec(`INSERT OR IGNORE INTO coord_message_refs(message_id,ref_kind,ref_id)
-			VALUES(?,?,?)`, id, r.Kind, r.ID); err != nil {
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO coord_message_refs(message_id,ref_kind,ref_id,ref_revision)
+			VALUES(?,?,?,?)`, id, r.Kind, r.ID, r.Revision); err != nil {
 			return 0, err
 		}
 	}
@@ -277,8 +287,8 @@ func (s *Store) CoordMessageRefs(messageID int64) ([]CoordRef, error) {
 	if s.reader != nil {
 		return s.reader.CoordMessageRefs(messageID)
 	}
-	rows, err := s.db.Query(`SELECT ref_kind,ref_id FROM coord_message_refs
-		WHERE message_id=? ORDER BY ref_kind,ref_id`, messageID)
+	rows, err := s.db.Query(`SELECT ref_kind,ref_id,ref_revision FROM coord_message_refs
+		WHERE message_id=? ORDER BY ref_kind,ref_id,ref_revision`, messageID)
 	if err != nil {
 		return nil, err
 	}
@@ -286,9 +296,10 @@ func (s *Store) CoordMessageRefs(messageID int64) ([]CoordRef, error) {
 	var out []CoordRef
 	for rows.Next() {
 		var r CoordRef
-		if err := rows.Scan(&r.Kind, &r.ID); err != nil {
+		if err := rows.Scan(&r.Kind, &r.ID, &r.Revision); err != nil {
 			return nil, err
 		}
+		r.MutableHead = r.Revision == ""
 		out = append(out, r)
 	}
 	return out, rows.Err()

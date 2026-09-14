@@ -457,7 +457,8 @@ CREATE TABLE IF NOT EXISTS coord_message_refs(
   message_id INTEGER NOT NULL REFERENCES coord_messages(id) ON DELETE CASCADE,
   ref_kind TEXT NOT NULL,
   ref_id TEXT NOT NULL,
-  PRIMARY KEY(message_id,ref_kind,ref_id));
+  ref_revision TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY(message_id,ref_kind,ref_id,ref_revision));
 `
 
 func Open(path string) (*Store, error) {
