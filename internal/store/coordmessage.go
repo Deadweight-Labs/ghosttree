@@ -3,81 +3,123 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"time"
 )
 
-// CoordMessage ist ein dauerhafter Beitrag in einem Raum. ClientID kommt vom
-// Absender und macht das Senden wiederholbar: derselbe Versuch nach einem
-// Timeout ist dieselbe Nachricht, nicht die zweite. Bei einem Agenten heißt
-// eine doppelt gelesene Bitte zweimal handeln, deshalb ist das keine Kosmetik.
+// Zielarten einer Nachricht. Dieselbe Primitive adressiert einen Raum und
+// eine Diskussion; Räume und Diskussionen behalten trotzdem eigene Aggregate
+// und Regeln. Eine gemeinsame Hülle ist kein Auftrag, alle Ghosttree-Objekte
+// in eine Riesentabelle zu legen.
+const (
+	DestinationRoom       = "room"
+	DestinationDiscussion = "discussion"
+)
+
+// Autorenarten. Mensch, Agent und Systemereignis sind verschiedene Dinge, und
+// die Unterscheidung wird aus der authentifizierten Verbindung bestimmt, nie
+// aus dem Rumpf einer Nachricht. Ein Agent, der "human" behauptet, erzeugt
+// keine menschliche Freigabe.
+const (
+	AuthorAgent  = "agent"
+	AuthorHuman  = "human"
+	AuthorSystem = "system"
+)
+
+// CoordMessage ist ein dauerhafter Beitrag an einem Ziel.
+//
+// Zwei Schlüssel machen das Senden wiederholbar, und sie tun verschiedene
+// Dinge: ClientID kommt vom Absender und fängt den eigenen Retry nach einem
+// Timeout ab. OriginEventID benennt ein fremdes Ereignis, aus dem dieser
+// Beitrag gespiegelt wurde, und verhindert, dass native Harness-Zustellung
+// und Ghosttree-Zustellung dieselbe Nachricht zweimal ans Modell liefern.
 type CoordMessage struct {
-	ID               int64      `json:"id,omitempty"`
-	RoomKey          string     `json:"room_key"`
-	SenderExternalID string     `json:"sender_external_id"`
-	SenderKind       string     `json:"sender_kind"`
-	ClientID         string     `json:"client_id"`
-	Kind             string     `json:"kind,omitempty"`
-	Body             string     `json:"body"`
-	ReplyTo          int64      `json:"reply_to,omitempty"`
-	CreatedAt        string     `json:"created_at,omitempty"`
-	Refs             []CoordRef `json:"refs,omitempty"`
+	ID              int64  `json:"id,omitempty"`
+	DestinationKind string `json:"destination_kind"`
+	DestinationID   string `json:"destination_id"`
+	// Sequence zählt je Ziel und beginnt bei 1. Eine globale Zeilennummer
+	// taugt dafür nicht: die Kontextkarte einer Diskussion grenzt sich mit
+	// covers_through_sequence gegen genau ihr Ziel ab, und Zeitstempel
+	// verschiedener Rechner sind keine verlässliche Kausalordnung.
+	Sequence          int64      `json:"sequence,omitempty"`
+	SenderExternalID  string     `json:"sender_external_id"`
+	AuthorPrincipalID string     `json:"author_principal_id,omitempty"`
+	AuthorKind        string     `json:"author_kind,omitempty"`
+	ParentExternalID  string     `json:"parent_external_id,omitempty"`
+	ClientID          string     `json:"client_id"`
+	Kind              string     `json:"kind,omitempty"`
+	Intent            string     `json:"intent,omitempty"`
+	Priority          string     `json:"priority,omitempty"`
+	Body              string     `json:"body"`
+	ReplyTo           int64      `json:"reply_to,omitempty"`
+	OriginEventID     string     `json:"origin_event_id,omitempty"`
+	CausationID       string     `json:"causation_id,omitempty"`
+	ExpiresAt         string     `json:"expires_at,omitempty"`
+	ObservedAtClient  string     `json:"observed_at_client,omitempty"`
+	CreatedAt         string     `json:"created_at,omitempty"`
+	Mentions          []string   `json:"mentions,omitempty"`
+	Refs              []CoordRef `json:"refs,omitempty"`
+	// Expired ist abgeleitet und wird nicht gespeichert. Eine abgelaufene
+	// Meldung bleibt Geschichte und verschwindet nicht; sie darf nur nicht
+	// als gegenwärtig gelesen werden. "Die API ist 20 Sekunden weg" von
+	// gestern ist kein Grund, heute zu warten.
+	Expired bool `json:"expired,omitempty"`
 }
 
 // CoordRef verbindet eine Nachricht mit einem bestehenden Ghosttree-Objekt.
 // Ohne das ist eine Abstimmung nur Text; damit ist sie der Weg zurück zu der
-// Entscheidung, dem Auftrag oder dem Beleg, um den es ging. Das ist der
-// Unterschied zwischen "das Auth-Ding ist fertig" und einer Nachricht, die in
-// sechs Monaten noch etwas wert ist.
+// Entscheidung, dem Auftrag oder dem Beleg, um den es ging.
 type CoordRef struct {
 	Kind string `json:"kind"`
 	ID   string `json:"id"`
 }
 
 // AppendCoordMessage speichert einen Beitrag, bevor irgendjemand seinen
-// Empfang bestätigt. Ein Wiederholungsversuch mit derselben ClientID liefert
-// die vorhandene ID zurück und lässt den gespeicherten Inhalt unangetastet:
-// eine Nachricht ändert sich nicht, weil jemand sie erneut sendet.
+// Empfang bestätigt. Zwei Wiederholungsfälle werden abgefangen, und beide
+// geben die vorhandene ID zurück, ohne den gespeicherten Inhalt anzutasten:
+// derselbe Absender mit derselben ClientID, und dasselbe fremde Ereignis mit
+// derselben OriginEventID.
 func (s *Store) AppendCoordMessage(m CoordMessage) (int64, error) {
 	if s.writer != nil {
 		return queueValue(s, []any{m}, func(d *Store, p []any) (int64, error) {
 			return d.AppendCoordMessage(p[0].(CoordMessage))
 		})
 	}
-	at := m.CreatedAt
-	if at == "" {
-		at = now()
-	}
-	kind := m.Kind
-	if kind == "" {
-		kind = "message"
-	}
-	senderKind := m.SenderKind
-	if senderKind == "" {
-		senderKind = "agent"
-	}
+	m = m.withDefaults()
 	tx, err := s.db.Begin()
 	if err != nil {
 		return 0, err
 	}
 	defer tx.Rollback()
 
-	// Der Wiederholungsfall zuerst. Kein UPDATE: wer denselben Schlüssel mit
-	// anderem Inhalt sendet, bekommt den alten Inhalt zurück, statt ihn dem
-	// Empfänger unter der Hand auszutauschen.
-	var existing int64
-	err = tx.QueryRow(`SELECT id FROM coord_messages WHERE sender_external_id=? AND client_id=?`,
-		m.SenderExternalID, m.ClientID).Scan(&existing)
-	switch {
-	case err == nil:
-		return existing, tx.Commit()
-	case !errors.Is(err, sql.ErrNoRows):
+	if id, found, err := existingCoordMessage(tx, m); err != nil {
+		return 0, err
+	} else if found {
+		return id, tx.Commit()
+	}
+
+	// Die Sequenz wird innerhalb derselben Transaktion vergeben. Der UNIQUE
+	// auf (destination_kind, destination_id, sequence) fängt ab, was zwei
+	// gleichzeitige Schreiber sonst doppelt vergeben könnten; im Runtime-Modus
+	// serialisiert der Writer ohnehin.
+	var seq int64
+	if err := tx.QueryRow(`SELECT COALESCE(MAX(sequence),0)+1 FROM coord_messages
+		WHERE destination_kind=? AND destination_id=?`,
+		m.DestinationKind, m.DestinationID).Scan(&seq); err != nil {
 		return 0, err
 	}
 
 	res, err := tx.Exec(`INSERT INTO coord_messages(
-			room_key,sender_external_id,sender_kind,client_id,kind,body,reply_to,created_at)
-		VALUES(?,?,?,?,?,?,?,?)`,
-		m.RoomKey, m.SenderExternalID, senderKind, m.ClientID, kind, m.Body,
-		nullableCoordID(m.ReplyTo), at)
+			destination_kind,destination_id,sequence,sender_external_id,
+			author_principal_id,author_kind,parent_external_id,client_id,kind,
+			intent,priority,body,reply_to,origin_event_id,causation_id,
+			expires_at,observed_at_client,created_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		m.DestinationKind, m.DestinationID, seq, m.SenderExternalID,
+		m.AuthorPrincipalID, m.AuthorKind, nullableText(m.ParentExternalID),
+		m.ClientID, m.Kind, m.Intent, m.Priority, m.Body,
+		nullableCoordID(m.ReplyTo), nullableText(m.OriginEventID),
+		nullableText(m.CausationID), nullableText(m.ExpiresAt),
+		nullableText(m.ObservedAtClient), m.CreatedAt)
 	if err != nil {
 		return 0, err
 	}
@@ -91,11 +133,66 @@ func (s *Store) AppendCoordMessage(m CoordMessage) (int64, error) {
 			return 0, err
 		}
 	}
+	for _, mention := range m.Mentions {
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO coord_message_mentions(message_id,mentioned_external_id)
+			VALUES(?,?)`, id, mention); err != nil {
+			return 0, err
+		}
+	}
 	return id, tx.Commit()
 }
 
-// nullableCoordID schreibt 0 als NULL. Eine Antwort auf Nachricht 0 gibt es
-// nicht, und eine 0 in der Spalte sähe aus wie eine echte Referenz.
+// withDefaults füllt, was der Store selbst verantwortet. AuthorKind fällt
+// bewusst auf agent zurück und nie auf human: wer keinen belegten
+// menschlichen Ursprung mitbringt, bekommt auch keinen.
+func (m CoordMessage) withDefaults() CoordMessage {
+	if m.CreatedAt == "" {
+		m.CreatedAt = now()
+	}
+	if m.Kind == "" {
+		m.Kind = "message"
+	}
+	if m.AuthorKind == "" {
+		m.AuthorKind = AuthorAgent
+	}
+	if m.Priority == "" {
+		m.Priority = "normal"
+	}
+	if m.DestinationKind == "" {
+		m.DestinationKind = DestinationRoom
+	}
+	return m
+}
+
+// existingCoordMessage beantwortet beide Wiederholungsfragen in einer Runde.
+// Kein UPDATE: wer denselben Schlüssel mit anderem Inhalt sendet, bekommt den
+// alten Inhalt zurück, statt ihn dem Empfänger unter der Hand auszutauschen.
+func existingCoordMessage(tx *sql.Tx, m CoordMessage) (int64, bool, error) {
+	var id int64
+	err := tx.QueryRow(`SELECT id FROM coord_messages
+		WHERE sender_external_id=? AND client_id=?`,
+		m.SenderExternalID, m.ClientID).Scan(&id)
+	switch {
+	case err == nil:
+		return id, true, nil
+	case !errors.Is(err, sql.ErrNoRows):
+		return 0, false, err
+	}
+	if m.OriginEventID == "" {
+		return 0, false, nil
+	}
+	err = tx.QueryRow(`SELECT id FROM coord_messages WHERE origin_event_id=?`,
+		m.OriginEventID).Scan(&id)
+	switch {
+	case err == nil:
+		return id, true, nil
+	case errors.Is(err, sql.ErrNoRows):
+		return 0, false, nil
+	default:
+		return 0, false, err
+	}
+}
+
 func nullableCoordID(id int64) any {
 	if id == 0 {
 		return nil
@@ -103,34 +200,74 @@ func nullableCoordID(id int64) any {
 	return id
 }
 
+func nullableText(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
 // CoordMessagesSince liefert das Fenster nach afterID; afterID=0 ist der
-// Anfang. Das Limit ist gedeckelt, damit ein einzelner Aufruf nicht einen
-// ganzen Raum in einen Modellkontext kippt.
-func (s *Store) CoordMessagesSince(roomKey string, afterID int64, limit int) ([]CoordMessage, error) {
+// Anfang. Das Limit ist gedeckelt, damit ein einzelner Aufruf nicht ein
+// ganzes Ziel in einen Modellkontext kippt.
+//
+// Abgelaufene Nachrichten werden ausgeliefert und als abgelaufen markiert,
+// nicht weggefiltert: sie bleiben Geschichte, dürfen aber nicht als
+// gegenwärtige Lage gelesen werden.
+func (s *Store) CoordMessagesSince(destinationKind, destinationID string, afterID int64, limit int) ([]CoordMessage, error) {
 	if s.reader != nil {
-		return s.reader.CoordMessagesSince(roomKey, afterID, limit)
+		return s.reader.CoordMessagesSince(destinationKind, destinationID, afterID, limit)
 	}
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	rows, err := s.db.Query(`SELECT id,room_key,sender_external_id,sender_kind,client_id,
-			kind,body,COALESCE(reply_to,0),created_at
-		FROM coord_messages WHERE room_key=? AND id>? ORDER BY id LIMIT ?`,
-		roomKey, afterID, limit)
+	rows, err := s.db.Query(`SELECT id,destination_kind,destination_id,sequence,
+			sender_external_id,author_principal_id,author_kind,
+			COALESCE(parent_external_id,''),client_id,kind,intent,priority,body,
+			COALESCE(reply_to,0),COALESCE(origin_event_id,''),
+			COALESCE(causation_id,''),COALESCE(expires_at,''),
+			COALESCE(observed_at_client,''),created_at
+		FROM coord_messages
+		WHERE destination_kind=? AND destination_id=? AND id>?
+		ORDER BY id LIMIT ?`,
+		destinationKind, destinationID, afterID, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
+	nowTS := now()
 	var out []CoordMessage
 	for rows.Next() {
 		var m CoordMessage
-		if err := rows.Scan(&m.ID, &m.RoomKey, &m.SenderExternalID, &m.SenderKind,
-			&m.ClientID, &m.Kind, &m.Body, &m.ReplyTo, &m.CreatedAt); err != nil {
+		if err := rows.Scan(&m.ID, &m.DestinationKind, &m.DestinationID, &m.Sequence,
+			&m.SenderExternalID, &m.AuthorPrincipalID, &m.AuthorKind,
+			&m.ParentExternalID, &m.ClientID, &m.Kind, &m.Intent, &m.Priority,
+			&m.Body, &m.ReplyTo, &m.OriginEventID, &m.CausationID, &m.ExpiresAt,
+			&m.ObservedAtClient, &m.CreatedAt); err != nil {
 			return nil, err
 		}
+		m.Expired = expiredAt(m.ExpiresAt, nowTS)
 		out = append(out, m)
 	}
 	return out, rows.Err()
+}
+
+// expiredAt vergleicht zwei RFC-3339-Zeitpunkte. Ein unlesbarer Zeitpunkt
+// gilt NICHT als abgelaufen: eine kaputte Angabe darf eine Meldung nicht
+// stillschweigend entwerten.
+func expiredAt(expires, reference string) bool {
+	if expires == "" {
+		return false
+	}
+	exp, err := time.Parse(time.RFC3339, expires)
+	if err != nil {
+		return false
+	}
+	ref, err := time.Parse(time.RFC3339, reference)
+	if err != nil {
+		ref = time.Now().UTC()
+	}
+	return exp.Before(ref)
 }
 
 // CoordMessageRefs liest die Objektbezüge einer Nachricht. Getrennt vom
@@ -153,6 +290,31 @@ func (s *Store) CoordMessageRefs(messageID int64) ([]CoordRef, error) {
 			return nil, err
 		}
 		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// CoordMessageMentions liest die ausdrücklich erwähnten Empfänger. Sie sind
+// die Grundlage der Zustellregeln: eine Erwähnung wird zeitnah geliefert, ein
+// gewöhnlicher Raumbeitrag darf gebündelt werden. Dafür braucht es kein
+// dauerhaft mitlesendes Modell.
+func (s *Store) CoordMessageMentions(messageID int64) ([]string, error) {
+	if s.reader != nil {
+		return s.reader.CoordMessageMentions(messageID)
+	}
+	rows, err := s.db.Query(`SELECT mentioned_external_id FROM coord_message_mentions
+		WHERE message_id=? ORDER BY mentioned_external_id`, messageID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var v string
+		if err := rows.Scan(&v); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
 	}
 	return out, rows.Err()
 }

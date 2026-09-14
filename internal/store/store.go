@@ -425,16 +425,34 @@ CREATE TABLE IF NOT EXISTS coord_agents(
 CREATE INDEX IF NOT EXISTS coord_agents_room ON coord_agents(room_key,last_seen_at);
 CREATE TABLE IF NOT EXISTS coord_messages(
   id INTEGER PRIMARY KEY,
-  room_key TEXT NOT NULL,
+  destination_kind TEXT NOT NULL CHECK(destination_kind IN ('room','discussion')),
+  destination_id TEXT NOT NULL,
+  sequence INTEGER NOT NULL,
   sender_external_id TEXT NOT NULL,
-  sender_kind TEXT NOT NULL CHECK(sender_kind IN ('agent','human')),
+  author_principal_id TEXT NOT NULL DEFAULT '',
+  author_kind TEXT NOT NULL CHECK(author_kind IN ('agent','human','system')),
+  parent_external_id TEXT,
   client_id TEXT NOT NULL,
   kind TEXT NOT NULL DEFAULT 'message',
+  intent TEXT NOT NULL DEFAULT '',
+  priority TEXT NOT NULL DEFAULT 'normal',
   body TEXT NOT NULL,
   reply_to INTEGER,
+  origin_event_id TEXT,
+  causation_id TEXT,
+  expires_at TEXT,
+  observed_at_client TEXT,
   created_at TEXT NOT NULL,
-  UNIQUE(sender_external_id,client_id));
-CREATE INDEX IF NOT EXISTS coord_messages_room ON coord_messages(room_key,id);
+  UNIQUE(sender_external_id,client_id),
+  UNIQUE(destination_kind,destination_id,sequence));
+CREATE INDEX IF NOT EXISTS coord_messages_destination
+  ON coord_messages(destination_kind,destination_id,id);
+CREATE UNIQUE INDEX IF NOT EXISTS coord_messages_origin
+  ON coord_messages(origin_event_id) WHERE origin_event_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS coord_message_mentions(
+  message_id INTEGER NOT NULL REFERENCES coord_messages(id) ON DELETE CASCADE,
+  mentioned_external_id TEXT NOT NULL,
+  PRIMARY KEY(message_id,mentioned_external_id));
 CREATE TABLE IF NOT EXISTS coord_message_refs(
   message_id INTEGER NOT NULL REFERENCES coord_messages(id) ON DELETE CASCADE,
   ref_kind TEXT NOT NULL,

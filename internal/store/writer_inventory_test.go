@@ -41,6 +41,7 @@ var writerMethodClasses = map[string]string{
 	"ContextSnapshot":               "read",
 	"ContextSnapshotAccess":         "read",
 	"ContextSnapshotEntries":        "read",
+	"CoordMessageMentions":          "read",
 	"CoordMessageRefs":              "read",
 	"CoordMessagesSince":            "read",
 	"CoordPeers":                    "read",

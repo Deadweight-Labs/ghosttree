@@ -9,8 +9,8 @@ import "testing"
 func TestAppendDeduplicatesByClientID(t *testing.T) {
 	s := openTest(t)
 	room := RoomKeyForProject("github.com/deadweight-labs/ghosttree")
-	m := CoordMessage{RoomKey: room, SenderExternalID: "sess-a", SenderKind: "agent",
-		ClientID: "c-1", Body: "ich nehme das Backend"}
+	m := CoordMessage{DestinationKind: DestinationRoom, DestinationID: room,
+		SenderExternalID: "sess-a", ClientID: "c-1", Body: "ich nehme das Backend"}
 
 	first, err := s.AppendCoordMessage(m)
 	if err != nil {
@@ -24,7 +24,7 @@ func TestAppendDeduplicatesByClientID(t *testing.T) {
 		t.Fatalf("retry created a second message: %d then %d", first, second)
 	}
 
-	got, err := s.CoordMessagesSince(room, 0, 50)
+	got, err := s.CoordMessagesSince(DestinationRoom, room, 0, 50)
 	if err != nil {
 		t.Fatalf("since: %v", err)
 	}
@@ -39,17 +39,17 @@ func TestAppendDeduplicatesByClientID(t *testing.T) {
 func TestRetryDoesNotRewriteTheStoredBody(t *testing.T) {
 	s := openTest(t)
 	room := RoomKeyForProject("p")
-	if _, err := s.AppendCoordMessage(CoordMessage{RoomKey: room,
-		SenderExternalID: "sess-a", SenderKind: "agent", ClientID: "c-1",
+	if _, err := s.AppendCoordMessage(CoordMessage{DestinationKind: DestinationRoom, DestinationID: room,
+		SenderExternalID: "sess-a", ClientID: "c-1",
 		Body: "original"}); err != nil {
 		t.Fatalf("first: %v", err)
 	}
-	if _, err := s.AppendCoordMessage(CoordMessage{RoomKey: room,
-		SenderExternalID: "sess-a", SenderKind: "agent", ClientID: "c-1",
+	if _, err := s.AppendCoordMessage(CoordMessage{DestinationKind: DestinationRoom, DestinationID: room,
+		SenderExternalID: "sess-a", ClientID: "c-1",
 		Body: "untergeschoben"}); err != nil {
 		t.Fatalf("retry: %v", err)
 	}
-	got, err := s.CoordMessagesSince(room, 0, 50)
+	got, err := s.CoordMessagesSince(DestinationRoom, room, 0, 50)
 	if err != nil {
 		t.Fatalf("since: %v", err)
 	}
@@ -65,15 +65,15 @@ func TestMessagesSinceIsACursor(t *testing.T) {
 	room := RoomKeyForProject("github.com/deadweight-labs/ghosttree")
 	var ids []int64
 	for _, body := range []string{"eins", "zwei", "drei"} {
-		id, err := s.AppendCoordMessage(CoordMessage{RoomKey: room,
-			SenderExternalID: "sess-a", SenderKind: "agent", ClientID: body, Body: body})
+		id, err := s.AppendCoordMessage(CoordMessage{DestinationKind: DestinationRoom, DestinationID: room,
+			SenderExternalID: "sess-a", ClientID: body, Body: body})
 		if err != nil {
 			t.Fatalf("append %s: %v", body, err)
 		}
 		ids = append(ids, id)
 	}
 
-	got, err := s.CoordMessagesSince(room, ids[0], 50)
+	got, err := s.CoordMessagesSince(DestinationRoom, room, ids[0], 50)
 	if err != nil {
 		t.Fatalf("since: %v", err)
 	}
@@ -89,8 +89,8 @@ func TestMessagesSinceIsACursor(t *testing.T) {
 func TestMessageKeepsItsReferences(t *testing.T) {
 	s := openTest(t)
 	room := RoomKeyForProject("p")
-	id, err := s.AppendCoordMessage(CoordMessage{RoomKey: room,
-		SenderExternalID: "sess-a", SenderKind: "agent", ClientID: "c-1",
+	id, err := s.AppendCoordMessage(CoordMessage{DestinationKind: DestinationRoom, DestinationID: room,
+		SenderExternalID: "sess-a", ClientID: "c-1",
 		Body: "Vertrag geändert",
 		Refs: []CoordRef{{Kind: "request", ID: "350"}, {Kind: "knowledge", ID: "2071"}}})
 	if err != nil {
@@ -111,12 +111,12 @@ func TestMessagesDoNotLeakAcrossRooms(t *testing.T) {
 	s := openTest(t)
 	project := RoomKeyForProject("p")
 	machine := RoomKeyForMachine("mainex")
-	if _, err := s.AppendCoordMessage(CoordMessage{RoomKey: machine,
-		SenderExternalID: "sess-a", SenderKind: "agent", ClientID: "c-1",
+	if _, err := s.AppendCoordMessage(CoordMessage{DestinationKind: DestinationRoom, DestinationID: machine,
+		SenderExternalID: "sess-a", ClientID: "c-1",
 		Body: "Postgres neu gestartet"}); err != nil {
 		t.Fatalf("append: %v", err)
 	}
-	got, err := s.CoordMessagesSince(project, 0, 50)
+	got, err := s.CoordMessagesSince(DestinationRoom, project, 0, 50)
 	if err != nil {
 		t.Fatalf("since: %v", err)
 	}
