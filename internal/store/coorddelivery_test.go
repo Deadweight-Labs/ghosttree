@@ -107,3 +107,65 @@ func TestUnknownCursorStartsAtTheBeginning(t *testing.T) {
 		t.Fatalf("an unknown cursor must start at 0, got %d", got)
 	}
 }
+
+// AC-8 von REQ-350 verlangt ausdrücklich, dass ein SERVERNEUSTART nichts
+// verliert. Ein In-Memory-Store kann das nicht zeigen: er stirbt mit dem
+// Prozess. Deshalb hier eine echte Datei, die geschlossen und neu geöffnet
+// wird — das ist der Fall, um den es geht.
+func TestStoredMessagesSurviveAServerRestart(t *testing.T) {
+	path := t.TempDir() + "/restart.db"
+	room := RoomKeyForProject("p")
+
+	first, err := Open(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	id, err := first.AppendCoordMessage(CoordMessage{
+		DestinationKind: DestinationRoom, DestinationID: room,
+		SenderExternalID: "sess-a", ClientID: "c-1", Body: "überlebt den Neustart"})
+	if err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	if err := first.SetCoordCursor("sess-b", DestinationRoom, room, id); err != nil {
+		t.Fatalf("cursor: %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	second, err := Open(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer second.Close()
+
+	got, err := second.CoordMessagesSince(DestinationRoom, room, 0, 50)
+	if err != nil {
+		t.Fatalf("since: %v", err)
+	}
+	if len(got) != 1 || got[0].Body != "überlebt den Neustart" {
+		t.Fatalf("the message did not survive the restart: %+v", got)
+	}
+
+	// Und der Lesestand steht noch, sonst bekommt der Empfänger nach dem
+	// Neustart alles erneut.
+	cursor, err := second.CoordCursor("sess-b", DestinationRoom, room)
+	if err != nil {
+		t.Fatalf("cursor: %v", err)
+	}
+	if cursor != id {
+		t.Fatalf("cursor was lost across the restart: want %d, got %d", id, cursor)
+	}
+
+	// Ein Wiederholungsversuch nach dem Neustart erzeugt keine zweite
+	// Nachricht — die Deduplizierung hängt am Bestand, nicht am Prozess.
+	again, err := second.AppendCoordMessage(CoordMessage{
+		DestinationKind: DestinationRoom, DestinationID: room,
+		SenderExternalID: "sess-a", ClientID: "c-1", Body: "überlebt den Neustart"})
+	if err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if again != id {
+		t.Fatalf("a retry after restart created a second message: %d then %d", id, again)
+	}
+}

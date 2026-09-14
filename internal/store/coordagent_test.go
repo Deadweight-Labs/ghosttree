@@ -79,3 +79,42 @@ func TestProjectAndMachineRoomsDoNotMix(t *testing.T) {
 		t.Fatalf("machine agent leaked into the project room: %+v", peers)
 	}
 }
+
+// AC-6 von REQ-350, zweite Hälfte: zwei Worktrees desselben Repos teilen den
+// Projektraum, bleiben aber unterscheidbar. Derselbe Pfad im selben Checkout
+// ist ein anderes Risiko als derselbe Pfad in zwei Worktrees — wer das
+// verschmilzt, warnt entweder zu oft oder zu selten.
+func TestTwoWorktreesShareTheRoomButStayDistinguishable(t *testing.T) {
+	s := openTest(t)
+	room := RoomKeyForProject("github.com/deadweight-labs/ghosttree")
+
+	for _, a := range []CoordAgent{
+		{ExternalID: "sess-main", Provider: "claude", RoomKey: room,
+			DisplayName: "Claude-main", Branch: "main", Worktree: "/home/robin/ghosttree"},
+		{ExternalID: "sess-feat", Provider: "codex", RoomKey: room,
+			DisplayName: "Codex-feat", Branch: "feat/coordination",
+			Worktree: "/home/robin/ghosttree/.claude/worktrees/feat"},
+	} {
+		if _, err := s.RegisterCoordAgent(a); err != nil {
+			t.Fatalf("register %s: %v", a.ExternalID, err)
+		}
+	}
+
+	peers, err := s.CoordPeers(room, "")
+	if err != nil {
+		t.Fatalf("peers: %v", err)
+	}
+	if len(peers) != 2 {
+		t.Fatalf("both worktrees belong in the same room, got %d peers", len(peers))
+	}
+	seen := map[string]string{}
+	for _, p := range peers {
+		seen[p.ExternalID] = p.Worktree
+	}
+	if seen["sess-main"] == seen["sess-feat"] {
+		t.Fatalf("the two worktrees are indistinguishable: %v", seen)
+	}
+	if seen["sess-main"] == "" || seen["sess-feat"] == "" {
+		t.Fatalf("the worktree must survive registration: %v", seen)
+	}
+}
