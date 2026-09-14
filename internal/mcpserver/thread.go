@@ -224,7 +224,7 @@ func (s *Server) handleThreadRead(ctx context.Context, _ *mcp.CallToolRequest, i
 		}
 	}
 
-	posts, err := s.client.CoordInbox(store.DestinationDiscussion, dest, 0, 200)
+	posts, err := s.client.CoordInbox(store.DestinationDiscussion, dest, s.sessionRef, 0, 200)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -41,10 +41,11 @@ func (c *Client) SendCoordMessage(m store.CoordMessage) (int64, error) {
 }
 
 // CoordInbox holt das Fenster nach afterID. afterID=0 ist der Anfang.
-func (c *Client) CoordInbox(destinationKind, destinationID string, afterID int64, limit int) ([]store.CoordMessage, error) {
+func (c *Client) CoordInbox(destinationKind, destinationID, asker string, afterID int64, limit int) ([]store.CoordMessage, error) {
 	q := url.Values{}
 	q.Set("destination_kind", destinationKind)
 	q.Set("destination_id", destinationID)
+	q.Set("agent_external_id", asker)
 	q.Set("after", strconv.FormatInt(afterID, 10))
 	if limit > 0 {
 		q.Set("limit", strconv.Itoa(limit))
@@ -78,4 +79,19 @@ func (c *Client) SetCoordCursor(agentExternalID, destinationKind, destinationID 
 		"destination_id":    destinationID,
 		"last_message_id":   lastMessageID,
 	}, nil)
+}
+
+// EnsureCoordRoom eröffnet einen Direkt- oder Gruppenraum. Idempotent:
+// dieselbe Runde ergibt denselben Raum mit demselben Verlauf.
+func (c *Client) EnsureCoordRoom(r store.CoordRoom) error {
+	return c.do("POST", "/api/coord/rooms", nil, r, nil)
+}
+
+// CoordRoomsFor listet die Direkt- und Gruppenräume eines Teilnehmers.
+func (c *Client) CoordRoomsFor(agentExternalID string) ([]store.CoordRoom, error) {
+	q := url.Values{}
+	q.Set("agent_external_id", agentExternalID)
+	var out []store.CoordRoom
+	err := c.do("GET", "/api/coord/rooms", q, nil, &out)
+	return out, err
 }

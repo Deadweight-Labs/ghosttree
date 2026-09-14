@@ -184,3 +184,70 @@ func TestMachineRoomReachesAnAgentWithoutARepository(t *testing.T) {
 		t.Fatalf("a machine-wide notice leaked into the project room: %s", text(t, inProject))
 	}
 }
+
+// AC-9 von REQ-350, über den ECHTEN HTTP-Weg: ein Unbeteiligter kommt an ein
+// privates Gespräch nicht heran. Der Store-Test zeigt, dass die Prüfung
+// funktioniert; dieser zeigt, dass sie auch benutzt wird.
+func TestAnOutsiderCannotReachAPrivateConversation(t *testing.T) {
+	a, b, st := twoSessions(t)
+	ctx := context.Background()
+
+	token, _ := st.AddPerson("dritter")
+	_ = token
+	outsider := &Server{client: a.client, sessionRef: "sess-fremd",
+		ctxAxes: a.ctxAxes}
+
+	if _, _, err := a.handleCoordDM(ctx, nil, CoordDMInput{
+		To: []string{b.sessionRef}, Body: "nur für dich", Label: "privat"}); err != nil {
+		t.Fatalf("dm: %v", err)
+	}
+
+	// Der Empfänger liest es.
+	got, _, err := b.handleCoordDMRead(ctx, nil, CoordDMReadInput{With: []string{a.sessionRef}})
+	if err != nil {
+		t.Fatalf("b reads: %v", err)
+	}
+	if !strings.Contains(text(t, got), "nur für dich") {
+		t.Fatalf("the recipient must be able to read it: %s", text(t, got))
+	}
+
+	// Der Dritte bekommt es nicht — und zwar mit einem Fehler, nicht mit
+	// einer leeren Liste. Leer läse sich wie "es gibt nichts".
+	if _, _, err := outsider.handleCoordDMRead(ctx, nil,
+		CoordDMReadInput{With: []string{a.sessionRef, b.sessionRef}}); err == nil {
+		t.Fatal("an outsider must be refused, not quietly served an empty room")
+	}
+
+	// Und er sieht das Gespräch nicht einmal in seiner Übersicht.
+	list, _, err := outsider.handleCoordDMRead(ctx, nil, CoordDMReadInput{})
+	if err != nil {
+		t.Fatalf("outsider list: %v", err)
+	}
+	// Auf das GEQUOTETE Label prüfen, nicht auf das nackte Wort: die
+	// englische Leerantwort "you are not part of any private conversation"
+	// enthält "privat" als Teilstring, und der erste Anlauf dieses Tests ist
+	// genau darüber gestolpert.
+	if strings.Contains(text(t, list), `"privat"`) {
+		t.Fatalf("a private room leaked into an outsider's overview: %s", text(t, list))
+	}
+}
+
+// Ein privates Gespräch taucht nicht im Projektraum auf. Das ist der zweite
+// Leckweg aus §9 — nicht nur direkter Abruf, sondern auch die gewöhnliche
+// Raumansicht.
+func TestAPrivateConversationDoesNotAppearInTheProjectRoom(t *testing.T) {
+	a, b, _ := twoSessions(t)
+	ctx := context.Background()
+
+	if _, _, err := a.handleCoordDM(ctx, nil, CoordDMInput{
+		To: []string{b.sessionRef}, Body: "vertraulich"}); err != nil {
+		t.Fatalf("dm: %v", err)
+	}
+	room, _, err := b.handleCoordInbox(ctx, nil, CoordInboxInput{})
+	if err != nil {
+		t.Fatalf("room read: %v", err)
+	}
+	if strings.Contains(text(t, room), "vertraulich") {
+		t.Fatalf("a private message leaked into the project room: %s", text(t, room))
+	}
+}

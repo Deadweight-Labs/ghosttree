@@ -487,6 +487,16 @@ CREATE TABLE IF NOT EXISTS thread_outcomes(
   created_at TEXT NOT NULL,
   decided_at TEXT,
   PRIMARY KEY(thread_id,kind,ref_id));
+CREATE TABLE IF NOT EXISTS coord_rooms(
+  room_key TEXT PRIMARY KEY,
+  kind TEXT NOT NULL CHECK(kind IN ('project','machine','direct','group')),
+  label TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS coord_room_members(
+  room_key TEXT NOT NULL REFERENCES coord_rooms(room_key) ON DELETE CASCADE,
+  member_external_id TEXT NOT NULL,
+  joined_at TEXT NOT NULL,
+  PRIMARY KEY(room_key,member_external_id));
 CREATE TABLE IF NOT EXISTS coord_deliveries(
   message_id INTEGER NOT NULL,
   recipient_external_id TEXT NOT NULL,

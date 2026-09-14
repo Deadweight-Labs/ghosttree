@@ -40,6 +40,17 @@ func (a *api) sendCoordMessage(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "destination_id, sender_external_id and client_id are required")
 		return
 	}
+	// Die Zugriffsgrenze wird auf dem Schreibweg genauso geprüft wie auf dem
+	// Leseweg. Ein Unbeteiligter darf in einen fremden DM nicht schreiben —
+	// sonst steht dort plötzlich eine Nachricht von jemandem, der den Raum
+	// nicht sehen kann.
+	if ok, err := a.st.MayReadCoordRoom(in.DestinationID, in.SenderExternalID); err != nil {
+		writeStoreError(w, http.StatusInternalServerError, err)
+		return
+	} else if !ok && in.DestinationKind == store.DestinationRoom {
+		writeErr(w, http.StatusForbidden, "not a member of this room")
+		return
+	}
 	in.AuthorKind = store.AuthorAgent
 	in.AuthorPrincipalID = principalOf(r).ID
 	id, err := a.st.AppendCoordMessage(in)
@@ -69,6 +80,20 @@ func (a *api) coordInbox(w http.ResponseWriter, r *http.Request) {
 	if q.Get("destination_id") == "" {
 		writeErr(w, http.StatusBadRequest, "destination_id is required")
 		return
+	}
+	// Ein Raum, den der Fragende nicht lesen darf, liefert nichts — und zwar
+	// bevor irgendetwas gelesen wird. Spec §9: private DMs dürfen nicht über
+	// Suche, Zusammenfassung oder Verknüpfung sichtbar werden, und der
+	// direkte Abruf ist der offensichtlichste dieser Wege.
+	if kind == store.DestinationRoom {
+		asker := q.Get("agent_external_id")
+		if ok, err := a.st.MayReadCoordRoom(q.Get("destination_id"), asker); err != nil {
+			writeStoreError(w, http.StatusInternalServerError, err)
+			return
+		} else if !ok {
+			writeErr(w, http.StatusForbidden, "not a member of this room")
+			return
+		}
 	}
 	after, _ := strconv.ParseInt(q.Get("after"), 10, 64)
 	limit, _ := strconv.Atoi(q.Get("limit"))
@@ -168,4 +193,38 @@ func (a *api) coordCursorSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]string{"status": "ok"})
+}
+
+func (a *api) ensureCoordRoom(w http.ResponseWriter, r *http.Request) {
+	var in store.CoordRoom
+	if err := readJSON(r, &in); err != nil {
+		writeStoreError(w, http.StatusBadRequest, err)
+		return
+	}
+	if in.Key == "" {
+		writeErr(w, http.StatusBadRequest, "room_key is required")
+		return
+	}
+	if err := a.st.EnsureCoordRoom(in); err != nil {
+		writeStoreError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, 200, map[string]string{"room_key": in.Key})
+}
+
+func (a *api) coordRooms(w http.ResponseWriter, r *http.Request) {
+	agent := r.URL.Query().Get("agent_external_id")
+	if agent == "" {
+		writeErr(w, http.StatusBadRequest, "agent_external_id is required")
+		return
+	}
+	out, err := a.st.CoordRoomsFor(agent)
+	if err != nil {
+		writeStoreError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if out == nil {
+		out = []store.CoordRoom{}
+	}
+	writeJSON(w, 200, out)
 }
