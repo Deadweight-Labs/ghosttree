@@ -74,3 +74,57 @@ func TestBrokenInputYieldsNothing(t *testing.T) {
 		}
 	}
 }
+
+// AC-5 von REQ-348: ein Pfad darf nicht an der Kürzung verlorengehen.
+//
+// Der Archivtext kürzt Argumente auf 600 Zeichen (maxToolCallArgs). Bei einem
+// Write mit großem content steht der Pfad danach nicht mehr drin — wer die
+// Aktivität aus dem TEXT zöge, verlöre ihn stillschweigend. Die Extraktion
+// liest deshalb das rohe JSON, nicht den gekürzten Text.
+func TestAPathSurvivesEvenWhenTheArchivedTextWouldTruncateIt(t *testing.T) {
+	huge := make([]byte, 5000)
+	for i := range huge {
+		huge[i] = 'x'
+	}
+	input, err := json.Marshal(map[string]string{
+		"content":   string(huge),
+		"file_path": "internal/store/wichtig.go",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, err := json.Marshal([]map[string]any{
+		{"type": "tool_use", "name": "Write", "input": json.RawMessage(input)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Der archivierte Text verliert den Pfad — das ist der Ausgangszustand.
+	archived := claudeToolCallText(block)
+	if len(archived) > maxToolCallArgs+64 {
+		t.Fatalf("the archived text should be truncated, got %d chars", len(archived))
+	}
+	// Belegen, dass er wirklich weg ist: sonst prüft der Test nichts.
+	if contains(archived, "wichtig.go") {
+		t.Fatal("precondition failed: the path still fits in the archived text")
+	}
+
+	// Die Extraktion findet ihn trotzdem.
+	got := ToolPathTouches(block)
+	if len(got) != 1 || got[0].Path != "internal/store/wichtig.go" {
+		t.Fatalf("the path must survive truncation: %+v", got)
+	}
+	if got[0].Quality != QualityIntent {
+		t.Fatalf("a write call is still only an intent: %q", got[0].Quality)
+	}
+}
+
+func contains(s, sub string) bool {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
+}
