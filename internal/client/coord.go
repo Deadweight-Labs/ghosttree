@@ -105,3 +105,43 @@ func (c *Client) CoordMessageMentions(messageID int64) ([]string, error) {
 	err := c.do("GET", fmt.Sprintf("/api/coord/messages/%d/mentions", messageID), nil, nil, &out)
 	return out, err
 }
+
+// PathActivitySince fragt, wer zuletzt an einem Pfad gearbeitet hat.
+func (c *Client) PathActivitySince(project, path string, minutes int, excludeSession string) ([]store.PathActivity, error) {
+	q := url.Values{}
+	q.Set("path", path)
+	if project != "" {
+		q.Set("project", project)
+	}
+	if minutes > 0 {
+		q.Set("minutes", strconv.Itoa(minutes))
+	}
+	if excludeSession != "" {
+		q.Set("exclude_session", excludeSession)
+	}
+	var out []store.PathActivity
+	err := c.do("GET", "/api/activity/path", q, nil, &out)
+	return out, err
+}
+
+// SessionPathActivity zeigt, woran eine Session gearbeitet hat.
+func (c *Client) SessionPathActivity(session string, minutes, limit int) ([]store.PathActivity, error) {
+	q := url.Values{}
+	q.Set("session", session)
+	if minutes > 0 {
+		q.Set("minutes", strconv.Itoa(minutes))
+	}
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	var out []store.PathActivity
+	err := c.do("GET", "/api/activity/session", q, nil, &out)
+	return out, err
+}
+
+// RecordPathActivity meldet beobachtete Aktivität. Der Collector benutzt das;
+// ein Fehler hier darf das Archivieren eines Transkripts nicht scheitern
+// lassen.
+func (c *Client) RecordPathActivity(events []store.PathActivity) error {
+	return c.do("POST", "/api/activity", nil, events, nil)
+}

@@ -373,3 +373,66 @@ func TestASubagentIsAddressableButItsClaimIsMarkedUnverified(t *testing.T) {
 		t.Fatal("the reply must be addressed to the subagent, not to its main session")
 	}
 }
+
+// AC-1 und AC-2 von REQ-348 über den ganzen Weg: eine Session verbucht
+// Aktivität, eine andere fragt danach — ohne ein Transkript zu lesen.
+func TestAnotherSessionsTouchesAreQueryable(t *testing.T) {
+	a, b, _ := twoSessions(t)
+	ctx := context.Background()
+
+	if err := a.client.RecordPathActivity([]store.PathActivity{
+		{Project: a.ctxAxes.Project, SessionExternalID: a.sessionRef,
+			Checkout: "/repo", Tool: "Edit", Path: "internal/store/x.go",
+			Writes: true, Quality: store.ActivityReported},
+	}); err != nil {
+		t.Fatalf("record: %v", err)
+	}
+
+	res, _, err := b.handleCoordTouched(ctx, nil, CoordTouchedInput{Path: "internal/store/x.go"})
+	if err != nil {
+		t.Fatalf("touched: %v", err)
+	}
+	got := text(t, res)
+	if !strings.Contains(got, a.sessionRef) {
+		t.Fatalf("b must see a's work on the path: %s", got)
+	}
+	if !strings.Contains(got, "Nothing is locked") {
+		t.Fatalf("the answer must not read like a lock: %s", got)
+	}
+}
+
+// Kein Befund ist KEINE Unbedenklichkeitsbescheinigung. Was nicht beobachtet
+// wurde, ist nicht dasselbe wie was nicht passiert ist — und ein Agent, der
+// das verwechselt, ändert beruhigt eine Datei, an der gerade jemand sitzt.
+func TestNoObservedActivityIsNotACleanBillOfHealth(t *testing.T) {
+	a, _, _ := twoSessions(t)
+	res, _, err := a.handleCoordTouched(context.Background(), nil,
+		CoordTouchedInput{Path: "nie/angefasst.go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := text(t, res)
+	if !strings.Contains(got, "not proof that nobody is working on it") {
+		t.Fatalf("absence of observation must not read as safety: %s", got)
+	}
+}
+
+// Ein Agent fragt nicht nach sich selbst.
+func TestTouchedExcludesTheAskingSession(t *testing.T) {
+	a, _, _ := twoSessions(t)
+	if err := a.client.RecordPathActivity([]store.PathActivity{
+		{Project: a.ctxAxes.Project, SessionExternalID: a.sessionRef,
+			Checkout: "/repo", Tool: "Edit", Path: "eigene.go",
+			Writes: true, Quality: store.ActivityReported},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	res, _, err := a.handleCoordTouched(context.Background(), nil,
+		CoordTouchedInput{Path: "eigene.go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(text(t, res), a.sessionRef) {
+		t.Fatalf("an agent must not be reported as its own conflict: %s", text(t, res))
+	}
+}

@@ -487,6 +487,19 @@ CREATE TABLE IF NOT EXISTS thread_outcomes(
   created_at TEXT NOT NULL,
   decided_at TEXT,
   PRIMARY KEY(thread_id,kind,ref_id));
+CREATE TABLE IF NOT EXISTS path_activity(
+  id INTEGER PRIMARY KEY,
+  project TEXT NOT NULL DEFAULT '',
+  session_external_id TEXT NOT NULL,
+  checkout TEXT NOT NULL DEFAULT '',
+  tool TEXT NOT NULL,
+  path TEXT NOT NULL,
+  writes INTEGER NOT NULL DEFAULT 0,
+  quality TEXT NOT NULL CHECK(quality IN ('intent','reported_success','observed_change','unattributed')),
+  at TEXT NOT NULL,
+  UNIQUE(session_external_id,tool,path,quality,at));
+CREATE INDEX IF NOT EXISTS path_activity_path ON path_activity(project,path,at);
+CREATE INDEX IF NOT EXISTS path_activity_session ON path_activity(session_external_id,at);
 CREATE TABLE IF NOT EXISTS coord_standing(
   room_key TEXT NOT NULL,
   message_id TEXT NOT NULL,

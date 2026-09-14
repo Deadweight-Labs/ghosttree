@@ -2,6 +2,7 @@ package collector
 
 import (
 	"bufio"
+	"encoding/json"
 	"io"
 	"log"
 	"os"
@@ -18,6 +19,18 @@ import (
 type Uploader interface {
 	UpsertSession(s store.Session) (int64, error)
 	AppendChunks(id int64, chunks []store.Chunk) error
+}
+
+// ActivityRecorder ist optional und wird per Typprüfung erkannt.
+//
+// Optional, weil das Einsammeln von Transkripten seit jeher funktioniert,
+// ohne Aktivität zu kennen — ein Uploader, der sie nicht kann, soll weiter
+// funktionieren, statt an einer erweiterten Schnittstelle zu brechen. Und
+// weil ein Fehler beim Verbuchen von Aktivität das Archivieren des
+// Transkripts nicht scheitern lassen darf: der Text ist der Bestand, die
+// Aktivität ist eine Ableitung daraus.
+type ActivityRecorder interface {
+	RecordPathActivity(events []store.PathActivity) error
 }
 
 // uploadBatch bounds request size during the initial import of old transcripts.
@@ -60,6 +73,8 @@ func SyncFile(path, harness string, up Uploader, st *State, machine string) erro
 	r := bufio.NewReaderSize(f, 1<<20)
 	offset := fs.Offset
 	var batch []store.Chunk
+	var touches []store.PathActivity
+	ident := sessionIdentity(path, harness, machine)
 	seq := fs.Seq
 	flush := func() error {
 		if len(batch) == 0 {
@@ -68,6 +83,13 @@ func SyncFile(path, harness string, up Uploader, st *State, machine string) erro
 		if err := up.AppendChunks(fs.SessionID, batch); err != nil {
 			return err
 		}
+		// Erst nach dem bestätigten Upload und ohne den Lauf zu gefährden:
+		// eine fehlgeschlagene Ableitung darf ein archiviertes Transkript
+		// nicht zurücknehmen.
+		if rec, ok := up.(ActivityRecorder); ok && len(touches) > 0 {
+			_ = rec.RecordPathActivity(touches)
+		}
+		touches = touches[:0]
 		fs.Offset = offset
 		fs.Seq = seq
 		batch = batch[:0]
@@ -92,6 +114,7 @@ func SyncFile(path, harness string, up Uploader, st *State, machine string) erro
 			Text: redact.Redact(p.Text),
 			Raw:  redact.Redact(trimmed),
 		})
+		touches = append(touches, activityFrom(ident, trimmed)...)
 		seq++
 		if len(batch) >= uploadBatch {
 			if err := flush(); err != nil {
@@ -244,4 +267,69 @@ func DefaultRoots(home string) map[string]string {
 		filepath.Join(home, ".claude", "projects"): "claude-code",
 		filepath.Join(home, ".codex", "sessions"):  "codex",
 	}
+}
+
+// touchIdentity ist, was eine Aktivitätszeile über ihre Herkunft weiß.
+type touchIdentity struct {
+	externalID string
+	project    string
+	// checkout ist das Arbeitsverzeichnis der Session. Es unterscheidet zwei
+	// Worktrees desselben Repos — derselbe Pfad dort ist ein anderes Risiko
+	// als derselbe Pfad im selben Checkout.
+	checkout string
+}
+
+// sessionIdentity liest Herkunft aus denselben Kopfzeilen, aus denen auch die
+// Sitzung selbst gebildet wird. Bewusst noch einmal gelesen statt im
+// Zustandsfile mitgeschleppt: der Zustand ist ein Fortschrittszähler, und ihn
+// mit Fachdaten zu füllen macht jede spätere Änderung zu einer Migration.
+func sessionIdentity(path, harness, machine string) touchIdentity {
+	head, err := firstLines(path, metaScanLines)
+	if err != nil {
+		return touchIdentity{externalID: strings.TrimSuffix(filepath.Base(path), ".jsonl")}
+	}
+	var externalID, cwd, project string
+	if harness == "codex" {
+		externalID, cwd, project, _ = CodexSessionMeta(head)
+	} else {
+		externalID, cwd, _ = ClaudeSessionMeta(path, head)
+	}
+	if externalID == "" {
+		externalID = strings.TrimSuffix(filepath.Base(path), ".jsonl")
+	}
+	if project == "" && cwd != "" {
+		project, _ = GitInfo(cwd)
+	}
+	return touchIdentity{externalID: externalID, project: project, checkout: cwd}
+}
+
+// activityFrom zieht die Pfadbezüge einer Transkriptzeile.
+//
+// Was hier entsteht, ist ausschließlich ABSICHT: an dieser Stelle steht, dass
+// ein Werkzeug mit diesem Pfad gerufen wurde. Ob es funktioniert hat, steht
+// im Ergebnisblock und wird nicht mit verbucht — eine Absicht als Änderung zu
+// zählen ist genau die Übertreibung, vor der beide Fassungen der Spec warnen.
+func activityFrom(ident touchIdentity, line string) []store.PathActivity {
+	var l struct {
+		Message *struct {
+			Content json.RawMessage `json:"content"`
+		} `json:"message"`
+	}
+	if json.Unmarshal([]byte(line), &l) != nil || l.Message == nil {
+		return nil
+	}
+	touches := ToolPathTouches(l.Message.Content)
+	if len(touches) == 0 {
+		return nil
+	}
+	at := time.Now().UTC().Format(time.RFC3339)
+	out := make([]store.PathActivity, 0, len(touches))
+	for _, t := range touches {
+		out = append(out, store.PathActivity{
+			Project: ident.project, SessionExternalID: ident.externalID,
+			Checkout: ident.checkout, Tool: t.Tool, Path: t.Path,
+			Writes: TouchWrites(t.Tool), Quality: store.ActivityIntent, At: at,
+		})
+	}
+	return out
 }

@@ -299,3 +299,60 @@ func (a *api) coordMessageMentions(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, out)
 }
+
+// pathActivity beantwortet "wer hat in den letzten N Minuten an diesem Pfad
+// gearbeitet". Der Fragende schließt sich selbst aus: die häufigste Datei, an
+// der jemand arbeitet, ist die eigene.
+func (a *api) pathActivity(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	if q.Get("path") == "" {
+		writeErr(w, http.StatusBadRequest, "path is required")
+		return
+	}
+	minutes, _ := strconv.Atoi(q.Get("minutes"))
+	out, err := a.st.PathActivitySince(q.Get("project"), q.Get("path"),
+		store.ActivityWindow(minutes), q.Get("exclude_session"))
+	if err != nil {
+		writeStoreError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if out == nil {
+		out = []store.PathActivity{}
+	}
+	writeJSON(w, 200, out)
+}
+
+// sessionActivity zeigt, woran EINE Session gearbeitet hat — die
+// Detailansicht hinter einem Teilnehmer, und der Grund, warum die Daten auch
+// ohne zweiten Agenten nützen.
+func (a *api) sessionActivity(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	if q.Get("session") == "" {
+		writeErr(w, http.StatusBadRequest, "session is required")
+		return
+	}
+	minutes, _ := strconv.Atoi(q.Get("minutes"))
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	out, err := a.st.SessionPathActivity(q.Get("session"), store.ActivityWindow(minutes), limit)
+	if err != nil {
+		writeStoreError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if out == nil {
+		out = []store.PathActivity{}
+	}
+	writeJSON(w, 200, out)
+}
+
+func (a *api) recordPathActivity(w http.ResponseWriter, r *http.Request) {
+	var in []store.PathActivity
+	if err := readJSON(r, &in); err != nil {
+		writeStoreError(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := a.st.RecordPathActivity(in); err != nil {
+		writeStoreError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, 200, map[string]int{"recorded": len(in)})
+}

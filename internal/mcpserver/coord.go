@@ -409,3 +409,45 @@ func (s *Server) coordRef() string {
 	// das passiert in Tests.
 	return fmt.Sprintf("derived:%s:%d", host, os.Getpid())
 }
+
+type CoordTouchedInput struct {
+	Path string `json:"path" jsonschema:"repository-relative path you are about to change"`
+	// Minuten sind optional; dreißig ist der Standard, weil eine Datei, die
+	// vor einer halben Stunde angefasst wurde, noch offene Arbeit sein kann.
+	Minutes int `json:"minutes,omitempty" jsonschema:"how far back to look, default 30"`
+}
+
+// handleCoordTouched ist das Werkzeug mit dem besten Verhältnis von Nutzen zu
+// Aufwand im ganzen Vorhaben — und das einzige, das auch ohne zweiten Agenten
+// etwas wert ist: wer allein arbeitet, will wissen, was die Session von
+// heute Mittag angefasst hat.
+//
+// Es sperrt nichts. Spec §A9: "Die erste Version sollte warnen und
+// Kommunikation ermöglichen, nicht automatisch jede kürzlich angefasste Datei
+// sperren." Ein toter Agent mit hängendem Schloss ist schlimmer als zwei
+// Agenten, die sich abstimmen.
+func (s *Server) handleCoordTouched(ctx context.Context, _ *mcp.CallToolRequest, in CoordTouchedInput) (*mcp.CallToolResult, any, error) {
+	if strings.TrimSpace(in.Path) == "" {
+		return nil, nil, fmt.Errorf("path is required")
+	}
+	events, err := s.client.PathActivitySince(s.ctxAxes.Project, in.Path, in.Minutes, s.coordRef())
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(events) == 0 {
+		// Kein Befund ist keine Unbedenklichkeitsbescheinigung. Was nicht
+		// beobachtet wurde, ist nicht dasselbe wie was nicht passiert ist.
+		return coordText(fmt.Sprintf("no observed activity on %s by anyone else. "+
+			"That is absence of observation, not proof that nobody is working on it.", in.Path)), nil, nil
+	}
+	mine := s.ctxAxes.Machine
+	var b strings.Builder
+	fmt.Fprintf(&b, "Other sessions touched %s recently:\n", in.Path)
+	for _, e := range events {
+		kind := store.ClassifyConflict(mine, e.Checkout)
+		fmt.Fprintf(&b, "  %s — %s %s (%s), %s\n",
+			e.SessionExternalID, e.Tool, e.Path, e.Quality, store.DescribeConflict(kind))
+	}
+	b.WriteString("\nNothing is locked. Decide whether to coordinate with coord_send before you change it.")
+	return coordText(b.String()), nil, nil
+}
