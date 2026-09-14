@@ -145,3 +145,12 @@ func (c *Client) SessionPathActivity(session string, minutes, limit int) ([]stor
 func (c *Client) RecordPathActivity(events []store.PathActivity) error {
 	return c.do("POST", "/api/activity", nil, events, nil)
 }
+
+// MarkCoordDelivery schreibt den Zustellzustand fort. Ein Adapter meldet
+// damit, was er WIRKLICH beobachtet hat — injected, wenn der Harness die
+// Eingabe genommen hat, acked erst bei einer gesehenen Antwort.
+func (c *Client) MarkCoordDelivery(messageID int64, recipient, state string) error {
+	return c.do("POST", "/api/coord/deliveries", nil, map[string]any{
+		"message_id": messageID, "recipient_external_id": recipient, "state": state,
+	}, nil)
+}

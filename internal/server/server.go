@@ -142,6 +142,7 @@ func New(st *store.Store, options ...Option) http.Handler {
 	mux.HandleFunc("GET /api/activity/path", a.pathActivity)
 	mux.HandleFunc("GET /api/activity/session", a.sessionActivity)
 	mux.HandleFunc("POST /api/activity", a.recordPathActivity)
+	mux.HandleFunc("POST /api/coord/deliveries", a.markCoordDelivery)
 	mux.HandleFunc("POST /api/coord/rooms", a.ensureCoordRoom)
 	mux.HandleFunc("GET /api/coord/rooms", a.coordRooms)
 	mux.HandleFunc("POST /api/coord/cursor", a.coordCursorSet)

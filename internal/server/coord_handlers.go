@@ -379,3 +379,39 @@ func (a *api) recordPathActivity(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, map[string]int{"recorded": len(in)})
 }
+
+type coordDeliveryInput struct {
+	MessageID int64  `json:"message_id"`
+	Recipient string `json:"recipient_external_id"`
+	State     string `json:"state"`
+}
+
+// markCoordDelivery nimmt die Beobachtung eines Adapters entgegen.
+//
+// Der Empfänger muss zu diesem Token gehören: sonst könnte ein Tokeninhaber
+// für eine fremde Session "gelesen" melden, und der Absender hielte eine
+// Nachricht für angekommen, die niemand gesehen hat. Eine erfundene
+// Empfangsbestätigung ist schlimmer als gar keine.
+func (a *api) markCoordDelivery(w http.ResponseWriter, r *http.Request) {
+	var in coordDeliveryInput
+	if err := readJSON(r, &in); err != nil {
+		writeStoreError(w, http.StatusBadRequest, err)
+		return
+	}
+	if in.MessageID == 0 || in.Recipient == "" || in.State == "" {
+		writeErr(w, http.StatusBadRequest, "message_id, recipient_external_id and state are required")
+		return
+	}
+	if ok, err := a.mayActAs(r, in.Recipient); err != nil {
+		writeStoreError(w, http.StatusInternalServerError, err)
+		return
+	} else if !ok {
+		writeErr(w, http.StatusForbidden, "cannot report delivery for another person's session")
+		return
+	}
+	if err := a.st.MarkCoordDelivery(in.MessageID, in.Recipient, in.State); err != nil {
+		writeStoreError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, 200, map[string]string{"status": in.State})
+}
