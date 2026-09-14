@@ -107,9 +107,15 @@ func TestCoordMessageRejectsMissingDestinationOrClientID(t *testing.T) {
 
 // Die Inbox liefert [] und nicht null. Ein Aufrufer iteriert darüber, und
 // null liest sich wie ein Fehler statt wie "nichts".
+//
+// Der Raum muss dabei ein echter Projektraum sein: seit der Zugriffsprüfung
+// ist ein Schlüssel ohne project:- oder machine:-Präfix ein unbekannter Raum
+// und damit nicht lesbar. Diese Richtung ist Absicht — die erste Fassung
+// dieses Tests fragte "leer" ab und bekam zu Recht 403.
 func TestEmptyInboxIsAnEmptyList(t *testing.T) {
 	srv, token := newTestServer(t)
-	res := req(t, "GET", srv.URL+"/api/coord/messages?destination_kind=room&destination_id=leer", token, nil)
+	room := store.RoomKeyForProject("github.com/x/leer")
+	res := req(t, "GET", srv.URL+"/api/coord/messages?destination_kind=room&destination_id="+room, token, nil)
 	defer res.Body.Close()
 	var got []store.CoordMessage
 	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
@@ -117,5 +123,17 @@ func TestEmptyInboxIsAnEmptyList(t *testing.T) {
 	}
 	if got == nil {
 		t.Fatal("want [], got null")
+	}
+}
+
+// Und die Kehrseite, damit die Lockerung oben nicht zur Lücke wird: ein
+// unbekannter Raum liefert 403 und keine leere Liste. Leer läse sich wie
+// "es gibt dort nichts", und das wäre eine Auskunft über einen fremden Raum.
+func TestAnUnknownRoomIsRefusedRatherThanServedEmpty(t *testing.T) {
+	srv, token := newTestServer(t)
+	res := req(t, "GET", srv.URL+"/api/coord/messages?destination_kind=room&destination_id=direct:geraten&agent_external_id=sess-fremd", token, nil)
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusForbidden {
+		t.Fatalf("want 403 for an unknown room, got %d", res.StatusCode)
 	}
 }
