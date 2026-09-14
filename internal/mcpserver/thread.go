@@ -119,7 +119,7 @@ func (s *Server) handleThreadOpen(ctx context.Context, _ *mcp.CallToolRequest, i
 			if err == nil {
 				_, _ = s.client.SendCoordMessage(store.CoordMessage{
 					DestinationKind: store.DestinationRoom, DestinationID: key,
-					SenderExternalID: s.sessionRef, ClientID: clientID,
+					SenderExternalID: s.coordRef(), ClientID: clientID,
 					Body: fmt.Sprintf("Thread %d offen: %s", id, in.Title),
 					Refs: []store.CoordRef{{Kind: "thread", ID: store.ThreadDestinationID(id)}},
 				})
@@ -136,9 +136,9 @@ func (s *Server) postToThread(id int64, body string) error {
 		return err
 	}
 	_, err = s.client.SendCoordMessage(store.CoordMessage{
-		DestinationKind: store.DestinationDiscussion,
-		DestinationID:   store.ThreadDestinationID(id),
-		SenderExternalID: s.sessionRef, ClientID: clientID, Body: body,
+		DestinationKind:  store.DestinationDiscussion,
+		DestinationID:    store.ThreadDestinationID(id),
+		SenderExternalID: s.coordRef(), ClientID: clientID, Body: body,
 	})
 	if err != nil {
 		return err
@@ -224,7 +224,7 @@ func (s *Server) handleThreadRead(ctx context.Context, _ *mcp.CallToolRequest, i
 		}
 	}
 
-	posts, err := s.client.CoordInbox(store.DestinationDiscussion, dest, s.sessionRef, 0, 200)
+	posts, err := s.client.CoordInbox(store.DestinationDiscussion, dest, s.coordRef(), 0, 200)
 	if err != nil {
 		return nil, nil, err
 	}

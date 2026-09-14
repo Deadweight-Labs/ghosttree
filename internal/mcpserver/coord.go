@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -79,6 +80,31 @@ func coordText(text string) *mcp.CallToolResult {
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: text}}}
 }
 
+// joinRoom meldet diese Session in ihrem Raum an, bevor sie etwas tut.
+//
+// Ohne das bleibt die Teilnehmerliste leer, obwohl Nachrichten fließen: ein
+// Agent, der schreibt und liest, ist Teilnehmer, und niemand sollte sich
+// vorher gesondert registrieren müssen. Im echten Codex-Lauf am 2026-09-14
+// war genau das der Unterschied zwischen "Nachrichten kommen an" und "die
+// Agenten sehen einander".
+//
+// Idempotent über die Teilnehmerkennung, und ein Fehler hier darf den
+// eigentlichen Aufruf nicht scheitern lassen: wer schreiben will, soll
+// schreiben können, auch wenn die Anwesenheitsliste klemmt.
+func (s *Server) joinRoom(roomKey string) {
+	provider := "unknown"
+	if s.sessionRef == "" {
+		// Ohne Harness-Session-ID ist auch der Anbieter nicht sicher
+		// feststellbar. Raten wäre schlimmer als "unbekannt": eine falsche
+		// Angabe in der Teilnehmerliste liest sich wie eine geprüfte.
+		provider = "unidentified-harness"
+	}
+	_, _ = s.client.RegisterCoordAgent(store.CoordAgent{
+		ExternalID: s.coordRef(), Provider: provider, RoomKey: roomKey,
+		DisplayName: s.coordRef(), Branch: s.ctxAxes.Branch,
+	})
+}
+
 func (s *Server) handleCoordSend(ctx context.Context, _ *mcp.CallToolRequest, in CoordSendInput) (*mcp.CallToolResult, any, error) {
 	if strings.TrimSpace(in.Body) == "" {
 		return nil, nil, fmt.Errorf("body is required")
@@ -87,13 +113,14 @@ func (s *Server) handleCoordSend(ctx context.Context, _ *mcp.CallToolRequest, in
 	if err != nil {
 		return nil, nil, err
 	}
+	s.joinRoom(key)
 	clientID, err := newCoordClientID()
 	if err != nil {
 		return nil, nil, err
 	}
 	msg := store.CoordMessage{
 		DestinationKind: store.DestinationRoom, DestinationID: key,
-		SenderExternalID: s.sessionRef, ClientID: clientID,
+		SenderExternalID: s.coordRef(), ClientID: clientID,
 		Body: in.Body, ReplyTo: in.ReplyTo, ExpiresAt: in.Expires,
 	}
 	if in.Mention != "" {
@@ -115,15 +142,16 @@ func (s *Server) handleCoordInbox(ctx context.Context, _ *mcp.CallToolRequest, i
 	if err != nil {
 		return nil, nil, err
 	}
+	s.joinRoom(key)
 	after := in.After
 	if after == 0 {
 		// Ohne ausdrückliche Angabe beim gespeicherten Stand weitermachen.
 		// Sonst liest ein Agent nach jedem Neustart denselben Raum von vorn.
-		if stored, err := s.client.CoordCursor(s.sessionRef, store.DestinationRoom, key); err == nil {
+		if stored, err := s.client.CoordCursor(s.coordRef(), store.DestinationRoom, key); err == nil {
 			after = stored
 		}
 	}
-	msgs, err := s.client.CoordInbox(store.DestinationRoom, key, s.sessionRef, after, in.Limit)
+	msgs, err := s.client.CoordInbox(store.DestinationRoom, key, s.coordRef(), after, in.Limit)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -134,7 +162,7 @@ func (s *Server) handleCoordInbox(ctx context.Context, _ *mcp.CallToolRequest, i
 		if m.ID > highest {
 			highest = m.ID
 		}
-		if m.SenderExternalID == s.sessionRef {
+		if m.SenderExternalID == s.coordRef() {
 			continue // die eigenen Beiträge sind keine Post
 		}
 		shown++
@@ -154,7 +182,7 @@ func (s *Server) handleCoordInbox(ctx context.Context, _ *mcp.CallToolRequest, i
 		// Cursor erst nach dem Rendern fortschreiben: was hier steht, gilt
 		// als zugestellt, und was nicht gerendert wurde, darf nicht als
 		// gelesen zählen.
-		if err := s.client.SetCoordCursor(s.sessionRef, store.DestinationRoom, key, highest); err != nil {
+		if err := s.client.SetCoordCursor(s.coordRef(), store.DestinationRoom, key, highest); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -169,6 +197,7 @@ func (s *Server) handleCoordPeers(ctx context.Context, _ *mcp.CallToolRequest, i
 	if err != nil {
 		return nil, nil, err
 	}
+	s.joinRoom(key)
 	peers, err := s.client.CoordPeers(key, "")
 	if err != nil {
 		return nil, nil, err
@@ -176,7 +205,7 @@ func (s *Server) handleCoordPeers(ctx context.Context, _ *mcp.CallToolRequest, i
 	var b strings.Builder
 	shown := 0
 	for _, p := range peers {
-		if p.ExternalID == s.sessionRef {
+		if p.ExternalID == s.coordRef() {
 			continue
 		}
 		shown++
@@ -221,7 +250,7 @@ func (s *Server) handleCoordDM(ctx context.Context, _ *mcp.CallToolRequest, in C
 	if len(in.To) == 0 || strings.TrimSpace(in.Body) == "" {
 		return nil, nil, fmt.Errorf("to and body are required")
 	}
-	members := append([]string{s.sessionRef}, in.To...)
+	members := append([]string{s.coordRef()}, in.To...)
 	kind := store.RoomDirect
 	if len(members) > 2 {
 		kind = store.RoomGroup
@@ -240,7 +269,7 @@ func (s *Server) handleCoordDM(ctx context.Context, _ *mcp.CallToolRequest, in C
 	}
 	id, err := s.client.SendCoordMessage(store.CoordMessage{
 		DestinationKind: store.DestinationRoom, DestinationID: key,
-		SenderExternalID: s.sessionRef, ClientID: clientID, Body: in.Body,
+		SenderExternalID: s.coordRef(), ClientID: clientID, Body: in.Body,
 	})
 	if err != nil {
 		return nil, nil, err
@@ -252,7 +281,7 @@ func (s *Server) handleCoordDM(ctx context.Context, _ *mcp.CallToolRequest, in C
 
 func (s *Server) handleCoordDMRead(ctx context.Context, _ *mcp.CallToolRequest, in CoordDMReadInput) (*mcp.CallToolResult, any, error) {
 	if len(in.With) == 0 {
-		rooms, err := s.client.CoordRoomsFor(s.sessionRef)
+		rooms, err := s.client.CoordRoomsFor(s.coordRef())
 		if err != nil {
 			return nil, nil, err
 		}
@@ -270,13 +299,13 @@ func (s *Server) handleCoordDMRead(ctx context.Context, _ *mcp.CallToolRequest, 
 		return coordText(b.String()), nil, nil
 	}
 
-	members := append([]string{s.sessionRef}, in.With...)
+	members := append([]string{s.coordRef()}, in.With...)
 	key := store.RoomKeyForDirect(members)
 	if len(members) > 2 {
 		key = store.RoomKeyForGroup(members)
 	}
-	after, _ := s.client.CoordCursor(s.sessionRef, store.DestinationRoom, key)
-	msgs, err := s.client.CoordInbox(store.DestinationRoom, key, s.sessionRef, after, 0)
+	after, _ := s.client.CoordCursor(s.coordRef(), store.DestinationRoom, key)
+	msgs, err := s.client.CoordInbox(store.DestinationRoom, key, s.coordRef(), after, 0)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -287,14 +316,14 @@ func (s *Server) handleCoordDMRead(ctx context.Context, _ *mcp.CallToolRequest, 
 		if m.ID > highest {
 			highest = m.ID
 		}
-		if m.SenderExternalID == s.sessionRef {
+		if m.SenderExternalID == s.coordRef() {
 			continue
 		}
 		shown++
 		fmt.Fprintf(&b, "[%d] %s: %s\n", m.ID, m.SenderExternalID, m.Body)
 	}
 	if highest > 0 {
-		if err := s.client.SetCoordCursor(s.sessionRef, store.DestinationRoom, key, highest); err != nil {
+		if err := s.client.SetCoordCursor(s.coordRef(), store.DestinationRoom, key, highest); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -302,4 +331,35 @@ func (s *Server) handleCoordDMRead(ctx context.Context, _ *mcp.CallToolRequest, 
 		return coordText("no new messages in that conversation"), nil, nil
 	}
 	return coordText(b.String()), nil, nil
+}
+
+// coordRef ist die Identität, unter der diese Session am Koordinationsraum
+// teilnimmt.
+//
+// Sie ist NICHT immer die Session-Referenz des Harness, und das ist eine
+// gemessene Notwendigkeit, keine Bequemlichkeit: codex-cli 0.153.4 setzt
+// weder CODEX_SESSION_ID noch CODEX_THREAD_ID in der Umgebung des
+// MCP-Prozesses. Ein echter Lauf am 2026-09-14 endete deshalb mit
+// "agent_external_id and destination_id are required" — die Werkzeuge waren
+// für Codex unbenutzbar, während jeder Test grün war, weil Tests die
+// Referenz setzen.
+//
+// Der Rückfall ist an den Prozess gebunden, und der Prozess IST die Session:
+// solange der MCP-Server lebt, ist es dieselbe Teilnehmerin. Er trägt
+// "derived:" im Namen, damit niemand ihn für die Sitzungskennung des Harness
+// hält — eine erfundene Kennung, die aussieht wie eine echte, wäre schlimmer
+// als gar keine.
+func (s *Server) coordRef() string {
+	if s.sessionRef != "" {
+		return s.sessionRef
+	}
+	host := s.ctxAxes.Machine
+	if host == "" {
+		host = "unknown"
+	}
+	// Kein Zwischenspeicher: der Wert ist aus Maschine und Prozess-ID
+	// deterministisch. Ein paketweiter sync.Once wäre hier sogar falsch — zwei
+	// Server im selben Prozess teilten sich sonst eine Identität, und genau
+	// das passiert in Tests.
+	return fmt.Sprintf("derived:%s:%d", host, os.Getpid())
 }

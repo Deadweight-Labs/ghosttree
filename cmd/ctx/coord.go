@@ -74,6 +74,14 @@ func cmdCoord(args []string, stdout io.Writer) int {
 	if code != 0 && sub != "rooms" {
 		return code
 	}
+	// Auch die CLI ist Teilnehmerin. Wer schreibt und liest, gehört in die
+	// Liste — sonst zeigt `coord peers` für einen Agenten "niemand da",
+	// während am selben Raum gerade jemand mitliest.
+	if code == 0 {
+		_, _ = c.RegisterCoordAgent(store.CoordAgent{
+			ExternalID: me, Provider: "ctx-cli", RoomKey: room, DisplayName: me,
+		})
+	}
 
 	switch sub {
 	case "peers":
