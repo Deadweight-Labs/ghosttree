@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
+	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
@@ -263,5 +265,57 @@ func TestThreadToolSchemasRequireOnlyWhatIsMandatory(t *testing.T) {
 		if !seen[name] {
 			t.Errorf("%s is not registered", name)
 		}
+	}
+}
+
+// AC-6 von REQ-349: ein geschlossener Thread erklärt keinen verknüpften
+// Request für erledigt. Das ist der Fall, vor dem die Spec §B6 warnt — ein
+// Agent schreibt "wir sind uns einig", und der Ledger hält das für fertige
+// Arbeit. Hier gegen den echten Request-Bestand geprüft, nicht nur behauptet.
+func TestResolvingAThreadLeavesItsRequestUntouched(t *testing.T) {
+	a, _, st := twoSessions(t)
+	ctx := context.Background()
+
+	created, err := st.CreateRequest(requestdomain.CreateInput{
+		Request: requestdomain.Request{
+			Type: "feature", Title: "irgendeine Arbeit", Description: "steht noch aus",
+			Scope: scope.Axes{Project: "github.com/deadweight-labs/ghosttree"},
+		},
+		Criteria: []string{"etwas Beobachtbares"},
+	})
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+	reqID := created.Request.ID
+
+	res, _, err := a.handleThreadOpen(ctx, nil, ThreadOpenInput{
+		Title:    "Wie machen wir das?",
+		LinkKind: "request", LinkID: fmt.Sprintf("%d", reqID)})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	var threadID int64
+	fmt.Sscanf(text(t, res), "thread %d", &threadID)
+
+	if _, _, err := a.handleThreadResolve(ctx, nil, ThreadResolveInput{
+		ID: threadID, Note: "einig auf Variante B"}); err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+
+	detail, err := st.RequestByID(reqID)
+	if err != nil {
+		t.Fatalf("read request: %v", err)
+	}
+	if detail.Request.State != "open" {
+		t.Fatalf("resolving a thread closed its request: state is %q", detail.Request.State)
+	}
+	var open int
+	for _, c := range detail.Criteria {
+		if c.State == "open" {
+			open++
+		}
+	}
+	if open != 1 {
+		t.Fatalf("the request's criteria must be untouched, %d still open", open)
 	}
 }
