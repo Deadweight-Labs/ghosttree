@@ -423,6 +423,23 @@ CREATE TABLE IF NOT EXISTS coord_agents(
   registered_at TEXT NOT NULL,
   last_seen_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS coord_agents_room ON coord_agents(room_key,last_seen_at);
+CREATE TABLE IF NOT EXISTS coord_messages(
+  id INTEGER PRIMARY KEY,
+  room_key TEXT NOT NULL,
+  sender_external_id TEXT NOT NULL,
+  sender_kind TEXT NOT NULL CHECK(sender_kind IN ('agent','human')),
+  client_id TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'message',
+  body TEXT NOT NULL,
+  reply_to INTEGER,
+  created_at TEXT NOT NULL,
+  UNIQUE(sender_external_id,client_id));
+CREATE INDEX IF NOT EXISTS coord_messages_room ON coord_messages(room_key,id);
+CREATE TABLE IF NOT EXISTS coord_message_refs(
+  message_id INTEGER NOT NULL REFERENCES coord_messages(id) ON DELETE CASCADE,
+  ref_kind TEXT NOT NULL,
+  ref_id TEXT NOT NULL,
+  PRIMARY KEY(message_id,ref_kind,ref_id));
 `
 
 func Open(path string) (*Store, error) {
