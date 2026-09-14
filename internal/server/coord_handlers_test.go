@@ -202,3 +202,31 @@ func TestOneTokenCannotActAsAnotherPersonsSession(t *testing.T) {
 		t.Errorf("the owner must still be allowed: got %d", res4.StatusCode)
 	}
 }
+
+// Erfundene Aktivität ist schlimmer als fehlende: sie erzeugt
+// Konfliktwarnungen, die niemanden betreffen, und macht damit die nächste
+// echte Warnung unglaubwürdig. Aus einem automatischen Security-Review.
+func TestActivityCannotBeInventedForAnotherPersonsSession(t *testing.T) {
+	srv, robinToken, philippToken := twoPersonServer(t)
+	room := store.RoomKeyForProject("github.com/x/y")
+
+	res := req(t, "POST", srv.URL+"/api/coord/agents", robinToken, store.CoordAgent{
+		ExternalID: "sess-robin", Provider: "claude", RoomKey: room, DisplayName: "Robin-A"})
+	res.Body.Close()
+
+	res = req(t, "POST", srv.URL+"/api/activity", philippToken, []store.PathActivity{
+		{Project: "github.com/x/y", SessionExternalID: "sess-robin",
+			Tool: "Edit", Path: "a.go", Quality: store.ActivityReported},
+	})
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusForbidden {
+		t.Errorf("inventing activity for another person's session: want 403, got %d", res.StatusCode)
+	}
+
+	// Und deren Aktivität auszulesen geht auch nicht.
+	res2 := req(t, "GET", srv.URL+"/api/activity/session?session=sess-robin", philippToken, nil)
+	defer res2.Body.Close()
+	if res2.StatusCode != http.StatusForbidden {
+		t.Errorf("reading another person's session activity: want 403, got %d", res2.StatusCode)
+	}
+}

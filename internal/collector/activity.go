@@ -124,5 +124,13 @@ func NormalizeTouchPath(p string) string {
 	if strings.ContainsAny(p, "*?[") {
 		return ""
 	}
-	return path.Clean(p)
+	clean := path.Clean(p)
+	// Die Wurzel ist kein Arbeitsgegenstand. Ein Lauf gegen echte
+	// Transkripte am 2026-09-14 lieferte "/" als Treffer; eine Warnung
+	// "jemand hat / angefasst" ist nur Rauschen und macht die nächste echte
+	// Warnung unglaubwürdiger.
+	if clean == "/" || clean == "." {
+		return ""
+	}
+	return clean
 }

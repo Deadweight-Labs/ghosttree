@@ -331,6 +331,13 @@ func (a *api) sessionActivity(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "session is required")
 		return
 	}
+	if ok, err := a.mayActAs(r, q.Get("session")); err != nil {
+		writeStoreError(w, http.StatusInternalServerError, err)
+		return
+	} else if !ok {
+		writeErr(w, http.StatusForbidden, "that session belongs to someone else")
+		return
+	}
 	minutes, _ := strconv.Atoi(q.Get("minutes"))
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	out, err := a.st.SessionPathActivity(q.Get("session"), store.ActivityWindow(minutes), limit)
@@ -344,11 +351,27 @@ func (a *api) sessionActivity(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, out)
 }
 
+// recordPathActivity nimmt beobachtete Aktivität an.
+//
+// Jede einzelne Zeile muss zu einer Session gehören, die dem Token gehört.
+// Sonst könnte ein Tokeninhaber fremde Aktivität ERFINDEN — und eine
+// erfundene Aktivität ist schlimmer als eine fehlende: sie erzeugt
+// Konfliktwarnungen, die niemanden betreffen, und macht damit die nächste
+// echte Warnung unglaubwürdig.
 func (a *api) recordPathActivity(w http.ResponseWriter, r *http.Request) {
 	var in []store.PathActivity
 	if err := readJSON(r, &in); err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
+	}
+	for _, e := range in {
+		if ok, err := a.mayActAs(r, e.SessionExternalID); err != nil {
+			writeStoreError(w, http.StatusInternalServerError, err)
+			return
+		} else if !ok {
+			writeErr(w, http.StatusForbidden, "cannot record activity for another person's session")
+			return
+		}
 	}
 	if err := a.st.RecordPathActivity(in); err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)
