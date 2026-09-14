@@ -180,3 +180,67 @@ func TestWritingRequiresBeingSignedIn(t *testing.T) {
 		t.Fatalf("an anonymous write stored %d messages", len(msgs))
 	}
 }
+
+// Angemeldet zu sein ist NICHT dasselbe wie in einem Raum zu sein. Ein
+// privates Gespräch zwischen zwei Agenten wird nicht dadurch lesbar, dass ein
+// Mensch dessen Schlüssel in die URL schreibt. Spec §9 — eine URL ist keine
+// Ausnahme von "private DMs bleiben privat".
+//
+// Aus einem automatischen Security-Review: der erste Entwurf des Composers
+// prüfte gar keine Mitgliedschaft.
+func TestBeingSignedInIsNotBeingInTheRoom(t *testing.T) {
+	srv, st, client := signedIn(t)
+
+	fremd := store.RoomKeyForDirect([]string{"sess-a", "sess-b"})
+	if err := st.EnsureCoordRoom(store.CoordRoom{Key: fremd, Kind: store.RoomDirect,
+		Members: []string{"sess-a", "sess-b"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AppendCoordMessage(store.CoordMessage{
+		DestinationKind: store.DestinationRoom, DestinationID: fremd,
+		SenderExternalID: "sess-a", ClientID: "c-1", Body: "vertraulich"}); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := client.Get(srv.URL + "/ui/coord?room=" + fremd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusForbidden {
+		t.Fatalf("reading a foreign private room: want 403, got %d", res.StatusCode)
+	}
+
+	// Und hineinschreiben geht auch nicht.
+	post, err := client.PostForm(srv.URL+"/ui/coord/send", url.Values{
+		"room": {fremd}, "body": {"ich mische mich ein"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer post.Body.Close()
+	if post.StatusCode != http.StatusForbidden {
+		t.Fatalf("writing into a foreign private room: want 403, got %d", post.StatusCode)
+	}
+
+	msgs, err := st.CoordMessagesSince(store.DestinationRoom, fremd, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("the foreign room gained a message: %+v", msgs)
+	}
+}
+
+// Der Projektraum bleibt für den angemeldeten Menschen offen: dort
+// entscheidet der Perimeter, nicht eine Mitgliederliste.
+func TestAProjectRoomStaysOpenToTheSignedInHuman(t *testing.T) {
+	srv, _, client := signedIn(t)
+	res, err := client.Get(srv.URL + "/ui/coord?room=" + store.RoomKeyForProject("github.com/x/y"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("a project room must stay readable, got %d", res.StatusCode)
+	}
+}

@@ -33,15 +33,45 @@ func newFormClientID(r *http.Request) string {
 	return hex.EncodeToString(b[:])
 }
 
+// humanMember ist die Kennung, unter der ein angemeldeter Mensch in Räumen
+// steht. Dieselbe wie beim Schreiben — sonst dürfte jemand schreiben, was er
+// hinterher nicht lesen kann.
+func humanMember(r *http.Request) string { return "human:" + personOf(r) }
+
+// mayEnter prüft die Raummitgliedschaft mit derselben Funktion, die auch die
+// API benutzt.
+//
+// Angemeldet zu sein ist NICHT dasselbe wie in einem Raum zu sein. Ein
+// Mensch sieht Projekt- und Maschinenräume, weil dort der Perimeter
+// entscheidet; ein privates Gespräch zwischen zwei Agenten sieht er nicht,
+// nur weil er dessen Schlüssel in die URL schreibt. Spec §9: private DMs
+// dürfen nicht über Suche, Zusammenfassung oder Verknüpfung sichtbar
+// werden — eine URL ist keine Ausnahme davon.
+func (a *app) mayEnter(w http.ResponseWriter, r *http.Request, room string) bool {
+	ok, err := a.store.MayReadCoordRoom(room, humanMember(r))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return false
+	}
+	if !ok {
+		http.Error(w, "not a member of this room", http.StatusForbidden)
+		return false
+	}
+	return true
+}
+
 func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 	room := r.URL.Query().Get("room")
 	if room == "" {
-		rooms, err := a.store.CoordRoomsFor(personOf(r))
+		rooms, err := a.store.CoordRoomsFor(humanMember(r))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		a.render(w, "coord", pageData{Title: "Coordination", CoordRooms: rooms})
+		return
+	}
+	if !a.mayEnter(w, r, room) {
 		return
 	}
 	msgs, err := a.store.CoordMessagesSince(store.DestinationRoom, room, 0, 100)
@@ -82,10 +112,13 @@ func (a *app) coordSend(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "room and body are required", http.StatusBadRequest)
 		return
 	}
+	if !a.mayEnter(w, r, room) {
+		return
+	}
 
 	msg := store.CoordMessage{
 		DestinationKind: store.DestinationRoom, DestinationID: room,
-		SenderExternalID: "human:" + person,
+		SenderExternalID: humanMember(r),
 		AuthorKind:       store.AuthorHuman,
 		ClientID:         newFormClientID(r),
 		Body:             body,
@@ -134,6 +167,9 @@ func (a *app) coordEndStanding(w http.ResponseWriter, r *http.Request) {
 	id := r.FormValue("message_id")
 	if room == "" || id == "" {
 		http.Error(w, "room and message_id are required", http.StatusBadRequest)
+		return
+	}
+	if !a.mayEnter(w, r, room) {
 		return
 	}
 	if err := a.store.EndStandingInstruction(room, id, personOf(r)); err != nil {
