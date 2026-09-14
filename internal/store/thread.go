@@ -246,6 +246,9 @@ func threadIsDormant(t Thread) bool {
 // draußen, solange niemand ausdrücklich danach fragt — sie sind nicht weg,
 // nur nicht im Weg.
 func (s *Store) SearchThreads(project, query string, includeArchived bool, limit int) ([]Thread, error) {
+	if s.reader != nil {
+		return s.reader.SearchThreads(project, query, includeArchived, limit)
+	}
 	return s.SearchThreadsFor(project, query, "", includeArchived, limit)
 }
 
@@ -337,6 +340,9 @@ func (s *Store) ThreadLinks(threadID int64) ([]ThreadLink, error) {
 // Das ist der Grund, warum ein Thread mehrfach verlinkt sein darf und
 // trotzdem einer bleibt.
 func (s *Store) ThreadsForObject(kind, id string) ([]Thread, error) {
+	if s.reader != nil {
+		return s.reader.ThreadsForObject(kind, id)
+	}
 	return s.ThreadsForObjectAs(kind, id, "")
 }
 
