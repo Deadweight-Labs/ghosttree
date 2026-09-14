@@ -29,6 +29,7 @@ type CoordSendInput struct {
 	// ist 20 Sekunden weg' morgen noch als gegenwärtige Lage da.
 	Expires string `json:"expires_at,omitempty" jsonschema:"RFC3339 time after which this stops being current, for time-critical notices like 'the API is down for 20 seconds'. It stays readable as history either way"`
 	Mention string `json:"mention,omitempty" jsonschema:"session id of one peer who should get this promptly rather than bundled with ordinary room traffic"`
+	As      string `json:"as,omitempty" jsonschema:"post as a named subagent of this session, for example \"tests\" or \"frontend\". Use it when you are a subagent so peers can address you directly. It is a self-declaration: ghosttree cannot verify it, and the peer list says so"`
 }
 
 type CoordInboxInput struct {
@@ -39,6 +40,30 @@ type CoordInboxInput struct {
 
 type CoordPeersInput struct {
 	Room string `json:"room,omitempty" jsonschema:"project (default) or machine"`
+}
+
+// subagentRef bildet die Kennung eines benannten Subagenten unter seiner
+// Hauptsession.
+//
+// HIER LIEGT EINE ECHTE GRENZE, und sie wird benannt statt umgangen. Claude
+// Code und Codex geben einem Subagenten keinen eigenen MCP-Prozess: Parent
+// und Subagent sprechen durch dieselbe Verbindung, und damit ist die
+// Teilnehmerkennung von Haus aus dieselbe. Ghosttree kann einen Subagenten
+// also nicht erkennen — nur entgegennehmen, dass einer sich als solcher
+// ausgibt.
+//
+// Das ist eine Selbstauskunft und wird überall als solche gezeigt. Spec §3
+// verlangt genau diese Ehrlichkeit: "Ein Proxy darf als Proxy arbeiten, aber
+// keinen Parent-Beitrag als eigenständige Subagent-Antwort ausgeben." Eine
+// unbelegte Kennung als geprüfte auszugeben wäre der Fehler, gegen den der
+// ganze Herkunftsteil dieses Systems antritt.
+func subagentRef(parent, name string) string {
+	name = strings.TrimSpace(name)
+	name = strings.ReplaceAll(name, "/", "-")
+	if name == "" {
+		return parent
+	}
+	return parent + "/" + name
 }
 
 // roomKeyFor löst den Raum aus dem gebundenen Projekt beziehungsweise der
@@ -91,6 +116,16 @@ func coordText(text string) *mcp.CallToolResult {
 // Idempotent über die Teilnehmerkennung, und ein Fehler hier darf den
 // eigentlichen Aufruf nicht scheitern lassen: wer schreiben will, soll
 // schreiben können, auch wenn die Anwesenheitsliste klemmt.
+// joinAsSubagent meldet einen selbsterklärten Subagenten an. Der Anbieter
+// heißt ausdrücklich "self-declared-subagent", damit die Teilnehmerliste
+// nicht so aussieht, als hätte der Harness das bestätigt.
+func (s *Server) joinAsSubagent(roomKey, ref string) {
+	_, _ = s.client.RegisterCoordAgent(store.CoordAgent{
+		ExternalID: ref, Provider: "self-declared-subagent", RoomKey: roomKey,
+		DisplayName: ref, ParentExternalID: s.coordRef(), Branch: s.ctxAxes.Branch,
+	})
+}
+
 func (s *Server) joinRoom(roomKey string) {
 	provider := "unknown"
 	if s.sessionRef == "" {
@@ -113,15 +148,24 @@ func (s *Server) handleCoordSend(ctx context.Context, _ *mcp.CallToolRequest, in
 	if err != nil {
 		return nil, nil, err
 	}
-	s.joinRoom(key)
+	sender := s.coordRef()
+	if in.As != "" {
+		sender = subagentRef(sender, in.As)
+		s.joinAsSubagent(key, sender)
+	} else {
+		s.joinRoom(key)
+	}
 	clientID, err := newCoordClientID()
 	if err != nil {
 		return nil, nil, err
 	}
 	msg := store.CoordMessage{
 		DestinationKind: store.DestinationRoom, DestinationID: key,
-		SenderExternalID: s.coordRef(), ClientID: clientID,
+		SenderExternalID: sender, ClientID: clientID,
 		Body: in.Body, ReplyTo: in.ReplyTo, ExpiresAt: in.Expires,
+	}
+	if in.As != "" {
+		msg.ParentExternalID = s.coordRef()
 	}
 	if in.Mention != "" {
 		msg.Mentions = []string{in.Mention}
@@ -214,7 +258,9 @@ func (s *Server) handleCoordPeers(ctx context.Context, _ *mcp.CallToolRequest, i
 			fmt.Fprintf(&b, " on %s", p.Branch)
 		}
 		if p.ParentExternalID != "" {
-			fmt.Fprintf(&b, ", subagent of %s", p.ParentExternalID)
+			// Selbstauskunft, und das steht dabei. Wer das liest, soll nicht
+			// glauben, der Harness habe es bestätigt.
+			fmt.Fprintf(&b, ", says it is a subagent of %s (self-declared, unverified)", p.ParentExternalID)
 		}
 		fmt.Fprintf(&b, " — id %s, last seen %s\n", p.ExternalID, p.LastSeenAt)
 	}

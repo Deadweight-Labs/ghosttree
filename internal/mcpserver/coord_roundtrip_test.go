@@ -305,3 +305,71 @@ func TestBRepliesInTheSameConversationAndAReadsIt(t *testing.T) {
 		t.Fatalf("the reply is not attached to the question: %+v", all)
 	}
 }
+
+// AC-3 von REQ-350, in der Form, die das Kriterium ausdrücklich zulässt: die
+// Lücke wird BENANNT statt umdefiniert.
+//
+// Claude Code und Codex geben einem Subagenten keinen eigenen MCP-Prozess.
+// Parent und Subagent sprechen durch dieselbe Verbindung, und damit ist die
+// Teilnehmerkennung von Haus aus dieselbe. Ghosttree kann einen Subagenten
+// nicht erkennen — nur entgegennehmen, dass einer sich als solcher ausgibt,
+// und das überall als Selbstauskunft zeigen.
+func TestASubagentIsAddressableButItsClaimIsMarkedUnverified(t *testing.T) {
+	a, b, _ := twoSessions(t)
+	ctx := context.Background()
+
+	if _, _, err := a.handleCoordSend(ctx, nil, CoordSendInput{
+		As: "tests", Body: "der Contract-Test prüft items ebenfalls"}); err != nil {
+		t.Fatalf("subagent sends: %v", err)
+	}
+
+	// Der Beitrag erscheint unter der eigenen Kennung, nicht unter der des
+	// Parents — ein Subagent ist adressierbar.
+	got, _, err := b.handleCoordInbox(ctx, nil, CoordInboxInput{})
+	if err != nil {
+		t.Fatalf("b reads: %v", err)
+	}
+	if !strings.Contains(text(t, got), "sess-claude/tests") {
+		t.Fatalf("the subagent must appear under its own id: %s", text(t, got))
+	}
+
+	// Und in der Teilnehmerliste steht, dass die Behauptung ungeprüft ist.
+	peers, _, err := b.handleCoordPeers(ctx, nil, CoordPeersInput{})
+	if err != nil {
+		t.Fatalf("peers: %v", err)
+	}
+	list := text(t, peers)
+	if !strings.Contains(list, "sess-claude/tests") {
+		t.Fatalf("the subagent must be listed: %s", list)
+	}
+	if !strings.Contains(list, "self-declared, unverified") {
+		t.Fatalf("a subagent claim ghosttree cannot verify must say so: %s", list)
+	}
+
+	// Eine Antwort erreicht den Subagenten unter seiner Kennung — nicht
+	// dessen Hauptsession, weil beide verschiedene Kennungen tragen.
+	if _, _, err := b.handleCoordSend(ctx, nil, CoordSendInput{
+		Body: "danke, dann lasse ich items", Mention: "sess-claude/tests"}); err != nil {
+		t.Fatalf("b replies: %v", err)
+	}
+	key, _ := b.roomKeyFor("project")
+	all, err := b.client.CoordInbox(store.DestinationRoom, key, b.coordRef(), 0, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mentionedSubagent bool
+	for _, m := range all {
+		mentions, err := b.client.CoordMessageMentions(m.ID)
+		if err != nil {
+			continue
+		}
+		for _, mention := range mentions {
+			if mention == "sess-claude/tests" {
+				mentionedSubagent = true
+			}
+		}
+	}
+	if !mentionedSubagent {
+		t.Fatal("the reply must be addressed to the subagent, not to its main session")
+	}
+}

@@ -279,3 +279,23 @@ func (a *api) coordRooms(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, out)
 }
+
+// coordMessageMentions liefert die ausdrücklich erwähnten Empfänger einer
+// Nachricht. Eigener Endpunkt statt eines Feldes im Fenster: eine Inbox
+// braucht die Erwähnungen selten, und ein Join lüde sie jedem Aufruf auf.
+func (a *api) coordMessageMentions(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		writeErr(w, http.StatusBadRequest, "message id is required")
+		return
+	}
+	out, err := a.st.CoordMessageMentions(id)
+	if err != nil {
+		writeStoreError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if out == nil {
+		out = []string{}
+	}
+	writeJSON(w, 200, out)
+}

@@ -1,6 +1,7 @@
 package client
 
 import (
+	"fmt"
 	"net/url"
 	"strconv"
 
@@ -93,5 +94,14 @@ func (c *Client) CoordRoomsFor(agentExternalID string) ([]store.CoordRoom, error
 	q.Set("agent_external_id", agentExternalID)
 	var out []store.CoordRoom
 	err := c.do("GET", "/api/coord/rooms", q, nil, &out)
+	return out, err
+}
+
+// CoordMessageMentions liest die ausdrücklich erwähnten Empfänger einer
+// Nachricht. Sie tragen die Zustellregeln: eine Erwähnung wird zeitnah
+// geliefert, gewöhnlicher Raumverkehr darf gebündelt werden.
+func (c *Client) CoordMessageMentions(messageID int64) ([]string, error) {
+	var out []string
+	err := c.do("GET", fmt.Sprintf("/api/coord/messages/%d/mentions", messageID), nil, nil, &out)
 	return out, err
 }
