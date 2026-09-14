@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -249,5 +250,58 @@ func TestAPrivateConversationDoesNotAppearInTheProjectRoom(t *testing.T) {
 	}
 	if strings.Contains(text(t, room), "vertraulich") {
 		t.Fatalf("a private message leaked into the project room: %s", text(t, room))
+	}
+}
+
+// AC-2 von REQ-350: A schreibt, B erreicht es, B antwortet IM SELBEN
+// GESPRÄCH, und A sieht die Antwort — ohne dass irgendwo ein Mensch Text
+// zwischen Terminals kopiert.
+func TestBRepliesInTheSameConversationAndAReadsIt(t *testing.T) {
+	a, b, _ := twoSessions(t)
+	ctx := context.Background()
+
+	if _, _, err := a.handleCoordSend(ctx, nil, CoordSendInput{
+		Body: "ich ergänze nextCursor am Endpoint"}); err != nil {
+		t.Fatalf("a sends: %v", err)
+	}
+
+	// B liest und merkt sich die Nachrichten-ID für die Antwort.
+	res, _, err := b.handleCoordInbox(ctx, nil, CoordInboxInput{})
+	if err != nil {
+		t.Fatalf("b reads: %v", err)
+	}
+	var msgID int64
+	if _, err := fmt.Sscanf(strings.TrimPrefix(text(t, res), "["), "%d", &msgID); err != nil {
+		t.Fatalf("no message id in %q: %v", text(t, res), err)
+	}
+
+	if _, _, err := b.handleCoordSend(ctx, nil, CoordSendInput{
+		Body: "bleibt items erhalten?", ReplyTo: msgID}); err != nil {
+		t.Fatalf("b replies: %v", err)
+	}
+
+	back, _, err := a.handleCoordInbox(ctx, nil, CoordInboxInput{})
+	if err != nil {
+		t.Fatalf("a reads: %v", err)
+	}
+	if !strings.Contains(text(t, back), "bleibt items erhalten") {
+		t.Fatalf("a did not receive the reply: %s", text(t, back))
+	}
+
+	// Und die Antwort hängt wirklich an der Frage, statt nur daneben zu
+	// stehen: ohne den Bezug ist ein Raum mit drei Gesprächen unlesbar.
+	key, _ := a.roomKeyFor("project")
+	all, err := a.client.CoordInbox(store.DestinationRoom, key, a.sessionRef, 0, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var linked bool
+	for _, m := range all {
+		if m.ReplyTo == msgID {
+			linked = true
+		}
+	}
+	if !linked {
+		t.Fatalf("the reply is not attached to the question: %+v", all)
 	}
 }
