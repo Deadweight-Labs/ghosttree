@@ -34,6 +34,11 @@ type pageData struct {
 	SessionID            int64
 	Project, Preview     string
 	Review               []reviewEntry
+	CoordRoom            string
+	CoordRooms           []store.CoordRoom
+	CoordMessages        []store.CoordMessage
+	CoordPeers           []store.CoordAgent
+	CoordStanding        []store.StandingInstruction
 }
 type reviewEntry struct {
 	Knowledge         store.Knowledge
@@ -56,6 +61,9 @@ func New(st *store.Store) http.Handler {
 	mux.Handle("GET /ui/sessions", a.requirePerson(http.HandlerFunc(a.sessionsPage)))
 	mux.Handle("GET /ui/sessions/{id}", a.requirePerson(http.HandlerFunc(a.sessionPage)))
 	mux.Handle("GET /ui/context", a.requirePerson(http.HandlerFunc(a.contextPage)))
+	mux.Handle("GET /ui/coord", a.requirePerson(http.HandlerFunc(a.coordRoomPage)))
+	mux.Handle("POST /ui/coord/send", a.requirePerson(http.HandlerFunc(a.coordSend)))
+	mux.Handle("POST /ui/coord/standing/end", a.requirePerson(http.HandlerFunc(a.coordEndStanding)))
 	mux.HandleFunc("GET /ui/{$}", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/ui/requests", http.StatusSeeOther) })
 	return mux
 }

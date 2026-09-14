@@ -487,6 +487,16 @@ CREATE TABLE IF NOT EXISTS thread_outcomes(
   created_at TEXT NOT NULL,
   decided_at TEXT,
   PRIMARY KEY(thread_id,kind,ref_id));
+CREATE TABLE IF NOT EXISTS coord_standing(
+  room_key TEXT NOT NULL,
+  message_id TEXT NOT NULL,
+  person TEXT NOT NULL,
+  body TEXT NOT NULL,
+  targets TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  ended_at TEXT,
+  ended_by TEXT,
+  PRIMARY KEY(room_key,message_id));
 CREATE TABLE IF NOT EXISTS coord_rooms(
   room_key TEXT PRIMARY KEY,
   kind TEXT NOT NULL CHECK(kind IN ('project','machine','direct','group')),
