@@ -408,6 +408,21 @@ CREATE TABLE IF NOT EXISTS document_revisions(
   person TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   UNIQUE(document_id,revision));
+CREATE TABLE IF NOT EXISTS coord_agents(
+  id INTEGER PRIMARY KEY,
+  external_id TEXT NOT NULL UNIQUE,
+  provider TEXT NOT NULL,
+  room_key TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  person TEXT,
+  cwd TEXT,
+  branch TEXT,
+  worktree TEXT,
+  parent_external_id TEXT,
+  capabilities TEXT,
+  registered_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS coord_agents_room ON coord_agents(room_key,last_seen_at);
 `
 
 func Open(path string) (*Store, error) {
