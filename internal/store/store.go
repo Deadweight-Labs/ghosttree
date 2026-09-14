@@ -449,6 +449,44 @@ CREATE INDEX IF NOT EXISTS coord_messages_destination
   ON coord_messages(destination_kind,destination_id,id);
 CREATE UNIQUE INDEX IF NOT EXISTS coord_messages_origin
   ON coord_messages(origin_event_id) WHERE origin_event_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS threads(
+  id INTEGER PRIMARY KEY,
+  project TEXT NOT NULL,
+  title TEXT NOT NULL,
+  question TEXT NOT NULL DEFAULT '',
+  state TEXT NOT NULL DEFAULT 'open' CHECK(state IN ('open','resolved','deferred')),
+  archived INTEGER NOT NULL DEFAULT 0,
+  person TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  resolved_at TEXT);
+CREATE INDEX IF NOT EXISTS threads_project ON threads(project,archived,updated_at);
+CREATE TABLE IF NOT EXISTS thread_links(
+  thread_id INTEGER NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  object_kind TEXT NOT NULL,
+  object_id TEXT NOT NULL,
+  object_revision TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(thread_id,object_kind,object_id,object_revision));
+CREATE INDEX IF NOT EXISTS thread_links_object ON thread_links(object_kind,object_id);
+CREATE TABLE IF NOT EXISTS thread_summaries(
+  thread_id INTEGER NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  revision INTEGER NOT NULL,
+  body TEXT NOT NULL,
+  open_questions TEXT NOT NULL DEFAULT '',
+  covers_through_sequence INTEGER NOT NULL,
+  person TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(thread_id,revision));
+CREATE TABLE IF NOT EXISTS thread_outcomes(
+  thread_id INTEGER NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  ref_id TEXT NOT NULL,
+  state TEXT NOT NULL DEFAULT 'proposed' CHECK(state IN ('proposed','accepted','rejected')),
+  note TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  decided_at TEXT,
+  PRIMARY KEY(thread_id,kind,ref_id));
 CREATE TABLE IF NOT EXISTS coord_deliveries(
   message_id INTEGER NOT NULL,
   recipient_external_id TEXT NOT NULL,
