@@ -20,6 +20,7 @@ var writerMethodClasses = map[string]string{
 	"AppendChunkBatches":            "write",
 	"AppendChunks":                  "write",
 	"AppendCoordMessage":            "write",
+	"ApplyCoordRetention":           "write",
 	"ApplyRequestDistillation":      "write",
 	"ApplySessionDistillation":      "write",
 	"ApplyStaleness":                "write",
