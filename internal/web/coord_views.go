@@ -23,12 +23,10 @@ type coordPageView struct {
 type coordRecipientView struct{ ID, Label, Kind string }
 
 type coordSidebarView struct {
-	NeedsAttention []coordRoomView
-	Mentions       []coordRoomView
-	Unread         []coordRoomView
-	Machines       []coordRoomView
-	Projects       []coordRoomView
-	Private        []coordRoomView
+	Attention []coordRoomView
+	Machines  []coordRoomView
+	Projects  []coordRoomView
+	Private   []coordRoomView
 }
 
 type coordRoomView struct {
@@ -88,6 +86,7 @@ type coordMessageView struct {
 	ReplyURL                      string
 	CanPromote                    bool
 	CSRFToken                     string
+	GroupStart                    bool
 }
 
 type coordReplyView struct {
@@ -141,14 +140,8 @@ func buildCoordSidebar(summaries []store.CoordRoomSummary, principalID, activeKe
 		case store.RoomDirect, store.RoomGroup:
 			out.Private = append(out.Private, room)
 		}
-		if room.Attention > 0 {
-			out.NeedsAttention = append(out.NeedsAttention, room)
-		}
-		if room.Mentions > 0 {
-			out.Mentions = append(out.Mentions, room)
-		}
-		if room.Unread > 0 {
-			out.Unread = append(out.Unread, room)
+		if room.Attention > 0 || room.Mentions > 0 || room.Unread > 0 {
+			out.Attention = append(out.Attention, room)
 		}
 	}
 	return out
@@ -291,18 +284,28 @@ func coordRoomLabel(room store.CoordRoom, principalID string, labels map[string]
 
 func buildCoordMessageViews(messages []store.CoordMessagePresentation, roomKey string, labels map[string]string) []coordMessageView {
 	out := make([]coordMessageView, 0, len(messages))
+	previousAuthorID, previousAuthorKind := "", ""
 	for _, presentation := range messages {
 		message := presentation.Message
 		author := strings.TrimSpace(presentation.AuthorLabel)
 		if author == "" {
 			author = strings.TrimSpace(message.SenderExternalID)
 		}
+		authorID := strings.TrimSpace(message.SenderExternalID)
+		if message.AuthorKind == store.AuthorHuman && strings.TrimSpace(message.AuthorPrincipalID) != "" {
+			authorID = strings.TrimSpace(message.AuthorPrincipalID)
+		}
+		if authorID == "" {
+			authorID = author
+		}
+		groupStart := len(out) == 0 || previousAuthorID != authorID || previousAuthorKind != message.AuthorKind || presentation.Reply != nil
 		view := coordMessageView{
 			ID: message.ID, Sequence: message.Sequence, Author: author,
 			AuthorKind: message.AuthorKind, Timestamp: message.CreatedAt, DisplayTimestamp: coordDisplayTimestamp(message.CreatedAt),
 			Body: message.Body, Intent: message.Intent, Expired: message.Expired,
 			ReplyURL:   coordRoomReplyURL(roomKey, message.ID, message.Sequence),
 			ReplyCount: presentation.ReplyCount,
+			GroupStart: groupStart,
 		}
 		for _, mention := range presentation.Mentions {
 			view.Mentions = append(view.Mentions, coordIdentityLabel(mention, labels))
@@ -332,6 +335,7 @@ func buildCoordMessageViews(messages []store.CoordMessagePresentation, roomKey s
 		}
 		view.Delivery = strings.Join(parts, " · ")
 		out = append(out, view)
+		previousAuthorID, previousAuthorKind = authorID, message.AuthorKind
 	}
 	return out
 }

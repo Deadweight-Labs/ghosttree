@@ -28,6 +28,30 @@ func TestCoordPageCarriesPreRenderEventCursorAndVisibleLiveStatus(t *testing.T) 
 	}
 }
 
+func TestCoordEventStructureRetainsProgressiveSurfaceHooks(t *testing.T) {
+	template := string(mustReadEmbedded(t, "templates/coord.html"))
+	for _, hook := range []string{
+		`id="coord-rooms"`,
+		`class="coord-conversation"`,
+		`id="coord-context"`,
+		`class="coord-messages"`,
+		`data-coord-sidebar-dynamic`,
+		`data-coord-read-actions`,
+		`data-coord-standing-list`,
+		`data-coord-thread-list`,
+		`coord-thread-paging`,
+		`class="coord-thread-messages"`,
+		`data-coord-draft-key=`,
+		`data-coord-focus-key=`,
+		`data-coord-drawer-target=`,
+		`data-coord-live-status`,
+	} {
+		if !strings.Contains(template, hook) {
+			t.Errorf("progressive coordination hook missing %q", hook)
+		}
+	}
+}
+
 func TestCoordProgressiveClientRefetchesCanonicalVisibleSurfaces(t *testing.T) {
 	source := string(mustReadEmbedded(t, "static/app.js"))
 	for _, want := range []string{
@@ -364,6 +388,27 @@ if (selectors.includes("#coord-rooms") || selectors.includes("#coord-context")) 
 	command := exec.Command("node", "-e", program)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("coord thread invalidation mapping failed: %v\n%s", err, output)
+	}
+}
+
+func TestCoordAttentionInvalidationRefreshesDedicatedDetailSurface(t *testing.T) {
+	source := string(mustReadEmbedded(t, "static/app.js"))
+	start := strings.Index(source, "  const roomSurfaces =")
+	end := strings.Index(source, "  const scheduleRefreshDrain =")
+	if start < 0 || end <= start {
+		t.Fatal("coord event surface mapping is not independently testable")
+	}
+	program := source[start:end] + `
+const selectors = coordEventSurfaces(
+  {object_kind:"attention", object_id:"41", kind:"attention"},
+  "project:visible", "",
+);
+if (!selectors.includes("[data-coord-attention-details]")) throw new Error("attention detail appearance/disappearance was not refreshed");
+if (!selectors.includes("[data-coord-sidebar-dynamic]")) throw new Error("attention summary was not refreshed");
+`
+	command := exec.Command("node", "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("coord attention invalidation mapping failed: %v\n%s", err, output)
 	}
 }
 

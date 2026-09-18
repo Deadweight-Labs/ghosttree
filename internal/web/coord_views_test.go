@@ -22,7 +22,7 @@ func TestCoordDisplayTimestampUsesLocalTimeAndKeepsInvalidValues(t *testing.T) {
 	}
 }
 
-func TestBuildCoordSidebarSeparatesRoomKindsAndKeepsAttention(t *testing.T) {
+func TestBuildCoordSidebarSeparatesRoomKindsAndUnifiesAttentionSignals(t *testing.T) {
 	summaries := []store.CoordRoomSummary{
 		{Room: store.CoordRoom{Key: "group:g", Kind: store.RoomGroup, Label: "Release"}, Unread: 3, MentionUnread: 1, Attention: 2},
 		{Room: store.CoordRoom{Key: "project:p", Kind: store.RoomProject}, Unread: 2},
@@ -32,17 +32,35 @@ func TestBuildCoordSidebarSeparatesRoomKindsAndKeepsAttention(t *testing.T) {
 
 	labels := map[string]string{"person:1": "Robin", "sess-a": "Build Agent"}
 	got := buildCoordSidebar(summaries, "person:1", "group:g", labels)
-	if len(got.NeedsAttention) != 1 || len(got.Mentions) != 1 || len(got.Unread) != 2 || len(got.Machines) != 1 || len(got.Projects) != 1 || len(got.Private) != 2 {
+	if len(got.Attention) != 2 || len(got.Machines) != 1 || len(got.Projects) != 1 || len(got.Private) != 2 {
 		t.Fatalf("unexpected sections: %+v", got)
 	}
-	if got.NeedsAttention[0].Attention != 2 || got.Mentions[0].Mentions != 1 {
-		t.Fatalf("attention signals merged: %+v", got)
+	if got.Attention[0].Key != "group:g" || got.Attention[0].Attention != 2 || got.Attention[0].Mentions != 1 || got.Attention[0].Unread != 3 {
+		t.Fatalf("room signals were not preserved in one attention row: %+v", got.Attention)
 	}
 	if !got.Private[0].Active || got.Private[0].Label != "Release" {
 		t.Fatalf("active labelled group not projected: %+v", got.Private[0])
 	}
 	if got.Private[1].Label != "Build Agent" {
 		t.Fatalf("direct label should name the peer, got %q", got.Private[1].Label)
+	}
+}
+
+func TestBuildCoordMessageViewsMarksConsecutiveAuthorGroups(t *testing.T) {
+	messages := []store.CoordMessagePresentation{
+		{Message: store.CoordMessage{ID: 1, Sequence: 1, SenderExternalID: "human-a", AuthorPrincipalID: "person:1", AuthorKind: store.AuthorHuman, Body: "one"}, AuthorLabel: "Robin"},
+		{Message: store.CoordMessage{ID: 2, Sequence: 2, SenderExternalID: "human-a", AuthorPrincipalID: "person:1", AuthorKind: store.AuthorHuman, Body: "two"}, AuthorLabel: "Robin"},
+		{Message: store.CoordMessage{ID: 3, Sequence: 3, SenderExternalID: "human-b", AuthorPrincipalID: "person:2", AuthorKind: store.AuthorHuman, Body: "same label, different person"}, AuthorLabel: "Robin"},
+		{Message: store.CoordMessage{ID: 4, Sequence: 4, SenderExternalID: "agent-a", AuthorKind: store.AuthorAgent, Body: "three"}, AuthorLabel: "Build Agent"},
+		{Message: store.CoordMessage{ID: 5, Sequence: 5, SenderExternalID: "agent-a", AuthorKind: store.AuthorAgent, Body: "reply"}, AuthorLabel: "Build Agent", Reply: &store.CoordReplyPreview{Sequence: 1}},
+	}
+	got := buildCoordMessageViews(messages, "project:p", nil)
+	if len(got) != 5 || !got[0].GroupStart || got[1].GroupStart || !got[2].GroupStart || !got[3].GroupStart || !got[4].GroupStart {
+		t.Fatalf("room message grouping=%+v", got)
+	}
+	thread := buildCoordThreadMessageViews(messages, "project:p", 7, nil)
+	if len(thread) != 5 || !thread[0].GroupStart || thread[1].GroupStart || !thread[2].GroupStart || !thread[3].GroupStart || !thread[4].GroupStart {
+		t.Fatalf("thread message grouping=%+v", thread)
 	}
 }
 

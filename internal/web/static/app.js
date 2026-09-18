@@ -639,6 +639,9 @@
   ];
   const coordEventSurfaces = (event, room, thread) => {
     const selectors = new Set(["[data-coord-sidebar-dynamic]"]);
+    if (event.kind === "attention") {
+      selectors.add("[data-coord-attention-details]");
+    }
     if (event.object_kind === "room" && event.object_id === room) {
       if (event.kind !== "read" && event.kind !== "attention") {
         roomSurfaces.forEach((selector) => selectors.add(selector));

@@ -743,7 +743,7 @@ func TestCoordWorkspaceRendersAllRoomSectionsAndNewestWindow(t *testing.T) {
 	}
 
 	html := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(project))
-	for _, want := range []string{"Erwähnungen", "Maschine", "Projekte", "Direkt &amp; Gruppen", "#75", "Teilnehmende", "Threads", "Knowledge"} {
+	for _, want := range []string{"Aufmerksamkeit", "Maschine", "Projekte", "Direkt &amp; Gruppen", "#75", "Teilnehmende", "Threads"} {
 		if !strings.Contains(html, want) {
 			t.Errorf("workspace missing %q", want)
 		}
@@ -768,6 +768,161 @@ func TestCoordWorkspaceRendersAllRoomSectionsAndNewestWindow(t *testing.T) {
 		if !strings.Contains(html, want) {
 			t.Errorf("drawer contract missing %q", want)
 		}
+	}
+}
+
+func TestCoordWorkspaceStructureUsesChatLandmarksAndOneAttentionRegion(t *testing.T) {
+	templateBytes, err := files.ReadFile("templates/coord.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := string(templateBytes)
+	for _, want := range []string{
+		`class="coord-appbar"`,
+		`class="coord-sidebar coord-room-rail"`,
+		`class="coord-message coord-message-group {{if .GroupStart}}`,
+		`class="coord-message-actions coord-message-tools"`,
+	} {
+		if !strings.Contains(template, want) {
+			t.Errorf("chat workspace structure missing %q", want)
+		}
+	}
+	if got := strings.Count(template, `class="coord-attention-region"`); got != 1 {
+		t.Fatalf("attention regions=%d, want exactly one compact region", got)
+	}
+	if strings.Contains(template, `class="coord-knowledge-slot"`) || strings.Contains(template, `<h2>Knowledge</h2>`) {
+		t.Fatal("coordination template must not contain the future Knowledge placeholder")
+	}
+}
+
+func TestCoordAttentionRegionRendersEachSignalledRoomOnceWithExplicitCounts(t *testing.T) {
+	srv, st, client := signedIn(t)
+	room := store.RoomKeyForProject("github.com/x/attention-union")
+	materializeWebRoom(t, st, room)
+	if _, err := st.AppendCoordMessage(store.CoordMessage{
+		DestinationKind: store.DestinationRoom, DestinationID: room,
+		SenderExternalID: "reviewer", AuthorPrincipalID: "person:2", AuthorKind: store.AuthorHuman,
+		ClientID: "all-signals", Body: "Bitte prüfen", Intent: store.IntentBlocker,
+		Mentions: []string{"person:1"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	page := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room))
+	start := strings.Index(page, `class="coord-attention-region"`)
+	if start < 0 {
+		t.Fatal("compact attention region missing")
+	}
+	end := strings.Index(page[start:], `</section>`)
+	if end < 0 {
+		t.Fatal("compact attention region is not closed")
+	}
+	region := page[start : start+end]
+	roomURL := `/ui/coord?room=` + url.QueryEscape(room)
+	if got := strings.Count(region, roomURL); got != 1 {
+		t.Fatalf("signalled room occurrences=%d, want one; region=%s", got, region)
+	}
+	for _, label := range []string{"1 offen", "1 Erwähnung", "1 Ungelesen"} {
+		if !strings.Contains(region, label) {
+			t.Errorf("attention row missing explicit signal %q", label)
+		}
+	}
+}
+
+func TestCoordAttentionDetailsHookExistsWhenEmptyAndPopulated(t *testing.T) {
+	srv, st, client := signedIn(t)
+	room := store.RoomKeyForProject("github.com/x/attention-details")
+	materializeWebRoom(t, st, room)
+	empty := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room))
+	if !strings.Contains(empty, `data-coord-attention-details`) {
+		t.Fatal("empty default inspector must retain the attention replacement hook")
+	}
+	if _, err := st.AppendCoordMessage(store.CoordMessage{
+		DestinationKind: store.DestinationRoom, DestinationID: room,
+		SenderExternalID: "reviewer", AuthorPrincipalID: "person:2", AuthorKind: store.AuthorHuman,
+		ClientID: "attention-detail", Body: "Antwort nötig", Intent: store.IntentQuestion,
+		Mentions: []string{"person:1"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	populated := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room))
+	start := strings.Index(populated, `data-coord-attention-details`)
+	if start < 0 {
+		t.Fatal("populated default inspector lost the attention replacement hook")
+	}
+	end := strings.Index(populated[start:], `</div>`)
+	if end < 0 || !strings.Contains(populated[start:start+end], "Antwort nötig") {
+		t.Fatal("populated attention replacement hook must contain actionable detail")
+	}
+}
+
+func TestCoordMessageStructureExposesGroupingAndHumanAgentAvatarsInBothFeeds(t *testing.T) {
+	template := string(mustReadEmbedded(t, "templates/coord.html"))
+	for _, want := range []string{
+		`coord-message-group-start`, `coord-message-continuation`,
+		`coord-message-avatar-human`, `coord-message-avatar-agent`,
+		`data-author-kind="{{.AuthorKind}}"`, `<span class="coord-author-kind">Agent</span>`,
+	} {
+		if !strings.Contains(template, want) {
+			t.Errorf("grouped message identity markup missing %q", want)
+		}
+	}
+	if got := strings.Count(template, `{{template "coord-message-identity" .}}`); got != 2 {
+		t.Fatalf("message identity render sites=%d, want room and thread feeds", got)
+	}
+}
+
+func TestCoordComposerKeepsPrimaryInputVisibleAndAdvancedFieldsInNativeDisclosure(t *testing.T) {
+	templateBytes, err := files.ReadFile("templates/coord.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := string(templateBytes)
+	formStart := strings.Index(template, `<form class="coord-composer"`)
+	if formStart < 0 {
+		t.Fatal("room composer form missing")
+	}
+	formEnd := strings.Index(template[formStart:], `</form>`)
+	if formEnd < 0 {
+		t.Fatal("room composer form is not closed")
+	}
+	composer := template[formStart : formStart+formEnd]
+	if !strings.Contains(composer, `class="coord-compose-primary"`) {
+		t.Fatal("composer must expose a primary input/action row")
+	}
+	moreStart := strings.Index(composer, `<details class="coord-compose-more`)
+	if moreStart < 0 {
+		t.Fatal("advanced composer controls must use a native details disclosure")
+	}
+	moreEnd := strings.Index(composer[moreStart:], `</details>`)
+	if moreEnd < 0 {
+		t.Fatal("advanced composer disclosure is not closed")
+	}
+	advanced := composer[moreStart : moreStart+moreEnd]
+	for _, field := range []string{`name="intent"`, `name="mentions"`, `name="expires_at"`} {
+		if !strings.Contains(advanced, field) {
+			t.Errorf("advanced composer disclosure missing %q", field)
+		}
+	}
+}
+
+func TestCoordThreadContextReplacesDefaultInspector(t *testing.T) {
+	srv, st, client := signedIn(t)
+	room := store.RoomKeyForProject("github.com/x/inspector-modes")
+	materializeWebRoom(t, st, room)
+	access := st.CoordinationFor(store.Principal{ID: "person:1", Label: "robin"}, "")
+	threadID, err := access.CreateTaskThreadInRoom(room, "Focused inspector", "Only the task", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defaultPage := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room))
+	if !strings.Contains(defaultPage, `class="coord-context-default"`) || strings.Contains(defaultPage, `class="coord-context-thread`) {
+		t.Fatal("room view must render only the default inspector mode")
+	}
+	threadPage := coordPageBody(t, client, srv.URL+coordThreadURL(room, threadID))
+	if !strings.Contains(threadPage, `class="coord-context-thread coord-thread-detail"`) || strings.Contains(threadPage, `class="coord-context-default"`) {
+		t.Fatal("selected thread must replace the default inspector mode")
 	}
 }
 
@@ -859,7 +1014,7 @@ func TestCoordMessageActionsShareOneTouchSizedHierarchy(t *testing.T) {
 		t.Fatal(err)
 	}
 	template := string(templateBytes)
-	if got := strings.Count(template, `class="coord-message-actions"`); got != 2 {
+	if got := strings.Count(template, `class="coord-message-actions coord-message-tools"`); got != 2 {
 		t.Fatalf("message action rows=%d, want room and thread rows", got)
 	}
 	if !strings.Contains(template, `class="coord-message-action coord-message-action-primary coord-reply-action"`) ||
@@ -1092,7 +1247,7 @@ func TestCoordWorkspaceSeparatesAttentionMentionsAndUnreadAndActsWithCSRF(t *tes
 		t.Fatalf("attention=%+v err=%v", items, err)
 	}
 	page := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room))
-	for _, want := range []string{"Braucht dich", "Mentions", "Ungelesen", "Release freigeben?", "nur Koordination", `action="/ui/coord/attention/action"`} {
+	for _, want := range []string{"Braucht dich", "Erwähnungen", "Ungelesen", "Release freigeben?", "nur Koordination", `action="/ui/coord/attention/action"`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("attention workspace missing %q", want)
 		}
