@@ -4,14 +4,27 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 )
 
 var (
-	ErrCoordNotFound  = errors.New("coordination target not found")
-	ErrCoordForbidden = errors.New("coordination target forbidden")
+	ErrCoordNotFound         = errors.New("coordination target not found")
+	ErrCoordForbidden        = errors.New("coordination target forbidden")
+	ErrCoordUnknownRecipient = errors.New("coordination recipient is not visible")
 )
+
+type CoordRecipient struct {
+	PrincipalID string
+	Label       string
+	Kind        string
+}
+
+type StandingInput struct {
+	RoomKey, ClientID, Body, ExpiresAt string
+	Mentions                           []string
+}
 
 // CoordAccess is the authenticated boundary around coordination data. HTTP
 // and browser handlers use it instead of combining raw store reads with
@@ -178,6 +191,55 @@ func (a CoordAccess) activeRoomMember(roomKey, actor string) (bool, error) {
 
 func (a CoordAccess) Room(roomKey string) (CoordRoom, error) {
 	return a.requireRoomAccess(roomKey)
+}
+
+func (a CoordAccess) RoomMemberships(roomKey string) ([]RoomMembership, error) {
+	reader := a.Store
+	if reader.reader != nil {
+		reader = reader.reader
+	}
+	tx, err := reader.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	actor, err := a.actorTx(tx)
+	if err != nil {
+		return nil, err
+	}
+	if err := a.canReadTx(tx, actor, DestinationRoom, roomKey); err != nil {
+		return nil, err
+	}
+	var kind string
+	if err := tx.QueryRow(`SELECT kind FROM coord_rooms WHERE room_key=?`, roomKey).Scan(&kind); err != nil {
+		return nil, err
+	}
+	if kind != RoomDirect && kind != RoomGroup {
+		return nil, nil
+	}
+	rows, err := tx.Query(`SELECT room_key,principal_id,joined_at,left_at,is_manager FROM coord_room_memberships WHERE room_key=? ORDER BY joined_at,principal_id`, roomKey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []RoomMembership
+	for rows.Next() {
+		var m RoomMembership
+		if err := rows.Scan(&m.RoomKey, &m.PrincipalID, &m.JoinedAt, &m.LeftAt, &m.Manager); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (a CoordAccess) Rooms() ([]CoordRoom, error) {
@@ -487,6 +549,11 @@ func (a CoordAccess) Send(message CoordMessage) (int64, error) {
 	}
 	if err := a.canRead(message.DestinationKind, message.DestinationID); err != nil {
 		return 0, err
+	}
+	if message.DestinationKind == DestinationRoom && len(message.Mentions) > 0 {
+		if err := a.ValidateRoomParticipants(message.DestinationID, message.Mentions); err != nil {
+			return 0, err
+		}
 	}
 	if message.ReplyTo != 0 {
 		reader := a.Store
@@ -799,6 +866,9 @@ func (a CoordAccess) CreateGroup(in GroupInput) (CoordRoom, error) {
 		return CoordRoom{}, err
 	}
 	in.Creator = actor
+	if err := a.validatePrivateRecipients(actor, in.Members); err != nil {
+		return CoordRoom{}, err
+	}
 	return a.Store.CreateCoordGroup(in)
 }
 
@@ -814,6 +884,9 @@ func (a CoordAccess) EnsureDirect(room CoordRoom) error {
 	}
 	if room.Kind != RoomDirect || !containsMember(normalizeMembers(room.Members), actor) {
 		return ErrCoordNotFound
+	}
+	if err := a.validatePrivateRecipients(actor, room.Members); err != nil {
+		return err
 	}
 	room.Actor = actor
 	return a.Store.EnsureCoordRoom(room)
@@ -835,6 +908,9 @@ func (a CoordAccess) UpdateGroup(in GroupUpdate) error {
 	if _, err := a.requireRoomAccess(in.RoomKey); err != nil {
 		return err
 	}
+	if err := a.validatePrivateRecipients(actor, append(append([]string{}, in.Add...), in.AddManagers...)); err != nil {
+		return err
+	}
 	return a.Store.UpdateCoordGroup(in)
 }
 
@@ -848,11 +924,364 @@ func (a CoordAccess) LeaveRoom(roomKey, principalID string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := a.requireRoomAccess(roomKey); err != nil {
+	room, err := a.requireRoomAccess(roomKey)
+	if err != nil {
 		return err
+	}
+	if room.Kind != RoomGroup {
+		return fmt.Errorf("%w: only groups can be left", ErrInvalidGroup)
 	}
 	if actor != principalID {
 		return fmt.Errorf("%w: use manager-authorized group update", ErrCoordForbidden)
 	}
 	return a.Store.LeaveCoordRoom(roomKey, principalID, actor)
+}
+
+// Recipients returns principals the current actor has actually encountered in
+// a room they can read. It is the shared boundary used before creating or
+// expanding private conversations; accepting arbitrary caller-supplied IDs
+// would turn the UI and API into a principal-enumeration surface.
+func (a CoordAccess) Recipients() ([]CoordRecipient, error) {
+	reader := a.Store
+	if reader.reader != nil {
+		reader = reader.reader
+	}
+	tx, err := reader.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	actor, err := a.actorTx(tx)
+	if err != nil {
+		return nil, err
+	}
+	if actor == "" {
+		return nil, ErrCoordForbidden
+	}
+	roomRows, err := tx.Query(`SELECT room_key FROM coord_rooms ORDER BY room_key`)
+	if err != nil {
+		return nil, err
+	}
+	var rooms []string
+	for roomRows.Next() {
+		var key string
+		if err := roomRows.Scan(&key); err != nil {
+			roomRows.Close()
+			return nil, err
+		}
+		rooms = append(rooms, key)
+	}
+	if err := roomRows.Err(); err != nil {
+		roomRows.Close()
+		return nil, err
+	}
+	if err := roomRows.Close(); err != nil {
+		return nil, err
+	}
+	ids := make(map[string]bool)
+	for _, room := range rooms {
+		if err := a.canReadTx(tx, actor, DestinationRoom, room); err != nil {
+			if errors.Is(err, ErrCoordNotFound) || errors.Is(err, ErrCoordForbidden) {
+				continue
+			}
+			return nil, err
+		}
+		memberRows, err := tx.Query(`SELECT principal_id FROM coord_room_memberships WHERE room_key=? AND left_at=''`, room)
+		if err != nil {
+			return nil, err
+		}
+		var members []string
+		for memberRows.Next() {
+			var member string
+			if err := memberRows.Scan(&member); err != nil {
+				memberRows.Close()
+				return nil, err
+			}
+			if member != actor {
+				ids[member] = true
+			}
+			members = append(members, member)
+		}
+		if err := memberRows.Err(); err != nil {
+			memberRows.Close()
+			return nil, err
+		}
+		if err := memberRows.Close(); err != nil {
+			return nil, err
+		}
+		for _, member := range members {
+			var owner string
+			queryErr := tx.QueryRow(`SELECT COALESCE(principal_id,'') FROM coord_agents WHERE external_id=?`, member).Scan(&owner)
+			if queryErr != nil && !errors.Is(queryErr, sql.ErrNoRows) {
+				return nil, queryErr
+			}
+			if owner != "" && owner != a.Principal.ID {
+				ids[owner] = true
+			}
+		}
+	}
+	out := make([]CoordRecipient, 0, len(ids))
+	for id := range ids {
+		recipient := CoordRecipient{PrincipalID: id, Label: id, Kind: "session"}
+		if strings.HasPrefix(id, "person:") {
+			recipient.Kind = "person"
+			if personID, parseErr := parsePersonPrincipalID(id); parseErr == nil {
+				var label string
+				if queryErr := tx.QueryRow(`SELECT name FROM persons WHERE id=?`, personID).Scan(&label); queryErr == nil && label != "" {
+					recipient.Label = label
+				}
+			}
+		} else {
+			var label string
+			if queryErr := tx.QueryRow(`SELECT display_name FROM coord_agents WHERE external_id=?`, id).Scan(&label); queryErr == nil && strings.TrimSpace(label) != "" {
+				recipient.Label = label
+			}
+		}
+		out = append(out, recipient)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Label != out[j].Label {
+			return out[i].Label < out[j].Label
+		}
+		return out[i].PrincipalID < out[j].PrincipalID
+	})
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (a CoordAccess) ValidateRoomParticipants(roomKey string, principals []string) error {
+	reader := a.Store
+	if reader.reader != nil {
+		reader = reader.reader
+	}
+	tx, err := reader.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	actor, err := a.actorTx(tx)
+	if err != nil {
+		return err
+	}
+	if err := a.canReadTx(tx, actor, DestinationRoom, roomKey); err != nil {
+		return err
+	}
+	if err := a.validateRoomParticipantsTx(tx, actor, roomKey, principals); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (a CoordAccess) validateRoomParticipantsTx(tx *sql.Tx, actor, roomKey string, principals []string) error {
+	allowed := map[string]bool{actor: true, a.Principal.ID: true}
+	rows, err := tx.Query(`SELECT principal_id FROM coord_room_memberships WHERE room_key=? AND left_at=''`, roomKey)
+	if err != nil {
+		return err
+	}
+	var participantIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		allowed[id] = true
+		participantIDs = append(participantIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, id := range participantIDs {
+		var owner string
+		qerr := tx.QueryRow(`SELECT COALESCE(principal_id,'') FROM coord_agents WHERE external_id=?`, id).Scan(&owner)
+		if qerr != nil && !errors.Is(qerr, sql.ErrNoRows) {
+			return qerr
+		}
+		if owner != "" {
+			allowed[owner] = true
+		}
+	}
+	for _, id := range normalizeMembers(principals) {
+		if !allowed[id] {
+			return fmt.Errorf("%w: %s", ErrCoordUnknownRecipient, id)
+		}
+	}
+	return nil
+}
+
+func (a CoordAccess) Standing(roomKey string) ([]StandingInstruction, error) {
+	reader := a.Store
+	if reader.reader != nil {
+		reader = reader.reader
+	}
+	tx, err := reader.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	actor, err := a.actorTx(tx)
+	if err != nil {
+		return nil, err
+	}
+	if err := a.canReadTx(tx, actor, DestinationRoom, roomKey); err != nil {
+		return nil, err
+	}
+	rows, err := tx.Query(`SELECT room_key,message_id,person,body,targets,created_at FROM coord_standing WHERE room_key=? AND ended_at IS NULL ORDER BY created_at`, roomKey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []StandingInstruction
+	for rows.Next() {
+		var in StandingInstruction
+		var targets string
+		if err := rows.Scan(&in.RoomKey, &in.MessageID, &in.Person, &in.Body, &targets, &in.CreatedAt); err != nil {
+			return nil, err
+		}
+		in.Targets = strings.Fields(targets)
+		out = append(out, in)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (a CoordAccess) CreateStanding(in StandingInput) (int64, error) {
+	if a.Store != nil && a.Store.writer != nil {
+		return queueValue(a.Store, []any{a.Principal, a.AgentExternalID, a.publicOnly, in}, func(d *Store, p []any) (int64, error) {
+			return queuedCoordAccess(d, p).CreateStanding(p[3].(StandingInput))
+		})
+	}
+	actor, err := a.mutationActor()
+	if err != nil {
+		return 0, err
+	}
+	in.RoomKey = strings.TrimSpace(in.RoomKey)
+	in.ClientID = strings.TrimSpace(in.ClientID)
+	in.Body = strings.TrimSpace(in.Body)
+	in.Mentions = normalizeMembers(in.Mentions)
+	if in.RoomKey == "" || in.ClientID == "" || in.Body == "" {
+		return 0, fmt.Errorf("standing instruction needs room, client id and body")
+	}
+	tx, err := a.Store.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	if err := a.requireRoomAccessTx(tx, actor, in.RoomKey); err != nil {
+		return 0, err
+	}
+	if err := a.validateRoomParticipantsTx(tx, actor, in.RoomKey, in.Mentions); err != nil {
+		return 0, err
+	}
+	message := CoordMessage{DestinationKind: DestinationRoom, DestinationID: in.RoomKey, SenderExternalID: actor, AuthorPrincipalID: a.Principal.ID, ClientID: in.ClientID, Body: in.Body, Intent: IntentStanding, ExpiresAt: strings.TrimSpace(in.ExpiresAt), Mentions: in.Mentions}
+	if a.AgentExternalID == "" {
+		message.AuthorKind = AuthorHuman
+	} else {
+		message.AuthorKind = AuthorAgent
+	}
+	id, err := appendCoordMessageTx(tx, message)
+	if err != nil {
+		return 0, err
+	}
+	var destination, body, intent, authorPrincipal, expiresAt string
+	if err := tx.QueryRow(`SELECT destination_id,body,intent,author_principal_id,COALESCE(expires_at,'') FROM coord_messages WHERE id=? AND destination_kind='room'`, id).Scan(&destination, &body, &intent, &authorPrincipal, &expiresAt); err != nil {
+		return 0, err
+	}
+	mentionRows, err := tx.Query(`SELECT mentioned_external_id FROM coord_message_mentions WHERE message_id=? ORDER BY mentioned_external_id`, id)
+	if err != nil {
+		return 0, err
+	}
+	var storedMentions []string
+	for mentionRows.Next() {
+		var mention string
+		if err := mentionRows.Scan(&mention); err != nil {
+			mentionRows.Close()
+			return 0, err
+		}
+		storedMentions = append(storedMentions, mention)
+	}
+	if err := mentionRows.Err(); err != nil {
+		mentionRows.Close()
+		return 0, err
+	}
+	if err := mentionRows.Close(); err != nil {
+		return 0, err
+	}
+	if destination != in.RoomKey || body != in.Body || intent != IntentStanding || authorPrincipal != a.Principal.ID || expiresAt != strings.TrimSpace(in.ExpiresAt) || strings.Join(storedMentions, "\x00") != strings.Join(in.Mentions, "\x00") {
+		return 0, fmt.Errorf("standing client id already belongs to another message")
+	}
+	person := a.Principal.Label
+	if person == "" {
+		person = a.Principal.ID
+	}
+	if _, err := tx.Exec(`INSERT INTO coord_standing(room_key,message_id,person,body,targets,created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(room_key,message_id) DO UPDATE SET body=excluded.body,targets=excluded.targets`, in.RoomKey, FormatMessageID(id), person, in.Body, strings.Join(in.Mentions, " "), now()); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return id, nil
+}
+
+func (a CoordAccess) EndStanding(roomKey, messageID string) error {
+	if a.Store != nil && a.Store.writer != nil {
+		return queueWrite(a.Store, []any{a.Principal, a.AgentExternalID, a.publicOnly, roomKey, messageID}, func(d *Store, p []any) error {
+			return queuedCoordAccess(d, p).EndStanding(p[3].(string), p[4].(string))
+		})
+	}
+	actor, err := a.mutationActor()
+	if err != nil {
+		return err
+	}
+	tx, err := a.Store.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := a.requireRoomAccessTx(tx, actor, roomKey); err != nil {
+		return err
+	}
+	endedBy := a.Principal.Label
+	if endedBy == "" {
+		endedBy = a.Principal.ID
+	}
+	res, err := tx.Exec(`UPDATE coord_standing SET ended_at=?,ended_by=? WHERE room_key=? AND message_id=? AND ended_at IS NULL`, now(), endedBy, roomKey, messageID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrCoordNotFound
+	}
+	return tx.Commit()
+}
+
+func (a CoordAccess) validatePrivateRecipients(actor string, principals []string) error {
+	known, err := a.Recipients()
+	if err != nil {
+		return err
+	}
+	allowed := map[string]bool{actor: true}
+	for _, recipient := range known {
+		allowed[recipient.PrincipalID] = true
+	}
+	for _, principal := range normalizeMembers(principals) {
+		if !allowed[principal] {
+			return fmt.Errorf("%w: %s", ErrCoordUnknownRecipient, principal)
+		}
+	}
+	return nil
 }

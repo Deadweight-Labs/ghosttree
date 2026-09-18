@@ -1,0 +1,82 @@
+{{define "coord"}}{{template "head" .}}{{template "nav" .}}
+<main class="coord-workspace" lang="de">
+  <p id="coord-status" class="coord-visually-hidden" aria-live="polite" aria-atomic="true"></p>
+  <button type="button" class="coord-backdrop" data-coord-drawer-close hidden aria-label="Seitenfläche schließen"></button>
+  <div class="coord-shell">
+    <aside class="coord-sidebar" id="coord-rooms" aria-label="Räume">
+      <header class="coord-sidebar-head">
+        <div><small>Ghosttree</small><h1>Coordination</h1></div>
+        <a class="coord-icon-link" href="/ui/coord" aria-label="Raumliste aktualisieren">↻</a>
+      </header>
+      <section class="coord-room-section" aria-labelledby="coord-mentions"><h2 id="coord-mentions">Erwähnungen</h2><nav aria-label="Erwähnungen">{{range .Coord.Sidebar.Attention}}{{template "coord-room-link" .}}{{else}}<span class="coord-empty-row">Keine</span>{{end}}</nav></section>
+      <section class="coord-room-section" aria-labelledby="coord-machines"><h2 id="coord-machines">Maschine</h2><nav aria-label="Maschine">{{range .Coord.Sidebar.Machines}}{{template "coord-room-link" .}}{{else}}<span class="coord-empty-row">Keine</span>{{end}}</nav></section>
+      <section class="coord-room-section" aria-labelledby="coord-projects"><h2 id="coord-projects">Projekte</h2><nav aria-label="Projekte">{{range .Coord.Sidebar.Projects}}{{template "coord-room-link" .}}{{else}}<span class="coord-empty-row">Keine</span>{{end}}</nav></section>
+      <section class="coord-room-section" aria-labelledby="coord-private"><h2 id="coord-private">Direkt &amp; Gruppen</h2><nav aria-label="Direkt und Gruppen">{{range .Coord.Sidebar.Private}}{{template "coord-room-link" .}}{{else}}<span class="coord-empty-row">Keine</span>{{end}}</nav></section>
+      <section class="coord-start" aria-labelledby="coord-new-title">
+        <h2 id="coord-new-title">Neues Gespräch</h2>
+        {{if .Coord.Recipients}}
+        <details><summary>Direktnachricht</summary>
+          <form method="post" action="/ui/coord/direct/start">
+            <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+            <label class="clay-field">Person oder Agent<select name="principal_id" required>{{range .Coord.Recipients}}<option value="{{.ID}}">{{.Label}} · {{.Kind}}</option>{{end}}</select></label>
+            <button class="clay-btn-primary">Öffnen</button>
+          </form>
+        </details>
+        <details><summary>Gruppe anlegen</summary>
+          <form method="post" action="/ui/coord/group/create">
+            <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+            <label class="clay-field">Name<input name="label" autocomplete="off"></label>
+            <fieldset><legend>Teilnehmende</legend>{{range .Coord.Recipients}}<label><input type="checkbox" name="members" value="{{.ID}}"> {{.Label}} <small>{{.Kind}}</small></label>{{end}}</fieldset>
+            <button class="clay-btn-primary">Gruppe anlegen</button>
+          </form>
+        </details>
+        {{else}}<p class="coord-muted">Noch keine sichtbaren Gesprächspartner.</p>{{end}}
+      </section>
+    </aside>
+
+    <section class="coord-conversation" aria-label="Unterhaltung">
+      {{with .Coord.Active}}
+      <header class="coord-conversation-head">
+        <div><small>{{.Room.Kind}}</small><h2>{{.Room.Label}}</h2></div>
+        <span class="coord-mobile-actions"><a href="#coord-rooms" class="coord-mobile-fallback">Räume</a><button type="button" class="coord-drawer-toggle" data-coord-drawer-target="coord-rooms" aria-controls="coord-rooms" aria-expanded="false">Räume</button><a href="#coord-context" class="coord-mobile-fallback">Kontext</a><button type="button" class="coord-drawer-toggle" data-coord-drawer-target="coord-context" aria-controls="coord-context" aria-expanded="false">Kontext</button></span>
+      </header>
+      <nav class="coord-paging" aria-label="Nachrichtenverlauf">
+        {{if .HasOlder}}<a href="{{.OlderURL}}">Ältere Nachrichten</a>{{end}}
+        {{if .HasNewer}}<a href="{{.NewerURL}}">Neuere Nachrichten</a>{{end}}
+      </nav>
+      <ol class="coord-messages">
+        {{range .Messages}}{{template "coord-message" .}}{{else}}<li class="coord-empty">Hier wurde noch nichts gesagt.</li>{{end}}
+      </ol>
+      {{if .LastSequence}}<div class="coord-read-actions">
+        <form method="post" action="/ui/coord/read"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="room" value="{{.Room.Key}}"><input type="hidden" name="sequence" value="{{.LastSequence}}"><button class="clay-btn-ghost">Bis hier gelesen</button></form>
+        <form method="post" action="/ui/coord/unread"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="room" value="{{.Room.Key}}"><input type="hidden" name="sequence" value="{{.FirstSequence}}"><button class="clay-btn-ghost">Ab hier ungelesen</button></form>
+      </div>{{end}}
+      <form class="coord-composer" method="post" action="/ui/coord/send">
+        <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="room" value="{{.Room.Key}}"><input type="hidden" name="form_id" value="{{.FormID}}">
+        <label for="coord-message-body">Nachricht</label><textarea id="coord-message-body" name="body" rows="3" required placeholder="In {{.Room.Label}} schreiben"></textarea>
+        {{if .Participants}}<fieldset class="coord-mentions"><legend>Erwähnen</legend>{{range .Participants}}{{if not .Current}}<label><input type="checkbox" name="mentions" value="{{.ID}}"> {{.Label}}</label>{{end}}{{end}}</fieldset>{{end}}
+        <details class="coord-compose-options"><summary>Weitere Optionen</summary><label class="clay-field">Gültig bis (RFC3339)<input name="expires_at"></label></details>
+        <button class="clay-btn-primary">Senden</button>
+      </form>
+      {{else}}
+      <div class="coord-welcome"><p class="coord-kicker">Zusammenarbeit, die nachvollziehbar bleibt</p><h2>Wähle einen Raum</h2><p>Maschinen- und Projekträume bündeln Arbeit. Direkte Gespräche und Gruppen bleiben bei ihren Teilnehmenden.</p></div>
+      {{end}}
+    </section>
+
+    <aside class="coord-context" id="coord-context" aria-label="Raumkontext">
+      {{with .Coord.Active}}
+      <section><h2>Teilnehmende</h2><ul class="coord-participants">{{range .Participants}}<li><span class="coord-avatar" aria-hidden="true">•</span><span><strong>{{.Label}}{{if .Current}} (du){{end}}</strong>{{if .Manager}}<small>Manager</small>{{end}}{{if .Provider}}<small>{{.Provider}}{{if .Branch}} · {{.Branch}}{{end}}</small>{{end}}{{if .LastSeen}}<small>Zuletzt beobachtet {{.LastSeen}}</small>{{end}}</span></li>{{end}}</ul><p class="coord-note">„Zuletzt beobachtet“ ist kein Versprechen, dass ein Agent gerade zuhört.</p></section>
+      {{if .Standing}}<section><h2>Geltende Vorgaben</h2>{{range .Standing}}<article class="coord-standing"><header><strong>{{.Person}}</strong> · <time datetime="{{.CreatedAt}}">{{.CreatedAt}}</time></header><p>{{.Body}}</p><small>Gilt in „{{$.Coord.Active.Room.Label}}“{{if .Targets}} · Adressaten: {{range .Targets}}{{.}} {{end}}{{else}} · alle Teilnehmenden{{end}}</small><form method="post" action="/ui/coord/standing/end"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="room" value="{{$.Coord.Active.Room.Key}}"><input type="hidden" name="message_id" value="{{.MessageID}}"><button class="clay-btn-ghost">Vorgabe beenden</button></form></article>{{end}}</section>{{end}}
+      <section class="coord-standing-create"><details><summary>Neue geltende Vorgabe</summary><p><strong>Achtung:</strong> Diese Vorgabe bleibt unabhängig vom Chatverlauf aktiv, bis sie ausdrücklich beendet wird.</p><form method="post" action="/ui/coord/standing/create"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="room" value="{{.Room.Key}}"><input type="hidden" name="form_id" value="{{.StandingFormID}}"><label class="clay-field">Vorgabe<textarea name="body" required></textarea></label>{{if .Participants}}<fieldset><legend>Adressaten</legend>{{range .Participants}}{{if not .Current}}<label><input type="checkbox" name="mentions" value="{{.ID}}"> {{.Label}}</label>{{end}}{{end}}</fieldset>{{end}}<label class="clay-field">Optionales Ablaufdatum des Chat-Hinweises (RFC3339)<input name="expires_at"></label><small>Das Datum beendet nicht die Vorgabe; dafür ist „Vorgabe beenden“ nötig.</small><label class="coord-confirm"><input type="checkbox" name="confirm_scope" value="1" required> Ich, {{$.Person}}, setze diese Vorgabe in „{{.Room.Label}}“.</label><button class="clay-btn-primary">Vorgabe setzen</button></form></details></section>
+      <section><h2>Threads</h2><p class="coord-muted">Aufgaben-Threads erscheinen hier, sobald sie in diesem Raum verankert sind.</p></section>
+      {{if .CanManage}}<section><details><summary>Gruppe verwalten</summary><form method="post" action="/ui/coord/group/update"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="room" value="{{.Room.Key}}"><label class="clay-field">Name<input name="label" value="{{.Room.Label}}"></label><label class="clay-field">Hinzufügen<select name="add"><option value="">Niemand</option>{{range $.Coord.Recipients}}<option value="{{.ID}}">{{.Label}}</option>{{end}}</select></label><label class="clay-field">Entfernen<select name="remove"><option value="">Niemand</option>{{range .Participants}}{{if not .Current}}<option value="{{.ID}}">{{.Label}}</option>{{end}}{{end}}</select></label><label class="clay-field">Zum Manager machen<select name="add_managers"><option value="">Niemand</option>{{range .Participants}}<option value="{{.ID}}">{{.Label}}</option>{{end}}</select></label><label class="clay-field">Managerrolle entziehen<select name="remove_managers"><option value="">Niemand</option>{{range .Participants}}{{if .Manager}}<option value="{{.ID}}">{{.Label}}</option>{{end}}{{end}}</select></label><button class="clay-btn-primary">Änderungen speichern</button></form></details></section>{{end}}
+      {{if .CanLeave}}<section><form method="post" action="/ui/coord/group/leave"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="room" value="{{.Room.Key}}"><button class="clay-btn-ghost">Gruppe verlassen</button></form></section>{{end}}
+      <section class="coord-knowledge-slot" aria-label="Künftige Projekt-Knowledge-Seitenfläche"><h2>Knowledge</h2><p>Eine projektbezogene Seitenfläche ist für einen späteren Ausbau vorgesehen.</p></section>
+      {{else}}<section><h2>Raumkontext</h2><p class="coord-muted">Teilnehmende, Vorgaben und Threads stehen hier neben dem gewählten Gespräch.</p></section>{{end}}
+    </aside>
+  </div>
+{{template "foot" .}}{{end}}
+
+{{define "coord-room-link"}}<a href="{{.URL}}"{{if .Active}} aria-current="page"{{end}}><span>{{.Label}}</span><span>{{if .Mentions}}<strong aria-label="{{.Mentions}} Erwähnungen">@{{.Mentions}}</strong>{{end}}{{if .Unread}}<strong aria-label="{{.Unread}} ungelesen">{{.Unread}}</strong>{{end}}</span></a>{{end}}
+
+{{define "coord-message"}}<li class="coord-message" id="message-{{.Sequence}}"><article>{{with .Reply}}<aside class="coord-reply">{{if .Missing}}Bezugsnachricht nicht mehr verfügbar{{else}}Antwort auf <a href="{{.URL}}">#{{.Sequence}}</a> · {{.Author}}<p>{{.Body}}</p>{{end}}</aside>{{end}}<header><strong>{{.Author}}</strong><small>#{{.Sequence}} · {{.AuthorKind}}{{if .Expired}} · abgelaufen, nur Verlauf{{end}}{{if eq .Intent "standing"}} · geltende Vorgabe{{end}}</small><time datetime="{{.Timestamp}}">{{.Timestamp}}</time></header><p>{{.Body}}</p>{{if .Mentions}}<small>Erwähnt: {{range .Mentions}}{{.}} {{end}}</small>{{end}}{{if .Refs}}<ul class="coord-refs">{{range .Refs}}<li>{{.Kind}}:{{.ID}}{{if .Revision}}@{{.Revision}}{{else if .Mutable}} (aktueller Stand){{end}}</li>{{end}}</ul>{{end}}{{if .Delivery}}<small class="coord-delivery">{{.Delivery}}</small>{{end}}</article></li>{{end}}

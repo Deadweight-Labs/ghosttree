@@ -94,17 +94,24 @@ func (s *Store) AppendCoordMessage(m CoordMessage) (int64, error) {
 			return d.AppendCoordMessage(p[0].(CoordMessage))
 		})
 	}
-	m = m.withDefaults()
 	tx, err := s.db.Begin()
 	if err != nil {
 		return 0, err
 	}
 	defer tx.Rollback()
+	id, err := appendCoordMessageTx(tx, m)
+	if err != nil {
+		return 0, err
+	}
+	return id, tx.Commit()
+}
 
+func appendCoordMessageTx(tx *sql.Tx, m CoordMessage) (int64, error) {
+	m = m.withDefaults()
 	if id, found, err := existingCoordMessage(tx, m); err != nil {
 		return 0, err
 	} else if found {
-		return id, tx.Commit()
+		return id, nil
 	}
 
 	// The high-water row survives retention, so an emptied destination never
@@ -155,7 +162,7 @@ func (s *Store) AppendCoordMessage(m CoordMessage) (int64, error) {
 			return 0, err
 		}
 	}
-	return id, tx.Commit()
+	return id, nil
 }
 
 // withDefaults füllt, was der Store selbst verantwortet. AuthorKind fällt

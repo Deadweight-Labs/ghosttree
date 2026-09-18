@@ -2,6 +2,7 @@
 package web
 
 import (
+	"bytes"
 	"database/sql"
 	"embed"
 	"html/template"
@@ -34,15 +35,7 @@ type pageData struct {
 	SessionID                                  int64
 	Project, Preview                           string
 	Review                                     []reviewEntry
-	CoordRoom                                  string
-	CoordRooms                                 []store.CoordRoom
-	CoordRoomSummaries                         []store.CoordRoomSummary
-	CoordMessages                              []store.CoordMessage
-	CoordHighWater, CoordBefore, CoordAfter    int64
-	CoordFirstSequence, CoordLastSequence      int64
-	CoordHasOlder, CoordHasNewer               bool
-	CoordPeers                                 []store.CoordAgent
-	CoordStanding                              []store.StandingInstruction
+	Coord                                      coordPageView
 }
 type reviewEntry struct {
 	Knowledge         store.Knowledge
@@ -70,15 +63,23 @@ func New(st *store.Store) http.Handler {
 	mux.Handle("POST /ui/coord/read", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordMarkRead))))
 	mux.Handle("POST /ui/coord/unread", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordMarkUnread))))
 	mux.Handle("POST /ui/coord/standing/end", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordEndStanding))))
+	mux.Handle("POST /ui/coord/standing/create", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordCreateStanding))))
+	mux.Handle("POST /ui/coord/direct/start", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordStartDirect))))
+	mux.Handle("POST /ui/coord/group/create", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordCreateGroup))))
+	mux.Handle("POST /ui/coord/group/update", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordUpdateGroup))))
+	mux.Handle("POST /ui/coord/group/leave", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordLeaveGroup))))
 	mux.HandleFunc("GET /ui/{$}", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/ui/requests", http.StatusSeeOther) })
 	return mux
 }
 
 func (a *app) render(w http.ResponseWriter, name string, data pageData) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := pages.ExecuteTemplate(w, name, data); err != nil {
+	var output bytes.Buffer
+	if err := pages.ExecuteTemplate(&output, name, data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = output.WriteTo(w)
 }
 func (a *app) renderBrowser(w http.ResponseWriter, r *http.Request, name string, data pageData) {
 	principal := browserPrincipal(r)

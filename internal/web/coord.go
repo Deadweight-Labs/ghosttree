@@ -36,6 +36,14 @@ func newFormClientID(r *http.Request) string {
 	return hex.EncodeToString(b[:])
 }
 
+func newCoordFormID() string {
+	var b [12]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "coord-form"
+	}
+	return hex.EncodeToString(b[:])
+}
+
 // humanMember ist die Kennung, unter der ein angemeldeter Mensch in Räumen
 // steht. Dieselbe wie beim Schreiben — sonst dürfte jemand schreiben, was er
 // hinterher nicht lesen kann.
@@ -51,8 +59,14 @@ func coordHTTPError(w http.ResponseWriter, err error) {
 		http.Error(w, "coordination target not found", http.StatusNotFound)
 	case errors.Is(err, store.ErrCoordForbidden):
 		http.Error(w, "coordination target forbidden", http.StatusForbidden)
+	case errors.Is(err, store.ErrInvalidGroup):
+		http.Error(w, "coordination group change forbidden", http.StatusForbidden)
+	case errors.Is(err, store.ErrLastGroupManager), errors.Is(err, store.ErrLegacyGroupReadOnly):
+		http.Error(w, "coordination group change conflicts with its current state", http.StatusConflict)
 	case errors.Is(err, store.ErrCoordInvalidSequence):
 		http.Error(w, "invalid coordination sequence", http.StatusBadRequest)
+	case errors.Is(err, store.ErrCoordUnknownRecipient):
+		http.Error(w, "coordination recipient is not available", http.StatusBadRequest)
 	default:
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
@@ -79,13 +93,22 @@ func (a *app) mayEnter(w http.ResponseWriter, r *http.Request, room string) bool
 
 func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 	room := r.URL.Query().Get("room")
+	summaries, err := a.browserCoord(r).RoomSummaries()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	recipients, err := a.browserCoord(r).Recipients()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	view := coordPageView{
+		Sidebar:    buildCoordSidebar(summaries, humanMember(r), room),
+		Recipients: buildCoordRecipientViews(recipients),
+	}
 	if room == "" {
-		summaries, err := a.browserCoord(r).RoomSummaries()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		a.renderBrowser(w, r, "coord", pageData{Title: "Coordination", CoordRoomSummaries: summaries})
+		a.renderBrowser(w, r, "coord", pageData{Title: "Coordination", Coord: view})
 		return
 	}
 	if !a.mayEnter(w, r, room) {
@@ -96,35 +119,85 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	page, err := a.browserCoord(r).MessageWindow(store.DestinationRoom, room, window)
+	access := a.browserCoord(r)
+	activeRoom, err := access.Room(room)
 	if err != nil {
 		coordHTTPError(w, err)
 		return
 	}
-	peers, err := a.browserCoord(r).Peers(room, "")
+	page, presentations, err := access.MessagePresentationWindow(store.DestinationRoom, room, window)
+	if err != nil {
+		coordHTTPError(w, err)
+		return
+	}
+	if aroundText := strings.TrimSpace(r.URL.Query().Get("around")); aroundText != "" {
+		around, _ := strconv.ParseInt(aroundText, 10, 64)
+		found := false
+		for _, message := range page.Messages {
+			if message.Sequence == around {
+				found = true
+				break
+			}
+		}
+		if !found {
+			http.Error(w, "around must name a retained message sequence", http.StatusBadRequest)
+			return
+		}
+	}
+	peers, err := access.Peers(room, "")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	standing, err := a.store.StandingInstructions(room)
+	standing, err := access.Standing(room)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	data := pageData{Title: "Coordination",
-		CoordRoom: room, CoordMessages: page.Messages, CoordPeers: peers,
-		CoordStanding: standing, CoordHighWater: page.HighWater,
-		CoordHasOlder: page.HasOlder, CoordHasNewer: page.HasNewer}
+	var memberships []store.RoomMembership
+	if activeRoom.Kind == store.RoomGroup || activeRoom.Kind == store.RoomDirect {
+		memberships, err = access.RoomMemberships(room)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	detail := &coordRoomDetailView{
+		Room: coordRoomView{Key: activeRoom.Key, Kind: activeRoom.Kind,
+			Label: coordRoomLabel(activeRoom, humanMember(r)), URL: coordRoomURL(activeRoom.Key, "", 0), Active: true},
+		Messages:     buildCoordMessageViews(presentations, room),
+		Participants: buildCoordParticipants(activeRoom, peers, memberships, humanMember(r)),
+		Standing:     buildCoordStandingViews(standing), HighWater: page.HighWater,
+		HasOlder: page.HasOlder, HasNewer: page.HasNewer,
+		CanLeave: activeRoom.Kind == store.RoomGroup,
+		FormID:   newCoordFormID(), StandingFormID: newCoordFormID(),
+	}
+	for _, membership := range memberships {
+		if membership.PrincipalID == humanMember(r) && membership.LeftAt == "" && membership.Manager {
+			detail.CanManage = true
+		}
+	}
+	view.Active = detail
+	data := pageData{Title: "Coordination", Coord: view}
+	var firstSequence, lastSequence, before, after int64
 	if len(page.Messages) > 0 {
-		data.CoordFirstSequence = page.Messages[0].Sequence
-		data.CoordLastSequence = page.Messages[len(page.Messages)-1].Sequence
-		data.CoordBefore = data.CoordFirstSequence
-		data.CoordAfter = data.CoordLastSequence
+		firstSequence = page.Messages[0].Sequence
+		lastSequence = page.Messages[len(page.Messages)-1].Sequence
+		before = firstSequence
+		after = lastSequence
 	} else if page.HasOlder {
 		// A forward cursor at the high-water has no message from which to derive
 		// a boundary. The durable high-water is still a valid before cursor,
 		// including when retention removed that exact row.
-		data.CoordBefore = page.HighWater
+		before = page.HighWater
+	}
+	detail.FirstSequence = firstSequence
+	detail.LastSequence = lastSequence
+	if detail.HasOlder {
+		detail.OlderURL = coordRoomURL(room, "before", before)
+	}
+	if detail.HasNewer {
+		detail.NewerURL = coordRoomURL(room, "after", after)
 	}
 	a.renderBrowser(w, r, "coord", data)
 }
@@ -132,8 +205,15 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 func coordWindowFromRequest(r *http.Request) (store.MessageWindow, error) {
 	beforeText := strings.TrimSpace(r.URL.Query().Get("before"))
 	afterText := strings.TrimSpace(r.URL.Query().Get("after"))
-	if beforeText != "" && afterText != "" {
-		return store.MessageWindow{}, errors.New("before and after are mutually exclusive")
+	aroundText := strings.TrimSpace(r.URL.Query().Get("around"))
+	set := 0
+	for _, value := range []string{beforeText, afterText, aroundText} {
+		if value != "" {
+			set++
+		}
+	}
+	if set > 1 {
+		return store.MessageWindow{}, errors.New("before, after and around are mutually exclusive")
 	}
 	if beforeText != "" {
 		sequence, err := strconv.ParseInt(beforeText, 10, 64)
@@ -149,6 +229,17 @@ func coordWindowFromRequest(r *http.Request) (store.MessageWindow, error) {
 		}
 		return store.AfterWindow(sequence, 50), nil
 	}
+	if aroundText != "" {
+		sequence, err := strconv.ParseInt(aroundText, 10, 64)
+		if err != nil || sequence <= 0 {
+			return store.MessageWindow{}, errors.New("around must be a positive sequence")
+		}
+		start := sequence - 25
+		if start < 0 {
+			start = 0
+		}
+		return store.AfterWindow(start, 50), nil
+	}
 	return store.LatestWindow(50), nil
 }
 
@@ -159,7 +250,6 @@ func coordWindowFromRequest(r *http.Request) (store.MessageWindow, error) {
 // wäre die ganze Unterscheidung zwischen Agenten- und Menschenbeitrag ein
 // Textfeld, und "Robin hat gesagt, du sollst deployen" eine Autorisierung.
 func (a *app) coordSend(w http.ResponseWriter, r *http.Request) {
-	person := personOf(r)
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -180,32 +270,31 @@ func (a *app) coordSend(w http.ResponseWriter, r *http.Request) {
 		Body:      body,
 		ExpiresAt: strings.TrimSpace(r.FormValue("expires_at")),
 	}
-	if mentions := strings.Fields(r.FormValue("mentions")); len(mentions) > 0 {
-		msg.Mentions = mentions
-	}
+	msg.Mentions = splitCoordPrincipals(r.Form["mentions"]...)
 
-	// Eine gezielte Vorgabe ist etwas anderes als eine Mitteilung. Spec §A4
-	// verlangt die Unterscheidung, und §11 verlangt, dass eine weiter
-	// geltende Einschränkung nicht durch Chat-Retention oder eine
-	// Zusammenfassung unbemerkt verschwindet. Deshalb bekommt sie einen
-	// eigenen Zustand statt nur eine besonders laut formulierte Nachricht.
-	if r.FormValue("standing") != "" {
-		msg.Intent = store.IntentStanding
-	}
-
-	id, err := a.browserCoord(r).Send(msg)
+	_, err := a.browserCoord(r).Send(msg)
 	if err != nil {
 		coordHTTPError(w, err)
 		return
 	}
-	if msg.Intent == store.IntentStanding {
-		if err := a.store.PutStandingInstruction(store.StandingInstruction{
-			RoomKey: room, MessageID: store.FormatMessageID(id), Person: person, Body: body,
-			Targets: msg.Mentions,
-		}); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
+	http.Redirect(w, r, "/ui/coord?room="+url.QueryEscape(room), http.StatusSeeOther)
+}
+
+func (a *app) coordCreateStanding(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	room, body := strings.TrimSpace(r.FormValue("room")), strings.TrimSpace(r.FormValue("body"))
+	if room == "" || body == "" || r.FormValue("confirm_scope") != "1" {
+		http.Error(w, "room, body and scope confirmation are required", http.StatusBadRequest)
+		return
+	}
+	mentions := splitCoordPrincipals(r.Form["mentions"]...)
+	_, err := a.browserCoord(r).CreateStanding(store.StandingInput{RoomKey: room, ClientID: newFormClientID(r), Body: body, ExpiresAt: strings.TrimSpace(r.FormValue("expires_at")), Mentions: mentions})
+	if err != nil {
+		coordHTTPError(w, err)
+		return
 	}
 	http.Redirect(w, r, "/ui/coord?room="+url.QueryEscape(room), http.StatusSeeOther)
 }
@@ -257,12 +346,105 @@ func (a *app) coordEndStanding(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "room and message_id are required", http.StatusBadRequest)
 		return
 	}
-	if !a.mayEnter(w, r, room) {
-		return
-	}
-	if err := a.store.EndStandingInstruction(room, id, personOf(r)); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	if err := a.browserCoord(r).EndStanding(room, id); err != nil {
+		coordHTTPError(w, err)
 		return
 	}
 	http.Redirect(w, r, "/ui/coord?room="+url.QueryEscape(room), http.StatusSeeOther)
+}
+
+func splitCoordPrincipals(values ...string) []string {
+	seen := make(map[string]bool)
+	var out []string
+	for _, value := range values {
+		for _, principal := range strings.Fields(value) {
+			if !seen[principal] {
+				seen[principal] = true
+				out = append(out, principal)
+			}
+		}
+	}
+	return out
+}
+
+func (a *app) coordStartDirect(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	actor := humanMember(r)
+	target := strings.TrimSpace(r.FormValue("principal_id"))
+	if target == "" || target == actor || len(strings.Fields(target)) != 1 {
+		http.Error(w, "one distinct principal id is required", http.StatusBadRequest)
+		return
+	}
+	members := []string{actor, target}
+	room := store.CoordRoom{Key: store.RoomKeyForDirect(members), Kind: store.RoomDirect, Members: members}
+	if err := a.browserCoord(r).EnsureDirect(room); err != nil {
+		coordHTTPError(w, err)
+		return
+	}
+	http.Redirect(w, r, "/ui/coord?room="+url.QueryEscape(room.Key), http.StatusSeeOther)
+}
+
+func (a *app) coordCreateGroup(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	members := splitCoordPrincipals(r.Form["members"]...)
+	members = append(members, humanMember(r))
+	room, err := a.browserCoord(r).CreateGroup(store.GroupInput{
+		Label: strings.TrimSpace(r.FormValue("label")), Members: members,
+	})
+	if err != nil {
+		if errors.Is(err, store.ErrInvalidGroup) {
+			http.Error(w, "a group needs at least one other participant", http.StatusBadRequest)
+			return
+		}
+		coordHTTPError(w, err)
+		return
+	}
+	http.Redirect(w, r, "/ui/coord?room="+url.QueryEscape(room.Key), http.StatusSeeOther)
+}
+
+func (a *app) coordUpdateGroup(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	room := strings.TrimSpace(r.FormValue("room"))
+	if room == "" {
+		http.Error(w, "room is required", http.StatusBadRequest)
+		return
+	}
+	label := strings.TrimSpace(r.FormValue("label"))
+	err := a.browserCoord(r).UpdateGroup(store.GroupUpdate{
+		RoomKey: room, Actor: humanMember(r), Label: &label,
+		Add: splitCoordPrincipals(r.Form["add"]...), Remove: splitCoordPrincipals(r.Form["remove"]...),
+		AddManagers:    splitCoordPrincipals(r.Form["add_managers"]...),
+		RemoveManagers: splitCoordPrincipals(r.Form["remove_managers"]...),
+	})
+	if err != nil {
+		coordHTTPError(w, err)
+		return
+	}
+	http.Redirect(w, r, "/ui/coord?room="+url.QueryEscape(room), http.StatusSeeOther)
+}
+
+func (a *app) coordLeaveGroup(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	room := strings.TrimSpace(r.FormValue("room"))
+	if room == "" {
+		http.Error(w, "room is required", http.StatusBadRequest)
+		return
+	}
+	if err := a.browserCoord(r).LeaveRoom(room, humanMember(r)); err != nil {
+		coordHTTPError(w, err)
+		return
+	}
+	http.Redirect(w, r, "/ui/coord", http.StatusSeeOther)
 }
