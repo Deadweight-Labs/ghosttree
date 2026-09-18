@@ -942,10 +942,12 @@ func TestCoordResponsiveEnhancedShellDropsHiddenSidebarColumn(t *testing.T) {
 		t.Fatal(err)
 	}
 	css := string(cssBytes)
-	if !strings.Contains(css, `@media(max-width:1100px)`) || !strings.Contains(css, `.coord-enhanced .coord-shell{grid-template-columns:minmax(0,1fr)}`) {
+	if !strings.Contains(css, `@media (max-width: 1100px)`) ||
+		!strings.Contains(coordCSSRule(t, css, `.coord-enhanced .coord-shell`), `grid-template-columns: minmax(0, 1fr);`) {
 		t.Fatal("enhanced tablet layout must give the hidden drawers no grid column")
 	}
-	if !strings.Contains(css, `.coord-enhanced .coord-sidebar[hidden],.coord-enhanced .coord-context[hidden]{display:none}`) {
+	hidden := coordCSSRule(t, css, `.coord-enhanced .coord-sidebar[hidden],`)
+	if !strings.Contains(hidden, `display: none;`) {
 		t.Fatal("enhanced drawers must honor the hidden attribute over their display rules")
 	}
 }
@@ -968,8 +970,9 @@ func TestCoordResponsiveDrawersExposeNamedCloseControls(t *testing.T) {
 		t.Fatal(err)
 	}
 	css := string(cssBytes)
-	if !strings.Contains(css, `.coord-drawer-close{display:none`) ||
-		!strings.Contains(css, `.coord-enhanced .coord-drawer-head{display:flex`) {
+	if !strings.Contains(coordCSSRule(t, css, `.coord-drawer-close`), `display: none;`) ||
+		!strings.Contains(coordCSSRule(t, css, `.coord-enhanced .coord-drawer-head`), `display: flex;`) ||
+		!strings.Contains(coordCSSRule(t, css, `.coord-enhanced .coord-drawer-close`), `display: inline-grid;`) {
 		t.Fatal("drawer close controls must only become visible in the enhanced responsive layout")
 	}
 	jsBytes, err := files.ReadFile("static/app.js")
@@ -1027,7 +1030,9 @@ func TestCoordMessageActionsShareOneTouchSizedHierarchy(t *testing.T) {
 		t.Fatal(err)
 	}
 	css := string(cssBytes)
-	if !strings.Contains(css, `.coord-message-action{display:inline-flex;align-items:center;min-height:2.75rem`) {
+	action := coordCSSRule(t, css, `.coord-message-action {`)
+	if !strings.Contains(action, `display: inline-flex;`) ||
+		!strings.Contains(action, `min-height: 2.75rem;`) {
 		t.Fatal("message actions must expose a 44px-equivalent touch target")
 	}
 }
@@ -1063,15 +1068,19 @@ func TestCoordLiveBadgeAndMobileToolbarHaveStableCompactContracts(t *testing.T) 
 		t.Fatal(err)
 	}
 	css := string(cssBytes)
+	live := coordCSSRule(t, css, `.coord-live-status`)
 	for _, want := range []string{
-		`right:max(.7rem,env(safe-area-inset-right))`,
-		`bottom:max(.7rem,env(safe-area-inset-bottom))`,
-		`pointer-events:none`,
-		`.clay-toolbar>a{flex:0 0 auto;min-height:2.75rem`,
+		`right: max(.7rem, env(safe-area-inset-right))`,
+		`bottom: max(.7rem, env(safe-area-inset-bottom))`,
+		`pointer-events: none`,
 	} {
-		if !strings.Contains(css, want) {
+		if !strings.Contains(live, want) {
 			t.Errorf("stable responsive chrome missing %q", want)
 		}
+	}
+	toolbarLinks := coordCSSRule(t, css, `.clay-toolbar:has(+ .coord-workspace) > a,`)
+	if !strings.Contains(toolbarLinks, `min-height: 2.75rem;`) {
+		t.Fatal("mobile toolbar links must retain 44px touch targets")
 	}
 }
 
@@ -1080,9 +1089,240 @@ func TestCoordThreadListSeparatesTitleFromStatus(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(cssBytes), `.coord-threads li>small{display:block;margin-top:.2rem`) {
+	css := string(cssBytes)
+	status := coordCSSRule(t, css, `.coord-threads li > small`)
+	if !strings.Contains(status, `display: block;`) || !strings.Contains(status, `margin-top: .2rem;`) {
 		t.Fatal("thread status must render on its own spaced line")
 	}
+}
+
+func TestCoordVisualSystemSeparatesChromeConversationAndInspector(t *testing.T) {
+	cssBytes, err := files.ReadFile("static/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	css := string(cssBytes)
+	workspace := coordCSSRule(t, css, "\n.coord-workspace {")
+	for _, want := range []string{
+		`--coord-chrome: #171a19`,
+		`--coord-conversation: #f4f0e7`,
+		`--coord-inspector: #ebe7de`,
+	} {
+		if !strings.Contains(workspace, want) {
+			t.Errorf("coord visual hierarchy missing %q", want)
+		}
+	}
+	if shell := coordCSSRule(t, css, `.coord-shell`); !strings.Contains(shell, `grid-template-columns: 16rem minmax(0, 1fr) 22rem;`) {
+		t.Fatalf("coord desktop columns lost their hierarchy: %s", shell)
+	}
+	if toggles := coordCSSRule(t, css, `.coord-mobile-actions a,`); !strings.Contains(toggles, `border-radius: 4px;`) {
+		t.Fatalf("coord controls exceed the restrained radius contract: %s", toggles)
+	}
+	for _, forbidden := range []string{`linear-gradient(`, `radial-gradient(`, `backdrop-filter:`, `border-radius: 999px`} {
+		if strings.Contains(css, forbidden) {
+			t.Errorf("coord visual system contains prohibited slop treatment %q", forbidden)
+		}
+	}
+}
+
+func TestCoordMessageGroupsKeepIdentityAndRevealToolsWithoutCardChrome(t *testing.T) {
+	css := string(mustReadEmbedded(t, "static/app.css"))
+	for _, want := range []string{
+		`.coord-message-group-start`,
+		`grid-template-columns: 2rem minmax(0, 1fr)`,
+		`.coord-message-continuation`,
+		`.coord-message-avatar-agent`,
+		`border-radius: 3px`,
+		`.coord-message:focus-within .coord-message-tools`,
+		`@media (hover: hover) and (pointer: fine)`,
+		`@media (hover: none), (pointer: coarse)`,
+	} {
+		if !strings.Contains(css, want) {
+			t.Errorf("message grouping/tool contract missing %q", want)
+		}
+	}
+	if strings.Contains(css, `.coord-message {\n  border:`) || strings.Contains(css, `.coord-message{border:`) {
+		t.Fatal("messages must not become individual bordered cards")
+	}
+}
+
+func TestCoordResponsiveLayoutKeepsFeedScrollableAndComposerVisible(t *testing.T) {
+	css := string(mustReadEmbedded(t, "static/app.css"))
+	for _, media := range []string{`@media (max-width: 1100px)`, `@media (max-width: 700px)`} {
+		if !strings.Contains(css, media) {
+			t.Errorf("bounded responsive chat contract missing %q", media)
+		}
+	}
+	mobile := css[strings.Index(css, `@media (max-width: 700px)`):]
+	if workspace := coordCSSRule(t, mobile, `html.coord-enhanced .coord-workspace`); !strings.Contains(workspace, `height: calc(100dvh - 3rem);`) {
+		t.Fatalf("enhanced mobile workspace is not viewport bound: %s", workspace)
+	}
+	if messages := coordCSSRule(t, mobile, `.coord-messages`); !strings.Contains(messages, `overflow: auto;`) {
+		t.Fatalf("mobile message feed does not own scrolling: %s", messages)
+	}
+	if composer := coordCSSRule(t, mobile, `.coord-composer`); !strings.Contains(composer, `padding-bottom: max(.75rem, env(safe-area-inset-bottom));`) {
+		t.Fatalf("mobile composer lost safe-area padding: %s", composer)
+	}
+	if hidden := coordCSSRule(t, css, `.coord-enhanced .coord-sidebar[hidden],`); !strings.Contains(hidden, `display: none;`) {
+		t.Fatalf("enhanced hidden drawers still occupy layout: %s", hidden)
+	}
+}
+
+func TestCoordNoJSMobileRestoresDocumentFlowInDOMOrder(t *testing.T) {
+	css := string(mustReadEmbedded(t, "static/app.css"))
+	if strings.Contains(css, "\nbody:has(> .coord-workspace) {") {
+		t.Fatal("viewport locking must not apply before progressive enhancement is active")
+	}
+	if block := coordCSSRule(t, css, `html.coord-enhanced body:has(> .coord-workspace)`); !strings.Contains(block, `overflow: hidden;`) {
+		t.Fatalf("enhanced body rule does not lock viewport: %s", block)
+	}
+	if block := coordCSSRule(t, css, `html:not(.coord-enhanced) body:has(> .coord-workspace)`); !strings.Contains(block, `overflow: auto;`) {
+		t.Fatalf("no-JS body rule does not restore document scroll: %s", block)
+	}
+	workspace := coordCSSRule(t, css, `html:not(.coord-enhanced) .coord-workspace`)
+	for _, want := range []string{`height: auto;`, `min-height: calc(100dvh - 3rem);`, `overflow: visible;`} {
+		if !strings.Contains(workspace, want) {
+			t.Errorf("no-JS workspace rule missing %q: %s", want, workspace)
+		}
+	}
+	shell := coordCSSRule(t, css, `html:not(.coord-enhanced) .coord-shell`)
+	for _, want := range []string{`display: flex;`, `flex-direction: column;`} {
+		if !strings.Contains(shell, want) {
+			t.Errorf("no-JS sequential shell missing %q: %s", want, shell)
+		}
+	}
+}
+
+func TestCoordHiddenMessageToolsStayFocusableAndOutOfFlow(t *testing.T) {
+	css := string(mustReadEmbedded(t, "static/app.css"))
+	base := coordCSSRule(t, css, `.coord-message-tools`)
+	if !strings.Contains(base, `position: absolute;`) {
+		t.Fatalf("message tools remain in message flow: %s", base)
+	}
+	hoverMedia := css[strings.Index(css, `@media (hover: hover) and (pointer: fine)`):]
+	hidden := coordCSSRule(t, hoverMedia, `.coord-message-tools`)
+	for _, want := range []string{`opacity: 0;`, `pointer-events: none;`} {
+		if !strings.Contains(hidden, want) {
+			t.Errorf("pointer-hidden tools rule missing %q: %s", want, hidden)
+		}
+	}
+	focused := coordCSSRule(t, hoverMedia, `.coord-message:hover .coord-message-tools,`)
+	for _, want := range []string{`opacity: 1;`, `pointer-events: auto;`} {
+		if !strings.Contains(focused, want) {
+			t.Errorf("focused tools rule missing %q: %s", want, focused)
+		}
+	}
+	if strings.Contains(css, `visibility: hidden`) {
+		t.Fatal("hidden message tools must remain in the keyboard tab sequence")
+	}
+}
+
+func TestCoordAgentIdentitySitsBesideAuthorAndContinuationKeepsAccessibleName(t *testing.T) {
+	template := string(mustReadEmbedded(t, "templates/coord.html"))
+	for _, want := range []string{
+		`<strong class="{{if not .GroupStart}}coord-visually-hidden{{end}}">{{.Author}}</strong>`,
+		`{{if and .GroupStart (eq .AuthorKind "agent")}}<span class="coord-author-kind">Agent</span>{{end}}`,
+		`{{if eq .AuthorKind "agent"}}A{{else}}●{{end}}`,
+	} {
+		if !strings.Contains(template, want) {
+			t.Errorf("restrained grouped identity missing %q", want)
+		}
+	}
+	if strings.Contains(template, `>◆<`) {
+		t.Fatal("agent avatar must not use the decorative AI-style diamond")
+	}
+}
+
+func TestCoordContrastFocusAndCoarseTargetsAreExplicit(t *testing.T) {
+	css := string(mustReadEmbedded(t, "static/app.css"))
+	workspace := coordCSSRule(t, css, "\n.coord-workspace {")
+	if !strings.Contains(workspace, `--coord-muted: #565d58`) {
+		t.Fatalf("conversation/inspector muted color lost its contrast token: %s", workspace)
+	}
+	focus := coordCSSRule(t, css, `.coord-shell :focus-visible,`)
+	if !strings.Contains(focus, `outline: 3px solid`) {
+		t.Fatalf("workspace focus indicator is thinner than three pixels: %s", focus)
+	}
+	coarseMedia := css[strings.Index(css, `@media (hover: none), (pointer: coarse)`):]
+	targets := coordCSSRule(t, coarseMedia, `.coord-workspace button,`)
+	targetStart := strings.Index(coarseMedia, `.coord-workspace button,`)
+	targetOpen := strings.Index(coarseMedia[targetStart:], `{`)
+	targetSelectors := coarseMedia[targetStart : targetStart+targetOpen]
+	for _, selector := range []string{`.coord-context a`} {
+		if !strings.Contains(targetSelectors, selector) {
+			t.Errorf("coarse target selector missing %q", selector)
+		}
+	}
+	if !strings.Contains(targets, `min-height: 2.75rem;`) {
+		t.Fatalf("coarse target rule is below 44 CSS pixels: %s", targets)
+	}
+	if summary := coordCSSRule(t, coarseMedia, `.coord-workspace summary`); !strings.Contains(summary, `min-height: 2.75rem;`) {
+		t.Fatalf("coarse summary target is below 44 CSS pixels: %s", summary)
+	}
+}
+
+func TestCoordCoarseMessageToolsReturnToGridFlowWithoutCoveringHeader(t *testing.T) {
+	css := string(mustReadEmbedded(t, "static/app.css"))
+	for _, media := range []string{`@media (hover: none), (pointer: coarse)`, `@media (max-width: 700px)`} {
+		mediaCSS := css[strings.Index(css, media):]
+		tools := coordCSSRule(t, mediaCSS, `.coord-message-tools`)
+		for _, want := range []string{
+			`position: relative;`,
+			`grid-column: 2;`,
+			`top: auto;`,
+			`right: auto;`,
+		} {
+			if !strings.Contains(tools, want) {
+				t.Errorf("%s message tools still overlap content; missing %q in %s", media, want, tools)
+			}
+		}
+	}
+}
+
+func TestCoordTouchTargetsPreserveNativeDetailsMarker(t *testing.T) {
+	css := string(mustReadEmbedded(t, "static/app.css"))
+	coarseMedia := css[strings.Index(css, `@media (hover: none), (pointer: coarse)`):]
+	summary := coordCSSRule(t, coarseMedia, `.coord-workspace summary`)
+	if !strings.Contains(summary, `min-height: 2.75rem;`) {
+		t.Fatalf("touch summary is below 44 CSS pixels: %s", summary)
+	}
+	if strings.Contains(summary, `display: inline-flex;`) || strings.Contains(summary, `display: flex;`) {
+		t.Fatalf("touch summary overrides its native disclosure marker: %s", summary)
+	}
+}
+
+func TestCoordInspectorLinksAndAttentionButtonsUseIntentionalFlatStates(t *testing.T) {
+	css := string(mustReadEmbedded(t, "static/app.css"))
+	links := coordCSSRule(t, css, `.coord-context a`)
+	for _, want := range []string{`color: var(--coord-signal-dark);`, `text-decoration-color:`, `text-underline-offset:`} {
+		if !strings.Contains(links, want) {
+			t.Errorf("inspector link treatment missing %q: %s", want, links)
+		}
+	}
+	buttons := coordCSSRule(t, css, `.coord-attention-card button`)
+	for _, want := range []string{`display: inline-flex;`, `border: 1px solid`, `border-radius: 2px;`, `background: transparent;`} {
+		if !strings.Contains(buttons, want) {
+			t.Errorf("attention action treatment missing %q: %s", want, buttons)
+		}
+	}
+}
+
+func coordCSSRule(t *testing.T, css, selector string) string {
+	t.Helper()
+	start := strings.Index(css, selector)
+	if start < 0 {
+		t.Fatalf("CSS selector missing %q", selector)
+	}
+	open := strings.Index(css[start:], "{")
+	if open < 0 {
+		t.Fatalf("CSS selector %q has no declaration block", selector)
+	}
+	open += start
+	close := strings.Index(css[open:], "}")
+	if close < 0 {
+		t.Fatalf("CSS selector %q has an unterminated declaration block", selector)
+	}
+	return css[open+1 : open+close]
 }
 
 func TestCoordWorkspaceRendersAuthorizedIdentityLabelsAndHonestPresence(t *testing.T) {
