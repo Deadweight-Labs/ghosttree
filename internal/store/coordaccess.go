@@ -1832,8 +1832,13 @@ func (a CoordAccess) Recipients() ([]CoordRecipient, error) {
 				}
 			}
 		} else {
+			externalID := id
+			if strings.HasPrefix(id, "agent:") {
+				recipient.Kind = "agent"
+				externalID = strings.TrimPrefix(id, "agent:")
+			}
 			var label string
-			if queryErr := tx.QueryRow(`SELECT display_name FROM coord_agents WHERE external_id=?`, id).Scan(&label); queryErr == nil && strings.TrimSpace(label) != "" {
+			if queryErr := tx.QueryRow(`SELECT display_name FROM coord_agents WHERE external_id=?`, externalID).Scan(&label); queryErr == nil && strings.TrimSpace(label) != "" {
 				recipient.Label = label
 			}
 		}

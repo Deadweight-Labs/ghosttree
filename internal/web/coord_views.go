@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
@@ -48,6 +49,8 @@ type coordRoomDetailView struct {
 	HasOlder, HasNewer     bool
 	CanManage, CanLeave    bool
 	FormID, StandingFormID string
+	ReplyTo                int64
+	ReplyTarget            *coordReplyView
 	Threads                []coordThreadView
 	Thread                 *coordThreadDetailView
 }
@@ -61,13 +64,20 @@ type coordThreadView struct {
 
 type coordThreadDetailView struct {
 	coordThreadView
-	Messages []coordMessageView
-	FormID   string
+	Messages                               []coordMessageView
+	FirstSequence, LastSequence, HighWater int64
+	OlderURL, NewerURL                     string
+	ClearReplyURL                          string
+	HasOlder, HasNewer                     bool
+	FormID                                 string
+	ReplyTo                                int64
+	ReplyTarget                            *coordReplyView
 }
 
 type coordMessageView struct {
-	ID, Sequence                  int64
+	ID, Sequence, ReplyCount      int64
 	Author, AuthorKind, Timestamp string
+	DisplayTimestamp              string
 	Body, Intent                  string
 	Expired                       bool
 	Reply                         *coordReplyView
@@ -75,6 +85,7 @@ type coordMessageView struct {
 	Refs                          []coordRefView
 	Delivery                      string
 	ThreadURL                     string
+	ReplyURL                      string
 	CanPromote                    bool
 	CSRFToken                     string
 }
@@ -90,30 +101,34 @@ type coordRefView struct {
 }
 type coordStandingView struct {
 	MessageID, Person, Body, CreatedAt string
+	DisplayTimestamp                   string
 	Targets                            []string
 }
 
 type coordParticipantView struct {
-	ID, Label, Provider, LastSeen, Branch string
-	Manager, Current                      bool
+	ID, Label, Provider, Worktree, LastSeen, Branch string
+	DisplayTimestamp                                string
+	Reachability, WorkState                         string
+	Manager, Current                                bool
 }
 
 type coordAttentionActionView struct{ Value, Label string }
 
 type coordAttentionView struct {
-	ID, Sequence                                              int64
-	RecipientID, Reason, State, Body, URL, RoomKey, CSRFToken string
-	Incoming, CanWithdraw                                     bool
-	CoordinationOnlyApproval                                  bool
-	Actions                                                   []coordAttentionActionView
+	ID, Sequence                                                   int64
+	RecipientID, RecipientLabel, Reason, State, Body, URL, RoomKey string
+	CSRFToken                                                      string
+	Incoming, CanWithdraw                                          bool
+	CoordinationOnlyApproval                                       bool
+	Actions                                                        []coordAttentionActionView
 }
 
-func buildCoordSidebar(summaries []store.CoordRoomSummary, principalID, activeKey string) coordSidebarView {
+func buildCoordSidebar(summaries []store.CoordRoomSummary, principalID, activeKey string, labels map[string]string) coordSidebarView {
 	var out coordSidebarView
 	for _, summary := range summaries {
 		room := coordRoomView{
 			Key: summary.Room.Key, Kind: summary.Room.Kind,
-			Label:  coordRoomLabel(summary.Room, principalID),
+			Label:  coordRoomLabel(summary.Room, principalID, labels),
 			URL:    coordRoomURL(summary.Room.Key, "", 0),
 			Unread: summary.Unread, Mentions: summary.MentionUnread, Attention: summary.Attention,
 			Active: summary.Room.Key == activeKey,
@@ -139,19 +154,21 @@ func buildCoordSidebar(summaries []store.CoordRoomSummary, principalID, activeKe
 	return out
 }
 
-func buildCoordAttentionViews(items []store.AttentionItem, csrfToken ...string) (incoming, outgoing []coordAttentionView) {
-	token := ""
-	if len(csrfToken) > 0 {
-		token = csrfToken[0]
+func buildCoordAttentionViews(items []store.AttentionItem, csrfToken string, labelIndexes ...map[string]string) (incoming, outgoing []coordAttentionView) {
+	var labels map[string]string
+	if len(labelIndexes) > 0 {
+		labels = labelIndexes[0]
 	}
 	for _, item := range items {
 		if item.State != store.AttentionOpen {
 			continue
 		}
+		recipientLabel := coordIdentityLabel(item.RecipientID, labels)
 		view := coordAttentionView{
 			ID: item.ID, Sequence: item.Sequence, Reason: item.Reason, State: item.State,
-			Body: item.Body, RecipientID: item.RecipientID, Incoming: item.IsRecipient, CanWithdraw: item.CanWithdraw,
-			RoomKey: item.HomeRoomKey, CSRFToken: token,
+			Body: item.Body, RecipientID: item.RecipientID, RecipientLabel: recipientLabel,
+			Incoming: item.IsRecipient, CanWithdraw: item.CanWithdraw,
+			RoomKey: item.HomeRoomKey, CSRFToken: csrfToken,
 			CoordinationOnlyApproval: item.Reason == store.AttentionApproval,
 		}
 		if item.DestinationKind == store.DestinationDiscussion {
@@ -206,6 +223,31 @@ func coordThreadMessageURL(room string, threadID, sequence int64) string {
 	return "/ui/coord?" + query.Encode() + "#thread-message-" + strconv.FormatInt(sequence, 10)
 }
 
+func coordThreadPageURL(room string, threadID int64, cursor string, sequence int64) string {
+	query := url.Values{"room": {room}, "thread": {strconv.FormatInt(threadID, 10)}}
+	if cursor != "" && sequence > 0 {
+		query.Set(cursor, strconv.FormatInt(sequence, 10))
+	}
+	return "/ui/coord?" + query.Encode() + "#coord-thread"
+}
+
+func coordRoomReplyURL(room string, messageID, sequence int64) string {
+	query := url.Values{"room": {room}, "around": {strconv.FormatInt(sequence, 10)}, "reply_to": {strconv.FormatInt(messageID, 10)}}
+	return "/ui/coord?" + query.Encode() + "#coord-message-body"
+}
+
+func coordThreadReplyURL(room string, threadID, messageID, sequence int64) string {
+	query := url.Values{
+		"room": {room}, "thread": {strconv.FormatInt(threadID, 10)},
+		"thread_around": {strconv.FormatInt(sequence, 10)}, "thread_reply_to": {strconv.FormatInt(messageID, 10)},
+	}
+	return "/ui/coord?" + query.Encode() + "#coord-thread-body"
+}
+
+func coordThreadComposerURL(room string, threadID int64) string {
+	return strings.TrimSuffix(coordThreadURL(room, threadID), "#coord-thread") + "#coord-thread-body"
+}
+
 func buildCoordThreadViews(in []store.RoomThread) []coordThreadView {
 	out := make([]coordThreadView, 0, len(in))
 	for _, item := range in {
@@ -224,7 +266,7 @@ func buildCoordThreadViews(in []store.RoomThread) []coordThreadView {
 	return out
 }
 
-func coordRoomLabel(room store.CoordRoom, principalID string) string {
+func coordRoomLabel(room store.CoordRoom, principalID string, labels map[string]string) string {
 	if label := strings.TrimSpace(room.Label); label != "" {
 		return label
 	}
@@ -233,7 +275,7 @@ func coordRoomLabel(room store.CoordRoom, principalID string) string {
 		var peers []string
 		for _, member := range room.Members {
 			if member != principalID {
-				peers = append(peers, member)
+				peers = append(peers, coordIdentityLabel(member, labels))
 			}
 		}
 		if len(peers) > 0 {
@@ -247,7 +289,7 @@ func coordRoomLabel(room store.CoordRoom, principalID string) string {
 	return room.Key
 }
 
-func buildCoordMessageViews(messages []store.CoordMessagePresentation, roomKey string) []coordMessageView {
+func buildCoordMessageViews(messages []store.CoordMessagePresentation, roomKey string, labels map[string]string) []coordMessageView {
 	out := make([]coordMessageView, 0, len(messages))
 	for _, presentation := range messages {
 		message := presentation.Message
@@ -257,9 +299,13 @@ func buildCoordMessageViews(messages []store.CoordMessagePresentation, roomKey s
 		}
 		view := coordMessageView{
 			ID: message.ID, Sequence: message.Sequence, Author: author,
-			AuthorKind: message.AuthorKind, Timestamp: message.CreatedAt,
+			AuthorKind: message.AuthorKind, Timestamp: message.CreatedAt, DisplayTimestamp: coordDisplayTimestamp(message.CreatedAt),
 			Body: message.Body, Intent: message.Intent, Expired: message.Expired,
-			Mentions: append([]string(nil), presentation.Mentions...),
+			ReplyURL:   coordRoomReplyURL(roomKey, message.ID, message.Sequence),
+			ReplyCount: presentation.ReplyCount,
+		}
+		for _, mention := range presentation.Mentions {
+			view.Mentions = append(view.Mentions, coordIdentityLabel(mention, labels))
 		}
 		if presentation.Reply != nil {
 			view.Reply = &coordReplyView{Sequence: presentation.Reply.Sequence, Author: presentation.Reply.Author, Body: presentation.Reply.Body, Missing: presentation.Reply.Missing}
@@ -290,20 +336,47 @@ func buildCoordMessageViews(messages []store.CoordMessagePresentation, roomKey s
 	return out
 }
 
-func buildCoordThreadMessageViews(messages []store.CoordMessagePresentation) []coordMessageView {
-	out := buildCoordMessageViews(messages, "")
+func buildCoordThreadMessageViews(messages []store.CoordMessagePresentation, room string, threadID int64, labels map[string]string) []coordMessageView {
+	out := buildCoordMessageViews(messages, "", labels)
 	for i := range out {
+		out[i].ReplyURL = coordThreadReplyURL(room, threadID, out[i].ID, out[i].Sequence)
 		if out[i].Reply != nil && !out[i].Reply.Missing {
-			out[i].Reply.URL = "#thread-message-" + strconv.FormatInt(out[i].Reply.Sequence, 10)
+			out[i].Reply.URL = coordThreadMessageURL(room, threadID, out[i].Reply.Sequence)
 		}
 	}
 	return out
 }
 
-func buildCoordStandingViews(in []store.StandingInstruction) []coordStandingView {
+func coordReplyTarget(presentations []store.CoordMessagePresentation, raw string) (int64, *coordReplyView, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, nil, nil
+	}
+	id, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || id <= 0 {
+		return 0, nil, fmt.Errorf("reply target must be a positive message id")
+	}
+	for _, presentation := range presentations {
+		if presentation.Message.ID != id {
+			continue
+		}
+		author := strings.TrimSpace(presentation.AuthorLabel)
+		if author == "" {
+			author = strings.TrimSpace(presentation.Message.SenderExternalID)
+		}
+		return id, &coordReplyView{Sequence: presentation.Message.Sequence, Author: author, Body: presentation.Message.Body}, nil
+	}
+	return 0, nil, fmt.Errorf("reply target is not in this destination window")
+}
+
+func buildCoordStandingViews(in []store.StandingInstruction, labels map[string]string) []coordStandingView {
 	out := make([]coordStandingView, 0, len(in))
 	for _, item := range in {
-		out = append(out, coordStandingView{MessageID: item.MessageID, Person: item.Person, Body: item.Body, Targets: append([]string(nil), item.Targets...), CreatedAt: item.CreatedAt})
+		view := coordStandingView{MessageID: item.MessageID, Person: item.Person, Body: item.Body, CreatedAt: item.CreatedAt, DisplayTimestamp: coordDisplayTimestamp(item.CreatedAt)}
+		for _, target := range item.Targets {
+			view.Targets = append(view.Targets, coordIdentityLabel(target, labels))
+		}
+		out = append(out, view)
 	}
 	return out
 }
@@ -316,24 +389,69 @@ func buildCoordRecipientViews(recipients []store.CoordRecipient) []coordRecipien
 	return out
 }
 
-func buildCoordParticipants(room store.CoordRoom, peers []store.CoordAgent, memberships []store.RoomMembership, principalID string) []coordParticipantView {
-	byID := make(map[string]coordParticipantView)
-	for _, member := range room.Members {
-		byID[member] = coordParticipantView{ID: member, Label: member, Current: member == principalID}
+func coordIdentityLabels(current store.Principal, recipients []store.CoordRecipient, peers ...store.CoordAgent) map[string]string {
+	labels := make(map[string]string, len(recipients)+len(peers)+1)
+	if strings.TrimSpace(current.ID) != "" && strings.TrimSpace(current.Label) != "" {
+		labels[current.ID] = strings.TrimSpace(current.Label)
+	}
+	for _, recipient := range recipients {
+		if strings.TrimSpace(recipient.Label) != "" {
+			labels[recipient.PrincipalID] = strings.TrimSpace(recipient.Label)
+		}
 	}
 	for _, peer := range peers {
 		label := strings.TrimSpace(peer.DisplayName)
 		if label == "" {
-			label = peer.ExternalID
+			label = strings.TrimSpace(peer.Person)
+		}
+		if label == "" {
+			label = "Agent"
+		}
+		labels[peer.ExternalID] = label
+	}
+	return labels
+}
+
+func coordIdentityLabel(id string, labels map[string]string) string {
+	if label := strings.TrimSpace(labels[id]); label != "" {
+		return label
+	}
+	return "Unbekannter Teilnehmer"
+}
+
+func buildCoordParticipants(room store.CoordRoom, peers []store.CoordAgent, memberships []store.RoomMembership, current store.Principal, labels map[string]string) []coordParticipantView {
+	byID := make(map[string]coordParticipantView)
+	for _, member := range room.Members {
+		byID[member] = coordParticipantView{ID: member, Label: coordIdentityLabel(member, labels), Current: member == current.ID, Reachability: "unbekannt", WorkState: "unbekannt"}
+	}
+	for _, peer := range peers {
+		label := strings.TrimSpace(labels[peer.ExternalID])
+		if label == "" {
+			label = strings.TrimSpace(peer.DisplayName)
+		}
+		if label == "" {
+			label = strings.TrimSpace(peer.Person)
+		}
+		if label == "" {
+			label = "Agent"
 		}
 		byID[peer.ExternalID] = coordParticipantView{
 			ID: peer.ExternalID, Label: label, Provider: peer.Provider,
-			LastSeen: peer.LastSeenAt, Branch: peer.Branch, Current: peer.ExternalID == principalID,
+			Worktree: peer.Worktree, LastSeen: peer.LastSeenAt, DisplayTimestamp: coordDisplayTimestamp(peer.LastSeenAt), Branch: peer.Branch,
+			Current: peer.ExternalID == current.ID, Reachability: "unbekannt", WorkState: "unbekannt",
 		}
 	}
-	if _, ok := byID[principalID]; !ok {
-		byID[principalID] = coordParticipantView{ID: principalID, Label: principalID, Current: true}
+	currentParticipant := byID[current.ID]
+	currentParticipant.ID = current.ID
+	currentParticipant.Current = true
+	currentParticipant.Reachability = "unbekannt"
+	currentParticipant.WorkState = "unbekannt"
+	if label := strings.TrimSpace(current.Label); label != "" {
+		currentParticipant.Label = label
+	} else if currentParticipant.Label == "" {
+		currentParticipant.Label = coordIdentityLabel(current.ID, labels)
 	}
+	byID[current.ID] = currentParticipant
 	for _, membership := range memberships {
 		if membership.LeftAt != "" {
 			continue
@@ -341,10 +459,12 @@ func buildCoordParticipants(room store.CoordRoom, peers []store.CoordAgent, memb
 		participant := byID[membership.PrincipalID]
 		participant.ID = membership.PrincipalID
 		if participant.Label == "" {
-			participant.Label = membership.PrincipalID
+			participant.Label = coordIdentityLabel(membership.PrincipalID, labels)
 		}
+		participant.Reachability = "unbekannt"
+		participant.WorkState = "unbekannt"
 		participant.Manager = membership.Manager
-		participant.Current = membership.PrincipalID == principalID
+		participant.Current = membership.PrincipalID == current.ID
 		byID[membership.PrincipalID] = participant
 	}
 	out := make([]coordParticipantView, 0, len(byID))
@@ -358,4 +478,12 @@ func buildCoordParticipants(room store.CoordRoom, peers []store.CoordAgent, memb
 		return out[i].Label < out[j].Label
 	})
 	return out
+}
+
+func coordDisplayTimestamp(raw string) string {
+	parsed, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return raw
+	}
+	return parsed.In(time.Local).Format("02.01.2006, 15:04")
 }

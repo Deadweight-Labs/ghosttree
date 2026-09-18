@@ -22,6 +22,7 @@ type CoordMessagePresentation struct {
 	Message     CoordMessage
 	AuthorLabel string
 	Reply       *CoordReplyPreview
+	ReplyCount  int64
 	Mentions    []string
 	Refs        []CoordRef
 	Delivery    CoordDeliverySummary
@@ -177,6 +178,30 @@ func coordMessagePresentationsTx(tx *sql.Tx, kind, destinationID string, message
 			author = personLabel
 		}
 		out[index[mid]].Reply = &CoordReplyPreview{MessageID: parentID, Sequence: seq, Author: author, Body: body, Missing: seq == 0}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+
+	rows, err = tx.Query(`SELECT reply_to,COUNT(*) FROM coord_messages
+		WHERE destination_kind=? AND destination_id=? AND reply_to IN (`+marks+`)
+		GROUP BY reply_to`, args...)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var parentID, count int64
+		if err := rows.Scan(&parentID, &count); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if position, ok := index[parentID]; ok {
+			out[position].ReplyCount = count
+		}
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()

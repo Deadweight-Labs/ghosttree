@@ -103,8 +103,9 @@ func TestBrowserSessionCarriesStablePrincipal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := body(t, resp); !strings.Contains(got, `data-principal="person:1"`) {
-		t.Fatal("stable principal missing from rendered session")
+	got := body(t, resp)
+	if !strings.Contains(got, `alice`) || strings.Contains(got, `data-principal="person:1"`) {
+		t.Fatal("browser session must render the human label without exposing its stable identifier")
 	}
 }
 

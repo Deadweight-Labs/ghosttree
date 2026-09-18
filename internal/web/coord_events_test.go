@@ -5,6 +5,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os/exec"
 	"strconv"
 	"strings"
 	"testing"
@@ -21,7 +23,7 @@ func TestCoordPageCarriesPreRenderEventCursorAndVisibleLiveStatus(t *testing.T) 
 		t.Fatal(err)
 	}
 	page := coordPageBody(t, client, srv.URL+"/ui/coord?room="+room)
-	if !strings.Contains(page, `data-coord-event-cursor="`) || !strings.Contains(page, `data-coord-live-status`) || !strings.Contains(page, "Live-Verbindung wird aufgebaut") {
+	if !strings.Contains(page, `data-coord-event-cursor="`) || !strings.Contains(page, `data-coord-live-status`) || !strings.Contains(page, `data-coord-action-status`) || !strings.Contains(page, "Live-Verbindung wird aufgebaut") {
 		t.Fatalf("coord live bootstrap missing: %s", page)
 	}
 }
@@ -35,7 +37,9 @@ func TestCoordProgressiveClientRefetchesCanonicalVisibleSurfaces(t *testing.T) {
 		"captureFocus", "restoreFocus", "[data-coord-sidebar-dynamic]", "[data-coord-read-actions]",
 		"raw.lastEventId", "Number.isSafeInteger", "eventID <= lastEventID",
 		"captureDrafts", "restoreDrafts", "coordDraftKey", "container.open", "control.checked",
+		".coord-thread-paging",
 		"session-ended", "source.close()", "visibilitychange",
+		`new URL(response.url).pathname === "/ui/login"`,
 	} {
 		if !strings.Contains(source, want) {
 			t.Errorf("progressive coordination client missing %q", want)
@@ -45,6 +49,103 @@ func TestCoordProgressiveClientRefetchesCanonicalVisibleSurfaces(t *testing.T) {
 		if strings.Contains(source, unsafe) {
 			t.Errorf("progressive refresh replaces draft-bearing surface via %q", unsafe)
 		}
+	}
+}
+
+func TestCoordProgressiveClientOnlyInterceptsSafeCoordinationNavigationAndForms(t *testing.T) {
+	source := string(mustReadEmbedded(t, "static/app.js"))
+	for _, want := range []string{
+		"history.pushState", "popstate", "event.submitter", "new FormData(form)",
+		"new URLSearchParams()", "coordFormBody",
+		"response.redirected", "response.url", "AbortController", "aria-busy",
+		"data-coord-action-status", "Aktion nicht automatisch erneut gesendet",
+		`location.assign(target.href)`, `redirect: "follow"`,
+	} {
+		if !strings.Contains(source, want) {
+			t.Errorf("progressive navigation client missing %q", want)
+		}
+	}
+	for _, path := range []string{
+		"/ui/coord/send", "/ui/coord/thread/post", "/ui/coord/read", "/ui/coord/unread",
+		"/ui/coord/attention/action", "/ui/coord/standing/create", "/ui/coord/standing/end",
+		"/ui/coord/direct/start", "/ui/coord/group/create", "/ui/coord/group/update",
+		"/ui/coord/group/leave", "/ui/coord/thread/create", "/ui/coord/thread/state",
+	} {
+		if !strings.Contains(source, `"`+path+`"`) {
+			t.Errorf("progressive form allowlist missing %q", path)
+		}
+	}
+	if strings.Contains(source, `"/ui/logout"`) {
+		t.Fatal("progressive coordination client must not intercept logout")
+	}
+}
+
+func TestCoordProgressiveTargetClassificationRunsInNode(t *testing.T) {
+	source := string(mustReadEmbedded(t, "static/app.js"))
+	start := strings.Index(source, "  const progressiveFormPaths =")
+	end := strings.Index(source, "  const liveStatus =")
+	if start < 0 || end <= start {
+		t.Fatal("progressive target helpers are not independently testable")
+	}
+	program := source[start:end] + `
+const origin = "https://ghosttree.test";
+const anchor = (href, extra = {}) => ({href, target:"", download:false, ...extra});
+if (coordPageTarget(anchor(origin + "/ui/coord?room=project%3Ap"), origin)?.pathname !== "/ui/coord") throw new Error("coord room link rejected");
+if (coordPageTarget(anchor(origin + "/ui/coord?room=project%3Ap#message-4"), origin)?.hash !== "#message-4") throw new Error("coord hash lost");
+if (coordPageTarget(anchor(origin + "/ui/requests/4"), origin) !== null) throw new Error("unrelated link intercepted");
+if (coordPageTarget(anchor("https://elsewhere.test/ui/coord"), origin) !== null) throw new Error("cross-origin link intercepted");
+if (coordPageTarget(anchor(origin + "/ui/coord", {target:"_blank"}), origin) !== null) throw new Error("targeted link intercepted");
+if (!coordFormTarget({method:"post", action:origin + "/ui/coord/send"}, origin)) throw new Error("composer rejected");
+if (!coordFormTarget({method:"POST", action:origin + "/ui/coord/thread/state"}, origin)) throw new Error("thread state rejected");
+if (coordFormTarget({method:"post", action:origin + "/ui/logout"}, origin) !== null) throw new Error("logout intercepted");
+if (coordFormTarget({method:"get", action:origin + "/ui/coord"}, origin) !== null) throw new Error("GET form intercepted");
+if (coordFormTarget({method:"post", action:"https://elsewhere.test/ui/coord/send"}, origin) !== null) throw new Error("cross-origin form intercepted");
+const NativeFormData = FormData;
+FormData = class {
+  constructor() { this.items = [["csrf_token", "token"], ["mentions", "person:a"], ["mentions", "person:b"]]; }
+  append(name, value) { this.items.push([name, value]); }
+  entries() { return this.items.values(); }
+};
+const encoded = coordFormBody({}, {name:"action", value:"approve"});
+FormData = NativeFormData;
+if (!(encoded instanceof URLSearchParams)) throw new Error("POST body is not urlencoded");
+if (encoded.get("csrf_token") !== "token") throw new Error("csrf token was lost");
+if (encoded.getAll("mentions").join(",") !== "person:a,person:b") throw new Error("repeated values were lost");
+if (encoded.get("action") !== "approve") throw new Error("submitter was lost");
+`
+	command := exec.Command("node", "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("progressive target classification failed: %v\n%s", err, output)
+	}
+}
+
+func TestCoordProgressiveURLEncodedPOSTPassesCSRFAndKeepsCanonicalPRG(t *testing.T) {
+	srv, st, client := signedIn(t)
+	room := store.RoomKeyForProject("github.com/x/progressive-post")
+	materializeWebRoom(t, st, room)
+	form := url.Values{
+		"csrf_token": {renderedCSRFToken(t, client, srv.URL+"/ui/coord")},
+		"room":       {room},
+		"sequence":   {"0"},
+	}
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/ui/coord/read", strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded;charset=UTF-8")
+	req.Header.Set("Origin", srv.URL)
+	req.Header.Set("X-Coord-Progressive", "1")
+	res, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("progressive POST status=%d, want 303", res.StatusCode)
+	}
+	want := "/ui/coord?room=" + url.QueryEscape(room)
+	if res.Header.Get("Location") != want {
+		t.Fatalf("progressive POST location=%q, want %q", res.Header.Get("Location"), want)
 	}
 }
 
@@ -59,6 +160,260 @@ func TestCoordMessagePromotionHasStableDraftIdentity(t *testing.T) {
 	page := coordPageBody(t, client, srv.URL+"/ui/coord?room="+room)
 	if !strings.Contains(page, `data-coord-draft-key="promote-`+strconv.FormatInt(messageID, 10)+`"`) {
 		t.Fatalf("promotion draft key missing: %s", page)
+	}
+}
+
+func TestCoordFocusIdentityPrefersStableOperationKey(t *testing.T) {
+	source := string(mustReadEmbedded(t, "static/app.js"))
+	start := strings.Index(source, "const focusIdentity =")
+	end := strings.Index(source, "  const captureFocus =")
+	if start < 0 || end <= start {
+		t.Fatal("focus identity helpers are not independently testable")
+	}
+	program := source[start:end] + `
+const oldButton = {dataset:{coordFocusKey:"room-read-project:p"}, tagName:"BUTTON", id:"", getAttribute:()=>"", textContent:"Bis hier gelesen"};
+const replacement = {dataset:{coordFocusKey:"room-read-project:p"}, tagName:"BUTTON", id:"", getAttribute:()=>"", textContent:"Localized replacement"};
+const wrongOperation = {dataset:{coordFocusKey:"room-unread-project:p"}, tagName:"BUTTON", id:"", getAttribute:()=>"", textContent:"Bis hier gelesen"};
+const oldUnkeyed = {dataset:{}, tagName:"BUTTON", id:"", getAttribute:()=>"", textContent:"Stand ändern"};
+const replacementUnkeyed = {dataset:{}, tagName:"BUTTON", id:"", getAttribute:()=>"", textContent:"Stand ändern"};
+const state = focusIdentity(oldButton);
+if (!sameFocusIdentity(state, replacement)) throw new Error("stable key did not survive replacement");
+if (sameFocusIdentity(state, wrongOperation)) throw new Error("fallback matched a different keyed operation");
+if (!sameFocusIdentity(focusIdentity(oldUnkeyed), replacementUnkeyed)) throw new Error("unkeyed operation focus was lost");
+`
+	command := exec.Command("node", "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("focus identity behavior failed: %v\n%s", err, output)
+	}
+}
+
+func TestCoordDraftIdentityExcludesServerContextAndSurvivesReplyShapeChanges(t *testing.T) {
+	source := string(mustReadEmbedded(t, "static/app.js"))
+	start := strings.Index(source, "  const draftControlSelector =")
+	end := strings.Index(source, "  const applyCoordinator =")
+	if start < 0 || end <= start {
+		t.Fatal("draft identity helpers are not independently testable")
+	}
+	if !strings.Contains(source[start:end], `input:not([type='hidden'])`) {
+		t.Fatal("draft controls must exclude hidden server-owned context")
+	}
+	program := source[start:end] + `
+const control = (tag, type, name, value, text = "") => ({
+  tagName:tag, type, value, textContent:text,
+  getAttribute:(key) => key === "name" ? name : (key === "type" ? type : ""),
+});
+const before = [
+  control("TEXTAREA", "", "body", "user draft"),
+  control("SELECT", "", "intent", "question"),
+  control("INPUT", "checkbox", "mentions", "person:a"),
+  control("INPUT", "checkbox", "mentions", "person:b"),
+];
+const after = [
+  control("TEXTAREA", "", "body", ""),
+  control("SELECT", "", "intent", ""),
+  control("INPUT", "checkbox", "mentions", "person:a"),
+  control("INPUT", "checkbox", "mentions", "person:b"),
+];
+const beforeKeys = draftControlKeys(before);
+const afterKeys = draftControlKeys(after);
+if (JSON.stringify(beforeKeys) !== JSON.stringify(afterKeys)) throw new Error("reply shape changed visible draft identities");
+if (new Set(beforeKeys).size !== beforeKeys.length) throw new Error("mention identities collided");
+if (beforeKeys.some((key) => key.includes("user draft"))) throw new Error("mutable text leaked into identity");
+
+let containers = [];
+const document = {
+  activeElement:null,
+  querySelectorAll:() => containers,
+};
+const field = (tag, type, name, value, checked = false) => ({
+  tagName:tag, type, value, checked, selectionStart:null, selectionEnd:null,
+  getAttribute:(key) => key === "name" ? name : (key === "type" ? type : ""),
+  focus() { document.activeElement = this; },
+});
+const container = (controls) => ({
+  dataset:{coordDraftKey:"room-composer-project:p"}, tagName:"FORM",
+  querySelectorAll:() => controls.filter((item) => item.type !== "hidden"),
+  contains:(item) => controls.includes(item),
+});
+const oldControls = [
+  field("INPUT", "hidden", "csrf_token", "old-csrf"),
+  field("INPUT", "hidden", "room", "project:p"),
+  field("INPUT", "hidden", "form_id", "old-form"),
+  field("INPUT", "hidden", "reply_to", "41"),
+  field("TEXTAREA", "", "body", "user draft"),
+  field("SELECT", "", "intent", "question"),
+  field("INPUT", "checkbox", "mentions", "person:a", true),
+  field("INPUT", "checkbox", "mentions", "person:b", false),
+];
+containers = [container(oldControls)];
+document.activeElement = oldControls[4];
+const drafts = captureDrafts();
+const newControls = [
+  field("INPUT", "hidden", "csrf_token", "new-csrf"),
+  field("INPUT", "hidden", "room", "project:p"),
+  field("INPUT", "hidden", "form_id", "new-form"),
+  field("INPUT", "hidden", "reply_to", "99"),
+  field("TEXTAREA", "", "body", ""),
+  field("SELECT", "", "intent", ""),
+  field("INPUT", "checkbox", "mentions", "person:a", false),
+  field("INPUT", "checkbox", "mentions", "person:b", true),
+];
+containers = [container(newControls)];
+document.activeElement = null;
+restoreDrafts(drafts);
+if (newControls[0].value !== "new-csrf" || newControls[2].value !== "new-form") throw new Error("server token context was overwritten");
+if (newControls[3].value !== "99") throw new Error("reply A overwrote server reply B");
+if (newControls[4].value !== "user draft" || newControls[5].value !== "question") throw new Error("user text draft was lost");
+if (!newControls[6].checked || newControls[7].checked) throw new Error("mention draft was not restored by value");
+
+const noReplyControls = oldControls.filter((item) => item.getAttribute("name") !== "reply_to");
+containers = [container(noReplyControls)];
+const noReplyDraft = captureDrafts();
+const replyControls = [...newControls];
+replyControls[3] = field("INPUT", "hidden", "reply_to", "123");
+containers = [container(replyControls)];
+restoreDrafts(noReplyDraft);
+if (replyControls[3].value !== "123" || replyControls[4].value !== "user draft") throw new Error("no-reply to reply shifted draft controls");
+`
+	command := exec.Command("node", "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("draft identity behavior failed: %v\n%s", err, output)
+	}
+}
+
+func TestCoordApplyCoordinatorRejectsStaleNavigationPostAndRefreshResults(t *testing.T) {
+	source := string(mustReadEmbedded(t, "static/app.js"))
+	start := strings.Index(source, "  const createCoordApplyCoordinator =")
+	end := strings.Index(source, "  const progressiveFormPaths =")
+	if start < 0 || end <= start {
+		t.Fatal("coord apply coordinator is not independently testable")
+	}
+	program := source[start:end] + `
+const deferred = () => {
+  let resolve;
+  return {promise:new Promise((done) => { resolve = done; }), resolve};
+};
+const coordinator = createCoordApplyCoordinator();
+let rendered = "initial";
+let queuedRefresh = false;
+let refreshDrains = 0;
+coordinator.onIdle(() => {
+  if (!queuedRefresh) return;
+  const refresh = coordinator.begin("refresh");
+  if (!refresh) throw new Error("queued refresh still blocked after idle");
+  queuedRefresh = false;
+  refreshDrains += 1;
+  rendered = "event-change";
+  coordinator.finish(refresh);
+});
+const run = async (kind, pending) => {
+  const lease = coordinator.begin(kind);
+  if (!lease) return;
+  const value = await pending.promise;
+  if (coordinator.current(lease)) rendered = value;
+  coordinator.finish(lease);
+};
+(async () => {
+  const a = deferred();
+  const b = deferred();
+  const runA = run("navigation", a);
+  const runB = run("navigation", b);
+  b.resolve("room-b"); await runB;
+  a.resolve("room-a"); await runA;
+  if (rendered !== "room-b") throw new Error("stale room A replaced room B");
+
+  const post = deferred();
+  const nav = deferred();
+  const runPost = run("post", post);
+  const runNav = run("navigation", nav);
+  nav.resolve("new-navigation"); await runNav;
+  post.resolve("old-post"); await runPost;
+  if (rendered !== "new-navigation") throw new Error("stale POST replaced navigation");
+
+  const blocking = coordinator.begin("navigation");
+  queuedRefresh = true;
+  if (coordinator.begin("refresh") !== null) throw new Error("refresh preempted navigation");
+  rendered = "stale-navigation-snapshot";
+  coordinator.finish(blocking);
+  if (queuedRefresh || refreshDrains !== 1 || rendered !== "event-change") throw new Error("pending SSE change was lost after navigation");
+})().catch((error) => { console.error(error); process.exit(1); });
+`
+	command := exec.Command("node", "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("coord apply ordering failed: %v\n%s", err, output)
+	}
+}
+
+func TestCoordThreadInvalidationAlsoRefreshesVisibleRoomMessages(t *testing.T) {
+	source := string(mustReadEmbedded(t, "static/app.js"))
+	start := strings.Index(source, "  const roomSurfaces =")
+	end := strings.Index(source, "  const scheduleRefreshDrain =")
+	if start < 0 || end <= start {
+		t.Fatal("coord event surface mapping is not independently testable")
+	}
+	program := source[start:end] + `
+const selectors = coordEventSurfaces(
+  {object_kind:"thread", object_id:"77", kind:"create"},
+  "project:visible", "",
+);
+if (!selectors.includes(".coord-messages")) throw new Error("thread promotion left visible room messages stale");
+if (!selectors.includes("[data-coord-thread-list]")) throw new Error("thread list was not refreshed");
+if (!selectors.includes("[data-coord-sidebar-dynamic]")) throw new Error("authorized sidebar summary was not refreshed");
+if (selectors.includes("#coord-rooms") || selectors.includes("#coord-context")) throw new Error("mapping requested broad private surfaces");
+`
+	command := exec.Command("node", "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("coord thread invalidation mapping failed: %v\n%s", err, output)
+	}
+}
+
+func TestCoordProgressiveNavigationHandlesThreadDrawerPopstateAndRefreshRetry(t *testing.T) {
+	source := string(mustReadEmbedded(t, "static/app.js"))
+	applyStart := strings.Index(source, "  const applyCoordPage =")
+	applyEnd := strings.Index(source, "  const fetchCoordPage =")
+	if applyStart < 0 || applyEnd <= applyStart {
+		t.Fatal("coord page apply function missing")
+	}
+	applySource := source[applyStart:applyEnd]
+	for _, want := range []string{"drawerWasOpen", "openSelectedThread()"} {
+		if !strings.Contains(applySource, want) {
+			t.Errorf("progressive page apply missing %q", want)
+		}
+	}
+	for _, want := range []string{
+		"coordFailedPopstateTarget(result, location.href)",
+		"refreshRetry.failure()", "refreshRetry.success()",
+	} {
+		if !strings.Contains(source, want) {
+			t.Errorf("progressive recovery path missing %q", want)
+		}
+	}
+
+	start := strings.Index(source, "  const coordPageLoadApplied =")
+	end := strings.Index(source, "  const liveStatus =")
+	if start < 0 || end <= start {
+		t.Fatal("progressive load/retry helpers are not independently testable")
+	}
+	program := source[start:end] + `
+const current = "https://ghosttree.test/ui/coord?room=project%3Ap";
+if (coordFailedPopstateTarget(coordPageLoadApplied, current) !== "") throw new Error("applied popstate forced reload");
+if (coordFailedPopstateTarget(coordPageLoadSuperseded, current) !== "") throw new Error("superseded popstate overrode newer navigation");
+if (coordFailedPopstateTarget(coordPageLoadForbidden, current) !== "/ui/coord") throw new Error("forbidden popstate did not escape to safe root");
+if (coordFailedPopstateTarget(coordPageLoadFailed, current) !== current) throw new Error("failed popstate left stale DOM under URL");
+
+const scheduled = [];
+const retry = createCoordRefreshRetry((delay) => scheduled.push(delay));
+retry.failure();
+if (scheduled.join(",") !== "250") throw new Error("first transient failure was not retried with backoff");
+retry.success();
+retry.failure();
+if (scheduled.join(",") !== "250,250") throw new Error("successful recovery did not reset backoff");
+retry.failure(); retry.failure(); retry.failure();
+if (scheduled.length !== 4 || scheduled[2] !== 1000 || scheduled[3] !== 3000) throw new Error("retry was not bounded");
+`
+	command := exec.Command("node", "-e", program)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("progressive navigation recovery behavior failed: %v\n%s", err, output)
 	}
 }
 

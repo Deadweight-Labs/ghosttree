@@ -121,10 +121,12 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 		coordHTTPError(w, err)
 		return
 	}
-	incomingAttention, outgoingAttention := buildCoordAttentionViews(attention, csrfOf(r))
+	current := browserPrincipal(r)
+	labels := coordIdentityLabels(current, recipients)
+	incomingAttention, outgoingAttention := buildCoordAttentionViews(attention, csrfOf(r), labels)
 	view := coordPageView{
 		EventCursor:       eventCursor,
-		Sidebar:           buildCoordSidebar(summaries, humanMember(r), room),
+		Sidebar:           buildCoordSidebar(summaries, humanMember(r), room, labels),
 		Recipients:        buildCoordRecipientViews(recipients),
 		IncomingAttention: incomingAttention,
 		OutgoingAttention: outgoingAttention,
@@ -171,6 +173,7 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	labels = coordIdentityLabels(current, recipients, peers...)
 	standing, err := access.Standing(room)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -191,13 +194,18 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 	}
 	detail := &coordRoomDetailView{
 		Room: coordRoomView{Key: activeRoom.Key, Kind: activeRoom.Kind,
-			Label: coordRoomLabel(activeRoom, humanMember(r)), URL: coordRoomURL(activeRoom.Key, "", 0), Active: true},
-		Messages:     buildCoordMessageViews(presentations, room),
-		Participants: buildCoordParticipants(activeRoom, peers, memberships, humanMember(r)),
-		Standing:     buildCoordStandingViews(standing), HighWater: page.HighWater,
+			Label: coordRoomLabel(activeRoom, humanMember(r), labels), URL: coordRoomURL(activeRoom.Key, "", 0), Active: true},
+		Messages:     buildCoordMessageViews(presentations, room, labels),
+		Participants: buildCoordParticipants(activeRoom, peers, memberships, current, labels),
+		Standing:     buildCoordStandingViews(standing, labels), HighWater: page.HighWater,
 		HasOlder: page.HasOlder, HasNewer: page.HasNewer,
 		CanLeave: activeRoom.Kind == store.RoomGroup,
 		FormID:   newCoordFormID(), StandingFormID: newCoordFormID(), Threads: buildCoordThreadViews(roomThreads),
+	}
+	detail.ReplyTo, detail.ReplyTarget, err = coordReplyTarget(presentations, r.URL.Query().Get("reply_to"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 	threadByAnchor := make(map[int64]string, len(detail.Threads))
 	for _, thread := range detail.Threads {
@@ -228,20 +236,12 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 			coordHTTPError(w, store.ErrCoordNotFound)
 			return
 		}
-		threadWindow := store.LatestWindow(50)
-		var threadAround int64
-		if aroundText := strings.TrimSpace(r.URL.Query().Get("thread_around")); aroundText != "" {
-			threadAround, parseErr = strconv.ParseInt(aroundText, 10, 64)
-			if parseErr != nil || threadAround <= 0 {
-				http.Error(w, "thread_around must be a positive sequence", http.StatusBadRequest)
-				return
-			}
-			start := threadAround - 25
-			if start < 0 {
-				start = 0
-			}
-			threadWindow = store.AfterWindow(start, 50)
+		threadWindow, parseErr := coordThreadWindowFromRequest(r)
+		if parseErr != nil {
+			http.Error(w, parseErr.Error(), http.StatusBadRequest)
+			return
 		}
+		threadAround, _ := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("thread_around")), 10, 64)
 		threadPage, presentations, loadErr := access.MessagePresentationWindow(store.DestinationDiscussion, store.ThreadDestinationID(selectedID), threadWindow)
 		if loadErr != nil {
 			coordHTTPError(w, loadErr)
@@ -260,7 +260,31 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		threadDetail := &coordThreadDetailView{coordThreadView: *selected, Messages: buildCoordThreadMessageViews(presentations), FormID: newCoordFormID()}
+		threadDetail := &coordThreadDetailView{
+			coordThreadView: *selected, Messages: buildCoordThreadMessageViews(presentations, room, selectedID, labels), FormID: newCoordFormID(),
+			HighWater: threadPage.HighWater, HasOlder: threadPage.HasOlder, HasNewer: threadPage.HasNewer,
+			ClearReplyURL: coordThreadComposerURL(room, selectedID),
+		}
+		threadDetail.ReplyTo, threadDetail.ReplyTarget, parseErr = coordReplyTarget(presentations, r.URL.Query().Get("thread_reply_to"))
+		if parseErr != nil {
+			http.Error(w, parseErr.Error(), http.StatusBadRequest)
+			return
+		}
+		var threadBefore, threadAfter int64
+		if len(threadPage.Messages) > 0 {
+			threadDetail.FirstSequence = threadPage.Messages[0].Sequence
+			threadDetail.LastSequence = threadPage.Messages[len(threadPage.Messages)-1].Sequence
+			threadBefore = threadDetail.FirstSequence
+			threadAfter = threadDetail.LastSequence
+		} else if threadPage.HasOlder {
+			threadBefore = threadPage.HighWater
+		}
+		if threadDetail.HasOlder {
+			threadDetail.OlderURL = coordThreadPageURL(room, selectedID, "thread_before", threadBefore)
+		}
+		if threadDetail.HasNewer {
+			threadDetail.NewerURL = coordThreadPageURL(room, selectedID, "thread_after", threadAfter)
+		}
 		detail.Thread = threadDetail
 	}
 	for _, membership := range memberships {
@@ -351,13 +375,18 @@ func (a *app) coordPostThread(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "thread and body are required", http.StatusBadRequest)
 		return
 	}
+	replyTo, err := coordOptionalReplyTo(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	intent := strings.TrimSpace(r.FormValue("intent"))
 	mentions := splitCoordPrincipals(r.Form["mentions"]...)
 	if !validCoordComposerIntent(intent) {
 		http.Error(w, "a valid intent is required", http.StatusBadRequest)
 		return
 	}
-	if _, err := a.browserCoord(r).ThreadPost(threadID, store.CoordMessage{ClientID: newFormClientID(r), Body: body, Intent: intent, Mentions: mentions}); err != nil {
+	if _, err := a.browserCoord(r).ThreadPost(threadID, store.CoordMessage{ClientID: newFormClientID(r), Body: body, Intent: intent, Mentions: mentions, ReplyTo: replyTo}); err != nil {
 		coordHTTPError(w, err)
 		return
 	}
@@ -432,6 +461,66 @@ func coordWindowFromRequest(r *http.Request) (store.MessageWindow, error) {
 	return store.LatestWindow(50), nil
 }
 
+func coordThreadWindowFromRequest(r *http.Request) (store.MessageWindow, error) {
+	beforeText := strings.TrimSpace(r.URL.Query().Get("thread_before"))
+	afterText := strings.TrimSpace(r.URL.Query().Get("thread_after"))
+	aroundText := strings.TrimSpace(r.URL.Query().Get("thread_around"))
+	set := 0
+	for _, value := range []string{beforeText, afterText, aroundText} {
+		if value != "" {
+			set++
+		}
+	}
+	if set > 1 {
+		return store.MessageWindow{}, errors.New("thread_before, thread_after and thread_around are mutually exclusive")
+	}
+	parsePositive := func(name, value string) (int64, error) {
+		sequence, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || sequence <= 0 {
+			return 0, errors.New(name + " must be a positive sequence")
+		}
+		return sequence, nil
+	}
+	if beforeText != "" {
+		sequence, err := parsePositive("thread_before", beforeText)
+		if err != nil {
+			return store.MessageWindow{}, err
+		}
+		return store.BeforeWindow(sequence, 50), nil
+	}
+	if afterText != "" {
+		sequence, err := parsePositive("thread_after", afterText)
+		if err != nil {
+			return store.MessageWindow{}, err
+		}
+		return store.AfterWindow(sequence, 50), nil
+	}
+	if aroundText != "" {
+		sequence, err := parsePositive("thread_around", aroundText)
+		if err != nil {
+			return store.MessageWindow{}, err
+		}
+		start := sequence - 25
+		if start < 0 {
+			start = 0
+		}
+		return store.AfterWindow(start, 50), nil
+	}
+	return store.LatestWindow(50), nil
+}
+
+func coordOptionalReplyTo(r *http.Request) (int64, error) {
+	raw := strings.TrimSpace(r.FormValue("reply_to"))
+	if raw == "" {
+		return 0, nil
+	}
+	id, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || id <= 0 {
+		return 0, errors.New("reply_to must be a positive message id")
+	}
+	return id, nil
+}
+
 // coordSend speichert einen menschlichen Beitrag.
 //
 // Die Herkunft kommt aus der angemeldeten Sitzung, nicht aus dem Formular.
@@ -452,11 +541,17 @@ func (a *app) coordSend(w http.ResponseWriter, r *http.Request) {
 	if !a.mayEnter(w, r, room) {
 		return
 	}
+	replyTo, err := coordOptionalReplyTo(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	msg := store.CoordMessage{
 		DestinationKind: store.DestinationRoom, DestinationID: room,
 		ClientID:  newFormClientID(r),
 		Body:      body,
+		ReplyTo:   replyTo,
 		ExpiresAt: strings.TrimSpace(r.FormValue("expires_at")),
 	}
 	msg.Mentions = splitCoordPrincipals(r.Form["mentions"]...)
@@ -466,7 +561,7 @@ func (a *app) coordSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err := a.browserCoord(r).Send(msg)
+	_, err = a.browserCoord(r).Send(msg)
 	if err != nil {
 		coordHTTPError(w, err)
 		return

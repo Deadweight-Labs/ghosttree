@@ -539,3 +539,29 @@ func TestQueuedCreateAndPromoteRecheckAccessAfterRevocation(t *testing.T) {
 		})
 	}
 }
+
+func TestRecipientsResolveAgentPrincipalToAuthorizedDisplayName(t *testing.T) {
+	s := newCoordAccessStore(t)
+	room := RoomKeyForProject("github.com/x/y")
+	registerAccessAgent(t, s, "person:1", "sess-owner", room)
+	if _, err := s.RegisterCoordAgent(CoordAgent{
+		ExternalID: "sess-peer", PrincipalID: "agent:sess-peer", Provider: "test",
+		DisplayName: "Backend Agent", RoomKey: room,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	recipients, err := s.CoordinationFor(Principal{ID: "person:1", Label: "Robin"}, "").Recipients()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, recipient := range recipients {
+		if recipient.PrincipalID == "agent:sess-peer" {
+			if recipient.Label != "Backend Agent" || recipient.Kind != "agent" {
+				t.Fatalf("agent recipient = %+v", recipient)
+			}
+			return
+		}
+	}
+	t.Fatalf("agent principal missing from recipients: %+v", recipients)
+}

@@ -26,17 +26,17 @@ type app struct {
 	sessions *sessions
 }
 type pageData struct {
-	Title, Person, Principal, CSRFToken, Error string
-	Requests                                   []requestdomain.SearchHit
-	Request                                    requestdomain.Detail
-	RequestThreads                             []coordThreadView
-	Knowledge                                  []store.Knowledge
-	Sessions                                   []store.Session
-	Chunks                                     []store.Chunk
-	SessionID                                  int64
-	Project, Preview                           string
-	Review                                     []reviewEntry
-	Coord                                      coordPageView
+	Title, Person, CSRFToken, Error string
+	Requests                        []requestdomain.SearchHit
+	Request                         requestdomain.Detail
+	RequestThreads                  []coordThreadView
+	Knowledge                       []store.Knowledge
+	Sessions                        []store.Session
+	Chunks                          []store.Chunk
+	SessionID                       int64
+	Project, Preview                string
+	Review                          []reviewEntry
+	Coord                           coordPageView
 }
 type reviewEntry struct {
 	Knowledge         store.Knowledge
@@ -91,7 +91,6 @@ func (a *app) render(w http.ResponseWriter, name string, data pageData) {
 func (a *app) renderBrowser(w http.ResponseWriter, r *http.Request, name string, data pageData) {
 	principal := browserPrincipal(r)
 	data.Person = principal.Label
-	data.Principal = principal.ID
 	data.CSRFToken = csrfOf(r)
 	a.render(w, name, data)
 }

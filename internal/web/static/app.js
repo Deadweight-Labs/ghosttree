@@ -71,32 +71,156 @@
     (panel.querySelector("a,button,input,select,textarea,summary") || panel)
       .focus();
   };
+  const bindDrawerCloseControls = () => {
+    document.querySelectorAll("[data-coord-drawer-close]").forEach((control) => {
+      if (control.dataset.coordDrawerCloseBound) return;
+      control.dataset.coordDrawerCloseBound = "true";
+      control.addEventListener("click", close);
+    });
+  };
   const bindDrawers = () => {
     toggles().forEach((button) => {
       if (button.dataset.coordDrawerBound) return;
       button.dataset.coordDrawerBound = "true";
       button.addEventListener("click", () => open(button));
     });
+    bindDrawerCloseControls();
+  };
+  const openSelectedThread = () => {
+    if (!media.matches || !document.querySelector(".coord-thread-detail")) return;
+    const contextButton = toggles().find(
+      (button) => button.dataset.coordDrawerTarget === "coord-context",
+    );
+    if (contextButton) open(contextButton);
   };
   bindDrawers();
-  if (backdrop) backdrop.addEventListener("click", close);
   addEventListener("keydown", (event) => {
     if (event.key === "Escape") close();
   });
   media.addEventListener("change", sync);
   sync();
+  openSelectedThread();
+
+  const createCoordApplyCoordinator = () => {
+    let generation = 0;
+    let active = null;
+    const idleListeners = new Set();
+    return {
+      begin(kind) {
+        if (kind === "refresh" && active && active.kind !== "refresh") {
+          return null;
+        }
+        generation += 1;
+        if (active) active.controller.abort();
+        active = {kind, generation, controller: new AbortController()};
+        return active;
+      },
+      current(lease) {
+        return active === lease && generation === lease.generation &&
+          !lease.controller.signal.aborted;
+      },
+      finish(lease) {
+        if (active !== lease) return;
+        active = null;
+        idleListeners.forEach((listener) => listener());
+      },
+      onIdle(listener) {
+        idleListeners.add(listener);
+        return () => idleListeners.delete(listener);
+      },
+    };
+  };
+  const progressiveFormPaths = new Set([
+    "/ui/coord/send",
+    "/ui/coord/thread/post",
+    "/ui/coord/read",
+    "/ui/coord/unread",
+    "/ui/coord/attention/action",
+    "/ui/coord/standing/create",
+    "/ui/coord/standing/end",
+    "/ui/coord/direct/start",
+    "/ui/coord/group/create",
+    "/ui/coord/group/update",
+    "/ui/coord/group/leave",
+    "/ui/coord/thread/create",
+    "/ui/coord/thread/state",
+  ]);
+  const coordPageTarget = (anchor, origin) => {
+    if (
+      !anchor || anchor.target || anchor.download ||
+      anchor.hasAttribute?.("download")
+    ) return null;
+    const target = new URL(anchor.href, origin);
+    return target.origin === origin && target.pathname === "/ui/coord"
+      ? target
+      : null;
+  };
+  const coordFormTarget = (form, origin) => {
+    if (!form || form.method.toLowerCase() !== "post") return null;
+    const target = new URL(form.action, origin);
+    return target.origin === origin && progressiveFormPaths.has(target.pathname)
+      ? target
+      : null;
+  };
+  const coordFormBody = (form, submitter) => {
+    const data = new FormData(form);
+    if (submitter?.name) data.append(submitter.name, submitter.value);
+    const body = new URLSearchParams();
+    for (const [name, value] of data.entries()) {
+      if (typeof value !== "string") return null;
+      body.append(name, value);
+    }
+    return body;
+  };
+  const coordPageLoadApplied = "applied";
+  const coordPageLoadFailed = "failed";
+  const coordPageLoadForbidden = "forbidden";
+  const coordPageLoadOffline = "offline";
+  const coordPageLoadRedirected = "redirected";
+  const coordPageLoadSuperseded = "superseded";
+  const coordFailedPopstateTarget = (result, currentURL) => {
+    if (
+      result === coordPageLoadApplied ||
+      result === coordPageLoadRedirected ||
+      result === coordPageLoadSuperseded
+    ) {
+      return "";
+    }
+    return result === coordPageLoadForbidden ? "/ui/coord" : currentURL;
+  };
+  const createCoordRefreshRetry = (schedule) => {
+    const delays = [250, 1000, 3000];
+    let failures = 0;
+    return {
+      failure() {
+        const delay = delays[failures];
+        if (delay === undefined) return false;
+        failures += 1;
+        schedule(delay);
+        return true;
+      },
+      success() {
+        failures = 0;
+      },
+    };
+  };
 
   const liveStatus = document.querySelector("[data-coord-live-status]");
   const announce = document.getElementById("coord-status");
+  const actionStatus = document.querySelector("[data-coord-action-status]");
   const setLive = (state, label, announcement = "") => {
     document.documentElement.dataset.coordLive = state;
     if (liveStatus) liveStatus.textContent = label;
     if (announcement && announce) announce.textContent = announcement;
   };
-  if (!("EventSource" in window)) {
-    setLive("unsupported", "Live-Updates nicht unterstützt");
-    return;
-  }
+  const setActionStatus = (message, error = false) => {
+    if (actionStatus) {
+      actionStatus.textContent = message;
+      actionStatus.hidden = !message;
+      actionStatus.dataset.error = error ? "true" : "false";
+    }
+    if (message && announce) announce.textContent = message;
+  };
 
   const pageParams = () => new URLSearchParams(location.search);
   const currentRoom = () => pageParams().get("room") || "";
@@ -161,44 +285,72 @@
     if (!current || !incoming) return;
     current.replaceChildren(...incoming.childNodes);
   };
+  const focusIdentity = (element) => ({
+    key: element?.dataset?.coordFocusKey || "",
+    tag: element?.tagName || "",
+    id: element?.id || "",
+    name: element?.getAttribute?.("name") || "",
+    href: element?.getAttribute?.("href") || "",
+    text: element?.textContent || "",
+  });
+  const sameFocusIdentity = (state, element) => {
+    if (state.key) return element?.dataset?.coordFocusKey === state.key;
+    return (state.id && element.id === state.id) ||
+      (state.href && element.getAttribute("href") === state.href) ||
+      (state.name && element.getAttribute("name") === state.name &&
+        element.textContent === state.text) ||
+      (!state.id && !state.href && !state.name && state.text &&
+        element.textContent === state.text);
+  };
   const captureFocus = () => {
     const element = document.activeElement;
     if (!element || element === document.body) return null;
-    return {
-      tag: element.tagName,
-      id: element.id,
-      name: element.getAttribute("name") || "",
-      href: element.getAttribute("href") || "",
-      text: element.textContent || "",
-    };
+    return focusIdentity(element);
   };
   const restoreFocus = (state) => {
     if (
       !state ||
       (document.activeElement && document.activeElement !== document.body)
     ) return;
-    const candidates = [...document.querySelectorAll(state.tag.toLowerCase())];
-    const match = candidates.find((element) =>
-      (state.id && element.id === state.id) ||
-      (state.href && element.getAttribute("href") === state.href) ||
-      (state.name && element.getAttribute("name") === state.name &&
-        element.textContent === state.text)
-    );
+    const candidates = state.key
+      ? [...document.querySelectorAll("[data-coord-focus-key]")]
+      : [...document.querySelectorAll(state.tag.toLowerCase())];
+    const match = candidates.find((element) => sameFocusIdentity(state, element));
     if (match) match.focus();
   };
-  const draftControlKey = (control, index) =>
-    `${control.tagName}:${control.getAttribute("name") || ""}:${index}`;
+  const draftControlSelector =
+    "input:not([type='hidden']),select,textarea,button,summary";
+  const draftControlBase = (control) => {
+    const tag = control.tagName;
+    const type = (control.getAttribute("type") || control.type || "")
+      .toLowerCase();
+    const name = control.getAttribute("name") || "";
+    let stableValue = "";
+    if (type === "checkbox" || type === "radio") stableValue = control.value;
+    else if (tag === "BUTTON") stableValue = control.value || control.textContent;
+    else if (tag === "SUMMARY") stableValue = control.textContent;
+    return `${tag}:${type}:${name}:${stableValue}`;
+  };
+  const draftControlKeys = (controls) => {
+    const ordinals = new Map();
+    return controls.map((control) => {
+      const base = draftControlBase(control);
+      const ordinal = ordinals.get(base) || 0;
+      ordinals.set(base, ordinal + 1);
+      return `${base}:${ordinal}`;
+    });
+  };
   const captureDrafts = () =>
     [...document.querySelectorAll("[data-coord-draft-key]")].map(
       (container) => {
-        const controls = [
-          ...container.querySelectorAll("input,select,textarea,button,summary"),
-        ];
+        const controls = [...container.querySelectorAll(draftControlSelector)];
+        const controlKeys = draftControlKeys(controls);
+        const focusIndex = controls.indexOf(document.activeElement);
         return {
           key: container.dataset.coordDraftKey,
           open: container.tagName === "DETAILS" ? container.open : null,
           controls: controls.map((control, index) => ({
-            key: draftControlKey(control, index),
+            key: controlKeys[index],
             value: control.value,
             checked: control.checked,
             selectionStart: typeof control.selectionStart === "number"
@@ -208,12 +360,7 @@
               ? control.selectionEnd
               : null,
           })),
-          focus: container.contains(document.activeElement)
-            ? draftControlKey(
-              document.activeElement,
-              controls.indexOf(document.activeElement),
-            )
-            : "",
+          focus: focusIndex >= 0 ? controlKeys[focusIndex] : "",
         };
       },
     );
@@ -225,23 +372,21 @@
       if (draft.open !== null && container.tagName === "DETAILS") {
         container.open = draft.open;
       }
-      const controls = [
-        ...container.querySelectorAll("input,select,textarea,button,summary"),
-      ];
+      const controls = [...container.querySelectorAll(draftControlSelector)];
+      const controlKeys = draftControlKeys(controls);
       for (const saved of draft.controls) {
-        const index = controls.findIndex((control, position) =>
-          draftControlKey(control, position) === saved.key
-        );
+        const index = controlKeys.indexOf(saved.key);
         if (index < 0) continue;
         const control = controls[index];
         if (control.type === "checkbox" || control.type === "radio") {
           control.checked = saved.checked;
-        } else if (control.tagName !== "BUTTON") control.value = saved.value;
+        } else if (
+          control.tagName !== "BUTTON" && control.tagName !== "SUMMARY" &&
+          control.type !== "file"
+        ) control.value = saved.value;
       }
       if (draft.focus) {
-        const focusIndex = controls.findIndex((control, position) =>
-          draftControlKey(control, position) === draft.focus
-        );
+        const focusIndex = controlKeys.indexOf(draft.focus);
         if (focusIndex >= 0) {
           const control = controls[focusIndex];
           const saved = draft.controls.find((item) => item.key === draft.focus);
@@ -257,8 +402,222 @@
     }
   };
 
+  const applyCoordinator = createCoordApplyCoordinator();
+  const postingForms = new WeakSet();
+  const coordPageDocument = (html) =>
+    new DOMParser().parseFromString(html, "text/html");
+  const canonicalCoordURL = (response, requested) => {
+    const target = new URL(response.url || requested.href, location.origin);
+    if (target.origin !== location.origin || target.pathname !== "/ui/coord") {
+      return null;
+    }
+    if (!target.hash && requested.hash && !response.redirected) {
+      target.hash = requested.hash;
+    }
+    return target;
+  };
+  const applyCoordPage = (incoming, target, options = {}) => {
+    const selectors = ["#coord-rooms", ".coord-conversation", "#coord-context"];
+    if (selectors.some((selector) => !incoming.querySelector(selector))) {
+      return false;
+    }
+    const oldRoom = currentRoom();
+    const drawerWasOpen = openPanel?.id === "coord-context";
+    const scroll = anchorState();
+    const focus = captureFocus();
+    const drafts = captureDrafts().filter(
+      (draft) => draft.key !== options.discardDraftKey,
+    );
+    selectors.forEach((selector) => replaceSurface(selector, incoming));
+    const incomingWorkspace = incoming.querySelector(".coord-workspace");
+    if (incomingWorkspace?.dataset.coordEventCursor) {
+      workspace.dataset.coordEventCursor =
+        incomingWorkspace.dataset.coordEventCursor;
+    }
+    if (options.history === "push") {
+      history.pushState({coord: true}, "", target.href);
+    } else if (options.history === "replace") {
+      history.replaceState({coord: true}, "", target.href);
+    }
+    bindDrawers();
+    if (openPanel) {
+      const reopenedPanel = document.getElementById(openPanel.id);
+      restoreOutside();
+      openPanel = reopenedPanel;
+      if (!reopenedPanel) return false;
+      reopenedPanel.hidden = false;
+      reopenedPanel.inert = false;
+      setOutsideInert(reopenedPanel);
+      const toggle = toggles().find(
+        (button) => button.dataset.coordDrawerTarget === openPanel.id,
+      );
+      if (toggle) {
+        toggle.setAttribute("aria-expanded", "true");
+        returnFocus = toggle;
+      }
+    }
+    const newRoom = currentRoom();
+    if (oldRoom === newRoom) restoreAnchor(scroll);
+    else {
+      const messages = document.querySelector(".coord-messages");
+      if (messages) messages.scrollTop = messages.scrollHeight;
+    }
+    restoreDrafts(drafts);
+    const hashTarget = target.hash && document.getElementById(target.hash.slice(1));
+    if (hashTarget) {
+      hashTarget.scrollIntoView({block: "nearest"});
+      if (/^(INPUT|SELECT|TEXTAREA|BUTTON|A)$/.test(hashTarget.tagName)) {
+        hashTarget.focus();
+      }
+    } else restoreFocus(focus);
+    markHighestRenderedRead();
+    if (!drawerWasOpen) openSelectedThread();
+    return true;
+  };
+  const fetchCoordPage = async (target, options = {}) => {
+    const lease = applyCoordinator.begin("navigation");
+    setActionStatus(options.loadingLabel || "Unterhaltung wird geladen …");
+    try {
+      const response = await fetch(target.href, {
+        credentials: "same-origin",
+        headers: {"X-Coord-Progressive": "1"},
+        signal: lease.controller.signal,
+      });
+      if (!applyCoordinator.current(lease)) return coordPageLoadSuperseded;
+      const responseURL = new URL(response.url || target.href, location.origin);
+      if (responseURL.pathname === "/ui/login") {
+        location.assign("/ui/login");
+        return coordPageLoadRedirected;
+      }
+      if (!response.ok) {
+        setActionStatus(
+          `Unterhaltung konnte nicht geladen werden (HTTP ${response.status}).`,
+          true,
+        );
+        return response.status === 403 || response.status === 404
+          ? coordPageLoadForbidden
+          : coordPageLoadFailed;
+      }
+      const canonical = canonicalCoordURL(response, target);
+      const html = await response.text();
+      if (!applyCoordinator.current(lease)) return coordPageLoadSuperseded;
+      const incoming = coordPageDocument(html);
+      if (!canonical || !applyCoordPage(incoming, canonical, options)) {
+        setActionStatus("Die Serverantwort konnte nicht angezeigt werden.", true);
+        return coordPageLoadFailed;
+      }
+      setActionStatus(options.successLabel || "Unterhaltung aktualisiert");
+      return coordPageLoadApplied;
+    } catch (error) {
+      if (error?.name === "AbortError") return coordPageLoadSuperseded;
+      if (!applyCoordinator.current(lease)) return coordPageLoadSuperseded;
+      setActionStatus("Offline · Seite wird normal geöffnet.", true);
+      return coordPageLoadOffline;
+    } finally {
+      applyCoordinator.finish(lease);
+    }
+  };
+  const postCoordForm = async (form, target, submitter) => {
+    if (postingForms.has(form)) return;
+    const body = coordFormBody(form, submitter);
+    if (!body) {
+      setActionStatus("Datei-Uploads werden hier nicht unterstützt.", true);
+      return;
+    }
+    if (!body.get("csrf_token")) {
+      setActionStatus("Sicherheits-Token fehlt; Formular nicht gesendet.", true);
+      return;
+    }
+    postingForms.add(form);
+    form.setAttribute("aria-busy", "true");
+    if (submitter) submitter.disabled = true;
+    const draftContainer = form.closest("[data-coord-draft-key]");
+    const lease = applyCoordinator.begin("post");
+    setActionStatus("Aktion wird ausgeführt …");
+    try {
+      const response = await fetch(target.href, {
+        method: "POST",
+        body,
+        credentials: "same-origin",
+        redirect: "follow",
+        headers: {"X-Coord-Progressive": "1"},
+        signal: lease.controller.signal,
+      });
+      if (!applyCoordinator.current(lease)) return;
+      const responseURL = new URL(response.url || target.href, location.origin);
+      if (responseURL.pathname === "/ui/login") {
+        location.assign("/ui/login");
+        return;
+      }
+      if (!response.ok) {
+        setActionStatus(
+          `Aktion fehlgeschlagen (HTTP ${response.status}). Eingaben bleiben erhalten.`,
+          true,
+        );
+        return;
+      }
+      const canonical = canonicalCoordURL(response, target);
+      const html = await response.text();
+      if (!applyCoordinator.current(lease)) return;
+      const incoming = coordPageDocument(html);
+      if (!canonical || !applyCoordPage(incoming, canonical, {
+        history: "push",
+        discardDraftKey: draftContainer?.dataset.coordDraftKey || "",
+      })) {
+        location.assign(response.url || "/ui/coord");
+        return;
+      }
+      setActionStatus("Aktion abgeschlossen");
+    } catch (error) {
+      if (error?.name === "AbortError" || !applyCoordinator.current(lease)) {
+        return;
+      }
+      setActionStatus(
+        "Offline · Aktion nicht automatisch erneut gesendet; Eingaben bleiben erhalten.",
+        true,
+      );
+    } finally {
+      applyCoordinator.finish(lease);
+      postingForms.delete(form);
+      if (form.isConnected) {
+        form.removeAttribute("aria-busy");
+        if (submitter) submitter.disabled = false;
+      }
+    }
+  };
+  document.addEventListener("click", (event) => {
+    if (
+      event.defaultPrevented || event.button !== 0 || event.metaKey ||
+      event.ctrlKey || event.shiftKey || event.altKey
+    ) return;
+    const anchor = event.target.closest?.("a");
+    if (!anchor || (anchor.getAttribute("href") || "").startsWith("#")) return;
+    const target = coordPageTarget(anchor, location.origin);
+    if (!target) return;
+    event.preventDefault();
+    fetchCoordPage(target, {history: "push"}).then((result) => {
+      if (result === coordPageLoadOffline) location.assign(target.href);
+    });
+  });
+  document.addEventListener("submit", (event) => {
+    const form = event.target;
+    const target = coordFormTarget(form, location.origin);
+    if (!target) return;
+    event.preventDefault();
+    postCoordForm(form, target, event.submitter);
+  });
+  addEventListener("popstate", () => {
+    const target = new URL(location.href);
+    if (target.pathname !== "/ui/coord") return;
+    fetchCoordPage(target).then((result) => {
+      const fallback = coordFailedPopstateTarget(result, location.href);
+      if (fallback) location.assign(fallback);
+    });
+  });
+
   let pending = new Set();
   let refreshing = false;
+  let refreshTimer = null;
   const queueSurface = (selector) => pending.add(selector);
   const queueSurfaces = (selectors) => selectors.forEach(queueSurface);
   const roomSurfaces = [
@@ -275,61 +634,106 @@
   const threadSurfaces = [
     "[data-coord-thread-list]",
     ".coord-thread-detail > header",
+    ".coord-thread-paging",
     ".coord-thread-messages",
   ];
-  const refreshVisible = async (event) => {
-    queueSurface("[data-coord-sidebar-dynamic]");
-    const room = currentRoom();
-    const thread = currentThread();
+  const coordEventSurfaces = (event, room, thread) => {
+    const selectors = new Set(["[data-coord-sidebar-dynamic]"]);
     if (event.object_kind === "room" && event.object_id === room) {
       if (event.kind !== "read" && event.kind !== "attention") {
-        queueSurfaces(roomSurfaces);
+        roomSurfaces.forEach((selector) => selectors.add(selector));
       }
-      queueSurfaces(contextSurfaces);
+      contextSurfaces.forEach((selector) => selectors.add(selector));
     }
     if (event.object_kind === "discussion" && event.object_id === thread) {
-      queueSurfaces(threadSurfaces);
+      threadSurfaces.forEach((selector) => selectors.add(selector));
     }
-    if (event.object_kind === "thread") queueSurfaces(threadSurfaces);
-    if (refreshing) return;
+    if (event.object_kind === "thread") {
+      threadSurfaces.forEach((selector) => selectors.add(selector));
+      selectors.add(".coord-messages");
+    }
+    return [...selectors];
+  };
+  const scheduleRefreshDrain = (delay = 35) => {
+    if (refreshing || refreshTimer !== null || !pending.size) return;
+    refreshTimer = setTimeout(() => {
+      refreshTimer = null;
+      drainRefreshQueue();
+    }, delay);
+  };
+  const refreshRetry = createCoordRefreshRetry(scheduleRefreshDrain);
+  const drainRefreshQueue = async () => {
+    if (refreshing || !pending.size) return;
     refreshing = true;
-    await new Promise((resolve) => setTimeout(resolve, 35));
-    while (pending.size) {
-      const selectors = [...pending];
-      pending = new Set();
-      const scroll = anchorState();
-      const focus = captureFocus();
-      const drafts = captureDrafts();
-      try {
-        const response = await fetch(location.href, {
-          headers: { "X-Coord-Fragment": "visible" },
-          credentials: "same-origin",
-        });
-        if (response.status === 403 || response.status === 404) {
-          location.assign("/ui/coord");
+    let blockedByUser = false;
+    let transientFailure = false;
+    try {
+      while (pending.size) {
+        const lease = applyCoordinator.begin("refresh");
+        if (!lease) {
+          blockedByUser = true;
           return;
         }
-        if (!response.ok) throw new Error(`coord refresh ${response.status}`);
-        const incoming = new DOMParser().parseFromString(
-          await response.text(),
-          "text/html",
-        );
-        selectors.forEach((selector) => replaceSurface(selector, incoming));
-        bindDrawers();
-        restoreAnchor(scroll);
-        restoreDrafts(drafts);
-        restoreFocus(focus);
-        markHighestRenderedRead();
-        setLive("live", "Live", "Unterhaltung aktualisiert");
-      } catch (_) {
-        setLive(
-          "offline",
-          "Live · Aktualisierung fehlgeschlagen",
-          "Live-Aktualisierung fehlgeschlagen",
-        );
+        const selectors = [...pending];
+        pending = new Set();
+        const scroll = anchorState();
+        const focus = captureFocus();
+        const drafts = captureDrafts();
+        try {
+          const response = await fetch(location.href, {
+            headers: { "X-Coord-Fragment": "visible" },
+            credentials: "same-origin",
+            signal: lease.controller.signal,
+          });
+          if (!applyCoordinator.current(lease)) return;
+          if (new URL(response.url).pathname === "/ui/login") {
+            location.assign("/ui/login");
+            return;
+          }
+          if (response.status === 403 || response.status === 404) {
+            location.assign("/ui/coord");
+            return;
+          }
+          if (!response.ok) throw new Error(`coord refresh ${response.status}`);
+          const html = await response.text();
+          if (!applyCoordinator.current(lease)) return;
+          const incoming = new DOMParser().parseFromString(html, "text/html");
+          selectors.forEach((selector) => replaceSurface(selector, incoming));
+          bindDrawers();
+          restoreAnchor(scroll);
+          restoreDrafts(drafts);
+          restoreFocus(focus);
+          markHighestRenderedRead();
+          refreshRetry.success();
+          setLive("live", "Live verbunden", "Unterhaltung aktualisiert");
+        } catch (error) {
+          selectors.forEach(queueSurface);
+          if (error?.name === "AbortError" || !applyCoordinator.current(lease)) {
+            blockedByUser = true;
+            return;
+          } else {
+            transientFailure = true;
+            setLive(
+              "offline",
+              "Live · Aktualisierung fehlgeschlagen",
+              "Live-Aktualisierung fehlgeschlagen",
+            );
+            return;
+          }
+        } finally {
+          applyCoordinator.finish(lease);
+        }
       }
+    } finally {
+      refreshing = false;
+      if (pending.size && transientFailure) refreshRetry.failure();
+      else if (pending.size && !blockedByUser) scheduleRefreshDrain();
     }
-    refreshing = false;
+  };
+  applyCoordinator.onIdle(scheduleRefreshDrain);
+  const refreshVisible = (event) => {
+    queueSurfaces(coordEventSurfaces(event, currentRoom(), currentThread()));
+    scheduleRefreshDrain();
   };
 
   let lastReadSubmitted = "";
@@ -359,44 +763,48 @@
     });
   };
 
-  const cursor = workspace.dataset.coordEventCursor || "0";
-  let lastEventID = Number(cursor);
-  const source = new EventSource(
-    `/ui/coord/events?after=${encodeURIComponent(cursor)}`,
-  );
-  source.addEventListener("open", () => {
-    setLive("live", "Live");
-    markHighestRenderedRead();
-  });
-  source.addEventListener("coord.changed", (raw) => {
-    try {
-      const eventID = Number(raw.lastEventId);
-      if (!Number.isSafeInteger(eventID) || eventID < 0) {
-        location.reload();
-        return;
-      }
-      if (eventID <= lastEventID) return;
-      lastEventID = eventID;
-      refreshVisible(JSON.parse(raw.data));
-    } catch (_) {
-      location.reload();
-    }
-  });
-  source.addEventListener("resync", () => {
-    setLive("resync", "Synchronisiere …");
-    location.reload();
-  });
-  source.addEventListener("session-ended", () => {
-    source.close();
-    setLive("offline", "Sitzung beendet");
-    location.assign("/ui/login");
-  });
-  source.onerror = () =>
-    setLive(
-      "offline",
-      "Offline · Verbindung wird wiederholt",
-      "Live-Verbindung unterbrochen",
+  if (!("EventSource" in window)) {
+    setLive("unsupported", "Live-Updates nicht unterstützt");
+  } else {
+    const cursor = workspace.dataset.coordEventCursor || "0";
+    let lastEventID = Number(cursor);
+    const source = new EventSource(
+      `/ui/coord/events?after=${encodeURIComponent(cursor)}`,
     );
+    source.addEventListener("open", () => {
+      setLive("live", "Live verbunden");
+      markHighestRenderedRead();
+    });
+    source.addEventListener("coord.changed", (raw) => {
+      try {
+        const eventID = Number(raw.lastEventId);
+        if (!Number.isSafeInteger(eventID) || eventID < 0) {
+          location.reload();
+          return;
+        }
+        if (eventID <= lastEventID) return;
+        lastEventID = eventID;
+        refreshVisible(JSON.parse(raw.data));
+      } catch (_) {
+        location.reload();
+      }
+    });
+    source.addEventListener("resync", () => {
+      setLive("resync", "Synchronisiere …");
+      location.reload();
+    });
+    source.addEventListener("session-ended", () => {
+      source.close();
+      setLive("offline", "Sitzung beendet");
+      location.assign("/ui/login");
+    });
+    source.onerror = () =>
+      setLive(
+        "offline",
+        "Offline · Verbindung wird wiederholt",
+        "Live-Verbindung unterbrochen",
+      );
+  }
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") markHighestRenderedRead();
   });

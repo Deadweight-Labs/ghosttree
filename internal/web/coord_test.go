@@ -771,6 +771,216 @@ func TestCoordWorkspaceRendersAllRoomSectionsAndNewestWindow(t *testing.T) {
 	}
 }
 
+func TestCoordWelcomeKeepsRoomPickerReachableWhenEnhanced(t *testing.T) {
+	srv, _, client := signedIn(t)
+	html := coordPageBody(t, client, srv.URL+"/ui/coord")
+	for _, want := range []string{`<h1 class="coord-visually-hidden">Coordination</h1>`, `aria-controls="coord-rooms"`, `data-coord-drawer-target="coord-rooms"`} {
+		if !strings.Contains(html, want) {
+			t.Errorf("welcome drawer contract missing %q", want)
+		}
+	}
+}
+
+func TestCoordResponsiveEnhancedShellDropsHiddenSidebarColumn(t *testing.T) {
+	cssBytes, err := files.ReadFile("static/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	css := string(cssBytes)
+	if !strings.Contains(css, `@media(max-width:1100px)`) || !strings.Contains(css, `.coord-enhanced .coord-shell{grid-template-columns:minmax(0,1fr)}`) {
+		t.Fatal("enhanced tablet layout must give the hidden drawers no grid column")
+	}
+	if !strings.Contains(css, `.coord-enhanced .coord-sidebar[hidden],.coord-enhanced .coord-context[hidden]{display:none}`) {
+		t.Fatal("enhanced drawers must honor the hidden attribute over their display rules")
+	}
+}
+
+func TestCoordResponsiveDrawersExposeNamedCloseControls(t *testing.T) {
+	srv, _, client := signedIn(t)
+	html := coordPageBody(t, client, srv.URL+"/ui/coord")
+	for _, want := range []string{
+		`class="coord-drawer-head"`,
+		`class="coord-drawer-close" data-coord-drawer-close aria-label="Räume schließen"`,
+		`class="coord-drawer-close" data-coord-drawer-close aria-label="Kontext schließen"`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("responsive drawer header missing %q", want)
+		}
+	}
+
+	cssBytes, err := files.ReadFile("static/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	css := string(cssBytes)
+	if !strings.Contains(css, `.coord-drawer-close{display:none`) ||
+		!strings.Contains(css, `.coord-enhanced .coord-drawer-head{display:flex`) {
+		t.Fatal("drawer close controls must only become visible in the enhanced responsive layout")
+	}
+	jsBytes, err := files.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(jsBytes)
+	for _, want := range []string{
+		`const bindDrawerCloseControls = () =>`,
+		`querySelectorAll("[data-coord-drawer-close]")`,
+		`control.dataset.coordDrawerCloseBound`,
+		`const reopenedPanel = document.getElementById(openPanel.id)`,
+		`setOutsideInert(reopenedPanel)`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("replace-safe drawer close binding missing %q", want)
+		}
+	}
+}
+
+func TestCoordSelectedThreadOpensResponsiveContextOnInitialLoad(t *testing.T) {
+	jsBytes, err := files.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(jsBytes)
+	for _, want := range []string{
+		`const openSelectedThread = () =>`,
+		`document.querySelector(".coord-thread-detail")`,
+		`button.dataset.coordDrawerTarget === "coord-context"`,
+		"sync();\n  openSelectedThread();",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("initial selected-thread drawer behavior missing %q", want)
+		}
+	}
+}
+
+func TestCoordMessageActionsShareOneTouchSizedHierarchy(t *testing.T) {
+	templateBytes, err := files.ReadFile("templates/coord.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := string(templateBytes)
+	if got := strings.Count(template, `class="coord-message-actions"`); got != 2 {
+		t.Fatalf("message action rows=%d, want room and thread rows", got)
+	}
+	if !strings.Contains(template, `class="coord-message-action coord-message-action-primary coord-reply-action"`) ||
+		!strings.Contains(template, `class="coord-message-action coord-message-action-secondary"`) {
+		t.Fatal("message actions must distinguish reply as primary from thread actions")
+	}
+
+	cssBytes, err := files.ReadFile("static/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	css := string(cssBytes)
+	if !strings.Contains(css, `.coord-message-action{display:inline-flex;align-items:center;min-height:2.75rem`) {
+		t.Fatal("message actions must expose a 44px-equivalent touch target")
+	}
+}
+
+func TestCoordTimestampsKeepMachineValueAndShowShortLocalValue(t *testing.T) {
+	templateBytes, err := files.ReadFile("templates/coord.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := string(templateBytes)
+	for _, want := range []string{
+		`<time datetime="{{.Timestamp}}" title="{{.Timestamp}}">{{.DisplayTimestamp}}</time>`,
+		`<time datetime="{{.CreatedAt}}" title="{{.CreatedAt}}">{{.DisplayTimestamp}}</time>`,
+		`<time datetime="{{.LastSeen}}" title="{{.LastSeen}}">{{.DisplayTimestamp}}</time>`,
+	} {
+		if !strings.Contains(template, want) {
+			t.Errorf("coord timestamp markup missing %q", want)
+		}
+	}
+}
+
+func TestCoordLiveBadgeAndMobileToolbarHaveStableCompactContracts(t *testing.T) {
+	jsBytes, err := files.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(jsBytes), `setLive("live", "Live verbunden"`) {
+		t.Fatal("connected live status must state what is connected")
+	}
+
+	cssBytes, err := files.ReadFile("static/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	css := string(cssBytes)
+	for _, want := range []string{
+		`right:max(.7rem,env(safe-area-inset-right))`,
+		`bottom:max(.7rem,env(safe-area-inset-bottom))`,
+		`pointer-events:none`,
+		`.clay-toolbar>a{flex:0 0 auto;min-height:2.75rem`,
+	} {
+		if !strings.Contains(css, want) {
+			t.Errorf("stable responsive chrome missing %q", want)
+		}
+	}
+}
+
+func TestCoordThreadListSeparatesTitleFromStatus(t *testing.T) {
+	cssBytes, err := files.ReadFile("static/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(cssBytes), `.coord-threads li>small{display:block;margin-top:.2rem`) {
+		t.Fatal("thread status must render on its own spaced line")
+	}
+}
+
+func TestCoordWorkspaceRendersAuthorizedIdentityLabelsAndHonestPresence(t *testing.T) {
+	srv, st, client := signedIn(t)
+	room := store.RoomKeyForProject("github.com/x/identity-ui")
+	materializeWebRoom(t, st, room)
+	if _, err := st.AddPerson("Alex"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.RegisterCoordAgent(store.CoordAgent{
+		ExternalID: "sess-peer-secret", PrincipalID: "person:2", Person: "Alex",
+		Provider: "codex", DisplayName: "Build Agent", RoomKey: room,
+		Worktree: "/worktrees/ui", Branch: "feat/ui",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CoordinationFor(store.Principal{ID: "person:1", Label: "robin"}, "").Send(store.CoordMessage{
+		DestinationKind: store.DestinationRoom, DestinationID: room, ClientID: "identity-message",
+		Body: "please review", Intent: store.IntentHandoff, Mentions: []string{"sess-peer-secret"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	direct := store.CoordRoom{Key: store.RoomKeyForDirect([]string{"person:1", "person:2"}), Kind: store.RoomDirect, Members: []string{"person:1", "person:2"}}
+	if err := st.CoordinationFor(store.Principal{ID: "person:1", Label: "robin"}, "").EnsureDirect(direct); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddPerson("Top Secret"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.RegisterCoordAgent(store.CoordAgent{
+		ExternalID: "sess-unrelated-secret", PrincipalID: "person:3", Person: "Top Secret",
+		Provider: "test", DisplayName: "Hidden Directory Agent", RoomKey: store.RoomKeyForMachine("other-host"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	html := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room))
+	for _, want := range []string{
+		"robin (du)", "Build Agent", "Alex", "Erwähnt: Build Agent", "an Build Agent",
+		"Provider: codex", "Worktree: /worktrees/ui", "Branch: feat/ui",
+		"Erreichbarkeit: unbekannt", "Arbeitszustand: unbekannt",
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("identity/presence presentation missing %q", want)
+		}
+	}
+	for _, forbidden := range []string{"Erwähnt: sess-peer-secret", ">sess-peer-secret<", "an sess-peer-secret", "Top Secret", "Hidden Directory Agent"} {
+		if strings.Contains(html, forbidden) {
+			t.Errorf("coordination UI leaked raw or unauthorized identity %q", forbidden)
+		}
+	}
+}
+
 func TestCoordWorkspaceEscapesAgentContentAndKeepsNoJSForms(t *testing.T) {
 	srv, st, client := signedIn(t)
 	room := store.RoomKeyForProject("github.com/x/escape")
@@ -949,6 +1159,207 @@ func TestThreadAttentionAroundLoadsSourceOlderThanLatestWindow(t *testing.T) {
 	around := coordPageBody(t, client, srv.URL+aroundURL)
 	if !strings.Contains(around, `id="thread-message-1"`) || !strings.Contains(around, "Old source") {
 		t.Fatalf("around window missed old source: %s", around)
+	}
+}
+
+func TestHumanCanReplyInRoomAndThreadWithoutJavaScript(t *testing.T) {
+	srv, st, client := signedIn(t)
+	room := store.RoomKeyForProject("github.com/x/replies")
+	foreignRoom := store.RoomKeyForProject("github.com/x/foreign-replies")
+	materializeWebRoom(t, st, room)
+	materializeWebRoom(t, st, foreignRoom)
+	parentID, err := st.AppendCoordMessage(store.CoordMessage{
+		DestinationKind: store.DestinationRoom, DestinationID: room,
+		SenderExternalID: "fixture:" + room, ClientID: "room-parent", Body: "Room parent",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreignID, err := st.AppendCoordMessage(store.CoordMessage{
+		DestinationKind: store.DestinationRoom, DestinationID: foreignRoom,
+		SenderExternalID: "fixture:" + foreignRoom, ClientID: "foreign-parent", Body: "Foreign parent",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	page := coordPageBody(t, client, srv.URL+coordRoomURL(room, "", 0))
+	replyURL := coordRoomReplyURL(room, parentID, 1)
+	for _, want := range []string{`href="` + strings.ReplaceAll(replyURL, "&", "&amp;") + `"`, `>Antworten</a>`} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("room reply control missing %q", want)
+		}
+	}
+	replyPage := coordPageBody(t, client, srv.URL+replyURL)
+	if !strings.Contains(replyPage, `type="hidden" name="reply_to" value="`+strconv.FormatInt(parentID, 10)+`"`) || !strings.Contains(replyPage, `id="coord-message-body"`) {
+		t.Fatalf("room reply selection was not carried to focused composer: %s", replyPage)
+	}
+	res := authenticatedPostForm(t, client, srv.URL+"/ui/coord/send", url.Values{
+		"room": {room}, "body": {"Room child"}, "reply_to": {strconv.FormatInt(parentID, 10)}, "form_id": {"room-reply"},
+	})
+	if res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("room reply status=%d body=%s", res.StatusCode, body(t, res))
+	}
+	res.Body.Close()
+	roomMessages, err := st.CoordMessagesSince(store.DestinationRoom, room, 0, 10)
+	if err != nil || len(roomMessages) != 2 || roomMessages[1].ReplyTo != parentID {
+		t.Fatalf("room reply messages=%+v err=%v", roomMessages, err)
+	}
+	rendered := coordPageBody(t, client, srv.URL+coordRoomURL(room, "", 0))
+	if !strings.Contains(rendered, "Antwort auf") || !strings.Contains(rendered, "Room parent") {
+		t.Fatalf("room reply preview missing: %s", rendered)
+	}
+	res = authenticatedPostForm(t, client, srv.URL+"/ui/coord/send", url.Values{
+		"room": {room}, "body": {"Forged room child"}, "reply_to": {strconv.FormatInt(foreignID, 10)},
+	})
+	if res.StatusCode != http.StatusNotFound {
+		t.Fatalf("cross-room reply status=%d body=%s", res.StatusCode, body(t, res))
+	}
+	res.Body.Close()
+
+	access := st.CoordinationFor(store.Principal{ID: "person:1", Label: "robin"}, "")
+	threadID, err := access.CreateTaskThreadInRoom(room, "Replies", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	threadParentID, err := access.ThreadPost(threadID, store.CoordMessage{ClientID: "thread-parent", Body: "Thread parent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	threadURL := coordThreadURL(room, threadID)
+	threadPage := coordPageBody(t, client, srv.URL+threadURL)
+	threadReplyURL := coordThreadReplyURL(room, threadID, threadParentID, 1)
+	if !strings.Contains(threadPage, `href="`+strings.ReplaceAll(threadReplyURL, "&", "&amp;")+`"`) {
+		t.Fatalf("thread reply control missing: %s", threadPage)
+	}
+	selected := coordPageBody(t, client, srv.URL+threadReplyURL)
+	clearThreadReplyURL := strings.TrimSuffix(threadURL, "#coord-thread") + "#coord-thread-body"
+	if !strings.Contains(selected, `type="hidden" name="reply_to" value="`+strconv.FormatInt(threadParentID, 10)+`"`) || !strings.Contains(selected, `id="coord-thread-body"`) || !strings.Contains(selected, `href="`+strings.ReplaceAll(clearThreadReplyURL, "&", "&amp;")+`"`) {
+		t.Fatalf("thread reply selection was not carried to focused composer: %s", selected)
+	}
+	res = authenticatedPostForm(t, client, srv.URL+"/ui/coord/thread/post", url.Values{
+		"thread_id": {strconv.FormatInt(threadID, 10)}, "body": {"Thread child"},
+		"reply_to": {strconv.FormatInt(threadParentID, 10)}, "form_id": {"thread-reply"},
+	})
+	if res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("thread reply status=%d body=%s", res.StatusCode, body(t, res))
+	}
+	res.Body.Close()
+	threadMessages, err := st.CoordMessagesSince(store.DestinationDiscussion, store.ThreadDestinationID(threadID), 0, 10)
+	if err != nil || len(threadMessages) != 2 || threadMessages[1].ReplyTo != threadParentID {
+		t.Fatalf("thread reply messages=%+v err=%v", threadMessages, err)
+	}
+	res = authenticatedPostForm(t, client, srv.URL+"/ui/coord/thread/post", url.Values{
+		"thread_id": {strconv.FormatInt(threadID, 10)}, "body": {"Forged thread child"},
+		"reply_to": {strconv.FormatInt(parentID, 10)},
+	})
+	if res.StatusCode != http.StatusNotFound {
+		t.Fatalf("cross-destination thread reply status=%d body=%s", res.StatusCode, body(t, res))
+	}
+	res.Body.Close()
+}
+
+func TestThreadPagingAndOldReplyTargetsRemainReachable(t *testing.T) {
+	srv, st, client := signedIn(t)
+	room := store.RoomKeyForProject("github.com/x/thread-paging")
+	materializeWebRoom(t, st, room)
+	access := st.CoordinationFor(store.Principal{ID: "person:1", Label: "robin"}, "")
+	threadID, err := access.CreateTaskThreadInRoom(room, "Paged", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var firstID int64
+	for i := 1; i <= 75; i++ {
+		message := store.CoordMessage{ClientID: "thread-page-" + strconv.Itoa(i), Body: "thread body"}
+		if i == 75 {
+			message.Body = "Reply to old parent"
+			message.ReplyTo = firstID
+		}
+		id, postErr := access.ThreadPost(threadID, message)
+		if postErr != nil {
+			t.Fatal(postErr)
+		}
+		if i == 1 {
+			firstID = id
+		}
+	}
+
+	base := coordThreadURL(room, threadID)
+	latest := coordPageBody(t, client, srv.URL+base)
+	for _, want := range []string{`id="thread-message-26"`, `id="thread-message-75"`, `thread_before=26`, `thread_around=1`, `#thread-message-1`} {
+		if !strings.Contains(latest, want) {
+			t.Errorf("latest thread page missing %q", want)
+		}
+	}
+	if strings.Contains(latest, `id="thread-message-25"`) {
+		t.Fatal("latest thread page rendered more than 50 messages")
+	}
+	before := coordPageBody(t, client, srv.URL+coordThreadPageURL(room, threadID, "thread_before", 26))
+	if !strings.Contains(before, `id="thread-message-1"`) || !strings.Contains(before, `id="thread-message-25"`) || strings.Contains(before, `id="thread-message-26"`) || !strings.Contains(before, `thread_after=25`) {
+		t.Fatalf("older thread page has wrong window/navigation: %s", before)
+	}
+	after := coordPageBody(t, client, srv.URL+coordThreadPageURL(room, threadID, "thread_after", 25))
+	if !strings.Contains(after, `id="thread-message-26"`) || !strings.Contains(after, `id="thread-message-75"`) || strings.Contains(after, `id="thread-message-25"`) {
+		t.Fatalf("newer thread page has wrong window: %s", after)
+	}
+	deep := coordPageBody(t, client, srv.URL+coordThreadMessageURL(room, threadID, 1))
+	if !strings.Contains(deep, `id="thread-message-1"`) {
+		t.Fatalf("old reply target not reachable: %s", deep)
+	}
+	for _, suffix := range []string{
+		"&thread_before=2&thread_after=1", "&thread_before=0", "&thread_after=0", "&thread_around=-1",
+	} {
+		res, getErr := client.Get(srv.URL + strings.TrimSuffix(base, "#coord-thread") + suffix)
+		if getErr != nil {
+			t.Fatal(getErr)
+		}
+		res.Body.Close()
+		if res.StatusCode != http.StatusBadRequest {
+			t.Errorf("invalid thread paging %q status=%d", suffix, res.StatusCode)
+		}
+	}
+}
+
+func TestReplyCountsRenderInRoomAndThread(t *testing.T) {
+	srv, st, client := signedIn(t)
+	room := store.RoomKeyForProject("github.com/x/reply-counts")
+	materializeWebRoom(t, st, room)
+	parent, err := st.AppendCoordMessage(store.CoordMessage{
+		DestinationKind: store.DestinationRoom, DestinationID: room,
+		SenderExternalID: "fixture:" + room, ClientID: "count-parent", Body: "Parent",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 2; i++ {
+		if _, err := st.AppendCoordMessage(store.CoordMessage{
+			DestinationKind: store.DestinationRoom, DestinationID: room,
+			SenderExternalID: "fixture:" + room, ClientID: "count-child-" + strconv.Itoa(i), Body: "Child", ReplyTo: parent,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	access := st.CoordinationFor(store.Principal{ID: "person:1", Label: "robin"}, "")
+	threadID, err := access.CreateTaskThreadInRoom(room, "Counted", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	threadParent, err := access.ThreadPost(threadID, store.CoordMessage{ClientID: "thread-count-parent", Body: "Thread parent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 2; i++ {
+		if _, err := access.ThreadPost(threadID, store.CoordMessage{ClientID: "thread-count-child-" + strconv.Itoa(i), Body: "Thread child", ReplyTo: threadParent}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := access.SetThreadArchived(threadID, true); err != nil {
+		t.Fatal(err)
+	}
+
+	page := coordPageBody(t, client, srv.URL+coordThreadURL(room, threadID))
+	if got := strings.Count(page, `>2 Antworten<`); got != 2 {
+		t.Fatalf("room and thread reply counters: got %d occurrences, want 2", got)
 	}
 }
 
