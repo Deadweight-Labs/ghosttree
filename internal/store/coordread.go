@@ -22,6 +22,7 @@ type CoordRoomSummary struct {
 	ManualUnreadFrom int64
 	Unread           int64
 	MentionUnread    int64
+	Attention        int64
 	LastMessageAt    string
 	lastMessageID    int64
 }
@@ -187,6 +188,33 @@ func (s *Store) projectRoomSummaries(actor, principalID, agentID string, rooms [
 			actor, room.Key, actor,
 			summary.ReadThrough, summary.ManualUnreadFrom, summary.ManualUnreadFrom).
 			Scan(&summary.Unread, &summary.MentionUnread); err != nil {
+			return nil, err
+		}
+		var threadMentions int64
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM coord_messages m
+			JOIN thread_homes home ON CAST(home.thread_id AS TEXT)=m.destination_id
+			JOIN coord_message_mentions mention ON mention.message_id=m.id
+			LEFT JOIN coord_read_state read ON read.principal_id=?
+			  AND read.destination_kind='discussion' AND read.destination_id=m.destination_id
+			WHERE m.destination_kind='discussion' AND home.room_key=?
+			  AND m.sender_external_id<>? AND mention.mentioned_external_id=?
+			  AND (m.sequence>COALESCE(read.read_through_sequence,0)
+			       OR (COALESCE(read.manual_unread_from_sequence,0)>0
+			           AND m.sequence>=read.manual_unread_from_sequence))`,
+			actor, room.Key, actor, actor).Scan(&threadMentions); err != nil {
+			return nil, err
+		}
+		summary.MentionUnread += threadMentions
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM coord_attention attention
+			JOIN coord_messages m ON m.id=attention.message_id
+			LEFT JOIN thread_homes home ON m.destination_kind='discussion'
+			  AND CAST(home.thread_id AS TEXT)=m.destination_id
+			WHERE attention.recipient_principal_id=? AND attention.state='open'
+			  AND (m.expires_at IS NULL OR m.expires_at='' OR julianday(m.expires_at) IS NULL
+			       OR julianday(m.expires_at)>=julianday(?))
+			  AND ((m.destination_kind='room' AND m.destination_id=?)
+			       OR (m.destination_kind='discussion' AND home.room_key=?))`,
+			actor, now(), room.Key, room.Key).Scan(&summary.Attention); err != nil {
 			return nil, err
 		}
 		out = append(out, summary)

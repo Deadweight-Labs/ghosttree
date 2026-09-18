@@ -25,9 +25,53 @@ func writeCoordAccessError(w http.ResponseWriter, err error) {
 		writeErr(w, http.StatusNotFound, "coordination target not found")
 	case errors.Is(err, store.ErrCoordForbidden):
 		writeErr(w, http.StatusForbidden, "coordination target forbidden")
+	case errors.Is(err, store.ErrInvalidAttentionAction), errors.Is(err, store.ErrAttentionRecipientRequired):
+		writeErr(w, http.StatusBadRequest, "invalid coordination attention action")
+	case errors.Is(err, store.ErrAttentionClosed):
+		writeErr(w, http.StatusConflict, "coordination attention item is already closed")
 	default:
 		writeStoreError(w, http.StatusInternalServerError, err)
 	}
+}
+
+func (a *api) coordAttention(w http.ResponseWriter, r *http.Request) {
+	agentID := r.URL.Query().Get("agent_external_id")
+	if agentID == "" {
+		writeErr(w, http.StatusBadRequest, "agent_external_id is required")
+		return
+	}
+	items, err := a.coordAccess(r, agentID).Attention()
+	if err != nil {
+		writeCoordAccessError(w, err)
+		return
+	}
+	if items == nil {
+		items = []store.AttentionItem{}
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
+type coordAttentionActionInput struct {
+	AgentExternalID string `json:"agent_external_id"`
+	AttentionID     int64  `json:"attention_id"`
+	Action          string `json:"action"`
+}
+
+func (a *api) coordAttentionAction(w http.ResponseWriter, r *http.Request) {
+	var in coordAttentionActionInput
+	if err := readJSON(r, &in); err != nil {
+		writeStoreError(w, http.StatusBadRequest, err)
+		return
+	}
+	if in.AgentExternalID == "" || in.AttentionID <= 0 || in.Action == "" {
+		writeErr(w, http.StatusBadRequest, "agent_external_id, attention_id and action are required")
+		return
+	}
+	if err := a.coordAccess(r, in.AgentExternalID).ResolveAttention(in.AttentionID, in.Action); err != nil {
+		writeCoordAccessError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // mayActAs schließt die Lücke zwischen Authentifizierung und Autorisierung.

@@ -11,24 +11,28 @@ import (
 )
 
 type coordPageView struct {
-	Sidebar    coordSidebarView
-	Active     *coordRoomDetailView
-	Recipients []coordRecipientView
+	Sidebar           coordSidebarView
+	Active            *coordRoomDetailView
+	Recipients        []coordRecipientView
+	IncomingAttention []coordAttentionView
+	OutgoingAttention []coordAttentionView
 }
 
 type coordRecipientView struct{ ID, Label, Kind string }
 
 type coordSidebarView struct {
-	Attention []coordRoomView
-	Machines  []coordRoomView
-	Projects  []coordRoomView
-	Private   []coordRoomView
+	NeedsAttention []coordRoomView
+	Mentions       []coordRoomView
+	Unread         []coordRoomView
+	Machines       []coordRoomView
+	Projects       []coordRoomView
+	Private        []coordRoomView
 }
 
 type coordRoomView struct {
-	Key, Kind, Label, URL string
-	Unread, Mentions      int64
-	Active                bool
+	Key, Kind, Label, URL       string
+	Unread, Mentions, Attention int64
+	Active                      bool
 }
 
 type coordRoomDetailView struct {
@@ -93,6 +97,16 @@ type coordParticipantView struct {
 	Manager, Current                      bool
 }
 
+type coordAttentionActionView struct{ Value, Label string }
+
+type coordAttentionView struct {
+	ID, Sequence                                              int64
+	RecipientID, Reason, State, Body, URL, RoomKey, CSRFToken string
+	Incoming, CanWithdraw                                     bool
+	CoordinationOnlyApproval                                  bool
+	Actions                                                   []coordAttentionActionView
+}
+
 func buildCoordSidebar(summaries []store.CoordRoomSummary, principalID, activeKey string) coordSidebarView {
 	var out coordSidebarView
 	for _, summary := range summaries {
@@ -100,7 +114,7 @@ func buildCoordSidebar(summaries []store.CoordRoomSummary, principalID, activeKe
 			Key: summary.Room.Key, Kind: summary.Room.Kind,
 			Label:  coordRoomLabel(summary.Room, principalID),
 			URL:    coordRoomURL(summary.Room.Key, "", 0),
-			Unread: summary.Unread, Mentions: summary.MentionUnread,
+			Unread: summary.Unread, Mentions: summary.MentionUnread, Attention: summary.Attention,
 			Active: summary.Room.Key == activeKey,
 		}
 		switch summary.Room.Kind {
@@ -111,11 +125,63 @@ func buildCoordSidebar(summaries []store.CoordRoomSummary, principalID, activeKe
 		case store.RoomDirect, store.RoomGroup:
 			out.Private = append(out.Private, room)
 		}
+		if room.Attention > 0 {
+			out.NeedsAttention = append(out.NeedsAttention, room)
+		}
 		if room.Mentions > 0 {
-			out.Attention = append(out.Attention, room)
+			out.Mentions = append(out.Mentions, room)
+		}
+		if room.Unread > 0 {
+			out.Unread = append(out.Unread, room)
 		}
 	}
 	return out
+}
+
+func buildCoordAttentionViews(items []store.AttentionItem, csrfToken ...string) (incoming, outgoing []coordAttentionView) {
+	token := ""
+	if len(csrfToken) > 0 {
+		token = csrfToken[0]
+	}
+	for _, item := range items {
+		if item.State != store.AttentionOpen {
+			continue
+		}
+		view := coordAttentionView{
+			ID: item.ID, Sequence: item.Sequence, Reason: item.Reason, State: item.State,
+			Body: item.Body, RecipientID: item.RecipientID, Incoming: item.IsRecipient, CanWithdraw: item.CanWithdraw,
+			RoomKey: item.HomeRoomKey, CSRFToken: token,
+			CoordinationOnlyApproval: item.Reason == store.AttentionApproval,
+		}
+		if item.DestinationKind == store.DestinationDiscussion {
+			threadID, err := strconv.ParseInt(item.DestinationID, 10, 64)
+			if err == nil && threadID > 0 && item.HomeRoomKey != "" {
+				view.URL = coordThreadMessageURL(item.HomeRoomKey, threadID, item.Sequence)
+			}
+		} else {
+			view.URL = coordRoomURL(item.DestinationID, "around", item.Sequence) + "#message-" + strconv.FormatInt(item.Sequence, 10)
+		}
+		if item.State == store.AttentionOpen && item.IsRecipient {
+			switch item.Reason {
+			case store.AttentionQuestion:
+				view.Actions = append(view.Actions, coordAttentionActionView{Value: store.AttentionActionAnswer, Label: "Beantwortet"})
+			case store.AttentionApproval:
+				view.Actions = append(view.Actions, coordAttentionActionView{Value: store.AttentionActionApprove, Label: "Zustimmen"}, coordAttentionActionView{Value: store.AttentionActionReject, Label: "Ablehnen"})
+			case store.AttentionBlocker:
+				view.Actions = append(view.Actions, coordAttentionActionView{Value: store.AttentionActionResolve, Label: "Gelöst"})
+			case store.AttentionHandoff:
+				view.Actions = append(view.Actions, coordAttentionActionView{Value: store.AttentionActionAccept, Label: "Übernehmen"})
+			}
+			view.Actions = append(view.Actions, coordAttentionActionView{Value: store.AttentionActionDismiss, Label: "Verwerfen"})
+		}
+		if view.Incoming {
+			incoming = append(incoming, view)
+		}
+		if view.CanWithdraw {
+			outgoing = append(outgoing, view)
+		}
+	}
+	return incoming, outgoing
 }
 
 func coordRoomURL(room, cursor string, sequence int64) string {
@@ -129,6 +195,14 @@ func coordRoomURL(room, cursor string, sequence int64) string {
 func coordThreadURL(room string, threadID int64) string {
 	query := url.Values{"room": {room}, "thread": {strconv.FormatInt(threadID, 10)}}
 	return "/ui/coord?" + query.Encode() + "#coord-thread"
+}
+
+func coordThreadMessageURL(room string, threadID, sequence int64) string {
+	query := url.Values{
+		"room": {room}, "thread": {strconv.FormatInt(threadID, 10)},
+		"thread_around": {strconv.FormatInt(sequence, 10)},
+	}
+	return "/ui/coord?" + query.Encode() + "#thread-message-" + strconv.FormatInt(sequence, 10)
 }
 
 func buildCoordThreadViews(in []store.RoomThread) []coordThreadView {

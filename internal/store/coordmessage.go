@@ -162,6 +162,19 @@ func appendCoordMessageTx(tx *sql.Tx, m CoordMessage) (int64, error) {
 			return 0, err
 		}
 	}
+	if reason, ok := attentionReasonForIntent(m.Intent); ok {
+		state := AttentionOpen
+		if expiredAt(m.ExpiresAt, now()) {
+			state = AttentionExpired
+		}
+		for _, recipient := range normalizeMembers(m.Mentions) {
+			if _, err := tx.Exec(`INSERT OR IGNORE INTO coord_attention(
+				recipient_principal_id,message_id,reason,state,created_at)
+				VALUES(?,?,?,?,?)`, recipient, id, reason, state, m.CreatedAt); err != nil {
+				return 0, err
+			}
+		}
+	}
 	return id, nil
 }
 

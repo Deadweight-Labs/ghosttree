@@ -43,6 +43,51 @@ func TestCoordAPIBlankOrUnownedAgentCannotAct(t *testing.T) {
 	}
 }
 
+func TestCoordAttentionAPIListsAndResolvesForOwnedRecipient(t *testing.T) {
+	srv, st, ownerToken, otherToken := coordinationAccessServer(t)
+	room := store.RoomKeyForProject("github.com/x/attention-api")
+	for _, agent := range []store.CoordAgent{
+		{ExternalID: "sess-owner", PrincipalID: "person:1", Person: "owner", Provider: "test", RoomKey: room},
+		{ExternalID: "sess-other", PrincipalID: "person:2", Person: "other", Provider: "test", RoomKey: room},
+	} {
+		if _, err := st.RegisterCoordAgent(agent); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := st.CoordinationFor(store.Principal{ID: "person:1"}, "sess-owner").Send(store.CoordMessage{
+		DestinationKind: store.DestinationRoom, DestinationID: room, ClientID: "api-question",
+		Body: "Answer?", Intent: store.IntentQuestion, Mentions: []string{"sess-other"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	res := req(t, "GET", srv.URL+"/api/coord/attention?agent_external_id=sess-other", otherToken, nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("list status=%d", res.StatusCode)
+	}
+	var items []store.AttentionItem
+	if err := json.NewDecoder(res.Body).Decode(&items); err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if len(items) != 1 || items[0].State != store.AttentionOpen {
+		t.Fatalf("items=%+v", items)
+	}
+	res = req(t, "POST", srv.URL+"/api/coord/attention/action", otherToken, map[string]any{
+		"agent_external_id": "sess-other", "attention_id": items[0].ID, "action": store.AttentionActionAnswer,
+	})
+	res.Body.Close()
+	if res.StatusCode != http.StatusNoContent {
+		t.Fatalf("resolve status=%d", res.StatusCode)
+	}
+	res = req(t, "POST", srv.URL+"/api/coord/attention/action", ownerToken, map[string]any{
+		"agent_external_id": "sess-owner", "attention_id": items[0].ID, "action": store.AttentionActionResolve,
+	})
+	res.Body.Close()
+	if res.StatusCode != http.StatusNotFound {
+		t.Fatalf("nonrecipient action status=%d", res.StatusCode)
+	}
+}
+
 func TestTaskThreadAPICreatesAndListsHomeThread(t *testing.T) {
 	srv, st, token, _ := coordinationAccessServer(t)
 	room := store.RoomKeyForProject("github.com/x/y")

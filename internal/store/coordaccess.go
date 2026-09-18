@@ -592,70 +592,81 @@ func (a CoordAccess) Send(message CoordMessage) (int64, error) {
 			return queuedCoordAccess(d, p).Send(p[3].(CoordMessage))
 		})
 	}
-	if message.DestinationKind == DestinationDiscussion {
-		tx, err := a.Store.db.Begin()
-		if err != nil {
-			return 0, err
-		}
-		defer tx.Rollback()
-		actor, err := a.actorTx(tx)
-		if err != nil || actor == "" || a.publicOnly {
-			if err != nil {
-				return 0, err
-			}
-			return 0, ErrCoordForbidden
-		}
-		if err := a.canReadTx(tx, actor, message.DestinationKind, message.DestinationID); err != nil {
-			return 0, err
-		}
-		if message.ReplyTo != 0 {
-			var count int
-			if err := tx.QueryRow(`SELECT COUNT(*) FROM coord_messages WHERE id=? AND destination_kind=? AND destination_id=?`, message.ReplyTo, message.DestinationKind, message.DestinationID).Scan(&count); err != nil {
-				return 0, err
-			}
-			if count == 0 {
-				return 0, ErrCoordNotFound
-			}
-		}
-		message.SenderExternalID = actor
-		message.AuthorPrincipalID = a.Principal.ID
-		if a.AgentExternalID == "" {
-			message.AuthorKind = AuthorHuman
-		} else {
-			message.AuthorKind = AuthorAgent
-		}
-		id, err := appendCoordMessageTx(tx, message)
-		if err != nil {
-			return 0, err
-		}
-		threadID, _ := strconv.ParseInt(message.DestinationID, 10, 64)
-		if _, err := tx.Exec(`UPDATE threads SET updated_at=? WHERE id=?`, now(), threadID); err != nil {
-			return 0, err
-		}
-		if err := tx.Commit(); err != nil {
-			return 0, err
-		}
-		return id, nil
+	if a.Store == nil || a.publicOnly {
+		return 0, ErrCoordForbidden
 	}
-	actor, err := a.mutationActor()
+	tx, err := a.Store.db.Begin()
 	if err != nil {
 		return 0, err
 	}
-	if err := a.canRead(message.DestinationKind, message.DestinationID); err != nil {
+	defer tx.Rollback()
+	actor, err := a.actorTx(tx)
+	if err != nil || actor == "" {
+		if err != nil {
+			return 0, err
+		}
+		return 0, ErrCoordForbidden
+	}
+	if err := a.canReadTx(tx, actor, message.DestinationKind, message.DestinationID); err != nil {
 		return 0, err
 	}
-	if message.DestinationKind == DestinationRoom && len(message.Mentions) > 0 {
-		if err := a.ValidateRoomParticipants(message.DestinationID, message.Mentions); err != nil {
+	if _, actionable := attentionReasonForIntent(message.Intent); actionable && len(normalizeMembers(message.Mentions)) == 0 {
+		if message.DestinationKind == DestinationRoom {
+			var roomKind string
+			if err := tx.QueryRow(`SELECT kind FROM coord_rooms WHERE room_key=?`, message.DestinationID).Scan(&roomKind); err != nil {
+				return 0, ErrCoordNotFound
+			}
+			if roomKind == RoomDirect {
+				rows, err := tx.Query(`SELECT principal_id FROM coord_room_memberships
+					WHERE room_key=? AND left_at='' AND principal_id<>? ORDER BY principal_id`, message.DestinationID, actor)
+				if err != nil {
+					return 0, err
+				}
+				for rows.Next() {
+					var recipient string
+					if err := rows.Scan(&recipient); err != nil {
+						rows.Close()
+						return 0, err
+					}
+					message.Mentions = append(message.Mentions, recipient)
+				}
+				if err := rows.Err(); err != nil {
+					rows.Close()
+					return 0, err
+				}
+				if err := rows.Close(); err != nil {
+					return 0, err
+				}
+			}
+		}
+		if len(normalizeMembers(message.Mentions)) == 0 {
+			return 0, ErrAttentionRecipientRequired
+		}
+	}
+	if len(message.Mentions) > 0 {
+		if message.DestinationKind == DestinationDiscussion {
+			threadID, parseErr := strconv.ParseInt(message.DestinationID, 10, 64)
+			if parseErr != nil || threadID <= 0 {
+				return 0, ErrCoordNotFound
+			}
+			if home, found, homeErr := threadHomeTx(tx, threadID); homeErr != nil {
+				return 0, homeErr
+			} else if found {
+				if err := a.validateRoomParticipantsTx(tx, actor, home.RoomKey, message.Mentions); err != nil {
+					return 0, err
+				}
+			} else {
+				if err := a.validateLegacyThreadParticipantsTx(tx, actor, threadID, message.Mentions); err != nil {
+					return 0, err
+				}
+			}
+		} else if err := a.validateRoomParticipantsTx(tx, actor, message.DestinationID, message.Mentions); err != nil {
 			return 0, err
 		}
 	}
 	if message.ReplyTo != 0 {
-		reader := a.Store
-		if reader.reader != nil {
-			reader = reader.reader
-		}
 		var count int
-		if err := reader.db.QueryRow(`SELECT COUNT(*) FROM coord_messages
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM coord_messages
 			WHERE id=? AND destination_kind=? AND destination_id=?`, message.ReplyTo,
 			message.DestinationKind, message.DestinationID).Scan(&count); err != nil {
 			return 0, err
@@ -671,11 +682,72 @@ func (a CoordAccess) Send(message CoordMessage) (int64, error) {
 	} else {
 		message.AuthorKind = AuthorAgent
 	}
-	id, err := a.Store.AppendCoordMessage(message)
+	id, err := appendCoordMessageTx(tx, message)
 	if err != nil {
 		return 0, err
 	}
+	if message.DestinationKind == DestinationDiscussion {
+		threadID, _ := strconv.ParseInt(message.DestinationID, 10, 64)
+		if _, err := tx.Exec(`UPDATE threads SET updated_at=? WHERE id=?`, now(), threadID); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
 	return id, nil
+}
+
+func (a CoordAccess) validateLegacyThreadParticipantsTx(tx *sql.Tx, actor string, threadID int64, principals []string) error {
+	var restricted int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM thread_visibility WHERE thread_id=?`, threadID).Scan(&restricted); err != nil {
+		return err
+	}
+	if restricted == 0 {
+		var project string
+		if err := tx.QueryRow(`SELECT project FROM threads WHERE id=?`, threadID).Scan(&project); err != nil {
+			return ErrCoordNotFound
+		}
+		return a.validateRoomParticipantsTx(tx, actor, RoomKeyForProject(project), principals)
+	}
+	allowed := map[string]bool{actor: true, a.Principal.ID: true}
+	rows, err := tx.Query(`SELECT member_external_id FROM thread_visibility WHERE thread_id=?`, threadID)
+	if err != nil {
+		return err
+	}
+	var members []string
+	for rows.Next() {
+		var member string
+		if err := rows.Scan(&member); err != nil {
+			rows.Close()
+			return err
+		}
+		allowed[member] = true
+		members = append(members, member)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, member := range members {
+		var owner string
+		err := tx.QueryRow(`SELECT COALESCE(principal_id,'') FROM coord_agents WHERE external_id=?`, member).Scan(&owner)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if owner != "" {
+			allowed[owner] = true
+		}
+	}
+	for _, principal := range normalizeMembers(principals) {
+		if !allowed[principal] {
+			return fmt.Errorf("%w: %s", ErrCoordUnknownRecipient, principal)
+		}
+	}
+	return nil
 }
 
 func (a CoordAccess) Thread(threadID int64) (Thread, error) {

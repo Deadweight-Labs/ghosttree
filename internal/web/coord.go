@@ -69,6 +69,12 @@ func coordHTTPError(w http.ResponseWriter, err error) {
 		http.Error(w, "invalid coordination sequence", http.StatusBadRequest)
 	case errors.Is(err, store.ErrCoordUnknownRecipient):
 		http.Error(w, "coordination recipient is not available", http.StatusBadRequest)
+	case errors.Is(err, store.ErrInvalidAttentionAction):
+		http.Error(w, "invalid coordination attention action", http.StatusBadRequest)
+	case errors.Is(err, store.ErrAttentionRecipientRequired):
+		http.Error(w, "coordination attention requires a recipient", http.StatusBadRequest)
+	case errors.Is(err, store.ErrAttentionClosed):
+		http.Error(w, "coordination attention item is already closed", http.StatusConflict)
 	default:
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
@@ -105,9 +111,17 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	attention, err := a.browserCoord(r).Attention()
+	if err != nil {
+		coordHTTPError(w, err)
+		return
+	}
+	incomingAttention, outgoingAttention := buildCoordAttentionViews(attention, csrfOf(r))
 	view := coordPageView{
-		Sidebar:    buildCoordSidebar(summaries, humanMember(r), room),
-		Recipients: buildCoordRecipientViews(recipients),
+		Sidebar:           buildCoordSidebar(summaries, humanMember(r), room),
+		Recipients:        buildCoordRecipientViews(recipients),
+		IncomingAttention: incomingAttention,
+		OutgoingAttention: outgoingAttention,
 	}
 	if room == "" {
 		a.renderBrowser(w, r, "coord", pageData{Title: "Coordination", Coord: view})
@@ -208,10 +222,37 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 			coordHTTPError(w, store.ErrCoordNotFound)
 			return
 		}
-		_, presentations, loadErr := access.MessagePresentationWindow(store.DestinationDiscussion, store.ThreadDestinationID(selectedID), store.LatestWindow(50))
+		threadWindow := store.LatestWindow(50)
+		var threadAround int64
+		if aroundText := strings.TrimSpace(r.URL.Query().Get("thread_around")); aroundText != "" {
+			threadAround, parseErr = strconv.ParseInt(aroundText, 10, 64)
+			if parseErr != nil || threadAround <= 0 {
+				http.Error(w, "thread_around must be a positive sequence", http.StatusBadRequest)
+				return
+			}
+			start := threadAround - 25
+			if start < 0 {
+				start = 0
+			}
+			threadWindow = store.AfterWindow(start, 50)
+		}
+		threadPage, presentations, loadErr := access.MessagePresentationWindow(store.DestinationDiscussion, store.ThreadDestinationID(selectedID), threadWindow)
 		if loadErr != nil {
 			coordHTTPError(w, loadErr)
 			return
+		}
+		if threadAround > 0 {
+			found := false
+			for _, message := range threadPage.Messages {
+				if message.Sequence == threadAround {
+					found = true
+					break
+				}
+			}
+			if !found {
+				http.Error(w, "thread_around must name a retained message sequence", http.StatusBadRequest)
+				return
+			}
 		}
 		threadDetail := &coordThreadDetailView{coordThreadView: *selected, Messages: buildCoordThreadMessageViews(presentations), FormID: newCoordFormID()}
 		detail.Thread = threadDetail
@@ -304,7 +345,13 @@ func (a *app) coordPostThread(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "thread and body are required", http.StatusBadRequest)
 		return
 	}
-	if _, err := a.browserCoord(r).ThreadPost(threadID, store.CoordMessage{ClientID: newFormClientID(r), Body: body}); err != nil {
+	intent := strings.TrimSpace(r.FormValue("intent"))
+	mentions := splitCoordPrincipals(r.Form["mentions"]...)
+	if !validCoordComposerIntent(intent) {
+		http.Error(w, "a valid intent is required", http.StatusBadRequest)
+		return
+	}
+	if _, err := a.browserCoord(r).ThreadPost(threadID, store.CoordMessage{ClientID: newFormClientID(r), Body: body, Intent: intent, Mentions: mentions}); err != nil {
 		coordHTTPError(w, err)
 		return
 	}
@@ -407,6 +454,11 @@ func (a *app) coordSend(w http.ResponseWriter, r *http.Request) {
 		ExpiresAt: strings.TrimSpace(r.FormValue("expires_at")),
 	}
 	msg.Mentions = splitCoordPrincipals(r.Form["mentions"]...)
+	msg.Intent = strings.TrimSpace(r.FormValue("intent"))
+	if !validCoordComposerIntent(msg.Intent) {
+		http.Error(w, "a valid intent is required", http.StatusBadRequest)
+		return
+	}
 
 	_, err := a.browserCoord(r).Send(msg)
 	if err != nil {
@@ -414,6 +466,42 @@ func (a *app) coordSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/ui/coord?room="+url.QueryEscape(room), http.StatusSeeOther)
+}
+
+func validCoordComposerIntent(intent string) bool {
+	return intent == "" || isAttentionIntent(intent)
+}
+
+func isAttentionIntent(intent string) bool {
+	switch intent {
+	case store.IntentQuestion, store.IntentApproval, store.IntentBlocker, store.IntentHandoff:
+		return true
+	default:
+		return false
+	}
+}
+
+func (a *app) coordAttentionAction(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	id, err := strconv.ParseInt(strings.TrimSpace(r.FormValue("attention_id")), 10, 64)
+	if err != nil || id <= 0 {
+		http.Error(w, "attention item is required", http.StatusBadRequest)
+		return
+	}
+	if err := a.browserCoord(r).ResolveAttention(id, strings.TrimSpace(r.FormValue("action"))); err != nil {
+		coordHTTPError(w, err)
+		return
+	}
+	location := "/ui/coord"
+	if room := strings.TrimSpace(r.FormValue("room")); room != "" {
+		if _, err := a.browserCoord(r).Room(room); err == nil {
+			location = coordRoomURL(room, "", 0)
+		}
+	}
+	http.Redirect(w, r, location, http.StatusSeeOther)
 }
 
 func (a *app) coordCreateStanding(w http.ResponseWriter, r *http.Request) {

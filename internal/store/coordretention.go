@@ -26,7 +26,7 @@ type RetentionResult struct {
 //
 // DIE AUSNAHME IST DER EIGENTLICHE INHALT DIESER FUNKTION. Spec §6: eine
 // Nachricht, die Grundlage eines dauerhaften Ergebnisses ist, darf nicht
-// verschwinden. Drei Dinge halten deshalb fest:
+// verschwinden. Vier Dinge halten deshalb fest:
 //
 //   - Beiträge, die in einen Thread übernommen wurden. Die Kopie in
 //     thread_sources überlebt ohnehin, aber das Original mit zu löschen
@@ -36,6 +36,8 @@ type RetentionResult struct {
 //     Einschränkung."
 //   - Nachrichten mit Objektbezügen. Wer auf REQ-350 zeigt, ist Provenienz
 //     und nicht Geplauder.
+//   - Quellen adressierter Attention. Auch ein abgeschlossenes Item bleibt
+//     nachvollziehbar und hält seine unveränderliche Quellnachricht fest.
 //
 // Was NICHT hier steht: eine Löschung von Threads oder Wissen. Beides hat
 // seinen eigenen Lebenszyklus, und §7 sagt ausdrücklich, dass Chat-Retention
@@ -61,6 +63,7 @@ func (s *Store) ApplyCoordRetention(before, activityBefore string) (RetentionRes
 		OR EXISTS(SELECT 1 FROM coord_standing cs
 			WHERE cs.message_id=CAST(coord_messages.id AS TEXT) AND cs.ended_at IS NULL)
 		OR EXISTS(SELECT 1 FROM coord_message_refs r WHERE r.message_id=coord_messages.id)
+		OR EXISTS(SELECT 1 FROM coord_attention attention WHERE attention.message_id=coord_messages.id)
 	)`
 
 	var out RetentionResult

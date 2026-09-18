@@ -854,12 +854,101 @@ func TestAllCoordRoomManagementMutationsRequireCSRF(t *testing.T) {
 	for _, path := range []string{
 		"/ui/coord/direct/start", "/ui/coord/group/create",
 		"/ui/coord/group/update", "/ui/coord/group/leave", "/ui/coord/standing/create",
+		"/ui/coord/attention/action",
 	} {
 		res := sameOriginPostForm(t, client, srv.URL+path, url.Values{})
 		res.Body.Close()
 		if res.StatusCode != http.StatusForbidden {
 			t.Errorf("%s without CSRF status=%d", path, res.StatusCode)
 		}
+	}
+}
+
+func TestCoordWorkspaceSeparatesAttentionMentionsAndUnreadAndActsWithCSRF(t *testing.T) {
+	srv, st, client := signedIn(t)
+	room := store.RoomKeyForProject("github.com/x/attention")
+	materializeWebRoom(t, st, room)
+	messageID, err := st.AppendCoordMessage(store.CoordMessage{
+		DestinationKind: store.DestinationRoom, DestinationID: room,
+		SenderExternalID: "reviewer", AuthorPrincipalID: "person:2", AuthorKind: store.AuthorHuman,
+		ClientID: "approval", Body: "Release freigeben?", Intent: store.IntentApproval,
+		Mentions: []string{"person:1"}, Refs: []store.CoordRef{{Kind: "request", ID: "REQ-380"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := st.CoordinationFor(store.Principal{ID: "person:1", Label: "robin"}, "").Attention()
+	if err != nil || len(items) != 1 || items[0].MessageID != messageID {
+		t.Fatalf("attention=%+v err=%v", items, err)
+	}
+	page := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room))
+	for _, want := range []string{"Braucht dich", "Mentions", "Ungelesen", "Release freigeben?", "nur Koordination", `action="/ui/coord/attention/action"`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("attention workspace missing %q", want)
+		}
+	}
+	res := authenticatedPostForm(t, client, srv.URL+"/ui/coord/attention/action", url.Values{
+		"attention_id": {strconv.FormatInt(items[0].ID, 10)}, "action": {store.AttentionActionApprove}, "room": {room},
+	})
+	if res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("approve status=%d body=%s", res.StatusCode, body(t, res))
+	}
+	res.Body.Close()
+	items, err = st.CoordinationFor(store.Principal{ID: "person:1", Label: "robin"}, "").Attention()
+	if err != nil || len(items) != 1 || items[0].State != store.AttentionResolved {
+		t.Fatalf("resolved attention=%+v err=%v", items, err)
+	}
+}
+
+func TestCoordComposerPersistsExplicitAttentionIntent(t *testing.T) {
+	srv, st, client := signedIn(t)
+	room := store.RoomKeyForProject("github.com/x/intent")
+	materializeWebRoom(t, st, room)
+	if _, err := st.RegisterCoordAgent(store.CoordAgent{ExternalID: "sess-peer", PrincipalID: "person:2", Person: "peer", Provider: "test", DisplayName: "Peer", RoomKey: room}); err != nil {
+		t.Fatal(err)
+	}
+	res := authenticatedPostForm(t, client, srv.URL+"/ui/coord/send", url.Values{
+		"room": {room}, "body": {"Please investigate"}, "intent": {store.IntentHandoff}, "mentions": {"sess-peer"},
+	})
+	if res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("send status=%d body=%s", res.StatusCode, body(t, res))
+	}
+	res.Body.Close()
+	items, err := st.CoordinationFor(store.Principal{ID: "person:2"}, "sess-peer").Attention()
+	if err != nil || len(items) != 1 || items[0].Reason != store.AttentionHandoff {
+		t.Fatalf("attention=%+v err=%v", items, err)
+	}
+}
+
+func TestThreadAttentionAroundLoadsSourceOlderThanLatestWindow(t *testing.T) {
+	srv, st, client := signedIn(t)
+	room := store.RoomKeyForProject("github.com/x/thread-attention")
+	materializeWebRoom(t, st, room)
+	if _, err := st.RegisterCoordAgent(store.CoordAgent{ExternalID: "sess-peer", PrincipalID: "person:2", Person: "peer", Provider: "test", DisplayName: "Peer", RoomKey: room}); err != nil {
+		t.Fatal(err)
+	}
+	owner := st.CoordinationFor(store.Principal{ID: "person:1", Label: "robin"}, "")
+	threadID, err := owner.CreateTaskThreadInRoom(room, "Old attention", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer := st.CoordinationFor(store.Principal{ID: "person:2", Label: "peer"}, "sess-peer")
+	if _, err := peer.ThreadPost(threadID, store.CoordMessage{ClientID: "old-question", Body: "Old source", Intent: store.IntentQuestion, Mentions: []string{"person:1"}}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 55; i++ {
+		if _, err := peer.ThreadPost(threadID, store.CoordMessage{ClientID: "filler-" + strconv.Itoa(i), Body: "filler"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	latest := coordPageBody(t, client, srv.URL+coordThreadURL(room, threadID))
+	if strings.Contains(latest, `id="thread-message-1"`) {
+		t.Fatal("latest thread window unexpectedly contained old source")
+	}
+	aroundURL := coordThreadMessageURL(room, threadID, 1)
+	around := coordPageBody(t, client, srv.URL+aroundURL)
+	if !strings.Contains(around, `id="thread-message-1"`) || !strings.Contains(around, "Old source") {
+		t.Fatalf("around window missed old source: %s", around)
 	}
 }
 

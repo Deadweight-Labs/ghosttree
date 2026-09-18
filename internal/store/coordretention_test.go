@@ -105,6 +105,36 @@ func TestRetentionKeepsMessagesThatReferenceObjects(t *testing.T) {
 	}
 }
 
+func TestRetentionKeepsSourcesForOpenAndClosedAttention(t *testing.T) {
+	s := openTest(t)
+	room := RoomKeyForProject("attention-retention")
+	at := time.Now().UTC().Add(-60 * 24 * time.Hour).Format(time.RFC3339)
+	var attentionIDs []int64
+	for _, message := range []CoordMessage{
+		{ClientID: "open-attention", Body: "open", Intent: IntentQuestion, Mentions: []string{"person:2"}},
+		{ClientID: "closed-attention", Body: "closed", Intent: IntentHandoff, Mentions: []string{"person:2"}},
+	} {
+		message.DestinationKind, message.DestinationID = DestinationRoom, room
+		message.SenderExternalID, message.CreatedAt = "sess-a", at
+		id, err := s.AppendCoordMessage(message)
+		if err != nil {
+			t.Fatal(err)
+		}
+		attentionIDs = append(attentionIDs, id)
+	}
+	if _, err := s.DB().Exec(`UPDATE coord_attention SET state='resolved',resolved_at=? WHERE message_id=?`, now(), attentionIDs[1]); err != nil {
+		t.Fatal(err)
+	}
+	oldMessage(t, s, room, "ordinary-retention", "ordinary", 60)
+	result, err := s.ApplyCoordRetention(RetentionCutoff(ChatRetention), RetentionCutoff(ActivityRetention))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.MessagesHeld != 2 || result.MessagesDeleted != 1 {
+		t.Fatalf("retention result=%+v", result)
+	}
+}
+
 // Frische Nachrichten bleiben, und Aktivität hat eine eigene, kürzere Frist.
 func TestRetentionLeavesFreshDataAndUsesSeparateWindows(t *testing.T) {
 	s := openTest(t)

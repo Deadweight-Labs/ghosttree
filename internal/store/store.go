@@ -600,6 +600,21 @@ CREATE TABLE IF NOT EXISTS coord_message_mentions(
   PRIMARY KEY(message_id,mentioned_external_id));
 CREATE INDEX IF NOT EXISTS coord_message_mentions_recipient
   ON coord_message_mentions(mentioned_external_id,message_id);
+CREATE TABLE IF NOT EXISTS coord_attention(
+  id INTEGER PRIMARY KEY,
+  recipient_principal_id TEXT NOT NULL,
+  message_id INTEGER NOT NULL REFERENCES coord_messages(id) ON DELETE RESTRICT,
+  reason TEXT NOT NULL CHECK(reason IN ('question','approval','blocker','handoff')),
+  state TEXT NOT NULL CHECK(state IN ('open','resolved','dismissed','expired')),
+  created_at TEXT NOT NULL,
+  resolved_at TEXT NOT NULL DEFAULT '',
+  UNIQUE(recipient_principal_id,message_id,reason));
+CREATE INDEX IF NOT EXISTS coord_attention_recipient
+  ON coord_attention(recipient_principal_id,state,id);
+INSERT OR IGNORE INTO coord_attention(recipient_principal_id,message_id,reason,state,created_at)
+  SELECT mm.mentioned_external_id,m.id,m.intent,'open',m.created_at
+  FROM coord_messages m JOIN coord_message_mentions mm ON mm.message_id=m.id
+  WHERE m.intent IN ('question','approval','blocker','handoff');
 CREATE TABLE IF NOT EXISTS coord_read_state(
   principal_id TEXT NOT NULL,
   destination_kind TEXT NOT NULL CHECK(destination_kind IN ('room','discussion')),
