@@ -290,6 +290,191 @@ func (a CoordAccess) Messages(kind, id string, afterID int64, limit int) ([]Coor
 	return a.Store.CoordMessagesSince(kind, id, afterID, limit)
 }
 
+func (a CoordAccess) MessageWindow(kind, id string, window MessageWindow) (MessagePage, error) {
+	if a.Store == nil || strings.TrimSpace(a.Principal.ID) == "" {
+		return MessagePage{}, ErrCoordForbidden
+	}
+	reader := a.Store
+	if reader.reader != nil {
+		reader = reader.reader
+	}
+	tx, err := reader.db.Begin()
+	if err != nil {
+		return MessagePage{}, err
+	}
+	defer tx.Rollback()
+	actor, err := a.actorTx(tx)
+	if err != nil {
+		return MessagePage{}, err
+	}
+	if err := a.canReadTx(tx, actor, kind, id); err != nil {
+		return MessagePage{}, err
+	}
+	page, err := coordMessageWindowTx(tx, kind, id, window)
+	if err != nil {
+		return MessagePage{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return MessagePage{}, err
+	}
+	return page, nil
+}
+
+func (a CoordAccess) actorTx(tx *sql.Tx) (string, error) {
+	if a.AgentExternalID == "" {
+		if a.publicOnly {
+			return "", nil
+		}
+		return a.Principal.ID, nil
+	}
+	var owner string
+	err := tx.QueryRow(`SELECT principal_id FROM coord_agents WHERE external_id=?`, a.AgentExternalID).Scan(&owner)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrCoordForbidden
+	}
+	if err != nil {
+		return "", err
+	}
+	if owner == "" || owner != a.Principal.ID {
+		return "", ErrCoordForbidden
+	}
+	return a.AgentExternalID, nil
+}
+
+func (a CoordAccess) canReadTx(tx *sql.Tx, actor, kind, id string) error {
+	switch kind {
+	case DestinationRoom:
+		return a.requireRoomAccessTx(tx, actor, id)
+	case DestinationDiscussion:
+		threadID, err := strconv.ParseInt(id, 10, 64)
+		if err != nil || threadID <= 0 {
+			return ErrCoordNotFound
+		}
+		var project string
+		if err := tx.QueryRow(`SELECT project FROM threads WHERE id=?`, threadID).Scan(&project); errors.Is(err, sql.ErrNoRows) {
+			return ErrCoordNotFound
+		} else if err != nil {
+			return err
+		}
+		var restricted int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM thread_visibility WHERE thread_id=?`, threadID).Scan(&restricted); err != nil {
+			return err
+		}
+		if restricted > 0 {
+			if a.publicOnly {
+				return ErrCoordNotFound
+			}
+			var member int
+			if err := tx.QueryRow(`SELECT COUNT(*) FROM thread_visibility
+				WHERE thread_id=? AND member_external_id=?`, threadID, actor).Scan(&member); err != nil {
+				return err
+			}
+			if member == 0 {
+				return ErrCoordNotFound
+			}
+			return nil
+		}
+		if a.publicOnly {
+			return nil
+		}
+		return a.requireRoomAccessTx(tx, actor, RoomKeyForProject(project))
+	default:
+		return ErrCoordNotFound
+	}
+}
+
+func (a CoordAccess) requireRoomAccessTx(tx *sql.Tx, actor, roomKey string) error {
+	var kind string
+	if err := tx.QueryRow(`SELECT kind FROM coord_rooms WHERE room_key=?`, roomKey).Scan(&kind); errors.Is(err, sql.ErrNoRows) {
+		return ErrCoordNotFound
+	} else if err != nil {
+		return err
+	}
+	switch kind {
+	case RoomDirect, RoomGroup:
+		var member int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM coord_room_memberships
+			WHERE room_key=? AND principal_id=? AND left_at=''`, roomKey, actor).Scan(&member); err != nil {
+			return err
+		}
+		if member == 0 {
+			return ErrCoordNotFound
+		}
+		return nil
+	case RoomProject, RoomMachine:
+		if a.publicOnly {
+			return nil
+		}
+		var member int
+		if a.AgentExternalID != "" {
+			if err := tx.QueryRow(`SELECT COUNT(*) FROM coord_room_memberships
+				WHERE room_key=? AND principal_id=? AND left_at=''`, roomKey, actor).Scan(&member); err != nil {
+				return err
+			}
+		} else {
+			if err := tx.QueryRow(`SELECT COUNT(*) FROM coord_room_memberships m
+				LEFT JOIN coord_agents agent ON agent.external_id=m.principal_id
+				WHERE m.room_key=? AND m.left_at=''
+				  AND (m.principal_id=? OR agent.principal_id=?)`, roomKey, a.Principal.ID, a.Principal.ID).Scan(&member); err != nil {
+				return err
+			}
+		}
+		if member == 0 {
+			return ErrCoordForbidden
+		}
+		return nil
+	default:
+		return ErrCoordNotFound
+	}
+}
+
+func (a CoordAccess) MarkRead(kind, id string, through int64) error {
+	if a.Store != nil && a.Store.writer != nil {
+		return queueWrite(a.Store, []any{a.Principal, a.AgentExternalID, a.publicOnly, kind, id, through}, func(d *Store, p []any) error {
+			return queuedCoordAccess(d, p).MarkRead(p[3].(string), p[4].(string), p[5].(int64))
+		})
+	}
+	actor, err := a.mutationActor()
+	if err != nil {
+		return err
+	}
+	if err := a.canRead(kind, id); err != nil {
+		return err
+	}
+	return a.Store.MarkCoordRead(actor, kind, id, through)
+}
+
+func (a CoordAccess) MarkUnread(kind, id string, from int64) error {
+	if a.Store != nil && a.Store.writer != nil {
+		return queueWrite(a.Store, []any{a.Principal, a.AgentExternalID, a.publicOnly, kind, id, from}, func(d *Store, p []any) error {
+			return queuedCoordAccess(d, p).MarkUnread(p[3].(string), p[4].(string), p[5].(int64))
+		})
+	}
+	actor, err := a.mutationActor()
+	if err != nil {
+		return err
+	}
+	if err := a.canRead(kind, id); err != nil {
+		return err
+	}
+	return a.Store.MarkCoordUnread(actor, kind, id, from)
+}
+
+func (a CoordAccess) RoomSummaries() ([]CoordRoomSummary, error) {
+	actor, err := a.actor()
+	if err != nil {
+		return nil, err
+	}
+	if actor == "" {
+		return nil, ErrCoordForbidden
+	}
+	rooms, err := a.Rooms()
+	if err != nil {
+		return nil, err
+	}
+	return a.Store.projectRoomSummaries(actor, a.Principal.ID, a.AgentExternalID, rooms)
+}
+
 func (a CoordAccess) Send(message CoordMessage) (int64, error) {
 	if a.Store != nil && a.Store.writer != nil {
 		return queueValue(a.Store, []any{a.Principal, a.AgentExternalID, a.publicOnly, message}, func(d *Store, p []any) (int64, error) {

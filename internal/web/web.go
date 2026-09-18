@@ -36,7 +36,11 @@ type pageData struct {
 	Review                                     []reviewEntry
 	CoordRoom                                  string
 	CoordRooms                                 []store.CoordRoom
+	CoordRoomSummaries                         []store.CoordRoomSummary
 	CoordMessages                              []store.CoordMessage
+	CoordHighWater, CoordBefore, CoordAfter    int64
+	CoordFirstSequence, CoordLastSequence      int64
+	CoordHasOlder, CoordHasNewer               bool
 	CoordPeers                                 []store.CoordAgent
 	CoordStanding                              []store.StandingInstruction
 }
@@ -63,6 +67,8 @@ func New(st *store.Store) http.Handler {
 	mux.Handle("GET /ui/context", a.requirePerson(http.HandlerFunc(a.contextPage)))
 	mux.Handle("GET /ui/coord", a.requirePerson(http.HandlerFunc(a.coordRoomPage)))
 	mux.Handle("POST /ui/coord/send", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordSend))))
+	mux.Handle("POST /ui/coord/read", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordMarkRead))))
+	mux.Handle("POST /ui/coord/unread", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordMarkUnread))))
 	mux.Handle("POST /ui/coord/standing/end", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordEndStanding))))
 	mux.HandleFunc("GET /ui/{$}", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/ui/requests", http.StatusSeeOther) })
 	return mux

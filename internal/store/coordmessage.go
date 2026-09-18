@@ -107,14 +107,20 @@ func (s *Store) AppendCoordMessage(m CoordMessage) (int64, error) {
 		return id, tx.Commit()
 	}
 
-	// Die Sequenz wird innerhalb derselben Transaktion vergeben. Der UNIQUE
-	// auf (destination_kind, destination_id, sequence) fängt ab, was zwei
-	// gleichzeitige Schreiber sonst doppelt vergeben könnten; im Runtime-Modus
-	// serialisiert der Writer ohnehin.
+	// The high-water row survives retention, so an emptied destination never
+	// reuses a sequence that an existing read marker may already cover.
 	var seq int64
-	if err := tx.QueryRow(`SELECT COALESCE(MAX(sequence),0)+1 FROM coord_messages
-		WHERE destination_kind=? AND destination_id=?`,
-		m.DestinationKind, m.DestinationID).Scan(&seq); err != nil {
+	if _, err := tx.Exec(`INSERT OR IGNORE INTO coord_destination_sequences(
+		destination_kind,destination_id,last_sequence) VALUES(?,?,0)`,
+		m.DestinationKind, m.DestinationID); err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(`UPDATE coord_destination_sequences SET last_sequence=last_sequence+1
+		WHERE destination_kind=? AND destination_id=?`, m.DestinationKind, m.DestinationID); err != nil {
+		return 0, err
+	}
+	if err := tx.QueryRow(`SELECT last_sequence FROM coord_destination_sequences
+		WHERE destination_kind=? AND destination_id=?`, m.DestinationKind, m.DestinationID).Scan(&seq); err != nil {
 		return 0, err
 	}
 

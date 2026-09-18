@@ -430,3 +430,172 @@ func TestAProjectRoomStaysOpenToTheSignedInHuman(t *testing.T) {
 		t.Fatalf("a project room must stay readable, got %d", res.StatusCode)
 	}
 }
+
+func TestCoordRoomRendersLatestFiftyAndSequencePages(t *testing.T) {
+	srv, st, client := signedIn(t)
+	room := store.RoomKeyForProject("github.com/x/paging")
+	materializeWebRoom(t, st, room)
+	for i := 1; i <= 75; i++ {
+		if _, err := st.AppendCoordMessage(store.CoordMessage{
+			DestinationKind: store.DestinationRoom, DestinationID: room,
+			SenderExternalID: "sess-other", ClientID: store.FormatMessageID(int64(i)), Body: "message",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	latest := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room))
+	if !strings.Contains(latest, "#26 ·") || !strings.Contains(latest, "#75 ·") || strings.Contains(latest, "#25 ·") {
+		t.Fatalf("latest page did not render 26..75")
+	}
+	before := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room)+"&before=26")
+	if !strings.Contains(before, "#1 ·") || !strings.Contains(before, "#25 ·") || strings.Contains(before, "#26 ·") {
+		t.Fatalf("before page did not render 1..25")
+	}
+	after := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room)+"&after=25")
+	if !strings.Contains(after, "#26 ·") || !strings.Contains(after, "#75 ·") || strings.Contains(after, "#25 ·") {
+		t.Fatalf("after page did not use an exclusive sequence boundary")
+	}
+	emptyAfter := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room)+"&after=75")
+	if !strings.Contains(emptyAfter, `before=75`) {
+		t.Fatalf("empty after page has no usable older navigation")
+	}
+	if strings.Contains(emptyAfter, "before=0") {
+		t.Fatal("empty after page rendered an invalid before=0 link")
+	}
+}
+
+func TestCoordGETDoesNotMarkMessagesRead(t *testing.T) {
+	srv, st, client := signedIn(t)
+	room := store.RoomKeyForProject("github.com/x/read")
+	materializeWebRoom(t, st, room)
+	if _, err := st.AppendCoordMessage(store.CoordMessage{DestinationKind: store.DestinationRoom, DestinationID: room, SenderExternalID: "other", ClientID: "one", Body: "one"}); err != nil {
+		t.Fatal(err)
+	}
+	res, err := client.Get(srv.URL + "/ui/coord?room=" + url.QueryEscape(room))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	state, err := st.CoordReadState("person:1", store.DestinationRoom, room)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.ReadThrough != 0 {
+		t.Fatalf("GET changed read state: %+v", state)
+	}
+}
+
+func TestCoordReadAndUnreadAreExplicitCSRFMutations(t *testing.T) {
+	srv, st, client := signedIn(t)
+	room := store.RoomKeyForProject("github.com/x/read")
+	materializeWebRoom(t, st, room)
+	for i := int64(1); i <= 3; i++ {
+		if _, err := st.AppendCoordMessage(store.CoordMessage{DestinationKind: store.DestinationRoom, DestinationID: room, SenderExternalID: "other", ClientID: store.FormatMessageID(i), Body: "message"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for path, sequence := range map[string]string{"read": "3", "unread": "2"} {
+		res := authenticatedPostForm(t, client, srv.URL+"/ui/coord/"+path, url.Values{"room": {room}, "sequence": {sequence}})
+		res.Body.Close()
+		if res.StatusCode != http.StatusSeeOther {
+			t.Fatalf("%s status=%d", path, res.StatusCode)
+		}
+	}
+	state, err := st.CoordReadState("person:1", store.DestinationRoom, room)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.ReadThrough != 3 || state.ManualUnreadFrom != 2 {
+		t.Fatalf("state=%+v", state)
+	}
+
+	res := sameOriginPostForm(t, client, srv.URL+"/ui/coord/read", url.Values{"room": {room}, "sequence": {"3"}})
+	res.Body.Close()
+	if res.StatusCode != http.StatusForbidden {
+		t.Fatalf("read without CSRF status=%d", res.StatusCode)
+	}
+}
+
+func TestCoordReadRoutesHidePrivateRoomsAndRejectInvalidPaging(t *testing.T) {
+	srv, st, client := signedIn(t)
+	private := store.RoomKeyForDirect([]string{"sess-a", "sess-b"})
+	if err := st.EnsureCoordRoom(store.CoordRoom{Key: private, Kind: store.RoomDirect, Members: []string{"sess-a", "sess-b"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AppendCoordMessage(store.CoordMessage{DestinationKind: store.DestinationRoom, DestinationID: private, SenderExternalID: "sess-a", ClientID: "secret", Body: "secret"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"read", "unread"} {
+		res := authenticatedPostForm(t, client, srv.URL+"/ui/coord/"+path, url.Values{"room": {private}, "sequence": {"1"}})
+		res.Body.Close()
+		if res.StatusCode != http.StatusNotFound {
+			t.Fatalf("%s private status=%d", path, res.StatusCode)
+		}
+	}
+	res, err := client.Get(srv.URL + "/ui/coord?room=" + url.QueryEscape(private) + "&before=0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	// Authorization runs before parsing, so a private room remains 404 even
+	// when its paging cursor is malformed.
+	if res.StatusCode != http.StatusNotFound {
+		t.Fatalf("private invalid paging status=%d", res.StatusCode)
+	}
+
+	room := store.RoomKeyForProject("github.com/x/valid")
+	materializeWebRoom(t, st, room)
+	res, err = client.Get(srv.URL + "/ui/coord?room=" + url.QueryEscape(room) + "&before=0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("invalid paging status=%d", res.StatusCode)
+	}
+}
+
+func TestCoordReadValidationReturnsBadRequest(t *testing.T) {
+	srv, st, client := signedIn(t)
+	room := store.RoomKeyForProject("github.com/x/validation")
+	materializeWebRoom(t, st, room)
+	if _, err := st.AppendCoordMessage(store.CoordMessage{DestinationKind: store.DestinationRoom, DestinationID: room, SenderExternalID: "other", ClientID: "one", Body: "one"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ path, sequence string }{
+		{path: "read", sequence: "2"},
+		{path: "unread", sequence: "2"},
+	} {
+		res := authenticatedPostForm(t, client, srv.URL+"/ui/coord/"+tc.path, url.Values{"room": {room}, "sequence": {tc.sequence}})
+		res.Body.Close()
+		if res.StatusCode != http.StatusBadRequest {
+			t.Fatalf("%s invalid sequence status=%d", tc.path, res.StatusCode)
+		}
+	}
+	res, err := client.Get(srv.URL + "/ui/coord?room=" + url.QueryEscape(room) + "&after=2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("future window status=%d", res.StatusCode)
+	}
+}
+
+func coordPageBody(t *testing.T, client *http.Client, target string) string {
+	t.Helper()
+	res, err := client.Get(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s status=%d body=%s", target, res.StatusCode, body)
+	}
+	return string(body)
+}

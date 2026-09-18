@@ -448,8 +448,20 @@ CREATE TABLE IF NOT EXISTS coord_messages(
   UNIQUE(destination_kind,destination_id,sequence));
 CREATE INDEX IF NOT EXISTS coord_messages_destination
   ON coord_messages(destination_kind,destination_id,id);
+CREATE INDEX IF NOT EXISTS coord_messages_destination_sequence
+  ON coord_messages(destination_kind,destination_id,sequence);
 CREATE UNIQUE INDEX IF NOT EXISTS coord_messages_origin
   ON coord_messages(origin_event_id) WHERE origin_event_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS coord_destination_sequences(
+  destination_kind TEXT NOT NULL,
+  destination_id TEXT NOT NULL,
+  last_sequence INTEGER NOT NULL CHECK(last_sequence>=0),
+  PRIMARY KEY(destination_kind,destination_id));
+INSERT INTO coord_destination_sequences(destination_kind,destination_id,last_sequence)
+  SELECT destination_kind,destination_id,MAX(sequence) FROM coord_messages
+  GROUP BY destination_kind,destination_id
+  ON CONFLICT(destination_kind,destination_id) DO UPDATE SET
+    last_sequence=MAX(last_sequence,excluded.last_sequence);
 CREATE TABLE IF NOT EXISTS threads(
   id INTEGER PRIMARY KEY,
   project TEXT NOT NULL,
@@ -580,6 +592,16 @@ CREATE TABLE IF NOT EXISTS coord_message_mentions(
   message_id INTEGER NOT NULL REFERENCES coord_messages(id) ON DELETE CASCADE,
   mentioned_external_id TEXT NOT NULL,
   PRIMARY KEY(message_id,mentioned_external_id));
+CREATE INDEX IF NOT EXISTS coord_message_mentions_recipient
+  ON coord_message_mentions(mentioned_external_id,message_id);
+CREATE TABLE IF NOT EXISTS coord_read_state(
+  principal_id TEXT NOT NULL,
+  destination_kind TEXT NOT NULL CHECK(destination_kind IN ('room','discussion')),
+  destination_id TEXT NOT NULL,
+  read_through_sequence INTEGER NOT NULL DEFAULT 0 CHECK(read_through_sequence>=0),
+  manual_unread_from_sequence INTEGER CHECK(manual_unread_from_sequence>0),
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(principal_id,destination_kind,destination_id));
 CREATE TABLE IF NOT EXISTS coord_message_refs(
   message_id INTEGER NOT NULL REFERENCES coord_messages(id) ON DELETE CASCADE,
   ref_kind TEXT NOT NULL,

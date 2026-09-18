@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -49,6 +51,8 @@ func coordHTTPError(w http.ResponseWriter, err error) {
 		http.Error(w, "coordination target not found", http.StatusNotFound)
 	case errors.Is(err, store.ErrCoordForbidden):
 		http.Error(w, "coordination target forbidden", http.StatusForbidden)
+	case errors.Is(err, store.ErrCoordInvalidSequence):
+		http.Error(w, "invalid coordination sequence", http.StatusBadRequest)
 	default:
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
@@ -76,20 +80,25 @@ func (a *app) mayEnter(w http.ResponseWriter, r *http.Request, room string) bool
 func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 	room := r.URL.Query().Get("room")
 	if room == "" {
-		rooms, err := a.browserCoord(r).Rooms()
+		summaries, err := a.browserCoord(r).RoomSummaries()
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		a.renderBrowser(w, r, "coord", pageData{Title: "Coordination", CoordRooms: rooms})
+		a.renderBrowser(w, r, "coord", pageData{Title: "Coordination", CoordRoomSummaries: summaries})
 		return
 	}
 	if !a.mayEnter(w, r, room) {
 		return
 	}
-	msgs, err := a.browserCoord(r).Messages(store.DestinationRoom, room, 0, 100)
+	window, err := coordWindowFromRequest(r)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	page, err := a.browserCoord(r).MessageWindow(store.DestinationRoom, room, window)
+	if err != nil {
+		coordHTTPError(w, err)
 		return
 	}
 	peers, err := a.browserCoord(r).Peers(room, "")
@@ -102,9 +111,45 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	a.renderBrowser(w, r, "coord", pageData{Title: "Coordination",
-		CoordRoom: room, CoordMessages: msgs, CoordPeers: peers,
-		CoordStanding: standing})
+	data := pageData{Title: "Coordination",
+		CoordRoom: room, CoordMessages: page.Messages, CoordPeers: peers,
+		CoordStanding: standing, CoordHighWater: page.HighWater,
+		CoordHasOlder: page.HasOlder, CoordHasNewer: page.HasNewer}
+	if len(page.Messages) > 0 {
+		data.CoordFirstSequence = page.Messages[0].Sequence
+		data.CoordLastSequence = page.Messages[len(page.Messages)-1].Sequence
+		data.CoordBefore = data.CoordFirstSequence
+		data.CoordAfter = data.CoordLastSequence
+	} else if page.HasOlder {
+		// A forward cursor at the high-water has no message from which to derive
+		// a boundary. The durable high-water is still a valid before cursor,
+		// including when retention removed that exact row.
+		data.CoordBefore = page.HighWater
+	}
+	a.renderBrowser(w, r, "coord", data)
+}
+
+func coordWindowFromRequest(r *http.Request) (store.MessageWindow, error) {
+	beforeText := strings.TrimSpace(r.URL.Query().Get("before"))
+	afterText := strings.TrimSpace(r.URL.Query().Get("after"))
+	if beforeText != "" && afterText != "" {
+		return store.MessageWindow{}, errors.New("before and after are mutually exclusive")
+	}
+	if beforeText != "" {
+		sequence, err := strconv.ParseInt(beforeText, 10, 64)
+		if err != nil || sequence <= 0 {
+			return store.MessageWindow{}, errors.New("before must be a positive sequence")
+		}
+		return store.BeforeWindow(sequence, 50), nil
+	}
+	if afterText != "" {
+		sequence, err := strconv.ParseInt(afterText, 10, 64)
+		if err != nil || sequence < 0 {
+			return store.MessageWindow{}, errors.New("after must be a non-negative sequence")
+		}
+		return store.AfterWindow(sequence, 50), nil
+	}
+	return store.LatestWindow(50), nil
 }
 
 // coordSend speichert einen menschlichen Beitrag.
@@ -162,7 +207,39 @@ func (a *app) coordSend(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	http.Redirect(w, r, "/ui/coord?room="+room, http.StatusSeeOther)
+	http.Redirect(w, r, "/ui/coord?room="+url.QueryEscape(room), http.StatusSeeOther)
+}
+
+func (a *app) coordMarkRead(w http.ResponseWriter, r *http.Request) {
+	a.coordSetReadState(w, r, false)
+}
+
+func (a *app) coordMarkUnread(w http.ResponseWriter, r *http.Request) {
+	a.coordSetReadState(w, r, true)
+}
+
+func (a *app) coordSetReadState(w http.ResponseWriter, r *http.Request, unread bool) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	room := strings.TrimSpace(r.FormValue("room"))
+	sequence, err := strconv.ParseInt(strings.TrimSpace(r.FormValue("sequence")), 10, 64)
+	if room == "" || err != nil || sequence < 0 || (unread && sequence == 0) {
+		http.Error(w, "room and valid sequence are required", http.StatusBadRequest)
+		return
+	}
+	access := a.browserCoord(r)
+	if unread {
+		err = access.MarkUnread(store.DestinationRoom, room, sequence)
+	} else {
+		err = access.MarkRead(store.DestinationRoom, room, sequence)
+	}
+	if err != nil {
+		coordHTTPError(w, err)
+		return
+	}
+	http.Redirect(w, r, "/ui/coord?room="+url.QueryEscape(room), http.StatusSeeOther)
 }
 
 // coordEndStanding beendet eine Vorgabe. Ausdrücklich und von einem
@@ -187,5 +264,5 @@ func (a *app) coordEndStanding(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/ui/coord?room="+room, http.StatusSeeOther)
+	http.Redirect(w, r, "/ui/coord?room="+url.QueryEscape(room), http.StatusSeeOther)
 }
