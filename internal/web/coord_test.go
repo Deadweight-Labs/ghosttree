@@ -1,6 +1,7 @@
 package web
 
 import (
+	"io"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -32,12 +33,53 @@ func signedIn(t *testing.T) (*httptest.Server, *store.Store, *http.Client) {
 	client := &http.Client{Jar: jar, CheckRedirect: func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
 	}}
-	res, err := client.PostForm(srv.URL+"/ui/login", url.Values{"token": {token}})
-	if err != nil {
-		t.Fatalf("login: %v", err)
-	}
+	res := sameOriginPostForm(t, client, srv.URL+"/ui/login", url.Values{"token": {token}})
 	res.Body.Close()
 	return srv, st, client
+}
+
+func authenticatedPostForm(t *testing.T, client *http.Client, target string, form url.Values) *http.Response {
+	t.Helper()
+	form.Set("csrf_token", renderedCSRFToken(t, client, strings.Split(target, "/ui/")[0]+"/ui/coord"))
+	req, err := http.NewRequest(http.MethodPost, target, strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	u, err := url.Parse(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Origin", u.Scheme+"://"+u.Host)
+	res, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return res
+}
+
+func renderedCSRFToken(t *testing.T, client *http.Client, pageURL string) string {
+	t.Helper()
+	page, err := client.Get(pageURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	markup, err := io.ReadAll(page.Body)
+	page.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const prefix = `name="csrf_token" value="`
+	start := strings.Index(string(markup), prefix)
+	if start < 0 {
+		t.Fatal("authenticated page did not render a CSRF token")
+	}
+	value := string(markup)[start+len(prefix):]
+	end := strings.IndexByte(value, '"')
+	if end < 0 {
+		t.Fatal("rendered CSRF token was not terminated")
+	}
+	return value[:end]
 }
 
 // AC-4 von REQ-350: der Mensch schreibt aus der authentifizierten Oberfläche
@@ -47,11 +89,8 @@ func TestAHumanWritesIntoARoomAndTheMessageCarriesThatOrigin(t *testing.T) {
 	srv, st, client := signedIn(t)
 	room := store.RoomKeyForProject("github.com/x/y")
 
-	res, err := client.PostForm(srv.URL+"/ui/coord/send", url.Values{
+	res := authenticatedPostForm(t, client, srv.URL+"/ui/coord/send", url.Values{
 		"room": {room}, "body": {"für diesen Release nur additive Änderungen"}})
-	if err != nil {
-		t.Fatalf("send: %v", err)
-	}
 	res.Body.Close()
 
 	msgs, err := st.CoordMessagesSince(store.DestinationRoom, room, 0, 10)
@@ -76,12 +115,9 @@ func TestAStandingInstructionSurvivesLaterTraffic(t *testing.T) {
 	srv, st, client := signedIn(t)
 	room := store.RoomKeyForProject("github.com/x/y")
 
-	res, err := client.PostForm(srv.URL+"/ui/coord/send", url.Values{
+	res := authenticatedPostForm(t, client, srv.URL+"/ui/coord/send", url.Values{
 		"room": {room}, "body": {"keine Breaking Changes in diesem Release"},
 		"standing": {"1"}, "mentions": {"sess-backend"}})
-	if err != nil {
-		t.Fatalf("send: %v", err)
-	}
 	res.Body.Close()
 
 	// Fünfzig weitere Nachrichten.
@@ -109,11 +145,8 @@ func TestAStandingInstructionSurvivesLaterTraffic(t *testing.T) {
 	}
 
 	// Und sie endet nur ausdrücklich.
-	res, err = client.PostForm(srv.URL+"/ui/coord/standing/end", url.Values{
+	res = authenticatedPostForm(t, client, srv.URL+"/ui/coord/standing/end", url.Values{
 		"room": {room}, "message_id": {standing[0].MessageID}})
-	if err != nil {
-		t.Fatalf("end: %v", err)
-	}
 	res.Body.Close()
 
 	after, err := st.StandingInstructions(room)
@@ -134,10 +167,7 @@ func TestResubmittingTheSameFormDoesNotDuplicate(t *testing.T) {
 	form := url.Values{"room": {room}, "body": {"einmal"}, "form_id": {"stabil-1"}}
 
 	for i := 0; i < 2; i++ {
-		res, err := client.PostForm(srv.URL+"/ui/coord/send", form)
-		if err != nil {
-			t.Fatalf("send %d: %v", i, err)
-		}
+		res := authenticatedPostForm(t, client, srv.URL+"/ui/coord/send", form)
 		res.Body.Close()
 	}
 	msgs, err := st.CoordMessagesSince(store.DestinationRoom, room, 0, 10)
@@ -181,6 +211,124 @@ func TestWritingRequiresBeingSignedIn(t *testing.T) {
 	}
 }
 
+func TestCoordMutationRejectsMissingCSRF(t *testing.T) {
+	srv, st, client := signedIn(t)
+	room := store.RoomKeyForProject("github.com/x/y")
+	for _, tc := range []struct {
+		name  string
+		token string
+	}{
+		{name: "missing"},
+		{name: "wrong", token: "not-the-session-token"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			form := url.Values{"room": {room}, "body": {"unsafe"}}
+			if tc.token != "" {
+				form.Set("csrf_token", tc.token)
+			}
+			res := sameOriginPostForm(t, client, srv.URL+"/ui/coord/send", form)
+			defer res.Body.Close()
+			if res.StatusCode != http.StatusForbidden {
+				t.Fatalf("status=%d", res.StatusCode)
+			}
+		})
+	}
+	msgs, err := st.CoordMessagesSince(store.DestinationRoom, room, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("invalid CSRF stored %d messages", len(msgs))
+	}
+}
+
+func TestCoordMutationRejectsTokenFromAnotherSession(t *testing.T) {
+	srv, st, client := signedIn(t)
+	otherToken, err := st.AddPerson("other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherJar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := &http.Client{Jar: otherJar, CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	login := sameOriginPostForm(t, other, srv.URL+"/ui/login", url.Values{"token": {otherToken}})
+	login.Body.Close()
+	foreignToken := renderedCSRFToken(t, other, srv.URL+"/ui/coord")
+	room := store.RoomKeyForProject("github.com/x/y")
+	res := sameOriginPostForm(t, client, srv.URL+"/ui/coord/send", url.Values{
+		"room": {room}, "body": {"unsafe"}, "csrf_token": {foreignToken},
+	})
+	res.Body.Close()
+	if res.StatusCode != http.StatusForbidden {
+		t.Fatalf("status=%d", res.StatusCode)
+	}
+	msgs, err := st.CoordMessagesSince(store.DestinationRoom, room, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("foreign CSRF token stored %d messages", len(msgs))
+	}
+}
+
+func TestCSRFMiddlewareCoversLogoutAndStandingEnd(t *testing.T) {
+	srv, _, client := signedIn(t)
+	for _, path := range []string{"/ui/logout", "/ui/coord/standing/end"} {
+		res := sameOriginPostForm(t, client, srv.URL+path, url.Values{})
+		res.Body.Close()
+		if res.StatusCode != http.StatusForbidden {
+			t.Errorf("%s: status=%d", path, res.StatusCode)
+		}
+	}
+	res, err := client.Get(srv.URL + "/ui/coord")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("failed logout CSRF ended the session: status=%d", res.StatusCode)
+	}
+}
+
+func TestCoordMutationRejectsInvalidOrigin(t *testing.T) {
+	srv, st, client := signedIn(t)
+	room := store.RoomKeyForProject("github.com/x/y")
+	for _, origin := range []string{"", "https://evil.example"} {
+		form := url.Values{
+			"room":       {room},
+			"body":       {"unsafe"},
+			"csrf_token": {renderedCSRFToken(t, client, srv.URL+"/ui/coord")},
+		}
+		req, err := http.NewRequest(http.MethodPost, srv.URL+"/ui/coord/send", strings.NewReader(form.Encode()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+		}
+		res, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		if res.StatusCode != http.StatusForbidden {
+			t.Fatalf("origin %q: status=%d", origin, res.StatusCode)
+		}
+	}
+	msgs, err := st.CoordMessagesSince(store.DestinationRoom, room, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("invalid origins stored %d messages", len(msgs))
+	}
+}
+
 // Angemeldet zu sein ist NICHT dasselbe wie in einem Raum zu sein. Ein
 // privates Gespräch zwischen zwei Agenten wird nicht dadurch lesbar, dass ein
 // Mensch dessen Schlüssel in die URL schreibt. Spec §9 — eine URL ist keine
@@ -212,11 +360,8 @@ func TestBeingSignedInIsNotBeingInTheRoom(t *testing.T) {
 	}
 
 	// Und hineinschreiben geht auch nicht.
-	post, err := client.PostForm(srv.URL+"/ui/coord/send", url.Values{
+	post := authenticatedPostForm(t, client, srv.URL+"/ui/coord/send", url.Values{
 		"room": {fremd}, "body": {"ich mische mich ein"}})
-	if err != nil {
-		t.Fatal(err)
-	}
 	defer post.Body.Close()
 	if post.StatusCode != http.StatusForbidden {
 		t.Fatalf("writing into a foreign private room: want 403, got %d", post.StatusCode)

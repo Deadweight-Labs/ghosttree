@@ -43,10 +43,7 @@ func body(t *testing.T, resp *http.Response) string {
 func login(t *testing.T, srv *httptest.Server, token string) *http.Client {
 	t.Helper()
 	client := &http.Client{CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
-	resp, err := client.PostForm(srv.URL+"/ui/login", url.Values{"token": {token}, "next": {"/ui/requests"}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	resp := sameOriginPostForm(t, client, srv.URL+"/ui/login", url.Values{"token": {token}, "next": {"/ui/requests"}})
 	if resp.StatusCode != http.StatusSeeOther {
 		t.Fatalf("login status=%d body=%s", resp.StatusCode, body(t, resp))
 	}
@@ -56,6 +53,25 @@ func login(t *testing.T, srv *httptest.Server, token string) *http.Client {
 	}
 	client.Jar = cookieJar{cookies: cookies}
 	return client
+}
+
+func sameOriginPostForm(t *testing.T, client *http.Client, target string, form url.Values) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, target, strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	u, err := url.Parse(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Origin", u.Scheme+"://"+u.Host)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp
 }
 
 type cookieJar struct{ cookies []*http.Cookie }
@@ -80,6 +96,18 @@ func TestShellAuthAndNavigation(t *testing.T) {
 	}
 }
 
+func TestBrowserSessionCarriesStablePrincipal(t *testing.T) {
+	srv, _, token := testWeb(t)
+	client := login(t, srv, token)
+	resp, err := client.Get(srv.URL + "/ui/coord")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := body(t, resp); !strings.Contains(got, `data-principal="person:1"`) {
+		t.Fatal("stable principal missing from rendered session")
+	}
+}
+
 func TestLoginUsesFixedReturnTarget(t *testing.T) {
 	srv, _, token := testWeb(t)
 	client := &http.Client{CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
@@ -92,14 +120,64 @@ func TestLoginUsesFixedReturnTarget(t *testing.T) {
 		`//evil.example`,
 		`https://evil.example`,
 	} {
-		resp, err := client.PostForm(srv.URL+"/ui/login", url.Values{"token": {token}, "next": {next}})
-		if err != nil {
-			t.Fatal(err)
-		}
+		resp := sameOriginPostForm(t, client, srv.URL+"/ui/login", url.Values{"token": {token}, "next": {next}})
 		resp.Body.Close()
 		if got := resp.Header.Get("Location"); got != "/ui/requests" {
 			t.Errorf("next %q redirected to %q", next, got)
 		}
+	}
+}
+
+func TestLoginRejectsCrossOrigin(t *testing.T) {
+	srv, _, token := testWeb(t)
+	client := &http.Client{CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
+	form := url.Values{"token": {token}}
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/ui/login", strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "https://evil.example")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("cross-origin login status=%d", resp.StatusCode)
+	}
+}
+
+func TestSameOriginTrustsForwardingOnlyFromLoopback(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		remoteAddr string
+		want       bool
+	}{
+		{name: "loopback proxy", remoteAddr: "127.0.0.1:43120", want: true},
+		{name: "untrusted remote", remoteAddr: "192.0.2.10:43120", want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "http://ghosttree.internal/ui/coord/send", nil)
+			req.RemoteAddr = tc.remoteAddr
+			req.Header.Set("Origin", "https://ghost.example")
+			req.Header.Set("X-Forwarded-Proto", "https")
+			req.Header.Set("X-Forwarded-Host", "ghost.example")
+			if got := sameOrigin(req); got != tc.want {
+				t.Fatalf("sameOrigin=%v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSameOriginRejectsMalformedForwardingFromLoopback(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "http://ghosttree.internal/ui/coord/send", nil)
+	req.RemoteAddr = "127.0.0.1:43120"
+	req.Header.Set("Origin", "http://ghosttree.internal")
+	req.Header.Set("X-Forwarded-Proto", "")
+	req.Header.Set("X-Forwarded-Host", "")
+	if sameOrigin(req) {
+		t.Fatal("present but empty forwarding headers fell back to the internal origin")
 	}
 }
 

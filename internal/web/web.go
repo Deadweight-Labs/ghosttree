@@ -25,20 +25,20 @@ type app struct {
 	sessions *sessions
 }
 type pageData struct {
-	Title, Person, Error string
-	Requests             []requestdomain.SearchHit
-	Request              requestdomain.Detail
-	Knowledge            []store.Knowledge
-	Sessions             []store.Session
-	Chunks               []store.Chunk
-	SessionID            int64
-	Project, Preview     string
-	Review               []reviewEntry
-	CoordRoom            string
-	CoordRooms           []store.CoordRoom
-	CoordMessages        []store.CoordMessage
-	CoordPeers           []store.CoordAgent
-	CoordStanding        []store.StandingInstruction
+	Title, Person, Principal, CSRFToken, Error string
+	Requests                                   []requestdomain.SearchHit
+	Request                                    requestdomain.Detail
+	Knowledge                                  []store.Knowledge
+	Sessions                                   []store.Session
+	Chunks                                     []store.Chunk
+	SessionID                                  int64
+	Project, Preview                           string
+	Review                                     []reviewEntry
+	CoordRoom                                  string
+	CoordRooms                                 []store.CoordRoom
+	CoordMessages                              []store.CoordMessage
+	CoordPeers                                 []store.CoordAgent
+	CoordStanding                              []store.StandingInstruction
 }
 type reviewEntry struct {
 	Knowledge         store.Knowledge
@@ -52,8 +52,8 @@ func New(st *store.Store) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /static/", http.FileServerFS(files))
 	mux.HandleFunc("GET /ui/login", a.loginPage)
-	mux.HandleFunc("POST /ui/login", a.loginSubmit)
-	mux.HandleFunc("POST /ui/logout", a.logout)
+	mux.Handle("POST /ui/login", requireSameOrigin(http.HandlerFunc(a.loginSubmit)))
+	mux.Handle("POST /ui/logout", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.logout))))
 	mux.Handle("GET /ui/requests", a.requirePerson(http.HandlerFunc(a.requestsPage)))
 	mux.Handle("GET /ui/requests/{id}", a.requirePerson(http.HandlerFunc(a.requestPage)))
 	mux.Handle("GET /ui/knowledge", a.requirePerson(http.HandlerFunc(a.knowledgePage)))
@@ -62,8 +62,8 @@ func New(st *store.Store) http.Handler {
 	mux.Handle("GET /ui/sessions/{id}", a.requirePerson(http.HandlerFunc(a.sessionPage)))
 	mux.Handle("GET /ui/context", a.requirePerson(http.HandlerFunc(a.contextPage)))
 	mux.Handle("GET /ui/coord", a.requirePerson(http.HandlerFunc(a.coordRoomPage)))
-	mux.Handle("POST /ui/coord/send", a.requirePerson(http.HandlerFunc(a.coordSend)))
-	mux.Handle("POST /ui/coord/standing/end", a.requirePerson(http.HandlerFunc(a.coordEndStanding)))
+	mux.Handle("POST /ui/coord/send", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordSend))))
+	mux.Handle("POST /ui/coord/standing/end", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordEndStanding))))
 	mux.HandleFunc("GET /ui/{$}", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/ui/requests", http.StatusSeeOther) })
 	return mux
 }
@@ -73,6 +73,13 @@ func (a *app) render(w http.ResponseWriter, name string, data pageData) {
 	if err := pages.ExecuteTemplate(w, name, data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
+}
+func (a *app) renderBrowser(w http.ResponseWriter, r *http.Request, name string, data pageData) {
+	principal := browserPrincipal(r)
+	data.Person = principal.Label
+	data.Principal = principal.ID
+	data.CSRFToken = csrfOf(r)
+	a.render(w, name, data)
 }
 func (a *app) requestsPage(w http.ResponseWriter, r *http.Request) {
 	state := r.URL.Query().Get("state")
@@ -84,7 +91,7 @@ func (a *app) requestsPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	a.render(w, "requests", pageData{Title: "Requests", Person: personOf(r), Requests: page.Results})
+	a.renderBrowser(w, r, "requests", pageData{Title: "Requests", Requests: page.Results})
 }
 func (a *app) requestPage(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -97,7 +104,7 @@ func (a *app) requestPage(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	a.render(w, "request", pageData{Title: detail.Request.HumanID(), Person: personOf(r), Request: detail})
+	a.renderBrowser(w, r, "request", pageData{Title: detail.Request.HumanID(), Request: detail})
 }
 
 func (a *app) knowledgePage(w http.ResponseWriter, r *http.Request) {
@@ -113,7 +120,7 @@ func (a *app) knowledgePage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	a.render(w, "knowledge", pageData{Title: "Knowledge", Person: personOf(r), Knowledge: entries, Project: project})
+	a.renderBrowser(w, r, "knowledge", pageData{Title: "Knowledge", Knowledge: entries, Project: project})
 }
 
 func (a *app) reviewPage(w http.ResponseWriter, r *http.Request) {
@@ -144,7 +151,7 @@ func (a *app) reviewPage(w http.ResponseWriter, r *http.Request) {
 		}
 		items = append(items, reviewEntry{Knowledge: k, Evidence: evidence, MigrationEvidence: migrationProof, Recurrence: recurrence})
 	}
-	a.render(w, "review", pageData{Title: "Review", Person: personOf(r), Review: items})
+	a.renderBrowser(w, r, "review", pageData{Title: "Review", Review: items})
 }
 
 func (a *app) sessionsPage(w http.ResponseWriter, r *http.Request) {
@@ -153,7 +160,7 @@ func (a *app) sessionsPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	a.render(w, "sessions", pageData{Title: "Sessions", Person: personOf(r), Sessions: entries})
+	a.renderBrowser(w, r, "sessions", pageData{Title: "Sessions", Sessions: entries})
 }
 
 func (a *app) sessionPage(w http.ResponseWriter, r *http.Request) {
@@ -167,7 +174,7 @@ func (a *app) sessionPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	a.render(w, "session", pageData{Title: "Session " + strconv.FormatInt(id, 10), Person: personOf(r), SessionID: id, Chunks: chunks})
+	a.renderBrowser(w, r, "session", pageData{Title: "Session " + strconv.FormatInt(id, 10), SessionID: id, Chunks: chunks})
 }
 
 func (a *app) contextPage(w http.ResponseWriter, r *http.Request) {
@@ -188,5 +195,5 @@ func (a *app) contextPage(w http.ResponseWriter, r *http.Request) {
 	if preview {
 		output = server.RenderBootstrapPreview(entries, 12000)
 	}
-	a.render(w, "context", pageData{Title: "Agent Context", Person: personOf(r), Project: project, Preview: output})
+	a.renderBrowser(w, r, "context", pageData{Title: "Agent Context", Project: project, Preview: output})
 }

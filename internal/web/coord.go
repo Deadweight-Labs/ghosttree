@@ -68,7 +68,7 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		a.render(w, "coord", pageData{Title: "Coordination", CoordRooms: rooms})
+		a.renderBrowser(w, r, "coord", pageData{Title: "Coordination", CoordRooms: rooms})
 		return
 	}
 	if !a.mayEnter(w, r, room) {
@@ -89,7 +89,7 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	a.render(w, "coord", pageData{Title: "Coordination",
+	a.renderBrowser(w, r, "coord", pageData{Title: "Coordination",
 		CoordRoom: room, CoordMessages: msgs, CoordPeers: peers,
 		CoordStanding: standing})
 }
