@@ -1078,8 +1078,8 @@ func TestCoordLiveBadgeAndMobileToolbarHaveStableCompactContracts(t *testing.T) 
 			t.Errorf("stable responsive chrome missing %q", want)
 		}
 	}
-	toolbarLinks := coordCSSRule(t, css, `.clay-toolbar:has(+ .coord-workspace) > a,`)
-	if !strings.Contains(toolbarLinks, `min-height: 2.75rem;`) {
+	toolbarLinks := coordCSSRule(t, css, `.app-brand,`)
+	if !strings.Contains(toolbarLinks, `min-height: 3rem;`) {
 		t.Fatal("mobile toolbar links must retain 44px touch targets")
 	}
 }

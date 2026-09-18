@@ -96,6 +96,140 @@ func TestShellAuthAndNavigation(t *testing.T) {
 	}
 }
 
+func TestAppChromeKeepsEveryGlobalDestinationAndLogoutAvailable(t *testing.T) {
+	srv, _, token := testWeb(t)
+	client := login(t, srv, token)
+
+	for _, path := range []string{
+		"/ui/requests",
+		"/ui/knowledge",
+		"/ui/review",
+		"/ui/sessions",
+		"/ui/coord",
+		"/ui/context",
+	} {
+		resp, err := client.Get(srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s status=%d", path, resp.StatusCode)
+		}
+		html := body(t, resp)
+		for _, want := range []string{
+			`class="app-header"`,
+			`class="app-brand" href="/ui/coord"`,
+			`>Ghosttree</span>`,
+			`href="/ui/requests"`,
+			`href="/ui/knowledge"`,
+			`href="/ui/review"`,
+			`href="/ui/sessions"`,
+			`href="/ui/coord"`,
+			`href="/ui/context"`,
+			`class="app-nav-more"`,
+			`<summary>More</summary>`,
+			`method="post" action="/ui/logout"`,
+			`name="csrf_token"`,
+			`>alice</button>`,
+		} {
+			if !strings.Contains(html, want) {
+				t.Errorf("GET %s chrome missing %q", path, want)
+			}
+		}
+	}
+}
+
+func TestAppChromeMarksCoordinationCurrentOnlyOnCoordination(t *testing.T) {
+	srv, _, token := testWeb(t)
+	client := login(t, srv, token)
+
+	resp, err := client.Get(srv.URL + "/ui/coord")
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordHTML := body(t, resp)
+	if !strings.Contains(coordHTML, `class="app-nav-coordination" href="/ui/coord" aria-current="page"`) {
+		t.Fatal("coordination navigation item is not marked current on the coordination page")
+	}
+
+	resp, err = client.Get(srv.URL + "/ui/requests")
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestsHTML := body(t, resp)
+	if strings.Contains(requestsHTML, `class="app-nav-coordination" href="/ui/coord" aria-current="page"`) {
+		t.Fatal("coordination navigation item is marked current outside coordination")
+	}
+}
+
+func TestAppChromeMarksTheCurrentSectionOnListAndDetailPages(t *testing.T) {
+	srv, st, token := testWeb(t)
+	client := login(t, srv, token)
+
+	detail, err := st.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: "Current navigation", Scope: scope.Axes{Project: "p"}}, Criteria: []string{"active section"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionID, err := st.UpsertSession(store.Session{Harness: "codex", ExternalID: "nav-current", Scope: scope.Axes{Project: "p"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		path, href, label string
+	}{
+		{"/ui/requests", "/ui/requests", "Requests"},
+		{"/ui/requests/" + strconv.FormatInt(detail.Request.ID, 10), "/ui/requests", "Requests"},
+		{"/ui/knowledge", "/ui/knowledge", "Knowledge"},
+		{"/ui/review", "/ui/review", "Review"},
+		{"/ui/sessions", "/ui/sessions", "Sessions"},
+		{"/ui/sessions/" + strconv.FormatInt(sessionID, 10), "/ui/sessions", "Sessions"},
+		{"/ui/context", "/ui/context", "Agent Context"},
+	} {
+		resp, err := client.Get(srv.URL + tc.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		html := body(t, resp)
+		want := `href="` + tc.href + `" aria-current="page">` + tc.label + `</a>`
+		if !strings.Contains(html, want) {
+			t.Errorf("GET %s does not mark %s current", tc.path, tc.label)
+		}
+	}
+}
+
+func TestAppChromeGivesLogoutAnActionName(t *testing.T) {
+	srv, _, token := testWeb(t)
+	client := login(t, srv, token)
+	resp, err := client.Get(srv.URL + "/ui/coord")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if html := body(t, resp); !strings.Contains(html, `aria-label="Sign out as alice"`) {
+		t.Fatal("logout button must expose its action and signed-in identity")
+	}
+}
+
+func TestAppChromeUsesNativeMobileDisclosureWithoutWrappingTheBar(t *testing.T) {
+	srv, _, _ := testWeb(t)
+	resp, err := http.Get(srv.URL + "/static/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	css := body(t, resp)
+	for _, want := range []string{
+		".app-nav-more",
+		"@media (max-width: 700px)",
+		"white-space: nowrap",
+		"grid-template-columns: auto minmax(0, 1fr) auto",
+		".app-nav a.app-nav-mobile-current",
+	} {
+		if !strings.Contains(css, want) {
+			t.Errorf("mobile app chrome CSS missing %q", want)
+		}
+	}
+}
+
 func TestBrowserSessionCarriesStablePrincipal(t *testing.T) {
 	srv, _, token := testWeb(t)
 	client := login(t, srv, token)
