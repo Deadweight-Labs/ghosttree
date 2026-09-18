@@ -629,6 +629,99 @@ CREATE TABLE IF NOT EXISTS coord_message_refs(
   ref_id TEXT NOT NULL,
   ref_revision TEXT NOT NULL DEFAULT '',
   PRIMARY KEY(message_id,ref_kind,ref_id,ref_revision));
+CREATE TABLE IF NOT EXISTS coord_events(
+  sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL,
+  object_kind TEXT NOT NULL,
+  object_id TEXT NOT NULL,
+  created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS coord_events_created ON coord_events(created_at);
+CREATE TRIGGER IF NOT EXISTS coord_events_bound AFTER INSERT ON coord_events BEGIN
+  DELETE FROM coord_events WHERE sequence<=NEW.sequence-512;
+END;
+CREATE TRIGGER IF NOT EXISTS coord_messages_event AFTER INSERT ON coord_messages BEGIN
+  INSERT INTO coord_events(kind,object_kind,object_id,created_at)
+  VALUES('message',NEW.destination_kind,NEW.destination_id,strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+END;
+CREATE TRIGGER IF NOT EXISTS coord_rooms_insert_event AFTER INSERT ON coord_rooms BEGIN
+  INSERT INTO coord_events(kind,object_kind,object_id,created_at)
+  VALUES('membership','room',NEW.room_key,strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+END;
+CREATE TRIGGER IF NOT EXISTS coord_rooms_update_event AFTER UPDATE OF label ON coord_rooms
+WHEN OLD.label IS NOT NEW.label BEGIN
+  INSERT INTO coord_events(kind,object_kind,object_id,created_at)
+  VALUES('membership','room',NEW.room_key,strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+END;
+CREATE TRIGGER IF NOT EXISTS coord_membership_event AFTER INSERT ON coord_room_membership_events BEGIN
+  INSERT INTO coord_events(kind,object_kind,object_id,created_at)
+  VALUES('membership','room',NEW.room_key,strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+END;
+CREATE TRIGGER IF NOT EXISTS coord_membership_visibility_event AFTER INSERT ON coord_room_membership_events
+WHEN NEW.action='leave' BEGIN
+  INSERT INTO coord_events(kind,object_kind,object_id,created_at)
+  VALUES('visibility','principal',NEW.principal_id,strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+END;
+CREATE TRIGGER IF NOT EXISTS coord_read_insert_event AFTER INSERT ON coord_read_state BEGIN
+  INSERT INTO coord_events(kind,object_kind,object_id,created_at)
+  VALUES('read',NEW.destination_kind,NEW.destination_id,strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+END;
+CREATE TRIGGER IF NOT EXISTS coord_read_update_event AFTER UPDATE ON coord_read_state
+WHEN OLD.read_through_sequence IS NOT NEW.read_through_sequence
+  OR OLD.manual_unread_from_sequence IS NOT NEW.manual_unread_from_sequence BEGIN
+  INSERT INTO coord_events(kind,object_kind,object_id,created_at)
+  VALUES('read',NEW.destination_kind,NEW.destination_id,strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+END;
+CREATE TRIGGER IF NOT EXISTS coord_attention_insert_event AFTER INSERT ON coord_attention BEGIN
+  INSERT INTO coord_events(kind,object_kind,object_id,created_at)
+  VALUES('attention','attention',CAST(NEW.id AS TEXT),strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+END;
+CREATE TRIGGER IF NOT EXISTS coord_attention_update_event AFTER UPDATE ON coord_attention
+WHEN OLD.state IS NOT NEW.state OR OLD.reason IS NOT NEW.reason
+  OR OLD.resolved_at IS NOT NEW.resolved_at BEGIN
+  INSERT INTO coord_events(kind,object_kind,object_id,created_at)
+  VALUES('attention','attention',CAST(NEW.id AS TEXT),strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+END;
+CREATE TRIGGER IF NOT EXISTS coord_standing_insert_event AFTER INSERT ON coord_standing BEGIN
+  INSERT INTO coord_events(kind,object_kind,object_id,created_at)
+  VALUES('standing','room',NEW.room_key,strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+END;
+CREATE TRIGGER IF NOT EXISTS coord_standing_update_event AFTER UPDATE ON coord_standing
+WHEN OLD.body IS NOT NEW.body OR OLD.targets IS NOT NEW.targets
+  OR OLD.ended_at IS NOT NEW.ended_at OR OLD.ended_by IS NOT NEW.ended_by BEGIN
+  INSERT INTO coord_events(kind,object_kind,object_id,created_at)
+  VALUES('standing','room',NEW.room_key,strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+END;
+CREATE TRIGGER IF NOT EXISTS coord_thread_insert_event AFTER INSERT ON threads BEGIN
+  INSERT INTO coord_events(kind,object_kind,object_id,created_at)
+  VALUES('thread','thread',CAST(NEW.id AS TEXT),strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+END;
+CREATE TRIGGER IF NOT EXISTS coord_thread_update_event AFTER UPDATE ON threads BEGIN
+  INSERT INTO coord_events(kind,object_kind,object_id,created_at)
+  VALUES('thread','thread',CAST(NEW.id AS TEXT),strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+END;
+CREATE TRIGGER IF NOT EXISTS coord_thread_home_insert_event AFTER INSERT ON thread_homes BEGIN
+  INSERT INTO coord_events(kind,object_kind,object_id,created_at)
+  VALUES('thread','thread',CAST(NEW.thread_id AS TEXT),strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+END;
+CREATE TRIGGER IF NOT EXISTS coord_thread_link_insert_event AFTER INSERT ON thread_links BEGIN
+  INSERT INTO coord_events(kind,object_kind,object_id,created_at)
+  VALUES('thread','thread',CAST(NEW.thread_id AS TEXT),strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+END;
+CREATE TRIGGER IF NOT EXISTS coord_thread_link_delete_event AFTER DELETE ON thread_links BEGIN
+  INSERT INTO coord_events(kind,object_kind,object_id,created_at)
+  VALUES('thread','thread',CAST(OLD.thread_id AS TEXT),strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+END;
+CREATE TRIGGER IF NOT EXISTS coord_delivery_insert_event AFTER INSERT ON coord_deliveries BEGIN
+  INSERT INTO coord_events(kind,object_kind,object_id,created_at)
+  SELECT 'delivery',destination_kind,destination_id,strftime('%Y-%m-%dT%H:%M:%fZ','now')
+  FROM coord_messages WHERE id=NEW.message_id;
+END;
+CREATE TRIGGER IF NOT EXISTS coord_delivery_update_event AFTER UPDATE ON coord_deliveries
+WHEN OLD.state IS NOT NEW.state OR OLD.rank IS NOT NEW.rank BEGIN
+  INSERT INTO coord_events(kind,object_kind,object_id,created_at)
+  SELECT 'delivery',destination_kind,destination_id,strftime('%Y-%m-%dT%H:%M:%fZ','now')
+  FROM coord_messages WHERE id=NEW.message_id;
+END;
 `
 
 func Open(path string) (*Store, error) {

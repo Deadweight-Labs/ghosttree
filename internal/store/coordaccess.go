@@ -1443,7 +1443,7 @@ func (a CoordAccess) SetThreadState(threadID int64, state string) error {
 	if state == ThreadResolved {
 		resolved = ts
 	}
-	if _, err := tx.Exec(`UPDATE threads SET state=?,resolved_at=?,updated_at=? WHERE id=?`, state, resolved, ts, threadID); err != nil {
+	if _, err := tx.Exec(`UPDATE threads SET state=?,resolved_at=?,updated_at=? WHERE id=? AND state<>?`, state, resolved, ts, threadID, state); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -1471,7 +1471,7 @@ func (a CoordAccess) SetThreadArchived(threadID int64, archived bool) error {
 	if archived {
 		flag = 1
 	}
-	if _, err := tx.Exec(`UPDATE threads SET archived=?,updated_at=? WHERE id=?`, flag, now(), threadID); err != nil {
+	if _, err := tx.Exec(`UPDATE threads SET archived=?,updated_at=? WHERE id=? AND archived<>?`, flag, now(), threadID, flag); err != nil {
 		return err
 	}
 	return tx.Commit()

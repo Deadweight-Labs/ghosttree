@@ -60,6 +60,7 @@ func New(st *store.Store) http.Handler {
 	mux.Handle("GET /ui/sessions/{id}", a.requirePerson(http.HandlerFunc(a.sessionPage)))
 	mux.Handle("GET /ui/context", a.requirePerson(http.HandlerFunc(a.contextPage)))
 	mux.Handle("GET /ui/coord", a.requirePerson(http.HandlerFunc(a.coordRoomPage)))
+	mux.Handle("GET /ui/coord/events", a.requirePerson(http.HandlerFunc(a.coordEvents)))
 	mux.Handle("GET /ui/coord/thread/{id}", a.requirePerson(http.HandlerFunc(a.coordThreadPage)))
 	mux.Handle("POST /ui/coord/send", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordSend))))
 	mux.Handle("POST /ui/coord/thread/create", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordCreateThread))))

@@ -101,6 +101,11 @@ func (a *app) mayEnter(w http.ResponseWriter, r *http.Request, room string) bool
 
 func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 	room := r.URL.Query().Get("room")
+	eventCursor, err := a.store.LatestCoordEventSequence()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	summaries, err := a.browserCoord(r).RoomSummaries()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -118,6 +123,7 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 	}
 	incomingAttention, outgoingAttention := buildCoordAttentionViews(attention, csrfOf(r))
 	view := coordPageView{
+		EventCursor:       eventCursor,
 		Sidebar:           buildCoordSidebar(summaries, humanMember(r), room),
 		Recipients:        buildCoordRecipientViews(recipients),
 		IncomingAttention: incomingAttention,

@@ -178,8 +178,8 @@ func (s *Store) SetThreadState(id int64, state string) error {
 	if state == ThreadResolved {
 		resolved = ts
 	}
-	_, err := s.db.Exec(`UPDATE threads SET state=?, resolved_at=?, updated_at=? WHERE id=?`,
-		state, resolved, ts, id)
+	_, err := s.db.Exec(`UPDATE threads SET state=?, resolved_at=?, updated_at=? WHERE id=? AND state<>?`,
+		state, resolved, ts, id, state)
 	return err
 }
 
@@ -196,7 +196,7 @@ func (s *Store) SetThreadArchived(id int64, archived bool) error {
 	if archived {
 		flag = 1
 	}
-	_, err := s.db.Exec(`UPDATE threads SET archived=?, updated_at=? WHERE id=?`, flag, now(), id)
+	_, err := s.db.Exec(`UPDATE threads SET archived=?, updated_at=? WHERE id=? AND archived<>?`, flag, now(), id, flag)
 	return err
 }
 
