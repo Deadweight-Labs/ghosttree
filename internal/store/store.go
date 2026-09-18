@@ -458,6 +458,7 @@ CREATE TABLE IF NOT EXISTS threads(
   state TEXT NOT NULL DEFAULT 'open' CHECK(state IN ('open','resolved','deferred')),
   archived INTEGER NOT NULL DEFAULT 0,
   person TEXT NOT NULL DEFAULT '',
+  author_principal_id TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   resolved_at TEXT);
@@ -663,6 +664,10 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 		return nil, err
 	}
 	if err := ensureCoordAgentPrincipalID(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureThreadAuthorPrincipalID(db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}

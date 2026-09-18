@@ -331,15 +331,25 @@ func TestAnOutsiderCannotReachAPrivateConversation(t *testing.T) {
 
 	// Und er sieht das Gespräch nicht einmal in seiner Übersicht.
 	list, _, err := outsider.handleCoordDMRead(ctx, nil, CoordDMReadInput{})
-	if err != nil {
-		t.Fatalf("outsider list: %v", err)
+	if err == nil {
+		t.Fatal("an unregistered outsider session listed coordination rooms")
 	}
 	// Auf das GEQUOTETE Label prüfen, nicht auf das nackte Wort: die
 	// englische Leerantwort "you are not part of any private conversation"
 	// enthält "privat" als Teilstring, und der erste Anlauf dieses Tests ist
 	// genau darüber gestolpert.
-	if strings.Contains(text(t, list), `"privat"`) {
+	if list != nil && strings.Contains(text(t, list), `"privat"`) {
 		t.Fatalf("a private room leaked into an outsider's overview: %s", text(t, list))
+	}
+}
+
+func TestDMReadRejectsMemberSetGuessingForGroups(t *testing.T) {
+	a, b, _ := twoSessions(t)
+	_, _, err := a.handleCoordDMRead(context.Background(), nil, CoordDMReadInput{
+		With: []string{b.sessionRef, "sess-third"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "opaque") {
+		t.Fatalf("group read by member set: want opaque-room error, got %v", err)
 	}
 }
 
@@ -469,7 +479,7 @@ func TestASubagentIsAddressableButItsClaimIsMarkedUnverified(t *testing.T) {
 	}
 	var mentionedSubagent bool
 	for _, m := range all {
-		mentions, err := b.client.CoordMessageMentions(m.ID)
+		mentions, err := b.client.CoordMessageMentions(m.ID, b.coordRef())
 		if err != nil {
 			continue
 		}

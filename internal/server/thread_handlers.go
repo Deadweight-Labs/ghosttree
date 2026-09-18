@@ -12,7 +12,26 @@ func threadIDFrom(r *http.Request) (int64, bool) {
 	return id, err == nil && id > 0
 }
 
+func (a *api) threadAccess(w http.ResponseWriter, r *http.Request) (store.CoordAccess, bool) {
+	if r.URL.Query().Get("agent_external_id") != "" && r.URL.Query().Get("public_only") == "1" {
+		writeErr(w, http.StatusBadRequest, "choose agent_external_id or public_only")
+		return store.CoordAccess{}, false
+	}
+	if agent := r.URL.Query().Get("agent_external_id"); agent != "" {
+		return a.coordAccess(r, agent), true
+	}
+	if r.URL.Query().Get("public_only") == "1" {
+		return a.st.CoordinationPublicFor(principalOf(r)), true
+	}
+	writeErr(w, http.StatusBadRequest, "agent_external_id is required")
+	return store.CoordAccess{}, false
+}
+
 func (a *api) createThread(w http.ResponseWriter, r *http.Request) {
+	access, ok := a.threadAccess(w, r)
+	if !ok {
+		return
+	}
 	var in store.Thread
 	if err := readJSON(r, &in); err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)
@@ -22,9 +41,12 @@ func (a *api) createThread(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "project is required")
 		return
 	}
-	in.Person = personOf(r)
-	id, err := a.st.CreateThread(in)
+	id, err := access.CreateThread(in)
 	if err != nil {
+		if err == store.ErrCoordForbidden || err == store.ErrCoordNotFound {
+			writeCoordAccessError(w, err)
+			return
+		}
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -32,15 +54,19 @@ func (a *api) createThread(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) listThreads(w http.ResponseWriter, r *http.Request) {
+	access, ok := a.threadAccess(w, r)
+	if !ok {
+		return
+	}
 	q := r.URL.Query()
 	if q.Get("project") == "" {
 		writeErr(w, http.StatusBadRequest, "project is required")
 		return
 	}
 	limit, _ := strconv.Atoi(q.Get("limit"))
-	out, err := a.st.SearchThreads(q.Get("project"), q.Get("q"), q.Get("archived") == "1", limit)
+	out, err := access.SearchThreads(q.Get("project"), q.Get("q"), q.Get("archived") == "1", limit)
 	if err != nil {
-		writeStoreError(w, http.StatusInternalServerError, err)
+		writeCoordAccessError(w, err)
 		return
 	}
 	if out == nil {
@@ -50,14 +76,18 @@ func (a *api) listThreads(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) getThread(w http.ResponseWriter, r *http.Request) {
+	access, allowed := a.threadAccess(w, r)
+	if !allowed {
+		return
+	}
 	id, ok := threadIDFrom(r)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "thread id is required")
 		return
 	}
-	t, err := a.st.ThreadByID(id)
+	t, err := access.Thread(id)
 	if err != nil {
-		writeStoreError(w, http.StatusNotFound, err)
+		writeCoordAccessError(w, err)
 		return
 	}
 	writeJSON(w, 200, t)
@@ -73,6 +103,10 @@ type threadStateInput struct {
 // legen wäre der Fehler, den Spec §B5 benennt — Archivierung sagt nichts
 // darüber, ob die Frage beantwortet ist.
 func (a *api) setThreadState(w http.ResponseWriter, r *http.Request) {
+	access, allowed := a.threadAccess(w, r)
+	if !allowed {
+		return
+	}
 	id, ok := threadIDFrom(r)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "thread id is required")
@@ -84,14 +118,18 @@ func (a *api) setThreadState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if in.State != "" {
-		if err := a.st.SetThreadState(id, in.State); err != nil {
+		if err := access.SetThreadState(id, in.State); err != nil {
+			if err == store.ErrCoordForbidden || err == store.ErrCoordNotFound {
+				writeCoordAccessError(w, err)
+				return
+			}
 			writeStoreError(w, http.StatusBadRequest, err)
 			return
 		}
 	}
 	if in.Archived != nil {
-		if err := a.st.SetThreadArchived(id, *in.Archived); err != nil {
-			writeStoreError(w, http.StatusInternalServerError, err)
+		if err := access.SetThreadArchived(id, *in.Archived); err != nil {
+			writeCoordAccessError(w, err)
 			return
 		}
 	}
@@ -99,6 +137,10 @@ func (a *api) setThreadState(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) linkThread(w http.ResponseWriter, r *http.Request) {
+	access, allowed := a.threadAccess(w, r)
+	if !allowed {
+		return
+	}
 	id, ok := threadIDFrom(r)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "thread id is required")
@@ -110,7 +152,11 @@ func (a *api) linkThread(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.ThreadID = id
-	if err := a.st.LinkThread(in); err != nil {
+	if err := access.LinkThread(in); err != nil {
+		if err == store.ErrCoordForbidden || err == store.ErrCoordNotFound {
+			writeCoordAccessError(w, err)
+			return
+		}
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -118,14 +164,18 @@ func (a *api) linkThread(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) threadLinks(w http.ResponseWriter, r *http.Request) {
+	access, allowed := a.threadAccess(w, r)
+	if !allowed {
+		return
+	}
 	id, ok := threadIDFrom(r)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "thread id is required")
 		return
 	}
-	out, err := a.st.ThreadLinks(id)
+	out, err := access.ThreadLinks(id)
 	if err != nil {
-		writeStoreError(w, http.StatusInternalServerError, err)
+		writeCoordAccessError(w, err)
 		return
 	}
 	if out == nil {
@@ -139,14 +189,18 @@ func (a *api) threadLinks(w http.ResponseWriter, r *http.Request) {
 // Verknüpfung nur in einer Richtung nutzbar, und die Knowledge-Ansicht
 // könnte nicht "Diskussionen: 2" zeigen.
 func (a *api) threadsForObject(w http.ResponseWriter, r *http.Request) {
+	access, allowed := a.threadAccess(w, r)
+	if !allowed {
+		return
+	}
 	q := r.URL.Query()
 	if q.Get("kind") == "" || q.Get("id") == "" {
 		writeErr(w, http.StatusBadRequest, "kind and id are required")
 		return
 	}
-	out, err := a.st.ThreadsForObject(q.Get("kind"), q.Get("id"))
+	out, err := access.ThreadsForObject(q.Get("kind"), q.Get("id"))
 	if err != nil {
-		writeStoreError(w, http.StatusInternalServerError, err)
+		writeCoordAccessError(w, err)
 		return
 	}
 	if out == nil {
@@ -156,6 +210,10 @@ func (a *api) threadsForObject(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) putThreadSummary(w http.ResponseWriter, r *http.Request) {
+	access, allowed := a.threadAccess(w, r)
+	if !allowed {
+		return
+	}
 	id, ok := threadIDFrom(r)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "thread id is required")
@@ -167,24 +225,27 @@ func (a *api) putThreadSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.ThreadID = id
-	in.Person = personOf(r)
-	rev, err := a.st.PutThreadSummary(in)
+	rev, err := access.PutThreadSummary(in)
 	if err != nil {
-		writeStoreError(w, http.StatusInternalServerError, err)
+		writeCoordAccessError(w, err)
 		return
 	}
 	writeJSON(w, 200, map[string]int{"revision": rev})
 }
 
 func (a *api) getThreadSummary(w http.ResponseWriter, r *http.Request) {
+	access, allowed := a.threadAccess(w, r)
+	if !allowed {
+		return
+	}
 	id, ok := threadIDFrom(r)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "thread id is required")
 		return
 	}
-	sum, found, err := a.st.LatestThreadSummary(id)
+	sum, found, err := access.ThreadSummary(id)
 	if err != nil {
-		writeStoreError(w, http.StatusInternalServerError, err)
+		writeCoordAccessError(w, err)
 		return
 	}
 	if !found {
@@ -197,6 +258,10 @@ func (a *api) getThreadSummary(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) putThreadOutcome(w http.ResponseWriter, r *http.Request) {
+	access, allowed := a.threadAccess(w, r)
+	if !allowed {
+		return
+	}
 	id, ok := threadIDFrom(r)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "thread id is required")
@@ -208,7 +273,11 @@ func (a *api) putThreadOutcome(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.ThreadID = id
-	if err := a.st.PutThreadOutcome(in); err != nil {
+	if err := access.PutThreadOutcome(in); err != nil {
+		if err == store.ErrCoordForbidden || err == store.ErrCoordNotFound {
+			writeCoordAccessError(w, err)
+			return
+		}
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -216,14 +285,18 @@ func (a *api) putThreadOutcome(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) threadOutcomes(w http.ResponseWriter, r *http.Request) {
+	access, allowed := a.threadAccess(w, r)
+	if !allowed {
+		return
+	}
 	id, ok := threadIDFrom(r)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "thread id is required")
 		return
 	}
-	out, err := a.st.ThreadOutcomes(id)
+	out, err := access.ThreadOutcomes(id)
 	if err != nil {
-		writeStoreError(w, http.StatusInternalServerError, err)
+		writeCoordAccessError(w, err)
 		return
 	}
 	if out == nil {
@@ -237,13 +310,17 @@ func (a *api) threadOutcomes(w http.ResponseWriter, r *http.Request) {
 // läuft: der Thread erführe sonst nichts davon und erschiene nach 14 Tagen
 // als ruhend, obwohl gerade jemand geschrieben hat.
 func (a *api) touchThread(w http.ResponseWriter, r *http.Request) {
+	access, allowed := a.threadAccess(w, r)
+	if !allowed {
+		return
+	}
 	id, ok := threadIDFrom(r)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "thread id is required")
 		return
 	}
-	if err := a.st.TouchThread(id); err != nil {
-		writeStoreError(w, http.StatusInternalServerError, err)
+	if err := access.TouchThread(id); err != nil {
+		writeCoordAccessError(w, err)
 		return
 	}
 	writeJSON(w, 200, map[string]string{"status": "ok"})

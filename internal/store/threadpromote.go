@@ -85,8 +85,8 @@ func (s *Store) PromoteMessagesToThread(roomKey string, messageIDs []int64, t Th
 	defer tx.Rollback()
 
 	ts := now()
-	res, err := tx.Exec(`INSERT INTO threads(project,title,question,state,archived,person,created_at,updated_at)
-		VALUES(?,?,?,'open',0,?,?,?)`, t.Project, t.Title, t.Question, by, ts, ts)
+	res, err := tx.Exec(`INSERT INTO threads(project,title,question,state,archived,person,author_principal_id,created_at,updated_at)
+		VALUES(?,?,?,'open',0,?,?,?,?)`, t.Project, t.Title, t.Question, by, t.AuthorPrincipalID, ts, ts)
 	if err != nil {
 		return PromoteResult{}, err
 	}
@@ -223,6 +223,7 @@ func (s *Store) SplitThread(sourceID int64, sequences []int64, t Thread, by stri
 	if t.Project == "" {
 		t.Project = source.Project
 	}
+	t.AuthorPrincipalID = source.AuthorPrincipalID
 
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -231,8 +232,8 @@ func (s *Store) SplitThread(sourceID int64, sequences []int64, t Thread, by stri
 	defer tx.Rollback()
 
 	ts := now()
-	res, err := tx.Exec(`INSERT INTO threads(project,title,question,state,archived,person,created_at,updated_at)
-		VALUES(?,?,?,'open',0,?,?,?)`, t.Project, t.Title, t.Question, by, ts, ts)
+	res, err := tx.Exec(`INSERT INTO threads(project,title,question,state,archived,person,author_principal_id,created_at,updated_at)
+		VALUES(?,?,?,'open',0,?,?,?,?)`, t.Project, t.Title, t.Question, by, t.AuthorPrincipalID, ts, ts)
 	if err != nil {
 		return PromoteResult{}, err
 	}

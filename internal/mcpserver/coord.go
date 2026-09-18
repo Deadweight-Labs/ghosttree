@@ -252,7 +252,7 @@ func (s *Server) handleCoordPeers(ctx context.Context, _ *mcp.CallToolRequest, i
 	if err := s.joinRoom(key); err != nil {
 		return nil, nil, err
 	}
-	peers, err := s.client.CoordPeers(key, "")
+	peers, err := s.client.CoordPeers(key, "", s.coordRef())
 	if err != nil {
 		return nil, nil, err
 	}
@@ -327,7 +327,7 @@ func (s *Server) handleCoordDM(ctx context.Context, _ *mcp.CallToolRequest, in C
 			if err := s.joinRoom(projectRoom); err != nil {
 				return nil, nil, err
 			}
-			group, err := s.client.CreateCoordGroup(store.GroupInput{Label: in.Label, Creator: s.coordRef(), Members: members})
+			group, err := s.client.CreateCoordGroup(store.GroupInput{Label: in.Label, Members: members}, s.coordRef())
 			if err != nil {
 				return nil, nil, err
 			}
@@ -344,7 +344,7 @@ func (s *Server) handleCoordDM(ctx context.Context, _ *mcp.CallToolRequest, in C
 			if err := s.joinRoom(projectRoom); err != nil {
 				return nil, nil, err
 			}
-			if err := s.client.EnsureCoordRoom(store.CoordRoom{Key: key, Kind: kind, Label: in.Label, Members: members, Actor: s.coordRef()}); err != nil {
+			if err := s.client.EnsureCoordRoom(store.CoordRoom{Key: key, Kind: kind, Label: in.Label, Members: members}, s.coordRef()); err != nil {
 				return nil, nil, err
 			}
 		}
@@ -383,6 +383,9 @@ func (s *Server) handleCoordDMRead(ctx context.Context, _ *mcp.CallToolRequest, 
 			fmt.Fprintf(&b, " with %s\n", strings.Join(r.Members, ", "))
 		}
 		return coordText(b.String()), nil, nil
+	}
+	if len(in.With) > 1 {
+		return nil, nil, fmt.Errorf("group conversations must be read by the opaque room id returned by coord_dm")
 	}
 
 	key := strings.TrimSpace(in.Room)

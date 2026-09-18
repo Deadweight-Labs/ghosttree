@@ -7,7 +7,10 @@ import (
 	"strings"
 )
 
-var ErrCoordAgentOwned = errors.New("coordination agent belongs to another principal")
+var (
+	ErrCoordAgentOwned        = errors.New("coordination agent belongs to another principal")
+	ErrCoordAgentScopeChanged = errors.New("coordination agent cannot switch public scope")
+)
 
 // CoordAgent ist eine angemeldete Session, kein von ghosttree gestarteter
 // Prozess. Niemand hier ist Parent eines anderen: ParentExternalID erklärt die
@@ -76,6 +79,17 @@ func (s *Store) RegisterCoordAgent(a CoordAgent) (int64, error) {
 		return 0, err
 	}
 	defer tx.Rollback()
+	var otherScope string
+	err = tx.QueryRow(`SELECT m.room_key FROM coord_room_memberships m
+		JOIN coord_rooms r ON r.room_key=m.room_key
+		WHERE m.principal_id=? AND m.left_at='' AND r.kind=? AND m.room_key<>?
+		LIMIT 1`, a.ExternalID, kind, a.RoomKey).Scan(&otherScope)
+	switch {
+	case err == nil:
+		return 0, fmt.Errorf("%w: already joined %s", ErrCoordAgentScopeChanged, otherScope)
+	case !errors.Is(err, sql.ErrNoRows):
+		return 0, err
+	}
 	if _, err := tx.Exec(`INSERT OR IGNORE INTO coord_rooms(room_key,kind,label,created_at) VALUES(?,?,?,?)`, a.RoomKey, kind, "", at); err != nil {
 		return 0, err
 	}

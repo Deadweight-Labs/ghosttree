@@ -73,6 +73,14 @@ func (s *Server) threadProject() (string, error) {
 	return s.ctxAxes.Project, nil
 }
 
+func (s *Server) joinThreadProject() error {
+	key, err := s.roomKeyFor("project")
+	if err != nil {
+		return err
+	}
+	return s.joinRoom(key)
+}
+
 func (s *Server) handleThreadOpen(ctx context.Context, _ *mcp.CallToolRequest, in ThreadOpenInput) (*mcp.CallToolResult, any, error) {
 	if strings.TrimSpace(in.Title) == "" {
 		return nil, nil, fmt.Errorf("title is required — it is what someone searches for later")
@@ -81,21 +89,24 @@ func (s *Server) handleThreadOpen(ctx context.Context, _ *mcp.CallToolRequest, i
 	if err != nil {
 		return nil, nil, err
 	}
+	if err := s.joinThreadProject(); err != nil {
+		return nil, nil, err
+	}
 	// Vorhandene Threads am selben Objekt vorschlagen, bevor ein zweiter
 	// entsteht. Spec §B5: vorschlagen ja, automatisch zusammenführen nein.
 	var existing []store.Thread
 	if in.LinkKind != "" && in.LinkID != "" {
-		existing, _ = s.client.ThreadsForObject(in.LinkKind, in.LinkID)
+		existing, _ = s.client.ThreadsForObject(in.LinkKind, in.LinkID, s.coordRef())
 	}
 
 	id, err := s.client.CreateThread(store.Thread{
-		Project: project, Title: in.Title, Question: in.Question})
+		Project: project, Title: in.Title, Question: in.Question}, s.coordRef())
 	if err != nil {
 		return nil, nil, err
 	}
 	if in.LinkKind != "" && in.LinkID != "" {
 		if err := s.client.LinkThread(store.ThreadLink{ThreadID: id,
-			Kind: in.LinkKind, ID: in.LinkID, Revision: in.LinkRev}); err != nil {
+			Kind: in.LinkKind, ID: in.LinkID, Revision: in.LinkRev}, s.coordRef()); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -143,12 +154,15 @@ func (s *Server) postToThread(id int64, body string) error {
 	if err != nil {
 		return err
 	}
-	return s.client.TouchThread(id)
+	return nil
 }
 
 func (s *Server) handleThreadReply(ctx context.Context, _ *mcp.CallToolRequest, in ThreadReplyInput) (*mcp.CallToolResult, any, error) {
 	if in.ID == 0 || strings.TrimSpace(in.Body) == "" {
 		return nil, nil, fmt.Errorf("id and body are required")
+	}
+	if err := s.joinThreadProject(); err != nil {
+		return nil, nil, err
 	}
 	if err := s.postToThread(in.ID, in.Body); err != nil {
 		return nil, nil, err
@@ -168,7 +182,10 @@ func (s *Server) handleThreadRead(ctx context.Context, _ *mcp.CallToolRequest, i
 	if in.ID == 0 {
 		return nil, nil, fmt.Errorf("id is required")
 	}
-	t, err := s.client.ThreadByID(in.ID)
+	if err := s.joinThreadProject(); err != nil {
+		return nil, nil, err
+	}
+	t, err := s.client.ThreadByID(in.ID, s.coordRef())
 	if err != nil {
 		return nil, nil, err
 	}
@@ -192,7 +209,7 @@ func (s *Server) handleThreadRead(ctx context.Context, _ *mcp.CallToolRequest, i
 		fmt.Fprintf(&b, "Question: %s\n", t.Question)
 	}
 
-	if links, err := s.client.ThreadLinks(in.ID); err == nil && len(links) > 0 {
+	if links, err := s.client.ThreadLinks(in.ID, s.coordRef()); err == nil && len(links) > 0 {
 		b.WriteString("Attached to: ")
 		for i, l := range links {
 			if i > 0 {
@@ -211,7 +228,7 @@ func (s *Server) handleThreadRead(ctx context.Context, _ *mcp.CallToolRequest, i
 	}
 
 	after := in.After
-	sum, sumErr := s.client.ThreadSummary(in.ID)
+	sum, sumErr := s.client.ThreadSummary(in.ID, s.coordRef())
 	hasSummary := sumErr == nil && sum.Body != ""
 	if hasSummary && !in.Full {
 		fmt.Fprintf(&b, "\nWorking state (summary rev %d, covers through post %d):\n%s\n",
@@ -257,7 +274,7 @@ func (s *Server) handleThreadRead(ctx context.Context, _ *mcp.CallToolRequest, i
 		}
 	}
 
-	if outcomes, err := s.client.ThreadOutcomes(in.ID); err == nil && len(outcomes) > 0 {
+	if outcomes, err := s.client.ThreadOutcomes(in.ID, s.coordRef()); err == nil && len(outcomes) > 0 {
 		b.WriteString("\nOutcomes:\n")
 		for _, o := range outcomes {
 			fmt.Fprintf(&b, "  %s %s [%s]", o.Kind, o.RefID, o.State)
@@ -276,16 +293,19 @@ func (s *Server) handleThreadRead(ctx context.Context, _ *mcp.CallToolRequest, i
 }
 
 func (s *Server) handleThreadFind(ctx context.Context, _ *mcp.CallToolRequest, in ThreadFindInput) (*mcp.CallToolResult, any, error) {
+	if err := s.joinThreadProject(); err != nil {
+		return nil, nil, err
+	}
 	var found []store.Thread
 	var err error
 	if in.ObjectKind != "" && in.ObjectID != "" {
-		found, err = s.client.ThreadsForObject(in.ObjectKind, in.ObjectID)
+		found, err = s.client.ThreadsForObject(in.ObjectKind, in.ObjectID, s.coordRef())
 	} else {
 		project, perr := s.threadProject()
 		if perr != nil {
 			return nil, nil, perr
 		}
-		found, err = s.client.SearchThreads(project, in.Query, in.Archived, 0)
+		found, err = s.client.SearchThreads(project, in.Query, in.Archived, 0, s.coordRef())
 	}
 	if err != nil {
 		return nil, nil, err
@@ -311,6 +331,9 @@ func (s *Server) handleThreadResolve(ctx context.Context, _ *mcp.CallToolRequest
 	if in.ID == 0 {
 		return nil, nil, fmt.Errorf("id is required")
 	}
+	if err := s.joinThreadProject(); err != nil {
+		return nil, nil, err
+	}
 	state := in.State
 	if state == "" {
 		state = store.ThreadResolved
@@ -320,7 +343,7 @@ func (s *Server) handleThreadResolve(ctx context.Context, _ *mcp.CallToolRequest
 			return nil, nil, err
 		}
 	}
-	if err := s.client.SetThreadState(in.ID, state); err != nil {
+	if err := s.client.SetThreadState(in.ID, state, s.coordRef()); err != nil {
 		return nil, nil, err
 	}
 	// Der Nachsatz ist der Punkt aus §B6: eine beendete Diskussion ist keine
@@ -333,13 +356,16 @@ func (s *Server) handleThreadPropose(ctx context.Context, _ *mcp.CallToolRequest
 	if in.ID == 0 || in.Kind == "" || strings.TrimSpace(in.Note) == "" {
 		return nil, nil, fmt.Errorf("id, kind and note are required")
 	}
+	if err := s.joinThreadProject(); err != nil {
+		return nil, nil, err
+	}
 	ref := in.Ref
 	if ref == "" {
 		ref = "proposal-" + store.ThreadDestinationID(in.ID) + "-" + in.Kind
 	}
 	if err := s.client.PutThreadOutcome(store.ThreadOutcome{
 		ThreadID: in.ID, Kind: in.Kind, RefID: ref,
-		State: store.OutcomeProposed, Note: in.Note}); err != nil {
+		State: store.OutcomeProposed, Note: in.Note}, s.coordRef()); err != nil {
 		return nil, nil, err
 	}
 	return coordText(fmt.Sprintf("recorded as a proposal on thread %d. It is not knowledge yet: "+

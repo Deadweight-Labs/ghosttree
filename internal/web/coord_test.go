@@ -38,6 +38,16 @@ func signedIn(t *testing.T) (*httptest.Server, *store.Store, *http.Client) {
 	return srv, st, client
 }
 
+func materializeWebRoom(t *testing.T, st *store.Store, room string) {
+	t.Helper()
+	if _, err := st.RegisterCoordAgent(store.CoordAgent{
+		ExternalID: "fixture:" + room, PrincipalID: "person:1", Person: "robin",
+		Provider: "test", DisplayName: "fixture", RoomKey: room,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func authenticatedPostForm(t *testing.T, client *http.Client, target string, form url.Values) *http.Response {
 	t.Helper()
 	form.Set("csrf_token", renderedCSRFToken(t, client, strings.Split(target, "/ui/")[0]+"/ui/coord"))
@@ -88,6 +98,7 @@ func renderedCSRFToken(t *testing.T, client *http.Client, pageURL string) string
 func TestAHumanWritesIntoARoomAndTheMessageCarriesThatOrigin(t *testing.T) {
 	srv, st, client := signedIn(t)
 	room := store.RoomKeyForProject("github.com/x/y")
+	materializeWebRoom(t, st, room)
 
 	res := authenticatedPostForm(t, client, srv.URL+"/ui/coord/send", url.Values{
 		"room": {room}, "body": {"für diesen Release nur additive Änderungen"}})
@@ -103,8 +114,8 @@ func TestAHumanWritesIntoARoomAndTheMessageCarriesThatOrigin(t *testing.T) {
 	if msgs[0].AuthorKind != store.AuthorHuman {
 		t.Fatalf("a message from the signed-in UI must be human, got %q", msgs[0].AuthorKind)
 	}
-	if !strings.Contains(msgs[0].SenderExternalID, "robin") {
-		t.Fatalf("the sender must name the signed-in person, got %q", msgs[0].SenderExternalID)
+	if msgs[0].SenderExternalID != "person:1" {
+		t.Fatalf("the sender must be the stable signed-in principal, got %q", msgs[0].SenderExternalID)
 	}
 }
 
@@ -114,6 +125,7 @@ func TestAHumanWritesIntoARoomAndTheMessageCarriesThatOrigin(t *testing.T) {
 func TestAStandingInstructionSurvivesLaterTraffic(t *testing.T) {
 	srv, st, client := signedIn(t)
 	room := store.RoomKeyForProject("github.com/x/y")
+	materializeWebRoom(t, st, room)
 
 	res := authenticatedPostForm(t, client, srv.URL+"/ui/coord/send", url.Values{
 		"room": {room}, "body": {"keine Breaking Changes in diesem Release"},
@@ -164,6 +176,7 @@ func TestAStandingInstructionSurvivesLaterTraffic(t *testing.T) {
 func TestResubmittingTheSameFormDoesNotDuplicate(t *testing.T) {
 	srv, st, client := signedIn(t)
 	room := store.RoomKeyForProject("github.com/x/y")
+	materializeWebRoom(t, st, room)
 	form := url.Values{"room": {room}, "body": {"einmal"}, "form_id": {"stabil-1"}}
 
 	for i := 0; i < 2; i++ {
@@ -208,6 +221,32 @@ func TestWritingRequiresBeingSignedIn(t *testing.T) {
 	}
 	if len(msgs) != 0 {
 		t.Fatalf("an anonymous write stored %d messages", len(msgs))
+	}
+}
+
+func TestBrowserCoordUsesStablePrincipalAndHidesUnknownPrivateRooms(t *testing.T) {
+	srv, st, client := signedIn(t)
+	project := store.RoomKeyForProject("github.com/x/y")
+	if _, err := st.RegisterCoordAgent(store.CoordAgent{ExternalID: "sess-a", PrincipalID: "person:1", Person: "robin", Provider: "test", RoomKey: project}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.RegisterCoordAgent(store.CoordAgent{ExternalID: "sess-b", PrincipalID: "person:1", Person: "robin", Provider: "test", RoomKey: project}); err != nil {
+		t.Fatal(err)
+	}
+	direct := store.RoomKeyForDirect([]string{"sess-a", "sess-b"})
+	if err := st.EnsureCoordRoom(store.CoordRoom{Key: direct, Kind: store.RoomDirect, Members: []string{"sess-a", "sess-b"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, room := range []string{store.RoomKeyForProject("github.com/x/missing"), direct} {
+		res, err := client.Get(srv.URL + "/ui/coord?room=" + url.QueryEscape(room))
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		if res.StatusCode != http.StatusNotFound {
+			t.Errorf("room %q: want 404, got %d", room, res.StatusCode)
+		}
 	}
 }
 
@@ -355,16 +394,16 @@ func TestBeingSignedInIsNotBeingInTheRoom(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer res.Body.Close()
-	if res.StatusCode != http.StatusForbidden {
-		t.Fatalf("reading a foreign private room: want 403, got %d", res.StatusCode)
+	if res.StatusCode != http.StatusNotFound {
+		t.Fatalf("reading a foreign private room: want 404, got %d", res.StatusCode)
 	}
 
 	// Und hineinschreiben geht auch nicht.
 	post := authenticatedPostForm(t, client, srv.URL+"/ui/coord/send", url.Values{
 		"room": {fremd}, "body": {"ich mische mich ein"}})
 	defer post.Body.Close()
-	if post.StatusCode != http.StatusForbidden {
-		t.Fatalf("writing into a foreign private room: want 403, got %d", post.StatusCode)
+	if post.StatusCode != http.StatusNotFound {
+		t.Fatalf("writing into a foreign private room: want 404, got %d", post.StatusCode)
 	}
 
 	msgs, err := st.CoordMessagesSince(store.DestinationRoom, fremd, 0, 10)
@@ -379,8 +418,10 @@ func TestBeingSignedInIsNotBeingInTheRoom(t *testing.T) {
 // Der Projektraum bleibt für den angemeldeten Menschen offen: dort
 // entscheidet der Perimeter, nicht eine Mitgliederliste.
 func TestAProjectRoomStaysOpenToTheSignedInHuman(t *testing.T) {
-	srv, _, client := signedIn(t)
-	res, err := client.Get(srv.URL + "/ui/coord?room=" + store.RoomKeyForProject("github.com/x/y"))
+	srv, st, client := signedIn(t)
+	room := store.RoomKeyForProject("github.com/x/y")
+	materializeWebRoom(t, st, room)
+	res, err := client.Get(srv.URL + "/ui/coord?room=" + room)
 	if err != nil {
 		t.Fatal(err)
 	}

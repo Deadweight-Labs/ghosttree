@@ -2,12 +2,191 @@ package server
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
+
+func coordinationAccessServer(t *testing.T) (*httptest.Server, *store.Store, string, string) {
+	t.Helper()
+	st, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	owner, _ := st.AddPerson("owner")
+	other, _ := st.AddPerson("other")
+	srv := httptest.NewServer(New(st))
+	t.Cleanup(srv.Close)
+	return srv, st, owner, other
+}
+
+func TestCoordAPIBlankOrUnownedAgentCannotAct(t *testing.T) {
+	srv, st, token, _ := coordinationAccessServer(t)
+	room := store.RoomKeyForProject("github.com/x/y")
+	if _, err := st.RegisterCoordAgent(store.CoordAgent{ExternalID: "seed", PrincipalID: "person:1", Person: "owner", Provider: "test", RoomKey: room}); err != nil {
+		t.Fatal(err)
+	}
+	for _, agent := range []string{"", "unregistered"} {
+		res := req(t, "POST", srv.URL+"/api/coord/messages", token, store.CoordMessage{
+			DestinationKind: store.DestinationRoom, DestinationID: room,
+			SenderExternalID: agent, ClientID: "forged-" + agent, Body: "forged",
+		})
+		res.Body.Close()
+		if res.StatusCode != http.StatusForbidden && res.StatusCode != http.StatusBadRequest {
+			t.Fatalf("agent %q acted through API: status=%d", agent, res.StatusCode)
+		}
+	}
+}
+
+func TestPrivateCoordTargetsReturn404AcrossHTTP(t *testing.T) {
+	srv, st, ownerToken, otherToken := coordinationAccessServer(t)
+	project := store.RoomKeyForProject("github.com/x/y")
+	for _, a := range []store.CoordAgent{
+		{ExternalID: "sess-a", PrincipalID: "person:1", Person: "owner", Provider: "test", RoomKey: project},
+		{ExternalID: "sess-b", PrincipalID: "person:1", Person: "owner", Provider: "test", RoomKey: project},
+		{ExternalID: "sess-other", PrincipalID: "person:2", Person: "other", Provider: "test", RoomKey: project},
+	} {
+		if _, err := st.RegisterCoordAgent(a); err != nil {
+			t.Fatal(err)
+		}
+	}
+	direct := store.RoomKeyForDirect([]string{"sess-a", "sess-b"})
+	if err := st.EnsureCoordRoom(store.CoordRoom{Key: direct, Kind: store.RoomDirect, Members: []string{"sess-a", "sess-b"}}); err != nil {
+		t.Fatal(err)
+	}
+	messageID, err := st.CoordinationFor(store.Principal{ID: "person:1"}, "sess-a").Send(store.CoordMessage{
+		DestinationKind: store.DestinationRoom, DestinationID: direct, ClientID: "private-source", Body: "secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	thread, err := st.PromoteMessagesToThread(direct, []int64{messageID}, store.Thread{Project: "github.com/x/y", Title: "secret"}, "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.LinkThread(store.ThreadLink{ThreadID: thread.ThreadID, Kind: "knowledge", ID: "secret-object"}); err != nil {
+		t.Fatal(err)
+	}
+	discussion := strconv.FormatInt(thread.ThreadID, 10)
+	privateResponse := req(t, "GET", srv.URL+"/api/coord/messages?destination_kind=room&destination_id="+direct+"&agent_external_id=sess-other", otherToken, nil)
+	privateBody, _ := io.ReadAll(privateResponse.Body)
+	privateResponse.Body.Close()
+	unknownResponse := req(t, "GET", srv.URL+"/api/coord/messages?destination_kind=room&destination_id=direct:unknown&agent_external_id=sess-other", otherToken, nil)
+	unknownBody, _ := io.ReadAll(unknownResponse.Body)
+	unknownResponse.Body.Close()
+	if privateResponse.StatusCode != unknownResponse.StatusCode || string(privateBody) != string(unknownBody) {
+		t.Fatalf("private and unknown differ: private=(%d,%q) unknown=(%d,%q)", privateResponse.StatusCode, privateBody, unknownResponse.StatusCode, unknownBody)
+	}
+
+	checks := []struct {
+		method string
+		url    string
+		body   any
+	}{
+		{"GET", srv.URL + "/api/coord/messages?destination_kind=room&destination_id=" + direct + "&agent_external_id=sess-other", nil},
+		{"GET", srv.URL + "/api/coord/agents?room_key=" + direct + "&agent_external_id=sess-other", nil},
+		{"GET", srv.URL + "/api/coord/cursor?destination_kind=discussion&destination_id=" + discussion + "&agent_external_id=sess-other", nil},
+		{"POST", srv.URL + "/api/coord/cursor", coordCursorInput{AgentExternalID: "sess-other", DestinationKind: store.DestinationDiscussion, DestinationID: discussion, LastMessageID: 4}},
+		{"POST", srv.URL + "/api/coord/messages", store.CoordMessage{DestinationKind: store.DestinationDiscussion, DestinationID: discussion, SenderExternalID: "sess-other", ClientID: "outsider", Body: "intrude"}},
+		{"GET", srv.URL + "/api/coord/messages/" + strconv.FormatInt(messageID, 10) + "/mentions?agent_external_id=sess-other", nil},
+		{"POST", srv.URL + "/api/coord/deliveries", coordDeliveryInput{MessageID: messageID, Recipient: "sess-other", State: store.DeliveryFetched}},
+		{"GET", srv.URL + "/api/threads/" + discussion + "?agent_external_id=sess-other", nil},
+		{"GET", srv.URL + "/api/threads/" + discussion + "/links?agent_external_id=sess-other", nil},
+		{"GET", srv.URL + "/api/threads/" + discussion + "/summary?agent_external_id=sess-other", nil},
+		{"GET", srv.URL + "/api/threads/" + discussion + "/outcomes?agent_external_id=sess-other", nil},
+		{"POST", srv.URL + "/api/threads/" + discussion + "/state?agent_external_id=sess-other", threadStateInput{State: store.ThreadResolved}},
+		{"POST", srv.URL + "/api/threads/" + discussion + "/touch?agent_external_id=sess-other", nil},
+		{"POST", srv.URL + "/api/threads/" + discussion + "/links?agent_external_id=sess-other", store.ThreadLink{Kind: "knowledge", ID: "leak"}},
+		{"POST", srv.URL + "/api/threads/" + discussion + "/summary?agent_external_id=sess-other", store.ThreadSummary{Body: "leak"}},
+		{"POST", srv.URL + "/api/threads/" + discussion + "/outcomes?agent_external_id=sess-other", store.ThreadOutcome{Kind: "decision", RefID: "leak"}},
+	}
+	for _, check := range checks {
+		res := req(t, check.method, check.url, otherToken, check.body)
+		res.Body.Close()
+		if res.StatusCode != http.StatusNotFound {
+			t.Errorf("%s %s: want 404, got %d", check.method, check.url, res.StatusCode)
+		}
+	}
+
+	res := req(t, "GET", srv.URL+"/api/threads/"+discussion+"?agent_external_id=sess-a", ownerToken, nil)
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("member lost private thread: status=%d", res.StatusCode)
+	}
+	for _, target := range []string{
+		srv.URL + "/api/threads?project=github.com/x/y&q=secret&agent_external_id=sess-other",
+		srv.URL + "/api/threads/for?kind=knowledge&id=secret-object&agent_external_id=sess-other",
+	} {
+		res := req(t, "GET", target, otherToken, nil)
+		var got []store.Thread
+		if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
+			res.Body.Close()
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		if len(got) != 0 {
+			t.Fatalf("private thread leaked through list %s: %+v", target, got)
+		}
+	}
+}
+
+func TestCoordCursorRejectsMalformedKindAndRange(t *testing.T) {
+	srv, _, token, _ := coordinationAccessServer(t)
+	for _, check := range []struct {
+		method string
+		url    string
+		body   any
+	}{
+		{"GET", srv.URL + "/api/coord/cursor?agent_external_id=sess-a&destination_kind=bogus&destination_id=x", nil},
+		{"POST", srv.URL + "/api/coord/cursor", coordCursorInput{AgentExternalID: "sess-a", DestinationKind: "bogus", DestinationID: "x"}},
+		{"POST", srv.URL + "/api/coord/cursor", coordCursorInput{AgentExternalID: "sess-a", DestinationKind: store.DestinationRoom, DestinationID: "project:x", LastMessageID: -1}},
+	} {
+		res := req(t, check.method, check.url, token, check.body)
+		res.Body.Close()
+		if res.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s %s: want 400, got %d", check.method, check.url, res.StatusCode)
+		}
+	}
+}
+
+func TestAPIRequiresExplicitAgentOrPublicReadProjection(t *testing.T) {
+	srv, st, token, _ := coordinationAccessServer(t)
+	id, err := st.CreateThread(store.Thread{Project: "github.com/x/y", Title: "public"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	destination := strconv.FormatInt(id, 10)
+	for _, target := range []string{
+		srv.URL + "/api/threads/" + destination,
+		srv.URL + "/api/coord/messages?destination_kind=discussion&destination_id=" + destination,
+	} {
+		res := req(t, "GET", target, token, nil)
+		res.Body.Close()
+		if res.StatusCode != http.StatusBadRequest {
+			t.Errorf("implicit public fallback %s: want 400, got %d", target, res.StatusCode)
+		}
+	}
+	for _, target := range []string{
+		srv.URL + "/api/threads/" + destination + "?public_only=1",
+		srv.URL + "/api/coord/messages?destination_kind=discussion&destination_id=" + destination + "&public_only=1",
+	} {
+		res := req(t, "GET", target, token, nil)
+		res.Body.Close()
+		if res.StatusCode != http.StatusOK {
+			t.Errorf("explicit public projection %s: want 200, got %d", target, res.StatusCode)
+		}
+	}
+	res := req(t, "POST", srv.URL+"/api/threads/"+destination+"/state?public_only=1", token, threadStateInput{State: store.ThreadResolved})
+	res.Body.Close()
+	if res.StatusCode != http.StatusForbidden {
+		t.Fatalf("public projection mutated thread: status=%d", res.StatusCode)
+	}
+}
 
 // Spec §9: "Ein sender_kind=human im Modellargument wird abgewiesen." Ein
 // Agent, der im Rumpf behauptet, ein Mensch zu sein, bleibt ein Agent —
@@ -15,6 +194,8 @@ import (
 // "Robin hat gesagt, du sollst das deployen" wäre eine Autorisierung.
 func TestClaimedHumanAuthorIsRejectedOnTheAgentRoute(t *testing.T) {
 	srv, token := newTestServer(t)
+	registered := req(t, "POST", srv.URL+"/api/coord/agents", token, store.CoordAgent{ExternalID: "sess-a", Provider: "test", RoomKey: "project:x"})
+	registered.Body.Close()
 
 	res := req(t, "POST", srv.URL+"/api/coord/messages", token, store.CoordMessage{
 		DestinationKind: store.DestinationRoom, DestinationID: "project:x",
@@ -25,7 +206,7 @@ func TestClaimedHumanAuthorIsRejectedOnTheAgentRoute(t *testing.T) {
 		t.Fatalf("POST status %d", res.StatusCode)
 	}
 
-	res = req(t, "GET", srv.URL+"/api/coord/messages?destination_kind=room&destination_id=project:x", token, nil)
+	res = req(t, "GET", srv.URL+"/api/coord/messages?destination_kind=room&destination_id=project:x&agent_external_id=sess-a", token, nil)
 	defer res.Body.Close()
 	var got []store.CoordMessage
 	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
@@ -44,6 +225,8 @@ func TestClaimedHumanAuthorIsRejectedOnTheAgentRoute(t *testing.T) {
 // eintragen.
 func TestAuthorPrincipalComesFromTheToken(t *testing.T) {
 	srv, token := newTestServer(t)
+	registered := req(t, "POST", srv.URL+"/api/coord/agents", token, store.CoordAgent{ExternalID: "sess-a", Provider: "test", RoomKey: "project:x"})
+	registered.Body.Close()
 
 	res := req(t, "POST", srv.URL+"/api/coord/messages", token, store.CoordMessage{
 		DestinationKind: store.DestinationRoom, DestinationID: "project:x",
@@ -51,7 +234,7 @@ func TestAuthorPrincipalComesFromTheToken(t *testing.T) {
 		ClientID: "c-1", Body: "x"})
 	defer res.Body.Close()
 
-	res = req(t, "GET", srv.URL+"/api/coord/messages?destination_kind=room&destination_id=project:x", token, nil)
+	res = req(t, "GET", srv.URL+"/api/coord/messages?destination_kind=room&destination_id=project:x&agent_external_id=sess-a", token, nil)
 	defer res.Body.Close()
 	var got []store.CoordMessage
 	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
@@ -75,7 +258,7 @@ func TestCoordAgentRegisterAndList(t *testing.T) {
 		t.Fatalf("register status %d", res.StatusCode)
 	}
 
-	res = req(t, "GET", srv.URL+"/api/coord/agents?room_key="+room, token, nil)
+	res = req(t, "GET", srv.URL+"/api/coord/agents?room_key="+room+"&agent_external_id=sess-a", token, nil)
 	defer res.Body.Close()
 	var peers []store.CoordAgent
 	if err := json.NewDecoder(res.Body).Decode(&peers); err != nil {
@@ -109,22 +292,22 @@ func TestDirectRoomEndpointRejectsUnboundActorAndPrivateKeyRepost(t *testing.T) 
 	res = req(t, "POST", srv.URL+"/api/coord/agents", robinToken, store.CoordAgent{ExternalID: "sess-peer", Provider: "test", RoomKey: room, DisplayName: "Peer"})
 	res.Body.Close()
 	direct := store.RoomKeyForDirect([]string{"sess-robin", "sess-peer"})
-	res = req(t, "POST", srv.URL+"/api/coord/rooms", robinToken, store.CoordRoom{Key: direct, Kind: store.RoomDirect, Members: []string{"sess-robin", "sess-peer"}, Actor: "sess-robin"})
+	res = req(t, "POST", srv.URL+"/api/coord/rooms?agent_external_id=sess-robin", robinToken, store.CoordRoom{Key: direct, Kind: store.RoomDirect, Members: []string{"sess-robin", "sess-peer"}})
 	res.Body.Close()
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("owner create status=%d", res.StatusCode)
 	}
 	res = req(t, "POST", srv.URL+"/api/coord/agents", philippToken, store.CoordAgent{ExternalID: "sess-attacker", Provider: "test", RoomKey: room, DisplayName: "Attacker"})
 	res.Body.Close()
-	res = req(t, "POST", srv.URL+"/api/coord/rooms", philippToken, store.CoordRoom{Key: direct, Kind: store.RoomDirect, Members: []string{"sess-robin", "sess-attacker"}, Actor: "sess-attacker"})
+	res = req(t, "POST", srv.URL+"/api/coord/rooms?agent_external_id=sess-attacker", philippToken, store.CoordRoom{Key: direct, Kind: store.RoomDirect, Members: []string{"sess-robin", "sess-attacker"}})
 	res.Body.Close()
 	if res.StatusCode != http.StatusBadRequest {
 		t.Fatalf("attacker repost status=%d, want 400", res.StatusCode)
 	}
 	res = req(t, "GET", srv.URL+"/api/coord/messages?destination_kind=room&destination_id="+direct+"&agent_external_id=sess-attacker", philippToken, nil)
 	defer res.Body.Close()
-	if res.StatusCode != http.StatusForbidden {
-		t.Fatalf("attacker read status=%d, want 403", res.StatusCode)
+	if res.StatusCode != http.StatusNotFound {
+		t.Fatalf("attacker read status=%d, want 404", res.StatusCode)
 	}
 }
 
@@ -134,7 +317,7 @@ func TestPrivateRoomRejectsUnregisteredRecipientBeforeItCanBeImpersonated(t *tes
 	res := req(t, "POST", srv.URL+"/api/coord/agents", robinToken, store.CoordAgent{ExternalID: "sess-robin", Provider: "test", RoomKey: project, DisplayName: "Robin"})
 	res.Body.Close()
 	direct := store.RoomKeyForDirect([]string{"sess-robin", "future-victim"})
-	res = req(t, "POST", srv.URL+"/api/coord/rooms", robinToken, store.CoordRoom{Key: direct, Kind: store.RoomDirect, Members: []string{"sess-robin", "future-victim"}, Actor: "sess-robin"})
+	res = req(t, "POST", srv.URL+"/api/coord/rooms?agent_external_id=sess-robin", robinToken, store.CoordRoom{Key: direct, Kind: store.RoomDirect, Members: []string{"sess-robin", "future-victim"}})
 	res.Body.Close()
 	if res.StatusCode != http.StatusForbidden {
 		t.Fatalf("unregistered recipient status=%d", res.StatusCode)
@@ -143,7 +326,7 @@ func TestPrivateRoomRejectsUnregisteredRecipientBeforeItCanBeImpersonated(t *tes
 	res.Body.Close()
 	res = req(t, "GET", srv.URL+"/api/coord/messages?destination_kind=room&destination_id="+direct+"&agent_external_id=future-victim", philippToken, nil)
 	defer res.Body.Close()
-	if res.StatusCode != http.StatusForbidden {
+	if res.StatusCode != http.StatusNotFound {
 		t.Fatalf("later claimant inherited pre-created private access: %d", res.StatusCode)
 	}
 }
@@ -181,7 +364,7 @@ func TestAgentOwnershipSurvivesPersonRename(t *testing.T) {
 
 func TestGroupCreatorMustBeRegisteredAndOwned(t *testing.T) {
 	srv, robinToken, philippToken := twoPersonServer(t)
-	res := req(t, "POST", srv.URL+"/api/coord/groups", philippToken, store.GroupInput{Creator: "sess-forged", Members: []string{"sess-forged", "peer"}})
+	res := req(t, "POST", srv.URL+"/api/coord/groups?agent_external_id=sess-forged", philippToken, store.GroupInput{Members: []string{"sess-forged", "peer"}})
 	res.Body.Close()
 	if res.StatusCode != http.StatusForbidden {
 		t.Fatalf("unregistered creator status=%d", res.StatusCode)
@@ -189,7 +372,7 @@ func TestGroupCreatorMustBeRegisteredAndOwned(t *testing.T) {
 	room := store.RoomKeyForProject("github.com/x/y")
 	res = req(t, "POST", srv.URL+"/api/coord/agents", robinToken, store.CoordAgent{ExternalID: "sess-robin", Provider: "test", RoomKey: room, DisplayName: "Robin"})
 	res.Body.Close()
-	res = req(t, "POST", srv.URL+"/api/coord/groups", philippToken, store.GroupInput{Creator: "sess-robin", Members: []string{"sess-robin", "peer"}})
+	res = req(t, "POST", srv.URL+"/api/coord/groups?agent_external_id=sess-robin", philippToken, store.GroupInput{Members: []string{"sess-robin", "peer"}})
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusForbidden {
 		t.Fatalf("foreign creator status=%d", res.StatusCode)
@@ -235,7 +418,10 @@ func TestCoordMessageRejectsMissingDestinationOrClientID(t *testing.T) {
 func TestEmptyInboxIsAnEmptyList(t *testing.T) {
 	srv, token := newTestServer(t)
 	room := store.RoomKeyForProject("github.com/x/leer")
-	res := req(t, "GET", srv.URL+"/api/coord/messages?destination_kind=room&destination_id="+room, token, nil)
+	registered := req(t, "POST", srv.URL+"/api/coord/agents", token, store.CoordAgent{
+		ExternalID: "sess-a", Provider: "test", RoomKey: room, DisplayName: "sess-a"})
+	registered.Body.Close()
+	res := req(t, "GET", srv.URL+"/api/coord/messages?destination_kind=room&destination_id="+room+"&agent_external_id=sess-a", token, nil)
 	defer res.Body.Close()
 	var got []store.CoordMessage
 	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {

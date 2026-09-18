@@ -39,6 +39,8 @@ var writerMethodClasses = map[string]string{
 	"CompleteRequest":               "write",
 	"CompletedDocumentArtifacts":    "read",
 	"CompletedMigrationArtifacts":   "read",
+	"CoordinationFor":               "administrative",
+	"CoordinationPublicFor":         "administrative",
 	"ContextSnapshot":               "read",
 	"ContextSnapshotAccess":         "read",
 	"ContextSnapshotEntries":        "read",

@@ -3,6 +3,7 @@ package web
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -36,25 +37,37 @@ func newFormClientID(r *http.Request) string {
 // humanMember ist die Kennung, unter der ein angemeldeter Mensch in Räumen
 // steht. Dieselbe wie beim Schreiben — sonst dürfte jemand schreiben, was er
 // hinterher nicht lesen kann.
-func humanMember(r *http.Request) string { return "human:" + personOf(r) }
+func humanMember(r *http.Request) string { return browserPrincipal(r).ID }
+
+func (a *app) browserCoord(r *http.Request) store.CoordAccess {
+	return a.store.CoordinationFor(browserPrincipal(r), "")
+}
+
+func coordHTTPError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, store.ErrCoordNotFound):
+		http.Error(w, "coordination target not found", http.StatusNotFound)
+	case errors.Is(err, store.ErrCoordForbidden):
+		http.Error(w, "coordination target forbidden", http.StatusForbidden)
+	default:
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
 
 // mayEnter prüft die Raummitgliedschaft mit derselben Funktion, die auch die
 // API benutzt.
 //
 // Angemeldet zu sein ist NICHT dasselbe wie in einem Raum zu sein. Ein
-// Mensch sieht Projekt- und Maschinenräume, weil dort der Perimeter
-// entscheidet; ein privates Gespräch zwischen zwei Agenten sieht er nicht,
+// Mensch sieht öffentliche Räume über seine direkte Mitgliedschaft oder
+// eine ihm gehörende aktive Agent-Session. Das ist eine Navigationsgrenze,
+// keine Mandantentrennung: Agent-Scope wird vom Client beobachtet und
+// selbst gemeldet. Ein privates Gespräch zwischen zwei Agenten sieht er nicht,
 // nur weil er dessen Schlüssel in die URL schreibt. Spec §9: private DMs
 // dürfen nicht über Suche, Zusammenfassung oder Verknüpfung sichtbar
 // werden — eine URL ist keine Ausnahme davon.
 func (a *app) mayEnter(w http.ResponseWriter, r *http.Request, room string) bool {
-	ok, err := a.store.MayReadCoordRoom(room, humanMember(r))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return false
-	}
-	if !ok {
-		http.Error(w, "not a member of this room", http.StatusForbidden)
+	if _, err := a.browserCoord(r).Room(room); err != nil {
+		coordHTTPError(w, err)
 		return false
 	}
 	return true
@@ -63,7 +76,7 @@ func (a *app) mayEnter(w http.ResponseWriter, r *http.Request, room string) bool
 func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 	room := r.URL.Query().Get("room")
 	if room == "" {
-		rooms, err := a.store.CoordRoomsFor(humanMember(r))
+		rooms, err := a.browserCoord(r).Rooms()
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -74,12 +87,12 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 	if !a.mayEnter(w, r, room) {
 		return
 	}
-	msgs, err := a.store.CoordMessagesSince(store.DestinationRoom, room, 0, 100)
+	msgs, err := a.browserCoord(r).Messages(store.DestinationRoom, room, 0, 100)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	peers, err := a.store.CoordPeers(room, "")
+	peers, err := a.browserCoord(r).Peers(room, "")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -118,11 +131,9 @@ func (a *app) coordSend(w http.ResponseWriter, r *http.Request) {
 
 	msg := store.CoordMessage{
 		DestinationKind: store.DestinationRoom, DestinationID: room,
-		SenderExternalID: humanMember(r),
-		AuthorKind:       store.AuthorHuman,
-		ClientID:         newFormClientID(r),
-		Body:             body,
-		ExpiresAt:        strings.TrimSpace(r.FormValue("expires_at")),
+		ClientID:  newFormClientID(r),
+		Body:      body,
+		ExpiresAt: strings.TrimSpace(r.FormValue("expires_at")),
 	}
 	if mentions := strings.Fields(r.FormValue("mentions")); len(mentions) > 0 {
 		msg.Mentions = mentions
@@ -137,9 +148,9 @@ func (a *app) coordSend(w http.ResponseWriter, r *http.Request) {
 		msg.Intent = store.IntentStanding
 	}
 
-	id, err := a.store.AppendCoordMessage(msg)
+	id, err := a.browserCoord(r).Send(msg)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		coordHTTPError(w, err)
 		return
 	}
 	if msg.Intent == store.IntentStanding {

@@ -21,6 +21,22 @@ func TestAgentCanOccupyMachineAndProjectRooms(t *testing.T) {
 	assertCoordRoomKeys(t, got, "machine:host", "project:repo")
 }
 
+func TestAgentCannotSwitchToAnotherRoomOfTheSamePublicKind(t *testing.T) {
+	s := openTest(t)
+	if _, err := s.RegisterCoordAgent(CoordAgent{ExternalID: "sess-a", PrincipalID: "person:1", RoomKey: "project:a"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RegisterCoordAgent(CoordAgent{ExternalID: "sess-a", PrincipalID: "person:1", RoomKey: "project:b"}); !errors.Is(err, ErrCoordAgentScopeChanged) {
+		t.Fatalf("project switch: want scope error, got %v", err)
+	}
+	if _, err := s.RegisterCoordAgent(CoordAgent{ExternalID: "sess-a", PrincipalID: "person:1", RoomKey: "machine:a"}); err != nil {
+		t.Fatalf("project plus machine must remain allowed: %v", err)
+	}
+	if _, err := s.RegisterCoordAgent(CoordAgent{ExternalID: "sess-a", PrincipalID: "person:1", RoomKey: "machine:b"}); !errors.Is(err, ErrCoordAgentScopeChanged) {
+		t.Fatalf("machine switch: want scope error, got %v", err)
+	}
+}
+
 func TestTwoGroupsWithSameMembersStayDistinct(t *testing.T) {
 	s := openTest(t)
 	a, err := s.CreateCoordGroup(GroupInput{Label: "release", Creator: "person:1", Members: []string{"person:1", "sess-a"}})

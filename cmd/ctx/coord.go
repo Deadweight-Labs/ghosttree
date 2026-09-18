@@ -91,7 +91,7 @@ func cmdCoord(args []string, stdout io.Writer) int {
 
 	switch sub {
 	case "peers":
-		peers, err := c.CoordPeers(room, "")
+		peers, err := c.CoordPeers(room, "", me)
 		if err != nil {
 			fmt.Fprintf(stdout, "peers: %v\n", err)
 			return 1

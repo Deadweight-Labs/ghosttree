@@ -19,14 +19,29 @@ func (c *Client) RegisterCoordAgent(a store.CoordAgent) (int64, error) {
 }
 
 // CoordPeers listet die Teilnehmer eines Raums. since darf leer sein.
-func (c *Client) CoordPeers(roomKey, since string) ([]store.CoordAgent, error) {
+func (c *Client) CoordPeers(roomKey, since, agentExternalID string) ([]store.CoordAgent, error) {
 	q := url.Values{}
 	q.Set("room_key", roomKey)
+	q.Set("agent_external_id", agentExternalID)
 	if since != "" {
 		q.Set("since", since)
 	}
 	var out []store.CoordAgent
 	err := c.do("GET", "/api/coord/agents", q, nil, &out)
+	return out, err
+}
+
+func (c *Client) PublicCoordInbox(destinationKind, destinationID string, afterID int64, limit int) ([]store.CoordMessage, error) {
+	q := url.Values{}
+	q.Set("public_only", "1")
+	q.Set("destination_kind", destinationKind)
+	q.Set("destination_id", destinationID)
+	q.Set("after", strconv.FormatInt(afterID, 10))
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	var out []store.CoordMessage
+	err := c.do("GET", "/api/coord/messages", q, nil, &out)
 	return out, err
 }
 
@@ -84,13 +99,15 @@ func (c *Client) SetCoordCursor(agentExternalID, destinationKind, destinationID 
 
 // EnsureCoordRoom eröffnet einen Raum mit schon feststehendem Schlüssel. Neue
 // Gruppen müssen über CreateCoordGroup entstehen, damit ihre ID opak bleibt.
-func (c *Client) EnsureCoordRoom(r store.CoordRoom) error {
-	return c.do("POST", "/api/coord/rooms", nil, r, nil)
+func (c *Client) EnsureCoordRoom(r store.CoordRoom, agentExternalID string) error {
+	q := url.Values{"agent_external_id": {agentExternalID}}
+	return c.do("POST", "/api/coord/rooms", q, r, nil)
 }
 
-func (c *Client) CreateCoordGroup(in store.GroupInput) (store.CoordRoom, error) {
+func (c *Client) CreateCoordGroup(in store.GroupInput, agentExternalID string) (store.CoordRoom, error) {
+	q := url.Values{"agent_external_id": {agentExternalID}}
 	var out store.CoordRoom
-	err := c.do("POST", "/api/coord/groups", nil, in, &out)
+	err := c.do("POST", "/api/coord/groups", q, in, &out)
 	return out, err
 }
 
@@ -106,9 +123,10 @@ func (c *Client) CoordRoomsFor(agentExternalID string) ([]store.CoordRoom, error
 // CoordMessageMentions liest die ausdrücklich erwähnten Empfänger einer
 // Nachricht. Sie tragen die Zustellregeln: eine Erwähnung wird zeitnah
 // geliefert, gewöhnlicher Raumverkehr darf gebündelt werden.
-func (c *Client) CoordMessageMentions(messageID int64) ([]string, error) {
+func (c *Client) CoordMessageMentions(messageID int64, agentExternalID string) ([]string, error) {
+	q := url.Values{"agent_external_id": {agentExternalID}}
 	var out []string
-	err := c.do("GET", fmt.Sprintf("/api/coord/messages/%d/mentions", messageID), nil, nil, &out)
+	err := c.do("GET", fmt.Sprintf("/api/coord/messages/%d/mentions", messageID), q, nil, &out)
 	return out, err
 }
 

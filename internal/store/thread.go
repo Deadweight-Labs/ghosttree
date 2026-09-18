@@ -37,13 +37,14 @@ const (
 // gebaut hat. Wer das verschmilzt, bekommt einen Agenten, der "wir sind uns
 // einig" schreibt und damit einen Request schließt.
 type Thread struct {
-	ID       int64  `json:"id,omitempty"`
-	Project  string `json:"project"`
-	Title    string `json:"title"`
-	Question string `json:"question,omitempty"`
-	State    string `json:"state,omitempty"`
-	Archived bool   `json:"archived,omitempty"`
-	Person   string `json:"person,omitempty"`
+	ID                int64  `json:"id,omitempty"`
+	Project           string `json:"project"`
+	Title             string `json:"title"`
+	Question          string `json:"question,omitempty"`
+	State             string `json:"state,omitempty"`
+	Archived          bool   `json:"archived,omitempty"`
+	Person            string `json:"person,omitempty"`
+	AuthorPrincipalID string `json:"author_principal_id,omitempty"`
 	// Dormant ist abgeleitet und wird nicht gespeichert. Ruhend ist NICHT
 	// gelöst: ein ruhender Thread trägt weiterhin state=open.
 	Dormant    bool   `json:"dormant,omitempty"`
@@ -135,9 +136,9 @@ func (s *Store) CreateThread(t Thread) (int64, error) {
 	if state == "" {
 		state = ThreadOpen
 	}
-	res, err := s.db.Exec(`INSERT INTO threads(project,title,question,state,archived,person,created_at,updated_at)
-		VALUES(?,?,?,?,0,?,?,?)`,
-		t.Project, t.Title, t.Question, state, t.Person, at, at)
+	res, err := s.db.Exec(`INSERT INTO threads(project,title,question,state,archived,person,author_principal_id,created_at,updated_at)
+		VALUES(?,?,?,?,0,?,?,?,?)`,
+		t.Project, t.Title, t.Question, state, t.Person, t.AuthorPrincipalID, at, at)
 	if err != nil {
 		return 0, err
 	}
@@ -203,7 +204,7 @@ func (s *Store) ThreadByID(id int64) (Thread, error) {
 	if s.reader != nil {
 		return s.reader.ThreadByID(id)
 	}
-	row := s.db.QueryRow(`SELECT id,project,title,question,state,archived,person,
+	row := s.db.QueryRow(`SELECT id,project,title,question,state,archived,person,author_principal_id,
 			created_at,updated_at,COALESCE(resolved_at,'') FROM threads WHERE id=?`, id)
 	return scanThread(row)
 }
@@ -212,11 +213,47 @@ type rowScanner interface {
 	Scan(dest ...any) error
 }
 
+func ensureThreadAuthorPrincipalID(db *sql.DB) error {
+	rows, err := db.Query(`PRAGMA table_info(threads)`)
+	if err != nil {
+		return err
+	}
+	found := false
+	for rows.Next() {
+		var cid, notNull, pk int
+		var name, typ string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		if name == "author_principal_id" {
+			found = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if !found {
+		if _, err := db.Exec(`ALTER TABLE threads ADD COLUMN author_principal_id TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+	_, err = db.Exec(`UPDATE threads
+		SET author_principal_id=(SELECT 'person:' || MIN(p.id) FROM persons p WHERE p.name=threads.person)
+		WHERE author_principal_id='' AND person<>''
+		  AND 1=(SELECT COUNT(*) FROM persons p WHERE p.name=threads.person)`)
+	return err
+}
+
 func scanThread(row rowScanner) (Thread, error) {
 	var t Thread
 	var archived int
 	if err := row.Scan(&t.ID, &t.Project, &t.Title, &t.Question, &t.State, &archived,
-		&t.Person, &t.CreatedAt, &t.UpdatedAt, &t.ResolvedAt); err != nil {
+		&t.Person, &t.AuthorPrincipalID, &t.CreatedAt, &t.UpdatedAt, &t.ResolvedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Thread{}, fmt.Errorf("thread not found")
 		}
@@ -266,7 +303,7 @@ func (s *Store) SearchThreadsFor(project, query, asker string, includeArchived b
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	sql := `SELECT id,project,title,question,state,archived,person,created_at,updated_at,
+	sql := `SELECT id,project,title,question,state,archived,person,author_principal_id,created_at,updated_at,
 			COALESCE(resolved_at,'') FROM threads WHERE project=?`
 	args := []any{project}
 	if !includeArchived {
@@ -354,7 +391,7 @@ func (s *Store) ThreadsForObjectAs(kind, id, asker string) ([]Thread, error) {
 	if s.reader != nil {
 		return s.reader.ThreadsForObjectAs(kind, id, asker)
 	}
-	rows, err := s.db.Query(`SELECT t.id,t.project,t.title,t.question,t.state,t.archived,t.person,
+	rows, err := s.db.Query(`SELECT t.id,t.project,t.title,t.question,t.state,t.archived,t.person,t.author_principal_id,
 			t.created_at,t.updated_at,COALESCE(t.resolved_at,'')
 		FROM threads t JOIN thread_links l ON l.thread_id=t.id
 		WHERE l.object_kind=? AND l.object_id=?
