@@ -475,6 +475,12 @@ CREATE TABLE IF NOT EXISTS threads(
   updated_at TEXT NOT NULL,
   resolved_at TEXT);
 CREATE INDEX IF NOT EXISTS threads_project ON threads(project,archived,updated_at);
+CREATE TABLE IF NOT EXISTS thread_homes(
+  thread_id INTEGER PRIMARY KEY REFERENCES threads(id) ON DELETE RESTRICT,
+  room_key TEXT NOT NULL REFERENCES coord_rooms(room_key) ON DELETE RESTRICT,
+  anchor_message_id INTEGER UNIQUE REFERENCES coord_messages(id) ON DELETE RESTRICT,
+  created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS thread_homes_room ON thread_homes(room_key,created_at,thread_id);
 CREATE TABLE IF NOT EXISTS thread_links(
   thread_id INTEGER NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
   object_kind TEXT NOT NULL,

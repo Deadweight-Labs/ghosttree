@@ -43,6 +43,72 @@ func TestCoordAPIBlankOrUnownedAgentCannotAct(t *testing.T) {
 	}
 }
 
+func TestTaskThreadAPICreatesAndListsHomeThread(t *testing.T) {
+	srv, st, token, _ := coordinationAccessServer(t)
+	room := store.RoomKeyForProject("github.com/x/y")
+	if _, err := st.RegisterCoordAgent(store.CoordAgent{ExternalID: "sess-a", PrincipalID: "person:1", Person: "owner", Provider: "test", RoomKey: room}); err != nil {
+		t.Fatal(err)
+	}
+	anchor, err := st.CoordinationFor(store.Principal{ID: "person:1"}, "sess-a").Send(store.CoordMessage{DestinationKind: store.DestinationRoom, DestinationID: room, ClientID: "api-anchor", Body: "Investigate"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := req(t, "POST", srv.URL+"/api/threads/from-message?agent_external_id=sess-a", token, map[string]any{
+		"anchor_message_id": anchor, "title": "API task", "question": "Why?",
+	})
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("create status=%d", res.StatusCode)
+	}
+	var created map[string]int64
+	if err := json.NewDecoder(res.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	threadID := created["id"]
+	for _, invalid := range []map[string]any{
+		{"anchor_message_id": -1, "room_key": room, "title": "negative"},
+		{"anchor_message_id": anchor, "room_key": room, "title": "ambiguous"},
+	} {
+		res = req(t, "POST", srv.URL+"/api/threads/from-message?agent_external_id=sess-a", token, invalid)
+		if res.StatusCode != http.StatusBadRequest {
+			t.Fatalf("invalid task input status=%d", res.StatusCode)
+		}
+		res.Body.Close()
+	}
+	res = req(t, "POST", srv.URL+"/api/threads/from-message?agent_external_id=sess-a", token, map[string]any{
+		"anchor_message_id": anchor, "title": "Different task",
+	})
+	if res.StatusCode != http.StatusConflict {
+		t.Fatalf("conflicting retry status=%d", res.StatusCode)
+	}
+	res.Body.Close()
+	res = req(t, "POST", srv.URL+"/api/threads/from-message?agent_external_id=sess-a", token, map[string]any{
+		"room_key": room, "title": "Room-only task",
+	})
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("room task status=%d", res.StatusCode)
+	}
+	res.Body.Close()
+
+	res = req(t, "GET", srv.URL+"/api/threads/"+strconv.FormatInt(threadID, 10)+"/home?agent_external_id=sess-a", token, nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("home status=%d", res.StatusCode)
+	}
+	res.Body.Close()
+	res = req(t, "GET", srv.URL+"/api/threads/home?room_key="+room+"&agent_external_id=sess-a", token, nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("list status=%d", res.StatusCode)
+	}
+	var listed []store.RoomThread
+	if err := json.NewDecoder(res.Body).Decode(&listed); err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if len(listed) != 2 || (listed[0].Thread.ID != threadID && listed[1].Thread.ID != threadID) {
+		t.Fatalf("listed=%+v", listed)
+	}
+}
+
 func TestPrivateCoordTargetsReturn404AcrossHTTP(t *testing.T) {
 	srv, st, ownerToken, otherToken := coordinationAccessServer(t)
 	project := store.RoomKeyForProject("github.com/x/y")

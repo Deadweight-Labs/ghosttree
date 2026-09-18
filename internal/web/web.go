@@ -29,6 +29,7 @@ type pageData struct {
 	Title, Person, Principal, CSRFToken, Error string
 	Requests                                   []requestdomain.SearchHit
 	Request                                    requestdomain.Detail
+	RequestThreads                             []coordThreadView
 	Knowledge                                  []store.Knowledge
 	Sessions                                   []store.Session
 	Chunks                                     []store.Chunk
@@ -59,7 +60,11 @@ func New(st *store.Store) http.Handler {
 	mux.Handle("GET /ui/sessions/{id}", a.requirePerson(http.HandlerFunc(a.sessionPage)))
 	mux.Handle("GET /ui/context", a.requirePerson(http.HandlerFunc(a.contextPage)))
 	mux.Handle("GET /ui/coord", a.requirePerson(http.HandlerFunc(a.coordRoomPage)))
+	mux.Handle("GET /ui/coord/thread/{id}", a.requirePerson(http.HandlerFunc(a.coordThreadPage)))
 	mux.Handle("POST /ui/coord/send", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordSend))))
+	mux.Handle("POST /ui/coord/thread/create", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordCreateThread))))
+	mux.Handle("POST /ui/coord/thread/post", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordPostThread))))
+	mux.Handle("POST /ui/coord/thread/state", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordSetThreadState))))
 	mux.Handle("POST /ui/coord/read", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordMarkRead))))
 	mux.Handle("POST /ui/coord/unread", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordMarkUnread))))
 	mux.Handle("POST /ui/coord/standing/end", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordEndStanding))))
@@ -111,7 +116,20 @@ func (a *app) requestPage(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	a.renderBrowser(w, r, "request", pageData{Title: detail.Request.HumanID(), Request: detail})
+	linked, err := a.browserCoord(r).ThreadsForObject("request", detail.Request.HumanID())
+	if err != nil {
+		coordHTTPError(w, err)
+		return
+	}
+	threadViews := make([]coordThreadView, 0, len(linked))
+	for _, thread := range linked {
+		home, homeErr := a.browserCoord(r).ThreadHome(thread.ID)
+		if homeErr != nil {
+			continue
+		}
+		threadViews = append(threadViews, coordThreadView{ID: thread.ID, Title: thread.Title, Question: thread.Question, State: thread.State, URL: coordThreadURL(home.RoomKey, thread.ID)})
+	}
+	a.renderBrowser(w, r, "request", pageData{Title: detail.Request.HumanID(), Request: detail, RequestThreads: threadViews})
 }
 
 func (a *app) knowledgePage(w http.ResponseWriter, r *http.Request) {

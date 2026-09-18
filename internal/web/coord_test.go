@@ -7,9 +7,12 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 
+	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
+	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
@@ -91,6 +94,131 @@ func renderedCSRFToken(t *testing.T, client *http.Client, pageURL string) string
 		t.Fatal("rendered CSRF token was not terminated")
 	}
 	return value[:end]
+}
+
+func TestTaskThreadCanBeCreatedOpenedAndDiscussedWithoutJavaScript(t *testing.T) {
+	srv, st, client := signedIn(t)
+	project := "github.com/x/y"
+	room := store.RoomKeyForProject(project)
+	materializeWebRoom(t, st, room)
+	anchor, err := st.AppendCoordMessage(store.CoordMessage{
+		DestinationKind: store.DestinationRoom, DestinationID: room,
+		SenderExternalID: "fixture:" + room, ClientID: "thread-anchor", Body: "Release is blocked",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := st.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{
+		Type: "feature", Title: "Ship release", Scope: scope.Axes{Project: project},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res := authenticatedPostForm(t, client, srv.URL+"/ui/coord/thread/create", url.Values{
+		"room": {room}, "anchor_message_id": {strconv.FormatInt(anchor, 10)},
+		"title": {"Investigate release"}, "question": {"What failed?"}, "request_id": {req.Request.HumanID()},
+	})
+	if res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("create status=%d body=%s", res.StatusCode, body(t, res))
+	}
+	location := res.Header.Get("Location")
+	res.Body.Close()
+	if !strings.Contains(location, "thread=") {
+		t.Fatalf("create redirect=%q", location)
+	}
+
+	page := coordPageBody(t, client, srv.URL+location)
+	for _, want := range []string{"Investigate release", "What failed?", req.Request.HumanID(), "Ship release", "open", "Release is blocked"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("thread page missing %q", want)
+		}
+	}
+	requestPage := coordPageBody(t, client, srv.URL+"/ui/requests/"+strconv.FormatInt(req.Request.ID, 10))
+	if !strings.Contains(requestPage, "Investigate release") || !strings.Contains(requestPage, "thread=") {
+		t.Fatalf("request page did not link its authorized discussion: %s", requestPage)
+	}
+	locationURL, err := url.Parse(location)
+	if err != nil {
+		t.Fatal(err)
+	}
+	threadIDText := locationURL.Query().Get("thread")
+	threadID, err := strconv.ParseInt(threadIDText, 10, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res = authenticatedPostForm(t, client, srv.URL+"/ui/coord/thread/post", url.Values{
+		"thread_id": {threadIDText}, "body": {"I can reproduce it"}, "form_id": {"thread-post"},
+	})
+	if res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("post status=%d body=%s", res.StatusCode, body(t, res))
+	}
+	res.Body.Close()
+	posts, err := st.CoordMessagesSince(store.DestinationDiscussion, store.ThreadDestinationID(threadID), 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 1 || posts[0].Body != "I can reproduce it" {
+		t.Fatalf("posts=%+v", posts)
+	}
+
+	res = authenticatedPostForm(t, client, srv.URL+"/ui/coord/thread/state", url.Values{
+		"thread_id": {threadIDText}, "state": {store.ThreadResolved},
+	})
+	if res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("state status=%d body=%s", res.StatusCode, body(t, res))
+	}
+	res.Body.Close()
+	stillOpen, err := st.RequestByID(req.Request.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stillOpen.Request.State != "open" {
+		t.Fatalf("thread state changed request to %q", stillOpen.Request.State)
+	}
+}
+
+func TestCoordThreadPathFocusesItsAuthorizedHome(t *testing.T) {
+	srv, st, client := signedIn(t)
+	room := store.RoomKeyForProject("github.com/x/y")
+	materializeWebRoom(t, st, room)
+	anchor, err := st.AppendCoordMessage(store.CoordMessage{DestinationKind: store.DestinationRoom, DestinationID: room, SenderExternalID: "fixture:" + room, ClientID: "focus-anchor", Body: "Focus me"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	threadID, err := st.CoordinationFor(store.Principal{ID: "person:1", Label: "robin"}, "").PromoteRoomMessageToTaskThread(anchor, "Focused", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := client.Get(srv.URL + "/ui/coord/thread/" + strconv.FormatInt(threadID, 10))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("status=%d body=%s", res.StatusCode, body(t, res))
+	}
+	if got := res.Header.Get("Location"); !strings.Contains(got, url.QueryEscape(room)) || !strings.Contains(got, "thread=") {
+		t.Fatalf("location=%q", got)
+	}
+	res.Body.Close()
+}
+
+func TestRoomTaskThreadCanBeCreatedWithoutAnchor(t *testing.T) {
+	srv, st, client := signedIn(t)
+	room := store.RoomKeyForProject("github.com/x/y")
+	materializeWebRoom(t, st, room)
+	res := authenticatedPostForm(t, client, srv.URL+"/ui/coord/thread/create", url.Values{
+		"room": {room}, "title": {"Room task"}, "question": {"What next?"},
+	})
+	if res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("status=%d body=%s", res.StatusCode, body(t, res))
+	}
+	location := res.Header.Get("Location")
+	res.Body.Close()
+	page := coordPageBody(t, client, srv.URL+location)
+	if !strings.Contains(page, "Room task") || strings.Contains(page, "Zur Ankernachricht") {
+		t.Fatalf("unexpected thread page: %s", page)
+	}
 }
 
 // AC-4 von REQ-350: der Mensch schreibt aus der authentifizierten Oberfläche

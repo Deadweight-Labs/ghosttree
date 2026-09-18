@@ -290,40 +290,30 @@ func (a CoordAccess) Rooms() ([]CoordRoom, error) {
 }
 
 func (a CoordAccess) requireThreadAccess(threadID int64) (Thread, error) {
-	actor, err := a.actor()
-	if err != nil {
-		return Thread{}, err
-	}
-	t, err := a.Store.ThreadByID(threadID)
-	if err != nil {
-		return Thread{}, ErrCoordNotFound
-	}
 	reader := a.Store
 	if reader.reader != nil {
 		reader = reader.reader
 	}
-	var restricted int
-	if err := reader.db.QueryRow(`SELECT COUNT(*) FROM thread_visibility WHERE thread_id=?`, threadID).Scan(&restricted); err != nil {
+	tx, err := reader.db.Begin()
+	if err != nil {
 		return Thread{}, err
 	}
-	if restricted > 0 {
-		if a.publicOnly {
-			return Thread{}, ErrCoordNotFound
-		}
-		var member int
-		if err := reader.db.QueryRow(`SELECT COUNT(*) FROM thread_visibility
-			WHERE thread_id=? AND member_external_id=?`, threadID, actor).Scan(&member); err != nil {
-			return Thread{}, err
-		}
-		if member == 0 {
-			return Thread{}, ErrCoordNotFound
-		}
-		return t, nil
+	defer tx.Rollback()
+	actor, err := a.actorTx(tx)
+	if err != nil {
+		return Thread{}, err
 	}
-	if !a.publicOnly {
-		if _, err := a.requireRoomAccess(RoomKeyForProject(t.Project)); err != nil {
-			return Thread{}, err
-		}
+	if err := a.canReadThreadTx(tx, actor, threadID); err != nil {
+		return Thread{}, err
+	}
+	row := tx.QueryRow(`SELECT id,project,title,question,state,archived,person,author_principal_id,
+		created_at,updated_at,COALESCE(resolved_at,'') FROM threads WHERE id=?`, threadID)
+	t, err := scanThread(row)
+	if err != nil {
+		return Thread{}, ErrCoordNotFound
+	}
+	if err := tx.Commit(); err != nil {
+		return Thread{}, err
 	}
 	return t, nil
 }
@@ -346,10 +336,58 @@ func (a CoordAccess) canRead(kind, id string) error {
 }
 
 func (a CoordAccess) Messages(kind, id string, afterID int64, limit int) ([]CoordMessage, error) {
-	if err := a.canRead(kind, id); err != nil {
+	reader := a.Store
+	if reader.reader != nil {
+		reader = reader.reader
+	}
+	tx, err := reader.db.Begin()
+	if err != nil {
 		return nil, err
 	}
-	return a.Store.CoordMessagesSince(kind, id, afterID, limit)
+	defer tx.Rollback()
+	actor, err := a.actorTx(tx)
+	if err != nil {
+		return nil, err
+	}
+	if err := a.canReadTx(tx, actor, kind, id); err != nil {
+		return nil, err
+	}
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	rows, err := tx.Query(`SELECT id,destination_kind,destination_id,sequence,
+		sender_external_id,author_principal_id,author_kind,COALESCE(parent_external_id,''),
+		client_id,kind,intent,priority,body,COALESCE(reply_to,0),COALESCE(origin_event_id,''),
+		COALESCE(causation_id,''),COALESCE(expires_at,''),COALESCE(observed_at_client,''),created_at
+		FROM coord_messages WHERE destination_kind=? AND destination_id=? AND id>?
+		ORDER BY id LIMIT ?`, kind, id, afterID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	nowTS := now()
+	var out []CoordMessage
+	for rows.Next() {
+		var message CoordMessage
+		if err := rows.Scan(&message.ID, &message.DestinationKind, &message.DestinationID, &message.Sequence,
+			&message.SenderExternalID, &message.AuthorPrincipalID, &message.AuthorKind, &message.ParentExternalID,
+			&message.ClientID, &message.Kind, &message.Intent, &message.Priority, &message.Body, &message.ReplyTo,
+			&message.OriginEventID, &message.CausationID, &message.ExpiresAt, &message.ObservedAtClient, &message.CreatedAt); err != nil {
+			return nil, err
+		}
+		message.Expired = expiredAt(message.ExpiresAt, nowTS)
+		out = append(out, message)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (a CoordAccess) MessageWindow(kind, id string, window MessageWindow) (MessagePage, error) {
@@ -412,12 +450,25 @@ func (a CoordAccess) canReadTx(tx *sql.Tx, actor, kind, id string) error {
 		if err != nil || threadID <= 0 {
 			return ErrCoordNotFound
 		}
-		var project string
-		if err := tx.QueryRow(`SELECT project FROM threads WHERE id=?`, threadID).Scan(&project); errors.Is(err, sql.ErrNoRows) {
-			return ErrCoordNotFound
-		} else if err != nil {
-			return err
-		}
+		return a.canReadThreadTx(tx, actor, threadID)
+	default:
+		return ErrCoordNotFound
+	}
+}
+
+func (a CoordAccess) canReadThreadTx(tx *sql.Tx, actor string, threadID int64) error {
+	var project string
+	if err := tx.QueryRow(`SELECT project FROM threads WHERE id=?`, threadID).Scan(&project); errors.Is(err, sql.ErrNoRows) {
+		return ErrCoordNotFound
+	} else if err != nil {
+		return err
+	}
+	if home, found, err := threadHomeTx(tx, threadID); err != nil {
+		return err
+	} else if found {
+		return a.requireRoomAccessTx(tx, actor, home.RoomKey)
+	}
+	{
 		var restricted int
 		if err := tx.QueryRow(`SELECT COUNT(*) FROM thread_visibility WHERE thread_id=?`, threadID).Scan(&restricted); err != nil {
 			return err
@@ -440,8 +491,6 @@ func (a CoordAccess) canReadTx(tx *sql.Tx, actor, kind, id string) error {
 			return nil
 		}
 		return a.requireRoomAccessTx(tx, actor, RoomKeyForProject(project))
-	default:
-		return ErrCoordNotFound
 	}
 }
 
@@ -543,6 +592,51 @@ func (a CoordAccess) Send(message CoordMessage) (int64, error) {
 			return queuedCoordAccess(d, p).Send(p[3].(CoordMessage))
 		})
 	}
+	if message.DestinationKind == DestinationDiscussion {
+		tx, err := a.Store.db.Begin()
+		if err != nil {
+			return 0, err
+		}
+		defer tx.Rollback()
+		actor, err := a.actorTx(tx)
+		if err != nil || actor == "" || a.publicOnly {
+			if err != nil {
+				return 0, err
+			}
+			return 0, ErrCoordForbidden
+		}
+		if err := a.canReadTx(tx, actor, message.DestinationKind, message.DestinationID); err != nil {
+			return 0, err
+		}
+		if message.ReplyTo != 0 {
+			var count int
+			if err := tx.QueryRow(`SELECT COUNT(*) FROM coord_messages WHERE id=? AND destination_kind=? AND destination_id=?`, message.ReplyTo, message.DestinationKind, message.DestinationID).Scan(&count); err != nil {
+				return 0, err
+			}
+			if count == 0 {
+				return 0, ErrCoordNotFound
+			}
+		}
+		message.SenderExternalID = actor
+		message.AuthorPrincipalID = a.Principal.ID
+		if a.AgentExternalID == "" {
+			message.AuthorKind = AuthorHuman
+		} else {
+			message.AuthorKind = AuthorAgent
+		}
+		id, err := appendCoordMessageTx(tx, message)
+		if err != nil {
+			return 0, err
+		}
+		threadID, _ := strconv.ParseInt(message.DestinationID, 10, 64)
+		if _, err := tx.Exec(`UPDATE threads SET updated_at=? WHERE id=?`, now(), threadID); err != nil {
+			return 0, err
+		}
+		if err := tx.Commit(); err != nil {
+			return 0, err
+		}
+		return id, nil
+	}
 	actor, err := a.mutationActor()
 	if err != nil {
 		return 0, err
@@ -580,12 +674,6 @@ func (a CoordAccess) Send(message CoordMessage) (int64, error) {
 	id, err := a.Store.AppendCoordMessage(message)
 	if err != nil {
 		return 0, err
-	}
-	if message.DestinationKind == DestinationDiscussion {
-		threadID, _ := strconv.ParseInt(message.DestinationID, 10, 64)
-		if err := a.Store.TouchThread(threadID); err != nil {
-			return 0, err
-		}
 	}
 	return id, nil
 }
@@ -677,34 +765,122 @@ func (a CoordAccess) MarkDelivery(messageID int64, state string) error {
 }
 
 func (a CoordAccess) SearchThreads(project, query string, includeArchived bool, limit int) ([]Thread, error) {
-	actor, err := a.actor()
+	reader := a.Store
+	if reader.reader != nil {
+		reader = reader.reader
+	}
+	tx, err := reader.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	actor, err := a.actorTx(tx)
 	if err != nil {
 		return nil, err
 	}
 	if !a.publicOnly {
-		if _, err := a.requireRoomAccess(RoomKeyForProject(project)); err != nil {
+		if err := a.requireRoomAccessTx(tx, actor, RoomKeyForProject(project)); err != nil {
 			return nil, err
 		}
 	}
-	return a.Store.SearchThreadsFor(project, query, actor, includeArchived, limit)
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	statement := `SELECT id,project,title,question,state,archived,person,author_principal_id,
+		created_at,updated_at,COALESCE(resolved_at,'') FROM threads WHERE project=?`
+	args := []any{project}
+	if !includeArchived {
+		statement += ` AND archived=0`
+	}
+	if q := strings.TrimSpace(query); q != "" {
+		statement += ` AND (title LIKE ? OR question LIKE ?)`
+		args = append(args, "%"+q+"%", "%"+q+"%")
+	}
+	statement += ` ORDER BY updated_at DESC,id DESC`
+	rows, err := tx.Query(statement, args...)
+	if err != nil {
+		return nil, err
+	}
+	var candidates []Thread
+	for rows.Next() {
+		thread, scanErr := scanThread(rows)
+		if scanErr != nil {
+			rows.Close()
+			return nil, scanErr
+		}
+		candidates = append(candidates, thread)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	out := make([]Thread, 0, min(limit, len(candidates)))
+	for _, thread := range candidates {
+		if err := a.canReadThreadTx(tx, actor, thread.ID); err == nil {
+			out = append(out, thread)
+			if len(out) == limit {
+				break
+			}
+		} else if !errors.Is(err, ErrCoordNotFound) && !errors.Is(err, ErrCoordForbidden) {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (a CoordAccess) ThreadsForObject(kind, id string) ([]Thread, error) {
-	actor, err := a.actor()
+	reader := a.Store
+	if reader.reader != nil {
+		reader = reader.reader
+	}
+	tx, err := reader.db.Begin()
 	if err != nil {
 		return nil, err
 	}
-	threads, err := a.Store.ThreadsForObjectAs(kind, id, actor)
+	defer tx.Rollback()
+	actor, err := a.actorTx(tx)
 	if err != nil {
 		return nil, err
 	}
-	visible := make([]Thread, 0, len(threads))
-	for _, thread := range threads {
-		if _, err := a.requireThreadAccess(thread.ID); err == nil {
+	rows, err := tx.Query(`SELECT t.id,t.project,t.title,t.question,t.state,t.archived,t.person,t.author_principal_id,
+		t.created_at,t.updated_at,COALESCE(t.resolved_at,'') FROM threads t
+		JOIN thread_links l ON l.thread_id=t.id WHERE l.object_kind=? AND l.object_id=?
+		ORDER BY t.updated_at DESC,t.id DESC`, kind, id)
+	if err != nil {
+		return nil, err
+	}
+	var candidates []Thread
+	for rows.Next() {
+		thread, scanErr := scanThread(rows)
+		if scanErr != nil {
+			rows.Close()
+			return nil, scanErr
+		}
+		candidates = append(candidates, thread)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	visible := make([]Thread, 0, len(candidates))
+	for _, thread := range candidates {
+		if err := a.canReadThreadTx(tx, actor, thread.ID); err == nil {
 			visible = append(visible, thread)
 		} else if !errors.Is(err, ErrCoordNotFound) && !errors.Is(err, ErrCoordForbidden) {
 			return nil, err
 		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
 	}
 	return visible, nil
 }
@@ -715,15 +891,45 @@ func (a CoordAccess) CreateThread(thread Thread) (int64, error) {
 			return queuedCoordAccess(d, p).CreateThread(p[3].(Thread))
 		})
 	}
-	if _, err := a.mutationActor(); err != nil {
+	if strings.TrimSpace(thread.Title) == "" || thread.Project == "" {
+		return 0, fmt.Errorf("a thread needs a title and project")
+	}
+	tx, err := a.Store.db.Begin()
+	if err != nil {
 		return 0, err
 	}
-	if _, err := a.requireRoomAccess(RoomKeyForProject(thread.Project)); err != nil {
+	defer tx.Rollback()
+	actor, err := a.actorTx(tx)
+	if err != nil || actor == "" || a.publicOnly {
+		if err != nil {
+			return 0, err
+		}
+		return 0, ErrCoordForbidden
+	}
+	if err := a.requireRoomAccessTx(tx, actor, RoomKeyForProject(thread.Project)); err != nil {
 		return 0, err
 	}
-	thread.Person = a.Principal.Label
-	thread.AuthorPrincipalID = a.Principal.ID
-	return a.Store.CreateThread(thread)
+	state := thread.State
+	if state == "" {
+		state = ThreadOpen
+	}
+	ts := thread.CreatedAt
+	if ts == "" {
+		ts = now()
+	}
+	res, err := tx.Exec(`INSERT INTO threads(project,title,question,state,archived,person,author_principal_id,created_at,updated_at)
+		VALUES(?,?,?,?,0,?,?,?,?)`, thread.Project, thread.Title, thread.Question, state, a.Principal.Label, a.Principal.ID, ts, ts)
+	if err != nil {
+		return 0, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return id, nil
 }
 
 func (a CoordAccess) PromoteMessagesToThread(roomKey string, messageIDs []int64, thread Thread) (PromoteResult, error) {
@@ -732,40 +938,349 @@ func (a CoordAccess) PromoteMessagesToThread(roomKey string, messageIDs []int64,
 			return queuedCoordAccess(d, p).PromoteMessagesToThread(p[3].(string), p[4].([]int64), p[5].(Thread))
 		})
 	}
-	if _, err := a.mutationActor(); err != nil {
-		return PromoteResult{}, err
+	if len(messageIDs) == 0 || strings.TrimSpace(thread.Title) == "" {
+		return PromoteResult{}, fmt.Errorf("promoting needs messages and a title")
 	}
-	room, err := a.requireRoomAccess(roomKey)
+	tx, err := a.Store.db.Begin()
 	if err != nil {
 		return PromoteResult{}, err
 	}
-	if room.Kind != RoomProject || room.Key != RoomKeyForProject(thread.Project) {
+	defer tx.Rollback()
+	actor, err := a.actorTx(tx)
+	if err != nil || actor == "" || a.publicOnly {
+		if err != nil {
+			return PromoteResult{}, err
+		}
 		return PromoteResult{}, ErrCoordForbidden
 	}
-	thread.Person = a.Principal.Label
-	thread.AuthorPrincipalID = a.Principal.ID
-	return a.Store.PromoteMessagesToThread(roomKey, messageIDs, thread, a.Principal.Label)
+	if err := a.requireRoomAccessTx(tx, actor, roomKey); err != nil {
+		return PromoteResult{}, err
+	}
+	var kind string
+	if err := tx.QueryRow(`SELECT kind FROM coord_rooms WHERE room_key=?`, roomKey).Scan(&kind); err != nil {
+		return PromoteResult{}, err
+	}
+	if kind != RoomProject || roomKey != RoomKeyForProject(thread.Project) {
+		return PromoteResult{}, ErrCoordForbidden
+	}
+	ts := now()
+	res, err := tx.Exec(`INSERT INTO threads(project,title,question,state,archived,person,author_principal_id,created_at,updated_at)
+		VALUES(?,?,?,'open',0,?,?,?,?)`, thread.Project, thread.Title, thread.Question, a.Principal.Label, a.Principal.ID, ts, ts)
+	if err != nil {
+		return PromoteResult{}, err
+	}
+	threadID, err := res.LastInsertId()
+	if err != nil {
+		return PromoteResult{}, err
+	}
+	out := PromoteResult{ThreadID: threadID}
+	for _, messageID := range messageIDs {
+		var body, sender, authorKind, createdAt, fromRoom string
+		err := tx.QueryRow(`SELECT body,sender_external_id,author_kind,created_at,destination_id FROM coord_messages WHERE id=? AND destination_kind='room'`, messageID).
+			Scan(&body, &sender, &authorKind, &createdAt, &fromRoom)
+		if err != nil {
+			out.Skipped = append(out.Skipped, strconv.FormatInt(messageID, 10)+" (not found)")
+			continue
+		}
+		if fromRoom != roomKey {
+			out.Skipped = append(out.Skipped, strconv.FormatInt(messageID, 10)+" (different room)")
+			continue
+		}
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO thread_sources(thread_id,source_kind,source_id,room_key,author,author_kind,body,original_at,copied_at)
+			VALUES(?,'coord_message',?,?,?,?,?,?,?)`, threadID, strconv.FormatInt(messageID, 10), roomKey, sender, authorKind, body, createdAt, ts); err != nil {
+			return PromoteResult{}, err
+		}
+		out.Copied++
+	}
+	if out.Copied == 0 {
+		return PromoteResult{}, fmt.Errorf("nothing was promoted: none of the messages belong to %s", roomKey)
+	}
+	if err := tx.Commit(); err != nil {
+		return PromoteResult{}, err
+	}
+	return out, nil
+}
+
+func (a CoordAccess) PromoteRoomMessageToTaskThread(anchorMessageID int64, title, question, requestID string) (int64, error) {
+	if a.Store != nil && a.Store.writer != nil {
+		return queueValue(a.Store, []any{a.Principal, a.AgentExternalID, a.publicOnly, anchorMessageID, title, question, requestID}, func(d *Store, p []any) (int64, error) {
+			return queuedCoordAccess(d, p).PromoteRoomMessageToTaskThread(p[3].(int64), p[4].(string), p[5].(string), p[6].(string))
+		})
+	}
+	return a.createTaskThread("", anchorMessageID, title, question, requestID)
+}
+
+func (a CoordAccess) CreateTaskThreadInRoom(roomKey, title, question, requestID string) (int64, error) {
+	if a.Store != nil && a.Store.writer != nil {
+		return queueValue(a.Store, []any{a.Principal, a.AgentExternalID, a.publicOnly, roomKey, title, question, requestID}, func(d *Store, p []any) (int64, error) {
+			return queuedCoordAccess(d, p).CreateTaskThreadInRoom(p[3].(string), p[4].(string), p[5].(string), p[6].(string))
+		})
+	}
+	return a.createTaskThread(strings.TrimSpace(roomKey), 0, title, question, requestID)
+}
+
+func (a CoordAccess) createTaskThread(roomKey string, anchorMessageID int64, title, question, requestID string) (int64, error) {
+	title = strings.TrimSpace(title)
+	question = strings.TrimSpace(question)
+	requestID = strings.TrimSpace(requestID)
+	if title == "" || (anchorMessageID <= 0 && roomKey == "") {
+		return 0, fmt.Errorf("home room and title are required")
+	}
+	tx, err := a.Store.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	actor, err := a.actorTx(tx)
+	if err != nil || actor == "" || a.publicOnly {
+		if err != nil {
+			return 0, err
+		}
+		return 0, ErrCoordForbidden
+	}
+	var body, sender, authorKind, createdAt string
+	if anchorMessageID > 0 {
+		var anchorRoom string
+		if err := tx.QueryRow(`SELECT destination_id,body,sender_external_id,author_kind,created_at
+			FROM coord_messages WHERE id=? AND destination_kind='room'`, anchorMessageID).
+			Scan(&anchorRoom, &body, &sender, &authorKind, &createdAt); errors.Is(err, sql.ErrNoRows) {
+			return 0, ErrCoordNotFound
+		} else if err != nil {
+			return 0, err
+		}
+		if roomKey != "" && roomKey != anchorRoom {
+			return 0, ErrCoordNotFound
+		}
+		roomKey = anchorRoom
+	}
+	if err := a.requireRoomAccessTx(tx, actor, roomKey); err != nil {
+		return 0, err
+	}
+	var kind string
+	if err := tx.QueryRow(`SELECT kind FROM coord_rooms WHERE room_key=?`, roomKey).Scan(&kind); err != nil {
+		return 0, err
+	}
+	project := roomKey
+	if kind == RoomProject {
+		project = strings.TrimPrefix(roomKey, "project:")
+	}
+	if requestID != "" {
+		requestNumber, parseErr := strconv.ParseInt(strings.TrimPrefix(requestID, "REQ-"), 10, 64)
+		if parseErr != nil || requestNumber <= 0 || requestID != "REQ-"+strconv.FormatInt(requestNumber, 10) {
+			return 0, fmt.Errorf("request link must be a canonical REQ-id")
+		}
+		var requestProject string
+		if err := tx.QueryRow(`SELECT project FROM requests WHERE id=?`, requestNumber).Scan(&requestProject); errors.Is(err, sql.ErrNoRows) {
+			return 0, fmt.Errorf("linked request not found")
+		} else if err != nil {
+			return 0, err
+		}
+		if kind == RoomProject && requestProject != "" && requestProject != project {
+			return 0, ErrCoordForbidden
+		}
+		if project == roomKey && requestProject != "" {
+			project = requestProject
+		}
+	}
+	ts := now()
+	res, err := tx.Exec(`INSERT INTO threads(project,title,question,state,archived,person,author_principal_id,created_at,updated_at)
+		VALUES(?,?,?,'open',0,?,?,?,?)`, project, title, question, a.Principal.Label, a.Principal.ID, ts, ts)
+	if err != nil {
+		return 0, err
+	}
+	threadID, err := res.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(`INSERT INTO thread_homes(thread_id,room_key,anchor_message_id,created_at) VALUES(?,?,?,?)`,
+		threadID, roomKey, nullableCoordID(anchorMessageID), ts); err != nil {
+		if anchorMessageID > 0 && strings.Contains(strings.ToLower(err.Error()), "unique") {
+			var existingID int64
+			var existingTitle, existingQuestion, existingRequest string
+			lookupErr := tx.QueryRow(`SELECT t.id,t.title,t.question,COALESCE((
+				SELECT l.object_id FROM thread_links l WHERE l.thread_id=t.id AND l.object_kind='request' ORDER BY l.rowid LIMIT 1),'')
+				FROM thread_homes h JOIN threads t ON t.id=h.thread_id WHERE h.anchor_message_id=?`, anchorMessageID).
+				Scan(&existingID, &existingTitle, &existingQuestion, &existingRequest)
+			if lookupErr == nil && existingTitle == title && existingQuestion == question && existingRequest == requestID {
+				return existingID, nil
+			}
+			return 0, ErrAnchorAlreadyThreaded
+		}
+		return 0, err
+	}
+	if anchorMessageID > 0 {
+		if _, err := tx.Exec(`INSERT INTO thread_sources(thread_id,source_kind,source_id,room_key,author,author_kind,body,original_at,copied_at)
+			VALUES(?,'coord_message',?,?,?,?,?,?,?)`, threadID, strconv.FormatInt(anchorMessageID, 10), roomKey, sender, authorKind, body, createdAt, ts); err != nil {
+			return 0, err
+		}
+	}
+	if requestID != "" {
+		if _, err := tx.Exec(`INSERT INTO thread_links(thread_id,object_kind,object_id,object_revision,created_at)
+			VALUES(?,'request',?,'',?)`, threadID, requestID, ts); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return threadID, nil
+}
+
+func (a CoordAccess) ThreadHome(threadID int64) (ThreadHome, error) {
+	reader := a.Store
+	if reader.reader != nil {
+		reader = reader.reader
+	}
+	tx, err := reader.db.Begin()
+	if err != nil {
+		return ThreadHome{}, err
+	}
+	defer tx.Rollback()
+	actor, err := a.actorTx(tx)
+	if err != nil {
+		return ThreadHome{}, err
+	}
+	if err := a.canReadThreadTx(tx, actor, threadID); err != nil {
+		return ThreadHome{}, err
+	}
+	home, found, err := threadHomeTx(tx, threadID)
+	if err != nil {
+		return ThreadHome{}, err
+	}
+	if !found {
+		return ThreadHome{}, ErrCoordNotFound
+	}
+	if err := tx.Commit(); err != nil {
+		return ThreadHome{}, err
+	}
+	return home, nil
+}
+
+func (a CoordAccess) RoomThreads(roomKey string) ([]RoomThread, error) {
+	reader := a.Store
+	if reader.reader != nil {
+		reader = reader.reader
+	}
+	tx, err := reader.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	actor, err := a.actorTx(tx)
+	if err != nil {
+		return nil, err
+	}
+	if err := a.requireRoomAccessTx(tx, actor, roomKey); err != nil {
+		return nil, err
+	}
+	threads, err := roomThreadsTx(tx, roomKey)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return threads, nil
 }
 
 func (a CoordAccess) requireThreadMutation(threadID int64) (Thread, error) {
-	if a.publicOnly {
-		return Thread{}, ErrCoordForbidden
+	reader := a.Store
+	if reader.reader != nil {
+		reader = reader.reader
 	}
-	thread, err := a.requireThreadAccess(threadID)
+	tx, err := reader.db.Begin()
 	if err != nil {
 		return Thread{}, err
 	}
-	if thread.AuthorPrincipalID == "" || thread.AuthorPrincipalID != a.Principal.ID {
-		return Thread{}, ErrCoordForbidden
+	defer tx.Rollback()
+	actor, err := a.actorTx(tx)
+	if err != nil {
+		return Thread{}, err
+	}
+	thread, err := a.requireThreadMutationTx(tx, actor, threadID)
+	if err != nil {
+		return Thread{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Thread{}, err
 	}
 	return thread, nil
 }
 
+func (a CoordAccess) requireThreadMutationTx(tx *sql.Tx, actor string, threadID int64) (Thread, error) {
+	if a.publicOnly {
+		return Thread{}, ErrCoordForbidden
+	}
+	if err := a.canReadThreadTx(tx, actor, threadID); err != nil {
+		return Thread{}, err
+	}
+	row := tx.QueryRow(`SELECT id,project,title,question,state,archived,person,author_principal_id,
+		created_at,updated_at,COALESCE(resolved_at,'') FROM threads WHERE id=?`, threadID)
+	thread, err := scanThread(row)
+	if err != nil {
+		return Thread{}, ErrCoordNotFound
+	}
+	if thread.AuthorPrincipalID != "" && thread.AuthorPrincipalID == a.Principal.ID {
+		return thread, nil
+	}
+	home, found, err := threadHomeTx(tx, threadID)
+	if err != nil {
+		return Thread{}, err
+	}
+	if found {
+		var manager int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM coord_room_memberships
+			WHERE room_key=? AND principal_id=? AND left_at='' AND is_manager=1`, home.RoomKey, actor).Scan(&manager); err != nil {
+			return Thread{}, err
+		}
+		if manager > 0 {
+			return thread, nil
+		}
+	}
+	return Thread{}, ErrCoordForbidden
+}
+
 func (a CoordAccess) ThreadLinks(threadID int64) ([]ThreadLink, error) {
-	if _, err := a.requireThreadAccess(threadID); err != nil {
+	reader := a.Store
+	if reader.reader != nil {
+		reader = reader.reader
+	}
+	tx, err := reader.db.Begin()
+	if err != nil {
 		return nil, err
 	}
-	return a.Store.ThreadLinks(threadID)
+	defer tx.Rollback()
+	actor, err := a.actorTx(tx)
+	if err != nil {
+		return nil, err
+	}
+	if err := a.canReadThreadTx(tx, actor, threadID); err != nil {
+		return nil, err
+	}
+	rows, err := tx.Query(`SELECT thread_id,object_kind,object_id,object_revision,created_at FROM thread_links WHERE thread_id=? ORDER BY object_kind,object_id`, threadID)
+	if err != nil {
+		return nil, err
+	}
+	var out []ThreadLink
+	for rows.Next() {
+		var link ThreadLink
+		if err := rows.Scan(&link.ThreadID, &link.Kind, &link.ID, &link.Revision, &link.CreatedAt); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		out = append(out, link)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (a CoordAccess) LinkThread(link ThreadLink) error {
@@ -774,10 +1289,60 @@ func (a CoordAccess) LinkThread(link ThreadLink) error {
 			return queuedCoordAccess(d, p).LinkThread(p[3].(ThreadLink))
 		})
 	}
-	if _, err := a.requireThreadMutation(link.ThreadID); err != nil {
+	if strings.TrimSpace(link.Kind) == "" || strings.TrimSpace(link.ID) == "" {
+		return fmt.Errorf("a thread link needs an object kind and id")
+	}
+	tx, err := a.Store.db.Begin()
+	if err != nil {
 		return err
 	}
-	return a.Store.LinkThread(link)
+	defer tx.Rollback()
+	actor, err := a.actorTx(tx)
+	if err != nil {
+		return err
+	}
+	if _, err := a.requireThreadMutationTx(tx, actor, link.ThreadID); err != nil {
+		return err
+	}
+	if link.Kind == "request" {
+		if home, found, err := threadHomeTx(tx, link.ThreadID); err != nil {
+			return err
+		} else if found {
+			requestNumber, parseErr := strconv.ParseInt(strings.TrimPrefix(link.ID, "REQ-"), 10, 64)
+			if parseErr != nil || requestNumber <= 0 || link.ID != "REQ-"+strconv.FormatInt(requestNumber, 10) {
+				return fmt.Errorf("request link must be a canonical REQ-id")
+			}
+			var requestProject string
+			if err := tx.QueryRow(`SELECT project FROM requests WHERE id=?`, requestNumber).Scan(&requestProject); errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("linked request not found")
+			} else if err != nil {
+				return err
+			}
+			var roomKind string
+			if err := tx.QueryRow(`SELECT kind FROM coord_rooms WHERE room_key=?`, home.RoomKey).Scan(&roomKind); err != nil {
+				return err
+			}
+			if roomKind == RoomProject && requestProject != "" && requestProject != strings.TrimPrefix(home.RoomKey, "project:") {
+				return ErrCoordForbidden
+			}
+			var existingID string
+			err := tx.QueryRow(`SELECT object_id FROM thread_links WHERE thread_id=? AND object_kind='request' ORDER BY rowid LIMIT 1`, link.ThreadID).Scan(&existingID)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+			if err == nil && existingID == link.ID {
+				return tx.Commit()
+			}
+			if err == nil {
+				return fmt.Errorf("a task thread can link only one request")
+			}
+		}
+	}
+	if _, err := tx.Exec(`INSERT OR IGNORE INTO thread_links(thread_id,object_kind,object_id,object_revision,created_at)
+		VALUES(?,?,?,?,?)`, link.ThreadID, link.Kind, link.ID, link.Revision, now()); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (a CoordAccess) SetThreadState(threadID int64, state string) error {
@@ -786,10 +1351,30 @@ func (a CoordAccess) SetThreadState(threadID int64, state string) error {
 			return queuedCoordAccess(d, p).SetThreadState(p[3].(int64), p[4].(string))
 		})
 	}
-	if _, err := a.requireThreadMutation(threadID); err != nil {
+	if state != ThreadOpen && state != ThreadResolved && state != ThreadDeferred {
+		return fmt.Errorf("unknown thread state %q", state)
+	}
+	tx, err := a.Store.db.Begin()
+	if err != nil {
 		return err
 	}
-	return a.Store.SetThreadState(threadID, state)
+	defer tx.Rollback()
+	actor, err := a.actorTx(tx)
+	if err != nil {
+		return err
+	}
+	if _, err := a.requireThreadMutationTx(tx, actor, threadID); err != nil {
+		return err
+	}
+	ts := now()
+	var resolved any
+	if state == ThreadResolved {
+		resolved = ts
+	}
+	if _, err := tx.Exec(`UPDATE threads SET state=?,resolved_at=?,updated_at=? WHERE id=?`, state, resolved, ts, threadID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (a CoordAccess) SetThreadArchived(threadID int64, archived bool) error {
@@ -798,10 +1383,26 @@ func (a CoordAccess) SetThreadArchived(threadID int64, archived bool) error {
 			return queuedCoordAccess(d, p).SetThreadArchived(p[3].(int64), p[4].(bool))
 		})
 	}
-	if _, err := a.requireThreadMutation(threadID); err != nil {
+	tx, err := a.Store.db.Begin()
+	if err != nil {
 		return err
 	}
-	return a.Store.SetThreadArchived(threadID, archived)
+	defer tx.Rollback()
+	actor, err := a.actorTx(tx)
+	if err != nil {
+		return err
+	}
+	if _, err := a.requireThreadMutationTx(tx, actor, threadID); err != nil {
+		return err
+	}
+	flag := 0
+	if archived {
+		flag = 1
+	}
+	if _, err := tx.Exec(`UPDATE threads SET archived=?,updated_at=? WHERE id=?`, flag, now(), threadID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (a CoordAccess) TouchThread(threadID int64) error {
@@ -810,17 +1411,58 @@ func (a CoordAccess) TouchThread(threadID int64) error {
 			return queuedCoordAccess(d, p).TouchThread(p[3].(int64))
 		})
 	}
-	if _, err := a.requireThreadMutation(threadID); err != nil {
+	tx, err := a.Store.db.Begin()
+	if err != nil {
 		return err
 	}
-	return a.Store.TouchThread(threadID)
+	defer tx.Rollback()
+	actor, err := a.actorTx(tx)
+	if err != nil {
+		return err
+	}
+	if _, err := a.requireThreadMutationTx(tx, actor, threadID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE threads SET updated_at=? WHERE id=?`, now(), threadID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (a CoordAccess) ThreadSummary(threadID int64) (ThreadSummary, bool, error) {
-	if _, err := a.requireThreadAccess(threadID); err != nil {
+	reader := a.Store
+	if reader.reader != nil {
+		reader = reader.reader
+	}
+	tx, err := reader.db.Begin()
+	if err != nil {
 		return ThreadSummary{}, false, err
 	}
-	return a.Store.LatestThreadSummary(threadID)
+	defer tx.Rollback()
+	actor, err := a.actorTx(tx)
+	if err != nil {
+		return ThreadSummary{}, false, err
+	}
+	if err := a.canReadThreadTx(tx, actor, threadID); err != nil {
+		return ThreadSummary{}, false, err
+	}
+	var summary ThreadSummary
+	err = tx.QueryRow(`SELECT thread_id,revision,body,open_questions,covers_through_sequence,person,created_at
+		FROM thread_summaries WHERE thread_id=? ORDER BY revision DESC LIMIT 1`, threadID).
+		Scan(&summary.ThreadID, &summary.Revision, &summary.Body, &summary.OpenQuestions, &summary.CoversThrough, &summary.Person, &summary.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		if err := tx.Commit(); err != nil {
+			return ThreadSummary{}, false, err
+		}
+		return ThreadSummary{}, false, nil
+	}
+	if err != nil {
+		return ThreadSummary{}, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return ThreadSummary{}, false, err
+	}
+	return summary, true, nil
 }
 
 func (a CoordAccess) PutThreadSummary(summary ThreadSummary) (int, error) {
@@ -829,18 +1471,77 @@ func (a CoordAccess) PutThreadSummary(summary ThreadSummary) (int, error) {
 			return queuedCoordAccess(d, p).PutThreadSummary(p[3].(ThreadSummary))
 		})
 	}
-	if _, err := a.requireThreadMutation(summary.ThreadID); err != nil {
+	tx, err := a.Store.db.Begin()
+	if err != nil {
 		return 0, err
 	}
-	summary.Person = a.Principal.Label
-	return a.Store.PutThreadSummary(summary)
+	defer tx.Rollback()
+	actor, err := a.actorTx(tx)
+	if err != nil {
+		return 0, err
+	}
+	if _, err := a.requireThreadMutationTx(tx, actor, summary.ThreadID); err != nil {
+		return 0, err
+	}
+	var next int
+	if err := tx.QueryRow(`SELECT COALESCE(MAX(revision),0)+1 FROM thread_summaries WHERE thread_id=?`, summary.ThreadID).Scan(&next); err != nil {
+		return 0, err
+	}
+	at := summary.CreatedAt
+	if at == "" {
+		at = now()
+	}
+	if _, err := tx.Exec(`INSERT INTO thread_summaries(thread_id,revision,body,open_questions,covers_through_sequence,person,created_at)
+		VALUES(?,?,?,?,?,?,?)`, summary.ThreadID, next, summary.Body, summary.OpenQuestions, summary.CoversThrough, a.Principal.Label, at); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return next, nil
 }
 
 func (a CoordAccess) ThreadOutcomes(threadID int64) ([]ThreadOutcome, error) {
-	if _, err := a.requireThreadAccess(threadID); err != nil {
+	reader := a.Store
+	if reader.reader != nil {
+		reader = reader.reader
+	}
+	tx, err := reader.db.Begin()
+	if err != nil {
 		return nil, err
 	}
-	return a.Store.ThreadOutcomes(threadID)
+	defer tx.Rollback()
+	actor, err := a.actorTx(tx)
+	if err != nil {
+		return nil, err
+	}
+	if err := a.canReadThreadTx(tx, actor, threadID); err != nil {
+		return nil, err
+	}
+	rows, err := tx.Query(`SELECT thread_id,kind,ref_id,state,note,created_at,COALESCE(decided_at,'') FROM thread_outcomes WHERE thread_id=? ORDER BY kind,ref_id`, threadID)
+	if err != nil {
+		return nil, err
+	}
+	var out []ThreadOutcome
+	for rows.Next() {
+		var outcome ThreadOutcome
+		if err := rows.Scan(&outcome.ThreadID, &outcome.Kind, &outcome.RefID, &outcome.State, &outcome.Note, &outcome.CreatedAt, &outcome.DecidedAt); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		out = append(out, outcome)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (a CoordAccess) PutThreadOutcome(outcome ThreadOutcome) error {
@@ -849,10 +1550,37 @@ func (a CoordAccess) PutThreadOutcome(outcome ThreadOutcome) error {
 			return queuedCoordAccess(d, p).PutThreadOutcome(p[3].(ThreadOutcome))
 		})
 	}
-	if _, err := a.requireThreadMutation(outcome.ThreadID); err != nil {
+	if outcome.State != "" && outcome.State != OutcomeProposed && outcome.State != OutcomeAccepted && outcome.State != OutcomeRejected {
+		return fmt.Errorf("unknown outcome state %q", outcome.State)
+	}
+	tx, err := a.Store.db.Begin()
+	if err != nil {
 		return err
 	}
-	return a.Store.PutThreadOutcome(outcome)
+	defer tx.Rollback()
+	actor, err := a.actorTx(tx)
+	if err != nil {
+		return err
+	}
+	if _, err := a.requireThreadMutationTx(tx, actor, outcome.ThreadID); err != nil {
+		return err
+	}
+	state := outcome.State
+	if state == "" {
+		state = OutcomeProposed
+	}
+	ts := now()
+	var decided any
+	if state != OutcomeProposed {
+		decided = ts
+	}
+	if _, err := tx.Exec(`INSERT INTO thread_outcomes(thread_id,kind,ref_id,state,note,created_at,decided_at)
+		VALUES(?,?,?,?,?,?,?) ON CONFLICT(thread_id,kind,ref_id) DO UPDATE SET
+		state=excluded.state,note=excluded.note,decided_at=excluded.decided_at`,
+		outcome.ThreadID, outcome.Kind, outcome.RefID, state, outcome.Note, ts, decided); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (a CoordAccess) CreateGroup(in GroupInput) (CoordRoom, error) {

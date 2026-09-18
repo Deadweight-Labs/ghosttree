@@ -63,6 +63,8 @@ func coordHTTPError(w http.ResponseWriter, err error) {
 		http.Error(w, "coordination group change forbidden", http.StatusForbidden)
 	case errors.Is(err, store.ErrLastGroupManager), errors.Is(err, store.ErrLegacyGroupReadOnly):
 		http.Error(w, "coordination group change conflicts with its current state", http.StatusConflict)
+	case errors.Is(err, store.ErrAnchorAlreadyThreaded):
+		http.Error(w, "coordination message already has a different task thread", http.StatusConflict)
 	case errors.Is(err, store.ErrCoordInvalidSequence):
 		http.Error(w, "invalid coordination sequence", http.StatusBadRequest)
 	case errors.Is(err, store.ErrCoordUnknownRecipient):
@@ -154,6 +156,11 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	roomThreads, err := access.RoomThreads(room)
+	if err != nil {
+		coordHTTPError(w, err)
+		return
+	}
 	var memberships []store.RoomMembership
 	if activeRoom.Kind == store.RoomGroup || activeRoom.Kind == store.RoomDirect {
 		memberships, err = access.RoomMemberships(room)
@@ -170,7 +177,44 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 		Standing:     buildCoordStandingViews(standing), HighWater: page.HighWater,
 		HasOlder: page.HasOlder, HasNewer: page.HasNewer,
 		CanLeave: activeRoom.Kind == store.RoomGroup,
-		FormID:   newCoordFormID(), StandingFormID: newCoordFormID(),
+		FormID:   newCoordFormID(), StandingFormID: newCoordFormID(), Threads: buildCoordThreadViews(roomThreads),
+	}
+	threadByAnchor := make(map[int64]string, len(detail.Threads))
+	for _, thread := range detail.Threads {
+		threadByAnchor[thread.AnchorMessageID] = thread.URL
+	}
+	for i := range detail.Messages {
+		detail.Messages[i].CSRFToken = csrfOf(r)
+		if threadURL := threadByAnchor[detail.Messages[i].ID]; threadURL != "" {
+			detail.Messages[i].ThreadURL = threadURL
+		} else {
+			detail.Messages[i].CanPromote = true
+		}
+	}
+	if selectedText := strings.TrimSpace(r.URL.Query().Get("thread")); selectedText != "" {
+		selectedID, parseErr := strconv.ParseInt(selectedText, 10, 64)
+		if parseErr != nil || selectedID <= 0 {
+			http.Error(w, "thread must be a positive id", http.StatusBadRequest)
+			return
+		}
+		var selected *coordThreadView
+		for i := range detail.Threads {
+			if detail.Threads[i].ID == selectedID {
+				selected = &detail.Threads[i]
+				break
+			}
+		}
+		if selected == nil {
+			coordHTTPError(w, store.ErrCoordNotFound)
+			return
+		}
+		_, presentations, loadErr := access.MessagePresentationWindow(store.DestinationDiscussion, store.ThreadDestinationID(selectedID), store.LatestWindow(50))
+		if loadErr != nil {
+			coordHTTPError(w, loadErr)
+			return
+		}
+		threadDetail := &coordThreadDetailView{coordThreadView: *selected, Messages: buildCoordThreadMessageViews(presentations), FormID: newCoordFormID()}
+		detail.Thread = threadDetail
 	}
 	for _, membership := range memberships {
 		if membership.PrincipalID == humanMember(r) && membership.LeftAt == "" && membership.Manager {
@@ -200,6 +244,98 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 		detail.NewerURL = coordRoomURL(room, "after", after)
 	}
 	a.renderBrowser(w, r, "coord", data)
+}
+
+func (a *app) coordThreadPage(w http.ResponseWriter, r *http.Request) {
+	threadID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || threadID <= 0 {
+		http.Error(w, "coordination target not found", http.StatusNotFound)
+		return
+	}
+	home, err := a.browserCoord(r).ThreadHome(threadID)
+	if err != nil {
+		coordHTTPError(w, err)
+		return
+	}
+	http.Redirect(w, r, coordThreadURL(home.RoomKey, threadID), http.StatusSeeOther)
+}
+
+func (a *app) coordCreateThread(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	anchorText := strings.TrimSpace(r.FormValue("anchor_message_id"))
+	var anchor int64
+	var err error
+	if anchorText != "" {
+		anchor, err = strconv.ParseInt(anchorText, 10, 64)
+		if err != nil || anchor <= 0 {
+			http.Error(w, "anchor message is invalid", http.StatusBadRequest)
+			return
+		}
+	}
+	var threadID int64
+	if anchor > 0 {
+		threadID, err = a.browserCoord(r).PromoteRoomMessageToTaskThread(anchor, r.FormValue("title"), r.FormValue("question"), r.FormValue("request_id"))
+	} else {
+		threadID, err = a.browserCoord(r).CreateTaskThreadInRoom(strings.TrimSpace(r.FormValue("room")), r.FormValue("title"), r.FormValue("question"), r.FormValue("request_id"))
+	}
+	if err != nil {
+		coordHTTPError(w, err)
+		return
+	}
+	home, err := a.browserCoord(r).ThreadHome(threadID)
+	if err != nil {
+		coordHTTPError(w, err)
+		return
+	}
+	http.Redirect(w, r, coordThreadURL(home.RoomKey, threadID), http.StatusSeeOther)
+}
+
+func (a *app) coordPostThread(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	threadID, err := strconv.ParseInt(strings.TrimSpace(r.FormValue("thread_id")), 10, 64)
+	body := strings.TrimSpace(r.FormValue("body"))
+	if err != nil || threadID <= 0 || body == "" {
+		http.Error(w, "thread and body are required", http.StatusBadRequest)
+		return
+	}
+	if _, err := a.browserCoord(r).ThreadPost(threadID, store.CoordMessage{ClientID: newFormClientID(r), Body: body}); err != nil {
+		coordHTTPError(w, err)
+		return
+	}
+	home, err := a.browserCoord(r).ThreadHome(threadID)
+	if err != nil {
+		coordHTTPError(w, err)
+		return
+	}
+	http.Redirect(w, r, coordThreadURL(home.RoomKey, threadID), http.StatusSeeOther)
+}
+
+func (a *app) coordSetThreadState(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	threadID, err := strconv.ParseInt(strings.TrimSpace(r.FormValue("thread_id")), 10, 64)
+	if err != nil || threadID <= 0 {
+		http.Error(w, "thread is required", http.StatusBadRequest)
+		return
+	}
+	if err := a.browserCoord(r).SetThreadState(threadID, strings.TrimSpace(r.FormValue("state"))); err != nil {
+		coordHTTPError(w, err)
+		return
+	}
+	home, err := a.browserCoord(r).ThreadHome(threadID)
+	if err != nil {
+		coordHTTPError(w, err)
+		return
+	}
+	http.Redirect(w, r, coordThreadURL(home.RoomKey, threadID), http.StatusSeeOther)
 }
 
 func coordWindowFromRequest(r *http.Request) (store.MessageWindow, error) {

@@ -43,6 +43,21 @@ type coordRoomDetailView struct {
 	HasOlder, HasNewer     bool
 	CanManage, CanLeave    bool
 	FormID, StandingFormID string
+	Threads                []coordThreadView
+	Thread                 *coordThreadDetailView
+}
+
+type coordThreadView struct {
+	ID, AnchorMessageID                               int64
+	Title, Question, State, URL, AnchorURL            string
+	Archived                                          bool
+	RequestID, RequestTitle, RequestState, RequestURL string
+}
+
+type coordThreadDetailView struct {
+	coordThreadView
+	Messages []coordMessageView
+	FormID   string
 }
 
 type coordMessageView struct {
@@ -54,6 +69,9 @@ type coordMessageView struct {
 	Mentions                      []string
 	Refs                          []coordRefView
 	Delivery                      string
+	ThreadURL                     string
+	CanPromote                    bool
+	CSRFToken                     string
 }
 
 type coordReplyView struct {
@@ -106,6 +124,29 @@ func coordRoomURL(room, cursor string, sequence int64) string {
 		query.Set(cursor, strconv.FormatInt(sequence, 10))
 	}
 	return "/ui/coord?" + query.Encode()
+}
+
+func coordThreadURL(room string, threadID int64) string {
+	query := url.Values{"room": {room}, "thread": {strconv.FormatInt(threadID, 10)}}
+	return "/ui/coord?" + query.Encode() + "#coord-thread"
+}
+
+func buildCoordThreadViews(in []store.RoomThread) []coordThreadView {
+	out := make([]coordThreadView, 0, len(in))
+	for _, item := range in {
+		view := coordThreadView{
+			ID: item.Thread.ID, AnchorMessageID: item.Home.AnchorMessageID,
+			Title: item.Thread.Title, Question: item.Thread.Question, State: item.Thread.State,
+			Archived: item.Thread.Archived, URL: coordThreadURL(item.Home.RoomKey, item.Thread.ID),
+			RequestID: item.RequestID, RequestTitle: item.RequestTitle, RequestState: item.RequestState,
+			RequestURL: "/ui/requests/" + strings.TrimPrefix(item.RequestID, "REQ-"),
+		}
+		if item.AnchorSequence > 0 {
+			view.AnchorURL = coordRoomURL(item.Home.RoomKey, "around", item.AnchorSequence) + "#message-" + strconv.FormatInt(item.AnchorSequence, 10)
+		}
+		out = append(out, view)
+	}
+	return out
 }
 
 func coordRoomLabel(room store.CoordRoom, principalID string) string {
@@ -170,6 +211,16 @@ func buildCoordMessageViews(messages []store.CoordMessagePresentation, roomKey s
 		}
 		view.Delivery = strings.Join(parts, " · ")
 		out = append(out, view)
+	}
+	return out
+}
+
+func buildCoordThreadMessageViews(messages []store.CoordMessagePresentation) []coordMessageView {
+	out := buildCoordMessageViews(messages, "")
+	for i := range out {
+		if out[i].Reply != nil && !out[i].Reply.Missing {
+			out[i].Reply.URL = "#thread-message-" + strconv.FormatInt(out[i].Reply.Sequence, 10)
+		}
 	}
 	return out
 }

@@ -53,6 +53,89 @@ func (a *api) createThread(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]int64{"id": id})
 }
 
+type taskThreadInput struct {
+	AnchorMessageID int64  `json:"anchor_message_id"`
+	RoomKey         string `json:"room_key,omitempty"`
+	Title           string `json:"title"`
+	Question        string `json:"question,omitempty"`
+	RequestID       string `json:"request_id,omitempty"`
+}
+
+func (a *api) createTaskThreadFromMessage(w http.ResponseWriter, r *http.Request) {
+	access, ok := a.threadAccess(w, r)
+	if !ok {
+		return
+	}
+	var in taskThreadInput
+	if err := readJSON(r, &in); err != nil {
+		writeStoreError(w, http.StatusBadRequest, err)
+		return
+	}
+	var id int64
+	var err error
+	if in.AnchorMessageID < 0 || (in.AnchorMessageID > 0 && in.RoomKey != "") {
+		writeErr(w, http.StatusBadRequest, "choose an anchor message or a home room")
+		return
+	}
+	if in.AnchorMessageID > 0 {
+		id, err = access.PromoteRoomMessageToTaskThread(in.AnchorMessageID, in.Title, in.Question, in.RequestID)
+	} else {
+		id, err = access.CreateTaskThreadInRoom(in.RoomKey, in.Title, in.Question, in.RequestID)
+	}
+	if err != nil {
+		if err == store.ErrCoordForbidden || err == store.ErrCoordNotFound {
+			writeCoordAccessError(w, err)
+			return
+		}
+		if err == store.ErrAnchorAlreadyThreaded {
+			writeErr(w, http.StatusConflict, "coordination message already has a different task thread")
+			return
+		}
+		writeStoreError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int64{"id": id})
+}
+
+func (a *api) listRoomThreads(w http.ResponseWriter, r *http.Request) {
+	access, ok := a.threadAccess(w, r)
+	if !ok {
+		return
+	}
+	roomKey := r.URL.Query().Get("room_key")
+	if roomKey == "" {
+		writeErr(w, http.StatusBadRequest, "room_key is required")
+		return
+	}
+	threads, err := access.RoomThreads(roomKey)
+	if err != nil {
+		writeCoordAccessError(w, err)
+		return
+	}
+	if threads == nil {
+		threads = []store.RoomThread{}
+	}
+	writeJSON(w, http.StatusOK, threads)
+}
+
+func (a *api) getThreadHome(w http.ResponseWriter, r *http.Request) {
+	access, ok := a.threadAccess(w, r)
+	if !ok {
+		return
+	}
+	id, ok := threadIDFrom(r)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "thread id is required")
+		return
+	}
+	home, err := access.ThreadHome(id)
+	if err != nil {
+		writeCoordAccessError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, home)
+}
+
 func (a *api) listThreads(w http.ResponseWriter, r *http.Request) {
 	access, ok := a.threadAccess(w, r)
 	if !ok {
