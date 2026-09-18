@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -35,10 +36,18 @@ func (a *api) mayActAs(r *http.Request, externalID string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if !registered || owner == "" {
+	if !registered {
 		return true, nil
 	}
-	return owner == personOf(r), nil
+	return owner != "" && owner == principalOf(r).ID, nil
+}
+
+func (a *api) mayActAsRegistered(r *http.Request, externalID string) (bool, error) {
+	owner, registered, err := a.st.CoordAgentOwner(externalID)
+	if err != nil {
+		return false, err
+	}
+	return registered && owner != "" && owner == principalOf(r).ID, nil
 }
 
 // sendCoordMessage nimmt einen Beitrag von einem Agenten an.
@@ -164,9 +173,21 @@ func (a *api) registerCoordAgent(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "external_id and room_key are required")
 		return
 	}
+	if owner, registered, err := a.st.CoordAgentOwner(in.ExternalID); err != nil {
+		writeStoreError(w, http.StatusInternalServerError, err)
+		return
+	} else if registered && owner != "" && owner != principalOf(r).ID {
+		writeErr(w, http.StatusForbidden, "that session belongs to someone else")
+		return
+	}
 	in.Person = personOf(r)
+	in.PrincipalID = principalOf(r).ID
 	id, err := a.st.RegisterCoordAgent(in)
 	if err != nil {
+		if errors.Is(err, store.ErrCoordAgentOwned) {
+			writeErr(w, http.StatusForbidden, "that session belongs to someone else")
+			return
+		}
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -249,11 +270,87 @@ func (a *api) ensureCoordRoom(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "room_key is required")
 		return
 	}
+	if in.Kind != store.RoomDirect {
+		writeErr(w, http.StatusBadRequest, "only canonical direct rooms use this endpoint")
+		return
+	}
+	if in.Actor == "" || !containsString(in.Members, in.Actor) {
+		writeErr(w, http.StatusForbidden, "a bound actor must be included in the direct room")
+		return
+	}
+	if ok, err := a.mayActAsRegistered(r, in.Actor); err != nil {
+		writeStoreError(w, http.StatusInternalServerError, err)
+		return
+	} else if !ok {
+		writeErr(w, http.StatusForbidden, "actor is not a registered session owned by this token")
+		return
+	}
+	if ok, err := a.coordMembersRegistered(in.Members); err != nil {
+		writeStoreError(w, http.StatusInternalServerError, err)
+		return
+	} else if !ok {
+		writeErr(w, http.StatusForbidden, "every private-room participant must be a registered session")
+		return
+	}
 	if err := a.st.EnsureCoordRoom(in); err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
 	writeJSON(w, 200, map[string]string{"room_key": in.Key})
+}
+
+func (a *api) createCoordGroup(w http.ResponseWriter, r *http.Request) {
+	var in store.GroupInput
+	if err := readJSON(r, &in); err != nil {
+		writeStoreError(w, http.StatusBadRequest, err)
+		return
+	}
+	if in.Creator == "" {
+		writeErr(w, http.StatusBadRequest, "creator is required")
+		return
+	}
+	if ok, err := a.mayActAsRegistered(r, in.Creator); err != nil {
+		writeStoreError(w, http.StatusInternalServerError, err)
+		return
+	} else if !ok {
+		writeErr(w, http.StatusForbidden, "that session belongs to someone else")
+		return
+	}
+	if ok, err := a.coordMembersRegistered(in.Members); err != nil {
+		writeStoreError(w, http.StatusInternalServerError, err)
+		return
+	} else if !ok {
+		writeErr(w, http.StatusForbidden, "every private-room participant must be a registered session")
+		return
+	}
+	room, err := a.st.CreateCoordGroup(in)
+	if err != nil {
+		writeStoreError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, room)
+}
+
+func (a *api) coordMembersRegistered(members []string) (bool, error) {
+	for _, member := range members {
+		owner, registered, err := a.st.CoordAgentOwner(member)
+		if err != nil {
+			return false, err
+		}
+		if !registered || owner == "" {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *api) coordRooms(w http.ResponseWriter, r *http.Request) {

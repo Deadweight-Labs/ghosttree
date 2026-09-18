@@ -1,6 +1,16 @@
 package store
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
+
+func registerHandoffTarget(t *testing.T, s *Store, externalID string) {
+	t.Helper()
+	if _, err := s.RegisterCoordAgent(CoordAgent{ExternalID: externalID, Provider: "test", RoomKey: RoomKeyForProject("handoff-test"), DisplayName: externalID, Person: externalID, PrincipalID: "person:" + externalID}); err != nil {
+		t.Fatal(err)
+	}
+}
 
 // A→B und B→A sind dasselbe Gespräch. Ohne sortierte Teilnehmer führen zwei
 // Agenten zwei getrennte Hälften und wundern sich, warum die Antwort fehlt.
@@ -90,6 +100,14 @@ func TestADirectRoomNeedsTwoMembers(t *testing.T) {
 	}
 }
 
+func TestADirectRoomRejectsMoreThanTwoMembers(t *testing.T) {
+	s := openTest(t)
+	members := []string{"a", "b", "c"}
+	if err := s.EnsureCoordRoom(CoordRoom{Key: RoomKeyForDirect(members), Kind: RoomDirect, Members: members}); err == nil {
+		t.Fatal("three-member direct room accepted")
+	}
+}
+
 // Ein Teilnehmer findet seine Gespräche wieder, ohne sich Schlüssel zu
 // merken — Projekt- und Maschinenräume stehen bewusst nicht in der Liste,
 // die ergeben sich aus der Umgebung.
@@ -156,6 +174,7 @@ func TestANewSessionInheritsNothingWithoutAnExplicitHandoff(t *testing.T) {
 	if ok {
 		t.Fatal("a new session must not inherit an old session's inbox")
 	}
+	registerHandoffTarget(t, s, "sess-neu")
 
 	moved, err := s.HandoffCoordRooms("sess-alt", "sess-neu", []string{key})
 	if err != nil {
@@ -191,6 +210,7 @@ func TestAHandoffCannotGrantRoomsTheSenderCannotRead(t *testing.T) {
 		Members: []string{"sess-x", "sess-y"}}); err != nil {
 		t.Fatal(err)
 	}
+	registerHandoffTarget(t, s, "sess-komplize")
 	moved, err := s.HandoffCoordRooms("sess-aussen", "sess-komplize", []string{fremd})
 	if err != nil {
 		t.Fatalf("handoff: %v", err)
@@ -204,6 +224,106 @@ func TestAHandoffCannotGrantRoomsTheSenderCannotRead(t *testing.T) {
 	}
 	if ok {
 		t.Fatal("the room leaked through a handoff by a non-member")
+	}
+}
+
+func TestRepeatedHandoffCountsOnlyNewMembership(t *testing.T) {
+	s := openTest(t)
+	key := RoomKeyForDirect([]string{"from", "peer"})
+	if err := s.EnsureCoordRoom(CoordRoom{Key: key, Kind: RoomDirect, Members: []string{"from", "peer"}}); err != nil {
+		t.Fatal(err)
+	}
+	registerHandoffTarget(t, s, "to")
+	first, err := s.HandoffCoordRooms("from", "to", []string{key})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.HandoffCoordRooms("from", "to", []string{key})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != 1 || second != 0 {
+		t.Fatalf("handoff counts first=%d second=%d", first, second)
+	}
+}
+
+func TestDirectEnsureRemainsIdempotentAfterHandoff(t *testing.T) {
+	s := openTest(t)
+	members := []string{"from", "peer"}
+	key := RoomKeyForDirect(members)
+	if err := s.EnsureCoordRoom(CoordRoom{Key: key, Kind: RoomDirect, Members: members}); err != nil {
+		t.Fatal(err)
+	}
+	registerHandoffTarget(t, s, "to")
+	if _, err := s.HandoffCoordRooms("from", "to", []string{key}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.EnsureCoordRoom(CoordRoom{Key: key, Kind: RoomDirect, Members: members}); err != nil {
+		t.Fatalf("canonical pair could not re-ensure after handoff: %v", err)
+	}
+}
+
+func TestGroupHandoffIsAuditedAndLegacyManagerlessGroupIsReadOnly(t *testing.T) {
+	s := openTest(t)
+	group, err := s.CreateCoordGroup(GroupInput{Creator: "from", Members: []string{"from", "peer"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registerHandoffTarget(t, s, "to")
+	moved, err := s.HandoffCoordRooms("from", "to", []string{group.Key})
+	if err != nil || moved != 1 {
+		t.Fatalf("managed handoff moved=%d err=%v", moved, err)
+	}
+	events, err := s.CoordRoomMembershipEvents(group.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var audited bool
+	for _, event := range events {
+		if event.Action == "join" && event.PrincipalID == "to" && event.ActorID == "from" {
+			audited = true
+		}
+	}
+	if !audited {
+		t.Fatalf("handoff join not audited: %+v", events)
+	}
+	legacy := RoomKeyForGroup([]string{"a", "b"})
+	if err := s.EnsureCoordRoom(CoordRoom{Key: legacy, Kind: RoomGroup, Members: []string{"a", "b"}}); err != nil {
+		t.Fatal(err)
+	}
+	registerHandoffTarget(t, s, "c")
+	if _, err := s.HandoffCoordRooms("a", "c", []string{legacy}); !errors.Is(err, ErrLegacyGroupReadOnly) {
+		t.Fatalf("legacy handoff err=%v", err)
+	}
+}
+
+func TestOrdinaryGroupMemberCannotHandoffAccess(t *testing.T) {
+	s := openTest(t)
+	group, err := s.CreateCoordGroup(GroupInput{Creator: "owner", Members: []string{"owner", "member"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registerHandoffTarget(t, s, "outsider")
+	if _, err := s.HandoffCoordRooms("member", "outsider", []string{group.Key}); err == nil {
+		t.Fatal("ordinary group member handed off access")
+	}
+}
+
+func TestHandoffRejectsUnregisteredTarget(t *testing.T) {
+	s := openTest(t)
+	key := RoomKeyForDirect([]string{"from", "peer"})
+	if err := s.EnsureCoordRoom(CoordRoom{Key: key, Kind: RoomDirect, Members: []string{"from", "peer"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.HandoffCoordRooms("from", "claimable-later", []string{key}); !errors.Is(err, ErrCoordHandoffTargetUnbound) {
+		t.Fatalf("handoff err=%v, want unbound target", err)
+	}
+	ok, err := s.MayReadCoordRoom(key, "claimable-later")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("unregistered target received private history")
 	}
 }
 

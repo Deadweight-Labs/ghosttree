@@ -415,6 +415,7 @@ CREATE TABLE IF NOT EXISTS coord_agents(
   room_key TEXT NOT NULL,
   display_name TEXT NOT NULL,
   person TEXT,
+  principal_id TEXT NOT NULL DEFAULT '',
   cwd TEXT,
   branch TEXT,
   worktree TEXT,
@@ -535,6 +536,31 @@ CREATE TABLE IF NOT EXISTS coord_room_members(
   member_external_id TEXT NOT NULL,
   joined_at TEXT NOT NULL,
   PRIMARY KEY(room_key,member_external_id));
+CREATE TABLE IF NOT EXISTS coord_room_memberships(
+  room_key TEXT NOT NULL REFERENCES coord_rooms(room_key) ON DELETE RESTRICT,
+  principal_id TEXT NOT NULL,
+  joined_at TEXT NOT NULL,
+  left_at TEXT NOT NULL DEFAULT '',
+  is_manager INTEGER NOT NULL DEFAULT 0 CHECK(is_manager IN (0,1)),
+  PRIMARY KEY(room_key,principal_id,joined_at));
+CREATE UNIQUE INDEX IF NOT EXISTS coord_room_memberships_one_active
+  ON coord_room_memberships(room_key,principal_id) WHERE left_at='';
+CREATE INDEX IF NOT EXISTS coord_room_memberships_active
+  ON coord_room_memberships(principal_id,room_key) WHERE left_at='';
+CREATE TABLE IF NOT EXISTS coord_room_membership_migrations(
+  version INTEGER PRIMARY KEY,
+  migrated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS coord_room_membership_events(
+  id INTEGER PRIMARY KEY,
+  room_key TEXT NOT NULL REFERENCES coord_rooms(room_key) ON DELETE RESTRICT,
+  principal_id TEXT NOT NULL DEFAULT '',
+  action TEXT NOT NULL CHECK(action IN ('group_create','join','leave','manager_grant','manager_revoke')),
+  actor_id TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL);
+CREATE TRIGGER IF NOT EXISTS coord_room_membership_events_no_update
+  BEFORE UPDATE ON coord_room_membership_events BEGIN SELECT RAISE(ABORT,'membership events are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS coord_room_membership_events_no_delete
+  BEFORE DELETE ON coord_room_membership_events BEGIN SELECT RAISE(ABORT,'membership events are append-only'); END;
 CREATE TABLE IF NOT EXISTS coord_deliveries(
   message_id INTEGER NOT NULL,
   recipient_external_id TEXT NOT NULL,
@@ -629,6 +655,14 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 		}
 	}
 	if _, err := db.Exec(schema); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := migrateCoordRoomMemberships(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureCoordAgentPrincipalID(db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}

@@ -145,6 +145,7 @@ func New(st *store.Store, options ...Option) http.Handler {
 	mux.HandleFunc("POST /api/coord/deliveries", a.markCoordDelivery)
 	mux.HandleFunc("POST /api/coord/rooms", a.ensureCoordRoom)
 	mux.HandleFunc("GET /api/coord/rooms", a.coordRooms)
+	mux.HandleFunc("POST /api/coord/groups", a.createCoordGroup)
 	mux.HandleFunc("POST /api/coord/cursor", a.coordCursorSet)
 	mux.HandleFunc("GET /api/coord/cursor", a.coordCursorGet)
 	mux.HandleFunc("POST /api/threads", a.createThread)

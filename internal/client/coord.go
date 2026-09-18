@@ -82,10 +82,16 @@ func (c *Client) SetCoordCursor(agentExternalID, destinationKind, destinationID 
 	}, nil)
 }
 
-// EnsureCoordRoom eröffnet einen Direkt- oder Gruppenraum. Idempotent:
-// dieselbe Runde ergibt denselben Raum mit demselben Verlauf.
+// EnsureCoordRoom eröffnet einen Raum mit schon feststehendem Schlüssel. Neue
+// Gruppen müssen über CreateCoordGroup entstehen, damit ihre ID opak bleibt.
 func (c *Client) EnsureCoordRoom(r store.CoordRoom) error {
 	return c.do("POST", "/api/coord/rooms", nil, r, nil)
+}
+
+func (c *Client) CreateCoordGroup(in store.GroupInput) (store.CoordRoom, error) {
+	var out store.CoordRoom
+	err := c.do("POST", "/api/coord/groups", nil, in, &out)
+	return out, err
 }
 
 // CoordRoomsFor listet die Direkt- und Gruppenräume eines Teilnehmers.

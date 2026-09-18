@@ -1,6 +1,13 @@
 package store
 
-import "strings"
+import (
+	"database/sql"
+	"errors"
+	"fmt"
+	"strings"
+)
+
+var ErrCoordAgentOwned = errors.New("coordination agent belongs to another principal")
 
 // CoordAgent ist eine angemeldete Session, kein von ghosttree gestarteter
 // Prozess. Niemand hier ist Parent eines anderen: ParentExternalID erklärt die
@@ -12,6 +19,7 @@ type CoordAgent struct {
 	RoomKey          string `json:"room_key"`
 	DisplayName      string `json:"display_name"`
 	Person           string `json:"person,omitempty"`
+	PrincipalID      string `json:"principal_id,omitempty"`
 	Cwd              string `json:"cwd,omitempty"`
 	Branch           string `json:"branch,omitempty"`
 	Worktree         string `json:"worktree,omitempty"`
@@ -37,10 +45,10 @@ func RoomKeyForMachine(host string) string {
 	return "machine:" + strings.TrimSpace(host)
 }
 
-// RegisterCoordAgent meldet eine Session in ihrem Raum an. Die Anmeldung ist
-// idempotent über die external_id: derselbe Aufruf nach einem Neustart ist
-// dieselbe Session, nicht die zweite. Ohne das stünde nach jeder Sitzung ein
-// Geist mehr in der Teilnehmerliste.
+// RegisterCoordAgent meldet eine Session in einem weiteren Raum an. Die
+// Anmeldung ist idempotent über external_id und atomar an PrincipalID gebunden.
+// room_key auf coord_agents bleibt als Kompatibilitätswert der Erstanmeldung
+// unverändert; die normalisierte Mitgliedschaft ist die aktuelle Wahrheit.
 func (s *Store) RegisterCoordAgent(a CoordAgent) (int64, error) {
 	if s.writer != nil {
 		return queueValue(s, []any{a}, func(d *Store, p []any) (int64, error) {
@@ -51,25 +59,84 @@ func (s *Store) RegisterCoordAgent(a CoordAgent) (int64, error) {
 	if at == "" {
 		at = now()
 	}
+	kind := ""
+	switch {
+	case strings.HasPrefix(a.RoomKey, "project:"):
+		kind = RoomProject
+	case strings.HasPrefix(a.RoomKey, "machine:"):
+		kind = RoomMachine
+	default:
+		return 0, fmt.Errorf("agent registration requires a project or machine room")
+	}
 	// registered_at bleibt beim Konflikt stehen: wann diese Session zuerst da
 	// war, ist eine andere Auskunft als wann sie zuletzt gesehen wurde, und
 	// die erste geht beim Überschreiben sonst verloren.
-	_, err := s.db.Exec(`INSERT INTO coord_agents(
-			external_id,provider,room_key,display_name,person,cwd,branch,worktree,
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`INSERT OR IGNORE INTO coord_rooms(room_key,kind,label,created_at) VALUES(?,?,?,?)`, a.RoomKey, kind, "", at); err != nil {
+		return 0, err
+	}
+	result, err := tx.Exec(`INSERT INTO coord_agents(
+			external_id,provider,room_key,display_name,person,principal_id,cwd,branch,worktree,
 			parent_external_id,capabilities,registered_at,last_seen_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(external_id) DO UPDATE SET
-			room_key=excluded.room_key, display_name=excluded.display_name,
+			display_name=excluded.display_name, person=excluded.person,
+			principal_id=CASE WHEN coord_agents.principal_id='' THEN excluded.principal_id ELSE coord_agents.principal_id END,
 			cwd=excluded.cwd, branch=excluded.branch, worktree=excluded.worktree,
-			capabilities=excluded.capabilities, last_seen_at=excluded.last_seen_at`,
-		a.ExternalID, a.Provider, a.RoomKey, a.DisplayName, a.Person, a.Cwd,
+			capabilities=excluded.capabilities, last_seen_at=excluded.last_seen_at
+		WHERE (coord_agents.principal_id<>'' AND coord_agents.principal_id=excluded.principal_id)
+		   OR (coord_agents.principal_id='' AND coord_agents.person<>'' AND coord_agents.person=excluded.person AND excluded.principal_id<>'')
+		   OR (coord_agents.principal_id='' AND coord_agents.person='' AND excluded.principal_id='' AND excluded.person='')`,
+		a.ExternalID, a.Provider, a.RoomKey, a.DisplayName, a.Person, a.PrincipalID, a.Cwd,
 		a.Branch, a.Worktree, a.ParentExternalID, a.Capabilities, at, at)
 	if err != nil {
 		return 0, err
 	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if changed == 0 {
+		return 0, ErrCoordAgentOwned
+	}
+	if _, err := tx.Exec(`INSERT INTO coord_room_memberships(room_key,principal_id,joined_at,left_at,is_manager)
+		VALUES(?,?,?,'',0) ON CONFLICT DO NOTHING`, a.RoomKey, a.ExternalID, membershipTime()); err != nil {
+		return 0, err
+	}
 	var id int64
-	err = s.db.QueryRow(`SELECT id FROM coord_agents WHERE external_id=?`, a.ExternalID).Scan(&id)
-	return id, err
+	err = tx.QueryRow(`SELECT id FROM coord_agents WHERE external_id=?`, a.ExternalID).Scan(&id)
+	if err != nil {
+		return 0, err
+	}
+	return id, tx.Commit()
+}
+
+func ensureCoordAgentPrincipalID(db *sql.DB) error {
+	rows, err := db.Query(`PRAGMA table_info(coord_agents)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notNull, pk int
+		var name, typ string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		if name == "principal_id" {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = db.Exec(`ALTER TABLE coord_agents ADD COLUMN principal_id TEXT NOT NULL DEFAULT ''`)
+	return err
 }
 
 // CoordPeers liefert die Teilnehmer eines Raums. since grenzt auf zuletzt
@@ -85,11 +152,12 @@ func (s *Store) CoordPeers(roomKey, since string) ([]CoordAgent, error) {
 	if s.reader != nil {
 		return s.reader.CoordPeers(roomKey, since)
 	}
-	query := `SELECT id,external_id,provider,room_key,display_name,
+	query := `SELECT a.id,a.external_id,a.provider,m.room_key,a.display_name,
 			COALESCE(person,''),COALESCE(cwd,''),COALESCE(branch,''),
 			COALESCE(worktree,''),COALESCE(parent_external_id,''),
 			COALESCE(capabilities,''),registered_at,last_seen_at
-		FROM coord_agents WHERE room_key=?`
+		FROM coord_agents a JOIN coord_room_memberships m ON m.principal_id=a.external_id
+		WHERE m.room_key=? AND m.left_at=''`
 	args := []any{roomKey}
 	if strings.TrimSpace(since) != "" {
 		query += ` AND last_seen_at >= ?`

@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -13,6 +14,101 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 	"net/http/httptest"
 )
+
+func TestMCPGroupsWithSameMembersGetDistinctServerIDs(t *testing.T) {
+	a, b, _ := twoSessions(t)
+	registerThirdSession(t, a)
+	ctx := context.Background()
+	var keys []string
+	for _, label := range []string{"release", "incident"} {
+		res, _, err := a.handleCoordDM(ctx, nil, CoordDMInput{
+			To: []string{b.sessionRef, "sess-third"}, Body: "hello", Label: label,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		match := regexp.MustCompile(`group:[0-9a-f]{32}`).FindString(text(t, res))
+		if match == "" {
+			t.Fatalf("opaque group id missing from %q", text(t, res))
+		}
+		keys = append(keys, match)
+	}
+	if keys[0] == keys[1] {
+		t.Fatalf("same-member groups collapsed to %s", keys[0])
+	}
+}
+
+func TestMCPPrivateSendRejectsPublicRoomID(t *testing.T) {
+	a, _, _ := twoSessions(t)
+	if _, _, err := a.handleCoordDM(context.Background(), nil, CoordDMInput{
+		Room: "project:github.com/deadweight-labs/ghosttree", Body: "not private",
+	}); err == nil {
+		t.Fatal("private-send tool accepted a public room")
+	}
+}
+
+func TestMCPGroupCanBeReadByOpaqueRoomID(t *testing.T) {
+	a, b, _ := twoSessions(t)
+	registerThirdSession(t, a)
+	res, _, err := a.handleCoordDM(context.Background(), nil, CoordDMInput{
+		To: []string{b.sessionRef, "sess-third"}, Body: "group payload", Label: "release",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := regexp.MustCompile(`group:[0-9a-f]{32}`).FindString(text(t, res))
+	read, _, err := b.handleCoordDMRead(context.Background(), nil, CoordDMReadInput{Room: key})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(text(t, read), "group payload") {
+		t.Fatalf("group body missing from opaque-id read: %s", text(t, read))
+	}
+}
+
+func TestMCPPrivateCreationStopsWhenSessionRegistrationIsRejected(t *testing.T) {
+	st, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	robin, _ := st.AddPerson("robin")
+	philipp, _ := st.AddPerson("philipp")
+	httpServer := httptest.NewServer(server.New(st))
+	t.Cleanup(httpServer.Close)
+	robinClient := client.New(config.Config{ServerURL: httpServer.URL, Token: robin, Machine: "mainex"})
+	room := store.RoomKeyForProject("github.com/x/y")
+	if _, err := robinClient.RegisterCoordAgent(store.CoordAgent{ExternalID: "sess-shared", Provider: "test", RoomKey: room, DisplayName: "Robin"}); err != nil {
+		t.Fatal(err)
+	}
+	philippClient := client.New(config.Config{ServerURL: httpServer.URL, Token: philipp, Machine: "mainex"})
+	mcpServer := &Server{client: philippClient, sessionRef: "sess-shared", ctxAxes: scope.Axes{Project: "github.com/x/y", Machine: "mainex"}}
+	if _, _, err := mcpServer.handleCoordDM(context.Background(), nil, CoordDMInput{To: []string{"peer"}, Body: "must fail"}); err == nil {
+		t.Fatal("private room creation continued after registration rejection")
+	}
+}
+
+func TestMCPSubagentPostStopsWhenOwnershipBindingFails(t *testing.T) {
+	st, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	robin, _ := st.AddPerson("robin")
+	philipp, _ := st.AddPerson("philipp")
+	httpServer := httptest.NewServer(server.New(st))
+	t.Cleanup(httpServer.Close)
+	room := store.RoomKeyForProject("github.com/x/y")
+	robinClient := client.New(config.Config{ServerURL: httpServer.URL, Token: robin, Machine: "mainex"})
+	if _, err := robinClient.RegisterCoordAgent(store.CoordAgent{ExternalID: "sess-shared/worker", Provider: "test", RoomKey: room, DisplayName: "worker"}); err != nil {
+		t.Fatal(err)
+	}
+	philippClient := client.New(config.Config{ServerURL: httpServer.URL, Token: philipp, Machine: "mainex"})
+	mcpServer := &Server{client: philippClient, sessionRef: "sess-shared", ctxAxes: scope.Axes{Project: "github.com/x/y", Machine: "mainex"}}
+	if _, _, err := mcpServer.handleCoordSend(context.Background(), nil, CoordSendInput{Body: "must fail", As: "worker"}); err == nil {
+		t.Fatal("subagent post continued after ownership bind failure")
+	}
+}
 
 // twoSessions baut zwei MCP-Server, die denselben Ghosttree-Server benutzen
 // und sich nur in Session-Referenz und Harness unterscheiden. Genau das ist
@@ -34,7 +130,21 @@ func twoSessions(t *testing.T) (*Server, *Server, *store.Store) {
 		return &Server{client: c, sessionRef: ref,
 			ctxAxes: scope.Axes{Project: "github.com/deadweight-labs/ghosttree", Machine: machine}}
 	}
-	return newSession("sess-claude", "mainex"), newSession("sess-codex", "mainex"), st
+	a, b := newSession("sess-claude", "mainex"), newSession("sess-codex", "mainex")
+	room := store.RoomKeyForProject("github.com/deadweight-labs/ghosttree")
+	for _, s := range []*Server{a, b} {
+		if _, err := s.client.RegisterCoordAgent(store.CoordAgent{ExternalID: s.sessionRef, Provider: "test", RoomKey: room, DisplayName: s.sessionRef}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return a, b, st
+}
+
+func registerThirdSession(t *testing.T, s *Server) {
+	t.Helper()
+	if _, err := s.client.RegisterCoordAgent(store.CoordAgent{ExternalID: "sess-third", Provider: "test", RoomKey: store.RoomKeyForProject("github.com/deadweight-labs/ghosttree"), DisplayName: "sess-third"}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // AC-1 und AC-2 von REQ-350 in der kleinsten Form, die sie wirklich prüft:

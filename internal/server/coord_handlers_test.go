@@ -89,6 +89,125 @@ func TestCoordAgentRegisterAndList(t *testing.T) {
 	}
 }
 
+func TestGenericRoomEndpointRejectsClientChosenGroupKey(t *testing.T) {
+	srv, token := newTestServer(t)
+	res := req(t, "POST", srv.URL+"/api/coord/rooms", token, store.CoordRoom{
+		Key: "group:chosen-by-client", Kind: store.RoomGroup,
+		Members: []string{"sess-a", "sess-b"},
+	})
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("client-chosen group key: want 400, got %d", res.StatusCode)
+	}
+}
+
+func TestDirectRoomEndpointRejectsUnboundActorAndPrivateKeyRepost(t *testing.T) {
+	srv, robinToken, philippToken := twoPersonServer(t)
+	room := store.RoomKeyForProject("github.com/x/y")
+	res := req(t, "POST", srv.URL+"/api/coord/agents", robinToken, store.CoordAgent{ExternalID: "sess-robin", Provider: "test", RoomKey: room, DisplayName: "Robin"})
+	res.Body.Close()
+	res = req(t, "POST", srv.URL+"/api/coord/agents", robinToken, store.CoordAgent{ExternalID: "sess-peer", Provider: "test", RoomKey: room, DisplayName: "Peer"})
+	res.Body.Close()
+	direct := store.RoomKeyForDirect([]string{"sess-robin", "sess-peer"})
+	res = req(t, "POST", srv.URL+"/api/coord/rooms", robinToken, store.CoordRoom{Key: direct, Kind: store.RoomDirect, Members: []string{"sess-robin", "sess-peer"}, Actor: "sess-robin"})
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("owner create status=%d", res.StatusCode)
+	}
+	res = req(t, "POST", srv.URL+"/api/coord/agents", philippToken, store.CoordAgent{ExternalID: "sess-attacker", Provider: "test", RoomKey: room, DisplayName: "Attacker"})
+	res.Body.Close()
+	res = req(t, "POST", srv.URL+"/api/coord/rooms", philippToken, store.CoordRoom{Key: direct, Kind: store.RoomDirect, Members: []string{"sess-robin", "sess-attacker"}, Actor: "sess-attacker"})
+	res.Body.Close()
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("attacker repost status=%d, want 400", res.StatusCode)
+	}
+	res = req(t, "GET", srv.URL+"/api/coord/messages?destination_kind=room&destination_id="+direct+"&agent_external_id=sess-attacker", philippToken, nil)
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusForbidden {
+		t.Fatalf("attacker read status=%d, want 403", res.StatusCode)
+	}
+}
+
+func TestPrivateRoomRejectsUnregisteredRecipientBeforeItCanBeImpersonated(t *testing.T) {
+	srv, robinToken, philippToken := twoPersonServer(t)
+	project := store.RoomKeyForProject("github.com/x/y")
+	res := req(t, "POST", srv.URL+"/api/coord/agents", robinToken, store.CoordAgent{ExternalID: "sess-robin", Provider: "test", RoomKey: project, DisplayName: "Robin"})
+	res.Body.Close()
+	direct := store.RoomKeyForDirect([]string{"sess-robin", "future-victim"})
+	res = req(t, "POST", srv.URL+"/api/coord/rooms", robinToken, store.CoordRoom{Key: direct, Kind: store.RoomDirect, Members: []string{"sess-robin", "future-victim"}, Actor: "sess-robin"})
+	res.Body.Close()
+	if res.StatusCode != http.StatusForbidden {
+		t.Fatalf("unregistered recipient status=%d", res.StatusCode)
+	}
+	res = req(t, "POST", srv.URL+"/api/coord/agents", philippToken, store.CoordAgent{ExternalID: "future-victim", Provider: "test", RoomKey: project, DisplayName: "Victim"})
+	res.Body.Close()
+	res = req(t, "GET", srv.URL+"/api/coord/messages?destination_kind=room&destination_id="+direct+"&agent_external_id=future-victim", philippToken, nil)
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusForbidden {
+		t.Fatalf("later claimant inherited pre-created private access: %d", res.StatusCode)
+	}
+}
+
+func TestAgentOwnershipSurvivesPersonRename(t *testing.T) {
+	st, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	token, _ := st.AddPerson("robin")
+	other, _ := st.AddPerson("philipp")
+	srv := httptest.NewServer(New(st))
+	t.Cleanup(srv.Close)
+	room := store.RoomKeyForProject("github.com/x/y")
+	res := req(t, "POST", srv.URL+"/api/coord/agents", token, store.CoordAgent{ExternalID: "sess-robin", Provider: "test", RoomKey: room, DisplayName: "Robin"})
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("initial register=%d", res.StatusCode)
+	}
+	if _, err := st.DB().Exec(`UPDATE persons SET name='renamed' WHERE name='robin'`); err != nil {
+		t.Fatal(err)
+	}
+	res = req(t, "POST", srv.URL+"/api/coord/agents", token, store.CoordAgent{ExternalID: "sess-robin", Provider: "test", RoomKey: room, DisplayName: "Renamed"})
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("rename broke stable ownership: %d", res.StatusCode)
+	}
+	res = req(t, "POST", srv.URL+"/api/coord/agents", other, store.CoordAgent{ExternalID: "sess-robin", Provider: "test", RoomKey: room, DisplayName: "Other"})
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusForbidden {
+		t.Fatalf("other principal took renamed session: %d", res.StatusCode)
+	}
+}
+
+func TestGroupCreatorMustBeRegisteredAndOwned(t *testing.T) {
+	srv, robinToken, philippToken := twoPersonServer(t)
+	res := req(t, "POST", srv.URL+"/api/coord/groups", philippToken, store.GroupInput{Creator: "sess-forged", Members: []string{"sess-forged", "peer"}})
+	res.Body.Close()
+	if res.StatusCode != http.StatusForbidden {
+		t.Fatalf("unregistered creator status=%d", res.StatusCode)
+	}
+	room := store.RoomKeyForProject("github.com/x/y")
+	res = req(t, "POST", srv.URL+"/api/coord/agents", robinToken, store.CoordAgent{ExternalID: "sess-robin", Provider: "test", RoomKey: room, DisplayName: "Robin"})
+	res.Body.Close()
+	res = req(t, "POST", srv.URL+"/api/coord/groups", philippToken, store.GroupInput{Creator: "sess-robin", Members: []string{"sess-robin", "peer"}})
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusForbidden {
+		t.Fatalf("foreign creator status=%d", res.StatusCode)
+	}
+}
+
+func TestAgentRegistrationCannotTakeOverAnotherPersonsExternalID(t *testing.T) {
+	srv, robinToken, philippToken := twoPersonServer(t)
+	room := store.RoomKeyForProject("github.com/x/y")
+	res := req(t, "POST", srv.URL+"/api/coord/agents", robinToken, store.CoordAgent{ExternalID: "sess-robin", Provider: "test", RoomKey: room, DisplayName: "Robin"})
+	res.Body.Close()
+	res = req(t, "POST", srv.URL+"/api/coord/agents", philippToken, store.CoordAgent{ExternalID: "sess-robin", Provider: "test", RoomKey: room, DisplayName: "Philipp"})
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusForbidden {
+		t.Fatalf("takeover status=%d", res.StatusCode)
+	}
+}
+
 // Pflichtfelder fehlen: der Aufruf wird abgewiesen, statt eine Nachricht in
 // einem Ziel abzulegen, das niemand abfragt.
 func TestCoordMessageRejectsMissingDestinationOrClientID(t *testing.T) {

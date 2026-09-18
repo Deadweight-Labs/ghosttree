@@ -1,6 +1,10 @@
 package store
 
-import "testing"
+import (
+	"errors"
+	"sync"
+	"testing"
+)
 
 // Zwei Sessions, die in verschiedenen Unterverzeichnissen desselben Repos
 // gestartet wurden, müssen im selben Raum landen. Der cwd unterscheidet sich,
@@ -50,6 +54,85 @@ func TestRegisterIsIdempotentPerSession(t *testing.T) {
 	}
 	if first != second {
 		t.Fatalf("same session got two agent ids: %d and %d", first, second)
+	}
+}
+
+func TestReregisterKeepsInitialCompatibilityRoom(t *testing.T) {
+	s := openTest(t)
+	if _, err := s.RegisterCoordAgent(CoordAgent{ExternalID: "sess-a", Provider: "test", RoomKey: "machine:host", DisplayName: "A"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RegisterCoordAgent(CoordAgent{ExternalID: "sess-a", Provider: "test", RoomKey: "project:repo", DisplayName: "A"}); err != nil {
+		t.Fatal(err)
+	}
+	var room string
+	if err := s.db.QueryRow(`SELECT room_key FROM coord_agents WHERE external_id='sess-a'`).Scan(&room); err != nil {
+		t.Fatal(err)
+	}
+	if room != "machine:host" {
+		t.Fatalf("compatibility room overwritten: %q", room)
+	}
+}
+
+func TestAgentOwnershipClaimIsAtomicAndStable(t *testing.T) {
+	s := openTest(t)
+	room := RoomKeyForProject("repo")
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	var wg sync.WaitGroup
+	for _, agent := range []CoordAgent{
+		{ExternalID: "shared", Provider: "test", RoomKey: room, DisplayName: "A", Person: "robin", PrincipalID: "person:1"},
+		{ExternalID: "shared", Provider: "test", RoomKey: room, DisplayName: "B", Person: "philipp", PrincipalID: "person:2"},
+	} {
+		wg.Add(1)
+		go func(agent CoordAgent) {
+			defer wg.Done()
+			<-start
+			_, err := s.RegisterCoordAgent(agent)
+			results <- err
+		}(agent)
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	var successes, rejected int
+	for err := range results {
+		if err == nil {
+			successes++
+		} else if errors.Is(err, ErrCoordAgentOwned) {
+			rejected++
+		} else {
+			t.Fatal(err)
+		}
+	}
+	if successes != 1 || rejected != 1 {
+		t.Fatalf("successes=%d rejected=%d", successes, rejected)
+	}
+}
+
+func TestLegacyAgentClaimRequiresMatchingAuthenticatedLabel(t *testing.T) {
+	s := openTest(t)
+	room := RoomKeyForProject("repo")
+	if _, err := s.db.Exec(`INSERT INTO coord_agents(external_id,provider,room_key,display_name,person,registered_at,last_seen_at)
+		VALUES('legacy','test',?,'legacy','robin','2020-01-01T00:00:00Z','2020-01-01T00:00:00Z')`, room); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RegisterCoordAgent(CoordAgent{ExternalID: "legacy", Provider: "test", RoomKey: room, DisplayName: "legacy", Person: "philipp", PrincipalID: "person:2"}); !errors.Is(err, ErrCoordAgentOwned) {
+		t.Fatalf("mismatched legacy claim err=%v", err)
+	}
+	if _, err := s.RegisterCoordAgent(CoordAgent{ExternalID: "legacy", Provider: "test", RoomKey: room, DisplayName: "legacy", Person: "robin", PrincipalID: "person:1"}); err != nil {
+		t.Fatalf("matching legacy claim: %v", err)
+	}
+	owner, registered, err := s.CoordAgentOwner("legacy")
+	if err != nil || !registered || owner != "person:1" {
+		t.Fatalf("owner=%q registered=%v err=%v", owner, registered, err)
+	}
+	if _, err := s.db.Exec(`INSERT INTO coord_agents(external_id,provider,room_key,display_name,person,registered_at,last_seen_at)
+		VALUES('empty-owner','test',?,'empty','', '2020-01-01T00:00:00Z','2020-01-01T00:00:00Z')`, room); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RegisterCoordAgent(CoordAgent{ExternalID: "empty-owner", Provider: "test", RoomKey: room, DisplayName: "empty", Person: "robin", PrincipalID: "person:1"}); !errors.Is(err, ErrCoordAgentOwned) {
+		t.Fatalf("empty legacy owner was freely claimable: %v", err)
 	}
 }
 

@@ -113,20 +113,21 @@ func coordText(text string) *mcp.CallToolResult {
 // war genau das der Unterschied zwischen "Nachrichten kommen an" und "die
 // Agenten sehen einander".
 //
-// Idempotent über die Teilnehmerkennung, und ein Fehler hier darf den
-// eigentlichen Aufruf nicht scheitern lassen: wer schreiben will, soll
-// schreiben können, auch wenn die Anwesenheitsliste klemmt.
+// Idempotent über die Teilnehmerkennung. Der gewöhnliche Raumverkehr bricht
+// bei einem Fehler ab: dieselbe Registrierung bindet bei privaten Räumen den
+// Akteur an den authentifizierten Token und ist deshalb Teil der Freigabe.
 // joinAsSubagent meldet einen selbsterklärten Subagenten an. Der Anbieter
 // heißt ausdrücklich "self-declared-subagent", damit die Teilnehmerliste
 // nicht so aussieht, als hätte der Harness das bestätigt.
-func (s *Server) joinAsSubagent(roomKey, ref string) {
-	_, _ = s.client.RegisterCoordAgent(store.CoordAgent{
+func (s *Server) joinAsSubagent(roomKey, ref string) error {
+	_, err := s.client.RegisterCoordAgent(store.CoordAgent{
 		ExternalID: ref, Provider: "self-declared-subagent", RoomKey: roomKey,
 		DisplayName: ref, ParentExternalID: s.coordRef(), Branch: s.ctxAxes.Branch,
 	})
+	return err
 }
 
-func (s *Server) joinRoom(roomKey string) {
+func (s *Server) joinRoom(roomKey string) error {
 	provider := "unknown"
 	if s.sessionRef == "" {
 		// Ohne Harness-Session-ID ist auch der Anbieter nicht sicher
@@ -134,10 +135,11 @@ func (s *Server) joinRoom(roomKey string) {
 		// Angabe in der Teilnehmerliste liest sich wie eine geprüfte.
 		provider = "unidentified-harness"
 	}
-	_, _ = s.client.RegisterCoordAgent(store.CoordAgent{
+	_, err := s.client.RegisterCoordAgent(store.CoordAgent{
 		ExternalID: s.coordRef(), Provider: provider, RoomKey: roomKey,
 		DisplayName: s.coordRef(), Branch: s.ctxAxes.Branch,
 	})
+	return err
 }
 
 func (s *Server) handleCoordSend(ctx context.Context, _ *mcp.CallToolRequest, in CoordSendInput) (*mcp.CallToolResult, any, error) {
@@ -151,9 +153,13 @@ func (s *Server) handleCoordSend(ctx context.Context, _ *mcp.CallToolRequest, in
 	sender := s.coordRef()
 	if in.As != "" {
 		sender = subagentRef(sender, in.As)
-		s.joinAsSubagent(key, sender)
+		if err := s.joinAsSubagent(key, sender); err != nil {
+			return nil, nil, err
+		}
 	} else {
-		s.joinRoom(key)
+		if err := s.joinRoom(key); err != nil {
+			return nil, nil, err
+		}
 	}
 	clientID, err := newCoordClientID()
 	if err != nil {
@@ -186,7 +192,9 @@ func (s *Server) handleCoordInbox(ctx context.Context, _ *mcp.CallToolRequest, i
 	if err != nil {
 		return nil, nil, err
 	}
-	s.joinRoom(key)
+	if err := s.joinRoom(key); err != nil {
+		return nil, nil, err
+	}
 	after := in.After
 	if after == 0 {
 		// Ohne ausdrückliche Angabe beim gespeicherten Stand weitermachen.
@@ -241,7 +249,9 @@ func (s *Server) handleCoordPeers(ctx context.Context, _ *mcp.CallToolRequest, i
 	if err != nil {
 		return nil, nil, err
 	}
-	s.joinRoom(key)
+	if err := s.joinRoom(key); err != nil {
+		return nil, nil, err
+	}
 	peers, err := s.client.CoordPeers(key, "")
 	if err != nil {
 		return nil, nil, err
@@ -279,10 +289,12 @@ type CoordDMInput struct {
 	Body string   `json:"body" jsonschema:"what you want to say"`
 	// Label hilft dem Menschen in der Übersicht und ist sonst folgenlos.
 	Label string `json:"label,omitempty" jsonschema:"short name for this conversation, for example 'API-Vertrag'"`
+	Room  string `json:"room,omitempty" jsonschema:"opaque group room id returned by an earlier call. Use it to continue that exact group; omit it to create a new group"`
 }
 
 type CoordDMReadInput struct {
 	With []string `json:"with,omitempty" jsonschema:"session ids of the other participants. Omit to list the private conversations you are part of"`
+	Room string   `json:"room,omitempty" jsonschema:"opaque group room id from coord_dm or the private-conversation list"`
 }
 
 // handleCoordDM eröffnet ein privates Gespräch und schreibt hinein. Beides in
@@ -293,21 +305,49 @@ type CoordDMReadInput struct {
 // zwischen zwei anderen eröffnen und es danach nicht mehr lesen — ein Raum
 // mit einem Beitrag, den sein Urheber nicht sehen darf.
 func (s *Server) handleCoordDM(ctx context.Context, _ *mcp.CallToolRequest, in CoordDMInput) (*mcp.CallToolResult, any, error) {
-	if len(in.To) == 0 || strings.TrimSpace(in.Body) == "" {
-		return nil, nil, fmt.Errorf("to and body are required")
+	if (len(in.To) == 0 && in.Room == "") || strings.TrimSpace(in.Body) == "" {
+		return nil, nil, fmt.Errorf("to or room, and body are required")
 	}
-	members := append([]string{s.coordRef()}, in.To...)
-	kind := store.RoomDirect
-	if len(members) > 2 {
-		kind = store.RoomGroup
+	key := strings.TrimSpace(in.Room)
+	kind := store.RoomGroup
+	if key != "" && !strings.HasPrefix(key, "group:") {
+		return nil, nil, fmt.Errorf("room must be an opaque group id returned by coord_dm")
 	}
-	key := store.RoomKeyForDirect(members)
-	if kind == store.RoomGroup {
-		key = store.RoomKeyForGroup(members)
-	}
-	if err := s.client.EnsureCoordRoom(store.CoordRoom{
-		Key: key, Kind: kind, Label: in.Label, Members: members}); err != nil {
-		return nil, nil, err
+	if key == "" {
+		members := append([]string{s.coordRef()}, in.To...)
+		kind = store.RoomDirect
+		if len(members) > 2 {
+			projectRoom, err := s.roomKeyFor("project")
+			if err != nil {
+				projectRoom, err = s.roomKeyFor("machine")
+			}
+			if err != nil {
+				return nil, nil, err
+			}
+			if err := s.joinRoom(projectRoom); err != nil {
+				return nil, nil, err
+			}
+			group, err := s.client.CreateCoordGroup(store.GroupInput{Label: in.Label, Creator: s.coordRef(), Members: members})
+			if err != nil {
+				return nil, nil, err
+			}
+			key = group.Key
+		} else {
+			key = store.RoomKeyForDirect(members)
+			projectRoom, err := s.roomKeyFor("project")
+			if err != nil {
+				projectRoom, err = s.roomKeyFor("machine")
+			}
+			if err != nil {
+				return nil, nil, err
+			}
+			if err := s.joinRoom(projectRoom); err != nil {
+				return nil, nil, err
+			}
+			if err := s.client.EnsureCoordRoom(store.CoordRoom{Key: key, Kind: kind, Label: in.Label, Members: members, Actor: s.coordRef()}); err != nil {
+				return nil, nil, err
+			}
+		}
 	}
 	clientID, err := newCoordClientID()
 	if err != nil {
@@ -322,11 +362,11 @@ func (s *Server) handleCoordDM(ctx context.Context, _ *mcp.CallToolRequest, in C
 	}
 	return coordText(fmt.Sprintf("stored as message %d in a private %s room with %s. "+
 		"Nobody outside it can read this, including through search or summaries.",
-		id, kind, strings.Join(in.To, ", "))), nil, nil
+		id, kind, strings.Join(in.To, ", ")+" ("+key+")")), nil, nil
 }
 
 func (s *Server) handleCoordDMRead(ctx context.Context, _ *mcp.CallToolRequest, in CoordDMReadInput) (*mcp.CallToolResult, any, error) {
-	if len(in.With) == 0 {
+	if len(in.With) == 0 && strings.TrimSpace(in.Room) == "" {
 		rooms, err := s.client.CoordRoomsFor(s.coordRef())
 		if err != nil {
 			return nil, nil, err
@@ -336,7 +376,7 @@ func (s *Server) handleCoordDMRead(ctx context.Context, _ *mcp.CallToolRequest, 
 		}
 		var b strings.Builder
 		for _, r := range rooms {
-			fmt.Fprintf(&b, "%s", r.Kind)
+			fmt.Fprintf(&b, "%s %s", r.Kind, r.Key)
 			if r.Label != "" {
 				fmt.Fprintf(&b, " %q", r.Label)
 			}
@@ -345,10 +385,16 @@ func (s *Server) handleCoordDMRead(ctx context.Context, _ *mcp.CallToolRequest, 
 		return coordText(b.String()), nil, nil
 	}
 
-	members := append([]string{s.coordRef()}, in.With...)
-	key := store.RoomKeyForDirect(members)
-	if len(members) > 2 {
-		key = store.RoomKeyForGroup(members)
+	key := strings.TrimSpace(in.Room)
+	if key != "" && !strings.HasPrefix(key, "group:") {
+		return nil, nil, fmt.Errorf("room must be an opaque group id returned by coord_dm")
+	}
+	if key == "" {
+		members := append([]string{s.coordRef()}, in.With...)
+		key = store.RoomKeyForDirect(members)
+		if len(members) > 2 {
+			key = store.RoomKeyForGroup(members)
+		}
 	}
 	after, _ := s.client.CoordCursor(s.coordRef(), store.DestinationRoom, key)
 	msgs, err := s.client.CoordInbox(store.DestinationRoom, key, s.coordRef(), after, 0)
