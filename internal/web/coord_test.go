@@ -2167,3 +2167,30 @@ func TestCoordVisualSystemAvoidsAntiSlopPatterns(t *testing.T) {
 		}
 	}
 }
+
+// Regression: a media-query rule `.coord-workspace button { display: inline-flex }`
+// outranked the UA `[hidden]` rule and the base `display: none` of the drawer
+// toggles, so the hidden backdrop dimmed narrow layouts and, without JS, the
+// toolbar showed link and button variants at once.
+func TestCoordHiddenAndNoScriptToolbarSurviveNarrowButtonRules(t *testing.T) {
+	raw, err := files.ReadFile("static/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	css := string(raw)
+	hidden := coordCSSRule(t, css, `.coord-workspace [hidden]`)
+	if !strings.Contains(hidden, `display: none !important`) {
+		t.Errorf("[hidden] elements in the workspace must stay display:none, got %q", hidden)
+	}
+	noJS := coordCSSRule(t, css, `html:not(.coord-enhanced) .coord-drawer-toggle`)
+	if !strings.Contains(noJS, `display: none !important`) {
+		t.Errorf("drawer toggles must be hidden without coord-enhanced, got %q", noJS)
+	}
+	template, err := files.ReadFile("templates/coord.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(template), `class="coord-backdrop" data-coord-drawer-close hidden`) {
+		t.Error("backdrop must carry the hidden attribute")
+	}
+}

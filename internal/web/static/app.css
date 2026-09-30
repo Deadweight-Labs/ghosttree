@@ -816,6 +816,11 @@ html.coord-enhanced body:has(> .coord-workspace) {
 
 .coord-drawer-open { overflow: hidden; }
 
+.coord-workspace [hidden],
+.coord-backdrop[hidden] { display: none !important; }
+
+html:not(.coord-enhanced) .coord-drawer-toggle { display: none !important; }
+
 .coord-shell :focus-visible,
 .app-header :focus-visible {
   outline: 3px solid #0b55c5;
