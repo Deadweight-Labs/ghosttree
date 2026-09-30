@@ -7,6 +7,8 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -1180,7 +1182,7 @@ func TestCoordMessageGroupsKeepIdentityAndRevealToolsWithoutCardChrome(t *testin
 		`grid-template-columns: 2rem minmax(0, 1fr)`,
 		`.coord-message-continuation`,
 		`.coord-message-avatar-agent`,
-		`border-radius: 3px`,
+		`border-radius: var(--coord-radius)`,
 		`.coord-message:focus-within .coord-message-tools`,
 		`@media (hover: hover) and (pointer: fine)`,
 		`@media (hover: none), (pointer: coarse)`,
@@ -1348,7 +1350,7 @@ func TestCoordInspectorLinksAndAttentionButtonsUseIntentionalFlatStates(t *testi
 		}
 	}
 	buttons := coordCSSRule(t, css, `.coord-attention-card button`)
-	for _, want := range []string{`display: inline-flex;`, `border: 1px solid`, `border-radius: 2px;`, `background: transparent;`} {
+	for _, want := range []string{`display: inline-flex;`, `border: 1px solid`, `border-radius: var(--coord-radius-sm);`, `background: transparent;`} {
 		if !strings.Contains(buttons, want) {
 			t.Errorf("attention action treatment missing %q: %s", want, buttons)
 		}
@@ -1999,4 +2001,169 @@ func coordPageBody(t *testing.T, client *http.Client, target string) string {
 		t.Fatalf("GET %s status=%d body=%s", target, res.StatusCode, body)
 	}
 	return string(body)
+}
+
+// cssRule ist eine Blattregel aus app.css. Umschließende @media-Blöcke sind
+// aufgelöst; es zählt nur Selektor und Deklarationstext.
+type cssRule struct{ selector, body string }
+
+var cssComment = regexp.MustCompile(`(?s)/\*.*?\*/`)
+
+// parseCSSRules zerlegt CSS in Blattregeln. Es reicht für dieses Stylesheet:
+// keine Strings mit Klammern, keine verschachtelten Regeln außer @media.
+func parseCSSRules(css string) []cssRule {
+	css = cssComment.ReplaceAllString(css, "")
+	var rules []cssRule
+	type frame struct {
+		selector string
+		body     strings.Builder
+		children bool
+	}
+	var stack []*frame
+	var buf strings.Builder
+	for _, r := range css {
+		switch r {
+		case '{':
+			if len(stack) > 0 {
+				stack[len(stack)-1].children = true
+			}
+			stack = append(stack, &frame{selector: strings.TrimSpace(buf.String())})
+			buf.Reset()
+		case '}':
+			if len(stack) == 0 {
+				continue
+			}
+			top := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			if !top.children {
+				top.body.WriteString(buf.String())
+				rules = append(rules, cssRule{top.selector, top.body.String()})
+			}
+			buf.Reset()
+		default:
+			buf.WriteRune(r)
+		}
+	}
+	return rules
+}
+
+func isCoordRule(r cssRule) bool { return strings.Contains(r.selector, "coord") }
+
+// shadowHasBlur meldet, ob eine Ebene eines box-shadow einen Weichzeichner hat.
+// Erlaubt sind Fokusringe und Linien (Blur 0); alles andere ist ein Glow
+// oder ein weicher Schlagschatten.
+func shadowHasBlur(value string) bool {
+	color := regexp.MustCompile(`(?i)(rgba?|hsla?)\([^)]*\)|#[0-9a-f]{3,8}\b`)
+	value = color.ReplaceAllString(value, "")
+	for _, layer := range strings.Split(value, ",") {
+		var lengths []string
+		for _, f := range strings.Fields(layer) {
+			if f == "inset" || strings.HasPrefix(f, "var(") {
+				continue
+			}
+			lengths = append(lengths, f)
+		}
+		if len(lengths) >= 3 {
+			v, err := strconv.ParseFloat(strings.TrimRight(lengths[2], "pxrem"), 64)
+			if err != nil || v != 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// TestCoordVisualSystemAvoidsAntiSlopPatterns hält die Do-not-Liste der
+// Coordination-Spec (specs/2026-09-18-coordination-visual-redesign.md) als
+// maschinelle Prüfung fest. Geprüft werden alle Regeln, deren Selektor "coord"
+// enthält, samt dem --coord-Token-Block.
+func TestCoordVisualSystemAvoidsAntiSlopPatterns(t *testing.T) {
+	raw, err := os.ReadFile("static/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rules := parseCSSRules(string(raw))
+
+	// Runde Formen sind nur für Avatare und den Statuspunkt gedacht; alles
+	// andere hat Ecken von höchstens 4px (keine Pills).
+	roundAllowed := map[string]string{
+		".coord-message-avatar-human":                "Avatar eines Menschen ist rund, Agenten sind quadratisch",
+		".coord-avatar":                              "Teilnehmer-Avatar in der Kontextspalte",
+		".coord-live-status:not(.coord-nojs-status)": "Statuspunkt im schmalen Layout",
+	}
+	forbidden := []struct {
+		name string
+		re   *regexp.Regexp
+	}{
+		{"gradient", regexp.MustCompile(`(?i)(linear|radial|conic|repeating-[a-z]+)-gradient\(`)},
+		{"backdrop-filter", regexp.MustCompile(`(?i)backdrop-filter\s*:`)},
+		{"text-shadow", regexp.MustCompile(`(?i)text-shadow\s*:`)},
+		{"filter blur", regexp.MustCompile(`(?i)(^|[;\s])filter\s*:[^;]*blur\(`)},
+		{"pill radius", regexp.MustCompile(`(?i)border-radius\s*:\s*(\d{3,}px|\d{3,}rem|9+em)`)},
+	}
+	shadow := regexp.MustCompile(`(?i)box-shadow\s*:\s*([^;]+)`)
+	radius := regexp.MustCompile(`(?i)border-radius\s*:\s*([^;]+)`)
+	coordVar := regexp.MustCompile(`var\(--coord-`)
+
+	seen := 0
+	for _, r := range rules {
+		if !isCoordRule(r) {
+			if coordVar.MatchString(r.body) {
+				t.Errorf("%s uses --coord tokens outside a coord selector", r.selector)
+			}
+			continue
+		}
+		seen++
+		for _, f := range forbidden {
+			if f.re.MatchString(r.body) {
+				t.Errorf("%s: forbidden %s", r.selector, f.name)
+			}
+		}
+		for _, m := range shadow.FindAllStringSubmatch(r.body, -1) {
+			if shadowHasBlur(m[1]) {
+				t.Errorf("%s: box-shadow with blur (glow or soft shadow): %s", r.selector, m[1])
+			}
+		}
+		for _, m := range radius.FindAllStringSubmatch(r.body, -1) {
+			if strings.Contains(m[1], "%") {
+				if _, ok := roundAllowed[r.selector]; !ok {
+					t.Errorf("%s: round shape is only allowed for avatars and the status dot", r.selector)
+				}
+			}
+		}
+	}
+	if seen < 100 {
+		t.Fatalf("parsed only %d coord rules; the extractor is probably broken", seen)
+	}
+	for sel := range roundAllowed {
+		found := false
+		for _, r := range rules {
+			if r.selector == sel && strings.Contains(r.body, "border-radius: 50%") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("stale allowlist entry %q", sel)
+		}
+	}
+
+	// Dokumentierte Tokens müssen im Token-Block stehen.
+	var tokens string
+	for _, r := range rules {
+		if r.selector == ".coord-workspace" && strings.Contains(r.body, "--coord-signal:") {
+			tokens = r.body
+		}
+	}
+	for _, name := range []string{
+		"--coord-chrome", "--coord-conversation", "--coord-inspector", "--coord-line",
+		"--coord-ink", "--coord-muted", "--coord-signal", "--coord-danger", "--coord-success",
+		"--coord-radius-sm", "--coord-radius",
+		"--coord-gap-1", "--coord-gap-2", "--coord-gap-3",
+		"--coord-text-micro", "--coord-text-label", "--coord-text-note",
+		"--coord-text-meta", "--coord-text-small", "--coord-text-title",
+	} {
+		if !strings.Contains(tokens, name+":") {
+			t.Errorf("token %s is missing from the .coord-workspace token block", name)
+		}
+	}
 }

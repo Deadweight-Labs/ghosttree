@@ -102,6 +102,22 @@ html.coord-enhanced body:has(> .coord-workspace) {
   --coord-danger: #9f332e;
   --coord-success: #26704a;
 
+  /* Shared scale for the coordination workspace. Radii stay at 2-3px (no pills;
+     round shapes are only for avatars). Gaps and type sizes are the steps the
+     workspace already repeats; one-off sizes stay literal. Depth comes from
+     surface values and 1px lines, so there is deliberately no shadow token. */
+  --coord-radius-sm: 2px;
+  --coord-radius: 3px;
+  --coord-gap-1: .35rem;
+  --coord-gap-2: .45rem;
+  --coord-gap-3: .55rem;
+  --coord-text-micro: .65rem;
+  --coord-text-label: .68rem;
+  --coord-text-note: .7rem;
+  --coord-text-meta: .72rem;
+  --coord-text-small: .78rem;
+  --coord-text-title: .95rem;
+
   display: grid;
   grid-template-rows: minmax(0, 1fr);
   width: 100%;
@@ -162,14 +178,14 @@ html.coord-enhanced body:has(> .coord-workspace) {
 
 .coord-sidebar-head h2 {
   margin: .1rem 0;
-  font-size: .95rem;
+  font-size: var(--coord-text-title);
   line-height: 1.2;
 }
 
 .coord-sidebar-head small,
 .coord-kicker {
   color: var(--coord-chrome-muted);
-  font-size: .65rem;
+  font-size: var(--coord-text-micro);
   font-weight: 750;
   letter-spacing: .08em;
   text-transform: uppercase;
@@ -188,7 +204,7 @@ html.coord-enhanced body:has(> .coord-workspace) {
   margin: 0;
   padding: .35rem;
   border: 0;
-  border-radius: 3px;
+  border-radius: var(--coord-radius);
   background: transparent;
   color: inherit;
   font-size: 1.35rem;
@@ -202,7 +218,7 @@ html.coord-enhanced body:has(> .coord-workspace) {
   width: 2.25rem;
   height: 2.25rem;
   place-items: center;
-  border-radius: 3px;
+  border-radius: var(--coord-radius);
   color: inherit;
   text-decoration: none;
 }
@@ -237,17 +253,17 @@ html.coord-enhanced body:has(> .coord-workspace) {
   align-items: center;
   justify-content: space-between;
   min-height: 2.25rem;
-  gap: .45rem;
+  gap: var(--coord-gap-2);
   padding: .38rem .5rem;
   border-left: 2px solid transparent;
-  border-radius: 2px;
+  border-radius: var(--coord-radius-sm);
   color: var(--coord-chrome-text);
   text-decoration: none;
   overflow-wrap: anywhere;
 }
 
 .coord-attention-region a { align-items: flex-start; }
-.coord-attention-region a > span { color: var(--coord-chrome-muted); font-size: .68rem; text-align: right; }
+.coord-attention-region a > span { color: var(--coord-chrome-muted); font-size: var(--coord-text-label); text-align: right; }
 
 .coord-attention-region a:hover,
 .coord-room-section a:hover {
@@ -263,7 +279,7 @@ html.coord-enhanced body:has(> .coord-workspace) {
 
 .coord-room-section strong {
   color: #7aa7ff;
-  font-size: .7rem;
+  font-size: var(--coord-text-note);
 }
 
 .coord-empty-row,
@@ -271,7 +287,7 @@ html.coord-enhanced body:has(> .coord-workspace) {
   display: block;
   padding: .35rem .5rem;
   color: var(--coord-muted);
-  font-size: .78rem;
+  font-size: var(--coord-text-small);
 }
 
 .coord-sidebar .coord-empty-row,
@@ -283,11 +299,11 @@ html.coord-enhanced body:has(> .coord-workspace) {
 }
 
 .coord-start details { margin: .25rem .45rem; }
-.coord-start summary { min-height: 2.25rem; padding: .45rem 0; cursor: pointer; font-size: .78rem; }
+.coord-start summary { min-height: 2.25rem; padding: .45rem 0; cursor: pointer; font-size: var(--coord-text-small); }
 .coord-start form,
-.coord-context form { display: grid; gap: .35rem; padding: .6rem 0; }
+.coord-context form { display: grid; gap: var(--coord-gap-1); padding: .6rem 0; }
 .coord-start fieldset,
-.coord-mentions { display: grid; gap: .35rem; padding: .35rem 0; border: 0; }
+.coord-mentions { display: grid; gap: var(--coord-gap-1); padding: .35rem 0; border: 0; }
 .coord-start label { overflow-wrap: anywhere; }
 
 /* Central conversation */
@@ -314,7 +330,7 @@ html.coord-enhanced body:has(> .coord-workspace) {
 
 .coord-conversation-head small {
   color: var(--coord-muted);
-  font-size: .68rem;
+  font-size: var(--coord-text-label);
   font-weight: 700;
   text-transform: uppercase;
 }
@@ -377,14 +393,14 @@ html.coord-enhanced body:has(> .coord-workspace) {
   margin-top: .05rem;
   background: #d2cdc2;
   color: #353b37;
-  font-size: .65rem;
+  font-size: var(--coord-text-micro);
 }
 
 .coord-message-avatar-human { border-radius: 50%; }
 
 .coord-message-avatar-agent {
   border: 1px solid #8e877b;
-  border-radius: 3px;
+  border-radius: var(--coord-radius);
   background: #ddd6c9;
   color: #0e4da8;
 }
@@ -395,7 +411,7 @@ html.coord-enhanced body:has(> .coord-workspace) {
   min-height: 1.15rem;
   padding: 0 .25rem;
   border: 1px solid #8ba3c7;
-  border-radius: 2px;
+  border-radius: var(--coord-radius-sm);
   color: var(--coord-signal-dark);
   font-size: .6rem;
   font-weight: 750;
@@ -409,12 +425,12 @@ html.coord-enhanced body:has(> .coord-workspace) {
   display: flex;
   align-items: baseline;
   min-width: 0;
-  gap: .45rem;
+  gap: var(--coord-gap-2);
 }
 
 .coord-message article > header strong { font-size: .84rem; }
 .coord-message header small,
-.coord-message time { color: var(--coord-muted); font-size: .68rem; }
+.coord-message time { color: var(--coord-muted); font-size: var(--coord-text-label); }
 .coord-message time { margin-left: auto; white-space: nowrap; }
 
 .coord-message article > p,
@@ -479,9 +495,9 @@ html.coord-enhanced body:has(> .coord-workspace) {
   min-height: 2.75rem;
   padding: .35rem .55rem;
   border: 1px solid transparent;
-  border-radius: 3px;
+  border-radius: var(--coord-radius);
   color: var(--coord-muted);
-  font-size: .72rem;
+  font-size: var(--coord-text-meta);
   font-weight: 700;
   text-decoration: none;
 }
@@ -519,7 +535,7 @@ html.coord-enhanced body:has(> .coord-workspace) {
 .coord-composer,
 .coord-thread-composer {
   display: grid;
-  gap: .35rem;
+  gap: var(--coord-gap-1);
   padding: .65rem .85rem max(.75rem, env(safe-area-inset-bottom));
   border-top: 1px solid var(--coord-line);
   background: var(--coord-conversation-raised);
@@ -572,7 +588,7 @@ html.coord-enhanced body:has(> .coord-workspace) {
 .coord-sidebar textarea {
   margin: 0;
   border: 1px solid #aaa398;
-  border-radius: 3px;
+  border-radius: var(--coord-radius);
   background: #fffdf8;
   color: var(--coord-ink);
 }
@@ -587,7 +603,7 @@ html.coord-enhanced body:has(> .coord-workspace) {
 
 .coord-workspace button {
   margin: 0;
-  border-radius: 3px;
+  border-radius: var(--coord-radius);
 }
 
 .coord-workspace summary { display: list-item; }
@@ -633,7 +649,7 @@ html.coord-enhanced body:has(> .coord-workspace) {
 
 .coord-context h2 {
   margin: .25rem 0 .5rem;
-  font-size: .72rem;
+  font-size: var(--coord-text-meta);
   font-weight: 800;
   letter-spacing: .06em;
   text-transform: uppercase;
@@ -657,7 +673,7 @@ html.coord-enhanced body:has(> .coord-workspace) {
 .coord-threads ul,
 .coord-participants {
   display: grid;
-  gap: .55rem;
+  gap: var(--coord-gap-3);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -666,8 +682,8 @@ html.coord-enhanced body:has(> .coord-workspace) {
 .coord-threads li { padding-bottom: .4rem; border-bottom: 1px solid #d7d1c6; }
 .coord-threads li > small { display: block; margin-top: .2rem; color: var(--coord-muted); }
 
-.coord-participants li { display: flex; gap: .55rem; }
-.coord-participants small { display: block; color: var(--coord-muted); font-size: .72rem; }
+.coord-participants li { display: flex; gap: var(--coord-gap-3); }
+.coord-participants small { display: block; color: var(--coord-muted); font-size: var(--coord-text-meta); }
 
 .coord-avatar {
   display: grid;
@@ -680,20 +696,20 @@ html.coord-enhanced body:has(> .coord-workspace) {
   background: transparent;
 }
 
-.coord-note { color: var(--coord-muted); font-size: .7rem; }
+.coord-note { color: var(--coord-muted); font-size: var(--coord-text-note); }
 .coord-standing,
 .coord-standing-create { padding-left: .65rem; border-left: 2px solid var(--coord-signal); }
 .coord-standing-create fieldset { display: grid; padding: .4rem 0; border: 0; }
-.coord-confirm { display: flex; align-items: flex-start; gap: .35rem; }
+.coord-confirm { display: flex; align-items: flex-start; gap: var(--coord-gap-1); }
 
 .coord-attention-list {
   display: grid;
-  gap: .35rem;
+  gap: var(--coord-gap-1);
   margin: .4rem 0 .8rem;
 }
 
 .coord-attention-list > h2 { margin: .2rem 0; }
-.coord-attention-list > h2 small { color: var(--coord-muted); font-size: .65rem; font-weight: 650; letter-spacing: 0; text-transform: none; }
+.coord-attention-list > h2 small { color: var(--coord-muted); font-size: var(--coord-text-micro); font-weight: 650; letter-spacing: 0; text-transform: none; }
 
 .coord-attention-card {
   padding: .55rem 0;
@@ -710,10 +726,10 @@ html.coord-enhanced body:has(> .coord-workspace) {
   min-height: 2rem;
   padding: .3rem .45rem;
   border: 1px solid #9d978b;
-  border-radius: 2px;
+  border-radius: var(--coord-radius-sm);
   background: transparent;
   color: var(--coord-ink);
-  font-size: .72rem;
+  font-size: var(--coord-text-meta);
 }
 
 .coord-attention-card button:hover,
@@ -733,11 +749,11 @@ html.coord-enhanced body:has(> .coord-workspace) {
 .coord-context > .coord-context-thread { padding: .75rem .8rem; }
 
 .coord-context-thread > header { padding-bottom: .5rem; border-bottom: 1px solid #cec8bc; }
-.coord-context-thread > header h2 { font-size: .95rem; letter-spacing: 0; text-transform: none; }
+.coord-context-thread > header h2 { font-size: var(--coord-text-title); letter-spacing: 0; text-transform: none; }
 .coord-thread-messages { min-height: 0; padding: .45rem 0 .75rem; }
 .coord-thread-messages .coord-message > article { grid-template-columns: 1.65rem minmax(0, 1fr); column-gap: .45rem; }
 .coord-thread-messages .coord-message-avatar { width: 1.65rem; height: 1.65rem; }
-.coord-refs { color: var(--coord-muted); font-family: ui-monospace, monospace; font-size: .7rem; }
+.coord-refs { color: var(--coord-muted); font-family: ui-monospace, monospace; font-size: var(--coord-text-note); }
 .coord-delivery { display: block; color: var(--coord-muted); text-align: right; }
 
 /* Status, accessibility and drawers */
@@ -750,10 +766,10 @@ html.coord-enhanced body:has(> .coord-workspace) {
   margin: 0;
   padding: .28rem .5rem;
   border: 1px solid #69716c;
-  border-radius: 3px;
+  border-radius: var(--coord-radius);
   background: #202422;
   color: #d9dedb;
-  font-size: .7rem;
+  font-size: var(--coord-text-note);
   pointer-events: none;
 }
 
@@ -767,7 +783,7 @@ html.coord-enhanced body:has(> .coord-workspace) {
   padding: .5rem .7rem;
   transform: translateX(-50%);
   border: 1px solid #777f7a;
-  border-radius: 3px;
+  border-radius: var(--coord-radius);
   background: #202422;
   color: #fff;
 }
@@ -832,7 +848,7 @@ html.coord-enhanced body:has(> .coord-workspace) {
     right: auto;
     opacity: 1;
     pointer-events: auto;
-    gap: .55rem;
+    gap: var(--coord-gap-3);
     padding: 0;
     border: 0;
     background: transparent;
@@ -897,7 +913,7 @@ html.coord-enhanced body:has(> .coord-workspace) {
   }
 
   .coord-mobile-actions,
-  .coord-mobile-fallback { display: inline-flex; gap: .35rem; }
+  .coord-mobile-fallback { display: inline-flex; gap: var(--coord-gap-1); }
 
 .coord-mobile-actions a,
   .coord-drawer-toggle {
@@ -1005,7 +1021,7 @@ html.coord-enhanced body:has(> .coord-workspace) {
     right: auto;
     opacity: 1;
     pointer-events: auto;
-    gap: .55rem;
+    gap: var(--coord-gap-3);
     margin-top: 0;
     padding: 0;
     border: 0;
