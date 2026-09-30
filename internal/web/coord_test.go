@@ -782,7 +782,7 @@ func TestCoordWorkspaceStructureUsesChatLandmarksAndOneAttentionRegion(t *testin
 	for _, want := range []string{
 		`class="coord-appbar"`,
 		`class="coord-sidebar coord-room-rail"`,
-		`class="coord-message coord-message-group {{if .GroupStart}}`,
+		`class="coord-message coord-message-group{{if .MentionsViewer}} coord-message-mentioned{{end}} {{if .GroupStart}}`,
 		`class="coord-message-actions coord-message-tools"`,
 	} {
 		if !strings.Contains(template, want) {
@@ -1070,7 +1070,9 @@ func TestCoordLiveBadgeAndMobileToolbarHaveStableCompactContracts(t *testing.T) 
 		t.Fatal(err)
 	}
 	css := string(cssBytes)
-	live := coordCSSRule(t, css, `.coord-live-status`)
+	// Desktop: the badge is a status row in the layout flow. Only the mobile
+	// dot floats, and it never takes pointer events.
+	live := coordCSSRule(t, css[strings.Index(css, `@media (max-width: 700px)`):], `.coord-live-status:not(.coord-nojs-status)`)
 	for _, want := range []string{
 		`right: max(.7rem, env(safe-area-inset-right))`,
 		`bottom: max(.7rem, env(safe-area-inset-bottom))`,
@@ -1102,8 +1104,8 @@ func TestCoordMobilePolishKeepsConversationDenseAndStatusOutOfTheWay(t *testing.
 	}
 	for _, want := range []string{
 		`coord-nojs-status`,
-		`placeholder="2026-09-18T18:30:00Z"`,
-		`Datum, Uhrzeit und Zeitzone`,
+		`type="datetime-local"`,
+		`Zeit in {{.Zone}}`,
 		`class="coord-mobile-fallback coord-skip-conversation"`,
 		`Braucht dich <small>alle Räume</small>`,
 		`{{.Attention}} offen`,
@@ -1343,8 +1345,8 @@ func TestCoordTouchTargetsPreserveNativeDetailsMarker(t *testing.T) {
 
 func TestCoordInspectorLinksAndAttentionButtonsUseIntentionalFlatStates(t *testing.T) {
 	css := string(mustReadEmbedded(t, "static/app.css"))
-	links := coordCSSRule(t, css, `.coord-context a`)
-	for _, want := range []string{`color: var(--coord-signal-dark);`, `text-decoration-color:`, `text-underline-offset:`} {
+	links := coordCSSRule(t, css, `:where(.coord-conversation, .coord-context) a:hover`)
+	for _, want := range []string{`color: var(--coord-link-hover);`, `text-decoration: underline;`, `text-underline-offset:`} {
 		if !strings.Contains(links, want) {
 			t.Errorf("inspector link treatment missing %q: %s", want, links)
 		}

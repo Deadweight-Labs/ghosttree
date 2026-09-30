@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
@@ -214,12 +215,14 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 		Room: coordRoomView{Key: activeRoom.Key, Kind: activeRoom.Kind,
 			Label: coordRoomLabel(activeRoom, humanMember(r), labels), URL: coordRoomURL(activeRoom.Key, "", 0), Active: true},
 		Messages:     buildCoordMessageViews(presentations, room, labels),
+		Zone:         time.Now().Format("MST"),
 		Participants: buildCoordParticipants(activeRoom, peers, memberships, current, labels),
 		Standing:     buildCoordStandingViews(standing, labels), HighWater: page.HighWater,
 		HasOlder: page.HasOlder, HasNewer: page.HasNewer,
 		CanLeave: activeRoom.Kind == store.RoomGroup,
 		FormID:   newCoordFormID(), StandingFormID: newCoordFormID(), Threads: buildCoordThreadViews(roomThreads),
 	}
+	markViewerMentions(detail.Messages, presentations, current.ID)
 	detail.ReplyTo, detail.ReplyTarget, err = coordReplyTarget(presentations, r.URL.Query().Get("reply_to"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -283,6 +286,7 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 			HighWater: threadPage.HighWater, HasOlder: threadPage.HasOlder, HasNewer: threadPage.HasNewer,
 			ClearReplyURL: coordThreadComposerURL(room, selectedID),
 		}
+		markViewerMentions(threadDetail.Messages, presentations, current.ID)
 		threadDetail.ReplyTo, threadDetail.ReplyTarget, parseErr = coordReplyTarget(presentations, r.URL.Query().Get("thread_reply_to"))
 		if parseErr != nil {
 			http.Error(w, parseErr.Error(), http.StatusBadRequest)
@@ -583,7 +587,7 @@ func (a *app) coordSend(w http.ResponseWriter, r *http.Request) {
 		ClientID:  newFormClientID(r),
 		Body:      body,
 		ReplyTo:   replyTo,
-		ExpiresAt: strings.TrimSpace(r.FormValue("expires_at")),
+		ExpiresAt: normalizeCoordExpiry(r.FormValue("expires_at")),
 	}
 	msg.Mentions = splitCoordPrincipals(r.Form["mentions"]...)
 	msg.Intent = strings.TrimSpace(r.FormValue("intent"))

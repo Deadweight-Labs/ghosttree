@@ -83,6 +83,7 @@ type coordRoomDetailView struct {
 	HasOlder, HasNewer     bool
 	CanManage, CanLeave    bool
 	FormID, StandingFormID string
+	Zone                   string
 	ReplyTo                int64
 	ReplyTarget            *coordReplyView
 	Threads                []coordThreadView
@@ -120,6 +121,7 @@ type coordMessageView struct {
 	Mentions                      []string
 	Refs                          []coordRefView
 	Delivery                      string
+	MentionsViewer                bool
 	ThreadURL                     string
 	ReplyURL                      string
 	CanPromote                    bool
@@ -404,11 +406,48 @@ func buildCoordMessageViews(messages []store.CoordMessagePresentation, roomKey s
 		if d.Stored > 0 {
 			parts = append(parts, fmt.Sprintf("%d gespeichert", d.Stored))
 		}
-		view.Delivery = strings.Join(parts, " · ")
+		// "stored" is where every message starts, so a message that is only
+		// stored carries no news; anything past it, or a recipient lagging
+		// behind others, is worth showing.
+		if d.Acked+d.Injected+d.Fetched > 0 {
+			view.Delivery = strings.Join(parts, " · ")
+		}
 		out = append(out, view)
 		previousAuthorID, previousAuthorKind = authorID, message.AuthorKind
 	}
 	return out
+}
+
+// markViewerMentions flags the messages that mention viewerID. views and
+// messages are index-aligned, as produced by buildCoordMessageViews.
+func markViewerMentions(views []coordMessageView, messages []store.CoordMessagePresentation, viewerID string) {
+	if viewerID == "" {
+		return
+	}
+	for i := range views {
+		if i >= len(messages) {
+			return
+		}
+		for _, mention := range messages[i].Mentions {
+			if mention == viewerID {
+				views[i].MentionsViewer = true
+				break
+			}
+		}
+	}
+}
+
+// normalizeCoordExpiry turns the browser's datetime-local value (no zone)
+// into RFC3339 UTC, reading it in the server's local zone, the same zone the
+// UI displays timestamps in. Anything else passes through for the store to judge.
+func normalizeCoordExpiry(raw string) string {
+	raw = strings.TrimSpace(raw)
+	for _, layout := range []string{"2006-01-02T15:04", "2006-01-02T15:04:05"} {
+		if t, err := time.ParseInLocation(layout, raw, time.Local); err == nil {
+			return t.UTC().Format(time.RFC3339)
+		}
+	}
+	return raw
 }
 
 func buildCoordThreadMessageViews(messages []store.CoordMessagePresentation, room string, threadID int64, labels map[string]string) []coordMessageView {
