@@ -29,6 +29,42 @@ type coordSidebarView struct {
 	Private   []coordRoomView
 }
 
+// BadgeCount is the one number shown on the narrow-layout rooms button:
+// everything that needs the viewer (open attention plus unread mentions) wins
+// over plain unread messages.
+func (s coordSidebarView) BadgeCount() int64 {
+	var needs, unread int64
+	for _, room := range s.Attention {
+		needs += room.Attention + room.Mentions
+		unread += room.Unread
+	}
+	if needs > 0 {
+		return needs
+	}
+	return unread
+}
+
+func (s coordSidebarView) BadgeLabel() string {
+	for _, room := range s.Attention {
+		if room.Attention+room.Mentions > 0 {
+			return "brauchen dich"
+		}
+	}
+	return "ungelesen"
+}
+
+// room finds a room by key across every sidebar section.
+func (s coordSidebarView) room(key string) (coordRoomView, bool) {
+	for _, section := range [][]coordRoomView{s.Machines, s.Projects, s.Private} {
+		for _, room := range section {
+			if room.Key == key {
+				return room, true
+			}
+		}
+	}
+	return coordRoomView{}, false
+}
+
 type coordRoomView struct {
 	Key, Kind, Label, URL       string
 	Unread, Mentions, Attention int64
@@ -51,6 +87,8 @@ type coordRoomDetailView struct {
 	ReplyTarget            *coordReplyView
 	Threads                []coordThreadView
 	Thread                 *coordThreadDetailView
+	PrivateNote            string
+	PrivatePeers           string
 }
 
 type coordThreadView struct {
@@ -111,6 +149,10 @@ type coordParticipantView struct {
 	Manager, Current                                bool
 }
 
+// coordParticipantUnknown is the neutral value for a state nobody reported.
+// It is the normal case and says nothing about idleness.
+const coordParticipantUnknown = "unbekannt"
+
 type coordAttentionActionView struct{ Value, Label string }
 
 type coordAttentionView struct {
@@ -118,6 +160,8 @@ type coordAttentionView struct {
 	RecipientID, RecipientLabel, Reason, State, Body, URL, RoomKey string
 	CSRFToken                                                      string
 	Incoming, CanWithdraw                                          bool
+	SenderLabel, RoomLabel                                         string
+	Private                                                        bool
 	CoordinationOnlyApproval                                       bool
 	Actions                                                        []coordAttentionActionView
 }
@@ -193,6 +237,33 @@ func buildCoordAttentionViews(items []store.AttentionItem, csrfToken string, lab
 		}
 	}
 	return incoming, outgoing
+}
+
+// annotateCoordAttention names sender and origin room on each card and marks
+// cards from direct or group rooms as private. Only rooms the viewer belongs
+// to reach this point: CoordAccess.Attention drops every item whose
+// destination the viewer cannot read.
+func annotateCoordAttention(views []coordAttentionView, items []store.AttentionItem, sidebar coordSidebarView, labels map[string]string) {
+	byID := make(map[int64]store.AttentionItem, len(items))
+	for _, item := range items {
+		byID[item.ID] = item
+	}
+	for i := range views {
+		item := byID[views[i].ID]
+		views[i].SenderLabel = coordIdentityLabel(item.SenderID, labels)
+		if labels[item.SenderID] == "" {
+			views[i].SenderLabel = coordIdentityLabel(item.AuthorID, labels)
+		}
+		if room, ok := sidebar.room(item.HomeRoomKey); ok {
+			views[i].RoomLabel = room.Label
+			views[i].Private = room.Kind == store.RoomDirect || room.Kind == store.RoomGroup
+			if room.Kind == store.RoomDirect {
+				views[i].RoomLabel = "Direktnachricht"
+			}
+		} else {
+			views[i].RoomLabel = coordRoomLabel(store.CoordRoom{Key: item.HomeRoomKey}, "", labels)
+		}
+	}
 }
 
 func coordRoomURL(room, cursor string, sequence int64) string {
@@ -490,4 +561,15 @@ func coordDisplayTimestamp(raw string) string {
 		return raw
 	}
 	return parsed.In(time.Local).Format("02.01.2006, 15:04")
+}
+
+// coordJoinNames joins names as "A", "A und B" or "A, B und C".
+func coordJoinNames(names []string) string {
+	switch len(names) {
+	case 0:
+		return ""
+	case 1:
+		return names[0]
+	}
+	return strings.Join(names[:len(names)-1], ", ") + " und " + names[len(names)-1]
 }

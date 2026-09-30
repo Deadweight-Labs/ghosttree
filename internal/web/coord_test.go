@@ -1412,14 +1412,13 @@ func TestCoordWorkspaceRendersAuthorizedIdentityLabelsAndHonestPresence(t *testi
 	html := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room))
 	for _, want := range []string{
 		"robin (du)", "Build Agent", "Alex", "Erwähnt: Build Agent", "an Build Agent",
-		"Provider: codex", "Worktree: /worktrees/ui", "Branch: feat/ui",
-		"Erreichbarkeit: unbekannt", "Arbeitszustand: unbekannt",
+		"<span>codex</span>", `title="Worktree: /worktrees/ui"`, "<span>feat/ui</span>",
 	} {
 		if !strings.Contains(html, want) {
 			t.Errorf("identity/presence presentation missing %q", want)
 		}
 	}
-	for _, forbidden := range []string{"Erwähnt: sess-peer-secret", ">sess-peer-secret<", "an sess-peer-secret", "Top Secret", "Hidden Directory Agent"} {
+	for _, forbidden := range []string{"Erreichbarkeit: unbekannt", "Arbeitszustand: unbekannt", "Erwähnt: sess-peer-secret", ">sess-peer-secret<", "an sess-peer-secret", "Top Secret", "Hidden Directory Agent"} {
 		if strings.Contains(html, forbidden) {
 			t.Errorf("coordination UI leaked raw or unauthorized identity %q", forbidden)
 		}
@@ -2192,5 +2191,245 @@ func TestCoordHiddenAndNoScriptToolbarSurviveNarrowButtonRules(t *testing.T) {
 	}
 	if !strings.Contains(string(template), `class="coord-backdrop" data-coord-drawer-close hidden`) {
 		t.Error("backdrop must carry the hidden attribute")
+	}
+}
+
+// coordSidebarAndContextFixture legt einen Projektraum an, in dem robin eine
+// offene Frage aus einer privaten Direktnachricht mit bob hat.
+func coordPrivateAttentionFixture(t *testing.T) (srv *httptest.Server, st *store.Store, client *http.Client, project, direct string) {
+	t.Helper()
+	srv, st, client = signedIn(t)
+	if _, err := st.AddPerson("bob"); err != nil {
+		t.Fatal(err)
+	}
+	project = store.RoomKeyForProject("github.com/x/privacy")
+	materializeWebRoom(t, st, project)
+	materializeWebRoomFor(t, st, project, "person:2", "bob")
+	direct = store.RoomKeyForDirect([]string{"person:1", "person:2"})
+	robin := st.CoordinationFor(store.Principal{ID: "person:1", Label: "robin"}, "")
+	if err := robin.EnsureDirect(store.CoordRoom{Key: direct, Kind: store.RoomDirect, Members: []string{"person:1", "person:2"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AppendCoordMessage(store.CoordMessage{
+		DestinationKind: store.DestinationRoom, DestinationID: direct,
+		SenderExternalID: "person:2", AuthorPrincipalID: "person:2", AuthorKind: store.AuthorHuman,
+		ClientID: "dm-secret", Body: "Vertraulich: Staging-Token rotieren?", Intent: store.IntentQuestion,
+		Mentions: []string{"person:1"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return srv, st, client, project, direct
+}
+
+func TestCoordNeedsYouLeadsContextAndNamesSenderRoomAndPrivacy(t *testing.T) {
+	srv, _, client, project, _ := coordPrivateAttentionFixture(t)
+	page := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(project))
+	needs := strings.Index(page, "Braucht dich")
+	participants := strings.Index(page, "<h2>Teilnehmende</h2>")
+	threads := strings.Index(page, "<h2>Aufgaben-Threads</h2>")
+	if needs < 0 || participants < 0 || threads < 0 || needs > participants || needs > threads {
+		t.Fatalf("Braucht dich must open the context: needs=%d threads=%d participants=%d", needs, threads, participants)
+	}
+	start := strings.Index(page, `class="coord-attention-card`)
+	if start < 0 {
+		t.Fatal("no attention card rendered")
+	}
+	card := page[start : start+strings.Index(page[start:], "</article>")]
+	for _, want := range []string{"von bob", "bob", `class="coord-private-mark"`, "Privat"} {
+		if !strings.Contains(card, want) {
+			t.Errorf("private attention card missing %q: %s", want, card)
+		}
+	}
+	if !strings.Contains(card, "coord-attention-origin") {
+		t.Errorf("card must carry an origin line: %s", card)
+	}
+}
+
+func TestCoordAttentionCardOfProjectRoomHasNoPrivateMark(t *testing.T) {
+	srv, st, client := signedIn(t)
+	room := store.RoomKeyForProject("github.com/x/public-card")
+	materializeWebRoom(t, st, room)
+	if _, err := st.AppendCoordMessage(store.CoordMessage{
+		DestinationKind: store.DestinationRoom, DestinationID: room,
+		SenderExternalID: "reviewer", AuthorPrincipalID: "person:2", AuthorKind: store.AuthorHuman,
+		ClientID: "q", Body: "Offene Frage", Intent: store.IntentQuestion, Mentions: []string{"person:1"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	page := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room))
+	if strings.Contains(page, `class="coord-private-mark"`) {
+		t.Error("project room card must not be marked private")
+	}
+	if !strings.Contains(page, "public-card") || !strings.Contains(page, "coord-attention-origin") {
+		t.Error("card must name its origin room")
+	}
+}
+
+// Privacy: the attention list is ACL-filtered (store.CoordAccess.Attention
+// runs canReadTx per item). A signed-in non-member must not see the DM card,
+// its text, or the DM room anywhere, and must not enter it by URL.
+func TestCoordPrivateDirectAttentionIsInvisibleToNonMembers(t *testing.T) {
+	srv, st, _, project, direct := coordPrivateAttentionFixture(t)
+	carolToken, err := st.AddPerson("carol")
+	if err != nil {
+		t.Fatal(err)
+	}
+	jar, _ := cookiejar.New(nil)
+	carol := &http.Client{Jar: jar, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	sameOriginPostForm(t, carol, srv.URL+"/ui/login", url.Values{"token": {carolToken}}).Body.Close()
+	materializeWebRoomFor(t, st, project, "person:3", "carol")
+
+	for _, target := range []string{
+		srv.URL + "/ui/coord",
+		srv.URL + "/ui/coord?room=" + url.QueryEscape(project),
+	} {
+		page := coordPageBody(t, carol, target)
+		for _, secret := range []string{"Vertraulich", "Staging-Token", "coord-private-mark", url.QueryEscape(direct)} {
+			if strings.Contains(page, secret) {
+				t.Errorf("%s leaked %q to a non-member", target, secret)
+			}
+		}
+	}
+	res, err := carol.Get(srv.URL + "/ui/coord?room=" + url.QueryEscape(direct))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode == http.StatusOK {
+		t.Fatalf("non-member entered the direct room, status=%d", res.StatusCode)
+	}
+}
+
+func materializeWebRoomFor(t *testing.T, st *store.Store, room, principal, person string) {
+	t.Helper()
+	if _, err := st.RegisterCoordAgent(store.CoordAgent{
+		ExternalID: "fixture:" + person + ":" + room, PrincipalID: principal, Person: person,
+		Provider: "test", DisplayName: "fixture " + person, RoomKey: room,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCoordDirectRoomShowsPrivateSignalInHeadAndComposer(t *testing.T) {
+	srv, _, client, project, direct := coordPrivateAttentionFixture(t)
+	page := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(direct))
+	head := page[strings.Index(page, `class="coord-conversation-head"`):]
+	head = head[:strings.Index(head, "</header>")]
+	if !strings.Contains(head, "Privat · nur du und bob") {
+		t.Errorf("conversation head lacks the private signal: %s", head)
+	}
+	composer := page[strings.Index(page, `class="coord-composer"`):]
+	composer = composer[:strings.Index(composer, "</form>")]
+	if !strings.Contains(composer, `class="coord-private-hint"`) || !strings.Contains(composer, "bob") {
+		t.Errorf("composer lacks the private hint: %s", composer)
+	}
+	other := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(project))
+	if strings.Contains(other, "Privat · nur du") || strings.Contains(other, `class="coord-private-hint"`) {
+		t.Error("project rooms must not carry the private signal")
+	}
+}
+
+func TestCoordSidebarShowsOneActiveRowAndSplitCounters(t *testing.T) {
+	srv, st, client := signedIn(t)
+	room := store.RoomKeyForProject("github.com/x/counters")
+	materializeWebRoom(t, st, room)
+	if _, err := st.AppendCoordMessage(store.CoordMessage{
+		DestinationKind: store.DestinationRoom, DestinationID: room,
+		SenderExternalID: "reviewer", AuthorPrincipalID: "person:2", AuthorKind: store.AuthorHuman,
+		ClientID: "q", Body: "Bitte", Intent: store.IntentQuestion, Mentions: []string{"person:1"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	page := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room))
+	rail := page[strings.Index(page, `id="coord-rooms"`):]
+	rail = rail[:strings.Index(rail, `class="coord-start"`)]
+	if got := strings.Count(rail, `aria-current="page"`); got != 1 {
+		t.Errorf("sidebar marks %d rows as current, want exactly 1", got)
+	}
+	if strings.Contains(rail, "@1") {
+		t.Error("mention counter must not use the cryptic @1 form")
+	}
+	for _, want := range []string{`class="coord-room-name" title="github.com/x/counters"`, `class="coord-room-counts"`, "1 offen", "1 @"} {
+		if !strings.Contains(rail, want) {
+			t.Errorf("sidebar row missing %q", want)
+		}
+	}
+}
+
+func TestCoordSidebarCSSKeepsCountersOnOneLineAndEllipsizesNames(t *testing.T) {
+	raw, err := files.ReadFile("static/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	css := string(raw)
+	counts := coordCSSRule(t, css, "\n.coord-room-counts {")
+	if !strings.Contains(counts, "white-space: nowrap") || !strings.Contains(counts, "flex: 0 0 auto") {
+		t.Errorf("counter column must not wrap or shrink: %q", counts)
+	}
+	name := coordCSSRule(t, css, "\n.coord-room-name {")
+	for _, want := range []string{"text-overflow: ellipsis", "white-space: nowrap", "overflow: hidden", "min-width: 0"} {
+		if !strings.Contains(name, want) {
+			t.Errorf("room name must ellipsize, missing %q in %q", want, name)
+		}
+	}
+}
+
+func TestCoordParticipantsHideUnknownStatesButKeepKnownOnes(t *testing.T) {
+	srv, st, client := signedIn(t)
+	room := store.RoomKeyForProject("github.com/x/participants")
+	if _, err := st.RegisterCoordAgent(store.CoordAgent{
+		ExternalID: "sess-a", PrincipalID: "person:1", Person: "robin", Provider: "claude",
+		DisplayName: "Build Agent", RoomKey: room, Branch: "feat/ui", Worktree: "/wt/ui",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	page := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room))
+	list := page[strings.Index(page, `class="coord-participants"`):]
+	list = list[:strings.Index(list, "</ul>")]
+	for _, gone := range []string{"unbekannt", "Erreichbarkeit", "Arbeitszustand", "idle", "untätig"} {
+		if strings.Contains(list, gone) {
+			t.Errorf("participants must not print %q for unobserved state", gone)
+		}
+	}
+	for _, want := range []string{"Build Agent", "claude", "feat/ui"} {
+		if !strings.Contains(list, want) {
+			t.Errorf("compact participant line lost %q", want)
+		}
+	}
+	template, _ := files.ReadFile("templates/coord.html")
+	if !strings.Contains(string(template), `Erreichbarkeit: {{.Reachability}}`) || !strings.Contains(string(template), `ne .Reachability "unbekannt"`) {
+		t.Error("known reachability must still be rendered, only unknown is hidden")
+	}
+}
+
+func TestCoordRoomsToggleCarriesTotalSignalWithAccessibleName(t *testing.T) {
+	srv, st, client := signedIn(t)
+	room := store.RoomKeyForProject("github.com/x/badge")
+	materializeWebRoom(t, st, room)
+	empty := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room))
+	if strings.Contains(empty, `class="coord-count"`) {
+		t.Error("badge must be absent when nothing needs attention")
+	}
+	if !strings.Contains(empty, "data-coord-rooms-count") {
+		t.Error("badge hook must exist even when empty so live updates can fill it")
+	}
+	if _, err := st.AppendCoordMessage(store.CoordMessage{
+		DestinationKind: store.DestinationRoom, DestinationID: room,
+		SenderExternalID: "reviewer", AuthorPrincipalID: "person:2", AuthorKind: store.AuthorHuman,
+		ClientID: "q", Body: "Bitte", Intent: store.IntentQuestion, Mentions: []string{"person:1"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	page := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room))
+	toggle := page[strings.Index(page, `data-coord-drawer-target="coord-rooms"`):]
+	toggle = toggle[:strings.Index(toggle, "</button>")]
+	for _, want := range []string{`class="coord-count"`, "brauchen dich", "data-coord-rooms-count"} {
+		if !strings.Contains(toggle, want) {
+			t.Errorf("rooms toggle missing %q: %s", want, toggle)
+		}
+	}
+	js, _ := files.ReadFile("static/app.js")
+	if !strings.Contains(string(js), "[data-coord-rooms-count]") {
+		t.Error("live refresh must replace the rooms badge")
 	}
 }

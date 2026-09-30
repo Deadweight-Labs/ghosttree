@@ -252,6 +252,7 @@ html.coord-enhanced body:has(> .coord-workspace) {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  min-width: 0;
   min-height: 2.25rem;
   gap: var(--coord-gap-2);
   padding: .38rem .5rem;
@@ -262,15 +263,29 @@ html.coord-enhanced body:has(> .coord-workspace) {
   overflow-wrap: anywhere;
 }
 
-.coord-attention-region a { align-items: flex-start; }
-.coord-attention-region a > span { color: var(--coord-chrome-muted); font-size: var(--coord-text-label); text-align: right; }
+.coord-attention-region a { flex-direction: column; align-items: stretch; gap: 0; text-align: left; }
+.coord-attention-region a > .coord-room-counts { color: var(--coord-chrome-muted); font-size: var(--coord-text-label); text-align: left; }
+
+/* Room name gives way (ellipsis, full name in title); the counter column never wraps. */
+.coord-room-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.coord-room-counts {
+  flex: 0 0 auto;
+  text-align: right;
+  white-space: nowrap;
+}
 
 .coord-attention-region a:hover,
 .coord-room-section a:hover {
   background: var(--coord-chrome-raised);
 }
 
-.coord-attention-region a[aria-current="page"],
 .coord-room-section a[aria-current="page"] {
   border-left-color: #4f8cff;
   background: var(--coord-chrome-active);
@@ -684,6 +699,8 @@ html.coord-enhanced body:has(> .coord-workspace) {
 
 .coord-participants li { display: flex; gap: var(--coord-gap-3); }
 .coord-participants small { display: block; color: var(--coord-muted); font-size: var(--coord-text-meta); }
+.coord-participant-meta { display: flex; flex-wrap: wrap; gap: 0 var(--coord-gap-1); }
+.coord-participant-meta > span + span::before { content: "· "; }
 
 .coord-avatar {
   display: grid;
@@ -719,6 +736,23 @@ html.coord-enhanced body:has(> .coord-workspace) {
 
 .coord-attention-card header { font-size: .76rem; }
 .coord-attention-card p { margin: .3rem 0; font-size: .8rem; }
+.coord-attention-card p.coord-attention-origin { margin: .2rem 0 0; color: var(--coord-muted); font-size: var(--coord-text-meta); }
+.coord-private-mark { color: var(--coord-ink); font-weight: 750; text-transform: uppercase; letter-spacing: .04em; font-size: var(--coord-text-micro); }
+.coord-private-note { margin: .05rem 0 0; color: var(--coord-muted); font-size: var(--coord-text-meta); }
+.coord-private-hint { margin: 0; padding: .2rem 0 0; color: var(--coord-muted); font-size: var(--coord-text-meta); }
+.coord-count {
+  display: inline-block;
+  min-width: 1.2rem;
+  margin-left: var(--coord-gap-1);
+  padding: 0 .3rem;
+  border-radius: var(--coord-radius-sm);
+  background: var(--coord-signal);
+  color: var(--coord-conversation-raised);
+  font-size: var(--coord-text-meta);
+  font-weight: 700;
+  line-height: 1.3;
+  text-align: center;
+}
 .coord-attention-card form { display: flex; flex-wrap: wrap; gap: .25rem; margin-top: .35rem; }
 .coord-attention-card button {
   display: inline-flex;
@@ -869,6 +903,8 @@ html:not(.coord-enhanced) .coord-drawer-toggle { display: none !important; }
     align-items: center;
     min-height: 2.75rem;
   }
+
+  .coord-attention-region a { display: flex; align-items: stretch; }
 
   .coord-workspace summary {
     min-height: 2.75rem;

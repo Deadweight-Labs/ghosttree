@@ -53,6 +53,7 @@ type AttentionItem struct {
 	Sequence        int64  `json:"sequence,omitempty"`
 	Body            string `json:"body,omitempty"`
 	AuthorID        string `json:"author_id,omitempty"`
+	SenderID        string `json:"sender_id,omitempty"`
 	HomeRoomKey     string `json:"home_room_key,omitempty"`
 	IsRecipient     bool   `json:"is_recipient,omitempty"`
 	CanWithdraw     bool   `json:"can_withdraw,omitempty"`
@@ -155,6 +156,7 @@ func (a CoordAccess) Attention() ([]AttentionItem, error) {
 		} else {
 			candidate.item.HomeRoomKey = candidate.item.DestinationID
 		}
+		candidate.item.SenderID = candidate.sender
 		candidate.item.IsRecipient = candidate.item.RecipientID == actor
 		candidate.item.CanWithdraw = candidate.item.AuthorID == a.Principal.ID || candidate.sender == actor
 		if candidate.item.State == AttentionOpen && expiredAt(candidate.expiresAt, nowTS) {

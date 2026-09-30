@@ -123,10 +123,28 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 	}
 	current := browserPrincipal(r)
 	labels := coordIdentityLabels(current, recipients)
-	incomingAttention, outgoingAttention := buildCoordAttentionViews(attention, csrfOf(r), labels)
+	// Agents that wrote an attention item are named through the peers of the
+	// room it came from; Peers is ACL-checked, so this adds no hidden identity.
+	attentionLabels := coordIdentityLabels(current, recipients)
+	seenRooms := map[string]bool{}
+	for _, item := range attention {
+		if item.HomeRoomKey == "" || seenRooms[item.HomeRoomKey] {
+			continue
+		}
+		seenRooms[item.HomeRoomKey] = true
+		if peers, err := a.browserCoord(r).Peers(item.HomeRoomKey, ""); err == nil {
+			for id, label := range coordIdentityLabels(current, nil, peers...) {
+				attentionLabels[id] = label
+			}
+		}
+	}
+	incomingAttention, outgoingAttention := buildCoordAttentionViews(attention, csrfOf(r), attentionLabels)
+	sidebar := buildCoordSidebar(summaries, humanMember(r), room, labels)
+	annotateCoordAttention(incomingAttention, attention, sidebar, attentionLabels)
+	annotateCoordAttention(outgoingAttention, attention, sidebar, attentionLabels)
 	view := coordPageView{
 		EventCursor:       eventCursor,
-		Sidebar:           buildCoordSidebar(summaries, humanMember(r), room, labels),
+		Sidebar:           sidebar,
 		Recipients:        buildCoordRecipientViews(recipients),
 		IncomingAttention: incomingAttention,
 		OutgoingAttention: outgoingAttention,
@@ -286,6 +304,19 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 			threadDetail.NewerURL = coordThreadPageURL(room, selectedID, "thread_after", threadAfter)
 		}
 		detail.Thread = threadDetail
+	}
+	if activeRoom.Kind == store.RoomDirect || activeRoom.Kind == store.RoomGroup {
+		var peers []string
+		for _, participant := range detail.Participants {
+			if !participant.Current {
+				peers = append(peers, participant.Label)
+			}
+		}
+		detail.PrivatePeers = coordJoinNames(peers)
+		detail.PrivateNote = "Privat · nur du"
+		if detail.PrivatePeers != "" {
+			detail.PrivateNote += " und " + detail.PrivatePeers
+		}
 	}
 	for _, membership := range memberships {
 		if membership.PrincipalID == humanMember(r) && membership.LeftAt == "" && membership.Manager {

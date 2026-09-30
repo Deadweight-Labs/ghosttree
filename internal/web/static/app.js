@@ -638,7 +638,10 @@
     ".coord-thread-messages",
   ];
   const coordEventSurfaces = (event, room, thread) => {
-    const selectors = new Set(["[data-coord-sidebar-dynamic]"]);
+    const selectors = new Set([
+      "[data-coord-sidebar-dynamic]",
+      "[data-coord-rooms-count]",
+    ]);
     if (event.kind === "attention") {
       selectors.add("[data-coord-attention-details]");
     }
