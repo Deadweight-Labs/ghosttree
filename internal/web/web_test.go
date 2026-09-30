@@ -127,7 +127,7 @@ func TestAppChromeKeepsEveryGlobalDestinationAndLogoutAvailable(t *testing.T) {
 			`href="/ui/coord"`,
 			`href="/ui/context"`,
 			`class="app-nav-more"`,
-			`<summary>More</summary>`,
+			`<summary>Mehr</summary>`,
 			`method="post" action="/ui/logout"`,
 			`name="csrf_token"`,
 			`>alice</button>`,
@@ -227,6 +227,20 @@ func TestAppChromeUsesNativeMobileDisclosureWithoutWrappingTheBar(t *testing.T) 
 		if !strings.Contains(css, want) {
 			t.Errorf("mobile app chrome CSS missing %q", want)
 		}
+	}
+}
+
+func TestAppChromeUsesGermanMobileOverflowLabel(t *testing.T) {
+	templateBytes, err := files.ReadFile("templates/pages.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := string(templateBytes)
+	if !strings.Contains(template, `<summary>Mehr</summary>`) || !strings.Contains(template, `aria-label="Weitere Ziele"`) {
+		t.Fatal("mobile overflow navigation must use consistent German labels")
+	}
+	if strings.Contains(template, `<summary>More</summary>`) {
+		t.Fatal("mobile overflow navigation retains the English placeholder label")
 	}
 }
 

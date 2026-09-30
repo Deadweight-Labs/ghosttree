@@ -1084,6 +1084,54 @@ func TestCoordLiveBadgeAndMobileToolbarHaveStableCompactContracts(t *testing.T) 
 	}
 }
 
+func TestCoordMobilePolishKeepsConversationDenseAndStatusOutOfTheWay(t *testing.T) {
+	templateBytes, err := files.ReadFile("templates/coord.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := string(templateBytes)
+	for _, unwanted := range []string{
+		`class="coord-kicker">Zusammenarbeit, die nachvollziehbar bleibt`,
+		`Gültig bis (RFC3339)`,
+	} {
+		if strings.Contains(template, unwanted) {
+			t.Errorf("coordination UI retains editorial or implementation-facing copy %q", unwanted)
+		}
+	}
+	for _, want := range []string{
+		`coord-nojs-status`,
+		`placeholder="2026-09-18T18:30:00Z"`,
+		`Datum, Uhrzeit und Zeitzone`,
+		`class="coord-mobile-fallback coord-skip-conversation"`,
+		`Braucht dich <small>alle Räume</small>`,
+		`{{.Attention}} offen`,
+		`{{.Unread}} neu`,
+	} {
+		if !strings.Contains(template, want) {
+			t.Errorf("coordination polish missing %q", want)
+		}
+	}
+
+	cssBytes, err := files.ReadFile("static/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	css := string(cssBytes)
+	for _, selector := range []string{
+		`.coord-context > .coord-context-thread`,
+		`.coord-mentions:not(:has(input))`,
+		`.coord-live-status:not(.coord-nojs-status)`,
+		`.coord-nojs-status`,
+	} {
+		if !strings.Contains(css, selector) {
+			t.Errorf("coordination polish CSS missing %q", selector)
+		}
+	}
+	if !strings.Contains(css, "padding: 0;\n    border: 0;\n    background: transparent;") {
+		t.Fatal("mobile message actions must not render as repeated bordered cards")
+	}
+}
+
 func TestCoordThreadListSeparatesTitleFromStatus(t *testing.T) {
 	cssBytes, err := files.ReadFile("static/app.css")
 	if err != nil {

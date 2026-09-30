@@ -559,6 +559,7 @@ html.coord-enhanced body:has(> .coord-workspace) {
 .coord-compose-more > summary { width: max-content; min-height: 2.25rem; padding: .35rem 0; color: var(--coord-muted); cursor: pointer; }
 .coord-compose-options label { display: block; }
 .coord-mentions { display: flex; flex-wrap: wrap; }
+.coord-mentions:not(:has(input)) { display: none; }
 
 .coord-conversation input,
 .coord-conversation select,
@@ -692,6 +693,7 @@ html.coord-enhanced body:has(> .coord-workspace) {
 }
 
 .coord-attention-list > h2 { margin: .2rem 0; }
+.coord-attention-list > h2 small { color: var(--coord-muted); font-size: .65rem; font-weight: 650; letter-spacing: 0; text-transform: none; }
 
 .coord-attention-card {
   padding: .55rem 0;
@@ -727,6 +729,8 @@ html.coord-enhanced body:has(> .coord-workspace) {
   padding: .75rem .8rem;
   overflow: hidden;
 }
+
+.coord-context > .coord-context-thread { padding: .75rem .8rem; }
 
 .coord-context-thread > header { padding-bottom: .5rem; border-bottom: 1px solid #cec8bc; }
 .coord-context-thread > header h2 { font-size: .95rem; letter-spacing: 0; text-transform: none; }
@@ -828,6 +832,10 @@ html.coord-enhanced body:has(> .coord-workspace) {
     right: auto;
     opacity: 1;
     pointer-events: auto;
+    gap: .55rem;
+    padding: 0;
+    border: 0;
+    background: transparent;
   }
 
   .coord-workspace button,
@@ -997,6 +1005,30 @@ html.coord-enhanced body:has(> .coord-workspace) {
     right: auto;
     opacity: 1;
     pointer-events: auto;
+    gap: .55rem;
+    margin-top: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+  }
+  .coord-message-action { padding-inline: 0; }
+  .coord-live-status:not(.coord-nojs-status) {
+    width: .65rem;
+    height: .65rem;
+    padding: 0;
+    overflow: hidden;
+    border: 0;
+    border-radius: 50%;
+    background: var(--coord-success);
+    color: transparent;
+  }
+  .coord-nojs-status {
+    position: static;
+    max-width: none;
+    padding: .55rem .7rem;
+    border-width: 1px 0 0;
+    border-radius: 0;
+    text-align: center;
   }
   .coord-read-actions { overflow-x: auto; }
   .coord-composer {
