@@ -821,21 +821,42 @@ html.coord-enhanced body:has(> .coord-workspace) {
 .coord-attention-list {
   display: grid;
   gap: var(--coord-gap-1);
-  margin: .4rem 0 .8rem;
+  margin: .4rem 0 .5rem;
 }
 
 .coord-attention-list > h2 { margin: .2rem 0; }
 .coord-attention-list > h2 small { color: var(--coord-muted); font-size: var(--coord-text-micro); font-weight: 650; letter-spacing: 0; text-transform: none; }
+.coord-attention-list ul,
+.coord-attention-outgoing ul { display: grid; margin: 0; padding: 0; list-style: none; }
+
+.coord-attention-more > summary,
+.coord-attention-outgoing > summary {
+  min-height: 2.25rem;
+  color: var(--coord-link);
+  font-size: var(--coord-text-small);
+}
+
+.coord-attention-outgoing { margin: 0 0 .8rem; }
+.coord-attention-outgoing > summary { color: var(--coord-ink); font-weight: 700; }
+.coord-attention-outgoing > summary small { color: var(--coord-muted); font-size: var(--coord-text-meta); font-weight: 650; }
 
 .coord-attention-card {
-  padding: .55rem 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 .6rem;
+  padding: .4rem 0;
   border-bottom: 1px solid #cec8bc;
   overflow-wrap: anywhere;
 }
 
-.coord-attention-card header { font-size: .76rem; }
-.coord-attention-card p { margin: .3rem 0; font-size: .8rem; }
-.coord-attention-card p.coord-attention-origin { margin: .2rem 0 0; color: var(--coord-muted); font-size: var(--coord-text-meta); }
+.coord-attention-card p { flex-basis: 100%; margin: 0; font-size: .8rem; }
+.coord-attention-card p.coord-attention-origin { color: var(--coord-ink); font-size: var(--coord-text-small); }
+.coord-attention-row { display: contents; }
+.coord-attention-actions[open] { flex-basis: 100%; }
+.coord-attention-link { font-size: var(--coord-text-meta); }
+.coord-attention-actions > summary { min-height: 2rem; padding: .2rem 0; color: var(--coord-link); font-size: var(--coord-text-meta); }
+.coord-attention-actions .coord-note { margin: .1rem 0 .25rem; }
 .coord-private-mark { color: var(--coord-ink); font-weight: 750; text-transform: uppercase; letter-spacing: .04em; font-size: var(--coord-text-micro); }
 .coord-private-note { margin: .05rem 0 0; color: var(--coord-muted); font-size: var(--coord-text-meta); }
 .coord-private-hint { margin: 0; padding: .2rem 0 0; color: var(--coord-muted); font-size: var(--coord-text-meta); }
@@ -852,7 +873,8 @@ html.coord-enhanced body:has(> .coord-workspace) {
   line-height: 1.3;
   text-align: center;
 }
-.coord-attention-card form { display: flex; flex-wrap: wrap; gap: .25rem; margin-top: .35rem; }
+.coord-attention-card form { display: flex; flex-wrap: wrap; gap: .25rem; margin-top: 0; }
+.coord-attention-actions form { margin-top: .2rem; }
 .coord-attention-card button {
   display: inline-flex;
   align-items: center;
@@ -921,6 +943,7 @@ html.coord-enhanced body:has(> .coord-workspace) {
   border-top: 1px solid #777f7a;
   background: #202422;
   color: #fff;
+  font-size: var(--coord-text-small);
 }
 
 .coord-action-status[data-error="true"] { border-color: #c35a54; background: #51211f; color: #fff; }
@@ -937,7 +960,6 @@ html.coord-enhanced body:has(> .coord-workspace) {
   border: 0 !important;
 }
 
-  font-size: var(--coord-text-small);
 .coord-backdrop {
   position: fixed;
   inset: 0;

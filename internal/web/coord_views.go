@@ -21,6 +21,23 @@ type coordPageView struct {
 	OutgoingAttention []coordAttentionView
 }
 
+const coordAttentionVisible = 3
+
+// IncomingHead is what "Braucht dich" shows at once; IncomingRest folds away.
+func (v coordPageView) IncomingHead() []coordAttentionView {
+	if len(v.IncomingAttention) <= coordAttentionVisible {
+		return v.IncomingAttention
+	}
+	return v.IncomingAttention[:coordAttentionVisible]
+}
+
+func (v coordPageView) IncomingRest() []coordAttentionView {
+	if len(v.IncomingAttention) <= coordAttentionVisible {
+		return nil
+	}
+	return v.IncomingAttention[coordAttentionVisible:]
+}
+
 type coordRecipientView struct{ ID, Label, Kind string }
 
 type coordSidebarView struct {
@@ -67,7 +84,9 @@ func (s coordSidebarView) room(key string) (coordRoomView, bool) {
 }
 
 type coordRoomView struct {
-	Key, Kind, Label, URL       string
+	Key, Kind, Label, URL string
+	// Name is what the sidebar shows; Label stays the full title.
+	Name                        string
 	Unread, Mentions, Attention int64
 	// NeedsYou counts each message once that mentions or awaits the viewer.
 	NeedsYou int64
@@ -165,10 +184,15 @@ type coordAttentionView struct {
 	RecipientID, RecipientLabel, Reason, State, Body, URL, RoomKey string
 	CSRFToken                                                      string
 	Incoming, CanWithdraw                                          bool
-	SenderLabel, RoomLabel                                         string
-	Private                                                        bool
-	CoordinationOnlyApproval                                       bool
-	Actions                                                        []coordAttentionActionView
+	SenderLabel, RoomLabel, RoomTitle                              string
+	ReasonLabel                                                    string
+	// Primary is the one action worth showing without a disclosure; More
+	// holds everything else behind "Aktionen".
+	Primary                  *coordAttentionActionView
+	More                     []coordAttentionActionView
+	Private                  bool
+	CoordinationOnlyApproval bool
+	Actions                  []coordAttentionActionView
 }
 
 func buildCoordSidebar(summaries []store.CoordRoomSummary, principalID, activeKey string, labels map[string]string) coordSidebarView {
@@ -181,6 +205,7 @@ func buildCoordSidebar(summaries []store.CoordRoomSummary, principalID, activeKe
 			Unread: summary.Unread, Mentions: summary.MentionUnread, Attention: summary.Attention, NeedsYou: summary.NeedsYou,
 			Active: summary.Room.Key == activeKey,
 		}
+		room.Name = coordShortRoomName(room.Kind, room.Label)
 		switch summary.Room.Kind {
 		case store.RoomMachine:
 			out.Machines = append(out.Machines, room)
@@ -226,7 +251,7 @@ func buildCoordAttentionViews(items []store.AttentionItem, csrfToken string, lab
 			case store.AttentionQuestion:
 				view.Actions = append(view.Actions, coordAttentionActionView{Value: store.AttentionActionAnswer, Label: "Beantwortet"})
 			case store.AttentionApproval:
-				view.Actions = append(view.Actions, coordAttentionActionView{Value: store.AttentionActionApprove, Label: "Zustimmen"}, coordAttentionActionView{Value: store.AttentionActionReject, Label: "Ablehnen"})
+				view.Actions = append(view.Actions, coordAttentionActionView{Value: store.AttentionActionApprove, Label: "Zustimmung vermerken"}, coordAttentionActionView{Value: store.AttentionActionReject, Label: "Ablehnung vermerken"})
 			case store.AttentionBlocker:
 				view.Actions = append(view.Actions, coordAttentionActionView{Value: store.AttentionActionResolve, Label: "Gelöst"})
 			case store.AttentionHandoff:
@@ -234,6 +259,8 @@ func buildCoordAttentionViews(items []store.AttentionItem, csrfToken string, lab
 			}
 			view.Actions = append(view.Actions, coordAttentionActionView{Value: store.AttentionActionDismiss, Label: "Verwerfen"})
 		}
+		view.ReasonLabel = coordAttentionReasonLabel(item.Reason)
+		view.Primary, view.More = splitCoordAttentionActions(item.Reason, view.Actions)
 		if view.Incoming {
 			incoming = append(incoming, view)
 		}
@@ -260,13 +287,14 @@ func annotateCoordAttention(views []coordAttentionView, items []store.AttentionI
 			views[i].SenderLabel = coordIdentityLabel(item.AuthorID, labels)
 		}
 		if room, ok := sidebar.room(item.HomeRoomKey); ok {
-			views[i].RoomLabel = room.Label
+			views[i].RoomLabel, views[i].RoomTitle = room.Name, room.Label
 			views[i].Private = room.Kind == store.RoomDirect || room.Kind == store.RoomGroup
 			if room.Kind == store.RoomDirect {
-				views[i].RoomLabel = "Direktnachricht"
+				views[i].RoomLabel, views[i].RoomTitle = "Direktnachricht", ""
 			}
 		} else {
-			views[i].RoomLabel = coordRoomLabel(store.CoordRoom{Key: item.HomeRoomKey}, "", labels)
+			full := coordRoomLabel(store.CoordRoom{Key: item.HomeRoomKey}, "", labels)
+			views[i].RoomLabel, views[i].RoomTitle = coordShortRoomName(coordRoomKindOf(item.HomeRoomKey), full), full
 		}
 	}
 }
@@ -632,4 +660,52 @@ func coordJoinNames(names []string) string {
 		return names[0]
 	}
 	return strings.Join(names[:len(names)-1], ", ") + " und " + names[len(names)-1]
+}
+
+// coordShortRoomName shows a project room as owner/repo. The host prefix
+// pushes the repo name out of a narrow sidebar; the full name stays in title.
+func coordShortRoomName(kind, name string) string {
+	if kind != store.RoomProject {
+		return name
+	}
+	parts := strings.Split(strings.Trim(name, "/"), "/")
+	if len(parts) <= 2 {
+		return name
+	}
+	return strings.Join(parts[len(parts)-2:], "/")
+}
+
+func coordRoomKindOf(key string) string {
+	if strings.HasPrefix(key, "project:") {
+		return store.RoomProject
+	}
+	return ""
+}
+
+func coordAttentionReasonLabel(reason string) string {
+	switch reason {
+	case store.AttentionQuestion:
+		return "Frage"
+	case store.AttentionApproval:
+		return "Freigabe"
+	case store.AttentionBlocker:
+		return "Blocker"
+	case store.AttentionHandoff:
+		return "Übergabe"
+	}
+	return reason
+}
+
+// splitCoordAttentionActions keeps a single unambiguous action inline. An
+// approval has two opposite outcomes and needs its explanation first, so it
+// and the dismissal stay behind the disclosure.
+func splitCoordAttentionActions(reason string, actions []coordAttentionActionView) (*coordAttentionActionView, []coordAttentionActionView) {
+	if len(actions) == 0 {
+		return nil, nil
+	}
+	if reason == store.AttentionApproval || actions[0].Value == store.AttentionActionDismiss {
+		return nil, actions
+	}
+	primary := actions[0]
+	return &primary, actions[1:]
 }
