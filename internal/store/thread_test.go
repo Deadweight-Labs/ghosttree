@@ -113,7 +113,7 @@ func TestSummaryCarriesItsSourceStateAndDoesNotReplaceTheHistory(t *testing.T) {
 	}
 
 	if _, err := s.PutThreadSummary(ThreadSummary{ThreadID: id,
-		Body: "Stand: additive Änderungen, nextCursor optional",
+		Body:          "Stand: additive Änderungen, nextCursor optional",
 		OpenQuestions: "Was passiert mit Clients, die items strikt validieren?",
 		CoversThrough: 40}); err != nil {
 		t.Fatalf("summary: %v", err)
