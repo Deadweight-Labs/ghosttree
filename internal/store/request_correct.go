@@ -56,6 +56,12 @@ func (s *Store) UpdateRequest(id int64, patch map[string]string, person, reason 
 		}
 	}
 
+	if s.writer != nil {
+		return queueWrite(s, []any{id, patch, person, reason}, func(d *Store, p []any) error {
+			return d.UpdateRequest(p[0].(int64), p[1].(map[string]string), p[2].(string), p[3].(string))
+		})
+	}
+
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -109,6 +115,12 @@ func (s *Store) RemoveRequestRelation(relationID int64, person, reason string) e
 		return requestdomain.NewRuleError("removal_reason_required",
 			"removing a relation has to say why", "pass the reason the edge was wrong", nil)
 	}
+	if s.writer != nil {
+		return queueWrite(s, []any{relationID, person, reason}, func(d *Store, p []any) error {
+			return d.RemoveRequestRelation(p[0].(int64), p[1].(string), p[2].(string))
+		})
+	}
+
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err

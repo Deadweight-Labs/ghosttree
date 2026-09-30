@@ -4,11 +4,9 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"io"
 	"sort"
-	"strings"
 	"unicode/utf8"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/snapshot"
@@ -51,6 +49,7 @@ type snapshotCollector struct {
 	limits       snapshot.Limits
 	entries      []snapshot.Entry
 	payloadBytes int64
+	logicalBytes int64
 }
 
 func newSnapshotCollector(limits snapshot.Limits) *snapshotCollector {
@@ -72,32 +71,20 @@ func (c *snapshotCollector) add(domain, key string, encode func(io.Writer) error
 		return &snapshot.RuleError{Code: "snapshot_invalid_utf8"}
 	}
 
-	capacity := c.limits.MaxEntryPayloadBytes
-	if c.limits.MaxSnapshotPayloadBytes >= 0 {
-		if c.payloadBytes > c.limits.MaxSnapshotPayloadBytes {
-			return &snapshot.RuleError{Code: "snapshot_limit_exceeded"}
-		}
-		remaining := c.limits.MaxSnapshotPayloadBytes - c.payloadBytes
-		if capacity < 0 || remaining < capacity {
-			capacity = remaining
-		}
+	budget, err := c.entryBudget(domain, key)
+	if err != nil {
+		return err
 	}
 	limitErr := &snapshot.RuleError{Code: "snapshot_limit_exceeded"}
-	buffer := newBoundedPayloadBuffer(capacity, limitErr)
+	buffer := newBoundedPayloadBuffer(budget.remaining, limitErr)
 	if err := encode(buffer); err != nil {
-		var ruleErr *snapshot.RuleError
-		if errors.As(err, &ruleErr) {
-			return ruleErr
-		}
-		code := "snapshot_invalid_payload"
-		if strings.Contains(err.Error(), "UTF-8") {
-			code = "snapshot_invalid_utf8"
-		}
-		return &snapshot.RuleError{Code: code}
+		return snapshotCaptureError(err)
 	}
-	raw := append([]byte(nil), buffer.Bytes()...)
+	raw := make([]byte, buffer.Len())
+	copy(raw, buffer.Bytes())
 	c.entries = append(c.entries, snapshot.Entry{Domain: domain, Key: key, Payload: raw, PayloadDigest: snapshot.EntryDigest(raw), PayloadSize: int64(len(raw))})
 	c.payloadBytes += int64(len(raw))
+	c.logicalBytes += int64(len(raw)) + int64(len(domain)) + int64(len(key)) + 32
 	return nil
 }
 
@@ -306,6 +293,16 @@ func captureKnowledge(ctx context.Context, q snapshotQueryer, project string, co
 			return err
 		}
 		p.Person, p.ConfirmedBy, p.LastModifiedBy = actor(pn, pl), actor(cn, cl), actor(mn, ml)
+		p.ActivationPaths = []string{}
+		p.Evidence = []snapshotEvidenceV1{}
+		budget, err := collector.entryBudget("knowledge", fmt.Sprint(p.ID))
+		if err != nil {
+			return err
+		}
+		if err := budget.add(p, false); err != nil {
+			return err
+		}
+
 		pr, err := q.QueryContext(ctx, `SELECT pattern FROM instruction_activation_path WHERE knowledge_id=? ORDER BY pattern`, p.ID)
 		if err != nil {
 			return err
@@ -313,6 +310,10 @@ func captureKnowledge(ctx context.Context, q snapshotQueryer, project string, co
 		for pr.Next() {
 			var v string
 			if err := pr.Scan(&v); err != nil {
+				pr.Close()
+				return err
+			}
+			if err := budget.add(v, len(p.ActivationPaths) > 0); err != nil {
 				pr.Close()
 				return err
 			}
@@ -338,6 +339,10 @@ func captureKnowledge(ctx context.Context, q snapshotQueryer, project string, co
 				return err
 			}
 			e.SessionRef = fmt.Sprintf("session:%d", sid)
+			if err := budget.add(e, len(p.Evidence) > 0); err != nil {
+				er.Close()
+				return err
+			}
 			p.Evidence = append(p.Evidence, e)
 		}
 		if err := er.Err(); err != nil {
@@ -462,7 +467,11 @@ func captureRequests(ctx context.Context, q snapshotQueryer, project string, col
 			return err
 		}
 		p.Person = actor(pid, label)
-		if err := captureRequestLists(ctx, q, &p); err != nil {
+		budget, err := collector.entryBudget("request", fmt.Sprint(p.ID))
+		if err != nil {
+			return err
+		}
+		if err := captureRequestLists(ctx, q, &p, budget); err != nil {
 			return err
 		}
 		if err := collector.add("request", fmt.Sprint(p.ID), func(w io.Writer) error {
@@ -474,7 +483,16 @@ func captureRequests(ctx context.Context, q snapshotQueryer, project string, col
 	return rows.Err()
 }
 
-func captureRequestLists(ctx context.Context, q snapshotQueryer, p *requestPayloadV1) error {
+func captureRequestLists(ctx context.Context, q snapshotQueryer, p *requestPayloadV1, budget *snapshotCaptureBudget) error {
+	p.Criteria = []requestCriterionV1{}
+	p.Evidence = []requestEvidenceV1{}
+	p.Relations = []requestRelationV1{}
+	p.Activity = []requestActivityV1{}
+	p.Sightings = []requestSightingV1{}
+	p.Work = []requestWorkV1{}
+	if err := budget.add(p, false); err != nil {
+		return err
+	}
 	cr, err := q.QueryContext(ctx, `SELECT id,number,description,state,created_at,updated_at FROM request_criteria WHERE request_id=? ORDER BY number,id`, p.ID)
 	if err != nil {
 		return err
@@ -482,6 +500,11 @@ func captureRequestLists(ctx context.Context, q snapshotQueryer, p *requestPaylo
 	for cr.Next() {
 		var c requestCriterionV1
 		if err := cr.Scan(&c.ID, &c.Number, &c.Description, &c.State, &c.CreatedAt, &c.UpdatedAt); err != nil {
+			cr.Close()
+			return err
+		}
+		c.Evidence = []requestEvidenceV1{}
+		if err := budget.add(c, len(p.Criteria) > 0); err != nil {
 			cr.Close()
 			return err
 		}
@@ -500,6 +523,11 @@ func captureRequestLists(ctx context.Context, q snapshotQueryer, p *requestPaylo
 				return err
 			}
 			e.Person = actor(id, label)
+			if err := budget.add(e, len(c.Evidence) > 0); err != nil {
+				er.Close()
+				cr.Close()
+				return err
+			}
 			c.Evidence = append(c.Evidence, e)
 		}
 		if err := er.Err(); err != nil {
@@ -534,6 +562,10 @@ func captureRequestLists(ctx context.Context, q snapshotQueryer, p *requestPaylo
 			return err
 		}
 		e.Person = actor(id, label)
+		if err := budget.add(e, len(p.Evidence) > 0); err != nil {
+			er.Close()
+			return err
+		}
 		p.Evidence = append(p.Evidence, e)
 	}
 	if err := er.Err(); err != nil {
@@ -551,6 +583,10 @@ func captureRequestLists(ctx context.Context, q snapshotQueryer, p *requestPaylo
 	for rr.Next() {
 		var v requestRelationV1
 		if err := rr.Scan(&v.ID, &v.OtherRequestID, &v.KnowledgeID, &v.Kind, &v.ExternalRef, &v.CreatedAt); err != nil {
+			rr.Close()
+			return err
+		}
+		if err := budget.add(v, len(p.Relations) > 0); err != nil {
 			rr.Close()
 			return err
 		}
@@ -577,6 +613,10 @@ func captureRequestLists(ctx context.Context, q snapshotQueryer, p *requestPaylo
 			return err
 		}
 		v.Person = actor(id, label)
+		if err := budget.add(v, len(p.Activity) > 0); err != nil {
+			ar.Close()
+			return err
+		}
 		p.Activity = append(p.Activity, v)
 	}
 	if err := ar.Err(); err != nil {
@@ -599,6 +639,10 @@ func captureRequestLists(ctx context.Context, q snapshotQueryer, p *requestPaylo
 			return err
 		}
 		v.SessionRef = fmt.Sprintf("session:%d", sid)
+		if err := budget.add(v, len(p.Work) > 0); err != nil {
+			wr.Close()
+			return err
+		}
 		p.Work = append(p.Work, v)
 	}
 	if err := wr.Err(); err != nil {
@@ -621,6 +665,10 @@ func captureRequestLists(ctx context.Context, q snapshotQueryer, p *requestPaylo
 			return err
 		}
 		v.SessionRef = fmt.Sprintf("session:%d", sid)
+		if err := budget.add(v, len(p.Sightings) > 0); err != nil {
+			sr.Close()
+			return err
+		}
 		p.Sightings = append(p.Sightings, v)
 	}
 	if err := sr.Err(); err != nil {

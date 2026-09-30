@@ -13,6 +13,7 @@ import (
 	"runtime/debug"
 	"time"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/store"
 	"github.com/Deadweight-Labs/ghosttree/internal/storebench"
 )
 
@@ -26,7 +27,7 @@ func main() {
 func runCommand(args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("storebench", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	backendName := flags.String("backend", "current", "current or queued")
+	backendName := flags.String("backend", "current", "current, queued, or runtime")
 	dbPath := flags.String("db", "", "new SQLite database path")
 	presetName := flags.String("preset", "small", "production-sample, small, medium, or monorepo")
 	seed := flags.Uint64("seed", 1, "deterministic workload seed")
@@ -46,9 +47,31 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 	if flags.NArg() != 0 {
 		return fmt.Errorf("unexpected arguments: %v", flags.Args())
 	}
-	if *backendName != "current" && *backendName != "queued" {
+	if *backendName != "current" && *backendName != "queued" && *backendName != "runtime" {
 		return fmt.Errorf("unknown backend %q", *backendName)
 	}
+	runtimeConfig := store.DefaultWriterConfig()
+	if *backendName == "runtime" {
+		var gatherSet bool
+		flags.Visit(func(f *flag.Flag) {
+			switch f.Name {
+			case "queue-operations":
+				runtimeConfig.MaxOperations = *queueOperations
+			case "queue-bytes":
+				runtimeConfig.MaxBytes = *queueBytes
+			case "batch":
+				runtimeConfig.MaxBatch = *batch
+			case "read-connections":
+				runtimeConfig.ReadConnections = *readConnections
+			case "gather-window":
+				gatherSet = true
+			}
+		})
+		if gatherSet && *gatherWindow != 0 {
+			return fmt.Errorf("runtime writer has no gather window")
+		}
+	}
+
 	if *repetition <= 0 {
 		return fmt.Errorf("repetition must be positive")
 	}
@@ -85,6 +108,8 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 	switch *backendName {
 	case "current":
 		backend, err = storebench.OpenCurrentSQLite(path)
+	case "runtime":
+		backend, err = storebench.OpenRuntimeSQLite(path, runtimeConfig)
 	case "queued":
 		backend, err = storebench.OpenQueuedSQLite(path, storebench.QueueConfig{
 			MaxOperations: *queueOperations, MaxBytes: *queueBytes, MaxBatch: *batch,

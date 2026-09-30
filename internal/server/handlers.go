@@ -18,7 +18,7 @@ import (
 func (a *api) createSession(w http.ResponseWriter, r *http.Request) {
 	var s store.Session
 	if err := readJSON(r, &s); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
 	if s.Harness == "" || s.ExternalID == "" {
@@ -28,7 +28,7 @@ func (a *api) createSession(w http.ResponseWriter, r *http.Request) {
 	s.Scope = scope.CanonicalAxes(s.Scope)
 	id, err := a.st.UpsertSession(s)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
 	if s.Scope.Machine != "" {
@@ -47,11 +47,11 @@ func (a *api) appendChunks(w http.ResponseWriter, r *http.Request) {
 		Chunks []store.Chunk `json:"chunks"`
 	}
 	if err := readJSON(r, &body); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
 	if err := a.st.AppendChunks(id, body.Chunks); err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -60,7 +60,7 @@ func (a *api) appendChunks(w http.ResponseWriter, r *http.Request) {
 func (a *api) listSessions(w http.ResponseWriter, r *http.Request) {
 	sessions, err := a.st.ListSessions(axesFromQuery(r), intParam(r, "limit", 50))
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, 200, sessions)
@@ -74,7 +74,7 @@ func (a *api) readSession(w http.ResponseWriter, r *http.Request) {
 	}
 	chunks, err := a.st.ReadSession(id, intParam(r, "from", 0), intParam(r, "limit", 200))
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, 200, chunks)
@@ -91,7 +91,7 @@ func (a *api) rawSession(w http.ResponseWriter, r *http.Request) {
 	}
 	lines, err := a.st.SessionRaw(id)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/x-ndjson; charset=utf-8")
@@ -114,7 +114,7 @@ type knowledgeRequest struct {
 func (a *api) createKnowledge(w http.ResponseWriter, r *http.Request) {
 	var req knowledgeRequest
 	if err := readJSON(r, &req); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
 	k := req.Knowledge
@@ -132,12 +132,12 @@ func (a *api) createKnowledge(w http.ResponseWriter, r *http.Request) {
 	k.Person = personOf(r)
 	id, err := a.st.InsertKnowledge(k)
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
 	saved, err := a.st.KnowledgeByID(id)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, 200, saved)
@@ -152,7 +152,7 @@ func (a *api) listKnowledge(w http.ResponseWriter, r *http.Request) {
 		ks, err = a.st.KnowledgeForContext(axesFromQuery(r))
 	}
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, 200, ks)
@@ -161,14 +161,14 @@ func (a *api) listKnowledge(w http.ResponseWriter, r *http.Request) {
 func (a *api) insertMigratedKnowledge(w http.ResponseWriter, r *http.Request) {
 	var in store.MigratedEntry
 	if err := readJSON(r, &in); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
 	in.Knowledge.Person = personOf(r)
 	in.Knowledge.Scope = scope.CanonicalAxes(in.Knowledge.Scope)
 	saved, err := a.st.InsertMigrated(in)
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, saved)
@@ -180,12 +180,12 @@ func (a *api) beginMigration(w http.ResponseWriter, r *http.Request) {
 		Artifacts map[string]string `json:"artifacts"`
 	}
 	if err := readJSON(r, &body); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
 	id, err := a.st.BeginMigration(scope.NormalizeRemote(body.Project), body.Artifacts)
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]int64{"id": id})
@@ -198,7 +198,7 @@ func (a *api) completeMigration(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.st.CompleteMigration(id); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -217,7 +217,7 @@ func (a *api) insertDocumentMigration(w http.ResponseWriter, r *http.Request) {
 		Revision   int    `json:"revision"`
 	}
 	if err := readJSON(r, &body); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
 	if body.Source == "" || body.Digest == "" || body.DocumentID == 0 || body.Revision < 1 {
@@ -225,7 +225,7 @@ func (a *api) insertDocumentMigration(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.st.InsertDocumentMigration(id, body.Source, body.Digest, body.DocumentID, body.Revision); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -234,7 +234,7 @@ func (a *api) insertDocumentMigration(w http.ResponseWriter, r *http.Request) {
 func (a *api) completedMigrationArtifacts(w http.ResponseWriter, r *http.Request) {
 	out, err := a.st.CompletedMigrationArtifacts(scope.NormalizeRemote(r.URL.Query().Get("project")))
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -244,7 +244,7 @@ func (a *api) completedDocumentArtifacts(w http.ResponseWriter, r *http.Request)
 	project := scope.NormalizeRemote(r.URL.Query().Get("project"))
 	out, err := a.st.CompletedDocumentArtifacts(project)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -261,19 +261,19 @@ type PendingEntry struct {
 func (a *api) pendingKnowledge(w http.ResponseWriter, r *http.Request) {
 	ks, err := a.st.PendingKnowledge(r.URL.Query().Get("project"), intParam(r, "limit", 50))
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
 	out := []PendingEntry{}
 	for _, k := range ks {
 		ev, err := a.st.EvidenceFor(k.ID)
 		if err != nil {
-			writeErr(w, http.StatusInternalServerError, err.Error())
+			writeStoreError(w, http.StatusInternalServerError, err)
 			return
 		}
 		n, err := a.st.Recurrence(k.ID)
 		if err != nil {
-			writeErr(w, http.StatusInternalServerError, err.Error())
+			writeStoreError(w, http.StatusInternalServerError, err)
 			return
 		}
 		proof, proofErr := a.st.MigrationEvidenceForKnowledge(k.ID)
@@ -281,7 +281,7 @@ func (a *api) pendingKnowledge(w http.ResponseWriter, r *http.Request) {
 		if proofErr == nil {
 			migrationProof = &proof
 		} else if proofErr != sql.ErrNoRows {
-			writeErr(w, http.StatusInternalServerError, proofErr.Error())
+			writeStoreError(w, http.StatusInternalServerError, proofErr)
 			return
 		}
 		out = append(out, PendingEntry{Knowledge: k, Evidence: ev, MigrationEvidence: migrationProof, Recurrence: n})
@@ -305,7 +305,7 @@ func (a *api) getKnowledge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, 200, k)
@@ -319,7 +319,7 @@ func (a *api) knowledgeHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	history, err := a.st.KnowledgeHistory(id)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, history)
@@ -340,11 +340,11 @@ func (a *api) setRegressionCover(w http.ResponseWriter, r *http.Request) {
 		Test  string `json:"test"`
 	}
 	if err := readJSON(r, &in); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
 	if err := a.st.SetRegressionCover(id, in.State, in.Test); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -353,7 +353,7 @@ func (a *api) setRegressionCover(w http.ResponseWriter, r *http.Request) {
 func (a *api) regressionGaps(w http.ResponseWriter, r *http.Request) {
 	gaps, unreviewed, err := a.st.RegressionGaps(axesFromQuery(r))
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
 	// Die Zahl der Unbeurteilten reist mit: eine kurze Lückenliste ohne sie
@@ -369,7 +369,7 @@ func (a *api) patchKnowledge(w http.ResponseWriter, r *http.Request) {
 	}
 	var patch map[string]string
 	if err := readJSON(r, &patch); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
 	// Der Token ist die einzige vertrauenswürdige Quelle für den Bestätiger;
@@ -383,7 +383,7 @@ func (a *api) patchKnowledge(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := a.st.UpdateKnowledgeBy(id, patch, personOf(r)); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -412,7 +412,7 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 		}
 		ks, err := search(q, filter, limit)
 		if err != nil {
-			writeErr(w, http.StatusInternalServerError, err.Error())
+			writeStoreError(w, http.StatusInternalServerError, err)
 			return
 		}
 		res.Knowledge = ks
@@ -420,7 +420,7 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 	if kind == "sessions" || kind == "all" {
 		hits, err := a.st.SearchSessions(q, filter, r.URL.Query().Get("exclude_session"), limit)
 		if err != nil {
-			writeErr(w, http.StatusInternalServerError, err.Error())
+			writeStoreError(w, http.StatusInternalServerError, err)
 			return
 		}
 		res.Sessions = hits
@@ -428,7 +428,7 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 	if kind == "requests" || kind == "all" {
 		page, err := a.st.SearchRequests(requestdomain.SearchFilter{Query: q, Scope: scope.Axes{Project: filter.Project}, Limit: limit})
 		if err != nil {
-			writeErr(w, http.StatusInternalServerError, err.Error())
+			writeStoreError(w, http.StatusInternalServerError, err)
 			return
 		}
 		res.Requests = page.Results
@@ -441,17 +441,17 @@ const defaultBudget = 4000
 func (a *api) bootstrap(w http.ResponseWriter, r *http.Request) {
 	actx, err := activationFromQuery(r)
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
 	entries, err := a.st.KnowledgeForActivatedContext(axesFromQuery(r), actx)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
 	openRequests, err := a.st.CountOpenRequests(axesFromQuery(r))
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
@@ -479,7 +479,7 @@ func (a *api) interrupted(w http.ResponseWriter, r *http.Request) {
 		time.Now().UTC().Add(-interruptedWindow).Format(time.RFC3339),
 		r.URL.Query().Get("session"), maxInterruptedThreads)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, threads)
@@ -499,7 +499,7 @@ func (a *api) relevant(w http.ResponseWriter, r *http.Request) {
 	}
 	entries, err := a.st.RelevantKnowledge(r.URL.Query().Get("q"), axesFromQuery(r), limit)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
@@ -746,7 +746,7 @@ func truncate(s string, n int) string {
 func (a *api) putGhost(w http.ResponseWriter, r *http.Request) {
 	var g store.GhostFile
 	if err := readJSON(r, &g); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
 	if g.Project == "" {
@@ -756,7 +756,7 @@ func (a *api) putGhost(w http.ResponseWriter, r *http.Request) {
 	g.Person = personOf(r)
 	id, err := a.st.PutGhostFile(g)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, 200, map[string]int64{"id": id})
@@ -770,7 +770,7 @@ func (a *api) ghostsForPath(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	entries, err := a.st.GhostFilesForDelivery(q.Get("project"), q.Get("path"), q.Get("session"))
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, 200, entries)
@@ -786,11 +786,11 @@ func (a *api) ghostsMove(w http.ResponseWriter, r *http.Request) {
 		To      string `json:"to"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
 	if err := a.st.MoveGhostFile(in.Project, in.From, in.To); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
 	writeJSON(w, 200, map[string]string{"from": in.From, "to": in.To})
@@ -803,7 +803,7 @@ func (a *api) ghostHistory(w http.ResponseWriter, r *http.Request) {
 	if q.Get("count") != "" {
 		n, err := a.st.GhostHistoryCount(q.Get("project"), q.Get("path"))
 		if err != nil {
-			writeErr(w, http.StatusInternalServerError, err.Error())
+			writeStoreError(w, http.StatusInternalServerError, err)
 			return
 		}
 		writeJSON(w, 200, map[string]int{"count": n})
@@ -819,7 +819,7 @@ func (a *api) ghostHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	versions, err := read(q.Get("project"), q.Get("path"), limit)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, 200, versions)
@@ -829,7 +829,7 @@ func (a *api) ghostTree(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	entries, err := a.st.GhostFilesUnder(q.Get("project"), q.Get("prefix"))
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, 200, entries)
@@ -839,7 +839,7 @@ func (a *api) searchGhosts(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	entries, err := a.st.SearchGhostFiles(q.Get("q"), q.Get("project"), intParam(r, "limit", 20))
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, 200, entries)

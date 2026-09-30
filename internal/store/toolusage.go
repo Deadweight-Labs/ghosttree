@@ -23,6 +23,9 @@ const toolCallMarker = "[tool call: "
 // which one was called, so their absence here is a gap in the archive rather
 // than evidence that nobody called anything.
 func (s *Store) ToolCallsPerProject(prefix string) ([]ToolCallRow, error) {
+	if s.reader != nil {
+		return s.reader.ToolCallsPerProject(prefix)
+	}
 	pattern := "%" + escapeLike(toolCallMarker+prefix) + "%"
 	rows, err := s.db.Query(`SELECT se.project, COUNT(*), COUNT(DISTINCT c.session_id)
 		FROM session_chunks c JOIN sessions se ON se.id = c.session_id

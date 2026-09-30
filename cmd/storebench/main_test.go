@@ -163,3 +163,29 @@ func TestRunCommandDoesNotOverwriteReport(t *testing.T) {
 		t.Fatalf("report was overwritten with %q", raw)
 	}
 }
+
+func TestRunCommandRuntimeUsesProductionDefaults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "runtime.json")
+	if err := runCommand([]string{"--backend=runtime", "--output=" + path}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var report storebench.Report
+	if err := json.Unmarshal(raw, &report); err != nil {
+		t.Fatal(err)
+	}
+	q := report.BackendStats.QueueConfig
+	if report.Backend != "sqlite_runtime" || report.Errors != 0 || report.VerificationError != "" || q == nil || q.MaxBytes != 256<<20 || q.GatherWindow != 0 || report.BackendStats.RuntimeWriter == nil || !report.BackendStats.RuntimeWriter.Enabled {
+		t.Fatalf("runtime report=%+v", report)
+	}
+}
+
+func TestRunCommandRuntimeRejectsGatherWindow(t *testing.T) {
+	err := runCommand([]string{"--backend=runtime", "--gather-window=1ms"}, &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "gather") {
+		t.Fatalf("gather config=%v", err)
+	}
+}

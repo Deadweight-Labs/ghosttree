@@ -157,6 +157,7 @@ func (m *metricsRegistry) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 	}
 
 	writeDBMetrics(w, runtimeStats)
+	writeWriterMetrics(w, runtimeStats)
 	writeMetricHeader(w, "ghosttree_build_info", "Ghosttree build information.", "gauge")
 	fmt.Fprintf(w, "ghosttree_build_info{version=\"%s\"} 1\n", escapeLabel(m.version))
 }
@@ -257,7 +258,7 @@ func boundedMethod(method string) string {
 
 func boundedErrorClass(class string) bool {
 	switch class {
-	case "auth", "not_found", "client", "server", "sqlite_busy":
+	case "auth", "not_found", "client", "server", "sqlite_busy", "writer_busy":
 		return true
 	default:
 		return false

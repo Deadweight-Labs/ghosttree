@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -16,6 +17,11 @@ type Store struct {
 	db            *sql.DB
 	path          string
 	snapshotFault func(string) error
+	writer        *runtimeWriter
+	bookkeeper    *runtimeWriter
+	reader        *Store
+	closeOnce     sync.Once
+	closeErr      error
 }
 
 type OpenOptions struct {
@@ -23,6 +29,8 @@ type OpenOptions struct {
 }
 
 type RuntimeStats struct {
+	Writer                            WriterStats
+	Reader                            sql.DBStats
 	DB                                sql.DBStats
 	DatabaseBytes, WALBytes, SHMBytes int64
 }
@@ -403,11 +411,10 @@ CREATE TABLE IF NOT EXISTS document_revisions(
 `
 
 func Open(path string) (*Store, error) {
-	maxOpenConns := defaultFileMaxOpenConns
 	if sqliteFilePath(path) == "" {
-		maxOpenConns = 1
+		return OpenWithOptions(path, OpenOptions{MaxOpenConns: 1})
 	}
-	return OpenWithOptions(path, OpenOptions{MaxOpenConns: maxOpenConns})
+	return OpenRuntime(path, DefaultWriterConfig())
 }
 
 func OpenReadOnly(path string, maxOpenConns int) (*Store, error) {
@@ -678,10 +685,29 @@ func ensureKnowledgeConfirmedBy(db *sql.DB) error {
 	return err
 }
 
-func (s *Store) Close() error { return s.db.Close() }
+func (s *Store) Close() error {
+	s.closeOnce.Do(func() {
+		if s.writer != nil {
+			s.writer.close()
+		}
+		if s.reader != nil {
+			s.closeErr = s.reader.Close()
+		}
+		if err := s.db.Close(); s.closeErr == nil {
+			s.closeErr = err
+		}
+	})
+	return s.closeErr
+}
 
 func (s *Store) RuntimeStats() RuntimeStats {
 	stats := RuntimeStats{DB: s.db.Stats()}
+	if s.writer != nil {
+		stats.Writer = s.writer.stats()
+	}
+	if s.reader != nil {
+		stats.Reader = s.reader.db.Stats()
+	}
 	if s.path == "" {
 		return stats
 	}

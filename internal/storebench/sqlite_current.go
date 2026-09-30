@@ -18,7 +18,7 @@ type currentSQLite struct {
 }
 
 func OpenCurrentSQLite(path string) (Backend, error) {
-	st, err := store.Open(path)
+	st, err := store.OpenWithOptions(path, store.OpenOptions{MaxOpenConns: 1})
 	if err != nil {
 		return nil, err
 	}

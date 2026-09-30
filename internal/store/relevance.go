@@ -47,6 +47,9 @@ const (
 // deliver, most relevant first. It returns nothing far more often than
 // something, which is the intended behaviour rather than a limitation.
 func (s *Store) RelevantKnowledge(text string, ax scope.Axes, limit int) ([]Knowledge, error) {
+	if s.reader != nil {
+		return s.reader.RelevantKnowledge(text, ax, limit)
+	}
 	return s.relevantKnowledge(text, ax, limit, true)
 }
 

@@ -19,6 +19,9 @@ type GhostReview struct {
 }
 
 func (s *Store) PutGhostReview(r GhostReview) error {
+	if s.writer != nil {
+		return queueWrite(s, []any{r}, func(d *Store, p []any) error { return d.PutGhostReview(p[0].(GhostReview)) })
+	}
 	at := r.At
 	if at == "" {
 		at = now()
@@ -35,6 +38,9 @@ func (s *Store) PutGhostReview(r GhostReview) error {
 // prefix is the repository root and yields the whole project, which is how the
 // materializer fetches them in one go.
 func (s *Store) GhostReviewsUnder(project, prefix string) ([]GhostReview, error) {
+	if s.reader != nil {
+		return s.reader.GhostReviewsUnder(project, prefix)
+	}
 	query := `SELECT project,path,git_blob,person,at FROM ghost_reviews WHERE project=?`
 	args := []any{project}
 	if prefix = strings.Trim(prefix, "/"); prefix != "" {

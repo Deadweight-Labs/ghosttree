@@ -9,6 +9,9 @@ type Evidence struct {
 }
 
 func (s *Store) AddEvidence(knowledgeID int64, ev []Evidence) error {
+	if s.writer != nil {
+		return queueWrite(s, []any{knowledgeID, ev}, func(d *Store, p []any) error { return d.AddEvidence(p[0].(int64), p[1].([]Evidence)) })
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -29,6 +32,9 @@ func (s *Store) AddEvidence(knowledgeID int64, ev []Evidence) error {
 }
 
 func (s *Store) EvidenceFor(knowledgeID int64) ([]Evidence, error) {
+	if s.reader != nil {
+		return s.reader.EvidenceFor(knowledgeID)
+	}
 	rows, err := s.db.Query(`SELECT session_id, chunk_seq, quote FROM knowledge_evidence
 		WHERE knowledge_id = ? ORDER BY session_id, chunk_seq`, knowledgeID)
 	if err != nil {
@@ -49,6 +55,9 @@ func (s *Store) EvidenceFor(knowledgeID int64) ([]Evidence, error) {
 // Recurrence counts independent sessions, not evidence rows: the same claim
 // found twice in one conversation is one observation, not two.
 func (s *Store) Recurrence(knowledgeID int64) (int, error) {
+	if s.reader != nil {
+		return s.reader.Recurrence(knowledgeID)
+	}
 	var n int
 	err := s.db.QueryRow(`SELECT COUNT(DISTINCT session_id) FROM knowledge_evidence
 		WHERE knowledge_id = ?`, knowledgeID).Scan(&n)

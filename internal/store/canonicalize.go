@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 )
@@ -28,17 +29,30 @@ type CanonicalizeReport struct {
 // a fraction of it. Aliases cover what normalisation cannot know on its own: a
 // repository that changed owner keeps no trace of where it came from.
 func (s *Store) CanonicalizeScopes(aliases map[string]string) (CanonicalizeReport, error) {
+	if s.writer != nil {
+		return queueValue(s, []any{aliases}, func(d *Store, p []any) (CanonicalizeReport, error) {
+			return d.CanonicalizeScopes(p[0].(map[string]string))
+		})
+	}
 	return s.canonicalizeScopes(aliases, false)
 }
 
 // PreviewCanonicalizeScopes reports what CanonicalizeScopes would change and
 // then rolls back, so the run can be inspected before it touches production.
 func (s *Store) PreviewCanonicalizeScopes(aliases map[string]string) (CanonicalizeReport, error) {
+	if s.writer != nil {
+		return queueValue(s, []any{aliases}, func(d *Store, p []any) (CanonicalizeReport, error) {
+			return d.PreviewCanonicalizeScopes(p[0].(map[string]string))
+		})
+	}
 	return s.canonicalizeScopes(aliases, true)
 }
 
 // Backup writes a verified copy of the database to path.
 func (s *Store) Backup(path string) error {
+	if s.writer != nil {
+		return errors.New("backup requires an offline administrative store opened with OpenWithOptions")
+	}
 	return createVerifiedBackup(s.db, path)
 }
 

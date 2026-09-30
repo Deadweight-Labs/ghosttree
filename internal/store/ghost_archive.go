@@ -51,6 +51,9 @@ type GhostArchiveCandidate struct {
 }
 
 func (s *Store) PrepareGhostArchive(project, path string) (GhostArchiveCandidate, error) {
+	if s.reader != nil {
+		return s.reader.PrepareGhostArchive(project, path)
+	}
 	if strings.TrimSpace(project) == "" {
 		return GhostArchiveCandidate{}, ErrGhostArchiveInvalid
 	}
@@ -119,6 +122,11 @@ func (s *Store) ArchiveGhostFiles(in GhostArchiveInput) (GhostArchiveResult, err
 		if token, err := hex.DecodeString(target.ExpectedToken); err != nil || len(token) != sha256.Size {
 			return out, fmt.Errorf("%w: expected token required for %q", ErrGhostArchiveInvalid, target.Path)
 		}
+	}
+	if s.writer != nil {
+		return queueValue(s, []any{in}, func(d *Store, p []any) (GhostArchiveResult, error) {
+			return d.ArchiveGhostFiles(p[0].(GhostArchiveInput))
+		})
 	}
 	tx, err := s.db.Begin()
 	if err != nil {

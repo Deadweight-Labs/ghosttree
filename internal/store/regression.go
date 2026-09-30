@@ -33,6 +33,9 @@ func (s *Store) SetRegressionCover(id int64, state, test string) error {
 	if state != "covered" {
 		test = ""
 	}
+	if s.writer != nil {
+		return queueWrite(s, []any{id, state, test}, func(d *Store, p []any) error { return d.SetRegressionCover(p[0].(int64), p[1].(string), p[2].(string)) })
+	}
 	// Bewusst nicht über UpdateKnowledge: das archiviert vor jeder Änderung die
 	// bisherige Fassung. Womit ein Eintrag abgesichert ist, ist eine Aussage
 	// ÜBER den Text und nicht der Text — eine neue Fassung anzulegen, weil
@@ -60,6 +63,9 @@ func validRegressionState(state string) bool {
 // Beiwerk: ohne sie liest sich eine kurze Lückenliste als Entwarnung, während
 // der Bestand in Wahrheit grösstenteils unangesehen ist.
 func (s *Store) RegressionGaps(ax scope.Axes) ([]Knowledge, int, error) {
+	if s.reader != nil {
+		return s.reader.RegressionGaps(ax)
+	}
 	where, args := ax.UnionWhere()
 	rows, err := s.db.Query(`SELECT id,type,title,body,project,branch,machine,confidence,status,origin,
 		person,confirmed_by,last_modified_by,harness,session_ref,observed_at,

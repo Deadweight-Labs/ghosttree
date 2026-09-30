@@ -50,7 +50,7 @@ func cmdCanonicalizeScopes(args []string, stdout io.Writer) int {
 		}
 	}
 
-	s, err := store.Open(*dbPath)
+	s, err := store.OpenWithOptions(*dbPath, store.OpenOptions{MaxOpenConns: 1})
 	if err != nil {
 		fmt.Fprintf(stdout, "open db: %v\n", err)
 		return 1

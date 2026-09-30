@@ -13,6 +13,9 @@ import (
 const snapshotHeadColumns = `id,project,name,schema_version,state,content_digest,git_object_format,git_commit,git_ref,git_branch,git_dirty,git_worktree_fingerprint_version,git_worktree_fingerprint,allow_dirty_used,git_metadata_source,message,actor_id,actor_label,session_ref,created_at,entry_count,payload_bytes_total,counts_json`
 
 func (s *Store) ListContextSnapshots(ctx context.Context, filter snapshot.ListFilter) (snapshot.SnapshotPage, error) {
+	if s.reader != nil {
+		return s.reader.ListContextSnapshots(ctx, filter)
+	}
 	limit := boundedSnapshotLimit(filter.Limit)
 	var before int64
 	var err error
@@ -49,6 +52,9 @@ func (s *Store) ListContextSnapshots(ctx context.Context, filter snapshot.ListFi
 }
 
 func (s *Store) ContextSnapshot(ctx context.Context, project, name string) (snapshot.Head, map[string]int64, error) {
+	if s.reader != nil {
+		return s.reader.ContextSnapshot(ctx, project, name)
+	}
 	head, counts, err := scanSnapshotHead(s.db.QueryRowContext(ctx, `SELECT `+snapshotHeadColumns+` FROM context_snapshots WHERE project=? AND name=? AND state='sealed'`, project, name))
 	if errors.Is(err, sql.ErrNoRows) {
 		return snapshot.Head{}, nil, &snapshot.RuleError{Code: "snapshot_not_found"}
@@ -57,6 +63,9 @@ func (s *Store) ContextSnapshot(ctx context.Context, project, name string) (snap
 }
 
 func (s *Store) ContextSnapshotEntries(ctx context.Context, project, name string, filter snapshot.EntryFilter) (snapshot.EntryPage, error) {
+	if s.reader != nil {
+		return s.reader.ContextSnapshotEntries(ctx, project, name, filter)
+	}
 	if filter.Key != "" && filter.Domain == "" {
 		return snapshot.EntryPage{}, &snapshot.RuleError{Code: "snapshot_invalid_filter"}
 	}

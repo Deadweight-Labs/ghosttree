@@ -194,7 +194,7 @@ func classifyRequestError(status int, class, message string) string {
 		return "sqlite_busy"
 	}
 	switch class {
-	case "auth", "not_found", "client", "server", "sqlite_busy":
+	case "auth", "not_found", "client", "server", "sqlite_busy", "writer_busy":
 		return class
 	}
 	switch {

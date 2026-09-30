@@ -16,6 +16,7 @@ type SnapshotAccess struct {
 }
 
 func (s *Store) SetContextSnapshotAccess(person, project string, read, create, releaseBind bool) error {
+
 	person = strings.TrimSpace(person)
 	project = scope.NormalizeRemote(project)
 	if person == "" {
@@ -26,6 +27,12 @@ func (s *Store) SetContextSnapshotAccess(person, project string, read, create, r
 	}
 	if releaseBind && (!read || !create) {
 		return fmt.Errorf("release-bind requires both read and create access")
+	}
+
+	if s.writer != nil {
+		return queueWrite(s, []any{person, project, read, create, releaseBind}, func(d *Store, p []any) error {
+			return d.SetContextSnapshotAccess(p[0].(string), p[1].(string), p[2].(bool), p[3].(bool), p[4].(bool))
+		})
 	}
 
 	tx, err := s.db.Begin()
@@ -83,6 +90,9 @@ func (s *Store) SetContextSnapshotAccess(person, project string, read, create, r
 }
 
 func (s *Store) ContextSnapshotAccess(principalID, project string) (SnapshotAccess, error) {
+	if s.reader != nil {
+		return s.reader.ContextSnapshotAccess(principalID, project)
+	}
 	personID, err := parsePersonPrincipalID(principalID)
 	if err != nil {
 		return SnapshotAccess{}, err
@@ -117,6 +127,9 @@ func defaultSnapshotAccess() SnapshotAccess {
 }
 
 func (s *Store) PrincipalByName(name string) (Principal, bool) {
+	if s.reader != nil {
+		return s.reader.PrincipalByName(name)
+	}
 	var id int64
 	var label string
 	err := s.db.QueryRow(`SELECT id, name FROM persons WHERE name=?`, strings.TrimSpace(name)).Scan(&id, &label)

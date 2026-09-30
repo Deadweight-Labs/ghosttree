@@ -19,7 +19,7 @@ func (a *api) ghostArchiveCandidate(w http.ResponseWriter, r *http.Request) {
 		if err == sql.ErrNoRows {
 			status = http.StatusNotFound
 		}
-		writeErr(w, status, err.Error())
+		writeStoreError(w, status, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -28,7 +28,7 @@ func (a *api) ghostArchiveCandidate(w http.ResponseWriter, r *http.Request) {
 func (a *api) archiveGhosts(w http.ResponseWriter, r *http.Request) {
 	var in store.GhostArchiveInput
 	if err := readJSON(r, &in); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
 	in.Person = personOf(r)
@@ -41,7 +41,7 @@ func (a *api) archiveGhosts(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, store.ErrGhostArchiveConflict) {
 			status = http.StatusConflict
 		}
-		writeErr(w, status, err.Error())
+		writeStoreError(w, status, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, out)

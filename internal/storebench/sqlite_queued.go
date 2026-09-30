@@ -18,7 +18,7 @@ func OpenQueuedSQLite(path string, config QueueConfig) (Backend, error) {
 	if config.MaxOperations <= 0 || config.MaxBytes <= 0 || config.MaxBatch <= 0 || config.ReadConnections <= 0 || config.GatherWindow < 0 {
 		return nil, fmt.Errorf("queue limits, batch size, and read connections must be positive and gather window non-negative")
 	}
-	writable, err := store.Open(path)
+	writable, err := store.OpenWithOptions(path, store.OpenOptions{MaxOpenConns: 1})
 	if err != nil {
 		return nil, err
 	}
