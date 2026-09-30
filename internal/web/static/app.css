@@ -956,7 +956,9 @@ html.coord-enhanced body:has(> .coord-workspace) {
 .coord-workspace [hidden],
 .coord-backdrop[hidden] { display: none !important; }
 
-html:not(.coord-enhanced) .coord-drawer-toggle { display: none !important; }
+html:not(.coord-enhanced) .coord-drawer-toggle,
+html:not(.coord-enhanced) .coord-drawer-close,
+html:not(.coord-enhanced) .coord-backdrop { display: none !important; }
 
 .coord-shell :focus-visible,
 .app-header :focus-visible {
@@ -1054,8 +1056,8 @@ html:not(.coord-enhanced) .coord-drawer-toggle { display: none !important; }
     overflow: visible;
   }
 
-  html:not(.coord-enhanced) .coord-sidebar { order: 1; }
-  html:not(.coord-enhanced) .coord-conversation { order: 2; }
+  html:not(.coord-enhanced) .coord-conversation { order: 1; }
+  html:not(.coord-enhanced) .coord-sidebar { order: 2; }
   html:not(.coord-enhanced) .coord-context { order: 3; }
 
   .coord-shell { grid-template-columns: 14rem minmax(0, 1fr); }

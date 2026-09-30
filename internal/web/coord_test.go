@@ -1106,7 +1106,6 @@ func TestCoordMobilePolishKeepsConversationDenseAndStatusOutOfTheWay(t *testing.
 		`coord-nojs-status`,
 		`type="datetime-local"`,
 		`Zeit in {{.Zone}}`,
-		`class="coord-mobile-fallback coord-skip-conversation"`,
 		`Braucht dich <small>alle Räume</small>`,
 		`{{.Attention}} offen`,
 		`{{.Unread}} neu`,
@@ -1242,6 +1241,53 @@ func TestCoordNoJSMobileRestoresDocumentFlowInDOMOrder(t *testing.T) {
 		if !strings.Contains(shell, want) {
 			t.Errorf("no-JS sequential shell missing %q: %s", want, shell)
 		}
+	}
+}
+
+func TestCoordNoJSMobilePutsConversationFirstAndHidesDeadControls(t *testing.T) {
+	css := string(mustReadEmbedded(t, "static/app.css"))
+	narrow := css[strings.Index(css, "@media (max-width: 1100px)"):]
+	for _, want := range []string{
+		`html:not(.coord-enhanced) .coord-conversation { order: 1; }`,
+		`html:not(.coord-enhanced) .coord-sidebar { order: 2; }`,
+		`html:not(.coord-enhanced) .coord-context { order: 3; }`,
+	} {
+		if !strings.Contains(narrow, want) {
+			t.Errorf("no-JS narrow flow must lead with the conversation, missing %q", want)
+		}
+	}
+	start := strings.Index(css, "html:not(.coord-enhanced) .coord-drawer-toggle")
+	if start < 0 {
+		t.Fatal("JS-only drawer close is not hidden without enhancement")
+	}
+	open := strings.Index(css[start:], "{")
+	selectors := css[start : start+open]
+	for _, want := range []string{".coord-drawer-toggle", ".coord-drawer-close", ".coord-backdrop"} {
+		if !strings.Contains(selectors, "html:not(.coord-enhanced) "+want) {
+			t.Errorf("JS-only control %s stays visible without enhancement", want)
+		}
+	}
+	if block := coordCSSRule(t, css, "html:not(.coord-enhanced) .coord-drawer-toggle"); !strings.Contains(block, "display: none !important;") {
+		t.Fatalf("dead controls must beat the mobile button display rule: %s", block)
+	}
+	if strings.Contains(string(mustReadEmbedded(t, "templates/coord.html")), "coord-skip-conversation") {
+		t.Fatal("the conversation is first without JS, so the skip link is dead weight")
+	}
+}
+
+func TestCoordRefreshLinkKeepsTheActiveRoom(t *testing.T) {
+	srv, st, client := signedIn(t)
+	room := store.RoomKeyForProject("github.com/x/refresh-link")
+	materializeWebRoom(t, st, room)
+	res, err := client.Get(srv.URL + "/ui/coord?room=" + url.QueryEscape(room))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+	want := `href="/ui/coord?room=` + url.QueryEscape(room) + `" aria-label="Raumliste aktualisieren"`
+	if !strings.Contains(strings.ToLower(string(body)), strings.ToLower(want)) {
+		t.Fatalf("refresh link loses the room context, want %q", want)
 	}
 }
 

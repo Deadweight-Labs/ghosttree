@@ -12,9 +12,8 @@
     <aside class="coord-sidebar coord-room-rail" id="coord-rooms" aria-label="Räume">
       <header class="coord-sidebar-head coord-drawer-head">
         <div><small>Ghosttree</small><h2>Coordination</h2></div>
-        <span class="coord-drawer-head-actions"><button type="button" class="coord-drawer-close" data-coord-drawer-close aria-label="Räume schließen">×</button><a class="coord-icon-link" href="/ui/coord" aria-label="Raumliste aktualisieren">↻</a></span>
+        <span class="coord-drawer-head-actions"><button type="button" class="coord-drawer-close" data-coord-drawer-close aria-label="Räume schließen">×</button><a class="coord-icon-link" href="/ui/coord{{with .Coord.Active}}?room={{.Room.Key}}{{end}}" aria-label="Raumliste aktualisieren">↻</a></span>
       </header>
-      {{with .Coord.Active}}<a href="#coord-conversation" class="coord-mobile-fallback coord-skip-conversation">Zum Gespräch</a>{{end}}
       <div data-coord-sidebar-dynamic>
       <section class="coord-attention-region" aria-labelledby="coord-attention"><h2 id="coord-attention">Aufmerksamkeit</h2>
         <nav aria-label="Aufmerksamkeit">{{range .Coord.Sidebar.Attention}}{{template "coord-attention-room-link" .}}{{else}}<span class="coord-empty-row">Keine</span>{{end}}</nav>
