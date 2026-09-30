@@ -48,7 +48,16 @@ func stateDir() (string, error) {
 	return filepath.Join(root, "ghosttree", "context-budget"), nil
 }
 
+// Deliver liefert Gedächtniskontext. Bestehender Aufrufweg; die Kanaltrennung
+// steckt in DeliverChannel.
 func Deliver(sessionID, text string, emit func(string) error) error {
+	return DeliverChannel(sessionID, ChannelMemory, text, emit)
+}
+
+// DeliverChannel führt je Kanal eine eigene Abrechnung. Der Zustand liegt in
+// einer eigenen Datei je (Session, Kanal) — dieselbe Sitzung hat damit zwei
+// unabhängige Konten, und keines kann das andere leeren.
+func DeliverChannel(sessionID, channel, text string, emit func(string) error) error {
 	if strings.TrimSpace(sessionID) == "" || len(sessionID) > 4096 {
 		return errors.New("context budget requires a session identity")
 	}
@@ -62,9 +71,16 @@ func Deliver(sessionID, text string, emit func(string) error) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	digest := sha256.Sum256([]byte(sessionID))
+	// Der Kanal geht in den Schlüssel ein, nicht nur in den Dateinamen: sonst
+	// hätte eine Sitzung mit leerem Kanalnamen denselben Hash wie der
+	// Gedächtniskanal und beide teilten sich still ein Konto.
+	digest := sha256.Sum256([]byte(channel + "\x00" + sessionID))
 	key := hex.EncodeToString(digest[:])
-	path := filepath.Join(dir, key+".json")
+	name := key + ".json"
+	if channel == ChannelCoord {
+		name = key + ".coord.json"
+	}
+	path := filepath.Join(dir, name)
 	unlock, err := lock(path + ".lock")
 	if err != nil {
 		return err
@@ -76,14 +92,29 @@ func Deliver(sessionID, text string, emit func(string) error) error {
 	} else if err != nil {
 		return err
 	}
+	// Ein rollendes Fenster erholt sich. Ein Lebenszeitbudget für Koordination
+	// hieße: ab Nachmittag kommt nichts mehr an, obwohl gerade die
+	// Abstimmungen laufen, für die es das Ganze gibt.
+	if window := ChannelWindow(channel); window > 0 && !r.StartedAt.IsZero() &&
+		time.Since(r.StartedAt) > window {
+		r = Receipt{Version: 1, SessionHash: key, StartedAt: time.Now().UTC()}
+	}
 	if r.Exhausted {
 		return emit("")
 	}
+	limit := ChannelLimit(channel)
+	cut := notice
+	if channel == ChannelCoord {
+		cut = coordNotice
+	}
 	text = strings.ToValidUTF8(text, "�")
 	n := utf8.RuneCountInString(text)
-	available := Limit - r.ReservedChars - utf8.RuneCountInString(notice)
+	available := limit - r.ReservedChars - utf8.RuneCountInString(cut)
 	if n > available {
-		text = string([]rune(text)[:available]) + notice
+		if available < 0 {
+			available = 0
+		}
+		text = string([]rune(text)[:available]) + cut
 		n = utf8.RuneCountInString(text)
 		r.Exhausted = true
 	}

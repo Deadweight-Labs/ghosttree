@@ -45,6 +45,8 @@ func run(args []string, stdout io.Writer) int {
 		return cmdDoc(rest, stdout)
 	case "migrate":
 		return cmdMigrate(rest, stdout)
+	case "coord":
+		return cmdCoord(rest, stdout)
 	case "mirror":
 		return cmdMirror(rest, stdout)
 	case "snapshot":
@@ -91,6 +93,7 @@ const usage = `usage: ctx <command>
   ghost    read description history or archive confirmed-deleted paths
   doc      write, publish, and read long-form documents
   migrate  move repository agent artifacts into ghosttree
+  coord    talk to the other agents in this repo or on this machine
   mirror   write .ghosttree/ for a repository (harnesses without hooks)
   snapshot create, inspect, export, verify, and mirror immutable context marks
   distill-sessions  extract quarantined knowledge from idle sessions

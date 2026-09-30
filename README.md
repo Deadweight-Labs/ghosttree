@@ -236,6 +236,9 @@ history. Treat the server as private infrastructure:
 
 - bind it to loopback or a trusted private interface;
 - use TLS at a reverse proxy when traffic crosses an untrusted network;
+- keep that reverse proxy on the same host: browser origin validation trusts
+  `X-Forwarded-Proto` and `X-Forwarded-Host` only from a loopback peer and
+  requires both headers;
 - keep person tokens out of repositories and logs;
 - back up the SQLite database and test restores;
 - review retention and access rules for your team.

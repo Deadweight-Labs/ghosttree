@@ -49,6 +49,10 @@ type Input struct {
 	TreeDescribed int
 	TreePaths     int
 
+	// Threads sind die laufenden Untersuchungen. Nur unbeschränkte: der
+	// Spiegel liegt im Repo und wird von jedem gelesen, der es auscheckt.
+	Threads []ThreadView
+
 	// At ist der Zeitpunkt dieses Durchlaufs. Ohne ihn sieht der Spiegel frisch
 	// aus, egal wie alt er ist — und auf einer Umgebung ohne Hook schreibt ihn
 	// niemand von allein.
@@ -74,6 +78,7 @@ func Build(in Input) []Doc {
 	for _, hit := range in.Requests {
 		docs = append(docs, Doc{Path: requestPath(hit.Request), Body: requestBody(hit, mentions[mentionKey("REQ-", hit.Request.ID)])})
 	}
+	docs = append(docs, threadDocs(in.Threads)...)
 	docs = append(docs, Doc{Path: "INDEX.md", Body: index(in, len(knowledge))})
 	return docs
 }
@@ -202,6 +207,16 @@ func index(in Input, knowledgeCount int) string {
 	fmt.Fprintf(&b, "- `docs/` — %d %s, in full. This is a generated projection; local edits are overwritten.\n", len(in.Documents), plural(len(in.Documents), "document", "documents"))
 	b.WriteString("- `edit/` — local document worktree. Edit these files and publish them with `ctx doc push`; the mirror never writes here.\n")
 	fmt.Fprintf(&b, "- `requests/open/` and `requests/done/` — the work ledger; %d of %d finished ones are kept here.\n", in.DoneShown, in.DoneTotal)
+	if len(in.Threads) > 0 {
+		open := 0
+		for _, v := range in.Threads {
+			if v.Thread.State == store.ThreadOpen {
+				open++
+			}
+		}
+		fmt.Fprintf(&b, "- `threads/` — %d discussion%s, %d still open. What is being investigated, as opposed to what is settled.\n",
+			len(in.Threads), plural(len(in.Threads), "", "s"), open)
+	}
 	fmt.Fprintf(&b, "- `tree/` — descriptions for %d of %d paths in this repository, one file each.\n\n",
 		in.TreeDescribed, in.TreePaths)
 
