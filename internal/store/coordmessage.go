@@ -106,8 +106,17 @@ func (s *Store) AppendCoordMessage(m CoordMessage) (int64, error) {
 	return id, tx.Commit()
 }
 
+// ErrCoordInvalidExpiry: expires_at must be RFC 3339, otherwise the message
+// would silently never expire.
+var ErrCoordInvalidExpiry = errors.New("coordination expiry is not an RFC 3339 timestamp")
+
 func appendCoordMessageTx(tx *sql.Tx, m CoordMessage) (int64, error) {
 	m = m.withDefaults()
+	if m.ExpiresAt != "" {
+		if _, err := time.Parse(time.RFC3339, m.ExpiresAt); err != nil {
+			return 0, ErrCoordInvalidExpiry
+		}
+	}
 	if id, found, err := existingCoordMessage(tx, m); err != nil {
 		return 0, err
 	} else if found {

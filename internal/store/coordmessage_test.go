@@ -1,6 +1,9 @@
 package store
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 // Dieselbe ClientID zweimal ist ein Wiederholungsversuch, keine zweite
 // Nachricht. Ohne das erzeugt jeder Netzwerk-Timeout ein Duplikat, und der
@@ -122,5 +125,24 @@ func TestMessagesDoNotLeakAcrossRooms(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Fatalf("machine message leaked into the project room: %+v", got)
+	}
+}
+
+func TestAppendCoordMessageRejectsUnparseableExpiry(t *testing.T) {
+	st := openTest(t)
+	for _, bad := range []string{"not a date", "2026-09-18T18:30", "2026-09"} {
+		_, err := st.AppendCoordMessage(CoordMessage{
+			DestinationKind: DestinationRoom, DestinationID: "project:x", SenderExternalID: "a",
+			ClientID: "c-" + bad, Body: "b", ExpiresAt: bad,
+		})
+		if !errors.Is(err, ErrCoordInvalidExpiry) {
+			t.Errorf("expiry %q: err=%v, want ErrCoordInvalidExpiry", bad, err)
+		}
+	}
+	if _, err := st.AppendCoordMessage(CoordMessage{
+		DestinationKind: DestinationRoom, DestinationID: "project:x", SenderExternalID: "a",
+		ClientID: "ok", Body: "b", ExpiresAt: "2026-09-18T18:30:00Z",
+	}); err != nil {
+		t.Fatalf("valid RFC3339 expiry rejected: %v", err)
 	}
 }

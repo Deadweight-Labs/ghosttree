@@ -1,6 +1,7 @@
 package web
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"sort"
@@ -439,17 +440,35 @@ func markViewerMentions(views []coordMessageView, messages []store.CoordMessageP
 	}
 }
 
-// normalizeCoordExpiry turns the browser's datetime-local value (no zone)
-// into RFC3339 UTC, reading it in the server's local zone, the same zone the
-// UI displays timestamps in. Anything else passes through for the store to judge.
-func normalizeCoordExpiry(raw string) string {
+var errCoordExpiryInvalid = errors.New("Ungültiges Ablaufdatum: bitte Datum und Uhrzeit wie 18.09.2026 18:30 angeben.")
+
+// parseCoordExpiry turns a datetime-local value (no zone) into RFC3339 UTC.
+// offset is the browser's minutes east of UTC for that very date (set by
+// app.js, so DST is right); without it the value is read in server. A value
+// that already carries a zone is used as given. Anything else is an error, since
+// an unreadable expiry would silently mean "never expires".
+func parseCoordExpiry(raw, offset string, server *time.Location) (string, error) {
 	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", nil
+	}
+	if t, err := time.Parse(time.RFC3339, raw); err == nil {
+		return t.UTC().Format(time.RFC3339), nil
+	}
+	loc := server
+	if offset = strings.TrimSpace(offset); offset != "" {
+		minutes, err := strconv.Atoi(offset)
+		if err != nil || minutes < -14*60 || minutes > 14*60 {
+			return "", errCoordExpiryInvalid
+		}
+		loc = time.FixedZone("", minutes*60)
+	}
 	for _, layout := range []string{"2006-01-02T15:04", "2006-01-02T15:04:05"} {
-		if t, err := time.ParseInLocation(layout, raw, time.Local); err == nil {
-			return t.UTC().Format(time.RFC3339)
+		if t, err := time.ParseInLocation(layout, raw, loc); err == nil {
+			return t.UTC().Format(time.RFC3339), nil
 		}
 	}
-	return raw
+	return "", errCoordExpiryInvalid
 }
 
 func buildCoordThreadMessageViews(messages []store.CoordMessagePresentation, room string, threadID int64, labels map[string]string) []coordMessageView {

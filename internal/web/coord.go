@@ -66,6 +66,8 @@ func coordHTTPError(w http.ResponseWriter, err error) {
 		http.Error(w, "coordination group change conflicts with its current state", http.StatusConflict)
 	case errors.Is(err, store.ErrAnchorAlreadyThreaded):
 		http.Error(w, "coordination message already has a different task thread", http.StatusConflict)
+	case errors.Is(err, store.ErrCoordInvalidExpiry):
+		http.Error(w, errCoordExpiryInvalid.Error(), http.StatusBadRequest)
 	case errors.Is(err, store.ErrCoordInvalidSequence):
 		http.Error(w, "invalid coordination sequence", http.StatusBadRequest)
 	case errors.Is(err, store.ErrCoordUnknownRecipient):
@@ -582,12 +584,17 @@ func (a *app) coordSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	expiresAt, err := parseCoordExpiry(r.FormValue("expires_at"), r.FormValue("expires_offset"), time.Local)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	msg := store.CoordMessage{
 		DestinationKind: store.DestinationRoom, DestinationID: room,
 		ClientID:  newFormClientID(r),
 		Body:      body,
 		ReplyTo:   replyTo,
-		ExpiresAt: normalizeCoordExpiry(r.FormValue("expires_at")),
+		ExpiresAt: expiresAt,
 	}
 	msg.Mentions = splitCoordPrincipals(r.Form["mentions"]...)
 	msg.Intent = strings.TrimSpace(r.FormValue("intent"))
@@ -651,7 +658,12 @@ func (a *app) coordCreateStanding(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	mentions := splitCoordPrincipals(r.Form["mentions"]...)
-	_, err := a.browserCoord(r).CreateStanding(store.StandingInput{RoomKey: room, ClientID: newFormClientID(r), Body: body, ExpiresAt: strings.TrimSpace(r.FormValue("expires_at")), Mentions: mentions})
+	expiresAt, err := parseCoordExpiry(r.FormValue("expires_at"), r.FormValue("expires_offset"), time.Local)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	_, err = a.browserCoord(r).CreateStanding(store.StandingInput{RoomKey: room, ClientID: newFormClientID(r), Body: body, ExpiresAt: expiresAt, Mentions: mentions})
 	if err != nil {
 		coordHTTPError(w, err)
 		return

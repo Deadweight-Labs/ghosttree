@@ -1,6 +1,11 @@
 package web
 
 import (
+	"io"
+	"net/http"
+	"net/url"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -88,7 +93,7 @@ func TestCoordComposerOptionsAreAScrollingLabelledGrid(t *testing.T) {
 		t.Fatal("room composer options missing")
 	}
 	block := tpl[start : start+strings.Index(tpl[start:], `</details>`)]
-	for _, want := range []string{`class="coord-option-grid"`, `class="coord-option-field"`, `type="datetime-local"`, `class="coord-mention-row"`} {
+	for _, want := range []string{`class="coord-option-grid"`, `class="coord-option-field"`, `{{template "coord-expiry-field"`, `class="coord-mention-row"`} {
 		if !strings.Contains(block, want) {
 			t.Errorf("composer options missing %q", want)
 		}
@@ -108,19 +113,99 @@ func TestCoordComposerOptionsAreAScrollingLabelledGrid(t *testing.T) {
 }
 
 func TestCoordExpiryAcceptsDatetimeLocalAndRFC3339(t *testing.T) {
-	prev := time.Local
-	time.Local = time.FixedZone("CEST", 2*60*60)
-	t.Cleanup(func() { time.Local = prev })
-	for in, want := range map[string]string{
-		"":                     "",
-		"2026-09-18T18:30":     "2026-09-18T16:30:00Z",
-		"2026-09-18T18:30:15":  "2026-09-18T16:30:15Z",
-		"2026-09-18T18:30:00Z": "2026-09-18T18:30:00Z",
-		"not a date":           "not a date",
+	server := time.FixedZone("CEST", 2*60*60)
+	for _, tc := range []struct{ in, offset, want string }{
+		{"", "", ""},
+		{"", "120", ""},
+		{"2026-09-18T18:30", "", "2026-09-18T16:30:00Z"},
+		{"2026-09-18T18:30:15", "", "2026-09-18T16:30:15Z"},
+		{"2026-09-18T18:30:00Z", "", "2026-09-18T18:30:00Z"},
+		{"2026-09-18T18:30:00+02:00", "", "2026-09-18T16:30:00Z"},
+		// The browser offset (minutes east of UTC) beats the server zone.
+		{"2026-07-01T18:30", "120", "2026-07-01T16:30:00Z"},
+		{"2026-01-15T18:30", "60", "2026-01-15T17:30:00Z"},
+		{"2026-01-15T18:30", "-300", "2026-01-15T23:30:00Z"},
+		{"2026-01-15T18:30", "", "2026-01-15T16:30:00Z"},
 	} {
-		if got := normalizeCoordExpiry(in); got != want {
-			t.Errorf("normalizeCoordExpiry(%q)=%q want %q", in, got, want)
+		got, err := parseCoordExpiry(tc.in, tc.offset, server)
+		if err != nil || got != tc.want {
+			t.Errorf("parseCoordExpiry(%q,%q)=%q,%v want %q", tc.in, tc.offset, got, err, tc.want)
 		}
+	}
+}
+
+func TestCoordExpiryRejectsInvalidValues(t *testing.T) {
+	server := time.FixedZone("CEST", 2*60*60)
+	for _, tc := range []struct{ in, offset string }{
+		{"not a date", ""}, {"2026-09-18T18", ""}, {"2026-09-18", ""}, {"2026-13-40T10:00", ""},
+		{"2026-09-18T18:30", "abc"}, {"2026-09-18T18:30", "99999"},
+	} {
+		if got, err := parseCoordExpiry(tc.in, tc.offset, server); err == nil {
+			t.Errorf("parseCoordExpiry(%q,%q)=%q, want error", tc.in, tc.offset, got)
+		}
+	}
+}
+
+func TestCoordSendRejectsInvalidExpiryAndStandingDoes(t *testing.T) {
+	srv, st, client := signedIn(t)
+	room := store.RoomKeyForProject("github.com/x/expiry")
+	materializeWebRoom(t, st, room)
+	for path, form := range map[string]url.Values{
+		"/ui/coord/send":            {"room": {room}, "body": {"hi"}, "expires_at": {"not a date"}},
+		"/ui/coord/standing/create": {"room": {room}, "body": {"rule"}, "confirm_scope": {"1"}, "expires_at": {"2026-09"}},
+	} {
+		res := authenticatedPostForm(t, client, srv.URL+path, form)
+		body, _ := io.ReadAll(res.Body)
+		res.Body.Close()
+		if res.StatusCode != http.StatusBadRequest || !strings.Contains(string(body), "Ablaufdatum") {
+			t.Errorf("%s status=%d body=%q, want 400 with a German expiry message", path, res.StatusCode, body)
+		}
+	}
+	page := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room))
+	if strings.Contains(page, "hi</") {
+		t.Error("a rejected message must not be stored")
+	}
+}
+
+func TestCoordExpiryFieldIsSharedAndHonestAboutTheZone(t *testing.T) {
+	tpl := coordTemplate(t)
+	if strings.Count(tpl, `{{template "coord-expiry-field"`) != 2 {
+		t.Error("composer and standing form must share the expiry field partial")
+	}
+	field := tpl[strings.Index(tpl, `{{define "coord-expiry-field"}}`):]
+	field = field[:strings.Index(field, "{{end}}")]
+	for _, want := range []string{`type="datetime-local"`, `name="expires_offset"`, `coord-zone-server`, "Serverzeit", `coord-zone-local`, "deiner Ortszeit"} {
+		if !strings.Contains(field, want) {
+			t.Errorf("expiry field partial missing %q", want)
+		}
+	}
+	if strings.Contains(tpl, "(RFC3339)") {
+		t.Error("no free-text RFC3339 field may remain")
+	}
+	requireCSS(t, ".coord-enhanced .coord-zone-server", "display: none;")
+}
+
+func TestCoordExpiryOffsetStampingRunsInNode(t *testing.T) {
+	source := string(mustReadEmbedded(t, "static/app.js"))
+	start := strings.Index(source, "  const progressiveFormPaths =")
+	end := strings.Index(source, "  const liveStatus =")
+	if start < 0 || end <= start || !strings.Contains(source[start:end], "coordExpiryOffset") {
+		t.Fatal("expiry offset helper must live in the independently testable block")
+	}
+	program := source[start:end] + `
+if (coordExpiryOffset("2026-07-01T18:30") !== "120") throw new Error("summer offset " + coordExpiryOffset("2026-07-01T18:30"));
+if (coordExpiryOffset("2026-01-15T18:30") !== "60") throw new Error("winter offset " + coordExpiryOffset("2026-01-15T18:30"));
+if (coordExpiryOffset("") !== "") throw new Error("empty value needs no offset");
+if (coordExpiryOffset("garbage") !== "") throw new Error("invalid value needs no offset");
+const field = {value:"2026-07-01T18:30"}, hidden = {value:""};
+const form = {querySelector: (s) => s.includes("expires_at") ? field : s.includes("expires_offset") ? hidden : null};
+stampCoordExpiryOffset(form);
+if (hidden.value !== "120") throw new Error("hidden offset not stamped: " + hidden.value);
+`
+	command := exec.Command("node", "-e", program)
+	command.Env = append(os.Environ(), "TZ=Europe/Berlin")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("expiry offset stamping failed: %v\n%s", err, output)
 	}
 }
 

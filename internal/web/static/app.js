@@ -162,6 +162,16 @@
       ? target
       : null;
   };
+  // Minutes east of UTC for the picked moment, so DST of the target date counts.
+  const coordExpiryOffset = (value) => {
+    const moment = new Date(value);
+    return value && !Number.isNaN(moment.getTime()) ? String(-moment.getTimezoneOffset()) : "";
+  };
+  const stampCoordExpiryOffset = (form) => {
+    const field = form.querySelector('[name="expires_at"]');
+    const offset = form.querySelector('[name="expires_offset"]');
+    if (field && offset) offset.value = coordExpiryOffset(field.value);
+  };
   const coordFormBody = (form, submitter) => {
     const data = new FormData(form);
     if (submitter?.name) data.append(submitter.name, submitter.value);
@@ -599,6 +609,7 @@
       if (result === coordPageLoadOffline) location.assign(target.href);
     });
   });
+  document.addEventListener("submit", (event) => stampCoordExpiryOffset(event.target), true);
   document.addEventListener("submit", (event) => {
     const form = event.target;
     const target = coordFormTarget(form, location.origin);

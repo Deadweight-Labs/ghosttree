@@ -659,6 +659,9 @@ html.coord-enhanced body:has(> .coord-workspace) {
 }
 
 .coord-option-field small { font-weight: 400; }
+.coord-zone-local { display: none; }
+.coord-enhanced .coord-zone-local { display: inline; }
+.coord-enhanced .coord-zone-server { display: none; }
 
 .coord-mentions { display: grid; gap: 0; }
 .coord-mentions legend { padding: 0; color: var(--coord-muted); font-size: var(--coord-text-meta); font-weight: 650; }

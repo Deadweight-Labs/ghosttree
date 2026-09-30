@@ -901,7 +901,7 @@ func TestCoordComposerKeepsPrimaryInputVisibleAndAdvancedFieldsInNativeDisclosur
 		t.Fatal("advanced composer disclosure is not closed")
 	}
 	advanced := composer[moreStart : moreStart+moreEnd]
-	for _, field := range []string{`name="intent"`, `name="mentions"`, `name="expires_at"`} {
+	for _, field := range []string{`name="intent"`, `name="mentions"`, `{{template "coord-expiry-field"`} {
 		if !strings.Contains(advanced, field) {
 			t.Errorf("advanced composer disclosure missing %q", field)
 		}
@@ -1105,7 +1105,7 @@ func TestCoordMobilePolishKeepsConversationDenseAndStatusOutOfTheWay(t *testing.
 	for _, want := range []string{
 		`coord-nojs-status`,
 		`type="datetime-local"`,
-		`Zeit in {{.Zone}}`,
+		`Zeit in {{.}} (Serverzeit)`,
 		`Braucht dich <small>alle Räume</small>`,
 		`{{.Attention}} offen`,
 		`{{.Unread}} neu`,
