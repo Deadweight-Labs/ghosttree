@@ -71,6 +71,10 @@
     (panel.querySelector("a,button,input,select,textarea,summary") || panel)
       .focus();
   };
+  // Choosing a room in the rooms drawer is a decision to go there: the drawer
+  // steps aside. Live refreshes (no history entry, same room) leave it alone.
+  const shouldCloseRoomsDrawer = (openPanelId, history, oldRoom, newRoom) =>
+    openPanelId === "coord-rooms" && (history === "push" || oldRoom !== newRoom);
   const bindDrawerCloseControls = () => {
     document.querySelectorAll("[data-coord-drawer-close]").forEach((control) => {
       if (control.dataset.coordDrawerCloseBound) return;
@@ -230,6 +234,13 @@
       actionStatus.dataset.error = error ? "true" : "false";
     }
     if (message && announce) announce.textContent = message;
+  };
+
+  // A page swap is not news worth a banner: clear the "wird geladen" line and
+  // leave the confirmation to screen readers.
+  const quietSuccess = (message) => {
+    setActionStatus("");
+    if (announce) announce.textContent = message;
   };
 
   const pageParams = () => new URLSearchParams(location.search);
@@ -450,6 +461,13 @@
       history.replaceState({coord: true}, "", target.href);
     }
     bindDrawers();
+    const closeRooms = shouldCloseRoomsDrawer(
+      openPanel?.id, options.history, oldRoom, currentRoom(),
+    );
+    if (closeRooms) {
+      returnFocus = null;
+      close();
+    }
     if (openPanel) {
       const reopenedPanel = document.getElementById(openPanel.id);
       restoreOutside();
@@ -478,6 +496,12 @@
       hashTarget.scrollIntoView({block: "nearest"});
       if (/^(INPUT|SELECT|TEXTAREA|BUTTON|A)$/.test(hashTarget.tagName)) {
         hashTarget.focus();
+      }
+    } else if (closeRooms) {
+      const heading = document.querySelector(".coord-conversation-head h2");
+      if (heading) {
+        heading.tabIndex = -1;
+        heading.focus({preventScroll: true});
       }
     } else restoreFocus(focus);
     markHighestRenderedRead();
@@ -516,7 +540,8 @@
         setActionStatus("Die Serverantwort konnte nicht angezeigt werden.", true);
         return coordPageLoadFailed;
       }
-      setActionStatus(options.successLabel || "Unterhaltung aktualisiert");
+      if (options.successLabel) setActionStatus(options.successLabel);
+      else quietSuccess("Unterhaltung aktualisiert");
       return coordPageLoadApplied;
     } catch (error) {
       if (error?.name === "AbortError") return coordPageLoadSuperseded;

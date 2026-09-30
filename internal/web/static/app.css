@@ -121,7 +121,7 @@ html.coord-enhanced body:has(> .coord-workspace) {
   --coord-text-title: .95rem;
 
   display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr) auto auto;
   width: 100%;
   max-width: none;
   height: calc(100dvh - 3rem);
@@ -914,16 +914,11 @@ html.coord-enhanced body:has(> .coord-workspace) {
 }
 
 .coord-action-status {
-  position: fixed;
-  left: 50%;
-  top: 3.5rem;
-  z-index: 50;
-  max-width: min(34rem, calc(100vw - 2rem));
+  grid-row: 3;
+  min-width: 0;
   margin: 0;
-  padding: .5rem .7rem;
-  transform: translateX(-50%);
-  border: 1px solid #777f7a;
-  border-radius: var(--coord-radius);
+  padding: .3rem .85rem;
+  border-top: 1px solid #777f7a;
   background: #202422;
   color: #fff;
 }
@@ -942,6 +937,7 @@ html.coord-enhanced body:has(> .coord-workspace) {
   border: 0 !important;
 }
 
+  font-size: var(--coord-text-small);
 .coord-backdrop {
   position: fixed;
   inset: 0;
