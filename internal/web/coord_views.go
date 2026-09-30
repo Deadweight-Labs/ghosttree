@@ -30,12 +30,12 @@ type coordSidebarView struct {
 }
 
 // BadgeCount is the one number shown on the narrow-layout rooms button:
-// everything that needs the viewer (open attention plus unread mentions) wins
-// over plain unread messages.
+// every message that needs the viewer (open attention or unread mention, each
+// counted once) wins over plain unread messages.
 func (s coordSidebarView) BadgeCount() int64 {
 	var needs, unread int64
 	for _, room := range s.Attention {
-		needs += room.Attention + room.Mentions
+		needs += room.NeedsYou
 		unread += room.Unread
 	}
 	if needs > 0 {
@@ -46,7 +46,7 @@ func (s coordSidebarView) BadgeCount() int64 {
 
 func (s coordSidebarView) BadgeLabel() string {
 	for _, room := range s.Attention {
-		if room.Attention+room.Mentions > 0 {
+		if room.NeedsYou > 0 {
 			return "brauchen dich"
 		}
 	}
@@ -68,7 +68,9 @@ func (s coordSidebarView) room(key string) (coordRoomView, bool) {
 type coordRoomView struct {
 	Key, Kind, Label, URL       string
 	Unread, Mentions, Attention int64
-	Active                      bool
+	// NeedsYou counts each message once that mentions or awaits the viewer.
+	NeedsYou int64
+	Active   bool
 }
 
 type coordRoomDetailView struct {
@@ -175,7 +177,7 @@ func buildCoordSidebar(summaries []store.CoordRoomSummary, principalID, activeKe
 			Key: summary.Room.Key, Kind: summary.Room.Kind,
 			Label:  coordRoomLabel(summary.Room, principalID, labels),
 			URL:    coordRoomURL(summary.Room.Key, "", 0),
-			Unread: summary.Unread, Mentions: summary.MentionUnread, Attention: summary.Attention,
+			Unread: summary.Unread, Mentions: summary.MentionUnread, Attention: summary.Attention, NeedsYou: summary.NeedsYou,
 			Active: summary.Room.Key == activeKey,
 		}
 		switch summary.Room.Kind {

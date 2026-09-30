@@ -2471,10 +2471,21 @@ func TestCoordRoomsToggleCarriesTotalSignalWithAccessibleName(t *testing.T) {
 	page := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room))
 	toggle := page[strings.Index(page, `data-coord-drawer-target="coord-rooms"`):]
 	toggle = toggle[:strings.Index(toggle, "</button>")]
-	for _, want := range []string{`class="coord-count"`, "brauchen dich", "data-coord-rooms-count"} {
+	for _, want := range []string{`class="coord-count" aria-hidden="true">1</span>`, ", 1 brauchen dich", "data-coord-rooms-count"} {
 		if !strings.Contains(toggle, want) {
-			t.Errorf("rooms toggle missing %q: %s", want, toggle)
+			t.Errorf("a question with a mention is one message that needs the viewer; toggle missing %q: %s", want, toggle)
 		}
+	}
+	if _, err := st.AppendCoordMessage(store.CoordMessage{
+		DestinationKind: store.DestinationRoom, DestinationID: room,
+		SenderExternalID: "reviewer", AuthorPrincipalID: "person:2", AuthorKind: store.AuthorHuman,
+		ClientID: "q2", Body: "Noch eine", Intent: store.IntentApproval, Mentions: []string{"person:1"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	page = coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room))
+	if !strings.Contains(page, `class="coord-count" aria-hidden="true">2</span>`) {
+		t.Error("two different messages that need the viewer must count as 2")
 	}
 	js, _ := files.ReadFile("static/app.js")
 	if !strings.Contains(string(js), "[data-coord-rooms-count]") {
