@@ -339,3 +339,21 @@ func TestUnknownThreadStateIsRejected(t *testing.T) {
 		t.Fatal("an invented thread state must be rejected")
 	}
 }
+
+// Ein negatives oder riesiges limit darf weder make zum Absturz bringen noch
+// die Allokation bestimmen: es wird auf den Standardwert bzw. das Maximum normalisiert.
+func TestSearchThreadsToleratesNegativeAndHugeLimit(t *testing.T) {
+	s := openTest(t)
+	newThread(t, s, "eins")
+	newThread(t, s, "zwei")
+
+	for _, limit := range []int{-1, -1 << 62, 0, int(^uint(0) >> 1)} {
+		got, err := s.SearchThreads("p", "", false, limit)
+		if err != nil {
+			t.Fatalf("limit %d: %v", limit, err)
+		}
+		if len(got) != 2 {
+			t.Fatalf("limit %d: want both threads, got %d", limit, len(got))
+		}
+	}
+}

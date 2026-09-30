@@ -889,7 +889,7 @@ func (a CoordAccess) SearchThreads(project, query string, includeArchived bool, 
 	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	out := make([]Thread, 0, min(limit, len(candidates)))
+	out := make([]Thread, 0, len(candidates))
 	for _, thread := range candidates {
 		if err := a.canReadThreadTx(tx, actor, thread.ID); err == nil {
 			out = append(out, thread)
