@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
@@ -188,7 +189,10 @@ type coordAttentionView struct {
 	ReasonLabel                                                    string
 	// Primary is the one action worth showing without a disclosure; More
 	// holds everything else behind "Aktionen".
-	Primary                  *coordAttentionActionView
+	Primary *coordAttentionActionView
+	// Inline holds the approval verdicts, which stay visible on the card.
+	Inline                   []coordAttentionActionView
+	Preview                  string
 	More                     []coordAttentionActionView
 	Private                  bool
 	CoordinationOnlyApproval bool
@@ -233,7 +237,7 @@ func buildCoordAttentionViews(items []store.AttentionItem, csrfToken string, lab
 		recipientLabel := coordIdentityLabel(item.RecipientID, labels)
 		view := coordAttentionView{
 			ID: item.ID, Sequence: item.Sequence, Reason: item.Reason, State: item.State,
-			Body: item.Body, RecipientID: item.RecipientID, RecipientLabel: recipientLabel,
+			Body: item.Body, Preview: coordAttentionPreview(item.Body), RecipientID: item.RecipientID, RecipientLabel: recipientLabel,
 			Incoming: item.IsRecipient, CanWithdraw: item.CanWithdraw,
 			RoomKey: item.HomeRoomKey, CSRFToken: csrfToken,
 			CoordinationOnlyApproval: item.Reason == store.AttentionApproval,
@@ -260,7 +264,7 @@ func buildCoordAttentionViews(items []store.AttentionItem, csrfToken string, lab
 			view.Actions = append(view.Actions, coordAttentionActionView{Value: store.AttentionActionDismiss, Label: "Verwerfen"})
 		}
 		view.ReasonLabel = coordAttentionReasonLabel(item.Reason)
-		view.Primary, view.More = splitCoordAttentionActions(item.Reason, view.Actions)
+		view.Primary, view.Inline, view.More = splitCoordAttentionActions(item.Reason, view.Actions)
 		if view.Incoming {
 			incoming = append(incoming, view)
 		}
@@ -699,13 +703,34 @@ func coordAttentionReasonLabel(reason string) string {
 // splitCoordAttentionActions keeps a single unambiguous action inline. An
 // approval has two opposite outcomes and needs its explanation first, so it
 // and the dismissal stay behind the disclosure.
-func splitCoordAttentionActions(reason string, actions []coordAttentionActionView) (*coordAttentionActionView, []coordAttentionActionView) {
+func splitCoordAttentionActions(reason string, actions []coordAttentionActionView) (primary *coordAttentionActionView, inline, more []coordAttentionActionView) {
 	if len(actions) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
-	if reason == store.AttentionApproval || actions[0].Value == store.AttentionActionDismiss {
-		return nil, actions
+	if reason == store.AttentionApproval {
+		last := len(actions) - 1
+		if actions[last].Value == store.AttentionActionDismiss {
+			return nil, actions[:last], actions[last:]
+		}
+		return nil, actions, nil
 	}
-	primary := actions[0]
-	return &primary, actions[1:]
+	if actions[0].Value == store.AttentionActionDismiss {
+		return nil, nil, actions
+	}
+	first := actions[0]
+	return &first, nil, actions[1:]
+}
+
+// coordAttentionPreviewRunes bounds the preview text sent per attention item;
+// the stylesheet clamps what is shown to two lines.
+const coordAttentionPreviewRunes = 240
+
+// coordAttentionPreview shortens body on a rune boundary so a multi-byte
+// character is never cut in half.
+func coordAttentionPreview(body string) string {
+	body = strings.TrimSpace(body)
+	if utf8.RuneCountInString(body) <= coordAttentionPreviewRunes {
+		return body
+	}
+	return string([]rune(body)[:coordAttentionPreviewRunes]) + "…"
 }
