@@ -41,13 +41,17 @@ type Notification struct {
 
 // NewNotification baut die Notification zu einer Nachricht. meta trägt
 // message_id und origin_event_id, über die eine Antwort ihre causation_id
-// setzt, dazu Raum und Absender.
+// setzt, dazu Raum, Absender und dessen Art (sender_kind: human oder agent,
+// wie der Server sie am Autor festhält; fehlt sie, bleibt der Schlüssel weg).
 func NewNotification(room store.CoordRoom, m store.CoordMessage, content string) Notification {
 	meta := map[string]string{
 		"message_id": strconv.FormatInt(m.ID, 10),
 		"room":       room.Key,
 		"room_kind":  room.Kind,
 		"sender":     m.SenderExternalID,
+	}
+	if m.AuthorKind != "" {
+		meta["sender_kind"] = m.AuthorKind
 	}
 	if m.OriginEventID != "" {
 		meta["origin_event_id"] = m.OriginEventID

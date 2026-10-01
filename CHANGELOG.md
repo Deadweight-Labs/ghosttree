@@ -22,6 +22,9 @@ Versioning, with pre-1.0 compatibility rules described in
   waiting for polling. Replies to replies stay quiet.
 - Add a `send` tool to the Claude channel server so a channel agent can start
   conversations (text, mention, room, intent) without a separate `ctx mcp`.
+- Tell Claude in the channel instructions that `<channel>` events are genuine
+  requests from the coordination room, and add `sender_kind` (human or agent)
+  to their meta.
 - Serialize runtime writes through a bounded queue while keeping reads on an
   independent connection pool. Batch pending session chunks, report retryable
   saturation errors, expose writer metrics, and drain accepted writes on shutdown.

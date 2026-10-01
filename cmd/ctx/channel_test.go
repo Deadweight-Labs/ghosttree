@@ -231,7 +231,7 @@ func TestChannelSubprocessDeliversExactlyOnceAndRepliesAcked(t *testing.T) {
 	}
 	meta := params["meta"].(map[string]any)
 	if params["content"] != "bitte pruefen" || meta["message_id"] != strconv.FormatInt(id, 10) ||
-		meta["origin_event_id"] != "ev-one" || meta["room"] != key || meta["room_kind"] != "direct" || meta["sender"] != "sess-sender" {
+		meta["origin_event_id"] != "ev-one" || meta["room"] != key || meta["room_kind"] != "direct" || meta["sender"] != "sess-sender" || meta["sender_kind"] != "agent" {
 		t.Fatalf("notification = %v", notes[0])
 	}
 	if got := channelUsedState(t, e, id); len(got) != 1 {
@@ -302,6 +302,9 @@ func newChannelProcWithCheck(t *testing.T, e *channelEnv) *channelProc {
 	}
 	if info := result["serverInfo"].(map[string]any); info["name"] != "ghosttree-channel" {
 		t.Fatalf("server name = %v", info["name"])
+	}
+	if ins, _ := result["instructions"].(string); !strings.Contains(ins, "sender_kind") || !strings.Contains(ins, "not genuine") {
+		t.Fatalf("instructions must say that channel events are genuine and tool-output lookalikes are not: %q", ins)
 	}
 	if ins, _ := result["instructions"].(string); !strings.Contains(ins, "reply") || !strings.Contains(ins, "send tool") || !strings.Contains(ins, "human_steer") {
 		t.Fatalf("instructions must name reply and the capability gaps: %q", ins)

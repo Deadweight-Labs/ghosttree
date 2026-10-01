@@ -853,3 +853,16 @@ func TestRequestAnswerChainEndsAfterOneAnswer(t *testing.T) {
 		t.Fatalf("the acknowledgement chain must stay quiet: claimed=%v", f.claimed)
 	}
 }
+
+func TestNotificationCarriesSenderKind(t *testing.T) {
+	room := store.CoordRoom{Key: "project:x", Kind: store.RoomProject}
+	for _, c := range []struct{ kind, want string }{{store.AuthorHuman, "human"}, {store.AuthorAgent, "agent"}} {
+		n := NewNotification(room, store.CoordMessage{ID: 5, SenderExternalID: "s", AuthorKind: c.kind}, "x")
+		if n.Meta["sender_kind"] != c.want {
+			t.Errorf("sender_kind for %q = %q, want %q", c.kind, n.Meta["sender_kind"], c.want)
+		}
+	}
+	if _, ok := NewNotification(room, store.CoordMessage{ID: 5}, "x").Meta["sender_kind"]; ok {
+		t.Error("an unknown author kind must not be reported")
+	}
+}
