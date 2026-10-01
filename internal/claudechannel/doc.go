@@ -59,10 +59,14 @@
 // Projekträumen automatisch am Absender setzt, macht eine Antwort nie zur
 // Anfrage. Eine Antwort auf eine eigene Antwort oder sonstige Nicht-Anfrage,
 // etwa ein Dank, weckt nicht, und die Tool-Instruktion bittet, Antworten nicht
-// zu beantworten: eine Kette endet nach einer Antwort. Eine Schleife über
+// zu beantworten: eine Kette endet nach einer Antwort. Wer nach einer Antwort
+// erneut etwas braucht (Re-Review nach einem Fix), setzt am reply einen
+// Attention-Intent (attentionIntent weckt auch als Antwort) oder nutzt send mit
+// Mention. Eine Schleife über
 // bewusste Sends (A sendet mit Mention, B sendet mit Mention, ...) begrenzt
-// zweierlei: das send-Tool lässt je Channel-Prozess höchstens 10 Sends mit
-// Mention pro Minute und 30 pro 15 Minuten zu (ctx channel, sendMentionsPer*),
+// zweierlei: die Tools send und reply mit Attention-Intent lassen je
+// Channel-Prozess höchstens 10 solcher Nachrichten pro Minute und 30 pro 15
+// Minuten zu (ctx channel, sendMentionsPer*),
 // und das Empfangsbudget (hookbudget.CoordLimit, 12000 Zeichen je 5 Minuten)
 // kürzt die Zustellung. Letzteres greift bei kurzen Nachrichten erst spät,
 // deshalb die Sendegrenze. Der Inhalt einer Notification wird von

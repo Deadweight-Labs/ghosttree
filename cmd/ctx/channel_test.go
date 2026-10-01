@@ -739,3 +739,134 @@ func TestChannelSendReportsDuplicates(t *testing.T) {
 		t.Fatalf("limiter recorded %d sends, want 1", n)
 	}
 }
+
+// Ablauf aus dem Experiment: der Reviewer meldet FAIL, der Builder behebt es und
+// antwortet auf diese Antwort. Ohne Intent bliebe der Reviewer stumm; mit
+// intent=question wird er geweckt, ein reply mit ack danach nicht.
+func TestChannelReplyWithIntentWakesTheReviewerAfterAFailReview(t *testing.T) {
+	if testing.Short() {
+		t.Skip("subprocess test")
+	}
+	e := newChannelEnv(t)
+	const reviewer = "sess-reviewer"
+	room := store.RoomKeyForMachine("chanbox")
+	if _, err := e.a.RegisterCoordAgent(store.CoordAgent{ExternalID: reviewer, Provider: "test", RoomKey: room, DisplayName: reviewer}); err != nil {
+		t.Fatal(err)
+	}
+	builder := startChannelAs(t, e, channelSelf)
+	builder.handshake()
+	rev := startChannelAs(t, e, reviewer)
+	rev.handshake()
+
+	// Builder bittet um Review; Reviewer antwortet mit FAIL (eine Antwort).
+	if text, isErr := builder.callTool(20, "send", fmt.Sprintf(`{"text":"bitte reviewen","mention":[%q],"intent":"handoff","room":"machine"}`, reviewer)); isErr {
+		t.Fatalf("send = %q", text)
+	}
+	if notes := rev.notifications(20*time.Second, 1); len(notes) != 1 {
+		t.Fatalf("reviewer must be woken by the handoff: %v", notes)
+	}
+	msgs, err := e.a.CoordInbox(store.DestinationRoom, room, "sess-sender", 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var request int64
+	for _, m := range msgs {
+		if m.Body == "bitte reviewen" {
+			request = m.ID
+		}
+	}
+	if text, isErr := rev.callTool(21, "reply", fmt.Sprintf(`{"message_id":%q,"text":"FAIL: test fehlt"}`, strconv.FormatInt(request, 10))); isErr {
+		t.Fatalf("fail review = %q", text)
+	}
+	if notes := builder.notifications(20*time.Second, 1); len(notes) != 1 {
+		t.Fatalf("builder must see the FAIL review: %v", notes)
+	}
+	fail := repliesTo(t, e, room, request)
+	if len(fail) != 1 {
+		t.Fatalf("want one FAIL review, got %v", fail)
+	}
+
+	// Ein reply ohne Intent auf die Antwort weckt niemanden.
+	if text, isErr := builder.callTool(22, "reply", fmt.Sprintf(`{"message_id":%q,"text":"review 77abc8c"}`, strconv.FormatInt(fail[0].ID, 10))); isErr {
+		t.Fatalf("plain reply = %q", text)
+	}
+	if notes := rev.notifications(1500*time.Millisecond, 0); len(notes) != 0 {
+		t.Fatalf("a plain reply to a reply must not wake: %v", notes)
+	}
+	// Mit intent=question schon.
+	text, isErr := builder.callTool(23, "reply", fmt.Sprintf(`{"message_id":%q,"text":"fixed, please re-review","intent":"question"}`, strconv.FormatInt(fail[0].ID, 10)))
+	if isErr {
+		t.Fatalf("reply with intent = %q", text)
+	}
+	notes := rev.notifications(20*time.Second, 1)
+	if len(notes) != 1 || notes[0]["params"].(map[string]any)["content"] != "fixed, please re-review" {
+		t.Fatalf("the reviewer must be woken by reply(intent=question): %v", notes)
+	}
+	// ack weckt nicht.
+	if text, isErr := builder.callTool(24, "reply", fmt.Sprintf(`{"message_id":%q,"text":"danke","intent":"ack"}`, strconv.FormatInt(fail[0].ID, 10))); isErr {
+		t.Fatalf("reply with ack = %q", text)
+	}
+	if notes := rev.notifications(1500*time.Millisecond, 0); len(notes) != 0 {
+		t.Fatalf("an ack reply must not wake: %v", notes)
+	}
+}
+
+func TestChannelReplyValidatesItsIntent(t *testing.T) {
+	e := newChannelEnv(t)
+	tools := newTools(e.b)
+	for _, intent := range []string{"shout", "standing"} {
+		_, _, err := tools.handleReply(context.Background(), nil, channelReplyInput{MessageID: "1", Text: "x", Intent: intent})
+		if err == nil || !strings.Contains(err.Error(), "unknown intent") {
+			t.Errorf("intent %q: err = %v", intent, err)
+		}
+	}
+}
+
+// Ein reply mit Attention-Intent teilt sich die Sendegrenze mit send; ein
+// normales reply und ein reply mit ack zählen nicht.
+func TestChannelReplyWithIntentCountsAgainstTheSendLimit(t *testing.T) {
+	e := newChannelEnv(t)
+	tools := newTools(e.b)
+	room := store.RoomKeyForMachine("chanbox")
+	tools.machineRoom = room
+	clock := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	tools.now = func() time.Time { return clock }
+	// Eine Nachricht des anderen Agenten, auf die geantwortet wird.
+	origin, err := e.a.SendCoordMessage(store.CoordMessage{
+		DestinationKind: store.DestinationRoom, DestinationID: room, SenderExternalID: "sess-sender",
+		ClientID: "o-limit", OriginEventID: "ev-limit", Body: "frage", Mentions: []string{channelSelf},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := strconv.FormatInt(origin, 10)
+	reply := func(i int, intent string) error {
+		_, _, err := tools.handleReply(context.Background(), nil, channelReplyInput{
+			MessageID: id, Room: room, Text: fmt.Sprintf("antwort %d", i), Intent: intent,
+		})
+		return err
+	}
+	for i := 0; i < sendMentionsPerMinute; i++ {
+		if err := reply(i, "question"); err != nil {
+			t.Fatalf("reply %d: %v", i, err)
+		}
+	}
+	if err := reply(100, "handoff"); err == nil || !strings.Contains(err.Error(), "send limit reached") {
+		t.Fatalf("reply with intent over the limit: %v", err)
+	}
+	// send teilt dieselbe Grenze.
+	if _, _, err := tools.handleSend(context.Background(), nil, channelSendInput{Text: "x", Room: "machine", Mention: []string{"sess-sender"}}); err == nil || !strings.Contains(err.Error(), "send limit reached") {
+		t.Fatalf("send must share the limit: %v", err)
+	}
+	// Normales reply und ack bleiben frei.
+	if err := reply(101, ""); err != nil {
+		t.Fatalf("plain reply must not be limited: %v", err)
+	}
+	if err := reply(102, "ack"); err != nil {
+		t.Fatalf("ack reply must not be limited: %v", err)
+	}
+	clock = clock.Add(sendMinuteWindow + time.Second)
+	if err := reply(103, "question"); err != nil {
+		t.Fatalf("reply after the window: %v", err)
+	}
+}

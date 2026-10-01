@@ -20,6 +20,9 @@ Versioning, with pre-1.0 compatibility rules described in
 - Wake a channel agent when its request is answered: a reply to a question-type
   message, or to a message that mentioned the replier, now delivers instead of
   waiting for polling. Replies to replies stay quiet.
+- Let the channel `reply` tool carry an optional `intent` so a reply to a reply
+  can ask for something again (such as a re-review) and wake the other agent;
+  such replies count against the `send` limit, plain replies still wake nobody.
 - Add a `send` tool to the Claude channel server so a channel agent can start
   conversations (text, mention, room, intent) without a separate `ctx mcp`.
 - Tell Claude in the channel instructions that `<channel>` events are genuine
