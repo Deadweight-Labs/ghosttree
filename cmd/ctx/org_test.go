@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
 	"github.com/Deadweight-Labs/ghosttree/internal/server"
@@ -74,11 +75,15 @@ func TestOrgCLICreateInviteAcceptAndMembers(t *testing.T) {
 		t.Fatalf("list: %s", out)
 	}
 
-	// Flags hinter den Positionsargumenten gehen auch.
-	out := f.ok(t, "robin", "org", "invite", "alpha", "--days", "3")
-	code := codeLine.FindString(out)
-	if code == "" || !strings.Contains(out, "single use") {
-		t.Fatalf("invite output: %s", out)
+	// Einladungen stellt die Weboberfläche aus; die CLI weist darauf hin.
+	c0, out := f.as(t, "robin", "org", "invite", "alpha", "--days", "3")
+	if c0 == 0 || !strings.Contains(out, "web_session_required") || !strings.Contains(out, f.url+"/ui/orgs") || !strings.Contains(out, "--db") {
+		t.Fatalf("invite hint: %d %s", c0, out)
+	}
+	org, _ := f.st.OrgByRef("alpha")
+	code, _, err := f.st.CreateInvitation("person:1", org.ID, "", "member", 3*24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
 	}
 	if c, o := f.as(t, "anna", "org", "accept", "wrong"); c == 0 || !strings.Contains(o, "invalid_code") {
 		t.Fatalf("wrong code: %d %s", c, o)
@@ -90,23 +95,37 @@ func TestOrgCLICreateInviteAcceptAndMembers(t *testing.T) {
 	if out := f.ok(t, "anna", "org", "members", "alpha"); !strings.Contains(out, "robin") || !strings.Contains(out, "anna") {
 		t.Fatalf("members: %s", out)
 	}
-	if c, o := f.as(t, "anna", "org", "invite", "alpha"); c == 0 || !strings.Contains(o, "not_org_owner") {
+	if c, o := f.as(t, "anna", "org", "invite", "alpha"); c == 0 || !strings.Contains(o, "web_session_required") {
 		t.Fatalf("member inviting: %d %s", c, o)
 	}
-	f.ok(t, "robin", "org", "members", "alpha", "set-role", "anna", "owner")
-	if c, o := f.as(t, "robin", "org", "members", "alpha", "set-role", "robin", "member"); c != 0 {
-		t.Fatalf("owner may demote another owner: %s", o)
+	if c, o := f.as(t, "robin", "org", "members", "alpha", "set-role", "anna", "owner"); c == 0 || !strings.Contains(o, "web_session_required") || !strings.Contains(o, "/ui/orgs") {
+		t.Fatalf("set-role over the API: %d %s", c, o)
 	}
-	if c, o := f.as(t, "anna", "org", "members", "alpha", "set-role", "anna", "member"); c == 0 || !strings.Contains(o, "last_owner") {
-		t.Fatalf("last owner: %d %s", c, o)
+	if f.st.OrgRole(org.ID, "person:2") != "member" {
+		t.Fatal("a refused set-role changed the role")
 	}
-	f.ok(t, "anna", "org", "invite", "alpha", "--email", "x@example.test")
+	// Was die Weboberfläche tut (hier: Store); der letzte Owner bleibt.
+	if err := f.st.SetOrgRole("person:1", org.ID, "person:2", "owner"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.SetOrgRole("person:1", org.ID, "person:1", "member"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.SetOrgRole("person:2", org.ID, "person:2", "member"); err == nil {
+		t.Fatal("last owner demoted")
+	}
+	if _, _, err := f.st.CreateInvitation("person:2", org.ID, "x@example.test", "", 0); err != nil {
+		t.Fatal(err)
+	}
 	list := f.ok(t, "anna", "org", "invitations", "alpha")
 	if !strings.Contains(list, "pending") || !strings.Contains(list, "x@example.test") || strings.Contains(list, code) {
 		t.Fatalf("invitations: %s", list)
 	}
 	f.ok(t, "anna", "org", "invitations", "alpha", "revoke", "2")
-	f.ok(t, "anna", "org", "members", "alpha", "remove", "robin")
+	if c, o := f.as(t, "anna", "org", "members", "alpha", "remove", "robin"); c == 0 || !strings.Contains(o, "web_session_required") {
+		t.Fatalf("removing another member over the API: %d %s", c, o)
+	}
+	f.ok(t, "robin", "org", "members", "alpha", "remove", "robin") // sich selbst verlassen
 	if c, _ := f.as(t, "robin", "org", "members", "alpha"); c == 0 {
 		t.Fatal("a removed member must lose access")
 	}
@@ -132,7 +151,12 @@ func TestProjectCLIClaimMoveListAndDefaults(t *testing.T) {
 	if c, o := f.as(t, "anna", "project", "claim", "github.com/x/y"); c == 0 || !strings.Contains(o, "no_org") && !strings.Contains(o, "project_claimed") {
 		t.Fatalf("foreign claim: %d %s", c, o)
 	}
-	f.ok(t, "robin", "project", "move", "github.com/x/y", "--org", "beta")
+	if c, o := f.as(t, "robin", "project", "move", "github.com/x/y", "--org", "beta"); c == 0 || !strings.Contains(o, "web_session_required") {
+		t.Fatalf("move over the API: %d %s", c, o)
+	}
+	if _, err := f.st.MoveProject("person:1", "github.com/x/y", "beta"); err != nil {
+		t.Fatal(err)
+	}
 	if out := f.ok(t, "robin", "project", "list", "--org", "beta"); !strings.Contains(out, "github.com/x/y") {
 		t.Fatalf("list after move: %s", out)
 	}

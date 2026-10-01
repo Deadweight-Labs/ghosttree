@@ -32,7 +32,7 @@ func roleAPI(t *testing.T) (orgFixture, string) {
 	return f, "/api/projects/" + strconv.FormatInt(p.ID, 10) + "/members"
 }
 
-func TestProjectRoleAPIGrantRules(t *testing.T) {
+func TestProjectRolesAreReadableButNotWritableOverTheAPI(t *testing.T) {
 	f, base := roleAPI(t)
 	out := f.mustCall(t, 200, "GET", base, f.robin, nil)
 	you := out["you"].(map[string]any)
@@ -40,51 +40,96 @@ func TestProjectRoleAPIGrantRules(t *testing.T) {
 		t.Fatalf("robin: %v", out)
 	}
 	f.mustCall(t, 404, "GET", base, f.carl, nil) // draußen: gibt es nicht
-	f.mustCall(t, 401, "GET", base, "", nil)     //
+	f.mustCall(t, 401, "GET", base, "", nil)
 	f.mustCall(t, 404, "GET", "/api/projects/999/members", f.robin, nil)
-
-	f.mustCall(t, 200, "PUT", base+"/anna", f.robin, map[string]any{"role": "lead", "can_review": true})
-	f.mustCall(t, 200, "PUT", base+"/person:3", f.anna, map[string]any{"role": "member"})
-	// Lead vergibt keinen Owner und keinen Lead.
-	if code, out := f.call(t, "PUT", base+"/ben", f.anna, map[string]any{"role": "owner"}); code != 403 || out["code"] != "role_forbidden" {
-		t.Fatalf("lead grants owner: %d %v", code, out)
+	if err := f.st.SetProjectRole("person:1", apiRoleProject, "person:3", "member", false, store.RoleViaWeb); err != nil {
+		t.Fatal(err)
 	}
-	f.mustCall(t, 403, "PUT", base+"/ben", f.anna, map[string]any{"role": "lead"})
-	// Selbsterhöhung.
-	if code, out := f.call(t, "PUT", base+"/anna", f.anna, map[string]any{"role": "owner"}); code != 403 || out["code"] != "self_promotion" {
-		t.Fatalf("self promotion: %d %v", code, out)
-	}
-	// Ein Member vergibt nichts.
-	if code, out := f.call(t, "PUT", base+"/ben", f.ben, map[string]any{"role": "lead"}); code != 403 || out["code"] != "not_grantor" {
-		t.Fatalf("member grants: %d %v", code, out)
-	}
-	// Von außen: das Projekt existiert nicht.
-	f.mustCall(t, 404, "PUT", base+"/ben", f.carl, map[string]any{"role": "guest"})
-	// Org-Owner sind implizit Owner.
-	if code, out := f.call(t, "PUT", base+"/robin", f.robin, map[string]any{"role": "guest"}); code != 409 || out["code"] != "implicit_owner" {
-		t.Fatalf("implicit owner: %d %v", code, out)
-	}
-	// Agenten vergeben keine Rollen: weder per Körperfeld noch per Query.
-	f.mustCall(t, 403, "PUT", base+"/ben", f.robin, map[string]any{"role": "guest", "agent_external_id": "claude:h:1"})
-	f.mustCall(t, 403, "PUT", base+"/ben?agent_external_id=claude:h:1", f.robin, map[string]any{"role": "guest"})
-	f.mustCall(t, 403, "DELETE", base+"/ben?agent_external_id=claude:h:1", f.robin, nil)
-	if got := f.st.ProjectRole(apiRoleProject, "person:3"); got.Role != "member" {
-		t.Fatalf("a rejected call changed the role: %+v", got)
-	}
-	f.mustCall(t, 400, "PUT", base+"/ben", f.robin, map[string]any{"role": "reviewer"})
-	f.mustCall(t, 404, "PUT", base+"/nobody", f.robin, map[string]any{"role": "guest"})
-
-	f.mustCall(t, 204, "DELETE", base+"/ben", f.robin, nil)
-	f.mustCall(t, 404, "DELETE", base+"/ben", f.robin, nil)
 	out = f.mustCall(t, 200, "GET", base, f.anna, nil)
 	if members := out["members"].([]any); len(members) != 2 {
-		t.Fatalf("members after removal: %v", members)
+		t.Fatalf("members: %v", members)
 	}
+}
+
+// Rollen, Mitgliedschaften, Einladungen und Projektverschiebungen ändert kein
+// Bearer-Token, auch nicht das des Owners und auch nicht mit agent_external_id.
+func TestAdminRoutesRefuseBearerTokens(t *testing.T) {
+	f, base := roleAPI(t)
+	if err := f.st.SetProjectRole("person:1", apiRoleProject, "person:3", "member", false, store.RoleViaWeb); err != nil {
+		t.Fatal(err)
+	}
+	beta, _ := f.st.CreateOrg("person:1", "Beta", "beta")
+	_ = beta
+	type call struct {
+		method, path string
+		body         map[string]any
+	}
+	calls := []call{
+		{"PUT", base + "/anna", map[string]any{"role": "owner"}},
+		{"DELETE", base + "/ben", nil},
+		{"PUT", "/api/orgs/alpha/members/anna", map[string]any{"role": "owner"}},
+		{"DELETE", "/api/orgs/alpha/members/ben", nil},
+		{"POST", "/api/orgs/alpha/invitations", map[string]any{"role": "owner"}},
+		{"POST", "/api/projects/move", map[string]any{"remote": apiRoleProject, "org": "beta"}},
+	}
+	for _, c := range calls {
+		for name, token := range map[string]string{"owner token": f.robin, "member token": f.anna} {
+			variants := map[string]struct {
+				path string
+				body map[string]any
+			}{
+				"plain":          {c.path, c.body},
+				"agent in query": {c.path + "?agent_external_id=claude:h:1", c.body},
+			}
+			if c.body != nil {
+				withAgent := map[string]any{"agent_external_id": "claude:h:1"}
+				for k, v := range c.body {
+					withAgent[k] = v
+				}
+				variants["agent in body"] = struct {
+					path string
+					body map[string]any
+				}{c.path, withAgent}
+			}
+			for vname, v := range variants {
+				code, out := f.call(t, c.method, v.path, token, v.body)
+				// Das Mitglied darf bei manchen Routen schon vorher abgewiesen
+				// werden; 403 ist es in jedem Fall.
+				if code != 403 {
+					t.Fatalf("%s %s with %s (%s) = %d %v", c.method, c.path, name, vname, code, out)
+				}
+				if token == f.robin && out["code"] != "web_session_required" {
+					t.Fatalf("%s %s with %s (%s): %v", c.method, c.path, name, vname, out)
+				}
+			}
+		}
+	}
+	// Nichts hat sich geändert.
+	if got := f.st.ProjectRole(apiRoleProject, "person:3"); got.Role != "member" {
+		t.Fatalf("role changed: %+v", got)
+	}
+	if got := f.st.ProjectRole(apiRoleProject, "person:2"); got.Role != "" {
+		t.Fatalf("role granted: %+v", got)
+	}
+	if f.st.OrgRole(1, "person:2") != "member" || f.st.OrgRole(1, "person:3") != "member" {
+		t.Fatal("membership changed")
+	}
+	if invs, _ := f.st.ListInvitations("person:1", 1); len(invs) != 2 { // nur die zwei aus roleAPI
+		t.Fatalf("invitations = %d", len(invs))
+	}
+	if p, _ := f.st.ProjectByRemote(apiRoleProject); p.Org != "alpha" {
+		t.Fatalf("project moved: %+v", p)
+	}
+	// Ohne Token: 401. Das Verlassen der eigenen Organisation bleibt erlaubt.
+	f.mustCall(t, 401, "PUT", base+"/anna", "", map[string]any{"role": "owner"})
 }
 
 func TestAgentRoleOverAPIAndPeers(t *testing.T) {
 	f, base := roleAPI(t)
-	f.mustCall(t, 200, "PUT", base+"/ben", f.robin, map[string]any{"role": "member", "can_review": true})
+	if err := f.st.SetProjectRole("person:1", apiRoleProject, "person:3", "member", true, store.RoleViaWeb); err != nil {
+		t.Fatal(err)
+	}
+	_ = base
 	room := "project:" + apiRoleProject
 	reg := func(token, id, role string, want int) {
 		t.Helper()

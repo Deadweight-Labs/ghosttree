@@ -702,3 +702,15 @@ func mustRoom(t *testing.T, s *Server) string {
 	}
 	return key
 }
+
+func TestRequestedMarkShowsCapping(t *testing.T) {
+	if got := requestedMark(store.CoordAgent{Role: "member", RequestedRole: "lead"}); got != " (requested lead, effective member)" {
+		t.Fatalf("capped: %q", got)
+	}
+	if got := requestedMark(store.CoordAgent{Role: "lead", RequestedRole: "lead"}); got != "" {
+		t.Fatalf("not capped: %q", got)
+	}
+	if got := requestedMark(store.CoordAgent{}); got != "" {
+		t.Fatalf("empty: %q", got)
+	}
+}

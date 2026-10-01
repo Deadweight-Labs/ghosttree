@@ -155,3 +155,73 @@ func TestCoordParticipantsShowRoles(t *testing.T) {
 		}
 	}
 }
+
+// roleForm schneidet das Rollenformular eines Kontos aus der Seite.
+func roleForm(page, account string) string {
+	marker := `name="account" value="` + account + `"><select name="role"`
+	i := strings.Index(page, marker)
+	if i < 0 {
+		return ""
+	}
+	rest := page[i:]
+	return rest[:strings.Index(rest, "</form>")]
+}
+
+func TestRoleSelectShowsTheCurrentRoleNeverOwnerByDefault(t *testing.T) {
+	base, st, alice, anna := roleWeb(t)
+	get := func(c *http.Client) string {
+		resp, _ := c.Get(base + "/ui/orgs?org=alpha")
+		return body(t, resp)
+	}
+	// Ohne Rolle: Platzhalter vorgewählt, nie owner.
+	form := roleForm(get(alice), "person:2")
+	if !strings.Contains(form, `<option value="" selected>`) || strings.Contains(form, `value="owner" selected`) || strings.Count(form, " selected") != 1 {
+		t.Fatalf("role-less account: %s", form)
+	}
+	if err := st.SetProjectRole("person:1", webRoleProject, "person:2", "member", false, store.RoleViaWeb); err != nil {
+		t.Fatal(err)
+	}
+	form = roleForm(get(alice), "person:2")
+	if !strings.Contains(form, `<option value="member" selected>`) || strings.Contains(form, `value=""`) || strings.Count(form, " selected") != 1 {
+		t.Fatalf("member: %s", form)
+	}
+	// Nur das Häkchen umschalten, die Rolle bleibt.
+	resp := postOrg(t, alice, base, "/ui/orgs/project/role", url.Values{"org": {"alpha"}, "remote": {webRoleProject}, "account": {"person:2"}, "role": {"member"}, "review": {"1"}})
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("toggle review: %d", resp.StatusCode)
+	}
+	if got := st.ProjectRole(webRoleProject, "person:2"); got.Role != "member" || !got.CanReview {
+		t.Fatalf("after toggling the flag: %+v", got)
+	}
+	// Ein Lead sieht bei sich die eigene Stufe vorgewählt und kann das Häkchen
+	// ablegen, ohne die Rolle zu ändern, aber sich nicht erhöhen.
+	if err := st.SetProjectRole("person:1", webRoleProject, "person:2", "lead", true, store.RoleViaWeb); err != nil {
+		t.Fatal(err)
+	}
+	form = roleForm(get(anna), "person:2")
+	if !strings.Contains(form, `<option value="lead" selected>`) || strings.Contains(form, `value="owner"`) {
+		t.Fatalf("lead's own row: %s", form)
+	}
+	resp = postOrg(t, anna, base, "/ui/orgs/project/role", url.Values{"org": {"alpha"}, "remote": {webRoleProject}, "account": {"person:2"}, "role": {"lead"}})
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("lead drops the flag: %d", resp.StatusCode)
+	}
+	if got := st.ProjectRole(webRoleProject, "person:2"); got.Role != "lead" || got.CanReview {
+		t.Fatalf("after dropping the flag: %+v", got)
+	}
+	resp = postOrg(t, anna, base, "/ui/orgs/project/role", url.Values{"org": {"alpha"}, "remote": {webRoleProject}, "account": {"person:2"}, "role": {"lead"}, "review": {"1"}})
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("lead raising its own flag: %d", resp.StatusCode)
+	}
+	// Eine leere Wahl (Platzhalter) ändert nichts.
+	if err := st.RemoveProjectRole("person:1", webRoleProject, "person:2", store.RoleViaWeb); err != nil {
+		t.Fatal(err)
+	}
+	resp = postOrg(t, alice, base, "/ui/orgs/project/role", url.Values{"org": {"alpha"}, "remote": {webRoleProject}, "account": {"person:2"}, "role": {""}})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("placeholder submitted: %d", resp.StatusCode)
+	}
+	if got := st.ProjectRole(webRoleProject, "person:2"); got.Role != "" {
+		t.Fatalf("placeholder set a role: %+v", got)
+	}
+}

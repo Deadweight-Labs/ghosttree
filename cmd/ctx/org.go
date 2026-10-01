@@ -5,13 +5,14 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
+	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
 const orgUsage = `usage: ctx org <command>
@@ -19,10 +20,12 @@ const orgUsage = `usage: ctx org <command>
   list                                    organizations you belong to
   create <name> [--slug S]                create an organization (instance admin)
   members <org>                           list members
-  members <org> set-role <account> <owner|member>
-  members <org> remove <account>          remove a member (or yourself)
-  invite <org> [--email E] [--role owner|member] [--days N]
+  members <org> set-role <account> <owner|member> [--db P]
+  members <org> remove <account> [--db P] remove a member (leaving yourself works
+                                          over the API)
+  invite <org> [--email E] [--role owner|member] [--days N] [--db P]
                                           print a single-use invitation code
+                                          (web UI, or --db on the server host)
   invitations <org> [revoke <id>]         list or revoke invitations
   accept <code>                           join an organization with a code
   rename <org> <name> [--slug S]          rename an organization (owner)
@@ -33,18 +36,20 @@ const projectUsage = `usage: ctx project <command>
   list [--org O]                          projects of your organizations
   claim [remote] [--org O]                assign a project to an organization
                                           (default remote: the current repository)
-  move <remote> --org O                   move a project (owner of both organizations)
+  move <remote> --org O                   web UI only (organizations page)
   move --force <remote> --org O --db P    admin: move without permission checks
                                           (database access, logged in org_events)
   roles <remote>                          who holds which role in a project
-  role set <remote> <account> <owner|lead|member|guest> [--review]
-                                          set a role (owner or lead; you cannot raise
-                                          your own role; --review sets can_review)
-  role remove <remote> <account>          take a role away
+  role set <remote> <account> <owner|lead|member|guest> [--review] [--db P]
+  role remove <remote> <account> [--db P]
+                                          change roles: in the web UI (Organizations
+                                          page), or --db on the server host
 
 Roles: owner > lead > member > guest. An organization owner is implicitly owner
-of every project of the organization. Roles are set by accounts only; this
-command refuses to run inside an agent session.`
+of every project of the organization. Roles and memberships are changed by a
+person in the browser; the API refuses them with a bearer token. --db is the
+operator's way out with direct database access (logged with via=cli-db for
+roles); it acts as the oldest owner of the organization.`
 
 // interspersed parst Flags auch hinter Positionsargumenten.
 func interspersed(fs *flag.FlagSet, args []string) ([]string, error) {
@@ -87,6 +92,13 @@ func orgFail(stdout io.Writer, what string, err error) int {
 			msg += " (use --org with one of: " + strings.Join(parts, ", ") + ")"
 		}
 		fmt.Fprintf(stdout, "%s: %s [%s]\n", what, msg, api.Code)
+		if api.Code == "web_session_required" {
+			link := "/ui/orgs"
+			if cfg, err := config.Load(); err == nil && cfg.ServerURL != "" {
+				link = strings.TrimRight(cfg.ServerURL, "/") + "/ui/orgs"
+			}
+			fmt.Fprintf(stdout, "Open %s in your browser and sign in. On the server host the operator can run this command with --db <path> instead.\n", link)
+		}
 		return 1
 	}
 	fmt.Fprintf(stdout, "%s: %v\n", what, err)
@@ -105,6 +117,7 @@ func cmdOrg(args []string, stdout io.Writer) int {
 	email := fs.String("email", "", "bind the invitation to this email address")
 	role := fs.String("role", "member", "invitation role")
 	days := fs.Int("days", 0, "invitation lifetime in days (default 7, at most 30)")
+	db := fs.String("db", "", "database path: operator access on the server host")
 	switch sub {
 	case "list", "create", "rename", "members", "invite", "invitations", "accept", "default":
 	default:
@@ -116,6 +129,9 @@ func cmdOrg(args []string, stdout io.Writer) int {
 		return 2
 	}
 	usage := func() int { fmt.Fprintln(stdout, orgUsage); return 2 }
+	if *db != "" {
+		return orgViaDB(sub, pos, *db, *email, *role, *days, stdout)
+	}
 	c, ok := orgClient(stdout)
 	if !ok {
 		return 1
@@ -258,6 +274,7 @@ func cmdProject(args []string, stdout io.Writer) int {
 	org := fs.String("org", "", "organization (slug or id)")
 	db := fs.String("db", "ghosttree.db", "database path (with --force)")
 	review := fs.Bool("review", false, "role set: also grant can_review")
+	dbSet := false
 	switch sub {
 	case "list", "claim", "move", "roles", "role":
 	default:
@@ -268,6 +285,7 @@ func cmdProject(args []string, stdout io.Writer) int {
 	if err != nil {
 		return 2
 	}
+	fs.Visit(func(f *flag.Flag) { dbSet = dbSet || f.Name == "db" })
 	usage := func() int { fmt.Fprintln(stdout, projectUsage); return 2 }
 	switch sub {
 	case "list":
@@ -290,10 +308,8 @@ func cmdProject(args []string, stdout io.Writer) int {
 		if !(len(pos) == 4 && pos[0] == "set") && !(len(pos) == 3 && pos[0] == "remove") {
 			return usage()
 		}
-		// Agenten vergeben keine Rollen, auch nicht über die CLI ihrer Maschine.
-		if strings.TrimSpace(os.Getenv(agentIDEnv)) != "" {
-			fmt.Fprintln(stdout, "agents cannot grant, change or revoke roles; run this from your own terminal")
-			return 1
+		if dbSet {
+			return projectRoleViaDB(pos, *db, *review, stdout)
 		}
 	}
 	if force {
@@ -391,4 +407,98 @@ func orDash(s string) string {
 		return "none"
 	}
 	return s
+}
+
+// projectRoleViaDB ist der Notausgang des Betreibers für Rollen: direkter
+// Datenbankzugriff, im Namen des ältesten Owners der Organisation, protokolliert
+// mit via=cli-db. Die Vergaberegeln gelten weiter (letzter Owner, Org-Owner).
+func projectRoleViaDB(pos []string, db string, review bool, stdout io.Writer) int {
+	st, ok := openAccountStore(db, stdout)
+	if !ok {
+		return 1
+	}
+	defer st.Close()
+	p, known := st.ProjectByRemote(pos[1])
+	if !known {
+		fmt.Fprintf(stdout, "project %s not found\n", pos[1])
+		return 1
+	}
+	actor, ok := st.OrgOwnerPrincipal(p.OrgID)
+	if !ok {
+		fmt.Fprintf(stdout, "organization %s has no owner\n", p.Org)
+		return 1
+	}
+	target, err := st.AccountByName(pos[2])
+	if err != nil {
+		fmt.Fprintf(stdout, "account %s not found\n", pos[2])
+		return 1
+	}
+	if pos[0] == "set" {
+		err = st.SetProjectRole(actor, p.Remote, target.ID, pos[3], review, store.RoleViaCLIDB)
+	} else {
+		err = st.RemoveProjectRole(actor, p.Remote, target.ID, store.RoleViaCLIDB)
+	}
+	if err != nil {
+		fmt.Fprintf(stdout, "role %s: %v\n", pos[0], err)
+		return 1
+	}
+	if pos[0] == "set" {
+		fmt.Fprintf(stdout, "%s is now %s in %s (acting as %s, via cli-db)\n", pos[2], pos[3], p.Remote, actor)
+	} else {
+		fmt.Fprintf(stdout, "%s holds no role in %s any more (via cli-db)\n", pos[2], p.Remote)
+	}
+	return 0
+}
+
+// orgViaDB ist der Notausgang des Betreibers für Mitgliedschaften und
+// Einladungen: direkter Datenbankzugriff, im Namen des ältesten Owners.
+func orgViaDB(sub string, pos []string, db, email, role string, days int, stdout io.Writer) int {
+	isMembers := sub == "members" && ((len(pos) == 4 && pos[1] == "set-role") || (len(pos) == 3 && pos[1] == "remove"))
+	if !isMembers && !(sub == "invite" && len(pos) == 1) {
+		fmt.Fprintln(stdout, "--db applies to: members <org> set-role|remove, invite <org>")
+		return 2
+	}
+	st, ok := openAccountStore(db, stdout)
+	if !ok {
+		return 1
+	}
+	defer st.Close()
+	o, err := st.OrgByRef(pos[0])
+	if err != nil {
+		fmt.Fprintf(stdout, "organization %s not found\n", pos[0])
+		return 1
+	}
+	actor, ok := st.OrgOwnerPrincipal(o.ID)
+	if !ok {
+		fmt.Fprintf(stdout, "organization %s has no owner\n", o.Slug)
+		return 1
+	}
+	if sub == "invite" {
+		if days < 0 {
+			return 2
+		}
+		code, inv, err := st.CreateInvitation(actor, o.ID, email, role, time.Duration(days)*24*time.Hour)
+		if err != nil {
+			fmt.Fprintf(stdout, "invite: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "invitation code (shown once, single use, valid until %s):\n%s\n", inv.ExpiresAt, code)
+		return 0
+	}
+	target, err := st.AccountByName(pos[2])
+	if err != nil {
+		fmt.Fprintf(stdout, "account %s not found\n", pos[2])
+		return 1
+	}
+	if pos[1] == "set-role" {
+		err = st.SetOrgRole(actor, o.ID, target.ID, pos[3])
+	} else {
+		err = st.RemoveOrgMember(actor, o.ID, target.ID)
+	}
+	if err != nil {
+		fmt.Fprintf(stdout, "%s: %v\n", pos[1], err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "%s done for %s in %s (acting as %s)\n", pos[1], pos[2], o.Slug, actor)
+	return 0
 }

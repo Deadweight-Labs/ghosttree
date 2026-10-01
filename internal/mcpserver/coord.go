@@ -269,14 +269,14 @@ func (s *Server) handleCoordPeers(ctx context.Context, _ *mcp.CallToolRequest, i
 	for _, p := range peers {
 		if p.ExternalID == s.coordRef() {
 			if p.Role != "" {
-				fmt.Fprintf(&b, "you: role %s%s\n", p.Role, reviewerMark(p.CanReview))
+				fmt.Fprintf(&b, "you: role %s%s%s\n", p.Role, reviewerMark(p.CanReview), requestedMark(p))
 			}
 			continue
 		}
 		shown++
 		fmt.Fprintf(&b, "%s (%s)", p.DisplayName, p.Provider)
 		if p.Role != "" {
-			fmt.Fprintf(&b, ", role %s%s", p.Role, reviewerMark(p.CanReview))
+			fmt.Fprintf(&b, ", role %s%s%s", p.Role, reviewerMark(p.CanReview), requestedMark(p))
 		}
 		if p.Owner != "" {
 			fmt.Fprintf(&b, ", owner %s", p.Owner)
@@ -555,6 +555,15 @@ func (s *Server) handleCoordTouched(ctx context.Context, _ *mcp.CallToolRequest,
 func reviewerMark(canReview bool) string {
 	if canReview {
 		return ", reviewer"
+	}
+	return ""
+}
+
+// requestedMark macht sichtbar, wenn die live berechnete Rolle unter der
+// angeforderten liegt (Kappung am Rang des Kontos).
+func requestedMark(p store.CoordAgent) string {
+	if p.RequestedRole != "" && p.Role != "" && p.RequestedRole != p.Role {
+		return " (requested " + p.RequestedRole + ", effective " + p.Role + ")"
 	}
 	return ""
 }

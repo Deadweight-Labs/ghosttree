@@ -22,6 +22,8 @@ const (
 	RoleViaAPI = "api"
 	RoleViaCLI = "cli"
 	RoleViaWeb = "web"
+	// RoleViaCLIDB: Notausgang des Betreibers mit direktem Datenbankzugriff.
+	RoleViaCLIDB = "cli-db"
 )
 
 var (
@@ -369,13 +371,16 @@ func (s *Store) GrantableRoles(actorPrincipal, remote, targetPrincipal string) [
 	if actorRank < RoleRank(RoleLead) {
 		return nil
 	}
-	curRank := RoleRank(projectRoleTx(s.db, remote, target).Role)
+	cur := projectRoleTx(s.db, remote, target).Role
+	curRank := RoleRank(cur)
 	var out []string
 	for _, r := range []string{RoleOwner, RoleLead, RoleMember, RoleGuest} {
 		rank := RoleRank(r)
 		switch {
 		case actor == target:
-			if rank >= actorRank {
+			// Die eigene Stufe bleibt wählbar, damit sich allein das
+			// Reviewer-Flag ändern lässt; höher geht nicht.
+			if rank > actorRank || (rank == actorRank && r != cur) {
 				continue
 			}
 		case actorRank == RoleRank(RoleLead):
@@ -516,4 +521,18 @@ func (s *Store) ProjectByID(id int64) (Project, bool) {
 		return Project{}, false
 	}
 	return projectTx(s.db, remote)
+}
+
+// OrgOwnerPrincipal nennt einen Owner der Organisation (den ältesten). Der
+// Betreiber-Notausgang mit --db handelt in dessen Namen, weil die Vergaberegeln
+// einen handelnden Owner verlangen.
+func (s *Store) OrgOwnerPrincipal(orgID int64) (string, bool) {
+	if s.reader != nil {
+		return s.reader.OrgOwnerPrincipal(orgID)
+	}
+	var id int64
+	if s.db.QueryRow(`SELECT account_id FROM org_members WHERE org_id=? AND role='owner' ORDER BY joined_at, account_id LIMIT 1`, orgID).Scan(&id) != nil {
+		return "", false
+	}
+	return principalOfID(id), true
 }

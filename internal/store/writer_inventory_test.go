@@ -34,6 +34,7 @@ var writerMethodClasses = map[string]string{
 	"GrantableRoles":                "read",
 	"ListProjectMembers":            "read",
 	"ProjectByID":                   "read",
+	"OrgOwnerPrincipal":             "read",
 	"OrgByRef":                      "read",
 	"ListOrgs":                      "read",
 	"OrgRole":                       "read",

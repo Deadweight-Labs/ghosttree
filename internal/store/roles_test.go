@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -420,5 +421,28 @@ func TestRolesMigrationOnOldDatabase(t *testing.T) {
 			t.Fatalf("open %d: agent after grant = %+v", i, got)
 		}
 		st.Close()
+	}
+}
+
+func TestLeadCannotRemoveOrDemoteAnotherLead(t *testing.T) {
+	st := roleFixture(t)
+	for _, who := range []string{"person:2", "person:3"} {
+		if err := setRole(st, "person:1", who, RoleLead, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.RemoveProjectRole("person:2", roleProject, "person:3", RoleViaWeb); !errors.Is(err, ErrRoleForbidden) {
+		t.Fatalf("lead removing a lead: %v", err)
+	}
+	if err := setRole(st, "person:2", "person:3", RoleGuest, false); !errors.Is(err, ErrRoleForbidden) {
+		t.Fatalf("lead demoting a lead: %v", err)
+	}
+	if got := st.ProjectRole(roleProject, "person:3"); got.Role != RoleLead {
+		t.Fatalf("the other lead lost the role: %+v", got)
+	}
+	// Die eigene Stufe bleibt wählbar (Flag umschalten), höher nicht.
+	got := st.GrantableRoles("person:2", roleProject, "person:2")
+	if strings.Join(got, ",") != "lead,member,guest" {
+		t.Fatalf("self grantable = %v", got)
 	}
 }

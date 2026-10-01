@@ -23,16 +23,6 @@ func (a *api) roleProject(w http.ResponseWriter, r *http.Request) (store.Project
 	return p, true
 }
 
-// rejectAgentGrant lehnt Rollenänderungen ab, die als Agentenaufruf
-// gekennzeichnet sind. Nur ein Konto in eigenem Namen vergibt Rollen.
-func rejectAgentGrant(w http.ResponseWriter, r *http.Request, bodyAgent string) bool {
-	if bodyAgent != "" || r.URL.Query().Get("agent_external_id") != "" {
-		writeCoded(w, http.StatusForbidden, "agent_cannot_grant", "agents cannot grant, change or revoke roles")
-		return true
-	}
-	return false
-}
-
 func (a *api) listProjectMembers(w http.ResponseWriter, r *http.Request) {
 	p, ok := a.roleProject(w, r)
 	if !ok {
@@ -49,50 +39,22 @@ func (a *api) listProjectMembers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"project": p, "members": members, "you": a.st.ProjectRole(p.Remote, principalOf(r).ID)})
 }
 
+// webSessionOnly lehnt eine Verwaltungsänderung über ein Bearer-Token ab. Ein
+// Maschinen-Token liegt in der Konfiguration jedes Rechners, auf dem ein Agent
+// läuft; wer Rollen, Mitgliedschaften oder Einladungen mit ihm ändern könnte,
+// bräuchte dafür keinen Menschen. Diese Änderungen macht ein Mensch in der
+// Weboberfläche (Browser-Sitzung, CSRF, Same-Origin) oder der Betreiber mit
+// Datenbankzugriff (ctx ... --db). Mit oder ohne agent_external_id ist die
+// Antwort dieselbe.
+func webSessionOnly(w http.ResponseWriter, what string) {
+	writeCoded(w, http.StatusForbidden, "web_session_required",
+		what+" require an interactive web session: use the organizations page of the web UI (/ui/orgs), or run the ctx command with --db on the server")
+}
+
 func (a *api) setProjectMemberRole(w http.ResponseWriter, r *http.Request) {
-	p, ok := a.roleProject(w, r)
-	if !ok {
-		return
-	}
-	var body struct {
-		Role            string `json:"role"`
-		CanReview       bool   `json:"can_review"`
-		AgentExternalID string `json:"agent_external_id"`
-	}
-	if !readOrgJSON(w, r, &body) {
-		return
-	}
-	if rejectAgentGrant(w, r, body.AgentExternalID) {
-		return
-	}
-	target, err := a.accountRef(r.PathValue("account"))
-	if err != nil {
-		writeCoded(w, http.StatusNotFound, "account_not_found", "account not found")
-		return
-	}
-	if err := a.st.SetProjectRole(principalOf(r).ID, p.Remote, target.ID, body.Role, body.CanReview, store.RoleViaAPI); err != nil {
-		writeOrgError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"account": target.Name, "role": body.Role, "can_review": body.CanReview})
+	webSessionOnly(w, "role changes")
 }
 
 func (a *api) removeProjectMemberRole(w http.ResponseWriter, r *http.Request) {
-	p, ok := a.roleProject(w, r)
-	if !ok {
-		return
-	}
-	if rejectAgentGrant(w, r, "") {
-		return
-	}
-	target, err := a.accountRef(r.PathValue("account"))
-	if err != nil {
-		writeCoded(w, http.StatusNotFound, "account_not_found", "account not found")
-		return
-	}
-	if err := a.st.RemoveProjectRole(principalOf(r).ID, p.Remote, target.ID, store.RoleViaAPI); err != nil {
-		writeOrgError(w, err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
+	webSessionOnly(w, "role changes")
 }

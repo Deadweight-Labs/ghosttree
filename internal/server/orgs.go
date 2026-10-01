@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
@@ -179,29 +178,13 @@ func (a *api) listOrgMembers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, members)
 }
 
+// setOrgMemberRole: Org-Rollen ändert nur ein Mensch in der Weboberfläche.
 func (a *api) setOrgMemberRole(w http.ResponseWriter, r *http.Request) {
-	o, _, ok := a.memberOrg(w, r)
-	if !ok {
-		return
-	}
-	var body struct {
-		Role string `json:"role"`
-	}
-	if !readOrgJSON(w, r, &body) {
-		return
-	}
-	target, err := a.accountRef(r.PathValue("account"))
-	if err != nil {
-		writeCoded(w, http.StatusNotFound, "account_not_found", "account not found")
-		return
-	}
-	if err := a.st.SetOrgRole(principalOf(r).ID, o.ID, target.ID, body.Role); err != nil {
-		writeOrgError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"account": target.Name, "role": body.Role})
+	webSessionOnly(w, "organization role changes")
 }
 
+// removeOrgMember: Mitglieder entfernt nur ein Mensch in der Weboberfläche.
+// Das eigene Verlassen bleibt über die API möglich, es nimmt nur eigene Macht.
 func (a *api) removeOrgMember(w http.ResponseWriter, r *http.Request) {
 	o, _, ok := a.memberOrg(w, r)
 	if !ok {
@@ -210,6 +193,10 @@ func (a *api) removeOrgMember(w http.ResponseWriter, r *http.Request) {
 	target, err := a.accountRef(r.PathValue("account"))
 	if err != nil {
 		writeCoded(w, http.StatusNotFound, "account_not_found", "account not found")
+		return
+	}
+	if target.ID != principalOf(r).ID {
+		webSessionOnly(w, "member removals")
 		return
 	}
 	if err := a.st.RemoveOrgMember(principalOf(r).ID, o.ID, target.ID); err != nil {
@@ -232,32 +219,10 @@ func (a *api) listOrgInvitations(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, list)
 }
 
-// createOrgInvitation stellt eine Einladung aus. Der Code steht nur in dieser
-// Antwort; danach existiert nur sein Hash.
+// createOrgInvitation: Einladungen (und damit neue Mitglieder, auch Owner)
+// stellt nur ein Mensch in der Weboberfläche aus.
 func (a *api) createOrgInvitation(w http.ResponseWriter, r *http.Request) {
-	o, _, ok := a.memberOrg(w, r)
-	if !ok {
-		return
-	}
-	var body struct {
-		Email    string `json:"email"`
-		Role     string `json:"role"`
-		TTLHours int    `json:"ttl_hours"`
-	}
-	if !readOrgJSON(w, r, &body) {
-		return
-	}
-	if body.TTLHours < 0 || body.TTLHours > int(store.MaxInvitationTTL/time.Hour) {
-		writeCoded(w, http.StatusBadRequest, "invalid_input", "ttl_hours must be between 1 and "+strconv.Itoa(int(store.MaxInvitationTTL/time.Hour)))
-		return
-	}
-	code, inv, err := a.st.CreateInvitation(principalOf(r).ID, o.ID, body.Email, body.Role, time.Duration(body.TTLHours)*time.Hour)
-	if err != nil {
-		writeOrgError(w, err)
-		return
-	}
-	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, http.StatusCreated, map[string]any{"code": code, "invitation": inv, "org": o.Slug})
+	webSessionOnly(w, "invitations")
 }
 
 func (a *api) revokeOrgInvitation(w http.ResponseWriter, r *http.Request) {
@@ -357,20 +322,11 @@ func (a *api) claimProject(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, p)
 }
 
+// moveProject: ein Projekt in eine andere Organisation zu legen ändert, wer
+// implizit Owner ist, und löscht seine Rollen. Das macht nur ein Mensch in der
+// Weboberfläche.
 func (a *api) moveProject(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Remote string `json:"remote"`
-		Org    string `json:"org"`
-	}
-	if !readOrgJSON(w, r, &body) {
-		return
-	}
-	p, err := a.st.MoveProject(principalOf(r).ID, body.Remote, body.Org)
-	if err != nil {
-		writeOrgError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, p)
+	webSessionOnly(w, "project moves")
 }
 
 // gateProject ordnet beim Schreiben eine noch unbekannte Remote einer

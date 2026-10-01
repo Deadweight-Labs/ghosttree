@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -60,6 +61,21 @@ func (f orgFixture) mustCall(t *testing.T, want int, method, path, token string,
 	return out
 }
 
+// invite stellt eine Einladung über den Store aus: die API tut das nicht mehr,
+// das ist Sache der Weboberfläche. Die Antwort hat die Form der früheren.
+func (f orgFixture) invite(t *testing.T, actor, org, email, role string) map[string]any {
+	t.Helper()
+	o, err := f.st.OrgByRef(org)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, inv, err := f.st.CreateInvitation(actor, o.ID, email, role, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return map[string]any{"code": code, "invitation": map[string]any{"id": float64(inv.ID), "status": inv.Status}}
+}
+
 func TestOrgCreationIsAdminOnly(t *testing.T) {
 	f := newOrgFixture(t)
 	code, out := f.call(t, "POST", "/api/orgs", f.anna, map[string]any{"name": "Alpha"})
@@ -81,9 +97,8 @@ func TestOrgMembersInvitationsAndPrivacy(t *testing.T) {
 
 	// Nichtmitglied: die Org existiert nicht.
 	f.mustCall(t, 404, "GET", "/api/orgs/alpha/members", f.anna, nil)
-	f.mustCall(t, 404, "POST", "/api/orgs/alpha/invitations", f.anna, map[string]any{})
 
-	inv := f.mustCall(t, 201, "POST", "/api/orgs/alpha/invitations", f.robin, map[string]any{"role": "member"})
+	inv := f.invite(t, "person:1", "alpha", "", "member")
 	code, _ := inv["code"].(string)
 	if code == "" || strings.Contains(inv["invitation"].(map[string]any)["status"].(string), "accepted") {
 		t.Fatalf("invitation = %v", inv)
@@ -100,23 +115,23 @@ func TestOrgMembersInvitationsAndPrivacy(t *testing.T) {
 
 	// Mitglied sieht Mitglieder, lädt aber nicht ein und ändert keine Rollen.
 	f.mustCall(t, 200, "GET", "/api/orgs/alpha/members", f.anna, nil)
-	f.mustCall(t, 403, "POST", "/api/orgs/alpha/invitations", f.anna, map[string]any{})
 	f.mustCall(t, 403, "GET", "/api/orgs/alpha/invitations", f.anna, nil)
-	f.mustCall(t, 403, "PUT", "/api/orgs/alpha/members/anna", f.anna, map[string]any{"role": "owner"})
-	f.mustCall(t, 403, "DELETE", "/api/orgs/alpha/members/robin", f.anna, nil)
-	// Owner befördert, der letzte Owner bleibt.
-	f.mustCall(t, 200, "PUT", "/api/orgs/alpha/members/anna", f.robin, map[string]any{"role": "owner"})
-	f.mustCall(t, 200, "PUT", "/api/orgs/alpha/members/person:1", f.anna, map[string]any{"role": "member"})
-	out := f.mustCall(t, 409, "PUT", "/api/orgs/alpha/members/anna", f.anna, map[string]any{"role": "member"})
-	if out["code"] != "last_owner" {
-		t.Fatalf("last owner: %v", out)
+	// Owner befördert über die Weboberfläche (hier: Store); der letzte Owner bleibt.
+	if err := f.st.SetOrgRole("person:1", 1, "person:2", "owner"); err != nil {
+		t.Fatal(err)
 	}
-	f.mustCall(t, 404, "PUT", "/api/orgs/alpha/members/nobody", f.anna, map[string]any{"role": "member"})
+	if err := f.st.SetOrgRole("person:2", 1, "person:1", "member"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.SetOrgRole("person:2", 1, "person:2", "member"); !errors.Is(err, store.ErrLastOrgOwner) {
+		t.Fatalf("last owner: %v", err)
+	}
+	// Das eigene Verlassen geht über die API und nimmt nur eigene Macht.
 	f.mustCall(t, 204, "DELETE", "/api/orgs/alpha/members/robin", f.robin, nil)
 	f.mustCall(t, 404, "GET", "/api/orgs/alpha/members", f.robin, nil)
 
 	// Widerruf.
-	inv = f.mustCall(t, 201, "POST", "/api/orgs/alpha/invitations", f.anna, map[string]any{"email": "ben@example.test"})
+	inv = f.invite(t, "person:2", "alpha", "ben@example.test", "")
 	id := int(inv["invitation"].(map[string]any)["id"].(float64))
 	f.mustCall(t, 204, "DELETE", "/api/orgs/alpha/invitations/"+itoa(id), f.anna, nil)
 	f.mustCall(t, 400, "POST", "/api/invitations/accept", f.ben, map[string]any{"code": inv["code"]})
@@ -130,7 +145,7 @@ func TestAPIInvitationBoundToEmail(t *testing.T) {
 	f := newOrgFixture(t)
 	f.mustCall(t, 201, "POST", "/api/orgs", f.robin, map[string]any{"name": "Alpha", "slug": "alpha"})
 	// Der Eingeladene muss die Adresse haben; carl hat keine.
-	inv := f.mustCall(t, 201, "POST", "/api/orgs/alpha/invitations", f.robin, map[string]any{"email": "ben@example.test"})
+	inv := f.invite(t, "person:1", "alpha", "ben@example.test", "")
 	out := f.mustCall(t, 403, "POST", "/api/invitations/accept", f.carl, map[string]any{"code": inv["code"]})
 	if out["code"] != "invitation_email" {
 		t.Fatalf("account without a matching email: %v", out)
@@ -157,7 +172,6 @@ func TestAPIInvitationBruteForceAndLimits(t *testing.T) {
 	if code, _ := f.call(t, "POST", "/api/orgs", f.robin, map[string]any{"name": big}); code != 413 {
 		t.Fatalf("oversized org body: %d", code)
 	}
-	f.mustCall(t, 404, "POST", "/api/orgs/x/invitations", f.robin, map[string]any{})
 }
 
 func TestProjectsClaimMoveAndImplicitAssignment(t *testing.T) {
@@ -165,10 +179,10 @@ func TestProjectsClaimMoveAndImplicitAssignment(t *testing.T) {
 	f.mustCall(t, 201, "POST", "/api/orgs", f.robin, map[string]any{"name": "Alpha", "slug": "alpha"})
 	f.mustCall(t, 201, "POST", "/api/orgs", f.robin, map[string]any{"name": "Beta", "slug": "beta"})
 	for _, org := range []string{"alpha", "beta"} {
-		inv := f.mustCall(t, 201, "POST", "/api/orgs/"+org+"/invitations", f.robin, map[string]any{"role": "owner"})
+		inv := f.invite(t, "person:1", org, "", "owner")
 		f.mustCall(t, 200, "POST", "/api/invitations/accept", f.ben, map[string]any{"code": inv["code"]})
 	}
-	inv := f.mustCall(t, 201, "POST", "/api/orgs/alpha/invitations", f.robin, map[string]any{})
+	inv := f.invite(t, "person:1", "alpha", "", "")
 	f.mustCall(t, 200, "POST", "/api/invitations/accept", f.anna, map[string]any{"code": inv["code"]})
 
 	// Anna (einfaches Mitglied): der Upload geht durch, besetzt aber nichts.
@@ -234,12 +248,11 @@ func TestProjectsClaimMoveAndImplicitAssignment(t *testing.T) {
 	f.mustCall(t, 200, "POST", "/api/sessions", f.robin, map[string]any{"harness": "claude-code", "external_id": "own", "scope": map[string]any{"project": "github.com/x/three", "machine": "robinbox"}})
 	// Fremdes Projekt beanspruchen: 409. Verschieben: nur Owner beider Orgs.
 	f.mustCall(t, 409, "POST", "/api/projects/claim", f.carl, map[string]any{"remote": "github.com/x/three"})
-	f.mustCall(t, 403, "POST", "/api/projects/move", f.anna, map[string]any{"remote": "github.com/x/three", "org": "alpha"})
-	out = f.mustCall(t, 200, "POST", "/api/projects/move", f.robin, map[string]any{"remote": "github.com/x/three", "org": "alpha"})
-	if out["org"] != "alpha" {
-		t.Fatalf("move: %v", out)
+	// Verschieben geht nur über die Weboberfläche.
+	f.mustCall(t, 403, "POST", "/api/projects/move", f.robin, map[string]any{"remote": "github.com/x/three", "org": "alpha"})
+	if p, err := f.st.MoveProject("person:1", "github.com/x/three", "alpha"); err != nil || p.Org != "alpha" {
+		t.Fatalf("move: %+v %v", p, err)
 	}
-	f.mustCall(t, 404, "POST", "/api/projects/move", f.robin, map[string]any{"remote": "github.com/x/none", "org": "alpha"})
 	// Liste: nur Projekte der eigenen Orgs.
 	resp := req(t, "GET", f.srv.URL+"/api/projects?org=beta", f.robin, nil)
 	defer resp.Body.Close()
