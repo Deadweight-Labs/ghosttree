@@ -6,6 +6,45 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Add visibility by role, behind `GHOSTTREE_ENFORCE_ACCESS`. One place,
+  `ProjectAccess`, decides for (account, project, resource, action) from
+  `Store.ProjectRole`; the API (and with it MCP and the hooks, which use the
+  API), the web pages and the project room of coordination all go through it.
+  Project knowledge, requests, documents and ghost descriptions are readable by
+  members (a guest reads only knowledge with confidence `trusted` or
+  `verified`, requests, documents and ghosts); members create and change their
+  own, owners and leads change everything, and only `can_review`, lead or owner
+  set or withdraw `confidence=verified`. The author of a knowledge entry comes
+  from the token and cannot be patched; the confirmer is the account that
+  verified it. Machine-axis knowledge is visible only to the account that owns
+  the machine, whatever its project role. Session metadata is visible to
+  members; a transcript (and its raw export and search snippets) to its owner
+  and to project owners and leads, plus members when the owner shares it with
+  the new `ctx session share <id>` (`--off` withdraws). The project room reads
+  and writes by role (a guest reads and writes, peers are shown from member),
+  direct and group rooms stay a matter of room membership only. Without a role
+  in the project the object does not exist for the caller (404); with one but
+  without the right it is 403. The bootstrap, relevant knowledge, interrupted
+  work, ghost delivery and path activity answer a caller without access with
+  what they may see (global knowledge) instead of an error, because hooks ask
+  in every repository. Without `GHOSTTREE_ENFORCE_ACCESS=1` nothing is refused:
+  the server logs `access: would deny` (account, project, resource, action,
+  reason; no content; once a minute per combination) so you can see what would
+  break before turning it on. Every route of the API and of the web UI is
+  classified in a table (`accessRoutes`, `webRoutes`); registering an
+  unclassified route aborts at startup, and tests fail if the table and the
+  registered routes differ or if a project route answers without asking
+  `ProjectAccess`. The roles of an account are loaded with one query per request.
+  `public_only=1` on threads only selects unrestricted threads and never loosens
+  the project role. In a remote nobody owns yet, the author sees and changes
+  their own entries and the instance admin sees everything; nothing else is
+  visible. Agents (bootstrap, relevant knowledge, ghost hook, search) are only
+  handed content whose author is currently at least `member` of the project
+  (ghosts: has write access); what strangers stored before a claim stays stored
+  and visible to the owner but is not delivered until a reviewer, lead or owner
+  sets the knowledge entry to `verified`. Content with no author (operator
+  paths) is delivered.
+
 - Add organizations, projects and invitations. An organization has members
   (roles `owner` and `member`; an account can belong to several) and owns
   projects; every project (a normalized remote such as

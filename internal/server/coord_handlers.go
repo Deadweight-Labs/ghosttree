@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
@@ -205,6 +206,12 @@ func (a *api) registerCoordAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.ExternalID == "" || in.RoomKey == "" {
 		writeErr(w, http.StatusBadRequest, "external_id and room_key are required")
+		return
+	}
+	// Ein Projektraum gehört zu einem Projekt: eine fremde Remote gibt es für
+	// diesen Aufrufer nicht, eine unbekannte wird wie bei jedem Schreiben
+	// zugeordnet.
+	if project, ok := strings.CutPrefix(in.RoomKey, "project:"); ok && !a.gateProject(w, r, project) {
 		return
 	}
 	if _, ok := accountOf(principalOf(r)); !ok {
@@ -493,6 +500,12 @@ func (a *api) pathActivity(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	if q.Get("path") == "" {
 		writeErr(w, http.StatusBadRequest, "path is required")
+		return
+	}
+	// Wer im Projekt arbeitet, ist Metadaten-Sicht: ab member. Der Hook fragt in
+	// jedem Repository, also kommt ohne Recht eine leere Liste statt eines Fehlers.
+	if !a.access(r).Allow(scope.NormalizeRemote(q.Get("project")), store.ResSessionMeta, store.ActRead, store.Object{}) {
+		writeJSON(w, 200, []store.PathActivity{})
 		return
 	}
 	minutes, _ := strconv.Atoi(q.Get("minutes"))

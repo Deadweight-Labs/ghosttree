@@ -5,11 +5,15 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
 func (a *api) ghostArchiveCandidate(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	if denyAccess(w, a.access(r).Check(scope.NormalizeRemote(q.Get("project")), store.ResGhost, store.ActEdit, store.Object{})) {
+		return
+	}
 	out, err := a.st.PrepareGhostArchive(q.Get("project"), q.Get("path"))
 	if err != nil {
 		status := http.StatusInternalServerError
@@ -29,6 +33,9 @@ func (a *api) archiveGhosts(w http.ResponseWriter, r *http.Request) {
 	var in store.GhostArchiveInput
 	if err := readJSON(r, &in); err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)
+		return
+	}
+	if denyAccess(w, a.access(r).Check(scope.NormalizeRemote(in.Project), store.ResGhost, store.ActEdit, store.Object{})) {
 		return
 	}
 	in.Person = personOf(r)

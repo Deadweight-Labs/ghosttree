@@ -21,6 +21,10 @@ type Session struct {
 	// Instanz-Owner. Owner ist der Kontoname, nur in Antworten.
 	AccountID int64  `json:"-"`
 	Owner     string `json:"owner,omitempty"`
+	// Shared: der Besitzer hat das Transkript für die Mitglieder des Projekts
+	// freigegeben (Spec 8.1). Owner und Lead brauchen die Freigabe nicht.
+	// Gesetzt wird es nur über SetSessionShared, nie aus einem Upload.
+	Shared bool `json:"shared,omitempty"`
 }
 
 type Chunk struct {
@@ -41,7 +45,7 @@ type SessionHit struct {
 	Snippet string  `json:"snippet"`
 }
 
-const sessionCols = `id, harness, external_id, project, branch, machine, cwd, started_at, last_seen_at, account_id`
+const sessionCols = `id, harness, external_id, project, branch, machine, cwd, started_at, last_seen_at, account_id, shared`
 
 func (s *Store) UpsertSession(sess Session) (int64, error) {
 	if s.writer != nil {
@@ -312,7 +316,7 @@ func (s *Store) SearchSessions(q string, filter scope.Axes, excludeSession strin
 		var h SessionHit
 		if err := rows.Scan(&h.Session.ID, &h.Session.Harness, &h.Session.ExternalID,
 			&h.Session.Scope.Project, &h.Session.Scope.Branch, &h.Session.Scope.Machine,
-			&h.Session.CWD, &h.Session.StartedAt, &h.Session.LastSeenAt, &h.Session.AccountID,
+			&h.Session.CWD, &h.Session.StartedAt, &h.Session.LastSeenAt, &h.Session.AccountID, &h.Session.Shared,
 			&h.Seq, &h.Snippet); err != nil {
 			return nil, err
 		}
@@ -342,10 +346,40 @@ func scanSessions(rows *sql.Rows) ([]Session, error) {
 		var s Session
 		if err := rows.Scan(&s.ID, &s.Harness, &s.ExternalID,
 			&s.Scope.Project, &s.Scope.Branch, &s.Scope.Machine,
-			&s.CWD, &s.StartedAt, &s.LastSeenAt, &s.AccountID); err != nil {
+			&s.CWD, &s.StartedAt, &s.LastSeenAt, &s.AccountID, &s.Shared); err != nil {
 			return nil, err
 		}
 		out = append(out, s)
 	}
 	return out, rows.Err()
 }
+
+// SetSessionShared gibt ein Transkript für die Mitglieder seines Projekts frei
+// oder nimmt die Freigabe zurück. Nur der Besitzer darf das (ErrNotSessionOwner).
+func (s *Store) SetSessionShared(id int64, accountPrincipal string, shared bool) error {
+	if s.writer != nil {
+		return queueWrite(s, []any{id, accountPrincipal, shared}, func(d *Store, p []any) error {
+			return d.SetSessionShared(p[0].(int64), p[1].(string), p[2].(bool))
+		})
+	}
+	acct, ok := accountNumericID(accountPrincipal)
+	if !ok {
+		return ErrNotSessionOwner
+	}
+	var stored int64
+	if err := s.db.QueryRow(`SELECT account_id FROM sessions WHERE id=?`, id).Scan(&stored); err != nil {
+		return err
+	}
+	if effectiveOwner(stored, instanceOwnerID(s.db)) != acct {
+		return ErrNotSessionOwner
+	}
+	v := 0
+	if shared {
+		v = 1
+	}
+	_, err := s.db.Exec(`UPDATE sessions SET shared=? WHERE id=?`, v, id)
+	return err
+}
+
+// ErrNotSessionOwner: nur der Besitzer einer Session gibt sie frei.
+var ErrNotSessionOwner = errors.New("only the owner of a session may share it")

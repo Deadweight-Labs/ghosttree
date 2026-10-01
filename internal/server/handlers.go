@@ -37,6 +37,9 @@ func (a *api) createSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.AccountID, s.Owner = acct, ""
+	if denyAccess(w, a.access(r).Check(s.Scope.Project, store.ResSessionMeta, store.ActCreate, store.Object{Own: true})) {
+		return
+	}
 	id, err := a.st.UpsertSession(s)
 	if errors.Is(err, store.ErrSessionCollision) {
 		writeCoded(w, http.StatusConflict, "session_id_collision", "that session id already belongs to another account or machine")
@@ -65,6 +68,9 @@ func (a *api) appendChunks(w http.ResponseWriter, r *http.Request) {
 	if !a.mayWriteSession(w, r, id) {
 		return
 	}
+	if denyAccess(w, a.access(r).Check("", store.ResSessionMeta, store.ActCreate, store.Object{Own: true})) {
+		return
+	}
 	if err := a.st.AppendChunks(id, body.Chunks); err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
@@ -73,11 +79,17 @@ func (a *api) appendChunks(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) listSessions(w http.ResponseWriter, r *http.Request) {
-	sessions, err := a.st.ListSessionsOwned(axesFromQuery(r), intParam(r, "limit", 50), ownerFilter(r))
+	limit := intParam(r, "limit", 50)
+	pa := a.access(r)
+	sessions, err := a.st.ListSessionsOwned(axesFromQuery(r), a.overfetch(limit), ownerFilter(r))
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
+	// Metadaten (wer arbeitet wo) sehen Mitglieder ab member; die eigenen
+	// Sessions bleiben dem Besitzer.
+	sessions = filterTo(sessions, limit, pa.CanSeeSessionMeta)
+	pa.Filtered()
 	writeJSON(w, 200, sessions)
 }
 
@@ -85,6 +97,9 @@ func (a *api) readSession(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathID(r)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "bad session id")
+		return
+	}
+	if !a.checkTranscript(w, r, id) {
 		return
 	}
 	chunks, err := a.st.ReadSession(id, intParam(r, "from", 0), intParam(r, "limit", 200))
@@ -102,6 +117,9 @@ func (a *api) rawSession(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathID(r)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "bad session id")
+		return
+	}
+	if !a.checkTranscript(w, r, id) {
 		return
 	}
 	lines, err := a.st.SessionRaw(id)
@@ -147,7 +165,14 @@ func (a *api) createKnowledge(w http.ResponseWriter, r *http.Request) {
 	if !a.gateMachine(w, r, k.Scope.Machine, false) || !a.gateProject(w, r, k.Scope.Project) {
 		return
 	}
-	k.Person = personOf(r)
+	// Die Zuschreibung kommt aus dem Token und ist danach unveränderlich.
+	k.Person, k.ConfirmedBy = personOf(r), ""
+	if k.Confidence == "verified" {
+		k.ConfirmedBy = k.Person
+	}
+	if denyAccess(w, a.access(r).CheckKnowledgeCreate(k)) {
+		return
+	}
 	id, err := a.st.InsertKnowledge(k)
 	if err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)
@@ -164,6 +189,9 @@ func (a *api) createKnowledge(w http.ResponseWriter, r *http.Request) {
 func (a *api) listKnowledge(w http.ResponseWriter, r *http.Request) {
 	var ks []store.Knowledge
 	var err error
+	if !a.listGateEntries(w, r, scope.NormalizeRemote(r.URL.Query().Get("project")), store.ResKnowledge) {
+		return
+	}
 	if r.URL.Query().Get("include_archived") == "1" {
 		ks, err = a.st.KnowledgeForProject(scope.NormalizeRemote(r.URL.Query().Get("project")))
 	} else {
@@ -173,7 +201,7 @@ func (a *api) listKnowledge(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, 200, ks)
+	writeJSON(w, 200, filterTo(ks, 0, a.access(r).CanSeeKnowledge))
 }
 
 func (a *api) insertMigratedKnowledge(w http.ResponseWriter, r *http.Request) {
@@ -184,6 +212,9 @@ func (a *api) insertMigratedKnowledge(w http.ResponseWriter, r *http.Request) {
 	}
 	in.Knowledge.Person = personOf(r)
 	in.Knowledge.Scope = scope.CanonicalAxes(in.Knowledge.Scope)
+	if denyAccess(w, a.access(r).CheckKnowledgeCreate(in.Knowledge)) {
+		return
+	}
 	saved, err := a.st.InsertMigrated(in)
 	if err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)
@@ -201,6 +232,9 @@ func (a *api) beginMigration(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
+	if denyAccess(w, a.access(r).Check(scope.NormalizeRemote(body.Project), store.ResKnowledge, store.ActCreate, store.Object{Own: true})) {
+		return
+	}
 	id, err := a.st.BeginMigration(scope.NormalizeRemote(body.Project), body.Artifacts)
 	if err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)
@@ -213,6 +247,9 @@ func (a *api) completeMigration(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathID(r)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "bad migration id")
+		return
+	}
+	if !a.checkMigration(w, r, id) {
 		return
 	}
 	if err := a.st.CompleteMigration(id); err != nil {
@@ -242,6 +279,9 @@ func (a *api) insertDocumentMigration(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "source, digest, document_id and revision are required")
 		return
 	}
+	if !a.checkMigration(w, r, id) {
+		return
+	}
 	if err := a.st.InsertDocumentMigration(id, body.Source, body.Digest, body.DocumentID, body.Revision); err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
@@ -250,6 +290,9 @@ func (a *api) insertDocumentMigration(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) completedMigrationArtifacts(w http.ResponseWriter, r *http.Request) {
+	if denyAccess(w, a.access(r).Check(scope.NormalizeRemote(r.URL.Query().Get("project")), store.ResKnowledge, store.ActCreate, store.Object{Own: true})) {
+		return
+	}
 	out, err := a.st.CompletedMigrationArtifacts(scope.NormalizeRemote(r.URL.Query().Get("project")))
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
@@ -260,6 +303,9 @@ func (a *api) completedMigrationArtifacts(w http.ResponseWriter, r *http.Request
 
 func (a *api) completedDocumentArtifacts(w http.ResponseWriter, r *http.Request) {
 	project := scope.NormalizeRemote(r.URL.Query().Get("project"))
+	if denyAccess(w, a.access(r).Check(project, store.ResKnowledge, store.ActCreate, store.Object{Own: true})) {
+		return
+	}
 	out, err := a.st.CompletedDocumentArtifacts(project)
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
@@ -277,11 +323,16 @@ type PendingEntry struct {
 }
 
 func (a *api) pendingKnowledge(w http.ResponseWriter, r *http.Request) {
-	ks, err := a.st.PendingKnowledge(r.URL.Query().Get("project"), intParam(r, "limit", 50))
+	limit := intParam(r, "limit", 50)
+	if !a.listGateEntries(w, r, scope.NormalizeRemote(r.URL.Query().Get("project")), store.ResKnowledge) {
+		return
+	}
+	ks, err := a.st.PendingKnowledge(r.URL.Query().Get("project"), a.overfetch(limit))
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
+	ks = filterTo(ks, limit, a.access(r).CanSeeKnowledge)
 	out := []PendingEntry{}
 	for _, k := range ks {
 		ev, err := a.st.EvidenceFor(k.ID)
@@ -319,11 +370,15 @@ func (a *api) getKnowledge(w http.ResponseWriter, r *http.Request) {
 	}
 	k, err := a.st.KnowledgeByID(id)
 	if err == sql.ErrNoRows {
+		a.access(r).Filtered()
 		writeErr(w, http.StatusNotFound, "no such knowledge entry")
 		return
 	}
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if denyAccess(w, a.access(r).CheckKnowledge(k, store.ActRead)) {
 		return
 	}
 	writeJSON(w, 200, k)
@@ -333,6 +388,9 @@ func (a *api) knowledgeHistory(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathID(r)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "bad knowledge id")
+		return
+	}
+	if !a.checkKnowledgeRef(w, r, id, store.ActRead) {
 		return
 	}
 	history, err := a.st.KnowledgeHistory(id)
@@ -361,6 +419,10 @@ func (a *api) setRegressionCover(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
+	// Eine Aussage über die Absicherung ist eine Beurteilung wie "verified".
+	if !a.checkKnowledgeRef(w, r, id, store.ActVerify) {
+		return
+	}
 	if err := a.st.SetRegressionCover(id, in.State, in.Test); err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
@@ -369,7 +431,10 @@ func (a *api) setRegressionCover(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) regressionGaps(w http.ResponseWriter, r *http.Request) {
-	gaps, unreviewed, err := a.st.RegressionGaps(axesFromQuery(r))
+	if !a.listGate(w, r, scope.NormalizeRemote(r.URL.Query().Get("project")), store.ResKnowledge) {
+		return
+	}
+	gaps, unreviewed, err := a.st.RegressionGapsVisible(axesFromQuery(r), a.access(r).CanSeeKnowledge)
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
@@ -391,9 +456,22 @@ func (a *api) patchKnowledge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Der Token ist die einzige vertrauenswürdige Quelle für den Bestätiger;
-	// ein mitgesendeter Name darf keine fremde Freigabe vortäuschen.
+	// ein mitgesendeter Name darf keine fremde Freigabe vortäuschen. Die
+	// Zuschreibung (person) ist nicht patchbar und bleibt dem ersten Autor.
 	delete(patch, "confirmed_by")
+	// Eine Beurteilung (confidence) verlangt lead, owner oder can_review: sie ist
+	// keine Änderung des Textes, und der Prüfer ändert fremde Einträge nicht,
+	// sondern beurteilt sie. Alles andere ist Ändern: Autor, lead, owner.
+	_, judges := patch["confidence"]
+	if len(patch) > 1 || !judges {
+		if !a.checkKnowledgeRef(w, r, id, store.ActEdit) {
+			return
+		}
+	}
 	if confidence, ok := patch["confidence"]; ok {
+		if !a.checkKnowledgeRef(w, r, id, store.ActVerify) {
+			return
+		}
 		if confidence == "verified" {
 			patch["confirmed_by"] = personOf(r)
 		} else {
@@ -421,6 +499,9 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 	}
 	filter := axesFromQuery(r)
 	limit := intParam(r, "limit", 20)
+	pa := a.access(r)
+	fetch := a.overfetch(limit)
+	pa.Filtered()
 	res := searchResult{Knowledge: []store.Knowledge{}, Sessions: []store.SessionHit{}, Requests: []requestdomain.SearchHit{}}
 	if kind == "knowledge" || kind == "all" {
 		// scope=union searches what the session would read, not an exact match.
@@ -428,28 +509,33 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("scope") == "union" {
 			search = a.st.SearchKnowledgeForContext
 		}
-		ks, err := search(q, filter, limit)
+		ks, err := search(q, filter, fetch)
 		if err != nil {
 			writeStoreError(w, http.StatusInternalServerError, err)
 			return
 		}
-		res.Knowledge = ks
+		// Suche und Bootstrap beliefern Agenten: zusätzlich zur Sichtbarkeit gilt
+		// die Auslieferungsregel (Autor ist im Projekt aktuell member).
+		res.Knowledge = filterTo(ks, limit, func(k store.Knowledge) bool { return pa.CanSeeKnowledge(k) && pa.CanDeliverKnowledge(k) })
 	}
 	if kind == "sessions" || kind == "all" {
-		hits, err := a.st.SearchSessions(q, filter, r.URL.Query().Get("exclude_session"), limit)
+		hits, err := a.st.SearchSessions(q, filter, r.URL.Query().Get("exclude_session"), fetch)
 		if err != nil {
 			writeStoreError(w, http.StatusInternalServerError, err)
 			return
 		}
-		res.Sessions = hits
+		// Ein Treffer zeigt einen Ausschnitt des Transkripts: es gilt die Regel
+		// für Transkripte, nicht die für Metadaten.
+		res.Sessions = filterTo(hits, limit, func(h store.SessionHit) bool { return pa.CanSeeTranscript(h.Session) })
 	}
 	if kind == "requests" || kind == "all" {
-		page, err := a.st.SearchRequests(requestdomain.SearchFilter{Query: q, Scope: scope.Axes{Project: filter.Project}, Limit: limit})
+		page, err := a.st.SearchRequests(a.requestFilter(r, requestdomain.SearchFilter{Query: q, Scope: scope.Axes{Project: filter.Project}, Limit: limit}))
 		if err != nil {
 			writeStoreError(w, http.StatusInternalServerError, err)
 			return
 		}
 		res.Requests = page.Results
+		a.noteRequestHits(r, page.Results)
 	}
 	writeJSON(w, 200, res)
 }
@@ -467,10 +553,17 @@ func (a *api) bootstrap(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
-	openRequests, err := a.st.CountOpenRequests(axesFromQuery(r))
-	if err != nil {
-		writeStoreError(w, http.StatusInternalServerError, err)
-		return
+	// Was beim Sessionstart ausgeliefert wird, folgt derselben Sichtbarkeit wie
+	// jede andere Lesung: globales Wissen für alle, Projektwissen nach Rolle,
+	// Maschinenwissen nur für den Besitzer der Maschine.
+	pa := a.access(r)
+	entries = filterTo(entries, 0, func(k store.Knowledge) bool { return pa.CanSeeKnowledge(k) && pa.CanDeliverKnowledge(k) })
+	openRequests := 0
+	if pa.CanSeeProject(axesFromQuery(r).Project, store.ResRequest) {
+		if openRequests, err = a.st.CountOpenRequests(axesFromQuery(r)); err != nil {
+			writeStoreError(w, http.StatusInternalServerError, err)
+			return
+		}
 	}
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 	w.WriteHeader(200)
@@ -485,6 +578,9 @@ func (a *api) bootstrap(w http.ResponseWriter, r *http.Request) {
 	// Der Zähler sagt, dass es etwas gibt; erst diese Zeile sagt, dass etwas
 	// angefangen und liegengeblieben ist. Ein Fehler kostet nur die Auskunft:
 	// der Bootstrap ist bis hierhin schon geschrieben.
+	if !pa.Allow(axesFromQuery(r).Project, store.ResSessionMeta, store.ActRead, store.Object{}) {
+		return
+	}
 	if threads, err := a.st.InterruptedWork(axesFromQuery(r),
 		time.Now().UTC().Add(-interruptedWindow).Format(time.RFC3339),
 		r.URL.Query().Get("session"), maxInterruptedThreads); err == nil {
@@ -493,6 +589,11 @@ func (a *api) bootstrap(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) interrupted(w http.ResponseWriter, r *http.Request) {
+	// Wie der Bootstrap: wer das Projekt nicht sieht, bekommt keine Liste.
+	if !a.access(r).Allow(axesFromQuery(r).Project, store.ResSessionMeta, store.ActRead, store.Object{}) {
+		writeJSON(w, http.StatusOK, []store.InterruptedThread{})
+		return
+	}
 	threads, err := a.st.InterruptedWork(axesFromQuery(r),
 		time.Now().UTC().Add(-interruptedWindow).Format(time.RFC3339),
 		r.URL.Query().Get("session"), maxInterruptedThreads)
@@ -515,11 +616,14 @@ func (a *api) relevant(w http.ResponseWriter, r *http.Request) {
 	if limit > maxRelevantEntries {
 		limit = maxRelevantEntries
 	}
-	entries, err := a.st.RelevantKnowledge(r.URL.Query().Get("q"), axesFromQuery(r), limit)
+	pa := a.access(r)
+	pa.Filtered()
+	entries, err := a.st.RelevantKnowledge(r.URL.Query().Get("q"), axesFromQuery(r), a.overfetch(limit))
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
+	entries = filterTo(entries, limit, func(k store.Knowledge) bool { return pa.CanSeeKnowledge(k) && pa.CanDeliverKnowledge(k) })
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 	w.WriteHeader(200)
 	if len(entries) == 0 {
@@ -771,6 +875,13 @@ func (a *api) putGhost(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "project is required")
 		return
 	}
+	g.Project = scope.NormalizeRemote(g.Project)
+	if !a.gateProject(w, r, g.Project) {
+		return
+	}
+	if denyAccess(w, a.access(r).Check(g.Project, store.ResGhost, store.ActCreate, store.Object{})) {
+		return
+	}
 	g.Person = personOf(r)
 	id, err := a.st.PutGhostFile(g)
 	if err != nil {
@@ -786,12 +897,19 @@ func (a *api) putGhost(w http.ResponseWriter, r *http.Request) {
 // 900-ms-Budget des Hooks.
 func (a *api) ghostsForPath(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	// Auslieferungspfad des Hooks: ohne Leserecht kommt eine leere Liste und es
+	// wird nichts als gesagt vermerkt.
+	if !a.access(r).Allow(scope.NormalizeRemote(q.Get("project")), store.ResGhost, store.ActRead, store.Object{}) {
+		writeJSON(w, 200, []store.GhostFile{})
+		return
+	}
 	entries, err := a.st.GhostFilesForDelivery(q.Get("project"), q.Get("path"), q.Get("session"))
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, 200, entries)
+	pa := a.access(r)
+	writeJSON(w, 200, filterTo(entries, 0, func(g store.GhostFile) bool { return pa.CanSeeGhost(g) && pa.CanDeliverGhost(g) }))
 }
 
 // ghostsMove hängt eine Beschreibung samt Historie auf einen neuen Pfad. Die
@@ -807,6 +925,9 @@ func (a *api) ghostsMove(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
+	if denyAccess(w, a.access(r).Check(scope.NormalizeRemote(in.Project), store.ResGhost, store.ActEdit, store.Object{})) {
+		return
+	}
 	if err := a.st.MoveGhostFile(in.Project, in.From, in.To); err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
@@ -816,6 +937,9 @@ func (a *api) ghostsMove(w http.ResponseWriter, r *http.Request) {
 
 func (a *api) ghostHistory(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	if !a.listGate(w, r, scope.NormalizeRemote(q.Get("project")), store.ResGhost) {
+		return
+	}
 	// Der Hook will nur die Zahl. Den ganzen Text zu übertragen, um ihn dann
 	// zu zählen, wäre auf einem Pfad mit 900-ms-Budget die falsche Rechnung.
 	if q.Get("count") != "" {
@@ -845,20 +969,29 @@ func (a *api) ghostHistory(w http.ResponseWriter, r *http.Request) {
 
 func (a *api) ghostTree(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	if !a.listGateEntries(w, r, scope.NormalizeRemote(q.Get("project")), store.ResGhost) {
+		return
+	}
 	entries, err := a.st.GhostFilesUnder(q.Get("project"), q.Get("prefix"))
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, 200, entries)
+	writeJSON(w, 200, filterTo(entries, 0, a.access(r).CanSeeGhost))
 }
 
 func (a *api) searchGhosts(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	entries, err := a.st.SearchGhostFiles(q.Get("q"), q.Get("project"), intParam(r, "limit", 20))
+	pa := a.access(r)
+	if q.Get("project") != "" && !a.listGateEntries(w, r, scope.NormalizeRemote(q.Get("project")), store.ResGhost) {
+		return
+	}
+	pa.Filtered()
+	limit := intParam(r, "limit", 20)
+	entries, err := a.st.SearchGhostFiles(q.Get("q"), q.Get("project"), a.overfetch(limit))
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, 200, entries)
+	writeJSON(w, 200, filterTo(entries, limit, func(g store.GhostFile) bool { return pa.CanSeeGhost(g) && pa.CanDeliverGhost(g) }))
 }

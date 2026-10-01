@@ -19,6 +19,7 @@ func OpenRuntime(path string, cfg WriterConfig) (*Store, error) {
 		_ = s.Close()
 		return nil, err
 	}
+	s.reader.acfg = s.accessCfg()
 	s.writer, err = newRuntimeWriter(cfg)
 	if err != nil {
 		_ = s.Close()
@@ -32,7 +33,7 @@ func OpenRuntime(path string, cfg WriterConfig) (*Store, error) {
 }
 
 func (s *Store) direct() *Store {
-	return &Store{db: s.db, path: s.path, snapshotFault: s.snapshotFault}
+	return &Store{db: s.db, path: s.path, snapshotFault: s.snapshotFault, acfg: s.accessCfg()}
 }
 
 func queueValue[T any](s *Store, payload []any, fn func(*Store, []any) (T, error)) (T, error) {

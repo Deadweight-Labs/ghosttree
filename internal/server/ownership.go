@@ -73,6 +73,12 @@ func (a *api) listMachines(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
+	// Maschinennamen sind Metadaten ihres Besitzers: mit Durchsetzung sieht jedes
+	// Konto die eigenen, der Instanz-Admin alle.
+	if pa := a.access(r); a.st.AccessEnforced() && !pa.IsAdmin() {
+		me := principalOf(r).ID
+		machines = filterTo(machines, 0, func(m store.Machine) bool { return m.AccountID == me })
+	}
 	writeJSON(w, http.StatusOK, machines)
 }
 

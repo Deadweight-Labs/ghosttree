@@ -49,6 +49,9 @@ func (a *api) createDocument(w http.ResponseWriter, r *http.Request) {
 	if !a.gateProject(w, r, d.Project) {
 		return
 	}
+	if denyAccess(w, a.access(r).Check(d.Project, store.ResDocument, store.ActCreate, store.Object{Own: true})) {
+		return
+	}
 	d.Person = personOf(r)
 	saved, err := a.st.CreateDocument(d, req.Body, req.Message)
 	if err != nil {
@@ -84,6 +87,12 @@ func (a *api) importDocumentMigration(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
+	if !a.gateProject(w, r, in.Document.Project) {
+		return
+	}
+	if denyAccess(w, a.access(r).Check(in.Document.Project, store.ResDocument, store.ActCreate, store.Object{Own: true})) {
+		return
+	}
 	saved, err := a.st.ImportDocument(in)
 	if err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)
@@ -105,6 +114,9 @@ func (a *api) pushDocumentRevision(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := validateDocumentBody(req.Body); err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)
+		return
+	}
+	if !a.checkDocument(w, r, id, store.ActEdit) {
 		return
 	}
 	saved, err := a.st.PushRevision(id, req.BaseRevision, req.Body, req.Message, personOf(r))
@@ -180,6 +192,9 @@ func (a *api) patchDocument(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if !a.checkDocument(w, r, id, store.ActEdit) {
+		return
+	}
 	if err := a.st.PatchDocument(id, patch); err != nil {
 		status := http.StatusBadRequest
 		if err == sql.ErrNoRows {
@@ -198,11 +213,15 @@ func (a *api) patchDocument(w http.ResponseWriter, r *http.Request) {
 
 func (a *api) listDocuments(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	if !a.listGateEntries(w, r, scope.NormalizeRemote(q.Get("project")), store.ResDocument) {
+		return
+	}
 	ds, err := a.st.Documents(scope.NormalizeRemote(q.Get("project")), q.Get("kind"), q.Get("include_archived") == "1")
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
+	ds = filterTo(ds, 0, a.access(r).CanSeeDocument)
 	if slug := q.Get("slug"); slug != "" {
 		for _, d := range ds {
 			if d.Slug == slug {
@@ -218,6 +237,9 @@ func (a *api) listDocuments(w http.ResponseWriter, r *http.Request) {
 
 func (a *api) getDocument(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if !a.checkDocument(w, r, id, store.ActRead) {
+		return
+	}
 	d, err := a.st.DocumentByID(id)
 	if err != nil {
 		writeStoreError(w, http.StatusNotFound, err)
@@ -228,6 +250,9 @@ func (a *api) getDocument(w http.ResponseWriter, r *http.Request) {
 
 func (a *api) documentRevisions(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if !a.checkDocument(w, r, id, store.ActRead) {
+		return
+	}
 	revs, err := a.st.DocumentRevisions(id)
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
@@ -241,6 +266,9 @@ func (a *api) documentRevision(w http.ResponseWriter, r *http.Request) {
 	n, err := strconv.Atoi(r.PathValue("rev"))
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "bad revision")
+		return
+	}
+	if !a.checkDocument(w, r, id, store.ActRead) {
 		return
 	}
 	rev, err := a.st.DocumentRevision(id, n)

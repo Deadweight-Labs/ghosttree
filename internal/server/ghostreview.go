@@ -3,6 +3,7 @@ package server
 import (
 	"net/http"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
@@ -24,6 +25,10 @@ func (a *api) putGhostReview(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "git_blob is required")
 		return
 	}
+	in.Project = scope.NormalizeRemote(in.Project)
+	if denyAccess(w, a.access(r).Check(in.Project, store.ResGhost, store.ActCreate, store.Object{})) {
+		return
+	}
 	in.Person = personOf(r)
 	if err := a.st.PutGhostReview(in); err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
@@ -36,6 +41,9 @@ func (a *api) ghostReviews(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	if q.Get("project") == "" {
 		writeErr(w, http.StatusBadRequest, "project is required")
+		return
+	}
+	if !a.listGate(w, r, scope.NormalizeRemote(q.Get("project")), store.ResGhost) {
 		return
 	}
 	out, err := a.st.GhostReviewsUnder(q.Get("project"), q.Get("prefix"))

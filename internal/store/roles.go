@@ -114,12 +114,75 @@ func projectRoleTx(q rowQuerier, remote string, account int64) RoleInfo {
 	var role string
 	var review int
 	_ = q.QueryRow(`SELECT role, can_review FROM project_members WHERE project_id=? AND account_id=?`, pid, account).Scan(&role, &review)
-	info := RoleInfo{Role: role, CanReview: review == 1}
+	return deriveRole(orgRole, role, review == 1)
+}
+
+// deriveRole ist die Ableitung selbst: Org-Owner sind implizit Owner, sonst
+// zählt die gespeicherte Zeile. Einzel- und Sammelabfrage (AccountRoles) teilen
+// sie, damit es nur eine Regel gibt.
+func deriveRole(orgRole, memberRole string, review bool) RoleInfo {
+	info := RoleInfo{Role: memberRole, CanReview: review}
 	if orgRole == OrgOwner {
-		info.Implicit = role != RoleOwner
+		info.Implicit = memberRole != RoleOwner
 		info.Role = RoleOwner
 	}
 	return info
+}
+
+// AccountRoles lädt in einer Abfrage die Rollen eines Kontos in allen Projekten
+// seiner Organisationen (Remote -> Rolle) und ob es Instanz-Admin ist. Das ist
+// die Sammelform von ProjectRole für Listen, Suche und Bootstrap; ein Test hält
+// beide gleich.
+func (s *Store) AccountRoles(accountPrincipal string) (map[string]RoleInfo, bool) {
+	if s.reader != nil {
+		return s.reader.AccountRoles(accountPrincipal)
+	}
+	out := map[string]RoleInfo{}
+	id, err := parsePersonPrincipalID(accountPrincipal)
+	if err != nil {
+		return out, false
+	}
+	var admin int
+	_ = s.db.QueryRow(`SELECT is_admin FROM persons WHERE id=?`, id).Scan(&admin)
+	rows, err := s.db.Query(`SELECT p.remote, om.role, COALESCE(pm.role,''), COALESCE(pm.can_review,0)
+		FROM projects p
+		JOIN org_members om ON om.org_id=p.org_id AND om.account_id=?
+		LEFT JOIN project_members pm ON pm.project_id=p.id AND pm.account_id=?`, id, id)
+	if err != nil {
+		return out, admin == 1
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var remote, orgRole, role string
+		var review int
+		if rows.Scan(&remote, &orgRole, &role, &review) == nil {
+			out[remote] = deriveRole(orgRole, role, review == 1)
+		}
+	}
+	return out, admin == 1
+}
+
+// machineOwners liefert Maschine -> Besitzerkonto und den Instanz-Owner, dem
+// Altbestand gehört.
+func (s *Store) machineOwners() (map[string]int64, int64) {
+	if s.reader != nil {
+		return s.reader.machineOwners()
+	}
+	owner := instanceOwnerID(s.db)
+	out := map[string]int64{}
+	rows, err := s.db.Query(`SELECT hostname, account_id FROM machines`)
+	if err != nil {
+		return out, owner
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		var id int64
+		if rows.Scan(&name, &id) == nil {
+			out[canonicalMachine(name)] = effectiveOwner(id, owner)
+		}
+	}
+	return out, owner
 }
 
 // ProjectRole liefert die Rolle des Kontos im Projekt (normalisierte Remote).
@@ -535,4 +598,30 @@ func (s *Store) OrgOwnerPrincipal(orgID int64) (string, bool) {
 		return "", false
 	}
 	return principalOfID(id), true
+}
+
+// ProjectWriters nennt die Namen der Konten, die im Projekt aktuell mindestens
+// member sind (Org-Owner implizit als owner). Dieselbe Ableitung wie ProjectRole;
+// ein Test hält beide gleich.
+func (s *Store) ProjectWriters(remote string) map[string]bool {
+	if s.reader != nil {
+		return s.reader.ProjectWriters(remote)
+	}
+	out := map[string]bool{}
+	rows, err := s.db.Query(`SELECT p.name FROM projects pr
+		JOIN org_members om ON om.org_id=pr.org_id
+		JOIN persons p ON p.id=om.account_id
+		LEFT JOIN project_members pm ON pm.project_id=pr.id AND pm.account_id=p.id
+		WHERE pr.remote=? AND (om.role=? OR pm.role IN (?,?,?))`, remote, OrgOwner, RoleOwner, RoleLead, RoleMember)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if rows.Scan(&name) == nil {
+			out[name] = true
+		}
+	}
+	return out
 }

@@ -307,6 +307,12 @@ func (c *Client) AppendChunks(id int64, chunks []store.Chunk) error {
 	return c.do("POST", "/api/sessions/"+strconv.FormatInt(id, 10)+"/chunks", nil, body, nil)
 }
 
+// ShareSession gibt das Transkript einer eigenen Session für die Mitglieder des
+// Projekts frei oder nimmt die Freigabe zurück.
+func (c *Client) ShareSession(id int64, shared bool) error {
+	return c.do("PUT", "/api/sessions/"+strconv.FormatInt(id, 10)+"/share", nil, map[string]bool{"shared": shared}, nil)
+}
+
 func (c *Client) Sessions(filter scope.Axes, limit int) ([]store.Session, error) {
 	q := axesQuery(filter)
 	if limit > 0 {

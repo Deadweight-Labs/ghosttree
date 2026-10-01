@@ -342,3 +342,18 @@ func TestServeRejectsStaleSnapshotSchemaWithoutChangingCounts(t *testing.T) {
 		t.Fatalf("startup probe changed snapshot count: %d -> %d", before, after)
 	}
 }
+
+func TestServeAccessEnforcementFollowsTheEnvironment(t *testing.T) {
+	for value, want := range map[string]bool{"": false, "0": false, "true": false, "1": true} {
+		t.Setenv(envEnforceAccess, value)
+		st, err := store.Open(":memory:")
+		if err != nil {
+			t.Fatal(err)
+		}
+		buildServerHandler(st, serveConfig{SnapshotLimits: snapshot.DefaultLimits()}, io.Discard)
+		if got := st.AccessEnforced(); got != want {
+			t.Errorf("%s=%q: enforced=%v, want %v", envEnforceAccess, value, got, want)
+		}
+		st.Close()
+	}
+}
