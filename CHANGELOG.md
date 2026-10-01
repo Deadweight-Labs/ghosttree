@@ -6,6 +6,16 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Project rooms of the coordination layer need a project role. Registering an
+  agent into `project:<remote>` takes at least the guest role (org owners as
+  before); org membership alone no longer joins. `GET /api/coord/rooms` drops
+  project rooms for accounts without a role and omits the member list for
+  guests, so a membership left behind after a role or org removal shows
+  nothing. It is filtered on read, so the membership returns with the role.
+  Both follow `GHOSTTREE_ENFORCE_ACCESS`: log mode keeps the old behaviour and
+  logs "would deny". A known project now answers `not_found` for non-members
+  and members without a role alike, and `POST /api/projects/claim` no longer
+  returns id and name to org members without a role.
 - Coordination messages carry an authority for their recipient: `directive` or
   `request`. One function, `store.AuthorityFor`, decides: a message is a
   directive only when the sender's rank in the recipient's project is higher
