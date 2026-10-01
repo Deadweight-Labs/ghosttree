@@ -17,6 +17,9 @@ Versioning, with pre-1.0 compatibility rules described in
   at safe points with atomic, at-most-once delivery. The channel is a Claude
   Code research-preview feature requiring the legacy `initialize` connection
   and `--dangerously-load-development-channels` flag.
+- Wake a channel agent when its request is answered: a reply to a question-type
+  message, or to a message that mentioned the replier, now delivers instead of
+  waiting for polling. Replies to replies stay quiet.
 - Serialize runtime writes through a bounded queue while keeping reads on an
   independent connection pool. Batch pending session chunks, report retryable
   saturation errors, expose writer metrics, and drain accepted writes on shutdown.

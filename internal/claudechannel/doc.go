@@ -49,9 +49,15 @@
 // der Write selbst läuft unter dem Datei-Lock, und eine blockierte Pipe hält
 // ihn, bis sie sich löst.
 //
-// Schleifenschutz: eine bloße Antwort auf eine eigene Nachricht weckt nicht
-// (siehe ShouldWake), und die Tool-Instruktion bittet, Antworten nicht zu
-// beantworten. Das schließt nur die Antwortschleife. Eine Schleife über
+// Weckregel für Antworten und Schleifenschutz: eine Antwort auf eine eigene
+// Anfrage weckt den Fragenden (siehe ClassifyParent), damit er nicht pollen
+// muss. Eine Anfrage ist eine Nachricht mit Attention-Intent (Frage, Freigabe,
+// Blocker, Übergabe) oder eine Nachricht, die selbst keine Antwort ist und den
+// Antwortenden ausdrücklich erwähnt. Die Erwähnung, die das reply-Tool in
+// Projekträumen automatisch am Absender setzt, macht eine Antwort nie zur
+// Anfrage. Eine Antwort auf eine eigene Antwort oder sonstige Nicht-Anfrage,
+// etwa ein Dank, weckt nicht, und die Tool-Instruktion bittet, Antworten nicht
+// zu beantworten: eine Kette endet nach einer Antwort. Eine Schleife über
 // bewusste Sends mit Intent question, Blocker und so weiter oder über frische
 // DMs ist nicht verhindert und nur durch das Koordinationsbudget begrenzt.
 //

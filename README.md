@@ -189,8 +189,13 @@ What was measured (Claude Code 2.1.284, `ctx channel --capabilities`):
 | `activity_observation` | gap |
 
 Delivery is at-most-once: a message is claimed atomically before it is sent and
-never re-sent, so a crash between claim and write loses it. Nothing stops two
-agents from answering each other's replies; the only bound on such a loop is the
+never re-sent, so a crash between claim and write loses it. A reply wakes the
+agent that asked when its original message was a request: a message with the
+intent `question`, `approval`, `blocker` or `handoff`, or a message that is not
+itself a reply and mentions the replier by name (the mention `reply` adds
+automatically does not count). A reply to a reply, such as a thanks, does not
+wake, so a chain ends after one answer. Nothing stops two agents from deliberately
+sending each other fresh questions; the only bound on such a loop is the
 per-session coordination budget. The limits are
 spelled out in `internal/claudechannel/doc.go`. The status line may say "no MCP
 server configured with that name" while delivery works.
