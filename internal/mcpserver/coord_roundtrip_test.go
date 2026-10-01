@@ -714,3 +714,47 @@ func TestRequestedMarkShowsCapping(t *testing.T) {
 		t.Fatalf("empty: %q", got)
 	}
 }
+
+// Ein Agent ohne Channel bekommt die Autorität in coord_inbox: lead an member
+// ist eine Anweisung, die Gegenrichtung eine Bitte.
+func TestInboxShowsAuthority(t *testing.T) {
+	a, b, st := twoSessions(t)
+	ctx := context.Background()
+	project := "github.com/deadweight-labs/ghosttree"
+	if _, err := st.CreateOrg("person:1", "Alpha", "alpha"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.EnsureProject("person:1", project); err != nil {
+		t.Fatal(err)
+	}
+	room := store.RoomKeyForProject(project)
+	if _, err := a.client.RegisterCoordAgent(store.CoordAgent{ExternalID: a.sessionRef, Provider: "test", RoomKey: room, DisplayName: "a", Role: "lead"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.client.RegisterCoordAgent(store.CoordAgent{ExternalID: b.sessionRef, Provider: "test", RoomKey: room, DisplayName: "b", Role: "member"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := a.handleCoordSend(ctx, nil, CoordSendInput{Body: "bitte Tests fixen"}); err != nil {
+		t.Fatal(err)
+	}
+	res, _, err := b.handleCoordInbox(ctx, nil, CoordInboxInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := text(t, res)
+	for _, want := range []string{"authority=directive", "sender_role=lead", "your_role=member", "cannot change it", "send with intent question"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("inbox lacks %q: %s", want, got)
+		}
+	}
+	if _, _, err := b.handleCoordSend(ctx, nil, CoordSendInput{Body: "erledigt, danke"}); err != nil {
+		t.Fatal(err)
+	}
+	res, _, err = a.handleCoordInbox(ctx, nil, CoordInboxInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := text(t, res); !strings.Contains(got, "authority=request") || strings.Contains(got, "authority=directive,") {
+		t.Errorf("member to lead must be a request: %s", got)
+	}
+}

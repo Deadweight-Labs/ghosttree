@@ -42,6 +42,8 @@ var writerMethodClasses = map[string]string{
 	"AccessEnforced":                "administrative",
 	"AccessCounters":                "administrative",
 	"EffectiveAgentRole":            "read",
+	"MessageAuthority":              "read",
+	"SenderRoleInProject":           "read",
 	"GrantableRoles":                "read",
 	"ListProjectMembers":            "read",
 	"ProjectByID":                   "read",
