@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -189,5 +190,27 @@ func TestDeviceLoginOnTakenMachineNameIs409(t *testing.T) {
 	code, body := f.post(t, "/api/auth/device/token", "", map[string]string{"device_code": start["device_code"].(string)})
 	if code != 409 || body["error"] != "machine_name_taken" {
 		t.Fatalf("device token on taken machine: %d %v", code, body)
+	}
+}
+
+// Nur Legacy-Tokens (der Collector) und gebundene Tokens beanspruchen
+// implizit; ein ungebundenes cli-Token sichert sich keinen Namen.
+func TestUnboundCliTokenDoesNotClaimMachineNames(t *testing.T) {
+	f := newOwnershipFixture(t)
+	cli, _, err := f.st.CreateToken("anna", store.TokenSpec{Label: "script"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, _ := f.post(t, "/api/sessions", cli, session("freename", "c1")); code != 200 {
+		t.Fatalf("upload: %d", code)
+	}
+	if err := f.st.MachineClaimable("freename", "person:1"); err != nil {
+		t.Fatalf("name must stay free: %v", err)
+	}
+	if code, _ := f.post(t, "/api/sessions", f.robinLegacy, session("freename", "c2")); code != 200 {
+		t.Fatalf("legacy collector on a new host: %d", code)
+	}
+	if err := f.st.MachineClaimable("freename", "person:2"); !errors.Is(err, store.ErrMachineTaken) {
+		t.Fatalf("legacy upload must claim: %v", err)
 	}
 }

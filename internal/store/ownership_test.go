@@ -125,3 +125,91 @@ func TestMachineClaimAndSessionOwnership(t *testing.T) {
 		t.Fatalf("session = %+v %v", got, err)
 	}
 }
+
+// Der Claim darf an der PK-Verletzung nicht als Serverfehler enden: liest er
+// "frei", während ein anderer Prozess den Namen einträgt, ist das ein 409.
+type staleReadTx struct {
+	txExec
+	missed bool
+}
+
+func (s *staleReadTx) QueryRow(q string, args ...any) *sql.Row {
+	if !s.missed {
+		s.missed = true
+		return s.txExec.QueryRow(`SELECT 0, '' WHERE 0`)
+	}
+	return s.txExec.QueryRow(q, args...)
+}
+
+func TestClaimRaceOnPrimaryKeyIsMachineTaken(t *testing.T) {
+	st, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	st.AddPerson("robin")
+	st.AddPerson("anna")
+	if err := st.ClaimMachine("box", "person:2"); err != nil {
+		t.Fatal(err)
+	}
+	tx, _ := st.db.Begin()
+	defer tx.Rollback()
+	if err := claimMachineTx(&staleReadTx{txExec: tx}, "box", 1); !errors.Is(err, ErrMachineTaken) {
+		t.Fatalf("race with foreign owner: %v", err)
+	}
+	if err := claimMachineTx(&staleReadTx{txExec: tx}, "box", 2); err != nil {
+		t.Fatalf("race with own claim: %v", err)
+	}
+}
+
+func TestSessionCollisionEmptyVersusSetMachine(t *testing.T) {
+	st, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	st.AddPerson("robin")
+	// Leer gespeichert: eine Maschine darf nachgetragen werden.
+	id, err := st.UpsertSession(Session{Harness: "codex", ExternalID: "a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again, err := st.UpsertSession(Session{Harness: "codex", ExternalID: "a", Scope: scope.Axes{Machine: "box"}}); err != nil || again != id {
+		t.Fatalf("empty -> set: %d %v", again, err)
+	}
+	// Gesetzt gespeichert: leer ist eine andere Maschine und kollidiert.
+	if _, err := st.UpsertSession(Session{Harness: "codex", ExternalID: "a"}); !errors.Is(err, ErrSessionCollision) {
+		t.Fatalf("set -> empty: %v", err)
+	}
+}
+
+func TestReleaseAndTransferMachine(t *testing.T) {
+	st, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	st.AddPerson("robin")
+	st.AddPerson("anna")
+	if err := st.ClaimMachine("squat", "person:2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.TransferMachine("Squat", "robin"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ClaimMachine("squat", "person:2"); !errors.Is(err, ErrMachineTaken) {
+		t.Fatalf("after transfer: %v", err)
+	}
+	if err := st.ReleaseMachine("squat"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ReleaseMachine("squat"); err == nil {
+		t.Fatal("releasing an unknown machine must fail")
+	}
+	if err := st.ClaimMachine("squat", "person:2"); err != nil {
+		t.Fatalf("after release: %v", err)
+	}
+	if err := st.TransferMachine("squat", "nobody"); err == nil {
+		t.Fatal("transfer to an unknown account must fail")
+	}
+}

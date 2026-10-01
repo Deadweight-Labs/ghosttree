@@ -168,7 +168,10 @@ func (s *Store) ListSessionsOwned(filter scope.Axes, limit int, ownerPrincipalID
 	if err != nil {
 		return nil, err
 	}
-	return out, s.fillSessionOwners(out)
+	if err := s.fillSessionOwners(out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // SessionsPendingDistillation returns sessions that have never been distilled
@@ -230,7 +233,10 @@ func (s *Store) SessionByID(id int64) (Session, error) {
 	if len(found) == 0 {
 		return Session{}, sql.ErrNoRows
 	}
-	return found[0], s.fillSessionOwners(found)
+	if err := s.fillSessionOwners(found); err != nil {
+		return Session{}, err
+	}
+	return found[0], nil
 }
 
 func (s *Store) ReadSession(id int64, fromSeq, limit int) ([]Chunk, error) {

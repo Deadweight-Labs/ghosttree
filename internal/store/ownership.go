@@ -138,7 +138,19 @@ func claimMachineTx(tx txExec, name string, account int64) error {
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		_, err := tx.Exec(`INSERT INTO machines(hostname, first_seen, last_seen, account_id) VALUES(?,?,?,?)`, name, at, at, account)
-		return err
+		if err == nil || !strings.Contains(err.Error(), "constraint") {
+			return err
+		}
+		// Ein anderer Prozess hat den Namen zwischen Lesen und Einfügen
+		// beansprucht (kein Writer-Queue-Schutz, etwa beim CLI): wie ein
+		// Fremdname behandeln, nicht als Serverfehler.
+		if err := tx.QueryRow(`SELECT account_id, last_seen FROM machines WHERE hostname=?`, name).Scan(&stored, &seen); err != nil {
+			return err
+		}
+		if effectiveOwner(stored, instanceOwnerID(tx)) != account {
+			return ErrMachineTaken
+		}
+		return nil
 	case err != nil:
 		return err
 	}
@@ -252,4 +264,42 @@ func (s *Store) fillSessionOwners(sessions []Session) error {
 		sessions[i].Owner = names[id]
 	}
 	return nil
+}
+
+// ReleaseMachine gibt einen Maschinennamen wieder frei (Admin, DB-Zugriff).
+// Sessions behalten ihren Maschinennamen; der nächste Claim ist wieder offen.
+func (s *Store) ReleaseMachine(name string) error {
+	if s.writer != nil {
+		return queueWrite(s, []any{name}, func(d *Store, p []any) error { return d.ReleaseMachine(p[0].(string)) })
+	}
+	res, err := s.db.Exec(`DELETE FROM machines WHERE hostname=?`, canonicalMachine(name))
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("machine %q not found", name)
+	}
+	return nil
+}
+
+// TransferMachine überträgt einen Maschinennamen an ein anderes Konto (Admin,
+// DB-Zugriff). Ein noch nicht beanspruchter Name wird dem Konto zugewiesen.
+func (s *Store) TransferMachine(name, account string) error {
+	if s.writer != nil {
+		return queueWrite(s, []any{name, account}, func(d *Store, p []any) error {
+			return d.TransferMachine(p[0].(string), p[1].(string))
+		})
+	}
+	a, err := s.AccountByName(account)
+	if err != nil {
+		return err
+	}
+	id, ok := accountNumericID(a.ID)
+	if !ok {
+		return fmt.Errorf("invalid account %q", account)
+	}
+	at := now()
+	_, err = s.db.Exec(`INSERT INTO machines(hostname, first_seen, last_seen, account_id) VALUES(?,?,?,?)
+		ON CONFLICT(hostname) DO UPDATE SET account_id=excluded.account_id`, canonicalMachine(name), at, at, id)
+	return err
 }

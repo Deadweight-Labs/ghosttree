@@ -38,7 +38,11 @@ func (a *api) gateMachine(w http.ResponseWriter, r *http.Request, machine string
 		return false
 	}
 	var err error
-	if claim {
+	// Beansprucht wird nur implizit durch Legacy-Tokens (der Collector lädt für
+	// neue Hostnamen hoch) und gebundene Tokens für ihre eigene Maschine. Alle
+	// anderen tragen ihre Maschine schon seit
+	// dem Geräte-Login oder prüfen nur.
+	if claim && (p.TokenKind == "legacy" || p.Machine != "") {
 		err = a.st.ClaimMachine(machine, p.ID)
 	} else {
 		err = a.st.MachineClaimable(machine, p.ID)

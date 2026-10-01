@@ -18,7 +18,11 @@ Versioning, with pre-1.0 compatibility rules described in
   agents belong to the first account (`person:1`) without rewriting the
   sessions table. Sessions, machines (`GET /api/machines`) and peers show their
   `owner`, and `?owner=me` filters sessions and machines. Legacy tokens keep
-  working unchanged.
+  working unchanged. Known gap: a legacy token (also one of a test person)
+  still claims a free machine name on its first upload, because the existing
+  collector uploads for new hostnames without a login; an admin frees or
+  reassigns such a name with `ctx machine release <name>` and `ctx machine
+  transfer <name> <account>` (database access, like `ctx account`).
 - Add browser pages for the device login and for tokens: `/ui/device` approves a
   `ctx login` (signed in, CSRF protected, wrong codes lock the account briefly)
   and `/ui/account/tokens` lists your tokens with label, machine, kind
