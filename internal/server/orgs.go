@@ -319,6 +319,12 @@ func (a *api) claimProject(w http.ResponseWriter, r *http.Request) {
 		writeOrgError(w, err)
 		return
 	}
+	// Der Claim eines schon beanspruchten Projekts ist idempotent und gibt es
+	// zurück; ein Mitglied der Org ohne Rolle im Projekt erfährt damit weder
+	// Id noch Namen.
+	if denyAccess(w, a.access(r).Check(p.Remote, store.ResProject, store.ActRead, store.Object{})) {
+		return
+	}
 	writeJSON(w, http.StatusOK, p)
 }
 

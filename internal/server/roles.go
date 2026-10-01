@@ -18,7 +18,9 @@ func (a *api) roleProject(w http.ResponseWriter, r *http.Request) (store.Project
 	p, ok := a.st.ProjectByID(id)
 	if !ok || a.st.OrgRole(p.OrgID, principalOf(r).ID) == "" {
 		a.access(r).Filtered()
-		writeOrgError(w, store.ErrProjectNotFound)
+		// Dieselbe Antwort wie die Rollenprüfung unten, damit Projekt-Ids sich
+		// nicht aufzählen lassen.
+		denyAccess(w, store.ErrAccessNotFound)
 		return store.Project{}, false
 	}
 	// Die Mitgliederliste ist Projektsache: ohne Rolle im Projekt gibt es sie
