@@ -106,6 +106,8 @@ func TestMatrixPerRoleResourceAction(t *testing.T) {
 		{"guest reads the project room", guest, ResRoom, ActRead, other, true},
 		{"guest writes to the project room", guest, ResRoom, ActCreate, other, true},
 		{"stranger does not read the room", none, ResRoom, ActRead, other, false},
+		{"member sees the project entry", member, ResProject, ActRead, other, true},
+		{"no role does not see the project entry", RoleInfo{}, ResProject, ActRead, other, false},
 		{"member sees agents", member, ResAgents, ActRead, other, true},
 		{"guest does not see agents", guest, ResAgents, ActRead, other, false},
 		{"guest reads members", guest, ResMembers, ActRead, other, true},
