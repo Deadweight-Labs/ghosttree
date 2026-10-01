@@ -301,7 +301,31 @@ func (a CoordAccess) Rooms() ([]CoordRoom, error) {
 			return nil, err
 		}
 	}
-	return rooms, nil
+	return a.gateProjectRooms(rooms), nil
+}
+
+// gateProjectRooms legt die Projektrolle über die Raumliste: eine Mitgliedschaft
+// im Projektraum bleibt in der Tabelle stehen, wenn das Konto seine Rolle oder
+// die Org verliert, und wirkt dann nicht mehr. Ohne Rolle fehlt der Raum, der
+// Gast sieht ihn ohne Mitgliederliste (Agenten zeigt der Raum ab member), wie
+// bei Peers. Gelesen statt beim Entzug aufgeräumt, weil jeder Weg, eine Rolle zu
+// verlieren (Rolle entziehen, Org verlassen, Projekt verschieben, Zeile von
+// Hand), so von allein abgedeckt ist und die Mitgliedschaft mit der Rolle
+// zurückkommt. Im Log-Modus bleibt die Liste, und "would deny" wird protokolliert.
+func (a CoordAccess) gateProjectRooms(rooms []CoordRoom) []CoordRoom {
+	out := make([]CoordRoom, 0, len(rooms))
+	for _, room := range rooms {
+		if room.Kind == RoomProject {
+			if a.projectRoomGate(room.Kind, room.Key, ResRoom, nil) != nil {
+				continue
+			}
+			if a.projectRoomGate(room.Kind, room.Key, ResAgents, nil) != nil {
+				room.Members = []string{}
+			}
+		}
+		out = append(out, room)
+	}
+	return out
 }
 
 func (a CoordAccess) requireThreadAccess(threadID int64) (Thread, error) {

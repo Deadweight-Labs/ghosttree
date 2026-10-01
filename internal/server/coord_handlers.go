@@ -215,8 +215,16 @@ func (a *api) registerCoordAgent(w http.ResponseWriter, r *http.Request) {
 	// Ein Projektraum gehört zu einem Projekt: eine fremde Remote gibt es für
 	// diesen Aufrufer nicht, eine unbekannte wird wie bei jedem Schreiben
 	// zugeordnet.
-	if project, ok := strings.CutPrefix(in.RoomKey, "project:"); ok && !a.gateProject(w, r, project) {
-		return
+	if project, ok := strings.CutPrefix(in.RoomKey, "project:"); ok {
+		if !a.gateProject(w, r, project) {
+			return
+		}
+		// Org-Mitgliedschaft allein genügt nicht: in den Projektraum kommt nur,
+		// wer im Projekt eine Rolle hat (Gast aufwärts). Eine noch
+		// unbeanspruchte Remote bleibt offen (Matrix und Decide).
+		if denyAccess(w, a.access(r).Check(strings.TrimSpace(project), store.ResRoom, store.ActCreate, store.Object{})) {
+			return
+		}
 	}
 	if _, ok := accountOf(principalOf(r)); !ok {
 		writeErr(w, http.StatusUnauthorized, "unauthorized")
