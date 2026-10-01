@@ -206,6 +206,7 @@ func TestPrivateCoordTargetsReturn404AcrossHTTP(t *testing.T) {
 		{"POST", srv.URL + "/api/coord/messages", store.CoordMessage{DestinationKind: store.DestinationDiscussion, DestinationID: discussion, SenderExternalID: "sess-other", ClientID: "outsider", Body: "intrude"}},
 		{"GET", srv.URL + "/api/coord/messages/" + strconv.FormatInt(messageID, 10) + "/mentions?agent_external_id=sess-other", nil},
 		{"POST", srv.URL + "/api/coord/deliveries", coordDeliveryInput{MessageID: messageID, Recipient: "sess-other", State: store.DeliveryFetched}},
+		{"POST", srv.URL + "/api/coord/deliveries/claim", coordDeliveryInput{MessageID: messageID, Recipient: "sess-other"}},
 		{"GET", srv.URL + "/api/threads/" + discussion + "?agent_external_id=sess-other", nil},
 		{"GET", srv.URL + "/api/threads/" + discussion + "/links?agent_external_id=sess-other", nil},
 		{"GET", srv.URL + "/api/threads/" + discussion + "/summary?agent_external_id=sess-other", nil},
@@ -644,5 +645,57 @@ func TestActivityCannotBeInventedForAnotherPersonsSession(t *testing.T) {
 	defer res2.Body.Close()
 	if res2.StatusCode != http.StatusForbidden {
 		t.Errorf("reading another person's session activity: want 403, got %d", res2.StatusCode)
+	}
+}
+
+func TestClaimCoordDeliveryRouteGrantsOneWinnerAndRejectsStrangers(t *testing.T) {
+	srv, st, ownerToken, otherToken := coordinationAccessServer(t)
+	room := store.RoomKeyForProject("github.com/x/claim")
+	for _, a := range []store.CoordAgent{
+		{ExternalID: "sess-a", PrincipalID: "person:1", Person: "owner", Provider: "test", RoomKey: room},
+		{ExternalID: "sess-b", PrincipalID: "person:1", Person: "owner", Provider: "test", RoomKey: room},
+		{ExternalID: "sess-other", PrincipalID: "person:2", Person: "other", Provider: "test", RoomKey: room},
+	} {
+		if _, err := st.RegisterCoordAgent(a); err != nil {
+			t.Fatal(err)
+		}
+	}
+	id, err := st.CoordinationFor(store.Principal{ID: "person:1"}, "sess-a").Send(store.CoordMessage{
+		DestinationKind: store.DestinationRoom, DestinationID: room, ClientID: "claim-src", Body: "hi",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim := func(token, recipient string) (int, bool) {
+		res := req(t, "POST", srv.URL+"/api/coord/deliveries/claim", token, coordDeliveryInput{MessageID: id, Recipient: recipient})
+		defer res.Body.Close()
+		var out struct {
+			Claimed bool `json:"claimed"`
+		}
+		_ = json.NewDecoder(res.Body).Decode(&out)
+		return res.StatusCode, out.Claimed
+	}
+	if status, claimed := claim(ownerToken, "sess-b"); status != http.StatusOK || !claimed {
+		t.Fatalf("first claim: status=%d claimed=%v", status, claimed)
+	}
+	if status, claimed := claim(ownerToken, "sess-b"); status != http.StatusOK || claimed {
+		t.Fatalf("second claim: status=%d claimed=%v", status, claimed)
+	}
+	if status, claimed := claim(otherToken, "sess-b"); status == http.StatusOK || claimed {
+		t.Fatalf("foreign token claimed for another principal's session: status=%d", status)
+	}
+	res := req(t, "POST", srv.URL+"/api/coord/deliveries/claim", ownerToken, coordDeliveryInput{})
+	res.Body.Close()
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("empty claim: status=%d", res.StatusCode)
+	}
+	list := req(t, "GET", srv.URL+"/api/coord/deliveries/injected?agent_external_id=sess-b&message_ids="+strconv.FormatInt(id, 10), ownerToken, nil)
+	var got struct {
+		IDs []int64 `json:"message_ids"`
+	}
+	_ = json.NewDecoder(list.Body).Decode(&got)
+	list.Body.Close()
+	if len(got.IDs) != 1 || got.IDs[0] != id {
+		t.Fatalf("injected = %v", got.IDs)
 	}
 }

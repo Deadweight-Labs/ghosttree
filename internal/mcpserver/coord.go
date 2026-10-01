@@ -207,6 +207,10 @@ func (s *Server) handleCoordInbox(ctx context.Context, _ *mcp.CallToolRequest, i
 	if err != nil {
 		return nil, nil, err
 	}
+	injected, err := s.injectedSet(msgs)
+	if err != nil {
+		return nil, nil, err
+	}
 	var b strings.Builder
 	var highest int64
 	shown := 0
@@ -216,6 +220,9 @@ func (s *Server) handleCoordInbox(ctx context.Context, _ *mcp.CallToolRequest, i
 		}
 		if m.SenderExternalID == s.coordRef() {
 			continue // die eigenen Beiträge sind keine Post
+		}
+		if injected[m.ID] {
+			continue // schon über den Channel eingebracht
 		}
 		shown++
 		fmt.Fprintf(&b, "[%d] %s", m.ID, m.SenderExternalID)
@@ -404,6 +411,10 @@ func (s *Server) handleCoordDMRead(ctx context.Context, _ *mcp.CallToolRequest, 
 	if err != nil {
 		return nil, nil, err
 	}
+	injected, err := s.injectedSet(msgs)
+	if err != nil {
+		return nil, nil, err
+	}
 	var b strings.Builder
 	var highest int64
 	shown := 0
@@ -412,6 +423,9 @@ func (s *Server) handleCoordDMRead(ctx context.Context, _ *mcp.CallToolRequest, 
 			highest = m.ID
 		}
 		if m.SenderExternalID == s.coordRef() {
+			continue
+		}
+		if injected[m.ID] {
 			continue
 		}
 		shown++
@@ -426,6 +440,25 @@ func (s *Server) handleCoordDMRead(ctx context.Context, _ *mcp.CallToolRequest, 
 		return coordText("no new messages in that conversation"), nil, nil
 	}
 	return coordText(b.String()), nil, nil
+}
+
+// injectedSet fragt, welche dieser Nachrichten diese Session schon über den
+// Channel bekommen hat. Ein Fehler wird nicht verschluckt: lieber kein
+// Ergebnis als dieselbe Nachricht zweimal.
+func (s *Server) injectedSet(msgs []store.CoordMessage) (map[int64]bool, error) {
+	ids := make([]int64, 0, len(msgs))
+	for _, m := range msgs {
+		ids = append(ids, m.ID)
+	}
+	got, err := s.client.CoordInjectedMessages(s.coordRef(), ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[int64]bool, len(got))
+	for _, id := range got {
+		out[id] = true
+	}
+	return out, nil
 }
 
 // coordRef ist die Identität, unter der diese Session am Koordinationsraum

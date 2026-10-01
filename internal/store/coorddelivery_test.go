@@ -1,6 +1,10 @@
 package store
 
-import "testing"
+import (
+	"path/filepath"
+	"sync"
+	"testing"
+)
 
 // Der Zustand darf nur vorwärts laufen. Ein spät eintreffendes "abgeholt"
 // nach einem "bestätigt" würde sonst eine gelesene Nachricht wieder als
@@ -168,4 +172,99 @@ func TestStoredMessagesSurviveAServerRestart(t *testing.T) {
 	if again != id {
 		t.Fatalf("a retry after restart created a second message: %d then %d", id, again)
 	}
+}
+
+func TestClaimCoordDeliveryWinsOnceAndNeverMovesBackwards(t *testing.T) {
+	s := openTest(t)
+	if err := s.MarkCoordDelivery(1, "sess-b", DeliveryFetched); err != nil {
+		t.Fatal(err)
+	}
+	won, err := s.ClaimCoordDelivery(1, "sess-b")
+	if err != nil || !won {
+		t.Fatalf("first claim: won=%v err=%v", won, err)
+	}
+	if won, err := s.ClaimCoordDelivery(1, "sess-b"); err != nil || won {
+		t.Fatalf("second claim: won=%v err=%v", won, err)
+	}
+	if err := s.MarkCoordDelivery(1, "sess-b", DeliveryAcked); err != nil {
+		t.Fatal(err)
+	}
+	if won, err := s.ClaimCoordDelivery(1, "sess-b"); err != nil || won {
+		t.Fatalf("claim after ack: won=%v err=%v", won, err)
+	}
+	if got, _ := s.CoordDeliveryState(1, "sess-b"); got != DeliveryAcked {
+		t.Fatalf("claim pulled state back to %q", got)
+	}
+}
+
+func TestClaimCoordDeliveryIsPerRecipientAndFromNothing(t *testing.T) {
+	s := openTest(t)
+	for _, r := range []string{"sess-a", "sess-b"} {
+		if won, err := s.ClaimCoordDelivery(5, r); err != nil || !won {
+			t.Fatalf("%s: won=%v err=%v", r, won, err)
+		}
+	}
+	if got, _ := s.CoordDeliveryState(5, "sess-a"); got != DeliveryInjected {
+		t.Fatalf("state = %q", got)
+	}
+}
+
+func TestCoordInjectedMessagesReportsOnlyInjectedOrLater(t *testing.T) {
+	s := openTest(t)
+	_ = s.MarkCoordDelivery(1, "sess-b", DeliveryFetched)
+	_ = s.MarkCoordDelivery(2, "sess-b", DeliveryInjected)
+	_ = s.MarkCoordDelivery(3, "sess-b", DeliveryAcked)
+	_ = s.MarkCoordDelivery(4, "sess-other", DeliveryInjected)
+	got, err := s.CoordInjectedMessages("sess-b", []int64{1, 2, 3, 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0] != 2 || got[1] != 3 {
+		t.Fatalf("injected = %v", got)
+	}
+}
+
+func raceClaim(t *testing.T, s *Store) {
+	t.Helper()
+	const n = 32
+	var wg sync.WaitGroup
+	results := make(chan bool, n)
+	start := make(chan struct{})
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			won, err := s.ClaimCoordDelivery(42, "sess-race")
+			if err != nil {
+				t.Error(err)
+			}
+			results <- won
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	winners := 0
+	for won := range results {
+		if won {
+			winners++
+		}
+	}
+	if winners != 1 {
+		t.Fatalf("winners = %d, want exactly 1", winners)
+	}
+}
+
+func TestClaimCoordDeliveryRaceHasExactlyOneWinner(t *testing.T) {
+	raceClaim(t, openTest(t))
+}
+
+func TestClaimCoordDeliveryRaceHasExactlyOneWinnerThroughRuntimeWriter(t *testing.T) {
+	s, err := OpenRuntime(filepath.Join(t.TempDir(), "claim.db"), DefaultWriterConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	raceClaim(t, s)
 }

@@ -556,3 +556,55 @@ func TestTouchedExcludesTheAskingSession(t *testing.T) {
 		t.Fatalf("an agent must not be reported as its own conflict: %s", text(t, res))
 	}
 }
+
+// AC-1231: was der Channel schon eingebracht hat, zeigt coord_inbox nicht
+// noch einmal.
+func TestInboxHidesMessagesAlreadyInjected(t *testing.T) {
+	a, b, _ := twoSessions(t)
+	ctx := context.Background()
+	if _, _, err := a.handleCoordSend(ctx, nil, CoordSendInput{Body: "bereits-eingebracht"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := a.handleCoordSend(ctx, nil, CoordSendInput{Body: "noch-offen"}); err != nil {
+		t.Fatal(err)
+	}
+	room := store.RoomKeyForProject("github.com/deadweight-labs/ghosttree")
+	msgs, err := b.client.CoordInbox(store.DestinationRoom, room, b.sessionRef, 0, 0)
+	if err != nil || len(msgs) != 2 {
+		t.Fatalf("msgs=%v err=%v", msgs, err)
+	}
+	if won, err := b.client.ClaimCoordDelivery(msgs[0].ID, b.sessionRef); err != nil || !won {
+		t.Fatalf("claim: won=%v err=%v", won, err)
+	}
+	res, _, err := b.handleCoordInbox(ctx, nil, CoordInboxInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := text(t, res)
+	if strings.Contains(got, "bereits-eingebracht") || !strings.Contains(got, "noch-offen") {
+		t.Fatalf("inbox = %q", got)
+	}
+}
+
+func TestDMReadHidesMessagesAlreadyInjected(t *testing.T) {
+	a, b, _ := twoSessions(t)
+	ctx := context.Background()
+	if _, _, err := a.handleCoordDM(ctx, nil, CoordDMInput{To: []string{b.sessionRef}, Body: "dm-eingebracht"}); err != nil {
+		t.Fatal(err)
+	}
+	key := store.RoomKeyForDirect([]string{b.sessionRef, a.sessionRef})
+	msgs, err := b.client.CoordInbox(store.DestinationRoom, key, b.sessionRef, 0, 0)
+	if err != nil || len(msgs) != 1 {
+		t.Fatalf("msgs=%v err=%v", msgs, err)
+	}
+	if won, err := b.client.ClaimCoordDelivery(msgs[0].ID, b.sessionRef); err != nil || !won {
+		t.Fatalf("claim: won=%v err=%v", won, err)
+	}
+	res, _, err := b.handleCoordDMRead(ctx, nil, CoordDMReadInput{With: []string{a.sessionRef}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(text(t, res), "dm-eingebracht") {
+		t.Fatalf("dm read repeated an injected message: %q", text(t, res))
+	}
+}

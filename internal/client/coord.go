@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
@@ -177,4 +178,36 @@ func (c *Client) MarkCoordDelivery(messageID int64, recipient, state string) err
 	return c.do("POST", "/api/coord/deliveries", nil, map[string]any{
 		"message_id": messageID, "recipient_external_id": recipient, "state": state,
 	}, nil)
+}
+
+// ClaimCoordDelivery fragt, ob dieser Aufrufer die Nachricht einbringen darf.
+// Genau ein Aufrufer je Nachricht und Empfänger bekommt true.
+func (c *Client) ClaimCoordDelivery(messageID int64, recipient string) (bool, error) {
+	var out struct {
+		Claimed bool `json:"claimed"`
+	}
+	err := c.do("POST", "/api/coord/deliveries/claim", nil, map[string]any{
+		"message_id": messageID, "recipient_external_id": recipient,
+	}, &out)
+	return out.Claimed, err
+}
+
+// CoordInjectedMessages nennt die schon eingebrachten unter den angefragten
+// Nachrichten dieses Empfängers.
+func (c *Client) CoordInjectedMessages(recipient string, messageIDs []int64) ([]int64, error) {
+	if len(messageIDs) == 0 {
+		return nil, nil
+	}
+	parts := make([]string, len(messageIDs))
+	for i, id := range messageIDs {
+		parts[i] = strconv.FormatInt(id, 10)
+	}
+	q := url.Values{}
+	q.Set("agent_external_id", recipient)
+	q.Set("message_ids", strings.Join(parts, ","))
+	var out struct {
+		IDs []int64 `json:"message_ids"`
+	}
+	err := c.do("GET", "/api/coord/deliveries/injected", q, nil, &out)
+	return out.IDs, err
 }

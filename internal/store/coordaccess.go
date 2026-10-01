@@ -836,6 +836,35 @@ func (a CoordAccess) MarkDelivery(messageID int64, state string) error {
 	return a.Store.MarkCoordDelivery(messageID, actor, state)
 }
 
+func (a CoordAccess) ClaimDelivery(messageID int64) (bool, error) {
+	if a.Store != nil && a.Store.writer != nil {
+		return queueValue(a.Store, []any{a.Principal, a.AgentExternalID, a.publicOnly, messageID}, func(d *Store, p []any) (bool, error) {
+			return queuedCoordAccess(d, p).ClaimDelivery(p[3].(int64))
+		})
+	}
+	actor, err := a.mutationActor()
+	if err != nil {
+		return false, err
+	}
+	if _, _, err := a.messageTarget(messageID); err != nil {
+		return false, err
+	}
+	return a.Store.ClaimCoordDelivery(messageID, actor)
+}
+
+// InjectedMessages nennt nur Zustellungen des eigenen Akteurs; fremde
+// Empfänger sind nicht abfragbar.
+func (a CoordAccess) InjectedMessages(messageIDs []int64) ([]int64, error) {
+	actor, err := a.actor()
+	if err != nil {
+		return nil, err
+	}
+	if actor == "" {
+		return nil, ErrCoordForbidden
+	}
+	return a.Store.CoordInjectedMessages(actor, messageIDs)
+}
+
 func (a CoordAccess) SearchThreads(project, query string, includeArchived bool, limit int) ([]Thread, error) {
 	reader := a.Store
 	if reader.reader != nil {
