@@ -3,9 +3,11 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -71,11 +73,14 @@ type guestViews struct {
 	Attention   int
 	Standing    []string
 	Status      int
+	Events      []string
+	Delivery    store.CoordDeliverySummary
+	Presented   []string
 }
 
 // guestScenario: gus postet eine Frage und eine Standing-Anweisung an
 // `mention`. miaInRoom steuert, ob dieses Ziel wirklich im Raum ist.
-func guestScenario(t *testing.T, miaInRoom bool, mention string) guestViews {
+func guestScenario(t *testing.T, miaInRoom, inThread bool, mention string) guestViews {
 	t.Helper()
 	f := roomGateFixture(t, true)
 	room := store.RoomKeyForProject(accProject)
@@ -96,8 +101,21 @@ func guestScenario(t *testing.T, miaInRoom bool, mention string) guestViews {
 	var resp struct {
 		ID int64 `json:"id"`
 	}
+	kind, dest := store.DestinationRoom, room
+	if inThread {
+		// Ein Alt-Thread ohne thread_homes-Zeile: der Raum ergibt sich nur aus dem Projekt.
+		tid, err := f.st.CreateThread(store.Thread{Project: accProject, Title: "legacy", AuthorPrincipalID: "person:3"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		kind, dest = store.DestinationDiscussion, strconv.FormatInt(tid, 10)
+	}
+	cursor, err := f.st.LatestCoordEventSequence()
+	if err != nil {
+		t.Fatal(err)
+	}
 	code, body := f.call(t, "gus", "POST", "/api/coord/messages", store.CoordMessage{
-		DestinationKind: store.DestinationRoom, DestinationID: room, SenderExternalID: "claude:gus",
+		DestinationKind: kind, DestinationID: dest, SenderExternalID: "claude:gus",
 		ClientID: "q", Body: "please look", Intent: store.IntentQuestion, Mentions: []string{mention}})
 	v.Status = code
 	if err := json.Unmarshal([]byte(body), &resp); err != nil {
@@ -120,6 +138,35 @@ func guestScenario(t *testing.T, miaInRoom bool, mention string) guestViews {
 	}
 	// Mitglied und Owner sehen die echte Zustellung.
 	member := f.st.CoordinationFor(store.Principal{ID: "person:3", Label: "mia"}, "claude:mia")
+	if miaInRoom {
+		if err := member.MarkDelivery(resp.ID, store.DeliveryFetched); err != nil {
+			t.Fatal(err)
+		}
+	}
+	replay, err := f.st.CoordEventsAfter(store.Principal{ID: "person:5", Label: "gus"}, cursor, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range replay.Events {
+		v.Events = append(v.Events, e.Kind+"/"+e.ObjectKind)
+	}
+	_, presented, err := guestAccess.MessagePresentationWindow(kind, dest, store.MessageWindow{Mode: "latest", Limit: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range presented {
+		v.Delivery = p.Delivery
+		v.Presented = append(v.Presented, strings.Join(p.Mentions, ","))
+	}
+	if _, mp, err := member.MessagePresentationWindow(kind, dest, store.MessageWindow{Mode: "latest", Limit: 50}); miaInRoom {
+		real := false
+		for _, p := range mp {
+			real = real || (p.Message.ID == resp.ID && p.Delivery.Fetched > 0)
+		}
+		if err != nil || !real {
+			t.Errorf("member sees the real delivery summary: %+v %v", mp, err)
+		}
+	}
 	got, err := member.MessageMentions(resp.ID)
 	if err != nil {
 		if miaInRoom {
@@ -144,14 +191,25 @@ func guestScenario(t *testing.T, miaInRoom bool, mention string) guestViews {
 // nie das gefilterte Ergebnis: sonst wäre das Zurücklesen ein Orakel dafür, wer
 // im Raum ist.
 func TestGuestViewsOfOwnPostsAreIdenticalForMemberAndNonMember(t *testing.T) {
-	in := guestScenario(t, true, "claude:mia")
-	out := guestScenario(t, false, "claude:mia")
-	if in.Status != 200 || out.Status != 200 {
-		t.Fatalf("status %d %d", in.Status, out.Status)
+	for _, inThread := range []bool{false, true} {
+		in := guestScenario(t, true, inThread, "claude:mia")
+		out := guestScenario(t, false, inThread, "claude:mia")
+		if in.Status != 200 || out.Status != 200 {
+			t.Fatalf("thread=%v status %d %d", inThread, in.Status, out.Status)
+		}
+		if !reflect.DeepEqual(in, out) {
+			t.Errorf("thread=%v: guest views differ with room membership:\nmember:     %+v\nnon-member: %+v", inThread, in, out)
+		}
+		if in.Attention != 0 || in.Delivery != (store.CoordDeliverySummary{}) {
+			t.Errorf("thread=%v: guest sees per-recipient state: %+v", inThread, in)
+		}
+		for _, e := range in.Events {
+			if strings.HasPrefix(e, "attention/") || strings.HasPrefix(e, "delivery/") {
+				t.Errorf("thread=%v: event stream shows %s to the guest", inThread, e)
+			}
+		}
 	}
-	if !reflect.DeepEqual(in, out) {
-		t.Errorf("guest views differ with room membership:\nmember:     %+v\nnon-member: %+v", in, out)
-	}
+	in := guestScenario(t, true, false, "claude:mia")
 	if !reflect.DeepEqual(in.APIMentions, []string{"claude:mia"}) || !reflect.DeepEqual(in.Standing, []string{"claude:mia"}) {
 		t.Errorf("guest should read back exactly what it typed: %+v", in)
 	}
@@ -192,6 +250,14 @@ func TestGuestMentionDeliversOnlyToRoomMembers(t *testing.T) {
 		if got := attentionOf(t, f, who.id, who.label, who.agent); len(got) != 0 {
 			t.Errorf("%s got attention from a guest mention: %+v", who.label, got)
 		}
+	}
+	// Zurückziehen an erratener Id verrät nichts: für den Gast gibt es den Eintrag nicht.
+	guest := f.st.CoordinationFor(store.Principal{ID: "person:5", Label: "gus"}, "claude:gus")
+	if err := guest.ResolveAttention(items[0].ID, store.AttentionActionWithdraw); !errors.Is(err, store.ErrCoordNotFound) {
+		t.Errorf("guest withdraw of a delivered item: %v", err)
+	}
+	if err := guest.ResolveAttention(items[0].ID+100, store.AttentionActionWithdraw); !errors.Is(err, store.ErrCoordNotFound) {
+		t.Errorf("guest withdraw of a missing item: %v", err)
 	}
 	// Das Mitglied bekommt die Nachricht als Bitte, nie als Anweisung.
 	var msgs []store.CoordMessage

@@ -161,7 +161,7 @@ func (a CoordAccess) Attention() ([]AttentionItem, error) {
 		// Ausgehende Einträge zeigen, wer eine Erwähnung wirklich erreicht hat,
 		// und damit, wer im Raum ist. Ein Gast sieht sie nicht; was er erwähnt hat,
 		// zeigt ihm die Nachricht selbst.
-		if !candidate.item.IsRecipient && a.guestViewsRoomTx(tx, candidate.item.HomeRoomKey) {
+		if !candidate.item.IsRecipient && a.guestViewForMessageTx(tx, candidate.item.DestinationKind, candidate.item.DestinationID) {
 			continue
 		}
 		candidate.item.CanWithdraw = candidate.item.AuthorID == a.Principal.ID || candidate.sender == actor
@@ -225,7 +225,9 @@ func (a CoordAccess) ResolveAttention(id int64, action string) error {
 	}
 	isAuthor := actor == sender || a.Principal.ID == authorPrincipal
 	if action == AttentionActionWithdraw {
-		if !isAuthor {
+		// Ein Gast sieht keine ausgehenden Einträge; Zurückziehen würde sonst an
+		// erratenen Ids verraten, welche Erwähnung jemanden erreicht hat.
+		if !isAuthor || (actor != recipient && a.guestViewForMessageTx(tx, kind, destination)) {
 			return ErrCoordNotFound
 		}
 	} else if actor != recipient {

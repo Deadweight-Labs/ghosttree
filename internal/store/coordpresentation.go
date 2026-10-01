@@ -53,8 +53,10 @@ func (a CoordAccess) MessagePresentationWindow(kind, id string, window MessageWi
 	if err != nil {
 		return MessagePage{}, nil, err
 	}
-	if a.guestViewsRoomTx(tx, messageRoomKeyTx(tx, kind, id)) {
+	if a.guestViewForMessageTx(tx, kind, id) {
 		for i := range presented {
+			// Zustellstand ist Zustand pro Empfänger; ein Gast sieht ihn nicht.
+			presented[i].Delivery = CoordDeliverySummary{}
 			raw, err := rawMentionsTx(tx, presented[i].Message.ID)
 			if err != nil {
 				return MessagePage{}, nil, err

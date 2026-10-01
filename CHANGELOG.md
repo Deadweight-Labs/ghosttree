@@ -12,7 +12,7 @@ Versioning, with pre-1.0 compatibility rules described in
   room are dropped silently with the same response. What a guest reads back of
   its own posts (mentions endpoint, "Erwähnt" in the web views, standing
   targets) is exactly what it typed, never the delivered subset, and outgoing
-  attention items are not shown to guests, so nothing tells members from
+  attention items, attention and delivery events and the delivery summary are not shown to guests, so nothing tells members from
   non-members. Members and owners still see the real deliveries. The room page
   now opens for guests, without the agent list. Both gates follow
   `GHOSTTREE_ENFORCE_ACCESS` (log mode: old behaviour plus "would deny"). An

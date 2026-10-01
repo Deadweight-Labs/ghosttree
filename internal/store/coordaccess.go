@@ -894,7 +894,7 @@ func (a CoordAccess) MessageMentions(messageID int64) ([]string, error) {
 		return nil, err
 	}
 	var raw []string
-	if a.guestViewsRoomTx(tx, messageRoomKeyTx(tx, kind, id)) {
+	if a.guestViewForMessageTx(tx, kind, id) {
 		raw, err = rawMentionsTx(tx, messageID)
 	}
 	tx.Rollback()
@@ -2078,9 +2078,17 @@ func (a CoordAccess) resolveMentionsTx(tx *sql.Tx, actor, roomKey string, mentio
 	return kept, raw, nil
 }
 
-// guestViewsRoomTx: der Leser sieht die Mitglieder dieses Projektraums nicht.
+// guestViewForMessageTx ist die EINE Frage hinter jeder Anzeige von Zustand
+// pro Empfänger an eigenen Beiträgen: sieht dieser Leser die Mitglieder des
+// Projektraums nicht, in dem die Nachricht liegt (Gast)? Wer sie bejaht,
+// zeigt dem Gast nur, was er selbst eingegeben hat, nie, wer erreicht wurde.
+//
+// Den Raum leitet messageRoomKeyTx ab, auch für Threads ohne thread_homes-Zeile.
+// Verbraucher: Attention, Attention-Ereignisse und Zustellereignisse im Log,
+// Zustellübersicht, Erwähnungen, Standing, ResolveAttention (Zurückziehen).
 // Im Logmodus gilt wie überall das alte Verhalten.
-func (a CoordAccess) guestViewsRoomTx(tx *sql.Tx, roomKey string) bool {
+func (a CoordAccess) guestViewForMessageTx(tx *sql.Tx, kind, id string) bool {
+	roomKey := messageRoomKeyTx(tx, kind, id)
 	return roomKey != "" && a.projectRoomGate(roomKindOf(roomKey), roomKey, ResAgents, tx) != nil
 }
 
@@ -2171,7 +2179,7 @@ func (a CoordAccess) Standing(roomKey string) ([]StandingInstruction, error) {
 	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if a.guestViewsRoomTx(tx, roomKey) {
+	if a.guestViewForMessageTx(tx, DestinationRoom, roomKey) {
 		for i := range out {
 			messageID, perr := strconv.ParseInt(out[i].MessageID, 10, 64)
 			if perr != nil {

@@ -136,6 +136,11 @@ func coordEventVisibleTx(tx *sql.Tx, access CoordAccess, actor string, event Coo
 	switch event.ObjectKind {
 	case DestinationRoom, DestinationDiscussion:
 		err = access.canReadTx(tx, actor, event.ObjectKind, event.ObjectID)
+		// Zustellereignisse treten auf, wenn ein Mitglied etwas abholt: für einen
+		// Gast ein Zeitsignal, wer im Raum ist.
+		if err == nil && event.Kind == CoordEventDelivery && access.guestViewForMessageTx(tx, event.ObjectKind, event.ObjectID) {
+			return false, nil
+		}
 	case "thread":
 		threadID, parseErr := strconv.ParseInt(event.ObjectID, 10, 64)
 		if parseErr != nil || threadID <= 0 {
@@ -162,6 +167,10 @@ func coordEventVisibleTx(tx *sql.Tx, access CoordAccess, actor string, event Coo
 			return false, nil
 		}
 		err = access.canReadTx(tx, actor, kind, id)
+		// Wie Attention(): ausgehende Einträge zeigen, wen die Erwähnung erreicht hat.
+		if err == nil && actor != recipient && access.guestViewForMessageTx(tx, kind, id) {
+			return false, nil
+		}
 	case "principal":
 		if event.Kind != CoordEventVisibility {
 			return false, nil
