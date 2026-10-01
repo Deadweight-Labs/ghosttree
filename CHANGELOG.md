@@ -6,6 +6,23 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Add ownership of machines, sessions and agent identities. Machine names are
+  unique across the instance and belong to the account that first claims them
+  (`ctx login` or the first upload); a second account gets `409
+  machine_name_taken`, and a token bound to a machine can only write under that
+  machine (`403`). Every uploaded session is stamped with the account of the
+  token, and re-uploading a session id that belongs to another account or
+  machine now returns `409 session_id_collision` instead of overwriting it; the
+  same account and machine stays idempotent. Agent identities belong to the
+  registering account and cannot be taken over. Existing machines, sessions and
+  agents belong to the first account (`person:1`) without rewriting the
+  sessions table. Sessions, machines (`GET /api/machines`) and peers show their
+  `owner`, and `?owner=me` filters sessions and machines. Legacy tokens keep
+  working unchanged. Known gap: a legacy token (also one of a test person)
+  still claims a free machine name on its first upload, because the existing
+  collector uploads for new hostnames without a login; an admin frees or
+  reassigns such a name with `ctx machine release <name>` and `ctx machine
+  transfer <name> <account>` (database access, like `ctx account`).
 - Add browser pages for the device login and for tokens: `/ui/device` approves a
   `ctx login` (signed in, CSRF protected, wrong codes lock the account briefly)
   and `/ui/account/tokens` lists your tokens with label, machine, kind

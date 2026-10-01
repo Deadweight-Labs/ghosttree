@@ -71,6 +71,8 @@ func run(args []string, stdout io.Writer) int {
 		return cmdPerson(rest, stdout)
 	case "account":
 		return cmdAccount(rest, stdout)
+	case "machine":
+		return cmdMachine(rest, stdout)
 	case "setup":
 		return cmdSetup(rest, stdout)
 	case "login":
@@ -96,6 +98,7 @@ const usage = `usage: ctx <command>
   login    sign this machine in through the browser (device login)
   person   manage persons/tokens (server-side; deprecated alias, see account)
   account  manage accounts and their tokens (server-side)
+  machine  list, release and transfer machine names (server-side)
   status   show local setup state
   doctor   check the harness wiring for drift (--fix to repair)
   export   write a session's original transcript as JSONL

@@ -91,6 +91,7 @@ func New(st *store.Store, options ...Option) http.Handler {
 	mux.HandleFunc("GET /api/context-snapshots/{name}/entries", a.contextSnapshotEntries)
 	mux.HandleFunc("POST /api/sessions", a.createSession)
 	mux.HandleFunc("GET /api/sessions", a.listSessions)
+	mux.HandleFunc("GET /api/machines", a.listMachines)
 	mux.HandleFunc("POST /api/sessions/{id}/chunks", a.appendChunks)
 	mux.HandleFunc("GET /api/sessions/{id}/raw", a.rawSession)
 	mux.HandleFunc("GET /api/sessions/{id}", a.readSession)

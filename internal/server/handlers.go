@@ -3,6 +3,7 @@ package server
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -26,13 +27,24 @@ func (a *api) createSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Scope = scope.CanonicalAxes(s.Scope)
+	if !a.gateMachine(w, r, s.Scope.Machine, true) {
+		return
+	}
+	// Besitz kommt aus dem Token, nie aus dem Rumpf.
+	acct, ok := accountOf(principalOf(r))
+	if !ok {
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	s.AccountID, s.Owner = acct, ""
 	id, err := a.st.UpsertSession(s)
+	if errors.Is(err, store.ErrSessionCollision) {
+		writeCoded(w, http.StatusConflict, "session_id_collision", "that session id already belongs to another account or machine")
+		return
+	}
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
-	}
-	if s.Scope.Machine != "" {
-		a.st.TouchMachine(s.Scope.Machine)
 	}
 	writeJSON(w, 200, map[string]int64{"id": id})
 }
@@ -50,6 +62,9 @@ func (a *api) appendChunks(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
+	if !a.mayWriteSession(w, r, id) {
+		return
+	}
 	if err := a.st.AppendChunks(id, body.Chunks); err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
@@ -58,7 +73,7 @@ func (a *api) appendChunks(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) listSessions(w http.ResponseWriter, r *http.Request) {
-	sessions, err := a.st.ListSessions(axesFromQuery(r), intParam(r, "limit", 50))
+	sessions, err := a.st.ListSessionsOwned(axesFromQuery(r), intParam(r, "limit", 50), ownerFilter(r))
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
@@ -128,6 +143,9 @@ func (a *api) createKnowledge(w http.ResponseWriter, r *http.Request) {
 	}
 	if k.Scope.IsGlobal() && req.AutoScope != nil {
 		k.Scope = scope.DefaultAxes(k.Type, req.AutoScope.Context)
+	}
+	if !a.gateMachine(w, r, k.Scope.Machine, false) {
+		return
 	}
 	k.Person = personOf(r)
 	id, err := a.st.InsertKnowledge(k)

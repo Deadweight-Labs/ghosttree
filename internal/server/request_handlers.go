@@ -27,6 +27,9 @@ func (a *api) createRequest(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
+	if !a.gateMachine(w, r, scope.CanonicalAxes(scope.Axes{Machine: body.Machine}).Machine, false) {
+		return
+	}
 	detail, err := a.st.CreateRequest(requestdomain.CreateInput{
 		Request: requestdomain.Request{
 			Type: body.Type, Title: body.Title, Description: body.Description, Priority: body.Priority,
