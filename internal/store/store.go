@@ -41,6 +41,25 @@ const schema = `
 CREATE TABLE IF NOT EXISTS persons(
   id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL,
   token_hash TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS account_identities(
+  account_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE RESTRICT,
+  issuer TEXT NOT NULL, subject TEXT NOT NULL, created_at TEXT NOT NULL,
+  PRIMARY KEY(issuer, subject));
+CREATE TABLE IF NOT EXISTS account_codes(
+  code_hash TEXT PRIMARY KEY,
+  kind TEXT NOT NULL CHECK(kind IN ('bootstrap','claim','login')),
+  account_id INTEGER NOT NULL DEFAULT 0, expires_at TEXT NOT NULL,
+  used_at TEXT NOT NULL DEFAULT '');
+CREATE TABLE IF NOT EXISTS api_tokens(
+  id INTEGER PRIMARY KEY,
+  account_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE RESTRICT,
+  token_hash TEXT NOT NULL UNIQUE, label TEXT NOT NULL DEFAULT '',
+  kind TEXT NOT NULL CHECK(kind IN ('cli','legacy')),
+  machine TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL, last_used_at TEXT NOT NULL DEFAULT '',
+  expires_at TEXT NOT NULL DEFAULT '', revoked_at TEXT NOT NULL DEFAULT '');
+CREATE TABLE IF NOT EXISTS account_migrations(
+  version INTEGER PRIMARY KEY, migrated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS context_snapshot_access(
   person_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE RESTRICT,
   project TEXT NOT NULL,
@@ -792,6 +811,10 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 		}
 	}
 	if _, err := db.Exec(schema); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := migrateAccounts(db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}

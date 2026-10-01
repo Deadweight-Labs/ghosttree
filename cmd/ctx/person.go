@@ -57,6 +57,7 @@ func cmdPersonAdd(args []string, stdout io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "token: %s\n", token)
 	fmt.Fprintln(stdout, "this token is shown once, store it now")
+	fmt.Fprintln(stdout, "note: person add is deprecated; use ctx account add and ctx account token create")
 	return 0
 }
 
