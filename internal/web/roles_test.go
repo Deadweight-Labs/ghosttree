@@ -225,3 +225,28 @@ func TestRoleSelectShowsTheCurrentRoleNeverOwnerByDefault(t *testing.T) {
 		t.Fatalf("placeholder set a role: %+v", got)
 	}
 }
+
+func TestCoordMessagesShowSenderRole(t *testing.T) {
+	_, st, _, _ := roleWeb(t)
+	if err := st.SetProjectRole("person:1", webRoleProject, "person:2", "member", false, store.RoleViaWeb); err != nil {
+		t.Fatal(err)
+	}
+	room := store.RoomKeyForProject(webRoleProject)
+	pres := []store.CoordMessagePresentation{
+		{Message: store.CoordMessage{ID: 1, Sequence: 1, SenderExternalID: "person:1", AuthorPrincipalID: "person:1", AuthorKind: store.AuthorHuman, Body: "I am the lead"}},
+		{Message: store.CoordMessage{ID: 2, Sequence: 2, SenderExternalID: "person:2", AuthorPrincipalID: "person:2", AuthorKind: store.AuthorHuman, Body: "hi"}},
+		{Message: store.CoordMessage{ID: 3, Sequence: 3, SenderExternalID: "ghost", AuthorKind: store.AuthorAgent, Body: "hi"}},
+	}
+	views := buildCoordMessageViews(pres, room, nil)
+	applyMessageRoles(st, room, views, pres)
+	if views[0].SenderRole != "owner" || views[1].SenderRole != "member" || views[2].SenderRole != "" {
+		t.Fatalf("roles = %q %q %q", views[0].SenderRole, views[1].SenderRole, views[2].SenderRole)
+	}
+	views = buildCoordMessageViews(pres, "machine:host", nil)
+	applyMessageRoles(st, "machine:host", views, pres)
+	for _, v := range views {
+		if v.SenderRole != "" {
+			t.Fatalf("machine room shows a role: %+v", v)
+		}
+	}
+}

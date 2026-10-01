@@ -399,6 +399,15 @@ func (a CoordAccess) Messages(kind, id string, afterID int64, limit int) ([]Coor
 	if err := rows.Close(); err != nil {
 		return nil, err
 	}
+	if a.AgentExternalID != "" {
+		// Der Leser ist ein Agent: Rollen und Autorität live aus dem Zustand
+		// dieser Transaktion, nach dem Schließen des Cursors.
+		ctx := newAgentAuthorityCtx(tx, a.AgentExternalID)
+		for i := range out {
+			au := ctx.evaluate(out[i])
+			out[i].SenderRole, out[i].RecipientRole, out[i].Authority = au.SenderRole, au.RecipientRole, au.Authority
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
@@ -698,6 +707,7 @@ func (a CoordAccess) Send(message CoordMessage) (int64, error) {
 	message.SenderExternalID = actor
 	message.AuthorPrincipalID = a.Principal.ID
 	message.AuthorKind = a.authorKind()
+	message.SenderRole, message.RecipientRole, message.Authority = "", "", ""
 	id, err := appendCoordMessageTx(tx, message)
 	if err != nil {
 		return 0, err

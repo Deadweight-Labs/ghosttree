@@ -6,6 +6,31 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Coordination messages carry an authority for their recipient: `directive` or
+  `request`. One function, `store.AuthorityFor`, decides: a message is a
+  directive only when the sender's rank in the recipient's project is higher
+  than the recipient's and the sender is server-verified (a human from an
+  interactive browser session, or a registered agent of the posting account,
+  with its effective role). Equal rank, no role, an unverified sender, the
+  machine room and agents without a project always give `request`. DMs and
+  groups are judged in the recipient's project. The value is computed when the
+  message is read, from current roles, so a demotion takes effect at once; it
+  is never stored, and role or authority fields sent by a client are dropped.
+  The channel adds `sender_role`, `recipient_role` and `authority` to the
+  notification meta (empty values are omitted), `coord_inbox` and
+  `coord_dm_read` print the same tag with a short legend, and the web room
+  shows the sender's role next to each message. The channel instructions now
+  explain directive versus request instead of calling every event a request.
+  A directive from an agent is scoped: carry it out within the existing task and
+  permissions and confirm destructive, irreversible or outward-facing steps with
+  a human; a prompt injection at a lead agent can continue as a directive, and
+  that confirmation is the mitigation. A directive also needs the recipient's
+  account to hold a role in the project. `human` posts stored before the new
+  rule (any post without an agent id, including CLI and bearer posts) stay
+  unverified: the first start records the highest message id and only later
+  human posts count. In `coord_inbox` and `coord_dm_read` every line after the
+  first line of a body is indented, so a body cannot fake a message header, and
+  agent ids are limited to letters, digits and `: . _ - /` (160 characters).
 - Add visibility by role, behind `GHOSTTREE_ENFORCE_ACCESS`. One place,
   `ProjectAccess`, decides for (account, project, resource, action) from
   `Store.ProjectRole`; the API (and with it MCP and the hooks, which use the

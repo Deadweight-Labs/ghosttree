@@ -63,6 +63,12 @@ type CoordMessage struct {
 	// als gegenwärtig gelesen werden. "Die API ist 20 Sekunden weg" von
 	// gestern ist kein Grund, heute zu warten.
 	Expired bool `json:"expired,omitempty"`
+	// SenderRole, RecipientRole und Authority sind abgeleitet, werden nie
+	// gespeichert und nur in Antworten an einen angemeldeten Agenten gesetzt.
+	// Was ein Client hier mitschickt, verwirft Send.
+	SenderRole    string `json:"sender_role,omitempty"`
+	RecipientRole string `json:"recipient_role,omitempty"`
+	Authority     string `json:"authority,omitempty"`
 }
 
 // CoordRef verbindet eine Nachricht mit einem bestehenden Ghosttree-Objekt.

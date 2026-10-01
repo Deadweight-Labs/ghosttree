@@ -42,6 +42,28 @@ type CoordAgent struct {
 	CanReview bool `json:"can_review,omitempty"`
 }
 
+// maxExternalIDLen begrenzt Agenten-IDs.
+const maxExternalIDLen = 160
+
+// ValidExternalID sagt, ob eine Agenten-ID zulässig ist: Buchstaben, Ziffern und
+// : . _ - und /, höchstens 160 Zeichen. Das deckt claude:<host>:<uuid>,
+// codex:<...>, cli:<host> und Subagenten (<session>/<name>) ab. Die ID steht in Kopfzeilen von Texten, die
+// Agenten lesen, und darf deshalb keine Zeilenumbrüche, Klammern oder Leerraum
+// tragen.
+func ValidExternalID(id string) bool {
+	if id == "" || len(id) > maxExternalIDLen {
+		return false
+	}
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == ':', r == '.', r == '_', r == '-', r == '/':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // RoomKeyForProject bildet den Projektraum aus der normalisierten Remote.
 // Absichtlich nicht aus dem cwd: zwei Agenten in packages/server und apps/web
 // gehören in denselben Raum, und derselbe Pfad auf zwei Maschinen nicht.

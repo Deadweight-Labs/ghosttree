@@ -137,19 +137,22 @@ type coordThreadDetailView struct {
 type coordMessageView struct {
 	ID, Sequence, ReplyCount      int64
 	Author, AuthorKind, Timestamp string
-	DisplayTimestamp              string
-	Body, Intent                  string
-	Expired                       bool
-	Reply                         *coordReplyView
-	Mentions                      []string
-	Refs                          []coordRefView
-	Delivery                      string
-	MentionsViewer                bool
-	ThreadURL                     string
-	ReplyURL                      string
-	CanPromote                    bool
-	CSRFToken                     string
-	GroupStart                    bool
+	// SenderRole ist die Rolle des Absenders im Projekt des Raums, live vom
+	// Server berechnet; leer außerhalb von Projekträumen.
+	SenderRole       string
+	DisplayTimestamp string
+	Body, Intent     string
+	Expired          bool
+	Reply            *coordReplyView
+	Mentions         []string
+	Refs             []coordRefView
+	Delivery         string
+	MentionsViewer   bool
+	ThreadURL        string
+	ReplyURL         string
+	CanPromote       bool
+	CSRFToken        string
+	GroupStart       bool
 }
 
 type coordReplyView struct {
@@ -754,5 +757,26 @@ func applyParticipantRoles(st *store.Store, roomKey string, participants []coord
 		}
 		info := st.ProjectRole(remote, participants[i].ID)
 		participants[i].Role, participants[i].CanReview = info.Role, info.CanReview
+	}
+}
+
+// applyMessageRoles setzt die aktuelle Projektrolle des Absenders an jede
+// Nachricht eines Projektraums. Die Rolle kommt aus dem Store (Konto aus
+// author_principal_id bzw. effektive Agentenrolle), nie aus dem Text.
+// views und messages sind index-aligned.
+func applyMessageRoles(st *store.Store, roomKey string, views []coordMessageView, messages []store.CoordMessagePresentation) {
+	remote, ok := strings.CutPrefix(roomKey, "project:")
+	if !ok {
+		return
+	}
+	raw := make([]store.CoordMessage, len(messages))
+	for i := range messages {
+		raw[i] = messages[i].Message
+	}
+	roles := st.SenderRolesInProject(remote, raw)
+	for i := range views {
+		if i < len(roles) {
+			views[i].SenderRole = roles[i]
+		}
 	}
 }
