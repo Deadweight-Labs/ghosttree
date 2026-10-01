@@ -158,6 +158,12 @@ func (a CoordAccess) Attention() ([]AttentionItem, error) {
 		}
 		candidate.item.SenderID = candidate.sender
 		candidate.item.IsRecipient = candidate.item.RecipientID == actor
+		// Ausgehende Einträge zeigen, wer eine Erwähnung wirklich erreicht hat,
+		// und damit, wer im Raum ist. Ein Gast sieht sie nicht; was er erwähnt hat,
+		// zeigt ihm die Nachricht selbst.
+		if !candidate.item.IsRecipient && a.guestViewsRoomTx(tx, candidate.item.HomeRoomKey) {
+			continue
+		}
 		candidate.item.CanWithdraw = candidate.item.AuthorID == a.Principal.ID || candidate.sender == actor
 		if candidate.item.State == AttentionOpen && expiredAt(candidate.expiresAt, nowTS) {
 			candidate.item.State = AttentionExpired

@@ -9,12 +9,16 @@ Versioning, with pre-1.0 compatibility rules described in
 - Guests no longer get the member list of a project room through the
   recipient list. A guest may still mention: members of the room get the
   message (as a request, never a directive), and mentions of anyone outside the
-  room are dropped silently with the same response, so the answer cannot tell
-  members from non-members. Nothing is delivered outside the room. The room
-  page now opens for guests, without the agent list. Both gates follow
+  room are dropped silently with the same response. What a guest reads back of
+  its own posts (mentions endpoint, "Erwähnt" in the web views, standing
+  targets) is exactly what it typed, never the delivered subset, and outgoing
+  attention items are not shown to guests, so nothing tells members from
+  non-members. Members and owners still see the real deliveries. The room page
+  now opens for guests, without the agent list. Both gates follow
   `GHOSTTREE_ENFORCE_ACCESS` (log mode: old behaviour plus "would deny"). An
   unknown mention recipient of a member is a 400 with a fixed message instead
-  of a 500 that echoed the probed id, in every mode.
+  of a 500 that echoed the probed id, in every mode. A legacy thread restricted
+  to a list of readers now also needs the project role.
 - Project rooms of the coordination layer need a project role. Registering an
   agent into `project:<remote>` takes at least the guest role (org owners as
   before); org membership alone no longer joins. `GET /api/coord/rooms` drops

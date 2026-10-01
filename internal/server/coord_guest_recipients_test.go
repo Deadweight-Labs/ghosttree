@@ -3,7 +3,9 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"log/slog"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -54,40 +56,136 @@ func attentionOf(t *testing.T, f *accessAPIFixture, id, label, agent string) []s
 	return items
 }
 
-// Ein Gast darf erwähnen, aber die Antwort verrät nicht, wer im Raum ist:
-// Mitglieder bekommen die Zustellung, Ziele außerhalb fallen stumm weg.
-func TestGuestMentionDoesNotRevealRoomMembership(t *testing.T) {
+func guestJSON(t *testing.T, f *accessAPIFixture, who, path string, out any) {
+	t.Helper()
+	body := f.expect(t, who, 200, "GET", path, nil)
+	if err := json.Unmarshal([]byte(body), out); err != nil {
+		t.Fatalf("%s: %v", body, err)
+	}
+}
+
+// guestViews sammelt alles, was der Gast gus über seine eigene Nachricht
+// zurücklesen kann. mentions: was er eingegeben hat.
+type guestViews struct {
+	APIMentions []string
+	Attention   int
+	Standing    []string
+	Status      int
+}
+
+// guestScenario: gus postet eine Frage und eine Standing-Anweisung an
+// `mention`. miaInRoom steuert, ob dieses Ziel wirklich im Raum ist.
+func guestScenario(t *testing.T, miaInRoom bool, mention string) guestViews {
+	t.Helper()
+	f := roomGateFixture(t, true)
+	room := store.RoomKeyForProject(accProject)
+	other := store.RoomKeyForProject(accOther)
+	for agent, principal := range map[string]string{"claude:gus": "person:5", "claude:lena": "person:2", "claude:robin": "person:1"} {
+		if _, err := f.st.RegisterCoordAgent(store.CoordAgent{ExternalID: agent, Provider: "claude", RoomKey: room, PrincipalID: principal, Person: strings.TrimPrefix(agent, "claude:")}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	miaRoom := room
+	if !miaInRoom {
+		miaRoom = other
+	}
+	if _, err := f.st.RegisterCoordAgent(store.CoordAgent{ExternalID: "claude:mia", Provider: "claude", RoomKey: miaRoom, PrincipalID: "person:3", Person: "mia"}); err != nil {
+		t.Fatal(err)
+	}
+	var v guestViews
+	var resp struct {
+		ID int64 `json:"id"`
+	}
+	code, body := f.call(t, "gus", "POST", "/api/coord/messages", store.CoordMessage{
+		DestinationKind: store.DestinationRoom, DestinationID: room, SenderExternalID: "claude:gus",
+		ClientID: "q", Body: "please look", Intent: store.IntentQuestion, Mentions: []string{mention}})
+	v.Status = code
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+		t.Fatal(err)
+	}
+	guestAccess := f.st.CoordinationFor(store.Principal{ID: "person:5", Label: "gus"}, "claude:gus")
+	if _, err := guestAccess.CreateStanding(store.StandingInput{RoomKey: room, ClientID: "s", Body: "always", Mentions: []string{mention}}); err != nil {
+		t.Fatal(err)
+	}
+	guestJSON(t, f, "gus", fmt.Sprintf("/api/coord/messages/%d/mentions?agent_external_id=claude:gus", resp.ID), &v.APIMentions)
+	var items []store.AttentionItem
+	guestJSON(t, f, "gus", "/api/coord/attention?agent_external_id=claude:gus", &items)
+	v.Attention = len(items)
+	standing, err := guestAccess.Standing(room)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range standing {
+		v.Standing = append(v.Standing, s.Targets...)
+	}
+	// Mitglied und Owner sehen die echte Zustellung.
+	member := f.st.CoordinationFor(store.Principal{ID: "person:3", Label: "mia"}, "claude:mia")
+	got, err := member.MessageMentions(resp.ID)
+	if err != nil {
+		if miaInRoom {
+			t.Fatal(err)
+		}
+	} else if miaInRoom != (len(got) == 1) {
+		t.Errorf("member view of mentions: in room=%v mentions=%v", miaInRoom, got)
+	}
+	if miaInRoom {
+		if a := attentionOf(t, f, "person:3", "mia", "claude:mia"); len(a) != 1 {
+			t.Errorf("member attention: %+v", a)
+		}
+	}
+	owner := f.st.CoordinationFor(store.Principal{ID: "person:1", Label: "robin"}, "claude:robin")
+	if real, err := owner.MessageMentions(resp.ID); err != nil || (miaInRoom && len(real) != 1) || (!miaInRoom && len(real) != 0) {
+		t.Errorf("owner sees the real mentions: %v %v", real, err)
+	}
+	return v
+}
+
+// Was ein Gast von seinen eigenen Beiträgen zurückliest, ist nur seine Eingabe,
+// nie das gefilterte Ergebnis: sonst wäre das Zurücklesen ein Orakel dafür, wer
+// im Raum ist.
+func TestGuestViewsOfOwnPostsAreIdenticalForMemberAndNonMember(t *testing.T) {
+	in := guestScenario(t, true, "claude:mia")
+	out := guestScenario(t, false, "claude:mia")
+	if in.Status != 200 || out.Status != 200 {
+		t.Fatalf("status %d %d", in.Status, out.Status)
+	}
+	if !reflect.DeepEqual(in, out) {
+		t.Errorf("guest views differ with room membership:\nmember:     %+v\nnon-member: %+v", in, out)
+	}
+	if !reflect.DeepEqual(in.APIMentions, []string{"claude:mia"}) || !reflect.DeepEqual(in.Standing, []string{"claude:mia"}) {
+		t.Errorf("guest should read back exactly what it typed: %+v", in)
+	}
+	if in.Attention != 0 {
+		t.Errorf("guest sees outgoing attention (state per target leaks delivery): %d", in.Attention)
+	}
+}
+
+func TestGuestMentionDeliversOnlyToRoomMembers(t *testing.T) {
 	f, room := guestRoomFixture(t, true)
-	// nora ist Org-Mitglied ohne Rolle: keine Mitgliedschaft im Raum.
 	if _, err := f.st.RegisterCoordAgent(store.CoordAgent{ExternalID: "claude:outside", Provider: "claude", RoomKey: store.RoomKeyForProject(accOther), PrincipalID: "person:6", Person: "nora"}); err != nil {
 		t.Fatal(err)
 	}
-	send := func(mention, id string) (int, string) {
-		return f.call(t, "gus", "POST", "/api/coord/messages", store.CoordMessage{
+	var codes []int
+	var bodies []string
+	for _, c := range []struct{ id, mention string }{{"in", "claude:mia"}, {"out", "claude:outside"}, {"nobody", "claude:nobody"}, {"person", "person:6"}} {
+		code, body := f.call(t, "gus", "POST", "/api/coord/messages", store.CoordMessage{
 			DestinationKind: store.DestinationRoom, DestinationID: room, SenderExternalID: "claude:gus",
-			ClientID: id, Body: "please look " + id, Intent: store.IntentQuestion, Mentions: []string{mention}})
-	}
-	inCode, inBody := send("claude:mia", "in")
-	outCode, outBody := send("claude:outside", "out")
-	unkCode, unkBody := send("person:6", "unk")
-	if inCode != 200 || outCode != inCode || unkCode != inCode {
-		t.Fatalf("status differs: member=%d outsider=%d person=%d", inCode, outCode, unkCode)
-	}
-	// Der Körper trägt nur die Nachrichten-ID; ohne sie ist er identisch.
-	strip := func(b string) string {
-		return strings.TrimSpace(strings.Map(func(r rune) rune {
+			ClientID: c.id, Body: "please look " + c.id, Intent: store.IntentQuestion, Mentions: []string{c.mention}})
+		codes = append(codes, code)
+		bodies = append(bodies, strings.Map(func(r rune) rune {
 			if r >= '0' && r <= '9' {
 				return -1
 			}
 			return r
-		}, b))
+		}, body))
 	}
-	if strip(inBody) != strip(outBody) || strip(inBody) != strip(unkBody) {
-		t.Errorf("bodies differ: %q %q %q", inBody, outBody, unkBody)
+	for i := range codes {
+		if codes[i] != 200 || bodies[i] != bodies[0] {
+			t.Errorf("response %d differs: %d %q vs %q", i, codes[i], bodies[i], bodies[0])
+		}
 	}
-	// Nur das Mitglied bekommt eine Zustellung (Attention), als Bitte.
 	items := attentionOf(t, f, "person:3", "mia", "claude:mia")
-	if len(items) != 1 || !strings.Contains(items[0].Body, "in") {
+	if len(items) != 1 || !strings.HasSuffix(items[0].Body, " in") {
 		t.Fatalf("member attention: %+v", items)
 	}
 	for _, who := range []struct{ id, label, agent string }{{"person:6", "nora", "claude:outside"}, {"person:2", "lena", "claude:lena"}} {
@@ -95,35 +193,12 @@ func TestGuestMentionDoesNotRevealRoomMembership(t *testing.T) {
 			t.Errorf("%s got attention from a guest mention: %+v", who.label, got)
 		}
 	}
-	// Auch beim Absender erscheint nur das Mitglied als Empfänger.
-	for _, it := range attentionOf(t, f, "person:5", "gus", "claude:gus") {
-		if it.RecipientID != "claude:mia" {
-			t.Errorf("attention item for a non-member: %+v", it)
-		}
-	}
-	if len(items) == 1 {
-		mentions, err := f.st.CoordinationFor(store.Principal{ID: "person:3", Label: "mia"}, "claude:mia").MessageMentions(items[0].MessageID)
-		if err != nil || len(mentions) != 1 || mentions[0] != "claude:mia" {
-			t.Errorf("stored mentions %v %v", mentions, err)
-		}
-	}
-	// Die Nachrichten der abgewiesenen Ziele tragen keine Erwähnung.
-	body := f.expect(t, "mia", 200, "GET", "/api/coord/messages?destination_id="+room+"&agent_external_id=claude:mia", nil)
+	// Das Mitglied bekommt die Nachricht als Bitte, nie als Anweisung.
 	var msgs []store.CoordMessage
-	if err := json.Unmarshal([]byte(body), &msgs); err != nil {
-		t.Fatal(err)
-	}
+	guestJSON(t, f, "mia", "/api/coord/messages?destination_id="+room+"&agent_external_id=claude:mia", &msgs)
 	for _, m := range msgs {
-		if m.SenderExternalID != "claude:gus" {
-			continue
-		}
-		mentions, _ := f.st.CoordinationFor(store.Principal{ID: "person:3", Label: "mia"}, "claude:mia").MessageMentions(m.ID)
-		isIn := strings.HasSuffix(m.Body, " in")
-		if isIn && m.Authority != "request" {
+		if m.SenderExternalID == "claude:gus" && strings.HasSuffix(m.Body, " in") && m.Authority != "request" {
 			t.Errorf("guest directive reached the member: authority=%q", m.Authority)
-		}
-		if !isIn && len(mentions) != 0 {
-			t.Errorf("message %q kept mentions %v", m.Body, mentions)
 		}
 	}
 	// Ein Mitglied behält den Fehler für unbekannte Ziele und darf erwähnen.
@@ -131,6 +206,11 @@ func TestGuestMentionDoesNotRevealRoomMembership(t *testing.T) {
 		DestinationKind: store.DestinationRoom, DestinationID: room, SenderExternalID: "claude:mia",
 		ClientID: "mm", Body: "hi", Mentions: []string{"claude:lena"}}); code != 200 {
 		t.Errorf("member mention: %d %s", code, body)
+	}
+	if code, _ := f.call(t, "mia", "POST", "/api/coord/messages", store.CoordMessage{
+		DestinationKind: store.DestinationRoom, DestinationID: room, SenderExternalID: "claude:mia",
+		ClientID: "mu", Body: "hi", Mentions: []string{"claude:nobody"}}); code != 400 {
+		t.Errorf("member mention of unknown: %d", code)
 	}
 }
 

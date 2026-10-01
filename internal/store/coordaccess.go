@@ -533,7 +533,9 @@ func (a CoordAccess) canReadThreadTx(tx *sql.Tx, actor string, threadID int64) e
 			if member == 0 {
 				return ErrCoordNotFound
 			}
-			return nil
+			// Die Thread-Liste allein genügt nicht: wer die Projektrolle verloren
+			// hat, liest auch einen eingeschränkten Thread nicht mehr.
+			return a.projectRoomGate(RoomProject, RoomKeyForProject(project), ResRoom, tx)
 		}
 		if a.publicOnly {
 			// public_only ist eine Auswahl (nur nicht eingeschränkte Threads), nie
@@ -696,8 +698,9 @@ func (a CoordAccess) Send(message CoordMessage) (int64, error) {
 			return 0, ErrAttentionRecipientRequired
 		}
 	}
+	var rawMentions []string
 	if len(message.Mentions) > 0 {
-		var mentions []string
+		var mentions, raw []string
 		var mentionErr error
 		if message.DestinationKind == DestinationDiscussion {
 			threadID, parseErr := strconv.ParseInt(message.DestinationID, 10, 64)
@@ -707,17 +710,17 @@ func (a CoordAccess) Send(message CoordMessage) (int64, error) {
 			if home, found, homeErr := threadHomeTx(tx, threadID); homeErr != nil {
 				return 0, homeErr
 			} else if found {
-				mentions, mentionErr = a.resolveMentionsTx(tx, actor, home.RoomKey, message.Mentions)
+				mentions, raw, mentionErr = a.resolveMentionsTx(tx, actor, home.RoomKey, message.Mentions)
 			} else {
-				mentions, mentionErr = a.resolveLegacyThreadMentionsTx(tx, actor, threadID, message.Mentions)
+				mentions, raw, mentionErr = a.resolveLegacyThreadMentionsTx(tx, actor, threadID, message.Mentions)
 			}
 		} else {
-			mentions, mentionErr = a.resolveMentionsTx(tx, actor, message.DestinationID, message.Mentions)
+			mentions, raw, mentionErr = a.resolveMentionsTx(tx, actor, message.DestinationID, message.Mentions)
 		}
 		if mentionErr != nil {
 			return 0, mentionErr
 		}
-		message.Mentions = mentions
+		message.Mentions, rawMentions = mentions, raw
 	}
 	if message.ReplyTo != 0 {
 		var count int
@@ -738,6 +741,9 @@ func (a CoordAccess) Send(message CoordMessage) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	if err := insertRawMentionsTx(tx, id, rawMentions); err != nil {
+		return 0, err
+	}
 	if message.DestinationKind == DestinationDiscussion {
 		threadID, _ := strconv.ParseInt(message.DestinationID, 10, 64)
 		if _, err := tx.Exec(`UPDATE threads SET updated_at=? WHERE id=?`, now(), threadID); err != nil {
@@ -750,19 +756,19 @@ func (a CoordAccess) Send(message CoordMessage) (int64, error) {
 	return id, nil
 }
 
-func (a CoordAccess) resolveLegacyThreadMentionsTx(tx *sql.Tx, actor string, threadID int64, principals []string) ([]string, error) {
+func (a CoordAccess) resolveLegacyThreadMentionsTx(tx *sql.Tx, actor string, threadID int64, principals []string) (kept, raw []string, err error) {
 	var restricted int
 	if err := tx.QueryRow(`SELECT COUNT(*) FROM thread_visibility WHERE thread_id=?`, threadID).Scan(&restricted); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if restricted == 0 {
 		var project string
 		if err := tx.QueryRow(`SELECT project FROM threads WHERE id=?`, threadID).Scan(&project); err != nil {
-			return nil, ErrCoordNotFound
+			return nil, nil, ErrCoordNotFound
 		}
 		return a.resolveMentionsTx(tx, actor, RoomKeyForProject(project), principals)
 	}
-	return principals, a.validateRestrictedThreadParticipantsTx(tx, actor, threadID, principals)
+	return principals, nil, a.validateRestrictedThreadParticipantsTx(tx, actor, threadID, principals)
 }
 
 func (a CoordAccess) validateRestrictedThreadParticipantsTx(tx *sql.Tx, actor string, threadID int64, principals []string) error {
@@ -875,8 +881,25 @@ func (a CoordAccess) messageTarget(messageID int64) (string, string, error) {
 }
 
 func (a CoordAccess) MessageMentions(messageID int64) ([]string, error) {
-	if _, _, err := a.messageTarget(messageID); err != nil {
+	kind, id, err := a.messageTarget(messageID)
+	if err != nil {
 		return nil, err
+	}
+	reader := a.Store
+	if reader.reader != nil {
+		reader = reader.reader
+	}
+	tx, err := reader.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	var raw []string
+	if a.guestViewsRoomTx(tx, messageRoomKeyTx(tx, kind, id)) {
+		raw, err = rawMentionsTx(tx, messageID)
+	}
+	tx.Rollback()
+	if err != nil || raw != nil {
+		return raw, err
 	}
 	return a.Store.CoordMessageMentions(messageID)
 }
@@ -2034,21 +2057,80 @@ func (a CoordAccess) mentionTargetsTx(tx *sql.Tx, actor, roomKey string) (map[st
 // gegen Erfolg verraten, wer im Raum ist. Er bekommt deshalb immer Erfolg, und
 // Ziele außerhalb des Raums fallen stumm weg: keine Zustellung, kein
 // Attention-Eintrag. Es wird nie an jemanden außerhalb des Raums zugestellt.
-func (a CoordAccess) resolveMentionsTx(tx *sql.Tx, actor, roomKey string, mentions []string) ([]string, error) {
+//
+// Das Rohe bleibt zur Anzeige für den Gast erhalten (zweiter Rückgabewert):
+// was er von seinen Beiträgen zurückliest, ist seine eigene Eingabe und nie das
+// gefilterte Ergebnis. Sonst wäre das Zurücklesen ein Orakel für die Mitglieder.
+func (a CoordAccess) resolveMentionsTx(tx *sql.Tx, actor, roomKey string, mentions []string) (kept, raw []string, err error) {
 	if a.projectRoomGate(roomKindOf(roomKey), roomKey, ResAgents, tx) == nil {
-		return mentions, a.validateRoomParticipantsTx(tx, actor, roomKey, mentions)
+		return mentions, nil, a.validateRoomParticipantsTx(tx, actor, roomKey, mentions)
 	}
 	allowed, err := a.mentionTargetsTx(tx, actor, roomKey)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	var kept []string
-	for _, id := range normalizeMembers(mentions) {
+	raw = normalizeMembers(mentions)
+	for _, id := range raw {
 		if allowed[id] {
 			kept = append(kept, id)
 		}
 	}
-	return kept, nil
+	return kept, raw, nil
+}
+
+// guestViewsRoomTx: der Leser sieht die Mitglieder dieses Projektraums nicht.
+// Im Logmodus gilt wie überall das alte Verhalten.
+func (a CoordAccess) guestViewsRoomTx(tx *sql.Tx, roomKey string) bool {
+	return roomKey != "" && a.projectRoomGate(roomKindOf(roomKey), roomKey, ResAgents, tx) != nil
+}
+
+// messageRoomKeyTx ist der Raum, in dem eine Nachricht liegt (bei Threads der
+// Heimatraum oder der Projektraum des Alt-Threads), sonst "".
+func messageRoomKeyTx(tx *sql.Tx, kind, id string) string {
+	if kind == DestinationRoom {
+		return id
+	}
+	threadID, err := strconv.ParseInt(id, 10, 64)
+	if err != nil || threadID <= 0 {
+		return ""
+	}
+	if home, found, err := threadHomeTx(tx, threadID); err == nil && found {
+		return home.RoomKey
+	}
+	var project string
+	if err := tx.QueryRow(`SELECT project FROM threads WHERE id=?`, threadID).Scan(&project); err != nil {
+		return ""
+	}
+	return RoomKeyForProject(project)
+}
+
+func insertRawMentionsTx(tx *sql.Tx, messageID int64, raw []string) error {
+	for _, mention := range raw {
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO coord_message_raw_mentions(message_id,mentioned_external_id)
+			VALUES(?,?)`, messageID, mention); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// rawMentionsTx liefert die eingegebenen Erwähnungen einer Gast-Nachricht oder
+// nil, wenn es keine gibt.
+func rawMentionsTx(tx *sql.Tx, messageID int64) ([]string, error) {
+	rows, err := tx.Query(`SELECT mentioned_external_id FROM coord_message_raw_mentions WHERE message_id=? ORDER BY mentioned_external_id`, messageID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var m string
+		if err := rows.Scan(&m); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
 }
 
 func (a CoordAccess) Standing(roomKey string) ([]StandingInstruction, error) {
@@ -2089,6 +2171,21 @@ func (a CoordAccess) Standing(roomKey string) ([]StandingInstruction, error) {
 	if err := rows.Close(); err != nil {
 		return nil, err
 	}
+	if a.guestViewsRoomTx(tx, roomKey) {
+		for i := range out {
+			messageID, perr := strconv.ParseInt(out[i].MessageID, 10, 64)
+			if perr != nil {
+				continue
+			}
+			raw, rerr := rawMentionsTx(tx, messageID)
+			if rerr != nil {
+				return nil, rerr
+			}
+			if raw != nil {
+				out[i].Targets = raw
+			}
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
@@ -2120,7 +2217,7 @@ func (a CoordAccess) CreateStanding(in StandingInput) (int64, error) {
 	if err := a.requireRoomAccessTx(tx, actor, in.RoomKey); err != nil {
 		return 0, err
 	}
-	mentions, err := a.resolveMentionsTx(tx, actor, in.RoomKey, in.Mentions)
+	mentions, raw, err := a.resolveMentionsTx(tx, actor, in.RoomKey, in.Mentions)
 	if err != nil {
 		return 0, err
 	}
@@ -2129,6 +2226,9 @@ func (a CoordAccess) CreateStanding(in StandingInput) (int64, error) {
 	message.AuthorKind = a.authorKind()
 	id, err := appendCoordMessageTx(tx, message)
 	if err != nil {
+		return 0, err
+	}
+	if err := insertRawMentionsTx(tx, id, raw); err != nil {
 		return 0, err
 	}
 	var destination, body, intent, authorPrincipal, expiresAt string

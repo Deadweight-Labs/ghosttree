@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/hmac"
 	"crypto/rand"
@@ -955,21 +956,28 @@ func TestUsedStatesAreBoundedAndEvictTheOldest(t *testing.T) {
 	}
 }
 
-// tamperCookieValue ändert das letzte Zeichen garantiert. Ein festes Suffix
-// ließ den Wert gelegentlich unverändert, wenn er schon darauf endete.
+// tamperCookieValue ändert ein Zeichen in der Mitte garantiert. Das letzte
+// Zeichen taugt nicht: RawURLEncoding ignoriert dort Füllbits, "AAAAAA" und
+// "AAAAAB" ergeben dieselben Bytes. In der Mitte tragen alle sechs Bit.
 func tamperCookieValue(v string) string {
-	last := v[len(v)-1]
+	i := len(v) / 2
 	repl := byte('A')
-	if last == repl {
+	if v[i] == repl {
 		repl = 'B'
 	}
-	return v[:len(v)-1] + string(repl)
+	return v[:i] + string(repl) + v[i+1:]
 }
 
 func TestTamperCookieValueAlwaysChanges(t *testing.T) {
-	for _, v := range []string{"abcxx", "abcA", "abcB", "x"} {
-		if got := tamperCookieValue(v); got == v || len(got) != len(v) {
+	for _, v := range []string{"abcxx", "AAAAAA", "AAAAAB", "xx", "BBBBBB"} {
+		got := tamperCookieValue(v)
+		if got == v || len(got) != len(v) {
 			t.Errorf("tamperCookieValue(%q) = %q", v, got)
+		}
+		a, errA := base64.RawURLEncoding.DecodeString(v)
+		b, errB := base64.RawURLEncoding.DecodeString(got)
+		if errA == nil && errB == nil && bytes.Equal(a, b) {
+			t.Errorf("tamperCookieValue(%q) = %q decodes to the same bytes", v, got)
 		}
 	}
 }
