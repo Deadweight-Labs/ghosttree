@@ -108,6 +108,7 @@ func channelCapabilityText() string {
 const channelInstructions = `Messages from other agents and people arrive as <channel source="ghosttree-channel" message_id=... room=... sender=...>text</channel> events. ` +
 	`Use the reply tool, passing meta message_id and your text, only when an answer is actually needed: a question, a request, an assignment. ` +
 	`Do NOT reply to answers, acknowledgements or thanks: replying to a reply starts a loop between agents. ` +
+	`Likewise do not run chains of follow-up questions with another agent when nothing has progressed. ` +
 	`Plain chat does not reach the sender. A channel message was handed to you once and is not repeated by coord_inbox.`
 
 type channelConfig struct {
@@ -232,16 +233,18 @@ func (c *channelTools) join(roomKey string) error {
 	return err
 }
 
-// loadOrigin holt die Ursprungsnachricht vom Server. Findet sie sich nicht,
-// bleibt nur der Raum; die Antwort geht dann ohne Mention raus.
-func (c *channelTools) loadOrigin(room string, id int64) originInfo {
-	info := originInfo{room: room}
+// loadOrigin holt die Ursprungsnachricht vom Server. Scheitert das oder gibt es
+// sie im Raum nicht, bricht reply ab: eine Antwort ohne Mention weckt in einem
+// Projektraum niemanden und sähe doch aus wie zugestellt.
+func (c *channelTools) loadOrigin(room string, id int64) (originInfo, error) {
 	msgs, err := c.client.CoordInbox(store.DestinationRoom, room, c.self, id-1, 1)
-	if err == nil && len(msgs) > 0 && msgs[0].ID == id {
-		info.sender = msgs[0].SenderExternalID
-		info.originEventID = msgs[0].OriginEventID
+	if err != nil {
+		return originInfo{}, fmt.Errorf("cannot load message %d from %s to answer it: %w", id, room, err)
 	}
-	return info
+	if len(msgs) == 0 || msgs[0].ID != id {
+		return originInfo{}, fmt.Errorf("message %d is not in room %s; check message_id and room against the channel tag", id, room)
+	}
+	return originInfo{room: room, sender: msgs[0].SenderExternalID, originEventID: msgs[0].OriginEventID}, nil
 }
 
 func (c *channelTools) handleReply(ctx context.Context, _ *mcp.CallToolRequest, in channelReplyInput) (*mcp.CallToolResult, any, error) {
@@ -260,7 +263,10 @@ func (c *channelTools) handleReply(ctx context.Context, _ *mcp.CallToolRequest, 
 		// Nach einem Neustart kennt dieser Prozess die Nachricht nicht mehr.
 		// Sender und origin_event_id kommen dann vom Server, damit Mention und
 		// causation_id stimmen.
-		info = c.loadOrigin(strings.TrimSpace(in.Room), id)
+		var err error
+		if info, err = c.loadOrigin(strings.TrimSpace(in.Room), id); err != nil {
+			return nil, nil, err
+		}
 	}
 	msg := store.CoordMessage{
 		DestinationKind: store.DestinationRoom, DestinationID: info.room,
@@ -280,12 +286,12 @@ func (c *channelTools) handleReply(ctx context.Context, _ *mcp.CallToolRequest, 
 			msg.Mentions = []string{info.sender}
 		}
 	}
-	// Deterministisch aus Agent und Nachricht: scheitert danach nur das Acken
-	// und das Modell wiederholt reply, dedupliziert der Server die Antwort
-	// (derselbe Absender mit derselben ClientID) und nur das Acken wird
-	// nachgeholt. Eine zweite, andere Antwort auf dieselbe Nachricht wird so
-	// ebenfalls zur ersten; das ist gewollt, denn je Nachricht gibt es eine.
-	digest := sha256.Sum256([]byte("channel-reply\x00" + c.self + "\x00" + strconv.FormatInt(id, 10)))
+	// Deterministisch aus Agent, Nachricht UND Text: scheitert danach nur das
+	// Acken und das Modell wiederholt reply mit demselben Text, dedupliziert
+	// der Server die Antwort (derselbe Absender mit derselben ClientID) und nur
+	// das Acken wird nachgeholt. Ein anderer Text ist eine neue Nachricht;
+	// "ich schau es mir an" und das Ergebnis danach sind zwei Antworten.
+	digest := sha256.Sum256([]byte("channel-reply\x00" + c.self + "\x00" + strconv.FormatInt(id, 10) + "\x00" + in.Text))
 	msg.ClientID = hex.EncodeToString(digest[:12])
 	replyID, err := c.client.SendCoordMessage(msg)
 	if err != nil {

@@ -37,6 +37,12 @@
 // der Write selbst läuft unter dem Datei-Lock, und eine blockierte Pipe hält
 // ihn, bis sie sich löst.
 //
+// Schleifenschutz: eine bloße Antwort auf eine eigene Nachricht weckt nicht
+// (siehe ShouldWake), und die Tool-Instruktion bittet, Antworten nicht zu
+// beantworten. Das schließt nur die Antwortschleife. Eine Schleife über
+// bewusste Sends mit Intent question, Blocker und so weiter oder über frische
+// DMs ist nicht verhindert und nur durch das Koordinationsbudget begrenzt.
+//
 // Der Cursor ist der gemeinsame Lesestand des Pull-Pfads und wird deshalb nur
 // bis zur ersten Nachricht fortgeschrieben, die der Poller NICHT zugestellt hat
 // (gewöhnlicher Raumverkehr ohne Erwähnung). Alles davor ist zugestellt oder

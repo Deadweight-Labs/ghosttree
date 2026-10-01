@@ -426,3 +426,52 @@ func TestChannelReplyRetryAfterFailedAckDoesNotDuplicate(t *testing.T) {
 		t.Fatalf("state = %q, want acked after the retry", st)
 	}
 }
+
+// Zwei verschiedene Antworten auf dieselbe Nachricht sind zwei Nachrichten:
+// "ich schaue" und das Ergebnis danach dürfen nicht zusammenfallen.
+func TestChannelDistinctRepliesStayDistinct(t *testing.T) {
+	e := newChannelEnv(t)
+	key, id := e.sendDM(t, "bitte", "d1")
+	tools := newTools(e.b)
+	tools.rec.seen[id] = originInfo{room: key, kind: "direct", sender: "sess-sender", originEventID: "ev-d1"}
+	for _, text := range []string{"ich schaue es mir an", "Ergebnis: alles gruen", "Ergebnis: alles gruen"} {
+		if _, _, err := tools.handleReply(context.Background(), nil, channelReplyInput{MessageID: strconv.FormatInt(id, 10), Text: text}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := repliesTo(t, e, key, id)
+	if len(got) != 2 || got[0].Body != "ich schaue es mir an" || got[1].Body != "Ergebnis: alles gruen" {
+		t.Fatalf("want two distinct replies (identical text deduplicated), got %+v", got)
+	}
+}
+
+// Scheitert das Nachladen der Ursprungsnachricht, bricht reply ab, statt ohne
+// Mention zu senden.
+func TestChannelReplyAbortsWhenTheOriginCannotBeLoaded(t *testing.T) {
+	e := newChannelEnv(t)
+	room := store.RoomKeyForMachine("chanbox")
+	id, err := e.a.SendCoordMessage(store.CoordMessage{DestinationKind: store.DestinationRoom, DestinationID: room,
+		SenderExternalID: "sess-sender", ClientID: "x1", Body: "frage"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "down", http.StatusServiceUnavailable)
+	}))
+	defer down.Close()
+	idStr := strconv.FormatInt(id, 10)
+	broken := newTools(client.New(config.Config{ServerURL: down.URL, Token: e.token, Machine: "chanbox"}))
+	if _, _, err := broken.handleReply(context.Background(), nil, channelReplyInput{MessageID: idStr, Text: "a", Room: room}); err == nil ||
+		!strings.Contains(err.Error(), "cannot load message") {
+		t.Fatalf("err = %v", err)
+	}
+	// Ein falscher Raum oder eine falsche ID ist ein klarer Fehler, keine stille Antwort.
+	ok := newTools(e.b)
+	if _, _, err := ok.handleReply(context.Background(), nil, channelReplyInput{MessageID: "9999", Text: "a", Room: room}); err == nil ||
+		!strings.Contains(err.Error(), "is not in room") {
+		t.Fatalf("err = %v", err)
+	}
+	if got := repliesTo(t, e, room, id); len(got) != 0 {
+		t.Fatalf("nothing may be sent: %+v", got)
+	}
+}
