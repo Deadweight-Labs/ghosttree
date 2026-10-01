@@ -468,7 +468,8 @@ func (s *Store) RemoveOrgMember(actorPrincipal string, orgID int64, targetPrinci
 	return tx.Commit()
 }
 
-// SetDefaultOrg wählt die Organisation, der ein Konto neue Projekte zuordnet.
+// SetDefaultOrg wählt die Organisation, der ein Konto neue Projekte zuordnet;
+// 0 löscht den Standard.
 func (s *Store) SetDefaultOrg(accountPrincipal string, orgID int64) error {
 	if s.writer != nil {
 		return queueWrite(s, []any{accountPrincipal, orgID}, func(d *Store, p []any) error {
@@ -479,7 +480,7 @@ func (s *Store) SetDefaultOrg(accountPrincipal string, orgID int64) error {
 	if err != nil {
 		return err
 	}
-	if orgRoleTx(s.db, orgID, acct) == "" {
+	if orgID != 0 && orgRoleTx(s.db, orgID, acct) == "" {
 		return ErrNotOrgMember
 	}
 	_, err = s.db.Exec(`UPDATE persons SET default_org_id=? WHERE id=?`, orgID, acct)

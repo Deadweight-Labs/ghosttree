@@ -12,7 +12,7 @@ import (
 // writeCoded antwortet mit einem maschinenlesbaren Fehlercode neben dem Text.
 func writeCoded(w http.ResponseWriter, status int, code, msg string) {
 	recordResponseError(w, classifyRequestError(status, "", msg), msg)
-	writeJSON(w, status, map[string]string{"error": msg, "code": code})
+	writeJSON(w, status, map[string]string{"error": msg, "message": msg, "code": code})
 }
 
 // gateMachine setzt die Maschinenregeln eines Schreibzugriffs durch.

@@ -26,6 +26,16 @@ Versioning, with pre-1.0 compatibility rules described in
   chunks) and adds three empty tables, so it takes milliseconds on a large
   database. A new instance gets a `default` organization with its bootstrap
   account. Organizations do not change who can see what yet.
+- Add the organization API and CLI. `ctx org list|create|members|invite|
+  invitations|accept|default` and `ctx project list|claim|move` talk to the
+  server with your token (`/api/orgs`, `/api/projects`, `/api/invitations/accept`).
+  Only an instance admin creates organizations; owners invite, change roles
+  and remove members (the last owner stays) and move a project between
+  organizations they own; members only list. Non-members see an organization
+  as nonexistent. Bodies of these routes are capped at 16 KiB, and five wrong
+  codes in ten minutes lock `accept` for that account. Sessions, knowledge,
+  requests and documents written for an unknown project assign it as described
+  above (`409 project_unclaimed` lists the organizations).
 - Add ownership of machines, sessions and agent identities. Machine names are
   unique across the instance and belong to the account that first claims them
   (`ctx login` or the first upload); a second account gets `409
