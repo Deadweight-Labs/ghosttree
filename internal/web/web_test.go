@@ -55,6 +55,24 @@ func login(t *testing.T, srv *httptest.Server, token string) *http.Client {
 	return client
 }
 
+// loginInteractive meldet ein Konto über einen Login-Link an. Die Sitzung ist
+// interaktiv und darf Verwaltungsformulare abschicken; login() mit eingefügtem
+// Token darf das nicht.
+func loginInteractive(t *testing.T, srv *httptest.Server, st *store.Store, account string) *http.Client {
+	t.Helper()
+	code, _, err := st.CreateAccountCode(store.CodeLogin, account)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
+	resp := sameOriginPostForm(t, client, srv.URL+"/ui/login/code", url.Values{"code": {code}})
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("login link status=%d body=%s", resp.StatusCode, body(t, resp))
+	}
+	client.Jar = cookieJar{cookies: resp.Cookies()}
+	return client
+}
+
 func sameOriginPostForm(t *testing.T, client *http.Client, target string, form url.Values) *http.Response {
 	t.Helper()
 	req, err := http.NewRequest(http.MethodPost, target, strings.NewReader(form.Encode()))

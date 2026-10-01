@@ -163,6 +163,12 @@ func (a *app) tokenRevoke(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	// Fremde Tokens widerruft ein Administrator nur aus einer interaktiven
+	// Sitzung; eigene darf jede Sitzung widerrufen, das nimmt nur Macht.
+	if info.AccountID != principal.ID && !interactive(r) {
+		a.notInteractive(w, r)
+		return
+	}
 	if err := a.store.RevokeToken(id); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

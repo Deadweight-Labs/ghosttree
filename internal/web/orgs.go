@@ -86,7 +86,7 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 				info := a.store.ProjectRole(p.Remote, m.AccountID)
 				rv.Rows = append(rv.Rows, projectRoleRow{
 					Account: m.Account, AccountID: m.AccountID, Role: info.Role, CanReview: info.CanReview,
-					Implicit: info.Implicit, Grantable: a.store.GrantableRoles(me, p.Remote, m.AccountID), Self: m.AccountID == me,
+					Implicit: info.Implicit, Grantable: a.grantable(r, me, p.Remote, m.AccountID), Self: m.AccountID == me,
 				})
 			}
 			v.Roles = append(v.Roles, rv)
@@ -283,4 +283,13 @@ func (a *app) orgProjectRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	orgRedirect(w, r, o.Slug, "Project role updated.")
+}
+
+// grantable nennt die wählbaren Rollen, aber nur in einer interaktiven Sitzung:
+// aus eingefügtem Token zeigt die Seite keine Rollenformulare.
+func (a *app) grantable(r *http.Request, actor, remote, target string) []string {
+	if !interactive(r) {
+		return nil
+	}
+	return a.store.GrantableRoles(actor, remote, target)
 }

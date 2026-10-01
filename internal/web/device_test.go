@@ -67,11 +67,11 @@ func TestDevicePageNeedsLoginAndPostNeedsCSRF(t *testing.T) {
 }
 
 func TestDeviceApprovalInBrowserIssuesBoundToken(t *testing.T) {
-	srv, st, token := testWeb(t)
+	srv, st, _ := testWeb(t)
 	clock := &struct{ t time.Time }{time.Now()}
 	st.Device().SetClock(func() time.Time { return clock.t })
 	start := startDevice(t, st, "laptop")
-	client := login(t, srv, token)
+	client := loginInteractive(t, srv, st, "alice")
 
 	// Die Eingabeseite füllt den Code vor, ohne zu bestätigen.
 	resp, err := client.Get(srv.URL + "/ui/device?user_code=" + url.QueryEscape(store.FormatUserCode(start.UserCode)))
@@ -99,9 +99,9 @@ func TestDeviceApprovalInBrowserIssuesBoundToken(t *testing.T) {
 }
 
 func TestDeviceWrongCodesLockTheSession(t *testing.T) {
-	srv, st, token := testWeb(t)
+	srv, st, _ := testWeb(t)
 	start := startDevice(t, st, "laptop")
-	client := login(t, srv, token)
+	client := loginInteractive(t, srv, st, "alice")
 	csrf := renderedCSRFToken(t, client, srv.URL+"/ui/device")
 	for i := 0; i < 5; i++ {
 		resp := sameOriginPostForm(t, client, srv.URL+"/ui/device", url.Values{"user_code": {"BBBB-BBBB"}, "csrf_token": {csrf}})
@@ -118,8 +118,8 @@ func TestDeviceWrongCodesLockTheSession(t *testing.T) {
 }
 
 func TestDeviceFormBodyIsLimited(t *testing.T) {
-	srv, _, token := testWeb(t)
-	client := login(t, srv, token)
+	srv, st, _ := testWeb(t)
+	client := loginInteractive(t, srv, st, "alice")
 	csrf := renderedCSRFToken(t, client, srv.URL+"/ui/device")
 	resp := sameOriginPostForm(t, client, srv.URL+"/ui/device", url.Values{"user_code": {strings.Repeat("A", 100000)}, "csrf_token": {csrf}})
 	if resp.StatusCode != http.StatusForbidden {
@@ -186,7 +186,7 @@ func TestTokenPageListsOwnTokensAndRevocationIsImmediate(t *testing.T) {
 	}
 
 	// Alice (Admin, erste Person) sieht alle, Bob sieht Alices Token nicht.
-	aliceClient := login(t, srv, aliceToken)
+	aliceClient := loginInteractive(t, srv, st, "alice")
 	resp, _ = aliceClient.Get(srv.URL + "/ui/account/tokens")
 	adminPage := body(t, resp)
 	if !strings.Contains(adminPage, "bob-laptop") || !strings.Contains(adminPage, "alice") || !strings.Contains(adminPage, "revoked") {

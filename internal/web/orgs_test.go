@@ -19,7 +19,8 @@ func orgWeb(t *testing.T) (srvURL string, st *store.Store, alice, anna *http.Cli
 	if org, err = st.CreateOrg("person:1", "Alpha", "alpha"); err != nil {
 		t.Fatal(err)
 	}
-	return srv.URL, st, login(t, srv, aliceTok), login(t, srv, annaTok), org
+	_, _ = aliceTok, annaTok
+	return srv.URL, st, loginInteractive(t, srv, st, "alice"), loginInteractive(t, srv, st, "anna"), org
 }
 
 func postOrg(t *testing.T, c *http.Client, base, path string, form url.Values) *http.Response {

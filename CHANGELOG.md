@@ -53,7 +53,14 @@ Versioning, with pre-1.0 compatibility rules described in
   invite` and `ctx project move` print where to go (the web UI link). The
   operator on the server host can run them with `--db <path>` (direct database
   access; it acts as the oldest owner of the organization, and role changes are
-  logged with `via=cli-db`). Roles are not enforced anywhere yet, so nobody
+  logged with `via=cli-db`). A web session started by pasting a token is
+  read-only: it shows no administration forms and the server answers them with
+  403, because that token sits in the config of every machine an agent runs on.
+  This covers project and organization roles, removing members, invitations,
+  moving projects, approving devices and revoking other accounts' tokens.
+  Sessions from OIDC, a login link or a bootstrap, claim or invitation code are
+  interactive; without OIDC the operator creates one with `ctx account
+  login-link <name> --db <path>`. Roles are not enforced anywhere yet, so nobody
   sees or may do less than before. Existing instances get the two tables and a
   `role` column on `coord_agents` (default `member`) on startup; existing
   organization members start without a stored role.
