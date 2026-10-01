@@ -66,6 +66,16 @@ func (s *Store) RegressionGaps(ax scope.Axes) ([]Knowledge, int, error) {
 	if s.reader != nil {
 		return s.reader.RegressionGaps(ax)
 	}
+	return s.RegressionGapsVisible(ax, nil)
+}
+
+// RegressionGapsVisible zählt und liefert nur Einträge, die keep zulässt (nil =
+// alle). Die Zahl der Unbeurteilten läuft durch denselben Filter, damit sie
+// nichts über unsichtbare Einträge verrät.
+func (s *Store) RegressionGapsVisible(ax scope.Axes, keep func(Knowledge) bool) ([]Knowledge, int, error) {
+	if s.reader != nil {
+		return s.reader.RegressionGapsVisible(ax, keep)
+	}
 	where, args := ax.UnionWhere()
 	rows, err := s.db.Query(`SELECT id,type,title,body,project,branch,machine,confidence,status,origin,
 		person,confirmed_by,last_modified_by,harness,session_ref,observed_at,
@@ -84,15 +94,36 @@ func (s *Store) RegressionGaps(ax scope.Axes) ([]Knowledge, int, error) {
 			&k.SessionRef, &k.ObservedAt, &k.RegressionState, &k.RegressionTest, &k.CreatedAt, &k.UpdatedAt); err != nil {
 			return nil, 0, err
 		}
-		gaps = append(gaps, k)
+		if keep == nil || keep(k) {
+			gaps = append(gaps, k)
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, 0, err
 	}
 	// Nur Pitfalls: eine Entscheidung oder Notiz hat keine Regressionsfrage, und
 	// sie ungefragt mitzuzählen liesse die Lücke grösser aussehen, als sie ist.
-	var unreviewed int
-	err = s.db.QueryRow(`SELECT COUNT(*) FROM knowledge
-		WHERE type='pitfall' AND regression_state='' AND status='active' AND `+where, args...).Scan(&unreviewed)
-	return gaps, unreviewed, err
+	if keep == nil {
+		var unreviewed int
+		err = s.db.QueryRow(`SELECT COUNT(*) FROM knowledge
+			WHERE type='pitfall' AND regression_state='' AND status='active' AND `+where, args...).Scan(&unreviewed)
+		return gaps, unreviewed, err
+	}
+	pending, err := s.db.Query(`SELECT id,project,branch,machine,confidence,person,confirmed_by FROM knowledge
+		WHERE type='pitfall' AND regression_state='' AND status='active' AND `+where, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer pending.Close()
+	unreviewed := 0
+	for pending.Next() {
+		var k Knowledge
+		if err := pending.Scan(&k.ID, &k.Scope.Project, &k.Scope.Branch, &k.Scope.Machine, &k.Confidence, &k.Person, &k.ConfirmedBy); err != nil {
+			return nil, 0, err
+		}
+		if keep(k) {
+			unreviewed++
+		}
+	}
+	return gaps, unreviewed, pending.Err()
 }

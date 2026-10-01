@@ -208,11 +208,13 @@ func (a *app) knowledgePage(w http.ResponseWriter, r *http.Request) {
 	var entries []store.Knowledge
 	var err error
 	pa := a.access(r)
-	if project != "" && a.accessDenied(w, r, pa.Check(project, store.ResKnowledge, store.ActRead, store.Object{Confidence: "verified"})) {
+	if project != "" && a.accessDenied(w, r, pa.GateList(project, store.ResKnowledge, true)) {
 		return
 	}
+	limit := 0
 	if q != "" {
-		entries, err = a.store.SearchAllKnowledge(q, scope.Axes{Project: project}, a.overfetch(50))
+		limit = 50
+		entries, err = a.store.SearchAllKnowledge(q, scope.Axes{Project: project}, a.overfetch(limit))
 	} else {
 		entries, err = a.store.KnowledgeForProject(project)
 	}
@@ -220,7 +222,7 @@ func (a *app) knowledgePage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	entries = keep(entries, 50, pa.CanSeeKnowledge)
+	entries = keep(entries, limit, pa.CanSeeKnowledge)
 	a.renderBrowser(w, r, "knowledge", pageData{Title: "Knowledge", Knowledge: entries, Project: project})
 }
 
@@ -304,7 +306,8 @@ func (a *app) contextPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	entries = keep(entries, 0, a.access(r).CanSeeKnowledge)
+	pa := a.access(r)
+	entries = keep(entries, 0, func(k store.Knowledge) bool { return pa.CanSeeKnowledge(k) && pa.CanDeliverKnowledge(k) })
 	output := server.RenderBootstrap(entries, 12000)
 	if preview {
 		output = server.RenderBootstrapPreview(entries, 12000)

@@ -126,6 +126,10 @@ type SearchFilter struct {
 	// Cursor nicht mehr.
 	Restrict bool
 	Projects []string
+	// UnclaimedAuthor: Aufträge dieses Autors in Remotes ohne Projektzeile bleiben
+	// sichtbar; UnclaimedAll (Instanz-Admin) zeigt alle dort.
+	UnclaimedAuthor string
+	UnclaimedAll    bool
 }
 
 type SearchHit struct {

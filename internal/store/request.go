@@ -249,6 +249,13 @@ func (s *Store) SearchRequests(filter requestdomain.SearchFilter) (requestdomain
 		if len(marks) > 0 {
 			clause += ` OR r.project IN (` + strings.Join(marks, ",") + `)`
 		}
+		switch {
+		case filter.UnclaimedAll:
+			clause += ` OR r.project NOT IN (SELECT remote FROM projects)`
+		case filter.UnclaimedAuthor != "":
+			clause += ` OR (r.person=? AND r.project NOT IN (SELECT remote FROM projects))`
+			args = append(args, filter.UnclaimedAuthor)
+		}
 		where = append(where, `(`+clause+`)`)
 	}
 	if filter.State != "" {

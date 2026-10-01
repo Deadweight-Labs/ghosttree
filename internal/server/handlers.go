@@ -189,7 +189,7 @@ func (a *api) createKnowledge(w http.ResponseWriter, r *http.Request) {
 func (a *api) listKnowledge(w http.ResponseWriter, r *http.Request) {
 	var ks []store.Knowledge
 	var err error
-	if !a.listGate(w, r, scope.NormalizeRemote(r.URL.Query().Get("project")), store.ResKnowledge) {
+	if !a.listGateEntries(w, r, scope.NormalizeRemote(r.URL.Query().Get("project")), store.ResKnowledge) {
 		return
 	}
 	if r.URL.Query().Get("include_archived") == "1" {
@@ -324,7 +324,7 @@ type PendingEntry struct {
 
 func (a *api) pendingKnowledge(w http.ResponseWriter, r *http.Request) {
 	limit := intParam(r, "limit", 50)
-	if !a.listGate(w, r, scope.NormalizeRemote(r.URL.Query().Get("project")), store.ResKnowledge) {
+	if !a.listGateEntries(w, r, scope.NormalizeRemote(r.URL.Query().Get("project")), store.ResKnowledge) {
 		return
 	}
 	ks, err := a.st.PendingKnowledge(r.URL.Query().Get("project"), a.overfetch(limit))
@@ -434,12 +434,11 @@ func (a *api) regressionGaps(w http.ResponseWriter, r *http.Request) {
 	if !a.listGate(w, r, scope.NormalizeRemote(r.URL.Query().Get("project")), store.ResKnowledge) {
 		return
 	}
-	gaps, unreviewed, err := a.st.RegressionGaps(axesFromQuery(r))
+	gaps, unreviewed, err := a.st.RegressionGapsVisible(axesFromQuery(r), a.access(r).CanSeeKnowledge)
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
-	gaps = filterTo(gaps, 0, a.access(r).CanSeeKnowledge)
 	// Die Zahl der Unbeurteilten reist mit: eine kurze Lückenliste ohne sie
 	// liest sich als Entwarnung, obwohl niemand hingesehen hat.
 	writeJSON(w, http.StatusOK, map[string]any{"gaps": gaps, "unreviewed": unreviewed})
@@ -515,7 +514,9 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 			writeStoreError(w, http.StatusInternalServerError, err)
 			return
 		}
-		res.Knowledge = filterTo(ks, limit, pa.CanSeeKnowledge)
+		// Suche und Bootstrap beliefern Agenten: zusätzlich zur Sichtbarkeit gilt
+		// die Auslieferungsregel (Autor ist im Projekt aktuell member).
+		res.Knowledge = filterTo(ks, limit, func(k store.Knowledge) bool { return pa.CanSeeKnowledge(k) && pa.CanDeliverKnowledge(k) })
 	}
 	if kind == "sessions" || kind == "all" {
 		hits, err := a.st.SearchSessions(q, filter, r.URL.Query().Get("exclude_session"), fetch)
@@ -556,7 +557,7 @@ func (a *api) bootstrap(w http.ResponseWriter, r *http.Request) {
 	// jede andere Lesung: globales Wissen für alle, Projektwissen nach Rolle,
 	// Maschinenwissen nur für den Besitzer der Maschine.
 	pa := a.access(r)
-	entries = filterTo(entries, 0, pa.CanSeeKnowledge)
+	entries = filterTo(entries, 0, func(k store.Knowledge) bool { return pa.CanSeeKnowledge(k) && pa.CanDeliverKnowledge(k) })
 	openRequests := 0
 	if pa.CanSeeProject(axesFromQuery(r).Project, store.ResRequest) {
 		if openRequests, err = a.st.CountOpenRequests(axesFromQuery(r)); err != nil {
@@ -622,7 +623,7 @@ func (a *api) relevant(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
-	entries = filterTo(entries, limit, pa.CanSeeKnowledge)
+	entries = filterTo(entries, limit, func(k store.Knowledge) bool { return pa.CanSeeKnowledge(k) && pa.CanDeliverKnowledge(k) })
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 	w.WriteHeader(200)
 	if len(entries) == 0 {
@@ -907,7 +908,8 @@ func (a *api) ghostsForPath(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, 200, entries)
+	pa := a.access(r)
+	writeJSON(w, 200, filterTo(entries, 0, func(g store.GhostFile) bool { return pa.CanSeeGhost(g) && pa.CanDeliverGhost(g) }))
 }
 
 // ghostsMove hängt eine Beschreibung samt Historie auf einen neuen Pfad. Die
@@ -967,7 +969,7 @@ func (a *api) ghostHistory(w http.ResponseWriter, r *http.Request) {
 
 func (a *api) ghostTree(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	if !a.listGate(w, r, scope.NormalizeRemote(q.Get("project")), store.ResGhost) {
+	if !a.listGateEntries(w, r, scope.NormalizeRemote(q.Get("project")), store.ResGhost) {
 		return
 	}
 	entries, err := a.st.GhostFilesUnder(q.Get("project"), q.Get("prefix"))
@@ -975,13 +977,13 @@ func (a *api) ghostTree(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, 200, entries)
+	writeJSON(w, 200, filterTo(entries, 0, a.access(r).CanSeeGhost))
 }
 
 func (a *api) searchGhosts(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	pa := a.access(r)
-	if q.Get("project") != "" && !a.listGate(w, r, scope.NormalizeRemote(q.Get("project")), store.ResGhost) {
+	if q.Get("project") != "" && !a.listGateEntries(w, r, scope.NormalizeRemote(q.Get("project")), store.ResGhost) {
 		return
 	}
 	pa.Filtered()
@@ -991,7 +993,5 @@ func (a *api) searchGhosts(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, 200, filterTo(entries, limit, func(g store.GhostFile) bool {
-		return pa.CanSeeProject(g.Project, store.ResGhost)
-	}))
+	writeJSON(w, 200, filterTo(entries, limit, func(g store.GhostFile) bool { return pa.CanSeeGhost(g) && pa.CanDeliverGhost(g) }))
 }

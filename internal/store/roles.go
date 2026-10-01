@@ -599,3 +599,29 @@ func (s *Store) OrgOwnerPrincipal(orgID int64) (string, bool) {
 	}
 	return principalOfID(id), true
 }
+
+// ProjectWriters nennt die Namen der Konten, die im Projekt aktuell mindestens
+// member sind (Org-Owner implizit als owner). Dieselbe Ableitung wie ProjectRole;
+// ein Test hält beide gleich.
+func (s *Store) ProjectWriters(remote string) map[string]bool {
+	if s.reader != nil {
+		return s.reader.ProjectWriters(remote)
+	}
+	out := map[string]bool{}
+	rows, err := s.db.Query(`SELECT p.name FROM projects pr
+		JOIN org_members om ON om.org_id=pr.org_id
+		JOIN persons p ON p.id=om.account_id
+		LEFT JOIN project_members pm ON pm.project_id=pr.id AND pm.account_id=p.id
+		WHERE pr.remote=? AND (om.role=? OR pm.role IN (?,?,?))`, remote, OrgOwner, RoleOwner, RoleLead, RoleMember)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if rows.Scan(&name) == nil {
+			out[name] = true
+		}
+	}
+	return out
+}

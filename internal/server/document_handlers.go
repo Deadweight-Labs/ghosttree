@@ -213,7 +213,7 @@ func (a *api) patchDocument(w http.ResponseWriter, r *http.Request) {
 
 func (a *api) listDocuments(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	if !a.listGate(w, r, scope.NormalizeRemote(q.Get("project")), store.ResDocument) {
+	if !a.listGateEntries(w, r, scope.NormalizeRemote(q.Get("project")), store.ResDocument) {
 		return
 	}
 	ds, err := a.st.Documents(scope.NormalizeRemote(q.Get("project")), q.Get("kind"), q.Get("include_archived") == "1")
@@ -221,6 +221,7 @@ func (a *api) listDocuments(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
+	ds = filterTo(ds, 0, a.access(r).CanSeeDocument)
 	if slug := q.Get("slug"); slug != "" {
 		for _, d := range ds {
 			if d.Slug == slug {

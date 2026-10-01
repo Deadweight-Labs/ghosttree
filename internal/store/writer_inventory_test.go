@@ -32,6 +32,8 @@ var writerMethodClasses = map[string]string{
 	"ProjectRole":                   "read",
 	"SetSessionShared":              "write",
 	"AccountRoles":                  "read",
+	"ProjectWriters":                "read",
+	"RegressionGapsVisible":         "read",
 	"RequestRef":                    "read",
 	"KnowledgeRef":                  "read",
 	"MigrationProject":              "read",

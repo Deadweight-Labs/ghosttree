@@ -433,3 +433,10 @@ func (a *api) checkDocument(w http.ResponseWriter, r *http.Request, id int64, ac
 	}
 	return !denyAccess(w, pa.Check(d.Project, store.ResDocument, act, store.Object{Own: pa.IsAuthor(d.Person)}))
 }
+
+// listGateEntries ist listGate für Handler, die jeden Eintrag danach mit Own
+// filtern: eine unbeanspruchte Remote geht dann durch, und der Filter zeigt dem
+// Autor das Seine, allen anderen nichts.
+func (a *api) listGateEntries(w http.ResponseWriter, r *http.Request, project string, res store.Resource) bool {
+	return !denyAccess(w, a.access(r).GateList(project, res, true))
+}

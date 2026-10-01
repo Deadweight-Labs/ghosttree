@@ -35,6 +35,15 @@ Versioning, with pre-1.0 compatibility rules described in
   unclassified route aborts at startup, and tests fail if the table and the
   registered routes differ or if a project route answers without asking
   `ProjectAccess`. The roles of an account are loaded with one query per request.
+  `public_only=1` on threads only selects unrestricted threads and never loosens
+  the project role. In a remote nobody owns yet, the author sees and changes
+  their own entries and the instance admin sees everything; nothing else is
+  visible. Agents (bootstrap, relevant knowledge, ghost hook, search) are only
+  handed content whose author is currently at least `member` of the project
+  (ghosts: has write access); what strangers stored before a claim stays stored
+  and visible to the owner but is not delivered until a reviewer, lead or owner
+  sets the knowledge entry to `verified`. Content with no author (operator
+  paths) is delivered.
 
 - Add organizations, projects and invitations. An organization has members
   (roles `owner` and `member`; an account can belong to several) and owns

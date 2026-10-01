@@ -189,3 +189,26 @@ func TestWebPagesFollowVisibility(t *testing.T) {
 	page("nora", "/ui/sessions/"+strconv.FormatInt(sessions["mia"], 10), 404)
 	_ = http.StatusOK
 }
+
+// Im Log-Modus zeigt die Wissensseite jedem Konto dieselben Einträge wie der
+// Store, ohne Kappung bei 50.
+func TestWebKnowledgePageInLogModeIsUnfiltered(t *testing.T) {
+	const project = "github.com/dw/p"
+	srv, st, token := testWeb(t)
+	for i := 0; i < 60; i++ {
+		if _, err := st.InsertKnowledge(store.Knowledge{Type: "note", Title: "entry-" + strconv.Itoa(i), Body: "b", Scope: scope.Axes{Project: project}, Person: "x", Confidence: "staged"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c := login(t, srv, token)
+	resp, err := c.Get(srv.URL + "/ui/knowledge?project=" + project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := body(t, resp)
+	for i := 0; i < 60; i++ {
+		if !strings.Contains(out, "entry-"+strconv.Itoa(i)+"<") && !strings.Contains(out, "entry-"+strconv.Itoa(i)+" ") && !strings.Contains(out, ">entry-"+strconv.Itoa(i)) {
+			t.Fatalf("entry-%d missing from the page", i)
+		}
+	}
+}

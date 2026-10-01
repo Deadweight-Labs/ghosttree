@@ -503,7 +503,9 @@ func (a CoordAccess) canReadThreadTx(tx *sql.Tx, actor string, threadID int64) e
 			return nil
 		}
 		if a.publicOnly {
-			return nil
+			// public_only ist eine Auswahl (nur nicht eingeschränkte Threads), nie
+			// eine Lockerung: die Projektrolle gilt auch hier.
+			return a.projectRoomGate(RoomProject, RoomKeyForProject(project), ResRoom, tx)
 		}
 		return a.requireRoomAccessTx(tx, actor, RoomKeyForProject(project))
 	}
@@ -902,6 +904,8 @@ func (a CoordAccess) SearchThreads(project, query string, includeArchived bool, 
 		if err := a.requireRoomAccessTx(tx, actor, RoomKeyForProject(project)); err != nil {
 			return nil, err
 		}
+	} else if err := a.projectRoomGate(RoomProject, RoomKeyForProject(project), ResRoom, tx); err != nil {
+		return nil, err
 	}
 	if limit <= 0 || limit > 200 {
 		limit = 50

@@ -276,6 +276,9 @@ type ProjectAccess struct {
 	machines map[string]int64
 	owner    int64
 
+	unclaimed map[string]bool
+	writers   map[string]map[string]bool
+
 	checks atomic.Int32
 	loads  atomic.Int32
 }
@@ -327,6 +330,19 @@ func (a *ProjectAccess) Projects() []string {
 // Filtered vermerkt, dass ein Handler sein Ergebnis über Allow/CanSee* filtert;
 // auch eine leere Liste hat dann geprüft.
 func (a *ProjectAccess) Filtered() { a.checks.Add(1) }
+
+// Unclaimed: zu der Remote gibt es keine Projektzeile (einmal je Anfrage geprüft).
+func (a *ProjectAccess) Unclaimed(project string) bool {
+	if a.unclaimed == nil {
+		a.unclaimed = map[string]bool{}
+	}
+	if v, ok := a.unclaimed[project]; ok {
+		return v
+	}
+	_, claimed := a.st.ProjectByRemote(project)
+	a.unclaimed[project] = !claimed
+	return !claimed
+}
 
 // IsAdmin: Instanz-Admin (persons.is_admin).
 func (a *ProjectAccess) IsAdmin() bool {
@@ -389,10 +405,11 @@ func (a *ProjectAccess) Decide(project string, res Resource, act Action, obj Obj
 		return Decision{Allowed: true}
 	}
 	rank := RoleRank(role.Role)
-	// Eine Remote ohne Projektzeile ist unbeansprucht; Anlegen bleibt wie bisher
-	// möglich (gateProject), alles andere gibt es für den Aufrufer nicht.
-	if rank == 0 && act == ActCreate {
-		if _, claimed := a.st.ProjectByRemote(project); !claimed {
+	// Eine Remote ohne Projektzeile ist unbeansprucht. Anlegen bleibt wie bisher
+	// möglich (gateProject); der Autor sieht und ändert seine eigenen Einträge
+	// dort immer, der Instanz-Admin sieht alles, andere nichts.
+	if rank == 0 && a.Unclaimed(project) {
+		if act == ActCreate || obj.Own || a.IsAdmin() {
 			return Decision{Allowed: true, Reason: "unclaimed project"}
 		}
 	}
@@ -414,7 +431,7 @@ func (a *ProjectAccess) Decide(project string, res Resource, act Action, obj Obj
 // Sessions ohne Projekt gehören ihrem Besitzer.
 func (a *ProjectAccess) decideGlobal(res Resource, act Action, obj Object) Decision {
 	switch res {
-	case ResKnowledge, ResRequest:
+	case ResKnowledge, ResRequest, ResDocument:
 		switch act {
 		case ActRead, ActCreate, ActWork:
 			return Decision{Allowed: true}
@@ -519,6 +536,7 @@ func (a *ProjectAccess) RequestFilter(f requestdomain.SearchFilter) requestdomai
 		return f
 	}
 	f.Restrict, f.Projects = true, a.Projects()
+	f.UnclaimedAuthor, f.UnclaimedAll = a.principal.Label, a.IsAdmin()
 	return f
 }
 
@@ -531,4 +549,84 @@ func (a *ProjectAccess) NoteRequestHits(hits []requestdomain.SearchHit) {
 	for _, h := range hits {
 		a.Allow(h.Request.Scope.Project, ResRequest, ActRead, Object{})
 	}
+}
+
+// ResDelivery ist das Ausliefern von Inhalt an Agenten (Bootstrap, relevantes
+// Wissen, Ghost-Hook, Suche). Es ist strenger als Lesen: ausgeliefert wird nur,
+// was jemand abgelegt hat, der im Projekt jetzt mindestens member ist.
+const ResDelivery Resource = "delivery"
+
+func (a *ProjectAccess) writersOf(project string) map[string]bool {
+	if a.writers == nil {
+		a.writers = map[string]map[string]bool{}
+	}
+	w, ok := a.writers[project]
+	if !ok {
+		w = a.st.ProjectWriters(project)
+		a.writers[project] = w
+	}
+	return w
+}
+
+// deliverable: der Autor ist im Projekt aktuell mindestens member. Ein leerer
+// Autor (Betreiberpfade wie der Distiller) zählt als vertrauenswürdig. Im
+// unbeanspruchten Projekt liefert der Aufrufer seine eigenen Einträge aus.
+func (a *ProjectAccess) deliverable(project, author, confirmedBy string, verified bool) bool {
+	if project == "" || author == "" {
+		return true
+	}
+	if a.Unclaimed(project) {
+		return a.IsAuthor(author) || a.IsAdmin()
+	}
+	w := a.writersOf(project)
+	if w[author] {
+		return true
+	}
+	// Übernahme: ein Prüfer, Lead oder Owner, der den Eintrag auf verified setzt,
+	// übernimmt ihn; das Setzen verlangt das Verified-Recht.
+	return verified && confirmedBy != "" && w[confirmedBy]
+}
+
+func (a *ProjectAccess) applyDelivery(project string, ok bool) bool {
+	d := Decision{Allowed: ok, Hidden: true, Reason: "author is not a member of the project"}
+	return a.st.accessCfg().apply(a.principal.ID, project, ResDelivery, ActRead, d)
+}
+
+// CanDeliverKnowledge: Eintrag darf an einen Agenten ausgeliefert werden. Gilt
+// zusätzlich zu CanSeeKnowledge. Inhalt, den Fremde vor dem Claim eines Projekts
+// abgelegt haben, bleibt gespeichert und sichtbar, wird aber nicht ausgeliefert,
+// bis ein Prüfer, Lead oder Owner ihn auf verified setzt.
+func (a *ProjectAccess) CanDeliverKnowledge(k Knowledge) bool {
+	if k.Scope.Project == "" {
+		return true
+	}
+	return a.applyDelivery(k.Scope.Project, a.deliverable(k.Scope.Project, k.Person, k.ConfirmedBy, k.Confidence == "verified"))
+}
+
+// CanDeliverGhost: bei Ghost-Beschreibungen muss der Autor Schreibrecht haben.
+func (a *ProjectAccess) CanDeliverGhost(g GhostFile) bool {
+	return a.applyDelivery(g.Project, a.deliverable(g.Project, g.Person, "", false))
+}
+
+// CanSeeGhost: Lesefilter für Ghost-Listen (der Autor sieht seine eigenen).
+func (a *ProjectAccess) CanSeeGhost(g GhostFile) bool {
+	return a.Allow(g.Project, ResGhost, ActRead, Object{Own: a.IsAuthor(g.Person)})
+}
+
+// CanSeeDocument: Lesefilter für Dokumentlisten.
+func (a *ProjectAccess) CanSeeDocument(d Document) bool {
+	return a.Allow(d.Project, ResDocument, ActRead, Object{Own: a.IsAuthor(d.Person)})
+}
+
+// GateList entscheidet, ob eine Liste mit ausdrücklichem Projekt überhaupt
+// angefragt werden darf. perEntry sagt, dass der Aufrufer jeden Eintrag danach
+// filtert (mit Own); dann darf auch eine unbeanspruchte Remote durch, weil der
+// Filter dem Autor das Seine zeigt und allen anderen nichts.
+func (a *ProjectAccess) GateList(project string, res Resource, perEntry bool) error {
+	project = strings.TrimSpace(project)
+	if perEntry && project != "" && a.Unclaimed(project) && a.Role(project).Role == "" {
+		a.Filtered()
+		return nil
+	}
+	return a.Check(project, res, ActRead, Object{Confidence: "verified"})
 }
