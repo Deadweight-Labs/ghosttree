@@ -23,7 +23,7 @@ jobs:
         env:
           BASE: ${{ github.base_ref }}
           HEAD: ${{ github.head_ref }}
-          ACTOR: ${{ github.actor }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
@@ -35,9 +35,9 @@ jobs:
             *) echo "Pull requests target dev or release/*; only release/* and hotfix/* target main."; exit 1 ;;
           esac
           printf '%s\n' "$PR_TITLE" | grep -Eq '^(feat|fix|docs|test|build|ci|chore|refactor|perf|revert)(\([a-z0-9._-]+\))?!?: .+'
-          if [ "$ACTOR" = "dependabot[bot]" ]; then
-            exit 0
-          fi
+          case "$PR_AUTHOR:$HEAD" in
+            "dependabot[bot]:dependabot/"*) exit 0 ;;
+          esac
           test "$(printf '%s\n' "$PR_BODY" | grep -Ec "^- \[[xX]\] \`(major|minor|patch|none)\`")" -eq 1
           printf '%s\n' "$PR_BODY" | grep -Eq '^- \[[xX]\] I have read and agree to the .*Contributor License Agreement'
 
