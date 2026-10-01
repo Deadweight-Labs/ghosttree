@@ -2,6 +2,7 @@ package web
 
 import (
 	"crypto"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -15,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -41,6 +43,16 @@ type fakeIdP struct {
 	nonce    string        // leer = Nonce der Anfrage
 	lifetime time.Duration // 0 = 5 Minuten
 	exchange int
+
+	// Fehlerhafte Tokens und Abläufe für gezielte Tests.
+	issuer         string          // leer = echter Issuer
+	signKey        *rsa.PrivateKey // leer = der veröffentlichte Schlüssel
+	kid            string          // leer = k1
+	alg            string          // leer = RS256, sonst "none" oder "HS256"
+	unverified     bool            // email_verified=false
+	extraAudiences []string
+	azp            string
+	breakChallenge bool // der IdP merkt sich eine falsche PKCE-Challenge
 }
 
 type fakeGrant struct{ challenge, nonce, redirect string }
@@ -87,7 +99,11 @@ func (f *fakeIdP) authorize(w http.ResponseWriter, r *http.Request) {
 	}
 	code := "code-" + q.Get("state")[:8]
 	f.mu.Lock()
-	f.codes[code] = fakeGrant{challenge: q.Get("code_challenge"), nonce: q.Get("nonce"), redirect: q.Get("redirect_uri")}
+	challenge := q.Get("code_challenge")
+	if f.breakChallenge {
+		challenge = b64([]byte("not-the-challenge"))
+	}
+	f.codes[code] = fakeGrant{challenge: challenge, nonce: q.Get("nonce"), redirect: q.Get("redirect_uri")}
 	f.mu.Unlock()
 	back, _ := url.Parse(q.Get("redirect_uri"))
 	v := back.Query()
@@ -127,21 +143,53 @@ func (f *fakeIdP) token(w http.ResponseWriter, r *http.Request) {
 		life = 5 * time.Minute
 	}
 	now := time.Now()
-	idToken := f.sign(map[string]any{
-		"iss": f.srv.URL, "sub": f.subject, "aud": aud, "nonce": nonce,
+	iss := f.srv.URL
+	if f.issuer != "" {
+		iss = f.issuer
+	}
+	claims := map[string]any{
+		"iss": iss, "sub": f.subject, "aud": aud, "nonce": nonce,
 		"iat": now.Add(-time.Minute).Unix(), "exp": now.Add(life).Unix(),
-		"email": f.email, "preferred_username": f.username,
-	})
+		"email": f.email, "email_verified": !f.unverified, "preferred_username": f.username,
+	}
+	if len(f.extraAudiences) > 0 {
+		claims["aud"] = append([]string{aud}, f.extraAudiences...)
+	}
+	if f.azp != "" {
+		claims["azp"] = f.azp
+	}
+	idToken := f.sign(claims)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"access_token": "at", "token_type": "Bearer", "id_token": idToken})
 }
 
 func (f *fakeIdP) sign(claims map[string]any) string {
-	header, _ := json.Marshal(map[string]string{"alg": "RS256", "kid": "k1", "typ": "JWT"})
+	kid := "k1"
+	if f.kid != "" {
+		kid = f.kid
+	}
+	alg := "RS256"
+	if f.alg != "" {
+		alg = f.alg
+	}
+	header, _ := json.Marshal(map[string]string{"alg": alg, "kid": kid, "typ": "JWT"})
 	payload, _ := json.Marshal(claims)
 	signing := b64(header) + "." + b64(payload)
+	switch alg {
+	case "none":
+		return signing + "."
+	case "HS256":
+		// Klassische Verwechslung: HMAC mit dem öffentlichen Schlüssel als Geheimnis.
+		mac := hmac.New(sha256.New, f.key.N.Bytes())
+		mac.Write([]byte(signing))
+		return signing + "." + b64(mac.Sum(nil))
+	}
+	key := f.key
+	if f.signKey != nil {
+		key = f.signKey
+	}
 	sum := sha256.Sum256([]byte(signing))
-	sig, err := rsa.SignPKCS1v15(rand.Reader, f.key, crypto.SHA256, sum[:])
+	sig, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, sum[:])
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -149,6 +197,7 @@ func (f *fakeIdP) sign(claims map[string]any) string {
 }
 
 type oidcEnv struct {
+	app    *app
 	idp    *fakeIdP
 	web    *httptest.Server
 	store  *store.Store
@@ -179,7 +228,8 @@ func newOIDCEnv(t *testing.T, withAlice bool, opts ...Option) *oidcEnv {
 		Issuer: env.idp.srv.URL, ClientID: testClientID, ClientSecret: env.idp.secret,
 		RedirectURL: env.web.URL + "/ui/login/oidc/callback",
 	})}, opts...)
-	handler = New(st, all...)
+	handler = newApp(st, all...)
+	env.app = handler.(*appHandler).app
 	return env
 }
 
@@ -336,6 +386,17 @@ func TestOIDCRejectsBadIDTokens(t *testing.T) {
 		{"wrong nonce", func(f *fakeIdP) { f.nonce = "evil-nonce" }},
 		{"wrong audience", func(f *fakeIdP) { f.audience = "another-client" }},
 		{"expired", func(f *fakeIdP) { f.lifetime = -time.Hour }},
+		{"wrong issuer", func(f *fakeIdP) { f.issuer = "https://evil.example.test" }},
+		{"signed with another key", func(f *fakeIdP) {
+			k, _ := rsa.GenerateKey(rand.Reader, 2048)
+			f.signKey = k
+		}},
+		{"unknown kid", func(f *fakeIdP) { f.kid = "unknown" }},
+		{"alg none", func(f *fakeIdP) { f.alg = "none" }},
+		{"alg HS256 with the public key as secret", func(f *fakeIdP) { f.alg = "HS256" }},
+		{"several audiences without azp", func(f *fakeIdP) { f.extraAudiences = []string{"other-client"} }},
+		{"azp of another client", func(f *fakeIdP) { f.extraAudiences = []string{"other-client"}; f.azp = "other-client" }},
+		{"azp of another client with a single audience", func(f *fakeIdP) { f.azp = "other-client" }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			env := newOIDCEnv(t, true)
@@ -683,5 +744,213 @@ func rawExec(t *testing.T, env *oidcEnv, query string) {
 	defer db.Close()
 	if _, err := db.Exec(query); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestOIDCAcceptsSeveralAudiencesWhenAzpIsThisClient(t *testing.T) {
+	env := newOIDCEnv(t, true)
+	env.idp.extraAudiences = []string{"other-client"}
+	env.idp.azp = testClientID
+	b := newBrowser(t)
+	resp := env.callback(t, b, env.startFlow(t, b, env.claimCode(t, "alice")))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther || !env.signedIn(t, b) {
+		t.Fatalf("status=%d", resp.StatusCode)
+	}
+}
+
+func TestOIDCStoresOnlyAVerifiedEmail(t *testing.T) {
+	env := newOIDCEnv(t, true)
+	env.idp.unverified = true
+	b := newBrowser(t)
+	resp := env.callback(t, b, env.startFlow(t, b, env.claimCode(t, "alice")))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("status=%d", resp.StatusCode)
+	}
+	if a, _ := env.store.AccountByName("alice"); a.Email != "" {
+		t.Fatalf("unverified email stored: %q", a.Email)
+	}
+	// Bootstrap: auch dort kein Email-Eintrag und kein Name daraus.
+	boot := newOIDCEnv(t, false)
+	boot.idp.unverified = true
+	boot.idp.username = ""
+	code, _, _ := boot.store.EnsureBootstrapCode()
+	b = newBrowser(t)
+	resp = boot.callback(t, b, boot.startFlow(t, b, code))
+	resp.Body.Close()
+	accounts, _ := boot.store.ListAccounts()
+	if len(accounts) != 1 || accounts[0].Email != "" || accounts[0].Name != "admin" {
+		t.Fatalf("accounts=%+v", accounts)
+	}
+}
+
+func TestOIDCRejectsAWrongPKCEVerifier(t *testing.T) {
+	env := newOIDCEnv(t, true)
+	env.idp.breakChallenge = true // der IdP erwartet eine andere Challenge als die gesendete
+	b := newBrowser(t)
+	code := env.claimCode(t, "alice")
+	resp := env.callback(t, b, env.startFlow(t, b, code))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadGateway || env.signedIn(t, b) || env.idp.exchange != 0 {
+		t.Fatalf("status=%d exchanges=%d", resp.StatusCode, env.idp.exchange)
+	}
+}
+
+func TestOIDCFlowCookieCannotBeForgedTamperedOrReusedAfterExpiry(t *testing.T) {
+	env := newOIDCEnv(t, true)
+	flowFor := func(b *http.Client) *http.Cookie {
+		for _, c := range b.Jar.Cookies(mustURL(env.web.URL + "/ui/login/oidc/callback")) {
+			if c.Name == flowCookie {
+				return c
+			}
+		}
+		t.Fatal("no flow cookie")
+		return nil
+	}
+	b := newBrowser(t)
+	cb := env.startFlow(t, b, env.claimCode(t, "alice"))
+	good := flowFor(b)
+
+	// Garbage und verändertes Cookie.
+	for name, value := range map[string]string{
+		"garbage":  "AAAA",
+		"tampered": good.Value[:len(good.Value)-2] + "xx",
+	} {
+		bad := newBrowser(t)
+		bad.Jar.SetCookies(mustURL(env.web.URL), []*http.Cookie{{Name: flowCookie, Value: value, Path: "/"}})
+		resp := env.callback(t, bad, cb)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest || env.signedIn(t, bad) {
+			t.Fatalf("%s: status=%d", name, resp.StatusCode)
+		}
+	}
+
+	// Abgelaufen: die Uhr läuft über die zehn Minuten hinaus.
+	env2 := newOIDCEnv(t, true)
+	b2 := newBrowser(t)
+	cb2 := env2.startFlow(t, b2, env2.claimCode(t, "alice"))
+	env2.clock(t, 11*time.Minute)
+	resp := env2.callback(t, b2, cb2)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest || env2.signedIn(t, b2) {
+		t.Fatalf("expired flow status=%d", resp.StatusCode)
+	}
+}
+
+// clock schiebt die Uhr des OIDC-Clients vor.
+func (e *oidcEnv) clock(t *testing.T, d time.Duration) {
+	t.Helper()
+	e.app.oidc.now = func() time.Time { return time.Now().Add(d) }
+}
+
+func TestLoginPostsAreBoundedInSizeAndCodeLength(t *testing.T) {
+	env := newOIDCEnv(t, true)
+	b := newBrowser(t)
+	post := func(path string, form url.Values) *http.Response {
+		return sameOriginPostForm(t, b, env.web.URL+path, form)
+	}
+	big := url.Values{"code": {strings.Repeat("a", 1<<20)}}
+	for _, path := range []string{"/ui/login/oidc", "/ui/login", "/ui/login/code"} {
+		resp := post(path, big)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusRequestEntityTooLarge {
+			t.Errorf("%s oversized body status=%d", path, resp.StatusCode)
+		}
+	}
+	long := url.Values{"code": {strings.Repeat("a", maxCodeLength+1)}}
+	for _, path := range []string{"/ui/login/oidc", "/ui/login/code"} {
+		resp := post(path, long)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s long code status=%d", path, resp.StatusCode)
+		}
+	}
+	// Die Grenze selbst ist erlaubt, und der Ablauf funktioniert danach weiter.
+	edge := post("/ui/login/oidc", url.Values{"code": {strings.Repeat("a", maxCodeLength)}})
+	edge.Body.Close()
+	if edge.StatusCode != http.StatusSeeOther {
+		t.Fatalf("edge status=%d", edge.StatusCode)
+	}
+	b2 := newBrowser(t)
+	resp := env.callback(t, b2, env.startFlow(t, b2, env.claimCode(t, "alice")))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther || !env.signedIn(t, b2) {
+		t.Fatalf("flow after oversized posts status=%d", resp.StatusCode)
+	}
+}
+
+func TestManyParallelStartsFromOneClientDoNotBlockOthersAndHoldNoServerState(t *testing.T) {
+	env := newOIDCEnv(t, true)
+	const starts = 3000
+	var wg sync.WaitGroup
+	work := make(chan struct{}, starts)
+	for i := 0; i < starts; i++ {
+		work <- struct{}{}
+	}
+	close(work)
+	var failed int32
+	var mu sync.Mutex
+	for w := 0; w < 32; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+			for range work {
+				req, _ := http.NewRequest(http.MethodPost, env.web.URL+"/ui/login/oidc", strings.NewReader("code=x"))
+				req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+				req.Header.Set("Origin", env.web.URL)
+				resp, err := client.Do(req)
+				if err != nil || resp.StatusCode != http.StatusSeeOther {
+					mu.Lock()
+					failed++
+					mu.Unlock()
+				}
+				if resp != nil {
+					resp.Body.Close()
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	if failed != 0 {
+		t.Fatalf("%d of %d starts were refused", failed, starts)
+	}
+	// Ein anderer Nutzer meldet sich danach ganz normal an.
+	other := newBrowser(t)
+	resp := env.callback(t, other, env.startFlow(t, other, env.claimCode(t, "alice")))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther || !env.signedIn(t, other) {
+		t.Fatalf("login after the flood status=%d", resp.StatusCode)
+	}
+	if n := len(env.app.oidc.used.seen); n != 1 {
+		t.Fatalf("server keeps %d states after %d starts, want only the one completed login", n, starts)
+	}
+}
+
+func TestUsedStatesAreBoundedAndEvictTheOldest(t *testing.T) {
+	u := newUsedStates()
+	now := time.Now()
+	exp := now.Add(time.Hour)
+	for i := 0; i < maxUsedStates+50; i++ {
+		if !u.use(strings.Repeat("s", 1)+strconv.Itoa(i), now, exp) {
+			t.Fatalf("fresh state %d refused", i)
+		}
+	}
+	if len(u.seen) > maxUsedStates || len(u.order) > maxUsedStates {
+		t.Fatalf("list grew to %d", len(u.seen))
+	}
+	if u.use("s"+strconv.Itoa(maxUsedStates+49), now, exp) {
+		t.Fatal("recent state accepted twice")
+	}
+	if !u.use("s0", now, exp) {
+		t.Fatal("evicted oldest state should be accepted again (bounded memory)")
+	}
+	// Abgelaufene Einträge verschwinden von selbst.
+	u2 := newUsedStates()
+	u2.use("old", now, now.Add(time.Minute))
+	u2.use("new", now.Add(2*time.Minute), now.Add(time.Hour))
+	if len(u2.seen) != 1 {
+		t.Fatalf("expired state kept: %v", u2.seen)
 	}
 }

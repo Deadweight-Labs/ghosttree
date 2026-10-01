@@ -174,8 +174,7 @@ func (a *app) loginPage(w http.ResponseWriter, r *http.Request) {
 	a.render(w, "login", a.loginData("Login", ""))
 }
 func (a *app) loginSubmit(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "invalid form", http.StatusBadRequest)
+	if !parseLoginForm(w, r) {
 		return
 	}
 	if !a.pasteLoginAllowed() {
@@ -227,12 +226,15 @@ func (a *app) codePage(w http.ResponseWriter, r *http.Request) {
 	a.render(w, "logincode", data)
 }
 func (a *app) codeSubmit(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "invalid form", http.StatusBadRequest)
+	if !parseLoginForm(w, r) {
 		return
 	}
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	code := strings.TrimSpace(r.FormValue("code"))
+	if len(code) > maxCodeLength || len(r.FormValue("name")) > maxNameLength {
+		http.Error(w, "field too long", http.StatusBadRequest)
+		return
+	}
 	var account store.Account
 	var err error
 	switch a.store.CodeKindFor(code) {

@@ -49,6 +49,16 @@ type reviewEntry struct {
 }
 
 func New(st *store.Store, opts ...Option) http.Handler {
+	return newApp(st, opts...)
+}
+
+// appHandler gibt Tests Zugriff auf den app-Zustand hinter dem Handler.
+type appHandler struct {
+	http.Handler
+	app *app
+}
+
+func newApp(st *store.Store, opts ...Option) http.Handler {
 	a := &app{store: st, sessions: newSessions()}
 	for _, opt := range opts {
 		opt(a)
@@ -86,7 +96,7 @@ func New(st *store.Store, opts ...Option) http.Handler {
 	mux.Handle("POST /ui/coord/group/update", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordUpdateGroup))))
 	mux.Handle("POST /ui/coord/group/leave", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordLeaveGroup))))
 	mux.HandleFunc("GET /ui/{$}", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/ui/requests", http.StatusSeeOther) })
-	return mux
+	return &appHandler{Handler: mux, app: a}
 }
 
 func (a *app) render(w http.ResponseWriter, name string, data pageData) {
