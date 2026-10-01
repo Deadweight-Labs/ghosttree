@@ -4,6 +4,7 @@ import (
 	"net/url"
 	"strconv"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
@@ -97,4 +98,56 @@ func (c *Client) RenameOrg(org, name, slug string) (store.Org, error) {
 	var out store.Org
 	err := c.do("PATCH", orgPath(org), nil, map[string]string{"name": name, "slug": slug}, &out)
 	return out, err
+}
+
+// ProjectRoles ist die Antwort auf die Rollenliste eines Projekts.
+type ProjectRoles struct {
+	Project store.Project         `json:"project"`
+	Members []store.ProjectMember `json:"members"`
+	You     store.RoleInfo        `json:"you"`
+}
+
+// projectID sucht die numerische Id der Remote unter den Projekten des Kontos.
+func (c *Client) projectID(remote string) (int64, error) {
+	projects, err := c.ListProjects("")
+	if err != nil {
+		return 0, err
+	}
+	want := scope.NormalizeRemote(remote)
+	for _, p := range projects {
+		if p.Remote == want {
+			return p.ID, nil
+		}
+	}
+	return 0, &APIError{Status: 404, Code: "project_not_found", Message: "project not found: " + remote}
+}
+
+func projectRolePath(id int64) string {
+	return "/api/projects/" + strconv.FormatInt(id, 10) + "/members"
+}
+
+func (c *Client) ProjectRoles(remote string) (ProjectRoles, error) {
+	var out ProjectRoles
+	id, err := c.projectID(remote)
+	if err != nil {
+		return out, err
+	}
+	err = c.do("GET", projectRolePath(id), nil, nil, &out)
+	return out, err
+}
+
+func (c *Client) SetProjectRole(remote, account, role string, canReview bool) error {
+	id, err := c.projectID(remote)
+	if err != nil {
+		return err
+	}
+	return c.do("PUT", projectRolePath(id)+"/"+url.PathEscape(account), nil, map[string]any{"role": role, "can_review": canReview}, nil)
+}
+
+func (c *Client) RemoveProjectRole(remote, account string) error {
+	id, err := c.projectID(remote)
+	if err != nil {
+		return err
+	}
+	return c.do("DELETE", projectRolePath(id)+"/"+url.PathEscape(account), nil, nil, nil)
 }

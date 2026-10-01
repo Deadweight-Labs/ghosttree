@@ -672,3 +672,33 @@ func TestInboxReadsOnWhenServerLacksInjectedRoute(t *testing.T) {
 		}
 	}
 }
+
+// coord_peers nennt die effektive Rolle jedes Peers und die eigene. Ohne
+// Projektzuordnung des Kontos ist sie guest, nie mehr.
+func TestPeersShowEffectiveRoles(t *testing.T) {
+	a, b, _ := twoSessions(t)
+	a.SetAgentRole("lead")
+	ctx := context.Background()
+	for _, s := range []*Server{a, b} {
+		if err := s.joinRoom(mustRoom(t, s)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	res, _, err := a.handleCoordPeers(ctx, nil, CoordPeersInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := text(t, res)
+	if !strings.Contains(got, "you: role guest") || !strings.Contains(got, "role guest") || !strings.Contains(got, "sess-codex") {
+		t.Fatalf("peers lack roles: %s", got)
+	}
+}
+
+func mustRoom(t *testing.T, s *Server) string {
+	t.Helper()
+	key, err := s.roomKeyFor("project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return key
+}

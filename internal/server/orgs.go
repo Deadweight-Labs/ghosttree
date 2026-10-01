@@ -46,6 +46,18 @@ func writeOrgError(w http.ResponseWriter, err error) {
 		writeCoded(w, http.StatusForbidden, "not_org_owner", err.Error())
 	case errors.Is(err, store.ErrNotOrgMember):
 		writeCoded(w, http.StatusForbidden, "not_org_member", err.Error())
+	case errors.Is(err, store.ErrNotGrantor):
+		writeCoded(w, http.StatusForbidden, "not_grantor", err.Error())
+	case errors.Is(err, store.ErrRoleForbidden):
+		writeCoded(w, http.StatusForbidden, "role_forbidden", err.Error())
+	case errors.Is(err, store.ErrSelfPromotion):
+		writeCoded(w, http.StatusForbidden, "self_promotion", err.Error())
+	case errors.Is(err, store.ErrLastProjectOwner):
+		writeCoded(w, http.StatusConflict, "last_owner", err.Error())
+	case errors.Is(err, store.ErrImplicitOwner):
+		writeCoded(w, http.StatusConflict, "implicit_owner", err.Error())
+	case errors.Is(err, store.ErrNoProjectRole):
+		writeCoded(w, http.StatusNotFound, "no_role", err.Error())
 	case errors.Is(err, store.ErrLastOrgOwner):
 		writeCoded(w, http.StatusConflict, "last_owner", err.Error())
 	case errors.Is(err, store.ErrOrgSlugTaken):

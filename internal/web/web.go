@@ -109,7 +109,7 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	for path, h := range map[string]http.HandlerFunc{
 		"/ui/orgs/invite": a.orgInvite, "/ui/orgs/invite/revoke": a.orgInviteRevoke,
 		"/ui/orgs/member/role": a.orgMemberRole, "/ui/orgs/member/remove": a.orgMemberRemove,
-		"/ui/orgs/project/move": a.orgProjectMove, "/ui/orgs/accept": a.orgAccept, "/ui/orgs/default": a.orgDefault,
+		"/ui/orgs/project/move": a.orgProjectMove, "/ui/orgs/project/role": a.orgProjectRole, "/ui/orgs/accept": a.orgAccept, "/ui/orgs/default": a.orgDefault,
 	} {
 		mux.Handle("POST "+path, a.requirePerson(limitBody(a.requireCSRF(h))))
 	}

@@ -26,6 +26,33 @@ Versioning, with pre-1.0 compatibility rules described in
   chunks) and adds three empty tables, so it takes milliseconds on a large
   database. A new instance gets a `default` organization with its bootstrap
   account. Organizations do not change who can see what yet.
+- Add roles per project. Within a project an account is `owner`, `lead`,
+  `member` or `guest` (in that order), and `can_review` marks a reviewer; the
+  flag is not a rank. An organization owner is implicitly owner of every project
+  of the organization, derived on every lookup and never stored; organization
+  membership alone gives no role. Owners grant any role; leads grant `member` or
+  `guest` (and the reviewer flag) to accounts below lead; members and guests
+  grant nothing. Nobody raises their own role, and the last owner of a project
+  cannot be demoted or removed. Leaving an organization or moving a project
+  drops the stored roles. Every change appends to `role_events` (append-only,
+  with who, what and via api, cli or web). `GET /api/projects/{id}/members`,
+  `PUT` and `DELETE .../members/{account}`, `ctx project roles <remote>` and
+  `ctx project role set <remote> <account> <role> [--review]` (also `remove`)
+  and a role select per project on the organizations page read and change them;
+  requests marked as coming from an agent are refused, and the CLI refuses to
+  run inside an agent session. Roles are not enforced anywhere yet, so nobody
+  sees or may do less than before. Existing instances get the two tables and a
+  `role` column on `coord_agents` (default `member`) on startup; existing
+  organization members start without a stored role.
+- Add agent roles. `ctx claude --role lead|member|guest` (default `member`)
+  passes the requested role to `ctx channel` and `ctx mcp` in
+  `GHOSTTREE_AGENT_ROLE`, and both send it when they register. The effective
+  role is computed live on the server as the lower of the requested role and the
+  rank of the agent's account in the project, never above `lead`; an account
+  without a role gives `guest`, and demoting an account demotes its agents at
+  once. Agents never hold `owner` and never grant roles. `coord_peers`, the
+  participant list of the coordination page (project rooms) and
+  `GET /api/coord/agents` show the effective role and the reviewer flag.
 - Add the organization API and CLI. `ctx org list|create|members|invite|
   invitations|accept|default` and `ctx project list|claim|move` talk to the
   server with your token (`/api/orgs`, `/api/projects`, `/api/invitations/accept`).

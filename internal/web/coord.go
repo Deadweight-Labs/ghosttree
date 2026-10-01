@@ -224,6 +224,7 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 		CanLeave: activeRoom.Kind == store.RoomGroup,
 		FormID:   newCoordFormID(), StandingFormID: newCoordFormID(), Threads: buildCoordThreadViews(roomThreads),
 	}
+	applyParticipantRoles(a.store, activeRoom.Key, detail.Participants)
 	markViewerMentions(detail.Messages, presentations, current.ID)
 	detail.ReplyTo, detail.ReplyTarget, err = coordReplyTarget(presentations, r.URL.Query().Get("reply_to"))
 	if err != nil {

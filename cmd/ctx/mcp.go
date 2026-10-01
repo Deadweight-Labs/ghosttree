@@ -18,6 +18,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/snapshot"
 	"github.com/Deadweight-Labs/ghosttree/internal/snapshotmirror"
+	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
 // currentAxes derives the session context from the working directory and the
@@ -60,6 +61,21 @@ func coordAgentOverride() string {
 		return ""
 	}
 	return id
+}
+
+// agentRoleFromEnv liest die per ctx claude --role angeforderte Rolle. Sie
+// gilt nur zusammen mit einer akzeptierten Launcher-Identität: eine geerbte
+// Variable ohne passende Agenten-ID wird ignoriert. Der Server kappt die Rolle
+// ohnehin live am Rang des Kontos.
+func agentRoleFromEnv() string {
+	if coordAgentOverride() == "" {
+		return ""
+	}
+	role := strings.TrimSpace(os.Getenv(agentRoleEnv))
+	if !store.ValidAgentRole(role) {
+		return ""
+	}
+	return role
 }
 
 type harnessContext struct {
@@ -146,6 +162,7 @@ func cmdMCP(args []string, stdout io.Writer) int {
 	srv := mcpserver.NewServer(c, hctx.axes, hctx.activation)
 	srv.SetSessionRef(currentSessionRef())
 	srv.SetCoordRef(coordAgentOverride())
+	srv.SetAgentRole(agentRoleFromEnv())
 	srv.SetRepoRoot(hctx.root)
 	srv.SetAfterSnapshot(func(ctx context.Context, project string) error {
 		return snapshotmirror.Rebuild(ctx, mcpSnapshotLister{client: c}, hctx.root, project)

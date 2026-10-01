@@ -30,7 +30,7 @@ func TestNewAgentIDShape(t *testing.T) {
 }
 
 func TestClaudeMCPConfigSharesIdentity(t *testing.T) {
-	raw, err := claudeMCPConfig("/opt/ctx", "claude:h:1")
+	raw, err := claudeMCPConfig("/opt/ctx", "claude:h:1", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,8 +112,8 @@ func TestRunClaudeLaunchesAndCleansUp(t *testing.T) {
 	}
 	t.Setenv(claudeBinEnv, fake)
 	t.Setenv("TMPDIR", dir)
-	conf, _ := claudeMCPConfig("/opt/ctx", "claude:h:9")
-	if code := runClaude(conf, "claude:h:9", []string{"--resume", "x y"}); code != 7 {
+	conf, _ := claudeMCPConfig("/opt/ctx", "claude:h:9", "")
+	if code := runClaude(conf, "claude:h:9", "", []string{"--resume", "x y"}); code != 7 {
 		t.Fatalf("exit code %d, want 7", code)
 	}
 	b, err := os.ReadFile(rec)
@@ -136,7 +136,7 @@ func TestRunClaudeLaunchesAndCleansUp(t *testing.T) {
 
 func TestRunClaudeMissingBinary(t *testing.T) {
 	t.Setenv(claudeBinEnv, filepath.Join(t.TempDir(), "nope"))
-	if code := runClaude([]byte("{}"), "a", nil); code != 127 {
+	if code := runClaude([]byte("{}"), "a", "", nil); code != 127 {
 		t.Fatalf("code %d", code)
 	}
 }
@@ -239,7 +239,7 @@ func TestRunClaudeForwardsSignalsAndCleansUp(t *testing.T) {
 			t.Setenv(claudeBinEnv, filepath.Join(dir, "claude"))
 			t.Setenv("TMPDIR", dir)
 			codeCh := make(chan int, 1)
-			go func() { codeCh <- runClaude([]byte("{}"), "claude:h:1", nil) }()
+			go func() { codeCh <- runClaude([]byte("{}"), "claude:h:1", "", nil) }()
 			deadline := time.Now().Add(5 * time.Second)
 			for {
 				if _, err := os.Stat(ready); err == nil {

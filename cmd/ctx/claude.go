@@ -14,6 +14,7 @@ import (
 	"syscall"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
+	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
 // agentIDPrefix ist das Provider-Präfix jeder Launcher-Identität; ctx mcp
@@ -24,19 +25,26 @@ const (
 	// agentIDEnv trägt die Koordinationsidentität eines per `ctx claude`
 	// gestarteten Claude. ctx mcp und ctx channel lesen sie beide.
 	agentIDEnv = "GHOSTTREE_AGENT_ID"
+	// agentRoleEnv trägt die mit --role angeforderte Rolle (lead, member,
+	// guest) zu ctx channel und ctx mcp. Der Server kappt sie live am Rang des
+	// Kontos im Projekt, höchstens lead.
+	agentRoleEnv = "GHOSTTREE_AGENT_ROLE"
 	// claudeDryRunEnv entspricht --dry-run.
 	claudeDryRunEnv = "GHOSTTREE_CLAUDE_DRY_RUN"
 	// claudeBinEnv überschreibt das aufgerufene claude-Programm.
 	claudeBinEnv = "GHOSTTREE_CLAUDE_BIN"
 )
 
-const claudeUsage = `usage: ctx claude [--dry-run] [--agent <identity>] [claude args...]
+const claudeUsage = `usage: ctx claude [--dry-run] [--agent <identity>] [--role lead|member|guest] [claude args...]
 
 Starts Claude Code with the ghosttree channel loaded, so coordination messages
 reach the session (a waiting session wakes up, a working one gets the message
 at its next tool result). The identity is generated per launch
 (claude:<host>:<uuid>) unless --agent names one; that
-identity must start with "claude:" or the launcher refuses it. Everything after the
+identity must start with "claude:" or the launcher refuses it. --role asks for
+the agent's role in the project (default member). The server applies
+min(requested, your own rank in the project), never above lead, and recomputes
+it live: demoting your account demotes your agents. Everything after the
 launcher's own flags goes to
 claude unchanged. Set GHOSTTREE_CLAUDE_DRY_RUN=1 to print instead of start.
 
@@ -63,12 +71,16 @@ func newAgentID(machine string) (string, error) {
 // claudeMCPConfig ist der Inhalt der temporären --mcp-config-Datei. Nur der
 // Channel steht darin: das ohnehin registrierte ctx mcp erbt die Identität über
 // die Umgebung des Claude-Prozesses.
-func claudeMCPConfig(exe, agent string) ([]byte, error) {
+func claudeMCPConfig(exe, agent, role string) ([]byte, error) {
+	env := map[string]string{agentIDEnv: agent}
+	if role != "" {
+		env[agentRoleEnv] = role
+	}
 	cfg := map[string]any{"mcpServers": map[string]any{
 		channelServerName: map[string]any{
 			"command": exe,
 			"args":    []string{"channel", "--agent", agent},
-			"env":     map[string]string{agentIDEnv: agent},
+			"env":     env,
 		},
 	}}
 	return json.MarshalIndent(cfg, "", "  ")
@@ -103,6 +115,7 @@ func cmdClaude(args []string, stdout io.Writer) int {
 	// Nur führende Launcher-Flags; alles ab dem ersten anderen Argument gehört
 	// claude.
 	presetAgent := ""
+	role := ""
 	for len(args) > 0 {
 		switch {
 		case args[0] == "--dry-run":
@@ -121,6 +134,14 @@ func cmdClaude(args []string, stdout io.Writer) int {
 				return 2
 			}
 			presetAgent = args[1]
+			args = args[2:]
+			continue
+		case args[0] == "--role":
+			if len(args) < 2 || !store.ValidAgentRole(args[1]) || args[1] == "" {
+				fmt.Fprintln(stdout, "--role needs lead, member or guest (agents are never owner)")
+				return 2
+			}
+			role = args[1]
 			args = args[2:]
 			continue
 		case args[0] == "-h" || args[0] == "--help":
@@ -146,22 +167,26 @@ func cmdClaude(args []string, stdout io.Writer) int {
 		fmt.Fprintf(os.Stderr, "claude: locate ctx binary: %v\n", err)
 		return 1
 	}
-	conf, err := claudeMCPConfig(exe, agent)
+	conf, err := claudeMCPConfig(exe, agent, role)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "claude: %v\n", err)
 		return 1
 	}
 	if dry {
-		fmt.Fprintf(stdout, "agent: %s\ncommand: %s\nenv: %s=%s\nmcp-config:\n%s\n",
-			agent, quoteArgs(claudeProgram(), claudeArgs("<tmp>", args)), agentIDEnv, agent, conf)
+		fmt.Fprintf(stdout, "agent: %s\ncommand: %s\nenv: %s=%s\n",
+			agent, quoteArgs(claudeProgram(), claudeArgs("<tmp>", args)), agentIDEnv, agent)
+		if role != "" {
+			fmt.Fprintf(stdout, "env: %s=%s\n", agentRoleEnv, role)
+		}
+		fmt.Fprintf(stdout, "mcp-config:\n%s\n", conf)
 		return 0
 	}
-	return runClaude(conf, agent, args)
+	return runClaude(conf, agent, role, args)
 }
 
 // runClaude startet claude als Kindprozess statt per exec, weil die temporäre
 // Konfiguration danach weg muss.
-func runClaude(conf []byte, agent string, extra []string) int {
+func runClaude(conf []byte, agent, role string, extra []string) int {
 	f, err := os.CreateTemp("", "ghosttree-claude-*.json") // 0600
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "claude: %v\n", err)
@@ -180,6 +205,12 @@ func runClaude(conf []byte, agent string, extra []string) int {
 	cmd := exec.Command(claudeProgram(), claudeArgs(f.Name(), extra)...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	cmd.Env = append(os.Environ(), agentIDEnv+"="+agent)
+	if role != "" {
+		cmd.Env = append(cmd.Env, agentRoleEnv+"="+role)
+	} else {
+		// Eine geerbte Rolle eines anderen Agenten gilt hier nicht.
+		cmd.Env = append(cmd.Env, agentRoleEnv+"=")
+	}
 
 	// Der Launcher fängt die Signale ab, damit er überlebt und aufräumt, und
 	// reicht sie an claude weiter. Vom Terminal kann claude dasselbe Signal

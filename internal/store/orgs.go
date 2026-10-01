@@ -82,6 +82,7 @@ type OrgMemberInfo struct {
 // Organisation. Alle anderen Tabellen führen weiter `project TEXT` und werden
 // über Remote verbunden; hier wird deshalb nichts umgeschrieben.
 type Project struct {
+	ID        int64  `json:"id"`
 	Remote    string `json:"remote"`
 	OrgID     int64  `json:"org_id"`
 	Org       string `json:"org"`
@@ -457,6 +458,12 @@ func (s *Store) RemoveOrgMember(actorPrincipal string, orgID int64, targetPrinci
 	if _, err := tx.Exec(`DELETE FROM org_members WHERE org_id=? AND account_id=?`, orgID, target); err != nil {
 		return err
 	}
+	// Projektrollen gehören zur Mitgliedschaft: wer geht, nimmt sie nicht mit
+	// zurück, wenn er wiederkommt.
+	if err := dropProjectRolesTx(tx, principalOfID(actor), RoleViaAPI,
+		`m.account_id=? AND p.org_id=?`, target, orgID); err != nil {
+		return err
+	}
 	// Ein Standard, auf den das Konto keinen Zugriff mehr hat, wird gelöscht
 	// statt zu wirken.
 	if _, err := tx.Exec(`UPDATE persons SET default_org_id=0 WHERE id=? AND default_org_id=?`, target, orgID); err != nil {
@@ -491,8 +498,8 @@ func (s *Store) SetDefaultOrg(accountPrincipal string, orgID int64) error {
 
 func projectTx(q rowQuerier, remote string) (Project, bool) {
 	var p Project
-	err := q.QueryRow(`SELECT p.remote, p.org_id, o.slug, p.name, p.created_at FROM projects p JOIN orgs o ON o.id = p.org_id WHERE p.remote=?`,
-		remote).Scan(&p.Remote, &p.OrgID, &p.Org, &p.Name, &p.CreatedAt)
+	err := q.QueryRow(`SELECT p.id, p.remote, p.org_id, o.slug, p.name, p.created_at FROM projects p JOIN orgs o ON o.id = p.org_id WHERE p.remote=?`,
+		remote).Scan(&p.ID, &p.Remote, &p.OrgID, &p.Org, &p.Name, &p.CreatedAt)
 	return p, err == nil
 }
 
@@ -688,6 +695,9 @@ func (s *Store) MoveProject(actorPrincipal, remote, toOrgRef string) (Project, e
 	if _, err := tx.Exec(`UPDATE projects SET org_id=? WHERE remote=?`, to.ID, cur.Remote); err != nil {
 		return Project{}, err
 	}
+	if err := dropProjectRolesTx(tx, principalOfID(actor), RoleViaAPI, `p.remote=?`, cur.Remote); err != nil {
+		return Project{}, err
+	}
 	for _, id := range []int64{cur.OrgID, to.ID} {
 		if err := orgEvent(tx, id, "move_project", principalOfID(actor), cur.Remote, cur.Org+" -> "+to.Slug); err != nil {
 			return Project{}, err
@@ -708,7 +718,7 @@ func (s *Store) ListProjects(accountPrincipal string, orgID int64) ([]Project, e
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.db.Query(`SELECT p.remote, p.org_id, o.slug, p.name, p.created_at FROM projects p
+	rows, err := s.db.Query(`SELECT p.id, p.remote, p.org_id, o.slug, p.name, p.created_at FROM projects p
 		JOIN orgs o ON o.id = p.org_id JOIN org_members m ON m.org_id = p.org_id AND m.account_id = ?
 		WHERE (? = 0 OR p.org_id = ?) ORDER BY o.slug, p.remote LIMIT ?`, acct, orgID, orgID, maxListRows)
 	if err != nil {
@@ -718,7 +728,7 @@ func (s *Store) ListProjects(accountPrincipal string, orgID int64) ([]Project, e
 	out := []Project{}
 	for rows.Next() {
 		var p Project
-		if err := rows.Scan(&p.Remote, &p.OrgID, &p.Org, &p.Name, &p.CreatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Remote, &p.OrgID, &p.Org, &p.Name, &p.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -1163,6 +1173,9 @@ func (s *Store) ForceMoveProject(remote, toOrgRef string) (Project, error) {
 		return cur, nil
 	}
 	if _, err := tx.Exec(`UPDATE projects SET org_id=? WHERE remote=?`, to.ID, cur.Remote); err != nil {
+		return Project{}, err
+	}
+	if err := dropProjectRolesTx(tx, "admin", RoleViaCLI, `p.remote=?`, cur.Remote); err != nil {
 		return Project{}, err
 	}
 	for _, id := range []int64{cur.OrgID, to.ID} {

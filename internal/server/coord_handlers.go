@@ -211,6 +211,10 @@ func (a *api) registerCoordAgent(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
+	if !store.ValidAgentRole(in.Role) {
+		writeCoded(w, http.StatusBadRequest, "invalid_role", "agent role must be lead, member or guest")
+		return
+	}
 	if owner, registered, err := a.st.CoordAgentOwner(in.ExternalID); err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return

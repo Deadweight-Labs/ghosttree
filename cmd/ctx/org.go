@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"text/tabwriter"
 
@@ -34,7 +35,16 @@ const projectUsage = `usage: ctx project <command>
                                           (default remote: the current repository)
   move <remote> --org O                   move a project (owner of both organizations)
   move --force <remote> --org O --db P    admin: move without permission checks
-                                          (database access, logged in org_events)`
+                                          (database access, logged in org_events)
+  roles <remote>                          who holds which role in a project
+  role set <remote> <account> <owner|lead|member|guest> [--review]
+                                          set a role (owner or lead; you cannot raise
+                                          your own role; --review sets can_review)
+  role remove <remote> <account>          take a role away
+
+Roles: owner > lead > member > guest. An organization owner is implicitly owner
+of every project of the organization. Roles are set by accounts only; this
+command refuses to run inside an agent session.`
 
 // interspersed parst Flags auch hinter Positionsargumenten.
 func interspersed(fs *flag.FlagSet, args []string) ([]string, error) {
@@ -247,8 +257,9 @@ func cmdProject(args []string, stdout io.Writer) int {
 	fs.SetOutput(stdout)
 	org := fs.String("org", "", "organization (slug or id)")
 	db := fs.String("db", "ghosttree.db", "database path (with --force)")
+	review := fs.Bool("review", false, "role set: also grant can_review")
 	switch sub {
-	case "list", "claim", "move":
+	case "list", "claim", "move", "roles", "role":
 	default:
 		fmt.Fprintln(stdout, projectUsage)
 		return 2
@@ -270,6 +281,19 @@ func cmdProject(args []string, stdout io.Writer) int {
 	case "move":
 		if len(pos) != 1 || *org == "" {
 			return usage()
+		}
+	case "roles":
+		if len(pos) != 1 {
+			return usage()
+		}
+	case "role":
+		if !(len(pos) == 4 && pos[0] == "set") && !(len(pos) == 3 && pos[0] == "remove") {
+			return usage()
+		}
+		// Agenten vergeben keine Rollen, auch nicht über die CLI ihrer Maschine.
+		if strings.TrimSpace(os.Getenv(agentIDEnv)) != "" {
+			fmt.Fprintln(stdout, "agents cannot grant, change or revoke roles; run this from your own terminal")
+			return 1
 		}
 	}
 	if force {
@@ -317,6 +341,41 @@ func cmdProject(args []string, stdout io.Writer) int {
 			return orgFail(stdout, "claim project", err)
 		}
 		fmt.Fprintf(stdout, "%s belongs to %s\n", p.Remote, p.Org)
+	case "roles":
+		r, err := c.ProjectRoles(pos[0])
+		if err != nil {
+			return orgFail(stdout, "list roles", err)
+		}
+		fmt.Fprintf(stdout, "%s (you: %s)\n", r.Project.Remote, orDash(r.You.Role))
+		tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
+		for _, m := range r.Members {
+			note := ""
+			if m.Implicit {
+				note = "implicit (organization owner)"
+			}
+			rev := ""
+			if m.CanReview {
+				rev = "reviewer"
+			}
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", m.Account, m.Role, rev, note)
+		}
+		tw.Flush()
+	case "role":
+		if pos[0] == "set" {
+			if err := c.SetProjectRole(pos[1], pos[2], pos[3], *review); err != nil {
+				return orgFail(stdout, "set role", err)
+			}
+			rev := ""
+			if *review {
+				rev = " (reviewer)"
+			}
+			fmt.Fprintf(stdout, "%s is now %s%s in %s\n", pos[2], pos[3], rev, scope.NormalizeRemote(pos[1]))
+		} else {
+			if err := c.RemoveProjectRole(pos[1], pos[2]); err != nil {
+				return orgFail(stdout, "remove role", err)
+			}
+			fmt.Fprintf(stdout, "%s holds no role in %s any more\n", pos[2], scope.NormalizeRemote(pos[1]))
+		}
 	case "move":
 		p, err := c.MoveProject(pos[0], *org)
 		if err != nil {
@@ -325,4 +384,11 @@ func cmdProject(args []string, stdout io.Writer) int {
 		fmt.Fprintf(stdout, "%s now belongs to %s\n", p.Remote, p.Org)
 	}
 	return 0
+}
+
+func orDash(s string) string {
+	if s == "" {
+		return "none"
+	}
+	return s
 }
