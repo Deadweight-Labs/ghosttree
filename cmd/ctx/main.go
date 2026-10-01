@@ -25,6 +25,8 @@ func run(args []string, stdout io.Writer) int {
 		return cmdMCP(rest, stdout)
 	case "channel":
 		return cmdChannel(rest, stdout)
+	case "claude":
+		return cmdClaude(rest, stdout)
 	case "install":
 		return cmdInstall(rest, stdout)
 	case "hook":
@@ -84,6 +86,7 @@ const usage = `usage: ctx <command>
   watch    run the session collector daemon
   mcp      run the MCP server (stdio)
   channel  serve coordination messages as a Claude Code channel (stdio, opt-in at session start)
+  claude   start Claude Code with the ghosttree channel (opt-in launcher)
   install  set up a harness (claude|codex|opencode)
   setup    write client config (server URL + token)
   person   manage persons/tokens (server-side)

@@ -26,7 +26,10 @@ func currentAxes(machine string) scope.Axes {
 }
 
 func currentSessionRef() string {
-	for _, key := range []string{"CODEX_SESSION_ID", "CODEX_THREAD_ID", "CLAUDE_CODE_SESSION_ID", "OPENCODE_SESSION_ID"} {
+	// GHOSTTREE_AGENT_ID gewinnt vor allen Harness-Kennungen: `ctx claude`
+	// setzt sie, damit ctx mcp und ctx channel dieselbe Koordinationsidentität
+	// tragen.
+	for _, key := range []string{agentIDEnv, "CODEX_SESSION_ID", "CODEX_THREAD_ID", "CLAUDE_CODE_SESSION_ID", "OPENCODE_SESSION_ID"} {
 		if ref := os.Getenv(key); ref != "" {
 			return ref
 		}
