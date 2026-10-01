@@ -29,7 +29,11 @@
 // scheitert oder dessen Prozess dazwischen stirbt. Diese Nachricht wird nie
 // erneut zugestellt, und der Pull-Pfad (coord_inbox, coord_dm_read) blendet sie
 // ebenfalls aus, weil er geclaimte Nachrichten als eingebracht behandelt. Das
-// ist der Preis dafür, dass nie doppelt zugestellt wird. Eine weitere Grenze:
+// ist der Preis dafür, dass nie doppelt zugestellt wird. Dazu gehört auch ein
+// Claim, der in ClaimTimeout ausläuft, nachdem der Server ihn schon verbucht
+// hat: er gilt hier als "nicht geschrieben", das Budget geht zurück, und der
+// nächste Lauf bekommt won=false. Die Nachricht ist dann geclaimt, aber nie
+// gesendet, und im Pull-Pfad ausgeblendet. Eine weitere Grenze:
 // der Write selbst läuft unter dem Datei-Lock, und eine blockierte Pipe hält
 // ihn, bis sie sich löst.
 //

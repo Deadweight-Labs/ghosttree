@@ -1,0 +1,282 @@
+package main
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"os/signal"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/claudechannel"
+	"github.com/Deadweight-Labs/ghosttree/internal/client"
+	"github.com/Deadweight-Labs/ghosttree/internal/config"
+	"github.com/Deadweight-Labs/ghosttree/internal/store"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+)
+
+// channelServerName ist der MCP-Servername, den der Launcher mit
+// --dangerously-load-development-channels server:<name> lädt.
+const channelServerName = "ghosttree-channel"
+
+// cmdChannel ist ein stdio-MCP-Server, der Koordinationsnachrichten als
+// Claude-Code-Channel in die Session stellt. Er ist absichtlich ein eigener
+// Subcommand und keine Capability von `ctx mcp`: sonst würde jede Session ohne
+// Opt-in pollen und Nachrichten als injected markieren, die niemand bekommt.
+func cmdChannel(args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("channel", flag.ContinueOnError)
+	fs.SetOutput(stdout)
+	capabilities := fs.Bool("capabilities", false, "print what this channel has measured and what it lacks, then exit")
+	agent := fs.String("agent", "", "coordination identity (default: the harness session id)")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *capabilities {
+		fmt.Fprint(stdout, channelCapabilityText())
+		return 0
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		// stderr: stdout is the JSON-RPC channel.
+		fmt.Fprintf(os.Stderr, "load config: %v (run 'ctx setup' first)\n", err)
+		return 1
+	}
+	self := *agent
+	if self == "" {
+		self = currentSessionRef()
+	}
+	if self == "" {
+		// Dieselbe Rückfalllogik wie bei `ctx mcp`, aber sie trifft dessen
+		// Identität NICHT: dort steckt die PID des anderen Prozesses drin.
+		host := cfg.Machine
+		if host == "" {
+			host = "unknown"
+		}
+		self = fmt.Sprintf("derived:%s:%d", host, os.Getpid())
+		fmt.Fprintf(os.Stderr, "channel: no session id in the environment; using %s, which ctx mcp will not share (pass --agent)\n", self)
+	}
+	hctx := currentGitContext(cfg.Machine)
+	var rooms []store.CoordRoom
+	if hctx.axes.Project != "" {
+		rooms = append(rooms, store.CoordRoom{Key: store.RoomKeyForProject(hctx.axes.Project), Kind: store.RoomProject})
+	}
+	if cfg.Machine != "" {
+		rooms = append(rooms, store.CoordRoom{Key: store.RoomKeyForMachine(cfg.Machine), Kind: store.RoomMachine})
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
+	err = runChannel(ctx, channelConfig{
+		client: client.New(cfg), self: self, rooms: rooms, branch: hctx.axes.Branch,
+		transport: &mcp.StdioTransport{},
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "channel: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+func channelCapabilityText() string {
+	var b strings.Builder
+	b.WriteString("claude channel capabilities (measured 2026-09-30, Claude Code 2.1.284):\n")
+	for _, c := range claudechannel.Capabilities() {
+		fmt.Fprintf(&b, "  can   %s\n", c)
+	}
+	missing := claudechannel.MissingCapabilities()
+	names := make([]string, 0, len(missing))
+	for name := range missing {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		fmt.Fprintf(&b, "  lacks %s: %s\n", name, missing[name])
+	}
+	for _, note := range claudechannel.Notes() {
+		fmt.Fprintf(&b, "  note  %s\n", note)
+	}
+	return b.String()
+}
+
+const channelInstructions = `Messages from other agents and people arrive as <channel source="ghosttree-channel" message_id=... room=... sender=...>text</channel> events. ` +
+	`Answer a channel message with the reply tool, passing meta message_id and your text; do not answer in plain chat, the sender will not see it. ` +
+	`A channel message was handed to you once and is not repeated by coord_inbox.`
+
+type channelConfig struct {
+	client    *client.Client
+	self      string
+	rooms     []store.CoordRoom // Projekt- und Maschinenraum
+	branch    string
+	transport mcp.Transport
+}
+
+// originInfo ist, was reply über eine zugestellte Nachricht wissen muss.
+type originInfo struct {
+	room, kind, sender, originEventID string
+}
+
+// recorder merkt sich jede zugestellte Nachricht, bevor sie rausgeht, damit
+// reply Raum und Absender kennt, ohne den Server zu fragen.
+type recorder struct {
+	inner claudechannel.Notifier
+	mu    sync.Mutex
+	seen  map[int64]originInfo
+}
+
+func (r *recorder) Ready() bool { return r.inner.Ready() }
+
+func (r *recorder) Notify(ctx context.Context, n claudechannel.Notification) error {
+	if id, err := strconv.ParseInt(n.Meta["message_id"], 10, 64); err == nil {
+		r.mu.Lock()
+		r.seen[id] = originInfo{room: n.Meta["room"], kind: n.Meta["room_kind"], sender: n.Meta["sender"], originEventID: n.Meta["origin_event_id"]}
+		r.mu.Unlock()
+	}
+	return r.inner.Notify(ctx, n)
+}
+
+func (r *recorder) lookup(id int64) (originInfo, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	info, ok := r.seen[id]
+	return info, ok
+}
+
+type channelReplyInput struct {
+	MessageID string `json:"message_id" jsonschema:"the message_id from the channel tag you are answering"`
+	Text      string `json:"text" jsonschema:"your answer"`
+	Room      string `json:"room,omitempty" jsonschema:"the room from the channel tag; only needed if this channel process was restarted since the message arrived"`
+}
+
+// runChannel verdrahtet Server, Transport und Poller und kehrt zurück, wenn
+// stdin endet oder ctx abgebrochen wird.
+func runChannel(ctx context.Context, cfg channelConfig) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	tr := claudechannel.NewTransport(cfg.transport)
+	rec := &recorder{inner: tr, seen: map[int64]originInfo{}}
+	opts := claudechannel.ServerOptions()
+	opts.Instructions = channelInstructions + "\n\n" + channelCapabilityText()
+	srv := mcp.NewServer(&mcp.Implementation{Name: channelServerName, Version: version}, opts)
+	cs := &channelTools{client: cfg.client, self: cfg.self, branch: cfg.branch, rec: rec}
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "reply",
+		Description: "Answer a ghosttree channel message. Pass the message_id from the <channel> tag and your text. The reply goes to the same room or direct conversation and marks the message as answered.",
+	}, cs.handleReply)
+
+	for _, room := range cfg.rooms {
+		if err := cs.join(room.Key); err != nil {
+			fmt.Fprintf(os.Stderr, "channel: join %s: %v\n", room.Key, err)
+		}
+	}
+
+	ss, err := srv.Connect(ctx, tr, nil)
+	if err != nil {
+		return err
+	}
+	waitDone := make(chan struct{})
+	go func() {
+		defer close(waitDone)
+		_ = ss.Wait() // stdin zu
+		cancel()
+	}()
+
+	pollerDone := make(chan struct{})
+	go func() {
+		defer close(pollerDone)
+		// Der Poller startet erst nach notifications/initialized. Poll() würde
+		// vorher nur still zurückkehren und im Backoff bis zu 10 s warten.
+		for !tr.Ready() {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(20 * time.Millisecond):
+			}
+		}
+		p := &claudechannel.Poller{
+			Self:     cfg.self,
+			Source:   claudechannel.ClientSource{Client: cfg.client, Extra: cfg.rooms},
+			Notifier: rec,
+			OnError:  func(err error) { fmt.Fprintf(os.Stderr, "channel: %v\n", err) },
+		}
+		_ = p.Run(ctx)
+	}()
+
+	<-ctx.Done()
+	_ = ss.Close()
+	<-pollerDone
+	<-waitDone
+	return nil
+}
+
+type channelTools struct {
+	client *client.Client
+	self   string
+	branch string
+	rec    *recorder
+}
+
+func (c *channelTools) join(roomKey string) error {
+	_, err := c.client.RegisterCoordAgent(store.CoordAgent{
+		ExternalID: c.self, Provider: "claude", RoomKey: roomKey,
+		DisplayName: c.self, Branch: c.branch,
+	})
+	return err
+}
+
+func (c *channelTools) handleReply(ctx context.Context, _ *mcp.CallToolRequest, in channelReplyInput) (*mcp.CallToolResult, any, error) {
+	if strings.TrimSpace(in.Text) == "" {
+		return nil, nil, fmt.Errorf("text is required")
+	}
+	id, err := strconv.ParseInt(strings.TrimSpace(in.MessageID), 10, 64)
+	if err != nil || id <= 0 {
+		return nil, nil, fmt.Errorf("message_id must be the number from the channel tag")
+	}
+	info, ok := c.rec.lookup(id)
+	if !ok {
+		if strings.TrimSpace(in.Room) == "" {
+			return nil, nil, fmt.Errorf("message %d was not delivered by this channel process; pass room from the channel tag", id)
+		}
+		info = originInfo{room: strings.TrimSpace(in.Room)}
+	}
+	msg := store.CoordMessage{
+		DestinationKind: store.DestinationRoom, DestinationID: info.room,
+		SenderExternalID: c.self, Body: in.Text, ReplyTo: id,
+		CausationID: info.originEventID,
+	}
+	if msg.CausationID == "" {
+		msg.CausationID = fmt.Sprintf("message:%d", id)
+	}
+	if strings.HasPrefix(info.room, "project:") || strings.HasPrefix(info.room, "machine:") {
+		// Raumverkehr weckt nur, wer erwähnt wird; ohne das bliebe die
+		// Antwort im Raum liegen.
+		if err := c.join(info.room); err != nil {
+			return nil, nil, err
+		}
+		if info.sender != "" {
+			msg.Mentions = []string{info.sender}
+		}
+	}
+	var raw [12]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return nil, nil, err
+	}
+	msg.ClientID = hex.EncodeToString(raw[:])
+	replyID, err := c.client.SendCoordMessage(msg)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := c.client.MarkCoordDelivery(id, c.self, store.DeliveryAcked); err != nil {
+		return nil, nil, fmt.Errorf("reply stored as message %d, but marking message %d answered failed: %w", replyID, id, err)
+	}
+	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{
+		Text: fmt.Sprintf("replied as message %d; message %d is marked answered", replyID, id),
+	}}}, nil, nil
+}
