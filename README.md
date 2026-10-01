@@ -146,6 +146,64 @@ revision.
 ctx doc import path/to/design.md --kind spec --slug storage-redesign --clean
 ```
 
+### Coordination messages in Claude Code (opt-in)
+
+`ctx claude [claude args...]` starts Claude Code with the ghosttree channel
+loaded. The aim is that `ctx coord` messages and agent mentions reach the
+session: a waiting session wakes up, a working one receives the message at
+its next tool result. Measured with Claude Code 2.1.284 (2026-09-30) and
+2.1.286 (2026-10-01, with the handshake rule below).
+The launcher generates one identity per launch (`claude:<host>:<uuid>`), writes a
+temporary MCP config for the `ghosttree-channel` server (`ctx channel --agent
+<id>`), and runs `claude --mcp-config <tmp> --dangerously-load-development-channels
+server:ghosttree-channel ...`. The identity also goes to the process environment
+as `GHOSTTREE_AGENT_ID`, which `ctx mcp` reads before any harness session id, so
+the channel and the `coord_*` tools act as the same agent. The variable changes
+only the coordination identity; search, interrupted-work handoff, and snapshots
+keep the harness session id. A `codex` or `opencode` started inside such a
+session ignores the variable (its provider prefix does not match); a `claude`
+started inside it without the launcher cannot be told apart and shares the
+identity. Arguments after the
+launcher's own flags (`--dry-run`, `--agent <id>`) pass through unchanged, the
+exit code is claude's, and the config file is removed afterwards.
+`ctx claude --dry-run` (or `GHOSTTREE_CLAUDE_DRY_RUN=1`) prints the command and
+config without starting anything. Claude answers with the channel's `reply`
+tool, which stores the answer and marks the message `acked`.
+
+This is opt-in at start: `ctx install claude` does not register the channel, and
+a running session cannot be attached later. The channel is a Claude Code
+research-preview feature; ghosttree is not on Anthropic's allowlist, so
+`--dangerously-load-development-channels` is required and Claude asks you to
+confirm it at every start. Team and Enterprise plans can switch channels off
+(`channelsEnabled`).
+
+What was measured (Claude Code 2.1.284, `ctx channel --capabilities`):
+
+| Capability | State |
+| --- | --- |
+| `receive_at_safe_point` | measured |
+| `wake_idle_session` | measured |
+| `receive_for_named_subagent` | gap |
+| `human_steer` | gap |
+| `human_interrupt` | gap |
+| `activity_observation` | gap |
+
+Delivery is at-most-once: a message is claimed atomically before it is sent and
+never re-sent, so a crash between claim and write loses it. Nothing stops two
+agents from answering each other's replies; the only bound on such a loop is the
+per-session coordination budget. The limits are
+spelled out in `internal/claudechannel/doc.go`. The status line may say "no MCP
+server configured with that name" while delivery works.
+
+Channels need the old `initialize` connection. Claude Code 2.1.286 first sends
+`server/discover`; if the server answers with MCP 2026-07-28, Claude Code
+registers no channel for that connection. The channel server therefore refuses
+`server/discover` with JSON-RPC -32601, and Claude Code falls back to
+`initialize` with 2025-11-25. Measured with Claude Code 2.1.286 on 2026-10-01;
+a later release may behave differently. `scripts/verify-claude-channel.sh` is a
+manual tmux check against a real session (not part of CI). It passes `--model
+opus`, because the model in a user's settings may be one Claude Code rejects.
+
 ### Inspecting a repository before migration
 
 ```bash

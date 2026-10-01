@@ -20,7 +20,9 @@ import (
 const coordUsage = `usage: ctx coord <command>
 
   peers [--machine] [repo]        who else is registered in this room
-  send <text> [--machine] [repo]  say something to the other agents
+  send <text> [--mention <agent>] [--machine] [repo]
+                                  say something to the other agents; a mention
+                                  wakes that agent if its harness can
   inbox [--machine] [--all] [repo] read what others said since your cursor
   rooms                           private conversations you take part in
   sessions                        codex sessions this machine can deliver to
@@ -57,8 +59,22 @@ func cmdCoord(args []string, stdout io.Writer) int {
 	machine := false
 	all := false
 	var positional []string
-	for _, a := range rest {
+	var mentions []string
+	for i := 0; i < len(rest); i++ {
+		a := rest[i]
 		switch a {
+		case "--mention":
+			if i+1 >= len(rest) {
+				fmt.Fprintln(stdout, "--mention needs an agent identity")
+				return 2
+			}
+			i++
+			if v := strings.TrimSpace(rest[i]); v == "" || strings.HasPrefix(v, "-") {
+				fmt.Fprintf(stdout, "--mention needs an agent identity, got %q\n", rest[i])
+				return 2
+			} else {
+				mentions = append(mentions, v)
+			}
 		case "--machine":
 			machine = true
 		case "--all":
@@ -115,6 +131,7 @@ func cmdCoord(args []string, stdout io.Writer) int {
 		id, err := c.SendCoordMessage(store.CoordMessage{
 			DestinationKind: store.DestinationRoom, DestinationID: room,
 			SenderExternalID: me, ClientID: newCoordClientID(), Body: body,
+			Mentions: mentions,
 		})
 		if err != nil {
 			fmt.Fprintf(stdout, "send: %v\n", err)

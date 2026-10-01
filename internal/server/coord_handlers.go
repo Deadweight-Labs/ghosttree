@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
@@ -576,4 +577,62 @@ func (a *api) markCoordDelivery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]string{"status": in.State})
+}
+
+// claimCoordDelivery entscheidet, welcher Kanal eine Nachricht einbringen
+// darf. Prüfung und Principal-Zugriff laufen wie bei markCoordDelivery: der
+// Empfänger muss zu diesem Token gehören.
+func (a *api) claimCoordDelivery(w http.ResponseWriter, r *http.Request) {
+	var in coordDeliveryInput
+	if err := readJSON(r, &in); err != nil {
+		writeStoreError(w, http.StatusBadRequest, err)
+		return
+	}
+	if in.MessageID == 0 || in.Recipient == "" {
+		writeErr(w, http.StatusBadRequest, "message_id and recipient_external_id are required")
+		return
+	}
+	claimed, err := a.coordAccess(r, in.Recipient).ClaimDelivery(in.MessageID)
+	if err != nil {
+		writeCoordAccessError(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"claimed": claimed})
+}
+
+// maxInjectedLookup begrenzt eine Abfrage. Der Poller fragt nach einer Seite
+// Inbox, nicht nach dem ganzen Verlauf.
+const maxInjectedLookup = 500
+
+func (a *api) coordInjectedMessages(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	if q.Get("agent_external_id") == "" {
+		writeErr(w, http.StatusBadRequest, "agent_external_id is required")
+		return
+	}
+	var ids []int64
+	for _, part := range strings.Split(q.Get("message_ids"), ",") {
+		if part = strings.TrimSpace(part); part == "" {
+			continue
+		}
+		id, err := strconv.ParseInt(part, 10, 64)
+		if err != nil || id <= 0 {
+			writeErr(w, http.StatusBadRequest, "invalid message_ids")
+			return
+		}
+		if len(ids) == maxInjectedLookup {
+			writeErr(w, http.StatusBadRequest, "too many message_ids")
+			return
+		}
+		ids = append(ids, id)
+	}
+	injected, err := a.coordAccess(r, q.Get("agent_external_id")).InjectedMessages(ids)
+	if err != nil {
+		writeCoordAccessError(w, err)
+		return
+	}
+	if injected == nil {
+		injected = []int64{}
+	}
+	writeJSON(w, 200, map[string][]int64{"message_ids": injected})
 }

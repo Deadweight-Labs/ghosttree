@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // Die fünf Zustände einer Zustellung, nach Spec §A7. Sie sind absichtlich
@@ -58,6 +59,64 @@ func (s *Store) MarkCoordDelivery(messageID int64, recipient, state string) erro
 			updated_at=excluded.updated_at`,
 		messageID, recipient, state, rank, now())
 	return err
+}
+
+// ClaimCoordDelivery hebt eine Zustellung genau einmal auf injected und
+// meldet, ob dieser Aufrufer gewonnen hat. Wer verliert, ändert nichts: das
+// Update greift nur, solange der Rang unter injected liegt, und SQLite
+// serialisiert die Schreiber. Ein bereits injected oder acked Eintrag bleibt
+// unberührt, damit ein zweiter Kanal dieselbe Nachricht nicht noch einmal
+// einbringt.
+func (s *Store) ClaimCoordDelivery(messageID int64, recipient string) (bool, error) {
+	if s.writer != nil {
+		return queueValue(s, []any{messageID, recipient}, func(d *Store, p []any) (bool, error) {
+			return d.ClaimCoordDelivery(p[0].(int64), p[1].(string))
+		})
+	}
+	rank := deliveryRank[DeliveryInjected]
+	res, err := s.db.Exec(`INSERT INTO coord_deliveries(message_id,recipient_external_id,state,rank,updated_at)
+		VALUES(?,?,?,?,?)
+		ON CONFLICT(message_id,recipient_external_id) DO UPDATE SET
+			state=excluded.state, rank=excluded.rank, updated_at=excluded.updated_at
+		WHERE coord_deliveries.rank < excluded.rank`,
+		messageID, recipient, DeliveryInjected, rank, now())
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+// CoordInjectedMessages liefert, welche der Nachrichten für diesen Empfänger
+// schon eingebracht (injected oder weiter) sind. Der Inbox-Abgleich blendet
+// sie aus, damit das Modell sie nicht ein zweites Mal bekommt.
+func (s *Store) CoordInjectedMessages(recipient string, messageIDs []int64) ([]int64, error) {
+	if s.reader != nil {
+		return s.reader.CoordInjectedMessages(recipient, messageIDs)
+	}
+	if len(messageIDs) == 0 {
+		return nil, nil
+	}
+	args := []any{recipient, deliveryRank[DeliveryInjected]}
+	for _, id := range messageIDs {
+		args = append(args, id)
+	}
+	rows, err := s.db.Query(`SELECT message_id FROM coord_deliveries
+		WHERE recipient_external_id=? AND rank>=? AND message_id IN (`+
+		strings.TrimSuffix(strings.Repeat("?,", len(messageIDs)), ",")+`) ORDER BY message_id`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
 }
 
 // CoordDeliveryState beantwortet, was über diese Zustellung bekannt ist.

@@ -12,7 +12,10 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/server"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
+	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 )
 
 func TestMCPGroupsWithSameMembersGetDistinctServerIDs(t *testing.T) {
@@ -554,5 +557,118 @@ func TestTouchedExcludesTheAskingSession(t *testing.T) {
 	}
 	if strings.Contains(text(t, res), a.sessionRef) {
 		t.Fatalf("an agent must not be reported as its own conflict: %s", text(t, res))
+	}
+}
+
+// AC-1231: was der Channel schon eingebracht hat, zeigt coord_inbox nicht
+// noch einmal.
+func TestInboxHidesMessagesAlreadyInjected(t *testing.T) {
+	a, b, _ := twoSessions(t)
+	ctx := context.Background()
+	if _, _, err := a.handleCoordSend(ctx, nil, CoordSendInput{Body: "bereits-eingebracht"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := a.handleCoordSend(ctx, nil, CoordSendInput{Body: "noch-offen"}); err != nil {
+		t.Fatal(err)
+	}
+	room := store.RoomKeyForProject("github.com/deadweight-labs/ghosttree")
+	msgs, err := b.client.CoordInbox(store.DestinationRoom, room, b.sessionRef, 0, 0)
+	if err != nil || len(msgs) != 2 {
+		t.Fatalf("msgs=%v err=%v", msgs, err)
+	}
+	if won, err := b.client.ClaimCoordDelivery(msgs[0].ID, b.sessionRef); err != nil || !won {
+		t.Fatalf("claim: won=%v err=%v", won, err)
+	}
+	res, _, err := b.handleCoordInbox(ctx, nil, CoordInboxInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := text(t, res)
+	if strings.Contains(got, "bereits-eingebracht") || !strings.Contains(got, "noch-offen") {
+		t.Fatalf("inbox = %q", got)
+	}
+}
+
+func TestDMReadHidesMessagesAlreadyInjected(t *testing.T) {
+	a, b, _ := twoSessions(t)
+	ctx := context.Background()
+	if _, _, err := a.handleCoordDM(ctx, nil, CoordDMInput{To: []string{b.sessionRef}, Body: "dm-eingebracht"}); err != nil {
+		t.Fatal(err)
+	}
+	key := store.RoomKeyForDirect([]string{b.sessionRef, a.sessionRef})
+	msgs, err := b.client.CoordInbox(store.DestinationRoom, key, b.sessionRef, 0, 0)
+	if err != nil || len(msgs) != 1 {
+		t.Fatalf("msgs=%v err=%v", msgs, err)
+	}
+	if won, err := b.client.ClaimCoordDelivery(msgs[0].ID, b.sessionRef); err != nil || !won {
+		t.Fatalf("claim: won=%v err=%v", won, err)
+	}
+	res, _, err := b.handleCoordDMRead(ctx, nil, CoordDMReadInput{With: []string{a.sessionRef}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(text(t, res), "dm-eingebracht") {
+		t.Fatalf("dm read repeated an injected message: %q", text(t, res))
+	}
+}
+
+// Ein älterer Server kennt die injected-Route nicht. Die Inbox muss dann ohne
+// Abgleich weiterlesen; jeder andere Fehler bleibt fail-closed.
+func TestInboxReadsOnWhenServerLacksInjectedRoute(t *testing.T) {
+	st, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	token, _ := st.AddPerson("robin")
+	real := httptest.NewServer(server.New(st))
+	t.Cleanup(real.Close)
+	target, _ := url.Parse(real.URL)
+	status, body := http.StatusNotFound, "404 page not found\n"
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/deliveries/injected") {
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(body))
+			return
+		}
+		httputil.NewSingleHostReverseProxy(target).ServeHTTP(w, r)
+	}))
+	t.Cleanup(proxy.Close)
+	room := store.RoomKeyForProject("github.com/deadweight-labs/ghosttree")
+	newSession := func(ref, base string) *Server {
+		c := client.New(config.Config{ServerURL: base, Token: token, Machine: "mainex"})
+		if _, err := c.RegisterCoordAgent(store.CoordAgent{ExternalID: ref, Provider: "test", RoomKey: room, DisplayName: ref}); err != nil {
+			t.Fatal(err)
+		}
+		return &Server{client: c, sessionRef: ref,
+			ctxAxes: scope.Axes{Project: "github.com/deadweight-labs/ghosttree", Machine: "mainex"}}
+	}
+	a, b := newSession("sess-a", real.URL), newSession("sess-b", proxy.URL)
+	ctx := context.Background()
+	send := func(msg string) {
+		if _, _, err := a.handleCoordSend(ctx, nil, CoordSendInput{Body: msg}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, m := range []int{http.StatusNotFound, http.StatusMethodNotAllowed} {
+		status = m
+		msg := fmt.Sprintf("alt-%d", m)
+		send(msg)
+		res, _, err := b.handleCoordInbox(ctx, nil, CoordInboxInput{})
+		if err != nil || !strings.Contains(text(t, res), msg) {
+			t.Fatalf("status %d: inbox must read on, err=%v", m, err)
+		}
+	}
+	// Echte Fehler und ein 404 des Handlers (JSON) bleiben fail-closed.
+	for _, c := range []struct {
+		status int
+		body   string
+	}{{http.StatusInternalServerError, "boom"}, {http.StatusNotFound, `{"error":"coordination target not found"}`}} {
+		status, body = c.status, c.body
+		send("closed")
+		if _, _, err := b.handleCoordInbox(ctx, nil, CoordInboxInput{}); err == nil {
+			t.Fatalf("status %d %q must fail closed", c.status, c.body)
+		}
 	}
 }

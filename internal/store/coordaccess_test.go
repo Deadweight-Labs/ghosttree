@@ -231,6 +231,10 @@ func TestPublicProjectionFailsClosedForEveryMutation(t *testing.T) {
 		},
 		"cursor":   func() error { return public.SetCursor(DestinationDiscussion, ThreadDestinationID(id), 1) },
 		"delivery": func() error { return public.MarkDelivery(1, DeliveryFetched) },
+		"claim": func() error {
+			_, err := public.ClaimDelivery(1)
+			return err
+		},
 		"group": func() error {
 			_, err := public.CreateGroup(GroupInput{Members: []string{"sess-a", "sess-b"}})
 			return err

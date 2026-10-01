@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -32,6 +33,33 @@ func currentSessionRef() string {
 		}
 	}
 	return ""
+}
+
+// coordAgentOverride ist die Koordinationsidentität aus GHOSTTREE_AGENT_ID, die
+// `ctx claude` setzt, damit ctx mcp und ctx channel derselbe Agent sind. Sie
+// ersetzt NICHT die Harness-Session-ID (Suche, Snapshots und unterbrochene
+// Arbeit brauchen die echte). Ein codex oder opencode, das in einer
+// ctx-claude-Session startet, erbt die Variable, trägt aber ein fremdes
+// Provider-Präfix und ignoriert sie. Ein dort ohne Launcher gestartetes claude
+// ist nicht zu unterscheiden und teilt sich die Identität.
+func coordAgentOverride() string {
+	id := strings.TrimSpace(os.Getenv(agentIDEnv))
+	if id == "" {
+		return ""
+	}
+	harness := ""
+	switch {
+	case os.Getenv("CODEX_SESSION_ID") != "" || os.Getenv("CODEX_THREAD_ID") != "":
+		harness = "codex"
+	case os.Getenv("OPENCODE_SESSION_ID") != "":
+		harness = "opencode"
+	case os.Getenv("CLAUDE_CODE_SESSION_ID") != "":
+		harness = "claude"
+	}
+	if harness != "" && !strings.HasPrefix(id, harness+":") {
+		return ""
+	}
+	return id
 }
 
 type harnessContext struct {
@@ -117,6 +145,7 @@ func cmdMCP(args []string, stdout io.Writer) int {
 	c := client.New(cfg)
 	srv := mcpserver.NewServer(c, hctx.axes, hctx.activation)
 	srv.SetSessionRef(currentSessionRef())
+	srv.SetCoordRef(coordAgentOverride())
 	srv.SetRepoRoot(hctx.root)
 	srv.SetAfterSnapshot(func(ctx context.Context, project string) error {
 		return snapshotmirror.Rebuild(ctx, mcpSnapshotLister{client: c}, hctx.root, project)

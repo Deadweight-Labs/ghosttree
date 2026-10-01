@@ -36,6 +36,8 @@ type Server struct {
 	// Ohne sie könnte eine Suche den gerade hochgeladenen Prompt als Beleg für
 	// sich selbst zurückgeben.
 	sessionRef string
+	// coordOverride ersetzt sessionRef ausschließlich in coordRef().
+	coordOverride string
 }
 
 // SetRepoRoot wird von cmd/ctx/mcp.go aus dem aufgelösten Git-Kontext gesetzt.
@@ -46,6 +48,11 @@ func (s *Server) SetAfterWrite(f func()) { s.afterWrite = f }
 func (s *Server) SetAfterSnapshot(f func(context.Context, string) error) { s.afterSnapshot = f }
 
 func (s *Server) SetSessionRef(ref string) { s.sessionRef = ref }
+
+// SetCoordRef setzt die Koordinationsidentität, wenn sie von der
+// Harness-Session abweicht (ctx claude). Suche, unterbrochene Arbeit und
+// Snapshots bleiben bei sessionRef, denn nur die hat ein Transkript.
+func (s *Server) SetCoordRef(ref string) { s.coordOverride = ref }
 
 func NewServer(c *client.Client, axes scope.Axes, base ...activation.Context) *Server {
 	s := &Server{client: c, ctxAxes: axes}

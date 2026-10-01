@@ -1,6 +1,7 @@
 package hookbudget
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -119,5 +120,37 @@ func TestEachChannelIsMeasuredSeparately(t *testing.T) {
 	}
 	if coord.ReservedChars != 200 {
 		t.Errorf("coordination account is %d, want 200", coord.ReservedChars)
+	}
+}
+
+// Ein emit, das nichts schrieb, gibt seine Reservierung zurück; ein anderer
+// Fehler zählt als Schreibversuch und behält sie.
+func TestDeliverChannelReleasesReservationWhenNothingWasEmitted(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	text := strings.Repeat("a", 5000)
+	for i := 0; i < 10; i++ {
+		err := DeliverChannel("s", ChannelCoord, text, func(string) error { return ErrNotEmitted })
+		if !errors.Is(err, ErrNotEmitted) {
+			t.Fatalf("err = %v", err)
+		}
+	}
+	r, _ := ChannelUsage("s", ChannelCoord)
+	if r.ReservedChars != 0 || r.Exhausted {
+		t.Fatalf("reservation leaked: %+v", r)
+	}
+	var got string
+	if err := DeliverChannel("s", ChannelCoord, text, func(s string) error { got = s; return nil }); err != nil || got != text {
+		t.Fatalf("err=%v full=%v", err, got == text)
+	}
+	// Ein Schreibfehler verbraucht Budget.
+	_ = DeliverChannel("w", ChannelCoord, "abc", func(string) error { return errors.New("pipe broke") })
+	if r, _ := ChannelUsage("w", ChannelCoord); r.ReservedChars != 3 {
+		t.Fatalf("a write attempt must spend budget: %+v", r)
+	}
+	// Erschöpftes Konto bleibt erschöpft, auch wenn eine gekürzte Zustellung zurückgerollt wird.
+	big := strings.Repeat("b", 20000)
+	_ = DeliverChannel("e", ChannelCoord, big, func(string) error { return ErrNotEmitted })
+	if r, _ := ChannelUsage("e", ChannelCoord); r.Exhausted || r.ReservedChars != 0 {
+		t.Fatalf("rolled-back truncation must not exhaust: %+v", r)
 	}
 }
