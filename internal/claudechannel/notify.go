@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strconv"
 	"sync"
+	"sync/atomic"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
@@ -67,16 +68,22 @@ func (n Notification) request() (*jsonrpc.Request, error) {
 
 // Notifier sendet Notifications. Der Poller kennt nur dieses Interface.
 type Notifier interface {
+	// Ready sagt, ob eine Notification jetzt rausgehen kann. Der Poller claimt
+	// erst, wenn das stimmt.
+	Ready() bool
 	Notify(ctx context.Context, n Notification) error
 }
 
 // Transport umhüllt einen mcp.Transport und schreibt Notifications an der
 // SDK-Schicht vorbei direkt auf dieselbe Verbindung. Connection.Write darf
 // nebenläufig aufgerufen werden, so dass das den Verkehr des SDK nicht stört.
+//
+// Bereit ist der Transport erst, wenn der Client notifications/initialized
+// geschickt hat, und nicht mehr nach Close oder einem Lesefehler.
 type Transport struct {
 	inner mcp.Transport
 	mu    sync.Mutex
-	conn  mcp.Connection
+	conn  *gate
 }
 
 var _ mcp.Transport = (*Transport)(nil)
@@ -85,29 +92,63 @@ var _ Notifier = (*Transport)(nil)
 // NewTransport umhüllt inner, etwa &mcp.StdioTransport{}.
 func NewTransport(inner mcp.Transport) *Transport { return &Transport{inner: inner} }
 
+// gate beobachtet den Verkehr, um die Bereitschaft abzuleiten.
+type gate struct {
+	mcp.Connection
+	ready atomic.Bool
+}
+
+func (g *gate) Read(ctx context.Context) (jsonrpc.Message, error) {
+	msg, err := g.Connection.Read(ctx)
+	if err != nil {
+		g.ready.Store(false)
+		return msg, err
+	}
+	if req, ok := msg.(*jsonrpc.Request); ok && req.Method == "notifications/initialized" {
+		g.ready.Store(true)
+	}
+	return msg, nil
+}
+
+func (g *gate) Close() error {
+	g.ready.Store(false)
+	return g.Connection.Close()
+}
+
 // Connect verbindet den inneren Transport und merkt sich die Verbindung.
 func (t *Transport) Connect(ctx context.Context) (mcp.Connection, error) {
 	conn, err := t.inner.Connect(ctx)
 	if err != nil {
 		return nil, err
 	}
+	g := &gate{Connection: conn}
 	t.mu.Lock()
-	t.conn = conn
+	t.conn = g
 	t.mu.Unlock()
-	return conn, nil
+	return g, nil
+}
+
+func (t *Transport) current() *gate {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.conn
+}
+
+// Ready sagt, ob der Handshake abgeschlossen und die Verbindung offen ist.
+func (t *Transport) Ready() bool {
+	g := t.current()
+	return g != nil && g.ready.Load()
 }
 
 // Notify schreibt notifications/claude/channel mit params {content, meta}.
 func (t *Transport) Notify(ctx context.Context, n Notification) error {
-	t.mu.Lock()
-	conn := t.conn
-	t.mu.Unlock()
-	if conn == nil {
+	g := t.current()
+	if g == nil || !g.ready.Load() {
 		return ErrNotConnected
 	}
 	req, err := n.request()
 	if err != nil {
 		return err
 	}
-	return conn.Write(ctx, req)
+	return g.Write(ctx, req)
 }

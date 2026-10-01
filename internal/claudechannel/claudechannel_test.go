@@ -84,7 +84,19 @@ func TestNotificationWireForm(t *testing.T) {
 	if _, ok := exp["claude/channel"]; !ok {
 		t.Fatalf("capabilities.experimental[claude/channel] missing: %v", caps)
 	}
+	if tr.Ready() {
+		t.Fatal("transport must not be ready before notifications/initialized")
+	}
+	if err := tr.Notify(ctx, Notification{}); !errors.Is(err, ErrNotConnected) {
+		t.Fatalf("notify before handshake: %v", err)
+	}
 	send(`{"jsonrpc":"2.0","method":"notifications/initialized"}`)
+	for deadline := time.Now().Add(5 * time.Second); !tr.Ready(); {
+		if time.Now().After(deadline) {
+			t.Fatal("transport never became ready after notifications/initialized")
+		}
+		time.Sleep(time.Millisecond)
+	}
 
 	room := store.CoordRoom{Key: "direct:a:b", Kind: store.RoomDirect}
 	m := store.CoordMessage{ID: 42, SenderExternalID: "sess-b", OriginEventID: "ev-7"}
@@ -108,6 +120,13 @@ func TestNotificationWireForm(t *testing.T) {
 	}
 	if _, hasID := got["id"]; hasID {
 		t.Fatal("a notification must not carry an id")
+	}
+	ss.Close()
+	if tr.Ready() {
+		t.Fatal("transport must not be ready after close")
+	}
+	if err := tr.Notify(ctx, Notification{}); !errors.Is(err, ErrNotConnected) {
+		t.Fatalf("notify after close: %v", err)
 	}
 }
 
@@ -213,9 +232,16 @@ func (f *fakeServer) SetCursor(_ string, room store.CoordRoom, id int64) error {
 }
 
 type fakeNotifier struct {
-	f    *fakeServer
-	got  []Notification
-	fail error
+	f     *fakeServer
+	got   []Notification
+	fail  error
+	notUp bool // nicht bereit: Handshake fehlt oder Verbindung zu
+}
+
+func (n *fakeNotifier) Ready() bool {
+	n.f.mu.Lock()
+	defer n.f.mu.Unlock()
+	return !n.notUp
 }
 
 func (n *fakeNotifier) Notify(_ context.Context, note Notification) error {
@@ -229,10 +255,21 @@ func (n *fakeNotifier) Notify(_ context.Context, note Notification) error {
 	return nil
 }
 
-type openBudget struct{ exhausted bool }
+// openBudget ist ein Budget ohne Dateizustand. exhausted ruft emit("") wie
+// hookbudget bei einem leeren Konto; err scheitert vor emit wie ein
+// unlesbares Konto.
+type openBudget struct {
+	exhausted bool
+	err       error
+}
 
-func (b openBudget) Exhausted(string) bool { return b.exhausted }
-func (openBudget) Deliver(_, text string, emit func(string) error) error {
+func (b openBudget) Deliver(_, text string, emit func(string) error) error {
+	if b.err != nil {
+		return b.err
+	}
+	if b.exhausted {
+		return emit("")
+	}
 	return emit(text)
 }
 
@@ -330,34 +367,166 @@ func TestPollerNeverClaimsWhatItWillNotWake(t *testing.T) {
 	}
 }
 
-func TestLostClaimIsNotRedeliveredAfterNotifyFailure(t *testing.T) {
+func TestNotReadyNotifierLosesNothing(t *testing.T) {
 	f := newFakeServer(directRoom)
-	f.msgs[directRoom.Key] = []store.CoordMessage{{ID: 9, SenderExternalID: "peer", Body: "x"}}
-	n := &fakeNotifier{f: f, fail: errors.New("transport gone")}
-	p := newPoller(f, n)
-	if _, err := p.Poll(context.Background()); err == nil {
-		t.Fatal("notify failure must surface")
+	f.msgs[directRoom.Key] = []store.CoordMessage{
+		{ID: 1, SenderExternalID: "peer", Body: "a"},
+		{ID: 2, SenderExternalID: "peer", Body: "b"},
 	}
-	n.fail = nil
+	n := &fakeNotifier{f: f, notUp: true}
+	p := newPoller(f, n)
+	for i := 0; i < 3; i++ {
+		if active, err := p.Poll(context.Background()); err != nil || active {
+			t.Fatalf("not ready: active=%v err=%v", active, err)
+		}
+	}
+	if len(f.claimed) != 0 || len(n.got) != 0 {
+		t.Fatalf("claimed=%v notified=%d while not ready", f.claimed, len(n.got))
+	}
+	n.notUp = false
 	if _, err := p.Poll(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(n.got) != 0 {
-		t.Fatal("at-most-once: a claimed message must not be delivered again")
+	if len(n.got) != 2 || n.got[0].Content != "a" || n.got[1].Content != "b" {
+		t.Fatalf("after readiness want exactly the two messages once, got %+v", n.got)
 	}
-	if f.cursor[directRoom.Key] != 0 {
-		t.Fatal("cursor must not move for an undelivered message")
+	_, _ = p.Poll(context.Background())
+	if len(n.got) != 2 {
+		t.Fatalf("redelivered: %d", len(n.got))
 	}
 }
 
-func TestExhaustedBudgetDoesNotClaim(t *testing.T) {
+// Wird der Notifier mitten im Stapel unbereit, gilt dasselbe.
+func TestNotifierGoingAwayMidBatchStopsBeforeTheNextClaim(t *testing.T) {
+	f := newFakeServer(directRoom)
+	f.msgs[directRoom.Key] = []store.CoordMessage{
+		{ID: 1, SenderExternalID: "peer", Body: "a"},
+		{ID: 2, SenderExternalID: "peer", Body: "b"},
+	}
+	n := &fakeNotifier{f: f}
+	p := newPoller(f, n)
+	p.Budget = budgetFunc(func(_, text string, emit func(string) error) error {
+		err := emit(text)
+		n.f.mu.Lock()
+		n.notUp = true // Verbindung weg nach der ersten Zustellung
+		n.f.mu.Unlock()
+		return err
+	})
+	if _, err := p.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(n.got) != 1 || f.claimed[2] {
+		t.Fatalf("delivered=%d claimed2=%v", len(n.got), f.claimed[2])
+	}
+	n.notUp = false
+	p.Budget = openBudget{}
+	if _, err := p.Poll(context.Background()); err != nil || len(n.got) != 2 {
+		t.Fatalf("err=%v delivered=%d", err, len(n.got))
+	}
+}
+
+type budgetFunc func(session, text string, emit func(string) error) error
+
+func (b budgetFunc) Deliver(s, text string, emit func(string) error) error { return b(s, text, emit) }
+
+func TestBudgetReadErrorFailsClosed(t *testing.T) {
+	f := newFakeServer(directRoom)
+	f.msgs[directRoom.Key] = []store.CoordMessage{{ID: 1, SenderExternalID: "peer", Body: "x"}}
+	n := &fakeNotifier{f: f}
+	p := newPoller(f, n)
+	p.Budget = openBudget{err: errors.New("state dir unreadable")}
+	active, err := p.Poll(context.Background())
+	if err == nil || active {
+		t.Fatalf("budget error must surface and not count as activity: active=%v err=%v", active, err)
+	}
+	if len(f.claimed) != 0 || len(n.got) != 0 {
+		t.Fatal("no claim without a reserved budget")
+	}
+	p.Budget = openBudget{}
+	if _, err := p.Poll(context.Background()); err != nil || len(n.got) != 1 {
+		t.Fatalf("after recovery: err=%v delivered=%d", err, len(n.got))
+	}
+}
+
+// Der Budgetfehler geht über OnError, und Run geht in den Backoff.
+func TestBudgetReadErrorIsReportedAndBacksOff(t *testing.T) {
+	f := newFakeServer(directRoom)
+	f.msgs[directRoom.Key] = []store.CoordMessage{{ID: 1, SenderExternalID: "peer", Body: "x"}}
+	ctx, cancel := context.WithCancel(context.Background())
+	rec := &sleepRecorder{cancel: cancel, stop: 4}
+	var errs []error
+	p := newPoller(f, &fakeNotifier{f: f})
+	p.Budget = openBudget{err: errors.New("unreadable")}
+	p.Sleep = rec.Sleep
+	p.OnError = func(err error) { errs = append(errs, err) }
+	_ = p.Run(ctx)
+	s := time.Second
+	if len(errs) != 4 || !reflect.DeepEqual(rec.d, []time.Duration{2 * s, 4 * s, 8 * s, 10 * s}) {
+		t.Fatalf("errs=%d waits=%v", len(errs), rec.d)
+	}
+}
+
+// Ein dauerhaft scheiternder Claim blockiert den Raum, geht aber in den Backoff
+// statt im 2-s-Takt weiterzulaufen.
+func TestPersistentClaimFailureBacksOff(t *testing.T) {
+	f := newFakeServer(directRoom)
+	f.msgs[directRoom.Key] = []store.CoordMessage{{ID: 1, SenderExternalID: "peer", Body: "x"}}
+	n := &fakeNotifier{f: f}
+	ctx, cancel := context.WithCancel(context.Background())
+	rec := &sleepRecorder{cancel: cancel, stop: 3}
+	p := newPoller(f, n)
+	p.Source = &claimFails{fakeServer: f}
+	p.Sleep = rec.Sleep
+	errs := 0
+	p.OnError = func(error) { errs++ }
+	_ = p.Run(ctx)
+	s := time.Second
+	if errs != 3 || !reflect.DeepEqual(rec.d, []time.Duration{2 * s, 4 * s, 8 * s}) {
+		t.Fatalf("errs=%d waits=%v", errs, rec.d)
+	}
+	if len(n.got) != 0 {
+		t.Fatal("nothing may be delivered when the claim never succeeds")
+	}
+}
+
+type claimFails struct{ *fakeServer }
+
+func (c *claimFails) Claim(string, int64) (bool, error) { return false, errors.New("server down") }
+
+// Mentions, die dauerhaft scheitern, verhalten sich genauso.
+func TestPersistentMentionsFailureBacksOff(t *testing.T) {
+	project := store.CoordRoom{Key: "project:x", Kind: store.RoomProject}
+	f := newFakeServer(project)
+	f.msgs[project.Key] = []store.CoordMessage{{ID: 1, SenderExternalID: "peer", Body: "x"}}
+	ctx, cancel := context.WithCancel(context.Background())
+	rec := &sleepRecorder{cancel: cancel, stop: 3}
+	p := newPoller(f, &fakeNotifier{f: f})
+	p.Source = &mentionsFail{fakeServer: f}
+	p.Sleep = rec.Sleep
+	_ = p.Run(ctx)
+	s := time.Second
+	if !reflect.DeepEqual(rec.d, []time.Duration{2 * s, 4 * s, 8 * s}) {
+		t.Fatalf("waits=%v", rec.d)
+	}
+}
+
+type mentionsFail struct{ *fakeServer }
+
+func (m *mentionsFail) Mentions(string, int64) ([]string, error) {
+	return nil, errors.New("server down")
+}
+
+// Erschöpft das Budget erst beim Reservieren (emit("")), ist nichts geclaimt,
+// und der Durchlauf zählt nicht als Aktivität.
+func TestExhaustedBudgetDoesNotClaimOrCountAsActivity(t *testing.T) {
 	f := newFakeServer(directRoom)
 	f.msgs[directRoom.Key] = []store.CoordMessage{{ID: 1, SenderExternalID: "peer", Body: "x"}}
 	n := &fakeNotifier{f: f}
 	p := newPoller(f, n)
 	p.Budget = openBudget{exhausted: true}
-	if _, err := p.Poll(context.Background()); err != nil {
-		t.Fatal(err)
+	active, err := p.Poll(context.Background())
+	if err != nil || active {
+		t.Fatalf("active=%v err=%v", active, err)
 	}
 	if len(f.claimed) != 0 || len(n.got) != 0 {
 		t.Fatal("an exhausted budget must leave the message unclaimed for the pull path")
@@ -365,6 +534,23 @@ func TestExhaustedBudgetDoesNotClaim(t *testing.T) {
 	p.Budget = openBudget{}
 	if _, err := p.Poll(context.Background()); err != nil || len(n.got) != 1 {
 		t.Fatalf("after recovery: err=%v delivered=%d", err, len(n.got))
+	}
+}
+
+// Ein echter Write-Fehler nach dem Claim bleibt die dokumentierte
+// at-most-once-Grenze: Fehler sichtbar, Nachricht nicht erneut zugestellt.
+func TestWriteFailureAfterClaimIsTheDocumentedAtMostOnceLimit(t *testing.T) {
+	f := newFakeServer(directRoom)
+	f.msgs[directRoom.Key] = []store.CoordMessage{{ID: 9, SenderExternalID: "peer", Body: "x"}}
+	n := &fakeNotifier{f: f, fail: errors.New("write failed")}
+	p := newPoller(f, n)
+	if _, err := p.Poll(context.Background()); err == nil {
+		t.Fatal("write failure must surface")
+	}
+	n.fail = nil
+	_, _ = p.Poll(context.Background())
+	if len(n.got) != 0 || f.cursor[directRoom.Key] != 0 {
+		t.Fatal("a claimed message is not delivered again and the cursor does not move")
 	}
 }
 

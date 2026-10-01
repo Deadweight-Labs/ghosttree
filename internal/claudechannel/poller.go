@@ -34,24 +34,16 @@ type Source interface {
 
 // Budget begrenzt die Zustellung je Session. Die echte Seite ist
 // hookbudget.DeliverChannel auf dem Koordinationskanal.
+//
+// Deliver reserviert das Budget UND ruft emit, in einem Schritt. Der Poller
+// claimt deshalb erst innerhalb von emit: ist das Budget erschöpft (emit("")),
+// oder scheitert das Lesen des Kontos (emit wird nie gerufen), ist nichts
+// geclaimt und nichts verloren.
 type Budget interface {
-	// Exhausted sagt, ob gerade nichts mehr durchgeht. Der Poller claimt dann
-	// nicht: eine geclaimte, aber verschluckte Nachricht wäre auch im Pull-Pfad
-	// verborgen.
-	Exhausted(session string) bool
 	Deliver(session, text string, emit func(string) error) error
 }
 
 type hookBudget struct{}
-
-func (hookBudget) Exhausted(session string) bool {
-	r, err := hookbudget.ChannelUsage(session, hookbudget.ChannelCoord)
-	if err != nil || !r.Exhausted {
-		return false
-	}
-	// Das rollende Fenster erholt sich; ein altes Konto sperrt nicht mehr.
-	return time.Since(r.StartedAt) <= hookbudget.ChannelWindow(hookbudget.ChannelCoord)
-}
 
 func (hookBudget) Deliver(session, text string, emit func(string) error) error {
 	return hookbudget.DeliverChannel(session, hookbudget.ChannelCoord, text, emit)
@@ -132,6 +124,9 @@ func (p *Poller) Poll(ctx context.Context) (active bool, err error) {
 	if p.pos == nil {
 		p.pos = map[string]int64{}
 	}
+	if !p.Notifier.Ready() {
+		return false, nil
+	}
 	rooms, err := p.Source.Rooms(p.Self)
 	if err != nil {
 		return false, err
@@ -150,6 +145,9 @@ func (p *Poller) Poll(ctx context.Context) (active bool, err error) {
 	return active, firstErr
 }
 
+// pollRoom gibt zurück, ob etwas vorangekommen ist (Nachricht zugestellt).
+// Ungeweckter Verkehr, Fehler und Stillstand zählen nicht: sie gehen in den
+// Backoff, statt im Takt von 2 s denselben Fehler zu wiederholen.
 func (p *Poller) pollRoom(ctx context.Context, room store.CoordRoom) (bool, error) {
 	cursor, err := p.Source.Cursor(p.Self, room)
 	if err != nil {
@@ -163,6 +161,7 @@ func (p *Poller) pollRoom(ctx context.Context, room store.CoordRoom) (bool, erro
 	if err != nil {
 		return false, err
 	}
+	progress := false
 	// contiguous: bis hierher ist alles zugestellt oder eigene Post. Nur dann
 	// darf der gemeinsame Cursor vorrücken, sonst verschwänden ungeweckte
 	// Nachrichten aus coord_inbox.
@@ -172,19 +171,20 @@ func (p *Poller) pollRoom(ctx context.Context, room store.CoordRoom) (bool, erro
 			continue
 		}
 		delivered, err := p.handle(ctx, room, m)
-		if errors.Is(err, errBudget) {
-			return true, nil // erschöpftes Budget ist kein Fehler; die Post bleibt im Pull-Pfad lesbar
+		if errors.Is(err, errStalled) {
+			return progress, nil // Position bleibt stehen, nichts ist geclaimt
 		}
 		if err != nil {
-			return true, err
+			return progress, err
 		}
 		pos = m.ID
 		p.pos[room.Key] = pos
+		progress = progress || delivered
 		switch {
 		case delivered:
 			if contiguous && m.ID > cursor {
 				if err := p.Source.SetCursor(p.Self, room, m.ID); err != nil {
-					return true, err
+					return progress, err
 				}
 				cursor = m.ID
 			}
@@ -193,12 +193,13 @@ func (p *Poller) pollRoom(ctx context.Context, room store.CoordRoom) (bool, erro
 			contiguous = false
 		}
 	}
-	return len(msgs) > 0, nil
+	return progress, nil
 }
 
-// handle entscheidet über eine Nachricht. Reihenfolge: Claim, dann
-// Notification. Ein Fehler VOR dem Claim lässt die Nachricht für den nächsten
-// Durchlauf stehen; nach dem Claim ist sie at-most-once (siehe doc.go).
+// handle entscheidet über eine Nachricht. Geclaimt wird erst, wenn die
+// Zustellung gesichert ist: Notifier bereit und Budget reserviert. Danach
+// bleibt als einziges ein echter Write-Fehler, und der ist at-most-once (siehe
+// doc.go). errStalled heißt: nichts geclaimt, später erneut versuchen.
 func (p *Poller) handle(ctx context.Context, room store.CoordRoom, m store.CoordMessage) (bool, error) {
 	now := p.now()
 	if !wakeCandidate(p.Self, room.Kind, m, now) {
@@ -213,20 +214,22 @@ func (p *Poller) handle(ctx context.Context, room store.CoordRoom, m store.Coord
 			return false, nil
 		}
 	}
-	if p.budget().Exhausted(p.Self) {
-		return false, errBudget
+	if !p.Notifier.Ready() {
+		return false, errStalled
 	}
-	won, err := p.Source.Claim(p.Self, m.ID)
-	if err != nil {
-		return false, err
-	}
-	if !won {
-		return false, nil // ein anderer Poller hat sie; nie erneut zustellen
-	}
-	sent := false
-	err = p.budget().Deliver(p.Self, m.Body, func(text string) error {
+	sent, lost, stalled := false, false, false
+	err := p.budget().Deliver(p.Self, m.Body, func(text string) error {
 		if text == "" {
-			return nil // Budget erschöpft; nichts geht raus
+			stalled = true // Budget erschöpft; nichts geclaimt
+			return nil
+		}
+		won, err := p.Source.Claim(p.Self, m.ID)
+		if err != nil {
+			return err
+		}
+		if !won {
+			lost = true // ein anderer Poller hat sie; nie erneut zustellen
+			return nil
 		}
 		if err := p.Notifier.Notify(ctx, NewNotification(room, m, text)); err != nil {
 			return err
@@ -234,14 +237,26 @@ func (p *Poller) handle(ctx context.Context, room store.CoordRoom, m store.Coord
 		sent = true
 		return nil
 	})
-	return sent, err
+	switch {
+	case sent && err != nil:
+		// Zugestellt, nur die Buchführung danach schlug fehl.
+		if p.OnError != nil {
+			p.OnError(err)
+		}
+		return true, nil
+	case err != nil:
+		return false, err
+	case stalled:
+		return false, errStalled
+	case lost:
+		return false, nil
+	}
+	return sent, nil
 }
 
-type budgetError struct{}
-
-func (budgetError) Error() string { return "claude channel: coordination budget exhausted" }
-
-var errBudget error = budgetError{}
+// errStalled: im Moment kann nicht zugestellt werden (Notifier nicht bereit,
+// Budget erschöpft). Kein Fehler, aber auch kein Fortschritt.
+var errStalled = errors.New("claude channel: delivery stalled")
 
 // ClientSource ist die Source gegen den ghosttree-Server. Extra nennt Räume,
 // die der Server nicht je Teilnehmer auflistet, also den Projekt- und

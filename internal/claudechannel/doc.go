@@ -11,13 +11,23 @@
 // Zustellung ist AT-MOST-ONCE, und das ist eine bekannte Grenze, kein Zufall.
 // Je Nachricht gilt die Reihenfolge Claim, dann Notification, dann Cursor. Der
 // Claim ist atomar im Server, damit zwei Poller derselben Session nicht beide
-// zustellen. Ein gewonnener Claim, dessen Notification nie rausgeht (der
-// Prozess stirbt dazwischen, der Transport ist weg), ist verloren: der Claim
-// wird nicht zurückgegeben, die Nachricht wird nie erneut zugestellt, und der
-// Pull-Pfad (coord_inbox, coord_dm_read) blendet sie ebenfalls aus, weil er
-// geclaimte Nachrichten als eingebracht behandelt. Das ist der Preis dafür,
-// dass nie doppelt zugestellt wird; die Alternative wäre eine Nachricht, die
-// eine Session zweimal weckt.
+// zustellen, und er wird nie zurückgenommen: die Zustände bleiben monoton.
+//
+// Deshalb claimt der Poller erst, wenn die Zustellung gesichert ist: der
+// Notifier ist bereit (Handshake abgeschlossen, nicht geschlossen) und das
+// Koordinationsbudget ist reserviert. Der Claim läuft innerhalb von
+// hookbudget.DeliverChannel, direkt vor dem Schreiben. Ist der Notifier nicht
+// bereit, das Budget erschöpft oder sein Konto nicht lesbar, gibt es keinen
+// Claim, die Position bleibt stehen, und der Poller geht in den Backoff.
+//
+// Übrig bleibt genau ein Verlustfall: ein gewonnener Claim, dessen Write
+// scheitert oder dessen Prozess dazwischen stirbt. Diese Nachricht wird nie
+// erneut zugestellt, und der Pull-Pfad (coord_inbox, coord_dm_read) blendet sie
+// ebenfalls aus, weil er geclaimte Nachrichten als eingebracht behandelt. Das
+// ist der Preis dafür, dass nie doppelt zugestellt wird. Ein kleineres
+// Restfenster: verliert ein Poller den Claim gegen einen anderen, ist sein
+// reserviertes Budget trotzdem verbraucht, weil hookbudget Reservieren und
+// Schreiben nicht trennt.
 //
 // Der Cursor ist der gemeinsame Lesestand des Pull-Pfads und wird deshalb nur
 // bis zur ersten Nachricht fortgeschrieben, die der Poller NICHT zugestellt hat
