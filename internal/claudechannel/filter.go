@@ -55,23 +55,71 @@ func attentionIntent(m store.CoordMessage) bool {
 	return false
 }
 
-// isPlainReply sagt, ob die Nachricht eine bloße Antwort auf eine eigene ist
-// und deshalb nicht wecken soll. Ohne das antworten sich zwei Channel-Agenten
-// endlos: jede reply weckt den anderen, der wieder antwortet. Menschen sind
-// ausgenommen, denn von ihnen geht keine Schleife aus. Die Nachricht bleibt im
-// Pull-Pfad sichtbar; sie wird nur nicht gepusht.
-func isPlainReply(m store.CoordMessage, replyToOwn bool) bool {
-	return m.ReplyTo != 0 && replyToOwn && !attentionIntent(m) && m.AuthorKind != store.AuthorHuman
+// ParentKind sagt, worauf eine Nachricht antwortet, soweit es für den
+// Wake-Filter zählt.
+type ParentKind int
+
+const (
+	// ParentNotOwn: keine Antwort, oder eine Antwort auf Fremdes.
+	ParentNotOwn ParentKind = iota
+	// ParentOwnRequest: Antwort auf eine eigene Anfrage (siehe ClassifyParent).
+	ParentOwnRequest
+	// ParentOwnOther: Antwort auf eine eigene Nachricht, die keine Anfrage war.
+	ParentOwnOther
+)
+
+// ClassifyParent ordnet die Ursprungsnachricht einer Antwort ein. self ist der
+// Empfänger, parent die Nachricht, auf die geantwortet wird, replier der
+// Absender der Antwort, parentMentions die Erwähnungen von parent.
+//
+// Eine Anfrage ist eine Nachricht mit Attention-Intent (Frage, Freigabe,
+// Blocker, Übergabe) oder eine Nachricht, die selbst keine Antwort ist und den
+// Antwortenden ausdrücklich erwähnt. In Direkt- und Gruppenräumen gibt es keine
+// Erwähnungen; dort ist jede eigene Nachricht, die selbst keine Antwort ist,
+// eine Anfrage. Das reply-Tool erwähnt in Raumverkehr den
+// Absender automatisch; diese Erwähnung steht immer an einer Antwort und macht
+// sie deshalb nie zur Anfrage. So bleibt der Schleifenschutz: eine Antwort auf
+// eine Antwort (etwa ein Dank) weckt nicht, und eine Kette endet nach einer
+// Antwort.
+func ClassifyParent(self, roomKind string, parent store.CoordMessage, replier string, parentMentions []string) ParentKind {
+	if !isOwn(self, parent) {
+		return ParentNotOwn
+	}
+	if attentionIntent(parent) {
+		return ParentOwnRequest
+	}
+	if parent.ReplyTo == 0 && !needsMentions(roomKind) {
+		return ParentOwnRequest
+	}
+	if parent.ReplyTo == 0 {
+		for _, who := range parentMentions {
+			if who == replier {
+				return ParentOwnRequest
+			}
+		}
+	}
+	return ParentOwnOther
 }
 
-// ShouldWake ist der Wake-Filter v1: Erwähnungen der eigenen Identität sowie
-// Direkt- und Gruppenräume. Nie eigene Nachrichten, nichts Abgelaufenes.
-// Attention-Intents wecken erst in v2. mentions sind die Erwähnungen der
-// Nachricht und werden nur für Projekt- und Maschinenräume gelesen.
-// replyToOwn sagt, dass m.ReplyTo auf eine Nachricht von self zeigt; eine
-// bloße Antwort darauf weckt nicht (siehe isPlainReply).
-func ShouldWake(self, roomKind string, m store.CoordMessage, mentions []string, replyToOwn bool, now time.Time) bool {
-	if !wakeCandidate(self, roomKind, m, now) || isPlainReply(m, replyToOwn) {
+// isPlainReply sagt, ob die Nachricht eine bloße Antwort auf eine eigene ist,
+// die keine Anfrage beantwortet, und deshalb nicht wecken soll. Ohne das
+// antworten sich zwei Channel-Agenten endlos: jede reply weckt den anderen, der
+// wieder antwortet. Menschen sind ausgenommen, denn von ihnen geht keine
+// Schleife aus. Die Nachricht bleibt im Pull-Pfad sichtbar; sie wird nur nicht
+// gepusht.
+func isPlainReply(m store.CoordMessage, parent ParentKind) bool {
+	return m.ReplyTo != 0 && parent == ParentOwnOther && !attentionIntent(m) && m.AuthorKind != store.AuthorHuman
+}
+
+// ShouldWake ist der Wake-Filter: Erwähnungen der eigenen Identität sowie
+// Direkt- und Gruppenräume, nie eigene Nachrichten, nichts Abgelaufenes.
+// Attention-Intents wecken auch als Antwort. Eine Antwort auf eine eigene
+// Anfrage weckt (parent == ParentOwnRequest); eine Antwort auf eine eigene
+// Nicht-Anfrage, etwa auf eine Antwort, weckt nicht (siehe isPlainReply).
+// mentions sind die Erwähnungen der Nachricht und werden nur für Projekt- und
+// Maschinenräume gelesen.
+func ShouldWake(self, roomKind string, m store.CoordMessage, mentions []string, parent ParentKind, now time.Time) bool {
+	if !wakeCandidate(self, roomKind, m, now) || isPlainReply(m, parent) {
 		return false
 	}
 	if !needsMentions(roomKind) {

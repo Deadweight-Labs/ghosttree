@@ -49,11 +49,31 @@
 // der Write selbst läuft unter dem Datei-Lock, und eine blockierte Pipe hält
 // ihn, bis sie sich löst.
 //
-// Schleifenschutz: eine bloße Antwort auf eine eigene Nachricht weckt nicht
-// (siehe ShouldWake), und die Tool-Instruktion bittet, Antworten nicht zu
-// beantworten. Das schließt nur die Antwortschleife. Eine Schleife über
-// bewusste Sends mit Intent question, Blocker und so weiter oder über frische
-// DMs ist nicht verhindert und nur durch das Koordinationsbudget begrenzt.
+// Weckregel für Antworten und Schleifenschutz: eine Antwort auf eine eigene
+// Anfrage weckt den Fragenden (siehe ClassifyParent), damit er nicht pollen
+// muss. Eine Anfrage ist eine Nachricht mit Attention-Intent (Frage, Freigabe,
+// Blocker, Übergabe) oder eine Nachricht, die selbst keine Antwort ist und den
+// Antwortenden ausdrücklich erwähnt; in Direkt- und Gruppenräumen, wo es keine
+// Erwähnungen gibt, ist jede eigene Nachricht, die keine Antwort ist, eine
+// Anfrage. Die Erwähnung, die das reply-Tool in
+// Projekträumen automatisch am Absender setzt, macht eine Antwort nie zur
+// Anfrage. Eine Antwort auf eine eigene Antwort oder sonstige Nicht-Anfrage,
+// etwa ein Dank, weckt nicht, und die Tool-Instruktion bittet, Antworten nicht
+// zu beantworten: eine Kette endet nach einer Antwort. Eine Schleife über
+// bewusste Sends (A sendet mit Mention, B sendet mit Mention, ...) begrenzt
+// zweierlei: das send-Tool lässt je Channel-Prozess höchstens 10 Sends mit
+// Mention pro Minute und 30 pro 15 Minuten zu (ctx channel, sendMentionsPer*),
+// und das Empfangsbudget (hookbudget.CoordLimit, 12000 Zeichen je 5 Minuten)
+// kürzt die Zustellung. Letzteres greift bei kurzen Nachrichten erst spät,
+// deshalb die Sendegrenze. Der Inhalt einer Notification wird von
+// "<channel" und "</channel" befreit (zu "&lt;channel"), damit ein Body keinen
+// eigenen Channel-Block mit gefälschtem sender_kind vortäuscht.
+//
+// Gespräche beginnen: der Channel-Server (ctx channel) bietet neben reply das
+// Tool send. Es schreibt in den Projekt- oder Maschinenraum, mit Mentions und
+// optionalem Intent, über dieselben Client- und Store-Wege wie coord_send. Ein
+// Channel-Agent braucht dafür kein ctx mcp daneben. Eine Anfrage mit send ist
+// genau die Nachricht, deren Beantwortung den Fragenden weckt (siehe oben).
 //
 // Der Cursor ist der gemeinsame Lesestand des Pull-Pfads und wird deshalb nur
 // bis zur ersten Nachricht fortgeschrieben, die der Poller NICHT zugestellt hat

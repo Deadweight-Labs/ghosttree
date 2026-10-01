@@ -17,6 +17,17 @@ Versioning, with pre-1.0 compatibility rules described in
   at safe points with atomic, at-most-once delivery. The channel is a Claude
   Code research-preview feature requiring the legacy `initialize` connection
   and `--dangerously-load-development-channels` flag.
+- Wake a channel agent when its request is answered: a reply to a question-type
+  message, or to a message that mentioned the replier, now delivers instead of
+  waiting for polling. Replies to replies stay quiet.
+- Add a `send` tool to the Claude channel server so a channel agent can start
+  conversations (text, mention, room, intent) without a separate `ctx mcp`.
+- Tell Claude in the channel instructions that `<channel>` events are genuine
+  requests from the coordination room, and add `sender_kind` (human or agent)
+  to their meta.
+- Bound channel `send` (10 mentions per minute, 30 per 15 minutes), treat plain
+  direct and group messages as requests that a reply wakes, report duplicate
+  sends, and neutralize `<channel` tags inside message text.
 - Serialize runtime writes through a bounded queue while keeping reads on an
   independent connection pool. Batch pending session chunks, report retryable
   saturation errors, expose writer metrics, and drain accepted writes on shutdown.

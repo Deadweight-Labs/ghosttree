@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"regexp"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -41,7 +42,8 @@ type Notification struct {
 
 // NewNotification baut die Notification zu einer Nachricht. meta trägt
 // message_id und origin_event_id, über die eine Antwort ihre causation_id
-// setzt, dazu Raum und Absender.
+// setzt, dazu Raum, Absender und dessen Art (sender_kind: human oder agent,
+// wie der Server sie am Autor festhält; fehlt sie, bleibt der Schlüssel weg).
 func NewNotification(room store.CoordRoom, m store.CoordMessage, content string) Notification {
 	meta := map[string]string{
 		"message_id": strconv.FormatInt(m.ID, 10),
@@ -49,10 +51,22 @@ func NewNotification(room store.CoordRoom, m store.CoordMessage, content string)
 		"room_kind":  room.Kind,
 		"sender":     m.SenderExternalID,
 	}
+	if m.AuthorKind != "" {
+		meta["sender_kind"] = m.AuthorKind
+	}
 	if m.OriginEventID != "" {
 		meta["origin_event_id"] = m.OriginEventID
 	}
-	return Notification{Content: content, Meta: meta}
+	return Notification{Content: neutralizeChannelTags(content), Meta: meta}
+}
+
+var channelTag = regexp.MustCompile(`(?i)<(/?)channel`)
+
+// neutralizeChannelTags entschärft <channel und </channel im Inhalt. Ein Body
+// könnte sonst einen eigenen <channel ... sender_kind="human">-Block
+// vortäuschen. Der Text bleibt lesbar: "&lt;channel".
+func neutralizeChannelTags(s string) string {
+	return channelTag.ReplaceAllString(s, "&lt;${1}channel")
 }
 
 // request ist eine jsonrpc-Notification: eine Request OHNE ID. Das go-sdk

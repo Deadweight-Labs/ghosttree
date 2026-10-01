@@ -214,13 +214,22 @@ func (p *Poller) handle(ctx context.Context, room store.CoordRoom, m store.Coord
 	if !wakeCandidate(p.Self, room.Kind, m, now) {
 		return false, nil
 	}
-	replyToOwn := false
+	parentKind := ParentNotOwn
 	if m.ReplyTo != 0 && !attentionIntent(m) && m.AuthorKind != store.AuthorHuman {
 		parent, ok, err := p.Source.Message(p.Self, room, m.ReplyTo)
 		if err != nil {
 			return false, err // fail-closed: ohne Antwort kein Claim
 		}
-		replyToOwn = ok && isOwn(p.Self, parent)
+		if ok && isOwn(p.Self, parent) {
+			var parentMentions []string
+			// Erwähnungen nur, wenn sie die Entscheidung tragen.
+			if !attentionIntent(parent) && parent.ReplyTo == 0 && needsMentions(room.Kind) {
+				if parentMentions, err = p.Source.Mentions(p.Self, parent.ID); err != nil {
+					return false, err
+				}
+			}
+			parentKind = ClassifyParent(p.Self, room.Kind, parent, m.SenderExternalID, parentMentions)
+		}
 	}
 	var mentions []string
 	if needsMentions(room.Kind) {
@@ -229,7 +238,7 @@ func (p *Poller) handle(ctx context.Context, room store.CoordRoom, m store.Coord
 			return false, err
 		}
 	}
-	if !ShouldWake(p.Self, room.Kind, m, mentions, replyToOwn, now) {
+	if !ShouldWake(p.Self, room.Kind, m, mentions, parentKind, now) {
 		return false, nil
 	}
 	if !p.Notifier.Ready() {

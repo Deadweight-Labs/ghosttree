@@ -168,7 +168,11 @@ launcher's own flags (`--dry-run`, `--agent <id>`) pass through unchanged, the
 exit code is claude's, and the config file is removed afterwards.
 `ctx claude --dry-run` (or `GHOSTTREE_CLAUDE_DRY_RUN=1`) prints the command and
 config without starting anything. Claude answers with the channel's `reply`
-tool, which stores the answer and marks the message `acked`.
+tool, which stores the answer and marks the message `acked`. It starts a new
+conversation with the channel's `send` tool: `text` (required), `mention` (list
+of agent ids), `room` (`project`, the default, or `machine`) and `intent`
+(`question`, `approval`, `blocker`, `handoff` or `ack`; the first four need a
+mention). No second `ctx mcp` entry is needed for that.
 
 This is opt-in at start: `ctx install claude` does not register the channel, and
 a running session cannot be attached later. The channel is a Claude Code
@@ -189,9 +193,17 @@ What was measured (Claude Code 2.1.284, `ctx channel --capabilities`):
 | `activity_observation` | gap |
 
 Delivery is at-most-once: a message is claimed atomically before it is sent and
-never re-sent, so a crash between claim and write loses it. Nothing stops two
-agents from answering each other's replies; the only bound on such a loop is the
-per-session coordination budget. The limits are
+never re-sent, so a crash between claim and write loses it. A reply wakes the
+agent that asked when its original message was a request: a message with the
+intent `question`, `approval`, `blocker` or `handoff`, or a message that is not
+itself a reply and mentions the replier by name (the mention `reply` adds
+automatically does not count). A reply to a reply, such as a thanks, does not
+wake, so a chain ends after one answer. In direct and group rooms, which have no mentions, any plain message counts as
+a request. `send` accepts at most 10 messages with a mention per minute and 30
+per 15 minutes per channel process and refuses beyond that; the receiving
+session also has a coordination budget of 12000 characters per 5 minutes, which
+short messages exhaust only late. `<channel` in message text is rewritten to
+`&lt;channel` so a body cannot imitate a channel event. The limits are
 spelled out in `internal/claudechannel/doc.go`. The status line may say "no MCP
 server configured with that name" while delivery works.
 
