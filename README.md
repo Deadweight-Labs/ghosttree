@@ -168,7 +168,11 @@ launcher's own flags (`--dry-run`, `--agent <id>`) pass through unchanged, the
 exit code is claude's, and the config file is removed afterwards.
 `ctx claude --dry-run` (or `GHOSTTREE_CLAUDE_DRY_RUN=1`) prints the command and
 config without starting anything. Claude answers with the channel's `reply`
-tool, which stores the answer and marks the message `acked`.
+tool, which stores the answer and marks the message `acked`. It starts a new
+conversation with the channel's `send` tool: `text` (required), `mention` (list
+of agent ids), `room` (`project`, the default, or `machine`) and `intent`
+(`question`, `approval`, `blocker`, `handoff` or `ack`; the first four need a
+mention). No second `ctx mcp` entry is needed for that.
 
 This is opt-in at start: `ctx install claude` does not register the channel, and
 a running session cannot be attached later. The channel is a Claude Code

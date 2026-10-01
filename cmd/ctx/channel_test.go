@@ -115,6 +115,12 @@ type channelProc struct {
 
 func startChannel(t *testing.T, e *channelEnv) *channelProc {
 	t.Helper()
+	return startChannelAs(t, e, channelSelf)
+}
+
+// startChannelAs startet ein `ctx channel` mit eigener Identität.
+func startChannelAs(t *testing.T, e *channelEnv, self string) *channelProc {
+	t.Helper()
 	exe, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -122,7 +128,7 @@ func startChannel(t *testing.T, e *channelEnv) *channelProc {
 	cmd := exec.Command(exe, "-test.run=^TestChannelChild$")
 	cmd.Dir = t.TempDir() // kein Repo: nur der Maschinenraum
 	cmd.Env = append(os.Environ(), "GHOSTTREE_TEST_CHANNEL_CHILD=1", "XDG_CONFIG_HOME="+e.cfgHome,
-		"CLAUDE_CODE_SESSION_ID="+channelSelf, "CODEX_SESSION_ID=", "CODEX_THREAD_ID=", "OPENCODE_SESSION_ID=",
+		"CLAUDE_CODE_SESSION_ID="+self, "CODEX_SESSION_ID=", "CODEX_THREAD_ID=", "OPENCODE_SESSION_ID=",
 		"XDG_STATE_HOME="+t.TempDir())
 	stdin, _ := cmd.StdinPipe()
 	stdout, _ := cmd.StdoutPipe()
@@ -297,7 +303,7 @@ func newChannelProcWithCheck(t *testing.T, e *channelEnv) *channelProc {
 	if info := result["serverInfo"].(map[string]any); info["name"] != "ghosttree-channel" {
 		t.Fatalf("server name = %v", info["name"])
 	}
-	if ins, _ := result["instructions"].(string); !strings.Contains(ins, "reply") || !strings.Contains(ins, "human_steer") {
+	if ins, _ := result["instructions"].(string); !strings.Contains(ins, "reply") || !strings.Contains(ins, "send tool") || !strings.Contains(ins, "human_steer") {
 		t.Fatalf("instructions must name reply and the capability gaps: %q", ins)
 	}
 	return p
@@ -499,5 +505,158 @@ func TestChannelReplyAbortsWhenTheOriginCannotBeLoaded(t *testing.T) {
 	}
 	if got := repliesTo(t, e, room, id); len(got) != 0 {
 		t.Fatalf("nothing may be sent: %+v", got)
+	}
+}
+
+// callTool ruft ein Tool des Channel-Prozesses und gibt Ergebnistext und
+// isError zurück. Dazwischenliegende Notifications werden verworfen.
+func (p *channelProc) callTool(id int, name, args string) (string, bool) {
+	p.t.Helper()
+	p.send(fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"tools/call","params":{"name":%q,"arguments":%s}}`, id, name, args))
+	for {
+		m, ok := p.next(10 * time.Second)
+		if !ok {
+			p.t.Fatalf("no result for tool %s", name)
+		}
+		if fmt.Sprint(m["id"]) != strconv.Itoa(id) {
+			continue
+		}
+		if m["error"] != nil {
+			return fmt.Sprint(m["error"]), true
+		}
+		res := m["result"].(map[string]any)
+		text := ""
+		if content, _ := res["content"].([]any); len(content) > 0 {
+			text, _ = content[0].(map[string]any)["text"].(string)
+		}
+		isErr, _ := res["isError"].(bool)
+		return text, isErr
+	}
+}
+
+// Ein Channel-Agent beginnt mit send ein Gespräch: die Nachricht trägt Mention
+// und Intent, der erwähnte Channel-Agent wird geweckt, der Absender nicht. Die
+// Antwort des anderen weckt dann den Fragenden.
+func TestChannelSendStartsAConversationAndWakesTheMentionedAgent(t *testing.T) {
+	if testing.Short() {
+		t.Skip("subprocess test")
+	}
+	e := newChannelEnv(t)
+	const other = "sess-other"
+	room := store.RoomKeyForMachine("chanbox")
+	if _, err := e.a.RegisterCoordAgent(store.CoordAgent{ExternalID: other, Provider: "test", RoomKey: room, DisplayName: other}); err != nil {
+		t.Fatal(err)
+	}
+	asker := startChannelAs(t, e, channelSelf)
+	asker.handshake()
+	answerer := startChannelAs(t, e, other)
+	answerer.handshake()
+
+	text, isErr := asker.callTool(10, "send", fmt.Sprintf(`{"text":"kannst du das pruefen?","mention":[%q],"intent":"question","room":"machine"}`, other))
+	if isErr || !strings.Contains(text, "stored as message") {
+		t.Fatalf("send = %q isError=%v", text, isErr)
+	}
+	notes := answerer.notifications(20*time.Second, 1)
+	if len(notes) != 1 {
+		t.Fatalf("the mentioned agent must be woken once, got %v", notes)
+	}
+	params := notes[0]["params"].(map[string]any)
+	meta := params["meta"].(map[string]any)
+	if params["content"] != "kannst du das pruefen?" || meta["sender"] != channelSelf || meta["room"] != room {
+		t.Fatalf("notification = %v", notes[0])
+	}
+	if own := asker.notifications(1500*time.Millisecond, 0); len(own) != 0 {
+		t.Fatalf("the sender must not wake itself: %v", own)
+	}
+	msgs, err := e.a.CoordInbox(store.DestinationRoom, room, "sess-sender", 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sent *store.CoordMessage
+	for i := range msgs {
+		if msgs[i].Body == "kannst du das pruefen?" {
+			sent = &msgs[i]
+		}
+	}
+	if sent == nil || sent.Intent != store.IntentQuestion || sent.SenderExternalID != channelSelf {
+		t.Fatalf("stored message = %+v", sent)
+	}
+	if got, err := e.a.CoordMessageMentions(sent.ID, "sess-sender"); err != nil || len(got) != 1 || got[0] != other {
+		t.Fatalf("mentions = %v err=%v", got, err)
+	}
+
+	// Die Antwort weckt den Fragenden.
+	text, isErr = answerer.callTool(11, "reply", fmt.Sprintf(`{"message_id":%q,"text":"ja, erledigt"}`, strconv.FormatInt(sent.ID, 10)))
+	if isErr {
+		t.Fatalf("reply = %q", text)
+	}
+	back := asker.notifications(20*time.Second, 1)
+	if len(back) != 1 || back[0]["params"].(map[string]any)["content"] != "ja, erledigt" {
+		t.Fatalf("the asker must be woken by the answer: %v", back)
+	}
+}
+
+func TestChannelSendValidatesItsInput(t *testing.T) {
+	e := newChannelEnv(t)
+	tools := newTools(e.b)
+	tools.machineRoom = store.RoomKeyForMachine("chanbox")
+	for _, c := range []struct {
+		name string
+		in   channelSendInput
+		want string
+	}{
+		{"empty text", channelSendInput{Text: "  ", Room: "machine"}, "text is required"},
+		{"no project room", channelSendInput{Text: "x"}, "not bound to a repository"},
+		{"unknown room", channelSendInput{Text: "x", Room: "lobby"}, "unknown room"},
+		{"unknown intent", channelSendInput{Text: "x", Room: "machine", Intent: "shout", Mention: []string{"sess-sender"}}, "unknown intent"},
+		{"standing is not allowed", channelSendInput{Text: "x", Room: "machine", Intent: "standing", Mention: []string{"sess-sender"}}, "unknown intent"},
+		{"question without mention", channelSendInput{Text: "x", Room: "machine", Intent: "question"}, "needs a mention"},
+		{"empty mention", channelSendInput{Text: "x", Room: "machine", Mention: []string{" "}}, "empty agent id"},
+		{"self mention", channelSendInput{Text: "x", Room: "machine", Mention: []string{channelSelf}}, "mention yourself"},
+		{"mention of a stranger", channelSendInput{Text: "x", Room: "machine", Mention: []string{"nobody"}}, ""},
+	} {
+		_, _, err := tools.handleSend(context.Background(), nil, c.in)
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: err = %v, want containing %q", c.name, err, c.want)
+		}
+	}
+}
+
+// Wiederholt das Modell send mit denselben Argumenten, entsteht keine zweite
+// Nachricht; ein anderer Text oder eine andere Mention ist eine neue.
+func TestChannelSendRetryDoesNotDuplicate(t *testing.T) {
+	e := newChannelEnv(t)
+	tools := newTools(e.b)
+	room := store.RoomKeyForMachine("chanbox")
+	tools.machineRoom = room
+	count := func() int {
+		msgs, err := e.a.CoordInbox(store.DestinationRoom, room, "sess-sender", 0, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := 0
+		for _, m := range msgs {
+			if m.SenderExternalID == channelSelf {
+				n++
+			}
+		}
+		return n
+	}
+	send := func(in channelSendInput) {
+		t.Helper()
+		in.Room = "machine"
+		if _, _, err := tools.handleSend(context.Background(), nil, in); err != nil {
+			t.Fatal(err)
+		}
+	}
+	send(channelSendInput{Text: "hallo", Mention: []string{"sess-sender"}})
+	send(channelSendInput{Text: "hallo", Mention: []string{"sess-sender"}})
+	if n := count(); n != 1 {
+		t.Fatalf("retry produced %d messages, want 1", n)
+	}
+	send(channelSendInput{Text: "hallo anders", Mention: []string{"sess-sender"}})
+	send(channelSendInput{Text: "hallo"})
+	if n := count(); n != 3 {
+		t.Fatalf("distinct sends produced %d messages, want 3", n)
 	}
 }

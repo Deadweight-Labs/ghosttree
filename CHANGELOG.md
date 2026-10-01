@@ -20,6 +20,8 @@ Versioning, with pre-1.0 compatibility rules described in
 - Wake a channel agent when its request is answered: a reply to a question-type
   message, or to a message that mentioned the replier, now delivers instead of
   waiting for polling. Replies to replies stay quiet.
+- Add a `send` tool to the Claude channel server so a channel agent can start
+  conversations (text, mention, room, intent) without a separate `ctx mcp`.
 - Serialize runtime writes through a bounded queue while keeping reads on an
   independent connection pool. Batch pending session chunks, report retryable
   saturation errors, expose writer metrics, and drain accepted writes on shutdown.

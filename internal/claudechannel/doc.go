@@ -61,6 +61,12 @@
 // bewusste Sends mit Intent question, Blocker und so weiter oder über frische
 // DMs ist nicht verhindert und nur durch das Koordinationsbudget begrenzt.
 //
+// Gespräche beginnen: der Channel-Server (ctx channel) bietet neben reply das
+// Tool send. Es schreibt in den Projekt- oder Maschinenraum, mit Mentions und
+// optionalem Intent, über dieselben Client- und Store-Wege wie coord_send. Ein
+// Channel-Agent braucht dafür kein ctx mcp daneben. Eine Anfrage mit send ist
+// genau die Nachricht, deren Beantwortung den Fragenden weckt (siehe oben).
+//
 // Der Cursor ist der gemeinsame Lesestand des Pull-Pfads und wird deshalb nur
 // bis zur ersten Nachricht fortgeschrieben, die der Poller NICHT zugestellt hat
 // (gewöhnlicher Raumverkehr ohne Erwähnung). Alles davor ist zugestellt oder
