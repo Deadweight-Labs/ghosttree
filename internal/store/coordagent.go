@@ -32,6 +32,14 @@ type CoordAgent struct {
 	LastSeenAt       string `json:"last_seen_at,omitempty"`
 	// Owner ist der Kontoname des registrierenden Tokens, nur in Antworten.
 	Owner string `json:"owner,omitempty"`
+	// Role: bei der Anmeldung die angeforderte Rolle (lead, member, guest; leer
+	// lässt eine bestehende unverändert), in Peer-Antworten die live berechnete
+	// effektive Rolle im Projekt des Raums. In Räumen ohne Projekt leer.
+	Role string `json:"role,omitempty"`
+	// RequestedRole ist in Peer-Antworten die gespeicherte Anforderung.
+	RequestedRole string `json:"requested_role,omitempty"`
+	// CanReview ist in Peer-Antworten das Prüfer-Flag des Kontos.
+	CanReview bool `json:"can_review,omitempty"`
 }
 
 // RoomKeyForProject bildet den Projektraum aus der normalisierten Remote.
@@ -59,6 +67,9 @@ func (s *Store) RegisterCoordAgent(a CoordAgent) (int64, error) {
 		return queueValue(s, []any{a}, func(d *Store, p []any) (int64, error) {
 			return d.RegisterCoordAgent(p[0].(CoordAgent))
 		})
+	}
+	if !ValidAgentRole(a.Role) {
+		return 0, fmt.Errorf("%w: agent role must be lead, member or guest", ErrInvalidInput)
 	}
 	at := a.RegisteredAt
 	if at == "" {
@@ -97,18 +108,19 @@ func (s *Store) RegisterCoordAgent(a CoordAgent) (int64, error) {
 	}
 	result, err := tx.Exec(`INSERT INTO coord_agents(
 			external_id,provider,room_key,display_name,person,principal_id,cwd,branch,worktree,
-			parent_external_id,capabilities,registered_at,last_seen_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+			parent_external_id,capabilities,registered_at,last_seen_at,role)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,COALESCE(NULLIF(?,''),'member'))
 		ON CONFLICT(external_id) DO UPDATE SET
 			display_name=excluded.display_name, person=excluded.person,
 			principal_id=CASE WHEN coord_agents.principal_id='' THEN excluded.principal_id ELSE coord_agents.principal_id END,
 			cwd=excluded.cwd, branch=excluded.branch, worktree=excluded.worktree,
-			capabilities=excluded.capabilities, last_seen_at=excluded.last_seen_at
+			capabilities=excluded.capabilities, last_seen_at=excluded.last_seen_at,
+			role=COALESCE(NULLIF(?,''),coord_agents.role)
 		WHERE (coord_agents.principal_id<>'' AND coord_agents.principal_id=excluded.principal_id)
 		   OR (coord_agents.principal_id='' AND coord_agents.person<>'' AND coord_agents.person=excluded.person AND excluded.principal_id<>'')
 		   OR (coord_agents.principal_id='' AND coord_agents.person='' AND excluded.principal_id='' AND excluded.person='')`,
 		a.ExternalID, a.Provider, a.RoomKey, a.DisplayName, a.Person, a.PrincipalID, a.Cwd,
-		a.Branch, a.Worktree, a.ParentExternalID, a.Capabilities, at, at)
+		a.Branch, a.Worktree, a.ParentExternalID, a.Capabilities, at, at, a.Role, a.Role)
 	if err != nil {
 		return 0, err
 	}
@@ -171,7 +183,7 @@ func (s *Store) CoordPeers(roomKey, since string) ([]CoordAgent, error) {
 	query := `SELECT a.id,a.external_id,a.provider,m.room_key,a.display_name,
 			COALESCE(person,''),COALESCE(cwd,''),COALESCE(branch,''),
 			COALESCE(worktree,''),COALESCE(parent_external_id,''),
-			COALESCE(capabilities,''),registered_at,last_seen_at,COALESCE(a.principal_id,'')
+			COALESCE(capabilities,''),registered_at,last_seen_at,COALESCE(a.principal_id,''),a.role
 		FROM coord_agents a JOIN coord_room_memberships m ON m.principal_id=a.external_id
 		WHERE m.room_key=? AND m.left_at=''`
 	args := []any{roomKey}
@@ -192,7 +204,7 @@ func (s *Store) CoordPeers(roomKey, since string) ([]CoordAgent, error) {
 		var principal string
 		if err := rows.Scan(&a.ID, &a.ExternalID, &a.Provider, &a.RoomKey,
 			&a.DisplayName, &a.Person, &a.Cwd, &a.Branch, &a.Worktree,
-			&a.ParentExternalID, &a.Capabilities, &a.RegisteredAt, &a.LastSeenAt, &principal); err != nil {
+			&a.ParentExternalID, &a.Capabilities, &a.RegisteredAt, &a.LastSeenAt, &principal, &a.RequestedRole); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -216,6 +228,17 @@ func (s *Store) CoordPeers(roomKey, since string) ([]CoordAgent, error) {
 			id = n
 		}
 		out[i].Owner = names[id]
+	}
+	// Rollen gibt es nur im Projektraum, und sie werden hier live berechnet.
+	if remote, ok := strings.CutPrefix(roomKey, "project:"); ok {
+		for i := range out {
+			info := effectiveAgentRoleTx(s.db, remote, out[i].ExternalID)
+			out[i].Role, out[i].CanReview = info.Role, info.CanReview
+		}
+	} else {
+		for i := range out {
+			out[i].RequestedRole = ""
+		}
 	}
 	return out, nil
 }

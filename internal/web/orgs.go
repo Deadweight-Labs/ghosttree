@@ -17,6 +17,24 @@ type orgMemberRow struct {
 	Self bool
 }
 
+// projectRoleRow ist ein Organisationsmitglied mit seiner Rolle in einem Projekt.
+// Grantable sind die Rollen, die der Betrachter ihm geben darf; leer heißt,
+// dass die Zeile nur angezeigt wird.
+type projectRoleRow struct {
+	Account, AccountID string
+	Role               string
+	CanReview          bool
+	Implicit           bool
+	Grantable          []string
+	Self               bool
+}
+
+type projectRolesView struct {
+	Remote string
+	You    string
+	Rows   []projectRoleRow
+}
+
 // orgsView sammelt, was die Org-Seite zeigt.
 type orgsView struct {
 	Orgs      []store.Org
@@ -25,6 +43,7 @@ type orgsView struct {
 	Members   []orgMemberRow
 	Invites   []store.Invitation
 	Projects  []store.Project
+	Roles     []projectRolesView
 	NewCode   string // einmalig angezeigter Einladungscode
 	NewExpiry string
 	Notice    string
@@ -61,6 +80,17 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 			v.Members = append(v.Members, orgMemberRow{OrgMemberInfo: m, Self: m.AccountID == me})
 		}
 		v.Projects, _ = a.store.ListProjects(me, v.Selected.ID)
+		for _, p := range v.Projects {
+			rv := projectRolesView{Remote: p.Remote, You: a.store.ProjectRole(p.Remote, me).Role}
+			for _, m := range members {
+				info := a.store.ProjectRole(p.Remote, m.AccountID)
+				rv.Rows = append(rv.Rows, projectRoleRow{
+					Account: m.Account, AccountID: m.AccountID, Role: info.Role, CanReview: info.CanReview,
+					Implicit: info.Implicit, Grantable: a.grantable(r, me, p.Remote, m.AccountID), Self: m.AccountID == me,
+				})
+			}
+			v.Roles = append(v.Roles, rv)
+		}
 		if v.Owner {
 			v.Invites, _ = a.store.ListInvitations(me, v.Selected.ID)
 		}
@@ -80,6 +110,18 @@ func orgError(err error) (int, string) {
 		return http.StatusNotFound, "Organization not found."
 	case errors.Is(err, store.ErrLastOrgOwner):
 		return http.StatusConflict, "An organization needs at least one owner."
+	case errors.Is(err, store.ErrNotGrantor):
+		return http.StatusForbidden, "Only a project owner or lead can change roles."
+	case errors.Is(err, store.ErrRoleForbidden):
+		return http.StatusForbidden, "You may not give that role to that account."
+	case errors.Is(err, store.ErrSelfPromotion):
+		return http.StatusForbidden, "You cannot raise your own role."
+	case errors.Is(err, store.ErrLastProjectOwner):
+		return http.StatusConflict, "A project needs at least one owner."
+	case errors.Is(err, store.ErrImplicitOwner):
+		return http.StatusConflict, "Organization owners are implicit project owners; change their organization role instead."
+	case errors.Is(err, store.ErrNoProjectRole):
+		return http.StatusNotFound, "That account holds no role in this project."
 	case errors.Is(err, store.ErrProjectNotFound):
 		return http.StatusNotFound, "Project not found."
 	case errors.Is(err, store.ErrInvalidInput):
@@ -218,4 +260,36 @@ func (a *app) orgDefault(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	orgRedirect(w, r, o.Slug, "Default organization set.")
+}
+
+// orgProjectRole setzt oder entfernt (role=none) die Projektrolle eines
+// Organisationsmitglieds. Die Regeln prüft der Store; die Oberfläche zeigt nur,
+// was er erlaubt.
+func (a *app) orgProjectRole(w http.ResponseWriter, r *http.Request) {
+	o, err := a.formOrg(r)
+	if err == nil {
+		p, known := a.store.ProjectByRemote(r.FormValue("remote"))
+		switch {
+		case !known || p.OrgID != o.ID:
+			err = store.ErrProjectNotFound
+		case r.FormValue("role") == "none":
+			err = a.store.RemoveProjectRole(browserPrincipal(r).ID, p.Remote, r.FormValue("account"), store.RoleViaWeb)
+		default:
+			err = a.store.SetProjectRole(browserPrincipal(r).ID, p.Remote, r.FormValue("account"), r.FormValue("role"), r.FormValue("review") == "1", store.RoleViaWeb)
+		}
+	}
+	if err != nil {
+		a.orgFailure(w, r, err)
+		return
+	}
+	orgRedirect(w, r, o.Slug, "Project role updated.")
+}
+
+// grantable nennt die wählbaren Rollen, aber nur in einer interaktiven Sitzung:
+// aus eingefügtem Token zeigt die Seite keine Rollenformulare.
+func (a *app) grantable(r *http.Request, actor, remote, target string) []string {
+	if !interactive(r) {
+		return nil
+	}
+	return a.store.GrantableRoles(actor, remote, target)
 }

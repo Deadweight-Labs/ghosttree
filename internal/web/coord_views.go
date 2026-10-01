@@ -172,6 +172,10 @@ type coordParticipantView struct {
 	DisplayTimestamp                                string
 	Reachability, WorkState                         string
 	Manager, Current                                bool
+	// Role ist die Projektrolle (owner, lead, member, guest), leer außerhalb
+	// eines Projektraums; CanReview das Prüfer-Flag.
+	Role      string
+	CanReview bool
 }
 
 // coordParticipantUnknown is the neutral value for a state nobody reported.
@@ -606,6 +610,7 @@ func buildCoordParticipants(room store.CoordRoom, peers []store.CoordAgent, memb
 			ID: peer.ExternalID, Label: label, Provider: peer.Provider,
 			Worktree: peer.Worktree, LastSeen: peer.LastSeenAt, DisplayTimestamp: coordDisplayTimestamp(peer.LastSeenAt), Branch: peer.Branch,
 			Current: peer.ExternalID == current.ID, Reachability: "unbekannt", WorkState: "unbekannt",
+			Role: peer.Role, CanReview: peer.CanReview,
 		}
 	}
 	currentParticipant := byID[current.ID]
@@ -733,4 +738,21 @@ func coordAttentionPreview(body string) string {
 		return body
 	}
 	return string([]rune(body)[:coordAttentionPreviewRunes]) + "…"
+}
+
+// applyParticipantRoles ergänzt die Rolle der menschlichen Teilnehmer
+// (person:<id>) im Projekt des Raums. Agenten tragen ihre effektive Rolle schon
+// aus der Peer-Liste. Außerhalb eines Projektraums bleibt alles leer.
+func applyParticipantRoles(st *store.Store, roomKey string, participants []coordParticipantView) {
+	remote, ok := strings.CutPrefix(roomKey, "project:")
+	if !ok {
+		return
+	}
+	for i := range participants {
+		if participants[i].Role != "" || !strings.HasPrefix(participants[i].ID, "person:") {
+			continue
+		}
+		info := st.ProjectRole(remote, participants[i].ID)
+		participants[i].Role, participants[i].CanReview = info.Role, info.CanReview
+	}
 }

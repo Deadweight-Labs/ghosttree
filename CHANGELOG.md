@@ -26,6 +26,60 @@ Versioning, with pre-1.0 compatibility rules described in
   chunks) and adds three empty tables, so it takes milliseconds on a large
   database. A new instance gets a `default` organization with its bootstrap
   account. Organizations do not change who can see what yet.
+- Add roles per project. Within a project an account is `owner`, `lead`,
+  `member` or `guest` (in that order), and `can_review` marks a reviewer; the
+  flag is not a rank. An organization owner is implicitly owner of every project
+  of the organization, derived on every lookup and never stored; organization
+  membership alone gives no role. Owners grant any role; leads grant `member` or
+  `guest` (and the reviewer flag) to accounts below lead; members and guests
+  grant nothing. Nobody raises their own role, and the last owner of a project
+  cannot be demoted or removed. Leaving an organization or moving a project
+  drops the stored roles. Every change appends to `role_events` (append-only,
+  with who, what and via web or cli-db). Roles and memberships are changed by
+  a person in the browser: the organizations page has a role select per project
+  (with the reviewer checkbox; the select shows the current role, an account
+  without a role shows a placeholder) and the organization, invitation and
+  project-move forms. `GET /api/projects/{id}/members` and `ctx project roles
+  <remote>` read them. Bearer tokens (CLI, collectors, agents) cannot change
+  them: `PUT` and `DELETE /api/projects/{id}/members/{account}`,
+  `PUT /api/orgs/{org}/members/{account}`, removing another member,
+  `POST /api/orgs/{org}/invitations` and `POST /api/projects/move` answer `403
+  web_session_required`, with or without `agent_external_id`, because a machine
+  token sits in the config of every machine an agent runs on. Leaving an
+  organization yourself, accepting an invitation, claiming a project, renaming
+  an organization, revoking an invitation and choosing a default organization
+  stay on the API: none of them gives anyone more power over other accounts.
+  `ctx project role set|remove`, `ctx org members set-role|remove`, `ctx org
+  invite` and `ctx project move` print where to go (the web UI link). The
+  operator on the server host can run them with `--db <path>` (direct database
+  access; it acts as the oldest owner of the organization, and role changes are
+  logged with `via=cli-db`). A web session started by pasting a token is
+  read-only: it shows no administration forms and the server answers them with
+  403, because that token sits in the config of every machine an agent runs on.
+  This covers project and organization roles, removing members, invitations,
+  moving projects, approving devices and revoking other accounts' tokens.
+  Sessions from OIDC, a login link or a bootstrap, claim or invitation code are
+  interactive; without OIDC the operator creates one with `ctx account
+  login-link <name> --db <path>`. Coordination posts are marked `human` only
+  when they come from such an interactive browser session; a bearer token or a
+  pasted-token session posts as `agent` with the account as sender, and the
+  channel's `sender_kind` follows. Roles are not enforced anywhere yet, so nobody
+  sees or may do less than before. Existing instances get the two tables and a
+  `role` column on `coord_agents` (default `member`) on startup; existing
+  organization members start without a stored role.
+- Add agent roles. `ctx claude --role lead|member|guest` (default `member`)
+  passes the requested role to `ctx channel` and `ctx mcp` in
+  `GHOSTTREE_AGENT_ROLE`, and both send it when they register. The effective
+  role is computed live on the server as the lower of the requested role and the
+  rank of the agent's account in the project, never above `lead`; an account
+  without a role gives `guest`, and demoting an account demotes its agents at
+  once. A request above the account's rank is capped silently rather than
+  refused (the spec says `403 role exceeds ceiling`; that would block every
+  default agent before visibility is enforced); `coord_peers` shows
+  "requested lead, effective member" when they differ. Agents never hold
+  `owner`. `coord_peers`, the
+  participant list of the coordination page (project rooms) and
+  `GET /api/coord/agents` show the effective role and the reviewer flag.
 - Add the organization API and CLI. `ctx org list|create|members|invite|
   invitations|accept|default` and `ctx project list|claim|move` talk to the
   server with your token (`/api/orgs`, `/api/projects`, `/api/invitations/accept`).

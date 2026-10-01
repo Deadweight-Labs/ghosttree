@@ -38,6 +38,9 @@ type Server struct {
 	sessionRef string
 	// coordOverride ersetzt sessionRef ausschließlich in coordRef().
 	coordOverride string
+	// agentRole ist die beim Start per ctx claude --role angeforderte Rolle.
+	// Der Server kappt sie live am Rang des Kontos; leer lässt sie bei member.
+	agentRole string
 }
 
 // SetRepoRoot wird von cmd/ctx/mcp.go aus dem aufgelösten Git-Kontext gesetzt.
@@ -53,6 +56,9 @@ func (s *Server) SetSessionRef(ref string) { s.sessionRef = ref }
 // Harness-Session abweicht (ctx claude). Suche, unterbrochene Arbeit und
 // Snapshots bleiben bei sessionRef, denn nur die hat ein Transkript.
 func (s *Server) SetCoordRef(ref string) { s.coordOverride = ref }
+
+// SetAgentRole setzt die angeforderte Rolle dieser Session (lead, member, guest).
+func (s *Server) SetAgentRole(role string) { s.agentRole = role }
 
 func NewServer(c *client.Client, axes scope.Axes, base ...activation.Context) *Server {
 	s := &Server{client: c, ctxAxes: axes}

@@ -90,6 +90,22 @@ CREATE TABLE IF NOT EXISTS org_events(
   actor TEXT NOT NULL DEFAULT '', subject TEXT NOT NULL DEFAULT '',
   detail TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS org_state(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS project_members(
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE RESTRICT,
+  account_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE RESTRICT,
+  role TEXT NOT NULL CHECK(role IN ('owner','lead','member','guest')),
+  can_review INTEGER NOT NULL DEFAULT 0 CHECK(can_review IN (0,1)),
+  granted_by INTEGER NOT NULL DEFAULT 0, granted_at TEXT NOT NULL,
+  PRIMARY KEY(project_id, account_id));
+CREATE INDEX IF NOT EXISTS project_members_account ON project_members(account_id);
+CREATE TABLE IF NOT EXISTS role_events(
+  id INTEGER PRIMARY KEY, scope TEXT NOT NULL, subject TEXT NOT NULL,
+  old_role TEXT NOT NULL DEFAULT '', new_role TEXT NOT NULL DEFAULT '',
+  actor TEXT NOT NULL DEFAULT '', via TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TRIGGER IF NOT EXISTS role_events_no_update BEFORE UPDATE ON role_events
+  BEGIN SELECT RAISE(ABORT, 'role_events is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS role_events_no_delete BEFORE DELETE ON role_events
+  BEGIN SELECT RAISE(ABORT, 'role_events is append-only'); END;
 CREATE TABLE IF NOT EXISTS context_snapshot_access(
   person_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE RESTRICT,
   project TEXT NOT NULL,
@@ -853,6 +869,10 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 		return nil, err
 	}
 	if err := ensureCoordAgentPrincipalID(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureCoordAgentRole(db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}

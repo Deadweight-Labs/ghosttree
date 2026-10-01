@@ -71,7 +71,7 @@ func cmdChannel(args []string, stdout io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 	err = runChannel(ctx, channelConfig{
-		client: client.New(cfg), self: self, rooms: rooms, branch: hctx.axes.Branch,
+		client: client.New(cfg), self: self, rooms: rooms, branch: hctx.axes.Branch, role: agentRoleFromEnv(),
 		transport: &mcp.StdioTransport{},
 	})
 	if err != nil {
@@ -133,6 +133,7 @@ type channelConfig struct {
 	self      string
 	rooms     []store.CoordRoom // Projekt- und Maschinenraum
 	branch    string
+	role      string
 	transport mcp.Transport
 }
 
@@ -192,7 +193,7 @@ func runChannel(ctx context.Context, cfg channelConfig) error {
 	opts := claudechannel.ServerOptions()
 	opts.Instructions = channelInstructions + "\n\n" + channelCapabilityText()
 	srv := mcp.NewServer(&mcp.Implementation{Name: channelServerName, Version: version}, opts)
-	cs := &channelTools{client: cfg.client, self: cfg.self, branch: cfg.branch, rec: rec}
+	cs := &channelTools{client: cfg.client, self: cfg.self, branch: cfg.branch, role: cfg.role, rec: rec}
 	for _, room := range cfg.rooms {
 		switch room.Kind {
 		case store.RoomProject:
@@ -313,6 +314,7 @@ type channelTools struct {
 	client      *client.Client
 	self        string
 	branch      string
+	role        string // angeforderte Agentenrolle (ctx claude --role)
 	rec         *recorder
 	projectRoom string // leer, wenn die Session an kein Repository gebunden ist
 	machineRoom string
@@ -338,7 +340,7 @@ func (c *channelTools) checkLimit() error {
 func (c *channelTools) join(roomKey string) error {
 	_, err := c.client.RegisterCoordAgent(store.CoordAgent{
 		ExternalID: c.self, Provider: "claude", RoomKey: roomKey,
-		DisplayName: c.self, Branch: c.branch,
+		DisplayName: c.self, Branch: c.branch, Role: c.role,
 	})
 	return err
 }

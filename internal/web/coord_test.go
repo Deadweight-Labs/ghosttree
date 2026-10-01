@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/claudechannel"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -227,7 +228,8 @@ func TestRoomTaskThreadCanBeCreatedWithoutAnchor(t *testing.T) {
 // in einen Raum, und der Beitrag trägt seine Herkunft. Bis hierhin war die
 // Operator-Oberfläche schreibfrei.
 func TestAHumanWritesIntoARoomAndTheMessageCarriesThatOrigin(t *testing.T) {
-	srv, st, client := signedIn(t)
+	srv, st, _ := signedIn(t)
+	client := loginInteractive(t, srv, st, "robin")
 	room := store.RoomKeyForProject("github.com/x/y")
 	materializeWebRoom(t, st, room)
 	res := authenticatedPostForm(t, client, srv.URL+"/ui/coord/send", url.Values{
@@ -2490,5 +2492,68 @@ func TestCoordRoomsToggleCarriesTotalSignalWithAccessibleName(t *testing.T) {
 	js, _ := files.ReadFile("static/app.js")
 	if !strings.Contains(string(js), "[data-coord-rooms-count]") {
 		t.Error("live refresh must replace the rooms badge")
+	}
+}
+
+// Nur ein Mensch in einer interaktiven Sitzung schreibt als human. Eine Sitzung
+// aus eingefügtem Token postet als agent (mit dem Konto als Absender), und der
+// Channel gibt das als meta.sender_kind weiter.
+func TestOnlyInteractiveBrowserPostsAreHuman(t *testing.T) {
+	srv, st, token := testWeb(t)
+	room := store.RoomKeyForProject("github.com/x/y")
+	materializeWebRoom(t, st, room)
+	pasted := login(t, srv, token)
+	interactiveClient := loginInteractive(t, srv, st, "alice")
+
+	for name, c := range map[string]*http.Client{"pasted": pasted, "interactive": interactiveClient} {
+		res := authenticatedPostForm(t, c, srv.URL+"/ui/coord/send", url.Values{"room": {room}, "body": {"hello from " + name}})
+		res.Body.Close()
+		if res.StatusCode != http.StatusSeeOther && res.StatusCode != http.StatusOK {
+			t.Fatalf("%s send: %d", name, res.StatusCode)
+		}
+		res = authenticatedPostForm(t, c, srv.URL+"/ui/coord/thread/create", url.Values{"room": {room}, "title": {"T " + name}, "question": {"Q " + name}})
+		res.Body.Close()
+	}
+	msgs, err := st.CoordMessagesSince(store.DestinationRoom, room, 0, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := 0
+	for _, m := range msgs {
+		want := ""
+		switch {
+		case strings.Contains(m.Body, "pasted"):
+			want = store.AuthorAgent
+		case strings.Contains(m.Body, "interactive"):
+			want = store.AuthorHuman
+		default:
+			continue
+		}
+		seen++
+		if m.AuthorKind != want || m.SenderExternalID != "person:1" {
+			t.Fatalf("%q: kind %q sender %q, want %q from the account", m.Body, m.AuthorKind, m.SenderExternalID, want)
+		}
+		meta := claudechannel.NewNotification(store.CoordRoom{Key: room, Kind: store.RoomProject}, m, m.Body).Meta
+		if meta["sender_kind"] != want {
+			t.Fatalf("channel meta sender_kind = %q, want %q", meta["sender_kind"], want)
+		}
+	}
+	if seen != 2 {
+		t.Fatalf("saw %d of the two posts in %+v", seen, msgs)
+	}
+	// Dasselbe für Themen-Beiträge: die Anker-/Diskussionsnachrichten tragen die Art.
+	rows, err := st.DB().Query(`SELECT m.author_kind, t.title FROM coord_messages m JOIN threads t ON m.destination_kind='discussion' AND m.destination_id=CAST(t.id AS TEXT)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var kind, title string
+		if err := rows.Scan(&kind, &title); err != nil {
+			t.Fatal(err)
+		}
+		if (title == "T pasted") != (kind == store.AuthorAgent) {
+			t.Fatalf("thread %q opened as %q", title, kind)
+		}
 	}
 }

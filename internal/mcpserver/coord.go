@@ -123,7 +123,7 @@ func coordText(text string) *mcp.CallToolResult {
 func (s *Server) joinAsSubagent(roomKey, ref string) error {
 	_, err := s.client.RegisterCoordAgent(store.CoordAgent{
 		ExternalID: ref, Provider: "self-declared-subagent", RoomKey: roomKey,
-		DisplayName: ref, ParentExternalID: s.coordRef(), Branch: s.ctxAxes.Branch,
+		DisplayName: ref, ParentExternalID: s.coordRef(), Branch: s.ctxAxes.Branch, Role: s.agentRole,
 	})
 	return err
 }
@@ -138,7 +138,7 @@ func (s *Server) joinRoom(roomKey string) error {
 	}
 	_, err := s.client.RegisterCoordAgent(store.CoordAgent{
 		ExternalID: s.coordRef(), Provider: provider, RoomKey: roomKey,
-		DisplayName: s.coordRef(), Branch: s.ctxAxes.Branch,
+		DisplayName: s.coordRef(), Branch: s.ctxAxes.Branch, Role: s.agentRole,
 	})
 	return err
 }
@@ -268,10 +268,19 @@ func (s *Server) handleCoordPeers(ctx context.Context, _ *mcp.CallToolRequest, i
 	shown := 0
 	for _, p := range peers {
 		if p.ExternalID == s.coordRef() {
+			if p.Role != "" {
+				fmt.Fprintf(&b, "you: role %s%s%s\n", p.Role, reviewerMark(p.CanReview), requestedMark(p))
+			}
 			continue
 		}
 		shown++
 		fmt.Fprintf(&b, "%s (%s)", p.DisplayName, p.Provider)
+		if p.Role != "" {
+			fmt.Fprintf(&b, ", role %s%s%s", p.Role, reviewerMark(p.CanReview), requestedMark(p))
+		}
+		if p.Owner != "" {
+			fmt.Fprintf(&b, ", owner %s", p.Owner)
+		}
 		if p.Branch != "" {
 			fmt.Fprintf(&b, " on %s", p.Branch)
 		}
@@ -283,7 +292,7 @@ func (s *Server) handleCoordPeers(ctx context.Context, _ *mcp.CallToolRequest, i
 		fmt.Fprintf(&b, " — id %s, last seen %s\n", p.ExternalID, p.LastSeenAt)
 	}
 	if shown == 0 {
-		return coordText("nobody else is registered in " + key), nil, nil
+		return coordText(b.String() + "nobody else is registered in " + key), nil, nil
 	}
 	// Die Zeile am Ende ist keine Zierde: last seen ist eine Beobachtung und
 	// kein Lebenszeichen, und ein Agent soll daraus nicht schließen, dass
@@ -541,4 +550,20 @@ func (s *Server) handleCoordTouched(ctx context.Context, _ *mcp.CallToolRequest,
 	}
 	b.WriteString("\nNothing is locked. Decide whether to coordinate with coord_send before you change it.")
 	return coordText(b.String()), nil, nil
+}
+
+func reviewerMark(canReview bool) string {
+	if canReview {
+		return ", reviewer"
+	}
+	return ""
+}
+
+// requestedMark macht sichtbar, wenn die live berechnete Rolle unter der
+// angeforderten liegt (Kappung am Rang des Kontos).
+func requestedMark(p store.CoordAgent) string {
+	if p.RequestedRole != "" && p.Role != "" && p.RequestedRole != p.Role {
+		return " (requested " + p.RequestedRole + ", effective " + p.Role + ")"
+	}
+	return ""
 }
