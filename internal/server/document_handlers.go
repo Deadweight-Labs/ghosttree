@@ -46,6 +46,9 @@ func (a *api) createDocument(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
+	if !a.gateProject(w, r, d.Project) {
+		return
+	}
 	d.Person = personOf(r)
 	saved, err := a.st.CreateDocument(d, req.Body, req.Message)
 	if err != nil {

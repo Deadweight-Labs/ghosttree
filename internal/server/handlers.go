@@ -27,7 +27,7 @@ func (a *api) createSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Scope = scope.CanonicalAxes(s.Scope)
-	if !a.gateMachine(w, r, s.Scope.Machine, true) {
+	if !a.gateMachine(w, r, s.Scope.Machine, true) || !a.gateProject(w, r, s.Scope.Project) {
 		return
 	}
 	// Besitz kommt aus dem Token, nie aus dem Rumpf.
@@ -144,7 +144,7 @@ func (a *api) createKnowledge(w http.ResponseWriter, r *http.Request) {
 	if k.Scope.IsGlobal() && req.AutoScope != nil {
 		k.Scope = scope.DefaultAxes(k.Type, req.AutoScope.Context)
 	}
-	if !a.gateMachine(w, r, k.Scope.Machine, false) {
+	if !a.gateMachine(w, r, k.Scope.Machine, false) || !a.gateProject(w, r, k.Scope.Project) {
 		return
 	}
 	k.Person = personOf(r)

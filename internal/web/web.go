@@ -43,6 +43,8 @@ type pageData struct {
 	Project, Preview                                  string
 	Review                                            []reviewEntry
 	Coord                                             coordPageView
+	Orgs                                              orgsView
+	Invite                                            bool
 }
 type reviewEntry struct {
 	Knowledge         store.Knowledge
@@ -103,6 +105,14 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	mux.Handle("POST /ui/device/decide", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.deviceDecide)))))
 	mux.Handle("GET /ui/account/tokens", a.requirePerson(http.HandlerFunc(a.tokensPage)))
 	mux.Handle("POST /ui/account/tokens/revoke", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.tokenRevoke)))))
+	mux.Handle("GET /ui/orgs", a.requirePerson(http.HandlerFunc(a.orgsPage)))
+	for path, h := range map[string]http.HandlerFunc{
+		"/ui/orgs/invite": a.orgInvite, "/ui/orgs/invite/revoke": a.orgInviteRevoke,
+		"/ui/orgs/member/role": a.orgMemberRole, "/ui/orgs/member/remove": a.orgMemberRemove,
+		"/ui/orgs/project/move": a.orgProjectMove, "/ui/orgs/accept": a.orgAccept, "/ui/orgs/default": a.orgDefault,
+	} {
+		mux.Handle("POST "+path, a.requirePerson(limitBody(a.requireCSRF(h))))
+	}
 	mux.HandleFunc("GET /ui/{$}", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/ui/requests", http.StatusSeeOther) })
 	return &appHandler{Handler: mux, app: a}
 }
@@ -135,6 +145,8 @@ func (a *app) renderBrowser(w http.ResponseWriter, r *http.Request, name string,
 		data.NavSection = "context"
 	case "tokens", "device", "devicecheck", "devicedone":
 		data.NavSection = "tokens"
+	case "orgs":
+		data.NavSection = "orgs"
 	}
 	a.render(w, name, data)
 }

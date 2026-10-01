@@ -6,6 +6,56 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Add organizations, projects and invitations. An organization has members
+  (roles `owner` and `member`; an account can belong to several) and owns
+  projects; every project (a normalized remote such as
+  `github.com/owner/repo`) belongs to exactly one organization. A write for a
+  remote nobody owns yet assigns it to the writer's default organization, or to
+  their only one; with several organizations and no default the write is
+  refused with `409 project_unclaimed` and the choices rather than guessed, and
+  an account without any organization is not affected. An owner invites by
+  single-use code (kept only as a hash, seven days by default, 30 at most, at
+  most 100 pending per organization). Redeeming it during OIDC sign-in creates
+  the account and the membership; an invitation without an email works by the
+  code alone, one with an email also requires the identity provider to report
+  that same address as verified, otherwise nothing is created and the code stays
+  valid. Wrong codes lock the signing-in identity for ten minutes after five
+  attempts. Existing instances get a `Default` organization (slug
+  `default`; rename it with `ctx org rename`) on startup with the first account as its owner and all known
+  projects in it; the migration only reads the small tables (never session
+  chunks) and adds three empty tables, so it takes milliseconds on a large
+  database. A new instance gets a `default` organization with its bootstrap
+  account. Organizations do not change who can see what yet.
+- Add the organization API and CLI. `ctx org list|create|members|invite|
+  invitations|accept|default` and `ctx project list|claim|move` talk to the
+  server with your token (`/api/orgs`, `/api/projects`, `/api/invitations/accept`).
+  Only an instance admin creates organizations; owners invite, change roles
+  and remove members (the last owner stays) and move a project between
+  organizations they own; members only list. Non-members see an organization
+  as nonexistent. Bodies of these routes are capped at 16 KiB, and five wrong
+  codes in ten minutes lock `accept` for that account. Sessions, knowledge,
+  requests and documents written for an unknown project assign it as described
+  above (`409 project_unclaimed` lists the organizations).
+- Keep projects from being claimed out from under their owners: `ctx project
+  claim` and its API now need an owner of the target organization, and a write
+  into a project that belongs to another organization is refused with `409
+  project_claimed`, also for accounts without any organization. Writes by members
+  of the project's organization, such as the collector of the first account, are
+  unchanged. Admins hand a squatted project back with `ctx project move --force
+  <remote> --org <org> --db <path>` (database access, recorded in `org_events`).
+  `ctx org rename <org> <name> [--slug S]` renames an organization (owner).
+  Writing for a project nobody owns yet claims it only for an owner of the
+  writer's default organization; a plain member's write goes through but leaves
+  the project unclaimed, and the first owner of any organization who then writes
+  there or claims it wins it.
+- Add an Organizations page (`/ui/orgs`) with members, invitations and
+  projects: owners create invitations (the code is shown once), change roles,
+  remove members and move projects; members see the lists and can leave or join
+  with a code. All forms are CSRF protected and size limited. An invitation link
+  (`/ui/login/code?code=...`) leads to the identity provider on OIDC instances;
+  without OIDC it creates the account from the code and a chosen name (an
+  invitation bound to an email needs OIDC, since nothing else verifies the
+  address).
 - Add ownership of machines, sessions and agent identities. Machine names are
   unique across the instance and belong to the account that first claims them
   (`ctx login` or the first upload); a second account gets `409
