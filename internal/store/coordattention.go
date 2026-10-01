@@ -105,7 +105,7 @@ func (a CoordAccess) Attention() ([]AttentionItem, error) {
 		m.body,m.author_principal_id,m.sender_external_id,COALESCE(m.expires_at,'')
 		FROM coord_attention attention JOIN coord_messages m ON m.id=attention.message_id
 		WHERE attention.recipient_principal_id=? OR m.sender_external_id=? OR m.author_principal_id=?
-		ORDER BY attention.id DESC`, actor, actor, a.Principal.ID)
+		ORDER BY attention.created_at DESC, attention.message_id DESC, attention.id DESC`, actor, actor, a.Principal.ID)
 	if err != nil {
 		return nil, err
 	}

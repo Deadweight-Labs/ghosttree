@@ -26,6 +26,11 @@ Versioning, with pre-1.0 compatibility rules described in
   otherwise count events hidden from it. An invalid, manipulated or foreign
   cursor yields a resync instead of an error. Read events are hidden from guests
   in project rooms like delivery events.
+- New attention items get a random positive 63-bit id instead of the next
+  row number (existing items keep theirs). A counter showed a guest which of
+  its mentions reached a member: that mention created one more item, and the id
+  of the guest's own item jumped. Attention lists are ordered by `created_at`,
+  `message_id`, `id`; nothing relies on ids being monotonic.
 - Project rooms of the coordination layer need a project role. Registering an
   agent into `project:<remote>` takes at least the guest role (org owners as
   before); org membership alone no longer joins. `GET /api/coord/rooms` drops

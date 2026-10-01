@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -305,5 +306,50 @@ func TestGuestRecipientGateLogModeKeepsOldBehaviour(t *testing.T) {
 		ClientID: "log", Body: "hi", Mentions: []string{"claude:mia"}})
 	if !strings.Contains(buf.String(), "access: would deny") {
 		t.Errorf("expected a would-deny line, got %q", buf.String())
+	}
+}
+
+// Die Ids der eigenen Attention-Einträge folgen keinem Zählmuster: Eine Erwähnung
+// eines Mitglieds legt zusätzlich einen Eintrag an, eine eines Nicht-Mitglieds
+// nicht, und bei einem Zähler zeigte die Lücke in den eigenen Ids, welches von
+// beiden zutraf.
+func TestGuestAttentionIDsFollowNoCountingPattern(t *testing.T) {
+	for _, targetInRoom := range []bool{true, false} {
+		f := roomGateFixture(t, true)
+		room := store.RoomKeyForProject(accProject)
+		other := store.RoomKeyForProject(accOther)
+		miaRoom := room
+		if !targetInRoom {
+			miaRoom = other
+		}
+		for agent, c := range map[string]struct{ principal, room string }{
+			"claude:gus": {"person:5", room}, "claude:mia": {"person:3", miaRoom}} {
+			if _, err := f.st.RegisterCoordAgent(store.CoordAgent{ExternalID: agent, Provider: "claude", RoomKey: c.room, PrincipalID: c.principal, Person: agent}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		var ids []int64
+		for i := 0; i < 12; i++ {
+			f.expect(t, "gus", 200, "POST", "/api/coord/messages", store.CoordMessage{
+				DestinationKind: store.DestinationRoom, DestinationID: room, SenderExternalID: "claude:gus",
+				ClientID: fmt.Sprintf("m%d", i), Body: "q", Intent: store.IntentQuestion, Mentions: []string{"claude:mia", "claude:gus"}})
+		}
+		var items []store.AttentionItem
+		guestJSON(t, f, "gus", "/api/coord/attention?agent_external_id=claude:gus", &items)
+		if len(items) != 12 {
+			t.Fatalf("in room=%v: guest sees %d own items, want 12", targetInRoom, len(items))
+		}
+		for _, it := range items {
+			ids = append(ids, it.ID)
+		}
+		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+		for i, id := range ids {
+			if id < 1<<32 {
+				t.Errorf("in room=%v: id %d looks like a counter", targetInRoom, id)
+			}
+			if i > 0 && ids[i]-ids[i-1] <= 2 {
+				t.Errorf("in room=%v: ids %d and %d follow a counting pattern", targetInRoom, ids[i-1], ids[i])
+			}
+		}
 	}
 }
