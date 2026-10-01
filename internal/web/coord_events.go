@@ -15,6 +15,10 @@ import (
 
 const coordEventPollInterval = 250 * time.Millisecond
 
+// sessionRecheckInterval begrenzt, wie oft ein offener Stream Token und Konto
+// gegen die Datenbank prüft. Variable, damit ein Test es verkürzen kann.
+var sessionRecheckInterval = 20 * time.Second
+
 func parseCoordEventCursor(r *http.Request) (int64, error) {
 	value := strings.TrimSpace(r.Header.Get("Last-Event-ID"))
 	if value == "" {
@@ -74,6 +78,7 @@ func (a *app) coordEvents(w http.ResponseWriter, r *http.Request) {
 	defer poll.Stop()
 	keepalive := time.NewTicker(15 * time.Second)
 	defer keepalive.Stop()
+	lastRecheck := time.Now()
 	for {
 		if replay.ScannedThrough < replay.Latest && !replay.Resync {
 			// Drain a backlog without waiting for another poll tick.
@@ -90,7 +95,15 @@ func (a *app) coordEvents(w http.ResponseWriter, r *http.Request) {
 			case <-poll.C:
 			}
 		}
-		if _, ok := a.sessions.get(cookie.Value); !ok {
+		_, live := a.sessions.get(cookie.Value)
+		if live && time.Since(lastRecheck) >= sessionRecheckInterval {
+			lastRecheck = time.Now()
+			if !a.store.PrincipalValid(principal) {
+				a.sessions.remove(cookie.Value)
+				live = false
+			}
+		}
+		if !live {
 			_, _ = fmt.Fprint(w, "event: session-ended\ndata: {}\n\n")
 			flusher.Flush()
 			return
