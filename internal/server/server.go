@@ -81,7 +81,7 @@ func New(st *store.Store, options ...Option) http.Handler {
 	})
 	mux.Handle("GET /metrics", a.metrics)
 	mux.HandleFunc("GET /api/whoami", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, principalOf(r))
+		writeJSON(w, http.StatusOK, a.whoAmI(r))
 	})
 	mux.HandleFunc("POST /api/context-snapshots", a.createContextSnapshot)
 	mux.HandleFunc("GET /api/context-snapshots", a.listContextSnapshots)
@@ -246,6 +246,24 @@ func (a *api) auth(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), personKey{}, principal)))
 	})
+}
+
+// whoAmIResponse ist der Principal plus die Kontodaten. Die Principal-Felder
+// bleiben flach, damit Clients, die nur store.Principal lesen, weiterlaufen.
+type whoAmIResponse struct {
+	store.Principal
+	Email string `json:"email,omitempty"`
+	Admin bool   `json:"admin"`
+	State string `json:"state,omitempty"`
+}
+
+func (a *api) whoAmI(r *http.Request) whoAmIResponse {
+	p := principalOf(r)
+	out := whoAmIResponse{Principal: p}
+	if acct, err := a.st.AccountByPrincipalID(p.ID); err == nil {
+		out.Email, out.Admin, out.State = acct.Email, acct.Admin, acct.State
+	}
+	return out
 }
 
 func personOf(r *http.Request) string {

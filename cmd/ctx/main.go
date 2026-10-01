@@ -69,6 +69,8 @@ func run(args []string, stdout io.Writer) int {
 		return cmdUnbindBranch(rest, stdout)
 	case "person":
 		return cmdPerson(rest, stdout)
+	case "account":
+		return cmdAccount(rest, stdout)
 	case "setup":
 		return cmdSetup(rest, stdout)
 	case "version":
@@ -89,7 +91,8 @@ const usage = `usage: ctx <command>
   claude   start Claude Code with the ghosttree channel (opt-in launcher)
   install  set up a harness (claude|codex|opencode)
   setup    write client config (server URL + token)
-  person   manage persons/tokens (server-side)
+  person   manage persons/tokens (server-side; deprecated alias, see account)
+  account  manage accounts and their tokens (server-side)
   status   show local setup state
   doctor   check the harness wiring for drift (--fix to repair)
   export   write a session's original transcript as JSONL

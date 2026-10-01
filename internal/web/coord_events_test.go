@@ -642,3 +642,55 @@ func mustReadEmbedded(t *testing.T, name string) []byte {
 	}
 	return data
 }
+
+func TestCoordSSEEndsWhenTokenIsRevoked(t *testing.T) {
+	old := sessionRecheckInterval
+	sessionRecheckInterval = 100 * time.Millisecond
+	t.Cleanup(func() { sessionRecheckInterval = old })
+	st, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	token, err := st.AddPerson("robin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	principal, ok := st.AuthenticatePrincipal(token)
+	if !ok {
+		t.Fatal("token rejected")
+	}
+	a := &app{store: st, sessions: newSessions()}
+	sessionID, err := a.sessions.create(principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/ui/coord/events", nil)
+	req = req.WithContext(context.WithValue(req.Context(), personKey{}, principal))
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: sessionID})
+	recorder := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		a.coordEvents(recorder, req)
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatal("stream ended while the token was still valid")
+	case <-time.After(400 * time.Millisecond):
+	}
+	if err := st.RevokeToken(principal.TokenID); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stream stayed open after the token was revoked")
+	}
+	if !strings.Contains(recorder.Body.String(), "event: session-ended") {
+		t.Fatalf("missing session-ended: %q", recorder.Body.String())
+	}
+	if _, ok := a.sessions.get(sessionID); ok {
+		t.Fatal("browser session survived")
+	}
+}

@@ -70,6 +70,15 @@ func (a *app) requirePerson(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if cookie, err := r.Cookie(sessionCookie); err == nil {
 			if session, ok := a.sessions.get(cookie.Value); ok {
+				// Das Token wurde beim Login geprüft; hier prüfen wir, ob es und
+				// das Konto noch gelten, sonst überlebte ein Widerruf bis zum
+				// Neustart.
+				if !a.store.PrincipalValid(session.principal) {
+					a.sessions.remove(cookie.Value)
+					http.SetCookie(w, &http.Cookie{Name: sessionCookie, Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+					http.Redirect(w, r, "/ui/login", http.StatusSeeOther)
+					return
+				}
 				ctx := context.WithValue(r.Context(), personKey{}, session.principal)
 				ctx = context.WithValue(ctx, csrfKey{}, session.csrf)
 				next.ServeHTTP(w, r.WithContext(ctx))

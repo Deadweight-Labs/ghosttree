@@ -714,3 +714,42 @@ func TestGhostSearchEndpointFindsByDescription(t *testing.T) {
 		t.Fatalf("search returned %+v", got)
 	}
 }
+
+func TestWhoAmIReportsAccountAndTokenKind(t *testing.T) {
+	st, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	legacy, _ := st.AddPerson("alice")
+	cli, info, err := st.CreateToken("alice", store.TokenSpec{Label: "laptop", Machine: "laptop-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(New(st))
+	t.Cleanup(srv.Close)
+
+	whoami := func(token string) (map[string]any, int) {
+		resp := req(t, "GET", srv.URL+"/api/whoami", token, nil)
+		var got map[string]any
+		json.NewDecoder(resp.Body).Decode(&got)
+		return got, resp.StatusCode
+	}
+	got, _ := whoami(legacy)
+	if got["id"] != "person:1" || got["token_kind"] != "legacy" || got["state"] != "active" || got["admin"] != false {
+		t.Fatalf("legacy whoami = %v", got)
+	}
+	got, _ = whoami(cli)
+	if got["id"] != "person:1" || got["token_kind"] != "cli" || got["machine"] != "laptop-a" {
+		t.Fatalf("cli whoami = %v", got)
+	}
+	if err := st.RevokeToken(info.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, code := whoami(cli); code != http.StatusUnauthorized {
+		t.Fatalf("revoked token status = %d", code)
+	}
+	if _, code := whoami(legacy); code != http.StatusOK {
+		t.Fatalf("legacy token must survive: %d", code)
+	}
+}
