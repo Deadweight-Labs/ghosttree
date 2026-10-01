@@ -315,6 +315,9 @@ func (s *Store) PrincipalValid(p Principal) bool {
 	if s.reader != nil {
 		return s.reader.PrincipalValid(p)
 	}
+	if p.TokenKind == WebSessionKind && p.TokenID == 0 {
+		return s.AccountActive(p.ID)
+	}
 	account, err := parsePersonPrincipalID(p.ID)
 	if err != nil || p.TokenID == 0 {
 		return false
