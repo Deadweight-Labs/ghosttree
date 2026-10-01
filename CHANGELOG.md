@@ -6,6 +6,17 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Add coordination rooms with delivery states (`stored < fetched < injected <
+  acked`) and monotonic read cursors, DMs and groups with principal isolation,
+  per-principal unread, and message expiry. Introduce `coord_peers`,
+  `coord_send`, `coord_inbox` MCP tools, `ctx coord` CLI, durable threads as
+  a first-class domain, file activity tracking, and a web workspace at
+  `/ui/coord`.
+- Deliver coordination messages and agent mentions into Claude Code sessions
+  through the ghosttree channel via `ctx claude`. Wake idle sessions and receive
+  at safe points with atomic, at-most-once delivery. The channel is a Claude
+  Code research-preview feature requiring the legacy `initialize` connection
+  and `--dangerously-load-development-channels` flag.
 - Serialize runtime writes through a bounded queue while keeping reads on an
   independent connection pool. Batch pending session chunks, report retryable
   saturation errors, expose writer metrics, and drain accepted writes on shutdown.
