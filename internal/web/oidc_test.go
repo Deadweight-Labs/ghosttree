@@ -815,7 +815,7 @@ func TestOIDCFlowCookieCannotBeForgedTamperedOrReusedAfterExpiry(t *testing.T) {
 	// Garbage und verändertes Cookie.
 	for name, value := range map[string]string{
 		"garbage":  "AAAA",
-		"tampered": good.Value[:len(good.Value)-2] + "xx",
+		"tampered": tamperCookieValue(good.Value),
 	} {
 		bad := newBrowser(t)
 		bad.Jar.SetCookies(mustURL(env.web.URL), []*http.Cookie{{Name: flowCookie, Value: value, Path: "/"}})
@@ -952,5 +952,24 @@ func TestUsedStatesAreBoundedAndEvictTheOldest(t *testing.T) {
 	u2.use("new", now.Add(2*time.Minute), now.Add(time.Hour))
 	if len(u2.seen) != 1 {
 		t.Fatalf("expired state kept: %v", u2.seen)
+	}
+}
+
+// tamperCookieValue ändert das letzte Zeichen garantiert. Ein festes Suffix
+// ließ den Wert gelegentlich unverändert, wenn er schon darauf endete.
+func tamperCookieValue(v string) string {
+	last := v[len(v)-1]
+	repl := byte('A')
+	if last == repl {
+		repl = 'B'
+	}
+	return v[:len(v)-1] + string(repl)
+}
+
+func TestTamperCookieValueAlwaysChanges(t *testing.T) {
+	for _, v := range []string{"abcxx", "abcA", "abcB", "x"} {
+		if got := tamperCookieValue(v); got == v || len(got) != len(v) {
+			t.Errorf("tamperCookieValue(%q) = %q", v, got)
+		}
 	}
 }

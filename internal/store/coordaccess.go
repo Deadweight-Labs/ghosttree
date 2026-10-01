@@ -1872,6 +1872,11 @@ func (a CoordAccess) Recipients() ([]CoordRecipient, error) {
 			}
 			return nil, err
 		}
+		// Wer Mitglieder eines Projektraums sehen darf, regelt dieselbe Stufe wie
+		// bei Peers: ab member. Ein Gast liest den Raum, bekommt aber keine Liste.
+		if a.projectRoomGate(roomKindOf(room), room, ResAgents, tx) != nil {
+			continue
+		}
 		memberRows, err := tx.Query(`SELECT principal_id FROM coord_room_memberships WHERE room_key=? AND left_at=''`, room)
 		if err != nil {
 			return nil, err
@@ -1966,6 +1971,13 @@ func (a CoordAccess) ValidateRoomParticipants(roomKey string, principals []strin
 }
 
 func (a CoordAccess) validateRoomParticipantsTx(tx *sql.Tx, actor, roomKey string, principals []string) error {
+	// Ein Gast sieht die Mitglieder eines Projektraums nicht. Würde die Prüfung
+	// unten für ihn laufen, verriete die Antwort (angenommen oder abgelehnt),
+	// wer im Raum ist. Deshalb gilt für Erwähnungen aus dem Gast-Rang eine
+	// einzige Antwort, unabhängig vom Ziel.
+	if len(normalizeMembers(principals)) > 0 && a.projectRoomGate(roomKindOf(roomKey), roomKey, ResAgents, tx) != nil {
+		return fmt.Errorf("%w: mentions need member rank in a project room", ErrCoordForbidden)
+	}
 	allowed := map[string]bool{actor: true, a.Principal.ID: true}
 	rows, err := tx.Query(`SELECT principal_id FROM coord_room_memberships WHERE room_key=? AND left_at=''`, roomKey)
 	if err != nil {
@@ -2216,4 +2228,13 @@ func (a CoordAccess) projectClaimed(tx rowQuerier, project string) bool {
 	}
 	_, claimed := a.Store.ProjectByRemote(project)
 	return claimed
+}
+
+// roomKindOf liest die Art eines Raums aus dem Schlüssel. Nur Projekträume
+// tragen das Präfix; für alle anderen Arten gilt projectRoomGate nicht.
+func roomKindOf(roomKey string) string {
+	if strings.HasPrefix(roomKey, "project:") {
+		return RoomProject
+	}
+	return ""
 }

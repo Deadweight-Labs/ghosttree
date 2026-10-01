@@ -6,6 +6,14 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Guests no longer get the member list of a project room through the
+  recipient list, and a guest cannot mention anyone there: every mention from a
+  guest is refused with the same 403, so the answer cannot tell members from
+  non-members. A guest still reads and posts plain messages, which count as
+  requests. The room page now opens for guests, without the agent list. Both
+  gates follow `GHOSTTREE_ENFORCE_ACCESS` (log mode: old behaviour plus "would
+  deny"). An unknown mention recipient is a 400 with a fixed message instead of
+  a 500 that echoed the probed id, in every mode.
 - Project rooms of the coordination layer need a project role. Registering an
   agent into `project:<remote>` takes at least the guest role (org owners as
   before); org membership alone no longer joins. `GET /api/coord/rooms` drops
