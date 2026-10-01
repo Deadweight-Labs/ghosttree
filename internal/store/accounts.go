@@ -26,6 +26,7 @@ type Account struct {
 type TokenInfo struct {
 	ID         int64  `json:"id"`
 	AccountID  string `json:"account_id"`
+	Account    string `json:"account,omitempty"` // Kontoname, nur in ListAllTokens
 	Label      string `json:"label"`
 	Kind       string `json:"kind"`
 	Machine    string `json:"machine,omitempty"`
@@ -63,6 +64,9 @@ func migrateAccounts(db *sql.DB) error {
 			return err
 		}
 	}
+	if err := allowDeviceTokenKind(db); err != nil {
+		return err
+	}
 	tx, err := db.Begin()
 	if err != nil {
 		return err
@@ -89,6 +93,50 @@ func migrateAccounts(db *sql.DB) error {
 			if _, err := tx.Exec(`INSERT INTO account_migrations(version, migrated_at) VALUES(1,?)`, now()); err != nil {
 				return err
 			}
+		}
+	}
+	return tx.Commit()
+}
+
+// allowDeviceTokenKind erweitert die CHECK-Bedingung von api_tokens um die Art
+// 'device'. SQLite kann eine CHECK-Bedingung nicht ändern; die Tabelle wird
+// deshalb einmal neu aufgebaut, wenn ihre Definition die Art noch nicht kennt.
+// Auf neuen Datenbanken ist das ein Lesezugriff auf sqlite_master.
+func allowDeviceTokenKind(db *sql.DB) error {
+	var ddl string
+	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type='table' AND name='api_tokens'`).Scan(&ddl); err != nil {
+		return err
+	}
+	if strings.Contains(ddl, "'device'") {
+		return nil
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	// Ein zweiter Prozess kann den Umbau inzwischen erledigt haben.
+	if err := tx.QueryRow(`SELECT sql FROM sqlite_master WHERE type='table' AND name='api_tokens'`).Scan(&ddl); err != nil {
+		return err
+	}
+	if strings.Contains(ddl, "'device'") {
+		return nil
+	}
+	for _, stmt := range []string{
+		`CREATE TABLE api_tokens_new(
+  id INTEGER PRIMARY KEY,
+  account_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE RESTRICT,
+  token_hash TEXT NOT NULL UNIQUE, label TEXT NOT NULL DEFAULT '',
+  kind TEXT NOT NULL CHECK(kind IN ('cli','legacy','device')),
+  machine TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL, last_used_at TEXT NOT NULL DEFAULT '',
+  expires_at TEXT NOT NULL DEFAULT '', revoked_at TEXT NOT NULL DEFAULT '')`,
+		`INSERT INTO api_tokens_new SELECT id, account_id, token_hash, label, kind, machine, created_at, last_used_at, expires_at, revoked_at FROM api_tokens`,
+		`DROP TABLE api_tokens`,
+		`ALTER TABLE api_tokens_new RENAME TO api_tokens`,
+	} {
+		if _, err := tx.Exec(stmt); err != nil {
+			return err
 		}
 	}
 	return tx.Commit()
@@ -700,4 +748,95 @@ func (s *Store) AccountActive(principalID string) bool {
 	}
 	a, err := s.AccountByPrincipalID(principalID)
 	return err == nil && a.State == "active"
+}
+
+// TokenByID liefert ein Token ohne Geheimnis.
+func (s *Store) TokenByID(id int64) (TokenInfo, error) {
+	if s.reader != nil {
+		return s.reader.TokenByID(id)
+	}
+	return s.tokenByID(id)
+}
+
+// ListAllTokens liefert die Tokens aller Konten samt Kontoname, neueste zuerst.
+// Nur für Administratoren gedacht; der Aufrufer entscheidet.
+func (s *Store) ListAllTokens() ([]TokenInfo, error) {
+	if s.reader != nil {
+		return s.reader.ListAllTokens()
+	}
+	rows, err := s.db.Query(`SELECT t.id, t.account_id, t.label, t.kind, t.machine, t.created_at, t.last_used_at,
+		t.expires_at, t.revoked_at, p.name FROM api_tokens t JOIN persons p ON p.id = t.account_id ORDER BY t.id DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []TokenInfo
+	for rows.Next() {
+		var t TokenInfo
+		var account int64
+		if err := rows.Scan(&t.ID, &account, &t.Label, &t.Kind, &t.Machine, &t.CreatedAt, &t.LastUsedAt, &t.ExpiresAt, &t.RevokedAt, &t.Account); err != nil {
+			return nil, err
+		}
+		t.AccountID = "person:" + strconv.FormatInt(account, 10)
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// CreateDeviceToken stellt das Token eines Geräte-Logins aus: gebunden an die
+// Maschine, Art 'device'. Frühere, noch gültige Geräte-Tokens desselben Kontos
+// für dieselbe Maschine werden im selben Schritt widerrufen (ein Token pro
+// Maschine). Manuelle und Legacy-Tokens bleiben unberührt: Skripte können sie
+// noch brauchen.
+func (s *Store) CreateDeviceToken(accountID, machine string) (string, TokenInfo, error) {
+	if s.writer != nil {
+		type result struct {
+			token string
+			info  TokenInfo
+		}
+		r, err := queueValue(s, []any{accountID, machine}, func(d *Store, p []any) (result, error) {
+			t, i, err := d.CreateDeviceToken(p[0].(string), p[1].(string))
+			return result{t, i}, err
+		})
+		return r.token, r.info, err
+	}
+	id, err := parsePersonPrincipalID(accountID)
+	if err != nil {
+		return "", TokenInfo{}, err
+	}
+	if machine == "" {
+		return "", TokenInfo{}, fmt.Errorf("device token needs a machine")
+	}
+	token, hash, err := newToken()
+	if err != nil {
+		return "", TokenInfo{}, err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return "", TokenInfo{}, err
+	}
+	defer tx.Rollback()
+	var state string
+	if err := tx.QueryRow(`SELECT state FROM persons WHERE id=?`, id).Scan(&state); err != nil {
+		return "", TokenInfo{}, errAccountNotFound
+	}
+	if state != "active" {
+		return "", TokenInfo{}, ErrAccountDisabled
+	}
+	at := now()
+	if _, err := tx.Exec(`UPDATE api_tokens SET revoked_at=? WHERE account_id=? AND kind='device' AND machine=? AND revoked_at=''`,
+		at, id, machine); err != nil {
+		return "", TokenInfo{}, err
+	}
+	res, err := tx.Exec(`INSERT INTO api_tokens(account_id, token_hash, label, kind, machine, created_at)
+		VALUES(?,?,?,?,?,?)`, id, hash, "ctx login on "+machine, "device", machine, at)
+	if err != nil {
+		return "", TokenInfo{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", TokenInfo{}, err
+	}
+	tokenID, _ := res.LastInsertId()
+	info, err := s.tokenByID(tokenID)
+	return token, info, err
 }

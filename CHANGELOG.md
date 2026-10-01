@@ -6,6 +6,12 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Add `ctx login`, a device login (RFC 8628 style) against the ghosttree server:
+  the CLI shows a URL and a short user code, you approve it in the browser, and
+  the machine receives its own API token, bound to its name and stored in the
+  client config. Codes are short-lived, single use and kept only as hashes in
+  server memory; unauthenticated starts are capped per sender and cannot crowd
+  out others. A new login replaces the earlier device token of the same machine.
 - Add accounts with revocable, time-bound API tokens; each token belongs to an
   account. Existing person-based tokens are migrated to legacy tokens on startup
   and function unchanged. Introduce `ctx account` (add, list, tokens, token

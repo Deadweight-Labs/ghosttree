@@ -73,6 +73,8 @@ func run(args []string, stdout io.Writer) int {
 		return cmdAccount(rest, stdout)
 	case "setup":
 		return cmdSetup(rest, stdout)
+	case "login":
+		return cmdLogin(rest, stdout)
 	case "version":
 		fmt.Fprintf(stdout, "ctx %s\n", version)
 		return 0
@@ -91,6 +93,7 @@ const usage = `usage: ctx <command>
   claude   start Claude Code with the ghosttree channel (opt-in launcher)
   install  set up a harness (claude|codex|opencode)
   setup    write client config (server URL + token)
+  login    sign this machine in through the browser (device login)
   person   manage persons/tokens (server-side; deprecated alias, see account)
   account  manage accounts and their tokens (server-side)
   status   show local setup state

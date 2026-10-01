@@ -20,6 +20,8 @@ type Store struct {
 	writer        *runtimeWriter
 	bookkeeper    *runtimeWriter
 	reader        *Store
+	deviceOnce    sync.Once
+	device        *DeviceFlows
 	closeOnce     sync.Once
 	closeErr      error
 }
@@ -54,7 +56,7 @@ CREATE TABLE IF NOT EXISTS api_tokens(
   id INTEGER PRIMARY KEY,
   account_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE RESTRICT,
   token_hash TEXT NOT NULL UNIQUE, label TEXT NOT NULL DEFAULT '',
-  kind TEXT NOT NULL CHECK(kind IN ('cli','legacy')),
+  kind TEXT NOT NULL CHECK(kind IN ('cli','legacy','device')),
   machine TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL, last_used_at TEXT NOT NULL DEFAULT '',
   expires_at TEXT NOT NULL DEFAULT '', revoked_at TEXT NOT NULL DEFAULT '');

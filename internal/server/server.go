@@ -83,6 +83,8 @@ func New(st *store.Store, options ...Option) http.Handler {
 	mux.HandleFunc("GET /api/whoami", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, a.whoAmI(r))
 	})
+	mux.HandleFunc("POST /api/auth/device", a.startDeviceLogin)
+	mux.HandleFunc("POST /api/auth/device/token", a.pollDeviceLogin)
 	mux.HandleFunc("POST /api/context-snapshots", a.createContextSnapshot)
 	mux.HandleFunc("GET /api/context-snapshots", a.listContextSnapshots)
 	mux.HandleFunc("GET /api/context-snapshots/{name}", a.getContextSnapshot)
@@ -231,7 +233,7 @@ func fallbackOperationID() string {
 
 func (a *api) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/health" || r.URL.Path == "/metrics" {
+		if r.URL.Path == "/api/health" || r.URL.Path == "/metrics" || (r.Method == http.MethodPost && isDevicePath(r.URL.Path)) {
 			next.ServeHTTP(w, r)
 			return
 		}
