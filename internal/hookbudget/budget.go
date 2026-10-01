@@ -21,6 +21,12 @@ const Limit = 24000
 
 const notice = "\n\n[ghosttree: Session hook context budget reached (24000 characters). This response was shortened; further automatic context is suppressed. Fetch full context with `context_get` or start at `.ghosttree/INDEX.md`.]\n"
 
+// lockWait bounds how long a hook waits for the budget lock. The lock is held
+// across two synced receipt writes (fsync of file and directory), so on a slow
+// disk one holder takes tens of milliseconds and waiters queue behind it. A
+// timeout is still better for a hook than hanging Claude.
+const lockWait = time.Second
+
 var ErrBusy = errors.New("context budget lock timed out")
 
 // ErrNotEmitted sagt, dass emit nichts geschrieben hat. Gibt emit einen Fehler
@@ -151,7 +157,8 @@ func lock(path string) (func(), error) {
 	if err != nil {
 		return nil, err
 	}
-	deadline := time.Now().Add(100 * time.Millisecond)
+	deadline := time.Now().Add(lockWait)
+	pause := time.Millisecond
 	for {
 		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 		if err == nil {
@@ -165,7 +172,10 @@ func lock(path string) (func(), error) {
 			f.Close()
 			return nil, ErrBusy
 		}
-		time.Sleep(time.Millisecond)
+		time.Sleep(pause)
+		if pause < 8*time.Millisecond {
+			pause *= 2
+		}
 	}
 	return func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN); _ = f.Close() }, nil
 }
