@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -451,6 +452,11 @@ func (s *Server) injectedSet(msgs []store.CoordMessage) (map[int64]bool, error) 
 		ids = append(ids, m.ID)
 	}
 	got, err := s.client.CoordInjectedMessages(s.coordRef(), ids)
+	if client.IsRouteMissing(err) {
+		// Ein älterer Server kennt keine Claims, also kann nichts injected
+		// sein. Andere Fehler bleiben fail-closed.
+		return map[int64]bool{}, nil
+	}
 	if err != nil {
 		return nil, err
 	}

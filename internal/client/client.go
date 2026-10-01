@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -55,6 +56,36 @@ func (e *ConflictError) Error() string {
 
 func (e *APIError) Error() string {
 	return fmt.Sprintf("HTTP %d: %s: %s", e.Status, e.Code, e.Message)
+}
+
+// StatusError ist eine Fehlerantwort ohne strukturierten APIError-Körper.
+type StatusError struct {
+	Method string
+	Path   string
+	Status int
+	Body   string
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("%s %s: %d: %s", e.Method, e.Path, e.Status, e.Body)
+}
+
+// IsRouteMissing sagt, ob der Server die Route gar nicht kennt. Das tut ein
+// älterer Server: der Router antwortet mit 404 und Klartext oder mit 405. Ein
+// 404 mit JSON-Körper ist dagegen eine echte Antwort des Handlers ("Ziel
+// nicht gefunden") und zählt nicht.
+func IsRouteMissing(err error) bool {
+	var se *StatusError
+	if !errors.As(err, &se) {
+		return false
+	}
+	switch se.Status {
+	case http.StatusMethodNotAllowed:
+		return true
+	case http.StatusNotFound:
+		return !strings.HasPrefix(se.Body, "{")
+	}
+	return false
 }
 
 func New(cfg config.Config) *Client {
@@ -159,7 +190,7 @@ func (c *Client) doContext(ctx context.Context, method, path string, query url.V
 			}
 			return &apiErr
 		}
-		return fmt.Errorf("%s %s: %d: %s", method, path, resp.StatusCode, strings.TrimSpace(string(raw)))
+		return &StatusError{Method: method, Path: path, Status: resp.StatusCode, Body: strings.TrimSpace(string(raw))}
 	}
 	switch o := out.(type) {
 	case nil:

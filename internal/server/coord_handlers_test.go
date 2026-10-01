@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -697,5 +698,34 @@ func TestClaimCoordDeliveryRouteGrantsOneWinnerAndRejectsStrangers(t *testing.T)
 	list.Body.Close()
 	if len(got.IDs) != 1 || got.IDs[0] != id {
 		t.Fatalf("injected = %v", got.IDs)
+	}
+}
+
+func TestInjectedLookupIsBoundedAndValidated(t *testing.T) {
+	srv, _, ownerToken, _ := coordinationAccessServer(t)
+	status := func(ids string) int {
+		res := req(t, "GET", srv.URL+"/api/coord/deliveries/injected?agent_external_id=sess-b&message_ids="+ids, ownerToken, nil)
+		res.Body.Close()
+		return res.StatusCode
+	}
+	many := func(n int) string {
+		parts := make([]string, n)
+		for i := range parts {
+			parts[i] = strconv.Itoa(i + 1)
+		}
+		return strings.Join(parts, ",")
+	}
+	if got := status(many(maxInjectedLookup)); got == http.StatusBadRequest {
+		t.Fatalf("exactly %d ids must be accepted, got %d", maxInjectedLookup, got)
+	}
+	for name, ids := range map[string]string{
+		"too many":    many(maxInjectedLookup + 1),
+		"not numeric": "1,abc",
+		"zero":        "0",
+		"negative":    "1,-5",
+	} {
+		if got := status(ids); got != http.StatusBadRequest {
+			t.Errorf("%s: want 400, got %d", name, got)
+		}
 	}
 }

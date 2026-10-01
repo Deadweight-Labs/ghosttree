@@ -600,6 +600,10 @@ func (a *api) claimCoordDelivery(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]bool{"claimed": claimed})
 }
 
+// maxInjectedLookup begrenzt eine Abfrage. Der Poller fragt nach einer Seite
+// Inbox, nicht nach dem ganzen Verlauf.
+const maxInjectedLookup = 500
+
 func (a *api) coordInjectedMessages(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	if q.Get("agent_external_id") == "" {
@@ -614,6 +618,10 @@ func (a *api) coordInjectedMessages(w http.ResponseWriter, r *http.Request) {
 		id, err := strconv.ParseInt(part, 10, 64)
 		if err != nil || id <= 0 {
 			writeErr(w, http.StatusBadRequest, "invalid message_ids")
+			return
+		}
+		if len(ids) == maxInjectedLookup {
+			writeErr(w, http.StatusBadRequest, "too many message_ids")
 			return
 		}
 		ids = append(ids, id)
