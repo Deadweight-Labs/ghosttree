@@ -1311,3 +1311,9 @@ html:not(.coord-enhanced) .coord-backdrop { display: none !important; }
     transition: none !important;
   }
 }
+
+/* Token- und Geräteseiten */
+.narrow-page { max-width: 36rem; }
+.token-table { width: 100%; border-collapse: collapse; }
+.token-table th, .token-table td { text-align: left; padding: .4rem .6rem; border-bottom: 1px solid #d8d3c8; vertical-align: top; }
+.token-table form { margin: 0; }

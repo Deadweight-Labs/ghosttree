@@ -30,6 +30,9 @@ type app struct {
 type pageData struct {
 	Title, NavSection, Person, CSRFToken, Error, Code string
 	OIDC, Paste, NeedsName                            bool
+	Admin, Approved                                   bool
+	DeviceMachine, DeviceRemote, DeviceStarted        string
+	Tokens                                            []tokenRow
 	Requests                                          []requestdomain.SearchHit
 	Request                                           requestdomain.Detail
 	RequestThreads                                    []coordThreadView
@@ -95,6 +98,11 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	mux.Handle("POST /ui/coord/group/create", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordCreateGroup))))
 	mux.Handle("POST /ui/coord/group/update", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordUpdateGroup))))
 	mux.Handle("POST /ui/coord/group/leave", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordLeaveGroup))))
+	mux.Handle("GET /ui/device", a.requirePerson(http.HandlerFunc(a.devicePage)))
+	mux.Handle("POST /ui/device", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.deviceLookup)))))
+	mux.Handle("POST /ui/device/decide", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.deviceDecide)))))
+	mux.Handle("GET /ui/account/tokens", a.requirePerson(http.HandlerFunc(a.tokensPage)))
+	mux.Handle("POST /ui/account/tokens/revoke", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.tokenRevoke)))))
 	mux.HandleFunc("GET /ui/{$}", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/ui/requests", http.StatusSeeOther) })
 	return &appHandler{Handler: mux, app: a}
 }
@@ -125,6 +133,8 @@ func (a *app) renderBrowser(w http.ResponseWriter, r *http.Request, name string,
 		data.NavSection = "coord"
 	case "context":
 		data.NavSection = "context"
+	case "tokens", "device", "devicecheck", "devicedone":
+		data.NavSection = "tokens"
 	}
 	a.render(w, name, data)
 }

@@ -6,6 +6,11 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Add browser pages for the device login and for tokens: `/ui/device` approves a
+  `ctx login` (signed in, CSRF protected, wrong codes lock the account briefly)
+  and `/ui/account/tokens` lists your tokens with label, machine, kind
+  (legacy, device, manual), creation date and expiry and revokes them with
+  immediate effect. Admins see and revoke every token.
 - Add `ctx login`, a device login (RFC 8628 style) against the ghosttree server:
   the CLI shows a URL and a short user code, you approve it in the browser, and
   the machine receives its own API token, bound to its name and stored in the
