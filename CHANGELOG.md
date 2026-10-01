@@ -60,7 +60,10 @@ Versioning, with pre-1.0 compatibility rules described in
   moving projects, approving devices and revoking other accounts' tokens.
   Sessions from OIDC, a login link or a bootstrap, claim or invitation code are
   interactive; without OIDC the operator creates one with `ctx account
-  login-link <name> --db <path>`. Roles are not enforced anywhere yet, so nobody
+  login-link <name> --db <path>`. Coordination posts are marked `human` only
+  when they come from such an interactive browser session; a bearer token or a
+  pasted-token session posts as `agent` with the account as sender, and the
+  channel's `sender_kind` follows. Roles are not enforced anywhere yet, so nobody
   sees or may do less than before. Existing instances get the two tables and a
   `role` column on `coord_agents` (default `member`) on startup; existing
   organization members start without a stored role.

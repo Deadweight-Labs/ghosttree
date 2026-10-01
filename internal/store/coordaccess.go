@@ -60,6 +60,18 @@ func queuedCoordAccess(d *Store, p []any) CoordAccess {
 	}.direct(d)
 }
 
+// authorKind setzt die Herkunft eines Beitrags. human gilt nur für einen
+// Menschen in einer interaktiven Browser-Sitzung (OIDC, Login-Link oder Code,
+// TokenKind web). Ein Bearer-Token und eine Sitzung aus eingefügtem Token liegen
+// in der Konfiguration von Rechnern, auf denen Agenten laufen; sie posten als
+// agent, mit dem Konto als Absender.
+func (a CoordAccess) authorKind() string {
+	if a.AgentExternalID == "" && a.Principal.TokenKind == WebSessionKind {
+		return AuthorHuman
+	}
+	return AuthorAgent
+}
+
 func (a CoordAccess) actor() (string, error) {
 	if a.Store == nil || strings.TrimSpace(a.Principal.ID) == "" {
 		return "", ErrCoordForbidden
@@ -677,11 +689,7 @@ func (a CoordAccess) Send(message CoordMessage) (int64, error) {
 	}
 	message.SenderExternalID = actor
 	message.AuthorPrincipalID = a.Principal.ID
-	if a.AgentExternalID == "" {
-		message.AuthorKind = AuthorHuman
-	} else {
-		message.AuthorKind = AuthorAgent
-	}
+	message.AuthorKind = a.authorKind()
 	id, err := appendCoordMessageTx(tx, message)
 	if err != nil {
 		return 0, err
@@ -2022,11 +2030,7 @@ func (a CoordAccess) CreateStanding(in StandingInput) (int64, error) {
 		return 0, err
 	}
 	message := CoordMessage{DestinationKind: DestinationRoom, DestinationID: in.RoomKey, SenderExternalID: actor, AuthorPrincipalID: a.Principal.ID, ClientID: in.ClientID, Body: in.Body, Intent: IntentStanding, ExpiresAt: strings.TrimSpace(in.ExpiresAt), Mentions: in.Mentions}
-	if a.AgentExternalID == "" {
-		message.AuthorKind = AuthorHuman
-	} else {
-		message.AuthorKind = AuthorAgent
-	}
+	message.AuthorKind = a.authorKind()
 	id, err := appendCoordMessageTx(tx, message)
 	if err != nil {
 		return 0, err

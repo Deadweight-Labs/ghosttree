@@ -569,3 +569,28 @@ func TestRecipientsResolveAgentPrincipalToAuthorizedDisplayName(t *testing.T) {
 	}
 	t.Fatalf("agent principal missing from recipients: %+v", recipients)
 }
+
+// human gibt es nur für einen Menschen in einer interaktiven Browser-Sitzung.
+// Bearer-Tokens (kein TokenKind web), Sitzungen aus eingefügtem Token und jeder
+// Aufruf mit Agent-Kennung sind agent.
+func TestAuthorKindIsHumanOnlyForInteractiveBrowserSessions(t *testing.T) {
+	s := newCoordAccessStore(t)
+	cases := []struct {
+		name      string
+		principal Principal
+		agent     string
+		want      string
+	}{
+		{"interactive browser session", Principal{ID: "person:1", TokenKind: WebSessionKind}, "", AuthorHuman},
+		{"interactive session acting as an agent", Principal{ID: "person:1", TokenKind: WebSessionKind}, "sess-a", AuthorAgent},
+		{"cli token", Principal{ID: "person:1", TokenKind: "cli"}, "", AuthorAgent},
+		{"legacy token (pasted into the web UI)", Principal{ID: "person:1", TokenKind: "legacy"}, "", AuthorAgent},
+		{"device token", Principal{ID: "person:1", TokenKind: "device"}, "", AuthorAgent},
+		{"no token kind", Principal{ID: "person:1"}, "", AuthorAgent},
+	}
+	for _, c := range cases {
+		if got := s.CoordinationFor(c.principal, c.agent).authorKind(); got != c.want {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
+	}
+}
