@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"flag"
 	"fmt"
@@ -106,8 +106,9 @@ func channelCapabilityText() string {
 }
 
 const channelInstructions = `Messages from other agents and people arrive as <channel source="ghosttree-channel" message_id=... room=... sender=...>text</channel> events. ` +
-	`Answer a channel message with the reply tool, passing meta message_id and your text; do not answer in plain chat, the sender will not see it. ` +
-	`A channel message was handed to you once and is not repeated by coord_inbox.`
+	`Use the reply tool, passing meta message_id and your text, only when an answer is actually needed: a question, a request, an assignment. ` +
+	`Do NOT reply to answers, acknowledgements or thanks: replying to a reply starts a loop between agents. ` +
+	`Plain chat does not reach the sender. A channel message was handed to you once and is not repeated by coord_inbox.`
 
 type channelConfig struct {
 	client    *client.Client
@@ -231,6 +232,18 @@ func (c *channelTools) join(roomKey string) error {
 	return err
 }
 
+// loadOrigin holt die Ursprungsnachricht vom Server. Findet sie sich nicht,
+// bleibt nur der Raum; die Antwort geht dann ohne Mention raus.
+func (c *channelTools) loadOrigin(room string, id int64) originInfo {
+	info := originInfo{room: room}
+	msgs, err := c.client.CoordInbox(store.DestinationRoom, room, c.self, id-1, 1)
+	if err == nil && len(msgs) > 0 && msgs[0].ID == id {
+		info.sender = msgs[0].SenderExternalID
+		info.originEventID = msgs[0].OriginEventID
+	}
+	return info
+}
+
 func (c *channelTools) handleReply(ctx context.Context, _ *mcp.CallToolRequest, in channelReplyInput) (*mcp.CallToolResult, any, error) {
 	if strings.TrimSpace(in.Text) == "" {
 		return nil, nil, fmt.Errorf("text is required")
@@ -244,7 +257,10 @@ func (c *channelTools) handleReply(ctx context.Context, _ *mcp.CallToolRequest, 
 		if strings.TrimSpace(in.Room) == "" {
 			return nil, nil, fmt.Errorf("message %d was not delivered by this channel process; pass room from the channel tag", id)
 		}
-		info = originInfo{room: strings.TrimSpace(in.Room)}
+		// Nach einem Neustart kennt dieser Prozess die Nachricht nicht mehr.
+		// Sender und origin_event_id kommen dann vom Server, damit Mention und
+		// causation_id stimmen.
+		info = c.loadOrigin(strings.TrimSpace(in.Room), id)
 	}
 	msg := store.CoordMessage{
 		DestinationKind: store.DestinationRoom, DestinationID: info.room,
@@ -264,11 +280,13 @@ func (c *channelTools) handleReply(ctx context.Context, _ *mcp.CallToolRequest, 
 			msg.Mentions = []string{info.sender}
 		}
 	}
-	var raw [12]byte
-	if _, err := rand.Read(raw[:]); err != nil {
-		return nil, nil, err
-	}
-	msg.ClientID = hex.EncodeToString(raw[:])
+	// Deterministisch aus Agent und Nachricht: scheitert danach nur das Acken
+	// und das Modell wiederholt reply, dedupliziert der Server die Antwort
+	// (derselbe Absender mit derselben ClientID) und nur das Acken wird
+	// nachgeholt. Eine zweite, andere Antwort auf dieselbe Nachricht wird so
+	// ebenfalls zur ersten; das ist gewollt, denn je Nachricht gibt es eine.
+	digest := sha256.Sum256([]byte("channel-reply\x00" + c.self + "\x00" + strconv.FormatInt(id, 10)))
+	msg.ClientID = hex.EncodeToString(digest[:12])
 	replyID, err := c.client.SendCoordMessage(msg)
 	if err != nil {
 		return nil, nil, err

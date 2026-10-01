@@ -30,6 +30,9 @@ type Source interface {
 	Rooms(self string) ([]store.CoordRoom, error)
 	Inbox(self string, room store.CoordRoom, after int64, limit int) ([]store.CoordMessage, error)
 	Mentions(self string, messageID int64) ([]string, error)
+	// Message lädt eine Nachricht des Raums. ok ist false, wenn es sie dort
+	// nicht gibt.
+	Message(self string, room store.CoordRoom, id int64) (m store.CoordMessage, ok bool, err error)
 	// Claim ist atomar: je Nachricht und Empfänger bekommt genau ein Aufrufer true.
 	Claim(ctx context.Context, self string, messageID int64) (bool, error)
 	Cursor(self string, room store.CoordRoom) (int64, error)
@@ -211,14 +214,23 @@ func (p *Poller) handle(ctx context.Context, room store.CoordRoom, m store.Coord
 	if !wakeCandidate(p.Self, room.Kind, m, now) {
 		return false, nil
 	}
-	if needsMentions(room.Kind) {
-		mentions, err := p.Source.Mentions(p.Self, m.ID)
+	replyToOwn := false
+	if m.ReplyTo != 0 && !attentionIntent(m) && m.AuthorKind != store.AuthorHuman {
+		parent, ok, err := p.Source.Message(p.Self, room, m.ReplyTo)
 		if err != nil {
+			return false, err // fail-closed: ohne Antwort kein Claim
+		}
+		replyToOwn = ok && isOwn(p.Self, parent)
+	}
+	var mentions []string
+	if needsMentions(room.Kind) {
+		var err error
+		if mentions, err = p.Source.Mentions(p.Self, m.ID); err != nil {
 			return false, err
 		}
-		if !ShouldWake(p.Self, room.Kind, m, mentions, now) {
-			return false, nil
-		}
+	}
+	if !ShouldWake(p.Self, room.Kind, m, mentions, replyToOwn, now) {
+		return false, nil
 	}
 	if !p.Notifier.Ready() {
 		return false, errStalled
@@ -291,6 +303,16 @@ func (s ClientSource) Rooms(self string) ([]store.CoordRoom, error) {
 
 func (s ClientSource) Inbox(self string, room store.CoordRoom, after int64, limit int) ([]store.CoordMessage, error) {
 	return s.Client.CoordInbox(store.DestinationRoom, room.Key, self, after, limit)
+}
+
+func (s ClientSource) Message(self string, room store.CoordRoom, id int64) (store.CoordMessage, bool, error) {
+	// Die Inbox liefert ab einer ID aufwärts; der erste Treffer ist die
+	// Nachricht selbst, wenn sie in diesem Raum liegt.
+	msgs, err := s.Client.CoordInbox(store.DestinationRoom, room.Key, self, id-1, 1)
+	if err != nil || len(msgs) == 0 || msgs[0].ID != id {
+		return store.CoordMessage{}, false, err
+	}
+	return msgs[0], true, nil
 }
 
 func (s ClientSource) Mentions(self string, id int64) ([]string, error) {

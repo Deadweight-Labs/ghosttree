@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -334,5 +337,92 @@ func TestChannelStopsCleanlyOnSIGTERMAndOnStdinEOF(t *testing.T) {
 		case <-time.After(10 * time.Second):
 			t.Fatalf("%s: channel did not stop", how)
 		}
+	}
+}
+
+func newTools(c *client.Client) *channelTools {
+	return &channelTools{client: c, self: channelSelf, rec: &recorder{seen: map[int64]originInfo{}}}
+}
+
+func repliesTo(t *testing.T, e *channelEnv, room string, id int64) []store.CoordMessage {
+	t.Helper()
+	msgs, err := e.a.CoordInbox(store.DestinationRoom, room, "sess-sender", 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []store.CoordMessage
+	for _, m := range msgs {
+		if m.ReplyTo == id {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// Nach einem Neustart kennt der Prozess die Nachricht nicht mehr. Mention und
+// causation_id kommen dann vom Server.
+func TestChannelReplyAfterRestartReloadsTheOrigin(t *testing.T) {
+	e := newChannelEnv(t)
+	room := store.RoomKeyForMachine("chanbox")
+	id, err := e.a.SendCoordMessage(store.CoordMessage{
+		DestinationKind: store.DestinationRoom, DestinationID: room, SenderExternalID: "sess-sender",
+		ClientID: "o1", OriginEventID: "ev-o1", Body: "frage", Mentions: []string{channelSelf},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools := newTools(e.b) // frischer Prozess: nichts im Speicher
+	if _, _, err := tools.handleReply(context.Background(), nil, channelReplyInput{MessageID: strconv.FormatInt(id, 10), Text: "antwort", Room: room}); err != nil {
+		t.Fatal(err)
+	}
+	got := repliesTo(t, e, room, id)
+	if len(got) != 1 || got[0].CausationID != "ev-o1" {
+		t.Fatalf("reply = %+v", got)
+	}
+	mentions, err := e.a.CoordMessageMentions(got[0].ID, "sess-sender")
+	if err != nil || len(mentions) != 1 || mentions[0] != "sess-sender" {
+		t.Fatalf("mentions = %v err=%v", mentions, err)
+	}
+	if st := deliveryState(t, e, id); st != store.DeliveryAcked {
+		t.Fatalf("state = %q", st)
+	}
+}
+
+// Scheitert nur das Acken, liefert ein Retry von reply dieselbe Nachricht und
+// holt das Acken nach, statt eine zweite Antwort zu erzeugen.
+func TestChannelReplyRetryAfterFailedAckDoesNotDuplicate(t *testing.T) {
+	e := newChannelEnv(t)
+	key, id := e.sendDM(t, "bitte", "r1")
+	var mu sync.Mutex
+	failed := false
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		fail := !failed && r.URL.Path == "/api/coord/deliveries"
+		if fail {
+			failed = true
+		}
+		mu.Unlock()
+		if fail {
+			http.Error(w, "boom", http.StatusInternalServerError)
+			return
+		}
+		target, _ := url.Parse(e.url)
+		httputil.NewSingleHostReverseProxy(target).ServeHTTP(w, r)
+	}))
+	defer proxy.Close()
+	tools := newTools(client.New(config.Config{ServerURL: proxy.URL, Token: e.token, Machine: "chanbox"}))
+	tools.rec.seen[id] = originInfo{room: key, kind: "direct", sender: "sess-sender", originEventID: "ev-r1"}
+	in := channelReplyInput{MessageID: strconv.FormatInt(id, 10), Text: "fertig"}
+	if _, _, err := tools.handleReply(context.Background(), nil, in); err == nil {
+		t.Fatal("the failed ack must surface")
+	}
+	if _, _, err := tools.handleReply(context.Background(), nil, in); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if got := repliesTo(t, e, key, id); len(got) != 1 {
+		t.Fatalf("want exactly one reply after a retry, got %d", len(got))
+	}
+	if st := deliveryState(t, e, id); st != store.DeliveryAcked {
+		t.Fatalf("state = %q, want acked after the retry", st)
 	}
 }

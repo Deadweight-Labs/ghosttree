@@ -45,12 +45,33 @@ func wakeCandidate(self, roomKind string, m store.CoordMessage, now time.Time) b
 	return false // unbekannte Raumart: lieber nicht wecken
 }
 
+// attentionIntent sagt, ob die Nachricht ausdrücklich Aufmerksamkeit verlangt:
+// Frage, Freigabe, Blocker, Übergabe. Ein ack ist keine.
+func attentionIntent(m store.CoordMessage) bool {
+	switch strings.TrimSpace(m.Intent) {
+	case store.IntentQuestion, store.IntentApproval, store.IntentBlocker, store.IntentHandoff:
+		return true
+	}
+	return false
+}
+
+// isPlainReply sagt, ob die Nachricht eine bloße Antwort auf eine eigene ist
+// und deshalb nicht wecken soll. Ohne das antworten sich zwei Channel-Agenten
+// endlos: jede reply weckt den anderen, der wieder antwortet. Menschen sind
+// ausgenommen, denn von ihnen geht keine Schleife aus. Die Nachricht bleibt im
+// Pull-Pfad sichtbar; sie wird nur nicht gepusht.
+func isPlainReply(m store.CoordMessage, replyToOwn bool) bool {
+	return m.ReplyTo != 0 && replyToOwn && !attentionIntent(m) && m.AuthorKind != store.AuthorHuman
+}
+
 // ShouldWake ist der Wake-Filter v1: Erwähnungen der eigenen Identität sowie
 // Direkt- und Gruppenräume. Nie eigene Nachrichten, nichts Abgelaufenes.
 // Attention-Intents wecken erst in v2. mentions sind die Erwähnungen der
 // Nachricht und werden nur für Projekt- und Maschinenräume gelesen.
-func ShouldWake(self, roomKind string, m store.CoordMessage, mentions []string, now time.Time) bool {
-	if !wakeCandidate(self, roomKind, m, now) {
+// replyToOwn sagt, dass m.ReplyTo auf eine Nachricht von self zeigt; eine
+// bloße Antwort darauf weckt nicht (siehe isPlainReply).
+func ShouldWake(self, roomKind string, m store.CoordMessage, mentions []string, replyToOwn bool, now time.Time) bool {
+	if !wakeCandidate(self, roomKind, m, now) || isPlainReply(m, replyToOwn) {
 		return false
 	}
 	if !needsMentions(roomKind) {

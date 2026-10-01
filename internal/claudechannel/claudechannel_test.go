@@ -145,30 +145,45 @@ func TestWakeFilter(t *testing.T) {
 	msg := func(sender, expires string, expired bool) store.CoordMessage {
 		return store.CoordMessage{ID: 1, SenderExternalID: sender, ExpiresAt: expires, Expired: expired}
 	}
+	reply := func(m store.CoordMessage, intent, author string) store.CoordMessage {
+		m.ReplyTo, m.Intent, m.AuthorKind = 99, intent, author
+		return m
+	}
 	for _, c := range []struct {
 		name     string
 		kind     string
 		m        store.CoordMessage
 		mentions []string
-		want     bool
+		// replyToOwn: m.ReplyTo zeigt auf eine eigene Nachricht
+		replyToOwn bool
+		want       bool
 	}{
-		{"direct wakes", store.RoomDirect, msg("peer", "", false), nil, true},
-		{"group wakes", store.RoomGroup, msg("peer", "", false), nil, true},
-		{"project without mention", store.RoomProject, msg("peer", "", false), nil, false},
-		{"project mentioning someone else", store.RoomProject, msg("peer", "", false), []string{"other"}, false},
-		{"project mentioning me", store.RoomProject, msg("peer", "", false), []string{"other", "me"}, true},
-		{"machine mentioning me", store.RoomMachine, msg("peer", "", false), []string{"me"}, true},
-		{"own message in direct", store.RoomDirect, msg("me", "", false), nil, false},
-		{"own subagent message", store.RoomDirect, msg("me/reviewer", "", false), nil, false},
-		{"similar name is not own", store.RoomDirect, msg("me2", "", false), nil, true},
-		{"own message mentioning me", store.RoomProject, msg("me", "", false), []string{"me"}, false},
-		{"flagged expired", store.RoomDirect, msg("peer", "", true), nil, false},
-		{"expires_at in the past", store.RoomDirect, msg("peer", past, false), nil, false},
-		{"expires_at in the future", store.RoomDirect, msg("peer", future, false), nil, true},
-		{"expired mention", store.RoomProject, msg("peer", past, false), []string{"me"}, false},
-		{"unknown room kind", "weird", msg("peer", "", false), []string{"me"}, false},
+		{"direct wakes", store.RoomDirect, msg("peer", "", false), nil, false, true},
+		{"group wakes", store.RoomGroup, msg("peer", "", false), nil, false, true},
+		{"project without mention", store.RoomProject, msg("peer", "", false), nil, false, false},
+		{"project mentioning someone else", store.RoomProject, msg("peer", "", false), []string{"other"}, false, false},
+		{"project mentioning me", store.RoomProject, msg("peer", "", false), []string{"other", "me"}, false, true},
+		{"machine mentioning me", store.RoomMachine, msg("peer", "", false), []string{"me"}, false, true},
+		{"own message in direct", store.RoomDirect, msg("me", "", false), nil, false, false},
+		{"own subagent message", store.RoomDirect, msg("me/reviewer", "", false), nil, false, false},
+		{"similar name is not own", store.RoomDirect, msg("me2", "", false), nil, false, true},
+		{"own message mentioning me", store.RoomProject, msg("me", "", false), []string{"me"}, false, false},
+		{"flagged expired", store.RoomDirect, msg("peer", "", true), nil, false, false},
+		{"expires_at in the past", store.RoomDirect, msg("peer", past, false), nil, false, false},
+		{"expires_at in the future", store.RoomDirect, msg("peer", future, false), nil, false, true},
+		{"expired mention", store.RoomProject, msg("peer", past, false), []string{"me"}, false, false},
+		{"unknown room kind", "weird", msg("peer", "", false), []string{"me"}, false, false},
+		{"plain reply to own message", store.RoomDirect, reply(msg("peer", "", false), "", ""), nil, true, false},
+		{"plain reply to own message in project room, mentioned", store.RoomProject, reply(msg("peer", "", false), "", ""), []string{"me"}, true, false},
+		{"reply to someone else's message wakes", store.RoomDirect, reply(msg("peer", "", false), "", ""), nil, false, true},
+		{"reply to own message with question intent", store.RoomDirect, reply(msg("peer", "", false), store.IntentQuestion, ""), nil, true, true},
+		{"reply to own message with blocker intent", store.RoomDirect, reply(msg("peer", "", false), store.IntentBlocker, ""), nil, true, true},
+		{"reply to own message with approval intent", store.RoomDirect, reply(msg("peer", "", false), store.IntentApproval, ""), nil, true, true},
+		{"reply to own message with handoff intent", store.RoomDirect, reply(msg("peer", "", false), store.IntentHandoff, ""), nil, true, true},
+		{"reply to own message with ack intent stays quiet", store.RoomDirect, reply(msg("peer", "", false), store.IntentAck, ""), nil, true, false},
+		{"human reply to own message wakes", store.RoomDirect, reply(msg("robin", "", false), "", store.AuthorHuman), nil, true, true},
 	} {
-		if got := ShouldWake("me", c.kind, c.m, c.mentions, now); got != c.want {
+		if got := ShouldWake("me", c.kind, c.m, c.mentions, c.replyToOwn, now); got != c.want {
 			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
 		}
 	}
@@ -203,6 +218,16 @@ func (f *fakeServer) Inbox(_ string, room store.CoordRoom, after int64, limit in
 		}
 	}
 	return out, nil
+}
+func (f *fakeServer) Message(_ string, room store.CoordRoom, id int64) (store.CoordMessage, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, m := range f.msgs[room.Key] {
+		if m.ID == id {
+			return m, true, nil
+		}
+	}
+	return store.CoordMessage{}, false, nil
 }
 func (f *fakeServer) Mentions(_ string, id int64) ([]string, error) {
 	f.mu.Lock()
@@ -728,4 +753,34 @@ type claimHangs struct{ *fakeServer }
 func (c *claimHangs) Claim(ctx context.Context, _ string, _ int64) (bool, error) {
 	<-ctx.Done()
 	return false, ctx.Err()
+}
+
+// Zwei Channel-Agenten in einem Raum: A fragt, B antwortet, A wird von der
+// Antwort nicht geweckt. Sonst antworteten sie sich endlos.
+func TestAnswerDoesNotWakeTheAskerButStaysReadable(t *testing.T) {
+	f := newFakeServer(directRoom)
+	f.msgs[directRoom.Key] = []store.CoordMessage{
+		{ID: 1, SenderExternalID: "a", Body: "kannst du das pruefen?", Intent: store.IntentQuestion},
+		{ID: 2, SenderExternalID: "b", Body: "ja, erledigt", ReplyTo: 1},
+	}
+	na, nb := &fakeNotifier{f: f}, &fakeNotifier{f: f}
+	pa, pb := newPoller(f, na), newPoller(f, nb)
+	pa.Self, pb.Self = "a", "b"
+	if _, err := pb.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pa.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(nb.got) != 1 || nb.got[0].Content != "kannst du das pruefen?" {
+		t.Fatalf("B must be woken by the question: %+v", nb.got)
+	}
+	if len(na.got) != 0 || f.claimed[2] {
+		t.Fatalf("A must not be woken (or claim) for the plain answer: %+v claimed=%v", na.got, f.claimed)
+	}
+	// Die Antwort ist nicht geclaimt, also bleibt sie im Pull-Pfad lesbar,
+	// und der gemeinsame Cursor von A rückt nicht über sie hinaus.
+	if f.cursor[directRoom.Key] > 1 {
+		t.Fatalf("cursor moved past the unread answer: %d", f.cursor[directRoom.Key])
+	}
 }
