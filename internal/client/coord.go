@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -183,10 +184,15 @@ func (c *Client) MarkCoordDelivery(messageID int64, recipient, state string) err
 // ClaimCoordDelivery fragt, ob dieser Aufrufer die Nachricht einbringen darf.
 // Genau ein Aufrufer je Nachricht und Empfänger bekommt true.
 func (c *Client) ClaimCoordDelivery(messageID int64, recipient string) (bool, error) {
+	return c.ClaimCoordDeliveryContext(context.Background(), messageID, recipient)
+}
+
+// ClaimCoordDeliveryContext ist ClaimCoordDelivery mit Abbruch und Frist.
+func (c *Client) ClaimCoordDeliveryContext(ctx context.Context, messageID int64, recipient string) (bool, error) {
 	var out struct {
 		Claimed bool `json:"claimed"`
 	}
-	err := c.do("POST", "/api/coord/deliveries/claim", nil, map[string]any{
+	err := c.doContext(ctx, "POST", "/api/coord/deliveries/claim", nil, map[string]any{
 		"message_id": messageID, "recipient_external_id": recipient,
 	}, &out)
 	return out.Claimed, err

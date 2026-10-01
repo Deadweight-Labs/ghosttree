@@ -17,6 +17,10 @@ const (
 	MinInterval = 2 * time.Second
 	MaxInterval = 10 * time.Second
 	inboxLimit  = 100
+	// ClaimTimeout begrenzt den Claim. Er läuft unter dem Datei-Lock des
+	// Budgets; ohne eigene Frist hielte ein hängender Server den Lock bis zum
+	// Client-Timeout.
+	ClaimTimeout = 5 * time.Second
 )
 
 // Source ist alles, was der Poller vom Server braucht. Ein Interface, damit der
@@ -27,7 +31,7 @@ type Source interface {
 	Inbox(self string, room store.CoordRoom, after int64, limit int) ([]store.CoordMessage, error)
 	Mentions(self string, messageID int64) ([]string, error)
 	// Claim ist atomar: je Nachricht und Empfänger bekommt genau ein Aufrufer true.
-	Claim(self string, messageID int64) (bool, error)
+	Claim(ctx context.Context, self string, messageID int64) (bool, error)
 	Cursor(self string, room store.CoordRoom) (int64, error)
 	SetCursor(self string, room store.CoordRoom, id int64) error
 }
@@ -60,6 +64,8 @@ type Poller struct {
 	// endet und gibt dann ctx.Err() zurück.
 	Now   func() time.Time
 	Sleep func(ctx context.Context, d time.Duration) error
+	// ClaimTimeout überschreibt die Frist des Claims; null heißt ClaimTimeout.
+	ClaimTimeout time.Duration
 	// OnError sieht Fehler, die einen Durchlauf abbrechen. Der Poller läuft
 	// danach mit Backoff weiter.
 	OnError func(error)
@@ -223,13 +229,20 @@ func (p *Poller) handle(ctx context.Context, room store.CoordRoom, m store.Coord
 			stalled = true // Budget erschöpft; nichts geclaimt
 			return nil
 		}
-		won, err := p.Source.Claim(p.Self, m.ID)
+		timeout := p.ClaimTimeout
+		if timeout <= 0 {
+			timeout = ClaimTimeout
+		}
+		cctx, cancel := context.WithTimeout(ctx, timeout)
+		won, err := p.Source.Claim(cctx, p.Self, m.ID)
+		cancel()
 		if err != nil {
-			return err
+			// Nichts geschrieben: die Budgetreservierung wird zurückgerollt.
+			return errors.Join(hookbudget.ErrNotEmitted, err)
 		}
 		if !won {
 			lost = true // ein anderer Poller hat sie; nie erneut zustellen
-			return nil
+			return hookbudget.ErrNotEmitted
 		}
 		if err := p.Notifier.Notify(ctx, NewNotification(room, m, text)); err != nil {
 			return err
@@ -244,12 +257,12 @@ func (p *Poller) handle(ctx context.Context, room store.CoordRoom, m store.Coord
 			p.OnError(err)
 		}
 		return true, nil
+	case lost:
+		return false, nil
 	case err != nil:
 		return false, err
 	case stalled:
 		return false, errStalled
-	case lost:
-		return false, nil
 	}
 	return sent, nil
 }
@@ -284,8 +297,8 @@ func (s ClientSource) Mentions(self string, id int64) ([]string, error) {
 	return s.Client.CoordMessageMentions(id, self)
 }
 
-func (s ClientSource) Claim(self string, id int64) (bool, error) {
-	return s.Client.ClaimCoordDelivery(id, self)
+func (s ClientSource) Claim(ctx context.Context, self string, id int64) (bool, error) {
+	return s.Client.ClaimCoordDeliveryContext(ctx, id, self)
 }
 
 func (s ClientSource) Cursor(self string, room store.CoordRoom) (int64, error) {

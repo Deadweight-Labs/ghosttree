@@ -20,14 +20,18 @@
 // bereit, das Budget erschöpft oder sein Konto nicht lesbar, gibt es keinen
 // Claim, die Position bleibt stehen, und der Poller geht in den Backoff.
 //
+// Nur ein tatsächlicher Schreibversuch verbraucht Budget: scheitert der Claim
+// oder geht er an einen anderen Poller, gibt DeliverChannel die Reservierung
+// unter demselben Lock zurück (hookbudget.ErrNotEmitted). Der Claim hat eine
+// eigene kurze Frist (ClaimTimeout), weil er den Datei-Lock des Budgets hält.
+//
 // Übrig bleibt genau ein Verlustfall: ein gewonnener Claim, dessen Write
 // scheitert oder dessen Prozess dazwischen stirbt. Diese Nachricht wird nie
 // erneut zugestellt, und der Pull-Pfad (coord_inbox, coord_dm_read) blendet sie
 // ebenfalls aus, weil er geclaimte Nachrichten als eingebracht behandelt. Das
-// ist der Preis dafür, dass nie doppelt zugestellt wird. Ein kleineres
-// Restfenster: verliert ein Poller den Claim gegen einen anderen, ist sein
-// reserviertes Budget trotzdem verbraucht, weil hookbudget Reservieren und
-// Schreiben nicht trennt.
+// ist der Preis dafür, dass nie doppelt zugestellt wird. Eine weitere Grenze:
+// der Write selbst läuft unter dem Datei-Lock, und eine blockierte Pipe hält
+// ihn, bis sie sich löst.
 //
 // Der Cursor ist der gemeinsame Lesestand des Pull-Pfads und wird deshalb nur
 // bis zur ersten Nachricht fortgeschrieben, die der Poller NICHT zugestellt hat

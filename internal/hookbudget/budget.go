@@ -23,6 +23,12 @@ const notice = "\n\n[ghosttree: Session hook context budget reached (24000 chara
 
 var ErrBusy = errors.New("context budget lock timed out")
 
+// ErrNotEmitted sagt, dass emit nichts geschrieben hat. Gibt emit einen Fehler
+// zurück, der das umhüllt, rollt DeliverChannel die Reservierung zurück: nur
+// ein tatsächlicher Schreibversuch verbraucht Budget. Jeder andere Fehler
+// zählt als Schreibversuch, denn ein halb geschriebener Text ist zugestellt.
+var ErrNotEmitted = errors.New("nothing was emitted")
+
 type Receipt struct {
 	Version       int       `json:"version"`
 	SessionHash   string    `json:"session_hash"`
@@ -109,6 +115,7 @@ func DeliverChannel(sessionID, channel, text string, emit func(string) error) er
 	}
 	text = strings.ToValidUTF8(text, "�")
 	n := utf8.RuneCountInString(text)
+	wasExhausted := r.Exhausted
 	available := limit - r.ReservedChars - utf8.RuneCountInString(cut)
 	if n > available {
 		if available < 0 {
@@ -124,6 +131,15 @@ func DeliverChannel(sessionID, channel, text string, emit func(string) error) er
 		return err
 	}
 	if err := emit(text); err != nil {
+		if errors.Is(err, ErrNotEmitted) {
+			// Nichts ging raus: Reservierung zurück, unter demselben Lock.
+			r.ReservedChars -= n
+			r.Exhausted = wasExhausted
+			r.UpdatedAt = time.Now().UTC()
+			if rerr := saveReceipt(path, r); rerr != nil {
+				return errors.Join(err, rerr)
+			}
+		}
 		return err
 	}
 	r.EmittedChars += n

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/hookbudget"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -208,7 +209,7 @@ func (f *fakeServer) Mentions(_ string, id int64) ([]string, error) {
 	defer f.mu.Unlock()
 	return f.mentions[id], nil
 }
-func (f *fakeServer) Claim(_ string, id int64) (bool, error) {
+func (f *fakeServer) Claim(_ context.Context, _ string, id int64) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.claimed[id] {
@@ -491,7 +492,9 @@ func TestPersistentClaimFailureBacksOff(t *testing.T) {
 
 type claimFails struct{ *fakeServer }
 
-func (c *claimFails) Claim(string, int64) (bool, error) { return false, errors.New("server down") }
+func (c *claimFails) Claim(context.Context, string, int64) (bool, error) {
+	return false, errors.New("server down")
+}
 
 // Mentions, die dauerhaft scheitern, verhalten sich genauso.
 func TestPersistentMentionsFailureBacksOff(t *testing.T) {
@@ -636,4 +639,93 @@ func TestRunReportsErrorsAndKeepsPolling(t *testing.T) {
 	if len(errs) == 0 || len(rec.d) != 2 {
 		t.Fatalf("errs=%v sleeps=%v", errs, rec.d)
 	}
+}
+
+func usage(t *testing.T) hookbudget.Receipt {
+	t.Helper()
+	r, err := hookbudget.ChannelUsage("me", hookbudget.ChannelCoord)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+// Nur ein tatsächlicher Schreibversuch verbraucht Budget. 20 gescheiterte
+// Claims à 1000 Zeichen wären bei CoordLimit 12000 sonst das ganze Konto.
+func TestFailedClaimsDoNotSpendBudget(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	f := newFakeServer(directRoom)
+	body := strings.Repeat("x", 1000)
+	f.msgs[directRoom.Key] = []store.CoordMessage{{ID: 1, SenderExternalID: "peer", Body: body}}
+	n := &fakeNotifier{f: f}
+	p := newPoller(f, n)
+	p.Budget = nil
+	p.Source = &claimFails{fakeServer: f}
+	for i := 0; i < 25; i++ {
+		if _, err := p.Poll(context.Background()); err == nil {
+			t.Fatal("claim failure must surface")
+		}
+	}
+	if r := usage(t); r.ReservedChars != 0 || r.Exhausted {
+		t.Fatalf("budget spent without a write: %+v", r)
+	}
+	p.Source = f
+	if _, err := p.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(n.got) != 1 || n.got[0].Content != body {
+		t.Fatalf("after recovery want the full message, got %d notifications", len(n.got))
+	}
+}
+
+func TestLostClaimsDoNotSpendBudget(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	f := newFakeServer(directRoom)
+	body := strings.Repeat("y", 1000)
+	for id := int64(1); id <= 25; id++ {
+		f.msgs[directRoom.Key] = append(f.msgs[directRoom.Key], store.CoordMessage{ID: id, SenderExternalID: "peer", Body: body})
+		f.claimed[id] = true // ein anderer Poller war schneller
+	}
+	n := &fakeNotifier{f: f}
+	p := newPoller(f, n)
+	p.Budget = nil
+	if _, err := p.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if r := usage(t); r.ReservedChars != 0 || r.Exhausted || len(n.got) != 0 {
+		t.Fatalf("lost claims spent budget: %+v delivered=%d", r, len(n.got))
+	}
+	f.msgs[directRoom.Key] = append(f.msgs[directRoom.Key], store.CoordMessage{ID: 26, SenderExternalID: "peer", Body: body})
+	if _, err := p.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(n.got) != 1 || n.got[0].Content != body {
+		t.Fatalf("want the full message, got %d", len(n.got))
+	}
+}
+
+// Der Claim läuft unter einer eigenen kurzen Frist, weil er den Budget-Lock hält.
+func TestClaimIsBoundedByItsOwnDeadline(t *testing.T) {
+	f := newFakeServer(directRoom)
+	f.msgs[directRoom.Key] = []store.CoordMessage{{ID: 1, SenderExternalID: "peer", Body: "x"}}
+	p := newPoller(f, &fakeNotifier{f: f})
+	p.Source = &claimHangs{fakeServer: f}
+	p.ClaimTimeout = 20 * time.Millisecond
+	done := make(chan error, 1)
+	go func() { _, err := p.Poll(context.Background()); done <- err }()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("err = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a hanging claim must not outlive its deadline")
+	}
+}
+
+type claimHangs struct{ *fakeServer }
+
+func (c *claimHangs) Claim(ctx context.Context, _ string, _ int64) (bool, error) {
+	<-ctx.Done()
+	return false, ctx.Err()
 }
