@@ -6,10 +6,13 @@
 # Not run in CI: it uses a real Claude session.
 #
 # Env: KEEP=1 keeps the work dir; OUT=<dir> copies the evidence there;
-#      TIMEOUT=<seconds> (default 180); CTX=<ctx binary> skips the build.
+#      TIMEOUT=<seconds> (default 180); CTX=<ctx binary> skips the build;
+#      MODEL=<alias> is passed to claude as --model (default opus), so a model
+#      in ~/.claude/settings.json that Claude Code rejects does not matter.
 set -u
 cd "$(dirname "$0")/.." || exit 1
 TIMEOUT=${TIMEOUT:-180}
+MODEL=${MODEL:-opus}
 WORK=$(mktemp -d /tmp/gt-claude-channel-e2e.XXXXXX)
 SESSION=gt-claude-e2e-$$
 PORT=$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])')
@@ -28,7 +31,7 @@ cleanup() {
   [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null
   if [ -n "${OUT:-}" ]; then
     mkdir -p "$OUT"
-    cp "$WORK/pane.txt" "$WORK/server.log" "$WORK/coord-state.txt" "$OUT"/ 2>/dev/null
+    cp "$WORK/pane.txt" "$WORK/server.log" "$WORK/coord-state.txt" "$WORK/claude-debug.txt" "$OUT"/ 2>/dev/null
     echo "evidence: $OUT"
   fi
   [ -z "${KEEP:-}" ] && rm -rf "$WORK"
@@ -58,7 +61,7 @@ for _ in $(seq 50); do curl -fs "http://127.0.0.1:$PORT/" >/dev/null 2>&1 && bre
 # claude runs in a scratch directory, not a repository: the machine room is the
 # shared room. XDG_CONFIG_HOME is passed through so ctx channel finds the lab.
 tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "$PROJECT_DIR" \
-  "env XDG_CONFIG_HOME=$XDG_CONFIG_HOME $CTX claude --agent '$AGENT'"
+  "env XDG_CONFIG_HOME=$XDG_CONFIG_HOME $CTX claude --agent '$AGENT' -- --model '$MODEL' --debug-file $WORK/claude-debug.txt"
 
 # Accepting Claude's trust dialog for the scratch directory adds a project entry
 # to ~/.claude.json. A separate CLAUDE_CONFIG_DIR would avoid it but loses the

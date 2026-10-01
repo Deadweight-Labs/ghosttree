@@ -98,16 +98,40 @@ type gate struct {
 	ready atomic.Bool
 }
 
+// methodDiscover ist die Anfrage, mit der Claude Code eine moderne Verbindung
+// (MCP 2026-07-28) probiert. Auf einer solchen Verbindung registriert Claude
+// Code keinen Channel; nur die alte initialize-Verbindung trägt Channels.
+const methodDiscover = "server/discover"
+
+// Read liest die nächste Nachricht für das SDK. Ein server/discover mit ID
+// beantwortet die Lese-Seite selbst mit -32601 und gibt es nicht ans SDK
+// weiter: das SDK würde 2026-07-28 aushandeln. Claude Code fällt dann auf
+// initialize zurück. Bereit wird die Verbindung erst mit
+// notifications/initialized.
 func (g *gate) Read(ctx context.Context) (jsonrpc.Message, error) {
-	msg, err := g.Connection.Read(ctx)
-	if err != nil {
-		g.ready.Store(false)
-		return msg, err
+	for {
+		msg, err := g.Connection.Read(ctx)
+		if err != nil {
+			g.ready.Store(false)
+			return msg, err
+		}
+		req, ok := msg.(*jsonrpc.Request)
+		if !ok {
+			return msg, nil
+		}
+		if req.Method == methodDiscover && req.IsCall() {
+			rejection := &jsonrpc.Response{ID: req.ID, Error: &jsonrpc.Error{Code: jsonrpc.CodeMethodNotFound, Message: "Method not found"}}
+			if err := g.Connection.Write(ctx, rejection); err != nil {
+				g.ready.Store(false)
+				return nil, err
+			}
+			continue
+		}
+		if req.Method == "notifications/initialized" {
+			g.ready.Store(true)
+		}
+		return msg, nil
 	}
-	if req, ok := msg.(*jsonrpc.Request); ok && req.Method == "notifications/initialized" {
-		g.ready.Store(true)
-	}
-	return msg, nil
 }
 
 func (g *gate) Close() error {

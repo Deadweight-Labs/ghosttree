@@ -150,9 +150,9 @@ ctx doc import path/to/design.md --kind spec --slug storage-redesign --clean
 
 `ctx claude [claude args...]` starts Claude Code with the ghosttree channel
 loaded. The aim is that `ctx coord` messages and agent mentions reach the
-session: a waiting session should wake up, a working one receive the message at
-its next tool result. That was measured with Claude Code 2.1.284 only; the
-channel is not currently confirmed against newer releases (see below).
+session: a waiting session wakes up, a working one receives the message at
+its next tool result. Measured with Claude Code 2.1.284 (2026-09-30) and
+2.1.286 (2026-10-01, with the handshake rule below).
 The launcher generates one identity per launch (`claude:<host>:<uuid>`), writes a
 temporary MCP config for the `ghosttree-channel` server (`ctx channel --agent
 <id>`), and runs `claude --mcp-config <tmp> --dangerously-load-development-channels
@@ -193,10 +193,16 @@ never re-sent, so a crash between claim and write loses it. Nothing stops two
 agents from answering each other's replies; the only bound on such a loop is the
 per-session coordination budget. The limits are
 spelled out in `internal/claudechannel/doc.go`. The status line may say "no MCP
-server configured with that name" while delivery works. Claude Code 2.1.286 speaks
-a newer MCP handshake (`server/discover`, no `initialize`); the channel is not
-known to wake it yet (see `scripts/verify-claude-channel.sh`, a manual tmux check that is
-not part of CI).
+server configured with that name" while delivery works.
+
+Channels need the old `initialize` connection. Claude Code 2.1.286 first sends
+`server/discover`; if the server answers with MCP 2026-07-28, Claude Code
+registers no channel for that connection. The channel server therefore refuses
+`server/discover` with JSON-RPC -32601, and Claude Code falls back to
+`initialize` with 2025-11-25. Measured with Claude Code 2.1.286 on 2026-10-01;
+a later release may behave differently. `scripts/verify-claude-channel.sh` is a
+manual tmux check against a real session (not part of CI). It passes `--model
+opus`, because the model in a user's settings may be one Claude Code rejects.
 
 ### Inspecting a repository before migration
 

@@ -303,6 +303,32 @@ func newChannelProcWithCheck(t *testing.T, e *channelEnv) *channelProc {
 	return p
 }
 
+// TestChannelRejectsServerDiscoverAndStillWorks: Claude Code probes with
+// server/discover before initialize. The channel server must refuse it, because
+// a modern connection carries no channel, and then serve the legacy handshake.
+func TestChannelRejectsServerDiscoverAndStillWorks(t *testing.T) {
+	if testing.Short() {
+		t.Skip("subprocess test")
+	}
+	e := newChannelEnv(t)
+	p := startChannel(t, e)
+	p.send(`{"jsonrpc":"2.0","id":"server-discover-probe-1","method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}`)
+	resp, ok := p.next(10 * time.Second)
+	if !ok {
+		t.Fatal("no answer to server/discover")
+	}
+	rejErr, _ := resp["error"].(map[string]any)
+	if resp["id"] != "server-discover-probe-1" || rejErr == nil || rejErr["code"] != float64(-32601) || resp["result"] != nil {
+		t.Fatalf("server/discover must be refused with -32601: %v", resp)
+	}
+	p.handshake()
+	_, id := e.sendDM(t, "nach discover", "disc")
+	notes := p.notifications(20*time.Second, 1)
+	if len(notes) != 1 || notes[0]["params"].(map[string]any)["meta"].(map[string]any)["message_id"] != strconv.FormatInt(id, 10) {
+		t.Fatalf("channel must still deliver after a refused discover: %v", notes)
+	}
+}
+
 func deliveryState(t *testing.T, e *channelEnv, id int64) string {
 	t.Helper()
 	var state string

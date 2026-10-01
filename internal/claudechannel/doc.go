@@ -1,12 +1,24 @@
 // Package claudechannel bringt Koordinationsnachrichten in eine Claude-Code-
 // Session, die beim Start mit einem Channel gestartet wurde.
 //
-// Gemessen am 2026-09-30 mit Claude Code 2.1.284 (Wissenseintrag #2359): ein
+// Zuerst gemessen am 2026-09-30 mit Claude Code 2.1.284 (Wissenseintrag #2359): ein
 // MCP-Server, der capabilities.experimental["claude/channel"] deklariert und
 // notifications/claude/channel mit {content, meta} sendet, weckt eine wartende
 // Session und wird in einer arbeitenden am nächsten Tool-Ergebnis absorbiert.
 // Das gilt nur als Opt-in beim Start; eine laufende Session lässt sich nicht
 // nachträglich anbinden (siehe OptInAtStartOnly).
+//
+// Protokollrevision: Channels tragen nur die alte initialize-Verbindung.
+// Gemessen am 2026-10-01 mit Claude Code 2.1.286 (Wissenseintrag #2382): Claude
+// Code fragt einen stdio-Server zuerst mit server/discover an. Beantwortet der
+// Server das und nennt 2026-07-28, verhandelt Claude Code die moderne Revision
+// und registriert keinen Channel ("connection negotiated a modern protocol
+// revision with no unsolicited notification path"). Deshalb beantwortet
+// Transport.Read jedes server/discover selbst mit -32601 und reicht es nicht
+// ans SDK weiter; Claude Code fällt auf initialize (2025-11-25) zurück, und der
+// Channel weckt die Session. Das ist eine Eigenschaft dieser Claude-Code-
+// Version und ihres Feature-Flags; ändert Claude Code das, ist die Messung neu
+// zu machen (scripts/verify-claude-channel.sh).
 //
 // Zustellung ist AT-MOST-ONCE, und das ist eine bekannte Grenze, kein Zufall.
 // Je Nachricht gilt die Reihenfolge Claim, dann Notification, dann Cursor. Der

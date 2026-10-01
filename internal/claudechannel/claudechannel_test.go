@@ -78,6 +78,17 @@ func TestNotificationWireForm(t *testing.T) {
 		}
 		return out
 	}
+	// Claude Code probes with server/discover first. It must be refused with
+	// -32601 and the same id, so the client falls back to initialize.
+	send(`{"jsonrpc":"2.0","id":"server-discover-probe-1","method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}`)
+	rejected := read()
+	rejErr, _ := rejected["error"].(map[string]any)
+	if rejected["id"] != "server-discover-probe-1" || rejErr == nil || rejErr["code"] != float64(-32601) || rejected["result"] != nil {
+		t.Fatalf("server/discover must be answered with -32601 and the same id: %v", rejected)
+	}
+	if tr.Ready() {
+		t.Fatal("a rejected server/discover must not make the transport ready")
+	}
 	send(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}`)
 	init := read()
 	caps := init["result"].(map[string]any)["capabilities"].(map[string]any)
