@@ -55,7 +55,7 @@ var accessRoutes = map[string]routeClass{
 	"DELETE /api/orgs/{org}/invitations/{id}":     classAccount,
 	"POST /api/invitations/accept":                classAccount,
 	"PUT /api/account/default-org":                classAccount,
-	"GET /api/projects":                           classAccount,
+	"GET /api/projects":                           classProject,
 	"GET /api/projects/{id}/members":              classProject,
 	"PUT /api/projects/{id}/members/{account}":    classAdmin,
 	"DELETE /api/projects/{id}/members/{account}": classAdmin,

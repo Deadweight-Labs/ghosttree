@@ -80,6 +80,7 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 			v.Members = append(v.Members, orgMemberRow{OrgMemberInfo: m, Self: m.AccountID == me})
 		}
 		v.Projects, _ = a.store.ListProjects(me, v.Selected.ID)
+		v.Projects = a.access(r).VisibleProjects(v.Projects)
 		for _, p := range v.Projects {
 			rv := projectRolesView{Remote: p.Remote, You: a.store.ProjectRole(p.Remote, me).Role}
 			for _, m := range members {

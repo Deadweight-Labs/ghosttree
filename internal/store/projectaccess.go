@@ -31,6 +31,9 @@ const (
 	ResMembers  Resource = "members"
 	ResDocument Resource = "document"
 	ResGhost    Resource = "ghost"
+	// ResProject ist der Projekteintrag selbst (Name in Listen): sichtbar mit
+	// irgendeiner Rolle, nicht schon durch die bloße Mitgliedschaft in der Org.
+	ResProject Resource = "project"
 )
 
 // Action ist, was getan werden soll.
@@ -117,6 +120,8 @@ func matrixAllows(role RoleInfo, res Resource, act Action, obj Object) bool {
 		}
 	case ResRoom:
 		return (act == ActRead || act == ActCreate) && rank >= 1
+	case ResProject:
+		return act == ActRead && rank >= 1
 	case ResAgents:
 		return act == ActRead && rank >= 2
 	case ResMembers:
@@ -322,6 +327,21 @@ func (a *ProjectAccess) Projects() []string {
 	for remote, r := range a.roles {
 		if RoleRank(r.Role) >= 1 {
 			out = append(out, remote)
+		}
+	}
+	return out
+}
+
+// VisibleProjects behält aus einer Projektliste, was das Konto sehen darf: der
+// Org-Owner alles in seiner Org (implizite Owner-Rolle), ein Mitglied nur
+// Projekte mit eigener Rolle, der Instanz-Admin wie bisher alles, was die Liste
+// ihm gibt. Im Log-Modus bleibt die Liste, und "would deny" wird protokolliert.
+func (a *ProjectAccess) VisibleProjects(in []Project) []Project {
+	a.Filtered()
+	out := make([]Project, 0, len(in))
+	for _, p := range in {
+		if a.IsAdmin() || a.Allow(p.Remote, ResProject, ActRead, Object{}) {
+			out = append(out, p)
 		}
 	}
 	return out

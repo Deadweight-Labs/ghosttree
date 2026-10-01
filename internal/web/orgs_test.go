@@ -51,7 +51,7 @@ func TestOrgPageShowsMembersProjectsAndRoleDependentControls(t *testing.T) {
 	}
 	resp, _ = anna.Get(base + "/ui/orgs")
 	page = body(t, resp)
-	if !strings.Contains(page, "github.com/x/one") || strings.Contains(page, "Create invitation") || strings.Contains(page, "Make owner") {
+	if strings.Contains(page, "Create invitation") || strings.Contains(page, "Make owner") {
 		t.Fatalf("member page: %s", page)
 	}
 	if !strings.Contains(page, "Leave") {
@@ -236,5 +236,44 @@ func TestOIDCInvitationLandingPointsToTheIdentityProvider(t *testing.T) {
 	resp = sameOriginPostForm(t, b, env.web.URL+"/ui/login/code", url.Values{"code": {code}, "name": {"x"}})
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("local redemption on an OIDC instance: %d", resp.StatusCode)
+	}
+}
+
+// Org-Mitgliedschaft allein zeigt keine Projektnamen; Log-Modus bleibt beim
+// Alten, Durchsetzung filtert.
+func TestOrgPageListsOnlyProjectsWithARole(t *testing.T) {
+	base, st, alice, anna, org := orgWeb(t)
+	for _, r := range []string{"github.com/x/shared", "github.com/x/secret"} {
+		if _, err := st.ClaimProject("person:1", r, "alpha"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	code, _, _ := st.CreateInvitation("person:1", org.ID, "", store.OrgMember, 0)
+	if _, err := st.AcceptInvitation("person:2", code); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetProjectRole("person:1", "github.com/x/shared", "person:2", store.RoleMember, false, store.RoleViaAPI); err != nil {
+		t.Fatal(err)
+	}
+	get := func(c *http.Client) string {
+		t.Helper()
+		resp, err := c.Get(base + "/ui/orgs")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return body(t, resp)
+	}
+	// Log-Modus: wie bisher.
+	if page := get(anna); !strings.Contains(page, "github.com/x/secret") {
+		t.Fatalf("log mode must keep the old list: %s", page)
+	}
+	st.SetAccessMode(store.AccessMode{Enforce: true})
+	page := get(anna)
+	if !strings.Contains(page, "github.com/x/shared") || strings.Contains(page, "github.com/x/secret") {
+		t.Fatalf("member page under enforcement: %s", page)
+	}
+	page = get(alice)
+	if !strings.Contains(page, "github.com/x/shared") || !strings.Contains(page, "github.com/x/secret") {
+		t.Fatalf("owner must see every project: %s", page)
 	}
 }
