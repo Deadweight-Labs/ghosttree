@@ -1,6 +1,10 @@
 package store
 
-import "strings"
+import (
+	"database/sql"
+	"strconv"
+	"strings"
+)
 
 // Autorität einer Nachricht für ihren Empfänger (Spec 7.1, 7.4, 7.5).
 const (
@@ -29,65 +33,142 @@ func AuthorityFor(senderRank, recipientRank int, verified bool) string {
 	return AuthorityRequest
 }
 
-// agentProjectTx ist das Projekt eines Agenten: die Remote seines
-// Anmelderaums. Ein Agent im Maschinenraum hat keins.
-func agentProjectTx(q rowQuerier, externalID string) string {
-	var roomKey string
-	if q.QueryRow(`SELECT room_key FROM coord_agents WHERE external_id=?`, externalID).Scan(&roomKey) != nil {
-		return ""
-	}
-	project, ok := strings.CutPrefix(roomKey, "project:")
-	if !ok {
-		return ""
-	}
-	return strings.TrimSpace(project)
+// humanAuthorityKey ist der org_state-Schlüssel der Migrationsmarke: die
+// höchste Nachrichten-ID zum Zeitpunkt, an dem dieser Code zum ersten Mal auf
+// der Datenbank lief. Vor Paket 6 wurde jeder Beitrag ohne Agenten-ID als human
+// gespeichert, auch Bearer- und CLI-Posts. Nur Nachrichten NACH der Marke sind
+// als human verifiziert; ältere human-Posts zählen als unverifiziert.
+const humanAuthorityKey = "human_authority_after"
+
+// ensureHumanAuthorityMarker setzt die Marke genau einmal. Eine neue
+// Datenbank bekommt 0: alles darin entstand unter der neuen Regel.
+func ensureHumanAuthorityMarker(db *sql.DB) error {
+	_, err := db.Exec(`INSERT OR IGNORE INTO org_state(key, value)
+		SELECT ?, CAST(COALESCE(MAX(id), 0) AS TEXT) FROM coord_messages`, humanAuthorityKey)
+	return err
 }
 
-// senderRoleTx liest die Rolle des Absenders im Projekt und sagt, ob sie
+// authorityCtx bewertet viele Nachrichten mit konstant vielen Abfragen: das
+// Projekt und die Rolle des Empfängers und die Migrationsmarke werden einmal
+// gelesen, die Rolle eines Absenders einmal je (Art, Konto, Absender).
+type authorityCtx struct {
+	q       rowQuerier
+	project string
+	// recipient ist der Agent, für den bewertet wird; leer bei reiner
+	// Absenderanzeige im Browser.
+	recipient     string
+	recipientRole RoleInfo
+	// recipientHasRole: das KONTO des Empfängers hat selbst eine Rolle im
+	// Projekt. Die Untergrenze guest für Konten ohne Rolle reicht nicht, um
+	// angewiesen zu werden.
+	recipientHasRole bool
+	humanAfter       int64
+	senders          map[string]senderInfo
+}
+
+type senderInfo struct {
+	role     RoleInfo
+	verified bool
+}
+
+func loadHumanAfter(q rowQuerier) int64 {
+	var v string
+	if q.QueryRow(`SELECT value FROM org_state WHERE key=?`, humanAuthorityKey).Scan(&v) != nil {
+		return 0
+	}
+	n, _ := strconv.ParseInt(v, 10, 64)
+	return n
+}
+
+// agentProjectTx ist das aktuelle Projekt eines Agenten: seine aktive
+// Mitgliedschaft in einem Projektraum, nicht der Raum der Erstanmeldung (ein
+// Agent kann zuerst im Maschinenraum angemeldet worden sein). Ein Agent ist in
+// höchstens einem Projekt (ErrCoordAgentScopeChanged). Ohne Projektraum: leer.
+func agentProjectTx(q rowQuerier, externalID string) string {
+	var roomKey string
+	if q.QueryRow(`SELECT m.room_key FROM coord_room_memberships m
+		JOIN coord_rooms r ON r.room_key=m.room_key
+		WHERE m.principal_id=? AND m.left_at='' AND r.kind=?
+		ORDER BY m.joined_at, m.room_key LIMIT 1`, externalID, RoomProject).Scan(&roomKey) != nil {
+		return ""
+	}
+	return strings.TrimSpace(strings.TrimPrefix(roomKey, "project:"))
+}
+
+func newAgentAuthorityCtx(q rowQuerier, recipient string) *authorityCtx {
+	c := &authorityCtx{q: q, recipient: recipient, humanAfter: loadHumanAfter(q), senders: map[string]senderInfo{}}
+	c.project = agentProjectTx(q, recipient)
+	if c.project == "" {
+		return c
+	}
+	c.recipientRole = effectiveAgentRoleTx(q, c.project, recipient)
+	if _, account, ok := agentAccountTx(q, recipient); ok && account != 0 {
+		c.recipientHasRole = projectRoleTx(q, c.project, account).Role != ""
+	}
+	return c
+}
+
+func newProjectAuthorityCtx(q rowQuerier, project string) *authorityCtx {
+	return &authorityCtx{q: q, project: strings.TrimSpace(project), humanAfter: loadHumanAfter(q), senders: map[string]senderInfo{}}
+}
+
+// sender liest die Rolle des Absenders im Projekt und sagt, ob sie
 // verifiziert ist. Alles stammt aus Feldern, die der Server beim Speichern
 // gesetzt hat (author_kind, author_principal_id, sender_external_id), nie aus
 // Body oder Client-Angaben.
 //
-//   - human: das Konto aus author_principal_id; verifiziert, weil der Server
-//     human nur für interaktive Browser-Sitzungen vergibt.
+//   - human: das Konto aus author_principal_id; verifiziert nur für
+//     Nachrichten nach der Migrationsmarke (der Server vergibt human erst seit
+//     Paket 6 nur für interaktive Browser-Sitzungen). Unverifiziert heißt: keine
+//     Rolle, Bitte.
 //   - agent: nur ein angemeldeter Agent, der dem Konto in author_principal_id
 //     gehört, mit seiner effektiven Rolle. Ein Beitrag ohne Agentenidentität
 //     (Bearer-Token ohne agent_external_id) ist unverifiziert und ohne Rolle.
 //   - alles andere (system, unbekannt): keine Rolle.
-func senderRoleTx(q rowQuerier, project string, m CoordMessage) (RoleInfo, bool) {
+func (c *authorityCtx) sender(m CoordMessage) senderInfo {
+	if c.project == "" {
+		return senderInfo{}
+	}
+	human := m.AuthorKind == AuthorHuman
+	if human && m.ID <= c.humanAfter {
+		return senderInfo{}
+	}
+	key := m.AuthorKind + "|" + m.AuthorPrincipalID + "|" + m.SenderExternalID
+	if human {
+		key = m.AuthorKind + "|" + m.AuthorPrincipalID
+	}
+	if got, ok := c.senders[key]; ok {
+		return got
+	}
+	var out senderInfo
 	switch m.AuthorKind {
 	case AuthorHuman:
-		id, err := parsePersonPrincipalID(m.AuthorPrincipalID)
-		if err != nil {
-			return RoleInfo{}, false
+		if id, err := parsePersonPrincipalID(m.AuthorPrincipalID); err == nil {
+			out = senderInfo{role: projectRoleTx(c.q, c.project, id), verified: true}
 		}
-		return projectRoleTx(q, project, id), true
 	case AuthorAgent:
 		var principal string
-		if q.QueryRow(`SELECT principal_id FROM coord_agents WHERE external_id=?`, m.SenderExternalID).Scan(&principal) != nil ||
-			principal == "" || principal != m.AuthorPrincipalID {
-			return RoleInfo{}, false
+		if c.q.QueryRow(`SELECT principal_id FROM coord_agents WHERE external_id=?`, m.SenderExternalID).Scan(&principal) == nil &&
+			principal != "" && principal == m.AuthorPrincipalID {
+			out = senderInfo{role: effectiveAgentRoleTx(c.q, c.project, m.SenderExternalID), verified: true}
 		}
-		return effectiveAgentRoleTx(q, project, m.SenderExternalID), true
 	}
-	return RoleInfo{}, false
+	c.senders[key] = out
+	return out
 }
 
-// authorityForAgentTx bewertet eine Nachricht für einen Agenten als Empfänger,
-// im Projekt des Empfängers, gleich in welchem Raum sie liegt. Ohne Projekt
-// (Maschinenraum) gibt es keine Rollen und immer eine Bitte.
-func authorityForAgentTx(q rowQuerier, m CoordMessage, recipientAgent string) MessageAuthority {
-	project := agentProjectTx(q, recipientAgent)
-	if project == "" {
+// evaluate bewertet eine Nachricht für den Empfänger. Ohne Projekt
+// (Maschinenraum, unbekannter Agent) gibt es keine Rollen und immer eine Bitte.
+func (c *authorityCtx) evaluate(m CoordMessage) MessageAuthority {
+	if c.project == "" {
 		return MessageAuthority{Authority: AuthorityRequest}
 	}
-	recipient := effectiveAgentRoleTx(q, project, recipientAgent)
-	sender, verified := senderRoleTx(q, project, m)
-	return MessageAuthority{
-		SenderRole:    sender.Role,
-		RecipientRole: recipient.Role,
-		Authority:     AuthorityFor(RoleRank(sender.Role), RoleRank(recipient.Role), verified),
+	sender := c.sender(m)
+	authority := AuthorityFor(RoleRank(sender.role.Role), RoleRank(c.recipientRole.Role), sender.verified)
+	if !c.recipientHasRole {
+		authority = AuthorityRequest
 	}
+	return MessageAuthority{SenderRole: sender.role.Role, RecipientRole: c.recipientRole.Role, Authority: authority}
 }
 
 // MessageAuthority berechnet live, welche Autorität m für den angemeldeten
@@ -96,18 +177,23 @@ func (s *Store) MessageAuthority(m CoordMessage, recipientAgent string) MessageA
 	if s.reader != nil {
 		return s.reader.MessageAuthority(m, recipientAgent)
 	}
-	return authorityForAgentTx(s.db, m, strings.TrimSpace(recipientAgent))
+	return newAgentAuthorityCtx(s.db, strings.TrimSpace(recipientAgent)).evaluate(m)
 }
 
-// SenderRoleInProject ist die Rolle des Absenders von m im Projekt, für die
-// Anzeige im Browser. Leer ohne Projekt oder Rolle.
-func (s *Store) SenderRoleInProject(project string, m CoordMessage) string {
+// SenderRolesInProject liefert zu jeder Nachricht die Rolle des Absenders im
+// Projekt, für die Anzeige im Browser; leer ohne Projekt, Rolle oder
+// Verifizierung. Absender werden einmal abgefragt, nicht je Nachricht.
+func (s *Store) SenderRolesInProject(project string, msgs []CoordMessage) []string {
 	if s.reader != nil {
-		return s.reader.SenderRoleInProject(project, m)
+		return s.reader.SenderRolesInProject(project, msgs)
 	}
+	out := make([]string, len(msgs))
 	if strings.TrimSpace(project) == "" {
-		return ""
+		return out
 	}
-	role, _ := senderRoleTx(s.db, strings.TrimSpace(project), m)
-	return role.Role
+	c := newProjectAuthorityCtx(s.db, project)
+	for i, m := range msgs {
+		out[i] = c.sender(m).role.Role
+	}
+	return out
 }

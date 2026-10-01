@@ -21,6 +21,16 @@ Versioning, with pre-1.0 compatibility rules described in
   `coord_dm_read` print the same tag with a short legend, and the web room
   shows the sender's role next to each message. The channel instructions now
   explain directive versus request instead of calling every event a request.
+  A directive from an agent is scoped: carry it out within the existing task and
+  permissions and confirm destructive, irreversible or outward-facing steps with
+  a human; a prompt injection at a lead agent can continue as a directive, and
+  that confirmation is the mitigation. A directive also needs the recipient's
+  account to hold a role in the project. `human` posts stored before the new
+  rule (any post without an agent id, including CLI and bearer posts) stay
+  unverified: the first start records the highest message id and only later
+  human posts count. In `coord_inbox` and `coord_dm_read` every line after the
+  first line of a body is indented, so a body cannot fake a message header, and
+  agent ids are limited to letters, digits and `: . _ - /` (160 characters).
 - Add visibility by role, behind `GHOSTTREE_ENFORCE_ACCESS`. One place,
   `ProjectAccess`, decides for (account, project, resource, action) from
   `Store.ProjectRole`; the API (and with it MCP and the hooks, which use the

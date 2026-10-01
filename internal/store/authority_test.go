@@ -1,6 +1,8 @@
 package store
 
 import (
+	"database/sql"
+	"strconv"
 	"testing"
 )
 
@@ -207,5 +209,152 @@ func TestAuthorityCannotBeForgedBySender(t *testing.T) {
 	if got.Authority != AuthorityRequest || got.SenderRole != RoleMember || got.RecipientRole != RoleMember ||
 		got.AuthorKind != AuthorAgent || got.SenderExternalID != "a-cleo" || got.AuthorPrincipalID != "person:4" {
 		t.Fatalf("forged fields took effect: %+v", got)
+	}
+}
+
+// Alte human-Posts (vor Paket 6 jeder Post ohne Agenten-ID, auch Bearer und
+// CLI) bleiben nach der Migration unverifiziert; neue human-Posts gelten.
+func TestLegacyHumanPostsAreNotDirectives(t *testing.T) {
+	e := authorityFixture(t)
+	bearer := e.st.CoordinationFor(Principal{ID: "person:1"}, "")
+	if _, err := bearer.Send(CoordMessage{DestinationKind: DestinationRoom, DestinationID: e.room, ClientID: "legacy", Body: "legacy"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.st.db.Exec(`UPDATE coord_messages SET author_kind='human' WHERE client_id='legacy'`); err != nil {
+		t.Fatal(err)
+	}
+	// Erster Start des neuen Codes auf dieser Datenbank: Marke = höchste ID.
+	if _, err := e.st.db.Exec(`DELETE FROM org_state WHERE key=?`, humanAuthorityKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureHumanAuthorityMarker(e.st.db); err != nil {
+		t.Fatal(err)
+	}
+	m := e.read(t, "a-ben", e.room, "legacy")
+	if m.AuthorKind != AuthorHuman || m.Authority != AuthorityRequest || m.SenderRole != "" {
+		t.Fatalf("legacy human post must stay a request without role: %+v", m)
+	}
+	fresh := e.sendAndRead(t, e.human("person:1"), e.room, "a-ben", "fresh")
+	if fresh.Authority != AuthorityDirective || fresh.SenderRole != RoleOwner {
+		t.Fatalf("post after the marker: %+v", fresh)
+	}
+	// Die Marke wird nur einmal gesetzt.
+	var before, after string
+	_ = e.st.db.QueryRow(`SELECT value FROM org_state WHERE key=?`, humanAuthorityKey).Scan(&before)
+	if err := ensureHumanAuthorityMarker(e.st.db); err != nil {
+		t.Fatal(err)
+	}
+	_ = e.st.db.QueryRow(`SELECT value FROM org_state WHERE key=?`, humanAuthorityKey).Scan(&after)
+	if before == "" || before != after {
+		t.Fatalf("marker moved: %q -> %q", before, after)
+	}
+}
+
+// Ein Agent, dessen Konto keine Rolle im Projekt hat, wird nicht angewiesen,
+// auch wenn die Untergrenze guest unter dem Absender liegt.
+func TestAuthorityNeedsARoleOfTheRecipientAccount(t *testing.T) {
+	e := authorityFixture(t)
+	m := e.dm(t, e.agent("a-ben"), "a-ben", "a-dev", "norole")
+	if m.Authority != AuthorityRequest || m.RecipientRole != RoleGuest {
+		t.Fatalf("member to an agent of a role-less account: %+v", m)
+	}
+	// Mit ausdrücklicher guest-Rolle des Kontos ist es anweisbar.
+	if err := setRole(e.st, "person:1", "person:4", RoleGuest, false); err != nil {
+		t.Fatal(err)
+	}
+	m = e.dm(t, e.agent("a-ben"), "a-ben", "a-cleo", "guestrole")
+	if m.Authority != AuthorityDirective {
+		t.Fatalf("member to an agent whose account is guest: %+v", m)
+	}
+}
+
+// Erst Maschinenraum, dann Projekt: das Projekt des Empfängers ist seine
+// aktuelle Projektraum-Mitgliedschaft, nicht der Raum der Erstanmeldung.
+func TestAuthorityRecipientProjectIsCurrentMembership(t *testing.T) {
+	e := authorityFixture(t)
+	registerRoleAgent(t, e.st, "a-late", "person:3", RoomKeyForMachine("late"), "member")
+	m := e.st.MessageAuthority(CoordMessage{SenderExternalID: "a-anna", AuthorPrincipalID: "person:2", AuthorKind: AuthorAgent}, "a-late")
+	if m != (MessageAuthority{Authority: AuthorityRequest}) {
+		t.Fatalf("machine room only: %+v", m)
+	}
+	registerRoleAgent(t, e.st, "a-late", "person:3", e.room, "member")
+	m = e.st.MessageAuthority(CoordMessage{SenderExternalID: "a-anna", AuthorPrincipalID: "person:2", AuthorKind: AuthorAgent}, "a-late")
+	if m.Authority != AuthorityDirective || m.RecipientRole != RoleMember {
+		t.Fatalf("machine room first, then project: %+v", m)
+	}
+}
+
+func TestAuthorityOnDiscussions(t *testing.T) {
+	e := authorityFixture(t)
+	anna := e.agent("a-anna")
+	id, err := anna.CreateThread(Thread{Project: roleProject, Title: "t"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := strconv.FormatInt(id, 10)
+	if _, err := anna.Send(CoordMessage{DestinationKind: DestinationDiscussion, DestinationID: key, ClientID: "t1", Body: "in thread"}); err != nil {
+		t.Fatal(err)
+	}
+	msgs, err := e.agent("a-ben").Messages(DestinationDiscussion, key, 0, 10)
+	if err != nil || len(msgs) != 1 {
+		t.Fatalf("thread read: %v %v", msgs, err)
+	}
+	if msgs[0].Authority != AuthorityDirective || msgs[0].SenderRole != RoleLead || msgs[0].RecipientRole != RoleMember {
+		t.Fatalf("thread message: %+v", msgs[0])
+	}
+}
+
+type countingQuerier struct {
+	q rowQuerier
+	n int
+}
+
+func (c *countingQuerier) QueryRow(query string, args ...any) *sql.Row {
+	c.n++
+	return c.q.QueryRow(query, args...)
+}
+
+// Die Zahl der Abfragen hängt an der Zahl der Absender, nicht der Nachrichten.
+func TestAuthorityQueriesDoNotGrowWithMessages(t *testing.T) {
+	e := authorityFixture(t)
+	senders := []CoordMessage{
+		{AuthorKind: AuthorAgent, SenderExternalID: "a-anna", AuthorPrincipalID: "person:2"},
+		{AuthorKind: AuthorAgent, SenderExternalID: "a-cleo", AuthorPrincipalID: "person:4"},
+		{AuthorKind: AuthorHuman, SenderExternalID: "person:1", AuthorPrincipalID: "person:1"},
+	}
+	run := func(n int) int {
+		cq := &countingQuerier{q: e.st.db}
+		ctx := newAgentAuthorityCtx(cq, "a-ben")
+		for i := 0; i < n; i++ {
+			m := senders[i%len(senders)]
+			m.ID = int64(1000 + i)
+			ctx.evaluate(m)
+		}
+		return cq.n
+	}
+	few, many := run(3), run(200)
+	t.Logf("queries: 3 messages = %d, 200 messages = %d", few, many)
+	if many != few {
+		t.Fatalf("queries grew with the message count: %d vs %d", few, many)
+	}
+	if many > 40 {
+		t.Fatalf("too many queries for 3 senders: %d", many)
+	}
+}
+
+func TestValidExternalID(t *testing.T) {
+	for _, ok := range []string{"claude:mainex:0b9e4f2a-1c3d-4e5f-8a6b-7c8d9e0f1a2b", "codex:host:abc", "cli:mainex", "sess-claude", "claude:h:x/tests", "a.b_c-d"} {
+		if !ValidExternalID(ok) {
+			t.Errorf("%q must be valid", ok)
+		}
+	}
+	long := make([]byte, 161)
+	for i := range long {
+		long[i] = 'a'
+	}
+	for _, bad := range []string{"", "a b", "a\nb", "a]b", "[1]", "a b", "<img>", string(long)} {
+		if ValidExternalID(bad) {
+			t.Errorf("%q must be invalid", bad)
+		}
 	}
 }

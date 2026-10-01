@@ -769,9 +769,14 @@ func applyMessageRoles(st *store.Store, roomKey string, views []coordMessageView
 	if !ok {
 		return
 	}
+	raw := make([]store.CoordMessage, len(messages))
+	for i := range messages {
+		raw[i] = messages[i].Message
+	}
+	roles := st.SenderRolesInProject(remote, raw)
 	for i := range views {
-		if i < len(messages) {
-			views[i].SenderRole = st.SenderRoleInProject(remote, messages[i].Message)
+		if i < len(roles) {
+			views[i].SenderRole = roles[i]
 		}
 	}
 }

@@ -208,6 +208,10 @@ func (a *api) registerCoordAgent(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "external_id and room_key are required")
 		return
 	}
+	if !store.ValidExternalID(in.ExternalID) {
+		writeCoded(w, http.StatusBadRequest, "invalid_external_id", "external_id may contain only letters, digits and : . _ - / (at most 160 characters)")
+		return
+	}
 	// Ein Projektraum gehört zu einem Projekt: eine fremde Remote gibt es für
 	// diesen Aufrufer nicht, eine unbekannte wird wie bei jedem Schreiben
 	// zugeordnet.

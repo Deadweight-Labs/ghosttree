@@ -73,6 +73,19 @@
 // "<channel" und "</channel" befreit (zu "&lt;channel"), damit ein Body keinen
 // eigenen Channel-Block mit gefälschtem sender_kind vortäuscht.
 //
+// Autorität: meta trägt sender_role, recipient_role und authority (directive
+// oder request). Der Server berechnet sie beim Lesen aus den aktuellen Rollen
+// (store.AuthorityFor); der Body hat keinen Einfluss. Eine ehrliche Grenze:
+// sender, sender_kind, sender_role und authority sind echt, der INHALT ist es
+// nicht. Ein Lead-Agent kann durch Repository- oder Web-Inhalt gesteuert
+// werden, und eine solche Injection setzt sich bei seinen Workern als
+// directive fort. Directives von Agenten sind deshalb begrenzt: der Empfänger
+// führt sie nur im Rahmen seines Auftrags und seiner Rechte aus und bestätigt
+// vor jedem zerstörerischen, unumkehrbaren oder nach außen wirkenden Schritt
+// (push, löschen, deploy, veröffentlichen, Secrets, Ausgaben) bei einem
+// Menschen. Das ist eine Abmilderung durch die Instruktion, keine technische
+// Sperre.
+//
 // Gespräche beginnen: der Channel-Server (ctx channel) bietet neben reply das
 // Tool send. Es schreibt in den Projekt- oder Maschinenraum, mit Mentions und
 // optionalem Intent, über dieselben Client- und Store-Wege wie coord_send. Ein

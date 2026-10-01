@@ -402,8 +402,9 @@ func (a CoordAccess) Messages(kind, id string, afterID int64, limit int) ([]Coor
 	if a.AgentExternalID != "" {
 		// Der Leser ist ein Agent: Rollen und Autorität live aus dem Zustand
 		// dieser Transaktion, nach dem Schließen des Cursors.
+		ctx := newAgentAuthorityCtx(tx, a.AgentExternalID)
 		for i := range out {
-			au := authorityForAgentTx(tx, out[i], a.AgentExternalID)
+			au := ctx.evaluate(out[i])
 			out[i].SenderRole, out[i].RecipientRole, out[i].Authority = au.SenderRole, au.RecipientRole, au.Authority
 		}
 	}
