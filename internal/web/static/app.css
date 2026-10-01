@@ -1317,3 +1317,6 @@ html:not(.coord-enhanced) .coord-backdrop { display: none !important; }
 .token-table { width: 100%; border-collapse: collapse; }
 .token-table th, .token-table td { text-align: left; padding: .4rem .6rem; border-bottom: 1px solid #d8d3c8; vertical-align: top; }
 .token-table form { margin: 0; }
+
+.org-switch a { margin-right: .75rem; }
+.org-code { word-break: break-all; }

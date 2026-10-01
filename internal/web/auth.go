@@ -222,7 +222,13 @@ func (a *app) codePage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	data := a.loginData("One-time code", "")
 	data.Code = code
-	data.NeedsName = code != "" && a.store.CodeKindFor(code) == store.CodeBootstrap
+	kind := ""
+	if code != "" {
+		kind = a.store.CodeKindFor(code)
+	}
+	// Eine Einladung braucht lokal einen Namen; mit OIDC trägt der IdP ihn bei.
+	data.Invite = kind == store.CodeInvitation
+	data.NeedsName = kind == store.CodeBootstrap || (data.Invite && a.oidc == nil)
 	a.render(w, "logincode", data)
 }
 func (a *app) codeSubmit(w http.ResponseWriter, r *http.Request) {
@@ -249,6 +255,13 @@ func (a *app) codeSubmit(w http.ResponseWriter, r *http.Request) {
 		}
 	case store.CodeLogin:
 		account, err = a.store.RedeemLoginLink(code)
+	case store.CodeInvitation:
+		if a.oidc != nil {
+			a.loginMessage(w, http.StatusForbidden, "Use the identity provider",
+				"On an instance with OIDC an invitation is redeemed by signing in with your identity provider.")
+			return
+		}
+		account, err = a.store.InviteLocal(code, r.FormValue("name"))
 	default:
 		err = store.ErrCodeInvalid
 	}

@@ -36,6 +36,14 @@ Versioning, with pre-1.0 compatibility rules described in
   codes in ten minutes lock `accept` for that account. Sessions, knowledge,
   requests and documents written for an unknown project assign it as described
   above (`409 project_unclaimed` lists the organizations).
+- Add an Organizations page (`/ui/orgs`) with members, invitations and
+  projects: owners create invitations (the code is shown once), change roles,
+  remove members and move projects; members see the lists and can leave or join
+  with a code. All forms are CSRF protected and size limited. An invitation link
+  (`/ui/login/code?code=...`) leads to the identity provider on OIDC instances;
+  without OIDC it creates the account from the code and a chosen name (an
+  invitation bound to an email needs OIDC, since nothing else verifies the
+  address).
 - Add ownership of machines, sessions and agent identities. Machine names are
   unique across the instance and belong to the account that first claims them
   (`ctx login` or the first upload); a second account gets `409
