@@ -390,6 +390,9 @@ const (
 	CodeBootstrap = "bootstrap"
 	CodeClaim     = "claim"
 	CodeLogin     = "login"
+	// CodeInvitation steht nicht in account_codes, sondern in invitations;
+	// CodeKindFor meldet sie mit.
+	CodeInvitation = "invitation"
 
 	BootstrapCodeTTL = 24 * time.Hour
 	ClaimCodeTTL     = 30 * time.Minute
@@ -423,6 +426,11 @@ const (
 	LoginExisting     LoginOutcome = "existing"
 	LoginClaimed      LoginOutcome = "claimed"
 	LoginBootstrapped LoginOutcome = "bootstrapped"
+	// LoginInvited: neues Konto aus einer Einladung, mit Org-Mitgliedschaft.
+	LoginInvited LoginOutcome = "invited"
+	// LoginJoined: bekannte Identität, die über eine Einladung einer weiteren
+	// Organisation beigetreten ist.
+	LoginJoined LoginOutcome = "joined"
 )
 
 func newCode() (plain, hash string, err error) { return newToken() }
@@ -567,7 +575,15 @@ func createBootstrapAccount(tx *sql.Tx, name, email string) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	return res.LastInsertId()
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+	// Eine leere Instanz bekommt mit ihrem ersten Konto die Default-Organisation.
+	if _, err := createOrgTx(tx, "Default", "default", id); err != nil {
+		return 0, err
+	}
+	return id, nil
 }
 
 // LoginIdentity löst eine IdP-Identität zu einem Konto auf. Bekannte Identität:
@@ -588,6 +604,18 @@ func (s *Store) LoginIdentity(in IdentityLogin) (Account, LoginOutcome, error) {
 		})
 		return r.a, r.o, err
 	}
+	key := in.Issuer + "\x00" + in.Subject
+	if in.Code != "" && s.attemptLimiter().blocked(key) {
+		return Account{}, "", ErrTooManyAttempts
+	}
+	a, o, err := s.loginIdentity(in)
+	if in.Code != "" {
+		s.attemptLimiter().note(key, err)
+	}
+	return a, o, err
+}
+
+func (s *Store) loginIdentity(in IdentityLogin) (Account, LoginOutcome, error) {
 	if in.Issuer == "" || in.Subject == "" {
 		return Account{}, "", fmt.Errorf("identity needs issuer and subject")
 	}
@@ -607,6 +635,18 @@ func (s *Store) LoginIdentity(in IdentityLogin) (Account, LoginOutcome, error) {
 		if a.State != "active" {
 			return Account{}, "", ErrAccountDisabled
 		}
+		// Ein Einladungs-Code nimmt auch ein bekanntes Konto in eine weitere
+		// Organisation auf. Andere Codes ignoriert eine bekannte Identität wie
+		// bisher.
+		if in.Code != "" && invitationExists(tx, in.Code) {
+			switch _, err := acceptInvitationTx(tx, in.Code, accountID, in.Email); {
+			case errors.Is(err, ErrAlreadyMember):
+				return a, LoginExisting, nil
+			case err != nil:
+				return Account{}, "", err
+			}
+			return a, LoginJoined, tx.Commit()
+		}
 		return a, LoginExisting, nil
 	case !errors.Is(err, sql.ErrNoRows):
 		return Account{}, "", err
@@ -615,11 +655,22 @@ func (s *Store) LoginIdentity(in IdentityLogin) (Account, LoginOutcome, error) {
 		return Account{}, "", ErrNoAccountForIdentity
 	}
 	kind, err := codeKind(tx, in.Code)
+	if errors.Is(err, ErrCodeInvalid) && invitationExists(tx, in.Code) {
+		kind, err = "invitation", nil
+	}
 	if err != nil {
 		return Account{}, "", err
 	}
 	var outcome LoginOutcome
 	switch kind {
+	case "invitation":
+		// Registrierung nur per Einladung: Konto und Mitgliedschaft entstehen
+		// gemeinsam oder gar nicht. in.Email ist nur gesetzt, wenn der IdP sie
+		// als verifiziert gemeldet hat.
+		if accountID, err = createInvitedAccountTx(tx, in.Name, in.Email, in.Code); err != nil {
+			return Account{}, "", err
+		}
+		outcome = LoginInvited
 	case CodeClaim:
 		if accountID, err = consumeCode(tx, in.Code, CodeClaim); err != nil {
 			return Account{}, "", err
@@ -730,6 +781,11 @@ func (s *Store) CodeKindFor(code string) string {
 	err := s.db.QueryRow(`SELECT kind FROM account_codes WHERE code_hash=? AND used_at='' AND expires_at>?`,
 		hashToken(code), now()).Scan(&kind)
 	if err != nil {
+		var one int
+		if s.db.QueryRow(`SELECT 1 FROM invitations WHERE code_hash=? AND accepted_at='' AND revoked_at='' AND expires_at>?`,
+			hashToken(code), now()).Scan(&one) == nil {
+			return CodeInvitation
+		}
 		return ""
 	}
 	return kind

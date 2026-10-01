@@ -62,6 +62,34 @@ CREATE TABLE IF NOT EXISTS api_tokens(
   expires_at TEXT NOT NULL DEFAULT '', revoked_at TEXT NOT NULL DEFAULT '');
 CREATE TABLE IF NOT EXISTS account_migrations(
   version INTEGER PRIMARY KEY, migrated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS orgs(
+  id INTEGER PRIMARY KEY, slug TEXT UNIQUE NOT NULL, name TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS org_members(
+  org_id INTEGER NOT NULL REFERENCES orgs(id) ON DELETE RESTRICT,
+  account_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE RESTRICT,
+  role TEXT NOT NULL CHECK(role IN ('owner','member')), joined_at TEXT NOT NULL,
+  PRIMARY KEY(org_id, account_id));
+CREATE INDEX IF NOT EXISTS org_members_account ON org_members(account_id);
+CREATE TABLE IF NOT EXISTS projects(
+  id INTEGER PRIMARY KEY, remote TEXT UNIQUE NOT NULL,
+  org_id INTEGER NOT NULL REFERENCES orgs(id) ON DELETE RESTRICT,
+  name TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS projects_org ON projects(org_id);
+CREATE TABLE IF NOT EXISTS invitations(
+  id INTEGER PRIMARY KEY,
+  org_id INTEGER NOT NULL REFERENCES orgs(id) ON DELETE RESTRICT,
+  project_id INTEGER NOT NULL DEFAULT 0,
+  role TEXT NOT NULL CHECK(role IN ('owner','member')),
+  email TEXT NOT NULL DEFAULT '', code_hash TEXT NOT NULL UNIQUE,
+  invited_by INTEGER NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL,
+  accepted_by INTEGER NOT NULL DEFAULT 0, accepted_at TEXT NOT NULL DEFAULT '',
+  revoked_at TEXT NOT NULL DEFAULT '');
+CREATE INDEX IF NOT EXISTS invitations_org ON invitations(org_id, id DESC);
+CREATE TABLE IF NOT EXISTS org_events(
+  id INTEGER PRIMARY KEY, org_id INTEGER NOT NULL, action TEXT NOT NULL,
+  actor TEXT NOT NULL DEFAULT '', subject TEXT NOT NULL DEFAULT '',
+  detail TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS org_state(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS context_snapshot_access(
   person_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE RESTRICT,
   project TEXT NOT NULL,
@@ -829,6 +857,10 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 		return nil, err
 	}
 	if err := migrateOwnership(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := migrateOrgs(db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}

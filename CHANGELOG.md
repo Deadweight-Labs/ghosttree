@@ -6,6 +6,26 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Add organizations, projects and invitations. An organization has members
+  (roles `owner` and `member`; an account can belong to several) and owns
+  projects; every project (a normalized remote such as
+  `github.com/owner/repo`) belongs to exactly one organization. A write for a
+  remote nobody owns yet assigns it to the writer's default organization, or to
+  their only one; with several organizations and no default the write is
+  refused with `409 project_unclaimed` and the choices rather than guessed, and
+  an account without any organization is not affected. An owner invites by
+  single-use code (kept only as a hash, seven days by default, 30 at most, at
+  most 100 pending per organization). Redeeming it during OIDC sign-in creates
+  the account and the membership; an invitation without an email works by the
+  code alone, one with an email also requires the identity provider to report
+  that same address as verified, otherwise nothing is created and the code stays
+  valid. Wrong codes lock the signing-in identity for ten minutes after five
+  attempts. Existing instances get a `Deadweight Labs` organization (slug
+  `deadweight`) on startup with the first account as its owner and all known
+  projects in it; the migration only reads the small tables (never session
+  chunks) and adds three empty tables, so it takes milliseconds on a large
+  database. A new instance gets a `default` organization with its bootstrap
+  account. Organizations do not change who can see what yet.
 - Add ownership of machines, sessions and agent identities. Machine names are
   unique across the instance and belong to the account that first claims them
   (`ctx login` or the first upload); a second account gets `409

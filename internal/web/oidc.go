@@ -447,6 +447,11 @@ func (a *app) identityRejected(w http.ResponseWriter, err error) {
 		a.loginMessage(w, http.StatusForbidden, "Code not accepted", "The code is invalid, expired or was already used. Ask for a new one.")
 	case errors.Is(err, store.ErrAccountHasIdentity):
 		a.loginMessage(w, http.StatusForbidden, "Account already connected", "This account is already connected to an identity and cannot be claimed again.")
+	case errors.Is(err, store.ErrInvitationEmail):
+		a.loginMessage(w, http.StatusForbidden, "Invitation is for another email address",
+			"This invitation is bound to an email address that your identity provider did not report as verified for this account. The invitation was not used; ask the inviter for one without an email address, or sign in with the invited address.")
+	case errors.Is(err, store.ErrTooManyAttempts):
+		a.loginMessage(w, http.StatusTooManyRequests, "Too many wrong codes", "Wait a few minutes before trying again.")
 	case errors.Is(err, store.ErrAccountDisabled):
 		a.loginMessage(w, http.StatusForbidden, "Account disabled", "This account is disabled.")
 	default:
