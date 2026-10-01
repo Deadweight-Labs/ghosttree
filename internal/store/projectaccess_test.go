@@ -106,6 +106,8 @@ func TestMatrixPerRoleResourceAction(t *testing.T) {
 		{"guest reads the project room", guest, ResRoom, ActRead, other, true},
 		{"guest writes to the project room", guest, ResRoom, ActCreate, other, true},
 		{"stranger does not read the room", none, ResRoom, ActRead, other, false},
+		{"member sees the project entry", member, ResProject, ActRead, other, true},
+		{"no role does not see the project entry", RoleInfo{}, ResProject, ActRead, other, false},
 		{"member sees agents", member, ResAgents, ActRead, other, true},
 		{"guest does not see agents", guest, ResAgents, ActRead, other, false},
 		{"guest reads members", guest, ResMembers, ActRead, other, true},
@@ -421,5 +423,90 @@ func TestProjectWritersMatchProjectRole(t *testing.T) {
 		if writers[name] != want {
 			t.Errorf("%s: writers=%v, role says %v", name, writers[name], want)
 		}
+	}
+}
+
+func visibleRemotes(st *Store, who string) []string {
+	all := []Project{}
+	for _, org := range []string{"alpha", "beta"} {
+		o, err := st.OrgByRef(org)
+		if err != nil {
+			continue
+		}
+		ps, _ := st.ListProjects(who, o.ID)
+		all = append(all, ps...)
+	}
+	out := []string{}
+	for _, p := range st.Access(Principal{ID: who}).VisibleProjects(all) {
+		out = append(out, p.Remote)
+	}
+	return out
+}
+
+func sameSet(got []string, want ...string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, g := range got {
+		seen[g] = true
+	}
+	for _, w := range want {
+		if !seen[w] {
+			return false
+		}
+	}
+	return true
+}
+
+// VisibleProjects ohne Instanz-Admin: Org-Owner sieht seine Org, nicht fremde;
+// Gast nur sein Projekt; ohne Rolle oder Mitgliedschaft nichts.
+func TestVisibleProjectsByRoleEnforced(t *testing.T) {
+	st := accessFixture(t) // alpha: roleProject; person:6 (nora) ohne Org
+	const alpha2, beta1 = "github.com/dw/alpha2", "github.com/dw/beta1"
+	if _, err := st.EnsureProject("person:1", alpha2); err != nil {
+		t.Fatal(err)
+	}
+	// nora (person:6) ist Owner von beta und nur Member in alpha.
+	mustOrg(t, st, "person:6", "Beta", "beta")
+	if _, err := st.ClaimProject("person:6", beta1, "beta"); err != nil {
+		t.Fatal(err)
+	}
+	code, _, err := st.CreateInvitation("person:1", 1, "", OrgMember, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AcceptInvitation("person:6", code); err != nil {
+		t.Fatal(err)
+	}
+	st.SetAccessMode(AccessMode{Enforce: true})
+
+	if got := visibleRemotes(st, "person:6"); !sameSet(got, beta1) {
+		t.Fatalf("org owner of beta, only member of alpha: got %v", got)
+	}
+	if got := visibleRemotes(st, "person:5"); !sameSet(got, roleProject) {
+		t.Fatalf("guest sees only its project: got %v", got)
+	}
+
+	if err := st.RemoveProjectRole("person:1", roleProject, "person:5", RoleViaAPI); err != nil {
+		t.Fatal(err)
+	}
+	if got := visibleRemotes(st, "person:5"); len(got) != 0 {
+		t.Fatalf("after role removal: got %v", got)
+	}
+
+	// Zeile bleibt zurück, Org-Mitgliedschaft ist weg.
+	if err := st.SetProjectRole("person:1", roleProject, "person:3", RoleMember, false, RoleViaAPI); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.db.Exec(`DELETE FROM org_members WHERE org_id=1 AND account_id=3`); err != nil {
+		t.Fatal(err)
+	}
+	if got := visibleRemotes(st, "person:3"); len(got) != 0 {
+		t.Fatalf("left-over project_members row without org membership: got %v", got)
+	}
+	// Auch wenn die Liste das Projekt trotzdem enthielte, filtert die Rolle.
+	if p, ok := st.ProjectByRemote(roleProject); !ok || len(st.Access(Principal{ID: "person:3"}).VisibleProjects([]Project{p})) != 0 {
+		t.Fatal("left-over row must not grant visibility")
 	}
 }

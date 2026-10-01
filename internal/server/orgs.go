@@ -303,7 +303,7 @@ func (a *api) listProjects(w http.ResponseWriter, r *http.Request) {
 		writeOrgError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, projects)
+	writeJSON(w, http.StatusOK, a.access(r).VisibleProjects(projects))
 }
 
 func (a *api) claimProject(w http.ResponseWriter, r *http.Request) {
