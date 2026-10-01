@@ -65,6 +65,18 @@ func installClaudeSelected(home string, selected ComponentSet) ([]Change, error)
 	return changes, nil
 }
 
+// hookTimeout is the explicit timeout in seconds for hooks that must not run
+// on the harness default. The pause gate runs before every tool call and only
+// reads a file; a stuck process must not stall the agent for the default.
+// (A timed-out hook is fail-open in Claude Code, so this bounds the cost, it
+// is not a gate.)
+func hookTimeout(command string) int {
+	if strings.HasPrefix(command, pauseGateHookCommand) {
+		return 5
+	}
+	return 0
+}
+
 // addHook appends to whatever is already registered for an event. Other tools
 // keep hooks here too — a lease daemon, an approval bridge — and replacing the
 // list would silently disarm them.
@@ -95,6 +107,14 @@ func addHook(path, event, command, matcher string) (Change, error) {
 				migrated := cmd != command
 				if migrated {
 					hm["command"] = command
+				}
+				if want := hookTimeout(command); want > 0 {
+					if have, _ := hm["timeout"].(float64); have != float64(want) {
+						hm["timeout"] = want
+						migrated = true
+					}
+				}
+				if migrated {
 					inner[handlerIndex] = hm
 					entry["hooks"] = inner
 				}
@@ -127,9 +147,11 @@ func addHook(path, event, command, matcher string) (Change, error) {
 			}
 		}
 	}
-	entry := map[string]any{
-		"hooks": []any{map[string]any{"type": "command", "command": command}},
+	handler := map[string]any{"type": "command", "command": command}
+	if want := hookTimeout(command); want > 0 {
+		handler["timeout"] = want
 	}
+	entry := map[string]any{"hooks": []any{handler}}
 	// Der Matcher hält ctx aus jedem Bash-Aufruf heraus. Ohne ihn feuert
 	// PreToolUse auf jedem Werkzeug, und ein Prozessstart je Aufruf ist ein
 	// spürbarer Preis für eine Antwort, die es meistens nicht gibt.

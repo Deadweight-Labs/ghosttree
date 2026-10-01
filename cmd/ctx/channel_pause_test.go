@@ -2,6 +2,9 @@ package main
 
 import (
 	"errors"
+	"github.com/Deadweight-Labs/ghosttree/internal/client"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -123,3 +126,42 @@ type discard struct{}
 func (*discard) Write(b []byte) (int, error) { return len(b), nil }
 
 func stringsReader(s string) *strings.Reader { return strings.NewReader(s) }
+
+func TestChannelPauseSyncDoesNotWedgeOnUnreportableAcks(t *testing.T) {
+	pauseEnv(t)
+	src := &fakePauseSource{control: &store.AgentControl{ID: 2, Action: store.ControlPause}}
+	p := &pauseSyncer{agent: pauseTestAgent, src: src}
+	_ = p.sync()
+	var sink discard
+	// A damaged flag.json: the hook acks with control_id 0.
+	dir, _ := agentpause.Dir(pauseTestAgent)
+	_ = os.WriteFile(filepath.Join(dir, "flag.json"), []byte("{broken"), 0o600)
+	agentpause.Gate(pauseTestAgent, stringsReader(`{"tool_use_id":"toolu_zero"}`), &sink)
+	_ = agentpause.WriteFlag(pauseTestAgent, agentpause.Flag{ControlID: 2})
+	agentpause.Gate(pauseTestAgent, stringsReader(`{"tool_use_id":"toolu_good"}`), &sink)
+	if err := p.sync(); err != nil {
+		t.Fatalf("a control_id 0 ack must be skipped, got %v", err)
+	}
+	if len(src.events) != 1 || src.events[0].ToolUseID != "toolu_good" {
+		t.Fatalf("events = %+v", src.events)
+	}
+	// A permanent rejection (400) advances past the line.
+	agentpause.Gate(pauseTestAgent, stringsReader(`{"tool_use_id":"toolu_bad"}`), &sink)
+	src.evErr = &client.StatusError{Method: "POST", Path: "/x", Status: 400}
+	if err := p.sync(); err != nil {
+		t.Fatalf("a 400 must not wedge the offset: %v", err)
+	}
+	src.evErr = nil
+	if err := p.sync(); err != nil || len(src.events) != 1 {
+		t.Fatalf("the rejected line must not be retried: %v %+v", err, src.events)
+	}
+	// Resume clears the acks even when reporting fails.
+	agentpause.Gate(pauseTestAgent, stringsReader(`{"tool_use_id":"toolu_late"}`), &sink)
+	src.control, src.evErr = nil, errors.New("503")
+	if err := p.sync(); err == nil {
+		t.Fatal("transient error must surface")
+	}
+	if acks, _ := agentpause.ReadAcks(pauseTestAgent, 0); len(acks) != 0 {
+		t.Fatalf("acks must be cleared on resume: %+v", acks)
+	}
+}

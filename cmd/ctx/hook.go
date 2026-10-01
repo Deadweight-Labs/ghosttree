@@ -629,6 +629,12 @@ func renderGhostDelivery(entries []store.GhostFile, fresh map[string]ghost.Fresh
 // any other harness prints nothing and exits 0, as every other hook does.
 // Codex has no measured pause interface and stays a named gap.
 func pauseGate(stdin io.Reader, harness string, stdout io.Writer) int {
+	if os.Getenv("GHOSTTREE_HOOK_SYNTHETIC") == "1" {
+		// Doctor's runtime probe: a well-formed, harmless answer that blocks
+		// nothing, so the probe can tell "runs and speaks JSON" from "broken".
+		fmt.Fprintln(stdout, `{"hookSpecificOutput":{"hookEventName":"PreToolUse"}}`)
+		return 0
+	}
 	if harness != "claude" {
 		return 0
 	}

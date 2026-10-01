@@ -62,13 +62,12 @@ func (p *pauseSyncer) sync() error {
 	}
 	reportErr := p.reportAcks()
 	if c == nil {
-		// Lift only after the last acks are reported; a failed report keeps the
-		// acks for the next round, the flag is gone either way.
+		// Control over: lift the flag and drop the ack file even if reporting
+		// failed. Acks of a finished control are only evidence for something
+		// already resumed, and keeping them could wedge the next control.
 		agentpause.RemoveFlag(p.agent)
-		if reportErr == nil {
-			agentpause.ClearAcks(p.agent)
-			p.ackOffset = 0
-		}
+		agentpause.ClearAcks(p.agent)
+		p.ackOffset = 0
 	}
 	return reportErr
 }
@@ -76,10 +75,23 @@ func (p *pauseSyncer) sync() error {
 func (p *pauseSyncer) reportAcks() error {
 	acks, next := agentpause.ReadAcks(p.agent, p.ackOffset)
 	for _, a := range acks {
+		if a.ControlID <= 0 {
+			// The hook found a flag it could not read and so knew no control.
+			// The server would answer 400 for ever; there is nothing to report.
+			p.ackOffset = a.End
+			continue
+		}
 		if _, err := p.src.RecordEvent(a.ControlID, store.ControlEvent{
 			Kind: store.ControlEventAck, ToolUseID: a.ToolUseID, ToolName: a.ToolName,
 			AgentID: a.AgentID, SessionID: a.SessionID,
 		}); err != nil {
+			if client.IsPermanent(err) {
+				// A rejection that will not change: log it and move on instead
+				// of retrying the same line for ever.
+				fmt.Fprintf(os.Stderr, "channel: pause ack dropped: %v\n", err)
+				p.ackOffset = a.End
+				continue
+			}
 			return err // the offset stays behind the last reported line
 		}
 		p.ackOffset = a.End

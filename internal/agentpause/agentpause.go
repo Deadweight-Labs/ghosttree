@@ -96,25 +96,50 @@ func RemoveFlag(agent string) {
 	}
 }
 
-// ReadFlag reports whether a flag exists. A flag that exists but cannot be
-// parsed still counts as set: the gate must not turn a damaged file into a
-// silent un-pause.
+// maxFlagSize bounds what the gate reads. A real flag is under 1 KiB.
+const maxFlagSize = 64 << 10
+
+// ReadFlag reports whether the agent is flagged.
+//
+//   - Nothing at the flag path: not flagged. This is the normal case and the
+//     cost of every tool call is this one Lstat.
+//   - A regular file of at most 64 KiB: read and parsed. If it cannot be
+//     parsed it still counts as flagged: the gate must not turn a damaged file
+//     into a silent un-pause.
+//   - Anything else at that path (FIFO, device, symlink, directory, a huge
+//     file): flagged, WITHOUT reading it. ghosttree only ever writes a small
+//     regular file there, so such an object is evidence that someone put
+//     something at the pause path on purpose, and reading it could block or
+//     follow a link out of the state directory.
+//   - The state directory is unreadable (Lstat fails for a reason other than
+//     "does not exist"): not flagged, fail-open. The gate cannot tell, and the
+//     server never shows "paused" without a hook ack plus a transcript proof,
+//     so a pause that did not take hold is never displayed as one.
 func ReadFlag(agent string) (Flag, bool) {
 	dir, err := Dir(agent)
 	if err != nil {
 		return Flag{}, false
 	}
 	path := filepath.Join(dir, flagName)
-	raw, err := os.ReadFile(path)
+	info, err := os.Lstat(path)
 	if err != nil {
-		// Present but unreadable (permissions, a directory in its place) still
-		// counts as set.
-		_, statErr := os.Lstat(path)
-		return Flag{}, statErr == nil
+		return Flag{}, false
 	}
-	var f Flag
-	_ = json.Unmarshal(raw, &f)
-	return f, true
+	if !info.Mode().IsRegular() || info.Size() > maxFlagSize {
+		return Flag{}, true
+	}
+	f, err := os.OpenFile(path, os.O_RDONLY|openFlags, 0)
+	if err != nil {
+		return Flag{}, true // present, but cannot be opened
+	}
+	defer f.Close()
+	raw, err := io.ReadAll(io.LimitReader(f, maxFlagSize))
+	if err != nil {
+		return Flag{}, true
+	}
+	var fl Flag
+	_ = json.Unmarshal(raw, &fl)
+	return fl, true
 }
 
 // hookInput is the part of the PreToolUse payload the gate records. agent_id

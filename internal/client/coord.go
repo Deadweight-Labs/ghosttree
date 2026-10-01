@@ -248,18 +248,27 @@ func permanentStatus(code int) bool {
 	return code == 400 || code == 404 || code == 409 || code == 422
 }
 
+// IsPermanent says a request failed with an answer the server will never change
+// for the same input (see permanentStatus), so retrying is pointless.
+func IsPermanent(err error) bool {
+	var api *APIError
+	var st *StatusError
+	switch {
+	case errors.As(err, &api):
+		return permanentStatus(api.Status)
+	case errors.As(err, &st):
+		return permanentStatus(st.Status)
+	}
+	return false
+}
+
 // RecordControlProof meldet einen Transkript-Beleg (collector.ControlProofRecorder).
 // Ein 400, 404, 409 oder 422 ist endgueltig und wird verschluckt, damit
 // der Collector nicht ewig denselben Stapel wiederholt; Netz- und 5xx-Fehler
 // kommen zurueck, damit er es nochmal versucht.
 func (c *Client) RecordControlProof(controlID int64, ev store.ControlEvent) error {
 	_, err := c.RecordControlEvent(controlID, ev)
-	var api *APIError
-	var st *StatusError
-	switch {
-	case errors.As(err, &api) && permanentStatus(api.Status):
-		return nil
-	case errors.As(err, &st) && permanentStatus(st.Status):
+	if IsPermanent(err) {
 		return nil
 	}
 	return err

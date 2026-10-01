@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -86,5 +87,80 @@ func TestPauseGateHookDoesNotTouchTheBudgetPath(t *testing.T) {
 	// Kein Budget-Zustand entstanden: der Zweig hat hookbudget nie betreten.
 	if _, err := os.Stat(filepath.Join(os.Getenv("XDG_STATE_HOME"), "ghosttree", "context-budget")); err == nil {
 		t.Fatal("pause-gate created hookbudget state")
+	}
+}
+
+func TestPauseGateAnswersTheDoctorProbeWithHarmlessJSON(t *testing.T) {
+	pauseEnv(t)
+	t.Setenv("GHOSTTREE_HOOK_SYNTHETIC", "1")
+	// Even with a flag set, the synthetic probe must not block anything.
+	_ = agentpause.WriteFlag(pauseTestAgent, agentpause.Flag{ControlID: 1})
+	var out bytes.Buffer
+	if code := cmdHookWith(strings.NewReader(`{"cwd":"/tmp","prompt":"","tool_input":{}}`), []string{"pause-gate", "--harness", "claude"}, &out); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil || got["continue"] != nil || got["hookSpecificOutput"].(map[string]any)["hookEventName"] != "PreToolUse" ||
+		got["hookSpecificOutput"].(map[string]any)["permissionDecision"] != nil {
+		t.Fatalf("probe output = %q", out.String())
+	}
+	if acks, _ := agentpause.ReadAcks(pauseTestAgent, 0); len(acks) != 0 {
+		t.Fatal("the probe must not write an ack")
+	}
+}
+
+// ctx install claude --only hooks followed by ctx doctor claude --only hooks
+// passes in a clean HOME, with the real binary on PATH (the probe runs it).
+func TestInstallThenDoctorHooksPassesForClaude(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds the binary")
+	}
+	bin := t.TempDir()
+	if out, err := exec.Command("go", "build", "-o", filepath.Join(bin, "ctx"), ".").CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("GHOSTTREE_AGENT_ID", "")
+	var out bytes.Buffer
+	if code := cmdInstall([]string{"claude", "--only", "hooks"}, &out); code != 0 {
+		t.Fatalf("install = %d\n%s", code, out.String())
+	}
+	out.Reset()
+	if code := cmdDoctor([]string{"claude", "--only", "hooks"}, &out); code != 0 {
+		t.Fatalf("doctor = %d\n%s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "pause-gate") {
+		t.Fatalf("doctor does not mention the gate:\n%s", out.String())
+	}
+	settings, _ := os.ReadFile(filepath.Join(home, ".claude", "settings.json"))
+	var s struct {
+		Hooks map[string][]struct {
+			Matcher string `json:"matcher"`
+			Hooks   []struct {
+				Command string  `json:"command"`
+				Timeout float64 `json:"timeout"`
+			} `json:"hooks"`
+		} `json:"hooks"`
+	}
+	if err := json.Unmarshal(settings, &s); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, g := range s.Hooks["PreToolUse"] {
+		for _, h := range g.Hooks {
+			if strings.HasPrefix(h.Command, "ctx hook pause-gate") {
+				found = true
+				if h.Timeout != 5 || g.Matcher != "" {
+					t.Fatalf("gate entry timeout=%v matcher=%q", h.Timeout, g.Matcher)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Fatal("gate not installed")
 	}
 }
