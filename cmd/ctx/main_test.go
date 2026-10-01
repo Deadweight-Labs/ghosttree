@@ -561,6 +561,37 @@ func TestAccountCLIAddsListsIssuesAndRevokes(t *testing.T) {
 	}
 }
 
+func TestAccountCLIIssuesClaimCodeAndLoginLink(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "ghosttree.db")
+	ctx := func(args ...string) (string, int) {
+		var out bytes.Buffer
+		code := run(append(args, "--db", db), &out)
+		return out.String(), code
+	}
+	ctx("account", "add", "robin")
+	claim, code := ctx("account", "claim-code", "robin")
+	if code != 0 || !strings.Contains(claim, "claim code: ") || !strings.Contains(claim, "30m0s") {
+		t.Fatalf("claim = %q exit=%d", claim, code)
+	}
+	link, code := ctx("account", "login-link", "robin", "--url", "https://gt.example/")
+	if code != 0 || !strings.HasPrefix(link, "https://gt.example/ui/login/code?code=") {
+		t.Fatalf("link = %q exit=%d", link, code)
+	}
+	var raw string
+	fmt.Sscanf(strings.SplitN(strings.SplitN(link, "code=", 2)[1], "\n", 2)[0], "%s", &raw)
+	st, err := store.Open(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if a, err := st.RedeemLoginLink(raw); err != nil || a.Name != "robin" {
+		t.Fatalf("redeem a=%+v err=%v", a, err)
+	}
+	if _, code := ctx("account", "claim-code", "ghost"); code == 0 {
+		t.Fatal("claim code for an unknown account")
+	}
+}
+
 func TestPersonAddStillIssuesLegacyToken(t *testing.T) {
 	db := filepath.Join(t.TempDir(), "ghosttree.db")
 	var out bytes.Buffer

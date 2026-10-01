@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -14,7 +15,9 @@ const accountUsage = `usage: ctx account add <name> [--email E] [--admin] --db <
        ctx account list --db <path>
        ctx account tokens <name> --db <path>
        ctx account token create <name> [--label L] [--machine M] [--expires-in 720h] --db <path>
-       ctx account token revoke <id> --db <path>`
+       ctx account token revoke <id> --db <path>
+       ctx account claim-code <name> --db <path>
+       ctx account login-link <name> [--url https://host] --db <path>`
 
 // cmdAccount arbeitet wie person direkt auf der Datenbank: Konten und Tokens
 // auszustellen braucht Zugriff auf den Server-Host, nicht ein Token.
@@ -30,6 +33,10 @@ func cmdAccount(args []string, stdout io.Writer) int {
 		return cmdAccountList(args[1:], stdout)
 	case "tokens":
 		return cmdAccountTokens(args[1:], stdout)
+	case "claim-code":
+		return cmdAccountClaimCode(args[1:], stdout)
+	case "login-link":
+		return cmdAccountLoginLink(args[1:], stdout)
 	case "token":
 		if len(args) > 1 && args[1] == "create" {
 			return cmdAccountTokenCreate(args[2:], stdout)
@@ -193,5 +200,50 @@ func cmdAccountTokenRevoke(args []string, stdout io.Writer) int {
 		return 1
 	}
 	fmt.Fprintf(stdout, "token %d revoked\n", id)
+	return 0
+}
+
+func cmdAccountClaimCode(args []string, stdout io.Writer) int {
+	_, name, db, ok := accountFlags("account claim-code", args, stdout, nil)
+	if !ok || name == "" {
+		fmt.Fprintln(stdout, "usage: ctx account claim-code <name> --db <path>")
+		return 2
+	}
+	st, ok := openAccountStore(*db, stdout)
+	if !ok {
+		return 1
+	}
+	defer st.Close()
+	code, ttl, err := st.CreateAccountCode(store.CodeClaim, name)
+	if err != nil {
+		fmt.Fprintf(stdout, "claim code: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "claim code: %s\n", code)
+	fmt.Fprintf(stdout, "valid %s, single use. Paste it into the code field on the OIDC sign-in page; the first login that presents it is bound to %s.\n", ttl, name)
+	return 0
+}
+
+func cmdAccountLoginLink(args []string, stdout io.Writer) int {
+	var base *string
+	_, name, db, ok := accountFlags("account login-link", args, stdout, func(fs *flag.FlagSet) {
+		base = fs.String("url", "http://127.0.0.1:8474", "public base URL of the server")
+	})
+	if !ok || name == "" {
+		fmt.Fprintln(stdout, "usage: ctx account login-link <name> [--url https://host] --db <path>")
+		return 2
+	}
+	st, ok := openAccountStore(*db, stdout)
+	if !ok {
+		return 1
+	}
+	defer st.Close()
+	code, ttl, err := st.CreateAccountCode(store.CodeLogin, name)
+	if err != nil {
+		fmt.Fprintf(stdout, "login link: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "%s/ui/login/code?code=%s\n", strings.TrimRight(*base, "/"), code)
+	fmt.Fprintf(stdout, "valid %s, single use\n", ttl)
 	return 0
 }

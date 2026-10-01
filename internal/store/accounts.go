@@ -326,3 +326,375 @@ func (s *Store) PrincipalValid(p Principal) bool {
 		p.TokenID, account, now()).Scan(&one)
 	return err == nil
 }
+
+// Code-Arten in account_codes. Es werden nur Hashes gespeichert; der
+// Klartext existiert genau einmal, bei der Ausgabe.
+const (
+	CodeBootstrap = "bootstrap"
+	CodeClaim     = "claim"
+	CodeLogin     = "login"
+
+	BootstrapCodeTTL = 24 * time.Hour
+	ClaimCodeTTL     = 30 * time.Minute
+	LoginLinkTTL     = 10 * time.Minute
+)
+
+var (
+	// ErrCodeInvalid deckt unbekannt, abgelaufen, schon benutzt und falsche Art
+	// ab. Der Aufrufer soll Gründe nicht unterscheiden können.
+	ErrCodeInvalid = errors.New("code is invalid, expired or already used")
+	// ErrNoAccountForIdentity: Die Identität ist nirgends verbunden und es kam
+	// weder ein Claim- noch ein Bootstrap-Code mit (Registrierung nur per
+	// Einladung).
+	ErrNoAccountForIdentity = errors.New("no account is linked to this identity")
+	ErrAccountDisabled      = errors.New("account is disabled")
+	ErrAccountHasIdentity   = errors.New("account already has an identity")
+)
+
+// IdentityLogin ist das Ergebnis einer erfolgreichen IdP-Anmeldung, wie der
+// Store es braucht. Code ist optional: ein Claim- oder Bootstrap-Code.
+type IdentityLogin struct {
+	Issuer, Subject string
+	Email, Name     string
+	Code            string
+}
+
+// LoginOutcome sagt, was LoginIdentity getan hat.
+type LoginOutcome string
+
+const (
+	LoginExisting     LoginOutcome = "existing"
+	LoginClaimed      LoginOutcome = "claimed"
+	LoginBootstrapped LoginOutcome = "bootstrapped"
+)
+
+func newCode() (plain, hash string, err error) { return newToken() }
+
+// CreateAccountCode gibt einen Claim- oder Login-Code für ein bestehendes Konto
+// aus. Ein Claim-Code entsteht nur für ein aktives Konto ohne Identität, damit
+// er nie ein schon verbundenes Konto umhängen kann.
+func (s *Store) CreateAccountCode(kind, account string) (string, time.Duration, error) {
+	if s.writer != nil {
+		type result struct {
+			code string
+			ttl  time.Duration
+		}
+		r, err := queueValue(s, []any{kind, account}, func(d *Store, p []any) (result, error) {
+			c, t, err := d.CreateAccountCode(p[0].(string), p[1].(string))
+			return result{c, t}, err
+		})
+		return r.code, r.ttl, err
+	}
+	var ttl time.Duration
+	switch kind {
+	case CodeClaim:
+		ttl = ClaimCodeTTL
+	case CodeLogin:
+		ttl = LoginLinkTTL
+	default:
+		return "", 0, fmt.Errorf("unsupported code kind %q", kind)
+	}
+	a, err := s.AccountByName(account)
+	if err != nil {
+		return "", 0, err
+	}
+	if a.State != "active" {
+		return "", 0, fmt.Errorf("account %q is %s", a.Name, a.State)
+	}
+	id, _ := parsePersonPrincipalID(a.ID)
+	if kind == CodeClaim {
+		var n int
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM account_identities WHERE account_id=?`, id).Scan(&n); err != nil {
+			return "", 0, err
+		}
+		if n > 0 {
+			return "", 0, ErrAccountHasIdentity
+		}
+	}
+	code, hash, err := newCode()
+	if err != nil {
+		return "", 0, err
+	}
+	if _, err := s.db.Exec(`INSERT INTO account_codes(code_hash, kind, account_id, expires_at) VALUES(?,?,?,?)`,
+		hash, kind, id, time.Now().UTC().Add(ttl).Format(time.RFC3339)); err != nil {
+		return "", 0, err
+	}
+	return code, ttl, nil
+}
+
+// EnsureBootstrapCode legt auf einer leeren Instanz (keine Person) einen
+// frischen Bootstrap-Code an und verwirft ältere unbenutzte. Sonst gibt es
+// keinen: ein bestehendes Konto wird per Claim-Code übernommen.
+func (s *Store) EnsureBootstrapCode() (string, bool, error) {
+	if s.writer != nil {
+		type result struct {
+			code string
+			ok   bool
+		}
+		r, err := queueValue(s, nil, func(d *Store, _ []any) (result, error) {
+			c, ok, err := d.EnsureBootstrapCode()
+			return result{c, ok}, err
+		})
+		return r.code, r.ok, err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return "", false, err
+	}
+	defer tx.Rollback()
+	var persons int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM persons`).Scan(&persons); err != nil {
+		return "", false, err
+	}
+	if persons > 0 {
+		return "", false, nil
+	}
+	code, hash, err := newCode()
+	if err != nil {
+		return "", false, err
+	}
+	if _, err := tx.Exec(`DELETE FROM account_codes WHERE kind='bootstrap' AND used_at=''`); err != nil {
+		return "", false, err
+	}
+	if _, err := tx.Exec(`INSERT INTO account_codes(code_hash, kind, expires_at) VALUES(?,?,?)`,
+		hash, CodeBootstrap, time.Now().UTC().Add(BootstrapCodeTTL).Format(time.RFC3339)); err != nil {
+		return "", false, err
+	}
+	return code, true, tx.Commit()
+}
+
+// consumeCode verbraucht einen Code atomar: ein einziges UPDATE mit allen
+// Bedingungen, damit zwei gleichzeitige Einlösungen nicht beide gewinnen.
+func consumeCode(tx *sql.Tx, code, kind string) (accountID int64, err error) {
+	hash := hashToken(code)
+	res, err := tx.Exec(`UPDATE account_codes SET used_at=? WHERE code_hash=? AND kind=? AND used_at='' AND expires_at>?`,
+		now(), hash, kind, now())
+	if err != nil {
+		return 0, err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return 0, ErrCodeInvalid
+	}
+	err = tx.QueryRow(`SELECT account_id FROM account_codes WHERE code_hash=?`, hash).Scan(&accountID)
+	return accountID, err
+}
+
+func codeKind(tx *sql.Tx, code string) (string, error) {
+	var kind string
+	err := tx.QueryRow(`SELECT kind FROM account_codes WHERE code_hash=?`, hashToken(code)).Scan(&kind)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrCodeInvalid
+	}
+	return kind, err
+}
+
+func accountState(tx *sql.Tx, id int64) (Account, error) {
+	return scanAccount(tx.QueryRow(accountSelect+` WHERE id=?`, id))
+}
+
+// createBootstrapAccount legt innerhalb der Transaktion das erste Konto an.
+func createBootstrapAccount(tx *sql.Tx, name, email string) (int64, error) {
+	var persons int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM persons`).Scan(&persons); err != nil {
+		return 0, err
+	}
+	if persons > 0 {
+		return 0, ErrCodeInvalid
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = "admin"
+	}
+	res, err := tx.Exec(`INSERT INTO persons(name, token_hash, created_at, email, is_admin) VALUES(?,?,?,?,1)`,
+		name, "", now(), strings.TrimSpace(email))
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// LoginIdentity löst eine IdP-Identität zu einem Konto auf. Bekannte Identität:
+// Anmeldung. Unbekannte: nur mit gültigem Claim-Code (verbindet ein
+// bestehendes Konto ohne Identität) oder Bootstrap-Code (erstes Konto einer
+// leeren Instanz, Admin). Alles andere ist ErrNoAccountForIdentity; es gibt
+// keine offene Registrierung. Alles läuft in einer Transaktion, ein
+// gescheiterter Versuch verbraucht den Code nicht.
+func (s *Store) LoginIdentity(in IdentityLogin) (Account, LoginOutcome, error) {
+	if s.writer != nil {
+		type result struct {
+			a Account
+			o LoginOutcome
+		}
+		r, err := queueValue(s, []any{in}, func(d *Store, p []any) (result, error) {
+			a, o, err := d.LoginIdentity(p[0].(IdentityLogin))
+			return result{a, o}, err
+		})
+		return r.a, r.o, err
+	}
+	if in.Issuer == "" || in.Subject == "" {
+		return Account{}, "", fmt.Errorf("identity needs issuer and subject")
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return Account{}, "", err
+	}
+	defer tx.Rollback()
+	var accountID int64
+	err = tx.QueryRow(`SELECT account_id FROM account_identities WHERE issuer=? AND subject=?`, in.Issuer, in.Subject).Scan(&accountID)
+	switch {
+	case err == nil:
+		a, err := accountState(tx, accountID)
+		if err != nil {
+			return Account{}, "", err
+		}
+		if a.State != "active" {
+			return Account{}, "", ErrAccountDisabled
+		}
+		return a, LoginExisting, nil
+	case !errors.Is(err, sql.ErrNoRows):
+		return Account{}, "", err
+	}
+	if in.Code == "" {
+		return Account{}, "", ErrNoAccountForIdentity
+	}
+	kind, err := codeKind(tx, in.Code)
+	if err != nil {
+		return Account{}, "", err
+	}
+	var outcome LoginOutcome
+	switch kind {
+	case CodeClaim:
+		if accountID, err = consumeCode(tx, in.Code, CodeClaim); err != nil {
+			return Account{}, "", err
+		}
+		a, err := accountState(tx, accountID)
+		if err != nil {
+			return Account{}, "", err
+		}
+		if a.State != "active" {
+			return Account{}, "", ErrAccountDisabled
+		}
+		var n int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM account_identities WHERE account_id=?`, accountID).Scan(&n); err != nil {
+			return Account{}, "", err
+		}
+		if n > 0 {
+			return Account{}, "", ErrAccountHasIdentity
+		}
+		if a.Email == "" && in.Email != "" {
+			if _, err := tx.Exec(`UPDATE persons SET email=? WHERE id=?`, strings.TrimSpace(in.Email), accountID); err != nil {
+				return Account{}, "", err
+			}
+		}
+		outcome = LoginClaimed
+	case CodeBootstrap:
+		if _, err := consumeCode(tx, in.Code, CodeBootstrap); err != nil {
+			return Account{}, "", err
+		}
+		if accountID, err = createBootstrapAccount(tx, in.Name, in.Email); err != nil {
+			return Account{}, "", err
+		}
+		outcome = LoginBootstrapped
+	default:
+		// Ein Login-Link bindet keine Identität.
+		return Account{}, "", ErrCodeInvalid
+	}
+	if _, err := tx.Exec(`INSERT INTO account_identities(account_id, issuer, subject, created_at) VALUES(?,?,?,?)`,
+		accountID, in.Issuer, in.Subject, now()); err != nil {
+		return Account{}, "", err
+	}
+	a, err := accountState(tx, accountID)
+	if err != nil {
+		return Account{}, "", err
+	}
+	return a, outcome, tx.Commit()
+}
+
+// BootstrapLocal erstellt das erste Konto ohne IdP: Bootstrap-Code plus ein
+// frei gewählter Name. Das Konto wird Admin.
+func (s *Store) BootstrapLocal(code, name string) (Account, error) {
+	if s.writer != nil {
+		return queueValue(s, []any{code, name}, func(d *Store, p []any) (Account, error) {
+			return d.BootstrapLocal(p[0].(string), p[1].(string))
+		})
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return Account{}, err
+	}
+	defer tx.Rollback()
+	if _, err := consumeCode(tx, code, CodeBootstrap); err != nil {
+		return Account{}, err
+	}
+	id, err := createBootstrapAccount(tx, name, "")
+	if err != nil {
+		return Account{}, err
+	}
+	a, err := accountState(tx, id)
+	if err != nil {
+		return Account{}, err
+	}
+	return a, tx.Commit()
+}
+
+// RedeemLoginLink löst einen Einmal-Login-Link ein und gibt das Konto zurück.
+func (s *Store) RedeemLoginLink(code string) (Account, error) {
+	if s.writer != nil {
+		return queueValue(s, []any{code}, func(d *Store, p []any) (Account, error) {
+			return d.RedeemLoginLink(p[0].(string))
+		})
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return Account{}, err
+	}
+	defer tx.Rollback()
+	id, err := consumeCode(tx, code, CodeLogin)
+	if err != nil {
+		return Account{}, err
+	}
+	a, err := accountState(tx, id)
+	if err != nil {
+		return Account{}, err
+	}
+	if a.State != "active" {
+		return Account{}, ErrAccountDisabled
+	}
+	return a, tx.Commit()
+}
+
+// CodeKindFor sagt, welche Art ein noch gültiger Code hat, ohne ihn zu
+// verbrauchen. Die Web-Seite entscheidet damit, ob sie einen Namen braucht.
+func (s *Store) CodeKindFor(code string) string {
+	if s.reader != nil {
+		return s.reader.CodeKindFor(code)
+	}
+	var kind string
+	err := s.db.QueryRow(`SELECT kind FROM account_codes WHERE code_hash=? AND used_at='' AND expires_at>?`,
+		hashToken(code), now()).Scan(&kind)
+	if err != nil {
+		return ""
+	}
+	return kind
+}
+
+// HasIdentities sagt, ob irgendein Konto schon eine IdP-Identität hat. Solange
+// nicht, bleibt der Token-Login der Weboberfläche der einzige Weg in eine
+// bestehende Instanz.
+func (s *Store) HasIdentities() bool {
+	if s.reader != nil {
+		return s.reader.HasIdentities()
+	}
+	var n int
+	return s.db.QueryRow(`SELECT COUNT(*) FROM account_identities`).Scan(&n) == nil && n > 0
+}
+
+// AccountActive prüft für kontobasierte Websitzungen (ohne Token), ob das
+// Konto noch existiert und aktiv ist.
+func (s *Store) AccountActive(principalID string) bool {
+	if s.reader != nil {
+		return s.reader.AccountActive(principalID)
+	}
+	a, err := s.AccountByPrincipalID(principalID)
+	return err == nil && a.State == "active"
+}
