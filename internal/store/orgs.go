@@ -549,9 +549,10 @@ func pickOrgTx(q queryer, account int64) (int64, error) {
 
 // claimProjectTx ordnet eine unbeanspruchte Remote einer Organisation zu und
 // ist bei einer schon zugeordneten idempotent. orgID 0 heißt: Regel des Kontos.
-// Ein ausdrücklicher Claim verlangt Owner der Ziel-Org: sonst könnte ein
-// einfaches Mitglied eine Remote besetzen, bevor ihr Besitzer dort schreibt.
-// Der implizite Weg (erster Schreibzugriff) genügt mit Mitgliedschaft.
+// Beides, der ausdrückliche Claim und der implizite beim ersten Schreiben,
+// verlangt Owner der Ziel-Org: sonst könnte ein einfaches Mitglied eine Remote
+// besetzen, bevor ihr Besitzer dort schreibt. Ein Mitglied beim impliziten
+// Schreiben lässt sie unbeansprucht (leeres Project, kein Fehler).
 func claimProjectTx(tx execQueryer, account int64, remote string, orgID int64, explicit bool) (Project, error) {
 	if p, ok := projectTx(tx, remote); ok {
 		if orgRoleTx(tx, p.OrgID, account) == "" {
@@ -567,8 +568,14 @@ func claimProjectTx(tx execQueryer, account int64, remote string, orgID int64, e
 	} else if orgRoleTx(tx, orgID, account) == "" {
 		return Project{}, ErrNotOrgMember
 	}
-	if explicit && orgRoleTx(tx, orgID, account) != OrgOwner {
-		return Project{}, ErrNotOrgOwner
+	if orgRoleTx(tx, orgID, account) != OrgOwner {
+		if explicit {
+			return Project{}, ErrNotOrgOwner
+		}
+		// Ein einfaches Mitglied besetzt beim Schreiben nichts: die Remote
+		// bleibt unbeansprucht, der Schreibzugriff geht durch, und der erste
+		// Owner, der dort schreibt oder claimt, gewinnt.
+		return Project{}, nil
 	}
 	if _, err := tx.Exec(`INSERT OR IGNORE INTO projects(remote, org_id, created_at) VALUES(?,?,?)`, remote, orgID, now()); err != nil {
 		return Project{}, err

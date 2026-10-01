@@ -140,28 +140,45 @@ func TestProjectAssignmentRule(t *testing.T) {
 	st := orgStore(t, "robin", "anna", "ben", "carl")
 	alpha := mustOrg(t, st, "person:1", "Alpha", "alpha")
 	beta := mustOrg(t, st, "person:1", "Beta", "beta")
-	// anna: nur Alpha. ben: beide ohne Standard. carl: keine.
-	join := func(acct string, o Org) {
-		code, _, _ := st.CreateInvitation("person:1", o.ID, "", OrgMember, 0)
+	// robin: Owner beider. anna: Mitglied von Alpha. ben: Owner beider, ohne
+	// Standard. carl: keine Org.
+	join := func(acct string, o Org, role string) {
+		code, _, _ := st.CreateInvitation("person:1", o.ID, "", role, 0)
 		if _, err := st.AcceptInvitation(acct, code); err != nil {
 			t.Fatal(err)
 		}
 	}
-	join("person:2", alpha)
-	join("person:3", alpha)
-	join("person:3", beta)
+	join("person:2", alpha, OrgMember)
+	join("person:3", alpha, OrgOwner)
+	join("person:3", beta, OrgOwner)
 	st.db.Exec(`UPDATE persons SET default_org_id=0 WHERE id=3`)
 
-	// Ein Konto mit einer Org: implizit dorthin.
+	// Ein einfaches Mitglied besetzt nichts: die Remote bleibt unbeansprucht,
+	// der Schreibzugriff geht durch (kein Fehler).
 	p, err := st.EnsureProject("person:2", "https://github.com/Deadweight-Labs/ghosttree.git")
-	if err != nil || p.Remote != "github.com/deadweight-labs/ghosttree" || p.Org != "alpha" {
-		t.Fatalf("implicit claim: %+v %v", p, err)
+	if err != nil || p.Org != "" {
+		t.Fatalf("member write: %+v %v", p, err)
 	}
-	// Zweiter Schreiber, anderer Weg, gleiche Antwort; kein zweiter Eintrag.
+	if _, ok := st.ProjectByRemote("github.com/deadweight-labs/ghosttree"); ok {
+		t.Fatal("a plain member must not claim a project by writing")
+	}
+	// Ein Owner schreibt in dieselbe unbeanspruchte Remote und gewinnt sie.
+	if p, err = st.EnsureProject("person:1", "github.com/deadweight-labs/ghosttree"); err != nil || p.Remote != "github.com/deadweight-labs/ghosttree" || p.Org != "alpha" {
+		t.Fatalf("owner write: %+v %v", p, err)
+	}
+	// Danach ist sie bekannt; Mitglieder und Owner derselben Org schreiben weiter.
 	if p2, err := st.EnsureProject("person:3", "github.com/deadweight-labs/ghosttree"); err != nil || p2.Org != "alpha" {
 		t.Fatalf("known project: %+v %v", p2, err)
 	}
+	// Eine unbeanspruchte Remote, die ein Mitglied angelegt hat, gewinnt der
+	// erste Owner, auch einer anderer Org (hier: ben mit Standard Beta).
+	st.EnsureProject("person:2", "github.com/x/memberfirst")
+	st.SetDefaultOrg("person:3", beta.ID)
+	if p, err := st.EnsureProject("person:3", "github.com/x/memberfirst"); err != nil || p.Org != "beta" {
+		t.Fatalf("first owner wins: %+v %v", p, err)
+	}
 	// Mehrere Orgs ohne Standard: nicht raten.
+	st.SetDefaultOrg("person:3", 0)
 	_, err = st.EnsureProject("person:3", "github.com/x/new")
 	var unclaimed *ProjectUnclaimedError
 	if !errors.As(err, &unclaimed) || len(unclaimed.Choices) != 2 {
@@ -170,13 +187,13 @@ func TestProjectAssignmentRule(t *testing.T) {
 	if _, ok := st.ProjectByRemote("github.com/x/new"); ok {
 		t.Fatal("a refused write must not leave a project behind")
 	}
-	// Mit Standard geht es, mit ausdrücklichem Claim auch.
+	// Mit Standard geht es.
 	st.SetDefaultOrg("person:3", beta.ID)
 	if p, err := st.EnsureProject("person:3", "github.com/x/new"); err != nil || p.Org != "beta" {
 		t.Fatalf("default org: %+v %v", p, err)
 	}
 	// Ein ausdrücklicher Claim ist Owner-Sache; ein Mitglied kann nicht besetzen.
-	if _, err := st.ClaimProject("person:3", "github.com/x/other", "alpha"); !errors.Is(err, ErrNotOrgOwner) {
+	if _, err := st.ClaimProject("person:2", "github.com/x/other", "alpha"); !errors.Is(err, ErrNotOrgOwner) {
 		t.Fatalf("explicit claim by a plain member: %v", err)
 	}
 	if _, ok := st.ProjectByRemote("github.com/x/other"); ok {

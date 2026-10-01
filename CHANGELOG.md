@@ -44,6 +44,10 @@ Versioning, with pre-1.0 compatibility rules described in
   unchanged. Admins hand a squatted project back with `ctx project move --force
   <remote> --org <org> --db <path>` (database access, recorded in `org_events`).
   `ctx org rename <org> <name> [--slug S]` renames an organization (owner).
+  Writing for a project nobody owns yet claims it only for an owner of the
+  writer's default organization; a plain member's write goes through but leaves
+  the project unclaimed, and the first owner of any organization who then writes
+  there or claims it wins it.
 - Add an Organizations page (`/ui/orgs`) with members, invitations and
   projects: owners create invitations (the code is shown once), change roles,
   remove members and move projects; members see the lists and can leave or join

@@ -165,17 +165,23 @@ func TestProjectsClaimMoveAndImplicitAssignment(t *testing.T) {
 	f.mustCall(t, 201, "POST", "/api/orgs", f.robin, map[string]any{"name": "Alpha", "slug": "alpha"})
 	f.mustCall(t, 201, "POST", "/api/orgs", f.robin, map[string]any{"name": "Beta", "slug": "beta"})
 	for _, org := range []string{"alpha", "beta"} {
-		inv := f.mustCall(t, 201, "POST", "/api/orgs/"+org+"/invitations", f.robin, map[string]any{})
+		inv := f.mustCall(t, 201, "POST", "/api/orgs/"+org+"/invitations", f.robin, map[string]any{"role": "owner"})
 		f.mustCall(t, 200, "POST", "/api/invitations/accept", f.ben, map[string]any{"code": inv["code"]})
 	}
 	inv := f.mustCall(t, 201, "POST", "/api/orgs/alpha/invitations", f.robin, map[string]any{})
 	f.mustCall(t, 200, "POST", "/api/invitations/accept", f.anna, map[string]any{"code": inv["code"]})
 
-	// Anna (eine Org): Session-Upload ordnet das Projekt Alpha zu.
+	// Anna (einfaches Mitglied): der Upload geht durch, besetzt aber nichts.
 	f.mustCall(t, 200, "POST", "/api/sessions", f.anna, map[string]any{"harness": "claude-code", "external_id": "s1",
 		"scope": map[string]any{"project": "github.com/x/one", "machine": "annabox"}})
+	if _, ok := f.st.ProjectByRemote("github.com/x/one"); ok {
+		t.Fatal("a plain member's write must leave the project unclaimed")
+	}
+	// Robin (Owner) schreibt dieselbe Remote und gewinnt sie.
+	f.mustCall(t, 200, "POST", "/api/sessions", f.robin, map[string]any{"harness": "claude-code", "external_id": "s0",
+		"scope": map[string]any{"project": "github.com/x/one", "machine": "robinbox"}})
 	if p, ok := f.st.ProjectByRemote("github.com/x/one"); !ok || p.Org != "alpha" {
-		t.Fatalf("implicit assignment: %+v %v", p, ok)
+		t.Fatalf("implicit assignment by an owner: %+v %v", p, ok)
 	}
 	// Ben: zwei Orgs. Erst ein Standard (Alpha, zuerst beigetreten), also geht es.
 	f.mustCall(t, 200, "POST", "/api/knowledge", f.ben, map[string]any{"type": "note", "title": "t", "body": "b",
@@ -196,7 +202,7 @@ func TestProjectsClaimMoveAndImplicitAssignment(t *testing.T) {
 		t.Fatal("refused write left a project")
 	}
 	// Ein Mitglied kann nicht besetzen; ein Owner schon.
-	if code, out := f.call(t, "POST", "/api/projects/claim", f.ben, map[string]any{"remote": "https://github.com/x/three.git", "org": "beta"}); code != 403 || out["code"] != "not_org_owner" {
+	if code, out := f.call(t, "POST", "/api/projects/claim", f.anna, map[string]any{"remote": "https://github.com/x/three.git", "org": "alpha"}); code != 403 || out["code"] != "not_org_owner" {
 		t.Fatalf("claim by a plain member: %d %v", code, out)
 	}
 	if _, ok := f.st.ProjectByRemote("github.com/x/three"); ok {
@@ -228,7 +234,7 @@ func TestProjectsClaimMoveAndImplicitAssignment(t *testing.T) {
 	f.mustCall(t, 200, "POST", "/api/sessions", f.robin, map[string]any{"harness": "claude-code", "external_id": "own", "scope": map[string]any{"project": "github.com/x/three", "machine": "robinbox"}})
 	// Fremdes Projekt beanspruchen: 409. Verschieben: nur Owner beider Orgs.
 	f.mustCall(t, 409, "POST", "/api/projects/claim", f.carl, map[string]any{"remote": "github.com/x/three"})
-	f.mustCall(t, 403, "POST", "/api/projects/move", f.ben, map[string]any{"remote": "github.com/x/three", "org": "alpha"})
+	f.mustCall(t, 403, "POST", "/api/projects/move", f.anna, map[string]any{"remote": "github.com/x/three", "org": "alpha"})
 	out = f.mustCall(t, 200, "POST", "/api/projects/move", f.robin, map[string]any{"remote": "github.com/x/three", "org": "alpha"})
 	if out["org"] != "alpha" {
 		t.Fatalf("move: %v", out)
