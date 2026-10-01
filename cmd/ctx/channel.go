@@ -123,6 +123,7 @@ const channelInstructions = `Messages from other agents and people arrive as <ch
 	`send with a mention wakes the recipient: do not use send to thank, confirm or answer (use reply for an answer, or nothing at all). ` +
 	`Answers to your own requests reach you without polling. ` +
 	`Answer a message with the reply tool, passing meta message_id and your text, only when an answer is actually needed: a question, a request, an assignment. ` +
+	`A reply without intent wakes nobody when it answers a reply. If you need something from the other agent again after an answer (for example a re-review after a fix), use reply with intent question or handoff, or send with a mention; a reply with such an intent counts against the same send limit as send with a mention. ` +
 	`Do NOT reply to answers, acknowledgements or thanks: replying to a reply starts a loop between agents. ` +
 	`Likewise do not run chains of follow-up questions with another agent when nothing has progressed. ` +
 	`Plain chat does not reach the sender. A channel message was handed to you once and is not repeated by coord_inbox.`
@@ -170,6 +171,7 @@ type channelReplyInput struct {
 	MessageID string `json:"message_id" jsonschema:"the message_id from the channel tag you are answering"`
 	Text      string `json:"text" jsonschema:"your answer"`
 	Room      string `json:"room,omitempty" jsonschema:"the room from the channel tag; only needed if this channel process was restarted since the message arrived"`
+	Intent    string `json:"intent,omitempty" jsonschema:"question, approval, blocker, handoff or ack; the first four wake the sender of the message you answer, so use one only when you need something from them again (for example a re-review after a fix); without intent the reply wakes nobody"`
 }
 
 type channelSendInput struct {
@@ -201,7 +203,7 @@ func runChannel(ctx context.Context, cfg channelConfig) error {
 	}
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "reply",
-		Description: "Answer a ghosttree channel message. Pass the message_id from the <channel> tag and your text. The reply goes to the same room or direct conversation and marks the message as answered.",
+		Description: "Answer a ghosttree channel message. Pass the message_id from the <channel> tag and your text. The reply goes to the same room or direct conversation and marks the message as answered. A plain reply to a reply wakes nobody; set intent question, approval, blocker or handoff when you need something from the sender again (it counts against the send limit).",
 	}, cs.handleReply)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "send",
@@ -253,8 +255,8 @@ func runChannel(ctx context.Context, cfg channelConfig) error {
 	return nil
 }
 
-// Sendegrenze von send je Channel-Prozess: gezählt werden gespeicherte
-// Nachrichten mit Mention, denn nur sie wecken. Ohne sie könnten zwei Agenten
+// Sendegrenze von send und reply je Channel-Prozess: gezählt werden gespeicherte
+// Nachrichten mit Mention oder Attention-Intent, denn nur sie wecken. Ohne sie könnten zwei Agenten
 // sich per send endlos wecken; das Empfangsbudget (hookbudget.CoordLimit,
 // 12000 Zeichen je 5 Minuten) greift bei kurzen Nachrichten erst nach
 // Hunderten Weckrufen. Startwerte, keine gemessenen Größen.
@@ -316,6 +318,23 @@ type channelTools struct {
 	machineRoom string
 }
 
+func (c *channelTools) clock() time.Time {
+	if c.now != nil {
+		return c.now()
+	}
+	return time.Now()
+}
+
+// checkLimit prüft die gemeinsame Sendegrenze von send mit Mention und reply
+// mit Attention-Intent.
+func (c *channelTools) checkLimit() error {
+	if ok, wait := c.limiter.check(c.clock()); !ok {
+		return fmt.Errorf("send limit reached (%d mentions per minute, %d per %d minutes): wait about %d seconds, answer with a plain reply instead, or do not send; sending more will not help",
+			sendMentionsPerMinute, sendMentionsPerQuarter, int(sendQuarterWindow/time.Minute), int(wait.Seconds())+1)
+	}
+	return nil
+}
+
 func (c *channelTools) join(roomKey string) error {
 	_, err := c.client.RegisterCoordAgent(store.CoordAgent{
 		ExternalID: c.self, Provider: "claude", RoomKey: roomKey,
@@ -346,6 +365,18 @@ func (c *channelTools) handleReply(ctx context.Context, _ *mcp.CallToolRequest, 
 	if err != nil || id <= 0 {
 		return nil, nil, fmt.Errorf("message_id must be the number from the channel tag")
 	}
+	intent := strings.ToLower(strings.TrimSpace(in.Intent))
+	if intent != "" && !sendIntents[intent] {
+		return nil, nil, fmt.Errorf("unknown intent %q: use question, approval, blocker, handoff or ack", in.Intent)
+	}
+	// Ein reply mit Attention-Intent weckt den Adressaten und zählt deshalb
+	// gegen dieselbe Grenze wie send mit Mention.
+	wakes := intent != "" && intent != store.IntentAck
+	if wakes {
+		if err := c.checkLimit(); err != nil {
+			return nil, nil, err
+		}
+	}
 	info, ok := c.rec.lookup(id)
 	if !ok {
 		if strings.TrimSpace(in.Room) == "" {
@@ -361,7 +392,7 @@ func (c *channelTools) handleReply(ctx context.Context, _ *mcp.CallToolRequest, 
 	}
 	msg := store.CoordMessage{
 		DestinationKind: store.DestinationRoom, DestinationID: info.room,
-		SenderExternalID: c.self, Body: in.Text, ReplyTo: id,
+		SenderExternalID: c.self, Body: in.Text, ReplyTo: id, Intent: intent,
 		CausationID: info.originEventID,
 	}
 	if msg.CausationID == "" {
@@ -382,11 +413,14 @@ func (c *channelTools) handleReply(ctx context.Context, _ *mcp.CallToolRequest, 
 	// der Server die Antwort (derselbe Absender mit derselben ClientID) und nur
 	// das Acken wird nachgeholt. Ein anderer Text ist eine neue Nachricht;
 	// "ich schau es mir an" und das Ergebnis danach sind zwei Antworten.
-	digest := sha256.Sum256([]byte("channel-reply\x00" + c.self + "\x00" + strconv.FormatInt(id, 10) + "\x00" + in.Text))
+	digest := sha256.Sum256([]byte("channel-reply\x00" + c.self + "\x00" + strconv.FormatInt(id, 10) + "\x00" + intent + "\x00" + in.Text))
 	msg.ClientID = hex.EncodeToString(digest[:12])
 	replyID, err := c.client.SendCoordMessage(msg)
 	if err != nil {
 		return nil, nil, err
+	}
+	if wakes {
+		c.limiter.record(c.clock())
 	}
 	if err := c.client.MarkCoordDelivery(id, c.self, store.DeliveryAcked); err != nil {
 		return nil, nil, fmt.Errorf("reply stored as message %d, but marking message %d answered failed: %w", replyID, id, err)
@@ -447,14 +481,9 @@ func (c *channelTools) handleSend(_ context.Context, _ *mcp.CallToolRequest, in 
 	if intent != "" && intent != store.IntentAck && len(mentions) == 0 {
 		return nil, nil, fmt.Errorf("intent %s needs a mention: say which agent should answer", intent)
 	}
-	now := time.Now
-	if c.now != nil {
-		now = c.now
-	}
 	if len(mentions) > 0 {
-		if ok, wait := c.limiter.check(now()); !ok {
-			return nil, nil, fmt.Errorf("send limit reached (%d mentions per minute, %d per %d minutes): wait about %d seconds, answer with reply instead, or do not send; sending more will not help",
-				sendMentionsPerMinute, sendMentionsPerQuarter, int(sendQuarterWindow/time.Minute), int(wait.Seconds())+1)
+		if err := c.checkLimit(); err != nil {
+			return nil, nil, err
 		}
 	}
 	if err := c.join(room); err != nil {
@@ -478,7 +507,7 @@ func (c *channelTools) handleSend(_ context.Context, _ *mcp.CallToolRequest, in 
 	}
 	c.sentIDs.Store(clientID, id)
 	if len(mentions) > 0 {
-		c.limiter.record(now())
+		c.limiter.record(c.clock())
 	}
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{
 		Text: fmt.Sprintf("stored as message %d in %s. It wakes a mentioned agent only if that agent runs the ghosttree channel; otherwise it sees it when it reads its inbox.", id, room),

@@ -198,9 +198,12 @@ agent that asked when its original message was a request: a message with the
 intent `question`, `approval`, `blocker` or `handoff`, or a message that is not
 itself a reply and mentions the replier by name (the mention `reply` adds
 automatically does not count). A reply to a reply, such as a thanks, does not
-wake, so a chain ends after one answer. In direct and group rooms, which have no mentions, any plain message counts as
-a request. `send` accepts at most 10 messages with a mention per minute and 30
-per 15 minutes per channel process and refuses beyond that; the receiving
+wake, so a chain ends after one answer. To ask again after an answer (for
+example a re-review after a fix), call `reply` with `intent` set to `question`,
+`approval`, `blocker` or `handoff`, or use `send` with a mention; a `reply`
+without intent wakes nobody. In direct and group rooms, which have no mentions, any plain message counts as
+a request. `send` with a mention and `reply` with an attention intent accept at most 10 messages per minute and 30
+per 15 minutes per channel process and refuse beyond that; the receiving
 session also has a coordination budget of 12000 characters per 5 minutes, which
 short messages exhaust only late. `<channel` in message text is rewritten to
 `&lt;channel` so a body cannot imitate a channel event. The limits are
