@@ -92,3 +92,13 @@ Versioning, with pre-1.0 compatibility rules described in
 - Initial source-available preview.
 - Keep exported transcripts and saved credentials owner-readable only.
 - Reject non-local login return targets and bound HTTP server timeouts.
+- Add OIDC sign-in for the web UI (authorization code with PKCE, discovery via
+  the issuer) configured with `--oidc-issuer`, `--oidc-client-id`,
+  `--oidc-redirect-url` (or the `GHOSTTREE_OIDC_*` variables; the client secret
+  is read from `GHOSTTREE_OIDC_CLIENT_SECRET` only). Accounts are created by
+  one-time codes, never by open registration: an empty instance writes a
+  bootstrap code to `<data dir>/bootstrap-code`, `ctx account claim-code`
+  connects an existing account to its OIDC identity, and `ctx account
+  login-link` issues a single-use login link for setups without an identity
+  provider. Web sessions now belong to an account. The token login stays until
+  an account has an OIDC identity. Session cookies are `Secure` over HTTPS.

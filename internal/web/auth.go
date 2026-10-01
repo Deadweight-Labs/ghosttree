@@ -75,7 +75,7 @@ func (a *app) requirePerson(next http.Handler) http.Handler {
 				// Neustart.
 				if !a.store.PrincipalValid(session.principal) {
 					a.sessions.remove(cookie.Value)
-					http.SetCookie(w, &http.Cookie{Name: sessionCookie, Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+					http.SetCookie(w, &http.Cookie{Name: sessionCookie, Path: "/", MaxAge: -1, HttpOnly: true, Secure: a.secureCookies(r), SameSite: http.SameSiteLaxMode})
 					http.Redirect(w, r, "/ui/login", http.StatusSeeOther)
 					return
 				}
@@ -158,33 +158,110 @@ func validForwardedHost(host string) bool {
 	u, err := url.Parse("https://" + host)
 	return err == nil && u.Host == host && u.Path == "" && u.RawQuery == "" && u.Fragment == ""
 }
+
+// pasteLoginAllowed regelt den Token-Login der Weboberfläche. Ohne OIDC bleibt
+// er wie bisher. Mit OIDC bleibt er, bis irgendein Konto eine Identität hat:
+// sonst sperrte sich eine bestehende Instanz aus, bevor jemand sein Konto per
+// Claim-Code verbunden hat.
+func (a *app) pasteLoginAllowed() bool {
+	return a.oidc == nil || !a.store.HasIdentities()
+}
+
+func (a *app) loginData(title, errMsg string) pageData {
+	return pageData{Title: title, Error: errMsg, OIDC: a.oidc != nil, Paste: a.pasteLoginAllowed()}
+}
 func (a *app) loginPage(w http.ResponseWriter, r *http.Request) {
-	a.render(w, "login", pageData{Title: "Login"})
+	a.render(w, "login", a.loginData("Login", ""))
 }
 func (a *app) loginSubmit(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "invalid form", http.StatusBadRequest)
+	if !parseLoginForm(w, r) {
+		return
+	}
+	if !a.pasteLoginAllowed() {
+		a.loginMessage(w, http.StatusForbidden, "Token login is disabled", "Sign in with your identity provider, or ask the operator for a one-time login link.")
 		return
 	}
 	principal, ok := a.store.AuthenticatePrincipal(r.FormValue("token"))
 	if !ok {
-		a.render(w, "login", pageData{Title: "Login", Error: "Invalid token"})
+		a.render(w, "login", a.loginData("Login", "Invalid token"))
 		return
+	}
+	a.startSession(w, r, principal)
+}
+
+// finishLogin startet eine Websitzung für ein Konto, ohne Token. Die Sitzung
+// gilt, solange das Konto aktiv ist (TokenKind "web").
+func (a *app) finishLogin(w http.ResponseWriter, r *http.Request, account store.Account) {
+	a.startSession(w, r, store.Principal{ID: account.ID, Label: account.Name, TokenKind: store.WebSessionKind})
+}
+
+// startSession vergibt immer eine neue Sitzungs-ID und verwirft eine
+// mitgebrachte (keine Session-Fixation).
+func (a *app) startSession(w http.ResponseWriter, r *http.Request, principal store.Principal) {
+	if old, err := r.Cookie(sessionCookie); err == nil {
+		a.sessions.remove(old.Value)
 	}
 	id, err := a.sessions.create(principal)
 	if err != nil {
 		http.Error(w, "could not create secure session", http.StatusInternalServerError)
 		return
 	}
-	// Secure is intentionally omitted because the supported private network deployment
-	// currently serves plain HTTP. HttpOnly and SameSite still constrain access.
-	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: id, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: 30 * 24 * 60 * 60})
+	// Secure folgt der Anfrage: die unterstützte private Netz-Bereitstellung
+	// spricht Klartext-HTTP, hinter TLS oder mit https-Redirect-URL ist es gesetzt.
+	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: id, Path: "/", HttpOnly: true,
+		Secure: a.secureCookies(r), SameSite: http.SameSiteLaxMode, MaxAge: 30 * 24 * 60 * 60})
 	http.Redirect(w, r, "/ui/requests", http.StatusSeeOther)
+}
+
+// codePage zeigt für einen Login-Link erst eine Bestätigung. Das Einlösen
+// geschieht per POST: Mail- und Chat-Vorschauen rufen Links per GET ab und
+// würden sonst den Einmal-Code verbrauchen.
+func (a *app) codePage(w http.ResponseWriter, r *http.Request) {
+	code := strings.TrimSpace(r.URL.Query().Get("code"))
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	data := a.loginData("One-time code", "")
+	data.Code = code
+	data.NeedsName = code != "" && a.store.CodeKindFor(code) == store.CodeBootstrap
+	a.render(w, "logincode", data)
+}
+func (a *app) codeSubmit(w http.ResponseWriter, r *http.Request) {
+	if !parseLoginForm(w, r) {
+		return
+	}
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	code := strings.TrimSpace(r.FormValue("code"))
+	if len(code) > maxCodeLength || len(r.FormValue("name")) > maxNameLength {
+		http.Error(w, "field too long", http.StatusBadRequest)
+		return
+	}
+	var account store.Account
+	var err error
+	switch a.store.CodeKindFor(code) {
+	case store.CodeBootstrap:
+		if a.oidc != nil {
+			a.loginMessage(w, http.StatusForbidden, "Use the identity provider",
+				"On an instance with OIDC the bootstrap code is entered in the code field of the OIDC sign-in.")
+			return
+		}
+		if account, err = a.store.BootstrapLocal(code, r.FormValue("name")); err == nil {
+			a.dropBootstrapFile()
+		}
+	case store.CodeLogin:
+		account, err = a.store.RedeemLoginLink(code)
+	default:
+		err = store.ErrCodeInvalid
+	}
+	if err != nil {
+		a.identityRejected(w, err)
+		return
+	}
+	a.finishLogin(w, r, account)
 }
 func (a *app) logout(w http.ResponseWriter, r *http.Request) {
 	if cookie, err := r.Cookie(sessionCookie); err == nil {
 		a.sessions.remove(cookie.Value)
 	}
-	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Path: "/", MaxAge: -1, HttpOnly: true, Secure: a.secureCookies(r), SameSite: http.SameSiteLaxMode})
 	http.Redirect(w, r, "/ui/login", http.StatusSeeOther)
 }

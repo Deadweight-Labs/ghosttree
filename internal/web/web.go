@@ -22,21 +22,24 @@ var files embed.FS
 var pages = template.Must(template.ParseFS(files, "templates/*.html"))
 
 type app struct {
-	store    *store.Store
-	sessions *sessions
+	store         *store.Store
+	sessions      *sessions
+	oidc          *oidcClient
+	bootstrapFile string
 }
 type pageData struct {
-	Title, NavSection, Person, CSRFToken, Error string
-	Requests                                    []requestdomain.SearchHit
-	Request                                     requestdomain.Detail
-	RequestThreads                              []coordThreadView
-	Knowledge                                   []store.Knowledge
-	Sessions                                    []store.Session
-	Chunks                                      []store.Chunk
-	SessionID                                   int64
-	Project, Preview                            string
-	Review                                      []reviewEntry
-	Coord                                       coordPageView
+	Title, NavSection, Person, CSRFToken, Error, Code string
+	OIDC, Paste, NeedsName                            bool
+	Requests                                          []requestdomain.SearchHit
+	Request                                           requestdomain.Detail
+	RequestThreads                                    []coordThreadView
+	Knowledge                                         []store.Knowledge
+	Sessions                                          []store.Session
+	Chunks                                            []store.Chunk
+	SessionID                                         int64
+	Project, Preview                                  string
+	Review                                            []reviewEntry
+	Coord                                             coordPageView
 }
 type reviewEntry struct {
 	Knowledge         store.Knowledge
@@ -45,12 +48,29 @@ type reviewEntry struct {
 	Recurrence        int
 }
 
-func New(st *store.Store) http.Handler {
+func New(st *store.Store, opts ...Option) http.Handler {
+	return newApp(st, opts...)
+}
+
+// appHandler gibt Tests Zugriff auf den app-Zustand hinter dem Handler.
+type appHandler struct {
+	http.Handler
+	app *app
+}
+
+func newApp(st *store.Store, opts ...Option) http.Handler {
 	a := &app{store: st, sessions: newSessions()}
+	for _, opt := range opts {
+		opt(a)
+	}
 	mux := http.NewServeMux()
 	mux.Handle("GET /static/", http.FileServerFS(files))
 	mux.HandleFunc("GET /ui/login", a.loginPage)
 	mux.Handle("POST /ui/login", requireSameOrigin(http.HandlerFunc(a.loginSubmit)))
+	mux.Handle("POST /ui/login/oidc", requireSameOrigin(http.HandlerFunc(a.oidcStart)))
+	mux.HandleFunc("GET /ui/login/oidc/callback", a.oidcCallback)
+	mux.HandleFunc("GET /ui/login/code", a.codePage)
+	mux.Handle("POST /ui/login/code", requireSameOrigin(http.HandlerFunc(a.codeSubmit)))
 	mux.Handle("POST /ui/logout", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.logout))))
 	mux.Handle("GET /ui/requests", a.requirePerson(http.HandlerFunc(a.requestsPage)))
 	mux.Handle("GET /ui/requests/{id}", a.requirePerson(http.HandlerFunc(a.requestPage)))
@@ -76,7 +96,7 @@ func New(st *store.Store) http.Handler {
 	mux.Handle("POST /ui/coord/group/update", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordUpdateGroup))))
 	mux.Handle("POST /ui/coord/group/leave", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordLeaveGroup))))
 	mux.HandleFunc("GET /ui/{$}", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/ui/requests", http.StatusSeeOther) })
-	return mux
+	return &appHandler{Handler: mux, app: a}
 }
 
 func (a *app) render(w http.ResponseWriter, name string, data pageData) {

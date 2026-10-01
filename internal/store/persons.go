@@ -18,6 +18,11 @@ type Principal struct {
 	Machine   string `json:"machine,omitempty"`
 }
 
+// WebSessionKind kennzeichnet einen Principal einer Websitzung, die aus einem
+// Login (OIDC oder Code) entstand und kein Token hat. Er entsteht nur
+// serverseitig, nie aus einer Anfrage.
+const WebSessionKind = "web"
+
 func newToken() (token, hash string, err error) {
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {

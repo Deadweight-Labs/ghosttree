@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/privatefile"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/server"
 	"github.com/Deadweight-Labs/ghosttree/internal/snapshot"
@@ -29,7 +30,15 @@ type serveConfig struct {
 	SnapshotLimits snapshot.Limits
 	SnapshotRoots  map[string]string
 	Writer         store.WriterConfig
+	OIDC           web.OIDCConfig
 }
+
+const (
+	envOIDCIssuer       = "GHOSTTREE_OIDC_ISSUER"
+	envOIDCClientID     = "GHOSTTREE_OIDC_CLIENT_ID"
+	envOIDCClientSecret = "GHOSTTREE_OIDC_CLIENT_SECRET"
+	envOIDCRedirectURL  = "GHOSTTREE_OIDC_REDIRECT_URL"
+)
 
 type snapshotRootValues []string
 
@@ -82,12 +91,20 @@ func parseServeConfig(args []string, output io.Writer) (serveConfig, error) {
 	fs.Int64Var(&cfg.SnapshotLimits.MaxProjectLogicalBytes, "snapshot-max-project-bytes", limits.MaxProjectLogicalBytes, "maximum logical snapshot bytes per project")
 	fs.Int64Var(&cfg.SnapshotLimits.MaxSnapshotsPerStore, "snapshot-max-store-count", limits.MaxSnapshotsPerStore, "maximum snapshots in the store")
 	fs.Int64Var(&cfg.SnapshotLimits.MaxStoreLogicalBytes, "snapshot-max-store-bytes", limits.MaxStoreLogicalBytes, "maximum logical snapshot bytes in the store")
+	fs.StringVar(&cfg.OIDC.Issuer, "oidc-issuer", os.Getenv(envOIDCIssuer), "OIDC issuer URL, e.g. https://id.example.com (env "+envOIDCIssuer+")")
+	fs.StringVar(&cfg.OIDC.ClientID, "oidc-client-id", os.Getenv(envOIDCClientID), "OIDC client id (env "+envOIDCClientID+")")
+	fs.StringVar(&cfg.OIDC.RedirectURL, "oidc-redirect-url", os.Getenv(envOIDCRedirectURL), "OIDC redirect URL, https://<public host>/ui/login/oidc/callback (env "+envOIDCRedirectURL+")")
+	// Das Secret gibt es bewusst nur über die Umgebung: ein Flag stünde in der Prozessliste.
+	cfg.OIDC.ClientSecret = os.Getenv(envOIDCClientSecret)
 	fs.Var(&roots, "snapshot-root", "project mirror root as PROJECT=ABSOLUTE_PATH; repeatable")
 	if err := fs.Parse(args); err != nil {
 		return serveConfig{}, err
 	}
 	if fs.NArg() != 0 {
 		return serveConfig{}, fmt.Errorf("unexpected arguments: %s", strings.Join(fs.Args(), " "))
+	}
+	if err := cfg.OIDC.Validate(); err != nil {
+		return serveConfig{}, err
 	}
 	if err := validateSnapshotLimits(cfg.SnapshotLimits); err != nil {
 		return serveConfig{}, err
@@ -182,6 +199,10 @@ func runServer(ctx context.Context, st *store.Store, cfg serveConfig, stdout, st
 		fmt.Fprintf(stdout, "apply knowledge staleness: %v\n", err)
 		return 1
 	}
+	if err := prepareBootstrapCode(st, cfg.DB, stdout); err != nil {
+		fmt.Fprintf(stdout, "bootstrap code: %v\n", err)
+		return 1
+	}
 	if ctx.Err() != nil {
 		return 0
 	}
@@ -208,8 +229,39 @@ func buildServerHandler(st *store.Store, cfg serveConfig, stderr io.Writer) http
 	apiHandler := server.New(st, options...)
 	root.Handle("/api/", apiHandler)
 	root.Handle("/metrics", apiHandler)
-	root.Handle("/", web.New(st))
+	webOptions := []web.Option{web.WithBootstrapFile(bootstrapCodePath(cfg.DB))}
+	if cfg.OIDC.Enabled() {
+		webOptions = append(webOptions, web.WithOIDC(cfg.OIDC))
+	}
+	root.Handle("/", web.New(st, webOptions...))
 	return root
+}
+
+func bootstrapCodePath(db string) string {
+	return filepath.Join(filepath.Dir(db), "bootstrap-code")
+}
+
+// prepareBootstrapCode legt auf einer leeren Instanz einen Bootstrap-Code an
+// und schreibt ihn in <Datenverzeichnis>/bootstrap-code (0600). Der Pfad wird
+// einmal gemeldet, der Code nie. Auf einer Instanz mit Konten bleibt keine
+// alte Datei liegen.
+func prepareBootstrapCode(st *store.Store, db string, stdout io.Writer) error {
+	path := bootstrapCodePath(db)
+	code, ok, err := st.EnsureBootstrapCode()
+	if err != nil {
+		return err
+	}
+	if !ok {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	if err := privatefile.Write(path, []byte(code+"\n")); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "empty instance: one-time bootstrap code written to %s (valid %s); present it on the sign-in page to create the first account\n", path, store.BootstrapCodeTTL)
+	return nil
 }
 
 type rootedSnapshotMirror struct {
