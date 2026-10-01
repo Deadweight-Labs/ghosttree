@@ -396,3 +396,60 @@ func TestOperatorSectionsUseStoredData(t *testing.T) {
 		t.Errorf("review omitted migration proof: %s", got)
 	}
 }
+
+func TestWebSessionEndsWhenTokenOrAccountStopsBeingValid(t *testing.T) {
+	srv, st, _ := testWeb(t)
+	st.AddAccount("bob", "", false)
+	status := func(c *http.Client) (int, string) {
+		resp, err := c.Get(srv.URL + "/ui/requests")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode, resp.Header.Get("Location")
+	}
+	issue := func(spec store.TokenSpec) (*http.Client, int64) {
+		token, info, err := st.CreateToken("bob", spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return login(t, srv, token), info.ID
+	}
+
+	valid, _ := issue(store.TokenSpec{})
+	for i := 0; i < 2; i++ {
+		if code, _ := status(valid); code != http.StatusOK {
+			t.Fatalf("valid session request %d: %d", i, code)
+		}
+	}
+
+	revoked, id := issue(store.TokenSpec{})
+	if code, _ := status(revoked); code != http.StatusOK {
+		t.Fatalf("before revoke: %d", code)
+	}
+	if err := st.RevokeToken(id); err != nil {
+		t.Fatal(err)
+	}
+	if code, loc := status(revoked); code != http.StatusSeeOther || loc != "/ui/login" {
+		t.Fatalf("revoked session: %d %q", code, loc)
+	}
+
+	expiring, id := issue(store.TokenSpec{})
+	if _, err := st.DB().Exec(`UPDATE api_tokens SET expires_at='2020-01-01T00:00:00Z' WHERE id=?`, id); err != nil {
+		t.Fatal(err)
+	}
+	if code, loc := status(expiring); code != http.StatusSeeOther || loc != "/ui/login" {
+		t.Fatalf("expired session: %d %q", code, loc)
+	}
+
+	disabled, _ := issue(store.TokenSpec{})
+	if _, err := st.DB().Exec(`UPDATE persons SET state='disabled' WHERE name='bob'`); err != nil {
+		t.Fatal(err)
+	}
+	if code, loc := status(disabled); code != http.StatusSeeOther || loc != "/ui/login" {
+		t.Fatalf("disabled account session: %d %q", code, loc)
+	}
+	if code, loc := status(valid); code != http.StatusSeeOther || loc != "/ui/login" {
+		t.Fatalf("sibling session of disabled account: %d %q", code, loc)
+	}
+}

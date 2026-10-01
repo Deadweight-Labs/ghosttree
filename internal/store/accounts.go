@@ -77,11 +77,18 @@ func migrateAccounts(db *sql.DB) error {
 		return err
 	}
 	if done == 0 {
-		if _, err := tx.Exec(`UPDATE persons SET is_admin=1 WHERE id=(SELECT MIN(id) FROM persons)`); err != nil {
+		// Ohne Person gibt es keinen Admin zu bestimmen; der Marker bleibt dann
+		// aus, und die erste später angelegte Person wird beim nächsten Öffnen
+		// Admin. Ein späteres Entziehen bleibt wirksam, weil der Marker danach
+		// gesetzt ist.
+		res, err := tx.Exec(`UPDATE persons SET is_admin=1 WHERE id=(SELECT MIN(id) FROM persons)`)
+		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(`INSERT INTO account_migrations(version, migrated_at) VALUES(1,?)`, now()); err != nil {
-			return err
+		if n, _ := res.RowsAffected(); n > 0 {
+			if _, err := tx.Exec(`INSERT INTO account_migrations(version, migrated_at) VALUES(1,?)`, now()); err != nil {
+				return err
+			}
 		}
 	}
 	return tx.Commit()
@@ -108,7 +115,17 @@ func ensurePersonsColumn(db *sql.DB, name, ddl string) error {
 		return err
 	}
 	rows.Close()
-	_, err = db.Exec(`ALTER TABLE persons ADD COLUMN ` + name + ` ` + ddl)
+	return addPersonsColumn(db, name, ddl)
+}
+
+// addPersonsColumn wertet "duplicate column" als Erfolg: öffnen zwei Prozesse
+// gleichzeitig, gewinnt einer das ALTER, und der andere hat sein Ziel ebenfalls
+// erreicht.
+func addPersonsColumn(db *sql.DB, name, ddl string) error {
+	_, err := db.Exec(`ALTER TABLE persons ADD COLUMN ` + name + ` ` + ddl)
+	if err != nil && strings.Contains(err.Error(), "duplicate column") {
+		return nil
+	}
 	return err
 }
 
@@ -289,4 +306,23 @@ func (s *Store) RevokeToken(id int64) error {
 	}
 	_, err := s.db.Exec(`UPDATE api_tokens SET revoked_at=? WHERE id=? AND revoked_at=''`, now(), id)
 	return err
+}
+
+// PrincipalValid sagt, ob das Token und das Konto des Principals noch gelten.
+// Langlebige Sitzungen (Web) prüfen damit bei jeder Anfrage nach, statt dem
+// Login-Zeitpunkt zu glauben. Nur Lesen.
+func (s *Store) PrincipalValid(p Principal) bool {
+	if s.reader != nil {
+		return s.reader.PrincipalValid(p)
+	}
+	account, err := parsePersonPrincipalID(p.ID)
+	if err != nil || p.TokenID == 0 {
+		return false
+	}
+	var one int
+	err = s.db.QueryRow(`SELECT 1 FROM api_tokens t JOIN persons p ON p.id = t.account_id
+		WHERE t.id = ? AND t.account_id = ? AND t.revoked_at = ''
+		  AND (t.expires_at = '' OR t.expires_at > ?) AND p.state = 'active'`,
+		p.TokenID, account, now()).Scan(&one)
+	return err == nil
 }

@@ -235,3 +235,61 @@ func TestUnknownAndEmptyTokenAreRejected(t *testing.T) {
 		}
 	}
 }
+
+func TestAddPersonsColumnToleratesDuplicate(t *testing.T) {
+	s := openTest(t)
+	if err := addPersonsColumn(s.DB(), "email", `TEXT NOT NULL DEFAULT ''`); err != nil {
+		t.Fatalf("duplicate column must count as success: %v", err)
+	}
+	if err := addPersonsColumn(s.DB(), "extra", `)(`); err == nil {
+		t.Fatal("other ALTER errors must surface")
+	}
+}
+
+func TestAdminMigrationWaitsForFirstPerson(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fresh.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	s, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddAccount("first", "", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddAccount("second", "", false); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	s, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if a, _ := s.AccountByName("first"); !a.Admin {
+		t.Fatalf("first person must become admin: %+v", a)
+	}
+	if a, _ := s.AccountByName("second"); a.Admin {
+		t.Fatalf("second person must not: %+v", a)
+	}
+}
+
+func TestPrincipalValidFollowsTokenAndAccount(t *testing.T) {
+	s := openTest(t)
+	s.AddAccount("alice", "", false)
+	token, info, _ := s.CreateToken("alice", TokenSpec{})
+	p, _ := s.AuthenticatePrincipal(token)
+	if !s.PrincipalValid(p) {
+		t.Fatal("fresh principal invalid")
+	}
+	if s.PrincipalValid(Principal{ID: "person:2", TokenID: info.ID}) {
+		t.Fatal("token of another account must not validate")
+	}
+	s.RevokeToken(info.ID)
+	if s.PrincipalValid(p) {
+		t.Fatal("revoked token still valid")
+	}
+}

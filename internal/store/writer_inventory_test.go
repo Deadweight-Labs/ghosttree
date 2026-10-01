@@ -16,6 +16,7 @@ var writerMethodClasses = map[string]string{
 	"AddCriterion":                  "write",
 	"AddEvidence":                   "write",
 	"AddPerson":                     "write",
+	"PrincipalValid":                "read",
 	"AddAccount":                    "write",
 	"CreateToken":                   "write",
 	"RevokeToken":                   "write",
