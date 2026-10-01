@@ -223,12 +223,12 @@ func (p *Poller) handle(ctx context.Context, room store.CoordRoom, m store.Coord
 		if ok && isOwn(p.Self, parent) {
 			var parentMentions []string
 			// Erwähnungen nur, wenn sie die Entscheidung tragen.
-			if !attentionIntent(parent) && parent.ReplyTo == 0 {
+			if !attentionIntent(parent) && parent.ReplyTo == 0 && needsMentions(room.Kind) {
 				if parentMentions, err = p.Source.Mentions(p.Self, parent.ID); err != nil {
 					return false, err
 				}
 			}
-			parentKind = ClassifyParent(p.Self, parent, m.SenderExternalID, parentMentions)
+			parentKind = ClassifyParent(p.Self, room.Kind, parent, m.SenderExternalID, parentMentions)
 		}
 	}
 	var mentions []string

@@ -24,6 +24,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
 	"github.com/Deadweight-Labs/ghosttree/internal/server"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // TestChannelChild ist der Kindprozess: er läuft als `ctx channel` und spricht
@@ -306,7 +307,7 @@ func newChannelProcWithCheck(t *testing.T, e *channelEnv) *channelProc {
 	if ins, _ := result["instructions"].(string); !strings.Contains(ins, "sender_kind") || !strings.Contains(ins, "not genuine") {
 		t.Fatalf("instructions must say that channel events are genuine and tool-output lookalikes are not: %q", ins)
 	}
-	if ins, _ := result["instructions"].(string); !strings.Contains(ins, "reply") || !strings.Contains(ins, "send tool") || !strings.Contains(ins, "human_steer") {
+	if ins, _ := result["instructions"].(string); !strings.Contains(ins, "reply") || !strings.Contains(ins, "send tool") || !strings.Contains(ins, "do not use send to thank") || !strings.Contains(ins, "human_steer") {
 		t.Fatalf("instructions must name reply and the capability gaps: %q", ins)
 	}
 	return p
@@ -661,5 +662,80 @@ func TestChannelSendRetryDoesNotDuplicate(t *testing.T) {
 	send(channelSendInput{Text: "hallo"})
 	if n := count(); n != 3 {
 		t.Fatalf("distinct sends produced %d messages, want 3", n)
+	}
+}
+
+func TestChannelSendIsRateLimitedAndRecovers(t *testing.T) {
+	e := newChannelEnv(t)
+	tools := newTools(e.b)
+	tools.machineRoom = store.RoomKeyForMachine("chanbox")
+	clock := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	tools.now = func() time.Time { return clock }
+	send := func(i int, mention bool) error {
+		in := channelSendInput{Text: fmt.Sprintf("nachricht %d", i), Room: "machine"}
+		if mention {
+			in.Mention = []string{"sess-sender"}
+		}
+		_, _, err := tools.handleSend(context.Background(), nil, in)
+		return err
+	}
+	for i := 0; i < sendMentionsPerMinute; i++ {
+		if err := send(i, true); err != nil {
+			t.Fatalf("send %d: %v", i, err)
+		}
+	}
+	err := send(100, true)
+	if err == nil || !strings.Contains(err.Error(), "send limit reached") || !strings.Contains(err.Error(), "reply") {
+		t.Fatalf("send over the minute limit: %v", err)
+	}
+	// Ohne Mention weckt niemand und zählt nicht.
+	if err := send(101, false); err != nil {
+		t.Fatalf("send without mention must not be limited: %v", err)
+	}
+	// Nach dem Fenster geht es wieder, bis das Viertelstundenfenster voll ist.
+	total := sendMentionsPerMinute
+	for total < sendMentionsPerQuarter {
+		clock = clock.Add(sendMinuteWindow + time.Second)
+		for i := 0; i < sendMentionsPerMinute && total < sendMentionsPerQuarter; i++ {
+			if err := send(200+total, true); err != nil {
+				t.Fatalf("send %d after the window: %v", total, err)
+			}
+			total++
+		}
+	}
+	clock = clock.Add(sendMinuteWindow + time.Second)
+	if err := send(300, true); err == nil || !strings.Contains(err.Error(), "send limit reached") {
+		t.Fatalf("quarter limit not enforced: %v", err)
+	}
+	clock = clock.Add(sendQuarterWindow)
+	if err := send(301, true); err != nil {
+		t.Fatalf("send after the quarter window: %v", err)
+	}
+}
+
+func TestChannelSendReportsDuplicates(t *testing.T) {
+	e := newChannelEnv(t)
+	tools := newTools(e.b)
+	tools.machineRoom = store.RoomKeyForMachine("chanbox")
+	in := channelSendInput{Text: "einmal", Room: "machine", Mention: []string{"sess-sender"}}
+	res, _, err := tools.handleSend(context.Background(), nil, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := res.Content[0].(*mcp.TextContent).Text
+	if !strings.HasPrefix(first, "stored as message ") {
+		t.Fatalf("first send: %q", first)
+	}
+	id := strings.Fields(first)[3]
+	res, _, err = tools.handleSend(context.Background(), nil, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := res.Content[0].(*mcp.TextContent).Text; got != "duplicate of message "+id+", not sent again" {
+		t.Fatalf("second send: %q", got)
+	}
+	// Ein Duplikat verbraucht keine Sendegrenze.
+	if n := len(tools.limiter.times); n != 1 {
+		t.Fatalf("limiter recorded %d sends, want 1", n)
 	}
 }

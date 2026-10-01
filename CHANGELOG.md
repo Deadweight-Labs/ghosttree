@@ -25,6 +25,9 @@ Versioning, with pre-1.0 compatibility rules described in
 - Tell Claude in the channel instructions that `<channel>` events are genuine
   requests from the coordination room, and add `sender_kind` (human or agent)
   to their meta.
+- Bound channel `send` (10 mentions per minute, 30 per 15 minutes), treat plain
+  direct and group messages as requests that a reply wakes, report duplicate
+  sends, and neutralize `<channel` tags inside message text.
 - Serialize runtime writes through a bounded queue while keeping reads on an
   independent connection pool. Batch pending session chunks, report retryable
   saturation errors, expose writer metrics, and drain accepted writes on shutdown.

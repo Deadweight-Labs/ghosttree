@@ -74,16 +74,21 @@ const (
 //
 // Eine Anfrage ist eine Nachricht mit Attention-Intent (Frage, Freigabe,
 // Blocker, Übergabe) oder eine Nachricht, die selbst keine Antwort ist und den
-// Antwortenden ausdrücklich erwähnt. Das reply-Tool erwähnt in Raumverkehr den
+// Antwortenden ausdrücklich erwähnt. In Direkt- und Gruppenräumen gibt es keine
+// Erwähnungen; dort ist jede eigene Nachricht, die selbst keine Antwort ist,
+// eine Anfrage. Das reply-Tool erwähnt in Raumverkehr den
 // Absender automatisch; diese Erwähnung steht immer an einer Antwort und macht
 // sie deshalb nie zur Anfrage. So bleibt der Schleifenschutz: eine Antwort auf
 // eine Antwort (etwa ein Dank) weckt nicht, und eine Kette endet nach einer
 // Antwort.
-func ClassifyParent(self string, parent store.CoordMessage, replier string, parentMentions []string) ParentKind {
+func ClassifyParent(self, roomKind string, parent store.CoordMessage, replier string, parentMentions []string) ParentKind {
 	if !isOwn(self, parent) {
 		return ParentNotOwn
 	}
 	if attentionIntent(parent) {
+		return ParentOwnRequest
+	}
+	if parent.ReplyTo == 0 && !needsMentions(roomKind) {
 		return ParentOwnRequest
 	}
 	if parent.ReplyTo == 0 {

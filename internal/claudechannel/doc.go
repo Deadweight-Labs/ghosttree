@@ -53,13 +53,21 @@
 // Anfrage weckt den Fragenden (siehe ClassifyParent), damit er nicht pollen
 // muss. Eine Anfrage ist eine Nachricht mit Attention-Intent (Frage, Freigabe,
 // Blocker, Übergabe) oder eine Nachricht, die selbst keine Antwort ist und den
-// Antwortenden ausdrücklich erwähnt. Die Erwähnung, die das reply-Tool in
+// Antwortenden ausdrücklich erwähnt; in Direkt- und Gruppenräumen, wo es keine
+// Erwähnungen gibt, ist jede eigene Nachricht, die keine Antwort ist, eine
+// Anfrage. Die Erwähnung, die das reply-Tool in
 // Projekträumen automatisch am Absender setzt, macht eine Antwort nie zur
 // Anfrage. Eine Antwort auf eine eigene Antwort oder sonstige Nicht-Anfrage,
 // etwa ein Dank, weckt nicht, und die Tool-Instruktion bittet, Antworten nicht
 // zu beantworten: eine Kette endet nach einer Antwort. Eine Schleife über
-// bewusste Sends mit Intent question, Blocker und so weiter oder über frische
-// DMs ist nicht verhindert und nur durch das Koordinationsbudget begrenzt.
+// bewusste Sends (A sendet mit Mention, B sendet mit Mention, ...) begrenzt
+// zweierlei: das send-Tool lässt je Channel-Prozess höchstens 10 Sends mit
+// Mention pro Minute und 30 pro 15 Minuten zu (ctx channel, sendMentionsPer*),
+// und das Empfangsbudget (hookbudget.CoordLimit, 12000 Zeichen je 5 Minuten)
+// kürzt die Zustellung. Letzteres greift bei kurzen Nachrichten erst spät,
+// deshalb die Sendegrenze. Der Inhalt einer Notification wird von
+// "<channel" und "</channel" befreit (zu "&lt;channel"), damit ein Body keinen
+// eigenen Channel-Block mit gefälschtem sender_kind vortäuscht.
 //
 // Gespräche beginnen: der Channel-Server (ctx channel) bietet neben reply das
 // Tool send. Es schreibt in den Projekt- oder Maschinenraum, mit Mentions und
