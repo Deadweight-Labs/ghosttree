@@ -42,6 +42,10 @@ func (a *app) deviceLookup(w http.ResponseWriter, r *http.Request) {
 		a.deviceError(w, r, err, code)
 		return
 	}
+	if err := a.store.MachineClaimable(req.Machine, browserPrincipal(r).ID); err != nil {
+		a.deviceError(w, r, err, "")
+		return
+	}
 	a.renderBrowser(w, r, "devicecheck", pageData{Title: "Approve a device",
 		Code: store.FormatUserCode(store.NormalizeUserCode(code)), DeviceMachine: req.Machine,
 		DeviceRemote: req.Remote, DeviceStarted: req.StartedAt.UTC().Format(time.RFC3339)})
@@ -53,6 +57,16 @@ func (a *app) deviceDecide(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	code := strings.TrimSpace(r.FormValue("user_code"))
 	approve := r.FormValue("decision") == "approve"
+	if approve {
+		// Der Name wird erst beim Abholen beansprucht; wer ihn schon vor der
+		// Bestätigung vergeben sieht, spart der CLI den Fehlschlag.
+		if req, err := a.store.Device().Lookup(code, browserPrincipal(r).ID); err == nil {
+			if err := a.store.MachineClaimable(req.Machine, browserPrincipal(r).ID); err != nil {
+				a.deviceError(w, r, err, "")
+				return
+			}
+		}
+	}
 	if err := a.store.Device().Decide(code, browserPrincipal(r).ID, approve); err != nil {
 		a.deviceError(w, r, err, code)
 		return
@@ -66,6 +80,9 @@ func (a *app) deviceDecide(w http.ResponseWriter, r *http.Request) {
 
 func (a *app) deviceError(w http.ResponseWriter, r *http.Request, err error, code string) {
 	status, msg := http.StatusBadRequest, "That code is not valid or has expired. Run ctx login again if it keeps failing."
+	if errors.Is(err, store.ErrMachineTaken) {
+		status, msg = http.StatusConflict, "That machine name belongs to another account. Run ctx login again with --machine and a different name."
+	}
 	if errors.Is(err, store.ErrDeviceLocked) {
 		status, msg = http.StatusTooManyRequests, "Too many wrong codes. Wait a few minutes and try again."
 	}

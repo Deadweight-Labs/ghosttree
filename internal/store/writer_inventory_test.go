@@ -14,6 +14,10 @@ import (
 
 var writerMethodClasses = map[string]string{
 	"AddCriterion":                  "write",
+	"ClaimMachine":                  "write",
+	"MachineClaimable":              "read",
+	"ListMachines":                  "read",
+	"ListSessionsOwned":             "read",
 	"AddEvidence":                   "write",
 	"AddPerson":                     "write",
 	"PrincipalValid":                "read",

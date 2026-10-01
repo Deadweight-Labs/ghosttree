@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 )
@@ -15,6 +16,11 @@ type Session struct {
 	CWD        string     `json:"cwd"`
 	StartedAt  string     `json:"started_at"`
 	LastSeenAt string     `json:"last_seen_at"`
+	// AccountID stempelt der Server beim Upload aus dem Token; ein Client kann
+	// ihn nicht setzen (json:"-"). 0 heißt Altbestand und gehört dem
+	// Instanz-Owner. Owner ist der Kontoname, nur in Antworten.
+	AccountID int64  `json:"-"`
+	Owner     string `json:"owner,omitempty"`
 }
 
 type Chunk struct {
@@ -35,7 +41,7 @@ type SessionHit struct {
 	Snippet string  `json:"snippet"`
 }
 
-const sessionCols = `id, harness, external_id, project, branch, machine, cwd, started_at, last_seen_at`
+const sessionCols = `id, harness, external_id, project, branch, machine, cwd, started_at, last_seen_at, account_id`
 
 func (s *Store) UpsertSession(sess Session) (int64, error) {
 	if s.writer != nil {
@@ -44,15 +50,28 @@ func (s *Store) UpsertSession(sess Session) (int64, error) {
 	if sess.StartedAt == "" {
 		sess.StartedAt = now()
 	}
+	owner := instanceOwnerID(s.db)
+	account := sess.AccountID
+	if account == 0 {
+		account = owner
+	}
+	// Die Kollisionsregel steht im WHERE des Upserts: gleiche Zeile nur für
+	// dasselbe Konto und dieselbe Maschine (eine leere gespeicherte Maschine
+	// darf gesetzt werden). Sonst liefert RETURNING keine Zeile.
 	var id int64
-	err := s.db.QueryRow(`INSERT INTO sessions(harness, external_id, project, branch, machine, cwd, started_at, last_seen_at)
-		VALUES(?,?,?,?,?,?,?,?)
+	err := s.db.QueryRow(`INSERT INTO sessions(harness, external_id, project, branch, machine, cwd, started_at, last_seen_at, account_id)
+		VALUES(?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(harness, external_id) DO UPDATE SET
 		  project = excluded.project, branch = excluded.branch, machine = excluded.machine,
-		  cwd = excluded.cwd, last_seen_at = excluded.last_seen_at
+		  cwd = excluded.cwd, last_seen_at = excluded.last_seen_at, account_id = excluded.account_id
+		WHERE (CASE WHEN sessions.account_id = 0 THEN ? ELSE sessions.account_id END) = excluded.account_id
+		  AND (sessions.machine = '' OR sessions.machine = excluded.machine)
 		RETURNING id`,
 		sess.Harness, sess.ExternalID, sess.Scope.Project, sess.Scope.Branch, sess.Scope.Machine,
-		sess.CWD, sess.StartedAt, now()).Scan(&id)
+		sess.CWD, sess.StartedAt, now(), account, owner).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, ErrSessionCollision
+	}
 	return id, err
 }
 
@@ -117,17 +136,39 @@ func (s *Store) ListSessions(filter scope.Axes, limit int) ([]Session, error) {
 	if s.reader != nil {
 		return s.reader.ListSessions(filter, limit)
 	}
+	return s.ListSessionsOwned(filter, limit, "")
+}
+
+// ListSessionsOwned ist ListSessions, auf Sessions eines Kontos eingegrenzt,
+// wenn ownerPrincipalID gesetzt ist (?owner=me). Altbestand zählt zum
+// Instanz-Owner.
+func (s *Store) ListSessionsOwned(filter scope.Axes, limit int, ownerPrincipalID string) ([]Session, error) {
+	if s.reader != nil {
+		return s.reader.ListSessionsOwned(filter, limit, ownerPrincipalID)
+	}
 	if limit <= 0 {
 		limit = 50
 	}
 	where, args := filter.FilterWhere()
+	if ownerPrincipalID != "" {
+		id, ok := accountNumericID(ownerPrincipalID)
+		if !ok {
+			return []Session{}, nil
+		}
+		where += ` AND (CASE WHEN account_id = 0 THEN ? ELSE account_id END) = ?`
+		args = append(args, instanceOwnerID(s.db), id)
+	}
 	args = append(args, limit)
 	rows, err := s.db.Query(`SELECT `+sessionCols+` FROM sessions WHERE `+where+`
 		ORDER BY last_seen_at DESC, id DESC LIMIT ?`, args...)
 	if err != nil {
 		return nil, err
 	}
-	return scanSessions(rows)
+	out, err := scanSessions(rows)
+	if err != nil {
+		return nil, err
+	}
+	return out, s.fillSessionOwners(out)
 }
 
 // SessionsPendingDistillation returns sessions that have never been distilled
@@ -189,7 +230,7 @@ func (s *Store) SessionByID(id int64) (Session, error) {
 	if len(found) == 0 {
 		return Session{}, sql.ErrNoRows
 	}
-	return found[0], nil
+	return found[0], s.fillSessionOwners(found)
 }
 
 func (s *Store) ReadSession(id int64, fromSeq, limit int) ([]Chunk, error) {
@@ -265,13 +306,27 @@ func (s *Store) SearchSessions(q string, filter scope.Axes, excludeSession strin
 		var h SessionHit
 		if err := rows.Scan(&h.Session.ID, &h.Session.Harness, &h.Session.ExternalID,
 			&h.Session.Scope.Project, &h.Session.Scope.Branch, &h.Session.Scope.Machine,
-			&h.Session.CWD, &h.Session.StartedAt, &h.Session.LastSeenAt,
+			&h.Session.CWD, &h.Session.StartedAt, &h.Session.LastSeenAt, &h.Session.AccountID,
 			&h.Seq, &h.Snippet); err != nil {
 			return nil, err
 		}
 		out = append(out, h)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	one := make([]Session, len(out))
+	for i := range out {
+		one[i] = out[i].Session
+	}
+	if err := s.fillSessionOwners(one); err != nil {
+		return nil, err
+	}
+	for i := range out {
+		out[i].Session = one[i]
+	}
+	return out, nil
 }
 
 func scanSessions(rows *sql.Rows) ([]Session, error) {
@@ -281,7 +336,7 @@ func scanSessions(rows *sql.Rows) ([]Session, error) {
 		var s Session
 		if err := rows.Scan(&s.ID, &s.Harness, &s.ExternalID,
 			&s.Scope.Project, &s.Scope.Branch, &s.Scope.Machine,
-			&s.CWD, &s.StartedAt, &s.LastSeenAt); err != nil {
+			&s.CWD, &s.StartedAt, &s.LastSeenAt, &s.AccountID); err != nil {
 			return nil, err
 		}
 		out = append(out, s)

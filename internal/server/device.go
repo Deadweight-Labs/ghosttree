@@ -158,6 +158,10 @@ func (a *api) pollDeviceLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "server_error"})
 	default:
 		token, info, err := a.st.CreateDeviceToken(approval.AccountID, approval.Machine)
+		if errors.Is(err, store.ErrMachineTaken) {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "machine_name_taken", "error_description": "that machine name belongs to another account; run ctx login with a different --machine"})
+			return
+		}
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "access_denied"})
 			return

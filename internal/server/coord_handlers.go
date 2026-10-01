@@ -207,11 +207,27 @@ func (a *api) registerCoordAgent(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "external_id and room_key are required")
 		return
 	}
+	if _, ok := accountOf(principalOf(r)); !ok {
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
 	if owner, registered, err := a.st.CoordAgentOwner(in.ExternalID); err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	} else if registered && owner != "" && owner != principalOf(r).ID {
 		writeErr(w, http.StatusForbidden, "that session belongs to someone else")
+		return
+	}
+	// Eine Maschine nennt der Raum (machine:<host>) oder die CLI-Identität
+	// (cli:<host>); beide stehen unter der Maschinenregel.
+	machine := strings.TrimPrefix(in.RoomKey, "machine:")
+	if machine == in.RoomKey {
+		machine = ""
+	}
+	if host, ok := strings.CutPrefix(in.ExternalID, "cli:"); ok && machine == "" {
+		machine = host
+	}
+	if !a.gateMachine(w, r, machine, true) {
 		return
 	}
 	in.Person = personOf(r)

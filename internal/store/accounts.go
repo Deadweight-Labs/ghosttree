@@ -284,6 +284,12 @@ func (s *Store) CreateToken(account string, spec TokenSpec) (string, TokenInfo, 
 		return "", TokenInfo{}, err
 	}
 	id, _ := parsePersonPrincipalID(a.ID)
+	if m := canonicalMachine(spec.Machine); m != "" {
+		if err := s.ClaimMachine(m, a.ID); err != nil {
+			return "", TokenInfo{}, err
+		}
+		spec.Machine = m
+	}
 	expires := ""
 	if spec.ExpiresIn > 0 {
 		expires = time.Now().UTC().Add(spec.ExpiresIn).Format(time.RFC3339)
@@ -804,6 +810,7 @@ func (s *Store) CreateDeviceToken(accountID, machine string) (string, TokenInfo,
 	if err != nil {
 		return "", TokenInfo{}, err
 	}
+	machine = canonicalMachine(machine)
 	if machine == "" {
 		return "", TokenInfo{}, fmt.Errorf("device token needs a machine")
 	}
@@ -822,6 +829,9 @@ func (s *Store) CreateDeviceToken(accountID, machine string) (string, TokenInfo,
 	}
 	if state != "active" {
 		return "", TokenInfo{}, ErrAccountDisabled
+	}
+	if err := claimMachineTx(tx, machine, id); err != nil {
+		return "", TokenInfo{}, err
 	}
 	at := now()
 	if _, err := tx.Exec(`UPDATE api_tokens SET revoked_at=? WHERE account_id=? AND kind='device' AND machine=? AND revoked_at=''`,

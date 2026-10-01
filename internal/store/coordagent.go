@@ -30,6 +30,8 @@ type CoordAgent struct {
 	Capabilities     string `json:"capabilities,omitempty"`
 	RegisteredAt     string `json:"registered_at,omitempty"`
 	LastSeenAt       string `json:"last_seen_at,omitempty"`
+	// Owner ist der Kontoname des registrierenden Tokens, nur in Antworten.
+	Owner string `json:"owner,omitempty"`
 }
 
 // RoomKeyForProject bildet den Projektraum aus der normalisierten Remote.
@@ -169,7 +171,7 @@ func (s *Store) CoordPeers(roomKey, since string) ([]CoordAgent, error) {
 	query := `SELECT a.id,a.external_id,a.provider,m.room_key,a.display_name,
 			COALESCE(person,''),COALESCE(cwd,''),COALESCE(branch,''),
 			COALESCE(worktree,''),COALESCE(parent_external_id,''),
-			COALESCE(capabilities,''),registered_at,last_seen_at
+			COALESCE(capabilities,''),registered_at,last_seen_at,COALESCE(a.principal_id,'')
 		FROM coord_agents a JOIN coord_room_memberships m ON m.principal_id=a.external_id
 		WHERE m.room_key=? AND m.left_at=''`
 	args := []any{roomKey}
@@ -184,14 +186,36 @@ func (s *Store) CoordPeers(roomKey, since string) ([]CoordAgent, error) {
 	}
 	defer rows.Close()
 	var out []CoordAgent
+	var principals []string
 	for rows.Next() {
 		var a CoordAgent
+		var principal string
 		if err := rows.Scan(&a.ID, &a.ExternalID, &a.Provider, &a.RoomKey,
 			&a.DisplayName, &a.Person, &a.Cwd, &a.Branch, &a.Worktree,
-			&a.ParentExternalID, &a.Capabilities, &a.RegisteredAt, &a.LastSeenAt); err != nil {
+			&a.ParentExternalID, &a.Capabilities, &a.RegisteredAt, &a.LastSeenAt, &principal); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
+		principals = append(principals, principal)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	if len(out) == 0 {
+		return out, nil
+	}
+	names, err := s.accountNames()
+	if err != nil {
+		return nil, err
+	}
+	owner := instanceOwnerID(s.db)
+	for i := range out {
+		id := owner
+		if n, ok := accountNumericID(principals[i]); ok {
+			id = n
+		}
+		out[i].Owner = names[id]
+	}
+	return out, nil
 }
