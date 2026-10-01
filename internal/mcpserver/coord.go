@@ -130,7 +130,7 @@ func (s *Server) joinAsSubagent(roomKey, ref string) error {
 
 func (s *Server) joinRoom(roomKey string) error {
 	provider := "unknown"
-	if s.sessionRef == "" {
+	if s.sessionRef == "" && s.coordOverride == "" {
 		// Ohne Harness-Session-ID ist auch der Anbieter nicht sicher
 		// feststellbar. Raten wäre schlimmer als "unbekannt": eine falsche
 		// Angabe in der Teilnehmerliste liest sich wie eine geprüfte.
@@ -484,6 +484,9 @@ func (s *Server) injectedSet(msgs []store.CoordMessage) (map[int64]bool, error) 
 // hält — eine erfundene Kennung, die aussieht wie eine echte, wäre schlimmer
 // als gar keine.
 func (s *Server) coordRef() string {
+	if s.coordOverride != "" {
+		return s.coordOverride
+	}
 	if s.sessionRef != "" {
 		return s.sessionRef
 	}

@@ -8,8 +8,7 @@
 # Env: KEEP=1 keeps the work dir; OUT=<dir> copies the evidence there;
 #      TIMEOUT=<seconds> (default 180); CTX=<ctx binary> skips the build.
 set -u
-cd "$(dirname "$0")/.."
-ROOT=$PWD
+cd "$(dirname "$0")/.." || exit 1
 TIMEOUT=${TIMEOUT:-180}
 WORK=$(mktemp -d /tmp/gt-claude-channel-e2e.XXXXXX)
 SESSION=gt-claude-e2e-$$
@@ -17,31 +16,50 @@ PORT=$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print
 AGENT="claude:e2e:$(python3 -c 'import uuid;print(uuid.uuid4())')"
 TOKEN_FILE=$WORK/token
 SERVER_PID=
-fail() { echo "FAIL: $*"; finish 1; }
+RESULT=1
+PROJECT_DIR=$WORK/project
+CLAUDE_JSON=$HOME/.claude.json
+TRUST_BACKUP=
+fail() { echo "FAIL: $*"; exit 1; }
 
-finish() {
-  local code=$1
+# Runs on every exit, including early ones and INT/TERM.
+cleanup() {
+  trap - EXIT INT TERM
   tmux capture-pane -p -t "$SESSION" -S -300 >"$WORK/pane.txt" 2>/dev/null
   tmux kill-session -t "$SESSION" 2>/dev/null
   [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null
+  if [ -n "$TRUST_BACKUP" ]; then
+    # Claude records the accepted trust dialog in ~/.claude.json. Remove only
+    # the key of this scratch directory, after claude has exited.
+    sleep 1
+    jq --arg p "$PROJECT_DIR" 'del(.projects[$p])' "$CLAUDE_JSON" >"$CLAUDE_JSON.gt-e2e.tmp" \
+      && chmod --reference="$TRUST_BACKUP" "$CLAUDE_JSON.gt-e2e.tmp" \
+      && mv "$CLAUDE_JSON.gt-e2e.tmp" "$CLAUDE_JSON" \
+      && echo "removed trust entry for $PROJECT_DIR (backup: $TRUST_BACKUP)" \
+      || echo "could not remove the trust entry for $PROJECT_DIR; restore from $TRUST_BACKUP if needed"
+    rm -f "$CLAUDE_JSON.gt-e2e.tmp"
+  fi
   if [ -n "${OUT:-}" ]; then
     mkdir -p "$OUT"
     cp "$WORK/pane.txt" "$WORK/server.log" "$WORK/coord-state.txt" "$OUT"/ 2>/dev/null
     echo "evidence: $OUT"
   fi
   [ -z "${KEEP:-}" ] && rm -rf "$WORK"
-  [ "$code" = 0 ] && echo PASS || true
-  exit "$code"
+  [ "$RESULT" = 0 ] && echo PASS
+  exit "$RESULT"
 }
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
-for tool in claude tmux sqlite3 python3; do
+for tool in claude tmux sqlite3 python3 jq; do
   command -v "$tool" >/dev/null || { echo "FAIL: $tool not found"; exit 1; }
 done
 CTX=${CTX:-$WORK/ctx}
 [ -x "$CTX" ] || go build -o "$CTX" ./cmd/ctx || fail "build ctx"
 
 export XDG_CONFIG_HOME=$WORK/config
-mkdir -p "$WORK/project"
+mkdir -p "$PROJECT_DIR"
 DB=$WORK/ghosttree.db
 "$CTX" person add e2e --db "$DB" | sed -n 's/^token: //p' >"$TOKEN_FILE"
 [ -s "$TOKEN_FILE" ] || fail "person add"
@@ -49,13 +67,19 @@ DB=$WORK/ghosttree.db
 SERVER_PID=$!
 for _ in $(seq 50); do curl -fs "http://127.0.0.1:$PORT/" >/dev/null 2>&1 && break; sleep 0.2; done
 "$CTX" setup --server "http://127.0.0.1:$PORT" --token "$(cat "$TOKEN_FILE")" >/dev/null || fail "ctx setup"
-MACHINE=$(python3 -c 'import json,os;print(json.load(open(os.environ["XDG_CONFIG_HOME"]+"/ghosttree/config.json")).get("machine") or os.uname().nodename)')
 
 # claude runs in a scratch directory, not a repository: the machine room is the
 # shared room. XDG_CONFIG_HOME is passed through so ctx channel finds the lab.
-tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "$WORK/project" \
+tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "$PROJECT_DIR" \
   "env XDG_CONFIG_HOME=$XDG_CONFIG_HOME $CTX claude --agent '$AGENT'"
 
+# Accepting Claude's trust dialog for the scratch directory writes a global
+# entry into ~/.claude.json. This script announces that, backs the file up
+# first, and removes exactly that one entry again on exit.
+TRUST_BACKUP=$CLAUDE_JSON.bak-gt-e2e-$$
+cp "$CLAUDE_JSON" "$TRUST_BACKUP" 2>/dev/null || TRUST_BACKUP=
+echo "note: this run trusts $PROJECT_DIR in $CLAUDE_JSON; backup ${TRUST_BACKUP:-none (no file)}, entry removed on exit"
+[ -z "$TRUST_BACKUP" ] && [ -e "$CLAUDE_JSON" ] && fail "cannot back up $CLAUDE_JSON"
 # Accept the trust dialog (default selection is "No, exit", so Down first) for
 # the scratch directory only, and the development-channel confirmation (default
 # is "I am using this for local development", so Enter).
@@ -75,7 +99,7 @@ MARK="E2E-$(date +%s)"
 "$CTX" coord send "@$AGENT $MARK: reply via the reply tool with the exact text GOT $MARK" --machine --mention "$AGENT" >/dev/null || fail "coord send"
 MSG=$(sqlite3 "$DB" "select max(id) from coord_messages where body like '%$MARK%';")
 
-reply= state=
+reply="" state=""
 deadline=$((SECONDS + TIMEOUT))
 while [ $SECONDS -lt $deadline ]; do
   reply=$(sqlite3 "$DB" "select body from coord_messages where reply_to=$MSG and sender_external_id='$AGENT' limit 1;")
@@ -93,4 +117,4 @@ cat "$WORK/coord-state.txt"
 [ -n "$reply" ] || fail "no reply from $AGENT within ${TIMEOUT}s"
 grep -qF "$MARK" <<<"$reply" || fail "reply does not contain $MARK: $reply"
 [ "$state" = acked ] || fail "delivery state is '${state:-none}', want acked"
-finish 0
+RESULT=0

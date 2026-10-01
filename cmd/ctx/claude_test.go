@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestNewAgentIDShape(t *testing.T) {
@@ -58,14 +60,6 @@ func TestClaudeArgsPassThrough(t *testing.T) {
 	got := claudeArgs("/tmp/x.json", []string{"-p", "hello world", "--model", "opus"})
 	want := []string{"--mcp-config", "/tmp/x.json", "--dangerously-load-development-channels", "server:ghosttree-channel", "-p", "hello world", "--model", "opus"}
 	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
-		t.Fatalf("got %q", got)
-	}
-}
-
-func TestAgentIDEnvOverridesHarnessSession(t *testing.T) {
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "sess-1")
-	t.Setenv(agentIDEnv, "claude:h:42")
-	if got := currentSessionRef(); got != "claude:h:42" {
 		t.Fatalf("got %q", got)
 	}
 }
@@ -162,5 +156,118 @@ func TestClaudeAgentFlagAndPassThroughAfterIt(t *testing.T) {
 	run([]string{"claude", "--dry-run", "-p", "--dry-run"}, &out)
 	if !strings.Contains(out.String(), "-p --dry-run\n") {
 		t.Fatalf("flag after first claude arg must pass through:\n%s", out.String())
+	}
+}
+
+func TestClaudeAgentFlagNeedsValue(t *testing.T) {
+	for _, args := range [][]string{{"claude", "--agent"}, {"claude", "--agent", ""}, {"claude", "--agent", "--dry-run"}} {
+		var out bytes.Buffer
+		if code := run(args, &out); code != 2 {
+			t.Errorf("%v: exit %d, want 2 (%s)", args, code, out.String())
+		}
+	}
+}
+
+func TestClaudeDoubleDashEndsLauncherFlags(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	var out bytes.Buffer
+	run([]string{"claude", "--dry-run", "--", "--dry-run", "-p"}, &out)
+	if !strings.Contains(out.String(), "server:ghosttree-channel --dry-run -p\n") {
+		t.Fatalf("-- must be consumed and the rest passed on:\n%s", out.String())
+	}
+}
+
+func TestCoordSendMentionRejectsBadValues(t *testing.T) {
+	for _, v := range []string{"", "  ", "-x", "--machine"} {
+		var out bytes.Buffer
+		if code := run([]string{"coord", "send", "hi", "--mention", v}, &out); code != 2 {
+			t.Errorf("mention %q: exit %d, want 2 (%s)", v, code, out.String())
+		}
+	}
+	var out bytes.Buffer
+	if code := run([]string{"coord", "send", "hi", "--mention"}, &out); code != 2 {
+		t.Errorf("missing value: exit %d", code)
+	}
+}
+
+func TestCoordAgentOverrideMatchesHarness(t *testing.T) {
+	clear := func() {
+		for _, k := range []string{"CODEX_SESSION_ID", "CODEX_THREAD_ID", "OPENCODE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"} {
+			t.Setenv(k, "")
+		}
+	}
+	clear()
+	t.Setenv(agentIDEnv, "claude:h:1")
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "sess-1")
+	if got := coordAgentOverride(); got != "claude:h:1" {
+		t.Errorf("claude harness: %q", got)
+	}
+	if got := currentSessionRef(); got != "sess-1" {
+		t.Errorf("session ref must stay the harness id, got %q", got)
+	}
+	clear()
+	t.Setenv("CODEX_THREAD_ID", "thr")
+	if got := coordAgentOverride(); got != "" {
+		t.Errorf("codex inside a ctx-claude session must not inherit the identity: %q", got)
+	}
+	if got := currentSessionRef(); got != "thr" {
+		t.Errorf("codex session ref: %q", got)
+	}
+}
+
+// Ein Fake-claude, das Signale mitschreibt und sich beendet.
+func fakeClaudeTrapping(t *testing.T, dir string) (ready, rec string) {
+	t.Helper()
+	ready, rec = filepath.Join(dir, "ready"), filepath.Join(dir, "sig")
+	script := "#!/bin/sh\n" +
+		"for s in INT QUIT TERM HUP; do trap \"echo $s > " + rec + "; exit 9\" $s; done\n" +
+		"touch " + ready + "\nwhile :; do sleep 0.05; done\n"
+	if err := os.WriteFile(filepath.Join(dir, "claude"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return ready, rec
+}
+
+func TestRunClaudeForwardsSignalsAndCleansUp(t *testing.T) {
+	for _, sig := range []struct {
+		name string
+		sig  syscall.Signal
+	}{{"INT", syscall.SIGINT}, {"QUIT", syscall.SIGQUIT}, {"TERM", syscall.SIGTERM}, {"HUP", syscall.SIGHUP}} {
+		t.Run(sig.name, func(t *testing.T) {
+			dir := t.TempDir()
+			ready, rec := fakeClaudeTrapping(t, dir)
+			t.Setenv(claudeBinEnv, filepath.Join(dir, "claude"))
+			t.Setenv("TMPDIR", dir)
+			codeCh := make(chan int, 1)
+			go func() { codeCh <- runClaude([]byte("{}"), "claude:h:1", nil) }()
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				if _, err := os.Stat(ready); err == nil {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("fake claude never started")
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+			time.Sleep(100 * time.Millisecond) // Notify steht lange vor dem Start des Kindes
+			if err := syscall.Kill(os.Getpid(), sig.sig); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case code := <-codeCh:
+				if code != 9 {
+					t.Fatalf("exit %d, want the child's 9", code)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("launcher did not return after the signal")
+			}
+			if b, _ := os.ReadFile(rec); strings.TrimSpace(string(b)) != sig.name {
+				t.Fatalf("child saw %q, want %s", b, sig.name)
+			}
+			if left, _ := filepath.Glob(filepath.Join(dir, "ghosttree-claude-*.json")); len(left) != 0 {
+				t.Fatalf("temp config left behind: %v", left)
+			}
+		})
 	}
 }

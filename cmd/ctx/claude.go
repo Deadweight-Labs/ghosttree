@@ -104,7 +104,13 @@ func cmdClaude(args []string, stdout io.Writer) int {
 			dry = true
 			args = args[1:]
 			continue
-		case args[0] == "--agent" && len(args) > 1:
+		case args[0] == "--":
+			args = args[1:] // beendet die Launcher-Flags und wird verbraucht
+		case args[0] == "--agent":
+			if len(args) < 2 || strings.TrimSpace(args[1]) == "" || strings.HasPrefix(args[1], "-") {
+				fmt.Fprintln(stdout, "--agent needs an identity")
+				return 2
+			}
 			presetAgent = args[1]
 			args = args[2:]
 			continue
@@ -166,10 +172,11 @@ func runClaude(conf []byte, agent string, extra []string) int {
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	cmd.Env = append(os.Environ(), agentIDEnv+"="+agent)
 
-	// SIGINT geht vom Terminal ohnehin an die ganze Vordergrundgruppe; der
-	// Launcher fängt es nur ab, damit er überlebt und aufräumt.
+	// Der Launcher fängt die Signale ab, damit er überlebt und aufräumt, und
+	// reicht sie an claude weiter. Vom Terminal kann claude dasselbe Signal
+	// zusätzlich selbst bekommen; im Raw-Modus von claude entsteht keins.
 	sigs := make(chan os.Signal, 4)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGHUP)
 	defer signal.Stop(sigs)
 	if err := cmd.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "claude: %v\n", err)
@@ -180,9 +187,7 @@ func runClaude(conf []byte, agent string, extra []string) int {
 		for {
 			select {
 			case s := <-sigs:
-				if s != syscall.SIGINT {
-					_ = cmd.Process.Signal(s)
-				}
+				_ = cmd.Process.Signal(s)
 			case <-done:
 				return
 			}

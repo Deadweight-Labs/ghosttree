@@ -69,7 +69,12 @@ func cmdCoord(args []string, stdout io.Writer) int {
 				return 2
 			}
 			i++
-			mentions = append(mentions, rest[i])
+			if v := strings.TrimSpace(rest[i]); v == "" || strings.HasPrefix(v, "-") {
+				fmt.Fprintf(stdout, "--mention needs an agent identity, got %q\n", rest[i])
+				return 2
+			} else {
+				mentions = append(mentions, v)
+			}
 		case "--machine":
 			machine = true
 		case "--all":
