@@ -94,11 +94,14 @@ func (s *Store) RegressionGapsVisible(ax scope.Axes, keep func(Knowledge) bool) 
 			&k.SessionRef, &k.ObservedAt, &k.RegressionState, &k.RegressionTest, &k.CreatedAt, &k.UpdatedAt); err != nil {
 			return nil, 0, err
 		}
-		if keep == nil || keep(k) {
-			gaps = append(gaps, k)
-		}
+		gaps = append(gaps, k)
 	}
 	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	// keep fragt selbst die Datenbank (Rollen, Maschinenbesitzer); mit offenem
+	// Cursor wäre dafür keine Verbindung frei. Erst einsammeln, dann filtern.
+	if err := rows.Close(); err != nil {
 		return nil, 0, err
 	}
 	// Nur Pitfalls: eine Entscheidung oder Notiz hat keine Regressionsfrage, und
@@ -109,21 +112,35 @@ func (s *Store) RegressionGapsVisible(ax scope.Axes, keep func(Knowledge) bool) 
 			WHERE type='pitfall' AND regression_state='' AND status='active' AND `+where, args...).Scan(&unreviewed)
 		return gaps, unreviewed, err
 	}
+	gaps = filterKnowledge(gaps, keep)
 	pending, err := s.db.Query(`SELECT id,project,branch,machine,confidence,person,confirmed_by FROM knowledge
 		WHERE type='pitfall' AND regression_state='' AND status='active' AND `+where, args...)
 	if err != nil {
 		return nil, 0, err
 	}
-	defer pending.Close()
-	unreviewed := 0
+	var open []Knowledge
 	for pending.Next() {
 		var k Knowledge
 		if err := pending.Scan(&k.ID, &k.Scope.Project, &k.Scope.Branch, &k.Scope.Machine, &k.Confidence, &k.Person, &k.ConfirmedBy); err != nil {
+			pending.Close()
 			return nil, 0, err
 		}
+		open = append(open, k)
+	}
+	if err := pending.Err(); err != nil {
+		pending.Close()
+		return nil, 0, err
+	}
+	pending.Close()
+	return gaps, len(filterKnowledge(open, keep)), nil
+}
+
+func filterKnowledge(in []Knowledge, keep func(Knowledge) bool) []Knowledge {
+	out := in[:0:0]
+	for _, k := range in {
 		if keep(k) {
-			unreviewed++
+			out = append(out, k)
 		}
 	}
-	return gaps, unreviewed, pending.Err()
+	return out
 }

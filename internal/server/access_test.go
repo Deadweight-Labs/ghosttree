@@ -14,6 +14,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
@@ -38,7 +39,21 @@ type accessAPIFixture struct {
 
 func accessAPI(t *testing.T, enforce bool) *accessAPIFixture {
 	t.Helper()
-	st, err := store.Open(":memory:")
+	return accessAPIOpen(t, enforce, false)
+}
+
+// accessAPIOpen mit singleConn=true öffnet die Datenbank mit genau einer
+// Verbindung: jede Abfrage, die bei offenem Cursor oder offener Transaktion eine
+// zweite braucht, hängt dann.
+func accessAPIOpen(t *testing.T, enforce, singleConn bool) *accessAPIFixture {
+	t.Helper()
+	var st *store.Store
+	var err error
+	if singleConn {
+		st, err = store.OpenWithOptions(t.TempDir()+"/one.db", store.OpenOptions{MaxOpenConns: 1})
+	} else {
+		st, err = store.Open(":memory:")
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -927,4 +942,70 @@ func TestLogModeListsEqualTheUnfilteredStore(t *testing.T) {
 			}
 		}
 	}
+}
+
+// Wächter gegen Verklemmungen: mit nur einer Datenbankverbindung darf keine
+// gefilterte Route hängen, für Fremde, Gäste, Mitglieder und Owner, im
+// Enforce- und im Log-Modus. Eine Prüfung, die bei offenem Cursor oder offener
+// Transaktion selbst abfragt, findet keine freie Verbindung und läuft in den
+// Timeout.
+func TestNoRouteHangsWithASingleConnection(t *testing.T) {
+	for _, enforce := range []bool{true, false} {
+		f := accessAPIOpen(t, enforce, true)
+		client := &http.Client{Timeout: 5 * time.Second}
+		body := `{"project":"` + accProject + `","title":"x","type":"note","body":"b","path":"a.go","slug":"s","kind":"spec","harness":"h","external_id":"e","shared":true,"patch":{},"state":"open","reason":"r","session_id":1,"chunks":[],"artifacts":{},"base_revision":1}`
+		n := 0
+		for pattern, class := range accessRoutes {
+			if class != classProject && class != classCoord {
+				continue
+			}
+			method, path, _ := strings.Cut(pattern, " ")
+			for _, ph := range []string{"{id}", "{rev}", "{org}", "{account}"} {
+				path = strings.ReplaceAll(path, ph, "1")
+			}
+			path += "?project=" + accProject + "&path=a.go&q=pitfall&session=s&slug=s&kind=knowledge&agent_external_id=claude:x&prefix=a&include_archived=1&public_only=1&destination_id=project:" + accProject
+			for _, who := range []string{"nora", "gus", "mia", "robin"} {
+				var rd io.Reader
+				if method != http.MethodGet && method != http.MethodDelete {
+					rd = strings.NewReader(body)
+				}
+				r, _ := http.NewRequest(method, f.srv.URL+path, rd)
+				r.Header.Set("Authorization", "Bearer "+f.tok[who])
+				resp, err := client.Do(r)
+				if err != nil {
+					t.Fatalf("enforce=%v %s %s as %s hangs or fails: %v", enforce, method, path, who, err)
+				}
+				resp.Body.Close()
+				n++
+			}
+		}
+		for _, p := range []string{"/api/knowledge/regression-gaps?project=" + accProject + "&machine=mia-box", "/api/knowledge?project=" + accProject, "/api/sessions", "/api/search?q=pitfall", "/api/context/bootstrap?project=" + accProject + "&machine=mia-box",
+			"/api/documents?project=" + accProject, "/api/ghosts/tree?project=" + accProject, "/api/requests", "/api/machines", "/api/knowledge/pending"} {
+			for _, who := range []string{"nora", "gus", "mia", "robin"} {
+				r, _ := http.NewRequest("GET", f.srv.URL+p, nil)
+				r.Header.Set("Authorization", "Bearer "+f.tok[who])
+				resp, err := client.Do(r)
+				if err != nil {
+					t.Fatalf("enforce=%v GET %s as %s hangs: %v", enforce, p, who, err)
+				}
+				resp.Body.Close()
+				n++
+			}
+		}
+		t.Logf("enforce=%v: %d calls with one connection", enforce, n)
+	}
+}
+
+// ActVerify geht nie über den eigenen Eintrag, auch nicht in einer
+// unbeanspruchten Remote.
+func TestAuthorCannotVerifyInAnUnclaimedRemote(t *testing.T) {
+	f := accessAPI(t, true)
+	const free = "github.com/free/verify"
+	var mine store.Knowledge
+	if err := json.Unmarshal([]byte(f.expect(t, "mia", 200, "POST", "/api/knowledge", store.Knowledge{Type: "note", Title: "own", Body: "b", Scope: scope.Axes{Project: free}})), &mine); err != nil {
+		t.Fatal(err)
+	}
+	f.expect(t, "mia", 404, "PATCH", idPath("/api/knowledge/%d", mine.ID), map[string]string{"confidence": "verified"})
+	f.expect(t, "mia", 404, "POST", "/api/knowledge", store.Knowledge{Type: "note", Title: "own2", Body: "b", Scope: scope.Axes{Project: free}, Confidence: "verified"})
+	f.expect(t, "robin", 204, "PATCH", idPath("/api/knowledge/%d", mine.ID), map[string]string{"confidence": "verified"}) // Admin
 }

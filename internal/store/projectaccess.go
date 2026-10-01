@@ -409,7 +409,9 @@ func (a *ProjectAccess) Decide(project string, res Resource, act Action, obj Obj
 	// möglich (gateProject); der Autor sieht und ändert seine eigenen Einträge
 	// dort immer, der Instanz-Admin sieht alles, andere nichts.
 	if rank == 0 && a.Unclaimed(project) {
-		if act == ActCreate || obj.Own || a.IsAdmin() {
+		// Verified setzt nie der Autor selbst: das Recht gibt es nur in einem
+		// beanspruchten Projekt (can_review, lead, owner) oder dem Admin.
+		if act == ActCreate || (obj.Own && act != ActVerify) || a.IsAdmin() {
 			return Decision{Allowed: true, Reason: "unclaimed project"}
 		}
 	}
