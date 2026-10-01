@@ -19,6 +19,13 @@ Versioning, with pre-1.0 compatibility rules described in
   unknown mention recipient of a member is a 400 with a fixed message instead
   of a 500 that echoed the probed id, in every mode. A legacy thread restricted
   to a list of readers now also needs the project role.
+- The browser event stream (`/ui/coord/events`) no longer exposes the global
+  event sequence: the SSE `id:`, the resync cursor and the page's initial cursor
+  are AES-GCM sealed, opaque and different on every send, for every viewer, and
+  the event payload carries no number. Gaps between a guest's own posts could
+  otherwise count events hidden from it. An invalid, manipulated or foreign
+  cursor yields a resync instead of an error. Read events are hidden from guests
+  in project rooms like delivery events.
 - Project rooms of the coordination layer need a project role. Registering an
   agent into `project:<remote>` takes at least the guest role (org owners as
   before); org membership alone no longer joins. `GET /api/coord/rooms` drops

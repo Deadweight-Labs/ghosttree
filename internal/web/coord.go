@@ -146,7 +146,7 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 	annotateCoordAttention(incomingAttention, attention, sidebar, attentionLabels)
 	annotateCoordAttention(outgoingAttention, attention, sidebar, attentionLabels)
 	view := coordPageView{
-		EventCursor:       eventCursor,
+		EventCursor:       a.sealCoordCursor(browserPrincipal(r), eventCursor),
 		Sidebar:           sidebar,
 		Recipients:        buildCoordRecipientViews(recipients),
 		IncomingAttention: incomingAttention,

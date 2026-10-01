@@ -136,9 +136,9 @@ func coordEventVisibleTx(tx *sql.Tx, access CoordAccess, actor string, event Coo
 	switch event.ObjectKind {
 	case DestinationRoom, DestinationDiscussion:
 		err = access.canReadTx(tx, actor, event.ObjectKind, event.ObjectID)
-		// Zustellereignisse treten auf, wenn ein Mitglied etwas abholt: für einen
-		// Gast ein Zeitsignal, wer im Raum ist.
-		if err == nil && event.Kind == CoordEventDelivery && access.guestViewForMessageTx(tx, event.ObjectKind, event.ObjectID) {
+		// Zustell- und Lesereignisse treten auf, wenn ein Mitglied etwas abholt oder
+		// liest: für einen Gast ein Zeitsignal, wer im Raum ist.
+		if err == nil && (event.Kind == CoordEventDelivery || event.Kind == CoordEventRead) && access.guestViewForMessageTx(tx, event.ObjectKind, event.ObjectID) {
 			return false, nil
 		}
 	case "thread":

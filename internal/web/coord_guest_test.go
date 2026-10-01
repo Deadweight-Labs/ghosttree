@@ -1,10 +1,14 @@
 package web
 
 import (
+	"context"
+	"io"
+	"net/http"
 	"net/http/httptest"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
@@ -160,7 +164,7 @@ func TestGuestWebViewsShowTypedMentionsNotDeliveredOnes(t *testing.T) {
 	}
 	// Die Nachricht gleicht sich in beiden Fällen; der Rest unterscheidet sich nur in IDs/Zeiten.
 	strip := func(s string) string {
-		s = regexp.MustCompile(`name="(csrf_token|form_id)" value="[^"]*"`).ReplaceAllString(s, "")
+		s = regexp.MustCompile(`(name="(csrf_token|form_id)" value|data-coord-event-cursor)="[^"]*"`).ReplaceAllString(s, "")
 		return strings.Map(func(r rune) rune {
 			if r >= '0' && r <= '9' {
 				return -1
@@ -173,5 +177,173 @@ func TestGuestWebViewsShowTypedMentionsNotDeliveredOnes(t *testing.T) {
 	}
 	if strip(inOverview) != strip(outOverview) {
 		t.Error("overview differs for the guest depending on whether the target is in the room")
+	}
+}
+
+// guestStream spielt dieselbe Lage mit einem Ziel im oder außerhalb des Raums
+// durch und liefert, was der Gast im Ereignisstrom sieht.
+func guestStream(t *testing.T, targetInRoom bool) (events []string, ids []string, raw string) {
+	t.Helper()
+	const project = "github.com/dw/guestsse"
+	st, err := store.Open(t.TempDir() + "/web.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	tokens := map[string]string{}
+	for i, name := range []string{"robin", "mia", "gus"} {
+		if _, err := st.AddAccount(name, "", i == 0); err != nil {
+			t.Fatal(err)
+		}
+		if tokens[name], _, err = st.CreateToken(name, store.TokenSpec{Label: "t"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	org, _ := st.CreateOrg("person:1", "Alpha", "alpha")
+	for _, who := range []string{"person:2", "person:3"} {
+		code, _, _ := st.CreateInvitation("person:1", org.ID, "", store.OrgMember, 0)
+		if _, err := st.AcceptInvitation(who, code); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := st.EnsureProject("person:1", project); err != nil {
+		t.Fatal(err)
+	}
+	for who, role := range map[string]string{"person:2": store.RoleMember, "person:3": store.RoleGuest} {
+		if err := st.SetProjectRole("person:1", project, who, role, false, store.RoleViaAPI); err != nil {
+			t.Fatal(err)
+		}
+	}
+	st.SetAccessMode(store.AccessMode{Enforce: true})
+	room := store.RoomKeyForProject(project)
+	targetRoom := room
+	if !targetInRoom {
+		targetRoom = store.RoomKeyForProject("github.com/dw/elsewhere")
+	}
+	for agent, r := range map[string]string{"claude:mia": room, "claude:gus": room, "claude:target": targetRoom} {
+		principal := map[string]string{"claude:mia": "person:2", "claude:gus": "person:3", "claude:target": "person:2"}[agent]
+		if _, err := st.RegisterCoordAgent(store.CoordAgent{ExternalID: agent, Provider: "claude", RoomKey: r, PrincipalID: principal, Person: "p"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	srv := httptest.NewServer(New(st))
+	t.Cleanup(srv.Close)
+	guest := login(t, srv, tokens["gus"])
+	read := func(lastID string) string {
+		ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+		defer cancel()
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/ui/coord/events?after=0", nil)
+		if lastID != "" {
+			req.Header.Set("Last-Event-ID", lastID)
+		}
+		resp, err := guest.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return string(b)
+	}
+	start := read("")
+	cursor := lastSSEIDOrEmpty(start)
+	gus := st.CoordinationFor(store.Principal{ID: "person:3", Label: "gus"}, "claude:gus")
+	id, err := gus.Send(store.CoordMessage{DestinationKind: store.DestinationRoom, DestinationID: room, SenderExternalID: "claude:gus",
+		ClientID: "q", Body: "question", Intent: store.IntentQuestion, Mentions: []string{"claude:target"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mia := st.CoordinationFor(store.Principal{ID: "person:2", Label: "mia"}, "claude:mia")
+	if targetInRoom {
+		if err := mia.MarkDelivery(id, store.DeliveryFetched); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := mia.MarkRead(store.DestinationRoom, room, 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gus.Send(store.CoordMessage{DestinationKind: store.DestinationRoom, DestinationID: room, SenderExternalID: "claude:gus", ClientID: "marker", Body: "marker"}); err != nil {
+		t.Fatal(err)
+	}
+	raw = read(cursor)
+	for _, line := range strings.Split(raw, "\n") {
+		switch {
+		case strings.HasPrefix(line, "event: "):
+			events = append(events, strings.TrimPrefix(line, "event: "))
+		case strings.HasPrefix(line, "id: "):
+			ids = append(ids, strings.TrimPrefix(line, "id: "))
+		}
+	}
+	// Mit dem letzten Cursor setzt der Strom fort, ohne Wiederholung.
+	if again := read(ids[len(ids)-1]); strings.Contains(again, "coord.changed") {
+		t.Errorf("resuming with the last token replays events: %q", again)
+	}
+	return events, ids, raw
+}
+
+func lastSSEIDOrEmpty(stream string) string {
+	id := ""
+	for _, line := range strings.Split(stream, "\n") {
+		if strings.HasPrefix(line, "id: ") {
+			id = strings.TrimPrefix(line, "id: ")
+		}
+	}
+	return id
+}
+
+// Der Gast liest den Ereignisstrom: ob das Ziel im Raum ist, darf an Anzahl,
+// Art und Form der Ids nicht erkennbar sein. Die Ids sind undurchsichtig, keine
+// vergleichbaren Zahlen.
+func TestGuestEventStreamLooksTheSameForMemberAndNonMemberTargets(t *testing.T) {
+	inEvents, inIDs, inRaw := guestStream(t, true)
+	outEvents, outIDs, outRaw := guestStream(t, false)
+	if strings.Join(inEvents, ",") != strings.Join(outEvents, ",") || len(inIDs) != len(outIDs) {
+		t.Errorf("event streams differ:\nmember:     %v\nnon-member: %v", inEvents, outEvents)
+	}
+	if len(inIDs) == 0 {
+		t.Fatal("the guest sees no events at all")
+	}
+	numeric := regexp.MustCompile(`^[0-9]+$`)
+	seen := map[string]bool{}
+	for _, id := range append(append([]string{}, inIDs...), outIDs...) {
+		if numeric.MatchString(id) || len(id) < 30 {
+			t.Errorf("event id looks like a counter: %q", id)
+		}
+		if seen[id] {
+			t.Errorf("event id repeats, so ids can be compared: %q", id)
+		}
+		seen[id] = true
+	}
+	for _, raw := range []string{inRaw, outRaw} {
+		if strings.Contains(raw, `"sequence"`) || strings.Contains(raw, "attention/") || strings.Contains(raw, `"kind":"delivery"`) || strings.Contains(raw, `"kind":"read"`) || strings.Contains(raw, `"kind":"attention"`) {
+			t.Errorf("stream carries hidden or numeric data: %q", raw)
+		}
+	}
+}
+
+func TestCoordCursorTokenResyncAndTampering(t *testing.T) {
+	srv, st, client := signedIn(t)
+	room := store.RoomKeyForProject("github.com/x/y")
+	materializeWebRoom(t, st, room)
+	first, _ := readFiniteSSE(t, client, srv.URL+"/ui/coord/events?after=0", "")
+	token := lastSSEID(t, first)
+	if _, err := st.AppendCoordMessage(store.CoordMessage{DestinationKind: store.DestinationRoom, DestinationID: room, SenderExternalID: "fixture:" + room, ClientID: "after-token", Body: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	// Mit dem Token geht es dort weiter, wo es stand.
+	body, _ := readFiniteSSE(t, client, srv.URL+"/ui/coord/events", token)
+	if !strings.Contains(body, "event: coord.changed") || strings.Contains(body, "event: resync") {
+		t.Fatalf("resume with a valid token: %q", body)
+	}
+	// Verändert, abgeschnitten, fremd, leer oder eine rohe Zahl: Resync, kein Fehler.
+	mid := len(token) / 2
+	flipped := token[:mid] + map[bool]string{true: "B", false: "A"}[token[mid] == 'A'] + token[mid+1:]
+	for name, bad := range map[string]string{"flipped": flipped, "truncated": token[:len(token)-4], "number": "3", "junk": "!!!", "huge": strings.Repeat("A", 4096)} {
+		body, headers := readFiniteSSE(t, client, srv.URL+"/ui/coord/events", bad)
+		if !strings.Contains(body, "event: resync") || strings.Contains(body, "coord.changed") {
+			t.Errorf("%s: want an opaque resync, got %q", name, body)
+		}
+		if headers.Get("Content-Type") != "text/event-stream" {
+			t.Errorf("%s: content type %q", name, headers.Get("Content-Type"))
+		}
 	}
 }
