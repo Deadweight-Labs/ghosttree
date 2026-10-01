@@ -24,6 +24,8 @@ type Store struct {
 	device        *DeviceFlows
 	closeOnce     sync.Once
 	closeErr      error
+	acfg          *accessConfig
+	accessOnce    sync.Once
 }
 
 type OpenOptions struct {

@@ -120,6 +120,12 @@ type SearchFilter struct {
 	// sieht dort nicht gekürzt aus, sondern beschädigt.
 	FullDescription bool
 	Limit           int
+	// Restrict begrenzt die Treffer auf Aufträge ohne Projekt und auf die
+	// Projekte in Projects (Sichtbarkeit nach Rolle). Das gehört in die
+	// Abfrage und nicht in einen Filter danach: sonst stimmen Seitengröße und
+	// Cursor nicht mehr.
+	Restrict bool
+	Projects []string
 }
 
 type SearchHit struct {

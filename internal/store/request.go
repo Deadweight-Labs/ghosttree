@@ -239,6 +239,18 @@ func (s *Store) SearchRequests(filter requestdomain.SearchFilter) (requestdomain
 			args = append(args, axis.v)
 		}
 	}
+	if filter.Restrict {
+		marks := make([]string, len(filter.Projects))
+		for i, p := range filter.Projects {
+			marks[i] = "?"
+			args = append(args, p)
+		}
+		clause := `r.project=''`
+		if len(marks) > 0 {
+			clause += ` OR r.project IN (` + strings.Join(marks, ",") + `)`
+		}
+		where = append(where, `(`+clause+`)`)
+	}
 	if filter.State != "" {
 		where = append(where, `r.state=?`)
 		args = append(args, filter.State)

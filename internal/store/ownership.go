@@ -40,7 +40,7 @@ type Machine struct {
 // haben.
 func migrateOwnership(db *sql.DB) error {
 	for _, c := range []struct{ table, column string }{
-		{"machines", "account_id"}, {"sessions", "account_id"},
+		{"machines", "account_id"}, {"sessions", "account_id"}, {"sessions", "shared"},
 	} {
 		if err := addColumnIfMissing(db, c.table, c.column, `INTEGER NOT NULL DEFAULT 0`); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			return err

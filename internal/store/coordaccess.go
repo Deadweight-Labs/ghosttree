@@ -125,6 +125,9 @@ func (a CoordAccess) requireRoomAccess(roomKey string) (CoordRoom, error) {
 			return CoordRoom{}, ErrCoordNotFound
 		}
 	case RoomProject, RoomMachine:
+		if err := a.projectRoomGate(room.Kind, room.Key, ResRoom, nil); err != nil {
+			return CoordRoom{}, err
+		}
 		if a.publicOnly {
 			return room, nil
 		}
@@ -525,6 +528,9 @@ func (a CoordAccess) requireRoomAccessTx(tx *sql.Tx, actor, roomKey string) erro
 		}
 		return nil
 	case RoomProject, RoomMachine:
+		if err := a.projectRoomGate(kind, roomKey, ResRoom, tx); err != nil {
+			return err
+		}
 		if a.publicOnly {
 			return nil
 		}
@@ -796,7 +802,12 @@ func (a CoordAccess) SetCursor(kind, id string, lastMessageID int64) error {
 }
 
 func (a CoordAccess) Peers(roomKey, since string) ([]CoordAgent, error) {
-	if _, err := a.requireRoomAccess(roomKey); err != nil {
+	room, err := a.requireRoomAccess(roomKey)
+	if err != nil {
+		return nil, err
+	}
+	// Agenten und Peers sieht ab member; der Gast liest den Raum, mehr nicht.
+	if err := a.projectRoomGate(room.Kind, room.Key, ResAgents, nil); err != nil {
 		return nil, err
 	}
 	return a.Store.CoordPeers(roomKey, since)
@@ -2122,4 +2133,49 @@ func (a CoordAccess) validatePrivateRecipients(actor string, principals []string
 		}
 	}
 	return nil
+}
+
+// projectRoomGate legt die Projektrolle über die Mitgliedschaft im Projektraum
+// (Spec 8.1, Koordination): ohne Rolle im Projekt gibt es den Raum nicht, der
+// Gast liest und schreibt (seine Beiträge gelten als Bitten), Agenten und Peers
+// zeigt der Raum erst ab member. DMs, Gruppen und Maschinenräume bleiben bei der
+// reinen Mitgliedschaft; ein Projekt-Owner liest keine fremden DMs. Mit tx wird
+// die Rolle in derselben Transaktion gelesen, sonst über den Store.
+//
+// Eine Remote ohne Projektzeile ist unbeansprucht; ihr Raum bleibt wie bisher
+// offen für Mitglieder des Raums, bis ein Owner sie beansprucht.
+func (a CoordAccess) projectRoomGate(kind, roomKey string, res Resource, tx rowQuerier) error {
+	if kind != RoomProject || a.Store == nil {
+		return nil
+	}
+	project := strings.TrimPrefix(roomKey, "project:")
+	acct, ok := accountNumericID(a.Principal.ID)
+	var role RoleInfo
+	if ok {
+		if tx != nil {
+			role = projectRoleTx(tx, project, acct)
+		} else {
+			role = a.Store.ProjectRole(project, a.Principal.ID)
+		}
+	}
+	d := Decision{Allowed: matrixAllows(role, res, ActRead, Object{})}
+	if !d.Allowed {
+		d.Hidden, d.Reason = true, "no access to the project room"
+		if RoleRank(role.Role) == 0 && !a.projectClaimed(tx, project) {
+			d = Decision{Allowed: true, Reason: "unclaimed project"}
+		}
+	}
+	if a.Store.accessCfg().apply(a.Principal.ID, project, res, ActRead, d) {
+		return nil
+	}
+	return ErrCoordNotFound
+}
+
+func (a CoordAccess) projectClaimed(tx rowQuerier, project string) bool {
+	if tx != nil {
+		_, claimed := projectTx(tx, project)
+		return claimed
+	}
+	_, claimed := a.Store.ProjectByRemote(project)
+	return claimed
 }
