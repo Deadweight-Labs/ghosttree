@@ -7,6 +7,7 @@ import (
 
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
+	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
 func (a *api) createRequest(w http.ResponseWriter, r *http.Request) {
@@ -31,6 +32,9 @@ func (a *api) createRequest(w http.ResponseWriter, r *http.Request) {
 		!a.gateProject(w, r, scope.CanonicalAxes(scope.Axes{Project: body.Project}).Project) {
 		return
 	}
+	if denyAccess(w, a.access(r).Check(scope.CanonicalAxes(scope.Axes{Project: body.Project}).Project, store.ResRequest, store.ActCreate, store.Object{Own: true})) {
+		return
+	}
 	detail, err := a.st.CreateRequest(requestdomain.CreateInput{
 		Request: requestdomain.Request{
 			Type: body.Type, Title: body.Title, Description: body.Description, Priority: body.Priority,
@@ -48,17 +52,21 @@ func (a *api) createRequest(w http.ResponseWriter, r *http.Request) {
 
 func (a *api) searchRequests(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	page, err := a.st.SearchRequests(requestdomain.SearchFilter{
+	if !a.listGate(w, r, axesFromQuery(r).Project, store.ResRequest) {
+		return
+	}
+	page, err := a.st.SearchRequests(a.requestFilter(r, requestdomain.SearchFilter{
 		Scope: axesFromQuery(r), Query: q.Get("q"), State: q.Get("state"),
 		Type: q.Get("type"), Cursor: q.Get("cursor"), Limit: intParam(r, "limit", 10),
 		// Nur für Aufrufer, die den ganzen Text zeigen — der Dateispiegel. Eine
 		// Trefferliste bleibt eine Trefferliste.
 		FullDescription: q.Get("full") == "1",
-	})
+	}))
 	if err != nil {
 		writeRequestError(w, err)
 		return
 	}
+	a.noteRequestHits(r, page.Results)
 	writeJSON(w, http.StatusOK, page)
 }
 
@@ -66,6 +74,9 @@ func (a *api) getRequest(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathID(r)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "bad request id")
+		return
+	}
+	if !a.checkRequest(w, r, store.RefRequest, id, store.ActRead) {
 		return
 	}
 	detail, err := a.st.RequestByID(id)
@@ -88,6 +99,9 @@ func (a *api) completeRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)
+		return
+	}
+	if !a.checkRequest(w, r, store.RefRequest, id, store.ActEdit) {
 		return
 	}
 	err := a.st.CompleteRequest(id, requestdomain.Evidence{Kind: body.EvidenceKind, Ref: body.EvidenceRef, Person: personOf(r)})
@@ -117,6 +131,9 @@ func (a *api) startRequestWork(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
+	if !a.checkRequest(w, r, store.RefRequest, requestID, store.ActWork) {
+		return
+	}
 	work, warnings, err := a.st.StartRequestWork(requestID, body.SessionID, body.Role, personOf(r))
 	if err != nil {
 		writeRequestError(w, err)
@@ -139,6 +156,9 @@ func (a *api) finishRequestWork(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
+	if !a.checkRequest(w, r, store.RefWork, workID, store.ActWork) {
+		return
+	}
 	work, err := a.st.FinishRequestWork(workID, body.State, body.Summary, personOf(r))
 	if err != nil {
 		writeRequestError(w, err)
@@ -158,6 +178,9 @@ func (a *api) addRequestCriterion(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)
+		return
+	}
+	if !a.checkRequest(w, r, store.RefRequest, requestID, store.ActEdit) {
 		return
 	}
 	criterion, err := a.st.AddCriterion(requestID, body.Description, personOf(r))
@@ -183,6 +206,9 @@ func (a *api) setRequestCriterion(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
+	if !a.checkRequest(w, r, store.RefCriterion, criterionID, store.ActWork) {
+		return
+	}
 	if err := a.st.SetCriterionState(criterionID, body.State, requestdomain.Evidence{Kind: body.EvidenceKind, Ref: body.EvidenceRef, Person: personOf(r)}); err != nil {
 		writeRequestError(w, err)
 		return
@@ -201,6 +227,9 @@ func (a *api) dropRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)
+		return
+	}
+	if !a.checkRequest(w, r, store.RefRequest, requestID, store.ActEdit) {
 		return
 	}
 	if err := a.st.DropRequest(requestID, body.Reason, personOf(r)); err != nil {
@@ -226,6 +255,9 @@ func (a *api) addRequestRelation(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
+	if !a.checkRequest(w, r, store.RefRequest, requestID, store.ActWork) {
+		return
+	}
 	saved, err := a.st.AddRequestRelation(requestID, relation, personOf(r))
 	if err != nil {
 		writeRequestError(w, err)
@@ -246,6 +278,9 @@ func (a *api) correctRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)
+		return
+	}
+	if !a.checkRequest(w, r, store.RefRequest, requestID, store.ActEdit) {
 		return
 	}
 	if err := a.st.UpdateRequest(requestID, body.Patch, personOf(r), body.Reason); err != nil {
@@ -271,6 +306,9 @@ func (a *api) removeRequestRelation(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)
+		return
+	}
+	if !a.checkRequest(w, r, store.RefRelation, relationID, store.ActWork) {
 		return
 	}
 	if err := a.st.RemoveRequestRelation(relationID, personOf(r), body.Reason); err != nil {

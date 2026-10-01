@@ -38,6 +38,9 @@ const (
 	envOIDCClientID     = "GHOSTTREE_OIDC_CLIENT_ID"
 	envOIDCClientSecret = "GHOSTTREE_OIDC_CLIENT_SECRET"
 	envOIDCRedirectURL  = "GHOSTTREE_OIDC_REDIRECT_URL"
+	// envEnforceAccess schaltet die Sichtbarkeit nach Rolle scharf. Ohne "1"
+	// wird nur protokolliert, was verweigert würde ("access: would deny").
+	envEnforceAccess = "GHOSTTREE_ENFORCE_ACCESS"
 )
 
 type snapshotRootValues []string
@@ -207,6 +210,8 @@ func runServer(ctx context.Context, st *store.Store, cfg serveConfig, stdout, st
 		return 0
 	}
 	fmt.Fprintf(stdout, "ghosttree %s listening on %s (db %s, ui /ui/)\n", version, cfg.Listen, cfg.DB)
+	slog.New(slog.NewJSONHandler(stderr, nil)).Info("access_mode", "enforce", accessEnforcedByEnv(), "env", envEnforceAccess,
+		"note", "without enforcement only 'access: would deny' is logged, nothing is refused")
 	slog.New(slog.NewJSONHandler(stderr, nil)).Info("writer_config", "max_operations", cfg.Writer.MaxOperations, "max_bytes", cfg.Writer.MaxBytes, "max_batch", cfg.Writer.MaxBatch, "read_connections", cfg.Writer.ReadConnections)
 	if err := serveUntilCanceled(ctx, newHTTPServer(cfg.Listen, buildServerHandler(st, cfg, stderr))); err != nil {
 		fmt.Fprintf(stdout, "serve: %v\n", err)
@@ -214,6 +219,8 @@ func runServer(ctx context.Context, st *store.Store, cfg serveConfig, stdout, st
 	}
 	return 0
 }
+
+func accessEnforcedByEnv() bool { return os.Getenv(envEnforceAccess) == "1" }
 
 func buildServerHandler(st *store.Store, cfg serveConfig, stderr io.Writer) http.Handler {
 	root := http.NewServeMux()
@@ -226,6 +233,7 @@ func buildServerHandler(st *store.Store, cfg serveConfig, stderr io.Writer) http
 	if len(cfg.SnapshotRoots) > 0 {
 		options = append(options, server.WithSnapshotMirror(&rootedSnapshotMirror{source: st, roots: cfg.SnapshotRoots}))
 	}
+	st.SetAccessMode(store.AccessMode{Enforce: accessEnforcedByEnv(), Logger: logger})
 	apiHandler := server.New(st, options...)
 	root.Handle("/api/", apiHandler)
 	root.Handle("/metrics", apiHandler)

@@ -17,7 +17,13 @@ func (a *api) roleProject(w http.ResponseWriter, r *http.Request) (store.Project
 	}
 	p, ok := a.st.ProjectByID(id)
 	if !ok || a.st.OrgRole(p.OrgID, principalOf(r).ID) == "" {
+		a.access(r).Filtered()
 		writeOrgError(w, store.ErrProjectNotFound)
+		return store.Project{}, false
+	}
+	// Die Mitgliederliste ist Projektsache: ohne Rolle im Projekt gibt es sie
+	// nicht, auch nicht für Mitglieder der Organisation.
+	if denyAccess(w, a.access(r).Check(p.Remote, store.ResMembers, store.ActRead, store.Object{})) {
 		return store.Project{}, false
 	}
 	return p, true
@@ -32,6 +38,11 @@ func (a *api) listProjectMembers(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeOrgError(w, err)
 		return
+	}
+	// Der Gast sieht nur den eigenen Eintrag.
+	if store.RoleRank(a.access(r).Role(p.Remote).Role) == 1 && a.st.AccessEnforced() {
+		me := principalOf(r).ID
+		members = filterTo(members, 0, func(m store.ProjectMember) bool { return m.AccountID == me })
 	}
 	if members == nil {
 		members = []store.ProjectMember{}
