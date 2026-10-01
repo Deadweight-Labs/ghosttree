@@ -195,13 +195,37 @@ func TestProjectsClaimMoveAndImplicitAssignment(t *testing.T) {
 	if _, ok := f.st.ProjectByRemote("github.com/x/three"); ok {
 		t.Fatal("refused write left a project")
 	}
-	f.mustCall(t, 200, "POST", "/api/projects/claim", f.ben, map[string]any{"remote": "https://github.com/x/three.git", "org": "beta"})
+	// Ein Mitglied kann nicht besetzen; ein Owner schon.
+	if code, out := f.call(t, "POST", "/api/projects/claim", f.ben, map[string]any{"remote": "https://github.com/x/three.git", "org": "beta"}); code != 403 || out["code"] != "not_org_owner" {
+		t.Fatalf("claim by a plain member: %d %v", code, out)
+	}
+	if _, ok := f.st.ProjectByRemote("github.com/x/three"); ok {
+		t.Fatal("a refused claim left a project")
+	}
+	f.mustCall(t, 200, "POST", "/api/projects/claim", f.robin, map[string]any{"remote": "https://github.com/x/three.git", "org": "beta"})
 	f.mustCall(t, 201, "POST", "/api/requests", f.ben, map[string]any{"type": "feature", "title": "r", "project": "github.com/x/three"})
 	// Carl hat keine Org: schreibt wie bisher, kein Projekt entsteht.
 	f.mustCall(t, 201, "POST", "/api/requests", f.carl, map[string]any{"type": "feature", "title": "r", "project": "github.com/x/four"})
 	if _, ok := f.st.ProjectByRemote("github.com/x/four"); ok {
 		t.Fatal("an account without an org must not claim")
 	}
+	// Schreibzugriff in ein fremdes Projekt: 409, auch ohne Org. Der Owner
+	// (wie der Prod-Collector von person:1) schreibt unverändert weiter.
+	for name, tok := range map[string]string{"account without org": f.carl, "member of another org": f.anna} {
+		for _, call := range []struct {
+			path string
+			body map[string]any
+		}{
+			{"/api/requests", map[string]any{"type": "feature", "title": "r", "project": "github.com/x/three"}},
+			{"/api/knowledge", map[string]any{"type": "note", "title": "t", "body": "b", "scope": map[string]any{"project": "github.com/x/three"}}},
+			{"/api/sessions", map[string]any{"harness": "claude-code", "external_id": "squat-" + name, "scope": map[string]any{"project": "github.com/x/three", "machine": "m-" + name}}},
+		} {
+			if code, out := f.call(t, "POST", call.path, tok, call.body); code != 409 || out["code"] != "project_claimed" {
+				t.Fatalf("%s writing %s into a foreign project: %d %v", name, call.path, code, out)
+			}
+		}
+	}
+	f.mustCall(t, 200, "POST", "/api/sessions", f.robin, map[string]any{"harness": "claude-code", "external_id": "own", "scope": map[string]any{"project": "github.com/x/three", "machine": "robinbox"}})
 	// Fremdes Projekt beanspruchen: 409. Verschieben: nur Owner beider Orgs.
 	f.mustCall(t, 409, "POST", "/api/projects/claim", f.carl, map[string]any{"remote": "github.com/x/three"})
 	f.mustCall(t, 403, "POST", "/api/projects/move", f.ben, map[string]any{"remote": "github.com/x/three", "org": "alpha"})

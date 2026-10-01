@@ -174,7 +174,7 @@ func migrateOrgs(db *sql.DB) error {
 		return err
 	}
 	if !org.Valid {
-		res, err := tx.Exec(`INSERT INTO orgs(slug, name, created_at) VALUES('deadweight','Deadweight Labs',?)`, now())
+		res, err := tx.Exec(`INSERT INTO orgs(slug, name, created_at) VALUES('default','Default',?)`, now())
 		if err != nil {
 			return err
 		}
@@ -549,7 +549,10 @@ func pickOrgTx(q queryer, account int64) (int64, error) {
 
 // claimProjectTx ordnet eine unbeanspruchte Remote einer Organisation zu und
 // ist bei einer schon zugeordneten idempotent. orgID 0 heißt: Regel des Kontos.
-func claimProjectTx(tx execQueryer, account int64, remote string, orgID int64) (Project, error) {
+// Ein ausdrücklicher Claim verlangt Owner der Ziel-Org: sonst könnte ein
+// einfaches Mitglied eine Remote besetzen, bevor ihr Besitzer dort schreibt.
+// Der implizite Weg (erster Schreibzugriff) genügt mit Mitgliedschaft.
+func claimProjectTx(tx execQueryer, account int64, remote string, orgID int64, explicit bool) (Project, error) {
 	if p, ok := projectTx(tx, remote); ok {
 		if orgRoleTx(tx, p.OrgID, account) == "" {
 			return Project{}, ErrProjectClaimed
@@ -563,6 +566,9 @@ func claimProjectTx(tx execQueryer, account int64, remote string, orgID int64) (
 		}
 	} else if orgRoleTx(tx, orgID, account) == "" {
 		return Project{}, ErrNotOrgMember
+	}
+	if explicit && orgRoleTx(tx, orgID, account) != OrgOwner {
+		return Project{}, ErrNotOrgOwner
 	}
 	if _, err := tx.Exec(`INSERT OR IGNORE INTO projects(remote, org_id, created_at) VALUES(?,?,?)`, remote, orgID, now()); err != nil {
 		return Project{}, err
@@ -593,10 +599,11 @@ func (s *Store) EnsureProject(accountPrincipal, remote string) (Project, error) 
 	if remote == "" || len(remote) > maxRemoteLen {
 		return Project{}, nil
 	}
-	return claimInTx(s.db, accountPrincipal, remote, "")
+	return claimInTx(s.db, accountPrincipal, remote, "", false)
 }
 
-// ClaimProject ist der ausdrückliche Weg (`ctx project claim`).
+// ClaimProject ist der ausdrückliche Weg (`ctx project claim`), nur für Owner
+// der Ziel-Org.
 func (s *Store) ClaimProject(accountPrincipal, remote, orgRef string) (Project, error) {
 	if s.writer != nil {
 		return queueValue(s, []any{accountPrincipal, remote, orgRef}, func(d *Store, p []any) (Project, error) {
@@ -607,10 +614,10 @@ func (s *Store) ClaimProject(accountPrincipal, remote, orgRef string) (Project, 
 	if err != nil {
 		return Project{}, err
 	}
-	return claimInTx(s.db, accountPrincipal, remote, orgRef)
+	return claimInTx(s.db, accountPrincipal, remote, orgRef, true)
 }
 
-func claimInTx(db *sql.DB, accountPrincipal, remote, orgRef string) (Project, error) {
+func claimInTx(db *sql.DB, accountPrincipal, remote, orgRef string, explicit bool) (Project, error) {
 	acct, err := parsePersonPrincipalID(accountPrincipal)
 	if err != nil {
 		return Project{}, err
@@ -628,7 +635,7 @@ func claimInTx(db *sql.DB, accountPrincipal, remote, orgRef string) (Project, er
 		}
 		orgID = o.ID
 	}
-	pr, err := claimProjectTx(tx, acct, remote, orgID)
+	pr, err := claimProjectTx(tx, acct, remote, orgID, explicit)
 	if err != nil {
 		return Project{}, err
 	}
@@ -1117,4 +1124,95 @@ func (l *attemptLimiter) note(key string, err error) {
 		}
 	}
 	l.failures[key] = append(l.failures[key], at)
+}
+
+// ForceMoveProject hängt ein Projekt ohne Rechteprüfung um (Admin-Weg mit
+// Datenbankzugriff, wie TransferMachine) und protokolliert es in org_events.
+// Damit lässt sich ein besetztes Projekt an seinen Besitzer zurückgeben.
+func (s *Store) ForceMoveProject(remote, toOrgRef string) (Project, error) {
+	if s.writer != nil {
+		return queueValue(s, []any{remote, toOrgRef}, func(d *Store, p []any) (Project, error) {
+			return d.ForceMoveProject(p[0].(string), p[1].(string))
+		})
+	}
+	remote, err := normalizeRemote(remote)
+	if err != nil {
+		return Project{}, err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return Project{}, err
+	}
+	defer tx.Rollback()
+	cur, ok := projectTx(tx, remote)
+	if !ok {
+		return Project{}, ErrProjectNotFound
+	}
+	to, err := orgByRefTx(tx, toOrgRef)
+	if err != nil {
+		return Project{}, err
+	}
+	if cur.OrgID == to.ID {
+		return cur, nil
+	}
+	if _, err := tx.Exec(`UPDATE projects SET org_id=? WHERE remote=?`, to.ID, cur.Remote); err != nil {
+		return Project{}, err
+	}
+	for _, id := range []int64{cur.OrgID, to.ID} {
+		if err := orgEvent(tx, id, "force_move_project", "admin", cur.Remote, cur.Org+" -> "+to.Slug); err != nil {
+			return Project{}, err
+		}
+	}
+	moved, _ := projectTx(tx, cur.Remote)
+	return moved, tx.Commit()
+}
+
+// RenameOrg ändert Name und optional Slug (leer = unverändert). Nur Owner.
+func (s *Store) RenameOrg(actorPrincipal string, orgID int64, name, slug string) (Org, error) {
+	if s.writer != nil {
+		return queueValue(s, []any{actorPrincipal, orgID, name, slug}, func(d *Store, p []any) (Org, error) {
+			return d.RenameOrg(p[0].(string), p[1].(int64), p[2].(string), p[3].(string))
+		})
+	}
+	actor, err := parsePersonPrincipalID(actorPrincipal)
+	if err != nil {
+		return Org{}, err
+	}
+	name = strings.TrimSpace(name)
+	slug = strings.ToLower(strings.TrimSpace(slug))
+	if name == "" || len(name) > maxOrgNameLen {
+		return Org{}, fmt.Errorf("%w: organization name must be 1 to %d characters", ErrInvalidInput, maxOrgNameLen)
+	}
+	if slug != "" && !slugPattern.MatchString(slug) {
+		return Org{}, fmt.Errorf("%w: slug must be lowercase letters, digits and dashes (up to 40 characters)", ErrInvalidInput)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return Org{}, err
+	}
+	defer tx.Rollback()
+	if orgRoleTx(tx, orgID, actor) != OrgOwner {
+		return Org{}, ErrNotOrgOwner
+	}
+	old, err := orgByIDTx(tx, orgID)
+	if err != nil {
+		return Org{}, err
+	}
+	if slug == "" {
+		slug = old.Slug
+	}
+	if _, err := tx.Exec(`UPDATE orgs SET name=?, slug=? WHERE id=?`, name, slug, orgID); err != nil {
+		if strings.Contains(err.Error(), "UNIQUE") {
+			return Org{}, ErrOrgSlugTaken
+		}
+		return Org{}, err
+	}
+	if err := orgEvent(tx, orgID, "rename_org", principalOfID(actor), slug, old.Name+" -> "+name); err != nil {
+		return Org{}, err
+	}
+	o, err := orgByIDTx(tx, orgID)
+	if err != nil {
+		return Org{}, err
+	}
+	return o, tx.Commit()
 }

@@ -20,8 +20,8 @@ Versioning, with pre-1.0 compatibility rules described in
   code alone, one with an email also requires the identity provider to report
   that same address as verified, otherwise nothing is created and the code stays
   valid. Wrong codes lock the signing-in identity for ten minutes after five
-  attempts. Existing instances get a `Deadweight Labs` organization (slug
-  `deadweight`) on startup with the first account as its owner and all known
+  attempts. Existing instances get a `Default` organization (slug
+  `default`; rename it with `ctx org rename`) on startup with the first account as its owner and all known
   projects in it; the migration only reads the small tables (never session
   chunks) and adds three empty tables, so it takes milliseconds on a large
   database. A new instance gets a `default` organization with its bootstrap
@@ -36,6 +36,14 @@ Versioning, with pre-1.0 compatibility rules described in
   codes in ten minutes lock `accept` for that account. Sessions, knowledge,
   requests and documents written for an unknown project assign it as described
   above (`409 project_unclaimed` lists the organizations).
+- Keep projects from being claimed out from under their owners: `ctx project
+  claim` and its API now need an owner of the target organization, and a write
+  into a project that belongs to another organization is refused with `409
+  project_claimed`, also for accounts without any organization. Writes by members
+  of the project's organization, such as the collector of the first account, are
+  unchanged. Admins hand a squatted project back with `ctx project move --force
+  <remote> --org <org> --db <path>` (database access, recorded in `org_events`).
+  `ctx org rename <org> <name> [--slug S]` renames an organization (owner).
 - Add an Organizations page (`/ui/orgs`) with members, invitations and
   projects: owners create invitations (the code is shown once), change roles,
   remove members and move projects; members see the lists and can leave or join

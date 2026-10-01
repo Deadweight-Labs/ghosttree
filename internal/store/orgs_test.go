@@ -175,8 +175,15 @@ func TestProjectAssignmentRule(t *testing.T) {
 	if p, err := st.EnsureProject("person:3", "github.com/x/new"); err != nil || p.Org != "beta" {
 		t.Fatalf("default org: %+v %v", p, err)
 	}
-	if p, err := st.ClaimProject("person:3", "github.com/x/other", "alpha"); err != nil || p.Org != "alpha" {
-		t.Fatalf("explicit claim: %+v %v", p, err)
+	// Ein ausdrücklicher Claim ist Owner-Sache; ein Mitglied kann nicht besetzen.
+	if _, err := st.ClaimProject("person:3", "github.com/x/other", "alpha"); !errors.Is(err, ErrNotOrgOwner) {
+		t.Fatalf("explicit claim by a plain member: %v", err)
+	}
+	if _, ok := st.ProjectByRemote("github.com/x/other"); ok {
+		t.Fatal("a refused claim left a project behind")
+	}
+	if p, err := st.ClaimProject("person:1", "github.com/x/other", "alpha"); err != nil || p.Org != "alpha" {
+		t.Fatalf("explicit claim by an owner: %+v %v", p, err)
 	}
 	// Keine Org: bleibt unbeansprucht, kein Fehler für den Aufrufer außer ErrNoOrg.
 	if _, err := st.EnsureProject("person:4", "github.com/x/none"); !errors.Is(err, ErrNoOrg) {
@@ -535,7 +542,7 @@ func TestOrgBackfillOnOldDatabase(t *testing.T) {
 		}
 		defer st.Close()
 		orgs, err := st.ListOrgs("person:1")
-		if err != nil || len(orgs) != 1 || orgs[0].Slug != "deadweight" || orgs[0].Role != OrgOwner || !orgs[0].Default {
+		if err != nil || len(orgs) != 1 || orgs[0].Slug != "default" || orgs[0].Role != OrgOwner || !orgs[0].Default {
 			t.Fatalf("%s: robin's orgs = %+v %v", label, orgs, err)
 		}
 		if orgs, _ := st.ListOrgs("person:2"); len(orgs) != 0 {
@@ -546,8 +553,8 @@ func TestOrgBackfillOnOldDatabase(t *testing.T) {
 			t.Fatalf("%s: projects = %+v %v", label, projects, err)
 		}
 		for i, p := range projects {
-			if p.Org != "deadweight" || p.Remote != want[i] {
-				t.Fatalf("%s: project %d = %+v, want %s in deadweight", label, i, p, want[i])
+			if p.Org != "default" || p.Remote != want[i] {
+				t.Fatalf("%s: project %d = %+v, want %s in default", label, i, p, want[i])
 			}
 		}
 	}
@@ -602,5 +609,45 @@ func TestOrgsThroughRuntimeWriter(t *testing.T) {
 	}
 	if p, ok := st.ProjectByRemote("github.com/x/y"); !ok || p.Org != "alpha" {
 		t.Fatalf("project through the writer: %+v %v", p, ok)
+	}
+}
+
+func TestForceMoveAndRename(t *testing.T) {
+	st := orgStore(t, "robin", "anna")
+	a := mustOrg(t, st, "person:1", "Alpha", "alpha")
+	b := mustOrg(t, st, "person:2", "Beta", "beta")
+	if _, err := st.ClaimProject("person:2", "github.com/x/y", "beta"); err != nil {
+		t.Fatal(err)
+	}
+	// Admin-Weg ohne Rechteprüfung, protokolliert in beiden Orgs.
+	p, err := st.ForceMoveProject("https://github.com/X/y.git", "alpha")
+	if err != nil || p.OrgID != a.ID {
+		t.Fatalf("force move: %+v %v", p, err)
+	}
+	var n int
+	st.db.QueryRow(`SELECT COUNT(*) FROM org_events WHERE action='force_move_project' AND subject='github.com/x/y'`).Scan(&n)
+	if n != 2 {
+		t.Fatalf("org_events entries = %d", n)
+	}
+	if _, err := st.ForceMoveProject("github.com/x/none", "alpha"); !errors.Is(err, ErrProjectNotFound) {
+		t.Fatalf("unknown project: %v", err)
+	}
+	_ = b
+
+	if _, err := st.RenameOrg("person:2", a.ID, "Hijack", ""); !errors.Is(err, ErrNotOrgOwner) {
+		t.Fatalf("rename by a non-member: %v", err)
+	}
+	o, err := st.RenameOrg("person:1", a.ID, "Deadweight Labs", "")
+	if err != nil || o.Name != "Deadweight Labs" || o.Slug != "alpha" {
+		t.Fatalf("rename: %+v %v", o, err)
+	}
+	if o, err = st.RenameOrg("person:1", a.ID, "Deadweight Labs", "deadweight"); err != nil || o.Slug != "deadweight" {
+		t.Fatalf("rename with slug: %+v %v", o, err)
+	}
+	if _, err := st.RenameOrg("person:1", a.ID, "X", "beta"); !errors.Is(err, ErrOrgSlugTaken) {
+		t.Fatalf("slug clash: %v", err)
+	}
+	if _, err := st.RenameOrg("person:1", a.ID, " ", ""); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("empty name: %v", err)
 	}
 }

@@ -24,6 +24,7 @@ const orgUsage = `usage: ctx org <command>
                                           print a single-use invitation code
   invitations <org> [revoke <id>]         list or revoke invitations
   accept <code>                           join an organization with a code
+  rename <org> <name> [--slug S]          rename an organization (owner)
   default <org>                           organization for your new projects ("none" clears)`
 
 const projectUsage = `usage: ctx project <command>
@@ -31,7 +32,9 @@ const projectUsage = `usage: ctx project <command>
   list [--org O]                          projects of your organizations
   claim [remote] [--org O]                assign a project to an organization
                                           (default remote: the current repository)
-  move <remote> --org O                   move a project (owner of both organizations)`
+  move <remote> --org O                   move a project (owner of both organizations)
+  move --force <remote> --org O --db P    admin: move without permission checks
+                                          (database access, logged in org_events)`
 
 // interspersed parst Flags auch hinter Positionsargumenten.
 func interspersed(fs *flag.FlagSet, args []string) ([]string, error) {
@@ -93,7 +96,7 @@ func cmdOrg(args []string, stdout io.Writer) int {
 	role := fs.String("role", "member", "invitation role")
 	days := fs.Int("days", 0, "invitation lifetime in days (default 7, at most 30)")
 	switch sub {
-	case "list", "create", "members", "invite", "invitations", "accept", "default":
+	case "list", "create", "rename", "members", "invite", "invitations", "accept", "default":
 	default:
 		fmt.Fprintln(stdout, orgUsage)
 		return 2
@@ -134,6 +137,15 @@ func cmdOrg(args []string, stdout io.Writer) int {
 			return orgFail(stdout, "create organization", err)
 		}
 		fmt.Fprintf(stdout, "organization %s created (you are its owner)\n", o.Slug)
+	case "rename":
+		if len(pos) != 2 {
+			return usage()
+		}
+		o, err := c.RenameOrg(pos[0], pos[1], *slug)
+		if err != nil {
+			return orgFail(stdout, "rename organization", err)
+		}
+		fmt.Fprintf(stdout, "organization is now %s (%s)\n", o.Name, o.Slug)
 	case "members":
 		switch {
 		case len(pos) == 1:
@@ -230,9 +242,11 @@ func cmdProject(args []string, stdout io.Writer) int {
 		return 2
 	}
 	sub := args[0]
+	args, force := removeBoolArg(args, "--force")
 	fs := flag.NewFlagSet("project "+sub, flag.ContinueOnError)
 	fs.SetOutput(stdout)
 	org := fs.String("org", "", "organization (slug or id)")
+	db := fs.String("db", "ghosttree.db", "database path (with --force)")
 	switch sub {
 	case "list", "claim", "move":
 	default:
@@ -257,6 +271,23 @@ func cmdProject(args []string, stdout io.Writer) int {
 		if len(pos) != 1 || *org == "" {
 			return usage()
 		}
+	}
+	if force {
+		if sub != "move" {
+			return usage()
+		}
+		st, ok := openAccountStore(*db, stdout)
+		if !ok {
+			return 1
+		}
+		defer st.Close()
+		p, err := st.ForceMoveProject(pos[0], *org)
+		if err != nil {
+			fmt.Fprintf(stdout, "move project: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "%s now belongs to %s\n", p.Remote, p.Org)
+		return 0
 	}
 	c, ok := orgClient(stdout)
 	if !ok {

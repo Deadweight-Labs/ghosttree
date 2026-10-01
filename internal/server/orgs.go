@@ -133,6 +133,27 @@ func (a *api) createOrg(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, o)
 }
 
+// renameOrg ändert Name und optional Slug einer Organisation (nur Owner).
+func (a *api) renameOrg(w http.ResponseWriter, r *http.Request) {
+	o, _, ok := a.memberOrg(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Name string `json:"name"`
+		Slug string `json:"slug"`
+	}
+	if !readOrgJSON(w, r, &body) {
+		return
+	}
+	renamed, err := a.st.RenameOrg(principalOf(r).ID, o.ID, body.Name, body.Slug)
+	if err != nil {
+		writeOrgError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, renamed)
+}
+
 func (a *api) listOrgMembers(w http.ResponseWriter, r *http.Request) {
 	o, _, ok := a.memberOrg(w, r)
 	if !ok {
@@ -342,15 +363,22 @@ func (a *api) moveProject(w http.ResponseWriter, r *http.Request) {
 
 // gateProject ordnet beim Schreiben eine noch unbekannte Remote einer
 // Organisation zu (Regel: Standard-Organisation des Schreibenden, sonst seine
-// einzige). Bekannte Projekte kosten einen Lesezugriff. Ein Konto ohne
-// Organisation schreibt wie bisher; mit mehreren Organisationen und ohne
+// einzige). In ein bekanntes Projekt schreibt nur ein Mitglied seiner Org (409
+// project_claimed sonst). Ein Konto ohne Organisation schreibt in unbekannte
+// Projekte wie bisher; mit mehreren Organisationen und ohne
 // Standard wird nicht geraten (409 project_unclaimed). Gibt false zurück, wenn
 // schon geantwortet wurde.
 func (a *api) gateProject(w http.ResponseWriter, r *http.Request, project string) bool {
 	if strings.TrimSpace(project) == "" {
 		return true
 	}
-	if _, known := a.st.ProjectByRemote(project); known {
+	if p, known := a.st.ProjectByRemote(project); known {
+		// Ein bekanntes Projekt nimmt nur Schreibzugriffe seiner Org an, auch
+		// von Konten ohne Org: sonst landeten Daten still in einer fremden Org.
+		if a.st.OrgRole(p.OrgID, principalOf(r).ID) == "" {
+			writeOrgError(w, store.ErrProjectClaimed)
+			return false
+		}
 		return true
 	}
 	_, err := a.st.EnsureProject(principalOf(r).ID, project)

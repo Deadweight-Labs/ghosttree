@@ -153,3 +153,36 @@ func TestProjectCLIClaimMoveListAndDefaults(t *testing.T) {
 		t.Fatalf("claim with default: %s", out)
 	}
 }
+
+func TestOrgRenameAndForceMove(t *testing.T) {
+	f := newOrgCLI(t)
+	f.ok(t, "robin", "org", "create", "Alpha", "--slug", "alpha")
+	if out := f.ok(t, "robin", "org", "rename", "alpha", "Deadweight Labs", "--slug", "deadweight"); !strings.Contains(out, "Deadweight Labs (deadweight)") {
+		t.Fatalf("rename: %s", out)
+	}
+	if c, o := f.as(t, "anna", "org", "rename", "deadweight", "Mine"); c == 0 || !strings.Contains(o, "org_not_found") {
+		t.Fatalf("rename by a non-member: %d %s", c, o)
+	}
+
+	// Admin-Weg mit Datenbankzugriff: ein besetztes Projekt zurückgeben.
+	db := t.TempDir() + "/force.db"
+	st, err := store.Open(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.AddPerson("robin")
+	st.AddPerson("anna")
+	st.CreateOrg("person:1", "Home", "home")
+	st.CreateOrg("person:2", "Squat", "squat")
+	if _, err := st.ClaimProject("person:2", "github.com/x/y", "squat"); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	var out bytes.Buffer
+	if code := run([]string{"project", "move", "--force", "github.com/x/y", "--org", "home", "--db", db}, &out); code != 0 || !strings.Contains(out.String(), "now belongs to home") {
+		t.Fatalf("force move: %d %s", code, out.String())
+	}
+	if code := run([]string{"project", "claim", "--force", "x", "--db", db}, &out); code != 2 {
+		t.Fatalf("--force is only for move: %d", code)
+	}
+}

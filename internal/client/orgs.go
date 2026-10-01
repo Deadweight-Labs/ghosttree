@@ -92,3 +92,9 @@ func (c *Client) MoveProject(remote, org string) (store.Project, error) {
 	err := c.do("POST", "/api/projects/move", nil, map[string]string{"remote": remote, "org": org}, &out)
 	return out, err
 }
+
+func (c *Client) RenameOrg(org, name, slug string) (store.Org, error) {
+	var out store.Org
+	err := c.do("PATCH", orgPath(org), nil, map[string]string{"name": name, "slug": slug}, &out)
+	return out, err
+}

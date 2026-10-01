@@ -21,6 +21,8 @@ var writerMethodClasses = map[string]string{
 	"EnsureProject":                 "write",
 	"ClaimProject":                  "write",
 	"MoveProject":                   "write",
+	"ForceMoveProject":              "write",
+	"RenameOrg":                     "write",
 	"CreateInvitation":              "write",
 	"RevokeInvitation":              "write",
 	"AcceptInvitation":              "write",

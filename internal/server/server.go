@@ -87,6 +87,7 @@ func New(st *store.Store, options ...Option) http.Handler {
 	mux.HandleFunc("POST /api/auth/device/token", a.pollDeviceLogin)
 	mux.HandleFunc("GET /api/orgs", a.listOrgs)
 	mux.HandleFunc("POST /api/orgs", a.createOrg)
+	mux.HandleFunc("PATCH /api/orgs/{org}", a.renameOrg)
 	mux.HandleFunc("GET /api/orgs/{org}/members", a.listOrgMembers)
 	mux.HandleFunc("PUT /api/orgs/{org}/members/{account}", a.setOrgMemberRole)
 	mux.HandleFunc("DELETE /api/orgs/{org}/members/{account}", a.removeOrgMember)
