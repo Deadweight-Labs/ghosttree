@@ -95,7 +95,7 @@ func resolveChannelSelf(flagValue string) string {
 
 func channelCapabilityText() string {
 	var b strings.Builder
-	b.WriteString("claude channel capabilities (measured 2026-09-30, Claude Code 2.1.284):\n")
+	b.WriteString("claude channel capabilities (measured 2026-09-30, Claude Code 2.1.284; human_pause 2026-10-02, 2.1.287):\n")
 	for _, c := range claudechannel.Capabilities() {
 		fmt.Fprintf(&b, "  can   %s\n", c)
 	}
@@ -250,8 +250,27 @@ func runChannel(ctx context.Context, cfg channelConfig) error {
 		_ = p.Run(ctx)
 	}()
 
+	// The pause mirror runs next to the poller. It needs the launcher identity
+	// the hook can find (GHOSTTREE_AGENT_ID); without it there is nothing to
+	// mirror and a pause stays "requested".
+	pauseDone := make(chan struct{})
+	var pause *pauseSyncer
+	if cfg.client != nil && pauseEligible(cfg.self) {
+		pause = &pauseSyncer{agent: cfg.self, src: clientPauseSource{cfg.client}}
+		go func() {
+			defer close(pauseDone)
+			pause.run(ctx)
+		}()
+	} else {
+		close(pauseDone)
+	}
+
 	<-ctx.Done()
 	_ = ss.Close()
+	<-pauseDone
+	if pause != nil {
+		pause.close()
+	}
 	<-pollerDone
 	<-waitDone
 	return nil

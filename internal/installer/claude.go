@@ -10,6 +10,8 @@ const (
 	hookCommand        = "ctx hook session-start"
 	promptHookCommand  = "ctx hook user-prompt-submit"
 	preToolHookCommand = "ctx hook pre-tool-use"
+	// pauseGateHookCommand: the human-pause gate, matcher empty.
+	pauseGateHookCommand = "ctx hook pause-gate"
 )
 
 // ClaudeConfigDir resolves where Claude Code keeps its user config. Verified on

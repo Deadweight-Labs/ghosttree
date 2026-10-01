@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -216,4 +217,50 @@ func (c *Client) CoordInjectedMessages(recipient string, messageIDs []int64) ([]
 	}
 	err := c.do("GET", "/api/coord/deliveries/injected", q, nil, &out)
 	return out.IDs, err
+}
+
+// AgentControl liefert den aktiven Pausen- oder Unterbrechungsvorgang des
+// Agenten, nil wenn es keinen gibt. Nur das Konto des Agenten darf fragen.
+func (c *Client) AgentControl(agent string) (*store.AgentControl, error) {
+	var out struct {
+		Control *store.AgentControl `json:"control"`
+	}
+	q := url.Values{}
+	q.Set("agent", agent)
+	err := c.do("GET", "/api/agent-control", q, nil, &out)
+	return out.Control, err
+}
+
+// RecordControlEvent meldet einen Hook-Ack oder einen Transkript-Beleg zu einem
+// Vorgang. false heisst: der Server kennt den Beleg schon oder den Vorgang
+// nicht; beides ist kein Grund, es erneut zu versuchen.
+func (c *Client) RecordControlEvent(controlID int64, ev store.ControlEvent) (bool, error) {
+	var out struct {
+		Recorded bool `json:"recorded"`
+	}
+	err := c.do("POST", "/api/agent-control/"+strconv.FormatInt(controlID, 10)+"/events", nil, ev, &out)
+	return out.Recorded, err
+}
+
+// permanentStatus: the server will never accept this proof as sent. 401, 403,
+// 408 and 429 are not in the list: they can pass.
+func permanentStatus(code int) bool {
+	return code == 400 || code == 404 || code == 409 || code == 422
+}
+
+// RecordControlProof meldet einen Transkript-Beleg (collector.ControlProofRecorder).
+// Ein 400, 404, 409 oder 422 ist endgueltig und wird verschluckt, damit
+// der Collector nicht ewig denselben Stapel wiederholt; Netz- und 5xx-Fehler
+// kommen zurueck, damit er es nochmal versucht.
+func (c *Client) RecordControlProof(controlID int64, ev store.ControlEvent) error {
+	_, err := c.RecordControlEvent(controlID, ev)
+	var api *APIError
+	var st *StatusError
+	switch {
+	case errors.As(err, &api) && permanentStatus(api.Status):
+		return nil
+	case errors.As(err, &st) && permanentStatus(st.Status):
+		return nil
+	}
+	return err
 }

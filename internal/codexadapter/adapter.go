@@ -34,6 +34,7 @@ const (
 	CapReceiveForSubagent = "receive_for_named_subagent"
 	CapHumanSteer         = "human_steer"
 	CapHumanInterrupt     = "human_interrupt"
+	CapHumanPause         = "human_pause"
 	CapActivityObserve    = "activity_observation"
 )
 
@@ -58,6 +59,7 @@ func MissingCapabilities() map[string]string {
 		CapReceiveForSubagent: "codex gives a subagent no separate thread id at this version",
 		CapHumanSteer:         "same ownership limit as receive_at_safe_point",
 		CapHumanInterrupt:     "turn/interrupt exists but is untested here; claiming it without a run would be the thing this package refuses to do",
+		CapHumanPause:         "codex has PreToolUse hooks, but their blocking semantics (continue:false, deny) are not measured, and the TUI is not ours; a pause is a gap here",
 		CapSend:               "sending is ghosttree's own channel, not something the app server does for us",
 	}
 }

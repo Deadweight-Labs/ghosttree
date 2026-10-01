@@ -1320,3 +1320,8 @@ html:not(.coord-enhanced) .coord-backdrop { display: none !important; }
 
 .org-switch a { margin-right: .75rem; }
 .org-code { word-break: break-all; }
+
+/* Pause control of an agent in the participant list (AC-1229). */
+.coord-agent-control { margin-top: .4rem; }
+.coord-agent-control form { display: flex; flex-wrap: wrap; gap: .35rem; align-items: center; margin-top: .3rem; }
+.coord-agent-control .coord-control-state { margin: 0; }

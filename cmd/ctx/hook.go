@@ -14,6 +14,7 @@ import (
 	"unicode"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
+	"github.com/Deadweight-Labs/ghosttree/internal/agentpause"
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/collector"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
@@ -52,6 +53,9 @@ func cmdHookWith(stdin io.Reader, args []string, stdout io.Writer) int {
 	if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 0 {
 		fmt.Fprintln(stdout, hookUsage)
 		return 2
+	}
+	if eventArg == "pause-gate" {
+		return pauseGate(stdin, *harness, stdout)
 	}
 	var out sessionStartOutput
 	var render func(io.Reader) string
@@ -94,7 +98,8 @@ func cmdHookWith(stdin io.Reader, args []string, stdout io.Writer) int {
 
 const hookUsage = `usage: ctx hook session-start [--harness claude|codex]
        ctx hook user-prompt-submit [--harness claude|codex]
-       ctx hook pre-tool-use [--harness claude|codex]`
+       ctx hook pre-tool-use [--harness claude|codex]
+       ctx hook pause-gate [--harness claude]`
 
 // relevanceTimeout is short because this hook sits between the keystroke and
 // the answer. Knowledge that arrives late is worse than knowledge that does not
@@ -615,4 +620,18 @@ func renderGhostDelivery(entries []store.GhostFile, fresh map[string]ghost.Fresh
 		}
 	}
 	return b.String()
+}
+
+// pauseGate is the PreToolUse hook behind a human pause. It stats one local
+// flag file and neither loads the config, calls the server nor touches the
+// hookbudget lock: it runs before every tool call. Only its own decision fails
+// closed (a damaged flag still pauses); a missing flag, a missing identity or
+// any other harness prints nothing and exits 0, as every other hook does.
+// Codex has no measured pause interface and stays a named gap.
+func pauseGate(stdin io.Reader, harness string, stdout io.Writer) int {
+	if harness != "claude" {
+		return 0
+	}
+	agentpause.Gate(coordAgentOverride(), stdin, stdout)
+	return 0
 }

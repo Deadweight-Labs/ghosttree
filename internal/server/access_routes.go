@@ -153,6 +153,10 @@ var accessRoutes = map[string]routeClass{
 	"PUT /api/documents/{id}/revisions":           classProject,
 	"GET /api/documents/{id}/revisions":           classProject,
 	"GET /api/documents/{id}/revisions/{rev}":     classProject,
+	"GET /api/agent-control":                      classAccount,
+	"POST /api/agent-control":                     classAdmin,
+	"POST /api/agent-control/resume":              classAdmin,
+	"POST /api/agent-control/{id}/events":         classAccount,
 	// Neu in Paket 7: Freigabe einer Session durch ihren Besitzer.
 	"PUT /api/sessions/{id}/share": classProject,
 }

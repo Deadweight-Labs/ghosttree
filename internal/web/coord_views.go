@@ -179,6 +179,8 @@ type coordParticipantView struct {
 	// eines Projektraums; CanReview das Prüfer-Flag.
 	Role      string
 	CanReview bool
+	// Control is the pause control of an agent, nil for people.
+	Control *coordControlView
 }
 
 // coordParticipantUnknown is the neutral value for a state nobody reported.

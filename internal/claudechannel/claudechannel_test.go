@@ -21,8 +21,11 @@ func TestCapabilitiesClaimOnlyWhatWasMeasured(t *testing.T) {
 	for _, c := range Capabilities() {
 		caps[c] = true
 	}
-	if !caps[CapReceiveAtSafePoint] || !caps[CapWakeIdleSession] {
-		t.Errorf("both measured capabilities must be claimed: %v", Capabilities())
+	if !caps[CapReceiveAtSafePoint] || !caps[CapWakeIdleSession] || !caps[CapHumanPause] {
+		t.Errorf("the measured capabilities must be claimed: %v", Capabilities())
+	}
+	if !strings.Contains(MissingCapabilities()[CapHumanInterrupt], "already running") {
+		t.Errorf("the interrupt gap must name what a pause cannot do: %q", MissingCapabilities()[CapHumanInterrupt])
 	}
 	missing := MissingCapabilities()
 	for _, c := range []string{CapReceiveForSubagent, CapHumanSteer, CapHumanInterrupt, CapActivityObserve} {
