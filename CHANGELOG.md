@@ -6,6 +6,12 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Add accounts with revocable, time-bound API tokens; each token belongs to an
+  account. Existing person-based tokens are migrated to legacy tokens on startup
+  and function unchanged. Introduce `ctx account` (add, list, tokens, token
+  create, token revoke) CLI commands; `ctx person add` is deprecated. End web
+  sessions and coordination event streams when their token is revoked or the
+  account is deactivated.
 - Add coordination rooms with delivery states (`stored < fetched < injected <
   acked`) and monotonic read cursors, DMs and groups with principal isolation,
   per-principal unread, and message expiry. Introduce `coord_peers`,
