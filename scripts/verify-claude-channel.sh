@@ -18,8 +18,6 @@ TOKEN_FILE=$WORK/token
 SERVER_PID=
 RESULT=1
 PROJECT_DIR=$WORK/project
-CLAUDE_JSON=$HOME/.claude.json
-TRUST_BACKUP=
 fail() { echo "FAIL: $*"; exit 1; }
 
 # Runs on every exit, including early ones and INT/TERM.
@@ -28,17 +26,6 @@ cleanup() {
   tmux capture-pane -p -t "$SESSION" -S -300 >"$WORK/pane.txt" 2>/dev/null
   tmux kill-session -t "$SESSION" 2>/dev/null
   [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null
-  if [ -n "$TRUST_BACKUP" ]; then
-    # Claude records the accepted trust dialog in ~/.claude.json. Remove only
-    # the key of this scratch directory, after claude has exited.
-    sleep 1
-    jq --arg p "$PROJECT_DIR" 'del(.projects[$p])' "$CLAUDE_JSON" >"$CLAUDE_JSON.gt-e2e.tmp" \
-      && chmod --reference="$TRUST_BACKUP" "$CLAUDE_JSON.gt-e2e.tmp" \
-      && mv "$CLAUDE_JSON.gt-e2e.tmp" "$CLAUDE_JSON" \
-      && echo "removed trust entry for $PROJECT_DIR (backup: $TRUST_BACKUP)" \
-      || echo "could not remove the trust entry for $PROJECT_DIR; restore from $TRUST_BACKUP if needed"
-    rm -f "$CLAUDE_JSON.gt-e2e.tmp"
-  fi
   if [ -n "${OUT:-}" ]; then
     mkdir -p "$OUT"
     cp "$WORK/pane.txt" "$WORK/server.log" "$WORK/coord-state.txt" "$OUT"/ 2>/dev/null
@@ -52,7 +39,7 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-for tool in claude tmux sqlite3 python3 jq; do
+for tool in claude tmux sqlite3 python3; do
   command -v "$tool" >/dev/null || { echo "FAIL: $tool not found"; exit 1; }
 done
 CTX=${CTX:-$WORK/ctx}
@@ -73,13 +60,11 @@ for _ in $(seq 50); do curl -fs "http://127.0.0.1:$PORT/" >/dev/null 2>&1 && bre
 tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "$PROJECT_DIR" \
   "env XDG_CONFIG_HOME=$XDG_CONFIG_HOME $CTX claude --agent '$AGENT'"
 
-# Accepting Claude's trust dialog for the scratch directory writes a global
-# entry into ~/.claude.json. This script announces that, backs the file up
-# first, and removes exactly that one entry again on exit.
-TRUST_BACKUP=$CLAUDE_JSON.bak-gt-e2e-$$
-cp "$CLAUDE_JSON" "$TRUST_BACKUP" 2>/dev/null || TRUST_BACKUP=
-echo "note: this run trusts $PROJECT_DIR in $CLAUDE_JSON; backup ${TRUST_BACKUP:-none (no file)}, entry removed on exit"
-[ -z "$TRUST_BACKUP" ] && [ -e "$CLAUDE_JSON" ] && fail "cannot back up $CLAUDE_JSON"
+# Accepting Claude's trust dialog for the scratch directory adds a project entry
+# to ~/.claude.json. A separate CLAUDE_CONFIG_DIR would avoid it but loses the
+# login, so the entry stays; this script never edits ~/.claude.json itself.
+echo "note: this run trusts $PROJECT_DIR in ~/.claude.json (harmless; remove the"
+echo "      key .projects[\"$PROJECT_DIR\"] there by hand if you want it gone)"
 # Accept the trust dialog (default selection is "No, exit", so Down first) for
 # the scratch directory only, and the development-channel confirmation (default
 # is "I am using this for local development", so Enter).

@@ -16,6 +16,10 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
 )
 
+// agentIDPrefix ist das Provider-Präfix jeder Launcher-Identität; ctx mcp
+// übernimmt GHOSTTREE_AGENT_ID nur mit dem Präfix der erkannten Harness.
+const agentIDPrefix = "claude:"
+
 const (
 	// agentIDEnv trägt die Koordinationsidentität eines per `ctx claude`
 	// gestarteten Claude. ctx mcp und ctx channel lesen sie beide.
@@ -31,7 +35,8 @@ const claudeUsage = `usage: ctx claude [--dry-run] [--agent <identity>] [claude 
 Starts Claude Code with the ghosttree channel loaded, so coordination messages
 reach the session (a waiting session wakes up, a working one gets the message
 at its next tool result). The identity is generated per launch
-(claude:<host>:<uuid>) unless --agent names one. Everything after the
+(claude:<host>:<uuid>) unless --agent names one; that
+identity must start with "claude:" or the launcher refuses it. Everything after the
 launcher's own flags goes to
 claude unchanged. Set GHOSTTREE_CLAUDE_DRY_RUN=1 to print instead of start.
 
@@ -109,6 +114,10 @@ func cmdClaude(args []string, stdout io.Writer) int {
 		case args[0] == "--agent":
 			if len(args) < 2 || strings.TrimSpace(args[1]) == "" || strings.HasPrefix(args[1], "-") {
 				fmt.Fprintln(stdout, "--agent needs an identity")
+				return 2
+			}
+			if !strings.HasPrefix(args[1], agentIDPrefix) {
+				fmt.Fprintf(stdout, "--agent %q must start with %q: ctx mcp ignores other identities, and the channel and coord tools would split\n", args[1], agentIDPrefix)
 				return 2
 			}
 			presetAgent = args[1]

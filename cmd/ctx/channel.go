@@ -49,10 +49,7 @@ func cmdChannel(args []string, stdout io.Writer) int {
 		fmt.Fprintf(os.Stderr, "load config: %v (run 'ctx setup' first)\n", err)
 		return 1
 	}
-	self := *agent
-	if self == "" {
-		self = currentSessionRef()
-	}
+	self := resolveChannelSelf(*agent)
 	if self == "" {
 		// Dieselbe Rückfalllogik wie bei `ctx mcp`, aber sie trifft dessen
 		// Identität NICHT: dort steckt die PID des anderen Prozesses drin.
@@ -82,6 +79,18 @@ func cmdChannel(args []string, stdout io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// resolveChannelSelf ist die Identität des Channels: --agent, sonst dieselbe Wahl wie
+// bei ctx mcp (GHOSTTREE_AGENT_ID mit passendem Präfix, dann die Harness-ID).
+func resolveChannelSelf(flagValue string) string {
+	if flagValue != "" {
+		return flagValue
+	}
+	if id := coordAgentOverride(); id != "" {
+		return id
+	}
+	return currentSessionRef()
 }
 
 func channelCapabilityText() string {

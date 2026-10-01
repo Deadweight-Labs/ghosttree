@@ -271,3 +271,29 @@ func TestRunClaudeForwardsSignalsAndCleansUp(t *testing.T) {
 		})
 	}
 }
+
+func TestClaudeAgentFlagRequiresPrefix(t *testing.T) {
+	var out bytes.Buffer
+	if code := run([]string{"claude", "--dry-run", "--agent", "alice"}, &out); code != 2 || !strings.Contains(out.String(), `must start with "claude:"`) {
+		t.Fatalf("exit %d: %s", code, out.String())
+	}
+}
+
+func TestChannelSelfFallsBackToAgentEnvWithPrefixRule(t *testing.T) {
+	for _, k := range []string{"CODEX_SESSION_ID", "CODEX_THREAD_ID", "OPENCODE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"} {
+		t.Setenv(k, "")
+	}
+	t.Setenv(agentIDEnv, "claude:h:7")
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "sess-1")
+	if got := resolveChannelSelf(""); got != "claude:h:7" {
+		t.Errorf("env fallback: %q", got)
+	}
+	if got := resolveChannelSelf("claude:explicit"); got != "claude:explicit" {
+		t.Errorf("flag wins: %q", got)
+	}
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	t.Setenv("CODEX_THREAD_ID", "thr")
+	if got := resolveChannelSelf(""); got != "thr" {
+		t.Errorf("foreign prefix must fall back to the harness id: %q", got)
+	}
+}
