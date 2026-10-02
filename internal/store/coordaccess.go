@@ -841,14 +841,18 @@ func (a CoordAccess) Send(message CoordMessage) (int64, error) {
 	waitRoom := ""
 	if reason, ok := attentionReasonForIntent(message.Intent); ok && reason != AttentionHandoff {
 		waitRoom = messageRoomKeyTx(tx, message.DestinationKind, message.DestinationID)
-		reconcileWaitCyclesSafeTx(tx, waitRoom, time.Now().UTC())
+		if err := reconcileWaitCyclesSafeTx(tx, waitRoom, time.Now().UTC()); err != nil {
+			return 0, err
+		}
 	}
 	id, err := appendCoordMessageTx(tx, message)
 	if err != nil {
 		return 0, err
 	}
 	if waitRoom != "" {
-		reconcileWaitCyclesSafeTx(tx, waitRoom, time.Now().UTC())
+		if err := reconcileWaitCyclesSafeTx(tx, waitRoom, time.Now().UTC()); err != nil {
+			return 0, err
+		}
 	}
 	if err := insertRawMentionsTx(tx, id, rawMentions); err != nil {
 		return 0, err

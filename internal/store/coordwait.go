@@ -4,8 +4,10 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"fmt"
 	"log"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -298,8 +300,7 @@ func loadWaitRows(db presenceDB, ref time.Time, roomKey string, senders []any) (
 	recipients := map[string]bool{}
 	for _, part := range chunkArgs(senders, waitChunk) {
 		wr, err := db.Query(presenceWaitsSQL(len(part)),
-			append(append([]any{AttentionQuestion, AttentionApproval, AttentionBlocker}, part...),
-				DestinationRoom, roomKey, DestinationDiscussion, roomKey)...)
+			append([]any{roomKey, AttentionQuestion, AttentionApproval, AttentionBlocker}, part...)...)
 		if err != nil {
 			return nil, err
 		}
@@ -356,17 +357,84 @@ func chunkArgs(list []any, n int) [][]any {
 }
 
 func ensureCoordWaitCycles(db *sql.DB) error {
-	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS coord_wait_cycles(
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS coord_wait_cycles(
 		id INTEGER PRIMARY KEY,
 		room_key TEXT NOT NULL,
 		cycle_key TEXT NOT NULL,
 		formed_at TEXT NOT NULL,
 		notified_message_id INTEGER NOT NULL DEFAULT 0,
+		notified_at TEXT NOT NULL DEFAULT '',
+		held INTEGER NOT NULL DEFAULT 0,
 		dissolved_at TEXT NOT NULL DEFAULT '');
 		CREATE UNIQUE INDEX IF NOT EXISTS coord_wait_cycles_active
 			ON coord_wait_cycles(room_key,cycle_key) WHERE dissolved_at='';
-		CREATE INDEX IF NOT EXISTS coord_wait_cycles_room ON coord_wait_cycles(room_key,formed_at)`)
+		CREATE INDEX IF NOT EXISTS coord_wait_cycles_set ON coord_wait_cycles(room_key,cycle_key,notified_at)`); err != nil {
+		return err
+	}
+	for _, col := range []struct{ table, name, ddl string }{
+		{"coord_wait_cycles", "notified_at", `TEXT NOT NULL DEFAULT ''`},
+		{"coord_wait_cycles", "held", `INTEGER NOT NULL DEFAULT 0`},
+		{"coord_attention", "room_key", `TEXT NOT NULL DEFAULT ''`},
+	} {
+		if err := ensureColumn(db, col.table, col.name, col.ddl); err != nil {
+			return err
+		}
+	}
+	// room_key an coord_attention: der Raum der Nachricht, damit die
+	// Wartepunkt-Abfrage die offenen Einträge EINES Raums findet. Altbestand
+	// wird beim Öffnen nachgetragen (nur offene Einträge zählen).
+	if _, err := db.Exec(`DROP INDEX IF EXISTS coord_attention_open;
+		CREATE INDEX IF NOT EXISTS coord_attention_open_room ON coord_attention(room_key,message_id) WHERE state='open';
+		UPDATE coord_attention SET room_key=COALESCE((
+			SELECT CASE m.destination_kind WHEN 'room' THEN m.destination_id
+				ELSE (SELECT h.room_key FROM thread_homes h WHERE CAST(h.thread_id AS TEXT)=m.destination_id) END
+			FROM coord_messages m WHERE m.id=coord_attention.message_id),'')
+		WHERE state='open' AND room_key=''`); err != nil {
+		return err
+	}
+	return nil
+}
+
+func ensureColumn(db *sql.DB, table, name, ddl string) error {
+	rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return err
+	}
+	found := false
+	for rows.Next() {
+		var cid, notNull, pk int
+		var col, typ string
+		var def sql.NullString
+		if err := rows.Scan(&cid, &col, &typ, &notNull, &def, &pk); err != nil {
+			rows.Close()
+			return err
+		}
+		found = found || col == name
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil || found {
+		return err
+	}
+	_, err = db.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + name + ` ` + ddl)
 	return err
+}
+
+// attentionRoomKeyTx ist der Raum, zu dem ein Attention-Eintrag zählt: der
+// Raum der Nachricht, bei einem Thread sein Heimatraum, sonst "" (ein Thread
+// ohne Heimat hat keinen Raum und zählt für keinen Wartekreis).
+func attentionRoomKeyTx(tx *sql.Tx, kind, id string) string {
+	if kind == DestinationRoom {
+		return id
+	}
+	threadID, err := strconv.ParseInt(id, 10, 64)
+	if err != nil || threadID <= 0 {
+		return ""
+	}
+	if home, found, err := threadHomeTx(tx, threadID); err == nil && found {
+		return home.RoomKey
+	}
+	return ""
 }
 
 // roomWaitCycles sind die Wartekreise eines Raums, über ALLE aktiven
@@ -423,41 +491,58 @@ func isSubset(sub, super map[string]bool) bool {
 	return true
 }
 
+// execWaitSavepoint führt die Savepoint-Anweisungen aus; Variable, damit ein
+// Test ein Scheitern des Rollbacks erzwingen kann.
+var execWaitSavepoint = func(tx *sql.Tx, query string) error {
+	_, err := tx.Exec(query)
+	return err
+}
+
 // reconcileWaitCyclesSafeTx ist reconcileWaitCyclesTx in einem Savepoint: ein
 // Fehler dort wird protokolliert und zurückgerollt, und der Vorgang, der den
 // Graphen geändert hat (eine Nachricht, ein Schließen), gelingt trotzdem. Die
 // Meldung ist ein Zusatz und darf nichts blockieren.
-func reconcileWaitCyclesSafeTx(tx *sql.Tx, roomKey string, ref time.Time) {
+//
+// Ausnahme: scheitert der Rollback selbst, ist der Zustand der Transaktion
+// unbekannt (SQLite kann sie ganz zurückgerollt haben, dann liefe der Rest im
+// Autocommit). Dann gibt die Funktion den Fehler zurück, und der Aufrufer
+// bricht ab.
+func reconcileWaitCyclesSafeTx(tx *sql.Tx, roomKey string, ref time.Time) error {
 	if roomKey == "" {
-		return
+		return nil
 	}
-	if _, err := tx.Exec(`SAVEPOINT wait_cycles`); err != nil {
+	if err := execWaitSavepoint(tx, `SAVEPOINT wait_cycles`); err != nil {
 		log.Printf("wait cycles: savepoint: %v", err)
-		return
+		return nil
 	}
 	if err := reconcileWaitCyclesTx(tx, roomKey, ref); err != nil {
 		log.Printf("wait cycles: room %s: %v", roomKey, err)
-		if _, rerr := tx.Exec(`ROLLBACK TO wait_cycles`); rerr != nil {
-			log.Printf("wait cycles: rollback: %v", rerr)
+		if rerr := execWaitSavepoint(tx, `ROLLBACK TO wait_cycles`); rerr != nil {
+			return fmt.Errorf("wait cycles: rollback failed after %v: %w", err, rerr)
 		}
 	}
-	if _, err := tx.Exec(`RELEASE wait_cycles`); err != nil {
+	if err := execWaitSavepoint(tx, `RELEASE wait_cycles`); err != nil {
 		log.Printf("wait cycles: release: %v", err)
 	}
+	return nil
 }
 
 // reconcileWaitCyclesTx gleicht die Kreise des Raums mit dem Merkbuch ab.
 //
 //   - Ein Kreis, den es nicht mehr gibt, gilt als aufgelöst.
-//   - Ein Kreis, dessen Mitglieder alle schon in einem aktiven Kreis standen
-//     (er ist geschrumpft oder hat sich geteilt), wird still übernommen: wer
-//     geht, löst keine neue Meldung aus.
+//   - Ein Kreis, dessen Mitglieder alle schon in einem aktiven, gemeldeten
+//     Kreis standen (er ist geschrumpft oder hat sich geteilt), wird still
+//     übernommen: wer geht, löst keine neue Meldung aus.
 //   - Ein Kreis mit mindestens einem Mitglied, das in keinem aktiven Kreis
 //     stand, ist neu und bekommt EINE Nachricht an alle Beteiligten. Das
 //     gilt auch, wenn ein Kreis wächst. Löst er sich auf und bildet sich
 //     später neu, ist er wieder neu.
-//   - Höchstens eine Meldung je Raum und waitNoteInterval; ein weiterer neuer
-//     Kreis steht im Merkbuch, wird aber nicht gesendet.
+//   - Höchstens eine Meldung je Mitgliedermenge und waitNoteInterval. Eine
+//     zurückgehaltene Meldung (held) steht im Merkbuch und wird beim nächsten
+//     Abgleich nach Ablauf der Frist gesendet, wenn der Kreis dann noch
+//     besteht. Die Frist gilt je Mitgliedermenge, nicht je Raum: ein Kreis aus
+//     Gästen verbraucht kein Kontingent, auf das ein Kreis von Mitgliedern
+//     angewiesen ist.
 //
 // Aufgerufen, wo sich der Graph ändert (Senden einer Frage, Freigabe oder
 // eines Blockers; Schließen eines Eintrags). Die Meldung geht durch die
@@ -469,30 +554,32 @@ func reconcileWaitCyclesTx(tx *sql.Tx, roomKey string, ref time.Time) error {
 	if err != nil {
 		return err
 	}
-	current := map[string]bool{}
+	current := map[string]WaitCycle{}
 	for _, c := range cycles {
-		current[c.Key()] = true
+		current[c.Key()] = c
 	}
-	ar, err := tx.Query(`SELECT id,cycle_key,formed_at FROM coord_wait_cycles WHERE room_key=? AND dissolved_at=''`, roomKey)
+	ar, err := tx.Query(`SELECT id,cycle_key,formed_at,held FROM coord_wait_cycles WHERE room_key=? AND dissolved_at=''`, roomKey)
 	if err != nil {
 		return err
 	}
 	type active struct {
 		id      int64
 		key, at string
+		held    bool
 		members map[string]bool
 	}
 	var rows []active
-	activeKeys := map[string]bool{}
+	byKey := map[string]active{}
 	for ar.Next() {
 		var r active
-		if err := ar.Scan(&r.id, &r.key, &r.at); err != nil {
+		var held int
+		if err := ar.Scan(&r.id, &r.key, &r.at, &held); err != nil {
 			ar.Close()
 			return err
 		}
-		r.members = cycleMembers(r.key)
+		r.held, r.members = held != 0, cycleMembers(r.key)
 		rows = append(rows, r)
-		activeKeys[r.key] = true
+		byKey[r.key] = r
 	}
 	if err := ar.Err(); err != nil {
 		ar.Close()
@@ -500,34 +587,14 @@ func reconcileWaitCyclesTx(tx *sql.Tx, roomKey string, ref time.Time) error {
 	}
 	ar.Close()
 	refText := ref.Format(time.RFC3339)
-	for _, c := range cycles {
-		key := c.Key()
-		if activeKeys[key] {
-			continue
-		}
-		members := cycleMembers(key)
-		formed, covered := refText, false
-		for _, r := range rows {
-			if isSubset(members, r.members) {
-				formed, covered = r.at, true
-				break
-			}
-		}
-		res, err := tx.Exec(`INSERT INTO coord_wait_cycles(room_key,cycle_key,formed_at) VALUES(?,?,?)`, roomKey, key, formed)
-		if err != nil {
-			return err
-		}
-		if covered {
-			continue
-		}
-		rowID, _ := res.LastInsertId()
-		var last sql.NullString
-		if err := tx.QueryRow(`SELECT MAX(formed_at) FROM coord_wait_cycles WHERE room_key=? AND notified_message_id<>0`, roomKey).Scan(&last); err != nil {
-			return err
-		}
-		if t, ok := parseAt(last.String); ok && ref.Sub(t) < waitNoteInterval {
-			continue // recorded, not sent
-		}
+	cutoff := ref.Add(-waitNoteInterval).Format(time.RFC3339)
+	limited := func(key string) (bool, error) {
+		var n int
+		err := tx.QueryRow(`SELECT COUNT(*) FROM coord_wait_cycles
+			WHERE room_key=? AND cycle_key=? AND notified_message_id<>0 AND notified_at>?`, roomKey, key, cutoff).Scan(&n)
+		return n > 0, err
+	}
+	send := func(rowID int64, c WaitCycle) error {
 		msgID, err := appendCoordMessageTx(tx, CoordMessage{
 			DestinationKind: DestinationRoom, DestinationID: roomKey,
 			SenderExternalID: WaitCycleSender, AuthorPrincipalID: "system", AuthorKind: AuthorSystem,
@@ -544,12 +611,53 @@ func reconcileWaitCyclesTx(tx *sql.Tx, roomKey string, ref time.Time) error {
 		if err := insertRawMentionsTx(tx, msgID, []string{waitCycleMask}); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(`UPDATE coord_wait_cycles SET notified_message_id=? WHERE id=?`, msgID, rowID); err != nil {
+		_, err = tx.Exec(`UPDATE coord_wait_cycles SET notified_message_id=?,notified_at=?,held=0 WHERE id=?`, msgID, refText, rowID)
+		return err
+	}
+	for _, c := range cycles {
+		key := c.Key()
+		if r, ok := byKey[key]; ok {
+			if r.held {
+				if lim, err := limited(key); err != nil {
+					return err
+				} else if !lim {
+					if err := send(r.id, c); err != nil {
+						return err
+					}
+				}
+			}
+			continue
+		}
+		members := cycleMembers(key)
+		formed, covered := refText, false
+		for _, r := range rows {
+			if !r.held && isSubset(members, r.members) {
+				formed, covered = r.at, true
+				break
+			}
+		}
+		res, err := tx.Exec(`INSERT INTO coord_wait_cycles(room_key,cycle_key,formed_at) VALUES(?,?,?)`, roomKey, key, formed)
+		if err != nil {
+			return err
+		}
+		if covered {
+			continue
+		}
+		rowID, _ := res.LastInsertId()
+		if lim, err := limited(key); err != nil {
+			return err
+		} else if lim {
+			if _, err := tx.Exec(`UPDATE coord_wait_cycles SET held=1 WHERE id=?`, rowID); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := send(rowID, c); err != nil {
 			return err
 		}
 	}
 	for _, r := range rows {
-		if !current[r.key] {
+		if _, ok := current[r.key]; !ok {
 			if _, err := tx.Exec(`UPDATE coord_wait_cycles SET dissolved_at=? WHERE id=?`, refText, r.id); err != nil {
 				return err
 			}

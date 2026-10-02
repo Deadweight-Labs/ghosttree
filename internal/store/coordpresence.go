@@ -219,8 +219,7 @@ func ensureCoordAgentPresence(db *sql.DB) error {
 		return err
 	}
 	_, err := db.Exec(`CREATE INDEX IF NOT EXISTS coord_messages_sender ON coord_messages(sender_external_id,id);
-		CREATE INDEX IF NOT EXISTS coord_attention_message ON coord_attention(message_id,state);
-		CREATE INDEX IF NOT EXISTS coord_attention_open ON coord_attention(message_id) WHERE state='open'`)
+		CREATE INDEX IF NOT EXISTS coord_attention_message ON coord_attention(message_id,state)`)
 	return err
 }
 
@@ -464,20 +463,19 @@ func presenceBatch(db presenceDB, ref time.Time, roomKey string, agents []presen
 }
 
 // presenceWaitsSQL ist die Wartepunkt-Abfrage für n Absender. Sie geht von den
-// OFFENEN Attention-Einträgen aus (teilindex coord_attention_open) und schlägt
-// die Nachricht über ihre Id nach: die Arbeit hängt an der Zahl offener
-// Wartepunkte, nicht an der Länge des Raumverlaufs. Argumente: drei Gründe, n
-// Absender, Raumart, Raumschlüssel, Threadart, Raumschlüssel. Eigene Funktion,
-// damit ein Test dieselbe Abfrage mit EXPLAIN prüft, die sie auch ausführt.
+// OFFENEN Attention-Einträgen DIESES Raums aus (Teilindex
+// coord_attention_open_room auf room_key) und schlägt die Nachricht über ihre
+// Id nach: die Arbeit hängt an der Zahl offener Wartepunkte im Raum, weder an
+// der Länge des Verlaufs noch an anderen Projekten. Argumente: Raumschlüssel,
+// drei Gründe, n Absender. Eigene Funktion, damit ein Test dieselbe Abfrage mit
+// EXPLAIN prüft, die sie auch ausführt.
 func presenceWaitsSQL(n int) string {
 	return `SELECT m.sender_external_id,a.recipient_principal_id,a.reason,a.created_at,COALESCE(m.expires_at,'')
 		FROM coord_attention a CROSS JOIN coord_messages m ON m.id=a.message_id
-		WHERE a.state='open' AND a.reason IN (?,?,?) AND m.sender_external_id IN (` + placeholders(n) + `)
+		WHERE a.state='open' AND a.room_key=? AND a.reason IN (?,?,?) AND m.sender_external_id IN (` + placeholders(n) + `)
 		  AND a.recipient_principal_id<>m.sender_external_id
-		  AND ((m.destination_kind=? AND m.destination_id=?)
-		    OR (m.destination_kind=? AND m.destination_id IN
-		         (SELECT CAST(thread_id AS TEXT) FROM thread_homes WHERE room_key=?
-		            AND thread_id NOT IN (SELECT thread_id FROM thread_visibility))))
+		  AND (m.destination_kind='room'
+		    OR CAST(m.destination_id AS INTEGER) NOT IN (SELECT thread_id FROM thread_visibility))
 		ORDER BY a.created_at DESC, a.id DESC LIMIT 2000`
 }
 

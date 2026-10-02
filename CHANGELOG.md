@@ -35,8 +35,9 @@ Versioning, with pre-1.0 compatibility rules described in
   marked as derived) and is flagged overdue after it; nothing is closed or
   answered automatically. An item with its own expiry never turns overdue: once
   expired it is no longer a current wait and drops out of the graph. The note is
-  sent at most once per room per 10 minutes (further cycles are recorded and
-  still shown in `coord_peers`), a cycle that only shrinks does not notify
+  sent at most once per 10 minutes for the same set of agents (a held-back note
+  is sent at the next change in the room once the window has passed and the cycle
+  is still active; other cycles are not affected), a cycle that only shrinks does not notify
   again, and one that gains a member does. The prefix `system:` is now reserved:
   agents cannot register or send under it, and system notes show as `(system)`
   in message headers. Agents that already carry the prefix in an old database

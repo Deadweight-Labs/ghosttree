@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -532,7 +533,30 @@ func TestNewMemberInAStandingCycleNotifiesOnce(t *testing.T) {
 	}
 }
 
-func TestAtMostOneNotePerRoomPerInterval(t *testing.T) {
+func heldCount(st *Store) int {
+	var n int
+	st.db.QueryRow(`SELECT COUNT(*) FROM coord_wait_cycles WHERE held=1 AND dissolved_at=''`).Scan(&n)
+	return n
+}
+
+func TestGuestCycleDoesNotTakeTheSlotOfAMemberCycle(t *testing.T) {
+	st, room := waitFixture(t)
+	waitNoteInterval = 10 * time.Minute
+	registerRoleAgent(t, st, "claude:g:1", "person:4", room, "guest")
+	registerRoleAgent(t, st, "claude:g:2", "person:4", room, "guest")
+	ask(t, st, room, "claude:g:1", "claude:g:2", IntentQuestion)
+	ask(t, st, room, "claude:g:2", "claude:g:1", IntentQuestion)
+	if n := len(cycleNotes(t, st)); n != 1 {
+		t.Fatalf("guest cycle notes = %d", n)
+	}
+	ask(t, st, room, waitA, waitB, IntentQuestion)
+	ask(t, st, room, waitB, waitA, IntentQuestion)
+	if n := len(cycleNotes(t, st)); n != 2 {
+		t.Fatalf("the member cycle was not announced: %d notes", n)
+	}
+}
+
+func TestTwoDifferentCyclesWithinTheWindowAreBothAnnounced(t *testing.T) {
 	st, room := waitFixture(t)
 	waitNoteInterval = 10 * time.Minute
 	registerRoleAgent(t, st, "claude:h:d", "person:4", room, "member")
@@ -541,17 +565,142 @@ func TestAtMostOneNotePerRoomPerInterval(t *testing.T) {
 	ask(t, st, room, waitB, waitA, IntentQuestion)
 	ask(t, st, room, "claude:h:d", "claude:h:e", IntentQuestion)
 	ask(t, st, room, "claude:h:e", "claude:h:d", IntentQuestion)
+	if n := len(cycleNotes(t, st)); n != 2 {
+		t.Fatalf("notes = %d, want 2", n)
+	}
+	if heldCount(st) != 0 {
+		t.Fatal("nothing should be held back")
+	}
+}
+
+func TestTheSameSetWithinTheWindowIsHeldBackAndSentLaterIfStillActive(t *testing.T) {
+	st, room := waitFixture(t)
+	waitNoteInterval = 10 * time.Minute
+	ask(t, st, room, waitA, waitB, IntentQuestion)
+	ask(t, st, room, waitB, waitA, IntentQuestion)
+	answerOne(t, st, waitA)
+	answerOne(t, st, waitB) // dissolved
+	ask(t, st, room, waitA, waitB, IntentQuestion)
+	ask(t, st, room, waitB, waitA, IntentQuestion) // the same set again, inside the window
 	if n := len(cycleNotes(t, st)); n != 1 {
-		t.Fatalf("notes = %d, want 1 within the interval", n)
+		t.Fatalf("notes = %d, want 1 inside the window", n)
 	}
-	// The second cycle is still reported in the peers, and in the ledger.
-	if c := cycleOf(t, st, room, "claude:h:d"); c == nil {
-		t.Fatal("a rate limited cycle must still show in the presence")
+	if heldCount(st) != 1 {
+		t.Fatalf("held = %d, want 1", heldCount(st))
 	}
-	var recorded int
-	st.db.QueryRow(`SELECT COUNT(*) FROM coord_wait_cycles WHERE dissolved_at=''`).Scan(&recorded)
-	if recorded != 2 {
-		t.Fatalf("ledger rows = %d, want 2", recorded)
+	// Still inside the window: another reconcile does not send it.
+	ask(t, st, room, waitC, waitA, IntentQuestion)
+	if n := len(cycleNotes(t, st)); n != 1 {
+		t.Fatalf("sent early: %d", n)
+	}
+	// The window passes; the cycle is still active, the next reconcile sends.
+	if _, err := st.db.Exec(`UPDATE coord_wait_cycles SET notified_at=? WHERE notified_message_id<>0`, time.Now().UTC().Add(-time.Hour).Format(time.RFC3339)); err != nil {
+		t.Fatal(err)
+	}
+	ask(t, st, room, waitC, waitB, IntentQuestion)
+	if n := len(cycleNotes(t, st)); n != 2 || heldCount(st) != 0 {
+		t.Fatalf("notes = %d held = %d, want 2 and 0", n, heldCount(st))
+	}
+}
+
+func TestAHeldNoteIsDroppedWhenTheCycleDissolvesFirst(t *testing.T) {
+	st, room := waitFixture(t)
+	waitNoteInterval = 10 * time.Minute
+	ask(t, st, room, waitA, waitB, IntentQuestion)
+	ask(t, st, room, waitB, waitA, IntentQuestion)
+	answerOne(t, st, waitA)
+	answerOne(t, st, waitB)
+	ask(t, st, room, waitA, waitB, IntentQuestion)
+	ask(t, st, room, waitB, waitA, IntentQuestion)
+	if heldCount(st) != 1 {
+		t.Fatalf("held = %d", heldCount(st))
+	}
+	answerOne(t, st, waitA)
+	answerOne(t, st, waitB)
+	if heldCount(st) != 0 || len(cycleNotes(t, st)) != 1 {
+		t.Fatalf("held=%d notes=%d", heldCount(st), len(cycleNotes(t, st)))
+	}
+}
+
+func TestAFailedRollbackAbortsTheSend(t *testing.T) {
+	st, room := waitFixture(t)
+	if _, err := st.db.Exec(`DROP TABLE coord_wait_cycles`); err != nil {
+		t.Fatal(err)
+	}
+	previous := execWaitSavepoint
+	execWaitSavepoint = func(tx *sql.Tx, q string) error {
+		if strings.HasPrefix(q, "ROLLBACK TO") {
+			return errors.New("simulated rollback failure")
+		}
+		return previous(tx, q)
+	}
+	t.Cleanup(func() { execWaitSavepoint = previous })
+	_, err := st.CoordinationFor(Principal{ID: "person:4"}, waitA).Send(CoordMessage{
+		DestinationKind: DestinationRoom, DestinationID: room, ClientID: "r1", Body: "x", Intent: IntentQuestion, Mentions: []string{waitB},
+	})
+	if err == nil || !strings.Contains(err.Error(), "simulated rollback failure") {
+		t.Fatalf("send = %v", err)
+	}
+	var n int
+	st.db.QueryRow(`SELECT COUNT(*) FROM coord_messages WHERE client_id='r1'`).Scan(&n)
+	if n != 0 {
+		t.Fatal("the message was committed although the bookkeeping state is unknown")
+	}
+}
+
+func TestOpenAttentionOfOtherRoomsIsNotScanned(t *testing.T) {
+	st, room := waitFixture(t)
+	const other = "github.com/dw/other"
+	if _, err := st.EnsureProject("person:1", other); err != nil {
+		t.Fatal(err)
+	}
+	otherRoom := RoomKeyForProject(other)
+	registerRoleAgent(t, st, "claude:o:1", "person:1", otherRoom, "member")
+	registerRoleAgent(t, st, "claude:o:2", "person:1", otherRoom, "member")
+	for i := 0; i < 30; i++ {
+		ask(t, st, otherRoom, "claude:o:1", "claude:o:2", IntentQuestion)
+	}
+	ask(t, st, room, waitA, waitB, IntentQuestion)
+
+	rows, err := loadWaitRows(st.db, time.Now().UTC(), room, []any{waitA, "claude:o:1"})
+	if err != nil || len(rows) != 1 || rows[0].Sender != waitA {
+		t.Fatalf("rows = %+v err = %v", rows, err)
+	}
+	// The plan walks the index of this room only.
+	args := []any{room, AttentionQuestion, AttentionApproval, AttentionBlocker, waitA}
+	plan, err := st.db.Query(`EXPLAIN QUERY PLAN `+presenceWaitsSQL(1), args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer plan.Close()
+	found := false
+	for plan.Next() {
+		var id, parent, unused int
+		var detail string
+		plan.Scan(&id, &parent, &unused, &detail)
+		found = found || strings.Contains(detail, "coord_attention_open_room (room_key=?")
+		if strings.HasPrefix(detail, "SCAN") {
+			t.Fatalf("scan: %s", detail)
+		}
+	}
+	if !found {
+		t.Fatal("the wait query does not use the room index")
+	}
+}
+
+func TestOldOpenAttentionRowsGetTheirRoomKey(t *testing.T) {
+	st, room := waitFixture(t)
+	ask(t, st, room, waitA, waitB, IntentQuestion)
+	if _, err := st.db.Exec(`UPDATE coord_attention SET room_key=''`); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureCoordWaitCycles(st.db); err != nil {
+		t.Fatal(err)
+	}
+	var got string
+	st.db.QueryRow(`SELECT room_key FROM coord_attention LIMIT 1`).Scan(&got)
+	if got != room {
+		t.Fatalf("room_key = %q, want %q", got, room)
 	}
 }
 

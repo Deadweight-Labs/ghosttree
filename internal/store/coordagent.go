@@ -51,11 +51,6 @@ type CoordAgent struct {
 // maxExternalIDLen begrenzt Agenten-IDs.
 const maxExternalIDLen = 160
 
-// ValidExternalID sagt, ob eine Agenten-ID zulässig ist: Buchstaben, Ziffern und
-// : . _ - und /, höchstens 160 Zeichen. Das deckt claude:<host>:<uuid>,
-// codex:<...>, cli:<host> und Subagenten (<session>/<name>) ab. Die ID steht in Kopfzeilen von Texten, die
-// Agenten lesen, und darf deshalb keine Zeilenumbrüche, Klammern oder Leerraum
-// tragen.
 // ReservedExternalID: der Präfix "system:" gehört dem Store (Systemmeldungen,
 // etwa über Wartekreise). Kein Client darf sich so anmelden oder so senden;
 // sonst könnte er sich als System ausgeben. Alt-Bestand, der so heißt, wird
@@ -64,6 +59,11 @@ func ReservedExternalID(id string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(id)), "system:")
 }
 
+// ValidExternalID sagt, ob eine Agenten-ID zulässig ist: Buchstaben, Ziffern und
+// : . _ - und /, höchstens 160 Zeichen. Das deckt claude:<host>:<uuid>,
+// codex:<...>, cli:<host> und Subagenten (<session>/<name>) ab. Die ID steht in Kopfzeilen von Texten, die
+// Agenten lesen, und darf deshalb keine Zeilenumbrüche, Klammern oder Leerraum
+// tragen.
 func ValidExternalID(id string) bool {
 	if id == "" || len(id) > maxExternalIDLen || ReservedExternalID(id) {
 		return false

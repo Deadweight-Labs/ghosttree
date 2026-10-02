@@ -253,7 +253,9 @@ func (a CoordAccess) ResolveAttention(id int64, action string) error {
 		return err
 	}
 	if reason != AttentionHandoff {
-		reconcileWaitCyclesSafeTx(tx, messageRoomKeyTx(tx, kind, destination), time.Now().UTC())
+		if err := reconcileWaitCyclesSafeTx(tx, messageRoomKeyTx(tx, kind, destination), time.Now().UTC()); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }
