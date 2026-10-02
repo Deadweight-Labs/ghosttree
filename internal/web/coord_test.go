@@ -1463,12 +1463,13 @@ func TestCoordWorkspaceRendersAuthorizedIdentityLabelsAndHonestPresence(t *testi
 	for _, want := range []string{
 		"robin (du)", "Build Agent", "Alex", "Erwähnt: Build Agent", "an Build Agent",
 		"<span>codex</span>", `title="Worktree: /worktrees/ui"`, "<span>feat/ui</span>",
+		"Erreichbarkeit: unbekannt (keine Beobachtung)", "Arbeitszustand: unbekannt (keine Beobachtung)",
 	} {
 		if !strings.Contains(html, want) {
 			t.Errorf("identity/presence presentation missing %q", want)
 		}
 	}
-	for _, forbidden := range []string{"Erreichbarkeit: unbekannt", "Arbeitszustand: unbekannt", "Erwähnt: sess-peer-secret", ">sess-peer-secret<", "an sess-peer-secret", "Top Secret", "Hidden Directory Agent"} {
+	for _, forbidden := range []string{"Erwähnt: sess-peer-secret", ">sess-peer-secret<", "an sess-peer-secret", "Top Secret", "Hidden Directory Agent"} {
 		if strings.Contains(html, forbidden) {
 			t.Errorf("coordination UI leaked raw or unauthorized identity %q", forbidden)
 		}
@@ -2424,7 +2425,7 @@ func TestCoordSidebarCSSKeepsCountersOnOneLineAndEllipsizesNames(t *testing.T) {
 	}
 }
 
-func TestCoordParticipantsHideUnknownStatesButKeepKnownOnes(t *testing.T) {
+func TestCoordParticipantsShowUnknownExplicitlyAndNeverIdle(t *testing.T) {
 	srv, st, client := signedIn(t)
 	room := store.RoomKeyForProject("github.com/x/participants")
 	if _, err := st.RegisterCoordAgent(store.CoordAgent{
@@ -2433,22 +2434,33 @@ func TestCoordParticipantsHideUnknownStatesButKeepKnownOnes(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	page := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room))
-	list := page[strings.Index(page, `class="coord-participants"`):]
-	list = list[:strings.Index(list, "</ul>")]
-	for _, gone := range []string{"unbekannt", "Erreichbarkeit", "Arbeitszustand", "idle", "untätig"} {
-		if strings.Contains(list, gone) {
-			t.Errorf("participants must not print %q for unobserved state", gone)
-		}
+	listOf := func() string {
+		page := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room))
+		list := page[strings.Index(page, `class="coord-participants"`):]
+		return list[:strings.Index(list, "</ul>")]
 	}
-	for _, want := range []string{"Build Agent", "claude", "feat/ui"} {
+	list := listOf()
+	for _, want := range []string{"Build Agent", "claude", "feat/ui",
+		"Erreichbarkeit: unbekannt (keine Beobachtung)", "Arbeitszustand: unbekannt (keine Beobachtung)"} {
 		if !strings.Contains(list, want) {
-			t.Errorf("compact participant line lost %q", want)
+			t.Errorf("participant line lost %q: %s", want, list)
 		}
 	}
-	template, _ := files.ReadFile("templates/coord.html")
-	if !strings.Contains(string(template), `Erreichbarkeit: {{.Reachability}}`) || !strings.Contains(string(template), `ne .Reachability "unbekannt"`) {
-		t.Error("known reachability must still be rendered, only unknown is hidden")
+	for _, gone := range []string{"idle", "untätig", "beendet", "verbunden"} {
+		if strings.Contains(list, gone) {
+			t.Errorf("silence must not read as %q", gone)
+		}
+	}
+	// A fresh poll is an observation and says so, with its age.
+	if err := st.TouchCoordAgentPoll("sess-a"); err != nil {
+		t.Fatal(err)
+	}
+	list = listOf()
+	if !strings.Contains(list, "Erreichbarkeit: verbunden (beobachtet, vor ") {
+		t.Errorf("fresh poll must show origin and age: %s", list)
+	}
+	if !strings.Contains(list, "Arbeitszustand: unbekannt (keine Beobachtung)") {
+		t.Errorf("a poll says nothing about work: %s", list)
 	}
 }
 

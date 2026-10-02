@@ -75,8 +75,12 @@ func TestClaudeDryRunFormat(t *testing.T) {
 	if id == nil {
 		t.Fatalf("no agent line:\n%s", s)
 	}
+	sess := regexp.MustCompile(`(?m)^env: GHOSTTREE_SESSION_ID=(\S+)$`).FindStringSubmatch(s)
+	if sess == nil {
+		t.Fatalf("the launcher must hand the session id to the agent:\n%s", s)
+	}
 	for _, want := range []string{
-		"command: claude --mcp-config <tmp> --dangerously-load-development-channels server:ghosttree-channel -p 'say hi'",
+		"command: claude --mcp-config <tmp> --dangerously-load-development-channels server:ghosttree-channel --session-id " + sess[1] + " -p 'say hi'",
 		"env: GHOSTTREE_AGENT_ID=" + id[1],
 		"mcp-config:\n{",
 		`"channel",`,
@@ -113,7 +117,7 @@ func TestRunClaudeLaunchesAndCleansUp(t *testing.T) {
 	t.Setenv(claudeBinEnv, fake)
 	t.Setenv("TMPDIR", dir)
 	conf, _ := claudeMCPConfig("/opt/ctx", "claude:h:9", "")
-	if code := runClaude(conf, "claude:h:9", "", []string{"--resume", "x y"}); code != 7 {
+	if code := runClaude(conf, "claude:h:9", "", "", false, []string{"--resume", "x y"}); code != 7 {
 		t.Fatalf("exit code %d, want 7", code)
 	}
 	b, err := os.ReadFile(rec)
@@ -136,7 +140,7 @@ func TestRunClaudeLaunchesAndCleansUp(t *testing.T) {
 
 func TestRunClaudeMissingBinary(t *testing.T) {
 	t.Setenv(claudeBinEnv, filepath.Join(t.TempDir(), "nope"))
-	if code := runClaude([]byte("{}"), "a", "", nil); code != 127 {
+	if code := runClaude([]byte("{}"), "a", "", "", false, nil); code != 127 {
 		t.Fatalf("code %d", code)
 	}
 }
@@ -149,7 +153,7 @@ func TestClaudeAgentFlagAndPassThroughAfterIt(t *testing.T) {
 	}
 	s := out.String()
 	// -p beendet die Launcher-Flags.
-	if !strings.Contains(s, "agent: claude:lab:1\n") || !strings.Contains(s, "server:ghosttree-channel -p x\n") {
+	if !strings.Contains(s, "agent: claude:lab:1\n") || !strings.Contains(s, " -p x\n") {
 		t.Fatalf("got:\n%s", s)
 	}
 	out.Reset()
@@ -172,7 +176,7 @@ func TestClaudeDoubleDashEndsLauncherFlags(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	var out bytes.Buffer
 	run([]string{"claude", "--dry-run", "--", "--dry-run", "-p"}, &out)
-	if !strings.Contains(out.String(), "server:ghosttree-channel --dry-run -p\n") {
+	if !strings.Contains(out.String(), " --dry-run -p\n") {
 		t.Fatalf("-- must be consumed and the rest passed on:\n%s", out.String())
 	}
 }
@@ -239,7 +243,7 @@ func TestRunClaudeForwardsSignalsAndCleansUp(t *testing.T) {
 			t.Setenv(claudeBinEnv, filepath.Join(dir, "claude"))
 			t.Setenv("TMPDIR", dir)
 			codeCh := make(chan int, 1)
-			go func() { codeCh <- runClaude([]byte("{}"), "claude:h:1", "", nil) }()
+			go func() { codeCh <- runClaude([]byte("{}"), "claude:h:1", "", "", false, nil) }()
 			deadline := time.Now().Add(5 * time.Second)
 			for {
 				if _, err := os.Stat(ready); err == nil {
@@ -295,5 +299,40 @@ func TestChannelSelfFallsBackToAgentEnvWithPrefixRule(t *testing.T) {
 	t.Setenv("CODEX_THREAD_ID", "thr")
 	if got := resolveChannelSelf(""); got != "thr" {
 		t.Errorf("foreign prefix must fall back to the harness id: %q", got)
+	}
+}
+
+func TestSessionForPinsTheSessionOnlyWhenItIsOurs(t *testing.T) {
+	session, pass, err := sessionFor([]string{"-p", "hi"})
+	if err != nil || !pass || !regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`).MatchString(session) {
+		t.Fatalf("fresh launch: %q pass=%v err=%v", session, pass, err)
+	}
+	for _, args := range [][]string{{"--resume", "x"}, {"-c"}, {"--continue"}, {"--resume=abc"}} {
+		if s, pass, _ := sessionFor(args); s != "" || pass {
+			t.Errorf("%v: a resumed session is not ours to name, got %q pass=%v", args, s, pass)
+		}
+	}
+	if s, pass, _ := sessionFor([]string{"--session-id", "my-own-id"}); s != "my-own-id" || pass {
+		t.Errorf("a caller-chosen session id is adopted, not duplicated: %q pass=%v", s, pass)
+	}
+	args := claudeLaunchArgs("/tmp/x.json", "uuid-1", true, []string{"-p", "hi"})
+	if strings.Join(args, " ") != "--mcp-config /tmp/x.json --dangerously-load-development-channels server:ghosttree-channel --session-id uuid-1 -p hi" {
+		t.Fatalf("launch args = %q", args)
+	}
+}
+
+func TestAgentSessionFromEnvNeedsTheLauncherIdentity(t *testing.T) {
+	t.Setenv(sessionIDEnv, "uuid-1")
+	t.Setenv(agentIDEnv, "")
+	if got := agentSessionFromEnv(); got != "" {
+		t.Fatalf("an inherited session id without a launcher identity must be ignored, got %q", got)
+	}
+	t.Setenv(agentIDEnv, "claude:h:abc")
+	if got := agentSessionFromEnv(); got != "uuid-1" {
+		t.Fatalf("session = %q", got)
+	}
+	t.Setenv(sessionIDEnv, "bad id")
+	if got := agentSessionFromEnv(); got != "" {
+		t.Fatalf("an invalid session id must be dropped, got %q", got)
 	}
 }

@@ -177,6 +177,7 @@ func (a *api) registerRoutes(mux *http.ServeMux) {
 	a.routeFunc(mux, "POST /api/agent-control/resume", a.agentControlWebOnly)
 	a.routeFunc(mux, "POST /api/agent-control/{id}/events", a.recordAgentControlEvent)
 	a.routeFunc(mux, "POST /api/coord/deliveries", a.markCoordDelivery)
+	a.routeFunc(mux, "POST /api/coord/heartbeat", a.coordHeartbeat)
 	a.routeFunc(mux, "POST /api/coord/deliveries/claim", a.claimCoordDelivery)
 	a.routeFunc(mux, "GET /api/coord/deliveries/injected", a.coordInjectedMessages)
 	a.routeFunc(mux, "POST /api/coord/rooms", a.ensureCoordRoom)
