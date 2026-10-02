@@ -809,7 +809,9 @@
     setLive("unsupported", "Live-Updates nicht unterstützt");
   } else {
     const cursor = workspace.dataset.coordEventCursor || "0";
-    let lastEventID = Number(cursor);
+    // Der Cursor ist undurchsichtig (versiegelt); er wird nur durchgereicht und
+    // nie als Zahl gelesen oder verglichen.
+    let lastEventID = cursor;
     const source = new EventSource(
       `/ui/coord/events?after=${encodeURIComponent(cursor)}`,
     );
@@ -819,13 +821,12 @@
     });
     source.addEventListener("coord.changed", (raw) => {
       try {
-        const eventID = Number(raw.lastEventId);
-        if (!Number.isSafeInteger(eventID) || eventID < 0) {
+        if (!raw.lastEventId) {
           location.reload();
           return;
         }
-        if (eventID <= lastEventID) return;
-        lastEventID = eventID;
+        if (raw.lastEventId === lastEventID) return;
+        lastEventID = raw.lastEventId;
         refreshVisible(JSON.parse(raw.data));
       } catch (_) {
         location.reload();

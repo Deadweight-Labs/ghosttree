@@ -6,6 +6,38 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Guests no longer get the member list of a project room through the
+  recipient list. A guest may still mention: members of the room get the
+  message (as a request, never a directive), and mentions of anyone outside the
+  room are dropped silently with the same response. What a guest reads back of
+  its own posts (mentions endpoint, "Erwähnt" in the web views, standing
+  targets) is exactly what it typed, never the delivered subset, and outgoing
+  attention items, attention and delivery events and the delivery summary are not shown to guests, so nothing tells members from
+  non-members. Members and owners still see the real deliveries. The room page
+  now opens for guests, without the agent list. Both gates follow
+  `GHOSTTREE_ENFORCE_ACCESS` (log mode: old behaviour plus "would deny"). An
+  unknown mention recipient of a member is a 400 with a fixed message instead
+  of a 500 that echoed the probed id, in every mode. A legacy thread restricted
+  to a list of readers now also needs the project role.
+- The browser event stream (`/ui/coord/events`) no longer exposes the global
+  event sequence: the SSE `id:`, the resync cursor and the page's initial cursor
+  are AES-GCM sealed, opaque and different on every send, for every viewer, and
+  the event payload carries no number. Gaps between a guest's own posts could
+  otherwise count events hidden from it. An invalid, manipulated or foreign
+  cursor yields a resync instead of an error. Read events are hidden from guests
+  in project rooms like delivery events.
+- New attention items get a random positive 63-bit id instead of the next
+  row number (existing items keep theirs). A counter showed a guest which of
+  its mentions reached a member: that mention created one more item, and the id
+  of the guest's own item jumped. Attention lists are ordered by `created_at`,
+  `message_id`, `id`; nothing relies on ids being monotonic.
+- The coordination event log keeps events for ten minutes instead of the
+  last 512. A count was observable: a guest could toggle read marks and count
+  the steps until its cursor expired, 512 or 511 depending on whether a
+  hidden event was added. Pruning now depends on time only (an insert trigger
+  deletes older events); a cursor carries its own time and resyncs when it is
+  older than 9 minutes, not after a number of events. A hard cap of 100000 events remains as
+  an emergency brake.
 - Project rooms of the coordination layer need a project role. Registering an
   agent into `project:<remote>` takes at least the guest role (org owners as
   before); org membership alone no longer joins. `GET /api/coord/rooms` drops

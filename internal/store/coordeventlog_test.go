@@ -75,50 +75,130 @@ func TestCoordEventReplayUsesCurrentRoomAndThreadAccess(t *testing.T) {
 	}
 }
 
-func TestCoordEventLogIsBoundedAndRequestsResyncForOldCursor(t *testing.T) {
+func eventStore(t *testing.T) (*Store, string) {
+	t.Helper()
 	s := newCoordAccessStore(t)
 	room := RoomKeyForProject("github.com/x/y")
 	if _, err := s.RegisterCoordAgent(CoordAgent{ExternalID: "sess-a", PrincipalID: "person:1", Provider: "test", RoomKey: room}); err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < coordEventRetentionLimit+1; i++ {
-		if _, err := s.AppendCoordMessage(CoordMessage{DestinationKind: DestinationRoom, DestinationID: room, SenderExternalID: "sess-a", ClientID: "bounded-" + strconv.Itoa(i), Body: "x"}); err != nil {
+	return s, room
+}
+
+func appendEvents(t *testing.T, s *Store, room, prefix string, n int) {
+	t.Helper()
+	for i := 0; i < n; i++ {
+		if _, err := s.AppendCoordMessage(CoordMessage{DestinationKind: DestinationRoom, DestinationID: room, SenderExternalID: "sess-a", ClientID: prefix + strconv.Itoa(i), Body: "x"}); err != nil {
 			t.Fatal(err)
 		}
 	}
+}
+
+func countEvents(t *testing.T, s *Store) (n int) {
+	t.Helper()
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM coord_events`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// Gelöscht wird nach Alter, nicht nach Zahl: auch viele Ereignisse binnen des
+// Fensters lassen einen alten Cursor ohne Resync.
+func TestCoordEventLogKeepsEverythingInsideTheWindow(t *testing.T) {
+	s, room := eventStore(t)
+	appendEvents(t, s, room, "inside-", 700)
+	if got := countEvents(t, s); got < 700 {
+		t.Fatalf("events inside the window were pruned: %d", got)
+	}
 	replay, err := s.CoordEventsAfter(Principal{ID: "person:1"}, 1, 10)
-	if err != nil {
+	if err != nil || replay.Resync {
+		t.Fatalf("a cursor inside the window must not resync: %+v %v", replay, err)
+	}
+}
+
+func TestCoordEventLogDropsOldEventsAndRequestsResyncAfterTheWindow(t *testing.T) {
+	s, room := eventStore(t)
+	appendEvents(t, s, room, "old-", 10)
+	before := countEvents(t, s)
+	if _, err := s.db.Exec(`UPDATE coord_events SET created_at='2000-01-01T00:00:00.000Z' WHERE sequence<=?`, before-3); err != nil {
 		t.Fatal(err)
 	}
-	if !replay.Resync || len(replay.Events) != 0 {
-		t.Fatalf("old cursor replay=%+v", replay)
+	// Ein neues Ereignis löst das Aufräumen aus.
+	appendEvents(t, s, room, "new-", 1)
+	left := countEvents(t, s)
+	if left != 4 {
+		t.Fatalf("after the window %d events remain, want the 3 recent plus the new one", left)
 	}
-	var count int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM coord_events`).Scan(&count); err != nil {
+	replay, err := s.CoordEventsAfter(Principal{ID: "person:1"}, 1, 10)
+	if err != nil || !replay.Resync || len(replay.Events) != 0 {
+		t.Fatalf("cursor behind the window must resync: %+v %v", replay, err)
+	}
+	oldest, _ := s.OldestCoordEventSequence()
+	latest, _ := s.LatestCoordEventSequence()
+	if r, err := s.CoordEventsAfter(Principal{ID: "person:1"}, oldest-1, 10); err != nil || r.Resync {
+		t.Fatalf("oldest-1 must remain replayable: %+v %v", r, err)
+	}
+	if r, err := s.CoordEventsAfter(Principal{ID: "person:1"}, oldest-2, 10); err != nil || !r.Resync {
+		t.Fatalf("oldest-2 must resync: %+v %v", r, err)
+	}
+	if r, err := s.CoordEventsAfter(Principal{ID: "person:1"}, latest, 10); err != nil || r.Resync || len(r.Events) != 0 || r.ScannedThrough != latest {
+		t.Fatalf("latest cursor: %+v %v", r, err)
+	}
+}
+
+// Ruhe ist kein Resync: Ein Cursor am Ende des Protokolls bleibt gültig, auch
+// wenn alle Einträge abgelaufen sind und das nächste Ereignis ihn weiterführt.
+func TestCoordEventCursorSurvivesAnIdleWindow(t *testing.T) {
+	s, room := eventStore(t)
+	appendEvents(t, s, room, "idle-", 3)
+	latest, _ := s.LatestCoordEventSequence()
+	if _, err := s.db.Exec(`UPDATE coord_events SET created_at='2000-01-01T00:00:00.000Z'`); err != nil {
 		t.Fatal(err)
 	}
-	if count > coordEventRetentionLimit {
-		t.Fatalf("event log retained %d rows, limit %d", count, coordEventRetentionLimit)
+	if r, err := s.CoordEventsAfter(Principal{ID: "person:1"}, latest, 10); err != nil || r.Resync {
+		t.Fatalf("idle cursor at the end: %+v %v", r, err)
 	}
-	oldest, err := s.OldestCoordEventSequence()
-	if err != nil {
+	appendEvents(t, s, room, "after-idle-", 1)
+	if got, _ := s.LatestCoordEventSequence(); got != latest+1 {
+		t.Fatalf("latest=%d want %d", got, latest+1)
+	}
+	if r, err := s.CoordEventsAfter(Principal{ID: "person:1"}, latest, 10); err != nil || r.Resync || len(r.Events) != 1 {
+		t.Fatalf("the next event continues the idle cursor: %+v %v", r, err)
+	}
+	// Alles abgelaufen, Tabelle leer: der Cursor am Ende bleibt gültig.
+	if _, err := s.db.Exec(`DELETE FROM coord_events`); err != nil {
 		t.Fatal(err)
 	}
-	latest, err := s.LatestCoordEventSequence()
-	if err != nil {
+	if got, _ := s.LatestCoordEventSequence(); got != latest+1 {
+		t.Fatalf("latest after emptying = %d", got)
+	}
+	if r, err := s.CoordEventsAfter(Principal{ID: "person:1"}, latest+1, 10); err != nil || r.Resync {
+		t.Fatalf("cursor on an empty log: %+v %v", r, err)
+	}
+}
+
+// Notbremse gegen unbegrenztes Wachstum, nur für den Fall, dass das Fenster
+// nichts löscht. Sie ist die einzige zählende Grenze.
+func TestCoordEventLogEmergencyCap(t *testing.T) {
+	s, _ := eventStore(t)
+	if _, err := s.db.Exec(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<?)
+		INSERT INTO coord_events(kind,object_kind,object_id,created_at)
+		SELECT 'message','room','x',strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM n`, coordEventEmergencyCap+500); err != nil {
 		t.Fatal(err)
 	}
-	atBoundary, err := s.CoordEventsAfter(Principal{ID: "person:1"}, oldest-1, 10)
-	if err != nil || atBoundary.Resync {
-		t.Fatalf("oldest-1 must remain replayable: replay=%+v err=%v", atBoundary, err)
+	if got := countEvents(t, s); got > coordEventEmergencyCap {
+		t.Fatalf("emergency cap exceeded: %d", got)
 	}
-	tooOld, err := s.CoordEventsAfter(Principal{ID: "person:1"}, oldest-2, 10)
-	if err != nil || !tooOld.Resync {
-		t.Fatalf("oldest-2 must resync: replay=%+v err=%v", tooOld, err)
+}
+
+func TestCoordEventAgeTriggerReplacesTheCountTrigger(t *testing.T) {
+	s, _ := eventStore(t)
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name='coord_events_bound'`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("the count trigger is still there: %d %v", n, err)
 	}
-	atLatest, err := s.CoordEventsAfter(Principal{ID: "person:1"}, latest, 10)
-	if err != nil || atLatest.Resync || len(atLatest.Events) != 0 || atLatest.ScannedThrough != latest {
-		t.Fatalf("latest cursor replay=%+v err=%v", atLatest, err)
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name='coord_events_age'`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("the age trigger is missing: %d %v", n, err)
 	}
 }
 
@@ -266,4 +346,27 @@ func eventTargetPresent(events []CoordEvent, kind, id string) bool {
 		}
 	}
 	return false
+}
+
+// Eine Datenbank mit dem alten Zähl-Trigger wird beim nächsten Öffnen umgestellt.
+func TestOpeningDropsTheOldCountTrigger(t *testing.T) {
+	path := t.TempDir() + "/events.db"
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`CREATE TRIGGER coord_events_bound AFTER INSERT ON coord_events BEGIN
+		DELETE FROM coord_events WHERE sequence<=NEW.sequence-512; END`); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	s, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE name='coord_events_bound'`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("old trigger survived: %d %v", n, err)
+	}
 }

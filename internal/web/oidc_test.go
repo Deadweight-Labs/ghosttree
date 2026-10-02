@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/hmac"
 	"crypto/rand"
@@ -815,7 +816,7 @@ func TestOIDCFlowCookieCannotBeForgedTamperedOrReusedAfterExpiry(t *testing.T) {
 	// Garbage und verändertes Cookie.
 	for name, value := range map[string]string{
 		"garbage":  "AAAA",
-		"tampered": good.Value[:len(good.Value)-2] + "xx",
+		"tampered": tamperCookieValue(good.Value),
 	} {
 		bad := newBrowser(t)
 		bad.Jar.SetCookies(mustURL(env.web.URL), []*http.Cookie{{Name: flowCookie, Value: value, Path: "/"}})
@@ -952,5 +953,31 @@ func TestUsedStatesAreBoundedAndEvictTheOldest(t *testing.T) {
 	u2.use("new", now.Add(2*time.Minute), now.Add(time.Hour))
 	if len(u2.seen) != 1 {
 		t.Fatalf("expired state kept: %v", u2.seen)
+	}
+}
+
+// tamperCookieValue ändert ein Zeichen in der Mitte garantiert. Das letzte
+// Zeichen taugt nicht: RawURLEncoding ignoriert dort Füllbits, "AAAAAA" und
+// "AAAAAB" ergeben dieselben Bytes. In der Mitte tragen alle sechs Bit.
+func tamperCookieValue(v string) string {
+	i := len(v) / 2
+	repl := byte('A')
+	if v[i] == repl {
+		repl = 'B'
+	}
+	return v[:i] + string(repl) + v[i+1:]
+}
+
+func TestTamperCookieValueAlwaysChanges(t *testing.T) {
+	for _, v := range []string{"abcxx", "AAAAAA", "AAAAAB", "xx", "BBBBBB"} {
+		got := tamperCookieValue(v)
+		if got == v || len(got) != len(v) {
+			t.Errorf("tamperCookieValue(%q) = %q", v, got)
+		}
+		a, errA := base64.RawURLEncoding.DecodeString(v)
+		b, errB := base64.RawURLEncoding.DecodeString(got)
+		if errA == nil && errB == nil && bytes.Equal(a, b) {
+			t.Errorf("tamperCookieValue(%q) = %q decodes to the same bytes", v, got)
+		}
 	}
 }
