@@ -89,10 +89,14 @@ func WriteFlag(agent string, f Flag) error {
 	return privatefile.Write(filepath.Join(dir, flagName), raw)
 }
 
-// RemoveFlag lifts the flag; a missing flag is fine.
+// RemoveFlag lifts the flag; a missing flag is fine. RemoveAll also clears a
+// non-regular object someone put at the flag path (directory, FIFO): it never
+// follows a symlink, it removes the link itself. The channel calls this when the
+// server reports no active control, so a same-user self-pause without a server
+// control does not stay for ever.
 func RemoveFlag(agent string) {
 	if dir, err := Dir(agent); err == nil {
-		_ = os.Remove(filepath.Join(dir, flagName))
+		_ = os.RemoveAll(filepath.Join(dir, flagName))
 	}
 }
 
