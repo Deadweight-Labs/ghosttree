@@ -6,6 +6,17 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Added: loop guard for the Claude channel (REQ-360). It counts rounds
+  between the same two participants that bring nothing new (acks, thanks,
+  repeated status lines) and resets on any new content: a commit hash, file
+  path, code block, link, REQ/AC/PR reference, a number not seen in the last 6
+  messages, a message from a human, or enough new words. From 3 such rounds the
+  wake notification carries `loop_streak=N` in its meta, only for the agent it
+  wakes. This release only observes: wakes are unchanged and the channel logs
+  "would hold" at 5. `GHOSTTREE_LOOP_GUARD=enforce` (off by default) withholds
+  the wake at 5, leaves the message stored and readable by pull, and posts one
+  notice into the room.
+
 - Fixed: `ctx doc new` and `ctx doc pull` no longer prepend the creation date
   to the worktree filename when the slug already starts with a `YYYY-MM-DD`
   date (it produced `2026-10-02-2026-10-02-x.md`, sometimes with two

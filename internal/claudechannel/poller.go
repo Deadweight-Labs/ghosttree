@@ -3,6 +3,8 @@ package claudechannel
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
@@ -73,8 +75,47 @@ type Poller struct {
 	// danach mit Backoff weiter.
 	OnError func(error)
 
-	pos map[string]int64 // Abrufstand je Raum, unabhängig vom gemeinsamen Cursor
+	// LoopGuard is the REQ-360 loop guard mode (store.LoopObserve, the default
+	// for the zero value, or store.LoopEnforce). It is an extra stage after
+	// ShouldWake and never a second wake rule: it only ever withholds a wake
+	// that ShouldWake allowed, and only in enforce mode.
+	LoopGuard store.LoopMode
+	// OnLoop sees every wake the guard would hold (observe) or held (enforce).
+	OnLoop func(LoopEvent)
+
+	pos      map[string]int64 // Abrufstand je Raum, unabhängig vom gemeinsamen Cursor
+	loops    map[string]*loopRoom
+	loopHeld map[string]bool // rooms whose current hold already got its notice
 }
+
+// loopRoom is the tracker of one room plus the last message it was fed: a
+// stalled delivery is retried, and the retry must not count twice.
+type loopRoom struct {
+	t      store.LoopTracker
+	lastID int64
+	last   store.LoopState
+}
+
+// LoopEvent reports a wake at hold streak. Held is false in observe mode:
+// "would hold".
+type LoopEvent struct {
+	Room    string
+	Message int64
+	Sender  string
+	Streak  int
+	Held    bool
+}
+
+// Noticer is an optional Source capability: post the notice a room gets when
+// the guard held a wake. Sources without it hold silently.
+type Noticer interface {
+	PostNotice(self string, room store.CoordRoom, text string) error
+}
+
+// loopNotice is the text of that notice. It names the way out.
+const loopNotice = "Wake calls in this room are paused: %d rounds in a row without new content. " +
+	"The messages stay readable. Any message with new content (a commit, file, link, number, " +
+	"REQ reference) or a message from a human lifts the pause."
 
 func (p *Poller) now() time.Time {
 	if p.Now != nil {
@@ -211,6 +252,7 @@ func (p *Poller) pollRoom(ctx context.Context, room store.CoordRoom) (bool, erro
 // doc.go). errStalled heißt: nichts geclaimt, später erneut versuchen.
 func (p *Poller) handle(ctx context.Context, room store.CoordRoom, m store.CoordMessage) (bool, error) {
 	now := p.now()
+	loop := p.loopState(room, m)
 	if !wakeCandidate(p.Self, room.Kind, m, now) {
 		return false, nil
 	}
@@ -241,6 +283,9 @@ func (p *Poller) handle(ctx context.Context, room store.CoordRoom, m store.Coord
 	if !ShouldWake(p.Self, room.Kind, m, mentions, parentKind, now) {
 		return false, nil
 	}
+	if p.loopHolds(room, m, loop) {
+		return false, nil
+	}
 	if !p.Notifier.Ready() {
 		return false, errStalled
 	}
@@ -265,7 +310,14 @@ func (p *Poller) handle(ctx context.Context, room store.CoordRoom, m store.Coord
 			lost = true // ein anderer Poller hat sie; nie erneut zustellen
 			return hookbudget.ErrNotEmitted
 		}
-		if err := p.Notifier.Notify(ctx, NewNotification(room, m, text)); err != nil {
+		note := NewNotification(room, m, text)
+		if loop.Warn() {
+			// Recipient-only: the notification goes to the one agent this
+			// message wakes, and the streak is built from messages that agent
+			// can read anyway.
+			note.Meta["loop_streak"] = strconv.Itoa(loop.Streak)
+		}
+		if err := p.Notifier.Notify(ctx, note); err != nil {
 			return err
 		}
 		sent = true
@@ -286,6 +338,54 @@ func (p *Poller) handle(ctx context.Context, room store.CoordRoom, m store.Coord
 		return false, errStalled
 	}
 	return sent, nil
+}
+
+// loopState feeds m to the room's tracker. Every message passes, own and
+// unwoken ones too: the streak is about the conversation, not about wakes.
+func (p *Poller) loopState(room store.CoordRoom, m store.CoordMessage) store.LoopState {
+	if p.loops == nil {
+		p.loops, p.loopHeld = map[string]*loopRoom{}, map[string]bool{}
+	}
+	r := p.loops[room.Key]
+	if r == nil {
+		r = &loopRoom{}
+		p.loops[room.Key] = r
+	}
+	if m.ID <= r.lastID {
+		return r.last
+	}
+	r.lastID, r.last = m.ID, r.t.Add(m)
+	if !r.last.Hold() {
+		delete(p.loopHeld, room.Key) // the brake is off; the next hold notices again
+	}
+	return r.last
+}
+
+// loopHolds is the loop guard stage, after ShouldWake. It reports whether the
+// wake is withheld. In observe mode it only reports "would hold" and returns
+// false; in enforce mode it returns true and, once per hold, posts the notice.
+// A notice message itself never wakes (store.LoopNoticeKind).
+func (p *Poller) loopHolds(room store.CoordRoom, m store.CoordMessage, st store.LoopState) bool {
+	if m.Kind == store.LoopNoticeKind {
+		return true
+	}
+	if !st.Hold() {
+		return false
+	}
+	enforce := p.LoopGuard == store.LoopEnforce
+	if p.OnLoop != nil {
+		p.OnLoop(LoopEvent{Room: room.Key, Message: m.ID, Sender: m.SenderExternalID, Streak: st.Streak, Held: enforce})
+	}
+	if !enforce {
+		return false
+	}
+	if n, ok := p.Source.(Noticer); ok && !p.loopHeld[room.Key] {
+		p.loopHeld[room.Key] = true
+		if err := n.PostNotice(p.Self, room, fmt.Sprintf(loopNotice, st.Streak)); err != nil && p.OnError != nil {
+			p.OnError(err)
+		}
+	}
+	return true
 }
 
 // errStalled: im Moment kann nicht zugestellt werden (Notifier nicht bereit,
@@ -322,6 +422,18 @@ func (s ClientSource) Message(self string, room store.CoordRoom, id int64) (stor
 		return store.CoordMessage{}, false, err
 	}
 	return msgs[0], true, nil
+}
+
+// PostNotice posts the guard's notice into the room as a message of kind
+// store.LoopNoticeKind. The client id is stable per sender and room and
+// minute, so a retry cannot post it twice.
+func (s ClientSource) PostNotice(self string, room store.CoordRoom, text string) error {
+	_, err := s.Client.SendCoordMessage(store.CoordMessage{
+		DestinationKind: store.DestinationRoom, DestinationID: room.Key, SenderExternalID: self,
+		ClientID: fmt.Sprintf("loop-notice:%s:%d", room.Key, time.Now().Unix()/60),
+		Kind:     store.LoopNoticeKind, Body: text,
+	})
+	return err
 }
 
 func (s ClientSource) Mentions(self string, id int64) ([]string, error) {
