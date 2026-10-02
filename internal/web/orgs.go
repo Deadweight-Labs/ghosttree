@@ -46,6 +46,7 @@ type orgsView struct {
 	Roles     []projectRolesView
 	NewCode   string // einmalig angezeigter Einladungscode
 	NewExpiry string
+	NewLink   bool // der Code gehört zu einer Projekt-Einladung (/join/<code>)
 	Notice    string
 }
 
@@ -182,14 +183,24 @@ func (a *app) orgInvite(w http.ResponseWriter, r *http.Request) {
 		a.orgFailure(w, r, store.ErrInvalidInput)
 		return
 	}
-	code, inv, err := a.store.CreateInvitation(browserPrincipal(r).ID, o.ID, r.FormValue("email"), r.FormValue("role"), time.Duration(days)*24*time.Hour)
+	ttl := time.Duration(days) * 24 * time.Hour
+	var code string
+	var inv store.Invitation
+	link := false
+	if project := strings.TrimSpace(r.FormValue("project")); project != "" {
+		// Ein Link vergibt nur member oder guest für dieses eine Projekt.
+		link = true
+		code, inv, err = a.store.CreateProjectInvitation(browserPrincipal(r).ID, o.ID, project, r.FormValue("project_role"), ttl)
+	} else {
+		code, inv, err = a.store.CreateInvitation(browserPrincipal(r).ID, o.ID, r.FormValue("email"), r.FormValue("role"), ttl)
+	}
 	if err != nil {
 		a.orgFailure(w, r, err)
 		return
 	}
 	// Der Code erscheint nur in dieser Antwort, nicht in einer URL oder einem
 	// Redirect.
-	a.renderOrgs(w, r, http.StatusOK, orgsView{NewCode: code, NewExpiry: inv.ExpiresAt}, o.Slug, "")
+	a.renderOrgs(w, r, http.StatusOK, orgsView{NewCode: code, NewExpiry: inv.ExpiresAt, NewLink: link}, o.Slug, "")
 }
 
 func (a *app) orgInviteRevoke(w http.ResponseWriter, r *http.Request) {

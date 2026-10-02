@@ -914,10 +914,10 @@ func invitationExists(q rowQuerier, code string) bool {
 // oder leer; eine an eine Adresse gebundene Einladung verlangt Gleichheit.
 // Gültigkeit, Zustand und Einlösbarkeit melden einheitlich ErrCodeInvalid.
 func acceptInvitationTx(tx execQueryer, code string, account int64, verifiedEmail string) (Org, error) {
-	var id, orgID, inviter int64
-	var role, email, expires, accepted, revoked string
-	err := tx.QueryRow(`SELECT id, org_id, role, email, invited_by, expires_at, accepted_at, revoked_at FROM invitations WHERE code_hash=?`,
-		hashToken(code)).Scan(&id, &orgID, &role, &email, &inviter, &expires, &accepted, &revoked)
+	var id, orgID, inviter, projectID int64
+	var role, projectRole, email, expires, accepted, revoked string
+	err := tx.QueryRow(`SELECT id, org_id, role, project_id, project_role, email, invited_by, expires_at, accepted_at, revoked_at FROM invitations WHERE code_hash=?`,
+		hashToken(code)).Scan(&id, &orgID, &role, &projectID, &projectRole, &email, &inviter, &expires, &accepted, &revoked)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Org{}, ErrCodeInvalid
 	}
@@ -932,11 +932,30 @@ func acceptInvitationTx(tx execQueryer, code string, account int64, verifiedEmai
 	if orgRoleTx(tx, orgID, inviter) != OrgOwner {
 		return Org{}, ErrCodeInvalid
 	}
+	// Eine Projekt-Einladung gilt nur, solange das Projekt in der Organisation
+	// liegt, die eingeladen hat.
+	var remote string
+	if projectID != 0 {
+		var projectOrg int64
+		if tx.QueryRow(`SELECT remote, org_id FROM projects WHERE id=?`, projectID).Scan(&remote, &projectOrg) != nil || projectOrg != orgID {
+			return Org{}, ErrCodeInvalid
+		}
+	}
 	if email != "" && !(verifiedEmail != "" && strings.EqualFold(email, strings.TrimSpace(verifiedEmail))) {
 		return Org{}, ErrInvitationEmail
 	}
-	if orgRoleTx(tx, orgID, account) != "" {
+	orgRole := orgRoleTx(tx, orgID, account)
+	if projectID == 0 && orgRole != "" || orgRole == OrgOwner {
 		return Org{}, ErrAlreadyMember
+	}
+	// Ein Konto, das die Organisation schon hat, kann über eine Projekt-Einladung
+	// eine Projektrolle bekommen, aber nie eine niedrigere oder gleiche.
+	var currentProject string
+	if projectID != 0 {
+		_ = tx.QueryRow(`SELECT role FROM project_members WHERE project_id=? AND account_id=?`, projectID, account).Scan(&currentProject)
+		if RoleRank(currentProject) >= RoleRank(projectRole) {
+			return Org{}, ErrAlreadyMember
+		}
 	}
 	res, err := tx.Exec(`UPDATE invitations SET accepted_by=?, accepted_at=? WHERE id=? AND accepted_at='' AND revoked_at=''`, account, now(), id)
 	if err != nil {
@@ -945,13 +964,27 @@ func acceptInvitationTx(tx execQueryer, code string, account int64, verifiedEmai
 	if n, _ := res.RowsAffected(); n != 1 {
 		return Org{}, ErrCodeInvalid
 	}
-	if _, err := tx.Exec(`INSERT INTO org_members(org_id, account_id, role, joined_at) VALUES(?,?,?,?)`, orgID, account, role, now()); err != nil {
-		return Org{}, err
+	if orgRole == "" {
+		if _, err := tx.Exec(`INSERT INTO org_members(org_id, account_id, role, joined_at) VALUES(?,?,?,?)`, orgID, account, role, now()); err != nil {
+			return Org{}, err
+		}
 	}
 	if _, err := tx.Exec(`UPDATE persons SET default_org_id=? WHERE id=? AND default_org_id=0`, orgID, account); err != nil {
 		return Org{}, err
 	}
-	if err := orgEvent(tx, orgID, "join", principalOfID(account), principalOfID(account), "invitation "+strconv.FormatInt(id, 10)+" as "+role); err != nil {
+	detail := "invitation " + strconv.FormatInt(id, 10) + " as " + role
+	if projectID != 0 {
+		if _, err := tx.Exec(`INSERT INTO project_members(project_id, account_id, role, can_review, granted_by, granted_at) VALUES(?,?,?,0,?,?)
+			ON CONFLICT(project_id, account_id) DO UPDATE SET role=excluded.role, can_review=0, granted_by=excluded.granted_by, granted_at=excluded.granted_at`,
+			projectID, account, projectRole, inviter, now()); err != nil {
+			return Org{}, err
+		}
+		if err := roleEvent(tx, remote, principalOfID(account), currentProject, projectRole, principalOfID(inviter), RoleViaInvitation); err != nil {
+			return Org{}, err
+		}
+		detail = "invitation " + strconv.FormatInt(id, 10) + " as " + projectRole + " of " + remote
+	}
+	if err := orgEvent(tx, orgID, "join", principalOfID(account), principalOfID(account), detail); err != nil {
 		return Org{}, err
 	}
 	return orgByIDTx(tx, orgID)

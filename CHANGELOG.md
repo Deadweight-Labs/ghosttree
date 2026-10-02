@@ -6,6 +6,19 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Added: invitation page `/join/<code>` (REQ-434, first part). It shows the
+  organization, project, role (member or guest) and expiry of an invitation
+  link and uses nothing up by being opened; the invitation is consumed when
+  the invitee signs in (identity provider or local code sign-in) or presses
+  "Join" in a signed-in session, once and atomically. Every code that does not
+  work (unknown, malformed, expired, used, revoked, inviter no longer owner,
+  project moved, org-wide or email-bound invitation) gets the same 404 page,
+  headers included; requests are limited per client address (30 per minute,
+  `GHOSTTREE_TRUSTED_PROXIES` honoured), never per code. The page sends
+  `Referrer-Policy: no-referrer`, `Cache-Control: no-store`, a script-free CSP
+  and `X-Robots-Tag`, and the server logs nothing for `/join/` paths. Owners
+  create project links on the organization page (member 7 days, guest 3 days
+  by default); a link never grants owner or lead.
 - Fixed: agents can now open question, approval, blocker and handoff waits.
   `coord_send` and `ctx coord send --intent` take an optional `intent`
   (question, approval, blocker, handoff, ack; the first four need a mention),

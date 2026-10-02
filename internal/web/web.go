@@ -35,6 +35,7 @@ type app struct {
 	proxies       proxytrust.Set
 	publicOrigin  string // scheme://host of GHOSTTREE_PUBLIC_URL, or empty
 	publicHTTPS   bool
+	joinLimits    *joinLimiter
 }
 type pageData struct {
 	Title, NavSection, Person, CSRFToken, Error, Code string
@@ -73,7 +74,7 @@ type appHandler struct {
 }
 
 func newApp(st *store.Store, opts ...Option) http.Handler {
-	a := &app{store: st, sessions: newSessions()}
+	a := &app{store: st, sessions: newSessions(), joinLimits: newJoinLimiter()}
 	for _, opt := range opts {
 		opt(a)
 	}
@@ -85,6 +86,13 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.handle(mux, "GET /ui/login/oidc/callback", a.oidcCallback)
 	a.handle(mux, "GET /ui/login/code", a.codePage)
 	a.handle(mux, "POST /ui/login/code", a.requireSameOrigin(http.HandlerFunc(a.codeSubmit)))
+	a.handle(mux, "GET /join/{code}", a.joinPage)
+	a.handle(mux, "GET /join/", func(w http.ResponseWriter, r *http.Request) {
+		if a.joinGate(w, r) {
+			a.joinNotFound(w)
+		}
+	})
+	a.handle(mux, "POST /join/{code}/accept", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.joinAccept))))))
 	a.handle(mux, "POST /ui/logout", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.logout))))
 	a.handle(mux, "GET /ui/requests", a.requirePerson(http.HandlerFunc(a.requestsPage)))
 	a.handle(mux, "GET /ui/requests/{id}", a.requirePerson(http.HandlerFunc(a.requestPage)))
@@ -382,6 +390,9 @@ const (
 
 var webRoutes = map[string]webClass{
 	"GET /static/":                    webPublic,
+	"GET /join/{code}":                webPublic,
+	"GET /join/":                      webPublic,
+	"POST /join/{code}/accept":        webAdmin,
 	"GET /ui/login":                   webPublic,
 	"POST /ui/login":                  webPublic,
 	"POST /ui/login/oidc":             webPublic,
