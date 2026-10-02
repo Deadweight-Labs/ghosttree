@@ -74,6 +74,7 @@ func SyncFile(path, harness string, up Uploader, st *State, machine string) erro
 	offset := fs.Offset
 	var batch []store.Chunk
 	var touches []store.PathActivity
+	var proofs []ControlProof
 	ident := sessionIdentity(path, harness, machine)
 	seq := fs.Seq
 	flush := func() error {
@@ -83,6 +84,18 @@ func SyncFile(path, harness string, up Uploader, st *State, machine string) erro
 		if err := up.AppendChunks(fs.SessionID, batch); err != nil {
 			return err
 		}
+		// Ein Pausenbeleg geht vor dem Offset-Fortschritt raus; scheitert er,
+		// wird der Stapel wiederholt (der Server hält jeden Beleg nur einmal).
+		if rec, ok := up.(ControlProofRecorder); ok {
+			for _, p := range proofs {
+				if err := rec.RecordControlProof(p.ControlID, store.ControlEvent{
+					Kind: store.ControlEventProof, ToolUseID: p.ToolUseID, SessionID: ident.externalID,
+				}); err != nil {
+					return err
+				}
+			}
+		}
+		proofs = proofs[:0]
 		// Erst nach dem bestätigten Upload und ohne den Lauf zu gefährden:
 		// eine fehlgeschlagene Ableitung darf ein archiviertes Transkript
 		// nicht zurücknehmen.
@@ -115,6 +128,11 @@ func SyncFile(path, harness string, up Uploader, st *State, machine string) erro
 			Raw:  redact.Redact(trimmed),
 		})
 		touches = append(touches, activityFrom(ident, trimmed)...)
+		if harness != "codex" {
+			if p, ok := ControlProofFrom([]byte(trimmed)); ok {
+				proofs = append(proofs, p)
+			}
+		}
 		seq++
 		if len(batch) >= uploadBatch {
 			if err := flush(); err != nil {

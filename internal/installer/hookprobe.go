@@ -33,6 +33,16 @@ func hookRuntimeChecks(h Harness, home string) []Check {
 		}
 		checks = append(checks, runnable)
 
+		if channel == ChannelPauseGate {
+			// The gate writes no activity receipt (it runs before every tool
+			// call and must stay cheap), and the context hook's receipt says
+			// nothing about it. It is only ever observed when a pause blocks a
+			// call, so "active" can only be unverified.
+			checks = append(checks, Check{Name: name + " active", Component: ComponentHooks, Unverified: true,
+				Detail: "(observed only when a pause blocks a call; start a pause from the web to see an ack)",
+				Fix:    "pause a test agent from the coordination page"})
+			continue
+		}
 		active := Check{Name: name + " active", Component: ComponentHooks, Detail: hookstate.DefaultPath(), Fix: "start a fresh " + h.Name + " session and trigger the event"}
 		receipt, found, err := hookstate.Latest(h.Name, event)
 		now := time.Now().UTC()

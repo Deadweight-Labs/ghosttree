@@ -105,6 +105,7 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.handle(mux, "POST /ui/coord/group/create", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordCreateGroup))))
 	a.handle(mux, "POST /ui/coord/group/update", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordUpdateGroup))))
 	a.handle(mux, "POST /ui/coord/group/leave", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordLeaveGroup))))
+	a.handle(mux, "POST /ui/coord/agent/control", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.coordAgentControl))))))
 	a.handle(mux, "GET /ui/device", a.requirePerson(http.HandlerFunc(a.devicePage)))
 	a.handle(mux, "POST /ui/device", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.deviceLookup))))))
 	a.handle(mux, "POST /ui/device/decide", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.deviceDecide))))))
@@ -411,6 +412,7 @@ var webRoutes = map[string]webClass{
 	"GET /ui/device":                  webAccount,
 	"POST /ui/device":                 webAdmin,
 	"POST /ui/device/decide":          webAdmin,
+	"POST /ui/coord/agent/control":    webAdmin,
 	"GET /ui/account/tokens":          webAccount,
 	"POST /ui/account/tokens/revoke":  webAccount,
 	"GET /ui/orgs":                    webAccount,

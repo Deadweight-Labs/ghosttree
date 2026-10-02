@@ -26,6 +26,11 @@ const (
 	// der Aufruf anfasst: der einzige Kanal, über den eine Dateibeschreibung
 	// genau dann ankommt, wenn sie zählt.
 	ChannelPreToolUse Channel = "pre-tool-use"
+	// ChannelPauseGate is not a context channel: it carries a human pause to the
+	// session (REQ-361, AC-1229). PreToolUse with an empty matcher so it fires on
+	// every tool, and it only reads a local flag file. Claude only; Codex has no
+	// measured pause interface and stays a named gap.
+	ChannelPauseGate Channel = "pause-gate"
 	// ChannelMCP is the pull side. Every harness ghosttree supports has it, and
 	// it is the only channel that answers a question rather than anticipating
 	// one.
@@ -72,7 +77,7 @@ func Harnesses() []Harness {
 		{
 			Name:       "claude",
 			Components: append([]Component(nil), componentOrder...),
-			Channels:   []Channel{ChannelSessionStart, ChannelUserPrompt, ChannelPreToolUse, ChannelMCP},
+			Channels:   []Channel{ChannelSessionStart, ChannelUserPrompt, ChannelPreToolUse, ChannelPauseGate, ChannelMCP},
 			Delivers:   []Channel{ChannelSessionStart, ChannelUserPrompt, ChannelPreToolUse, ChannelMCP},
 			HooksPath:  func(home string) string { return filepath.Join(home, ".claude", "settings.json") },
 			RulePath:   func(home string) string { return filepath.Join(home, ".claude", "CLAUDE.md") },
@@ -189,6 +194,8 @@ func (h Harness) hookCommandFor(c Channel) (event, command, matcher string, ok b
 			return "PreToolUse", preToolHookCommand + " --harness " + h.Name, "", true
 		}
 		return "PreToolUse", preToolHookCommand + " --harness " + h.Name, "Read|Edit|Write|NotebookEdit", true
+	case ChannelPauseGate:
+		return "PreToolUse", pauseGateHookCommand + " --harness " + h.Name, "", true
 	}
 	return "", "", "", false
 }

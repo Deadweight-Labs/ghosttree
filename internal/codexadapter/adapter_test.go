@@ -35,6 +35,9 @@ func TestCapabilitiesClaimOnlyWhatWasMeasured(t *testing.T) {
 	if caps[CapReceiveAtSafePoint] {
 		t.Error("delivery into a running foreign turn is not measured and must not be claimed")
 	}
+	if caps[CapHumanPause] || MissingCapabilities()[CapHumanPause] == "" {
+		t.Error("a Codex pause is not measured: it must be a named gap")
+	}
 	if caps[CapHumanInterrupt] {
 		t.Error("interrupting is untested here; claiming it would be the thing this package refuses to do")
 	}

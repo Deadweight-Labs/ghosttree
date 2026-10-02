@@ -6,6 +6,26 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- A person can pause or interrupt a Claude agent that was started with
+  `ctx claude`, from the participant list of the coordination page. Allowed
+  for project role lead or above and for the owner of the agent's account,
+  from an interactive web session only (`POST /api/agent-control` answers
+  `web_session_required` to every token). The state is derived from evidence:
+  `requested`, `acknowledged` (the new `ctx hook pause-gate` PreToolUse hook
+  blocked a call and the channel reported it), `effective` (that call is also
+  stopped in the transcript, `hook_stopped_continuation`), `resumed`. The page
+  says "pausiert" only for `effective`. `ctx install claude` adds the gate as a
+  second PreToolUse entry with an empty matcher; it reads one local flag file
+  and calls no server. An interrupt is a pause: a running tool call is not
+  aborted and nothing stops while the model answers without a tool call
+  (`human_interrupt` stays a named gap). Codex has no pause (`human_pause` is a
+  named gap there). If `ctx channel` is not running the control stays
+  `requested`. An agent without a person account is refused with a named gap,
+  not left in `requested`. A pause can be lifted by the person who set it or by
+  someone with at least their project rank; the owner of the agent's account
+  as a mere member cannot lift a lead's pause. The hook entry carries
+  `timeout 5`, and `ctx doctor` reports the gate as runnable and, until a pause
+  has blocked a call, as unverified.
 - Guests no longer get the member list of a project room through the
   recipient list. A guest may still mention: members of the room get the
   message (as a request, never a directive), and mentions of anyone outside the

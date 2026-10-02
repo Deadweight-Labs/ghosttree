@@ -230,6 +230,7 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 		FormID:   newCoordFormID(), StandingFormID: newCoordFormID(), Threads: buildCoordThreadViews(roomThreads),
 	}
 	applyParticipantRoles(a.store, activeRoom.Key, detail.Participants)
+	a.applyParticipantControls(r, activeRoom.Key, detail.Participants)
 	applyMessageRoles(a.store, activeRoom.Key, detail.Messages, presentations)
 	markViewerMentions(detail.Messages, presentations, current.ID)
 	detail.ReplyTo, detail.ReplyTarget, err = coordReplyTarget(presentations, r.URL.Query().Get("reply_to"))

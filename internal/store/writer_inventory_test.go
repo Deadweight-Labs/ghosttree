@@ -257,6 +257,15 @@ var writerMethodClasses = map[string]string{
 	"UpdateCoordGroup":              "write",
 	"UpdateRequest":                 "write",
 	"UpsertSession":                 "write",
+	"RequestAgentControl":           "write",
+	"ResumeAgentControl":            "write",
+	"RecordControlEvent":            "write",
+	"ActiveAgentControl":            "read",
+	"LatestAgentControl":            "read",
+	"AgentControlHistory":           "read",
+	"MayControlAgent":               "read",
+	"MayResumeAgentControl":         "read",
+	"AgentControlGap":               "read",
 }
 
 type writerSource struct {
