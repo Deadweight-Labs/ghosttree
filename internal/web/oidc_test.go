@@ -548,7 +548,7 @@ func TestLoginLinkIsConfirmedByPostAndSingleUse(t *testing.T) {
 	b2 := newBrowser(t)
 	resp = sameOriginPostForm(t, b2, srv.URL+"/ui/login/code", url.Values{"code": {code}})
 	text := body(t, resp)
-	if resp.StatusCode != http.StatusForbidden || !strings.Contains(text, "Code not accepted") {
+	if resp.StatusCode != http.StatusForbidden || !strings.Contains(text, "That code isn&#39;t valid.") {
 		t.Fatalf("reuse status=%d body=%s", resp.StatusCode, text)
 	}
 	// Ohne Same-Origin-Nachweis wird nichts eingelöst.
@@ -612,7 +612,7 @@ func TestTokenPasteLoginStaysUntilAnIdentityExists(t *testing.T) {
 		t.Fatalf("paste before claim status=%d", resp.StatusCode)
 	}
 	page, _ := anon.Get(env.web.URL + "/ui/login")
-	if text := body(t, page); !strings.Contains(text, `name="token"`) || !strings.Contains(text, "Sign in with OIDC") {
+	if text := body(t, page); !strings.Contains(text, `name="token"`) || !strings.Contains(text, "Continue with your identity provider") {
 		t.Fatalf("login page before claim: %s", text)
 	}
 	b := newBrowser(t)

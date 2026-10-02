@@ -1,0 +1,23 @@
+{{define "head"}}<!doctype html><html lang="en" data-clay-theme="ghosttree"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{t "shell.title" .Title}}</title><link rel="icon" href="/static/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/static/clay/index.css"><link rel="stylesheet" href="/static/theme.css"><link rel="stylesheet" href="/static/app.css"><link rel="stylesheet" href="/static/tokens.css"><link rel="stylesheet" href="/static/shell.css"></head><body class="ui" data-clay-density="tool">{{end}}
+
+{{define "navitem"}}<a class="shell-link" href="{{.Href}}" data-nav="{{.Key}}"{{if .Current}} aria-current="page"{{end}}>{{t .Label}}</a>{{range .Sub}}<a class="shell-sub{{if .Current}} is-active{{end}}" href="{{.Href}}" data-nav="{{.Key}}">{{t .Label}}</a>{{end}}{{end}}
+
+{{define "nav"}}<div class="shell">
+<aside class="shell-side">
+<a class="shell-brand" href="/ui/"><span class="brand-mark" aria-hidden="true"></span><span>{{t "shell.brand"}}</span></a>
+{{if .Shell.Projects}}<form class="shell-project" method="get" action="{{.Shell.ProjectAction}}"><label class="visually-hidden" for="shell-project">{{t "shell.project"}}</label><select id="shell-project" name="project" data-autosubmit><option value=""{{if .Shell.AllSelected}} selected{{end}}>{{t "shell.all_projects"}}</option>{{range .Shell.Projects}}<option value="{{.Remote}}"{{if .Selected}} selected{{end}}>{{.Remote}}</option>{{end}}</select><button class="visually-hidden">{{t "shell.switch_project"}}</button></form>{{end}}
+<nav class="shell-nav" aria-label="{{t "shell.nav"}}">
+{{range .Shell.Primary}}{{template "navitem" .}}{{end}}
+{{if .Shell.Secondary}}<hr class="shell-rule">{{range .Shell.Secondary}}{{template "navitem" .}}{{end}}{{end}}
+</nav>
+<p class="shell-host">{{.Shell.Host}}</p>
+</aside>
+<div class="shell-main">
+<header class="shell-top">
+<form class="shell-search" role="search" method="get" action="/ui/knowledge"><input id="shell-search" type="search" name="q" autocomplete="off" placeholder="{{t "shell.search_placeholder"}}" aria-label="{{t "shell.search_label"}}"><kbd aria-hidden="true">{{t "shell.search_hint"}}</kbd></form>
+<details class="account"><summary aria-label="{{t "shell.account_menu"}}"><span class="account-avatar" aria-hidden="true">{{.Shell.Initial}}</span><span class="account-id"><span class="account-name">{{.Person}}</span><span class="account-role">{{t .Shell.RoleKey}}</span></span></summary>
+<div class="account-menu"><a data-account="join" href="/ui/orgs">{{t "shell.join"}}</a><form method="post" action="/ui/logout"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><button class="account-signout">{{t "shell.sign_out"}}</button></form></div></details>
+</header>
+{{end}}
+
+{{define "foot"}}</main>{{if .Shell.On}}</div></div><script src="/static/shell.js"></script>{{end}}<script src="/static/app.js"></script></body></html>{{end}}

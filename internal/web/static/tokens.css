@@ -1,0 +1,76 @@
+/* Design tokens of the web interface (REQ-435). Colours, spacing, radii, type
+   scale and focus style live here and nowhere else; other stylesheets read
+   them with var(). A dark scheme replaces the colour block under a
+   [data-scheme] selector later. */
+
+@font-face { font-family: "IBM Plex Sans"; font-weight: 400; font-style: normal; font-display: swap; src: url("/static/fonts/IBMPlexSans-Regular-Latin1.woff2") format("woff2"); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02C6, U+02DA, U+02DC, U+2013-2014, U+2018-201A, U+201C-201E, U+2020-2022, U+2026, U+2030, U+2039-203A, U+2044, U+20AC, U+2122, U+2212; }
+@font-face { font-family: "IBM Plex Sans"; font-weight: 500; font-style: normal; font-display: swap; src: url("/static/fonts/IBMPlexSans-Medium-Latin1.woff2") format("woff2"); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02C6, U+02DA, U+02DC, U+2013-2014, U+2018-201A, U+201C-201E, U+2020-2022, U+2026, U+2030, U+2039-203A, U+2044, U+20AC, U+2122, U+2212; }
+@font-face { font-family: "IBM Plex Sans"; font-weight: 600; font-style: normal; font-display: swap; src: url("/static/fonts/IBMPlexSans-SemiBold-Latin1.woff2") format("woff2"); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02C6, U+02DA, U+02DC, U+2013-2014, U+2018-201A, U+201C-201E, U+2020-2022, U+2026, U+2030, U+2039-203A, U+2044, U+20AC, U+2122, U+2212; }
+@font-face { font-family: "IBM Plex Mono"; font-weight: 400; font-style: normal; font-display: swap; src: url("/static/fonts/IBMPlexMono-Regular-Latin1.woff2") format("woff2"); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02C6, U+02DA, U+02DC, U+2013-2014, U+2018-201A, U+201C-201E, U+2020-2022, U+2026, U+2030, U+2039-203A, U+2044, U+20AC, U+2122, U+2212; }
+@font-face { font-family: "IBM Plex Mono"; font-weight: 600; font-style: normal; font-display: swap; src: url("/static/fonts/IBMPlexMono-SemiBold-Latin1.woff2") format("woff2"); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02C6, U+02DA, U+02DC, U+2013-2014, U+2018-201A, U+201C-201E, U+2020-2022, U+2026, U+2030, U+2039-203A, U+2044, U+20AC, U+2122, U+2212; }
+
+:root {
+  /* Surface */
+  --color-surface-app: #f3f4ef;
+  --color-surface-panel: #ffffff;
+  --color-surface-sunken: #eaece5;
+  --color-surface-hover: #f0f2eb;
+  --color-surface-selected: #e3ebe4;
+  --color-surface-nav: #ecefe7;
+  /* Text */
+  --color-text-primary: #1c2520;
+  --color-text-secondary: #46524b;
+  --color-text-muted: #58645d;
+  /* Line */
+  --color-line-subtle: #e7eae3;
+  --color-line-default: #d9ded4;
+  --color-line-strong: #b3bcb0;
+  /* Accent */
+  --color-accent: #2f6b4a;
+  --color-accent-hover: #265a3d;
+  --color-accent-soft: #e0ede4;
+  --color-accent-text: #1f4e34;
+  /* Status: state only, each with a soft surface */
+  --color-ok: #276a43;
+  --color-ok-soft: #e0f0e5;
+  --color-warn: #8a560a;
+  --color-warn-soft: #faefd6;
+  --color-danger: #b3342c;
+  --color-danger-soft: #fae6e3;
+  --color-info: #2b5f8e;
+  --color-info-soft: #e1ecf6;
+  --color-neutral: #5d6962;
+  --color-neutral-soft: #eceee8;
+
+  /* Spacing */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  /* Radii */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 12px;
+  --radius-round: 999px;
+
+  /* Type */
+  --font-sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --text-page-title: 600 22px/1.25 var(--font-sans);
+  --text-detail-title: 600 18px/1.3 var(--font-sans);
+  --text-panel-title: 600 15px/1.35 var(--font-sans);
+  --text-body: 400 13px/1.45 var(--font-sans);
+  --text-secondary: 400 12px/1.45 var(--font-sans);
+  --text-label: 600 11px/1.3 var(--font-sans);
+  --text-mono: 400 12px/1.45 var(--font-mono);
+
+  /* Focus */
+  --focus-color: var(--color-accent);
+  --focus-ring: 0 0 0 3px rgba(47, 107, 74, 0.28);
+
+  /* Layout */
+  --side-width: 224px;
+  --top-height: 48px;
+}

@@ -44,6 +44,9 @@ type OIDCConfig struct {
 	ClientID     string
 	ClientSecret string
 	RedirectURL  string
+	// Name ist der Anzeigename des Anbieters auf der Anmeldeseite ("Continue
+	// with <Name>"). Leer: die Seite nennt keinen Anbieter.
+	Name string
 	// HTTPClient ist für Tests austauschbar; Standard ist ein Client mit Timeout.
 	HTTPClient *http.Client
 }
@@ -256,6 +259,7 @@ func WithOIDC(cfg OIDCConfig) Option {
 				panic("oidc: " + err.Error())
 			}
 			a.oidc = c
+			a.oidcName = strings.TrimSpace(cfg.Name)
 		}
 	}
 }
@@ -334,8 +338,8 @@ func (a *app) oidcStart(w http.ResponseWriter, r *http.Request) {
 	}
 	oauthCfg, _, err := a.oidc.ready(r.Context())
 	if err != nil {
-		a.loginMessage(w, http.StatusBadGateway, "Identity provider unreachable",
-			"The identity provider could not be reached. Try again in a moment, or ask the operator for a one-time login link.")
+		a.loginMessage(w, http.StatusBadGateway, "auth.idp_unreachable.title",
+			"auth.idp_unreachable.text")
 		return
 	}
 	state, err1 := randomString()
@@ -388,43 +392,43 @@ func (a *app) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		flow, valid = a.oidc.seal.open(cookie.Value)
 	}
 	if !valid || subtle.ConstantTimeCompare([]byte(flow.State), []byte(state)) != 1 {
-		a.loginMessage(w, http.StatusBadRequest, "Sign-in could not be verified",
-			"This sign-in was not started in this browser or has already been used. Start again from the sign-in page.")
+		a.loginMessage(w, http.StatusBadRequest, "auth.not_verified.title",
+			"auth.not_verified.text")
 		return
 	}
 	now := a.oidc.now()
 	expires := time.Unix(flow.Expires, 0)
 	if !now.Before(expires) || !a.oidc.used.use(state, now, expires) {
-		a.loginMessage(w, http.StatusBadRequest, "Sign-in expired", "The sign-in took too long or was already used. Start again.")
+		a.loginMessage(w, http.StatusBadRequest, "auth.sign_in_expired.title", "auth.sign_in_expired.text")
 		return
 	}
 	if e := r.URL.Query().Get("error"); e != "" {
-		a.loginMessage(w, http.StatusForbidden, "Sign-in was not completed", "The identity provider reported: "+e+".")
+		a.loginMessage(w, http.StatusForbidden, "auth.sso_reported.title", "auth.sso_reported.text", e)
 		return
 	}
 	oauthCfg, verifier, err := a.oidc.ready(r.Context())
 	if err != nil {
-		a.loginMessage(w, http.StatusBadGateway, "Identity provider unreachable", "Try again in a moment.")
+		a.loginMessage(w, http.StatusBadGateway, "auth.idp_unreachable_retry.title", "auth.idp_unreachable_retry.text")
 		return
 	}
 	ctx := a.oidc.context(r.Context())
 	token, err := oauthCfg.Exchange(ctx, r.URL.Query().Get("code"), oauth2.VerifierOption(flow.Verifier))
 	if err != nil {
-		a.loginMessage(w, http.StatusBadGateway, "Sign-in failed", "The identity provider rejected the sign-in.")
+		a.loginMessage(w, http.StatusBadGateway, "auth.idp_rejected.title", "auth.idp_rejected.text")
 		return
 	}
 	rawID, _ := token.Extra("id_token").(string)
 	if rawID == "" {
-		a.loginMessage(w, http.StatusBadGateway, "Sign-in failed", "The identity provider returned no ID token.")
+		a.loginMessage(w, http.StatusBadGateway, "auth.no_id_token.title", "auth.no_id_token.text")
 		return
 	}
 	idToken, err := verifier.Verify(ctx, rawID)
 	if err != nil {
-		a.loginMessage(w, http.StatusForbidden, "Sign-in failed", "The ID token is invalid or expired.")
+		a.loginMessage(w, http.StatusForbidden, "auth.id_token_invalid.title", "auth.id_token_invalid.text")
 		return
 	}
 	if subtle.ConstantTimeCompare([]byte(idToken.Nonce), []byte(flow.Nonce)) != 1 {
-		a.loginMessage(w, http.StatusForbidden, "Sign-in failed", "The ID token does not belong to this sign-in.")
+		a.loginMessage(w, http.StatusForbidden, "auth.id_token_nonce.title", "auth.id_token_nonce.text")
 		return
 	}
 	var claims struct {
@@ -435,13 +439,13 @@ func (a *app) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		AuthorizedParty   string `json:"azp"`
 	}
 	if err := idToken.Claims(&claims); err != nil || idToken.Subject == "" {
-		a.loginMessage(w, http.StatusForbidden, "Sign-in failed", "The ID token carries no usable subject.")
+		a.loginMessage(w, http.StatusForbidden, "auth.id_token_subject.title", "auth.id_token_subject.text")
 		return
 	}
 	// OIDC Core 3.1.3.7: bei mehreren Audiences oder gesetztem azp muss azp
 	// dieser Client sein.
 	if (len(idToken.Audience) > 1 || claims.AuthorizedParty != "") && claims.AuthorizedParty != a.oidc.cfg.ClientID {
-		a.loginMessage(w, http.StatusForbidden, "Sign-in failed", "The ID token was issued for another client.")
+		a.loginMessage(w, http.StatusForbidden, "auth.id_token_client.title", "auth.id_token_client.text")
 		return
 	}
 	// Eine nicht bestätigte Email ist eine Behauptung des Nutzers. Sie wird
@@ -478,19 +482,19 @@ func displayName(preferred, name, email string) string {
 func (a *app) identityRejected(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, store.ErrNoAccountForIdentity):
-		a.loginMessage(w, http.StatusForbidden, "No ghosttree account for this identity",
-			"This identity is not linked to a ghosttree account, and accounts are created by invitation only. Ask an owner for an invitation, or for a claim code if your account already exists.")
+		a.loginMessage(w, http.StatusForbidden, "auth.no_account.title",
+			"auth.no_account.text")
 	case errors.Is(err, store.ErrCodeInvalid):
-		a.loginMessage(w, http.StatusForbidden, "Code not accepted", "The code is invalid, expired or was already used. Ask for a new one.")
+		a.loginMessage(w, http.StatusForbidden, "auth.code_not_accepted.title", "auth.code_not_accepted.text")
 	case errors.Is(err, store.ErrAccountHasIdentity):
-		a.loginMessage(w, http.StatusForbidden, "Account already connected", "This account is already connected to an identity and cannot be claimed again.")
+		a.loginMessage(w, http.StatusForbidden, "auth.already_connected.title", "auth.already_connected.text")
 	case errors.Is(err, store.ErrInvitationEmail):
-		a.loginMessage(w, http.StatusForbidden, "Invitation is for another email address",
-			"This invitation is bound to an email address that your identity provider did not report as verified for this account. The invitation was not used; ask the inviter for one without an email address, or sign in with the invited address.")
+		a.loginMessage(w, http.StatusForbidden, "auth.invitation_email.title",
+			"auth.invitation_email.text")
 	case errors.Is(err, store.ErrTooManyAttempts):
-		a.loginMessage(w, http.StatusTooManyRequests, "Too many wrong codes", "Wait a few minutes before trying again.")
+		a.loginMessage(w, http.StatusTooManyRequests, "auth.too_many_codes.title", "auth.too_many_codes.text")
 	case errors.Is(err, store.ErrAccountDisabled):
-		a.loginMessage(w, http.StatusForbidden, "Account disabled", "This account is disabled.")
+		a.loginMessage(w, http.StatusForbidden, "auth.account_disabled.title", "auth.account_disabled.text")
 	default:
 		http.Error(w, "sign-in failed", http.StatusInternalServerError)
 	}
@@ -503,9 +507,9 @@ func (a *app) dropBootstrapFile() {
 }
 
 // loginMessage zeigt eine eigene Seite statt eines nackten Fehlertexts.
-func (a *app) loginMessage(w http.ResponseWriter, status int, title, message string) {
+func (a *app) loginMessage(w http.ResponseWriter, status int, titleKey, textKey string, args ...any) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
-	a.render(w, "loginmsg", pageData{Title: title, Error: message})
+	a.render(w, "loginmsg", pageData{Title: msg(titleKey), Error: msg(textKey, args...)})
 }
