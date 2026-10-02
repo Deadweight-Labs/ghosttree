@@ -34,6 +34,7 @@ type serveConfig struct {
 	Writer         store.WriterConfig
 	OIDC           web.OIDCConfig
 	PublicURL      string
+	DistDir        string
 	TrustedProxies proxytrust.Set
 }
 
@@ -49,6 +50,9 @@ const (
 	// the README section "Running behind TLS or a reverse proxy".
 	envPublicURL      = "GHOSTTREE_PUBLIC_URL"
 	envTrustedProxies = "GHOSTTREE_TRUSTED_PROXIES"
+	// envDistDir names a directory with the ctx release archives and
+	// checksums.txt; the server then serves /install.sh and /dist/.
+	envDistDir = "GHOSTTREE_DIST_DIR"
 )
 
 type snapshotRootValues []string
@@ -106,6 +110,7 @@ func parseServeConfig(args []string, output io.Writer) (serveConfig, error) {
 	fs.StringVar(&cfg.OIDC.ClientID, "oidc-client-id", os.Getenv(envOIDCClientID), "OIDC client id (env "+envOIDCClientID+")")
 	fs.StringVar(&cfg.OIDC.RedirectURL, "oidc-redirect-url", os.Getenv(envOIDCRedirectURL), "OIDC redirect URL, https://<public host>/ui/login/oidc/callback (env "+envOIDCRedirectURL+")")
 	fs.StringVar(&cfg.PublicURL, "public-url", os.Getenv(envPublicURL), "external base URL, e.g. https://ghosttree.example.com; an https URL makes every cookie Secure (env "+envPublicURL+")")
+	fs.StringVar(&cfg.DistDir, "dist-dir", os.Getenv(envDistDir), "directory with ctx_<version>_<os>_<arch>.tar.gz archives and checksums.txt; enables /install.sh and /dist/ (env "+envDistDir+")")
 	trusted := fs.String("trusted-proxies", os.Getenv(envTrustedProxies), "comma-separated CIDRs/IPs of reverse proxies whose X-Forwarded-Proto/Host are believed; loopback is always trusted, nothing else by default (env "+envTrustedProxies+")")
 	// Das Secret gibt es bewusst nur über die Umgebung: ein Flag stünde in der Prozessliste.
 	cfg.OIDC.ClientSecret = os.Getenv(envOIDCClientSecret)
@@ -129,6 +134,11 @@ func parseServeConfig(args []string, output io.Writer) (serveConfig, error) {
 			u.Host = strings.TrimSuffix(u.Host, ":"+u.Port())
 		}
 		cfg.PublicURL = u.Scheme + "://" + u.Host
+	}
+	if cfg.DistDir != "" {
+		if fi, err := os.Stat(filepath.Join(cfg.DistDir, "checksums.txt")); err != nil || !fi.Mode().IsRegular() {
+			return serveConfig{}, fmt.Errorf("--dist-dir %q must contain checksums.txt", cfg.DistDir)
+		}
 	}
 	proxies, err := proxytrust.Parse(*trusted)
 	if err != nil {
@@ -273,6 +283,9 @@ func buildServerHandler(st *store.Store, cfg serveConfig, stderr io.Writer) http
 	webOptions := []web.Option{web.WithBootstrapFile(bootstrapCodePath(cfg.DB)), web.WithTrustedProxies(cfg.TrustedProxies)}
 	if cfg.PublicURL != "" {
 		webOptions = append(webOptions, web.WithPublicURL(cfg.PublicURL))
+	}
+	if cfg.DistDir != "" {
+		webOptions = append(webOptions, web.WithDistDir(cfg.DistDir))
 	}
 	if cfg.OIDC.Enabled() {
 		webOptions = append(webOptions, web.WithOIDC(cfg.OIDC))
