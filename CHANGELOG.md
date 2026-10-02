@@ -42,6 +42,8 @@ Versioning, with pre-1.0 compatibility rules described in
   agents cannot register or send under it, and system notes show as `(system)`
   in message headers. Agents that already carry the prefix in an old database
   are kept but can no longer send.
+  Threads without a home room deliberately do not take part in wait cycles,
+  consistent with presence, which also reads waits per room only.
 - Presence is now two separate fields with an origin. `coord_peers`, the peers
   API (`presence` on each peer) and the participant list in the web show
   reachability (`connected`, `unknown`, `ended`) and work state (`working`,
