@@ -330,7 +330,7 @@ func TestSameOriginTrustsForwardingOnlyFromLoopback(t *testing.T) {
 			req.Header.Set("Origin", "https://ghost.example")
 			req.Header.Set("X-Forwarded-Proto", "https")
 			req.Header.Set("X-Forwarded-Host", "ghost.example")
-			if got := sameOrigin(req); got != tc.want {
+			if got := (&app{}).sameOrigin(req); got != tc.want {
 				t.Fatalf("sameOrigin=%v, want %v", got, tc.want)
 			}
 		})
@@ -343,7 +343,7 @@ func TestSameOriginRejectsMalformedForwardingFromLoopback(t *testing.T) {
 	req.Header.Set("Origin", "http://ghosttree.internal")
 	req.Header.Set("X-Forwarded-Proto", "")
 	req.Header.Set("X-Forwarded-Host", "")
-	if sameOrigin(req) {
+	if (&app{}).sameOrigin(req) {
 		t.Fatal("present but empty forwarding headers fell back to the internal origin")
 	}
 }

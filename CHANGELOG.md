@@ -6,6 +6,16 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Added: configurable Secure cookies behind TLS and reverse proxies (REQ-236).
+  `--public-url` / `GHOSTTREE_PUBLIC_URL` (an https URL makes every cookie
+  Secure and its origin is accepted for same-origin checks) and
+  `--trusted-proxies` / `GHOSTTREE_TRUSTED_PROXIES` (CIDRs or addresses whose
+  `X-Forwarded-Proto`/`-Host` are believed; previously only loopback was).
+  Loopback stays trusted, no other peer is by default, so plain private HTTP
+  keeps working unchanged. Login and logout session cookies are now built by
+  one function and carry identical attributes. The device-login base URL and
+  rate-limit client address use the same trust set. README section "Running
+  behind TLS or a reverse proxy".
 - Added: loop guard for the Claude channel (REQ-360). A message counts as
   low content only if it brings no new word compared to the last 6 messages of
   the room (digits ignored, so a counter like "step 14 of 20" is no content;
