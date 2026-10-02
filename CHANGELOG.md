@@ -6,6 +6,15 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Added: `ctx join --server <url> --pair XXXX-XXXX` pairs a machine with the
+  code from an invitation page (REQ-434, part 3). It opens a loopback
+  listener on 127.0.0.1 only for the duration of the command, proves the
+  exchange with PKCE (S256), shows the account and organization and asks
+  before writing the client config (`--yes` skips questions). Without a
+  usable browser on the machine (`--no-browser`, SSH without a display) it
+  shows a four-character code to type in the browser instead. It then offers
+  `ctx install` for the Claude and Codex setups it finds. `ctx join --help`
+  exits 0 so the installer can detect the command.
 - Added: the server can serve the `ctx` installer (REQ-434, fourth part).
   With `GHOSTTREE_DIST_DIR` (or `--dist-dir`) pointing at a directory of
   `ctx_<version>_<os>_<arch>.tar.gz` archives and `checksums.txt`, it answers

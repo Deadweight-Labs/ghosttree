@@ -83,6 +83,11 @@ func run(args []string, stdout io.Writer) int {
 		return cmdSetup(rest, stdout)
 	case "login":
 		return cmdLogin(rest, stdout)
+	case "join":
+		return cmdJoin(rest, stdout)
+	case "help", "--help", "-h":
+		fmt.Fprintln(stdout, usage)
+		return 0
 	case "version":
 		fmt.Fprintf(stdout, "ctx %s\n", version)
 		return 0
@@ -102,6 +107,7 @@ const usage = `usage: ctx <command>
   install  set up a harness (claude|codex|opencode)
   setup    write client config (server URL + token)
   login    sign this machine in through the browser (device login)
+  join     pair this machine with a pairing code from an invitation page
   person   manage persons/tokens (server-side; deprecated alias, see account)
   account  manage accounts and their tokens (server-side)
   machine  list, release and transfer machine names (server-side)
