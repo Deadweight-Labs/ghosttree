@@ -513,7 +513,8 @@ func TestCodeAndOIDCStartRejectNullAndForeignOrigin(t *testing.T) {
 		req, _ := http.NewRequest(http.MethodPost, srv.URL+path, strings.NewReader(url.Values{"code": {code}}.Encode()))
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		req.Header.Set("Origin", origin)
-		resp, err := http.DefaultClient.Do(req)
+		noRedirect := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		resp, err := noRedirect.Do(req)
 		if err != nil {
 			t.Fatal(err)
 		}
