@@ -899,7 +899,8 @@ func (s *Store) CreateDeviceToken(accountID, machine string) (string, TokenInfo,
 	if state != "active" {
 		return "", TokenInfo{}, ErrAccountDisabled
 	}
-	if err := claimMachineTx(tx, machine, id); err != nil {
+	created, err := claimMachineTx(tx, machine, id)
+	if err != nil {
 		return "", TokenInfo{}, err
 	}
 	at := now()
@@ -912,6 +913,14 @@ func (s *Store) CreateDeviceToken(accountID, machine string) (string, TokenInfo,
 	if err != nil {
 		return "", TokenInfo{}, err
 	}
+	if created {
+		// Dieses Token hat den Namen neu eingeführt; nur dann darf es ihn
+		// beim Widerruf wieder freigeben (RevokeOwnToken).
+		tokenID, _ := res.LastInsertId()
+		if _, err := tx.Exec(`UPDATE machines SET claimed_by_token=? WHERE hostname=?`, tokenID, machine); err != nil {
+			return "", TokenInfo{}, err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return "", TokenInfo{}, err
 	}
@@ -920,40 +929,58 @@ func (s *Store) CreateDeviceToken(accountID, machine string) (string, TokenInfo,
 	return token, info, err
 }
 
-// RevokeOwnToken widerruft genau das Token, mit dem p sich ausweist, und gibt
-// bei einem Geräte-Token die daran hängende Maschine frei, sofern sie diesem
-// Konto gehört. Beides geschieht in einer Transaktion. Ein bereits
-// widerrufenes oder fremdes Token ergibt ErrTokenNotActive und ändert nichts.
-func (s *Store) RevokeOwnToken(p Principal) error {
+// RevokeOwnToken widerruft genau das Token, mit dem p sich ausweist. Der
+// Maschinenname wird nur freigegeben, wenn genau dieses Token ihn neu
+// eingeführt hat, kein anderes Token des Kontos ihn noch trägt und an dem Namen
+// nichts hängt (Sitzungen, Wissen, Anforderungen). Sonst bleibt der Name beim
+// Konto: ein erneuter Join mit Ablehnung oder ein gestohlenes Token kann eine
+// eingeführte Maschine nicht freigeben und damit nicht für andere öffnen.
+// Ein bereits widerrufenes oder fremdes Token ergibt ErrTokenNotActive.
+func (s *Store) RevokeOwnToken(p Principal) (released bool, err error) {
 	if s.writer != nil {
-		return queueWrite(s, []any{p}, func(d *Store, a []any) error { return d.RevokeOwnToken(a[0].(Principal)) })
+		return queueValue(s, []any{p}, func(d *Store, a []any) (bool, error) { return d.RevokeOwnToken(a[0].(Principal)) })
 	}
 	account, err := parsePersonPrincipalID(p.ID)
 	if err != nil || p.TokenID == 0 {
-		return ErrTokenNotActive
+		return false, ErrTokenNotActive
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer tx.Rollback()
 	var kind, machine string
 	err = tx.QueryRow(`SELECT kind, machine FROM api_tokens WHERE id=? AND account_id=? AND revoked_at=''`, p.TokenID, account).Scan(&kind, &machine)
 	if errors.Is(err, sql.ErrNoRows) {
-		return ErrTokenNotActive
+		return false, ErrTokenNotActive
 	}
 	if err != nil {
-		return err
+		return false, err
 	}
 	if _, err := tx.Exec(`UPDATE api_tokens SET revoked_at=? WHERE id=? AND revoked_at=''`, now(), p.TokenID); err != nil {
-		return err
+		return false, err
 	}
 	if kind == "device" && machine != "" {
-		if _, err := tx.Exec(`DELETE FROM machines WHERE hostname=? AND account_id=?`, canonicalMachine(machine), account); err != nil {
-			return err
+		name := canonicalMachine(machine)
+		var others, attached int
+		if err := tx.QueryRow(`SELECT
+			(SELECT COUNT(*) FROM api_tokens WHERE account_id=? AND machine=? AND revoked_at='' AND id<>?),
+			(SELECT COUNT(*) FROM sessions WHERE lower(machine)=?) +
+			(SELECT COUNT(*) FROM knowledge WHERE lower(machine)=?) +
+			(SELECT COUNT(*) FROM requests WHERE lower(machine)=?)`,
+			account, machine, p.TokenID, name, name, name).Scan(&others, &attached); err != nil {
+			return false, err
+		}
+		if others == 0 && attached == 0 {
+			res, err := tx.Exec(`DELETE FROM machines WHERE hostname=? AND account_id=? AND claimed_by_token=?`, name, account, p.TokenID)
+			if err != nil {
+				return false, err
+			}
+			n, _ := res.RowsAffected()
+			released = n > 0
 		}
 	}
-	return tx.Commit()
+	return released, tx.Commit()
 }
 
 // ErrTokenNotActive meldet ein Token, das es nicht (mehr) gibt oder das nicht

@@ -177,16 +177,17 @@ func (a *api) revokeOwnToken(w http.ResponseWriter, r *http.Request) {
 		writeCoded(w, http.StatusForbidden, "bearer_token_required", "this call revokes the bearer token it was made with")
 		return
 	}
-	switch err := a.st.RevokeOwnToken(p); {
+	released, err := a.st.RevokeOwnToken(p)
+	switch {
 	case errors.Is(err, store.ErrTokenNotActive):
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
 		return
 	case err != nil:
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "server_error"})
+		writeErr(w, http.StatusInternalServerError, "server_error")
 		return
 	}
 	if a.logger != nil {
-		a.logger.Info("token_self_revoked", "token_id", p.TokenID, "account", p.ID)
+		a.logger.Info("token_self_revoked", "token_id", p.TokenID, "account", p.ID, "machine", p.Machine, "released", released)
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusNoContent)

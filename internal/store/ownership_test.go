@@ -154,10 +154,10 @@ func TestClaimRaceOnPrimaryKeyIsMachineTaken(t *testing.T) {
 	}
 	tx, _ := st.db.Begin()
 	defer tx.Rollback()
-	if err := claimMachineTx(&staleReadTx{txExec: tx}, "box", 1); !errors.Is(err, ErrMachineTaken) {
+	if _, err := claimMachineTx(&staleReadTx{txExec: tx}, "box", 1); !errors.Is(err, ErrMachineTaken) {
 		t.Fatalf("race with foreign owner: %v", err)
 	}
-	if err := claimMachineTx(&staleReadTx{txExec: tx}, "box", 2); err != nil {
+	if _, err := claimMachineTx(&staleReadTx{txExec: tx}, "box", 2); err != nil {
 		t.Fatalf("race with own claim: %v", err)
 	}
 }

@@ -15,10 +15,16 @@ Versioning, with pre-1.0 compatibility rules described in
   shows a four-character code to type in the browser instead. It then offers
   `ctx install` for the Claude and Codex setups it finds. `ctx join --help`
   exits 0 so the installer can detect the command. If the confirmation is
-  declined or the config cannot be written, the new token is revoked at once.
+  declined, interrupted (Ctrl-C, SIGTERM, SIGHUP) or the config cannot be
+  written, the new token is revoked at once. A repeated join on a machine that
+  is already connected asks first, because it replaces that connection. Plain
+  http is accepted only for localhost; text from the server is stripped of
+  control characters before it is shown.
 - Added: `DELETE /api/tokens/self` revokes the bearer token the request was
-  made with and releases its machine name. A second call, or a web session,
-  is refused.
+  made with. The machine name is released only if that token introduced it
+  and nothing is attached to it; otherwise it stays with its owner. A second
+  call, or a web session, is refused.
+- Changed: organization names may not contain control characters.
 - Added: the server can serve the `ctx` installer (REQ-434, fourth part).
   With `GHOSTTREE_DIST_DIR` (or `--dist-dir`) pointing at a directory of
   `ctx_<version>_<os>_<arch>.tar.gz` archives and `checksums.txt`, it answers

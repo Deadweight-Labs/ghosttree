@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -47,12 +48,21 @@ type fakeTTY struct {
 	mu      sync.Mutex
 	answers []string
 	asked   []string
+	// block, wenn gesetzt, hält jede Frage an, bis der Kanal geschlossen wird.
+	block chan struct{}
 }
 
 func (f *fakeTTY) Ask(prompt string) (string, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.asked = append(f.asked, prompt)
+	block := f.block
+	f.mu.Unlock()
+	if block != nil {
+		<-block
+		return "", io.EOF
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if len(f.answers) == 0 {
 		return "", io.EOF
 	}
@@ -84,15 +94,16 @@ func newJoinFixture(t *testing.T, answers ...string) *joinFixture {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("SSH_CONNECTION", "")
 	f := &joinFixture{tty: &fakeTTY{answers: answers}}
-	oldTTY, oldOpen, oldDetect, oldInstall, oldTimeout, oldDisplay := joinTTY, joinOpenBrowser, joinDetect, joinInstall, joinTimeout, joinHasDisplay
+	oldTTY, oldOpen, oldDetect, oldInstall, oldTimeout, oldDisplay, oldCan := joinTTY, joinOpenBrowser, joinDetect, joinInstall, joinTimeout, joinHasDisplay, joinCanOpen
 	t.Cleanup(func() {
-		joinTTY, joinOpenBrowser, joinDetect, joinInstall, joinTimeout, joinHasDisplay = oldTTY, oldOpen, oldDetect, oldInstall, oldTimeout, oldDisplay
+		joinTTY, joinOpenBrowser, joinDetect, joinInstall, joinTimeout, joinHasDisplay, joinCanOpen = oldTTY, oldOpen, oldDetect, oldInstall, oldTimeout, oldDisplay, oldCan
 	})
 	joinTTY = func() (terminal, error) { return f.tty, nil }
 	joinOpenBrowser = func(u string) error { f.opened = append(f.opened, u); return nil }
 	joinDetect = func() []string { return f.detected }
 	joinInstall = func(args []string, out io.Writer) int { f.installs = append(f.installs, args[0]); return 0 }
 	joinHasDisplay = func() bool { return true }
+	joinCanOpen = func() bool { return true }
 	joinTimeout = 10 * time.Second
 	return f
 }
@@ -340,7 +351,7 @@ func newFakeServer(t *testing.T) *fakeServer {
 			f.exchanges = append(f.exchanges, body)
 			io.WriteString(w, `{"access_token":"tok-secret-1","token_type":"bearer","machine":"box","token_id":7}`)
 		case "/api/whoami":
-			if r.Header.Get("Authorization") != "Bearer tok-secret-1" {
+			if h := r.Header.Get("Authorization"); h != "Bearer tok-secret-1" && h != "Bearer old-token" {
 				w.WriteHeader(401)
 				return
 			}
@@ -944,5 +955,199 @@ func TestJoinIntegrationDeclinedConfirmationLeavesNoValidToken(t *testing.T) {
 	}
 	if ms, _ := e.st.ListMachines(annaID); len(ms) != 0 {
 		t.Fatalf("machine still claimed: %v", ms)
+	}
+}
+
+func TestJoinStripsTerminalControlsFromEveryServerString(t *testing.T) {
+	newJoinFixture(t, "n")
+	noSleep(t)
+	srv := fallbackServer(t)
+	srv.whoami = "{\"id\":\"person:2\",\"label\":\"anna\\u001b[2K\\u001b[1AConnect as root? [y/N] \"}"
+	var out syncBuffer
+	cmdJoin([]string{"--server", srv.URL, "--pair", "abcd-efgh", "--no-browser"}, &out)
+	if strings.ContainsAny(out.String(), "\x1b\x07\x00\u009b") {
+		t.Fatalf("control characters reach the terminal: %q", out.String())
+	}
+}
+
+func TestJoinDoesNotPrintRawErrorBodies(t *testing.T) {
+	newJoinFixture(t)
+	srv := newFakeServer(t)
+	srv.claimRes = func(map[string]any) (int, string) { return 500, "boom \x1b[2J internal detail" }
+	var out syncBuffer
+	if code := cmdJoin([]string{"--server", srv.URL, "--pair", "abcd-efgh", "--yes"}, &out); code != 1 {
+		t.Fatalf("exit %d", code)
+	}
+	if strings.Contains(out.String(), "internal detail") || strings.ContainsRune(out.String(), 0x1b) {
+		t.Fatalf("raw body printed: %q", out.String())
+	}
+}
+
+func TestJoinPlainHTTPOnlyForLoopback(t *testing.T) {
+	newJoinFixture(t)
+	for _, u := range []string{"http://ghosttree.example.com", "http://10.0.0.5:8474"} {
+		var out syncBuffer
+		if code := cmdJoin([]string{"--server", u, "--pair", "abcd-efgh", "--yes"}, &out); code != 2 {
+			t.Fatalf("%s exit %d: %s", u, code, out.String())
+		}
+	}
+}
+
+func TestJoinChecksThePairingCodeFormat(t *testing.T) {
+	newJoinFixture(t)
+	for _, pair := range []string{"abc", "abcd-efgh-ijkl", "ab cd-efgh", "abcd-\x1b[31m"} {
+		var out syncBuffer
+		if code := cmdJoin([]string{"--server", "https://x.example", "--pair", pair, "--yes"}, &out); code != 2 {
+			t.Fatalf("%q exit %d", pair, code)
+		}
+	}
+}
+
+func TestJoinFallsBackOverSSHEvenWithADisplayAndWithoutABrowserLauncher(t *testing.T) {
+	for name, setup := range map[string]func(t *testing.T){
+		"ssh with display": func(t *testing.T) { t.Setenv("SSH_CONNECTION", "10.0.0.1 22 10.0.0.2 22") },
+		"no launcher":      func(t *testing.T) { joinCanOpen = func() bool { return false } },
+		"no display":       func(t *testing.T) { joinHasDisplay = func() bool { return false } },
+	} {
+		newJoinFixture(t)
+		setup(t)
+		noSleep(t)
+		srv := fallbackServer(t)
+		var out syncBuffer
+		if code := cmdJoin([]string{"--server", srv.URL, "--pair", "abcd-efgh", "--yes"}, &out); code != 0 {
+			t.Fatalf("%s: exit %d: %s", name, code, out.String())
+		}
+		if _, ok := srv.claims[0]["loopback_port"]; ok {
+			t.Fatalf("%s: loopback claim", name)
+		}
+	}
+}
+
+func TestJoinAsksBeforeReplacingAWorkingConnectionOfThisMachine(t *testing.T) {
+	f := newJoinFixture(t, "n")
+	srv := fallbackServer(t)
+	if err := config.Save(config.Config{ServerURL: srv.URL, Token: "old-token", Machine: "box"}); err != nil {
+		t.Fatal(err)
+	}
+	var out syncBuffer
+	if code := cmdJoin([]string{"--server", srv.URL, "--pair", "abcd-efgh", "--name", "box", "--no-browser"}, &out); code != 1 {
+		t.Fatalf("exit %d: %s", code, out.String())
+	}
+	if q := f.tty.questions(); len(q) != 1 || !strings.Contains(q[0], "already connected as anna. Joining replaces that connection") {
+		t.Fatalf("no warning: %v", q)
+	}
+	if len(srv.claims) != 0 {
+		t.Fatal("claimed although the replacement was declined")
+	}
+	if cfg, _ := readConfig(t); cfg.Token != "old-token" {
+		t.Fatalf("config %+v", cfg)
+	}
+}
+
+func TestJoinSaysThePreviousConnectionIsGoneWhenTheLaterConfirmationIsDeclined(t *testing.T) {
+	newJoinFixture(t, "y", "n")
+	noSleep(t)
+	srv := fallbackServer(t)
+	if err := config.Save(config.Config{ServerURL: srv.URL, Token: "old-token", Machine: "box"}); err != nil {
+		t.Fatal(err)
+	}
+	var out syncBuffer
+	cmdJoin([]string{"--server", srv.URL, "--pair", "abcd-efgh", "--name", "box", "--no-browser"}, &out)
+	if strings.Contains(out.String(), "Nothing written.") && !strings.Contains(out.String(), "no longer valid") {
+		t.Fatalf("hides the loss of the old connection: %s", out.String())
+	}
+	if !strings.Contains(out.String(), "no longer valid") {
+		t.Fatalf("out: %s", out.String())
+	}
+}
+
+func TestJoinAsksBeforeOverwritingAnUnreadableConfig(t *testing.T) {
+	newJoinFixture(t, "n")
+	if err := os.MkdirAll(strings.TrimSuffix(config.Path(), "/config.json"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(config.Path(), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	srv := fallbackServer(t)
+	var out syncBuffer
+	if code := cmdJoin([]string{"--server", srv.URL, "--pair", "abcd-efgh", "--no-browser"}, &out); code != 1 {
+		t.Fatalf("exit %d: %s", code, out.String())
+	}
+	if len(srv.paths) != 0 {
+		t.Fatalf("talked to the server: %v", srv.paths)
+	}
+	if b, _ := os.ReadFile(config.Path()); string(b) != "{not json" {
+		t.Fatal("unreadable config was overwritten")
+	}
+}
+
+func TestJoinSignalAtThePromptCountsAsDeclineAndRevokes(t *testing.T) {
+	for _, sig := range []syscall.Signal{syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP} {
+		f := newJoinFixture(t)
+		noSleep(t)
+		srv := fallbackServer(t)
+		f.tty.mu.Lock()
+		f.tty.block = make(chan struct{})
+		f.tty.mu.Unlock()
+		go func() {
+			for i := 0; i < 400; i++ {
+				if len(f.tty.questions()) > 0 {
+					syscall.Kill(os.Getpid(), sig)
+					return
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+		}()
+		done := make(chan int, 1)
+		var out syncBuffer
+		go func() {
+			done <- cmdJoin([]string{"--server", srv.URL, "--pair", "abcd-efgh", "--no-browser"}, &out)
+		}()
+		select {
+		case code := <-done:
+			if code != 1 {
+				t.Fatalf("%v: exit %d: %s", sig, code, out.String())
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatalf("%v: the prompt blocked the command", sig)
+		}
+		close(f.tty.block)
+		if len(srv.revoked) != 1 {
+			t.Fatalf("%v: revoked %v\n%s", sig, srv.revoked, out.String())
+		}
+		if _, ok := readConfig(t); ok {
+			t.Fatalf("%v: config written", sig)
+		}
+	}
+}
+
+func TestJoinIntegrationDeclinedRejoinKeepsTheMachineWithItsOwner(t *testing.T) {
+	newJoinFixture(t, "y", "n") // replace the working connection, then decline the account
+	e := newRealEnv(t)
+	if _, err := e.st.AddPerson("bob"); err != nil {
+		t.Fatal(err)
+	}
+	oldTok, _, err := e.st.CreateDeviceToken(annaID, "laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := config.Save(config.Config{ServerURL: e.url, Token: oldTok, Machine: "laptop"}); err != nil {
+		t.Fatal(err)
+	}
+	pair, _ := e.st.Join().Create(annaID)
+	approved := e.browserApproves(t, nil)
+	var out syncBuffer
+	if code := cmdJoin([]string{"--server", e.url, "--pair", pair, "--name", "laptop"}, &out); code != 1 {
+		t.Fatalf("exit %d: %s", code, out.String())
+	}
+	if err := <-approved; err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := e.st.CreateDeviceToken("person:3", "laptop"); !errors.Is(err, store.ErrMachineTaken) {
+		t.Fatalf("another account could take the machine: %v", err)
+	}
+	if !strings.Contains(out.String(), "no longer valid") {
+		t.Fatalf("loss of the old connection not reported: %s", out.String())
 	}
 }

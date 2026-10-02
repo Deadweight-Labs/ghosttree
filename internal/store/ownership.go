@@ -40,7 +40,7 @@ type Machine struct {
 // haben.
 func migrateOwnership(db *sql.DB) error {
 	for _, c := range []struct{ table, column string }{
-		{"machines", "account_id"}, {"sessions", "account_id"}, {"sessions", "shared"},
+		{"machines", "account_id"}, {"machines", "claimed_by_token"}, {"sessions", "account_id"}, {"sessions", "shared"},
 	} {
 		if err := addColumnIfMissing(db, c.table, c.column, `INTEGER NOT NULL DEFAULT 0`); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			return err
@@ -119,7 +119,7 @@ func (s *Store) ClaimMachine(name, accountPrincipalID string) error {
 		return err
 	}
 	defer tx.Rollback()
-	if err := claimMachineTx(tx, name, account); err != nil {
+	if _, err := claimMachineTx(tx, name, account); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -130,39 +130,44 @@ type txExec interface {
 	Exec(query string, args ...any) (sql.Result, error)
 }
 
-func claimMachineTx(tx txExec, name string, account int64) error {
+// claimMachineTx beansprucht den Namen für das Konto; created ist wahr, wenn
+// dieser Aufruf die Zeile neu angelegt hat (der Name war vorher frei).
+func claimMachineTx(tx txExec, name string, account int64) (created bool, err error) {
 	var stored int64
 	var seen string
 	at := now()
-	err := tx.QueryRow(`SELECT account_id, last_seen FROM machines WHERE hostname=?`, name).Scan(&stored, &seen)
+	err = tx.QueryRow(`SELECT account_id, last_seen FROM machines WHERE hostname=?`, name).Scan(&stored, &seen)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		_, err := tx.Exec(`INSERT INTO machines(hostname, first_seen, last_seen, account_id) VALUES(?,?,?,?)`, name, at, at, account)
-		if err == nil || !strings.Contains(err.Error(), "constraint") {
-			return err
+		if err == nil {
+			return true, nil
+		}
+		if !strings.Contains(err.Error(), "constraint") {
+			return false, err
 		}
 		// Ein anderer Prozess hat den Namen zwischen Lesen und Einfügen
 		// beansprucht (kein Writer-Queue-Schutz, etwa beim CLI): wie ein
 		// Fremdname behandeln, nicht als Serverfehler.
 		if err := tx.QueryRow(`SELECT account_id, last_seen FROM machines WHERE hostname=?`, name).Scan(&stored, &seen); err != nil {
-			return err
+			return false, err
 		}
 		if effectiveOwner(stored, instanceOwnerID(tx)) != account {
-			return ErrMachineTaken
+			return false, ErrMachineTaken
 		}
-		return nil
+		return false, nil
 	case err != nil:
-		return err
+		return false, err
 	}
 	if effectiveOwner(stored, instanceOwnerID(tx)) != account {
-		return ErrMachineTaken
+		return false, ErrMachineTaken
 	}
 	// Aktualisieren nur, wenn nötig: der Collector ruft das bei jedem Upload.
 	if stored == 0 || seen < time.Now().UTC().Add(-time.Minute).Format(time.RFC3339) {
 		_, err := tx.Exec(`UPDATE machines SET account_id=?, last_seen=? WHERE hostname=?`, account, at, name)
-		return err
+		return false, err
 	}
-	return nil
+	return false, nil
 }
 
 // MachineClaimable meldet ErrMachineTaken, wenn der Name einem anderen Konto

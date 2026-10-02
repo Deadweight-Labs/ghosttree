@@ -23,7 +23,9 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
+	"unicode"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
@@ -34,6 +36,7 @@ var (
 	joinTTY         = openDevTTY
 	joinOpenBrowser = openBrowser
 	joinHasDisplay  = hasDisplay
+	joinCanOpen     = canOpenBrowser
 	joinDetect      = detectHarnesses
 	joinInstall     = cmdInstall
 	joinTimeout     = 10 * time.Minute
@@ -44,6 +47,11 @@ var (
 const (
 	errInterrupted = "Setup was interrupted. Run the command again."
 	joinPairPath   = "/join/pair"
+)
+
+var (
+	pairRE        = regexp.MustCompile(`^[A-Za-z0-9]{4}-?[A-Za-z0-9]{4}$`)
+	confirmCodeRE = regexp.MustCompile(`^[A-Z0-9]{4}$`)
 )
 
 var machineNameRE = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
@@ -276,6 +284,19 @@ func hasDisplay() bool {
 	return os.Getenv("DISPLAY") != "" || os.Getenv("WAYLAND_DISPLAY") != ""
 }
 
+// canOpenBrowser sagt, ob es ein Programm zum Öffnen einer Adresse gibt.
+func canOpenBrowser() bool {
+	name := "xdg-open"
+	switch runtime.GOOS {
+	case "darwin":
+		name = "open"
+	case "windows":
+		name = "rundll32"
+	}
+	_, err := exec.LookPath(name)
+	return err == nil
+}
+
 func openBrowser(u string) error {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
@@ -338,11 +359,15 @@ func cmdJoin(args []string, stdout io.Writer) int {
 		return 2
 	}
 	server := strings.TrimRight(strings.TrimSpace(*serverURL), "/")
-	if u, err := url.Parse(server); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+	u, err := url.Parse(server)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return usage("--server must be an http(s) URL")
 	}
-	if strings.TrimSpace(*pair) == "" || fs.NArg() != 0 {
-		return usage("--pair is required")
+	if u.Scheme == "http" && !isLoopbackHost(u.Hostname()) {
+		return usage("--server must use https (plain http only for localhost)")
+	}
+	if fs.NArg() != 0 || !pairRE.MatchString(strings.TrimSpace(*pair)) {
+		return usage("--pair must look like XXXX-XXXX")
 	}
 	machine := *name
 	if machine == "" {
@@ -351,6 +376,11 @@ func cmdJoin(args []string, stdout io.Writer) int {
 	} else if !machineNameRE.MatchString(machine) {
 		return usage("--name may only contain A-Z a-z 0-9 . _ - (at most 64)")
 	}
+
+	// Ein Signal gilt überall als Abbruch; nach der Ausstellung des Tokens
+	// führt Abbruch zum Widerruf.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	defer stop()
 
 	var tty terminal
 	if !*yes {
@@ -362,74 +392,95 @@ func cmdJoin(args []string, stdout io.Writer) int {
 		defer t.Close()
 		tty = t
 	}
-	existing, _ := config.Load()
-	if existing.Token != "" && existing.ServerURL != "" && strings.TrimRight(existing.ServerURL, "/") != server && tty != nil {
-		if !confirm(tty, fmt.Sprintf("Replace the config for %s with %s? [y/N] ", existing.ServerURL, server), false) {
+	existing, loadErr := config.Load()
+	switch {
+	case loadErr != nil && !errors.Is(loadErr, os.ErrNotExist):
+		if tty != nil && !confirm(ctx, tty, fmt.Sprintf("The config at %s is unreadable. Overwrite it? [y/N] ", config.Path()), false) {
+			fmt.Fprintln(stdout, "Cancelled. Config unchanged.")
+			return 1
+		}
+	case existing.Token != "" && existing.ServerURL != "" && strings.TrimRight(existing.ServerURL, "/") != server && tty != nil:
+		if !confirm(ctx, tty, fmt.Sprintf("Replace the config for %s with %s? [y/N] ", safe(existing.ServerURL), server), false) {
 			fmt.Fprintln(stdout, "Cancelled. Config unchanged.")
 			return 1
 		}
 	}
+	// Ein erneuter Join derselben Maschine widerruft das alte Geräte-Token schon
+	// bei der Ausstellung des neuen: vorher fragen.
+	replaced := false
+	if loadErr == nil && existing.Token != "" && strings.TrimRight(existing.ServerURL, "/") == server {
+		old := client.New(config.Config{ServerURL: server, Token: existing.Token, Machine: existing.Machine})
+		if who, err := old.WhoAmIContext(ctx); err == nil && strings.EqualFold(existing.Machine, machine) {
+			if tty != nil && !confirm(ctx, tty, fmt.Sprintf("This machine is already connected as %s. Joining replaces that connection. Continue? [y/N] ", safe(who.Label)), false) {
+				fmt.Fprintln(stdout, "Cancelled. Config and connection unchanged.")
+				return 1
+			}
+			replaced = true
+		}
+	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
 	c := client.New(config.Config{ServerURL: server})
-	remote := os.Getenv("SSH_CONNECTION") != "" && !joinHasDisplay()
+	remote := os.Getenv("SSH_CONNECTION") != ""
 	var tok client.DeviceToken
-	var err error
 	var cb *callback
-	if !*noBrowser && !remote {
+	if !*noBrowser && !remote && joinHasDisplay() && joinCanOpen() {
 		cb = prepareLoopback()
 	}
 	if cb != nil {
 		defer cb.Close()
-		tok, err = joinLoopback(ctx, c, cb, *pair, machine, server, stdout)
+		tok, err = joinLoopback(ctx, c, cb, strings.TrimSpace(*pair), machine, server, stdout)
 	} else {
-		tok, err = joinCode(ctx, c, *pair, machine, server, stdout)
+		tok, err = joinCode(ctx, c, strings.TrimSpace(*pair), machine, server, stdout)
 	}
 	if err != nil {
-		fmt.Fprintln(stdout, err)
+		fmt.Fprintln(stdout, interruptedOr(err))
 		return 1
 	}
 
-	cfg := config.Config{ServerURL: server, Token: tok.AccessToken, Machine: tok.Machine}
+	cfg := config.Config{ServerURL: server, Token: tok.AccessToken, Machine: safe(tok.Machine)}
 	if cfg.Machine == "" {
 		cfg.Machine = machine
 	}
 	issued := client.New(cfg)
-	who, err := issued.WhoAmI()
-	if err != nil {
-		fmt.Fprintf(stdout, "Could not check the new token: %v\nNothing written.\n", err)
+	// Ab hier gibt es ein gültiges, noch nicht gespeichertes Token: jeder Weg
+	// ohne Speichern widerruft es.
+	abort := func(msg string) int {
+		fmt.Fprintln(stdout, msg)
 		revokeIssued(issued, stdout)
+		if replaced {
+			fmt.Fprintln(stdout, "The previous connection of this machine is no longer valid; run ctx join or ctx login to connect again.")
+		}
 		return 1
 	}
+	who, err := issued.WhoAmIContext(ctx)
+	if err != nil {
+		return abort("Could not check the new token. Nothing written.")
+	}
 	org := ""
-	if orgs, err := client.New(cfg).ListOrgs(); err == nil {
+	if orgs, err := issued.ListOrgsContext(ctx); err == nil {
 		var names []string
 		for _, o := range orgs {
 			if o.Default {
-				names = append([]string{o.Name}, names...)
+				names = append([]string{safe(o.Name)}, names...)
 			} else {
-				names = append(names, o.Name)
+				names = append(names, safe(o.Name))
 			}
 		}
 		if len(names) > 0 {
 			org = ", org " + strings.Join(names, ", ")
 		}
 	}
-	fmt.Fprintf(stdout, "Account %s%s, machine %s\n", who.Label, org, cfg.Machine)
-	if tty != nil && !confirm(tty, fmt.Sprintf("Connect this machine as %s? [y/N] ", who.Label), false) {
-		fmt.Fprintln(stdout, "Cancelled. Nothing written.")
-		revokeIssued(issued, stdout)
-		return 1
+	label := safe(who.Label)
+	fmt.Fprintf(stdout, "Account %s%s, machine %s\n", label, org, cfg.Machine)
+	if tty != nil && !confirm(ctx, tty, fmt.Sprintf("Connect this machine as %s? [y/N] ", label), false) {
+		return abort("Cancelled. Nothing written.")
 	}
 	if err := config.Save(cfg); err != nil {
-		fmt.Fprintf(stdout, "save config: %v\n", err)
-		revokeIssued(issued, stdout)
-		return 1
+		return abort(fmt.Sprintf("save config: %v", err))
 	}
 	fmt.Fprintf(stdout, "Wrote %s\n", config.Path())
 	for _, h := range joinDetect() {
-		if tty != nil && !confirm(tty, fmt.Sprintf("Install ghosttree for %s? [Y/n] ", h), true) {
+		if tty != nil && !confirm(ctx, tty, fmt.Sprintf("Install ghosttree for %s? [Y/n] ", h), true) {
 			continue
 		}
 		if code := joinInstall([]string{h}, stdout); code != 0 {
@@ -440,10 +491,38 @@ func cmdJoin(args []string, stdout io.Writer) int {
 	cmdStatus(nil, &st)
 	for _, line := range strings.Split(strings.TrimSpace(st.String()), "\n") {
 		if line != "" && !strings.HasPrefix(line, "transcripts") {
-			fmt.Fprintln(stdout, line)
+			fmt.Fprintln(stdout, safe(line))
 		}
 	}
 	return 0
+}
+
+// interruptedOr macht aus einem Abbruch des Kontexts die übliche Meldung.
+func interruptedOr(err error) string {
+	if errors.Is(err, context.Canceled) {
+		return errInterrupted
+	}
+	return safe(err.Error())
+}
+
+func isLoopbackHost(h string) bool {
+	if strings.EqualFold(h, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(h)
+	return ip != nil && ip.IsLoopback()
+}
+
+// safe entfernt Steuerzeichen (C0, DEL, C1, auch ESC) aus Text, den der Server
+// geliefert hat, damit er das Terminal nicht umschreiben und eine Rückfrage
+// nicht fälschen kann.
+func safe(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, s)
 }
 
 // revokeIssued widerruft das gerade ausgestellte, nicht gespeicherte Token, damit
@@ -452,18 +531,34 @@ func revokeIssued(c *client.Client, stdout io.Writer) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if err := c.RevokeSelf(ctx); err != nil {
-		fmt.Fprintf(stdout, "Could not revoke the new token (%v); release machine %s on the server.\n", err, c.Machine())
+		fmt.Fprintf(stdout, "Could not revoke the new token (%s); release machine %s on the server.\n", interruptedOr(err), safe(c.Machine()))
 		return
 	}
 	fmt.Fprintln(stdout, "New token revoked.")
 }
 
-func confirm(t terminal, prompt string, def bool) bool {
-	a, err := t.Ask(prompt)
-	if err != nil {
+// confirm fragt auf dem Terminal. Ein Abbruch des Kontexts (Signal) während der
+// Frage zählt als Ablehnung; die blockierte Leseroutine endet mit dem Prozess.
+func confirm(ctx context.Context, t terminal, prompt string, def bool) bool {
+	type answer struct {
+		text string
+		err  error
+	}
+	ch := make(chan answer, 1)
+	go func() {
+		a, err := t.Ask(prompt)
+		ch <- answer{a, err}
+	}()
+	var a answer
+	select {
+	case a = <-ch:
+	case <-ctx.Done():
 		return false
 	}
-	switch strings.ToLower(strings.TrimSpace(a)) {
+	if a.err != nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(a.text)) {
 	case "y", "yes":
 		return true
 	case "":
@@ -492,7 +587,7 @@ func claimError(err error) error {
 	case "too_many_requests":
 		return errors.New("Too many attempts. Try again in a minute.")
 	}
-	return fmt.Errorf("Pairing failed: %v", err)
+	return failure(err)
 }
 
 func exchangeError(err error) error {
@@ -504,7 +599,19 @@ func exchangeError(err error) error {
 	case "too_many_requests":
 		return errors.New("Too many attempts. Try again in a minute.")
 	}
-	return fmt.Errorf("Pairing failed: %v", err)
+	return failure(err)
+}
+
+// failure beschreibt einen Fehler ohne den Körper der Serverantwort.
+func failure(err error) error {
+	var se *client.StatusError
+	if errors.As(err, &se) {
+		return fmt.Errorf("Pairing failed (server answered %d).", se.Status)
+	}
+	if errors.Is(err, context.Canceled) {
+		return err
+	}
+	return fmt.Errorf("Pairing failed: %s", safe(err.Error()))
 }
 
 func joinLoopback(ctx context.Context, c *client.Client, cb *callback, pair, machine, server string, stdout io.Writer) (client.DeviceToken, error) {
@@ -545,7 +652,11 @@ func joinLoopback(ctx context.Context, c *client.Client, cb *callback, pair, mac
 	case err != nil:
 		return client.DeviceToken{}, err
 	}
-	tok, err := c.JoinExchange(ctx, code, verifier)
+	// Der Tausch läuft unabhängig vom Signal-Kontext, damit ein Abbruch mitten
+	// im Tausch kein Token ausstellt, das niemand mehr sieht.
+	xctx, xcancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer xcancel()
+	tok, err := c.JoinExchange(xctx, code, verifier)
 	cb.Finish(err)
 	if err != nil {
 		return client.DeviceToken{}, exchangeError(err)
@@ -563,6 +674,9 @@ func joinCode(ctx context.Context, c *client.Client, pair, machine, server strin
 	if claim.Mode != "code" || claim.DeviceCode == "" {
 		return client.DeviceToken{}, errors.New(errInterrupted)
 	}
+	if !confirmCodeRE.MatchString(claim.ConfirmCode) {
+		return client.DeviceToken{}, errors.New(errInterrupted)
+	}
 	fmt.Fprintf(stdout, "Approve %s at %s - Type this code in your browser: %s\n", machine, server+joinPairPath, claim.ConfirmCode)
 	interval := time.Duration(claim.Interval) * time.Second
 	if interval <= 0 {
@@ -577,7 +691,9 @@ func joinCode(ctx context.Context, c *client.Client, pair, machine, server strin
 		if err := loginSleep(ctx, interval); err != nil {
 			return client.DeviceToken{}, err
 		}
-		tok, err := c.PollDeviceLogin(ctx, claim.DeviceCode)
+		pctx, pcancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		tok, err := c.PollDeviceLogin(pctx, claim.DeviceCode)
+		pcancel()
 		if err == nil {
 			return tok, nil
 		}

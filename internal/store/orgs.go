@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 )
@@ -220,8 +221,8 @@ func (s *Store) accountRowID(principal string) (int64, error) {
 
 func createOrgTx(tx execQueryer, name, slug string, owner int64) (Org, error) {
 	name = strings.TrimSpace(name)
-	if name == "" || len(name) > maxOrgNameLen {
-		return Org{}, fmt.Errorf("%w: organization name must be 1 to %d characters", ErrInvalidInput, maxOrgNameLen)
+	if name == "" || len(name) > maxOrgNameLen || hasControlRunes(name) {
+		return Org{}, fmt.Errorf("%w: organization name must be 1 to %d printable characters", ErrInvalidInput, maxOrgNameLen)
 	}
 	slug = strings.ToLower(strings.TrimSpace(slug))
 	if slug == "" {
@@ -1303,8 +1304,8 @@ func (s *Store) RenameOrg(actorPrincipal string, orgID int64, name, slug string)
 	}
 	name = strings.TrimSpace(name)
 	slug = strings.ToLower(strings.TrimSpace(slug))
-	if name == "" || len(name) > maxOrgNameLen {
-		return Org{}, fmt.Errorf("%w: organization name must be 1 to %d characters", ErrInvalidInput, maxOrgNameLen)
+	if name == "" || len(name) > maxOrgNameLen || hasControlRunes(name) {
+		return Org{}, fmt.Errorf("%w: organization name must be 1 to %d printable characters", ErrInvalidInput, maxOrgNameLen)
 	}
 	if slug != "" && !slugPattern.MatchString(slug) {
 		return Org{}, fmt.Errorf("%w: slug must be lowercase letters, digits and dashes (up to 40 characters)", ErrInvalidInput)
@@ -1338,4 +1339,15 @@ func (s *Store) RenameOrg(actorPrincipal string, orgID int64, name, slug string)
 		return Org{}, err
 	}
 	return o, tx.Commit()
+}
+
+// hasControlRunes sagt, ob s Steuerzeichen (C0, DEL, C1) enthält. Ein Name mit
+// ESC-Folgen könnte in einem Terminal, das ihn anzeigt, Text überschreiben.
+func hasControlRunes(s string) bool {
+	for _, r := range s {
+		if unicode.IsControl(r) {
+			return true
+		}
+	}
+	return false
 }

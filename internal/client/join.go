@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
 // JoinClaimRequest ist der Körper von POST /api/join/claim. Die drei
@@ -63,4 +64,18 @@ func ErrorCode(err error) string {
 // RevokeSelf widerruft das Token dieses Clients und gibt seine Maschine frei.
 func (c *Client) RevokeSelf(ctx context.Context) error {
 	return c.doContext(ctx, "DELETE", "/api/tokens/self", nil, nil, nil)
+}
+
+// WhoAmIContext ist WhoAmI mit Kontext, damit ein Abbruch die Anfrage beendet.
+func (c *Client) WhoAmIContext(ctx context.Context) (store.Principal, error) {
+	var principal store.Principal
+	err := c.doContext(ctx, "GET", "/api/whoami", nil, nil, &principal)
+	return principal, err
+}
+
+// ListOrgsContext ist ListOrgs mit Kontext.
+func (c *Client) ListOrgsContext(ctx context.Context) ([]store.Org, error) {
+	var out []store.Org
+	err := c.doContext(ctx, "GET", "/api/orgs", nil, nil, &out)
+	return out, err
 }
