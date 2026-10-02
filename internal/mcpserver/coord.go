@@ -139,6 +139,22 @@ func (s *Server) joinAsSubagent(roomKey, ref string) error {
 	return err
 }
 
+// registeredSession ist die Transkript-Session, die dieser Agent meldet: die
+// vom Launcher vorgegebene, sonst die Session-ID des Harness, wenn er sie kennt.
+// Ob die Session wirklich zu diesem Konto gehört, entscheidet der Server beim
+// Lesen (gleiches Konto, Aktivität und Session); eine falsche Angabe ergibt
+// "unbekannt", keine fremde Aktivität.
+func (s *Server) registeredSession() string {
+	id := s.sessionUUID
+	if id == "" {
+		id = s.sessionRef
+	}
+	if !store.ValidExternalID(id) {
+		return ""
+	}
+	return id
+}
+
 func (s *Server) joinRoom(roomKey string) error {
 	provider := "unknown"
 	if s.sessionRef == "" && s.coordOverride == "" {
@@ -149,7 +165,7 @@ func (s *Server) joinRoom(roomKey string) error {
 	}
 	_, err := s.client.RegisterCoordAgent(store.CoordAgent{
 		ExternalID: s.coordRef(), Provider: provider, RoomKey: roomKey,
-		DisplayName: s.coordRef(), Branch: s.ctxAxes.Branch, Role: s.agentRole, SessionID: s.sessionUUID,
+		DisplayName: s.coordRef(), Branch: s.ctxAxes.Branch, Role: s.agentRole, SessionID: s.registeredSession(),
 	})
 	return err
 }

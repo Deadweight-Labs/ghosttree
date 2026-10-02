@@ -3,11 +3,13 @@ package collector
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/redact"
@@ -100,7 +102,11 @@ func SyncFile(path, harness string, up Uploader, st *State, machine string) erro
 		// eine fehlgeschlagene Ableitung darf ein archiviertes Transkript
 		// nicht zurücknehmen.
 		if rec, ok := up.(ActivityRecorder); ok && len(touches) > 0 {
-			_ = rec.RecordPathActivity(touches)
+			// Ein Fehler hält das Archivieren nicht auf, bleibt aber nicht stumm:
+			// ein 403 hieße, dass Aktivität dieser Session nirgends ankommt.
+			if err := rec.RecordPathActivity(touches); err != nil {
+				activityWarn.printf("activity of session %s not recorded: %v", ident.externalID, err)
+			}
 		}
 		touches = touches[:0]
 		fs.Offset = offset
@@ -350,4 +356,35 @@ func activityFrom(ident touchIdentity, line string) []store.PathActivity {
 		})
 	}
 	return out
+}
+
+// limitedLog schreibt höchstens alle interval eine Zeile und zählt, was es
+// unterdrückt hat. Der Collector ruft den Weg je Transkriptstapel; ein dauerhaft
+// verweigerter Upload soll sichtbar sein, ohne das Log zu fluten.
+type limitedLog struct {
+	mu         sync.Mutex
+	interval   time.Duration
+	now        func() time.Time
+	out        func(string)
+	last       time.Time
+	suppressed int
+}
+
+var activityWarn = &limitedLog{interval: time.Minute, now: time.Now, out: func(s string) { log.Print(s) }}
+
+func (l *limitedLog) printf(format string, args ...any) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := l.now()
+	if !l.last.IsZero() && now.Sub(l.last) < l.interval {
+		l.suppressed++
+		return
+	}
+	msg := fmt.Sprintf(format, args...)
+	if l.suppressed > 0 {
+		msg += fmt.Sprintf(" (%d similar messages suppressed)", l.suppressed)
+		l.suppressed = 0
+	}
+	l.last = now
+	l.out(msg)
 }

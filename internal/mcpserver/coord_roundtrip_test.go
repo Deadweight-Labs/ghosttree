@@ -835,7 +835,67 @@ func TestPeersPrintReachabilityAndWorkSeparatelyWithOrigin(t *testing.T) {
 // only accepted for a session that exists and belongs to the caller's account.
 func uploadSession(t *testing.T, st *store.Store, ref string) {
 	t.Helper()
-	if _, err := st.UpsertSession(store.Session{Harness: "claude", ExternalID: ref}); err != nil {
+	uploadSessionIn(t, st, ref, "")
+}
+
+func uploadSessionIn(t *testing.T, st *store.Store, ref, project string) {
+	t.Helper()
+	if _, err := st.UpsertSession(store.Session{Harness: "claude", ExternalID: ref, Scope: scope.Axes{Project: project}}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// N3: an agent started without the launcher still reports the harness session
+// id it knows, so its activity maps to it (same account, same project).
+func TestAgentWithoutLauncherRegistersItsHarnessSession(t *testing.T) {
+	a, b, st := twoSessions(t)
+	ctx := context.Background()
+	project := "github.com/deadweight-labs/ghosttree"
+	uploadSessionIn(t, st, a.sessionRef, project)
+	if err := a.client.RecordPathActivity([]store.PathActivity{{Project: project, SessionExternalID: a.sessionRef,
+		Tool: "Edit", Path: "x.go", Quality: store.ActivityIntent}}); err != nil {
+		t.Fatal(err)
+	}
+	// a registers through its own tools (joinRoom reports sessionRef).
+	if _, _, err := a.handleCoordPeers(ctx, nil, CoordPeersInput{}); err != nil {
+		t.Fatal(err)
+	}
+	res, _, err := b.handleCoordPeers(ctx, nil, CoordPeersInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := text(t, res); !strings.Contains(got, "work working (observed") {
+		t.Fatalf("an agent that knows its harness session must map to its activity: %s", got)
+	}
+}
+
+// N4: coord_touched leaves out the asker's own session, found by the session
+// id it registered, not only by its coordination id.
+func TestTouchedExcludesTheAskersRegisteredSessionUUID(t *testing.T) {
+	a, b, st := twoSessions(t)
+	ctx := context.Background()
+	a.coordOverride = "claude:h:launched"
+	a.sessionUUID = "uuid-launched"
+	uploadSession(t, st, "uuid-launched")
+	uploadSession(t, st, b.sessionRef)
+	for _, ref := range []string{"uuid-launched", b.sessionRef} {
+		if err := a.client.RecordPathActivity([]store.PathActivity{{Project: a.ctxAxes.Project, SessionExternalID: ref,
+			Tool: "Edit", Path: "shared.go", Quality: store.ActivityIntent}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := a.handleCoordPeers(ctx, nil, CoordPeersInput{}); err != nil { // registers with session id
+		t.Fatal(err)
+	}
+	res, _, err := a.handleCoordTouched(ctx, nil, CoordTouchedInput{Path: "shared.go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := text(t, res)
+	if strings.Contains(got, "uuid-launched") {
+		t.Fatalf("the asker's own session must not be reported as a conflict: %s", got)
+	}
+	if !strings.Contains(got, b.sessionRef) {
+		t.Fatalf("another session must still be reported: %s", got)
 	}
 }

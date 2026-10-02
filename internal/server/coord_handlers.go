@@ -531,10 +531,47 @@ func (a *api) pathActivity(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
-	if out == nil {
-		out = []store.PathActivity{}
-	}
+	out = a.shapePathActivity(r, scope.NormalizeRemote(q.Get("project")), q.Get("exclude_session"), out)
 	writeJSON(w, 200, out)
+}
+
+// shapePathActivity schließt den Fragenden selbst aus (auch unter seiner
+// gemeldeten Session-UUID, nicht nur unter der Agenten-ID) und maskiert die
+// Session-Kennung für alle außer dem Eigentümer der Zeile und Leads des
+// Projekts: die UUID ist der Schlüssel, unter dem Aktivität zugeordnet wird,
+// und soll nicht jedem Mitglied als Name für fremde Sessions dienen. Statt ihrer
+// steht der Agent, der sie gemeldet hat, sonst nichts. Im Log-Modus des
+// Zugriffsschalters bleibt alles sichtbar.
+func (a *api) shapePathActivity(r *http.Request, project, exclude string, in []store.PathActivity) []store.PathActivity {
+	me := principalOf(r)
+	myAccount := store.AccountIDOf(me.ID)
+	skip := map[string]bool{}
+	if exclude != "" {
+		skip[exclude] = true
+		if sid := a.st.AgentSessionID(exclude, me.ID); sid != "" {
+			skip[sid] = true
+		}
+	}
+	lead := store.RoleRank(a.st.ProjectRole(project, me.ID).Role) >= store.RoleRank(store.RoleLead)
+	mask := a.st.AccessEnforced() && !lead
+	owner := a.st.OwnerAccountID()
+	out := make([]store.PathActivity, 0, len(in))
+	for _, e := range in {
+		if skip[e.SessionExternalID] {
+			continue
+		}
+		if mask {
+			rowAccount := e.AccountID
+			if rowAccount == 0 {
+				rowAccount = owner
+			}
+			if rowAccount != myAccount {
+				e.SessionExternalID = a.st.AgentForSession(e.SessionExternalID, rowAccount)
+			}
+		}
+		out = append(out, e)
+	}
+	return out
 }
 
 // sessionActivity zeigt, woran EINE Session gearbeitet hat — die
@@ -553,7 +590,7 @@ func (a *api) sessionActivity(w http.ResponseWriter, r *http.Request) {
 	}
 	minutes, _ := strconv.Atoi(q.Get("minutes"))
 	limit, _ := strconv.Atoi(q.Get("limit"))
-	out, err := a.st.SessionPathActivity(q.Get("session"), store.ActivityWindow(minutes), limit)
+	out, err := a.st.SessionPathActivity(q.Get("session"), store.AccountIDOf(principalOf(r).ID), store.ActivityWindow(minutes), limit)
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
@@ -589,6 +626,7 @@ func (a *api) recordPathActivity(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		in[i].At = clampActivityTime(in[i].At, nowTime)
+		in[i].AccountID = store.AccountIDOf(principal)
 	}
 	if err := a.st.RecordPathActivity(in); err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)
@@ -597,15 +635,19 @@ func (a *api) recordPathActivity(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]int{"recorded": len(in)})
 }
 
-// maxActivitySkew: so weit darf ein vom Client gemeldeter Zeitpunkt von der
-// Serverzeit abweichen. Alles darüber hinaus ist Uhrenfehler oder Fälschung
+// maxActivitySkew: so weit darf ein vom Client gemeldeter Zeitpunkt in der
+// Vergangenheit von der Serverzeit abweichen. Alles darüber hinaus ist Uhrenfehler oder Fälschung
 // (eine Aktivität "im Jahr 2099" bliebe sonst ewig frisch) und wird durch die
 // Serverzeit ersetzt.
 const maxActivitySkew = 5 * time.Minute
 
+// maxActivityFuture: in die Zukunft darf ein Zeitpunkt kaum zeigen. Eine
+// Aktivität "von gleich" bliebe sonst entsprechend länger frisch.
+const maxActivityFuture = 30 * time.Second
+
 func clampActivityTime(at string, now time.Time) string {
 	t, err := time.Parse(time.RFC3339, at)
-	if err != nil || t.After(now.Add(maxActivitySkew)) || t.Before(now.Add(-maxActivitySkew)) {
+	if err != nil || t.After(now.Add(maxActivityFuture)) || t.Before(now.Add(-maxActivitySkew)) {
 		return now.Format(time.RFC3339)
 	}
 	return t.UTC().Format(time.RFC3339)

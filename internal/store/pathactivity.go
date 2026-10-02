@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"fmt"
 	"strings"
 	"time"
@@ -44,6 +45,65 @@ type PathActivity struct {
 	Writes            bool   `json:"writes,omitempty"`
 	Quality           string `json:"quality"`
 	At                string `json:"at,omitempty"`
+	// AccountID stempelt der Server beim Schreiben aus dem Token; ein Client kann
+	// ihn nicht setzen. 0 ist Altbestand und gehört dem Instanz-Owner. Nur so
+	// lässt sich Aktivität einem Konto zuordnen, wenn eine Session-Kennung bei
+	// einem anderen Harness unter fremdem Konto ebenfalls vorkommt.
+	AccountID int64 `json:"-"`
+}
+
+// ensurePathActivityAccount baut eine alte path_activity um, die kein Konto
+// kennt. SQLite kann eine UNIQUE-Klausel nicht ändern, und ohne das Konto in
+// ihr könnte jemand mit einer erratenen Zeile die echte Zeile eines anderen
+// still verdrängen (INSERT OR IGNORE).
+func ensurePathActivityAccount(db *sql.DB) error {
+	rows, err := db.Query(`PRAGMA table_info(path_activity)`)
+	if err != nil {
+		return err
+	}
+	has := false
+	for rows.Next() {
+		var cid, notNull, pk int
+		var name, typ string
+		var dv sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &dv, &pk); err != nil {
+			rows.Close()
+			return err
+		}
+		has = has || name == "account_id"
+	}
+	rows.Close()
+	if has {
+		return nil
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	_, err = tx.Exec(`
+CREATE TABLE path_activity_new(
+  id INTEGER PRIMARY KEY,
+  project TEXT NOT NULL DEFAULT '',
+  session_external_id TEXT NOT NULL,
+  checkout TEXT NOT NULL DEFAULT '',
+  tool TEXT NOT NULL,
+  path TEXT NOT NULL,
+  writes INTEGER NOT NULL DEFAULT 0,
+  quality TEXT NOT NULL CHECK(quality IN ('intent','reported_success','observed_change','unattributed')),
+  at TEXT NOT NULL,
+  account_id INTEGER NOT NULL DEFAULT 0,
+  UNIQUE(account_id,session_external_id,tool,path,quality,at));
+INSERT INTO path_activity_new(id,project,session_external_id,checkout,tool,path,writes,quality,at,account_id)
+  SELECT id,project,session_external_id,checkout,tool,path,writes,quality,at,0 FROM path_activity;
+DROP TABLE path_activity;
+ALTER TABLE path_activity_new RENAME TO path_activity;
+CREATE INDEX IF NOT EXISTS path_activity_path ON path_activity(project,path,at);
+CREATE INDEX IF NOT EXISTS path_activity_session ON path_activity(session_external_id,at);`)
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // RecordPathActivity schreibt beobachtete Aktivität fort. Idempotent über
@@ -84,9 +144,9 @@ func (s *Store) RecordPathActivity(events []PathActivity) error {
 			writes = 1
 		}
 		if _, err := tx.Exec(`INSERT OR IGNORE INTO path_activity(
-				project,session_external_id,checkout,tool,path,writes,quality,at)
-			VALUES(?,?,?,?,?,?,?,?)`,
-			e.Project, e.SessionExternalID, e.Checkout, e.Tool, e.Path, writes, e.Quality, at); err != nil {
+				project,session_external_id,checkout,tool,path,writes,quality,at,account_id)
+			VALUES(?,?,?,?,?,?,?,?,?)`,
+			e.Project, e.SessionExternalID, e.Checkout, e.Tool, e.Path, writes, e.Quality, at, e.AccountID); err != nil {
 			return err
 		}
 	}
@@ -103,7 +163,7 @@ func (s *Store) PathActivitySince(project, path, since, excludeSession string) (
 	if s.reader != nil {
 		return s.reader.PathActivitySince(project, path, since, excludeSession)
 	}
-	query := `SELECT id,project,session_external_id,checkout,tool,path,writes,quality,at
+	query := `SELECT id,project,session_external_id,checkout,tool,path,writes,quality,at,account_id
 		FROM path_activity WHERE path=? AND at>=?`
 	args := []any{path, since}
 	if project != "" {
@@ -122,16 +182,19 @@ func (s *Store) PathActivitySince(project, path, since, excludeSession string) (
 // Detailansicht hinter einem Teilnehmer und der Grund, warum die Daten auch
 // ohne zweiten Agenten nützen: wer allein arbeitet, will wissen, was die
 // Session von heute Mittag angefasst hat.
-func (s *Store) SessionPathActivity(sessionExternalID, since string, limit int) ([]PathActivity, error) {
+func (s *Store) SessionPathActivity(sessionExternalID string, account int64, since string, limit int) ([]PathActivity, error) {
 	if s.reader != nil {
-		return s.reader.SessionPathActivity(sessionExternalID, since, limit)
+		return s.reader.SessionPathActivity(sessionExternalID, account, since, limit)
 	}
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	return s.scanPathActivity(`SELECT id,project,session_external_id,checkout,tool,path,writes,quality,at
+	// Nur Zeilen dieses Kontos: dieselbe Kennung unter fremdem Konto ist nicht
+	// diese Session.
+	return s.scanPathActivity(`SELECT id,project,session_external_id,checkout,tool,path,writes,quality,at,account_id
 		FROM path_activity WHERE session_external_id=? AND at>=?
-		ORDER BY at DESC, id DESC LIMIT ?`, sessionExternalID, since, limit)
+		  AND (CASE WHEN account_id=0 THEN ? ELSE account_id END)=?
+		ORDER BY at DESC, id DESC LIMIT ?`, sessionExternalID, since, instanceOwnerID(s.db), account, limit)
 }
 
 func (s *Store) scanPathActivity(query string, args ...any) ([]PathActivity, error) {
@@ -145,7 +208,7 @@ func (s *Store) scanPathActivity(query string, args ...any) ([]PathActivity, err
 		var a PathActivity
 		var writes int
 		if err := rows.Scan(&a.ID, &a.Project, &a.SessionExternalID, &a.Checkout,
-			&a.Tool, &a.Path, &writes, &a.Quality, &a.At); err != nil {
+			&a.Tool, &a.Path, &writes, &a.Quality, &a.At, &a.AccountID); err != nil {
 			return nil, err
 		}
 		a.Writes = writes != 0

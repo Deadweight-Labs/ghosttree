@@ -91,6 +91,19 @@ func agentSessionFromEnv() string {
 	return id
 }
 
+// registeredSessionID ist die Session, die ein Agent bei der Anmeldung meldet:
+// die des Launchers, sonst die Session-ID des Harness. Der Server prüft beim
+// Lesen, ob sie zum selben Konto gehört.
+func registeredSessionID() string {
+	if id := agentSessionFromEnv(); id != "" {
+		return id
+	}
+	if id := currentSessionRef(); store.ValidExternalID(id) {
+		return id
+	}
+	return ""
+}
+
 type harnessContext struct {
 	axes       scope.Axes
 	activation activation.Context

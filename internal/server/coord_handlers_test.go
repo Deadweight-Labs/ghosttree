@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
@@ -764,7 +765,7 @@ func TestActivityIsBoundToTheSessionsAccountAndItsTimeIsClamped(t *testing.T) {
 	if code := post(robin, "uuid-robin", future); code != http.StatusOK {
 		t.Fatalf("robin posting for his own session: got %d", code)
 	}
-	got, err := st.SessionPathActivity("uuid-robin", "2000-01-01T00:00:00Z", 10)
+	got, err := st.SessionPathActivity("uuid-robin", 1, "2000-01-01T00:00:00Z", 10)
 	if err != nil || len(got) != 1 {
 		t.Fatalf("stored activity = %+v err=%v", got, err)
 	}
@@ -775,7 +776,7 @@ func TestActivityIsBoundToTheSessionsAccountAndItsTimeIsClamped(t *testing.T) {
 	// A time within five minutes is kept (normalised to UTC).
 	near := time.Now().Add(-2 * time.Minute).UTC().Format(time.RFC3339)
 	post(robin, "uuid-robin", near)
-	rows, _ := st.SessionPathActivity("uuid-robin", "2000-01-01T00:00:00Z", 10)
+	rows, _ := st.SessionPathActivity("uuid-robin", 1, "2000-01-01T00:00:00Z", 10)
 	found := false
 	for _, r := range rows {
 		found = found || r.At == near
@@ -788,5 +789,119 @@ func TestActivityIsBoundToTheSessionsAccountAndItsTimeIsClamped(t *testing.T) {
 	res.Body.Close()
 	if res.StatusCode != http.StatusForbidden {
 		t.Fatalf("anna reading robin's session activity: got %d", res.StatusCode)
+	}
+}
+
+// Sessions are unique per (harness, external id) only. A foreign account that
+// uploads the same id under another harness must neither lock the owner out
+// nor be able to speak for the owner's session.
+func TestForeignSessionRowWithTheSameIDDoesNotBlockTheOwner(t *testing.T) {
+	st, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	robin, _ := st.AddPerson("robin")
+	anna, _ := st.AddPerson("anna")
+	srv := httptest.NewServer(New(st))
+	t.Cleanup(srv.Close)
+	if _, err := st.UpsertSession(store.Session{Harness: "claude", ExternalID: "uuid-r"}); err != nil {
+		t.Fatal(err)
+	}
+	// anna learns the id and uploads it under another harness.
+	if _, err := st.UpsertSession(store.Session{Harness: "codex", ExternalID: "uuid-r", AccountID: 2}); err != nil {
+		t.Fatal(err)
+	}
+	post := func(token string) int {
+		res := req(t, "POST", srv.URL+"/api/activity", token, []store.PathActivity{
+			{SessionExternalID: "uuid-r", Tool: "Edit", Path: "a.go", Quality: store.ActivityIntent}})
+		res.Body.Close()
+		return res.StatusCode
+	}
+	if code := post(robin); code != http.StatusOK {
+		t.Fatalf("a foreign row must not lock robin out: got %d", code)
+	}
+	if code := post(anna); code != http.StatusOK {
+		t.Fatalf("anna owns her own row: got %d", code)
+	}
+	// Each account's rows stay its own.
+	mine, _ := st.SessionPathActivity("uuid-r", 1, "2000-01-01T00:00:00Z", 10)
+	hers, _ := st.SessionPathActivity("uuid-r", 2, "2000-01-01T00:00:00Z", 10)
+	if len(mine) != 1 || len(hers) != 1 || mine[0].AccountID != 1 || hers[0].AccountID != 2 {
+		t.Fatalf("rows are not bound to their accounts: %+v / %+v", mine, hers)
+	}
+}
+
+func TestActivityTimeIsClampedToThirtySecondsAhead(t *testing.T) {
+	now := time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
+	f := func(d time.Duration) string { return now.Add(d).Format(time.RFC3339) }
+	for name, c := range map[string]struct{ in, want string }{
+		"20 s ahead is kept":     {f(20 * time.Second), f(20 * time.Second)},
+		"60 s ahead is replaced": {f(60 * time.Second), f(0)},
+		"4 min back is kept":     {f(-4 * time.Minute), f(-4 * time.Minute)},
+		"6 min back is replaced": {f(-6 * time.Minute), f(0)},
+		"unreadable is replaced": {"yesterday", f(0)},
+		"offset is made UTC":     {now.In(time.FixedZone("x", 7200)).Format(time.RFC3339), f(0)},
+	} {
+		if got := clampActivityTime(c.in, now); got != c.want {
+			t.Errorf("%s: got %s, want %s", name, got, c.want)
+		}
+	}
+}
+
+// The session id is the key activity is attributed under. Members who are
+// neither the row's owner nor a lead see the agent that reported it instead
+// (REQ-360 round 2), and the asker's own session is left out by UUID too.
+func TestPathActivityMasksSessionIDsForOrdinaryMembers(t *testing.T) {
+	f, _ := roleAPI(t)
+	if err := f.st.SetProjectRole("person:1", apiRoleProject, "person:2", store.RoleMember, false, store.RoleViaAPI); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.SetProjectRole("person:1", apiRoleProject, "person:3", store.RoleLead, false, store.RoleViaAPI); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.st.UpsertSession(store.Session{Harness: "claude", ExternalID: "uuid-r", Scope: scope.Axes{Project: apiRoleProject}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.st.RegisterCoordAgent(store.CoordAgent{ExternalID: "claude:h:robin", Provider: "claude", PrincipalID: "person:1",
+		RoomKey: store.RoomKeyForProject(apiRoleProject), SessionID: "uuid-r"}); err != nil {
+		t.Fatal(err)
+	}
+	res := req(t, "POST", f.srv.URL+"/api/activity", f.robin, []store.PathActivity{
+		{Project: apiRoleProject, SessionExternalID: "uuid-r", Tool: "Edit", Path: "a.go", Quality: store.ActivityIntent}})
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("record: %d", res.StatusCode)
+	}
+	seen := func(token, query string) []string {
+		res := req(t, "GET", f.srv.URL+"/api/activity/path?project="+apiRoleProject+"&path=a.go"+query, token, nil)
+		defer res.Body.Close()
+		var rows []store.PathActivity
+		if err := json.NewDecoder(res.Body).Decode(&rows); err != nil {
+			t.Fatal(err)
+		}
+		var ids []string
+		for _, r := range rows {
+			ids = append(ids, r.SessionExternalID)
+		}
+		return ids
+	}
+	// Log mode: nothing is hidden yet.
+	if got := seen(f.anna, ""); len(got) != 1 || got[0] != "uuid-r" {
+		t.Fatalf("log mode must not mask: %v", got)
+	}
+	f.st.SetAccessMode(store.AccessMode{Enforce: true})
+	if got := seen(f.anna, ""); len(got) != 1 || got[0] != "claude:h:robin" {
+		t.Fatalf("a member must see the agent, not the session id: %v", got)
+	}
+	if got := seen(f.ben, ""); len(got) != 1 || got[0] != "uuid-r" {
+		t.Fatalf("a lead sees the session id: %v", got)
+	}
+	if got := seen(f.robin, ""); len(got) != 1 || got[0] != "uuid-r" {
+		t.Fatalf("the owner of the row sees the session id: %v", got)
+	}
+	// N4: asking as the agent leaves out its own session, found by its UUID.
+	if got := seen(f.robin, "&exclude_session=claude:h:robin"); len(got) != 0 {
+		t.Fatalf("the asker's own session must be excluded by its registered UUID: %v", got)
 	}
 }

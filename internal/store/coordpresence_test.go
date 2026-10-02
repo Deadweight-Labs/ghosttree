@@ -129,10 +129,19 @@ func uploadTestSession(t *testing.T, st *Store, session, project string, account
 	}
 }
 
+// touch records activity the way the server does: stamped with the account of
+// the session's uploader (the caller's account at the API).
 func touch(t *testing.T, st *Store, session string) {
 	t.Helper()
+	var account int64
+	_ = st.db.QueryRow(`SELECT account_id FROM sessions WHERE external_id=? LIMIT 1`, session).Scan(&account)
+	touchAs(t, st, session, account)
+}
+
+func touchAs(t *testing.T, st *Store, session string, account int64) {
+	t.Helper()
 	if err := st.RecordPathActivity([]PathActivity{{SessionExternalID: session, Tool: "Edit", Path: "a.go",
-		Quality: ActivityIntent, At: time.Now().UTC().Format(time.RFC3339)}}); err != nil {
+		Quality: ActivityIntent, At: time.Now().UTC().Format(time.RFC3339), AccountID: account}}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -499,5 +508,85 @@ func TestPollDueOnlyAfterTheInterval(t *testing.T) {
 	}
 	if st.CoordAgentPollDue("claude:h:unknown") {
 		t.Fatal("an unregistered agent is never due")
+	}
+}
+
+// Sessions are unique per (harness, id). anna uploads robin's id under another
+// harness: robin can still write, and anna's activity under that id is not
+// robin's presence.
+func TestForeignRowWithTheSameSessionIDNeitherBlocksNorInjects(t *testing.T) {
+	st := controlFixture(t)
+	room := RoomKeyForProject(roleProject)
+	registerWithSession(t, st, "claude:h:robin", "person:4", "uuid-r", roleProject)
+	// person:3 uploads the same id for another harness, in the same project.
+	if _, err := st.UpsertSession(Session{Harness: "codex", ExternalID: "uuid-r", Scope: scope.Axes{Project: roleProject}, AccountID: 3}); err != nil {
+		t.Fatal(err)
+	}
+	if !st.SessionOwnedBy("uuid-r", "person:4") || !st.SessionOwnedBy("uuid-r", "person:3") {
+		t.Fatal("each account owns its own row; a foreign row must not lock the owner out")
+	}
+	touchAs(t, st, "uuid-r", 3)
+	if p := presenceOf(t, st, room, "claude:h:robin"); p.WorkState.Value != WorkUnknown {
+		t.Fatalf("anna's activity under robin's id injected presence: %+v", p.WorkState)
+	}
+	touchAs(t, st, "uuid-r", 4)
+	if p := presenceOf(t, st, room, "claude:h:robin"); p.WorkState.Value != WorkWorking {
+		t.Fatalf("robin's own activity must count: %+v", p.WorkState)
+	}
+	// The same unique key from another account does not swallow robin's row.
+	a, _ := st.SessionPathActivity("uuid-r", 4, "2000-01-01T00:00:00Z", 10)
+	b, _ := st.SessionPathActivity("uuid-r", 3, "2000-01-01T00:00:00Z", 10)
+	if len(a) == 0 || len(b) != 1 {
+		t.Fatalf("rows per account: robin %d, anna %d", len(a), len(b))
+	}
+	same := PathActivity{SessionExternalID: "uuid-r", Tool: "Edit", Path: "same.go", Quality: ActivityIntent, At: "2026-10-02T12:00:00Z"}
+	first, second := same, same
+	first.AccountID, second.AccountID = 3, 4
+	if err := st.RecordPathActivity([]PathActivity{first}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.RecordPathActivity([]PathActivity{second}); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	_ = st.db.QueryRow(`SELECT COUNT(*) FROM path_activity WHERE path='same.go'`).Scan(&n)
+	if n != 2 {
+		t.Fatalf("a pre-inserted identical row of another account swallowed robin's: %d rows", n)
+	}
+}
+
+func TestOldPathActivityTableGainsTheAccount(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+	st, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.db.Exec(`DROP TABLE path_activity;
+		CREATE TABLE path_activity(
+		  id INTEGER PRIMARY KEY, project TEXT NOT NULL DEFAULT '', session_external_id TEXT NOT NULL,
+		  checkout TEXT NOT NULL DEFAULT '', tool TEXT NOT NULL, path TEXT NOT NULL,
+		  writes INTEGER NOT NULL DEFAULT 0,
+		  quality TEXT NOT NULL CHECK(quality IN ('intent','reported_success','observed_change','unattributed')),
+		  at TEXT NOT NULL, UNIQUE(session_external_id,tool,path,quality,at));
+		INSERT INTO path_activity(project,session_external_id,tool,path,quality,at) VALUES('p','s','Edit','a.go','intent','2026-10-02T12:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	st, err = Open(path)
+	if err != nil {
+		t.Fatalf("reopen old database: %v", err)
+	}
+	defer st.Close()
+	var account int64
+	var n int
+	if err := st.db.QueryRow(`SELECT COUNT(*), COALESCE(MAX(account_id),-1) FROM path_activity`).Scan(&n, &account); err != nil || n != 1 || account != 0 {
+		t.Fatalf("old rows must survive with account 0 (the instance owner): n=%d account=%d err=%v", n, account, err)
+	}
+	if err := st.RecordPathActivity([]PathActivity{{SessionExternalID: "s", Tool: "Edit", Path: "a.go", Quality: ActivityIntent, At: "2026-10-02T12:00:00Z", AccountID: 5}}); err != nil {
+		t.Fatal(err)
+	}
+	_ = st.db.QueryRow(`SELECT COUNT(*) FROM path_activity`).Scan(&n)
+	if n != 2 {
+		t.Fatalf("the rebuilt table must key on the account: %d rows", n)
 	}
 }

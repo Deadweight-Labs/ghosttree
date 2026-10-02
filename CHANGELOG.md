@@ -27,10 +27,19 @@ Versioning, with pre-1.0 compatibility rules described in
   there is no self-report channel, Bash-only work is invisible, agents started
   without the launcher or resumed with `--resume` stay `unknown`, and codex
   agents have little to observe.
-- `POST /api/activity` and `GET /api/activity/session` now require that the
-  session belongs to the caller's account (the transcript must have been
-  uploaded first), where a bare session id used to pass for everyone; a client
-  `at` more than five minutes from server time is replaced by server time.
+- Observed activity is bound to the account that reported it.
+  `POST /api/activity` and `GET /api/activity/session` require that the caller
+  has an uploaded session with that id (a bare session id used to pass for
+  everyone, and a foreign row of another harness with the same id no longer
+  matters). `path_activity` gets `account_id` (old rows stay 0, the instance
+  owner; the table is rebuilt so a foreign row cannot shadow yours) and
+  presence reads only the agent's own account. A client `at` more than 30 s
+  ahead or 5 min behind server time is replaced by server time. While access
+  enforcement is on, `GET /api/activity/path` shows ordinary members the agent
+  that reported a session instead of its id (the owner and project leads see
+  the id), and leaves the asker's own session out by its registered id. The
+  collector now logs a refused activity upload (at most once a minute). Agents
+  without the launcher register the harness session id they know.
 - Agents now see who a human sender is. The messages API has an optional
   `sender_display_name` (the account name, read live, human authors only,
   withheld from guests of a project room while access enforcement is on); the

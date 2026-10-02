@@ -249,9 +249,11 @@ func (s *Store) TouchCoordAgentPoll(externalID string) error {
 	return err
 }
 
-// SessionOwnedBy sagt, ob eine Transkript-Session zu diesem Konto gehört. Nur
-// eine hochgeladene Session hat einen Eigentümer; Altbestand ohne Konto gehört
-// dem Instanz-Owner.
+// SessionOwnedBy sagt, ob das Konto eine hochgeladene Session mit dieser
+// Kennung hat. Genügt EINE eigene Zeile: Sessions sind nur je (Harness, Kennung)
+// eindeutig, und eine fremde Zeile mit derselben Kennung bei einem anderen
+// Harness darf den Eigentümer nicht aussperren. Wessen Aktivität es ist, hält
+// path_activity.account_id fest. Altbestand ohne Konto gehört dem Instanz-Owner.
 func (s *Store) SessionOwnedBy(sessionExternalID, principalID string) bool {
 	if s.reader != nil {
 		return s.reader.SessionOwnedBy(sessionExternalID, principalID)
@@ -260,14 +262,53 @@ func (s *Store) SessionOwnedBy(sessionExternalID, principalID string) bool {
 	if !ok || sessionExternalID == "" {
 		return false
 	}
-	owner := instanceOwnerID(s.db)
-	// Alle Zeilen dieser Kennung müssen dem Konto gehören: dieselbe Kennung bei
-	// einem anderen Harness unter fremdem Konto ist keine eigene Session.
-	var total, mine int
-	err := s.db.QueryRow(`SELECT COUNT(*),
-			COALESCE(SUM(CASE WHEN (CASE WHEN account_id=0 THEN ? ELSE account_id END)=? THEN 1 ELSE 0 END),0)
-		FROM sessions WHERE external_id=?`, owner, account, sessionExternalID).Scan(&total, &mine)
-	return err == nil && total > 0 && mine == total
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM sessions WHERE external_id=?
+		AND (CASE WHEN account_id=0 THEN ? ELSE account_id END)=?`,
+		sessionExternalID, instanceOwnerID(s.db), account).Scan(&n)
+	return err == nil && n > 0
+}
+
+// OwnerAccountID ist das Konto, dem Altbestand ohne Konto gehört.
+func (s *Store) OwnerAccountID() int64 {
+	if s.reader != nil {
+		return s.reader.OwnerAccountID()
+	}
+	return instanceOwnerID(s.db)
+}
+
+// AccountIDOf ist die Kontonummer eines Personen-Principals, sonst 0.
+func AccountIDOf(principalID string) int64 {
+	id, _ := accountNumericID(principalID)
+	return id
+}
+
+// AgentForSession nennt den Agenten dieses Kontos, der die Session unter seiner
+// Kennung gemeldet hat ("" ohne Treffer). Damit zeigt eine maskierte Aktivität
+// statt der Session-UUID den Agenten, den Mitglieder ohnehin in der Peer-Liste
+// sehen.
+func (s *Store) AgentForSession(sessionExternalID string, account int64) string {
+	if s.reader != nil {
+		return s.reader.AgentForSession(sessionExternalID, account)
+	}
+	var id string
+	if err := s.db.QueryRow(`SELECT external_id FROM coord_agents WHERE session_id=? AND principal_id=? ORDER BY id LIMIT 1`,
+		sessionExternalID, "person:"+strconv.FormatInt(account, 10)).Scan(&id); err != nil {
+		return ""
+	}
+	return id
+}
+
+// AgentSessionID ist die Session, die ein Agent dieses Principals gemeldet hat.
+func (s *Store) AgentSessionID(externalID, principalID string) string {
+	if s.reader != nil {
+		return s.reader.AgentSessionID(externalID, principalID)
+	}
+	var id string
+	if err := s.db.QueryRow(`SELECT session_id FROM coord_agents WHERE external_id=? AND principal_id=?`, externalID, principalID).Scan(&id); err != nil {
+		return ""
+	}
+	return id
 }
 
 // presenceDB ist, was die Ableitung von der Datenbank braucht; ein Interface,
@@ -325,22 +366,24 @@ func presenceBatch(db presenceDB, ref time.Time, roomKey string, agents []presen
 		if len(withSession) > 0 {
 			owner := instanceOwnerID(db)
 			args := append(idArgs(withSession, func(a presenceAgent) string { return a.SessionID }), remote, ref.Add(-ActivityFreshTTL).Format(time.RFC3339))
+			ownerSQL := strconv.FormatInt(owner, 10)
 			rows, err := db.Query(`SELECT pa.session_external_id,
-					CASE WHEN s.account_id=0 THEN `+strconv.FormatInt(owner, 10)+` ELSE s.account_id END, MAX(pa.at)
+					CASE WHEN pa.account_id=0 THEN `+ownerSQL+` ELSE pa.account_id END,
+					CASE WHEN s.account_id=0 THEN `+ownerSQL+` ELSE s.account_id END, MAX(pa.at)
 				FROM path_activity pa JOIN sessions s ON s.external_id=pa.session_external_id
 				WHERE pa.session_external_id IN (`+placeholders(len(withSession))+`) AND s.project=? AND pa.at>=?
-				GROUP BY pa.session_external_id, s.account_id`, args...)
+				GROUP BY pa.session_external_id, pa.account_id, s.account_id`, args...)
 			if err == nil {
 				type seen struct {
-					account int64
-					at      string
+					activityAccount, sessionAccount int64
+					at                              string
 				}
 				bySession := map[string][]seen{}
 				for rows.Next() {
 					var sid, at string
-					var account int64
-					if rows.Scan(&sid, &account, &at) == nil {
-						bySession[sid] = append(bySession[sid], seen{account, at})
+					var activityAccount, sessionAccount int64
+					if rows.Scan(&sid, &activityAccount, &sessionAccount, &at) == nil {
+						bySession[sid] = append(bySession[sid], seen{activityAccount, sessionAccount, at})
 					}
 				}
 				rows.Close()
@@ -350,7 +393,7 @@ func presenceBatch(db presenceDB, ref time.Time, roomKey string, agents []presen
 						continue
 					}
 					for _, sn := range bySession[a.SessionID] {
-						if sn.account == account && laterThan(sn.at, inputs[a.ExternalID].LastActivityAt) {
+						if sn.activityAccount == account && sn.sessionAccount == account && laterThan(sn.at, inputs[a.ExternalID].LastActivityAt) {
 							inputs[a.ExternalID].LastActivityAt = sn.at
 						}
 					}
