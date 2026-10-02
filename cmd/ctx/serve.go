@@ -34,6 +34,7 @@ type serveConfig struct {
 	Writer         store.WriterConfig
 	OIDC           web.OIDCConfig
 	PublicURL      string
+	DistDir        string
 	TrustedProxies proxytrust.Set
 }
 
@@ -49,6 +50,9 @@ const (
 	// the README section "Running behind TLS or a reverse proxy".
 	envPublicURL      = "GHOSTTREE_PUBLIC_URL"
 	envTrustedProxies = "GHOSTTREE_TRUSTED_PROXIES"
+	// envDistDir names a directory with the ctx release archives and
+	// checksums.txt; the server then serves /install.sh and /dist/.
+	envDistDir = "GHOSTTREE_DIST_DIR"
 )
 
 type snapshotRootValues []string
@@ -106,6 +110,7 @@ func parseServeConfig(args []string, output io.Writer) (serveConfig, error) {
 	fs.StringVar(&cfg.OIDC.ClientID, "oidc-client-id", os.Getenv(envOIDCClientID), "OIDC client id (env "+envOIDCClientID+")")
 	fs.StringVar(&cfg.OIDC.RedirectURL, "oidc-redirect-url", os.Getenv(envOIDCRedirectURL), "OIDC redirect URL, https://<public host>/ui/login/oidc/callback (env "+envOIDCRedirectURL+")")
 	fs.StringVar(&cfg.PublicURL, "public-url", os.Getenv(envPublicURL), "external base URL, e.g. https://ghosttree.example.com; an https URL makes every cookie Secure (env "+envPublicURL+")")
+	fs.StringVar(&cfg.DistDir, "dist-dir", os.Getenv(envDistDir), "directory with ctx_<version>_<os>_<arch>.tar.gz archives and checksums.txt; enables /install.sh and /dist/ (env "+envDistDir+")")
 	trusted := fs.String("trusted-proxies", os.Getenv(envTrustedProxies), "comma-separated CIDRs/IPs of reverse proxies whose X-Forwarded-Proto/Host are believed; loopback is always trusted, nothing else by default (env "+envTrustedProxies+")")
 	// Das Secret gibt es bewusst nur über die Umgebung: ein Flag stünde in der Prozessliste.
 	cfg.OIDC.ClientSecret = os.Getenv(envOIDCClientSecret)
@@ -128,7 +133,15 @@ func parseServeConfig(args []string, output io.Writer) (serveConfig, error) {
 		if (u.Scheme == "https" && u.Port() == "443") || (u.Scheme == "http" && u.Port() == "80") {
 			u.Host = strings.TrimSuffix(u.Host, ":"+u.Port())
 		}
+		if !web.ValidPublicHost(u.Host) {
+			return serveConfig{}, fmt.Errorf("--public-url host %q has characters outside letters, digits, . : [ ] -", u.Host)
+		}
 		cfg.PublicURL = u.Scheme + "://" + u.Host
+	}
+	if cfg.DistDir != "" {
+		if _, err := web.CheckDistDir(cfg.DistDir); err != nil {
+			return serveConfig{}, fmt.Errorf("--dist-dir %q: %w", cfg.DistDir, err)
+		}
 	}
 	proxies, err := proxytrust.Parse(*trusted)
 	if err != nil {
@@ -241,6 +254,17 @@ func runServer(ctx context.Context, st *store.Store, cfg serveConfig, stdout, st
 	if note := proxyConfigWarning(cfg); note != "" {
 		slog.New(slog.NewJSONHandler(stderr, nil)).Warn("proxy_config", "public_url", cfg.PublicURL, "note", note)
 	}
+	if cfg.DistDir != "" {
+		logger := slog.New(slog.NewJSONHandler(stderr, nil))
+		if versions, _ := web.CheckDistDir(cfg.DistDir); len(versions) > 1 {
+			logger.Warn("dist_dir", "dir", cfg.DistDir, "versions", versions, "note", "checksums.txt lists several ctx versions; install.sh refuses an ambiguous list, keep one version per directory")
+		} else if len(versions) == 0 {
+			logger.Warn("dist_dir", "dir", cfg.DistDir, "note", "checksums.txt lists no ctx_<version>_<os>_<arch>.tar.gz archive")
+		}
+		if cfg.PublicURL == "" {
+			logger.Warn("dist_dir", "note", "without "+envPublicURL+" (https) /install.sh is served only to loopback hosts or via a trusted proxy sending X-Forwarded-Proto/Host")
+		}
+	}
 	slog.New(slog.NewJSONHandler(stderr, nil)).Info("writer_config", "max_operations", cfg.Writer.MaxOperations, "max_bytes", cfg.Writer.MaxBytes, "max_batch", cfg.Writer.MaxBatch, "read_connections", cfg.Writer.ReadConnections)
 	if err := serveUntilCanceled(ctx, newHTTPServer(cfg.Listen, buildServerHandler(st, cfg, stderr))); err != nil {
 		fmt.Fprintf(stdout, "serve: %v\n", err)
@@ -273,6 +297,9 @@ func buildServerHandler(st *store.Store, cfg serveConfig, stderr io.Writer) http
 	webOptions := []web.Option{web.WithBootstrapFile(bootstrapCodePath(cfg.DB)), web.WithTrustedProxies(cfg.TrustedProxies)}
 	if cfg.PublicURL != "" {
 		webOptions = append(webOptions, web.WithPublicURL(cfg.PublicURL))
+	}
+	if cfg.DistDir != "" {
+		webOptions = append(webOptions, web.WithDistDir(cfg.DistDir))
 	}
 	if cfg.OIDC.Enabled() {
 		webOptions = append(webOptions, web.WithOIDC(cfg.OIDC))

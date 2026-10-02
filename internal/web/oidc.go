@@ -274,6 +274,9 @@ func WithPublicURL(raw string) Option {
 		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
 			panic("web: invalid public URL")
 		}
+		if u.User != nil || !distHostRE.MatchString(u.Host) {
+			panic("web: invalid public URL host")
+		}
 		host := u.Host
 		if (u.Scheme == "https" && u.Port() == "443") || (u.Scheme == "http" && u.Port() == "80") {
 			host = strings.TrimSuffix(host, ":"+u.Port())
