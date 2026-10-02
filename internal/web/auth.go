@@ -82,6 +82,7 @@ func (a *app) requirePerson(next http.Handler) http.Handler {
 				}
 				ctx := context.WithValue(r.Context(), personKey{}, session.principal)
 				ctx = context.WithValue(ctx, csrfKey{}, session.csrf)
+				ctx = context.WithValue(ctx, shellMemoKey{}, &shellMemo{})
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}

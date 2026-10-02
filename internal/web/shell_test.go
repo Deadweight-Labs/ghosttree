@@ -23,6 +23,7 @@ const (
 // "hidden" hat nur alice.
 type shellEnv struct {
 	Base                                 string
+	Srv                                  *httptest.Server
 	St                                   *store.Store
 	Owner, Member, Guest, Lead, Reviewer *http.Client
 }
@@ -55,7 +56,7 @@ func shellWebAll(t *testing.T) shellEnv {
 			t.Fatal(err)
 		}
 	}
-	return shellEnv{Base: srv.URL, St: st,
+	return shellEnv{Base: srv.URL, Srv: srv, St: st,
 		Owner: loginInteractive(t, srv, st, "alice"), Member: loginInteractive(t, srv, st, "anna"), Guest: loginInteractive(t, srv, st, "gina"),
 		Lead: loginInteractive(t, srv, st, "lars"), Reviewer: loginInteractive(t, srv, st, "rita")}
 }
@@ -168,7 +169,7 @@ func TestShellProjectSelectorListsOnlyProjectsWithARole(t *testing.T) {
 func TestShellProjectSelectionIsKept(t *testing.T) {
 	base, owner, _, _ := shellWeb(t)
 	_, page := fetchPage(t, owner, base+"/ui/knowledge?project="+shellProject)
-	if !regexp.MustCompile(`<option value="` + regexp.QuoteMeta(shellProject) + `" selected`).MatchString(page) {
+	if !regexp.MustCompile(`<option value="` + regexp.QuoteMeta(shellProject) + `" title="` + regexp.QuoteMeta(shellProject) + `" selected`).MatchString(page) {
 		t.Error("selector does not show the chosen project")
 	}
 }
@@ -272,7 +273,7 @@ func TestAllProjectsIsOfferedToOwnersOnly(t *testing.T) {
 		if strings.Contains(page, "All projects") {
 			t.Errorf("%s is offered All projects", name)
 		}
-		if strings.Contains(page, `value="" disabled`) || !regexp.MustCompile(`<option value="`+regexp.QuoteMeta(shellProject)+`" selected`).MatchString(page) {
+		if strings.Contains(page, `value="" disabled`) || !regexp.MustCompile(`<option value="`+regexp.QuoteMeta(shellProject)+`" title="`+regexp.QuoteMeta(shellProject)+`" selected`).MatchString(page) {
 			t.Errorf("%s selector does not preselect the first project", name)
 		}
 	}

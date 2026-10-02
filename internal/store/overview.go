@@ -1,43 +1,11 @@
 package store
 
-import (
-	"strings"
-	"time"
-)
+import "strings"
 
 // Abfragen für die Startseite. Jede nimmt die Grenze des Betrachters in die
 // Abfrage selbst (Projektliste), statt global zu holen und danach zu kappen:
 // ein Fenster nach Anzahl oder Alter über die ganze Instanz würde sonst
 // verborgene Zeilen mitzählen (#2447).
-
-// PendingDevice ist ein offener Geräte-Login, wie ihn der Owner zur Freigabe
-// sieht. Der User-Code gehört bewusst nicht dazu: wer ihn tippt, beweist, am
-// Terminal zu sitzen.
-type PendingDevice struct {
-	Machine, Remote string
-	StartedAt       time.Time
-}
-
-// Pending listet die offenen Geräte-Abläufe, älteste zuerst. Join-Paarungen
-// gehören ihrer Join-Sitzung und erscheinen nicht.
-func (d *DeviceFlows) Pending() []PendingDevice {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.purge(d.now())
-	var out []PendingDevice
-	for _, f := range d.byDevice {
-		if f.join || f.state != "pending" {
-			continue
-		}
-		out = append(out, PendingDevice{Machine: f.machine, Remote: f.remote, StartedAt: f.created})
-	}
-	for i := 1; i < len(out); i++ {
-		for j := i; j > 0 && out[j].StartedAt.Before(out[j-1].StartedAt); j-- {
-			out[j], out[j-1] = out[j-1], out[j]
-		}
-	}
-	return out
-}
 
 // CriteriaProgress ist der Fortschritt eines Requests: erledigte (met oder
 // waived) von allen Kriterien.
@@ -87,6 +55,7 @@ type KnowledgeWindow struct {
 	UnclaimedAuthor string
 	UnclaimedAll    bool
 	Limit           int
+	Offset          int
 }
 
 // KnowledgeWindow liefert neueste zuerst. Die Projektgrenze steckt in der
@@ -126,9 +95,9 @@ func (s *Store) KnowledgeWindow(w KnowledgeWindow) ([]Knowledge, error) {
 		}
 		where = append(where, `(`+clause+`)`)
 	}
-	args = append(args, w.Limit)
+	args = append(args, w.Limit, max(w.Offset, 0))
 	rows, err := s.db.Query(`SELECT `+knowledgeCols+` FROM knowledge WHERE `+strings.Join(where, ` AND `)+
-		` ORDER BY created_at DESC, id DESC LIMIT ?`, args...)
+		` ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`, args...)
 	if err != nil {
 		return nil, err
 	}

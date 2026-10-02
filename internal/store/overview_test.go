@@ -8,32 +8,6 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 )
 
-func TestPendingDevicesListOpenFlowsOnlyAndNeverTheUserCode(t *testing.T) {
-	d, clock := newDeviceFixture(t)
-	first, _ := d.Start("1.1.1.1", "alpha", "1.1.1.1")
-	clock.advance(time.Minute)
-	if _, err := d.Start("2.2.2.2", "beta", "2.2.2.2"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := d.StartJoin("3.3.3.3", "joiner", "3.3.3.3"); err != nil {
-		t.Fatal(err)
-	}
-	got := d.Pending()
-	if len(got) != 2 || got[0].Machine != "alpha" || got[1].Machine != "beta" {
-		t.Fatalf("pending = %+v, want alpha then beta and no join flow", got)
-	}
-	if err := d.Decide(first.UserCode, "person:1", false); err != nil {
-		t.Fatal(err)
-	}
-	if got := d.Pending(); len(got) != 1 || got[0].Machine != "beta" {
-		t.Fatalf("after deny pending = %+v", got)
-	}
-	clock.advance(DeviceFlowTTL + time.Minute)
-	if got := d.Pending(); len(got) != 0 {
-		t.Fatalf("expired flows are listed: %+v", got)
-	}
-}
-
 func TestCriteriaProgressCountsMetAndWaivedOfAll(t *testing.T) {
 	s := openTest(t)
 	detail, err := s.CreateRequest(requestdomain.CreateInput{

@@ -57,7 +57,6 @@ var messages = map[string]string{
 	"ov.review":            "Review",
 	"ov.approve":           "Approve",
 	"ov.code":              "Code from your terminal",
-	"ov.wants":             "%s wants to connect",
 	"ov.proposed_by":       "Proposed by %s",
 	"ov.work.working":      "Working",
 	"ov.work.waiting_user": "Waiting for you",

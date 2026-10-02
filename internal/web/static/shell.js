@@ -1,7 +1,14 @@
 // Shell behaviour: "/" focuses the search field, the project selector submits
 // on change, and the account menu closes on Escape or a click outside.
 (() => {
+  // Loaded from the head: the js class must be set before first paint.
   document.documentElement.classList.add("js");
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    init();
+  }
+  function init() {
   const shell = document.querySelector(".shell");
   const toggle = document.querySelector("[data-shell-toggle]");
   if (shell && toggle) {
@@ -42,5 +49,21 @@
     document.addEventListener("click", (event) => {
       if (account.open && !account.contains(event.target)) account.open = false;
     });
+  }
+  for (const bar of document.querySelectorAll("[data-pct]")) {
+    bar.style.width = Math.max(0, Math.min(100, Number(bar.dataset.pct) || 0)) + "%";
+  }
+  const refresh = Number(document.body.dataset.refresh) || 0;
+  if (refresh > 0) {
+    const tick = () => {
+      const field = document.querySelector("input[name=user_code]");
+      if (field && (field === document.activeElement || field.value)) {
+        setTimeout(tick, refresh * 1000);
+      } else {
+        location.reload();
+      }
+    };
+    setTimeout(tick, refresh * 1000);
+  }
   }
 })();

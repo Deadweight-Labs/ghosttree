@@ -64,7 +64,11 @@ func (s *Store) AddPerson(name string) (string, error) {
 		return "", ErrAccountNameTaken
 	}
 	at := now()
-	res, err := tx.Exec(`INSERT INTO persons(name, token_hash, created_at) VALUES(?,?,?)`, name, hash, at)
+	first, err := claimFirstAdminTx(tx, at)
+	if err != nil {
+		return "", err
+	}
+	res, err := tx.Exec(`INSERT INTO persons(name, token_hash, created_at, is_admin) VALUES(?,?,?,?)`, name, hash, at, first)
 	if err != nil {
 		return "", err
 	}

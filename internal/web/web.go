@@ -83,6 +83,24 @@ type appHandler struct {
 	app *app
 }
 
+// ServeHTTP setzt die Sicherheitsköpfe aller /ui/-Seiten, bevor ein Handler
+// antwortet; Handler dürfen sie überschreiben (join.go setzt eigene).
+func (h *appHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/ui" || strings.HasPrefix(r.URL.Path, "/ui/") {
+		uiHeaders(w.Header())
+	}
+	h.Handler.ServeHTTP(w, r)
+}
+
+// uiHeaders: Skripte, Stile, Schriften und Bilder nur von dieser Herkunft,
+// keine fremden Ressourcen, nicht einbettbar. form-action bleibt offen, weil der
+// Weg zum Identitätsanbieter eine Weiterleitung ist.
+func uiHeaders(h http.Header) {
+	h.Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'")
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Referrer-Policy", "strict-origin")
+}
+
 func newApp(st *store.Store, opts ...Option) http.Handler {
 	a := &app{store: st, sessions: newSessions(), joinLimits: newJoinLimiter()}
 	for _, opt := range opts {

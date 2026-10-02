@@ -8,19 +8,28 @@ Versioning, with pre-1.0 compatibility rules described in
 
 - Changed: the web interface starts on a new Overview (REQ-435, second part).
   `/ui/` and the redirect after sign-in lead to `/ui/overview`, and the brand
-  link too. "Next" lists what needs a decision (a device waiting for approval
-  for owners, knowledge to review for reviewers, requests addressed to you),
-  "Agents" shows each agent as active (signal within 8 minutes), idle or
-  offline (over a day), and the side column shows open requests with their
-  criteria progress and what was learned this week. Everything is drawn from
-  what the viewer may see; guests get only requests and knowledge, and the page
-  is the same whether or not hidden projects hold data. The owner of an instance
-  without agents gets one step instead: the `ctx login --server` command to copy,
-  "Waiting for your machine", and the page switches by itself once the machine
-  and an agent are there. Without a chosen project, members and guests now start
-  with their first project selected. The fonts moved to a versioned path
+  link too. "Next" lists what needs a decision (knowledge to review for
+  reviewers, requests addressed to you), "Agents" shows each agent as active
+  (signal within 8 minutes), idle or offline (over a day) for the rooms you take
+  part in, and the side column shows open requests with their criteria progress
+  and what was learned this week. Everything is drawn from what the viewer may
+  see; guests get only requests and knowledge, and the page is the same whether
+  or not hidden projects hold data. Owners and admins of an instance without
+  agents get one step instead: the `ctx login --server` command to copy, a field
+  for the code from the terminal (the machine is named only after the code is
+  entered, never listed), "Waiting for your machine", and the page switches by
+  itself once the machine and an agent are there. The oldest account no longer
+  counts as owner on its own; the first account of a fresh instance is an admin
+  from the start. Without a `?project=`, members and guests get their first
+  project preselected. The fonts moved to a versioned path
   (`/static/fonts/plex-1.1-2.5/`) so long caching stays safe, and the `js` class
-  is set in the page head so the narrow-screen menu no longer flashes open.
+  is set from `shell.js` in the page head so the narrow-screen menu no longer
+  flashes open.
+- Security: every `/ui/` page now sends a Content-Security-Policy (own origin
+  only, no inline script or style, no framing), `X-Content-Type-Options: nosniff`
+  and `Referrer-Policy: strict-origin`; the Overview is `no-store`. The inline
+  script, the inline progress width and the inline `noscript` style moved into
+  `shell.js` and `app.css`.
 - Changed: the web interface has a new app shell (REQ-435, first part). A
   left navigation (Overview, Agents, Rooms, Knowledge, Requests; Administration
   for owners and admins, "My devices & tokens" for members) with a project

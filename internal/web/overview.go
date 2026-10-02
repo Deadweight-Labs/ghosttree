@@ -1,9 +1,11 @@
 package web
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -56,11 +58,9 @@ type overviewView struct {
 	NoContent bool
 }
 
-// nextRow ist eine Entscheidung, die jetzt ansteht. Device gesetzt: Zeile mit
-// Code-Feld (Freigabe), sonst Link zur Stelle.
+// nextRow ist eine Entscheidung, die jetzt ansteht: Titel, Detail, Link zur Stelle.
 type nextRow struct {
 	Title, Detail, Href, HrefLabel string
-	Device                         bool
 }
 
 type agentRow struct {
@@ -76,13 +76,17 @@ type requestRow struct {
 
 type learnedRow struct{ Title, Age string }
 
+// setupView ist die Seite "Connect your first agent". Offene Geräte-Logins der
+// Instanz erscheinen hier nie: wer den Code vom Terminal kennt, gibt ihn ein, und
+// erst die Device-Seite nennt danach die Maschine.
 type setupView struct {
-	// State: waiting, wants (ein Gerät wartet auf Freigabe), connected.
-	State           string
-	Command         string
-	Machine, Remote string
-	Detail          string
-	Title           string
+	// State: waiting oder connected.
+	State   string
+	Command string
+	Machine string
+	Title   string
+	// Code: die Sitzung darf Geräte freigeben, also zeigt die Seite das Code-Feld.
+	Code bool
 }
 
 // agentState ordnet ein Lebenszeichen ein. Ein fehlendes Signal gilt als offline.
@@ -137,28 +141,32 @@ func selectedProject(sh shellView) string {
 }
 
 func (a *app) overviewPage(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	now := overviewNow().UTC()
 	pa := a.access(r)
-	who := a.viewerOf(r, pa)
+	who := a.shellBaseFor(r).who
 	shell := a.shellFor(r, "overview")
 	project := selectedProject(shell)
 	view := overviewView{Guest: who.kind == viewerGuest, CSRFToken: csrfOf(r)}
 	data := pageData{Title: msg("overview.title")}
 
 	var agents []agentRow
+	var err error
 	if !view.Guest {
-		agents = a.overviewAgents(pa, project, now)
+		if agents, err = a.overviewAgents(r, pa, project, now); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 	if setup := a.setupFor(r, who, agents, now); setup != nil {
 		view.Setup = setup
-		if r.URL.Query().Get("connect") == "" && setup.State != "wants" {
+		if r.URL.Query().Get("connect") == "" {
 			data.Refresh = setupRefreshSeconds
 		}
 		a.renderBrowser(w, r, "overview", data.withOverview(view))
 		return
 	}
 
-	var err error
 	if view.Requests, err = a.overviewRequests(pa, project); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -188,23 +196,29 @@ func (d pageData) withOverview(v overviewView) pageData {
 
 // overviewAgents listet die Agenten der Projekte, in denen der Betrachter
 // Agenten lesen darf. project != "" schränkt auf dieses Projekt ein.
-func (a *app) overviewAgents(pa *store.ProjectAccess, project string, now time.Time) []agentRow {
+// Die Peers kommen über dieselbe Zugangsprüfung wie /ui/coord.
+func (a *app) overviewAgents(r *http.Request, pa *store.ProjectAccess, project string, now time.Time) ([]agentRow, error) {
 	type ranked struct {
 		row    agentRow
 		signal time.Time
 	}
 	seen := map[string]bool{}
 	var out []ranked
-	for _, remote := range pa.Projects() {
+	access := a.browserCoord(r)
+	remotes := slices.Sorted(slices.Values(pa.Projects()))
+	for _, remote := range remotes {
 		if project != "" && remote != project {
 			continue
 		}
 		if !pa.Allow(remote, store.ResAgents, store.ActRead, store.Object{}) {
 			continue
 		}
-		peers, err := a.store.CoordPeers(store.RoomKeyForProject(remote), "")
-		if err != nil {
+		peers, err := access.Peers(store.RoomKeyForProject(remote), "")
+		if errors.Is(err, store.ErrCoordNotFound) || errors.Is(err, store.ErrCoordForbidden) {
 			continue
+		}
+		if err != nil {
+			return nil, err
 		}
 		for _, peer := range peers {
 			if peer.ParentExternalID != "" || seen[peer.ExternalID] {
@@ -250,7 +264,7 @@ func (a *app) overviewAgents(pa *store.ProjectAccess, project string, now time.T
 			break
 		}
 	}
-	return rows
+	return rows, nil
 }
 
 func stateLabel(state string) string {
@@ -323,17 +337,42 @@ func (a *app) knowledgeWindowFor(pa *store.ProjectAccess, project string) store.
 	return w
 }
 
+// knowledgeKeep liest die Wissensfenster seitenweise, bis limit Einträge den
+// feinen Test bestehen oder nichts mehr kommt. Ein fester Ausschnitt vor dem
+// Test ließe verborgene Einträge sichtbare verdrängen (#2447).
+func (a *app) knowledgeKeep(w store.KnowledgeWindow, limit int, allow func(store.Knowledge) bool) ([]store.Knowledge, error) {
+	const page = 100
+	w.Limit = page
+	var out []store.Knowledge
+	for w.Offset = 0; ; w.Offset += page {
+		rows, err := a.store.KnowledgeWindow(w)
+		if err != nil {
+			return nil, err
+		}
+		for _, k := range rows {
+			if allow(k) {
+				out = append(out, k)
+				if len(out) >= limit {
+					return out, nil
+				}
+			}
+		}
+		if len(rows) < page {
+			return out, nil
+		}
+	}
+}
+
 func (a *app) overviewLearned(pa *store.ProjectAccess, project string, now time.Time) ([]learnedRow, error) {
 	w := a.knowledgeWindowFor(pa, project)
 	w.Since = now.Add(-learnedWindow).Format(time.RFC3339)
-	entries, err := a.store.KnowledgeWindow(w)
+	pa.Filtered()
+	entries, err := a.knowledgeKeep(w, overviewMaxLearned, func(k store.Knowledge) bool {
+		return pa.CanSeeKnowledge(k) && pa.CanDeliverKnowledge(k)
+	})
 	if err != nil {
 		return nil, err
 	}
-	pa.Filtered()
-	entries = keep(entries, overviewMaxLearned, func(k store.Knowledge) bool {
-		return pa.CanSeeKnowledge(k) && pa.CanDeliverKnowledge(k)
-	})
 	rows := make([]learnedRow, len(entries))
 	for i, k := range entries {
 		rows[i] = learnedRow{Title: k.Title, Age: shortAge(now, parseTime(k.CreatedAt))}
@@ -341,28 +380,21 @@ func (a *app) overviewLearned(pa *store.ProjectAccess, project string, now time.
 	return rows, nil
 }
 
-// overviewNext sammelt, was den Betrachter jetzt braucht: Geräte-Freigaben
-// (nur Owner), Wissen zur Prüfung (nur wer prüfen darf) und an ihn gerichtete
-// Anliegen in Räumen, die er lesen darf.
+// overviewNext sammelt, was den Betrachter jetzt braucht: Wissen zur Prüfung
+// (nur wer prüfen darf) und an ihn gerichtete Anliegen in Räumen, die er lesen
+// darf. Offene Geräte-Logins gehören nicht dazu (siehe setupView).
 func (a *app) overviewNext(r *http.Request, pa *store.ProjectAccess, who viewer, project string, now time.Time) ([]nextRow, error) {
 	var rows []nextRow
-	if a.ownerLike(r, who) && interactive(r) {
-		for _, d := range a.store.Device().Pending() {
-			rows = append(rows, nextRow{Device: true, Title: msg("ov.wants", d.Machine),
-				Detail: strings.Join([]string{d.Remote, shortAge(now, d.StartedAt)}, " · ")})
-		}
-	}
 	if who.reviewer {
 		w := a.knowledgeWindowFor(pa, project)
 		w.Pending = true
-		pending, err := a.store.KnowledgeWindow(w)
+		pa.Filtered()
+		pending, err := a.knowledgeKeep(w, overviewMaxReview, func(k store.Knowledge) bool {
+			return pa.CanSeeKnowledge(k) && pa.CheckKnowledge(k, store.ActVerify) == nil
+		})
 		if err != nil {
 			return nil, err
 		}
-		pa.Filtered()
-		pending = keep(pending, overviewMaxReview, func(k store.Knowledge) bool {
-			return pa.CanSeeKnowledge(k) && pa.CheckKnowledge(k, store.ActVerify) == nil
-		})
 		for _, k := range pending {
 			detail := shortAge(now, parseTime(k.CreatedAt))
 			if k.Person != "" {
@@ -387,9 +419,12 @@ func (a *app) overviewNext(r *http.Request, pa *store.ProjectAccess, who viewer,
 func (a *app) overviewAttention(r *http.Request, now time.Time) ([]nextRow, error) {
 	access := a.browserCoord(r)
 	items, err := access.Attention()
-	if err != nil {
+	if errors.Is(err, store.ErrCoordNotFound) || errors.Is(err, store.ErrCoordForbidden) {
 		// Ohne Raumzugang (zum Beispiel ein Konto ohne Agenten) gibt es nichts.
 		return nil, nil
+	}
+	if err != nil {
+		return nil, err
 	}
 	current := browserPrincipal(r)
 	labels := coordIdentityLabels(current, nil)
@@ -430,7 +465,7 @@ func oneLine(s string, limit int) string {
 }
 
 // setupFor entscheidet, ob statt der Übersicht "Connect your first agent"
-// erscheint: für einen Owner, solange kein Agent sichtbar ist und keine
+// erscheint: für Owner und Admins, solange kein Agent sichtbar ist und keine
 // Maschine gerade erst verbunden wurde; für jeden Nicht-Gast auf Wunsch
 // (?connect=1). Der Befehl nennt nur die Adresse dieses Servers.
 func (a *app) setupFor(r *http.Request, who viewer, agents []agentRow, now time.Time) *setupView {
@@ -438,19 +473,12 @@ func (a *app) setupFor(r *http.Request, who viewer, agents []agentRow, now time.
 		return nil
 	}
 	forced := r.URL.Query().Get("connect") != ""
-	if !forced && (!a.ownerLike(r, who) || len(agents) > 0) {
+	if !forced && (who.kind != viewerOwner || len(agents) > 0) {
 		return nil
 	}
-	view := &setupView{State: "waiting", Title: msg("setup.title_first"), Command: a.loginCommand(r)}
+	view := &setupView{State: "waiting", Title: msg("setup.title_first"), Command: a.loginCommand(r), Code: interactive(r)}
 	if forced {
 		view.Title = msg("setup.title")
-	}
-	if a.ownerLike(r, who) && interactive(r) {
-		if pending := a.store.Device().Pending(); len(pending) > 0 {
-			view.State, view.Machine, view.Remote = "wants", pending[0].Machine, pending[0].Remote
-			view.Detail = strings.Join([]string{pending[0].Remote, shortAge(now, pending[0].StartedAt)}, " · ")
-			return view
-		}
 	}
 	if machine, ok := a.recentMachine(r, now); ok {
 		view.State, view.Machine = "connected", machine
@@ -505,15 +533,4 @@ func (a *app) loginCommand(r *http.Request) string {
 		origin = "https://" + a.publicHost(r)
 	}
 	return fmt.Sprintf("ctx login --server %s", origin)
-}
-
-// ownerLike: Owner im Sinne der Hülle, oder das älteste Konto der Instanz. Auf
-// einer frischen Instanz hat es noch keine Organisation und gilt der Hülle als
-// Member, ist aber die Person, die den ersten Agenten verbindet.
-func (a *app) ownerLike(r *http.Request, who viewer) bool {
-	if who.kind == viewerOwner {
-		return true
-	}
-	id := store.AccountIDOf(browserPrincipal(r).ID)
-	return id != 0 && id == a.store.OwnerAccountID()
 }

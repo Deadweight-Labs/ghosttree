@@ -736,7 +736,7 @@ func TestWhoAmIReportsAccountAndTokenKind(t *testing.T) {
 		return got, resp.StatusCode
 	}
 	got, _ := whoami(legacy)
-	if got["id"] != "person:1" || got["token_kind"] != "legacy" || got["state"] != "active" || got["admin"] != false {
+	if got["id"] != "person:1" || got["token_kind"] != "legacy" || got["state"] != "active" || got["admin"] != true {
 		t.Fatalf("legacy whoami = %v", got)
 	}
 	got, _ = whoami(cli)

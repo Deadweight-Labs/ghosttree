@@ -67,6 +67,7 @@ func fillVisible(t *testing.T, st *store.Store) {
 	ovKnowledge(t, st, shellProject, "Visible lesson", "trusted")
 	ovKnowledge(t, st, shellProject, "Visible proposal", "staged")
 	ovAgent(t, st, shellProject, "claude:visible", "visible-agent", "person:2")
+	ovAgent(t, st, shellProject, "claude:visible-owner", "owner-agent", "person:1")
 }
 
 func fillHidden(t *testing.T, st *store.Store) {
@@ -79,14 +80,23 @@ func fillHidden(t *testing.T, st *store.Store) {
 	}
 }
 
+func fetchBody(t *testing.T, c *http.Client, target string) string {
+	t.Helper()
+	_, page := fetchPage(t, c, target)
+	return page
+}
+
 func TestOverviewEveryListComesFromTheViewersVisibleSet(t *testing.T) {
 	e := ovEnv(t)
 	fillVisible(t, e.St)
 	fillHidden(t, e.St)
 	secrets := []string{"SECRET", shellHiddenProject, "claude:hidden", "0/3"}
+	if strings.Contains(fetchBody(t, e.Owner, e.Base+"/ui/overview"), "SECRET-MACHINE") {
+		t.Error("the owner overview names a machine that only started a login")
+	}
 
 	_, owner := fetchPage(t, e.Owner, e.Base+"/ui/overview")
-	for _, want := range []string{"Visible request", "SECRET-REQ", "SECRET-LESSON", "SECRET-AGENT", "SECRET-PROPOSAL", "SECRET-MACHINE wants to connect", "1/2", "0/3"} {
+	for _, want := range []string{"Visible request", "SECRET-REQ", "SECRET-LESSON", "SECRET-AGENT", "SECRET-PROPOSAL", "1/2", "0/3"} {
 		if !strings.Contains(owner, want) {
 			t.Errorf("owner overview lacks %q", want)
 		}
@@ -96,9 +106,20 @@ func TestOverviewEveryListComesFromTheViewersVisibleSet(t *testing.T) {
 		t.Error("the project selector does not narrow the owner overview")
 	}
 
+	// Agenten erscheinen über dieselbe Zugangsprüfung wie die Räume: nur in
+	// Räumen, in denen der Betrachter selbst einen Agenten hat.
+	_, anna := fetchPage(t, e.Member, e.Base+"/ui/overview")
+	if !strings.Contains(anna, "visible-agent") {
+		t.Error("a member does not see the agents of the room they are in")
+	}
+	for name, c := range map[string]*http.Client{"lead": e.Lead, "reviewer": e.Reviewer} {
+		if strings.Contains(fetchBody(t, c, e.Base+"/ui/overview"), "visible-agent") {
+			t.Errorf("%s sees agents of a room they have no agent in", name)
+		}
+	}
 	for name, c := range map[string]*http.Client{"member": e.Member, "lead": e.Lead, "reviewer": e.Reviewer} {
 		_, page := fetchPage(t, c, e.Base+"/ui/overview")
-		for _, want := range []string{"Visible request", "1/2", "Visible lesson", "visible-agent"} {
+		for _, want := range []string{"Visible request", "1/2", "Visible lesson"} {
 			if !strings.Contains(page, want) {
 				t.Errorf("%s overview lacks %q", name, want)
 			}
@@ -189,17 +210,16 @@ func TestMemberCannotProbeHiddenProjectsThroughTheSelector(t *testing.T) {
 	}
 }
 
-func TestOverviewNextOffersDeviceApprovalToOwnersOnlyAndNeverShowsTheCode(t *testing.T) {
+func TestDeviceApprovalIsACodeFieldWithoutMachineIPOrAge(t *testing.T) {
 	e := ovEnv(t)
-	fillVisible(t, e.St)
 	start, err := e.St.Device().Start("203.0.113.4", "mainex", "203.0.113.4")
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, owner := fetchPage(t, e.Owner, e.Base+"/ui/overview")
-	for _, want := range []string{"mainex wants to connect", "203.0.113.4", `action="/ui/device"`, `name="user_code"`, `name="csrf_token"`} {
+	for _, want := range []string{`action="/ui/device"`, `name="user_code"`, `name="csrf_token"`} {
 		if !strings.Contains(owner, want) {
-			t.Errorf("owner Next lacks %q", want)
+			t.Errorf("the setup lacks %q", want)
 		}
 	}
 	for _, code := range []string{start.UserCode, store.FormatUserCode(start.UserCode)} {
@@ -207,8 +227,8 @@ func TestOverviewNextOffersDeviceApprovalToOwnersOnlyAndNeverShowsTheCode(t *tes
 			t.Error("the page shows the user code")
 		}
 	}
-	for name, c := range map[string]*http.Client{"member": e.Member, "lead": e.Lead, "guest": e.Guest} {
-		_, page := fetchPage(t, c, e.Base+"/ui/overview")
+	for name, c := range map[string]*http.Client{"owner": e.Owner, "member": e.Member, "lead": e.Lead, "guest": e.Guest} {
+		_, page := fetchPage(t, c, e.Base+"/ui/overview?connect=1")
 		if strings.Contains(page, "mainex") || strings.Contains(page, "203.0.113.4") {
 			t.Errorf("%s sees a pending device", name)
 		}
@@ -234,38 +254,6 @@ func TestOverviewNextOffersDeviceApprovalToOwnersOnlyAndNeverShowsTheCode(t *tes
 	}
 }
 
-func TestOverviewNextShowsOnlyOpenRequestsAddressedToTheViewerInRoomsTheyMayRead(t *testing.T) {
-	e := ovEnv(t)
-	visible, hidden := store.RoomKeyForProject(shellProject), store.RoomKeyForProject(shellHiddenProject)
-	materializeWebRoomFor(t, e.St, visible, "person:4", "lars")
-	materializeWebRoomFor(t, e.St, visible, "person:2", "anna")
-	materializeWebRoomFor(t, e.St, hidden, "person:1", "alice")
-	send := func(room, sender, principal, id, text string, mention string) {
-		t.Helper()
-		if _, err := e.St.AppendCoordMessage(store.CoordMessage{DestinationKind: store.DestinationRoom, DestinationID: room,
-			SenderExternalID: sender, AuthorPrincipalID: principal, AuthorKind: store.AuthorHuman, ClientID: id, Body: text, Intent: store.IntentQuestion, Mentions: []string{mention}}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	send(visible, "lars", "person:4", "v1", "Which schema first?", "person:2")
-	send(hidden, "alice", "person:1", "h1", "SECRET-ASK", "person:2")
-	_, anna := fetchPage(t, e.Member, e.Base+"/ui/overview")
-	if !strings.Contains(anna, "Which schema first?") || !strings.Contains(anna, "/ui/coord?") {
-		t.Errorf("member lacks the addressed request or its link: %s", anna)
-	}
-	if strings.Contains(anna, "SECRET") {
-		t.Error("a request from a room the member cannot read shows up")
-	}
-	_, lars := fetchPage(t, e.Lead, e.Base+"/ui/overview")
-	if strings.Contains(lars, "Which schema first?") {
-		t.Error("a request addressed to someone else shows up")
-	}
-	_, gina := fetchPage(t, e.Guest, e.Base+"/ui/overview")
-	if strings.Contains(gina, "schema") || strings.Contains(gina, "ov-next") {
-		t.Error("a guest gets a Next list")
-	}
-}
-
 func TestOwnerOnAnEmptyInstanceSeesGettingStartedThatSwitches(t *testing.T) {
 	e := shellWebAll(t)
 	_, page := fetchPage(t, e.Owner, e.Base+"/ui/overview")
@@ -283,11 +271,8 @@ func TestOwnerOnAnEmptyInstanceSeesGettingStartedThatSwitches(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, page = fetchPage(t, e.Owner, e.Base+"/ui/overview")
-	if !strings.Contains(page, "mainex wants to connect") || !strings.Contains(page, `name="user_code"`) {
-		t.Error("setup does not show the waiting device")
-	}
-	if strings.Contains(page, `http-equiv="refresh"`) {
-		t.Error("the page reloads while a code is being typed")
+	if strings.Contains(page, "mainex") || strings.Contains(page, "203.0.113.9") || !strings.Contains(page, `name="user_code"`) {
+		t.Error("setup names the waiting device or lacks the code field")
 	}
 	if strings.Contains(page, start.UserCode) {
 		t.Error("the user code is shown")
@@ -349,6 +334,7 @@ func TestGettingStartedIsForOwnersAndAConnectedMachineDoesNotTrapThem(t *testing
 func TestOverviewEmptySectionsAreOneLineAndAnAction(t *testing.T) {
 	e := shellWebAll(t)
 	ovAgent(t, e.St, shellProject, "claude:a", "agent-a", "person:2")
+	ovAgent(t, e.St, shellProject, "claude:o", "agent-o", "person:1")
 	_, page := fetchPage(t, e.Owner, e.Base+"/ui/overview")
 	for _, want := range []string{"No open requests.", "Nothing learned this week."} {
 		if !strings.Contains(page, want) {
@@ -443,8 +429,12 @@ func TestShellHeadSetsTheJSClassBeforeFirstPaint(t *testing.T) {
 	e := shellWebAll(t)
 	_, page := fetchPage(t, e.Member, e.Base+"/ui/requests")
 	head := page[:strings.Index(page, "</head>")]
-	if !strings.Contains(head, `<script>document.documentElement.classList.add("js")</script>`) {
-		t.Error("the js class is only set by the deferred shell script")
+	if strings.Contains(head, "<script>") || !strings.Contains(head, `<script src="/static/shell.js"></script>`) {
+		t.Error("the js class script is not a synchronous external script in the head")
+	}
+	js := body(t, mustGet(t, e.Base+"/static/shell.js"))
+	if !strings.Contains(js, `classList.add("js")`) {
+		t.Error("shell.js does not set the js class")
 	}
 	if strings.Index(head, "<script>") > strings.Index(head, "shell.css") {
 		t.Log("script after stylesheet is fine as long as it sits in the head")

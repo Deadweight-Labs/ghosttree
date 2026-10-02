@@ -98,6 +98,24 @@ func migrateAccounts(db *sql.DB) error {
 	return tx.Commit()
 }
 
+// claimFirstAdminTx liefert 1, wenn die Instanz noch keine Person hat: die
+// erste Person ist sofort Admin, ohne dass der Store neu geöffnet werden muss.
+// Der Migrationsmarker wird dabei gesetzt, damit ein späteres Entziehen beim
+// nächsten Öffnen nicht rückgängig gemacht wird.
+func claimFirstAdminTx(tx *sql.Tx, at string) (int, error) {
+	var persons int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM persons`).Scan(&persons); err != nil {
+		return 0, err
+	}
+	if persons > 0 {
+		return 0, nil
+	}
+	if _, err := tx.Exec(`INSERT OR IGNORE INTO account_migrations(version, migrated_at) VALUES(1,?)`, at); err != nil {
+		return 0, err
+	}
+	return 1, nil
+}
+
 // allowDeviceTokenKind erweitert die CHECK-Bedingung von api_tokens um die Art
 // 'device'. SQLite kann eine CHECK-Bedingung nicht ändern; die Tabelle wird
 // deshalb einmal neu aufgebaut, wenn ihre Definition die Art noch nicht kennt.
@@ -202,8 +220,14 @@ func (s *Store) AddAccount(name, email string, admin bool) (Account, error) {
 	} else if taken {
 		return Account{}, ErrAccountNameTaken
 	}
+	at := now()
+	first, err := claimFirstAdminTx(tx, at)
+	if err != nil {
+		return Account{}, err
+	}
+	flag = max(flag, first)
 	if _, err := tx.Exec(`INSERT INTO persons(name, token_hash, created_at, email, is_admin) VALUES(?,?,?,?,?)`,
-		name, "", now(), strings.TrimSpace(email), flag); err != nil {
+		name, "", at, strings.TrimSpace(email), flag); err != nil {
 		return Account{}, err
 	}
 	if err := tx.Commit(); err != nil {

@@ -102,7 +102,7 @@
       {{else}}<section><h2>Raumkontext</h2><p class="coord-muted">Teilnehmende, Vorgaben und Threads stehen hier neben dem gewählten Gespräch.</p></section>{{end}}
     </aside>
   </div>
-  <noscript><style>[data-coord-live-status]{display:none}</style><p class="coord-live-status coord-nojs-status">Live-Updates aus · Seite manuell aktualisieren</p></noscript>
+  <noscript><p class="coord-live-status coord-nojs-status">Live-Updates aus · Seite manuell aktualisieren</p></noscript>
 {{template "foot" .}}{{end}}
 
 {{define "coord-room-link"}}<a href="{{.URL}}"{{if .Active}} aria-current="page"{{end}}><span class="coord-room-name" title="{{.Label}}">{{.Name}}</span><span class="coord-room-counts">{{if .Attention}}<strong aria-label="{{.Attention}} offene Aufmerksamkeiten">{{.Attention}} offen</strong>{{end}}{{if .Mentions}}{{if .Attention}} · {{end}}<strong aria-label="{{.Mentions}} Erwähnungen">{{.Mentions}} @</strong>{{end}}{{if .Unread}}{{if or .Attention .Mentions}} · {{end}}<strong aria-label="{{.Unread}} ungelesen">{{.Unread}} neu</strong>{{end}}</span></a>{{end}}

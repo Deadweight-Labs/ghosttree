@@ -1224,3 +1224,7 @@ html:not(.coord-enhanced) .coord-backdrop { display: none !important; }
 .coord-agent-control { margin-top: .4rem; }
 .coord-agent-control form { display: flex; flex-wrap: wrap; gap: .35rem; align-items: center; margin-top: .3rem; }
 .coord-agent-control .coord-control-state { margin: 0; }
+
+html:not(.js) [data-coord-live-status] {
+  display: none;
+}
