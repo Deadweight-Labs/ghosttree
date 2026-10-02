@@ -1,1 +1,26 @@
-{{define "overview"}}{{template "head" .}}{{template "nav" .}}<main><h1 class="visually-hidden">{{t "overview.title"}}</h1>{{template "foot" .}}{{end}}
+{{define "ovdevice"}}<form class="ov-device" method="post" action="/ui/device"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><input name="user_code" class="ov-code" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="32" required placeholder="{{t "ov.code"}}" aria-label="{{t "ov.code"}}"><button class="ov-btn ov-btn-primary">{{t "ov.approve"}}</button></form>{{end}}
+
+{{define "ovsetup"}}{{with .Overview.Setup}}<section class="ov-setup"><h1>{{.Title}}</h1>
+{{if eq .State "connected"}}<p class="ov-setup-line"><span class="ov-dot is-active" aria-hidden="true"></span><strong>{{t "setup.connected" .Machine}}</strong></p><p>{{t "setup.start"}}</p>
+{{else}}<div class="ov-command"><pre><code id="ov-command">{{.Command}}</code></pre><button type="button" class="ov-btn" data-copy="#ov-command" data-copied="{{t "setup.copied"}}">{{t "setup.copy"}}</button></div>
+{{if .Code}}{{template "ovdevice" $}}{{end}}
+<p class="ov-setup-line"><span class="ov-dot is-wait" aria-hidden="true"></span>{{t "setup.waiting"}}</p>{{end}}
+</section>{{end}}{{end}}
+
+{{define "overview"}}{{template "head" .}}{{template "nav" .}}<main class="ov">
+{{with .Overview}}{{if .Setup}}{{template "ovsetup" $}}
+{{else if .Guest}}<h1 class="visually-hidden">{{t "overview.title"}}</h1>
+{{if .NoContent}}<p class="ov-empty">{{t "ov.nothing"}}</p>{{end}}
+{{if .Requests}}<section class="ov-section ov-narrow"><h2>{{t "ov.requests"}}</h2><ul class="ov-list">{{range .Requests}}<li class="ov-row ov-request"><a class="ov-id" href="{{.Href}}">{{.ID}}</a><span class="ov-title">{{.Title}}</span>{{if .Total}}<span class="ov-bar" aria-hidden="true"><i data-pct="{{.Percent}}"></i></span><span class="ov-num">{{.Progress}}</span>{{end}}</li>{{end}}</ul></section>{{end}}
+{{if .Learned}}<section class="ov-section ov-narrow"><h2>{{t "ov.knowledge"}}</h2><ul class="ov-list">{{range .Learned}}<li class="ov-row"><span class="ov-title">{{.Title}}</span><span class="ov-num">{{.Age}}</span></li>{{end}}</ul></section>{{end}}
+{{else}}<h1 class="visually-hidden">{{t "overview.title"}}</h1>
+<div class="ov-cols"><div class="ov-main">
+{{if .Next}}<section class="ov-section"><h2>{{t "ov.next"}}</h2><ul class="ov-list">{{range .Next}}<li class="ov-row ov-next"><div class="ov-text"><span class="ov-title">{{.Title}}</span><span class="ov-meta">{{.Detail}}</span></div>{{if .Href}}<a class="ov-btn" href="{{.Href}}">{{.HrefLabel}}</a>{{end}}</li>{{end}}</ul></section>{{end}}
+<section class="ov-section"><div class="ov-head"><h2>{{t "ov.agents"}}</h2>{{if .Agents}}<a class="ov-btn" href="{{.Connect}}">{{t "ov.connect_another"}}</a>{{end}}</div>
+{{if .Agents}}<ul class="ov-list">{{range .Agents}}<li class="ov-row ov-agent"><span class="ov-dot is-{{.State}}" title="{{.StateText}}"></span><div class="ov-text"><span class="ov-name">{{.Name}}</span><span class="ov-meta">{{.Project}}</span></div><span class="ov-activity">{{if .Activity}}{{.Activity}}{{else if ne .State "active"}}{{.StateText}}{{end}}</span><span class="ov-num">{{.Age}}</span></li>{{end}}</ul>
+{{else}}<p class="ov-empty">{{t "ov.no_agents"}}</p><a class="ov-btn ov-btn-primary" href="{{.Connect}}">{{t "ov.connect"}}</a>{{end}}</section>
+</div><div class="ov-side">
+<section class="ov-section"><h2>{{t "ov.requests"}}</h2>{{if .Requests}}<ul class="ov-list">{{range .Requests}}<li class="ov-request"><a class="ov-reqtitle" href="{{.Href}}"><span class="ov-id">{{.ID}}</span> {{.Title}}</a>{{if .Total}}<div class="ov-prog"><span class="ov-bar" aria-hidden="true"><i data-pct="{{.Percent}}"></i></span><span class="ov-num">{{.Progress}}</span></div>{{end}}</li>{{end}}</ul>{{else}}<p class="ov-empty">{{t "ov.no_requests"}}</p>{{end}}</section>
+<section class="ov-section"><h2>{{t "ov.learned"}}</h2>{{if .Learned}}<ul class="ov-list">{{range .Learned}}<li class="ov-row"><span class="ov-title">{{.Title}}</span><span class="ov-num">{{.Age}}</span></li>{{end}}</ul>{{else}}<p class="ov-empty">{{t "ov.no_learned"}}</p>{{end}}</section>
+</div></div>
+{{end}}{{end}}{{template "foot" .}}{{end}}

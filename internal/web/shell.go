@@ -19,7 +19,47 @@ type navItem struct {
 
 type projectOption struct {
 	Remote   string
+	Label    string
 	Selected bool
+}
+
+// shellBase ist, was jede Seite einer Anfrage aus Rolle und Projektliste
+// braucht. Es wird je Anfrage einmal berechnet (shellMemo) und danach kopiert.
+type shellBase struct {
+	who      viewer
+	projects []projectOption
+	all      bool
+}
+
+type shellMemoKey struct{}
+
+// shellMemo hängt an der Anfrage (requirePerson) und hält die Hülle.
+type shellMemo struct{ base *shellBase }
+
+// shellBaseFor liefert Betrachter und Projektliste mit der Vorauswahl "erstes
+// eigenes Projekt", wo "All projects" nicht zur Wahl steht. Ohne Memo in der
+// Anfrage (Tests) wird jedes Mal gerechnet.
+func (a *app) shellBaseFor(r *http.Request) shellBase {
+	memo, _ := r.Context().Value(shellMemoKey{}).(*shellMemo)
+	if memo != nil && memo.base != nil {
+		b := *memo.base
+		b.projects = slices.Clone(b.projects)
+		return b
+	}
+	pa := a.access(r)
+	b := shellBase{who: a.viewerOf(r, pa)}
+	b.projects, b.all = a.projectOptions(r, pa)
+	// Ohne gültiges ?project= bekommt, wer nicht "All projects" wählen kann, sein
+	// erstes Projekt vorgewählt. Ein Projektname ohne Rolle wirkt wie keiner.
+	if b.who.kind != viewerOwner && b.all && len(b.projects) > 0 {
+		b.projects[0].Selected, b.all = true, false
+	}
+	if memo != nil {
+		stored := b
+		stored.projects = slices.Clone(b.projects)
+		memo.base = &stored
+	}
+	return b
 }
 
 // shellView ist, was die Hülle (Seitenleiste, Kopf, Kontomenü) für genau diesen
@@ -116,8 +156,8 @@ func navKeyFor(section string, kind viewerKind) string {
 }
 
 func (a *app) shellFor(r *http.Request, name string) shellView {
-	pa := a.access(r)
-	who := a.viewerOf(r, pa)
+	base := a.shellBaseFor(r)
+	who := base.who
 	kind := who.kind
 	current := navKeyFor(name, kind)
 	item := func(key, label, href string) navItem {
@@ -161,7 +201,7 @@ func (a *app) shellFor(r *http.Request, name string) shellView {
 	if projectAware[name] {
 		v.ProjectAction = r.URL.Path
 	}
-	v.Projects, v.AllSelected = a.projectOptions(r, pa)
+	v.Projects, v.AllSelected = base.projects, base.all
 	return v
 }
 
@@ -184,22 +224,22 @@ func (a *app) projectOptions(r *http.Request, pa *store.ProjectAccess) ([]projec
 		return nil, true
 	}
 	chosen := scope.NormalizeRemote(r.URL.Query().Get("project"))
+	var visible []string
+	for _, p := range list {
+		if pa.Role(p.Remote).Role != "" {
+			visible = append(visible, p.Remote)
+		}
+	}
+	labels := projectLabels(visible)
 	var out []projectOption
 	found := false
-	for _, p := range list {
-		if pa.Role(p.Remote).Role == "" {
-			continue
-		}
-		sel := chosen != "" && p.Remote == chosen
+	for _, remote := range visible {
+		sel := chosen != "" && remote == chosen
 		found = found || sel
-		out = append(out, projectOption{Remote: p.Remote, Selected: sel})
+		out = append(out, projectOption{Remote: remote, Label: labels[remote], Selected: sel})
 	}
 	slices.SortFunc(out, func(x, y projectOption) int { return strings.Compare(x.Remote, y.Remote) })
 	return out, !found
-}
-
-func (a *app) overviewPage(w http.ResponseWriter, r *http.Request) {
-	a.renderBrowser(w, r, "overview", pageData{Title: msg("overview.title")})
 }
 
 func (a *app) rootRedirect(w http.ResponseWriter, r *http.Request) {
@@ -224,4 +264,35 @@ func (a *app) favicon(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "image/svg+xml")
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	_, _ = w.Write(raw)
+}
+
+// projectLabels gibt jeder Remote ihren kurzen Namen; teilen sich sichtbare
+// Projekte denselben, steht das Owner-Segment davor (owner/name). Verglichen
+// wird nur unter den übergebenen, also sichtbaren Projekten.
+func projectLabels(remotes []string) map[string]string {
+	count := map[string]int{}
+	for _, r := range remotes {
+		count[projectLabel(r)]++
+	}
+	out := make(map[string]string, len(remotes))
+	for _, r := range remotes {
+		label := projectLabel(r)
+		if count[label] > 1 {
+			parts := strings.Split(strings.Trim(r, "/"), "/")
+			if len(parts) >= 2 {
+				label = parts[len(parts)-2] + "/" + label
+			}
+		}
+		out[r] = label
+	}
+	return out
+}
+
+// projectLabel ist der kurze Name eines Projekts: der letzte Pfadteil der Remote.
+func projectLabel(remote string) string {
+	trimmed := strings.Trim(remote, "/")
+	if i := strings.LastIndex(trimmed, "/"); i >= 0 && i+1 < len(trimmed) {
+		return trimmed[i+1:]
+	}
+	return remote
 }

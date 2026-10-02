@@ -120,7 +120,7 @@ func (a *app) joinHeaders(w http.ResponseWriter) {
 	// 'self' würde auch die 303-Weiterleitung der Freigabe auf den Loopback des
 	// Installers (http://127.0.0.1:<port>/callback) blockieren, weil Browser
 	// form-action auf die Ziele von Weiterleitungen anwenden.
-	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'")
+	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'self'; img-src 'self'; font-src 'self'; base-uri 'none'; frame-ancestors 'none'")
 	h.Set("Content-Type", "text/html; charset=utf-8")
 }
 
