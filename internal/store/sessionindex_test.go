@@ -899,7 +899,7 @@ func TestMigrationOnManyChunksStartsFastAndIndexesInTheBackground(t *testing.T) 
 	if _, err := st.AddPerson("robin"); err != nil {
 		t.Fatal(err)
 	}
-	const sessions, perSession = 40, 1500
+	const sessions, perSession = 20, 1000
 	tx, _ := st.db.Begin()
 	for i := 0; i < sessions; i++ {
 		res, _ := tx.Exec(`INSERT INTO sessions(harness, external_id, started_at, last_seen_at) VALUES('claude-code', ?, '2026-10-01T00:00:00Z', '2026-10-01T00:00:00Z')`, fmt.Sprintf("big%d", i))

@@ -3,11 +3,11 @@
 {{with .SessionsV}}
 <h1>{{t "nav.sessions"}}</h1>
 <form class="sfilters" method="get" action="/ui/sessions" role="search">
-<span class="sq"><label class="visually-hidden" for="sess-q">{{t "sessions.search_label"}}</label><input id="sess-q" type="search" name="q" value="{{.Q}}" placeholder="{{t "sessions.search_placeholder"}}" autocomplete="off" data-sessions-search>{{if .Q}}<a class="sq-clear" href="{{.ClearHref}}" aria-label="{{t "sessions.clear_search"}}"></a>{{else}}<kbd aria-hidden="true">{{t "shell.search_hint"}}</kbd>{{end}}</span>
-{{range .Selects}}<select name="{{.Name}}" aria-label="{{.Label}}" data-autosubmit><option value="">{{.Label}}</option>{{range .Options}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select>{{end}}
+<span class="sq"><label class="visually-hidden" for="sess-q">{{t "sessions.search_label"}}</label><input id="sess-q" class="clay-field" type="search" name="q" value="{{.Q}}" placeholder="{{t "sessions.search_placeholder"}}" autocomplete="off" data-sessions-search>{{if .Q}}<a class="sq-clear" href="{{.ClearHref}}" aria-label="{{t "sessions.clear_search"}}"></a>{{else}}<kbd aria-hidden="true">{{t "shell.search_hint"}}</kbd>{{end}}</span>
+{{range .Selects}}<select class="clay-select" name="{{.Name}}" aria-label="{{.Label}}" data-autosubmit><option value="">{{.Label}}</option>{{range .Options}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select>{{end}}
 {{if .ShowMine}}<span class="seg" role="group" aria-label="{{t "sessions.owner_filter"}}"><a href="{{.EveryoneHref}}"{{if not .Mine}} class="is-on" aria-current="true"{{end}}>{{t "sessions.everyone"}}</a><a href="{{.MineHref}}"{{if .Mine}} class="is-on" aria-current="true"{{end}}>{{t "sessions.mine"}}</a></span>{{end}}
 {{if .Kind}}<input type="hidden" name="kind" value="{{.Kind}}">{{end}}
-<noscript><button class="btn-sm">{{t "sessions.apply"}}</button></noscript>
+<noscript><button class="clay-btn">{{t "sessions.apply"}}</button></noscript>
 </form>
 {{if .Indexing}}<p class="sindex" role="status">{{.Indexing}}</p>{{end}}
 {{if .Searching}}
@@ -20,12 +20,12 @@
 {{range .Hits}}<a class="shit" data-kind="{{.Kind}}" href="{{.Href}}"><span class="sh-who">{{.Label}}</span><span class="sh-text">{{range .Parts}}{{if .Hit}}<mark>{{.Text}}</mark>{{else}}{{.Text}}{{end}}{{end}}</span><span class="sh-seq">{{.Seq}}</span></a>{{end}}
 {{if .MoreHref}}<a class="smore" href="{{.MoreHref}}">{{.MoreText}}</a>{{end}}
 </section>
-{{else}}<div class="sempty"><p>{{t "sessions.no_results" .Q}}</p><a class="btn-sm" href="{{.ClearHref}}">{{t "sessions.clear_search"}}</a></div>{{end}}
-{{if .Next}}<footer class="sfoot"><a class="btn-sm" href="{{.Next}}">{{t "sessions.show_older"}}</a></footer>{{end}}
+{{else}}<div class="sempty"><p>{{t "sessions.no_results" .Q}}</p><a class="clay-btn" href="{{.ClearHref}}">{{t "sessions.clear_search"}}</a></div>{{end}}
+{{if .Next}}<footer class="sfoot"><a class="clay-btn" href="{{.Next}}">{{t "sessions.show_older"}}</a></footer>{{end}}
 </section>
 {{else}}
-{{if .Empty}}<div class="sempty">{{if .Guest}}<p>{{t "sessions.empty_guest"}}</p>{{else}}<p>{{t "sessions.empty"}}</p><a class="btn-sm" href="/join/pair">{{t "sessions.connect"}}</a>{{end}}</div>
-{{else if .NoMatch}}<div class="sempty"><p>{{t "sessions.no_match"}}</p><a class="btn-sm" href="{{.ClearFilters}}">{{t "sessions.clear_filters"}}</a></div>
+{{if .Empty}}<div class="sempty">{{if .Guest}}<p>{{t "sessions.empty_guest"}}</p>{{else}}<p>{{t "sessions.empty"}}</p><a class="clay-btn" href="/join/pair">{{t "sessions.connect"}}</a>{{end}}</div>
+{{else if .NoMatch}}<div class="sempty"><p>{{t "sessions.no_match"}}</p><a class="clay-btn" href="{{.ClearFilters}}">{{t "sessions.clear_filters"}}</a></div>
 {{else}}
 <div class="spanel"><table class="stable">
 <thead><tr><th scope="col" class="c-live"><span class="visually-hidden">{{t "sessions.col_live"}}</span></th><th scope="col">{{t "sessions.col_session"}}</th><th scope="col">{{t "sessions.col_linked"}}</th><th scope="col" class="num">{{t "sessions.col_messages"}}</th><th scope="col" class="num">{{t "sessions.col_duration"}}</th><th scope="col" class="num">{{t "sessions.col_time"}}</th></tr></thead>
@@ -36,7 +36,7 @@
 <td class="num">{{.Messages}}</td><td class="num">{{.Duration}}</td><td class="num"><time datetime="{{.Stamp}}" data-clock>{{.Time}}</time></td></tr>
 {{end}}</tbody>{{end}}
 </table>
-{{if .Next}}<footer class="sfoot"><a class="btn-sm" href="{{.Next}}">{{t "sessions.show_older"}}</a></footer>{{end}}</div>
+{{if .Next}}<footer class="sfoot"><a class="clay-btn" href="{{.Next}}">{{t "sessions.show_older"}}</a></footer>{{end}}</div>
 {{end}}
 {{end}}
 {{end}}
@@ -46,9 +46,9 @@
 {{define "session"}}{{template "head" .}}{{template "nav" .}}<main class="sess-main sess-detail">
 <link rel="stylesheet" href="/static/sessions.css">
 {{with .SessionV}}{{if .Missing}}
-<div class="smissing"><h1>{{t "sessions.not_found"}}</h1><a class="btn-sm" href="/ui/sessions">{{t "sessions.all_sessions"}}</a></div>
+<div class="smissing"><h1>{{t "sessions.not_found"}}</h1><a class="clay-btn" href="/ui/sessions">{{t "sessions.all_sessions"}}</a></div>
 {{else if .Confirm}}
-<form class="sconfirm" method="post" action="{{.Confirm.Action}}"><p>{{.Confirm.Text}}</p><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="level" value="{{.Confirm.Level}}"><input type="hidden" name="confirm" value="1"><button class="btn-sm">{{t "sessions.share_anyway"}}</button> <a class="btn-sm" href="{{.Confirm.Back}}">{{t "sessions.cancel"}}</a></form>
+<form class="sconfirm" method="post" action="{{.Confirm.Action}}"><p>{{.Confirm.Text}}</p><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="level" value="{{.Confirm.Level}}"><input type="hidden" name="confirm" value="1"><button class="clay-btn">{{t "sessions.share_anyway"}}</button> <a class="clay-btn" href="{{.Confirm.Back}}">{{t "sessions.cancel"}}</a></form>
 {{else}}
 <div class="sd-grid">
 <nav class="prompts" aria-label="{{t "sessions.prompts"}}"><h2>{{t "sessions.prompts"}}</h2>
@@ -61,7 +61,7 @@
 <header class="sd-head"><div class="sd-titles"><h1>{{if .Live}}<span class="live-dot" role="img" aria-label="{{t "sessions.live"}}"></span>{{end}}{{.Title}}</h1><p class="smeta">{{.Meta}}</p></div>
 <div class="sd-actions">
 {{with .Share}}<form class="share" method="post" action="{{.Action}}"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><span class="seg" role="group" aria-label="{{t "sessions.sharing"}}">{{range .Levels}}<button name="level" value="{{.Value}}"{{if .Current}} class="is-on" aria-pressed="true"{{end}}>{{.Label}}</button>{{end}}</span></form>{{end}}
-<button type="button" class="btn-sm js-only" data-copy-link>{{t "sessions.copy_link"}}</button>
+<button type="button" class="clay-btn clay-btn-sm js-only" data-copy-link>{{t "sessions.copy_link"}}</button>
 </div></header>
 {{if .Created}}<p class="created"><span class="cl">{{t "sessions.created"}}</span>{{range .Created}}<a class="chip" href="{{.Href}}">{{.Text}}</a>{{end}}</p>{{end}}
 <div class="sd-tools">
@@ -70,7 +70,7 @@
 <span class="sd-toggles"><a class="tog{{if .ToolsOn}} is-on{{end}}" href="{{.ToolsHref}}">{{t "sessions.tools"}}</a><a class="tog{{if .ThinkingOn}} is-on{{end}}" href="{{.ThinkingHref}}">{{t "sessions.thinking"}}</a><a class="tog-plain" href="{{.ExpandHref}}">{{if .Expanded}}{{t "sessions.collapse_all"}}{{else}}{{t "sessions.expand_all"}}{{end}}</a></span>
 </div>
 {{if .Earlier.Href}}<a class="wlink" href="{{.Earlier.Href}}">{{.Earlier.Text}}</a>{{end}}
-{{if .WindowError}}<p class="serror" role="alert"><span>{{t "sessions.window_error"}}</span> <a class="btn-sm" href="{{.RetryHref}}">{{t "sessions.retry"}}</a></p>{{end}}
+{{if .WindowError}}<p class="serror" role="alert"><span>{{t "sessions.window_error"}}</span> <a class="clay-btn" href="{{.RetryHref}}">{{t "sessions.retry"}}</a></p>{{end}}
 <div class="flow">
 {{range .Blocks}}{{if eq .Kind "user"}}<article class="blk blk-user{{if .Target}} is-target{{end}}"{{if .ID}} id="{{.ID}}"{{end}}><header><span class="who">{{.Who}}</span><a class="seq" href="#{{.ID}}">{{.Seq}}</a><time datetime="{{.Stamp}}" data-clock>{{.Time}}</time></header><div class="msg">{{.Body}}</div></article>
 {{else if eq .Kind "assistant"}}<article class="blk blk-assistant{{if .Target}} is-target{{end}}"{{if .ID}} id="{{.ID}}"{{end}}><header><span class="who">{{.Who}}</span><a class="seq" href="#{{.ID}}">{{.Seq}}</a><time datetime="{{.Stamp}}" data-clock>{{.Time}}</time></header><div class="msg">{{.Body}}</div></article>
