@@ -145,7 +145,7 @@ func TestBuildCoordParticipantsUsesCanonicalLabelsAndHonestPresence(t *testing.T
 	if got[2].Label != "Build Agent" || got[2].Provider != "codex" || got[2].Worktree != "/worktrees/ui" || got[2].Branch != "feat/ui" || got[2].LastSeen != "2026-09-18T10:00:00Z" {
 		t.Fatalf("agent presentation=%+v", got[2])
 	}
-	if got[2].Reachability != "unbekannt" || got[2].WorkState != "unbekannt" {
+	if got[2].Reachability != "unknown" || got[2].WorkState != "unknown" {
 		t.Fatalf("presence must remain explicitly unknown: %+v", got[2])
 	}
 	if got[2].DisplayTimestamp != "18.09.2026, 12:00" {
@@ -193,12 +193,12 @@ func TestBuildCoordParticipantsShowsOriginAndAgeAndNeverInventsIdle(t *testing.T
 	for _, p := range buildCoordParticipants(room, peers, nil, current, nil) {
 		byLabel[p.Label] = p
 	}
-	if got := byLabel["Polling"]; got.ReachabilityText != "verbunden (beobachtet, vor 12 s)" || got.WorkStateText != "wartet auf Peer (abgeleitet, vor 2 min)" {
+	if got := byLabel["Polling"]; got.ReachabilityText != "connected (observed, 12 s ago)" || got.WorkStateText != "waiting for peer (derived, 2 min ago)" {
 		t.Fatalf("polling agent = %+v", got)
 	}
 	got := byLabel["Silent"]
-	if got.Reachability != "unbekannt" || got.WorkState != "unbekannt" ||
-		got.ReachabilityText != "unbekannt (keine Beobachtung)" || got.WorkStateText != "unbekannt (keine Beobachtung)" {
+	if got.Reachability != "unknown" || got.WorkState != "unknown" ||
+		got.ReachabilityText != "unknown (not observed)" || got.WorkStateText != "unknown (not observed)" {
 		t.Fatalf("silent agent = %+v", got)
 	}
 	// People have no presence and show none.

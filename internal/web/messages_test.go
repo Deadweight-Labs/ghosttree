@@ -9,7 +9,7 @@ import (
 )
 
 // p1Templates sind die Vorlagen, deren Texte vollständig im Katalog liegen.
-var p1Templates = []string{"templates/layout.html", "templates/login.html", "templates/overview.html"}
+var p1Templates = []string{"templates/layout.html", "templates/login.html", "templates/overview.html", "templates/coord.html"}
 
 var (
 	scriptRE   = regexp.MustCompile(`(?s)<script>.*?</script>`)
@@ -43,7 +43,11 @@ func TestP1TemplatesCarryNoTextOutsideTheCatalog(t *testing.T) {
 
 // isTechnicalValue erlaubt Werte, die kein Text für Menschen sind.
 func isTechnicalValue(v string) bool {
-	return strings.HasPrefix(v, "/") || strings.HasPrefix(v, "1") || v == "on"
+	switch v {
+	case "message", "directive", "request", "question", "approval", "blocker", "handoff", "open", "resolved", "deferred", "withdraw":
+		return true
+	}
+	return strings.HasPrefix(v, "/") || strings.HasPrefix(v, "1") || strings.HasPrefix(v, "REQ-") || v == "on"
 }
 
 func TestCatalogKeysUsedByTemplatesExistAndEveryKeyIsUsed(t *testing.T) {
@@ -101,7 +105,7 @@ func TestMsgFormatsArgumentsAndNeverReturnsEmpty(t *testing.T) {
 	}
 }
 
-var goKeyRE = regexp.MustCompile(`"((?:shell|nav|role|login|auth|overview|ov|setup|age)\.[a-z0-9_.]+)"`)
+var goKeyRE = regexp.MustCompile(`"((?:shell|nav|role|login|auth|overview|ov|setup|age|coord)\.[a-z0-9_.]+)"`)
 
 // goMessageKeys sammelt die Schlüssel, die im Go-Code vorkommen (Navigation,
 // Rollen, Fehlertexte der Handler).

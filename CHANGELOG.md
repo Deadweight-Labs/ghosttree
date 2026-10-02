@@ -6,6 +6,20 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Changed: rooms are a real chat (REQ-435, fourth part). Rooms switch through a
+  dark tab pill with an unread dot, and a compact "+" starts a direct message or
+  a group. The flow groups consecutive messages of one sender, shows agents as
+  dark avatars with name and `@machine`, your own messages as blue bubbles on
+  the right, system lines small and centered, and the task thread under the
+  message. Directives are dark pinned plates with their scope and an End action;
+  requests and questions are white cards with the waiting time and their
+  answer actions. The composer has a Message / Directive / Request pill, a
+  sunken field and a round send button: Enter sends, Shift+Enter breaks the
+  line, and a directive is only set with its own button. The right column
+  lists participants with status, directives in force and threads; on narrow
+  screens it opens as a panel. Room texts are English and come from the message
+  catalog, the page works in light and dark, and live updates keep the scroll
+  position or stay at the end.
 - Changed: the web interface moves to the Clay material with a blue palette
   (REQ-435, third part). The sidebar is a raised card, the Overview greets the
   user and shows requests with progress bars, and every other page, the
