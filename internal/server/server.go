@@ -106,6 +106,7 @@ func (a *api) registerRoutes(mux *http.ServeMux) {
 	a.routeFunc(mux, "POST /api/auth/device/token", a.pollDeviceLogin)
 	a.routeFunc(mux, "POST /api/join/claim", a.claimJoin)
 	a.routeFunc(mux, "POST /api/join/token", a.exchangeJoin)
+	a.routeFunc(mux, "DELETE /api/tokens/self", a.revokeOwnToken)
 	a.routeFunc(mux, "GET /api/orgs", a.listOrgs)
 	a.routeFunc(mux, "POST /api/orgs", a.createOrg)
 	a.routeFunc(mux, "PATCH /api/orgs/{org}", a.renameOrg)

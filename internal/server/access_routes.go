@@ -42,6 +42,7 @@ var accessRoutes = map[string]routeClass{
 	"GET /api/health":                             classPublic,
 	"GET /metrics":                                classPublic,
 	"GET /api/whoami":                             classAccount,
+	"DELETE /api/tokens/self":                     classAccount,
 	"POST /api/auth/device":                       classPublic,
 	"POST /api/auth/device/token":                 classPublic,
 	"POST /api/join/claim":                        classPublic,
