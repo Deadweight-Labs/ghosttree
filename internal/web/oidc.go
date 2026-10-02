@@ -90,6 +90,7 @@ type oidcFlow struct {
 	Verifier string `json:"v"`
 	Nonce    string `json:"n"`
 	Code     string `json:"c,omitempty"`
+	Join     bool   `json:"j,omitempty"` // Anmeldung über die Join-Seite
 	Expires  int64  `json:"e"`
 }
 
@@ -342,7 +343,7 @@ func (a *app) oidcStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	verifier := oauth2.GenerateVerifier()
-	sealed, err := a.oidc.seal.seal(oidcFlow{State: state, Verifier: verifier, Nonce: nonce, Code: code,
+	sealed, err := a.oidc.seal.seal(oidcFlow{State: state, Verifier: verifier, Nonce: nonce, Code: code, Join: r.FormValue("join") == "1",
 		Expires: a.oidc.now().Add(flowTTL).Unix()})
 	if err != nil {
 		http.Error(w, "could not create secure flow", http.StatusInternalServerError)
@@ -456,6 +457,10 @@ func (a *app) oidcCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	if outcome == store.LoginBootstrapped {
 		a.dropBootstrapFile()
+	}
+	if flow.Join && (outcome == store.LoginInvited || outcome == store.LoginJoined) {
+		a.finishJoinLogin(w, r, account)
+		return
 	}
 	a.finishLogin(w, r, account)
 }

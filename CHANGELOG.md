@@ -34,6 +34,22 @@ Versioning, with pre-1.0 compatibility rules described in
   invitation list shows project and role. `/ui/orgs/accept` hands project codes
   over to the join page. At startup the server warns when
   `GHOSTTREE_PUBLIC_URL` is set but `GHOSTTREE_TRUSTED_PROXIES` is empty.
+- Added: join session and pairing code (REQ-434, second part). After an
+  invitation is accepted, or when a signed-in account chooses "Connect this
+  machine" at `/join/pair`, the server opens a short-lived join session (in
+  memory, 10 minutes) and shows a one-time pairing code `XXXX-XXXX` with the
+  install command; the invitation code never appears in the command. The
+  installer calls `POST /api/join/claim` with the pairing code and a machine
+  name (no token) and gets a `device_code` for the existing device flow; the
+  token exists only after the invited account approves "<machine> wants to
+  connect" in an interactive browser session (CSRF, same origin, account
+  confirmation) and is delivered once at `POST /api/auth/device/token`. Order
+  does not matter: the machine may report before or after the page is open.
+  Unknown, expired, used and malformed codes get the same answer; wrong codes
+  are limited per client address, open flows per address, and a code dies after
+  three attempts or when a second device tries it (the page warns). A server
+  restart drops sessions; the page then says "Setup was interrupted". Signing
+  in through the join page lands on the pairing page.
 - Fixed: signing in with a one-time code, login link, invitation or bootstrap
   code in a browser ended with 403. The code pages sent
   `Referrer-Policy: no-referrer`, so the browser posted the form with

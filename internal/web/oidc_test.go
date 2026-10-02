@@ -246,7 +246,12 @@ func newBrowser(t *testing.T) *http.Client {
 // startFlow macht Schritt 1 und 2 und liefert die Callback-URL des IdP.
 func (e *oidcEnv) startFlow(t *testing.T, b *http.Client, code string) *url.URL {
 	t.Helper()
-	resp := sameOriginPostForm(t, b, e.web.URL+"/ui/login/oidc", url.Values{"code": {code}})
+	return e.startFlowWith(t, b, url.Values{"code": {code}})
+}
+
+func (e *oidcEnv) startFlowWith(t *testing.T, b *http.Client, form url.Values) *url.URL {
+	t.Helper()
+	resp := sameOriginPostForm(t, b, e.web.URL+"/ui/login/oidc", form)
 	if resp.StatusCode != http.StatusSeeOther {
 		t.Fatalf("start status=%d body=%s", resp.StatusCode, body(t, resp))
 	}

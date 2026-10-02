@@ -27,9 +27,7 @@ import (
 // /ui/login/code (beide legen das Konto und die Rolle in einer Transaktion an),
 // und für ein angemeldetes Konto über POST /join/<code>/accept.
 //
-// Anschluss für die Join-Sitzung (P2): joinPreview liefert die geprüfte
-// Einladung, joinAccepted ist der eine Ort, an dem nach dem Beitritt weiter
-// geleitet wird.
+// Nach dem Beitritt geht es auf /join/pair (joinpair.go), die Paarung des Geräts.
 
 const (
 	joinLimit      = 30
@@ -274,10 +272,19 @@ func (a *app) joinSignOut(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, back, http.StatusSeeOther)
 }
 
-// joinAccepted ist der Ort, an dem der Beitritt endet. P2 setzt hier die
-// Join-Sitzung fort (Paarung des Geräts); bis dahin geht es in die Oberfläche.
+// joinAccepted ist der Ort, an dem der Beitritt endet: das Konto bekommt eine
+// Join-Sitzung mit Paarungscode (joinpair.go).
 func (a *app) joinAccepted(w http.ResponseWriter, r *http.Request, _ store.InvitePreview) {
-	http.Redirect(w, r, "/ui/requests", http.StatusSeeOther)
+	a.joinPairStart(w, r, browserPrincipal(r).ID)
+}
+
+// joinPairStart legt die Sitzung des Kontos an und leitet auf die Paarungsseite.
+func (a *app) joinPairStart(w http.ResponseWriter, r *http.Request, account string) {
+	if _, err := a.store.Join().Create(account); err != nil {
+		http.Redirect(w, r, "/ui/requests", http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, "/join/pair", http.StatusSeeOther)
 }
 
 func (a *app) joinMessage(w http.ResponseWriter, status int, title, message string) {

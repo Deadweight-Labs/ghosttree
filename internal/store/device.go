@@ -328,3 +328,53 @@ func (d *DeviceFlows) Open() int {
 	d.purge(d.now())
 	return len(d.byDevice)
 }
+
+// Busy sagt, ob ein Start von dieser Adresse an einer Grenze scheitern würde.
+// Die Join-Paarung fragt das vor der Prüfung des Paarungscodes, damit "zu viele
+// offene Abläufe" für gültige und ungültige Codes gleich ausfällt.
+func (d *DeviceFlows) Busy(client string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.purge(d.now())
+	return d.perClient[client] >= maxDevicePerClient || len(d.byDevice) >= maxDeviceFlows
+}
+
+// Drop verwirft den Ablauf zu einem User-Code, falls es ihn noch gibt.
+func (d *DeviceFlows) Drop(userCode string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if f := d.byUser[hashCode(NormalizeUserCode(userCode))]; f != nil {
+		d.remove(f)
+	}
+}
+
+// Status nennt den Zustand des Ablaufs (pending, approved, denied) oder "", wenn
+// er abgeholt wurde oder abgelaufen ist.
+func (d *DeviceFlows) Status(userCode string) string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.purge(d.now())
+	if f := d.byUser[hashCode(NormalizeUserCode(userCode))]; f != nil {
+		return f.state
+	}
+	return ""
+}
+
+// DecideFlow entscheidet den Ablauf zu einem User-Code im Namen des Kontos, ohne
+// dass dafür ein Fehlversuch gezählt wird: der Aufrufer (die Join-Sitzung) hat
+// den Code selbst erzeugt, er wurde nicht geraten.
+func (d *DeviceFlows) DecideFlow(userCode, account string, approve bool) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.purge(d.now())
+	f := d.byUser[hashCode(NormalizeUserCode(userCode))]
+	if f == nil || f.state != "pending" {
+		return ErrDeviceUnknown
+	}
+	if approve {
+		f.state, f.account = "approved", account
+	} else {
+		f.state = "denied"
+	}
+	return nil
+}
