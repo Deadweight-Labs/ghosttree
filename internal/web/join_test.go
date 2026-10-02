@@ -683,11 +683,11 @@ func TestLeadCanPromoteARolelessOrgMemberInBothModes(t *testing.T) {
 	for _, enforce := range []bool{false, true} {
 		t.Run(fmt.Sprint("enforce=", enforce), func(t *testing.T) {
 			srv, st, _, org, _ := joinWeb(t)
-			for _, n := range []string{"anna", "carl", "ben"} {
+			for _, n := range []string{"anna", "carl", "ben", "dora"} {
 				st.AddPerson(n)
 			}
 			// anna: Lead, carl: Member von A, ben: Org-Mitglied ohne Projektrolle.
-			for _, who := range []string{"person:2", "person:3", "person:4"} {
+			for _, who := range []string{"person:2", "person:3", "person:4", "person:5"} {
 				if _, err := st.AcceptInvitation(who, mustOrgInvite(t, st, org)); err != nil {
 					t.Fatal(err)
 				}
@@ -712,6 +712,15 @@ func TestLeadCanPromoteARolelessOrgMemberInBothModes(t *testing.T) {
 			// Ein Member bekommt keine Beförderungs-Formulare und mit Durchsetzung nur die Projektmitglieder.
 			if err := st.RemoveProjectRole("person:1", joinProject, "person:4", store.RoleViaCLI); err != nil {
 				t.Fatal(err)
+			}
+			// Ein expliziter Projekt-Owner (kein Org-Owner) sieht das Formular ebenso.
+			if err := st.SetProjectRole("person:1", joinProject, "person:5", store.RoleOwner, false, store.RoleViaCLI); err != nil {
+				t.Fatal(err)
+			}
+			dora := loginInteractive(t, srv, st, "dora")
+			resp, _ = dora.Get(srv.URL + "/ui/orgs?org=alpha")
+			if page := body(t, resp); !strings.Contains(page, `name="account" value="person:4"`) {
+				t.Fatalf("a project owner cannot see the role-less member: %s", page)
 			}
 			carl := loginInteractive(t, srv, st, "carl")
 			resp, _ = carl.Get(srv.URL + "/ui/orgs?org=alpha")

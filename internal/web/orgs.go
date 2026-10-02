@@ -102,9 +102,9 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 			rows := projectMembers
 			// Die ganze Org sehen, um auch Konten ohne Rolle eine zu geben: ein
 			// Owner, jeder ohne durchgesetzte Sichtbarkeit (dort sehen alle
-			// ohnehin alles) und ein Lead in seinem Projekt (vom Owner
+			// ohnehin alles) und ein Lead oder Projekt-Owner in seinem Projekt (vom Owner
 			// eingesetzt). Member und Gast sehen die Mitglieder des Projekts.
-			if v.Owner || !a.store.AccessEnforced() || rv.You == store.RoleLead {
+			if v.Owner || !a.store.AccessEnforced() || store.RoleRank(rv.You) >= store.RoleRank(store.RoleLead) {
 				if orgAll == nil {
 					orgAll, _ = a.store.ListOrgMembers(v.Selected.ID)
 				}
