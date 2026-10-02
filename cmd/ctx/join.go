@@ -39,10 +39,14 @@ var (
 	joinCanOpen     = canOpenBrowser
 	joinDetect      = detectHarnesses
 	joinInstall     = cmdInstall
-	joinTimeout     = 10 * time.Minute
+	joinTimeout     = joinDefaultTimeout
 
 	startCallbackFunc = startCallback
 )
+
+// joinDefaultTimeout deckt die Lebensdauer einer Join-Sitzung (30 Minuten, etwa
+// für eine lange Registrierung beim Identitätsanbieter).
+const joinDefaultTimeout = 30 * time.Minute
 
 const (
 	errInterrupted = "Setup was interrupted. Run the command again."

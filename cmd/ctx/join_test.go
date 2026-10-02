@@ -1217,3 +1217,9 @@ func TestJoinAsksAlsoWhenTheNewNameDiffersOnTheSameServer(t *testing.T) {
 		t.Fatalf("questions %v claims %v", q, srv.claims)
 	}
 }
+
+func TestJoinWaitsAsLongAsASessionLives(t *testing.T) {
+	if joinDefaultTimeout != 30*time.Minute || joinTimeout != joinDefaultTimeout {
+		t.Fatalf("default wait %v / %v", joinDefaultTimeout, joinTimeout)
+	}
+}
