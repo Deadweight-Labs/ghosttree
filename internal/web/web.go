@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
+	"github.com/Deadweight-Labs/ghosttree/internal/proxytrust"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/server"
@@ -31,6 +32,9 @@ type app struct {
 	registered    []string
 	cursorOnce    sync.Once
 	cursorSeal    *flowSealer
+	proxies       proxytrust.Set
+	publicOrigin  string // scheme://host of GHOSTTREE_PUBLIC_URL, or empty
+	publicHTTPS   bool
 }
 type pageData struct {
 	Title, NavSection, Person, CSRFToken, Error, Code string
@@ -76,11 +80,11 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	mux := http.NewServeMux()
 	a.handle(mux, "GET /static/", http.FileServerFS(files))
 	a.handle(mux, "GET /ui/login", a.loginPage)
-	a.handle(mux, "POST /ui/login", requireSameOrigin(http.HandlerFunc(a.loginSubmit)))
-	a.handle(mux, "POST /ui/login/oidc", requireSameOrigin(http.HandlerFunc(a.oidcStart)))
+	a.handle(mux, "POST /ui/login", a.requireSameOrigin(http.HandlerFunc(a.loginSubmit)))
+	a.handle(mux, "POST /ui/login/oidc", a.requireSameOrigin(http.HandlerFunc(a.oidcStart)))
 	a.handle(mux, "GET /ui/login/oidc/callback", a.oidcCallback)
 	a.handle(mux, "GET /ui/login/code", a.codePage)
-	a.handle(mux, "POST /ui/login/code", requireSameOrigin(http.HandlerFunc(a.codeSubmit)))
+	a.handle(mux, "POST /ui/login/code", a.requireSameOrigin(http.HandlerFunc(a.codeSubmit)))
 	a.handle(mux, "POST /ui/logout", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.logout))))
 	a.handle(mux, "GET /ui/requests", a.requirePerson(http.HandlerFunc(a.requestsPage)))
 	a.handle(mux, "GET /ui/requests/{id}", a.requirePerson(http.HandlerFunc(a.requestPage)))

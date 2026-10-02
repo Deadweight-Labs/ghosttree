@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/proxytrust"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/snapshot"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -47,6 +48,15 @@ func WithLogger(logger *slog.Logger) Option {
 	return func(a *api) { a.logger = logger }
 }
 
+// WithTrustedProxies names the networks whose forwarding headers are believed
+// (loopback is always included).
+func WithTrustedProxies(s proxytrust.Set) Option { return func(a *api) { a.proxies = s } }
+
+// WithPublicURL fixes the externally visible base URL (scheme://host, no path).
+func WithPublicURL(raw string) Option {
+	return func(a *api) { a.publicURL = strings.TrimRight(raw, "/") }
+}
+
 func WithBuildVersion(version string) Option {
 	return func(a *api) { a.buildVersion = version }
 }
@@ -60,6 +70,8 @@ func withSnapshotErrorLogger(logger snapshotErrorLogger) Option {
 }
 
 type api struct {
+	proxies              proxytrust.Set
+	publicURL            string
 	st                   *store.Store
 	snapshotLimits       snapshot.Limits
 	snapshotMirror       SnapshotMirror

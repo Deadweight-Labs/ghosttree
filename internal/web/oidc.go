@@ -21,6 +21,7 @@ import (
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/proxytrust"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
@@ -259,19 +260,48 @@ func WithOIDC(cfg OIDCConfig) Option {
 	}
 }
 
+// WithTrustedProxies names the proxy networks whose X-Forwarded-Proto and
+// X-Forwarded-Host headers are believed (loopback is always included).
+func WithTrustedProxies(s proxytrust.Set) Option { return func(a *app) { a.proxies = s } }
+
+// WithPublicURL declares the external address. With an https URL every cookie
+// is Secure regardless of headers, and that origin is accepted for
+// same-origin checks.
+func WithPublicURL(raw string) Option {
+	return func(a *app) {
+		u, err := url.Parse(raw)
+		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+			panic("web: invalid public URL")
+		}
+		a.publicOrigin = u.Scheme + "://" + u.Host
+		a.publicHTTPS = u.Scheme == "https"
+	}
+}
+
 // WithBootstrapFile nennt die Datei mit dem Klartext-Bootstrap-Code; sie wird
 // gelöscht, sobald das erste Konto angelegt ist.
 func WithBootstrapFile(path string) Option { return func(a *app) { a.bootstrapFile = path } }
 
+// secureCookies decides the Secure attribute for every cookie we set. It is
+// true for a direct TLS connection, for an https public URL or OIDC redirect
+// URL, and for X-Forwarded-Proto: https from a trusted proxy peer only.
 func (a *app) secureCookies(r *http.Request) bool {
-	if r.TLS != nil {
+	if r.TLS != nil || a.publicHTTPS {
 		return true
 	}
 	if a.oidc != nil && strings.HasPrefix(a.oidc.cfg.RedirectURL, "https://") {
 		return true
 	}
 	proto, set := singleForwardedValue(r.Header, "X-Forwarded-Proto")
-	return set && proto == "https" && remoteIsLoopback(r.RemoteAddr)
+	return set && proto == "https" && a.proxies.Trusts(r.RemoteAddr)
+}
+
+// sessionCookieFor builds the browser session cookie. Login and logout both go
+// through it so a clearing cookie always carries the attributes of the one it
+// replaces (browsers match on name, path and attributes).
+func (a *app) sessionCookieFor(r *http.Request, value string, maxAge int) *http.Cookie {
+	return &http.Cookie{Name: sessionCookie, Value: value, Path: "/", HttpOnly: true,
+		Secure: a.secureCookies(r), SameSite: http.SameSiteLaxMode, MaxAge: maxAge}
 }
 
 func (a *app) flowCookie(r *http.Request, value string, maxAge int) *http.Cookie {

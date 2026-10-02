@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -75,7 +74,7 @@ func (a *app) requirePerson(next http.Handler) http.Handler {
 				// Neustart.
 				if !a.store.PrincipalValid(session.principal) {
 					a.sessions.remove(cookie.Value)
-					http.SetCookie(w, &http.Cookie{Name: sessionCookie, Path: "/", MaxAge: -1, HttpOnly: true, Secure: a.secureCookies(r), SameSite: http.SameSiteLaxMode})
+					http.SetCookie(w, a.sessionCookieFor(r, "", -1))
 					http.Redirect(w, r, "/ui/login", http.StatusSeeOther)
 					return
 				}
@@ -121,7 +120,7 @@ func (a *app) requireCSRF(next http.Handler) http.Handler {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			if err := r.ParseForm(); err != nil ||
 				subtle.ConstantTimeCompare([]byte(r.FormValue("csrf_token")), []byte(csrfOf(r))) != 1 ||
-				!sameOrigin(r) {
+				!a.sameOrigin(r) {
 				http.Error(w, "forbidden", http.StatusForbidden)
 				return
 			}
@@ -129,20 +128,23 @@ func (a *app) requireCSRF(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
-func requireSameOrigin(next http.Handler) http.Handler {
+func (a *app) requireSameOrigin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !sameOrigin(r) {
+		if !a.sameOrigin(r) {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
 }
-func sameOrigin(r *http.Request) bool {
+func (a *app) sameOrigin(r *http.Request) bool {
 	origin, err := url.Parse(strings.TrimSpace(r.Header.Get("Origin")))
 	if err != nil || origin.Scheme == "" || origin.Host == "" || origin.User != nil ||
 		origin.Path != "" || origin.RawQuery != "" || origin.Fragment != "" {
 		return false
+	}
+	if a.publicOrigin != "" && strings.EqualFold(origin.Scheme+"://"+origin.Host, a.publicOrigin) {
+		return true
 	}
 	scheme := "http"
 	if r.TLS != nil {
@@ -152,7 +154,7 @@ func sameOrigin(r *http.Request) bool {
 	forwardedProto, protoSet := singleForwardedValue(r.Header, "X-Forwarded-Proto")
 	forwardedHost, hostSet := singleForwardedValue(r.Header, "X-Forwarded-Host")
 	if protoSet || hostSet {
-		if !remoteIsLoopback(r.RemoteAddr) || !protoSet || !hostSet ||
+		if !a.proxies.Trusts(r.RemoteAddr) || !protoSet || !hostSet ||
 			(forwardedProto != "http" && forwardedProto != "https") || !validForwardedHost(forwardedHost) {
 			return false
 		}
@@ -170,14 +172,6 @@ func singleForwardedValue(header http.Header, name string) (string, bool) {
 	}
 	value := strings.TrimSpace(values[0])
 	return value, true
-}
-func remoteIsLoopback(remoteAddr string) bool {
-	host, _, err := net.SplitHostPort(remoteAddr)
-	if err != nil {
-		return false
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
 }
 func validForwardedHost(host string) bool {
 	if host == "" || strings.ContainsAny(host, " /\\@\t\r\n") {
@@ -234,10 +228,7 @@ func (a *app) startSession(w http.ResponseWriter, r *http.Request, principal sto
 		http.Error(w, "could not create secure session", http.StatusInternalServerError)
 		return
 	}
-	// Secure folgt der Anfrage: die unterstützte private Netz-Bereitstellung
-	// spricht Klartext-HTTP, hinter TLS oder mit https-Redirect-URL ist es gesetzt.
-	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: id, Path: "/", HttpOnly: true,
-		Secure: a.secureCookies(r), SameSite: http.SameSiteLaxMode, MaxAge: 30 * 24 * 60 * 60})
+	http.SetCookie(w, a.sessionCookieFor(r, id, 30*24*60*60))
 	http.Redirect(w, r, "/ui/requests", http.StatusSeeOther)
 }
 
@@ -303,6 +294,6 @@ func (a *app) logout(w http.ResponseWriter, r *http.Request) {
 	if cookie, err := r.Cookie(sessionCookie); err == nil {
 		a.sessions.remove(cookie.Value)
 	}
-	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Path: "/", MaxAge: -1, HttpOnly: true, Secure: a.secureCookies(r), SameSite: http.SameSiteLaxMode})
+	http.SetCookie(w, a.sessionCookieFor(r, "", -1))
 	http.Redirect(w, r, "/ui/login", http.StatusSeeOther)
 }

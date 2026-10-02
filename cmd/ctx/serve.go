@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/privatefile"
+	"github.com/Deadweight-Labs/ghosttree/internal/proxytrust"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/server"
 	"github.com/Deadweight-Labs/ghosttree/internal/snapshot"
@@ -31,6 +33,8 @@ type serveConfig struct {
 	SnapshotRoots  map[string]string
 	Writer         store.WriterConfig
 	OIDC           web.OIDCConfig
+	PublicURL      string
+	TrustedProxies proxytrust.Set
 }
 
 const (
@@ -41,6 +45,10 @@ const (
 	// envEnforceAccess schaltet die Sichtbarkeit nach Rolle scharf. Ohne "1"
 	// wird nur protokolliert, was verweigert würde ("access: would deny").
 	envEnforceAccess = "GHOSTTREE_ENFORCE_ACCESS"
+	// envPublicURL and envTrustedProxies describe the TLS/proxy boundary; see
+	// the README section "Running behind TLS or a reverse proxy".
+	envPublicURL      = "GHOSTTREE_PUBLIC_URL"
+	envTrustedProxies = "GHOSTTREE_TRUSTED_PROXIES"
 )
 
 type snapshotRootValues []string
@@ -97,6 +105,8 @@ func parseServeConfig(args []string, output io.Writer) (serveConfig, error) {
 	fs.StringVar(&cfg.OIDC.Issuer, "oidc-issuer", os.Getenv(envOIDCIssuer), "OIDC issuer URL, e.g. https://id.example.com (env "+envOIDCIssuer+")")
 	fs.StringVar(&cfg.OIDC.ClientID, "oidc-client-id", os.Getenv(envOIDCClientID), "OIDC client id (env "+envOIDCClientID+")")
 	fs.StringVar(&cfg.OIDC.RedirectURL, "oidc-redirect-url", os.Getenv(envOIDCRedirectURL), "OIDC redirect URL, https://<public host>/ui/login/oidc/callback (env "+envOIDCRedirectURL+")")
+	fs.StringVar(&cfg.PublicURL, "public-url", os.Getenv(envPublicURL), "external base URL, e.g. https://ghosttree.example.com; an https URL makes every cookie Secure (env "+envPublicURL+")")
+	trusted := fs.String("trusted-proxies", os.Getenv(envTrustedProxies), "comma-separated CIDRs/IPs of reverse proxies whose X-Forwarded-Proto/Host are believed; loopback is always trusted, nothing else by default (env "+envTrustedProxies+")")
 	// Das Secret gibt es bewusst nur über die Umgebung: ein Flag stünde in der Prozessliste.
 	cfg.OIDC.ClientSecret = os.Getenv(envOIDCClientSecret)
 	fs.Var(&roots, "snapshot-root", "project mirror root as PROJECT=ABSOLUTE_PATH; repeatable")
@@ -109,6 +119,19 @@ func parseServeConfig(args []string, output io.Writer) (serveConfig, error) {
 	if err := cfg.OIDC.Validate(); err != nil {
 		return serveConfig{}, err
 	}
+	if cfg.PublicURL != "" {
+		u, err := url.Parse(cfg.PublicURL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil ||
+			(u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+			return serveConfig{}, fmt.Errorf("--public-url must be http(s)://host[:port] without path, got %q", cfg.PublicURL)
+		}
+		cfg.PublicURL = u.Scheme + "://" + u.Host
+	}
+	proxies, err := proxytrust.Parse(*trusted)
+	if err != nil {
+		return serveConfig{}, fmt.Errorf("--trusted-proxies: %w", err)
+	}
+	cfg.TrustedProxies = proxies
 	if err := validateSnapshotLimits(cfg.SnapshotLimits); err != nil {
 		return serveConfig{}, err
 	}
@@ -229,6 +252,10 @@ func buildServerHandler(st *store.Store, cfg serveConfig, stderr io.Writer) http
 		server.WithContextSnapshotLimits(cfg.SnapshotLimits),
 		server.WithLogger(logger),
 		server.WithBuildVersion(version),
+		server.WithTrustedProxies(cfg.TrustedProxies),
+	}
+	if cfg.PublicURL != "" {
+		options = append(options, server.WithPublicURL(cfg.PublicURL))
 	}
 	if len(cfg.SnapshotRoots) > 0 {
 		options = append(options, server.WithSnapshotMirror(&rootedSnapshotMirror{source: st, roots: cfg.SnapshotRoots}))
@@ -237,7 +264,10 @@ func buildServerHandler(st *store.Store, cfg serveConfig, stderr io.Writer) http
 	apiHandler := server.New(st, options...)
 	root.Handle("/api/", apiHandler)
 	root.Handle("/metrics", apiHandler)
-	webOptions := []web.Option{web.WithBootstrapFile(bootstrapCodePath(cfg.DB))}
+	webOptions := []web.Option{web.WithBootstrapFile(bootstrapCodePath(cfg.DB)), web.WithTrustedProxies(cfg.TrustedProxies)}
+	if cfg.PublicURL != "" {
+		webOptions = append(webOptions, web.WithPublicURL(cfg.PublicURL))
+	}
 	if cfg.OIDC.Enabled() {
 		webOptions = append(webOptions, web.WithOIDC(cfg.OIDC))
 	}

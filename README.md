@@ -309,9 +309,9 @@ history. Treat the server as private infrastructure:
 
 - bind it to loopback or a trusted private interface;
 - use TLS at a reverse proxy when traffic crosses an untrusted network;
-- keep that reverse proxy on the same host: browser origin validation trusts
-  `X-Forwarded-Proto` and `X-Forwarded-Host` only from a loopback peer and
-  requires both headers;
+- run the reverse proxy on the same host, or list its network in
+  `--trusted-proxies`: forwarding headers are believed only from loopback and
+  from those networks (see "Running behind TLS or a reverse proxy");
 - keep person tokens out of repositories and logs;
 - back up the SQLite database and test restores;
 - review retention and access rules for your team.
@@ -326,6 +326,57 @@ existing authorization model.
 Security reports belong at
 [security@deadweightlabs.com](mailto:security@deadweightlabs.com), not in a
 public issue. See [SECURITY.md](SECURITY.md).
+
+### Running behind TLS or a reverse proxy
+
+`ctx serve` speaks plain HTTP. The browser session cookie, and the OIDC flow
+cookie, are always `HttpOnly` and `SameSite=Lax`. They get `Secure` when any of
+these holds:
+
+1. the connection itself is TLS;
+2. `--public-url` (env `GHOSTTREE_PUBLIC_URL`) is an `https://` URL, or the
+   OIDC redirect URL is `https://`;
+3. the request carries exactly one `X-Forwarded-Proto: https` and its TCP peer
+   is a trusted proxy.
+
+The login and the logout cookie are built the same way and always carry the
+same attributes. Otherwise the cookie is not `Secure`, so a private HTTP
+deployment (loopback, VPN) keeps working with no extra setting. A browser never
+sends a `Secure` cookie over HTTP, so an https setup that gets this wrong shows
+up as a login loop rather than a silent downgrade.
+
+Trusted proxies are loopback (a proxy on the same host) plus whatever you list
+in `--trusted-proxies` / `GHOSTTREE_TRUSTED_PROXIES`, a comma-separated list of
+CIDRs or addresses. A client outside that list cannot switch `Secure` on with
+a header, and its forwarding headers also make the same-origin check on form
+posts fail. List only the proxy's own address, never a network that ordinary
+clients share.
+
+Recommended setup behind a TLS terminator on another host:
+
+```bash
+GHOSTTREE_PUBLIC_URL=https://ghosttree.example.com
+GHOSTTREE_TRUSTED_PROXIES=192.0.2.10        # the proxy's address as seen by ctx serve
+GHOSTTREE_LISTEN=192.0.2.20:8474            # private interface, not a public one
+```
+
+The proxy must forward `Host`, `X-Forwarded-Proto` and `X-Forwarded-Host`, and
+must overwrite those headers rather than append to client-supplied ones:
+
+```nginx
+location / {
+    proxy_pass http://192.0.2.20:8474;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Host $host;
+}
+```
+
+`--public-url` is the simplest switch: with it every cookie is `Secure` no
+matter what headers arrive, and requests whose `Origin` equals it are accepted
+even if the proxy forwards no headers. It also fixes the base URL printed by the
+device login. Use `--trusted-proxies` alone when one server answers under
+several host names. `ctx serve --help` lists both flags.
 
 ## Roadmap
 
