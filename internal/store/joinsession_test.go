@@ -663,23 +663,46 @@ func TestJoinLoopbackClaimsAreLimitedPerNetwork(t *testing.T) {
 	}
 }
 
-// N4: ein beanspruchtes Gerät verlängert die Sitzung nicht über das Login-Fenster.
-func TestJoinClaimDoesNotExtendBeyondTheLoginWindow(t *testing.T) {
+// N4/R1: Claim bei Minute 12, Anmeldung bei Minute 20: die Bindung hält, die
+// Sitzung ist dieselbe; das Login-Fenster endet bei 30 Minuten.
+func TestJoinClaimedSessionSurvivesALateLoginButNotTheLoginWindow(t *testing.T) {
 	st, clock := pairFixture(t)
 	j := st.Join()
 	o, _ := j.Open(testInvite, "")
-	clock.t = clock.t.Add(JoinSessionTTL - time.Minute)
+	start := clock.t
+	clock.t = start.Add(12 * time.Minute)
 	if _, err := j.Claim(loopReq(o.Pair, "m", "1.1.1.1")); err != nil {
 		t.Fatal(err)
 	}
-	j.Bind(testInvite, o.ID, "person:2")
-	clock.t = clock.t.Add(2 * time.Minute) // über TTL, Claim hält die Sitzung noch
-	if v := j.View("person:2"); v.State != JoinClaimed {
-		t.Fatalf("claimed session should survive its TTL: %q", v.State)
+	clock.t = start.Add(20 * time.Minute)
+	if err := j.Bind(testInvite, o.ID, "person:2"); err != nil {
+		t.Fatal(err)
 	}
-	clock.t = clock.t.Add(JoinMaxLifetime) // weit über das Fenster
+	if v := j.View("person:2"); v.State != JoinClaimed || v.Machine != "m" || j.Sessions() != 1 {
+		t.Fatalf("late login lost the claimed session: %+v sessions=%d", v, j.Sessions())
+	}
+	clock.t = start.Add(JoinMaxLifetime + time.Second)
 	if v := j.View("person:2"); v.State != JoinNone {
 		t.Fatalf("session outlived the window: %q", v.State)
+	}
+}
+
+// R2: Endzustände ohne Konto weichen beim Überlauf; ein Link-Inhaber füllt die Plätze nicht damit.
+func TestJoinOpenEvictsUnboundCompromisedAndDeniedSessions(t *testing.T) {
+	st, _ := pairFixture(t)
+	j := st.Join()
+	for i := 0; i < maxJoinPerInvite; i++ {
+		o, _ := j.Open(testInvite, "")
+		if _, err := j.Claim(codeReq(o.Pair, "m", fmt.Sprintf("10.1.%d.1", i))); err != nil {
+			t.Fatal(err)
+		}
+		j.Claim(codeReq(o.Pair, "thief", fmt.Sprintf("10.2.%d.1", i))) // zweiter Claim: kompromittiert
+	}
+	if o, err := j.Open(testInvite, ""); err != nil || o.Pair == "" {
+		t.Fatalf("compromised sessions blocked the slots: %+v %v", o, err)
+	}
+	if n := j.Sessions(); n != maxJoinPerInvite {
+		t.Fatalf("%d sessions", n)
 	}
 }
 

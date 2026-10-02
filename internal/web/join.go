@@ -178,6 +178,7 @@ func (a *app) joinPreview(code string) (store.InvitePreview, bool) {
 
 type joinView struct {
 	Command                                 string
+	NoSlot                                  bool
 	Org, Project, Role, RoleText, ExpiresAt string
 	Code, CSRFToken, Person                 string
 	SignedIn, OIDC, NeedsName               bool
@@ -226,9 +227,10 @@ func (a *app) joinPage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if open, err := a.store.Join().Open(code, a.joinCookieValue(r)); err == nil {
+		view.NoSlot = open.Pair == ""
 		view.Command = a.joinCommand(r, open.Pair)
 		if open.ID != "" {
-			http.SetCookie(w, a.joinCookieFor(r, open.ID, int(store.JoinSessionTTL.Seconds())))
+			http.SetCookie(w, a.joinCookieFor(r, open.ID, int(store.JoinMaxLifetime.Seconds())))
 		}
 	}
 	a.joinHeaders(w)

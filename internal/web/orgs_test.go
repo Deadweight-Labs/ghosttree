@@ -234,8 +234,9 @@ func TestOIDCInvitationLandingPointsToTheIdentityProvider(t *testing.T) {
 	}
 	b := newBrowser(t)
 	resp = sameOriginPostForm(t, b, env.web.URL+"/ui/login/code", url.Values{"code": {code}, "name": {"x"}})
-	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("local redemption on an OIDC instance: %d", resp.StatusCode)
+	// Der Code wird nicht lokal eingelöst, sondern startet den Anbieter-Ablauf.
+	if loc := resp.Header.Get("Location"); resp.StatusCode != http.StatusSeeOther || !strings.HasPrefix(loc, env.idp.srv.URL+"/authorize?") || env.signedIn(t, b) {
+		t.Fatalf("local redemption on an OIDC instance: %d %q", resp.StatusCode, resp.Header.Get("Location"))
 	}
 }
 

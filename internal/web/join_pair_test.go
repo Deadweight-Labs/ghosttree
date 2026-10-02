@@ -592,7 +592,7 @@ func TestJoinOIDCSignInBindsTheSessionAndLandsOnThePairingPage(t *testing.T) {
 	b := newBrowser(t)
 	page, _ := b.Get(env.web.URL + "/join/" + code)
 	pair := pairRE.FindString(body(t, page))
-	if pair == "" || !strings.Contains(body2(t, b, env.web.URL+"/join/"+code), `name="join" value="1"`) {
+	if pair == "" || !strings.Contains(joinPageText(t, b, env.web.URL+"/join/"+code), `name="join" value="1"`) {
 		t.Fatalf("join page lacks pair or marker (%q)", pair)
 	}
 	// Der Installer ist schon da.
@@ -614,7 +614,7 @@ func TestJoinOIDCSignInBindsTheSessionAndLandsOnThePairingPage(t *testing.T) {
 	}
 }
 
-func body2(t *testing.T, c *http.Client, u string) string {
+func joinPageText(t *testing.T, c *http.Client, u string) string {
 	t.Helper()
 	resp, err := c.Get(u)
 	if err != nil {
@@ -755,6 +755,52 @@ func TestJoinCompromisedLoopbackPageOffersToStopTheInstaller(t *testing.T) {
 	e.st.Join().Claim(loopClaim(pair, "thief", "198.51.100.7"))
 	text := e.pairPage(t, b)
 	if !strings.Contains(text, `href="http://127.0.0.1:40123/callback?error=access_denied`) || strings.Contains(text, "thief") {
+		t.Fatalf("page: %s", text)
+	}
+}
+
+// R1: Der Cookie lebt so lange wie das Login-Fenster; Claim bei Minute 12 und
+// Anmeldung bei Minute 20 behalten dieselbe Sitzung.
+func TestJoinCookieOutlivesALateLoginAfterTheClaim(t *testing.T) {
+	e := newPairEnv(t)
+	b := browser(t)
+	resp, _ := e.get(t, b, "/join/"+e.code)
+	var maxAge int
+	for _, c := range resp.Cookies() {
+		if c.Name == "gt_join" {
+			maxAge = c.MaxAge
+		}
+	}
+	if maxAge != int(store.JoinMaxLifetime.Seconds()) {
+		t.Fatalf("cookie max-age %d", maxAge)
+	}
+	pair := pairRE.FindString(joinPageText(t, b, e.srv+"/join/"+e.code))
+	start := e.clock.t
+	e.clock.t = start.Add(12 * time.Minute)
+	e.claimLoop(t, pair, "late-box")
+	e.clock.t = start.Add(20 * time.Minute)
+	r := sameOriginPostForm(t, b, e.srv+"/ui/login/code", url.Values{"code": {e.code}, "name": {"lena"}, "join": {"1"}})
+	r.Body.Close()
+	if r.StatusCode != http.StatusSeeOther || r.Header.Get("Location") != "/join/pair" {
+		t.Fatalf("sign-in: %d %s", r.StatusCode, r.Header.Get("Location"))
+	}
+	if text := e.pairPage(t, b); !strings.Contains(text, "late-box") || !strings.Contains(text, "wants to connect") || e.st.Join().Sessions() != 1 {
+		t.Fatalf("binding lost: sessions=%d %s", e.st.Join().Sessions(), text)
+	}
+}
+
+// R3: Sind alle Plätze belegt, steht statt des Befehls eine Zeile.
+func TestJoinPageSaysSignInFirstWhenNoSlotIsFree(t *testing.T) {
+	e := newPairEnv(t)
+	for i := 0; i < 10; i++ {
+		b := browser(t)
+		pair := e.pairOf(t, b, e.code)
+		if _, err := e.st.Join().Claim(loopClaim(pair, "m", "10."+string(rune('0'+i))+".0.1")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, text := e.get(t, browser(t), "/join/"+e.code)
+	if strings.Contains(text, "| sh -s -- --pair") || !strings.Contains(text, "Sign in first, then connect this machine.") {
 		t.Fatalf("page: %s", text)
 	}
 }

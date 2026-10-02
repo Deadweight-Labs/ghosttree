@@ -357,10 +357,13 @@ func (j *JoinSessions) Open(inviteCode, id string) (JoinOpen, error) {
 		}
 	}
 	if count >= maxJoinPerInvite {
-		// Nur Sitzungen ohne Gerät und ohne Konto weichen; sonst gibt es für
-		// diese Anfrage keine Sitzung und keinen Befehl.
+		// Nur Sitzungen ohne Gerät und ohne Konto weichen (wartende und solche
+		// in Endzuständen); sonst gibt es für diese Anfrage keine Sitzung.
 		before := len(j.all)
-		j.evictOldest(func(s *joinSession) bool { return s.invite == invite && s.state == JoinWaiting && s.account == "" })
+		j.evictOldest(func(s *joinSession) bool {
+			return s.invite == invite && s.account == "" &&
+				(s.state == JoinWaiting || s.state == JoinCompromised || s.state == JoinDenied)
+		})
 		if len(j.all) == before {
 			return JoinOpen{}, nil
 		}
