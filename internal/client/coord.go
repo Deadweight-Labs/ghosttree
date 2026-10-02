@@ -182,6 +182,12 @@ func (c *Client) MarkCoordDelivery(messageID int64, recipient, state string) err
 	}, nil)
 }
 
+// CoordHeartbeat meldet, dass der Channel dieses Agenten gerade abruft. Der
+// Server drosselt selbst auf einen Schreibvorgang je HeartbeatInterval.
+func (c *Client) CoordHeartbeat(agent string) error {
+	return c.do("POST", "/api/coord/heartbeat", nil, map[string]any{"agent_external_id": agent}, nil)
+}
+
 // ClaimCoordDelivery fragt, ob dieser Aufrufer die Nachricht einbringen darf.
 // Genau ein Aufrufer je Nachricht und Empfänger bekommt true.
 func (c *Client) ClaimCoordDelivery(messageID int64, recipient string) (bool, error) {
@@ -229,6 +235,20 @@ func (c *Client) AgentControl(agent string) (*store.AgentControl, error) {
 	q.Set("agent", agent)
 	err := c.do("GET", "/api/agent-control", q, nil, &out)
 	return out.Control, err
+}
+
+// AgentControlState liefert den aktiven Vorgang und, wenn es keinen gibt, den
+// jüngsten aufgehobenen (resumed). Ein älterer Server kennt das zweite Feld
+// nicht; dann bleibt resumed nil.
+func (c *Client) AgentControlState(agent string) (active, resumed *store.AgentControl, err error) {
+	var out struct {
+		Control *store.AgentControl `json:"control"`
+		Resumed *store.AgentControl `json:"resumed"`
+	}
+	q := url.Values{}
+	q.Set("agent", agent)
+	err = c.do("GET", "/api/agent-control", q, nil, &out)
+	return out.Control, out.Resumed, err
 }
 
 // RecordControlEvent meldet einen Hook-Ack oder einen Transkript-Beleg zu einem

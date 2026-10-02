@@ -72,6 +72,11 @@ type CoordMessage struct {
 	SenderRole    string `json:"sender_role,omitempty"`
 	RecipientRole string `json:"recipient_role,omitempty"`
 	Authority     string `json:"authority,omitempty"`
+	// SenderDisplayName ist der Kontoname des menschlichen Absenders, live
+	// aus persons gelesen und nie gespeichert. Er fehlt für Agenten und für
+	// Leser, die die Mitglieder des Projektraums nicht sehen (Gast). Der Wert
+	// ist Nutzereingabe: Anzeigende Clients müssen ihn entschärfen.
+	SenderDisplayName string `json:"sender_display_name,omitempty"`
 }
 
 // CoordRef verbindet eine Nachricht mit einem bestehenden Ghosttree-Objekt.
@@ -126,10 +131,15 @@ func appendCoordMessageTx(tx *sql.Tx, m CoordMessage) (int64, error) {
 			return 0, ErrCoordInvalidExpiry
 		}
 	}
-	if id, found, err := existingCoordMessage(tx, m); err != nil {
-		return 0, err
-	} else if found {
-		return id, nil
+	// Systemmeldungen gehen nie durch die Wiederholungserkennung: sie kommen nur
+	// aus dem Store, und eine vorab gesendete ClientID darf sie nicht
+	// unterdrücken.
+	if m.AuthorKind != AuthorSystem {
+		if id, found, err := existingCoordMessage(tx, m); err != nil {
+			return 0, err
+		} else if found {
+			return id, nil
+		}
 	}
 
 	// The high-water row survives retention, so an emptied destination never
@@ -185,8 +195,9 @@ func appendCoordMessageTx(tx *sql.Tx, m CoordMessage) (int64, error) {
 		if expiredAt(m.ExpiresAt, now()) {
 			state = AttentionExpired
 		}
+		roomKey := attentionRoomKeyTx(tx, m.DestinationKind, m.DestinationID)
 		for _, recipient := range normalizeMembers(m.Mentions) {
-			if err := insertAttentionTx(tx, recipient, id, reason, state, m.CreatedAt); err != nil {
+			if err := insertAttentionTx(tx, recipient, id, reason, state, m.CreatedAt, roomKey); err != nil {
 				return 0, err
 			}
 		}
@@ -396,7 +407,7 @@ func randomAttentionID() int64 {
 // insertAttentionTx legt einen Eintrag mit zufälliger Id an. Ein Duplikat
 // (derselbe Empfänger, dieselbe Nachricht und Art) ist wie bisher ein No-op;
 // eine Kollision der Id wird mit einer neuen Zufallszahl wiederholt.
-func insertAttentionTx(tx *sql.Tx, recipient string, messageID int64, reason, state, createdAt string) error {
+func insertAttentionTx(tx *sql.Tx, recipient string, messageID int64, reason, state, createdAt, roomKey string) error {
 	for attempt := 0; attempt < 16; attempt++ {
 		id := attentionIDSource()
 		var taken int
@@ -406,9 +417,9 @@ func insertAttentionTx(tx *sql.Tx, recipient string, messageID int64, reason, st
 		if taken > 0 {
 			continue
 		}
-		_, err := tx.Exec(`INSERT INTO coord_attention(id,recipient_principal_id,message_id,reason,state,created_at)
-			VALUES(?,?,?,?,?,?) ON CONFLICT(recipient_principal_id,message_id,reason) DO NOTHING`,
-			id, recipient, messageID, reason, state, createdAt)
+		_, err := tx.Exec(`INSERT INTO coord_attention(id,recipient_principal_id,message_id,reason,state,created_at,room_key)
+			VALUES(?,?,?,?,?,?,?) ON CONFLICT(recipient_principal_id,message_id,reason) DO NOTHING`,
+			id, recipient, messageID, reason, state, createdAt, roomKey)
 		if err == nil {
 			return nil
 		}

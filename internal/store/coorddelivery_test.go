@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 )
 
 // Der Zustand darf nur vorwärts laufen. Ein spät eintreffendes "abgeholt"
@@ -267,4 +268,109 @@ func TestClaimCoordDeliveryRaceHasExactlyOneWinnerThroughRuntimeWriter(t *testin
 	}
 	t.Cleanup(func() { _ = s.Close() })
 	raceClaim(t, s)
+}
+
+// AC 1221 (REQ-360): eine Empfangsbestätigung erzeugt keinen Chatbeitrag und
+// keinen Modellturn. Beleg über den Zustellweg: kein coord_messages-Eintrag,
+// kein Attention-Eintrag, kein Weckkandidat, kein Claim für andere.
+func TestAckedDeliveryCreatesNoPostNoAttentionNoWakeAndNoClaim(t *testing.T) {
+	s := newCoordAccessStore(t)
+	room := RoomKeyForProject("github.com/x/ack")
+	registerAccessAgent(t, s, "person:1", "sess-a", room)
+	registerAccessAgent(t, s, "person:2", "sess-b", room)
+	registerAccessAgent(t, s, "person:3", "sess-c", room)
+	sender := s.CoordinationFor(Principal{ID: "person:1"}, "sess-a")
+	recipient := s.CoordinationFor(Principal{ID: "person:2"}, "sess-b")
+	other := s.CoordinationFor(Principal{ID: "person:3"}, "sess-c")
+
+	id, err := sender.Send(CoordMessage{
+		DestinationKind: DestinationRoom, DestinationID: room, ClientID: "ack-src",
+		Body: "Can you review?", Intent: IntentQuestion, Mentions: []string{"person:2"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := func(query string, args ...any) (n int) {
+		t.Helper()
+		if err := s.db.QueryRow(query, args...).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	messagesBefore := count(`SELECT COUNT(*) FROM coord_messages`)
+	maxBefore := count(`SELECT COALESCE(MAX(id),0) FROM coord_messages`)
+	attentionBefore, err := recipient.Attention()
+	if err != nil {
+		t.Fatal(err)
+	}
+	senderAttentionBefore, err := sender.Attention()
+	if err != nil {
+		t.Fatal(err)
+	}
+	attentionRowsBefore := count(`SELECT COUNT(*) FROM coord_attention`)
+	messageEventsBefore := count(`SELECT COUNT(*) FROM coord_events WHERE kind=?`, CoordEventMessage)
+	deliveryEventsBefore := count(`SELECT COUNT(*) FROM coord_events WHERE kind=?`, CoordEventDelivery)
+
+	if err := recipient.MarkDelivery(id, DeliveryAcked); err != nil {
+		t.Fatal(err)
+	}
+
+	// a) kein Chatbeitrag
+	if got := count(`SELECT COUNT(*) FROM coord_messages`); got != messagesBefore {
+		t.Fatalf("ack created a coord_messages row: %d -> %d", messagesBefore, got)
+	}
+	if got := count(`SELECT COALESCE(MAX(id),0) FROM coord_messages`); got != maxBefore {
+		t.Fatalf("ack moved the highest message id: %d -> %d", maxBefore, got)
+	}
+	if got := count(`SELECT COUNT(*) FROM coord_events WHERE kind=?`, CoordEventMessage); got != messageEventsBefore {
+		t.Fatalf("ack produced a message event")
+	}
+	if got := count(`SELECT COUNT(*) FROM coord_events WHERE kind=?`, CoordEventDelivery); got != deliveryEventsBefore+1 {
+		t.Fatalf("ack must produce exactly one delivery event: %d -> %d", deliveryEventsBefore, got)
+	}
+	msgs, err := s.CoordMessagesSince(DestinationRoom, room, 0, 100)
+	if err != nil || len(msgs) != messagesBefore {
+		t.Fatalf("room traffic changed by ack: %d msgs err=%v", len(msgs), err)
+	}
+	// b) kein Attention-Eintrag
+	if got := count(`SELECT COUNT(*) FROM coord_attention`); got != attentionRowsBefore {
+		t.Fatalf("ack changed attention rows: %d -> %d", attentionRowsBefore, got)
+	}
+	after, err := recipient.Attention()
+	if err != nil || len(after) != len(attentionBefore) {
+		t.Fatalf("recipient attention changed by ack: %+v err=%v", after, err)
+	}
+	senderAfter, err := sender.Attention()
+	if err != nil || len(senderAfter) != len(senderAttentionBefore) {
+		t.Fatalf("sender attention changed by ack: %+v err=%v", senderAfter, err)
+	}
+	// c) kein Weckkandidat: es gibt keine neue Nachricht, die geweckt werden könnte
+	later, err := sender.Messages(DestinationRoom, room, int64(maxBefore), 100)
+	if err != nil || len(later) != 0 {
+		t.Fatalf("something new for the sender to wake on after an ack: %+v err=%v", later, err)
+	}
+	// Und eine einfache Ack-Nachricht eines Agenten ist in Direkt- und Gruppenräumen kein Weckkandidat (Gegenprobe der Regel).
+	now := time.Now()
+	for _, m := range []CoordMessage{{ID: 9, SenderExternalID: "sess-b", Intent: IntentAck}, {ID: 9, SenderExternalID: "sess-b", Kind: "ack"}} {
+		if ShouldWake("sess-a", RoomDirect, m, nil, WakeParentNotOwn, now) || ShouldWake("sess-a", RoomGroup, m, nil, WakeParentNotOwn, now) {
+			t.Fatalf("an ack message is a wake candidate: %+v", m)
+		}
+	}
+	// d) kein Claim für andere: der Ack eines Empfängers verbraucht nichts
+	// für einen anderen, dessen Claim gewinnt noch genau einmal.
+	if injected, err := other.InjectedMessages([]int64{id}); err != nil || len(injected) != 0 {
+		t.Fatalf("another recipient already counts as injected: %v err=%v", injected, err)
+	}
+	if won, err := other.ClaimDelivery(id); err != nil || !won {
+		t.Fatalf("another recipient's claim was lost after someone else's ack: won=%v err=%v", won, err)
+	}
+	if won, err := other.ClaimDelivery(id); err != nil || won {
+		t.Fatalf("second claim of the same recipient must lose: won=%v err=%v", won, err)
+	}
+	if st, _ := s.CoordDeliveryState(id, "sess-c"); st != DeliveryInjected {
+		t.Fatalf("other recipient state = %q", st)
+	}
+	if st, _ := s.CoordDeliveryState(id, "sess-b"); st != DeliveryAcked {
+		t.Fatalf("recipient state = %q", st)
+	}
 }

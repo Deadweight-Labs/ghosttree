@@ -178,3 +178,50 @@ func TestUnknownPrincipalLabelsAreNotRenderedAsIdentifiers(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildCoordParticipantsShowsOriginAndAgeAndNeverInventsIdle(t *testing.T) {
+	current := store.Principal{ID: "person:1", Label: "Robin"}
+	room := store.CoordRoom{Key: "project:x", Kind: store.RoomProject, Members: []string{"person:1"}}
+	peers := []store.CoordAgent{
+		{ExternalID: "a", DisplayName: "Polling", Provider: "claude", Presence: &store.Presence{
+			Reachability: store.PresenceField{Value: store.ReachConnected, Origin: store.OriginObserved, At: "2026-10-02T10:00:00Z", AgeSeconds: 12},
+			WorkState:    store.PresenceField{Value: store.WorkWaitingPeer, Origin: store.OriginDerived, At: "2026-10-02T09:58:00Z", AgeSeconds: 130},
+		}},
+		{ExternalID: "b", DisplayName: "Silent", Provider: "claude"},
+	}
+	byLabel := map[string]coordParticipantView{}
+	for _, p := range buildCoordParticipants(room, peers, nil, current, nil) {
+		byLabel[p.Label] = p
+	}
+	if got := byLabel["Polling"]; got.ReachabilityText != "verbunden (beobachtet, vor 12 s)" || got.WorkStateText != "wartet auf Peer (abgeleitet, vor 2 min)" {
+		t.Fatalf("polling agent = %+v", got)
+	}
+	got := byLabel["Silent"]
+	if got.Reachability != "unbekannt" || got.WorkState != "unbekannt" ||
+		got.ReachabilityText != "unbekannt (keine Beobachtung)" || got.WorkStateText != "unbekannt (keine Beobachtung)" {
+		t.Fatalf("silent agent = %+v", got)
+	}
+	// People have no presence and show none.
+	if p := byLabel["Robin"]; p.ReachabilityText != "" || p.WorkStateText != "" {
+		t.Fatalf("a person must not carry agent presence: %+v", p)
+	}
+}
+
+func TestBuildCoordWaitCyclesNamesTheCycleOnceAndHidesNothingElse(t *testing.T) {
+	cycle := &store.WaitCycle{Members: []string{"a", "b"}, Since: "2026-10-02T10:00:00Z", ReviewAt: "2026-10-02T10:30:00Z"}
+	peers := []store.CoordAgent{
+		{ExternalID: "a", DisplayName: "Anna-Agent", Presence: &store.Presence{Cycle: cycle}},
+		{ExternalID: "b", DisplayName: "Bert-Agent", Presence: &store.Presence{Cycle: cycle}},
+		{ExternalID: "c", DisplayName: "Cleo-Agent", Presence: &store.Presence{}},
+	}
+	got := buildCoordWaitCycles(peers, map[string]string{"a": "Anna"})
+	if len(got) != 1 || !strings.Contains(got[0], "gegenseitiges Warten: Anna ↔ Bert-Agent (seit ") {
+		t.Fatalf("lines = %q", got)
+	}
+	if lines := buildCoordWaitCycles(peers[2:], nil); len(lines) != 0 {
+		t.Fatalf("no cycle, no line: %q", lines)
+	}
+	if lines := buildCoordWaitCycles(nil, nil); len(lines) != 0 {
+		t.Fatalf("a viewer without a peer list sees nothing: %q", lines)
+	}
+}

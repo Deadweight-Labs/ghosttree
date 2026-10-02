@@ -117,3 +117,47 @@ func TestUnknownRoomIsRejected(t *testing.T) {
 		t.Fatal("an unknown room name must be rejected rather than silently defaulted")
 	}
 }
+
+// Das Schema, das ein Client über die Leitung sieht, muss intent als
+// optionales Feld mit allen erlaubten Werten in der Beschreibung tragen. Ein
+// Enum steht bewusst nicht im Schema: der SDK-Validator würde "Question" oder
+// "" vor dem Handler abweisen, der beides normalisiert (siehe
+// TestCoordSendIntentThroughTheRealSchema).
+func TestCoordSendSchemaCarriesIntent(t *testing.T) {
+	c, _ := newTestClient(t)
+	session := connect(t, &Server{client: c, ctxAxes: scope.Axes{
+		Project: "github.com/x/y", Machine: "testbox"}})
+	tools, err := session.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range tools.Tools {
+		if tool.Name != "coord_send" {
+			continue
+		}
+		raw, _ := json.Marshal(tool.InputSchema)
+		var schema struct {
+			Properties map[string]struct {
+				Description string   `json:"description"`
+				Enum        []string `json:"enum"`
+			} `json:"properties"`
+		}
+		if err := json.Unmarshal(raw, &schema); err != nil {
+			t.Fatal(err)
+		}
+		prop, ok := schema.Properties["intent"]
+		if !ok {
+			t.Fatalf("coord_send has no lowercase intent property: %s", raw)
+		}
+		if len(prop.Enum) != 0 {
+			t.Errorf("intent must not carry an enum: %s", raw)
+		}
+		for _, want := range []string{"question", "approval", "blocker", "handoff", "ack"} {
+			if !strings.Contains(prop.Description, want) {
+				t.Errorf("intent description lacks %q: %s", want, prop.Description)
+			}
+		}
+		return
+	}
+	t.Fatal("coord_send is not registered")
+}

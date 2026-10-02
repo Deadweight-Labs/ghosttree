@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 var (
@@ -40,10 +41,23 @@ type CoordAgent struct {
 	RequestedRole string `json:"requested_role,omitempty"`
 	// CanReview ist in Peer-Antworten das Prüfer-Flag des Kontos.
 	CanReview bool `json:"can_review,omitempty"`
+	// SessionID ist die Transkript-Session des Harness, die der Agent bei der
+	// Anmeldung meldet. Nur Eingabe: Peer-Antworten tragen sie nie.
+	SessionID string `json:"session_id,omitempty"`
+	// Presence ist nur in Peer-Antworten gesetzt, beim Lesen abgeleitet.
+	Presence *Presence `json:"presence,omitempty"`
 }
 
 // maxExternalIDLen begrenzt Agenten-IDs.
 const maxExternalIDLen = 160
+
+// ReservedExternalID: der Präfix "system:" gehört dem Store (Systemmeldungen,
+// etwa über Wartekreise). Kein Client darf sich so anmelden oder so senden;
+// sonst könnte er sich als System ausgeben. Alt-Bestand, der so heißt, wird
+// nicht gelöscht, kann aber nicht mehr senden.
+func ReservedExternalID(id string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(id)), "system:")
+}
 
 // ValidExternalID sagt, ob eine Agenten-ID zulässig ist: Buchstaben, Ziffern und
 // : . _ - und /, höchstens 160 Zeichen. Das deckt claude:<host>:<uuid>,
@@ -51,7 +65,7 @@ const maxExternalIDLen = 160
 // Agenten lesen, und darf deshalb keine Zeilenumbrüche, Klammern oder Leerraum
 // tragen.
 func ValidExternalID(id string) bool {
-	if id == "" || len(id) > maxExternalIDLen {
+	if id == "" || len(id) > maxExternalIDLen || ReservedExternalID(id) {
 		return false
 	}
 	for _, r := range id {
@@ -93,6 +107,12 @@ func (s *Store) RegisterCoordAgent(a CoordAgent) (int64, error) {
 	if !ValidAgentRole(a.Role) {
 		return 0, fmt.Errorf("%w: agent role must be lead, member or guest", ErrInvalidInput)
 	}
+	if ReservedExternalID(a.ExternalID) {
+		return 0, fmt.Errorf("%w: the system: prefix is reserved", ErrInvalidInput)
+	}
+	if a.SessionID != "" && !ValidExternalID(a.SessionID) {
+		return 0, fmt.Errorf("%w: session id has invalid characters", ErrInvalidInput)
+	}
 	at := a.RegisteredAt
 	if at == "" {
 		at = now()
@@ -130,19 +150,20 @@ func (s *Store) RegisterCoordAgent(a CoordAgent) (int64, error) {
 	}
 	result, err := tx.Exec(`INSERT INTO coord_agents(
 			external_id,provider,room_key,display_name,person,principal_id,cwd,branch,worktree,
-			parent_external_id,capabilities,registered_at,last_seen_at,role)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,COALESCE(NULLIF(?,''),'member'))
+			parent_external_id,capabilities,registered_at,last_seen_at,role,session_id)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,COALESCE(NULLIF(?,''),'member'),?)
 		ON CONFLICT(external_id) DO UPDATE SET
 			display_name=excluded.display_name, person=excluded.person,
 			principal_id=CASE WHEN coord_agents.principal_id='' THEN excluded.principal_id ELSE coord_agents.principal_id END,
 			cwd=excluded.cwd, branch=excluded.branch, worktree=excluded.worktree,
 			capabilities=excluded.capabilities, last_seen_at=excluded.last_seen_at,
-			role=COALESCE(NULLIF(?,''),coord_agents.role)
+			role=COALESCE(NULLIF(?,''),coord_agents.role),
+			session_id=COALESCE(NULLIF(excluded.session_id,''),coord_agents.session_id)
 		WHERE (coord_agents.principal_id<>'' AND coord_agents.principal_id=excluded.principal_id)
 		   OR (coord_agents.principal_id='' AND coord_agents.person<>'' AND coord_agents.person=excluded.person AND excluded.principal_id<>'')
 		   OR (coord_agents.principal_id='' AND coord_agents.person='' AND excluded.principal_id='' AND excluded.person='')`,
 		a.ExternalID, a.Provider, a.RoomKey, a.DisplayName, a.Person, a.PrincipalID, a.Cwd,
-		a.Branch, a.Worktree, a.ParentExternalID, a.Capabilities, at, at, a.Role, a.Role)
+		a.Branch, a.Worktree, a.ParentExternalID, a.Capabilities, at, at, a.Role, a.SessionID, a.Role)
 	if err != nil {
 		return 0, err
 	}
@@ -193,11 +214,9 @@ func ensureCoordAgentPrincipalID(db *sql.DB) error {
 // gesehene Agenten ein und darf leer sein — wer alle will, bekommt alle,
 // einschließlich der lange stillen.
 //
-// Was diese Liste bewusst NICHT sagt: ob jemand erreichbar ist. last_seen_at
-// ist eine Beobachtung, kein Lebenszeichen. Ein ausbleibender Eintrag kann
-// eine gekappte Verbindung sein, und ein lebender Prozess beweist nicht, dass
-// ein Modell arbeitet. Erreichbarkeit bekommt erst dann eine Darstellung,
-// wenn gemessen ist, was sie je Harness überhaupt heißen kann.
+// last_seen_at ist eine Beobachtung der Anmeldung, kein Lebenszeichen. Wer
+// erreichbar ist und was er tut, steht in Presence (coordpresence.go): je Feld
+// mit Herkunft und Alter, und ohne Beleg "unknown".
 func (s *Store) CoordPeers(roomKey, since string) ([]CoordAgent, error) {
 	if s.reader != nil {
 		return s.reader.CoordPeers(roomKey, since)
@@ -205,7 +224,7 @@ func (s *Store) CoordPeers(roomKey, since string) ([]CoordAgent, error) {
 	query := `SELECT a.id,a.external_id,a.provider,m.room_key,a.display_name,
 			COALESCE(person,''),COALESCE(cwd,''),COALESCE(branch,''),
 			COALESCE(worktree,''),COALESCE(parent_external_id,''),
-			COALESCE(capabilities,''),registered_at,last_seen_at,COALESCE(a.principal_id,''),a.role
+			COALESCE(capabilities,''),registered_at,last_seen_at,COALESCE(a.principal_id,''),a.role,a.last_poll_at,a.session_id
 		FROM coord_agents a JOIN coord_room_memberships m ON m.principal_id=a.external_id
 		WHERE m.room_key=? AND m.left_at=''`
 	args := []any{roomKey}
@@ -221,16 +240,19 @@ func (s *Store) CoordPeers(roomKey, since string) ([]CoordAgent, error) {
 	defer rows.Close()
 	var out []CoordAgent
 	var principals []string
+	var polls, sessions []string
 	for rows.Next() {
 		var a CoordAgent
-		var principal string
+		var principal, poll, session string
 		if err := rows.Scan(&a.ID, &a.ExternalID, &a.Provider, &a.RoomKey,
 			&a.DisplayName, &a.Person, &a.Cwd, &a.Branch, &a.Worktree,
-			&a.ParentExternalID, &a.Capabilities, &a.RegisteredAt, &a.LastSeenAt, &principal, &a.RequestedRole); err != nil {
+			&a.ParentExternalID, &a.Capabilities, &a.RegisteredAt, &a.LastSeenAt, &principal, &a.RequestedRole, &poll, &session); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
 		principals = append(principals, principal)
+		polls = append(polls, poll)
+		sessions = append(sessions, session)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -250,6 +272,26 @@ func (s *Store) CoordPeers(roomKey, since string) ([]CoordAgent, error) {
 			id = n
 		}
 		out[i].Owner = names[id]
+	}
+	agents := make([]presenceAgent, len(out))
+	for i := range out {
+		agents[i] = presenceAgent{ExternalID: out[i].ExternalID, PrincipalID: principals[i], SessionID: sessions[i], LastPoll: polls[i]}
+	}
+	derived := presenceBatch(s.db, time.Now().UTC(), roomKey, agents)
+	// Wartekreise über alle Mitglieder des Raums, unabhängig vom since-Filter.
+	var cycleOf map[string]*WaitCycle
+	if cycles, err := roomWaitCycles(s.db, time.Now().UTC(), roomKey); err == nil && len(cycles) > 0 {
+		cycleOf = map[string]*WaitCycle{}
+		for i := range cycles {
+			for _, m := range cycles[i].Members {
+				cycleOf[m] = &cycles[i]
+			}
+		}
+	}
+	for i := range out {
+		p := derived[out[i].ExternalID]
+		p.Cycle = cycleOf[out[i].ExternalID]
+		out[i].Presence = &p
 	}
 	// Rollen gibt es nur im Projektraum, und sie werden hier live berechnet.
 	if remote, ok := strings.CutPrefix(roomKey, "project:"); ok {

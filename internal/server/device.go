@@ -2,7 +2,6 @@ package server
 
 import (
 	"errors"
-	"net"
 	"net/http"
 	"strings"
 	"unicode"
@@ -58,48 +57,32 @@ func validMachine(name string) bool {
 	return true
 }
 
-// clientAddr ist die Absenderadresse für die Begrenzung offener Abläufe. Hinter
-// einem Proxy auf Loopback zählt der letzte X-Forwarded-For-Eintrag, den der
-// Proxy selbst angehängt hat; von sonst woher ist der Header beliebig.
-func clientAddr(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
-	}
-	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
-		if parts := strings.Split(r.Header.Get("X-Forwarded-For"), ","); len(parts) > 0 {
-			if last := strings.TrimSpace(parts[len(parts)-1]); net.ParseIP(last) != nil {
-				return last
-			}
-		}
-	}
-	return host
+// clientAddr ist die Absenderadresse für die Begrenzung offener Abläufe. Nur
+// von einem vertrauenswürdigen Proxy zählt X-Forwarded-For: alle Zeilen werden
+// verbunden und von rechts gelesen, der erste nicht vertrauenswürdige Eintrag
+// ist der Client. Vom Client mitgeschickte Einträge stehen links davon.
+func (a *api) clientAddr(r *http.Request) string {
+	return a.proxies.Client(r.RemoteAddr, r.Header.Values("X-Forwarded-For"))
 }
 
-func requestBaseURL(r *http.Request) string {
+func (a *api) requestBaseURL(r *http.Request) string {
+	if a.publicURL != "" {
+		return a.publicURL
+	}
 	scheme := "http"
 	host := r.Host
 	if r.TLS != nil {
 		scheme = "https"
 	}
-	if remoteLoopback(r) {
-		if p := r.Header.Get("X-Forwarded-Proto"); p == "http" || p == "https" {
+	if a.proxies.Trusts(r.RemoteAddr) {
+		if p := singleHeader(r.Header, "X-Forwarded-Proto"); p == "http" || p == "https" {
 			scheme = p
 		}
-		if h := r.Header.Get("X-Forwarded-Host"); h != "" && !strings.ContainsAny(h, " /\\@,") {
+		if h := singleHeader(r.Header, "X-Forwarded-Host"); h != "" && !strings.ContainsAny(h, " /\\@,") {
 			host = h
 		}
 	}
 	return scheme + "://" + host
-}
-
-func remoteLoopback(r *http.Request) bool {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return false
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
 }
 
 // startDeviceLogin ist der Beginn des Geräte-Logins (RFC 8628, Abschnitt 3.1).
@@ -113,7 +96,7 @@ func (a *api) startDeviceLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_request", "error_description": "machine is required (printable, at most 128 bytes)"})
 		return
 	}
-	start, err := a.st.Device().Start(clientAddr(r), machine, clientAddr(r))
+	start, err := a.st.Device().Start(a.clientAddr(r), machine, a.clientAddr(r))
 	if err != nil {
 		if errors.Is(err, store.ErrDeviceBusy) {
 			w.Header().Set("Retry-After", "60")
@@ -123,7 +106,7 @@ func (a *api) startDeviceLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "server_error"})
 		return
 	}
-	uri := requestBaseURL(r) + "/ui/device"
+	uri := a.requestBaseURL(r) + "/ui/device"
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, map[string]any{
 		"device_code":               start.DeviceCode,
@@ -170,4 +153,14 @@ func (a *api) pollDeviceLogin(w http.ResponseWriter, r *http.Request) {
 			"access_token": token, "token_type": "bearer", "machine": info.Machine, "token_id": info.ID,
 		})
 	}
+}
+
+// singleHeader returns the value of a header sent exactly once and without a
+// comma list; repeated or combined values are not believed.
+func singleHeader(h http.Header, name string) string {
+	v := h.Values(name)
+	if len(v) != 1 || strings.Contains(v[0], ",") {
+		return ""
+	}
+	return strings.TrimSpace(v[0])
 }

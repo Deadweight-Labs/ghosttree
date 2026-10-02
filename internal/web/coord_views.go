@@ -95,9 +95,12 @@ type coordRoomView struct {
 }
 
 type coordRoomDetailView struct {
-	Room                   coordRoomView
-	Messages               []coordMessageView
-	Participants           []coordParticipantView
+	Room         coordRoomView
+	Messages     []coordMessageView
+	Participants []coordParticipantView
+	// WaitCycles: je Kreis gegenseitigen Wartens eine Zeile, aus der Presence
+	// der Peers (Peers ist ACL-geprüft, ein Gast bekommt keine Liste).
+	WaitCycles             []string
 	Standing               []coordStandingView
 	HighWater              int64
 	FirstSequence          int64
@@ -174,7 +177,11 @@ type coordParticipantView struct {
 	ID, Label, Provider, Worktree, LastSeen, Branch string
 	DisplayTimestamp                                string
 	Reachability, WorkState                         string
-	Manager, Current                                bool
+	// ReachabilityText und WorkStateText tragen Wert, Herkunft und Alter
+	// ("verbunden (beobachtet, vor 12 s)"); leer bei Menschen, für die es keine
+	// Presence gibt. Ein Agent ohne Beleg zeigt "unbekannt (keine Beobachtung)".
+	ReachabilityText, WorkStateText string
+	Manager, Current                bool
 	// Role ist die Projektrolle (owner, lead, member, guest), leer außerhalb
 	// eines Projektraums; CanReview das Prüfer-Flag.
 	Role      string
@@ -295,10 +302,7 @@ func annotateCoordAttention(views []coordAttentionView, items []store.AttentionI
 	}
 	for i := range views {
 		item := byID[views[i].ID]
-		views[i].SenderLabel = coordIdentityLabel(item.SenderID, labels)
-		if labels[item.SenderID] == "" {
-			views[i].SenderLabel = coordIdentityLabel(item.AuthorID, labels)
-		}
+		views[i].SenderLabel = coordSenderLabel(item, labels)
 		if room, ok := sidebar.room(item.HomeRoomKey); ok {
 			views[i].RoomLabel, views[i].RoomTitle = room.Name, room.Label
 			views[i].Private = room.Kind == store.RoomDirect || room.Kind == store.RoomGroup
@@ -595,6 +599,53 @@ func coordIdentityLabel(id string, labels map[string]string) string {
 	return "Unbekannter Teilnehmer"
 }
 
+// coordSenderLabel: Etikett des Absenders, sonst das des Kontos, sonst die
+// bloße Absender-ID (die Agenten-ID, die auch ein Gast sehen darf) statt
+// "Unbekannter Teilnehmer".
+func coordSenderLabel(item store.AttentionItem, labels map[string]string) string {
+	if label := strings.TrimSpace(labels[item.SenderID]); label != "" {
+		return label
+	}
+	if label := strings.TrimSpace(labels[item.AuthorID]); label != "" {
+		return label
+	}
+	if id := strings.TrimSpace(item.SenderID); id != "" {
+		return id
+	}
+	return coordIdentityLabel(item.AuthorID, labels)
+}
+
+var presenceLabels = map[string]string{
+	store.ReachConnected: "verbunden", store.ReachUnknown: "unbekannt", store.ReachEnded: "beendet",
+	store.WorkWorking: "arbeitet", store.WorkWaitingUser: "wartet auf Nutzer", store.WorkWaitingPeer: "wartet auf Peer",
+	store.WorkBlocked: "blockiert", store.WorkPaused: "pausiert",
+}
+
+var originLabels = map[string]string{
+	store.OriginObserved: "beobachtet", store.OriginSelfReported: "selbst gemeldet", store.OriginDerived: "abgeleitet",
+}
+
+func coordAge(seconds int64) string {
+	switch {
+	case seconds < 60:
+		return fmt.Sprintf("vor %d s", seconds)
+	case seconds < 3600:
+		return fmt.Sprintf("vor %d min", seconds/60)
+	default:
+		return fmt.Sprintf("vor %d h", seconds/3600)
+	}
+}
+
+// presenceText bildet ein Presence-Feld ab. Ohne Herkunft gibt es keinen Beleg:
+// das steht dann da, statt eines Werts, der mehr behauptet.
+func presenceText(f store.PresenceField) (value, text string) {
+	value = presenceLabels[f.Value]
+	if value == "" || f.Origin == "" {
+		return "unbekannt", "unbekannt (keine Beobachtung)"
+	}
+	return value, fmt.Sprintf("%s (%s, %s)", value, originLabels[f.Origin], coordAge(f.AgeSeconds))
+}
+
 func buildCoordParticipants(room store.CoordRoom, peers []store.CoordAgent, memberships []store.RoomMembership, current store.Principal, labels map[string]string) []coordParticipantView {
 	byID := make(map[string]coordParticipantView)
 	for _, member := range room.Members {
@@ -617,12 +668,18 @@ func buildCoordParticipants(room store.CoordRoom, peers []store.CoordAgent, memb
 			Current: peer.ExternalID == current.ID, Reachability: "unbekannt", WorkState: "unbekannt",
 			Role: peer.Role, CanReview: peer.CanReview,
 		}
+		view := byID[peer.ExternalID]
+		pr := store.Presence{}
+		if peer.Presence != nil {
+			pr = *peer.Presence
+		}
+		view.Reachability, view.ReachabilityText = presenceText(pr.Reachability)
+		view.WorkState, view.WorkStateText = presenceText(pr.WorkState)
+		byID[peer.ExternalID] = view
 	}
 	currentParticipant := byID[current.ID]
 	currentParticipant.ID = current.ID
 	currentParticipant.Current = true
-	currentParticipant.Reachability = "unbekannt"
-	currentParticipant.WorkState = "unbekannt"
 	if label := strings.TrimSpace(current.Label); label != "" {
 		currentParticipant.Label = label
 	} else if currentParticipant.Label == "" {
@@ -638,8 +695,6 @@ func buildCoordParticipants(room store.CoordRoom, peers []store.CoordAgent, memb
 		if participant.Label == "" {
 			participant.Label = coordIdentityLabel(membership.PrincipalID, labels)
 		}
-		participant.Reachability = "unbekannt"
-		participant.WorkState = "unbekannt"
 		participant.Manager = membership.Manager
 		participant.Current = membership.PrincipalID == current.ID
 		byID[membership.PrincipalID] = participant
@@ -781,4 +836,33 @@ func applyMessageRoles(st *store.Store, roomKey string, views []coordMessageView
 			views[i].SenderRole = roles[i]
 		}
 	}
+}
+
+// buildCoordWaitCycles beschreibt die Wartekreise der Peers, je Kreis einmal.
+// Gemeldet, nicht aufgelöst: die Zeile sagt, wer auf wen wartet und bis wann
+// die Review fällig ist.
+func buildCoordWaitCycles(peers []store.CoordAgent, labels map[string]string) []string {
+	name := func(id string) string {
+		for _, p := range peers {
+			if p.ExternalID == id {
+				if l := strings.TrimSpace(labels[id]); l != "" {
+					return l
+				}
+				return strings.TrimSpace(p.DisplayName)
+			}
+		}
+		return ""
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, p := range peers {
+		if p.Presence == nil || p.Presence.Cycle == nil || seen[p.Presence.Cycle.Key()] {
+			continue
+		}
+		seen[p.Presence.Cycle.Key()] = true
+		c := *p.Presence.Cycle
+		c.Since, c.ReviewAt = coordDisplayTimestamp(c.Since), coordDisplayTimestamp(c.ReviewAt)
+		out = append(out, c.Describe(name))
+	}
+	return out
 }

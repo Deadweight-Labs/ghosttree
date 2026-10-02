@@ -4,9 +4,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 var (
@@ -351,6 +353,7 @@ func (a CoordAccess) requireThreadAccess(threadID int64) (Thread, error) {
 	if err != nil {
 		return Thread{}, ErrCoordNotFound
 	}
+	a.maskThreadPersonTx(tx, &t)
 	if err := tx.Commit(); err != nil {
 		return Thread{}, err
 	}
@@ -423,6 +426,9 @@ func (a CoordAccess) Messages(kind, id string, afterID int64, limit int) ([]Coor
 	if err := rows.Close(); err != nil {
 		return nil, err
 	}
+	if err := fillSenderDisplayNamesTx(tx, a, kind, id, out); err != nil {
+		return nil, err
+	}
 	if a.AgentExternalID != "" {
 		// Der Leser ist ein Agent: Rollen und Autorität live aus dem Zustand
 		// dieser Transaktion, nach dem Schließen des Cursors.
@@ -432,10 +438,96 @@ func (a CoordAccess) Messages(kind, id string, afterID int64, limit int) ([]Coor
 			out[i].SenderRole, out[i].RecipientRole, out[i].Authority = au.SenderRole, au.RecipientRole, au.Authority
 		}
 	}
+	// Erst nach der Autoritätsberechnung: sie liest das Konto des Absenders.
+	if len(out) > 0 && a.guestViewForMessageTx(tx, kind, id) {
+		a.maskMessageOwners(out)
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return out, nil
+}
+
+// maskMessageOwners leert in der Gastsicht AuthorPrincipalID: bei einem
+// Agenten ist es das Konto seines Besitzers, also ein Mitgliedsorakel. Nur die
+// eigenen Nachrichten des Lesers behalten es. Menschliche Absender erkennt der
+// Gast an der Absender-ID (person:N), die ohnehin sichtbar ist.
+func (a CoordAccess) maskMessageOwners(msgs []CoordMessage) {
+	for i := range msgs {
+		if msgs[i].AuthorPrincipalID != a.Principal.ID {
+			msgs[i].AuthorPrincipalID = ""
+		}
+	}
+}
+
+// maskThreadPersonTx entfernt für Gäste den Urheber des Threads (Person und
+// AuthorPrincipalID). Der eigene Thread des Leser bleibt, wie er ist.
+func (a CoordAccess) maskThreadPersonTx(tx *sql.Tx, t *Thread) {
+	a.maskThreadPersonCachedTx(tx, t, nil)
+}
+
+// maskThreadPersonCachedTx fragt die Gastsicht einmal je Projekt (der
+// Projektraum entscheidet), nicht je Thread. cache darf nil sein.
+func (a CoordAccess) maskThreadPersonCachedTx(tx *sql.Tx, t *Thread, cache map[string]bool) {
+	if t.AuthorPrincipalID != "" && t.AuthorPrincipalID == a.Principal.ID {
+		return
+	}
+	guest, ok := cache[t.Project]
+	if !ok {
+		guest = a.guestViewForMessageTx(tx, DestinationRoom, RoomKeyForProject(t.Project))
+		if cache != nil {
+			cache[t.Project] = guest
+		}
+	}
+	if guest {
+		maskThreadPerson(a, t)
+	}
+}
+
+// maskThreadPerson leert Person und AuthorPrincipalID. Der Thread speichert
+// nur das Konto, nicht den Agenten: bei einem Agenten-Thread wäre person:N
+// (wie der Name) der Besitzer des Agenten und damit ein Mitgliedsorakel. Eine
+// Herleitung des Agenten aus dem ersten Beitrag wäre unsicher, deshalb sieht
+// der Gast keinen Urheber.
+func maskThreadPerson(a CoordAccess, t *Thread) {
+	if t.AuthorPrincipalID == a.Principal.ID {
+		return
+	}
+	t.Person, t.AuthorPrincipalID = "", ""
+}
+
+// fillSenderDisplayNamesTx setzt den Kontonamen menschlicher Absender. Die
+// Gastfrage stellt guestViewForMessageTx einmal für den ganzen Raum (nicht pro
+// Nachricht): wer die Mitglieder nicht sieht, bekommt keinen Namen, auch nicht
+// den eines Absenders, dessen Nachricht er liest. Der Name hängt nur an der
+// sichtbaren Nachricht und an keiner verborgenen Zeile.
+func fillSenderDisplayNamesTx(tx *sql.Tx, a CoordAccess, kind, id string, msgs []CoordMessage) error {
+	names := map[string]string{}
+	guest, guestKnown := false, false
+	for i := range msgs {
+		m := &msgs[i]
+		if m.AuthorKind != AuthorHuman || !strings.HasPrefix(m.AuthorPrincipalID, "person:") {
+			continue
+		}
+		if !guestKnown {
+			guest, guestKnown = a.guestViewForMessageTx(tx, kind, id), true
+		}
+		if guest {
+			return nil
+		}
+		name, ok := names[m.AuthorPrincipalID]
+		if !ok {
+			personID, err := strconv.ParseInt(strings.TrimPrefix(m.AuthorPrincipalID, "person:"), 10, 64)
+			if err == nil {
+				if err := tx.QueryRow(`SELECT name FROM persons WHERE id=?`, personID).Scan(&name); err != nil && !errors.Is(err, sql.ErrNoRows) {
+					return err
+				}
+			}
+			names[m.AuthorPrincipalID] = name
+		}
+		m.SenderDisplayName = NormalizeAccountName(name)
+	}
+	return nil
 }
 
 func (a CoordAccess) MessageWindow(kind, id string, window MessageWindow) (MessagePage, error) {
@@ -461,6 +553,9 @@ func (a CoordAccess) MessageWindow(kind, id string, window MessageWindow) (Messa
 	page, err := coordMessageWindowTx(tx, kind, id, window)
 	if err != nil {
 		return MessagePage{}, err
+	}
+	if len(page.Messages) > 0 && a.guestViewForMessageTx(tx, kind, id) {
+		a.maskMessageOwners(page.Messages)
 	}
 	if err := tx.Commit(); err != nil {
 		return MessagePage{}, err
@@ -662,6 +757,9 @@ func (a CoordAccess) Send(message CoordMessage) (int64, error) {
 		}
 		return 0, ErrCoordForbidden
 	}
+	if ReservedExternalID(actor) {
+		return 0, ErrCoordForbidden // der Präfix system: gehört dem Store
+	}
 	if err := a.canReadTx(tx, actor, message.DestinationKind, message.DestinationID); err != nil {
 		return 0, err
 	}
@@ -736,10 +834,25 @@ func (a CoordAccess) Send(message CoordMessage) (int64, error) {
 	message.SenderExternalID = actor
 	message.AuthorPrincipalID = a.Principal.ID
 	message.AuthorKind = a.authorKind()
-	message.SenderRole, message.RecipientRole, message.Authority = "", "", ""
+	message.SenderRole, message.RecipientRole, message.Authority, message.SenderDisplayName = "", "", "", ""
+	// Ein Wartekreis wird vor dem Senden abgeglichen, damit einer, der
+	// zwischenzeitlich abgelaufen ist, als aufgelöst gilt, bevor diese Nachricht
+	// ihn neu schließt; und danach, weil sie ihn schließen kann.
+	waitRoom := ""
+	if reason, ok := attentionReasonForIntent(message.Intent); ok && reason != AttentionHandoff {
+		waitRoom = messageRoomKeyTx(tx, message.DestinationKind, message.DestinationID)
+		if err := reconcileWaitCyclesSafeTx(tx, waitRoom, time.Now().UTC()); err != nil {
+			return 0, err
+		}
+	}
 	id, err := appendCoordMessageTx(tx, message)
 	if err != nil {
 		return 0, err
+	}
+	if waitRoom != "" {
+		if err := reconcileWaitCyclesSafeTx(tx, waitRoom, time.Now().UTC()); err != nil {
+			return 0, err
+		}
 	}
 	if err := insertRawMentionsTx(tx, id, rawMentions); err != nil {
 		return 0, err
@@ -898,8 +1011,21 @@ func (a CoordAccess) MessageMentions(messageID int64) ([]string, error) {
 		raw, err = rawMentionsTx(tx, messageID)
 	}
 	tx.Rollback()
-	if err != nil || raw != nil {
-		return raw, err
+	if err != nil {
+		return nil, err
+	}
+	if raw != nil {
+		// Der Gast sieht von den Erwähnungen nur, was getippt wurde, und sich
+		// selbst, wenn er gemeint ist: die eigene Empfängerrolle ist ihm ohnehin
+		// bekannt, und ohne sie würde ein maskierter Empfänger (etwa bei einer
+		// Meldung über einen Wartekreis) nie geweckt. Andere Empfänger bleiben
+		// verborgen.
+		if actor, aerr := a.actor(); aerr == nil && actor != "" && !slices.Contains(raw, actor) {
+			if real, merr := a.Store.CoordMessageMentions(messageID); merr == nil && slices.Contains(real, actor) {
+				raw = append(raw, actor)
+			}
+		}
+		return raw, nil
 	}
 	return a.Store.CoordMessageMentions(messageID)
 }
@@ -918,6 +1044,22 @@ func (a CoordAccess) MarkDelivery(messageID int64, state string) error {
 		return err
 	}
 	return a.Store.MarkCoordDelivery(messageID, actor, state)
+}
+
+// Heartbeat stempelt den Abruf des eigenen Agenten. Nur der Agent des Tokens
+// darf das; die Antwort verrät nicht, ob geschrieben oder gedrosselt wurde.
+func (a CoordAccess) Heartbeat() error {
+	if a.AgentExternalID == "" {
+		return ErrCoordForbidden
+	}
+	actor, err := a.mutationActor()
+	if err != nil {
+		return err
+	}
+	if !a.Store.CoordAgentPollDue(actor) {
+		return nil
+	}
+	return a.Store.TouchCoordAgentPoll(actor)
 }
 
 func (a CoordAccess) ClaimDelivery(messageID int64) (bool, error) {
@@ -1005,8 +1147,10 @@ func (a CoordAccess) SearchThreads(project, query string, includeArchived bool, 
 		return nil, err
 	}
 	out := make([]Thread, 0, len(candidates))
+	guestCache := map[string]bool{}
 	for _, thread := range candidates {
 		if err := a.canReadThreadTx(tx, actor, thread.ID); err == nil {
+			a.maskThreadPersonCachedTx(tx, &thread, guestCache)
 			out = append(out, thread)
 			if len(out) == limit {
 				break
@@ -1059,8 +1203,10 @@ func (a CoordAccess) ThreadsForObject(kind, id string) ([]Thread, error) {
 		return nil, err
 	}
 	visible := make([]Thread, 0, len(candidates))
+	guestCache := map[string]bool{}
 	for _, thread := range candidates {
 		if err := a.canReadThreadTx(tx, actor, thread.ID); err == nil {
+			a.maskThreadPersonCachedTx(tx, &thread, guestCache)
 			visible = append(visible, thread)
 		} else if !errors.Is(err, ErrCoordNotFound) && !errors.Is(err, ErrCoordForbidden) {
 			return nil, err
@@ -1364,6 +1510,11 @@ func (a CoordAccess) RoomThreads(roomKey string) ([]RoomThread, error) {
 	if err != nil {
 		return nil, err
 	}
+	if a.guestViewForMessageTx(tx, DestinationRoom, roomKey) {
+		for i := range threads {
+			maskThreadPerson(a, &threads[i].Thread)
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
@@ -1645,6 +1796,10 @@ func (a CoordAccess) ThreadSummary(threadID int64) (ThreadSummary, bool, error) 
 	}
 	if err != nil {
 		return ThreadSummary{}, false, err
+	}
+	if a.guestViewForMessageTx(tx, DestinationDiscussion, strconv.FormatInt(threadID, 10)) {
+		// Die Zusammenfassung trägt nur den Kontonamen; ein Gast bekommt keinen.
+		summary.Person = ""
 	}
 	if err := tx.Commit(); err != nil {
 		return ThreadSummary{}, false, err
@@ -2179,8 +2334,19 @@ func (a CoordAccess) Standing(roomKey string) ([]StandingInstruction, error) {
 	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if a.guestViewForMessageTx(tx, DestinationRoom, roomKey) {
+	if !a.guestViewForMessageTx(tx, DestinationRoom, roomKey) {
 		for i := range out {
+			out[i].Person = NormalizeAccountName(out[i].Person)
+		}
+	} else {
+		for i := range out {
+			// Person ist der Kontoname des Urhebers; der Gast sieht die ID.
+			var sender string
+			if err := tx.QueryRow(`SELECT sender_external_id FROM coord_messages WHERE id=?`, out[i].MessageID).Scan(&sender); err == nil {
+				out[i].Person = sender
+			} else {
+				out[i].Person = ""
+			}
 			messageID, perr := strconv.ParseInt(out[i].MessageID, 10, 64)
 			if perr != nil {
 				continue
@@ -2209,6 +2375,9 @@ func (a CoordAccess) CreateStanding(in StandingInput) (int64, error) {
 	actor, err := a.mutationActor()
 	if err != nil {
 		return 0, err
+	}
+	if ReservedExternalID(actor) {
+		return 0, ErrCoordForbidden
 	}
 	in.RoomKey = strings.TrimSpace(in.RoomKey)
 	in.ClientID = strings.TrimSpace(in.ClientID)

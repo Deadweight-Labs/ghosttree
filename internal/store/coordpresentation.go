@@ -49,12 +49,16 @@ func (a CoordAccess) MessagePresentationWindow(kind, id string, window MessageWi
 	if err != nil {
 		return MessagePage{}, nil, err
 	}
-	presented, err := coordMessagePresentationsTx(tx, kind, id, page.Messages)
+	presented, err := coordMessagePresentationsTx(tx, kind, id, page.Messages, a.guestViewForMessageTx(tx, kind, id))
 	if err != nil {
 		return MessagePage{}, nil, err
 	}
 	if a.guestViewForMessageTx(tx, kind, id) {
+		a.maskMessageOwners(page.Messages)
 		for i := range presented {
+			if presented[i].Message.AuthorPrincipalID != a.Principal.ID {
+				presented[i].Message.AuthorPrincipalID = ""
+			}
 			// Zustellstand ist Zustand pro Empfänger; ein Gast sieht ihn nicht.
 			presented[i].Delivery = CoordDeliverySummary{}
 			raw, err := rawMentionsTx(tx, presented[i].Message.ID)
@@ -72,7 +76,7 @@ func (a CoordAccess) MessagePresentationWindow(kind, id string, window MessageWi
 	return page, presented, nil
 }
 
-func coordMessagePresentationsTx(tx *sql.Tx, kind, destinationID string, messages []CoordMessage) ([]CoordMessagePresentation, error) {
+func coordMessagePresentationsTx(tx *sql.Tx, kind, destinationID string, messages []CoordMessage, guest bool) ([]CoordMessagePresentation, error) {
 	out := make([]CoordMessagePresentation, len(messages))
 	if len(messages) == 0 {
 		return out, nil
@@ -102,6 +106,10 @@ func coordMessagePresentationsTx(tx *sql.Tx, kind, destinationID string, message
 			rows.Close()
 			return nil, err
 		}
+		if guest {
+			continue // Gast: nur die ID, nie Konto- oder Besitzername
+		}
+		agentLabel, personLabel = NormalizeAccountName(agentLabel), NormalizeAccountName(personLabel)
 		if authorKind == AuthorHuman && personLabel != "" {
 			out[index[messageID]].AuthorLabel = personLabel
 		} else if agentLabel != "" {
@@ -183,6 +191,11 @@ func coordMessagePresentationsTx(tx *sql.Tx, kind, destinationID string, message
 			rows.Close()
 			return nil, err
 		}
+		if guest {
+			// Gast: die ID des Absenders, kein Konto- oder Besitzername.
+			agentLabel, personLabel = "", ""
+		}
+		agentLabel, personLabel = NormalizeAccountName(agentLabel), NormalizeAccountName(personLabel)
 		if authorKind == AuthorHuman && personLabel != "" {
 			author = personLabel
 		} else if agentLabel != "" {

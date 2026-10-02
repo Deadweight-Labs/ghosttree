@@ -77,16 +77,23 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 		v.Owner = v.Selected.Role == store.OrgOwner
 		members, _ := a.store.ListOrgMembers(v.Selected.ID)
 		for _, m := range members {
+			m.Account = store.NormalizeAccountName(m.Account)
 			v.Members = append(v.Members, orgMemberRow{OrgMemberInfo: m, Self: m.AccountID == me})
 		}
 		v.Projects, _ = a.store.ListProjects(me, v.Selected.ID)
 		v.Projects = a.access(r).VisibleProjects(v.Projects)
 		for _, p := range v.Projects {
 			rv := projectRolesView{Remote: p.Remote, You: a.store.ProjectRole(p.Remote, me).Role}
+			// Ein Gast sieht nur den eigenen Eintrag, wie in der API
+			// (listProjectMembers).
+			guest := store.RoleRank(a.access(r).Role(p.Remote).Role) == 1 && a.store.AccessEnforced()
 			for _, m := range members {
+				if guest && m.AccountID != me {
+					continue
+				}
 				info := a.store.ProjectRole(p.Remote, m.AccountID)
 				rv.Rows = append(rv.Rows, projectRoleRow{
-					Account: m.Account, AccountID: m.AccountID, Role: info.Role, CanReview: info.CanReview,
+					Account: store.NormalizeAccountName(m.Account), AccountID: m.AccountID, Role: info.Role, CanReview: info.CanReview,
 					Implicit: info.Implicit, Grantable: a.grantable(r, me, p.Remote, m.AccountID), Self: m.AccountID == me,
 				})
 			}

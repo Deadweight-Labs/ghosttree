@@ -17,6 +17,15 @@ create `/etc/ghosttree/server.env` before starting it:
 GHOSTTREE_LISTEN=<private-address>:8474
 ```
 
+Behind a TLS terminator add the proxy settings to the same file (the unit
+passes the environment to `ctx serve`); see "Running behind TLS or a reverse
+proxy" in the main README:
+
+```text
+GHOSTTREE_PUBLIC_URL=https://ghosttree.example.com
+GHOSTTREE_TRUSTED_PROXIES=<proxy-address>
+```
+
 Use the server's address on the trusted private network, such as NetBird, in
 the listen setting, client configuration and monitoring target. After changing
 the client URL, restart the collector and reconnect running MCP servers: they

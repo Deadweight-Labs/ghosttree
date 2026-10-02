@@ -72,3 +72,37 @@ func TestBootstrapCodeFileOnlyOnEmptyInstance(t *testing.T) {
 		t.Fatalf("stale bootstrap file: %v", err)
 	}
 }
+
+func TestServeProxyConfiguration(t *testing.T) {
+	t.Setenv(envPublicURL, "")
+	t.Setenv(envTrustedProxies, "")
+	cfg, err := parseServeConfig(nil, io.Discard)
+	if err != nil || cfg.PublicURL != "" || cfg.TrustedProxies.Configured() {
+		t.Fatalf("default must trust no proxy and set no public url: %+v %v", cfg, err)
+	}
+	cfg, err = parseServeConfig([]string{"--public-url", "https://gt.example.test/", "--trusted-proxies", "192.0.2.0/24,198.51.100.1"}, io.Discard)
+	if err != nil || cfg.PublicURL != "https://gt.example.test" || !cfg.TrustedProxies.Trusts("192.0.2.9:1") || cfg.TrustedProxies.Trusts("203.0.113.1:1") {
+		t.Fatalf("cfg=%+v err=%v", cfg, err)
+	}
+	t.Setenv(envTrustedProxies, "198.51.100.0/24")
+	cfg, err = parseServeConfig(nil, io.Discard)
+	if err != nil || !cfg.TrustedProxies.Trusts("198.51.100.7:1") {
+		t.Fatalf("env not read: %v", err)
+	}
+	cfg, err = parseServeConfig([]string{"--public-url", "https://gt.example.test:443"}, io.Discard)
+	if err != nil || cfg.PublicURL != "https://gt.example.test" {
+		t.Fatalf("default port not dropped: %+v %v", cfg, err)
+	}
+	cfg, err = parseServeConfig([]string{"--public-url", "https://gt.example.test:8443"}, io.Discard)
+	if err != nil || cfg.PublicURL != "https://gt.example.test:8443" {
+		t.Fatalf("custom port lost: %+v %v", cfg, err)
+	}
+	for _, bad := range [][]string{
+		{"--public-url", "gt.example.test"}, {"--trusted-proxies", "0.0.0.0/0"}, {"--public-url", "ftp://x"}, {"--public-url", "https://x/path"},
+		{"--public-url", "https://u:p@x"}, {"--trusted-proxies", "nonsense"},
+	} {
+		if _, err := parseServeConfig(bad, io.Discard); err == nil {
+			t.Errorf("%v accepted", bad)
+		}
+	}
+}

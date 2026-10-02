@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"errors"
+	"github.com/Deadweight-Labs/ghosttree/internal/claudechannel"
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"os"
 	"path/filepath"
@@ -14,13 +16,16 @@ import (
 
 type fakePauseSource struct {
 	control *store.AgentControl
+	resumed *store.AgentControl
 	err     error
 	events  []store.ControlEvent
 	ids     []int64
 	evErr   error
 }
 
-func (f *fakePauseSource) ActiveControl(string) (*store.AgentControl, error) { return f.control, f.err }
+func (f *fakePauseSource) ControlState(string) (*store.AgentControl, *store.AgentControl, error) {
+	return f.control, f.resumed, f.err
+}
 func (f *fakePauseSource) RecordEvent(id int64, ev store.ControlEvent) (bool, error) {
 	if f.evErr != nil {
 		return false, f.evErr
@@ -163,5 +168,140 @@ func TestChannelPauseSyncDoesNotWedgeOnUnreportableAcks(t *testing.T) {
 	}
 	if acks, _ := agentpause.ReadAcks(pauseTestAgent, 0); len(acks) != 0 {
 		t.Fatalf("acks must be cleared on resume: %+v", acks)
+	}
+}
+
+type fakeNotifier struct {
+	ready bool
+	got   []claudechannel.Notification
+	err   error
+}
+
+func (f *fakeNotifier) Ready() bool { return f.ready }
+func (f *fakeNotifier) Notify(_ context.Context, n claudechannel.Notification) error {
+	if f.err != nil {
+		return f.err
+	}
+	f.got = append(f.got, n)
+	return nil
+}
+
+func resumeFixture(t *testing.T) (*fakePauseSource, *fakeNotifier, func() *pauseSyncer) {
+	t.Helper()
+	pauseEnv(t)
+	src := &fakePauseSource{}
+	n := &fakeNotifier{ready: true}
+	return src, n, func() *pauseSyncer {
+		return &pauseSyncer{agent: pauseTestAgent, src: src, notifier: n}
+	}
+}
+
+func resumeOf(id int64, by string) *store.AgentControl {
+	return &store.AgentControl{ID: id, Action: store.ControlPause, ResumedBy: "person:1", ResumedByLabel: by, ResumedAt: "2026-10-02T10:00:00Z"}
+}
+
+// Die Session hat zuletzt die stopReason des Hooks gesehen und hielte sich
+// ohne Meldung für weiter pausiert. Die Aufhebung kommt deshalb als Channel-
+// Meldung, genau einmal je Aufhebung, und nennt die Aufgabe als fortgesetzt.
+func TestChannelPauseResumeNotifiesTheSessionOnce(t *testing.T) {
+	src, n, mk := resumeFixture(t)
+	p := mk()
+	src.control = &store.AgentControl{ID: 7, Action: store.ControlPause, RequestedByLabel: "robin"}
+	if err := p.sync(); err != nil {
+		t.Fatal(err)
+	}
+	if len(n.got) != 0 {
+		t.Fatalf("a pause alone must not notify: %+v", n.got)
+	}
+	src.control, src.resumed = nil, resumeOf(7, "Robin")
+	for i := 0; i < 3; i++ {
+		if err := p.sync(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(n.got) != 1 {
+		t.Fatalf("want exactly one notification, got %d: %+v", len(n.got), n.got)
+	}
+	got := n.got[0]
+	for _, want := range []string{"Pause aufgehoben durch Robin", "control #7", "du kannst weiterarbeiten", "Aufgabe"} {
+		if !strings.Contains(got.Content, want) {
+			t.Errorf("content lacks %q: %s", want, got.Content)
+		}
+	}
+	if got.Meta["control_id"] != "7" || got.Meta["resumed_by"] != "Robin" || got.Meta["event"] != "pause_resumed" {
+		t.Errorf("meta = %+v", got.Meta)
+	}
+	if _, set := agentpause.ReadFlag(pauseTestAgent); set {
+		t.Error("the flag must be gone")
+	}
+	// Eine zweite Pause und ihre Aufhebung ist eine zweite Meldung.
+	src.control, src.resumed = &store.AgentControl{ID: 9, Action: store.ControlPause}, nil
+	_ = p.sync()
+	src.control, src.resumed = nil, resumeOf(9, "Robin")
+	_ = p.sync()
+	if len(n.got) != 2 || n.got[1].Meta["control_id"] != "9" {
+		t.Fatalf("second resume: %+v", n.got)
+	}
+}
+
+// Ein neu gestarteter Channel kennt die aufgehobene Pause nur aus der
+// Serverantwort. Er hat sie nie aktiv gesehen und meldet sie nicht noch einmal.
+func TestChannelPauseResumeIsNotRepeatedAfterRestart(t *testing.T) {
+	src, n, mk := resumeFixture(t)
+	first := mk()
+	src.control = &store.AgentControl{ID: 3, Action: store.ControlPause}
+	_ = first.sync()
+	src.control, src.resumed = nil, resumeOf(3, "Robin")
+	_ = first.sync()
+	if len(n.got) != 1 {
+		t.Fatalf("setup: %d", len(n.got))
+	}
+	first.close()
+	restarted := mk()
+	for i := 0; i < 3; i++ {
+		_ = restarted.sync()
+	}
+	if len(n.got) != 1 {
+		t.Fatalf("restart repeated the notification: %+v", n.got)
+	}
+	// Läuft die Pause über den Neustart hinweg weiter, meldet der neue Prozess
+	// ihre Aufhebung dagegen genau einmal.
+	src.control, src.resumed = &store.AgentControl{ID: 4, Action: store.ControlPause}, nil
+	_ = first.sync()
+	first.close()
+	again := mk()
+	_ = again.sync()
+	src.control, src.resumed = nil, resumeOf(4, "Robin")
+	_ = again.sync()
+	_ = again.sync()
+	if len(n.got) != 2 || n.got[1].Meta["control_id"] != "4" {
+		t.Fatalf("resume across restart: %+v", n.got)
+	}
+}
+
+// Ist der Transport noch nicht bereit oder scheitert das Schreiben, bleibt die
+// Meldung offen und geht mit dem nächsten Durchlauf raus. Die Pause ist
+// trotzdem sofort aufgehoben.
+func TestChannelPauseResumeRetriesUntilTheNotificationIsWritten(t *testing.T) {
+	src, n, mk := resumeFixture(t)
+	p := mk()
+	src.control = &store.AgentControl{ID: 5, Action: store.ControlPause}
+	_ = p.sync()
+	src.control, src.resumed = nil, resumeOf(5, "Robin")
+	n.ready = false
+	_ = p.sync()
+	if _, set := agentpause.ReadFlag(pauseTestAgent); set {
+		t.Fatal("an unready transport must not keep the agent paused")
+	}
+	n.ready, n.err = true, errors.New("pipe closed")
+	_ = p.sync()
+	if len(n.got) != 0 {
+		t.Fatal("failed write counted as delivered")
+	}
+	n.err = nil
+	_ = p.sync()
+	_ = p.sync()
+	if len(n.got) != 1 {
+		t.Fatalf("want one after recovery, got %d", len(n.got))
 	}
 }

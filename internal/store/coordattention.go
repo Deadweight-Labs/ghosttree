@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -66,15 +67,6 @@ func attentionReasonForIntent(intent string) (string, bool) {
 	default:
 		return "", false
 	}
-}
-
-// CoordMessageWakeCandidate describes intent, not delivery. An adapter still
-// has to re-check recipient access, expiry, rate limits and loop protection.
-func CoordMessageWakeCandidate(message CoordMessage) bool {
-	if strings.TrimSpace(message.Intent) == IntentAck || strings.TrimSpace(message.Kind) == IntentAck || len(normalizeMembers(message.Mentions)) == 0 {
-		return false
-	}
-	return !message.Expired && !expiredAt(message.ExpiresAt, now())
 }
 
 func (a CoordAccess) Attention() ([]AttentionItem, error) {
@@ -165,6 +157,11 @@ func (a CoordAccess) Attention() ([]AttentionItem, error) {
 			continue
 		}
 		candidate.item.CanWithdraw = candidate.item.AuthorID == a.Principal.ID || candidate.sender == actor
+		// Gastsicht (nur eigene Empfängerzeilen kommen hier an): das Konto
+		// hinter einem fremden Agenten bleibt verborgen.
+		if candidate.item.AuthorID != a.Principal.ID && a.guestViewForMessageTx(tx, candidate.item.DestinationKind, candidate.item.DestinationID) {
+			candidate.item.AuthorID = ""
+		}
 		if candidate.item.State == AttentionOpen && expiredAt(candidate.expiresAt, nowTS) {
 			candidate.item.State = AttentionExpired
 			if _, err := tx.Exec(`UPDATE coord_attention SET state='expired' WHERE id=? AND state='open'`, candidate.item.ID); err != nil {
@@ -255,6 +252,11 @@ func (a CoordAccess) ResolveAttention(id int64, action string) error {
 	if _, err := tx.Exec(`UPDATE coord_attention SET state=?,resolved_at=? WHERE id=? AND state='open'`, next, now(), id); err != nil {
 		return err
 	}
+	if reason != AttentionHandoff {
+		if err := reconcileWaitCyclesSafeTx(tx, messageRoomKeyTx(tx, kind, destination), time.Now().UTC()); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
 }
 
@@ -285,3 +287,22 @@ func actionAllowedForReason(reason, action string) bool {
 		return false
 	}
 }
+
+// ErrInvalidSendIntent meldet einen Intent, den ein Agent nicht setzen darf.
+var ErrInvalidSendIntent = errors.New("unknown intent: use question, approval, blocker, handoff or ack")
+
+// AgentSendIntent normalisiert den Intent einer Agent-Nachricht. Leer ist
+// erlaubt. standing (Menschen vorbehalten) und attention (setzt der Store)
+// gehören nicht dazu; derselbe Wertebereich gilt für coord_send, den
+// Channel-Tools send/reply, `ctx coord send` und die Agent-Route des Servers.
+func AgentSendIntent(intent string) (string, error) {
+	intent = strings.ToLower(strings.TrimSpace(intent))
+	switch intent {
+	case "", IntentQuestion, IntentApproval, IntentBlocker, IntentHandoff, IntentAck:
+		return intent, nil
+	}
+	return "", ErrInvalidSendIntent
+}
+
+// AgentSendIntents sind die erlaubten Werte in Anzeigereihenfolge.
+var AgentSendIntents = []string{IntentQuestion, IntentApproval, IntentBlocker, IntentHandoff, IntentAck}

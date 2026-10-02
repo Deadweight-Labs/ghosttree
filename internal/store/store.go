@@ -4,6 +4,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"net/url"
 	"os"
 	"strings"
@@ -212,6 +213,50 @@ CREATE TABLE IF NOT EXISTS knowledge(
   regression_state TEXT NOT NULL DEFAULT '',
   regression_test TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS knowledge_groups(
+  id INTEGER PRIMARY KEY, project TEXT NOT NULL,
+  label TEXT NOT NULL DEFAULT '',
+  volatility TEXT NOT NULL DEFAULT 'unrated'
+    CHECK(volatility IN ('unrated','volatile','slow','timeless')),
+  volatility_by TEXT NOT NULL DEFAULT '', volatility_at TEXT NOT NULL DEFAULT '',
+  -- Groups are never deleted, so their events stay attributable: a merged
+  -- group points at the survivor, a group without members is dissolved.
+  state TEXT NOT NULL DEFAULT 'active' CHECK(state IN ('active','merged','dissolved')),
+  merged_into INTEGER REFERENCES knowledge_groups(id) ON DELETE RESTRICT,
+  created_at TEXT NOT NULL,
+  CHECK((state='merged') = (merged_into IS NOT NULL)));
+CREATE TABLE IF NOT EXISTS knowledge_relations(
+  id INTEGER PRIMARY KEY,
+  project TEXT NOT NULL,
+  from_id INTEGER NOT NULL REFERENCES knowledge(id) ON DELETE RESTRICT,
+  to_id INTEGER NOT NULL REFERENCES knowledge(id) ON DELETE RESTRICT,
+  kind TEXT NOT NULL CHECK(kind IN ('supersedes','sibling')),
+  state TEXT NOT NULL CHECK(state IN ('proposed','active','rejected','revoked')),
+  origin TEXT NOT NULL CHECK(origin IN ('human','agent','distiller','migrated')),
+  group_id INTEGER REFERENCES knowledge_groups(id) ON DELETE RESTRICT,
+  reason TEXT NOT NULL DEFAULT '',
+  created_by TEXT NOT NULL, created_by_account INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL,
+  decided_by TEXT NOT NULL DEFAULT '', decided_by_account INTEGER NOT NULL DEFAULT 0, decided_at TEXT NOT NULL DEFAULT '',
+  CHECK(from_id <> to_id),
+  CHECK(kind <> 'sibling' OR from_id < to_id));
+CREATE UNIQUE INDEX IF NOT EXISTS knowledge_relations_live
+  ON knowledge_relations(kind, from_id, to_id) WHERE state IN ('proposed','active');
+CREATE INDEX IF NOT EXISTS knowledge_relations_from ON knowledge_relations(from_id);
+CREATE INDEX IF NOT EXISTS knowledge_relations_to ON knowledge_relations(to_id);
+CREATE INDEX IF NOT EXISTS knowledge_relations_group ON knowledge_relations(group_id);
+CREATE TABLE IF NOT EXISTS knowledge_relation_events(
+  id INTEGER PRIMARY KEY, project TEXT NOT NULL DEFAULT '',
+  relation_id INTEGER, group_id INTEGER,
+  action TEXT NOT NULL,
+  actor TEXT NOT NULL, actor_account_id INTEGER NOT NULL DEFAULT 0, actor_role TEXT NOT NULL DEFAULT '',
+  via TEXT NOT NULL DEFAULT '',
+  detail TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS knowledge_relation_events_rel ON knowledge_relation_events(relation_id);
+CREATE INDEX IF NOT EXISTS knowledge_relation_events_group ON knowledge_relation_events(group_id);
+CREATE TRIGGER IF NOT EXISTS knowledge_relation_events_no_update BEFORE UPDATE ON knowledge_relation_events
+  BEGIN SELECT RAISE(ABORT, 'knowledge_relation_events is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS knowledge_relation_events_no_delete BEFORE DELETE ON knowledge_relation_events
+  BEGIN SELECT RAISE(ABORT, 'knowledge_relation_events is append-only'); END;
 CREATE TABLE IF NOT EXISTS instruction_activation_path(
   knowledge_id INTEGER NOT NULL REFERENCES knowledge(id) ON DELETE CASCADE,
   pattern TEXT NOT NULL,
@@ -599,7 +644,8 @@ CREATE TABLE IF NOT EXISTS path_activity(
   writes INTEGER NOT NULL DEFAULT 0,
   quality TEXT NOT NULL CHECK(quality IN ('intent','reported_success','observed_change','unattributed')),
   at TEXT NOT NULL,
-  UNIQUE(session_external_id,tool,path,quality,at));
+  account_id INTEGER NOT NULL DEFAULT 0,
+  UNIQUE(account_id,session_external_id,tool,path,quality,at));
 CREATE INDEX IF NOT EXISTS path_activity_path ON path_activity(project,path,at);
 CREATE INDEX IF NOT EXISTS path_activity_session ON path_activity(session_external_id,at);
 CREATE TABLE IF NOT EXISTS coord_standing(
@@ -882,6 +928,18 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := ensurePathActivityAccount(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureCoordAgentPresence(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureCoordWaitCycles(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := ensureCoordAgentRole(db); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -928,6 +986,13 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 	if err := EnsureContextSnapshotSchema(db); err != nil {
 		_ = db.Close()
 		return nil, err
+	}
+	if report, err := BackfillKnowledgeRelations(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	} else if report.Unclean() {
+		log.Printf("knowledge relations backfill: created=%d skipped_unusable=%d skipped_cycle=%d superseded_without_parent=%d",
+			report.Created, report.SkippedUnusable, report.SkippedCycle, report.SupersededWithoutParent)
 	}
 	db.SetMaxOpenConns(options.MaxOpenConns)
 	db.SetMaxIdleConns(options.MaxOpenConns)

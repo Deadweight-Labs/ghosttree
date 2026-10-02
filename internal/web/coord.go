@@ -224,6 +224,7 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 		Messages:     buildCoordMessageViews(presentations, room, labels),
 		Zone:         time.Now().Format("MST"),
 		Participants: buildCoordParticipants(activeRoom, peers, memberships, current, labels),
+		WaitCycles:   buildCoordWaitCycles(peers, labels),
 		Standing:     buildCoordStandingViews(standing, labels), HighWater: page.HighWater,
 		HasOlder: page.HasOlder, HasNewer: page.HasNewer,
 		CanLeave: activeRoom.Kind == store.RoomGroup,

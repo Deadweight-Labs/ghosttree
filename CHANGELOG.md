@@ -6,6 +6,159 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Fixed: agents can now open question, approval, blocker and handoff waits.
+  `coord_send` and `ctx coord send --intent` take an optional `intent`
+  (question, approval, blocker, handoff, ack; the first four need a mention),
+  the MCP schema describes the values (no enum, so "Question" is normalised
+  rather than refused by the SDK), and the agent send route rejects `standing`,
+  `attention` and unknown intents. Before, only the web UI could create these,
+  so wait-cycle detection and attention never saw an agent-made wait.
+- Fixed: after a pause or interruption is lifted, the Claude channel tells the
+  session once ("Pause aufgehoben durch <person> (control #N) - du kannst
+  weiterarbeiten", meta `event`, `control_id`, `resumed_by`). The notification
+  wakes an idle session, so the agent continues its original task on its own
+  instead of believing it is still paused. A restarted channel does not repeat
+  it. `GET /api/agent-control` also returns the latest lifted control as
+  `resumed` when none is active.
+- Fixed: `ctx coord send` (and the other room commands) no longer swallow a
+  rejected registration. The CLI identity `cli:<machine>` belongs to one
+  project room; from a second repository the server's message ("already
+  registered in another room") is shown with a hint, coded server errors
+  (machine_bound, invalid_external_id, ...) are shown too, and
+  `--agent-name <name>` posts as `ctx:<machine>:<name>`, which also works with
+  machine-bound device tokens.
+- Added: data model for relations between knowledge entries (REQ-157, first
+  step). New tables `knowledge_relations` (kinds `supersedes` and `sibling`,
+  states proposed/active/rejected/revoked, nothing is ever deleted),
+  `knowledge_groups` (one volatility per sibling group) and the append-only
+  `knowledge_relation_events`, plus store functions to add, approve, revoke and
+  list relations and to set a group's volatility. Existing `superseded_by`
+  values are copied into active `supersedes` edges when the database is
+  opened (idempotent, one transaction, a revoked edge stays revoked, legacy
+  cycles are skipped and logged). Nothing
+  reads the new tables yet: delivery, search and the `superseded_by` patch
+  behave as before. The `superseded_by` column stays in place.
+- Added: configurable Secure cookies behind TLS and reverse proxies (REQ-236).
+  `--public-url` / `GHOSTTREE_PUBLIC_URL` (an https URL makes every cookie
+  Secure and its origin is accepted for same-origin checks) and
+  `--trusted-proxies` / `GHOSTTREE_TRUSTED_PROXIES` (CIDRs or addresses whose
+  `X-Forwarded-Proto`/`-Host` are believed; previously only loopback was).
+  Loopback stays trusted, no other peer is by default, so plain private HTTP
+  keeps working unchanged. Login and logout session cookies are now built by
+  one function and carry identical attributes. The device-login base URL and
+  rate-limit client address use the same trust set. README section "Running
+  behind TLS or a reverse proxy".
+- Added: loop guard for the Claude channel (REQ-360). A message counts as
+  low content only if it brings no new word compared to the last 6 messages of
+  the room (digits ignored, so a counter like "step 14 of 20" is no content;
+  thanks and acknowledgements do not count as words) or repeats the sender's
+  previous message. Each change of sender among such messages is a round. Any
+  new word, commit hash, file path, code block, link, REQ/AC/PR reference or a
+  message from a human resets the count. From 3 rounds the wake notification
+  carries `loop_streak=N` in its meta, only for the agent it wakes. This
+  release only observes: wakes are unchanged and the channel logs "would hold"
+  at 5. `GHOSTTREE_LOOP_GUARD=enforce` (off by default) withholds the wake at
+  5, leaves the message stored and readable by pull, and posts one ordinary
+  ack notice into the room. Padding with fresh words evades the guard on
+  purpose (false holds are worse); the send limit stays the backstop. Known
+  limitation, to resolve before enforce: pure measurement exchanges ("p50
+  12.4ms" then "11.9ms") reach hold level, because numbers are not content.
+- Mutual waiting is reported instead of managed silently. Open questions,
+  approvals and blockers between agents form a wait graph per room (a handoff
+  is not a wait; threads restricted to some participants are left out). A cycle
+  (A waits on B and B on A, or A, B, C in a ring) shows up in `coord_peers` and
+  the web room as "gegenseitiges Warten: A ↔ B (seit ...)", in the peers API as
+  `presence.cycle` on each member next to `waiting_peer`, and once per cycle as
+  a room message from `system:wait-cycle` that mentions the members and goes
+  through the normal wake rule. The message names nobody in its text, so a guest
+  who can read the room does not learn who waits. A cycle that dissolves and
+  forms again notifies again; a standing cycle never repeats. Every wait has a
+  review date (the item's own expiry, otherwise 30 minutes after it was asked,
+  marked as derived) and is flagged overdue after it; nothing is closed or
+  answered automatically. An item with its own expiry never turns overdue: once
+  expired it is no longer a current wait and drops out of the graph. The note is
+  sent at most once per 10 minutes for the same set of agents (a held-back note
+  is sent at the next change in the room once the window has passed and the cycle
+  is still active; other cycles are not affected), a cycle that only shrinks does not notify
+  again, and one that gains a member does. The prefix `system:` is now reserved:
+  agents cannot register or send under it, and system notes show as `(system)`
+  in message headers. Agents that already carry the prefix in an old database
+  are kept but can no longer send.
+  Threads without a home room deliberately do not take part in wait cycles,
+  consistent with presence, which also reads waits per room only.
+- Presence is now two separate fields with an origin. `coord_peers`, the peers
+  API (`presence` on each peer) and the participant list in the web show
+  reachability (`connected`, `unknown`, `ended`) and work state (`working`,
+  `waiting_user`, `waiting_peer`, `blocked`, `paused`, `unknown`), each with
+  origin (`observed`, `self_reported`, `derived`), time and age. Nothing claims
+  more than was seen: silence is `unknown`, never idle or ended. `connected`
+  needs a channel poll within 90 s; the channel (`ctx channel`) now reports its
+  polling through `POST /api/coord/heartbeat`, written at most once per 30 s
+  per agent and answered the same whether it wrote or not. `working` comes from
+  a session the collector saw tool calls for in the last 2 minutes (only in
+  project rooms, only for activity of that project, and only for an agent that
+  reported its session id: `ctx claude` now starts Claude Code with
+  `--session-id`, and the agent reports it at registration; there is no suffix
+  matching on agent ids), `paused` only for an effective pause (hook ack and
+  transcript proof; an acknowledged pause stays `unknown`),
+  `waiting_peer`/`waiting_user` from an open question or approval the agent
+  sent in that room, `blocked` from an open blocker. Known gaps, printed with
+  the peer list: `ended` is never produced (no session-end signal exists),
+  there is no self-report channel, Bash-only work is invisible, agents started
+  without the launcher or resumed with `--resume` stay `unknown`, and codex
+  agents have little to observe.
+- Observed activity is bound to the account that reported it.
+  `POST /api/activity` and `GET /api/activity/session` require that the caller
+  has an uploaded session with that id (a bare session id used to pass for
+  everyone, and a foreign row of another harness with the same id no longer
+  matters). `path_activity` gets `account_id` (old rows stay 0, the instance
+  owner; the table is rebuilt so a foreign row cannot shadow yours) and
+  presence reads only the agent's own account. A client `at` more than 30 s
+  ahead or 5 min behind server time is replaced by server time. While access
+  enforcement is on, `GET /api/activity/path` shows ordinary members the agent
+  that reported a session instead of its id, and hides the checkout path (the
+  owner and project leads see both). This masking is cosmetic: members can
+  read session ids through `/api/sessions`, and the account binding above is
+  the actual protection. The asker's own session is left out by its registered
+  id. The
+  collector now logs a refused activity upload (at most once a minute). Agents
+  without the launcher register the harness session id they know.
+- Fixed: `ctx doc new` and `ctx doc pull` no longer prepend the creation date
+  to the worktree filename when the slug already starts with a `YYYY-MM-DD`
+  date (it produced `2026-10-02-2026-10-02-x.md`, sometimes with two
+  different dates because the prefix is the UTC creation date). Existing
+  files with a doubled prefix are not renamed and keep working: `ctx doc pull`
+  now reuses the path already recorded for a document. To tidy one, rename
+  the file under `.ghosttree/edit/` and update its `path` in
+  `.ghosttree/edit/.state.json`; the server only stores the slug.
+
+- A plain `ack` message from an agent (not a reply, no question, approval,
+  blocker or handoff) in a direct or group room no longer wakes channel
+  agents; it stays readable by pull. Acks that reply to a request, human acks
+  and acks in project or machine rooms behave as before.
+
+- Agents now see who a human sender is. The messages API has an optional
+  `sender_display_name` (the account name, read live, human authors only,
+  withheld from guests of a project room while access enforcement is on); the
+  channel meta has `sender_name`; `coord_inbox`, `coord_dm_read` and thread
+  reads show `Robin (person:1, human)` instead of `person:1 (human)`
+  (`coord_dm_read` and thread posts had no human tag before, and thread posts
+  are now header-safe too). The name is a label the person chose, not proof of
+  identity: the sender id stays the identity, and the channel instructions and
+  the MCP legend say so. Names are normalised (NFKC, invisible characters and
+  Hangul fillers removed, only letters, digits, spaces and `. _ - '`, at most
+  64 characters). New accounts are compared ignoring case and look-alike forms:
+  an invited account whose name collides gets a `-2` style suffix, and
+  `ctx account add` or `ctx person add` refuse it. Latin and Cyrillic letters
+  inside one name, and look-alikes made with a legitimate combining mark, are
+  still not caught. Names are normalised to a fixpoint (at most two combining
+  marks per letter, overlay marks dropped) and the web shows the same
+  normalised string. Guest masking applies to project rooms; in DMs and
+  private groups members see each other as before. A guest sees sender ids instead of account names and
+  agent owner names in the coordination page, in standing instructions (the sender id) and
+  thread authors (hidden), and only their own row in the project role table of the
+  organization page. Guests also no longer receive `author_principal_id` (the
+  owner account of an agent) on messages or attention items. `ctx person add` reports the stored name.
 - A person can pause or interrupt a Claude agent that was started with
   `ctx claude`, from the participant list of the coordination page. Allowed
   for project role lead or above and for the owner of the agent's account,

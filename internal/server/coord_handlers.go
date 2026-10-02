@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -140,6 +141,14 @@ func (a *api) sendCoordMessage(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "destination_id, sender_external_id and client_id are required")
 		return
 	}
+	// Über diese Route kommen nur Agenten. standing gehört Menschen und
+	// attention setzt der Store; beides darf ein Client nicht behaupten.
+	intent, err := store.AgentSendIntent(in.Intent)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	in.Intent = intent
 	id, err := a.coordAccess(r, in.SenderExternalID).Send(in)
 	if err != nil {
 		writeCoordAccessError(w, err)
@@ -209,6 +218,10 @@ func (a *api) registerCoordAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.ExternalID == "" || in.RoomKey == "" {
 		writeErr(w, http.StatusBadRequest, "external_id and room_key are required")
+		return
+	}
+	if store.ReservedExternalID(in.ExternalID) {
+		writeCoded(w, http.StatusBadRequest, "reserved_external_id", "the system: prefix is reserved for ghosttree itself")
 		return
 	}
 	if !store.ValidExternalID(in.ExternalID) {
@@ -530,10 +543,49 @@ func (a *api) pathActivity(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
-	if out == nil {
-		out = []store.PathActivity{}
-	}
+	out = a.shapePathActivity(r, scope.NormalizeRemote(q.Get("project")), q.Get("exclude_session"), out)
 	writeJSON(w, 200, out)
+}
+
+// shapePathActivity schließt den Fragenden selbst aus (auch unter seiner
+// gemeldeten Session-UUID, nicht nur unter der Agenten-ID) und maskiert die
+// Session-Kennung für alle außer dem Eigentümer der Zeile und Leads des
+// Projekts: die UUID ist der Schlüssel, unter dem Aktivität zugeordnet wird,
+// und soll nicht jedem Mitglied als Name für fremde Sessions dienen. Statt ihrer
+// steht der Agent, der sie gemeldet hat, sonst nichts. Im Log-Modus des
+// Zugriffsschalters bleibt alles sichtbar.
+func (a *api) shapePathActivity(r *http.Request, project, exclude string, in []store.PathActivity) []store.PathActivity {
+	me := principalOf(r)
+	myAccount := store.AccountIDOf(me.ID)
+	skip := map[string]bool{}
+	if exclude != "" {
+		skip[exclude] = true
+		if sid := a.st.AgentSessionID(exclude, me.ID); sid != "" {
+			skip[sid] = true
+		}
+	}
+	lead := store.RoleRank(a.st.ProjectRole(project, me.ID).Role) >= store.RoleRank(store.RoleLead)
+	mask := a.st.AccessEnforced() && !lead
+	owner := a.st.OwnerAccountID()
+	out := make([]store.PathActivity, 0, len(in))
+	for _, e := range in {
+		if skip[e.SessionExternalID] {
+			continue
+		}
+		if mask {
+			rowAccount := e.AccountID
+			if rowAccount == 0 {
+				rowAccount = owner
+			}
+			if rowAccount != myAccount {
+				e.SessionExternalID = a.st.AgentForSession(e.SessionExternalID, rowAccount)
+				// Der Checkout ist ein fremder absoluter Pfad auf einer fremden Maschine.
+				e.Checkout = ""
+			}
+		}
+		out = append(out, e)
+	}
+	return out
 }
 
 // sessionActivity zeigt, woran EINE Session gearbeitet hat — die
@@ -545,16 +597,14 @@ func (a *api) sessionActivity(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "session is required")
 		return
 	}
-	if ok, err := a.mayActAs(r, q.Get("session")); err != nil {
-		writeStoreError(w, http.StatusInternalServerError, err)
-		return
-	} else if !ok {
+	// Wie beim Schreiben zählt das Konto der Session, nicht die Agenten-ID.
+	if !a.st.SessionOwnedBy(q.Get("session"), principalOf(r).ID) {
 		writeErr(w, http.StatusForbidden, "that session belongs to someone else")
 		return
 	}
 	minutes, _ := strconv.Atoi(q.Get("minutes"))
 	limit, _ := strconv.Atoi(q.Get("limit"))
-	out, err := a.st.SessionPathActivity(q.Get("session"), store.ActivityWindow(minutes), limit)
+	out, err := a.st.SessionPathActivity(q.Get("session"), store.AccountIDOf(principalOf(r).ID), store.ActivityWindow(minutes), limit)
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
@@ -578,20 +628,43 @@ func (a *api) recordPathActivity(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
-	for _, e := range in {
-		if ok, err := a.mayActAs(r, e.SessionExternalID); err != nil {
-			writeStoreError(w, http.StatusInternalServerError, err)
-			return
-		} else if !ok {
+	// Eine Session hat einen Eigentümer erst, wenn ihr Transkript hochgeladen
+	// ist; der Collector lädt hoch, bevor er Aktivität meldet. Eine bloße
+	// Session-Kennung ist keine registrierte Agenten-ID und bestünde jede
+	// mayActAs-Prüfung, deshalb zählt hier nur das Konto der Session.
+	principal := principalOf(r).ID
+	nowTime := time.Now().UTC()
+	for i := range in {
+		if !a.st.SessionOwnedBy(in[i].SessionExternalID, principal) {
 			writeErr(w, http.StatusForbidden, "cannot record activity for another person's session")
 			return
 		}
+		in[i].At = clampActivityTime(in[i].At, nowTime)
+		in[i].AccountID = store.AccountIDOf(principal)
 	}
 	if err := a.st.RecordPathActivity(in); err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
 	writeJSON(w, 200, map[string]int{"recorded": len(in)})
+}
+
+// maxActivitySkew: so weit darf ein vom Client gemeldeter Zeitpunkt in der
+// Vergangenheit von der Serverzeit abweichen. Alles darüber hinaus ist Uhrenfehler oder Fälschung
+// (eine Aktivität "im Jahr 2099" bliebe sonst ewig frisch) und wird durch die
+// Serverzeit ersetzt.
+const maxActivitySkew = 5 * time.Minute
+
+// maxActivityFuture: in die Zukunft darf ein Zeitpunkt kaum zeigen. Eine
+// Aktivität "von gleich" bliebe sonst entsprechend länger frisch.
+const maxActivityFuture = 30 * time.Second
+
+func clampActivityTime(at string, now time.Time) string {
+	t, err := time.Parse(time.RFC3339, at)
+	if err != nil || t.After(now.Add(maxActivityFuture)) || t.Before(now.Add(-maxActivitySkew)) {
+		return now.Format(time.RFC3339)
+	}
+	return t.UTC().Format(time.RFC3339)
 }
 
 type coordDeliveryInput struct {
@@ -625,6 +698,30 @@ func (a *api) markCoordDelivery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]string{"status": in.State})
+}
+
+type coordHeartbeatInput struct {
+	Agent string `json:"agent_external_id"`
+}
+
+// coordHeartbeat nimmt den Takt des Channel-Pollers an. Der Agent muss zum
+// Token gehören; ein fremder Takt wäre eine erfundene Erreichbarkeit. Die
+// Antwort ist immer dieselbe, ob geschrieben oder gedrosselt wurde.
+func (a *api) coordHeartbeat(w http.ResponseWriter, r *http.Request) {
+	var in coordHeartbeatInput
+	if err := readJSON(r, &in); err != nil {
+		writeStoreError(w, http.StatusBadRequest, err)
+		return
+	}
+	if in.Agent == "" {
+		writeErr(w, http.StatusBadRequest, "agent_external_id is required")
+		return
+	}
+	if err := a.coordAccess(r, in.Agent).Heartbeat(); err != nil {
+		writeCoordAccessError(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]string{"status": "ok"})
 }
 
 // claimCoordDelivery entscheidet, welcher Kanal eine Nachricht einbringen

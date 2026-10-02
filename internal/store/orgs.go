@@ -999,23 +999,22 @@ func (s *Store) acceptInvitation(acct int64, code string) (Org, error) {
 }
 
 // inviteName macht aus dem Anzeigenamen einen freien Kontonamen.
-func inviteName(tx rowQuerier, wanted string) (string, error) {
-	base := strings.TrimSpace(wanted)
+func inviteName(tx queryer, wanted string) (string, error) {
+	base := NormalizeAccountName(wanted)
 	if base == "" {
 		base = "user"
 	}
-	if len(base) > 64 {
-		base = base[:64]
+	if r := []rune(base); len(r) > 60 {
+		base = string(r[:60])
 	}
 	name := base
 	for i := 2; i < 1000; i++ {
-		var one int
-		err := tx.QueryRow(`SELECT 1 FROM persons WHERE name=?`, name).Scan(&one)
-		if errors.Is(err, sql.ErrNoRows) {
-			return name, nil
-		}
+		taken, err := accountNameTakenTx(tx, name)
 		if err != nil {
 			return "", err
+		}
+		if !taken {
+			return name, nil
 		}
 		name = base + "-" + strconv.Itoa(i)
 	}
