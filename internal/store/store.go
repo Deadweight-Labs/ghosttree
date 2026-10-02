@@ -599,7 +599,8 @@ CREATE TABLE IF NOT EXISTS path_activity(
   writes INTEGER NOT NULL DEFAULT 0,
   quality TEXT NOT NULL CHECK(quality IN ('intent','reported_success','observed_change','unattributed')),
   at TEXT NOT NULL,
-  UNIQUE(session_external_id,tool,path,quality,at));
+  account_id INTEGER NOT NULL DEFAULT 0,
+  UNIQUE(account_id,session_external_id,tool,path,quality,at));
 CREATE INDEX IF NOT EXISTS path_activity_path ON path_activity(project,path,at);
 CREATE INDEX IF NOT EXISTS path_activity_session ON path_activity(session_external_id,at);
 CREATE TABLE IF NOT EXISTS coord_standing(
@@ -879,6 +880,14 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 		return nil, err
 	}
 	if err := ensureCoordAgentPrincipalID(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensurePathActivityAccount(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureCoordAgentPresence(db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}

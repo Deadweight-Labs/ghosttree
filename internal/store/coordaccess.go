@@ -1013,6 +1013,22 @@ func (a CoordAccess) MarkDelivery(messageID int64, state string) error {
 	return a.Store.MarkCoordDelivery(messageID, actor, state)
 }
 
+// Heartbeat stempelt den Abruf des eigenen Agenten. Nur der Agent des Tokens
+// darf das; die Antwort verrät nicht, ob geschrieben oder gedrosselt wurde.
+func (a CoordAccess) Heartbeat() error {
+	if a.AgentExternalID == "" {
+		return ErrCoordForbidden
+	}
+	actor, err := a.mutationActor()
+	if err != nil {
+		return err
+	}
+	if !a.Store.CoordAgentPollDue(actor) {
+		return nil
+	}
+	return a.Store.TouchCoordAgentPoll(actor)
+}
+
 func (a CoordAccess) ClaimDelivery(messageID int64) (bool, error) {
 	if a.Store != nil && a.Store.writer != nil {
 		return queueValue(a.Store, []any{a.Principal, a.AgentExternalID, a.publicOnly, messageID}, func(d *Store, p []any) (bool, error) {

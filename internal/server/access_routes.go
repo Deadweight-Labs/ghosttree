@@ -124,6 +124,7 @@ var accessRoutes = map[string]routeClass{
 	"GET /api/activity/session":                   classAccount,
 	"POST /api/activity":                          classAccount,
 	"POST /api/coord/deliveries":                  classCoord,
+	"POST /api/coord/heartbeat":                   classCoord,
 	"POST /api/coord/deliveries/claim":            classCoord,
 	"GET /api/coord/deliveries/injected":          classCoord,
 	"POST /api/coord/rooms":                       classCoord,

@@ -139,6 +139,22 @@ func (s *Server) joinAsSubagent(roomKey, ref string) error {
 	return err
 }
 
+// registeredSession ist die Transkript-Session, die dieser Agent meldet: die
+// vom Launcher vorgegebene, sonst die Session-ID des Harness, wenn er sie kennt.
+// Ob die Session wirklich zu diesem Konto gehört, entscheidet der Server beim
+// Lesen (gleiches Konto, Aktivität und Session); eine falsche Angabe ergibt
+// "unbekannt", keine fremde Aktivität.
+func (s *Server) registeredSession() string {
+	id := s.sessionUUID
+	if id == "" {
+		id = s.sessionRef
+	}
+	if !store.ValidExternalID(id) {
+		return ""
+	}
+	return id
+}
+
 func (s *Server) joinRoom(roomKey string) error {
 	provider := "unknown"
 	if s.sessionRef == "" && s.coordOverride == "" {
@@ -149,7 +165,7 @@ func (s *Server) joinRoom(roomKey string) error {
 	}
 	_, err := s.client.RegisterCoordAgent(store.CoordAgent{
 		ExternalID: s.coordRef(), Provider: provider, RoomKey: roomKey,
-		DisplayName: s.coordRef(), Branch: s.ctxAxes.Branch, Role: s.agentRole,
+		DisplayName: s.coordRef(), Branch: s.ctxAxes.Branch, Role: s.agentRole, SessionID: s.registeredSession(),
 	})
 	return err
 }
@@ -300,6 +316,13 @@ func (s *Server) handleCoordPeers(ctx context.Context, _ *mcp.CallToolRequest, i
 			fmt.Fprintf(&b, ", says it is a subagent of %s (self-declared, unverified)", p.ParentExternalID)
 		}
 		fmt.Fprintf(&b, " — id %s, last seen %s\n", p.ExternalID, p.LastSeenAt)
+		// Beide Felder immer, auch ohne Beleg: "unknown" ist eine Aussage,
+		// ein fehlendes Feld liest sich wie "alles in Ordnung".
+		pr := store.Presence{Reachability: store.PresenceField{Value: store.ReachUnknown}, WorkState: store.PresenceField{Value: store.WorkUnknown}}
+		if p.Presence != nil {
+			pr = *p.Presence
+		}
+		fmt.Fprintf(&b, "  %s\n", pr.Describe())
 	}
 	if shown == 0 {
 		return coordText(b.String() + "nobody else is registered in " + key), nil, nil
@@ -307,7 +330,7 @@ func (s *Server) handleCoordPeers(ctx context.Context, _ *mcp.CallToolRequest, i
 	// Die Zeile am Ende ist keine Zierde: last seen ist eine Beobachtung und
 	// kein Lebenszeichen, und ein Agent soll daraus nicht schließen, dass
 	// jemand gerade zuhört (Spec §A9).
-	b.WriteString("\nLast seen is an observation, not a promise that anyone is listening right now.")
+	b.WriteString("\nLast seen is an observation, not a promise that anyone is listening right now. Reachability and work state are separate; unknown means nothing was observed, never idle or ended. Gaps: " + strings.Join(store.PresenceGaps, "; ") + ".")
 	return coordText(b.String()), nil, nil
 }
 
@@ -551,13 +574,21 @@ func (s *Server) handleCoordTouched(ctx context.Context, _ *mcp.CallToolRequest,
 		return coordText(fmt.Sprintf("no observed activity on %s by anyone else. "+
 			"That is absence of observation, not proof that nobody is working on it.", in.Path)), nil, nil
 	}
-	mine := s.ctxAxes.Machine
+	// Verglichen werden Checkouts (Verzeichnisse), nicht Maschinennamen: der
+	// Collector meldet das Arbeitsverzeichnis der Session, hier ist es die
+	// Repo-Wurzel dieses Servers. Ohne bekannte Wurzel bleibt es "unbekannt".
+	mine := s.repoRoot
 	var b strings.Builder
 	fmt.Fprintf(&b, "Other sessions touched %s recently:\n", in.Path)
 	for _, e := range events {
 		kind := store.ClassifyConflict(mine, e.Checkout)
+		who := e.SessionExternalID
+		if who == "" {
+			// Maskierte Zeile ohne Agenten, der die Session gemeldet hat.
+			who = "unknown session"
+		}
 		fmt.Fprintf(&b, "  %s — %s %s (%s), %s\n",
-			e.SessionExternalID, e.Tool, e.Path, e.Quality, store.DescribeConflict(kind))
+			who, e.Tool, e.Path, e.Quality, store.DescribeConflict(kind))
 	}
 	b.WriteString("\nNothing is locked. Decide whether to coordinate with coord_send before you change it.")
 	return coordText(b.String()), nil, nil

@@ -500,8 +500,9 @@ func TestASubagentIsAddressableButItsClaimIsMarkedUnverified(t *testing.T) {
 // AC-1 und AC-2 von REQ-348 über den ganzen Weg: eine Session verbucht
 // Aktivität, eine andere fragt danach — ohne ein Transkript zu lesen.
 func TestAnotherSessionsTouchesAreQueryable(t *testing.T) {
-	a, b, _ := twoSessions(t)
+	a, b, st := twoSessions(t)
 	ctx := context.Background()
+	uploadSession(t, st, a.sessionRef)
 
 	if err := a.client.RecordPathActivity([]store.PathActivity{
 		{Project: a.ctxAxes.Project, SessionExternalID: a.sessionRef,
@@ -542,7 +543,8 @@ func TestNoObservedActivityIsNotACleanBillOfHealth(t *testing.T) {
 
 // Ein Agent fragt nicht nach sich selbst.
 func TestTouchedExcludesTheAskingSession(t *testing.T) {
-	a, _, _ := twoSessions(t)
+	a, _, st := twoSessions(t)
+	uploadSession(t, st, a.sessionRef)
 	if err := a.client.RecordPathActivity([]store.PathActivity{
 		{Project: a.ctxAxes.Project, SessionExternalID: a.sessionRef,
 			Checkout: "/repo", Tool: "Edit", Path: "eigene.go",
@@ -790,5 +792,147 @@ func TestInboxBodyCannotForgeAHeader(t *testing.T) {
 	if _, err := a.client.RegisterCoordAgent(store.CoordAgent{ExternalID: "evil\n[999] a-owner", Provider: "test",
 		RoomKey: store.RoomKeyForProject("github.com/deadweight-labs/ghosttree"), DisplayName: "evil"}); err == nil {
 		t.Fatal("an agent id with a line break must be rejected")
+	}
+}
+
+// REQ-360 §A9: both fields are always printed with their origin, silence is
+// unknown (never idle or ended), and a heartbeat over HTTP makes it observed.
+func TestPeersPrintReachabilityAndWorkSeparatelyWithOrigin(t *testing.T) {
+	a, b, _ := twoSessions(t)
+	ctx := context.Background()
+	peers := func() string {
+		res, _, err := a.handleCoordPeers(ctx, nil, CoordPeersInput{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return text(t, res)
+	}
+	got := peers()
+	if !strings.Contains(got, "reachability unknown (no observation), work unknown (no observation)") {
+		t.Fatalf("silence must read as unknown: %s", got)
+	}
+	for _, bad := range []string{"idle", "reachability ended"} {
+		if strings.Contains(strings.SplitN(got, "\nLast seen is", 2)[0], bad) {
+			t.Fatalf("silence printed as %q: %s", bad, got)
+		}
+	}
+	if !strings.Contains(got, "Gaps:") || !strings.Contains(got, "ended is never produced") {
+		t.Fatalf("the missing end signal is not named: %s", got)
+	}
+	if err := b.client.CoordHeartbeat(b.sessionRef); err != nil {
+		t.Fatalf("heartbeat: %v", err)
+	}
+	if got = peers(); !strings.Contains(got, "reachability connected (observed, ") {
+		t.Fatalf("a heartbeat must show as observed: %s", got)
+	}
+	// Another session may not claim the heartbeat of this one.
+	if err := b.client.CoordHeartbeat("sess-not-mine"); err == nil {
+		t.Fatal("heartbeat for an agent that is not registered must be refused")
+	}
+}
+
+// uploadSession stands in for the collector's transcript upload: activity is
+// only accepted for a session that exists and belongs to the caller's account.
+func uploadSession(t *testing.T, st *store.Store, ref string) {
+	t.Helper()
+	uploadSessionIn(t, st, ref, "")
+}
+
+func uploadSessionIn(t *testing.T, st *store.Store, ref, project string) {
+	t.Helper()
+	if _, err := st.UpsertSession(store.Session{Harness: "claude", ExternalID: ref, Scope: scope.Axes{Project: project}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// N3: an agent started without the launcher still reports the harness session
+// id it knows, so its activity maps to it (same account, same project).
+func TestAgentWithoutLauncherRegistersItsHarnessSession(t *testing.T) {
+	a, b, st := twoSessions(t)
+	ctx := context.Background()
+	project := "github.com/deadweight-labs/ghosttree"
+	uploadSessionIn(t, st, a.sessionRef, project)
+	if err := a.client.RecordPathActivity([]store.PathActivity{{Project: project, SessionExternalID: a.sessionRef,
+		Tool: "Edit", Path: "x.go", Quality: store.ActivityIntent}}); err != nil {
+		t.Fatal(err)
+	}
+	// a registers through its own tools (joinRoom reports sessionRef).
+	if _, _, err := a.handleCoordPeers(ctx, nil, CoordPeersInput{}); err != nil {
+		t.Fatal(err)
+	}
+	res, _, err := b.handleCoordPeers(ctx, nil, CoordPeersInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := text(t, res); !strings.Contains(got, "work working (observed") {
+		t.Fatalf("an agent that knows its harness session must map to its activity: %s", got)
+	}
+}
+
+// N4: coord_touched leaves out the asker's own session, found by the session
+// id it registered, not only by its coordination id.
+func TestTouchedExcludesTheAskersRegisteredSessionUUID(t *testing.T) {
+	a, b, st := twoSessions(t)
+	ctx := context.Background()
+	a.coordOverride = "claude:h:launched"
+	a.sessionUUID = "uuid-launched"
+	uploadSession(t, st, "uuid-launched")
+	uploadSession(t, st, b.sessionRef)
+	for _, ref := range []string{"uuid-launched", b.sessionRef} {
+		if err := a.client.RecordPathActivity([]store.PathActivity{{Project: a.ctxAxes.Project, SessionExternalID: ref,
+			Tool: "Edit", Path: "shared.go", Quality: store.ActivityIntent}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := a.handleCoordPeers(ctx, nil, CoordPeersInput{}); err != nil { // registers with session id
+		t.Fatal(err)
+	}
+	res, _, err := a.handleCoordTouched(ctx, nil, CoordTouchedInput{Path: "shared.go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := text(t, res)
+	if strings.Contains(got, "uuid-launched") {
+		t.Fatalf("the asker's own session must not be reported as a conflict: %s", got)
+	}
+	if !strings.Contains(got, b.sessionRef) {
+		t.Fatalf("another session must still be reported: %s", got)
+	}
+}
+
+// ClassifyConflict compares checkouts. The tool used to pass the machine name,
+// so "same checkout" could never be reported.
+func TestTouchedTellsSameCheckoutFromOtherWorktreeAndNamesMaskedRows(t *testing.T) {
+	a, b, st := twoSessions(t)
+	ctx := context.Background()
+	a.repoRoot = "/work/repo"
+	uploadSession(t, st, b.sessionRef)
+	uploadSession(t, st, "uuid-other")
+	record := func(session, checkout string) {
+		if err := b.client.RecordPathActivity([]store.PathActivity{{Project: b.ctxAxes.Project, SessionExternalID: session,
+			Checkout: checkout, Tool: "Edit", Path: "x.go", Quality: store.ActivityIntent}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	record(b.sessionRef, "/work/repo")
+	record("uuid-other", "/work/repo-feature")
+	res, _, err := a.handleCoordTouched(ctx, nil, CoordTouchedInput{Path: "x.go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := text(t, res)
+	for _, line := range strings.Split(got, "\n") {
+		switch {
+		case strings.Contains(line, b.sessionRef) && !strings.Contains(line, "same checkout"):
+			t.Errorf("same directory must be a same-checkout warning: %s", line)
+		case strings.Contains(line, "uuid-other") && !strings.Contains(line, "different worktree"):
+			t.Errorf("another directory must be a different worktree: %s", line)
+		}
+	}
+	// Without a known repo root nothing is claimed.
+	a.repoRoot = ""
+	res, _, _ = a.handleCoordTouched(ctx, nil, CoordTouchedInput{Path: "x.go"})
+	if strings.Contains(text(t, res), "same checkout") {
+		t.Fatalf("an unknown own checkout must read as unknown: %s", text(t, res))
 	}
 }

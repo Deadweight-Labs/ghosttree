@@ -182,6 +182,12 @@ func (c *Client) MarkCoordDelivery(messageID int64, recipient, state string) err
 	}, nil)
 }
 
+// CoordHeartbeat meldet, dass der Channel dieses Agenten gerade abruft. Der
+// Server drosselt selbst auf einen Schreibvorgang je HeartbeatInterval.
+func (c *Client) CoordHeartbeat(agent string) error {
+	return c.do("POST", "/api/coord/heartbeat", nil, map[string]any{"agent_external_id": agent}, nil)
+}
+
 // ClaimCoordDelivery fragt, ob dieser Aufrufer die Nachricht einbringen darf.
 // Genau ein Aufrufer je Nachricht und Empfänger bekommt true.
 func (c *Client) ClaimCoordDelivery(messageID int64, recipient string) (bool, error) {

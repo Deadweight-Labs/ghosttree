@@ -29,6 +29,11 @@ const (
 	// guest) zu ctx channel und ctx mcp. Der Server kappt sie live am Rang des
 	// Kontos im Projekt, höchstens lead.
 	agentRoleEnv = "GHOSTTREE_AGENT_ROLE"
+	// sessionIDEnv trägt die Session-UUID, die der Launcher Claude Code per
+	// --session-id vorgibt. ctx mcp und ctx channel melden sie bei der
+	// Anmeldung; nur über sie lässt sich beobachtete Aktivität einem Agenten
+	// zuordnen (Presence, REQ-360).
+	sessionIDEnv = "GHOSTTREE_SESSION_ID"
 	// claudeDryRunEnv entspricht --dry-run.
 	claudeDryRunEnv = "GHOSTTREE_CLAUDE_DRY_RUN"
 	// claudeBinEnv überschreibt das aufgerufene claude-Programm.
@@ -55,6 +60,17 @@ and 'ctx install' does not register it. Claude Code will ask you to confirm
 // newAgentID erzeugt die eine Identität dieses Launches, im Stil der übrigen
 // Kennungen (Anbieter:Maschine:Kennung).
 func newAgentID(machine string) (string, error) {
+	u, err := newUUID()
+	if err != nil {
+		return "", err
+	}
+	if machine == "" {
+		machine = "unknown"
+	}
+	return "claude:" + machine + ":" + u, nil
+}
+
+func newUUID() (string, error) {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		return "", err
@@ -62,10 +78,34 @@ func newAgentID(machine string) (string, error) {
 	b[6] = b[6]&0x0f | 0x40 // UUID v4
 	b[8] = b[8]&0x3f | 0x80
 	h := hex.EncodeToString(b[:])
-	if machine == "" {
-		machine = "unknown"
+	return fmt.Sprintf("%s-%s-%s-%s-%s", h[0:8], h[8:12], h[12:16], h[16:20], h[20:]), nil
+}
+
+// sessionFor entscheidet die Session-UUID dieses Starts. Gibt der Aufrufer
+// selbst eine Session vor oder setzt eine fort, ist die UUID nicht unsere
+// Wahl: eine eigene Vorgabe wird übernommen, bei --resume und Verwandten ist
+// sie unbekannt (leer) und der Agent meldet keine. Dann bleibt "arbeitet"
+// unbekannt, statt zu raten.
+func sessionFor(extra []string) (session string, pass bool, err error) {
+	for i, a := range extra {
+		switch a {
+		case "--session-id":
+			if i+1 < len(extra) {
+				return extra[i+1], false, nil
+			}
+			return "", false, nil
+		case "--resume", "-r", "--continue", "-c", "--from-pr":
+			return "", false, nil
+		}
+		if v, ok := strings.CutPrefix(a, "--session-id="); ok {
+			return v, false, nil
+		}
+		if strings.HasPrefix(a, "--resume=") {
+			return "", false, nil
+		}
 	}
-	return fmt.Sprintf("claude:%s:%s-%s-%s-%s-%s", machine, h[0:8], h[8:12], h[12:16], h[16:20], h[20:]), nil
+	session, err = newUUID()
+	return session, err == nil, err
 }
 
 // claudeMCPConfig ist der Inhalt der temporären --mcp-config-Datei. Nur der
@@ -90,6 +130,15 @@ func claudeMCPConfig(exe, agent, role string) ([]byte, error) {
 func claudeArgs(cfgPath string, extra []string) []string {
 	args := []string{"--mcp-config", cfgPath, "--dangerously-load-development-channels", "server:" + channelServerName}
 	return append(args, extra...)
+}
+
+// claudeLaunchArgs ergänzt --session-id, wenn der Launcher die Session
+// vorgibt.
+func claudeLaunchArgs(cfgPath, session string, pass bool, extra []string) []string {
+	if !pass || session == "" {
+		return claudeArgs(cfgPath, extra)
+	}
+	return claudeArgs(cfgPath, append([]string{"--session-id", session}, extra...))
 }
 
 func claudeProgram() string {
@@ -162,6 +211,11 @@ func cmdClaude(args []string, stdout io.Writer) int {
 			return 1
 		}
 	}
+	session, passSession, err := sessionFor(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "claude: %v\n", err)
+		return 1
+	}
 	exe, err := os.Executable()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "claude: locate ctx binary: %v\n", err)
@@ -174,19 +228,20 @@ func cmdClaude(args []string, stdout io.Writer) int {
 	}
 	if dry {
 		fmt.Fprintf(stdout, "agent: %s\ncommand: %s\nenv: %s=%s\n",
-			agent, quoteArgs(claudeProgram(), claudeArgs("<tmp>", args)), agentIDEnv, agent)
+			agent, quoteArgs(claudeProgram(), claudeLaunchArgs("<tmp>", session, passSession, args)), agentIDEnv, agent)
+		fmt.Fprintf(stdout, "env: %s=%s\n", sessionIDEnv, session)
 		if role != "" {
 			fmt.Fprintf(stdout, "env: %s=%s\n", agentRoleEnv, role)
 		}
 		fmt.Fprintf(stdout, "mcp-config:\n%s\n", conf)
 		return 0
 	}
-	return runClaude(conf, agent, role, args)
+	return runClaude(conf, agent, role, session, passSession, args)
 }
 
 // runClaude startet claude als Kindprozess statt per exec, weil die temporäre
 // Konfiguration danach weg muss.
-func runClaude(conf []byte, agent, role string, extra []string) int {
+func runClaude(conf []byte, agent, role, session string, passSession bool, extra []string) int {
 	f, err := os.CreateTemp("", "ghosttree-claude-*.json") // 0600
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "claude: %v\n", err)
@@ -202,9 +257,11 @@ func runClaude(conf []byte, agent, role string, extra []string) int {
 		return 1
 	}
 
-	cmd := exec.Command(claudeProgram(), claudeArgs(f.Name(), extra)...)
+	cmd := exec.Command(claudeProgram(), claudeLaunchArgs(f.Name(), session, passSession, extra)...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	cmd.Env = append(os.Environ(), agentIDEnv+"="+agent)
+	// Die Session-UUID geht nur mit, wenn sie sicher ist; eine geerbte aus einem
+	// früheren Launch wird überschrieben, nicht weitergereicht.
+	cmd.Env = append(os.Environ(), agentIDEnv+"="+agent, sessionIDEnv+"="+session)
 	if role != "" {
 		cmd.Env = append(cmd.Env, agentRoleEnv+"="+role)
 	} else {

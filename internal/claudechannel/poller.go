@@ -86,6 +86,30 @@ type Poller struct {
 	pos      map[string]int64 // Abrufstand je Raum, unabhängig vom gemeinsamen Cursor
 	loops    map[string]*loopRoom
 	loopHeld map[string]bool // rooms whose current hold already got its notice
+
+	lastBeat time.Time
+	readOK   bool // mindestens ein Raum wurde in diesem Durchlauf gelesen
+}
+
+// Heartbeater ist die optionale Seite einer Source, die den Abruf auf dem
+// Server vermerkt (Erreichbarkeit, REQ-360). Der Poller ruft sie höchstens
+// einmal je store.HeartbeatInterval.
+type Heartbeater interface {
+	Heartbeat(self string) error
+}
+
+// beat meldet den Abruf, gedrosselt. Ein Fehler zählt nicht als Abruf und wird
+// beim nächsten Durchlauf wiederholt; er bricht den Durchlauf nicht ab.
+func (p *Poller) beat() {
+	h, ok := p.Source.(Heartbeater)
+	if !ok {
+		return
+	}
+	if now := p.now(); p.lastBeat.IsZero() || now.Sub(p.lastBeat) >= store.HeartbeatInterval {
+		if h.Heartbeat(p.Self) == nil {
+			p.lastBeat = now
+		}
+	}
 }
 
 // loopRoom is the tracker of one room plus the last message it was fed: a
@@ -183,6 +207,7 @@ func (p *Poller) Poll(ctx context.Context) (active bool, err error) {
 		return false, err
 	}
 	var firstErr error
+	p.readOK = false
 	for _, room := range rooms {
 		if ctx.Err() != nil {
 			return active, ctx.Err()
@@ -192,6 +217,12 @@ func (p *Poller) Poll(ctx context.Context) (active bool, err error) {
 		if err != nil && firstErr == nil {
 			firstErr = err
 		}
+	}
+	// "Verbunden" heißt: dieser Durchlauf hat mindestens einen Raum wirklich
+	// gelesen. Ein Server, der Räume nennt und jeden Abruf verweigert, ist
+	// nicht erreichbar.
+	if p.readOK {
+		p.beat()
 	}
 	return active, firstErr
 }
@@ -212,6 +243,7 @@ func (p *Poller) pollRoom(ctx context.Context, room store.CoordRoom) (bool, erro
 	if err != nil {
 		return false, err
 	}
+	p.readOK = true
 	progress := false
 	// contiguous: bis hierher ist alles zugestellt oder eigene Post. Nur dann
 	// darf der gemeinsame Cursor vorrücken, sonst verschwänden ungeweckte
@@ -451,4 +483,9 @@ func (s ClientSource) Cursor(self string, room store.CoordRoom) (int64, error) {
 
 func (s ClientSource) SetCursor(self string, room store.CoordRoom, id int64) error {
 	return s.Client.SetCoordCursor(self, store.DestinationRoom, room.Key, id)
+}
+
+// Heartbeat vermerkt den Abruf auf dem Server.
+func (s ClientSource) Heartbeat(self string) error {
+	return s.Client.CoordHeartbeat(self)
 }
