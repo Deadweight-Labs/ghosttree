@@ -43,6 +43,7 @@ const (
 	envOIDCClientID     = "GHOSTTREE_OIDC_CLIENT_ID"
 	envOIDCClientSecret = "GHOSTTREE_OIDC_CLIENT_SECRET"
 	envOIDCRedirectURL  = "GHOSTTREE_OIDC_REDIRECT_URL"
+	envOIDCName         = "GHOSTTREE_OIDC_NAME"
 	// envEnforceAccess schaltet die Sichtbarkeit nach Rolle scharf. Ohne "1"
 	// wird nur protokolliert, was verweigert würde ("access: would deny").
 	envEnforceAccess = "GHOSTTREE_ENFORCE_ACCESS"
@@ -109,6 +110,7 @@ func parseServeConfig(args []string, output io.Writer) (serveConfig, error) {
 	fs.StringVar(&cfg.OIDC.Issuer, "oidc-issuer", os.Getenv(envOIDCIssuer), "OIDC issuer URL, e.g. https://id.example.com (env "+envOIDCIssuer+")")
 	fs.StringVar(&cfg.OIDC.ClientID, "oidc-client-id", os.Getenv(envOIDCClientID), "OIDC client id (env "+envOIDCClientID+")")
 	fs.StringVar(&cfg.OIDC.RedirectURL, "oidc-redirect-url", os.Getenv(envOIDCRedirectURL), "OIDC redirect URL, https://<public host>/ui/login/oidc/callback (env "+envOIDCRedirectURL+")")
+	fs.StringVar(&cfg.OIDC.Name, "oidc-name", os.Getenv(envOIDCName), "provider name on the sign-in button, e.g. ZITADEL; empty names no provider (env "+envOIDCName+")")
 	fs.StringVar(&cfg.PublicURL, "public-url", os.Getenv(envPublicURL), "external base URL, e.g. https://ghosttree.example.com; an https URL makes every cookie Secure (env "+envPublicURL+")")
 	fs.StringVar(&cfg.DistDir, "dist-dir", os.Getenv(envDistDir), "directory with ctx_<version>_<os>_<arch>.tar.gz archives and checksums.txt; enables /install.sh and /dist/ (env "+envDistDir+")")
 	trusted := fs.String("trusted-proxies", os.Getenv(envTrustedProxies), "comma-separated CIDRs/IPs of reverse proxies whose X-Forwarded-Proto/Host are believed; loopback is always trusted, nothing else by default (env "+envTrustedProxies+")")

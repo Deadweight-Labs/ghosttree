@@ -1,0 +1,168 @@
+/* App shell and sign-in page. Only token values are used for colour, space,
+   radius and type; see tokens.css. */
+
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+body.ui {
+  margin: 0;
+  background: var(--color-surface-app);
+  color: var(--color-text-primary);
+  font: var(--text-body);
+  -webkit-font-smoothing: antialiased;
+}
+:where(body.ui) a { color: var(--color-accent-text); }
+:where(body.ui) :focus-visible { outline: 2px solid var(--focus-color); outline-offset: 2px; }
+:where(body.ui) h1 { font: var(--text-page-title); margin: 0 0 var(--space-4); }
+:where(body.ui) h2 { font: var(--text-panel-title); }
+:where(body.ui) :is(code, pre, kbd) { font-family: var(--font-mono); }
+:where(body.ui) :is(input, select, button, textarea) { font-family: inherit; font-size: inherit; margin: 0; }
+
+/* Buttons and fields (shell and sign-in) */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; width: 100%;
+  min-height: 28px; padding: 3px 10px; margin: 0; cursor: pointer;
+  border: 1px solid var(--color-line-strong); border-radius: var(--radius-md);
+  background: var(--color-surface-panel); color: var(--color-text-primary);
+  font: 600 13px/1.3 var(--font-sans); text-align: left; justify-content: flex-start;
+}
+.btn:hover { background: var(--color-surface-hover); }
+.btn-primary { background: var(--color-accent); border-color: var(--color-accent); color: #fff; }
+.btn-primary:hover { background: var(--color-accent-hover); }
+
+.field { display: grid; gap: var(--space-1); margin: 0 0 var(--space-3); }
+.field > span { font-weight: 600; }
+.field input {
+  min-height: 30px; padding: 4px 10px; border: 1px solid var(--color-line-strong);
+  border-radius: var(--radius-md); background: var(--color-surface-panel); color: var(--color-text-primary);
+}
+.field input::placeholder, .shell-search input::placeholder { color: var(--color-text-muted); opacity: 1; }
+.field input:focus, .field input:focus-visible, .shell-search input:focus-visible {
+  outline: none; border-color: var(--color-accent); box-shadow: var(--focus-ring);
+}
+
+/* Shell */
+.shell { display: grid; grid-template-columns: var(--side-width) minmax(0, 1fr); min-height: 100vh; }
+.shell-side {
+  position: sticky; top: 0; align-self: start; height: 100vh; display: flex; flex-direction: column;
+  padding: var(--space-4) 0 var(--space-3); background: var(--color-surface-nav);
+  border-right: 1px solid var(--color-line-default);
+}
+.shell-brand, .login-brand {
+  display: flex; align-items: center; gap: var(--space-2); color: var(--color-text-primary) !important;
+  font: 600 15px/1 var(--font-sans); text-decoration: none;
+}
+.shell-head { display: flex; align-items: center; justify-content: space-between; padding: 0 var(--space-3) var(--space-4) 0; }
+.shell-brand { padding: 0 var(--space-4) 0 18px; }
+.shell-toggle { display: none; width: 32px; height: 32px; padding: 0; border: 1px solid var(--color-line-default); border-radius: var(--radius-md); background: var(--color-surface-panel); cursor: pointer; }
+.shell-toggle span, .shell-toggle span::before, .shell-toggle span::after { display: block; width: 14px; height: 2px; margin: 0 auto; background: var(--color-text-secondary); content: ""; }
+.shell-toggle span { position: relative; }
+.shell-toggle span::before { position: absolute; top: -5px; left: 0; }
+.shell-toggle span::after { position: absolute; top: 5px; left: 0; }
+.shell-collapsible { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.brand-mark { width: 18px; height: 18px; border-radius: 5px; background: var(--color-accent); }
+.shell-project { margin: 0 10px var(--space-4); }
+.shell-project select {
+  width: 100%; min-height: 34px; padding: 0 var(--space-2); border: 1px solid var(--color-line-default);
+  border-radius: var(--radius-md); background: var(--color-surface-panel); color: var(--color-text-primary);
+  font-weight: 600; text-overflow: ellipsis;
+}
+.shell-nav { display: flex; flex-direction: column; gap: 2px; padding: 0 10px; }
+.shell-link, .shell-sub {
+  display: block; padding: 5px var(--space-2); border-radius: var(--radius-md);
+  color: var(--color-text-secondary) !important; text-decoration: none; line-height: 18px;
+}
+.shell-sub { margin-left: var(--space-4); padding-block: 3px; font: var(--text-secondary); }
+.shell-link:hover, .shell-sub:hover { background: var(--color-surface-hover); }
+.shell-link[aria-current="page"] { background: var(--color-surface-selected); color: var(--color-text-primary) !important; font-weight: 600; }
+.shell-sub.is-active { color: var(--color-text-primary) !important; font-weight: 600; }
+.shell-rule { width: calc(100% - 2 * var(--space-2)); margin: var(--space-4) var(--space-2); border: 0; border-top: 1px solid var(--color-line-default); }
+.shell-host { margin: auto 0 0; padding: 0 var(--space-4) 0 18px; font: 400 11px/1.4 var(--font-mono); color: var(--color-text-muted); overflow-wrap: anywhere; }
+
+.shell-main { min-width: 0; display: flex; flex-direction: column; }
+.shell-top {
+  position: sticky; top: 0; z-index: 20; height: var(--top-height); flex: none; display: flex; align-items: center;
+  justify-content: space-between; padding: 0 var(--space-3) 0 var(--space-4); gap: var(--space-4);
+  background: var(--color-surface-panel); border-bottom: 1px solid var(--color-line-default);
+}
+.shell-search { position: relative; width: 420px; max-width: 100%; margin: 0; }
+.shell-search input {
+  width: 100%; height: 30px; padding: 0 36px 0 10px; border: 1px solid var(--color-line-default);
+  border-radius: var(--radius-md); background: var(--color-surface-app); color: var(--color-text-primary);
+}
+.shell-search kbd {
+  position: absolute; right: 8px; top: 50%; transform: translateY(-50%); padding: 0 5px;
+  border: 1px solid var(--color-line-strong); border-radius: var(--radius-sm); background: var(--color-surface-panel);
+  color: var(--color-text-secondary); font: 400 11px/16px var(--font-mono);
+}
+:where(.shell-main > main) { width: 100%; max-width: 76rem; margin: 0; padding: var(--space-5) 28px; flex: 1; }
+
+.account { position: relative; }
+.account summary {
+  display: flex; align-items: center; gap: var(--space-2); padding: 3px 10px 3px 4px; list-style: none; cursor: pointer;
+  border: 1px solid var(--color-line-default); border-radius: var(--radius-round); background: var(--color-surface-panel);
+}
+.account summary::-webkit-details-marker { display: none; }
+.account summary::after { content: ""; border: 4px solid transparent; border-top-color: var(--color-text-secondary); margin-top: 4px; }
+.account-avatar {
+  width: 24px; height: 24px; display: grid; place-items: center; border-radius: 50%;
+  background: var(--color-accent-soft); color: var(--color-accent-text); font-weight: 600; font-size: 11px;
+}
+.account-id { display: flex; flex-direction: column; text-align: left; line-height: 1.15; }
+.account-name { font-weight: 600; font-size: 12px; }
+.account-role { font-size: 11px; color: var(--color-text-secondary); }
+.account-menu {
+  position: absolute; right: 0; top: calc(100% + 6px); min-width: 180px; padding: var(--space-1);
+  background: var(--color-surface-panel); border: 1px solid var(--color-line-default); border-radius: var(--radius-md);
+  box-shadow: 0 6px 18px rgba(28, 37, 32, 0.12);
+}
+.account-menu a, .account-signout {
+  display: block; width: 100%; padding: 6px var(--space-2); border: 0; border-radius: var(--radius-sm); background: none;
+  color: var(--color-text-primary) !important; text-align: left; text-decoration: none; cursor: pointer; font: inherit;
+}
+.account-menu a:hover, .account-signout:hover { background: var(--color-surface-hover); }
+.account-menu form { margin: 0; }
+
+/* Sign-in */
+.login { max-width: none; margin: 0; padding: 12vh var(--space-4) var(--space-5); display: flex; flex-direction: column; align-items: center; }
+.login-brand { margin-bottom: var(--space-4); }
+.login-card {
+  width: 380px; max-width: 100%; padding: var(--space-5); background: var(--color-surface-panel);
+  border: 1px solid var(--color-line-default); border-radius: 14px;
+}
+.login-card h1 { margin: var(--space-3) 0 var(--space-5); }
+.login-form { display: block; }
+.login-form > .btn { margin-bottom: var(--space-3); }
+.login-divider { display: flex; align-items: center; gap: var(--space-3); margin: var(--space-3) 0; color: var(--color-text-secondary); font: var(--text-secondary); }
+.login-divider::before, .login-divider::after { content: ""; flex: 1; border-top: 1px solid var(--color-line-default); }
+.login-error {
+  margin: 0 0 var(--space-3); padding: var(--space-2) var(--space-3); border-radius: var(--radius-md);
+  background: var(--color-danger-soft); color: var(--color-danger);
+}
+.login-token { margin-top: var(--space-1); text-align: center; }
+.login-token summary { display: inline-block; list-style: none; cursor: pointer; color: var(--color-text-secondary); font: var(--text-secondary); }
+.login-token summary::-webkit-details-marker { display: none; }
+.login-token summary:hover { color: var(--color-text-primary); }
+.login-token form { margin-top: var(--space-3); text-align: left; }
+.login-back { display: block; margin-top: var(--space-4); text-align: center; color: var(--color-text-secondary) !important; font: var(--text-secondary); }
+.login-card p { margin: 0 0 var(--space-3); }
+
+/* Narrow screens: no separate mobile design. The sidebar becomes a bar on top
+   whose menu opens with the toggle; without script everything stays open. */
+@media (max-width: 900px) {
+  .shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr; }
+  .shell-side { position: static; height: auto; padding-bottom: var(--space-2); border-right: 0; border-bottom: 1px solid var(--color-line-default); }
+  .shell-head { padding-bottom: 0; }
+  .shell-toggle { display: block; }
+  .js .shell:not([data-open]) .shell-collapsible { display: none; }
+  .shell-collapsible { padding-top: var(--space-3); }
+  .shell-host { margin-top: var(--space-3); }
+  .shell-top { position: static; padding: 0 var(--space-3); }
+  .shell-search { width: auto; flex: 1; }
+  .account-id { display: none; }
+  :where(.shell-main > main) { padding: var(--space-4) var(--space-3); overflow-x: auto; }
+  html.coord-enhanced .shell .coord-workspace { height: calc(100dvh - 6rem); }
+  .login { padding-top: 6vh; }
+}

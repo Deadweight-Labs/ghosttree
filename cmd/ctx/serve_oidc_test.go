@@ -106,3 +106,18 @@ func TestServeProxyConfiguration(t *testing.T) {
 		}
 	}
 }
+
+func TestServeConfigReadsTheProviderNameFromEnvAndFlag(t *testing.T) {
+	t.Setenv(envOIDCName, "ZITADEL")
+	cfg, err := parseServeConfig(nil, io.Discard)
+	if err != nil || cfg.OIDC.Name != "ZITADEL" {
+		t.Fatalf("env name=%q err=%v", cfg.OIDC.Name, err)
+	}
+	cfg, err = parseServeConfig([]string{"--oidc-name=Keycloak"}, io.Discard)
+	if err != nil || cfg.OIDC.Name != "Keycloak" {
+		t.Fatalf("flag name=%q err=%v", cfg.OIDC.Name, err)
+	}
+	if cfg.OIDC.Enabled() {
+		t.Fatal("a provider name alone must not enable OIDC")
+	}
+}

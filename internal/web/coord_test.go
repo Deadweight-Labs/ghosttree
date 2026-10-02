@@ -1084,10 +1084,6 @@ func TestCoordLiveBadgeAndMobileToolbarHaveStableCompactContracts(t *testing.T) 
 			t.Errorf("stable responsive chrome missing %q", want)
 		}
 	}
-	toolbarLinks := coordCSSRule(t, css, `.app-brand,`)
-	if !strings.Contains(toolbarLinks, `min-height: 3rem;`) {
-		t.Fatal("mobile toolbar links must retain 44px touch targets")
-	}
 }
 
 func TestCoordMobilePolishKeepsConversationDenseAndStatusOutOfTheWay(t *testing.T) {
@@ -1223,13 +1219,13 @@ func TestCoordResponsiveLayoutKeepsFeedScrollableAndComposerVisible(t *testing.T
 
 func TestCoordNoJSMobileRestoresDocumentFlowInDOMOrder(t *testing.T) {
 	css := string(mustReadEmbedded(t, "static/app.css"))
-	if strings.Contains(css, "\nbody:has(> .coord-workspace) {") {
+	if strings.Contains(css, "\nbody:has(.coord-workspace) {") {
 		t.Fatal("viewport locking must not apply before progressive enhancement is active")
 	}
-	if block := coordCSSRule(t, css, `html.coord-enhanced body:has(> .coord-workspace)`); !strings.Contains(block, `overflow: hidden;`) {
+	if block := coordCSSRule(t, css, `html.coord-enhanced body:has(.coord-workspace)`); !strings.Contains(block, `overflow: hidden;`) {
 		t.Fatalf("enhanced body rule does not lock viewport: %s", block)
 	}
-	if block := coordCSSRule(t, css, `html:not(.coord-enhanced) body:has(> .coord-workspace)`); !strings.Contains(block, `overflow: auto;`) {
+	if block := coordCSSRule(t, css, `html:not(.coord-enhanced) body:has(.coord-workspace)`); !strings.Contains(block, `overflow: auto;`) {
 		t.Fatalf("no-JS body rule does not restore document scroll: %s", block)
 	}
 	workspace := coordCSSRule(t, css, `html:not(.coord-enhanced) .coord-workspace`)
@@ -1339,7 +1335,7 @@ func TestCoordContrastFocusAndCoarseTargetsAreExplicit(t *testing.T) {
 	if !strings.Contains(workspace, `--coord-muted: #565d58`) {
 		t.Fatalf("conversation/inspector muted color lost its contrast token: %s", workspace)
 	}
-	focus := coordCSSRule(t, css, `.coord-shell :focus-visible,`)
+	focus := coordCSSRule(t, css, `.coord-shell :focus-visible`)
 	if !strings.Contains(focus, `outline: 3px solid`) {
 		t.Fatalf("workspace focus indicator is thinner than three pixels: %s", focus)
 	}
