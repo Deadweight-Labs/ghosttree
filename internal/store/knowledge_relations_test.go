@@ -710,3 +710,27 @@ func TestRelationQueriesUseIndexes(t *testing.T) {
 		rows.Close()
 	}
 }
+
+func TestSplitGroupHasOwnSplitEvent(t *testing.T) {
+	s := openTest(t)
+	ids := make([]int64, 4)
+	for i := range ids {
+		ids[i] = relEntry(t, s, "p", string(rune('a'+i)))
+	}
+	mustRel(t, s, ids[0], ids[1], RelSibling)
+	bridge := mustRel(t, s, ids[1], ids[2], RelSibling)
+	mustRel(t, s, ids[2], ids[3], RelSibling)
+	kept, _, _ := s.GroupOf(ids[0])
+	if _, err := s.RevokeRelation(bridge.ID, relActor, "x"); err != nil {
+		t.Fatal(err)
+	}
+	ng, ok, _ := s.GroupOf(ids[3])
+	if !ok || ng.ID == kept.ID {
+		t.Fatalf("no new group: %+v", ng)
+	}
+	evs, err := s.RelationEvents(0, ng.ID)
+	if err != nil || len(evs) != 1 || evs[0].Action != "group_split" || evs[0].GroupID != ng.ID ||
+		!strings.Contains(evs[0].Detail, "split_from=#"+strconv.FormatInt(kept.ID, 10)) {
+		t.Errorf("events of the new group = %+v, %v", evs, err)
+	}
+}

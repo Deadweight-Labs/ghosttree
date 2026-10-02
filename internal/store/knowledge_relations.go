@@ -642,6 +642,10 @@ func splitGroupTx(tx *sql.Tx, gid, except int64, actor RelationActor) error {
 				}
 			}
 		}
+		if err := insertRelationEvent(tx, project, 0, ng, "group_split", actor,
+			fmt.Sprintf("split_from=#%d, volatility %s", gid, vol)); err != nil {
+			return err
+		}
 		newIDs = append(newIDs, fmt.Sprintf("#%d", ng))
 	}
 	return insertRelationEvent(tx, project, 0, gid, "group_split", actor,
