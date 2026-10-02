@@ -18,7 +18,8 @@ Versioning, with pre-1.0 compatibility rules described in
   Hangul fillers removed, only letters, digits, spaces and `. _ - '`, at most
   64 characters). New accounts are compared ignoring case and look-alike forms:
   an invited account whose name collides gets a `-2` style suffix, and
-  `ctx account add` or `ctx person add` refuse it. Latin and Cyrillic letters
+  `ctx account add` or Die Gast-Maskierung gilt für Projekträume; in DMs und privaten
+  Gruppen sehen Mitglieder einander wie bisher. `ctx person add` refuse it. Latin and Cyrillic letters
   inside one name, and look-alikes made with a legitimate combining mark, are
   still not caught. Names are normalised to a fixpoint (at most two combining
   marks per letter, overlay marks dropped) and the web shows the same
