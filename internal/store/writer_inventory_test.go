@@ -93,6 +93,7 @@ var writerMethodClasses = map[string]string{
 	"ListAllTokens":                 "read",
 	"TokenByID":                     "read",
 	"RevokeToken":                   "write",
+	"RevokeOwnToken":                "write",
 	"AccountByName":                 "read",
 	"AccountByPrincipalID":          "read",
 	"ListAccounts":                  "read",
