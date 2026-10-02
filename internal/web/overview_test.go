@@ -451,16 +451,16 @@ func TestFontPathsAreVersionedSoImmutableCachingIsSafe(t *testing.T) {
 		resp.Body.Close()
 		return resp
 	}
-	if resp := get("/static/fonts/IBMPlexSans-Regular-Latin1.woff2"); resp.StatusCode != http.StatusNotFound {
+	if resp := get("/static/fonts/gabarito-latin-wght-normal.woff2"); resp.StatusCode != http.StatusNotFound {
 		t.Errorf("the unversioned font path still answers: %d", resp.StatusCode)
 	}
-	resp := get("/static/fonts/plex-1.1-2.5/IBMPlexSans-Regular-Latin1.woff2")
+	resp := get("/static/fonts/v5/gabarito-latin-wght-normal.woff2")
 	if resp.StatusCode != http.StatusOK || !strings.Contains(resp.Header.Get("Cache-Control"), "immutable") {
 		t.Errorf("versioned font = %d %q", resp.StatusCode, resp.Header.Get("Cache-Control"))
 	}
 	css := body(t, mustGet(t, srv.URL+"/static/tokens.css"))
 	for _, m := range regexp.MustCompile(`url\("(/static/fonts/[^"]+)"\)`).FindAllStringSubmatch(css, -1) {
-		if r := get(m[1]); r.StatusCode != http.StatusOK || !strings.Contains(m[1], "plex-1.1-2.5/") {
+		if r := get(m[1]); r.StatusCode != http.StatusOK || !strings.Contains(m[1], "v5/") {
 			t.Errorf("tokens.css font %s = %d", m[1], r.StatusCode)
 		}
 	}

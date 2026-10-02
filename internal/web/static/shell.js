@@ -50,6 +50,19 @@
       if (account.open && !account.contains(event.target)) account.open = false;
     });
   }
+  // The greeting follows the visitor's clock, so the server renders a neutral
+  // text and the browser picks the time of day and the date.
+  const today = document.querySelector("[data-today]");
+  if (today) {
+    const now = new Date();
+    today.dateTime = now.toISOString().slice(0, 10);
+    today.textContent = now.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" });
+  }
+  const greet = document.querySelector("[data-greet-morning]");
+  if (greet) {
+    const hour = new Date().getHours();
+    greet.textContent = hour < 12 ? greet.dataset.greetMorning : hour < 18 ? greet.dataset.greetAfternoon : greet.dataset.greetEvening;
+  }
   for (const bar of document.querySelectorAll("[data-pct]")) {
     bar.style.width = Math.max(0, Math.min(100, Number(bar.dataset.pct) || 0)) + "%";
   }

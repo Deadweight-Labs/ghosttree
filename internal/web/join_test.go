@@ -591,7 +591,7 @@ func TestOrgPageGuestLinksNeedEnforcementAndShowAbsoluteURL(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || !regexp.MustCompile(`<code>/join/[0-9a-f]{64}</code>`).MatchString(page) {
 		t.Fatalf("link: %d %s", resp.StatusCode, page)
 	}
-	if !strings.Contains(page, "<td>guest</td><td>"+joinProject+"</td>") {
+	if !strings.Contains(page, `<td data-label="Role">guest</td><td data-label="Project">`+joinProject+"</td>") {
 		t.Fatalf("the invitation list does not show project and role: %s", page)
 	}
 }

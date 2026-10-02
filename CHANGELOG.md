@@ -6,6 +6,14 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Changed: the web interface moves to the Clay material with a blue palette
+  (REQ-435, third part). The sidebar is a raised card, the Overview greets the
+  user and shows requests with progress bars, and every other page, the
+  sign-in and the join pages get the same buttons, fields, cards and tables.
+  Light and dark follow the system setting. Gabarito, Fragment Mono and
+  Source Serif 4 (SIL OFL, under `internal/web/static/fonts/v5/`) replace
+  IBM Plex. The rooms keep their own surface as a light panel in both modes
+  until their redesign.
 - Fixed: hardening of join sessions after review (REQ-434, P2b). Sessions
   that have a device are never evicted by further opens of the same
   invitation, and loopback claims are limited per /64 and /48 like device

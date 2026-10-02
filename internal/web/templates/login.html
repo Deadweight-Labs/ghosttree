@@ -1,24 +1,24 @@
-{{define "loginbrand"}}<a class="login-brand" href="/ui/"><span class="brand-mark" aria-hidden="true"></span><span>{{t "shell.brand"}}</span></a>{{end}}
+{{define "loginbrand"}}<a class="login-brand" href="/ui/">{{t "shell.brand_lead"}}<b>{{t "shell.brand_tail"}}</b></a>{{end}}
 
 {{define "login"}}{{template "head" .}}<main class="login">{{template "loginbrand"}}
-<section class="login-card"><h1>{{t "login.title"}}</h1>
+<section class="login-card clay"><h1>{{t "login.title"}}</h1>
 <form class="login-form" method="post" action="/ui/login/code">
 <button class="visually-hidden" tabindex="-1" aria-hidden="true">{{t "login.submit"}}</button>
-{{if .OIDC}}<button class="btn btn-primary" formaction="/ui/login/oidc" formnovalidate>{{if .ProviderName}}{{t "login.provider" .ProviderName}}{{else}}{{t "login.provider_generic"}}{{end}}</button><div class="login-divider" role="separator"><span>{{t "login.or"}}</span></div>{{end}}
+{{if .OIDC}}<button class="clay btn btn-primary" formaction="/ui/login/oidc" formnovalidate>{{if .ProviderName}}{{t "login.provider" .ProviderName}}{{else}}{{t "login.provider_generic"}}{{end}}</button><div class="login-divider" role="separator"><span>{{t "login.or"}}</span></div>{{end}}
 {{if .Error}}<p class="login-error" role="alert">{{.Error}}</p>{{end}}
-<label class="field"><span>{{if .Bootstrap}}{{t "login.bootstrap_label"}}{{else}}{{t "login.code_label"}}{{end}}</span><input name="code" type="password" autocomplete="off" spellcheck="false" placeholder="{{t "login.code_placeholder"}}"{{if not .OIDC}} required{{end}}></label>
-{{if .Bootstrap}}<label class="field"><span>{{t "login.name_label"}}</span><input name="name" autocomplete="off" required placeholder="{{t "login.name_placeholder"}}"></label>{{end}}
-<button class="btn{{if not .OIDC}} btn-primary{{end}}">{{t "login.submit"}}</button>
+<label class="field"><span>{{if .Bootstrap}}{{t "login.bootstrap_label"}}{{else}}{{t "login.code_label"}}{{end}}</span><input class="clay" name="code" type="password" autocomplete="off" spellcheck="false" placeholder="{{t "login.code_placeholder"}}"{{if not .OIDC}} required{{end}}></label>
+{{if .Bootstrap}}<label class="field"><span>{{t "login.name_label"}}</span><input class="clay" name="name" autocomplete="off" required placeholder="{{t "login.name_placeholder"}}"></label>{{end}}
+<button class="clay btn{{if not .OIDC}} btn-primary{{end}}">{{t "login.submit"}}</button>
 </form>
-{{if and .Paste (not .Bootstrap)}}<details class="login-token"{{if .TokenOpen}} open{{end}}><summary>{{t "login.token_toggle"}}</summary><form method="post" action="/ui/login"><label class="field"><span>{{t "login.token_label"}}</span><input name="token" type="password" autocomplete="off" required></label><button class="btn">{{t "login.submit"}}</button></form></details>{{end}}
+{{if and .Paste (not .Bootstrap)}}<details class="login-token"{{if .TokenOpen}} open{{end}}><summary>{{t "login.token_toggle"}}</summary><form method="post" action="/ui/login"><label class="field"><span>{{t "login.token_label"}}</span><input class="clay" name="token" type="password" autocomplete="off" required></label><button class="clay btn">{{t "login.submit"}}</button></form></details>{{end}}
 </section>{{template "foot" .}}{{end}}
 
 {{define "logincode"}}{{template "head" .}}<main class="login">{{template "loginbrand"}}
-<section class="login-card"><h1>{{if .Invite}}{{t "login.invite_title"}}{{else}}{{t "login.code_title"}}{{end}}</h1>
+<section class="login-card clay"><h1>{{if .Invite}}{{t "login.invite_title"}}{{else}}{{t "login.code_title"}}{{end}}</h1>
 {{if .Error}}<p class="login-error" role="alert">{{.Error}}</p>{{end}}
-{{if and .Invite .OIDC}}<p>{{t "login.invite_text"}}</p><form class="login-form" method="post" action="/ui/login/oidc"><input type="hidden" name="code" value="{{.Code}}"><button class="btn btn-primary">{{t "login.provider_generic"}}</button></form>
-{{else}}<form class="login-form" method="post" action="/ui/login/code"><label class="field"><span>{{t "login.code_label"}}</span><input name="code" type="password" value="{{.Code}}" autocomplete="off" required></label>{{if .NeedsName}}<label class="field"><span>{{t "login.account_name"}}</span><input name="name" required></label>{{end}}<button class="btn btn-primary">{{t "login.continue"}}</button></form>{{end}}
+{{if and .Invite .OIDC}}<p>{{t "login.invite_text"}}</p><form class="login-form" method="post" action="/ui/login/oidc"><input type="hidden" name="code" value="{{.Code}}"><button class="clay btn btn-primary">{{t "login.provider_generic"}}</button></form>
+{{else}}<form class="login-form" method="post" action="/ui/login/code"><label class="field"><span>{{t "login.code_label"}}</span><input class="clay" name="code" type="password" value="{{.Code}}" autocomplete="off" required></label>{{if .NeedsName}}<label class="field"><span>{{t "login.account_name"}}</span><input class="clay" name="name" required></label>{{end}}<button class="clay btn btn-primary">{{t "login.continue"}}</button></form>{{end}}
 <a class="login-back" href="/ui/login">{{t "login.back"}}</a></section>{{template "foot" .}}{{end}}
 
 {{define "loginmsg"}}{{template "head" .}}<main class="login">{{template "loginbrand"}}
-<section class="login-card"><h1>{{.Title}}</h1><p class="login-error" role="alert">{{.Error}}</p><a class="login-back" href="/ui/login">{{t "login.back_to_sign_in"}}</a></section>{{template "foot" .}}{{end}}
+<section class="login-card clay"><h1>{{.Title}}</h1><p class="login-error" role="alert">{{.Error}}</p><a class="login-back" href="/ui/login">{{t "login.back_to_sign_in"}}</a></section>{{template "foot" .}}{{end}}
