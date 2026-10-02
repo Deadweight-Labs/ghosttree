@@ -6,6 +6,19 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Fixed: hardening of join sessions after review (REQ-434, P2b). Sessions
+  that have a device are never evicted by further opens of the same
+  invitation, and loopback claims are limited per /64 and /48 like device
+  flows. The join cookie is `__Host-gt_join` wherever it is Secure. A session
+  lives at most 30 minutes in total. Machine names in a join claim are limited
+  to letters, digits, `.`, `_` and `-` (64 characters), the fallback approval
+  page warns on a different network, and the "Same network" line is dropped
+  when `GHOSTTREE_PUBLIC_URL` is set without trusted proxies. Denying a loopback
+  request redirects the browser to the installer with `error=access_denied`.
+  `code_challenge_method` must be `S256`, and `code_verifier` must use the
+  RFC 7636 characters. A claim keeps the session and its device flow until
+  30 minutes after the invitation page was opened, so a late sign-in does not
+  lose a waiting installer (`expires_in` reports the remaining time).
 - Changed: the web interface starts on a new Overview (REQ-435, second part).
   `/ui/` and the redirect after sign-in lead to `/ui/overview`, and the brand
   link too. "Next" lists what needs a decision (knowledge to review for
@@ -19,8 +32,8 @@ Versioning, with pre-1.0 compatibility rules described in
   for the code from the terminal (the machine is named only after the code is
   entered, never listed), "Waiting for your machine", and the page switches by
   itself once the machine or any request, knowledge or agent is there; an
-  instance that is already in use always shows the normal Overview. The oldest account no longer
-  counts as owner on its own; the first account of a fresh instance is an admin
+  instance that is already in use always shows the normal Overview. The oldest
+  account no longer counts as owner on its own; the first account of a fresh instance is an admin
   from the start. Without a `?project=`, members and guests get their first
   project preselected. The fonts moved to a versioned path
   (`/static/fonts/plex-1.1-2.5/`) so long caching stays safe, and the `js` class
@@ -29,8 +42,7 @@ Versioning, with pre-1.0 compatibility rules described in
 - Security: every `/ui/` page now sends a Content-Security-Policy (own origin
   only, no inline script or style, no framing), `X-Content-Type-Options: nosniff`
   and `Referrer-Policy: strict-origin`, and is `no-store`; the join page may load
-  the self-hosted fonts. The inline
-  script, the inline progress width and the inline `noscript` style moved into
+  the self-hosted fonts. The inline script, the inline progress width and the inline `noscript` style moved into
   `shell.js` and `app.css`.
 - Added: `ctx join --server <url> --pair XXXX-XXXX` pairs a machine with the
   code from an invitation page (REQ-434, part 3). It opens a loopback

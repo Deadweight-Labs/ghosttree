@@ -592,7 +592,7 @@ func TestJoinOIDCSignInBindsTheSessionAndLandsOnThePairingPage(t *testing.T) {
 	b := newBrowser(t)
 	page, _ := b.Get(env.web.URL + "/join/" + code)
 	pair := pairRE.FindString(body(t, page))
-	if pair == "" || !strings.Contains(body2(t, b, env.web.URL+"/join/"+code), `name="join" value="1"`) {
+	if pair == "" || !strings.Contains(joinPageText(t, b, env.web.URL+"/join/"+code), `name="join" value="1"`) {
 		t.Fatalf("join page lacks pair or marker (%q)", pair)
 	}
 	// Der Installer ist schon da.
@@ -614,7 +614,7 @@ func TestJoinOIDCSignInBindsTheSessionAndLandsOnThePairingPage(t *testing.T) {
 	}
 }
 
-func body2(t *testing.T, c *http.Client, u string) string {
+func joinPageText(t *testing.T, c *http.Client, u string) string {
 	t.Helper()
 	resp, err := c.Get(u)
 	if err != nil {
@@ -638,5 +638,204 @@ func TestJoinPairWritesNoLogLineWithTheCodes(t *testing.T) {
 	e.pairPage(t, b)
 	if strings.Contains(logs.String(), pair) || strings.Contains(logs.String(), e.code) {
 		t.Fatalf("a code reached a log: %s", logs.String())
+	}
+}
+
+// publicEnv startet eine zweite Oberfläche auf demselben Store mit öffentlicher URL.
+func (e pairEnv) publicEnv(t *testing.T, opts ...Option) pairEnv {
+	t.Helper()
+	var h http.Handler
+	hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { h.ServeHTTP(w, r) }))
+	t.Cleanup(hs.Close)
+	h = New(e.st, append([]Option{WithPublicURL(hs.URL)}, opts...)...)
+	out := e
+	out.hs, out.srv = hs, hs.URL
+	return out
+}
+
+// N5: hinter einer öffentlichen URL ohne benannte Proxys wäre "Same network" immer "yes".
+func TestJoinSameNetworkLineIsOmittedWithPublicURLAndNoTrustedProxies(t *testing.T) {
+	e := newPairEnv(t).publicEnv(t)
+	b := browser(t)
+	e.signInAs(t, b, "anna")
+	pair := e.pairOf(t, b, e.code)
+	e.accept(t, b, e.code)
+	e.claimLoop(t, pair, "box")
+	text := e.pairPage(t, b)
+	if strings.Contains(text, "Same network") || strings.Contains(text, "different network") || !strings.Contains(text, "wants to connect") {
+		t.Fatalf("page: %s", text)
+	}
+}
+
+func TestJoinSameNetworkLineStaysWithPublicURLAndTrustedProxies(t *testing.T) {
+	set, err := proxytrust.Parse("10.0.0.0/8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := newPairEnv(t).publicEnv(t, WithTrustedProxies(set))
+	b := browser(t)
+	e.signInAs(t, b, "anna")
+	pair := e.pairOf(t, b, e.code)
+	e.accept(t, b, e.code)
+	e.claimLoop(t, pair, "box")
+	if text := e.pairPage(t, b); !strings.Contains(text, "Same network as this browser") {
+		t.Fatalf("page: %s", text)
+	}
+}
+
+// N3: im Rückfall steht bei fremdem Netz eine Warnung, und das Feld sagt, woher der Code kommt.
+func TestJoinCodeFallbackWarnsOnAnotherNetworkAndNamesTheTerminal(t *testing.T) {
+	e := newPairEnv(t)
+	b := browser(t)
+	e.signInAs(t, b, "anna")
+	pair := e.pairOf(t, b, e.code)
+	e.accept(t, b, e.code)
+	if _, err := e.st.Join().Claim(store.JoinClaimRequest{Addr: "203.0.113.5", Pair: pair, Machine: "box"}); err != nil {
+		t.Fatal(err)
+	}
+	text := e.pairPage(t, b)
+	for _, want := range []string{"Same network as this browser: <strong>no</strong>", "This is a different network.", "Your terminal shows a 4-character code"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("page lacks %q: %s", want, text)
+		}
+	}
+}
+
+// N2: mit Secure heißt der Cookie __Host-gt_join (Path=/, ohne Domain).
+func TestJoinCookieUsesTheHostPrefixWhereSecureApplies(t *testing.T) {
+	e := newPairEnv(t)
+	h := New(e.st, WithPublicURL("https://gt.example.test"))
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "https://gt.example.test/join/"+e.code, nil)
+	h.ServeHTTP(rec, req)
+	var cookie *http.Cookie
+	for _, c := range rec.Result().Cookies() {
+		cookie = c
+	}
+	if cookie == nil || cookie.Name != "__Host-gt_join" || !cookie.Secure || cookie.Path != "/" || cookie.Domain != "" || !cookie.HttpOnly {
+		t.Fatalf("cookie %+v", cookie)
+	}
+	// Dasselbe Cookie bringt dieselbe Sitzung zurück; der Name ohne Präfix zählt nicht.
+	before := e.st.Join().Sessions()
+	req2 := httptest.NewRequest("GET", "https://gt.example.test/join/"+e.code, nil)
+	req2.AddCookie(cookie)
+	h.ServeHTTP(httptest.NewRecorder(), req2)
+	req3 := httptest.NewRequest("GET", "https://gt.example.test/join/"+e.code, nil)
+	req3.AddCookie(&http.Cookie{Name: "gt_join", Value: cookie.Value})
+	h.ServeHTTP(httptest.NewRecorder(), req3)
+	if n := e.st.Join().Sessions(); n != before+1 {
+		t.Fatalf("sessions %d -> %d: the unprefixed cookie was accepted or the prefixed one ignored", before, n)
+	}
+}
+
+// N6: Ablehnen im Loopback-Modus sagt dem Installer Bescheid (RFC 6749 4.1.2.1).
+func TestJoinDenyRedirectsTheBrowserToTheInstallerWithAccessDenied(t *testing.T) {
+	e := newPairEnv(t)
+	b := browser(t)
+	e.signInAs(t, b, "anna")
+	pair := e.pairOf(t, b, e.code)
+	e.accept(t, b, e.code)
+	e.claimLoop(t, pair, "box")
+	resp := e.decide(t, b, url.Values{"decision": {"deny"}})
+	resp.Body.Close()
+	loc := resp.Header.Get("Location")
+	if resp.StatusCode != http.StatusSeeOther || !strings.HasPrefix(loc, "http://127.0.0.1:40123/callback?") ||
+		!strings.Contains(loc, "error=access_denied") || !strings.Contains(loc, "state=state-12345678") || strings.Contains(loc, "code=") {
+		t.Fatalf("deny: %d %q", resp.StatusCode, loc)
+	}
+}
+
+func TestJoinCompromisedLoopbackPageOffersToStopTheInstaller(t *testing.T) {
+	e := newPairEnv(t)
+	b := browser(t)
+	e.signInAs(t, b, "anna")
+	pair := e.pairOf(t, b, e.code)
+	e.accept(t, b, e.code)
+	e.claimLoop(t, pair, "mine")
+	e.st.Join().Claim(loopClaim(pair, "thief", "198.51.100.7"))
+	text := e.pairPage(t, b)
+	if !strings.Contains(text, `href="http://127.0.0.1:40123/callback?error=access_denied`) || strings.Contains(text, "thief") {
+		t.Fatalf("page: %s", text)
+	}
+}
+
+// R1: Der Cookie lebt so lange wie das Login-Fenster; Claim bei Minute 12 und
+// Anmeldung bei Minute 20 behalten dieselbe Sitzung.
+func TestJoinCookieOutlivesALateLoginAfterTheClaim(t *testing.T) {
+	e := newPairEnv(t)
+	b := browser(t)
+	resp, _ := e.get(t, b, "/join/"+e.code)
+	var maxAge int
+	for _, c := range resp.Cookies() {
+		if c.Name == "gt_join" {
+			maxAge = c.MaxAge
+		}
+	}
+	if maxAge != int(store.JoinMaxLifetime.Seconds()) {
+		t.Fatalf("cookie max-age %d", maxAge)
+	}
+	pair := pairRE.FindString(joinPageText(t, b, e.srv+"/join/"+e.code))
+	start := e.clock.t
+	e.clock.t = start.Add(12 * time.Minute)
+	e.claimLoop(t, pair, "late-box")
+	e.clock.t = start.Add(20 * time.Minute)
+	r := sameOriginPostForm(t, b, e.srv+"/ui/login/code", url.Values{"code": {e.code}, "name": {"lena"}, "join": {"1"}})
+	r.Body.Close()
+	if r.StatusCode != http.StatusSeeOther || r.Header.Get("Location") != "/join/pair" {
+		t.Fatalf("sign-in: %d %s", r.StatusCode, r.Header.Get("Location"))
+	}
+	if text := e.pairPage(t, b); !strings.Contains(text, "late-box") || !strings.Contains(text, "wants to connect") || e.st.Join().Sessions() != 1 {
+		t.Fatalf("binding lost: sessions=%d %s", e.st.Join().Sessions(), text)
+	}
+}
+
+// R3: Sind alle Plätze belegt, steht statt des Befehls eine Zeile.
+func TestJoinPageSaysSignInFirstWhenNoSlotIsFree(t *testing.T) {
+	e := newPairEnv(t)
+	for i := 0; i < 10; i++ {
+		b := browser(t)
+		pair := e.pairOf(t, b, e.code)
+		if _, err := e.st.Join().Claim(loopClaim(pair, "m", "10."+string(rune('0'+i))+".0.1")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, text := e.get(t, browser(t), "/join/"+e.code)
+	if strings.Contains(text, "| sh -s -- --pair") || !strings.Contains(text, "Sign in first, then connect this machine.") {
+		t.Fatalf("page: %s", text)
+	}
+}
+
+// Ein im Codefeld eingegebener Einladungscode führt bei OIDC nach der Annahme auf /join/pair.
+func TestOIDCTypedProjectInvitationEndsOnThePairingPage(t *testing.T) {
+	env := newOIDCEnv(t, true)
+	env.store.SetAccessMode(store.AccessMode{Enforce: true})
+	org, err := env.store.CreateOrg("person:1", "Alpha", "alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = env.store.EnsureProject("person:1", joinProject); err != nil {
+		t.Fatal(err)
+	}
+	code := projectInvite(t, env.store, org, store.RoleMember)
+	b := newBrowser(t)
+	resp := env.callback(t, b, env.startFlow(t, b, code))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/join/pair" {
+		t.Fatalf("callback: %d %q", resp.StatusCode, resp.Header.Get("Location"))
+	}
+}
+
+func TestJoinPageSaysJoinFirstToASignedInVisitorWhenNoSlotIsFree(t *testing.T) {
+	e := newPairEnv(t)
+	for i := 0; i < 10; i++ {
+		pair := e.pairOf(t, browser(t), e.code)
+		if _, err := e.st.Join().Claim(loopClaim(pair, "m", "10."+string(rune('0'+i))+".0.1")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b := browser(t)
+	e.signInAs(t, b, "anna")
+	if _, text := e.get(t, b, "/join/"+e.code); !strings.Contains(text, "Join first, then connect this machine.") {
+		t.Fatalf("page: %s", text)
 	}
 }
