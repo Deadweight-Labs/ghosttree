@@ -54,6 +54,8 @@ type pageData struct {
 	Sessions                                          []store.Session
 	Chunks                                            []store.Chunk
 	SessionID                                         int64
+	SessionsV                                         *sessionsView
+	SessionV                                          *sessionView
 	Project, Preview                                  string
 	Review                                            []reviewEntry
 	Coord                                             coordPageView
@@ -117,6 +119,7 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.handle(mux, "GET /ui/review", a.requirePerson(http.HandlerFunc(a.reviewPage)))
 	a.handle(mux, "GET /ui/sessions", a.requirePerson(http.HandlerFunc(a.sessionsPage)))
 	a.handle(mux, "GET /ui/sessions/{id}", a.requirePerson(http.HandlerFunc(a.sessionPage)))
+	a.handle(mux, "POST /ui/sessions/{id}/share", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.sessionShare))))))
 	a.handle(mux, "GET /ui/context", a.requirePerson(http.HandlerFunc(a.contextPage)))
 	a.handle(mux, "GET /ui/coord", a.requirePerson(http.HandlerFunc(a.coordRoomPage)))
 	a.handle(mux, "GET /ui/coord/events", a.requirePerson(http.HandlerFunc(a.coordEvents)))
@@ -295,39 +298,6 @@ func (a *app) reviewPage(w http.ResponseWriter, r *http.Request) {
 	a.renderBrowser(w, r, "review", pageData{Title: "Review", Review: items})
 }
 
-func (a *app) sessionsPage(w http.ResponseWriter, r *http.Request) {
-	pa := a.access(r)
-	entries, err := a.store.ListSessions(scope.Axes{Project: scope.NormalizeRemote(r.URL.Query().Get("project"))}, a.overfetch(50))
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	entries = keep(entries, 50, pa.CanSeeSessionMeta)
-	a.renderBrowser(w, r, "sessions", pageData{Title: "Sessions", Sessions: entries})
-}
-
-func (a *app) sessionPage(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	sess, err := a.store.SessionByID(id)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	if a.accessDenied(w, r, a.access(r).CheckTranscript(sess, store.ActRead)) {
-		return
-	}
-	chunks, err := a.store.ReadSession(id, 0, 500)
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	a.renderBrowser(w, r, "session", pageData{Title: "Session " + strconv.FormatInt(id, 10), SessionID: id, Chunks: chunks})
-}
-
 func (a *app) contextPage(w http.ResponseWriter, r *http.Request) {
 	project := scope.NormalizeRemote(r.URL.Query().Get("project"))
 	preview := r.URL.Query().Get("preview") == "1"
@@ -437,6 +407,7 @@ var webRoutes = map[string]webClass{
 	"GET /ui/review":                  webProject,
 	"GET /ui/sessions":                webProject,
 	"GET /ui/sessions/{id}":           webProject,
+	"POST /ui/sessions/{id}/share":    webAdmin,
 	"GET /ui/context":                 webProject,
 	"GET /ui/coord":                   webCoord,
 	"GET /ui/coord/events":            webCoord,

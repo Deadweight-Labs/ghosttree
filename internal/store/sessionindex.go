@@ -515,7 +515,22 @@ func (s *Store) SessionByPublicID(pid string) (Session, error) {
 	return found[0], nil
 }
 
-// cleanSnippet faltet Whitespace in einem Ausschnitt zusammen.
+// cleanSnippet faltet Whitespace in einem Ausschnitt zu einem Leerzeichen
+// zusammen; Leerzeichen an den Rändern bleiben, damit markierte und
+// unmarkierte Teile zusammen wieder den Satz ergeben.
 func cleanSnippet(s string) string {
-	return strings.Join(strings.Fields(s), " ")
+	var b strings.Builder
+	space := false
+	for _, r := range s {
+		if r == ' ' || r == '\n' || r == '\t' || r == '\r' {
+			if !space {
+				b.WriteByte(' ')
+			}
+			space = true
+			continue
+		}
+		space = false
+		b.WriteRune(r)
+	}
+	return b.String()
 }

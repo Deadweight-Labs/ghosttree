@@ -9,7 +9,7 @@ import (
 )
 
 // p1Templates sind die Vorlagen, deren Texte vollständig im Katalog liegen.
-var p1Templates = []string{"templates/layout.html", "templates/login.html", "templates/overview.html"}
+var p1Templates = []string{"templates/layout.html", "templates/login.html", "templates/overview.html", "templates/sessions.html"}
 
 var (
 	actionRE   = regexp.MustCompile(`(?s)\{\{.*?\}\}`)
@@ -100,7 +100,7 @@ func TestMsgFormatsArgumentsAndNeverReturnsEmpty(t *testing.T) {
 	}
 }
 
-var goKeyRE = regexp.MustCompile(`"((?:shell|nav|role|login|auth|overview)\.[a-z0-9_.]+)"`)
+var goKeyRE = regexp.MustCompile(`"((?:shell|nav|role|login|auth|overview|sessions)\.[a-z0-9_.]+)"`)
 
 // goMessageKeys sammelt die Schlüssel, die im Go-Code vorkommen (Navigation,
 // Rollen, Fehlertexte der Handler).

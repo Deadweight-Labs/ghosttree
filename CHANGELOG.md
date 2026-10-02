@@ -6,6 +6,23 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Changed: the Sessions page is rebuilt for reading and searching (REQ-435,
+  Sessions view). The list groups sessions by day with title, agent@machine,
+  project, branch, linked requests and knowledge, message count, duration and a
+  Live marker, filterable by project, machine, agent, time and Everyone/Mine
+  (menus show counts of the sessions you may read). The search covers messages,
+  commands, tool output and, on request, thinking blocks, and groups hits per
+  session with a marked snippet that jumps into the transcript. The transcript
+  shows your prompts and the agent's text, collapses tool calls and thinking to
+  one line, cuts long output after 12 lines ("Show all N lines"), shows edits and
+  patches as diffs, lists your prompts on the left, finds text across the whole
+  session with next/previous, and loads 200 messages at a time. The owner of a
+  session or the project owner sets it to private, project members, or including
+  guests; guests see only sessions shared with them and no machine, branch or
+  owner. Session addresses are random; old numeric addresses redirect for
+  readers and otherwise look like an unknown session. Sessions you cannot read
+  show as "Private" rows without title or link.
+
 - Added: sessions are searchable and addressable by a random id (REQ-435,
   Sessions backend). Every stored line of a session is read into one display
   model for Claude Code and Codex (messages, prompts, thinking, tool calls with

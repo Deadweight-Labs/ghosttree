@@ -574,16 +574,6 @@ func snippetParts(s string) []SnippetPart {
 		parts = append(parts, SnippetPart{Text: cleanSnippet(s[:j]), Hit: true})
 		s = s[j+1:]
 	}
-	// Leerzeichen an den Rändern der Teile gehen beim Zusammenfalten verloren;
-	// ein Teil trägt sie selbst, damit der Satz zusammenhängend bleibt.
-	for i := range parts {
-		if i > 0 && !parts[i].Hit && parts[i].Text != "" && parts[i-1].Hit {
-			parts[i].Text = " " + parts[i].Text
-		}
-		if i > 0 && parts[i].Hit && parts[i-1].Text != "" {
-			parts[i-1].Text += " "
-		}
-	}
 	return parts
 }
 
