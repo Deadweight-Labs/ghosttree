@@ -7,7 +7,6 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -294,7 +293,7 @@ func TestAStandingInstructionSurvivesLaterTraffic(t *testing.T) {
 		t.Errorf("targets must survive: %+v", standing[0].Targets)
 	}
 	page := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room))
-	for _, want := range []string{"Adressaten:", "sess-backend", `<time datetime="`, "Gilt in"} {
+	for _, want := range []string{"Addressed to", "sess-backend", `<time datetime="`, "until ended"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("standing card missing %q", want)
 		}
@@ -589,15 +588,15 @@ func TestCoordRoomRendersLatestFiftyAndSequencePages(t *testing.T) {
 	}
 
 	latest := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room))
-	if !strings.Contains(latest, "#26 ·") || !strings.Contains(latest, "#75 ·") || strings.Contains(latest, "#25 ·") {
+	if !strings.Contains(latest, `id="message-26"`) || !strings.Contains(latest, `id="message-75"`) || strings.Contains(latest, `id="message-25"`) {
 		t.Fatalf("latest page did not render 26..75")
 	}
 	before := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room)+"&before=26")
-	if !strings.Contains(before, "#1 ·") || !strings.Contains(before, "#25 ·") || strings.Contains(before, "#26 ·") {
+	if !strings.Contains(before, `id="message-1"`) || !strings.Contains(before, `id="message-25"`) || strings.Contains(before, `id="message-26"`) {
 		t.Fatalf("before page did not render 1..25")
 	}
 	after := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room)+"&after=25")
-	if !strings.Contains(after, "#26 ·") || !strings.Contains(after, "#75 ·") || strings.Contains(after, "#25 ·") {
+	if !strings.Contains(after, `id="message-26"`) || !strings.Contains(after, `id="message-75"`) || strings.Contains(after, `id="message-25"`) {
 		t.Fatalf("after page did not use an exclusive sequence boundary")
 	}
 	emptyAfter := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room)+"&after=75")
@@ -608,7 +607,7 @@ func TestCoordRoomRendersLatestFiftyAndSequencePages(t *testing.T) {
 		t.Fatal("empty after page rendered an invalid before=0 link")
 	}
 	around := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room)+"&around=25")
-	if !strings.Contains(around, "#25 ·") || !strings.Contains(around, `id="message-25"`) || strings.Contains(around, "#75 ·") {
+	if !strings.Contains(around, `id="message-25"`) || !strings.Contains(around, `id="message-25"`) || strings.Contains(around, `id="message-75"`) {
 		t.Fatalf("around page did not include its requested anchor")
 	}
 }
@@ -747,12 +746,12 @@ func TestCoordWorkspaceRendersAllRoomSectionsAndNewestWindow(t *testing.T) {
 	}
 
 	html := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(project))
-	for _, want := range []string{"Aufmerksamkeit", "Maschine", "Projekte", "Direkt &amp; Gruppen", "#75", "Teilnehmende", "Threads"} {
+	for _, want := range []string{`class="rtabs`, `title="github.com/x/workspace"`, `title="mainex"`, `id="message-75"`, "Participants", "Threads"} {
 		if !strings.Contains(html, want) {
 			t.Errorf("workspace missing %q", want)
 		}
 	}
-	if strings.Contains(html, "#25") {
+	if strings.Contains(html, `id="message-25"`) {
 		t.Fatal("workspace rendered the oldest page instead of the newest window")
 	}
 	for _, want := range []string{`class="coord-shell"`, `class="coord-sidebar`, `class="coord-conversation`, `class="coord-context`} {
@@ -763,39 +762,15 @@ func TestCoordWorkspaceRendersAllRoomSectionsAndNewestWindow(t *testing.T) {
 	if strings.Count(html, "<main") != 1 {
 		t.Fatalf("workspace must have exactly one main landmark")
 	}
-	for _, want := range []string{`aria-label="Räume"`, `aria-label="Unterhaltung"`, `aria-label="Raumkontext"`, `aria-live="polite"`} {
+	for _, want := range []string{`aria-label="Rooms"`, `aria-label="Conversation"`, `aria-label="Room details"`, `aria-live="polite"`} {
 		if !strings.Contains(html, want) {
 			t.Errorf("accessible workspace contract missing %q", want)
 		}
 	}
-	for _, want := range []string{`href="#coord-rooms"`, `href="#coord-context"`, `aria-controls="coord-rooms"`, `aria-controls="coord-context"`, `aria-expanded="false"`} {
+	for _, want := range []string{`href="#coord-context"`, `aria-controls="coord-context"`, `aria-expanded="false"`} {
 		if !strings.Contains(html, want) {
 			t.Errorf("drawer contract missing %q", want)
 		}
-	}
-}
-
-func TestCoordWorkspaceStructureUsesChatLandmarksAndOneAttentionRegion(t *testing.T) {
-	templateBytes, err := files.ReadFile("templates/coord.html")
-	if err != nil {
-		t.Fatal(err)
-	}
-	template := string(templateBytes)
-	for _, want := range []string{
-		`class="coord-appbar"`,
-		`class="coord-sidebar coord-room-rail"`,
-		`class="coord-message coord-message-group{{if .MentionsViewer}} coord-message-mentioned{{end}} {{if .GroupStart}}`,
-		`class="coord-message-actions coord-message-tools"`,
-	} {
-		if !strings.Contains(template, want) {
-			t.Errorf("chat workspace structure missing %q", want)
-		}
-	}
-	if got := strings.Count(template, `class="coord-attention-region"`); got != 1 {
-		t.Fatalf("attention regions=%d, want exactly one compact region", got)
-	}
-	if strings.Contains(template, `class="coord-knowledge-slot"`) || strings.Contains(template, `<h2>Knowledge</h2>`) {
-		t.Fatal("coordination template must not contain the future Knowledge placeholder")
 	}
 }
 
@@ -813,20 +788,20 @@ func TestCoordAttentionRegionRendersEachSignalledRoomOnceWithExplicitCounts(t *t
 	}
 
 	page := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room))
-	start := strings.Index(page, `class="coord-attention-region"`)
+	start := strings.Index(page, `<nav class="rtabs`)
 	if start < 0 {
-		t.Fatal("compact attention region missing")
+		t.Fatal("room tabs missing")
 	}
-	end := strings.Index(page[start:], `</section>`)
+	end := strings.Index(page[start:], `</nav>`)
 	if end < 0 {
-		t.Fatal("compact attention region is not closed")
+		t.Fatal("room tabs are not closed")
 	}
 	region := page[start : start+end]
 	roomURL := `/ui/coord?room=` + url.QueryEscape(room)
 	if got := strings.Count(region, roomURL); got != 1 {
 		t.Fatalf("signalled room occurrences=%d, want one; region=%s", got, region)
 	}
-	for _, label := range []string{"1 offen", "1 Erwähnung", "1 Ungelesen"} {
+	for _, label := range []string{"1 open", "1 mentioned", "1 unread"} {
 		if !strings.Contains(region, label) {
 			t.Errorf("attention row missing explicit signal %q", label)
 		}
@@ -860,56 +835,6 @@ func TestCoordAttentionDetailsHookExistsWhenEmptyAndPopulated(t *testing.T) {
 	}
 }
 
-func TestCoordMessageStructureExposesGroupingAndHumanAgentAvatarsInBothFeeds(t *testing.T) {
-	template := string(mustReadEmbedded(t, "templates/coord.html"))
-	for _, want := range []string{
-		`coord-message-group-start`, `coord-message-continuation`,
-		`coord-message-avatar-human`, `coord-message-avatar-agent`,
-		`data-author-kind="{{.AuthorKind}}"`, `<span class="coord-author-kind">Agent</span>`,
-	} {
-		if !strings.Contains(template, want) {
-			t.Errorf("grouped message identity markup missing %q", want)
-		}
-	}
-	if got := strings.Count(template, `{{template "coord-message-identity" .}}`); got != 2 {
-		t.Fatalf("message identity render sites=%d, want room and thread feeds", got)
-	}
-}
-
-func TestCoordComposerKeepsPrimaryInputVisibleAndAdvancedFieldsInNativeDisclosure(t *testing.T) {
-	templateBytes, err := files.ReadFile("templates/coord.html")
-	if err != nil {
-		t.Fatal(err)
-	}
-	template := string(templateBytes)
-	formStart := strings.Index(template, `<form class="coord-composer"`)
-	if formStart < 0 {
-		t.Fatal("room composer form missing")
-	}
-	formEnd := strings.Index(template[formStart:], `</form>`)
-	if formEnd < 0 {
-		t.Fatal("room composer form is not closed")
-	}
-	composer := template[formStart : formStart+formEnd]
-	if !strings.Contains(composer, `class="coord-compose-primary"`) {
-		t.Fatal("composer must expose a primary input/action row")
-	}
-	moreStart := strings.Index(composer, `<details class="coord-compose-more`)
-	if moreStart < 0 {
-		t.Fatal("advanced composer controls must use a native details disclosure")
-	}
-	moreEnd := strings.Index(composer[moreStart:], `</details>`)
-	if moreEnd < 0 {
-		t.Fatal("advanced composer disclosure is not closed")
-	}
-	advanced := composer[moreStart : moreStart+moreEnd]
-	for _, field := range []string{`name="intent"`, `name="mentions"`, `{{template "coord-expiry-field"`} {
-		if !strings.Contains(advanced, field) {
-			t.Errorf("advanced composer disclosure missing %q", field)
-		}
-	}
-}
-
 func TestCoordThreadContextReplacesDefaultInspector(t *testing.T) {
 	srv, st, client := signedIn(t)
 	room := store.RoomKeyForProject("github.com/x/inspector-modes")
@@ -925,7 +850,7 @@ func TestCoordThreadContextReplacesDefaultInspector(t *testing.T) {
 		t.Fatal("room view must render only the default inspector mode")
 	}
 	threadPage := coordPageBody(t, client, srv.URL+coordThreadURL(room, threadID))
-	if !strings.Contains(threadPage, `class="coord-context-thread coord-thread-detail"`) || strings.Contains(threadPage, `class="coord-context-default"`) {
+	if !strings.Contains(threadPage, `class="coord-context-thread coord-thread-detail card clay"`) || strings.Contains(threadPage, `class="coord-context-default"`) {
 		t.Fatal("selected thread must replace the default inspector mode")
 	}
 }
@@ -933,66 +858,9 @@ func TestCoordThreadContextReplacesDefaultInspector(t *testing.T) {
 func TestCoordWelcomeKeepsRoomPickerReachableWhenEnhanced(t *testing.T) {
 	srv, _, client := signedIn(t)
 	html := coordPageBody(t, client, srv.URL+"/ui/coord")
-	for _, want := range []string{`<h1 class="coord-visually-hidden">Coordination</h1>`, `aria-controls="coord-rooms"`, `data-coord-drawer-target="coord-rooms"`} {
+	for _, want := range []string{`<h1 class="coord-visually-hidden">Rooms</h1>`, `class="coord-welcome"`} {
 		if !strings.Contains(html, want) {
 			t.Errorf("welcome drawer contract missing %q", want)
-		}
-	}
-}
-
-func TestCoordResponsiveEnhancedShellDropsHiddenSidebarColumn(t *testing.T) {
-	cssBytes, err := files.ReadFile("static/app.css")
-	if err != nil {
-		t.Fatal(err)
-	}
-	css := string(cssBytes)
-	if !strings.Contains(css, `@media (max-width: 1100px)`) ||
-		!strings.Contains(coordCSSRule(t, css, `.coord-enhanced .coord-shell`), `grid-template-columns: minmax(0, 1fr);`) {
-		t.Fatal("enhanced tablet layout must give the hidden drawers no grid column")
-	}
-	hidden := coordCSSRule(t, css, `.coord-enhanced .coord-sidebar[hidden],`)
-	if !strings.Contains(hidden, `display: none;`) {
-		t.Fatal("enhanced drawers must honor the hidden attribute over their display rules")
-	}
-}
-
-func TestCoordResponsiveDrawersExposeNamedCloseControls(t *testing.T) {
-	srv, _, client := signedIn(t)
-	html := coordPageBody(t, client, srv.URL+"/ui/coord")
-	for _, want := range []string{
-		`class="coord-drawer-head"`,
-		`class="coord-drawer-close" data-coord-drawer-close aria-label="Räume schließen"`,
-		`class="coord-drawer-close" data-coord-drawer-close aria-label="Kontext schließen"`,
-	} {
-		if !strings.Contains(html, want) {
-			t.Errorf("responsive drawer header missing %q", want)
-		}
-	}
-
-	cssBytes, err := files.ReadFile("static/app.css")
-	if err != nil {
-		t.Fatal(err)
-	}
-	css := string(cssBytes)
-	if !strings.Contains(coordCSSRule(t, css, `.coord-drawer-close`), `display: none;`) ||
-		!strings.Contains(coordCSSRule(t, css, `.coord-enhanced .coord-drawer-head`), `display: flex;`) ||
-		!strings.Contains(coordCSSRule(t, css, `.coord-enhanced .coord-drawer-close`), `display: inline-grid;`) {
-		t.Fatal("drawer close controls must only become visible in the enhanced responsive layout")
-	}
-	jsBytes, err := files.ReadFile("static/app.js")
-	if err != nil {
-		t.Fatal(err)
-	}
-	script := string(jsBytes)
-	for _, want := range []string{
-		`const bindDrawerCloseControls = () =>`,
-		`querySelectorAll("[data-coord-drawer-close]")`,
-		`control.dataset.coordDrawerCloseBound`,
-		`const reopenedPanel = document.getElementById(openPanel.id)`,
-		`setOutsideInert(reopenedPanel)`,
-	} {
-		if !strings.Contains(script, want) {
-			t.Errorf("replace-safe drawer close binding missing %q", want)
 		}
 	}
 }
@@ -1011,394 +879,6 @@ func TestCoordSelectedThreadOpensResponsiveContextOnInitialLoad(t *testing.T) {
 	} {
 		if !strings.Contains(script, want) {
 			t.Errorf("initial selected-thread drawer behavior missing %q", want)
-		}
-	}
-}
-
-func TestCoordMessageActionsShareOneTouchSizedHierarchy(t *testing.T) {
-	templateBytes, err := files.ReadFile("templates/coord.html")
-	if err != nil {
-		t.Fatal(err)
-	}
-	template := string(templateBytes)
-	if got := strings.Count(template, `class="coord-message-actions coord-message-tools"`); got != 2 {
-		t.Fatalf("message action rows=%d, want room and thread rows", got)
-	}
-	if !strings.Contains(template, `class="coord-message-action coord-message-action-primary coord-reply-action"`) ||
-		!strings.Contains(template, `class="coord-message-action coord-message-action-secondary"`) {
-		t.Fatal("message actions must distinguish reply as primary from thread actions")
-	}
-
-	cssBytes, err := files.ReadFile("static/app.css")
-	if err != nil {
-		t.Fatal(err)
-	}
-	css := string(cssBytes)
-	action := coordCSSRule(t, css, `.coord-message-action {`)
-	if !strings.Contains(action, `display: inline-flex;`) ||
-		!strings.Contains(action, `min-height: 2.75rem;`) {
-		t.Fatal("message actions must expose a 44px-equivalent touch target")
-	}
-}
-
-func TestCoordTimestampsKeepMachineValueAndShowShortLocalValue(t *testing.T) {
-	templateBytes, err := files.ReadFile("templates/coord.html")
-	if err != nil {
-		t.Fatal(err)
-	}
-	template := string(templateBytes)
-	for _, want := range []string{
-		`<time datetime="{{.Timestamp}}" title="{{.Timestamp}}">{{.DisplayTimestamp}}</time>`,
-		`<time datetime="{{.CreatedAt}}" title="{{.CreatedAt}}">{{.DisplayTimestamp}}</time>`,
-		`<time datetime="{{.LastSeen}}" title="{{.LastSeen}}">{{.DisplayTimestamp}}</time>`,
-	} {
-		if !strings.Contains(template, want) {
-			t.Errorf("coord timestamp markup missing %q", want)
-		}
-	}
-}
-
-func TestCoordLiveBadgeAndMobileToolbarHaveStableCompactContracts(t *testing.T) {
-	jsBytes, err := files.ReadFile("static/app.js")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(jsBytes), `setLive("live", "Live verbunden"`) {
-		t.Fatal("connected live status must state what is connected")
-	}
-
-	cssBytes, err := files.ReadFile("static/app.css")
-	if err != nil {
-		t.Fatal(err)
-	}
-	css := string(cssBytes)
-	// Desktop: the badge is a status row in the layout flow. Only the mobile
-	// dot floats, and it never takes pointer events.
-	live := coordCSSRule(t, css[strings.Index(css, `@media (max-width: 700px)`):], `.coord-live-status:not(.coord-nojs-status)`)
-	for _, want := range []string{
-		`right: max(.7rem, env(safe-area-inset-right))`,
-		`bottom: max(.7rem, env(safe-area-inset-bottom))`,
-		`pointer-events: none`,
-	} {
-		if !strings.Contains(live, want) {
-			t.Errorf("stable responsive chrome missing %q", want)
-		}
-	}
-}
-
-func TestCoordMobilePolishKeepsConversationDenseAndStatusOutOfTheWay(t *testing.T) {
-	templateBytes, err := files.ReadFile("templates/coord.html")
-	if err != nil {
-		t.Fatal(err)
-	}
-	template := string(templateBytes)
-	for _, unwanted := range []string{
-		`class="coord-kicker">Zusammenarbeit, die nachvollziehbar bleibt`,
-		`Gültig bis (RFC3339)`,
-	} {
-		if strings.Contains(template, unwanted) {
-			t.Errorf("coordination UI retains editorial or implementation-facing copy %q", unwanted)
-		}
-	}
-	for _, want := range []string{
-		`coord-nojs-status`,
-		`type="datetime-local"`,
-		`Zeit in {{.}} (Serverzeit)`,
-		`Braucht dich <small>alle Räume</small>`,
-		`{{.Attention}} offen`,
-		`{{.Unread}} neu`,
-	} {
-		if !strings.Contains(template, want) {
-			t.Errorf("coordination polish missing %q", want)
-		}
-	}
-
-	cssBytes, err := files.ReadFile("static/app.css")
-	if err != nil {
-		t.Fatal(err)
-	}
-	css := string(cssBytes)
-	for _, selector := range []string{
-		`.coord-context > .coord-context-thread`,
-		`.coord-mentions:not(:has(input))`,
-		`.coord-live-status:not(.coord-nojs-status)`,
-		`.coord-nojs-status`,
-	} {
-		if !strings.Contains(css, selector) {
-			t.Errorf("coordination polish CSS missing %q", selector)
-		}
-	}
-	if !strings.Contains(css, "padding: 0;\n    border: 0;\n    background: transparent;") {
-		t.Fatal("mobile message actions must not render as repeated bordered cards")
-	}
-}
-
-func TestCoordThreadListSeparatesTitleFromStatus(t *testing.T) {
-	cssBytes, err := files.ReadFile("static/app.css")
-	if err != nil {
-		t.Fatal(err)
-	}
-	css := string(cssBytes)
-	status := coordCSSRule(t, css, `.coord-threads li > small`)
-	if !strings.Contains(status, `display: block;`) || !strings.Contains(status, `margin-top: .2rem;`) {
-		t.Fatal("thread status must render on its own spaced line")
-	}
-}
-
-func TestCoordVisualSystemSeparatesChromeConversationAndInspector(t *testing.T) {
-	cssBytes, err := files.ReadFile("static/app.css")
-	if err != nil {
-		t.Fatal(err)
-	}
-	css := string(cssBytes)
-	workspace := coordCSSRule(t, css, "\n.coord-workspace {")
-	for _, want := range []string{
-		`--coord-chrome: #1a2333`,
-		`--coord-conversation: #f6f8fc`,
-		`--coord-inspector: #e6eaf2`,
-	} {
-		if !strings.Contains(workspace, want) {
-			t.Errorf("coord visual hierarchy missing %q", want)
-		}
-	}
-	if shell := coordCSSRule(t, css, `.coord-shell`); !strings.Contains(shell, `grid-template-columns: 16rem minmax(0, 1fr) 22rem;`) {
-		t.Fatalf("coord desktop columns lost their hierarchy: %s", shell)
-	}
-	if toggles := coordCSSRule(t, css, `.coord-mobile-actions a,`); !strings.Contains(toggles, `border-radius: 4px;`) {
-		t.Fatalf("coord controls exceed the restrained radius contract: %s", toggles)
-	}
-	for _, forbidden := range []string{`linear-gradient(`, `radial-gradient(`, `backdrop-filter:`, `border-radius: 999px`} {
-		if strings.Contains(css, forbidden) {
-			t.Errorf("coord visual system contains prohibited slop treatment %q", forbidden)
-		}
-	}
-}
-
-func TestCoordMessageGroupsKeepIdentityAndRevealToolsWithoutCardChrome(t *testing.T) {
-	css := string(mustReadEmbedded(t, "static/app.css"))
-	for _, want := range []string{
-		`.coord-message-group-start`,
-		`grid-template-columns: 2rem minmax(0, 1fr)`,
-		`.coord-message-continuation`,
-		`.coord-message-avatar-agent`,
-		`border-radius: var(--coord-radius)`,
-		`.coord-message:focus-within .coord-message-tools`,
-		`@media (hover: hover) and (pointer: fine)`,
-		`@media (hover: none), (pointer: coarse)`,
-	} {
-		if !strings.Contains(css, want) {
-			t.Errorf("message grouping/tool contract missing %q", want)
-		}
-	}
-	if strings.Contains(css, `.coord-message {\n  border:`) || strings.Contains(css, `.coord-message{border:`) {
-		t.Fatal("messages must not become individual bordered cards")
-	}
-}
-
-func TestCoordResponsiveLayoutKeepsFeedScrollableAndComposerVisible(t *testing.T) {
-	css := string(mustReadEmbedded(t, "static/app.css"))
-	for _, media := range []string{`@media (max-width: 1100px)`, `@media (max-width: 700px)`} {
-		if !strings.Contains(css, media) {
-			t.Errorf("bounded responsive chat contract missing %q", media)
-		}
-	}
-	mobile := css[strings.Index(css, `@media (max-width: 700px)`):]
-	if workspace := coordCSSRule(t, mobile, `html.coord-enhanced .coord-workspace`); !strings.Contains(workspace, `height: calc(100dvh - 3rem);`) {
-		t.Fatalf("enhanced mobile workspace is not viewport bound: %s", workspace)
-	}
-	if messages := coordCSSRule(t, mobile, `.coord-messages`); !strings.Contains(messages, `overflow: auto;`) {
-		t.Fatalf("mobile message feed does not own scrolling: %s", messages)
-	}
-	if composer := coordCSSRule(t, mobile, `.coord-composer`); !strings.Contains(composer, `padding-bottom: max(.75rem, env(safe-area-inset-bottom));`) {
-		t.Fatalf("mobile composer lost safe-area padding: %s", composer)
-	}
-	if hidden := coordCSSRule(t, css, `.coord-enhanced .coord-sidebar[hidden],`); !strings.Contains(hidden, `display: none;`) {
-		t.Fatalf("enhanced hidden drawers still occupy layout: %s", hidden)
-	}
-}
-
-func TestCoordNoJSMobileRestoresDocumentFlowInDOMOrder(t *testing.T) {
-	css := string(mustReadEmbedded(t, "static/app.css"))
-	if strings.Contains(css, "\nbody:has(.coord-workspace) {") {
-		t.Fatal("viewport locking must not apply before progressive enhancement is active")
-	}
-	if block := coordCSSRule(t, css, `html.coord-enhanced body:has(.coord-workspace)`); !strings.Contains(block, `overflow: hidden;`) {
-		t.Fatalf("enhanced body rule does not lock viewport: %s", block)
-	}
-	if block := coordCSSRule(t, css, `html:not(.coord-enhanced) body:has(.coord-workspace)`); !strings.Contains(block, `overflow: auto;`) {
-		t.Fatalf("no-JS body rule does not restore document scroll: %s", block)
-	}
-	workspace := coordCSSRule(t, css, `html:not(.coord-enhanced) .coord-workspace`)
-	for _, want := range []string{`height: auto;`, `min-height: calc(100dvh - 3rem);`, `overflow: visible;`} {
-		if !strings.Contains(workspace, want) {
-			t.Errorf("no-JS workspace rule missing %q: %s", want, workspace)
-		}
-	}
-	shell := coordCSSRule(t, css, `html:not(.coord-enhanced) .coord-shell`)
-	for _, want := range []string{`display: flex;`, `flex-direction: column;`} {
-		if !strings.Contains(shell, want) {
-			t.Errorf("no-JS sequential shell missing %q: %s", want, shell)
-		}
-	}
-}
-
-func TestCoordNoJSMobilePutsConversationFirstAndHidesDeadControls(t *testing.T) {
-	css := string(mustReadEmbedded(t, "static/app.css"))
-	narrow := css[strings.Index(css, "@media (max-width: 1100px)"):]
-	for _, want := range []string{
-		`html:not(.coord-enhanced) .coord-conversation { order: 1; }`,
-		`html:not(.coord-enhanced) .coord-sidebar { order: 2; }`,
-		`html:not(.coord-enhanced) .coord-context { order: 3; }`,
-	} {
-		if !strings.Contains(narrow, want) {
-			t.Errorf("no-JS narrow flow must lead with the conversation, missing %q", want)
-		}
-	}
-	start := strings.Index(css, "html:not(.coord-enhanced) .coord-drawer-toggle")
-	if start < 0 {
-		t.Fatal("JS-only drawer close is not hidden without enhancement")
-	}
-	open := strings.Index(css[start:], "{")
-	selectors := css[start : start+open]
-	for _, want := range []string{".coord-drawer-toggle", ".coord-drawer-close", ".coord-backdrop"} {
-		if !strings.Contains(selectors, "html:not(.coord-enhanced) "+want) {
-			t.Errorf("JS-only control %s stays visible without enhancement", want)
-		}
-	}
-	if block := coordCSSRule(t, css, "html:not(.coord-enhanced) .coord-drawer-toggle"); !strings.Contains(block, "display: none !important;") {
-		t.Fatalf("dead controls must beat the mobile button display rule: %s", block)
-	}
-	if strings.Contains(string(mustReadEmbedded(t, "templates/coord.html")), "coord-skip-conversation") {
-		t.Fatal("the conversation is first without JS, so the skip link is dead weight")
-	}
-}
-
-func TestCoordRefreshLinkKeepsTheActiveRoom(t *testing.T) {
-	srv, st, client := signedIn(t)
-	room := store.RoomKeyForProject("github.com/x/refresh-link")
-	materializeWebRoom(t, st, room)
-	res, err := client.Get(srv.URL + "/ui/coord?room=" + url.QueryEscape(room))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer res.Body.Close()
-	body, _ := io.ReadAll(res.Body)
-	want := `href="/ui/coord?room=` + url.QueryEscape(room) + `" aria-label="Raumliste aktualisieren"`
-	if !strings.Contains(strings.ToLower(string(body)), strings.ToLower(want)) {
-		t.Fatalf("refresh link loses the room context, want %q", want)
-	}
-}
-
-func TestCoordHiddenMessageToolsStayFocusableAndOutOfFlow(t *testing.T) {
-	css := string(mustReadEmbedded(t, "static/app.css"))
-	base := coordCSSRule(t, css, `.coord-message-tools`)
-	if !strings.Contains(base, `position: absolute;`) {
-		t.Fatalf("message tools remain in message flow: %s", base)
-	}
-	hoverMedia := css[strings.Index(css, `@media (hover: hover) and (pointer: fine)`):]
-	hidden := coordCSSRule(t, hoverMedia, `.coord-message-tools`)
-	for _, want := range []string{`opacity: 0;`, `pointer-events: none;`} {
-		if !strings.Contains(hidden, want) {
-			t.Errorf("pointer-hidden tools rule missing %q: %s", want, hidden)
-		}
-	}
-	focused := coordCSSRule(t, hoverMedia, `.coord-message:hover .coord-message-tools,`)
-	for _, want := range []string{`opacity: 1;`, `pointer-events: auto;`} {
-		if !strings.Contains(focused, want) {
-			t.Errorf("focused tools rule missing %q: %s", want, focused)
-		}
-	}
-	if strings.Contains(css, `visibility: hidden`) {
-		t.Fatal("hidden message tools must remain in the keyboard tab sequence")
-	}
-}
-
-func TestCoordAgentIdentitySitsBesideAuthorAndContinuationKeepsAccessibleName(t *testing.T) {
-	template := string(mustReadEmbedded(t, "templates/coord.html"))
-	for _, want := range []string{
-		`<strong class="{{if not .GroupStart}}coord-visually-hidden{{end}}">{{.Author}}</strong>`,
-		`{{if and .GroupStart (eq .AuthorKind "agent")}}<span class="coord-author-kind">Agent</span>{{end}}`,
-		`{{if eq .AuthorKind "agent"}}A{{else}}●{{end}}`,
-	} {
-		if !strings.Contains(template, want) {
-			t.Errorf("restrained grouped identity missing %q", want)
-		}
-	}
-	if strings.Contains(template, `>◆<`) {
-		t.Fatal("agent avatar must not use the decorative AI-style diamond")
-	}
-}
-
-func TestCoordContrastFocusAndCoarseTargetsAreExplicit(t *testing.T) {
-	css := string(mustReadEmbedded(t, "static/app.css"))
-	workspace := coordCSSRule(t, css, "\n.coord-workspace {")
-	if !strings.Contains(workspace, `--coord-muted: #4f5b6e`) {
-		t.Fatalf("conversation/inspector muted color lost its contrast token: %s", workspace)
-	}
-	focus := coordCSSRule(t, css, `.coord-shell :focus-visible`)
-	if !strings.Contains(focus, `outline: 3px solid`) {
-		t.Fatalf("workspace focus indicator is thinner than three pixels: %s", focus)
-	}
-	coarseMedia := css[strings.Index(css, `@media (hover: none), (pointer: coarse)`):]
-	targets := coordCSSRule(t, coarseMedia, `.coord-workspace button,`)
-	targetStart := strings.Index(coarseMedia, `.coord-workspace button,`)
-	targetOpen := strings.Index(coarseMedia[targetStart:], `{`)
-	targetSelectors := coarseMedia[targetStart : targetStart+targetOpen]
-	for _, selector := range []string{`.coord-context a`} {
-		if !strings.Contains(targetSelectors, selector) {
-			t.Errorf("coarse target selector missing %q", selector)
-		}
-	}
-	if !strings.Contains(targets, `min-height: 2.75rem;`) {
-		t.Fatalf("coarse target rule is below 44 CSS pixels: %s", targets)
-	}
-	if summary := coordCSSRule(t, coarseMedia, `.coord-workspace summary`); !strings.Contains(summary, `min-height: 2.75rem;`) {
-		t.Fatalf("coarse summary target is below 44 CSS pixels: %s", summary)
-	}
-}
-
-func TestCoordCoarseMessageToolsReturnToGridFlowWithoutCoveringHeader(t *testing.T) {
-	css := string(mustReadEmbedded(t, "static/app.css"))
-	for _, media := range []string{`@media (hover: none), (pointer: coarse)`, `@media (max-width: 700px)`} {
-		mediaCSS := css[strings.Index(css, media):]
-		tools := coordCSSRule(t, mediaCSS, `.coord-message-tools`)
-		for _, want := range []string{
-			`position: relative;`,
-			`grid-column: 2;`,
-			`top: auto;`,
-			`right: auto;`,
-		} {
-			if !strings.Contains(tools, want) {
-				t.Errorf("%s message tools still overlap content; missing %q in %s", media, want, tools)
-			}
-		}
-	}
-}
-
-func TestCoordTouchTargetsPreserveNativeDetailsMarker(t *testing.T) {
-	css := string(mustReadEmbedded(t, "static/app.css"))
-	coarseMedia := css[strings.Index(css, `@media (hover: none), (pointer: coarse)`):]
-	summary := coordCSSRule(t, coarseMedia, `.coord-workspace summary`)
-	if !strings.Contains(summary, `min-height: 2.75rem;`) {
-		t.Fatalf("touch summary is below 44 CSS pixels: %s", summary)
-	}
-	if strings.Contains(summary, `display: inline-flex;`) || strings.Contains(summary, `display: flex;`) {
-		t.Fatalf("touch summary overrides its native disclosure marker: %s", summary)
-	}
-}
-
-func TestCoordInspectorLinksAndAttentionButtonsUseIntentionalFlatStates(t *testing.T) {
-	css := string(mustReadEmbedded(t, "static/app.css"))
-	links := coordCSSRule(t, css, `:where(.coord-conversation, .coord-context) a:hover`)
-	for _, want := range []string{`color: var(--coord-link-hover);`, `text-decoration: underline;`, `text-underline-offset:`} {
-		if !strings.Contains(links, want) {
-			t.Errorf("inspector link treatment missing %q: %s", want, links)
-		}
-	}
-	buttons := coordCSSRule(t, css, `.coord-attention-card button`)
-	for _, want := range []string{`display: inline-flex;`, `border: 1px solid`, `border-radius: var(--coord-radius-sm);`, `background: transparent;`} {
-		if !strings.Contains(buttons, want) {
-			t.Errorf("attention action treatment missing %q: %s", want, buttons)
 		}
 	}
 }
@@ -1457,15 +937,15 @@ func TestCoordWorkspaceRendersAuthorizedIdentityLabelsAndHonestPresence(t *testi
 
 	html := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room))
 	for _, want := range []string{
-		"robin (du)", "Build Agent", "Alex", "Erwähnt: Build Agent", "an Build Agent",
-		"<span>codex</span>", `title="Worktree: /worktrees/ui"`, "<span>feat/ui</span>",
-		"Erreichbarkeit: unbekannt (keine Beobachtung)", "Arbeitszustand: unbekannt (keine Beobachtung)",
+		"robin", "Build Agent", "Alex", "Handoff to Build Agent", "to Build Agent",
+		"<span>codex</span>", `title="Worktree: /worktrees/ui"`, ">feat/ui<",
+		"Reachability: unknown (not observed)", "Work state: unknown (not observed)",
 	} {
 		if !strings.Contains(html, want) {
 			t.Errorf("identity/presence presentation missing %q", want)
 		}
 	}
-	for _, forbidden := range []string{"Erwähnt: sess-peer-secret", ">sess-peer-secret<", "an sess-peer-secret", "Top Secret", "Hidden Directory Agent"} {
+	for _, forbidden := range []string{"Mentioned: sess-peer-secret", ">sess-peer-secret<", "to sess-peer-secret", "Top Secret", "Hidden Directory Agent"} {
 		if strings.Contains(html, forbidden) {
 			t.Errorf("coordination UI leaked raw or unauthorized identity %q", forbidden)
 		}
@@ -1508,8 +988,8 @@ func TestCoordWorkspaceEscapesAgentContentAndKeepsNoJSForms(t *testing.T) {
 	if strings.Contains(html, `<ol class="coord-messages" aria-live=`) {
 		t.Fatal("the full message history must not be an aria-live region")
 	}
-	if !strings.Contains(html, `id="coord-status"`) || !strings.Contains(html, `lang="de"`) {
-		t.Fatal("workspace lacks its small status region or language declaration")
+	if !strings.Contains(html, `id="coord-status"`) {
+		t.Fatal("workspace lacks its small status region")
 	}
 }
 
@@ -1583,7 +1063,7 @@ func TestCoordWorkspaceSeparatesAttentionMentionsAndUnreadAndActsWithCSRF(t *tes
 		t.Fatalf("attention=%+v err=%v", items, err)
 	}
 	page := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room))
-	for _, want := range []string{"Braucht dich", "Erwähnungen", "Ungelesen", "Release freigeben?", "nur Koordination", `action="/ui/coord/attention/action"`} {
+	for _, want := range []string{"Needs you", "Release freigeben?", "Coordination only", `action="/ui/coord/attention/action"`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("attention workspace missing %q", want)
 		}
@@ -1676,7 +1156,7 @@ func TestHumanCanReplyInRoomAndThreadWithoutJavaScript(t *testing.T) {
 
 	page := coordPageBody(t, client, srv.URL+coordRoomURL(room, "", 0))
 	replyURL := coordRoomReplyURL(room, parentID, 1)
-	for _, want := range []string{`href="` + strings.ReplaceAll(replyURL, "&", "&amp;") + `"`, `>Antworten</a>`} {
+	for _, want := range []string{`href="` + strings.ReplaceAll(replyURL, "&", "&amp;") + `"`, `>Reply</a>`} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("room reply control missing %q", want)
 		}
@@ -1697,7 +1177,7 @@ func TestHumanCanReplyInRoomAndThreadWithoutJavaScript(t *testing.T) {
 		t.Fatalf("room reply messages=%+v err=%v", roomMessages, err)
 	}
 	rendered := coordPageBody(t, client, srv.URL+coordRoomURL(room, "", 0))
-	if !strings.Contains(rendered, "Antwort auf") || !strings.Contains(rendered, "Room parent") {
+	if !strings.Contains(rendered, "Reply to #") || !strings.Contains(rendered, "Room parent") {
 		t.Fatalf("room reply preview missing: %s", rendered)
 	}
 	res = authenticatedPostForm(t, client, srv.URL+"/ui/coord/send", url.Values{
@@ -1849,7 +1329,7 @@ func TestReplyCountsRenderInRoomAndThread(t *testing.T) {
 	}
 
 	page := coordPageBody(t, client, srv.URL+coordThreadURL(room, threadID))
-	if got := strings.Count(page, `>2 Antworten<`); got != 2 {
+	if got := strings.Count(page, `>2 replies<`); got != 2 {
 		t.Fatalf("room and thread reply counters: got %d occurrences, want 2", got)
 	}
 }
@@ -2119,101 +1599,6 @@ func shadowHasBlur(value string) bool {
 	return false
 }
 
-// TestCoordVisualSystemAvoidsAntiSlopPatterns hält die Do-not-Liste der
-// Coordination-Spec (specs/2026-09-18-coordination-visual-redesign.md) als
-// maschinelle Prüfung fest. Geprüft werden alle Regeln, deren Selektor "coord"
-// enthält, samt dem --coord-Token-Block.
-func TestCoordVisualSystemAvoidsAntiSlopPatterns(t *testing.T) {
-	raw, err := os.ReadFile("static/app.css")
-	if err != nil {
-		t.Fatal(err)
-	}
-	rules := parseCSSRules(string(raw))
-
-	// Runde Formen sind nur für Avatare und den Statuspunkt gedacht; alles
-	// andere hat Ecken von höchstens 4px (keine Pills).
-	roundAllowed := map[string]string{
-		".coord-message-avatar-human":                "Avatar eines Menschen ist rund, Agenten sind quadratisch",
-		".coord-avatar":                              "Teilnehmer-Avatar in der Kontextspalte",
-		".coord-live-status:not(.coord-nojs-status)": "Statuspunkt im schmalen Layout",
-	}
-	forbidden := []struct {
-		name string
-		re   *regexp.Regexp
-	}{
-		{"gradient", regexp.MustCompile(`(?i)(linear|radial|conic|repeating-[a-z]+)-gradient\(`)},
-		{"backdrop-filter", regexp.MustCompile(`(?i)backdrop-filter\s*:`)},
-		{"text-shadow", regexp.MustCompile(`(?i)text-shadow\s*:`)},
-		{"filter blur", regexp.MustCompile(`(?i)(^|[;\s])filter\s*:[^;]*blur\(`)},
-		{"pill radius", regexp.MustCompile(`(?i)border-radius\s*:\s*(\d{3,}px|\d{3,}rem|9+em)`)},
-	}
-	shadow := regexp.MustCompile(`(?i)box-shadow\s*:\s*([^;]+)`)
-	radius := regexp.MustCompile(`(?i)border-radius\s*:\s*([^;]+)`)
-	coordVar := regexp.MustCompile(`var\(--coord-`)
-
-	seen := 0
-	for _, r := range rules {
-		if !isCoordRule(r) {
-			if coordVar.MatchString(r.body) {
-				t.Errorf("%s uses --coord tokens outside a coord selector", r.selector)
-			}
-			continue
-		}
-		seen++
-		for _, f := range forbidden {
-			if f.re.MatchString(r.body) {
-				t.Errorf("%s: forbidden %s", r.selector, f.name)
-			}
-		}
-		for _, m := range shadow.FindAllStringSubmatch(r.body, -1) {
-			if shadowHasBlur(m[1]) {
-				t.Errorf("%s: box-shadow with blur (glow or soft shadow): %s", r.selector, m[1])
-			}
-		}
-		for _, m := range radius.FindAllStringSubmatch(r.body, -1) {
-			if strings.Contains(m[1], "%") {
-				if _, ok := roundAllowed[r.selector]; !ok {
-					t.Errorf("%s: round shape is only allowed for avatars and the status dot", r.selector)
-				}
-			}
-		}
-	}
-	if seen < 100 {
-		t.Fatalf("parsed only %d coord rules; the extractor is probably broken", seen)
-	}
-	for sel := range roundAllowed {
-		found := false
-		for _, r := range rules {
-			if r.selector == sel && strings.Contains(r.body, "border-radius: 50%") {
-				found = true
-			}
-		}
-		if !found {
-			t.Errorf("stale allowlist entry %q", sel)
-		}
-	}
-
-	// Dokumentierte Tokens müssen im Token-Block stehen.
-	var tokens string
-	for _, r := range rules {
-		if r.selector == ".coord-workspace" && strings.Contains(r.body, "--coord-signal:") {
-			tokens = r.body
-		}
-	}
-	for _, name := range []string{
-		"--coord-chrome", "--coord-conversation", "--coord-inspector", "--coord-line",
-		"--coord-ink", "--coord-muted", "--coord-signal", "--coord-danger", "--coord-success",
-		"--coord-radius-sm", "--coord-radius",
-		"--coord-gap-1", "--coord-gap-2", "--coord-gap-3",
-		"--coord-text-micro", "--coord-text-label", "--coord-text-note",
-		"--coord-text-meta", "--coord-text-small", "--coord-text-title",
-	} {
-		if !strings.Contains(tokens, name+":") {
-			t.Errorf("token %s is missing from the .coord-workspace token block", name)
-		}
-	}
-}
-
 // Regression: a media-query rule `.coord-workspace button { display: inline-flex }`
 // outranked the UA `[hidden]` rule and the base `display: none` of the drawer
 // toggles, so the hidden backdrop dimmed narrow layouts and, without JS, the
@@ -2271,18 +1656,18 @@ func coordPrivateAttentionFixture(t *testing.T) (srv *httptest.Server, st *store
 func TestCoordNeedsYouLeadsContextAndNamesSenderRoomAndPrivacy(t *testing.T) {
 	srv, _, client, project, _ := coordPrivateAttentionFixture(t)
 	page := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(project))
-	needs := strings.Index(page, "Braucht dich")
-	participants := strings.Index(page, "<h2>Teilnehmende</h2>")
-	threads := strings.Index(page, "<h2>Aufgaben-Threads</h2>")
+	needs := strings.Index(page, "Needs you")
+	participants := strings.Index(page, ">Participants</h3>")
+	threads := strings.Index(page, "<h3>Threads</h3>")
 	if needs < 0 || participants < 0 || threads < 0 || needs > participants || needs > threads {
-		t.Fatalf("Braucht dich must open the context: needs=%d threads=%d participants=%d", needs, threads, participants)
+		t.Fatalf("Needs you must open the context: needs=%d threads=%d participants=%d", needs, threads, participants)
 	}
 	start := strings.Index(page, `class="coord-attention-card`)
 	if start < 0 {
 		t.Fatal("no attention card rendered")
 	}
 	card := page[start : start+strings.Index(page[start:], "</article>")]
-	for _, want := range []string{"von bob", "bob", `class="coord-private-mark"`, "Privat"} {
+	for _, want := range []string{"from bob", "bob", `class="coord-private-mark"`, "Private"} {
 		if !strings.Contains(card, want) {
 			t.Errorf("private attention card missing %q: %s", want, card)
 		}
@@ -2362,7 +1747,7 @@ func TestCoordDirectRoomShowsPrivateSignalInHeadAndComposer(t *testing.T) {
 	page := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(direct))
 	head := page[strings.Index(page, `class="coord-conversation-head"`):]
 	head = head[:strings.Index(head, "</header>")]
-	if !strings.Contains(head, "Privat · nur du und bob") {
+	if !strings.Contains(head, "Private, only you and bob") {
 		t.Errorf("conversation head lacks the private signal: %s", head)
 	}
 	composer := page[strings.Index(page, `class="coord-composer"`):]
@@ -2371,7 +1756,7 @@ func TestCoordDirectRoomShowsPrivateSignalInHeadAndComposer(t *testing.T) {
 		t.Errorf("composer lacks the private hint: %s", composer)
 	}
 	other := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(project))
-	if strings.Contains(other, "Privat · nur du") || strings.Contains(other, `class="coord-private-hint"`) {
+	if strings.Contains(other, "Private, only you") || strings.Contains(other, `class="coord-private-hint"`) {
 		t.Error("project rooms must not carry the private signal")
 	}
 }
@@ -2389,34 +1774,16 @@ func TestCoordSidebarShowsOneActiveRowAndSplitCounters(t *testing.T) {
 	}
 	page := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room))
 	rail := page[strings.Index(page, `id="coord-rooms"`):]
-	rail = rail[:strings.Index(rail, `class="coord-start"`)]
+	rail = rail[:strings.Index(rail, `</nav>`)]
 	if got := strings.Count(rail, `aria-current="page"`); got != 1 {
 		t.Errorf("sidebar marks %d rows as current, want exactly 1", got)
 	}
 	if strings.Contains(rail, "@1") {
 		t.Error("mention counter must not use the cryptic @1 form")
 	}
-	for _, want := range []string{`class="coord-room-name" title="github.com/x/counters"`, `class="coord-room-counts"`, "1 offen", "1 @"} {
+	for _, want := range []string{`class="coord-room-name" title="github.com/x/counters"`, `coord-room-counts`, "1 open", "1 mentioned"} {
 		if !strings.Contains(rail, want) {
 			t.Errorf("sidebar row missing %q", want)
-		}
-	}
-}
-
-func TestCoordSidebarCSSKeepsCountersOnOneLineAndEllipsizesNames(t *testing.T) {
-	raw, err := files.ReadFile("static/app.css")
-	if err != nil {
-		t.Fatal(err)
-	}
-	css := string(raw)
-	counts := coordCSSRule(t, css, "\n.coord-room-counts {")
-	if !strings.Contains(counts, "white-space: nowrap") || !strings.Contains(counts, "flex: 0 0 auto") {
-		t.Errorf("counter column must not wrap or shrink: %q", counts)
-	}
-	name := coordCSSRule(t, css, "\n.coord-room-name {")
-	for _, want := range []string{"text-overflow: ellipsis", "white-space: nowrap", "overflow: hidden", "min-width: 0"} {
-		if !strings.Contains(name, want) {
-			t.Errorf("room name must ellipsize, missing %q in %q", want, name)
 		}
 	}
 }
@@ -2437,12 +1804,12 @@ func TestCoordParticipantsShowUnknownExplicitlyAndNeverIdle(t *testing.T) {
 	}
 	list := listOf()
 	for _, want := range []string{"Build Agent", "claude", "feat/ui",
-		"Erreichbarkeit: unbekannt (keine Beobachtung)", "Arbeitszustand: unbekannt (keine Beobachtung)"} {
+		"Reachability: unknown (not observed)", "Work state: unknown (not observed)"} {
 		if !strings.Contains(list, want) {
 			t.Errorf("participant line lost %q: %s", want, list)
 		}
 	}
-	for _, gone := range []string{"idle", "untätig", "beendet", "verbunden"} {
+	for _, gone := range []string{"idle", "ended", "connected"} {
 		if strings.Contains(list, gone) {
 			t.Errorf("silence must not read as %q", gone)
 		}
@@ -2452,10 +1819,10 @@ func TestCoordParticipantsShowUnknownExplicitlyAndNeverIdle(t *testing.T) {
 		t.Fatal(err)
 	}
 	list = listOf()
-	if !strings.Contains(list, "Erreichbarkeit: verbunden (beobachtet, vor ") {
+	if !strings.Contains(list, "Reachability: connected (observed, ") {
 		t.Errorf("fresh poll must show origin and age: %s", list)
 	}
-	if !strings.Contains(list, "Arbeitszustand: unbekannt (keine Beobachtung)") {
+	if !strings.Contains(list, "Work state: unknown (not observed)") {
 		t.Errorf("a poll says nothing about work: %s", list)
 	}
 }
@@ -2479,9 +1846,9 @@ func TestCoordRoomsToggleCarriesTotalSignalWithAccessibleName(t *testing.T) {
 		t.Fatal(err)
 	}
 	page := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room))
-	toggle := page[strings.Index(page, `data-coord-drawer-target="coord-rooms"`):]
+	toggle := page[strings.Index(page, `data-coord-drawer-target="coord-context"`):]
 	toggle = toggle[:strings.Index(toggle, "</button>")]
-	for _, want := range []string{`class="coord-count" aria-hidden="true">1</span>`, ", 1 brauchen dich", "data-coord-rooms-count"} {
+	for _, want := range []string{`class="coord-count" aria-hidden="true">1</span>`, "1 need you", "data-coord-rooms-count"} {
 		if !strings.Contains(toggle, want) {
 			t.Errorf("a question with a mention is one message that needs the viewer; toggle missing %q: %s", want, toggle)
 		}

@@ -146,6 +146,7 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 	annotateCoordAttention(incomingAttention, attention, sidebar, attentionLabels)
 	annotateCoordAttention(outgoingAttention, attention, sidebar, attentionLabels)
 	view := coordPageView{
+		Texts:             coordClientTexts(),
 		EventCursor:       a.sealCoordCursor(browserPrincipal(r), eventCursor, time.Now()),
 		Sidebar:           sidebar,
 		Recipients:        buildCoordRecipientViews(recipients),
@@ -230,23 +231,40 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 		CanLeave: activeRoom.Kind == store.RoomGroup,
 		FormID:   newCoordFormID(), StandingFormID: newCoordFormID(), Threads: buildCoordThreadViews(roomThreads),
 	}
+	detail.Room.Name = coordShortRoomName(detail.Room.Kind, detail.Room.Label)
 	applyParticipantRoles(a.store, activeRoom.Key, detail.Participants)
 	a.applyParticipantControls(r, activeRoom.Key, detail.Participants)
 	applyMessageRoles(a.store, activeRoom.Key, detail.Messages, presentations)
 	markViewerMentions(detail.Messages, presentations, current.ID)
+	detail.CanDirect = true
+	roleRoom := false
+	if remote, ok := strings.CutPrefix(activeRoom.Key, "project:"); ok {
+		if _, claimed := a.store.ProjectByRemote(remote); claimed {
+			roleRoom = true
+			detail.CanDirect = coordCanDirect(a.store.ProjectRole(remote, current.ID).Role)
+		}
+	}
+	for i := range detail.Standing {
+		detail.Standing[i].Scope = coordStandingScope(detail.Standing[i].Targets, detail.Room.Label)
+		detail.Standing[i].CanEnd = access.CanEndStanding(activeRoom.Key, detail.Standing[i].MessageID)
+	}
+	decorateCoordMessages(detail.Messages, presentations, current.ID, activeRoom.Key, detail.Room.Label, detail.Standing, append(append([]coordAttentionView{}, incomingAttention...), outgoingAttention...), roleRoom, time.Now())
+	applyRequestStates(detail.Messages, presentations, activeRoom.Key, attention, attentionLabels)
 	detail.ReplyTo, detail.ReplyTarget, err = coordReplyTarget(presentations, r.URL.Query().Get("reply_to"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	threadByAnchor := make(map[int64]string, len(detail.Threads))
+	threadByAnchor := make(map[int64]coordThreadView, len(detail.Threads))
 	for _, thread := range detail.Threads {
-		threadByAnchor[thread.AnchorMessageID] = thread.URL
+		threadByAnchor[thread.AnchorMessageID] = thread
 	}
 	for i := range detail.Messages {
 		detail.Messages[i].CSRFToken = csrfOf(r)
-		if threadURL := threadByAnchor[detail.Messages[i].ID]; threadURL != "" {
-			detail.Messages[i].ThreadURL = threadURL
+		if thread, ok := threadByAnchor[detail.Messages[i].ID]; ok && thread.URL != "" {
+			detail.Messages[i].ThreadURL = thread.URL
+			detail.Messages[i].ThreadTitle = thread.Title
+			detail.Messages[i].ThreadMeta = thread.State
 		} else {
 			detail.Messages[i].CanPromote = true
 		}
@@ -298,6 +316,10 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 			ClearReplyURL: coordThreadComposerURL(room, selectedID),
 		}
 		markViewerMentions(threadDetail.Messages, presentations, current.ID)
+		for i := range threadDetail.Messages {
+			message := presentations[i].Message
+			threadDetail.Messages[i].Own = message.AuthorKind == store.AuthorHuman && message.AuthorPrincipalID == current.ID
+		}
 		threadDetail.ReplyTo, threadDetail.ReplyTarget, parseErr = coordReplyTarget(presentations, r.URL.Query().Get("thread_reply_to"))
 		if parseErr != nil {
 			http.Error(w, parseErr.Error(), http.StatusBadRequest)
@@ -328,9 +350,9 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		detail.PrivatePeers = coordJoinNames(peers)
-		detail.PrivateNote = "Privat · nur du"
+		detail.PrivateNote = msg("coord.private_note")
 		if detail.PrivatePeers != "" {
-			detail.PrivateNote += " und " + detail.PrivatePeers
+			detail.PrivateNote = msg("coord.private_note_with", detail.PrivatePeers)
 		}
 	}
 	for _, membership := range memberships {

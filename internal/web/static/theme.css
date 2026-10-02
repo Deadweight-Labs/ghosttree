@@ -29,6 +29,11 @@
   --clay-slab-ink:  #f1f4fa;
   --clay-agent:     light-dark(#2b3750, #3b4a66);
   --clay-agent-ink: #f1f4fa;
+  --tabbar:         light-dark(#1a2333, #3a4760);
+  --tabbar-ink:     #f1f4fa;
+  --tabbar-sel:     light-dark(#eceff5, #e8edf6);
+  --tabbar-sel-ink: #1a2333;
+  --tabbar-dot:     #8db3ff;
   --clay-line: light-dark(rgba(26,35,51,.11), rgba(255,255,255,.08));
 
   --clay-light-az: 0deg;

@@ -2,6 +2,14 @@
   const workspace = document.querySelector(".coord-workspace");
   if (!workspace) return;
 
+  // Texts for status lines come from the server catalog, not from this file.
+  let texts = {};
+  try {
+    texts = JSON.parse(workspace.dataset.coordTexts || "{}");
+  } catch (_) {
+    texts = {};
+  }
+  const text = (key) => texts[key] || "";
   const media = matchMedia("(max-width: 1100px)");
   const backdrop = document.querySelector("[data-coord-drawer-close]");
   document.documentElement.classList.add("coord-enhanced");
@@ -49,7 +57,7 @@
   };
   const sync = () => {
     close();
-    for (const id of ["coord-rooms", "coord-context"]) {
+    for (const id of ["coord-context"]) {
       const panel = document.getElementById(id);
       if (!panel) continue;
       panel.hidden = media.matches;
@@ -98,6 +106,13 @@
     if (contextButton) open(contextButton);
   };
   bindDrawers();
+  const scrollFlowToEnd = () => {
+    const flow = document.querySelector(".coord-messages");
+    const target = location.hash && document.getElementById(location.hash.slice(1));
+    if (target) target.scrollIntoView({block: "center"});
+    else if (flow) flow.scrollTop = flow.scrollHeight;
+  };
+  scrollFlowToEnd();
   addEventListener("keydown", (event) => {
     if (event.key === "Escape") close();
   });
@@ -159,9 +174,11 @@
       ? target
       : null;
   };
-  const coordFormTarget = (form, origin) => {
+  const coordFormTarget = (form, origin, submitter) => {
     if (!form || form.method.toLowerCase() !== "post") return null;
-    const target = new URL(form.action, origin);
+    // A submit button may post elsewhere (the directive button does).
+    const action = submitter?.hasAttribute("formaction") ? submitter.formAction : form.action;
+    const target = new URL(action, origin);
     return target.origin === origin && progressiveFormPaths.has(target.pathname)
       ? target
       : null;
@@ -227,16 +244,22 @@
     if (liveStatus) liveStatus.textContent = label;
     if (announcement && announce) announce.textContent = announcement;
   };
+  let actionTimer = null;
   const setActionStatus = (message, error = false) => {
     if (actionStatus) {
       actionStatus.textContent = message;
       actionStatus.hidden = !message;
       actionStatus.dataset.error = error ? "true" : "false";
+      clearTimeout(actionTimer);
+      // Progress and confirmations fade; errors stay until the next action.
+      if (message && !error) {
+        actionTimer = setTimeout(() => { actionStatus.hidden = true; }, 3000);
+      }
     }
     if (message && announce) announce.textContent = message;
   };
 
-  // A page swap is not news worth a banner: clear the "wird geladen" line and
+  // A page swap is not news worth a banner: clear the "loading" line and
   // leave the confirmation to screen readers.
   const quietSuccess = (message) => {
     setActionStatus("");
@@ -510,7 +533,7 @@
   };
   const fetchCoordPage = async (target, options = {}) => {
     const lease = applyCoordinator.begin("navigation");
-    setActionStatus(options.loadingLabel || "Unterhaltung wird geladen …");
+    setActionStatus(options.loadingLabel || text("loading"));
     try {
       const response = await fetch(target.href, {
         credentials: "same-origin",
@@ -525,7 +548,7 @@
       }
       if (!response.ok) {
         setActionStatus(
-          `Unterhaltung konnte nicht geladen werden (HTTP ${response.status}).`,
+          text("load_failed").replace("%s", response.status),
           true,
         );
         return response.status === 403 || response.status === 404
@@ -537,16 +560,16 @@
       if (!applyCoordinator.current(lease)) return coordPageLoadSuperseded;
       const incoming = coordPageDocument(html);
       if (!canonical || !applyCoordPage(incoming, canonical, options)) {
-        setActionStatus("Die Serverantwort konnte nicht angezeigt werden.", true);
+        setActionStatus(text("render_failed"), true);
         return coordPageLoadFailed;
       }
       if (options.successLabel) setActionStatus(options.successLabel);
-      else quietSuccess("Unterhaltung aktualisiert");
+      else quietSuccess(text("updated"));
       return coordPageLoadApplied;
     } catch (error) {
       if (error?.name === "AbortError") return coordPageLoadSuperseded;
       if (!applyCoordinator.current(lease)) return coordPageLoadSuperseded;
-      setActionStatus("Offline · Seite wird normal geöffnet.", true);
+      setActionStatus(text("offline_page"), true);
       return coordPageLoadOffline;
     } finally {
       applyCoordinator.finish(lease);
@@ -556,11 +579,11 @@
     if (postingForms.has(form)) return;
     const body = coordFormBody(form, submitter);
     if (!body) {
-      setActionStatus("Datei-Uploads werden hier nicht unterstützt.", true);
+      setActionStatus(text("no_uploads"), true);
       return;
     }
     if (!body.get("csrf_token")) {
-      setActionStatus("Sicherheits-Token fehlt; Formular nicht gesendet.", true);
+      setActionStatus(text("no_token"), true);
       return;
     }
     postingForms.add(form);
@@ -568,7 +591,7 @@
     if (submitter) submitter.disabled = true;
     const draftContainer = form.closest("[data-coord-draft-key]");
     const lease = applyCoordinator.begin("post");
-    setActionStatus("Aktion wird ausgeführt …");
+    setActionStatus(text("working"));
     try {
       const response = await fetch(target.href, {
         method: "POST",
@@ -586,7 +609,7 @@
       }
       if (!response.ok) {
         setActionStatus(
-          `Aktion fehlgeschlagen (HTTP ${response.status}). Eingaben bleiben erhalten.`,
+          text("failed").replace("%s", response.status),
           true,
         );
         return;
@@ -602,13 +625,13 @@
         location.assign(response.url || "/ui/coord");
         return;
       }
-      setActionStatus("Aktion abgeschlossen");
+      setActionStatus(text("done"));
     } catch (error) {
       if (error?.name === "AbortError" || !applyCoordinator.current(lease)) {
         return;
       }
       setActionStatus(
-        "Offline · Aktion nicht automatisch erneut gesendet; Eingaben bleiben erhalten.",
+        text("offline_post"),
         true,
       );
     } finally {
@@ -637,10 +660,43 @@
   document.addEventListener("submit", (event) => stampCoordExpiryOffset(event.target), true);
   document.addEventListener("submit", (event) => {
     const form = event.target;
-    const target = coordFormTarget(form, location.origin);
+    const target = coordFormTarget(form, location.origin, event.submitter);
     if (!target) return;
     event.preventDefault();
     postCoordForm(form, target, event.submitter);
+  });
+  // Composer: the mode pill picks what a post becomes. A request needs a kind,
+  // anything else carries none.
+  document.addEventListener("change", (event) => {
+    const radio = event.target;
+    if (!radio.matches?.('input[name="mode"]') || !radio.form) return;
+    const kinds = [...radio.form.querySelectorAll('input[name="intent"]')];
+    const to = [...radio.form.querySelectorAll(".comp-to input")];
+    if (radio.value === "request") {
+      if (!kinds.some((kind) => kind.checked) && kinds[0]) kinds[0].checked = true;
+    } else {
+      kinds.forEach((kind) => { kind.checked = false; });
+      to.forEach((target) => { target.checked = false; });
+    }
+    // The addressee is the one thing a request cannot do without.
+    to.forEach((target) => { target.required = radio.value === "request"; });
+  });
+  // Enter sends, Shift+Enter breaks the line. A directive stays in force until
+  // it is ended, so it is only ever set with its own button.
+  document.addEventListener("keydown", (event) => {
+    if (
+      event.key !== "Enter" || event.shiftKey || event.altKey || event.ctrlKey ||
+      event.metaKey || event.isComposing || event.defaultPrevented
+    ) return;
+    const area = event.target;
+    if (!(area instanceof HTMLTextAreaElement) || area.name !== "body" || !area.form) return;
+    const form = area.form;
+    if (form.querySelector('input[name="mode"]:checked')?.value === "directive") return;
+    if (!area.value.trim()) return;
+    event.preventDefault();
+    const button = [...form.querySelectorAll("button.comp-send")]
+      .find((candidate) => candidate.offsetParent !== null);
+    form.requestSubmit(button);
   });
   addEventListener("popstate", () => {
     const target = new URL(location.href);
@@ -747,7 +803,7 @@
           restoreFocus(focus);
           markHighestRenderedRead();
           refreshRetry.success();
-          setLive("live", "Live verbunden", "Unterhaltung aktualisiert");
+          setLive("live", text("live"), text("updated"));
         } catch (error) {
           selectors.forEach(queueSurface);
           if (error?.name === "AbortError" || !applyCoordinator.current(lease)) {
@@ -757,8 +813,8 @@
             transientFailure = true;
             setLive(
               "offline",
-              "Live · Aktualisierung fehlgeschlagen",
-              "Live-Aktualisierung fehlgeschlagen",
+              text("refresh_failed"),
+              text("refresh_failed_announce"),
             );
             return;
           }
@@ -806,7 +862,7 @@
   };
 
   if (!("EventSource" in window)) {
-    setLive("unsupported", "Live-Updates nicht unterstützt");
+    setLive("unsupported", text("unsupported"));
   } else {
     const cursor = workspace.dataset.coordEventCursor || "0";
     // Der Cursor ist undurchsichtig (versiegelt); er wird nur durchgereicht und
@@ -816,7 +872,7 @@
       `/ui/coord/events?after=${encodeURIComponent(cursor)}`,
     );
     source.addEventListener("open", () => {
-      setLive("live", "Live verbunden");
+      setLive("live", text("live"));
       markHighestRenderedRead();
     });
     source.addEventListener("coord.changed", (raw) => {
@@ -833,19 +889,19 @@
       }
     });
     source.addEventListener("resync", () => {
-      setLive("resync", "Synchronisiere …");
+      setLive("resync", text("resync"));
       location.reload();
     });
     source.addEventListener("session-ended", () => {
       source.close();
-      setLive("offline", "Sitzung beendet");
+      setLive("offline", text("session_ended"));
       location.assign("/ui/login");
     });
     source.onerror = () =>
       setLive(
         "offline",
-        "Offline · Verbindung wird wiederholt",
-        "Live-Verbindung unterbrochen",
+        text("offline_retry"),
+        text("offline_retry_announce"),
       );
   }
   document.addEventListener("visibilitychange", () => {
