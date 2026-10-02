@@ -212,6 +212,39 @@ CREATE TABLE IF NOT EXISTS knowledge(
   regression_state TEXT NOT NULL DEFAULT '',
   regression_test TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS knowledge_groups(
+  id INTEGER PRIMARY KEY, project TEXT NOT NULL,
+  label TEXT NOT NULL DEFAULT '',
+  volatility TEXT NOT NULL DEFAULT 'unrated'
+    CHECK(volatility IN ('unrated','volatile','slow','timeless')),
+  volatility_by TEXT NOT NULL DEFAULT '', volatility_at TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS knowledge_relations(
+  id INTEGER PRIMARY KEY,
+  project TEXT NOT NULL,
+  from_id INTEGER NOT NULL REFERENCES knowledge(id) ON DELETE RESTRICT,
+  to_id INTEGER NOT NULL REFERENCES knowledge(id) ON DELETE RESTRICT,
+  kind TEXT NOT NULL CHECK(kind IN ('supersedes','sibling')),
+  state TEXT NOT NULL CHECK(state IN ('proposed','active','rejected','revoked')),
+  origin TEXT NOT NULL CHECK(origin IN ('human','agent','distiller','migrated')),
+  group_id INTEGER REFERENCES knowledge_groups(id) ON DELETE RESTRICT,
+  reason TEXT NOT NULL DEFAULT '',
+  created_by TEXT NOT NULL, created_at TEXT NOT NULL,
+  decided_by TEXT NOT NULL DEFAULT '', decided_at TEXT NOT NULL DEFAULT '',
+  CHECK(from_id <> to_id),
+  CHECK(kind <> 'sibling' OR from_id < to_id));
+CREATE UNIQUE INDEX IF NOT EXISTS knowledge_relations_live
+  ON knowledge_relations(kind, from_id, to_id) WHERE state IN ('proposed','active');
+CREATE INDEX IF NOT EXISTS knowledge_relations_to ON knowledge_relations(to_id);
+CREATE INDEX IF NOT EXISTS knowledge_relations_group ON knowledge_relations(group_id);
+CREATE TABLE IF NOT EXISTS knowledge_relation_events(
+  id INTEGER PRIMARY KEY, relation_id INTEGER, group_id INTEGER,
+  action TEXT NOT NULL,
+  actor TEXT NOT NULL, actor_role TEXT NOT NULL DEFAULT '',
+  via TEXT NOT NULL DEFAULT '',
+  detail TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS knowledge_relation_events_rel ON knowledge_relation_events(relation_id);
+CREATE INDEX IF NOT EXISTS knowledge_relation_events_group ON knowledge_relation_events(group_id);
 CREATE TABLE IF NOT EXISTS instruction_activation_path(
   knowledge_id INTEGER NOT NULL REFERENCES knowledge(id) ON DELETE CASCADE,
   pattern TEXT NOT NULL,
@@ -939,6 +972,10 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 		return nil, err
 	}
 	if err := EnsureContextSnapshotSchema(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if _, err := BackfillKnowledgeRelations(db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
