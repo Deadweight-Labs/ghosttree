@@ -1,1 +1,58 @@
-[data-clay-theme="ghosttree"] { --clay-bg: #f3f4ef; --clay-ink: #1c2520; --clay-accent: #2f6b4a; --clay-radius: 1rem; --coord-canvas:#f0f2ed; --coord-panel:#f8faf5; --coord-conversation:#fff; --coord-selected:#e1e8df; --coord-line:#d9ded5; --coord-muted:#647066; }
+/* ghosttree palette on the Clay engine (clay/): cool blue, light and dark
+   following the system setting through color-scheme and light-dark(). Values
+   only; the mechanics live in clay/. */
+[data-clay-theme="ghosttree"] {
+  color-scheme: light dark;
+  --clay-font-ui: "Gabarito", system-ui, sans-serif;
+  --clay-font-mono: "Fragment Mono", ui-monospace, monospace;
+  --clay-font-serif: "Source Serif 4", Georgia, serif;
+
+  --clay-bg:        light-dark(#eceff5, #12171f);
+  --clay-c-surface: light-dark(#ffffff, #1d2430);
+  --clay-c-raised:  light-dark(#f6f8fc, #283140);
+  --clay-c-sunken:  light-dark(#e1e6ef, #171d27);
+
+  --clay-ink:       light-dark(#1a2333, #e8edf6);
+  --clay-ink-soft:  light-dark(#445166, #aab5c8);
+  --clay-ink-faint: light-dark(#5a6679, #8995ab);
+
+  --clay-accent:      light-dark(#1f5fd1, #6f9fff);
+  --clay-accent-ink:  light-dark(#ffffff, #0b1528);
+  --clay-accent-text: light-dark(#1a53b8, #8db3ff);
+  --clay-ok:          light-dark(#0b7a55, #4fd1a1);
+  --clay-warn:        light-dark(#9a5b00, #f0b45a);
+  --clay-danger:      light-dark(#c0392b, #e8664f);
+  --clay-danger-ink:  light-dark(#ffffff, #1a0b08);
+  --clay-danger-strong: light-dark(#b3321f, #ff8d7a);
+
+  --clay-slab:      light-dark(#1a2333, #364764);
+  --clay-slab-ink:  #f1f4fa;
+  --clay-agent:     light-dark(#2b3750, #3b4a66);
+  --clay-agent-ink: #f1f4fa;
+  --clay-line: light-dark(rgba(26,35,51,.11), rgba(255,255,255,.08));
+
+  --clay-light-az: 0deg;
+  --clay-wall-tint: light-dark(oklch(.38 .06 260), #000000);
+  --clay-wall-base: 16;
+  --clay-wall-step: 6;
+  --clay-shadow: light-dark(rgba(26,45,84,.30), rgba(0,0,0,.5));
+  --clay-shadow-drop: 1.875;
+  --clay-shadow-blur: 1.5;
+  --clay-shadow-spread: 0;
+  --clay-rim: light-dark(transparent, rgba(255,255,255,.09));
+  --clay-material: 1;
+  --clay-well-ink: light-dark(rgba(26,45,84,.16), rgba(0,0,0,.5));
+  --clay-well-rim: light-dark(rgba(26,45,84,.06), rgba(0,0,0,.3));
+  --clay-scrim: light-dark(rgba(26,35,51,.35), rgba(0,0,0,.6));
+
+  --clay-density: 1; --clay-density-base: 1;
+  --clay-tap-min: 2.25rem;
+  --clay-text-base: .9375rem;
+  --clay-radius-lg: 28px; --clay-radius: 22px; --clay-radius-sm: 16px; --clay-radius-xs: 12px;
+  --clay-ease: cubic-bezier(.22, 1, .36, 1);
+  --clay-dur: .18s;
+  --well-grad: light-dark(radial-gradient(120% 140% at 30% 0%, #f1f4fa, #e6ebf3 55%, #dfe5ef), radial-gradient(120% 140% at 30% 0%, #1a212b, #151b24 55%, #11161e));
+
+  background: var(--clay-bg);
+  color: var(--clay-ink);
+}

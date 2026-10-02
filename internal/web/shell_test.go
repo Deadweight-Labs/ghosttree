@@ -342,7 +342,7 @@ func TestShellNavigationCollapsesOnNarrowScreens(t *testing.T) {
 
 func TestFontsAreCachedLongOtherStaticFilesAreNot(t *testing.T) {
 	srv, _, _ := testWeb(t)
-	resp, err := http.Get(srv.URL + "/static/fonts/plex-1.1-2.5/IBMPlexSans-Regular-Latin1.woff2")
+	resp, err := http.Get(srv.URL + "/static/fonts/v5/gabarito-latin-wght-normal.woff2")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -422,13 +422,13 @@ func TestShellPagesLoadSelfHostedFonts(t *testing.T) {
 		t.Fatal(err)
 	}
 	css := body(t, resp)
-	for _, want := range []string{"--color-accent: #2f6b4a", "--color-text-muted: #58645d", "--font-sans", "--font-mono", "--radius-", "--space-", "--focus-ring", "IBM Plex Sans", "IBM Plex Mono", "/static/fonts/plex-1.1-2.5/IBMPlexSans-Regular-Latin1.woff2"} {
+	for _, want := range []string{"--color-accent: var(--clay-accent)", "--color-text-muted: var(--clay-ink-faint)", "--font-sans", "--font-mono", "--radius-", "--space-", "--focus-ring", "Gabarito", "Fragment Mono", "Source Serif 4", "/static/fonts/v5/gabarito-latin-wght-normal.woff2"} {
 		if !strings.Contains(css, want) {
 			t.Errorf("tokens.css lacks %q", want)
 		}
 	}
-	for _, f := range []string{"IBMPlexSans-Regular-Latin1.woff2", "IBMPlexSans-Medium-Latin1.woff2", "IBMPlexSans-SemiBold-Latin1.woff2", "IBMPlexMono-Regular-Latin1.woff2", "IBMPlexMono-SemiBold-Latin1.woff2", "OFL-IBM-Plex-Sans.txt", "OFL-IBM-Plex-Mono.txt"} {
-		resp, err := http.Get(srv.URL + "/static/fonts/plex-1.1-2.5/" + f)
+	for _, f := range []string{"gabarito-latin-wght-normal.woff2", "fragment-mono-latin-400-normal.woff2", "source-serif-4-latin-wght-normal.woff2", "OFL-variable-gabarito.txt", "OFL-fragment-mono.txt", "OFL-variable-source-serif-4.txt"} {
+		resp, err := http.Get(srv.URL + "/static/fonts/v5/" + f)
 		if err != nil {
 			t.Fatal(err)
 		}

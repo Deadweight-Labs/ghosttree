@@ -10,6 +10,8 @@ var messages = map[string]string{
 	// Hülle: Navigation, Kopf, Kontomenü.
 	"shell.title":              "ghosttree — %s",
 	"shell.brand":              "ghosttree",
+	"shell.brand_lead":         "ghost",
+	"shell.brand_tail":         "tree",
 	"shell.nav":                "Main",
 	"shell.project":            "Project",
 	"shell.all_projects":       "All projects",
@@ -22,6 +24,7 @@ var messages = map[string]string{
 	"shell.sign_out":           "Sign out",
 	"nav.overview":             "Overview",
 	"nav.sessions":             "Sessions",
+	"shell.admin":              "Administration",
 	"shell.menu":               "Menu",
 	"nav.agents":               "Agents",
 	"nav.rooms":                "Rooms",
@@ -42,6 +45,10 @@ var messages = map[string]string{
 
 	// Startseite.
 	"age.now":              "now",
+	"ov.hello":             "Hello, %s",
+	"ov.hello_morning":     "Good morning, %s",
+	"ov.hello_afternoon":   "Good afternoon, %s",
+	"ov.hello_evening":     "Good evening, %s",
 	"ov.next":              "Next",
 	"ov.agents":            "Agents",
 	"ov.requests":          "Requests",

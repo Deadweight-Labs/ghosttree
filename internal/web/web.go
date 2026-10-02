@@ -527,7 +527,7 @@ func WebRouteClasses() map[string]string {
 }
 
 // staticFiles liefert die eingebetteten Dateien. Die Schriften ändern sich nur
-// mit einer neuen Plex-Version und liegen lange im Cache.
+// mit einer neuen Schriftversion (Ordner v5) und liegen lange im Cache.
 func (a *app) staticFiles() http.Handler {
 	fileServer := http.FileServerFS(files)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
