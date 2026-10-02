@@ -182,7 +182,7 @@ func TestGuestWebViewsShowTypedMentionsNotDeliveredOnes(t *testing.T) {
 
 // guestStream spielt dieselbe Lage mit einem Ziel im oder außerhalb des Raums
 // durch und liefert, was der Gast im Ereignisstrom sieht.
-func guestStream(t *testing.T, targetInRoom bool) (events []string, ids []string, raw string) {
+func guestStream(t *testing.T, targetInRoom bool, fillers int) (events []string, ids []string, raw string) {
 	t.Helper()
 	const project = "github.com/dw/guestsse"
 	st, err := store.Open(t.TempDir() + "/web.db")
@@ -230,7 +230,7 @@ func guestStream(t *testing.T, targetInRoom bool) (events []string, ids []string
 	t.Cleanup(srv.Close)
 	guest := login(t, srv, tokens["gus"])
 	read := func(lastID string) string {
-		ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+		ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
 		defer cancel()
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/ui/coord/events?after=0", nil)
 		if lastID != "" {
@@ -264,6 +264,18 @@ func guestStream(t *testing.T, targetInRoom bool) (events []string, ids []string
 	if _, err := gus.Send(store.CoordMessage{DestinationKind: store.DestinationRoom, DestinationID: room, SenderExternalID: "claude:gus", ClientID: "marker", Body: "marker"}); err != nil {
 		t.Fatal(err)
 	}
+	// Füllereignisse des Gastes selbst: jedes Umschalten ist ein Ereignis.
+	for i := 0; i < fillers; i++ {
+		var err error
+		if i%2 == 0 {
+			err = gus.MarkRead(store.DestinationRoom, room, 1)
+		} else {
+			err = gus.MarkUnread(store.DestinationRoom, room, 1)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	raw = read(cursor)
 	for _, line := range strings.Split(raw, "\n") {
 		switch {
@@ -294,8 +306,8 @@ func lastSSEIDOrEmpty(stream string) string {
 // Art und Form der Ids nicht erkennbar sein. Die Ids sind undurchsichtig, keine
 // vergleichbaren Zahlen.
 func TestGuestEventStreamLooksTheSameForMemberAndNonMemberTargets(t *testing.T) {
-	inEvents, inIDs, inRaw := guestStream(t, true)
-	outEvents, outIDs, outRaw := guestStream(t, false)
+	inEvents, inIDs, inRaw := guestStream(t, true, 0)
+	outEvents, outIDs, outRaw := guestStream(t, false, 0)
 	if strings.Join(inEvents, ",") != strings.Join(outEvents, ",") || len(inIDs) != len(outIDs) {
 		t.Errorf("event streams differ:\nmember:     %v\nnon-member: %v", inEvents, outEvents)
 	}
@@ -345,5 +357,20 @@ func TestCoordCursorTokenResyncAndTampering(t *testing.T) {
 		if headers.Get("Content-Type") != "text/event-stream" {
 			t.Errorf("%s: content type %q", name, headers.Get("Content-Type"))
 		}
+	}
+}
+
+// Der Gast löst Ereignisse aus und zählt, bei welcher Zahl sein Cursor verfällt.
+// Verfall hängt nur an der Zeit: egal wie viele Füller und ob das Ziel im Raum
+// ist, es gibt keinen Resync und dieselben sichtbaren Ereignisse.
+func TestGuestCannotCountEventsUntilResync(t *testing.T) {
+	const fillers = 600 // mehr als die frühere Grenze von 512
+	inEvents, _, inRaw := guestStream(t, true, fillers)
+	outEvents, _, outRaw := guestStream(t, false, fillers)
+	if strings.Contains(inRaw, "event: resync") || strings.Contains(outRaw, "event: resync") {
+		t.Errorf("a cursor inside the window resynced after %d filler events", fillers)
+	}
+	if strings.Join(inEvents, ",") != strings.Join(outEvents, ",") {
+		t.Errorf("visible events differ:\nmember: %v\nnon-member: %v", inEvents, outEvents)
 	}
 }

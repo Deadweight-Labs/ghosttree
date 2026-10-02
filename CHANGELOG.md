@@ -31,6 +31,13 @@ Versioning, with pre-1.0 compatibility rules described in
   its mentions reached a member: that mention created one more item, and the id
   of the guest's own item jumped. Attention lists are ordered by `created_at`,
   `message_id`, `id`; nothing relies on ids being monotonic.
+- The coordination event log keeps events for ten minutes instead of the
+  last 512. A count was observable: a guest could toggle read marks and count
+  the steps until its cursor expired, 512 or 511 depending on whether a
+  hidden event was added. Pruning now depends on time only (an insert trigger
+  deletes older events); a cursor resyncs when the history behind it has
+  expired, not after a number of events. A hard cap of 100000 events remains as
+  an emergency brake.
 - Project rooms of the coordination layer need a project role. Registering an
   agent into `project:<remote>` takes at least the guest role (org owners as
   before); org membership alone no longer joins. `GET /api/coord/rooms` drops

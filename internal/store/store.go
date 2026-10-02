@@ -707,8 +707,12 @@ CREATE TABLE IF NOT EXISTS coord_events(
   object_id TEXT NOT NULL,
   created_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS coord_events_created ON coord_events(created_at);
-CREATE TRIGGER IF NOT EXISTS coord_events_bound AFTER INSERT ON coord_events BEGIN
-  DELETE FROM coord_events WHERE sequence<=NEW.sequence-512;
+DROP TRIGGER IF EXISTS coord_events_bound;
+DROP TRIGGER IF EXISTS coord_events_age;
+CREATE TRIGGER coord_events_age AFTER INSERT ON coord_events BEGIN
+  DELETE FROM coord_events
+  WHERE created_at<strftime('%Y-%m-%dT%H:%M:%fZ','now','-10 minutes')
+     OR sequence<=NEW.sequence-100000;
 END;
 CREATE TRIGGER IF NOT EXISTS coord_messages_event AFTER INSERT ON coord_messages BEGIN
   INSERT INTO coord_events(kind,object_kind,object_id,created_at)

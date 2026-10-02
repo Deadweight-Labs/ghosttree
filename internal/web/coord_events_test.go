@@ -548,10 +548,18 @@ func TestCoordSSETooOldCursorEmitsResync(t *testing.T) {
 	materializeWebRoom(t, st, room)
 	first, _ := readFiniteSSE(t, client, srv.URL+"/ui/coord/events?after=0", "")
 	oldToken := lastSSEID(t, first)
-	for i := 0; i < 520; i++ {
+	for i := 0; i < 20; i++ {
 		if _, err := st.AppendCoordMessage(store.CoordMessage{DestinationKind: store.DestinationRoom, DestinationID: room, SenderExternalID: "fixture:" + room, ClientID: "sse-prune-" + strconv.Itoa(i), Body: "x"}); err != nil {
 			t.Fatal(err)
 		}
+	}
+	// Nach dem Zeitfenster: die alten Ereignisse sind abgelaufen, das nächste
+	// löst das Aufräumen aus.
+	if _, err := st.DB().Exec(`UPDATE coord_events SET created_at='2000-01-01T00:00:00.000Z'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AppendCoordMessage(store.CoordMessage{DestinationKind: store.DestinationRoom, DestinationID: room, SenderExternalID: "fixture:" + room, ClientID: "sse-prune-trigger", Body: "x"}); err != nil {
+		t.Fatal(err)
 	}
 	body, _ := readFiniteSSE(t, client, srv.URL+"/ui/coord/events", oldToken)
 	if !strings.Contains(body, "event: resync") {
