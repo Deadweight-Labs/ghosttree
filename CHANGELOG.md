@@ -6,6 +6,45 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Fixed: hardening of join sessions after review (REQ-434, P2b). Sessions
+  that have a device are never evicted by further opens of the same
+  invitation, and loopback claims are limited per /64 and /48 like device
+  flows. The join cookie is `__Host-gt_join` wherever it is Secure. A session
+  lives at most 30 minutes in total. Machine names in a join claim are limited
+  to letters, digits, `.`, `_` and `-` (64 characters), the fallback approval
+  page warns on a different network, and the "Same network" line is dropped
+  when `GHOSTTREE_PUBLIC_URL` is set without trusted proxies. Denying a loopback
+  request redirects the browser to the installer with `error=access_denied`.
+  `code_challenge_method` must be `S256`, and `code_verifier` must use the
+  RFC 7636 characters. A claim keeps the session and its device flow until
+  30 minutes after the invitation page was opened, so a late sign-in does not
+  lose a waiting installer (`expires_in` reports the remaining time).
+- Changed: the web interface starts on a new Overview (REQ-435, second part).
+  `/ui/` and the redirect after sign-in lead to `/ui/overview`, and the brand
+  link too. "Next" lists what needs a decision (knowledge to review for
+  reviewers, requests addressed to you), "Agents" shows each agent as active
+  (signal within 8 minutes), idle or offline (over a day) for the rooms you take
+  part in, and the side column shows open requests with their criteria progress
+  and what was learned this week. Everything is drawn from what the viewer may
+  see; guests get only requests and knowledge, and the page is the same whether
+  or not hidden projects hold data. Owners and admins of an instance without
+  agents get one step instead: the `ctx login --server` command to copy, a field
+  for the code from the terminal (the machine is named only after the code is
+  entered, never listed), "Waiting for your machine", and the page switches by
+  itself once the machine or any request, knowledge or agent is there; an
+  instance that is already in use always shows the normal Overview. The oldest
+  account no longer counts as owner on its own; the first account of a fresh instance is an admin
+  from the start. Without a `?project=`, members and guests get their first
+  project preselected. The fonts moved to a versioned path
+  (`/static/fonts/plex-1.1-2.5/`) so long caching stays safe, and the `js` class
+  is set from `shell.js` in the page head so the narrow-screen menu no longer
+  flashes open.
+- Security: every `/ui/` page now sends a Content-Security-Policy (own origin
+  only, no inline script or style, no framing), `X-Content-Type-Options: nosniff`
+  and `Referrer-Policy: strict-origin`, and is `no-store`; the join page may load
+  the self-hosted fonts. The inline script, the inline progress width and the inline `noscript` style moved into
+  `shell.js` and `app.css`.
+
 - Changed: the Sessions page is rebuilt for reading and searching (REQ-435,
   Sessions view). The list groups sessions by day with title, agent@machine,
   project, branch, linked requests and knowledge, message count, duration and a
@@ -51,7 +90,23 @@ Versioning, with pre-1.0 compatibility rules described in
   for the whole session; each background step is limited to about 50 ms of
   writer time, and chunks written by a rolled-back binary after the first
   indexing are picked up at the next start. Session uploads are limited to
-  128 MiB per request and the collector sends at most 32 MiB of text at once.
+  64 MiB per request, checked for ownership before the body is read, with at
+  most two large uploads at a time; the collector sizes a request by its
+  serialized body (24 MiB) and halves one the server refuses.
+
+- Fixed: what a guest observes of sessions no longer depends on sessions they may
+  not read (REQ-435, review). Search and list choose the readable sessions before
+  ranking and cutting to the limit, so hidden hits neither push a shared session
+  out nor reveal how many exist. Guests no longer see the internal session number
+  anywhere (API, search, `context_sessions`, the response to creating a session);
+  they address a session by its random address, which `/api/sessions/{id}` and
+  `/chunks` accept in place of the number (members and older collectors keep the
+  number; an older collector run by a guest needs an update). A page of the
+  transcript ends between stored lines, never inside one. Times use the server's
+  zone everywhere. The credentials question when sharing with guests is a page
+  you reach by redirect, not the answer to a POST. Opening a session while the
+  background indexing runs is limited in time and bytes per step and gives up
+  after 2 seconds with what is indexed. `ctx account ... --db ./x.db` opens.
 - Added: `ctx join --server <url> --pair XXXX-XXXX` pairs a machine with the
   code from an invitation page (REQ-434, part 3). It opens a loopback
   listener on 127.0.0.1 only for the duration of the command, proves the

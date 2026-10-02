@@ -82,6 +82,7 @@ func (a *app) requirePerson(next http.Handler) http.Handler {
 				}
 				ctx := context.WithValue(r.Context(), personKey{}, session.principal)
 				ctx = context.WithValue(ctx, csrfKey{}, session.csrf)
+				ctx = context.WithValue(ctx, shellMemoKey{}, &shellMemo{})
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
@@ -257,7 +258,7 @@ func (a *app) finishLogin(w http.ResponseWriter, r *http.Request, account store.
 // ist die Freigabe des Geräts.
 func (a *app) finishJoinLogin(w http.ResponseWriter, r *http.Request, account store.Account, inviteCode string) {
 	next := "/ui/requests"
-	if err := a.store.Join().Bind(inviteCode, joinCookieValue(r), account.ID); err == nil {
+	if err := a.store.Join().Bind(inviteCode, a.joinCookieValue(r), account.ID); err == nil {
 		next = "/join/pair"
 	}
 	http.SetCookie(w, a.joinCookieFor(r, "", -1))
@@ -267,7 +268,7 @@ func (a *app) finishJoinLogin(w http.ResponseWriter, r *http.Request, account st
 // startSession vergibt immer eine neue Sitzungs-ID und verwirft eine
 // mitgebrachte (keine Session-Fixation).
 func (a *app) startSession(w http.ResponseWriter, r *http.Request, principal store.Principal) {
-	a.startSessionAt(w, r, principal, "/ui/requests")
+	a.startSessionAt(w, r, principal, "/ui/overview")
 }
 
 func (a *app) startSessionAt(w http.ResponseWriter, r *http.Request, principal store.Principal, next string) {

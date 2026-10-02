@@ -116,8 +116,11 @@ func (a *app) joinHeaders(w http.ResponseWriter) {
 	h.Set("X-Robots-Tag", "noindex, nofollow")
 	h.Set("X-Content-Type-Options", "nosniff")
 	// Keine Skripte, keine fremden Ressourcen, nicht einbettbar. form-action
-	// bleibt offen: der Weg zum Identitätsanbieter ist eine Weiterleitung.
-	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'")
+	// bleibt offen: der Weg zum Identitätsanbieter ist eine Weiterleitung, und
+	// 'self' würde auch die 303-Weiterleitung der Freigabe auf den Loopback des
+	// Installers (http://127.0.0.1:<port>/callback) blockieren, weil Browser
+	// form-action auf die Ziele von Weiterleitungen anwenden.
+	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'self'; img-src 'self'; font-src 'self'; base-uri 'none'; frame-ancestors 'none'")
 	h.Set("Content-Type", "text/html; charset=utf-8")
 }
 
@@ -175,6 +178,7 @@ func (a *app) joinPreview(code string) (store.InvitePreview, bool) {
 
 type joinView struct {
 	Command                                 string
+	NoSlot                                  bool
 	Org, Project, Role, RoleText, ExpiresAt string
 	Code, CSRFToken, Person                 string
 	SignedIn, OIDC, NeedsName               bool
@@ -222,10 +226,11 @@ func (a *app) joinPage(w http.ResponseWriter, r *http.Request) {
 			view.Email = acct.Email
 		}
 	}
-	if open, err := a.store.Join().Open(code, joinCookieValue(r)); err == nil {
+	if open, err := a.store.Join().Open(code, a.joinCookieValue(r)); err == nil {
+		view.NoSlot = open.Pair == ""
 		view.Command = a.joinCommand(r, open.Pair)
 		if open.ID != "" {
-			http.SetCookie(w, a.joinCookieFor(r, open.ID, int(store.JoinSessionTTL.Seconds())))
+			http.SetCookie(w, a.joinCookieFor(r, open.ID, int(store.JoinMaxLifetime.Seconds())))
 		}
 	}
 	a.joinHeaders(w)
@@ -290,7 +295,7 @@ func (a *app) joinAccepted(w http.ResponseWriter, r *http.Request, code string) 
 // joinBind bindet die Sitzung an das Konto und leitet auf die Paarungsseite.
 func (a *app) joinBind(w http.ResponseWriter, r *http.Request, inviteCode, account string) {
 	http.SetCookie(w, a.joinCookieFor(r, "", -1))
-	if err := a.store.Join().Bind(inviteCode, joinCookieValue(r), account); err != nil {
+	if err := a.store.Join().Bind(inviteCode, a.joinCookieValue(r), account); err != nil {
 		http.Redirect(w, r, "/ui/requests", http.StatusSeeOther)
 		return
 	}

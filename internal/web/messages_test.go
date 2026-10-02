@@ -12,6 +12,7 @@ import (
 var p1Templates = []string{"templates/layout.html", "templates/login.html", "templates/overview.html", "templates/sessions.html"}
 
 var (
+	scriptRE   = regexp.MustCompile(`(?s)<script>.*?</script>`)
 	actionRE   = regexp.MustCompile(`(?s)\{\{.*?\}\}`)
 	catalogRE  = regexp.MustCompile(`\{\{\s*t\s+"([^"]+)"`)
 	textNodeRE = regexp.MustCompile(`>([^<>]+)<`)
@@ -26,7 +27,7 @@ func TestP1TemplatesCarryNoTextOutsideTheCatalog(t *testing.T) {
 		}
 		src := string(raw)
 		// Aktionen durch einen Marker ersetzen: was übrig bleibt, ist Literal.
-		stripped := actionRE.ReplaceAllString(src, "\x00")
+		stripped := scriptRE.ReplaceAllString(actionRE.ReplaceAllString(src, "\x00"), "")
 		for _, m := range textNodeRE.FindAllStringSubmatch(stripped, -1) {
 			if txt := strings.Trim(m[1], " \t\r\n\x00"); txt != "" {
 				t.Errorf("%s: literal text %q outside the catalog", name, txt)
@@ -100,7 +101,7 @@ func TestMsgFormatsArgumentsAndNeverReturnsEmpty(t *testing.T) {
 	}
 }
 
-var goKeyRE = regexp.MustCompile(`"((?:shell|nav|role|login|auth|overview|sessions)\.[a-z0-9_.]+)"`)
+var goKeyRE = regexp.MustCompile(`"((?:shell|nav|role|login|auth|overview|ov|setup|age|sessions)\.[a-z0-9_.]+)"`)
 
 // goMessageKeys sammelt die Schlüssel, die im Go-Code vorkommen (Navigation,
 // Rollen, Fehlertexte der Handler).

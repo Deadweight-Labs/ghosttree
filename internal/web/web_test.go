@@ -141,7 +141,7 @@ func TestLoginUsesFixedReturnTarget(t *testing.T) {
 	} {
 		resp := sameOriginPostForm(t, client, srv.URL+"/ui/login", url.Values{"token": {token}, "next": {next}})
 		resp.Body.Close()
-		if got := resp.Header.Get("Location"); got != "/ui/requests" {
+		if got := resp.Header.Get("Location"); got != "/ui/overview" {
 			t.Errorf("next %q redirected to %q", next, got)
 		}
 	}

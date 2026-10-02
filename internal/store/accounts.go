@@ -82,9 +82,10 @@ func migrateAccounts(db *sql.DB) error {
 	}
 	if done == 0 {
 		// Ohne Person gibt es keinen Admin zu bestimmen; der Marker bleibt dann
-		// aus, und die erste später angelegte Person wird beim nächsten Öffnen
-		// Admin. Ein späteres Entziehen bleibt wirksam, weil der Marker danach
-		// gesetzt ist.
+		// aus, und eine später von einem älteren Binary angelegte Person wird
+		// beim nächsten Öffnen Admin. Das erste Konto über Bootstrap setzt den
+		// Marker sofort, in derselben Transaktion. Ein späteres Entziehen bleibt
+		// wirksam, weil der Marker danach gesetzt ist.
 		res, err := tx.Exec(`UPDATE persons SET is_admin=1 WHERE id=(SELECT MIN(id) FROM persons)`)
 		if err != nil {
 			return err
@@ -96,6 +97,24 @@ func migrateAccounts(db *sql.DB) error {
 		}
 	}
 	return tx.Commit()
+}
+
+// claimFirstAdminTx liefert 1, wenn die Instanz noch keine Person hat: die
+// erste Person ist sofort Admin, ohne dass der Store neu geöffnet werden muss.
+// Der Migrationsmarker wird dabei gesetzt, damit ein späteres Entziehen beim
+// nächsten Öffnen nicht rückgängig gemacht wird.
+func claimFirstAdminTx(tx *sql.Tx, at string) (int, error) {
+	var persons int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM persons`).Scan(&persons); err != nil {
+		return 0, err
+	}
+	if persons > 0 {
+		return 0, nil
+	}
+	if _, err := tx.Exec(`INSERT OR IGNORE INTO account_migrations(version, migrated_at) VALUES(1,?)`, at); err != nil {
+		return 0, err
+	}
+	return 1, nil
 }
 
 // allowDeviceTokenKind erweitert die CHECK-Bedingung von api_tokens um die Art
@@ -202,8 +221,14 @@ func (s *Store) AddAccount(name, email string, admin bool) (Account, error) {
 	} else if taken {
 		return Account{}, ErrAccountNameTaken
 	}
+	at := now()
+	first, err := claimFirstAdminTx(tx, at)
+	if err != nil {
+		return Account{}, err
+	}
+	flag = max(flag, first)
 	if _, err := tx.Exec(`INSERT INTO persons(name, token_hash, created_at, email, is_admin) VALUES(?,?,?,?,?)`,
-		name, "", now(), strings.TrimSpace(email), flag); err != nil {
+		name, "", at, strings.TrimSpace(email), flag); err != nil {
 		return Account{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -594,6 +619,9 @@ func createBootstrapAccount(tx *sql.Tx, name, email string) (int64, error) {
 	}
 	// Eine leere Instanz bekommt mit ihrem ersten Konto die Default-Organisation.
 	if _, err := createOrgTx(tx, "Default", "default", id); err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(`INSERT OR IGNORE INTO account_migrations(version, migrated_at) VALUES(1,?)`, now()); err != nil {
 		return 0, err
 	}
 	return id, nil

@@ -149,6 +149,60 @@ body.ui {
 .login-back { display: block; margin-top: var(--space-4); text-align: center; color: var(--color-text-secondary) !important; font: var(--text-secondary); }
 .login-card p { margin: 0 0 var(--space-3); }
 
+/* Overview */
+.ov-cols { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: var(--space-6); align-items: start; }
+.ov-section { margin: 0 0 var(--space-6); }
+.ov-narrow { max-width: 640px; }
+.ov h2 { margin: 0 0 var(--space-2); }
+.ov-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-2); }
+.ov-head h2 { margin: 0; }
+.ov-list { list-style: none; margin: 0; padding: 0; }
+.ov-row { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) 0; border-bottom: 1px solid var(--color-line-default); }
+.ov-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.ov-title { flex: 1; min-width: 0; font-weight: 500; overflow-wrap: anywhere; }
+.ov-text .ov-title, .ov-name { font-weight: 600; }
+.ov-meta { font: var(--text-mono); color: var(--color-text-secondary); overflow-wrap: anywhere; }
+.ov-num { font: var(--text-mono); color: var(--color-text-secondary); white-space: nowrap; }
+.ov-activity { flex: 0 1 220px; color: var(--color-text-secondary); }
+.ov-empty { margin: 0 0 var(--space-3); color: var(--color-text-secondary); }
+.ov-dot { flex: none; width: 8px; height: 8px; border-radius: var(--radius-round); background: var(--color-neutral); }
+.ov-dot.is-active { background: var(--color-ok); }
+.ov-dot.is-idle { background: var(--color-neutral); }
+.ov-dot.is-offline { background: var(--color-danger); }
+.ov-dot.is-wait { background: var(--color-warn); }
+.ov-btn {
+  display: inline-flex; align-items: center; min-height: 28px; padding: 3px 10px; cursor: pointer; text-decoration: none;
+  border: 1px solid var(--color-line-strong); border-radius: var(--radius-md); background: var(--color-surface-panel);
+  color: var(--color-text-primary) !important; font: 600 13px/1.3 var(--font-sans); white-space: nowrap;
+}
+.ov-btn:hover { background: var(--color-surface-hover); }
+.ov-btn-primary { background: var(--color-accent); border-color: var(--color-accent); color: #fff !important; }
+.ov-btn-primary:hover { background: var(--color-accent-hover); }
+.ov-device { display: flex; gap: var(--space-2); margin: 0; }
+.ov-code {
+  width: 150px; min-height: 28px; padding: 2px 8px; border: 1px solid var(--color-line-strong); border-radius: var(--radius-md);
+  background: var(--color-surface-panel); color: var(--color-text-primary); font: var(--text-mono);
+}
+.ov-code::placeholder { color: var(--color-text-muted); opacity: 1; }
+.ov-code:focus-visible { outline: none; border-color: var(--color-accent); box-shadow: var(--focus-ring); }
+.ov-request { padding: var(--space-2) 0; border-bottom: 1px solid var(--color-line-default); }
+.ov-request.ov-row { padding: var(--space-3) 0; }
+.ov-reqtitle { color: var(--color-text-primary) !important; text-decoration: none; }
+.ov-id { font: 600 12px/1.3 var(--font-mono); color: var(--color-accent-text) !important; text-decoration: none; }
+.ov-prog { display: flex; align-items: center; gap: var(--space-2); margin-top: var(--space-1); }
+.ov-bar { flex: 1; min-width: 40px; max-width: 300px; height: 6px; border-radius: var(--radius-round); background: var(--color-surface-sunken); overflow: hidden; }
+.ov-bar > i { display: block; height: 100%; background: var(--color-accent); }
+.ov-setup { max-width: 560px; padding-top: var(--space-6); }
+.ov-setup h1 { font: var(--text-page-title); margin-bottom: var(--space-5); }
+.ov-command { display: flex; align-items: flex-start; gap: var(--space-3); margin: 0 0 var(--space-3); padding: var(--space-3); border-radius: var(--radius-md); background: #1c2520; color: #eef2ea; }
+.ov-command pre { flex: 1; margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ov-setup-line { display: flex; align-items: center; gap: var(--space-2); margin: 0 0 var(--space-3); }
+.ov-setup-line .ov-meta { margin-left: var(--space-2); }
+@media (max-width: 900px) {
+  .ov-cols { grid-template-columns: minmax(0, 1fr); }
+  .ov-next { flex-wrap: wrap; }
+}
+
 /* Narrow screens: no separate mobile design. The sidebar becomes a bar on top
    whose menu opens with the toggle; without script everything stays open. */
 @media (max-width: 900px) {

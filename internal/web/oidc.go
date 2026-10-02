@@ -361,7 +361,7 @@ func (a *app) beginOIDC(w http.ResponseWriter, r *http.Request, code string) {
 		return
 	}
 	verifier := oauth2.GenerateVerifier()
-	sealed, err := a.oidc.seal.seal(oidcFlow{State: state, Verifier: verifier, Nonce: nonce, Code: code, Join: r.FormValue("join") == "1",
+	sealed, err := a.oidc.seal.seal(oidcFlow{State: state, Verifier: verifier, Nonce: nonce, Code: code, Join: r.FormValue("join") == "1" || a.isJoinInvitation(code),
 		Expires: a.oidc.now().Add(flowTTL).Unix()})
 	if err != nil {
 		http.Error(w, "could not create secure flow", http.StatusInternalServerError)
@@ -528,4 +528,12 @@ func (a *app) loginMessage(w http.ResponseWriter, status int, titleKey, textKey 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	a.render(w, "loginmsg", pageData{Title: msg(titleKey), Error: msg(textKey, args...)})
+}
+
+// isJoinInvitation: ein im Codefeld eingegebener gültiger Einladungscode eines
+// Projekts gilt wie die Anmeldung von der Join-Seite, damit das Ziel nach der
+// Annahme /join/pair ist.
+func (a *app) isJoinInvitation(code string) bool {
+	_, ok := a.joinPreview(code)
+	return ok
 }

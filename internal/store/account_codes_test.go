@@ -171,3 +171,33 @@ func TestLoginLinkIsSingleUseExpiresAndNeedsActiveAccount(t *testing.T) {
 		t.Fatal("code issued for a disabled account")
 	}
 }
+
+func TestBootstrapAccountSetsTheMigrationMarkerInTheSameTransaction(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "marker.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, _, _ := s.EnsureBootstrapCode()
+	a, _, err := s.LoginIdentity(IdentityLogin{Issuer: "i", Subject: "s", Name: "robin", Code: code})
+	if err != nil || !a.Admin {
+		t.Fatalf("a=%+v err=%v", a, err)
+	}
+	var marked int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM account_migrations WHERE version=1`).Scan(&marked); err != nil || marked != 1 {
+		t.Fatalf("marker rows = %d err=%v", marked, err)
+	}
+	// Ein entzogenes Admin-Recht kehrt beim nächsten Öffnen nicht zurück.
+	if _, err := s.db.Exec(`UPDATE persons SET is_admin=0`); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	s, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if got, _ := s.AccountByName("robin"); got.Admin {
+		t.Fatal("admin flag returned after reopen")
+	}
+}
