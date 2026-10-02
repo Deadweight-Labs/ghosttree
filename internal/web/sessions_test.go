@@ -322,6 +322,13 @@ func TestSessionSearchOnlyUsesWhatTheViewerMayRead(t *testing.T) {
 			}
 		}
 		m := regexp.MustCompile(`(\d+) matches in (\d+) sessions?`).FindStringSubmatch(page)
+		if c.name == "guest" {
+			// Guests get no counts at all.
+			if m != nil || strings.Count(page, `data-session="`) != len(c.want) {
+				t.Errorf("guest: found line %v", m)
+			}
+			continue
+		}
 		if m == nil || m[2] != fmt.Sprint(len(c.want)) {
 			t.Errorf("%s: found line %v, want %d sessions", c.name, m, len(c.want))
 		}
@@ -353,7 +360,7 @@ func TestSessionSearchWithoutResultsOffersToClear(t *testing.T) {
 
 func TestSessionDetailRendersBlocksReadably(t *testing.T) {
 	e := seedSessions(t)
-	code, page := e.get(t, e.Owner, "/ui/sessions/"+e.pid["anna-project"])
+	code, page := e.get(t, e.Owner, "/ui/sessions/"+e.pid["anna-project"]+"?thinking=1")
 	if code != 200 {
 		t.Fatalf("status %d", code)
 	}
@@ -489,7 +496,7 @@ func TestSessionCodexTranscriptRenders(t *testing.T) {
 		t.Fatal(err)
 	}
 	sess, _ := e.St.SessionByID(id)
-	code, page := e.get(t, e.Owner, "/ui/sessions/"+sess.PublicID)
+	code, page := e.get(t, e.Owner, "/ui/sessions/"+sess.PublicID+"?thinking=1")
 	if code != 200 {
 		t.Fatalf("status %d", code)
 	}
@@ -557,33 +564,17 @@ func TestSessionMissingPageIsTheSameForAbsentAndHidden(t *testing.T) {
 	}
 }
 
-func TestLegacyNumericAddressRedirectsOnlyForReaders(t *testing.T) {
+func TestNumericAddressesAreGone(t *testing.T) {
 	e := seedSessions(t)
-	num := func(name string) string { return fmt.Sprintf("/ui/sessions/%d", e.id[name]) }
-	resp, err := e.Member.Get(e.Base + num("anna-private") + "?q=zebrafish")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.StatusCode != http.StatusSeeOther || !strings.HasPrefix(resp.Header.Get("Location"), "/ui/sessions/"+e.pid["anna-private"]) {
-		t.Errorf("owner of the session: %d -> %q", resp.StatusCode, resp.Header.Get("Location"))
-	}
-	if !strings.Contains(resp.Header.Get("Location"), "q=zebrafish") {
-		t.Error("query lost in the redirect")
-	}
-	// Nicht lesbar und nicht vorhanden sind nicht zu unterscheiden.
-	codeHidden, hidden := e.get(t, e.Member, num("alice-private"))
-	codeAbsent, absent := e.get(t, e.Member, "/ui/sessions/999999")
-	if codeHidden != 404 || codeAbsent != 404 {
-		t.Errorf("hidden %d absent %d", codeHidden, codeAbsent)
-	}
 	strip := func(s string) string {
 		return regexp.MustCompile(`name="csrf_token" value="[^"]*"`).ReplaceAllString(s, "")
 	}
-	if strip(hidden) != strip(absent) {
-		t.Error("numeric hidden and absent differ")
-	}
-	if code, _ := e.get(t, e.Guest, num("anna-project")); code != 404 {
-		t.Errorf("guest follows a numeric address to a members-only session: %d", code)
+	_, absent := e.get(t, e.Member, "/ui/sessions/999999")
+	for _, name := range []string{"anna-private", "anna-project", "alice-private"} {
+		code, page := e.get(t, e.Member, fmt.Sprintf("/ui/sessions/%d", e.id[name]))
+		if code != 404 || strip(page) != strip(absent) {
+			t.Errorf("numeric address of %s: %d", name, code)
+		}
 	}
 }
 
@@ -741,8 +732,9 @@ func TestSessionPagesDoNotChangeWhenHiddenSessionsAreAdded(t *testing.T) {
 			_, p := e.get(t, c, u)
 			after := strip(p)
 			if after != before[n+u] {
-				// A member legitimately sees metadata rows of other sessions; only the guest must be byte-identical.
-				if n == "guest" || strings.Contains(after, "secretbox") && strings.Contains(u, "q=") {
+				// A member legitimately sees the metadata rows of other sessions in the
+				// list; every other page, search pages included, must not change.
+				if n == "guest" || strings.Contains(u, "q=") {
 					t.Errorf("%s %s changes with hidden sessions", n, u)
 				}
 			}

@@ -222,8 +222,11 @@ func (s *Store) startIndexBackfill() error {
 		return queueWrite(s, nil, func(d *Store, _ []any) error { return d.startIndexBackfill() })
 	}
 	var have int
-	if err := s.db.QueryRow(`SELECT count(*) FROM index_state WHERE key='backfill_bound'`).Scan(&have); err != nil || have > 0 {
+	if err := s.db.QueryRow(`SELECT count(*) FROM index_state WHERE key='backfill_bound'`).Scan(&have); err != nil {
 		return err
+	}
+	if have > 0 {
+		return s.raiseBackfillBound()
 	}
 	var bound int64
 	if err := s.db.QueryRow(`SELECT COALESCE(MAX(id),0) FROM session_chunks`).Scan(&bound); err != nil {
@@ -235,6 +238,34 @@ func (s *Store) startIndexBackfill() error {
 	}
 	_, err := s.db.Exec(`INSERT OR IGNORE INTO index_state(key,val) VALUES('backfill_bound',?),('backfill_cursor',0),('backfill_done',?)`, bound, done)
 	return err
+}
+
+// raiseBackfillBound holt Chunks hinter der alten Grenze ein: ein zurückgerolltes
+// Binary schreibt ohne Index, und nach dem nächsten Update liegen sie jenseits
+// von backfill_bound. Gibt es dort Chunks ohne Indexzeile, wandert die Grenze
+// auf die größte Nummer und der Lauf beginnt wieder; der Stand davor bleibt.
+func (s *Store) raiseBackfillBound() error {
+	var bound int64
+	if err := s.db.QueryRow(`SELECT COALESCE((SELECT val FROM index_state WHERE key='backfill_bound'),0)`).Scan(&bound); err != nil {
+		return err
+	}
+	var missing int
+	if err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM session_chunks c WHERE c.id > ? AND NOT EXISTS (SELECT 1 FROM chunk_index x WHERE x.chunk_id = c.id))`, bound).Scan(&missing); err != nil || missing == 0 {
+		return err
+	}
+	var max int64
+	if err := s.db.QueryRow(`SELECT COALESCE(MAX(id),0) FROM session_chunks`).Scan(&max); err != nil {
+		return err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`INSERT OR REPLACE INTO index_state(key,val) VALUES('backfill_bound',?),('backfill_done',0)`, max); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // IndexProgress ist der sichtbare Stand des Nachindizierens.
@@ -293,6 +324,7 @@ func (s *Store) RunIndexBackfill(ctx context.Context, opts BackfillOptions) erro
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		began := time.Now()
 		done, err := s.IndexBackfillStep(opts.Batch)
 		if err != nil {
 			return err
@@ -300,10 +332,13 @@ func (s *Store) RunIndexBackfill(ctx context.Context, opts BackfillOptions) erro
 		if done {
 			return nil
 		}
+		// Die Pause wächst mit der Arbeitszeit des Schritts: der Schreiber ist
+		// höchstens etwa ein Drittel der Zeit belegt.
+		pause := max(opts.Pause, 2*time.Since(began))
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(opts.Pause):
+		case <-time.After(pause):
 		}
 	}
 }
@@ -311,12 +346,20 @@ func (s *Store) RunIndexBackfill(ctx context.Context, opts BackfillOptions) erro
 // maxStepBytes begrenzt den Rohtext, den ein Schritt im Speicher hält.
 const maxStepBytes = 8 << 20
 
+// backfillStepBudget ist die Zeit, die ein Schritt den Schreiber höchstens
+// belegt; danach endet er nach der laufenden Gruppe und der Rest folgt im
+// nächsten Schritt. backfillGroup Chunks gelten als unteilbar.
+var backfillStepBudget = 50 * time.Millisecond
+
+const backfillGroup = 10
+
 // IndexBackfillStep indiziert den nächsten Block des Bestands und sagt, ob der
 // Lauf damit fertig ist.
 func (s *Store) IndexBackfillStep(batch int) (bool, error) {
 	if s.writer != nil {
 		return queueValue(s, []any{batch}, func(d *Store, p []any) (bool, error) { return d.IndexBackfillStep(p[0].(int)) })
 	}
+	began := time.Now()
 	if batch <= 0 {
 		batch = 300
 	}
@@ -338,7 +381,7 @@ func (s *Store) IndexBackfillStep(batch int) (bool, error) {
 		return false, err
 	}
 	var chunks []chunkRow
-	size, last := 0, cursor
+	size := 0
 	for rows.Next() {
 		var r chunkRow
 		if err := rows.Scan(&r.id, &r.sessionID, &r.seq, &r.harness, &r.raw); err != nil {
@@ -346,7 +389,6 @@ func (s *Store) IndexBackfillStep(batch int) (bool, error) {
 			return false, err
 		}
 		chunks = append(chunks, r)
-		last = r.id
 		if size += len(r.raw); size > maxStepBytes {
 			break
 		}
@@ -360,10 +402,23 @@ func (s *Store) IndexBackfillStep(batch int) (bool, error) {
 		return false, err
 	}
 	defer tx.Rollback()
-	if err := indexChunks(tx, chunks); err != nil {
-		return false, err
+	// Gruppenweise, bis die Zeit des Schritts aufgebraucht ist.
+	processed := 0
+	for processed < len(chunks) {
+		group := chunks[processed:min(processed+backfillGroup, len(chunks))]
+		if err := indexChunks(tx, group); err != nil {
+			return false, err
+		}
+		processed += len(group)
+		if time.Since(began) >= backfillStepBudget {
+			break
+		}
 	}
-	finished := len(chunks) < batch && size <= maxStepBytes
+	last := cursor
+	if processed > 0 {
+		last = chunks[processed-1].id
+	}
+	finished := processed == len(chunks) && len(chunks) < batch && size <= maxStepBytes
 	if finished {
 		last = bound
 	}
@@ -378,46 +433,63 @@ func (s *Store) IndexBackfillStep(batch int) (bool, error) {
 	return finished, tx.Commit()
 }
 
+// indexSessionBatch ist ein Schreiberauftrag: bis zu indexBatch Chunks der
+// Session. Es sagt, wie viele es waren.
+const indexBatch = 300
+
+func (s *Store) indexSessionBatch(id int64) (int, error) {
+	if s.writer != nil {
+		return queueValue(s, []any{id}, func(d *Store, p []any) (int, error) { return d.indexSessionBatch(p[0].(int64)) })
+	}
+	rows, err := s.db.Query(`SELECT c.id, c.session_id, c.seq, se.harness, c.raw FROM session_chunks c
+		JOIN sessions se ON se.id = c.session_id
+		LEFT JOIN chunk_index x ON x.chunk_id = c.id
+		WHERE c.session_id = ? AND x.chunk_id IS NULL ORDER BY c.id LIMIT ?`, id, indexBatch)
+	if err != nil {
+		return 0, err
+	}
+	var chunks []chunkRow
+	for rows.Next() {
+		var r chunkRow
+		if err := rows.Scan(&r.id, &r.sessionID, &r.seq, &r.harness, &r.raw); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		chunks = append(chunks, r)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	if len(chunks) == 0 {
+		return 0, nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	if err := indexChunks(tx, chunks); err != nil {
+		return 0, err
+	}
+	return len(chunks), tx.Commit()
+}
+
 // IndexSession holt die noch nicht indizierten Chunks einer Session nach. Die
 // Sessionansicht ruft es, solange der Hintergrundlauf nicht durch ist, damit
 // Gliederung und Titel nicht auf ihn warten.
-func (s *Store) IndexSession(id int64) error {
-	if s.writer != nil {
-		return queueWrite(s, []any{id}, func(d *Store, p []any) error { return d.IndexSession(p[0].(int64)) })
-	}
+func (s *Store) IndexSession(id int64) error { return s.IndexSessionContext(context.Background(), id) }
+
+// IndexSessionContext arbeitet die Session in Aufträgen zu je 300 Chunks ab;
+// zwischen den Aufträgen kommen andere Schreiber dran, und ein beendeter ctx
+// (Anfrage abgebrochen) hält die Schleife an.
+func (s *Store) IndexSessionContext(ctx context.Context, id int64) error {
 	for {
-		rows, err := s.db.Query(`SELECT c.id, c.session_id, c.seq, se.harness, c.raw FROM session_chunks c
-			JOIN sessions se ON se.id = c.session_id
-			LEFT JOIN chunk_index x ON x.chunk_id = c.id
-			WHERE c.session_id = ? AND x.chunk_id IS NULL ORDER BY c.id LIMIT 300`, id)
-		if err != nil {
+		if err := ctx.Err(); err != nil {
 			return err
 		}
-		var chunks []chunkRow
-		for rows.Next() {
-			var r chunkRow
-			if err := rows.Scan(&r.id, &r.sessionID, &r.seq, &r.harness, &r.raw); err != nil {
-				rows.Close()
-				return err
-			}
-			chunks = append(chunks, r)
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return err
-		}
-		if len(chunks) == 0 {
-			return nil
-		}
-		tx, err := s.db.Begin()
-		if err != nil {
-			return err
-		}
-		if err := indexChunks(tx, chunks); err != nil {
-			tx.Rollback()
-			return err
-		}
-		if err := tx.Commit(); err != nil {
+		n, err := s.indexSessionBatch(id)
+		if err != nil || n < indexBatch {
 			return err
 		}
 	}

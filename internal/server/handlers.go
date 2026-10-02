@@ -18,8 +18,7 @@ import (
 
 func (a *api) createSession(w http.ResponseWriter, r *http.Request) {
 	var s store.Session
-	if err := readJSON(r, &s); err != nil {
-		writeStoreError(w, http.StatusBadRequest, err)
+	if !readLimitedJSON(w, r, &s, maxSessionBody) {
 		return
 	}
 	if s.Harness == "" || s.ExternalID == "" {
@@ -52,6 +51,29 @@ func (a *api) createSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]int64{"id": id})
 }
 
+// Grenzen der Session-Uploads. Der Collector schickt höchstens 500 Zeilen und
+// 32 MiB Rohtext je Anfrage (collector.uploadBatch, uploadBatchBytes); die
+// Grenze liegt darüber, damit auch eine einzelne sehr große Zeile durchgeht.
+// maxChunkBody ist eine Variable, damit der Test sie senken kann.
+var maxChunkBody int64 = 128 << 20
+
+const maxSessionBody = 64 << 10
+
+// readLimitedJSON liest einen JSON-Körper bis limit Bytes (413 darüber).
+func readLimitedJSON(w http.ResponseWriter, r *http.Request, v any, limit int64) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
+	if err := readJSON(r, v); err != nil {
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			writeCoded(w, http.StatusRequestEntityTooLarge, "body_too_large", "request body is too large")
+		} else {
+			writeStoreError(w, http.StatusBadRequest, err)
+		}
+		return false
+	}
+	return true
+}
+
 func (a *api) appendChunks(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathID(r)
 	if !ok {
@@ -61,8 +83,7 @@ func (a *api) appendChunks(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Chunks []store.Chunk `json:"chunks"`
 	}
-	if err := readJSON(r, &body); err != nil {
-		writeStoreError(w, http.StatusBadRequest, err)
+	if !readLimitedJSON(w, r, &body, maxChunkBody) {
 		return
 	}
 	if !a.mayWriteSession(w, r, id) {
@@ -81,16 +102,31 @@ func (a *api) appendChunks(w http.ResponseWriter, r *http.Request) {
 func (a *api) listSessions(w http.ResponseWriter, r *http.Request) {
 	limit := intParam(r, "limit", 50)
 	pa := a.access(r)
-	sessions, err := a.st.ListSessionsOwned(axesFromQuery(r), a.overfetch(limit), ownerFilter(r))
+	dbFilter, viewFilter, fetch := a.sessionFilters(axesFromQuery(r), a.overfetch(limit))
+	sessions, err := a.st.ListSessionsOwned(dbFilter, fetch, ownerFilter(r))
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
 	// Metadaten (wer arbeitet wo) sehen Mitglieder ab member; die eigenen
-	// Sessions bleiben dem Besitzer.
-	sessions = filterTo(sessions, limit, pa.CanSeeSessionMeta)
+	// Sessions bleiben dem Besitzer. Titel, Zähler und Adresse stammen aus dem
+	// Transkript und gehören nur dem, der es lesen darf; Gäste sehen weder
+	// Maschine, Branch, Pfad noch Besitzer.
+	out := make([]store.Session, 0, len(sessions))
+	for _, sess := range sessions {
+		if !pa.CanSeeSessionMeta(sess) {
+			continue
+		}
+		view := pa.MetaView(sess)
+		if pa.MatchesAxes(view, viewFilter) {
+			out = append(out, view)
+			if len(out) >= limit {
+				break
+			}
+		}
+	}
 	pa.Filtered()
-	writeJSON(w, 200, sessions)
+	writeJSON(w, 200, out)
 }
 
 func (a *api) readSession(w http.ResponseWriter, r *http.Request) {
@@ -519,14 +555,27 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 		res.Knowledge = filterTo(ks, limit, func(k store.Knowledge) bool { return pa.CanSeeKnowledge(k) && pa.CanDeliverKnowledge(k) })
 	}
 	if kind == "sessions" || kind == "all" {
-		hits, err := a.st.SearchSessions(q, filter, r.URL.Query().Get("exclude_session"), fetch)
+		dbFilter, viewFilter, fetchSessions := a.sessionFilters(filter, fetch)
+		hits, err := a.st.SearchSessions(q, dbFilter, r.URL.Query().Get("exclude_session"), fetchSessions)
 		if err != nil {
 			writeStoreError(w, http.StatusInternalServerError, err)
 			return
 		}
 		// Ein Treffer zeigt einen Ausschnitt des Transkripts: es gilt die Regel
 		// für Transkripte, nicht die für Metadaten.
-		res.Sessions = filterTo(hits, limit, func(h store.SessionHit) bool { return pa.CanSeeTranscript(h.Session) })
+		res.Sessions = res.Sessions[:0]
+		for _, h := range hits {
+			if !pa.CanSeeTranscript(h.Session) {
+				continue
+			}
+			h.Session = pa.MetaView(h.Session)
+			if pa.MatchesAxes(h.Session, viewFilter) {
+				res.Sessions = append(res.Sessions, h)
+				if len(res.Sessions) >= limit {
+					break
+				}
+			}
+		}
 	}
 	if kind == "requests" || kind == "all" {
 		page, err := a.st.SearchRequests(a.requestFilter(r, requestdomain.SearchFilter{Query: q, Scope: scope.Axes{Project: filter.Project}, Limit: limit}))
@@ -994,4 +1043,17 @@ func (a *api) searchGhosts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, filterTo(entries, limit, func(g store.GhostFile) bool { return pa.CanSeeGhost(g) && pa.CanDeliverGhost(g) }))
+}
+
+// sessionFilters trennt den Filter für die Datenbank von dem, der auf das
+// angewendet wird, was der Betrachter von einer Session sieht. Maschine und
+// Branch gelten nie auf dem Rohwert: ein Gast sähe sonst an der Trefferzahl, wo
+// eine Session läuft. Ohne Durchsetzung bleibt es beim Datenbankfilter.
+func (a *api) sessionFilters(f scope.Axes, fetch int) (db, view scope.Axes, limit int) {
+	if !a.st.AccessEnforced() || (f.Machine == "" && f.Branch == "") {
+		return f, scope.Axes{}, fetch
+	}
+	view = scope.Axes{Machine: f.Machine, Branch: f.Branch}
+	f.Machine, f.Branch = "", ""
+	return f, view, max(fetch, 1000)
 }

@@ -191,6 +191,11 @@ var messages = map[string]string{
 	"sessions.one_line":           "1 line",
 	"sessions.show_all_lines":     "Show all %d lines",
 	"sessions.ok":                 "ok",
+	"sessions.truncated":          "… truncated",
+	"sessions.secrets_many":       "%d possible secrets in this session. Share anyway?",
+	"sessions.secrets_one":        "1 possible secret in this session. Share anyway?",
+	"sessions.share_anyway":       "Share anyway",
+	"sessions.cancel":             "Cancel",
 }
 
 // msg liefert den Text zu einem Schlüssel. Ein unbekannter Schlüssel kommt als

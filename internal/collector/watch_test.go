@@ -126,3 +126,42 @@ func TestStateRoundtrip(t *testing.T) {
 		t.Errorf("reloaded state = %+v", again.Files)
 	}
 }
+
+type sizeUp struct {
+	fakeUp
+	batches []int
+}
+
+func (s *sizeUp) AppendChunks(id int64, cs []store.Chunk) error {
+	n := 0
+	for _, c := range cs {
+		n += len(c.Raw)
+	}
+	s.batches = append(s.batches, n)
+	return s.fakeUp.AppendChunks(id, cs)
+}
+
+func TestSyncFileSplitsUploadsBySize(t *testing.T) {
+	dir := t.TempDir()
+	fp := filepath.Join(dir, "big.jsonl")
+	filler := strings.Repeat("a", 1<<20)
+	var b strings.Builder
+	for i := 0; i < 40; i++ {
+		b.WriteString(`{"type":"user","cwd":"/tmp","sessionId":"big","message":{"role":"user","content":"` + filler + `"}}` + "\n")
+	}
+	if err := os.WriteFile(fp, []byte(b.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	up := &sizeUp{}
+	if err := SyncFile(fp, "claude-code", up, newTestState(dir), "m"); err != nil {
+		t.Fatal(err)
+	}
+	if len(up.batches) < 2 {
+		t.Fatalf("40 MiB went out in %d request(s)", len(up.batches))
+	}
+	for _, n := range up.batches {
+		if n > uploadBatchBytes+(2<<20) {
+			t.Errorf("batch of %d bytes exceeds the limit", n)
+		}
+	}
+}

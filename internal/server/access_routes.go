@@ -360,9 +360,17 @@ func (a *api) shareSession(w http.ResponseWriter, r *http.Request) {
 	if denyAccess(w, a.access(r).CheckTranscript(sess, store.ActShare)) {
 		return
 	}
-	if err := a.st.SetSessionShared(id, principalOf(r).ID, body.Shared); err != nil {
-		if errors.Is(err, store.ErrNotSessionOwner) {
-			denyAccess(w, store.ErrAccessForbidden)
+	// Dieselbe Regel wie im Browser: Besitzer der Session und Owner des
+	// Projekts; die Stufe "mit Gästen" bleibt erhalten, solange geteilt ist.
+	level := store.VisPrivate
+	if body.Shared {
+		level = store.VisProject
+		if sess.Visibility == store.VisGuests {
+			level = store.VisGuests
+		}
+	}
+	if err := a.st.SetSessionVisibility(id, a.access(r), level); err != nil {
+		if denyAccess(w, err) {
 			return
 		}
 		writeStoreError(w, http.StatusInternalServerError, err)

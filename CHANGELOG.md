@@ -10,7 +10,7 @@ Versioning, with pre-1.0 compatibility rules described in
   Sessions view). The list groups sessions by day with title, agent@machine,
   project, branch, linked requests and knowledge, message count, duration and a
   Live marker, filterable by project, machine, agent, time and Everyone/Mine
-  (menus show counts of the sessions you may read). The search covers messages,
+  (menus show counts of the sessions you may read; guests see no counts). The search covers messages,
   commands, tool output and, on request, thinking blocks, and groups hits per
   session with a marked snippet that jumps into the transcript. The transcript
   shows your prompts and the agent's text, collapses tool calls and thinking to
@@ -19,9 +19,13 @@ Versioning, with pre-1.0 compatibility rules described in
   session with next/previous, and loads 200 messages at a time. The owner of a
   session or the project owner sets it to private, project members, or including
   guests; guests see only sessions shared with them and no machine, branch or
-  owner. Session addresses are random; old numeric addresses redirect for
-  readers and otherwise look like an unknown session. Sessions you cannot read
-  show as "Private" rows without title or link.
+  owner. Session addresses are random; a numeric address looks like an unknown
+  session. Sessions you cannot read show as "Private" rows without title or
+  link. Thinking blocks are hidden until you turn them on. Sharing with guests
+  asks first when the transcript looks like it contains credentials ("3 possible
+  secrets in this session. Share anyway?"). A block shows at most 2000 lines or
+  256 KB and a page at most 5000 lines; the rest is marked as truncated and the
+  page offers the next window.
 
 - Added: sessions are searchable and addressable by a random id (REQ-435,
   Sessions backend). Every stored line of a session is read into one display
@@ -37,7 +41,17 @@ Versioning, with pre-1.0 compatibility rules described in
   project owner changes it, every change is recorded, and a guest sees only
   sessions shared with guests, without machine, branch, path or owner. Search
   results, counts and filter numbers are formed from the sessions the viewer
-  may read only.
+  may read only. The session list API and `context_sessions` now give title,
+  message count and address only for sessions the caller may read and hide
+  machine, branch, path and owner from guests, also when filtering by machine
+  or branch; the legacy share route follows the same rule as the browser, so
+  the project owner may use it too. Paging cursors carry a position in the list
+  the viewer sees, never an internal id or a score. Opening a session during the
+  background indexing works in jobs of 300 chunks and no longer holds the writer
+  for the whole session; each background step is limited to about 50 ms of
+  writer time, and chunks written by a rolled-back binary after the first
+  indexing are picked up at the next start. Session uploads are limited to
+  128 MiB per request and the collector sends at most 32 MiB of text at once.
 - Added: `ctx join --server <url> --pair XXXX-XXXX` pairs a machine with the
   code from an invitation page (REQ-434, part 3). It opens a loopback
   listener on 127.0.0.1 only for the duration of the command, proves the

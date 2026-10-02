@@ -38,6 +38,10 @@ type ActivityRecorder interface {
 // uploadBatch bounds request size during the initial import of old transcripts.
 const uploadBatch = 500
 
+// uploadBatchBytes bounds the raw text of one request; the server refuses
+// bodies above 128 MiB, and JSON escaping can double what is counted here.
+const uploadBatchBytes = 32 << 20
+
 // metaScanLines is how far into a file we look for the session metadata line.
 const metaScanLines = 200
 
@@ -75,6 +79,7 @@ func SyncFile(path, harness string, up Uploader, st *State, machine string) erro
 	r := bufio.NewReaderSize(f, 1<<20)
 	offset := fs.Offset
 	var batch []store.Chunk
+	batchBytes := 0
 	var touches []store.PathActivity
 	var proofs []ControlProof
 	ident := sessionIdentity(path, harness, machine)
@@ -112,6 +117,7 @@ func SyncFile(path, harness string, up Uploader, st *State, machine string) erro
 		fs.Offset = offset
 		fs.Seq = seq
 		batch = batch[:0]
+		batchBytes = 0
 		return st.Save()
 	}
 	for {
@@ -140,7 +146,8 @@ func SyncFile(path, harness string, up Uploader, st *State, machine string) erro
 			}
 		}
 		seq++
-		if len(batch) >= uploadBatch {
+		batchBytes += len(trimmed)
+		if len(batch) >= uploadBatch || batchBytes >= uploadBatchBytes {
 			if err := flush(); err != nil {
 				return err
 			}

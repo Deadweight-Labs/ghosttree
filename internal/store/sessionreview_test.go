@@ -1,0 +1,217 @@
+package store
+
+import (
+	"context"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+)
+
+const roleProjectB = "github.com/dw/q"
+
+// gus is guest in roleProject and member in roleProjectB.
+func newMixedRoleFixture(t *testing.T) *Store {
+	t.Helper()
+	st := accessFixture(t)
+	st.SetAccessMode(AccessMode{Enforce: true})
+	if _, err := st.EnsureProject("person:1", roleProjectB); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetProjectRole("person:1", roleProjectB, "person:5", RoleMember, false, RoleViaAPI); err != nil {
+		t.Fatal(err)
+	}
+	return st
+}
+
+func TestMixedRoleFacetsAndMachineFilterUseTheViewedMachine(t *testing.T) {
+	st := newMixedRoleFixture(t)
+	addSession(t, st, "x-guest", 4, roleProject, "boxa", VisGuests, transcriptWith("zebra"))
+	addSession(t, st, "y-private", 3, roleProjectB, "boxb", "", transcriptWith("zebra"))
+	gus := viewer(st, "person:5", "gus")
+
+	page, err := st.BrowseSessions(gus, SessionFilter{}, "", 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var machines []string
+	for _, o := range page.Facets.Machines {
+		machines = append(machines, o.Value)
+	}
+	if strings.Join(machines, ",") != "boxb" {
+		t.Errorf("machine facet = %v, want only the machine of the project where the viewer is a member", machines)
+	}
+	for _, c := range []struct {
+		machine string
+		rows    int
+	}{{"boxa", 0}, {"boxb", 1}} {
+		p, err := st.BrowseSessions(gus, SessionFilter{Machine: c.machine}, "", 50)
+		if err != nil || len(p.Rows) != c.rows {
+			t.Errorf("browse machine=%s: rows=%d err=%v, want %d", c.machine, len(p.Rows), err, c.rows)
+		}
+	}
+	s, err := st.SearchTranscripts(gus, SearchQuery{Q: "zebra", Filter: SessionFilter{Machine: "boxa"}, Limit: 10})
+	if err != nil || len(s.Groups) != 0 || s.Sessions != 0 || s.Matches != 0 {
+		t.Errorf("search machine=boxa as a guest of that project: %+v err=%v", s, err)
+	}
+	if s, _ = st.SearchTranscripts(gus, SearchQuery{Q: "zebra", Limit: 10}); len(s.Facets.Machines) != 0 {
+		t.Errorf("search machine facet leaks %v", s.Facets.Machines)
+	}
+}
+
+func TestMetaViewHidesWhatTheViewerMayNotRead(t *testing.T) {
+	f := newVisFixture(t)
+	mia := viewer(f.st, "person:3", "mia")
+	got := mia.MetaView(f.a)
+	if got.Title != "" || got.Messages != 0 || got.PublicID != "" {
+		t.Errorf("member meta view of a foreign private session: %+v", got)
+	}
+	if own := mia.MetaView(f.b); own.Title == "" || own.PublicID == "" {
+		t.Errorf("owner lost the content of her session: %+v", own)
+	}
+	gus := viewer(f.st, "person:5", "gus")
+	g := gus.MetaView(f.d)
+	if g.Title == "" || g.Scope.Machine != "" || g.Scope.Branch != "" || g.CWD != "" || g.ExternalID != "" || g.Owner != "" {
+		t.Errorf("guest meta view of a guest-shared session: %+v", g)
+	}
+}
+
+func TestCursorsCarryNeitherInternalIDsNorScores(t *testing.T) {
+	st := accessFixture(t)
+	st.SetAccessMode(AccessMode{Enforce: true})
+	for i := 0; i < 8; i++ {
+		addSession(t, st, "hidden-"+strconv.Itoa(i), 3, roleProject, "m", "", transcriptWith("zebra"))
+	}
+	var visible []Session
+	for i := 0; i < 3; i++ {
+		visible = append(visible, addSession(t, st, "vis-"+strconv.Itoa(i), 4, roleProject, "box", VisGuests, transcriptWith("zebra")))
+	}
+	gus := viewer(st, "person:5", "gus")
+	b, err := st.BrowseSessions(gus, SessionFilter{}, "", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cursors := map[string]string{"browse": b.Next}
+	for _, sort := range []string{"best", "newest"} {
+		p, err := st.SearchTranscripts(gus, SearchQuery{Q: "zebra", Sort: sort, Limit: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		cursors["search "+sort] = p.Next
+	}
+	for name, c := range cursors {
+		if c == "" {
+			t.Fatalf("%s: no cursor", name)
+		}
+		if strings.Contains(c, ".") {
+			t.Errorf("%s cursor carries a score: %q", name, c)
+		}
+		for _, field := range strings.Split(c, "|") {
+			for _, s := range visible {
+				if field == strconv.FormatInt(s.ID, 10) {
+					t.Errorf("%s cursor carries the internal id %d: %q", name, s.ID, c)
+				}
+			}
+		}
+	}
+}
+
+func TestIndexSessionRunsOneWriterJobPerBatch(t *testing.T) {
+	st, err := OpenRuntime(filepath.Join(t.TempDir(), "rt.db"), DefaultWriterConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if _, err := st.AddPerson("robin"); err != nil {
+		t.Fatal(err)
+	}
+	s := addSession(t, st, "s", 1, "", "m", "", nil)
+	legacyChunks(t, st, s.ID, numbered(700))
+	before := st.RuntimeStats().Writer.Admitted
+	if err := st.IndexSession(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	if jobs := st.RuntimeStats().Writer.Admitted - before; jobs < 3 {
+		t.Errorf("IndexSession took %d writer jobs for 700 chunks, want one per batch of 300", jobs)
+	}
+	var n int
+	_ = st.DB().QueryRow(`SELECT count(*) FROM chunk_index WHERE session_id=?`, s.ID).Scan(&n)
+	if n != 700 {
+		t.Errorf("indexed %d of 700", n)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	legacyChunks(t, st, s.ID, []Chunk{{Seq: 700, Raw: userLine("2026-10-01T10:00:00Z", "late")}})
+	if err := st.IndexSessionContext(ctx, s.ID); err == nil {
+		t.Error("a cancelled request must stop indexing")
+	}
+}
+
+func TestBackfillRestartsForChunksBeyondTheBound(t *testing.T) {
+	st := orgStore(t, "robin")
+	s := addSession(t, st, "old", 1, "", "m", "", nil)
+	legacyChunks(t, st, s.ID, transcriptWith("narwhal"))
+	resetBackfill(t, st)
+	if err := st.RunIndexBackfill(context.Background(), BackfillOptions{Batch: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if !st.IndexProgress().Done {
+		t.Fatal("first run not done")
+	}
+	// An older binary ran for a while and wrote chunks without an index row.
+	legacyChunks(t, st, s.ID, []Chunk{{Seq: 100, Raw: userLine("2026-10-01T11:00:00Z", "written by a rolled back binary narwhal")}})
+	if err := st.startIndexBackfill(); err != nil {
+		t.Fatal(err)
+	}
+	if st.IndexProgress().Done {
+		t.Fatal("chunks beyond the bound are not noticed at start")
+	}
+	if err := st.RunIndexBackfill(context.Background(), BackfillOptions{Batch: 2}); err != nil {
+		t.Fatal(err)
+	}
+	var total, indexed int
+	_ = st.db.QueryRow(`SELECT count(*) FROM session_chunks`).Scan(&total)
+	_ = st.db.QueryRow(`SELECT count(*) FROM chunk_index`).Scan(&indexed)
+	if total != indexed {
+		t.Errorf("indexed %d of %d chunks", indexed, total)
+	}
+	// A second start finds nothing to redo.
+	if err := st.startIndexBackfill(); err != nil || !st.IndexProgress().Done {
+		t.Errorf("restart without new chunks: done=%v err=%v", st.IndexProgress().Done, err)
+	}
+}
+
+func TestBackfillStepStaysWithinItsTimeBudget(t *testing.T) {
+	st := orgStore(t, "robin")
+	s := addSession(t, st, "old", 1, "", "m", "", nil)
+	legacyChunks(t, st, s.ID, numbered(120))
+	resetBackfill(t, st)
+	old := backfillStepBudget
+	backfillStepBudget = time.Nanosecond
+	defer func() { backfillStepBudget = old }()
+	done, err := st.IndexBackfillStep(300)
+	if err != nil || done {
+		t.Fatalf("a step with no time left finished the whole stock: done=%v err=%v", done, err)
+	}
+	var n int
+	_ = st.db.QueryRow(`SELECT count(*) FROM chunk_index`).Scan(&n)
+	if n == 0 || n >= 120 {
+		t.Fatalf("step indexed %d chunks, want some but not all", n)
+	}
+	for i := 0; !done; i++ {
+		if i > 500 {
+			t.Fatal("backfill does not make progress")
+		}
+		if done, err = st.IndexBackfillStep(300); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = st.db.QueryRow(`SELECT count(*) FROM chunk_index`).Scan(&n)
+	if n != 120 {
+		t.Errorf("indexed %d of 120", n)
+	}
+	if got, _ := st.SessionByID(s.ID); got.Messages != 80 {
+		t.Errorf("messages = %d, a chunk was counted twice or lost", got.Messages)
+	}
+}

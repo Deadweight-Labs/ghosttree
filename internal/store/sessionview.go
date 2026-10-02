@@ -3,13 +3,13 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
-	"math"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/transcript"
 )
 
@@ -70,7 +70,7 @@ func (a *ProjectAccess) matchFilter(s Session, f SessionFilter, skip int) bool {
 	if skip != dimProject && f.Project != "" && s.Scope.Project != f.Project {
 		return false
 	}
-	if skip != dimMachine && f.Machine != "" && s.Scope.Machine != f.Machine {
+	if skip != dimMachine && f.Machine != "" && a.guestView(s).Scope.Machine != f.Machine {
 		return false
 	}
 	if skip != dimHarness && f.Harness != "" && s.Harness != f.Harness {
@@ -144,7 +144,7 @@ func (a *ProjectAccess) computeFacets(cands []Session, f SessionFilter) Facets {
 			proj[s.Scope.Project]++
 		}
 		if a.matchFilter(s, f, dimMachine) {
-			mach[s.Scope.Machine]++
+			mach[a.guestView(s).Scope.Machine]++
 		}
 		if a.matchFilter(s, f, dimHarness) {
 			harn[s.Harness]++
@@ -181,20 +181,20 @@ func (s *Store) BrowseSessions(pa *ProjectAccess, f SessionFilter, cursor string
 	if pa.isGuestOnly() {
 		page.Facets = pa.guestFacets(page.Facets)
 	}
-	afterTS, afterID, hasCursor := decodeTimeCursor(cursor)
+	var kept []Session
 	for _, sess := range visible {
-		if !pa.matchFilter(sess, f, dimAll) {
-			continue
+		if pa.matchFilter(sess, f, dimAll) {
+			kept = append(kept, sess)
 		}
-		if hasCursor && !(sess.LastSeenAt < afterTS || (sess.LastSeenAt == afterTS && sess.ID < afterID)) {
-			continue
-		}
-		if len(page.Rows) == limit {
-			last := page.Rows[len(page.Rows)-1].Session
-			page.Next = encodeTimeCursor(last.LastSeenAt, last.ID)
-			break
-		}
+	}
+	stamp := func(i int) string { return kept[i].LastSeenAt }
+	start := timePosition(len(kept), cursor, stamp)
+	end := min(start+limit, len(kept))
+	for _, sess := range kept[start:end] {
 		page.Rows = append(page.Rows, pa.row(sess))
+	}
+	if end < len(kept) && end > start {
+		page.Next = encodeTimeCursor(stamp(end-1), countSameStamp(end, stamp))
 	}
 	return page, nil
 }
@@ -210,18 +210,44 @@ func (a *ProjectAccess) row(sess Session) SessionRow {
 	return SessionRow{Session: a.guestView(sess), Readable: readable}
 }
 
-func encodeTimeCursor(ts string, id int64) string { return "t|" + ts + "|" + strconv.FormatInt(id, 10) }
+// Cursor der Liste: Zeitstempel der letzten gezeigten Zeile und wie viele
+// Zeilen mit diesem Stempel schon gezeigt wurden. Beides stammt aus Zeilen, die
+// der Betrachter sieht; keine interne Nummer, kein Rang (#2447).
+func encodeTimeCursor(ts string, shown int) string { return "t|" + ts + "|" + strconv.Itoa(shown) }
 
-func decodeTimeCursor(c string) (string, int64, bool) {
+func decodeTimeCursor(c string) (string, int, bool) {
 	parts := strings.Split(c, "|")
 	if len(parts) != 3 || parts[0] != "t" {
 		return "", 0, false
 	}
-	id, err := strconv.ParseInt(parts[2], 10, 64)
-	if err != nil {
+	n, err := strconv.Atoi(parts[2])
+	if err != nil || n < 0 {
 		return "", 0, false
 	}
-	return parts[1], id, true
+	return parts[1], n, true
+}
+
+// countSameStamp zählt die Zeilen vor end mit dem Stempel der Zeile end-1.
+func countSameStamp(end int, stamp func(i int) string) int {
+	n := 0
+	for i := end - 1; i >= 0 && stamp(i) == stamp(end-1); i-- {
+		n++
+	}
+	return n
+}
+
+// timePosition findet den ersten Eintrag hinter dem Cursor in einer nach Zeit
+// absteigend geordneten Liste. Ein unlesbarer Cursor beginnt von vorn.
+func timePosition(n int, cursor string, stamp func(i int) string) int {
+	ts, shown, ok := decodeTimeCursor(cursor)
+	if !ok {
+		return 0
+	}
+	i := sort.Search(n, func(i int) bool { return stamp(i) <= ts })
+	for ; shown > 0 && i < n && stamp(i) == ts; shown-- {
+		i++
+	}
+	return i
 }
 
 // ------------------------------------------------------------------- Suche
@@ -410,7 +436,11 @@ func (s *Store) SearchTranscripts(pa *ProjectAccess, q SearchQuery) (SearchPage,
 	end := min(start+q.Limit, len(kept))
 	pageRows := kept[start:end]
 	if end < len(kept) && len(pageRows) > 0 {
-		page.Next = encodeSearchCursor(pageRows[len(pageRows)-1], newest)
+		if newest {
+			page.Next = encodeTimeCursor(kept[end-1].sess.LastSeenAt, countSameStamp(end, func(i int) string { return kept[i].sess.LastSeenAt }))
+		} else {
+			page.Next = encodeOffsetCursor(end)
+		}
 	}
 	groups, err := s.hitsFor(pa, pageRows, expr, q.Kind)
 	if err != nil {
@@ -420,41 +450,26 @@ func (s *Store) SearchTranscripts(pa *ProjectAccess, q SearchQuery) (SearchPage,
 	return page, nil
 }
 
-func encodeSearchCursor(m matchedSession, newest bool) string {
-	if newest {
-		return encodeTimeCursor(m.sess.LastSeenAt, m.sess.ID)
-	}
-	return "b|" + strconv.FormatFloat(m.rank, 'g', -1, 64) + "|" + strconv.FormatInt(m.sess.ID, 10)
-}
+// encodeOffsetCursor: Stelle in der Liste, die der Betrachter selbst sieht.
+func encodeOffsetCursor(offset int) string { return "o|" + strconv.Itoa(offset) }
 
 // positionAfter findet den ersten Eintrag hinter dem Cursor. Bei einem
-// unlesbaren Cursor beginnt die Liste von vorn.
+// unlesbaren Cursor beginnt die Liste von vorn. Die Reihenfolge nach Rang
+// hängt über die Dokumenthäufigkeit des Index von allen Texten ab; ein Rang
+// selbst verlässt den Server nie.
 func positionAfter(kept []matchedSession, cursor string, newest bool) int {
-	parts := strings.Split(cursor, "|")
-	if len(parts) != 3 {
-		return 0
-	}
-	id, err := strconv.ParseInt(parts[2], 10, 64)
-	if err != nil {
-		return 0
-	}
 	if newest {
-		if parts[0] != "t" {
-			return 0
-		}
-		return sort.Search(len(kept), func(i int) bool {
-			k := kept[i].sess
-			return k.LastSeenAt < parts[1] || (k.LastSeenAt == parts[1] && k.ID < id)
-		})
+		return timePosition(len(kept), cursor, func(i int) string { return kept[i].sess.LastSeenAt })
 	}
-	rank, err := strconv.ParseFloat(parts[1], 64)
-	if parts[0] != "b" || err != nil || math.IsNaN(rank) {
+	parts := strings.Split(cursor, "|")
+	if len(parts) != 2 || parts[0] != "o" {
 		return 0
 	}
-	return sort.Search(len(kept), func(i int) bool {
-		k := kept[i]
-		return k.rank > rank || (k.rank == rank && k.sess.ID < id)
-	})
+	n, err := strconv.Atoi(parts[1])
+	if err != nil || n < 0 {
+		return 0
+	}
+	return min(n, len(kept))
 }
 
 // hitsFor holt je Session die drei besten Treffer mit Ausschnitt.
@@ -807,6 +822,17 @@ func (s *Store) SessionLinks(pa *ProjectAccess, sessionIDs []int64) (map[int64][
 // (Besitzer der Session oder Owner des Projekts). Gilt auch im Log-Modus.
 func (a *ProjectAccess) CanShareSession(s Session) bool {
 	return a.Decide(s.Scope.Project, ResTranscript, ActShare, a.transcriptObject(s)).Allowed
+}
+
+// MetaView ist die Session für Metadatenlisten (API, Suche): Titel, Zähler und
+// Adresse nur, wenn der Betrachter das Transkript lesen darf; Gäste ohne
+// Maschine, Branch, Pfad und Besitzer.
+func (a *ProjectAccess) MetaView(s Session) Session { return a.row(s).Session }
+
+// MatchesAxes prüft Maschine und Branch gegen das, was der Betrachter von der
+// Session sieht, nie gegen den Rohwert.
+func (a *ProjectAccess) MatchesAxes(viewed Session, f scope.Axes) bool {
+	return (f.Machine == "" || viewed.Scope.Machine == f.Machine) && (f.Branch == "" || viewed.Scope.Branch == f.Branch)
 }
 
 // SessionView bereitet die Metadaten einer Session für diesen Betrachter auf:

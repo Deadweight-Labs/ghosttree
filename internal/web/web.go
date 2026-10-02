@@ -54,6 +54,7 @@ type pageData struct {
 	Sessions                                          []store.Session
 	Chunks                                            []store.Chunk
 	SessionID                                         int64
+	SessionLinks                                      map[int64]string
 	SessionsV                                         *sessionsView
 	SessionV                                          *sessionView
 	Project, Preview                                  string
@@ -239,7 +240,29 @@ func (a *app) requestPage(w http.ResponseWriter, r *http.Request) {
 		}
 		threadViews = append(threadViews, coordThreadView{ID: thread.ID, Title: thread.Title, Question: thread.Question, State: thread.State, URL: coordThreadURL(home.RoomKey, thread.ID)})
 	}
-	a.renderBrowser(w, r, "request", pageData{Title: detail.Request.HumanID(), Request: detail, RequestThreads: threadViews})
+	var workIDs []int64
+	for _, w := range detail.Work {
+		workIDs = append(workIDs, w.SessionID)
+	}
+	a.renderBrowser(w, r, "request", pageData{Title: detail.Request.HumanID(), Request: detail, RequestThreads: threadViews, SessionLinks: a.sessionLinks(a.access(r), workIDs)})
+}
+
+// sessionLinks nennt zu Sessionnummern aus Verweisen die Adresse in der
+// Weboberfläche, nur für Sessions, die der Betrachter lesen darf. Ohne Eintrag
+// steht kein Link; die Nummer selbst erscheint nie in einer Adresse.
+func (a *app) sessionLinks(pa *store.ProjectAccess, ids []int64) map[int64]string {
+	out := map[int64]string{}
+	for _, id := range ids {
+		if _, done := out[id]; done {
+			continue
+		}
+		sess, err := a.store.SessionByID(id)
+		if err != nil || sess.PublicID == "" || !pa.CanSeeTranscript(sess) {
+			continue
+		}
+		out[id] = "/ui/sessions/" + sess.PublicID
+	}
+	return out
 }
 
 func (a *app) knowledgePage(w http.ResponseWriter, r *http.Request) {
@@ -274,11 +297,15 @@ func (a *app) reviewPage(w http.ResponseWriter, r *http.Request) {
 	}
 	entries = keep(entries, 50, pa.CanSeeKnowledge)
 	items := make([]reviewEntry, 0, len(entries))
+	var evidenceIDs []int64
 	for _, k := range entries {
 		evidence, err := a.store.EvidenceFor(k.ID)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
+		}
+		for _, ev := range evidence {
+			evidenceIDs = append(evidenceIDs, ev.SessionID)
 		}
 		recurrence, err := a.store.Recurrence(k.ID)
 		if err != nil {
@@ -295,7 +322,7 @@ func (a *app) reviewPage(w http.ResponseWriter, r *http.Request) {
 		}
 		items = append(items, reviewEntry{Knowledge: k, Evidence: evidence, MigrationEvidence: migrationProof, Recurrence: recurrence})
 	}
-	a.renderBrowser(w, r, "review", pageData{Title: "Review", Review: items})
+	a.renderBrowser(w, r, "review", pageData{Title: "Review", Review: items, SessionLinks: a.sessionLinks(pa, evidenceIDs)})
 }
 
 func (a *app) contextPage(w http.ResponseWriter, r *http.Request) {

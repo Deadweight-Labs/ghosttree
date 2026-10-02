@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"html"
 	"html/template"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"path"
@@ -15,6 +16,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/redact"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 	"github.com/Deadweight-Labs/ghosttree/internal/transcript"
@@ -26,14 +28,19 @@ import (
 // diese Datei bildet keine zweite Zählung.
 
 const (
-	pageSize        = 50
-	resultLines     = 12
-	liveWindow      = 3 * time.Minute
-	promptsShown    = 30
-	maxQueryRunes   = 200
-	titleArgRunes   = 110
-	windowChunks    = 200
+	pageSize      = 50
+	resultLines   = 12
+	liveWindow    = 3 * time.Minute
+	promptsShown  = 30
+	maxQueryRunes = 200
+	titleArgRunes = 110
+	windowChunks  = 200
+	// maxRenderedRows begrenzt die Zeilen (Codezeilen, Diffzeilen, Blöcke) einer
+	// Seite; maxBlockLines und maxBlockBytes den Text eines einzelnen Blocks.
+	// Was darüber liegt, bleibt gespeichert und wird als gekürzt markiert.
 	maxRenderedRows = 5000
+	maxBlockLines   = 2000
+	maxBlockBytes   = 256 << 10
 )
 
 // ------------------------------------------------------------- Ansichtsmodelle
@@ -162,9 +169,14 @@ type blockView struct {
 	Input        *codeView
 	Output       *codeView
 	Diffs        []diffView
+	Trunc        string // gesetzt, wenn Eingabe, Ausgabe oder Diff gekürzt wurde
 	Stamp        string
 	Notes        []chip
 	NoteLabel    string
+}
+
+type shareConfirm struct {
+	Action, Level, Text, Back string
 }
 
 type levelForm struct {
@@ -174,6 +186,7 @@ type levelForm struct {
 
 type sessionView struct {
 	Missing             bool
+	Confirm             *shareConfirm
 	PID, Title          string
 	Live                bool
 	Meta                string
@@ -414,15 +427,23 @@ func sessionFilterFromQuery(r *http.Request, guest bool) (store.SessionFilter, u
 	return f, keep
 }
 
-func facetSelect(name, label string, opts []store.FacetOption, chosen string, display func(string) string) filterSelect {
+// facetSelect baut eine Auswahl. Mit counts=false (Gäste) steht keine Zahl
+// dabei: jede Zahl wäre eine Aussage über den Bestand.
+func facetSelect(name, label string, opts []store.FacetOption, chosen string, display func(string) string, counts bool) filterSelect {
 	sel := filterSelect{Name: name, Label: label}
 	found := false
+	text := func(v string, n int) string {
+		if !counts {
+			return display(v)
+		}
+		return fmt.Sprintf("%s (%d)", display(v), n)
+	}
 	for _, o := range opts {
 		found = found || o.Value == chosen
-		sel.Options = append(sel.Options, filterOption{Value: o.Value, Label: fmt.Sprintf("%s (%d)", display(o.Value), o.Count), Selected: o.Value == chosen})
+		sel.Options = append(sel.Options, filterOption{Value: o.Value, Label: text(o.Value, o.Count), Selected: o.Value == chosen})
 	}
 	if chosen != "" && !found {
-		sel.Options = append(sel.Options, filterOption{Value: chosen, Label: fmt.Sprintf("%s (0)", display(chosen)), Selected: true})
+		sel.Options = append(sel.Options, filterOption{Value: chosen, Label: text(chosen, 0), Selected: true})
 	}
 	return sel
 }
@@ -498,9 +519,15 @@ func (a *app) sessionsPage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		facets = page.Facets
-		v.Found = foundText(page.Matches, page.Sessions)
+		if !guest {
+			v.Found = foundText(page.Matches, page.Sessions)
+		}
 		for _, g := range page.Groups {
-			v.Groups = append(v.Groups, a.groupView(g, query, kind, now))
+			gv := a.groupView(g, query, kind, now)
+			if guest {
+				gv.Count, gv.MoreText = "", ""
+			}
+			v.Groups = append(v.Groups, gv)
 		}
 		if page.Next != "" {
 			v.Next = linkURL(withQuery(url.Values{"cursor": {page.Next}, "sort": {sortBy}}))
@@ -557,11 +584,11 @@ func (a *app) sessionsPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	chosenProject := filter.Project
-	v.Selects = append(v.Selects, facetSelect("project", msg("sessions.all_projects"), facets.Projects, chosenProject, projectName))
+	v.Selects = append(v.Selects, facetSelect("project", msg("sessions.all_projects"), facets.Projects, chosenProject, projectName, !guest))
 	if !guest && len(facets.Machines) > 0 || filter.Machine != "" {
-		v.Selects = append(v.Selects, facetSelect("machine", msg("sessions.all_machines"), facets.Machines, filter.Machine, func(s string) string { return s }))
+		v.Selects = append(v.Selects, facetSelect("machine", msg("sessions.all_machines"), facets.Machines, filter.Machine, func(s string) string { return s }, !guest))
 	}
-	v.Selects = append(v.Selects, facetSelect("agent", msg("sessions.any_agent"), facets.Harnesses, filter.Harness, agentName))
+	v.Selects = append(v.Selects, facetSelect("agent", msg("sessions.any_agent"), facets.Harnesses, filter.Harness, agentName, !guest))
 	v.Selects = append(v.Selects, periodSelect(r.URL.Query().Get("period")))
 	if v.ShowMine {
 		ev := url.Values{}
@@ -717,41 +744,22 @@ func (a *app) sessionMissing(w http.ResponseWriter, r *http.Request) {
 	a.renderBrowser(w, r, "session", pageData{Title: msg("nav.sessions"), SessionV: &sessionView{Missing: true}})
 }
 
-// lookupSession löst die Adresse auf. Eine alte laufende Nummer führt nur dann
-// weiter, wenn der Betrachter die Session lesen darf; sonst ist sie nicht von
-// einer unbekannten zu unterscheiden.
-func (a *app) lookupSession(r *http.Request, pa *store.ProjectAccess) (sess store.Session, redirect string, ok bool) {
-	raw := r.PathValue("id")
-	if s, err := a.store.SessionByPublicID(raw); err == nil {
-		if !pa.CanSeeTranscript(s) {
-			return store.Session{}, "", false
-		}
-		return s, "", true
+// lookupSession löst die Adresse auf. Nur die zufällige Adresse führt zu einer
+// Session, und nur, wenn der Betrachter das Transkript lesen darf; sonst ist
+// sie nicht von einer unbekannten zu unterscheiden.
+func (a *app) lookupSession(r *http.Request, pa *store.ProjectAccess) (store.Session, bool) {
+	s, err := a.store.SessionByPublicID(r.PathValue("id"))
+	if err != nil || !pa.CanSeeTranscript(s) {
+		return store.Session{}, false
 	}
-	n, err := strconv.ParseInt(raw, 10, 64)
-	if err != nil || n <= 0 {
-		return store.Session{}, "", false
-	}
-	s, err := a.store.SessionByID(n)
-	if err != nil || !pa.CanSeeTranscript(s) || s.PublicID == "" {
-		return store.Session{}, "", false
-	}
-	target := "/ui/sessions/" + s.PublicID
-	if r.URL.RawQuery != "" {
-		target += "?" + r.URL.RawQuery
-	}
-	return s, target, true
+	return s, true
 }
 
 func (a *app) sessionPage(w http.ResponseWriter, r *http.Request) {
 	pa := a.access(r)
-	sess, redirect, ok := a.lookupSession(r, pa)
+	sess, ok := a.lookupSession(r, pa)
 	if !ok {
 		a.sessionMissing(w, r)
-		return
-	}
-	if redirect != "" {
-		http.Redirect(w, r, redirect, http.StatusSeeOther)
 		return
 	}
 	qv := r.URL.Query()
@@ -764,11 +772,18 @@ func (a *app) sessionPage(w http.ResponseWriter, r *http.Request) {
 	if f, err := strconv.Atoi(qv.Get("from")); err == nil && qv.Get("from") != "" {
 		from = f
 	}
-	toolsOn, thinkingOn := qv.Get("tools") != "0", qv.Get("thinking") != "0"
+	// Denkblöcke sind nur auf Wunsch da (thinking=1), Werkzeuge standardmäßig.
+	toolsOn, thinkingOn := qv.Get("tools") != "0", qv.Get("thinking") == "1"
 	expanded := qv.Get("open") == "1"
+	kind := qv.Get("kind")
+	if !slices.Contains(kindKeys, kind) {
+		kind = ""
+	}
 
 	if !a.store.IndexProgress().Done {
-		_ = a.store.IndexSession(sess.ID)
+		if err := a.store.IndexSessionContext(r.Context(), sess.ID); err != nil && r.Context().Err() == nil {
+			slog.Warn("session_index_on_demand", "error", err.Error())
+		}
 	}
 	view := pa.SessionView(sess)
 	v := &sessionView{
@@ -791,8 +806,11 @@ func (a *app) sessionPage(w http.ResponseWriter, r *http.Request) {
 		if !toolsOn {
 			out.Set("tools", "0")
 		}
-		if !thinkingOn {
-			out.Set("thinking", "0")
+		if thinkingOn {
+			out.Set("thinking", "1")
+		}
+		if kind != "" {
+			out.Set("kind", kind)
 		}
 		if expanded {
 			out.Set("open", "1")
@@ -814,8 +832,8 @@ func (a *app) sessionPage(w http.ResponseWriter, r *http.Request) {
 
 	if qv.Get("back") == "1" && q != "" {
 		bq := url.Values{"q": {q}}
-		if k := qv.Get("kind"); slices.Contains(kindKeys, k) && k != "" {
-			bq.Set("kind", k)
+		if kind != "" {
+			bq.Set("kind", kind)
 		}
 		v.BackResults = chip{Href: "/ui/sessions?" + bq.Encode(), Text: msg("sessions.back_to_results", q)}
 	}
@@ -837,8 +855,8 @@ func (a *app) sessionPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Suche in der Session: Positionen gelten für die ganze Session.
-	hlKind := ""
-	if thinkingOn {
+	hlKind := kind
+	if kind == "" && thinkingOn {
 		hlKind = "all"
 	}
 	var hits []int
@@ -849,7 +867,7 @@ func (a *app) sessionPage(w http.ResponseWriter, r *http.Request) {
 	v.FindAction = "/ui/sessions/" + sess.PublicID
 	v.Hidden = nil
 	for _, key := range []string{"tools", "thinking", "open", "back", "kind"} {
-		if val := state(url.Values{"kind": {qv.Get("kind")}}).Get(key); val != "" {
+		if val := state(nil).Get(key); val != "" {
 			v.Hidden = append(v.Hidden, chip{Text: key, Href: val})
 		}
 	}
@@ -876,7 +894,11 @@ func (a *app) sessionPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	v.ToolsHref = sessURL(toggleParam("tools", toolsOn), "")
-	v.ThinkingHref = sessURL(toggleParam("thinking", thinkingOn), "")
+	if thinkingOn {
+		v.ThinkingHref = sessURL(nil, "", "thinking")
+	} else {
+		v.ThinkingHref = sessURL(url.Values{"thinking": {"1"}}, "")
+	}
 	if expanded {
 		v.ExpandHref = sessURL(nil, "", "open")
 	} else {
@@ -897,11 +919,20 @@ func (a *app) sessionPage(w http.ResponseWriter, r *http.Request) {
 	}
 	v.Empty = len(win.Chunks) == 0
 	hl := newHighlighter(q)
-	v.Blocks = buildBlocks(sess, win.Chunks, hl, at, expanded, toolsOn, thinkingOn, created)
+	blocks, cut := buildBlocks(sess, win.Chunks, hl, at, expanded, toolsOn, thinkingOn, created)
+	v.Blocks = blocks
 	if win.Earlier {
 		v.Earlier = chip{Href: sessURL(url.Values{"from": {strconv.Itoa(win.EarlierFrom)}}, "", "at"), Text: msg("sessions.show_earlier", windowChunks)}
 	}
-	if win.Later {
+	if cut > 0 {
+		rest := 0
+		for _, c := range win.Chunks {
+			if c.Seq >= cut {
+				rest++
+			}
+		}
+		v.Later = chip{Href: sessURL(url.Values{"from": {strconv.Itoa(cut)}}, "", "at"), Text: msg("sessions.show_later", rest)}
+	} else if win.Later {
 		v.Later = chip{Href: sessURL(url.Values{"from": {strconv.Itoa(win.LaterFrom)}}, "", "at"), Text: msg("sessions.show_later", windowChunks)}
 	}
 
@@ -987,8 +1018,8 @@ func detailMeta(s store.Session) string {
 // sessionShare stellt die Freigabestufe ein (POST, CSRF, interaktive Sitzung).
 func (a *app) sessionShare(w http.ResponseWriter, r *http.Request) {
 	pa := a.access(r)
-	sess, redirect, ok := a.lookupSession(r, pa)
-	if !ok || redirect != "" {
+	sess, ok := a.lookupSession(r, pa)
+	if !ok {
 		a.sessionMissing(w, r)
 		return
 	}
@@ -998,6 +1029,21 @@ func (a *app) sessionShare(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "unknown level", http.StatusBadRequest)
 		return
+	}
+	// Vor der Stufe "mit Gästen" fragt die Seite nach, wenn das Transkript
+	// aussieht, als enthielte es Zugangsdaten. Die Frage kommt nur dem, der
+	// teilen darf.
+	if level == store.VisGuests && sess.Visibility != store.VisGuests && r.FormValue("confirm") != "1" && pa.CanShareSession(sess) {
+		if n := a.countSecrets(sess.ID); n > 0 {
+			text := msg("sessions.secrets_many", n)
+			if n == 1 {
+				text = msg("sessions.secrets_one")
+			}
+			back := "/ui/sessions/" + sess.PublicID
+			a.renderBrowser(w, r, "session", pageData{Title: msg("nav.sessions"), SessionV: &sessionView{
+				PID: sess.PublicID, Confirm: &shareConfirm{Action: back + "/share", Level: level, Text: text, Back: back}}})
+			return
+		}
 	}
 	if err := a.store.SetSessionVisibility(sess.ID, pa, level); err != nil {
 		switch {
@@ -1013,12 +1059,49 @@ func (a *app) sessionShare(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/ui/sessions/"+sess.PublicID, http.StatusSeeOther)
 }
 
+// countSecrets zählt mögliche Zugangsdaten im Rohtranskript.
+func (a *app) countSecrets(id int64) int {
+	n := 0
+	for from := 0; ; {
+		chunks, err := a.store.ReadSession(id, from, 500)
+		if err != nil || len(chunks) == 0 {
+			return n
+		}
+		for _, c := range chunks {
+			n += len(redact.FindSecrets(c.Raw))
+			from = c.Seq + 1
+		}
+	}
+}
+
 // --------------------------------------------------------- Blöcke aufbauen
 
 var fenceRe = regexp.MustCompile("(?s)```[a-zA-Z0-9_+-]*\n?(.*?)(?:```|$)")
 
+// capText kürzt den Text eines Blocks auf maxBlockBytes und maxBlockLines. Es
+// schneidet an einer Zeilen- oder Zeichengrenze und sagt, ob gekürzt wurde.
+func capText(s string) (string, bool) {
+	cut := false
+	if len(s) > maxBlockBytes {
+		s, cut = strings.ToValidUTF8(s[:maxBlockBytes], ""), true
+		if i := strings.LastIndexByte(s, '\n'); i > 0 {
+			s = s[:i]
+		}
+	}
+	lines := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\n' {
+			if lines++; lines >= maxBlockLines {
+				return s[:i], true
+			}
+		}
+	}
+	return s, cut
+}
+
 // messageHTML formatiert Fließtext: Absätze und umzäunte Codeblöcke.
 func messageHTML(text string, hl highlighter, current bool) template.HTML {
+	text, cut := capText(text)
 	var b strings.Builder
 	pos := 0
 	para := func(s string) {
@@ -1035,6 +1118,9 @@ func messageHTML(text string, hl highlighter, current bool) template.HTML {
 		pos = m[1]
 	}
 	para(text[pos:])
+	if cut {
+		b.WriteString(`<p class="trunc">` + html.EscapeString(msg("sessions.truncated")) + "</p>")
+	}
 	return template.HTML(b.String())
 }
 
@@ -1056,29 +1142,34 @@ func inlineHTML(p string, hl highlighter, current bool) string {
 	return b.String()
 }
 
-func codeLines(text string, hl highlighter, current bool) []codeLine {
-	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
+// codeLines zerlegt Text in nummerierte Zeilen, höchstens maxBlockLines; der
+// zweite Wert sagt, ob gekürzt wurde, der dritte nennt die echte Zeilenzahl.
+func codeLines(text string, hl highlighter, current bool) ([]codeLine, bool, int) {
+	text = strings.TrimRight(text, "\n")
+	total := strings.Count(text, "\n") + 1
+	text, cut := capText(text)
+	lines := strings.Split(text, "\n")
 	out := make([]codeLine, len(lines))
 	for i, l := range lines {
 		out[i] = codeLine{N: i + 1, HTML: hl.html(l, current)}
 	}
-	return out
+	return out, cut, total
 }
 
 // outputCode zeigt die ersten Zeilen und legt den Rest hinter einen Schalter.
-func outputCode(label, text string, hl highlighter, current, all bool) *codeView {
-	lines := codeLines(text, hl, current)
-	cv := &codeView{Label: label, Total: msg("sessions.n_lines", len(lines))}
-	if len(lines) == 1 {
+func outputCode(label, text string, hl highlighter, current, all bool) (*codeView, bool) {
+	lines, cut, total := codeLines(text, hl, current)
+	cv := &codeView{Label: label, Total: msg("sessions.n_lines", total)}
+	if total == 1 {
 		cv.Total = msg("sessions.one_line")
 	}
 	if all || len(lines) <= resultLines+2 {
 		cv.Head = lines
-		return cv
+		return cv, cut
 	}
 	cv.Head, cv.Rest = lines[:resultLines], lines[resultLines:]
 	cv.RestLabel = msg("sessions.show_all_lines", len(lines))
-	return cv
+	return cv, cut
 }
 
 func diffStat(files []transcript.DiffFile) (add, del int) {
@@ -1095,7 +1186,25 @@ func diffStat(files []transcript.DiffFile) (add, del int) {
 	return
 }
 
-func buildBlocks(sess store.Session, chunks []store.Chunk, hl highlighter, at int, expanded, toolsOn, thinkingOn bool, links []store.SessionLink) []blockView {
+// blockRows zählt die Zeilen, die ein Block auf der Seite belegt.
+func blockRows(bv blockView) int {
+	n := 1
+	for _, cv := range []*codeView{bv.Input, bv.Output} {
+		if cv != nil {
+			n += len(cv.Head) + len(cv.Rest)
+		}
+	}
+	for _, d := range bv.Diffs {
+		n += len(d.Lines)
+	}
+	return n
+}
+
+// buildBlocks baut die Blöcke eines Fensters, zusammen höchstens
+// maxRenderedRows Zeilen. cut ist die Sequenz, ab der die Seite endet und ein
+// weiteres Fenster nötig ist (0: nichts abgeschnitten). Das Ziel eines
+// Treffers steht immer auf der Seite.
+func buildBlocks(sess store.Session, chunks []store.Chunk, hl highlighter, at int, expanded, toolsOn, thinkingOn bool, links []store.SessionLink) (out []blockView, cut int) {
 	var raw []transcript.Block
 	for _, c := range chunks {
 		parsed := transcript.Parse(sess.Harness, c.Seq, c.Raw).Blocks
@@ -1120,10 +1229,16 @@ func buildBlocks(sess store.Session, chunks []store.Chunk, hl highlighter, at in
 			ni++
 		}
 	}
-	var out []blockView
 	seen := map[int]bool{}
+	rows, last := 0, -1
 	for i, b := range blocks {
 		if bv, ok := blockFor(sess, b, hl, at, expanded, toolsOn, thinkingOn); ok {
+			n := blockRows(bv)
+			if !bv.Target && len(out) > 0 && rows+n > maxRenderedRows {
+				return out, max(b.Seq, last+1)
+			}
+			rows += n
+			last = b.Seq
 			// Several blocks can come from one stored line; the first carries
 			// the address of the line, the others are reached through it.
 			if seen[b.Seq] && bv.Kind != "tool" && bv.Kind != "result" {
@@ -1147,7 +1262,7 @@ func buildBlocks(sess store.Session, chunks []store.Chunk, hl highlighter, at in
 			out = append(out, blockView{Kind: "note", NoteLabel: msg("sessions.created"), Notes: chips})
 		}
 	}
-	return out
+	return out, 0
 }
 
 func blockFor(sess store.Session, b transcript.Block, hl highlighter, at int, expanded, toolsOn, thinkingOn bool) (blockView, bool) {
@@ -1191,8 +1306,12 @@ func toolBlock(b transcript.Block, hl highlighter, target, expanded bool) blockV
 		bv.Tool = msg("sessions.who.output")
 		bv.Result = resultSummary(b)
 		if b.HasOutput {
-			bv.Output = outputCode("", b.Output, hl, target, false)
+			var cut bool
+			bv.Output, cut = outputCode("", b.Output, hl, target, false)
 			bv.Output.Label = msg("sessions.who.output")
+			if cut {
+				bv.Trunc = msg("sessions.truncated")
+			}
 		}
 		return bv
 	}
@@ -1204,9 +1323,15 @@ func toolBlock(b transcript.Block, hl highlighter, target, expanded bool) blockV
 	bv.Result = resultSummary(b)
 	switch {
 	case len(b.Diff) > 0:
+		budget := maxBlockLines
 		for _, f := range b.Diff {
 			dv := diffView{Path: f.Path}
 			for _, l := range f.Lines {
+				if budget == 0 {
+					bv.Trunc = msg("sessions.truncated")
+					break
+				}
+				budget--
 				cls, sign := "dl", " "
 				switch l.Op {
 				case '+':
@@ -1220,13 +1345,19 @@ func toolBlock(b transcript.Block, hl highlighter, target, expanded bool) blockV
 			}
 			bv.Diffs = append(bv.Diffs, dv)
 		}
-	case b.Input != "" && strings.Contains(b.Input, "\n"):
-		bv.Input = &codeView{Label: msg("sessions.who.command"), Head: codeLines(b.Input, hl, target)}
-	case b.Input != "" && b.Tool == "Bash" || b.Tool == "exec_command":
-		bv.Input = &codeView{Label: msg("sessions.who.command"), Head: codeLines(b.Input, hl, target)}
+	case b.Input != "" && strings.Contains(b.Input, "\n"), b.Input != "" && b.Tool == "Bash" || b.Tool == "exec_command":
+		lines, cut, _ := codeLines(b.Input, hl, target)
+		bv.Input = &codeView{Label: msg("sessions.who.command"), Head: lines}
+		if cut {
+			bv.Trunc = msg("sessions.truncated")
+		}
 	}
 	if b.HasOutput {
-		bv.Output = outputCode(msg("sessions.who.output"), b.Output, hl, target, false)
+		var cut bool
+		bv.Output, cut = outputCode(msg("sessions.who.output"), b.Output, hl, target, false)
+		if cut {
+			bv.Trunc = msg("sessions.truncated")
+		}
 	}
 	return bv
 }
