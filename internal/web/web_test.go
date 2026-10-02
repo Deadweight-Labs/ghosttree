@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -469,5 +470,69 @@ func TestWebSessionEndsWhenTokenOrAccountStopsBeingValid(t *testing.T) {
 	}
 	if code, loc := status(valid); code != http.StatusSeeOther || loc != "/ui/login" {
 		t.Fatalf("sibling session of disabled account: %d %q", code, loc)
+	}
+}
+
+// A form POST from a page with Referrer-Policy: no-referrer carries
+// "Origin: null" (Fetch spec). The code pages must use a policy under which
+// the browser sends the real origin.
+func TestCodePageSendsStrictOriginReferrerPolicy(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "ref.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	srv := httptest.NewServer(New(st))
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/ui/login/code?code=abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if got := resp.Header.Get("Referrer-Policy"); got != "strict-origin" {
+		t.Fatalf("Referrer-Policy=%q, want strict-origin", got)
+	}
+}
+
+func TestCodeAndOIDCStartRejectNullAndForeignOrigin(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "orig.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if _, err := st.AddPerson("alice"); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(New(st))
+	defer srv.Close()
+	code, _, err := st.CreateAccountCode(store.CodeLogin, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	post := func(path, origin string) int {
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+path, strings.NewReader(url.Values{"code": {code}}.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Origin", origin)
+		noRedirect := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		resp, err := noRedirect.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	for _, path := range []string{"/ui/login/code", "/ui/login/oidc"} {
+		for _, origin := range []string{"null", "https://evil.example"} {
+			if got := post(path, origin); got != http.StatusForbidden {
+				t.Fatalf("%s origin %q: status=%d, want 403", path, origin, got)
+			}
+			if st.CodeKindFor(code) != store.CodeLogin {
+				t.Fatalf("%s origin %q consumed the code", path, origin)
+			}
+		}
+	}
+	// The same code still works with the real origin.
+	if got := post("/ui/login/code", srv.URL); got != http.StatusSeeOther {
+		t.Fatalf("real origin: status=%d, want 303", got)
 	}
 }

@@ -530,7 +530,7 @@ func TestLoginLinkIsConfirmedByPostAndSingleUse(t *testing.T) {
 			t.Fatal(err)
 		}
 		text := body(t, resp)
-		if resp.StatusCode != http.StatusOK || !strings.Contains(text, `method="post"`) || resp.Header.Get("Referrer-Policy") != "no-referrer" {
+		if resp.StatusCode != http.StatusOK || !strings.Contains(text, `method="post"`) || resp.Header.Get("Referrer-Policy") != "strict-origin" {
 			t.Fatalf("status=%d referrer=%q", resp.StatusCode, resp.Header.Get("Referrer-Policy"))
 		}
 	}
