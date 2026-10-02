@@ -51,7 +51,9 @@ func TestBatchSizeCountsTheSerializedBodyIncludingText(t *testing.T) {
 	writeLines(t, fp, 30, strings.Repeat("<", 1<<20))
 	old := uploadBatchBytes
 	uploadBatchBytes = 8 << 20
-	defer func() { uploadBatchBytes = old }()
+	oldLine := serverLineLimit
+	serverLineLimit = 10 << 20
+	defer func() { uploadBatchBytes, serverLineLimit = old, oldLine }()
 	up := &limitUp{limit: 10 << 20}
 	if err := SyncFile(fp, "claude-code", up, newTestState(dir), "m"); err != nil {
 		t.Fatal(err)
@@ -92,6 +94,9 @@ func TestSingleLineTooLargeForTheServerIsReplacedByAMarker(t *testing.T) {
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "s.jsonl")
 	writeLines(t, fp, 1, strings.Repeat("a", 300<<10))
+	old := serverLineLimit
+	serverLineLimit = 100 << 10
+	defer func() { serverLineLimit = old }()
 	up := &limitUp{limit: 100 << 10}
 	st := newTestState(dir)
 	if err := SyncFile(fp, "claude-code", up, st, "m"); err != nil {
@@ -103,6 +108,27 @@ func TestSingleLineTooLargeForTheServerIsReplacedByAMarker(t *testing.T) {
 	}
 	if st.Files[fp].Offset == 0 {
 		t.Error("offset did not advance past the oversized line")
+	}
+}
+
+// A 413 for a line that is within the server's own limit comes from somewhere
+// else (a proxy limit): replacing the line would lose it for good, so the file
+// stops and says so.
+func TestRefusalBelowTheServerLimitPausesTheFileInsteadOfReplacingTheLine(t *testing.T) {
+	dir := t.TempDir()
+	fp := filepath.Join(dir, "s.jsonl")
+	writeLines(t, fp, 1, strings.Repeat("a", 300<<10))
+	up := &limitUp{limit: 100 << 10} // refuses, although far below serverLineLimit
+	st := newTestState(dir)
+	err := SyncFile(fp, "claude-code", up, st, "m")
+	if err == nil || !strings.Contains(err.Error(), "paused") {
+		t.Fatalf("want a loud pause error, got %v", err)
+	}
+	if len(up.chunks[1]) != 0 {
+		t.Errorf("the line was replaced: %+v", up.chunks[1])
+	}
+	if f := st.Files[fp]; f != nil && f.Offset != 0 {
+		t.Errorf("offset advanced to %d", f.Offset)
 	}
 }
 

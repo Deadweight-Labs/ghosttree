@@ -355,6 +355,12 @@ func (a *api) shareSession(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
+	// Wer das Transkript nicht lesen darf, bekommt dieselbe 404 wie bei einer
+	// unbekannten Nummer: ein 403 verriete, dass es die Session gibt.
+	if err := a.access(r).CheckTranscript(sess, store.ActRead); errors.Is(err, store.ErrAccessNotFound) {
+		denyAccess(w, err)
+		return
+	}
 	// Teilen ist Sache des Besitzers, auch im Log-Modus: die Freigabe ändert,
 	// was andere lesen dürfen.
 	if denyAccess(w, a.access(r).CheckTranscript(sess, store.ActShare)) {
@@ -376,7 +382,13 @@ func (a *api) shareSession(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"id": id, "shared": body.Shared})
+	out := map[string]any{"shared": body.Shared}
+	if a.access(r).SeesSessionNumbers(sess.Scope.Project) {
+		out["id"] = id
+	} else {
+		out["public_id"] = sess.PublicID
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // checkKnowledgeRef prüft eine Aktion auf einen Eintrag, ohne den Text zu laden.

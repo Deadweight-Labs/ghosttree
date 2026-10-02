@@ -58,8 +58,8 @@ Versioning, with pre-1.0 compatibility rules described in
   session with next/previous, and loads 200 messages at a time. The owner of a
   session or the project owner sets it to private, project members, or including
   guests; guests see only sessions shared with them and no machine, branch or
-  owner. Session addresses are random; a numeric address looks like an unknown
-  session. Sessions you cannot read show as "Private" rows without title or
+  owner. Session addresses are random; members may still use the running number,
+  for a guest every number looks like an unknown session. Sessions you cannot read show as "Private" rows without title or
   link. Thinking blocks are hidden until you turn them on. Sharing with guests
   asks first when the transcript looks like it contains credentials ("3 possible
   secrets in this session. Share anyway?"). A block shows at most 2000 lines or
@@ -100,13 +100,26 @@ Versioning, with pre-1.0 compatibility rules described in
   out nor reveal how many exist. Guests no longer see the internal session number
   anywhere (API, search, `context_sessions`, the response to creating a session);
   they address a session by its random address, which `/api/sessions/{id}` and
-  `/chunks` accept in place of the number (members and older collectors keep the
-  number; an older collector run by a guest needs an update). A page of the
+  `/chunks` accept in place of the number (members and older collectors of
+  members keep the number; for a guest every number answers like an unknown
+  session, so an older collector run by a guest stops uploading and needs an
+  update). A page of the
   transcript ends between stored lines, never inside one. Times use the server's
   zone everywhere. The credentials question when sharing with guests is a page
   you reach by redirect, not the answer to a POST. Opening a session while the
   background indexing runs is limited in time and bytes per step and gives up
   after 2 seconds with what is indexed. `ctx account ... --db ./x.db` opens.
+- Fixed: more review findings on sessions. Sharing a session you may not read
+  answers 404 exactly like an unknown number (it was 403), and the answer to a
+  guest names the address instead of the number. The readable set of sessions is
+  now part of the SQL query, so a search costs the same however many hidden
+  sessions exist, and listing no longer reads a changing `last_seen_at` page by
+  page. A large upload waiting for its slot no longer uses up the server's read
+  timeout. The collector replaces a single line with a marker only when it is
+  over the server's 64 MiB limit per request; a 413 for a smaller line (a proxy
+  limit) pauses that file with a log line instead of discarding the line. A page
+  of a transcript shows at most 2000 blocks, also inside one stored line, with a
+  "truncated" note.
 - Added: `ctx join --server <url> --pair XXXX-XXXX` pairs a machine with the
   code from an invitation page (REQ-434, part 3). It opens a loopback
   listener on 127.0.0.1 only for the duration of the command, proves the

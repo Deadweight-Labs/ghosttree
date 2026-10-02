@@ -850,3 +850,60 @@ func (a *ProjectAccess) MatchesAxes(viewed Session, f scope.Axes) bool {
 // SessionView bereitet die Metadaten einer Session für diesen Betrachter auf:
 // ein Gast sieht weder Maschine, Branch, Pfad noch Besitzer.
 func (a *ProjectAccess) SessionView(s Session) Session { return a.guestView(s) }
+
+// SessionPrefilter ist die Menge lesbarer Transkripte als SQL-Bedingung auf
+// sessions. Where leer: keine Einschränkung. Exact: die Bedingung deckt genau
+// die Matrix ab, die Zeilenprüfung ist danach überflüssig.
+type SessionPrefilter struct {
+	Where string
+	Args  []any
+	Exact bool
+}
+
+func (p SessionPrefilter) apply(where string, args []any) (string, []any) {
+	if p.Where == "" {
+		return where, args
+	}
+	return where + ` AND (` + p.Where + `)`, append(args, p.Args...)
+}
+
+// TranscriptPrefilter spiegelt die Lese-Regel für Transkripte (matrixAllows,
+// decideGlobal, unbeanspruchte Projekte) als SQL: Besitzer, Gast-Stufe ab Gast,
+// Freigabe ab member, alles ab lead, der Instanz-Admin zusätzlich in
+// unbeanspruchten Projekten. Die Abfrage hängt damit nicht davon ab, wie viele
+// verborgene Sessions es gibt (#2447). Ohne Durchsetzung gilt alles.
+func (a *ProjectAccess) TranscriptPrefilter() SessionPrefilter {
+	if !a.st.AccessEnforced() {
+		return SessionPrefilter{Exact: true}
+	}
+	if !a.valid {
+		return SessionPrefilter{Where: `0`, Exact: true}
+	}
+	a.loadRoles()
+	a.loadMachines()
+	var guests, members, leads []string
+	for remote, r := range a.roles {
+		switch rank := RoleRank(r.Role); {
+		case rank >= 3:
+			leads = append(leads, remote)
+		case rank == 2:
+			members = append(members, remote)
+		case rank == 1:
+			guests = append(guests, remote)
+		}
+	}
+	list := func(in []string) string {
+		b, _ := json.Marshal(in)
+		return string(b)
+	}
+	owner := a.owner
+	q := `(CASE WHEN account_id = 0 THEN ? ELSE account_id END) = ?
+		OR (visibility = 'guests' AND project IN (SELECT value FROM json_each(?)))
+		OR ((shared = 1 OR COALESCE(visibility,'') NOT IN ('','private')) AND project IN (SELECT value FROM json_each(?)))
+		OR project IN (SELECT value FROM json_each(?))`
+	args := []any{owner, a.account, list(guests), list(members), list(leads)}
+	if a.admin {
+		q += ` OR (project != '' AND project NOT IN (SELECT remote FROM projects))`
+	}
+	return SessionPrefilter{Where: q, Args: args, Exact: true}
+}

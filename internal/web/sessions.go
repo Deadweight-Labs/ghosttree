@@ -43,6 +43,10 @@ const (
 	maxBlockBytes   = 256 << 10
 )
 
+// maxBlocksPerPage begrenzt die Blöcke einer Seite hart, auch innerhalb einer
+// gespeicherten Zeile. Eine Variable, damit der Test sie senken oder heben kann.
+var maxBlocksPerPage = 2000
+
 // ------------------------------------------------------------- Ansichtsmodelle
 
 type chip struct {
@@ -1248,14 +1252,24 @@ func buildBlocks(sess store.Session, chunks []store.Chunk, hl highlighter, at in
 		}
 	}
 	seen := map[int]bool{}
-	rows, last := 0, -1
+	rows, last, shown, capped := 0, -1, 0, -1
 	for i, b := range blocks {
 		if bv, ok := blockFor(sess, b, hl, at, expanded, toolsOn, thinkingOn); ok {
 			n := blockRows(bv)
+			// Harte Obergrenze an Blöcken je Seite, auch innerhalb einer
+			// gespeicherten Zeile (die Seite endet sonst nie): der Rest der Zeile
+			// bleibt weg, mit Hinweis, und das Ziel eines Treffers bleibt.
+			if shown >= maxBlocksPerPage && b.Seq == last && !bv.Target {
+				if capped != b.Seq {
+					out = append(out, blockView{Kind: "note", NoteLabel: msg("sessions.truncated")})
+					capped = b.Seq
+				}
+				continue
+			}
 			// Die Seite endet zwischen zwei gespeicherten Zeilen, nie in einer:
 			// das nächste Fenster beginnt bei einer Zeile und könnte die übrigen
 			// Blöcke dieser Zeile nicht mehr erreichen.
-			if !bv.Target && len(out) > 0 && rows+n > maxRenderedRows && b.Seq != last {
+			if !bv.Target && len(out) > 0 && (rows+n > maxRenderedRows || shown >= maxBlocksPerPage) && b.Seq != last {
 				return out, b.Seq
 			}
 			rows += n
@@ -1266,6 +1280,7 @@ func buildBlocks(sess store.Session, chunks []store.Chunk, hl highlighter, at in
 				bv.ID = ""
 			}
 			seen[b.Seq] = true
+			shown++
 			out = append(out, bv)
 		}
 		// Eine Notiz steht hinter dem Block, in dessen Spanne die Session das

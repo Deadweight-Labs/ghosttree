@@ -80,6 +80,10 @@ const smallBody = 4 << 20
 
 var bigBodies = make(chan struct{}, 2)
 
+// bodyReadWindow ist die Zeit, die ein großer Upload nach Erhalt seines Platzes
+// zum Lesen des Körpers hat (so lang wie ReadTimeout in cmd/ctx/serve.go).
+const bodyReadWindow = 30 * time.Second
+
 const maxSessionBody = 64 << 10
 
 // readLimitedJSON liest einen JSON-Körper bis limit Bytes (413 darüber).
@@ -119,6 +123,10 @@ func (a *api) appendChunks(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 		}
+		// Das Warten auf den Platz darf nicht von der Lesefrist des Servers
+		// abgehen: sie beginnt neu, sobald der Körper gelesen werden darf. Ein
+		// Server ohne Fristen oder ein Recorder meldet ErrNotSupported.
+		_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(bodyReadWindow))
 	}
 	var body struct {
 		Chunks []store.Chunk `json:"chunks"`
@@ -145,7 +153,7 @@ func (a *api) listSessions(w http.ResponseWriter, r *http.Request) {
 	// verborgene Sessions es gibt oder wie aktuell sie sind.
 	sessions, err := a.st.ListSessionsVisible(dbFilter, limit, ownerFilter(r), func(sess store.Session) bool {
 		return pa.CanSeeSessionMeta(sess) && pa.MatchesAxes(pa.MetaView(sess), viewFilter)
-	})
+	}, store.SessionPrefilter{})
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
@@ -588,14 +596,21 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 		// Mit Durchsetzung steht die lesbare Menge vor dem Rang fest: ein
 		// verborgener Treffer darf weder einen sichtbaren verdrängen noch
 		// verraten, wie viele es gibt (#2447). Das Limit gilt danach.
+		// Die Lese-Regel steckt als SQL in der Abfrage (TranscriptPrefilter): die
+		// Laufzeit hängt nicht von verborgenen Sessions ab, und wer ohnehin
+		// alles in seinem Filter lesen darf, braucht keine Zeilenprüfung.
 		var readable func(store.Session) bool
+		var pre store.SessionPrefilter
 		if a.st.AccessEnforced() {
 			fetchSessions = limit
-			readable = func(sess store.Session) bool {
-				return pa.CanSeeTranscript(sess) && pa.MatchesAxes(pa.MetaView(sess), viewFilter)
+			pre = pa.TranscriptPrefilter()
+			if !pre.Exact || viewFilter.Machine != "" || viewFilter.Branch != "" {
+				readable = func(sess store.Session) bool {
+					return pa.CanSeeTranscript(sess) && pa.MatchesAxes(pa.MetaView(sess), viewFilter)
+				}
 			}
 		}
-		hits, err := a.st.SearchSessionsVisible(q, dbFilter, r.URL.Query().Get("exclude_session"), fetchSessions, readable)
+		hits, err := a.st.SearchSessionsVisible(q, dbFilter, r.URL.Query().Get("exclude_session"), fetchSessions, readable, pre)
 		if err != nil {
 			writeStoreError(w, http.StatusInternalServerError, err)
 			return

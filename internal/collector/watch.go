@@ -179,10 +179,16 @@ func wireSize(c store.Chunk) int {
 	return len(b) + 1
 }
 
+// serverLineLimit ist die Größe, bis zu der der Server eine einzelne Zeile
+// annimmt (server.maxChunkBody, 64 MiB). Nur eine Zeile darüber geht als
+// Platzhalter hinaus; alles darunter ist ein anderes Limit, das der Betreiber
+// beheben muss.
+var serverLineLimit = 64 << 20
+
 // uploadSplit lädt einen Stapel hoch. Lehnt der Server ihn als zu groß ab (413),
 // wird er halbiert und beide Hälften einzeln gesendet; ein Wiederholen
-// desselben Stapels käme nie durch. Eine einzelne Zeile, die auch allein zu
-// groß ist, geht als Platzhalter mit derselben Nummer hinaus, damit die Folge
+// desselben Stapels käme nie durch. Eine einzelne Zeile, die auch allein über
+// serverLineLimit liegt, geht als Platzhalter mit derselben Nummer hinaus, damit die Folge
 // lückenlos bleibt und der Lauf weiterkommt.
 func uploadSplit(up Uploader, ref store.SessionRef, batch []store.Chunk) error {
 	err := sendChunks(up, ref, batch)
@@ -191,6 +197,14 @@ func uploadSplit(up Uploader, ref store.SessionRef, batch []store.Chunk) error {
 	}
 	if len(batch) == 1 {
 		c := batch[0]
+		if wireSize(c) <= serverLineLimit {
+			// Unter der Grenze des Servers: die Ablehnung kommt von woanders
+			// (Proxy-Limit). Ein Platzhalter verlöre die Zeile für immer; die
+			// Datei hält an und wird im nächsten Lauf neu versucht.
+			err := fmt.Errorf("session line %d (%d bytes) was refused with 413 although it is within the server limit of %d bytes (a proxy limit?); file paused, nothing was replaced: %w", c.Seq, wireSize(c), serverLineLimit, err)
+			log.Print(err)
+			return err
+		}
 		note, _ := json.Marshal(map[string]any{"type": "ghosttree-omitted", "reason": "line too large for upload", "bytes": len(c.Raw)})
 		log.Printf("session line %d is %d bytes and was refused by the server; uploading a marker instead", c.Seq, len(c.Raw))
 		return sendChunks(up, ref, []store.Chunk{{Seq: c.Seq, Role: "other", Raw: string(note)}})

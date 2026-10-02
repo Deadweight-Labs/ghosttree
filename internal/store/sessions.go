@@ -242,11 +242,11 @@ func (s *Store) ListSessionsOwned(filter scope.Axes, limit int, ownerPrincipalID
 // ListSessionsVisible liefert die neuesten Sessions, für die keep gilt, höchstens
 // limit viele. Die Sichtbarkeit entscheidet vor dem Abschneiden: wer nur einen
 // Teil des Bestands sehen darf, bekommt dieselbe Antwort, egal wie viele und wie
-// aktuelle verborgene Sessions es gibt (#2447). Die Zeilen werden seitenweise
-// gelesen, bis das Limit erreicht oder der Bestand zu Ende ist.
-func (s *Store) ListSessionsVisible(filter scope.Axes, limit int, ownerPrincipalID string, keep func(Session) bool) ([]Session, error) {
+// aktuelle verborgene Sessions es gibt (#2447). pre schränkt die Abfrage schon
+// in SQL auf die lesbare Menge ein; keep prüft die übrigen Zeilen (nil: alle).
+func (s *Store) ListSessionsVisible(filter scope.Axes, limit int, ownerPrincipalID string, keep func(Session) bool, pre SessionPrefilter) ([]Session, error) {
 	if s.reader != nil {
-		return s.reader.ListSessionsVisible(filter, limit, ownerPrincipalID, keep)
+		return s.reader.ListSessionsVisible(filter, limit, ownerPrincipalID, keep, pre)
 	}
 	if limit <= 0 {
 		limit = 50
@@ -260,6 +260,7 @@ func (s *Store) ListSessionsVisible(filter scope.Axes, limit int, ownerPrincipal
 		where += ` AND (CASE WHEN account_id = 0 THEN ? ELSE account_id END) = ?`
 		args = append(args, instanceOwnerID(s.db), id)
 	}
+	where, args = pre.apply(where, args)
 	out := []Session{}
 	err := s.eachSession(where, args, func(sess Session) (bool, error) {
 		if keep == nil || keep(sess) {
@@ -271,11 +272,12 @@ func (s *Store) ListSessionsVisible(filter scope.Axes, limit int, ownerPrincipal
 }
 
 // visibleSessionIDs sind die Nummern der Sessions, für die keep gilt.
-func (s *Store) visibleSessionIDs(filter scope.Axes, keep func(Session) bool) ([]int64, error) {
+func (s *Store) visibleSessionIDs(filter scope.Axes, keep func(Session) bool, pre SessionPrefilter) ([]int64, error) {
 	where, args := filter.FilterWhere()
+	where, args = pre.apply(where, args)
 	ids := []int64{}
 	err := s.eachSession(where, args, func(sess Session) (bool, error) {
-		if keep(sess) {
+		if keep == nil || keep(sess) {
 			ids = append(ids, sess.ID)
 		}
 		return true, nil
@@ -289,43 +291,61 @@ func idsJSONOf(ids []int64) string {
 }
 
 // eachSession ruft fn für die Sessions, neueste zuerst, bis fn false liefert.
-// Gelesen wird in Seiten nach (last_seen_at, id); es bleibt keine Abfrage offen,
+// Die Reihenfolge steht mit einer einzigen Abfrage fest (nur die Nummern, eine
+// Anweisung ist ein Schnappschuss); die Zeilen kommen danach seitenweise nach
+// Nummer. So verschiebt ein Upload, der last_seen_at ändert, während gelesen
+// wird, weder Zeilen noch doppelt sie, und es bleibt keine Abfrage offen,
 // während fn läuft.
 func (s *Store) eachSession(where string, args []any, fn func(Session) (bool, error)) error {
 	const page = 500
-	lastSeen, lastID, started := "", int64(0), false
-	for {
-		q := `SELECT ` + sessionCols + ` FROM sessions WHERE ` + where
-		a := append([]any(nil), args...)
-		if started {
-			q += ` AND (last_seen_at < ? OR (last_seen_at = ? AND id < ?))`
-			a = append(a, lastSeen, lastSeen, lastID)
+	rows, err := s.db.Query(`SELECT id FROM sessions WHERE `+where+` ORDER BY last_seen_at DESC, id DESC`, args...)
+	if err != nil {
+		return err
+	}
+	var order []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
 		}
-		q += ` ORDER BY last_seen_at DESC, id DESC LIMIT ?`
-		a = append(a, page)
-		rows, err := s.db.Query(q, a...)
+		order = append(order, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	for start := 0; start < len(order); start += page {
+		end := min(start+page, len(order))
+		ids := order[start:end]
+		rows, err := s.db.Query(`SELECT `+sessionCols+` FROM sessions WHERE id IN (SELECT value FROM json_each(?))`, idsJSONOf(ids))
 		if err != nil {
 			return err
 		}
-		batch, err := scanSessions(rows)
+		got, err := scanSessions(rows)
 		if err != nil {
 			return err
 		}
-		if err := s.fillSessionOwners(batch); err != nil {
+		if err := s.fillSessionOwners(got); err != nil {
 			return err
 		}
-		for _, sess := range batch {
+		byID := make(map[int64]Session, len(got))
+		for _, sess := range got {
+			byID[sess.ID] = sess
+		}
+		for _, id := range ids {
+			sess, ok := byID[id]
+			if !ok {
+				continue
+			}
 			more, err := fn(sess)
 			if err != nil || !more {
 				return err
 			}
 		}
-		if len(batch) < page {
-			return nil
-		}
-		last := batch[len(batch)-1]
-		lastSeen, lastID, started = last.LastSeenAt, last.ID, true
 	}
+	return nil
 }
 
 // SessionsPendingDistillation returns sessions that have never been distilled
@@ -444,7 +464,7 @@ func (s *Store) SearchSessions(q string, filter scope.Axes, excludeSession strin
 	if s.reader != nil {
 		return s.reader.SearchSessions(q, filter, excludeSession, limit)
 	}
-	return s.SearchSessionsVisible(q, filter, excludeSession, limit, nil)
+	return s.SearchSessionsVisible(q, filter, excludeSession, limit, nil, SessionPrefilter{})
 }
 
 // SearchSessionsVisible sucht nur in Sessions, für die keep gilt, und schneidet
@@ -452,17 +472,17 @@ func (s *Store) SearchSessions(q string, filter scope.Axes, excludeSession strin
 // als Liste in die Abfrage: der Rang verborgener Treffer kann so weder
 // verdrängen noch verraten, wie viele es gibt (#2447). Ohne keep sucht sie im
 // ganzen Bestand.
-func (s *Store) SearchSessionsVisible(q string, filter scope.Axes, excludeSession string, limit int, keep func(Session) bool) ([]SessionHit, error) {
+func (s *Store) SearchSessionsVisible(q string, filter scope.Axes, excludeSession string, limit int, keep func(Session) bool, pre SessionPrefilter) ([]SessionHit, error) {
 	if s.reader != nil {
-		return s.reader.SearchSessionsVisible(q, filter, excludeSession, limit, keep)
+		return s.reader.SearchSessionsVisible(q, filter, excludeSession, limit, keep, pre)
 	}
 	if limit <= 0 {
 		limit = 20
 	}
 	where, args := filter.FilterWhere()
 	args = append([]any{ftsQuery(q), excludeSession, excludeSession}, args...)
-	if keep != nil {
-		ids, err := s.visibleSessionIDs(filter, keep)
+	if keep != nil || pre.Where != "" {
+		ids, err := s.visibleSessionIDs(filter, keep, pre)
 		if err != nil {
 			return nil, err
 		}

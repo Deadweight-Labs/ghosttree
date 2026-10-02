@@ -2,11 +2,14 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 )
 
 const roleProjectB = "github.com/dw/q"
@@ -213,5 +216,58 @@ func TestBackfillStepStaysWithinItsTimeBudget(t *testing.T) {
 	}
 	if got, _ := st.SessionByID(s.ID); got.Messages != 80 {
 		t.Errorf("messages = %d, a chunk was counted twice or lost", got.Messages)
+	}
+}
+
+func idsOfSessions(ss []Session) string {
+	out := make([]string, len(ss))
+	for i, s := range ss {
+		out[i] = s.ExternalID
+	}
+	return strings.Join(out, ",")
+}
+
+// The prefilter is the readable set as SQL: it must give the same sessions as
+// the full per-row check, for every kind of viewer.
+func TestTranscriptPrefilterEqualsTheRowByRowCheck(t *testing.T) {
+	f := newVisFixture(t)
+	addSession(t, f.st, "f-loose", 3, "", "laptop", "", transcriptWith("zebra"))
+	addSession(t, f.st, "g-unclaimed", 4, "github.com/dw/unclaimed", "box", "", transcriptWith("zebra"))
+	addSession(t, f.st, "h-unclaimed-robin", 1, "github.com/dw/unclaimed", "box", "", transcriptWith("zebra"))
+	for _, who := range []struct{ id, label string }{{"person:1", "robin"}, {"person:2", "lena"}, {"person:3", "mia"}, {"person:4", "rex"}, {"person:5", "gus"}, {"person:6", "nora"}} {
+		pa := viewer(f.st, who.id, who.label)
+		keep := func(s Session) bool { return pa.CanSeeTranscript(s) }
+		want, err := f.st.ListSessionsVisible(scope.Axes{}, 100, "", keep, SessionPrefilter{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		pre := pa.TranscriptPrefilter()
+		viaFilter, err := f.st.ListSessionsVisible(scope.Axes{}, 100, "", nil, pre)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !pre.Exact {
+			t.Errorf("%s: the prefilter must be exact under enforcement", who.label)
+		}
+		if idsOfSessions(want) != idsOfSessions(viaFilter) {
+			t.Errorf("%s: row check %s, prefilter %s", who.label, idsOfSessions(want), idsOfSessions(viaFilter))
+		}
+	}
+}
+
+// Hidden sessions cost the guest nothing: the row check never sees them.
+func TestGuestScanDoesNotTouchHiddenSessions(t *testing.T) {
+	f := newVisFixture(t)
+	for i := 0; i < 60; i++ {
+		addSession(t, f.st, fmt.Sprintf("hidden-%d", i), 3, roleProject, "laptop", "", nil)
+	}
+	pa := viewer(f.st, "person:5", "gus")
+	calls := 0
+	_, err := f.st.SearchSessionsVisible("zebra", scope.Axes{}, "", 20, func(s Session) bool { calls++; return pa.CanSeeTranscript(s) }, pa.TranscriptPrefilter())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls > 3 {
+		t.Errorf("row check ran %d times, hidden sessions must not reach it", calls)
 	}
 }

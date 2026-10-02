@@ -194,3 +194,62 @@ func TestSessionUploadChecksOwnershipBeforeReadingTheBody(t *testing.T) {
 		t.Errorf("foreign upload = %d, want 403 before the body is decoded", code)
 	}
 }
+
+func TestShareDoesNotRevealWhetherAHiddenSessionExists(t *testing.T) {
+	f := accessAPI(t, true)
+	body := map[string]bool{"shared": true}
+	// mia is a member but may not read rex's private session.
+	hiddenCode, hiddenBody := f.call(t, "mia", "PUT", idPath("/api/sessions/%d/share", f.id["s-rex"]), body)
+	unknownCode, unknownBody := f.call(t, "mia", "PUT", "/api/sessions/999999/share", body)
+	if hiddenCode != 404 || hiddenCode != unknownCode || hiddenBody != unknownBody {
+		t.Errorf("hidden = %d %q, unknown = %d %q: must be identical 404", hiddenCode, hiddenBody, unknownCode, unknownBody)
+	}
+	// A readable session of someone else is still a 403 (the caller may read it).
+	if err := f.st.SetSessionVisibility(f.id["s-rex"], f.st.Access(store.Principal{ID: "person:4", Label: "rex"}), store.VisProject); err != nil {
+		t.Fatal(err)
+	}
+	f.expect(t, "mia", 403, "PUT", idPath("/api/sessions/%d/share", f.id["s-rex"]), body)
+}
+
+func TestGuestNumbersAreUnknownOnEverySessionRoute(t *testing.T) {
+	f := oracleFixture(t, 3)
+	routes := []struct{ method, tail string }{
+		{"GET", ""}, {"GET", "/raw"}, {"POST", "/chunks"}, {"PUT", "/share"},
+	}
+	payload := func(tail string) any {
+		switch tail {
+		case "/chunks":
+			return map[string]any{"chunks": []store.Chunk{{Seq: 0, Role: "user", Text: "x", Raw: "{}"}}}
+		case "/share":
+			return map[string]bool{"shared": true}
+		}
+		return nil
+	}
+	for _, r := range routes {
+		wantCode, wantBody := f.call(t, "gus", r.method, "/api/sessions/999999"+r.tail, payload(r.tail))
+		for n := int64(1); n <= int64(len(f.id))+8; n++ {
+			code, out := f.call(t, "gus", r.method, fmt.Sprintf("/api/sessions/%d%s", n, r.tail), payload(r.tail))
+			if code != wantCode || out != wantBody {
+				t.Errorf("guest %s /api/sessions/%d%s = %d %q, unknown = %d %q", r.method, n, r.tail, code, out, wantCode, wantBody)
+			}
+		}
+	}
+}
+
+func TestGuestShareAnswerCarriesTheAddressNotTheNumber(t *testing.T) {
+	f := accessAPI(t, true)
+	body := map[string]any{"harness": "claude-code", "external_id": "guest-own", "scope": map[string]string{"project": accProject}}
+	var made map[string]any
+	if err := json.Unmarshal([]byte(f.expect(t, "gus", 200, "POST", "/api/sessions", body)), &made); err != nil {
+		t.Fatal(err)
+	}
+	pid, _ := made["public_id"].(string)
+	out := f.expect(t, "gus", 200, "PUT", "/api/sessions/"+pid+"/share", map[string]bool{"shared": true})
+	var got map[string]any
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatal(err)
+	}
+	if _, has := got["id"]; has || got["public_id"] != pid {
+		t.Errorf("guest share answer = %s", out)
+	}
+}

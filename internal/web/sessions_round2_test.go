@@ -14,6 +14,9 @@ import (
 func TestAPageCutNeverSplitsTheBlocksOfOneLine(t *testing.T) {
 	// One stored line carries more blocks than a page may render. The cut has
 	// to fall between lines, or the rest of that line is lost without a trace.
+	old := maxBlocksPerPage
+	maxBlocksPerPage = 1 << 30
+	defer func() { maxBlocksPerPage = old }()
 	var blocks []map[string]any
 	for i := 0; i < maxRenderedRows+500; i++ {
 		blocks = append(blocks, tb("part"))
@@ -39,6 +42,35 @@ func TestAPageCutNeverSplitsTheBlocksOfOneLine(t *testing.T) {
 				t.Errorf("block of line %d shown before the cut at %d", b.Seq, cut)
 			}
 		}
+	}
+}
+
+func TestABlockCapHoldsInsideOneStoredLineAndSaysSo(t *testing.T) {
+	var blocks []map[string]any
+	for i := 0; i < maxBlocksPerPage+300; i++ {
+		blocks = append(blocks, tb("part"))
+	}
+	cs := chunks(uLine("first"), aLine(blocks...), uLine("after the big line"))
+	out, cut := buildBlocks(store.Session{Harness: "claude-code"}, cs, newHighlighter(""), 0, false, true, false, nil)
+	parts, notes := 0, 0
+	for _, b := range out {
+		switch b.Kind {
+		case "assistant":
+			parts++
+		case "note":
+			if b.NoteLabel == msg("sessions.truncated") {
+				notes++
+			}
+		}
+	}
+	if parts > maxBlocksPerPage {
+		t.Errorf("page holds %d blocks, cap %d", parts, maxBlocksPerPage)
+	}
+	if notes != 1 {
+		t.Errorf("want exactly one truncation note, got %d", notes)
+	}
+	if cut != 0 && cut != 2 {
+		t.Errorf("cut = %d", cut)
 	}
 }
 
