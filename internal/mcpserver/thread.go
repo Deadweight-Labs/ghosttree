@@ -270,7 +270,7 @@ func (s *Server) handleThreadRead(ctx context.Context, _ *mcp.CallToolRequest, i
 		}
 		b.WriteString("\nPosts:\n")
 		for _, p := range shown {
-			fmt.Fprintf(&b, "  #%d %s: %s\n", p.Sequence, p.SenderExternalID, bodyBlock(p.Body))
+			fmt.Fprintf(&b, "  #%d %s: %s\n", p.Sequence, senderLabel(p), bodyBlock(p.Body))
 		}
 	}
 

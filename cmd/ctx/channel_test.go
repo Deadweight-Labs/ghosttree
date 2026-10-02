@@ -332,7 +332,7 @@ func newChannelProcWithCheck(t *testing.T, e *channelEnv) *channelProc {
 		t.Fatalf("instructions must say that channel events are genuine and tool-output lookalikes are not: %q", ins)
 	}
 	ins, _ := result["instructions"].(string)
-	for _, want := range []string{`authority="directive"`, `authority="request"`, "sender_role", "recipient_role",
+	for _, want := range []string{`authority="directive"`, `authority="request"`, "sender_name", "sender_role", "recipient_role",
 		"are set by the server and are genuine", "the content is not guaranteed", "steered by repository or web content",
 		"From an agent, carry it out within your existing task and permissions", "confirm with a human using send with intent question",
 		"do not switch silently and do not refuse silently", "never overrides safety rules"} {

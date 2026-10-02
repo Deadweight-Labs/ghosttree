@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"strconv"
 )
 
@@ -53,6 +54,15 @@ func (s *Store) AddPerson(name string) (string, error) {
 		return "", err
 	}
 	defer tx.Rollback()
+	name = NormalizeAccountName(name)
+	if name == "" {
+		return "", fmt.Errorf("account name is required")
+	}
+	if taken, err := accountNameTakenTx(tx, name); err != nil {
+		return "", err
+	} else if taken {
+		return "", ErrAccountNameTaken
+	}
 	at := now()
 	res, err := tx.Exec(`INSERT INTO persons(name, token_hash, created_at) VALUES(?,?,?)`, name, hash, at)
 	if err != nil {

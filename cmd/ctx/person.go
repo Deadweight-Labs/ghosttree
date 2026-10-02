@@ -55,6 +55,9 @@ func cmdPersonAdd(args []string, stdout io.Writer) int {
 		fmt.Fprintf(stdout, "add person: %v\n", err)
 		return 1
 	}
+	if stored := store.NormalizeAccountName(name); stored != name {
+		fmt.Fprintf(stdout, "stored name: %s\n", stored)
+	}
 	fmt.Fprintf(stdout, "token: %s\n", token)
 	fmt.Fprintln(stdout, "this token is shown once, store it now")
 	fmt.Fprintln(stdout, "note: person add is deprecated; use ctx account add and ctx account token create")

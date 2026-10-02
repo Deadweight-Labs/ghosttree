@@ -6,6 +6,28 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Agents now see who a human sender is. The messages API has an optional
+  `sender_display_name` (the account name, read live, human authors only,
+  withheld from guests of a project room while access enforcement is on); the
+  channel meta has `sender_name`; `coord_inbox`, `coord_dm_read` and thread
+  reads show `Robin (person:1, human)` instead of `person:1 (human)`
+  (`coord_dm_read` and thread posts had no human tag before, and thread posts
+  are now header-safe too). The name is a label the person chose, not proof of
+  identity: the sender id stays the identity, and the channel instructions and
+  the MCP legend say so. Names are normalised (NFKC, invisible characters and
+  Hangul fillers removed, only letters, digits, spaces and `. _ - '`, at most
+  64 characters). New accounts are compared ignoring case and look-alike forms:
+  an invited account whose name collides gets a `-2` style suffix, and
+  `ctx account add` or Die Gast-Maskierung gilt für Projekträume; in DMs und privaten
+  Gruppen sehen Mitglieder einander wie bisher. `ctx person add` refuse it. Latin and Cyrillic letters
+  inside one name, and look-alikes made with a legitimate combining mark, are
+  still not caught. Names are normalised to a fixpoint (at most two combining
+  marks per letter, overlay marks dropped) and the web shows the same
+  normalised string. A guest sees sender ids instead of account names and
+  agent owner names in the coordination page, in standing instructions (the sender id) and
+  thread authors (hidden), and only their own row in the project role table of the
+  organization page. Guests also no longer receive `author_principal_id` (the
+  owner account of an agent) on messages or attention items. `ctx person add` reports the stored name.
 - A person can pause or interrupt a Claude agent that was started with
   `ctx claude`, from the participant list of the coordination page. Allowed
   for project role lead or above and for the owner of the agent's account,

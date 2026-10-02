@@ -295,10 +295,7 @@ func annotateCoordAttention(views []coordAttentionView, items []store.AttentionI
 	}
 	for i := range views {
 		item := byID[views[i].ID]
-		views[i].SenderLabel = coordIdentityLabel(item.SenderID, labels)
-		if labels[item.SenderID] == "" {
-			views[i].SenderLabel = coordIdentityLabel(item.AuthorID, labels)
-		}
+		views[i].SenderLabel = coordSenderLabel(item, labels)
 		if room, ok := sidebar.room(item.HomeRoomKey); ok {
 			views[i].RoomLabel, views[i].RoomTitle = room.Name, room.Label
 			views[i].Private = room.Kind == store.RoomDirect || room.Kind == store.RoomGroup
@@ -593,6 +590,22 @@ func coordIdentityLabel(id string, labels map[string]string) string {
 		return label
 	}
 	return "Unbekannter Teilnehmer"
+}
+
+// coordSenderLabel: Etikett des Absenders, sonst das des Kontos, sonst die
+// bloße Absender-ID (die Agenten-ID, die auch ein Gast sehen darf) statt
+// "Unbekannter Teilnehmer".
+func coordSenderLabel(item store.AttentionItem, labels map[string]string) string {
+	if label := strings.TrimSpace(labels[item.SenderID]); label != "" {
+		return label
+	}
+	if label := strings.TrimSpace(labels[item.AuthorID]); label != "" {
+		return label
+	}
+	if id := strings.TrimSpace(item.SenderID); id != "" {
+		return id
+	}
+	return coordIdentityLabel(item.AuthorID, labels)
 }
 
 func buildCoordParticipants(room store.CoordRoom, peers []store.CoordAgent, memberships []store.RoomMembership, current store.Principal, labels map[string]string) []coordParticipantView {
