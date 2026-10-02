@@ -22,7 +22,6 @@ Versioning, with pre-1.0 compatibility rules described in
   limitation, to resolve before enforce: pure measurement exchanges ("p50
   12.4ms" then "11.9ms") reach hold level, because numbers are not content.
 
-
 - Presence is now two separate fields with an origin. `coord_peers`, the peers
   API (`presence` on each peer) and the participant list in the web show
   reachability (`connected`, `unknown`, `ended`) and work state (`working`,
