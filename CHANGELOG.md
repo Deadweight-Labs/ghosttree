@@ -23,9 +23,15 @@ Versioning, with pre-1.0 compatibility rules described in
   by default); a link never grants owner or lead. Guest links need
   `GHOSTTREE_ENFORCE_ACCESS=1`, project links are accepted only in a browser
   session (the token API refuses them), the signed-in page asks to confirm the
-  account name and offers "Not you? Sign out", and an org member who is only a
-  guest sees just themselves and the owners in the member list (UI and API).
-  The invitation list shows project and role.
+  account name and offers "Not you? Sign out", and, when
+  `GHOSTTREE_ENFORCE_ACCESS=1` is set, an org member who is not an owner sees only
+  the owners, themselves and the accounts that share a project with them (a
+  guest or a member without a project role: only owners and themselves), without
+  other accounts' ids, in the member list (UI and API). Without enforcement
+  every member sees everyone, as before, and a guest link is not valid. The
+  invitation list shows project and role. `/ui/orgs/accept` hands project codes
+  over to the join page. At startup the server warns when
+  `GHOSTTREE_PUBLIC_URL` is set but `GHOSTTREE_TRUSTED_PROXIES` is empty.
 - Fixed: signing in with a one-time code, login link, invitation or bootstrap
   code in a browser ended with 403. The code pages sent
   `Referrer-Policy: no-referrer`, so the browser posted the form with

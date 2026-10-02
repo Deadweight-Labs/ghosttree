@@ -137,26 +137,29 @@ func (s *Store) CreateProjectInvitation(actorPrincipal string, orgID int64, remo
 	return code, inv, tx.Commit()
 }
 
-// IsProjectInvitation sagt, ob ein Code eine Projekt-Einladung ist. Das ändert
-// sich nie: die Spalte wird nach dem Anlegen nicht mehr geschrieben.
-func (s *Store) IsProjectInvitation(code string) bool {
+// OpenProjectInvitation sagt, ob ein Code eine noch offene Projekt-Einladung
+// ist. Für jeden anderen Code (auch einen unbekannten, abgelaufenen oder
+// verbrauchten) ist die Antwort dieselbe, damit niemand an ihr Codes
+// unterscheidet.
+func (s *Store) OpenProjectInvitation(code string) bool {
 	if s.reader != nil {
-		return s.reader.IsProjectInvitation(code)
+		return s.reader.OpenProjectInvitation(code)
 	}
 	var n int
-	return s.db.QueryRow(`SELECT 1 FROM invitations WHERE code_hash=? AND project_id<>0`, hashToken(code)).Scan(&n) == nil
+	return s.db.QueryRow(`SELECT 1 FROM invitations WHERE code_hash=? AND project_id<>0 AND accepted_at='' AND revoked_at='' AND expires_at>?`,
+		hashToken(code), now()).Scan(&n) == nil
 }
 
-// PreviewInvitation liest eine Einladung, ohne etwas zu verbrauchen oder zu
+// PreviewInvitation liest (enforced: ob die Sichtbarkeit durchgesetzt wird; ohne sie gilt ein Gast-Link nicht) eine Einladung, ohne etwas zu verbrauchen oder zu
 // schreiben. Jeder Grund, aus dem sie nicht (mehr) einlösbar ist, ergibt
 // dieselbe Antwort ErrCodeInvalid und läuft über genau eine Abfrage: nicht
 // vorhanden, abgelaufen, verbraucht, widerrufen, Einlader nicht mehr Owner,
-// Projekt verschoben oder gelöscht, und eine Einladung, die kein
+// Projekt verschoben oder gelöscht, Gast-Link ohne durchgesetzte Sichtbarkeit, und eine Einladung, die kein
 // Link-Rollenpaar (Projekt plus member/guest) trägt. Für einen Fremden ist
 // all das nicht unterscheidbar (Pitfall #2447).
-func (s *Store) PreviewInvitation(code string) (InvitePreview, error) {
+func (s *Store) PreviewInvitation(code string, enforced bool) (InvitePreview, error) {
 	if s.reader != nil {
-		return s.reader.PreviewInvitation(code)
+		return s.reader.PreviewInvitation(code, enforced)
 	}
 	var p InvitePreview
 	err := s.db.QueryRow(`SELECT o.name, COALESCE(NULLIF(pr.name,''), pr.remote), i.project_role, i.expires_at
@@ -165,8 +168,8 @@ func (s *Store) PreviewInvitation(code string) (InvitePreview, error) {
 		JOIN org_members m ON m.org_id = i.org_id AND m.account_id = i.invited_by AND m.role = ?
 		JOIN projects pr ON pr.id = i.project_id AND pr.org_id = i.org_id
 		WHERE i.code_hash = ? AND i.accepted_at = '' AND i.revoked_at = '' AND i.expires_at > ?
-		  AND i.email = '' AND i.project_role IN (?, ?)`,
-		OrgOwner, hashToken(code), now(), RoleMember, RoleGuest).Scan(&p.Org, &p.Project, &p.Role, &p.ExpiresAt)
+		  AND i.email = '' AND i.project_role IN (?, ?) AND (i.project_role <> ? OR ?)`,
+		OrgOwner, hashToken(code), now(), RoleMember, RoleGuest, RoleGuest, enforced).Scan(&p.Org, &p.Project, &p.Role, &p.ExpiresAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return InvitePreview{}, ErrCodeInvalid
 	}

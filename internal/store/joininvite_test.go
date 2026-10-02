@@ -59,7 +59,7 @@ func TestPreviewShowsOnlyOrgProjectRoleExpiryAndConsumesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < 3; i++ {
-		p, err := st.PreviewInvitation(code)
+		p, err := st.PreviewInvitation(code, true)
 		if err != nil || p.Org != "Alpha" || p.Project != joinRemote || p.Role != RoleGuest || p.ExpiresAt != inv.ExpiresAt {
 			t.Fatalf("preview %d: %+v %v", i, p, err)
 		}
@@ -105,7 +105,7 @@ func TestPreviewRejectsEveryInvalidVariantIdentically(t *testing.T) {
 		"org-wide owner invitation": ownerLink, "org-wide email invitation": emailBound,
 	}
 	for name, code := range cases {
-		p, err := st.PreviewInvitation(code)
+		p, err := st.PreviewInvitation(code, true)
 		if !errors.Is(err, ErrCodeInvalid) || p != (InvitePreview{}) {
 			t.Errorf("%s: preview=%+v err=%v", name, p, err)
 		}
@@ -115,11 +115,11 @@ func TestPreviewRejectsEveryInvalidVariantIdentically(t *testing.T) {
 func TestPreviewInviterNoLongerOwner(t *testing.T) {
 	st, o := joinFixture(t)
 	code, _, _ := st.CreateProjectInvitation("person:1", o.ID, joinRemote, RoleMember, 0)
-	if _, err := st.PreviewInvitation(code); err != nil {
+	if _, err := st.PreviewInvitation(code, true); err != nil {
 		t.Fatal(err)
 	}
 	st.db.Exec(`UPDATE org_members SET role='member' WHERE org_id=? AND account_id=1`, o.ID)
-	if _, err := st.PreviewInvitation(code); !errors.Is(err, ErrCodeInvalid) {
+	if _, err := st.PreviewInvitation(code, true); !errors.Is(err, ErrCodeInvalid) {
 		t.Fatalf("demoted inviter: %v", err)
 	}
 }
@@ -267,47 +267,97 @@ func TestProjectInvitationRoleIsConstrained(t *testing.T) {
 	}
 }
 
-func TestOrgMemberListIsReducedForGuestsAndPlainMembers(t *testing.T) {
+func TestOrgMemberListShowsOnlyWhoSharesAProject(t *testing.T) {
 	st, o := joinFixture(t)
-	guest, _, _ := st.CreateProjectInvitation("person:1", o.ID, joinRemote, RoleGuest, 0)
-	member, _, _ := st.CreateProjectInvitation("person:1", o.ID, joinRemote, RoleMember, 0)
-	if _, err := st.AcceptInvitation("person:2", guest); err != nil {
+	for _, n := range []string{"carl", "dora"} {
+		if _, err := st.AddPerson(n); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const other = "github.com/alpha/secret"
+	if _, err := st.EnsureProject("person:1", other); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.AcceptInvitation("person:3", member); err != nil {
-		t.Fatal(err)
-	}
-	names := func(viewer string) []string {
-		list, err := st.ListOrgMembersFor(o.ID, viewer)
+	join := func(who, remote, role string) {
+		code, _, err := st.CreateProjectInvitation("person:1", o.ID, remote, role, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
-		var out []string
+		if _, err := st.AcceptInvitation(who, code); err != nil {
+			t.Fatal(err)
+		}
+	}
+	join("person:2", joinRemote, RoleMember) // anna: Projekt A
+	join("person:3", joinRemote, RoleGuest)  // ben: Gast in A
+	join("person:4", other, RoleMember)      // carl: nur Projekt B
+	join("person:5", joinRemote, RoleGuest)  // dora: Gast in A
+	view := func(viewer string) map[string]OrgMemberInfo {
+		list, err := st.ListOrgMembersFor(o.ID, viewer, st.AccessEnforced())
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]OrgMemberInfo{}
 		for _, m := range list {
-			out = append(out, m.Account)
+			out[m.Account] = m
 		}
 		return out
 	}
-	if got := names("person:2"); len(got) != 2 || got[0] == got[1] {
-		t.Fatalf("guest sees %v, want only himself and the owner", got)
+	// Mitglied von A: Owner, sich selbst und Konten aus A; carl nicht.
+	anna := view("person:2")
+	if len(anna) != 4 || anna["carl"].Account != "" || anna["robin"].Account == "" || anna["ben"].Account == "" || anna["dora"].Account == "" {
+		t.Fatalf("member of A sees %v", anna)
 	}
-	for _, got := range names("person:2") {
-		if got == "ben" {
-			t.Fatal("the guest sees another member")
+	// Ids nur für den Betrachter selbst.
+	for name, m := range anna {
+		if (name == "anna") != (m.AccountID != "") {
+			t.Fatalf("account id of %s: %q", name, m.AccountID)
 		}
 	}
-	if got := names("person:3"); len(got) != 3 {
-		t.Fatalf("member sees %v", got)
+	// Gast: nur Owner und er selbst.
+	ben := view("person:3")
+	if len(ben) != 2 || ben["robin"].Account == "" || ben["ben"].Account == "" || ben["anna"].Account != "" {
+		t.Fatalf("guest sees %v", ben)
 	}
-	if got := names("person:1"); len(got) != 3 {
-		t.Fatalf("owner sees %v", got)
+	// Owner sieht alle mit Ids.
+	if all := view("person:1"); len(all) != 5 || all["carl"].AccountID == "" {
+		t.Fatalf("owner sees %v", all)
+	}
+	// Ohne Durchsetzung sieht jedes Mitglied alle, wie bisher.
+	st.SetAccessMode(AccessMode{Enforce: false})
+	if free := view("person:3"); len(free) != 5 {
+		t.Fatalf("without enforcement a guest sees %v", free)
 	}
 }
 
-func TestIsProjectInvitation(t *testing.T) {
+func TestGuestInvitationIsInvalidWhenEnforcementIsOff(t *testing.T) {
+	st, o := joinFixture(t)
+	code, _, err := st.CreateProjectInvitation("person:1", o.ID, joinRemote, RoleGuest, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.SetAccessMode(AccessMode{Enforce: false})
+	if _, err := st.PreviewInvitation(code, false); !errors.Is(err, ErrCodeInvalid) {
+		t.Fatalf("preview: %v", err)
+	}
+	if _, err := st.AcceptInvitation("person:2", code); !errors.Is(err, ErrCodeInvalid) {
+		t.Fatalf("accept: %v", err)
+	}
+	st.SetAccessMode(AccessMode{Enforce: true})
+	if _, err := st.AcceptInvitation("person:2", code); err != nil {
+		t.Fatalf("accept with enforcement back on: %v", err)
+	}
+}
+
+func TestOpenProjectInvitationIsFalseForEveryOtherCode(t *testing.T) {
 	st, o := joinFixture(t)
 	project, _, _ := st.CreateProjectInvitation("person:1", o.ID, joinRemote, RoleMember, 0)
-	if !st.IsProjectInvitation(project) || st.IsProjectInvitation(mustInvite(t, st, o)) || st.IsProjectInvitation("nope") {
-		t.Fatal("IsProjectInvitation is wrong")
+	if !st.OpenProjectInvitation(project) || st.OpenProjectInvitation(mustInvite(t, st, o)) || st.OpenProjectInvitation("nope") {
+		t.Fatal("OpenProjectInvitation is wrong")
+	}
+	if _, err := st.AcceptInvitation("person:2", project); err != nil {
+		t.Fatal(err)
+	}
+	if st.OpenProjectInvitation(project) {
+		t.Fatal("a used project invitation still counts as open")
 	}
 }

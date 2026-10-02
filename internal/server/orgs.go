@@ -172,7 +172,7 @@ func (a *api) listOrgMembers(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	members, err := a.st.ListOrgMembersFor(o.ID, principalOf(r).ID)
+	members, err := a.st.ListOrgMembersFor(o.ID, principalOf(r).ID, a.st.AccessEnforced())
 	if err != nil {
 		writeOrgError(w, err)
 		return
@@ -254,10 +254,12 @@ func (a *api) acceptInvitation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	code := strings.TrimSpace(body.Code)
-	// Eine Projekt-Einladung nimmt nur ein Mensch im Browser an: ein Token liegt
+	// Nur eine offene Projekt-Einladung wird hier abgewiesen; jeder andere Code,
+	// auch ein ungültiger, geht durch AcceptInvitation und seine Sperre und
+	// bekommt die einheitliche Antwort. Eine Projekt-Einladung nimmt nur ein Mensch im Browser an: ein Token liegt
 	// in der Konfiguration jedes Agenten, und ein Link in einem fremden Text
 	// darf ihm keine Rolle verschaffen.
-	if a.st.IsProjectInvitation(code) {
+	if a.st.OpenProjectInvitation(code) {
 		webSessionOnly(w, "project invitations")
 		return
 	}

@@ -168,7 +168,7 @@ func (a *app) joinPreview(code string) (store.InvitePreview, bool) {
 	if !wellFormedJoinCode(code) {
 		return store.InvitePreview{}, false
 	}
-	p, err := a.store.PreviewInvitation(code)
+	p, err := a.store.PreviewInvitation(code, a.store.AccessEnforced())
 	return p, err == nil
 }
 
@@ -176,6 +176,7 @@ type joinView struct {
 	Org, Project, Role, RoleText, ExpiresAt string
 	Code, CSRFToken, Person                 string
 	SignedIn, OIDC, NeedsName               bool
+	AccountID, Email                        string
 }
 
 func roleText(role string) string {
@@ -212,6 +213,12 @@ func (a *app) joinPage(w http.ResponseWriter, r *http.Request) {
 		ExpiresAt: preview.ExpiresAt, Code: code, OIDC: a.oidc != nil, NeedsName: a.oidc == nil}
 	if session, ok := a.joinSession(r); ok {
 		view.SignedIn, view.Person, view.CSRFToken = true, session.principal.Label, session.csrf
+		// Neben dem Namen die Kennung und die Adresse des Kontos: ein Name mit
+		// ähnlich aussehenden Zeichen fällt so auf.
+		view.AccountID = session.principal.ID
+		if acct, err := a.store.AccountByPrincipalID(session.principal.ID); err == nil {
+			view.Email = acct.Email
+		}
 	}
 	a.joinHeaders(w)
 	a.joinWrite(w, "join", view)

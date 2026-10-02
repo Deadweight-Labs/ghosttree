@@ -238,6 +238,9 @@ func runServer(ctx context.Context, st *store.Store, cfg serveConfig, stdout, st
 	fmt.Fprintf(stdout, "ghosttree %s listening on %s (db %s, ui /ui/)\n", version, cfg.Listen, cfg.DB)
 	slog.New(slog.NewJSONHandler(stderr, nil)).Info("access_mode", "enforce", accessEnforcedByEnv(), "env", envEnforceAccess,
 		"note", "without enforcement only 'access: would deny' is logged, nothing is refused")
+	if note := proxyConfigWarning(cfg); note != "" {
+		slog.New(slog.NewJSONHandler(stderr, nil)).Warn("proxy_config", "public_url", cfg.PublicURL, "note", note)
+	}
 	slog.New(slog.NewJSONHandler(stderr, nil)).Info("writer_config", "max_operations", cfg.Writer.MaxOperations, "max_bytes", cfg.Writer.MaxBytes, "max_batch", cfg.Writer.MaxBatch, "read_connections", cfg.Writer.ReadConnections)
 	if err := serveUntilCanceled(ctx, newHTTPServer(cfg.Listen, buildServerHandler(st, cfg, stderr))); err != nil {
 		fmt.Fprintf(stdout, "serve: %v\n", err)
@@ -342,4 +345,15 @@ func newHTTPServer(addr string, handler http.Handler) *http.Server {
 		WriteTimeout:      5 * time.Minute,
 		IdleTimeout:       2 * time.Minute,
 	}
+}
+
+// proxyConfigWarning nennt das Problem, wenn eine öffentliche URL (also ein
+// Proxy davor) gesetzt ist, aber kein vertrauenswürdiger Proxy: dann haben alle
+// Clients die Adresse des Proxys, und die Grenzen je Adresse (Einladungsseite,
+// Geräte-Login) gelten für alle zusammen.
+func proxyConfigWarning(cfg serveConfig) string {
+	if cfg.PublicURL == "" || cfg.TrustedProxies.Configured() {
+		return ""
+	}
+	return envPublicURL + " is set but " + envTrustedProxies + " is empty: behind a reverse proxy every client shares the proxy address, so the per-address limits (join page, device logins) apply to all clients together"
 }

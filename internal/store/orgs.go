@@ -72,7 +72,7 @@ type Org struct {
 }
 
 type OrgMemberInfo struct {
-	AccountID string `json:"account_id"`
+	AccountID string `json:"account_id,omitempty"`
 	Account   string `json:"account"`
 	Role      string `json:"role"`
 	JoinedAt  string `json:"joined_at"`
@@ -375,18 +375,24 @@ func (s *Store) ListOrgMembers(orgID int64) ([]OrgMemberInfo, error) {
 	return out, rows.Err()
 }
 
-// ListOrgMembersFor ist die Mitgliederliste für einen Betrachter. Org-Owner und
-// Konten mit einer Projektrolle über guest sehen alle. Wer nur Gast ist oder
-// keine Projektrolle hat, sieht sich selbst und die Owner, und keine
-// Gesamtzahl: sonst verriete die Liste die Mitglieder, die ein Gast nicht
-// kennen soll (Pitfall #2447).
-func (s *Store) ListOrgMembersFor(orgID int64, viewerPrincipal string) ([]OrgMemberInfo, error) {
+// ListOrgMembersFor ist die Mitgliederliste für einen Betrachter (enforced:
+// ob die Sichtbarkeit durchgesetzt wird). Ohne
+// durchgesetzte Sichtbarkeit sieht jedes Mitglied alle Inhalte, dann auch alle
+// Mitglieder. Mit ihr sieht ein Org-Owner alle; wer kein Owner ist, sieht die
+// Owner, sich selbst und die Konten, die mit ihm ein Projekt teilen, in dem er
+// mehr als Gast ist. Ein Gast, oder wer keine Projektrolle hat, sieht nur die
+// Owner und sich selbst. Die Ids der anderen Einträge fehlen: fortlaufende Ids
+// verrieten die Zahl der Konten (Pitfall #2447).
+func (s *Store) ListOrgMembersFor(orgID int64, viewerPrincipal string, enforced bool) ([]OrgMemberInfo, error) {
 	if s.reader != nil {
-		return s.reader.ListOrgMembersFor(orgID, viewerPrincipal)
+		return s.reader.ListOrgMembersFor(orgID, viewerPrincipal, enforced)
 	}
 	all, err := s.ListOrgMembers(orgID)
 	if err != nil {
 		return nil, err
+	}
+	if !enforced {
+		return all, nil
 	}
 	viewer, err := parsePersonPrincipalID(viewerPrincipal)
 	if err != nil {
@@ -395,29 +401,35 @@ func (s *Store) ListOrgMembersFor(orgID int64, viewerPrincipal string) ([]OrgMem
 	if orgRoleTx(s.db, orgID, viewer) == OrgOwner {
 		return all, nil
 	}
-	rows, err := s.db.Query(`SELECT pm.role FROM project_members pm JOIN projects p ON p.id = pm.project_id
-		WHERE p.org_id=? AND pm.account_id=?`, orgID, viewer)
+	rows, err := s.db.Query(`SELECT DISTINCT other.account_id FROM project_members mine
+		JOIN projects p ON p.id = mine.project_id AND p.org_id = ?
+		JOIN project_members other ON other.project_id = mine.project_id
+		WHERE mine.account_id = ? AND mine.role IN (?, ?, ?)`, orgID, viewer, RoleOwner, RoleLead, RoleMember)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
+	shared := map[string]bool{}
 	for rows.Next() {
-		var role string
-		if err := rows.Scan(&role); err != nil {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
 			return nil, err
 		}
-		if RoleRank(role) > RoleRank(RoleGuest) {
-			return all, nil
-		}
+		shared[principalOfID(id)] = true
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	self := principalOfID(viewer)
 	out := []OrgMemberInfo{}
 	for _, m := range all {
-		if m.Role == OrgOwner || m.AccountID == principalOfID(viewer) {
-			out = append(out, m)
+		if m.AccountID != self && m.Role != OrgOwner && !shared[m.AccountID] {
+			continue
 		}
+		if m.AccountID != self {
+			m.AccountID = ""
+		}
+		out = append(out, m)
 	}
 	return out, nil
 }
@@ -965,7 +977,7 @@ func invitationExists(q rowQuerier, code string) bool {
 // verifiedEmail muss vom Aufrufer verifiziert sein (IdP-Claim email_verified)
 // oder leer; eine an eine Adresse gebundene Einladung verlangt Gleichheit.
 // Gültigkeit, Zustand und Einlösbarkeit melden einheitlich ErrCodeInvalid.
-func acceptInvitationTx(tx execQueryer, code string, account int64, verifiedEmail string) (Org, error) {
+func acceptInvitationTx(tx execQueryer, code string, account int64, verifiedEmail string, enforced bool) (Org, error) {
 	var id, orgID, inviter, projectID int64
 	var role, projectRole, email, expires, accepted, revoked string
 	err := tx.QueryRow(`SELECT id, org_id, role, project_id, project_role, email, invited_by, expires_at, accepted_at, revoked_at FROM invitations WHERE code_hash=?`,
@@ -989,6 +1001,10 @@ func acceptInvitationTx(tx execQueryer, code string, account int64, verifiedEmai
 	var remote string
 	if projectID != 0 {
 		if projectRole != RoleMember && projectRole != RoleGuest {
+			return Org{}, ErrCodeInvalid
+		}
+		// Ein Gast-Link gilt nur, solange die Sichtbarkeit durchgesetzt wird.
+		if projectRole == RoleGuest && !enforced {
 			return Org{}, ErrCodeInvalid
 		}
 		var projectOrg int64
@@ -1079,7 +1095,7 @@ func (s *Store) acceptInvitation(acct int64, code string) (Org, error) {
 	if a.State != "active" {
 		return Org{}, ErrAccountDisabled
 	}
-	o, err := acceptInvitationTx(tx, code, acct, a.Email)
+	o, err := acceptInvitationTx(tx, code, acct, a.Email, s.AccessEnforced())
 	if err != nil {
 		return Org{}, err
 	}
@@ -1111,7 +1127,7 @@ func inviteName(tx queryer, wanted string) (string, error) {
 
 // createInvitedAccountTx legt das Konto zu einer Einladung an und löst sie ein;
 // scheitert die Einlösung, bleibt auch das Konto aus (Rollback des Aufrufers).
-func createInvitedAccountTx(tx execQueryer, name, email, code string) (int64, error) {
+func createInvitedAccountTx(tx execQueryer, name, email, code string, enforced bool) (int64, error) {
 	if !invitationExists(tx, code) {
 		return 0, ErrCodeInvalid
 	}
@@ -1124,7 +1140,7 @@ func createInvitedAccountTx(tx execQueryer, name, email, code string) (int64, er
 		return 0, err
 	}
 	id, _ := res.LastInsertId()
-	if _, err := acceptInvitationTx(tx, code, id, email); err != nil {
+	if _, err := acceptInvitationTx(tx, code, id, email, enforced); err != nil {
 		return 0, err
 	}
 	return id, nil
@@ -1147,7 +1163,7 @@ func (s *Store) InviteLocal(code, name string) (Account, error) {
 		return Account{}, err
 	}
 	defer tx.Rollback()
-	id, err := createInvitedAccountTx(tx, name, "", code)
+	id, err := createInvitedAccountTx(tx, name, "", code, s.AccessEnforced())
 	if err != nil {
 		return Account{}, err
 	}

@@ -241,7 +241,7 @@ func TestJoinPageNeverConsumesTheInvitation(t *testing.T) {
 		r2, _ := anonClient().Do(head)
 		r2.Body.Close()
 	}
-	if _, err := st.PreviewInvitation(code); err != nil {
+	if _, err := st.PreviewInvitation(code, true); err != nil {
 		t.Fatalf("invitation gone after previews: %v", err)
 	}
 	if _, err := st.AcceptInvitation("person:2", code); err != nil {
@@ -278,7 +278,7 @@ func TestJoinAcceptNeedsInteractiveLoginAndCSRFAndHappensOnce(t *testing.T) {
 			t.Fatalf("csrf %q accept: %d", token, resp.StatusCode)
 		}
 	}
-	if _, err := st.PreviewInvitation(code); err != nil {
+	if _, err := st.PreviewInvitation(code, true); err != nil {
 		t.Fatalf("a refused accept consumed the invitation: %v", err)
 	}
 	// Die Seite für ein angemeldetes Konto bietet den Beitritt an.
@@ -427,7 +427,7 @@ func TestJoinLocalSignInCreatesAccountWithProjectRole(t *testing.T) {
 	if st.OrgRole(org.ID, principal) != store.OrgMember || st.ProjectRole(joinProject, principal).Role != store.RoleMember {
 		t.Fatalf("roles: org=%q project=%q", st.OrgRole(org.ID, principal), st.ProjectRole(joinProject, principal).Role)
 	}
-	if _, err := st.PreviewInvitation(code); err == nil {
+	if _, err := st.PreviewInvitation(code, true); err == nil {
 		t.Fatal("the invitation stayed valid after use")
 	}
 }
@@ -480,7 +480,7 @@ func TestOrgPageCreatesProjectInvitationLinks(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || m == nil {
 		t.Fatalf("link not shown: %d %s", resp.StatusCode, page)
 	}
-	if _, err := st.PreviewInvitation(m[1]); err != nil {
+	if _, err := st.PreviewInvitation(m[1], true); err != nil {
 		t.Fatal(err)
 	}
 	for _, role := range []string{"owner", "lead", ""} {
@@ -536,7 +536,7 @@ func TestJoinSignedInPageNamesTheAccountAndOffersSignOut(t *testing.T) {
 	code := projectInvite(t, st, org, store.RoleMember)
 	page, _ := anna.Get(srv.URL + "/join/" + code)
 	text := body(t, page)
-	for _, want := range []string{"signed in as <strong>anna</strong>", `name="confirm_account"`, "Not you?", `action="/join/` + code + `/signout"`} {
+	for _, want := range []string{"signed in as <strong>anna</strong> <small>(person:2)", "signed in as <strong>anna</strong>", `name="confirm_account"`, "Not you?", `action="/join/` + code + `/signout"`} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("page lacks %q: %s", want, text)
 		}
@@ -550,7 +550,7 @@ func TestJoinSignedInPageNamesTheAccountAndOffersSignOut(t *testing.T) {
 			t.Fatalf("confirm %q: %d", confirm, resp.StatusCode)
 		}
 	}
-	if _, err := st.PreviewInvitation(code); err != nil {
+	if _, err := st.PreviewInvitation(code, true); err != nil {
 		t.Fatal("an unconfirmed accept consumed the invitation")
 	}
 	// Abmelden führt zurück zur Einladung, die Sitzung ist weg.
@@ -599,23 +599,80 @@ func TestOrgPageAbsoluteJoinURLWithPublicOrigin(t *testing.T) {
 	}
 }
 
-func TestOrgPageHidesOtherMembersFromAGuest(t *testing.T) {
+func TestOrgPageShowsOnlyWhoSharesAProject(t *testing.T) {
 	srv, st, _, org, _ := joinWeb(t)
-	st.AddPerson("anna")
-	st.AddPerson("ben")
-	if _, err := st.AcceptInvitation("person:3", projectInvite(t, st, org, store.RoleMember)); err != nil {
+	for _, n := range []string{"anna", "secretguy"} {
+		st.AddPerson(n)
+	}
+	const secret = "github.com/alpha/secret"
+	if _, err := st.EnsureProject("person:1", secret); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.AcceptInvitation("person:2", projectInvite(t, st, org, store.RoleGuest)); err != nil {
+	a, _, _ := st.CreateProjectInvitation("person:1", org.ID, joinProject, store.RoleMember, 0)
+	b, _, _ := st.CreateProjectInvitation("person:1", org.ID, secret, store.RoleMember, 0)
+	if _, err := st.AcceptInvitation("person:2", a); err != nil {
 		t.Fatal(err)
 	}
-	guest := loginInteractive(t, srv, st, "anna")
-	resp, _ := guest.Get(srv.URL + "/ui/orgs?org=alpha")
+	if _, err := st.AcceptInvitation("person:3", b); err != nil {
+		t.Fatal(err)
+	}
+	anna := loginInteractive(t, srv, st, "anna")
+	resp, _ := anna.Get(srv.URL + "/ui/orgs?org=alpha")
 	page := body(t, resp)
-	if strings.Contains(page, "ben") {
-		t.Fatalf("the guest sees another member: %s", page)
+	for _, leak := range []string{"secretguy", "person:3", secret} {
+		if strings.Contains(page, leak) {
+			t.Errorf("the page leaks %q", leak)
+		}
 	}
 	if !strings.Contains(page, "alice") || !strings.Contains(page, "anna") {
-		t.Fatalf("guest does not see himself and the owner: %s", page)
+		t.Fatalf("anna lacks owner or herself: %s", page)
+	}
+	// Auch ein Gast sieht keine anderen Mitglieder.
+	g, _, _ := st.CreateProjectInvitation("person:1", org.ID, joinProject, store.RoleGuest, 0)
+	st.AddPerson("gina")
+	if _, err := st.AcceptInvitation("person:4", g); err != nil {
+		t.Fatal(err)
+	}
+	gina := loginInteractive(t, srv, st, "gina")
+	resp, _ = gina.Get(srv.URL + "/ui/orgs?org=alpha")
+	if page := body(t, resp); strings.Contains(page, "anna") || strings.Contains(page, "secretguy") {
+		t.Fatalf("guest page leaks members: %s", page)
+	}
+}
+
+func TestOrgAcceptSendsProjectInvitationsToTheJoinPage(t *testing.T) {
+	srv, st, _, org, _ := joinWeb(t)
+	annaTok, _ := st.AddPerson("anna")
+	code := projectInvite(t, st, org, store.RoleMember)
+	// Eine Sitzung aus eingefügtem Token kommt hier nicht an der Bestätigung vorbei.
+	pasted := login(t, srv, annaTok)
+	resp := sameOriginPostForm(t, pasted, srv.URL+"/ui/orgs/accept", url.Values{"csrf_token": {renderedCSRFToken(t, pasted, srv.URL+"/ui/orgs")}, "code": {code}})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/join/"+code {
+		t.Fatalf("project code on /ui/orgs/accept: %d %s", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	if _, err := st.PreviewInvitation(code, true); err != nil {
+		t.Fatal("the redirect consumed the invitation")
+	}
+	if st.ProjectRole(joinProject, "person:2").Role != "" {
+		t.Fatal("a role was granted without the join page")
+	}
+	// Ein Org-weiter Code geht weiter hier durch.
+	plain := mustOrgInvite(t, st, org)
+	resp = sameOriginPostForm(t, pasted, srv.URL+"/ui/orgs/accept", url.Values{"csrf_token": {renderedCSRFToken(t, pasted, srv.URL+"/ui/orgs")}, "code": {plain}})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther || strings.HasPrefix(resp.Header.Get("Location"), "/join/") {
+		t.Fatalf("org-wide code: %d %s", resp.StatusCode, resp.Header.Get("Location"))
+	}
+}
+
+func TestJoinGuestPageIsNotFoundWithoutEnforcement(t *testing.T) {
+	srv, st, _, org, _ := joinWeb(t)
+	code := projectInvite(t, st, org, store.RoleGuest)
+	st.SetAccessMode(store.AccessMode{Enforce: false})
+	got, _ := anonClient().Get(srv.URL + "/join/" + code)
+	unknown, _ := anonClient().Get(srv.URL + "/join/" + strings.Repeat("ab", 32))
+	if snapshot(t, got) != snapshot(t, unknown) {
+		t.Fatal("a guest link without enforcement answers differently from an unknown code")
 	}
 }

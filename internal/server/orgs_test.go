@@ -276,11 +276,13 @@ func TestProjectInvitationsNeedAWebSessionAndGuestsSeeFewMembers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Ein unbekannter und ein verbrauchter Code bekommen dieselbe Antwort.
+	f.mustCall(t, 400, "POST", "/api/invitations/accept", f.anna, map[string]any{"code": strings.Repeat("ab", 32)})
 	out := f.mustCall(t, 403, "POST", "/api/invitations/accept", f.anna, map[string]any{"code": guest})
 	if out["code"] != "web_session_required" {
 		t.Fatalf("token accept of a project invitation: %v", out)
 	}
-	if _, err := f.st.PreviewInvitation(guest); err != nil {
+	if _, err := f.st.PreviewInvitation(guest, true); err != nil {
 		t.Fatal("the refused token accept consumed the invitation")
 	}
 	// Im Browser angenommen (Store), sieht der Gast über die API nur sich und den Owner.
@@ -300,6 +302,9 @@ func TestProjectInvitationsNeedAWebSessionAndGuestsSeeFewMembers(t *testing.T) {
 	for _, m := range list {
 		if m["account"] == "ben" {
 			t.Fatal("the guest sees another member")
+		}
+		if m["account"] == "robin" && m["account_id"] != nil {
+			t.Fatalf("the owner entry carries an id: %v", m)
 		}
 	}
 }

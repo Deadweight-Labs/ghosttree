@@ -78,7 +78,7 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 	}
 	if v.Selected.ID != 0 {
 		v.Owner = v.Selected.Role == store.OrgOwner
-		members, _ := a.store.ListOrgMembersFor(v.Selected.ID, me)
+		members, _ := a.store.ListOrgMembersFor(v.Selected.ID, me, a.store.AccessEnforced())
 		v.GuestLinks = a.store.AccessEnforced()
 		for _, m := range members {
 			m.Account = store.NormalizeAccountName(m.Account)
@@ -91,14 +91,34 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 			// Ein Gast sieht nur den eigenen Eintrag, wie in der API
 			// (listProjectMembers).
 			guest := store.RoleRank(a.access(r).Role(p.Remote).Role) == 1 && a.store.AccessEnforced()
-			for _, m := range members {
+			// Die Zeilen kommen aus den Mitgliedern des Projekts, nicht aus der
+			// Org-Liste: sonst stünde jedes Org-Mitglied mit "none" darin.
+			projectMembers, _ := a.store.ListProjectMembers(p.Remote)
+			byID := map[string]store.ProjectMember{}
+			for _, m := range projectMembers {
+				byID[m.AccountID] = m
+			}
+			rows := projectMembers
+			if v.Owner {
+				// Nur ein Owner sieht die ganze Org, um auch Konten ohne Rolle
+				// eine zu geben; wer nicht Owner ist, sieht die Mitglieder des
+				// Projekts.
+				rows = rows[:0:0]
+				for _, m := range members {
+					if pm, ok := byID[m.AccountID]; ok {
+						rows = append(rows, pm)
+					} else {
+						rows = append(rows, store.ProjectMember{AccountID: m.AccountID, Account: m.Account})
+					}
+				}
+			}
+			for _, m := range rows {
 				if guest && m.AccountID != me {
 					continue
 				}
-				info := a.store.ProjectRole(p.Remote, m.AccountID)
 				rv.Rows = append(rv.Rows, projectRoleRow{
-					Account: store.NormalizeAccountName(m.Account), AccountID: m.AccountID, Role: info.Role, CanReview: info.CanReview,
-					Implicit: info.Implicit, Grantable: a.grantable(r, me, p.Remote, m.AccountID), Self: m.AccountID == me,
+					Account: store.NormalizeAccountName(m.Account), AccountID: m.AccountID, Role: m.Role, CanReview: m.CanReview,
+					Implicit: m.Implicit, Grantable: a.grantable(r, me, p.Remote, m.AccountID), Self: m.AccountID == me,
 				})
 			}
 			v.Roles = append(v.Roles, rv)
@@ -266,7 +286,14 @@ func (a *app) orgProjectMove(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) orgAccept(w http.ResponseWriter, r *http.Request) {
-	o, err := a.store.AcceptInvitation(browserPrincipal(r).ID, strings.TrimSpace(r.FormValue("code")))
+	code := strings.TrimSpace(r.FormValue("code"))
+	// Eine Projekt-Einladung geht nur über die Einladungsseite: dort verlangt der
+	// Beitritt eine interaktive Sitzung und die Bestätigung des Kontos.
+	if wellFormedJoinCode(code) && a.store.OpenProjectInvitation(code) {
+		http.Redirect(w, r, "/join/"+code, http.StatusSeeOther)
+		return
+	}
+	o, err := a.store.AcceptInvitation(browserPrincipal(r).ID, code)
 	if err != nil {
 		a.orgFailure(w, r, err)
 		return
