@@ -88,9 +88,6 @@ type PresenceInput struct {
 	// angeforderte Pause ist kein Beleg.
 	PauseAt string
 	Waits   []PresenceWait
-	// Cycle ist gesetzt, wenn der Agent in einem Kreis gegenseitigen Wartens
-	// steht (coordwait.go). Eine Meldung, kein Zustand: nichts wird gelöst.
-	Cycle *WaitCycle
 }
 
 func parseAt(s string) (time.Time, bool) {
@@ -118,7 +115,6 @@ func DerivePresence(ref time.Time, in PresenceInput) Presence {
 	p := Presence{
 		Reachability: PresenceField{Value: ReachUnknown},
 		WorkState:    PresenceField{Value: WorkUnknown},
-		Cycle:        in.Cycle,
 	}
 	if t, ok := parseAt(in.LastPollAt); ok && ref.Sub(t) <= PollFreshTTL {
 		p.Reachability = field(ReachConnected, OriginObserved, in.LastPollAt, ref)
@@ -223,7 +219,8 @@ func ensureCoordAgentPresence(db *sql.DB) error {
 		return err
 	}
 	_, err := db.Exec(`CREATE INDEX IF NOT EXISTS coord_messages_sender ON coord_messages(sender_external_id,id);
-		CREATE INDEX IF NOT EXISTS coord_attention_message ON coord_attention(message_id,state)`)
+		CREATE INDEX IF NOT EXISTS coord_attention_message ON coord_attention(message_id,state);
+		CREATE INDEX IF NOT EXISTS coord_attention_open ON coord_attention(message_id) WHERE state='open'`)
 	return err
 }
 
@@ -454,21 +451,9 @@ func presenceBatch(db presenceDB, ref time.Time, roomKey string, agents []presen
 	// 3. Offene Wartepunkte, nur aus diesem Raum (loadWaitRows ist die eine
 	// Wartequelle, auch für die Zykluserkennung in coordwait.go).
 	waitRows, _ := loadWaitRows(db, ref, roomKey, ids)
-	var edges []WaitEdge
 	for _, r := range waitRows {
 		if in := inputs[r.Sender]; in != nil {
 			in.Waits = append(in.Waits, PresenceWait{Reason: r.Reason, At: r.At, Kind: r.Kind})
-		}
-		if e, ok := r.edge(ref); ok {
-			edges = append(edges, e)
-		}
-	}
-	for _, c := range DetectWaitCycles(edges) {
-		for _, m := range c.Members {
-			if in := inputs[m]; in != nil {
-				cc := c
-				in.Cycle = &cc
-			}
 		}
 	}
 
@@ -478,12 +463,16 @@ func presenceBatch(db presenceDB, ref time.Time, roomKey string, agents []presen
 	return out
 }
 
-// presenceWaitsSQL ist die Wartepunkt-Abfrage für n Absender. Eigene Funktion,
+// presenceWaitsSQL ist die Wartepunkt-Abfrage für n Absender. Sie geht von den
+// OFFENEN Attention-Einträgen aus (teilindex coord_attention_open) und schlägt
+// die Nachricht über ihre Id nach: die Arbeit hängt an der Zahl offener
+// Wartepunkte, nicht an der Länge des Raumverlaufs. Argumente: drei Gründe, n
+// Absender, Raumart, Raumschlüssel, Threadart, Raumschlüssel. Eigene Funktion,
 // damit ein Test dieselbe Abfrage mit EXPLAIN prüft, die sie auch ausführt.
 func presenceWaitsSQL(n int) string {
 	return `SELECT m.sender_external_id,a.recipient_principal_id,a.reason,a.created_at,COALESCE(m.expires_at,'')
-		FROM coord_messages m JOIN coord_attention a ON a.message_id=m.id
-		WHERE m.sender_external_id IN (` + placeholders(n) + `) AND a.state=? AND a.reason IN (?,?,?)
+		FROM coord_attention a CROSS JOIN coord_messages m ON m.id=a.message_id
+		WHERE a.state='open' AND a.reason IN (?,?,?) AND m.sender_external_id IN (` + placeholders(n) + `)
 		  AND a.recipient_principal_id<>m.sender_external_id
 		  AND ((m.destination_kind=? AND m.destination_id=?)
 		    OR (m.destination_kind=? AND m.destination_id IN

@@ -1,9 +1,11 @@
 package store
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
+	"log"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -37,7 +39,16 @@ const (
 	waitCycleMask = "*"
 
 	maxOrderedCycle = 10
+
+	// waitChunk begrenzt die IN-Listen einer Abfrage; SQLite kennt eine
+	// Obergrenze für Variablen, und große Räume sollen sie nicht erreichen.
+	waitChunk = 500
 )
+
+// waitNoteInterval: höchstens eine Systemmeldung über einen Wartekreis je Raum
+// in diesem Abstand. Ein weiterer Kreis wird im Merkbuch festgehalten und
+// erscheint in coord_peers, wird aber nicht gesendet. Variable für Tests.
+var waitNoteInterval = 10 * time.Minute
 
 // WaitEdge: Waiter wartet auf Awaited.
 type WaitEdge struct {
@@ -45,6 +56,9 @@ type WaitEdge struct {
 	Since                   string
 	// ReviewAt ist das Ablaufdatum des Eintrags, sonst Since + WaitReviewAfter
 	// (ReviewDerived). Danach ist die Wartekante überfällig, nicht geschlossen.
+	// Ein Eintrag mit eigenem Ablauf wird nie überfällig: abgelaufen ist er
+	// keine gegenwärtige Wartekante mehr (wie bei der Weckregel), er fällt aus
+	// dem Graphen, statt als überfällig weiterzugelten.
 	ReviewAt      string
 	ReviewDerived bool
 	Overdue       bool
@@ -275,38 +289,38 @@ func (r waitRow) edge(ref time.Time) (WaitEdge, bool) {
 
 // loadWaitRows ist die eine Wartequelle: offene, nicht abgelaufene Fragen,
 // Freigaben und Blocker der Absender, nur aus diesem Raum (und Threads, die
-// dort zuhause sind, soweit sie nicht auf Teilnehmer beschränkt sind). Zwei
-// Abfragen, unabhängig von der Zahl der Agenten.
+// dort zuhause sind, soweit sie nicht auf Teilnehmer beschränkt sind). Die
+// Absenderliste wird in Stücken zu waitChunk gefragt; sonst zwei Abfragen
+// (plus eine für die Empfänger), unabhängig von der Zahl der Agenten.
 func loadWaitRows(db presenceDB, ref time.Time, roomKey string, senders []any) ([]waitRow, error) {
-	if len(senders) == 0 {
-		return nil, nil
-	}
 	refText := ref.Format(time.RFC3339)
-	wr, err := db.Query(presenceWaitsSQL(len(senders)),
-		append(append([]any{}, senders...), AttentionOpen, AttentionQuestion, AttentionApproval, AttentionBlocker,
-			DestinationRoom, roomKey, DestinationDiscussion, roomKey)...)
-	if err != nil {
-		return nil, err
-	}
 	var rows []waitRow
 	recipients := map[string]bool{}
-	for wr.Next() {
-		var r waitRow
-		if wr.Scan(&r.Sender, &r.Recipient, &r.Reason, &r.At, &r.Expires) == nil && !expiredAt(r.Expires, refText) {
-			rows = append(rows, r)
-			if _, perr := parsePersonPrincipalID(r.Recipient); perr != nil {
-				recipients[r.Recipient] = true
+	for _, part := range chunkArgs(senders, waitChunk) {
+		wr, err := db.Query(presenceWaitsSQL(len(part)),
+			append(append([]any{AttentionQuestion, AttentionApproval, AttentionBlocker}, part...),
+				DestinationRoom, roomKey, DestinationDiscussion, roomKey)...)
+		if err != nil {
+			return nil, err
+		}
+		for wr.Next() {
+			var r waitRow
+			if wr.Scan(&r.Sender, &r.Recipient, &r.Reason, &r.At, &r.Expires) == nil && !expiredAt(r.Expires, refText) {
+				rows = append(rows, r)
+				if _, perr := parsePersonPrincipalID(r.Recipient); perr != nil {
+					recipients[r.Recipient] = true
+				}
 			}
 		}
+		wr.Close()
 	}
-	wr.Close()
 	isAgent := map[string]bool{}
-	if len(recipients) > 0 {
-		list := make([]any, 0, len(recipients))
-		for r := range recipients {
-			list = append(list, r)
-		}
-		ar, err := db.Query(`SELECT external_id FROM coord_agents WHERE external_id IN (`+placeholders(len(list))+`)`, list...)
+	list := make([]any, 0, len(recipients))
+	for r := range recipients {
+		list = append(list, r)
+	}
+	for _, part := range chunkArgs(list, waitChunk) {
+		ar, err := db.Query(`SELECT external_id FROM coord_agents WHERE external_id IN (`+placeholders(len(part))+`)`, part...)
 		if err != nil {
 			return nil, err
 		}
@@ -328,6 +342,19 @@ func loadWaitRows(db presenceDB, ref time.Time, roomKey string, senders []any) (
 	return rows, nil
 }
 
+func chunkArgs(list []any, n int) [][]any {
+	var out [][]any
+	for len(list) > 0 {
+		k := n
+		if len(list) < k {
+			k = len(list)
+		}
+		out = append(out, list[:k])
+		list = list[k:]
+	}
+	return out
+}
+
 func ensureCoordWaitCycles(db *sql.DB) error {
 	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS coord_wait_cycles(
 		id INTEGER PRIMARY KEY,
@@ -337,83 +364,135 @@ func ensureCoordWaitCycles(db *sql.DB) error {
 		notified_message_id INTEGER NOT NULL DEFAULT 0,
 		dissolved_at TEXT NOT NULL DEFAULT '');
 		CREATE UNIQUE INDEX IF NOT EXISTS coord_wait_cycles_active
-			ON coord_wait_cycles(room_key,cycle_key) WHERE dissolved_at=''`)
+			ON coord_wait_cycles(room_key,cycle_key) WHERE dissolved_at='';
+		CREATE INDEX IF NOT EXISTS coord_wait_cycles_room ON coord_wait_cycles(room_key,formed_at)`)
 	return err
 }
 
-// reconcileWaitCyclesTx gleicht die Kreise des Raums mit dem Merkbuch ab: ein
-// Kreis, den es nicht mehr gibt, gilt als aufgelöst; ein neuer bekommt GENAU
-// EINE Nachricht an alle Beteiligten. Solange er besteht, ändert sich nichts,
-// auch wenn eine Kante dazukommt oder ausläuft. Löst er sich auf und bildet
-// sich später neu, ist das ein neuer Kreis mit neuer Meldung.
-//
-// Aufgerufen, wo sich der Graph ändert: beim Senden einer Frage, Freigabe oder
-// eines Blockers und beim Schließen eines Eintrags. Die Meldung geht durch die
-// gewöhnliche Weckregel (ShouldWake: Erwähnung im Projektraum, immer im Direkt-
-// und Gruppenraum), es gibt keinen eigenen Weckpfad. Sie erzeugt keine
-// Wartekante und beantwortet nichts, kann also keine Schleife anstoßen.
-func reconcileWaitCyclesTx(tx *sql.Tx, roomKey string, ref time.Time) error {
-	if roomKey == "" {
-		return nil
-	}
-	mr, err := tx.Query(`SELECT a.external_id FROM coord_agents a
+// roomWaitCycles sind die Wartekreise eines Raums, über ALLE aktiven
+// Agenten-Mitglieder, nicht nur über die einer gefilterten Peer-Liste. Eine
+// Quelle für die Anzeige (CoordPeers) und den Abgleich (reconcile).
+func roomWaitCycles(db presenceDB, ref time.Time, roomKey string) ([]WaitCycle, error) {
+	mr, err := db.Query(`SELECT a.external_id FROM coord_agents a
 		JOIN coord_room_memberships m ON m.principal_id=a.external_id
 		WHERE m.room_key=? AND m.left_at=''`, roomKey)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var members []any
 	for mr.Next() {
 		var id string
 		if err := mr.Scan(&id); err != nil {
 			mr.Close()
-			return err
+			return nil, err
 		}
 		members = append(members, id)
 	}
 	if err := mr.Err(); err != nil {
 		mr.Close()
-		return err
+		return nil, err
 	}
 	mr.Close()
-
-	var cycles []WaitCycle
-	if len(members) > 0 {
-		rows, err := loadWaitRows(tx, ref, roomKey, members)
-		if err != nil {
-			return err
-		}
-		var edges []WaitEdge
-		for _, r := range rows {
-			if e, ok := r.edge(ref); ok {
-				edges = append(edges, e)
-			}
-		}
-		cycles = DetectWaitCycles(edges)
+	rows, err := loadWaitRows(db, ref, roomKey, members)
+	if err != nil {
+		return nil, err
 	}
-	current := map[string]WaitCycle{}
-	for _, c := range cycles {
-		current[c.Key()] = c
+	var edges []WaitEdge
+	for _, r := range rows {
+		if e, ok := r.edge(ref); ok {
+			edges = append(edges, e)
+		}
 	}
+	return DetectWaitCycles(edges), nil
+}
 
-	ar, err := tx.Query(`SELECT id,cycle_key FROM coord_wait_cycles WHERE room_key=? AND dissolved_at=''`, roomKey)
+func cycleMembers(key string) map[string]bool {
+	out := map[string]bool{}
+	for _, m := range strings.Split(key, "\x1f") {
+		out[m] = true
+	}
+	return out
+}
+
+func isSubset(sub, super map[string]bool) bool {
+	for m := range sub {
+		if !super[m] {
+			return false
+		}
+	}
+	return true
+}
+
+// reconcileWaitCyclesSafeTx ist reconcileWaitCyclesTx in einem Savepoint: ein
+// Fehler dort wird protokolliert und zurückgerollt, und der Vorgang, der den
+// Graphen geändert hat (eine Nachricht, ein Schließen), gelingt trotzdem. Die
+// Meldung ist ein Zusatz und darf nichts blockieren.
+func reconcileWaitCyclesSafeTx(tx *sql.Tx, roomKey string, ref time.Time) {
+	if roomKey == "" {
+		return
+	}
+	if _, err := tx.Exec(`SAVEPOINT wait_cycles`); err != nil {
+		log.Printf("wait cycles: savepoint: %v", err)
+		return
+	}
+	if err := reconcileWaitCyclesTx(tx, roomKey, ref); err != nil {
+		log.Printf("wait cycles: room %s: %v", roomKey, err)
+		if _, rerr := tx.Exec(`ROLLBACK TO wait_cycles`); rerr != nil {
+			log.Printf("wait cycles: rollback: %v", rerr)
+		}
+	}
+	if _, err := tx.Exec(`RELEASE wait_cycles`); err != nil {
+		log.Printf("wait cycles: release: %v", err)
+	}
+}
+
+// reconcileWaitCyclesTx gleicht die Kreise des Raums mit dem Merkbuch ab.
+//
+//   - Ein Kreis, den es nicht mehr gibt, gilt als aufgelöst.
+//   - Ein Kreis, dessen Mitglieder alle schon in einem aktiven Kreis standen
+//     (er ist geschrumpft oder hat sich geteilt), wird still übernommen: wer
+//     geht, löst keine neue Meldung aus.
+//   - Ein Kreis mit mindestens einem Mitglied, das in keinem aktiven Kreis
+//     stand, ist neu und bekommt EINE Nachricht an alle Beteiligten. Das
+//     gilt auch, wenn ein Kreis wächst. Löst er sich auf und bildet sich
+//     später neu, ist er wieder neu.
+//   - Höchstens eine Meldung je Raum und waitNoteInterval; ein weiterer neuer
+//     Kreis steht im Merkbuch, wird aber nicht gesendet.
+//
+// Aufgerufen, wo sich der Graph ändert (Senden einer Frage, Freigabe oder
+// eines Blockers; Schließen eines Eintrags). Die Meldung geht durch die
+// gewöhnliche Weckregel (ShouldWake), es gibt keinen eigenen Weckpfad. Sie
+// erzeugt keine Wartekante und beantwortet nichts, kann also keine Schleife
+// anstoßen.
+func reconcileWaitCyclesTx(tx *sql.Tx, roomKey string, ref time.Time) error {
+	cycles, err := roomWaitCycles(tx, ref, roomKey)
 	if err != nil {
 		return err
 	}
-	active := map[string]bool{}
-	var gone []any
+	current := map[string]bool{}
+	for _, c := range cycles {
+		current[c.Key()] = true
+	}
+	ar, err := tx.Query(`SELECT id,cycle_key,formed_at FROM coord_wait_cycles WHERE room_key=? AND dissolved_at=''`, roomKey)
+	if err != nil {
+		return err
+	}
+	type active struct {
+		id      int64
+		key, at string
+		members map[string]bool
+	}
+	var rows []active
+	activeKeys := map[string]bool{}
 	for ar.Next() {
-		var id int64
-		var key string
-		if err := ar.Scan(&id, &key); err != nil {
+		var r active
+		if err := ar.Scan(&r.id, &r.key, &r.at); err != nil {
 			ar.Close()
 			return err
 		}
-		if _, still := current[key]; still {
-			active[key] = true
-		} else {
-			gone = append(gone, id)
-		}
+		r.members = cycleMembers(r.key)
+		rows = append(rows, r)
+		activeKeys[r.key] = true
 	}
 	if err := ar.Err(); err != nil {
 		ar.Close()
@@ -421,27 +500,39 @@ func reconcileWaitCyclesTx(tx *sql.Tx, roomKey string, ref time.Time) error {
 	}
 	ar.Close()
 	refText := ref.Format(time.RFC3339)
-	for _, id := range gone {
-		if _, err := tx.Exec(`UPDATE coord_wait_cycles SET dissolved_at=? WHERE id=?`, refText, id); err != nil {
-			return err
-		}
-	}
 	for _, c := range cycles {
 		key := c.Key()
-		if active[key] {
+		if activeKeys[key] {
 			continue
 		}
-		res, err := tx.Exec(`INSERT INTO coord_wait_cycles(room_key,cycle_key,formed_at) VALUES(?,?,?)`, roomKey, key, refText)
+		members := cycleMembers(key)
+		formed, covered := refText, false
+		for _, r := range rows {
+			if isSubset(members, r.members) {
+				formed, covered = r.at, true
+				break
+			}
+		}
+		res, err := tx.Exec(`INSERT INTO coord_wait_cycles(room_key,cycle_key,formed_at) VALUES(?,?,?)`, roomKey, key, formed)
 		if err != nil {
 			return err
 		}
+		if covered {
+			continue
+		}
 		rowID, _ := res.LastInsertId()
-		mentions := normalizeMembers(c.Members)
+		var last sql.NullString
+		if err := tx.QueryRow(`SELECT MAX(formed_at) FROM coord_wait_cycles WHERE room_key=? AND notified_message_id<>0`, roomKey).Scan(&last); err != nil {
+			return err
+		}
+		if t, ok := parseAt(last.String); ok && ref.Sub(t) < waitNoteInterval {
+			continue // recorded, not sent
+		}
 		msgID, err := appendCoordMessageTx(tx, CoordMessage{
 			DestinationKind: DestinationRoom, DestinationID: roomKey,
 			SenderExternalID: WaitCycleSender, AuthorPrincipalID: "system", AuthorKind: AuthorSystem,
-			ClientID: "wait-cycle:" + strconv.FormatInt(rowID, 10),
-			Intent:   IntentAttention, Priority: "high", Mentions: mentions, CreatedAt: refText,
+			ClientID: randomNoteID(),
+			Intent:   IntentAttention, Priority: "high", Mentions: normalizeMembers(c.Members), CreatedAt: refText,
 			// Kein Name im Text: der Raum kann Gäste haben, die Nachrichten
 			// lesen. Wer im Kreis steht, sagen die Erwähnungen, die nur
 			// Mitglieder sehen, und coord_peers.
@@ -457,5 +548,23 @@ func reconcileWaitCyclesTx(tx *sql.Tx, roomKey string, ref time.Time) error {
 			return err
 		}
 	}
+	for _, r := range rows {
+		if !current[r.key] {
+			if _, err := tx.Exec(`UPDATE coord_wait_cycles SET dissolved_at=? WHERE id=?`, refText, r.id); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
+}
+
+// randomNoteID ist die ClientID einer Systemmeldung: unvorhersagbar. Die
+// Meldung geht außerdem nie durch die Wiederholungserkennung (siehe
+// appendCoordMessageTx), eine vorab gesendete ClientID unterdrückt sie also nicht.
+func randomNoteID() string {
+	var b [12]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic("wait cycle note id: " + err.Error())
+	}
+	return "wait-cycle:" + hex.EncodeToString(b[:])
 }

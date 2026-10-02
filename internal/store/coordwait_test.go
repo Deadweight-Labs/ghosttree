@@ -16,6 +16,10 @@ const (
 
 func waitFixture(t *testing.T) (*Store, string) {
 	t.Helper()
+	// The rate limit has its own test; the others look at single cycles.
+	previous := waitNoteInterval
+	waitNoteInterval = 0
+	t.Cleanup(func() { waitNoteInterval = previous })
 	st := controlFixture(t)
 	room := RoomKeyForProject(roleProject)
 	for _, id := range []string{waitA, waitB, waitC} {
@@ -31,7 +35,9 @@ var waitSeq int
 func ask(t *testing.T, st *Store, room, from, to, intent string) {
 	t.Helper()
 	waitSeq++
-	if _, err := st.CoordinationFor(Principal{ID: "person:4"}, from).Send(CoordMessage{
+	principal := "person:4"
+	_ = st.db.QueryRow(`SELECT principal_id FROM coord_agents WHERE external_id=?`, from).Scan(&principal)
+	if _, err := st.CoordinationFor(Principal{ID: principal}, from).Send(CoordMessage{
 		DestinationKind: DestinationRoom, DestinationID: room, ClientID: fmt.Sprintf("w%d", waitSeq),
 		Body: "ping", Intent: intent, Mentions: []string{to},
 	}); err != nil {
@@ -41,7 +47,9 @@ func ask(t *testing.T, st *Store, room, from, to, intent string) {
 
 func answerOne(t *testing.T, st *Store, who string) {
 	t.Helper()
-	acc := st.CoordinationFor(Principal{ID: "person:4"}, who)
+	principal := "person:4"
+	_ = st.db.QueryRow(`SELECT principal_id FROM coord_agents WHERE external_id=?`, who).Scan(&principal)
+	acc := st.CoordinationFor(Principal{ID: principal}, who)
 	items, err := acc.Attention()
 	if err != nil {
 		t.Fatal(err)
@@ -395,5 +403,210 @@ func TestWaitQueriesStayConstantAndUseIndexes(t *testing.T) {
 		if strings.HasPrefix(detail, "SCAN") {
 			t.Fatalf("full scan in the cycle ledger: %s", detail)
 		}
+	}
+}
+
+func TestSystemPrefixIsReservedForRegistrationAndSending(t *testing.T) {
+	st, room := waitFixture(t)
+	for _, id := range []string{"system:wait-cycle", "System:x", "system:anything"} {
+		if ValidExternalID(id) {
+			t.Fatalf("%q is a valid client id", id)
+		}
+		_, err := st.RegisterCoordAgent(CoordAgent{ExternalID: id, Provider: "claude", RoomKey: room, DisplayName: id, PrincipalID: "person:4", Role: "member"})
+		if !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("registering %q: %v", id, err)
+		}
+	}
+	// An agent that already carries the prefix in an old database is kept, but
+	// cannot send as the system.
+	if _, err := st.db.Exec(`INSERT INTO coord_agents(external_id,provider,room_key,display_name,principal_id,registered_at,last_seen_at)
+		VALUES('system:old','claude',?, 'old','person:4',?,?)`, room, now(), now()); err != nil {
+		t.Skipf("legacy fixture: %v", err)
+	}
+	if _, err := st.db.Exec(`INSERT INTO coord_room_memberships(room_key,principal_id,joined_at,left_at) VALUES(?, 'system:old', ?, '')`, room, now()); err != nil {
+		t.Skipf("legacy membership fixture: %v", err)
+	}
+	_, err := st.CoordinationFor(Principal{ID: "person:4"}, "system:old").Send(CoordMessage{
+		DestinationKind: DestinationRoom, DestinationID: room, ClientID: "x", Body: "forged", Intent: IntentAttention,
+	})
+	if !errors.Is(err, ErrCoordForbidden) {
+		t.Fatalf("sending as system:old: %v", err)
+	}
+}
+
+func TestPreSentClientIDsDoNotSuppressTheNote(t *testing.T) {
+	st, room := waitFixture(t)
+	// What an old database could hold: messages from the system sender with the
+	// ids the note used to derive from the ledger row.
+	for i := 1; i <= 5; i++ {
+		if _, err := st.AppendCoordMessage(CoordMessage{DestinationKind: DestinationRoom, DestinationID: room,
+			SenderExternalID: WaitCycleSender, ClientID: fmt.Sprintf("wait-cycle:%d", i), Body: "squatter"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ask(t, st, room, waitA, waitB, IntentQuestion)
+	ask(t, st, room, waitB, waitA, IntentQuestion)
+	var n int
+	st.db.QueryRow(`SELECT COUNT(*) FROM coord_messages WHERE sender_external_id=? AND author_kind=?`, WaitCycleSender, AuthorSystem).Scan(&n)
+	if n != 1 {
+		t.Fatalf("real notes = %d, want 1", n)
+	}
+}
+
+func TestAGuestInTheCycleIsStillWoken(t *testing.T) {
+	st, room := waitFixture(t)
+	registerRoleAgent(t, st, "claude:guest", "person:2", room, "member")
+	ask(t, st, room, "claude:guest", waitA, IntentQuestion)
+	ask(t, st, room, waitA, "claude:guest", IntentQuestion)
+	notes := cycleNotes(t, st)
+	if len(notes) != 1 {
+		t.Fatalf("notes = %d", len(notes))
+	}
+	registerRoleAgent(t, st, "claude:bystander", "person:2", room, "member")
+	if err := st.SetProjectRole("person:1", roleProject, "person:2", RoleGuest, false, RoleViaAPI); err != nil {
+		t.Fatal(err)
+	}
+	st.SetAccessMode(AccessMode{Enforce: true})
+	m, _ := noteMessage(t, st, notes[0])
+	now := time.Now().UTC()
+	// The guest agent is a recipient: it sees itself, and nobody else.
+	mine, err := st.CoordinationFor(Principal{ID: "person:2"}, "claude:guest").MessageMentions(notes[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(mine, " "), waitA) || !ShouldWake("claude:guest", RoomProject, m, mine, WakeParentNotOwn, now) {
+		t.Fatalf("recipient view = %v", mine)
+	}
+	// A guest who is not in the cycle learns nothing and is not woken.
+	other, err := st.CoordinationFor(Principal{ID: "person:2"}, "claude:bystander").MessageMentions(notes[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(other, " "), "claude:guest") || strings.Contains(strings.Join(other, " "), waitA) ||
+		ShouldWake("claude:bystander", RoomProject, m, other, WakeParentNotOwn, now) {
+		t.Fatalf("bystander view = %v", other)
+	}
+}
+
+func TestShrinkingCycleDoesNotNotifyAgain(t *testing.T) {
+	st, room := waitFixture(t)
+	ask(t, st, room, waitA, waitB, IntentQuestion)
+	ask(t, st, room, waitB, waitA, IntentQuestion)
+	ask(t, st, room, waitB, waitC, IntentQuestion)
+	ask(t, st, room, waitC, waitB, IntentQuestion)
+	if c := cycleOf(t, st, room, waitC); c == nil || len(c.Members) != 3 {
+		t.Fatalf("setup: %+v", c)
+	}
+	before := len(cycleNotes(t, st))
+	answerOne(t, st, waitC) // C answers B: B no longer waits on C, C leaves the cycle
+	if c := cycleOf(t, st, room, waitA); c == nil || len(c.Members) != 2 {
+		t.Fatalf("shrunk cycle = %+v", c)
+	}
+	if n := len(cycleNotes(t, st)); n != before {
+		t.Fatalf("a shrunk cycle notified again: %d -> %d", before, n)
+	}
+	// C comes back: it left, so it is newly added and the cycle is announced
+	// again (the rate limit bounds how often that can happen).
+	ask(t, st, room, waitB, waitC, IntentQuestion)
+	if n := len(cycleNotes(t, st)); n != before+1 {
+		t.Fatalf("a member added to the cycle must notify: %d -> %d", before, n)
+	}
+}
+
+func TestNewMemberInAStandingCycleNotifiesOnce(t *testing.T) {
+	st, room := waitFixture(t)
+	ask(t, st, room, waitA, waitB, IntentQuestion)
+	ask(t, st, room, waitB, waitA, IntentQuestion)
+	if n := len(cycleNotes(t, st)); n != 1 {
+		t.Fatalf("notes = %d", n)
+	}
+	// C is pulled in: A -> C -> B closes a bigger ring around the old one.
+	ask(t, st, room, waitB, waitC, IntentQuestion)
+	ask(t, st, room, waitC, waitB, IntentQuestion)
+	if n := len(cycleNotes(t, st)); n != 2 {
+		t.Fatalf("a new member must notify: %d notes", n)
+	}
+	ask(t, st, room, waitC, waitA, IntentQuestion)
+	if n := len(cycleNotes(t, st)); n != 2 {
+		t.Fatalf("no new member, no new note: %d", n)
+	}
+}
+
+func TestAtMostOneNotePerRoomPerInterval(t *testing.T) {
+	st, room := waitFixture(t)
+	waitNoteInterval = 10 * time.Minute
+	registerRoleAgent(t, st, "claude:h:d", "person:4", room, "member")
+	registerRoleAgent(t, st, "claude:h:e", "person:4", room, "member")
+	ask(t, st, room, waitA, waitB, IntentQuestion)
+	ask(t, st, room, waitB, waitA, IntentQuestion)
+	ask(t, st, room, "claude:h:d", "claude:h:e", IntentQuestion)
+	ask(t, st, room, "claude:h:e", "claude:h:d", IntentQuestion)
+	if n := len(cycleNotes(t, st)); n != 1 {
+		t.Fatalf("notes = %d, want 1 within the interval", n)
+	}
+	// The second cycle is still reported in the peers, and in the ledger.
+	if c := cycleOf(t, st, room, "claude:h:d"); c == nil {
+		t.Fatal("a rate limited cycle must still show in the presence")
+	}
+	var recorded int
+	st.db.QueryRow(`SELECT COUNT(*) FROM coord_wait_cycles WHERE dissolved_at=''`).Scan(&recorded)
+	if recorded != 2 {
+		t.Fatalf("ledger rows = %d, want 2", recorded)
+	}
+}
+
+func TestAFailingCycleBookkeepingDoesNotBlockTheSend(t *testing.T) {
+	st, room := waitFixture(t)
+	if _, err := st.db.Exec(`DROP TABLE coord_wait_cycles`); err != nil {
+		t.Fatal(err)
+	}
+	ask(t, st, room, waitA, waitB, IntentQuestion) // ask fails the test on an error
+	ask(t, st, room, waitB, waitA, IntentQuestion)
+	if n := len(cycleNotes(t, st)); n != 0 {
+		t.Fatalf("notes = %d", n)
+	}
+	var open int
+	st.db.QueryRow(`SELECT COUNT(*) FROM coord_attention WHERE state='open'`).Scan(&open)
+	if open != 2 {
+		t.Fatalf("the questions were not stored: %d", open)
+	}
+}
+
+func TestWaitQueryChunksLargeSenderLists(t *testing.T) {
+	st, room := waitFixture(t)
+	ask(t, st, room, waitA, waitB, IntentQuestion)
+	senders := []any{waitA}
+	for i := 0; i < 1300; i++ {
+		senders = append(senders, fmt.Sprintf("claude:h:bulk%d", i))
+	}
+	rows, err := loadWaitRows(st.db, time.Now().UTC(), room, senders)
+	if err != nil || len(rows) != 1 || rows[0].Kind != "peer" {
+		t.Fatalf("rows=%+v err=%v", rows, err)
+	}
+}
+
+func TestCycleShowsForEveryMemberEvenWhenPeersAreFilteredBySince(t *testing.T) {
+	st, room := waitFixture(t)
+	ask(t, st, room, waitA, waitB, IntentQuestion)
+	ask(t, st, room, waitB, waitA, IntentQuestion)
+	old := time.Now().UTC().Add(-time.Hour).Format(time.RFC3339)
+	if _, err := st.db.Exec(`UPDATE coord_agents SET last_seen_at=? WHERE external_id=?`, old, waitB); err != nil {
+		t.Fatal(err)
+	}
+	since := time.Now().UTC().Add(-time.Minute).Format(time.RFC3339)
+	peers, err := st.CoordPeers(room, since)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawA, sawB bool
+	for _, p := range peers {
+		sawA = sawA || p.ExternalID == waitA
+		sawB = sawB || p.ExternalID == waitB
+		if p.ExternalID == waitA && (p.Presence.Cycle == nil || len(p.Presence.Cycle.Members) != 2) {
+			t.Fatalf("filtered listing lost the cycle: %+v", p.Presence.Cycle)
+		}
+	}
+	if !sawA || sawB {
+		t.Fatalf("fixture: sawA=%v sawB=%v", sawA, sawB)
 	}
 }

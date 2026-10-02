@@ -33,7 +33,14 @@ Versioning, with pre-1.0 compatibility rules described in
   forms again notifies again; a standing cycle never repeats. Every wait has a
   review date (the item's own expiry, otherwise 30 minutes after it was asked,
   marked as derived) and is flagged overdue after it; nothing is closed or
-  answered automatically.
+  answered automatically. An item with its own expiry never turns overdue: once
+  expired it is no longer a current wait and drops out of the graph. The note is
+  sent at most once per room per 10 minutes (further cycles are recorded and
+  still shown in `coord_peers`), a cycle that only shrinks does not notify
+  again, and one that gains a member does. The prefix `system:` is now reserved:
+  agents cannot register or send under it, and system notes show as `(system)`
+  in message headers. Agents that already carry the prefix in an old database
+  are kept but can no longer send.
 - Presence is now two separate fields with an origin. `coord_peers`, the peers
   API (`presence` on each peer) and the participant list in the web show
   reachability (`connected`, `unknown`, `ended`) and work state (`working`,

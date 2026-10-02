@@ -131,10 +131,15 @@ func appendCoordMessageTx(tx *sql.Tx, m CoordMessage) (int64, error) {
 			return 0, ErrCoordInvalidExpiry
 		}
 	}
-	if id, found, err := existingCoordMessage(tx, m); err != nil {
-		return 0, err
-	} else if found {
-		return id, nil
+	// Systemmeldungen gehen nie durch die Wiederholungserkennung: sie kommen nur
+	// aus dem Store, und eine vorab gesendete ClientID darf sie nicht
+	// unterdrücken.
+	if m.AuthorKind != AuthorSystem {
+		if id, found, err := existingCoordMessage(tx, m); err != nil {
+			return 0, err
+		} else if found {
+			return id, nil
+		}
 	}
 
 	// The high-water row survives retention, so an emptied destination never

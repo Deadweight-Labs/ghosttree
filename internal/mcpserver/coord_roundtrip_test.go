@@ -953,3 +953,17 @@ func TestWaitCycleLinesNameTheCycleOnce(t *testing.T) {
 		t.Fatalf("no cycle, no line: %q", got)
 	}
 }
+
+func TestSystemMessagesAreMarkedBySystemAuthorKindNotByID(t *testing.T) {
+	sys := senderLabel(store.CoordMessage{SenderExternalID: "system:wait-cycle", AuthorKind: store.AuthorSystem})
+	if sys != "system:wait-cycle (system)" {
+		t.Fatalf("system header = %q", sys)
+	}
+	// The mark follows author_kind: an agent with a similar id is not marked.
+	if got := senderLabel(store.CoordMessage{SenderExternalID: "claude:system", AuthorKind: store.AuthorAgent}); strings.Contains(got, "(system)") {
+		t.Fatalf("agent header = %q", got)
+	}
+	if got := senderLabel(store.CoordMessage{SenderExternalID: "system:x", AuthorKind: store.AuthorAgent}); strings.Contains(got, "(system)") {
+		t.Fatalf("an agent id must not earn the system mark: %q", got)
+	}
+}
