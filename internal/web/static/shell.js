@@ -1,6 +1,15 @@
 // Shell behaviour: "/" focuses the search field, the project selector submits
 // on change, and the account menu closes on Escape or a click outside.
 (() => {
+  document.documentElement.classList.add("js");
+  const shell = document.querySelector(".shell");
+  const toggle = document.querySelector("[data-shell-toggle]");
+  if (shell && toggle) {
+    toggle.addEventListener("click", () => {
+      const open = shell.toggleAttribute("data-open");
+      toggle.setAttribute("aria-expanded", String(open));
+    });
+  }
   const search = document.getElementById("shell-search");
   if (search) {
     addEventListener("keydown", (event) => {

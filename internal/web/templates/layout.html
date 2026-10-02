@@ -4,13 +4,15 @@
 
 {{define "nav"}}<div class="shell">
 <aside class="shell-side">
-<a class="shell-brand" href="/ui/"><span class="brand-mark" aria-hidden="true"></span><span>{{t "shell.brand"}}</span></a>
-{{if .Shell.Projects}}<form class="shell-project" method="get" action="{{.Shell.ProjectAction}}"><label class="visually-hidden" for="shell-project">{{t "shell.project"}}</label><select id="shell-project" name="project" data-autosubmit><option value=""{{if .Shell.AllSelected}} selected{{end}}>{{t "shell.all_projects"}}</option>{{range .Shell.Projects}}<option value="{{.Remote}}"{{if .Selected}} selected{{end}}>{{.Remote}}</option>{{end}}</select><button class="visually-hidden">{{t "shell.switch_project"}}</button></form>{{end}}
+<div class="shell-head"><a class="shell-brand" href="/ui/"><span class="brand-mark" aria-hidden="true"></span><span>{{t "shell.brand"}}</span></a><button type="button" class="shell-toggle" data-shell-toggle aria-expanded="false" aria-controls="shell-collapsible" aria-label="{{t "shell.menu"}}"><span aria-hidden="true"></span></button></div>
+<div class="shell-collapsible" id="shell-collapsible">
+{{if .Shell.Projects}}<form class="shell-project" method="get" action="{{.Shell.ProjectAction}}"><label class="visually-hidden" for="shell-project">{{t "shell.project"}}</label><select id="shell-project" name="project" data-autosubmit>{{if .Shell.CanAll}}<option value=""{{if .Shell.AllSelected}} selected{{end}}>{{t "shell.all_projects"}}</option>{{else if .Shell.AllSelected}}<option value="" disabled selected hidden>{{t "shell.project"}}</option>{{end}}{{range .Shell.Projects}}<option value="{{.Remote}}"{{if .Selected}} selected{{end}}>{{.Remote}}</option>{{end}}</select><button class="visually-hidden">{{t "shell.switch_project"}}</button></form>{{end}}
 <nav class="shell-nav" aria-label="{{t "shell.nav"}}">
 {{range .Shell.Primary}}{{template "navitem" .}}{{end}}
 {{if .Shell.Secondary}}<hr class="shell-rule">{{range .Shell.Secondary}}{{template "navitem" .}}{{end}}{{end}}
 </nav>
 <p class="shell-host">{{.Shell.Host}}</p>
+</div>
 </aside>
 <div class="shell-main">
 <header class="shell-top">

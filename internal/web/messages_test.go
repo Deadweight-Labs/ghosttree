@@ -92,7 +92,7 @@ func TestCatalogTextsAreEnglishAndNotEmpty(t *testing.T) {
 }
 
 func TestMsgFormatsArgumentsAndNeverReturnsEmpty(t *testing.T) {
-	if got := msg("login.provider"); !strings.Contains(got, "%s") && got == "" {
+	if got := msg("login.provider", "ZITADEL"); got != "Continue with ZITADEL" {
 		t.Fatalf("msg returned %q", got)
 	}
 	if got := msg("no.such.key"); got != "no.such.key" {

@@ -2,6 +2,7 @@ package web
 
 import (
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 
@@ -31,6 +32,7 @@ type shellView struct {
 	Secondary     []navItem
 	Projects      []projectOption
 	AllSelected   bool
+	CanAll        bool
 	ProjectAction string
 	Initial       string
 	RoleKey       string
@@ -45,33 +47,43 @@ const (
 	viewerOwner
 )
 
+// viewer ist der eingeordnete Betrachter der Hülle.
+type viewer struct {
+	kind    viewerKind
+	roleKey string
+	// reviewer: darf Wissen prüfen (Reviewer-Flag, Lead, Owner, Admin).
+	reviewer bool
+}
+
 // viewerOf ordnet den Betrachter ein: Owner/Admin, Member (auch Lead) oder
 // Guest. Guest ist, wer höchstens Guest-Rollen hat. Wer noch in keinem Projekt
 // eine Rolle hat (frische Instanz, Konto ohne Organisation), bekommt die
 // Navigation eines Members; die Seiten dahinter filtern selbst.
-func (a *app) viewerOf(r *http.Request) (viewerKind, string) {
-	pa := a.access(r)
+func (a *app) viewerOf(r *http.Request, pa *store.ProjectAccess) viewer {
 	orgOwner := false
 	if orgs, err := a.store.ListOrgs(browserPrincipal(r).ID); err == nil {
 		for _, o := range orgs {
 			orgOwner = orgOwner || o.Role == store.OrgOwner
 		}
 	}
-	rank := 0
+	rank, flag := 0, false
 	for _, remote := range pa.Projects() {
-		rank = max(rank, store.RoleRank(pa.Role(remote).Role))
+		role := pa.Role(remote)
+		rank = max(rank, store.RoleRank(role.Role))
+		flag = flag || role.CanReview
 	}
+	reviewer := flag || rank >= store.RoleRank(store.RoleLead) || pa.IsAdmin() || orgOwner
 	switch {
 	case orgOwner || rank >= store.RoleRank(store.RoleOwner):
-		return viewerOwner, "role.owner"
+		return viewer{viewerOwner, "role.owner", true}
 	case pa.IsAdmin():
-		return viewerOwner, "role.admin"
+		return viewer{viewerOwner, "role.admin", true}
 	case rank == store.RoleRank(store.RoleLead):
-		return viewerMember, "role.lead"
+		return viewer{viewerMember, "role.lead", reviewer}
 	case rank == store.RoleRank(store.RoleGuest):
-		return viewerGuest, "role.guest"
+		return viewer{viewerGuest, "role.guest", false}
 	}
-	return viewerMember, "role.member"
+	return viewer{viewerMember, "role.member", reviewer}
 }
 
 // projectAware sind die Seiten, die ?project= auswerten.
@@ -87,7 +99,7 @@ func navKeyFor(section string, kind viewerKind) string {
 	case "knowledge", "review", "context":
 		return "knowledge"
 	case "sessions", "session":
-		return "agents"
+		return "sessions"
 	case "coord":
 		return "rooms"
 	case "tokens", "device", "devicecheck", "devicedone":
@@ -104,22 +116,29 @@ func navKeyFor(section string, kind viewerKind) string {
 }
 
 func (a *app) shellFor(r *http.Request, name string) shellView {
-	kind, roleKey := a.viewerOf(r)
+	pa := a.access(r)
+	who := a.viewerOf(r, pa)
+	kind := who.kind
 	current := navKeyFor(name, kind)
 	item := func(key, label, href string) navItem {
 		return navItem{Key: key, Label: label, Href: href, Current: key == current}
 	}
-	v := shellView{On: true, RoleKey: roleKey, Host: r.Host}
+	v := shellView{On: true, RoleKey: who.roleKey, Host: a.publicHost(r), CanAll: kind == viewerOwner}
 	if label := strings.TrimSpace(browserPrincipal(r).Label); label != "" {
 		v.Initial = strings.ToUpper(string([]rune(label)[:1]))
 	}
 
 	v.Primary = []navItem{item("overview", "nav.overview", "/ui/overview")}
 	if kind != viewerGuest {
-		v.Primary = append(v.Primary, item("agents", "nav.agents", "/ui/sessions"), item("rooms", "nav.rooms", "/ui/coord"))
+		v.Primary = append(v.Primary, item("agents", "nav.agents", "/ui/sessions"))
+	}
+	// Sessions zeigt jeder; die Seite filtert selbst, der Eintrag verrät nichts.
+	v.Primary = append(v.Primary, item("sessions", "nav.sessions", "/ui/sessions"))
+	if kind != viewerGuest {
+		v.Primary = append(v.Primary, item("rooms", "nav.rooms", "/ui/coord"))
 	}
 	knowledge := item("knowledge", "nav.knowledge", "/ui/knowledge")
-	if kind != viewerGuest && current == "knowledge" {
+	if who.reviewer && current == "knowledge" {
 		sub := func(key, label, href, section string) navItem {
 			return navItem{Key: key, Label: label, Href: href, Current: name == section}
 		}
@@ -142,14 +161,24 @@ func (a *app) shellFor(r *http.Request, name string) shellView {
 	if projectAware[name] {
 		v.ProjectAction = r.URL.Path
 	}
-	v.Projects, v.AllSelected = a.projectOptions(r)
+	v.Projects, v.AllSelected = a.projectOptions(r, pa)
 	return v
+}
+
+// publicHost ist der Host, den die Fußzeile zeigt: der der öffentlichen URL,
+// sonst der der Anfrage. Ein Proxy-Host aus Headern wird nie gezeigt.
+func (a *app) publicHost(r *http.Request) string {
+	if a.publicOrigin != "" {
+		if u, err := url.Parse(a.publicOrigin); err == nil && u.Host != "" {
+			return u.Host
+		}
+	}
+	return r.Host
 }
 
 // projectOptions listet die Projekte, in denen der Betrachter eine Rolle hat,
 // und markiert das gewählte (?project=). Projekte ohne Rolle erscheinen nie.
-func (a *app) projectOptions(r *http.Request) ([]projectOption, bool) {
-	pa := a.access(r)
+func (a *app) projectOptions(r *http.Request, pa *store.ProjectAccess) ([]projectOption, bool) {
 	list, err := a.store.ListProjects(browserPrincipal(r).ID, 0)
 	if err != nil {
 		return nil, true

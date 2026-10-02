@@ -54,7 +54,14 @@ body.ui {
   display: flex; align-items: center; gap: var(--space-2); color: var(--color-text-primary) !important;
   font: 600 15px/1 var(--font-sans); text-decoration: none;
 }
-.shell-brand { padding: 0 var(--space-4) var(--space-4) 18px; }
+.shell-head { display: flex; align-items: center; justify-content: space-between; padding: 0 var(--space-3) var(--space-4) 0; }
+.shell-brand { padding: 0 var(--space-4) 0 18px; }
+.shell-toggle { display: none; width: 32px; height: 32px; padding: 0; border: 1px solid var(--color-line-default); border-radius: var(--radius-md); background: var(--color-surface-panel); cursor: pointer; }
+.shell-toggle span, .shell-toggle span::before, .shell-toggle span::after { display: block; width: 14px; height: 2px; margin: 0 auto; background: var(--color-text-secondary); content: ""; }
+.shell-toggle span { position: relative; }
+.shell-toggle span::before { position: absolute; top: -5px; left: 0; }
+.shell-toggle span::after { position: absolute; top: 5px; left: 0; }
+.shell-collapsible { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .brand-mark { width: 18px; height: 18px; border-radius: 5px; background: var(--color-accent); }
 .shell-project { margin: 0 10px var(--space-4); }
 .shell-project select {
@@ -141,3 +148,21 @@ body.ui {
 .login-token form { margin-top: var(--space-3); text-align: left; }
 .login-back { display: block; margin-top: var(--space-4); text-align: center; color: var(--color-text-secondary) !important; font: var(--text-secondary); }
 .login-card p { margin: 0 0 var(--space-3); }
+
+/* Narrow screens: no separate mobile design. The sidebar becomes a bar on top
+   whose menu opens with the toggle; without script everything stays open. */
+@media (max-width: 900px) {
+  .shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr; }
+  .shell-side { position: static; height: auto; padding-bottom: var(--space-2); border-right: 0; border-bottom: 1px solid var(--color-line-default); }
+  .shell-head { padding-bottom: 0; }
+  .shell-toggle { display: block; }
+  .js .shell:not([data-open]) .shell-collapsible { display: none; }
+  .shell-collapsible { padding-top: var(--space-3); }
+  .shell-host { margin-top: var(--space-3); }
+  .shell-top { position: static; padding: 0 var(--space-3); }
+  .shell-search { width: auto; flex: 1; }
+  .account-id { display: none; }
+  :where(.shell-main > main) { padding: var(--space-4) var(--space-3); overflow-x: auto; }
+  html.coord-enhanced .shell .coord-workspace { height: calc(100dvh - 6rem); }
+  .login { padding-top: 6vh; }
+}

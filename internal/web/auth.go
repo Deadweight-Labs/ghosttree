@@ -289,7 +289,11 @@ func (a *app) codeSubmit(w http.ResponseWriter, r *http.Request) {
 	if !parseLoginForm(w, r) {
 		return
 	}
-	code := codeFromInput(r.FormValue("code"))
+	code, joinCode := codeFromInput(r.FormValue("code"))
+	if joinCode != "" {
+		http.Redirect(w, r, "/join/"+joinCode, http.StatusSeeOther)
+		return
+	}
 	if len(code) > maxCodeLength || len(r.FormValue("name")) > maxNameLength {
 		http.Error(w, "field too long", http.StatusBadRequest)
 		return
@@ -299,8 +303,7 @@ func (a *app) codeSubmit(w http.ResponseWriter, r *http.Request) {
 	switch a.store.CodeKindFor(code) {
 	case store.CodeBootstrap:
 		if a.oidc != nil {
-			a.loginMessage(w, http.StatusForbidden, "auth.bootstrap_via_idp.title",
-				"auth.bootstrap_via_idp.text")
+			a.beginOIDC(w, r, code)
 			return
 		}
 		if account, err = a.store.BootstrapLocal(code, r.FormValue("name")); err == nil {
@@ -308,10 +311,17 @@ func (a *app) codeSubmit(w http.ResponseWriter, r *http.Request) {
 		}
 	case store.CodeLogin:
 		account, err = a.store.RedeemLoginLink(code)
+	case store.CodeClaim:
+		// Ein Claim-Code gehört zum Anbieter-Ablauf; ohne OIDC gibt es ihn nicht.
+		if a.oidc == nil {
+			err = store.ErrCodeInvalid
+			break
+		}
+		a.beginOIDC(w, r, code)
+		return
 	case store.CodeInvitation:
 		if a.oidc != nil {
-			a.loginMessage(w, http.StatusForbidden, "auth.invitation_via_idp.title",
-				"auth.invitation_via_idp.text")
+			a.beginOIDC(w, r, code)
 			return
 		}
 		account, err = a.store.InviteLocal(code, r.FormValue("name"))
@@ -336,17 +346,24 @@ func (a *app) logout(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/ui/login", http.StatusSeeOther)
 }
 
-// codeFromInput nimmt den Code aus dem Feld "Code or login link": entweder der
-// Code selbst oder ein eingefügter Login-Link mit ?code=.
-func codeFromInput(raw string) string {
+// codeFromInput nimmt den Code aus dem Feld "Code or login link": der Code
+// selbst, ein Login-Link mit ?code= oder ein Einladungslink /join/<code>. Bei
+// einem Einladungslink kommt der Einladungscode als zweiter Wert zurück; er
+// wird nie als Login-Code gewertet.
+func codeFromInput(raw string) (code, joinCode string) {
 	raw = strings.TrimSpace(raw)
 	if !strings.Contains(raw, "://") || len(raw) > 2048 {
-		return raw
+		return raw, ""
 	}
-	if u, err := url.Parse(raw); err == nil {
-		if code := strings.TrimSpace(u.Query().Get("code")); code != "" {
-			return code
-		}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return raw, ""
 	}
-	return raw
+	if rest, ok := strings.CutPrefix(u.Path, "/join/"); ok && wellFormedJoinCode(rest) {
+		return "", rest
+	}
+	if c := strings.TrimSpace(u.Query().Get("code")); c != "" {
+		return c, ""
+	}
+	return raw, ""
 }

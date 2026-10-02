@@ -4,9 +4,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
+	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
+	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
@@ -15,16 +18,22 @@ const (
 	shellHiddenProject = "github.com/x/hidden"
 )
 
-// shellWeb legt einen Owner (alice), ein Member (anna) und einen Guest (gina)
-// in einer Organisation an. Das Projekt "hidden" hat nur alice.
-func shellWeb(t *testing.T) (base string, owner, member, guest *http.Client) {
+// shellEnv ist eine Organisation mit Owner (alice), Member (anna), Guest
+// (gina), Lead (lars) und Member mit Reviewer-Flag (rita). Das Projekt
+// "hidden" hat nur alice.
+type shellEnv struct {
+	Base                                 string
+	St                                   *store.Store
+	Owner, Member, Guest, Lead, Reviewer *http.Client
+}
+
+func shellWebAll(t *testing.T) shellEnv {
 	t.Helper()
 	srv, st, _ := testWeb(t)
-	if _, err := st.AddPerson("anna"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := st.AddPerson("gina"); err != nil {
-		t.Fatal(err)
+	for _, n := range []string{"anna", "gina", "lars", "rita"} {
+		if _, err := st.AddPerson(n); err != nil {
+			t.Fatal(err)
+		}
 	}
 	org, err := st.CreateOrg("person:1", "Alpha", "alpha")
 	if err != nil {
@@ -35,19 +44,26 @@ func shellWeb(t *testing.T) (base string, owner, member, guest *http.Client) {
 			t.Fatal(err)
 		}
 	}
-	for _, account := range []string{"person:2", "person:3"} {
+	for _, account := range []string{"person:2", "person:3", "person:4", "person:5"} {
 		code, _, _ := st.CreateInvitation("person:1", org.ID, "", store.OrgMember, 0)
 		if _, err := st.AcceptInvitation(account, code); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := st.SetProjectRole("person:1", shellProject, "person:2", store.RoleMember, false, store.RoleViaCLI); err != nil {
-		t.Fatal(err)
+	for account, role := range map[string]string{"person:2": store.RoleMember, "person:3": store.RoleGuest, "person:4": store.RoleLead, "person:5": store.RoleMember} {
+		if err := st.SetProjectRole("person:1", shellProject, account, role, account == "person:5", store.RoleViaCLI); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if err := st.SetProjectRole("person:1", shellProject, "person:3", store.RoleGuest, false, store.RoleViaCLI); err != nil {
-		t.Fatal(err)
-	}
-	return srv.URL, loginInteractive(t, srv, st, "alice"), loginInteractive(t, srv, st, "anna"), loginInteractive(t, srv, st, "gina")
+	return shellEnv{Base: srv.URL, St: st,
+		Owner: loginInteractive(t, srv, st, "alice"), Member: loginInteractive(t, srv, st, "anna"), Guest: loginInteractive(t, srv, st, "gina"),
+		Lead: loginInteractive(t, srv, st, "lars"), Reviewer: loginInteractive(t, srv, st, "rita")}
+}
+
+func shellWeb(t *testing.T) (base string, owner, member, guest *http.Client) {
+	t.Helper()
+	e := shellWebAll(t)
+	return e.Base, e.Owner, e.Member, e.Guest
 }
 
 func fetchPage(t *testing.T, c *http.Client, url string) (int, string) {
@@ -72,7 +88,7 @@ func navKeys(page string) map[string]bool {
 
 func TestShellNavigationFollowsTheRole(t *testing.T) {
 	base, owner, member, guest := shellWeb(t)
-	workspace := []string{"overview", "agents", "rooms", "knowledge", "requests"}
+	workspace := []string{"overview", "agents", "sessions", "rooms", "knowledge", "requests"}
 	for _, tc := range []struct {
 		name   string
 		client *http.Client
@@ -81,7 +97,7 @@ func TestShellNavigationFollowsTheRole(t *testing.T) {
 	}{
 		{"owner", owner, append(workspace, "admin-org", "admin-devices"), []string{"account-devices"}},
 		{"member", member, append(workspace, "account-devices"), []string{"admin-org", "admin-devices"}},
-		{"guest", guest, []string{"overview", "knowledge", "requests"}, []string{"agents", "rooms", "admin-org", "admin-devices", "account-devices"}},
+		{"guest", guest, []string{"overview", "sessions", "knowledge", "requests"}, []string{"agents", "rooms", "admin-org", "admin-devices", "account-devices"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			status, page := fetchPage(t, tc.client, base+"/ui/overview")
@@ -111,7 +127,7 @@ func TestShellNavigationRevealsNothingToAGuest(t *testing.T) {
 	for _, path := range []string{"/ui/overview", "/ui/requests", "/ui/knowledge"} {
 		_, page := fetchPage(t, guest, base+path)
 		for _, leak := range []string{
-			`href="/ui/sessions"`, `href="/ui/coord"`, `href="/ui/account/tokens"`,
+			`href="/ui/coord"`, `href="/ui/account/tokens"`,
 			`href="/ui/review"`, `href="/ui/context"`,
 			shellHiddenProject, // Projekt ohne Rolle des Gastes
 		} {
@@ -213,7 +229,7 @@ func TestEveryBrowserPageUsesTheShell(t *testing.T) {
 func TestShellMarksTheCurrentSection(t *testing.T) {
 	base, owner, _, _ := shellWeb(t)
 	for path, key := range map[string]string{
-		"/ui/overview": "overview", "/ui/sessions": "agents", "/ui/coord": "rooms",
+		"/ui/overview": "overview", "/ui/sessions": "sessions", "/ui/coord": "rooms",
 		"/ui/knowledge": "knowledge", "/ui/review": "knowledge", "/ui/context": "knowledge",
 		"/ui/requests": "requests", "/ui/orgs": "admin-org", "/ui/account/tokens": "admin-devices",
 	} {
@@ -227,15 +243,118 @@ func TestShellMarksTheCurrentSection(t *testing.T) {
 	}
 }
 
-func TestKnowledgeTabsAppearUnderKnowledgeForNonGuests(t *testing.T) {
-	base, owner, _, guest := shellWeb(t)
-	_, page := fetchPage(t, owner, base+"/ui/review")
-	if !navKeys(page)["knowledge-review"] || !navKeys(page)["knowledge-context"] {
-		t.Error("review and agent context stay reachable for a reviewer")
+func TestKnowledgeReviewAndContextAreForReviewersLeadsAndOwnersOnly(t *testing.T) {
+	e := shellWebAll(t)
+	for name, c := range map[string]*http.Client{"owner": e.Owner, "lead": e.Lead, "reviewer": e.Reviewer} {
+		_, page := fetchPage(t, c, e.Base+"/ui/review")
+		if !navKeys(page)["knowledge-review"] || !navKeys(page)["knowledge-context"] {
+			t.Errorf("%s lacks review and agent context entries", name)
+		}
 	}
-	_, page = fetchPage(t, guest, base+"/ui/knowledge")
-	if navKeys(page)["knowledge-review"] || navKeys(page)["knowledge-context"] {
-		t.Error("guest sees review or context entries")
+	for name, c := range map[string]*http.Client{"member": e.Member, "guest": e.Guest} {
+		_, page := fetchPage(t, c, e.Base+"/ui/knowledge")
+		for _, k := range []string{"knowledge-review", "knowledge-context", "knowledge-search"} {
+			if navKeys(page)[k] {
+				t.Errorf("%s sees %s", name, k)
+			}
+		}
+	}
+}
+
+func TestAllProjectsIsOfferedToOwnersOnly(t *testing.T) {
+	e := shellWebAll(t)
+	_, page := fetchPage(t, e.Owner, e.Base+"/ui/overview")
+	if !strings.Contains(page, `<option value="" selected>All projects`) {
+		t.Error("owner lacks All projects")
+	}
+	for name, c := range map[string]*http.Client{"member": e.Member, "guest": e.Guest, "lead": e.Lead} {
+		_, page := fetchPage(t, c, e.Base+"/ui/overview")
+		if strings.Contains(page, "All projects") {
+			t.Errorf("%s is offered All projects", name)
+		}
+		if !strings.Contains(page, `<option value="" disabled selected hidden>`) {
+			t.Errorf("%s selector has no neutral placeholder", name)
+		}
+	}
+}
+
+func TestEveryShellPageHasLogoutWithCSRFAndMarksDetailPages(t *testing.T) {
+	e := shellWebAll(t)
+	detail, err := e.St.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: "Nav", Scope: scope.Axes{Project: shellProject}}, Criteria: []string{"c"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sid, err := e.St.UpsertSession(store.Session{Harness: "codex", ExternalID: "nav", Scope: scope.Axes{Project: shellProject}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for path, key := range map[string]string{
+		"/ui/overview": "overview", "/ui/requests": "requests", "/ui/requests/" + strconv.FormatInt(detail.Request.ID, 10): "requests",
+		"/ui/sessions": "sessions", "/ui/sessions/" + strconv.FormatInt(sid, 10): "sessions",
+		"/ui/knowledge": "knowledge", "/ui/coord": "rooms", "/ui/orgs": "admin-org", "/ui/account/tokens": "admin-devices",
+	} {
+		_, page := fetchPage(t, e.Owner, e.Base+path)
+		if !strings.Contains(page, `data-nav="`+key+`" aria-current="page"`) {
+			t.Errorf("GET %s does not mark %s current", path, key)
+		}
+		if !regexp.MustCompile(`method="post" action="/ui/logout"><input type="hidden" name="csrf_token" value="[0-9a-f]{16,}"`).MatchString(page) {
+			t.Errorf("GET %s lacks the logout form with a CSRF token", path)
+		}
+	}
+}
+
+func TestShellFooterShowsThePublicHostNotTheRequestHost(t *testing.T) {
+	st := mustStore(t)
+	if _, err := st.AddPerson("alice"); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(New(st, WithPublicURL("https://gt.example.test")))
+	defer srv.Close()
+	c := loginInteractive(t, srv, st, "alice")
+	_, page := fetchPage(t, c, srv.URL+"/ui/overview")
+	if !strings.Contains(page, `<p class="shell-host">gt.example.test</p>`) {
+		t.Errorf("footer does not show the public host: %s", page)
+	}
+	srv2, _, tok := testWeb(t)
+	_, page = fetchPage(t, login(t, srv2, tok), srv2.URL+"/ui/overview")
+	if !strings.Contains(page, `<p class="shell-host">`+strings.TrimPrefix(srv2.URL, "http://")+`</p>`) {
+		t.Error("without a public URL the footer shows the request host")
+	}
+}
+
+func TestShellNavigationCollapsesOnNarrowScreens(t *testing.T) {
+	e := shellWebAll(t)
+	_, page := fetchPage(t, e.Owner, e.Base+"/ui/overview")
+	if !strings.Contains(page, `data-shell-toggle`) || !strings.Contains(page, `aria-expanded="false"`) || !strings.Contains(page, `class="shell-collapsible"`) {
+		t.Error("shell lacks the navigation toggle")
+	}
+	resp, err := http.Get(e.Base + "/static/shell.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	css := body(t, resp)
+	if !strings.Contains(css, "@media (max-width: 900px)") || !strings.Contains(css, ".js .shell:not([data-open]) .shell-collapsible") {
+		t.Error("shell.css lacks the narrow-screen rules")
+	}
+}
+
+func TestFontsAreCachedLongOtherStaticFilesAreNot(t *testing.T) {
+	srv, _, _ := testWeb(t)
+	resp, err := http.Get(srv.URL + "/static/fonts/IBMPlexSans-Regular-Latin1.woff2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if cc := resp.Header.Get("Cache-Control"); !strings.Contains(cc, "max-age=31536000") || !strings.Contains(cc, "immutable") {
+		t.Errorf("font Cache-Control=%q", cc)
+	}
+	resp, err = http.Get(srv.URL + "/static/shell.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if strings.Contains(resp.Header.Get("Cache-Control"), "immutable") {
+		t.Error("stylesheets must not be immutable")
 	}
 }
 

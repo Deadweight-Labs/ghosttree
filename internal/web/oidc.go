@@ -331,7 +331,18 @@ func (a *app) oidcStart(w http.ResponseWriter, r *http.Request) {
 	if !parseLoginForm(w, r) {
 		return
 	}
-	code := strings.TrimSpace(r.FormValue("code"))
+	code, joinCode := codeFromInput(r.FormValue("code"))
+	if joinCode != "" {
+		http.Redirect(w, r, "/join/"+joinCode, http.StatusSeeOther)
+		return
+	}
+	a.beginOIDC(w, r, code)
+}
+
+// beginOIDC startet den Ablauf mit dem eingegebenen Code (leer, Claim-,
+// Bootstrap- oder Einladungscode). Der Anbieterknopf und das Codefeld mit
+// Enter laufen beide hierüber.
+func (a *app) beginOIDC(w http.ResponseWriter, r *http.Request, code string) {
 	if len(code) > maxCodeLength {
 		http.Error(w, "code too long", http.StatusBadRequest)
 		return

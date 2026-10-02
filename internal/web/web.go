@@ -9,6 +9,7 @@ import (
 	"html/template"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
@@ -85,7 +86,7 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 		opt(a)
 	}
 	mux := http.NewServeMux()
-	a.handle(mux, "GET /static/", http.FileServerFS(files))
+	a.handle(mux, "GET /static/", a.staticFiles())
 	a.handle(mux, "GET /{$}", a.rootRedirect)
 	a.handle(mux, "GET /favicon.ico", a.favicon)
 	a.handle(mux, "GET /ui/login", a.loginPage)
@@ -488,4 +489,16 @@ func WebRouteClasses() map[string]string {
 		out[pattern] = string(class)
 	}
 	return out
+}
+
+// staticFiles liefert die eingebetteten Dateien. Die Schriften ändern sich nur
+// mit einer neuen Plex-Version und liegen lange im Cache.
+func (a *app) staticFiles() http.Handler {
+	fileServer := http.FileServerFS(files)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/static/fonts/") {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		}
+		fileServer.ServeHTTP(w, r)
+	})
 }

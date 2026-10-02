@@ -19,7 +19,10 @@ Versioning, with pre-1.0 compatibility rules described in
   Design tokens and self-hosted IBM Plex Sans and Mono (SIL OFL, under
   `/static/fonts`) replace system fonts. `/` redirects to `/ui/`, and a
   favicon is served. All texts of the shell and sign-in page come from one
-  message catalog.
+  message catalog. On an OIDC instance, a claim, bootstrap or invitation code
+  typed into the code field (Enter) starts the provider sign-in, and a pasted
+  login or `/join/<code>` link is understood by both buttons. Below 900 px the
+  navigation folds behind a menu button.
 
 - Added: the server can serve the `ctx` installer (REQ-434, fourth part).
   With `GHOSTTREE_DIST_DIR` (or `--dist-dir`) pointing at a directory of
