@@ -184,9 +184,14 @@ func (s *Store) AddAccount(name, email string, admin bool) (Account, error) {
 			return d.AddAccount(p[0].(string), p[1].(string), p[2].(bool))
 		})
 	}
-	name = strings.TrimSpace(name)
+	name = NormalizeAccountName(name)
 	if name == "" {
 		return Account{}, fmt.Errorf("account name is required")
+	}
+	if taken, err := accountNameTakenTx(s.db, name); err != nil {
+		return Account{}, err
+	} else if taken {
+		return Account{}, ErrAccountNameTaken
 	}
 	flag := 0
 	if admin {
@@ -566,7 +571,7 @@ func createBootstrapAccount(tx *sql.Tx, name, email string) (int64, error) {
 	if persons > 0 {
 		return 0, ErrCodeInvalid
 	}
-	name = strings.TrimSpace(name)
+	name = NormalizeAccountName(name)
 	if name == "" {
 		name = "admin"
 	}

@@ -470,7 +470,7 @@ func fillSenderDisplayNamesTx(tx *sql.Tx, a CoordAccess, kind, id string, msgs [
 			}
 			names[m.AuthorPrincipalID] = name
 		}
-		m.SenderDisplayName = name
+		m.SenderDisplayName = NormalizeAccountName(name)
 	}
 	return nil
 }

@@ -31,7 +31,7 @@ func TestSenderNameIsSanitisedAndLimited(t *testing.T) {
 		t.Fatalf("unsafe name: %q", got)
 	}
 	m.SenderDisplayName = strings.Repeat("x", 300)
-	if got := NewNotification(store.CoordRoom{}, m, "x").Meta["sender_name"]; len(got) != MaxSenderName {
+	if got := NewNotification(store.CoordRoom{}, m, "x").Meta["sender_name"]; len(got) != store.MaxDisplayNameRunes {
 		t.Fatalf("len %d", len(got))
 	}
 }

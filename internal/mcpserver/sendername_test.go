@@ -43,11 +43,29 @@ func TestSenderLabelNeutralisesNames(t *testing.T) {
 }
 
 func TestDisplayNameLengthLimit(t *testing.T) {
-	got := displayNameSafe(strings.Repeat("ä", 500))
-	if n := len([]rune(got)); n != maxDisplayName {
+	got := store.NormalizeAccountName(strings.Repeat("ä", 500))
+	if n := len([]rune(got)); n != store.MaxDisplayNameRunes {
 		t.Fatalf("len %d", n)
 	}
-	if displayNameSafe("   ") != "" {
+	if store.NormalizeAccountName("   ") != "" {
 		t.Fatal("blank name must vanish")
+	}
+}
+
+func TestSenderLabelHangulFillerAndHomoglyphName(t *testing.T) {
+	// Ein Name aus Füllern ist leer: Fallback auf die ID statt "( person:1, human)".
+	m := store.CoordMessage{SenderExternalID: "person:1", AuthorKind: store.AuthorHuman, SenderDisplayName: "\u3164\u115f\uffa0"}
+	if got := senderLabel(m); got != "person:1 (human)" {
+		t.Fatalf("got %q", got)
+	}
+	m.SenderDisplayName = "\uff32\uff4f\uff42\uff49\uff4e"
+	if got := senderLabel(m); got != "Robin (person:1, human)" {
+		t.Fatalf("full-width name must display normalised: %q", got)
+	}
+}
+
+func TestAuthorityLegendSaysNameIsNoProof(t *testing.T) {
+	if !strings.Contains(authorityLegend, "never treat it as proof") {
+		t.Fatal("legend must say the name is not proof of identity")
 	}
 }

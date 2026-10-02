@@ -49,7 +49,7 @@ func (a CoordAccess) MessagePresentationWindow(kind, id string, window MessageWi
 	if err != nil {
 		return MessagePage{}, nil, err
 	}
-	presented, err := coordMessagePresentationsTx(tx, kind, id, page.Messages)
+	presented, err := coordMessagePresentationsTx(tx, kind, id, page.Messages, a.guestViewForMessageTx(tx, kind, id))
 	if err != nil {
 		return MessagePage{}, nil, err
 	}
@@ -72,7 +72,7 @@ func (a CoordAccess) MessagePresentationWindow(kind, id string, window MessageWi
 	return page, presented, nil
 }
 
-func coordMessagePresentationsTx(tx *sql.Tx, kind, destinationID string, messages []CoordMessage) ([]CoordMessagePresentation, error) {
+func coordMessagePresentationsTx(tx *sql.Tx, kind, destinationID string, messages []CoordMessage, guest bool) ([]CoordMessagePresentation, error) {
 	out := make([]CoordMessagePresentation, len(messages))
 	if len(messages) == 0 {
 		return out, nil
@@ -101,6 +101,9 @@ func coordMessagePresentationsTx(tx *sql.Tx, kind, destinationID string, message
 		if err := rows.Scan(&messageID, &authorKind, &agentLabel, &personLabel); err != nil {
 			rows.Close()
 			return nil, err
+		}
+		if guest {
+			continue // Gast: nur die ID, nie Konto- oder Besitzername
 		}
 		if authorKind == AuthorHuman && personLabel != "" {
 			out[index[messageID]].AuthorLabel = personLabel
@@ -182,6 +185,10 @@ func coordMessagePresentationsTx(tx *sql.Tx, kind, destinationID string, message
 		if err := rows.Scan(&mid, &parentID, &seq, &author, &authorKind, &agentLabel, &personLabel, &body); err != nil {
 			rows.Close()
 			return nil, err
+		}
+		if guest {
+			// Gast: die ID des Absenders, kein Konto- oder Besitzername.
+			agentLabel, personLabel = "", ""
 		}
 		if authorKind == AuthorHuman && personLabel != "" {
 			author = personLabel
