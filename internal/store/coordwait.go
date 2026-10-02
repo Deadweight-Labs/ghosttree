@@ -112,11 +112,11 @@ func (c WaitCycle) Describe(label func(string) string) string {
 	default:
 		chain = strings.Join(names, " ↔ ")
 	}
-	out := "gegenseitiges Warten: " + chain + " (seit " + c.Since + ")"
+	out := "mutual wait: " + chain + " (since " + c.Since + ")"
 	if c.Overdue {
-		out += ", Review seit " + c.ReviewAt + " überfällig"
+		out += ", review overdue since " + c.ReviewAt
 	} else if c.ReviewAt != "" {
-		out += ", Review bis " + c.ReviewAt
+		out += ", review due " + c.ReviewAt
 	}
 	return out
 }

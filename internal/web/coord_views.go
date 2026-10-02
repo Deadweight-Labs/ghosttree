@@ -1,7 +1,7 @@
 package web
 
 import (
-	"errors"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"sort"
@@ -14,7 +14,9 @@ import (
 )
 
 type coordPageView struct {
-	EventCursor       string
+	EventCursor string
+	// Texts is the JSON the script reads its status lines from.
+	Texts             string
 	Sidebar           coordSidebarView
 	Active            *coordRoomDetailView
 	Recipients        []coordRecipientView
@@ -24,7 +26,17 @@ type coordPageView struct {
 
 const coordAttentionVisible = 3
 
-// IncomingHead is what "Braucht dich" shows at once; IncomingRest folds away.
+// FirstRoom is the room the empty page offers: the first tab.
+func (v coordPageView) FirstRoom() *coordRoomView {
+	for _, section := range [][]coordRoomView{v.Sidebar.Projects, v.Sidebar.Machines, v.Sidebar.Private} {
+		if len(section) > 0 {
+			return &section[0]
+		}
+	}
+	return nil
+}
+
+// IncomingHead is what "Needs you" shows at once; IncomingRest folds away.
 func (v coordPageView) IncomingHead() []coordAttentionView {
 	if len(v.IncomingAttention) <= coordAttentionVisible {
 		return v.IncomingAttention
@@ -39,7 +51,7 @@ func (v coordPageView) IncomingRest() []coordAttentionView {
 	return v.IncomingAttention[coordAttentionVisible:]
 }
 
-type coordRecipientView struct{ ID, Label, Kind string }
+type coordRecipientView struct{ ID, Label, Kind, Option string }
 
 type coordSidebarView struct {
 	Attention []coordRoomView
@@ -66,10 +78,10 @@ func (s coordSidebarView) BadgeCount() int64 {
 func (s coordSidebarView) BadgeLabel() string {
 	for _, room := range s.Attention {
 		if room.NeedsYou > 0 {
-			return "brauchen dich"
+			return msg("coord.badge_needs")
 		}
 	}
-	return "ungelesen"
+	return msg("coord.badge_unread")
 }
 
 // room finds a room by key across every sidebar section.
@@ -100,14 +112,17 @@ type coordRoomDetailView struct {
 	Participants []coordParticipantView
 	// WaitCycles: je Kreis gegenseitigen Wartens eine Zeile, aus der Presence
 	// der Peers (Peers ist ACL-geprüft, ein Gast bekommt keine Liste).
-	WaitCycles             []string
-	Standing               []coordStandingView
-	HighWater              int64
-	FirstSequence          int64
-	LastSequence           int64
-	OlderURL, NewerURL     string
-	HasOlder, HasNewer     bool
-	CanManage, CanLeave    bool
+	WaitCycles          []string
+	Standing            []coordStandingView
+	HighWater           int64
+	FirstSequence       int64
+	LastSequence        int64
+	OlderURL, NewerURL  string
+	HasOlder, HasNewer  bool
+	CanManage, CanLeave bool
+	// CanDirect: the viewer's rank lets a standing instruction be a directive;
+	// below it the same gesture is a standing request.
+	CanDirect              bool
 	FormID, StandingFormID string
 	Zone                   string
 	ReplyTo                int64
@@ -156,6 +171,39 @@ type coordMessageView struct {
 	CanPromote       bool
 	CSRFToken        string
 	GroupStart       bool
+	// Own marks the viewer's own human posts (right-aligned blue bubbles).
+	Own, System bool
+	// Name and Machine split an agent label "name@machine" for display;
+	// Initials stand in for a person's avatar.
+	Name, Machine, Initials string
+	// Clock is the local time of day; Timestamp stays the exact value.
+	Clock        string
+	MentionsText string
+	// ThreadTitle and ThreadMeta describe the task thread anchored here.
+	ThreadTitle, ThreadMeta string
+	Directive               *coordDirectiveView
+	Request                 *coordRequestView
+}
+
+// coordDirectiveView is a standing instruction shown as a pinned plate. Active
+// is false once it was ended (or is not part of the room's standing list).
+type coordDirectiveView struct {
+	Active bool
+	// CanEnd: the viewer may end it (its author, or at least the author's rank).
+	// Request: the author's rank is below directive rank, so it only asks.
+	CanEnd, Request    bool
+	MessageID, RoomKey string
+	Scope              string
+}
+
+// coordRequestView is a question, approval, blocker or handoff. Items are the
+// open attention entries for this very message that the viewer may act on or
+// withdraw; Waiting is set while any is open.
+type coordRequestView struct {
+	Title, Waiting string
+	// State names how a closed request ended, e.g. "Answered · robin".
+	State string
+	Items []coordAttentionView
 }
 
 type coordReplyView struct {
@@ -163,14 +211,36 @@ type coordReplyView struct {
 	Author, Body, URL string
 	Missing           bool
 }
+
+// Head reads "Reply to #12 · Mia".
+func (r coordReplyView) Head() string {
+	return msg("coord.reply_to", r.Sequence) + " · " + r.Author
+}
+
 type coordRefView struct {
 	Kind, ID, Revision string
 	Mutable            bool
 }
+
+// Text names a reference: kind:id, the pinned revision or "(current state)".
+func (r coordRefView) Text() string {
+	text := r.Kind + ":" + r.ID
+	if r.Revision != "" {
+		return text + "@" + r.Revision
+	}
+	if r.Mutable {
+		return text + " " + msg("coord.ref_head")
+	}
+	return text
+}
+
 type coordStandingView struct {
 	MessageID, Person, Body, CreatedAt string
 	DisplayTimestamp                   string
 	Targets                            []string
+	// Scope reads "All agents in <room>, until ended" or the addressees.
+	Scope  string
+	CanEnd bool
 }
 
 type coordParticipantView struct {
@@ -188,11 +258,17 @@ type coordParticipantView struct {
 	CanReview bool
 	// Control is the pause control of an agent, nil for people.
 	Control *coordControlView
+	// Human, Initials, Dot and StatusLabel drive the compact list: Dot is one of
+	// active, wait, bad, idle, off; StatusLabel is the short state in words.
+	Human                      bool
+	Initials, Dot, StatusLabel string
+	// ReachKey and WorkKey are the raw store values; empty without evidence.
+	ReachKey, WorkKey string
 }
 
 // coordParticipantUnknown is the neutral value for a state nobody reported.
 // It is the normal case and says nothing about idleness.
-const coordParticipantUnknown = "unbekannt"
+const coordParticipantUnknown = "unknown"
 
 type coordAttentionActionView struct{ Value, Label string }
 
@@ -201,8 +277,10 @@ type coordAttentionView struct {
 	RecipientID, RecipientLabel, Reason, State, Body, URL, RoomKey string
 	CSRFToken                                                      string
 	Incoming, CanWithdraw                                          bool
-	SenderLabel, RoomLabel, RoomTitle                              string
-	ReasonLabel                                                    string
+	// Thread marks an item whose message lives in a task thread, not the room.
+	Thread                            bool
+	SenderLabel, RoomLabel, RoomTitle string
+	ReasonLabel                       string
 	// Primary is the one action worth showing without a disclosure; More
 	// holds everything else behind "Aktionen".
 	Primary *coordAttentionActionView
@@ -259,6 +337,7 @@ func buildCoordAttentionViews(items []store.AttentionItem, csrfToken string, lab
 			CoordinationOnlyApproval: item.Reason == store.AttentionApproval,
 		}
 		if item.DestinationKind == store.DestinationDiscussion {
+			view.Thread = true
 			threadID, err := strconv.ParseInt(item.DestinationID, 10, 64)
 			if err == nil && threadID > 0 && item.HomeRoomKey != "" {
 				view.URL = coordThreadMessageURL(item.HomeRoomKey, threadID, item.Sequence)
@@ -269,15 +348,15 @@ func buildCoordAttentionViews(items []store.AttentionItem, csrfToken string, lab
 		if item.State == store.AttentionOpen && item.IsRecipient {
 			switch item.Reason {
 			case store.AttentionQuestion:
-				view.Actions = append(view.Actions, coordAttentionActionView{Value: store.AttentionActionAnswer, Label: "Beantwortet"})
+				view.Actions = append(view.Actions, coordAttentionActionView{Value: store.AttentionActionAnswer, Label: msg("coord.action.answer")})
 			case store.AttentionApproval:
-				view.Actions = append(view.Actions, coordAttentionActionView{Value: store.AttentionActionApprove, Label: "Zustimmung vermerken"}, coordAttentionActionView{Value: store.AttentionActionReject, Label: "Ablehnung vermerken"})
+				view.Actions = append(view.Actions, coordAttentionActionView{Value: store.AttentionActionApprove, Label: msg("coord.action.approve")}, coordAttentionActionView{Value: store.AttentionActionReject, Label: msg("coord.action.reject")})
 			case store.AttentionBlocker:
-				view.Actions = append(view.Actions, coordAttentionActionView{Value: store.AttentionActionResolve, Label: "Gelöst"})
+				view.Actions = append(view.Actions, coordAttentionActionView{Value: store.AttentionActionResolve, Label: msg("coord.action.resolve")})
 			case store.AttentionHandoff:
-				view.Actions = append(view.Actions, coordAttentionActionView{Value: store.AttentionActionAccept, Label: "Übernehmen"})
+				view.Actions = append(view.Actions, coordAttentionActionView{Value: store.AttentionActionAccept, Label: msg("coord.action.accept")})
 			}
-			view.Actions = append(view.Actions, coordAttentionActionView{Value: store.AttentionActionDismiss, Label: "Verwerfen"})
+			view.Actions = append(view.Actions, coordAttentionActionView{Value: store.AttentionActionDismiss, Label: msg("coord.action.dismiss")})
 		}
 		view.ReasonLabel = coordAttentionReasonLabel(item.Reason)
 		view.Primary, view.Inline, view.More = splitCoordAttentionActions(item.Reason, view.Actions)
@@ -307,7 +386,7 @@ func annotateCoordAttention(views []coordAttentionView, items []store.AttentionI
 			views[i].RoomLabel, views[i].RoomTitle = room.Name, room.Label
 			views[i].Private = room.Kind == store.RoomDirect || room.Kind == store.RoomGroup
 			if room.Kind == store.RoomDirect {
-				views[i].RoomLabel, views[i].RoomTitle = "Direktnachricht", ""
+				views[i].RoomLabel, views[i].RoomTitle = msg("coord.direct_message"), ""
 			}
 		} else {
 			full := coordRoomLabel(store.CoordRoom{Key: item.HomeRoomKey}, "", labels)
@@ -405,7 +484,7 @@ func coordRoomLabel(room store.CoordRoom, principalID string, labels map[string]
 
 func buildCoordMessageViews(messages []store.CoordMessagePresentation, roomKey string, labels map[string]string) []coordMessageView {
 	out := make([]coordMessageView, 0, len(messages))
-	previousAuthorID, previousAuthorKind := "", ""
+	previousAuthorID, previousAuthorKind, previousCard := "", "", false
 	for _, presentation := range messages {
 		message := presentation.Message
 		author := strings.TrimSpace(presentation.AuthorLabel)
@@ -419,7 +498,8 @@ func buildCoordMessageViews(messages []store.CoordMessagePresentation, roomKey s
 		if authorID == "" {
 			authorID = author
 		}
-		groupStart := len(out) == 0 || previousAuthorID != authorID || previousAuthorKind != message.AuthorKind || presentation.Reply != nil
+		card := message.AuthorKind == store.AuthorSystem || message.Intent == store.IntentStanding || isAttentionIntent(message.Intent)
+		groupStart := len(out) == 0 || previousAuthorID != authorID || previousAuthorKind != message.AuthorKind || presentation.Reply != nil || card || previousCard
 		view := coordMessageView{
 			ID: message.ID, Sequence: message.Sequence, Author: author,
 			AuthorKind: message.AuthorKind, Timestamp: message.CreatedAt, DisplayTimestamp: coordDisplayTimestamp(message.CreatedAt),
@@ -427,10 +507,22 @@ func buildCoordMessageViews(messages []store.CoordMessagePresentation, roomKey s
 			ReplyURL:   coordRoomReplyURL(roomKey, message.ID, message.Sequence),
 			ReplyCount: presentation.ReplyCount,
 			GroupStart: groupStart,
+			System:     message.AuthorKind == store.AuthorSystem,
+			Clock:      coordClock(message.CreatedAt),
 		}
+		shown := author
+		if message.AuthorKind == store.AuthorAgent {
+			// The stored label turns "@" into "_"; the peer label keeps the machine.
+			if label := strings.TrimSpace(labels[message.SenderExternalID]); label != "" {
+				shown = label
+			}
+		}
+		view.Name, view.Machine = coordSplitAgentName(shown, message.AuthorKind)
+		view.Initials = coordInitials(author)
 		for _, mention := range presentation.Mentions {
 			view.Mentions = append(view.Mentions, coordIdentityLabel(mention, labels))
 		}
+		view.MentionsText = coordJoinNames(view.Mentions)
 		if presentation.Reply != nil {
 			view.Reply = &coordReplyView{Sequence: presentation.Reply.Sequence, Author: presentation.Reply.Author, Body: presentation.Reply.Body, Missing: presentation.Reply.Missing}
 			if !view.Reply.Missing {
@@ -443,16 +535,16 @@ func buildCoordMessageViews(messages []store.CoordMessagePresentation, roomKey s
 		d := presentation.Delivery
 		parts := []string{}
 		if d.Acked > 0 {
-			parts = append(parts, fmt.Sprintf("%d bestätigt", d.Acked))
+			parts = append(parts, msg("coord.delivery.acked", d.Acked))
 		}
 		if d.Injected > 0 {
-			parts = append(parts, fmt.Sprintf("%d eingebracht", d.Injected))
+			parts = append(parts, msg("coord.delivery.injected", d.Injected))
 		}
 		if d.Fetched > 0 {
-			parts = append(parts, fmt.Sprintf("%d abgeholt", d.Fetched))
+			parts = append(parts, msg("coord.delivery.fetched", d.Fetched))
 		}
 		if d.Stored > 0 {
-			parts = append(parts, fmt.Sprintf("%d gespeichert", d.Stored))
+			parts = append(parts, msg("coord.delivery.stored", d.Stored))
 		}
 		// "stored" is where every message starts, so a message that is only
 		// stored carries no news; anything past it, or a recipient lagging
@@ -461,7 +553,7 @@ func buildCoordMessageViews(messages []store.CoordMessagePresentation, roomKey s
 			view.Delivery = strings.Join(parts, " · ")
 		}
 		out = append(out, view)
-		previousAuthorID, previousAuthorKind = authorID, message.AuthorKind
+		previousAuthorID, previousAuthorKind, previousCard = authorID, message.AuthorKind, card
 	}
 	return out
 }
@@ -485,7 +577,12 @@ func markViewerMentions(views []coordMessageView, messages []store.CoordMessageP
 	}
 }
 
-var errCoordExpiryInvalid = errors.New("Ungültiges Ablaufdatum: bitte Datum und Uhrzeit wie 18.09.2026 18:30 angeben.")
+// errCoordExpiryInvalid carries its text from the message catalog.
+var errCoordExpiryInvalid error = coordExpiryError{}
+
+type coordExpiryError struct{}
+
+func (coordExpiryError) Error() string { return msg("coord.expiry_invalid") }
 
 // parseCoordExpiry turns a datetime-local value (no zone) into RFC3339 UTC.
 // offset is the browser's minutes east of UTC for that very date (set by
@@ -564,7 +661,7 @@ func buildCoordStandingViews(in []store.StandingInstruction, labels map[string]s
 func buildCoordRecipientViews(recipients []store.CoordRecipient) []coordRecipientView {
 	out := make([]coordRecipientView, 0, len(recipients))
 	for _, recipient := range recipients {
-		out = append(out, coordRecipientView{ID: recipient.PrincipalID, Label: recipient.Label, Kind: recipient.Kind})
+		out = append(out, coordRecipientView{ID: recipient.PrincipalID, Label: recipient.Label, Kind: recipient.Kind, Option: recipient.Label + " · " + recipient.Kind})
 	}
 	return out
 }
@@ -596,7 +693,7 @@ func coordIdentityLabel(id string, labels map[string]string) string {
 	if label := strings.TrimSpace(labels[id]); label != "" {
 		return label
 	}
-	return "Unbekannter Teilnehmer"
+	return msg("coord.unknown_participant")
 }
 
 // coordSenderLabel: Etikett des Absenders, sonst das des Kontos, sonst die
@@ -615,41 +712,42 @@ func coordSenderLabel(item store.AttentionItem, labels map[string]string) string
 	return coordIdentityLabel(item.AuthorID, labels)
 }
 
-var presenceLabels = map[string]string{
-	store.ReachConnected: "verbunden", store.ReachUnknown: "unbekannt", store.ReachEnded: "beendet",
-	store.WorkWorking: "arbeitet", store.WorkWaitingUser: "wartet auf Nutzer", store.WorkWaitingPeer: "wartet auf Peer",
-	store.WorkBlocked: "blockiert", store.WorkPaused: "pausiert",
+var presenceKeys = map[string]string{
+	store.ReachConnected: "coord.presence.connected", store.ReachUnknown: "coord.presence.unknown", store.ReachEnded: "coord.presence.ended",
+	store.WorkWorking: "coord.presence.working", store.WorkWaitingUser: "coord.presence.waiting_user", store.WorkWaitingPeer: "coord.presence.waiting_peer",
+	store.WorkBlocked: "coord.presence.blocked", store.WorkPaused: "coord.presence.paused",
 }
 
-var originLabels = map[string]string{
-	store.OriginObserved: "beobachtet", store.OriginSelfReported: "selbst gemeldet", store.OriginDerived: "abgeleitet",
+var originKeys = map[string]string{
+	store.OriginObserved: "coord.origin.observed", store.OriginSelfReported: "coord.origin.self_reported", store.OriginDerived: "coord.origin.derived",
 }
 
 func coordAge(seconds int64) string {
 	switch {
 	case seconds < 60:
-		return fmt.Sprintf("vor %d s", seconds)
+		return msg("coord.age.seconds", seconds)
 	case seconds < 3600:
-		return fmt.Sprintf("vor %d min", seconds/60)
+		return msg("coord.age.minutes", seconds/60)
 	default:
-		return fmt.Sprintf("vor %d h", seconds/3600)
+		return msg("coord.age.hours", seconds/3600)
 	}
 }
 
 // presenceText bildet ein Presence-Feld ab. Ohne Herkunft gibt es keinen Beleg:
 // das steht dann da, statt eines Werts, der mehr behauptet.
 func presenceText(f store.PresenceField) (value, text string) {
-	value = presenceLabels[f.Value]
-	if value == "" || f.Origin == "" {
-		return "unbekannt", "unbekannt (keine Beobachtung)"
+	key := presenceKeys[f.Value]
+	if key == "" || f.Origin == "" {
+		return msg("coord.presence.unknown"), msg("coord.presence.no_evidence")
 	}
-	return value, fmt.Sprintf("%s (%s, %s)", value, originLabels[f.Origin], coordAge(f.AgeSeconds))
+	value = msg(key)
+	return value, fmt.Sprintf("%s (%s, %s)", value, msg(originKeys[f.Origin]), coordAge(f.AgeSeconds))
 }
 
 func buildCoordParticipants(room store.CoordRoom, peers []store.CoordAgent, memberships []store.RoomMembership, current store.Principal, labels map[string]string) []coordParticipantView {
 	byID := make(map[string]coordParticipantView)
 	for _, member := range room.Members {
-		byID[member] = coordParticipantView{ID: member, Label: coordIdentityLabel(member, labels), Current: member == current.ID, Reachability: "unbekannt", WorkState: "unbekannt"}
+		byID[member] = coordParticipantView{ID: member, Label: coordIdentityLabel(member, labels), Current: member == current.ID, Reachability: coordParticipantUnknown, WorkState: coordParticipantUnknown}
 	}
 	for _, peer := range peers {
 		label := strings.TrimSpace(labels[peer.ExternalID])
@@ -665,7 +763,7 @@ func buildCoordParticipants(room store.CoordRoom, peers []store.CoordAgent, memb
 		byID[peer.ExternalID] = coordParticipantView{
 			ID: peer.ExternalID, Label: label, Provider: peer.Provider,
 			Worktree: peer.Worktree, LastSeen: peer.LastSeenAt, DisplayTimestamp: coordDisplayTimestamp(peer.LastSeenAt), Branch: peer.Branch,
-			Current: peer.ExternalID == current.ID, Reachability: "unbekannt", WorkState: "unbekannt",
+			Current: peer.ExternalID == current.ID, Reachability: coordParticipantUnknown, WorkState: coordParticipantUnknown,
 			Role: peer.Role, CanReview: peer.CanReview,
 		}
 		view := byID[peer.ExternalID]
@@ -675,6 +773,12 @@ func buildCoordParticipants(room store.CoordRoom, peers []store.CoordAgent, memb
 		}
 		view.Reachability, view.ReachabilityText = presenceText(pr.Reachability)
 		view.WorkState, view.WorkStateText = presenceText(pr.WorkState)
+		if pr.Reachability.Origin != "" {
+			view.ReachKey = pr.Reachability.Value
+		}
+		if pr.WorkState.Origin != "" {
+			view.WorkKey = pr.WorkState.Value
+		}
 		byID[peer.ExternalID] = view
 	}
 	currentParticipant := byID[current.ID]
@@ -703,6 +807,9 @@ func buildCoordParticipants(room store.CoordRoom, peers []store.CoordAgent, memb
 	for _, participant := range byID {
 		out = append(out, participant)
 	}
+	for i := range out {
+		decorateCoordParticipant(&out[i])
+	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Current != out[j].Current {
 			return out[i].Current
@@ -720,7 +827,7 @@ func coordDisplayTimestamp(raw string) string {
 	return parsed.In(time.Local).Format("02.01.2006, 15:04")
 }
 
-// coordJoinNames joins names as "A", "A und B" or "A, B und C".
+// coordJoinNames joins names as "A", "A and B" or "A, B and C".
 func coordJoinNames(names []string) string {
 	switch len(names) {
 	case 0:
@@ -728,7 +835,7 @@ func coordJoinNames(names []string) string {
 	case 1:
 		return names[0]
 	}
-	return strings.Join(names[:len(names)-1], ", ") + " und " + names[len(names)-1]
+	return strings.Join(names[:len(names)-1], ", ") + " " + msg("coord.and") + " " + names[len(names)-1]
 }
 
 // coordShortRoomName shows a project room as owner/repo. The host prefix
@@ -754,13 +861,13 @@ func coordRoomKindOf(key string) string {
 func coordAttentionReasonLabel(reason string) string {
 	switch reason {
 	case store.AttentionQuestion:
-		return "Frage"
+		return msg("coord.reason.question")
 	case store.AttentionApproval:
-		return "Freigabe"
+		return msg("coord.reason.approval")
 	case store.AttentionBlocker:
-		return "Blocker"
+		return msg("coord.reason.blocker")
 	case store.AttentionHandoff:
-		return "Übergabe"
+		return msg("coord.reason.handoff")
 	}
 	return reason
 }
@@ -865,4 +972,226 @@ func buildCoordWaitCycles(peers []store.CoordAgent, labels map[string]string) []
 		out = append(out, c.Describe(name))
 	}
 	return out
+}
+
+// coordSplitAgentName shows an agent label "name@machine" as the name and the
+// machine apart; people and labels without a machine are left whole.
+func coordSplitAgentName(author, kind string) (name, machine string) {
+	if kind != store.AuthorAgent {
+		return author, ""
+	}
+	if i := strings.Index(author, "@"); i > 0 && i < len(author)-1 {
+		return author[:i], author[i:]
+	}
+	return author, ""
+}
+
+// coordInitials are the first letters of up to two words, upper case.
+func coordInitials(label string) string {
+	var out []rune
+	for _, word := range strings.Fields(label) {
+		r, _ := utf8.DecodeRuneInString(word)
+		if r != utf8.RuneError {
+			out = append(out, []rune(strings.ToUpper(string(r)))...)
+		}
+		if len(out) == 2 {
+			break
+		}
+	}
+	if len(out) == 1 {
+		// A single word gives its first two letters.
+		rs := []rune(strings.ToUpper(strings.TrimSpace(label)))
+		if len(rs) >= 2 {
+			return string(rs[:2])
+		}
+	}
+	return string(out)
+}
+
+// coordClock is the local time of day for today and a short date before it.
+func coordClock(raw string) string {
+	parsed, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return raw
+	}
+	local := parsed.In(time.Local)
+	if local.YearDay() == time.Now().YearDay() && local.Year() == time.Now().Year() {
+		return local.Format("15:04")
+	}
+	return local.Format("2 Jan 15:04")
+}
+
+// coordWaiting words how long an open request has been waiting.
+func coordWaiting(created string, now time.Time) string {
+	parsed, err := time.Parse(time.RFC3339, created)
+	if err != nil {
+		return ""
+	}
+	d := now.Sub(parsed)
+	switch {
+	case d < time.Minute:
+		return msg("coord.waiting_now")
+	case d < time.Hour:
+		return msg("coord.waiting", msg("coord.age.min", int64(d/time.Minute)))
+	case d < 48*time.Hour:
+		return msg("coord.waiting", msg("coord.age.h", int64(d/time.Hour)))
+	}
+	return msg("coord.waiting", msg("coord.age.d", int64(d/(24*time.Hour))))
+}
+
+// decorateCoordParticipant derives the compact status of the participant list
+// from the evidence the store reported, never from the absence of evidence.
+func decorateCoordParticipant(p *coordParticipantView) {
+	p.Human = strings.HasPrefix(p.ID, "person:")
+	p.Initials = coordInitials(p.Label)
+	switch {
+	case p.Current:
+		p.Dot, p.StatusLabel = "active", msg("coord.you")
+	case p.Human:
+		p.Dot = "off"
+	case p.ReachKey == store.ReachEnded:
+		p.Dot, p.StatusLabel = "off", msg("coord.presence.ended")
+	case p.WorkKey == store.WorkWorking:
+		p.Dot, p.StatusLabel = "active", msg("ov.work.working")
+	case p.WorkKey == store.WorkWaitingUser:
+		p.Dot, p.StatusLabel = "wait", msg("ov.work.waiting_user")
+	case p.WorkKey == store.WorkWaitingPeer:
+		p.Dot, p.StatusLabel = "wait", msg("ov.work.waiting_peer")
+	case p.WorkKey == store.WorkBlocked:
+		p.Dot, p.StatusLabel = "bad", msg("ov.work.blocked")
+	case p.WorkKey == store.WorkPaused:
+		p.Dot, p.StatusLabel = "quiet", msg("ov.work.paused")
+	case p.ReachKey == store.ReachConnected:
+		p.Dot, p.StatusLabel = "quiet", msg("coord.presence.connected")
+	default:
+		p.Dot = "off"
+	}
+}
+
+// decorateCoordMessages adds what depends on the viewer and on the room: own
+// bubbles, directive plates, request cards with the open attention entries for
+// the very message, and the waiting time. views and pres are index-aligned.
+func decorateCoordMessages(views []coordMessageView, pres []store.CoordMessagePresentation, viewerID, roomKey, roomLabel string, standing []coordStandingView, attention []coordAttentionView, roleRoom bool, now time.Time) {
+	activeStanding := make(map[string]coordStandingView, len(standing))
+	for _, item := range standing {
+		activeStanding[item.MessageID] = item
+	}
+	for i := range views {
+		if i >= len(pres) {
+			return
+		}
+		message := pres[i].Message
+		views[i].Own = message.AuthorKind == store.AuthorHuman && viewerID != "" && message.AuthorPrincipalID == viewerID
+		switch {
+		case message.Intent == store.IntentStanding:
+			id := strconv.FormatInt(message.ID, 10)
+			item, ok := activeStanding[id]
+			scope := item.Scope
+			if !ok {
+				scope = coordStandingScope(views[i].Mentions, roomLabel)
+			}
+			views[i].Directive = &coordDirectiveView{Active: ok, CanEnd: ok && item.CanEnd, MessageID: id, RoomKey: roomKey, Scope: scope,
+				Request: roleRoom && views[i].SenderRole != "" && !coordCanDirect(views[i].SenderRole)}
+		case isAttentionIntent(message.Intent):
+			request := &coordRequestView{Title: coordRequestTitle(message.Intent, views[i].MentionsText)}
+			seen := map[int64]bool{}
+			for _, item := range attention {
+				if item.Thread || item.RoomKey != roomKey || item.Sequence != message.Sequence || seen[item.ID] {
+					continue
+				}
+				seen[item.ID] = true
+				request.Items = append(request.Items, item)
+			}
+			if len(request.Items) > 0 {
+				request.Waiting = coordWaiting(message.CreatedAt, now)
+			}
+			views[i].Request = request
+		}
+	}
+}
+
+// coordCanDirect: only a rank above guest can direct anyone (AuthorityFor needs
+// the sender above the recipient, and recipients with a role start at guest).
+func coordCanDirect(role string) bool {
+	return store.RoleRank(role) > store.RoleRank(store.RoleGuest)
+}
+
+var coordClosedKeys = map[string]string{
+	"question.resolved":  "coord.closed.question.resolved",
+	"question.dismissed": "coord.closed.question.dismissed",
+	"question.expired":   "coord.closed.question.expired",
+	"approval.resolved":  "coord.closed.approval.resolved",
+	"approval.dismissed": "coord.closed.approval.dismissed",
+	"approval.expired":   "coord.closed.approval.expired",
+	"blocker.resolved":   "coord.closed.blocker.resolved",
+	"blocker.dismissed":  "coord.closed.blocker.dismissed",
+	"blocker.expired":    "coord.closed.blocker.expired",
+	"handoff.resolved":   "coord.closed.handoff.resolved",
+	"handoff.dismissed":  "coord.closed.handoff.dismissed",
+	"handoff.expired":    "coord.closed.handoff.expired",
+}
+
+// applyRequestStates names how closed requests ended, from the viewer's own
+// attention entries for that message.
+func applyRequestStates(views []coordMessageView, pres []store.CoordMessagePresentation, roomKey string, items []store.AttentionItem, labels map[string]string) {
+	for i := range views {
+		if i >= len(pres) || views[i].Request == nil || len(views[i].Request.Items) > 0 {
+			continue
+		}
+		var parts []string
+		for _, item := range items {
+			if item.State == store.AttentionOpen || item.DestinationKind != store.DestinationRoom || item.DestinationID != roomKey || item.Sequence != pres[i].Message.Sequence {
+				continue
+			}
+			if key, ok := coordClosedKeys[item.Reason+"."+item.State]; ok {
+				parts = append(parts, msg(key)+" · "+coordIdentityLabel(item.RecipientID, labels))
+			}
+		}
+		views[i].Request.State = strings.Join(parts, ", ")
+	}
+}
+
+func coordStandingScope(targets []string, roomLabel string) string {
+	if len(targets) == 0 {
+		return msg("coord.scope_all", roomLabel)
+	}
+	return msg("coord.scope_targets", coordJoinNames(targets))
+}
+
+var coordRequestTitleKeys = map[string][2]string{
+	store.IntentQuestion: {"coord.reason.question", "coord.request.question"},
+	store.IntentApproval: {"coord.reason.approval", "coord.request.approval"},
+	store.IntentBlocker:  {"coord.reason.blocker", "coord.request.blocker"},
+	store.IntentHandoff:  {"coord.reason.handoff", "coord.request.handoff"},
+}
+
+// coordRequestTitle is the card heading: the kind alone, or the kind with the
+// people it is addressed to ("Asks Robin").
+func coordRequestTitle(intent, who string) string {
+	keys := coordRequestTitleKeys[intent]
+	if who == "" {
+		return msg(keys[0])
+	}
+	return msg(keys[1], who)
+}
+
+var coordClientTextKeys = []string{
+	"coord.js.loading", "coord.js.load_failed", "coord.js.render_failed", "coord.js.updated", "coord.js.offline_page",
+	"coord.js.no_uploads", "coord.js.no_token", "coord.js.working", "coord.js.failed", "coord.js.done", "coord.js.offline_post",
+	"coord.js.live", "coord.js.refresh_failed", "coord.js.refresh_failed_announce", "coord.js.unsupported", "coord.js.resync",
+	"coord.js.session_ended", "coord.js.offline_retry", "coord.js.offline_retry_announce",
+}
+
+// coordClientTexts is the catalog slice the page script needs, as JSON for a
+// data attribute (the policy forbids inline script, not data).
+func coordClientTexts() string {
+	texts := make(map[string]string, len(coordClientTextKeys))
+	for _, key := range coordClientTextKeys {
+		texts[key[strings.LastIndex(key, ".")+1:]] = msg(key)
+	}
+	raw, err := json.Marshal(texts)
+	if err != nil {
+		return "{}"
+	}
+	return string(raw)
 }

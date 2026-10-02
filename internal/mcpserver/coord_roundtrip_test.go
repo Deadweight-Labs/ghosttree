@@ -945,8 +945,8 @@ func TestWaitCycleLinesNameTheCycleOnce(t *testing.T) {
 		{ExternalID: "c", DisplayName: "Cleo"},
 	}
 	lines := waitCycleLines(peers)
-	if len(lines) != 1 || !strings.Contains(lines[0], "gegenseitiges Warten: Anna ↔ Bert (seit 2026-10-02T10:00:00Z)") ||
-		!strings.Contains(lines[0], "überfällig") || !strings.Contains(lines[0], "nothing was resolved automatically") {
+	if len(lines) != 1 || !strings.Contains(lines[0], "mutual wait: Anna ↔ Bert (since 2026-10-02T10:00:00Z)") ||
+		!strings.Contains(lines[0], "overdue") || !strings.Contains(lines[0], "nothing was resolved automatically") {
 		t.Fatalf("lines = %q", lines)
 	}
 	if got := waitCycleLines(peers[2:]); len(got) != 0 {

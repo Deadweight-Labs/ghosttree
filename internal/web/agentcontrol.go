@@ -10,7 +10,7 @@ import (
 )
 
 // coordControlView is the pause control of one agent in the participant list.
-// The state text only says "pausiert" for an effective control: a hook
+// The state text only says "paused" for an effective control: a hook
 // acknowledgement and the transcript entry for the same tool call (AC-1229).
 type coordControlView struct {
 	Agent, Room, CSRFToken string
@@ -30,26 +30,20 @@ type coordControlView struct {
 	Who       string
 }
 
-const (
-	controlGapText    = "Pause am nächsten Werkzeugaufruf; ein laufender Aufruf wird nicht abgebrochen (Lücke)"
-	controlIdleHint   = "Wirkt am nächsten Werkzeugaufruf. Ein laufender Aufruf und eine Antwort ohne Werkzeug werden nicht abgebrochen (Lücke)."
-	controlResumeHint = "Fortsetzen hebt die Sperre auf; der Agent arbeitet erst nach einer neuen Eingabe weiter."
-)
-
 func controlView(c store.AgentControl) (label, detail string) {
-	name := "Pause"
+	name := msg("age.control.pause")
 	if c.Action == store.ControlInterrupt {
-		name = "Unterbrechung"
+		name = msg("age.control.interrupt")
 	}
 	switch c.State {
 	case store.ControlRequested:
-		return name + " angefordert", "Noch nicht bestätigt, nicht pausiert: der Channel des Agenten hat den Hook noch nicht melden sehen, oder der Agent ruft gerade keine Werkzeuge auf."
+		return msg("age.control.requested", name), msg("age.control.requested.detail")
 	case store.ControlAcknowledged:
-		return "Bestätigt (Hook)", "Der Hook hat einen Werkzeugaufruf blockiert. Das Transkript belegt den Stopp noch nicht, deshalb gilt der Agent noch nicht als pausiert."
+		return msg("age.control.acknowledged"), msg("age.control.acknowledged.detail")
 	case store.ControlEffective:
-		return "Pausiert (belegt)", "Hook-Bestätigung und Transkript-Beleg (hook_stopped_continuation) für denselben Aufruf liegen vor. Der Beleg stammt vom Rechner des Agentenkontos (dasselbe Konto) und schützt nicht vor einem böswilligen Agenten mit Shell-Zugriff (Entscheidung #2411, Dokument 2026-10-02-human-pause-interrupt)."
+		return msg("age.control.effective"), msg("age.control.effective.detail")
 	case store.ControlResumed:
-		return "Fortgesetzt", "Die Sperre ist aufgehoben."
+		return msg("age.control.resumed"), msg("age.control.resumed.detail")
 	}
 	return "", ""
 }
@@ -79,7 +73,7 @@ func (a *app) applyParticipantControls(r *http.Request, roomKey string, particip
 				v.Who = c.ResumedByLabel
 			}
 			if c.Gap != "" && v.Active {
-				v.Gap = controlGapText
+				v.Gap = msg("age.control.gap")
 			}
 			v.Blocked = blockedSummary(c)
 		}
@@ -104,23 +98,10 @@ func blockedSummary(c store.AgentControl) string {
 	if acks == 0 {
 		return ""
 	}
-	s := "Blockierte Aufrufe: " + itoa(acks)
 	if len(names) > 0 {
-		s += " (Subagent: " + strings.Join(names, ", ") + ")"
+		return msg("age.control.blocked_by", acks, strings.Join(names, ", "))
 	}
-	return s
-}
-
-func itoa(n int) string {
-	const digits = "0123456789"
-	if n == 0 {
-		return "0"
-	}
-	var b []byte
-	for ; n > 0; n /= 10 {
-		b = append([]byte{digits[n%10]}, b...)
-	}
-	return string(b)
+	return msg("age.control.blocked", acks)
 }
 
 // coordAgentControl nimmt Pause, Unterbrechung und Fortsetzen entgegen. Die

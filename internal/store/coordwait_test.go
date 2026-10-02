@@ -115,7 +115,7 @@ func TestMutualWaitBetweenTwoIsDetected(t *testing.T) {
 		t.Fatalf("a bystander is no part of the cycle: %+v", c)
 	}
 	line := cycleOf(t, st, room, waitA).Describe(nil)
-	if !strings.Contains(line, "gegenseitiges Warten: "+waitA+" ↔ "+waitB+" (seit ") {
+	if !strings.Contains(line, "mutual wait: "+waitA+" ↔ "+waitB+" (since ") {
 		t.Fatalf("line = %q", line)
 	}
 }
@@ -189,7 +189,7 @@ func TestWaitEdgeReviewDateAndOverdue(t *testing.T) {
 		t.Fatal("a wait on a person is no agent edge")
 	}
 	cs := DetectWaitCycles([]WaitEdge{young, old})
-	if len(cs) != 1 || !cs[0].Overdue || cs[0].ReviewAt != old.ReviewAt || !strings.Contains(cs[0].Describe(nil), "überfällig") {
+	if len(cs) != 1 || !cs[0].Overdue || cs[0].ReviewAt != old.ReviewAt || !strings.Contains(cs[0].Describe(nil), "overdue") {
 		t.Fatalf("cycle = %+v", cs)
 	}
 	// Overdue is marked, not closed: the cycle is still reported.

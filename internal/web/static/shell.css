@@ -117,13 +117,8 @@ svg.i { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-widt
 
 .shell-main { min-width: 0; }
 .shell-main > main { width: 100%; max-width: 76rem; margin: 0; padding: 6px 0 var(--shadow-room-y); }
-/* The coordination workspace keeps its own surface until the room redesign; it
-   sits in the shell as one raised card. */
-.shell-main > main.coord-workspace {
-  --clay-rest-h: 6;
-  --clay-surface: var(--coord-conversation);
-  max-width: none; padding: 0; height: calc(100dvh - 54px); border-radius: var(--clay-radius-lg);
-}
+/* The room fills the main column; its own surfaces carry the depth. */
+.shell-main > main.coord-workspace { max-width: none; padding: 0; height: calc(100dvh - 54px); }
 
 /* Avatars: an agent is a dark squircle, a person is round and light. */
 .av {
@@ -288,6 +283,5 @@ svg.i { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-widt
   .shell-collapsible { padding-top: var(--space-3); }
   .shell-admin { margin-top: var(--space-3); padding-top: 0; }
   .account-menu { bottom: auto; top: calc(100% + 6px); }
-  html.coord-enhanced .shell .coord-workspace { height: calc(100dvh - 5rem); }
   .login { padding-top: 6vh; }
 }

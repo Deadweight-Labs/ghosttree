@@ -6,6 +6,38 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Fixed: ending a standing instruction needs more than room access. Only its
+  author, or someone whose project rank is at least the author's (owners and
+  instance admins always), can end it; anyone else gets "forbidden", and the
+  room shows End only to those who may. Before, a guest could end an owner's
+  directive, also one written before the authority migration. Guests see End
+  only on their own directives and get the same answer for every other one, so
+  the button no longer reveals who outranks whom; an admin's agent does not
+  inherit the admin's right to end everything.
+- Fixed: the room's send, read and answer buttons submit in place again. The
+  page script treated every button as having its own form target and let the
+  browser post the form natively, which replaced the page with plain text on an
+  error and dropped what was typed.
+- Changed: directive plates and request cards name the sender's project role,
+  instructions from below member rank read as "Standing request", the composer
+  offers "Directive" only to those who can give one, a request asks for its
+  addressee inline, More is an icon next to Send, closed requests show how they
+  ended ("Answered · robin"), and the no-script refresh link keeps the room.
+  Agent pause texts and the mutual-wait line are English.
+- Changed: rooms are a real chat (REQ-435, fourth part). Rooms switch through a
+  dark tab pill with an unread dot, and a compact "+" starts a direct message or
+  a group. The flow groups consecutive messages of one sender, shows agents as
+  dark avatars with name and `@machine`, your own messages as blue bubbles on
+  the right, system lines small and centered, and the task thread under the
+  message. Directives are dark pinned plates with their scope and an End action;
+  requests and questions are white cards with the waiting time and their
+  answer actions. The composer has a Message / Directive / Request pill, a
+  sunken field and a round send button: Enter sends, Shift+Enter breaks the
+  line, and a directive is only set with its own button. The right column
+  lists participants with status, directives in force and threads; on narrow
+  screens it opens as a panel. Room texts are English and come from the message
+  catalog, the page works in light and dark, and live updates keep the scroll
+  position or stay at the end.
 - Changed: the web interface moves to the Clay material with a blue palette
   (REQ-435, third part). The sidebar is a raised card, the Overview greets the
   user and shows requests with progress bars, and every other page, the

@@ -23,7 +23,7 @@ func TestCoordPageCarriesPreRenderEventCursorAndVisibleLiveStatus(t *testing.T) 
 		t.Fatal(err)
 	}
 	page := coordPageBody(t, client, srv.URL+"/ui/coord?room="+room)
-	if !strings.Contains(page, `data-coord-event-cursor="`) || !strings.Contains(page, `data-coord-live-status`) || !strings.Contains(page, `data-coord-action-status`) || !strings.Contains(page, "Live-Verbindung wird aufgebaut") {
+	if !strings.Contains(page, `data-coord-event-cursor="`) || !strings.Contains(page, `data-coord-live-status`) || !strings.Contains(page, `data-coord-action-status`) || !strings.Contains(page, "Connecting") {
 		t.Fatalf("coord live bootstrap missing: %s", page)
 	}
 }
@@ -82,7 +82,7 @@ func TestCoordProgressiveClientOnlyInterceptsSafeCoordinationNavigationAndForms(
 		"history.pushState", "popstate", "event.submitter", "new FormData(form)",
 		"new URLSearchParams()", "coordFormBody",
 		"response.redirected", "response.url", "AbortController", "aria-busy",
-		"data-coord-action-status", "Aktion nicht automatisch erneut gesendet",
+		"data-coord-action-status", "offline_post",
 		`location.assign(target.href)`, `redirect: "follow"`,
 	} {
 		if !strings.Contains(source, want) {

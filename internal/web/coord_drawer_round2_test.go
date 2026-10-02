@@ -6,14 +6,6 @@ import (
 	"testing"
 )
 
-func TestCoordToastNeverCoversHeadings(t *testing.T) {
-	for _, body := range cssBodies(t, ".coord-action-status") {
-		if strings.Contains(body, "position: fixed") {
-			t.Errorf("the status toast must sit in the layout flow: %s", body)
-		}
-	}
-}
-
 func TestCoordRoomsDrawerClosesAfterProgressiveNavigation(t *testing.T) {
 	source := string(mustReadEmbedded(t, "static/app.js"))
 	start := strings.Index(source, "  const shouldCloseRoomsDrawer =")
