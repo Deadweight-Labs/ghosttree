@@ -162,6 +162,11 @@ func (a *app) shellFor(r *http.Request, name string) shellView {
 		v.ProjectAction = r.URL.Path
 	}
 	v.Projects, v.AllSelected = a.projectOptions(r, pa)
+	// Ohne gültiges ?project= bekommt, wer nicht "All projects" wählen kann, sein
+	// erstes Projekt vorgewählt. Ein Projektname ohne Rolle wirkt wie keiner.
+	if !v.CanAll && v.AllSelected && len(v.Projects) > 0 {
+		v.Projects[0].Selected, v.AllSelected = true, false
+	}
 	return v
 }
 
@@ -196,10 +201,6 @@ func (a *app) projectOptions(r *http.Request, pa *store.ProjectAccess) ([]projec
 	}
 	slices.SortFunc(out, func(x, y projectOption) int { return strings.Compare(x.Remote, y.Remote) })
 	return out, !found
-}
-
-func (a *app) overviewPage(w http.ResponseWriter, r *http.Request) {
-	a.renderBrowser(w, r, "overview", pageData{Title: msg("overview.title")})
 }
 
 func (a *app) rootRedirect(w http.ResponseWriter, r *http.Request) {

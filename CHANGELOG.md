@@ -6,6 +6,21 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Changed: the web interface starts on a new Overview (REQ-435, second part).
+  `/ui/` and the redirect after sign-in lead to `/ui/overview`, and the brand
+  link too. "Next" lists what needs a decision (a device waiting for approval
+  for owners, knowledge to review for reviewers, requests addressed to you),
+  "Agents" shows each agent as active (signal within 8 minutes), idle or
+  offline (over a day), and the side column shows open requests with their
+  criteria progress and what was learned this week. Everything is drawn from
+  what the viewer may see; guests get only requests and knowledge, and the page
+  is the same whether or not hidden projects hold data. The owner of an instance
+  without agents gets one step instead: the `ctx login --server` command to copy,
+  "Waiting for your machine", and the page switches by itself once the machine
+  and an agent are there. Without a chosen project, members and guests now start
+  with their first project selected. The fonts moved to a versioned path
+  (`/static/fonts/plex-1.1-2.5/`) so long caching stays safe, and the `js` class
+  is set in the page head so the narrow-screen menu no longer flashes open.
 - Changed: the web interface has a new app shell (REQ-435, first part). A
   left navigation (Overview, Agents, Rooms, Knowledge, Requests; Administration
   for owners and admins, "My devices & tokens" for members) with a project

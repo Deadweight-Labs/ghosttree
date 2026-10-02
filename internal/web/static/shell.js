@@ -23,6 +23,17 @@
   for (const select of document.querySelectorAll("select[data-autosubmit]")) {
     select.addEventListener("change", () => select.form && select.form.requestSubmit());
   }
+  for (const button of document.querySelectorAll("[data-copy]")) {
+    button.addEventListener("click", () => {
+      const source = document.querySelector(button.dataset.copy);
+      if (!source || !navigator.clipboard) return;
+      const label = button.textContent;
+      navigator.clipboard.writeText(source.textContent.trim()).then(() => {
+        button.textContent = button.dataset.copied || label;
+        setTimeout(() => { button.textContent = label; }, 1500);
+      });
+    });
+  }
   const account = document.querySelector("details.account");
   if (account) {
     addEventListener("keydown", (event) => {

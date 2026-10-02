@@ -319,7 +319,7 @@ func TestOIDCClaimFlowBindsPerson1ThenSignsInWithoutCode(t *testing.T) {
 	env := newOIDCEnv(t, true)
 	b := newBrowser(t)
 	resp := env.callback(t, b, env.startFlow(t, b, env.claimCode(t, "alice")))
-	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/ui/requests" {
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/ui/overview" {
 		t.Fatalf("callback status=%d body=%s", resp.StatusCode, body(t, resp))
 	}
 	var session *http.Cookie
@@ -556,7 +556,7 @@ func TestLoginLinkIsConfirmedByPostAndSingleUse(t *testing.T) {
 	}
 	resp := sameOriginPostForm(t, b, srv.URL+"/ui/login/code", url.Values{"code": {code}})
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/ui/requests" {
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/ui/overview" {
 		t.Fatalf("post status=%d", resp.StatusCode)
 	}
 	if resp, _ := b.Get(srv.URL + "/ui/requests"); resp.StatusCode != http.StatusOK {

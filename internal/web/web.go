@@ -62,6 +62,9 @@ type pageData struct {
 	ProviderName                                      string
 	Bootstrap, TokenOpen                              bool
 	Shell                                             shellView
+	Overview                                          overviewView
+	// Refresh: Sekunden bis zum automatischen Neuladen (0 = nie).
+	Refresh int
 }
 type reviewEntry struct {
 	Knowledge         store.Knowledge
@@ -154,7 +157,7 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	} {
 		a.handle(mux, "POST "+path, a.requirePerson(limitBody(a.requireCSRF(h))))
 	}
-	a.handle(mux, "GET /ui/{$}", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/ui/requests", http.StatusSeeOther) })
+	a.handle(mux, "GET /ui/{$}", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/ui/overview", http.StatusSeeOther) })
 	return &appHandler{Handler: mux, app: a}
 }
 
@@ -240,7 +243,7 @@ func (a *app) requestPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) knowledgePage(w http.ResponseWriter, r *http.Request) {
-	q, project := r.URL.Query().Get("q"), scope.NormalizeRemote(r.URL.Query().Get("project"))
+	q, project := r.URL.Query().Get("q"), a.projectParam(r)
 	var entries []store.Knowledge
 	var err error
 	pa := a.access(r)
@@ -328,8 +331,17 @@ func (a *app) sessionPage(w http.ResponseWriter, r *http.Request) {
 	a.renderBrowser(w, r, "session", pageData{Title: "Session " + strconv.FormatInt(id, 10), SessionID: id, Chunks: chunks})
 }
 
+// projectParam ist das Projekt einer projektbezogenen Seite: das genannte,
+// sonst das in der Hülle vorgewählte (nur Nicht-Owner haben eines).
+func (a *app) projectParam(r *http.Request) string {
+	if p := scope.NormalizeRemote(r.URL.Query().Get("project")); p != "" {
+		return p
+	}
+	return selectedProject(a.shellFor(r, "knowledge"))
+}
+
 func (a *app) contextPage(w http.ResponseWriter, r *http.Request) {
-	project := scope.NormalizeRemote(r.URL.Query().Get("project"))
+	project := a.projectParam(r)
 	preview := r.URL.Query().Get("preview") == "1"
 	var entries []store.Knowledge
 	var err error

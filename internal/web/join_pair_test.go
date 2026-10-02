@@ -564,7 +564,7 @@ func TestJoinSignInThroughTheJoinPageBindsTheBrowsersSessionAndOnlyThen(t *testi
 	other := projectInvite(t, e.st, e.org, store.RoleMember)
 	resp = sameOriginPostForm(t, anonClient(), e.srv+"/ui/login/code", url.Values{"code": {other}, "name": {"paula"}})
 	resp.Body.Close()
-	if resp.Header.Get("Location") != "/ui/requests" {
+	if resp.Header.Get("Location") != "/ui/overview" {
 		t.Fatalf("without marker: %s", resp.Header.Get("Location"))
 	}
 	// Ein Browser ohne Cookie (anderes Gerät) bekommt eine eigene neue Sitzung, nie die eines anderen.
