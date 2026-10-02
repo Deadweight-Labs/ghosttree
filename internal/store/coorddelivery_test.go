@@ -349,10 +349,10 @@ func TestAckedDeliveryCreatesNoPostNoAttentionNoWakeAndNoClaim(t *testing.T) {
 	if err != nil || len(later) != 0 {
 		t.Fatalf("something new for the sender to wake on after an ack: %+v err=%v", later, err)
 	}
-	// Und die Ack-Absicht selbst ist nie ein Weckkandidat (Gegenprobe der Regel).
+	// Und eine einfache Ack-Nachricht eines Agenten ist in Direkt- und Gruppenräumen kein Weckkandidat (Gegenprobe der Regel).
 	now := time.Now()
 	for _, m := range []CoordMessage{{ID: 9, SenderExternalID: "sess-b", Intent: IntentAck}, {ID: 9, SenderExternalID: "sess-b", Kind: "ack"}} {
-		if ShouldWake("sess-a", RoomDirect, m, nil, WakeParentNotOwn, now) || ShouldWake("sess-a", RoomProject, m, []string{"sess-a"}, WakeParentNotOwn, now) {
+		if ShouldWake("sess-a", RoomDirect, m, nil, WakeParentNotOwn, now) || ShouldWake("sess-a", RoomGroup, m, nil, WakeParentNotOwn, now) {
 			t.Fatalf("an ack message is a wake candidate: %+v", m)
 		}
 	}

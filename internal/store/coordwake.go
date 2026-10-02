@@ -50,14 +50,29 @@ func WakeAttentionIntent(m CoordMessage) bool {
 	return ok
 }
 
+// plainAgentAck is the one acknowledgement that never wakes: an ack (intent or
+// kind) from an agent, not a reply, without an attention intent, in a direct or
+// group room. Replies, human acks, acks that carry a question, approval,
+// blocker or handoff, and acks in project or machine rooms (where a mention
+// decides) follow the ordinary rule.
+func plainAgentAck(roomKind string, m CoordMessage) bool {
+	if strings.TrimSpace(m.Intent) != IntentAck && strings.TrimSpace(m.Kind) != IntentAck {
+		return false
+	}
+	if roomKind != RoomDirect && roomKind != RoomGroup {
+		return false
+	}
+	return m.ReplyTo == 0 && m.AuthorKind != AuthorHuman && !WakeAttentionIntent(m)
+}
+
 // WakeCandidate is the part of the wake rule that needs no mentions, so a
-// caller can ask for mentions only once it says true. An acknowledgement
-// (intent or kind "ack") is never a candidate.
+// caller can ask for mentions only once it says true. A plain agent
+// acknowledgement is never a candidate (see plainAgentAck).
 func WakeCandidate(self, roomKind string, m CoordMessage, now time.Time) bool {
 	if WakeOwn(self, m) || WakeExpired(m, now) {
 		return false
 	}
-	if strings.TrimSpace(m.Intent) == IntentAck || strings.TrimSpace(m.Kind) == IntentAck {
+	if plainAgentAck(roomKind, m) {
 		return false
 	}
 	switch roomKind {
@@ -79,7 +94,7 @@ func WakePlainReply(m CoordMessage, parent WakeParent) bool {
 // describes intent, not delivery: an adapter still checks recipient access,
 // rate limits and loop protection. Mentions of self wake in project and
 // machine rooms; direct and group rooms wake without. Never own messages,
-// never acknowledgements, nothing expired. Attention intents wake even as a
+// never a plain agent acknowledgement, nothing expired. Attention intents wake even as a
 // reply; a reply to an own request wakes; a reply to an own non-request does
 // not. mentions are only read for rooms that need them.
 func ShouldWake(self, roomKind string, m CoordMessage, mentions []string, parent WakeParent, now time.Time) bool {

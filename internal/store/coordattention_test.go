@@ -98,7 +98,7 @@ func TestAttentionRequiresExplicitIntentAndAckIsNeverWakeCandidate(t *testing.T)
 		}
 	}
 	wake := func(m CoordMessage) bool {
-		return ShouldWake("person:2", RoomProject, m, m.Mentions, WakeParentNotOwn, time.Now())
+		return ShouldWake("person:2", RoomDirect, m, m.Mentions, WakeParentNotOwn, time.Now())
 	}
 	if !wake(messages[0]) {
 		t.Fatal("direct mention did not become a wake candidate")

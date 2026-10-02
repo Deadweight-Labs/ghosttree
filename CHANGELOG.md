@@ -6,8 +6,10 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
-- A plain `ack` message no longer wakes channel agents; it stays readable by
-  pull.
+- A plain `ack` message from an agent (not a reply, no question, approval,
+  blocker or handoff) in a direct or group room no longer wakes channel
+  agents; it stays readable by pull. Acks that reply to a request, human acks
+  and acks in project or machine rooms behave as before.
 - A person can pause or interrupt a Claude agent that was started with
   `ctx claude`, from the participant list of the coordination page. Allowed
   for project role lead or above and for the owner of the agent's account,
