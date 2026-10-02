@@ -287,3 +287,22 @@ func actionAllowedForReason(reason, action string) bool {
 		return false
 	}
 }
+
+// ErrInvalidSendIntent meldet einen Intent, den ein Agent nicht setzen darf.
+var ErrInvalidSendIntent = errors.New("unknown intent: use question, approval, blocker, handoff or ack")
+
+// AgentSendIntent normalisiert den Intent einer Agent-Nachricht. Leer ist
+// erlaubt. standing (Menschen vorbehalten) und attention (setzt der Store)
+// gehören nicht dazu; derselbe Wertebereich gilt für coord_send, den
+// Channel-Tools send/reply, `ctx coord send` und die Agent-Route des Servers.
+func AgentSendIntent(intent string) (string, error) {
+	intent = strings.ToLower(strings.TrimSpace(intent))
+	switch intent {
+	case "", IntentQuestion, IntentApproval, IntentBlocker, IntentHandoff, IntentAck:
+		return intent, nil
+	}
+	return "", ErrInvalidSendIntent
+}
+
+// AgentSendIntents sind die erlaubten Werte in Anzeigereihenfolge.
+var AgentSendIntents = []string{IntentQuestion, IntentApproval, IntentBlocker, IntentHandoff, IntentAck}

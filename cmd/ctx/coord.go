@@ -4,8 +4,11 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"path/filepath"
 	"strings"
 	"time"
@@ -20,9 +23,12 @@ import (
 const coordUsage = `usage: ctx coord <command>
 
   peers [--machine] [repo]        who else is registered in this room
-  send <text> [--mention <agent>] [--machine] [repo]
+  send <text> [--mention <agent>] [--intent <kind>] [--machine] [repo]
                                   say something to the other agents; a mention
-                                  wakes that agent if its harness can
+                                  wakes that agent if its harness can. --intent
+                                  (question, approval, blocker, handoff, ack)
+                                  asks the mentioned agent for an answer and
+                                  needs --mention
   inbox [--machine] [--all] [repo] read what others said since your cursor
   rooms                           private conversations you take part in
   sessions                        codex sessions this machine can deliver to
@@ -34,6 +40,10 @@ directory: two agents in different subdirectories of one repo share it.
 --machine addresses everyone on this computer instead, including agents
 without a repository.
 
+The CLI writes as cli:<machine>, and one identity belongs to one project room.
+To post into a second repository, give it its own identity with
+--agent-name <name>; the CLI then writes as ctx:<machine>:<name>.
+
 This is the way in for humans, for harnesses without MCP, and for measuring
 whether a message actually crosses between two harnesses. Agents use the
 coord_* tools.`
@@ -44,6 +54,70 @@ coord_* tools.`
 // Absender den Maschinennamen und nicht eine erfundene Sitzungskennung.
 func coordSession(cfg config.Config) string {
 	return "cli:" + cfg.Machine
+}
+
+// coordAPIError liest Status und Meldung aus einem Client-Fehler. Der Server
+// antwortet entweder mit einem codierten Fehler (*client.APIError: etwa
+// machine_bound, invalid_external_id, access denied) oder mit {"error":"..."}
+// (*client.StatusError). Beide müssen ankommen; sonst steht in der Ausgabe nur
+// ein allgemeines "forbidden" und die eigentliche Auskunft geht unter.
+func coordAPIError(err error) (status int, message string, ok bool) {
+	var ae *client.APIError
+	if errors.As(err, &ae) {
+		msg := ae.Message
+		if msg == "" {
+			msg = ae.Code
+		}
+		if ae.Code != "" && ae.Code != msg {
+			msg += " (" + ae.Code + ")"
+		}
+		if ae.Resolution != "" {
+			msg += ": " + ae.Resolution
+		}
+		return ae.Status, msg, true
+	}
+	var se *client.StatusError
+	if errors.As(err, &se) {
+		var body struct {
+			Error string `json:"error"`
+		}
+		if json.Unmarshal([]byte(se.Body), &body) == nil && body.Error != "" {
+			return se.Status, body.Error, true
+		}
+		return se.Status, se.Body, true
+	}
+	return 0, "", false
+}
+
+func coordAPIMessage(err error) string {
+	if _, msg, ok := coordAPIError(err); ok && msg != "" {
+		return msg
+	}
+	return err.Error()
+}
+
+// coordJoinFailure erklärt, warum die CLI-Identität ihren Raum nicht betreten
+// konnte, und sagt, was man tun kann. Nur Ablehnungen (400, 403, 409) zählen;
+// ein Netzfehler bleibt wie bisher folgenlos, die Folgeanfrage meldet ihn
+// selbst.
+func coordJoinFailure(err error, me, room, machine string) (string, bool) {
+	status, message, ok := coordAPIError(err)
+	if !ok || (status != http.StatusBadRequest && status != http.StatusForbidden && status != http.StatusConflict) {
+		return "", false
+	}
+	msg := fmt.Sprintf("cannot join %s as %s: %s", room, me, message)
+	if status == http.StatusBadRequest && strings.Contains(message, "another room") {
+		msg += fmt.Sprintf("\nhint: %s is bound to the first project room it joined. To post into this repository, use a separate identity: ctx coord <command> --agent-name <name> ... (posts as %s)", me, coordNamedSession(machine, "<name>"))
+	}
+	return msg, true
+}
+
+// coordNamedSession bildet eine eigene Identität für ein weiteres Repository.
+// Das Präfix ist bewusst nicht "cli:": der Server liest hinter "cli:" einen
+// Maschinennamen und würde "host:name" gegen ein an die Maschine gebundenes
+// Geräte-Token prüfen und ablehnen.
+func coordNamedSession(machine, name string) string {
+	return "ctx:" + machine + ":" + name
 }
 
 func cmdCoord(args []string, stdout io.Writer) int {
@@ -60,6 +134,7 @@ func cmdCoord(args []string, stdout io.Writer) int {
 	all := false
 	var positional []string
 	var mentions []string
+	var intentFlag, agentName string
 	for i := 0; i < len(rest); i++ {
 		a := rest[i]
 		switch a {
@@ -74,6 +149,17 @@ func cmdCoord(args []string, stdout io.Writer) int {
 				return 2
 			} else {
 				mentions = append(mentions, v)
+			}
+		case "--intent", "--agent-name":
+			if i+1 >= len(rest) || strings.HasPrefix(rest[i+1], "-") {
+				fmt.Fprintf(stdout, "%s needs a value\n", a)
+				return 2
+			}
+			i++
+			if a == "--intent" {
+				intentFlag = rest[i]
+			} else {
+				agentName = rest[i]
 			}
 		case "--machine":
 			machine = true
@@ -91,6 +177,22 @@ func cmdCoord(args []string, stdout io.Writer) int {
 	}
 	c := client.New(cfg)
 	me := coordSession(cfg)
+	if agentName != "" {
+		me = coordNamedSession(cfg.Machine, agentName)
+		if !store.ValidExternalID(me) || strings.ContainsAny(agentName, ":/") {
+			fmt.Fprintf(stdout, "--agent-name %q: use letters, digits, . _ - only\n", agentName)
+			return 2
+		}
+	}
+	intent, ierr := store.AgentSendIntent(intentFlag)
+	if ierr != nil {
+		fmt.Fprintf(stdout, "unknown intent %q: use question, approval, blocker, handoff or ack\n", intentFlag)
+		return 2
+	}
+	if intent != "" && sub != "send" {
+		fmt.Fprintln(stdout, "--intent only applies to send")
+		return 2
+	}
 
 	room, code := coordRoomKey(machine, positional, cfg, stdout)
 	if code != 0 && sub != "rooms" {
@@ -100,9 +202,14 @@ func cmdCoord(args []string, stdout io.Writer) int {
 	// Liste — sonst zeigt `coord peers` für einen Agenten "niemand da",
 	// während am selben Raum gerade jemand mitliest.
 	if code == 0 {
-		_, _ = c.RegisterCoordAgent(store.CoordAgent{
+		if _, err := c.RegisterCoordAgent(store.CoordAgent{
 			ExternalID: me, Provider: "ctx-cli", RoomKey: room, DisplayName: me,
-		})
+		}); err != nil && sub != "rooms" {
+			if msg, rejected := coordJoinFailure(err, me, room, cfg.Machine); rejected {
+				fmt.Fprintln(stdout, msg)
+				return 1
+			}
+		}
 	}
 
 	switch sub {
@@ -128,13 +235,17 @@ func cmdCoord(args []string, stdout io.Writer) int {
 			fmt.Fprintln(stdout, "nothing to say")
 			return 2
 		}
+		if intent != "" && intent != store.IntentAck && len(mentions) == 0 {
+			fmt.Fprintf(stdout, "intent %s needs --mention: say which agent should answer\n", intent)
+			return 2
+		}
 		id, err := c.SendCoordMessage(store.CoordMessage{
 			DestinationKind: store.DestinationRoom, DestinationID: room,
 			SenderExternalID: me, ClientID: newCoordClientID(), Body: body,
-			Mentions: mentions,
+			Mentions: mentions, Intent: intent,
 		})
 		if err != nil {
-			fmt.Fprintf(stdout, "send: %v\n", err)
+			fmt.Fprintf(stdout, "send: %s\n", coordAPIMessage(err))
 			return 1
 		}
 		// Gespeichert, nicht zugestellt — dieselbe Ehrlichkeit wie im

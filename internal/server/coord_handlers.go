@@ -141,6 +141,14 @@ func (a *api) sendCoordMessage(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "destination_id, sender_external_id and client_id are required")
 		return
 	}
+	// Über diese Route kommen nur Agenten. standing gehört Menschen und
+	// attention setzt der Store; beides darf ein Client nicht behaupten.
+	intent, err := store.AgentSendIntent(in.Intent)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	in.Intent = intent
 	id, err := a.coordAccess(r, in.SenderExternalID).Send(in)
 	if err != nil {
 		writeCoordAccessError(w, err)

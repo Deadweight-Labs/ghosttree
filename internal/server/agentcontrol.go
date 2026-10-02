@@ -40,7 +40,17 @@ func (a *api) getAgentControl(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !found {
-		writeJSON(w, http.StatusOK, map[string]any{"control": nil})
+		// Ohne aktiven Vorgang nennt die Antwort den jüngsten, wenn er
+		// aufgehoben wurde. Daran erkennt der Channel, wer die Pause beendet
+		// hat, und kann der Session sagen, dass sie weiterarbeiten darf.
+		out := map[string]any{"control": nil}
+		if last, ok, err := a.st.LatestAgentControl(agent); err != nil {
+			writeStoreError(w, http.StatusInternalServerError, err)
+			return
+		} else if ok && last.ResumedAt != "" {
+			out["resumed"] = last
+		}
+		writeJSON(w, http.StatusOK, out)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"control": c})

@@ -30,6 +30,7 @@ type CoordSendInput struct {
 	// ist 20 Sekunden weg' morgen noch als gegenwärtige Lage da.
 	Expires string `json:"expires_at,omitempty" jsonschema:"RFC3339 time after which this stops being current, for time-critical notices like 'the API is down for 20 seconds'. It stays readable as history either way"`
 	Mention string `json:"mention,omitempty" jsonschema:"session id of one peer who should get this promptly rather than bundled with ordinary room traffic"`
+	Intent  string `json:"intent,omitempty" jsonschema:"question, approval, blocker, handoff or ack. The first four ask the mentioned peer for an answer or a decision: they open an attention item for them, take part in wait-cycle detection, and need mention. Omit it for plain information"`
 	As      string `json:"as,omitempty" jsonschema:"post as a named subagent of this session, for example \"tests\" or \"frontend\". Use it when you are a subagent so peers can address you directly. It is a self-declaration: ghosttree cannot verify it, and the peer list says so"`
 }
 
@@ -174,6 +175,13 @@ func (s *Server) handleCoordSend(ctx context.Context, _ *mcp.CallToolRequest, in
 	if strings.TrimSpace(in.Body) == "" {
 		return nil, nil, fmt.Errorf("body is required")
 	}
+	intent, err := store.AgentSendIntent(in.Intent)
+	if err != nil {
+		return nil, nil, fmt.Errorf("unknown intent %q: use question, approval, blocker, handoff or ack", in.Intent)
+	}
+	if intent != "" && intent != store.IntentAck && strings.TrimSpace(in.Mention) == "" {
+		return nil, nil, fmt.Errorf("intent %s needs a mention: say which peer should answer", intent)
+	}
 	key, err := s.roomKeyFor(in.Room)
 	if err != nil {
 		return nil, nil, err
@@ -196,7 +204,7 @@ func (s *Server) handleCoordSend(ctx context.Context, _ *mcp.CallToolRequest, in
 	msg := store.CoordMessage{
 		DestinationKind: store.DestinationRoom, DestinationID: key,
 		SenderExternalID: sender, ClientID: clientID,
-		Body: in.Body, ReplyTo: in.ReplyTo, ExpiresAt: in.Expires,
+		Body: in.Body, ReplyTo: in.ReplyTo, ExpiresAt: in.Expires, Intent: intent,
 	}
 	if in.As != "" {
 		msg.ParentExternalID = s.coordRef()

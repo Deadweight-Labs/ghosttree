@@ -41,6 +41,15 @@ func TestAgentControlRoundtrip(t *testing.T) {
 	if got, _ := c.AgentControl(agent); got.State != store.ControlEffective {
 		t.Fatalf("after ack and proof = %+v", got)
 	}
+	// Nach dem Fortsetzen nennt der Server den aufgehobenen Vorgang samt dem,
+	// der ihn aufgehoben hat; der Channel braucht das für die Meldung an die Session.
+	if _, err := st.ResumeAgentControl(store.Principal{ID: "person:1", Label: "alice", TokenKind: store.WebSessionKind}, agent); err != nil {
+		t.Fatal(err)
+	}
+	active, resumed, err := c.AgentControlState(agent)
+	if err != nil || active != nil || resumed == nil || resumed.ID != made.ID || resumed.ResumedByLabel != "alice" {
+		t.Fatalf("after resume = %+v %+v %v", active, resumed, err)
+	}
 	// Ein unbekannter Vorgang ist kein Grund, den Stapel ewig zu wiederholen.
 	if err := c.RecordControlProof(9999, store.ControlEvent{Kind: store.ControlEventProof, ToolUseID: "x"}); err != nil {
 		t.Fatalf("unknown control must be swallowed: %v", err)
