@@ -358,3 +358,87 @@ func TestValidExternalID(t *testing.T) {
 		}
 	}
 }
+
+// Beenden darf eine Vorgabe die Autorin oder wer im Projekt mindestens ihren
+// Rang hat; ein Gast beendet nie die Vorgabe eines Owners.
+func TestEndStandingNeedsTheAuthorOrAtLeastTheirRank(t *testing.T) {
+	e := authorityFixture(t)
+	code, _, err := e.st.CreateInvitation("person:1", orgIDOf(t, e.st), "", OrgMember, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.st.AcceptInvitation("person:5", code); err != nil {
+		t.Fatal(err)
+	}
+	if err := setRole(e.st, "person:1", "person:5", RoleGuest, false); err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	standing := func(by CoordAccess, body string) string {
+		t.Helper()
+		n++
+		if _, err := by.CreateStanding(StandingInput{RoomKey: e.room, ClientID: "s" + strconv.Itoa(n), Body: body}); err != nil {
+			t.Fatal(err)
+		}
+		list, err := e.st.StandingInstructions(e.room)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, item := range list {
+			if item.Body == body {
+				return item.MessageID
+			}
+		}
+		t.Fatalf("standing %q not listed", body)
+		return ""
+	}
+	owner, guest, member, lead := e.human("person:1"), e.human("person:5"), e.human("person:3"), e.human("person:2")
+
+	id := standing(owner, "owner rule")
+	if guest.CanEndStanding(e.room, id) || member.CanEndStanding(e.room, id) || lead.CanEndStanding(e.room, id) {
+		t.Error("only an owner may offer End on an owner's directive")
+	}
+	if err := guest.EndStanding(e.room, id); err != ErrCoordForbidden {
+		t.Fatalf("guest ending an owner directive = %v, want forbidden", err)
+	}
+	if err := member.EndStanding(e.room, id); err != ErrCoordForbidden {
+		t.Fatalf("member ending an owner directive = %v, want forbidden", err)
+	}
+	if list, _ := e.st.StandingInstructions(e.room); len(list) != 1 {
+		t.Fatalf("directive must still be in force: %v", list)
+	}
+	if !owner.CanEndStanding(e.room, id) {
+		t.Error("the author may end")
+	}
+	if err := owner.EndStanding(e.room, id); err != nil {
+		t.Fatalf("author ends: %v", err)
+	}
+
+	// A lead's directive: the author, a higher rank and an owner may end it.
+	id = standing(lead, "lead rule")
+	if err := member.EndStanding(e.room, id); err != ErrCoordForbidden {
+		t.Fatalf("member ending a lead directive = %v, want forbidden", err)
+	}
+	if err := owner.EndStanding(e.room, id); err != nil {
+		t.Fatalf("owner ends a lead directive: %v", err)
+	}
+	id = standing(lead, "lead rule 2")
+	if err := lead.EndStanding(e.room, id); err != nil {
+		t.Fatalf("author lead ends own directive: %v", err)
+	}
+
+	// A guest ends their own.
+	id = standing(guest, "guest rule")
+	if err := guest.EndStanding(e.room, id); err != nil {
+		t.Fatalf("guest ends own directive: %v", err)
+	}
+}
+
+func orgIDOf(t *testing.T, st *Store) int64 {
+	t.Helper()
+	orgs, err := st.ListOrgs("person:1")
+	if err != nil || len(orgs) == 0 {
+		t.Fatalf("orgs: %v %v", orgs, err)
+	}
+	return orgs[0].ID
+}

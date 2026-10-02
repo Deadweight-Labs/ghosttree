@@ -236,10 +236,20 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 	a.applyParticipantControls(r, activeRoom.Key, detail.Participants)
 	applyMessageRoles(a.store, activeRoom.Key, detail.Messages, presentations)
 	markViewerMentions(detail.Messages, presentations, current.ID)
+	detail.CanDirect = true
+	roleRoom := false
+	if remote, ok := strings.CutPrefix(activeRoom.Key, "project:"); ok {
+		if _, claimed := a.store.ProjectByRemote(remote); claimed {
+			roleRoom = true
+			detail.CanDirect = coordCanDirect(a.store.ProjectRole(remote, current.ID).Role)
+		}
+	}
 	for i := range detail.Standing {
 		detail.Standing[i].Scope = coordStandingScope(detail.Standing[i].Targets, detail.Room.Label)
+		detail.Standing[i].CanEnd = access.CanEndStanding(activeRoom.Key, detail.Standing[i].MessageID)
 	}
-	decorateCoordMessages(detail.Messages, presentations, current.ID, activeRoom.Key, detail.Room.Label, detail.Standing, append(append([]coordAttentionView{}, incomingAttention...), outgoingAttention...), time.Now())
+	decorateCoordMessages(detail.Messages, presentations, current.ID, activeRoom.Key, detail.Room.Label, detail.Standing, append(append([]coordAttentionView{}, incomingAttention...), outgoingAttention...), roleRoom, time.Now())
+	applyRequestStates(detail.Messages, presentations, activeRoom.Key, attention, attentionLabels)
 	detail.ReplyTo, detail.ReplyTarget, err = coordReplyTarget(presentations, r.URL.Query().Get("reply_to"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)

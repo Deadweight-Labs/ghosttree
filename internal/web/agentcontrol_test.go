@@ -69,12 +69,12 @@ func TestAgentControlOnTheParticipantShowsOnlyProvenStates(t *testing.T) {
 	st, alice := e.st, e.alice
 	pageURL := e.srv.URL + "/ui/coord?room=" + url.QueryEscape(e.room)
 	page := coordPageBody(t, alice, pageURL)
-	for _, want := range []string{`action="/ui/coord/agent/control"`, "Pausieren", "Unterbrechen", "nächsten Werkzeugaufruf"} {
+	for _, want := range []string{`action="/ui/coord/agent/control"`, "Pause", "Interrupt", "next tool call"} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("idle participant lacks %q", want)
 		}
 	}
-	if strings.Contains(page, "Fortsetzen") {
+	if strings.Contains(page, "Resume") {
 		t.Fatal("nothing to resume yet")
 	}
 
@@ -87,17 +87,17 @@ func TestAgentControlOnTheParticipantShowsOnlyProvenStates(t *testing.T) {
 		t.Fatalf("control = %+v %v", c, ok)
 	}
 	page = coordPageBody(t, alice, pageURL)
-	if !strings.Contains(page, "Pause angefordert") || !strings.Contains(page, "nicht pausiert") || !strings.Contains(page, "Fortsetzen") {
+	if !strings.Contains(page, "Pause requested") || !strings.Contains(page, "not paused") || !strings.Contains(page, "Resume") {
 		t.Fatalf("requested state not shown honestly: %s", page[strings.Index(page, "coord-agent-control"):])
 	}
-	if strings.Contains(page, "Pausiert (belegt)") {
+	if strings.Contains(page, "Paused (verified)") {
 		t.Fatal("requested must never read as paused")
 	}
 
 	owner := "person:3"
 	_, _ = st.RecordControlEvent(owner, c.ID, store.ControlEvent{Kind: store.ControlEventAck, ToolUseID: "toolu_1", ToolName: "Bash", AgentID: "sub1"})
 	page = coordPageBody(t, alice, pageURL)
-	if !strings.Contains(page, "Bestätigt (Hook)") || strings.Contains(page, "Pausiert (belegt)") {
+	if !strings.Contains(page, "Confirmed (hook)") || strings.Contains(page, "Paused (verified)") {
 		t.Fatalf("acknowledged state wrong: %s", page[strings.Index(page, "coord-agent-control"):])
 	}
 	if !strings.Contains(page, "sub1") {
@@ -106,7 +106,7 @@ func TestAgentControlOnTheParticipantShowsOnlyProvenStates(t *testing.T) {
 
 	_, _ = st.RecordControlEvent(owner, c.ID, store.ControlEvent{Kind: store.ControlEventProof, ToolUseID: "toolu_1"})
 	page = coordPageBody(t, alice, pageURL)
-	if !strings.Contains(page, "Pausiert (belegt)") || !strings.Contains(page, "schützt nicht vor einem böswilligen Agenten") {
+	if !strings.Contains(page, "Paused (verified)") || !strings.Contains(page, "does not protect against a malicious agent") {
 		t.Fatalf("effective state missing: %s", page[strings.Index(page, "coord-agent-control"):])
 	}
 
@@ -115,7 +115,7 @@ func TestAgentControlOnTheParticipantShowsOnlyProvenStates(t *testing.T) {
 		t.Fatalf("resume = %d", resp.StatusCode)
 	}
 	page = coordPageBody(t, alice, pageURL)
-	if !strings.Contains(page, "Fortgesetzt") || strings.Contains(page, "Pausiert (belegt)") {
+	if !strings.Contains(page, "Resumed") || strings.Contains(page, "Paused (verified)") {
 		t.Fatalf("resumed state wrong: %s", page[strings.Index(page, "coord-agent-control"):])
 	}
 
@@ -125,7 +125,7 @@ func TestAgentControlOnTheParticipantShowsOnlyProvenStates(t *testing.T) {
 		t.Fatalf("interrupt = %d", resp.StatusCode)
 	}
 	page = coordPageBody(t, alice, pageURL)
-	if !strings.Contains(page, "Unterbrechung angefordert") || !strings.Contains(page, "laufender Aufruf wird nicht abgebrochen") {
+	if !strings.Contains(page, "Interrupt requested") || !strings.Contains(page, "running call is not aborted") {
 		t.Fatalf("interrupt gap not named: %s", page[strings.Index(page, "coord-agent-control"):])
 	}
 }
@@ -161,7 +161,7 @@ func TestAgentControlIsRefusedForTokenSessionsAndPlainMembers(t *testing.T) {
 		t.Fatal(err)
 	}
 	page = coordPageBody(t, alice, srv+"/ui/coord?room="+url.QueryEscape(room))
-	if !strings.Contains(page, "Pause für codex nicht unterstützt (Lücke)") {
+	if !strings.Contains(page, "Pause is not supported for codex (gap)") {
 		t.Fatal("codex must show the gap")
 	}
 	if strings.Contains(page, `name="agent" value="codex:h:x"`) {
@@ -199,7 +199,7 @@ func TestAgentControlShowsAGapForAgentsWithoutAPersonAccount(t *testing.T) {
 		t.Fatal(err)
 	}
 	page := coordPageBody(t, e.alice, e.srv.URL+"/ui/coord?room="+url.QueryEscape(e.room))
-	if !strings.Contains(page, "keinem Personenkonto") || strings.Contains(page, `name="agent" value="claude:h:odd"`) {
+	if !strings.Contains(page, "has no person account") || strings.Contains(page, `name="agent" value="claude:h:odd"`) {
 		t.Fatal("an agent without a person account must show the gap and no form")
 	}
 	form := url.Values{"action": {"pause"}, "agent": {"claude:h:odd"}}

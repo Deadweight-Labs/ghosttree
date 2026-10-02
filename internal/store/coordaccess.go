@@ -2466,6 +2466,9 @@ func (a CoordAccess) EndStanding(roomKey, messageID string) error {
 	if err := a.requireRoomAccessTx(tx, actor, roomKey); err != nil {
 		return err
 	}
+	if !canEndStandingTx(tx, a.Principal.ID, a.AgentExternalID, roomKey, messageID) {
+		return ErrCoordForbidden
+	}
 	endedBy := a.Principal.Label
 	if endedBy == "" {
 		endedBy = a.Principal.ID

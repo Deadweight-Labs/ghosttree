@@ -113,14 +113,17 @@ type coordRoomDetailView struct {
 	Participants []coordParticipantView
 	// WaitCycles: je Kreis gegenseitigen Wartens eine Zeile, aus der Presence
 	// der Peers (Peers ist ACL-geprüft, ein Gast bekommt keine Liste).
-	WaitCycles             []string
-	Standing               []coordStandingView
-	HighWater              int64
-	FirstSequence          int64
-	LastSequence           int64
-	OlderURL, NewerURL     string
-	HasOlder, HasNewer     bool
-	CanManage, CanLeave    bool
+	WaitCycles          []string
+	Standing            []coordStandingView
+	HighWater           int64
+	FirstSequence       int64
+	LastSequence        int64
+	OlderURL, NewerURL  string
+	HasOlder, HasNewer  bool
+	CanManage, CanLeave bool
+	// CanDirect: the viewer's rank lets a standing instruction be a directive;
+	// below it the same gesture is a standing request.
+	CanDirect              bool
 	FormID, StandingFormID string
 	Zone                   string
 	ReplyTo                int64
@@ -186,7 +189,10 @@ type coordMessageView struct {
 // coordDirectiveView is a standing instruction shown as a pinned plate. Active
 // is false once it was ended (or is not part of the room's standing list).
 type coordDirectiveView struct {
-	Active             bool
+	Active bool
+	// CanEnd: the viewer may end it (its author, or at least the author's rank).
+	// Request: the author's rank is below directive rank, so it only asks.
+	CanEnd, Request    bool
 	MessageID, RoomKey string
 	Scope              string
 }
@@ -196,7 +202,9 @@ type coordDirectiveView struct {
 // withdraw; Waiting is set while any is open.
 type coordRequestView struct {
 	Title, Waiting string
-	Items          []coordAttentionView
+	// State names how a closed request ended, e.g. "Answered · robin".
+	State string
+	Items []coordAttentionView
 }
 
 type coordReplyView struct {
@@ -232,7 +240,8 @@ type coordStandingView struct {
 	DisplayTimestamp                   string
 	Targets                            []string
 	// Scope reads "All agents in <room>, until ended" or the addressees.
-	Scope string
+	Scope  string
+	CanEnd bool
 }
 
 type coordParticipantView struct {
@@ -1058,7 +1067,7 @@ func decorateCoordParticipant(p *coordParticipantView) {
 // decorateCoordMessages adds what depends on the viewer and on the room: own
 // bubbles, directive plates, request cards with the open attention entries for
 // the very message, and the waiting time. views and pres are index-aligned.
-func decorateCoordMessages(views []coordMessageView, pres []store.CoordMessagePresentation, viewerID, roomKey, roomLabel string, standing []coordStandingView, attention []coordAttentionView, now time.Time) {
+func decorateCoordMessages(views []coordMessageView, pres []store.CoordMessagePresentation, viewerID, roomKey, roomLabel string, standing []coordStandingView, attention []coordAttentionView, roleRoom bool, now time.Time) {
 	activeStanding := make(map[string]coordStandingView, len(standing))
 	for _, item := range standing {
 		activeStanding[item.MessageID] = item
@@ -1077,7 +1086,8 @@ func decorateCoordMessages(views []coordMessageView, pres []store.CoordMessagePr
 			if !ok {
 				scope = coordStandingScope(views[i].Mentions, roomLabel)
 			}
-			views[i].Directive = &coordDirectiveView{Active: ok, MessageID: id, RoomKey: roomKey, Scope: scope}
+			views[i].Directive = &coordDirectiveView{Active: ok, CanEnd: ok && item.CanEnd, MessageID: id, RoomKey: roomKey, Scope: scope,
+				Request: roleRoom && views[i].SenderRole != "" && !coordCanDirect(views[i].SenderRole)}
 		case isAttentionIntent(message.Intent):
 			request := &coordRequestView{Title: coordRequestTitle(message.Intent, views[i].MentionsText)}
 			seen := map[int64]bool{}
@@ -1093,6 +1103,47 @@ func decorateCoordMessages(views []coordMessageView, pres []store.CoordMessagePr
 			}
 			views[i].Request = request
 		}
+	}
+}
+
+// coordCanDirect: only a rank above guest can direct anyone (AuthorityFor needs
+// the sender above the recipient, and recipients with a role start at guest).
+func coordCanDirect(role string) bool {
+	return store.RoleRank(role) > store.RoleRank(store.RoleGuest)
+}
+
+var coordClosedKeys = map[string]string{
+	"question.resolved":  "coord.closed.question.resolved",
+	"question.dismissed": "coord.closed.question.dismissed",
+	"question.expired":   "coord.closed.question.expired",
+	"approval.resolved":  "coord.closed.approval.resolved",
+	"approval.dismissed": "coord.closed.approval.dismissed",
+	"approval.expired":   "coord.closed.approval.expired",
+	"blocker.resolved":   "coord.closed.blocker.resolved",
+	"blocker.dismissed":  "coord.closed.blocker.dismissed",
+	"blocker.expired":    "coord.closed.blocker.expired",
+	"handoff.resolved":   "coord.closed.handoff.resolved",
+	"handoff.dismissed":  "coord.closed.handoff.dismissed",
+	"handoff.expired":    "coord.closed.handoff.expired",
+}
+
+// applyRequestStates names how closed requests ended, from the viewer's own
+// attention entries for that message.
+func applyRequestStates(views []coordMessageView, pres []store.CoordMessagePresentation, roomKey string, items []store.AttentionItem, labels map[string]string) {
+	for i := range views {
+		if i >= len(pres) || views[i].Request == nil || len(views[i].Request.Items) > 0 {
+			continue
+		}
+		var parts []string
+		for _, item := range items {
+			if item.State == store.AttentionOpen || item.DestinationKind != store.DestinationRoom || item.DestinationID != roomKey || item.Sequence != pres[i].Message.Sequence {
+				continue
+			}
+			if key, ok := coordClosedKeys[item.Reason+"."+item.State]; ok {
+				parts = append(parts, msg(key)+" · "+coordIdentityLabel(item.RecipientID, labels))
+			}
+		}
+		views[i].Request.State = strings.Join(parts, ", ")
 	}
 }
 

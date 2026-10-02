@@ -215,7 +215,7 @@ func TestBuildCoordWaitCyclesNamesTheCycleOnceAndHidesNothingElse(t *testing.T) 
 		{ExternalID: "c", DisplayName: "Cleo-Agent", Presence: &store.Presence{}},
 	}
 	got := buildCoordWaitCycles(peers, map[string]string{"a": "Anna"})
-	if len(got) != 1 || !strings.Contains(got[0], "gegenseitiges Warten: Anna ↔ Bert-Agent (seit ") {
+	if len(got) != 1 || !strings.Contains(got[0], "mutual wait: Anna ↔ Bert-Agent (since ") {
 		t.Fatalf("lines = %q", got)
 	}
 	if lines := buildCoordWaitCycles(peers[2:], nil); len(lines) != 0 {

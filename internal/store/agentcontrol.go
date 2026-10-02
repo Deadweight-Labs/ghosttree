@@ -64,10 +64,10 @@ func controlGapTx(q rowQuerier, agent string) string {
 		return ""
 	}
 	if provider != "claude" {
-		return "Pause für " + provider + " nicht unterstützt (Lücke): kein gemessener Weg, einen laufenden Agenten dieses Harness anzuhalten"
+		return "Pause is not supported for " + provider + " (gap): no measured way to stop a running agent of this harness"
 	}
 	if _, err := parsePersonPrincipalID(principal); err != nil {
-		return "Pause nicht möglich (Lücke): der Agent gehört zu keinem Personenkonto, seine Belege wären nicht zuzuordnen"
+		return "Pause is not possible (gap): the agent has no person account, so its evidence cannot be attributed"
 	}
 	return ""
 }

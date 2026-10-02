@@ -276,6 +276,7 @@ summary.coord-text-action::-webkit-details-marker { display: none; }
 .ask-k b { color: var(--clay-accent-text); }
 .ask-by { color: var(--clay-ink-soft); }
 .ask-k .cm-time { margin-left: auto; }
+.ask-state { margin: 6px 0 0; color: var(--clay-ink-soft); font-size: 13px; font-weight: 700; }
 .ask-t { margin: 2px 0 0; font-size: 16.5px; font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; white-space: pre-wrap; }
 .acts { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 14px; }
 .acts form { display: flex; flex-wrap: wrap; gap: 10px; margin: 0; }
@@ -287,15 +288,17 @@ summary.coord-text-action::-webkit-details-marker { display: none; }
 
 /* Composer */
 .coord-composer {
-  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: end; gap: 10px 12px;
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: end; gap: 10px 12px;
   padding: 6px 4px var(--shadow-room-y); margin: 0;
 }
 .coord-composer > .coord-reply, .coord-composer > .coord-private-hint { grid-column: 1 / -1; grid-row: 1; }
 .coord-private-hint { margin: 0; color: var(--clay-ink-faint); font-size: 12.5px; }
 .comp-modes, .comp { display: contents; }
-.comp-kinds { grid-column: 1 / -1; grid-row: 2; display: none; flex-wrap: wrap; gap: 8px; }
+.comp-request { grid-column: 1 / -1; grid-row: 2; display: none; flex-direction: column; gap: 8px; }
+.comp-kinds, .comp-to { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.comp-to-label { color: var(--clay-ink-soft); font-size: 13.5px; font-weight: 700; }
 .comp-scope { grid-column: 1 / -1; grid-row: 2; display: none; margin: 0; color: var(--clay-ink-soft); font-size: 13.5px; font-weight: 600; }
-.coord-composer:has(input[name="mode"][value="request"]:checked) .comp-kinds,
+.coord-composer:has(input[name="mode"][value="request"]:checked) .comp-request,
 .coord-composer:has(input[name="mode"][value="directive"]:checked) .comp-scope { display: flex; }
 .pill {
   --clay-rest-h: 5; --clay-surface: var(--tabbar); grid-column: 1; grid-row: 3; align-self: center; display: inline-flex; gap: 2px; padding: 5px; border-radius: 99px;
@@ -317,14 +320,15 @@ summary.coord-text-action::-webkit-details-marker { display: none; }
   color: var(--clay-ink); font: inherit; font-size: 15.5px; line-height: 1.4; resize: none; field-sizing: content; overflow-y: auto;
 }
 .comp-in::placeholder { color: var(--clay-ink-faint); opacity: 1; }
-.comp-send { grid-column: 3; grid-row: 3; }
+.comp-send { grid-column: 4; grid-row: 3; }
 .comp-send.round { inline-size: 52px; block-size: 52px; min-height: 52px; }
 .comp-send-directive { min-height: 52px; padding: 0 22px; }
-.coord-compose-more { grid-column: 1 / -1; grid-row: 4; position: relative; }
-.coord-compose-more > summary { width: max-content; }
+.comp-more { grid-column: 3; grid-row: 3; position: relative; align-self: end; }
+.comp-more > summary { list-style: none; cursor: pointer; inline-size: 52px; block-size: 52px; min-height: 52px; padding: 0; }
+.comp-more > summary:focus-visible { outline: 2px solid var(--clay-accent); outline-offset: 2px; }
 .coord-option-panel {
   --clay-rest-h: 7; --clay-surface: var(--clay-c-surface);
-  position: absolute; bottom: calc(100% + 10px); left: 0; z-index: 20; display: grid; gap: 12px; width: min(420px, 92vw); padding: 14px 16px; border-radius: var(--clay-radius-sm);
+  position: absolute; bottom: calc(100% + 10px); right: 0; z-index: 20; display: grid; gap: 12px; width: min(420px, 92vw); padding: 14px 16px; border-radius: var(--clay-radius-sm);
 }
 .coord-option-field { display: grid; gap: 6px; font-weight: 700; font-size: 13.5px; }
 .coord-option-field small { color: var(--clay-ink-faint); font-weight: 500; }
@@ -341,6 +345,7 @@ summary.coord-text-action::-webkit-details-marker { display: none; }
 .coord-context {
   grid-area: ctx; min-width: 0; min-height: 0; overflow-y: auto; scrollbar-width: thin;
   margin-right: calc(var(--shadow-room-x) * -1); padding: 4px var(--shadow-room-x) var(--shadow-room-y) 4px;
+  -webkit-mask-image: linear-gradient(#000 calc(100% - var(--shadow-room-y)), transparent); mask-image: linear-gradient(#000 calc(100% - var(--shadow-room-y)), transparent);
 }
 .coord-drawer-head { display: none; }
 .coord-context h3 { margin: 0 0 8px; font-size: 14px; font-weight: 700; color: var(--clay-ink-soft); letter-spacing: 0; }
@@ -461,12 +466,12 @@ html:not(.js) [data-coord-live-status] { display: none; }
   .rtabs-scroll { flex: 1 1 auto; }
   .coord-start { position: static; }
   .coord-start-panel { left: var(--shadow-room-x); right: 0; top: 56px; }
-  .coord-composer { grid-template-columns: minmax(0, 1fr) auto; }
+  .coord-composer { grid-template-columns: minmax(0, 1fr) auto auto; }
   .pill { grid-column: 1 / -1; grid-row: 3; justify-self: center; }
   .pill span { padding: 7px 14px; font-size: 13.5px; }
   .comp-in { grid-column: 1; grid-row: 4; }
-  .comp-send { grid-column: 2; grid-row: 4; }
-  .coord-compose-more { grid-row: 5; }
+  .comp-more { grid-column: 2; grid-row: 4; }
+  .comp-send { grid-column: 3; grid-row: 4; }
   .cm-bubble { font-size: 15px; padding: 9px 14px; }
   .slab { grid-template-columns: 30px minmax(0, 1fr); padding: 14px 16px; }
   .slab-pin { inline-size: 30px; block-size: 30px; }
@@ -499,4 +504,14 @@ html:not(.js) [data-coord-live-status] { display: none; }
   .coord-messages { overflow: visible; max-height: none; mask-image: none; -webkit-mask-image: none; }
   .coord-messages > :first-child { margin-top: 0; }
   .coord-context { overflow: visible; }
+}
+
+/* Touch: every control in the room is at least 44px in both directions. */
+@media (hover: none), (pointer: coarse) {
+  .coord-workspace button, .coord-workspace summary, .coord-workspace .coord-text-action, .coord-workspace .acts .btn,
+  .coord-workspace .comp-more > summary, .coord-workspace .pill span, .coord-workspace .coord-chip span, .coord-workspace .slab-end,
+  .coord-context a, .coord-nojs-status a {
+    min-height: 44px; min-width: 44px; display: inline-flex; align-items: center; justify-content: center;
+  }
+  .coord-workspace .acts .btn { min-height: 44px; }
 }

@@ -177,7 +177,8 @@
   const coordFormTarget = (form, origin, submitter) => {
     if (!form || form.method.toLowerCase() !== "post") return null;
     // A submit button may post elsewhere (the directive button does).
-    const target = new URL(submitter?.formAction || form.action, origin);
+    const action = submitter?.hasAttribute("formaction") ? submitter.formAction : form.action;
+    const target = new URL(action, origin);
     return target.origin === origin && progressiveFormPaths.has(target.pathname)
       ? target
       : null;
@@ -670,9 +671,15 @@
     const radio = event.target;
     if (!radio.matches?.('input[name="mode"]') || !radio.form) return;
     const kinds = [...radio.form.querySelectorAll('input[name="intent"]')];
+    const to = [...radio.form.querySelectorAll(".comp-to input")];
     if (radio.value === "request") {
       if (!kinds.some((kind) => kind.checked) && kinds[0]) kinds[0].checked = true;
-    } else kinds.forEach((kind) => { kind.checked = false; });
+    } else {
+      kinds.forEach((kind) => { kind.checked = false; });
+      to.forEach((target) => { target.checked = false; });
+    }
+    // The addressee is the one thing a request cannot do without.
+    to.forEach((target) => { target.required = radio.value === "request"; });
   });
   // Enter sends, Shift+Enter breaks the line. A directive stays in force until
   // it is ended, so it is only ever set with its own button.

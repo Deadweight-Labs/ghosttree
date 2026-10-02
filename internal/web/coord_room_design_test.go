@@ -82,7 +82,7 @@ func TestCoordScriptSendsOnEnterAndKeepsShiftEnterForNewLines(t *testing.T) {
 	js := string(mustReadEmbedded(t, "static/app.js"))
 	for _, want := range []string{
 		`event.key !== "Enter"`, "event.shiftKey", "event.isComposing", "form.requestSubmit(button)",
-		`=== "directive"`, "submitter?.formAction",
+		`=== "directive"`, `submitter?.hasAttribute("formaction")`,
 	} {
 		if !strings.Contains(js, want) {
 			t.Errorf("composer script missing %q", want)

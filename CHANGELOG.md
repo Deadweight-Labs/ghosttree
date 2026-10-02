@@ -6,6 +6,21 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Fixed: ending a standing instruction needs more than room access. Only its
+  author, or someone whose project rank is at least the author's (owners and
+  instance admins always), can end it; anyone else gets "forbidden", and the
+  room shows End only to those who may. Before, a guest could end an owner's
+  directive.
+- Fixed: the room's send, read and answer buttons submit in place again. The
+  page script treated every button as having its own form target and let the
+  browser post the form natively, which replaced the page with plain text on an
+  error and dropped what was typed.
+- Changed: directive plates and request cards name the sender's project role,
+  instructions from below member rank read as "Standing request", the composer
+  offers "Directive" only to those who can give one, a request asks for its
+  addressee inline, More is an icon next to Send, closed requests show how they
+  ended ("Answered · robin"), and the no-script refresh link keeps the room.
+  Agent pause texts and the mutual-wait line are English.
 - Changed: rooms are a real chat (REQ-435, fourth part). Rooms switch through a
   dark tab pill with an unread dot, and a compact "+" starts a direct message or
   a group. The flow groups consecutive messages of one sender, shows agents as
