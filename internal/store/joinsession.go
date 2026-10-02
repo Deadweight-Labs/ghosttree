@@ -547,7 +547,10 @@ func (j *JoinSessions) Claim(req JoinClaimRequest) (JoinClaim, error) {
 	if err != nil {
 		return JoinClaim{}, err
 	}
-	out := JoinClaim{Mode: JoinModeCode, ExpiresIn: DeviceFlowTTL, Interval: DeviceInterval}
+	// Ein Claim hält Sitzung (und im Code-Weg den Geräte-Ablauf) bis zum Ende
+	// des Login-Fensters, damit eine späte Anmeldung das Gerät nicht verliert.
+	window := s.created.Add(JoinMaxLifetime).Sub(now)
+	out := JoinClaim{Mode: JoinModeCode, ExpiresIn: window, Interval: DeviceInterval}
 	if loop {
 		out.Mode = JoinModeLoopback
 		host := req.Host
@@ -556,7 +559,7 @@ func (j *JoinSessions) Claim(req JoinClaimRequest) (JoinClaim, error) {
 		}
 		s.challenge, s.cbHost, s.cbPort, s.cbState = req.Challenge, host, req.Port, req.State
 	} else {
-		start, err := j.device.StartJoin(netKey, req.Machine, req.Addr)
+		start, err := j.device.StartJoin(netKey, req.Machine, req.Addr, window)
 		if err != nil {
 			return JoinClaim{}, err
 		}
@@ -571,7 +574,7 @@ func (j *JoinSessions) Claim(req JoinClaimRequest) (JoinClaim, error) {
 		out.ExpiresIn, out.Interval = start.ExpiresIn, start.Interval
 	}
 	s.mode, s.machine, s.remote, s.net, s.wide, s.nonce, s.state = out.Mode, req.Machine, req.Addr, netKey, wide, nonce, JoinClaimed
-	s.extend(now.Add(DeviceFlowTTL))
+	s.extend(s.created.Add(JoinMaxLifetime))
 	return out, nil
 }
 

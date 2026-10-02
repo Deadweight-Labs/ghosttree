@@ -16,7 +16,9 @@ Versioning, with pre-1.0 compatibility rules described in
   when `GHOSTTREE_PUBLIC_URL` is set without trusted proxies. Denying a loopback
   request redirects the browser to the installer with `error=access_denied`.
   `code_challenge_method` must be `S256`, and `code_verifier` must use the
-  RFC 7636 characters.
+  RFC 7636 characters. A claim keeps the session and its device flow until
+  30 minutes after the invitation page was opened, so a late sign-in does not
+  lose a waiting installer (`expires_in` reports the remaining time).
 
 - Changed: the web interface has a new app shell (REQ-435, first part). A
   left navigation (Overview, Agents, Rooms, Knowledge, Requests; Administration

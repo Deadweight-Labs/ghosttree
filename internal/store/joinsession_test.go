@@ -793,3 +793,67 @@ func TestJoinDecideChecksTheMachineOutsideTheLockAndRechecksState(t *testing.T) 
 		t.Fatalf("approve after state change: %v", err)
 	}
 }
+
+// R1 (Runde 3): ein früher Claim hält die Sitzung bis zum Ende des Login-Fensters,
+// in beiden Wegen samt Gerät.
+func TestJoinEarlyClaimSurvivesALateLoginInBothModes(t *testing.T) {
+	for name, req := range map[string]func(string) JoinClaimRequest{
+		"loopback": func(p string) JoinClaimRequest { return loopReq(p, "m", "1.1.1.1") },
+		"code":     func(p string) JoinClaimRequest { return codeReq(p, "m", "1.1.1.1") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			st, clock := pairFixture(t)
+			j := st.Join()
+			o, _ := j.Open(testInvite, "")
+			start := clock.t
+			clock.t = start.Add(time.Minute)
+			claim, err := j.Claim(req(o.Pair))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := JoinMaxLifetime - time.Minute; claim.ExpiresIn != want {
+				t.Fatalf("expires_in %v want %v", claim.ExpiresIn, want)
+			}
+			clock.t = start.Add(20 * time.Minute)
+			if err := j.Bind(testInvite, o.ID, "person:2"); err != nil {
+				t.Fatal(err)
+			}
+			v := j.View("person:2")
+			if v.State != JoinClaimed || v.Machine != "m" {
+				t.Fatalf("device lost: %+v", v)
+			}
+			if name == "code" {
+				confirm := claim.Confirm
+				if _, err := j.Decide("person:2", true, v.Nonce, confirm, nil); err != nil {
+					t.Fatal(err)
+				}
+				if _, _, err := st.Device().Poll(claim.DeviceCode); err != nil {
+					t.Fatalf("device flow: %v", err)
+				}
+			}
+		})
+	}
+}
+
+// Beim Überlauf weichen wartende Sitzungen vor kompromittierten.
+func TestJoinOpenEvictsWaitingBeforeCompromised(t *testing.T) {
+	st, clock := pairFixture(t)
+	j := st.Join()
+	dead, _ := j.Open(testInvite, "")
+	j.Claim(codeReq(dead.Pair, "m", "10.3.0.1"))
+	j.Claim(codeReq(dead.Pair, "thief", "10.3.0.2"))
+	var waiting []JoinOpen
+	for i := 0; i < maxJoinPerInvite-1; i++ {
+		clock.t = clock.t.Add(time.Second)
+		w, _ := j.Open(testInvite, "")
+		waiting = append(waiting, w)
+	}
+	j.Open(testInvite, "")
+	j.mu.Lock()
+	_, deadAlive := j.byID[hashCode(dead.ID)]
+	_, firstAlive := j.byID[hashCode(waiting[0].ID)]
+	j.mu.Unlock()
+	if !deadAlive || firstAlive {
+		t.Fatalf("dead=%v firstWaiting=%v", deadAlive, firstAlive)
+	}
+}

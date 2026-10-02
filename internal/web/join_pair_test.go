@@ -804,3 +804,38 @@ func TestJoinPageSaysSignInFirstWhenNoSlotIsFree(t *testing.T) {
 		t.Fatalf("page: %s", text)
 	}
 }
+
+// Ein im Codefeld eingegebener Einladungscode führt bei OIDC nach der Annahme auf /join/pair.
+func TestOIDCTypedProjectInvitationEndsOnThePairingPage(t *testing.T) {
+	env := newOIDCEnv(t, true)
+	env.store.SetAccessMode(store.AccessMode{Enforce: true})
+	org, err := env.store.CreateOrg("person:1", "Alpha", "alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = env.store.EnsureProject("person:1", joinProject); err != nil {
+		t.Fatal(err)
+	}
+	code := projectInvite(t, env.store, org, store.RoleMember)
+	b := newBrowser(t)
+	resp := env.callback(t, b, env.startFlow(t, b, code))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/join/pair" {
+		t.Fatalf("callback: %d %q", resp.StatusCode, resp.Header.Get("Location"))
+	}
+}
+
+func TestJoinPageSaysJoinFirstToASignedInVisitorWhenNoSlotIsFree(t *testing.T) {
+	e := newPairEnv(t)
+	for i := 0; i < 10; i++ {
+		pair := e.pairOf(t, browser(t), e.code)
+		if _, err := e.st.Join().Claim(loopClaim(pair, "m", "10."+string(rune('0'+i))+".0.1")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b := browser(t)
+	e.signInAs(t, b, "anna")
+	if _, text := e.get(t, b, "/join/"+e.code); !strings.Contains(text, "Join first, then connect this machine.") {
+		t.Fatalf("page: %s", text)
+	}
+}
