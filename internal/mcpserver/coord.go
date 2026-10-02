@@ -10,7 +10,6 @@ import (
 
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
-	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -711,20 +710,4 @@ func waitCycleLines(peers []store.CoordAgent) []string {
 		lines = append(lines, "! "+p.Presence.Cycle.Describe(func(id string) string { return names[id] })+" — nothing was resolved automatically: one of them has to answer, withdraw or ask the human")
 	}
 	return lines
-}
-
-// coordSendSchema ergänzt das aus der Eingabestruktur erzeugte Schema um die
-// erlaubten intent-Werte. Das jsonschema-Tag kann nur beschreiben, nicht
-// aufzählen; der Handler prüft denselben Wertebereich (store.AgentSendIntent).
-func coordSendSchema() *jsonschema.Schema {
-	schema, err := jsonschema.For[CoordSendInput](nil)
-	if err != nil {
-		panic(fmt.Sprintf("coord_send schema: %v", err))
-	}
-	if p := schema.Properties["intent"]; p != nil {
-		for _, v := range store.AgentSendIntents {
-			p.Enum = append(p.Enum, v)
-		}
-	}
-	return schema
 }

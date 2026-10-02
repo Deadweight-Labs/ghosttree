@@ -9,7 +9,8 @@ Versioning, with pre-1.0 compatibility rules described in
 - Fixed: agents can now open question, approval, blocker and handoff waits.
   `coord_send` and `ctx coord send --intent` take an optional `intent`
   (question, approval, blocker, handoff, ack; the first four need a mention),
-  the MCP schema lists the values, and the agent send route rejects `standing`,
+  the MCP schema describes the values (no enum, so "Question" is normalised
+  rather than refused by the SDK), and the agent send route rejects `standing`,
   `attention` and unknown intents. Before, only the web UI could create these,
   so wait-cycle detection and attention never saw an agent-made wait.
 - Fixed: after a pause or interruption is lifted, the Claude channel tells the
@@ -22,8 +23,10 @@ Versioning, with pre-1.0 compatibility rules described in
 - Fixed: `ctx coord send` (and the other room commands) no longer swallow a
   rejected registration. The CLI identity `cli:<machine>` belongs to one
   project room; from a second repository the server's message ("already
-  registered in another room") is shown with a hint, and `--agent <id>` posts
-  with a separate identity.
+  registered in another room") is shown with a hint, coded server errors
+  (machine_bound, invalid_external_id, ...) are shown too, and
+  `--agent-name <name>` posts as `ctx:<machine>:<name>`, which also works with
+  machine-bound device tokens.
 - Added: configurable Secure cookies behind TLS and reverse proxies (REQ-236).
   `--public-url` / `GHOSTTREE_PUBLIC_URL` (an https URL makes every cookie
   Secure and its origin is accepted for same-origin checks) and

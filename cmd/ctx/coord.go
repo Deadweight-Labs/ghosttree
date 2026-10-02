@@ -42,7 +42,7 @@ without a repository.
 
 The CLI writes as cli:<machine>, and one identity belongs to one project room.
 To post into a second repository, give it its own identity with
---agent <id> (for example cli:<machine>:<repo>).
+--agent-name <name>; the CLI then writes as ctx:<machine>:<name>.
 
 This is the way in for humans, for harnesses without MCP, and for measuring
 whether a message actually crosses between two harnesses. Agents use the
@@ -56,40 +56,68 @@ func coordSession(cfg config.Config) string {
 	return "cli:" + cfg.Machine
 }
 
-// coordAPIMessage holt die Meldung des Servers aus einem Client-Fehler. Der
-// Server antwortet mit {"error":"..."}; ohne diese Auswertung steht in der
-// Ausgabe der rohe Statuszeilen-Text und die eigentliche Auskunft
-// ("already registered in another room") geht unter.
-func coordAPIMessage(err error) string {
+// coordAPIError liest Status und Meldung aus einem Client-Fehler. Der Server
+// antwortet entweder mit einem codierten Fehler (*client.APIError: etwa
+// machine_bound, invalid_external_id, access denied) oder mit {"error":"..."}
+// (*client.StatusError). Beide müssen ankommen; sonst steht in der Ausgabe nur
+// ein allgemeines "forbidden" und die eigentliche Auskunft geht unter.
+func coordAPIError(err error) (status int, message string, ok bool) {
+	var ae *client.APIError
+	if errors.As(err, &ae) {
+		msg := ae.Message
+		if msg == "" {
+			msg = ae.Code
+		}
+		if ae.Code != "" && ae.Code != msg {
+			msg += " (" + ae.Code + ")"
+		}
+		if ae.Resolution != "" {
+			msg += ": " + ae.Resolution
+		}
+		return ae.Status, msg, true
+	}
 	var se *client.StatusError
 	if errors.As(err, &se) {
 		var body struct {
 			Error string `json:"error"`
 		}
 		if json.Unmarshal([]byte(se.Body), &body) == nil && body.Error != "" {
-			return body.Error
+			return se.Status, body.Error, true
 		}
-		if se.Body != "" {
-			return se.Body
-		}
+		return se.Status, se.Body, true
+	}
+	return 0, "", false
+}
+
+func coordAPIMessage(err error) string {
+	if _, msg, ok := coordAPIError(err); ok && msg != "" {
+		return msg
 	}
 	return err.Error()
 }
 
 // coordJoinFailure erklärt, warum die CLI-Identität ihren Raum nicht betreten
-// konnte, und sagt, was man tun kann. Nur Ablehnungen der Anmeldung (400/403)
-// zählen; ein Netzfehler bleibt wie bisher folgenlos, die Folgeanfrage meldet
-// ihn selbst.
-func coordJoinFailure(err error, me, room string) (string, bool) {
-	var se *client.StatusError
-	if !errors.As(err, &se) || (se.Status != http.StatusBadRequest && se.Status != http.StatusForbidden) {
+// konnte, und sagt, was man tun kann. Nur Ablehnungen (400, 403, 409) zählen;
+// ein Netzfehler bleibt wie bisher folgenlos, die Folgeanfrage meldet ihn
+// selbst.
+func coordJoinFailure(err error, me, room, machine string) (string, bool) {
+	status, message, ok := coordAPIError(err)
+	if !ok || (status != http.StatusBadRequest && status != http.StatusForbidden && status != http.StatusConflict) {
 		return "", false
 	}
-	msg := fmt.Sprintf("cannot join %s as %s: %s", room, me, coordAPIMessage(err))
-	if se.Status == http.StatusBadRequest && strings.Contains(se.Body, "another room") {
-		msg += fmt.Sprintf("\nhint: %s is bound to the first project room it joined. To post into this repository, use a separate identity: ctx coord <command> --agent %s:<name> ...", me, me)
+	msg := fmt.Sprintf("cannot join %s as %s: %s", room, me, message)
+	if status == http.StatusBadRequest && strings.Contains(message, "another room") {
+		msg += fmt.Sprintf("\nhint: %s is bound to the first project room it joined. To post into this repository, use a separate identity: ctx coord <command> --agent-name <name> ... (posts as %s)", me, coordNamedSession(machine, "<name>"))
 	}
 	return msg, true
+}
+
+// coordNamedSession bildet eine eigene Identität für ein weiteres Repository.
+// Das Präfix ist bewusst nicht "cli:": der Server liest hinter "cli:" einen
+// Maschinennamen und würde "host:name" gegen ein an die Maschine gebundenes
+// Geräte-Token prüfen und ablehnen.
+func coordNamedSession(machine, name string) string {
+	return "ctx:" + machine + ":" + name
 }
 
 func cmdCoord(args []string, stdout io.Writer) int {
@@ -106,7 +134,7 @@ func cmdCoord(args []string, stdout io.Writer) int {
 	all := false
 	var positional []string
 	var mentions []string
-	var intentFlag, agentFlag string
+	var intentFlag, agentName string
 	for i := 0; i < len(rest); i++ {
 		a := rest[i]
 		switch a {
@@ -122,7 +150,7 @@ func cmdCoord(args []string, stdout io.Writer) int {
 			} else {
 				mentions = append(mentions, v)
 			}
-		case "--intent", "--agent":
+		case "--intent", "--agent-name":
 			if i+1 >= len(rest) || strings.HasPrefix(rest[i+1], "-") {
 				fmt.Fprintf(stdout, "%s needs a value\n", a)
 				return 2
@@ -131,7 +159,7 @@ func cmdCoord(args []string, stdout io.Writer) int {
 			if a == "--intent" {
 				intentFlag = rest[i]
 			} else {
-				agentFlag = rest[i]
+				agentName = rest[i]
 			}
 		case "--machine":
 			machine = true
@@ -149,12 +177,12 @@ func cmdCoord(args []string, stdout io.Writer) int {
 	}
 	c := client.New(cfg)
 	me := coordSession(cfg)
-	if agentFlag != "" {
-		if !store.ValidExternalID(agentFlag) || store.ReservedExternalID(agentFlag) {
-			fmt.Fprintf(stdout, "--agent %q is not a valid agent identity\n", agentFlag)
+	if agentName != "" {
+		me = coordNamedSession(cfg.Machine, agentName)
+		if !store.ValidExternalID(me) || strings.ContainsAny(agentName, ":/") {
+			fmt.Fprintf(stdout, "--agent-name %q: use letters, digits, . _ - only\n", agentName)
 			return 2
 		}
-		me = agentFlag
 	}
 	intent, ierr := store.AgentSendIntent(intentFlag)
 	if ierr != nil {
@@ -177,7 +205,7 @@ func cmdCoord(args []string, stdout io.Writer) int {
 		if _, err := c.RegisterCoordAgent(store.CoordAgent{
 			ExternalID: me, Provider: "ctx-cli", RoomKey: room, DisplayName: me,
 		}); err != nil && sub != "rooms" {
-			if msg, rejected := coordJoinFailure(err, me, room); rejected {
+			if msg, rejected := coordJoinFailure(err, me, room, cfg.Machine); rejected {
 				fmt.Fprintln(stdout, msg)
 				return 1
 			}

@@ -16,6 +16,13 @@ import (
 
 func coordCLIEnv(t *testing.T) (*store.Store, config.Config) {
 	t.Helper()
+	return coordCLIEnvWith(t, false)
+}
+
+// coordCLIEnvWith: bound=true nutzt ein an die Maschine "testbox" gebundenes
+// Token wie der Geräte-Login; ohne Bindung ein Legacy-Token.
+func coordCLIEnvWith(t *testing.T, bound bool) (*store.Store, config.Config) {
+	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
@@ -25,6 +32,13 @@ func coordCLIEnv(t *testing.T) (*store.Store, config.Config) {
 	}
 	t.Cleanup(func() { st.Close() })
 	token, _ := st.AddPerson("alice")
+	if bound {
+		var err error
+		token, _, err = st.CreateToken("alice", store.TokenSpec{Label: "device", Machine: "testbox"})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	srv := httptest.NewServer(server.New(st))
 	t.Cleanup(srv.Close)
 	cfg := config.Config{ServerURL: srv.URL, Token: token, Machine: "testbox"}
@@ -81,41 +95,72 @@ func TestCoordSendIntentIsValidatedLocally(t *testing.T) {
 
 // Die CLI-Identität gehört einem Projektraum. Aus einem zweiten Repo kam
 // bisher nur ein 403 oder 404 ohne Erklärung, weil die Ablehnung der
-// Anmeldung verworfen wurde.
+// Anmeldung verworfen wurde. Der Hinweis muss auch mit einem an die Maschine
+// gebundenen Geräte-Token funktionieren.
 func TestCoordSendFromSecondRepoExplainsTheBoundIdentity(t *testing.T) {
-	coordCLIEnv(t)
-	first := coordRepo(t, "https://github.com/x/first.git")
-	second := coordRepo(t, "https://github.com/x/second.git")
-	var out bytes.Buffer
-	if code := run([]string{"coord", "send", "hello", first}, &out); code != 0 {
-		t.Fatalf("first send: %d %s", code, out.String())
-	}
-	out.Reset()
-	if code := run([]string{"coord", "send", "hello", second}, &out); code != 1 {
-		t.Fatalf("second send: want 1, got %d: %s", code, out.String())
-	}
-	got := out.String()
-	for _, want := range []string{"already registered in another room", "--agent cli:testbox:"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("output lacks %q: %s", want, got)
-		}
-	}
-	if strings.Contains(got, `{"error"`) {
-		t.Errorf("raw JSON body leaked: %s", got)
-	}
-
-	// Mit eigener Identität funktioniert dasselbe Repo.
-	out.Reset()
-	if code := run([]string{"coord", "send", "hello", "--agent", "cli:testbox:second", second}, &out); code != 0 {
-		t.Fatalf("send with --agent: %d %s", code, out.String())
+	for _, bound := range []bool{false, true} {
+		t.Run(map[bool]string{false: "legacy", true: "machine-bound"}[bound], func(t *testing.T) {
+			coordCLIEnvWith(t, bound)
+			first := coordRepo(t, "https://github.com/x/first.git")
+			second := coordRepo(t, "https://github.com/x/second.git")
+			var out bytes.Buffer
+			if code := run([]string{"coord", "send", "hello", first}, &out); code != 0 {
+				t.Fatalf("first send: %d %s", code, out.String())
+			}
+			out.Reset()
+			if code := run([]string{"coord", "send", "hello", second}, &out); code != 1 {
+				t.Fatalf("second send: want 1, got %d: %s", code, out.String())
+			}
+			got := out.String()
+			for _, want := range []string{"already registered in another room", "--agent-name <name>", "ctx:testbox:<name>"} {
+				if !strings.Contains(got, want) {
+					t.Errorf("output lacks %q: %s", want, got)
+				}
+			}
+			if strings.Contains(got, `{"error"`) {
+				t.Errorf("raw JSON body leaked: %s", got)
+			}
+			out.Reset()
+			if code := run([]string{"coord", "send", "hello", "--agent-name", "second", second}, &out); code != 0 {
+				t.Fatalf("send with --agent-name: %d %s", code, out.String())
+			}
+		})
 	}
 }
 
-func TestCoordAgentFlagRejectsReservedIdentity(t *testing.T) {
+// Codierte Fehler des Servers (*client.APIError) dürfen nicht untergehen.
+func TestCoordSendShowsCodedServerErrors(t *testing.T) {
+	_, cfg := coordCLIEnvWith(t, true)
+	cfg.Machine = "otherbox" // das Token ist an testbox gebunden
+	if err := config.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	repo := coordRepo(t, "https://github.com/x/coded.git")
+	var out bytes.Buffer
+	if code := run([]string{"coord", "send", "hello", repo}, &out); code != 1 {
+		t.Fatalf("want 1, got %d: %s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "machine_bound") || !strings.Contains(out.String(), "testbox") {
+		t.Fatalf("coded error swallowed: %s", out.String())
+	}
+}
+
+func TestCoordAPIErrorReadsBothErrorTypes(t *testing.T) {
+	st, msg, ok := coordAPIError(&client.APIError{Status: 403, Code: "machine_bound", Message: "bound to x"})
+	if !ok || st != 403 || !strings.Contains(msg, "machine_bound") || !strings.Contains(msg, "bound to x") {
+		t.Fatalf("APIError: %d %q %v", st, msg, ok)
+	}
+	st, msg, ok = coordAPIError(&client.StatusError{Status: 400, Body: `{"error":"already registered in another room"}`})
+	if !ok || st != 400 || msg != "already registered in another room" {
+		t.Fatalf("StatusError: %d %q %v", st, msg, ok)
+	}
+}
+
+func TestCoordAgentNameRejectsInvalidNames(t *testing.T) {
 	coordCLIEnv(t)
 	repo := coordRepo(t, "https://github.com/x/res.git")
 	var out bytes.Buffer
-	if code := run([]string{"coord", "send", "x", "--agent", "system:bot", repo}, &out); code != 2 {
+	if code := run([]string{"coord", "send", "x", "--agent-name", "system:bot", repo}, &out); code != 2 {
 		t.Fatalf("want 2, got %d: %s", code, out.String())
 	}
 }

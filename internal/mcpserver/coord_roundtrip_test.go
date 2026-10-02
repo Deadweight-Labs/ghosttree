@@ -1006,3 +1006,22 @@ func TestCoordSendRejectsBadIntent(t *testing.T) {
 		}
 	}
 }
+
+// Durch das echte Schema: der SDK-Validator sieht den intent vor dem Handler.
+// "" und "Question" müssen dort durchkommen (der Handler normalisiert), ein
+// unbekannter Wert scheitert.
+func TestCoordSendIntentThroughTheRealSchema(t *testing.T) {
+	a, b, _ := twoSessions(t)
+	session := connect(t, a)
+	for _, intent := range []string{"", "question", "Question", " QUESTION "} {
+		out, failed := callTool(t, session, "coord_send", map[string]any{
+			"body": "ok " + intent, "intent": intent, "mention": b.sessionRef})
+		if failed {
+			t.Errorf("intent %q rejected: %s", intent, out)
+		}
+	}
+	if out, failed := callTool(t, session, "coord_send", map[string]any{
+		"body": "x", "intent": "urgent", "mention": b.sessionRef}); !failed {
+		t.Errorf("unknown intent accepted: %s", out)
+	}
+}
