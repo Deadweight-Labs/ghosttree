@@ -206,3 +206,22 @@ func TestBuildCoordParticipantsShowsOriginAndAgeAndNeverInventsIdle(t *testing.T
 		t.Fatalf("a person must not carry agent presence: %+v", p)
 	}
 }
+
+func TestBuildCoordWaitCyclesNamesTheCycleOnceAndHidesNothingElse(t *testing.T) {
+	cycle := &store.WaitCycle{Members: []string{"a", "b"}, Since: "2026-10-02T10:00:00Z", ReviewAt: "2026-10-02T10:30:00Z"}
+	peers := []store.CoordAgent{
+		{ExternalID: "a", DisplayName: "Anna-Agent", Presence: &store.Presence{Cycle: cycle}},
+		{ExternalID: "b", DisplayName: "Bert-Agent", Presence: &store.Presence{Cycle: cycle}},
+		{ExternalID: "c", DisplayName: "Cleo-Agent", Presence: &store.Presence{}},
+	}
+	got := buildCoordWaitCycles(peers, map[string]string{"a": "Anna"})
+	if len(got) != 1 || !strings.Contains(got[0], "gegenseitiges Warten: Anna ↔ Bert-Agent (seit ") {
+		t.Fatalf("lines = %q", got)
+	}
+	if lines := buildCoordWaitCycles(peers[2:], nil); len(lines) != 0 {
+		t.Fatalf("no cycle, no line: %q", lines)
+	}
+	if lines := buildCoordWaitCycles(nil, nil); len(lines) != 0 {
+		t.Fatalf("a viewer without a peer list sees nothing: %q", lines)
+	}
+}

@@ -4,9 +4,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 var (
@@ -755,6 +757,9 @@ func (a CoordAccess) Send(message CoordMessage) (int64, error) {
 		}
 		return 0, ErrCoordForbidden
 	}
+	if ReservedExternalID(actor) {
+		return 0, ErrCoordForbidden // der Präfix system: gehört dem Store
+	}
 	if err := a.canReadTx(tx, actor, message.DestinationKind, message.DestinationID); err != nil {
 		return 0, err
 	}
@@ -830,9 +835,24 @@ func (a CoordAccess) Send(message CoordMessage) (int64, error) {
 	message.AuthorPrincipalID = a.Principal.ID
 	message.AuthorKind = a.authorKind()
 	message.SenderRole, message.RecipientRole, message.Authority, message.SenderDisplayName = "", "", "", ""
+	// Ein Wartekreis wird vor dem Senden abgeglichen, damit einer, der
+	// zwischenzeitlich abgelaufen ist, als aufgelöst gilt, bevor diese Nachricht
+	// ihn neu schließt; und danach, weil sie ihn schließen kann.
+	waitRoom := ""
+	if reason, ok := attentionReasonForIntent(message.Intent); ok && reason != AttentionHandoff {
+		waitRoom = messageRoomKeyTx(tx, message.DestinationKind, message.DestinationID)
+		if err := reconcileWaitCyclesSafeTx(tx, waitRoom, time.Now().UTC()); err != nil {
+			return 0, err
+		}
+	}
 	id, err := appendCoordMessageTx(tx, message)
 	if err != nil {
 		return 0, err
+	}
+	if waitRoom != "" {
+		if err := reconcileWaitCyclesSafeTx(tx, waitRoom, time.Now().UTC()); err != nil {
+			return 0, err
+		}
 	}
 	if err := insertRawMentionsTx(tx, id, rawMentions); err != nil {
 		return 0, err
@@ -991,8 +1011,21 @@ func (a CoordAccess) MessageMentions(messageID int64) ([]string, error) {
 		raw, err = rawMentionsTx(tx, messageID)
 	}
 	tx.Rollback()
-	if err != nil || raw != nil {
-		return raw, err
+	if err != nil {
+		return nil, err
+	}
+	if raw != nil {
+		// Der Gast sieht von den Erwähnungen nur, was getippt wurde, und sich
+		// selbst, wenn er gemeint ist: die eigene Empfängerrolle ist ihm ohnehin
+		// bekannt, und ohne sie würde ein maskierter Empfänger (etwa bei einer
+		// Meldung über einen Wartekreis) nie geweckt. Andere Empfänger bleiben
+		// verborgen.
+		if actor, aerr := a.actor(); aerr == nil && actor != "" && !slices.Contains(raw, actor) {
+			if real, merr := a.Store.CoordMessageMentions(messageID); merr == nil && slices.Contains(real, actor) {
+				raw = append(raw, actor)
+			}
+		}
+		return raw, nil
 	}
 	return a.Store.CoordMessageMentions(messageID)
 }
@@ -2342,6 +2375,9 @@ func (a CoordAccess) CreateStanding(in StandingInput) (int64, error) {
 	actor, err := a.mutationActor()
 	if err != nil {
 		return 0, err
+	}
+	if ReservedExternalID(actor) {
+		return 0, ErrCoordForbidden
 	}
 	in.RoomKey = strings.TrimSpace(in.RoomKey)
 	in.ClientID = strings.TrimSpace(in.ClientID)
