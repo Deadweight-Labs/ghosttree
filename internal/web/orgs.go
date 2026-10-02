@@ -37,17 +37,19 @@ type projectRolesView struct {
 
 // orgsView sammelt, was die Org-Seite zeigt.
 type orgsView struct {
-	Orgs      []store.Org
-	Selected  store.Org
-	Owner     bool
-	Members   []orgMemberRow
-	Invites   []store.Invitation
-	Projects  []store.Project
-	Roles     []projectRolesView
-	NewCode   string // einmalig angezeigter Einladungscode
-	NewExpiry string
-	NewLink   bool // der Code gehört zu einer Projekt-Einladung (/join/<code>)
-	Notice    string
+	Orgs       []store.Org
+	Selected   store.Org
+	Owner      bool
+	Members    []orgMemberRow
+	Invites    []store.Invitation
+	Projects   []store.Project
+	Roles      []projectRolesView
+	NewCode    string // einmalig angezeigter Einladungscode
+	NewExpiry  string
+	NewLink    bool // der Code gehört zu einer Projekt-Einladung (/join/<code>)
+	NewURL     string
+	GuestLinks bool // Gast-Links gibt es nur bei durchgesetzter Sichtbarkeit
+	Notice     string
 }
 
 // orgsPage zeigt Mitglieder, Einladungen und Projekte einer Organisation.
@@ -76,7 +78,8 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 	}
 	if v.Selected.ID != 0 {
 		v.Owner = v.Selected.Role == store.OrgOwner
-		members, _ := a.store.ListOrgMembers(v.Selected.ID)
+		members, _ := a.store.ListOrgMembersFor(v.Selected.ID, me)
+		v.GuestLinks = a.store.AccessEnforced()
 		for _, m := range members {
 			m.Account = store.NormalizeAccountName(m.Account)
 			v.Members = append(v.Members, orgMemberRow{OrgMemberInfo: m, Self: m.AccountID == me})
@@ -135,6 +138,8 @@ func orgError(err error) (int, string) {
 		return http.StatusNotFound, "Project not found."
 	case errors.Is(err, store.ErrInvalidInput):
 		return http.StatusBadRequest, err.Error()
+	case errors.Is(err, store.ErrGuestLinkNeedsEnforcement):
+		return http.StatusConflict, "Guest links are not available: this server does not enforce project visibility (GHOSTTREE_ENFORCE_ACCESS=1 is not set), so a guest would see more than the invitation promises. Create a member link, or ask the operator to turn enforcement on."
 	case errors.Is(err, store.ErrTooManyInvites):
 		return http.StatusConflict, "Too many pending invitations; revoke some first."
 	case errors.Is(err, store.ErrCodeInvalid):
@@ -200,7 +205,7 @@ func (a *app) orgInvite(w http.ResponseWriter, r *http.Request) {
 	}
 	// Der Code erscheint nur in dieser Antwort, nicht in einer URL oder einem
 	// Redirect.
-	a.renderOrgs(w, r, http.StatusOK, orgsView{NewCode: code, NewExpiry: inv.ExpiresAt, NewLink: link}, o.Slug, "")
+	a.renderOrgs(w, r, http.StatusOK, orgsView{NewCode: code, NewExpiry: inv.ExpiresAt, NewLink: link, NewURL: a.joinURL(code)}, o.Slug, "")
 }
 
 func (a *app) orgInviteRevoke(w http.ResponseWriter, r *http.Request) {
@@ -312,3 +317,6 @@ func (a *app) grantable(r *http.Request, actor, remote, target string) []string 
 	}
 	return a.store.GrantableRoles(actor, remote, target)
 }
+
+// joinURL ist der Einladungslink; mit gesetzter GHOSTTREE_PUBLIC_URL absolut.
+func (a *app) joinURL(code string) string { return a.publicOrigin + "/join/" + code }

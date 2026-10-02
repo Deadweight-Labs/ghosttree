@@ -11,6 +11,7 @@ const joinRemote = "github.com/alpha/app"
 func joinFixture(t *testing.T) (*Store, Org) {
 	t.Helper()
 	st := orgStore(t, "robin", "anna", "ben")
+	st.SetAccessMode(AccessMode{Enforce: true})
 	o := mustOrg(t, st, "person:1", "Alpha", "alpha")
 	if _, err := st.EnsureProject("person:1", joinRemote); err != nil {
 		t.Fatal(err)
@@ -202,5 +203,111 @@ func TestAcceptProjectInvitationForExistingOrgMemberAddsRoleNeverLowers(t *testi
 	}
 	if st.ProjectRole(joinRemote, "person:2").Role != RoleMember {
 		t.Fatal("role was lowered")
+	}
+}
+
+func TestGuestLinkNeedsEnforcement(t *testing.T) {
+	st, o := joinFixture(t)
+	st.SetAccessMode(AccessMode{Enforce: false})
+	if _, _, err := st.CreateProjectInvitation("person:1", o.ID, joinRemote, RoleGuest, 0); !errors.Is(err, ErrGuestLinkNeedsEnforcement) {
+		t.Fatalf("guest link without enforcement: %v", err)
+	}
+	if _, _, err := st.CreateProjectInvitation("person:1", o.ID, joinRemote, RoleMember, 0); err != nil {
+		t.Fatalf("member link without enforcement: %v", err)
+	}
+}
+
+func TestProjectInvitationNormalizesTheRemoteAndIsListedWithProjectAndRole(t *testing.T) {
+	st, o := joinFixture(t)
+	if _, _, err := st.CreateProjectInvitation("person:1", o.ID, "https://github.com/Alpha/App.git", RoleGuest, 0); err != nil {
+		t.Fatalf("url form of the remote: %v", err)
+	}
+	if _, _, err := st.CreateProjectInvitation("person:1", o.ID, "has space", RoleGuest, 0); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("bad remote: %v", err)
+	}
+	list, err := st.ListInvitations("person:1", o.ID)
+	if err != nil || len(list) != 1 || list[0].ProjectRemote != joinRemote || list[0].ProjectRole != RoleGuest {
+		t.Fatalf("list = %+v %v", list, err)
+	}
+}
+
+func TestProjectInvitationKeepsCanReviewOfAnExistingRole(t *testing.T) {
+	st, o := joinFixture(t)
+	if _, err := st.AcceptInvitation("person:2", mustInvite(t, st, o)); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetProjectRole("person:1", joinRemote, "person:2", RoleGuest, true, RoleViaCLI); err != nil {
+		t.Fatal(err)
+	}
+	code, _, _ := st.CreateProjectInvitation("person:1", o.ID, joinRemote, RoleMember, 0)
+	if _, err := st.AcceptInvitation("person:2", code); err != nil {
+		t.Fatal(err)
+	}
+	if info := st.ProjectRole(joinRemote, "person:2"); info.Role != RoleMember || !info.CanReview {
+		t.Fatalf("role after upgrade: %+v", info)
+	}
+}
+
+func mustInvite(t *testing.T, st *Store, o Org) string {
+	t.Helper()
+	code, _, err := st.CreateInvitation("person:1", o.ID, "", OrgMember, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return code
+}
+
+// Die Datenbank selbst lässt keine andere Projektrolle zu, und eine Einladung,
+// die sie doch trüge, ließe sich nicht einlösen.
+func TestProjectInvitationRoleIsConstrained(t *testing.T) {
+	st, o := joinFixture(t)
+	if _, err := st.db.Exec(`INSERT INTO invitations(org_id, project_id, project_role, role, code_hash, invited_by, created_at, expires_at) VALUES(?,1,'lead','member','x',1,?,?)`,
+		o.ID, now(), time.Now().Add(time.Hour).UTC().Format(time.RFC3339)); err == nil {
+		t.Fatal("a lead invitation row was accepted by the database")
+	}
+}
+
+func TestOrgMemberListIsReducedForGuestsAndPlainMembers(t *testing.T) {
+	st, o := joinFixture(t)
+	guest, _, _ := st.CreateProjectInvitation("person:1", o.ID, joinRemote, RoleGuest, 0)
+	member, _, _ := st.CreateProjectInvitation("person:1", o.ID, joinRemote, RoleMember, 0)
+	if _, err := st.AcceptInvitation("person:2", guest); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AcceptInvitation("person:3", member); err != nil {
+		t.Fatal(err)
+	}
+	names := func(viewer string) []string {
+		list, err := st.ListOrgMembersFor(o.ID, viewer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, m := range list {
+			out = append(out, m.Account)
+		}
+		return out
+	}
+	if got := names("person:2"); len(got) != 2 || got[0] == got[1] {
+		t.Fatalf("guest sees %v, want only himself and the owner", got)
+	}
+	for _, got := range names("person:2") {
+		if got == "ben" {
+			t.Fatal("the guest sees another member")
+		}
+	}
+	if got := names("person:3"); len(got) != 3 {
+		t.Fatalf("member sees %v", got)
+	}
+	if got := names("person:1"); len(got) != 3 {
+		t.Fatalf("owner sees %v", got)
+	}
+}
+
+func TestIsProjectInvitation(t *testing.T) {
+	st, o := joinFixture(t)
+	project, _, _ := st.CreateProjectInvitation("person:1", o.ID, joinRemote, RoleMember, 0)
+	if !st.IsProjectInvitation(project) || st.IsProjectInvitation(mustInvite(t, st, o)) || st.IsProjectInvitation("nope") {
+		t.Fatal("IsProjectInvitation is wrong")
 	}
 }

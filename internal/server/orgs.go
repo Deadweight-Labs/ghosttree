@@ -65,6 +65,8 @@ func writeOrgError(w http.ResponseWriter, err error) {
 		writeCoded(w, http.StatusConflict, "project_claimed", err.Error())
 	case errors.Is(err, store.ErrAlreadyMember):
 		writeCoded(w, http.StatusConflict, "already_member", err.Error())
+	case errors.Is(err, store.ErrGuestLinkNeedsEnforcement):
+		writeCoded(w, http.StatusConflict, "guest_link_needs_enforcement", err.Error())
 	case errors.Is(err, store.ErrTooManyInvites):
 		writeCoded(w, http.StatusConflict, "too_many_invitations", err.Error())
 	case errors.Is(err, store.ErrNoOrg):
@@ -170,7 +172,7 @@ func (a *api) listOrgMembers(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	members, err := a.st.ListOrgMembers(o.ID)
+	members, err := a.st.ListOrgMembersFor(o.ID, principalOf(r).ID)
 	if err != nil {
 		writeOrgError(w, err)
 		return
@@ -251,7 +253,15 @@ func (a *api) acceptInvitation(w http.ResponseWriter, r *http.Request) {
 	if !readOrgJSON(w, r, &body) {
 		return
 	}
-	o, err := a.st.AcceptInvitation(principalOf(r).ID, strings.TrimSpace(body.Code))
+	code := strings.TrimSpace(body.Code)
+	// Eine Projekt-Einladung nimmt nur ein Mensch im Browser an: ein Token liegt
+	// in der Konfiguration jedes Agenten, und ein Link in einem fremden Text
+	// darf ihm keine Rolle verschaffen.
+	if a.st.IsProjectInvitation(code) {
+		webSessionOnly(w, "project invitations")
+		return
+	}
+	o, err := a.st.AcceptInvitation(principalOf(r).ID, code)
 	if err != nil {
 		writeOrgError(w, err)
 		return

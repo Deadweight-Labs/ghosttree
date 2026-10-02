@@ -101,6 +101,10 @@ type Invitation struct {
 	CreatedAt string `json:"created_at"`
 	ExpiresAt string `json:"expires_at"`
 	Status    string `json:"status"` // pending, expired, accepted, revoked
+	// ProjectRemote und ProjectRole sind nur bei einer Projekt-Einladung (Link)
+	// gesetzt.
+	ProjectRemote string `json:"project,omitempty"`
+	ProjectRole   string `json:"project_role,omitempty"`
 }
 
 type queryer interface {
@@ -369,6 +373,53 @@ func (s *Store) ListOrgMembers(orgID int64) ([]OrgMemberInfo, error) {
 		out = append(out, m)
 	}
 	return out, rows.Err()
+}
+
+// ListOrgMembersFor ist die Mitgliederliste für einen Betrachter. Org-Owner und
+// Konten mit einer Projektrolle über guest sehen alle. Wer nur Gast ist oder
+// keine Projektrolle hat, sieht sich selbst und die Owner, und keine
+// Gesamtzahl: sonst verriete die Liste die Mitglieder, die ein Gast nicht
+// kennen soll (Pitfall #2447).
+func (s *Store) ListOrgMembersFor(orgID int64, viewerPrincipal string) ([]OrgMemberInfo, error) {
+	if s.reader != nil {
+		return s.reader.ListOrgMembersFor(orgID, viewerPrincipal)
+	}
+	all, err := s.ListOrgMembers(orgID)
+	if err != nil {
+		return nil, err
+	}
+	viewer, err := parsePersonPrincipalID(viewerPrincipal)
+	if err != nil {
+		return []OrgMemberInfo{}, nil
+	}
+	if orgRoleTx(s.db, orgID, viewer) == OrgOwner {
+		return all, nil
+	}
+	rows, err := s.db.Query(`SELECT pm.role FROM project_members pm JOIN projects p ON p.id = pm.project_id
+		WHERE p.org_id=? AND pm.account_id=?`, orgID, viewer)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var role string
+		if err := rows.Scan(&role); err != nil {
+			return nil, err
+		}
+		if RoleRank(role) > RoleRank(RoleGuest) {
+			return all, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out := []OrgMemberInfo{}
+	for _, m := range all {
+		if m.Role == OrgOwner || m.AccountID == principalOfID(viewer) {
+			out = append(out, m)
+		}
+	}
+	return out, nil
 }
 
 func ownerCountTx(q rowQuerier, orgID int64) int {
@@ -823,13 +874,14 @@ func (s *Store) CreateInvitation(actorPrincipal string, orgID int64, email, role
 	return code, inv, tx.Commit()
 }
 
-const invitationSelect = `SELECT i.id, i.org_id, i.role, i.email, p.name, i.created_at, i.expires_at, i.accepted_at, i.revoked_at
-	FROM invitations i JOIN persons p ON p.id = i.invited_by`
+const invitationSelect = `SELECT i.id, i.org_id, i.role, i.email, p.name, i.created_at, i.expires_at, i.accepted_at, i.revoked_at,
+	COALESCE(pr.remote,''), i.project_role
+	FROM invitations i JOIN persons p ON p.id = i.invited_by LEFT JOIN projects pr ON pr.id = i.project_id`
 
 func scanInvitation(r rowScanner) (Invitation, error) {
 	var inv Invitation
 	var accepted, revoked string
-	if err := r.Scan(&inv.ID, &inv.OrgID, &inv.Role, &inv.Email, &inv.InvitedBy, &inv.CreatedAt, &inv.ExpiresAt, &accepted, &revoked); err != nil {
+	if err := r.Scan(&inv.ID, &inv.OrgID, &inv.Role, &inv.Email, &inv.InvitedBy, &inv.CreatedAt, &inv.ExpiresAt, &accepted, &revoked, &inv.ProjectRemote, &inv.ProjectRole); err != nil {
 		return Invitation{}, err
 	}
 	switch {
@@ -933,9 +985,12 @@ func acceptInvitationTx(tx execQueryer, code string, account int64, verifiedEmai
 		return Org{}, ErrCodeInvalid
 	}
 	// Eine Projekt-Einladung gilt nur, solange das Projekt in der Organisation
-	// liegt, die eingeladen hat.
+	// liegt, die eingeladen hat, und trägt nur member oder guest.
 	var remote string
 	if projectID != 0 {
+		if projectRole != RoleMember && projectRole != RoleGuest {
+			return Org{}, ErrCodeInvalid
+		}
 		var projectOrg int64
 		if tx.QueryRow(`SELECT remote, org_id FROM projects WHERE id=?`, projectID).Scan(&remote, &projectOrg) != nil || projectOrg != orgID {
 			return Org{}, ErrCodeInvalid
@@ -975,7 +1030,7 @@ func acceptInvitationTx(tx execQueryer, code string, account int64, verifiedEmai
 	detail := "invitation " + strconv.FormatInt(id, 10) + " as " + role
 	if projectID != 0 {
 		if _, err := tx.Exec(`INSERT INTO project_members(project_id, account_id, role, can_review, granted_by, granted_at) VALUES(?,?,?,0,?,?)
-			ON CONFLICT(project_id, account_id) DO UPDATE SET role=excluded.role, can_review=0, granted_by=excluded.granted_by, granted_at=excluded.granted_at`,
+			ON CONFLICT(project_id, account_id) DO UPDATE SET role=excluded.role, granted_by=excluded.granted_by, granted_at=excluded.granted_at`,
 			projectID, account, projectRole, inviter, now()); err != nil {
 			return Org{}, err
 		}

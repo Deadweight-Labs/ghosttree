@@ -93,6 +93,7 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 		}
 	})
 	a.handle(mux, "POST /join/{code}/accept", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.joinAccept))))))
+	a.handle(mux, "POST /join/{code}/signout", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.joinSignOut)))))
 	a.handle(mux, "POST /ui/logout", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.logout))))
 	a.handle(mux, "GET /ui/requests", a.requirePerson(http.HandlerFunc(a.requestsPage)))
 	a.handle(mux, "GET /ui/requests/{id}", a.requirePerson(http.HandlerFunc(a.requestPage)))
@@ -393,6 +394,7 @@ var webRoutes = map[string]webClass{
 	"GET /join/{code}":                webPublic,
 	"GET /join/":                      webPublic,
 	"POST /join/{code}/accept":        webAdmin,
+	"POST /join/{code}/signout":       webAccount,
 	"GET /ui/login":                   webPublic,
 	"POST /ui/login":                  webPublic,
 	"POST /ui/login/oidc":             webPublic,

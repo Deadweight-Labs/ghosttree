@@ -263,3 +263,43 @@ func TestProjectsClaimMoveAndImplicitAssignment(t *testing.T) {
 	}
 	f.mustCall(t, 404, "GET", "/api/projects?org=nope", f.robin, nil)
 }
+
+func TestProjectInvitationsNeedAWebSessionAndGuestsSeeFewMembers(t *testing.T) {
+	f := newOrgFixture(t)
+	f.st.SetAccessMode(store.AccessMode{Enforce: true})
+	f.mustCall(t, 201, "POST", "/api/orgs", f.robin, map[string]any{"name": "Alpha", "slug": "alpha"})
+	if _, err := f.st.EnsureProject("person:1", "github.com/alpha/app"); err != nil {
+		t.Fatal(err)
+	}
+	o, _ := f.st.OrgByRef("alpha")
+	guest, _, err := f.st.CreateProjectInvitation("person:1", o.ID, "github.com/alpha/app", store.RoleGuest, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := f.mustCall(t, 403, "POST", "/api/invitations/accept", f.anna, map[string]any{"code": guest})
+	if out["code"] != "web_session_required" {
+		t.Fatalf("token accept of a project invitation: %v", out)
+	}
+	if _, err := f.st.PreviewInvitation(guest); err != nil {
+		t.Fatal("the refused token accept consumed the invitation")
+	}
+	// Im Browser angenommen (Store), sieht der Gast über die API nur sich und den Owner.
+	if _, err := f.st.AcceptInvitation("person:2", guest); err != nil {
+		t.Fatal(err)
+	}
+	member, _, _ := f.st.CreateProjectInvitation("person:1", o.ID, "github.com/alpha/app", store.RoleMember, 0)
+	if _, err := f.st.AcceptInvitation("person:3", member); err != nil {
+		t.Fatal(err)
+	}
+	req := req(t, "GET", f.srv.URL+"/api/orgs/alpha/members", f.anna, nil)
+	defer req.Body.Close()
+	var list []map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&list); err != nil || len(list) != 2 {
+		t.Fatalf("guest sees %v %v", list, err)
+	}
+	for _, m := range list {
+		if m["account"] == "ben" {
+			t.Fatal("the guest sees another member")
+		}
+	}
+}

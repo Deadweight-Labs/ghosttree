@@ -23,6 +23,7 @@ const joinProject = "github.com/alpha/app"
 func joinWeb(t *testing.T) (srv *httptest.Server, st *store.Store, alice *http.Client, org store.Org, aliceTok string) {
 	t.Helper()
 	srv, st, aliceTok = testWeb(t)
+	st.SetAccessMode(store.AccessMode{Enforce: true})
 	var err error
 	if org, err = st.CreateOrg("person:1", "Alpha", "alpha"); err != nil {
 		t.Fatal(err)
@@ -201,7 +202,7 @@ func TestJoinPageShowsOnlyWhatTheInviteeNeedsAndSetsSafeHeaders(t *testing.T) {
 			t.Errorf("page leaks %q", leak)
 		}
 	}
-	for k, want := range map[string]string{"Referrer-Policy": "no-referrer", "Cache-Control": "no-store", "X-Robots-Tag": "noindex, nofollow", "X-Content-Type-Options": "nosniff"} {
+	for k, want := range map[string]string{"Referrer-Policy": "strict-origin", "Cache-Control": "no-store", "X-Robots-Tag": "noindex, nofollow", "X-Content-Type-Options": "nosniff"} {
 		if h.Get(k) != want {
 			t.Errorf("%s=%q want %q", k, h.Get(k), want)
 		}
@@ -287,7 +288,7 @@ func TestJoinAcceptNeedsInteractiveLoginAndCSRFAndHappensOnce(t *testing.T) {
 		t.Fatalf("signed-in page: %s", text)
 	}
 	csrf := regexp.MustCompile(`name="csrf_token" value="([^"]+)"`).FindStringSubmatch(text)[1]
-	resp = sameOriginPostForm(t, anna, target, url.Values{"csrf_token": {csrf}})
+	resp = sameOriginPostForm(t, anna, target, url.Values{"csrf_token": {csrf}, "confirm_account": {"anna"}})
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusSeeOther {
 		t.Fatalf("accept: %d", resp.StatusCode)
@@ -296,7 +297,7 @@ func TestJoinAcceptNeedsInteractiveLoginAndCSRFAndHappensOnce(t *testing.T) {
 		t.Fatalf("role %q", got)
 	}
 	// Einmalig: ein zweiter Versuch sieht die gleiche 404-Seite wie ein unbekannter Code.
-	resp = sameOriginPostForm(t, anna, target, url.Values{"csrf_token": {csrf}})
+	resp = sameOriginPostForm(t, anna, target, url.Values{"csrf_token": {csrf}, "confirm_account": {"anna"}})
 	second := snapshot(t, resp)
 	unknown, _ := anonClient().Get(srv.URL + "/join/" + strings.Repeat("ab", 32))
 	if second != snapshot(t, unknown) {
@@ -343,9 +344,9 @@ func TestJoinLimiterIsPerAddressAndNeverPerCode(t *testing.T) {
 	}
 }
 
-func TestJoinLimiterWindowResetsAndIsBounded(t *testing.T) {
+func TestJoinLimiterWindowResetsAndEvictsOnlyTheOldest(t *testing.T) {
 	now := time.Unix(1000, 0)
-	l := &joinLimiter{now: func() time.Time { return now }, counts: map[string]int{}}
+	l := &joinLimiter{now: func() time.Time { return now }, counts: map[string]joinCount{}}
 	for i := 0; i < joinLimit; i++ {
 		if !l.allow("a") {
 			t.Fatal("early refusal")
@@ -358,11 +359,20 @@ func TestJoinLimiterWindowResetsAndIsBounded(t *testing.T) {
 	if !l.allow("a") {
 		t.Fatal("the window did not reset")
 	}
+	// Ein voller Speicher leert die Zähler anderer Adressen nicht.
+	l = &joinLimiter{now: func() time.Time { return now }, counts: map[string]joinCount{}}
+	for i := 0; i < joinLimit+1; i++ {
+		l.allow("busy")
+	}
 	for i := 0; i < joinLimiterMax+10; i++ {
+		now = now.Add(time.Millisecond)
 		l.allow(fmt.Sprint("k", i))
 	}
 	if len(l.counts) > joinLimiterMax {
 		t.Fatalf("the limiter grew to %d keys", len(l.counts))
+	}
+	if l.counts["busy"].n != 0 && l.allow("busy") {
+		t.Fatal("a busy address was forgotten by eviction")
 	}
 }
 
@@ -424,6 +434,7 @@ func TestJoinLocalSignInCreatesAccountWithProjectRole(t *testing.T) {
 
 func TestJoinOIDCSignInCreatesAccountWithProjectRole(t *testing.T) {
 	env := newOIDCEnv(t, true)
+	env.store.SetAccessMode(store.AccessMode{Enforce: true})
 	org, err := env.store.CreateOrg("person:1", "Alpha", "alpha")
 	if err != nil {
 		t.Fatal(err)
@@ -459,6 +470,7 @@ func TestJoinOIDCSignInCreatesAccountWithProjectRole(t *testing.T) {
 func TestOrgPageCreatesProjectInvitationLinks(t *testing.T) {
 	base, st, alice, anna, org := orgWeb(t)
 	_ = anna
+	st.SetAccessMode(store.AccessMode{Enforce: true})
 	if _, err := st.EnsureProject("person:1", joinProject); err != nil {
 		t.Fatal(err)
 	}
@@ -477,5 +489,133 @@ func TestOrgPageCreatesProjectInvitationLinks(t *testing.T) {
 		if resp.StatusCode == http.StatusOK {
 			t.Fatalf("a link granted role %q", role)
 		}
+	}
+}
+
+// Mit no-referrer sendet der Browser bei jedem POST "Origin: null", und die
+// Same-Origin-Prüfung lehnt Beitritt und Anmeldung ab. Die Policy der Seite
+// muss die Origin erhalten und darf den Pfad mit dem Code nie weitergeben.
+func TestJoinPagePolicyKeepsTheOriginOfItsPostsAndHidesThePath(t *testing.T) {
+	srv, st, _, org, _ := joinWeb(t)
+	code := projectInvite(t, st, org, store.RoleMember)
+	resp, _ := anonClient().Get(srv.URL + "/join/" + code)
+	page := body(t, resp)
+	header := resp.Header.Get("Referrer-Policy")
+	meta := regexp.MustCompile(`<meta name="referrer" content="([^"]+)"`).FindStringSubmatch(page)
+	if header != "strict-origin" || meta == nil || meta[1] != "strict-origin" {
+		t.Fatalf("header=%q meta=%v", header, meta)
+	}
+	for _, bad := range []string{"no-referrer", "same-origin-null"} {
+		if header == bad || meta[1] == bad {
+			t.Fatalf("policy %q makes browsers send Origin: null", bad)
+		}
+	}
+	// Dieselbe Policy auf der 404-Seite, damit nichts unterscheidbar ist.
+	notFound, _ := anonClient().Get(srv.URL + "/join/" + strings.Repeat("ab", 32))
+	if notFound.Header.Get("Referrer-Policy") != header {
+		t.Fatal("the 404 page uses another referrer policy")
+	}
+	// Die Formulare der Seite laufen gegen die Same-Origin-Prüfung, wie ein Browser
+	// sie mit dieser Policy sendet: Origin ist Schema und Host.
+	for _, path := range []string{"/ui/login/code"} {
+		form := url.Values{"code": {code}, "name": {"flo"}}
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+path, strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Origin", srv.URL)
+		r, err := anonClient().Do(req)
+		if err != nil || r.StatusCode != http.StatusSeeOther {
+			t.Fatalf("%s: %v %v", path, r, err)
+		}
+	}
+}
+
+func TestJoinSignedInPageNamesTheAccountAndOffersSignOut(t *testing.T) {
+	srv, st, _, org, _ := joinWeb(t)
+	st.AddPerson("anna")
+	anna := loginInteractive(t, srv, st, "anna")
+	code := projectInvite(t, st, org, store.RoleMember)
+	page, _ := anna.Get(srv.URL + "/join/" + code)
+	text := body(t, page)
+	for _, want := range []string{"signed in as <strong>anna</strong>", `name="confirm_account"`, "Not you?", `action="/join/` + code + `/signout"`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("page lacks %q: %s", want, text)
+		}
+	}
+	csrf := regexp.MustCompile(`name="csrf_token" value="([^"]+)"`).FindStringSubmatch(text)[1]
+	// Ohne Bestätigung des Kontonamens wird nichts verbraucht.
+	for _, confirm := range []string{"", "someone-else"} {
+		resp := sameOriginPostForm(t, anna, srv.URL+"/join/"+code+"/accept", url.Values{"csrf_token": {csrf}, "confirm_account": {confirm}})
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("confirm %q: %d", confirm, resp.StatusCode)
+		}
+	}
+	if _, err := st.PreviewInvitation(code); err != nil {
+		t.Fatal("an unconfirmed accept consumed the invitation")
+	}
+	// Abmelden führt zurück zur Einladung, die Sitzung ist weg.
+	resp := sameOriginPostForm(t, anna, srv.URL+"/join/"+code+"/signout", url.Values{"csrf_token": {csrf}})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/join/"+code {
+		t.Fatalf("sign out: %d %s", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	anna.Jar = nil
+	again := sameOriginPostForm(t, anna, srv.URL+"/join/"+code+"/accept", url.Values{"csrf_token": {csrf}, "confirm_account": {"anna"}})
+	again.Body.Close()
+	// Ohne Cookie: Weiterleitung zum Login.
+	if again.StatusCode != http.StatusSeeOther {
+		t.Fatalf("after sign out: %d", again.StatusCode)
+	}
+}
+
+func TestOrgPageGuestLinksNeedEnforcementAndShowAbsoluteURL(t *testing.T) {
+	base, st, alice, _, org := orgWeb(t)
+	if _, err := st.EnsureProject("person:1", joinProject); err != nil {
+		t.Fatal(err)
+	}
+	resp, _ := alice.Get(base + "/ui/orgs")
+	if page := body(t, resp); !strings.Contains(page, "Guest links are not available") || strings.Contains(page, `<option value="guest">`) {
+		t.Fatalf("page does not explain the missing guest links: %s", page)
+	}
+	resp = postOrg(t, alice, base, "/ui/orgs/invite", url.Values{"org": {org.Slug}, "project": {joinProject}, "project_role": {"guest"}})
+	if page := body(t, resp); resp.StatusCode != http.StatusConflict || !strings.Contains(page, "GHOSTTREE_ENFORCE_ACCESS") {
+		t.Fatalf("guest link without enforcement: %d %s", resp.StatusCode, page)
+	}
+	st.SetAccessMode(store.AccessMode{Enforce: true})
+	resp = postOrg(t, alice, base, "/ui/orgs/invite", url.Values{"org": {org.Slug}, "project": {joinProject}, "project_role": {"guest"}})
+	page := body(t, resp)
+	if resp.StatusCode != http.StatusOK || !regexp.MustCompile(`<code>/join/[0-9a-f]{64}</code>`).MatchString(page) {
+		t.Fatalf("link: %d %s", resp.StatusCode, page)
+	}
+	if !strings.Contains(page, "<td>guest</td><td>"+joinProject+"</td>") {
+		t.Fatalf("the invitation list does not show project and role: %s", page)
+	}
+}
+
+func TestOrgPageAbsoluteJoinURLWithPublicOrigin(t *testing.T) {
+	a := &app{publicOrigin: "https://gt.example.test"}
+	if got := a.joinURL("abc"); got != "https://gt.example.test/join/abc" {
+		t.Fatal(got)
+	}
+}
+
+func TestOrgPageHidesOtherMembersFromAGuest(t *testing.T) {
+	srv, st, _, org, _ := joinWeb(t)
+	st.AddPerson("anna")
+	st.AddPerson("ben")
+	if _, err := st.AcceptInvitation("person:3", projectInvite(t, st, org, store.RoleMember)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AcceptInvitation("person:2", projectInvite(t, st, org, store.RoleGuest)); err != nil {
+		t.Fatal(err)
+	}
+	guest := loginInteractive(t, srv, st, "anna")
+	resp, _ := guest.Get(srv.URL + "/ui/orgs?org=alpha")
+	page := body(t, resp)
+	if strings.Contains(page, "ben") {
+		t.Fatalf("the guest sees another member: %s", page)
+	}
+	if !strings.Contains(page, "alice") || !strings.Contains(page, "anna") {
+		t.Fatalf("guest does not see himself and the owner: %s", page)
 	}
 }

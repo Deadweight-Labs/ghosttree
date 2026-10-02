@@ -33,36 +33,63 @@ import (
 
 const (
 	joinLimit      = 30
-	joinWindow     = time.Minute
+	joinWindow     = 10 * time.Minute
 	joinLimiterMax = 10000
 )
 
 // joinCodeLen: Einladungscodes sind 32 Zufallsbytes in Hex.
 const joinCodeLen = 64
 
+type joinCount struct {
+	start time.Time
+	n     int
+}
+
 type joinLimiter struct {
-	mu      sync.Mutex
-	now     func() time.Time
-	started time.Time
-	counts  map[string]int
+	mu     sync.Mutex
+	now    func() time.Time
+	counts map[string]joinCount
 }
 
 func newJoinLimiter() *joinLimiter {
-	return &joinLimiter{now: time.Now, counts: map[string]int{}}
+	return &joinLimiter{now: time.Now, counts: map[string]joinCount{}}
 }
 
-// allow zählt einen Aufruf für die Adresse. Ein festes Fenster genügt: der
-// Zähler gehört der Adresse, nie dem Code, damit ein Fremder keine echte
-// Einladung sperren kann. Bei Überlauf beginnt das Fenster neu.
+// allow zählt einen Aufruf für die Adresse in einem festen Fenster je Adresse.
+// Der Zähler gehört der Adresse, nie dem Code, damit ein Fremder keine echte
+// Einladung sperren kann. Ist die Tabelle voll, fliegen erst abgelaufene
+// Fenster raus, dann die älteste Adresse; die Zähler der anderen bleiben.
 func (l *joinLimiter) allow(key string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	at := l.now()
-	if l.counts == nil || at.Sub(l.started) >= joinWindow || len(l.counts) >= joinLimiterMax {
-		l.started, l.counts = at, map[string]int{}
+	c, ok := l.counts[key]
+	if !ok || at.Sub(c.start) >= joinWindow {
+		if !ok && len(l.counts) >= joinLimiterMax {
+			l.evict(at)
+		}
+		c = joinCount{start: at}
 	}
-	l.counts[key]++
-	return l.counts[key] <= joinLimit
+	c.n++
+	l.counts[key] = c
+	return c.n <= joinLimit
+}
+
+func (l *joinLimiter) evict(at time.Time) {
+	var oldest string
+	var oldestAt time.Time
+	for k, c := range l.counts {
+		if at.Sub(c.start) >= joinWindow {
+			delete(l.counts, k)
+			continue
+		}
+		if oldest == "" || c.start.Before(oldestAt) {
+			oldest, oldestAt = k, c.start
+		}
+	}
+	if len(l.counts) >= joinLimiterMax && oldest != "" {
+		delete(l.counts, oldest)
+	}
 }
 
 // joinClientKey bündelt IPv6-Adressen auf ihr /64, sonst reichte ein Wechsel
@@ -80,7 +107,11 @@ func (a *app) joinClientKey(r *http.Request) string {
 func (a *app) joinHeaders(w http.ResponseWriter) {
 	h := w.Header()
 	h.Set("Cache-Control", "no-store")
-	h.Set("Referrer-Policy", "no-referrer")
+	// strict-origin, nicht no-referrer: mit no-referrer sendet der Browser bei
+	// jedem POST "Origin: null", und die Same-Origin-Prüfung lehnt Beitritt und
+	// Anmeldung ab. strict-origin schickt nur Schema und Host, nie den Pfad mit
+	// dem Code, und beim Wechsel zu http gar nichts.
+	h.Set("Referrer-Policy", "strict-origin")
 	h.Set("X-Robots-Tag", "noindex, nofollow")
 	h.Set("X-Content-Type-Options", "nosniff")
 	// Keine Skripte, keine fremden Ressourcen, nicht einbettbar. form-action
@@ -198,6 +229,14 @@ func (a *app) joinAccept(w http.ResponseWriter, r *http.Request) {
 		a.joinNotFound(w)
 		return
 	}
+	// Wer hier als fremdes Konto angemeldet ist (etwa durch einen untergeschobenen
+	// Login), muss den Kontonamen ausdrücklich bestätigen. Ein Sitzungsalter
+	// ließe sich nicht prüfen, ohne die Sitzungen zu ändern, und die Bestätigung
+	// fängt auch den Fall ab, dass das Konto alt, aber nicht das eigene ist.
+	if r.FormValue("confirm_account") != browserPrincipal(r).Label {
+		a.joinMessage(w, http.StatusBadRequest, "Please confirm your account", "Go back to the invitation and tick the box that names the account you are joining with.")
+		return
+	}
 	_, err := a.store.AcceptInvitation(browserPrincipal(r).ID, code)
 	switch {
 	case err == nil:
@@ -211,8 +250,21 @@ func (a *app) joinAccept(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, store.ErrAccountDisabled):
 		a.joinMessage(w, http.StatusForbidden, "Account disabled", "This account is disabled.")
 	default:
-		http.Error(w, "joining failed", http.StatusInternalServerError)
+		a.joinMessage(w, http.StatusInternalServerError, "Joining failed", "Something went wrong. The invitation may still be usable; try again in a moment.")
 	}
+}
+
+// joinSignOut beendet die Sitzung und führt zurück zur Einladung ("Not you?").
+func (a *app) joinSignOut(w http.ResponseWriter, r *http.Request) {
+	if cookie, err := r.Cookie(sessionCookie); err == nil {
+		a.sessions.remove(cookie.Value)
+	}
+	http.SetCookie(w, a.sessionCookieFor(r, "", -1))
+	back := "/ui/login"
+	if code := r.PathValue("code"); wellFormedJoinCode(code) {
+		back = "/join/" + code
+	}
+	http.Redirect(w, r, back, http.StatusSeeOther)
 }
 
 // joinAccepted ist der Ort, an dem der Beitritt endet. P2 setzt hier die

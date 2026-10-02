@@ -13,12 +13,19 @@ Versioning, with pre-1.0 compatibility rules described in
   "Join" in a signed-in session, once and atomically. Every code that does not
   work (unknown, malformed, expired, used, revoked, inviter no longer owner,
   project moved, org-wide or email-bound invitation) gets the same 404 page,
-  headers included; requests are limited per client address (30 per minute,
+  headers included; requests are limited per client address (30 per 10 minutes,
   `GHOSTTREE_TRUSTED_PROXIES` honoured), never per code. The page sends
-  `Referrer-Policy: no-referrer`, `Cache-Control: no-store`, a script-free CSP
-  and `X-Robots-Tag`, and the server logs nothing for `/join/` paths. Owners
+  `Referrer-Policy: strict-origin` (not `no-referrer`, which makes browsers
+  send `Origin: null` on every POST and breaks the same-origin check; the code
+  in the path is still never passed on), `Cache-Control: no-store`, a
+  script-free CSP and `X-Robots-Tag`, and the server logs nothing for `/join/` paths. Owners
   create project links on the organization page (member 7 days, guest 3 days
-  by default); a link never grants owner or lead.
+  by default); a link never grants owner or lead. Guest links need
+  `GHOSTTREE_ENFORCE_ACCESS=1`, project links are accepted only in a browser
+  session (the token API refuses them), the signed-in page asks to confirm the
+  account name and offers "Not you? Sign out", and an org member who is only a
+  guest sees just themselves and the owners in the member list (UI and API).
+  The invitation list shows project and role.
 - Fixed: agents can now open question, approval, blocker and handoff waits.
   `coord_send` and `ctx coord send --intent` take an optional `intent`
   (question, approval, blocker, handoff, ack; the first four need a mention),

@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 )
 
@@ -13,6 +12,10 @@ import (
 const (
 	DefaultGuestInvitationTTL = 3 * 24 * time.Hour
 )
+
+// ErrGuestLinkNeedsEnforcement: Gast-Links gibt es nur, wenn die
+// Sichtbarkeit durchgesetzt wird (GHOSTTREE_ENFORCE_ACCESS=1).
+var ErrGuestLinkNeedsEnforcement = errors.New("guest links need access enforcement (GHOSTTREE_ENFORCE_ACCESS=1); without it a guest would see more than the page promises")
 
 // InvitePreview ist alles, was ein Inhaber des Codes vor der Anmeldung sieht.
 // Bewusst klein: keine Ids, keine Zähler, keine Namen anderer Personen.
@@ -46,7 +49,7 @@ func ensureInvitationProjectRole(db *sql.DB) error {
 		return err
 	}
 	rows.Close()
-	_, err = db.Exec(`ALTER TABLE invitations ADD COLUMN project_role TEXT NOT NULL DEFAULT ''`)
+	_, err = db.Exec(`ALTER TABLE invitations ADD COLUMN project_role TEXT NOT NULL DEFAULT '' CHECK(project_role IN ('','member','guest'))`)
 	return err
 }
 
@@ -83,6 +86,16 @@ func (s *Store) CreateProjectInvitation(actorPrincipal string, orgID int64, remo
 	if ttl > MaxInvitationTTL {
 		return "", Invitation{}, fmt.Errorf("%w: invitations live at most %d days", ErrInvalidInput, int(MaxInvitationTTL/(24*time.Hour)))
 	}
+	// Ein Gast sieht nur, was die Durchsetzung ihm lässt. Ohne sie erlaubt die
+	// Matrix im Log-Modus alles, und der Link würde mehr gewähren, als die
+	// Seite verspricht.
+	if projectRole == RoleGuest && !s.AccessEnforced() {
+		return "", Invitation{}, ErrGuestLinkNeedsEnforcement
+	}
+	remote, err = normalizeRemote(remote)
+	if err != nil {
+		return "", Invitation{}, err
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return "", Invitation{}, err
@@ -92,7 +105,7 @@ func (s *Store) CreateProjectInvitation(actorPrincipal string, orgID int64, remo
 		return "", Invitation{}, ErrNotOrgOwner
 	}
 	var projectID, projectOrg int64
-	if tx.QueryRow(`SELECT id, org_id FROM projects WHERE remote=?`, strings.TrimSpace(remote)).Scan(&projectID, &projectOrg) != nil || projectOrg != orgID {
+	if tx.QueryRow(`SELECT id, org_id FROM projects WHERE remote=?`, remote).Scan(&projectID, &projectOrg) != nil || projectOrg != orgID {
 		return "", Invitation{}, ErrProjectNotFound
 	}
 	var pending int
@@ -114,7 +127,7 @@ func (s *Store) CreateProjectInvitation(actorPrincipal string, orgID int64, remo
 		return "", Invitation{}, err
 	}
 	id, _ := res.LastInsertId()
-	if err := orgEvent(tx, orgID, "invite", principalOfID(actor), "", projectRole+" of "+strings.TrimSpace(remote)); err != nil {
+	if err := orgEvent(tx, orgID, "invite", principalOfID(actor), "", projectRole+" of "+remote); err != nil {
 		return "", Invitation{}, err
 	}
 	inv, err := invitationTx(tx, id)
@@ -122,6 +135,16 @@ func (s *Store) CreateProjectInvitation(actorPrincipal string, orgID int64, remo
 		return "", Invitation{}, err
 	}
 	return code, inv, tx.Commit()
+}
+
+// IsProjectInvitation sagt, ob ein Code eine Projekt-Einladung ist. Das ändert
+// sich nie: die Spalte wird nach dem Anlegen nicht mehr geschrieben.
+func (s *Store) IsProjectInvitation(code string) bool {
+	if s.reader != nil {
+		return s.reader.IsProjectInvitation(code)
+	}
+	var n int
+	return s.db.QueryRow(`SELECT 1 FROM invitations WHERE code_hash=? AND project_id<>0`, hashToken(code)).Scan(&n) == nil
 }
 
 // PreviewInvitation liest eine Einladung, ohne etwas zu verbrauchen oder zu
