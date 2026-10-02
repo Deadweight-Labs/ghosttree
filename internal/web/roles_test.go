@@ -275,3 +275,17 @@ func TestOrgPageRoleTableHidesMembersFromGuests(t *testing.T) {
 		t.Fatalf("owner lost rows: %s", owner)
 	}
 }
+
+// Alte rohe Namen werden in der Rollentabelle normalisiert angezeigt.
+func TestOrgPageRoleTableNormalisesStoredNames(t *testing.T) {
+	base, st, alice, _ := roleWeb(t)
+	if _, err := st.DB().Exec(`UPDATE persons SET name=? WHERE id=2`, "Ｒｏㅤbin"); err != nil {
+		t.Fatal(err)
+	}
+	resp, _ := alice.Get(base + "/ui/orgs?org=alpha")
+	page := body(t, resp)
+	i := strings.Index(page, "Project roles")
+	if i < 0 || !strings.Contains(page[i:], "Robin") || strings.Contains(page[i:], "Ｒｏ") || strings.Contains(page, "ㅤ") {
+		t.Fatalf("raw name shown: %s", page)
+	}
+}

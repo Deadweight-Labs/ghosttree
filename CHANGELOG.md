@@ -25,7 +25,8 @@ Versioning, with pre-1.0 compatibility rules described in
   normalised string. A guest sees sender ids instead of account names and
   agent owner names in the coordination page, in standing instructions (the sender id) and
   thread authors (hidden), and only their own row in the project role table of the
-  organization page. `ctx person add` reports the stored name.
+  organization page. Guests also no longer receive `author_principal_id` (the
+  owner account of an agent) on messages or attention items. `ctx person add` reports the stored name.
 - A person can pause or interrupt a Claude agent that was started with
   `ctx claude`, from the participant list of the coordination page. Allowed
   for project role lead or above and for the owner of the agent's account,

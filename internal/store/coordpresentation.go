@@ -54,7 +54,11 @@ func (a CoordAccess) MessagePresentationWindow(kind, id string, window MessageWi
 		return MessagePage{}, nil, err
 	}
 	if a.guestViewForMessageTx(tx, kind, id) {
+		a.maskMessageOwners(page.Messages)
 		for i := range presented {
+			if presented[i].Message.AuthorPrincipalID != a.Principal.ID {
+				presented[i].Message.AuthorPrincipalID = ""
+			}
 			// Zustellstand ist Zustand pro Empfänger; ein Gast sieht ihn nicht.
 			presented[i].Delivery = CoordDeliverySummary{}
 			raw, err := rawMentionsTx(tx, presented[i].Message.ID)

@@ -165,6 +165,11 @@ func (a CoordAccess) Attention() ([]AttentionItem, error) {
 			continue
 		}
 		candidate.item.CanWithdraw = candidate.item.AuthorID == a.Principal.ID || candidate.sender == actor
+		// Gastsicht (nur eigene Empfängerzeilen kommen hier an): das Konto
+		// hinter einem fremden Agenten bleibt verborgen.
+		if candidate.item.AuthorID != a.Principal.ID && a.guestViewForMessageTx(tx, candidate.item.DestinationKind, candidate.item.DestinationID) {
+			candidate.item.AuthorID = ""
+		}
 		if candidate.item.State == AttentionOpen && expiredAt(candidate.expiresAt, nowTS) {
 			candidate.item.State = AttentionExpired
 			if _, err := tx.Exec(`UPDATE coord_attention SET state='expired' WHERE id=? AND state='open'`, candidate.item.ID); err != nil {

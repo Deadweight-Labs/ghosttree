@@ -93,7 +93,7 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 				}
 				info := a.store.ProjectRole(p.Remote, m.AccountID)
 				rv.Rows = append(rv.Rows, projectRoleRow{
-					Account: m.Account, AccountID: m.AccountID, Role: info.Role, CanReview: info.CanReview,
+					Account: store.NormalizeAccountName(m.Account), AccountID: m.AccountID, Role: info.Role, CanReview: info.CanReview,
 					Implicit: info.Implicit, Grantable: a.grantable(r, me, p.Remote, m.AccountID), Self: m.AccountID == me,
 				})
 			}

@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -286,5 +287,51 @@ func TestStandingPersonOfAnAgentIsTheAgentIDForGuests(t *testing.T) {
 	}
 	if got[0].Person != "a-cleo" {
 		t.Fatalf("guest must see the agent id: %+v", got[0])
+	}
+}
+
+// Ein Gast sieht das Konto hinter einem Agenten nirgends: weder in der
+// Nachrichten-API noch im Fenster, in der Darstellung oder in der Attention.
+func TestGuestNeverSeesTheOwnerAccountOfAnAgent(t *testing.T) {
+	e := guestEnv(t)
+	cleo := e.agent("a-cleo")
+	if _, err := cleo.Send(CoordMessage{DestinationKind: DestinationRoom, DestinationID: e.room, ClientID: "own1", Body: "from cleo agent",
+		Intent: IntentQuestion, Mentions: []string{"a-dev"}}); err != nil {
+		t.Fatal(err)
+	}
+	guestReaders := map[string]CoordAccess{"agent": e.agent("a-dev"), "human": e.human("person:5")}
+	has := func(v any) bool { return strings.Contains(fmt.Sprintf("%+v", v), "person:4") }
+
+	for name, g := range guestReaders {
+		msgs, err := g.Messages(DestinationRoom, e.room, 0, 50)
+		if err != nil || len(msgs) == 0 {
+			t.Fatalf("%s messages: %v %d", name, err, len(msgs))
+		}
+		if has(msgs) {
+			t.Errorf("%s Messages leak person:4: %+v", name, msgs)
+		}
+		page, err := g.MessageWindow(DestinationRoom, e.room, MessageWindow{Mode: messageWindowLatest, Limit: 50})
+		if err != nil || has(page.Messages) {
+			t.Errorf("%s MessageWindow: %v %+v", name, err, page.Messages)
+		}
+		page, pres, err := g.MessagePresentationWindow(DestinationRoom, e.room, MessageWindow{Mode: messageWindowLatest, Limit: 50})
+		if err != nil || has(page.Messages) || has(pres) {
+			t.Errorf("%s presentation: %v", name, err)
+		}
+	}
+	items, err := e.agent("a-dev").Attention()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) == 0 {
+		t.Fatal("test setup: the guest agent has no attention item to check")
+	}
+	if has(items) {
+		t.Errorf("attention leaks person:4: %+v", items)
+	}
+	// Mitglieder sehen es weiterhin.
+	msgs, err := e.agent("a-ben").Messages(DestinationRoom, e.room, 0, 50)
+	if err != nil || !has(msgs) {
+		t.Fatalf("member must still see the owner account: %v %+v", err, msgs)
 	}
 }

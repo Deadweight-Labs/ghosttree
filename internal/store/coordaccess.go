@@ -436,19 +436,48 @@ func (a CoordAccess) Messages(kind, id string, afterID int64, limit int) ([]Coor
 			out[i].SenderRole, out[i].RecipientRole, out[i].Authority = au.SenderRole, au.RecipientRole, au.Authority
 		}
 	}
+	// Erst nach der Autoritätsberechnung: sie liest das Konto des Absenders.
+	if len(out) > 0 && a.guestViewForMessageTx(tx, kind, id) {
+		a.maskMessageOwners(out)
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
+// maskMessageOwners leert in der Gastsicht AuthorPrincipalID: bei einem
+// Agenten ist es das Konto seines Besitzers, also ein Mitgliedsorakel. Nur die
+// eigenen Nachrichten des Lesers behalten es. Menschliche Absender erkennt der
+// Gast an der Absender-ID (person:N), die ohnehin sichtbar ist.
+func (a CoordAccess) maskMessageOwners(msgs []CoordMessage) {
+	for i := range msgs {
+		if msgs[i].AuthorPrincipalID != a.Principal.ID {
+			msgs[i].AuthorPrincipalID = ""
+		}
+	}
+}
+
 // maskThreadPersonTx entfernt für Gäste den Urheber des Threads (Person und
 // AuthorPrincipalID). Der eigene Thread des Leser bleibt, wie er ist.
 func (a CoordAccess) maskThreadPersonTx(tx *sql.Tx, t *Thread) {
+	a.maskThreadPersonCachedTx(tx, t, nil)
+}
+
+// maskThreadPersonCachedTx fragt die Gastsicht einmal je Projekt (der
+// Projektraum entscheidet), nicht je Thread. cache darf nil sein.
+func (a CoordAccess) maskThreadPersonCachedTx(tx *sql.Tx, t *Thread, cache map[string]bool) {
 	if t.AuthorPrincipalID != "" && t.AuthorPrincipalID == a.Principal.ID {
 		return
 	}
-	if a.guestViewForMessageTx(tx, DestinationDiscussion, strconv.FormatInt(t.ID, 10)) {
+	guest, ok := cache[t.Project]
+	if !ok {
+		guest = a.guestViewForMessageTx(tx, DestinationRoom, RoomKeyForProject(t.Project))
+		if cache != nil {
+			cache[t.Project] = guest
+		}
+	}
+	if guest {
 		maskThreadPerson(a, t)
 	}
 }
@@ -522,6 +551,9 @@ func (a CoordAccess) MessageWindow(kind, id string, window MessageWindow) (Messa
 	page, err := coordMessageWindowTx(tx, kind, id, window)
 	if err != nil {
 		return MessagePage{}, err
+	}
+	if len(page.Messages) > 0 && a.guestViewForMessageTx(tx, kind, id) {
+		a.maskMessageOwners(page.Messages)
 	}
 	if err := tx.Commit(); err != nil {
 		return MessagePage{}, err
@@ -1066,9 +1098,10 @@ func (a CoordAccess) SearchThreads(project, query string, includeArchived bool, 
 		return nil, err
 	}
 	out := make([]Thread, 0, len(candidates))
+	guestCache := map[string]bool{}
 	for _, thread := range candidates {
 		if err := a.canReadThreadTx(tx, actor, thread.ID); err == nil {
-			a.maskThreadPersonTx(tx, &thread)
+			a.maskThreadPersonCachedTx(tx, &thread, guestCache)
 			out = append(out, thread)
 			if len(out) == limit {
 				break
@@ -1121,9 +1154,10 @@ func (a CoordAccess) ThreadsForObject(kind, id string) ([]Thread, error) {
 		return nil, err
 	}
 	visible := make([]Thread, 0, len(candidates))
+	guestCache := map[string]bool{}
 	for _, thread := range candidates {
 		if err := a.canReadThreadTx(tx, actor, thread.ID); err == nil {
-			a.maskThreadPersonTx(tx, &thread)
+			a.maskThreadPersonCachedTx(tx, &thread, guestCache)
 			visible = append(visible, thread)
 		} else if !errors.Is(err, ErrCoordNotFound) && !errors.Is(err, ErrCoordForbidden) {
 			return nil, err
@@ -2251,7 +2285,11 @@ func (a CoordAccess) Standing(roomKey string) ([]StandingInstruction, error) {
 	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if a.guestViewForMessageTx(tx, DestinationRoom, roomKey) {
+	if !a.guestViewForMessageTx(tx, DestinationRoom, roomKey) {
+		for i := range out {
+			out[i].Person = NormalizeAccountName(out[i].Person)
+		}
+	} else {
 		for i := range out {
 			// Person ist der Kontoname des Urhebers; der Gast sieht die ID.
 			var sender string
