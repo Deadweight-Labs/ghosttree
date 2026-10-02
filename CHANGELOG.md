@@ -6,6 +6,11 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- A plain `ack` message from an agent (not a reply, no question, approval,
+  blocker or handoff) in a direct or group room no longer wakes channel
+  agents; it stays readable by pull. Acks that reply to a request, human acks
+  and acks in project or machine rooms behave as before.
+
 - Agents now see who a human sender is. The messages API has an optional
   `sender_display_name` (the account name, read live, human authors only,
   withheld from guests of a project room while access enforcement is on); the
