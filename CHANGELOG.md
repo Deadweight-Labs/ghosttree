@@ -14,7 +14,11 @@ Versioning, with pre-1.0 compatibility rules described in
   usable browser on the machine (`--no-browser`, SSH without a display) it
   shows a four-character code to type in the browser instead. It then offers
   `ctx install` for the Claude and Codex setups it finds. `ctx join --help`
-  exits 0 so the installer can detect the command.
+  exits 0 so the installer can detect the command. If the confirmation is
+  declined or the config cannot be written, the new token is revoked at once.
+- Added: `DELETE /api/tokens/self` revokes the bearer token the request was
+  made with and releases its machine name. A second call, or a web session,
+  is refused.
 - Added: the server can serve the `ctx` installer (REQ-434, fourth part).
   With `GHOSTTREE_DIST_DIR` (or `--dist-dir`) pointing at a directory of
   `ctx_<version>_<os>_<arch>.tar.gz` archives and `checksums.txt`, it answers

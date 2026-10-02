@@ -59,3 +59,8 @@ func ErrorCode(err error) string {
 	}
 	return body.Error
 }
+
+// RevokeSelf widerruft das Token dieses Clients und gibt seine Maschine frei.
+func (c *Client) RevokeSelf(ctx context.Context) error {
+	return c.doContext(ctx, "DELETE", "/api/tokens/self", nil, nil, nil)
+}

@@ -298,6 +298,7 @@ type fakeServer struct {
 	*httptest.Server
 	mu        sync.Mutex
 	claims    []map[string]any
+	revoked   []string
 	exchanges []map[string]string
 	paths     []string
 	claimRes  func(map[string]any) (int, string)
@@ -330,6 +331,9 @@ func newFakeServer(t *testing.T) *fakeServer {
 				w.WriteHeader(400)
 			}
 			io.WriteString(w, res)
+		case "/api/tokens/self":
+			f.revoked = append(f.revoked, r.Method+" "+r.Header.Get("Authorization"))
+			w.WriteHeader(204)
 		case "/api/join/token":
 			var body map[string]string
 			json.NewDecoder(r.Body).Decode(&body)
@@ -442,6 +446,9 @@ func TestJoinNeverWritesConfigWhenTheAccountIsNotConfirmed(t *testing.T) {
 	}
 	if _, ok := readConfig(t); ok {
 		t.Fatal("config written without confirmation")
+	}
+	if len(srv.revoked) != 1 || srv.revoked[0] != "DELETE Bearer tok-secret-1" || !strings.Contains(out.String(), "New token revoked.") {
+		t.Fatalf("issued token not revoked: %v\n%s", srv.revoked, out.String())
 	}
 	if strings.Contains(out.String(), "tok-secret-1") {
 		t.Fatal("token printed")
@@ -871,5 +878,71 @@ func TestJoinMachineNames(t *testing.T) {
 	var out syncBuffer
 	if code := cmdJoin([]string{"--server", "https://x.example", "--pair", "abcd-efgh", "--name", "bad name!", "--yes"}, &out); code != 2 {
 		t.Fatalf("invalid --name exit %d", code)
+	}
+}
+
+func TestJoinRevokesTheIssuedTokenWhenTheConfigCannotBeWritten(t *testing.T) {
+	newJoinFixture(t)
+	noSleep(t)
+	blocker := t.TempDir() + "/file"
+	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", blocker) // a file where the directory should be
+	srv := fallbackServer(t)
+	var out syncBuffer
+	if code := cmdJoin([]string{"--server", srv.URL, "--pair", "abcd-efgh", "--no-browser", "--yes"}, &out); code != 1 {
+		t.Fatalf("exit %d: %s", code, out.String())
+	}
+	if len(srv.revoked) != 1 {
+		t.Fatalf("revoked %v\n%s", srv.revoked, out.String())
+	}
+}
+
+func TestJoinSuccessDoesNotRevoke(t *testing.T) {
+	newJoinFixture(t)
+	noSleep(t)
+	srv := fallbackServer(t)
+	cmdJoin([]string{"--server", srv.URL, "--pair", "abcd-efgh", "--no-browser", "--yes"}, &syncBuffer{})
+	if len(srv.revoked) != 0 {
+		t.Fatalf("revoked %v", srv.revoked)
+	}
+}
+
+func TestJoinIntegrationDeclinedConfirmationLeavesNoValidToken(t *testing.T) {
+	f := newJoinFixture(t, "n")
+	_ = f
+	e := newRealEnv(t)
+	pair, _ := e.st.Join().Create(annaID)
+	approved := e.browserApproves(t, nil)
+	var out syncBuffer
+	if code := cmdJoin([]string{"--server", e.url, "--pair", pair, "--name", "annas-box"}, &out); code != 1 {
+		t.Fatalf("exit %d: %s", code, out.String())
+	}
+	if err := <-approved; err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := readConfig(t); ok {
+		t.Fatal("config written")
+	}
+	toks, err := e.st.ListTokens("anna")
+	if err != nil {
+		t.Fatal(err)
+	}
+	devices := 0
+	for _, tk := range toks {
+		if tk.Kind != "device" {
+			continue
+		}
+		devices++
+		if tk.RevokedAt == "" {
+			t.Fatalf("a valid token is left: %+v", tk)
+		}
+	}
+	if devices == 0 {
+		t.Fatal("no token was issued at all; test proves nothing")
+	}
+	if ms, _ := e.st.ListMachines(annaID); len(ms) != 0 {
+		t.Fatalf("machine still claimed: %v", ms)
 	}
 }

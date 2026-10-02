@@ -166,3 +166,28 @@ func singleHeader(h http.Header, name string) string {
 	}
 	return strings.TrimSpace(v[0])
 }
+
+// revokeOwnToken widerruft das Token, mit dem die Anfrage authentifiziert ist
+// (`ctx join` räumt damit ein ungenutztes Token wieder ab). Nur für Bearer-
+// Token; eine Web-Sitzung hat keines. Ein zweiter Aufruf scheitert schon an der
+// Authentifizierung mit 401. Das Log nennt nur Token-ID und Konto.
+func (a *api) revokeOwnToken(w http.ResponseWriter, r *http.Request) {
+	p := principalOf(r)
+	if p.TokenKind == store.WebSessionKind || p.TokenID == 0 {
+		writeCoded(w, http.StatusForbidden, "bearer_token_required", "this call revokes the bearer token it was made with")
+		return
+	}
+	switch err := a.st.RevokeOwnToken(p); {
+	case errors.Is(err, store.ErrTokenNotActive):
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	case err != nil:
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "server_error"})
+		return
+	}
+	if a.logger != nil {
+		a.logger.Info("token_self_revoked", "token_id", p.TokenID, "account", p.ID)
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusNoContent)
+}

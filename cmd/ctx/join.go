@@ -395,9 +395,11 @@ func cmdJoin(args []string, stdout io.Writer) int {
 	if cfg.Machine == "" {
 		cfg.Machine = machine
 	}
-	who, err := client.New(cfg).WhoAmI()
+	issued := client.New(cfg)
+	who, err := issued.WhoAmI()
 	if err != nil {
 		fmt.Fprintf(stdout, "Could not check the new token: %v\nNothing written.\n", err)
+		revokeIssued(issued, stdout)
 		return 1
 	}
 	org := ""
@@ -416,11 +418,13 @@ func cmdJoin(args []string, stdout io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "Account %s%s, machine %s\n", who.Label, org, cfg.Machine)
 	if tty != nil && !confirm(tty, fmt.Sprintf("Connect this machine as %s? [y/N] ", who.Label), false) {
-		fmt.Fprintf(stdout, "Cancelled. Nothing written; release machine %s on the server to revoke its token.\n", cfg.Machine)
+		fmt.Fprintln(stdout, "Cancelled. Nothing written.")
+		revokeIssued(issued, stdout)
 		return 1
 	}
 	if err := config.Save(cfg); err != nil {
 		fmt.Fprintf(stdout, "save config: %v\n", err)
+		revokeIssued(issued, stdout)
 		return 1
 	}
 	fmt.Fprintf(stdout, "Wrote %s\n", config.Path())
@@ -440,6 +444,18 @@ func cmdJoin(args []string, stdout io.Writer) int {
 		}
 	}
 	return 0
+}
+
+// revokeIssued widerruft das gerade ausgestellte, nicht gespeicherte Token, damit
+// kein ungenutztes gültiges Token zurückbleibt.
+func revokeIssued(c *client.Client, stdout io.Writer) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := c.RevokeSelf(ctx); err != nil {
+		fmt.Fprintf(stdout, "Could not revoke the new token (%v); release machine %s on the server.\n", err, c.Machine())
+		return
+	}
+	fmt.Fprintln(stdout, "New token revoked.")
 }
 
 func confirm(t terminal, prompt string, def bool) bool {

@@ -919,3 +919,43 @@ func (s *Store) CreateDeviceToken(accountID, machine string) (string, TokenInfo,
 	info, err := s.tokenByID(tokenID)
 	return token, info, err
 }
+
+// RevokeOwnToken widerruft genau das Token, mit dem p sich ausweist, und gibt
+// bei einem Geräte-Token die daran hängende Maschine frei, sofern sie diesem
+// Konto gehört. Beides geschieht in einer Transaktion. Ein bereits
+// widerrufenes oder fremdes Token ergibt ErrTokenNotActive und ändert nichts.
+func (s *Store) RevokeOwnToken(p Principal) error {
+	if s.writer != nil {
+		return queueWrite(s, []any{p}, func(d *Store, a []any) error { return d.RevokeOwnToken(a[0].(Principal)) })
+	}
+	account, err := parsePersonPrincipalID(p.ID)
+	if err != nil || p.TokenID == 0 {
+		return ErrTokenNotActive
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var kind, machine string
+	err = tx.QueryRow(`SELECT kind, machine FROM api_tokens WHERE id=? AND account_id=? AND revoked_at=''`, p.TokenID, account).Scan(&kind, &machine)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrTokenNotActive
+	}
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE api_tokens SET revoked_at=? WHERE id=? AND revoked_at=''`, now(), p.TokenID); err != nil {
+		return err
+	}
+	if kind == "device" && machine != "" {
+		if _, err := tx.Exec(`DELETE FROM machines WHERE hostname=? AND account_id=?`, canonicalMachine(machine), account); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// ErrTokenNotActive meldet ein Token, das es nicht (mehr) gibt oder das nicht
+// zum Konto gehört; der Server beantwortet es wie jedes ungültige Token.
+var ErrTokenNotActive = errors.New("token not active")
