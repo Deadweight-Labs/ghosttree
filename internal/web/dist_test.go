@@ -37,7 +37,6 @@ func distServer(t *testing.T, dir string, opts ...Option) *httptest.Server {
 const fakeCtx = `#!/bin/sh
 case "$1" in
 version) echo "ctx 9.9.9-test" ;;
-join) shift; echo "$*" > "$HOME/join-args" ;;
 *) echo "unknown command $1"; echo "usage: ctx <command>"; echo; echo "  version  print version"; exit 2 ;;
 esac
 `
@@ -45,7 +44,7 @@ esac
 const fakeCtxWithJoin = `#!/bin/sh
 case "$1" in
 version) echo "ctx 9.9.9-test" ;;
-join) shift; echo "$*" > "$HOME/join-args" ;;
+join) if [ "$2" = --help ]; then exit 0; fi; shift; echo "$*" > "$HOME/join-args" ;;
 *) echo "unknown command $1"; echo "usage: ctx <command>"; echo; echo "  join     join a server"; echo "  version  print version"; exit 2 ;;
 esac
 `
@@ -186,7 +185,7 @@ func TestInstallScriptUsesPublicURL(t *testing.T) {
 	if !strings.Contains(sh, "'https://gt.example.com'") || strings.Contains(sh, "__GHOSTTREE_SERVER__") {
 		t.Errorf("server URL not substituted")
 	}
-	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/x-shellscript") {
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/plain") {
 		t.Errorf("content type %q", ct)
 	}
 	if cc := resp.Header.Get("Cache-Control"); !strings.Contains(cc, "no-store") {
@@ -203,20 +202,205 @@ func TestInstallScriptUsesRequestOriginWithoutPublicURL(t *testing.T) {
 	}
 }
 
+func serveRaw(t *testing.T, h http.Handler, host, remote string, hdr map[string]string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest("GET", "/install.sh", nil)
+	req.Host = host
+	if remote != "" {
+		req.RemoteAddr = remote
+	}
+	for k, v := range hdr {
+		req.Header.Set(k, v)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+func distHandler(t *testing.T, opts ...Option) http.Handler {
+	t.Helper()
+	st, err := store.Open(t.TempDir() + "/web.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	return New(st, append(opts, WithDistDir(distDir(t, fakeCtx)))...)
+}
+
 func TestInstallScriptRejectsHostThatCouldInjectShell(t *testing.T) {
+	h := distHandler(t)
+	for _, host := range []string{"x';touch /tmp/pwn;'", "a b", "a$(id)", "a`id`", "a\"b", "a;b", "127.0.0.1'; id; '"} {
+		rec := serveRaw(t, h, host, "", nil)
+		if rec.Code != http.StatusBadRequest || strings.Contains(rec.Body.String(), "touch") {
+			t.Errorf("host %q: %d", host, rec.Code)
+		}
+	}
+}
+
+func TestInstallScriptRefusesPlainHTTPForRemoteHosts(t *testing.T) {
+	h := distHandler(t)
+	// TLS terminated by a proxy that sends no forwarded headers: no TLS seen.
+	if rec := serveRaw(t, h, "gt.example.com", "", nil); rec.Code != http.StatusBadRequest {
+		t.Errorf("plain http remote host: %d", rec.Code)
+	}
+	for _, host := range []string{"localhost:8474", "127.0.0.1:8474", "[::1]:8474"} {
+		if rec := serveRaw(t, h, host, "", nil); rec.Code != http.StatusOK {
+			t.Errorf("loopback %s: %d", host, rec.Code)
+		}
+	}
+	// http public URL on a remote host is refused as well.
+	hp := distHandler(t, WithPublicURL("http://gt.example.com"))
+	if rec := serveRaw(t, hp, "gt.example.com", "", nil); rec.Code != http.StatusBadRequest {
+		t.Errorf("http public url: %d", rec.Code)
+	}
+}
+
+func TestInstallScriptForwardedHeaders(t *testing.T) {
+	h := distHandler(t)
+	ok := map[string]string{"X-Forwarded-Proto": "https", "X-Forwarded-Host": "gt.example.com"}
+	rec := serveRaw(t, h, "internal:8474", "127.0.0.1:5555", ok)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "'https://gt.example.com'") {
+		t.Errorf("trusted proxy: %d", rec.Code)
+	}
+	// Untrusted peer must not steer the address.
+	if rec := serveRaw(t, h, "internal:8474", "203.0.113.5:5555", ok); rec.Code == 200 {
+		t.Error("untrusted peer's forwarded headers accepted")
+	}
+	for name, hdr := range map[string]map[string]string{
+		"injected host": {"X-Forwarded-Proto": "https", "X-Forwarded-Host": "x';id;'"},
+		"proto only":    {"X-Forwarded-Proto": "https"},
+		"host only":     {"X-Forwarded-Host": "gt.example.com"},
+		"http remote":   {"X-Forwarded-Proto": "http", "X-Forwarded-Host": "gt.example.com"},
+		"odd proto":     {"X-Forwarded-Proto": "javascript", "X-Forwarded-Host": "gt.example.com"},
+		"list of hosts": {"X-Forwarded-Proto": "https", "X-Forwarded-Host": "a.example,b.example"},
+	} {
+		if rec := serveRaw(t, h, "internal:8474", "127.0.0.1:5555", hdr); rec.Code == 200 {
+			t.Errorf("%s accepted", name)
+		}
+	}
+}
+
+func TestPublicURLWithShellCharactersIsRejected(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Error("WithPublicURL accepted a host with quotes")
+		}
+	}()
+	WithPublicURL("https://x';id;'")(&app{})
+}
+
+func TestInstallScriptRefusesPlainHTTPBase(t *testing.T) {
+	for _, base := range []string{"http://gt.example.com", "ftp://x"} {
+		script := strings.ReplaceAll(installScript, installServerPlaceholder, base)
+		r := runInstall(t, "", nil, script)
+		if r.err == nil || r.installed() || !strings.Contains(r.out, "refusing") && !strings.Contains(r.out, "unsupported") {
+			t.Errorf("%s: err=%v\n%s", base, r.err, r.out)
+		}
+	}
+}
+
+func TestInstallScriptRefusesAmbiguousChecksums(t *testing.T) {
+	dir := distDir(t, fakeCtx)
+	sum := sumOf(t, filepath.Join(dir, "ctx_1.2.3_linux_amd64.tar.gz"))
+	var b strings.Builder
+	for _, osn := range []string{"linux", "darwin"} {
+		for _, arch := range []string{"amd64", "arm64"} {
+			fmt.Fprintf(&b, "%s  ctx_1.2.3_%s_%s.tar.gz\n%s  ctx_1.2.4_%s_%s.tar.gz\n", sum, osn, arch, sum, osn, arch)
+		}
+	}
+	os.WriteFile(filepath.Join(dir, "checksums.txt"), []byte(b.String()), 0o644)
+	srv := distServer(t, dir)
+	r := runInstall(t, srv.URL, nil, "")
+	if r.err == nil || r.installed() || !strings.Contains(r.out, "ambiguous") {
+		t.Errorf("err=%v\n%s", r.err, r.out)
+	}
+}
+
+func TestInstallScriptAcceptsCRLFAndStarChecksums(t *testing.T) {
+	dir := distDir(t, fakeCtx)
+	b, _ := os.ReadFile(filepath.Join(dir, "checksums.txt"))
+	crlf := strings.ReplaceAll(strings.ReplaceAll(string(b), "  ctx_", " *ctx_"), "\n", "\r\n")
+	os.WriteFile(filepath.Join(dir, "checksums.txt"), []byte(crlf), 0o644)
+	srv := distServer(t, dir)
+	r := runInstall(t, srv.URL, nil, "")
+	if r.err != nil || !r.installed() {
+		t.Errorf("%v\n%s", r.err, r.out)
+	}
+	if resp, _ := get(t, srv.URL+"/dist/ctx_1.2.3_linux_amd64.tar.gz"); resp.StatusCode != 200 {
+		t.Errorf("server did not list starred name: %d", resp.StatusCode)
+	}
+}
+
+func TestInstallScriptRejectsSymlinkedCtxInArchive(t *testing.T) {
+	dir := distDir(t, fakeCtx)
+	var sums strings.Builder
+	for _, osn := range []string{"linux", "darwin"} {
+		for _, arch := range []string{"amd64", "arm64"} {
+			name := fmt.Sprintf("ctx_1.2.3_%s_%s.tar.gz", osn, arch)
+			f, _ := os.Create(filepath.Join(dir, name))
+			gz := gzip.NewWriter(f)
+			tw := tar.NewWriter(gz)
+			tw.WriteHeader(&tar.Header{Name: "ctx", Typeflag: tar.TypeSymlink, Linkname: "/bin/sh", Mode: 0o755})
+			tw.Close()
+			gz.Close()
+			f.Close()
+			fmt.Fprintf(&sums, "%s  %s\n", sumOf(t, filepath.Join(dir, name)), name)
+		}
+	}
+	os.WriteFile(filepath.Join(dir, "checksums.txt"), []byte(sums.String()), 0o644)
+	srv := distServer(t, dir)
+	r := runInstall(t, srv.URL, nil, "")
+	if r.err == nil || r.installed() {
+		t.Errorf("symlink ctx installed\n%s", r.out)
+	}
+}
+
+func TestDistRefusesSymlinks(t *testing.T) {
+	dir := distDir(t, fakeCtx)
+	outside := filepath.Join(t.TempDir(), "outside.tar.gz")
+	os.WriteFile(outside, []byte("outside-data"), 0o644)
+	link := filepath.Join(dir, "ctx_1.2.3_linux_amd64.tar.gz")
+	os.Remove(link)
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skip("no symlinks")
+	}
+	srv := distServer(t, dir)
+	resp, b := get(t, srv.URL+"/dist/ctx_1.2.3_linux_amd64.tar.gz")
+	if resp.StatusCode == 200 || strings.Contains(b, "outside-data") {
+		t.Errorf("symlinked archive served: %d", resp.StatusCode)
+	}
+	// A symlinked checksums.txt disqualifies the directory at startup.
+	other := t.TempDir()
+	real := filepath.Join(other, "real.txt")
+	os.WriteFile(real, []byte(""), 0o644)
+	os.Symlink(real, filepath.Join(other, "checksums.txt"))
+	if _, err := CheckDistDir(other); err == nil {
+		t.Error("CheckDistDir accepted a symlinked checksums.txt")
+	}
+}
+
+func TestCheckDistDirReportsVersions(t *testing.T) {
+	dir := distDir(t, fakeCtx)
+	v, err := CheckDistDir(dir)
+	if err != nil || len(v) != 1 || v[0] != "1.2.3" {
+		t.Fatalf("%v %v", v, err)
+	}
+	sum := sumOf(t, filepath.Join(dir, "ctx_1.2.3_linux_amd64.tar.gz"))
+	os.WriteFile(filepath.Join(dir, "checksums.txt"), []byte(sum+"  ctx_1.0.0_linux_amd64.tar.gz\n"+sum+"  ctx_2.0.0_linux_amd64.tar.gz\n"), 0o644)
+	if v, _ := CheckDistDir(dir); len(v) != 2 {
+		t.Errorf("versions %v", v)
+	}
+}
+
+func TestDistChecksumsCacheFollowsChanges(t *testing.T) {
 	dir := distDir(t, fakeCtx)
 	srv := distServer(t, dir)
-	for _, host := range []string{"x';touch /tmp/pwn;'", "a b", "a$(id)", "a`id`", "a\"b", "a;b"} {
-		req, _ := http.NewRequest("GET", srv.URL+"/install.sh", nil)
-		req.Host = host
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			continue // client refuses to send it
-		}
-		b := body(t, resp)
-		if resp.StatusCode == 200 || strings.Contains(b, "touch /tmp/pwn") {
-			t.Errorf("host %q accepted: %d", host, resp.StatusCode)
-		}
+	if resp, _ := get(t, srv.URL+"/dist/ctx_1.2.3_linux_amd64.tar.gz"); resp.StatusCode != 200 {
+		t.Fatal(resp.StatusCode)
+	}
+	os.WriteFile(filepath.Join(dir, "checksums.txt"), []byte("short\n"), 0o644)
+	if resp, _ := get(t, srv.URL+"/dist/ctx_1.2.3_linux_amd64.tar.gz"); resp.StatusCode == 200 {
+		t.Error("stale checksums cache")
 	}
 }
 

@@ -327,7 +327,12 @@ and installs `ctx` to `~/.local/bin` (`$XDG_BIN_HOME` if set), without sudo. The
 server address in the script is `GHOSTTREE_PUBLIC_URL`, or else the address the
 request came in on. `GHOSTTREE_DOWNLOAD_BASE` on the client replaces the
 download location, for example with a GitHub release URL, since the archives
-use goreleaser's layout. Cautious readers can fetch the script, read it, and
+use goreleaser's layout. The installer refuses a plain-http source (except
+loopback, or `GHOSTTREE_ALLOW_HTTP=1`), and the server serves `/install.sh`
+only for an https address: set `GHOSTTREE_PUBLIC_URL`, or let a trusted proxy
+send `X-Forwarded-Proto` and `X-Forwarded-Host`. `/dist/` has no rate limit of
+its own; limit it at the reverse proxy. Keep one ctx version per directory.
+Cautious readers can fetch the script, read it, and
 run it afterwards.
 
 ## Privacy and security

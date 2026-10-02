@@ -25,3 +25,14 @@ func TestServeDistDirFlagAndEnv(t *testing.T) {
 		t.Fatalf("env: %v %q", err, cfg.DistDir)
 	}
 }
+
+func TestServePublicURLRejectsShellCharacters(t *testing.T) {
+	for _, u := range []string{"https://x';id;'", "https://a b.example", "https://a`id`.example"} {
+		if _, err := parseServeConfig([]string{"--public-url", u}, &bytes.Buffer{}); err == nil {
+			t.Errorf("%q accepted", u)
+		}
+	}
+	if _, err := parseServeConfig([]string{"--public-url", "https://gt.example.com:8443"}, &bytes.Buffer{}); err != nil {
+		t.Error(err)
+	}
+}

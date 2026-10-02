@@ -34,10 +34,28 @@ main() {
     *) die "unsupported CPU architecture: $(uname -m) (supported: amd64, arm64)" ;;
   esac
 
+  # Plain http would let anyone on the path swap archive and checksums alike.
+  case "$base" in
+    https://*) protos='=https' ;;
+    http://localhost | http://localhost:* | http://127.0.0.1 | http://127.0.0.1:* | http://\[::1\] | http://\[::1\]:* | http://\[::1]*)
+      protos='=http,https' ;;
+    http://*)
+      if [ "${GHOSTTREE_ALLOW_HTTP:-}" = 1 ]; then
+        protos='=http,https'
+      else
+        die "refusing to download over plain http from $base (use https, or set GHOSTTREE_ALLOW_HTTP=1 if you trust the network)"
+      fi ;;
+    *) die "unsupported download location: $base" ;;
+  esac
+
   if command -v curl >/dev/null 2>&1; then
-    fetch() { curl -fsSL --proto '=https,http' -o "$2" "$1"; }
+    fetch() { curl -fsSL --proto "$protos" --proto-redir "$protos" -o "$2" "$1"; }
   elif command -v wget >/dev/null 2>&1; then
-    fetch() { wget -qO "$2" "$1"; }
+    if [ "$protos" = '=https' ]; then
+      fetch() { wget -qO "$2" --https-only "$1"; }
+    else
+      fetch() { wget -qO "$2" "$1"; }
+    fi
   else
     die "curl or wget is required"
   fi
@@ -51,19 +69,33 @@ main() {
   fi
 
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/ghosttree-install.XXXXXX") || die "cannot create a temporary directory"
-  trap 'rm -rf "$tmp"' EXIT INT TERM HUP
+  trap 'rm -rf "$tmp"' EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
 
   say "Downloading checksums from $base"
-  fetch "$base/checksums.txt" "$tmp/checksums.txt" || die "cannot download $base/checksums.txt"
+  fetch "$base/checksums.txt" "$tmp/checksums.raw" || die "cannot download $base/checksums.txt"
+  # Same rules as the server: CR dropped, "<64 hex>  [*]<name>" lines only.
+  tr -d '\r' < "$tmp/checksums.raw" | awk '
+    NF == 2 && length($1) == 64 && $1 !~ /[^0-9a-fA-F]/ { sub(/^\*/, "", $2); print $1, $2 }
+  ' > "$tmp/checksums.txt"
 
-  archive=$(awk -v suffix="_${os}_${arch}.tar.gz" '
-    NF == 2 && substr($2, 1, 4) == "ctx_" && substr($2, length($2) - length(suffix) + 1) == suffix { print $2; exit }
+  suffix="_${os}_${arch}.tar.gz"
+  matches=$(awk -v suffix="$suffix" '
+    substr($2, 1, 4) == "ctx_" && length($2) > length(suffix) && substr($2, length($2) - length(suffix) + 1) == suffix { n++ }
+    END { print n + 0 }
   ' "$tmp/checksums.txt")
-  [ -n "$archive" ] || die "no ctx build for ${os}/${arch} listed in $base/checksums.txt"
-  case "$archive" in */* | *..*) die "unexpected archive name in checksums.txt" ;; esac
+  [ "$matches" -ne 0 ] || die "no ctx build for ${os}/${arch} listed in $base/checksums.txt"
+  [ "$matches" -eq 1 ] || die "$base/checksums.txt lists $matches builds for ${os}/${arch}; refusing an ambiguous list"
 
-  want=$(awk -v f="$archive" 'NF == 2 && $2 == f { print $1; exit }' "$tmp/checksums.txt")
+  archive=$(awk -v suffix="$suffix" '
+    substr($2, 1, 4) == "ctx_" && length($2) > length(suffix) && substr($2, length($2) - length(suffix) + 1) == suffix { print $2 }
+  ' "$tmp/checksums.txt")
+  case "$archive" in */* | *..* | -*) die "unexpected archive name in checksums.txt" ;; esac
+  want=$(awk -v f="$archive" '$2 == f { print $1 }' "$tmp/checksums.txt")
   [ -n "$want" ] || die "no checksum for $archive"
+  [ "$(printf '%s\n' "$want" | wc -l | tr -d ' ')" -eq 1 ] || die "duplicate checksum entries for $archive"
 
   say "Downloading $archive"
   fetch "$base/$archive" "$tmp/$archive" || die "cannot download $base/$archive"
@@ -79,6 +111,9 @@ main() {
 
   bindir=${XDG_BIN_HOME:-$HOME/.local/bin}
   mkdir -p "$bindir" || die "cannot create $bindir"
+  if [ -L "$tmp/x/ctx" ] || [ ! -f "$tmp/x/ctx" ]; then
+    die "the archive's ctx is not a regular file; nothing was installed"
+  fi
   chmod 755 "$tmp/x/ctx"
   # Same directory, then rename: an existing ctx is replaced atomically.
   cp "$tmp/x/ctx" "$bindir/.ctx.new.$$" || die "cannot write to $bindir"
@@ -92,7 +127,7 @@ main() {
   esac
 
   if [ "$#" -gt 0 ]; then
-    if "$bindir/ctx" help 2>&1 | grep -q '^  join '; then
+    if "$bindir/ctx" join --help >/dev/null 2>&1; then
       say "Joining $server"
       "$bindir/ctx" join --server "$server" "$@"
     else

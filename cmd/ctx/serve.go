@@ -133,11 +133,14 @@ func parseServeConfig(args []string, output io.Writer) (serveConfig, error) {
 		if (u.Scheme == "https" && u.Port() == "443") || (u.Scheme == "http" && u.Port() == "80") {
 			u.Host = strings.TrimSuffix(u.Host, ":"+u.Port())
 		}
+		if !web.ValidPublicHost(u.Host) {
+			return serveConfig{}, fmt.Errorf("--public-url host %q has characters outside letters, digits, . : [ ] -", u.Host)
+		}
 		cfg.PublicURL = u.Scheme + "://" + u.Host
 	}
 	if cfg.DistDir != "" {
-		if fi, err := os.Stat(filepath.Join(cfg.DistDir, "checksums.txt")); err != nil || !fi.Mode().IsRegular() {
-			return serveConfig{}, fmt.Errorf("--dist-dir %q must contain checksums.txt", cfg.DistDir)
+		if _, err := web.CheckDistDir(cfg.DistDir); err != nil {
+			return serveConfig{}, fmt.Errorf("--dist-dir %q: %w", cfg.DistDir, err)
 		}
 	}
 	proxies, err := proxytrust.Parse(*trusted)
@@ -250,6 +253,17 @@ func runServer(ctx context.Context, st *store.Store, cfg serveConfig, stdout, st
 		"note", "without enforcement only 'access: would deny' is logged, nothing is refused")
 	if note := proxyConfigWarning(cfg); note != "" {
 		slog.New(slog.NewJSONHandler(stderr, nil)).Warn("proxy_config", "public_url", cfg.PublicURL, "note", note)
+	}
+	if cfg.DistDir != "" {
+		logger := slog.New(slog.NewJSONHandler(stderr, nil))
+		if versions, _ := web.CheckDistDir(cfg.DistDir); len(versions) > 1 {
+			logger.Warn("dist_dir", "dir", cfg.DistDir, "versions", versions, "note", "checksums.txt lists several ctx versions; install.sh refuses an ambiguous list, keep one version per directory")
+		} else if len(versions) == 0 {
+			logger.Warn("dist_dir", "dir", cfg.DistDir, "note", "checksums.txt lists no ctx_<version>_<os>_<arch>.tar.gz archive")
+		}
+		if cfg.PublicURL == "" {
+			logger.Warn("dist_dir", "note", "without "+envPublicURL+" (https) /install.sh is served only to loopback hosts or via a trusted proxy sending X-Forwarded-Proto/Host")
+		}
 	}
 	slog.New(slog.NewJSONHandler(stderr, nil)).Info("writer_config", "max_operations", cfg.Writer.MaxOperations, "max_bytes", cfg.Writer.MaxBytes, "max_batch", cfg.Writer.MaxBatch, "read_connections", cfg.Writer.ReadConnections)
 	if err := serveUntilCanceled(ctx, newHTTPServer(cfg.Listen, buildServerHandler(st, cfg, stderr))); err != nil {

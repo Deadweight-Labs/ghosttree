@@ -13,7 +13,9 @@ Versioning, with pre-1.0 compatibility rules described in
   `curl -fsSL https://<server>/install.sh | sh` verifies the SHA-256, installs
   to `~/.local/bin` without sudo, and passes arguments after `--` to
   `ctx join`. `make dist` builds the archives and checksums for linux and
-  darwin on amd64 and arm64.
+  darwin on amd64 and arm64. The installer refuses plain http (except
+  loopback) and an ambiguous `checksums.txt`; the server serves it only for an
+  https address.
 
 - Added: invitation page `/join/<code>` (REQ-434, first part). It shows the
   organization, project, role (member or guest) and expiry of an invitation

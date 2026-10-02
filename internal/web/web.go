@@ -36,6 +36,7 @@ type app struct {
 	publicOrigin  string // scheme://host of GHOSTTREE_PUBLIC_URL, or empty
 	publicHTTPS   bool
 	joinLimits    *joinLimiter
+	distSums      distCache
 	distDir       string // ctx archives + checksums.txt served at /dist/; empty = off
 }
 type pageData struct {

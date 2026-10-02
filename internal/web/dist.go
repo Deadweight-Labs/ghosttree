@@ -4,12 +4,18 @@ import (
 	"bufio"
 	_ "embed"
 	"errors"
+	"fmt"
+	"html"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
+	"sync"
+	"time"
 )
 
 //go:embed install.sh
@@ -24,20 +30,21 @@ func WithDistDir(dir string) Option { return func(a *app) { a.distDir = dir } }
 
 var distNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]*$`)
 
-// distListed returns the file names named in checksums.txt, plus checksums.txt.
-// A name with a path separator or anything outside a plain file name is
-// dropped, so the list can never point out of the directory.
-func (a *app) distListed() (map[string]bool, error) {
-	f, err := os.Open(filepath.Join(a.distDir, "checksums.txt"))
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
+var (
+	distHashRE    = regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
+	distVersionRE = regexp.MustCompile(`^ctx_(.+)_(?:linux|darwin)_(?:amd64|arm64)\.tar\.gz$`)
+)
+
+// parseChecksums reads sha256sum/goreleaser lines "<64 hex>  <name>" (a "*"
+// before the name, CR line ends and anything malformed are tolerated or
+// dropped; install.sh applies the same rules). A name with a path separator or
+// anything outside a plain file name is dropped, so the list can never point
+// out of the directory.
+func parseChecksums(r *bufio.Scanner) map[string]bool {
 	names := map[string]bool{"checksums.txt": true}
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		fields := strings.Fields(sc.Text())
-		if len(fields) != 2 {
+	for r.Scan() {
+		fields := strings.Fields(strings.TrimRight(r.Text(), "\r"))
+		if len(fields) != 2 || !distHashRE.MatchString(fields[0]) {
 			continue
 		}
 		name := strings.TrimPrefix(fields[1], "*")
@@ -45,7 +52,83 @@ func (a *app) distListed() (map[string]bool, error) {
 			names[name] = true
 		}
 	}
-	return names, sc.Err()
+	return names
+}
+
+// openDistFile opens a regular, non-symlink file of dir. The Lstat/Fstat
+// comparison closes the window between the check and the open.
+func openDistFile(dir, name string) (*os.File, os.FileInfo, error) {
+	path := filepath.Join(dir, name)
+	li, err := os.Lstat(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !li.Mode().IsRegular() {
+		return nil, nil, errors.New("not a regular file")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	fi, err := f.Stat()
+	if err != nil || !os.SameFile(li, fi) {
+		f.Close()
+		return nil, nil, errors.New("file changed")
+	}
+	return f, fi, nil
+}
+
+// CheckDistDir validates a --dist-dir and returns the distinct ctx versions
+// its checksums.txt lists (more than one makes install.sh refuse, so the
+// caller should warn).
+func CheckDistDir(dir string) ([]string, error) {
+	f, _, err := openDistFile(dir, "checksums.txt")
+	if err != nil {
+		return nil, fmt.Errorf("checksums.txt: %w", err)
+	}
+	defer f.Close()
+	seen := map[string]bool{}
+	for name := range parseChecksums(bufio.NewScanner(f)) {
+		if m := distVersionRE.FindStringSubmatch(name); m != nil {
+			seen[m[1]] = true
+		}
+	}
+	versions := make([]string, 0, len(seen))
+	for v := range seen {
+		versions = append(versions, v)
+	}
+	sort.Strings(versions)
+	return versions, nil
+}
+
+// distCache keeps the parsed checksums.txt until its mtime or size changes.
+type distCache struct {
+	mu    sync.Mutex
+	mtime time.Time
+	size  int64
+	names map[string]bool
+}
+
+// distListed returns the file names named in checksums.txt, plus itself.
+func (a *app) distListed() (map[string]bool, error) {
+	f, fi, err := openDistFile(a.distDir, "checksums.txt")
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	c := &a.distSums
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.names != nil && c.mtime.Equal(fi.ModTime()) && c.size == fi.Size() {
+		return c.names, nil
+	}
+	sc := bufio.NewScanner(f)
+	names := parseChecksums(sc)
+	if err := sc.Err(); err != nil {
+		return nil, err
+	}
+	c.names, c.mtime, c.size = names, fi.ModTime(), fi.Size()
+	return names, nil
 }
 
 func distContentType(name string) string {
@@ -71,22 +154,12 @@ func (a *app) distFile(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	path := filepath.Join(a.distDir, name)
-	if fi, err := os.Lstat(path); err != nil || !fi.Mode().IsRegular() {
-		http.NotFound(w, r)
-		return
-	}
-	f, err := os.Open(path)
+	f, fi, err := openDistFile(a.distDir, name)
 	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
 	defer f.Close()
-	fi, err := f.Stat()
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
 	h := w.Header()
 	h.Set("Content-Type", distContentType(name))
 	h.Set("X-Content-Type-Options", "nosniff")
@@ -103,6 +176,12 @@ func (a *app) distFile(w http.ResponseWriter, r *http.Request) {
 // a trusted proxy.
 func (a *app) requestOrigin(r *http.Request) (string, error) {
 	if a.publicOrigin != "" {
+		if !distHostRE.MatchString(strings.SplitN(a.publicOrigin, "://", 2)[1]) {
+			return "", errors.New("bad public url")
+		}
+		if !strings.HasPrefix(a.publicOrigin, "https://") && !loopbackHost(strings.TrimPrefix(a.publicOrigin, "http://")) {
+			return "", errPlainHTTP
+		}
 		return a.publicOrigin, nil
 	}
 	scheme, host := "http", r.Host
@@ -120,11 +199,26 @@ func (a *app) requestOrigin(r *http.Request) (string, error) {
 	if !validForwardedHost(host) || !distHostRE.MatchString(host) {
 		return "", errors.New("bad host")
 	}
+	if scheme != "https" && !loopbackHost(host) {
+		return "", errPlainHTTP
+	}
 	u, err := url.Parse(scheme + "://" + host)
 	if err != nil || u.Host != host {
 		return "", errors.New("bad host")
 	}
 	return scheme + "://" + host, nil
+}
+
+var errPlainHTTP = errors.New("plain http")
+
+// loopbackHost reports whether host (with optional port) is this machine.
+func loopbackHost(host string) bool {
+	h := host
+	if hh, _, err := net.SplitHostPort(host); err == nil {
+		h = hh
+	}
+	h = strings.Trim(h, "[]")
+	return strings.EqualFold(h, "localhost") || h == "127.0.0.1" || h == "::1"
 }
 
 // distHostRE keeps the host to characters that are inert inside a
@@ -137,13 +231,24 @@ func (a *app) installSh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	origin, err := a.requestOrigin(r)
+	if errors.Is(err, errPlainHTTP) {
+		http.Error(w, "install.sh is only served over https (set GHOSTTREE_PUBLIC_URL to the https address)", http.StatusBadRequest)
+		return
+	}
 	if err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
+	// The origin passed distHostRE or came from a validated public URL; the
+	// escape changes nothing for such values and keeps the data flow explicit.
+	origin = html.EscapeString(origin)
 	h := w.Header()
-	h.Set("Content-Type", "text/x-shellscript; charset=utf-8")
+	h.Set("Content-Type", "text/plain; charset=utf-8")
 	h.Set("Cache-Control", "no-store")
 	h.Set("X-Content-Type-Options", "nosniff")
 	_, _ = w.Write([]byte(strings.ReplaceAll(installScript, installServerPlaceholder, origin)))
 }
+
+// ValidPublicHost reports whether host (with optional port) is made only of
+// characters that are inert in a shell string.
+func ValidPublicHost(host string) bool { return distHostRE.MatchString(host) }
