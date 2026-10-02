@@ -208,7 +208,8 @@ func (a CoordAccess) CanEndStanding(roomKey, messageID string) bool {
 	if reader.reader != nil {
 		reader = reader.reader
 	}
-	return canEndStandingTx(reader.db, a.Principal.ID, a.AgentExternalID, roomKey, messageID)
+	return canEndStandingTx(reader.db, a.Principal.ID, a.AgentExternalID, roomKey, messageID,
+		a.projectRoomGate(roomKindOf(roomKey), roomKey, ResAgents, reader.db) != nil)
 }
 
 // canEndStandingTx: eine Vorgabe beendet die Autorin selbst oder wer im Projekt
@@ -216,15 +217,25 @@ func (a CoordAccess) CanEndStanding(roomKey, messageID string) bool {
 // Räume ohne Projekt oder Projekte ohne Besitzer kennen keine Rollen und bleiben
 // bei der Raumzugehörigkeit. Eine Vorgabe, die es nicht gibt, ist nicht
 // verboten, sondern "nicht gefunden" beim Beenden.
-func canEndStandingTx(q rowQuerier, principal, agent, roomKey, messageID string) bool {
+//
+// Wer in der Gastsicht steht (guestView), sieht keine Ränge anderer: er beendet
+// nur eigene Vorgaben, für jede andere und jede unbekannte ID gleich verboten,
+// damit weder Knopf noch Antwort den Rang der Autorin oder die Existenz einer
+// ID verraten.
+//
+// Der Rang der Autorin kommt aus author_principal_id und der Projektrolle, nicht
+// aus sender(): der Beitrag vor der Migrationsmarke zählt hier mit seinem Rang,
+// sonst beendete jeder Gast eine alte Owner-Vorgabe. Ist die Autorin nicht
+// bestimmbar, beendet nur ein Owner oder Admin.
+func canEndStandingTx(q rowQuerier, principal, agent, roomKey, messageID string, guestView bool) bool {
 	id, err := strconv.ParseInt(messageID, 10, 64)
 	if err != nil {
-		return true
+		return !guestView
 	}
 	var m CoordMessage
 	if q.QueryRow(`SELECT id, author_kind, author_principal_id, sender_external_id FROM coord_messages WHERE id=? AND destination_kind='room' AND destination_id=?`,
 		id, roomKey).Scan(&m.ID, &m.AuthorKind, &m.AuthorPrincipalID, &m.SenderExternalID) != nil {
-		return true
+		return !guestView
 	}
 	if agent != "" {
 		if m.SenderExternalID == agent {
@@ -232,6 +243,9 @@ func canEndStandingTx(q rowQuerier, principal, agent, roomKey, messageID string)
 		}
 	} else if m.AuthorKind == AuthorHuman && m.AuthorPrincipalID == principal {
 		return true
+	}
+	if guestView {
+		return false
 	}
 	project, ok := strings.CutPrefix(roomKey, "project:")
 	if !ok {
@@ -250,9 +264,13 @@ func canEndStandingTx(q rowQuerier, principal, agent, roomKey, messageID string)
 	if !hasAccount || account == 0 {
 		return false
 	}
-	var admin int
-	if q.QueryRow(`SELECT is_admin FROM persons WHERE id=?`, account).Scan(&admin) == nil && admin == 1 {
-		return true
+	// Instanz-Admins beenden alles, ihre Agenten nicht: der Agent erbt vom
+	// Konto höchstens die Projektrolle.
+	if agent == "" {
+		var admin int
+		if q.QueryRow(`SELECT is_admin FROM persons WHERE id=?`, account).Scan(&admin) == nil && admin == 1 {
+			return true
+		}
 	}
 	var actor RoleInfo
 	if agent != "" {
@@ -260,6 +278,24 @@ func canEndStandingTx(q rowQuerier, principal, agent, roomKey, messageID string)
 	} else {
 		actor = projectRoleTx(q, project, account)
 	}
-	author := newProjectAuthorityCtx(q, project).sender(m)
-	return RoleRank(actor.Role) > 0 && RoleRank(actor.Role) >= RoleRank(author.role.Role)
+	return RoleRank(actor.Role) > 0 && RoleRank(actor.Role) >= standingAuthorRankTx(q, project, m)
+}
+
+// standingAuthorRankTx ist der Rang, den die Autorin einer Vorgabe heute im
+// Projekt hat, ohne Verifizierung: es geht darum, wer geschrieben hat. Nicht
+// bestimmbar heißt Owner-Rang, also nur Owner und Admins können beenden.
+func standingAuthorRankTx(q rowQuerier, project string, m CoordMessage) int {
+	unknown := RoleRank(RoleOwner)
+	if m.AuthorKind == AuthorAgent && m.SenderExternalID != "" {
+		if _, _, ok := agentAccountTx(q, m.SenderExternalID); ok {
+			return RoleRank(effectiveAgentRoleTx(q, project, m.SenderExternalID).Role)
+		}
+		return unknown
+	}
+	if m.AuthorKind == AuthorHuman {
+		if id, err := parsePersonPrincipalID(m.AuthorPrincipalID); err == nil {
+			return RoleRank(projectRoleTx(q, project, id).Role)
+		}
+	}
+	return unknown
 }

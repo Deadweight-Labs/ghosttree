@@ -10,7 +10,10 @@ Versioning, with pre-1.0 compatibility rules described in
   author, or someone whose project rank is at least the author's (owners and
   instance admins always), can end it; anyone else gets "forbidden", and the
   room shows End only to those who may. Before, a guest could end an owner's
-  directive.
+  directive, also one written before the authority migration. Guests see End
+  only on their own directives and get the same answer for every other one, so
+  the button no longer reveals who outranks whom; an admin's agent does not
+  inherit the admin's right to end everything.
 - Fixed: the room's send, read and answer buttons submit in place again. The
   page script treated every button as having its own form target and let the
   browser post the form natively, which replaced the page with plain text on an

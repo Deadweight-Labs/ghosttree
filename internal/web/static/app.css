@@ -344,7 +344,7 @@ summary.coord-text-action::-webkit-details-marker { display: none; }
 /* Right column */
 .coord-context {
   grid-area: ctx; min-width: 0; min-height: 0; overflow-y: auto; scrollbar-width: thin;
-  margin-right: calc(var(--shadow-room-x) * -1); padding: 4px var(--shadow-room-x) var(--shadow-room-y) 4px;
+  margin-inline: calc(var(--shadow-room-x) * -1); padding: 4px var(--shadow-room-x) var(--shadow-room-y);
   -webkit-mask-image: linear-gradient(#000 calc(100% - var(--shadow-room-y)), transparent); mask-image: linear-gradient(#000 calc(100% - var(--shadow-room-y)), transparent);
 }
 .coord-drawer-head { display: none; }
@@ -456,10 +456,12 @@ html:not(.js) [data-coord-live-status] { display: none; }
   html.coord-enhanced .coord-drawer-open { overflow: hidden; }
   html:not(.coord-enhanced) .coord-workspace { height: auto; }
   html:not(.coord-enhanced) .coord-messages { max-height: 70dvh; }
-  html:not(.coord-enhanced) .coord-context { overflow: visible; margin: 0; }
+  html:not(.coord-enhanced) .coord-context { overflow: visible; margin: 0; padding-inline: 0; }
 }
 @media (max-width: 900px) {
   html.coord-enhanced .shell .shell-main > main.coord-workspace { height: calc(100dvh - 132px); }
+  /* .shell has only 16px padding from here on (shell.css), the shadow room must shrink with it. */
+  .coord-messages { margin-inline: -16px; padding-inline: 16px; }
 }
 @media (max-width: 700px) {
   .coord-sidebar { padding-right: 96px; }
@@ -479,7 +481,6 @@ html:not(.js) [data-coord-live-status] { display: none; }
   .ask { grid-template-columns: 32px minmax(0, 1fr); padding: 14px 16px; gap: 2px 11px; }
   .ask .av { inline-size: 32px; block-size: 32px; border-radius: 11px; }
   .ask-t { font-size: 15.5px; }
-  .coord-messages { margin-inline: -16px; padding-inline: 16px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .cm-tools { transition: none; }

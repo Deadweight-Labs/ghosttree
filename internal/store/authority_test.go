@@ -442,3 +442,178 @@ func orgIDOf(t *testing.T, st *Store) int64 {
 	}
 	return orgs[0].ID
 }
+
+// standingBy legt eine Vorgabe an und liefert ihre Nachrichten-ID.
+func (e authorityEnv) standingBy(t *testing.T, by CoordAccess, room, body string) string {
+	t.Helper()
+	if _, err := by.CreateStanding(StandingInput{RoomKey: room, ClientID: "sb-" + body, Body: body}); err != nil {
+		t.Fatalf("create standing %q: %v", body, err)
+	}
+	list, err := e.st.StandingInstructions(room)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range list {
+		if item.Body == body {
+			return item.MessageID
+		}
+	}
+	t.Fatalf("standing %q not listed", body)
+	return ""
+}
+
+func (e authorityEnv) addGuest(t *testing.T) {
+	t.Helper()
+	code, _, err := e.st.CreateInvitation("person:1", orgIDOf(t, e.st), "", OrgMember, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.st.AcceptInvitation("person:5", code); err != nil {
+		t.Fatal(err)
+	}
+	if err := setRole(e.st, "person:1", "person:5", RoleGuest, false); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Der Ende-Knopf darf einem Gast nicht verraten, welchen Rang die Autorin hat:
+// in der Gastsicht gibt es nur für eigene Vorgaben einen Knopf, und die
+// Antwort ist für jede fremde (und jede unbekannte) Vorgabe dieselbe.
+func TestGuestViewEndStandingIsNoRankOracle(t *testing.T) {
+	for _, enforce := range []bool{true, false} {
+		e := authorityFixture(t)
+		e.st.SetAccessMode(AccessMode{Enforce: enforce})
+		e.addGuest(t)
+		guest := e.human("person:5")
+		own := e.standingBy(t, guest, e.room, "guest own")
+		byAgent := e.standingBy(t, e.agent("a-anna"), e.room, "anna agent rule")
+		byOwner := e.standingBy(t, e.human("person:1"), e.room, "owner rule")
+
+		forms := func() int {
+			n := 0
+			for _, id := range []string{byAgent, byOwner} {
+				if guest.CanEndStanding(e.room, id) {
+					n++
+				}
+			}
+			return n
+		}
+		answers := func() []error {
+			out := []error{}
+			for _, id := range []string{byAgent, byOwner, "999999"} {
+				out = append(out, guest.EndStanding(e.room, id))
+			}
+			return out
+		}
+		check := func(when string) {
+			if enforce {
+				if n := forms(); n != 0 {
+					t.Fatalf("%s: guest sees %d End forms on foreign directives", when, n)
+				}
+			}
+			for i, err := range answers() {
+				if err != ErrCoordForbidden && !(enforce == false && i == 2) {
+					t.Fatalf("%s enforce=%v answer %d = %v, want forbidden", when, enforce, i, err)
+				}
+			}
+		}
+		check("before")
+		if err := setRole(e.st, "person:1", "person:2", RoleGuest, false); err != nil {
+			t.Fatal(err)
+		}
+		if enforce {
+			// Ohne Durchsetzung gibt es keine Gastsicht, dort gilt der Rang.
+			check("after demoting anna")
+		}
+		if !guest.CanEndStanding(e.room, own) {
+			t.Fatal("a guest may end their own directive")
+		}
+	}
+}
+
+// Wer ein Beitrag vor der Migrationsmarke geschrieben hat, zählt beim Beenden
+// trotzdem mit seinem Rang; ein Gast beendet die alte Owner-Vorgabe nicht.
+func TestEndStandingRanksTheAuthorBeforeTheMigrationMarker(t *testing.T) {
+	for _, enforce := range []bool{true, false} {
+		e := authorityFixture(t)
+		e.st.SetAccessMode(AccessMode{Enforce: enforce})
+		e.addGuest(t)
+		old := e.standingBy(t, e.human("person:1"), e.room, "old owner rule")
+		oldLead := e.standingBy(t, e.human("person:2"), e.room, "old lead rule")
+		if _, err := e.st.db.Exec(`INSERT OR REPLACE INTO org_state(key, value) VALUES(?, '1000000')`, humanAuthorityKey); err != nil {
+			t.Fatal(err)
+		}
+		guest, member := e.human("person:5"), e.human("person:3")
+		if guest.CanEndStanding(e.room, old) || member.CanEndStanding(e.room, old) {
+			t.Fatalf("enforce=%v: no End on an old owner directive", enforce)
+		}
+		if err := guest.EndStanding(e.room, old); err != ErrCoordForbidden {
+			t.Fatalf("enforce=%v guest ends old owner directive = %v", enforce, err)
+		}
+		if err := member.EndStanding(e.room, oldLead); err != ErrCoordForbidden {
+			t.Fatalf("enforce=%v member ends old lead directive = %v", enforce, err)
+		}
+		if err := e.human("person:1").EndStanding(e.room, old); err != nil {
+			t.Fatalf("owner ends old directive: %v", err)
+		}
+	}
+}
+
+// Rollenwechsel nach dem Post, Admin, Agent eines Admins, unbeanspruchte
+// Projekte und Maschinenräume.
+func TestEndStandingRoleChangesAdminsAndUnclaimedRooms(t *testing.T) {
+	e := authorityFixture(t)
+	e.st.SetAccessMode(AccessMode{Enforce: true})
+	ownerRule := e.standingBy(t, e.human("person:1"), e.room, "owner rule")
+
+	// Admin (member im Projekt) darf; sein Agent nicht.
+	if _, err := e.st.db.Exec(`UPDATE persons SET is_admin=1 WHERE id=3`); err != nil {
+		t.Fatal(err)
+	}
+	if e.agent("a-ben").CanEndStanding(e.room, ownerRule) {
+		t.Fatal("an admin's agent must not end everything")
+	}
+	if err := e.agent("a-ben").EndStanding(e.room, ownerRule); err != ErrCoordForbidden {
+		t.Fatalf("admin's agent = %v", err)
+	}
+	if !e.human("person:3").CanEndStanding(e.room, ownerRule) {
+		t.Fatal("an admin may end any directive")
+	}
+	if _, err := e.st.db.Exec(`UPDATE persons SET is_admin=0 WHERE id=3`); err != nil {
+		t.Fatal(err)
+	}
+
+	// Rollenwechsel nach dem Post: Anna schreibt als lead, wird member; ben
+	// (member) darf nun beenden, wer unter member liegt nicht mehr.
+	annaRule := e.standingBy(t, e.human("person:2"), e.room, "anna rule")
+	if e.human("person:3").CanEndStanding(e.room, annaRule) {
+		t.Fatal("member must not end a lead's directive")
+	}
+	if err := setRole(e.st, "person:1", "person:2", RoleMember, false); err != nil {
+		t.Fatal(err)
+	}
+	if !e.human("person:3").CanEndStanding(e.room, annaRule) {
+		t.Fatal("after the demotion the author ranks member, ben may end")
+	}
+
+	// Implizite Org-Owner (robin) beenden jede Vorgabe.
+	if !e.human("person:1").CanEndStanding(e.room, annaRule) {
+		t.Fatal("implicit org owner ends everything")
+	}
+
+	// Maschinenraum: keine Rollen, Raumzugehörigkeit genügt.
+	machine := RoomKeyForMachine("box")
+	machineRule := e.standingBy(t, e.agent("m-one"), machine, "machine rule")
+	if !e.agent("m-two").CanEndStanding(machine, machineRule) {
+		t.Fatal("machine rooms know no ranks")
+	}
+
+	// Unbeanspruchtes Projekt: wie ein Raum ohne Rollen.
+	open := RoomKeyForProject("github.com/dw/unclaimed")
+	registerRoleAgent(t, e.st, "u-one", "person:1", open, "lead")
+	registerRoleAgent(t, e.st, "u-two", "person:3", open, "member")
+	openRule := e.standingBy(t, e.agent("u-one"), open, "open rule")
+	if !e.agent("u-two").CanEndStanding(open, openRule) {
+		t.Fatal("unclaimed projects know no ranks")
+	}
+}

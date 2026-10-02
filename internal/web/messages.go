@@ -86,6 +86,7 @@ var messages = map[string]string{
 	"coord.rooms":                      "Rooms",
 	"coord.conversation":               "Conversation",
 	"coord.context":                    "Room details",
+	"coord.expiry_invalid":             "Invalid expiry: enter a date and time like 2026-09-18 18:30.",
 	"coord.close_panel":                "Close panel",
 	"coord.live.connecting":            "Connecting",
 	"coord.live.off":                   "Live updates off.",
