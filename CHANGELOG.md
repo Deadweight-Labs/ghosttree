@@ -15,12 +15,22 @@ Versioning, with pre-1.0 compatibility rules described in
   needs a channel poll within 90 s; the channel (`ctx channel`) now reports its
   polling through `POST /api/coord/heartbeat`, written at most once per 30 s
   per agent and answered the same whether it wrote or not. `working` comes from
-  tool calls the collector saw in the last 2 minutes, `paused` from a pause
-  with hook evidence, `waiting_peer`/`waiting_user` from an open question or
-  approval the agent sent in that room, `blocked` from an open blocker. Known
-  gaps, printed with the peer list: `ended` is never produced (no session-end
-  signal exists), there is no self-report channel, Bash-only work is invisible,
-  and codex agents have little to observe.
+  a session the collector saw tool calls for in the last 2 minutes (only in
+  project rooms, only for activity of that project, and only for an agent that
+  reported its session id: `ctx claude` now starts Claude Code with
+  `--session-id`, and the agent reports it at registration; there is no suffix
+  matching on agent ids), `paused` only for an effective pause (hook ack and
+  transcript proof; an acknowledged pause stays `unknown`),
+  `waiting_peer`/`waiting_user` from an open question or approval the agent
+  sent in that room, `blocked` from an open blocker. Known gaps, printed with
+  the peer list: `ended` is never produced (no session-end signal exists),
+  there is no self-report channel, Bash-only work is invisible, agents started
+  without the launcher or resumed with `--resume` stay `unknown`, and codex
+  agents have little to observe.
+- `POST /api/activity` and `GET /api/activity/session` now require that the
+  session belongs to the caller's account (the transcript must have been
+  uploaded first), where a bare session id used to pass for everyone; a client
+  `at` more than five minutes from server time is replaced by server time.
 - Agents now see who a human sender is. The messages API has an optional
   `sender_display_name` (the account name, read live, human authors only,
   withheld from guests of a project room while access enforcement is on); the
@@ -33,13 +43,12 @@ Versioning, with pre-1.0 compatibility rules described in
   Hangul fillers removed, only letters, digits, spaces and `. _ - '`, at most
   64 characters). New accounts are compared ignoring case and look-alike forms:
   an invited account whose name collides gets a `-2` style suffix, and
-  `ctx account add` or
-  `ctx person add` refuse it. Guest masking applies to project rooms; in DMs
-  and private groups members see each other as before. Latin and Cyrillic letters
+  `ctx account add` or `ctx person add` refuse it. Latin and Cyrillic letters
   inside one name, and look-alikes made with a legitimate combining mark, are
   still not caught. Names are normalised to a fixpoint (at most two combining
   marks per letter, overlay marks dropped) and the web shows the same
-  normalised string. A guest sees sender ids instead of account names and
+  normalised string. Guest masking applies to project rooms; in DMs and
+  private groups members see each other as before. A guest sees sender ids instead of account names and
   agent owner names in the coordination page, in standing instructions (the sender id) and
   thread authors (hidden), and only their own row in the project role table of the
   organization page. Guests also no longer receive `author_principal_id` (the

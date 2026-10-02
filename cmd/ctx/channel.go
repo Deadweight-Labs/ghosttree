@@ -71,7 +71,7 @@ func cmdChannel(args []string, stdout io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 	err = runChannel(ctx, channelConfig{
-		client: client.New(cfg), self: self, rooms: rooms, branch: hctx.axes.Branch, role: agentRoleFromEnv(),
+		client: client.New(cfg), self: self, rooms: rooms, branch: hctx.axes.Branch, role: agentRoleFromEnv(), session: agentSessionFromEnv(),
 		transport: &mcp.StdioTransport{},
 	})
 	if err != nil {
@@ -135,6 +135,7 @@ type channelConfig struct {
 	rooms     []store.CoordRoom // Projekt- und Maschinenraum
 	branch    string
 	role      string
+	session   string
 	transport mcp.Transport
 }
 
@@ -194,7 +195,7 @@ func runChannel(ctx context.Context, cfg channelConfig) error {
 	opts := claudechannel.ServerOptions()
 	opts.Instructions = channelInstructions + "\n\n" + channelCapabilityText()
 	srv := mcp.NewServer(&mcp.Implementation{Name: channelServerName, Version: version}, opts)
-	cs := &channelTools{client: cfg.client, self: cfg.self, branch: cfg.branch, role: cfg.role, rec: rec}
+	cs := &channelTools{client: cfg.client, self: cfg.self, branch: cfg.branch, role: cfg.role, session: cfg.session, rec: rec}
 	for _, room := range cfg.rooms {
 		switch room.Kind {
 		case store.RoomProject:
@@ -335,6 +336,7 @@ type channelTools struct {
 	self        string
 	branch      string
 	role        string // angeforderte Agentenrolle (ctx claude --role)
+	session     string // vom Launcher vorgegebene Session-UUID, sonst leer
 	rec         *recorder
 	projectRoom string // leer, wenn die Session an kein Repository gebunden ist
 	machineRoom string
@@ -360,7 +362,7 @@ func (c *channelTools) checkLimit() error {
 func (c *channelTools) join(roomKey string) error {
 	_, err := c.client.RegisterCoordAgent(store.CoordAgent{
 		ExternalID: c.self, Provider: "claude", RoomKey: roomKey,
-		DisplayName: c.self, Branch: c.branch, Role: c.role,
+		DisplayName: c.self, Branch: c.branch, Role: c.role, SessionID: c.session,
 	})
 	return err
 }

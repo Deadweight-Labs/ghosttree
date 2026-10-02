@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -545,10 +546,8 @@ func (a *api) sessionActivity(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "session is required")
 		return
 	}
-	if ok, err := a.mayActAs(r, q.Get("session")); err != nil {
-		writeStoreError(w, http.StatusInternalServerError, err)
-		return
-	} else if !ok {
+	// Wie beim Schreiben zählt das Konto der Session, nicht die Agenten-ID.
+	if !a.st.SessionOwnedBy(q.Get("session"), principalOf(r).ID) {
 		writeErr(w, http.StatusForbidden, "that session belongs to someone else")
 		return
 	}
@@ -578,20 +577,38 @@ func (a *api) recordPathActivity(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
-	for _, e := range in {
-		if ok, err := a.mayActAs(r, e.SessionExternalID); err != nil {
-			writeStoreError(w, http.StatusInternalServerError, err)
-			return
-		} else if !ok {
+	// Eine Session hat einen Eigentümer erst, wenn ihr Transkript hochgeladen
+	// ist; der Collector lädt hoch, bevor er Aktivität meldet. Eine bloße
+	// Session-Kennung ist keine registrierte Agenten-ID und bestünde jede
+	// mayActAs-Prüfung, deshalb zählt hier nur das Konto der Session.
+	principal := principalOf(r).ID
+	nowTime := time.Now().UTC()
+	for i := range in {
+		if !a.st.SessionOwnedBy(in[i].SessionExternalID, principal) {
 			writeErr(w, http.StatusForbidden, "cannot record activity for another person's session")
 			return
 		}
+		in[i].At = clampActivityTime(in[i].At, nowTime)
 	}
 	if err := a.st.RecordPathActivity(in); err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
 	writeJSON(w, 200, map[string]int{"recorded": len(in)})
+}
+
+// maxActivitySkew: so weit darf ein vom Client gemeldeter Zeitpunkt von der
+// Serverzeit abweichen. Alles darüber hinaus ist Uhrenfehler oder Fälschung
+// (eine Aktivität "im Jahr 2099" bliebe sonst ewig frisch) und wird durch die
+// Serverzeit ersetzt.
+const maxActivitySkew = 5 * time.Minute
+
+func clampActivityTime(at string, now time.Time) string {
+	t, err := time.Parse(time.RFC3339, at)
+	if err != nil || t.After(now.Add(maxActivitySkew)) || t.Before(now.Add(-maxActivitySkew)) {
+		return now.Format(time.RFC3339)
+	}
+	return t.UTC().Format(time.RFC3339)
 }
 
 type coordDeliveryInput struct {

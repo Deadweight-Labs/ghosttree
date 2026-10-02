@@ -149,7 +149,7 @@ func (s *Server) joinRoom(roomKey string) error {
 	}
 	_, err := s.client.RegisterCoordAgent(store.CoordAgent{
 		ExternalID: s.coordRef(), Provider: provider, RoomKey: roomKey,
-		DisplayName: s.coordRef(), Branch: s.ctxAxes.Branch, Role: s.agentRole,
+		DisplayName: s.coordRef(), Branch: s.ctxAxes.Branch, Role: s.agentRole, SessionID: s.sessionUUID,
 	})
 	return err
 }

@@ -1,8 +1,14 @@
 package store
 
 import (
+	"database/sql"
+	"fmt"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 )
 
 var presenceRef = time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
@@ -104,11 +110,36 @@ func presenceOf(t *testing.T, st *Store, room, agent string) Presence {
 	return Presence{}
 }
 
+// registerWithSession registers an agent that reports its transcript session,
+// and stands in for the collector's upload of that session.
+func registerWithSession(t *testing.T, st *Store, id, principal, session, project string) {
+	t.Helper()
+	account, _ := accountNumericID(principal)
+	if _, err := st.RegisterCoordAgent(CoordAgent{ExternalID: id, Provider: "claude", RoomKey: RoomKeyForProject(roleProject),
+		DisplayName: id, PrincipalID: principal, Role: "member", SessionID: session}); err != nil {
+		t.Fatal(err)
+	}
+	uploadTestSession(t, st, session, project, account)
+}
+
+func uploadTestSession(t *testing.T, st *Store, session, project string, account int64) {
+	t.Helper()
+	if _, err := st.UpsertSession(Session{Harness: "claude", ExternalID: session, Scope: scope.Axes{Project: project}, AccountID: account}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func touch(t *testing.T, st *Store, session string) {
+	t.Helper()
+	if err := st.RecordPathActivity([]PathActivity{{SessionExternalID: session, Tool: "Edit", Path: "a.go",
+		Quality: ActivityIntent, At: time.Now().UTC().Format(time.RFC3339)}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestPeersCarryPresenceFromRealSignals(t *testing.T) {
 	st := controlFixture(t)
 	room := RoomKeyForProject(roleProject)
-	const peer = "claude:h:peer"
-	registerRoleAgent(t, st, peer, "person:4", room, "member")
 
 	// Silence: registered, nothing observed.
 	p := presenceOf(t, st, room, controlAgent)
@@ -116,7 +147,7 @@ func TestPeersCarryPresenceFromRealSignals(t *testing.T) {
 		t.Fatalf("silent agent = %+v", p)
 	}
 
-	// Fresh poll: connected, observed, with a time.
+	// Fresh poll: connected, observed, with a time; and nothing about work.
 	if err := st.TouchCoordAgentPoll(controlAgent); err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +155,6 @@ func TestPeersCarryPresenceFromRealSignals(t *testing.T) {
 	if p.Reachability.Value != ReachConnected || p.Reachability.Origin != OriginObserved || p.Reachability.At == "" {
 		t.Fatalf("polling agent = %+v", p.Reachability)
 	}
-	// A poll alone says nothing about work.
 	if p.WorkState.Value != WorkUnknown {
 		t.Fatalf("poll must not imply work: %+v", p.WorkState)
 	}
@@ -137,32 +167,191 @@ func TestPeersCarryPresenceFromRealSignals(t *testing.T) {
 		t.Fatalf("stale poll = %+v", p.Reachability)
 	}
 
-	// Collector activity under the transcript session id: working, observed.
-	if err := st.RecordPathActivity([]PathActivity{{
-		SessionExternalID: "pausable", Tool: "Edit", Path: "a.go", Quality: ActivityIntent,
-		At: time.Now().UTC().Format(time.RFC3339),
-	}}); err != nil {
-		t.Fatal(err)
+	// Activity with no session id on the agent proves nothing about it.
+	touch(t, st, "pausable")
+	if p = presenceOf(t, st, room, controlAgent); p.WorkState.Value != WorkUnknown {
+		t.Fatalf("an agent without a registered session id must stay unknown: %+v", p.WorkState)
 	}
+
+	// The real mapping: the agent reports its session, the session is its own
+	// account's and belongs to this project.
+	registerWithSession(t, st, controlAgent, "person:4", "uuid-real", roleProject)
+	touch(t, st, "uuid-real")
 	p = presenceOf(t, st, room, controlAgent)
 	if p.WorkState.Value != WorkWorking || p.WorkState.Origin != OriginObserved {
 		t.Fatalf("active agent = %+v", p.WorkState)
 	}
+}
 
-	// A requested pause is not yet a claim; an acknowledged one is.
+func TestActivityIsOnlyMappedByExactSessionIDOfTheSameAccountAndProject(t *testing.T) {
+	st := controlFixture(t)
+	room := RoomKeyForProject(roleProject)
+
+	// A victim works in this project.
+	registerWithSession(t, st, "claude:h:victim", "person:4", "uuid-victim", roleProject)
+	touch(t, st, "uuid-victim")
+	if p := presenceOf(t, st, room, "claude:h:victim"); p.WorkState.Value != WorkWorking {
+		t.Fatalf("setup: %+v", p.WorkState)
+	}
+
+	// Suffix collision: an agent id that merely ENDS on the victim's session id.
+	registerRoleAgent(t, st, "evil:x:uuid-victim", "person:3", room, "member")
+	if p := presenceOf(t, st, room, "evil:x:uuid-victim"); p.WorkState.Value != WorkUnknown {
+		t.Fatalf("suffix collision borrowed foreign activity: %+v", p.WorkState)
+	}
+
+	// Claiming the victim's session id from another account does not help: the
+	// session is not that account's.
+	if _, err := st.RegisterCoordAgent(CoordAgent{ExternalID: "evil:y:1", Provider: "claude", RoomKey: room,
+		DisplayName: "evil", PrincipalID: "person:3", Role: "member", SessionID: "uuid-victim"}); err != nil {
+		t.Fatal(err)
+	}
+	if p := presenceOf(t, st, room, "evil:y:1"); p.WorkState.Value != WorkUnknown {
+		t.Fatalf("claimed foreign session: %+v", p.WorkState)
+	}
+
+	// Activity from another project must not show in this room, even for the
+	// agent's own session: the viewer may not see that project.
+	registerWithSession(t, st, "claude:h:elsewhere", "person:4", "uuid-else", "github.com/other/secret")
+	touch(t, st, "uuid-else")
+	if p := presenceOf(t, st, room, "claude:h:elsewhere"); p.WorkState.Value != WorkUnknown {
+		t.Fatalf("activity from another project leaked into this room: %+v", p.WorkState)
+	}
+}
+
+func TestWorkingIsNotShownInDirectOrGroupRooms(t *testing.T) {
+	st := controlFixture(t)
+	registerWithSession(t, st, "claude:h:a", "person:4", "uuid-a", roleProject)
+	registerWithSession(t, st, "claude:h:b", "person:4", "uuid-b", roleProject)
+	touch(t, st, "uuid-a")
+	group, err := st.CreateCoordGroup(GroupInput{Label: "pair", Creator: "claude:h:a", Members: []string{"claude:h:a", "claude:h:b"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := presenceOf(t, st, group.Key, "claude:h:a"); p.WorkState.Value != WorkUnknown {
+		t.Fatalf("a group room has no project to scope activity: %+v", p.WorkState)
+	}
+}
+
+func TestOnlyAnEffectivePauseShowsAsPaused(t *testing.T) {
+	st := controlFixture(t)
+	room := RoomKeyForProject(roleProject)
 	c, err := st.RequestAgentControl(web("person:1", "robin"), controlAgent, ControlPause, "", RoleViaWeb)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p = presenceOf(t, st, room, controlAgent); p.WorkState.Value == WorkPaused {
+	if p := presenceOf(t, st, room, controlAgent); p.WorkState.Value == WorkPaused {
 		t.Fatal("a requested pause must not show as paused")
 	}
 	if _, err := st.RecordControlEvent("person:4", c.ID, ControlEvent{Kind: ControlEventAck, ToolUseID: "t1", SessionID: "s"}); err != nil {
 		t.Fatal(err)
 	}
-	p = presenceOf(t, st, room, controlAgent)
+	// The hook gave the pause; nothing shows that the model stopped.
+	if p := presenceOf(t, st, room, controlAgent); p.WorkState.Value != WorkUnknown {
+		t.Fatalf("an acknowledged pause is not yet a pause: %+v", p.WorkState)
+	}
+	if _, err := st.RecordControlEvent("person:4", c.ID, ControlEvent{Kind: ControlEventProof, ToolUseID: "t1", SessionID: "s"}); err != nil {
+		t.Fatal(err)
+	}
+	p := presenceOf(t, st, room, controlAgent)
 	if p.WorkState.Value != WorkPaused || p.WorkState.Origin != OriginObserved {
-		t.Fatalf("paused agent = %+v", p.WorkState)
+		t.Fatalf("effective pause = %+v", p.WorkState)
+	}
+}
+
+type countingDB struct {
+	db *sql.DB
+	n  int
+}
+
+func (c *countingDB) Query(q string, a ...any) (*sql.Rows, error) { c.n++; return c.db.Query(q, a...) }
+func (c *countingDB) QueryRow(q string, a ...any) *sql.Row        { c.n++; return c.db.QueryRow(q, a...) }
+
+func TestPresenceQueryCountDoesNotGrowWithThePeers(t *testing.T) {
+	st := controlFixture(t)
+	room := RoomKeyForProject(roleProject)
+	count := func(peers int) int {
+		var agents []presenceAgent
+		for i := 0; i < peers; i++ {
+			id := fmt.Sprintf("claude:h:n%d-%d", peers, i)
+			registerWithSession(t, st, id, "person:4", fmt.Sprintf("uuid-%d-%d", peers, i), roleProject)
+			touch(t, st, fmt.Sprintf("uuid-%d-%d", peers, i))
+			agents = append(agents, presenceAgent{ExternalID: id, PrincipalID: "person:4", SessionID: fmt.Sprintf("uuid-%d-%d", peers, i)})
+		}
+		c := &countingDB{db: st.db}
+		presenceBatch(c, time.Now().UTC(), room, agents)
+		return c.n
+	}
+	small, large := count(2), count(40)
+	if small != large {
+		t.Fatalf("queries grow with the peers: %d for 2, %d for 40", small, large)
+	}
+	if large > 6 {
+		t.Fatalf("too many queries for one peers call: %d", large)
+	}
+}
+
+func TestPresenceWaitQueryUsesIndexes(t *testing.T) {
+	st := controlFixture(t)
+	args := []any{"a", "b", AttentionOpen, AttentionQuestion, AttentionApproval, AttentionBlocker, DestinationRoom, "r", DestinationDiscussion, "r"}
+	rows, err := st.db.Query(`EXPLAIN QUERY PLAN `+presenceWaitsSQL(2), args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		if strings.HasPrefix(detail, "SCAN coord_messages") || strings.HasPrefix(detail, "SCAN coord_attention") || strings.HasPrefix(detail, "SCAN m") || strings.HasPrefix(detail, "SCAN a") {
+			t.Fatalf("full scan in the wait query: %s", detail)
+		}
+	}
+}
+
+func TestOldDatabaseGainsThePresenceColumns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+	st, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registerRoleAgent(t, st, "claude:h:old", "", RoomKeyForProject(roleProject), "member")
+	for _, col := range []string{"last_poll_at", "session_id"} {
+		if _, err := st.db.Exec(`ALTER TABLE coord_agents DROP COLUMN ` + col); err != nil {
+			t.Skipf("sqlite cannot drop %s: %v", col, err)
+		}
+	}
+	st.Close()
+	st, err = Open(path)
+	if err != nil {
+		t.Fatalf("reopen old database: %v", err)
+	}
+	defer st.Close()
+	if err := st.TouchCoordAgentPoll("claude:h:old"); err != nil {
+		t.Fatal(err)
+	}
+	p := presenceOf(t, st, RoomKeyForProject(roleProject), "claude:h:old")
+	if p.Reachability.Value != ReachConnected {
+		t.Fatalf("migrated agent = %+v", p)
+	}
+}
+
+func TestPresenceComparesTimesNotText(t *testing.T) {
+	if !laterThan("2026-10-02T12:30:00Z", "2026-10-02T13:00:00+02:00") {
+		t.Fatal("12:30Z is later than 11:00Z although it sorts lower as text")
+	}
+	if laterThan("garbage", "2026-10-02T12:00:00Z") {
+		t.Fatal("an unreadable time is never later")
+	}
+	st := controlFixture(t)
+	if err := st.RecordPathActivity([]PathActivity{{SessionExternalID: "s", Tool: "Edit", Path: "p", Quality: ActivityIntent, At: "2026-10-02T14:00:00+02:00"}}); err != nil {
+		t.Fatal(err)
+	}
+	var at string
+	if err := st.db.QueryRow(`SELECT at FROM path_activity WHERE session_external_id='s'`).Scan(&at); err != nil || at != "2026-10-02T12:00:00Z" {
+		t.Fatalf("stored at = %q (%v), want UTC with Z", at, err)
 	}
 }
 
@@ -294,5 +483,21 @@ func TestHeartbeatCreatesNoEvent(t *testing.T) {
 	}
 	if count() != before {
 		t.Fatal("heartbeat must not emit coordination events")
+	}
+}
+
+func TestPollDueOnlyAfterTheInterval(t *testing.T) {
+	st := controlFixture(t)
+	if !st.CoordAgentPollDue(controlAgent) {
+		t.Fatal("an agent that never polled is due")
+	}
+	if err := st.TouchCoordAgentPoll(controlAgent); err != nil {
+		t.Fatal(err)
+	}
+	if st.CoordAgentPollDue(controlAgent) {
+		t.Fatal("inside the interval nothing is due, so no write is queued")
+	}
+	if st.CoordAgentPollDue("claude:h:unknown") {
+		t.Fatal("an unregistered agent is never due")
 	}
 }

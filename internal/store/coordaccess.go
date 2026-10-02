@@ -1023,6 +1023,9 @@ func (a CoordAccess) Heartbeat() error {
 	if err != nil {
 		return err
 	}
+	if !a.Store.CoordAgentPollDue(actor) {
+		return nil
+	}
 	return a.Store.TouchCoordAgentPoll(actor)
 }
 

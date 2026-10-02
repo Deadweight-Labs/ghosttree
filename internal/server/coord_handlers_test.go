@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
@@ -727,5 +728,65 @@ func TestInjectedLookupIsBoundedAndValidated(t *testing.T) {
 		if got := status(ids); got != http.StatusBadRequest {
 			t.Errorf("%s: want 400, got %d", name, got)
 		}
+	}
+}
+
+// A bare session UUID is never a registered agent, so the agent-ownership check
+// passes for everyone. Activity is therefore bound to the account that owns
+// the uploaded session, and its time is the server's (REQ-360 review H1).
+func TestActivityIsBoundToTheSessionsAccountAndItsTimeIsClamped(t *testing.T) {
+	st, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	robin, _ := st.AddPerson("robin")
+	anna, _ := st.AddPerson("anna")
+	srv := httptest.NewServer(New(st))
+	t.Cleanup(srv.Close)
+	// Robin's collector has uploaded this transcript (account 0 is the owner).
+	if _, err := st.UpsertSession(store.Session{Harness: "claude", ExternalID: "uuid-robin"}); err != nil {
+		t.Fatal(err)
+	}
+	post := func(token, session, at string) int {
+		res := req(t, "POST", srv.URL+"/api/activity", token, []store.PathActivity{
+			{SessionExternalID: session, Tool: "Edit", Path: "a.go", Quality: store.ActivityIntent, At: at}})
+		res.Body.Close()
+		return res.StatusCode
+	}
+	future := "2099-01-01T00:00:00Z"
+	if code := post(anna, "uuid-robin", future); code != http.StatusForbidden {
+		t.Fatalf("anna posting for robin's session: want 403, got %d", code)
+	}
+	if code := post(robin, "uuid-never-uploaded", future); code != http.StatusForbidden {
+		t.Fatalf("a session nobody uploaded has no owner: want 403, got %d", code)
+	}
+	if code := post(robin, "uuid-robin", future); code != http.StatusOK {
+		t.Fatalf("robin posting for his own session: got %d", code)
+	}
+	got, err := st.SessionPathActivity("uuid-robin", "2000-01-01T00:00:00Z", 10)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("stored activity = %+v err=%v", got, err)
+	}
+	at, _ := time.Parse(time.RFC3339, got[0].At)
+	if d := time.Since(at); d < -time.Minute || d > time.Minute {
+		t.Fatalf("a future client time must be replaced by server time, stored %s", got[0].At)
+	}
+	// A time within five minutes is kept (normalised to UTC).
+	near := time.Now().Add(-2 * time.Minute).UTC().Format(time.RFC3339)
+	post(robin, "uuid-robin", near)
+	rows, _ := st.SessionPathActivity("uuid-robin", "2000-01-01T00:00:00Z", 10)
+	found := false
+	for _, r := range rows {
+		found = found || r.At == near
+	}
+	if !found {
+		t.Fatalf("a time within the skew window must be kept: %+v", rows)
+	}
+	// Reading is bound the same way.
+	res := req(t, "GET", srv.URL+"/api/activity/session?session=uuid-robin", anna, nil)
+	res.Body.Close()
+	if res.StatusCode != http.StatusForbidden {
+		t.Fatalf("anna reading robin's session activity: got %d", res.StatusCode)
 	}
 }

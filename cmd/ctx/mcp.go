@@ -78,6 +78,19 @@ func agentRoleFromEnv() string {
 	return role
 }
 
+// agentSessionFromEnv ist die vom Launcher vorgegebene Session-UUID. Wie die
+// Rolle gilt sie nur zusammen mit einer akzeptierten Launcher-Identität.
+func agentSessionFromEnv() string {
+	if coordAgentOverride() == "" {
+		return ""
+	}
+	id := strings.TrimSpace(os.Getenv(sessionIDEnv))
+	if !store.ValidExternalID(id) {
+		return ""
+	}
+	return id
+}
+
 type harnessContext struct {
 	axes       scope.Axes
 	activation activation.Context
@@ -163,6 +176,7 @@ func cmdMCP(args []string, stdout io.Writer) int {
 	srv.SetSessionRef(currentSessionRef())
 	srv.SetCoordRef(coordAgentOverride())
 	srv.SetAgentRole(agentRoleFromEnv())
+	srv.SetSessionID(agentSessionFromEnv())
 	srv.SetRepoRoot(hctx.root)
 	srv.SetAfterSnapshot(func(ctx context.Context, project string) error {
 		return snapshotmirror.Rebuild(ctx, mcpSnapshotLister{client: c}, hctx.root, project)

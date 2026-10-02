@@ -500,8 +500,9 @@ func TestASubagentIsAddressableButItsClaimIsMarkedUnverified(t *testing.T) {
 // AC-1 und AC-2 von REQ-348 über den ganzen Weg: eine Session verbucht
 // Aktivität, eine andere fragt danach — ohne ein Transkript zu lesen.
 func TestAnotherSessionsTouchesAreQueryable(t *testing.T) {
-	a, b, _ := twoSessions(t)
+	a, b, st := twoSessions(t)
 	ctx := context.Background()
+	uploadSession(t, st, a.sessionRef)
 
 	if err := a.client.RecordPathActivity([]store.PathActivity{
 		{Project: a.ctxAxes.Project, SessionExternalID: a.sessionRef,
@@ -542,7 +543,8 @@ func TestNoObservedActivityIsNotACleanBillOfHealth(t *testing.T) {
 
 // Ein Agent fragt nicht nach sich selbst.
 func TestTouchedExcludesTheAskingSession(t *testing.T) {
-	a, _, _ := twoSessions(t)
+	a, _, st := twoSessions(t)
+	uploadSession(t, st, a.sessionRef)
 	if err := a.client.RecordPathActivity([]store.PathActivity{
 		{Project: a.ctxAxes.Project, SessionExternalID: a.sessionRef,
 			Checkout: "/repo", Tool: "Edit", Path: "eigene.go",
@@ -826,5 +828,14 @@ func TestPeersPrintReachabilityAndWorkSeparatelyWithOrigin(t *testing.T) {
 	// Another session may not claim the heartbeat of this one.
 	if err := b.client.CoordHeartbeat("sess-not-mine"); err == nil {
 		t.Fatal("heartbeat for an agent that is not registered must be refused")
+	}
+}
+
+// uploadSession stands in for the collector's transcript upload: activity is
+// only accepted for a session that exists and belongs to the caller's account.
+func uploadSession(t *testing.T, st *store.Store, ref string) {
+	t.Helper()
+	if _, err := st.UpsertSession(store.Session{Harness: "claude", ExternalID: ref}); err != nil {
+		t.Fatal(err)
 	}
 }

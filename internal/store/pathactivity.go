@@ -73,9 +73,11 @@ func (s *Store) RecordPathActivity(events []PathActivity) error {
 	}
 	defer tx.Rollback()
 	for _, e := range events {
-		at := e.At
-		if at == "" {
-			at = now()
+		// Immer als UTC mit Z gespeichert: Vergleiche und Fenster laufen über
+		// Text, und ein Wert mit Offset würde sie verfälschen.
+		at := now()
+		if t, err := time.Parse(time.RFC3339, e.At); err == nil {
+			at = t.UTC().Format(time.RFC3339)
 		}
 		writes := 0
 		if e.Writes {

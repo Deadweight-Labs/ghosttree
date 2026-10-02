@@ -65,3 +65,21 @@ func TestPollerSendsNoHeartbeatWhileNotReady(t *testing.T) {
 		t.Fatal("a channel that cannot receive must not report itself as polling")
 	}
 }
+
+type unreadable struct{ *beatSource }
+
+func (unreadable) Inbox(string, store.CoordRoom, int64, int) ([]store.CoordMessage, error) {
+	return nil, errors.New("forbidden")
+}
+
+// A server that lists rooms but refuses every read is not reachable: the
+// heartbeat is sent only after at least one room was actually read.
+func TestPollerHeartbeatNeedsASuccessfulRoomRead(t *testing.T) {
+	f := newFakeServer(store.CoordRoom{Key: "project:x", Kind: store.RoomProject})
+	bs := &beatSource{fakeServer: f}
+	p := &Poller{Self: "me", Source: unreadable{bs}, Notifier: &fakeNotifier{f: f}, Budget: openBudget{}, Now: func() time.Time { return testNow }}
+	_, _ = p.Poll(context.Background())
+	if bs.beats != 0 {
+		t.Fatal("a failed room read must not count as polling")
+	}
+}

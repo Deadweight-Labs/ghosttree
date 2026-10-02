@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -48,6 +49,7 @@ var PresenceGaps = []string{
 	"no self-report channel for waiting_user: it is only derived from an open question or approval addressed to a person",
 	"working is seen only through tool calls that touch a path (collector transcript scan); Bash-only work and model streaming are invisible",
 	"codex agents have no pause path and no matching hook signal; their work state is mostly unknown",
+	"working needs a session id registered by the agent (ctx claude); agents without one stay unknown, and so does every direct or group room, where no project scopes the activity",
 }
 
 // PresenceField ist eine Angabe samt Beleg.
@@ -127,15 +129,15 @@ func DerivePresence(ref time.Time, in PresenceInput) Presence {
 		w := &in.Waits[i]
 		switch {
 		case w.Reason == AttentionBlocker:
-			if blocker == nil || w.At > blocker.At {
+			if blocker == nil || laterThan(w.At, blocker.At) {
 				blocker = w
 			}
 		case w.Kind == "user":
-			if user == nil || w.At > user.At {
+			if user == nil || laterThan(w.At, user.At) {
 				user = w
 			}
 		case w.Kind == "peer":
-			if peer == nil || w.At > peer.At {
+			if peer == nil || laterThan(w.At, peer.At) {
 				peer = w
 			}
 		}
@@ -174,7 +176,7 @@ func (p Presence) Describe() string {
 	return "reachability " + one(p.Reachability) + ", work " + one(p.WorkState)
 }
 
-func ensureCoordAgentLastPoll(db *sql.DB) error {
+func ensureCoordAgentColumn(db *sql.DB, name, ddl string) error {
 	rows, err := db.Query(`PRAGMA table_info(coord_agents)`)
 	if err != nil {
 		return err
@@ -182,12 +184,12 @@ func ensureCoordAgentLastPoll(db *sql.DB) error {
 	defer rows.Close()
 	for rows.Next() {
 		var cid, notNull, pk int
-		var name, typ string
+		var col, typ string
 		var defaultValue sql.NullString
-		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+		if err := rows.Scan(&cid, &col, &typ, &notNull, &defaultValue, &pk); err != nil {
 			return err
 		}
-		if name == "last_poll_at" {
+		if col == name {
 			return nil
 		}
 	}
@@ -195,15 +197,46 @@ func ensureCoordAgentLastPoll(db *sql.DB) error {
 		return err
 	}
 	rows.Close()
-	_, err = db.Exec(`ALTER TABLE coord_agents ADD COLUMN last_poll_at TEXT NOT NULL DEFAULT ''`)
+	_, err = db.Exec(`ALTER TABLE coord_agents ADD COLUMN ` + name + ` ` + ddl)
 	return err
 }
 
-// TouchCoordAgentPoll stempelt den Abruf des Channels. Der Schreibvorgang
-// geschieht höchstens einmal je HeartbeatInterval und Agent: das Update trägt
-// die Drosselung selbst, ein Aufrufer, der öfter klopft, ändert nichts. Kein
-// Ereignis, keine Sequenznummer: die Spalte hat keinen Trigger, und der Aufrufer
-// erfährt nicht, ob geschrieben wurde (kein Orakel, Pitfall #2447).
+// ensureCoordAgentPresence ergänzt auf einer alten Datenbank die Spalten für
+// den Abruf-Zeitpunkt (last_poll_at) und die vom Agenten gemeldete
+// Session-Kennung (session_id), und den Index, der die Wartepunkt-Abfrage trägt.
+func ensureCoordAgentPresence(db *sql.DB) error {
+	if err := ensureCoordAgentColumn(db, "last_poll_at", `TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	if err := ensureCoordAgentColumn(db, "session_id", `TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	_, err := db.Exec(`CREATE INDEX IF NOT EXISTS coord_messages_sender ON coord_messages(sender_external_id,id);
+		CREATE INDEX IF NOT EXISTS coord_attention_message ON coord_attention(message_id,state)`)
+	return err
+}
+
+// CoordAgentPollDue sagt, ob der letzte Abruf-Stempel älter als das
+// HeartbeatInterval ist. Der Aufrufer fragt zuerst hier und schreibt nur bei
+// true: so läuft ein Takt innerhalb des Intervalls gar nicht erst in die
+// Schreibwarteschlange. Die Antwort geht nie an den Client zurück (kein
+// Orakel, Pitfall #2447).
+func (s *Store) CoordAgentPollDue(externalID string) bool {
+	if s.reader != nil {
+		return s.reader.CoordAgentPollDue(externalID)
+	}
+	var last string
+	if err := s.db.QueryRow(`SELECT last_poll_at FROM coord_agents WHERE external_id=?`, externalID).Scan(&last); err != nil {
+		return false
+	}
+	t, ok := parseAt(last)
+	return !ok || time.Now().UTC().Sub(t) >= HeartbeatInterval
+}
+
+// TouchCoordAgentPoll stempelt den Abruf des Channels. Das Update prüft die
+// Frist selbst: wer öfter klopft als alle HeartbeatInterval, ändert nichts, auch
+// wenn er CoordAgentPollDue übergeht. Kein Ereignis, keine Sequenznummer: die
+// Spalte hat keinen Trigger.
 func (s *Store) TouchCoordAgentPoll(externalID string) error {
 	if s.writer != nil {
 		return queueWrite(s, []any{externalID}, func(d *Store, p []any) error {
@@ -216,67 +249,232 @@ func (s *Store) TouchCoordAgentPoll(externalID string) error {
 	return err
 }
 
-// presenceFor sammelt die Belege eines Agenten im Raum und leitet ab.
-func presenceFor(db *sql.DB, ref time.Time, roomKey, externalID, lastPoll string) Presence {
-	in := PresenceInput{LastPollAt: lastPoll}
-	// Beobachtete Werkzeugaktivität: der Collector schreibt die Session-ID des
-	// Transkripts, die Agenten-ID endet auf dieselbe Kennung (claude:<host>:<uuid>).
-	session := externalID
-	if i := strings.LastIndex(externalID, ":"); i >= 0 {
-		session = externalID[i+1:]
+// SessionOwnedBy sagt, ob eine Transkript-Session zu diesem Konto gehört. Nur
+// eine hochgeladene Session hat einen Eigentümer; Altbestand ohne Konto gehört
+// dem Instanz-Owner.
+func (s *Store) SessionOwnedBy(sessionExternalID, principalID string) bool {
+	if s.reader != nil {
+		return s.reader.SessionOwnedBy(sessionExternalID, principalID)
 	}
-	cutoff := ref.Add(-ActivityFreshTTL).Format(time.RFC3339)
-	var at sql.NullString
-	if db.QueryRow(`SELECT MAX(at) FROM path_activity WHERE session_external_id IN (?,?) AND at>=?`,
-		externalID, session, cutoff).Scan(&at) == nil && at.Valid {
-		in.LastActivityAt = at.String
+	account, ok := accountNumericID(principalID)
+	if !ok || sessionExternalID == "" {
+		return false
 	}
-	// Pause: nur ein belegter Vorgang zählt, kein angeforderter.
-	if c, ok, err := activeControlTx(db, externalID); err == nil && ok && c.Action == ControlPause {
-		switch c.State {
-		case ControlEffective:
-			in.PauseAt = c.EffectiveAt
-		case ControlAcknowledged:
-			in.PauseAt = c.AckedAt
+	owner := instanceOwnerID(s.db)
+	// Alle Zeilen dieser Kennung müssen dem Konto gehören: dieselbe Kennung bei
+	// einem anderen Harness unter fremdem Konto ist keine eigene Session.
+	var total, mine int
+	err := s.db.QueryRow(`SELECT COUNT(*),
+			COALESCE(SUM(CASE WHEN (CASE WHEN account_id=0 THEN ? ELSE account_id END)=? THEN 1 ELSE 0 END),0)
+		FROM sessions WHERE external_id=?`, owner, account, sessionExternalID).Scan(&total, &mine)
+	return err == nil && total > 0 && mine == total
+}
+
+// presenceDB ist, was die Ableitung von der Datenbank braucht; ein Interface,
+// damit ein Test die Zahl der Abfragen zählen kann.
+type presenceDB interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+	QueryRow(query string, args ...any) *sql.Row
+}
+
+// presenceAgent sind die Angaben, aus denen die Belege gesucht werden.
+type presenceAgent struct {
+	ExternalID, PrincipalID, SessionID, LastPoll string
+}
+
+func placeholders(n int) string {
+	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
+}
+
+func idArgs(agents []presenceAgent, pick func(presenceAgent) string) []any {
+	args := make([]any, 0, len(agents))
+	for _, a := range agents {
+		args = append(args, pick(a))
+	}
+	return args
+}
+
+// presenceBatch leitet die Presence aller Agenten eines Raums mit einer festen
+// Zahl von Abfragen ab (höchstens fünf), unabhängig von der Teilnehmerzahl.
+//
+// Zuordnung der Aktivität: nur über die vom Agenten gemeldete session_id, mit
+// exakter Gleichheit, und nur wenn die Session demselben Konto gehört wie der
+// Agent. Kein Suffix-Vergleich: eine Agenten-ID ist frei wählbar. Aktivität
+// zählt nur im Projektraum und nur aus diesem Projekt, damit niemand über den
+// Arbeitszustand erfährt, was in Projekten läuft, die er nicht sehen darf.
+func presenceBatch(db presenceDB, ref time.Time, roomKey string, agents []presenceAgent) map[string]Presence {
+	out := make(map[string]Presence, len(agents))
+	if len(agents) == 0 {
+		return out
+	}
+	inputs := make(map[string]*PresenceInput, len(agents))
+	for _, a := range agents {
+		inputs[a.ExternalID] = &PresenceInput{LastPollAt: a.LastPoll}
+	}
+	refText := ref.Format(time.RFC3339)
+	ids := idArgs(agents, func(a presenceAgent) string { return a.ExternalID })
+
+	// 1. Beobachtete Werkzeugaktivität (nur Projektraum, nur Agenten mit session_id).
+	if remote, ok := strings.CutPrefix(roomKey, "project:"); ok {
+		var withSession []presenceAgent
+		for _, a := range agents {
+			if a.SessionID != "" {
+				withSession = append(withSession, a)
+			}
+		}
+		if len(withSession) > 0 {
+			owner := instanceOwnerID(db)
+			args := append(idArgs(withSession, func(a presenceAgent) string { return a.SessionID }), remote, ref.Add(-ActivityFreshTTL).Format(time.RFC3339))
+			rows, err := db.Query(`SELECT pa.session_external_id,
+					CASE WHEN s.account_id=0 THEN `+strconv.FormatInt(owner, 10)+` ELSE s.account_id END, MAX(pa.at)
+				FROM path_activity pa JOIN sessions s ON s.external_id=pa.session_external_id
+				WHERE pa.session_external_id IN (`+placeholders(len(withSession))+`) AND s.project=? AND pa.at>=?
+				GROUP BY pa.session_external_id, s.account_id`, args...)
+			if err == nil {
+				type seen struct {
+					account int64
+					at      string
+				}
+				bySession := map[string][]seen{}
+				for rows.Next() {
+					var sid, at string
+					var account int64
+					if rows.Scan(&sid, &account, &at) == nil {
+						bySession[sid] = append(bySession[sid], seen{account, at})
+					}
+				}
+				rows.Close()
+				for _, a := range withSession {
+					account, ok := accountNumericID(a.PrincipalID)
+					if !ok {
+						continue
+					}
+					for _, sn := range bySession[a.SessionID] {
+						if sn.account == account && laterThan(sn.at, inputs[a.ExternalID].LastActivityAt) {
+							inputs[a.ExternalID].LastActivityAt = sn.at
+						}
+					}
+				}
+			}
 		}
 	}
-	// Offene Wartepunkte, nur aus diesem Raum: eine Frage im privaten Gespräch
-	// wäre hier sonst für alle Mitglieder ablesbar.
-	rows, err := db.Query(`SELECT a.recipient_principal_id,a.reason,a.created_at,COALESCE(m.expires_at,'')
-		FROM coord_attention a JOIN coord_messages m ON m.id=a.message_id
-		WHERE m.sender_external_id=? AND a.state=? AND a.reason IN (?,?,?)
-		  AND a.recipient_principal_id<>?
-		  AND ((m.destination_kind=? AND m.destination_id=?)
-		    OR (m.destination_kind=? AND m.destination_id IN
-		         (SELECT CAST(thread_id AS TEXT) FROM thread_homes WHERE room_key=?)))
-		ORDER BY a.created_at DESC, a.id DESC LIMIT 50`,
-		externalID, AttentionOpen, AttentionQuestion, AttentionApproval, AttentionBlocker, externalID,
-		DestinationRoom, roomKey, DestinationDiscussion, roomKey)
+
+	// 2. Pausen: nur ein WIRKSAMER Vorgang (Hook-Ack und Transkript-Beleg zum
+	// selben Aufruf) zählt. Angefordert oder nur quittiert ist keine Pause.
+	rows, err := db.Query(`SELECT id,agent,action,resumed_at FROM agent_controls
+		WHERE agent IN (`+placeholders(len(ids))+`) AND resumed_at='' AND action=? ORDER BY id`, append(append([]any{}, ids...), ControlPause)...)
 	if err == nil {
-		type rec struct{ recipient, reason, at, exp string }
-		var recs []rec
+		controls := map[int64]*AgentControl{}
+		var controlIDs []any
 		for rows.Next() {
-			var r rec
-			if rows.Scan(&r.recipient, &r.reason, &r.at, &r.exp) == nil {
-				recs = append(recs, r)
+			c := &AgentControl{}
+			if rows.Scan(&c.ID, &c.Agent, &c.Action, &c.ResumedAt) == nil {
+				controls[c.ID] = c
+				controlIDs = append(controlIDs, c.ID)
 			}
 		}
 		rows.Close()
-		for _, r := range recs {
-			if expiredAt(r.exp, ref.Format(time.RFC3339)) {
-				continue
+		if len(controlIDs) > 0 {
+			ev, err := db.Query(`SELECT control_id,kind,tool_use_id,recorded_at FROM agent_control_events
+				WHERE control_id IN (`+placeholders(len(controlIDs))+`) ORDER BY id`, controlIDs...)
+			if err == nil {
+				for ev.Next() {
+					var e ControlEvent
+					if ev.Scan(&e.ControlID, &e.Kind, &e.ToolUseID, &e.RecordedAt) == nil {
+						if c := controls[e.ControlID]; c != nil {
+							c.Events = append(c.Events, e)
+						}
+					}
+				}
+				ev.Close()
 			}
+			for _, c := range controls {
+				c.deriveState()
+				// Mehrere offene Vorgänge desselben Agenten: der späteste Beleg gilt.
+				if c.State == ControlEffective && laterThan(c.EffectiveAt, inputs[c.Agent].PauseAt) {
+					inputs[c.Agent].PauseAt = c.EffectiveAt
+				}
+			}
+		}
+	}
+
+	// 3. Offene Wartepunkte, nur aus diesem Raum: eine Frage im privaten
+	// Gespräch wäre hier sonst für alle Mitglieder ablesbar.
+	wr, err := db.Query(presenceWaitsSQL(len(ids)),
+		append(append([]any{}, ids...), AttentionOpen, AttentionQuestion, AttentionApproval, AttentionBlocker,
+			DestinationRoom, roomKey, DestinationDiscussion, roomKey)...)
+	if err == nil {
+		type rec struct{ sender, recipient, reason, at string }
+		var recs []rec
+		recipients := map[string]bool{}
+		for wr.Next() {
+			var r rec
+			var exp string
+			if wr.Scan(&r.sender, &r.recipient, &r.reason, &r.at, &exp) == nil && !expiredAt(exp, refText) {
+				recs = append(recs, r)
+				if _, perr := parsePersonPrincipalID(r.recipient); perr != nil {
+					recipients[r.recipient] = true
+				}
+			}
+		}
+		wr.Close()
+		// 4. Welche Empfänger sind Agenten? Eine Abfrage für alle.
+		isAgent := map[string]bool{}
+		if len(recipients) > 0 {
+			list := make([]any, 0, len(recipients))
+			for r := range recipients {
+				list = append(list, r)
+			}
+			if ar, err := db.Query(`SELECT external_id FROM coord_agents WHERE external_id IN (`+placeholders(len(list))+`)`, list...); err == nil {
+				for ar.Next() {
+					var id string
+					if ar.Scan(&id) == nil {
+						isAgent[id] = true
+					}
+				}
+				ar.Close()
+			}
+		}
+		for _, r := range recs {
 			w := PresenceWait{Reason: r.reason, At: r.at}
 			if _, perr := parsePersonPrincipalID(r.recipient); perr == nil {
 				w.Kind = "user"
-			} else {
-				var one int
-				if db.QueryRow(`SELECT 1 FROM coord_agents WHERE external_id=?`, r.recipient).Scan(&one) == nil {
-					w.Kind = "peer"
-				}
+			} else if isAgent[r.recipient] {
+				w.Kind = "peer"
 			}
-			in.Waits = append(in.Waits, w)
+			if in := inputs[r.sender]; in != nil {
+				in.Waits = append(in.Waits, w)
+			}
 		}
 	}
-	return DerivePresence(ref, in)
+
+	for id, in := range inputs {
+		out[id] = DerivePresence(ref, *in)
+	}
+	return out
+}
+
+// presenceWaitsSQL ist die Wartepunkt-Abfrage für n Absender. Eigene Funktion,
+// damit ein Test dieselbe Abfrage mit EXPLAIN prüft, die sie auch ausführt.
+func presenceWaitsSQL(n int) string {
+	return `SELECT m.sender_external_id,a.recipient_principal_id,a.reason,a.created_at,COALESCE(m.expires_at,'')
+		FROM coord_messages m JOIN coord_attention a ON a.message_id=m.id
+		WHERE m.sender_external_id IN (` + placeholders(n) + `) AND a.state=? AND a.reason IN (?,?,?)
+		  AND a.recipient_principal_id<>m.sender_external_id
+		  AND ((m.destination_kind=? AND m.destination_id=?)
+		    OR (m.destination_kind=? AND m.destination_id IN
+		         (SELECT CAST(thread_id AS TEXT) FROM thread_homes WHERE room_key=?)))
+		ORDER BY a.created_at DESC, a.id DESC LIMIT 2000`
+}
+
+// laterThan vergleicht Zeitpunkte als Zeiten, nicht als Text: Zeitzonen und
+// Brüche würden sonst die Reihenfolge verfälschen. Ein nicht lesbarer Wert ist
+// nie später.
+func laterThan(a, b string) bool {
+	ta, ok := parseAt(a)
+	if !ok {
+		return false
+	}
+	tb, ok := parseAt(b)
+	return !ok || ta.After(tb)
 }

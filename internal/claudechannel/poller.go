@@ -76,6 +76,7 @@ type Poller struct {
 	pos map[string]int64 // Abrufstand je Raum, unabhängig vom gemeinsamen Cursor
 
 	lastBeat time.Time
+	readOK   bool // mindestens ein Raum wurde in diesem Durchlauf gelesen
 }
 
 // Heartbeater ist die optionale Seite einer Source, die den Abruf auf dem
@@ -163,8 +164,8 @@ func (p *Poller) Poll(ctx context.Context) (active bool, err error) {
 	if err != nil {
 		return false, err
 	}
-	p.beat()
 	var firstErr error
+	p.readOK = false
 	for _, room := range rooms {
 		if ctx.Err() != nil {
 			return active, ctx.Err()
@@ -174,6 +175,12 @@ func (p *Poller) Poll(ctx context.Context) (active bool, err error) {
 		if err != nil && firstErr == nil {
 			firstErr = err
 		}
+	}
+	// "Verbunden" heißt: dieser Durchlauf hat mindestens einen Raum wirklich
+	// gelesen. Ein Server, der Räume nennt und jeden Abruf verweigert, ist
+	// nicht erreichbar.
+	if p.readOK {
+		p.beat()
 	}
 	return active, firstErr
 }
@@ -194,6 +201,7 @@ func (p *Poller) pollRoom(ctx context.Context, room store.CoordRoom) (bool, erro
 	if err != nil {
 		return false, err
 	}
+	p.readOK = true
 	progress := false
 	// contiguous: bis hierher ist alles zugestellt oder eigene Post. Nur dann
 	// darf der gemeinsame Cursor vorrücken, sonst verschwänden ungeweckte
