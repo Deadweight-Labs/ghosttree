@@ -99,7 +99,7 @@ func cmdAccountAdd(args []string, stdout io.Writer) int {
 		return 1
 	}
 	fmt.Fprintf(stdout, "account %s\t%s\n", a.ID, a.Name)
-	fmt.Fprintln(stdout, "no token yet: ctx account token create "+a.Name)
+	fmt.Fprintln(stdout, "no token yet: ctx account token create "+shellQuote(a.Name))
 	return 0
 }
 
@@ -246,4 +246,10 @@ func cmdAccountLoginLink(args []string, stdout io.Writer) int {
 	fmt.Fprintf(stdout, "%s/ui/login/code?code=%s\n", strings.TrimRight(*base, "/"), code)
 	fmt.Fprintf(stdout, "valid %s, single use\n", ttl)
 	return 0
+}
+
+// shellQuote setzt ein Argument in Hochkommas, damit ein Name mit Leerzeichen
+// oder Anführungszeichen im ausgegebenen Hinweis als eines gilt.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

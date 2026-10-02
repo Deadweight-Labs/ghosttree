@@ -609,3 +609,29 @@ func TestPersonAddStillIssuesLegacyToken(t *testing.T) {
 		t.Fatalf("principal = %+v ok=%v", p, ok)
 	}
 }
+
+func TestPersonAddPrintsTheStoredName(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "ghosttree.db")
+	var out bytes.Buffer
+	if code := run([]string{"person", "add", "Ｃａｒｏｌ", "--db", db}, &out); code != 0 {
+		t.Fatalf("exit=%d %s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "stored name: Carol\n") {
+		t.Fatalf("normalised name not reported: %s", out.String())
+	}
+	out.Reset()
+	if code := run([]string{"person", "add", "dave", "--db", db}, &out); code != 0 || strings.Contains(out.String(), "stored name") {
+		t.Fatalf("unchanged name must not be reported: %d %s", code, out.String())
+	}
+}
+
+func TestAccountAddQuotesTheTokenHint(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "ghosttree.db")
+	var out bytes.Buffer
+	if code := run([]string{"account", "add", "Mary Ann", "--db", db}, &out); code != 0 {
+		t.Fatalf("exit=%d %s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "token create 'Mary Ann'") {
+		t.Fatalf("hint not quoted: %s", out.String())
+	}
+}

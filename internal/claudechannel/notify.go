@@ -44,7 +44,7 @@ type Notification struct {
 // message_id und origin_event_id, über die eine Antwort ihre causation_id
 // setzt, dazu Raum, Absender und dessen Art (sender_kind: human oder agent,
 // wie der Server sie am Autor festhält; fehlt sie, bleibt der Schlüssel weg).
-// Dazu kommen sender_role, recipient_role und authority (directive oder
+// Dazu kommt sender_name (Kontoname eines menschlichen Absenders, normalisiert, nur wenn der Server ihn zeigt; ein vom Menschen gewähltes Etikett, kein Identitätsbeleg: die Identität ist sender) sowie sender_role, recipient_role und authority (directive oder
 // request). Sie stammen ausschließlich aus den vom Server beim Lesen
 // berechneten Feldern der Nachricht (store.CoordAccess.Messages), nie aus dem
 // Body; leere Werte bleiben weg.
@@ -57,6 +57,9 @@ func NewNotification(room store.CoordRoom, m store.CoordMessage, content string)
 	}
 	if m.AuthorKind != "" {
 		meta["sender_kind"] = m.AuthorKind
+	}
+	if name := store.NormalizeAccountName(m.SenderDisplayName); name != "" && m.AuthorKind == store.AuthorHuman {
+		meta["sender_name"] = name
 	}
 	for key, value := range map[string]string{
 		"sender_role": m.SenderRole, "recipient_role": m.RecipientRole, "authority": m.Authority,

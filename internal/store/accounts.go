@@ -184,7 +184,7 @@ func (s *Store) AddAccount(name, email string, admin bool) (Account, error) {
 			return d.AddAccount(p[0].(string), p[1].(string), p[2].(bool))
 		})
 	}
-	name = strings.TrimSpace(name)
+	name = NormalizeAccountName(name)
 	if name == "" {
 		return Account{}, fmt.Errorf("account name is required")
 	}
@@ -192,8 +192,21 @@ func (s *Store) AddAccount(name, email string, admin bool) (Account, error) {
 	if admin {
 		flag = 1
 	}
-	if _, err := s.db.Exec(`INSERT INTO persons(name, token_hash, created_at, email, is_admin) VALUES(?,?,?,?,?)`,
+	tx, err := s.db.Begin()
+	if err != nil {
+		return Account{}, err
+	}
+	defer tx.Rollback()
+	if taken, err := accountNameTakenTx(tx, name); err != nil {
+		return Account{}, err
+	} else if taken {
+		return Account{}, ErrAccountNameTaken
+	}
+	if _, err := tx.Exec(`INSERT INTO persons(name, token_hash, created_at, email, is_admin) VALUES(?,?,?,?,?)`,
 		name, "", now(), strings.TrimSpace(email), flag); err != nil {
+		return Account{}, err
+	}
+	if err := tx.Commit(); err != nil {
 		return Account{}, err
 	}
 	return s.AccountByName(name)
@@ -566,7 +579,7 @@ func createBootstrapAccount(tx *sql.Tx, name, email string) (int64, error) {
 	if persons > 0 {
 		return 0, ErrCodeInvalid
 	}
-	name = strings.TrimSpace(name)
+	name = NormalizeAccountName(name)
 	if name == "" {
 		name = "admin"
 	}
