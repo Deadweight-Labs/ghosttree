@@ -28,7 +28,9 @@ Versioning, with pre-1.0 compatibility rules described in
   the owners, themselves and the accounts that share a project with them (a
   guest or a member without a project role: only owners and themselves), without
   other accounts' ids, in the member list (UI and API). Without enforcement
-  every member sees everyone, as before, and a guest link is not valid. The
+  every member sees everyone, as before, and a guest link is not valid. A project
+  lead (and any owner, or anyone without enforcement) still sees all org members
+  in the role forms of their project and can promote role-less members. The
   invitation list shows project and role. `/ui/orgs/accept` hands project codes
   over to the join page. At startup the server warns when
   `GHOSTTREE_PUBLIC_URL` is set but `GHOSTTREE_TRUSTED_PROXIES` is empty.

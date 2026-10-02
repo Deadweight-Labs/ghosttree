@@ -84,6 +84,7 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 			m.Account = store.NormalizeAccountName(m.Account)
 			v.Members = append(v.Members, orgMemberRow{OrgMemberInfo: m, Self: m.AccountID == me})
 		}
+		var orgAll []store.OrgMemberInfo
 		v.Projects, _ = a.store.ListProjects(me, v.Selected.ID)
 		v.Projects = a.access(r).VisibleProjects(v.Projects)
 		for _, p := range v.Projects {
@@ -99,12 +100,16 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 				byID[m.AccountID] = m
 			}
 			rows := projectMembers
-			if v.Owner {
-				// Nur ein Owner sieht die ganze Org, um auch Konten ohne Rolle
-				// eine zu geben; wer nicht Owner ist, sieht die Mitglieder des
-				// Projekts.
+			// Die ganze Org sehen, um auch Konten ohne Rolle eine zu geben: ein
+			// Owner, jeder ohne durchgesetzte Sichtbarkeit (dort sehen alle
+			// ohnehin alles) und ein Lead in seinem Projekt (vom Owner
+			// eingesetzt). Member und Gast sehen die Mitglieder des Projekts.
+			if v.Owner || !a.store.AccessEnforced() || rv.You == store.RoleLead {
+				if orgAll == nil {
+					orgAll, _ = a.store.ListOrgMembers(v.Selected.ID)
+				}
 				rows = rows[:0:0]
-				for _, m := range members {
+				for _, m := range orgAll {
 					if pm, ok := byID[m.AccountID]; ok {
 						rows = append(rows, pm)
 					} else {
@@ -289,7 +294,7 @@ func (a *app) orgAccept(w http.ResponseWriter, r *http.Request) {
 	code := strings.TrimSpace(r.FormValue("code"))
 	// Eine Projekt-Einladung geht nur über die Einladungsseite: dort verlangt der
 	// Beitritt eine interaktive Sitzung und die Bestätigung des Kontos.
-	if wellFormedJoinCode(code) && a.store.OpenProjectInvitation(code) {
+	if wellFormedJoinCode(code) && a.store.OpenProjectInvitation(code, a.store.AccessEnforced()) {
 		http.Redirect(w, r, "/join/"+code, http.StatusSeeOther)
 		return
 	}

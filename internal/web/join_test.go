@@ -676,3 +676,52 @@ func TestJoinGuestPageIsNotFoundWithoutEnforcement(t *testing.T) {
 		t.Fatal("a guest link without enforcement answers differently from an unknown code")
 	}
 }
+
+// Ein Lead befördert ein Org-Mitglied ohne Projektrolle, mit und ohne
+// durchgesetzte Sichtbarkeit; ein Member sieht dieses Konto dort nicht.
+func TestLeadCanPromoteARolelessOrgMemberInBothModes(t *testing.T) {
+	for _, enforce := range []bool{false, true} {
+		t.Run(fmt.Sprint("enforce=", enforce), func(t *testing.T) {
+			srv, st, _, org, _ := joinWeb(t)
+			for _, n := range []string{"anna", "carl", "ben"} {
+				st.AddPerson(n)
+			}
+			// anna: Lead, carl: Member von A, ben: Org-Mitglied ohne Projektrolle.
+			for _, who := range []string{"person:2", "person:3", "person:4"} {
+				if _, err := st.AcceptInvitation(who, mustOrgInvite(t, st, org)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := st.SetProjectRole("person:1", joinProject, "person:2", store.RoleLead, false, store.RoleViaCLI); err != nil {
+				t.Fatal(err)
+			}
+			if err := st.SetProjectRole("person:1", joinProject, "person:3", store.RoleMember, false, store.RoleViaCLI); err != nil {
+				t.Fatal(err)
+			}
+			st.SetAccessMode(store.AccessMode{Enforce: enforce})
+			anna := loginInteractive(t, srv, st, "anna")
+			resp, _ := anna.Get(srv.URL + "/ui/orgs?org=alpha")
+			if page := body(t, resp); !strings.Contains(page, `name="account" value="person:4"`) {
+				t.Fatalf("the lead cannot see the role-less member: %s", page)
+			}
+			resp = postOrg(t, anna, srv.URL, "/ui/orgs/project/role", url.Values{"org": {"alpha"}, "remote": {joinProject}, "account": {"person:4"}, "role": {"member"}})
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusSeeOther || st.ProjectRole(joinProject, "person:4").Role != store.RoleMember {
+				t.Fatalf("promotion: %d role=%q", resp.StatusCode, st.ProjectRole(joinProject, "person:4").Role)
+			}
+			// Ein Member bekommt keine Beförderungs-Formulare und mit Durchsetzung nur die Projektmitglieder.
+			if err := st.RemoveProjectRole("person:1", joinProject, "person:4", store.RoleViaCLI); err != nil {
+				t.Fatal(err)
+			}
+			carl := loginInteractive(t, srv, st, "carl")
+			resp, _ = carl.Get(srv.URL + "/ui/orgs?org=alpha")
+			page := body(t, resp)
+			if strings.Contains(page, `name="account" value="person:`) && strings.Contains(page, "/ui/orgs/project/role") {
+				t.Fatalf("a member gets role forms: %s", page)
+			}
+			if enforce && strings.Contains(page, "ben") {
+				t.Fatalf("a member sees a role-less org member: %s", page)
+			}
+		})
+	}
+}

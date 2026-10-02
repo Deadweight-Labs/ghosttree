@@ -351,13 +351,27 @@ func TestGuestInvitationIsInvalidWhenEnforcementIsOff(t *testing.T) {
 func TestOpenProjectInvitationIsFalseForEveryOtherCode(t *testing.T) {
 	st, o := joinFixture(t)
 	project, _, _ := st.CreateProjectInvitation("person:1", o.ID, joinRemote, RoleMember, 0)
-	if !st.OpenProjectInvitation(project) || st.OpenProjectInvitation(mustInvite(t, st, o)) || st.OpenProjectInvitation("nope") {
+	if !st.OpenProjectInvitation(project, true) || st.OpenProjectInvitation(mustInvite(t, st, o), true) || st.OpenProjectInvitation("nope", true) {
 		t.Fatal("OpenProjectInvitation is wrong")
 	}
 	if _, err := st.AcceptInvitation("person:2", project); err != nil {
 		t.Fatal(err)
 	}
-	if st.OpenProjectInvitation(project) {
+	if st.OpenProjectInvitation(project, true) {
 		t.Fatal("a used project invitation still counts as open")
+	}
+}
+
+// Dieselbe Gültigkeit wie die Vorschau, sonst unterschiede die Antwort Codes.
+func TestOpenProjectInvitationFollowsThePreviewValidity(t *testing.T) {
+	st, o := joinFixture(t)
+	guest, _, _ := st.CreateProjectInvitation("person:1", o.ID, joinRemote, RoleGuest, 0)
+	if !st.OpenProjectInvitation(guest, true) || st.OpenProjectInvitation(guest, false) {
+		t.Fatal("a guest link must count as open only with enforcement")
+	}
+	member, _, _ := st.CreateProjectInvitation("person:1", o.ID, joinRemote, RoleMember, 0)
+	st.db.Exec(`UPDATE org_members SET role='member' WHERE org_id=? AND account_id=1`, o.ID)
+	if st.OpenProjectInvitation(member, true) {
+		t.Fatal("an invitation of a demoted inviter counts as open")
 	}
 }

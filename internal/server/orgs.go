@@ -259,7 +259,7 @@ func (a *api) acceptInvitation(w http.ResponseWriter, r *http.Request) {
 	// bekommt die einheitliche Antwort. Eine Projekt-Einladung nimmt nur ein Mensch im Browser an: ein Token liegt
 	// in der Konfiguration jedes Agenten, und ein Link in einem fremden Text
 	// darf ihm keine Rolle verschaffen.
-	if a.st.OpenProjectInvitation(code) {
+	if a.st.OpenProjectInvitation(code, a.st.AccessEnforced()) {
 		webSessionOnly(w, "project invitations")
 		return
 	}

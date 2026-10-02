@@ -138,16 +138,15 @@ func (s *Store) CreateProjectInvitation(actorPrincipal string, orgID int64, remo
 }
 
 // OpenProjectInvitation sagt, ob ein Code eine noch offene Projekt-Einladung
-// ist. Für jeden anderen Code (auch einen unbekannten, abgelaufenen oder
+// ist, mit genau der Gültigkeit der Vorschau (enforced wie dort). Für jeden anderen Code (auch einen unbekannten, abgelaufenen oder
 // verbrauchten) ist die Antwort dieselbe, damit niemand an ihr Codes
 // unterscheidet.
-func (s *Store) OpenProjectInvitation(code string) bool {
+func (s *Store) OpenProjectInvitation(code string, enforced bool) bool {
 	if s.reader != nil {
-		return s.reader.OpenProjectInvitation(code)
+		return s.reader.OpenProjectInvitation(code, enforced)
 	}
-	var n int
-	return s.db.QueryRow(`SELECT 1 FROM invitations WHERE code_hash=? AND project_id<>0 AND accepted_at='' AND revoked_at='' AND expires_at>?`,
-		hashToken(code), now()).Scan(&n) == nil
+	_, err := s.PreviewInvitation(code, enforced)
+	return err == nil
 }
 
 // PreviewInvitation liest (enforced: ob die Sichtbarkeit durchgesetzt wird; ohne sie gilt ein Gast-Link nicht) eine Einladung, ohne etwas zu verbrauchen oder zu
