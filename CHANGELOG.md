@@ -30,6 +30,25 @@ Versioning, with pre-1.0 compatibility rules described in
   and `Referrer-Policy: strict-origin`; the Overview is `no-store`. The inline
   script, the inline progress width and the inline `noscript` style moved into
   `shell.js` and `app.css`.
+- Added: `ctx join --server <url> --pair XXXX-XXXX` pairs a machine with the
+  code from an invitation page (REQ-434, part 3). It opens a loopback
+  listener on 127.0.0.1 only for the duration of the command, proves the
+  exchange with PKCE (S256), shows the account and organization and asks
+  before writing the client config (`--yes` skips questions). Without a
+  usable browser on the machine (`--no-browser`, SSH without a display) it
+  shows a four-character code to type in the browser instead. It then offers
+  `ctx install` for the Claude and Codex setups it finds. `ctx join --help`
+  exits 0 so the installer can detect the command. If the confirmation is
+  declined, interrupted (Ctrl-C, SIGTERM, SIGHUP) or the config cannot be
+  written, the new token is revoked at once. A repeated join on a machine that
+  is already connected asks first, because it replaces that connection. Plain
+  http is accepted only for localhost; text from the server is stripped of
+  control characters before it is shown.
+- Added: `DELETE /api/tokens/self` revokes the bearer token the request was
+  made with. The machine name is released only if that token introduced it
+  and nothing is attached to it; otherwise it stays with its owner. A second
+  call, or a web session, is refused.
+- Changed: organization names may not contain control characters.
 - Changed: the web interface has a new app shell (REQ-435, first part). A
   left navigation (Overview, Agents, Rooms, Knowledge, Requests; Administration
   for owners and admins, "My devices & tokens" for members) with a project
