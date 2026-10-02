@@ -146,6 +146,79 @@ revision.
 ctx doc import path/to/design.md --kind spec --slug storage-redesign --clean
 ```
 
+### Coordination messages in Claude Code (opt-in)
+
+`ctx claude [claude args...]` starts Claude Code with the ghosttree channel
+loaded. The aim is that `ctx coord` messages and agent mentions reach the
+session: a waiting session wakes up, a working one receives the message at
+its next tool result. Measured with Claude Code 2.1.284 (2026-09-30) and
+2.1.286 (2026-10-01, with the handshake rule below).
+The launcher generates one identity per launch (`claude:<host>:<uuid>`), writes a
+temporary MCP config for the `ghosttree-channel` server (`ctx channel --agent
+<id>`), and runs `claude --mcp-config <tmp> --dangerously-load-development-channels
+server:ghosttree-channel ...`. The identity also goes to the process environment
+as `GHOSTTREE_AGENT_ID`, which `ctx mcp` reads before any harness session id, so
+the channel and the `coord_*` tools act as the same agent. The variable changes
+only the coordination identity; search, interrupted-work handoff, and snapshots
+keep the harness session id. A `codex` or `opencode` started inside such a
+session ignores the variable (its provider prefix does not match); a `claude`
+started inside it without the launcher cannot be told apart and shares the
+identity. Arguments after the
+launcher's own flags (`--dry-run`, `--agent <id>`) pass through unchanged, the
+exit code is claude's, and the config file is removed afterwards.
+`ctx claude --dry-run` (or `GHOSTTREE_CLAUDE_DRY_RUN=1`) prints the command and
+config without starting anything. Claude answers with the channel's `reply`
+tool, which stores the answer and marks the message `acked`. It starts a new
+conversation with the channel's `send` tool: `text` (required), `mention` (list
+of agent ids), `room` (`project`, the default, or `machine`) and `intent`
+(`question`, `approval`, `blocker`, `handoff` or `ack`; the first four need a
+mention). No second `ctx mcp` entry is needed for that.
+
+This is opt-in at start: `ctx install claude` does not register the channel, and
+a running session cannot be attached later. The channel is a Claude Code
+research-preview feature; ghosttree is not on Anthropic's allowlist, so
+`--dangerously-load-development-channels` is required and Claude asks you to
+confirm it at every start. Team and Enterprise plans can switch channels off
+(`channelsEnabled`).
+
+What was measured (Claude Code 2.1.284, `ctx channel --capabilities`):
+
+| Capability | State |
+| --- | --- |
+| `receive_at_safe_point` | measured |
+| `wake_idle_session` | measured |
+| `receive_for_named_subagent` | gap |
+| `human_steer` | gap |
+| `human_interrupt` | gap |
+| `activity_observation` | gap |
+
+Delivery is at-most-once: a message is claimed atomically before it is sent and
+never re-sent, so a crash between claim and write loses it. A reply wakes the
+agent that asked when its original message was a request: a message with the
+intent `question`, `approval`, `blocker` or `handoff`, or a message that is not
+itself a reply and mentions the replier by name (the mention `reply` adds
+automatically does not count). A reply to a reply, such as a thanks, does not
+wake, so a chain ends after one answer. To ask again after an answer (for
+example a re-review after a fix), call `reply` with `intent` set to `question`,
+`approval`, `blocker` or `handoff`, or use `send` with a mention; a `reply`
+without intent wakes nobody. In direct and group rooms, which have no mentions, any plain message counts as
+a request. `send` with a mention and `reply` with an attention intent accept at most 10 messages per minute and 30
+per 15 minutes per channel process and refuse beyond that; the receiving
+session also has a coordination budget of 12000 characters per 5 minutes, which
+short messages exhaust only late. `<channel` in message text is rewritten to
+`&lt;channel` so a body cannot imitate a channel event. The limits are
+spelled out in `internal/claudechannel/doc.go`. The status line may say "no MCP
+server configured with that name" while delivery works.
+
+Channels need the old `initialize` connection. Claude Code 2.1.286 first sends
+`server/discover`; if the server answers with MCP 2026-07-28, Claude Code
+registers no channel for that connection. The channel server therefore refuses
+`server/discover` with JSON-RPC -32601, and Claude Code falls back to
+`initialize` with 2025-11-25. Measured with Claude Code 2.1.286 on 2026-10-01;
+a later release may behave differently. `scripts/verify-claude-channel.sh` is a
+manual tmux check against a real session (not part of CI). It passes `--model
+opus`, because the model in a user's settings may be one Claude Code rejects.
+
 ### Inspecting a repository before migration
 
 ```bash
@@ -236,6 +309,9 @@ history. Treat the server as private infrastructure:
 
 - bind it to loopback or a trusted private interface;
 - use TLS at a reverse proxy when traffic crosses an untrusted network;
+- run the reverse proxy on the same host, or list its network in
+  `--trusted-proxies`: forwarding headers are believed only from loopback and
+  from those networks (see "Running behind TLS or a reverse proxy");
 - keep person tokens out of repositories and logs;
 - back up the SQLite database and test restores;
 - review retention and access rules for your team.
@@ -250,6 +326,77 @@ existing authorization model.
 Security reports belong at
 [security@deadweightlabs.com](mailto:security@deadweightlabs.com), not in a
 public issue. See [SECURITY.md](SECURITY.md).
+
+### Running behind TLS or a reverse proxy
+
+`ctx serve` speaks plain HTTP. The browser session cookie, and the OIDC flow
+cookie, are always `HttpOnly` and `SameSite=Lax`. They get `Secure` when any of
+these holds:
+
+1. the connection itself is TLS;
+2. `--public-url` (env `GHOSTTREE_PUBLIC_URL`) is an `https://` URL, or the
+   OIDC redirect URL is `https://`;
+3. the request carries exactly one `X-Forwarded-Proto: https` and its TCP peer
+   is a trusted proxy.
+
+The login and the logout cookie are built the same way and always carry the
+same attributes. Otherwise the cookie is not `Secure`, so a private HTTP
+deployment (loopback, VPN) keeps working with no extra setting. A browser never
+sends a `Secure` cookie over HTTP, so an https setup that gets this wrong shows
+up as a login loop rather than a silent downgrade.
+
+Trusted proxies are loopback (a proxy on the same host) plus whatever you list
+in `--trusted-proxies` / `GHOSTTREE_TRUSTED_PROXIES`, a comma-separated list of
+CIDRs or addresses. A client outside that list cannot switch `Secure` on with
+a header, and its forwarding headers also make the same-origin check on form
+posts fail. List only the proxy's own address, never a network that ordinary
+clients share. `/0`, IPv4-mapped prefixes and zoned addresses are rejected at
+startup.
+
+Loopback is trusted by default. Anything that makes a remote client appear as a
+loopback peer (`ssh -L`, `socat`, a Docker port mapping or other local
+forwarder) therefore also gets its forwarding headers believed. If you run such
+forwarders, add the word `none` to the list (`GHOSTTREE_TRUSTED_PROXIES=none`,
+or `none,192.0.2.10`) to switch loopback trust off and trust only what you list.
+With `none`, a proxy on the same host is no longer believed either, so forwarding
+headers from it are ignored; enter that proxy's address explicitly in the list.
+
+The client address used to rate-limit device logins comes from
+`X-Forwarded-For`, read only when the direct peer is trusted: all header lines
+are joined and read from right to left, trusted proxies are skipped, and the
+first untrusted address is the client. Entries a client sent itself therefore
+stay to the left and are ignored.
+
+Recommended setup behind a TLS terminator on another host:
+
+```bash
+GHOSTTREE_PUBLIC_URL=https://ghosttree.example.com
+GHOSTTREE_TRUSTED_PROXIES=192.0.2.10        # the proxy's address as seen by ctx serve
+GHOSTTREE_LISTEN=192.0.2.20:8474            # private interface, not a public one
+```
+
+The proxy must forward `Host`, `X-Forwarded-Proto` and `X-Forwarded-Host`, and
+must overwrite those headers rather than append to client-supplied ones:
+
+```nginx
+location / {
+    proxy_pass http://192.0.2.20:8474;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Host $host;
+    proxy_set_header X-Forwarded-For $remote_addr;
+}
+```
+
+`X-Forwarded-For $remote_addr` overwrites whatever the client sent and is the
+recommended form. With `$proxy_add_x_forwarded_for` (append) ghosttree still
+picks the proxy-added entry, but only if the proxy is in `--trusted-proxies`.
+
+`--public-url` is the simplest switch: with it every cookie is `Secure` no
+matter what headers arrive, and requests whose `Origin` equals it are accepted
+even if the proxy forwards no headers. It also fixes the base URL printed by the
+device login. Use `--trusted-proxies` alone when one server answers under
+several host names. `ctx serve --help` lists both flags.
 
 ## Roadmap
 

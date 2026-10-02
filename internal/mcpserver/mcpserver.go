@@ -36,6 +36,13 @@ type Server struct {
 	// Ohne sie könnte eine Suche den gerade hochgeladenen Prompt als Beleg für
 	// sich selbst zurückgeben.
 	sessionRef string
+	// coordOverride ersetzt sessionRef ausschließlich in coordRef().
+	coordOverride string
+	// agentRole ist die beim Start per ctx claude --role angeforderte Rolle.
+	// Der Server kappt sie live am Rang des Kontos; leer lässt sie bei member.
+	agentRole string
+	// sessionUUID ist die Transkript-Session, wenn der Launcher sie vorgegeben hat.
+	sessionUUID string
 }
 
 // SetRepoRoot wird von cmd/ctx/mcp.go aus dem aufgelösten Git-Kontext gesetzt.
@@ -46,6 +53,18 @@ func (s *Server) SetAfterWrite(f func()) { s.afterWrite = f }
 func (s *Server) SetAfterSnapshot(f func(context.Context, string) error) { s.afterSnapshot = f }
 
 func (s *Server) SetSessionRef(ref string) { s.sessionRef = ref }
+
+// SetCoordRef setzt die Koordinationsidentität, wenn sie von der
+// Harness-Session abweicht (ctx claude). Suche, unterbrochene Arbeit und
+// Snapshots bleiben bei sessionRef, denn nur die hat ein Transkript.
+func (s *Server) SetCoordRef(ref string) { s.coordOverride = ref }
+
+// SetAgentRole setzt die angeforderte Rolle dieser Session (lead, member, guest).
+func (s *Server) SetAgentRole(role string) { s.agentRole = role }
+
+// SetSessionID setzt die vom Launcher vorgegebene Session-UUID, die der Agent
+// bei der Anmeldung meldet.
+func (s *Server) SetSessionID(id string) { s.sessionUUID = id }
 
 func NewServer(c *client.Client, axes scope.Axes, base ...activation.Context) *Server {
 	s := &Server{client: c, ctxAxes: axes}
@@ -152,6 +171,18 @@ func (s *Server) Register(srv *mcp.Server) {
 		Description: "Say which test keeps a fixed defect from coming back — or that none does. ghosttree is not what prevents a regression; a test is. A pitfall only helps while somebody reads it. Call this after fixing a bug you recorded: state=covered with the test that would catch its return, state=uncovered when no such test exists and could, state=not_applicable when there is nothing to test here (a pitfall about a tool's behaviour is not a regression candidate — say so rather than leaving it blank, or a considered decision reads as an open task). Call it with no arguments to list the fixes nothing guards, together with how many pitfalls nobody has judged yet.",
 		Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed},
 	}, s.handleRegressionCover)
+	mcp.AddTool(srv, &mcp.Tool{Name: "coord_peers", Description: "Who else is working in this repository or on this machine — independently started sessions, not subagents you spawned. Nobody here is anyone's parent. Use it before changing something another agent is likely to be in the middle of.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closed}}, s.handleCoordPeers)
+	mcp.AddTool(srv, &mcp.Tool{Name: "coord_send", Description: "Say something to the other agents in this repository or on this machine: a contract you are about to change, a service you restarted, a question for whoever owns a path. Stored durably. It reports stored, never delivered — whether a running session is interrupted for it depends on that session's harness.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleCoordSend)
+	mcp.AddTool(srv, &mcp.Tool{Name: "coord_inbox", Description: "Read what other agents have said since you last looked. Continues from your stored cursor by default, so calling it twice does not repeat itself. Messages past their expiry are shown as history and marked — an old \"restarting in 10 seconds\" is not an instruction today.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closed}}, s.handleCoordInbox)
+	mcp.AddTool(srv, &mcp.Tool{Name: "coord_touched", Description: "Has anyone else worked on this path lately? Ask before changing something another session may be in the middle of. It distinguishes the same checkout from a separate worktree, because those are different risks. Nothing is locked and no answer is a clean bill of health — absence of observation is not proof that nobody is there.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closed}}, s.handleCoordTouched)
+	mcp.AddTool(srv, &mcp.Tool{Name: "coord_dm", Description: "Talk to one peer or a small group privately, without involving the whole project room. Nobody outside the conversation can read it — not through search, not through summaries. Use it when the exchange only concerns the people in it.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleCoordDM)
+	mcp.AddTool(srv, &mcp.Tool{Name: "coord_dm_read", Description: "Read a private conversation, or list the ones you are part of. Continues from your cursor.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closed}}, s.handleCoordDMRead)
+	mcp.AddTool(srv, &mcp.Tool{Name: "thread_open", Description: "Start a lasting discussion about one question — something that outlives this session and that a later agent can pick up. Attach it to the knowledge entry, request or document it is about. Not for chatter: a question nobody will ask again belongs in coord_send.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleThreadOpen)
+	mcp.AddTool(srv, &mcp.Tool{Name: "thread_read", Description: "Read where a discussion stands: the working state, what is still open, what came out of it, and the posts since the summary's reach. It tells you what it left out and how to get it — it never silently truncates.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closed}}, s.handleThreadRead)
+	mcp.AddTool(srv, &mcp.Tool{Name: "thread_reply", Description: "Add a contribution to an existing discussion. Disagreeing with what is already there is the useful case — two agents agreeing does not make a guess a fact.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleThreadReply)
+	mcp.AddTool(srv, &mcp.Tool{Name: "thread_find", Description: "Find discussions by words or, better, by the object they hang on — before opening a second thread about a question someone already investigated.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closed}}, s.handleThreadFind)
+	mcp.AddTool(srv, &mcp.Tool{Name: "thread_resolve", Description: "Close a discussion because the question is answered, park it as deferred, or reopen it. This closes the discussion, never the work: linked requests keep their own criteria and evidence.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleThreadResolve)
+	mcp.AddTool(srv, &mcp.Tool{Name: "thread_propose", Description: "Record what a discussion suggests should become a decision, pitfall or request. It is a proposal, not knowledge: promoting it takes its own write and the usual review. A rejected proposal stays as a result, so the same idea is not re-argued in three months.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleThreadPropose)
 	mcp.AddTool(srv, &mcp.Tool{Name: "request_search", Description: "List or search the current project's work ledger. Works like listing issues: call it with no query to see what is open, or name a subject to narrow. A question that names no subject — \"what is left to do\" — returns the list rather than guessing. Answers with a compact list; call request_get for one entry's full text. Use it before substantial feature, architecture, migration, or multi-session work.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closed}}, s.handleRequestSearch)
 	mcp.AddTool(srv, &mcp.Tool{Name: "request_get", Description: "Get one request as readable text with its original paragraphs. Concise includes the request, description, criteria, relations, and latest work; it omits activity, older work, and criterion evidence. Use response_format=detailed for the complete history and all evidence.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closed}}, s.handleRequestGet)
 	mcp.AddTool(srv, &mcp.Tool{Name: "request_create", Description: "Create a ledger entry for substantial work when request_search found no match. Include observable acceptance criteria; do not use for trivial local fixes.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleRequestCreate)

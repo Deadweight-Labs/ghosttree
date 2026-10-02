@@ -66,6 +66,16 @@ func (s *Store) RegressionGaps(ax scope.Axes) ([]Knowledge, int, error) {
 	if s.reader != nil {
 		return s.reader.RegressionGaps(ax)
 	}
+	return s.RegressionGapsVisible(ax, nil)
+}
+
+// RegressionGapsVisible zählt und liefert nur Einträge, die keep zulässt (nil =
+// alle). Die Zahl der Unbeurteilten läuft durch denselben Filter, damit sie
+// nichts über unsichtbare Einträge verrät.
+func (s *Store) RegressionGapsVisible(ax scope.Axes, keep func(Knowledge) bool) ([]Knowledge, int, error) {
+	if s.reader != nil {
+		return s.reader.RegressionGapsVisible(ax, keep)
+	}
 	where, args := ax.UnionWhere()
 	rows, err := s.db.Query(`SELECT id,type,title,body,project,branch,machine,confidence,status,origin,
 		person,confirmed_by,last_modified_by,harness,session_ref,observed_at,
@@ -89,10 +99,48 @@ func (s *Store) RegressionGaps(ax scope.Axes) ([]Knowledge, int, error) {
 	if err := rows.Err(); err != nil {
 		return nil, 0, err
 	}
+	// keep fragt selbst die Datenbank (Rollen, Maschinenbesitzer); mit offenem
+	// Cursor wäre dafür keine Verbindung frei. Erst einsammeln, dann filtern.
+	if err := rows.Close(); err != nil {
+		return nil, 0, err
+	}
 	// Nur Pitfalls: eine Entscheidung oder Notiz hat keine Regressionsfrage, und
 	// sie ungefragt mitzuzählen liesse die Lücke grösser aussehen, als sie ist.
-	var unreviewed int
-	err = s.db.QueryRow(`SELECT COUNT(*) FROM knowledge
-		WHERE type='pitfall' AND regression_state='' AND status='active' AND `+where, args...).Scan(&unreviewed)
-	return gaps, unreviewed, err
+	if keep == nil {
+		var unreviewed int
+		err = s.db.QueryRow(`SELECT COUNT(*) FROM knowledge
+			WHERE type='pitfall' AND regression_state='' AND status='active' AND `+where, args...).Scan(&unreviewed)
+		return gaps, unreviewed, err
+	}
+	gaps = filterKnowledge(gaps, keep)
+	pending, err := s.db.Query(`SELECT id,project,branch,machine,confidence,person,confirmed_by FROM knowledge
+		WHERE type='pitfall' AND regression_state='' AND status='active' AND `+where, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	var open []Knowledge
+	for pending.Next() {
+		var k Knowledge
+		if err := pending.Scan(&k.ID, &k.Scope.Project, &k.Scope.Branch, &k.Scope.Machine, &k.Confidence, &k.Person, &k.ConfirmedBy); err != nil {
+			pending.Close()
+			return nil, 0, err
+		}
+		open = append(open, k)
+	}
+	if err := pending.Err(); err != nil {
+		pending.Close()
+		return nil, 0, err
+	}
+	pending.Close()
+	return gaps, len(filterKnowledge(open, keep)), nil
+}
+
+func filterKnowledge(in []Knowledge, keep func(Knowledge) bool) []Knowledge {
+	out := in[:0:0]
+	for _, k := range in {
+		if keep(k) {
+			out = append(out, k)
+		}
+	}
+	return out
 }

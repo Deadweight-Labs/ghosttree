@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/snapshot"
 	"github.com/Deadweight-Labs/ghosttree/internal/snapshotmirror"
+	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
 // currentAxes derives the session context from the working directory and the
@@ -30,6 +32,74 @@ func currentSessionRef() string {
 		if ref := os.Getenv(key); ref != "" {
 			return ref
 		}
+	}
+	return ""
+}
+
+// coordAgentOverride ist die Koordinationsidentität aus GHOSTTREE_AGENT_ID, die
+// `ctx claude` setzt, damit ctx mcp und ctx channel derselbe Agent sind. Sie
+// ersetzt NICHT die Harness-Session-ID (Suche, Snapshots und unterbrochene
+// Arbeit brauchen die echte). Ein codex oder opencode, das in einer
+// ctx-claude-Session startet, erbt die Variable, trägt aber ein fremdes
+// Provider-Präfix und ignoriert sie. Ein dort ohne Launcher gestartetes claude
+// ist nicht zu unterscheiden und teilt sich die Identität.
+func coordAgentOverride() string {
+	id := strings.TrimSpace(os.Getenv(agentIDEnv))
+	if id == "" {
+		return ""
+	}
+	harness := ""
+	switch {
+	case os.Getenv("CODEX_SESSION_ID") != "" || os.Getenv("CODEX_THREAD_ID") != "":
+		harness = "codex"
+	case os.Getenv("OPENCODE_SESSION_ID") != "":
+		harness = "opencode"
+	case os.Getenv("CLAUDE_CODE_SESSION_ID") != "":
+		harness = "claude"
+	}
+	if harness != "" && !strings.HasPrefix(id, harness+":") {
+		return ""
+	}
+	return id
+}
+
+// agentRoleFromEnv liest die per ctx claude --role angeforderte Rolle. Sie
+// gilt nur zusammen mit einer akzeptierten Launcher-Identität: eine geerbte
+// Variable ohne passende Agenten-ID wird ignoriert. Der Server kappt die Rolle
+// ohnehin live am Rang des Kontos.
+func agentRoleFromEnv() string {
+	if coordAgentOverride() == "" {
+		return ""
+	}
+	role := strings.TrimSpace(os.Getenv(agentRoleEnv))
+	if !store.ValidAgentRole(role) {
+		return ""
+	}
+	return role
+}
+
+// agentSessionFromEnv ist die vom Launcher vorgegebene Session-UUID. Wie die
+// Rolle gilt sie nur zusammen mit einer akzeptierten Launcher-Identität.
+func agentSessionFromEnv() string {
+	if coordAgentOverride() == "" {
+		return ""
+	}
+	id := strings.TrimSpace(os.Getenv(sessionIDEnv))
+	if !store.ValidExternalID(id) {
+		return ""
+	}
+	return id
+}
+
+// registeredSessionID ist die Session, die ein Agent bei der Anmeldung meldet:
+// die des Launchers, sonst die Session-ID des Harness. Der Server prüft beim
+// Lesen, ob sie zum selben Konto gehört.
+func registeredSessionID() string {
+	if id := agentSessionFromEnv(); id != "" {
+		return id
+	}
+	if id := currentSessionRef(); store.ValidExternalID(id) {
+		return id
 	}
 	return ""
 }
@@ -117,6 +187,9 @@ func cmdMCP(args []string, stdout io.Writer) int {
 	c := client.New(cfg)
 	srv := mcpserver.NewServer(c, hctx.axes, hctx.activation)
 	srv.SetSessionRef(currentSessionRef())
+	srv.SetCoordRef(coordAgentOverride())
+	srv.SetAgentRole(agentRoleFromEnv())
+	srv.SetSessionID(agentSessionFromEnv())
 	srv.SetRepoRoot(hctx.root)
 	srv.SetAfterSnapshot(func(ctx context.Context, project string) error {
 		return snapshotmirror.Rebuild(ctx, mcpSnapshotLister{client: c}, hctx.root, project)

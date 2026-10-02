@@ -23,6 +23,10 @@ func run(args []string, stdout io.Writer) int {
 		return cmdWatch(rest, stdout)
 	case "mcp":
 		return cmdMCP(rest, stdout)
+	case "channel":
+		return cmdChannel(rest, stdout)
+	case "claude":
+		return cmdClaude(rest, stdout)
 	case "install":
 		return cmdInstall(rest, stdout)
 	case "hook":
@@ -45,6 +49,8 @@ func run(args []string, stdout io.Writer) int {
 		return cmdDoc(rest, stdout)
 	case "migrate":
 		return cmdMigrate(rest, stdout)
+	case "coord":
+		return cmdCoord(rest, stdout)
 	case "mirror":
 		return cmdMirror(rest, stdout)
 	case "snapshot":
@@ -63,8 +69,20 @@ func run(args []string, stdout io.Writer) int {
 		return cmdUnbindBranch(rest, stdout)
 	case "person":
 		return cmdPerson(rest, stdout)
+	case "account":
+		return cmdAccount(rest, stdout)
+	case "machine":
+		return cmdMachine(rest, stdout)
+	case "session":
+		return cmdSession(rest, stdout)
+	case "org":
+		return cmdOrg(rest, stdout)
+	case "project":
+		return cmdProject(rest, stdout)
 	case "setup":
 		return cmdSetup(rest, stdout)
+	case "login":
+		return cmdLogin(rest, stdout)
 	case "version":
 		fmt.Fprintf(stdout, "ctx %s\n", version)
 		return 0
@@ -79,9 +97,17 @@ const usage = `usage: ctx <command>
   serve    run the ghosttree server
   watch    run the session collector daemon
   mcp      run the MCP server (stdio)
+  channel  serve coordination messages as a Claude Code channel (stdio, opt-in at session start)
+  claude   start Claude Code with the ghosttree channel (opt-in launcher)
   install  set up a harness (claude|codex|opencode)
   setup    write client config (server URL + token)
-  person   manage persons/tokens (server-side)
+  login    sign this machine in through the browser (device login)
+  person   manage persons/tokens (server-side; deprecated alias, see account)
+  account  manage accounts and their tokens (server-side)
+  machine  list, release and transfer machine names (server-side)
+  session  share a session's transcript with the members of its project
+  org      organizations: members, invitations, default (needs ctx login)
+  project  list, claim and move projects between organizations
   status   show local setup state
   doctor   check the harness wiring for drift (--fix to repair)
   export   write a session's original transcript as JSONL
@@ -91,6 +117,7 @@ const usage = `usage: ctx <command>
   ghost    read description history or archive confirmed-deleted paths
   doc      write, publish, and read long-form documents
   migrate  move repository agent artifacts into ghosttree
+  coord    talk to the other agents in this repo or on this machine
   mirror   write .ghosttree/ for a repository (harnesses without hooks)
   snapshot create, inspect, export, verify, and mirror immutable context marks
   distill-sessions  extract quarantined knowledge from idle sessions

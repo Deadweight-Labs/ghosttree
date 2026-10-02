@@ -4,6 +4,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"net/url"
 	"os"
 	"strings"
@@ -20,8 +21,12 @@ type Store struct {
 	writer        *runtimeWriter
 	bookkeeper    *runtimeWriter
 	reader        *Store
+	deviceOnce    sync.Once
+	device        *DeviceFlows
 	closeOnce     sync.Once
 	closeErr      error
+	acfg          *accessConfig
+	accessOnce    sync.Once
 }
 
 type OpenOptions struct {
@@ -41,6 +46,69 @@ const schema = `
 CREATE TABLE IF NOT EXISTS persons(
   id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL,
   token_hash TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS account_identities(
+  account_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE RESTRICT,
+  issuer TEXT NOT NULL, subject TEXT NOT NULL, created_at TEXT NOT NULL,
+  PRIMARY KEY(issuer, subject));
+CREATE TABLE IF NOT EXISTS account_codes(
+  code_hash TEXT PRIMARY KEY,
+  kind TEXT NOT NULL CHECK(kind IN ('bootstrap','claim','login')),
+  account_id INTEGER NOT NULL DEFAULT 0, expires_at TEXT NOT NULL,
+  used_at TEXT NOT NULL DEFAULT '');
+CREATE TABLE IF NOT EXISTS api_tokens(
+  id INTEGER PRIMARY KEY,
+  account_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE RESTRICT,
+  token_hash TEXT NOT NULL UNIQUE, label TEXT NOT NULL DEFAULT '',
+  kind TEXT NOT NULL CHECK(kind IN ('cli','legacy','device')),
+  machine TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL, last_used_at TEXT NOT NULL DEFAULT '',
+  expires_at TEXT NOT NULL DEFAULT '', revoked_at TEXT NOT NULL DEFAULT '');
+CREATE TABLE IF NOT EXISTS account_migrations(
+  version INTEGER PRIMARY KEY, migrated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS orgs(
+  id INTEGER PRIMARY KEY, slug TEXT UNIQUE NOT NULL, name TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS org_members(
+  org_id INTEGER NOT NULL REFERENCES orgs(id) ON DELETE RESTRICT,
+  account_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE RESTRICT,
+  role TEXT NOT NULL CHECK(role IN ('owner','member')), joined_at TEXT NOT NULL,
+  PRIMARY KEY(org_id, account_id));
+CREATE INDEX IF NOT EXISTS org_members_account ON org_members(account_id);
+CREATE TABLE IF NOT EXISTS projects(
+  id INTEGER PRIMARY KEY, remote TEXT UNIQUE NOT NULL,
+  org_id INTEGER NOT NULL REFERENCES orgs(id) ON DELETE RESTRICT,
+  name TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS projects_org ON projects(org_id);
+CREATE TABLE IF NOT EXISTS invitations(
+  id INTEGER PRIMARY KEY,
+  org_id INTEGER NOT NULL REFERENCES orgs(id) ON DELETE RESTRICT,
+  project_id INTEGER NOT NULL DEFAULT 0,
+  role TEXT NOT NULL CHECK(role IN ('owner','member')),
+  email TEXT NOT NULL DEFAULT '', code_hash TEXT NOT NULL UNIQUE,
+  invited_by INTEGER NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL,
+  accepted_by INTEGER NOT NULL DEFAULT 0, accepted_at TEXT NOT NULL DEFAULT '',
+  revoked_at TEXT NOT NULL DEFAULT '');
+CREATE INDEX IF NOT EXISTS invitations_org ON invitations(org_id, id DESC);
+CREATE TABLE IF NOT EXISTS org_events(
+  id INTEGER PRIMARY KEY, org_id INTEGER NOT NULL, action TEXT NOT NULL,
+  actor TEXT NOT NULL DEFAULT '', subject TEXT NOT NULL DEFAULT '',
+  detail TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS org_state(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS project_members(
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE RESTRICT,
+  account_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE RESTRICT,
+  role TEXT NOT NULL CHECK(role IN ('owner','lead','member','guest')),
+  can_review INTEGER NOT NULL DEFAULT 0 CHECK(can_review IN (0,1)),
+  granted_by INTEGER NOT NULL DEFAULT 0, granted_at TEXT NOT NULL,
+  PRIMARY KEY(project_id, account_id));
+CREATE INDEX IF NOT EXISTS project_members_account ON project_members(account_id);
+CREATE TABLE IF NOT EXISTS role_events(
+  id INTEGER PRIMARY KEY, scope TEXT NOT NULL, subject TEXT NOT NULL,
+  old_role TEXT NOT NULL DEFAULT '', new_role TEXT NOT NULL DEFAULT '',
+  actor TEXT NOT NULL DEFAULT '', via TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TRIGGER IF NOT EXISTS role_events_no_update BEFORE UPDATE ON role_events
+  BEGIN SELECT RAISE(ABORT, 'role_events is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS role_events_no_delete BEFORE DELETE ON role_events
+  BEGIN SELECT RAISE(ABORT, 'role_events is append-only'); END;
 CREATE TABLE IF NOT EXISTS context_snapshot_access(
   person_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE RESTRICT,
   project TEXT NOT NULL,
@@ -145,6 +213,50 @@ CREATE TABLE IF NOT EXISTS knowledge(
   regression_state TEXT NOT NULL DEFAULT '',
   regression_test TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS knowledge_groups(
+  id INTEGER PRIMARY KEY, project TEXT NOT NULL,
+  label TEXT NOT NULL DEFAULT '',
+  volatility TEXT NOT NULL DEFAULT 'unrated'
+    CHECK(volatility IN ('unrated','volatile','slow','timeless')),
+  volatility_by TEXT NOT NULL DEFAULT '', volatility_at TEXT NOT NULL DEFAULT '',
+  -- Groups are never deleted, so their events stay attributable: a merged
+  -- group points at the survivor, a group without members is dissolved.
+  state TEXT NOT NULL DEFAULT 'active' CHECK(state IN ('active','merged','dissolved')),
+  merged_into INTEGER REFERENCES knowledge_groups(id) ON DELETE RESTRICT,
+  created_at TEXT NOT NULL,
+  CHECK((state='merged') = (merged_into IS NOT NULL)));
+CREATE TABLE IF NOT EXISTS knowledge_relations(
+  id INTEGER PRIMARY KEY,
+  project TEXT NOT NULL,
+  from_id INTEGER NOT NULL REFERENCES knowledge(id) ON DELETE RESTRICT,
+  to_id INTEGER NOT NULL REFERENCES knowledge(id) ON DELETE RESTRICT,
+  kind TEXT NOT NULL CHECK(kind IN ('supersedes','sibling')),
+  state TEXT NOT NULL CHECK(state IN ('proposed','active','rejected','revoked')),
+  origin TEXT NOT NULL CHECK(origin IN ('human','agent','distiller','migrated')),
+  group_id INTEGER REFERENCES knowledge_groups(id) ON DELETE RESTRICT,
+  reason TEXT NOT NULL DEFAULT '',
+  created_by TEXT NOT NULL, created_by_account INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL,
+  decided_by TEXT NOT NULL DEFAULT '', decided_by_account INTEGER NOT NULL DEFAULT 0, decided_at TEXT NOT NULL DEFAULT '',
+  CHECK(from_id <> to_id),
+  CHECK(kind <> 'sibling' OR from_id < to_id));
+CREATE UNIQUE INDEX IF NOT EXISTS knowledge_relations_live
+  ON knowledge_relations(kind, from_id, to_id) WHERE state IN ('proposed','active');
+CREATE INDEX IF NOT EXISTS knowledge_relations_from ON knowledge_relations(from_id);
+CREATE INDEX IF NOT EXISTS knowledge_relations_to ON knowledge_relations(to_id);
+CREATE INDEX IF NOT EXISTS knowledge_relations_group ON knowledge_relations(group_id);
+CREATE TABLE IF NOT EXISTS knowledge_relation_events(
+  id INTEGER PRIMARY KEY, project TEXT NOT NULL DEFAULT '',
+  relation_id INTEGER, group_id INTEGER,
+  action TEXT NOT NULL,
+  actor TEXT NOT NULL, actor_account_id INTEGER NOT NULL DEFAULT 0, actor_role TEXT NOT NULL DEFAULT '',
+  via TEXT NOT NULL DEFAULT '',
+  detail TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS knowledge_relation_events_rel ON knowledge_relation_events(relation_id);
+CREATE INDEX IF NOT EXISTS knowledge_relation_events_group ON knowledge_relation_events(group_id);
+CREATE TRIGGER IF NOT EXISTS knowledge_relation_events_no_update BEFORE UPDATE ON knowledge_relation_events
+  BEGIN SELECT RAISE(ABORT, 'knowledge_relation_events is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS knowledge_relation_events_no_delete BEFORE DELETE ON knowledge_relation_events
+  BEGIN SELECT RAISE(ABORT, 'knowledge_relation_events is append-only'); END;
 CREATE TABLE IF NOT EXISTS instruction_activation_path(
   knowledge_id INTEGER NOT NULL REFERENCES knowledge(id) ON DELETE CASCADE,
   pattern TEXT NOT NULL,
@@ -408,6 +520,329 @@ CREATE TABLE IF NOT EXISTS document_revisions(
   person TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   UNIQUE(document_id,revision));
+CREATE TABLE IF NOT EXISTS coord_agents(
+  id INTEGER PRIMARY KEY,
+  external_id TEXT NOT NULL UNIQUE,
+  provider TEXT NOT NULL,
+  room_key TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  person TEXT,
+  principal_id TEXT NOT NULL DEFAULT '',
+  cwd TEXT,
+  branch TEXT,
+  worktree TEXT,
+  parent_external_id TEXT,
+  capabilities TEXT,
+  registered_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS coord_agents_room ON coord_agents(room_key,last_seen_at);
+CREATE TABLE IF NOT EXISTS coord_messages(
+  id INTEGER PRIMARY KEY,
+  destination_kind TEXT NOT NULL CHECK(destination_kind IN ('room','discussion')),
+  destination_id TEXT NOT NULL,
+  sequence INTEGER NOT NULL,
+  sender_external_id TEXT NOT NULL,
+  author_principal_id TEXT NOT NULL DEFAULT '',
+  author_kind TEXT NOT NULL CHECK(author_kind IN ('agent','human','system')),
+  parent_external_id TEXT,
+  client_id TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'message',
+  intent TEXT NOT NULL DEFAULT '',
+  priority TEXT NOT NULL DEFAULT 'normal',
+  body TEXT NOT NULL,
+  reply_to INTEGER,
+  origin_event_id TEXT,
+  causation_id TEXT,
+  expires_at TEXT,
+  observed_at_client TEXT,
+  created_at TEXT NOT NULL,
+  UNIQUE(sender_external_id,client_id),
+  UNIQUE(destination_kind,destination_id,sequence));
+CREATE INDEX IF NOT EXISTS coord_messages_destination
+  ON coord_messages(destination_kind,destination_id,id);
+CREATE INDEX IF NOT EXISTS coord_messages_destination_sequence
+  ON coord_messages(destination_kind,destination_id,sequence);
+CREATE UNIQUE INDEX IF NOT EXISTS coord_messages_origin
+  ON coord_messages(origin_event_id) WHERE origin_event_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS coord_destination_sequences(
+  destination_kind TEXT NOT NULL,
+  destination_id TEXT NOT NULL,
+  last_sequence INTEGER NOT NULL CHECK(last_sequence>=0),
+  PRIMARY KEY(destination_kind,destination_id));
+INSERT INTO coord_destination_sequences(destination_kind,destination_id,last_sequence)
+  SELECT destination_kind,destination_id,MAX(sequence) FROM coord_messages
+  GROUP BY destination_kind,destination_id
+  ON CONFLICT(destination_kind,destination_id) DO UPDATE SET
+    last_sequence=MAX(last_sequence,excluded.last_sequence);
+CREATE TABLE IF NOT EXISTS threads(
+  id INTEGER PRIMARY KEY,
+  project TEXT NOT NULL,
+  title TEXT NOT NULL,
+  question TEXT NOT NULL DEFAULT '',
+  state TEXT NOT NULL DEFAULT 'open' CHECK(state IN ('open','resolved','deferred')),
+  archived INTEGER NOT NULL DEFAULT 0,
+  person TEXT NOT NULL DEFAULT '',
+  author_principal_id TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  resolved_at TEXT);
+CREATE INDEX IF NOT EXISTS threads_project ON threads(project,archived,updated_at);
+CREATE TABLE IF NOT EXISTS thread_homes(
+  thread_id INTEGER PRIMARY KEY REFERENCES threads(id) ON DELETE RESTRICT,
+  room_key TEXT NOT NULL REFERENCES coord_rooms(room_key) ON DELETE RESTRICT,
+  anchor_message_id INTEGER UNIQUE REFERENCES coord_messages(id) ON DELETE RESTRICT,
+  created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS thread_homes_room ON thread_homes(room_key,created_at,thread_id);
+CREATE TABLE IF NOT EXISTS thread_links(
+  thread_id INTEGER NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  object_kind TEXT NOT NULL,
+  object_id TEXT NOT NULL,
+  object_revision TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(thread_id,object_kind,object_id,object_revision));
+CREATE INDEX IF NOT EXISTS thread_links_object ON thread_links(object_kind,object_id);
+CREATE TABLE IF NOT EXISTS thread_sources(
+  thread_id INTEGER NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  source_kind TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  room_key TEXT NOT NULL DEFAULT '',
+  author TEXT NOT NULL DEFAULT '',
+  author_kind TEXT NOT NULL DEFAULT '',
+  body TEXT NOT NULL,
+  original_at TEXT NOT NULL DEFAULT '',
+  copied_at TEXT NOT NULL,
+  PRIMARY KEY(thread_id,source_kind,source_id));
+CREATE TABLE IF NOT EXISTS thread_visibility(
+  thread_id INTEGER NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  member_external_id TEXT NOT NULL,
+  PRIMARY KEY(thread_id,member_external_id));
+CREATE TABLE IF NOT EXISTS thread_summaries(
+  thread_id INTEGER NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  revision INTEGER NOT NULL,
+  body TEXT NOT NULL,
+  open_questions TEXT NOT NULL DEFAULT '',
+  covers_through_sequence INTEGER NOT NULL,
+  person TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(thread_id,revision));
+CREATE TABLE IF NOT EXISTS thread_outcomes(
+  thread_id INTEGER NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  ref_id TEXT NOT NULL,
+  state TEXT NOT NULL DEFAULT 'proposed' CHECK(state IN ('proposed','accepted','rejected')),
+  note TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  decided_at TEXT,
+  PRIMARY KEY(thread_id,kind,ref_id));
+CREATE TABLE IF NOT EXISTS path_activity(
+  id INTEGER PRIMARY KEY,
+  project TEXT NOT NULL DEFAULT '',
+  session_external_id TEXT NOT NULL,
+  checkout TEXT NOT NULL DEFAULT '',
+  tool TEXT NOT NULL,
+  path TEXT NOT NULL,
+  writes INTEGER NOT NULL DEFAULT 0,
+  quality TEXT NOT NULL CHECK(quality IN ('intent','reported_success','observed_change','unattributed')),
+  at TEXT NOT NULL,
+  account_id INTEGER NOT NULL DEFAULT 0,
+  UNIQUE(account_id,session_external_id,tool,path,quality,at));
+CREATE INDEX IF NOT EXISTS path_activity_path ON path_activity(project,path,at);
+CREATE INDEX IF NOT EXISTS path_activity_session ON path_activity(session_external_id,at);
+CREATE TABLE IF NOT EXISTS coord_standing(
+  room_key TEXT NOT NULL,
+  message_id TEXT NOT NULL,
+  person TEXT NOT NULL,
+  body TEXT NOT NULL,
+  targets TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  ended_at TEXT,
+  ended_by TEXT,
+  PRIMARY KEY(room_key,message_id));
+CREATE TABLE IF NOT EXISTS coord_rooms(
+  room_key TEXT PRIMARY KEY,
+  kind TEXT NOT NULL CHECK(kind IN ('project','machine','direct','group')),
+  label TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS coord_room_members(
+  room_key TEXT NOT NULL REFERENCES coord_rooms(room_key) ON DELETE CASCADE,
+  member_external_id TEXT NOT NULL,
+  joined_at TEXT NOT NULL,
+  PRIMARY KEY(room_key,member_external_id));
+CREATE TABLE IF NOT EXISTS coord_room_memberships(
+  room_key TEXT NOT NULL REFERENCES coord_rooms(room_key) ON DELETE RESTRICT,
+  principal_id TEXT NOT NULL,
+  joined_at TEXT NOT NULL,
+  left_at TEXT NOT NULL DEFAULT '',
+  is_manager INTEGER NOT NULL DEFAULT 0 CHECK(is_manager IN (0,1)),
+  PRIMARY KEY(room_key,principal_id,joined_at));
+CREATE UNIQUE INDEX IF NOT EXISTS coord_room_memberships_one_active
+  ON coord_room_memberships(room_key,principal_id) WHERE left_at='';
+CREATE INDEX IF NOT EXISTS coord_room_memberships_active
+  ON coord_room_memberships(principal_id,room_key) WHERE left_at='';
+CREATE TABLE IF NOT EXISTS coord_room_membership_migrations(
+  version INTEGER PRIMARY KEY,
+  migrated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS coord_room_membership_events(
+  id INTEGER PRIMARY KEY,
+  room_key TEXT NOT NULL REFERENCES coord_rooms(room_key) ON DELETE RESTRICT,
+  principal_id TEXT NOT NULL DEFAULT '',
+  action TEXT NOT NULL CHECK(action IN ('group_create','join','leave','manager_grant','manager_revoke')),
+  actor_id TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL);
+CREATE TRIGGER IF NOT EXISTS coord_room_membership_events_no_update
+  BEFORE UPDATE ON coord_room_membership_events BEGIN SELECT RAISE(ABORT,'membership events are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS coord_room_membership_events_no_delete
+  BEFORE DELETE ON coord_room_membership_events BEGIN SELECT RAISE(ABORT,'membership events are append-only'); END;
+CREATE TABLE IF NOT EXISTS coord_deliveries(
+  message_id INTEGER NOT NULL,
+  recipient_external_id TEXT NOT NULL,
+  state TEXT NOT NULL,
+  rank INTEGER NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(message_id,recipient_external_id));
+CREATE TABLE IF NOT EXISTS coord_cursors(
+  agent_external_id TEXT NOT NULL,
+  destination_kind TEXT NOT NULL,
+  destination_id TEXT NOT NULL,
+  last_message_id INTEGER NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(agent_external_id,destination_kind,destination_id));
+CREATE TABLE IF NOT EXISTS coord_message_mentions(
+  message_id INTEGER NOT NULL REFERENCES coord_messages(id) ON DELETE CASCADE,
+  mentioned_external_id TEXT NOT NULL,
+  PRIMARY KEY(message_id,mentioned_external_id));
+CREATE TABLE IF NOT EXISTS coord_message_raw_mentions(
+  message_id INTEGER NOT NULL REFERENCES coord_messages(id) ON DELETE CASCADE,
+  mentioned_external_id TEXT NOT NULL,
+  PRIMARY KEY(message_id,mentioned_external_id));
+CREATE INDEX IF NOT EXISTS coord_message_mentions_recipient
+  ON coord_message_mentions(mentioned_external_id,message_id);
+CREATE TABLE IF NOT EXISTS coord_attention(
+  id INTEGER PRIMARY KEY,
+  recipient_principal_id TEXT NOT NULL,
+  message_id INTEGER NOT NULL REFERENCES coord_messages(id) ON DELETE RESTRICT,
+  reason TEXT NOT NULL CHECK(reason IN ('question','approval','blocker','handoff')),
+  state TEXT NOT NULL CHECK(state IN ('open','resolved','dismissed','expired')),
+  created_at TEXT NOT NULL,
+  resolved_at TEXT NOT NULL DEFAULT '',
+  UNIQUE(recipient_principal_id,message_id,reason));
+CREATE INDEX IF NOT EXISTS coord_attention_recipient
+  ON coord_attention(recipient_principal_id,state,id);
+INSERT OR IGNORE INTO coord_attention(recipient_principal_id,message_id,reason,state,created_at)
+  SELECT mm.mentioned_external_id,m.id,m.intent,'open',m.created_at
+  FROM coord_messages m JOIN coord_message_mentions mm ON mm.message_id=m.id
+  WHERE m.intent IN ('question','approval','blocker','handoff');
+CREATE TABLE IF NOT EXISTS coord_read_state(
+  principal_id TEXT NOT NULL,
+  destination_kind TEXT NOT NULL CHECK(destination_kind IN ('room','discussion')),
+  destination_id TEXT NOT NULL,
+  read_through_sequence INTEGER NOT NULL DEFAULT 0 CHECK(read_through_sequence>=0),
+  manual_unread_from_sequence INTEGER CHECK(manual_unread_from_sequence>0),
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(principal_id,destination_kind,destination_id));
+CREATE TABLE IF NOT EXISTS coord_message_refs(
+  message_id INTEGER NOT NULL REFERENCES coord_messages(id) ON DELETE CASCADE,
+  ref_kind TEXT NOT NULL,
+  ref_id TEXT NOT NULL,
+  ref_revision TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY(message_id,ref_kind,ref_id,ref_revision));
+CREATE TABLE IF NOT EXISTS coord_events(
+  sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL,
+  object_kind TEXT NOT NULL,
+  object_id TEXT NOT NULL,
+  created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS coord_events_created ON coord_events(created_at);
+DROP TRIGGER IF EXISTS coord_events_bound;
+DROP TRIGGER IF EXISTS coord_events_age;
+CREATE TRIGGER coord_events_age AFTER INSERT ON coord_events BEGIN
+  DELETE FROM coord_events
+  WHERE created_at<strftime('%Y-%m-%dT%H:%M:%fZ','now','-10 minutes')
+     OR sequence<=NEW.sequence-100000;
+END;
+CREATE TRIGGER IF NOT EXISTS coord_messages_event AFTER INSERT ON coord_messages BEGIN
+  INSERT INTO coord_events(kind,object_kind,object_id,created_at)
+  VALUES('message',NEW.destination_kind,NEW.destination_id,strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+END;
+CREATE TRIGGER IF NOT EXISTS coord_rooms_insert_event AFTER INSERT ON coord_rooms BEGIN
+  INSERT INTO coord_events(kind,object_kind,object_id,created_at)
+  VALUES('membership','room',NEW.room_key,strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+END;
+CREATE TRIGGER IF NOT EXISTS coord_rooms_update_event AFTER UPDATE OF label ON coord_rooms
+WHEN OLD.label IS NOT NEW.label BEGIN
+  INSERT INTO coord_events(kind,object_kind,object_id,created_at)
+  VALUES('membership','room',NEW.room_key,strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+END;
+CREATE TRIGGER IF NOT EXISTS coord_membership_event AFTER INSERT ON coord_room_membership_events BEGIN
+  INSERT INTO coord_events(kind,object_kind,object_id,created_at)
+  VALUES('membership','room',NEW.room_key,strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+END;
+CREATE TRIGGER IF NOT EXISTS coord_membership_visibility_event AFTER INSERT ON coord_room_membership_events
+WHEN NEW.action='leave' BEGIN
+  INSERT INTO coord_events(kind,object_kind,object_id,created_at)
+  VALUES('visibility','principal',NEW.principal_id,strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+END;
+CREATE TRIGGER IF NOT EXISTS coord_read_insert_event AFTER INSERT ON coord_read_state BEGIN
+  INSERT INTO coord_events(kind,object_kind,object_id,created_at)
+  VALUES('read',NEW.destination_kind,NEW.destination_id,strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+END;
+CREATE TRIGGER IF NOT EXISTS coord_read_update_event AFTER UPDATE ON coord_read_state
+WHEN OLD.read_through_sequence IS NOT NEW.read_through_sequence
+  OR OLD.manual_unread_from_sequence IS NOT NEW.manual_unread_from_sequence BEGIN
+  INSERT INTO coord_events(kind,object_kind,object_id,created_at)
+  VALUES('read',NEW.destination_kind,NEW.destination_id,strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+END;
+CREATE TRIGGER IF NOT EXISTS coord_attention_insert_event AFTER INSERT ON coord_attention BEGIN
+  INSERT INTO coord_events(kind,object_kind,object_id,created_at)
+  VALUES('attention','attention',CAST(NEW.id AS TEXT),strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+END;
+CREATE TRIGGER IF NOT EXISTS coord_attention_update_event AFTER UPDATE ON coord_attention
+WHEN OLD.state IS NOT NEW.state OR OLD.reason IS NOT NEW.reason
+  OR OLD.resolved_at IS NOT NEW.resolved_at BEGIN
+  INSERT INTO coord_events(kind,object_kind,object_id,created_at)
+  VALUES('attention','attention',CAST(NEW.id AS TEXT),strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+END;
+CREATE TRIGGER IF NOT EXISTS coord_standing_insert_event AFTER INSERT ON coord_standing BEGIN
+  INSERT INTO coord_events(kind,object_kind,object_id,created_at)
+  VALUES('standing','room',NEW.room_key,strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+END;
+CREATE TRIGGER IF NOT EXISTS coord_standing_update_event AFTER UPDATE ON coord_standing
+WHEN OLD.body IS NOT NEW.body OR OLD.targets IS NOT NEW.targets
+  OR OLD.ended_at IS NOT NEW.ended_at OR OLD.ended_by IS NOT NEW.ended_by BEGIN
+  INSERT INTO coord_events(kind,object_kind,object_id,created_at)
+  VALUES('standing','room',NEW.room_key,strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+END;
+CREATE TRIGGER IF NOT EXISTS coord_thread_insert_event AFTER INSERT ON threads BEGIN
+  INSERT INTO coord_events(kind,object_kind,object_id,created_at)
+  VALUES('thread','thread',CAST(NEW.id AS TEXT),strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+END;
+CREATE TRIGGER IF NOT EXISTS coord_thread_update_event AFTER UPDATE ON threads BEGIN
+  INSERT INTO coord_events(kind,object_kind,object_id,created_at)
+  VALUES('thread','thread',CAST(NEW.id AS TEXT),strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+END;
+CREATE TRIGGER IF NOT EXISTS coord_thread_home_insert_event AFTER INSERT ON thread_homes BEGIN
+  INSERT INTO coord_events(kind,object_kind,object_id,created_at)
+  VALUES('thread','thread',CAST(NEW.thread_id AS TEXT),strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+END;
+CREATE TRIGGER IF NOT EXISTS coord_thread_link_insert_event AFTER INSERT ON thread_links BEGIN
+  INSERT INTO coord_events(kind,object_kind,object_id,created_at)
+  VALUES('thread','thread',CAST(NEW.thread_id AS TEXT),strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+END;
+CREATE TRIGGER IF NOT EXISTS coord_thread_link_delete_event AFTER DELETE ON thread_links BEGIN
+  INSERT INTO coord_events(kind,object_kind,object_id,created_at)
+  VALUES('thread','thread',CAST(OLD.thread_id AS TEXT),strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+END;
+CREATE TRIGGER IF NOT EXISTS coord_delivery_insert_event AFTER INSERT ON coord_deliveries BEGIN
+  INSERT INTO coord_events(kind,object_kind,object_id,created_at)
+  SELECT 'delivery',destination_kind,destination_id,strftime('%Y-%m-%dT%H:%M:%fZ','now')
+  FROM coord_messages WHERE id=NEW.message_id;
+END;
+CREATE TRIGGER IF NOT EXISTS coord_delivery_update_event AFTER UPDATE ON coord_deliveries
+WHEN OLD.state IS NOT NEW.state OR OLD.rank IS NOT NEW.rank BEGIN
+  INSERT INTO coord_events(kind,object_kind,object_id,created_at)
+  SELECT 'delivery',destination_kind,destination_id,strftime('%Y-%m-%dT%H:%M:%fZ','now')
+  FROM coord_messages WHERE id=NEW.message_id;
+END;
 `
 
 func Open(path string) (*Store, error) {
@@ -481,6 +916,54 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := migrateAccounts(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := migrateCoordRoomMemberships(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureCoordAgentPrincipalID(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensurePathActivityAccount(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureCoordAgentPresence(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureCoordWaitCycles(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureCoordAgentRole(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureHumanAuthorityMarker(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureAgentControl(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := migrateOwnership(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := migrateOrgs(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureThreadAuthorPrincipalID(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := ensureKnowledgeConfirmedBy(db); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -503,6 +986,13 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 	if err := EnsureContextSnapshotSchema(db); err != nil {
 		_ = db.Close()
 		return nil, err
+	}
+	if report, err := BackfillKnowledgeRelations(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	} else if report.Unclean() {
+		log.Printf("knowledge relations backfill: created=%d skipped_unusable=%d skipped_cycle=%d superseded_without_parent=%d",
+			report.Created, report.SkippedUnusable, report.SkippedCycle, report.SupersededWithoutParent)
 	}
 	db.SetMaxOpenConns(options.MaxOpenConns)
 	db.SetMaxIdleConns(options.MaxOpenConns)

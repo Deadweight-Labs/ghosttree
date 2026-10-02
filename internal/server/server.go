@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/proxytrust"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/snapshot"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -47,6 +48,15 @@ func WithLogger(logger *slog.Logger) Option {
 	return func(a *api) { a.logger = logger }
 }
 
+// WithTrustedProxies names the networks whose forwarding headers are believed
+// (loopback is always included).
+func WithTrustedProxies(s proxytrust.Set) Option { return func(a *api) { a.proxies = s } }
+
+// WithPublicURL fixes the externally visible base URL (scheme://host, no path).
+func WithPublicURL(raw string) Option {
+	return func(a *api) { a.publicURL = strings.TrimRight(raw, "/") }
+}
+
 func WithBuildVersion(version string) Option {
 	return func(a *api) { a.buildVersion = version }
 }
@@ -60,6 +70,8 @@ func withSnapshotErrorLogger(logger snapshotErrorLogger) Option {
 }
 
 type api struct {
+	proxies              proxytrust.Set
+	publicURL            string
 	st                   *store.Store
 	snapshotLimits       snapshot.Limits
 	snapshotMirror       SnapshotMirror
@@ -69,6 +81,8 @@ type api struct {
 	buildVersion         string
 	requestIDGenerator   requestIDGenerator
 	metrics              *metricsRegistry
+	registered           []string
+	uncheckedHook        func(route string)
 }
 
 type personKey struct{}
@@ -76,72 +90,135 @@ type personKey struct{}
 func New(st *store.Store, options ...Option) http.Handler {
 	a := newAPI(st, options...)
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
+	a.registerRoutes(mux)
+	return a.telemetry(a.auth(a.captureRoute(mux)))
+}
+
+func (a *api) registerRoutes(mux *http.ServeMux) {
+	a.routeFunc(mux, "GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	})
-	mux.Handle("GET /metrics", a.metrics)
-	mux.HandleFunc("GET /api/whoami", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, principalOf(r))
+	a.route(mux, "GET /metrics", a.metrics)
+	a.routeFunc(mux, "GET /api/whoami", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, a.whoAmI(r))
 	})
-	mux.HandleFunc("POST /api/context-snapshots", a.createContextSnapshot)
-	mux.HandleFunc("GET /api/context-snapshots", a.listContextSnapshots)
-	mux.HandleFunc("GET /api/context-snapshots/{name}", a.getContextSnapshot)
-	mux.HandleFunc("GET /api/context-snapshots/{name}/entries", a.contextSnapshotEntries)
-	mux.HandleFunc("POST /api/sessions", a.createSession)
-	mux.HandleFunc("GET /api/sessions", a.listSessions)
-	mux.HandleFunc("POST /api/sessions/{id}/chunks", a.appendChunks)
-	mux.HandleFunc("GET /api/sessions/{id}/raw", a.rawSession)
-	mux.HandleFunc("GET /api/sessions/{id}", a.readSession)
-	mux.HandleFunc("POST /api/requests", a.createRequest)
-	mux.HandleFunc("GET /api/requests", a.searchRequests)
-	mux.HandleFunc("GET /api/requests/search", a.searchRequests)
-	mux.HandleFunc("GET /api/requests/{id}", a.getRequest)
-	mux.HandleFunc("POST /api/requests/{id}/work", a.startRequestWork)
-	mux.HandleFunc("PATCH /api/request-work/{id}", a.finishRequestWork)
-	mux.HandleFunc("POST /api/requests/{id}/criteria", a.addRequestCriterion)
-	mux.HandleFunc("PATCH /api/criteria/{id}", a.setRequestCriterion)
-	mux.HandleFunc("POST /api/requests/{id}/complete", a.completeRequest)
-	mux.HandleFunc("POST /api/requests/{id}/drop", a.dropRequest)
-	mux.HandleFunc("POST /api/requests/{id}/relations", a.addRequestRelation)
-	mux.HandleFunc("PATCH /api/requests/{id}", a.correctRequest)
-	mux.HandleFunc("DELETE /api/request-relations/{id}", a.removeRequestRelation)
-	mux.HandleFunc("POST /api/knowledge", a.createKnowledge)
-	mux.HandleFunc("GET /api/knowledge", a.listKnowledge)
-	mux.HandleFunc("GET /api/knowledge/pending", a.pendingKnowledge)
-	mux.HandleFunc("GET /api/knowledge/{id}", a.getKnowledge)
-	mux.HandleFunc("GET /api/knowledge/{id}/history", a.knowledgeHistory)
-	mux.HandleFunc("PATCH /api/knowledge/{id}", a.patchKnowledge)
-	mux.HandleFunc("PUT /api/knowledge/{id}/regression", a.setRegressionCover)
-	mux.HandleFunc("GET /api/knowledge/regression-gaps", a.regressionGaps)
-	mux.HandleFunc("POST /api/migrated-knowledge", a.insertMigratedKnowledge)
-	mux.HandleFunc("GET /api/migrations", a.completedMigrationArtifacts)
-	mux.HandleFunc("GET /api/migrations/documents", a.completedDocumentArtifacts)
-	mux.HandleFunc("POST /api/migrations", a.beginMigration)
-	mux.HandleFunc("PUT /api/migrations/{id}/complete", a.completeMigration)
-	mux.HandleFunc("POST /api/migrations/{id}/documents", a.insertDocumentMigration)
-	mux.HandleFunc("POST /api/migrations/{id}/documents/import", a.importDocumentMigration)
-	mux.HandleFunc("GET /api/search", a.search)
-	mux.HandleFunc("GET /api/context/bootstrap", a.bootstrap)
-	mux.HandleFunc("GET /api/context/interrupted", a.interrupted)
-	mux.HandleFunc("GET /api/context/relevant", a.relevant)
-	mux.HandleFunc("POST /api/ghosts", a.putGhost)
-	mux.HandleFunc("GET /api/ghosts", a.ghostsForPath)
-	mux.HandleFunc("GET /api/ghosts/tree", a.ghostTree)
-	mux.HandleFunc("GET /api/ghosts/history", a.ghostHistory)
-	mux.HandleFunc("POST /api/ghosts/move", a.ghostsMove)
-	mux.HandleFunc("POST /api/ghosts/archive", a.archiveGhosts)
-	mux.HandleFunc("GET /api/ghosts/archive-candidate", a.ghostArchiveCandidate)
-	mux.HandleFunc("GET /api/ghosts/search", a.searchGhosts)
-	mux.HandleFunc("POST /api/ghosts/reviews", a.putGhostReview)
-	mux.HandleFunc("GET /api/ghosts/reviews", a.ghostReviews)
-	mux.HandleFunc("POST /api/documents", a.createDocument)
-	mux.HandleFunc("GET /api/documents", a.listDocuments)
-	mux.HandleFunc("GET /api/documents/{id}", a.getDocument)
-	mux.HandleFunc("PATCH /api/documents/{id}", a.patchDocument)
-	mux.HandleFunc("PUT /api/documents/{id}/revisions", a.pushDocumentRevision)
-	mux.HandleFunc("GET /api/documents/{id}/revisions", a.documentRevisions)
-	mux.HandleFunc("GET /api/documents/{id}/revisions/{rev}", a.documentRevision)
-	return a.telemetry(a.auth(a.captureRoute(mux)))
+	a.routeFunc(mux, "POST /api/auth/device", a.startDeviceLogin)
+	a.routeFunc(mux, "POST /api/auth/device/token", a.pollDeviceLogin)
+	a.routeFunc(mux, "GET /api/orgs", a.listOrgs)
+	a.routeFunc(mux, "POST /api/orgs", a.createOrg)
+	a.routeFunc(mux, "PATCH /api/orgs/{org}", a.renameOrg)
+	a.routeFunc(mux, "GET /api/orgs/{org}/members", a.listOrgMembers)
+	a.routeFunc(mux, "PUT /api/orgs/{org}/members/{account}", a.setOrgMemberRole)
+	a.routeFunc(mux, "DELETE /api/orgs/{org}/members/{account}", a.removeOrgMember)
+	a.routeFunc(mux, "GET /api/orgs/{org}/invitations", a.listOrgInvitations)
+	a.routeFunc(mux, "POST /api/orgs/{org}/invitations", a.createOrgInvitation)
+	a.routeFunc(mux, "DELETE /api/orgs/{org}/invitations/{id}", a.revokeOrgInvitation)
+	a.routeFunc(mux, "POST /api/invitations/accept", a.acceptInvitation)
+	a.routeFunc(mux, "PUT /api/account/default-org", a.setDefaultOrg)
+	a.routeFunc(mux, "GET /api/projects", a.listProjects)
+	a.routeFunc(mux, "GET /api/projects/{id}/members", a.listProjectMembers)
+	a.routeFunc(mux, "PUT /api/projects/{id}/members/{account}", a.setProjectMemberRole)
+	a.routeFunc(mux, "DELETE /api/projects/{id}/members/{account}", a.removeProjectMemberRole)
+	a.routeFunc(mux, "POST /api/projects/claim", a.claimProject)
+	a.routeFunc(mux, "POST /api/projects/move", a.moveProject)
+	a.routeFunc(mux, "POST /api/context-snapshots", a.createContextSnapshot)
+	a.routeFunc(mux, "GET /api/context-snapshots", a.listContextSnapshots)
+	a.routeFunc(mux, "GET /api/context-snapshots/{name}", a.getContextSnapshot)
+	a.routeFunc(mux, "GET /api/context-snapshots/{name}/entries", a.contextSnapshotEntries)
+	a.routeFunc(mux, "POST /api/sessions", a.createSession)
+	a.routeFunc(mux, "GET /api/sessions", a.listSessions)
+	a.routeFunc(mux, "GET /api/machines", a.listMachines)
+	a.routeFunc(mux, "POST /api/sessions/{id}/chunks", a.appendChunks)
+	a.routeFunc(mux, "GET /api/sessions/{id}/raw", a.rawSession)
+	a.routeFunc(mux, "PUT /api/sessions/{id}/share", a.shareSession)
+	a.routeFunc(mux, "GET /api/sessions/{id}", a.readSession)
+	a.routeFunc(mux, "POST /api/requests", a.createRequest)
+	a.routeFunc(mux, "GET /api/requests", a.searchRequests)
+	a.routeFunc(mux, "GET /api/requests/search", a.searchRequests)
+	a.routeFunc(mux, "GET /api/requests/{id}", a.getRequest)
+	a.routeFunc(mux, "POST /api/requests/{id}/work", a.startRequestWork)
+	a.routeFunc(mux, "PATCH /api/request-work/{id}", a.finishRequestWork)
+	a.routeFunc(mux, "POST /api/requests/{id}/criteria", a.addRequestCriterion)
+	a.routeFunc(mux, "PATCH /api/criteria/{id}", a.setRequestCriterion)
+	a.routeFunc(mux, "POST /api/requests/{id}/complete", a.completeRequest)
+	a.routeFunc(mux, "POST /api/requests/{id}/drop", a.dropRequest)
+	a.routeFunc(mux, "POST /api/requests/{id}/relations", a.addRequestRelation)
+	a.routeFunc(mux, "PATCH /api/requests/{id}", a.correctRequest)
+	a.routeFunc(mux, "DELETE /api/request-relations/{id}", a.removeRequestRelation)
+	a.routeFunc(mux, "POST /api/knowledge", a.createKnowledge)
+	a.routeFunc(mux, "GET /api/knowledge", a.listKnowledge)
+	a.routeFunc(mux, "GET /api/knowledge/pending", a.pendingKnowledge)
+	a.routeFunc(mux, "GET /api/knowledge/{id}", a.getKnowledge)
+	a.routeFunc(mux, "GET /api/knowledge/{id}/history", a.knowledgeHistory)
+	a.routeFunc(mux, "PATCH /api/knowledge/{id}", a.patchKnowledge)
+	a.routeFunc(mux, "PUT /api/knowledge/{id}/regression", a.setRegressionCover)
+	a.routeFunc(mux, "GET /api/knowledge/regression-gaps", a.regressionGaps)
+	a.routeFunc(mux, "POST /api/migrated-knowledge", a.insertMigratedKnowledge)
+	a.routeFunc(mux, "GET /api/migrations", a.completedMigrationArtifacts)
+	a.routeFunc(mux, "GET /api/migrations/documents", a.completedDocumentArtifacts)
+	a.routeFunc(mux, "POST /api/migrations", a.beginMigration)
+	a.routeFunc(mux, "PUT /api/migrations/{id}/complete", a.completeMigration)
+	a.routeFunc(mux, "POST /api/migrations/{id}/documents", a.insertDocumentMigration)
+	a.routeFunc(mux, "POST /api/migrations/{id}/documents/import", a.importDocumentMigration)
+	a.routeFunc(mux, "GET /api/search", a.search)
+	a.routeFunc(mux, "GET /api/context/bootstrap", a.bootstrap)
+	a.routeFunc(mux, "GET /api/context/interrupted", a.interrupted)
+	a.routeFunc(mux, "GET /api/context/relevant", a.relevant)
+	a.routeFunc(mux, "POST /api/ghosts", a.putGhost)
+	a.routeFunc(mux, "GET /api/ghosts", a.ghostsForPath)
+	a.routeFunc(mux, "GET /api/ghosts/tree", a.ghostTree)
+	a.routeFunc(mux, "GET /api/ghosts/history", a.ghostHistory)
+	a.routeFunc(mux, "POST /api/ghosts/move", a.ghostsMove)
+	a.routeFunc(mux, "POST /api/ghosts/archive", a.archiveGhosts)
+	a.routeFunc(mux, "GET /api/ghosts/archive-candidate", a.ghostArchiveCandidate)
+	a.routeFunc(mux, "GET /api/ghosts/search", a.searchGhosts)
+	a.routeFunc(mux, "POST /api/ghosts/reviews", a.putGhostReview)
+	a.routeFunc(mux, "GET /api/ghosts/reviews", a.ghostReviews)
+	a.routeFunc(mux, "POST /api/coord/agents", a.registerCoordAgent)
+	a.routeFunc(mux, "GET /api/coord/agents", a.coordPeers)
+	a.routeFunc(mux, "POST /api/coord/messages", a.sendCoordMessage)
+	a.routeFunc(mux, "GET /api/coord/messages", a.coordInbox)
+	a.routeFunc(mux, "GET /api/coord/messages/{id}/mentions", a.coordMessageMentions)
+	a.routeFunc(mux, "GET /api/coord/attention", a.coordAttention)
+	a.routeFunc(mux, "POST /api/coord/attention/action", a.coordAttentionAction)
+	a.routeFunc(mux, "GET /api/activity/path", a.pathActivity)
+	a.routeFunc(mux, "GET /api/activity/session", a.sessionActivity)
+	a.routeFunc(mux, "POST /api/activity", a.recordPathActivity)
+	a.routeFunc(mux, "GET /api/agent-control", a.getAgentControl)
+	a.routeFunc(mux, "POST /api/agent-control", a.agentControlWebOnly)
+	a.routeFunc(mux, "POST /api/agent-control/resume", a.agentControlWebOnly)
+	a.routeFunc(mux, "POST /api/agent-control/{id}/events", a.recordAgentControlEvent)
+	a.routeFunc(mux, "POST /api/coord/deliveries", a.markCoordDelivery)
+	a.routeFunc(mux, "POST /api/coord/heartbeat", a.coordHeartbeat)
+	a.routeFunc(mux, "POST /api/coord/deliveries/claim", a.claimCoordDelivery)
+	a.routeFunc(mux, "GET /api/coord/deliveries/injected", a.coordInjectedMessages)
+	a.routeFunc(mux, "POST /api/coord/rooms", a.ensureCoordRoom)
+	a.routeFunc(mux, "GET /api/coord/rooms", a.coordRooms)
+	a.routeFunc(mux, "POST /api/coord/groups", a.createCoordGroup)
+	a.routeFunc(mux, "POST /api/coord/cursor", a.coordCursorSet)
+	a.routeFunc(mux, "GET /api/coord/cursor", a.coordCursorGet)
+	a.routeFunc(mux, "POST /api/threads", a.createThread)
+	a.routeFunc(mux, "POST /api/threads/from-message", a.createTaskThreadFromMessage)
+	a.routeFunc(mux, "GET /api/threads/home", a.listRoomThreads)
+	a.routeFunc(mux, "GET /api/threads", a.listThreads)
+	a.routeFunc(mux, "GET /api/threads/for", a.threadsForObject)
+	a.routeFunc(mux, "GET /api/threads/{id}", a.getThread)
+	a.routeFunc(mux, "GET /api/threads/{id}/home", a.getThreadHome)
+	a.routeFunc(mux, "POST /api/threads/{id}/state", a.setThreadState)
+	a.routeFunc(mux, "POST /api/threads/{id}/touch", a.touchThread)
+	a.routeFunc(mux, "POST /api/threads/{id}/links", a.linkThread)
+	a.routeFunc(mux, "GET /api/threads/{id}/links", a.threadLinks)
+	a.routeFunc(mux, "POST /api/threads/{id}/summary", a.putThreadSummary)
+	a.routeFunc(mux, "GET /api/threads/{id}/summary", a.getThreadSummary)
+	a.routeFunc(mux, "POST /api/threads/{id}/outcomes", a.putThreadOutcome)
+	a.routeFunc(mux, "GET /api/threads/{id}/outcomes", a.threadOutcomes)
+	a.routeFunc(mux, "POST /api/documents", a.createDocument)
+	a.routeFunc(mux, "GET /api/documents", a.listDocuments)
+	a.routeFunc(mux, "GET /api/documents/{id}", a.getDocument)
+	a.routeFunc(mux, "PATCH /api/documents/{id}", a.patchDocument)
+	a.routeFunc(mux, "PUT /api/documents/{id}/revisions", a.pushDocumentRevision)
+	a.routeFunc(mux, "GET /api/documents/{id}/revisions", a.documentRevisions)
+	a.routeFunc(mux, "GET /api/documents/{id}/revisions/{rev}", a.documentRevision)
 }
 
 func newAPI(st *store.Store, options ...Option) *api {
@@ -198,7 +275,7 @@ func fallbackOperationID() string {
 
 func (a *api) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/health" || r.URL.Path == "/metrics" {
+		if r.URL.Path == "/api/health" || r.URL.Path == "/metrics" || (r.Method == http.MethodPost && isDevicePath(r.URL.Path)) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -211,8 +288,27 @@ func (a *api) auth(next http.Handler) http.Handler {
 		if record := requestRecordFromContext(r.Context()); record != nil {
 			record.actor = principal.Label
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), personKey{}, principal)))
+		ctx := context.WithValue(r.Context(), personKey{}, principal)
+		next.ServeHTTP(w, r.WithContext(withAccessHolder(ctx, a.st, principal)))
 	})
+}
+
+// whoAmIResponse ist der Principal plus die Kontodaten. Die Principal-Felder
+// bleiben flach, damit Clients, die nur store.Principal lesen, weiterlaufen.
+type whoAmIResponse struct {
+	store.Principal
+	Email string `json:"email,omitempty"`
+	Admin bool   `json:"admin"`
+	State string `json:"state,omitempty"`
+}
+
+func (a *api) whoAmI(r *http.Request) whoAmIResponse {
+	p := principalOf(r)
+	out := whoAmIResponse{Principal: p}
+	if acct, err := a.st.AccountByPrincipalID(p.ID); err == nil {
+		out.Email, out.Admin, out.State = acct.Email, acct.Admin, acct.State
+	}
+	return out
 }
 
 func personOf(r *http.Request) string {

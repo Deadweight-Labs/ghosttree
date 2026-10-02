@@ -511,3 +511,127 @@ func TestDistillSessionsRefusesToReleaseTheCurrentPromptVersion(t *testing.T) {
 		t.Fatalf("output does not explain the refusal: %s", out.String())
 	}
 }
+
+func TestAccountCLIAddsListsIssuesAndRevokes(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "ghosttree.db")
+	ctx := func(args ...string) string {
+		t.Helper()
+		var out bytes.Buffer
+		if code := run(append(args, "--db", db), &out); code != 0 {
+			t.Fatalf("%v: exit=%d output=%s", args, code, out.String())
+		}
+		return out.String()
+	}
+	if got := ctx("account", "add", "alice", "--email", "a@example.com"); !strings.Contains(got, "person:1") {
+		t.Fatalf("add = %q", got)
+	}
+	if got := ctx("account", "list"); !strings.Contains(got, "alice") || !strings.Contains(got, "email=a@example.com") {
+		t.Fatalf("list = %q", got)
+	}
+	created := ctx("account", "token", "create", "alice", "--label", "laptop", "--machine", "laptop-a", "--expires-in", "24h")
+	var token string
+	fmt.Sscanf(strings.SplitN(strings.SplitN(created, "token: ", 2)[1], "\n", 2)[0], "%s", &token)
+	if token == "" || !strings.Contains(created, "id: 1") {
+		t.Fatalf("create = %q", created)
+	}
+	listed := ctx("account", "tokens", "alice")
+	if !strings.Contains(listed, "laptop") || !strings.Contains(listed, "active") || strings.Contains(listed, token) {
+		t.Fatalf("tokens = %q", listed)
+	}
+	st, err := store.Open(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p, ok := st.AuthenticatePrincipal(token); !ok || p.Label != "alice" {
+		t.Fatalf("issued token = %+v ok=%v", p, ok)
+	}
+	st.Close()
+	ctx("account", "token", "revoke", "1")
+	if got := ctx("account", "tokens", "alice"); !strings.Contains(got, "revoked") {
+		t.Fatalf("tokens after revoke = %q", got)
+	}
+	st, _ = store.Open(db)
+	defer st.Close()
+	if _, ok := st.AuthenticatePrincipal(token); ok {
+		t.Fatal("revoked token still authenticates")
+	}
+	var out bytes.Buffer
+	if code := run([]string{"account", "token", "create", "ghost", "--db", db}, &out); code == 0 {
+		t.Fatalf("unknown account must fail: %s", out.String())
+	}
+}
+
+func TestAccountCLIIssuesClaimCodeAndLoginLink(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "ghosttree.db")
+	ctx := func(args ...string) (string, int) {
+		var out bytes.Buffer
+		code := run(append(args, "--db", db), &out)
+		return out.String(), code
+	}
+	ctx("account", "add", "robin")
+	claim, code := ctx("account", "claim-code", "robin")
+	if code != 0 || !strings.Contains(claim, "claim code: ") || !strings.Contains(claim, "30m0s") {
+		t.Fatalf("claim = %q exit=%d", claim, code)
+	}
+	link, code := ctx("account", "login-link", "robin", "--url", "https://gt.example/")
+	if code != 0 || !strings.HasPrefix(link, "https://gt.example/ui/login/code?code=") {
+		t.Fatalf("link = %q exit=%d", link, code)
+	}
+	var raw string
+	fmt.Sscanf(strings.SplitN(strings.SplitN(link, "code=", 2)[1], "\n", 2)[0], "%s", &raw)
+	st, err := store.Open(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if a, err := st.RedeemLoginLink(raw); err != nil || a.Name != "robin" {
+		t.Fatalf("redeem a=%+v err=%v", a, err)
+	}
+	if _, code := ctx("account", "claim-code", "ghost"); code == 0 {
+		t.Fatal("claim code for an unknown account")
+	}
+}
+
+func TestPersonAddStillIssuesLegacyToken(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "ghosttree.db")
+	var out bytes.Buffer
+	if code := run([]string{"person", "add", "carol", "--db", db}, &out); code != 0 {
+		t.Fatalf("exit=%d %s", code, out.String())
+	}
+	var token string
+	fmt.Sscanf(strings.SplitN(out.String(), "token: ", 2)[1], "%s", &token)
+	st, err := store.Open(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if p, ok := st.AuthenticatePrincipal(token); !ok || p.Label != "carol" || p.TokenKind != "legacy" {
+		t.Fatalf("principal = %+v ok=%v", p, ok)
+	}
+}
+
+func TestPersonAddPrintsTheStoredName(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "ghosttree.db")
+	var out bytes.Buffer
+	if code := run([]string{"person", "add", "Ｃａｒｏｌ", "--db", db}, &out); code != 0 {
+		t.Fatalf("exit=%d %s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "stored name: Carol\n") {
+		t.Fatalf("normalised name not reported: %s", out.String())
+	}
+	out.Reset()
+	if code := run([]string{"person", "add", "dave", "--db", db}, &out); code != 0 || strings.Contains(out.String(), "stored name") {
+		t.Fatalf("unchanged name must not be reported: %d %s", code, out.String())
+	}
+}
+
+func TestAccountAddQuotesTheTokenHint(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "ghosttree.db")
+	var out bytes.Buffer
+	if code := run([]string{"account", "add", "Mary Ann", "--db", db}, &out); code != 0 {
+		t.Fatalf("exit=%d %s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "token create 'Mary Ann'") {
+		t.Fatalf("hint not quoted: %s", out.String())
+	}
+}

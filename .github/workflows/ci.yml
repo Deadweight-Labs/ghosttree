@@ -23,7 +23,7 @@ jobs:
         env:
           BASE: ${{ github.base_ref }}
           HEAD: ${{ github.head_ref }}
-          ACTOR: ${{ github.actor }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
@@ -35,15 +35,16 @@ jobs:
             *) echo "Pull requests target dev or release/*; only release/* and hotfix/* target main."; exit 1 ;;
           esac
           printf '%s\n' "$PR_TITLE" | grep -Eq '^(feat|fix|docs|test|build|ci|chore|refactor|perf|revert)(\([a-z0-9._-]+\))?!?: .+'
-          if [ "$ACTOR" = "dependabot[bot]" ]; then
-            exit 0
-          fi
+          case "$PR_AUTHOR:$HEAD" in
+            "dependabot[bot]:dependabot/"*) exit 0 ;;
+          esac
           test "$(printf '%s\n' "$PR_BODY" | grep -Ec "^- \[[xX]\] \`(major|minor|patch|none)\`")" -eq 1
           printf '%s\n' "$PR_BODY" | grep -Eq '^- \[[xX]\] I have read and agree to the .*Contributor License Agreement'
 
   quality:
     name: Go quality
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -61,7 +62,7 @@ jobs:
       - name: Check planned version
         run: grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$' VERSION
       - name: Test with race detector
-        run: go test -race -count=1 ./...
+        run: go test -race -count=1 -timeout 30m ./...
       - name: Cross-build supported targets
         run: |
           for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
