@@ -204,6 +204,11 @@ func docPull(repoRoot, project string, c *client.Client, slug string, force bool
 		fmt.Fprintln(stdout, err)
 		return 1
 	}
+	// Keep a file that already exists under an older name (for example one
+	// with a doubled date prefix) instead of leaving it behind as an orphan.
+	if existing, ok := state[slug]; ok && existing.Path != "" {
+		rel = existing.Path
+	}
 	if err := docwork.WriteFile(repoRoot, rel, revision.Body); err != nil {
 		fmt.Fprintln(stdout, err)
 		return 1

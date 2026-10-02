@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
@@ -186,5 +187,49 @@ func TestDocImportRecordsProofBeforeClean(t *testing.T) {
 	proof, err := c.CompletedDocumentArtifacts("p")
 	if err != nil || len(proof["existing-design.md"]) != 1 || proof["existing-design.md"][0] != store.Digest(body) {
 		t.Fatalf("proof = %+v, %v", proof, err)
+	}
+}
+
+func TestDocNewDatePrefix(t *testing.T) {
+	today := time.Now().UTC().Format("2006-01-02")
+	cases := []struct{ name, slug, want string }{
+		{"slug without date", "gap-analysis", "specs/" + today + "-gap-analysis.md"},
+		{"slug with date", "2026-10-02-gap-analysis", "specs/2026-10-02-gap-analysis.md"},
+		{"slug with other date", "2020-01-01-gap-analysis", "specs/2020-01-01-gap-analysis.md"},
+		{"slug with date only", "2026-10-02", "specs/2026-10-02.md"},
+		{"digits that are not a date", "2026-req", "specs/" + today + "-2026-req.md"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			var out bytes.Buffer
+			if code := docNew(root, []string{"spec", tc.slug}, &out); code != 0 {
+				t.Fatalf("docNew = %d: %s", code, out.String())
+			}
+			state, _ := docwork.LoadState(root)
+			if got := state[tc.slug].Path; got != tc.want {
+				t.Fatalf("path = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// The title never feeds the filename; a dated title must not change the path.
+func TestDocNewDatedTitleDoesNotAffectPath(t *testing.T) {
+	root := t.TempDir()
+	var out bytes.Buffer
+	if code := docNew(root, []string{"spec", "req360-gap-analysis"}, &out); code != 0 {
+		t.Fatal(out.String())
+	}
+	state, _ := docwork.LoadState(root)
+	path := state["req360-gap-analysis"].Path
+	if err := docwork.WriteFile(root, path, "# 2026-10-02 REQ-360 gap analysis\n"); err != nil {
+		t.Fatal(err)
+	}
+	if got := docTitle("# 2026-10-02 REQ-360 gap analysis\n", "x"); got != "2026-10-02 REQ-360 gap analysis" {
+		t.Fatalf("title = %q", got)
+	}
+	if strings.Count(path, "-20") > 0 && strings.Count(path, "2026-10-02") > 1 {
+		t.Fatalf("doubled date in %q", path)
 	}
 }
