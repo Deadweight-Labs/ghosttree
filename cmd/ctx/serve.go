@@ -268,7 +268,26 @@ func runServer(ctx context.Context, st *store.Store, cfg serveConfig, stdout, st
 		}
 	}
 	slog.New(slog.NewJSONHandler(stderr, nil)).Info("writer_config", "max_operations", cfg.Writer.MaxOperations, "max_bytes", cfg.Writer.MaxBytes, "max_batch", cfg.Writer.MaxBatch, "read_connections", cfg.Writer.ReadConnections)
-	if err := serveUntilCanceled(ctx, newHTTPServer(cfg.Listen, buildServerHandler(st, cfg, stderr))); err != nil {
+	// The session search index of chunks written before it existed is caught up
+	// in the background, in small resumable steps; serving does not wait for it.
+	indexCtx, stopIndex := context.WithCancel(ctx)
+	indexDone := make(chan struct{})
+	go func() {
+		defer close(indexDone)
+		logger := slog.New(slog.NewJSONHandler(stderr, nil))
+		started := time.Now()
+		if err := st.RunIndexBackfill(indexCtx, store.BackfillOptions{}); err != nil {
+			if indexCtx.Err() == nil {
+				logger.Error("session_index_backfill", "error", err.Error())
+			}
+			return
+		}
+		logger.Info("session_index_backfill", "state", "complete", "seconds", int(time.Since(started).Seconds()))
+	}()
+	err := serveUntilCanceled(ctx, newHTTPServer(cfg.Listen, buildServerHandler(st, cfg, stderr)))
+	stopIndex()
+	<-indexDone
+	if err != nil {
 		fmt.Fprintf(stdout, "serve: %v\n", err)
 		return 1
 	}

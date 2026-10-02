@@ -962,6 +962,10 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := ensureSessionIndex(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := ensureInvitationProjectRole(db); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -1002,7 +1006,12 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 	}
 	db.SetMaxOpenConns(options.MaxOpenConns)
 	db.SetMaxIdleConns(options.MaxOpenConns)
-	return &Store{db: db, path: dbPath}, nil
+	st := &Store{db: db, path: dbPath}
+	if err := st.startIndexBackfill(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return st, nil
 }
 
 func storeSQLiteDSN(path string) string {

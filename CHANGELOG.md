@@ -6,6 +6,22 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Added: sessions are searchable and addressable by a random id (REQ-435,
+  Sessions backend). Every stored line of a session is read into one display
+  model for Claude Code and Codex (messages, prompts, thinking, tool calls with
+  input and result, diffs), and the search index now covers thinking blocks,
+  tool input and tool results, each cut to 8 KB per chunk; before, 88 % of the
+  chunks had no searchable text. Chunks stored earlier are indexed in the
+  background after the update, in small resumable steps (the server starts at
+  once; progress survives a restart). Sessions get a title (the Claude
+  `ai-title`, else the first user message) and a random web address instead of
+  the running number. A session has three sharing levels: private, project
+  members, and project including guests. Only the session's owner or the
+  project owner changes it, every change is recorded, and a guest sees only
+  sessions shared with guests, without machine, branch, path or owner. Search
+  results, counts and filter numbers are formed from the sessions the viewer
+  may read only.
+
 - Changed: the web interface has a new app shell (REQ-435, first part). A
   left navigation (Overview, Agents, Rooms, Knowledge, Requests; Administration
   for owners and admins, "My devices & tokens" for members) with a project

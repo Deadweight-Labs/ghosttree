@@ -25,7 +25,23 @@ type Session struct {
 	// freigegeben (Spec 8.1). Owner und Lead brauchen die Freigabe nicht.
 	// Gesetzt wird es nur über SetSessionShared, nie aus einem Upload.
 	Shared bool `json:"shared,omitempty"`
+	// Visibility ist die Freigabestufe: private, project (Mitglieder) oder
+	// guests (Mitglieder und Gäste). Shared ist true ab project.
+	Visibility string `json:"visibility,omitempty"`
+	// PublicID ist die Adresse in der Weboberfläche: zufällig, ohne Zählfolge.
+	PublicID string `json:"public_id,omitempty"`
+	// Title: ai-title der Session, sonst die erste Nutzernachricht (gekürzt).
+	Title string `json:"title,omitempty"`
+	// Messages zählt Nutzer- und Assistententexte (aus dem Index).
+	Messages int `json:"messages,omitempty"`
 }
+
+// Freigabestufen einer Session.
+const (
+	VisPrivate = "private"
+	VisProject = "project"
+	VisGuests  = "guests"
+)
 
 type Chunk struct {
 	Seq  int    `json:"seq"`
@@ -45,7 +61,7 @@ type SessionHit struct {
 	Snippet string  `json:"snippet"`
 }
 
-const sessionCols = `id, harness, external_id, project, branch, machine, cwd, started_at, last_seen_at, account_id, shared`
+const sessionCols = `id, harness, external_id, project, branch, machine, cwd, started_at, last_seen_at, account_id, shared, visibility, public_id, title, msg_count`
 
 func (s *Store) UpsertSession(sess Session) (int64, error) {
 	if s.writer != nil {
@@ -63,8 +79,12 @@ func (s *Store) UpsertSession(sess Session) (int64, error) {
 	// dasselbe Konto und dieselbe Maschine (eine leere gespeicherte Maschine
 	// darf gesetzt werden). Sonst liefert RETURNING keine Zeile.
 	var id int64
-	err := s.db.QueryRow(`INSERT INTO sessions(harness, external_id, project, branch, machine, cwd, started_at, last_seen_at, account_id)
-		VALUES(?,?,?,?,?,?,?,?,?)
+	publicID, err := newPublicID()
+	if err != nil {
+		return 0, err
+	}
+	err = s.db.QueryRow(`INSERT INTO sessions(harness, external_id, project, branch, machine, cwd, started_at, last_seen_at, account_id, public_id)
+		VALUES(?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(harness, external_id) DO UPDATE SET
 		  project = excluded.project, branch = excluded.branch, machine = excluded.machine,
 		  cwd = excluded.cwd, last_seen_at = excluded.last_seen_at, account_id = excluded.account_id
@@ -72,7 +92,7 @@ func (s *Store) UpsertSession(sess Session) (int64, error) {
 		  AND (sessions.machine = '' OR sessions.machine = excluded.machine)
 		RETURNING id`,
 		sess.Harness, sess.ExternalID, sess.Scope.Project, sess.Scope.Branch, sess.Scope.Machine,
-		sess.CWD, sess.StartedAt, now(), account, owner).Scan(&id)
+		sess.CWD, sess.StartedAt, now(), account, publicID, owner).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, ErrSessionCollision
 	}
@@ -126,12 +146,33 @@ func (s *Store) AppendChunkBatches(batches []ChunkBatch) error {
 		return err
 	}
 	defer stmt.Close()
+	harness := map[int64]string{}
+	var fresh []chunkRow
 	for _, batch := range batches {
-		for _, c := range batch.Chunks {
-			if _, err := stmt.Exec(batch.SessionID, c.Seq, c.Role, c.Text, c.Raw); err != nil {
+		h, ok := harness[batch.SessionID]
+		if !ok {
+			if err := tx.QueryRow(`SELECT harness FROM sessions WHERE id = ?`, batch.SessionID).Scan(&h); err != nil {
 				return err
 			}
+			harness[batch.SessionID] = h
 		}
+		for _, c := range batch.Chunks {
+			res, err := stmt.Exec(batch.SessionID, c.Seq, c.Role, c.Text, c.Raw)
+			if err != nil {
+				return err
+			}
+			// Nur ein wirklich neuer Chunk wird indiziert.
+			if n, _ := res.RowsAffected(); n == 1 {
+				id, err := res.LastInsertId()
+				if err != nil {
+					return err
+				}
+				fresh = append(fresh, chunkRow{id: id, sessionID: batch.SessionID, seq: c.Seq, harness: h, raw: c.Raw})
+			}
+		}
+	}
+	if err := indexChunks(tx, fresh); err != nil {
+		return err
 	}
 	return tx.Commit()
 }
@@ -314,10 +355,7 @@ func (s *Store) SearchSessions(q string, filter scope.Axes, excludeSession strin
 	out := []SessionHit{}
 	for rows.Next() {
 		var h SessionHit
-		if err := rows.Scan(&h.Session.ID, &h.Session.Harness, &h.Session.ExternalID,
-			&h.Session.Scope.Project, &h.Session.Scope.Branch, &h.Session.Scope.Machine,
-			&h.Session.CWD, &h.Session.StartedAt, &h.Session.LastSeenAt, &h.Session.AccountID, &h.Session.Shared,
-			&h.Seq, &h.Snippet); err != nil {
+		if err := scanSession(rows, &h.Session, &h.Seq, &h.Snippet); err != nil {
 			return nil, err
 		}
 		out = append(out, h)
@@ -339,14 +377,32 @@ func (s *Store) SearchSessions(q string, filter scope.Axes, excludeSession strin
 	return out, nil
 }
 
+// scanSession liest die Spalten von sessionCols und danach extra.
+func scanSession(rows interface{ Scan(...any) error }, s *Session, extra ...any) error {
+	var shared int
+	dest := []any{&s.ID, &s.Harness, &s.ExternalID,
+		&s.Scope.Project, &s.Scope.Branch, &s.Scope.Machine,
+		&s.CWD, &s.StartedAt, &s.LastSeenAt, &s.AccountID, &shared, &s.Visibility, &s.PublicID, &s.Title, &s.Messages}
+	if err := rows.Scan(append(dest, extra...)...); err != nil {
+		return err
+	}
+	// Eine alte Zeile mit shared=1 ohne Stufe ist eine Freigabe für Mitglieder.
+	if shared != 0 && (s.Visibility == "" || s.Visibility == VisPrivate) {
+		s.Visibility = VisProject
+	}
+	if s.Visibility == "" {
+		s.Visibility = VisPrivate
+	}
+	s.Shared = s.Visibility != VisPrivate
+	return nil
+}
+
 func scanSessions(rows *sql.Rows) ([]Session, error) {
 	defer rows.Close()
 	out := []Session{}
 	for rows.Next() {
 		var s Session
-		if err := rows.Scan(&s.ID, &s.Harness, &s.ExternalID,
-			&s.Scope.Project, &s.Scope.Branch, &s.Scope.Machine,
-			&s.CWD, &s.StartedAt, &s.LastSeenAt, &s.AccountID, &s.Shared); err != nil {
+		if err := scanSession(rows, &s); err != nil {
 			return nil, err
 		}
 		out = append(out, s)
@@ -373,12 +429,15 @@ func (s *Store) SetSessionShared(id int64, accountPrincipal string, shared bool)
 	if effectiveOwner(stored, instanceOwnerID(s.db)) != acct {
 		return ErrNotSessionOwner
 	}
-	v := 0
+	level := VisPrivate
 	if shared {
-		v = 1
+		level = VisProject
+		var cur string
+		if err := s.db.QueryRow(`SELECT visibility FROM sessions WHERE id=?`, id).Scan(&cur); err == nil && cur == VisGuests {
+			level = VisGuests
+		}
 	}
-	_, err := s.db.Exec(`UPDATE sessions SET shared=? WHERE id=?`, v, id)
-	return err
+	return s.setVisibility(id, level, accountPrincipal)
 }
 
 // ErrNotSessionOwner: nur der Besitzer einer Session gibt sie frei.
