@@ -27,6 +27,17 @@ Versioning, with pre-1.0 compatibility rules described in
   (machine_bound, invalid_external_id, ...) are shown too, and
   `--agent-name <name>` posts as `ctx:<machine>:<name>`, which also works with
   machine-bound device tokens.
+- Added: data model for relations between knowledge entries (REQ-157, first
+  step). New tables `knowledge_relations` (kinds `supersedes` and `sibling`,
+  states proposed/active/rejected/revoked, nothing is ever deleted),
+  `knowledge_groups` (one volatility per sibling group) and the append-only
+  `knowledge_relation_events`, plus store functions to add, approve, revoke and
+  list relations and to set a group's volatility. Existing `superseded_by`
+  values are copied into active `supersedes` edges when the database is
+  opened (idempotent, one transaction, a revoked edge stays revoked, legacy
+  cycles are skipped and logged). Nothing
+  reads the new tables yet: delivery, search and the `superseded_by` patch
+  behave as before. The `superseded_by` column stays in place.
 - Added: configurable Secure cookies behind TLS and reverse proxies (REQ-236).
   `--public-url` / `GHOSTTREE_PUBLIC_URL` (an https URL makes every cookie
   Secure and its origin is accepted for same-origin checks) and

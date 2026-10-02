@@ -13,6 +13,15 @@ import (
 )
 
 var writerMethodClasses = map[string]string{
+	"AddRelation":                   "write",
+	"DecideRelation":                "write",
+	"RevokeRelation":                "write",
+	"SetGroupVolatility":            "write",
+	"RelationsOf":                   "read",
+	"RelationEvents":                "read",
+	"RelationByID":                  "read",
+	"GroupOf":                       "read",
+	"GroupByID":                     "read",
 	"AddCriterion":                  "write",
 	"CreateOrg":                     "write",
 	"SetOrgRole":                    "write",
