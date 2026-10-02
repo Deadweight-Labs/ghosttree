@@ -967,3 +967,42 @@ func TestSystemMessagesAreMarkedBySystemAuthorKindNotByID(t *testing.T) {
 		t.Fatalf("an agent id must not earn the system mark: %q", got)
 	}
 }
+
+// coord_send mit intent legt eine Wartebeziehung an: Der Empfänger bekommt
+// einen Attention-Eintrag. Das war bisher nur über die Weboberfläche möglich.
+func TestCoordSendIntentCreatesAnAttentionItem(t *testing.T) {
+	a, b, _ := twoSessions(t)
+	ctx := context.Background()
+	if _, _, err := a.handleCoordSend(ctx, nil, CoordSendInput{
+		Body: "darf ich pushen?", Intent: "Question", Mention: b.sessionRef}); err != nil {
+		t.Fatalf("send with intent: %v", err)
+	}
+	key, _ := b.roomKeyFor("project")
+	msgs, err := b.client.CoordInbox(store.DestinationRoom, key, b.coordRef(), 0, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, m := range msgs {
+		if m.Body == "darf ich pushen?" && m.Intent == store.IntentQuestion {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("the stored message does not carry intent question: %+v", msgs)
+	}
+}
+
+func TestCoordSendRejectsBadIntent(t *testing.T) {
+	a, b, _ := twoSessions(t)
+	ctx := context.Background()
+	for _, in := range []CoordSendInput{
+		{Body: "x", Intent: "standing", Mention: b.sessionRef},
+		{Body: "x", Intent: "urgent", Mention: b.sessionRef},
+		{Body: "x", Intent: "question"}, // braucht eine Erwähnung
+	} {
+		if _, _, err := a.handleCoordSend(ctx, nil, in); err == nil {
+			t.Errorf("accepted %+v", in)
+		}
+	}
+}

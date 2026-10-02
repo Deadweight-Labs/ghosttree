@@ -237,6 +237,20 @@ func (c *Client) AgentControl(agent string) (*store.AgentControl, error) {
 	return out.Control, err
 }
 
+// AgentControlState liefert den aktiven Vorgang und, wenn es keinen gibt, den
+// jüngsten aufgehobenen (resumed). Ein älterer Server kennt das zweite Feld
+// nicht; dann bleibt resumed nil.
+func (c *Client) AgentControlState(agent string) (active, resumed *store.AgentControl, err error) {
+	var out struct {
+		Control *store.AgentControl `json:"control"`
+		Resumed *store.AgentControl `json:"resumed"`
+	}
+	q := url.Values{}
+	q.Set("agent", agent)
+	err = c.do("GET", "/api/agent-control", q, nil, &out)
+	return out.Control, out.Resumed, err
+}
+
 // RecordControlEvent meldet einen Hook-Ack oder einen Transkript-Beleg zu einem
 // Vorgang. false heisst: der Server kennt den Beleg schon oder den Vorgang
 // nicht; beides ist kein Grund, es erneut zu versuchen.

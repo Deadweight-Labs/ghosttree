@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/agentpause"
+	"github.com/Deadweight-Labs/ghosttree/internal/claudechannel"
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
@@ -19,14 +21,16 @@ const pauseInterval = 2 * time.Second
 
 // pauseSource is what the syncer needs from the server.
 type pauseSource interface {
-	ActiveControl(agent string) (*store.AgentControl, error)
+	// ControlState returns the active control and, when there is none, the
+	// latest one that was lifted (it names who resumed).
+	ControlState(agent string) (active, resumed *store.AgentControl, err error)
 	RecordEvent(controlID int64, ev store.ControlEvent) (bool, error)
 }
 
 type clientPauseSource struct{ c *client.Client }
 
-func (s clientPauseSource) ActiveControl(agent string) (*store.AgentControl, error) {
-	return s.c.AgentControl(agent)
+func (s clientPauseSource) ControlState(agent string) (*store.AgentControl, *store.AgentControl, error) {
+	return s.c.AgentControlState(agent)
 }
 
 func (s clientPauseSource) RecordEvent(id int64, ev store.ControlEvent) (bool, error) {
@@ -38,20 +42,39 @@ func (s clientPauseSource) RecordEvent(id int64, ev store.ControlEvent) (bool, e
 // per Claude session that already knows its agent identity and talks to the
 // server. If it is not running, nothing is mirrored and the control stays
 // "requested", which is the honest state.
+//
+// When a control it has seen active is lifted, the syncer tells the session so
+// through the channel. The hook's stopReason is the last thing the agent saw;
+// without a positive signal it keeps believing it is paused. A channel
+// notification wakes an idle session (measured, see package claudechannel), and
+// a resume is an explicit human action, so the wake is wanted.
 type pauseSyncer struct {
 	agent     string
 	src       pauseSource
 	ackOffset int64
+
+	// notifier delivers the resume notice; nil means no channel to tell.
+	notifier claudechannel.Notifier
+	// seen holds the controls this process has watched while they were active.
+	// Only those are announced when lifted, so a restarted channel, which finds
+	// an old lifted control in the server's answer, stays silent. announced
+	// keeps one notice per control.
+	seen      map[int64]bool
+	announced map[int64]bool
 }
 
 // sync does one round. A server error leaves the flag as it is: an
 // unreachable server must neither start nor silently lift a pause.
 func (p *pauseSyncer) sync() error {
-	c, err := p.src.ActiveControl(p.agent)
+	c, resumed, err := p.src.ControlState(p.agent)
 	if err != nil {
 		return err
 	}
 	if c != nil {
+		if p.seen == nil {
+			p.seen = map[int64]bool{}
+		}
+		p.seen[c.ID] = true
 		if cur, set := agentpause.ReadFlag(p.agent); !set || cur.ControlID != c.ID {
 			if err := agentpause.WriteFlag(p.agent, agentpause.Flag{
 				ControlID: c.ID, Action: c.Action, By: c.RequestedByLabel, Reason: c.Reason,
@@ -68,8 +91,47 @@ func (p *pauseSyncer) sync() error {
 		agentpause.RemoveFlag(p.agent)
 		agentpause.ClearAcks(p.agent)
 		p.ackOffset = 0
+		if err := p.announceResume(resumed); err != nil && reportErr == nil {
+			reportErr = err
+		}
 	}
 	return reportErr
+}
+
+// announceResume sends the resume notice once for a control this process saw
+// active. A transport that is not ready or a failed write leaves the control
+// unannounced; the server keeps returning it, so the next round retries.
+func (p *pauseSyncer) announceResume(c *store.AgentControl) error {
+	if p.notifier == nil || c == nil || c.ResumedAt == "" || !p.seen[c.ID] || p.announced[c.ID] {
+		return nil
+	}
+	if !p.notifier.Ready() {
+		return nil
+	}
+	by := store.NormalizeAccountName(c.ResumedByLabel)
+	if by == "" {
+		by = "einem Menschen"
+	}
+	what := "Pause"
+	if c.Action == store.ControlInterrupt {
+		what = "Unterbrechung"
+	}
+	n := claudechannel.Notification{
+		Content: fmt.Sprintf("%s aufgehoben durch %s (control #%d) — du kannst weiterarbeiten. Deine ursprüngliche Aufgabe läuft weiter: mach dort weiter, wo du angehalten wurdest. Das ist keine neue Aufgabe.", what, by, c.ID),
+		Meta: map[string]string{
+			"event": "pause_resumed", "control_id": strconv.FormatInt(c.ID, 10), "resumed_by": by,
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := p.notifier.Notify(ctx, n); err != nil {
+		return err
+	}
+	if p.announced == nil {
+		p.announced = map[int64]bool{}
+	}
+	p.announced[c.ID] = true
+	return nil
 }
 
 func (p *pauseSyncer) reportAcks() error {

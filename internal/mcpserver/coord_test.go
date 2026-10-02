@@ -117,3 +117,45 @@ func TestUnknownRoomIsRejected(t *testing.T) {
 		t.Fatal("an unknown room name must be rejected rather than silently defaulted")
 	}
 }
+
+// Das Schema, das ein Client über die Leitung sieht, muss intent als
+// optionales Feld mit genau den Werten tragen, die der Server annimmt. Ohne
+// das Feld konnte ein Agent keine Frage, Freigabe, Blockade oder Übergabe
+// anlegen, obwohl die Anleitung ihn dazu auffordert.
+func TestCoordSendSchemaCarriesIntentEnum(t *testing.T) {
+	c, _ := newTestClient(t)
+	session := connect(t, &Server{client: c, ctxAxes: scope.Axes{
+		Project: "github.com/x/y", Machine: "testbox"}})
+	tools, err := session.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range tools.Tools {
+		if tool.Name != "coord_send" {
+			continue
+		}
+		raw, _ := json.Marshal(tool.InputSchema)
+		var schema struct {
+			Properties map[string]struct {
+				Enum []string `json:"enum"`
+			} `json:"properties"`
+		}
+		if err := json.Unmarshal(raw, &schema); err != nil {
+			t.Fatal(err)
+		}
+		prop, ok := schema.Properties["intent"]
+		if !ok {
+			t.Fatalf("coord_send has no lowercase intent property: %s", raw)
+		}
+		for _, want := range []string{"question", "approval", "blocker", "handoff", "ack"} {
+			if !slices.Contains(prop.Enum, want) {
+				t.Errorf("intent enum lacks %q: %s", want, raw)
+			}
+		}
+		if slices.Contains(prop.Enum, "standing") {
+			t.Errorf("intent enum must not offer standing: %s", raw)
+		}
+		return
+	}
+	t.Fatal("coord_send is not registered")
+}

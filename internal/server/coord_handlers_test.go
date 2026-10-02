@@ -989,3 +989,48 @@ func TestAckedDeliveryRouteCreatesNoPostNoAttentionNoWakeAndNoClaim(t *testing.T
 		t.Fatalf("acked recipient state = %q", state)
 	}
 }
+
+// Die Agent-Route nimmt intent vom Client an (question, approval, blocker,
+// handoff, ack), weist aber alles ab, was Menschen oder dem Store vorbehalten
+// ist oder gar nicht existiert.
+func TestCoordAPISendAcceptsAttentionIntentAndRejectsReservedOnes(t *testing.T) {
+	srv, st, token, _ := coordinationAccessServer(t)
+	room := store.RoomKeyForProject("github.com/x/intent")
+	for _, id := range []string{"sess-a", "sess-b"} {
+		if _, err := st.RegisterCoordAgent(store.CoordAgent{ExternalID: id, PrincipalID: "person:1", Person: "owner", Provider: "test", RoomKey: room}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	send := func(clientID, intent string) int {
+		res := req(t, "POST", srv.URL+"/api/coord/messages", token, store.CoordMessage{
+			DestinationKind: store.DestinationRoom, DestinationID: room,
+			SenderExternalID: "sess-a", ClientID: clientID, Body: "x " + clientID,
+			Intent: intent, Mentions: []string{"sess-b"},
+		})
+		res.Body.Close()
+		return res.StatusCode
+	}
+	for _, intent := range []string{"question", "approval", "blocker", "handoff", "ack", ""} {
+		if code := send("ok-"+intent, intent); code != http.StatusOK {
+			t.Errorf("intent %q: want 200, got %d", intent, code)
+		}
+	}
+	for _, intent := range []string{"standing", "attention", "bogus"} {
+		if code := send("bad-"+intent, intent); code != http.StatusBadRequest {
+			t.Errorf("intent %q: want 400, got %d", intent, code)
+		}
+	}
+	msgs, err := st.CoordinationFor(store.Principal{ID: "person:1"}, "sess-b").Messages(store.DestinationRoom, room, 0, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var q bool
+	for _, m := range msgs {
+		if m.Body == "x ok-question" && m.Intent == store.IntentQuestion {
+			q = true
+		}
+	}
+	if !q {
+		t.Fatalf("question intent not stored: %+v", msgs)
+	}
+}
