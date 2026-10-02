@@ -1,46 +1,45 @@
-/* Design tokens of the web interface (REQ-435). Colours, spacing, radii, type
-   scale and focus style live here and nowhere else; other stylesheets read
-   them with var(). A dark scheme replaces the colour block under a
-   [data-scheme] selector later. */
+/* Design tokens of the web interface (REQ-435). The palette itself lives in
+   theme.css as --clay-* values (light and dark); the names below are the
+   stable aliases the other stylesheets read with var(). Spacing, radii, type
+   scale and focus style are defined here and nowhere else. */
 
-@font-face { font-family: "IBM Plex Sans"; font-weight: 400; font-style: normal; font-display: swap; src: url("/static/fonts/plex-1.1-2.5/IBMPlexSans-Regular-Latin1.woff2") format("woff2"); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02C6, U+02DA, U+02DC, U+2013-2014, U+2018-201A, U+201C-201E, U+2020-2022, U+2026, U+2030, U+2039-203A, U+2044, U+20AC, U+2122, U+2212; }
-@font-face { font-family: "IBM Plex Sans"; font-weight: 500; font-style: normal; font-display: swap; src: url("/static/fonts/plex-1.1-2.5/IBMPlexSans-Medium-Latin1.woff2") format("woff2"); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02C6, U+02DA, U+02DC, U+2013-2014, U+2018-201A, U+201C-201E, U+2020-2022, U+2026, U+2030, U+2039-203A, U+2044, U+20AC, U+2122, U+2212; }
-@font-face { font-family: "IBM Plex Sans"; font-weight: 600; font-style: normal; font-display: swap; src: url("/static/fonts/plex-1.1-2.5/IBMPlexSans-SemiBold-Latin1.woff2") format("woff2"); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02C6, U+02DA, U+02DC, U+2013-2014, U+2018-201A, U+201C-201E, U+2020-2022, U+2026, U+2030, U+2039-203A, U+2044, U+20AC, U+2122, U+2212; }
-@font-face { font-family: "IBM Plex Mono"; font-weight: 400; font-style: normal; font-display: swap; src: url("/static/fonts/plex-1.1-2.5/IBMPlexMono-Regular-Latin1.woff2") format("woff2"); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02C6, U+02DA, U+02DC, U+2013-2014, U+2018-201A, U+201C-201E, U+2020-2022, U+2026, U+2030, U+2039-203A, U+2044, U+20AC, U+2122, U+2212; }
-@font-face { font-family: "IBM Plex Mono"; font-weight: 600; font-style: normal; font-display: swap; src: url("/static/fonts/plex-1.1-2.5/IBMPlexMono-SemiBold-Latin1.woff2") format("woff2"); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02C6, U+02DA, U+02DC, U+2013-2014, U+2018-201A, U+201C-201E, U+2020-2022, U+2026, U+2030, U+2039-203A, U+2044, U+20AC, U+2122, U+2212; }
+@font-face { font-family: "Gabarito"; font-weight: 400 900; font-style: normal; font-display: swap; src: url("/static/fonts/v5/gabarito-latin-wght-normal.woff2") format("woff2"); }
+@font-face { font-family: "Fragment Mono"; font-weight: 400; font-style: normal; font-display: swap; src: url("/static/fonts/v5/fragment-mono-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "Source Serif 4"; font-weight: 200 900; font-style: normal; font-display: swap; src: url("/static/fonts/v5/source-serif-4-latin-wght-normal.woff2") format("woff2"); }
 
 :root {
   /* Surface */
-  --color-surface-app: #f3f4ef;
-  --color-surface-panel: #ffffff;
-  --color-surface-sunken: #eaece5;
-  --color-surface-hover: #f0f2eb;
-  --color-surface-selected: #e3ebe4;
-  --color-surface-nav: #ecefe7;
+  --color-surface-app: var(--clay-bg);
+  --color-surface-panel: var(--clay-c-surface);
+  --color-surface-sunken: var(--clay-c-sunken);
+  --color-surface-hover: var(--clay-c-raised);
+  --color-surface-selected: color-mix(in srgb, var(--clay-accent) 14%, var(--clay-c-surface));
+  --color-surface-nav: var(--clay-c-surface);
   /* Text */
-  --color-text-primary: #1c2520;
-  --color-text-secondary: #46524b;
-  --color-text-muted: #58645d;
+  --color-text-primary: var(--clay-ink);
+  --color-text-secondary: var(--clay-ink-soft);
+  --color-text-muted: var(--clay-ink-faint);
   /* Line */
-  --color-line-subtle: #e7eae3;
-  --color-line-default: #d9ded4;
-  --color-line-strong: #b3bcb0;
+  --color-line-subtle: var(--clay-line);
+  --color-line-default: color-mix(in srgb, var(--clay-ink) 16%, transparent);
+  --color-line-strong: color-mix(in srgb, var(--clay-ink) 38%, transparent);
   /* Accent */
-  --color-accent: #2f6b4a;
-  --color-accent-hover: #265a3d;
-  --color-accent-soft: #e0ede4;
-  --color-accent-text: #1f4e34;
+  --color-accent: var(--clay-accent);
+  --color-accent-hover: color-mix(in srgb, var(--clay-accent), var(--clay-ink) 18%);
+  --color-accent-soft: color-mix(in srgb, var(--clay-accent) 14%, var(--clay-c-surface));
+  --color-accent-text: var(--clay-accent-text);
+  --color-accent-ink: var(--clay-accent-ink);
   /* Status: state only, each with a soft surface */
-  --color-ok: #276a43;
-  --color-ok-soft: #e0f0e5;
-  --color-warn: #8a560a;
-  --color-warn-soft: #faefd6;
-  --color-danger: #b3342c;
-  --color-danger-soft: #fae6e3;
-  --color-info: #2b5f8e;
-  --color-info-soft: #e1ecf6;
-  --color-neutral: #5d6962;
-  --color-neutral-soft: #eceee8;
+  --color-ok: var(--clay-ok);
+  --color-ok-soft: color-mix(in srgb, var(--clay-ok) 14%, var(--clay-c-surface));
+  --color-warn: var(--clay-warn);
+  --color-warn-soft: color-mix(in srgb, var(--clay-warn) 16%, var(--clay-c-surface));
+  --color-danger: var(--clay-danger-strong);
+  --color-danger-soft: color-mix(in srgb, var(--clay-danger-strong) 14%, var(--clay-c-surface));
+  --color-info: var(--clay-accent-text);
+  --color-info-soft: var(--color-accent-soft);
+  --color-neutral: var(--clay-ink-faint);
+  --color-neutral-soft: var(--clay-c-sunken);
 
   /* Spacing */
   --space-1: 4px;
@@ -50,27 +49,32 @@
   --space-5: 24px;
   --space-6: 32px;
   /* Radii */
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 12px;
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 22px;
   --radius-round: 999px;
 
   /* Type */
-  --font-sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
-  --text-page-title: 600 22px/1.25 var(--font-sans);
-  --text-detail-title: 600 18px/1.3 var(--font-sans);
-  --text-panel-title: 600 15px/1.35 var(--font-sans);
-  --text-body: 400 13px/1.45 var(--font-sans);
-  --text-secondary: 400 12px/1.45 var(--font-sans);
-  --text-label: 600 11px/1.3 var(--font-sans);
-  --text-mono: 400 12px/1.45 var(--font-mono);
+  --font-sans: var(--clay-font-ui);
+  --font-mono: var(--clay-font-mono);
+  --font-serif: var(--clay-font-serif);
+  --text-page-title: 700 30px/1.1 var(--font-sans);
+  --text-detail-title: 700 20px/1.25 var(--font-sans);
+  --text-panel-title: 700 19px/1.25 var(--font-sans);
+  --text-body: 500 15px/1.45 var(--font-sans);
+  --text-secondary: 500 13px/1.45 var(--font-sans);
+  --text-label: 700 12px/1.3 var(--font-sans);
+  --text-mono: 400 13px/1.45 var(--font-mono);
 
   /* Focus */
-  --focus-color: var(--color-accent);
-  --focus-ring: 0 0 0 3px rgba(47, 107, 74, 0.28);
+  --focus-color: var(--clay-accent);
+  --focus-ring: 0 0 0 3px color-mix(in srgb, var(--clay-accent) 35%, transparent);
 
   /* Layout */
-  --side-width: 224px;
+  --side-width: 268px;
   --top-height: 48px;
+  /* Clay surfaces cast up to 30px downward and 28px sideways; scroll and clip
+     containers pad by at least this much so the shadow is never cut. */
+  --shadow-room-y: 30px;
+  --shadow-room-x: 28px;
 }

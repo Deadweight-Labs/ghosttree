@@ -1153,9 +1153,9 @@ func TestCoordVisualSystemSeparatesChromeConversationAndInspector(t *testing.T) 
 	css := string(cssBytes)
 	workspace := coordCSSRule(t, css, "\n.coord-workspace {")
 	for _, want := range []string{
-		`--coord-chrome: #171a19`,
-		`--coord-conversation: #f4f0e7`,
-		`--coord-inspector: #ebe7de`,
+		`--coord-chrome: #1a2333`,
+		`--coord-conversation: #f6f8fc`,
+		`--coord-inspector: #e6eaf2`,
 	} {
 		if !strings.Contains(workspace, want) {
 			t.Errorf("coord visual hierarchy missing %q", want)
@@ -1332,7 +1332,7 @@ func TestCoordAgentIdentitySitsBesideAuthorAndContinuationKeepsAccessibleName(t 
 func TestCoordContrastFocusAndCoarseTargetsAreExplicit(t *testing.T) {
 	css := string(mustReadEmbedded(t, "static/app.css"))
 	workspace := coordCSSRule(t, css, "\n.coord-workspace {")
-	if !strings.Contains(workspace, `--coord-muted: #565d58`) {
+	if !strings.Contains(workspace, `--coord-muted: #4f5b6e`) {
 		t.Fatalf("conversation/inspector muted color lost its contrast token: %s", workspace)
 	}
 	focus := coordCSSRule(t, css, `.coord-shell :focus-visible`)
