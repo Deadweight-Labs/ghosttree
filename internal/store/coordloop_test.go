@@ -108,8 +108,7 @@ func TestEveryContentSignalResetsTheStreak(t *testing.T) {
 		{"REQ reference", "ref", func(m *CoordMessage) { m.Body = "ok, REQ-360" }},
 		{"AC reference", "ref", func(m *CoordMessage) { m.Body = "ok, AC 1223" }},
 		{"typed ref", "ref", func(m *CoordMessage) { m.Body = "ok"; m.Refs = []CoordRef{{Kind: "document", ID: "d1"}} }},
-		{"new number", "number", func(m *CoordMessage) { m.Body = "ok, 42 ms" }},
-		{"new decimal", "number", func(m *CoordMessage) { m.Body = "ok, 3.5" }},
+		{"new word", "text", func(m *CoordMessage) { m.Body = "ok, Rotation" }},
 		{"human", "human", func(m *CoordMessage) { m.AuthorKind = AuthorHuman; m.SenderExternalID = "person:1"; m.Body = "ok" }},
 		{"new question with text", "question", func(m *CoordMessage) {
 			m.Intent = IntentQuestion
@@ -160,11 +159,14 @@ func TestMixedConversationResetsThenWakes(t *testing.T) {
 	}
 }
 
-func TestThirdParticipantEndsTheRun(t *testing.T) {
-	tr, _ := primed()
-	got := tr.Add(loopMsg(6, "claude:lab:c", "ok"))
-	if got.Streak != 0 || !got.Low {
-		t.Fatalf("a third participant starts a new pair: %+v", got)
+func TestThreeAgentAckLoopRises(t *testing.T) {
+	var msgs []CoordMessage
+	for i := 0; i < 8; i++ {
+		msgs = append(msgs, loopMsg(i+1, []string{"a", "b", "c"}[i%3], "ok"))
+	}
+	states := loopRun(msgs)
+	if states[7].Streak != 7 || !states[5].Hold() || states[4].Hold() {
+		t.Fatalf("a third participant must not reset the loop: %+v", states)
 	}
 }
 
@@ -188,12 +190,48 @@ func TestStreakDecaysAfterQuiet(t *testing.T) {
 	}
 }
 
-func TestGuardNoticesAreInvisible(t *testing.T) {
+func TestGuardNoticeIsAnOrdinaryLowContentMessage(t *testing.T) {
 	tr, _ := primed()
-	notice := loopMsg(6, "claude:lab:a", "Wake calls paused")
-	notice.Kind = LoopNoticeKind
-	if got := tr.Add(notice); got.Streak != 4 {
-		t.Fatalf("a notice changed the streak: %+v", got)
+	notice := loopMsg(6, "claude:lab:a", "ok")
+	notice.Intent = IntentAck
+	if got := tr.Add(notice); !got.Low {
+		t.Fatalf("a notice carries no special status: %+v", got)
+	}
+}
+
+func TestPlainCountersAreNotNewContent(t *testing.T) {
+	var steps, tries []CoordMessage
+	for i := 0; i < 12; i++ {
+		sender := []string{"a", "b"}[i%2]
+		steps = append(steps, loopMsg(i+1, sender, fmt.Sprintf("Schritt %d von 20: Tests laufen noch", 14+i)))
+		tries = append(tries, loopMsg(i+1, sender, fmt.Sprintf("Versuch %d", i+1)))
+	}
+	for name, msgs := range map[string][]CoordMessage{"steps": steps, "tries": tries} {
+		if got := loopRun(msgs)[11]; !got.Hold() {
+			t.Errorf("%s: a counter defeated the guard: %+v", name, got)
+		}
+	}
+}
+
+func TestLongBodiesAreReadOnlyUpToTheCap(t *testing.T) {
+	var tr LoopTracker
+	tr.Add(loopMsg(1, "a", "ok"))
+	huge := loopMsg(2, "b", strings.Repeat("ok ", LoopMaxBody)+" ENDWORD 9d9399e")
+	if got := tr.Add(huge); !got.Low {
+		t.Fatalf("content beyond the cap must not count: %+v", got)
+	}
+}
+
+func TestSignalNameIsDeterministic(t *testing.T) {
+	for i := 0; i < 30; i++ {
+		var tr LoopTracker
+		got := tr.Add(loopMsg(1, "a", "siehe https://example.org und README.md und 9d9399e und REQ-1"))
+		if got.Signal != "commit" && got.Signal != "link" && got.Signal != "path" && got.Signal != "ref" {
+			t.Fatal(got)
+		}
+		if got.Signal != "commit" { // sorted keys: code < commit < link < path < ref
+			t.Fatalf("signal = %q", got.Signal)
+		}
 	}
 }
 
@@ -207,18 +245,17 @@ func TestLoopIsDeterministic(t *testing.T) {
 	}
 }
 
-func TestLoopPaddingWithRandomWordsIsAKnownBypass(t *testing.T) {
+func TestLoopPaddingWithFreshWordsIsAKnownBypass(t *testing.T) {
 	// Documented limit, not a promise: padding every message with fresh words
-	// looks like content to a token rule. The send limit stays the backstop.
-	words := []string{"alpha bravo charlie delta echo foxtrot golf hotel", "india juliet kilo lima mike november oscar papa",
-		"quebec romeo sierra tango uniform victor whiskey xray", "yankee zulu amber basalt cobalt dune ember fjord"}
+	// is content to a token rule. False holds are worse than missed loops, and
+	// the send limit stays the backstop.
+	words := []string{"alpha bravo", "charlie delta", "echo foxtrot", "golf hotel", "india juliet", "kilo lima"}
 	var msgs []CoordMessage
 	for i, w := range words {
-		sender := []string{"a", "b"}[i%2]
-		msgs = append(msgs, loopMsg(i+1, sender, "ok "+w))
+		msgs = append(msgs, loopMsg(i+1, []string{"a", "b"}[i%2], "ok "+w))
 	}
 	if got := loopRun(msgs)[len(msgs)-1]; got.Streak != 0 {
-		t.Skipf("padding no longer evades the rule: %+v", got)
+		t.Fatalf("padding with fresh words is expected to evade the rule: %+v", got)
 	}
 }
 
@@ -305,6 +342,76 @@ func TestProductiveConversationStaysFreeOverFortyRounds(t *testing.T) {
 	for i, s := range loopRun(all) {
 		if s.Streak >= LoopWarnStreak {
 			t.Fatalf("message %d reached streak %d", i, s.Streak)
+		}
+	}
+}
+
+func dialogue(lines ...string) []CoordMessage {
+	var msgs []CoordMessage
+	for i, l := range lines {
+		msgs = append(msgs, loopMsg(i+1, []string{"a", "b"}[i%2], l))
+	}
+	return msgs
+}
+
+func counterLines(format string, from, n int) []CoordMessage {
+	var lines []string
+	for i := 0; i < n; i++ {
+		lines = append(lines, fmt.Sprintf(format, from+i))
+	}
+	return dialogue(lines...)
+}
+
+// loopCases are the conversations the rule is measured on: productive ones
+// must stay below LoopWarnStreak, loops must reach LoopHoldStreak.
+func loopCases(t *testing.T) []struct {
+	name       string
+	msgs       []CoordMessage
+	productive bool
+} {
+	return []struct {
+		name       string
+		msgs       []CoordMessage
+		productive bool
+	}{
+		{"experiment 2383 (13 messages)", experiment(t, "loop_experiment_2383.psv"), true},
+		{"experiment 2384 (9 messages)", experiment(t, "loop_experiment_2384.psv"), true},
+		{"short Q&A: which file", dialogue("Welche Datei?", "die in cmd", "und welche Funktion?", "Run", "und die Signatur?",
+			"Run(ctx) error", "wer ruft sie auf?", "main", "und bei Fehlern?", "Exit-Code 1", "gibt es Tests?", "ja, einen Smoketest"), true},
+		{"short argument chain: cache or DB", dialogue("Lieber Cache oder direkt DB?", "Cache, Lesen überwiegt.", "Und die Invalidierung?",
+			"Beim Schreiben.", "Wie lange TTL?", "Eine Minute reicht.", "Und bei Ausfall?", "Alte Werte liefern.", "Dann Metriken?", "Trefferquote genügt."), true},
+		{"ack ping-pong", pingPong(10), false},
+		{"paraphrased status", dialogue("Status bleibt gleich", "Der Status ist unveraendert: Tests gruen, Review steht aus",
+			"Status bleibt gleich", "Tests gruen, Review steht aus, Status unveraendert", "Status bleibt gleich!", "Der Status ist unveraendert: Tests gruen, Review steht aus",
+			"Status bleibt gleich", "Review steht aus, Tests gruen, Status unveraendert"), false},
+		{"counter status line (steps)", counterLines("Schritt %d von 20: Tests laufen noch", 14, 12), false},
+		{"counter (Versuch 1..12)", counterLines("Versuch %d", 1, 12), false},
+		{"three agents ok/ok/ok", func() []CoordMessage {
+			var m []CoordMessage
+			for i := 0; i < 8; i++ {
+				m = append(m, loopMsg(i+1, []string{"a", "b", "c"}[i%3], "ok"))
+			}
+			return m
+		}(), false},
+	}
+}
+
+func TestLoopFixtureTable(t *testing.T) {
+	for _, c := range loopCases(t) {
+		var streaks []int
+		max := 0
+		for _, s := range loopRun(c.msgs) {
+			streaks = append(streaks, s.Streak)
+			if s.Streak > max {
+				max = s.Streak
+			}
+		}
+		t.Logf("%-34s max %d  %v", c.name, max, streaks)
+		switch {
+		case c.productive && max >= LoopWarnStreak:
+			t.Errorf("%s: productive conversation reached streak %d", c.name, max)
+		case !c.productive && max < LoopHoldStreak:
+			t.Errorf("%s: loop only reached streak %d", c.name, max)
 		}
 	}
 }

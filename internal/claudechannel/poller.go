@@ -109,7 +109,8 @@ type LoopEvent struct {
 // Noticer is an optional Source capability: post the notice a room gets when
 // the guard held a wake. Sources without it hold silently.
 type Noticer interface {
-	PostNotice(self string, room store.CoordRoom, text string) error
+	// PostNotice is told which held message started the hold (id and sender).
+	PostNotice(self string, room store.CoordRoom, heldID int64, heldSender, text string) error
 }
 
 // loopNotice is the text of that notice. It names the way out.
@@ -362,13 +363,11 @@ func (p *Poller) loopState(room store.CoordRoom, m store.CoordMessage) store.Loo
 }
 
 // loopHolds is the loop guard stage, after ShouldWake. It reports whether the
-// wake is withheld. In observe mode it only reports "would hold" and returns
-// false; in enforce mode it returns true and, once per hold, posts the notice.
-// A notice message itself never wakes (store.LoopNoticeKind).
+// wake is withheld. It depends on mode and streak only. In observe mode it
+// reports "would hold" and returns false; in enforce mode it returns true and,
+// once per hold, posts the notice (an ordinary ack without mentions, which the
+// unified wake rule never wakes on, so the notice cannot feed the loop).
 func (p *Poller) loopHolds(room store.CoordRoom, m store.CoordMessage, st store.LoopState) bool {
-	if m.Kind == store.LoopNoticeKind {
-		return true
-	}
 	if !st.Hold() {
 		return false
 	}
@@ -381,7 +380,7 @@ func (p *Poller) loopHolds(room store.CoordRoom, m store.CoordMessage, st store.
 	}
 	if n, ok := p.Source.(Noticer); ok && !p.loopHeld[room.Key] {
 		p.loopHeld[room.Key] = true
-		if err := n.PostNotice(p.Self, room, fmt.Sprintf(loopNotice, st.Streak)); err != nil && p.OnError != nil {
+		if err := n.PostNotice(p.Self, room, m.ID, m.SenderExternalID, fmt.Sprintf(loopNotice, st.Streak)); err != nil && p.OnError != nil {
 			p.OnError(err)
 		}
 	}
@@ -424,14 +423,16 @@ func (s ClientSource) Message(self string, room store.CoordRoom, id int64) (stor
 	return msgs[0], true, nil
 }
 
-// PostNotice posts the guard's notice into the room as a message of kind
-// store.LoopNoticeKind. The client id is stable per sender and room and
-// minute, so a retry cannot post it twice.
-func (s ClientSource) PostNotice(self string, room store.CoordRoom, text string) error {
+// PostNotice posts the guard's notice into the room as an ordinary ack with
+// no mentions. The client id names the room, the sender of the held message
+// (the other side of the loop) and the message that started the hold; the
+// sender of the notice is the recipient, so one hold yields at most one notice
+// per direction, and a retry cannot post it twice.
+func (s ClientSource) PostNotice(self string, room store.CoordRoom, heldID int64, heldSender, text string) error {
 	_, err := s.Client.SendCoordMessage(store.CoordMessage{
 		DestinationKind: store.DestinationRoom, DestinationID: room.Key, SenderExternalID: self,
-		ClientID: fmt.Sprintf("loop-notice:%s:%d", room.Key, time.Now().Unix()/60),
-		Kind:     store.LoopNoticeKind, Body: text,
+		ClientID: fmt.Sprintf("loop-notice:%s:from=%s:msg=%d", room.Key, heldSender, heldID),
+		Intent:   store.IntentAck, Body: text,
 	})
 	return err
 }

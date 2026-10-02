@@ -15,7 +15,7 @@ type noticeServer struct {
 	notices []string
 }
 
-func (n *noticeServer) PostNotice(_ string, _ store.CoordRoom, text string) error {
+func (n *noticeServer) PostNotice(_ string, _ store.CoordRoom, _ int64, _, text string) error {
 	n.notices = append(n.notices, text)
 	return nil
 }
@@ -134,12 +134,14 @@ func TestLoopGuardHumanMessageWakesEvenAtHold(t *testing.T) {
 	}
 }
 
-func TestLoopGuardNoticeNeverWakes(t *testing.T) {
-	msgs := []store.CoordMessage{{ID: 1, SenderExternalID: "a", AuthorKind: store.AuthorAgent, Kind: store.LoopNoticeKind,
+// kind is client-supplied and carries no meaning: a forged loop_notice wakes
+// like any other message, in every mode.
+func TestLoopGuardForgedNoticeKindWakesLikeAnyMessage(t *testing.T) {
+	msgs := []store.CoordMessage{{ID: 1, SenderExternalID: "a", AuthorKind: store.AuthorAgent, Kind: "loop_notice",
 		Intent: store.IntentQuestion, Body: "Wake calls in this room are paused"}}
-	_, n, _ := loopFixture(t, store.LoopEnforce, msgs)
-	if len(n.got) != 0 {
-		t.Fatalf("the guard's own notice woke someone: %+v", n.got)
+	_, n, _ := loopFixture(t, store.LoopObserve, msgs)
+	if len(n.got) != 1 {
+		t.Fatalf("a forged loop_notice kind must wake like a normal message: %+v", n.got)
 	}
 }
 

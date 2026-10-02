@@ -3,6 +3,7 @@ package store
 import (
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -13,10 +14,19 @@ import (
 // rounds without new content, never messages: any message that brings
 // something new resets the streak, so a long productive review never trips it.
 //
-// The rule is deterministic, with no model call, and pure: LoopTracker keeps
-// the last LoopWindow messages of ONE room and is fed in message order. Time
-// only enters through the messages' own CreatedAt, so a replay gives the same
-// streaks. All thresholds are starting values, not measured quantities.
+// A message is low content only if it brings ZERO new content tokens compared
+// to the last LoopWindow messages of the room (after stop words and ack
+// filler, digits normalised to "#"), or repeats the sender's own previous
+// message (token Jaccard >= 0.8). A false hold on a short productive dialogue
+// is worse than a missed loop, so a single new word is new content; padding
+// with fresh words evades the guard on purpose and the send limit stays the
+// backstop. Plain counters ("step 14 of 20") are not new content; a number
+// only counts as part of an identifier (hash, REQ/AC/PR, path, link).
+//
+// The rule is deterministic, with no model call, and pure: LoopTracker is fed
+// the messages of ONE room in order. Time only enters through the messages'
+// own CreatedAt, so a replay gives the same streaks. Thresholds are starting
+// values, not measured quantities.
 const (
 	// LoopWindow is how many earlier messages novelty is measured against.
 	LoopWindow = 6
@@ -27,16 +37,11 @@ const (
 	LoopHoldStreak = 5
 	// LoopDecay is the quiet time after which a streak is forgotten.
 	LoopDecay = 10 * time.Minute
+	// LoopMaxBody is how much of a message the tracker reads. The server does
+	// not cap bodies, and the rule must stay cheap.
+	LoopMaxBody = 16 << 10
 
-	loopShortTokens   = 8    // fewer content tokens than this is a short message
-	loopNovelShare    = 0.30 // a short message needs this share of new tokens
-	loopRepeatShare   = 0.15 // a long message below this share is a repeat
-	loopMinNewTokens  = 3    // fewer new tokens than this is never new content
-	loopJaccardRepeat = 0.80 // token overlap with the sender's own earlier message
-
-	// LoopNoticeKind marks the notice a room gets when a wake is held. It
-	// never wakes and never counts toward a streak.
-	LoopNoticeKind = "loop_notice"
+	loopJaccardRepeat = 0.80 // token overlap with the sender's own previous message
 )
 
 // LoopMode is the GHOSTTREE_LOOP_GUARD switch.
@@ -78,31 +83,24 @@ func (s LoopState) Hold() bool { return s.Streak >= LoopHoldStreak }
 type LoopTracker struct {
 	window []loopEntry
 	streak int
-	pair   []string // the participants of the current low-content run
-	last   string   // sender of the last low-content message of the run
+	last   string // sender of the last low-content message of the run
 	prevAt time.Time
 }
 
 type loopEntry struct {
-	sender  string
-	tokens  map[string]bool
-	numbers map[string]bool
-	idents  map[string]bool // "kind:value"
+	sender string
+	tokens map[string]bool
+	idents map[string]bool // "kind:value"
 }
 
-// Add feeds the next message of the room and returns the state after it.
-// Notices of the guard itself are invisible to it.
+// Add feeds the next message of the room and returns the state after it. The
+// guard's own notices are ordinary messages (low content) to it.
 //
-// A round is one hand-off in a back-and-forth between the same participants:
-// a low-content message from a different participant than the previous low
-// one adds a round; the same sender talking on does not. The first message of
-// a run only starts it. A low-content message from a third participant ends
-// the run (the pair changed). New content, a human sender, or LoopDecay of
-// silence reset the streak to zero.
+// A round is a change of sender among consecutive low-content messages, so a
+// third participant joining an ack loop does not end it. The first low message
+// of a run only starts it; the same sender talking on adds nothing. New
+// content, a human sender, or LoopDecay of silence reset the streak to zero.
 func (t *LoopTracker) Add(m CoordMessage) LoopState {
-	if m.Kind == LoopNoticeKind {
-		return LoopState{Streak: t.streak}
-	}
 	at, _ := time.Parse(time.RFC3339, m.CreatedAt)
 	if !at.IsZero() && !t.prevAt.IsZero() && at.Sub(t.prevAt) > LoopDecay {
 		t.reset()
@@ -119,23 +117,14 @@ func (t *LoopTracker) Add(m CoordMessage) LoopState {
 		t.reset()
 		return LoopState{Signal: signal}
 	}
-	sender := m.SenderExternalID
-	switch {
-	case len(t.pair) == 0:
-		t.pair, t.last = []string{sender}, sender
-	case !loopHas(t.pair, sender) && len(t.pair) >= 2:
-		t.streak, t.pair, t.last = 0, []string{sender}, sender
-	case sender != t.last:
-		if !loopHas(t.pair, sender) {
-			t.pair = append(t.pair, sender)
-		}
+	if t.last != "" && m.SenderExternalID != t.last {
 		t.streak++
-		t.last = sender
 	}
+	t.last = m.SenderExternalID
 	return LoopState{Streak: t.streak, Low: true}
 }
 
-func (t *LoopTracker) reset() { t.streak, t.pair, t.last = 0, nil, "" }
+func (t *LoopTracker) reset() { t.streak, t.last = 0, "" }
 
 // assess returns the message's features and the content signal that makes it
 // new ("" if it is low-content), judged against the window before it.
@@ -156,51 +145,35 @@ func (t *LoopTracker) assess(m CoordMessage) (loopEntry, string) {
 		}
 		return false
 	}
+	keys := make([]string, 0, len(f.idents))
 	for key := range f.idents {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys) // the signal name must not depend on map order
+	for _, key := range keys {
 		if !seen(func(e loopEntry) map[string]bool { return e.idents }, key) {
 			return f, key[:strings.Index(key, ":")]
 		}
 	}
-	for key := range f.numbers {
-		if !seen(func(e loopEntry) map[string]bool { return e.numbers }, key) {
-			return f, "number"
+	// The sender's own previous message, however long, is a repeat when it is
+	// nearly the same words.
+	for i := len(t.window) - 1; i >= 0; i-- {
+		if w := t.window[i]; w.sender == f.sender {
+			if len(f.tokens) > 0 && jaccard(f.tokens, w.tokens) >= loopJaccardRepeat {
+				return f, ""
+			}
+			break
 		}
 	}
-	// A message that mostly repeats the sender's own earlier wording is a
-	// repeat however long it is.
-	for _, w := range t.window {
-		if w.sender == f.sender && len(f.tokens) > 0 && jaccard(f.tokens, w.tokens) >= loopJaccardRepeat {
-			return f, ""
-		}
-	}
-	newTokens := 0
 	for tok := range f.tokens {
 		if !seen(func(e loopEntry) map[string]bool { return e.tokens }, tok) {
-			newTokens++
+			if m.Intent == IntentQuestion {
+				return f, "question"
+			}
+			return f, "text"
 		}
 	}
-	share := 0.0
-	if len(f.tokens) > 0 {
-		share = float64(newTokens) / float64(len(f.tokens))
-	}
-	short := len(f.tokens) < loopShortTokens
-	// One or two new words ("gern geschehen") are no substance.
-	if newTokens < loopMinNewTokens || (short && share < loopNovelShare) || (!short && share < loopRepeatShare) {
-		return f, ""
-	}
-	if m.Intent == IntentQuestion {
-		return f, "question"
-	}
-	return f, "text"
-}
-
-func loopHas(list []string, s string) bool {
-	for _, v := range list {
-		if v == s {
-			return true
-		}
-	}
-	return false
+	return f, ""
 }
 
 func jaccard(a, b map[string]bool) float64 {
@@ -223,17 +196,21 @@ var (
 	loopRef       = regexp.MustCompile(`(?i)\b(?:req|ac|thr|pr)[-# ]?\d+\b|#\d+\b`)
 	loopHash      = regexp.MustCompile(`\b[0-9a-f]{7,40}\b`)
 	loopPath      = regexp.MustCompile(`(?:[\w.~-]+/){2,}[\w.-]+|(?:\.{0,2}|~)/[\w.-]+(?:/[\w.-]+)*|\b[\w-]+\.(?:go|md|ts|tsx|js|py|sh|json|ya?ml|toml|html|css|sql|txt|mod|sum)\b`)
-	loopNumber    = regexp.MustCompile(`\d+(?:[.,]\d+)?`)
+	loopDigits    = regexp.MustCompile(`\d+(?:[.,]\d+)?`)
 )
 
 // loopFeatures extracts the content markers of a body: identifiers (code
 // block, link, REQ/AC/THR/PR reference, commit hash, file path) keyed
-// "kind:value", numbers with two digits or a fraction (list numbering and
-// "2/3" stay out), and the content tokens that remain once identifiers and
-// stop words are cut. A hex run only counts as a commit hash when it mixes
-// digits and letters, so "defaced" and "1234567" are not hashes.
+// "kind:value", and the content tokens that remain once identifiers and stop
+// words are cut. Digits are normalised to "#", and a token that is nothing but
+// digits is dropped, so a counter is no content. A hex run only counts as a
+// commit hash when it mixes digits and letters. Only the first LoopMaxBody
+// bytes are read.
 func loopFeatures(body string) loopEntry {
-	f := loopEntry{tokens: map[string]bool{}, numbers: map[string]bool{}, idents: map[string]bool{}}
+	if len(body) > LoopMaxBody {
+		body = strings.ToValidUTF8(body[:LoopMaxBody], "")
+	}
+	f := loopEntry{tokens: map[string]bool{}, idents: map[string]bool{}}
 	rest := body
 	cut := func(re *regexp.Regexp, kind string, norm func(string) string) {
 		for _, s := range re.FindAllString(rest, -1) {
@@ -254,15 +231,11 @@ func loopFeatures(body string) loopEntry {
 		return " "
 	})
 	cut(loopPath, "path", func(s string) string { return strings.ToLower(strings.Trim(s, "./")) })
-	for _, n := range loopNumber.FindAllString(rest, -1) {
-		if len(n) >= 2 {
-			f.numbers[n] = true
-		}
-	}
-	for _, tok := range strings.FieldsFunc(strings.ToLower(rest), func(r rune) bool {
-		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	rest = loopDigits.ReplaceAllString(strings.ToLower(rest), "#")
+	for _, tok := range strings.FieldsFunc(rest, func(r rune) bool {
+		return r != '#' && !unicode.IsLetter(r) && !unicode.IsDigit(r)
 	}) {
-		if len([]rune(tok)) >= 2 && !loopStop[tok] {
+		if tok != "#" && len([]rune(tok)) >= 2 && !loopStop[tok] {
 			f.tokens[tok] = true
 		}
 	}
@@ -274,7 +247,7 @@ func loopFeatures(body string) loopEntry {
 var loopStop = func() map[string]bool {
 	m := map[string]bool{}
 	for _, w := range strings.Fields(`
-		ok okay ja jo nein gern gerne danke dank bitte super prima gut alles klar genau
+		ok okay geschehen ja jo nein gern gerne danke dank bitte super prima gut alles klar genau
 		verstanden passt stimmt richtig erledigt fertig done thanks thank you thx yes yep yeah
 		sure fine great good got understood agreed noted ack roger welcome please cool
 		der die das den dem des ein eine einen einem einer und oder aber auch noch nur schon
