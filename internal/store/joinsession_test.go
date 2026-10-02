@@ -1,7 +1,10 @@
 package store
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -22,78 +25,339 @@ func pairFixture(t *testing.T) (*Store, *joinClock) {
 	return st, clock
 }
 
-func TestJoinPairCodeLooksLikeAUserCode(t *testing.T) {
-	st, _ := pairFixture(t)
-	pair, err := st.Join().Create("person:2")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(pair) != 9 || pair[4] != '-' || NormalizeUserCode(pair) == "" {
-		t.Fatalf("pair %q", pair)
-	}
-}
-
-// Installation zuerst: das Gerät meldet sich, die Seite sieht es später.
-func TestJoinClaimBeforeTheBrowserLooksAndApproveDeliversOneToken(t *testing.T) {
-	st, clock := pairFixture(t)
-	j := st.Join()
-	pair, _ := j.Create("person:2")
-	if v := j.View("person:2"); v.State != JoinWaiting {
-		t.Fatalf("state %q", v.State)
-	}
-	claim, err := j.Claim("1.1.1.1", strings.ToLower(pair), "laptop", "1.1.1.1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := pollLater(st, clock, claim.DeviceCode); !errors.Is(err, ErrDevicePending) {
-		t.Fatalf("poll before approval: %v", err)
-	}
-	v := j.View("person:2")
-	if v.State != JoinClaimed || v.Machine != "laptop" || v.Remote != "1.1.1.1" || v.Pair != pair {
-		t.Fatalf("view %+v", v)
-	}
-	if err := j.Decide("person:2", true); err != nil {
-		t.Fatal(err)
-	}
-	if j.View("person:2").State != JoinApproved {
-		t.Fatal("not approved")
-	}
-	appr, _, err := pollLater(st, clock, claim.DeviceCode)
-	if err != nil || appr.AccountID != "person:2" || appr.Machine != "laptop" {
-		t.Fatalf("poll after approval: %+v %v", appr, err)
-	}
-	if _, _, err := pollLater(st, clock, claim.DeviceCode); !errors.Is(err, ErrDeviceUnknown) {
-		t.Fatalf("second poll: %v", err)
-	}
-	if v := j.View("person:2"); v.State != JoinConnected {
-		t.Fatalf("after delivery %q", v.State)
-	}
-}
-
 // pollLater wartet länger als jedes Poll-Intervall, damit kein slow_down dazwischenkommt.
 func pollLater(st *Store, clock *joinClock, deviceCode string) (DeviceApproval, time.Duration, error) {
 	clock.t = clock.t.Add(time.Minute)
 	return st.Device().Poll(deviceCode)
 }
 
-func TestJoinApproveNeedsAClaimFirst(t *testing.T) {
+const testInvite = "invite-code-1"
+
+// pkce liefert Verifier und Challenge (S256).
+func pkce() (verifier, challenge string) {
+	verifier = strings.Repeat("v", 43)
+	sum := sha256.Sum256([]byte(verifier))
+	return verifier, base64.RawURLEncoding.EncodeToString(sum[:])
+}
+
+func loopReq(pair, machine, addr string) JoinClaimRequest {
+	_, ch := pkce()
+	return JoinClaimRequest{Addr: addr, Pair: pair, Machine: machine, Challenge: ch, State: "state-12345678", Port: 40123}
+}
+
+func codeReq(pair, machine, addr string) JoinClaimRequest {
+	return JoinClaimRequest{Addr: addr, Pair: pair, Machine: machine}
+}
+
+func TestJoinOpenCreatesOneSessionPerBrowserAndInvitation(t *testing.T) {
 	st, _ := pairFixture(t)
 	j := st.Join()
-	j.Create("person:2")
-	if err := j.Decide("person:2", true); !errors.Is(err, ErrJoinNotReady) {
+	a, err := j.Open(testInvite, "")
+	if err != nil || a.ID == "" || len(a.Pair) != 9 || a.Pair[4] != '-' || NormalizeUserCode(a.Pair) == "" {
+		t.Fatalf("open: %+v %v", a, err)
+	}
+	// Dasselbe Cookie: dieselbe Sitzung, kein neues Cookie.
+	again, _ := j.Open(testInvite, a.ID)
+	if again.Pair != a.Pair || again.ID != "" || j.Sessions() != 1 {
+		t.Fatalf("reload: %+v sessions=%d", again, j.Sessions())
+	}
+	// Anderer Browser oder Cookie einer anderen Einladung: eigene Sitzung.
+	other, _ := j.Open(testInvite, "")
+	third, _ := j.Open("invite-code-2", a.ID)
+	if other.Pair == a.Pair || third.Pair == a.Pair || third.ID == "" || j.Sessions() != 3 {
+		t.Fatalf("others: %+v %+v", other, third)
+	}
+}
+
+func TestJoinOpenCapsSessionsPerInvitationAndKeepsOtherInvitations(t *testing.T) {
+	st, _ := pairFixture(t)
+	j := st.Join()
+	first, _ := j.Open("other", "")
+	for i := 0; i < maxJoinPerInvite+5; i++ {
+		if _, err := j.Open(testInvite, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := j.Sessions(); n != maxJoinPerInvite+1 {
+		t.Fatalf("%d sessions", n)
+	}
+	if _, err := j.Claim(codeReq(first.Pair, "m", "1.1.1.1")); err != nil {
+		t.Fatalf("another invitation lost its session: %v", err)
+	}
+}
+
+func TestJoinSessionsExpire(t *testing.T) {
+	st, clock := pairFixture(t)
+	j := st.Join()
+	o, _ := j.Open(testInvite, "")
+	clock.t = clock.t.Add(JoinSessionTTL + time.Second)
+	if _, err := j.Claim(codeReq(o.Pair, "m", "1.1.1.1")); err != ErrJoinInvalid {
+		t.Fatalf("expired: %v", err)
+	}
+	if j.Sessions() != 0 {
+		t.Fatal("expired session stays")
+	}
+}
+
+// Installation zuerst: Gerät meldet sich vor dem Login, Bindung kommt später.
+func TestJoinCodeModeInstallerFirstThenLoginThenApprove(t *testing.T) {
+	st, clock := pairFixture(t)
+	j := st.Join()
+	o, _ := j.Open(testInvite, "")
+	claim, err := j.Claim(codeReq(strings.ToLower(o.Pair), "laptop", "1.1.1.1"))
+	if err != nil || claim.Mode != JoinModeCode || len(claim.DeviceCode) != 64 || len(claim.Confirm) != 4 {
+		t.Fatalf("claim: %+v %v", claim, err)
+	}
+	if _, _, err := pollLater(st, clock, claim.DeviceCode); !errors.Is(err, ErrDevicePending) {
+		t.Fatalf("poll before login: %v", err)
+	}
+	if err := j.Bind(testInvite, o.ID, "person:2"); err != nil {
+		t.Fatal(err)
+	}
+	v := j.View("person:2")
+	if v.State != JoinClaimed || v.Machine != "laptop" || v.Mode != JoinModeCode || v.Nonce == "" {
+		t.Fatalf("view %+v", v)
+	}
+	// Falscher Bestätigungscode, dann der richtige.
+	if _, err := j.Decide("person:2", true, v.Nonce, "ZZZZ", nil); !errors.Is(err, ErrJoinConfirm) {
+		t.Fatalf("wrong confirm: %v", err)
+	}
+	if _, err := j.Decide("person:2", true, v.Nonce, strings.ToLower(claim.Confirm), nil); err != nil {
+		t.Fatal(err)
+	}
+	appr, _, err := pollLater(st, clock, claim.DeviceCode)
+	if err != nil || appr.AccountID != "person:2" || appr.Machine != "laptop" {
+		t.Fatalf("poll: %+v %v", appr, err)
+	}
+	if _, _, err := pollLater(st, clock, claim.DeviceCode); !errors.Is(err, ErrDeviceUnknown) {
+		t.Fatalf("second poll: %v", err)
+	}
+	// Erst nach ausgestelltem Token gilt die Sitzung als verbunden.
+	if v := j.View("person:2"); v.State == JoinConnected {
+		t.Fatal("connected before the token was issued")
+	}
+	j.DeliveredDevice(claim.DeviceCode)
+	if v := j.View("person:2"); v.State != JoinConnected {
+		t.Fatalf("after delivery %q", v.State)
+	}
+}
+
+// Login zuerst: Konto gebunden, Seite wartet, dann meldet sich das Gerät.
+func TestJoinLoginFirstThenInstaller(t *testing.T) {
+	st, _ := pairFixture(t)
+	j := st.Join()
+	o, _ := j.Open(testInvite, "")
+	j.Bind(testInvite, o.ID, "person:2")
+	if v := j.View("person:2"); v.State != JoinWaiting || v.Pair != o.Pair {
+		t.Fatalf("after bind %+v", v)
+	}
+	if _, err := j.Decide("person:2", true, "x", "", nil); !errors.Is(err, ErrJoinNotReady) {
 		t.Fatalf("approve without device: %v", err)
 	}
-	if err := j.Decide("person:9", true); !errors.Is(err, ErrJoinNotReady) {
-		t.Fatalf("approve without session: %v", err)
+	if _, err := j.Claim(loopReq(o.Pair, "box", "2.2.2.2")); err != nil {
+		t.Fatal(err)
+	}
+	if v := j.View("person:2"); v.State != JoinClaimed || v.Mode != JoinModeLoopback {
+		t.Fatalf("view %+v", v)
+	}
+}
+
+func TestJoinBindNeedsTheSameInvitationAndBrowser(t *testing.T) {
+	st, _ := pairFixture(t)
+	j := st.Join()
+	o, _ := j.Open(testInvite, "")
+	// Falsche Einladung oder Cookie: das Konto bekommt eine neue, eigene Sitzung.
+	j.Bind("invite-code-2", o.ID, "person:3")
+	if v := j.View("person:3"); v.State != JoinWaiting || v.Pair == o.Pair {
+		t.Fatalf("foreign bind %+v", v)
+	}
+	if _, err := j.Claim(codeReq(o.Pair, "m", "1.1.1.1")); err != nil {
+		t.Fatalf("the browser's session was taken: %v", err)
+	}
+	// Ein Konto, das schon eine Sitzung hat, behält nur die neue.
+	j.Bind(testInvite, o.ID, "person:3")
+	if j.Sessions() != 1 {
+		t.Fatalf("sessions %d", j.Sessions())
+	}
+}
+
+func exchangeFlow(t *testing.T) (*JoinSessions, JoinView, string) {
+	t.Helper()
+	st, _ := pairFixture(t)
+	j := st.Join()
+	o, _ := j.Open(testInvite, "")
+	if _, err := j.Claim(loopReq(o.Pair, "laptop", "1.1.1.1")); err != nil {
+		t.Fatal(err)
+	}
+	j.Bind(testInvite, o.ID, "person:2")
+	v := j.View("person:2")
+	dec, err := j.Decide("person:2", true, v.Nonce, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return j, v, dec.Redirect
+}
+
+func TestJoinLoopbackApproveRedirectsToTheClaimedPortOnly(t *testing.T) {
+	_, _, target := exchangeFlow(t)
+	if !strings.HasPrefix(target, "http://127.0.0.1:40123/callback?") || !strings.Contains(target, "state=state-12345678") ||
+		!strings.Contains(target, "code=") {
+		t.Fatalf("redirect %q", target)
+	}
+}
+
+func authCode(target string) string {
+	i := strings.Index(target, "code=")
+	return strings.SplitN(target[i+5:], "&", 2)[0]
+}
+
+func TestJoinExchangeNeedsTheVerifierAndWorksOnce(t *testing.T) {
+	j, _, target := exchangeFlow(t)
+	code := authCode(target)
+	verifier, _ := pkce()
+	if _, err := j.Exchange("9.9.9.9", code, strings.Repeat("w", 43)); err != ErrJoinInvalid {
+		t.Fatalf("wrong verifier: %v", err)
+	}
+	// Ein Fehlversuch verbraucht den Code.
+	if _, err := j.Exchange("9.9.9.9", code, verifier); err != ErrJoinInvalid {
+		t.Fatalf("code survived a failed try: %v", err)
+	}
+}
+
+func TestJoinExchangeSuccessAndReuse(t *testing.T) {
+	j, _, target := exchangeFlow(t)
+	code := authCode(target)
+	verifier, _ := pkce()
+	g, err := j.Exchange("9.9.9.9", code, verifier)
+	if err != nil || g.Account != "person:2" || g.Machine != "laptop" {
+		t.Fatalf("exchange: %+v %v", g, err)
+	}
+	if v := j.View("person:2"); v.State == JoinConnected {
+		t.Fatal("connected before delivery")
+	}
+	j.Delivered(g)
+	if v := j.View("person:2"); v.State != JoinConnected {
+		t.Fatalf("state %q", v.State)
+	}
+	if _, err := j.Exchange("9.9.9.9", code, verifier); err != ErrJoinInvalid {
+		t.Fatalf("reuse: %v", err)
+	}
+}
+
+func TestJoinExchangeExpires(t *testing.T) {
+	st, clock := pairFixture(t)
+	j := st.Join()
+	o, _ := j.Open(testInvite, "")
+	j.Claim(loopReq(o.Pair, "m", "1.1.1.1"))
+	j.Bind(testInvite, o.ID, "person:2")
+	dec, _ := j.Decide("person:2", true, j.View("person:2").Nonce, "", nil)
+	clock.t = clock.t.Add(joinAuthTTL + time.Second)
+	verifier, _ := pkce()
+	if _, err := j.Exchange("9.9.9.9", authCode(dec.Redirect), verifier); err != ErrJoinInvalid {
+		t.Fatalf("expired: %v", err)
+	}
+}
+
+// Dieb-Szenario: wer den Paarungscode abfängt und zuerst claimt, bekommt weder den
+// Autorisierungscode (er geht auf den Loopback des Browsers) noch ein Token.
+func TestJoinThiefClaimsFirstGetsNothing(t *testing.T) {
+	st, _ := pairFixture(t)
+	j := st.Join()
+	o, _ := j.Open(testInvite, "")
+	thief := loopReq(o.Pair, "laptop", "6.6.6.6") // Gerätename wie beim Opfer
+	thief.Challenge = base64.RawURLEncoding.EncodeToString(make([]byte, 32))
+	if _, err := j.Claim(thief); err != nil {
+		t.Fatal(err)
+	}
+	// Das Opfer meldet sich danach: zweiter Claim, die Sitzung ist verworfen.
+	if _, err := j.Claim(loopReq(o.Pair, "laptop", "1.1.1.1")); err != ErrJoinInvalid {
+		t.Fatalf("victim claim: %v", err)
+	}
+	j.Bind(testInvite, o.ID, "person:2")
+	v := j.View("person:2")
+	if v.State != JoinCompromised {
+		t.Fatalf("state %q", v.State)
+	}
+	if _, err := j.Decide("person:2", true, v.Nonce, "", nil); !errors.Is(err, ErrJoinNotReady) {
+		t.Fatalf("approve of a compromised session: %v", err)
+	}
+}
+
+// Der Dieb claimt zuerst und das Opfer gibt trotzdem frei (es sieht nur "laptop"):
+// der Code geht an den Loopback des Opfers; der Dieb kennt ihn nicht, seinen
+// Verifier gibt es auch nicht, und mit dem Verifier des Opfers (den nur dessen
+// CLI hat) lässt sich der Code nicht tauschen, wenn der Dieb eine andere
+// Challenge nannte.
+func TestJoinStolenPairCodeWithApprovedVictimStillGivesTheThiefNothing(t *testing.T) {
+	st, _ := pairFixture(t)
+	j := st.Join()
+	o, _ := j.Open(testInvite, "")
+	thief := loopReq(o.Pair, "laptop", "6.6.6.6")
+	thief.Challenge = base64.RawURLEncoding.EncodeToString(sha256Of("thief-secret-verifier-0000000000000000000000"))
+	j.Claim(thief)
+	j.Bind(testInvite, o.ID, "person:2")
+	dec, err := j.Decide("person:2", true, j.View("person:2").Nonce, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Der Dieb sieht die URL nie; selbst mit einem geratenen Code scheitert er.
+	if _, err := j.Exchange("6.6.6.6", strings.Repeat("a", 64), "thief-secret-verifier-0000000000000000000000"); err != ErrJoinInvalid {
+		t.Fatal("guessed code worked")
+	}
+	// Das Opfer-Gerät (anderer Verifier) kann den Code nicht einlösen.
+	verifier, _ := pkce()
+	if _, err := j.Exchange("1.1.1.1", authCode(dec.Redirect), verifier); err != ErrJoinInvalid {
+		t.Fatalf("exchange with a foreign verifier: %v", err)
+	}
+}
+
+func sha256Of(s string) []byte { sum := sha256.Sum256([]byte(s)); return sum[:] }
+
+func TestJoinCodeModeThiefCannotApproveWithoutTheTerminalCode(t *testing.T) {
+	st, clock := pairFixture(t)
+	j := st.Join()
+	o, _ := j.Open(testInvite, "")
+	claim, _ := j.Claim(codeReq(o.Pair, "laptop", "6.6.6.6"))
+	j.Bind(testInvite, o.ID, "person:2")
+	nonce := j.View("person:2").Nonce
+	for i := 0; i < maxJoinConfirmFails; i++ {
+		if _, err := j.Decide("person:2", true, nonce, "", nil); !errors.Is(err, ErrJoinConfirm) {
+			t.Fatalf("try %d: %v", i, err)
+		}
+	}
+	if v := j.View("person:2"); v.State != JoinCompromised {
+		t.Fatalf("state %q", v.State)
+	}
+	if _, _, err := pollLater(st, clock, claim.DeviceCode); !errors.Is(err, ErrDeviceUnknown) {
+		t.Fatalf("the device flow of a compromised session lives: %v", err)
+	}
+}
+
+func TestJoinSecondClaimDropsTheSessionAndItsDeviceFlow(t *testing.T) {
+	st, clock := pairFixture(t)
+	j := st.Join()
+	o, _ := j.Open(testInvite, "")
+	first, _ := j.Claim(codeReq(o.Pair, "mine", "1.1.1.1"))
+	if _, err := j.Claim(codeReq(o.Pair, "thief", "2.2.2.2")); err != ErrJoinInvalid {
+		t.Fatalf("second claim: %v", err)
+	}
+	if _, _, err := pollLater(st, clock, first.DeviceCode); !errors.Is(err, ErrDeviceUnknown) {
+		t.Fatalf("first device flow survived: %v", err)
+	}
+	// Die Einladungsseite im selben Browser bekommt jetzt einen neuen Code.
+	again, _ := j.Open(testInvite, o.ID)
+	if again.ID == "" || again.Pair == o.Pair {
+		t.Fatalf("reload after compromise: %+v", again)
 	}
 }
 
 func TestJoinDeny(t *testing.T) {
 	st, clock := pairFixture(t)
 	j := st.Join()
-	pair, _ := j.Create("person:2")
-	claim, _ := j.Claim("a", pair, "laptop", "a")
-	if err := j.Decide("person:2", false); err != nil {
+	o, _ := j.Open(testInvite, "")
+	claim, _ := j.Claim(codeReq(o.Pair, "laptop", "1.1.1.1"))
+	j.Bind(testInvite, o.ID, "person:2")
+	if _, err := j.Decide("person:2", false, j.View("person:2").Nonce, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := pollLater(st, clock, claim.DeviceCode); !errors.Is(err, ErrDeviceDenied) {
@@ -102,72 +366,96 @@ func TestJoinDeny(t *testing.T) {
 	if v := j.View("person:2"); v.State != JoinDenied {
 		t.Fatalf("state %q", v.State)
 	}
-	// Danach lässt sich der Code nicht mehr beanspruchen.
-	if _, err := j.Claim("a", pair, "laptop", "a"); !errors.Is(err, ErrJoinInvalid) {
+	if _, err := j.Claim(codeReq(o.Pair, "x", "1.1.1.1")); err != ErrJoinInvalid {
 		t.Fatalf("claim after deny: %v", err)
 	}
 }
 
-func TestJoinSecondClaimIsRefusedAndShownAsWarning(t *testing.T) {
+func TestJoinApproveIsBoundToTheShownRequest(t *testing.T) {
 	st, _ := pairFixture(t)
 	j := st.Join()
 	pair, _ := j.Create("person:2")
-	if _, err := j.Claim("a", pair, "laptop", "a"); err != nil {
-		t.Fatal(err)
+	j.Claim(loopReq(pair, "laptop", "1.1.1.1"))
+	if _, err := j.Decide("person:2", true, "stale-nonce", "", nil); !errors.Is(err, ErrJoinNotReady) {
+		t.Fatalf("stale nonce: %v", err)
 	}
-	if _, err := j.Claim("b", pair, "evil", "b"); !errors.Is(err, ErrJoinInvalid) {
-		t.Fatalf("second claim: %v", err)
+	if _, err := j.Decide("person:2", true, "", "", nil); !errors.Is(err, ErrJoinNotReady) {
+		t.Fatalf("no nonce: %v", err)
 	}
-	v := j.View("person:2")
-	if v.Machine != "laptop" || v.Conflicts != 1 {
-		t.Fatalf("view %+v", v)
+	nonce := j.View("person:2").Nonce
+	boom := errors.New("name taken")
+	if _, err := j.Decide("person:2", true, nonce, "", func(m string) error {
+		if m != "laptop" {
+			t.Errorf("check saw %q", m)
+		}
+		return boom
+	}); err != boom {
+		t.Fatalf("check error: %v", err)
+	}
+	if _, err := j.Decide("person:2", true, nonce, "", nil); err != nil {
+		t.Fatalf("a failed check consumed the request: %v", err)
+	}
+}
+
+func TestJoinDecideBelongsToTheBoundAccount(t *testing.T) {
+	st, _ := pairFixture(t)
+	j := st.Join()
+	pair, _ := j.Create("person:2")
+	j.Claim(loopReq(pair, "laptop", "1.1.1.1"))
+	nonce := j.View("person:2").Nonce
+	if _, err := j.Decide("person:9", true, nonce, "", nil); !errors.Is(err, ErrJoinNotReady) {
+		t.Fatalf("other account: %v", err)
+	}
+	if v := j.View("person:9"); v.State != JoinNone || v.Pair != "" {
+		t.Fatalf("other account sees %+v", v)
+	}
+}
+
+func TestJoinJoinFlowsAreInvisibleToTheUserCodeFlow(t *testing.T) {
+	st, _ := pairFixture(t)
+	j := st.Join()
+	o, _ := j.Open(testInvite, "")
+	claim, _ := j.Claim(codeReq(o.Pair, "laptop", "1.1.1.1"))
+	for _, code := range []string{o.Pair, claim.Confirm, claim.Confirm + claim.Confirm} {
+		if _, err := st.Device().Lookup(code, "person:2"); err == nil {
+			t.Fatalf("/ui/device finds a join flow by %q", code)
+		}
+		if err := st.Device().Decide(code, "person:2", true); err == nil {
+			t.Fatalf("/ui/device decided a join flow by %q", code)
+		}
+	}
+	if st.Device().JoinStatus(DeviceHash(claim.DeviceCode)) != "pending" {
+		t.Fatal("the join flow was touched")
 	}
 }
 
 func TestJoinUnknownExpiredAndConsumedAreTheSameError(t *testing.T) {
 	st, clock := pairFixture(t)
 	j := st.Join()
-	expired, _ := j.Create("person:2")
-	consumed, _ := j.Create("person:3")
-	if _, err := j.Claim("a", consumed, "m", "a"); err != nil {
-		t.Fatal(err)
-	}
-	clock.t = clock.t.Add(JoinSessionTTL + time.Second)
-	for name, code := range map[string]string{"unknown": "BCDF-GHJK", "expired": expired, "consumed": consumed, "garbage": "not a code", "empty": ""} {
-		if _, err := j.Claim("c-"+name, code, "m", "c"); err != ErrJoinInvalid {
+	expired, _ := j.Open("a", "")
+	consumed, _ := j.Open("b", "")
+	denied, _ := j.Open("c", "")
+	j.Claim(codeReq(consumed.Pair, "m", "1.1.1.1"))
+	j.Claim(codeReq(denied.Pair, "m", "1.1.1.2"))
+	j.Bind("c", denied.ID, "person:4")
+	j.Decide("person:4", false, j.View("person:4").Nonce, "", nil)
+	cases := map[string]string{"unknown": "BCDF-GHJK", "claimed": consumed.Pair, "denied": denied.Pair, "garbage": "not a code", "empty": ""}
+	for name, code := range cases {
+		if _, err := j.Claim(codeReq(code, "m", "c-"+name)); err != ErrJoinInvalid {
 			t.Errorf("%s: %v (want exactly ErrJoinInvalid)", name, err)
 		}
 	}
-}
-
-func TestJoinClaimAfterSessionExpiryExtendsToTheDeviceFlow(t *testing.T) {
-	st, clock := pairFixture(t)
-	j := st.Join()
-	pair, _ := j.Create("person:2")
-	clock.t = clock.t.Add(JoinSessionTTL - time.Second)
-	claim, err := j.Claim("a", pair, "m", "a")
-	if err != nil {
-		t.Fatal(err)
-	}
-	clock.t = clock.t.Add(5 * time.Minute) // über die Frist des Codes, unter der des Geräte-Ablaufs
-	if v := j.View("person:2"); v.State != JoinClaimed {
-		t.Fatalf("state %q", v.State)
-	}
-	if err := j.Decide("person:2", true); err != nil {
-		t.Fatal(err)
-	}
-	_ = claim
-	clock.t = clock.t.Add(DeviceFlowTTL + JoinSessionTTL)
-	if v := j.View("person:2"); v.State != JoinNone {
-		t.Fatalf("after expiry %q", v.State)
+	clock.t = clock.t.Add(JoinSessionTTL + time.Second)
+	if _, err := j.Claim(codeReq(expired.Pair, "m", "c-exp")); err != ErrJoinInvalid {
+		t.Errorf("expired: %v", err)
 	}
 }
 
 func TestJoinRestartLosesSessionsNeutrally(t *testing.T) {
 	st, _ := pairFixture(t)
-	pair, _ := st.Join().Create("person:2")
+	o, _ := st.Join().Open(testInvite, "")
 	fresh := NewJoinSessions(st.Device())
-	if _, err := fresh.Claim("a", pair, "m", "a"); err != ErrJoinInvalid {
+	if _, err := fresh.Claim(codeReq(o.Pair, "m", "a")); err != ErrJoinInvalid {
 		t.Fatalf("claim after restart: %v", err)
 	}
 	if v := fresh.View("person:2"); v.State != JoinNone {
@@ -179,12 +467,12 @@ func TestJoinNewCodeReplacesTheOldAndDropsItsDevice(t *testing.T) {
 	st, clock := pairFixture(t)
 	j := st.Join()
 	first, _ := j.Create("person:2")
-	claim, _ := j.Claim("a", first, "m", "a")
+	claim, _ := j.Claim(codeReq(first, "m", "1.1.1.1"))
 	second, _ := j.Create("person:2")
 	if first == second {
 		t.Fatal("same code twice")
 	}
-	if _, err := j.Claim("b", first, "m", "b"); err != ErrJoinInvalid {
+	if _, err := j.Claim(codeReq(first, "m", "2.2.2.2")); err != ErrJoinInvalid {
 		t.Fatalf("old code: %v", err)
 	}
 	if _, _, err := pollLater(st, clock, claim.DeviceCode); !errors.Is(err, ErrDeviceUnknown) {
@@ -192,28 +480,43 @@ func TestJoinNewCodeReplacesTheOldAndDropsItsDevice(t *testing.T) {
 	}
 }
 
-func TestJoinWrongGuessesLockTheAddress(t *testing.T) {
+func TestJoinWrongGuessesLockTheNetworkIncludingIPv6Prefixes(t *testing.T) {
 	st, clock := pairFixture(t)
 	j := st.Join()
 	pair, _ := j.Create("person:2")
 	for i := 0; i < maxJoinFailures; i++ {
-		if _, err := j.Claim("9.9.9.9", "BCDF-GHJK", "m", "9.9.9.9"); err != ErrJoinInvalid {
+		if _, err := j.Claim(codeReq("BCDF-GHJK", "m", "9.9.9.9")); err != ErrJoinInvalid {
 			t.Fatalf("guess %d: %v", i, err)
 		}
 	}
-	// Auch der richtige Code hilft dieser Adresse jetzt nicht; die Sperre hängt nur an der Adresse.
-	if _, err := j.Claim("9.9.9.9", pair, "m", "9.9.9.9"); !errors.Is(err, ErrJoinLocked) {
-		t.Fatalf("locked address with right code: %v", err)
+	for _, code := range []string{pair, "BCDF-GHJK"} {
+		if _, err := j.Claim(codeReq(code, "m", "9.9.9.9")); !errors.Is(err, ErrJoinLocked) {
+			t.Fatalf("locked address, code %q: %v", code, err)
+		}
 	}
-	if _, err := j.Claim("9.9.9.9", "BCDF-GHJK", "m", "9.9.9.9"); !errors.Is(err, ErrJoinLocked) {
-		t.Fatalf("locked address with wrong code: %v", err)
+	// IPv6: Adressen eines /64 teilen sich die Sperre.
+	for i := 0; i < maxJoinFailures; i++ {
+		j.Claim(codeReq("BCDF-GHJK", "m", "2001:db8:1:2::"+string(rune('1'+i))))
 	}
-	// Eine andere Adresse ist nicht betroffen, die Sitzung auch nicht.
-	if _, err := j.Claim("8.8.8.8", pair, "m", "8.8.8.8"); err != nil {
+	if _, err := j.Claim(codeReq(pair, "m", "2001:db8:1:2::ff")); !errors.Is(err, ErrJoinLocked) {
+		t.Fatalf("same /64: %v", err)
+	}
+	// Ein anderes /64 im selben /48 hat die höhere zweite Stufe: erst viele Fehlversuche sperren es.
+	if _, err := j.Claim(codeReq("BCDF-GHJK", "m", "2001:db8:1:3::1")); err != ErrJoinInvalid {
+		t.Fatalf("other /64: %v", err)
+	}
+	for i := 0; i < maxJoinFailures*joinWiderFactor; i++ {
+		j.Claim(codeReq("BCDF-GHJK", "m", fmt.Sprintf("2001:db8:1:%x::1", i+16)))
+	}
+	if _, err := j.Claim(codeReq(pair, "m", "2001:db8:1:ffff::1")); !errors.Is(err, ErrJoinLocked) {
+		t.Fatalf("same /48: %v", err)
+	}
+	// Eine fremde Adresse und die Sitzung sind unberührt.
+	if _, err := j.Claim(codeReq(pair, "m", "8.8.8.8")); err != nil {
 		t.Fatalf("other address: %v", err)
 	}
 	clock.t = clock.t.Add(joinFailureWindow + time.Second)
-	if _, err := j.Claim("9.9.9.9", "BCDF-GHJK", "m", "9.9.9.9"); err != ErrJoinInvalid {
+	if _, err := j.Claim(codeReq("BCDF-GHJK", "m", "9.9.9.9")); err != ErrJoinInvalid {
 		t.Fatalf("after the window: %v", err)
 	}
 }
@@ -222,40 +525,43 @@ func TestJoinBusyAddressAnswersTheSameForValidAndInvalidCodes(t *testing.T) {
 	st, _ := pairFixture(t)
 	j := st.Join()
 	for i := 0; i < maxDevicePerClient; i++ {
-		if _, _, err := startOpen(st, "7.7.7.7"); err != nil {
+		if _, err := st.Device().Start("7.7.7.7", "other", "7.7.7.7"); err != nil {
 			t.Fatal(err)
 		}
 	}
-	pair, _ := j.Create("person:2")
-	_, errValid := j.Claim("7.7.7.7", pair, "m", "7.7.7.7")
-	_, errInvalid := j.Claim("7.7.7.7", "BCDF-GHJK", "m", "7.7.7.7")
+	o, _ := j.Open(testInvite, "")
+	_, errValid := j.Claim(codeReq(o.Pair, "m", "7.7.7.7"))
+	_, errInvalid := j.Claim(codeReq("BCDF-GHJK", "m", "7.7.7.7"))
 	if !errors.Is(errValid, ErrDeviceBusy) || errValid != errInvalid {
 		t.Fatalf("valid=%v invalid=%v", errValid, errInvalid)
 	}
-	// Die Sitzung ist durch den Fehlschlag nicht verbraucht.
-	if _, err := j.Claim("6.6.6.6", pair, "m", "6.6.6.6"); err != nil {
+	if _, err := j.Claim(codeReq(o.Pair, "m", "6.6.6.6")); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func startOpen(st *Store, client string) (DeviceStart, int, error) {
-	s, err := st.Device().Start(client, "other", client)
-	return s, 0, err
-}
-
-func TestJoinSessionAttemptsAreCapped(t *testing.T) {
-	st, _ := pairFixture(t)
-	j := st.Join()
-	pair, _ := j.Create("person:2")
-	if _, err := j.Claim("a", pair, "m", "a"); err != nil {
-		t.Fatal(err)
+func TestJoinLoopbackFieldsAreValidated(t *testing.T) {
+	good := loopReq("x", "m", "a")
+	if !good.ValidLoopback() {
+		t.Fatal("good request invalid")
 	}
-	for i := 0; i < maxJoinSessionTries+2; i++ {
-		j.Claim("evil-"+string(rune('a'+i)), pair, "m", "x")
+	for name, mod := range map[string]func(*JoinClaimRequest){
+		"port low": func(r *JoinClaimRequest) { r.Port = 80 }, "port high": func(r *JoinClaimRequest) { r.Port = 70000 },
+		"no port": func(r *JoinClaimRequest) { r.Port = 0 }, "short challenge": func(r *JoinClaimRequest) { r.Challenge = "abc" },
+		"bad challenge": func(r *JoinClaimRequest) { r.Challenge = strings.Repeat("+", 43) },
+		"short state":   func(r *JoinClaimRequest) { r.State = "s" }, "state with &": func(r *JoinClaimRequest) { r.State = "state&evil=1abc" },
+		"foreign host": func(r *JoinClaimRequest) { r.Host = "evil.example" }, "no state": func(r *JoinClaimRequest) { r.State = "" },
+	} {
+		r := good
+		mod(&r)
+		if r.ValidLoopback() {
+			t.Errorf("%s accepted", name)
+		}
 	}
-	v := j.View("person:2")
-	if v.Machine != "m" || v.Conflicts == 0 {
-		t.Fatalf("view %+v", v)
+	v6 := good
+	v6.Host = "[::1]"
+	if !v6.ValidLoopback() {
+		t.Error("ipv6 loopback refused")
 	}
 }
 
@@ -263,11 +569,11 @@ func TestJoinSessionsAreCapped(t *testing.T) {
 	st, _ := pairFixture(t)
 	j := st.Join()
 	for i := 0; i < maxJoinSessions+10; i++ {
-		if _, err := j.Create("person:" + string(rune('A'+i%26)) + strings.Repeat("x", i/26)); err != nil {
+		if _, err := j.Create("person:" + strings.Repeat("x", i%7) + string(rune('A'+i%26)) + strings.Repeat("y", i/26)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if n := j.Open(); n > maxJoinSessions {
+	if n := j.Sessions(); n > maxJoinSessions {
 		t.Fatalf("%d sessions", n)
 	}
 }

@@ -34,22 +34,31 @@ Versioning, with pre-1.0 compatibility rules described in
   invitation list shows project and role. `/ui/orgs/accept` hands project codes
   over to the join page. At startup the server warns when
   `GHOSTTREE_PUBLIC_URL` is set but `GHOSTTREE_TRUSTED_PROXIES` is empty.
-- Added: join session and pairing code (REQ-434, second part). After an
-  invitation is accepted, or when a signed-in account chooses "Connect this
-  machine" at `/join/pair`, the server opens a short-lived join session (in
-  memory, 10 minutes) and shows a one-time pairing code `XXXX-XXXX` with the
-  install command; the invitation code never appears in the command. The
-  installer calls `POST /api/join/claim` with the pairing code and a machine
-  name (no token) and gets a `device_code` for the existing device flow; the
-  token exists only after the invited account approves "<machine> wants to
-  connect" in an interactive browser session (CSRF, same origin, account
-  confirmation) and is delivered once at `POST /api/auth/device/token`. Order
-  does not matter: the machine may report before or after the page is open.
-  Unknown, expired, used and malformed codes get the same answer; wrong codes
-  are limited per client address, open flows per address, and a code dies after
-  three attempts or when a second device tries it (the page warns). A server
-  restart drops sessions; the page then says "Setup was interrupted". Signing
-  in through the join page lands on the pairing page.
+- Added: join session and pairing code (REQ-434, second part), so that
+  installation and sign-in run in parallel. Opening a valid invitation page
+  `/join/<code>` creates a join session bound to the invitation and the
+  browser (HttpOnly `gt_join` cookie, 15 minutes, never in a URL) without using
+  the invitation up, and shows the install command with a one-time pairing
+  code `XXXX-XXXX`; reloading shows the same code. Invalid invitations create
+  no session and stay byte-identical 404s. The installer calls
+  `POST /api/join/claim` (no token) with the pairing code and a machine name
+  and waits; after sign-in and joining, the session is bound to the account and
+  only that account can approve "<machine> wants to connect" (interactive
+  session, CSRF, same origin, account confirmation, bound to the shown
+  request, with a "same network as this browser" line). Either order works.
+  Preferred path (RFC 8252 with PKCE): the claim carries `code_challenge`,
+  `loopback_port` and `state`; after approval the browser is redirected to
+  `http://127.0.0.1:<port>/callback?code=..&state=..` and `POST /api/join/token`
+  exchanges the one-use code for the token only with the matching
+  `code_verifier`, so a thief of the pairing code gets nothing. Fallback
+  (client without a loopback listener): the claim answer carries a
+  confirmation code, the approval page asks for it, and the token comes through
+  the device flow. A second claim discards the session. Unknown, expired,
+  claimed, denied and malformed codes get the same answer; wrong codes are
+  limited per /64 (and per /48 on IPv6) and logged when they pile up. Join
+  device flows have no user code, so `/ui/device` cannot see or decide them.
+  A server restart drops sessions; the page then says "Setup was interrupted".
+  The command is shown only over https or loopback.
 - Fixed: signing in with a one-time code, login link, invitation or bootstrap
   code in a browser ended with 403. The code pages sent
   `Referrer-Policy: no-referrer`, so the browser posted the form with

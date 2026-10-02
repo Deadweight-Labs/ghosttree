@@ -8,19 +8,30 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
-// POST /api/join/claim (REQ-434, Paket P2): der Installer (ctx join) meldet sein
-// Gerät mit dem Paarungscode an, den die Join-Seite zeigt. Der Aufruf braucht
-// kein Token. Er startet den gewöhnlichen Geräte-Ablauf; das Token holt der
-// Client danach bei POST /api/auth/device/token mit dem device_code ab, sobald
-// das Konto im Browser freigegeben hat.
+// Join-Paarung für den Installer (REQ-434, Paket P2). Beide Aufrufe sind ohne
+// Token erreichbar.
 //
-// Beobachtbar für einen Fremden ist nur: 400 invalid_pair (für jeden Code, der
-// nicht taugt), 429 (Adresse gesperrt oder zu viele offene Abläufe; hängt nie
-// vom Code ab), 400/413 invalid_request für einen kaputten Körper (ebenfalls
-// vom Code unabhängig). Der Paarungscode steht nur im Körper, nie in einer URL.
+// POST /api/join/claim meldet ein Gerät mit dem Paarungscode der Join-Seite an.
+// Mit code_challenge (S256), loopback_port und state wählt der Client den
+// Loopback-Weg (RFC 8252 mit PKCE): nach der Freigabe im Browser landet ein
+// einmaliger Code auf http://127.0.0.1:<port>/callback, und
+// POST /api/join/token tauscht ihn gegen das Token, aber nur mit dem
+// code_verifier. Ohne diese Felder gilt der Rückfall: die Antwort enthält einen
+// Bestätigungscode, den die Freigabeseite abfragt, und das Token kommt über den
+// Geräte-Ablauf (/api/auth/device/token).
+//
+// Beobachtbar für einen Fremden ist nur: 400 invalid_pair bzw. invalid_grant für
+// jeden Code, der nicht taugt, 429 (Netz gesperrt oder zu viele offene Abläufe;
+// hängt nie vom Code ab) und 400/413 invalid_request für einen kaputten Körper
+// (ebenfalls vom Code unabhängig). Codes stehen nur in Körpern, nie in URLs.
 type joinClaimRequest struct {
-	Pair    string `json:"pair"`
-	Machine string `json:"machine"`
+	Pair                string `json:"pair"`
+	Machine             string `json:"machine"`
+	CodeChallenge       string `json:"code_challenge"`
+	CodeChallengeMethod string `json:"code_challenge_method"`
+	LoopbackPort        int    `json:"loopback_port"`
+	LoopbackHost        string `json:"loopback_host"`
+	State               string `json:"state"`
 }
 
 func (a *api) claimJoin(w http.ResponseWriter, r *http.Request) {
@@ -34,17 +45,26 @@ func (a *api) claimJoin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_request", "error_description": "machine is required (printable, at most 128 bytes)"})
 		return
 	}
-	addr := a.clientAddr(r)
-	claim, err := a.st.Join().Claim(addr, req.Pair, machine, addr)
+	claim := store.JoinClaimRequest{Addr: a.clientAddr(r), Pair: req.Pair, Machine: machine,
+		Challenge: req.CodeChallenge, State: req.State, Host: req.LoopbackHost, Port: req.LoopbackPort}
+	if claim.Loopback() && (!claim.ValidLoopback() || (req.CodeChallengeMethod != "" && req.CodeChallengeMethod != "S256")) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_request", "error_description": "loopback needs code_challenge (S256), loopback_port (1024-65535) and state"})
+		return
+	}
+	out, err := a.st.Join().Claim(claim)
 	switch {
 	case err == nil:
-		writeJSON(w, http.StatusOK, map[string]any{
-			"device_code":      claim.DeviceCode,
-			"expires_in":       int(claim.ExpiresIn.Seconds()),
-			"interval":         int(claim.Interval.Seconds()),
-			"token_endpoint":   "/api/auth/device/token",
-			"verification_uri": a.requestBaseURL(r) + "/join/pair",
-		})
+		body := map[string]any{"mode": out.Mode, "expires_in": int(out.ExpiresIn.Seconds()),
+			"verification_uri": a.requestBaseURL(r) + "/join/pair"}
+		if out.Mode == store.JoinModeLoopback {
+			body["token_endpoint"] = "/api/join/token"
+		} else {
+			body["token_endpoint"] = "/api/auth/device/token"
+			body["device_code"] = out.DeviceCode
+			body["confirm_code"] = out.Confirm
+			body["interval"] = int(out.Interval.Seconds())
+		}
+		writeJSON(w, http.StatusOK, body)
 	case errors.Is(err, store.ErrJoinInvalid):
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_pair"})
 	case errors.Is(err, store.ErrJoinLocked), errors.Is(err, store.ErrDeviceBusy):
@@ -53,4 +73,42 @@ func (a *api) claimJoin(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "server_error"})
 	}
+}
+
+type joinTokenRequest struct {
+	Code         string `json:"code"`
+	CodeVerifier string `json:"code_verifier"`
+}
+
+// exchangeJoin tauscht den Code vom Loopback-Callback gegen das Token (PKCE).
+func (a *api) exchangeJoin(w http.ResponseWriter, r *http.Request) {
+	var req joinTokenRequest
+	if !readDeviceBody(w, r, &req) {
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	grant, err := a.st.Join().Exchange(a.clientAddr(r), strings.TrimSpace(req.Code), req.CodeVerifier)
+	switch {
+	case errors.Is(err, store.ErrJoinInvalid):
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_grant"})
+		return
+	case errors.Is(err, store.ErrJoinLocked):
+		w.Header().Set("Retry-After", "60")
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too_many_requests"})
+		return
+	case err != nil:
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "server_error"})
+		return
+	}
+	token, info, err := a.st.CreateDeviceToken(grant.Account, grant.Machine)
+	if errors.Is(err, store.ErrMachineTaken) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "machine_name_taken", "error_description": "that machine name belongs to another account; start again with a different machine name"})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "access_denied"})
+		return
+	}
+	a.st.Join().Delivered(grant)
+	writeJSON(w, http.StatusOK, map[string]any{"access_token": token, "token_type": "bearer", "machine": info.Machine, "token_id": info.ID})
 }

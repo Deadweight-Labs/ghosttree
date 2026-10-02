@@ -6,6 +6,7 @@ import (
 	"log"
 	"log/slog"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
 	"regexp"
@@ -13,20 +14,24 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/proxytrust"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
-var pairRE = regexp.MustCompile(`[BCDFGHJKMNPQRTVWX34679]{4}-[BCDFGHJKMNPQRTVWX34679]{4}`)
+var (
+	pairRE  = regexp.MustCompile(`[BCDFGHJKMNPQRTVWX34679]{4}-[BCDFGHJKMNPQRTVWX34679]{4}`)
+	nonceRE = regexp.MustCompile(`name="nonce" value="([0-9a-f]+)"`)
+)
 
-// pairWeb: wie joinWeb, dazu ein Konto "anna" mit Einladung und ihre angemeldete Sitzung.
+type testClock struct{ t time.Time }
+
 type pairEnv struct {
-	srv     string
 	hs      *httptest.Server
-	annaTok string
+	srv     string
 	st      *store.Store
-	anna    *http.Client
 	org     store.Org
-	code    string
+	code    string // Einladung für ein noch nicht vorhandenes Konto
+	annaTok string
 	clock   *testClock
 }
 
@@ -40,13 +45,31 @@ func newPairEnv(t *testing.T) pairEnv {
 	clock := &testClock{t: time.Now()}
 	st.Device().SetClock(func() time.Time { return clock.t })
 	st.Join().SetClock(func() time.Time { return clock.t })
-	return pairEnv{hs: srv, annaTok: annaTok, srv: srv.URL, st: st, anna: loginInteractive(t, srv, st, "anna"), org: org,
-		code: projectInvite(t, st, org, store.RoleMember), clock: clock}
+	return pairEnv{hs: srv, srv: srv.URL, st: st, org: org, annaTok: annaTok, code: projectInvite(t, st, org, store.RoleMember), clock: clock}
 }
 
-func (e pairEnv) csrf(t *testing.T, c *http.Client) string {
+// browser ist ein Browser mit Cookie-Speicher, der keinen Weiterleitungen folgt.
+func browser(t *testing.T) *http.Client {
 	t.Helper()
-	return renderedCSRFToken(t, c, e.srv+"/join/pair")
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &http.Client{Jar: jar, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+}
+
+// signInAs meldet ein vorhandenes Konto über einen Login-Link in diesem Browser an.
+func (e pairEnv) signInAs(t *testing.T, c *http.Client, name string) {
+	t.Helper()
+	code, _, err := e.st.CreateAccountCode(store.CodeLogin, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp := sameOriginPostForm(t, c, e.srv+"/ui/login/code", url.Values{"code": {code}})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("sign-in: %d", resp.StatusCode)
+	}
 }
 
 func (e pairEnv) get(t *testing.T, c *http.Client, path string) (*http.Response, string) {
@@ -58,49 +81,41 @@ func (e pairEnv) get(t *testing.T, c *http.Client, path string) (*http.Response,
 	return resp, body(t, resp)
 }
 
-// accept nimmt die Einladung an und gibt den Paarungscode der Seite zurück.
-func (e pairEnv) accept(t *testing.T) string {
+func (e pairEnv) pairOf(t *testing.T, c *http.Client, code string) string {
 	t.Helper()
-	_, page := e.get(t, e.anna, "/join/"+e.code)
-	csrf := regexp.MustCompile(`name="csrf_token" value="([^"]+)"`).FindStringSubmatch(page)[1]
-	resp := sameOriginPostForm(t, e.anna, e.srv+"/join/"+e.code+"/accept", url.Values{"csrf_token": {csrf}, "confirm_account": {"anna"}})
+	resp, text := e.get(t, c, "/join/"+code)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("join page: %d", resp.StatusCode)
+	}
+	pair := pairRE.FindString(text)
+	if pair == "" {
+		t.Fatalf("no pairing code on the join page: %s", text)
+	}
+	return pair
+}
+
+func csrfOn(t *testing.T, text string) string {
+	t.Helper()
+	m := regexp.MustCompile(`name="csrf_token" value="([^"]+)"`).FindStringSubmatch(text)
+	if m == nil {
+		t.Fatalf("no csrf token: %s", text)
+	}
+	return m[1]
+}
+
+// accept nimmt die Einladung im angemeldeten Browser an.
+func (e pairEnv) accept(t *testing.T, c *http.Client, code string) *http.Response {
+	t.Helper()
+	_, page := e.get(t, c, "/join/"+code)
+	resp := sameOriginPostForm(t, c, e.srv+"/join/"+code+"/accept", url.Values{"csrf_token": {csrfOn(t, page)}, "confirm_account": {"anna"}})
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/join/pair" {
 		t.Fatalf("accept: %d %s", resp.StatusCode, resp.Header.Get("Location"))
 	}
-	_, pair := e.get(t, e.anna, "/join/pair")
-	return pairRE.FindString(pair)
+	return resp
 }
 
-func (e pairEnv) claim(t *testing.T, pair, machine string) store.JoinClaim {
-	t.Helper()
-	c, err := e.st.Join().Claim("203.0.113.5", pair, machine, "203.0.113.5")
-	if err != nil {
-		t.Fatalf("claim: %v", err)
-	}
-	return c
-}
-
-func (e pairEnv) decide(t *testing.T, c *http.Client, decision string, confirm string) *http.Response {
-	t.Helper()
-	form := url.Values{"csrf_token": {e.csrf(t, c)}, "decision": {decision}}
-	if confirm != "" {
-		form.Set("confirm_account", confirm)
-	}
-	return sameOriginPostForm(t, c, e.srv+"/join/pair/decide", form)
-}
-
-// poll holt das Token ab wie /api/auth/device/token, nach dem Poll-Intervall.
-func (e pairEnv) poll(t *testing.T, deviceCode string) (store.DeviceApproval, error) {
-	t.Helper()
-	e.clock.t = e.clock.t.Add(time.Minute)
-	a, _, err := e.st.Device().Poll(deviceCode)
-	return a, err
-}
-
-type testClock struct{ t time.Time }
-
-func (e pairEnv) page(t *testing.T, c *http.Client) string {
+func (e pairEnv) pairPage(t *testing.T, c *http.Client) string {
 	t.Helper()
 	resp, text := e.get(t, c, "/join/pair")
 	if resp.StatusCode != http.StatusOK {
@@ -109,284 +124,461 @@ func (e pairEnv) page(t *testing.T, c *http.Client) string {
 	return text
 }
 
-func TestJoinAcceptEndsOnThePairingPageWithTheCommandButNeverTheInvitationCode(t *testing.T) {
-	e := newPairEnv(t)
-	pair := e.accept(t)
-	if pair == "" {
-		t.Fatal("no pairing code on the page")
-	}
-	resp, text := e.get(t, e.anna, "/join/pair")
-	if !strings.Contains(text, "--pair "+pair) || !strings.Contains(text, "| sh -s --") {
-		t.Fatalf("no command: %s", text)
-	}
-	if strings.Contains(text, e.code) {
-		t.Fatal("the invitation code is on the pairing page")
-	}
-	h := resp.Header
-	if h.Get("Cache-Control") != "no-store" || h.Get("Referrer-Policy") != "strict-origin" || !strings.Contains(h.Get("Content-Security-Policy"), "default-src 'none'") {
-		t.Fatalf("headers %v", h)
-	}
-	if loc := resp.Request.URL.String(); strings.Contains(loc, pair) {
-		t.Fatal("the code is in the URL")
-	}
-	// Die Einladung ist verbraucht, die Sitzung gehört anna.
-	if _, err := e.st.PreviewInvitation(e.code, true); err == nil {
-		t.Fatal("invitation still valid")
+func loopClaim(pair, machine, addr string) store.JoinClaimRequest {
+	return store.JoinClaimRequest{Addr: addr, Pair: pair, Machine: machine, Challenge: strings.Repeat("A", 43), State: "state-12345678", Port: 40123}
+}
+
+func (e pairEnv) claimLoop(t *testing.T, pair, machine string) {
+	t.Helper()
+	if _, err := e.st.Join().Claim(loopClaim(pair, machine, "127.0.0.1")); err != nil {
+		t.Fatalf("claim: %v", err)
 	}
 }
 
-// Reihenfolge 1: Seite zuerst offen, das Gerät meldet sich danach.
-func TestJoinPairBrowserFirstThenInstaller(t *testing.T) {
+func (e pairEnv) claimCode(t *testing.T, pair, machine string) store.JoinClaim {
+	t.Helper()
+	c, err := e.st.Join().Claim(store.JoinClaimRequest{Addr: "127.0.0.1", Pair: pair, Machine: machine})
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	return c
+}
+
+func (e pairEnv) decide(t *testing.T, c *http.Client, form url.Values) *http.Response {
+	t.Helper()
+	_, page := e.get(t, c, "/join/pair")
+	form.Set("csrf_token", csrfOn(t, page))
+	if form.Get("nonce") == "" {
+		if m := nonceRE.FindStringSubmatch(page); m != nil {
+			form.Set("nonce", m[1])
+		}
+	}
+	return sameOriginPostForm(t, c, e.srv+"/join/pair/decide", form)
+}
+
+func (e pairEnv) poll(t *testing.T, deviceCode string) error {
+	t.Helper()
+	e.clock.t = e.clock.t.Add(time.Minute)
+	_, _, err := e.st.Device().Poll(deviceCode)
+	return err
+}
+
+func TestJoinPageShowsCommandAndPairingCodeBeforeAnyLoginAndKeepsItOnReload(t *testing.T) {
 	e := newPairEnv(t)
-	pair := e.accept(t)
-	if text := e.page(t, e.anna); strings.Contains(text, "wants to connect") || strings.Contains(text, `value="approve"`) {
-		t.Fatalf("approval offered with no device: %s", text)
+	b := browser(t)
+	resp, text := e.get(t, b, "/join/"+e.code)
+	pair := pairRE.FindString(text)
+	if pair == "" || !strings.Contains(text, "| sh -s -- --pair "+pair) || !strings.Contains(text, "Run only on your own machine.") {
+		t.Fatalf("no command: %s", text)
+	}
+	if strings.Contains(text[strings.Index(text, "<pre"):strings.Index(text, "</pre>")], e.code) {
+		t.Fatal("the invitation code is in the command")
+	}
+	var cookie *http.Cookie
+	for _, c := range resp.Cookies() {
+		if c.Name == "gt_join" {
+			cookie = c
+		}
+	}
+	if cookie == nil || !cookie.HttpOnly || cookie.Path != "/" || cookie.SameSite != http.SameSiteLaxMode || strings.Contains(cookie.Value, pair) || strings.Contains(cookie.Value, e.code) {
+		t.Fatalf("cookie %+v", cookie)
+	}
+	// Dasselbe Cookie: dieselbe Sitzung, kein neues Cookie.
+	resp2, text2 := e.get(t, b, "/join/"+e.code)
+	if pairRE.FindString(text2) != pair || len(resp2.Cookies()) != 0 || e.st.Join().Sessions() != 1 {
+		t.Fatalf("reload changed the session: %d cookies=%v", e.st.Join().Sessions(), resp2.Cookies())
+	}
+	// Das Öffnen verbraucht nichts.
+	if _, err := e.st.PreviewInvitation(e.code, true); err != nil {
+		t.Fatalf("the invitation was used: %v", err)
+	}
+}
+
+func TestJoinInvalidInvitationsMakeNoSessionAndNoCookie(t *testing.T) {
+	e := newPairEnv(t)
+	for _, code := range []string{strings.Repeat("ab", 32), "short"} {
+		resp, _ := e.get(t, browser(t), "/join/"+code)
+		if resp.StatusCode != http.StatusNotFound || len(resp.Cookies()) != 0 {
+			t.Fatalf("%s: %d %v", code, resp.StatusCode, resp.Cookies())
+		}
+	}
+	if e.st.Join().Sessions() != 0 {
+		t.Fatal("an invalid invitation created a session")
+	}
+}
+
+// Installation vor der Anmeldung: der Installer wartet schon, dann meldet sich der Eingeladene an.
+func TestJoinInstallerFirstThenSignInWithTheInvitation(t *testing.T) {
+	e := newPairEnv(t)
+	b := browser(t)
+	pair := e.pairOf(t, b, e.code)
+	e.claimLoop(t, pair, "philipps-laptop")
+	// Anmeldung über die Join-Seite: neues Konto, Sitzung wird gebunden.
+	resp := sameOriginPostForm(t, b, e.srv+"/ui/login/code", url.Values{"code": {e.code}, "name": {"philipp"}, "join": {"1"}})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/join/pair" {
+		t.Fatalf("sign-in: %d %s", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	text := e.pairPage(t, b)
+	if !strings.Contains(text, "philipps-laptop") || !strings.Contains(text, "wants to connect") || !strings.Contains(text, `value="approve"`) {
+		t.Fatalf("approval page: %s", text)
+	}
+	acct, _ := e.st.AccountByName("philipp")
+	if v := e.st.Join().View(acct.ID); v.State != store.JoinClaimed {
+		t.Fatalf("session %q", v.State)
+	}
+	// Freigabe: Loopback-Weg, 303 auf den beim Claim genannten Port.
+	resp = e.decide(t, b, url.Values{"decision": {"approve"}, "confirm_account": {"philipp"}})
+	resp.Body.Close()
+	loc := resp.Header.Get("Location")
+	if resp.StatusCode != http.StatusSeeOther || !strings.HasPrefix(loc, "http://127.0.0.1:40123/callback?code=") || !strings.Contains(loc, "state=state-12345678") {
+		t.Fatalf("approve: %d %q", resp.StatusCode, loc)
+	}
+}
+
+// Anmeldung vor der Installation: das Konto ist gebunden, die Seite wartet, dann meldet sich das Gerät.
+func TestJoinLoginFirstThenInstaller(t *testing.T) {
+	e := newPairEnv(t)
+	b := browser(t)
+	e.signInAs(t, b, "anna")
+	pair := e.pairOf(t, b, e.code)
+	e.accept(t, b, e.code)
+	text := e.pairPage(t, b)
+	if !strings.Contains(text, pair) || strings.Contains(text, "wants to connect") || strings.Contains(text, `value="approve"`) {
+		t.Fatalf("waiting page: %s", text)
 	}
 	// Ohne Gerät gibt es nichts freizugeben.
-	if resp := e.decide(t, e.anna, "approve", "anna"); resp.StatusCode != http.StatusConflict {
+	if resp := e.decide(t, b, url.Values{"decision": {"approve"}, "confirm_account": {"anna"}, "nonce": {"x"}}); resp.StatusCode != http.StatusConflict {
 		t.Fatalf("early approve: %d", resp.StatusCode)
 	}
-	claim := e.claim(t, strings.ToLower(pair), "anna-laptop")
-	text := e.page(t, e.anna)
-	for _, want := range []string{"anna-laptop", "wants to connect", pair, `value="approve"`, `value="deny"`, "203.0.113.5"} {
+	e.claimLoop(t, strings.ToLower(pair), "annas-laptop")
+	text = e.pairPage(t, b)
+	for _, want := range []string{"annas-laptop", "wants to connect", `value="approve"`, `value="deny"`, "Same network as this browser: <strong>yes</strong>"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("approval page lacks %q: %s", want, text)
 		}
 	}
-	if _, err := e.poll(t, claim.DeviceCode); !errors.Is(err, store.ErrDevicePending) {
-		t.Fatalf("before approval: %v", err)
+	if strings.Contains(text, "Your terminal shows") {
+		t.Fatal("the loopback path asks for a typed code")
 	}
-	resp := e.decide(t, e.anna, "approve", "anna")
+	// Meta-Refresh steht im head und die Seite bietet "Check again".
+	if i, j := strings.Index(text, `http-equiv="refresh"`), strings.Index(text, "<title>"); i < 0 || i > j || !strings.Contains(text, "Check again") {
+		t.Fatalf("refresh not in head: %s", text)
+	}
+	if _, err := e.st.PreviewInvitation(e.code, true); err == nil {
+		t.Fatal("invitation still valid after accept")
+	}
+}
+
+func TestJoinSameNetworkLineSaysNoForAnotherNetwork(t *testing.T) {
+	e := newPairEnv(t)
+	b := browser(t)
+	e.signInAs(t, b, "anna")
+	pair := e.pairOf(t, b, e.code)
+	e.accept(t, b, e.code)
+	if _, err := e.st.Join().Claim(loopClaim(pair, "box", "203.0.113.5")); err != nil {
+		t.Fatal(err)
+	}
+	if text := e.pairPage(t, b); !strings.Contains(text, "Same network as this browser: <strong>no</strong>") || !strings.Contains(text, "203.0.113.5") {
+		t.Fatalf("page: %s", text)
+	}
+}
+
+func TestJoinCodeFallbackNeedsTheTerminalCodeAndDeliversThroughTheDeviceFlow(t *testing.T) {
+	e := newPairEnv(t)
+	b := browser(t)
+	e.signInAs(t, b, "anna")
+	pair := e.pairOf(t, b, e.code)
+	e.accept(t, b, e.code)
+	claim := e.claimCode(t, pair, "annas-laptop")
+	text := e.pairPage(t, b)
+	if !strings.Contains(text, "Your terminal shows") || strings.Contains(text, claim.Confirm) || strings.Contains(text, claim.DeviceCode) {
+		t.Fatalf("approval page: %s", text)
+	}
+	if err := e.poll(t, claim.DeviceCode); !errors.Is(err, store.ErrDevicePending) {
+		t.Fatal(err)
+	}
+	resp := e.decide(t, b, url.Values{"decision": {"approve"}, "confirm_account": {"anna"}, "confirm_code": {"WWWW"}})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("wrong code: %d", resp.StatusCode)
+	}
+	if err := e.poll(t, claim.DeviceCode); !errors.Is(err, store.ErrDevicePending) {
+		t.Fatalf("a wrong code decided the flow: %v", err)
+	}
+	resp = e.decide(t, b, url.Values{"decision": {"approve"}, "confirm_account": {"anna"}, "confirm_code": {strings.ToLower(claim.Confirm)}})
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/join/pair" {
 		t.Fatalf("approve: %d %s", resp.StatusCode, resp.Header.Get("Location"))
 	}
-	appr, err := e.poll(t, claim.DeviceCode)
-	if err != nil || appr.AccountID != "person:2" || appr.Machine != "anna-laptop" {
-		t.Fatalf("poll: %+v %v", appr, err)
-	}
-	if _, err := e.poll(t, claim.DeviceCode); !errors.Is(err, store.ErrDeviceUnknown) {
-		t.Fatalf("second poll: %v", err)
-	}
-	if text := e.page(t, e.anna); !strings.Contains(text, "Connected") {
-		t.Fatalf("final page: %s", text)
+	if err := e.poll(t, claim.DeviceCode); err != nil {
+		t.Fatalf("token: %v", err)
 	}
 }
 
-// Reihenfolge 2: das Gerät hat sich gemeldet, bevor die Seite je neu geladen wurde.
-func TestJoinPairInstallerFirstThenBrowser(t *testing.T) {
+func TestJoinCodeFallbackThreeWrongCodesCompromiseTheSession(t *testing.T) {
 	e := newPairEnv(t)
-	pair := e.accept(t)
-	claim := e.claim(t, pair, "box")
-	if _, err := e.poll(t, claim.DeviceCode); !errors.Is(err, store.ErrDevicePending) {
-		t.Fatal(err)
+	b := browser(t)
+	e.signInAs(t, b, "anna")
+	pair := e.pairOf(t, b, e.code)
+	e.accept(t, b, e.code)
+	claim := e.claimCode(t, pair, "box")
+	for i := 0; i < 3; i++ {
+		e.decide(t, b, url.Values{"decision": {"approve"}, "confirm_account": {"anna"}, "confirm_code": {"WWWW"}}).Body.Close()
 	}
-	// Erst jetzt öffnet die Seite wieder: sie zeigt sofort die Freigabe.
-	if text := e.page(t, e.anna); !strings.Contains(text, "box") || !strings.Contains(text, `value="approve"`) {
+	if text := e.pairPage(t, b); !strings.Contains(text, "Another device tried to use this code") || !strings.Contains(text, "New code") {
 		t.Fatalf("page: %s", text)
 	}
-	resp := e.decide(t, e.anna, "approve", "anna")
-	resp.Body.Close()
-	if appr, err := e.poll(t, claim.DeviceCode); err != nil || appr.AccountID != "person:2" {
-		t.Fatalf("%+v %v", appr, err)
+	if err := e.poll(t, claim.DeviceCode); !errors.Is(err, store.ErrDeviceUnknown) {
+		t.Fatalf("flow alive: %v", err)
 	}
 }
 
-func TestJoinPairDenyGivesNoToken(t *testing.T) {
+func TestJoinSecondClaimShowsTheWarningAndOffersANewCode(t *testing.T) {
 	e := newPairEnv(t)
-	claim := e.claim(t, e.accept(t), "box")
-	resp := e.decide(t, e.anna, "deny", "")
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusSeeOther {
-		t.Fatalf("deny: %d", resp.StatusCode)
+	b := browser(t)
+	e.signInAs(t, b, "anna")
+	pair := e.pairOf(t, b, e.code)
+	e.accept(t, b, e.code)
+	e.claimLoop(t, pair, "mine")
+	if _, err := e.st.Join().Claim(loopClaim(pair, "thief", "198.51.100.7")); err == nil {
+		t.Fatal("second claim worked")
 	}
-	if _, err := e.poll(t, claim.DeviceCode); !errors.Is(err, store.ErrDeviceDenied) {
-		t.Fatalf("poll: %v", err)
-	}
-	if text := e.page(t, e.anna); !strings.Contains(text, "Denied") {
+	text := e.pairPage(t, b)
+	if !strings.Contains(text, "Another device tried to use this code") || strings.Contains(text, "thief") || strings.Contains(text, `value="approve"`) {
 		t.Fatalf("page: %s", text)
 	}
+	resp := sameOriginPostForm(t, b, e.srv+"/join/pair", url.Values{"csrf_token": {csrfOn(t, text)}})
+	resp.Body.Close()
+	if fresh := pairRE.FindString(e.pairPage(t, b)); fresh == "" || fresh == pair {
+		t.Fatalf("no fresh code: %q", fresh)
+	}
 }
 
-func TestJoinPairApprovalNeedsInteractiveSessionCSRFOriginAndConfirmation(t *testing.T) {
+func TestJoinApprovalNeedsInteractiveSessionCSRFOriginConfirmationAndTheShownRequest(t *testing.T) {
 	e := newPairEnv(t)
-	claim := e.claim(t, e.accept(t), "box")
+	b := browser(t)
+	e.signInAs(t, b, "anna")
+	pair := e.pairOf(t, b, e.code)
+	e.accept(t, b, e.code)
+	e.claimLoop(t, pair, "box")
+	_, page := e.get(t, b, "/join/pair")
+	csrf, nonce := csrfOn(t, page), nonceRE.FindStringSubmatch(page)[1]
 	target := e.srv + "/join/pair/decide"
-	csrf := e.csrf(t, e.anna)
-	// Anonym: Login-Seite.
-	if resp := sameOriginPostForm(t, anonClient(), target, url.Values{"decision": {"approve"}}); resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/ui/login" {
+	good := func() url.Values {
+		return url.Values{"csrf_token": {csrf}, "nonce": {nonce}, "decision": {"approve"}, "confirm_account": {"anna"}}
+	}
+	// Anonym.
+	if resp := sameOriginPostForm(t, anonClient(), target, good()); resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/ui/login" {
 		t.Fatalf("anonymous: %d", resp.StatusCode)
 	}
-	// Eingefügtes Token (nicht interaktiv): 403, auch für anna selbst.
+	// Eingefügtes Token: 403 beim Lesen der Seite und beim Entscheiden.
 	pasted := login(t, e.hs, e.annaTok)
-	if resp := sameOriginPostForm(t, pasted, target, url.Values{"csrf_token": {renderedCSRFToken(t, pasted, e.srv+"/ui/orgs")}, "decision": {"approve"}, "confirm_account": {"anna"}}); resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("pasted token: %d", resp.StatusCode)
+	if resp, _ := pasted.Get(e.srv + "/join/pair"); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("pasted token GET: %d", resp.StatusCode)
 	}
-	// CSRF fehlt/falsch, fremder Origin.
-	for _, token := range []string{"", "nope"} {
-		if resp := sameOriginPostForm(t, e.anna, target, url.Values{"csrf_token": {token}, "decision": {"approve"}, "confirm_account": {"anna"}}); resp.StatusCode != http.StatusForbidden {
-			t.Fatalf("csrf %q: %d", token, resp.StatusCode)
+	form := good()
+	form.Set("csrf_token", renderedCSRFToken(t, pasted, e.srv+"/ui/orgs"))
+	if resp := sameOriginPostForm(t, pasted, target, form); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("pasted token POST: %d", resp.StatusCode)
+	}
+	// CSRF fehlt oder falsch; fremder Origin.
+	for _, tok := range []string{"", "nope"} {
+		f := good()
+		f.Set("csrf_token", tok)
+		if resp := sameOriginPostForm(t, b, target, f); resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("csrf %q: %d", tok, resp.StatusCode)
 		}
 	}
-	req, _ := http.NewRequest("POST", target, strings.NewReader(url.Values{"csrf_token": {csrf}, "decision": {"approve"}, "confirm_account": {"anna"}}.Encode()))
+	req, _ := http.NewRequest("POST", target, strings.NewReader(good().Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Origin", "https://evil.example")
-	if resp, err := e.anna.Do(req); err != nil || resp.StatusCode != http.StatusForbidden {
+	if resp, err := b.Do(req); err != nil || resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("foreign origin: %v %v", resp, err)
 	}
-	// Ohne Kontobestätigung oder mit einem anderen Namen: 400.
+	// Kontobestätigung fehlt oder falsch: 400. Kennung fehlt oder alt: 409.
 	for _, confirm := range []string{"", "ben"} {
-		resp := e.decide(t, e.anna, "approve", confirm)
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusBadRequest {
+		f := good()
+		f.Set("confirm_account", confirm)
+		if resp := sameOriginPostForm(t, b, target, f); resp.StatusCode != http.StatusBadRequest {
 			t.Fatalf("confirm %q: %d", confirm, resp.StatusCode)
 		}
 	}
-	// Nichts davon hat entschieden.
-	if _, err := e.poll(t, claim.DeviceCode); !errors.Is(err, store.ErrDevicePending) {
-		t.Fatalf("a refused request decided the flow: %v", err)
+	for _, n := range []string{"", "stale"} {
+		f := good()
+		f.Set("nonce", n)
+		if resp := sameOriginPostForm(t, b, target, f); resp.StatusCode != http.StatusConflict {
+			t.Fatalf("nonce %q: %d", n, resp.StatusCode)
+		}
+	}
+	if v := e.st.Join().View("person:2"); v.State != store.JoinClaimed {
+		t.Fatalf("a refused request changed the state: %q", v.State)
+	}
+	// Alter Tab: nach Ablehnen und neuem Code gilt die alte Kennung nicht mehr.
+	sameOriginPostForm(t, b, target, url.Values{"csrf_token": {csrf}, "nonce": {nonce}, "decision": {"deny"}}).Body.Close()
+	sameOriginPostForm(t, b, e.srv+"/join/pair", url.Values{"csrf_token": {csrf}}).Body.Close()
+	fresh := pairRE.FindString(e.pairPage(t, b))
+	e.claimLoop(t, fresh, "other-box")
+	if resp := sameOriginPostForm(t, b, target, good()); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("old tab approved a new device: %d", resp.StatusCode)
 	}
 }
 
-func TestJoinPairAnotherAccountNeitherSeesNorDecidesAnnasSession(t *testing.T) {
+func TestJoinAnotherAccountNeitherSeesNorDecidesAnnasSession(t *testing.T) {
 	e := newPairEnv(t)
-	pair := e.accept(t)
-	claim := e.claim(t, pair, "annas-laptop")
+	b := browser(t)
+	e.signInAs(t, b, "anna")
+	pair := e.pairOf(t, b, e.code)
+	e.accept(t, b, e.code)
+	e.claimLoop(t, pair, "annas-laptop")
 	e.st.AddPerson("ben")
-	ben := loginInteractive(t, e.hs, e.st, "ben")
-	if text := e.page(t, ben); strings.Contains(text, pair) || strings.Contains(text, "annas-laptop") {
+	ben := browser(t)
+	e.signInAs(t, ben, "ben")
+	if text := e.pairPage(t, ben); strings.Contains(text, pair) || strings.Contains(text, "annas-laptop") {
 		t.Fatalf("ben sees annas session: %s", text)
 	}
-	resp := e.decide(t, ben, "approve", "ben")
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusConflict {
+	_, annaPage := e.get(t, b, "/join/pair")
+	form := url.Values{"nonce": {nonceRE.FindStringSubmatch(annaPage)[1]}, "decision": {"approve"}, "confirm_account": {"ben"}}
+	if resp := e.decide(t, ben, form); resp.StatusCode != http.StatusConflict {
 		t.Fatalf("ben approve: %d", resp.StatusCode)
 	}
-	if _, err := e.poll(t, claim.DeviceCode); !errors.Is(err, store.ErrDevicePending) {
-		t.Fatalf("ben decided: %v", err)
+	if v := e.st.Join().View("person:2"); v.State != store.JoinClaimed {
+		t.Fatalf("ben decided: %q", v.State)
 	}
 }
 
-func TestJoinPairConnectThisMachineForASignedInAccount(t *testing.T) {
-	srv, st, _, _, _ := joinWeb(t)
-	st.AddPerson("anna")
-	anna := loginInteractive(t, srv, st, "anna")
-	e := pairEnv{hs: srv, srv: srv.URL, st: st, anna: anna, clock: &testClock{t: time.Now()}}
-	st.Device().SetClock(func() time.Time { return e.clock.t })
-	text := e.page(t, anna)
+func TestJoinConnectThisMachineForASignedInAccount(t *testing.T) {
+	e := newPairEnv(t)
+	b := browser(t)
+	e.signInAs(t, b, "anna")
+	text := e.pairPage(t, b)
 	if !strings.Contains(text, "Connect this machine") || strings.Contains(text, "Setup was interrupted") {
 		t.Fatalf("start page: %s", text)
 	}
-	target := srv.URL + "/join/pair"
-	csrf := e.csrf(t, anna)
-	// Ohne Bestätigung des Kontos keine Sitzung.
-	resp := sameOriginPostForm(t, anna, target, url.Values{"csrf_token": {csrf}})
+	target, csrf := e.srv+"/join/pair", csrfOn(t, text)
+	resp := sameOriginPostForm(t, b, target, url.Values{"csrf_token": {csrf}})
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusBadRequest || st.Join().Open() != 0 {
+	if resp.StatusCode != http.StatusBadRequest || e.st.Join().Sessions() != 0 {
 		t.Fatalf("unconfirmed: %d", resp.StatusCode)
 	}
-	resp = sameOriginPostForm(t, anna, target, url.Values{"csrf_token": {csrf}, "confirm_account": {"anna"}})
+	resp = sameOriginPostForm(t, b, target, url.Values{"csrf_token": {csrf}, "confirm_account": {"anna"}})
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusSeeOther || st.Join().Open() != 1 {
+	if resp.StatusCode != http.StatusSeeOther || e.st.Join().Sessions() != 1 {
 		t.Fatalf("create: %d", resp.StatusCode)
 	}
-	first := pairRE.FindString(e.page(t, anna))
-	// Ein neuer Code ersetzt den alten, ohne neue Bestätigung.
-	resp = sameOriginPostForm(t, anna, target, url.Values{"csrf_token": {csrf}})
+	waiting := e.pairPage(t, b)
+	first := pairRE.FindString(waiting)
+	for _, want := range []string{"| sh -s -- --pair " + first, "ctx login --server", "Open ghosttree", "Run only on your own machine."} {
+		if !strings.Contains(waiting, want) {
+			t.Errorf("waiting page lacks %q", want)
+		}
+	}
+	resp = sameOriginPostForm(t, b, target, url.Values{"csrf_token": {csrf}})
 	resp.Body.Close()
-	second := pairRE.FindString(e.page(t, anna))
-	if resp.StatusCode != http.StatusSeeOther || first == second {
+	if second := pairRE.FindString(e.pairPage(t, b)); resp.StatusCode != http.StatusSeeOther || second == first {
 		t.Fatalf("renew: %d %s %s", resp.StatusCode, first, second)
 	}
-	if _, err := st.Join().Claim("1.1.1.1", first, "m", "1.1.1.1"); err != store.ErrJoinInvalid {
+	if _, err := e.st.Join().Claim(loopClaim(first, "m", "1.1.1.1")); err != store.ErrJoinInvalid {
 		t.Fatalf("old code: %v", err)
 	}
 }
 
 func TestJoinPairPageAfterLossOfTheSessionSaysSetupWasInterrupted(t *testing.T) {
 	e := newPairEnv(t)
-	e.accept(t)
-	e.clock.t = e.clock.t.Add(store.JoinSessionTTL + time.Minute) // oder ein Neustart: die Sitzung ist weg
-	_, text := e.get(t, e.anna, "/join/pair?w=1")
+	b := browser(t)
+	e.signInAs(t, b, "anna")
+	e.pairOf(t, b, e.code)
+	e.accept(t, b, e.code)
+	e.clock.t = e.clock.t.Add(store.JoinSessionTTL + time.Minute) // oder ein Neustart
+	_, text := e.get(t, b, "/join/pair?w=1")
 	if !strings.Contains(text, "Setup was interrupted") || !strings.Contains(text, "Start again") {
 		t.Fatalf("page: %s", text)
 	}
-	if _, text := e.get(t, e.anna, "/join/pair"); strings.Contains(text, "interrupted") {
+	if _, text := e.get(t, b, "/join/pair"); strings.Contains(text, "interrupted") {
 		t.Fatalf("a first visit looks interrupted: %s", text)
 	}
 }
 
-func TestJoinPairClaimedPageWarnsAboutASecondDevice(t *testing.T) {
-	e := newPairEnv(t)
-	pair := e.accept(t)
-	e.claim(t, pair, "mine")
-	if _, err := e.st.Join().Claim("198.51.100.7", pair, "thief", "198.51.100.7"); err == nil {
-		t.Fatal("second claim worked")
-	}
-	text := e.page(t, e.anna)
-	if !strings.Contains(text, "mine") || strings.Contains(text, "thief") || !strings.Contains(text, "Another device tried to use this code") {
-		t.Fatalf("page: %s", text)
-	}
-}
-
-func TestJoinPairApproveRefusesAMachineNameOfAnotherAccount(t *testing.T) {
+func TestJoinApproveRefusesAMachineNameOfAnotherAccount(t *testing.T) {
 	e := newPairEnv(t)
 	e.st.AddPerson("ben")
 	if _, _, err := e.st.CreateDeviceToken("person:3", "shared-name"); err != nil {
 		t.Fatal(err)
 	}
-	claim := e.claim(t, e.accept(t), "shared-name")
-	resp := e.decide(t, e.anna, "approve", "anna")
+	b := browser(t)
+	e.signInAs(t, b, "anna")
+	pair := e.pairOf(t, b, e.code)
+	e.accept(t, b, e.code)
+	e.claimLoop(t, pair, "shared-name")
+	resp := e.decide(t, b, url.Values{"decision": {"approve"}, "confirm_account": {"anna"}})
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusConflict {
 		t.Fatalf("approve: %d", resp.StatusCode)
 	}
-	if _, err := e.poll(t, claim.DeviceCode); !errors.Is(err, store.ErrDevicePending) {
-		t.Fatalf("flow was decided: %v", err)
+	if v := e.st.Join().View("person:2"); v.State != store.JoinClaimed {
+		t.Fatalf("state %q", v.State)
 	}
 }
 
-func TestJoinSignInThroughTheJoinPageLandsOnThePairingPage(t *testing.T) {
-	srv, st, _, org, _ := joinWeb(t)
-	code := projectInvite(t, st, org, store.RoleMember)
-	_, page := (pairEnv{srv: srv.URL}).get(t, anonClient(), "/join/"+code)
-	if !strings.Contains(page, `name="join" value="1"`) {
-		t.Fatalf("the join form lacks the marker: %s", page)
+func TestJoinCommandNeedsHTTPSOrLoopbackAndIgnoresUntrustedForwardedHeaders(t *testing.T) {
+	e := newPairEnv(t)
+	// Ein Server, der keinem Proxy vertraut: X-Forwarded-* zählt nicht.
+	none, _ := proxytrust.Parse("none")
+	srv := httptest.NewServer(New(e.st, WithTrustedProxies(none)))
+	t.Cleanup(srv.Close)
+	get := func(host string, hdr map[string]string) string {
+		req, _ := http.NewRequest("GET", srv.URL+"/join/"+e.code, nil)
+		req.Host = host
+		for k, v := range hdr {
+			req.Header.Set(k, v)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return body(t, resp)
 	}
-	resp := sameOriginPostForm(t, anonClient(), srv.URL+"/ui/login/code", url.Values{"code": {code}, "name": {"philipp"}, "join": {"1"}})
+	if text := get("gt.example", nil); strings.Contains(text, "<pre") || !strings.Contains(text, "Valid until") {
+		t.Fatalf("http command for a public host: %s", text)
+	}
+	// X-Forwarded-Proto von einem nicht vertrauten Absender zählt nicht.
+	if text := get("gt.example", map[string]string{"X-Forwarded-Proto": "https", "X-Forwarded-Host": "gt.example"}); strings.Contains(text, "<pre") {
+		t.Fatalf("forwarded headers were believed: %s", text)
+	}
+	if text := get("localhost:8474", nil); !strings.Contains(text, "curl -fsSL http://localhost:8474/install.sh") {
+		t.Fatalf("loopback command: %s", text)
+	}
+}
+
+func TestJoinSignInThroughTheJoinPageBindsTheBrowsersSessionAndOnlyThen(t *testing.T) {
+	e := newPairEnv(t)
+	b := browser(t)
+	pair := e.pairOf(t, b, e.code)
+	resp := sameOriginPostForm(t, b, e.srv+"/ui/login/code", url.Values{"code": {e.code}, "name": {"philipp"}, "join": {"1"}})
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/join/pair" {
-		t.Fatalf("sign-in: %d %s", resp.StatusCode, resp.Header.Get("Location"))
-	}
-	acct, _ := st.AccountByName("philipp")
-	if v := st.Join().View(acct.ID); v.State != store.JoinWaiting {
-		t.Fatalf("session %q", v.State)
+	acct, _ := e.st.AccountByName("philipp")
+	if v := e.st.Join().View(acct.ID); v.State != store.JoinWaiting || v.Pair != pair {
+		t.Fatalf("session %+v (page showed %s)", v, pair)
 	}
 	// Ohne Marker bleibt alles wie bisher.
-	other := projectInvite(t, st, org, store.RoleMember)
-	resp = sameOriginPostForm(t, anonClient(), srv.URL+"/ui/login/code", url.Values{"code": {other}, "name": {"paula"}})
+	other := projectInvite(t, e.st, e.org, store.RoleMember)
+	resp = sameOriginPostForm(t, anonClient(), e.srv+"/ui/login/code", url.Values{"code": {other}, "name": {"paula"}})
 	resp.Body.Close()
 	if resp.Header.Get("Location") != "/ui/requests" {
 		t.Fatalf("without marker: %s", resp.Header.Get("Location"))
 	}
-}
-
-func TestJoinPairWritesNoLogLineWithTheCodes(t *testing.T) {
-	e := newPairEnv(t)
-	var logs bytes.Buffer
-	prevSlog, prevOut := slog.Default(), log.Writer()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
-	log.SetOutput(&logs)
-	t.Cleanup(func() { slog.SetDefault(prevSlog); log.SetOutput(prevOut) })
-	pair := e.accept(t)
-	e.claim(t, pair, "box")
-	e.page(t, e.anna)
-	if strings.Contains(logs.String(), pair) || strings.Contains(logs.String(), e.code) {
-		t.Fatalf("a code reached a log: %s", logs.String())
+	// Ein Browser ohne Cookie (anderes Gerät) bekommt eine eigene neue Sitzung, nie die eines anderen.
+	third := projectInvite(t, e.st, e.org, store.RoleMember)
+	pairThird := e.pairOf(t, browser(t), third)
+	resp = sameOriginPostForm(t, browser(t), e.srv+"/ui/login/code", url.Values{"code": {third}, "name": {"tina"}, "join": {"1"}})
+	resp.Body.Close()
+	tina, _ := e.st.AccountByName("tina")
+	if v := e.st.Join().View(tina.ID); v.State != store.JoinWaiting || v.Pair == pairThird {
+		t.Fatalf("cookie-less sign-in took over a session: %+v", v)
 	}
 }
 
-func TestJoinOIDCSignInThroughTheJoinPageLandsOnThePairingPage(t *testing.T) {
+func TestJoinOIDCSignInBindsTheSessionAndLandsOnThePairingPage(t *testing.T) {
 	env := newOIDCEnv(t, true)
 	env.store.SetAccessMode(store.AccessMode{Enforce: true})
 	org, _ := env.store.CreateOrg("person:1", "Alpha", "alpha")
@@ -397,12 +589,17 @@ func TestJoinOIDCSignInThroughTheJoinPageLandsOnThePairingPage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	page, _ := anonClient().Get(env.web.URL + "/join/" + code)
-	if text := body(t, page); !strings.Contains(text, `name="join" value="1"`) {
-		t.Fatalf("oidc join form lacks the marker: %s", text)
+	b := newBrowser(t)
+	page, _ := b.Get(env.web.URL + "/join/" + code)
+	pair := pairRE.FindString(body(t, page))
+	if pair == "" || !strings.Contains(body2(t, b, env.web.URL+"/join/"+code), `name="join" value="1"`) {
+		t.Fatalf("join page lacks pair or marker (%q)", pair)
+	}
+	// Der Installer ist schon da.
+	if _, err := env.store.Join().Claim(loopClaim(pair, "box", "127.0.0.1")); err != nil {
+		t.Fatal(err)
 	}
 	env.idp.subject, env.idp.username, env.idp.email = "sub-philipp", "philipp", "philipp@example.test"
-	b := newBrowser(t)
 	resp := env.callback(t, b, env.startFlowWith(t, b, url.Values{"code": {code}, "join": {"1"}}))
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/join/pair" {
@@ -412,7 +609,34 @@ func TestJoinOIDCSignInThroughTheJoinPageLandsOnThePairingPage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v := env.store.Join().View(acct.ID); v.State != store.JoinWaiting {
-		t.Fatalf("session %q", v.State)
+	if v := env.store.Join().View(acct.ID); v.State != store.JoinClaimed || v.Machine != "box" {
+		t.Fatalf("session %+v", v)
+	}
+}
+
+func body2(t *testing.T, c *http.Client, u string) string {
+	t.Helper()
+	resp, err := c.Get(u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body(t, resp)
+}
+
+func TestJoinPairWritesNoLogLineWithTheCodes(t *testing.T) {
+	e := newPairEnv(t)
+	var logs bytes.Buffer
+	prevSlog, prevOut := slog.Default(), log.Writer()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	log.SetOutput(&logs)
+	t.Cleanup(func() { slog.SetDefault(prevSlog); log.SetOutput(prevOut) })
+	b := browser(t)
+	e.signInAs(t, b, "anna")
+	pair := e.pairOf(t, b, e.code)
+	e.accept(t, b, e.code)
+	e.claimLoop(t, pair, "box")
+	e.pairPage(t, b)
+	if strings.Contains(logs.String(), pair) || strings.Contains(logs.String(), e.code) {
+		t.Fatalf("a code reached a log: %s", logs.String())
 	}
 }

@@ -218,13 +218,15 @@ func (a *app) finishLogin(w http.ResponseWriter, r *http.Request, account store.
 }
 
 // finishJoinLogin ist finishLogin für eine Anmeldung über die Join-Seite: das
-// Konto kommt aus der Einladung, die Join-Sitzung für das Gerät entsteht gleich
-// mit, und die Seite danach ist die Paarung.
-func (a *app) finishJoinLogin(w http.ResponseWriter, r *http.Request, account store.Account) {
+// Konto kommt aus der Einladung, die Join-Sitzung dieses Browsers (und damit ein
+// schon wartender Installer) wird an das Konto gebunden, und die Seite danach
+// ist die Freigabe des Geräts.
+func (a *app) finishJoinLogin(w http.ResponseWriter, r *http.Request, account store.Account, inviteCode string) {
 	next := "/ui/requests"
-	if _, err := a.store.Join().Create(account.ID); err == nil {
+	if err := a.store.Join().Bind(inviteCode, joinCookieValue(r), account.ID); err == nil {
 		next = "/join/pair"
 	}
+	http.SetCookie(w, a.joinCookieFor(r, "", -1))
 	a.startSessionAt(w, r, store.Principal{ID: account.ID, Label: account.Name, TokenKind: store.WebSessionKind}, next)
 }
 
@@ -305,7 +307,7 @@ func (a *app) codeSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if kind == store.CodeInvitation && r.FormValue("join") == "1" {
-		a.finishJoinLogin(w, r, account)
+		a.finishJoinLogin(w, r, account, code)
 		return
 	}
 	a.finishLogin(w, r, account)

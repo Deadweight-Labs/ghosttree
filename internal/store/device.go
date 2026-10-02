@@ -75,6 +75,7 @@ type deviceFlow struct {
 	interval             time.Duration
 	state                string // pending, approved, denied
 	account              string
+	join                 bool // Join-Paarung: ohne User-Code, nur über deviceHash ansprechbar
 }
 
 // DeviceFlows hält die offenen Geräte-Abläufe.
@@ -157,7 +158,9 @@ func (d *DeviceFlows) purge(now time.Time) {
 
 func (d *DeviceFlows) remove(f *deviceFlow) {
 	delete(d.byDevice, f.deviceHash)
-	delete(d.byUser, f.userHash)
+	if !f.join {
+		delete(d.byUser, f.userHash)
+	}
 	if d.perClient[f.client]--; d.perClient[f.client] <= 0 {
 		delete(d.perClient, f.client)
 	}
@@ -170,6 +173,17 @@ func (d *DeviceFlows) remove(f *deviceFlow) {
 // weniger als der Start selbst; ein einzelner Absender kann so fremde Abläufe
 // nicht verdrängen.
 func (d *DeviceFlows) Start(client, machine, remote string) (DeviceStart, error) {
+	return d.start(client, machine, remote, false)
+}
+
+// StartJoin legt einen Ablauf für die Join-Paarung an. Er hat keinen User-Code,
+// ist also über /ui/device weder zu finden noch zu entscheiden; die Join-Sitzung
+// spricht ihn über den Hash des device_code an.
+func (d *DeviceFlows) StartJoin(client, machine, remote string) (DeviceStart, error) {
+	return d.start(client, machine, remote, true)
+}
+
+func (d *DeviceFlows) start(client, machine, remote string, join bool) (DeviceStart, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	now := d.now()
@@ -203,7 +217,7 @@ func (d *DeviceFlows) Start(client, machine, remote string) (DeviceStart, error)
 	}
 	deviceCode := hex.EncodeToString(rawDevice)
 	var userCode, userHash string
-	for tries := 0; ; tries++ {
+	for tries := 0; !join; tries++ {
 		c, err := newUserCode()
 		if err != nil {
 			return DeviceStart{}, err
@@ -218,8 +232,11 @@ func (d *DeviceFlows) Start(client, machine, remote string) (DeviceStart, error)
 	}
 	f := &deviceFlow{deviceHash: hashCode(deviceCode), userHash: userHash, client: client, machine: machine, remote: remote,
 		created: now, expires: now.Add(DeviceFlowTTL), lastPoll: now, interval: DeviceInterval, state: "pending"}
+	f.join = join
 	d.byDevice[f.deviceHash] = f
-	d.byUser[userHash] = f
+	if !join {
+		d.byUser[userHash] = f
+	}
 	d.perClient[client]++
 	return DeviceStart{DeviceCode: deviceCode, UserCode: userCode, ExpiresIn: DeviceFlowTTL, Interval: DeviceInterval}, nil
 }
@@ -339,36 +356,38 @@ func (d *DeviceFlows) Busy(client string) bool {
 	return d.perClient[client] >= maxDevicePerClient || len(d.byDevice) >= maxDeviceFlows
 }
 
-// Drop verwirft den Ablauf zu einem User-Code, falls es ihn noch gibt.
-func (d *DeviceFlows) Drop(userCode string) {
+// DeviceHash ist die Kennung, unter der eine Join-Sitzung ihren Ablauf führt.
+func DeviceHash(deviceCode string) string { return hashCode(deviceCode) }
+
+// DropJoin verwirft den Join-Ablauf mit diesem Hash, falls es ihn noch gibt.
+func (d *DeviceFlows) DropJoin(deviceHash string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if f := d.byUser[hashCode(NormalizeUserCode(userCode))]; f != nil {
+	if f := d.byDevice[deviceHash]; f != nil && f.join {
 		d.remove(f)
 	}
 }
 
-// Status nennt den Zustand des Ablaufs (pending, approved, denied) oder "", wenn
-// er abgeholt wurde oder abgelaufen ist.
-func (d *DeviceFlows) Status(userCode string) string {
+// JoinStatus nennt den Zustand eines Join-Ablaufs (pending, approved, denied)
+// oder "", wenn er abgeholt wurde oder abgelaufen ist.
+func (d *DeviceFlows) JoinStatus(deviceHash string) string {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.purge(d.now())
-	if f := d.byUser[hashCode(NormalizeUserCode(userCode))]; f != nil {
+	if f := d.byDevice[deviceHash]; f != nil && f.join {
 		return f.state
 	}
 	return ""
 }
 
-// DecideFlow entscheidet den Ablauf zu einem User-Code im Namen des Kontos, ohne
-// dass dafür ein Fehlversuch gezählt wird: der Aufrufer (die Join-Sitzung) hat
-// den Code selbst erzeugt, er wurde nicht geraten.
-func (d *DeviceFlows) DecideFlow(userCode, account string, approve bool) error {
+// DecideJoin entscheidet einen Join-Ablauf im Namen des Kontos. Die Join-Sitzung
+// hat den Ablauf selbst erzeugt, also zählt hier kein Fehlversuch.
+func (d *DeviceFlows) DecideJoin(deviceHash, account string, approve bool) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.purge(d.now())
-	f := d.byUser[hashCode(NormalizeUserCode(userCode))]
-	if f == nil || f.state != "pending" {
+	f := d.byDevice[deviceHash]
+	if f == nil || !f.join || f.state != "pending" {
 		return ErrDeviceUnknown
 	}
 	if approve {

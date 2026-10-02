@@ -92,7 +92,7 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 			a.joinNotFound(w)
 		}
 	})
-	a.handle(mux, "GET /join/pair", a.requirePerson(http.HandlerFunc(a.joinPairPage)))
+	a.handle(mux, "GET /join/pair", a.requirePerson(a.requireInteractive(http.HandlerFunc(a.joinPairPage))))
 	a.handle(mux, "POST /join/pair", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.joinPairCreate))))))
 	a.handle(mux, "POST /join/pair/decide", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.joinPairDecide))))))
 	a.handle(mux, "POST /join/{code}/accept", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.joinAccept))))))
