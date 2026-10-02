@@ -6,6 +6,12 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Fixed: signing in with a one-time code, login link or bootstrap code in a
+  browser ended with 403. The code pages sent `Referrer-Policy: no-referrer`,
+  so Chromium posted the form with `Origin: null`, which the same-origin check
+  rightly rejects. They now send `strict-origin`: the browser sends the real
+  origin, the Referer carries no path (the code is in the link's query), and
+  `Origin: null` and foreign origins are still refused.
 - Fixed: agents can now open question, approval, blocker and handoff waits.
   `coord_send` and `ctx coord send --intent` take an optional `intent`
   (question, approval, blocker, handoff, ack; the first four need a mention),

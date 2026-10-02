@@ -238,7 +238,7 @@ func (a *app) startSession(w http.ResponseWriter, r *http.Request, principal sto
 func (a *app) codePage(w http.ResponseWriter, r *http.Request) {
 	code := strings.TrimSpace(r.URL.Query().Get("code"))
 	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("Referrer-Policy", "strict-origin")
 	data := a.loginData("One-time code", "")
 	data.Code = code
 	kind := ""
@@ -254,7 +254,7 @@ func (a *app) codeSubmit(w http.ResponseWriter, r *http.Request) {
 	if !parseLoginForm(w, r) {
 		return
 	}
-	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("Referrer-Policy", "strict-origin")
 	code := strings.TrimSpace(r.FormValue("code"))
 	if len(code) > maxCodeLength || len(r.FormValue("name")) > maxNameLength {
 		http.Error(w, "field too long", http.StatusBadRequest)

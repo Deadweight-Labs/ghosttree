@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -469,5 +470,60 @@ func TestWebSessionEndsWhenTokenOrAccountStopsBeingValid(t *testing.T) {
 	}
 	if code, loc := status(valid); code != http.StatusSeeOther || loc != "/ui/login" {
 		t.Fatalf("sibling session of disabled account: %d %q", code, loc)
+	}
+}
+
+// Chromium sends "Origin: null" on a form POST when the form page carries
+// Referrer-Policy: no-referrer. The code pages must therefore use a policy
+// under which the browser sends the real origin, while "null" and foreign
+// origins stay rejected.
+func TestCodePageReferrerPolicyKeepsRealOriginAndCodeOutOfReferer(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "ref.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	srv := httptest.NewServer(New(st))
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/ui/login/code?code=abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	// strict-origin: Origin stays a real origin, Referer never carries the path.
+	if got := resp.Header.Get("Referrer-Policy"); got != "strict-origin" {
+		t.Fatalf("Referrer-Policy=%q, want strict-origin", got)
+	}
+}
+
+func TestCodeSubmitRejectsNullAndForeignOrigin(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "orig.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if _, err := st.AddPerson("alice"); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(New(st))
+	defer srv.Close()
+	for _, origin := range []string{"null", "https://evil.example", ""} {
+		code, _, err := st.CreateAccountCode(store.CodeLogin, "alice")
+		if err != nil {
+			t.Fatal(err)
+		}
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/ui/login/code", strings.NewReader(url.Values{"code": {code}}.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("origin %q: status=%d, want 403", origin, resp.StatusCode)
+		}
 	}
 }
