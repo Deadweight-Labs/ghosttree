@@ -23,6 +23,8 @@ type Store struct {
 	reader        *Store
 	deviceOnce    sync.Once
 	device        *DeviceFlows
+	joinOnce      sync.Once
+	join          *JoinSessions
 	closeOnce     sync.Once
 	closeErr      error
 	acfg          *accessConfig

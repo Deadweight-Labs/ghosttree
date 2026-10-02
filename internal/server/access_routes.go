@@ -44,6 +44,8 @@ var accessRoutes = map[string]routeClass{
 	"GET /api/whoami":                             classAccount,
 	"POST /api/auth/device":                       classPublic,
 	"POST /api/auth/device/token":                 classPublic,
+	"POST /api/join/claim":                        classPublic,
+	"POST /api/join/token":                        classPublic,
 	"GET /api/orgs":                               classAccount,
 	"POST /api/orgs":                              classAccount,
 	"PATCH /api/orgs/{org}":                       classAccount,

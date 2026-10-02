@@ -103,6 +103,9 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 			a.joinNotFound(w)
 		}
 	})
+	a.handle(mux, "GET /join/pair", a.requirePerson(a.requireInteractive(http.HandlerFunc(a.joinPairPage))))
+	a.handle(mux, "POST /join/pair", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.joinPairCreate))))))
+	a.handle(mux, "POST /join/pair/decide", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.joinPairDecide))))))
 	a.handle(mux, "POST /join/{code}/accept", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.joinAccept))))))
 	a.handle(mux, "POST /join/{code}/signout", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.joinSignOut)))))
 	a.handle(mux, "POST /ui/logout", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.logout))))
@@ -411,6 +414,9 @@ var webRoutes = map[string]webClass{
 	"GET /dist/{name}":                webPublic,
 	"GET /join/{code}":                webPublic,
 	"GET /join/":                      webPublic,
+	"GET /join/pair":                  webAccount,
+	"POST /join/pair":                 webAdmin,
+	"POST /join/pair/decide":          webAdmin,
 	"POST /join/{code}/accept":        webAdmin,
 	"POST /join/{code}/signout":       webAccount,
 	"GET /ui/login":                   webPublic,

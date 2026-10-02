@@ -251,9 +251,26 @@ func (a *app) finishLogin(w http.ResponseWriter, r *http.Request, account store.
 	a.startSession(w, r, store.Principal{ID: account.ID, Label: account.Name, TokenKind: store.WebSessionKind})
 }
 
+// finishJoinLogin ist finishLogin für eine Anmeldung über die Join-Seite: das
+// Konto kommt aus der Einladung, die Join-Sitzung dieses Browsers (und damit ein
+// schon wartender Installer) wird an das Konto gebunden, und die Seite danach
+// ist die Freigabe des Geräts.
+func (a *app) finishJoinLogin(w http.ResponseWriter, r *http.Request, account store.Account, inviteCode string) {
+	next := "/ui/requests"
+	if err := a.store.Join().Bind(inviteCode, joinCookieValue(r), account.ID); err == nil {
+		next = "/join/pair"
+	}
+	http.SetCookie(w, a.joinCookieFor(r, "", -1))
+	a.startSessionAt(w, r, store.Principal{ID: account.ID, Label: account.Name, TokenKind: store.WebSessionKind}, next)
+}
+
 // startSession vergibt immer eine neue Sitzungs-ID und verwirft eine
 // mitgebrachte (keine Session-Fixation).
 func (a *app) startSession(w http.ResponseWriter, r *http.Request, principal store.Principal) {
+	a.startSessionAt(w, r, principal, "/ui/requests")
+}
+
+func (a *app) startSessionAt(w http.ResponseWriter, r *http.Request, principal store.Principal, next string) {
 	if old, err := r.Cookie(sessionCookie); err == nil {
 		a.sessions.remove(old.Value)
 	}
@@ -263,7 +280,7 @@ func (a *app) startSession(w http.ResponseWriter, r *http.Request, principal sto
 		return
 	}
 	http.SetCookie(w, a.sessionCookieFor(r, id, 30*24*60*60))
-	http.Redirect(w, r, "/ui/requests", http.StatusSeeOther)
+	http.Redirect(w, r, next, http.StatusSeeOther)
 }
 
 // codePage zeigt für einen Login-Link erst eine Bestätigung. Das Einlösen
@@ -300,7 +317,8 @@ func (a *app) codeSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	var account store.Account
 	var err error
-	switch a.store.CodeKindFor(code) {
+	kind := a.store.CodeKindFor(code)
+	switch kind {
 	case store.CodeBootstrap:
 		if a.oidc != nil {
 			a.beginOIDC(w, r, code)
@@ -334,6 +352,10 @@ func (a *app) codeSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		a.identityRejected(w, err)
+		return
+	}
+	if kind == store.CodeInvitation && r.FormValue("join") == "1" {
+		a.finishJoinLogin(w, r, account, code)
 		return
 	}
 	a.finishLogin(w, r, account)
