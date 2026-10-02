@@ -188,17 +188,25 @@ func (s *Store) AddAccount(name, email string, admin bool) (Account, error) {
 	if name == "" {
 		return Account{}, fmt.Errorf("account name is required")
 	}
-	if taken, err := accountNameTakenTx(s.db, name); err != nil {
-		return Account{}, err
-	} else if taken {
-		return Account{}, ErrAccountNameTaken
-	}
 	flag := 0
 	if admin {
 		flag = 1
 	}
-	if _, err := s.db.Exec(`INSERT INTO persons(name, token_hash, created_at, email, is_admin) VALUES(?,?,?,?,?)`,
+	tx, err := s.db.Begin()
+	if err != nil {
+		return Account{}, err
+	}
+	defer tx.Rollback()
+	if taken, err := accountNameTakenTx(tx, name); err != nil {
+		return Account{}, err
+	} else if taken {
+		return Account{}, ErrAccountNameTaken
+	}
+	if _, err := tx.Exec(`INSERT INTO persons(name, token_hash, created_at, email, is_admin) VALUES(?,?,?,?,?)`,
 		name, "", now(), strings.TrimSpace(email), flag); err != nil {
+		return Account{}, err
+	}
+	if err := tx.Commit(); err != nil {
 		return Account{}, err
 	}
 	return s.AccountByName(name)

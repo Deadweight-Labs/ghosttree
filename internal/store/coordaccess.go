@@ -351,6 +351,7 @@ func (a CoordAccess) requireThreadAccess(threadID int64) (Thread, error) {
 	if err != nil {
 		return Thread{}, ErrCoordNotFound
 	}
+	a.maskThreadPersonTx(tx, &t)
 	if err := tx.Commit(); err != nil {
 		return Thread{}, err
 	}
@@ -439,6 +440,25 @@ func (a CoordAccess) Messages(kind, id string, afterID int64, limit int) ([]Coor
 		return nil, err
 	}
 	return out, nil
+}
+
+// maskThreadPersonTx ersetzt für Gäste den Kontonamen im Thread (Person, bei
+// Agenten der Besitzername) durch die ID des Urhebers. Der eigene Thread des
+// Lesers bleibt, wie er ist.
+func (a CoordAccess) maskThreadPersonTx(tx *sql.Tx, t *Thread) {
+	if t.AuthorPrincipalID != "" && t.AuthorPrincipalID == a.Principal.ID {
+		return
+	}
+	if a.guestViewForMessageTx(tx, DestinationDiscussion, strconv.FormatInt(t.ID, 10)) {
+		maskThreadPerson(a, t)
+	}
+}
+
+func maskThreadPerson(a CoordAccess, t *Thread) {
+	if t.AuthorPrincipalID == a.Principal.ID {
+		return
+	}
+	t.Person = t.AuthorPrincipalID
 }
 
 // fillSenderDisplayNamesTx setzt den Kontonamen menschlicher Absender. Die
@@ -1044,6 +1064,7 @@ func (a CoordAccess) SearchThreads(project, query string, includeArchived bool, 
 	out := make([]Thread, 0, len(candidates))
 	for _, thread := range candidates {
 		if err := a.canReadThreadTx(tx, actor, thread.ID); err == nil {
+			a.maskThreadPersonTx(tx, &thread)
 			out = append(out, thread)
 			if len(out) == limit {
 				break
@@ -1098,6 +1119,7 @@ func (a CoordAccess) ThreadsForObject(kind, id string) ([]Thread, error) {
 	visible := make([]Thread, 0, len(candidates))
 	for _, thread := range candidates {
 		if err := a.canReadThreadTx(tx, actor, thread.ID); err == nil {
+			a.maskThreadPersonTx(tx, &thread)
 			visible = append(visible, thread)
 		} else if !errors.Is(err, ErrCoordNotFound) && !errors.Is(err, ErrCoordForbidden) {
 			return nil, err
@@ -1401,6 +1423,11 @@ func (a CoordAccess) RoomThreads(roomKey string) ([]RoomThread, error) {
 	if err != nil {
 		return nil, err
 	}
+	if a.guestViewForMessageTx(tx, DestinationRoom, roomKey) {
+		for i := range threads {
+			maskThreadPerson(a, &threads[i].Thread)
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
@@ -1682,6 +1709,10 @@ func (a CoordAccess) ThreadSummary(threadID int64) (ThreadSummary, bool, error) 
 	}
 	if err != nil {
 		return ThreadSummary{}, false, err
+	}
+	if a.guestViewForMessageTx(tx, DestinationDiscussion, strconv.FormatInt(threadID, 10)) {
+		// Die Zusammenfassung trägt nur den Kontonamen; ein Gast bekommt keinen.
+		summary.Person = ""
 	}
 	if err := tx.Commit(); err != nil {
 		return ThreadSummary{}, false, err
@@ -2218,6 +2249,13 @@ func (a CoordAccess) Standing(roomKey string) ([]StandingInstruction, error) {
 	}
 	if a.guestViewForMessageTx(tx, DestinationRoom, roomKey) {
 		for i := range out {
+			// Person ist der Kontoname des Urhebers; der Gast sieht die ID.
+			var sender string
+			if err := tx.QueryRow(`SELECT sender_external_id FROM coord_messages WHERE id=?`, out[i].MessageID).Scan(&sender); err == nil {
+				out[i].Person = sender
+			} else {
+				out[i].Person = ""
+			}
 			messageID, perr := strconv.ParseInt(out[i].MessageID, 10, 64)
 			if perr != nil {
 				continue

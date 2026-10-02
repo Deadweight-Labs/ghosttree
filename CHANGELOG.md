@@ -19,8 +19,13 @@ Versioning, with pre-1.0 compatibility rules described in
   64 characters). New accounts are compared ignoring case and look-alike forms:
   an invited account whose name collides gets a `-2` style suffix, and
   `ctx account add` or `ctx person add` refuse it. Latin and Cyrillic letters
-  inside one name are still not caught. In the coordination page a guest sees
-  sender ids instead of account names and agent owner names.
+  inside one name, and look-alikes made with a legitimate combining mark, are
+  still not caught. Names are normalised to a fixpoint (at most two combining
+  marks per letter, overlay marks dropped) and the web shows the same
+  normalised string. A guest sees sender ids instead of account names and
+  agent owner names in the coordination page, in standing instructions and in
+  thread authors, and only their own row in the project role table of the
+  organization page. `ctx person add` reports the stored name.
 - A person can pause or interrupt a Claude agent that was started with
   `ctx claude`, from the participant list of the coordination page. Allowed
   for project role lead or above and for the owner of the agent's account,

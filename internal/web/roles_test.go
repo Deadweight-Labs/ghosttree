@@ -250,3 +250,28 @@ func TestCoordMessagesShowSenderRole(t *testing.T) {
 		}
 	}
 }
+
+// Ein Gast sieht in der Rollentabelle nur den eigenen Eintrag, wie in der API.
+func TestOrgPageRoleTableHidesMembersFromGuests(t *testing.T) {
+	base, st, alice, anna := roleWeb(t)
+	if err := st.SetProjectRole("person:1", webRoleProject, "person:2", store.RoleGuest, false, store.RoleViaAPI); err != nil {
+		t.Fatal(err)
+	}
+	st.SetAccessMode(store.AccessMode{Enforce: true})
+	roles := func(c *http.Client) string {
+		resp, _ := c.Get(base + "/ui/orgs?org=alpha")
+		page := body(t, resp)
+		i := strings.Index(page, "Project roles")
+		if i < 0 {
+			t.Fatalf("no role table: %s", page)
+		}
+		return page[i:]
+	}
+	got := roles(anna)
+	if !strings.Contains(got, "anna") || strings.Contains(got, "alice") {
+		t.Fatalf("guest must see only their own role row: %s", got)
+	}
+	if owner := roles(alice); !strings.Contains(owner, "alice") || !strings.Contains(owner, "anna") {
+		t.Fatalf("owner lost rows: %s", owner)
+	}
+}

@@ -1,6 +1,9 @@
 package store
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func nameOf(t *testing.T, e authorityEnv, reader, body string) CoordMessage {
 	t.Helper()
@@ -140,5 +143,123 @@ func TestWebAuthorLabelsHiddenFromGuests(t *testing.T) {
 	}
 	if h, a, r := labels(e.human("person:5")); h != "person:1" || a != "a-ben" || r != "person:1" {
 		t.Fatalf("guest labels must be IDs: %q %q %q", h, a, r)
+	}
+}
+
+func guestEnv(t *testing.T) authorityEnv {
+	t.Helper()
+	e := authorityFixture(t)
+	e.st.SetAccessMode(AccessMode{Enforce: true})
+	var orgID int64
+	if err := e.st.db.QueryRow(`SELECT MIN(id) FROM orgs`).Scan(&orgID); err != nil {
+		t.Fatal(err)
+	}
+	code, _, err := e.st.CreateInvitation("person:1", orgID, "", OrgMember, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.st.AcceptInvitation("person:5", code); err != nil {
+		t.Fatal(err)
+	}
+	if err := setRole(e.st, "person:1", "person:5", RoleGuest, false); err != nil {
+		t.Fatal(err)
+	}
+	return e
+}
+
+func TestStandingPersonHiddenFromGuests(t *testing.T) {
+	e := guestEnv(t)
+	owner := e.st.CoordinationFor(Principal{ID: "person:1", Label: "robin", TokenKind: WebSessionKind}, "")
+	id, err := owner.Send(CoordMessage{DestinationKind: DestinationRoom, DestinationID: e.room, ClientID: "s1", Body: "rule"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = id
+	if _, err := owner.CreateStanding(StandingInput{RoomKey: e.room, ClientID: "st1", Body: "always test"}); err != nil {
+		t.Fatal(err)
+	}
+	read := func(a CoordAccess) []StandingInstruction {
+		out, err := a.Standing(e.room)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	if got := read(e.human("person:3")); len(got) != 1 || got[0].Person != "robin" {
+		t.Fatalf("member: %+v", got)
+	}
+	if got := read(e.human("person:5")); len(got) != 1 || got[0].Person != "person:1" {
+		t.Fatalf("guest must see the id, not the account name: %+v", got)
+	}
+}
+
+func TestThreadPersonHiddenFromGuests(t *testing.T) {
+	e := guestEnv(t)
+	ben := e.st.CoordinationFor(Principal{ID: "person:3", Label: "ben"}, "a-ben")
+	tid, err := ben.CreateThread(Thread{Project: e.project, Title: "t", Question: "q"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	homed, err := ben.CreateTaskThreadInRoom(e.room, "h", "q", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, who := range map[string]CoordAccess{"member": e.human("person:1"), "guest": e.human("person:5")} {
+		want := "ben"
+		if name == "guest" {
+			want = "person:3"
+		}
+		list, err := who.SearchThreads(e.project, "", false, 50)
+		if err != nil {
+			t.Fatalf("%s search: %v", name, err)
+		}
+		seen := 0
+		for _, x := range list {
+			if x.ID == tid || x.ID == homed {
+				seen++
+				if x.Person != want {
+					t.Errorf("%s search: Person=%q want %q", name, x.Person, want)
+				}
+			}
+		}
+		if seen == 0 {
+			t.Errorf("%s search saw no thread", name)
+		}
+		for _, id := range []int64{tid, homed} {
+			one, err := who.Thread(id)
+			if err != nil || one.Person != want {
+				t.Errorf("%s get %d: %q %v want %q", name, id, one.Person, err, want)
+			}
+		}
+		rooms, err := who.RoomThreads(e.room)
+		if err != nil {
+			t.Fatalf("%s room threads: %v", name, err)
+		}
+		for _, x := range rooms {
+			if x.Thread.Person != want {
+				t.Errorf("%s room threads: Person=%q want %q", name, x.Thread.Person, want)
+			}
+		}
+		if _, err := ben.PutThreadSummary(ThreadSummary{ThreadID: homed, Body: "s"}); err != nil {
+			t.Fatal(err)
+		}
+		sum, ok, err := who.ThreadSummary(homed)
+		if err != nil || !ok {
+			t.Fatalf("%s summary: %v %v", name, ok, err)
+		}
+		wantSum := "ben"
+		if name == "guest" {
+			wantSum = ""
+		}
+		if sum.Person != wantSum {
+			t.Errorf("%s summary Person=%q want %q", name, sum.Person, wantSum)
+		}
+	}
+}
+
+func TestAddAccountCollisionCheckIsAtomic(t *testing.T) {
+	st := orgStore(t, "robin")
+	if _, err := st.AddAccount("robin", "", false); !errors.Is(err, ErrAccountNameTaken) {
+		t.Fatalf("got %v", err)
 	}
 }

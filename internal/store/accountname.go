@@ -34,17 +34,36 @@ func isInvisibleName(r rune) bool {
 // MaxDisplayNameRunes Zeichen. Der Name ist Nutzereingabe: der Rest des
 // Systems zeigt nur diese Form, und die Identität bleibt person:N.
 func NormalizeAccountName(name string) string {
+	// Bis zum Fixpunkt: das Entfernen unsichtbarer Zeichen kann Mn/Mc neu
+	// hinter einen Buchstaben setzen oder NFKC-Sequenzen neu bilden. Jede
+	// Runde verkürzt oder lässt gleich, also endet die Schleife.
+	for i := 0; i < 8; i++ {
+		next := normalizeAccountNameOnce(name)
+		if next == name {
+			return next
+		}
+		name = next
+	}
+	return name
+}
+
+// maxMarksPerLetter begrenzt Kombinationszeichen hinter einem Buchstaben.
+const maxMarksPerLetter = 2
+
+func normalizeAccountNameOnce(name string) string {
 	var out []rune
-	lastLetter := false
+	lastLetter, marks := false, 0
 	for _, r := range norm.NFKC.String(name) {
 		switch {
 		case isInvisibleName(r):
 			continue
 		case unicode.IsLetter(r):
-			out, lastLetter = append(out, r), true
+			out, lastLetter, marks = append(out, r), true, 0
 		case unicode.In(r, unicode.Mn, unicode.Mc):
-			if lastLetter {
-				out = append(out, r)
+			// Überlagerungszeichen (U+0334 bis U+0338) streichen ein Zeichen
+			// durch und täuschen ein anderes vor.
+			if lastLetter && marks < maxMarksPerLetter && (r < 0x0334 || r > 0x0338) {
+				out, marks = append(out, r), marks+1
 			}
 		case unicode.IsDigit(r):
 			out, lastLetter = append(out, r), false

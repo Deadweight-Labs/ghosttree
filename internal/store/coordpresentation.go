@@ -105,6 +105,7 @@ func coordMessagePresentationsTx(tx *sql.Tx, kind, destinationID string, message
 		if guest {
 			continue // Gast: nur die ID, nie Konto- oder Besitzername
 		}
+		agentLabel, personLabel = NormalizeAccountName(agentLabel), NormalizeAccountName(personLabel)
 		if authorKind == AuthorHuman && personLabel != "" {
 			out[index[messageID]].AuthorLabel = personLabel
 		} else if agentLabel != "" {
@@ -190,6 +191,7 @@ func coordMessagePresentationsTx(tx *sql.Tx, kind, destinationID string, message
 			// Gast: die ID des Absenders, kein Konto- oder Besitzername.
 			agentLabel, personLabel = "", ""
 		}
+		agentLabel, personLabel = NormalizeAccountName(agentLabel), NormalizeAccountName(personLabel)
 		if authorKind == AuthorHuman && personLabel != "" {
 			author = personLabel
 		} else if agentLabel != "" {
