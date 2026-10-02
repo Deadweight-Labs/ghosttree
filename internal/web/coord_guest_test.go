@@ -2,10 +2,12 @@ package web
 
 import (
 	"context"
+	"encoding/base64"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -372,5 +374,69 @@ func TestGuestCannotCountEventsUntilResync(t *testing.T) {
 	}
 	if strings.Join(inEvents, ",") != strings.Join(outEvents, ",") {
 		t.Errorf("visible events differ:\nmember: %v\nnon-member: %v", inEvents, outEvents)
+	}
+}
+
+// runCursorStream ruft den Strom direkt auf und liefert, was er in kurzer Zeit schreibt.
+func runCursorStream(t *testing.T, a *app, principal store.Principal, cursor string) string {
+	t.Helper()
+	sessionID, err := a.sessions.create(principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	req := httptest.NewRequest(http.MethodGet, "/ui/coord/events?after="+cursor, nil).WithContext(ctx)
+	req = req.WithContext(context.WithValue(req.Context(), personKey{}, principal))
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: sessionID})
+	rec := httptest.NewRecorder()
+	a.coordEvents(rec, req)
+	return rec.Body.String()
+}
+
+func TestCoordCursorCarriesItsTime(t *testing.T) {
+	st, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	a := &app{store: st, sessions: newSessions()}
+	principal := store.Principal{ID: "person:1", Label: "robin"}
+	room := store.RoomKeyForProject("github.com/x/y")
+	materializeWebRoom(t, st, room)
+	for i := 0; i < 3; i++ {
+		if _, err := st.AppendCoordMessage(store.CoordMessage{DestinationKind: store.DestinationRoom, DestinationID: room, SenderExternalID: "fixture:" + room, ClientID: "t" + strconv.Itoa(i), Body: "x"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now := time.Now()
+	// Ein Cursor knapp innerhalb des Fensters (8 Minuten) gilt, einer knapp
+	// außerhalb (9,5 Minuten) lädt neu, unabhängig vom Tabelleninhalt.
+	if body := runCursorStream(t, a, principal, a.sealCoordCursor(principal, 1, now.Add(-8*time.Minute))); strings.Contains(body, "event: resync") {
+		t.Errorf("a cursor inside the window resynced: %q", body)
+	}
+	if body := runCursorStream(t, a, principal, a.sealCoordCursor(principal, 1, now.Add(-9*time.Minute-30*time.Second))); !strings.Contains(body, "event: resync") {
+		t.Errorf("an old cursor must resync: %q", body)
+	}
+	// Uhr zurückgesprungen: die Zeit liegt in der Zukunft und gilt als frisch.
+	if body := runCursorStream(t, a, principal, a.sealCoordCursor(principal, 1, now.Add(30*time.Minute))); strings.Contains(body, "event: resync") {
+		t.Errorf("a future cursor time resynced: %q", body)
+	}
+	// Format 1 (nur die Folge, anderer AAD) ist ungültig und ergibt einen sauberen Resync.
+	sealer := a.coordCursors()
+	nonce := make([]byte, sealer.aead.NonceSize())
+	plain := make([]byte, 8)
+	plain[7] = 1
+	old := base64.RawURLEncoding.EncodeToString(sealer.aead.Seal(nonce, nonce, plain, append([]byte("ghosttree coord event cursor v1"), principal.ID...)))
+	if body := runCursorStream(t, a, principal, old); !strings.Contains(body, "event: resync") || strings.Contains(body, "coord.changed") {
+		t.Errorf("an old-format token must resync: %q", body)
+	}
+	// Ein gelöschter Verlauf hinter einem frischen Cursor (Uhrensprung vorwärts
+	// oder rückwärts, Notbremse) lädt für Mitglieder neu, statt still zu verlieren.
+	if _, err := st.DB().Exec(`DELETE FROM coord_events WHERE sequence<=2`); err != nil {
+		t.Fatal(err)
+	}
+	if body := runCursorStream(t, a, principal, a.sealCoordCursor(principal, 1, now)); !strings.Contains(body, "event: resync") {
+		t.Errorf("missing history behind a fresh cursor must resync for a non-guest: %q", body)
 	}
 }

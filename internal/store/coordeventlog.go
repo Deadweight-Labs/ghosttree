@@ -103,16 +103,27 @@ func (s *Store) CoordEventsAfter(principal Principal, after int64, limit int) (C
 		return CoordEventReplay{}, ErrCoordEventCursor
 	}
 	if after > 0 && after < latest {
-		// Gelöscht wird nur nach Alter, und zwar von vorn. Fehlt also der Eintrag
-		// direkt nach der Cursorposition, ist Verlauf abgelaufen, den der Leser
-		// nicht mehr bekommt: Resync. Der Zustand hängt an der Zeit, nie an der
-		// Zahl der Einträge. Ist die Tabelle ganz leer, sind alle abgelaufen.
-		var oldest int64
-		if err := tx.QueryRow(`SELECT COALESCE(MIN(sequence),0) FROM coord_events`).Scan(&oldest); err != nil {
+		// Sicherheitsnetz für Uhrensprünge: Fehlt direkt nach der Cursorposition
+		// Verlauf, obwohl der Cursor (nach seiner eingebetteten Zeit) noch frisch
+		// ist, lädt die Seite neu, statt still Ereignisse zu verlieren. Für Gäste
+		// gilt diese Regel NICHT: Was nach dem Cursor fehlt, hängt dort auch vom
+		// Alter versteckter Zeilen aus der eigenen Transaktion ab (etwa dem
+		// Attention-Eintrag einer Erwähnung) und wäre ein Orakel. Für Gäste
+		// entscheidet allein die Zeit im Cursor (siehe die Web-Schicht); ein
+		// Uhrensprung kostet sie höchstens eine veraltete Anzeige bis zum
+		// nächsten Laden, nie Vertraulichkeit.
+		guest, err := principalIsGuestTx(tx, principal.ID)
+		if err != nil {
 			return CoordEventReplay{}, err
 		}
-		if oldest == 0 || oldest > after+1 {
-			return CoordEventReplay{Resync: true, Latest: latest, ScannedThrough: latest}, nil
+		if !guest {
+			var oldest int64
+			if err := tx.QueryRow(`SELECT COALESCE(MIN(sequence),0) FROM coord_events`).Scan(&oldest); err != nil {
+				return CoordEventReplay{}, err
+			}
+			if oldest == 0 || oldest > after+1 {
+				return CoordEventReplay{Resync: true, Latest: latest, ScannedThrough: latest}, nil
+			}
 		}
 	}
 	rows, err := tx.Query(`SELECT sequence,kind,object_kind,object_id,created_at
@@ -222,4 +233,17 @@ func coordEventVisibleTx(tx *sql.Tx, access CoordAccess, actor string, event Coo
 		return false, nil
 	}
 	return false, fmt.Errorf("authorize coordination event: %w", err)
+}
+
+// principalIsGuestTx: das Konto hat in mindestens einem Projekt nur die Rolle
+// guest. Bewusst grob (auch bei Mitgliedschaft in anderen Projekten): im
+// Zweifel gilt der vorsichtigere Pfad ohne Lückenprüfung.
+func principalIsGuestTx(tx *sql.Tx, principalID string) (bool, error) {
+	account, ok := accountNumericID(principalID)
+	if !ok {
+		return false, nil
+	}
+	var guest bool
+	err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM project_members WHERE account_id=? AND role='guest')`, account).Scan(&guest)
+	return guest, err
 }

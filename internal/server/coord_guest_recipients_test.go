@@ -353,3 +353,63 @@ func TestGuestAttentionIDsFollowNoCountingPattern(t *testing.T) {
 		}
 	}
 }
+
+// Lazy-Aufräumen um die Fenstergrenze: Bei einem Mitglied als Ziel liegt direkt
+// hinter dem Cursor des Gastes die versteckte Attention-Zeile aus derselben
+// Transaktion. Altert und verschwindet sie, darf das den Resync des Gastes nicht
+// unterscheiden. Für ihn entscheidet nur die Zeit im Cursor (Web-Schicht), nie
+// der Tabelleninhalt.
+func TestGuestEventResyncDoesNotDependOnHiddenRows(t *testing.T) {
+	decide := func(targetInRoom bool) (guestResync, memberResync bool) {
+		f := roomGateFixture(t, true)
+		room := store.RoomKeyForProject(accProject)
+		other := store.RoomKeyForProject(accOther)
+		miaRoom := room
+		if !targetInRoom {
+			miaRoom = other
+		}
+		for agent, c := range map[string]struct{ principal, room string }{
+			"claude:gus": {"person:5", room}, "claude:mia": {"person:3", miaRoom}} {
+			if _, err := f.st.RegisterCoordAgent(store.CoordAgent{ExternalID: agent, Provider: "claude", RoomKey: c.room, PrincipalID: c.principal, Person: agent}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		f.expect(t, "gus", 200, "POST", "/api/coord/messages", store.CoordMessage{
+			DestinationKind: store.DestinationRoom, DestinationID: room, SenderExternalID: "claude:gus",
+			ClientID: "q", Body: "q", Intent: store.IntentQuestion, Mentions: []string{"claude:mia"}})
+		var cursor int64
+		if err := f.st.DB().QueryRow(`SELECT MAX(sequence) FROM coord_events WHERE kind='message'`).Scan(&cursor); err != nil {
+			t.Fatal(err)
+		}
+		// Das Protokoll altert von vorn: der Cursor und, beim Mitglied als Ziel, die
+		// versteckte Attention-Zeile direkt dahinter. Ein weiteres Ereignis löst
+		// das Aufräumen aus.
+		if _, err := f.st.DB().Exec(`UPDATE coord_events SET created_at='2000-01-01T00:00:00.000Z' WHERE sequence<=?`, cursor+1); err != nil {
+			t.Fatal(err)
+		}
+		f.expect(t, "gus", 200, "POST", "/api/coord/messages", store.CoordMessage{
+			DestinationKind: store.DestinationRoom, DestinationID: room, SenderExternalID: "claude:gus", ClientID: "marker", Body: "m"})
+		replay, err := f.st.CoordEventsAfter(store.Principal{ID: "person:5", Label: "gus"}, cursor, 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		member, err := f.st.CoordEventsAfter(store.Principal{ID: "person:3", Label: "mia"}, cursor, 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return replay.Resync, member.Resync
+	}
+	inGuest, inMember := decide(true)
+	outGuest, outMember := decide(false)
+	if inGuest != outGuest {
+		t.Errorf("the guest's resync decision differs: member target=%v non-member target=%v", inGuest, outGuest)
+	}
+	if inGuest || outGuest {
+		t.Error("a guest must not resync on missing rows; only the cursor time decides")
+	}
+	// Ein Mitglied behält die Lückenprüfung als Netz gegen Uhrensprünge: Fehlt
+	// hinter einem frischen Cursor Verlauf (hier die Attention-Zeile), lädt es neu.
+	if !inMember {
+		t.Errorf("non-guest gap safety net did not resync: member target=%v non-member target=%v", inMember, outMember)
+	}
+}
