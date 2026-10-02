@@ -6,8 +6,10 @@ import (
 	"errors"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
+	"unicode"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
@@ -44,7 +46,7 @@ type Notification struct {
 // message_id und origin_event_id, über die eine Antwort ihre causation_id
 // setzt, dazu Raum, Absender und dessen Art (sender_kind: human oder agent,
 // wie der Server sie am Autor festhält; fehlt sie, bleibt der Schlüssel weg).
-// Dazu kommen sender_role, recipient_role und authority (directive oder
+// Dazu kommt sender_name (Kontoname eines menschlichen Absenders, entschärft, nur wenn der Server ihn zeigt) sowie sender_role, recipient_role und authority (directive oder
 // request). Sie stammen ausschließlich aus den vom Server beim Lesen
 // berechneten Feldern der Nachricht (store.CoordAccess.Messages), nie aus dem
 // Body; leere Werte bleiben weg.
@@ -58,6 +60,9 @@ func NewNotification(room store.CoordRoom, m store.CoordMessage, content string)
 	if m.AuthorKind != "" {
 		meta["sender_kind"] = m.AuthorKind
 	}
+	if name := SafeSenderName(m.SenderDisplayName); name != "" && m.AuthorKind == store.AuthorHuman {
+		meta["sender_name"] = name
+	}
 	for key, value := range map[string]string{
 		"sender_role": m.SenderRole, "recipient_role": m.RecipientRole, "authority": m.Authority,
 	} {
@@ -69,6 +74,29 @@ func NewNotification(room store.CoordRoom, m store.CoordMessage, content string)
 		meta["origin_event_id"] = m.OriginEventID
 	}
 	return Notification{Content: neutralizeChannelTags(content), Meta: meta}
+}
+
+// MaxSenderName begrenzt sender_name (Zeichen).
+const MaxSenderName = 64
+
+// SafeSenderName entschärft einen Kontonamen für die Channel-Meta: nur
+// Buchstaben, Ziffern, Leerzeichen und . _ - ', alles andere wird zu _,
+// Leerraum zusammengezogen, höchstens MaxSenderName Zeichen. Der Name ist
+// Nutzereingabe und wird als k="v"-Attribut gezeigt; Anführungszeichen,
+// Zeilenumbrüche und spitze Klammern dürfen darin nie vorkommen.
+func SafeSenderName(name string) string {
+	name = strings.Map(func(r rune) rune {
+		switch {
+		case unicode.IsLetter(r), unicode.IsDigit(r), r == '.', r == '_', r == '-', r == '\'', r == ' ':
+			return r
+		}
+		return '_'
+	}, name)
+	name = strings.Join(strings.Fields(name), " ")
+	if r := []rune(name); len(r) > MaxSenderName {
+		name = strings.TrimSpace(string(r[:MaxSenderName]))
+	}
+	return name
 }
 
 var channelTag = regexp.MustCompile(`(?i)<(/?)channel`)

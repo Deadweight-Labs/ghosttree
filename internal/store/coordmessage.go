@@ -72,6 +72,11 @@ type CoordMessage struct {
 	SenderRole    string `json:"sender_role,omitempty"`
 	RecipientRole string `json:"recipient_role,omitempty"`
 	Authority     string `json:"authority,omitempty"`
+	// SenderDisplayName ist der Kontoname des menschlichen Absenders, live
+	// aus persons gelesen und nie gespeichert. Er fehlt für Agenten und für
+	// Leser, die die Mitglieder des Projektraums nicht sehen (Gast). Der Wert
+	// ist Nutzereingabe: Anzeigende Clients müssen ihn entschärfen.
+	SenderDisplayName string `json:"sender_display_name,omitempty"`
 }
 
 // CoordRef verbindet eine Nachricht mit einem bestehenden Ghosttree-Objekt.

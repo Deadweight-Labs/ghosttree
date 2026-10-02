@@ -423,6 +423,9 @@ func (a CoordAccess) Messages(kind, id string, afterID int64, limit int) ([]Coor
 	if err := rows.Close(); err != nil {
 		return nil, err
 	}
+	if err := fillSenderDisplayNamesTx(tx, a, kind, id, out); err != nil {
+		return nil, err
+	}
 	if a.AgentExternalID != "" {
 		// Der Leser ist ein Agent: Rollen und Autorität live aus dem Zustand
 		// dieser Transaktion, nach dem Schließen des Cursors.
@@ -436,6 +439,40 @@ func (a CoordAccess) Messages(kind, id string, afterID int64, limit int) ([]Coor
 		return nil, err
 	}
 	return out, nil
+}
+
+// fillSenderDisplayNamesTx setzt den Kontonamen menschlicher Absender. Die
+// Gastfrage stellt guestViewForMessageTx einmal für den ganzen Raum (nicht pro
+// Nachricht): wer die Mitglieder nicht sieht, bekommt keinen Namen, auch nicht
+// den eines Absenders, dessen Nachricht er liest. Der Name hängt nur an der
+// sichtbaren Nachricht und an keiner verborgenen Zeile.
+func fillSenderDisplayNamesTx(tx *sql.Tx, a CoordAccess, kind, id string, msgs []CoordMessage) error {
+	names := map[string]string{}
+	guest, guestKnown := false, false
+	for i := range msgs {
+		m := &msgs[i]
+		if m.AuthorKind != AuthorHuman || !strings.HasPrefix(m.AuthorPrincipalID, "person:") {
+			continue
+		}
+		if !guestKnown {
+			guest, guestKnown = a.guestViewForMessageTx(tx, kind, id), true
+		}
+		if guest {
+			return nil
+		}
+		name, ok := names[m.AuthorPrincipalID]
+		if !ok {
+			personID, err := strconv.ParseInt(strings.TrimPrefix(m.AuthorPrincipalID, "person:"), 10, 64)
+			if err == nil {
+				if err := tx.QueryRow(`SELECT name FROM persons WHERE id=?`, personID).Scan(&name); err != nil && !errors.Is(err, sql.ErrNoRows) {
+					return err
+				}
+			}
+			names[m.AuthorPrincipalID] = name
+		}
+		m.SenderDisplayName = name
+	}
+	return nil
 }
 
 func (a CoordAccess) MessageWindow(kind, id string, window MessageWindow) (MessagePage, error) {
@@ -736,7 +773,7 @@ func (a CoordAccess) Send(message CoordMessage) (int64, error) {
 	message.SenderExternalID = actor
 	message.AuthorPrincipalID = a.Principal.ID
 	message.AuthorKind = a.authorKind()
-	message.SenderRole, message.RecipientRole, message.Authority = "", "", ""
+	message.SenderRole, message.RecipientRole, message.Authority, message.SenderDisplayName = "", "", "", ""
 	id, err := appendCoordMessageTx(tx, message)
 	if err != nil {
 		return 0, err

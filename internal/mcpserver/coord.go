@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"unicode"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -237,10 +238,7 @@ func (s *Server) handleCoordInbox(ctx context.Context, _ *mcp.CallToolRequest, i
 			continue // schon über den Channel eingebracht
 		}
 		shown++
-		fmt.Fprintf(&b, "[%d] %s", m.ID, headerSafe(m.SenderExternalID))
-		if m.AuthorKind == store.AuthorHuman {
-			b.WriteString(" (human)")
-		}
+		fmt.Fprintf(&b, "[%d] %s", m.ID, senderLabel(m))
 		b.WriteString(authorityTag(m))
 		if m.Expired {
 			// Abgelaufen heißt lesbar, aber nicht mehr gegenwärtig. Ohne
@@ -452,7 +450,7 @@ func (s *Server) handleCoordDMRead(ctx context.Context, _ *mcp.CallToolRequest, 
 			continue
 		}
 		shown++
-		fmt.Fprintf(&b, "[%d] %s%s: %s\n", m.ID, headerSafe(m.SenderExternalID), authorityTag(m), bodyBlock(m.Body))
+		fmt.Fprintf(&b, "[%d] %s%s: %s\n", m.ID, senderLabel(m), authorityTag(m), bodyBlock(m.Body))
 	}
 	if highest > 0 {
 		if err := s.client.SetCoordCursor(s.coordRef(), store.DestinationRoom, key, highest); err != nil {
@@ -616,6 +614,45 @@ func authorityTag(m store.CoordMessage) string {
 		tag += ", your_role=" + m.RecipientRole
 	}
 	return tag + "]"
+}
+
+// maxDisplayName begrenzt den Anzeigenamen in Kopfzeilen (Zeichen).
+const maxDisplayName = 64
+
+// senderLabel ist der Absender für Kopfzeilen: bei Menschen mit Kontoname
+// "Robin (person:1, human)", sonst die bloße ID. Der Name ist Nutzereingabe und
+// geht durch displayNameSafe.
+func senderLabel(m store.CoordMessage) string {
+	id := headerSafe(m.SenderExternalID)
+	name := displayNameSafe(m.SenderDisplayName)
+	if m.AuthorKind == store.AuthorHuman {
+		if name != "" {
+			return name + " (" + id + ", human)"
+		}
+		return id + " (human)"
+	}
+	return id
+}
+
+// displayNameSafe macht einen Anzeigenamen kopfzeilentauglich: nur Buchstaben,
+// Ziffern, Leerzeichen und . _ - ' ; alles andere (Zeilenumbrüche, Klammern,
+// Doppelpunkte, Steuerzeichen) wird zu _, Leerraum zusammengezogen, Länge
+// auf maxDisplayName Zeichen begrenzt.
+func displayNameSafe(name string) string {
+	name = strings.Map(func(r rune) rune {
+		switch {
+		case unicode.IsLetter(r), unicode.IsDigit(r), r == '.', r == '_', r == '-', r == '\'':
+			return r
+		case r == ' ':
+			return ' '
+		}
+		return '_'
+	}, name)
+	name = strings.Join(strings.Fields(name), " ")
+	if r := []rune(name); len(r) > maxDisplayName {
+		name = strings.TrimSpace(string(r[:maxDisplayName]))
+	}
+	return name
 }
 
 // headerSafe ersetzt in einer Absender-ID alles außer Buchstaben, Ziffern und
