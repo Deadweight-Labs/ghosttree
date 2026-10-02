@@ -99,6 +99,7 @@ func uiHeaders(h http.Header) {
 	h.Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'")
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("Referrer-Policy", "strict-origin")
+	h.Set("Cache-Control", "no-store")
 }
 
 func newApp(st *store.Store, opts ...Option) http.Handler {

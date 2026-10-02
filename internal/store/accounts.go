@@ -82,9 +82,10 @@ func migrateAccounts(db *sql.DB) error {
 	}
 	if done == 0 {
 		// Ohne Person gibt es keinen Admin zu bestimmen; der Marker bleibt dann
-		// aus, und die erste später angelegte Person wird beim nächsten Öffnen
-		// Admin. Ein späteres Entziehen bleibt wirksam, weil der Marker danach
-		// gesetzt ist.
+		// aus, und eine später von einem älteren Binary angelegte Person wird
+		// beim nächsten Öffnen Admin. Das erste Konto über Bootstrap setzt den
+		// Marker sofort, in derselben Transaktion. Ein späteres Entziehen bleibt
+		// wirksam, weil der Marker danach gesetzt ist.
 		res, err := tx.Exec(`UPDATE persons SET is_admin=1 WHERE id=(SELECT MIN(id) FROM persons)`)
 		if err != nil {
 			return err
@@ -618,6 +619,9 @@ func createBootstrapAccount(tx *sql.Tx, name, email string) (int64, error) {
 	}
 	// Eine leere Instanz bekommt mit ihrem ersten Konto die Default-Organisation.
 	if _, err := createOrgTx(tx, "Default", "default", id); err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(`INSERT OR IGNORE INTO account_migrations(version, migrated_at) VALUES(1,?)`, now()); err != nil {
 		return 0, err
 	}
 	return id, nil

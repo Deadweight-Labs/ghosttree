@@ -41,6 +41,8 @@ const (
 	overviewMaxRequests = 6
 	overviewMaxLearned  = 5
 	setupRefreshSeconds = 5
+	// knowledgeMaxPages: so viele Seiten zu je 100 liest knowledgeKeep höchstens.
+	knowledgeMaxPages = 10
 )
 
 // overviewNow ist die Uhr der Startseite; Tests setzen sie.
@@ -158,15 +160,6 @@ func (a *app) overviewPage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if setup := a.setupFor(r, who, agents, now); setup != nil {
-		view.Setup = setup
-		if r.URL.Query().Get("connect") == "" {
-			data.Refresh = setupRefreshSeconds
-		}
-		a.renderBrowser(w, r, "overview", data.withOverview(view))
-		return
-	}
-
 	if view.Requests, err = a.overviewRequests(pa, project); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -174,6 +167,28 @@ func (a *app) overviewPage(w http.ResponseWriter, r *http.Request) {
 	if view.Learned, err = a.overviewLearned(pa, project, now); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	if !view.Guest {
+		hasContent := len(agents) > 0 || len(view.Requests) > 0 || len(view.Learned) > 0
+		if !hasContent && r.URL.Query().Get("connect") == "" {
+			if hasContent, err = a.overviewHasKnowledge(pa, project); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+		setup, err := a.setupFor(r, who, hasContent, now)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if setup != nil {
+			view.Setup = setup
+			if r.URL.Query().Get("connect") == "" {
+				data.Refresh = setupRefreshSeconds
+			}
+			a.renderBrowser(w, r, "overview", data.withOverview(overviewView{Setup: setup, CSRFToken: view.CSRFToken}))
+			return
+		}
 	}
 	if view.Guest {
 		view.NoContent = len(view.Requests) == 0 && len(view.Learned) == 0
@@ -338,13 +353,16 @@ func (a *app) knowledgeWindowFor(pa *store.ProjectAccess, project string) store.
 }
 
 // knowledgeKeep liest die Wissensfenster seitenweise, bis limit Einträge den
-// feinen Test bestehen oder nichts mehr kommt. Ein fester Ausschnitt vor dem
-// Test ließe verborgene Einträge sichtbare verdrängen (#2447).
+// feinen Test bestehen oder nichts mehr kommt, höchstens knowledgeMaxPages
+// Seiten. Ein fester Ausschnitt vor dem Test ließe verborgene Einträge sichtbare
+// verdrängen (#2447); die Obergrenze hält eine Seite mit vielen verborgenen
+// Einträgen bezahlbar.
 func (a *app) knowledgeKeep(w store.KnowledgeWindow, limit int, allow func(store.Knowledge) bool) ([]store.Knowledge, error) {
 	const page = 100
 	w.Limit = page
 	var out []store.Knowledge
-	for w.Offset = 0; ; w.Offset += page {
+	for pages := 0; pages < knowledgeMaxPages; pages++ {
+		w.Offset = pages * page
 		rows, err := a.store.KnowledgeWindow(w)
 		if err != nil {
 			return nil, err
@@ -361,6 +379,17 @@ func (a *app) knowledgeKeep(w store.KnowledgeWindow, limit int, allow func(store
 			return out, nil
 		}
 	}
+	return out, nil
+}
+
+// overviewHasKnowledge: gibt es in den sichtbaren Projekten irgendein Wissen,
+// gleich wie alt. Es entscheidet mit, ob die Instanz noch leer ist.
+func (a *app) overviewHasKnowledge(pa *store.ProjectAccess, project string) (bool, error) {
+	pa.Filtered()
+	found, err := a.knowledgeKeep(a.knowledgeWindowFor(pa, project), 1, func(k store.Knowledge) bool {
+		return pa.CanSeeKnowledge(k) && pa.CanDeliverKnowledge(k)
+	})
+	return len(found) > 0, err
 }
 
 func (a *app) overviewLearned(pa *store.ProjectAccess, project string, now time.Time) ([]learnedRow, error) {
@@ -465,37 +494,40 @@ func oneLine(s string, limit int) string {
 }
 
 // setupFor entscheidet, ob statt der Übersicht "Connect your first agent"
-// erscheint: für Owner und Admins, solange kein Agent sichtbar ist und keine
-// Maschine gerade erst verbunden wurde; für jeden Nicht-Gast auf Wunsch
-// (?connect=1). Der Befehl nennt nur die Adresse dieses Servers.
-func (a *app) setupFor(r *http.Request, who viewer, agents []agentRow, now time.Time) *setupView {
-	if who.kind == viewerGuest {
-		return nil
-	}
+// erscheint (nie für Gäste, der Aufrufer prüft das): auf Wunsch (?connect=1)
+// für jeden, sonst nur für Owner und Admins, die keine Maschine haben (oder
+// deren gerade erst verbundene bestätigt wird) und in deren sichtbaren Projekten
+// weder Agenten noch Requests noch Wissen vorkommen. Eine laufende Instanz zeigt immer
+// die Übersicht. Der Befehl nennt nur die Adresse dieses Servers.
+func (a *app) setupFor(r *http.Request, who viewer, hasContent bool, now time.Time) (*setupView, error) {
 	forced := r.URL.Query().Get("connect") != ""
-	if !forced && (who.kind != viewerOwner || len(agents) > 0) {
-		return nil
+	if !forced && (hasContent || who.kind != viewerOwner) {
+		return nil, nil
 	}
 	view := &setupView{State: "waiting", Title: msg("setup.title_first"), Command: a.loginCommand(r), Code: interactive(r)}
 	if forced {
 		view.Title = msg("setup.title")
 	}
-	if machine, ok := a.recentMachine(r, now); ok {
-		view.State, view.Machine = "connected", machine
-		return view
+	tokens, err := a.deviceTokens(r)
+	if err != nil {
+		return nil, err
 	}
-	if !forced && len(agents) == 0 && a.hasMachine(r) {
+	if machine, ok := recentMachine(tokens, now); ok {
+		view.State, view.Machine = "connected", machine
+		return view, nil
+	}
+	if !forced && len(tokens) > 0 {
 		// Eine Maschine ist seit längerem verbunden: normale Übersicht mit
 		// leerer Agentenliste statt einer Seite, die nie verschwindet.
-		return nil
+		return nil, nil
 	}
-	return view
+	return view, nil
 }
 
-func (a *app) deviceTokens(r *http.Request) []store.TokenInfo {
+func (a *app) deviceTokens(r *http.Request) ([]store.TokenInfo, error) {
 	tokens, err := a.store.ListTokens(browserPrincipal(r).Label)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	nowText := overviewNow().UTC().Format(time.RFC3339)
 	var out []store.TokenInfo
@@ -504,15 +536,13 @@ func (a *app) deviceTokens(r *http.Request) []store.TokenInfo {
 			out = append(out, t)
 		}
 	}
-	return out
+	return out, nil
 }
 
-func (a *app) hasMachine(r *http.Request) bool { return len(a.deviceTokens(r)) > 0 }
-
-func (a *app) recentMachine(r *http.Request, now time.Time) (string, bool) {
+func recentMachine(tokens []store.TokenInfo, now time.Time) (string, bool) {
 	var newest store.TokenInfo
 	var at time.Time
-	for _, t := range a.deviceTokens(r) {
+	for _, t := range tokens {
 		if c := parseTime(t.CreatedAt); c.After(at) {
 			newest, at = t, c
 		}

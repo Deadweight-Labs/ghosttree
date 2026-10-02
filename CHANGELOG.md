@@ -18,7 +18,8 @@ Versioning, with pre-1.0 compatibility rules described in
   agents get one step instead: the `ctx login --server` command to copy, a field
   for the code from the terminal (the machine is named only after the code is
   entered, never listed), "Waiting for your machine", and the page switches by
-  itself once the machine and an agent are there. The oldest account no longer
+  itself once the machine or any request, knowledge or agent is there; an
+  instance that is already in use always shows the normal Overview. The oldest account no longer
   counts as owner on its own; the first account of a fresh instance is an admin
   from the start. Without a `?project=`, members and guests get their first
   project preselected. The fonts moved to a versioned path
@@ -27,7 +28,8 @@ Versioning, with pre-1.0 compatibility rules described in
   flashes open.
 - Security: every `/ui/` page now sends a Content-Security-Policy (own origin
   only, no inline script or style, no framing), `X-Content-Type-Options: nosniff`
-  and `Referrer-Policy: strict-origin`; the Overview is `no-store`. The inline
+  and `Referrer-Policy: strict-origin`, and is `no-store`; the join page may load
+  the self-hosted fonts. The inline
   script, the inline progress width and the inline `noscript` style moved into
   `shell.js` and `app.css`.
 - Added: `ctx join --server <url> --pair XXXX-XXXX` pairs a machine with the

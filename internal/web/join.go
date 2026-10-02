@@ -117,7 +117,7 @@ func (a *app) joinHeaders(w http.ResponseWriter) {
 	h.Set("X-Content-Type-Options", "nosniff")
 	// Keine Skripte, keine fremden Ressourcen, nicht einbettbar. form-action
 	// bleibt offen: der Weg zum Identitätsanbieter ist eine Weiterleitung.
-	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'")
+	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'self'; img-src 'self'; font-src 'self'; base-uri 'none'; frame-ancestors 'none'")
 	h.Set("Content-Type", "text/html; charset=utf-8")
 }
 

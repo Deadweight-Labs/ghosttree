@@ -208,10 +208,13 @@ func TestJoinPageShowsOnlyWhatTheInviteeNeedsAndSetsSafeHeaders(t *testing.T) {
 		}
 	}
 	csp := h.Get("Content-Security-Policy")
-	for _, want := range []string{"default-src 'none'", "frame-ancestors 'none'", "base-uri 'none'"} {
+	for _, want := range []string{"default-src 'none'", "frame-ancestors 'none'", "base-uri 'none'", "font-src 'self'"} {
 		if !strings.Contains(csp, want) {
 			t.Errorf("CSP %q lacks %s", csp, want)
 		}
+	}
+	if !strings.Contains(page, `href="/static/tokens.css"`) {
+		t.Error("join page does not load the self-hosted font faces")
 	}
 	if strings.Contains(csp, "script-src") || strings.Contains(csp, "unsafe") {
 		t.Errorf("CSP allows scripts: %s", csp)

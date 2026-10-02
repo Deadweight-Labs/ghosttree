@@ -224,15 +224,19 @@ func (a *app) projectOptions(r *http.Request, pa *store.ProjectAccess) ([]projec
 		return nil, true
 	}
 	chosen := scope.NormalizeRemote(r.URL.Query().Get("project"))
+	var visible []string
+	for _, p := range list {
+		if pa.Role(p.Remote).Role != "" {
+			visible = append(visible, p.Remote)
+		}
+	}
+	labels := projectLabels(visible)
 	var out []projectOption
 	found := false
-	for _, p := range list {
-		if pa.Role(p.Remote).Role == "" {
-			continue
-		}
-		sel := chosen != "" && p.Remote == chosen
+	for _, remote := range visible {
+		sel := chosen != "" && remote == chosen
 		found = found || sel
-		out = append(out, projectOption{Remote: p.Remote, Label: projectLabel(p.Remote), Selected: sel})
+		out = append(out, projectOption{Remote: remote, Label: labels[remote], Selected: sel})
 	}
 	slices.SortFunc(out, func(x, y projectOption) int { return strings.Compare(x.Remote, y.Remote) })
 	return out, !found
@@ -260,6 +264,28 @@ func (a *app) favicon(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "image/svg+xml")
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	_, _ = w.Write(raw)
+}
+
+// projectLabels gibt jeder Remote ihren kurzen Namen; teilen sich sichtbare
+// Projekte denselben, steht das Owner-Segment davor (owner/name). Verglichen
+// wird nur unter den übergebenen, also sichtbaren Projekten.
+func projectLabels(remotes []string) map[string]string {
+	count := map[string]int{}
+	for _, r := range remotes {
+		count[projectLabel(r)]++
+	}
+	out := make(map[string]string, len(remotes))
+	for _, r := range remotes {
+		label := projectLabel(r)
+		if count[label] > 1 {
+			parts := strings.Split(strings.Trim(r, "/"), "/")
+			if len(parts) >= 2 {
+				label = parts[len(parts)-2] + "/" + label
+			}
+		}
+		out[r] = label
+	}
+	return out
 }
 
 // projectLabel ist der kurze Name eines Projekts: der letzte Pfadteil der Remote.
