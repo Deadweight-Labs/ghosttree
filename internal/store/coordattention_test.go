@@ -3,6 +3,7 @@ package store
 import (
 	"errors"
 	"testing"
+	"time"
 )
 
 func attentionGroupFixture(t *testing.T) (*Store, CoordAccess, CoordAccess, CoordAccess, string) {
@@ -96,13 +97,16 @@ func TestAttentionRequiresExplicitIntentAndAckIsNeverWakeCandidate(t *testing.T)
 			t.Fatalf("send %d: %v", i, err)
 		}
 	}
-	if !CoordMessageWakeCandidate(messages[0]) {
+	wake := func(m CoordMessage) bool {
+		return ShouldWake("person:2", RoomProject, m, m.Mentions, WakeParentNotOwn, time.Now())
+	}
+	if !wake(messages[0]) {
 		t.Fatal("direct mention did not become a wake candidate")
 	}
-	if CoordMessageWakeCandidate(messages[1]) {
+	if wake(messages[1]) {
 		t.Fatal("ack became a wake candidate")
 	}
-	if CoordMessageWakeCandidate(messages[2]) {
+	if wake(messages[2]) {
 		t.Fatal("ack kind became a wake candidate")
 	}
 	items, err := recipient.Attention()
