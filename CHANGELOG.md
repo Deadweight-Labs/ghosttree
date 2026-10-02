@@ -25,6 +25,24 @@ Versioning, with pre-1.0 compatibility rules described in
   and nothing is attached to it; otherwise it stays with its owner. A second
   call, or a web session, is refused.
 - Changed: organization names may not contain control characters.
+- Changed: the web interface has a new app shell (REQ-435, first part). A
+  left navigation (Overview, Agents, Rooms, Knowledge, Requests; Administration
+  for owners and admins, "My devices & tokens" for members) with a project
+  selector, a search field and an account menu replaces the top bar. Guests see
+  only Overview, Knowledge and Requests, and the navigation carries no counters
+  and no project they have no role in. Existing pages keep their content and
+  routes; `/ui/rooms` redirects to `/ui/coord`. The sign-in page is new: a
+  provider button (named only when `GHOSTTREE_OIDC_NAME` or `--oidc-name` is
+  set), one field for a code or pasted login link, and the person-token form
+  behind "Paste a person token"; a wrong code shows the error inside the form.
+  Design tokens and self-hosted IBM Plex Sans and Mono (SIL OFL, under
+  `/static/fonts`) replace system fonts. `/` redirects to `/ui/`, and a
+  favicon is served. All texts of the shell and sign-in page come from one
+  message catalog. On an OIDC instance, a claim, bootstrap or invitation code
+  typed into the code field (Enter) starts the provider sign-in, and a pasted
+  login or `/join/<code>` link is understood by both buttons. Below 900 px the
+  navigation folds behind a menu button.
+
 - Added: the server can serve the `ctx` installer (REQ-434, fourth part).
   With `GHOSTTREE_DIST_DIR` (or `--dist-dir`) pointing at a directory of
   `ctx_<version>_<os>_<arch>.tar.gz` archives and `checksums.txt`, it answers

@@ -9,6 +9,7 @@ import (
 	"html/template"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
@@ -22,7 +23,7 @@ import (
 //go:embed templates static
 var files embed.FS
 
-var pages = template.Must(template.ParseFS(files, "templates/*.html"))
+var pages = template.Must(template.New("").Funcs(template.FuncMap{"t": msg}).ParseFS(files, "templates/*.html"))
 
 type app struct {
 	store         *store.Store
@@ -38,6 +39,7 @@ type app struct {
 	joinLimits    *joinLimiter
 	distSums      distCache
 	distDir       string // ctx archives + checksums.txt served at /dist/; empty = off
+	oidcName      string // display name of the identity provider; empty = unnamed
 }
 type pageData struct {
 	Title, NavSection, Person, CSRFToken, Error, Code string
@@ -57,6 +59,9 @@ type pageData struct {
 	Coord                                             coordPageView
 	Orgs                                              orgsView
 	Invite                                            bool
+	ProviderName                                      string
+	Bootstrap, TokenOpen                              bool
+	Shell                                             shellView
 }
 type reviewEntry struct {
 	Knowledge         store.Knowledge
@@ -81,7 +86,9 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 		opt(a)
 	}
 	mux := http.NewServeMux()
-	a.handle(mux, "GET /static/", http.FileServerFS(files))
+	a.handle(mux, "GET /static/", a.staticFiles())
+	a.handle(mux, "GET /{$}", a.rootRedirect)
+	a.handle(mux, "GET /favicon.ico", a.favicon)
 	a.handle(mux, "GET /ui/login", a.loginPage)
 	a.handle(mux, "POST /ui/login", a.requireSameOrigin(http.HandlerFunc(a.loginSubmit)))
 	a.handle(mux, "POST /ui/login/oidc", a.requireSameOrigin(http.HandlerFunc(a.oidcStart)))
@@ -102,6 +109,8 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.handle(mux, "POST /join/{code}/accept", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.joinAccept))))))
 	a.handle(mux, "POST /join/{code}/signout", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.joinSignOut)))))
 	a.handle(mux, "POST /ui/logout", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.logout))))
+	a.handle(mux, "GET /ui/overview", a.requirePerson(http.HandlerFunc(a.overviewPage)))
+	a.handle(mux, "GET /ui/rooms", a.requirePerson(http.HandlerFunc(a.roomsAlias)))
 	a.handle(mux, "GET /ui/requests", a.requirePerson(http.HandlerFunc(a.requestsPage)))
 	a.handle(mux, "GET /ui/requests/{id}", a.requirePerson(http.HandlerFunc(a.requestPage)))
 	a.handle(mux, "GET /ui/knowledge", a.requirePerson(http.HandlerFunc(a.knowledgePage)))
@@ -163,7 +172,10 @@ func (a *app) renderBrowser(w http.ResponseWriter, r *http.Request, name string,
 	data.Person = principal.Label
 	data.CSRFToken = csrfOf(r)
 	data.Interactive = interactive(r)
+	data.Shell = a.shellFor(r, name)
 	switch name {
+	case "overview":
+		data.NavSection = "overview"
 	case "requests", "request":
 		data.NavSection = "requests"
 	case "knowledge":
@@ -413,7 +425,11 @@ var webRoutes = map[string]webClass{
 	"GET /ui/login/oidc/callback":     webPublic,
 	"GET /ui/login/code":              webPublic,
 	"POST /ui/login/code":             webPublic,
+	"GET /{$}":                        webPublic,
+	"GET /favicon.ico":                webPublic,
 	"GET /ui/{$}":                     webPublic,
+	"GET /ui/overview":                webAccount,
+	"GET /ui/rooms":                   webCoord,
 	"POST /ui/logout":                 webAccount,
 	"GET /ui/requests":                webProject,
 	"GET /ui/requests/{id}":           webProject,
@@ -479,4 +495,16 @@ func WebRouteClasses() map[string]string {
 		out[pattern] = string(class)
 	}
 	return out
+}
+
+// staticFiles liefert die eingebetteten Dateien. Die Schriften ändern sich nur
+// mit einer neuen Plex-Version und liegen lange im Cache.
+func (a *app) staticFiles() http.Handler {
+	fileServer := http.FileServerFS(files)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/static/fonts/") {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		}
+		fileServer.ServeHTTP(w, r)
+	})
 }

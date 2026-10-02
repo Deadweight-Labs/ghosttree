@@ -251,7 +251,19 @@ func (e *oidcEnv) startFlow(t *testing.T, b *http.Client, code string) *url.URL 
 
 func (e *oidcEnv) startFlowWith(t *testing.T, b *http.Client, form url.Values) *url.URL {
 	t.Helper()
-	resp := sameOriginPostForm(t, b, e.web.URL+"/ui/login/oidc", form)
+	return e.startFlowForm(t, b, "/ui/login/oidc", form)
+}
+
+// startFlowAt startet den Ablauf über einen beliebigen Einstieg (Anbieterknopf
+// oder Codefeld mit Enter).
+func (e *oidcEnv) startFlowAt(t *testing.T, b *http.Client, path, code string) *url.URL {
+	t.Helper()
+	return e.startFlowForm(t, b, path, url.Values{"code": {code}})
+}
+
+func (e *oidcEnv) startFlowForm(t *testing.T, b *http.Client, path string, form url.Values) *url.URL {
+	t.Helper()
+	resp := sameOriginPostForm(t, b, e.web.URL+path, form)
 	if resp.StatusCode != http.StatusSeeOther {
 		t.Fatalf("start status=%d body=%s", resp.StatusCode, body(t, resp))
 	}
@@ -553,7 +565,7 @@ func TestLoginLinkIsConfirmedByPostAndSingleUse(t *testing.T) {
 	b2 := newBrowser(t)
 	resp = sameOriginPostForm(t, b2, srv.URL+"/ui/login/code", url.Values{"code": {code}})
 	text := body(t, resp)
-	if resp.StatusCode != http.StatusForbidden || !strings.Contains(text, "Code not accepted") {
+	if resp.StatusCode != http.StatusForbidden || !strings.Contains(text, "That code isn&#39;t valid.") {
 		t.Fatalf("reuse status=%d body=%s", resp.StatusCode, text)
 	}
 	// Ohne Same-Origin-Nachweis wird nichts eingelöst.
@@ -617,7 +629,7 @@ func TestTokenPasteLoginStaysUntilAnIdentityExists(t *testing.T) {
 		t.Fatalf("paste before claim status=%d", resp.StatusCode)
 	}
 	page, _ := anon.Get(env.web.URL + "/ui/login")
-	if text := body(t, page); !strings.Contains(text, `name="token"`) || !strings.Contains(text, "Sign in with OIDC") {
+	if text := body(t, page); !strings.Contains(text, `name="token"`) || !strings.Contains(text, "Continue with your identity provider") {
 		t.Fatalf("login page before claim: %s", text)
 	}
 	b := newBrowser(t)

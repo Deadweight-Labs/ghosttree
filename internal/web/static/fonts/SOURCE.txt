@@ -1,0 +1,15 @@
+IBM Plex Sans 1.1.0 and IBM Plex Mono 2.5.0, Latin-1 subsets (split woff2).
+
+Source: official IBM/plex GitHub releases
+  https://github.com/IBM/plex/releases/download/%40ibm%2Fplex-sans%401.1.0/ibm-plex-sans.zip
+    sha256 fb365d910566e6d199cc2c15579a7dd9a267128e18431a394ed81f1970c69200
+  https://github.com/IBM/plex/releases/download/%40ibm%2Fplex-mono%402.5.0/ibm-plex-mono.zip
+    sha256 6d23f01257663d8cc49a0d64c22ced630b79e0e2a0ac08a0da86e9a38bbc481c
+Files are taken unchanged from fonts/split/woff2/ in those archives.
+
+sha256 of the files in this directory
+e8993d946649b9d01abb1ed06d574b19d8ea3e66b5c3948602db335c44c18e56  IBMPlexMono-Regular-Latin1.woff2
+b7acd05041ab65f3b7039e218ddd893065e11a07e85ea85019473152a51b6b7d  IBMPlexMono-SemiBold-Latin1.woff2
+b5610af04d0d4b5a14a621d96d974b993e945a065db1a8861918f69ef9321934  IBMPlexSans-Medium-Latin1.woff2
+b5ad7bd39f996144915f0ad9849a90183b27d8c28ad97ed98af5b1bebc51f6b1  IBMPlexSans-Regular-Latin1.woff2
+fff0ab3a88b0b4aa0b693e4f0201359a15183b08e3fa5696d1918d8f0ade8ad5  IBMPlexSans-SemiBold-Latin1.woff2
