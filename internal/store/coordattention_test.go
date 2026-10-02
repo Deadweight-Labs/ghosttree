@@ -109,6 +109,10 @@ func TestAttentionRequiresExplicitIntentAndAckIsNeverWakeCandidate(t *testing.T)
 	if wake(messages[2]) {
 		t.Fatal("ack kind became a wake candidate")
 	}
+	// In a project room a mention decides, so an ack with a mention still wakes.
+	if !ShouldWake("person:2", RoomProject, messages[1], messages[1].Mentions, WakeParentNotOwn, time.Now()) {
+		t.Fatal("ack with a mention in a project room must still wake")
+	}
 	items, err := recipient.Attention()
 	if err != nil {
 		t.Fatal(err)
