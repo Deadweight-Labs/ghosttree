@@ -76,8 +76,8 @@ func TestAgentControlStatesAreDerivedFromEvidence(t *testing.T) {
 		t.Fatalf("ack and matching proof = %+v", got)
 	}
 
-	r, err := st.ResumeAgentControl(web("person:3", "ben"), controlAgent)
-	if err != nil || r.State != ControlResumed || r.ResumedByLabel != "ben" || r.ResumedAt == "" {
+	r, err := st.ResumeAgentControl(web("person:1", "robin"), controlAgent)
+	if err != nil || r.State != ControlResumed || r.ResumedByLabel != "robin" || r.ResumedAt == "" {
 		t.Fatalf("resume = %+v %v", r, err)
 	}
 	if _, ok, _ := st.ActiveAgentControl(controlAgent); ok {
@@ -126,7 +126,7 @@ func TestAgentControlPermissions(t *testing.T) {
 		{"lead", web("person:3", "ben"), true},
 		{"account owner of the agent", web("person:4", "cleo"), true},
 		{"plain member", web("person:2", "anna"), false},
-		{"no role at all", web("person:5", "dev"), false},
+		{"no role at all", web("person:5", "dev"), false}, // not seen: ErrControlNotFound
 		{"lead through a bearer token", Principal{ID: "person:3", Label: "ben", TokenKind: "cli"}, false},
 		{"owner through a legacy token", Principal{ID: "person:1", Label: "robin"}, false},
 		{"the agent account through a token", Principal{ID: "person:4", Label: "cleo", TokenKind: "device"}, false},
@@ -136,8 +136,12 @@ func TestAgentControlPermissions(t *testing.T) {
 			if tc.ok && err != nil {
 				t.Fatalf("want allowed: %v", err)
 			}
-			if !tc.ok && !errors.Is(err, ErrControlForbidden) {
-				t.Fatalf("want ErrControlForbidden, got %v", err)
+			want := ErrControlForbidden
+			if tc.p.ID == "person:5" {
+				want = ErrControlNotFound // indistinguishable from an unknown agent
+			}
+			if !tc.ok && !errors.Is(err, want) {
+				t.Fatalf("want %v, got %v", want, err)
 			}
 			if tc.ok {
 				if _, err := st.ResumeAgentControl(tc.p, controlAgent); err != nil {
@@ -189,5 +193,65 @@ func TestAgentControlEventsOnlyFromTheAgentOwner(t *testing.T) {
 	}
 	if _, err := st.db.Exec(`UPDATE agent_control_events SET tool_name='x'`); err == nil || !strings.Contains(err.Error(), "append-only") {
 		t.Fatalf("events must be append-only: %v", err)
+	}
+}
+
+// The account owner as a mere member cannot lift a lead's pause; the requester
+// and anyone at least as senior can.
+func TestAgentControlResumeNeedsTheRequestersRank(t *testing.T) {
+	st := controlFixture(t)
+	lead, owner, member := web("person:3", "ben"), web("person:4", "cleo"), web("person:2", "anna")
+	if _, err := st.RequestAgentControl(lead, controlAgent, ControlPause, "", RoleViaWeb); err != nil {
+		t.Fatal(err)
+	}
+	if st.MayResumeAgentControl(owner, controlAgent) {
+		t.Fatal("UI must not offer resume to a member who owns the account")
+	}
+	if _, err := st.ResumeAgentControl(owner, controlAgent); !errors.Is(err, ErrControlResumeRank) {
+		t.Fatalf("member owner lifting a lead's pause: %v", err)
+	}
+	if _, err := st.ResumeAgentControl(member, controlAgent); !errors.Is(err, ErrControlForbidden) {
+		t.Fatalf("unrelated member: %v", err)
+	}
+	if _, ok, _ := st.ActiveAgentControl(controlAgent); !ok {
+		t.Fatal("the pause must still hold")
+	}
+	if !st.MayResumeAgentControl(web("person:1", "robin"), controlAgent) {
+		t.Fatal("a more senior person may resume")
+	}
+	if _, err := st.ResumeAgentControl(lead, controlAgent); err != nil {
+		t.Fatalf("requester: %v", err)
+	}
+	// The other direction: the owner paused, a lead lifts it (rank >=).
+	if _, err := st.RequestAgentControl(owner, controlAgent, ControlPause, "", RoleViaWeb); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ResumeAgentControl(lead, controlAgent); err != nil {
+		t.Fatalf("lead lifting the owner's pause: %v", err)
+	}
+}
+
+func TestAgentControlRefusesAgentsItCannotReach(t *testing.T) {
+	st := controlFixture(t)
+	room := RoomKeyForProject(roleProject)
+	if _, err := st.RegisterCoordAgent(CoordAgent{ExternalID: "codex:h:x", Provider: "codex", RoomKey: room, DisplayName: "x", PrincipalID: "person:4"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.RegisterCoordAgent(CoordAgent{ExternalID: "claude:h:nobody", Provider: "claude", RoomKey: room, DisplayName: "y", PrincipalID: "cli:odd"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"codex:h:x", "claude:h:nobody"} {
+		if gap := st.AgentControlGap(id); gap == "" {
+			t.Fatalf("%s must carry a named gap", id)
+		}
+		if _, err := st.RequestAgentControl(web("person:1", "robin"), id, ControlPause, "", RoleViaWeb); !errors.Is(err, ErrControlUnsupported) {
+			t.Fatalf("%s: %v", id, err)
+		}
+		if _, ok, _ := st.ActiveAgentControl(id); ok {
+			t.Fatalf("%s: a refused request must not leave a control behind", id)
+		}
+	}
+	if st.AgentControlGap(controlAgent) != "" {
+		t.Fatal("a claude agent with a person account is supported")
 	}
 }

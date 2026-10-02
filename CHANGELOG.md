@@ -20,7 +20,12 @@ Versioning, with pre-1.0 compatibility rules described in
   aborted and nothing stops while the model answers without a tool call
   (`human_interrupt` stays a named gap). Codex has no pause (`human_pause` is a
   named gap there). If `ctx channel` is not running the control stays
-  `requested`.
+  `requested`. An agent without a person account is refused with a named gap,
+  not left in `requested`. A pause can be lifted by the person who set it or by
+  someone with at least their project rank; the owner of the agent's account
+  as a mere member cannot lift a lead's pause. The hook entry carries
+  `timeout 5`, and `ctx doctor` reports the gate as runnable and, until a pause
+  has blocked a call, as unverified.
 - Project rooms of the coordination layer need a project role. Registering an
   agent into `project:<remote>` takes at least the guest role (org owners as
   before); org membership alone no longer joins. `GET /api/coord/rooms` drops

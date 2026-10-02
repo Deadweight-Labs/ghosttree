@@ -264,6 +264,8 @@ var writerMethodClasses = map[string]string{
 	"LatestAgentControl":            "read",
 	"AgentControlHistory":           "read",
 	"MayControlAgent":               "read",
+	"MayResumeAgentControl":         "read",
+	"AgentControlGap":               "read",
 }
 
 type writerSource struct {

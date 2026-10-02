@@ -39,7 +39,38 @@ var (
 	ErrControlForbidden = errors.New("only a project lead or the agent's account owner may control it, from an interactive web session")
 	ErrControlNotFound  = errors.New("agent or control not found")
 	ErrControlActive    = errors.New("another control is already active for this agent")
+	// ErrControlUnsupported: a named gap, not a control that would sit in
+	// "requested" for ever.
+	ErrControlUnsupported = errors.New("pause is not supported for this agent")
+	// ErrControlResumeRank: only the requester, or someone at least as senior in
+	// the project, lifts a control.
+	ErrControlResumeRank = errors.New("only the person who requested this, or someone with at least their project rank, may resume it")
 )
+
+// AgentControlGap says why an agent cannot be paused, or "" if it can. The
+// pause reaches an agent through the Claude hook gate and the channel of the
+// launcher identity, and the evidence is accepted from the agent's person
+// account.
+func (s *Store) AgentControlGap(agent string) string {
+	if s.reader != nil {
+		return s.reader.AgentControlGap(agent)
+	}
+	return controlGapTx(s.db, agent)
+}
+
+func controlGapTx(q rowQuerier, agent string) string {
+	var provider, principal string
+	if q.QueryRow(`SELECT provider, COALESCE(principal_id,'') FROM coord_agents WHERE external_id=?`, agent).Scan(&provider, &principal) != nil {
+		return ""
+	}
+	if provider != "claude" {
+		return "Pause für " + provider + " nicht unterstützt (Lücke): kein gemessener Weg, einen laufenden Agenten dieses Harness anzuhalten"
+	}
+	if _, err := parsePersonPrincipalID(principal); err != nil {
+		return "Pause nicht möglich (Lücke): der Agent gehört zu keinem Personenkonto, seine Belege wären nicht zuzuordnen"
+	}
+	return ""
+}
 
 // ControlEvent ist ein Beleg zu einem Vorgang.
 type ControlEvent struct {
@@ -106,30 +137,94 @@ CREATE TRIGGER IF NOT EXISTS agent_control_events_no_delete BEFORE DELETE ON age
 	return err
 }
 
-// mayControlTx: Mensch in einer Web-Sitzung UND (Besitzer des Agentenkontos
-// ODER mindestens lead im Projekt des Agenten). Der Store prueft das selbst,
-// damit kein Aufrufer die Pruefung vergessen kann.
-func mayControlTx(q rowQuerier, actor Principal, agent string) (project string, ok bool) {
+// controlRight is what an actor may do with an agent.
+type controlRight int
+
+const (
+	// controlUnseen: the actor has no business with this agent at all; callers
+	// answer exactly as for an agent that does not exist.
+	controlUnseen controlRight = iota
+	// controlSeen: the actor knows the agent (project role, or account owner) but
+	// may not control it.
+	controlSeen
+	controlAllowed
+)
+
+// controlRightTx: a human in a web session AND (owner of the agent's person
+// account OR at least lead in the agent's project). The store checks this
+// itself so no caller can forget it.
+func controlRightTx(q rowQuerier, actor Principal, agent string) (project string, right controlRight) {
 	project = agentProjectTx(q, agent)
-	if actor.TokenKind != WebSessionKind {
-		return project, false
-	}
 	id, err := parsePersonPrincipalID(actor.ID)
 	if err != nil {
-		return project, false
+		return project, controlUnseen
 	}
-	if _, account, registered := agentAccountTx(q, agent); registered && account != 0 && account == id {
-		return project, true
+	owner := false
+	var principal string
+	if q.QueryRow(`SELECT COALESCE(principal_id,'') FROM coord_agents WHERE external_id=?`, agent).Scan(&principal) == nil {
+		if oid, err := parsePersonPrincipalID(principal); err == nil && oid == id {
+			owner = true
+		}
 	}
-	if project != "" && RoleRank(projectRoleTx(q, project, id).Role) >= RoleRank(RoleLead) {
-		return project, true
+	rank := 0
+	if project != "" {
+		rank = RoleRank(projectRoleTx(q, project, id).Role)
 	}
-	return project, false
+	switch {
+	case actor.TokenKind == WebSessionKind && (owner || rank >= RoleRank(RoleLead)):
+		return project, controlAllowed
+	case owner || rank >= RoleRank(RoleGuest):
+		return project, controlSeen
+	}
+	return project, controlUnseen
+}
+
+// mayControlTx keeps the boolean view for MayControlAgent.
+func mayControlTx(q rowQuerier, actor Principal, agent string) (string, bool) {
+	project, right := controlRightTx(q, actor, agent)
+	return project, right == controlAllowed
+}
+
+// mayResumeTx: the requester, or someone whose project rank is at least the
+// requester's. An account owner who is only a member cannot lift a lead's pause.
+func mayResumeTx(q rowQuerier, actor Principal, project string, active AgentControl) bool {
+	if actor.ID == active.RequestedBy {
+		return true
+	}
+	rank := func(principal string) int {
+		id, err := parsePersonPrincipalID(principal)
+		if err != nil || project == "" {
+			return 0
+		}
+		return RoleRank(projectRoleTx(q, project, id).Role)
+	}
+	return rank(actor.ID) >= rank(active.RequestedBy)
 }
 
 func agentRegisteredTx(q rowQuerier, agent string) bool {
 	var one int
 	return q.QueryRow(`SELECT 1 FROM coord_agents WHERE external_id=?`, agent).Scan(&one) == nil
+}
+
+func denyControl(r controlRight) error {
+	if r == controlUnseen {
+		return ErrControlNotFound // indistinguishable from an unknown agent
+	}
+	return ErrControlForbidden
+}
+
+// MayResumeAgentControl sagt der Oberflaeche, ob der aktive Vorgang von diesem
+// Menschen aufgehoben werden darf.
+func (s *Store) MayResumeAgentControl(actor Principal, agent string) bool {
+	if s.reader != nil {
+		return s.reader.MayResumeAgentControl(actor, agent)
+	}
+	project, right := controlRightTx(s.db, actor, agent)
+	if right != controlAllowed {
+		return false
+	}
+	active, found, err := activeControlTx(s.db, agent)
+	return err == nil && found && mayResumeTx(s.db, actor, project, active)
 }
 
 // MayControlAgent sagt der Oberflaeche, ob sie die Schaltflaechen zeigt.
@@ -168,9 +263,12 @@ func (s *Store) RequestAgentControl(actor Principal, agent, action, reason, via 
 		return AgentControl{}, err
 	}
 	defer tx.Rollback()
-	project, ok := mayControlTx(tx, actor, agent)
-	if !ok {
-		return AgentControl{}, ErrControlForbidden
+	project, right := controlRightTx(tx, actor, agent)
+	if right != controlAllowed {
+		return AgentControl{}, denyControl(right)
+	}
+	if gap := controlGapTx(tx, agent); gap != "" {
+		return AgentControl{}, fmt.Errorf("%w: %s", ErrControlUnsupported, gap)
 	}
 	if active, found, err := activeControlTx(tx, agent); err != nil {
 		return AgentControl{}, err
@@ -209,8 +307,9 @@ func (s *Store) ResumeAgentControl(actor Principal, agent string) (AgentControl,
 		return AgentControl{}, err
 	}
 	defer tx.Rollback()
-	if _, ok := mayControlTx(tx, actor, agent); !ok {
-		return AgentControl{}, ErrControlForbidden
+	project, right := controlRightTx(tx, actor, agent)
+	if right != controlAllowed {
+		return AgentControl{}, denyControl(right)
 	}
 	active, found, err := activeControlTx(tx, agent)
 	if err != nil {
@@ -218,6 +317,9 @@ func (s *Store) ResumeAgentControl(actor Principal, agent string) (AgentControl,
 	}
 	if !found {
 		return AgentControl{}, ErrControlNotFound
+	}
+	if !mayResumeTx(tx, actor, project, active) {
+		return AgentControl{}, ErrControlResumeRank
 	}
 	if _, err := tx.Exec(`UPDATE agent_controls SET resumed_by=?, resumed_by_label=?, resumed_at=? WHERE id=?`,
 		actor.ID, actor.Label, now(), active.ID); err != nil {

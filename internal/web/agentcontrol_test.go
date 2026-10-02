@@ -106,7 +106,7 @@ func TestAgentControlOnTheParticipantShowsOnlyProvenStates(t *testing.T) {
 
 	_, _ = st.RecordControlEvent(owner, c.ID, store.ControlEvent{Kind: store.ControlEventProof, ToolUseID: "toolu_1"})
 	page = coordPageBody(t, alice, pageURL)
-	if !strings.Contains(page, "Pausiert (belegt)") {
+	if !strings.Contains(page, "Pausiert (belegt)") || !strings.Contains(page, "schützt nicht vor einem böswilligen Agenten") {
 		t.Fatalf("effective state missing: %s", page[strings.Index(page, "coord-agent-control"):])
 	}
 
@@ -161,10 +161,51 @@ func TestAgentControlIsRefusedForTokenSessionsAndPlainMembers(t *testing.T) {
 		t.Fatal(err)
 	}
 	page = coordPageBody(t, alice, srv+"/ui/coord?room="+url.QueryEscape(room))
-	if !strings.Contains(page, "Pause für Codex nicht unterstützt") {
+	if !strings.Contains(page, "Pause für codex nicht unterstützt (Lücke)") {
 		t.Fatal("codex must show the gap")
 	}
 	if strings.Contains(page, `name="agent" value="codex:h:x"`) {
 		t.Fatal("codex must not get a control form")
+	}
+}
+
+// An unknown agent and one the viewer has no business with look the same.
+func TestAgentControlAnswersAlikeForUnknownAndForeignAgents(t *testing.T) {
+	e := ctlFixture(t)
+	other := store.RoomKeyForProject("github.com/x/other")
+	if _, err := e.st.RegisterCoordAgent(store.CoordAgent{ExternalID: "claude:h:foreign", PrincipalID: "person:3", Person: "bob", Provider: "claude", DisplayName: "f", RoomKey: other}); err != nil {
+		t.Fatal(err)
+	}
+	var bodies []string
+	for _, agent := range []string{"claude:h:does-not-exist", "claude:h:foreign"} {
+		form := url.Values{"action": {"pause"}, "agent": {agent}}
+		form.Set("csrf_token", renderedCSRFToken(t, e.anna, e.srv.URL+"/ui/coord?room="+url.QueryEscape(e.room)))
+		form.Set("room", e.room)
+		resp := sameOriginPostForm(t, e.anna, e.srv.URL+"/ui/coord/agent/control", form)
+		b := body(t, resp)
+		if resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("%s = %d %s", agent, resp.StatusCode, b)
+		}
+		bodies = append(bodies, b)
+	}
+	if bodies[0] != bodies[1] {
+		t.Fatalf("answers differ: %q vs %q", bodies[0], bodies[1])
+	}
+}
+
+func TestAgentControlShowsAGapForAgentsWithoutAPersonAccount(t *testing.T) {
+	e := ctlFixture(t)
+	if _, err := e.st.RegisterCoordAgent(store.CoordAgent{ExternalID: "claude:h:odd", PrincipalID: "cli:odd", Provider: "claude", DisplayName: "odd agent", RoomKey: e.room}); err != nil {
+		t.Fatal(err)
+	}
+	page := coordPageBody(t, e.alice, e.srv.URL+"/ui/coord?room="+url.QueryEscape(e.room))
+	if !strings.Contains(page, "keinem Personenkonto") || strings.Contains(page, `name="agent" value="claude:h:odd"`) {
+		t.Fatal("an agent without a person account must show the gap and no form")
+	}
+	form := url.Values{"action": {"pause"}, "agent": {"claude:h:odd"}}
+	form.Set("csrf_token", renderedCSRFToken(t, e.alice, e.srv.URL+"/ui/coord?room="+url.QueryEscape(e.room)))
+	form.Set("room", e.room)
+	if resp := sameOriginPostForm(t, e.alice, e.srv.URL+"/ui/coord/agent/control", form); resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("pause of an unsupported agent = %d", resp.StatusCode)
 	}
 }

@@ -18,12 +18,16 @@ type coordControlView struct {
 	CanControl bool
 	// Unsupported names the harness gap instead of showing a dead button.
 	Unsupported bool
-	Active      bool
-	Label       string
-	Detail      string
-	Gap         string
-	Blocked     string
-	Who         string
+	// GapText names why the agent cannot be paused (Unsupported).
+	GapText string
+	// CanResume: the viewer may lift the active control (requester or equal rank).
+	CanResume bool
+	Active    bool
+	Label     string
+	Detail    string
+	Gap       string
+	Blocked   string
+	Who       string
 }
 
 const (
@@ -43,7 +47,7 @@ func controlView(c store.AgentControl) (label, detail string) {
 	case store.ControlAcknowledged:
 		return "Bestätigt (Hook)", "Der Hook hat einen Werkzeugaufruf blockiert. Das Transkript belegt den Stopp noch nicht, deshalb gilt der Agent noch nicht als pausiert."
 	case store.ControlEffective:
-		return "Pausiert (belegt)", "Hook-Bestätigung und Transkript-Beleg (hook_stopped_continuation) für denselben Aufruf liegen vor."
+		return "Pausiert (belegt)", "Hook-Bestätigung und Transkript-Beleg (hook_stopped_continuation) für denselben Aufruf liegen vor. Der Beleg stammt vom Rechner des Agentenkontos (dasselbe Konto) und schützt nicht vor einem böswilligen Agenten mit Shell-Zugriff (Entscheidung #2411, Dokument 2026-10-02-human-pause-interrupt)."
 	case store.ControlResumed:
 		return "Fortgesetzt", "Die Sperre ist aufgehoben."
 	}
@@ -58,14 +62,15 @@ func (a *app) applyParticipantControls(r *http.Request, roomKey string, particip
 		if p.Current || p.Provider == "" {
 			continue
 		}
-		if p.Provider == "codex" {
-			p.Control = &coordControlView{Agent: p.ID, Unsupported: true}
+		if p.Provider != "claude" && p.Provider != "codex" {
 			continue
 		}
-		if p.Provider != "claude" {
+		if gap := a.store.AgentControlGap(p.ID); gap != "" {
+			p.Control = &coordControlView{Agent: p.ID, Unsupported: true, GapText: gap}
 			continue
 		}
-		v := &coordControlView{Agent: p.ID, Room: roomKey, CSRFToken: csrfOf(r), CanControl: a.store.MayControlAgent(actor, p.ID)}
+		v := &coordControlView{Agent: p.ID, Room: roomKey, CSRFToken: csrfOf(r), CanControl: a.store.MayControlAgent(actor, p.ID),
+			CanResume: a.store.MayResumeAgentControl(actor, p.ID)}
 		if c, ok, err := a.store.LatestAgentControl(p.ID); err == nil && ok {
 			v.Label, v.Detail = controlView(c)
 			v.Active = c.State != store.ControlResumed
@@ -139,11 +144,14 @@ func (a *app) coordAgentControl(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch {
-	case errors.Is(err, store.ErrControlForbidden):
+	case errors.Is(err, store.ErrControlForbidden), errors.Is(err, store.ErrControlResumeRank):
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	case errors.Is(err, store.ErrControlNotFound):
 		http.Error(w, "agent or control not found", http.StatusNotFound)
+		return
+	case errors.Is(err, store.ErrControlUnsupported):
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 		return
 	case errors.Is(err, store.ErrControlActive):
 		http.Error(w, err.Error(), http.StatusConflict)
