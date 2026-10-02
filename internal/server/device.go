@@ -2,7 +2,6 @@ package server
 
 import (
 	"errors"
-	"net"
 	"net/http"
 	"strings"
 	"unicode"
@@ -58,22 +57,12 @@ func validMachine(name string) bool {
 	return true
 }
 
-// clientAddr ist die Absenderadresse für die Begrenzung offener Abläufe. Hinter
-// einem Proxy auf Loopback zählt der letzte X-Forwarded-For-Eintrag, den der
-// Proxy selbst angehängt hat; von sonst woher ist der Header beliebig.
+// clientAddr ist die Absenderadresse für die Begrenzung offener Abläufe. Nur
+// von einem vertrauenswürdigen Proxy zählt X-Forwarded-For: alle Zeilen werden
+// verbunden und von rechts gelesen, der erste nicht vertrauenswürdige Eintrag
+// ist der Client. Vom Client mitgeschickte Einträge stehen links davon.
 func (a *api) clientAddr(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
-	}
-	if a.proxies.Trusts(r.RemoteAddr) {
-		if parts := strings.Split(r.Header.Get("X-Forwarded-For"), ","); len(parts) > 0 {
-			if last := strings.TrimSpace(parts[len(parts)-1]); net.ParseIP(last) != nil {
-				return last
-			}
-		}
-	}
-	return host
+	return a.proxies.Client(r.RemoteAddr, r.Header.Values("X-Forwarded-For"))
 }
 
 func (a *api) requestBaseURL(r *http.Request) string {
@@ -86,10 +75,10 @@ func (a *api) requestBaseURL(r *http.Request) string {
 		scheme = "https"
 	}
 	if a.proxies.Trusts(r.RemoteAddr) {
-		if p := r.Header.Get("X-Forwarded-Proto"); p == "http" || p == "https" {
+		if p := singleHeader(r.Header, "X-Forwarded-Proto"); p == "http" || p == "https" {
 			scheme = p
 		}
-		if h := r.Header.Get("X-Forwarded-Host"); h != "" && !strings.ContainsAny(h, " /\\@,") {
+		if h := singleHeader(r.Header, "X-Forwarded-Host"); h != "" && !strings.ContainsAny(h, " /\\@,") {
 			host = h
 		}
 	}
@@ -164,4 +153,14 @@ func (a *api) pollDeviceLogin(w http.ResponseWriter, r *http.Request) {
 			"access_token": token, "token_type": "bearer", "machine": info.Machine, "token_id": info.ID,
 		})
 	}
+}
+
+// singleHeader returns the value of a header sent exactly once and without a
+// comma list; repeated or combined values are not believed.
+func singleHeader(h http.Header, name string) string {
+	v := h.Values(name)
+	if len(v) != 1 || strings.Contains(v[0], ",") {
+		return ""
+	}
+	return strings.TrimSpace(v[0])
 }

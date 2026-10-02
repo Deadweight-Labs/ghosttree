@@ -350,7 +350,20 @@ in `--trusted-proxies` / `GHOSTTREE_TRUSTED_PROXIES`, a comma-separated list of
 CIDRs or addresses. A client outside that list cannot switch `Secure` on with
 a header, and its forwarding headers also make the same-origin check on form
 posts fail. List only the proxy's own address, never a network that ordinary
-clients share.
+clients share. `/0`, IPv4-mapped prefixes and zoned addresses are rejected at
+startup.
+
+Loopback is trusted by default. Anything that makes a remote client appear as a
+loopback peer (`ssh -L`, `socat`, a Docker port mapping or other local
+forwarder) therefore also gets its forwarding headers believed. If you run such
+forwarders, add the word `none` to the list (`GHOSTTREE_TRUSTED_PROXIES=none`,
+or `none,192.0.2.10`) to switch loopback trust off and trust only what you list.
+
+The client address used to rate-limit device logins comes from
+`X-Forwarded-For`, read only when the direct peer is trusted: all header lines
+are joined and read from right to left, trusted proxies are skipped, and the
+first untrusted address is the client. Entries a client sent itself therefore
+stay to the left and are ignored.
 
 Recommended setup behind a TLS terminator on another host:
 
@@ -369,8 +382,13 @@ location / {
     proxy_set_header Host $host;
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header X-Forwarded-Host $host;
+    proxy_set_header X-Forwarded-For $remote_addr;
 }
 ```
+
+`X-Forwarded-For $remote_addr` overwrites whatever the client sent and is the
+recommended form. With `$proxy_add_x_forwarded_for` (append) ghosttree still
+picks the proxy-added entry, but only if the proxy is in `--trusted-proxies`.
 
 `--public-url` is the simplest switch: with it every cookie is `Secure` no
 matter what headers arrive, and requests whose `Origin` equals it are accepted

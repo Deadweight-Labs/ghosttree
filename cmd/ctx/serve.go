@@ -125,6 +125,9 @@ func parseServeConfig(args []string, output io.Writer) (serveConfig, error) {
 			(u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
 			return serveConfig{}, fmt.Errorf("--public-url must be http(s)://host[:port] without path, got %q", cfg.PublicURL)
 		}
+		if (u.Scheme == "https" && u.Port() == "443") || (u.Scheme == "http" && u.Port() == "80") {
+			u.Host = strings.TrimSuffix(u.Host, ":"+u.Port())
+		}
 		cfg.PublicURL = u.Scheme + "://" + u.Host
 	}
 	proxies, err := proxytrust.Parse(*trusted)

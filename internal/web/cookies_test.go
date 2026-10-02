@@ -204,3 +204,13 @@ func TestPublicURLOriginIsAcceptedWithoutForwardingHeaders(t *testing.T) {
 		t.Fatal("foreign origin accepted")
 	}
 }
+
+func TestPublicURLDefaultPortIsDropped(t *testing.T) {
+	a := &app{}
+	WithPublicURL("https://gt.example.test:443")(a)
+	r := httptest.NewRequest(http.MethodPost, "http://x/ui/login", nil)
+	r.Header.Set("Origin", "https://gt.example.test")
+	if !a.sameOrigin(r) {
+		t.Fatal("browser origin without default port rejected")
+	}
+}

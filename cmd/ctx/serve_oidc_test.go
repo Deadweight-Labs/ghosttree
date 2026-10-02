@@ -89,8 +89,16 @@ func TestServeProxyConfiguration(t *testing.T) {
 	if err != nil || !cfg.TrustedProxies.Trusts("198.51.100.7:1") {
 		t.Fatalf("env not read: %v", err)
 	}
+	cfg, err = parseServeConfig([]string{"--public-url", "https://gt.example.test:443"}, io.Discard)
+	if err != nil || cfg.PublicURL != "https://gt.example.test" {
+		t.Fatalf("default port not dropped: %+v %v", cfg, err)
+	}
+	cfg, err = parseServeConfig([]string{"--public-url", "https://gt.example.test:8443"}, io.Discard)
+	if err != nil || cfg.PublicURL != "https://gt.example.test:8443" {
+		t.Fatalf("custom port lost: %+v %v", cfg, err)
+	}
 	for _, bad := range [][]string{
-		{"--public-url", "gt.example.test"}, {"--public-url", "ftp://x"}, {"--public-url", "https://x/path"},
+		{"--public-url", "gt.example.test"}, {"--trusted-proxies", "0.0.0.0/0"}, {"--public-url", "ftp://x"}, {"--public-url", "https://x/path"},
 		{"--public-url", "https://u:p@x"}, {"--trusted-proxies", "nonsense"},
 	} {
 		if _, err := parseServeConfig(bad, io.Discard); err == nil {

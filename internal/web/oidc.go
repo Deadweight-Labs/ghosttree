@@ -273,7 +273,11 @@ func WithPublicURL(raw string) Option {
 		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
 			panic("web: invalid public URL")
 		}
-		a.publicOrigin = u.Scheme + "://" + u.Host
+		host := u.Host
+		if (u.Scheme == "https" && u.Port() == "443") || (u.Scheme == "http" && u.Port() == "80") {
+			host = strings.TrimSuffix(host, ":"+u.Port())
+		}
+		a.publicOrigin = u.Scheme + "://" + host
 		a.publicHTTPS = u.Scheme == "https"
 	}
 }
