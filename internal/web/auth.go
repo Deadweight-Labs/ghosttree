@@ -251,10 +251,10 @@ func (a *app) codePage(w http.ResponseWriter, r *http.Request) {
 	a.render(w, "logincode", data)
 }
 func (a *app) codeSubmit(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Referrer-Policy", "strict-origin")
 	if !parseLoginForm(w, r) {
 		return
 	}
-	w.Header().Set("Referrer-Policy", "strict-origin")
 	code := strings.TrimSpace(r.FormValue("code"))
 	if len(code) > maxCodeLength || len(r.FormValue("name")) > maxNameLength {
 		http.Error(w, "field too long", http.StatusBadRequest)

@@ -473,11 +473,10 @@ func TestWebSessionEndsWhenTokenOrAccountStopsBeingValid(t *testing.T) {
 	}
 }
 
-// Chromium sends "Origin: null" on a form POST when the form page carries
-// Referrer-Policy: no-referrer. The code pages must therefore use a policy
-// under which the browser sends the real origin, while "null" and foreign
-// origins stay rejected.
-func TestCodePageReferrerPolicyKeepsRealOriginAndCodeOutOfReferer(t *testing.T) {
+// A form POST from a page with Referrer-Policy: no-referrer carries
+// "Origin: null" (Fetch spec). The code pages must use a policy under which
+// the browser sends the real origin.
+func TestCodePageSendsStrictOriginReferrerPolicy(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "ref.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -490,13 +489,12 @@ func TestCodePageReferrerPolicyKeepsRealOriginAndCodeOutOfReferer(t *testing.T) 
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	// strict-origin: Origin stays a real origin, Referer never carries the path.
 	if got := resp.Header.Get("Referrer-Policy"); got != "strict-origin" {
 		t.Fatalf("Referrer-Policy=%q, want strict-origin", got)
 	}
 }
 
-func TestCodeSubmitRejectsNullAndForeignOrigin(t *testing.T) {
+func TestCodeAndOIDCStartRejectNullAndForeignOrigin(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "orig.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -507,23 +505,33 @@ func TestCodeSubmitRejectsNullAndForeignOrigin(t *testing.T) {
 	}
 	srv := httptest.NewServer(New(st))
 	defer srv.Close()
-	for _, origin := range []string{"null", "https://evil.example", ""} {
-		code, _, err := st.CreateAccountCode(store.CodeLogin, "alice")
-		if err != nil {
-			t.Fatal(err)
-		}
-		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/ui/login/code", strings.NewReader(url.Values{"code": {code}}.Encode()))
+	code, _, err := st.CreateAccountCode(store.CodeLogin, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	post := func(path, origin string) int {
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+path, strings.NewReader(url.Values{"code": {code}}.Encode()))
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		if origin != "" {
-			req.Header.Set("Origin", origin)
-		}
+		req.Header.Set("Origin", origin)
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			t.Fatal(err)
 		}
 		resp.Body.Close()
-		if resp.StatusCode != http.StatusForbidden {
-			t.Fatalf("origin %q: status=%d, want 403", origin, resp.StatusCode)
+		return resp.StatusCode
+	}
+	for _, path := range []string{"/ui/login/code", "/ui/login/oidc"} {
+		for _, origin := range []string{"null", "https://evil.example"} {
+			if got := post(path, origin); got != http.StatusForbidden {
+				t.Fatalf("%s origin %q: status=%d, want 403", path, origin, got)
+			}
+			if st.CodeKindFor(code) != store.CodeLogin {
+				t.Fatalf("%s origin %q consumed the code", path, origin)
+			}
 		}
+	}
+	// The same code still works with the real origin.
+	if got := post("/ui/login/code", srv.URL); got != http.StatusSeeOther {
+		t.Fatalf("real origin: status=%d, want 303", got)
 	}
 }
