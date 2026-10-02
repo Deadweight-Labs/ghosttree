@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
@@ -239,8 +240,26 @@ func TestGroupMembershipMergeAndSplit(t *testing.T) {
 	if m.ID != g1.ID {
 		t.Errorf("lower id must survive, got %d want %d", m.ID, g1.ID)
 	}
-	if _, err := s.GroupByID(g2.ID); !errors.Is(err, ErrRelationNotFound) {
-		t.Errorf("merged-away group must be gone: %v", err)
+	if gone, err := s.GroupByID(g2.ID); err != nil || gone.State != "merged" || gone.MergedInto != g1.ID || len(gone.Members) != 0 {
+		t.Errorf("merged-away group must stay as a pointer: %+v %v", gone, err)
+	}
+	if _, err := s.SetGroupVolatility(g2.ID, "slow", relActor); !errors.Is(err, ErrRelationState) {
+		t.Errorf("volatility on a merged group: %v", err)
+	}
+	// The survivor's history includes the merged group's events (its two
+	// volatility_set events), and the project is on every event.
+	hist, _ := s.RelationEvents(0, g1.ID)
+	vols := 0
+	for _, e := range hist {
+		if e.Action == "volatility_set" {
+			vols++
+		}
+		if e.Project != "p" {
+			t.Errorf("event without project: %+v", e)
+		}
+	}
+	if vols != 2 {
+		t.Errorf("history of survivor has %d volatility events, want 2 (own and merged-in)", vols)
 	}
 	evs, _ := s.RelationEvents(0, m.ID)
 	var merged *KnowledgeRelationEvent
@@ -431,9 +450,9 @@ func TestBackfillMigratesLegacySupersededBy(t *testing.T) {
 			t.Errorf("entry %d status = %s", id, k.Status)
 		}
 	}
-	skipped, err := BackfillKnowledgeRelations(s.db)
-	if err != nil || skipped != 2 {
-		t.Errorf("rerun skipped = %d, %v (the two unusable rows are reported again, nothing else)", skipped, err)
+	rep, err := BackfillKnowledgeRelations(s.db)
+	if err != nil || rep.Created != 0 || rep.SkippedUnusable != 2 || rep.SkippedCycle != 0 {
+		t.Errorf("rerun = %+v, %v (the two unusable rows are reported again, nothing else)", rep, err)
 	}
 }
 
@@ -512,3 +531,182 @@ func TestBackfillPicksUpNewLegacyWritesOnce(t *testing.T) {
 }
 
 func itoa(v int64) string { return strconv.FormatInt(v, 10) }
+
+func groupCount(t *testing.T, s *Store, id int64) int {
+	t.Helper()
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(DISTINCT group_id) FROM knowledge_relations WHERE kind='sibling' AND state='active' AND (from_id=? OR to_id=?)`, id, id).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func TestApprovingSiblingKeepsEntryInOneGroup(t *testing.T) {
+	s := openTest(t)
+	a, b, c := relEntry(t, s, "p", "a"), relEntry(t, s, "p", "b"), relEntry(t, s, "p", "c")
+	pr, err := s.AddRelation(RelationInput{FromID: a, ToID: b, Kind: RelSibling, State: RelProposed, Origin: RelOriginDistiller}, relActor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustRel(t, s, a, c, RelSibling)
+	if _, err := s.DecideRelation(pr.ID, true, relActor, ""); err != nil {
+		t.Fatal(err)
+	}
+	if n := groupCount(t, s, a); n != 1 {
+		t.Fatalf("a is in %d groups, want 1", n)
+	}
+	g, ok, _ := s.GroupOf(a)
+	if !ok || !reflect.DeepEqual(g.Members, []int64{a, b, c}) {
+		t.Errorf("group = %+v", g)
+	}
+}
+
+func TestApprovalRechecksParentStatus(t *testing.T) {
+	s := openTest(t)
+	a, b := relEntry(t, s, "p", "a"), relEntry(t, s, "p", "b")
+	pr, _ := s.AddRelation(RelationInput{FromID: a, ToID: b, Kind: RelSupersedes, Reason: "r", State: RelProposed}, relActor)
+	if err := s.UpdateKnowledge(a, map[string]string{"status": "deprecated"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DecideRelation(pr.ID, true, relActor, ""); !errors.Is(err, ErrRelationInvalid) {
+		t.Errorf("approving with a deprecated parent: %v", err)
+	}
+	if r, _ := s.RelationByID(pr.ID); r.State != RelProposed {
+		t.Errorf("a failed approval must leave the proposal alone: %+v", r)
+	}
+}
+
+func TestBackfillSkipsLegacyCycles(t *testing.T) {
+	path := legacyRelationsDB(t)
+	db, _ := sql.Open("sqlite", path)
+	// 1<->2 is a 2-cycle; 3->4->5->3 is a 3-cycle. 6 is superseded without a parent.
+	for _, stmt := range []string{
+		`UPDATE knowledge SET status='active',superseded_by=0`,
+		`UPDATE knowledge SET status='superseded',superseded_by=2 WHERE id=1`,
+		`UPDATE knowledge SET status='superseded',superseded_by=1 WHERE id=2`,
+		`UPDATE knowledge SET status='superseded',superseded_by=4 WHERE id=3`,
+		`UPDATE knowledge SET status='superseded',superseded_by=5,project='p' WHERE id=4`,
+		`UPDATE knowledge SET status='superseded',superseded_by=3,project='p' WHERE id=5`,
+		`UPDATE knowledge SET status='superseded' WHERE id=6`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db.Close()
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var n int
+	s.db.QueryRow(`SELECT COUNT(*) FROM knowledge_relations`).Scan(&n)
+	if n != 3 {
+		t.Fatalf("edges = %d, want 3 (one per cycle member pair minus the closing edge: 1 + 2)", n)
+	}
+	// No entry may be hidden by every one of its relations: some member of
+	// each cycle has no incoming live edge.
+	var heads int
+	s.db.QueryRow(`SELECT COUNT(*) FROM knowledge k WHERE k.id IN (1,2,3,4,5) AND NOT EXISTS(SELECT 1 FROM knowledge_relations r WHERE r.to_id=k.id AND r.state='active')`).Scan(&heads)
+	if heads != 2 {
+		t.Errorf("unsuperseded heads = %d, want one per cycle", heads)
+	}
+	rep, err := BackfillKnowledgeRelations(s.db)
+	if err != nil || rep.Created != 0 || rep.SkippedCycle != 2 || rep.SupersededWithoutParent != 1 {
+		t.Errorf("rerun = %+v, %v", rep, err)
+	}
+}
+
+func TestRelationEventsAreAppendOnly(t *testing.T) {
+	s := openTest(t)
+	a, b := relEntry(t, s, "p", "a"), relEntry(t, s, "p", "b")
+	r := mustRel(t, s, a, b, RelSibling)
+	if _, err := s.db.Exec(`UPDATE knowledge_relation_events SET detail='x' WHERE relation_id=?`, r.ID); err == nil {
+		t.Error("update of an event must abort")
+	}
+	if _, err := s.db.Exec(`DELETE FROM knowledge_relation_events`); err == nil {
+		t.Error("delete of an event must abort")
+	}
+}
+
+func TestGroupHistorySurvivesMergeAndDissolve(t *testing.T) {
+	s := openTest(t)
+	a, b, c, d := relEntry(t, s, "p", "a"), relEntry(t, s, "p", "b"), relEntry(t, s, "p", "c"), relEntry(t, s, "p", "d")
+	ab := mustRel(t, s, a, b, RelSibling)
+	cd := mustRel(t, s, c, d, RelSibling)
+	g1, _, _ := s.GroupOf(a)
+	g2, _, _ := s.GroupOf(c)
+	s.SetGroupVolatility(g2.ID, "slow", relActor)
+	bc := mustRel(t, s, b, c, RelSibling) // merge g2 into g1
+	s.RevokeRelation(cd.ID, relActor, "x")
+	s.RevokeRelation(ab.ID, relActor, "x")
+	s.RevokeRelation(bc.ID, relActor, "x") // last edge: the group dissolves
+	// Groups are never reused or deleted: a new group gets a fresh id.
+	e, f := relEntry(t, s, "p", "e"), relEntry(t, s, "p", "f")
+	mustRel(t, s, e, f, RelSibling)
+	ng, _, _ := s.GroupOf(e)
+	var rows int
+	s.db.QueryRow(`SELECT COUNT(*) FROM knowledge_groups`).Scan(&rows)
+	if ng.ID == g1.ID || ng.ID == g2.ID || rows < 3 {
+		t.Errorf("group ids reused or rows deleted: new=%d old=%d,%d rows=%d", ng.ID, g1.ID, g2.ID, rows)
+	}
+	h, _ := s.RelationEvents(0, g1.ID)
+	seen := map[string]int{}
+	for _, ev := range h {
+		seen[ev.Action]++
+	}
+	if seen["volatility_set"] != 1 || seen["group_merged"] < 1 || seen["group_split"] < 1 {
+		t.Errorf("history of g1 = %v", seen)
+	}
+	for _, ev := range h {
+		if ng.ID != 0 && ev.GroupID == ng.ID {
+			t.Errorf("a new group's events leaked into an old history: %+v", ev)
+		}
+	}
+	// The group that lost all edges is dissolved and keeps its volatility.
+	if d1, _ := s.GroupByID(g1.ID); d1.State != "dissolved" || d1.Volatility != "slow" {
+		t.Errorf("dissolved group = %+v", d1)
+	}
+}
+
+func TestRelationRecordsActorAccount(t *testing.T) {
+	s := openTest(t)
+	a, b := relEntry(t, s, "p", "a"), relEntry(t, s, "p", "b")
+	who := RelationActor{Name: "anna", AccountID: 42, Role: "member", Via: "web"}
+	r, err := s.AddRelation(RelationInput{FromID: b, ToID: a, Kind: RelSupersedes, Reason: "r"}, who)
+	if err != nil || r.CreatedByAccount != 42 || r.DecidedByAccount != 42 {
+		t.Fatalf("relation = %+v, %v", r, err)
+	}
+	rv, _ := s.RevokeRelation(r.ID, RelationActor{Name: "bob", AccountID: 7}, "no")
+	if rv.DecidedByAccount != 7 || rv.CreatedByAccount != 42 {
+		t.Errorf("revoked = %+v", rv)
+	}
+	evs, _ := s.RelationEvents(r.ID, 0)
+	if len(evs) != 2 || evs[0].ActorAccountID != 42 || evs[1].ActorAccountID != 7 {
+		t.Errorf("events = %+v", evs)
+	}
+}
+
+func TestRelationQueriesUseIndexes(t *testing.T) {
+	s := openTest(t)
+	for _, q := range []string{
+		`SELECT id FROM knowledge_relations WHERE from_id=1 UNION SELECT id FROM knowledge_relations WHERE to_id=1`,
+		`SELECT group_id FROM knowledge_relations WHERE from_id=1 AND kind='sibling' AND state='active' AND id<>0 AND group_id IS NOT NULL UNION SELECT group_id FROM knowledge_relations WHERE to_id=1 AND kind='sibling' AND state='active' AND id<>0 AND group_id IS NOT NULL`,
+		`SELECT id FROM knowledge_relations WHERE group_id=1`,
+		`SELECT id FROM knowledge_relation_events WHERE relation_id=1`,
+	} {
+		rows, err := s.db.Query(`EXPLAIN QUERY PLAN ` + q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for rows.Next() {
+			var id, parent, unused int
+			var detail string
+			rows.Scan(&id, &parent, &unused, &detail)
+			if strings.HasPrefix(detail, "SCAN knowledge_relation") {
+				t.Errorf("full scan in %q: %s", q, detail)
+			}
+		}
+		rows.Close()
+	}
+}

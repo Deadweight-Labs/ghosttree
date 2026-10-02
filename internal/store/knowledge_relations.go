@@ -50,9 +50,14 @@ type KnowledgeRelation struct {
 	GroupID   int64  `json:"group_id,omitempty"`
 	Reason    string `json:"reason,omitempty"`
 	CreatedBy string `json:"created_by"`
-	CreatedAt string `json:"created_at"`
-	DecidedBy string `json:"decided_by,omitempty"`
-	DecidedAt string `json:"decided_at,omitempty"`
+	// CreatedByAccount and DecidedByAccount are persons.id of the actors (0 =
+	// unknown, e.g. a legacy row), so a later notification does not depend on
+	// a display name.
+	CreatedByAccount int64  `json:"created_by_account,omitempty"`
+	CreatedAt        string `json:"created_at"`
+	DecidedBy        string `json:"decided_by,omitempty"`
+	DecidedByAccount int64  `json:"decided_by_account,omitempty"`
+	DecidedAt        string `json:"decided_at,omitempty"`
 }
 
 type KnowledgeGroup struct {
@@ -62,27 +67,33 @@ type KnowledgeGroup struct {
 	Volatility   string  `json:"volatility"`
 	VolatilityBy string  `json:"volatility_by,omitempty"`
 	VolatilityAt string  `json:"volatility_at,omitempty"`
+	State        string  `json:"state"` // active|merged|dissolved
+	MergedInto   int64   `json:"merged_into,omitempty"`
 	CreatedAt    string  `json:"created_at"`
 	Members      []int64 `json:"members"`
 }
 
 type KnowledgeRelationEvent struct {
 	ID         int64  `json:"id"`
+	Project    string `json:"project"`
 	RelationID int64  `json:"relation_id,omitempty"`
 	GroupID    int64  `json:"group_id,omitempty"`
 	Action     string `json:"action"`
 	Actor      string `json:"actor"`
-	ActorRole  string `json:"actor_role,omitempty"`
-	Via        string `json:"via,omitempty"`
-	Detail     string `json:"detail,omitempty"`
-	CreatedAt  string `json:"created_at"`
+	// ActorAccountID is persons.id of the actor, 0 when unknown.
+	ActorAccountID int64  `json:"actor_account_id,omitempty"`
+	ActorRole      string `json:"actor_role,omitempty"`
+	Via            string `json:"via,omitempty"`
+	Detail         string `json:"detail,omitempty"`
+	CreatedAt      string `json:"created_at"`
 }
 
 // RelationActor names who caused a change; it lands in the event log.
 type RelationActor struct {
-	Name string
-	Role string
-	Via  string // mcp|cli|web|distiller|migration
+	Name      string
+	AccountID int64 // persons.id, 0 when unknown
+	Role      string
+	Via       string // mcp|cli|web|distiller|migration
 }
 
 func (a RelationActor) valid() error {
@@ -128,9 +139,9 @@ type relQuerier interface {
 	Exec(string, ...any) (sql.Result, error)
 }
 
-func insertRelationEvent(q relQuerier, relationID, groupID int64, action string, a RelationActor, detail string) error {
-	_, err := q.Exec(`INSERT INTO knowledge_relation_events(relation_id,group_id,action,actor,actor_role,via,detail,created_at) VALUES(?,?,?,?,?,?,?,?)`,
-		nullInt(relationID), nullInt(groupID), action, a.Name, a.Role, a.Via, detail, now())
+func insertRelationEvent(q relQuerier, project string, relationID, groupID int64, action string, a RelationActor, detail string) error {
+	_, err := q.Exec(`INSERT INTO knowledge_relation_events(project,relation_id,group_id,action,actor,actor_account_id,actor_role,via,detail,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)`,
+		project, nullInt(relationID), nullInt(groupID), action, a.Name, a.AccountID, a.Role, a.Via, detail, now())
 	return err
 }
 
@@ -208,19 +219,21 @@ func addRelationTx(tx *sql.Tx, in RelationInput, actor RelationActor) (Knowledge
 	if project != toProject {
 		return KnowledgeRelation{}, ErrRelationProject
 	}
-	if in.Kind == RelSupersedes && (fromStatus == "archived" || fromStatus == "deprecated") {
-		return KnowledgeRelation{}, fmt.Errorf("%w: a %s entry cannot supersede another", ErrRelationInvalid, fromStatus)
+	if in.Kind == RelSupersedes {
+		if err := checkParentAlive(fromStatus); err != nil {
+			return KnowledgeRelation{}, err
+		}
 	}
 	if err := checkRelationFree(tx, in); err != nil {
 		return KnowledgeRelation{}, err
 	}
 	ts := now()
-	decidedBy, decidedAt := "", ""
+	decidedBy, decidedAt, decidedAcct := "", "", int64(0)
 	if in.State == RelActive {
-		decidedBy, decidedAt = actor.Name, ts
+		decidedBy, decidedAt, decidedAcct = actor.Name, ts, actor.AccountID
 	}
-	res, err := tx.Exec(`INSERT INTO knowledge_relations(project,from_id,to_id,kind,state,origin,reason,created_by,created_at,decided_by,decided_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
-		project, in.FromID, in.ToID, in.Kind, in.State, in.Origin, in.Reason, actor.Name, ts, decidedBy, decidedAt)
+	res, err := tx.Exec(`INSERT INTO knowledge_relations(project,from_id,to_id,kind,state,origin,reason,created_by,created_by_account,created_at,decided_by,decided_by_account,decided_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		project, in.FromID, in.ToID, in.Kind, in.State, in.Origin, in.Reason, actor.Name, actor.AccountID, ts, decidedBy, decidedAcct, decidedAt)
 	if err != nil {
 		return KnowledgeRelation{}, err
 	}
@@ -232,7 +245,7 @@ func addRelationTx(tx *sql.Tx, in RelationInput, actor RelationActor) (Knowledge
 	if in.State == RelProposed {
 		action = "proposed"
 	}
-	if err := insertRelationEvent(tx, id, 0, action, actor, in.Reason); err != nil {
+	if err := insertRelationEvent(tx, project, id, 0, action, actor, in.Reason); err != nil {
 		return KnowledgeRelation{}, err
 	}
 	if in.State == RelActive && in.Kind == RelSibling {
@@ -241,6 +254,14 @@ func addRelationTx(tx *sql.Tx, in RelationInput, actor RelationActor) (Knowledge
 		}
 	}
 	return relationByID(tx, id)
+}
+
+// checkParentAlive: no archived or deprecated entry may supersede another.
+func checkParentAlive(status string) error {
+	if status == "archived" || status == "deprecated" {
+		return fmt.Errorf("%w: a %s entry cannot supersede another", ErrRelationInvalid, status)
+	}
+	return nil
 }
 
 func relationEnd(q relQuerier, id int64) (project, status string, err error) {
@@ -276,10 +297,14 @@ func checkRelationFree(q relQuerier, in RelationInput) error {
 	if in.Kind != RelSupersedes {
 		return nil
 	}
-	// The new edge is from -> to. It closes a cycle if from is reachable
-	// from to through live supersedes edges.
-	seen := map[int64]bool{in.ToID: true}
-	queue := []int64{in.ToID}
+	return supersedesCycle(q, in.FromID, in.ToID)
+}
+
+// supersedesCycle reports ErrRelationCycle when a new edge from -> to would
+// close a cycle, i.e. from is reachable from to through live supersedes edges.
+func supersedesCycle(q relQuerier, from, to int64) error {
+	seen := map[int64]bool{to: true}
+	queue := []int64{to}
 	for len(queue) > 0 {
 		cur := queue[0]
 		queue = queue[1:]
@@ -302,7 +327,7 @@ func checkRelationFree(q relQuerier, in RelationInput) error {
 		}
 		rows.Close()
 		for _, id := range next {
-			if id == in.FromID {
+			if id == from {
 				return ErrRelationCycle
 			}
 			if !seen[id] {
@@ -314,11 +339,11 @@ func checkRelationFree(q relQuerier, in RelationInput) error {
 	return nil
 }
 
-const relationCols = `id,project,from_id,to_id,kind,state,origin,COALESCE(group_id,0),reason,created_by,created_at,decided_by,decided_at`
+const relationCols = `id,project,from_id,to_id,kind,state,origin,COALESCE(group_id,0),reason,created_by,created_by_account,created_at,decided_by,decided_by_account,decided_at`
 
 func scanRelation(sc interface{ Scan(...any) error }) (KnowledgeRelation, error) {
 	var r KnowledgeRelation
-	err := sc.Scan(&r.ID, &r.Project, &r.FromID, &r.ToID, &r.Kind, &r.State, &r.Origin, &r.GroupID, &r.Reason, &r.CreatedBy, &r.CreatedAt, &r.DecidedBy, &r.DecidedAt)
+	err := sc.Scan(&r.ID, &r.Project, &r.FromID, &r.ToID, &r.Kind, &r.State, &r.Origin, &r.GroupID, &r.Reason, &r.CreatedBy, &r.CreatedByAccount, &r.CreatedAt, &r.DecidedBy, &r.DecidedByAccount, &r.DecidedAt)
 	return r, err
 }
 
@@ -357,6 +382,15 @@ func (s *Store) DecideRelation(id int64, approve bool, actor RelationActor, reas
 	state, action := RelRejected, "rejected"
 	if approve {
 		state, action = RelActive, "activated"
+		if rel.Kind == RelSupersedes {
+			var st string
+			if err := tx.QueryRow(`SELECT status FROM knowledge WHERE id=?`, rel.FromID).Scan(&st); err != nil {
+				return KnowledgeRelation{}, err
+			}
+			if err := checkParentAlive(st); err != nil {
+				return KnowledgeRelation{}, err
+			}
+		}
 		// Free the live slot while re-checking against everything else.
 		if _, err := tx.Exec(`UPDATE knowledge_relations SET state='rejected' WHERE id=?`, id); err != nil {
 			return KnowledgeRelation{}, err
@@ -365,10 +399,10 @@ func (s *Store) DecideRelation(id int64, approve bool, actor RelationActor, reas
 			return KnowledgeRelation{}, err
 		}
 	}
-	if _, err := tx.Exec(`UPDATE knowledge_relations SET state=?,decided_by=?,decided_at=? WHERE id=?`, state, actor.Name, ts, id); err != nil {
+	if _, err := tx.Exec(`UPDATE knowledge_relations SET state=?,decided_by=?,decided_by_account=?,decided_at=? WHERE id=?`, state, actor.Name, actor.AccountID, ts, id); err != nil {
 		return KnowledgeRelation{}, err
 	}
-	if err := insertRelationEvent(tx, id, 0, action, actor, reason); err != nil {
+	if err := insertRelationEvent(tx, rel.Project, id, 0, action, actor, reason); err != nil {
 		return KnowledgeRelation{}, err
 	}
 	if approve && rel.Kind == RelSibling {
@@ -406,10 +440,10 @@ func (s *Store) RevokeRelation(id int64, actor RelationActor, reason string) (Kn
 	if rel.State != RelActive && rel.State != RelProposed {
 		return KnowledgeRelation{}, ErrRelationState
 	}
-	if _, err := tx.Exec(`UPDATE knowledge_relations SET state='revoked',decided_by=?,decided_at=? WHERE id=?`, actor.Name, now(), id); err != nil {
+	if _, err := tx.Exec(`UPDATE knowledge_relations SET state='revoked',decided_by=?,decided_by_account=?,decided_at=? WHERE id=?`, actor.Name, actor.AccountID, now(), id); err != nil {
 		return KnowledgeRelation{}, err
 	}
-	if err := insertRelationEvent(tx, id, 0, "revoked", actor, reason); err != nil {
+	if err := insertRelationEvent(tx, rel.Project, id, 0, "revoked", actor, reason); err != nil {
 		return KnowledgeRelation{}, err
 	}
 	if rel.Kind == RelSibling && rel.State == RelActive && rel.GroupID != 0 {
@@ -417,7 +451,7 @@ func (s *Store) RevokeRelation(id int64, actor RelationActor, reason string) (Kn
 		if _, err := tx.Exec(`UPDATE knowledge_relations SET group_id=NULL WHERE id=?`, id); err != nil {
 			return KnowledgeRelation{}, err
 		}
-		if err := splitGroupTx(tx, rel.GroupID, actor); err != nil {
+		if err := splitGroupTx(tx, rel.GroupID, rel.ID, actor); err != nil {
 			return KnowledgeRelation{}, err
 		}
 	}
@@ -432,11 +466,11 @@ func (s *Store) RevokeRelation(id int64, actor RelationActor, reason string) (Kn
 // group: new group if neither has one, join if one has, merge if both have
 // different ones. The edge itself records the group.
 func joinGroupTx(tx *sql.Tx, relID int64, project string, a, b int64, actor RelationActor) error {
-	ga, err := entryGroup(tx, a)
+	ga, err := entryGroup(tx, a, relID)
 	if err != nil {
 		return err
 	}
-	gb, err := entryGroup(tx, b)
+	gb, err := entryGroup(tx, b, relID)
 	if err != nil {
 		return err
 	}
@@ -460,7 +494,7 @@ func joinGroupTx(tx *sql.Tx, relID int64, project string, a, b int64, actor Rela
 			gid = gb
 		}
 		loser := ga + gb - gid
-		if err := mergeGroupsTx(tx, gid, loser, actor); err != nil {
+		if err := mergeGroupsTx(tx, project, gid, loser, actor); err != nil {
 			return err
 		}
 	}
@@ -468,16 +502,23 @@ func joinGroupTx(tx *sql.Tx, relID int64, project string, a, b int64, actor Rela
 	return err
 }
 
-func entryGroup(q relQuerier, knowledgeID int64) (int64, error) {
+// entryGroup returns the group of an entry through its active sibling edges,
+// ignoring the edge `except` (the one being activated, which has no group
+// yet). Written as a UNION so each side uses its own index.
+func entryGroup(q relQuerier, knowledgeID, except int64) (int64, error) {
 	var g sql.NullInt64
-	err := q.QueryRow(`SELECT group_id FROM knowledge_relations WHERE kind='sibling' AND state='active' AND (from_id=? OR to_id=?) LIMIT 1`, knowledgeID, knowledgeID).Scan(&g)
+	err := q.QueryRow(`SELECT group_id FROM (
+			SELECT group_id FROM knowledge_relations WHERE from_id=? AND kind='sibling' AND state='active' AND id<>? AND group_id IS NOT NULL
+			UNION
+			SELECT group_id FROM knowledge_relations WHERE to_id=? AND kind='sibling' AND state='active' AND id<>? AND group_id IS NOT NULL
+		) LIMIT 1`, knowledgeID, except, knowledgeID, except).Scan(&g)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, nil
 	}
 	return g.Int64, err
 }
 
-func mergeGroupsTx(tx *sql.Tx, keep, loser int64, actor RelationActor) error {
+func mergeGroupsTx(tx *sql.Tx, project string, keep, loser int64, actor RelationActor) error {
 	var kv, lv, klabel, llabel string
 	if err := tx.QueryRow(`SELECT volatility,label FROM knowledge_groups WHERE id=?`, keep).Scan(&kv, &klabel); err != nil {
 		return err
@@ -504,18 +545,22 @@ func mergeGroupsTx(tx *sql.Tx, keep, loser int64, actor RelationActor) error {
 	if _, err := tx.Exec(`UPDATE knowledge_groups SET label=? WHERE id=?`, label, keep); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`DELETE FROM knowledge_groups WHERE id=?`, loser); err != nil {
+	if _, err := tx.Exec(`UPDATE knowledge_groups SET state='merged',merged_into=? WHERE id=?`, keep, loser); err != nil {
 		return err
 	}
-	return insertRelationEvent(tx, 0, keep, "group_merged", actor,
-		fmt.Sprintf("merged #%d (%s) into #%d (%s), result %s", loser, lv, keep, kv, merged))
+	// Logged on both groups: the loser's history ends here and points on.
+	detail := fmt.Sprintf("merged #%d (%s) into #%d (%s), result %s", loser, lv, keep, kv, merged)
+	if err := insertRelationEvent(tx, project, 0, loser, "group_merged", actor, detail); err != nil {
+		return err
+	}
+	return insertRelationEvent(tx, project, 0, keep, "group_merged", actor, detail)
 }
 
 // splitGroupTx recomputes the connected components of a group's remaining
 // active sibling edges. The component holding the smallest entry id keeps the
 // group id; the others get new rows with the old volatility and label.
-func splitGroupTx(tx *sql.Tx, gid int64, actor RelationActor) error {
-	rows, err := tx.Query(`SELECT id,from_id,to_id FROM knowledge_relations WHERE group_id=? AND kind='sibling' AND state='active'`, gid)
+func splitGroupTx(tx *sql.Tx, gid, except int64, actor RelationActor) error {
+	rows, err := tx.Query(`SELECT id,from_id,to_id FROM knowledge_relations WHERE group_id=? AND kind='sibling' AND state='active' AND id<>?`, gid, except)
 	if err != nil {
 		return err
 	}
@@ -540,10 +585,11 @@ func splitGroupTx(tx *sql.Tx, gid int64, actor RelationActor) error {
 		return err
 	}
 	if len(edges) == 0 {
-		if _, err := tx.Exec(`DELETE FROM knowledge_groups WHERE id=?`, gid); err != nil {
+		// The group row stays, volatility included, so its history is readable.
+		if _, err := tx.Exec(`UPDATE knowledge_groups SET state='dissolved' WHERE id=?`, gid); err != nil {
 			return err
 		}
-		return insertRelationEvent(tx, 0, gid, "group_split", actor, "no members left, group dissolved")
+		return insertRelationEvent(tx, project, 0, gid, "group_split", actor, "no members left, group dissolved, volatility "+vol)
 	}
 	parent := map[int64]int64{}
 	var find func(int64) int64
@@ -598,7 +644,7 @@ func splitGroupTx(tx *sql.Tx, gid int64, actor RelationActor) error {
 		}
 		newIDs = append(newIDs, fmt.Sprintf("#%d", ng))
 	}
-	return insertRelationEvent(tx, 0, gid, "group_split", actor,
+	return insertRelationEvent(tx, project, 0, gid, "group_split", actor,
 		fmt.Sprintf("kept #%d, new groups %s, volatility %s", gid, strings.Join(newIDs, ", "), vol))
 }
 
@@ -621,17 +667,20 @@ func (s *Store) SetGroupVolatility(groupID int64, value string, actor RelationAc
 		return KnowledgeGroup{}, err
 	}
 	defer tx.Rollback()
-	var old string
-	if err := tx.QueryRow(`SELECT volatility FROM knowledge_groups WHERE id=?`, groupID).Scan(&old); err != nil {
+	var old, gstate, project string
+	if err := tx.QueryRow(`SELECT volatility,state,project FROM knowledge_groups WHERE id=?`, groupID).Scan(&old, &gstate, &project); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return KnowledgeGroup{}, ErrRelationNotFound
 		}
 		return KnowledgeGroup{}, err
 	}
+	if gstate != "active" {
+		return KnowledgeGroup{}, ErrRelationState
+	}
 	if _, err := tx.Exec(`UPDATE knowledge_groups SET volatility=?,volatility_by=?,volatility_at=? WHERE id=?`, value, actor.Name, now(), groupID); err != nil {
 		return KnowledgeGroup{}, err
 	}
-	if err := insertRelationEvent(tx, 0, groupID, "volatility_set", actor, old+" -> "+value); err != nil {
+	if err := insertRelationEvent(tx, project, 0, groupID, "volatility_set", actor, old+" -> "+value); err != nil {
 		return KnowledgeGroup{}, err
 	}
 	g, err := groupByID(tx, groupID)
@@ -643,8 +692,8 @@ func (s *Store) SetGroupVolatility(groupID int64, value string, actor RelationAc
 
 func groupByID(q relQuerier, id int64) (KnowledgeGroup, error) {
 	var g KnowledgeGroup
-	err := q.QueryRow(`SELECT id,project,label,volatility,volatility_by,volatility_at,created_at FROM knowledge_groups WHERE id=?`, id).
-		Scan(&g.ID, &g.Project, &g.Label, &g.Volatility, &g.VolatilityBy, &g.VolatilityAt, &g.CreatedAt)
+	err := q.QueryRow(`SELECT id,project,label,volatility,volatility_by,volatility_at,state,COALESCE(merged_into,0),created_at FROM knowledge_groups WHERE id=?`, id).
+		Scan(&g.ID, &g.Project, &g.Label, &g.Volatility, &g.VolatilityBy, &g.VolatilityAt, &g.State, &g.MergedInto, &g.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return g, ErrRelationNotFound
 	}
@@ -681,7 +730,7 @@ func (s *Store) GroupOf(knowledgeID int64) (KnowledgeGroup, bool, error) {
 	if s.reader != nil {
 		return s.reader.GroupOf(knowledgeID)
 	}
-	gid, err := entryGroup(s.db, knowledgeID)
+	gid, err := entryGroup(s.db, knowledgeID, 0)
 	if err != nil || gid == 0 {
 		return KnowledgeGroup{}, false, err
 	}
@@ -711,7 +760,8 @@ func (s *Store) RelationsOf(knowledgeID int64) ([]KnowledgeRelation, error) {
 	if s.reader != nil {
 		return s.reader.RelationsOf(knowledgeID)
 	}
-	rows, err := s.db.Query(`SELECT `+relationCols+` FROM knowledge_relations WHERE from_id=? OR to_id=? ORDER BY id`, knowledgeID, knowledgeID)
+	rows, err := s.db.Query(`SELECT `+relationCols+` FROM knowledge_relations WHERE from_id=?
+		UNION SELECT `+relationCols+` FROM knowledge_relations WHERE to_id=? ORDER BY id`, knowledgeID, knowledgeID)
 	if err != nil {
 		return nil, err
 	}
@@ -728,14 +778,20 @@ func (s *Store) RelationsOf(knowledgeID int64) ([]KnowledgeRelation, error) {
 }
 
 // RelationEvents lists the events of one relation, or of a group when
-// relationID is 0, oldest first.
+// relationID is 0, oldest first. A group's history includes the groups that
+// were merged into it, transitively.
 func (s *Store) RelationEvents(relationID, groupID int64) ([]KnowledgeRelationEvent, error) {
 	if s.reader != nil {
 		return s.reader.RelationEvents(relationID, groupID)
 	}
-	rows, err := s.db.Query(`SELECT id,COALESCE(relation_id,0),COALESCE(group_id,0),action,actor,actor_role,via,detail,created_at
-		FROM knowledge_relation_events WHERE (?<>0 AND relation_id=?) OR (?<>0 AND group_id=?) ORDER BY id`,
-		relationID, relationID, groupID, groupID)
+	rows, err := s.db.Query(`WITH RECURSIVE g(id) AS (
+			SELECT ? WHERE ?<>0
+			UNION SELECT k.id FROM knowledge_groups k JOIN g ON k.merged_into=g.id
+		)
+		SELECT id,project,COALESCE(relation_id,0),COALESCE(group_id,0),action,actor,actor_account_id,actor_role,via,detail,created_at
+		FROM knowledge_relation_events
+		WHERE (?<>0 AND relation_id=?) OR group_id IN (SELECT id FROM g) ORDER BY id`,
+		groupID, groupID, relationID, relationID)
 	if err != nil {
 		return nil, err
 	}
@@ -743,7 +799,7 @@ func (s *Store) RelationEvents(relationID, groupID int64) ([]KnowledgeRelationEv
 	var out []KnowledgeRelationEvent
 	for rows.Next() {
 		var e KnowledgeRelationEvent
-		if err := rows.Scan(&e.ID, &e.RelationID, &e.GroupID, &e.Action, &e.Actor, &e.ActorRole, &e.Via, &e.Detail, &e.CreatedAt); err != nil {
+		if err := rows.Scan(&e.ID, &e.Project, &e.RelationID, &e.GroupID, &e.Action, &e.Actor, &e.ActorAccountID, &e.ActorRole, &e.Via, &e.Detail, &e.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, e)
@@ -751,73 +807,99 @@ func (s *Store) RelationEvents(relationID, groupID int64) ([]KnowledgeRelationEv
 	return out, rows.Err()
 }
 
+// BackfillReport counts what the backfill did and what it could not use.
+type BackfillReport struct {
+	Created                 int
+	SkippedUnusable         int // parent missing, self-referencing or in another project
+	SkippedCycle            int // the edge would close a supersession cycle
+	SupersededWithoutParent int // status=superseded but superseded_by=0 (left as they are)
+}
+
+// Unclean reports whether anything was skipped or inconsistent.
+func (r BackfillReport) Unclean() bool {
+	return r.SkippedUnusable+r.SkippedCycle+r.SupersededWithoutParent > 0
+}
+
 // BackfillKnowledgeRelations turns every legacy superseded_by value into an
 // active supersedes edge (origin=migrated). It runs on every open, in one
 // transaction, and is idempotent: a pair that already has an edge in any
 // state is skipped, so a later revoke is not undone by the next start. It
 // does not touch knowledge.status or superseded_by, which delivery still
-// reads, so nothing about behaviour changes. Rows whose parent is missing,
-// self-referencing or in another project are skipped and counted.
-func BackfillKnowledgeRelations(db *sql.DB) (skipped int, err error) {
+// reads, so nothing about behaviour changes. Edges that would close a cycle
+// (legacy data can hold A<->B) are skipped, so the later delivery cutover
+// cannot hide every member of a cycle.
+func BackfillKnowledgeRelations(db *sql.DB) (BackfillReport, error) {
+	var rep BackfillReport
 	has, err := knowledgeHasColumn(db, "superseded_by")
 	if err != nil || !has {
-		return 0, err
+		return rep, err
 	}
 	tx, err := db.Begin()
 	if err != nil {
-		return 0, err
+		return rep, err
 	}
 	defer tx.Rollback()
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM knowledge WHERE status='superseded' AND superseded_by=0`).Scan(&rep.SupersededWithoutParent); err != nil {
+		return rep, err
+	}
 	rows, err := tx.Query(`SELECT k.id, k.superseded_by, k.project, p.project IS NULL OR p.project<>k.project,
-			COALESCE(NULLIF(k.last_modified_by,''),NULLIF(k.person,''),'migration'), k.updated_at
+			COALESCE(NULLIF(k.last_modified_by,''),NULLIF(k.person,''),'migration'),
+			COALESCE((SELECT id FROM persons WHERE name=COALESCE(NULLIF(k.last_modified_by,''),NULLIF(k.person,''))),0), k.updated_at
 		FROM knowledge k LEFT JOIN knowledge p ON p.id=k.superseded_by
 		WHERE k.superseded_by>0
 		  AND NOT EXISTS(SELECT 1 FROM knowledge_relations r WHERE r.kind='supersedes' AND r.from_id=k.superseded_by AND r.to_id=k.id)
 		ORDER BY k.id`)
 	if err != nil {
-		return 0, err
+		return rep, err
 	}
 	type legacy struct {
-		id, parent int64
-		project    string
-		bad        bool
-		by, at     string
+		id, parent, acct int64
+		project          string
+		bad              bool
+		by, at           string
 	}
 	var todo []legacy
 	for rows.Next() {
 		var l legacy
-		if err := rows.Scan(&l.id, &l.parent, &l.project, &l.bad, &l.by, &l.at); err != nil {
+		if err := rows.Scan(&l.id, &l.parent, &l.project, &l.bad, &l.by, &l.acct, &l.at); err != nil {
 			rows.Close()
-			return 0, err
+			return rep, err
 		}
 		todo = append(todo, l)
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
-		return 0, err
+		return rep, err
 	}
 	rows.Close()
 	actor := RelationActor{Name: "migration", Via: "migration"}
 	for _, l := range todo {
 		if l.bad || l.parent == l.id {
-			skipped++
+			rep.SkippedUnusable++
 			continue
 		}
-		ts := l.at
-		res, err := tx.Exec(`INSERT INTO knowledge_relations(project,from_id,to_id,kind,state,origin,reason,created_by,created_at,decided_by,decided_at) VALUES(?,?,?,'supersedes','active','migrated','migrated from superseded_by',?,?,'migration',?)`,
-			l.project, l.parent, l.id, l.by, ts, now())
+		if err := supersedesCycle(tx, l.parent, l.id); err != nil {
+			if errors.Is(err, ErrRelationCycle) {
+				rep.SkippedCycle++
+				continue
+			}
+			return rep, err
+		}
+		res, err := tx.Exec(`INSERT INTO knowledge_relations(project,from_id,to_id,kind,state,origin,reason,created_by,created_by_account,created_at,decided_by,decided_at) VALUES(?,?,?,'supersedes','active','migrated','migrated from superseded_by',?,?,?,'migration',?)`,
+			l.project, l.parent, l.id, l.by, l.acct, l.at, now())
 		if err != nil {
-			return 0, err
+			return rep, err
 		}
 		rid, err := res.LastInsertId()
 		if err != nil {
-			return 0, err
+			return rep, err
 		}
-		if err := insertRelationEvent(tx, rid, 0, "activated", actor, "backfill from superseded_by"); err != nil {
-			return 0, err
+		if err := insertRelationEvent(tx, l.project, rid, 0, "activated", actor, "backfill from superseded_by"); err != nil {
+			return rep, err
 		}
+		rep.Created++
 	}
-	return skipped, tx.Commit()
+	return rep, tx.Commit()
 }
 
 func knowledgeHasColumn(db *sql.DB, name string) (bool, error) {
