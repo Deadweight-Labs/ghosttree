@@ -936,3 +936,34 @@ func TestTouchedTellsSameCheckoutFromOtherWorktreeAndNamesMaskedRows(t *testing.
 		t.Fatalf("an unknown own checkout must read as unknown: %s", text(t, res))
 	}
 }
+
+func TestWaitCycleLinesNameTheCycleOnce(t *testing.T) {
+	cycle := &store.WaitCycle{Members: []string{"a", "b"}, Since: "2026-10-02T10:00:00Z", ReviewAt: "2026-10-02T10:30:00Z", Overdue: true}
+	peers := []store.CoordAgent{
+		{ExternalID: "a", DisplayName: "Anna", Presence: &store.Presence{Cycle: cycle}},
+		{ExternalID: "b", DisplayName: "Bert", Presence: &store.Presence{Cycle: cycle}},
+		{ExternalID: "c", DisplayName: "Cleo"},
+	}
+	lines := waitCycleLines(peers)
+	if len(lines) != 1 || !strings.Contains(lines[0], "gegenseitiges Warten: Anna ↔ Bert (seit 2026-10-02T10:00:00Z)") ||
+		!strings.Contains(lines[0], "überfällig") || !strings.Contains(lines[0], "nothing was resolved automatically") {
+		t.Fatalf("lines = %q", lines)
+	}
+	if got := waitCycleLines(peers[2:]); len(got) != 0 {
+		t.Fatalf("no cycle, no line: %q", got)
+	}
+}
+
+func TestSystemMessagesAreMarkedBySystemAuthorKindNotByID(t *testing.T) {
+	sys := senderLabel(store.CoordMessage{SenderExternalID: "system:wait-cycle", AuthorKind: store.AuthorSystem})
+	if sys != "system:wait-cycle (system)" {
+		t.Fatalf("system header = %q", sys)
+	}
+	// The mark follows author_kind: an agent with a similar id is not marked.
+	if got := senderLabel(store.CoordMessage{SenderExternalID: "claude:system", AuthorKind: store.AuthorAgent}); strings.Contains(got, "(system)") {
+		t.Fatalf("agent header = %q", got)
+	}
+	if got := senderLabel(store.CoordMessage{SenderExternalID: "system:x", AuthorKind: store.AuthorAgent}); strings.Contains(got, "(system)") {
+		t.Fatalf("an agent id must not earn the system mark: %q", got)
+	}
+}

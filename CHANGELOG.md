@@ -21,7 +21,29 @@ Versioning, with pre-1.0 compatibility rules described in
   purpose (false holds are worse); the send limit stays the backstop. Known
   limitation, to resolve before enforce: pure measurement exchanges ("p50
   12.4ms" then "11.9ms") reach hold level, because numbers are not content.
-
+- Mutual waiting is reported instead of managed silently. Open questions,
+  approvals and blockers between agents form a wait graph per room (a handoff
+  is not a wait; threads restricted to some participants are left out). A cycle
+  (A waits on B and B on A, or A, B, C in a ring) shows up in `coord_peers` and
+  the web room as "gegenseitiges Warten: A ↔ B (seit ...)", in the peers API as
+  `presence.cycle` on each member next to `waiting_peer`, and once per cycle as
+  a room message from `system:wait-cycle` that mentions the members and goes
+  through the normal wake rule. The message names nobody in its text, so a guest
+  who can read the room does not learn who waits. A cycle that dissolves and
+  forms again notifies again; a standing cycle never repeats. Every wait has a
+  review date (the item's own expiry, otherwise 30 minutes after it was asked,
+  marked as derived) and is flagged overdue after it; nothing is closed or
+  answered automatically. An item with its own expiry never turns overdue: once
+  expired it is no longer a current wait and drops out of the graph. The note is
+  sent at most once per 10 minutes for the same set of agents (a held-back note
+  is sent at the next change in the room once the window has passed and the cycle
+  is still active; other cycles are not affected), a cycle that only shrinks does not notify
+  again, and one that gains a member does. The prefix `system:` is now reserved:
+  agents cannot register or send under it, and system notes show as `(system)`
+  in message headers. Agents that already carry the prefix in an old database
+  are kept but can no longer send.
+  Threads without a home room deliberately do not take part in wait cycles,
+  consistent with presence, which also reads waits per room only.
 - Presence is now two separate fields with an origin. `coord_peers`, the peers
   API (`presence` on each peer) and the participant list in the web show
   reachability (`connected`, `unknown`, `ended`) and work state (`working`,

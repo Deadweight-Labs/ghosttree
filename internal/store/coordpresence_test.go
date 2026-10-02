@@ -302,7 +302,7 @@ func TestPresenceQueryCountDoesNotGrowWithThePeers(t *testing.T) {
 
 func TestPresenceWaitQueryUsesIndexes(t *testing.T) {
 	st := controlFixture(t)
-	args := []any{"a", "b", AttentionOpen, AttentionQuestion, AttentionApproval, AttentionBlocker, DestinationRoom, "r", DestinationDiscussion, "r"}
+	args := []any{"r", AttentionQuestion, AttentionApproval, AttentionBlocker, "a", "b"}
 	rows, err := st.db.Query(`EXPLAIN QUERY PLAN `+presenceWaitsSQL(2), args...)
 	if err != nil {
 		t.Fatal(err)
@@ -314,8 +314,16 @@ func TestPresenceWaitQueryUsesIndexes(t *testing.T) {
 		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
 			t.Fatal(err)
 		}
-		if strings.HasPrefix(detail, "SCAN coord_messages") || strings.HasPrefix(detail, "SCAN coord_attention") || strings.HasPrefix(detail, "SCAN m") || strings.HasPrefix(detail, "SCAN a") {
+		// The walk starts at the open attention rows (partial index) and looks
+		// the message up by id; a scan of anything else is a full scan.
+		if strings.HasPrefix(detail, "SCAN") {
 			t.Fatalf("full scan in the wait query: %s", detail)
+		}
+		if strings.Contains(detail, "SEARCH a") && !strings.Contains(detail, "coord_attention_open_room (room_key=?") {
+			t.Fatalf("open attention is not found by room: %s", detail)
+		}
+		if strings.Contains(detail, "SEARCH m") && !strings.Contains(detail, "PRIMARY KEY") && !strings.Contains(detail, "rowid") {
+			t.Fatalf("messages are not looked up by id: %s", detail)
 		}
 	}
 }

@@ -51,13 +51,21 @@ type CoordAgent struct {
 // maxExternalIDLen begrenzt Agenten-IDs.
 const maxExternalIDLen = 160
 
+// ReservedExternalID: der Präfix "system:" gehört dem Store (Systemmeldungen,
+// etwa über Wartekreise). Kein Client darf sich so anmelden oder so senden;
+// sonst könnte er sich als System ausgeben. Alt-Bestand, der so heißt, wird
+// nicht gelöscht, kann aber nicht mehr senden.
+func ReservedExternalID(id string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(id)), "system:")
+}
+
 // ValidExternalID sagt, ob eine Agenten-ID zulässig ist: Buchstaben, Ziffern und
 // : . _ - und /, höchstens 160 Zeichen. Das deckt claude:<host>:<uuid>,
 // codex:<...>, cli:<host> und Subagenten (<session>/<name>) ab. Die ID steht in Kopfzeilen von Texten, die
 // Agenten lesen, und darf deshalb keine Zeilenumbrüche, Klammern oder Leerraum
 // tragen.
 func ValidExternalID(id string) bool {
-	if id == "" || len(id) > maxExternalIDLen {
+	if id == "" || len(id) > maxExternalIDLen || ReservedExternalID(id) {
 		return false
 	}
 	for _, r := range id {
@@ -98,6 +106,9 @@ func (s *Store) RegisterCoordAgent(a CoordAgent) (int64, error) {
 	}
 	if !ValidAgentRole(a.Role) {
 		return 0, fmt.Errorf("%w: agent role must be lead, member or guest", ErrInvalidInput)
+	}
+	if ReservedExternalID(a.ExternalID) {
+		return 0, fmt.Errorf("%w: the system: prefix is reserved", ErrInvalidInput)
 	}
 	if a.SessionID != "" && !ValidExternalID(a.SessionID) {
 		return 0, fmt.Errorf("%w: session id has invalid characters", ErrInvalidInput)
@@ -267,8 +278,19 @@ func (s *Store) CoordPeers(roomKey, since string) ([]CoordAgent, error) {
 		agents[i] = presenceAgent{ExternalID: out[i].ExternalID, PrincipalID: principals[i], SessionID: sessions[i], LastPoll: polls[i]}
 	}
 	derived := presenceBatch(s.db, time.Now().UTC(), roomKey, agents)
+	// Wartekreise über alle Mitglieder des Raums, unabhängig vom since-Filter.
+	var cycleOf map[string]*WaitCycle
+	if cycles, err := roomWaitCycles(s.db, time.Now().UTC(), roomKey); err == nil && len(cycles) > 0 {
+		cycleOf = map[string]*WaitCycle{}
+		for i := range cycles {
+			for _, m := range cycles[i].Members {
+				cycleOf[m] = &cycles[i]
+			}
+		}
+	}
 	for i := range out {
 		p := derived[out[i].ExternalID]
+		p.Cycle = cycleOf[out[i].ExternalID]
 		out[i].Presence = &p
 	}
 	// Rollen gibt es nur im Projektraum, und sie werden hier live berechnet.

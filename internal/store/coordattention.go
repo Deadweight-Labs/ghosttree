@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -250,6 +251,11 @@ func (a CoordAccess) ResolveAttention(id int64, action string) error {
 	}
 	if _, err := tx.Exec(`UPDATE coord_attention SET state=?,resolved_at=? WHERE id=? AND state='open'`, next, now(), id); err != nil {
 		return err
+	}
+	if reason != AttentionHandoff {
+		if err := reconcileWaitCyclesSafeTx(tx, messageRoomKeyTx(tx, kind, destination), time.Now().UTC()); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }

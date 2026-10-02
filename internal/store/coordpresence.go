@@ -66,6 +66,9 @@ type PresenceField struct {
 type Presence struct {
 	Reachability PresenceField `json:"reachability"`
 	WorkState    PresenceField `json:"work_state"`
+	// Cycle: der Agent wartet im Kreis (A wartet auf B, B auf A, oder länger).
+	// Ergänzt waiting_peer, ersetzt es nicht.
+	Cycle *WaitCycle `json:"cycle,omitempty"`
 }
 
 // PresenceWait ist ein offener Eintrag, auf den der Agent wartet.
@@ -173,7 +176,11 @@ func (p Presence) Describe() string {
 		}
 		return f.Value + " (" + f.Origin + ", " + (time.Duration(f.AgeSeconds) * time.Second).String() + " ago)"
 	}
-	return "reachability " + one(p.Reachability) + ", work " + one(p.WorkState)
+	out := "reachability " + one(p.Reachability) + ", work " + one(p.WorkState)
+	if p.Cycle != nil {
+		out += ", in a wait cycle with " + strings.Join(p.Cycle.Members, ", ")
+	}
+	return out
 }
 
 func ensureCoordAgentColumn(db *sql.DB, name, ddl string) error {
@@ -352,7 +359,6 @@ func presenceBatch(db presenceDB, ref time.Time, roomKey string, agents []presen
 	for _, a := range agents {
 		inputs[a.ExternalID] = &PresenceInput{LastPollAt: a.LastPoll}
 	}
-	refText := ref.Format(time.RFC3339)
 	ids := idArgs(agents, func(a presenceAgent) string { return a.ExternalID })
 
 	// 1. Beobachtete Werkzeugaktivität (nur Projektraum, nur Agenten mit session_id).
@@ -441,53 +447,12 @@ func presenceBatch(db presenceDB, ref time.Time, roomKey string, agents []presen
 		}
 	}
 
-	// 3. Offene Wartepunkte, nur aus diesem Raum: eine Frage im privaten
-	// Gespräch wäre hier sonst für alle Mitglieder ablesbar.
-	wr, err := db.Query(presenceWaitsSQL(len(ids)),
-		append(append([]any{}, ids...), AttentionOpen, AttentionQuestion, AttentionApproval, AttentionBlocker,
-			DestinationRoom, roomKey, DestinationDiscussion, roomKey)...)
-	if err == nil {
-		type rec struct{ sender, recipient, reason, at string }
-		var recs []rec
-		recipients := map[string]bool{}
-		for wr.Next() {
-			var r rec
-			var exp string
-			if wr.Scan(&r.sender, &r.recipient, &r.reason, &r.at, &exp) == nil && !expiredAt(exp, refText) {
-				recs = append(recs, r)
-				if _, perr := parsePersonPrincipalID(r.recipient); perr != nil {
-					recipients[r.recipient] = true
-				}
-			}
-		}
-		wr.Close()
-		// 4. Welche Empfänger sind Agenten? Eine Abfrage für alle.
-		isAgent := map[string]bool{}
-		if len(recipients) > 0 {
-			list := make([]any, 0, len(recipients))
-			for r := range recipients {
-				list = append(list, r)
-			}
-			if ar, err := db.Query(`SELECT external_id FROM coord_agents WHERE external_id IN (`+placeholders(len(list))+`)`, list...); err == nil {
-				for ar.Next() {
-					var id string
-					if ar.Scan(&id) == nil {
-						isAgent[id] = true
-					}
-				}
-				ar.Close()
-			}
-		}
-		for _, r := range recs {
-			w := PresenceWait{Reason: r.reason, At: r.at}
-			if _, perr := parsePersonPrincipalID(r.recipient); perr == nil {
-				w.Kind = "user"
-			} else if isAgent[r.recipient] {
-				w.Kind = "peer"
-			}
-			if in := inputs[r.sender]; in != nil {
-				in.Waits = append(in.Waits, w)
-			}
+	// 3. Offene Wartepunkte, nur aus diesem Raum (loadWaitRows ist die eine
+	// Wartequelle, auch für die Zykluserkennung in coordwait.go).
+	waitRows, _ := loadWaitRows(db, ref, roomKey, ids)
+	for _, r := range waitRows {
+		if in := inputs[r.Sender]; in != nil {
+			in.Waits = append(in.Waits, PresenceWait{Reason: r.Reason, At: r.At, Kind: r.Kind})
 		}
 	}
 
@@ -497,16 +462,20 @@ func presenceBatch(db presenceDB, ref time.Time, roomKey string, agents []presen
 	return out
 }
 
-// presenceWaitsSQL ist die Wartepunkt-Abfrage für n Absender. Eigene Funktion,
-// damit ein Test dieselbe Abfrage mit EXPLAIN prüft, die sie auch ausführt.
+// presenceWaitsSQL ist die Wartepunkt-Abfrage für n Absender. Sie geht von den
+// OFFENEN Attention-Einträgen DIESES Raums aus (Teilindex
+// coord_attention_open_room auf room_key) und schlägt die Nachricht über ihre
+// Id nach: die Arbeit hängt an der Zahl offener Wartepunkte im Raum, weder an
+// der Länge des Verlaufs noch an anderen Projekten. Argumente: Raumschlüssel,
+// drei Gründe, n Absender. Eigene Funktion, damit ein Test dieselbe Abfrage mit
+// EXPLAIN prüft, die sie auch ausführt.
 func presenceWaitsSQL(n int) string {
 	return `SELECT m.sender_external_id,a.recipient_principal_id,a.reason,a.created_at,COALESCE(m.expires_at,'')
-		FROM coord_messages m JOIN coord_attention a ON a.message_id=m.id
-		WHERE m.sender_external_id IN (` + placeholders(n) + `) AND a.state=? AND a.reason IN (?,?,?)
+		FROM coord_attention a CROSS JOIN coord_messages m ON m.id=a.message_id
+		WHERE a.state='open' AND a.room_key=? AND a.reason IN (?,?,?) AND m.sender_external_id IN (` + placeholders(n) + `)
 		  AND a.recipient_principal_id<>m.sender_external_id
-		  AND ((m.destination_kind=? AND m.destination_id=?)
-		    OR (m.destination_kind=? AND m.destination_id IN
-		         (SELECT CAST(thread_id AS TEXT) FROM thread_homes WHERE room_key=?)))
+		  AND (m.destination_kind='room'
+		    OR CAST(m.destination_id AS INTEGER) NOT IN (SELECT thread_id FROM thread_visibility))
 		ORDER BY a.created_at DESC, a.id DESC LIMIT 2000`
 }
 

@@ -95,9 +95,12 @@ type coordRoomView struct {
 }
 
 type coordRoomDetailView struct {
-	Room                   coordRoomView
-	Messages               []coordMessageView
-	Participants           []coordParticipantView
+	Room         coordRoomView
+	Messages     []coordMessageView
+	Participants []coordParticipantView
+	// WaitCycles: je Kreis gegenseitigen Wartens eine Zeile, aus der Presence
+	// der Peers (Peers ist ACL-geprüft, ein Gast bekommt keine Liste).
+	WaitCycles             []string
 	Standing               []coordStandingView
 	HighWater              int64
 	FirstSequence          int64
@@ -833,4 +836,33 @@ func applyMessageRoles(st *store.Store, roomKey string, views []coordMessageView
 			views[i].SenderRole = roles[i]
 		}
 	}
+}
+
+// buildCoordWaitCycles beschreibt die Wartekreise der Peers, je Kreis einmal.
+// Gemeldet, nicht aufgelöst: die Zeile sagt, wer auf wen wartet und bis wann
+// die Review fällig ist.
+func buildCoordWaitCycles(peers []store.CoordAgent, labels map[string]string) []string {
+	name := func(id string) string {
+		for _, p := range peers {
+			if p.ExternalID == id {
+				if l := strings.TrimSpace(labels[id]); l != "" {
+					return l
+				}
+				return strings.TrimSpace(p.DisplayName)
+			}
+		}
+		return ""
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, p := range peers {
+		if p.Presence == nil || p.Presence.Cycle == nil || seen[p.Presence.Cycle.Key()] {
+			continue
+		}
+		seen[p.Presence.Cycle.Key()] = true
+		c := *p.Presence.Cycle
+		c.Since, c.ReviewAt = coordDisplayTimestamp(c.Since), coordDisplayTimestamp(c.ReviewAt)
+		out = append(out, c.Describe(name))
+	}
+	return out
 }

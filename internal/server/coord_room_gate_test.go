@@ -159,3 +159,14 @@ func TestProjectProbesAreIndistinguishable(t *testing.T) {
 		t.Errorf("member with role: %d %s", code, body)
 	}
 }
+
+func TestSystemPrefixCannotBeRegisteredOverTheAPI(t *testing.T) {
+	f := roomGateFixture(t, true)
+	room := store.RoomKeyForProject(accProject)
+	for _, id := range []string{"system:wait-cycle", "System:x"} {
+		code, body := f.call(t, "mia", "POST", "/api/coord/agents", store.CoordAgent{ExternalID: id, Provider: "claude", RoomKey: room})
+		if code != 400 || !strings.Contains(body, "reserved_external_id") {
+			t.Errorf("registering %q: %d %s", id, code, body)
+		}
+	}
+}
