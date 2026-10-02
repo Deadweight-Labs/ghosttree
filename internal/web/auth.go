@@ -257,7 +257,7 @@ func (a *app) finishLogin(w http.ResponseWriter, r *http.Request, account store.
 // ist die Freigabe des Geräts.
 func (a *app) finishJoinLogin(w http.ResponseWriter, r *http.Request, account store.Account, inviteCode string) {
 	next := "/ui/requests"
-	if err := a.store.Join().Bind(inviteCode, joinCookieValue(r), account.ID); err == nil {
+	if err := a.store.Join().Bind(inviteCode, a.joinCookieValue(r), account.ID); err == nil {
 		next = "/join/pair"
 	}
 	http.SetCookie(w, a.joinCookieFor(r, "", -1))

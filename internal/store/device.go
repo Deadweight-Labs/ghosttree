@@ -173,17 +173,20 @@ func (d *DeviceFlows) remove(f *deviceFlow) {
 // weniger als der Start selbst; ein einzelner Absender kann so fremde Abläufe
 // nicht verdrängen.
 func (d *DeviceFlows) Start(client, machine, remote string) (DeviceStart, error) {
-	return d.start(client, machine, remote, false)
+	return d.start(client, machine, remote, false, DeviceFlowTTL)
 }
 
 // StartJoin legt einen Ablauf für die Join-Paarung an. Er hat keinen User-Code,
 // ist also über /ui/device weder zu finden noch zu entscheiden; die Join-Sitzung
 // spricht ihn über den Hash des device_code an.
-func (d *DeviceFlows) StartJoin(client, machine, remote string) (DeviceStart, error) {
-	return d.start(client, machine, remote, true)
+//
+// ttl ist die Lebensdauer des Ablaufs; die Join-Sitzung hält ihn bis zum Ende
+// ihres Login-Fensters.
+func (d *DeviceFlows) StartJoin(client, machine, remote string, ttl time.Duration) (DeviceStart, error) {
+	return d.start(client, machine, remote, true, ttl)
 }
 
-func (d *DeviceFlows) start(client, machine, remote string, join bool) (DeviceStart, error) {
+func (d *DeviceFlows) start(client, machine, remote string, join bool, ttl time.Duration) (DeviceStart, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	now := d.now()
@@ -231,14 +234,14 @@ func (d *DeviceFlows) start(client, machine, remote string, join bool) (DeviceSt
 		}
 	}
 	f := &deviceFlow{deviceHash: hashCode(deviceCode), userHash: userHash, client: client, machine: machine, remote: remote,
-		created: now, expires: now.Add(DeviceFlowTTL), lastPoll: now, interval: DeviceInterval, state: "pending"}
+		created: now, expires: now.Add(ttl), lastPoll: now, interval: DeviceInterval, state: "pending"}
 	f.join = join
 	d.byDevice[f.deviceHash] = f
 	if !join {
 		d.byUser[userHash] = f
 	}
 	d.perClient[client]++
-	return DeviceStart{DeviceCode: deviceCode, UserCode: userCode, ExpiresIn: DeviceFlowTTL, Interval: DeviceInterval}, nil
+	return DeviceStart{DeviceCode: deviceCode, UserCode: userCode, ExpiresIn: ttl, Interval: DeviceInterval}, nil
 }
 
 // Poll beantwortet die Abfrage des Clients. Ein bestätigter oder abgelehnter

@@ -56,6 +56,8 @@ var messages = map[string]string{
 	"login.error_code":       "That code isn't valid. Check it and try again, or ask for a new link.",
 	"login.error_token":      "That token isn't valid. Check it and try again.",
 	"login.invite_title":     "Join an organization",
+	"join.join_first":        "Join first, then connect this machine.",
+	"join.sign_in_first":     "Sign in first, then connect this machine.",
 	"login.invite_text":      "You were invited. Sign in with your identity provider to create your account and join.",
 	"login.code_title":       "One-time code",
 	"login.account_name":     "Account name",

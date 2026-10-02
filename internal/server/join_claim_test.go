@@ -223,6 +223,8 @@ func TestJoinClaimRejectsBrokenLoopbackFields(t *testing.T) {
 		"port 80":      func(b map[string]any) { b["loopback_port"] = 80 },
 		"no state":     func(b map[string]any) { delete(b, "state") },
 		"bad method":   func(b map[string]any) { b["code_challenge_method"] = "plain" },
+		"no method":    func(b map[string]any) { delete(b, "code_challenge_method") },
+		"empty method": func(b map[string]any) { b["code_challenge_method"] = "" },
 		"foreign host": func(b map[string]any) { b["loopback_host"] = "evil.example" },
 		"short chall":  func(b map[string]any) { b["code_challenge"] = "abc" },
 	} {
@@ -412,5 +414,20 @@ func TestJoinClaimAfterRestartIsTheNeutralAnswer(t *testing.T) {
 	defer srv.Close()
 	if code, body := claimWith(t, srv, "", claimBody(pair, "m")); code != 400 || body["error"] != "invalid_pair" {
 		t.Fatalf("%d %v", code, body)
+	}
+}
+
+// N3: der Maschinenname im Join-Claim ist ein Kennzeichen, kein Text.
+func TestJoinClaimMachineNameIsRestrictedToHostnameCharacters(t *testing.T) {
+	srv, st, _ := joinClockFixture(t)
+	st.AddPerson("anna")
+	pair, _ := boundSession(t, st, "person:2")
+	for _, name := range []string{"Approve this now", "a/b", "caf\u00e9", "x:y", strings.Repeat("x", 65), "a b"} {
+		if code, body := claimWith(t, srv, "10.8.0.1", claimBody(pair, name)); code != 400 || body["error"] != "invalid_request" {
+			t.Errorf("%q: %d %v", name, code, body)
+		}
+	}
+	if code, body := claimWith(t, srv, "10.8.0.2", loopbackBody(pair, strings.Repeat("a", 63)+".")); code != 200 {
+		t.Fatalf("hostname-like name refused: %d %v", code, body)
 	}
 }
