@@ -302,6 +302,39 @@ scope; payloads remain in the server store. A failed mirror refresh does not
 undo a committed snapshot. Its warning includes an operation ID that operators
 can correlate with the server log.
 
+### Serving the installer
+
+`ctx serve` can hand out the `ctx` binaries itself, so a new machine needs one
+command. Build the archives, put them where the server can read them, and point
+the server at that directory:
+
+```sh
+make dist                                  # dist/release/ctx_<version>_<os>_<arch>.tar.gz + checksums.txt
+GHOSTTREE_DIST_DIR=/srv/ghosttree-dist ctx serve ...   # or --dist-dir
+```
+
+The server then answers `GET /install.sh` and `GET /dist/<file>` (only files
+listed in `checksums.txt`; nothing else in the directory is reachable). Without
+the setting both routes return 404. A machine installs with
+
+```sh
+curl -fsSL https://<server>/install.sh | sh
+```
+
+The script picks the build for Linux or macOS (amd64, arm64; Windows only
+inside WSL), downloads the archive and `checksums.txt`, verifies the SHA-256,
+and installs `ctx` to `~/.local/bin` (`$XDG_BIN_HOME` if set), without sudo. The
+server address in the script is `GHOSTTREE_PUBLIC_URL`, or else the address the
+request came in on. `GHOSTTREE_DOWNLOAD_BASE` on the client replaces the
+download location, for example with a GitHub release URL, since the archives
+use goreleaser's layout. The installer refuses a plain-http source (except
+loopback, or `GHOSTTREE_ALLOW_HTTP=1`), and the server serves `/install.sh`
+only for an https address: set `GHOSTTREE_PUBLIC_URL`, or let a trusted proxy
+send `X-Forwarded-Proto` and `X-Forwarded-Host`. `/dist/` has no rate limit of
+its own; limit it at the reverse proxy. Keep one ctx version per directory.
+Cautious readers can fetch the script, read it, and
+run it afterwards.
+
 ## Privacy and security
 
 Ghosttree may hold source paths, prompts, command output, and operational

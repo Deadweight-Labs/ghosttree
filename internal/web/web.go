@@ -36,6 +36,8 @@ type app struct {
 	publicOrigin  string // scheme://host of GHOSTTREE_PUBLIC_URL, or empty
 	publicHTTPS   bool
 	joinLimits    *joinLimiter
+	distSums      distCache
+	distDir       string // ctx archives + checksums.txt served at /dist/; empty = off
 }
 type pageData struct {
 	Title, NavSection, Person, CSRFToken, Error, Code string
@@ -86,6 +88,8 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.handle(mux, "GET /ui/login/oidc/callback", a.oidcCallback)
 	a.handle(mux, "GET /ui/login/code", a.codePage)
 	a.handle(mux, "POST /ui/login/code", a.requireSameOrigin(http.HandlerFunc(a.codeSubmit)))
+	a.handle(mux, "GET /install.sh", a.installSh)
+	a.handle(mux, "GET /dist/{name}", a.distFile)
 	a.handle(mux, "GET /join/{code}", a.joinPage)
 	a.handle(mux, "GET /join/", func(w http.ResponseWriter, r *http.Request) {
 		if a.joinGate(w, r) {
@@ -391,6 +395,8 @@ const (
 
 var webRoutes = map[string]webClass{
 	"GET /static/":                    webPublic,
+	"GET /install.sh":                 webPublic,
+	"GET /dist/{name}":                webPublic,
 	"GET /join/{code}":                webPublic,
 	"GET /join/":                      webPublic,
 	"POST /join/{code}/accept":        webAdmin,
