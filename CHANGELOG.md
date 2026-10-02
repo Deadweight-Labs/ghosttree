@@ -18,7 +18,9 @@ Versioning, with pre-1.0 compatibility rules described in
   at 5. `GHOSTTREE_LOOP_GUARD=enforce` (off by default) withholds the wake at
   5, leaves the message stored and readable by pull, and posts one ordinary
   ack notice into the room. Padding with fresh words evades the guard on
-  purpose (false holds are worse); the send limit stays the backstop.
+  purpose (false holds are worse); the send limit stays the backstop. Known
+  limitation, to resolve before enforce: pure measurement exchanges ("p50
+  12.4ms" then "11.9ms") reach hold level, because numbers are not content.
 
 - Fixed: `ctx doc new` and `ctx doc pull` no longer prepend the creation date
   to the worktree filename when the slug already starts with a `YYYY-MM-DD`

@@ -190,12 +190,23 @@ func TestStreakDecaysAfterQuiet(t *testing.T) {
 	}
 }
 
-func TestGuardNoticeIsAnOrdinaryLowContentMessage(t *testing.T) {
-	tr, _ := primed()
-	notice := loopMsg(6, "claude:lab:a", "ok")
+// The notice a poller posts has words nobody said before. It must not lift the
+// hold it announces: the loop holds again at once, not five rounds later.
+func TestGuardNoticeDoesNotResetItsOwnHold(t *testing.T) {
+	tr, _ := primed() // streak 4
+	if got := tr.Add(loopMsg(6, "claude:lab:b", "ok")); !got.Hold() {
+		t.Fatalf("expected hold: %+v", got)
+	}
+	notice := loopMsg(7, "claude:lab:a", LoopNoticePrefix+"Wake calls in this room are paused: 5 rounds without new content. Any message with new content lifts the pause.")
 	notice.Intent = IntentAck
-	if got := tr.Add(notice); !got.Low {
-		t.Fatalf("a notice carries no special status: %+v", got)
+	if got := tr.Add(notice); got.Streak != 5 {
+		t.Fatalf("the notice changed the streak: %+v", got)
+	}
+	if got := tr.Add(loopMsg(8, "claude:lab:a", "ok")); !got.Hold() || got.Streak != 6 {
+		t.Fatalf("the loop must hold again immediately after the notice: %+v", got)
+	}
+	if got := tr.Add(loopMsg(9, "claude:lab:b", "ok")); got.Streak != 7 {
+		t.Fatalf("streak keeps rising: %+v", got)
 	}
 }
 

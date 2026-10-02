@@ -114,7 +114,7 @@ type Noticer interface {
 }
 
 // loopNotice is the text of that notice. It names the way out.
-const loopNotice = "Wake calls in this room are paused: %d rounds in a row without new content. " +
+const loopNotice = store.LoopNoticePrefix + "Wake calls in this room are paused: %d rounds in a row without new content. " +
 	"The messages stay readable. Any message with new content (a commit, file, link, number, " +
 	"REQ reference) or a message from a human lifts the pause."
 

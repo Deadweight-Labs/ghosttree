@@ -42,6 +42,13 @@ const (
 	LoopMaxBody = 16 << 10
 
 	loopJaccardRepeat = 0.80 // token overlap with the sender's own previous message
+
+	// LoopNoticePrefix starts the notice a poller posts when it holds a wake.
+	// The tracker ignores such a message entirely (it neither counts nor
+	// resets): otherwise the notice's own new words would lift the hold it
+	// announces. Matching on content is enough; a forged notice does at most
+	// what any ack does, and is ignored by the guard.
+	LoopNoticePrefix = "[loop-guard] "
 )
 
 // LoopMode is the GHOSTTREE_LOOP_GUARD switch.
@@ -93,14 +100,17 @@ type loopEntry struct {
 	idents map[string]bool // "kind:value"
 }
 
-// Add feeds the next message of the room and returns the state after it. The
-// guard's own notices are ordinary messages (low content) to it.
+// Add feeds the next message of the room and returns the state after it. A
+// notice of the guard itself (LoopNoticePrefix) is skipped: it changes nothing.
 //
 // A round is a change of sender among consecutive low-content messages, so a
 // third participant joining an ack loop does not end it. The first low message
 // of a run only starts it; the same sender talking on adds nothing. New
 // content, a human sender, or LoopDecay of silence reset the streak to zero.
 func (t *LoopTracker) Add(m CoordMessage) LoopState {
+	if strings.HasPrefix(m.Body, LoopNoticePrefix) {
+		return LoopState{Streak: t.streak, Low: true}
+	}
 	at, _ := time.Parse(time.RFC3339, m.CreatedAt)
 	if !at.IsZero() && !t.prevAt.IsZero() && at.Sub(t.prevAt) > LoopDecay {
 		t.reset()
