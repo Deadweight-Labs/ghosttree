@@ -36,8 +36,11 @@ Versioning, with pre-1.0 compatibility rules described in
   presence reads only the agent's own account. A client `at` more than 30 s
   ahead or 5 min behind server time is replaced by server time. While access
   enforcement is on, `GET /api/activity/path` shows ordinary members the agent
-  that reported a session instead of its id (the owner and project leads see
-  the id), and leaves the asker's own session out by its registered id. The
+  that reported a session instead of its id, and hides the checkout path (the
+  owner and project leads see both). This masking is cosmetic: members can
+  read session ids through `/api/sessions`, and the account binding above is
+  the actual protection. The asker's own session is left out by its registered
+  id. The
   collector now logs a refused activity upload (at most once a minute). Agents
   without the launcher register the harness session id they know.
 - Agents now see who a human sender is. The messages API has an optional

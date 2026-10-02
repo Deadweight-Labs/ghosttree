@@ -868,7 +868,7 @@ func TestPathActivityMasksSessionIDsForOrdinaryMembers(t *testing.T) {
 		t.Fatal(err)
 	}
 	res := req(t, "POST", f.srv.URL+"/api/activity", f.robin, []store.PathActivity{
-		{Project: apiRoleProject, SessionExternalID: "uuid-r", Tool: "Edit", Path: "a.go", Quality: store.ActivityIntent}})
+		{Project: apiRoleProject, SessionExternalID: "uuid-r", Checkout: "/home/robin/repo", Tool: "Edit", Path: "a.go", Quality: store.ActivityIntent}})
 	res.Body.Close()
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("record: %d", res.StatusCode)
@@ -883,6 +883,9 @@ func TestPathActivityMasksSessionIDsForOrdinaryMembers(t *testing.T) {
 		var ids []string
 		for _, r := range rows {
 			ids = append(ids, r.SessionExternalID)
+			if r.SessionExternalID != "uuid-r" && r.Checkout != "" {
+				t.Fatalf("a masked row must not carry the foreign checkout path: %+v", r)
+			}
 		}
 		return ids
 	}

@@ -567,6 +567,8 @@ func (a *api) shapePathActivity(r *http.Request, project, exclude string, in []s
 			}
 			if rowAccount != myAccount {
 				e.SessionExternalID = a.st.AgentForSession(e.SessionExternalID, rowAccount)
+				// Der Checkout ist ein fremder absoluter Pfad auf einer fremden Maschine.
+				e.Checkout = ""
 			}
 		}
 		out = append(out, e)

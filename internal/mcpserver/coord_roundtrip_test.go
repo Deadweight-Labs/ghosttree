@@ -899,3 +899,40 @@ func TestTouchedExcludesTheAskersRegisteredSessionUUID(t *testing.T) {
 		t.Fatalf("another session must still be reported: %s", got)
 	}
 }
+
+// ClassifyConflict compares checkouts. The tool used to pass the machine name,
+// so "same checkout" could never be reported.
+func TestTouchedTellsSameCheckoutFromOtherWorktreeAndNamesMaskedRows(t *testing.T) {
+	a, b, st := twoSessions(t)
+	ctx := context.Background()
+	a.repoRoot = "/work/repo"
+	uploadSession(t, st, b.sessionRef)
+	uploadSession(t, st, "uuid-other")
+	record := func(session, checkout string) {
+		if err := b.client.RecordPathActivity([]store.PathActivity{{Project: b.ctxAxes.Project, SessionExternalID: session,
+			Checkout: checkout, Tool: "Edit", Path: "x.go", Quality: store.ActivityIntent}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	record(b.sessionRef, "/work/repo")
+	record("uuid-other", "/work/repo-feature")
+	res, _, err := a.handleCoordTouched(ctx, nil, CoordTouchedInput{Path: "x.go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := text(t, res)
+	for _, line := range strings.Split(got, "\n") {
+		switch {
+		case strings.Contains(line, b.sessionRef) && !strings.Contains(line, "same checkout"):
+			t.Errorf("same directory must be a same-checkout warning: %s", line)
+		case strings.Contains(line, "uuid-other") && !strings.Contains(line, "different worktree"):
+			t.Errorf("another directory must be a different worktree: %s", line)
+		}
+	}
+	// Without a known repo root nothing is claimed.
+	a.repoRoot = ""
+	res, _, _ = a.handleCoordTouched(ctx, nil, CoordTouchedInput{Path: "x.go"})
+	if strings.Contains(text(t, res), "same checkout") {
+		t.Fatalf("an unknown own checkout must read as unknown: %s", text(t, res))
+	}
+}

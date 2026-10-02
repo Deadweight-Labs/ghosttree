@@ -574,13 +574,21 @@ func (s *Server) handleCoordTouched(ctx context.Context, _ *mcp.CallToolRequest,
 		return coordText(fmt.Sprintf("no observed activity on %s by anyone else. "+
 			"That is absence of observation, not proof that nobody is working on it.", in.Path)), nil, nil
 	}
-	mine := s.ctxAxes.Machine
+	// Verglichen werden Checkouts (Verzeichnisse), nicht Maschinennamen: der
+	// Collector meldet das Arbeitsverzeichnis der Session, hier ist es die
+	// Repo-Wurzel dieses Servers. Ohne bekannte Wurzel bleibt es "unbekannt".
+	mine := s.repoRoot
 	var b strings.Builder
 	fmt.Fprintf(&b, "Other sessions touched %s recently:\n", in.Path)
 	for _, e := range events {
 		kind := store.ClassifyConflict(mine, e.Checkout)
+		who := e.SessionExternalID
+		if who == "" {
+			// Maskierte Zeile ohne Agenten, der die Session gemeldet hat.
+			who = "unknown session"
+		}
 		fmt.Fprintf(&b, "  %s — %s %s (%s), %s\n",
-			e.SessionExternalID, e.Tool, e.Path, e.Quality, store.DescribeConflict(kind))
+			who, e.Tool, e.Path, e.Quality, store.DescribeConflict(kind))
 	}
 	b.WriteString("\nNothing is locked. Decide whether to coordinate with coord_send before you change it.")
 	return coordText(b.String()), nil, nil
