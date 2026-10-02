@@ -14,7 +14,7 @@ import (
 )
 
 type coordPageView struct {
-	EventCursor       int64
+	EventCursor       string
 	Sidebar           coordSidebarView
 	Active            *coordRoomDetailView
 	Recipients        []coordRecipientView

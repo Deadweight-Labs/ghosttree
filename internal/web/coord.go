@@ -146,7 +146,7 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 	annotateCoordAttention(incomingAttention, attention, sidebar, attentionLabels)
 	annotateCoordAttention(outgoingAttention, attention, sidebar, attentionLabels)
 	view := coordPageView{
-		EventCursor:       eventCursor,
+		EventCursor:       a.sealCoordCursor(browserPrincipal(r), eventCursor, time.Now()),
 		Sidebar:           sidebar,
 		Recipients:        buildCoordRecipientViews(recipients),
 		IncomingAttention: incomingAttention,
@@ -190,8 +190,13 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	peers, err := access.Peers(room, "")
+	if errors.Is(err, store.ErrCoordNotFound) {
+		// Der Raum ist lesbar (mayEnter), die Agentenliste nicht: ein Gast sieht
+		// die Nachrichten ohne Mitglieder.
+		peers, err = nil, nil
+	}
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		coordHTTPError(w, err)
 		return
 	}
 	labels = coordIdentityLabels(current, recipients, peers...)

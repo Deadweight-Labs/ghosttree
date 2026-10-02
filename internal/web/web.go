@@ -9,6 +9,7 @@ import (
 	"html/template"
 	"net/http"
 	"strconv"
+	"sync"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
@@ -28,6 +29,8 @@ type app struct {
 	oidc          *oidcClient
 	bootstrapFile string
 	registered    []string
+	cursorOnce    sync.Once
+	cursorSeal    *flowSealer
 }
 type pageData struct {
 	Title, NavSection, Person, CSRFToken, Error, Code string

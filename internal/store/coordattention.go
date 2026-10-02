@@ -105,7 +105,7 @@ func (a CoordAccess) Attention() ([]AttentionItem, error) {
 		m.body,m.author_principal_id,m.sender_external_id,COALESCE(m.expires_at,'')
 		FROM coord_attention attention JOIN coord_messages m ON m.id=attention.message_id
 		WHERE attention.recipient_principal_id=? OR m.sender_external_id=? OR m.author_principal_id=?
-		ORDER BY attention.id DESC`, actor, actor, a.Principal.ID)
+		ORDER BY attention.created_at DESC, attention.message_id DESC, attention.id DESC`, actor, actor, a.Principal.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -158,6 +158,12 @@ func (a CoordAccess) Attention() ([]AttentionItem, error) {
 		}
 		candidate.item.SenderID = candidate.sender
 		candidate.item.IsRecipient = candidate.item.RecipientID == actor
+		// Ausgehende Einträge zeigen, wer eine Erwähnung wirklich erreicht hat,
+		// und damit, wer im Raum ist. Ein Gast sieht sie nicht; was er erwähnt hat,
+		// zeigt ihm die Nachricht selbst.
+		if !candidate.item.IsRecipient && a.guestViewForMessageTx(tx, candidate.item.DestinationKind, candidate.item.DestinationID) {
+			continue
+		}
 		candidate.item.CanWithdraw = candidate.item.AuthorID == a.Principal.ID || candidate.sender == actor
 		if candidate.item.State == AttentionOpen && expiredAt(candidate.expiresAt, nowTS) {
 			candidate.item.State = AttentionExpired
@@ -219,7 +225,9 @@ func (a CoordAccess) ResolveAttention(id int64, action string) error {
 	}
 	isAuthor := actor == sender || a.Principal.ID == authorPrincipal
 	if action == AttentionActionWithdraw {
-		if !isAuthor {
+		// Ein Gast sieht keine ausgehenden Einträge; Zurückziehen würde sonst an
+		// erratenen Ids verraten, welche Erwähnung jemanden erreicht hat.
+		if !isAuthor || (actor != recipient && a.guestViewForMessageTx(tx, kind, destination)) {
 			return ErrCoordNotFound
 		}
 	} else if actor != recipient {

@@ -59,7 +59,7 @@ func TestCoordProgressiveClientRefetchesCanonicalVisibleSurfaces(t *testing.T) {
 		"URLSearchParams", "around", "thread_around", "data-coord-live-status",
 		"replaceChildren", "getBoundingClientRect", "container.scrollTop", "messageScrollTop", "contextScrollTop",
 		"captureFocus", "restoreFocus", "[data-coord-sidebar-dynamic]", "[data-coord-read-actions]",
-		"raw.lastEventId", "Number.isSafeInteger", "eventID <= lastEventID",
+		"raw.lastEventId", "raw.lastEventId === lastEventID",
 		"captureDrafts", "restoreDrafts", "coordDraftKey", "container.open", "control.checked",
 		".coord-thread-paging",
 		"session-ended", "source.close()", "visibilitychange",
@@ -481,13 +481,17 @@ func TestCoordSSERequiresBrowserSessionAndRejectsBadCursor(t *testing.T) {
 		t.Fatal(err)
 	}
 	req.Header.Set("Last-Event-ID", "not-a-number")
-	response, err := client.Do(req)
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	defer cancel()
+	response, err := client.Do(req.WithContext(ctx))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer response.Body.Close()
-	if response.StatusCode != http.StatusBadRequest {
-		t.Fatalf("bad cursor status=%d", response.StatusCode)
+	data, _ := io.ReadAll(response.Body)
+	// Ein ungültiger Cursor ist kein Fehler mit Auskunft, sondern ein Resync.
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(data), "event: resync") {
+		t.Fatalf("bad cursor status=%d body=%q", response.StatusCode, data)
 	}
 }
 
@@ -542,15 +546,40 @@ func TestCoordSSETooOldCursorEmitsResync(t *testing.T) {
 	srv, st, client := signedIn(t)
 	room := store.RoomKeyForProject("github.com/x/y")
 	materializeWebRoom(t, st, room)
-	for i := 0; i < 520; i++ {
+	first, _ := readFiniteSSE(t, client, srv.URL+"/ui/coord/events?after=0", "")
+	oldToken := lastSSEID(t, first)
+	for i := 0; i < 20; i++ {
 		if _, err := st.AppendCoordMessage(store.CoordMessage{DestinationKind: store.DestinationRoom, DestinationID: room, SenderExternalID: "fixture:" + room, ClientID: "sse-prune-" + strconv.Itoa(i), Body: "x"}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	body, _ := readFiniteSSE(t, client, srv.URL+"/ui/coord/events", "1")
+	// Nach dem Zeitfenster: die alten Ereignisse sind abgelaufen, das nächste
+	// löst das Aufräumen aus.
+	if _, err := st.DB().Exec(`UPDATE coord_events SET created_at='2000-01-01T00:00:00.000Z'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AppendCoordMessage(store.CoordMessage{DestinationKind: store.DestinationRoom, DestinationID: room, SenderExternalID: "fixture:" + room, ClientID: "sse-prune-trigger", Body: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := readFiniteSSE(t, client, srv.URL+"/ui/coord/events", oldToken)
 	if !strings.Contains(body, "event: resync") {
 		t.Fatalf("stream=%q", body)
 	}
+}
+
+// lastSSEID liest die id: der letzten Meldung eines Streams.
+func lastSSEID(t *testing.T, stream string) string {
+	t.Helper()
+	id := ""
+	for _, line := range strings.Split(stream, "\n") {
+		if strings.HasPrefix(line, "id: ") {
+			id = strings.TrimPrefix(line, "id: ")
+		}
+	}
+	if id == "" {
+		t.Fatalf("no id in stream %q", stream)
+	}
+	return id
 }
 
 func TestCoordSSEStopsWhenRequestContextIsCancelled(t *testing.T) {

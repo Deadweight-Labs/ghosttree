@@ -27,6 +27,9 @@ func writeCoordAccessError(w http.ResponseWriter, err error) {
 		writeErr(w, http.StatusNotFound, "coordination target not found")
 	case errors.Is(err, store.ErrCoordForbidden):
 		writeErr(w, http.StatusForbidden, "coordination target forbidden")
+	case errors.Is(err, store.ErrCoordUnknownRecipient):
+		// Fester Text: die Antwort darf die geprüfte Id nicht zurückgeben.
+		writeErr(w, http.StatusBadRequest, "coordination recipient is not available")
 	case errors.Is(err, store.ErrInvalidAttentionAction), errors.Is(err, store.ErrAttentionRecipientRequired):
 		writeErr(w, http.StatusBadRequest, "invalid coordination attention action")
 	case errors.Is(err, store.ErrAttentionClosed):

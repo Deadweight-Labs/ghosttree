@@ -1,8 +1,11 @@
 package store
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"encoding/binary"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -183,9 +186,7 @@ func appendCoordMessageTx(tx *sql.Tx, m CoordMessage) (int64, error) {
 			state = AttentionExpired
 		}
 		for _, recipient := range normalizeMembers(m.Mentions) {
-			if _, err := tx.Exec(`INSERT OR IGNORE INTO coord_attention(
-				recipient_principal_id,message_id,reason,state,created_at)
-				VALUES(?,?,?,?,?)`, recipient, id, reason, state, m.CreatedAt); err != nil {
+			if err := insertAttentionTx(tx, recipient, id, reason, state, m.CreatedAt); err != nil {
 				return 0, err
 			}
 		}
@@ -369,4 +370,51 @@ func (s *Store) CoordMessageMentions(messageID int64) ([]string, error) {
 		out = append(out, v)
 	}
 	return out, rows.Err()
+}
+
+// attentionIDSource liefert Kandidaten für neue Attention-Ids. Variable, damit
+// ein Test eine Kollision erzwingen kann.
+var attentionIDSource = randomAttentionID
+
+// randomAttentionID: positive 63-Bit-Zahl aus crypto/rand. Ein Zähler wäre ein
+// Seitenkanal: Eine Erwähnung eines Nicht-Mitglieds legt keine Zeile an, die
+// eines Mitglieds schon, und die Lücke in den eigenen Ids verriete es einem
+// Gast. Nichts darf von monotonen Ids abhängen; sortiert wird nach created_at
+// und message_id.
+func randomAttentionID() int64 {
+	var b [8]byte
+	for {
+		if _, err := rand.Read(b[:]); err != nil {
+			panic("coordination attention id: " + err.Error())
+		}
+		if id := int64(binary.BigEndian.Uint64(b[:]) >> 1); id > 0 {
+			return id
+		}
+	}
+}
+
+// insertAttentionTx legt einen Eintrag mit zufälliger Id an. Ein Duplikat
+// (derselbe Empfänger, dieselbe Nachricht und Art) ist wie bisher ein No-op;
+// eine Kollision der Id wird mit einer neuen Zufallszahl wiederholt.
+func insertAttentionTx(tx *sql.Tx, recipient string, messageID int64, reason, state, createdAt string) error {
+	for attempt := 0; attempt < 16; attempt++ {
+		id := attentionIDSource()
+		var taken int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM coord_attention WHERE id=?`, id).Scan(&taken); err != nil {
+			return err
+		}
+		if taken > 0 {
+			continue
+		}
+		_, err := tx.Exec(`INSERT INTO coord_attention(id,recipient_principal_id,message_id,reason,state,created_at)
+			VALUES(?,?,?,?,?,?) ON CONFLICT(recipient_principal_id,message_id,reason) DO NOTHING`,
+			id, recipient, messageID, reason, state, createdAt)
+		if err == nil {
+			return nil
+		}
+		if !strings.Contains(err.Error(), "coord_attention.id") {
+			return err
+		}
+	}
+	return errors.New("coordination attention id: no free id after 16 attempts")
 }
