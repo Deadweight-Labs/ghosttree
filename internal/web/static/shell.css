@@ -251,7 +251,7 @@ svg.i { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-widt
 .ov-prog { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); margin: 6px 0 8px; }
 .ov-bar {
   --clay-rest-h: -3;
-  --clay-surface: var(--clay-c-sunken);
+  --clay-surface: color-mix(in oklab, var(--clay-ink) 16%, var(--clay-c-sunken));
   display: block; position: relative; block-size: 9px; border-radius: 99px; overflow: hidden;
 }
 .ov-bar > i { position: absolute; inset: 0 auto 0 0; display: block; background: var(--clay-accent); border-radius: 99px; }
@@ -280,7 +280,7 @@ svg.i { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-widt
 
   /* Narrow screens: the sidebar card becomes a bar on top whose menu opens
      with the toggle; without script everything stays open. */
-  .shell { grid-template-columns: minmax(0, 1fr); gap: 20px; padding: 14px 16px var(--shadow-room-y); }
+  .shell { grid-template-columns: minmax(0, 1fr); align-content: start; gap: 20px; padding: 14px 16px var(--shadow-room-y); }
   .shell-side { position: relative; top: 0; min-height: 0; padding: 14px 14px 16px; }
   .shell-head { padding-bottom: 0; }
   .shell-toggle { display: block; }

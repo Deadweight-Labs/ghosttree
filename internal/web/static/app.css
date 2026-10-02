@@ -1231,6 +1231,23 @@ html:not(.coord-enhanced) .coord-backdrop { display: none !important; }
 .token-table tbody tr:last-child td { border-bottom: 0; }
 .token-table td { vertical-align: middle; }
 .token-table form { display: inline-block; margin: 0 .25rem 0 0; }
+.role-pill { display: inline-block; padding: 3px 12px; border-radius: 99px; background: var(--clay-c-sunken); color: var(--clay-ink-soft); font: 700 .75rem/1.4 var(--clay-font-ui, system-ui, sans-serif); letter-spacing: .02em; vertical-align: middle; }
+.filters .clay-btn { align-self: stretch; }
+
+/* Tables become a list of rows on narrow screens: one block per record, the
+   column name in front of each value. */
+@media (max-width: 700px) {
+  .token-table, .token-table tbody, .token-table tr, .token-table td { display: block; width: 100%; }
+  .token-table thead { position: absolute; inline-size: 1px; block-size: 1px; overflow: hidden; clip-path: inset(50%); }
+  .token-table tr { padding: .6rem 0; border-bottom: 1px solid var(--clay-line); }
+  .token-table tbody tr:last-child { border-bottom: 0; }
+  .token-table th, .token-table td { padding: .3rem .1rem; border-bottom: 0; }
+  .token-table td[data-label] { display: block; text-align: right; overflow-wrap: anywhere; }
+  .token-table td[data-label]::before { content: attr(data-label); float: left; margin-right: 1rem; color: var(--clay-ink-faint); font-size: .75rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; text-align: left; }
+  .token-table td:not([data-label]) { display: flex; flex-wrap: wrap; gap: .5rem; padding-top: .5rem; }
+  .token-table td:not([data-label]):empty { display: none; }
+  .token-table td form { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin: 0; }
+}
 
 .org-switch a { margin-right: .75rem; }
 .org-code { word-break: break-all; }
