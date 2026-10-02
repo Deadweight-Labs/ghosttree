@@ -577,3 +577,196 @@ func TestJoinSessionsAreCapped(t *testing.T) {
 		t.Fatalf("%d sessions", n)
 	}
 }
+
+// N1: wer den Einladungslink hat, verdrängt keine Sitzung mit Gerät.
+func TestJoinOpenNeverEvictsSessionsWithADevice(t *testing.T) {
+	st, _ := pairFixture(t)
+	j := st.Join()
+	var first JoinOpen
+	for i := 0; i < maxJoinPerInvite; i++ {
+		o, err := j.Open(testInvite, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 {
+			first = o
+		}
+		if _, err := j.Claim(loopReq(o.Pair, "m", fmt.Sprintf("10.0.%d.1", i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	extra, err := j.Open(testInvite, "")
+	if err != nil || extra.Pair != "" || extra.ID != "" {
+		t.Fatalf("overflow got a session: %+v %v", extra, err)
+	}
+	if n := j.Sessions(); n != maxJoinPerInvite {
+		t.Fatalf("%d sessions", n)
+	}
+	// Die erste Sitzung ist noch beansprucht und bindbar.
+	if err := j.Bind(testInvite, first.ID, "person:2"); err != nil {
+		t.Fatal(err)
+	}
+	if v := j.View("person:2"); v.State != JoinClaimed {
+		t.Fatalf("state %q", v.State)
+	}
+	// Eine Sitzung ohne Gerät weicht weiterhin.
+	st2, _ := pairFixture(t)
+	j2 := st2.Join()
+	for i := 0; i < maxJoinPerInvite; i++ {
+		j2.Open(testInvite, "")
+	}
+	if o, _ := j2.Open(testInvite, ""); o.Pair == "" {
+		t.Fatal("waiting sessions should still make room")
+	}
+}
+
+func TestJoinLoopbackClaimsAreLimitedPerNetwork(t *testing.T) {
+	st, _ := pairFixture(t)
+	j := st.Join()
+	claim := func(addr string) error {
+		o, err := j.Open(fmt.Sprintf("inv-%s-%d", addr, j.Sessions()), "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = j.Claim(loopReq(o.Pair, "m", addr))
+		return err
+	}
+	for i := 0; i < maxDevicePerClient; i++ {
+		if err := claim("5.5.5.5"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := claim("5.5.5.5"); !errors.Is(err, ErrDeviceBusy) {
+		t.Fatalf("v4: %v", err)
+	}
+	if err := claim("6.6.6.6"); err != nil {
+		t.Fatalf("other address: %v", err)
+	}
+	// IPv6: ein /64 teilt sich die Grenze, ein /48 hat das Vierfache.
+	for i := 0; i < maxDevicePerClient; i++ {
+		if err := claim(fmt.Sprintf("2001:db8:1:1:%x::1", i+1)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := claim("2001:db8:1:1:ffff::1"); !errors.Is(err, ErrDeviceBusy) {
+		t.Fatalf("/64: %v", err)
+	}
+	for sub := 2; sub <= 4; sub++ {
+		for i := 0; i < maxDevicePerClient; i++ {
+			if err := claim(fmt.Sprintf("2001:db8:1:%d::%x", sub, i+1)); err != nil {
+				t.Fatalf("sub %d: %v", sub, err)
+			}
+		}
+	}
+	if err := claim("2001:db8:1:9::1"); !errors.Is(err, ErrDeviceBusy) {
+		t.Fatalf("/48: %v", err)
+	}
+}
+
+// N4: ein beanspruchtes Gerät verlängert die Sitzung nicht über das Login-Fenster.
+func TestJoinClaimDoesNotExtendBeyondTheLoginWindow(t *testing.T) {
+	st, clock := pairFixture(t)
+	j := st.Join()
+	o, _ := j.Open(testInvite, "")
+	clock.t = clock.t.Add(JoinSessionTTL - time.Minute)
+	if _, err := j.Claim(loopReq(o.Pair, "m", "1.1.1.1")); err != nil {
+		t.Fatal(err)
+	}
+	j.Bind(testInvite, o.ID, "person:2")
+	clock.t = clock.t.Add(2 * time.Minute) // über TTL, Claim hält die Sitzung noch
+	if v := j.View("person:2"); v.State != JoinClaimed {
+		t.Fatalf("claimed session should survive its TTL: %q", v.State)
+	}
+	clock.t = clock.t.Add(JoinMaxLifetime) // weit über das Fenster
+	if v := j.View("person:2"); v.State != JoinNone {
+		t.Fatalf("session outlived the window: %q", v.State)
+	}
+}
+
+// N6: Ablehnung und Kompromittierung sagen dem wartenden Installer Bescheid.
+func TestJoinDenyLoopbackRedirectsWithAccessDenied(t *testing.T) {
+	st, _ := pairFixture(t)
+	j := st.Join()
+	o, _ := j.Open(testInvite, "")
+	j.Claim(loopReq(o.Pair, "m", "1.1.1.1"))
+	j.Bind(testInvite, o.ID, "person:2")
+	dec, err := j.Decide("person:2", false, j.View("person:2").Nonce, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(dec.Redirect, "http://127.0.0.1:40123/callback?") || !strings.Contains(dec.Redirect, "error=access_denied") ||
+		!strings.Contains(dec.Redirect, "state=state-12345678") || strings.Contains(dec.Redirect, "code=") {
+		t.Fatalf("deny redirect %q", dec.Redirect)
+	}
+	// Code-Weg: kein Ziel.
+	o2, _ := j.Open(testInvite, "")
+	j.Claim(codeReq(o2.Pair, "m", "1.1.1.1"))
+	j.Bind(testInvite, o2.ID, "person:3")
+	if dec, _ := j.Decide("person:3", false, j.View("person:3").Nonce, "", nil); dec.Redirect != "" {
+		t.Fatalf("code mode redirect %q", dec.Redirect)
+	}
+}
+
+func TestJoinCompromisedLoopbackOffersTheCallbackTarget(t *testing.T) {
+	st, _ := pairFixture(t)
+	j := st.Join()
+	o, _ := j.Open(testInvite, "")
+	j.Claim(loopReq(o.Pair, "m", "1.1.1.1"))
+	j.Bind(testInvite, o.ID, "person:2")
+	if _, err := j.Claim(loopReq(o.Pair, "thief", "2.2.2.2")); err != ErrJoinInvalid {
+		t.Fatal(err)
+	}
+	v := j.View("person:2")
+	if v.State != JoinCompromised || !strings.HasPrefix(v.Callback, "http://127.0.0.1:40123/callback?") || !strings.Contains(v.Callback, "error=access_denied") {
+		t.Fatalf("view %+v", v)
+	}
+	// Ohne Callback-Ziel (Code-Weg) gibt es keins.
+	o2, _ := j.Open(testInvite, "")
+	j.Claim(codeReq(o2.Pair, "m", "1.1.1.1"))
+	j.Bind(testInvite, o2.ID, "person:3")
+	j.Claim(codeReq(o2.Pair, "thief", "2.2.2.2"))
+	if v := j.View("person:3"); v.State != JoinCompromised || v.Callback != "" {
+		t.Fatalf("view %+v", v)
+	}
+}
+
+// Nit: code_verifier nur aus den Zeichen nach RFC 7636.
+func TestJoinExchangeRejectsVerifiersOutsideRFC7636(t *testing.T) {
+	st, _ := pairFixture(t)
+	j := st.Join()
+	bad := strings.Repeat("v", 42) + "+"
+	sum := sha256.Sum256([]byte(bad))
+	req := loopReq("", "m", "1.1.1.1")
+	req.Challenge = base64.RawURLEncoding.EncodeToString(sum[:])
+	o, _ := j.Open(testInvite, "")
+	req.Pair = o.Pair
+	j.Claim(req)
+	j.Bind(testInvite, o.ID, "person:2")
+	dec, _ := j.Decide("person:2", true, j.View("person:2").Nonce, "", nil)
+	if _, err := j.Exchange("9.9.9.9", authCode(dec.Redirect), bad); err != ErrJoinInvalid {
+		t.Fatalf("verifier with '+' accepted: %v", err)
+	}
+}
+
+// Nit: die Datenbankprüfung läuft ohne Sperre, und danach zählt der aktuelle Zustand.
+func TestJoinDecideChecksTheMachineOutsideTheLockAndRechecksState(t *testing.T) {
+	st, _ := pairFixture(t)
+	j := st.Join()
+	o, _ := j.Open(testInvite, "")
+	j.Claim(codeReq(o.Pair, "laptop", "1.1.1.1"))
+	j.Bind(testInvite, o.ID, "person:2")
+	nonce := j.View("person:2").Nonce
+	_, err := j.Decide("person:2", true, nonce, "", func(string) error {
+		if j.mu.TryLock() {
+			j.mu.Unlock()
+		} else {
+			t.Error("check ran under the lock")
+		}
+		// Während der Prüfung meldet sich ein Dieb: Sitzung wird kompromittiert.
+		j.Claim(codeReq(o.Pair, "thief", "2.2.2.2"))
+		return nil
+	})
+	if err != ErrJoinNotReady {
+		t.Fatalf("approve after state change: %v", err)
+	}
+}

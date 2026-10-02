@@ -24,6 +24,24 @@ import (
 // jeden Code, der nicht taugt, 429 (Netz gesperrt oder zu viele offene Abläufe;
 // hängt nie vom Code ab) und 400/413 invalid_request für einen kaputten Körper
 // (ebenfalls vom Code unabhängig). Codes stehen nur in Körpern, nie in URLs.
+// validJoinMachine ist strenger als validMachine: der Name steht auf der
+// Freigabeseite, wo ein Fremder mit einem Claim Text anzeigen lassen kann, und
+// darf dort kein Satz sein, der zum Freigeben auffordert. Der Geräte-Ablauf
+// behält die weitere Regel.
+func validJoinMachine(name string) bool {
+	if name == "" || len(name) > 64 {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '.' || c == '_' || c == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 type joinClaimRequest struct {
 	Pair                string `json:"pair"`
 	Machine             string `json:"machine"`
@@ -41,13 +59,13 @@ func (a *api) claimJoin(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	machine := strings.TrimSpace(req.Machine)
-	if !validMachine(machine) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_request", "error_description": "machine is required (printable, at most 128 bytes)"})
+	if !validJoinMachine(machine) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_request", "error_description": "machine is required (letters, digits, '.', '_' and '-', at most 64)"})
 		return
 	}
 	claim := store.JoinClaimRequest{Addr: a.clientAddr(r), Pair: req.Pair, Machine: machine,
 		Challenge: req.CodeChallenge, State: req.State, Host: req.LoopbackHost, Port: req.LoopbackPort}
-	if claim.Loopback() && (!claim.ValidLoopback() || (req.CodeChallengeMethod != "" && req.CodeChallengeMethod != "S256")) {
+	if claim.Loopback() && (!claim.ValidLoopback() || req.CodeChallengeMethod != "S256") {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_request", "error_description": "loopback needs code_challenge (S256), loopback_port (1024-65535) and state"})
 		return
 	}

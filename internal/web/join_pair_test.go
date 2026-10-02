@@ -640,3 +640,121 @@ func TestJoinPairWritesNoLogLineWithTheCodes(t *testing.T) {
 		t.Fatalf("a code reached a log: %s", logs.String())
 	}
 }
+
+// publicEnv startet eine zweite Oberfläche auf demselben Store mit öffentlicher URL.
+func (e pairEnv) publicEnv(t *testing.T, opts ...Option) pairEnv {
+	t.Helper()
+	var h http.Handler
+	hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { h.ServeHTTP(w, r) }))
+	t.Cleanup(hs.Close)
+	h = New(e.st, append([]Option{WithPublicURL(hs.URL)}, opts...)...)
+	out := e
+	out.hs, out.srv = hs, hs.URL
+	return out
+}
+
+// N5: hinter einer öffentlichen URL ohne benannte Proxys wäre "Same network" immer "yes".
+func TestJoinSameNetworkLineIsOmittedWithPublicURLAndNoTrustedProxies(t *testing.T) {
+	e := newPairEnv(t).publicEnv(t)
+	b := browser(t)
+	e.signInAs(t, b, "anna")
+	pair := e.pairOf(t, b, e.code)
+	e.accept(t, b, e.code)
+	e.claimLoop(t, pair, "box")
+	text := e.pairPage(t, b)
+	if strings.Contains(text, "Same network") || strings.Contains(text, "different network") || !strings.Contains(text, "wants to connect") {
+		t.Fatalf("page: %s", text)
+	}
+}
+
+func TestJoinSameNetworkLineStaysWithPublicURLAndTrustedProxies(t *testing.T) {
+	set, err := proxytrust.Parse("10.0.0.0/8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := newPairEnv(t).publicEnv(t, WithTrustedProxies(set))
+	b := browser(t)
+	e.signInAs(t, b, "anna")
+	pair := e.pairOf(t, b, e.code)
+	e.accept(t, b, e.code)
+	e.claimLoop(t, pair, "box")
+	if text := e.pairPage(t, b); !strings.Contains(text, "Same network as this browser") {
+		t.Fatalf("page: %s", text)
+	}
+}
+
+// N3: im Rückfall steht bei fremdem Netz eine Warnung, und das Feld sagt, woher der Code kommt.
+func TestJoinCodeFallbackWarnsOnAnotherNetworkAndNamesTheTerminal(t *testing.T) {
+	e := newPairEnv(t)
+	b := browser(t)
+	e.signInAs(t, b, "anna")
+	pair := e.pairOf(t, b, e.code)
+	e.accept(t, b, e.code)
+	if _, err := e.st.Join().Claim(store.JoinClaimRequest{Addr: "203.0.113.5", Pair: pair, Machine: "box"}); err != nil {
+		t.Fatal(err)
+	}
+	text := e.pairPage(t, b)
+	for _, want := range []string{"Same network as this browser: <strong>no</strong>", "This is a different network.", "Your terminal shows a 4-character code"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("page lacks %q: %s", want, text)
+		}
+	}
+}
+
+// N2: mit Secure heißt der Cookie __Host-gt_join (Path=/, ohne Domain).
+func TestJoinCookieUsesTheHostPrefixWhereSecureApplies(t *testing.T) {
+	e := newPairEnv(t)
+	h := New(e.st, WithPublicURL("https://gt.example.test"))
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "https://gt.example.test/join/"+e.code, nil)
+	h.ServeHTTP(rec, req)
+	var cookie *http.Cookie
+	for _, c := range rec.Result().Cookies() {
+		cookie = c
+	}
+	if cookie == nil || cookie.Name != "__Host-gt_join" || !cookie.Secure || cookie.Path != "/" || cookie.Domain != "" || !cookie.HttpOnly {
+		t.Fatalf("cookie %+v", cookie)
+	}
+	// Dasselbe Cookie bringt dieselbe Sitzung zurück; der Name ohne Präfix zählt nicht.
+	before := e.st.Join().Sessions()
+	req2 := httptest.NewRequest("GET", "https://gt.example.test/join/"+e.code, nil)
+	req2.AddCookie(cookie)
+	h.ServeHTTP(httptest.NewRecorder(), req2)
+	req3 := httptest.NewRequest("GET", "https://gt.example.test/join/"+e.code, nil)
+	req3.AddCookie(&http.Cookie{Name: "gt_join", Value: cookie.Value})
+	h.ServeHTTP(httptest.NewRecorder(), req3)
+	if n := e.st.Join().Sessions(); n != before+1 {
+		t.Fatalf("sessions %d -> %d: the unprefixed cookie was accepted or the prefixed one ignored", before, n)
+	}
+}
+
+// N6: Ablehnen im Loopback-Modus sagt dem Installer Bescheid (RFC 6749 4.1.2.1).
+func TestJoinDenyRedirectsTheBrowserToTheInstallerWithAccessDenied(t *testing.T) {
+	e := newPairEnv(t)
+	b := browser(t)
+	e.signInAs(t, b, "anna")
+	pair := e.pairOf(t, b, e.code)
+	e.accept(t, b, e.code)
+	e.claimLoop(t, pair, "box")
+	resp := e.decide(t, b, url.Values{"decision": {"deny"}})
+	resp.Body.Close()
+	loc := resp.Header.Get("Location")
+	if resp.StatusCode != http.StatusSeeOther || !strings.HasPrefix(loc, "http://127.0.0.1:40123/callback?") ||
+		!strings.Contains(loc, "error=access_denied") || !strings.Contains(loc, "state=state-12345678") || strings.Contains(loc, "code=") {
+		t.Fatalf("deny: %d %q", resp.StatusCode, loc)
+	}
+}
+
+func TestJoinCompromisedLoopbackPageOffersToStopTheInstaller(t *testing.T) {
+	e := newPairEnv(t)
+	b := browser(t)
+	e.signInAs(t, b, "anna")
+	pair := e.pairOf(t, b, e.code)
+	e.accept(t, b, e.code)
+	e.claimLoop(t, pair, "mine")
+	e.st.Join().Claim(loopClaim(pair, "thief", "198.51.100.7"))
+	text := e.pairPage(t, b)
+	if !strings.Contains(text, `href="http://127.0.0.1:40123/callback?error=access_denied`) || strings.Contains(text, "thief") {
+		t.Fatalf("page: %s", text)
+	}
+}

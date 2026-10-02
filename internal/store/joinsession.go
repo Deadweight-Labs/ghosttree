@@ -37,11 +37,20 @@ import (
 //     verlangt, dass er eingetippt wird; das Token kommt dann über den
 //     Geräte-Ablauf (/api/auth/device/token).
 //
+// Wer den Einladungslink hat, kann die Sitzung eines anderen nicht verdrängen:
+// Sitzungen mit Gerät (und gebundene) weichen nie einer neuen Anfrage; sind alle
+// zehn Plätze einer Einladung so belegt, bekommt die neue Anfrage keinen Befehl.
+// Loopback-Claims zählen wie Geräte-Abläufe je /64 und je /48.
+//
 // Ein zweiter Claim auf einen gemeldeten Code verwirft die Sitzung. Der Zustand
 // liegt im Speicher; ein Neustart verwirft alles, und jeder alte Code wird wie
 // ein unbekannter behandelt.
 const (
 	JoinSessionTTL = 15 * time.Minute
+	// JoinMaxLifetime ist das Login-Fenster: so lange darf eine Sitzung von
+	// ihrer Entstehung an höchstens leben, auch wenn ein Gerät sie beansprucht
+	// hat. Ohne die Grenze verlängerte jeder Claim Sitzung und Cookie.
+	JoinMaxLifetime = 30 * time.Minute
 
 	joinAuthTTL         = 2 * time.Minute
 	maxJoinSessions     = 1000
@@ -99,6 +108,7 @@ type joinSession struct {
 	machine     string
 	remote      string
 	net         string // Netz (/64) des Claim, zum Vergleich mit dem Browser
+	wide        string // Netz (/48) des Claim, leer bei IPv4
 	nonce       string
 	deviceHash  string // Code-Weg: Geräte-Ablauf
 	confirmHash string
@@ -120,6 +130,9 @@ type JoinView struct {
 	Net     string
 	Nonce   string
 	Mode    string
+	// Callback: Loopback-Weg, wenn die Sitzung kompromittiert ist; Ziel, auf das
+	// der Browser den wartenden Installer abbrechen lassen kann.
+	Callback string
 }
 
 // JoinOpen ist die Antwort an die Einladungsseite.
@@ -147,7 +160,7 @@ type JoinClaim struct {
 
 // JoinDecision ist das Ergebnis einer Freigabe.
 type JoinDecision struct {
-	Redirect string // Loopback-Weg: Ziel für den Browser
+	Redirect string // Loopback-Weg: Ziel für den Browser (bei Ablehnung mit error=access_denied)
 }
 
 // JoinGrant ist das Ergebnis eines gültigen Tausches.
@@ -268,6 +281,22 @@ func (j *JoinSessions) evictOldest(match func(*joinSession) bool) {
 	}
 }
 
+// extend verlängert die Sitzung bis end, nie über das Login-Fenster hinaus.
+func (s *joinSession) extend(end time.Time) {
+	if limit := s.created.Add(JoinMaxLifetime); end.After(limit) {
+		end = limit
+	}
+	if end.After(s.expires) {
+		s.expires = end
+	}
+}
+
+// callback baut das Ziel auf dem Loopback des Installers (RFC 6749 4.1.2).
+func (s *joinSession) callback(q url.Values) string {
+	q.Set("state", s.cbState)
+	return "http://" + s.cbHost + ":" + strconv.Itoa(s.cbPort) + "/callback?" + q.Encode()
+}
+
 func (j *JoinSessions) newPair() (string, error) {
 	for tries := 0; tries < 20; tries++ {
 		c, err := newUserCode()
@@ -328,7 +357,13 @@ func (j *JoinSessions) Open(inviteCode, id string) (JoinOpen, error) {
 		}
 	}
 	if count >= maxJoinPerInvite {
-		j.evictOldest(func(s *joinSession) bool { return s.invite == invite })
+		// Nur Sitzungen ohne Gerät und ohne Konto weichen; sonst gibt es für
+		// diese Anfrage keine Sitzung und keinen Befehl.
+		before := len(j.all)
+		j.evictOldest(func(s *joinSession) bool { return s.invite == invite && s.state == JoinWaiting && s.account == "" })
+		if len(j.all) == before {
+			return JoinOpen{}, nil
+		}
 	}
 	newID, err := randomHex(16)
 	if err != nil {
@@ -486,6 +521,10 @@ func (j *JoinSessions) Claim(req JoinClaimRequest) (JoinClaim, error) {
 	if !loop && j.device.Busy(netKey) {
 		return JoinClaim{}, ErrDeviceBusy
 	}
+	wide := widerKey(req.Addr)
+	if loop && j.loopbackBusy(netKey, wide) {
+		return JoinClaim{}, ErrDeviceBusy
+	}
 	var s *joinSession
 	if code := NormalizeUserCode(req.Pair); code != "" {
 		s = j.byPair[hashCode(code)]
@@ -528,11 +567,27 @@ func (j *JoinSessions) Claim(req JoinClaimRequest) (JoinClaim, error) {
 		out.DeviceCode, out.Confirm = start.DeviceCode, confirm
 		out.ExpiresIn, out.Interval = start.ExpiresIn, start.Interval
 	}
-	s.mode, s.machine, s.remote, s.net, s.nonce, s.state = out.Mode, req.Machine, req.Addr, netKey, nonce, JoinClaimed
-	if end := now.Add(DeviceFlowTTL); end.After(s.expires) {
-		s.expires = end
-	}
+	s.mode, s.machine, s.remote, s.net, s.wide, s.nonce, s.state = out.Mode, req.Machine, req.Addr, netKey, wide, nonce, JoinClaimed
+	s.extend(now.Add(DeviceFlowTTL))
 	return out, nil
+}
+
+// loopbackBusy zählt die offenen Loopback-Claims eines Netzes (/64, im /48
+// entsprechend mehr), wie Busy es für Geräte-Abläufe tut.
+func (j *JoinSessions) loopbackBusy(netKey, wide string) bool {
+	n, nw := 0, 0
+	for _, s := range j.all {
+		if s.mode != JoinModeLoopback || (s.state != JoinClaimed && s.state != JoinApproved) {
+			continue
+		}
+		if s.net == netKey {
+			n++
+		}
+		if wide != "" && s.wide == wide {
+			nw++
+		}
+	}
+	return n >= maxDevicePerClient || (wide != "" && nw >= maxDevicePerClient*joinWiderFactor)
 }
 
 // live gibt die Sitzung des Kontos und, falls das Gerät verschwunden ist, den
@@ -561,23 +616,27 @@ func (j *JoinSessions) View(account string) JoinView {
 	if s == nil {
 		return JoinView{State: JoinNone}
 	}
-	return JoinView{State: state, Pair: FormatUserCode(s.pair), Machine: s.machine, Remote: s.remote, Net: s.net,
+	v := JoinView{State: state, Pair: FormatUserCode(s.pair), Machine: s.machine, Remote: s.remote, Net: s.net,
 		Nonce: s.nonce, Mode: s.mode}
+	if state == JoinCompromised && s.mode == JoinModeLoopback && s.cbPort != 0 {
+		v.Callback = s.callback(url.Values{"error": {"access_denied"}})
+	}
+	return v
 }
 
 // Decide bestätigt oder verweigert das gemeldete Gerät im Namen des Kontos. nonce
 // ist die Kennung der Anfrage, die die Seite zeigte; gehört sie zu einem anderen
 // Gerät, passiert nichts. check läuft unter derselben Sperre (Maschinenname).
-// Beim Loopback-Weg liefert eine Freigabe das Ziel für den Browser.
+// Beim Loopback-Weg liefert die Entscheidung das Ziel für den Browser: bei Freigabe mit Code, bei Ablehnung mit error=access_denied.
 func (j *JoinSessions) Decide(account string, approve bool, nonce, confirm string, check func(machine string) error) (JoinDecision, error) {
 	j.mu.Lock()
-	defer j.mu.Unlock()
-	now := j.now()
-	s, state := j.live(account, now)
+	s, state := j.live(account, j.now())
 	if s == nil || state != JoinClaimed || nonce == "" || subtle.ConstantTimeCompare([]byte(nonce), []byte(s.nonce)) != 1 {
+		j.mu.Unlock()
 		return JoinDecision{}, ErrJoinNotReady
 	}
 	if !approve {
+		defer j.mu.Unlock()
 		if s.mode == JoinModeCode {
 			if err := j.device.DecideJoin(s.deviceHash, account, false); err != nil {
 				return JoinDecision{}, ErrJoinNotReady
@@ -585,13 +644,30 @@ func (j *JoinSessions) Decide(account string, approve bool, nonce, confirm strin
 		}
 		s.state = JoinDenied
 		delete(j.byPair, hashCode(s.pair))
+		if s.mode == JoinModeLoopback {
+			return JoinDecision{Redirect: s.callback(url.Values{"error": {"access_denied"}})}, nil
+		}
 		return JoinDecision{}, nil
 	}
 	if check != nil {
-		if err := check(s.machine); err != nil {
+		// Die Prüfung fragt die Datenbank und läuft ohne Sperre; danach gilt
+		// nur, was zum aktuellen Zustand derselben Anfrage noch passt.
+		machine := s.machine
+		j.mu.Unlock()
+		err := check(machine)
+		j.mu.Lock()
+		if err != nil {
+			j.mu.Unlock()
 			return JoinDecision{}, err
 		}
+		s, state = j.live(account, j.now())
+		if s == nil || state != JoinClaimed || s.machine != machine || subtle.ConstantTimeCompare([]byte(nonce), []byte(s.nonce)) != 1 {
+			j.mu.Unlock()
+			return JoinDecision{}, ErrJoinNotReady
+		}
 	}
+	defer j.mu.Unlock()
+	now := j.now()
 	if s.mode == JoinModeCode {
 		given := normalizeConfirm(confirm)
 		if given == "" || hashCode(given) != s.confirmHash {
@@ -612,11 +688,8 @@ func (j *JoinSessions) Decide(account string, approve bool, nonce, confirm strin
 	}
 	s.authHash, s.authExpires, s.state = hashCode(code), now.Add(joinAuthTTL), JoinApproved
 	j.byAuth[s.authHash] = s
-	if end := s.authExpires.Add(time.Minute); end.After(s.expires) {
-		s.expires = end
-	}
-	q := url.Values{"code": {code}, "state": {s.cbState}}
-	return JoinDecision{Redirect: "http://" + s.cbHost + ":" + strconv.Itoa(s.cbPort) + "/callback?" + q.Encode()}, nil
+	s.extend(s.authExpires.Add(time.Minute))
+	return JoinDecision{Redirect: s.callback(url.Values{"code": {code}})}, nil
 }
 
 // normalizeConfirm macht aus der Eingabe die kanonische Form des Bestätigungscodes
@@ -653,7 +726,7 @@ func (j *JoinSessions) Exchange(addr, code, verifier string) (JoinGrant, error) 
 		s.authHash = ""
 	}
 	sum := sha256.Sum256([]byte(verifier))
-	ok := s != nil && now.Before(s.authExpires) && s.state == JoinApproved && len(verifier) >= 43 && len(verifier) <= 128 &&
+	ok := s != nil && now.Before(s.authExpires) && s.state == JoinApproved && len(verifier) >= 43 && len(verifier) <= 128 && allBytes(verifier, stateChars) &&
 		subtle.ConstantTimeCompare([]byte(base64.RawURLEncoding.EncodeToString(sum[:])), []byte(s.challenge)) == 1
 	if !ok {
 		j.fail(addr, now)
@@ -687,9 +760,7 @@ func (j *JoinSessions) DeliveredDevice(deviceCode string) {
 func (j *JoinSessions) connected(s *joinSession) {
 	s.state = JoinConnected
 	delete(j.byPair, hashCode(s.pair))
-	if end := j.now().Add(time.Minute); end.After(s.expires) {
-		s.expires = end
-	}
+	s.extend(j.now().Add(time.Minute))
 }
 
 // Sessions zählt die Sitzungen; für Tests.

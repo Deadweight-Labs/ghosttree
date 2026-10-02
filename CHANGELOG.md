@@ -6,6 +6,18 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Fixed: hardening of join sessions after review (REQ-434, P2b). Sessions
+  that have a device are never evicted by further opens of the same
+  invitation, and loopback claims are limited per /64 and /48 like device
+  flows. The join cookie is `__Host-gt_join` wherever it is Secure. A session
+  lives at most 30 minutes in total. Machine names in a join claim are limited
+  to letters, digits, `.`, `_` and `-` (64 characters), the fallback approval
+  page warns on a different network, and the "Same network" line is dropped
+  when `GHOSTTREE_PUBLIC_URL` is set without trusted proxies. Denying a loopback
+  request redirects the browser to the installer with `error=access_denied`.
+  `code_challenge_method` must be `S256`, and `code_verifier` must use the
+  RFC 7636 characters.
+
 - Added: the server can serve the `ctx` installer (REQ-434, fourth part).
   With `GHOSTTREE_DIST_DIR` (or `--dist-dir`) pointing at a directory of
   `ctx_<version>_<os>_<arch>.tar.gz` archives and `checksums.txt`, it answers
