@@ -3,7 +3,9 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"strconv"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 )
@@ -35,6 +37,24 @@ type Session struct {
 	// Messages zählt Nutzer- und Assistententexte (aus dem Index).
 	Messages int `json:"messages,omitempty"`
 }
+
+// SessionRef ist, womit ein Client eine Session anspricht: Mitglieder kennen die
+// laufende Nummer, Gäste nur die zufällige Adresse.
+type SessionRef struct {
+	ID       int64  `json:"id,omitempty"`
+	PublicID string `json:"public_id,omitempty"`
+}
+
+// PathSegment ist der Teil des Pfads /api/sessions/{ref}.
+func (r SessionRef) PathSegment() string {
+	if r.ID != 0 {
+		return strconv.FormatInt(r.ID, 10)
+	}
+	return r.PublicID
+}
+
+// Zero: weder Nummer noch Adresse bekannt.
+func (r SessionRef) Zero() bool { return r.ID == 0 && r.PublicID == "" }
 
 // Freigabestufen einer Session.
 const (
@@ -219,6 +239,95 @@ func (s *Store) ListSessionsOwned(filter scope.Axes, limit int, ownerPrincipalID
 	return out, nil
 }
 
+// ListSessionsVisible liefert die neuesten Sessions, für die keep gilt, höchstens
+// limit viele. Die Sichtbarkeit entscheidet vor dem Abschneiden: wer nur einen
+// Teil des Bestands sehen darf, bekommt dieselbe Antwort, egal wie viele und wie
+// aktuelle verborgene Sessions es gibt (#2447). Die Zeilen werden seitenweise
+// gelesen, bis das Limit erreicht oder der Bestand zu Ende ist.
+func (s *Store) ListSessionsVisible(filter scope.Axes, limit int, ownerPrincipalID string, keep func(Session) bool) ([]Session, error) {
+	if s.reader != nil {
+		return s.reader.ListSessionsVisible(filter, limit, ownerPrincipalID, keep)
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	where, args := filter.FilterWhere()
+	if ownerPrincipalID != "" {
+		id, ok := accountNumericID(ownerPrincipalID)
+		if !ok {
+			return []Session{}, nil
+		}
+		where += ` AND (CASE WHEN account_id = 0 THEN ? ELSE account_id END) = ?`
+		args = append(args, instanceOwnerID(s.db), id)
+	}
+	out := []Session{}
+	err := s.eachSession(where, args, func(sess Session) (bool, error) {
+		if keep == nil || keep(sess) {
+			out = append(out, sess)
+		}
+		return len(out) < limit, nil
+	})
+	return out, err
+}
+
+// visibleSessionIDs sind die Nummern der Sessions, für die keep gilt.
+func (s *Store) visibleSessionIDs(filter scope.Axes, keep func(Session) bool) ([]int64, error) {
+	where, args := filter.FilterWhere()
+	ids := []int64{}
+	err := s.eachSession(where, args, func(sess Session) (bool, error) {
+		if keep(sess) {
+			ids = append(ids, sess.ID)
+		}
+		return true, nil
+	})
+	return ids, err
+}
+
+func idsJSONOf(ids []int64) string {
+	b, _ := json.Marshal(ids)
+	return string(b)
+}
+
+// eachSession ruft fn für die Sessions, neueste zuerst, bis fn false liefert.
+// Gelesen wird in Seiten nach (last_seen_at, id); es bleibt keine Abfrage offen,
+// während fn läuft.
+func (s *Store) eachSession(where string, args []any, fn func(Session) (bool, error)) error {
+	const page = 500
+	lastSeen, lastID, started := "", int64(0), false
+	for {
+		q := `SELECT ` + sessionCols + ` FROM sessions WHERE ` + where
+		a := append([]any(nil), args...)
+		if started {
+			q += ` AND (last_seen_at < ? OR (last_seen_at = ? AND id < ?))`
+			a = append(a, lastSeen, lastSeen, lastID)
+		}
+		q += ` ORDER BY last_seen_at DESC, id DESC LIMIT ?`
+		a = append(a, page)
+		rows, err := s.db.Query(q, a...)
+		if err != nil {
+			return err
+		}
+		batch, err := scanSessions(rows)
+		if err != nil {
+			return err
+		}
+		if err := s.fillSessionOwners(batch); err != nil {
+			return err
+		}
+		for _, sess := range batch {
+			more, err := fn(sess)
+			if err != nil || !more {
+				return err
+			}
+		}
+		if len(batch) < page {
+			return nil
+		}
+		last := batch[len(batch)-1]
+		lastSeen, lastID, started = last.LastSeenAt, last.ID, true
+	}
+}
+
 // SessionsPendingDistillation returns sessions that have never been distilled
 // and have been idle since idleBefore, oldest first. Ordering matters: the
 // distiller must drain the archive rather than revisit the newest window.
@@ -335,11 +444,34 @@ func (s *Store) SearchSessions(q string, filter scope.Axes, excludeSession strin
 	if s.reader != nil {
 		return s.reader.SearchSessions(q, filter, excludeSession, limit)
 	}
+	return s.SearchSessionsVisible(q, filter, excludeSession, limit, nil)
+}
+
+// SearchSessionsVisible sucht nur in Sessions, für die keep gilt, und schneidet
+// erst danach auf limit ab. Die lesbare Menge steht vor der Suche fest und geht
+// als Liste in die Abfrage: der Rang verborgener Treffer kann so weder
+// verdrängen noch verraten, wie viele es gibt (#2447). Ohne keep sucht sie im
+// ganzen Bestand.
+func (s *Store) SearchSessionsVisible(q string, filter scope.Axes, excludeSession string, limit int, keep func(Session) bool) ([]SessionHit, error) {
+	if s.reader != nil {
+		return s.reader.SearchSessionsVisible(q, filter, excludeSession, limit, keep)
+	}
 	if limit <= 0 {
 		limit = 20
 	}
 	where, args := filter.FilterWhere()
 	args = append([]any{ftsQuery(q), excludeSession, excludeSession}, args...)
+	if keep != nil {
+		ids, err := s.visibleSessionIDs(filter, keep)
+		if err != nil {
+			return nil, err
+		}
+		if len(ids) == 0 {
+			return []SessionHit{}, nil
+		}
+		where += ` AND se.id IN (SELECT value FROM json_each(?))`
+		args = append(args, idsJSONOf(ids))
+	}
 	args = append(args, limit)
 	rows, err := s.db.Query(`SELECT `+prefix(sessionCols, "se.")+`, c.seq,
 		snippet(chunks_fts, 0, '', '', '…', 12)

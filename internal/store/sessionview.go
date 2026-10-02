@@ -101,14 +101,26 @@ func (s *Store) allSessions() ([]Session, error) {
 
 // guestView: wer in dem Projekt höchstens Gast ist und die Session nicht
 // besitzt, sieht weder Maschine, Branch, Pfad noch Besitzer, nur Plattform und
-// Projekt. Ohne Durchsetzung sieht jeder alles (Log-Modus).
+// Projekt. Die laufende Nummer sieht ein Gast nie, auch bei der eigenen Session
+// nicht: sie zählt alle Sessions des Servers (#2447). Ohne Durchsetzung sieht
+// jeder alles (Log-Modus).
 func (a *ProjectAccess) guestView(sess Session) Session {
-	if !a.st.AccessEnforced() || a.OwnsSession(sess) || RoleRank(a.Role(sess.Scope.Project).Role) >= 2 {
+	if !a.st.AccessEnforced() || RoleRank(a.Role(sess.Scope.Project).Role) >= 2 {
+		return sess
+	}
+	sess.ID = 0
+	if a.OwnsSession(sess) {
 		return sess
 	}
 	sess.Scope.Machine, sess.Scope.Branch, sess.CWD = "", "", ""
 	sess.Owner, sess.AccountID, sess.ExternalID = "", 0, ""
 	return sess
+}
+
+// SeesSessionNumbers: der Betrachter darf die laufende Nummer der Sessions des
+// Projekts kennen (Mitglied ab member, oder ohne Durchsetzung).
+func (a *ProjectAccess) SeesSessionNumbers(project string) bool {
+	return !a.st.AccessEnforced() || RoleRank(a.Role(project).Role) >= 2
 }
 
 func (a *ProjectAccess) isGuestOnly() bool {

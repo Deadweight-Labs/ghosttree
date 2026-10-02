@@ -96,7 +96,7 @@ func searchIDs(t *testing.T, st *Store, pa *ProjectAccess, q string) (SearchPage
 	}
 	got := map[string]bool{}
 	for _, g := range page.Groups {
-		raw, err := st.SessionByID(g.Session.ID)
+		raw, err := st.SessionByPublicID(g.Session.PublicID)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -323,10 +323,13 @@ func TestGuestListsOnlyGuestSharedSessionsWithoutMachineOrOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(page.Rows) != 1 || page.Rows[0].Session.ID != f.d.ID || !page.Rows[0].Readable {
+	if len(page.Rows) != 1 || page.Rows[0].Session.PublicID != f.d.PublicID || !page.Rows[0].Readable {
 		t.Fatalf("guest rows = %+v", page.Rows)
 	}
 	s := page.Rows[0].Session
+	if s.ID != 0 {
+		t.Errorf("guest sees the session number %d", s.ID)
+	}
 	if s.Scope.Machine != "" || s.Scope.Branch != "" || s.CWD != "" || s.Owner != "" || s.AccountID != 0 || s.ExternalID != "" {
 		t.Errorf("guest sees machine, branch, path or owner: %+v", s)
 	}
@@ -1014,5 +1017,27 @@ func TestSessionLinksAreFilteredByTheViewer(t *testing.T) {
 	guest, _ := st.SessionLinks(viewer(st, "person:5", "gus"), []int64{f.d.ID})
 	if len(guest[f.d.ID]) != 1 || guest[f.d.ID][0].Label != "trusted note" {
 		t.Errorf("guest links = %+v, want only the trusted entry", guest[f.d.ID])
+	}
+}
+
+// A path like ./x.db or ../x.db used to reach SQLite as a URI with an authority
+// ("invalid uri authority: .").
+func TestOpenAcceptsRelativeDotPaths(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(filepath.Join(dir, "sub"))
+	for _, p := range []string{"./one.db", "../two.db", "three.db"} {
+		st, err := Open(p)
+		if err != nil {
+			t.Fatalf("Open(%q): %v", p, err)
+		}
+		st.Close()
+	}
+	for _, f := range []string{"sub/one.db", "two.db", "sub/three.db"} {
+		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
+			t.Errorf("%s was not created: %v", f, err)
+		}
 	}
 }

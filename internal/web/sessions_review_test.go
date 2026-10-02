@@ -144,9 +144,13 @@ func TestSharingWithGuestsAsksAboutSecrets(t *testing.T) {
 	if resp, _ := post(url.Values{"level": {store.VisProject}}); resp.StatusCode != http.StatusSeeOther {
 		t.Fatalf("project level: %d", resp.StatusCode)
 	}
-	resp, page := post(url.Values{"level": {store.VisGuests}})
-	if resp.StatusCode != http.StatusOK || !strings.Contains(page, "3 possible secrets in this session. Share anyway?") {
-		t.Fatalf("no confirmation: %d %.300s", resp.StatusCode, page)
+	resp, _ := post(url.Values{"level": {store.VisGuests}})
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("no redirect to the confirmation: %d", resp.StatusCode)
+	}
+	_, page := e.get(t, e.Member, resp.Header.Get("Location"))
+	if !strings.Contains(page, "3 possible secrets in this session. Share anyway?") {
+		t.Fatalf("no confirmation: %.300s", page)
 	}
 	if got, _ := e.St.SessionByID(id); got.Visibility != store.VisProject {
 		t.Errorf("level changed before the confirmation: %q", got.Visibility)

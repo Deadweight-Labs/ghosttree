@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -869,7 +870,13 @@ func OpenReadOnly(path string, maxOpenConns int) (*Store, error) {
 	if !info.Mode().IsRegular() {
 		return nil, fmt.Errorf("database path %q is not a regular file", dbPath)
 	}
-	dsn := (&url.URL{Scheme: "file", Path: dbPath}).String() +
+	// Ein relativer Pfad würde als URI "file://./x.db" mit der Autorität "."
+	// gelesen; absolut hat die URI keine.
+	absPath, err := filepath.Abs(dbPath)
+	if err != nil {
+		return nil, err
+	}
+	dsn := (&url.URL{Scheme: "file", Path: absPath}).String() +
 		"?mode=ro&_pragma=foreign_keys(1)&_pragma=recursive_triggers(1)&_pragma=busy_timeout(5000)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {

@@ -333,7 +333,7 @@ func (a *api) checkTranscript(w http.ResponseWriter, r *http.Request, id int64) 
 // shareSession gibt ein Transkript für die Mitglieder des Projekts frei oder
 // nimmt die Freigabe zurück. Nur der Besitzer.
 func (a *api) shareSession(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(r)
+	id, ok := a.sessionPathID(r)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "bad session id")
 		return

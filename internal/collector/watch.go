@@ -3,9 +3,11 @@ package collector
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,6 +25,14 @@ type Uploader interface {
 	AppendChunks(id int64, chunks []store.Chunk) error
 }
 
+// RefUploader ist optional: ein Uploader, der Sessions über Nummer oder Adresse
+// anspricht. Ein Gast bekommt vom Server keine Nummer, nur die Adresse; ohne
+// diese Schnittstelle gilt die Nummer wie bisher.
+type RefUploader interface {
+	UpsertSessionRef(s store.Session) (store.SessionRef, error)
+	AppendChunksRef(ref store.SessionRef, chunks []store.Chunk) error
+}
+
 // ActivityRecorder ist optional und wird per Typprüfung erkannt.
 //
 // Optional, weil das Einsammeln von Transkripten seit jeher funktioniert,
@@ -38,9 +48,10 @@ type ActivityRecorder interface {
 // uploadBatch bounds request size during the initial import of old transcripts.
 const uploadBatch = 500
 
-// uploadBatchBytes bounds the raw text of one request; the server refuses
-// bodies above 128 MiB, and JSON escaping can double what is counted here.
-const uploadBatchBytes = 32 << 20
+// uploadBatchBytes bounds the serialized size of one request (text and raw line
+// as JSON, escaping included); the server refuses bodies above 64 MiB. A request
+// the server refuses anyway is halved (see uploadSplit).
+var uploadBatchBytes = 24 << 20
 
 // metaScanLines is how far into a file we look for the session metadata line.
 const metaScanLines = 200
@@ -56,12 +67,14 @@ func parserFor(harness string) func([]byte) ParsedLine {
 // The offset only advances after the server accepted a batch.
 func SyncFile(path, harness string, up Uploader, st *State, machine string) error {
 	fs := st.file(path)
-	if fs.SessionID == 0 || fs.MetadataVersion < 1 {
-		id, err := registerSession(path, harness, up, machine)
+	ref := store.SessionRef{ID: fs.SessionID, PublicID: fs.PublicID}
+	if ref.Zero() || fs.MetadataVersion < 1 {
+		var err error
+		ref, err = registerSession(path, harness, up, machine)
 		if err != nil {
 			return err
 		}
-		fs.SessionID = id
+		fs.SessionID, fs.PublicID = ref.ID, ref.PublicID
 		fs.MetadataVersion = 1
 		if err := st.Save(); err != nil {
 			return err
@@ -88,7 +101,7 @@ func SyncFile(path, harness string, up Uploader, st *State, machine string) erro
 		if len(batch) == 0 {
 			return nil
 		}
-		if err := up.AppendChunks(fs.SessionID, batch); err != nil {
+		if err := uploadSplit(up, ref, batch); err != nil {
 			return err
 		}
 		// Ein Pausenbeleg geht vor dem Offset-Fortschritt raus; scheitert er,
@@ -146,7 +159,7 @@ func SyncFile(path, harness string, up Uploader, st *State, machine string) erro
 			}
 		}
 		seq++
-		batchBytes += len(trimmed)
+		batchBytes += wireSize(batch[len(batch)-1])
 		if len(batch) >= uploadBatch || batchBytes >= uploadBatchBytes {
 			if err := flush(); err != nil {
 				return err
@@ -156,10 +169,56 @@ func SyncFile(path, harness string, up Uploader, st *State, machine string) erro
 	return flush()
 }
 
-func registerSession(path, harness string, up Uploader, machine string) (int64, error) {
+// wireSize ist die Größe eines Chunks im Anfragekörper: Text und Rohzeile als
+// JSON, mit Escapes. Gezählt wird, was der Server begrenzt, nicht der Rohtext.
+func wireSize(c store.Chunk) int {
+	b, err := json.Marshal(c)
+	if err != nil {
+		return len(c.Text) + len(c.Raw)
+	}
+	return len(b) + 1
+}
+
+// uploadSplit lädt einen Stapel hoch. Lehnt der Server ihn als zu groß ab (413),
+// wird er halbiert und beide Hälften einzeln gesendet; ein Wiederholen
+// desselben Stapels käme nie durch. Eine einzelne Zeile, die auch allein zu
+// groß ist, geht als Platzhalter mit derselben Nummer hinaus, damit die Folge
+// lückenlos bleibt und der Lauf weiterkommt.
+func uploadSplit(up Uploader, ref store.SessionRef, batch []store.Chunk) error {
+	err := sendChunks(up, ref, batch)
+	if err == nil || !tooLarge(err) {
+		return err
+	}
+	if len(batch) == 1 {
+		c := batch[0]
+		note, _ := json.Marshal(map[string]any{"type": "ghosttree-omitted", "reason": "line too large for upload", "bytes": len(c.Raw)})
+		log.Printf("session line %d is %d bytes and was refused by the server; uploading a marker instead", c.Seq, len(c.Raw))
+		return sendChunks(up, ref, []store.Chunk{{Seq: c.Seq, Role: "other", Raw: string(note)}})
+	}
+	mid := len(batch) / 2
+	if err := uploadSplit(up, ref, batch[:mid]); err != nil {
+		return err
+	}
+	return uploadSplit(up, ref, batch[mid:])
+}
+
+func sendChunks(up Uploader, ref store.SessionRef, batch []store.Chunk) error {
+	if ru, ok := up.(RefUploader); ok {
+		return ru.AppendChunksRef(ref, batch)
+	}
+	return up.AppendChunks(ref.ID, batch)
+}
+
+// tooLarge sagt, ob der Server die Anfrage wegen ihrer Größe abgelehnt hat.
+func tooLarge(err error) bool {
+	var h interface{ HTTPStatus() int }
+	return errors.As(err, &h) && h.HTTPStatus() == http.StatusRequestEntityTooLarge
+}
+
+func registerSession(path, harness string, up Uploader, machine string) (store.SessionRef, error) {
 	head, err := firstLines(path, metaScanLines)
 	if err != nil {
-		return 0, err
+		return store.SessionRef{}, err
 	}
 	var externalID, cwd, project, branch string
 	if harness == "codex" {
@@ -181,13 +240,22 @@ func registerSession(path, harness string, up Uploader, machine string) (int64, 
 	if fi, err := os.Stat(path); err == nil {
 		started = fi.ModTime().UTC().Format(time.RFC3339)
 	}
-	return up.UpsertSession(store.Session{
+	sess := store.Session{
 		Harness:    harness,
 		ExternalID: externalID,
 		Scope:      scope.Axes{Project: project, Branch: branch, Machine: machine},
 		CWD:        cwd,
 		StartedAt:  started,
-	})
+	}
+	if ru, ok := up.(RefUploader); ok {
+		ref, err := ru.UpsertSessionRef(sess)
+		if err == nil && ref.Zero() {
+			err = errors.New("server named no session")
+		}
+		return ref, err
+	}
+	id, err := up.UpsertSession(sess)
+	return store.SessionRef{ID: id}, err
 }
 
 func firstLines(path string, n int) ([][]byte, error) {

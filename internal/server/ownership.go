@@ -104,7 +104,10 @@ func accountOf(p store.Principal) (int64, bool) {
 func (a *api) mayWriteSession(w http.ResponseWriter, r *http.Request, id int64) bool {
 	sess, err := a.st.SessionByID(id)
 	if errors.Is(err, sql.ErrNoRows) {
-		return true
+		// Wie eine fremde Session: wer rät, erfährt nicht, welche Nummern
+		// vergeben sind.
+		writeCoded(w, http.StatusForbidden, "session_owned", "that session belongs to another account")
+		return false
 	}
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)

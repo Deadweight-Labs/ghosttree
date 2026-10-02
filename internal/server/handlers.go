@@ -48,14 +48,37 @@ func (a *api) createSession(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, 200, map[string]int64{"id": id})
+	a.writeSessionRef(w, r, s.Scope.Project, id)
+}
+
+// writeSessionRef antwortet auf das Anlegen einer Session. Mitglieder bekommen
+// die Nummer und die Adresse (ältere Collector brauchen die Nummer), Gäste nur
+// die Adresse: laufende Nummern, die ein Gast mit eigenen Sessions erzeugt,
+// zählten sonst die verborgenen dazwischen (#2447).
+func (a *api) writeSessionRef(w http.ResponseWriter, r *http.Request, project string, id int64) {
+	sess, err := a.st.SessionByID(id)
+	if err != nil {
+		writeStoreError(w, http.StatusInternalServerError, err)
+		return
+	}
+	out := map[string]any{"public_id": sess.PublicID}
+	if a.access(r).SeesSessionNumbers(project) {
+		out["id"] = id
+	}
+	writeJSON(w, 200, out)
 }
 
 // Grenzen der Session-Uploads. Der Collector schickt höchstens 500 Zeilen und
-// 32 MiB Rohtext je Anfrage (collector.uploadBatch, uploadBatchBytes); die
-// Grenze liegt darüber, damit auch eine einzelne sehr große Zeile durchgeht.
+// 24 MiB serialisiert je Anfrage (collector.uploadBatch, uploadBatchBytes) und
+// halbiert bei 413; die Grenze liegt darüber.
 // maxChunkBody ist eine Variable, damit der Test sie senken kann.
-var maxChunkBody int64 = 128 << 20
+var maxChunkBody int64 = 64 << 20
+
+// smallBody ist die Größe, bis zu der ein Upload ohne Platz in bigBodies
+// auskommt; darüber dürfen höchstens zwei Uploads gleichzeitig lesen.
+const smallBody = 4 << 20
+
+var bigBodies = make(chan struct{}, 2)
 
 const maxSessionBody = 64 << 10
 
@@ -75,21 +98,32 @@ func readLimitedJSON(w http.ResponseWriter, r *http.Request, v any, limit int64)
 }
 
 func (a *api) appendChunks(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(r)
+	id, ok := a.sessionPathID(r)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "bad session id")
 		return
+	}
+	// Besitz und Recht vor dem Körper: wer nicht schreiben darf, bringt den
+	// Server nicht dazu, bis zu maxChunkBody Bytes zu lesen und zu decodieren.
+	if !a.mayWriteSession(w, r, id) {
+		return
+	}
+	if denyAccess(w, a.access(r).Check("", store.ResSessionMeta, store.ActCreate, store.Object{Own: true})) {
+		return
+	}
+	// Große Körper belegen viel Speicher: nur wenige gleichzeitig.
+	if r.ContentLength < 0 || r.ContentLength > smallBody {
+		select {
+		case bigBodies <- struct{}{}:
+			defer func() { <-bigBodies }()
+		case <-r.Context().Done():
+			return
+		}
 	}
 	var body struct {
 		Chunks []store.Chunk `json:"chunks"`
 	}
 	if !readLimitedJSON(w, r, &body, maxChunkBody) {
-		return
-	}
-	if !a.mayWriteSession(w, r, id) {
-		return
-	}
-	if denyAccess(w, a.access(r).Check("", store.ResSessionMeta, store.ActCreate, store.Object{Own: true})) {
 		return
 	}
 	if err := a.st.AppendChunks(id, body.Chunks); err != nil {
@@ -102,35 +136,30 @@ func (a *api) appendChunks(w http.ResponseWriter, r *http.Request) {
 func (a *api) listSessions(w http.ResponseWriter, r *http.Request) {
 	limit := intParam(r, "limit", 50)
 	pa := a.access(r)
-	dbFilter, viewFilter, fetch := a.sessionFilters(axesFromQuery(r), a.overfetch(limit))
-	sessions, err := a.st.ListSessionsOwned(dbFilter, fetch, ownerFilter(r))
+	dbFilter, viewFilter, _ := a.sessionFilters(axesFromQuery(r), limit)
+	// Metadaten (wer arbeitet wo) sehen Mitglieder ab member; die eigenen
+	// Sessions bleiben dem Besitzer. Titel, Zähler und Adresse stammen aus dem
+	// Transkript und gehören nur dem, der es lesen darf; Gäste sehen weder
+	// Maschine, Branch, Pfad noch Besitzer. Die Sichtbarkeit entscheidet vor dem
+	// Abschneiden auf limit (#2447): die Antwort hängt nicht davon ab, wie viele
+	// verborgene Sessions es gibt oder wie aktuell sie sind.
+	sessions, err := a.st.ListSessionsVisible(dbFilter, limit, ownerFilter(r), func(sess store.Session) bool {
+		return pa.CanSeeSessionMeta(sess) && pa.MatchesAxes(pa.MetaView(sess), viewFilter)
+	})
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
-	// Metadaten (wer arbeitet wo) sehen Mitglieder ab member; die eigenen
-	// Sessions bleiben dem Besitzer. Titel, Zähler und Adresse stammen aus dem
-	// Transkript und gehören nur dem, der es lesen darf; Gäste sehen weder
-	// Maschine, Branch, Pfad noch Besitzer.
 	out := make([]store.Session, 0, len(sessions))
 	for _, sess := range sessions {
-		if !pa.CanSeeSessionMeta(sess) {
-			continue
-		}
-		view := pa.MetaView(sess)
-		if pa.MatchesAxes(view, viewFilter) {
-			out = append(out, view)
-			if len(out) >= limit {
-				break
-			}
-		}
+		out = append(out, pa.MetaView(sess))
 	}
 	pa.Filtered()
 	writeJSON(w, 200, out)
 }
 
 func (a *api) readSession(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(r)
+	id, ok := a.sessionPathID(r)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "bad session id")
 		return
@@ -150,7 +179,7 @@ func (a *api) readSession(w http.ResponseWriter, r *http.Request) {
 // The harnesses expire their own transcripts, so this is what makes ghosttree
 // the long-term copy rather than just an index of one.
 func (a *api) rawSession(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(r)
+	id, ok := a.sessionPathID(r)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "bad session id")
 		return
@@ -556,7 +585,17 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 	}
 	if kind == "sessions" || kind == "all" {
 		dbFilter, viewFilter, fetchSessions := a.sessionFilters(filter, fetch)
-		hits, err := a.st.SearchSessions(q, dbFilter, r.URL.Query().Get("exclude_session"), fetchSessions)
+		// Mit Durchsetzung steht die lesbare Menge vor dem Rang fest: ein
+		// verborgener Treffer darf weder einen sichtbaren verdrängen noch
+		// verraten, wie viele es gibt (#2447). Das Limit gilt danach.
+		var readable func(store.Session) bool
+		if a.st.AccessEnforced() {
+			fetchSessions = limit
+			readable = func(sess store.Session) bool {
+				return pa.CanSeeTranscript(sess) && pa.MatchesAxes(pa.MetaView(sess), viewFilter)
+			}
+		}
+		hits, err := a.st.SearchSessionsVisible(q, dbFilter, r.URL.Query().Get("exclude_session"), fetchSessions, readable)
 		if err != nil {
 			writeStoreError(w, http.StatusInternalServerError, err)
 			return

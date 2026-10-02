@@ -276,9 +276,15 @@ func sessionMeta(s store.Session) string {
 	return strings.Join(parts, " · ")
 }
 
+// parseStamp liest einen Zeitstempel der Datenbank (UTC) in der Zeitzone des
+// Servers. Jede Uhrzeit der Seiten geht hierüber, damit Zeilen, Gruppen und
+// Kopf dieselbe Zeit zeigen.
 func parseStamp(s string) time.Time {
 	t, _ := time.Parse(time.RFC3339, s)
-	return t
+	if t.IsZero() {
+		return t
+	}
+	return t.In(time.Local)
 }
 
 func formatDuration(from, to string) string {
@@ -297,6 +303,7 @@ func formatDuration(from, to string) string {
 }
 
 func dayLabel(t, now time.Time) string {
+	t, now = t.In(time.Local), now.In(time.Local)
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
 	day := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
 	switch {
@@ -399,10 +406,10 @@ func sessionFilterFromQuery(r *http.Request, guest bool) (store.SessionFilter, u
 		f.Machine = strings.ToLower(strings.TrimSpace(q.Get("machine")))
 		f.Mine = q.Get("owner") == "mine"
 	}
-	now := time.Now().UTC()
+	now := time.Now().In(time.Local)
 	switch q.Get("period") {
 	case "today":
-		f.Since = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+		f.Since = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.Local)
 	case "7d":
 		f.Since = now.AddDate(0, 0, -7)
 	case "30d":
@@ -847,6 +854,21 @@ func (a *app) sessionPage(w http.ResponseWriter, r *http.Request) {
 		v.Share = form
 	}
 
+	// Rückfrage vor dem Teilen mit Gästen, wenn das Transkript Zugangsdaten
+	// zu enthalten scheint; nur dem, der teilen darf.
+	if qv.Get("confirm") == store.VisGuests && v.Share != nil && sess.Visibility != store.VisGuests {
+		if n := a.countSecrets(sess.ID); n > 0 {
+			text := msg("sessions.secrets_many", n)
+			if n == 1 {
+				text = msg("sessions.secrets_one")
+			}
+			back := "/ui/sessions/" + sess.PublicID
+			a.renderBrowser(w, r, "session", pageData{Title: msg("nav.sessions"), SessionV: &sessionView{
+				PID: sess.PublicID, Confirm: &shareConfirm{Action: back + "/share", Level: store.VisGuests, Text: text, Back: back}}})
+			return
+		}
+	}
+
 	// Verknüpfungen: nur Ziele, die der Betrachter sehen darf.
 	links, _ := a.store.SessionLinks(pa, []int64{sess.ID})
 	created := links[sess.ID]
@@ -1034,14 +1056,10 @@ func (a *app) sessionShare(w http.ResponseWriter, r *http.Request) {
 	// aussieht, als enthielte es Zugangsdaten. Die Frage kommt nur dem, der
 	// teilen darf.
 	if level == store.VisGuests && sess.Visibility != store.VisGuests && r.FormValue("confirm") != "1" && pa.CanShareSession(sess) {
-		if n := a.countSecrets(sess.ID); n > 0 {
-			text := msg("sessions.secrets_many", n)
-			if n == 1 {
-				text = msg("sessions.secrets_one")
-			}
-			back := "/ui/sessions/" + sess.PublicID
-			a.renderBrowser(w, r, "session", pageData{Title: msg("nav.sessions"), SessionV: &sessionView{
-				PID: sess.PublicID, Confirm: &shareConfirm{Action: back + "/share", Level: level, Text: text, Back: back}}})
+		if a.countSecrets(sess.ID) > 0 {
+			// Post/Redirect/Get: die Frage ist eine Seite für sich, die man
+			// neu laden kann, ohne den Wechsel erneut zu senden.
+			http.Redirect(w, r, "/ui/sessions/"+sess.PublicID+"?confirm="+store.VisGuests, http.StatusSeeOther)
 			return
 		}
 	}
@@ -1234,8 +1252,11 @@ func buildBlocks(sess store.Session, chunks []store.Chunk, hl highlighter, at in
 	for i, b := range blocks {
 		if bv, ok := blockFor(sess, b, hl, at, expanded, toolsOn, thinkingOn); ok {
 			n := blockRows(bv)
-			if !bv.Target && len(out) > 0 && rows+n > maxRenderedRows {
-				return out, max(b.Seq, last+1)
+			// Die Seite endet zwischen zwei gespeicherten Zeilen, nie in einer:
+			// das nächste Fenster beginnt bei einer Zeile und könnte die übrigen
+			// Blöcke dieser Zeile nicht mehr erreichen.
+			if !bv.Target && len(out) > 0 && rows+n > maxRenderedRows && b.Seq != last {
+				return out, b.Seq
 			}
 			rows += n
 			last = b.Seq
