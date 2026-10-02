@@ -25,7 +25,7 @@ type deviceTokenRequest struct {
 }
 
 func isDevicePath(path string) bool {
-	return path == "/api/auth/device" || path == "/api/auth/device/token"
+	return path == "/api/auth/device" || path == "/api/auth/device/token" || path == "/api/join/claim" || path == "/api/join/token"
 }
 
 // readDeviceBody liest einen begrenzten JSON-Körper. Beide Endpunkte sind ohne
@@ -149,6 +149,8 @@ func (a *api) pollDeviceLogin(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "access_denied"})
 			return
 		}
+		// Erst jetzt, mit ausgestelltem Token, gilt eine Join-Paarung als verbunden.
+		a.st.Join().DeliveredDevice(strings.TrimSpace(req.DeviceCode))
 		writeJSON(w, http.StatusOK, map[string]any{
 			"access_token": token, "token_type": "bearer", "machine": info.Machine, "token_id": info.ID,
 		})

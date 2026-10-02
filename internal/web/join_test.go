@@ -216,8 +216,9 @@ func TestJoinPageShowsOnlyWhatTheInviteeNeedsAndSetsSafeHeaders(t *testing.T) {
 	if strings.Contains(csp, "script-src") || strings.Contains(csp, "unsafe") {
 		t.Errorf("CSP allows scripts: %s", csp)
 	}
-	if len(h.Values("Set-Cookie")) != 0 {
-		t.Errorf("the page sets cookies: %v", h.Values("Set-Cookie"))
+	// Einziger Cookie: der HttpOnly-Cookie der Join-Sitzung, ohne Code darin.
+	if cookies := h.Values("Set-Cookie"); len(cookies) != 1 || !strings.HasPrefix(cookies[0], "gt_join=") || !strings.Contains(cookies[0], "HttpOnly") || strings.Contains(cookies[0], code) {
+		t.Errorf("cookies: %v", cookies)
 	}
 	if regexp.MustCompile(`(?i)(src|href|action)="(https?:)?//`).MatchString(page) {
 		t.Errorf("page loads or links something external: %s", page)

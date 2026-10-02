@@ -27,9 +27,10 @@ import (
 // /ui/login/code (beide legen das Konto und die Rolle in einer Transaktion an),
 // und für ein angemeldetes Konto über POST /join/<code>/accept.
 //
-// Anschluss für die Join-Sitzung (P2): joinPreview liefert die geprüfte
-// Einladung, joinAccepted ist der eine Ort, an dem nach dem Beitritt weiter
-// geleitet wird.
+// Schon die Einladungsseite legt eine Join-Sitzung mit Paarungscode an (ohne die
+// Einladung zu verbrauchen), damit Installation und Anmeldung parallel laufen.
+// Nach dem Beitritt wird sie an das Konto gebunden und es geht auf /join/pair
+// (joinpair.go), die Freigabe des Geräts.
 
 const (
 	joinLimit      = 30
@@ -173,6 +174,7 @@ func (a *app) joinPreview(code string) (store.InvitePreview, bool) {
 }
 
 type joinView struct {
+	Command                                 string
 	Org, Project, Role, RoleText, ExpiresAt string
 	Code, CSRFToken, Person                 string
 	SignedIn, OIDC, NeedsName               bool
@@ -220,6 +222,12 @@ func (a *app) joinPage(w http.ResponseWriter, r *http.Request) {
 			view.Email = acct.Email
 		}
 	}
+	if open, err := a.store.Join().Open(code, joinCookieValue(r)); err == nil {
+		view.Command = a.joinCommand(r, open.Pair)
+		if open.ID != "" {
+			http.SetCookie(w, a.joinCookieFor(r, open.ID, int(store.JoinSessionTTL.Seconds())))
+		}
+	}
 	a.joinHeaders(w)
 	a.joinWrite(w, "join", view)
 }
@@ -231,8 +239,7 @@ func (a *app) joinAccept(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	code := r.PathValue("code")
-	preview, ok := a.joinPreview(code)
-	if !ok {
+	if _, ok := a.joinPreview(code); !ok {
 		a.joinNotFound(w)
 		return
 	}
@@ -247,7 +254,7 @@ func (a *app) joinAccept(w http.ResponseWriter, r *http.Request) {
 	_, err := a.store.AcceptInvitation(browserPrincipal(r).ID, code)
 	switch {
 	case err == nil:
-		a.joinAccepted(w, r, preview)
+		a.joinAccepted(w, r, code)
 	case errors.Is(err, store.ErrCodeInvalid):
 		a.joinNotFound(w)
 	case errors.Is(err, store.ErrAlreadyMember):
@@ -274,10 +281,20 @@ func (a *app) joinSignOut(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, back, http.StatusSeeOther)
 }
 
-// joinAccepted ist der Ort, an dem der Beitritt endet. P2 setzt hier die
-// Join-Sitzung fort (Paarung des Geräts); bis dahin geht es in die Oberfläche.
-func (a *app) joinAccepted(w http.ResponseWriter, r *http.Request, _ store.InvitePreview) {
-	http.Redirect(w, r, "/ui/requests", http.StatusSeeOther)
+// joinAccepted ist der Ort, an dem der Beitritt endet: die Join-Sitzung dieses
+// Browsers wird an das Konto gebunden (oder eine neue für das Konto angelegt).
+func (a *app) joinAccepted(w http.ResponseWriter, r *http.Request, code string) {
+	a.joinBind(w, r, code, browserPrincipal(r).ID)
+}
+
+// joinBind bindet die Sitzung an das Konto und leitet auf die Paarungsseite.
+func (a *app) joinBind(w http.ResponseWriter, r *http.Request, inviteCode, account string) {
+	http.SetCookie(w, a.joinCookieFor(r, "", -1))
+	if err := a.store.Join().Bind(inviteCode, joinCookieValue(r), account); err != nil {
+		http.Redirect(w, r, "/ui/requests", http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, "/join/pair", http.StatusSeeOther)
 }
 
 func (a *app) joinMessage(w http.ResponseWriter, status int, title, message string) {

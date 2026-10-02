@@ -89,6 +89,7 @@ var writerMethodClasses = map[string]string{
 	"CreateToken":                   "write",
 	"CreateDeviceToken":             "write",
 	"Device":                        "administrative",
+	"Join":                          "administrative",
 	"ListAllTokens":                 "read",
 	"TokenByID":                     "read",
 	"RevokeToken":                   "write",
