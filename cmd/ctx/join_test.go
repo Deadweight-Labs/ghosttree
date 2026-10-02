@@ -57,7 +57,10 @@ func (f *fakeTTY) Ask(prompt string) (string, error) {
 	f.asked = append(f.asked, prompt)
 	block := f.block
 	f.mu.Unlock()
-	if block != nil {
+	f.mu.Lock()
+	exhausted := len(f.answers) == 0
+	f.mu.Unlock()
+	if block != nil && exhausted {
 		<-block
 		return "", io.EOF
 	}
@@ -1149,5 +1152,68 @@ func TestJoinIntegrationDeclinedRejoinKeepsTheMachineWithItsOwner(t *testing.T) 
 	}
 	if !strings.Contains(out.String(), "no longer valid") {
 		t.Fatalf("loss of the old connection not reported: %s", out.String())
+	}
+}
+
+func TestJoinStripsBidiAndZeroWidthFormatCharacters(t *testing.T) {
+	newJoinFixture(t, "n")
+	noSleep(t)
+	srv := fallbackServer(t)
+	srv.whoami = "{\"id\":\"person:2\",\"label\":\"an\\u202ena\\u200b\\u2066\"}"
+	var out syncBuffer
+	cmdJoin([]string{"--server", srv.URL, "--pair", "abcd-efgh", "--no-browser"}, &out)
+	if strings.ContainsAny(out.String(), "\u202e\u200b\u2066") || !strings.Contains(out.String(), "Account anna") {
+		t.Fatalf("out %q", out.String())
+	}
+}
+
+func TestJoinSignalDuringTheInstallQuestionsStopsTheLoop(t *testing.T) {
+	f := newJoinFixture(t, "y")
+	f.detected = []string{"claude", "codex"}
+	noSleep(t)
+	srv := fallbackServer(t)
+	f.tty.mu.Lock()
+	f.tty.block = make(chan struct{})
+	f.tty.mu.Unlock()
+	go func() {
+		for i := 0; i < 400; i++ {
+			if len(f.tty.questions()) >= 2 {
+				syscall.Kill(os.Getpid(), syscall.SIGINT)
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+	done := make(chan int, 1)
+	var out syncBuffer
+	go func() {
+		done <- cmdJoin([]string{"--server", srv.URL, "--pair", "abcd-efgh", "--no-browser"}, &out)
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("blocked")
+	}
+	close(f.tty.block)
+	if q := f.tty.questions(); len(q) != 2 || len(f.installs) != 0 {
+		t.Fatalf("questions %v installs %v", q, f.installs)
+	}
+	if !strings.Contains(out.String(), "Interrupted") {
+		t.Fatalf("out %s", out.String())
+	}
+}
+
+func TestJoinAsksAlsoWhenTheNewNameDiffersOnTheSameServer(t *testing.T) {
+	f := newJoinFixture(t, "n")
+	srv := fallbackServer(t)
+	if err := config.Save(config.Config{ServerURL: srv.URL, Token: "old-token", Machine: "box"}); err != nil {
+		t.Fatal(err)
+	}
+	var out syncBuffer
+	if code := cmdJoin([]string{"--server", srv.URL, "--pair", "abcd-efgh", "--name", "other", "--no-browser"}, &out); code != 1 {
+		t.Fatalf("exit %d", code)
+	}
+	if q := f.tty.questions(); len(q) != 1 || !strings.Contains(q[0], "already connected as anna") || len(srv.claims) != 0 {
+		t.Fatalf("questions %v claims %v", q, srv.claims)
 	}
 }

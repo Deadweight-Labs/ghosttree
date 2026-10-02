@@ -305,6 +305,6 @@ func (s *Store) TransferMachine(name, account string) error {
 	}
 	at := now()
 	_, err = s.db.Exec(`INSERT INTO machines(hostname, first_seen, last_seen, account_id) VALUES(?,?,?,?)
-		ON CONFLICT(hostname) DO UPDATE SET account_id=excluded.account_id`, canonicalMachine(name), at, at, id)
+		ON CONFLICT(hostname) DO UPDATE SET account_id=excluded.account_id, claimed_by_token=0`, canonicalMachine(name), at, at, id)
 	return err
 }

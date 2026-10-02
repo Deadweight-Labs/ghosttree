@@ -106,7 +106,7 @@ func TestRevokeOwnTokenTwiceAndForeignPrincipal(t *testing.T) {
 func TestOrgNamesRejectControlCharacters(t *testing.T) {
 	s := openTest(t)
 	s.AddPerson("alice")
-	for _, name := range []string{"Evil\x1b[2K", "tab\there", "nul\x00", "c1\u009b"} {
+	for _, name := range []string{"Evil\x1b[2K", "rtl\u202eevil", "zw\u200bspace", "iso\u2066x", "tab\there", "nul\x00", "c1\u009b"} {
 		if _, err := s.CreateOrg("person:1", name, ""); !errors.Is(err, ErrInvalidInput) {
 			t.Errorf("CreateOrg(%q): %v", name, err)
 		}
@@ -117,5 +117,18 @@ func TestOrgNamesRejectControlCharacters(t *testing.T) {
 	}
 	if _, err := s.RenameOrg("person:1", o.ID, "Bad\x1b[31m", ""); !errors.Is(err, ErrInvalidInput) {
 		t.Errorf("RenameOrg: %v", err)
+	}
+}
+
+func TestTransferMachineForgetsTheClaimingToken(t *testing.T) {
+	s := openTest(t)
+	s.AddPerson("alice")
+	s.AddPerson("bob")
+	tok, _, _ := s.CreateDeviceToken("person:1", "moved")
+	if err := s.TransferMachine("moved", "bob"); err != nil {
+		t.Fatal(err)
+	}
+	if released, err := s.RevokeOwnToken(principalOfToken(t, s, tok)); err != nil || released {
+		t.Fatalf("released=%v err=%v", released, err)
 	}
 }

@@ -410,12 +410,17 @@ func cmdJoin(args []string, stdout io.Writer) int {
 	replaced := false
 	if loadErr == nil && existing.Token != "" && strings.TrimRight(existing.ServerURL, "/") == server {
 		old := client.New(config.Config{ServerURL: server, Token: existing.Token, Machine: existing.Machine})
-		if who, err := old.WhoAmIContext(ctx); err == nil && strings.EqualFold(existing.Machine, machine) {
-			if tty != nil && !confirm(ctx, tty, fmt.Sprintf("This machine is already connected as %s. Joining replaces that connection. Continue? [y/N] ", safe(who.Label)), false) {
+		if who, err := old.WhoAmIContext(ctx); err == nil {
+			same := strings.EqualFold(existing.Machine, machine)
+			q := fmt.Sprintf("This machine is already connected as %s. Joining replaces that connection. Continue? [y/N] ", safe(who.Label))
+			if !same {
+				q = fmt.Sprintf("This machine is already connected as %s (machine %s). Joining replaces the local config. Continue? [y/N] ", safe(who.Label), safe(existing.Machine))
+			}
+			if tty != nil && !confirm(ctx, tty, q, false) {
 				fmt.Fprintln(stdout, "Cancelled. Config and connection unchanged.")
 				return 1
 			}
-			replaced = true
+			replaced = same
 		}
 	}
 
@@ -480,6 +485,10 @@ func cmdJoin(args []string, stdout io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "Wrote %s\n", config.Path())
 	for _, h := range joinDetect() {
+		if ctx.Err() != nil {
+			fmt.Fprintln(stdout, "Interrupted. Connected, but not installed for your agents; run ctx install claude|codex.")
+			return 1
+		}
 		if tty != nil && !confirm(ctx, tty, fmt.Sprintf("Install ghosttree for %s? [Y/n] ", h), true) {
 			continue
 		}
@@ -513,12 +522,12 @@ func isLoopbackHost(h string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// safe entfernt Steuerzeichen (C0, DEL, C1, auch ESC) aus Text, den der Server
+// safe entfernt Steuerzeichen (C0, DEL, C1, auch ESC) und Formatzeichen (Bidi, Zero-Width) aus Text, den der Server
 // geliefert hat, damit er das Terminal nicht umschreiben und eine Rückfrage
 // nicht fälschen kann.
 func safe(s string) string {
 	return strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
 			return -1
 		}
 		return r
@@ -540,6 +549,10 @@ func revokeIssued(c *client.Client, stdout io.Writer) {
 // confirm fragt auf dem Terminal. Ein Abbruch des Kontexts (Signal) während der
 // Frage zählt als Ablehnung; die blockierte Leseroutine endet mit dem Prozess.
 func confirm(ctx context.Context, t terminal, prompt string, def bool) bool {
+	// Nach einem Abbruch keine weitere Leseroutine auf demselben Terminal starten.
+	if ctx.Err() != nil {
+		return false
+	}
 	type answer struct {
 		text string
 		err  error

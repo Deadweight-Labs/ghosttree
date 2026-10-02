@@ -1341,11 +1341,12 @@ func (s *Store) RenameOrg(actorPrincipal string, orgID int64, name, slug string)
 	return o, tx.Commit()
 }
 
-// hasControlRunes sagt, ob s Steuerzeichen (C0, DEL, C1) enthält. Ein Name mit
+// hasControlRunes sagt, ob s Steuerzeichen (C0, DEL, C1) oder Formatzeichen
+// (Bidi-Umschalter, Zero-Width) enthält. Ein Name mit
 // ESC-Folgen könnte in einem Terminal, das ihn anzeigt, Text überschreiben.
 func hasControlRunes(s string) bool {
 	for _, r := range s {
-		if unicode.IsControl(r) {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
 			return true
 		}
 	}

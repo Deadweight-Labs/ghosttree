@@ -962,16 +962,18 @@ func (s *Store) RevokeOwnToken(p Principal) (released bool, err error) {
 	}
 	if kind == "device" && machine != "" {
 		name := canonicalMachine(machine)
-		var others, attached int
+		// lower() bleibt: Altzeilen in sessions, knowledge und requests tragen den
+		// Namen nicht zwingend klein geschrieben. EXISTS hört beim ersten Treffer auf.
+		var others, attached bool
 		if err := tx.QueryRow(`SELECT
-			(SELECT COUNT(*) FROM api_tokens WHERE account_id=? AND machine=? AND revoked_at='' AND id<>?),
-			(SELECT COUNT(*) FROM sessions WHERE lower(machine)=?) +
-			(SELECT COUNT(*) FROM knowledge WHERE lower(machine)=?) +
-			(SELECT COUNT(*) FROM requests WHERE lower(machine)=?)`,
+			EXISTS(SELECT 1 FROM api_tokens WHERE account_id=? AND machine=? AND revoked_at='' AND id<>? LIMIT 1),
+			EXISTS(SELECT 1 FROM sessions WHERE lower(machine)=? LIMIT 1)
+			OR EXISTS(SELECT 1 FROM knowledge WHERE lower(machine)=? LIMIT 1)
+			OR EXISTS(SELECT 1 FROM requests WHERE lower(machine)=? LIMIT 1)`,
 			account, machine, p.TokenID, name, name, name).Scan(&others, &attached); err != nil {
 			return false, err
 		}
-		if others == 0 && attached == 0 {
+		if !others && !attached {
 			res, err := tx.Exec(`DELETE FROM machines WHERE hostname=? AND account_id=? AND claimed_by_token=?`, name, account, p.TokenID)
 			if err != nil {
 				return false, err
