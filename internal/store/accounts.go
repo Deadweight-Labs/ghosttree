@@ -652,7 +652,7 @@ func (s *Store) loginIdentity(in IdentityLogin) (Account, LoginOutcome, error) {
 		// Organisation auf. Andere Codes ignoriert eine bekannte Identität wie
 		// bisher.
 		if in.Code != "" && invitationExists(tx, in.Code) {
-			switch _, err := acceptInvitationTx(tx, in.Code, accountID, in.Email); {
+			switch _, err := acceptInvitationTx(tx, in.Code, accountID, in.Email, s.AccessEnforced()); {
 			case errors.Is(err, ErrAlreadyMember):
 				return a, LoginExisting, nil
 			case err != nil:
@@ -680,7 +680,7 @@ func (s *Store) loginIdentity(in IdentityLogin) (Account, LoginOutcome, error) {
 		// Registrierung nur per Einladung: Konto und Mitgliedschaft entstehen
 		// gemeinsam oder gar nicht. in.Email ist nur gesetzt, wenn der IdP sie
 		// als verifiziert gemeldet hat.
-		if accountID, err = createInvitedAccountTx(tx, in.Name, in.Email, in.Code); err != nil {
+		if accountID, err = createInvitedAccountTx(tx, in.Name, in.Email, in.Code, s.AccessEnforced()); err != nil {
 			return Account{}, "", err
 		}
 		outcome = LoginInvited

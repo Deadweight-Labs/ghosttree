@@ -6,6 +6,34 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Added: invitation page `/join/<code>` (REQ-434, first part). It shows the
+  organization, project, role (member or guest) and expiry of an invitation
+  link and uses nothing up by being opened; the invitation is consumed when
+  the invitee signs in (identity provider or local code sign-in) or presses
+  "Join" in a signed-in session, once and atomically. Every code that does not
+  work (unknown, malformed, expired, used, revoked, inviter no longer owner,
+  project moved, org-wide or email-bound invitation) gets the same 404 page,
+  headers included; requests are limited per client address (30 per 10 minutes,
+  `GHOSTTREE_TRUSTED_PROXIES` honoured), never per code. The page sends
+  `Referrer-Policy: strict-origin` (not `no-referrer`, which makes browsers
+  send `Origin: null` on every POST and breaks the same-origin check; the code
+  in the path is still never passed on), `Cache-Control: no-store`, a
+  script-free CSP and `X-Robots-Tag`, and the server logs nothing for `/join/` paths. Owners
+  create project links on the organization page (member 7 days, guest 3 days
+  by default); a link never grants owner or lead. Guest links need
+  `GHOSTTREE_ENFORCE_ACCESS=1`, project links are accepted only in a browser
+  session (the token API refuses them), the signed-in page asks to confirm the
+  account name and offers "Not you? Sign out", and, when
+  `GHOSTTREE_ENFORCE_ACCESS=1` is set, an org member who is not an owner sees only
+  the owners, themselves and the accounts that share a project with them (a
+  guest or a member without a project role: only owners and themselves), without
+  other accounts' ids, in the member list (UI and API). Without enforcement
+  every member sees everyone, as before, and a guest link is not valid. A project
+  lead (and any owner, or anyone without enforcement) still sees all org members
+  in the role forms of their project and can promote role-less members. The
+  invitation list shows project and role. `/ui/orgs/accept` hands project codes
+  over to the join page. At startup the server warns when
+  `GHOSTTREE_PUBLIC_URL` is set but `GHOSTTREE_TRUSTED_PROXIES` is empty.
 - Fixed: signing in with a one-time code, login link, invitation or bootstrap
   code in a browser ended with 403. The code pages sent
   `Referrer-Policy: no-referrer`, so the browser posted the form with

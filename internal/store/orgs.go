@@ -72,7 +72,7 @@ type Org struct {
 }
 
 type OrgMemberInfo struct {
-	AccountID string `json:"account_id"`
+	AccountID string `json:"account_id,omitempty"`
 	Account   string `json:"account"`
 	Role      string `json:"role"`
 	JoinedAt  string `json:"joined_at"`
@@ -101,6 +101,10 @@ type Invitation struct {
 	CreatedAt string `json:"created_at"`
 	ExpiresAt string `json:"expires_at"`
 	Status    string `json:"status"` // pending, expired, accepted, revoked
+	// ProjectRemote und ProjectRole sind nur bei einer Projekt-Einladung (Link)
+	// gesetzt.
+	ProjectRemote string `json:"project,omitempty"`
+	ProjectRole   string `json:"project_role,omitempty"`
 }
 
 type queryer interface {
@@ -369,6 +373,65 @@ func (s *Store) ListOrgMembers(orgID int64) ([]OrgMemberInfo, error) {
 		out = append(out, m)
 	}
 	return out, rows.Err()
+}
+
+// ListOrgMembersFor ist die Mitgliederliste für einen Betrachter (enforced:
+// ob die Sichtbarkeit durchgesetzt wird). Ohne
+// durchgesetzte Sichtbarkeit sieht jedes Mitglied alle Inhalte, dann auch alle
+// Mitglieder. Mit ihr sieht ein Org-Owner alle; wer kein Owner ist, sieht die
+// Owner, sich selbst und die Konten, die mit ihm ein Projekt teilen, in dem er
+// mehr als Gast ist. Ein Gast, oder wer keine Projektrolle hat, sieht nur die
+// Owner und sich selbst. Die Ids der anderen Einträge fehlen: fortlaufende Ids
+// verrieten die Zahl der Konten (Pitfall #2447).
+func (s *Store) ListOrgMembersFor(orgID int64, viewerPrincipal string, enforced bool) ([]OrgMemberInfo, error) {
+	if s.reader != nil {
+		return s.reader.ListOrgMembersFor(orgID, viewerPrincipal, enforced)
+	}
+	all, err := s.ListOrgMembers(orgID)
+	if err != nil {
+		return nil, err
+	}
+	if !enforced {
+		return all, nil
+	}
+	viewer, err := parsePersonPrincipalID(viewerPrincipal)
+	if err != nil {
+		return []OrgMemberInfo{}, nil
+	}
+	if orgRoleTx(s.db, orgID, viewer) == OrgOwner {
+		return all, nil
+	}
+	rows, err := s.db.Query(`SELECT DISTINCT other.account_id FROM project_members mine
+		JOIN projects p ON p.id = mine.project_id AND p.org_id = ?
+		JOIN project_members other ON other.project_id = mine.project_id
+		WHERE mine.account_id = ? AND mine.role IN (?, ?, ?)`, orgID, viewer, RoleOwner, RoleLead, RoleMember)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	shared := map[string]bool{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		shared[principalOfID(id)] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	self := principalOfID(viewer)
+	out := []OrgMemberInfo{}
+	for _, m := range all {
+		if m.AccountID != self && m.Role != OrgOwner && !shared[m.AccountID] {
+			continue
+		}
+		if m.AccountID != self {
+			m.AccountID = ""
+		}
+		out = append(out, m)
+	}
+	return out, nil
 }
 
 func ownerCountTx(q rowQuerier, orgID int64) int {
@@ -823,13 +886,14 @@ func (s *Store) CreateInvitation(actorPrincipal string, orgID int64, email, role
 	return code, inv, tx.Commit()
 }
 
-const invitationSelect = `SELECT i.id, i.org_id, i.role, i.email, p.name, i.created_at, i.expires_at, i.accepted_at, i.revoked_at
-	FROM invitations i JOIN persons p ON p.id = i.invited_by`
+const invitationSelect = `SELECT i.id, i.org_id, i.role, i.email, p.name, i.created_at, i.expires_at, i.accepted_at, i.revoked_at,
+	COALESCE(pr.remote,''), i.project_role
+	FROM invitations i JOIN persons p ON p.id = i.invited_by LEFT JOIN projects pr ON pr.id = i.project_id`
 
 func scanInvitation(r rowScanner) (Invitation, error) {
 	var inv Invitation
 	var accepted, revoked string
-	if err := r.Scan(&inv.ID, &inv.OrgID, &inv.Role, &inv.Email, &inv.InvitedBy, &inv.CreatedAt, &inv.ExpiresAt, &accepted, &revoked); err != nil {
+	if err := r.Scan(&inv.ID, &inv.OrgID, &inv.Role, &inv.Email, &inv.InvitedBy, &inv.CreatedAt, &inv.ExpiresAt, &accepted, &revoked, &inv.ProjectRemote, &inv.ProjectRole); err != nil {
 		return Invitation{}, err
 	}
 	switch {
@@ -913,11 +977,11 @@ func invitationExists(q rowQuerier, code string) bool {
 // verifiedEmail muss vom Aufrufer verifiziert sein (IdP-Claim email_verified)
 // oder leer; eine an eine Adresse gebundene Einladung verlangt Gleichheit.
 // Gültigkeit, Zustand und Einlösbarkeit melden einheitlich ErrCodeInvalid.
-func acceptInvitationTx(tx execQueryer, code string, account int64, verifiedEmail string) (Org, error) {
-	var id, orgID, inviter int64
-	var role, email, expires, accepted, revoked string
-	err := tx.QueryRow(`SELECT id, org_id, role, email, invited_by, expires_at, accepted_at, revoked_at FROM invitations WHERE code_hash=?`,
-		hashToken(code)).Scan(&id, &orgID, &role, &email, &inviter, &expires, &accepted, &revoked)
+func acceptInvitationTx(tx execQueryer, code string, account int64, verifiedEmail string, enforced bool) (Org, error) {
+	var id, orgID, inviter, projectID int64
+	var role, projectRole, email, expires, accepted, revoked string
+	err := tx.QueryRow(`SELECT id, org_id, role, project_id, project_role, email, invited_by, expires_at, accepted_at, revoked_at FROM invitations WHERE code_hash=?`,
+		hashToken(code)).Scan(&id, &orgID, &role, &projectID, &projectRole, &email, &inviter, &expires, &accepted, &revoked)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Org{}, ErrCodeInvalid
 	}
@@ -932,11 +996,37 @@ func acceptInvitationTx(tx execQueryer, code string, account int64, verifiedEmai
 	if orgRoleTx(tx, orgID, inviter) != OrgOwner {
 		return Org{}, ErrCodeInvalid
 	}
+	// Eine Projekt-Einladung gilt nur, solange das Projekt in der Organisation
+	// liegt, die eingeladen hat, und trägt nur member oder guest.
+	var remote string
+	if projectID != 0 {
+		if projectRole != RoleMember && projectRole != RoleGuest {
+			return Org{}, ErrCodeInvalid
+		}
+		// Ein Gast-Link gilt nur, solange die Sichtbarkeit durchgesetzt wird.
+		if projectRole == RoleGuest && !enforced {
+			return Org{}, ErrCodeInvalid
+		}
+		var projectOrg int64
+		if tx.QueryRow(`SELECT remote, org_id FROM projects WHERE id=?`, projectID).Scan(&remote, &projectOrg) != nil || projectOrg != orgID {
+			return Org{}, ErrCodeInvalid
+		}
+	}
 	if email != "" && !(verifiedEmail != "" && strings.EqualFold(email, strings.TrimSpace(verifiedEmail))) {
 		return Org{}, ErrInvitationEmail
 	}
-	if orgRoleTx(tx, orgID, account) != "" {
+	orgRole := orgRoleTx(tx, orgID, account)
+	if projectID == 0 && orgRole != "" || orgRole == OrgOwner {
 		return Org{}, ErrAlreadyMember
+	}
+	// Ein Konto, das die Organisation schon hat, kann über eine Projekt-Einladung
+	// eine Projektrolle bekommen, aber nie eine niedrigere oder gleiche.
+	var currentProject string
+	if projectID != 0 {
+		_ = tx.QueryRow(`SELECT role FROM project_members WHERE project_id=? AND account_id=?`, projectID, account).Scan(&currentProject)
+		if RoleRank(currentProject) >= RoleRank(projectRole) {
+			return Org{}, ErrAlreadyMember
+		}
 	}
 	res, err := tx.Exec(`UPDATE invitations SET accepted_by=?, accepted_at=? WHERE id=? AND accepted_at='' AND revoked_at=''`, account, now(), id)
 	if err != nil {
@@ -945,13 +1035,27 @@ func acceptInvitationTx(tx execQueryer, code string, account int64, verifiedEmai
 	if n, _ := res.RowsAffected(); n != 1 {
 		return Org{}, ErrCodeInvalid
 	}
-	if _, err := tx.Exec(`INSERT INTO org_members(org_id, account_id, role, joined_at) VALUES(?,?,?,?)`, orgID, account, role, now()); err != nil {
-		return Org{}, err
+	if orgRole == "" {
+		if _, err := tx.Exec(`INSERT INTO org_members(org_id, account_id, role, joined_at) VALUES(?,?,?,?)`, orgID, account, role, now()); err != nil {
+			return Org{}, err
+		}
 	}
 	if _, err := tx.Exec(`UPDATE persons SET default_org_id=? WHERE id=? AND default_org_id=0`, orgID, account); err != nil {
 		return Org{}, err
 	}
-	if err := orgEvent(tx, orgID, "join", principalOfID(account), principalOfID(account), "invitation "+strconv.FormatInt(id, 10)+" as "+role); err != nil {
+	detail := "invitation " + strconv.FormatInt(id, 10) + " as " + role
+	if projectID != 0 {
+		if _, err := tx.Exec(`INSERT INTO project_members(project_id, account_id, role, can_review, granted_by, granted_at) VALUES(?,?,?,0,?,?)
+			ON CONFLICT(project_id, account_id) DO UPDATE SET role=excluded.role, granted_by=excluded.granted_by, granted_at=excluded.granted_at`,
+			projectID, account, projectRole, inviter, now()); err != nil {
+			return Org{}, err
+		}
+		if err := roleEvent(tx, remote, principalOfID(account), currentProject, projectRole, principalOfID(inviter), RoleViaInvitation); err != nil {
+			return Org{}, err
+		}
+		detail = "invitation " + strconv.FormatInt(id, 10) + " as " + projectRole + " of " + remote
+	}
+	if err := orgEvent(tx, orgID, "join", principalOfID(account), principalOfID(account), detail); err != nil {
 		return Org{}, err
 	}
 	return orgByIDTx(tx, orgID)
@@ -991,7 +1095,7 @@ func (s *Store) acceptInvitation(acct int64, code string) (Org, error) {
 	if a.State != "active" {
 		return Org{}, ErrAccountDisabled
 	}
-	o, err := acceptInvitationTx(tx, code, acct, a.Email)
+	o, err := acceptInvitationTx(tx, code, acct, a.Email, s.AccessEnforced())
 	if err != nil {
 		return Org{}, err
 	}
@@ -1023,7 +1127,7 @@ func inviteName(tx queryer, wanted string) (string, error) {
 
 // createInvitedAccountTx legt das Konto zu einer Einladung an und löst sie ein;
 // scheitert die Einlösung, bleibt auch das Konto aus (Rollback des Aufrufers).
-func createInvitedAccountTx(tx execQueryer, name, email, code string) (int64, error) {
+func createInvitedAccountTx(tx execQueryer, name, email, code string, enforced bool) (int64, error) {
 	if !invitationExists(tx, code) {
 		return 0, ErrCodeInvalid
 	}
@@ -1036,7 +1140,7 @@ func createInvitedAccountTx(tx execQueryer, name, email, code string) (int64, er
 		return 0, err
 	}
 	id, _ := res.LastInsertId()
-	if _, err := acceptInvitationTx(tx, code, id, email); err != nil {
+	if _, err := acceptInvitationTx(tx, code, id, email, enforced); err != nil {
 		return 0, err
 	}
 	return id, nil
@@ -1059,7 +1163,7 @@ func (s *Store) InviteLocal(code, name string) (Account, error) {
 		return Account{}, err
 	}
 	defer tx.Rollback()
-	id, err := createInvitedAccountTx(tx, name, "", code)
+	id, err := createInvitedAccountTx(tx, name, "", code, s.AccessEnforced())
 	if err != nil {
 		return Account{}, err
 	}

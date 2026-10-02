@@ -37,16 +37,19 @@ type projectRolesView struct {
 
 // orgsView sammelt, was die Org-Seite zeigt.
 type orgsView struct {
-	Orgs      []store.Org
-	Selected  store.Org
-	Owner     bool
-	Members   []orgMemberRow
-	Invites   []store.Invitation
-	Projects  []store.Project
-	Roles     []projectRolesView
-	NewCode   string // einmalig angezeigter Einladungscode
-	NewExpiry string
-	Notice    string
+	Orgs       []store.Org
+	Selected   store.Org
+	Owner      bool
+	Members    []orgMemberRow
+	Invites    []store.Invitation
+	Projects   []store.Project
+	Roles      []projectRolesView
+	NewCode    string // einmalig angezeigter Einladungscode
+	NewExpiry  string
+	NewLink    bool // der Code gehört zu einer Projekt-Einladung (/join/<code>)
+	NewURL     string
+	GuestLinks bool // Gast-Links gibt es nur bei durchgesetzter Sichtbarkeit
+	Notice     string
 }
 
 // orgsPage zeigt Mitglieder, Einladungen und Projekte einer Organisation.
@@ -75,11 +78,13 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 	}
 	if v.Selected.ID != 0 {
 		v.Owner = v.Selected.Role == store.OrgOwner
-		members, _ := a.store.ListOrgMembers(v.Selected.ID)
+		members, _ := a.store.ListOrgMembersFor(v.Selected.ID, me, a.store.AccessEnforced())
+		v.GuestLinks = a.store.AccessEnforced()
 		for _, m := range members {
 			m.Account = store.NormalizeAccountName(m.Account)
 			v.Members = append(v.Members, orgMemberRow{OrgMemberInfo: m, Self: m.AccountID == me})
 		}
+		var orgAll []store.OrgMemberInfo
 		v.Projects, _ = a.store.ListProjects(me, v.Selected.ID)
 		v.Projects = a.access(r).VisibleProjects(v.Projects)
 		for _, p := range v.Projects {
@@ -87,14 +92,38 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 			// Ein Gast sieht nur den eigenen Eintrag, wie in der API
 			// (listProjectMembers).
 			guest := store.RoleRank(a.access(r).Role(p.Remote).Role) == 1 && a.store.AccessEnforced()
-			for _, m := range members {
+			// Die Zeilen kommen aus den Mitgliedern des Projekts, nicht aus der
+			// Org-Liste: sonst stünde jedes Org-Mitglied mit "none" darin.
+			projectMembers, _ := a.store.ListProjectMembers(p.Remote)
+			byID := map[string]store.ProjectMember{}
+			for _, m := range projectMembers {
+				byID[m.AccountID] = m
+			}
+			rows := projectMembers
+			// Die ganze Org sehen, um auch Konten ohne Rolle eine zu geben: ein
+			// Owner, jeder ohne durchgesetzte Sichtbarkeit (dort sehen alle
+			// ohnehin alles) und ein Lead oder Projekt-Owner in seinem Projekt (vom Owner
+			// eingesetzt). Member und Gast sehen die Mitglieder des Projekts.
+			if v.Owner || !a.store.AccessEnforced() || store.RoleRank(rv.You) >= store.RoleRank(store.RoleLead) {
+				if orgAll == nil {
+					orgAll, _ = a.store.ListOrgMembers(v.Selected.ID)
+				}
+				rows = rows[:0:0]
+				for _, m := range orgAll {
+					if pm, ok := byID[m.AccountID]; ok {
+						rows = append(rows, pm)
+					} else {
+						rows = append(rows, store.ProjectMember{AccountID: m.AccountID, Account: m.Account})
+					}
+				}
+			}
+			for _, m := range rows {
 				if guest && m.AccountID != me {
 					continue
 				}
-				info := a.store.ProjectRole(p.Remote, m.AccountID)
 				rv.Rows = append(rv.Rows, projectRoleRow{
-					Account: store.NormalizeAccountName(m.Account), AccountID: m.AccountID, Role: info.Role, CanReview: info.CanReview,
-					Implicit: info.Implicit, Grantable: a.grantable(r, me, p.Remote, m.AccountID), Self: m.AccountID == me,
+					Account: store.NormalizeAccountName(m.Account), AccountID: m.AccountID, Role: m.Role, CanReview: m.CanReview,
+					Implicit: m.Implicit, Grantable: a.grantable(r, me, p.Remote, m.AccountID), Self: m.AccountID == me,
 				})
 			}
 			v.Roles = append(v.Roles, rv)
@@ -134,6 +163,8 @@ func orgError(err error) (int, string) {
 		return http.StatusNotFound, "Project not found."
 	case errors.Is(err, store.ErrInvalidInput):
 		return http.StatusBadRequest, err.Error()
+	case errors.Is(err, store.ErrGuestLinkNeedsEnforcement):
+		return http.StatusConflict, "Guest links are not available: this server does not enforce project visibility (GHOSTTREE_ENFORCE_ACCESS=1 is not set), so a guest would see more than the invitation promises. Create a member link, or ask the operator to turn enforcement on."
 	case errors.Is(err, store.ErrTooManyInvites):
 		return http.StatusConflict, "Too many pending invitations; revoke some first."
 	case errors.Is(err, store.ErrCodeInvalid):
@@ -182,14 +213,24 @@ func (a *app) orgInvite(w http.ResponseWriter, r *http.Request) {
 		a.orgFailure(w, r, store.ErrInvalidInput)
 		return
 	}
-	code, inv, err := a.store.CreateInvitation(browserPrincipal(r).ID, o.ID, r.FormValue("email"), r.FormValue("role"), time.Duration(days)*24*time.Hour)
+	ttl := time.Duration(days) * 24 * time.Hour
+	var code string
+	var inv store.Invitation
+	link := false
+	if project := strings.TrimSpace(r.FormValue("project")); project != "" {
+		// Ein Link vergibt nur member oder guest für dieses eine Projekt.
+		link = true
+		code, inv, err = a.store.CreateProjectInvitation(browserPrincipal(r).ID, o.ID, project, r.FormValue("project_role"), ttl)
+	} else {
+		code, inv, err = a.store.CreateInvitation(browserPrincipal(r).ID, o.ID, r.FormValue("email"), r.FormValue("role"), ttl)
+	}
 	if err != nil {
 		a.orgFailure(w, r, err)
 		return
 	}
 	// Der Code erscheint nur in dieser Antwort, nicht in einer URL oder einem
 	// Redirect.
-	a.renderOrgs(w, r, http.StatusOK, orgsView{NewCode: code, NewExpiry: inv.ExpiresAt}, o.Slug, "")
+	a.renderOrgs(w, r, http.StatusOK, orgsView{NewCode: code, NewExpiry: inv.ExpiresAt, NewLink: link, NewURL: a.joinURL(code)}, o.Slug, "")
 }
 
 func (a *app) orgInviteRevoke(w http.ResponseWriter, r *http.Request) {
@@ -250,7 +291,14 @@ func (a *app) orgProjectMove(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) orgAccept(w http.ResponseWriter, r *http.Request) {
-	o, err := a.store.AcceptInvitation(browserPrincipal(r).ID, strings.TrimSpace(r.FormValue("code")))
+	code := strings.TrimSpace(r.FormValue("code"))
+	// Eine Projekt-Einladung geht nur über die Einladungsseite: dort verlangt der
+	// Beitritt eine interaktive Sitzung und die Bestätigung des Kontos.
+	if wellFormedJoinCode(code) && a.store.OpenProjectInvitation(code, a.store.AccessEnforced()) {
+		http.Redirect(w, r, "/join/"+code, http.StatusSeeOther)
+		return
+	}
+	o, err := a.store.AcceptInvitation(browserPrincipal(r).ID, code)
 	if err != nil {
 		a.orgFailure(w, r, err)
 		return
@@ -301,3 +349,6 @@ func (a *app) grantable(r *http.Request, actor, remote, target string) []string 
 	}
 	return a.store.GrantableRoles(actor, remote, target)
 }
+
+// joinURL ist der Einladungslink; mit gesetzter GHOSTTREE_PUBLIC_URL absolut.
+func (a *app) joinURL(code string) string { return a.publicOrigin + "/join/" + code }

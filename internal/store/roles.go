@@ -24,6 +24,8 @@ const (
 	RoleViaWeb = "web"
 	// RoleViaCLIDB: Notausgang des Betreibers mit direktem Datenbankzugriff.
 	RoleViaCLIDB = "cli-db"
+	// RoleViaInvitation: die Rolle kam mit dem Einlösen einer Projekt-Einladung.
+	RoleViaInvitation = "invitation"
 )
 
 var (
