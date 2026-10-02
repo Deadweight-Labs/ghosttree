@@ -384,8 +384,12 @@ func (s *Store) SearchTranscripts(pa *ProjectAccess, q SearchQuery) (SearchPage,
 	}
 	// bm25() gilt nur in der Abfrage, die den FTS-Index selbst liest; die
 	// Verbindung zu chunk_index folgt deshalb in einer zweiten Stufe.
+	// bm25 rechnet mit der Dokumenthäufigkeit des ganzen Index, also auch mit
+	// verborgenen Sessions: wer nicht alles lesen darf, bekommt die Reihenfolge
+	// nur aus der lesbaren Menge (Trefferzahl, dann Aktualität).
+	restricted := len(readable) != len(all)
 	rankExpr := "0"
-	if q.Sort != "newest" {
+	if q.Sort != "newest" && !restricted {
 		rankExpr = "bm25(sess_fts, 2.0, 0.5, 1.0, 0.5)"
 	}
 	rows, err := s.db.Query(`WITH h AS MATERIALIZED (SELECT rowid AS rid, `+rankExpr+` AS r FROM sess_fts WHERE sess_fts MATCH ?)
@@ -436,7 +440,14 @@ func (s *Store) SearchTranscripts(pa *ProjectAccess, q SearchQuery) (SearchPage,
 			}
 			return a.sess.ID > b.sess.ID
 		}
-		if a.rank != b.rank {
+		if restricted {
+			if a.count != b.count {
+				return a.count > b.count
+			}
+			if a.sess.LastSeenAt != b.sess.LastSeenAt {
+				return a.sess.LastSeenAt > b.sess.LastSeenAt
+			}
+		} else if a.rank != b.rank {
 			return a.rank < b.rank
 		}
 		return a.sess.ID > b.sess.ID

@@ -53,6 +53,17 @@ Versioning, with pre-1.0 compatibility rules described in
   the self-hosted fonts. The inline script, the inline progress width and the inline `noscript` style moved into
   `shell.js` and `app.css`.
 
+- Fixed: session review round 4 (REQ-435). Search order no longer depends on
+  sessions you cannot read (web and `/api/search` rank restricted viewers by
+  matches in readable chunks, then recency), request details, work entries and
+  lists show a session's public address instead of its running number for
+  viewers who may not know numbers and omit unreadable sessions, the index
+  backfill rides out a full writer or a locked database instead of stopping,
+  a step reads at most its byte budget, an upload line just under the server
+  limit counts the request envelope, and stored projects are written in
+  canonical form once. Transcript blocks use the Clay cards of the v5 design,
+  your prompts are blue bubbles on the right, and message numbers show only on
+  hover or focus.
 - Changed: the Sessions page is rebuilt for reading and searching (REQ-435,
   Sessions view). The list groups sessions by day with title, agent@machine,
   project, branch, linked requests and knowledge, message count, duration and a

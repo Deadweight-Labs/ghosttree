@@ -366,16 +366,16 @@ func TestSessionDetailRendersBlocksReadably(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Fix the zebrafish login",                       // Titel
-		`class="blk blk-user"`,                          // Nutzerprompt als Block
+		`class="blk blk-user clay"`,                     // Nutzerprompt als Block
 		"Please look at zebrafish in the login handler", // Text
-		`<details class="think"`,                        // Denkblock eingeklappt
+		`<details class="think clay"`,                   // Denkblock eingeklappt
 		`<details class="tool`,                          // Werkzeugaufruf eingeklappt
 		"Show all 30 lines",                             // Ergebnis gekürzt
-		`class="diff"`,                                  // Diff
+		`class="diff clay"`,                             // Diff
 		`class="dl dl-del"`,
 		`class="dl dl-add"`,
 		`class="tr is-bad">error`, // Fehler fällt im Ergebnis auf
-		`class="tool is-failed"`,
+		`class="tool clay is-failed"`,
 		"Prompts",
 		"3 tool calls",
 	} {
@@ -383,7 +383,7 @@ func TestSessionDetailRendersBlocksReadably(t *testing.T) {
 			t.Errorf("detail lacks %q", want)
 		}
 	}
-	if strings.Contains(page, `<details class="think" open`) || strings.Contains(page, `<details class="tool" open`) {
+	if strings.Contains(page, `<details class="think clay" open`) || strings.Contains(page, `<details class="tool" open`) {
 		t.Error("blocks are open in the resting state")
 	}
 	// Von den 30 Zeilen stehen 12 offen, der Rest hinter dem Schalter.

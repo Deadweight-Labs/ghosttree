@@ -165,3 +165,25 @@ func TestGuestCollectorKeepsTheAddressInsteadOfANumber(t *testing.T) {
 		t.Errorf("state = %+v", f)
 	}
 }
+
+// The server limit applies to the whole body, so a line just below it still
+// does not fit once the {"chunks":[...]} envelope is added: it must get the
+// marker instead of an endless 413.
+func TestLineJustBelowTheServerLimitCountsTheEnvelope(t *testing.T) {
+	old := serverLineLimit
+	serverLineLimit = 100 << 10
+	defer func() { serverLineLimit = old }()
+	c := store.Chunk{Seq: 0, Role: "user", Raw: ""}
+	c.Raw = strings.Repeat("a", serverLineLimit-wireSize(c)-envelopeBytes/2)
+	if w := wireSize(c); w > serverLineLimit || w+envelopeBytes <= serverLineLimit {
+		t.Fatalf("setup: wire size %d, limit %d", w, serverLineLimit)
+	}
+	up := &limitUp{limit: serverLineLimit}
+	if err := uploadSplit(up, store.SessionRef{ID: 1}, []store.Chunk{c}); err != nil {
+		t.Fatalf("a line that cannot fit must be replaced by a marker, got %v", err)
+	}
+	got := up.chunks[1]
+	if len(got) != 1 || got[0].Seq != 0 || !strings.Contains(got[0].Raw, "omitted") {
+		t.Fatalf("chunks = %+v", got)
+	}
+}

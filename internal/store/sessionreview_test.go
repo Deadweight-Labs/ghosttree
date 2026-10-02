@@ -234,6 +234,28 @@ func TestTranscriptPrefilterEqualsTheRowByRowCheck(t *testing.T) {
 	addSession(t, f.st, "f-loose", 3, "", "laptop", "", transcriptWith("zebra"))
 	addSession(t, f.st, "g-unclaimed", 4, "github.com/dw/unclaimed", "box", "", transcriptWith("zebra"))
 	addSession(t, f.st, "h-unclaimed-robin", 1, "github.com/dw/unclaimed", "box", "", transcriptWith("zebra"))
+	// Altbestand: kein Konto, shared=1 bei Stufe private, und Projekte in
+	// nicht kanonischer Schreibweise (die Migration macht sie kanonisch).
+	legacy := addSession(t, f.st, "i-legacy-shared", 1, roleProject, "box", "", transcriptWith("zebra"))
+	if _, err := f.st.db.Exec(`UPDATE sessions SET account_id=0, shared=1, visibility='private' WHERE id=?`, legacy.ID); err != nil {
+		t.Fatal(err)
+	}
+	for i, p := range []string{" HTTPS://" + roleProject + ".git/ ", "git@" + strings.Replace(roleProject, "/", ":", 1) + ".git"} {
+		odd := addSession(t, f.st, fmt.Sprintf("j-odd-%d", i), 4, "", "box", VisGuests, transcriptWith("zebra"))
+		if _, err := f.st.db.Exec(`UPDATE sessions SET project=? WHERE id=?`, p, odd.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := f.st.db.Exec(`DELETE FROM index_state WHERE key='sessions_project_canonical'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureCanonicalSessionProjects(f.st.db); err != nil {
+		t.Fatal(err)
+	}
+	var odd int
+	if err := f.st.db.QueryRow(`SELECT COUNT(*) FROM sessions WHERE project != '' AND project != lower(trim(project)) OR project LIKE '%.git' OR project LIKE 'git@%'`).Scan(&odd); err != nil || odd != 0 {
+		t.Fatalf("%d sessions keep a non canonical project (err %v)", odd, err)
+	}
 	for _, who := range []struct{ id, label string }{{"person:1", "robin"}, {"person:2", "lena"}, {"person:3", "mia"}, {"person:4", "rex"}, {"person:5", "gus"}, {"person:6", "nora"}} {
 		pa := viewer(f.st, who.id, who.label)
 		keep := func(s Session) bool { return pa.CanSeeTranscript(s) }
@@ -269,5 +291,57 @@ func TestGuestScanDoesNotTouchHiddenSessions(t *testing.T) {
 	}
 	if calls > 3 {
 		t.Errorf("row check ran %d times, hidden sessions must not reach it", calls)
+	}
+}
+
+// Ranking must not depend on sessions the viewer cannot read: bm25 uses the
+// document frequency of the whole index, so a restricted viewer is ranked from
+// the readable set only.
+func userChunks(texts ...string) []Chunk {
+	var out []Chunk
+	for i, text := range texts {
+		out = append(out, Chunk{Seq: i, Role: "user", Text: text,
+			Raw: userLine(fmt.Sprintf("2026-10-01T10:00:%02dZ", i), text)})
+	}
+	return out
+}
+
+func TestRankingIgnoresHiddenSessions(t *testing.T) {
+	orders := func(hidden string) (web, api string) {
+		st := accessFixture(t)
+		st.SetAccessMode(AccessMode{Enforce: true})
+		addSession(t, st, "s1", 4, roleProject, "box", VisGuests, userChunks("alpha alpha alpha alpha beta"))
+		addSession(t, st, "s2", 4, roleProject, "box", VisGuests, userChunks("alpha beta beta beta beta"))
+		for i := 0; i < 40 && hidden != ""; i++ {
+			addSession(t, st, fmt.Sprintf("p-%d", i), 3, roleProject, "m", "", userChunks("zzz "+hidden))
+		}
+		gus := viewer(st, "person:5", "gus")
+		page, err := st.SearchTranscripts(gus, SearchQuery{Q: "alpha beta", Limit: 50})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, g := range page.Groups {
+			raw, _ := st.SessionByPublicID(g.Session.PublicID)
+			web += raw.ExternalID + ","
+		}
+		hits, err := st.SearchSessionsVisible("alpha beta", scope.Axes{}, "", 50,
+			func(s Session) bool { return gus.CanSeeTranscript(s) }, gus.TranscriptPrefilter())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, h := range hits {
+			api += h.Session.ExternalID + ","
+		}
+		return
+	}
+	web0, api0 := orders("")
+	if web0 == "" || api0 == "" {
+		t.Fatalf("no hits: web=%q api=%q", web0, api0)
+	}
+	for _, hidden := range []string{"alpha", "beta"} {
+		web, api := orders(hidden)
+		if web != web0 || api != api0 {
+			t.Errorf("40 hidden %q sessions changed the order: web %q -> %q, api %q -> %q", hidden, web0, web, api0, api)
+		}
 	}
 }

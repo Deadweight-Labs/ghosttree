@@ -597,8 +597,10 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 		// verborgener Treffer darf weder einen sichtbaren verdrängen noch
 		// verraten, wie viele es gibt (#2447). Das Limit gilt danach.
 		// Die Lese-Regel steckt als SQL in der Abfrage (TranscriptPrefilter): die
-		// Laufzeit hängt nicht von verborgenen Sessions ab, und wer ohnehin
-		// alles in seinem Filter lesen darf, braucht keine Zeilenprüfung.
+		// Zeilenprüfung läuft nur über lesbare Kandidaten, und wer ohnehin alles
+		// in seinem Filter lesen darf, braucht keine. Der Volltext-MATCH selbst
+		// läuft über den ganzen Index, die Laufzeit hängt also von den Treffern
+		// verborgener Sessions mit ab.
 		var readable func(store.Session) bool
 		var pre store.SessionPrefilter
 		if a.st.AccessEnforced() {
@@ -636,6 +638,9 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			writeStoreError(w, http.StatusInternalServerError, err)
 			return
+		}
+		for i := range page.Results {
+			page.Results[i] = pa.RequestHitView(page.Results[i])
 		}
 		res.Requests = page.Results
 		a.noteRequestHits(r, page.Results)

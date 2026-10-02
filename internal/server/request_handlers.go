@@ -47,7 +47,7 @@ func (a *api) createRequest(w http.ResponseWriter, r *http.Request) {
 		writeRequestError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, detail)
+	writeJSON(w, http.StatusCreated, a.access(r).RequestDetailView(detail))
 }
 
 func (a *api) searchRequests(w http.ResponseWriter, r *http.Request) {
@@ -67,6 +67,10 @@ func (a *api) searchRequests(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.noteRequestHits(r, page.Results)
+	pa := a.access(r)
+	for i := range page.Results {
+		page.Results[i] = pa.RequestHitView(page.Results[i])
+	}
 	writeJSON(w, http.StatusOK, page)
 }
 
@@ -84,7 +88,7 @@ func (a *api) getRequest(w http.ResponseWriter, r *http.Request) {
 		writeRequestError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, detail)
+	writeJSON(w, http.StatusOK, a.access(r).RequestDetailView(detail))
 }
 
 func (a *api) completeRequest(w http.ResponseWriter, r *http.Request) {
@@ -114,7 +118,7 @@ func (a *api) completeRequest(w http.ResponseWriter, r *http.Request) {
 		writeRequestError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, detail)
+	writeJSON(w, http.StatusOK, a.access(r).RequestDetailView(detail))
 }
 
 func (a *api) startRequestWork(w http.ResponseWriter, r *http.Request) {
@@ -139,7 +143,7 @@ func (a *api) startRequestWork(w http.ResponseWriter, r *http.Request) {
 		writeRequestError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"work": work, "warnings": warnings})
+	writeJSON(w, http.StatusCreated, map[string]any{"work": a.workView(r, work), "warnings": warnings})
 }
 
 func (a *api) finishRequestWork(w http.ResponseWriter, r *http.Request) {
@@ -164,7 +168,7 @@ func (a *api) finishRequestWork(w http.ResponseWriter, r *http.Request) {
 		writeRequestError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, work)
+	writeJSON(w, http.StatusOK, a.workView(r, work))
 }
 
 func (a *api) addRequestCriterion(w http.ResponseWriter, r *http.Request) {
@@ -241,7 +245,7 @@ func (a *api) dropRequest(w http.ResponseWriter, r *http.Request) {
 		writeRequestError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, detail)
+	writeJSON(w, http.StatusOK, a.access(r).RequestDetailView(detail))
 }
 
 func (a *api) addRequestRelation(w http.ResponseWriter, r *http.Request) {
@@ -292,7 +296,7 @@ func (a *api) correctRequest(w http.ResponseWriter, r *http.Request) {
 		writeRequestError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, detail)
+	writeJSON(w, http.StatusOK, a.access(r).RequestDetailView(detail))
 }
 
 func (a *api) removeRequestRelation(w http.ResponseWriter, r *http.Request) {
@@ -342,4 +346,14 @@ func writeRequestError(w http.ResponseWriter, err error) {
 	}
 	recordResponseError(w, classifyRequestError(http.StatusInternalServerError, "", err.Error()), err.Error())
 	writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "internal", "message": "request operation failed", "resolution": "retry or inspect server logs"})
+}
+
+// workView: wer die Session-Nummern des Projekts nicht kennen darf, bekommt sie
+// auch aus einem einzelnen Arbeitseintrag nicht zurück.
+func (a *api) workView(r *http.Request, w requestdomain.Work) requestdomain.Work {
+	detail, err := a.st.RequestByID(w.RequestID)
+	if err != nil || !a.access(r).SeesSessionNumbers(detail.Request.Scope.Project) {
+		w.SessionID = 0
+	}
+	return w
 }

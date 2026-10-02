@@ -131,3 +131,68 @@ func TestBackfillFinishesAtTheLastChunkAndSetsTheBoundThere(t *testing.T) {
 		t.Errorf("progress = %+v", p)
 	}
 }
+
+// The byte budget bounds a step inside a group of chunks, not only between
+// groups: a group of fat chunks must not read far past the budget.
+func TestByteBudgetCutsInsideAGroup(t *testing.T) {
+	st := orgStore(t, "robin")
+	s := addSession(t, st, "old", 1, "", "m", "", nil)
+	var fat []Chunk
+	for i := 0; i < 40; i++ {
+		fat = append(fat, Chunk{Seq: i, Raw: userLine("2026-10-01T10:00:00Z", strings.Repeat("y", 10<<10))})
+	}
+	legacyChunks(t, st, s.ID, fat)
+	resetBackfill(t, st)
+	oldBytes := maxStepBytes
+	maxStepBytes = 35 << 10
+	defer func() { maxStepBytes = oldBytes }()
+	read := 0
+	chunksRead = func(n int) { read += n }
+	defer func() { chunksRead = nil }()
+	n, more, err := st.indexSessionBatch(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !more || n < 1 || n > 4 || read != n {
+		t.Fatalf("indexed %d (read %d, more=%v) with a 35 KiB budget over 10 KiB chunks, want at most 4", n, read, more)
+	}
+	// The rest still follows, nothing is lost.
+	if err := st.IndexSessionContext(context.Background(), s.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := indexedCount(t, st); got != 40 {
+		t.Errorf("indexed %d of 40", got)
+	}
+}
+
+func TestBackfillRidesOutTransientWriterErrors(t *testing.T) {
+	oldMax := backfillRetryMax
+	backfillRetryMax = 5 * time.Millisecond
+	defer func() { backfillRetryMax = oldMax }()
+	failures := []error{ErrWriterOperationsFull, ErrWriterBytesFull, fmt.Errorf("step: %w", ErrWriterOperationsFull),
+		fmt.Errorf("database is locked (5) (SQLITE_BUSY)")}
+	calls := 0
+	step := func(int) (bool, error) {
+		calls++
+		if calls <= len(failures) {
+			return false, failures[calls-1]
+		}
+		return calls >= len(failures)+3, nil
+	}
+	if err := runIndexBackfill(context.Background(), BackfillOptions{Pause: time.Millisecond}, step); err != nil {
+		t.Fatalf("transient errors must not end the run: %v", err)
+	}
+	if calls != len(failures)+3 {
+		t.Errorf("calls = %d", calls)
+	}
+	// A real error still ends it, and a canceled context ends a retry loop.
+	boom := fmt.Errorf("disk on fire")
+	if err := runIndexBackfill(context.Background(), BackfillOptions{}, func(int) (bool, error) { return false, boom }); err != boom {
+		t.Errorf("hard error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := runIndexBackfill(ctx, BackfillOptions{}, func(int) (bool, error) { return false, ErrWriterBytesFull }); err == nil {
+		t.Error("canceled context must end the run")
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/transcript"
 )
 
@@ -314,21 +315,50 @@ type BackfillOptions struct {
 // ist oder ctx endet. Ein Abbruch verliert nichts: der nächste Lauf macht beim
 // gespeicherten Stand weiter.
 func (s *Store) RunIndexBackfill(ctx context.Context, opts BackfillOptions) error {
+	return runIndexBackfill(ctx, opts, s.IndexBackfillStep)
+}
+
+// transientBackfillError: ein voller Schreiber oder eine gesperrte Datenbank
+// vergeht von selbst; der Lauf wartet und macht weiter.
+func transientBackfillError(err error) bool {
+	if errors.Is(err, ErrWriterOperationsFull) || errors.Is(err, ErrWriterBytesFull) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "sqlite_busy") || strings.Contains(msg, "database is locked") ||
+		strings.Contains(msg, "database table is locked")
+}
+
+// backfillRetryMax ist die längste Wartezeit nach einem vorübergehenden Fehler.
+var backfillRetryMax = 5 * time.Second
+
+func runIndexBackfill(ctx context.Context, opts BackfillOptions, step func(int) (bool, error)) error {
 	if opts.Batch <= 0 {
 		opts.Batch = 300
 	}
 	if opts.Pause <= 0 {
 		opts.Pause = 25 * time.Millisecond
 	}
+	backoff := opts.Pause
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		began := time.Now()
-		done, err := s.IndexBackfillStep(opts.Batch)
+		done, err := step(opts.Batch)
 		if err != nil {
-			return err
+			if !transientBackfillError(err) {
+				return err
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(backoff):
+			}
+			backoff = min(backoff*2, backfillRetryMax)
+			continue
 		}
+		backoff = opts.Pause
 		if done {
 			return nil
 		}
@@ -368,15 +398,23 @@ func indexGroups(tx *sql.Tx, began time.Time, batch int, after int64, next func(
 	size := 0
 	for processed < batch {
 		n := min(backfillGroup, batch-processed)
-		query, args := next(last, n)
+		inner, args := next(last, n)
+		// Die Gruppe endet vor der Zeile, die das Byte-Budget des Schritts
+		// sprengen würde (die erste Zeile kommt immer mit); cnt ist die Zahl
+		// der Zeilen vor der Kürzung.
+		query := `SELECT id, session_id, seq, harness, raw, cnt FROM (
+			SELECT *, SUM(length(raw)) OVER (ORDER BY id) AS cum, COUNT(*) OVER () AS cnt FROM (` + inner + `))
+			WHERE cum - length(raw) < ? ORDER BY id`
+		args = append(args, max(maxStepBytes-size, 1))
 		rows, err := tx.Query(query, args...)
 		if err != nil {
 			return last, processed, false, err
 		}
 		var group []chunkRow
+		cnt := 0
 		for rows.Next() {
 			var r chunkRow
-			if err := rows.Scan(&r.id, &r.sessionID, &r.seq, &r.harness, &r.raw); err != nil {
+			if err := rows.Scan(&r.id, &r.sessionID, &r.seq, &r.harness, &r.raw, &cnt); err != nil {
 				rows.Close()
 				return last, processed, false, err
 			}
@@ -399,10 +437,10 @@ func indexGroups(tx *sql.Tx, began time.Time, batch int, after int64, next func(
 				size += len(r.raw)
 			}
 		}
-		if len(group) < n {
+		if cnt < n && len(group) == cnt {
 			return last, processed, true, nil
 		}
-		if time.Since(began) >= backfillStepBudget || size > maxStepBytes {
+		if len(group) < cnt || time.Since(began) >= backfillStepBudget || size >= maxStepBytes {
 			break
 		}
 	}
@@ -654,4 +692,52 @@ func cleanSnippet(s string) string {
 		b.WriteRune(r)
 	}
 	return b.String()
+}
+
+// ensureCanonicalSessionProjects schreibt sessions.project einmalig in die
+// kanonische Form (wie scope.CanonicalAxes). Die SQL-Vorauswahl der lesbaren
+// Menge vergleicht den Rohwert, die Zeilenprüfung den normalisierten; nur wenn
+// beide denselben Text sehen, geben sie dieselbe Menge.
+func ensureCanonicalSessionProjects(db *sql.DB) error {
+	const key = "sessions_project_canonical"
+	var done int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM index_state WHERE key=?`, key).Scan(&done); err != nil {
+		return err
+	}
+	if done > 0 {
+		return nil
+	}
+	rows, err := db.Query(`SELECT DISTINCT project FROM sessions WHERE project != ''`)
+	if err != nil {
+		return err
+	}
+	var raw []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			rows.Close()
+			return err
+		}
+		raw = append(raw, p)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, p := range raw {
+		if canon := scope.NormalizeRemote(p); canon != p {
+			if _, err := tx.Exec(`UPDATE OR IGNORE sessions SET project=? WHERE project=?`, canon, p); err != nil {
+				return err
+			}
+		}
+	}
+	if _, err := tx.Exec(`INSERT OR REPLACE INTO index_state(key,val) VALUES(?,1)`, key); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

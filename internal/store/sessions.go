@@ -493,13 +493,21 @@ func (s *Store) SearchSessionsVisible(q string, filter scope.Axes, excludeSessio
 		args = append(args, idsJSONOf(ids))
 	}
 	args = append(args, limit)
-	rows, err := s.db.Query(`SELECT `+prefix(sessionCols, "se.")+`, c.seq,
-		snippet(chunks_fts, 0, '', '', '…', 12)
-		FROM chunks_fts f
-		JOIN session_chunks c ON c.id = f.rowid
+	// bm25 (f.rank) hängt vom ganzen Index ab, auch von verborgenen Sessions:
+	// wer nur eine Teilmenge lesen darf, bekommt die Reihenfolge allein aus
+	// der lesbaren Menge.
+	order := "h.r"
+	if keep != nil || pre.Where != "" {
+		order = "COUNT(*) OVER (PARTITION BY se.id) DESC, se.last_seen_at DESC, se.id DESC, c.seq"
+	}
+	rows, err := s.db.Query(`WITH h AS MATERIALIZED (SELECT rowid AS cid, rank AS r,
+			snippet(chunks_fts, 0, '', '', '…', 12) AS snip FROM chunks_fts WHERE chunks_fts MATCH ?)
+		SELECT `+prefix(sessionCols, "se.")+`, c.seq, h.snip
+		FROM h
+		JOIN session_chunks c ON c.id = h.cid
 		JOIN sessions se ON se.id = c.session_id
-		WHERE chunks_fts MATCH ? AND (? = '' OR se.external_id != ?) AND `+where+`
-		ORDER BY f.rank LIMIT ?`, args...)
+		WHERE (? = '' OR se.external_id != ?) AND `+where+`
+		ORDER BY `+order+` LIMIT ?`, args...)
 	if err != nil {
 		return nil, err
 	}

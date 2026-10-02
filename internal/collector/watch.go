@@ -185,6 +185,10 @@ func wireSize(c store.Chunk) int {
 // beheben muss.
 var serverLineLimit = 64 << 20
 
+// envelopeBytes ist die Hülle {"chunks":[…]} samt Zeilenende um einen Stapel:
+// das Limit des Servers gilt für den ganzen Körper, nicht für die Zeile allein.
+const envelopeBytes = len(`{"chunks":[]}`) + 1
+
 // uploadSplit lädt einen Stapel hoch. Lehnt der Server ihn als zu groß ab (413),
 // wird er halbiert und beide Hälften einzeln gesendet; ein Wiederholen
 // desselben Stapels käme nie durch. Eine einzelne Zeile, die auch allein über
@@ -197,7 +201,7 @@ func uploadSplit(up Uploader, ref store.SessionRef, batch []store.Chunk) error {
 	}
 	if len(batch) == 1 {
 		c := batch[0]
-		if wireSize(c) <= serverLineLimit {
+		if wireSize(c)+envelopeBytes <= serverLineLimit {
 			// Unter der Grenze des Servers: die Ablehnung kommt von woanders
 			// (Proxy-Limit). Ein Platzhalter verlöre die Zeile für immer; die
 			// Datei hält an und wird im nächsten Lauf neu versucht.

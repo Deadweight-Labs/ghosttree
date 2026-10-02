@@ -17,14 +17,14 @@ func TestThinkingIsOffUntilAsked(t *testing.T) {
 	e := seedSessions(t)
 	base := "/ui/sessions/" + e.pid["anna-project"]
 	_, page := e.get(t, e.Owner, base)
-	if strings.Contains(page, `<details class="think"`) {
+	if strings.Contains(page, `<details class="think clay"`) {
 		t.Error("thinking blocks are shown by default")
 	}
 	if !strings.Contains(page, "thinking=1") {
 		t.Error("no link to turn thinking on")
 	}
 	_, page = e.get(t, e.Owner, base+"?thinking=1")
-	if !strings.Contains(page, `<details class="think"`) {
+	if !strings.Contains(page, `<details class="think clay"`) {
 		t.Error("thinking=1 does not show thinking")
 	}
 	// A search the viewer scoped to thinking finds thinking, even while the blocks are hidden.

@@ -52,12 +52,12 @@
 {{else}}
 <div class="sd-grid">
 <nav class="prompts" aria-label="{{t "sessions.prompts"}}"><h2>{{t "sessions.prompts"}}</h2>
-<ol>{{range .Prompts}}<li class="pr{{if .Current}} is-current{{end}}"><a href="{{.Href}}"><span class="pr-n">{{.N}}</span><span class="pr-t">{{.Text}}</span><span class="pr-m"><span>{{.Time}}</span><span>{{.Tools}}</span></span>{{if .Hits}}<span class="pr-hits">{{.Hits}}</span>{{end}}</a></li>{{end}}</ol>
+<ol>{{range .Prompts}}<li class="pr{{if .Current}} is-current{{end}}"><a{{if .Current}} class="clay"{{end}} href="{{.Href}}"><span class="pr-n">{{.N}}</span><span class="pr-t">{{.Text}}</span><span class="pr-m"><span>{{.Time}}</span><span>{{.Tools}}</span></span>{{if .Hits}}<span class="pr-hits">{{.Hits}}</span>{{end}}</a></li>{{end}}</ol>
 {{if .MorePrompts.Href}}<a class="pr-more" href="{{.MorePrompts.Href}}">{{.MorePrompts.Text}}</a>{{end}}
 </nav>
 <div class="sd-main">
-<a class="back" href="/ui/sessions">{{t "sessions.back"}}</a>
-{{if .BackResults.Href}}<a class="back" href="{{.BackResults.Href}}">{{.BackResults.Text}}</a>{{end}}
+<a class="back clay clay-btn clay-btn-icon" href="/ui/sessions" aria-label="{{t "sessions.back"}}"></a>
+{{if .BackResults.Href}}<a class="back-results" href="{{.BackResults.Href}}">{{.BackResults.Text}}</a>{{end}}
 <header class="sd-head"><div class="sd-titles"><h1>{{if .Live}}<span class="live-dot" role="img" aria-label="{{t "sessions.live"}}"></span>{{end}}{{.Title}}</h1><p class="smeta">{{.Meta}}</p></div>
 <div class="sd-actions">
 {{with .Share}}<form class="share" method="post" action="{{.Action}}"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><span class="seg" role="group" aria-label="{{t "sessions.sharing"}}">{{range .Levels}}<button name="level" value="{{.Value}}"{{if .Current}} class="is-on" aria-pressed="true"{{end}}>{{.Label}}</button>{{end}}</span></form>{{end}}
@@ -72,13 +72,13 @@
 {{if .Earlier.Href}}<a class="wlink" href="{{.Earlier.Href}}">{{.Earlier.Text}}</a>{{end}}
 {{if .WindowError}}<p class="serror" role="alert"><span>{{t "sessions.window_error"}}</span> <a class="clay-btn" href="{{.RetryHref}}">{{t "sessions.retry"}}</a></p>{{end}}
 <div class="flow">
-{{range .Blocks}}{{if eq .Kind "user"}}<article class="blk blk-user{{if .Target}} is-target{{end}}"{{if .ID}} id="{{.ID}}"{{end}}><header><span class="who">{{.Who}}</span><a class="seq" href="#{{.ID}}">{{.Seq}}</a><time datetime="{{.Stamp}}" data-clock>{{.Time}}</time></header><div class="msg">{{.Body}}</div></article>
+{{range .Blocks}}{{if eq .Kind "user"}}<article class="blk blk-user clay{{if .Target}} is-target{{end}}"{{if .ID}} id="{{.ID}}"{{end}}><header><span class="who visually-hidden">{{.Who}}</span><a class="seq" href="#{{.ID}}">{{.Seq}}</a><time datetime="{{.Stamp}}" data-clock>{{.Time}}</time></header><div class="msg">{{.Body}}</div></article>
 {{else if eq .Kind "assistant"}}<article class="blk blk-assistant{{if .Target}} is-target{{end}}"{{if .ID}} id="{{.ID}}"{{end}}><header><span class="who">{{.Who}}</span><a class="seq" href="#{{.ID}}">{{.Seq}}</a><time datetime="{{.Stamp}}" data-clock>{{.Time}}</time></header><div class="msg">{{.Body}}</div></article>
-{{else if eq .Kind "thinking"}}<details class="think{{if .Target}} is-target{{end}}"{{if .ID}} id="{{.ID}}"{{end}}{{if .Open}} open{{end}}><summary><span class="tn">{{t "sessions.who.thinking"}}</span> <span class="ta">{{.Summary}}</span><a class="seq" href="#{{.ID}}">{{.Seq}}</a></summary><div class="msg">{{.Body}}</div></details>
+{{else if eq .Kind "thinking"}}<details class="think clay{{if .Target}} is-target{{end}}"{{if .ID}} id="{{.ID}}"{{end}}{{if .Open}} open{{end}}><summary><span class="tn">{{t "sessions.who.thinking"}}</span> <span class="ta">{{.Summary}}</span><a class="seq" href="#{{.ID}}">{{.Seq}}</a></summary><div class="msg">{{.Body}}</div></details>
 {{else if eq .Kind "note"}}<p class="note"><span class="cl">{{.NoteLabel}}</span>{{range .Notes}}<a class="chip" href="{{.Href}}">{{.Text}}</a>{{end}}</p>
-{{else}}<details class="tool{{if .Failed}} is-failed{{end}}{{if .Target}} is-target{{end}}" id="{{.ID}}-t"{{if .Open}} open{{end}}><summary>{{range .Extra}}<span class="anchor" id="{{.}}"></span>{{end}}<span class="tn">{{.Tool}}</span> <span class="ta">{{.Arg}}</span><span class="tr{{if .Failed}} is-bad{{end}}">{{.Result}}</span><a class="seq" href="#{{.ID}}">{{.Seq}}</a></summary>
+{{else}}<details class="tool clay{{if .Failed}} is-failed{{end}}{{if .Target}} is-target{{end}}" id="{{.ID}}-t"{{if .Open}} open{{end}}><summary>{{range .Extra}}<span class="anchor" id="{{.}}"></span>{{end}}<span class="tn">{{.Tool}}</span> <span class="ta">{{.Arg}}</span><span class="tr{{if .Failed}} is-bad{{end}}">{{.Result}}</span><a class="seq" href="#{{.ID}}">{{.Seq}}</a></summary>
 {{with .Input}}{{template "code" .}}{{end}}
-{{range .Diffs}}<div class="diff"><div class="diff-path">{{.Path}}</div>{{range .Lines}}<div class="{{.Class}}"><span class="ds">{{.Sign}}</span><span class="lt">{{.HTML}}</span></div>{{end}}</div>{{end}}
+{{range .Diffs}}<div class="diff clay"><div class="diff-path">{{.Path}}</div>{{range .Lines}}<div class="{{.Class}}"><span class="ds">{{.Sign}}</span><span class="lt">{{.HTML}}</span></div>{{end}}</div>{{end}}
 {{with .Output}}{{template "code" .}}{{end}}{{if .Trunc}}<p class="trunc">{{.Trunc}}</p>{{end}}</details>
 {{end}}{{end}}
 </div>
@@ -88,6 +88,6 @@
 <script src="/static/sessions.js"></script>
 {{template "foot" .}}{{end}}
 
-{{define "code"}}<div class="code-box"><div class="code-head"><span>{{.Label}}</span>{{if .Total}}<span class="code-total">{{.Total}}</span>{{end}}</div>
+{{define "code"}}<div class="code-box clay"><div class="code-head"><span>{{.Label}}</span>{{if .Total}}<span class="code-total">{{.Total}}</span>{{end}}</div>
 <div class="code-body">{{range .Head}}<div class="ol"><span class="ln">{{.N}}</span><span class="lt">{{.HTML}}</span></div>{{end}}</div>
 {{if .Rest}}<details class="more"><summary>{{.RestLabel}}</summary><div class="code-body">{{range .Rest}}<div class="ol"><span class="ln">{{.N}}</span><span class="lt">{{.HTML}}</span></div>{{end}}</div></details>{{end}}</div>{{end}}

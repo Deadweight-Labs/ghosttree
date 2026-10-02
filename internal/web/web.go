@@ -233,6 +233,9 @@ func (a *app) requestsPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pa.NoteRequestHits(page.Results)
+	for i := range page.Results {
+		page.Results[i] = pa.RequestHitView(page.Results[i])
+	}
 	a.renderBrowser(w, r, "requests", pageData{Title: "Requests", Requests: page.Results})
 }
 func (a *app) requestPage(w http.ResponseWriter, r *http.Request) {
@@ -262,11 +265,8 @@ func (a *app) requestPage(w http.ResponseWriter, r *http.Request) {
 		}
 		threadViews = append(threadViews, coordThreadView{ID: thread.ID, Title: thread.Title, Question: thread.Question, State: thread.State, URL: coordThreadURL(home.RoomKey, thread.ID)})
 	}
-	var workIDs []int64
-	for _, w := range detail.Work {
-		workIDs = append(workIDs, w.SessionID)
-	}
-	a.renderBrowser(w, r, "request", pageData{Title: detail.Request.HumanID(), Request: detail, RequestThreads: threadViews, SessionLinks: a.sessionLinks(a.access(r), workIDs)})
+	detail = a.access(r).RequestDetailView(detail)
+	a.renderBrowser(w, r, "request", pageData{Title: detail.Request.HumanID(), Request: detail, RequestThreads: threadViews})
 }
 
 // sessionLinks nennt zu Sessionnummern aus Verweisen die Adresse in der
