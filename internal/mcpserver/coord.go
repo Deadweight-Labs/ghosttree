@@ -291,6 +291,11 @@ func (s *Server) handleCoordPeers(ctx context.Context, _ *mcp.CallToolRequest, i
 		return nil, nil, err
 	}
 	var b strings.Builder
+	// Gegenseitiges Warten steht ganz oben und zählt auch dann, wenn man selbst
+	// beteiligt ist: niemand soll zwei schlafende Agenten still verwalten.
+	for _, line := range waitCycleLines(peers) {
+		b.WriteString(line + "\n")
+	}
 	shown := 0
 	for _, p := range peers {
 		if p.ExternalID == s.coordRef() {
@@ -673,4 +678,23 @@ func headerSafe(id string) string {
 		}
 		return '_'
 	}, id)
+}
+
+// waitCycleLines beschreibt die Wartekreise, die an der Presence der Peers
+// hängen, je Kreis eine Zeile mit Anzeigenamen. Nichts wird aufgelöst.
+func waitCycleLines(peers []store.CoordAgent) []string {
+	names := map[string]string{}
+	for _, p := range peers {
+		names[p.ExternalID] = p.DisplayName
+	}
+	seen := map[string]bool{}
+	var lines []string
+	for _, p := range peers {
+		if p.Presence == nil || p.Presence.Cycle == nil || seen[p.Presence.Cycle.Key()] {
+			continue
+		}
+		seen[p.Presence.Cycle.Key()] = true
+		lines = append(lines, "! "+p.Presence.Cycle.Describe(func(id string) string { return names[id] })+" — nothing was resolved automatically: one of them has to answer, withdraw or ask the human")
+	}
+	return lines
 }

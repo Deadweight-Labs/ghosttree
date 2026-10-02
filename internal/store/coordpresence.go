@@ -66,6 +66,9 @@ type PresenceField struct {
 type Presence struct {
 	Reachability PresenceField `json:"reachability"`
 	WorkState    PresenceField `json:"work_state"`
+	// Cycle: der Agent wartet im Kreis (A wartet auf B, B auf A, oder länger).
+	// Ergänzt waiting_peer, ersetzt es nicht.
+	Cycle *WaitCycle `json:"cycle,omitempty"`
 }
 
 // PresenceWait ist ein offener Eintrag, auf den der Agent wartet.
@@ -85,6 +88,9 @@ type PresenceInput struct {
 	// angeforderte Pause ist kein Beleg.
 	PauseAt string
 	Waits   []PresenceWait
+	// Cycle ist gesetzt, wenn der Agent in einem Kreis gegenseitigen Wartens
+	// steht (coordwait.go). Eine Meldung, kein Zustand: nichts wird gelöst.
+	Cycle *WaitCycle
 }
 
 func parseAt(s string) (time.Time, bool) {
@@ -112,6 +118,7 @@ func DerivePresence(ref time.Time, in PresenceInput) Presence {
 	p := Presence{
 		Reachability: PresenceField{Value: ReachUnknown},
 		WorkState:    PresenceField{Value: WorkUnknown},
+		Cycle:        in.Cycle,
 	}
 	if t, ok := parseAt(in.LastPollAt); ok && ref.Sub(t) <= PollFreshTTL {
 		p.Reachability = field(ReachConnected, OriginObserved, in.LastPollAt, ref)
@@ -173,7 +180,11 @@ func (p Presence) Describe() string {
 		}
 		return f.Value + " (" + f.Origin + ", " + (time.Duration(f.AgeSeconds) * time.Second).String() + " ago)"
 	}
-	return "reachability " + one(p.Reachability) + ", work " + one(p.WorkState)
+	out := "reachability " + one(p.Reachability) + ", work " + one(p.WorkState)
+	if p.Cycle != nil {
+		out += ", in a wait cycle with " + strings.Join(p.Cycle.Members, ", ")
+	}
+	return out
 }
 
 func ensureCoordAgentColumn(db *sql.DB, name, ddl string) error {
@@ -352,7 +363,6 @@ func presenceBatch(db presenceDB, ref time.Time, roomKey string, agents []presen
 	for _, a := range agents {
 		inputs[a.ExternalID] = &PresenceInput{LastPollAt: a.LastPoll}
 	}
-	refText := ref.Format(time.RFC3339)
 	ids := idArgs(agents, func(a presenceAgent) string { return a.ExternalID })
 
 	// 1. Beobachtete Werkzeugaktivität (nur Projektraum, nur Agenten mit session_id).
@@ -441,52 +451,23 @@ func presenceBatch(db presenceDB, ref time.Time, roomKey string, agents []presen
 		}
 	}
 
-	// 3. Offene Wartepunkte, nur aus diesem Raum: eine Frage im privaten
-	// Gespräch wäre hier sonst für alle Mitglieder ablesbar.
-	wr, err := db.Query(presenceWaitsSQL(len(ids)),
-		append(append([]any{}, ids...), AttentionOpen, AttentionQuestion, AttentionApproval, AttentionBlocker,
-			DestinationRoom, roomKey, DestinationDiscussion, roomKey)...)
-	if err == nil {
-		type rec struct{ sender, recipient, reason, at string }
-		var recs []rec
-		recipients := map[string]bool{}
-		for wr.Next() {
-			var r rec
-			var exp string
-			if wr.Scan(&r.sender, &r.recipient, &r.reason, &r.at, &exp) == nil && !expiredAt(exp, refText) {
-				recs = append(recs, r)
-				if _, perr := parsePersonPrincipalID(r.recipient); perr != nil {
-					recipients[r.recipient] = true
-				}
-			}
+	// 3. Offene Wartepunkte, nur aus diesem Raum (loadWaitRows ist die eine
+	// Wartequelle, auch für die Zykluserkennung in coordwait.go).
+	waitRows, _ := loadWaitRows(db, ref, roomKey, ids)
+	var edges []WaitEdge
+	for _, r := range waitRows {
+		if in := inputs[r.Sender]; in != nil {
+			in.Waits = append(in.Waits, PresenceWait{Reason: r.Reason, At: r.At, Kind: r.Kind})
 		}
-		wr.Close()
-		// 4. Welche Empfänger sind Agenten? Eine Abfrage für alle.
-		isAgent := map[string]bool{}
-		if len(recipients) > 0 {
-			list := make([]any, 0, len(recipients))
-			for r := range recipients {
-				list = append(list, r)
-			}
-			if ar, err := db.Query(`SELECT external_id FROM coord_agents WHERE external_id IN (`+placeholders(len(list))+`)`, list...); err == nil {
-				for ar.Next() {
-					var id string
-					if ar.Scan(&id) == nil {
-						isAgent[id] = true
-					}
-				}
-				ar.Close()
-			}
+		if e, ok := r.edge(ref); ok {
+			edges = append(edges, e)
 		}
-		for _, r := range recs {
-			w := PresenceWait{Reason: r.reason, At: r.at}
-			if _, perr := parsePersonPrincipalID(r.recipient); perr == nil {
-				w.Kind = "user"
-			} else if isAgent[r.recipient] {
-				w.Kind = "peer"
-			}
-			if in := inputs[r.sender]; in != nil {
-				in.Waits = append(in.Waits, w)
+	}
+	for _, c := range DetectWaitCycles(edges) {
+		for _, m := range c.Members {
+			if in := inputs[m]; in != nil {
+				cc := c
+				in.Cycle = &cc
 			}
 		}
 	}
@@ -506,7 +487,8 @@ func presenceWaitsSQL(n int) string {
 		  AND a.recipient_principal_id<>m.sender_external_id
 		  AND ((m.destination_kind=? AND m.destination_id=?)
 		    OR (m.destination_kind=? AND m.destination_id IN
-		         (SELECT CAST(thread_id AS TEXT) FROM thread_homes WHERE room_key=?)))
+		         (SELECT CAST(thread_id AS TEXT) FROM thread_homes WHERE room_key=?
+		            AND thread_id NOT IN (SELECT thread_id FROM thread_visibility))))
 		ORDER BY a.created_at DESC, a.id DESC LIMIT 2000`
 }
 

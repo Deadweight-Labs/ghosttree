@@ -936,3 +936,20 @@ func TestTouchedTellsSameCheckoutFromOtherWorktreeAndNamesMaskedRows(t *testing.
 		t.Fatalf("an unknown own checkout must read as unknown: %s", text(t, res))
 	}
 }
+
+func TestWaitCycleLinesNameTheCycleOnce(t *testing.T) {
+	cycle := &store.WaitCycle{Members: []string{"a", "b"}, Since: "2026-10-02T10:00:00Z", ReviewAt: "2026-10-02T10:30:00Z", Overdue: true}
+	peers := []store.CoordAgent{
+		{ExternalID: "a", DisplayName: "Anna", Presence: &store.Presence{Cycle: cycle}},
+		{ExternalID: "b", DisplayName: "Bert", Presence: &store.Presence{Cycle: cycle}},
+		{ExternalID: "c", DisplayName: "Cleo"},
+	}
+	lines := waitCycleLines(peers)
+	if len(lines) != 1 || !strings.Contains(lines[0], "gegenseitiges Warten: Anna ↔ Bert (seit 2026-10-02T10:00:00Z)") ||
+		!strings.Contains(lines[0], "überfällig") || !strings.Contains(lines[0], "nothing was resolved automatically") {
+		t.Fatalf("lines = %q", lines)
+	}
+	if got := waitCycleLines(peers[2:]); len(got) != 0 {
+		t.Fatalf("no cycle, no line: %q", got)
+	}
+}

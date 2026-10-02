@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 var (
@@ -830,9 +831,24 @@ func (a CoordAccess) Send(message CoordMessage) (int64, error) {
 	message.AuthorPrincipalID = a.Principal.ID
 	message.AuthorKind = a.authorKind()
 	message.SenderRole, message.RecipientRole, message.Authority, message.SenderDisplayName = "", "", "", ""
+	// Ein Wartekreis wird vor dem Senden abgeglichen, damit einer, der
+	// zwischenzeitlich abgelaufen ist, als aufgelöst gilt, bevor diese Nachricht
+	// ihn neu schließt; und danach, weil sie ihn schließen kann.
+	waitRoom := ""
+	if reason, ok := attentionReasonForIntent(message.Intent); ok && reason != AttentionHandoff {
+		waitRoom = messageRoomKeyTx(tx, message.DestinationKind, message.DestinationID)
+		if err := reconcileWaitCyclesTx(tx, waitRoom, time.Now().UTC()); err != nil {
+			return 0, err
+		}
+	}
 	id, err := appendCoordMessageTx(tx, message)
 	if err != nil {
 		return 0, err
+	}
+	if waitRoom != "" {
+		if err := reconcileWaitCyclesTx(tx, waitRoom, time.Now().UTC()); err != nil {
+			return 0, err
+		}
 	}
 	if err := insertRawMentionsTx(tx, id, rawMentions); err != nil {
 		return 0, err
