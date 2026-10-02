@@ -74,6 +74,29 @@ type Poller struct {
 	OnError func(error)
 
 	pos map[string]int64 // Abrufstand je Raum, unabhängig vom gemeinsamen Cursor
+
+	lastBeat time.Time
+}
+
+// Heartbeater ist die optionale Seite einer Source, die den Abruf auf dem
+// Server vermerkt (Erreichbarkeit, REQ-360). Der Poller ruft sie höchstens
+// einmal je store.HeartbeatInterval.
+type Heartbeater interface {
+	Heartbeat(self string) error
+}
+
+// beat meldet den Abruf, gedrosselt. Ein Fehler zählt nicht als Abruf und wird
+// beim nächsten Durchlauf wiederholt; er bricht den Durchlauf nicht ab.
+func (p *Poller) beat() {
+	h, ok := p.Source.(Heartbeater)
+	if !ok {
+		return
+	}
+	if now := p.now(); p.lastBeat.IsZero() || now.Sub(p.lastBeat) >= store.HeartbeatInterval {
+		if h.Heartbeat(p.Self) == nil {
+			p.lastBeat = now
+		}
+	}
 }
 
 func (p *Poller) now() time.Time {
@@ -140,6 +163,7 @@ func (p *Poller) Poll(ctx context.Context) (active bool, err error) {
 	if err != nil {
 		return false, err
 	}
+	p.beat()
 	var firstErr error
 	for _, room := range rooms {
 		if ctx.Err() != nil {
@@ -338,4 +362,9 @@ func (s ClientSource) Cursor(self string, room store.CoordRoom) (int64, error) {
 
 func (s ClientSource) SetCursor(self string, room store.CoordRoom, id int64) error {
 	return s.Client.SetCoordCursor(self, store.DestinationRoom, room.Key, id)
+}
+
+// Heartbeat vermerkt den Abruf auf dem Server.
+func (s ClientSource) Heartbeat(self string) error {
+	return s.Client.CoordHeartbeat(self)
 }

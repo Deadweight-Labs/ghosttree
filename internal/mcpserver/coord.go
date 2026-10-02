@@ -300,6 +300,13 @@ func (s *Server) handleCoordPeers(ctx context.Context, _ *mcp.CallToolRequest, i
 			fmt.Fprintf(&b, ", says it is a subagent of %s (self-declared, unverified)", p.ParentExternalID)
 		}
 		fmt.Fprintf(&b, " — id %s, last seen %s\n", p.ExternalID, p.LastSeenAt)
+		// Beide Felder immer, auch ohne Beleg: "unknown" ist eine Aussage,
+		// ein fehlendes Feld liest sich wie "alles in Ordnung".
+		pr := store.Presence{Reachability: store.PresenceField{Value: store.ReachUnknown}, WorkState: store.PresenceField{Value: store.WorkUnknown}}
+		if p.Presence != nil {
+			pr = *p.Presence
+		}
+		fmt.Fprintf(&b, "  %s\n", pr.Describe())
 	}
 	if shown == 0 {
 		return coordText(b.String() + "nobody else is registered in " + key), nil, nil
@@ -307,7 +314,7 @@ func (s *Server) handleCoordPeers(ctx context.Context, _ *mcp.CallToolRequest, i
 	// Die Zeile am Ende ist keine Zierde: last seen ist eine Beobachtung und
 	// kein Lebenszeichen, und ein Agent soll daraus nicht schließen, dass
 	// jemand gerade zuhört (Spec §A9).
-	b.WriteString("\nLast seen is an observation, not a promise that anyone is listening right now.")
+	b.WriteString("\nLast seen is an observation, not a promise that anyone is listening right now. Reachability and work state are separate; unknown means nothing was observed, never idle or ended. Gaps: " + strings.Join(store.PresenceGaps, "; ") + ".")
 	return coordText(b.String()), nil, nil
 }
 

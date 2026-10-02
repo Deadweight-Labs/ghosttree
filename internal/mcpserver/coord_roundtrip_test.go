@@ -792,3 +792,39 @@ func TestInboxBodyCannotForgeAHeader(t *testing.T) {
 		t.Fatal("an agent id with a line break must be rejected")
 	}
 }
+
+// REQ-360 §A9: both fields are always printed with their origin, silence is
+// unknown (never idle or ended), and a heartbeat over HTTP makes it observed.
+func TestPeersPrintReachabilityAndWorkSeparatelyWithOrigin(t *testing.T) {
+	a, b, _ := twoSessions(t)
+	ctx := context.Background()
+	peers := func() string {
+		res, _, err := a.handleCoordPeers(ctx, nil, CoordPeersInput{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return text(t, res)
+	}
+	got := peers()
+	if !strings.Contains(got, "reachability unknown (no observation), work unknown (no observation)") {
+		t.Fatalf("silence must read as unknown: %s", got)
+	}
+	for _, bad := range []string{"idle", "reachability ended"} {
+		if strings.Contains(strings.SplitN(got, "\nLast seen is", 2)[0], bad) {
+			t.Fatalf("silence printed as %q: %s", bad, got)
+		}
+	}
+	if !strings.Contains(got, "Gaps:") || !strings.Contains(got, "ended is never produced") {
+		t.Fatalf("the missing end signal is not named: %s", got)
+	}
+	if err := b.client.CoordHeartbeat(b.sessionRef); err != nil {
+		t.Fatalf("heartbeat: %v", err)
+	}
+	if got = peers(); !strings.Contains(got, "reachability connected (observed, ") {
+		t.Fatalf("a heartbeat must show as observed: %s", got)
+	}
+	// Another session may not claim the heartbeat of this one.
+	if err := b.client.CoordHeartbeat("sess-not-mine"); err == nil {
+		t.Fatal("heartbeat for an agent that is not registered must be refused")
+	}
+}

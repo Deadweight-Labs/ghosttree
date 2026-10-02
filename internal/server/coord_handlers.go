@@ -627,6 +627,30 @@ func (a *api) markCoordDelivery(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]string{"status": in.State})
 }
 
+type coordHeartbeatInput struct {
+	Agent string `json:"agent_external_id"`
+}
+
+// coordHeartbeat nimmt den Takt des Channel-Pollers an. Der Agent muss zum
+// Token gehören; ein fremder Takt wäre eine erfundene Erreichbarkeit. Die
+// Antwort ist immer dieselbe, ob geschrieben oder gedrosselt wurde.
+func (a *api) coordHeartbeat(w http.ResponseWriter, r *http.Request) {
+	var in coordHeartbeatInput
+	if err := readJSON(r, &in); err != nil {
+		writeStoreError(w, http.StatusBadRequest, err)
+		return
+	}
+	if in.Agent == "" {
+		writeErr(w, http.StatusBadRequest, "agent_external_id is required")
+		return
+	}
+	if err := a.coordAccess(r, in.Agent).Heartbeat(); err != nil {
+		writeCoordAccessError(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]string{"status": "ok"})
+}
+
 // claimCoordDelivery entscheidet, welcher Kanal eine Nachricht einbringen
 // darf. Prüfung und Principal-Zugriff laufen wie bei markCoordDelivery: der
 // Empfänger muss zu diesem Token gehören.

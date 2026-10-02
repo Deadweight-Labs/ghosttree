@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 var (
@@ -40,6 +41,8 @@ type CoordAgent struct {
 	RequestedRole string `json:"requested_role,omitempty"`
 	// CanReview ist in Peer-Antworten das Prüfer-Flag des Kontos.
 	CanReview bool `json:"can_review,omitempty"`
+	// Presence ist nur in Peer-Antworten gesetzt, beim Lesen abgeleitet.
+	Presence *Presence `json:"presence,omitempty"`
 }
 
 // maxExternalIDLen begrenzt Agenten-IDs.
@@ -193,11 +196,9 @@ func ensureCoordAgentPrincipalID(db *sql.DB) error {
 // gesehene Agenten ein und darf leer sein — wer alle will, bekommt alle,
 // einschließlich der lange stillen.
 //
-// Was diese Liste bewusst NICHT sagt: ob jemand erreichbar ist. last_seen_at
-// ist eine Beobachtung, kein Lebenszeichen. Ein ausbleibender Eintrag kann
-// eine gekappte Verbindung sein, und ein lebender Prozess beweist nicht, dass
-// ein Modell arbeitet. Erreichbarkeit bekommt erst dann eine Darstellung,
-// wenn gemessen ist, was sie je Harness überhaupt heißen kann.
+// last_seen_at ist eine Beobachtung der Anmeldung, kein Lebenszeichen. Wer
+// erreichbar ist und was er tut, steht in Presence (coordpresence.go): je Feld
+// mit Herkunft und Alter, und ohne Beleg "unknown".
 func (s *Store) CoordPeers(roomKey, since string) ([]CoordAgent, error) {
 	if s.reader != nil {
 		return s.reader.CoordPeers(roomKey, since)
@@ -205,7 +206,7 @@ func (s *Store) CoordPeers(roomKey, since string) ([]CoordAgent, error) {
 	query := `SELECT a.id,a.external_id,a.provider,m.room_key,a.display_name,
 			COALESCE(person,''),COALESCE(cwd,''),COALESCE(branch,''),
 			COALESCE(worktree,''),COALESCE(parent_external_id,''),
-			COALESCE(capabilities,''),registered_at,last_seen_at,COALESCE(a.principal_id,''),a.role
+			COALESCE(capabilities,''),registered_at,last_seen_at,COALESCE(a.principal_id,''),a.role,a.last_poll_at
 		FROM coord_agents a JOIN coord_room_memberships m ON m.principal_id=a.external_id
 		WHERE m.room_key=? AND m.left_at=''`
 	args := []any{roomKey}
@@ -221,16 +222,18 @@ func (s *Store) CoordPeers(roomKey, since string) ([]CoordAgent, error) {
 	defer rows.Close()
 	var out []CoordAgent
 	var principals []string
+	var polls []string
 	for rows.Next() {
 		var a CoordAgent
-		var principal string
+		var principal, poll string
 		if err := rows.Scan(&a.ID, &a.ExternalID, &a.Provider, &a.RoomKey,
 			&a.DisplayName, &a.Person, &a.Cwd, &a.Branch, &a.Worktree,
-			&a.ParentExternalID, &a.Capabilities, &a.RegisteredAt, &a.LastSeenAt, &principal, &a.RequestedRole); err != nil {
+			&a.ParentExternalID, &a.Capabilities, &a.RegisteredAt, &a.LastSeenAt, &principal, &a.RequestedRole, &poll); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
 		principals = append(principals, principal)
+		polls = append(polls, poll)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -250,6 +253,8 @@ func (s *Store) CoordPeers(roomKey, since string) ([]CoordAgent, error) {
 			id = n
 		}
 		out[i].Owner = names[id]
+		p := presenceFor(s.db, time.Now().UTC(), roomKey, out[i].ExternalID, polls[i])
+		out[i].Presence = &p
 	}
 	// Rollen gibt es nur im Projektraum, und sie werden hier live berechnet.
 	if remote, ok := strings.CutPrefix(roomKey, "project:"); ok {

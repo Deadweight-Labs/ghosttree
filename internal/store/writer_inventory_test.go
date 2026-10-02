@@ -112,6 +112,7 @@ var writerMethodClasses = map[string]string{
 	"ContextSnapshotAccess":         "read",
 	"ContextSnapshotEntries":        "read",
 	"ClaimCoordDelivery":            "write",
+	"TouchCoordAgentPoll":           "write",
 	"CoordAgentOwner":               "read",
 	"CoordCursor":                   "read",
 	"CoordRoomMembers":              "read",

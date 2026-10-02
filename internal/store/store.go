@@ -882,6 +882,10 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := ensureCoordAgentLastPoll(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := ensureCoordAgentRole(db); err != nil {
 		_ = db.Close()
 		return nil, err
