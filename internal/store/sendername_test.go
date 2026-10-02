@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -195,7 +196,8 @@ func TestStandingPersonHiddenFromGuests(t *testing.T) {
 
 func TestThreadPersonHiddenFromGuests(t *testing.T) {
 	e := guestEnv(t)
-	ben := e.st.CoordinationFor(Principal{ID: "person:3", Label: "ben"}, "a-ben")
+	// cleos Agent legt die Threads an; der Thread kennt nur das Konto.
+	ben := e.st.CoordinationFor(Principal{ID: "person:4", Label: "cleo"}, "a-cleo")
 	tid, err := ben.CreateThread(Thread{Project: e.project, Title: "t", Question: "q"})
 	if err != nil {
 		t.Fatal(err)
@@ -205,9 +207,9 @@ func TestThreadPersonHiddenFromGuests(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, who := range map[string]CoordAccess{"member": e.human("person:1"), "guest": e.human("person:5")} {
-		want := "ben"
+		want := "cleo"
 		if name == "guest" {
-			want = "person:3"
+			want = ""
 		}
 		list, err := who.SearchThreads(e.project, "", false, 50)
 		if err != nil {
@@ -217,6 +219,9 @@ func TestThreadPersonHiddenFromGuests(t *testing.T) {
 		for _, x := range list {
 			if x.ID == tid || x.ID == homed {
 				seen++
+				if name == "guest" && (strings.Contains(x.Person+x.AuthorPrincipalID, "cleo") || strings.Contains(x.Person+x.AuthorPrincipalID, "person:4")) {
+					t.Errorf("guest sees cleo or person:4: %+v", x)
+				}
 				if x.Person != want {
 					t.Errorf("%s search: Person=%q want %q", name, x.Person, want)
 				}
@@ -227,6 +232,9 @@ func TestThreadPersonHiddenFromGuests(t *testing.T) {
 		}
 		for _, id := range []int64{tid, homed} {
 			one, err := who.Thread(id)
+			if name == "guest" && one.AuthorPrincipalID != "" {
+				t.Errorf("guest sees the owner id: %+v", one)
+			}
 			if err != nil || one.Person != want {
 				t.Errorf("%s get %d: %q %v want %q", name, id, one.Person, err, want)
 			}
@@ -247,7 +255,7 @@ func TestThreadPersonHiddenFromGuests(t *testing.T) {
 		if err != nil || !ok {
 			t.Fatalf("%s summary: %v %v", name, ok, err)
 		}
-		wantSum := "ben"
+		wantSum := "cleo"
 		if name == "guest" {
 			wantSum = ""
 		}
@@ -261,5 +269,22 @@ func TestAddAccountCollisionCheckIsAtomic(t *testing.T) {
 	st := orgStore(t, "robin")
 	if _, err := st.AddAccount("robin", "", false); !errors.Is(err, ErrAccountNameTaken) {
 		t.Fatalf("got %v", err)
+	}
+}
+
+// Legt ein Agent die Standing-Anweisung an, zeigt der Gast die Agenten-ID und
+// weder Besitzername noch person:N.
+func TestStandingPersonOfAnAgentIsTheAgentIDForGuests(t *testing.T) {
+	e := guestEnv(t)
+	cleo := e.st.CoordinationFor(Principal{ID: "person:4", Label: "cleo"}, "a-cleo")
+	if _, err := cleo.CreateStanding(StandingInput{RoomKey: e.room, ClientID: "sa", Body: "agent rule"}); err != nil {
+		t.Skipf("agents cannot create standing instructions here: %v", err)
+	}
+	got, err := e.human("person:5").Standing(e.room)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("%v %+v", err, got)
+	}
+	if got[0].Person != "a-cleo" {
+		t.Fatalf("guest must see the agent id: %+v", got[0])
 	}
 }

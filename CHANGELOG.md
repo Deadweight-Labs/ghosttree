@@ -23,8 +23,8 @@ Versioning, with pre-1.0 compatibility rules described in
   still not caught. Names are normalised to a fixpoint (at most two combining
   marks per letter, overlay marks dropped) and the web shows the same
   normalised string. A guest sees sender ids instead of account names and
-  agent owner names in the coordination page, in standing instructions and in
-  thread authors, and only their own row in the project role table of the
+  agent owner names in the coordination page, in standing instructions (the sender id) and
+  thread authors (hidden), and only their own row in the project role table of the
   organization page. `ctx person add` reports the stored name.
 - A person can pause or interrupt a Claude agent that was started with
   `ctx claude`, from the participant list of the coordination page. Allowed

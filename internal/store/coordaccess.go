@@ -442,9 +442,8 @@ func (a CoordAccess) Messages(kind, id string, afterID int64, limit int) ([]Coor
 	return out, nil
 }
 
-// maskThreadPersonTx ersetzt für Gäste den Kontonamen im Thread (Person, bei
-// Agenten der Besitzername) durch die ID des Urhebers. Der eigene Thread des
-// Lesers bleibt, wie er ist.
+// maskThreadPersonTx entfernt für Gäste den Urheber des Threads (Person und
+// AuthorPrincipalID). Der eigene Thread des Leser bleibt, wie er ist.
 func (a CoordAccess) maskThreadPersonTx(tx *sql.Tx, t *Thread) {
 	if t.AuthorPrincipalID != "" && t.AuthorPrincipalID == a.Principal.ID {
 		return
@@ -454,11 +453,16 @@ func (a CoordAccess) maskThreadPersonTx(tx *sql.Tx, t *Thread) {
 	}
 }
 
+// maskThreadPerson leert Person und AuthorPrincipalID. Der Thread speichert
+// nur das Konto, nicht den Agenten: bei einem Agenten-Thread wäre person:N
+// (wie der Name) der Besitzer des Agenten und damit ein Mitgliedsorakel. Eine
+// Herleitung des Agenten aus dem ersten Beitrag wäre unsicher, deshalb sieht
+// der Gast keinen Urheber.
 func maskThreadPerson(a CoordAccess, t *Thread) {
 	if t.AuthorPrincipalID == a.Principal.ID {
 		return
 	}
-	t.Person = t.AuthorPrincipalID
+	t.Person, t.AuthorPrincipalID = "", ""
 }
 
 // fillSenderDisplayNamesTx setzt den Kontonamen menschlicher Absender. Die
