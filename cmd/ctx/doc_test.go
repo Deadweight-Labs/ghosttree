@@ -233,3 +233,77 @@ func TestDocNewDatedTitleDoesNotAffectPath(t *testing.T) {
 		t.Fatalf("doubled date in %q", path)
 	}
 }
+
+func TestDocNewPathCollisions(t *testing.T) {
+	today := time.Now().UTC().Format("2006-01-02")
+	plain := "specs/" + today + "-gap.md"
+	dated := today + "-gap"
+	docOf := func(t *testing.T, root string, slug string) string {
+		t.Helper()
+		var out bytes.Buffer
+		if code := docNew(root, []string{"spec", slug}, &out); code != 0 {
+			t.Fatalf("docNew %s = %d: %s", slug, code, out.String())
+		}
+		state, _ := docwork.LoadState(root)
+		return state[slug].Path
+	}
+	t.Run("plain first then dated", func(t *testing.T) {
+		root := t.TempDir()
+		if got := docOf(t, root, "gap"); got != plain {
+			t.Fatalf("plain = %q", got)
+		}
+		want := "specs/" + today + "-" + dated + ".md"
+		if got := docOf(t, root, dated); got != want {
+			t.Fatalf("dated = %q, want %q", got, want)
+		}
+	})
+	t.Run("dated first then plain", func(t *testing.T) {
+		root := t.TempDir()
+		if got := docOf(t, root, dated); got != plain {
+			t.Fatalf("dated = %q", got)
+		}
+		if got := docOf(t, root, "gap"); got != "specs/"+today+"-gap-2.md" {
+			t.Fatalf("plain = %q", got)
+		}
+	})
+	t.Run("foreign file on disk", func(t *testing.T) {
+		root := t.TempDir()
+		if err := docwork.WriteFile(root, plain, "foreign\n"); err != nil {
+			t.Fatal(err)
+		}
+		got := docOf(t, root, "gap")
+		if got == plain {
+			t.Fatal("overwrote a foreign file")
+		}
+		if body, _ := docwork.ReadFile(root, plain); body != "foreign\n" {
+			t.Fatalf("foreign file changed: %q", body)
+		}
+	})
+	t.Run("suffix when the fallback is taken too", func(t *testing.T) {
+		root := t.TempDir()
+		now := time.Now().UTC().Format(time.RFC3339)
+		state := docwork.State{
+			"gap":   {Path: plain},
+			"other": {Path: "specs/" + today + "-" + dated + ".md"},
+		}
+		got, err := freeDocPath(root, state, "spec", now, dated)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := "specs/" + today + "-" + dated + "-2.md"; got != want {
+			t.Fatalf("got %q, want %q", got, want)
+		}
+		state["third"] = docwork.Entry{Path: got}
+		if got, _ = freeDocPath(root, state, "spec", now, dated); got != "specs/"+today+"-"+dated+"-3.md" {
+			t.Fatalf("got %q", got)
+		}
+	})
+	t.Run("own entry is not a collision", func(t *testing.T) {
+		root := t.TempDir()
+		now := time.Now().UTC().Format(time.RFC3339)
+		state := docwork.State{"gap": {Path: plain}}
+		if got, _ := freeDocPath(root, state, "spec", now, "gap"); got != plain {
+			t.Fatalf("got %q", got)
+		}
+	})
+}

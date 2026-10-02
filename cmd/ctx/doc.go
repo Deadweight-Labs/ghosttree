@@ -124,8 +124,8 @@ func docNew(repoRoot string, args []string, stdout io.Writer) int {
 		return docCLIUsage(stdout)
 	}
 	kind, slug := args[0], args[1]
-	rel, err := docwork.RelPath(kind, time.Now().UTC().Format(time.RFC3339), slug)
-	if err != nil {
+	createdAt := time.Now().UTC().Format(time.RFC3339)
+	if _, err := docwork.RelPath(kind, createdAt, slug); err != nil {
 		fmt.Fprintln(stdout, err)
 		return 2
 	}
@@ -133,6 +133,11 @@ func docNew(repoRoot string, args []string, stdout io.Writer) int {
 	if err != nil {
 		fmt.Fprintln(stdout, err)
 		return 1
+	}
+	rel, err := freeDocPath(repoRoot, state, kind, createdAt, slug)
+	if err != nil {
+		fmt.Fprintln(stdout, err)
+		return 2
 	}
 	if _, exists := state[slug]; exists {
 		fmt.Fprintf(stdout, "a local document named %q already exists\n", slug)
@@ -149,6 +154,49 @@ func docNew(repoRoot string, args []string, stdout io.Writer) int {
 	}
 	fmt.Fprintln(stdout, filepath.Join(docwork.Dir(repoRoot), filepath.FromSlash(rel)))
 	return 0
+}
+
+// freeDocPath returns the worktree path for slug that no other document owns.
+// The preferred path is docwork.RelPath (a dated slug gets no second prefix).
+// If another slug's state entry claims it, or a file is already there that
+// belongs to nobody we know, it falls back to the date-prefixed form
+// <UTC date>-<slug>.md (a doubled prefix for a dated slug, so unique), and
+// then to -2, -3, ... suffixes. An entry's own path is never treated as taken.
+func freeDocPath(repoRoot string, state docwork.State, kind, createdAt, slug string) (string, error) {
+	preferred, err := docwork.RelPath(kind, createdAt, slug)
+	if err != nil {
+		return "", err
+	}
+	taken := func(rel string) bool {
+		for other, entry := range state {
+			if entry.Path == rel {
+				return other != slug
+			}
+		}
+		if own, ok := state[slug]; ok && own.Path == rel {
+			return false
+		}
+		_, statErr := os.Lstat(filepath.Join(docwork.Dir(repoRoot), filepath.FromSlash(rel)))
+		return statErr == nil
+	}
+	if !taken(preferred) {
+		return preferred, nil
+	}
+	day := createdAt
+	if len(day) >= 10 {
+		day = day[:10]
+	}
+	dir := preferred[:strings.LastIndex(preferred, "/")+1]
+	fallback := dir + day + "-" + slug
+	if !taken(fallback + ".md") {
+		return fallback + ".md", nil
+	}
+	for n := 2; ; n++ {
+		candidate := fmt.Sprintf("%s-%d.md", fallback, n)
+		if !taken(candidate) {
+			return candidate, nil
+		}
+	}
 }
 
 func docHasChanged(repoRoot string, entry docwork.Entry) (bool, error) {
@@ -199,7 +247,7 @@ func docPull(repoRoot, project string, c *client.Client, slug string, force bool
 		fmt.Fprintln(stdout, err)
 		return 1
 	}
-	rel, err := docwork.RelPath(document.Kind, document.CreatedAt, document.Slug)
+	rel, err := freeDocPath(repoRoot, state, document.Kind, document.CreatedAt, document.Slug)
 	if err != nil {
 		fmt.Fprintln(stdout, err)
 		return 1
@@ -446,7 +494,7 @@ func docMove(repoRoot, project string, c *client.Client, slug, newSlug string, s
 		if len(base) >= 10 {
 			createdAt = base[:10]
 		}
-		newPath, _ := docwork.RelPath(kind, createdAt, newSlug)
+		newPath, _ := freeDocPath(repoRoot, state, kind, createdAt, newSlug)
 		oldPath := entry.Path
 		if err := docwork.MoveFile(repoRoot, oldPath, newPath); err != nil {
 			fmt.Fprintln(stdout, err)
@@ -467,7 +515,7 @@ func docMove(repoRoot, project string, c *client.Client, slug, newSlug string, s
 			return 1
 		}
 		if local {
-			newPath, _ := docwork.RelPath(document.Kind, document.CreatedAt, newSlug)
+			newPath, _ := freeDocPath(repoRoot, state, document.Kind, document.CreatedAt, newSlug)
 			oldPath := entry.Path
 			if err := docwork.MoveFile(repoRoot, oldPath, newPath); err != nil {
 				fmt.Fprintln(stdout, err)
