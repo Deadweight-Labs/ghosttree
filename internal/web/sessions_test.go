@@ -704,3 +704,48 @@ func TestIndexingProgressShowsForMembersNotForGuests(t *testing.T) {
 		t.Error("guest sees the indexing state")
 	}
 }
+
+// Pitfall #2447: nothing the guest or member can observe may depend on rows
+// they may not read. Adding hidden sessions must leave their pages unchanged.
+func TestSessionPagesDoNotChangeWhenHiddenSessionsAreAdded(t *testing.T) {
+	e := seedSessions(t)
+	strip := func(s string) string {
+		return regexp.MustCompile(`name="csrf_token" value="[^"]*"`).ReplaceAllString(s, "")
+	}
+	urls := []string{
+		"/ui/sessions",
+		"/ui/sessions?q=zebrafish",
+		"/ui/sessions?q=zebrafish&kind=output",
+		"/ui/sessions?machine=laptop&agent=codex&owner=mine",
+		"/ui/sessions?q=nomatchatall",
+	}
+	clients := map[string]*http.Client{"guest": e.Guest, "member": e.Member}
+	before := map[string]string{}
+	for n, c := range clients {
+		for _, u := range urls {
+			_, p := e.get(t, c, u)
+			before[n+u] = strip(p)
+		}
+	}
+	for i := 0; i < 60; i++ {
+		id, err := e.St.UpsertSession(store.Session{Harness: "codex", ExternalID: fmt.Sprintf("hid-%d", i), AccountID: 1, Scope: scope.Axes{Project: shellProject, Machine: "secretbox"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := e.St.AppendChunks(id, chunks(uLine("zebrafish hidden "+fmt.Sprint(i)))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for n, c := range clients {
+		for _, u := range urls {
+			_, p := e.get(t, c, u)
+			after := strip(p)
+			if after != before[n+u] {
+				// A member legitimately sees metadata rows of other sessions; only the guest must be byte-identical.
+				if n == "guest" || strings.Contains(after, "secretbox") && strings.Contains(u, "q=") {
+					t.Errorf("%s %s changes with hidden sessions", n, u)
+				}
+			}
+		}
+	}
+}

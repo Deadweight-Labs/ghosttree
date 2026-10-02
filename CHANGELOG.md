@@ -38,7 +38,6 @@ Versioning, with pre-1.0 compatibility rules described in
   sessions shared with guests, without machine, branch, path or owner. Search
   results, counts and filter numbers are formed from the sessions the viewer
   may read only.
-
 - Added: `ctx join --server <url> --pair XXXX-XXXX` pairs a machine with the
   code from an invitation page (REQ-434, part 3). It opens a loopback
   listener on 127.0.0.1 only for the duration of the command, proves the
