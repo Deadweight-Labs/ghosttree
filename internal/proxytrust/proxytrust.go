@@ -102,7 +102,7 @@ func (s Set) Client(remoteAddr string, xff []string) string {
 	current := peer
 	parts := strings.Split(strings.Join(xff, ","), ",")
 	for i := len(parts) - 1; i >= 0; i-- {
-		a, err := netip.ParseAddr(strings.TrimSpace(parts[i]))
+		a, err := netip.ParseAddr(stripPort(strings.TrimSpace(parts[i])))
 		if err != nil || a.Zone() != "" {
 			break
 		}
@@ -117,3 +117,21 @@ func (s Set) Client(remoteAddr string, xff []string) string {
 
 // Configured reports whether any non-loopback network is trusted.
 func (s Set) Configured() bool { return len(s.prefixes) > 0 }
+
+// stripPort removes a port and square brackets from an X-Forwarded-For entry:
+// "203.0.113.9:5555", "[2001:db8::1]" and "[2001:db8::1]:443". A bare IPv6
+// address contains several colons and is left alone.
+func stripPort(entry string) string {
+	if strings.HasPrefix(entry, "[") {
+		if host, _, err := net.SplitHostPort(entry); err == nil {
+			return host
+		}
+		return strings.TrimSuffix(strings.TrimPrefix(entry, "["), "]")
+	}
+	if strings.Count(entry, ":") == 1 {
+		if host, _, err := net.SplitHostPort(entry); err == nil {
+			return host
+		}
+	}
+	return entry
+}

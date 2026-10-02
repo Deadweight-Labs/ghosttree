@@ -358,6 +358,8 @@ loopback peer (`ssh -L`, `socat`, a Docker port mapping or other local
 forwarder) therefore also gets its forwarding headers believed. If you run such
 forwarders, add the word `none` to the list (`GHOSTTREE_TRUSTED_PROXIES=none`,
 or `none,192.0.2.10`) to switch loopback trust off and trust only what you list.
+With `none`, a proxy on the same host is no longer believed either, so forwarding
+headers from it are ignored; enter that proxy's address explicitly in the list.
 
 The client address used to rate-limit device logins comes from
 `X-Forwarded-For`, read only when the direct peer is trusted: all header lines

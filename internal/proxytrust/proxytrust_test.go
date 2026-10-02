@@ -45,6 +45,10 @@ func TestClientAddress(t *testing.T) {
 		"ipv6 trusted hop":                 {"[2001:db8::1]:1", []string{"203.0.113.8, 2001:db8::2"}, "203.0.113.8"},
 		"mapped client normalised":         {"192.0.2.10:1", []string{"::ffff:198.51.100.9"}, "198.51.100.9"},
 		"mapped trusted peer":              {"[::ffff:192.0.2.10]:1", []string{"198.51.100.9"}, "198.51.100.9"},
+		"ipv4 with port":                   {"192.0.2.10:1", []string{"203.0.113.9:5555"}, "203.0.113.9"},
+		"bracketed ipv6":                   {"192.0.2.10:1", []string{"[2001:db9::1]"}, "2001:db9::1"},
+		"bracketed ipv6 with port":         {"192.0.2.10:1", []string{"[2001:db9::1]:443"}, "2001:db9::1"},
+		"port on trusted hop":              {"192.0.2.10:1", []string{"198.51.100.9:7, 192.0.2.77:80"}, "198.51.100.9"},
 		"zoned entry rejected":             {"192.0.2.10:1", []string{"fe80::1%eth0"}, "192.0.2.10"},
 		"loopback peer trusted by default": {"127.0.0.1:1", []string{"198.51.100.9"}, "198.51.100.9"},
 	} {
