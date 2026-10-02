@@ -163,6 +163,10 @@ func TestWakeFilter(t *testing.T) {
 		m.ReplyTo, m.Intent, m.AuthorKind = 99, intent, author
 		return m
 	}
+	ack := func(m store.CoordMessage, intent, kind, author string, replyTo int64) store.CoordMessage {
+		m.Intent, m.Kind, m.AuthorKind, m.ReplyTo = intent, kind, author, replyTo
+		return m
+	}
 	for _, c := range []struct {
 		name     string
 		kind     string
@@ -201,6 +205,17 @@ func TestWakeFilter(t *testing.T) {
 		{"reply without intent to a reply in project room stays quiet", store.RoomProject, reply(msg("peer", "", false), "", ""), []string{"me"}, ParentOwnOther, false},
 		{"human reply to own message wakes", store.RoomDirect, reply(msg("robin", "", false), "", store.AuthorHuman), nil, ParentOwnOther, true},
 		{"reply to own request in direct room wakes", store.RoomDirect, reply(msg("peer", "", false), "", ""), nil, ParentOwnRequest, true},
+		{"plain agent ack in direct room stays quiet", store.RoomDirect, ack(msg("peer", "", false), store.IntentAck, "", "", 0), nil, ParentNotOwn, false},
+		{"plain agent ack by kind in group room stays quiet", store.RoomGroup, ack(msg("peer", "", false), "", "ack", "", 0), nil, ParentNotOwn, false},
+		{"ack reply to own request wakes the asker", store.RoomDirect, ack(msg("peer", "", false), store.IntentAck, "", "", 99), nil, ParentOwnRequest, true},
+		{"human ack in direct room wakes", store.RoomDirect, ack(msg("robin", "", false), store.IntentAck, "", store.AuthorHuman, 0), nil, ParentNotOwn, true},
+		{"human ack in project room mentioned wakes", store.RoomProject, ack(msg("robin", "", false), store.IntentAck, "", store.AuthorHuman, 0), []string{"me"}, ParentNotOwn, true},
+		{"human ack in project room not mentioned stays quiet", store.RoomProject, ack(msg("robin", "", false), store.IntentAck, "", store.AuthorHuman, 0), nil, ParentNotOwn, false},
+		{"agent ack in project room mentioned wakes as before", store.RoomProject, ack(msg("peer", "", false), store.IntentAck, "", "", 0), []string{"me"}, ParentNotOwn, true},
+		{"kind ack with question intent wakes", store.RoomDirect, ack(msg("peer", "", false), store.IntentQuestion, "ack", "", 0), nil, ParentNotOwn, true},
+		{"kind ack with blocker intent wakes", store.RoomGroup, ack(msg("peer", "", false), store.IntentBlocker, "ack", "", 0), nil, ParentNotOwn, true},
+		{"kind ack with approval intent wakes", store.RoomDirect, ack(msg("peer", "", false), store.IntentApproval, "ack", "", 0), nil, ParentNotOwn, true},
+		{"kind ack with handoff intent wakes", store.RoomDirect, ack(msg("peer", "", false), store.IntentHandoff, "ack", "", 0), nil, ParentNotOwn, true},
 		{"reply to own request in project room, mentioned, wakes", store.RoomProject, reply(msg("peer", "", false), "", ""), []string{"me"}, ParentOwnRequest, true},
 		{"reply to own request in project room, not mentioned", store.RoomProject, reply(msg("peer", "", false), "", ""), nil, ParentOwnRequest, false},
 	} {

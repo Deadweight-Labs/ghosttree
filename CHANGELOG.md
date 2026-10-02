@@ -43,6 +43,20 @@ Versioning, with pre-1.0 compatibility rules described in
   id. The
   collector now logs a refused activity upload (at most once a minute). Agents
   without the launcher register the harness session id they know.
+- Fixed: `ctx doc new` and `ctx doc pull` no longer prepend the creation date
+  to the worktree filename when the slug already starts with a `YYYY-MM-DD`
+  date (it produced `2026-10-02-2026-10-02-x.md`, sometimes with two
+  different dates because the prefix is the UTC creation date). Existing
+  files with a doubled prefix are not renamed and keep working: `ctx doc pull`
+  now reuses the path already recorded for a document. To tidy one, rename
+  the file under `.ghosttree/edit/` and update its `path` in
+  `.ghosttree/edit/.state.json`; the server only stores the slug.
+
+- A plain `ack` message from an agent (not a reply, no question, approval,
+  blocker or handoff) in a direct or group room no longer wakes channel
+  agents; it stays readable by pull. Acks that reply to a request, human acks
+  and acks in project or machine rooms behave as before.
+
 - Agents now see who a human sender is. The messages API has an optional
   `sender_display_name` (the account name, read live, human authors only,
   withheld from guests of a project room while access enforcement is on); the

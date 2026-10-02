@@ -68,15 +68,6 @@ func attentionReasonForIntent(intent string) (string, bool) {
 	}
 }
 
-// CoordMessageWakeCandidate describes intent, not delivery. An adapter still
-// has to re-check recipient access, expiry, rate limits and loop protection.
-func CoordMessageWakeCandidate(message CoordMessage) bool {
-	if strings.TrimSpace(message.Intent) == IntentAck || strings.TrimSpace(message.Kind) == IntentAck || len(normalizeMembers(message.Mentions)) == 0 {
-		return false
-	}
-	return !message.Expired && !expiredAt(message.ExpiresAt, now())
-}
-
 func (a CoordAccess) Attention() ([]AttentionItem, error) {
 	if a.Store == nil || strings.TrimSpace(a.Principal.ID) == "" || a.publicOnly {
 		return nil, ErrCoordForbidden

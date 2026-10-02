@@ -908,3 +908,84 @@ func TestPathActivityMasksSessionIDsForOrdinaryMembers(t *testing.T) {
 		t.Fatalf("the asker's own session must be excluded by its registered UUID: %v", got)
 	}
 }
+
+// AC 1221 (REQ-360): die Zustellroute mit state acked erzeugt keinen
+// Chatbeitrag, keinen Attention-Eintrag, keinen Weckkandidaten und keinen
+// Claim für andere Empfänger.
+func TestAckedDeliveryRouteCreatesNoPostNoAttentionNoWakeAndNoClaim(t *testing.T) {
+	srv, st, ownerToken, otherToken := coordinationAccessServer(t)
+	room := store.RoomKeyForProject("github.com/x/ackroute")
+	for _, a := range []store.CoordAgent{
+		{ExternalID: "sess-a", PrincipalID: "person:1", Person: "owner", Provider: "test", RoomKey: room},
+		{ExternalID: "sess-b", PrincipalID: "person:1", Person: "owner", Provider: "test", RoomKey: room},
+		{ExternalID: "sess-other", PrincipalID: "person:2", Person: "other", Provider: "test", RoomKey: room},
+	} {
+		if _, err := st.RegisterCoordAgent(a); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sender := st.CoordinationFor(store.Principal{ID: "person:1"}, "sess-a")
+	id, err := sender.Send(store.CoordMessage{
+		DestinationKind: store.DestinationRoom, DestinationID: room, ClientID: "ack-route-src",
+		Body: "please look", Intent: store.IntentQuestion, Mentions: []string{"person:2"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := st.CoordMessagesSince(store.DestinationRoom, room, 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := st.CoordinationFor(store.Principal{ID: "person:2"}, "sess-other")
+	attentionBefore, err := other.Attention()
+	if err != nil {
+		t.Fatal(err)
+	}
+	senderAttentionBefore, err := sender.Attention()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res := req(t, "POST", srv.URL+"/api/coord/deliveries", ownerToken, coordDeliveryInput{MessageID: id, Recipient: "sess-b", State: store.DeliveryAcked})
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("ack route: status=%d", res.StatusCode)
+	}
+
+	after, err := st.CoordMessagesSince(store.DestinationRoom, room, 0, 100)
+	if err != nil || len(after) != len(before) || after[len(after)-1].ID != before[len(before)-1].ID {
+		t.Fatalf("ack created a chat post: before=%d after=%d err=%v", len(before), len(after), err)
+	}
+	attentionAfter, err := other.Attention()
+	if err != nil || len(attentionAfter) != len(attentionBefore) {
+		t.Fatalf("ack changed the recipient's attention: %+v err=%v", attentionAfter, err)
+	}
+	senderAttentionAfter, err := sender.Attention()
+	if err != nil || len(senderAttentionAfter) != len(senderAttentionBefore) {
+		t.Fatalf("ack changed the sender's attention: %+v err=%v", senderAttentionAfter, err)
+	}
+	// Kein neuer Beitrag, also nichts, worauf ein Poller wecken könnte.
+	fresh := req(t, "GET", srv.URL+"/api/coord/messages?destination_kind=room&destination_id="+room+"&agent_external_id=sess-a&after="+strconv.FormatInt(id, 10), ownerToken, nil)
+	var inbox []store.CoordMessage
+	_ = json.NewDecoder(fresh.Body).Decode(&inbox)
+	fresh.Body.Close()
+	if fresh.StatusCode != http.StatusOK {
+		t.Fatalf("inbox status=%d", fresh.StatusCode)
+	}
+	if len(inbox) != 0 {
+		t.Fatalf("something new in the sender's inbox after an ack: %+v", inbox)
+	}
+	// Kein Claim für andere: der Empfänger des anderen Principals gewinnt noch.
+	claim := req(t, "POST", srv.URL+"/api/coord/deliveries/claim", otherToken, coordDeliveryInput{MessageID: id, Recipient: "sess-other"})
+	var claimed struct {
+		Claimed bool `json:"claimed"`
+	}
+	_ = json.NewDecoder(claim.Body).Decode(&claimed)
+	claim.Body.Close()
+	if claim.StatusCode != http.StatusOK || !claimed.Claimed {
+		t.Fatalf("another recipient's claim was lost after an ack: status=%d claimed=%v", claim.StatusCode, claimed.Claimed)
+	}
+	if state, _ := st.CoordDeliveryState(id, "sess-b"); state != store.DeliveryAcked {
+		t.Fatalf("acked recipient state = %q", state)
+	}
+}
