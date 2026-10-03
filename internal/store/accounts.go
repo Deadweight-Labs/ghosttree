@@ -59,6 +59,10 @@ func migrateAccounts(db *sql.DB) error {
 		{"is_admin", `INTEGER NOT NULL DEFAULT 0`},
 		{"state", `TEXT NOT NULL DEFAULT 'active' CHECK(state IN ('active','disabled'))`},
 		{"default_org_id", `INTEGER NOT NULL DEFAULT 0`},
+		// name_source sagt, woher der Anzeigename stammt: "idp" vom Anbieter
+		// (folgt dessen Änderungen), "user" von der Person selbst (bleibt),
+		// leer unbekannt oder vom Admin gewählt.
+		{"name_source", `TEXT NOT NULL DEFAULT ''`},
 	} {
 		if err := ensurePersonsColumn(db, c.name, c.ddl); err != nil {
 			return err
@@ -596,7 +600,7 @@ func accountState(tx *sql.Tx, id int64) (Account, error) {
 }
 
 // createBootstrapAccount legt innerhalb der Transaktion das erste Konto an.
-func createBootstrapAccount(tx *sql.Tx, name, email string) (int64, error) {
+func createBootstrapAccount(tx *sql.Tx, name, email, source string) (int64, error) {
 	var persons int
 	if err := tx.QueryRow(`SELECT COUNT(*) FROM persons`).Scan(&persons); err != nil {
 		return 0, err
@@ -606,10 +610,10 @@ func createBootstrapAccount(tx *sql.Tx, name, email string) (int64, error) {
 	}
 	name = NormalizeAccountName(name)
 	if name == "" {
-		name = "admin"
+		name, source = "admin", ""
 	}
-	res, err := tx.Exec(`INSERT INTO persons(name, token_hash, created_at, email, is_admin) VALUES(?,?,?,?,1)`,
-		name, "", now(), strings.TrimSpace(email))
+	res, err := tx.Exec(`INSERT INTO persons(name, token_hash, created_at, email, is_admin, name_source) VALUES(?,?,?,?,1,?)`,
+		name, "", now(), strings.TrimSpace(email), source)
 	if err != nil {
 		return 0, err
 	}
@@ -676,19 +680,24 @@ func (s *Store) loginIdentity(in IdentityLogin) (Account, LoginOutcome, error) {
 		if a.State != "active" {
 			return Account{}, "", ErrAccountDisabled
 		}
+		if renamed, err := syncIdPNameTx(tx, accountID, a.Name, in.Name); err != nil {
+			return Account{}, "", err
+		} else if renamed != "" {
+			a.Name = renamed
+		}
 		// Ein Einladungs-Code nimmt auch ein bekanntes Konto in eine weitere
 		// Organisation auf. Andere Codes ignoriert eine bekannte Identität wie
 		// bisher.
 		if in.Code != "" && invitationExists(tx, in.Code) {
 			switch _, err := acceptInvitationTx(tx, in.Code, accountID, in.Email, s.AccessEnforced()); {
 			case errors.Is(err, ErrAlreadyMember):
-				return a, LoginExisting, nil
+				return a, LoginExisting, tx.Commit()
 			case err != nil:
 				return Account{}, "", err
 			}
 			return a, LoginJoined, tx.Commit()
 		}
-		return a, LoginExisting, nil
+		return a, LoginExisting, tx.Commit()
 	case !errors.Is(err, sql.ErrNoRows):
 		return Account{}, "", err
 	}
@@ -708,7 +717,7 @@ func (s *Store) loginIdentity(in IdentityLogin) (Account, LoginOutcome, error) {
 		// Registrierung nur per Einladung: Konto und Mitgliedschaft entstehen
 		// gemeinsam oder gar nicht. in.Email ist nur gesetzt, wenn der IdP sie
 		// als verifiziert gemeldet hat.
-		if accountID, err = createInvitedAccountTx(tx, in.Name, in.Email, in.Code, s.AccessEnforced()); err != nil {
+		if accountID, err = createInvitedAccountTx(tx, in.Name, in.Email, in.Code, nameSourceIdP, s.AccessEnforced()); err != nil {
 			return Account{}, "", err
 		}
 		outcome = LoginInvited
@@ -740,7 +749,7 @@ func (s *Store) loginIdentity(in IdentityLogin) (Account, LoginOutcome, error) {
 		if _, err := consumeCode(tx, in.Code, CodeBootstrap); err != nil {
 			return Account{}, "", err
 		}
-		if accountID, err = createBootstrapAccount(tx, in.Name, in.Email); err != nil {
+		if accountID, err = createBootstrapAccount(tx, in.Name, in.Email, nameSourceIdP); err != nil {
 			return Account{}, "", err
 		}
 		outcome = LoginBootstrapped
@@ -775,7 +784,7 @@ func (s *Store) BootstrapLocal(code, name string) (Account, error) {
 	if _, err := consumeCode(tx, code, CodeBootstrap); err != nil {
 		return Account{}, err
 	}
-	id, err := createBootstrapAccount(tx, name, "")
+	id, err := createBootstrapAccount(tx, name, "", "")
 	if err != nil {
 		return Account{}, err
 	}

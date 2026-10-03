@@ -190,6 +190,7 @@ type oidcClient struct {
 	mu       sync.Mutex
 	oauth    *oauth2.Config
 	verifier *oidc.IDTokenVerifier
+	provider *oidc.Provider
 }
 
 func newOIDCClient(cfg OIDCConfig) (*oidcClient, error) {
@@ -236,6 +237,7 @@ func (c *oidcClient) ready(ctx context.Context) (*oauth2.Config, *oidc.IDTokenVe
 		Scopes: []string{oidc.ScopeOpenID, "email", "profile"},
 	}
 	c.verifier = provider.Verifier(&oidc.Config{ClientID: c.cfg.ClientID})
+	c.provider = provider
 	return c.oauth, c.verifier, nil
 }
 
@@ -443,13 +445,7 @@ func (a *app) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		a.loginMessage(w, http.StatusForbidden, "auth.id_token_nonce.title", "auth.id_token_nonce.text")
 		return
 	}
-	var claims struct {
-		Email             string `json:"email"`
-		EmailVerified     bool   `json:"email_verified"`
-		PreferredUsername string `json:"preferred_username"`
-		Name              string `json:"name"`
-		AuthorizedParty   string `json:"azp"`
-	}
+	var claims profileClaims
 	if err := idToken.Claims(&claims); err != nil || idToken.Subject == "" {
 		a.loginMessage(w, http.StatusForbidden, "auth.id_token_subject.title", "auth.id_token_subject.text")
 		return
@@ -460,6 +456,12 @@ func (a *app) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		a.loginMessage(w, http.StatusForbidden, "auth.id_token_client.title", "auth.id_token_client.text")
 		return
 	}
+	// Viele Anbieter (ZITADEL ohne "User Info Inside ID Token") legen Namen
+	// nur am userinfo-Endpunkt ab. Wer im ID-Token nicht benannt ist, wird dort
+	// nachgefragt; ein Fehler dort ändert am Login nichts.
+	if !claims.named() {
+		a.oidc.mergeUserInfo(ctx, oauthCfg, token, idToken.Subject, &claims)
+	}
 	// Eine nicht bestätigte Email ist eine Behauptung des Nutzers. Sie wird
 	// nicht gespeichert und nicht zum Benennen verwendet.
 	if !claims.EmailVerified {
@@ -467,7 +469,7 @@ func (a *app) oidcCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	account, outcome, err := a.store.LoginIdentity(store.IdentityLogin{
 		Issuer: idToken.Issuer, Subject: idToken.Subject, Email: claims.Email,
-		Name: displayName(claims.PreferredUsername, claims.Name, claims.Email), Code: flow.Code,
+		Name: claims.displayName(), Code: flow.Code,
 	})
 	if err != nil {
 		a.identityRejected(w, err)
@@ -476,6 +478,8 @@ func (a *app) oidcCallback(w http.ResponseWriter, r *http.Request) {
 	if outcome == store.LoginBootstrapped {
 		a.dropBootstrapFile()
 	}
+	// A name the IdP changed reaches the sessions that are already open.
+	a.sessions.relabel(account.ID, account.Name)
 	if flow.Join && (outcome == store.LoginInvited || outcome == store.LoginJoined) {
 		a.finishJoinLogin(w, r, account)
 		return
@@ -483,16 +487,89 @@ func (a *app) oidcCallback(w http.ResponseWriter, r *http.Request) {
 	a.finishLogin(w, r, account)
 }
 
-func displayName(preferred, name, email string) string {
-	for _, v := range []string{preferred, name} {
-		if v = strings.TrimSpace(v); v != "" {
-			return v
-		}
+// profileClaims sind die Profil-Claims aus ID-Token und userinfo.
+type profileClaims struct {
+	Email             string `json:"email"`
+	EmailVerified     bool   `json:"email_verified"`
+	PreferredUsername string `json:"preferred_username"`
+	Name              string `json:"name"`
+	GivenName         string `json:"given_name"`
+	FamilyName        string `json:"family_name"`
+	Nickname          string `json:"nickname"`
+	AuthorizedParty   string `json:"azp"`
+}
+
+// fullName ist der Name, den der Anbieter für die Person selbst meldet.
+func (c profileClaims) fullName() string {
+	if n := strings.TrimSpace(c.Name); n != "" {
+		return n
 	}
-	if local, _, ok := strings.Cut(strings.TrimSpace(email), "@"); ok && local != "" {
+	return strings.TrimSpace(strings.TrimSpace(c.GivenName) + " " + strings.TrimSpace(c.FamilyName))
+}
+
+// named: das ID-Token nennt die Person schon mit ihrem Namen.
+func (c profileClaims) named() bool { return c.fullName() != "" }
+
+// displayName ist der Anzeigename: Name, Vor- und Nachname, Spitzname,
+// Benutzername. Eine E-Mail-Adresse ist nie der Anzeigename; steht nichts
+// anderes zur Verfügung, bleibt höchstens der Teil vor dem @, aus einem
+// Benutzernamen in Adressform oder aus einer bestätigten Adresse.
+func (c profileClaims) displayName() string {
+	if n := c.fullName(); n != "" {
+		return n
+	}
+	if n := strings.TrimSpace(c.Nickname); n != "" {
+		return n
+	}
+	user := strings.TrimSpace(c.PreferredUsername)
+	if user != "" && !strings.Contains(user, "@") {
+		return user
+	}
+	if local, _, ok := strings.Cut(user, "@"); ok && local != "" {
 		return local
 	}
+	if c.EmailVerified {
+		if local, _, ok := strings.Cut(strings.TrimSpace(c.Email), "@"); ok && local != "" {
+			return local
+		}
+	}
 	return ""
+}
+
+// mergeUserInfo ergänzt fehlende Claims aus dem userinfo-Endpunkt. Die Antwort
+// gilt nur, wenn ihr Subject das des ID-Tokens ist (OIDC Core 5.3.2).
+func (c *oidcClient) mergeUserInfo(ctx context.Context, cfg *oauth2.Config, token *oauth2.Token, subject string, claims *profileClaims) {
+	c.mu.Lock()
+	provider := c.provider
+	c.mu.Unlock()
+	if provider == nil {
+		return
+	}
+	info, err := provider.UserInfo(ctx, cfg.TokenSource(ctx, token))
+	if err != nil || info.Subject != subject {
+		return
+	}
+	var got profileClaims
+	if info.Claims(&got) != nil {
+		return
+	}
+	if claims.Name == "" {
+		claims.Name = got.Name
+	}
+	if claims.GivenName == "" && claims.FamilyName == "" {
+		claims.GivenName, claims.FamilyName = got.GivenName, got.FamilyName
+	}
+	if claims.Nickname == "" {
+		claims.Nickname = got.Nickname
+	}
+	if claims.PreferredUsername == "" {
+		claims.PreferredUsername = got.PreferredUsername
+	}
+	if claims.Email == "" || !claims.EmailVerified {
+		if got.Email != "" && got.EmailVerified {
+			claims.Email, claims.EmailVerified = got.Email, true
+		}
+	}
 }
 
 func (a *app) identityRejected(w http.ResponseWriter, err error) {

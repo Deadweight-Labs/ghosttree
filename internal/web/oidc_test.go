@@ -54,6 +54,12 @@ type fakeIdP struct {
 	extraAudiences []string
 	azp            string
 	breakChallenge bool // der IdP merkt sich eine falsche PKCE-Challenge
+
+	// userinfo ist die Antwort des userinfo-Endpunkts; nil heißt: der
+	// Endpunkt antwortet mit 500. userinfoCalls zählt die Abrufe.
+	userinfo      map[string]any
+	userinfoCalls int
+	idTokenName   map[string]any // zusätzliche Claims im ID-Token
 }
 
 type fakeGrant struct{ challenge, nonce, redirect string }
@@ -71,7 +77,7 @@ func newFakeIdP(t *testing.T) *fakeIdP {
 	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{
 			"issuer": f.srv.URL, "authorization_endpoint": f.srv.URL + "/authorize",
-			"token_endpoint": f.srv.URL + "/token", "jwks_uri": f.srv.URL + "/jwks",
+			"token_endpoint": f.srv.URL + "/token", "jwks_uri": f.srv.URL + "/jwks", "userinfo_endpoint": f.srv.URL + "/userinfo",
 			"id_token_signing_alg_values_supported": []string{"RS256"},
 		})
 	})
@@ -80,6 +86,17 @@ func newFakeIdP(t *testing.T) *fakeIdP {
 			"kty": "RSA", "alg": "RS256", "use": "sig", "kid": "k1",
 			"n": b64(key.N.Bytes()), "e": b64(big.NewInt(int64(key.E)).Bytes()),
 		}}})
+	})
+	mux.HandleFunc("/userinfo", func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.userinfoCalls++
+		if f.userinfo == nil || r.Header.Get("Authorization") != "Bearer at" {
+			http.Error(w, "nope", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(f.userinfo)
 	})
 	mux.HandleFunc("/authorize", f.authorize)
 	mux.HandleFunc("/token", f.token)
@@ -152,6 +169,9 @@ func (f *fakeIdP) token(w http.ResponseWriter, r *http.Request) {
 		"iss": iss, "sub": f.subject, "aud": aud, "nonce": nonce,
 		"iat": now.Add(-time.Minute).Unix(), "exp": now.Add(life).Unix(),
 		"email": f.email, "email_verified": !f.unverified, "preferred_username": f.username,
+	}
+	for k, v := range f.idTokenName {
+		claims[k] = v
 	}
 	if len(f.extraAudiences) > 0 {
 		claims["aud"] = append([]string{aud}, f.extraAudiences...)

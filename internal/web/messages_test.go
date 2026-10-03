@@ -9,7 +9,7 @@ import (
 )
 
 // p1Templates sind die Vorlagen, deren Texte vollständig im Katalog liegen.
-var p1Templates = []string{"templates/layout.html", "templates/login.html", "templates/overview.html", "templates/sessions.html", "templates/coord.html", "templates/knowledge.html", "templates/requests.html", "templates/orgs.html", "templates/device.html"}
+var p1Templates = []string{"templates/layout.html", "templates/login.html", "templates/overview.html", "templates/sessions.html", "templates/coord.html", "templates/knowledge.html", "templates/requests.html", "templates/orgs.html", "templates/device.html", "templates/profile.html"}
 
 var (
 	scriptRE   = regexp.MustCompile(`(?s)<script>.*?</script>`)
@@ -105,7 +105,7 @@ func TestMsgFormatsArgumentsAndNeverReturnsEmpty(t *testing.T) {
 	}
 }
 
-var goKeyRE = regexp.MustCompile(`"((?:shell|nav|role|login|auth|overview|ov|setup|age|agent|machine|sessions|coord|knowledge|requests|adm|time|join|pair)\.[a-z0-9_.]+)"`)
+var goKeyRE = regexp.MustCompile(`"((?:shell|nav|role|login|auth|overview|ov|setup|age|agent|machine|sessions|coord|knowledge|requests|adm|time|join|pair|profile)\.[a-z0-9_.]+)"`)
 
 // goMessageKeys sammelt die Schlüssel, die im Go-Code vorkommen (Navigation,
 // Rollen, Fehlertexte der Handler).

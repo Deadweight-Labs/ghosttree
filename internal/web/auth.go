@@ -57,6 +57,18 @@ func (s *sessions) get(id string) (browserSession, bool) {
 	s.values[id] = v
 	return v, true
 }
+
+// relabel gives every session of an account its new display name.
+func (s *sessions) relabel(accountID, label string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, v := range s.values {
+		if v.principal.ID == accountID {
+			v.principal.Label = label
+			s.values[id] = v
+		}
+	}
+}
 func (s *sessions) remove(id string) { s.mu.Lock(); delete(s.values, id); s.mu.Unlock() }
 func browserPrincipal(r *http.Request) store.Principal {
 	v, _ := r.Context().Value(personKey{}).(store.Principal)

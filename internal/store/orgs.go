@@ -1150,8 +1150,9 @@ func (s *Store) acceptInvitation(acct int64, code string) (Org, error) {
 	return o, tx.Commit()
 }
 
-// inviteName macht aus dem Anzeigenamen einen freien Kontonamen.
-func inviteName(tx queryer, wanted string) (string, error) {
+// inviteName macht aus dem Anzeigenamen einen freien Kontonamen. Das Konto
+// self (0: keines) zählt dabei nicht als Kollision mit sich selbst.
+func inviteName(tx queryer, wanted string, self int64) (string, error) {
 	base := NormalizeAccountName(wanted)
 	if base == "" {
 		base = "user"
@@ -1161,7 +1162,7 @@ func inviteName(tx queryer, wanted string) (string, error) {
 	}
 	name := base
 	for i := 2; i < 1000; i++ {
-		taken, err := accountNameTakenTx(tx, name)
+		taken, err := accountNameTakenByOtherTx(tx, name, self)
 		if err != nil {
 			return "", err
 		}
@@ -1175,15 +1176,18 @@ func inviteName(tx queryer, wanted string) (string, error) {
 
 // createInvitedAccountTx legt das Konto zu einer Einladung an und löst sie ein;
 // scheitert die Einlösung, bleibt auch das Konto aus (Rollback des Aufrufers).
-func createInvitedAccountTx(tx execQueryer, name, email, code string, enforced bool) (int64, error) {
+func createInvitedAccountTx(tx execQueryer, name, email, code, source string, enforced bool) (int64, error) {
 	if !invitationExists(tx, code) {
 		return 0, ErrCodeInvalid
 	}
-	name, err := inviteName(tx, name)
+	if NormalizeAccountName(name) == "" {
+		source = ""
+	}
+	name, err := inviteName(tx, name, 0)
 	if err != nil {
 		return 0, err
 	}
-	res, err := tx.Exec(`INSERT INTO persons(name, token_hash, created_at, email) VALUES(?,?,?,?)`, name, "", now(), strings.TrimSpace(email))
+	res, err := tx.Exec(`INSERT INTO persons(name, token_hash, created_at, email, name_source) VALUES(?,?,?,?,?)`, name, "", now(), strings.TrimSpace(email), source)
 	if err != nil {
 		return 0, err
 	}
@@ -1211,7 +1215,7 @@ func (s *Store) InviteLocal(code, name string) (Account, error) {
 		return Account{}, err
 	}
 	defer tx.Rollback()
-	id, err := createInvitedAccountTx(tx, name, "", code, s.AccessEnforced())
+	id, err := createInvitedAccountTx(tx, name, "", code, "", s.AccessEnforced())
 	if err != nil {
 		return Account{}, err
 	}

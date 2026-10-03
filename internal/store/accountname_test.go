@@ -52,7 +52,7 @@ func TestInvitedNamesAreDisambiguated(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		got, err := inviteName(tx, in)
+		got, err := inviteName(tx, in, 0)
 		tx.Rollback()
 		if err != nil || got != want {
 			t.Errorf("inviteName(%q) = %q, %v; want %q", in, got, err, want)

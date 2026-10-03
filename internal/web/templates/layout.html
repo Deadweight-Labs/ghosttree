@@ -18,7 +18,7 @@
 {{if .Shell.Secondary}}<nav class="shell-nav shell-admin" aria-label="{{t "shell.admin"}}">{{range .Shell.Secondary}}{{template "navitem" .}}{{end}}</nav>{{end}}
 <hr class="shell-rule">
 <details class="account"><summary aria-label="{{t "shell.account_menu"}}"><span class="av human sm clay" aria-hidden="true">{{.Shell.Initial}}</span><span class="account-id"><span class="account-name">{{.Person}}</span><span class="account-role">{{t .Shell.RoleKey}}</span></span></summary>
-<div class="account-menu clay"><a data-account="join" href="/ui/orgs">{{t "shell.join"}}</a><form method="post" action="/ui/logout"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><button class="account-signout">{{t "shell.sign_out"}}</button></form></div></details>
+<div class="account-menu clay"><a data-account="profile" href="/ui/profile">{{t "shell.profile"}}</a><a data-account="join" href="/ui/orgs">{{t "shell.join"}}</a><form method="post" action="/ui/logout"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><button class="account-signout">{{t "shell.sign_out"}}</button></form></div></details>
 <p class="shell-host">{{.Shell.Host}}</p>
 </div>
 </aside>

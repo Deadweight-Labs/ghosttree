@@ -89,8 +89,13 @@ func accountNameKey(name string) string {
 
 // accountNameTakenTx sagt, ob ein vorhandenes Konto denselben Vergleichsschlüssel hat.
 func accountNameTakenTx(q queryer, name string) (bool, error) {
+	return accountNameTakenByOtherTx(q, name, 0)
+}
+
+// accountNameTakenByOtherTx ist accountNameTakenTx ohne das Konto self.
+func accountNameTakenByOtherTx(q queryer, name string, self int64) (bool, error) {
 	key := accountNameKey(name)
-	rows, err := q.Query(`SELECT name FROM persons`)
+	rows, err := q.Query(`SELECT name FROM persons WHERE id<>?`, self)
 	if err != nil {
 		return false, err
 	}
