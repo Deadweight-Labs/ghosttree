@@ -153,6 +153,9 @@ func navKeyFor(section string, kind viewerKind) string {
 		if kind == viewerOwner {
 			return "admin-org"
 		}
+		if kind == viewerMember {
+			return "account-org"
+		}
 	}
 	return ""
 }
@@ -196,7 +199,7 @@ func (a *app) shellFor(r *http.Request, name string) shellView {
 	case viewerOwner:
 		v.Secondary = []navItem{item("admin-org", "nav.organization", "/ui/orgs"), item("admin-devices", "nav.devices", "/ui/account/tokens")}
 	case viewerMember:
-		v.Secondary = []navItem{item("account-devices", "nav.my_devices", "/ui/account/tokens")}
+		v.Secondary = []navItem{item("account-org", "nav.people", "/ui/orgs"), item("account-devices", "nav.my_devices", "/ui/account/tokens")}
 	}
 
 	v.ProjectAction = "/ui/knowledge"

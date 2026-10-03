@@ -478,7 +478,7 @@ func TestOrgPageCreatesProjectInvitationLinks(t *testing.T) {
 	if _, err := st.EnsureProject("person:1", joinProject); err != nil {
 		t.Fatal(err)
 	}
-	resp := postOrg(t, alice, base, "/ui/orgs/invite", url.Values{"org": {org.Slug}, "project": {joinProject}, "project_role": {"guest"}})
+	resp := postOrgFollow(t, alice, base, "/ui/orgs/invite", url.Values{"org": {org.Slug}, "project": {joinProject}, "project_role": {"guest"}})
 	page := body(t, resp)
 	m := regexp.MustCompile(`/join/([0-9a-f]{64})`).FindStringSubmatch(page)
 	if resp.StatusCode != http.StatusOK || m == nil {
@@ -592,7 +592,7 @@ func TestOrgPageGuestLinksNeedEnforcementAndShowAbsoluteURL(t *testing.T) {
 		t.Fatalf("guest link without enforcement: %d %s", resp.StatusCode, page)
 	}
 	st.SetAccessMode(store.AccessMode{Enforce: true})
-	resp = postOrg(t, alice, base, "/ui/orgs/invite", url.Values{"org": {org.Slug}, "project": {joinProject}, "project_role": {"guest"}})
+	resp = postOrgFollow(t, alice, base, "/ui/orgs/invite", url.Values{"org": {org.Slug}, "project": {joinProject}, "project_role": {"guest"}})
 	page := body(t, resp)
 	if resp.StatusCode != http.StatusOK || !regexp.MustCompile(`value="http://127\.0\.0\.1:[0-9]+/join/[0-9a-f]{64}"`).MatchString(page) {
 		t.Fatalf("link: %d %s", resp.StatusCode, page)

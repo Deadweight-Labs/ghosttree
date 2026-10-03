@@ -47,7 +47,7 @@ func isTechnicalValue(v string) bool {
 	case "message", "directive", "request", "question", "approval", "blocker", "handoff", "open", "resolved", "deferred", "withdraw", "met", "waived":
 		return true
 	}
-	return strings.HasPrefix(v, "/") || strings.HasPrefix(v, "1") || strings.HasPrefix(v, "REQ-") || v == "on" || v == "member" || v == "owner" || v == "guest" || v == "none" || v == "7" || v == "approve" || v == "deny" || v == "member\x00owner"
+	return strings.HasPrefix(v, "/") || strings.HasPrefix(v, "1") || strings.HasPrefix(v, "REQ-") || v == "on" || v == "member" || v == "owner" || v == "guest" || v == "none" || v == "7" || v == "approve" || v == "deny" || v == "member\x00owner" || regexp.MustCompile(`^[0-9]+$`).MatchString(v)
 }
 
 func TestCatalogKeysUsedByTemplatesExistAndEveryKeyIsUsed(t *testing.T) {

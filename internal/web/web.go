@@ -34,6 +34,7 @@ type app struct {
 	publicOrigin  string // scheme://host of GHOSTTREE_PUBLIC_URL, or empty
 	publicHTTPS   bool
 	joinLimits    *joinLimiter
+	inviteLinks   *inviteLinks
 	distSums      distCache
 	distDir       string // ctx archives + checksums.txt served at /dist/; empty = off
 	oidcName      string // display name of the identity provider; empty = unnamed
@@ -100,7 +101,7 @@ func uiHeaders(h http.Header) {
 }
 
 func newApp(st *store.Store, opts ...Option) http.Handler {
-	a := &app{store: st, sessions: newSessions(), joinLimits: newJoinLimiter()}
+	a := &app{store: st, sessions: newSessions(), joinLimits: newJoinLimiter(), inviteLinks: newInviteLinks()}
 	for _, opt := range opts {
 		opt(a)
 	}

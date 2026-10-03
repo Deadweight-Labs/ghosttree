@@ -177,7 +177,9 @@ type coordMessageView struct {
 	Author, AuthorKind, Timestamp string
 	// SenderRole ist die Rolle des Absenders im Projekt des Raums, live vom
 	// Server berechnet; leer außerhalb von Projekträumen.
-	SenderRole       string
+	SenderRole string
+	// SenderRoleTitle says in a sentence what that role may do.
+	SenderRoleTitle  string
 	DisplayTimestamp string
 	Body, Intent     string
 	Expired          bool
@@ -1049,6 +1051,7 @@ func applyMessageRoles(st *store.Store, roomKey, viewerID string, views []coordM
 				continue
 			}
 			views[i].SenderRole = roles[i]
+			views[i].SenderRoleTitle = roleTitle(roles[i])
 		}
 	}
 }
@@ -1302,4 +1305,19 @@ func coordClientTexts() string {
 		return "{}"
 	}
 	return string(raw)
+}
+
+// roleTitle explains a project role in a sentence, for the hover text of its label.
+func roleTitle(role string) string {
+	switch role {
+	case store.RoleOwner:
+		return msg("role.owner.title")
+	case store.RoleLead:
+		return msg("role.lead.title")
+	case store.RoleMember:
+		return msg("role.member.title")
+	case store.RoleGuest:
+		return msg("role.guest.title")
+	}
+	return ""
 }

@@ -25,6 +25,22 @@ func orgWeb(t *testing.T) (srvURL string, st *store.Store, alice, anna *http.Cli
 	return srv.URL, st, loginInteractive(t, srv, st, "alice"), loginInteractive(t, srv, st, "anna"), org
 }
 
+// postOrgFollow posts like postOrg and, as a browser does, follows a 303 to the
+// page the redirect names with the same client.
+func postOrgFollow(t *testing.T, c *http.Client, base, path string, form url.Values) *http.Response {
+	t.Helper()
+	resp := postOrg(t, c, base, path, form)
+	if resp.StatusCode != http.StatusSeeOther {
+		return resp
+	}
+	resp.Body.Close()
+	next, err := c.Get(base + resp.Header.Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return next
+}
+
 func postOrg(t *testing.T, c *http.Client, base, path string, form url.Values) *http.Response {
 	t.Helper()
 	form.Set("csrf_token", renderedCSRFToken(t, c, base+"/ui/orgs"))
@@ -117,8 +133,9 @@ func TestOrgInviteAcceptRoleMoveAndRemoveInTheBrowser(t *testing.T) {
 	beta, _ := st.CreateOrg("person:1", "Beta", "beta")
 	st.ClaimProject("person:1", "github.com/x/one", "alpha")
 
-	// Einladung: der Code erscheint nur in der Antwort auf das Formular.
-	resp := postOrg(t, alice, base, "/ui/orgs/invite", url.Values{"org": {"alpha"}, "role": {"member"}, "days": {"3"}})
+	// Einladung: der Link steht auf der Seite nach der Weiterleitung und bleibt
+	// beim Ersteller sichtbar, solange die Einladung offen ist.
+	resp := postOrgFollow(t, alice, base, "/ui/orgs/invite", url.Values{"org": {"alpha"}, "role": {"member"}, "days": {"3"}})
 	page := body(t, resp)
 	code := between(page, "/ui/login/code?code=", `"`)
 	if resp.StatusCode != 200 || len(code) != 64 {
@@ -128,8 +145,8 @@ func TestOrgInviteAcceptRoleMoveAndRemoveInTheBrowser(t *testing.T) {
 		t.Fatal("the code page must not be cached")
 	}
 	again, _ := alice.Get(base + "/ui/orgs?org=alpha")
-	if strings.Contains(body(t, again), code) {
-		t.Fatal("the code must not be shown again")
+	if !strings.Contains(body(t, again), code) {
+		t.Fatal("the creator must be able to copy the link of an open invitation again")
 	}
 	// Anna löst ihn ein, falscher Code geht nicht.
 	if resp := postOrg(t, anna, base, "/ui/orgs/accept", url.Values{"code": {"wrong"}}); resp.StatusCode != http.StatusBadRequest {
@@ -301,12 +318,12 @@ func TestOrgInviteOffersOwnProjectsAsChoiceAndClaimsOnlyWhatTheOwnerUploaded(t *
 		return body(t, resp)
 	}
 	page := get(alice)
-	if strings.Contains(page, `name="project" maxlength`) || !strings.Contains(page, "Add to organization and invite") ||
-		!strings.Contains(page, `<option value="github.com/x/mine">`) || strings.Contains(page, "github.com/x/annas") {
+	if strings.Contains(page, `name="project" maxlength`) || strings.Contains(page, "Add to organization and invite") ||
+		!strings.Contains(page, `<option value="github.com/x/mine"`) || strings.Contains(page, "github.com/x/annas") {
 		t.Fatalf("owner page: %s", page)
 	}
 	// Ein Mitglied sieht weder Formular noch fremde oder eigene unbeanspruchte Projekte.
-	if page := get(anna); strings.Contains(page, "github.com/x/annas") || strings.Contains(page, "github.com/x/mine") || strings.Contains(page, "Add to organization") {
+	if page := get(anna); strings.Contains(page, "github.com/x/annas") || strings.Contains(page, "github.com/x/mine") || strings.Contains(page, "Create invitation") {
 		t.Fatalf("member page lists unclaimed projects: %s", page)
 	}
 	// Anna darf auch nicht per Hand-POST claimen.
@@ -330,9 +347,9 @@ func TestOrgInviteOffersOwnProjectsAsChoiceAndClaimsOnlyWhatTheOwnerUploaded(t *
 	if _, ok := st.ProjectByRemote("github.com/x/mine"); ok {
 		t.Fatal("a refused link left a claim behind")
 	}
-	resp := postOrg(t, alice, base, "/ui/orgs/invite", url.Values{"org": {"alpha"}, "project": {"github.com/x/mine"}, "claim": {"1"}, "project_role": {"member"}, "days": {"7"}})
+	resp := postOrgFollow(t, alice, base, "/ui/orgs/invite", url.Values{"org": {"alpha"}, "project": {"github.com/x/mine"}, "claim": {"1"}, "project_role": {"member"}, "days": {"7"}})
 	page = body(t, resp)
-	if resp.StatusCode != http.StatusOK || !strings.Contains(page, "/join/") || !strings.Contains(page, "shown only now") {
+	if resp.StatusCode != http.StatusOK || !strings.Contains(page, "/join/") || !strings.Contains(page, "stays here until it is used") {
 		t.Fatalf("claim and invite: %d %s", resp.StatusCode, page)
 	}
 	if p, ok := st.ProjectByRemote("github.com/x/mine"); !ok || p.OrgID != org.ID {
@@ -374,12 +391,12 @@ func TestOrgInviteLinkDefaultsFollowTheRoleAndSharedRemotesAreNotOffered(t *test
 	uploadWebSession(t, st, 1, "c", "github.com/x/mine")
 	resp, _ := alice.Get(base + "/ui/orgs?org=alpha")
 	page := body(t, resp)
-	if strings.Contains(page, "github.com/x/shared") || !strings.Contains(page, `<option value="github.com/x/mine">`) {
+	if strings.Contains(page, "github.com/x/shared") || !strings.Contains(page, `<option value="github.com/x/mine"`) {
 		t.Fatalf("claim list: %s", page)
 	}
-	// Nur das E-Mail-Formular trägt eine feste Vorvorgabe; die Link-Formulare lassen die Tage leer.
-	if strings.Count(page, `name="days" type="number" min="1" max="30" value="7"`) != 1 {
-		t.Fatalf("link forms carry a fixed days value: %s", page)
+	// Die Dauer ist eine Auswahl; ihre erste Option (leer) lässt den Server die Rolle entscheiden.
+	if strings.Count(page, `<option value="" data-member="7 days" data-guest="3 days">7 days</option>`) != 2 {
+		t.Fatalf("the days choice does not name its default: %s", page)
 	}
 	if resp := postOrg(t, alice, base, "/ui/orgs/invite", url.Values{"org": {"alpha"}, "project": {"github.com/x/shared"}, "claim": {"1"}, "project_role": {"member"}}); resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("shared remote by hand: %d", resp.StatusCode)
@@ -399,7 +416,7 @@ func TestOrgInviteLinkDefaultsFollowTheRoleAndSharedRemotesAreNotOffered(t *test
 	_ = anna
 	// Standardwerte (Feld leer): Mitglied 7 Tage, Gast 3 Tage.
 	for role, want := range map[string]time.Duration{"member": 7 * 24 * time.Hour, "guest": 3 * 24 * time.Hour} {
-		resp := postOrg(t, alice, base, "/ui/orgs/invite", url.Values{"org": {"alpha"}, "project": {"github.com/x/mine"}, "claim": {"1"}, "project_role": {role}, "days": {""}})
+		resp := postOrgFollow(t, alice, base, "/ui/orgs/invite", url.Values{"org": {"alpha"}, "project": {"github.com/x/mine"}, "claim": {"1"}, "project_role": {role}, "days": {""}})
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("%s link: %d %s", role, resp.StatusCode, body(t, resp))
 		}
