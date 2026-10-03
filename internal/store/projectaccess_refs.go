@@ -50,6 +50,17 @@ func (s *Store) RequestRef(kind RequestRefKind, id int64) (ObjectRef, error) {
 	return ref, err
 }
 
+// RequestWorkSession nennt die Session einer Arbeit. sql.ErrNoRows, wenn es die
+// Arbeit nicht gibt.
+func (s *Store) RequestWorkSession(workID int64) (int64, error) {
+	if s.reader != nil {
+		return s.reader.RequestWorkSession(workID)
+	}
+	var sid int64
+	err := s.db.QueryRow(`SELECT session_id FROM request_work WHERE id=?`, workID).Scan(&sid)
+	return sid, err
+}
+
 // KnowledgeRef: Projekt-, Maschinen- und Autorangaben eines Eintrags ohne Text.
 func (s *Store) KnowledgeRef(id int64) (Knowledge, error) {
 	if s.reader != nil {

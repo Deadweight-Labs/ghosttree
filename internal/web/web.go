@@ -310,7 +310,7 @@ func (a *app) knowledgePage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	entries = keep(entries, limit, pa.CanSeeKnowledge)
+	entries = pa.KnowledgeViews(keep(entries, limit, pa.CanSeeKnowledge))
 	a.renderBrowser(w, r, "knowledge", pageData{Title: "Knowledge", Knowledge: entries, Project: project})
 }
 
@@ -330,13 +330,14 @@ func (a *app) reviewPage(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), 500)
 			return
 		}
-		for _, ev := range evidence {
-			evidenceIDs = append(evidenceIDs, ev.SessionID)
-		}
 		recurrence, err := a.store.Recurrence(k.ID)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
+		}
+		evidence, recurrence = pa.ReadableEvidence(k.Scope.Project, evidence, recurrence)
+		for _, ev := range evidence {
+			evidenceIDs = append(evidenceIDs, ev.SessionID)
 		}
 		proof, err := a.store.MigrationEvidenceForKnowledge(k.ID)
 		var migrationProof *store.MigrationEvidence
@@ -346,7 +347,7 @@ func (a *app) reviewPage(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), 500)
 			return
 		}
-		items = append(items, reviewEntry{Knowledge: k, Evidence: evidence, MigrationEvidence: migrationProof, Recurrence: recurrence})
+		items = append(items, reviewEntry{Knowledge: pa.KnowledgeView(k), Evidence: evidence, MigrationEvidence: pa.MigrationEvidenceView(k.Scope.Project, migrationProof), Recurrence: recurrence})
 	}
 	a.renderBrowser(w, r, "review", pageData{Title: "Review", Review: items, SessionLinks: a.sessionLinks(pa, evidenceIDs)})
 }

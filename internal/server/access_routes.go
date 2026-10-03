@@ -443,7 +443,13 @@ func (a *api) checkRequest(w http.ResponseWriter, r *http.Request, kind store.Re
 		writeRequestError(w, err)
 		return false
 	}
-	return !denyAccess(w, pa.Check(ref.Project, store.ResRequest, act, store.Object{Own: pa.IsAuthor(ref.Person)}))
+	err = pa.Check(ref.Project, store.ResRequest, act, store.Object{Own: pa.IsAuthor(ref.Person)})
+	if errors.Is(err, store.ErrAccessNotFound) {
+		// Verborgenes Projekt: Body wie bei einer unbekannten Id.
+		writeRequestError(w, sql.ErrNoRows)
+		return false
+	}
+	return !denyAccess(w, err)
 }
 
 func (a *api) noteRequestHits(r *http.Request, hits []requestdomain.SearchHit) {

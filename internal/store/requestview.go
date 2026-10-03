@@ -41,9 +41,9 @@ func (a *ProjectAccess) RequestDetailView(d requestdomain.Detail) requestdomain.
 	}
 	d.Request.SessionRef = ""
 	// Wer an dem Auftrag arbeiten darf (decideGlobal: jedes Konto an globalen
-	// Aufträgen), braucht die echten Nummern, um Arbeit abzuschließen oder
-	// Belege zu setzen; neu vergebene träfen fremde Zeilen. Gefiltert wird auch
-	// dann, nur die Nummern bleiben.
+	// Aufträgen), braucht die echten Arbeits-Ids, um Arbeit abzuschließen; neu
+	// vergebene träfen fremde Zeilen. Gefiltert wird auch dann, nur diese Ids
+	// bleiben (Aktivität und Beleg werden immer neu nummeriert).
 	keepIDs := a.Decide(project, ResRequest, ActWork, Object{Own: a.IsAuthor(d.Request.Person)}).Allowed
 	// Alles, was an einer Session hängt, bleibt nur, wenn sie lesbar ist, und
 	// wird sonst ganz weggelassen: ein Platzhalter ließe sich mitzählen. Die
@@ -80,10 +80,9 @@ func (a *ProjectAccess) RequestDetailView(d requestdomain.Detail) requestdomain.
 			if !ok || (e.Kind == "session" && !sessionRefPattern.MatchString(e.Ref)) {
 				continue
 			}
+			// Keine Route nimmt eine Beleg-Id an: immer neu vergeben.
 			evidenceNo++
-			if !keepIDs {
-				e.ID = evidenceNo
-			}
+			e.ID = evidenceNo
 			e.Ref = ref
 			kept = append(kept, e)
 		}
@@ -116,9 +115,8 @@ func (a *ProjectAccess) RequestDetailView(d requestdomain.Detail) requestdomain.
 			}
 			act.Data = ref
 		}
-		if !keepIDs {
-			act.ID = int64(len(activity) + 1)
-		}
+		// Auch eine Aktivitäts-Id braucht kein Schreibzugriff: immer neu vergeben.
+		act.ID = int64(len(activity) + 1)
 		act.SessionID = 0
 		activity = append(activity, act)
 	}
