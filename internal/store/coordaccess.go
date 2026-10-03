@@ -1582,12 +1582,12 @@ func (a CoordAccess) createTaskThread(roomKey string, anchorMessageID int64, tit
 		}
 		var requestProject string
 		if err := tx.QueryRow(`SELECT project FROM requests WHERE id=?`, requestNumber).Scan(&requestProject); errors.Is(err, sql.ErrNoRows) {
-			return 0, fmt.Errorf("linked request not found")
+			return 0, errLinkedRequestNotFound
 		} else if err != nil {
 			return 0, err
 		}
 		if kind == RoomProject && requestProject != "" && requestProject != project {
-			return 0, ErrCoordForbidden
+			return 0, errLinkedRequestNotFound
 		}
 		if project == roomKey && requestProject != "" {
 			project = requestProject
@@ -2737,7 +2737,7 @@ func validateRequestLinkTx(tx *sql.Tx, roomKey, linkID string) error {
 	}
 	var requestProject string
 	if err := tx.QueryRow(`SELECT project FROM requests WHERE id=?`, requestNumber).Scan(&requestProject); errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("linked request not found")
+		return errLinkedRequestNotFound
 	} else if err != nil {
 		return err
 	}
@@ -2747,7 +2747,12 @@ func validateRequestLinkTx(tx *sql.Tx, roomKey, linkID string) error {
 	}
 	if roomKind == RoomProject && strings.TrimSpace(requestProject) != "" &&
 		RoomKeyForProject(requestProject) != roomKey {
-		return ErrCoordForbidden
+		return errLinkedRequestNotFound
 	}
 	return nil
 }
+
+// errLinkedRequestNotFound answers both a request that does not exist and one
+// that belongs to another project, so a link cannot probe which request ids
+// exist elsewhere.
+var errLinkedRequestNotFound = errors.New("linked request not found")

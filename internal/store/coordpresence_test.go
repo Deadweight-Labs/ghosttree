@@ -288,7 +288,7 @@ func TestPresenceQueryCountDoesNotGrowWithThePeers(t *testing.T) {
 			agents = append(agents, presenceAgent{ExternalID: id, PrincipalID: "person:4", SessionID: fmt.Sprintf("uuid-%d-%d", peers, i)})
 		}
 		c := &countingDB{db: st.db}
-		presenceBatch(c, time.Now().UTC(), room, agents)
+		presenceBatch(c, time.Now().UTC(), room, agents, nil)
 		return c.n
 	}
 	small, large := count(2), count(40)

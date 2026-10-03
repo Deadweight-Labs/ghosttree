@@ -248,13 +248,12 @@ func (s *Store) OwnAgents(accountPrincipal string) ([]CoordAgent, error) {
 	rows.Close()
 	var out []CoordAgent
 	for room, ids := range mine {
-		peers, err := s.CoordPeers(room, "")
+		peers, err := s.coordPeers(room, "", ids)
 		if err != nil {
 			return nil, err
 		}
 		for _, p := range peers {
 			if ids[p.ExternalID] {
-				p.Presence = ownPresence(p.Presence)
 				out = append(out, p)
 			}
 		}
@@ -274,6 +273,14 @@ func (s *Store) CoordPeers(roomKey, since string) ([]CoordAgent, error) {
 	if s.reader != nil {
 		return s.reader.CoordPeers(roomKey, since)
 	}
+	return s.coordPeers(roomKey, since, nil)
+}
+
+// coordPeers is CoordPeers with a set of agents whose presence is derived from
+// their own signals only (poll, tool activity, pause): no waits and no cycle,
+// because those come from messages to other participants and would tell a
+// viewer without the right to list the room whether an @-name is a member.
+func (s *Store) coordPeers(roomKey, since string, ownOnly map[string]bool) ([]CoordAgent, error) {
 	query := `SELECT a.id,a.external_id,a.provider,m.room_key,a.display_name,
 			COALESCE(person,''),COALESCE(cwd,''),COALESCE(branch,''),
 			COALESCE(worktree,''),COALESCE(parent_external_id,''),
@@ -330,7 +337,7 @@ func (s *Store) CoordPeers(roomKey, since string) ([]CoordAgent, error) {
 	for i := range out {
 		agents[i] = presenceAgent{ExternalID: out[i].ExternalID, PrincipalID: principals[i], SessionID: sessions[i], LastPoll: polls[i]}
 	}
-	derived := presenceBatch(s.db, time.Now().UTC(), roomKey, agents)
+	derived := presenceBatch(s.db, time.Now().UTC(), roomKey, agents, ownOnly)
 	// Wartekreise über alle Mitglieder des Raums, unabhängig vom since-Filter.
 	var cycleOf map[string]*WaitCycle
 	if cycles, err := roomWaitCycles(s.db, time.Now().UTC(), roomKey); err == nil && len(cycles) > 0 {
@@ -343,7 +350,9 @@ func (s *Store) CoordPeers(roomKey, since string) ([]CoordAgent, error) {
 	}
 	for i := range out {
 		p := derived[out[i].ExternalID]
-		p.Cycle = cycleOf[out[i].ExternalID]
+		if !ownOnly[out[i].ExternalID] {
+			p.Cycle = cycleOf[out[i].ExternalID]
+		}
 		out[i].Presence = &p
 	}
 	// Rollen gibt es nur im Projektraum, und sie werden hier live berechnet.
@@ -358,21 +367,4 @@ func (s *Store) CoordPeers(roomKey, since string) ([]CoordAgent, error) {
 		}
 	}
 	return out, nil
-}
-
-// ownPresence keeps what the agent itself shows (reachable, working, paused)
-// and drops the waiting states. Those are derived from messages to other
-// participants, so on a viewer without the right to list the room they would
-// tell whether an @-name is a real, hidden member.
-func ownPresence(p *Presence) *Presence {
-	if p == nil {
-		return nil
-	}
-	c := *p
-	switch c.WorkState.Value {
-	case WorkWaitingUser, WorkWaitingPeer, WorkBlocked:
-		c.WorkState = PresenceField{Value: WorkUnknown}
-	}
-	c.Cycle = nil
-	return &c
 }

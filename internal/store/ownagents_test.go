@@ -1,6 +1,9 @@
 package store
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 // A guest has no right to list a project's agents, but the agent they started
 // themselves is theirs to see; nobody else's shows up.
@@ -85,5 +88,45 @@ func TestOwnAgentsPresenceDoesNotRevealWhoTheyWaitFor(t *testing.T) {
 	}
 	if v := got[0].Presence.WorkState.Value; v == WorkWaitingPeer || v == WorkWaitingUser || v == WorkBlocked || got[0].Presence.Cycle != nil {
 		t.Fatalf("own agent shows a wait: %+v", got[0].Presence)
+	}
+}
+
+// With fresh tool activity the agent reads "working" whether or not the person
+// it asked is a real member; a mask applied after the wait is derived would
+// turn the first case into "unknown" and tell the two apart.
+func TestOwnAgentsPresenceIsTheSameForRealAndMissingMentionTargets(t *testing.T) {
+	state := func(target string) (string, string) {
+		st := accessFixture(t)
+		room := RoomKeyForProject(roleProject)
+		const guestAgent = "claude:host-g:aaaa"
+		registerRoleAgent(t, st, guestAgent, "person:5", room, "guest")
+		registerRoleAgent(t, st, "claude:host-m:bbbb", "person:3", room, "member")
+		now := time.Now().UTC().Format(time.RFC3339)
+		seen := time.Now().UTC().Add(-20 * time.Second).Format(time.RFC3339)
+		if _, err := st.db.Exec(`INSERT INTO sessions(harness,external_id,project,started_at,last_seen_at,account_id) VALUES('claude','sess-g',?,?,?,5)`, roleProject, now, now); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.db.Exec(`UPDATE coord_agents SET session_id='sess-g' WHERE external_id=?`, guestAgent); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.db.Exec(`INSERT INTO path_activity(project,session_external_id,tool,path,quality,at,account_id) VALUES(?,?,?,?,?,?,5)`, roleProject, "sess-g", "Edit", "a.go", "intent", seen); err != nil {
+			t.Fatal(err)
+		}
+		guest := st.CoordinationFor(Principal{ID: "person:5", Label: "nora"}, guestAgent)
+		_, _ = guest.Send(CoordMessage{DestinationKind: DestinationRoom, DestinationID: room,
+			ClientID: "q", Body: "ping", Intent: IntentQuestion, Mentions: []string{target}})
+		got, err := st.OwnAgents("person:5")
+		if err != nil || len(got) != 1 {
+			t.Fatalf("own agents %+v err=%v", got, err)
+		}
+		return got[0].Presence.WorkState.Value, got[0].Presence.Reachability.Value
+	}
+	realW, realR := state("claude:host-m:bbbb")
+	ghostW, ghostR := state("claude:host-ghost:zzzz")
+	if realW != ghostW || realR != ghostR {
+		t.Fatalf("member target gives %s/%s, missing target %s/%s", realW, realR, ghostW, ghostR)
+	}
+	if realW != WorkWorking {
+		t.Fatalf("fresh activity shows %q, want working", realW)
 	}
 }

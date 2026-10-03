@@ -158,3 +158,27 @@ func TestMigrationTrimsProjectKey(t *testing.T) {
 		t.Fatalf("home=%q err=%v want %q", got, err, room)
 	}
 }
+
+// A request of another project and a request that does not exist fail the same
+// way, so a link cannot be used to find out which request ids exist.
+func TestRequestLinkErrorDoesNotTellMissingFromForeign(t *testing.T) {
+	st := accessFixture(t)
+	room := RoomKeyForProject(roleProject)
+	registerRoleAgent(t, st, "claude:host-m:bbbb", "person:3", room, "member")
+	mia := st.CoordinationFor(Principal{ID: "person:3", Label: "mia"}, "claude:host-m:bbbb")
+	foreign := fixRequest(t, st, "github.com/other/secret")
+	_, missing := mia.CreateThread(Thread{Project: roleProject, Title: "a", Link: &ThreadLink{Kind: "request", ID: "REQ-9999"}})
+	_, other := mia.CreateThread(Thread{Project: roleProject, Title: "b", Link: &ThreadLink{Kind: "request", ID: "REQ-" + itoa(foreign)}})
+	if missing == nil || other == nil || missing.Error() != other.Error() || errors.Is(other, ErrCoordForbidden) {
+		t.Fatalf("missing: %v; foreign: %v", missing, other)
+	}
+	id, err := mia.CreateThread(Thread{Project: roleProject, Title: "c"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	missing = mia.LinkThread(ThreadLink{ThreadID: id, Kind: "request", ID: "REQ-9999"})
+	other = mia.LinkThread(ThreadLink{ThreadID: id, Kind: "request", ID: "REQ-" + itoa(foreign)})
+	if missing == nil || other == nil || missing.Error() != other.Error() || errors.Is(other, ErrCoordForbidden) {
+		t.Fatalf("link missing: %v; foreign: %v", missing, other)
+	}
+}
