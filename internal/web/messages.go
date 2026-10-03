@@ -408,6 +408,8 @@ var messages = map[string]string{
 	"join.accept":             "Join",
 	"join.not_you":            "Not you?",
 	"join.sign_in_join":       "Continue and join",
+	"join.create_account":     "Create an account",
+	"login.no_account":        "No account yet? Open the invitation link you were sent; it lets you create one.",
 	"join.have_account":       "I already have an account",
 	"join.name_label":         "Your name",
 	"join.create_join":        "Create account and join",

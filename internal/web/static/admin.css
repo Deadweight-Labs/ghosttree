@@ -113,3 +113,11 @@
 .ad-fields { align-items: flex-start; }
 .ad-form { flex-wrap: nowrap; align-content: start; }
 .ad-fields { flex: none; }
+
+/* Profile form, the secondary invitation option and a link inside a list row. */
+.ad-save { align-self: flex-start; margin-top: var(--space-3); }
+.ad-more { margin: 0; }
+.ad-more > summary { cursor: pointer; font: var(--text-label); font-size: 13.5px; color: var(--clay-ink-soft); padding: 4px 0; }
+.ad-more[open] > summary { margin-bottom: var(--space-3); }
+.ad-body .ad-copy { margin-top: 8px; }
+.ad-form .ad-sel + .ad-sel { margin-left: 0; }

@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -47,6 +48,10 @@ type OIDCConfig struct {
 	// Name ist der Anzeigename des Anbieters auf der Anmeldeseite ("Continue
 	// with <Name>"). Leer: die Seite nennt keinen Anbieter.
 	Name string
+	// Signup steuert den Weg "Konto anlegen" auf der Einladungsseite (OIDC
+	// prompt=create): "1" immer anbieten, "0" nie, leer nur, wenn der Anbieter
+	// "create" in prompt_values_supported der Discovery nennt.
+	Signup string
 	// HTTPClient ist für Tests austauschbar; Standard ist ein Client mit Timeout.
 	HTTPClient *http.Client
 }
@@ -61,6 +66,9 @@ func (c OIDCConfig) Enabled() bool {
 func (c OIDCConfig) Validate() error {
 	if !c.Enabled() {
 		return nil
+	}
+	if c.Signup != "" && c.Signup != "0" && c.Signup != "1" {
+		return fmt.Errorf("oidc signup must be 1, 0 or empty")
 	}
 	if c.Issuer == "" || c.ClientID == "" || c.RedirectURL == "" {
 		return errors.New("oidc needs issuer, client id and redirect url together")
@@ -191,6 +199,8 @@ type oidcClient struct {
 	oauth    *oauth2.Config
 	verifier *oidc.IDTokenVerifier
 	provider *oidc.Provider
+	// createPrompt: die Discovery nennt prompt=create.
+	createPrompt bool
 }
 
 func newOIDCClient(cfg OIDCConfig) (*oidcClient, error) {
@@ -238,7 +248,30 @@ func (c *oidcClient) ready(ctx context.Context) (*oauth2.Config, *oidc.IDTokenVe
 	}
 	c.verifier = provider.Verifier(&oidc.Config{ClientID: c.cfg.ClientID})
 	c.provider = provider
+	var meta struct {
+		Prompts []string `json:"prompt_values_supported"`
+	}
+	if provider.Claims(&meta) == nil {
+		c.createPrompt = slices.Contains(meta.Prompts, "create")
+	}
 	return c.oauth, c.verifier, nil
+}
+
+// signupOffered sagt, ob "Konto anlegen" angeboten wird. Ein nicht erreichbarer
+// Anbieter heißt: nein (außer bei erzwungenem "1").
+func (c *oidcClient) signupOffered(ctx context.Context) bool {
+	switch c.cfg.Signup {
+	case "0":
+		return false
+	case "1":
+		return true
+	}
+	if _, _, err := c.ready(ctx); err != nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.createPrompt
 }
 
 func randomString() (string, error) {
@@ -370,7 +403,13 @@ func (a *app) beginOIDC(w http.ResponseWriter, r *http.Request, code string) {
 		return
 	}
 	http.SetCookie(w, a.flowCookie(r, sealed, int(flowTTL.Seconds())))
-	target := oauthCfg.AuthCodeURL(state, oauth2.S256ChallengeOption(verifier), oidc.Nonce(nonce))
+	opts := []oauth2.AuthCodeOption{oauth2.S256ChallengeOption(verifier), oidc.Nonce(nonce)}
+	// Nur der Weg "Konto anlegen" der Einladungsseite schickt prompt=create, und
+	// nur, wo er angeboten wird; ein von Hand gesetztes Feld ändert sonst nichts.
+	if r.FormValue("signup") == "1" && a.oidc.signupOffered(r.Context()) {
+		opts = append(opts, oauth2.SetAuthURLParam("prompt", "create"))
+	}
+	target := oauthCfg.AuthCodeURL(state, opts...)
 	http.Redirect(w, r, target, http.StatusSeeOther)
 }
 

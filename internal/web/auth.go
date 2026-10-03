@@ -316,7 +316,7 @@ func (a *app) codePage(w http.ResponseWriter, r *http.Request) {
 			if target == "" {
 				target = p.Org
 			}
-			data.InviteV = &joinView{Inviter: p.Inviter, Target: target, Org: p.Org, ExpiresAt: p.ExpiresAt}
+			data.InviteV = &joinView{Inviter: p.Inviter, Target: target, Org: p.Org, ExpiresAt: p.ExpiresAt, Signup: a.oidc != nil && a.oidc.signupOffered(r.Context())}
 			if p.Project == "" {
 				data.InviteV.Org = ""
 			}

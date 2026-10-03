@@ -6,6 +6,20 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Added: names and invitations work for two people (REQ-438). The sign-in reads
+  the display name from the identity provider's userinfo endpoint when the ID
+  token carries none (name, given and family name, nickname, user name; an email
+  address is never a name), refreshes it at each sign-in until the person sets one
+  on the new Profile page. Agents read as "Claude · Robin · mainex" instead of
+  their session ID, in rooms, recipient pickers and the Agents page; guests see a
+  neutral "Someone" or "Agent" and never an ID. Project rooms list everyone with a
+  role in the project, with that role, for members and up. Inviting is one flow:
+  pick the project and the role, get the invitation link; the link stays copyable
+  for its creator while the invitation is open, and a reload no longer fails.
+  Members without a project are flagged with a button to add one, the last owner
+  cannot step down or leave, and the default organization is marked "For new
+  projects". An invitation link offers "Create an account" when the identity
+  provider supports `prompt=create` (`GHOSTTREE_OIDC_SIGNUP=1` or `0` overrides).
 - Changed: owners, leads and members may write in the project rooms of their
   project through their role, without an agent of their own in the room (REQ-437).
   Messages, replies, threads and standing instructions work from the browser

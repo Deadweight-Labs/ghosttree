@@ -12,8 +12,10 @@
 {{if .SignedIn}}<p class="join-who"><span class="av human sm clay" aria-hidden="true">{{.Initial}}</span><span><strong>{{.Person}}</strong>{{if .Email}}<small>{{.Email}}</small>{{end}}</span></p>
 <form class="login-form" method="post" action="/join/{{.Code}}/accept"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}">{{template "joinconfirm" .}}<button class="clay btn btn-primary">{{t "join.accept"}}</button></form>
 <form class="join-signout" method="post" action="/join/{{.Code}}/signout"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><span>{{t "join.not_you"}}</span> <button class="join-link">{{t "shell.sign_out"}}</button></form>
-{{else if .OIDC}}<form class="login-form" method="post" action="/ui/login/oidc"><input type="hidden" name="code" value="{{.Code}}"><input type="hidden" name="join" value="1"><button class="clay btn btn-primary">{{t "join.sign_in_join"}}</button></form>
-<p class="join-alt"><a href="/ui/login">{{t "join.have_account"}}</a></p>
+{{else if .OIDC}}<form class="login-form" method="post" action="/ui/login/oidc"><input type="hidden" name="code" value="{{.Code}}"><input type="hidden" name="join" value="1">{{if .Signup}}<input type="hidden" name="signup" value="1"><button class="clay btn btn-primary">{{t "join.create_account"}}</button></form>
+<form class="login-form" method="post" action="/ui/login/oidc"><input type="hidden" name="code" value="{{.Code}}"><input type="hidden" name="join" value="1"><button class="clay btn">{{t "join.sign_in_join"}}</button></form>
+{{else}}<button class="clay btn btn-primary">{{t "join.sign_in_join"}}</button></form>
+<p class="join-alt"><a href="/ui/login">{{t "join.have_account"}}</a></p>{{end}}
 {{else}}<form class="login-form" method="post" action="/ui/login/code"><input type="hidden" name="code" value="{{.Code}}"><input type="hidden" name="join" value="1"><label class="field"><span>{{t "join.name_label"}}</span><input class="clay" name="name" maxlength="64" required autocomplete="nickname" autocapitalize="none" spellcheck="false" placeholder="{{t "login.name_placeholder"}}"></label><button class="clay btn btn-primary">{{t "join.create_join"}}</button></form>
 <p class="join-alt"><a href="/ui/login">{{t "join.have_account"}}</a></p>
 {{end}}{{template "joinfoot"}}{{end}}
