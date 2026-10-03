@@ -235,7 +235,7 @@ func (a *app) listAgents(r *http.Request, pa *store.ProjectAccess, project strin
 		if !pa.Allow(remote, store.ResAgents, store.ActRead, store.Object{}) {
 			continue
 		}
-		peers, err := access.Peers(store.RoomKeyForProject(remote), "")
+		peers, err := access.ProjectAgents(remote)
 		if errors.Is(err, store.ErrCoordNotFound) || errors.Is(err, store.ErrCoordForbidden) {
 			continue
 		}

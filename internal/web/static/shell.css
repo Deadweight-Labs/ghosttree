@@ -287,11 +287,11 @@ svg.i { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-widt
 }
 
 /* Agents page. Card list in the overview deck; status dot is .ov-dot. */
-.ag { max-width: 60rem; }
+.shell-main > main.ag { max-width: 60rem; }
 .ag-deck { padding: 8px 10px; }
 .ag-card { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; gap: 16px; align-items: start; padding: 14px; }
 .ag-card + .ag-card { border-top: 1px solid var(--clay-line); }
-.ag-card.is-offline { opacity: .6; }
+.ag-card.is-offline .av, .ag-card.is-offline .ov-name { opacity: .6; }
 .ag-body { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .ag-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
 .ag-machine { font-family: var(--font-mono); }
@@ -299,6 +299,7 @@ svg.i { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-widt
 .ag-req:hover { text-decoration: underline; }
 .ag-post { margin: 0; color: var(--clay-ink-soft); overflow-wrap: anywhere; }
 .ag-foot { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; }
+.ag-links { display: inline-flex; gap: 16px; white-space: nowrap; }
 .ag-link { color: var(--clay-accent-text) !important; font-size: 13px; font-weight: 600; text-decoration: none; }
 .ag-link:hover { text-decoration: underline; }
 .ag-card .ov-state { padding-top: 4px; }

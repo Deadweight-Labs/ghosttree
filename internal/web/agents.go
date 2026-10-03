@@ -29,6 +29,7 @@ type agentsView struct {
 	Cards     []agentCard
 	Connect   string
 	CanAdd    bool
+	Guest     bool
 	CSRFToken string
 }
 
@@ -55,7 +56,8 @@ func (a *app) agentsPage(w http.ResponseWriter, r *http.Request) {
 	who := a.shellBaseFor(r).who
 	shell := a.shellFor(r, "agents")
 	view := agentsView{CSRFToken: csrfOf(r)}
-	if who.kind != viewerGuest {
+	view.Guest = who.kind == viewerGuest
+	if !view.Guest {
 		view.CanAdd, view.Connect = true, "/ui/overview?connect=1"
 		rows, err := a.listAgents(r, pa, selectedProject(shell), now, agentsMax)
 		if err != nil {

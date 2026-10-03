@@ -106,15 +106,15 @@ func TestOverviewEveryListComesFromTheViewersVisibleSet(t *testing.T) {
 		t.Error("the project selector does not narrow the owner overview")
 	}
 
-	// Agenten erscheinen über dieselbe Zugangsprüfung wie die Räume: nur in
-	// Räumen, in denen der Betrachter selbst einen Agenten hat.
+	// Agenten sieht, wer sie mit seiner Projektrolle lesen darf (ab member),
+	// auch ohne eigenen Agenten im Raum.
 	_, anna := fetchPage(t, e.Member, e.Base+"/ui/overview")
 	if !strings.Contains(anna, "visible-agent") {
 		t.Error("a member does not see the agents of the room they are in")
 	}
 	for name, c := range map[string]*http.Client{"lead": e.Lead, "reviewer": e.Reviewer} {
-		if strings.Contains(fetchBody(t, c, e.Base+"/ui/overview"), "visible-agent") {
-			t.Errorf("%s sees agents of a room they have no agent in", name)
+		if !strings.Contains(fetchBody(t, c, e.Base+"/ui/overview"), "visible-agent") {
+			t.Errorf("%s does not see the agents of a project they read", name)
 		}
 	}
 	for name, c := range map[string]*http.Client{"member": e.Member, "lead": e.Lead, "reviewer": e.Reviewer} {

@@ -4,7 +4,7 @@
 <div class="ag-body"><div class="ag-line"><span class="ov-name">{{.Name}}</span>{{if .Machine}}<span class="ov-meta ag-machine">@{{.Machine}}</span>{{end}}</div>
 {{if .ReqID}}<a class="ag-req" href="{{.ReqHref}}"><span class="ov-id">{{.ReqID}}</span> {{.ReqTitle}}</a>{{end}}
 {{if .Post}}<p class="ag-post">{{.Post}}<span class="ov-num"> · {{.PostAge}}</span></p>{{end}}
-<div class="ag-foot"><span class="ov-meta">{{.Project}}{{if .Branch}} · {{.Branch}}{{end}}</span><a class="ag-link" href="{{.RoomHref}}">{{t "agents.room"}}</a>{{if .SessionHref}}<a class="ag-link" href="{{.SessionHref}}">{{t "agents.session"}}</a>{{end}}</div></div>
-<span class="ov-state">{{if .Activity}}<span class="ov-activity">{{.Activity}}</span>{{end}}<span class="ov-dot is-{{.State}}{{if eq .State "active"}} pulse{{end}}" title="{{.StateText}}"></span><span class="ov-num">{{.Age}}</span></span></li>{{end}}</ul>
-{{else}}<p class="ov-empty">{{t "ov.no_agents"}}</p>{{if .CanAdd}}<a class="ov-btn ov-btn-primary clay" href="{{.Connect}}">{{t "ov.connect"}}</a>{{end}}{{end}}
+<div class="ag-foot"><span class="ov-meta">{{.Project}}{{if .Branch}} · {{.Branch}}{{end}}</span><span class="ag-links"><a class="ag-link" href="{{.RoomHref}}">{{t "agents.room"}}</a>{{if .SessionHref}}<a class="ag-link" href="{{.SessionHref}}">{{t "agents.session"}}</a>{{end}}</span></div></div>
+<span class="ov-state"><span class="ov-activity">{{if .Activity}}{{.Activity}}{{else}}{{.StateText}}{{end}}</span><span class="ov-dot is-{{.State}}{{if eq .State "active"}} pulse{{end}}" title="{{.StateText}}"></span><span class="ov-num">{{.Age}}</span></span></li>{{end}}</ul>
+{{else if .Guest}}<p class="ov-empty">{{t "ov.nothing"}}</p>{{else}}<p class="ov-empty">{{t "ov.no_agents"}}</p>{{if .CanAdd}}<a class="ov-btn ov-btn-primary clay" href="{{.Connect}}">{{t "ov.connect"}}</a>{{end}}{{end}}
 {{end}}{{template "foot" .}}{{end}}

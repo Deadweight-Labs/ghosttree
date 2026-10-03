@@ -974,6 +974,25 @@ func (a CoordAccess) Peers(roomKey, since string) ([]CoordAgent, error) {
 	return a.Store.CoordPeers(roomKey, since)
 }
 
+// ProjectAgents lists the agents of a project room for a browser viewer whose
+// own project role may read agents (member and up), even without an agent of
+// their own in the room. Read only: the room, its posts and every write keep
+// their membership rules. What comes back depends on the viewer's role alone;
+// anyone below member gets exactly what Peers answers.
+func (a CoordAccess) ProjectAgents(project string) ([]CoordAgent, error) {
+	roomKey := RoomKeyForProject(project)
+	if a.Store == nil || a.AgentExternalID != "" || a.publicOnly {
+		return a.Peers(roomKey, "")
+	}
+	if _, ok := accountNumericID(a.Principal.ID); !ok || !matrixAllows(a.Store.ProjectRole(project, a.Principal.ID), ResAgents, ActRead, Object{}) {
+		return a.Peers(roomKey, "")
+	}
+	if _, err := a.rawRoom(roomKey); err != nil {
+		return nil, err
+	}
+	return a.Store.CoordPeers(roomKey, "")
+}
+
 func (a CoordAccess) messageTarget(messageID int64) (string, string, error) {
 	reader := a.Store
 	if reader.reader != nil {

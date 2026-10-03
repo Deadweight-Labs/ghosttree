@@ -16,8 +16,8 @@ func TestOwnerWithoutOwnAgentOnALiveInstanceSeesTheOverview(t *testing.T) {
 		if strings.Contains(page, "Connect your first agent") || strings.Contains(page, `http-equiv="refresh"`) {
 			t.Errorf("%s is held in Getting started: %s", name, page)
 		}
-		if !strings.Contains(page, "Live request") || !strings.Contains(page, "Connect an agent") {
-			t.Errorf("%s lacks requests or the connect action", name)
+		if !strings.Contains(page, "Live request") || !strings.Contains(page, "member-agent") || !strings.Contains(page, "Connect another agent") {
+			t.Errorf("%s lacks requests, the project's agent or the connect action", name)
 		}
 	}
 }

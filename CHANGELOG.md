@@ -10,7 +10,10 @@ Versioning, with pre-1.0 compatibility rules described in
   project and branch, the open request it works on, its last room post and
   when it was last active, with links to its room and session. Without agents
   the page is one line and a connect action. Agents, requests and sessions you
-  may not read stay out, and a guest sees none.
+  may not read stay out, and a guest sees none. Owners, leads and members see
+  the agents of their projects without needing an agent of their own in the
+  room; the Agents page and the overview list the same agents. A guest sees
+  "Nothing here yet." and no connect action.
 - Fixed: ending a standing instruction needs more than room access. Only its
   author, or someone whose project rank is at least the author's (owners and
   instance admins always), can end it; anyone else gets "forbidden", and the
