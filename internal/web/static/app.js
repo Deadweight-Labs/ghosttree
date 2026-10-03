@@ -113,6 +113,12 @@
     else if (flow) flow.scrollTop = flow.scrollHeight;
   };
   scrollFlowToEnd();
+  const syncFlowFade = (flow) => flow.classList.toggle("is-scrolled", flow.scrollTop > 2);
+  document.addEventListener("scroll", (event) => {
+    if (event.target instanceof Element && event.target.matches(".coord-messages")) syncFlowFade(event.target);
+  }, true);
+  const initialFlow = document.querySelector(".coord-messages");
+  if (initialFlow) syncFlowFade(initialFlow);
   addEventListener("keydown", (event) => {
     if (event.key === "Escape") close();
   });

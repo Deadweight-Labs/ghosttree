@@ -201,7 +201,7 @@ func (s *Store) SenderRolesInProject(project string, msgs []CoordMessage) []stri
 // CanEndStanding sagt, ob der Handelnde die Vorgabe beenden darf; die Oberfläche
 // zeigt "Beenden" nur dann. Dieselbe Regel wie EndStanding.
 func (a CoordAccess) CanEndStanding(roomKey, messageID string) bool {
-	if a.Store == nil {
+	if a.Store == nil || !a.CanPost(roomKey) {
 		return false
 	}
 	reader := a.Store

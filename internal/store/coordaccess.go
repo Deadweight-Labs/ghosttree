@@ -108,7 +108,19 @@ func (a CoordAccess) mutationActor() (string, error) {
 	return actor, nil
 }
 
+// requireRoomAccess is the write gate: active membership (an own agent in the
+// room), never a role (spec 7.5: roles never grant write access).
 func (a CoordAccess) requireRoomAccess(roomKey string) (CoordRoom, error) {
+	return a.roomAccess(roomKey, false)
+}
+
+// requireRoomRead is the read gate: membership, or for a project room the
+// project role member and up in a web session (matrix 8.1).
+func (a CoordAccess) requireRoomRead(roomKey string) (CoordRoom, error) {
+	return a.roomAccess(roomKey, true)
+}
+
+func (a CoordAccess) roomAccess(roomKey string, byRole bool) (CoordRoom, error) {
 	actor, err := a.actor()
 	if err != nil {
 		return CoordRoom{}, err
@@ -139,15 +151,15 @@ func (a CoordAccess) requireRoomAccess(roomKey string) (CoordRoom, error) {
 				return CoordRoom{}, err
 			}
 			if !ok {
-				return CoordRoom{}, ErrCoordForbidden
+				return CoordRoom{}, noMembershipError(room.Kind)
 			}
 		} else {
 			ok, err := a.principalOwnsPublicMembership(room.Key)
 			if err != nil {
 				return CoordRoom{}, err
 			}
-			if !ok {
-				return CoordRoom{}, ErrCoordForbidden
+			if !ok && !(byRole && room.Kind == RoomProject && a.memberReadsProjectRoom(room.Key, nil)) {
+				return CoordRoom{}, noMembershipError(room.Kind)
 			}
 		}
 	default:
@@ -160,6 +172,39 @@ func (a CoordAccess) requireRoomAccess(roomKey string) (CoordRoom, error) {
 		}
 	}
 	return room, nil
+}
+
+// noMembershipError: a project room the viewer may see but is not a member of
+// is forbidden; a machine room is not found, so that hostnames cannot be
+// enumerated (#2447). Both answer the same bytes as a missing room.
+func noMembershipError(kind string) error {
+	if kind == RoomMachine {
+		return ErrCoordNotFound
+	}
+	return ErrCoordForbidden
+}
+
+// memberReadsProjectRoom lets a signed-in person with the project role member
+// or higher (owner, lead, member, reviewer) READ the project room without an
+// agent of their own in it (matrix 8.1). It never grants write access (spec
+// 7.5): posting, directives, threads and mutations keep the membership rule,
+// and agent tokens, pasted sessions and guests are not covered.
+func (a CoordAccess) memberReadsProjectRoom(roomKey string, tx rowQuerier) bool {
+	if a.Store == nil || a.publicOnly || a.AgentExternalID != "" || a.Principal.TokenKind != WebSessionKind || !strings.HasPrefix(roomKey, "project:") {
+		return false
+	}
+	acct, ok := accountNumericID(a.Principal.ID)
+	if !ok {
+		return false
+	}
+	project := strings.TrimPrefix(roomKey, "project:")
+	var role RoleInfo
+	if tx != nil {
+		role = projectRoleTx(tx, project, acct)
+	} else {
+		role = a.Store.ProjectRole(project, a.Principal.ID)
+	}
+	return matrixAllows(role, ResAgents, ActRead, Object{})
 }
 
 func (a CoordAccess) principalOwnsPublicMembership(roomKey string) (bool, error) {
@@ -207,7 +252,18 @@ func (a CoordAccess) activeRoomMember(roomKey, actor string) (bool, error) {
 }
 
 func (a CoordAccess) Room(roomKey string) (CoordRoom, error) {
-	return a.requireRoomAccess(roomKey)
+	return a.requireRoomRead(roomKey)
+}
+
+// CanPost says whether the viewer may write into the room: the same check
+// that Send, CreateStanding and thread creation apply, so the page offers a
+// composer only where a post would be accepted.
+func (a CoordAccess) CanPost(roomKey string) bool {
+	if a.publicOnly {
+		return false
+	}
+	_, err := a.requireRoomAccess(roomKey)
+	return err == nil
 }
 
 func (a CoordAccess) RoomMemberships(roomKey string) ([]RoomMembership, error) {
@@ -260,13 +316,20 @@ func (a CoordAccess) RoomMemberships(roomKey string) ([]RoomMembership, error) {
 }
 
 func (a CoordAccess) Rooms() ([]CoordRoom, error) {
+	rooms, _, err := a.roomsWithRole()
+	return rooms, err
+}
+
+// roomsWithRole is Rooms plus the keys that are listed only through the
+// viewer's project role (computed once, for the summaries).
+func (a CoordAccess) roomsWithRole() ([]CoordRoom, map[string]bool, error) {
 	actor, err := a.actor()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	rooms, err := a.Store.CoordRoomsForPrincipal(actor)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if a.AgentExternalID == "" && !a.publicOnly {
 		reader := a.Store
@@ -280,13 +343,13 @@ func (a CoordAccess) Rooms() ([]CoordRoom, error) {
 			WHERE r.kind IN ('project','machine') AND a.principal_id=?
 			ORDER BY r.created_at DESC,r.room_key`, a.Principal.ID)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		defer rows.Close()
 		for rows.Next() {
 			var room CoordRoom
 			if err := rows.Scan(&room.Key, &room.Kind, &room.Label, &room.CreatedAt); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			found := false
 			for _, existing := range rooms {
@@ -300,10 +363,66 @@ func (a CoordAccess) Rooms() ([]CoordRoom, error) {
 			}
 		}
 		if err := rows.Err(); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
-	return a.gateProjectRooms(rooms), nil
+	byRole, err := a.roleReadableProjectRooms(rooms)
+	if err != nil {
+		return nil, nil, err
+	}
+	keys := map[string]bool{}
+	for _, room := range byRole {
+		rooms = append(rooms, room)
+		keys[room.Key] = true
+	}
+	return a.gateProjectRooms(rooms), keys, nil
+}
+
+// roleReadableProjectRooms lists the project rooms the viewer may read through
+// their project role alone (member and up, web session) and that are not in
+// have yet, so the room tabs show every room the page lets them open. One
+// query for all roles of the account, filtered to rank 2 and up.
+func (a CoordAccess) roleReadableProjectRooms(have []CoordRoom) ([]CoordRoom, error) {
+	if a.Store == nil || a.publicOnly || a.AgentExternalID != "" || a.Principal.TokenKind != WebSessionKind {
+		return nil, nil
+	}
+	acct, ok := accountNumericID(a.Principal.ID)
+	if !ok {
+		return nil, nil
+	}
+	reader := a.Store
+	if reader.reader != nil {
+		reader = reader.reader
+	}
+	rows, err := reader.db.Query(`SELECT r.room_key,r.kind,r.label,r.created_at,
+			om.role, COALESCE(pm.role,''), COALESCE(pm.can_review,0)
+		FROM coord_rooms r
+		JOIN projects p ON r.room_key='project:'||p.remote
+		JOIN org_members om ON om.org_id=p.org_id AND om.account_id=?
+		LEFT JOIN project_members pm ON pm.project_id=p.id AND pm.account_id=?
+		WHERE r.kind='project' ORDER BY r.created_at DESC,r.room_key`, acct, acct)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	seen := map[string]bool{}
+	for _, room := range have {
+		seen[room.Key] = true
+	}
+	var out []CoordRoom
+	for rows.Next() {
+		var room CoordRoom
+		var orgRole, role string
+		var review int
+		if err := rows.Scan(&room.Key, &room.Kind, &room.Label, &room.CreatedAt, &orgRole, &role, &review); err != nil {
+			return nil, err
+		}
+		if seen[room.Key] || !matrixAllows(deriveRole(orgRole, role, review == 1), ResAgents, ActRead, Object{}) {
+			continue
+		}
+		out = append(out, room)
+	}
+	return out, rows.Err()
 }
 
 // gateProjectRooms legt die Projektrolle über die Raumliste: eine Mitgliedschaft
@@ -363,7 +482,7 @@ func (a CoordAccess) requireThreadAccess(threadID int64) (Thread, error) {
 func (a CoordAccess) canRead(kind, id string) error {
 	switch kind {
 	case DestinationRoom:
-		_, err := a.requireRoomAccess(id)
+		_, err := a.requireRoomRead(id)
 		return err
 	case DestinationDiscussion:
 		threadID, err := strconv.ParseInt(id, 10, 64)
@@ -585,21 +704,34 @@ func (a CoordAccess) actorTx(tx *sql.Tx) (string, error) {
 }
 
 func (a CoordAccess) canReadTx(tx *sql.Tx, actor, kind, id string) error {
+	return a.canAccessTx(tx, actor, kind, id, true)
+}
+
+// canWriteTx is canReadTx without the role fallback: the member rule.
+func (a CoordAccess) canWriteTx(tx *sql.Tx, actor, kind, id string) error {
+	return a.canAccessTx(tx, actor, kind, id, false)
+}
+
+func (a CoordAccess) canAccessTx(tx *sql.Tx, actor, kind, id string, byRole bool) error {
 	switch kind {
 	case DestinationRoom:
-		return a.requireRoomAccessTx(tx, actor, id)
+		return a.roomAccessTx(tx, actor, id, byRole)
 	case DestinationDiscussion:
 		threadID, err := strconv.ParseInt(id, 10, 64)
 		if err != nil || threadID <= 0 {
 			return ErrCoordNotFound
 		}
-		return a.canReadThreadTx(tx, actor, threadID)
+		return a.threadAccessTx(tx, actor, threadID, byRole)
 	default:
 		return ErrCoordNotFound
 	}
 }
 
 func (a CoordAccess) canReadThreadTx(tx *sql.Tx, actor string, threadID int64) error {
+	return a.threadAccessTx(tx, actor, threadID, true)
+}
+
+func (a CoordAccess) threadAccessTx(tx *sql.Tx, actor string, threadID int64, byRole bool) error {
 	var project string
 	if err := tx.QueryRow(`SELECT project FROM threads WHERE id=?`, threadID).Scan(&project); errors.Is(err, sql.ErrNoRows) {
 		return ErrCoordNotFound
@@ -609,7 +741,7 @@ func (a CoordAccess) canReadThreadTx(tx *sql.Tx, actor string, threadID int64) e
 	if home, found, err := threadHomeTx(tx, threadID); err != nil {
 		return err
 	} else if found {
-		return a.requireRoomAccessTx(tx, actor, home.RoomKey)
+		return a.roomAccessTx(tx, actor, home.RoomKey, byRole)
 	}
 	{
 		var restricted int
@@ -637,11 +769,16 @@ func (a CoordAccess) canReadThreadTx(tx *sql.Tx, actor string, threadID int64) e
 			// eine Lockerung: die Projektrolle gilt auch hier.
 			return a.projectRoomGate(RoomProject, RoomKeyForProject(project), ResRoom, tx)
 		}
-		return a.requireRoomAccessTx(tx, actor, RoomKeyForProject(project))
+		return a.roomAccessTx(tx, actor, RoomKeyForProject(project), byRole)
 	}
 }
 
+// requireRoomAccessTx is the write gate (membership only).
 func (a CoordAccess) requireRoomAccessTx(tx *sql.Tx, actor, roomKey string) error {
+	return a.roomAccessTx(tx, actor, roomKey, false)
+}
+
+func (a CoordAccess) roomAccessTx(tx *sql.Tx, actor, roomKey string, byRole bool) error {
 	var kind string
 	if err := tx.QueryRow(`SELECT kind FROM coord_rooms WHERE room_key=?`, roomKey).Scan(&kind); errors.Is(err, sql.ErrNoRows) {
 		return ErrCoordNotFound
@@ -680,8 +817,8 @@ func (a CoordAccess) requireRoomAccessTx(tx *sql.Tx, actor, roomKey string) erro
 				return err
 			}
 		}
-		if member == 0 {
-			return ErrCoordForbidden
+		if member == 0 && !(byRole && kind == RoomProject && a.memberReadsProjectRoom(roomKey, tx)) {
+			return noMembershipError(kind)
 		}
 		return nil
 	default:
@@ -729,11 +866,11 @@ func (a CoordAccess) RoomSummaries() ([]CoordRoomSummary, error) {
 	if actor == "" {
 		return nil, ErrCoordForbidden
 	}
-	rooms, err := a.Rooms()
+	rooms, byRole, err := a.roomsWithRole()
 	if err != nil {
 		return nil, err
 	}
-	return a.Store.projectRoomSummaries(actor, a.Principal.ID, a.AgentExternalID, rooms)
+	return a.Store.projectRoomSummaries(actor, a.Principal.ID, a.AgentExternalID, rooms, byRole)
 }
 
 func (a CoordAccess) Send(message CoordMessage) (int64, error) {
@@ -760,7 +897,7 @@ func (a CoordAccess) Send(message CoordMessage) (int64, error) {
 	if ReservedExternalID(actor) {
 		return 0, ErrCoordForbidden // der Präfix system: gehört dem Store
 	}
-	if err := a.canReadTx(tx, actor, message.DestinationKind, message.DestinationID); err != nil {
+	if err := a.canWriteTx(tx, actor, message.DestinationKind, message.DestinationID); err != nil {
 		return 0, err
 	}
 	if _, actionable := attentionReasonForIntent(message.Intent); actionable && len(normalizeMembers(message.Mentions)) == 0 {
@@ -963,7 +1100,7 @@ func (a CoordAccess) SetCursor(kind, id string, lastMessageID int64) error {
 }
 
 func (a CoordAccess) Peers(roomKey, since string) ([]CoordAgent, error) {
-	room, err := a.requireRoomAccess(roomKey)
+	room, err := a.requireRoomRead(roomKey)
 	if err != nil {
 		return nil, err
 	}
@@ -1125,7 +1262,7 @@ func (a CoordAccess) SearchThreads(project, query string, includeArchived bool, 
 		return nil, err
 	}
 	if !a.publicOnly {
-		if err := a.requireRoomAccessTx(tx, actor, RoomKeyForProject(project)); err != nil {
+		if err := a.roomAccessTx(tx, actor, RoomKeyForProject(project), true); err != nil {
 			return nil, err
 		}
 	} else if err := a.projectRoomGate(RoomProject, RoomKeyForProject(project), ResRoom, tx); err != nil {
@@ -1522,7 +1659,7 @@ func (a CoordAccess) RoomThreads(roomKey string) ([]RoomThread, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := a.requireRoomAccessTx(tx, actor, roomKey); err != nil {
+	if err := a.roomAccessTx(tx, actor, roomKey, true); err != nil {
 		return nil, err
 	}
 	threads, err := roomThreadsTx(tx, roomKey)
@@ -1568,7 +1705,7 @@ func (a CoordAccess) requireThreadMutationTx(tx *sql.Tx, actor string, threadID 
 	if a.publicOnly {
 		return Thread{}, ErrCoordForbidden
 	}
-	if err := a.canReadThreadTx(tx, actor, threadID); err != nil {
+	if err := a.threadAccessTx(tx, actor, threadID, false); err != nil {
 		return Thread{}, err
 	}
 	row := tx.QueryRow(`SELECT id,project,title,question,state,archived,person,author_principal_id,
@@ -2069,7 +2206,7 @@ func (a CoordAccess) Recipients() ([]CoordRecipient, error) {
 	}
 	ids := make(map[string]bool)
 	for _, room := range rooms {
-		if err := a.canReadTx(tx, actor, DestinationRoom, room); err != nil {
+		if err := a.canWriteTx(tx, actor, DestinationRoom, room); err != nil {
 			if errors.Is(err, ErrCoordNotFound) || errors.Is(err, ErrCoordForbidden) {
 				continue
 			}
@@ -2164,7 +2301,7 @@ func (a CoordAccess) ValidateRoomParticipants(roomKey string, principals []strin
 	if err != nil {
 		return err
 	}
-	if err := a.canReadTx(tx, actor, DestinationRoom, roomKey); err != nil {
+	if err := a.canWriteTx(tx, actor, DestinationRoom, roomKey); err != nil {
 		return err
 	}
 	if err := a.validateRoomParticipantsTx(tx, actor, roomKey, principals); err != nil {
