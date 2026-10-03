@@ -160,7 +160,7 @@ func (a *api) finishRequestWork(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
-	if !a.checkRequest(w, r, store.RefWork, workID, store.ActWork) {
+	if !a.checkRequest(w, r, store.RefWork, workID, store.ActWork) || !a.checkWorkSession(w, r, workID) {
 		return
 	}
 	work, err := a.st.FinishRequestWork(workID, body.State, body.Summary, personOf(r))
@@ -346,6 +346,27 @@ func writeRequestError(w http.ResponseWriter, err error) {
 	}
 	recordResponseError(w, classifyRequestError(http.StatusInternalServerError, "", err.Error()), err.Error())
 	writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "internal", "message": "request operation failed", "resolution": "retry or inspect server logs"})
+}
+
+// checkWorkSession: wer die Session-Nummern des Projekts nicht kennen darf, darf
+// nur Arbeit beenden, deren Session er lesen kann (eigene eingeschlossen). Für
+// jede andere antwortet der Pfad wie für eine unbekannte Id, sonst verriete die
+// Antwort (Stand, Rolle, work_not_active), dass es die verborgene Arbeit gibt.
+func (a *api) checkWorkSession(w http.ResponseWriter, r *http.Request, workID int64) bool {
+	pa := a.access(r)
+	ref, err := a.st.RequestRef(store.RefWork, workID)
+	if err != nil || pa.SeesSessionNumbers(ref.Project) {
+		return true
+	}
+	sid, err := a.st.RequestWorkSession(workID)
+	if err == nil {
+		if sess, serr := a.st.SessionByID(sid); serr == nil && pa.CanSeeTranscript(sess) {
+			return true
+		}
+	}
+	pa.Filtered()
+	writeRequestError(w, sql.ErrNoRows)
+	return false
 }
 
 // workView: wer die Session-Nummern des Projekts nicht kennen darf, bekommt sie

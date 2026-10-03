@@ -6,6 +6,13 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Fixed: guests no longer learn that hidden sessions exist through knowledge
+  or by ending work. Knowledge from distillation points at a session by its
+  address, and only when the guest may read that session; otherwise the
+  reference, its quotes and its session counts are left out, in the knowledge
+  API, the search, the review list and the web pages. Ending request work whose
+  session is hidden from you answers exactly like an unknown id; members still
+  end anyone's work, and everyone ends their own.
 - Fixed: ending a standing instruction needs more than room access. Only its
   author, or someone whose project rank is at least the author's (owners and
   instance admins always), can end it; anyone else gets "forbidden", and the

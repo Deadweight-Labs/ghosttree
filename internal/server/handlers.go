@@ -256,7 +256,7 @@ func (a *api) createKnowledge(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, 200, saved)
+	writeJSON(w, 200, a.access(r).KnowledgeView(saved))
 }
 
 func (a *api) listKnowledge(w http.ResponseWriter, r *http.Request) {
@@ -274,7 +274,8 @@ func (a *api) listKnowledge(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, 200, filterTo(ks, 0, a.access(r).CanSeeKnowledge))
+	pa := a.access(r)
+	writeJSON(w, 200, pa.KnowledgeViews(filterTo(ks, 0, pa.CanSeeKnowledge)))
 }
 
 func (a *api) insertMigratedKnowledge(w http.ResponseWriter, r *http.Request) {
@@ -405,7 +406,8 @@ func (a *api) pendingKnowledge(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
-	ks = filterTo(ks, limit, a.access(r).CanSeeKnowledge)
+	pa := a.access(r)
+	ks = filterTo(ks, limit, pa.CanSeeKnowledge)
 	out := []PendingEntry{}
 	for _, k := range ks {
 		ev, err := a.st.EvidenceFor(k.ID)
@@ -426,7 +428,8 @@ func (a *api) pendingKnowledge(w http.ResponseWriter, r *http.Request) {
 			writeStoreError(w, http.StatusInternalServerError, proofErr)
 			return
 		}
-		out = append(out, PendingEntry{Knowledge: k, Evidence: ev, MigrationEvidence: migrationProof, Recurrence: n})
+		ev, n = pa.EvidenceView(k.Scope.Project, ev, n)
+		out = append(out, PendingEntry{Knowledge: pa.KnowledgeView(k), Evidence: ev, MigrationEvidence: pa.MigrationEvidenceView(k.Scope.Project, migrationProof), Recurrence: n})
 	}
 	writeJSON(w, 200, out)
 }
@@ -454,7 +457,7 @@ func (a *api) getKnowledge(w http.ResponseWriter, r *http.Request) {
 	if denyAccess(w, a.access(r).CheckKnowledge(k, store.ActRead)) {
 		return
 	}
-	writeJSON(w, 200, k)
+	writeJSON(w, 200, a.access(r).KnowledgeView(k))
 }
 
 func (a *api) knowledgeHistory(w http.ResponseWriter, r *http.Request) {
@@ -514,7 +517,7 @@ func (a *api) regressionGaps(w http.ResponseWriter, r *http.Request) {
 	}
 	// Die Zahl der Unbeurteilten reist mit: eine kurze Lückenliste ohne sie
 	// liest sich als Entwarnung, obwohl niemand hingesehen hat.
-	writeJSON(w, http.StatusOK, map[string]any{"gaps": gaps, "unreviewed": unreviewed})
+	writeJSON(w, http.StatusOK, map[string]any{"gaps": a.access(r).KnowledgeViews(gaps), "unreviewed": unreviewed})
 }
 
 func (a *api) patchKnowledge(w http.ResponseWriter, r *http.Request) {
@@ -589,7 +592,7 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 		}
 		// Suche und Bootstrap beliefern Agenten: zusätzlich zur Sichtbarkeit gilt
 		// die Auslieferungsregel (Autor ist im Projekt aktuell member).
-		res.Knowledge = filterTo(ks, limit, func(k store.Knowledge) bool { return pa.CanSeeKnowledge(k) && pa.CanDeliverKnowledge(k) })
+		res.Knowledge = pa.KnowledgeViews(filterTo(ks, limit, func(k store.Knowledge) bool { return pa.CanSeeKnowledge(k) && pa.CanDeliverKnowledge(k) }))
 	}
 	if kind == "sessions" || kind == "all" {
 		dbFilter, viewFilter, fetchSessions := a.sessionFilters(filter, fetch)
