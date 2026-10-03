@@ -263,6 +263,11 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 			detail.Room.Name = tab.Name
 		}
 	}
+	// Who has a role in the project, for the viewers who may see it; a guest
+	// gets nothing here, not even an empty marker.
+	if people, perr := access.RoomPeople(room); perr == nil {
+		detail.Participants = addRoomPeople(detail.Participants, people, current)
+	}
 	applyParticipantRoles(a.store, activeRoom.Key, detail.Participants)
 	a.applyParticipantControls(r, activeRoom.Key, detail.Participants)
 	applyMessageRoles(a.store, activeRoom.Key, current.ID, detail.Messages, presentations)

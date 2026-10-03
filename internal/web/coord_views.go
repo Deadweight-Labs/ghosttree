@@ -283,6 +283,10 @@ type coordParticipantView struct {
 	// active, wait, bad, idle, off; StatusLabel is the short state in words.
 	Human                      bool
 	Initials, Dot, StatusLabel string
+	// ListOnly marks a person shown because they have a role in the project,
+	// not because they joined the room: they are listed but not offered as a
+	// recipient, since only room members can be addressed.
+	ListOnly bool
 	// ReachKey and WorkKey are the raw store values; empty without evidence.
 	ReachKey, WorkKey string
 }
@@ -550,14 +554,15 @@ func buildCoordMessageViews(messages []store.CoordMessagePresentation, roomKey s
 				shown = label
 			}
 		}
+		shown = readableAuthor(shown)
 		view.Name, view.Machine = coordSplitAgentName(shown, message.AuthorKind)
-		view.Initials = coordInitials(author)
+		view.Initials = coordInitials(readableAuthor(author))
 		for _, mention := range presentation.Mentions {
 			view.Mentions = append(view.Mentions, coordIdentityLabel(mention, labels))
 		}
 		view.MentionsText = coordJoinNames(view.Mentions)
 		if presentation.Reply != nil {
-			view.Reply = &coordReplyView{Sequence: presentation.Reply.Sequence, Author: presentation.Reply.Author, Body: presentation.Reply.Body, Missing: presentation.Reply.Missing}
+			view.Reply = &coordReplyView{Sequence: presentation.Reply.Sequence, Author: readableAuthor(presentation.Reply.Author), Body: presentation.Reply.Body, Missing: presentation.Reply.Missing}
 			if !view.Reply.Missing {
 				view.Reply.URL = coordRoomURL(roomKey, "around", view.Reply.Sequence) + "#message-" + strconv.FormatInt(view.Reply.Sequence, 10)
 			}
@@ -674,7 +679,7 @@ func coordReplyTarget(presentations []store.CoordMessagePresentation, raw string
 		if author == "" {
 			author = strings.TrimSpace(presentation.Message.SenderExternalID)
 		}
-		return id, &coordReplyView{Sequence: presentation.Message.Sequence, Author: author, Body: presentation.Message.Body}, nil
+		return id, &coordReplyView{Sequence: presentation.Message.Sequence, Author: readableAuthor(author), Body: presentation.Message.Body}, nil
 	}
 	return 0, nil, fmt.Errorf("reply target is not in this destination window")
 }
@@ -694,9 +699,19 @@ func buildCoordStandingViews(in []store.StandingInstruction, labels map[string]s
 func buildCoordRecipientViews(recipients []store.CoordRecipient) []coordRecipientView {
 	out := make([]coordRecipientView, 0, len(recipients))
 	for _, recipient := range recipients {
-		out = append(out, coordRecipientView{ID: recipient.PrincipalID, Label: recipient.Label, Kind: recipient.Kind, Option: recipient.Label + " · " + recipient.Kind})
+		label := coordRecipientLabel(recipient)
+		out = append(out, coordRecipientView{ID: recipient.PrincipalID, Label: label, Kind: recipient.Kind, Option: label + " · " + recipient.Kind})
 	}
 	return out
+}
+
+// coordRecipientLabel is how a recipient reads in the pickers: people by their
+// name, agents as "Claude · Robin · mainex" instead of their session ID.
+func coordRecipientLabel(recipient store.CoordRecipient) string {
+	if recipient.Kind == "person" {
+		return strings.TrimSpace(recipient.Label)
+	}
+	return agentLabel(recipient.Label, recipient.Provider, strings.TrimPrefix(recipient.PrincipalID, "agent:"), recipient.Owner)
 }
 
 func coordIdentityLabels(current store.Principal, recipients []store.CoordRecipient, peers ...store.CoordAgent) map[string]string {
@@ -705,8 +720,8 @@ func coordIdentityLabels(current store.Principal, recipients []store.CoordRecipi
 		labels[current.ID] = strings.TrimSpace(current.Label)
 	}
 	for _, recipient := range recipients {
-		if strings.TrimSpace(recipient.Label) != "" {
-			labels[recipient.PrincipalID] = strings.TrimSpace(recipient.Label)
+		if label := coordRecipientLabel(recipient); label != "" {
+			labels[recipient.PrincipalID] = label
 		}
 	}
 	for _, peer := range peers {
@@ -727,7 +742,31 @@ func coordIdentityLabel(id string, labels map[string]string) string {
 	if label := strings.TrimSpace(labels[id]); label != "" {
 		return label
 	}
-	return msg("coord.unknown_participant")
+	return neutralIdentityLabel(id)
+}
+
+// neutralIdentityLabel names a participant by the shape of its ID alone, for
+// anyone not entitled to more: "Someone" for a person, the tool for an agent
+// ("Claude", else "Agent"). The ID itself never shows, and the label is
+// the same whether or not the participant exists.
+func neutralIdentityLabel(id string) string {
+	id = strings.TrimSpace(id)
+	switch {
+	case id == "":
+		return msg("coord.unknown_participant")
+	case strings.HasPrefix(id, "person:"):
+		return msg("coord.someone")
+	}
+	return neutralAgentLabel(strings.TrimPrefix(id, "agent:"))
+}
+
+// readableAuthor replaces an author label that is a raw ID (what a viewer who
+// may not see names is given) by the neutral label.
+func readableAuthor(label string) string {
+	if strings.HasPrefix(label, "person:") || strings.HasPrefix(label, "agent:") || looksLikeIdentifier(label, "") {
+		return neutralIdentityLabel(label)
+	}
+	return label
 }
 
 // coordSenderLabel: Etikett des Absenders, sonst das des Kontos, sonst die
@@ -741,7 +780,7 @@ func coordSenderLabel(item store.AttentionItem, labels map[string]string) string
 		return label
 	}
 	if id := strings.TrimSpace(item.SenderID); id != "" {
-		return id
+		return neutralIdentityLabel(id)
 	}
 	return coordIdentityLabel(item.AuthorID, labels)
 }
@@ -951,7 +990,41 @@ func applyParticipantRoles(st *store.Store, roomKey string, participants []coord
 		}
 		info := st.ProjectRole(remote, participants[i].ID)
 		participants[i].Role, participants[i].CanReview = info.Role, info.CanReview
+		if participants[i].StatusLabel == "" && info.Role != "" {
+			participants[i].StatusLabel = msg("role." + info.Role)
+		}
 	}
+}
+
+// addRoomPeople lists the people with a role in the project next to the agents
+// and the people who joined the room. people is empty for viewers who may not
+// see it (guests), so nothing is added for them. Each person shows with their
+// role; those not in the room are marked ListOnly.
+func addRoomPeople(parts []coordParticipantView, people []store.ProjectMember, current store.Principal) []coordParticipantView {
+	have := make(map[string]bool, len(parts))
+	for _, p := range parts {
+		have[p.ID] = true
+	}
+	for _, person := range people {
+		if have[person.AccountID] || person.Role == "" {
+			continue
+		}
+		p := coordParticipantView{ID: person.AccountID, Label: store.NormalizeAccountName(person.Account), Role: person.Role,
+			CanReview: person.CanReview, Current: person.AccountID == current.ID, ListOnly: true,
+			Reachability: coordParticipantUnknown, WorkState: coordParticipantUnknown}
+		decorateCoordParticipant(&p)
+		if !p.Current {
+			p.StatusLabel = msg("role." + person.Role)
+		}
+		parts = append(parts, p)
+	}
+	sort.SliceStable(parts, func(i, j int) bool {
+		if parts[i].Current != parts[j].Current {
+			return parts[i].Current
+		}
+		return parts[i].Label < parts[j].Label
+	})
+	return parts
 }
 
 // applyMessageRoles setzt die aktuelle Projektrolle des Absenders an jede
