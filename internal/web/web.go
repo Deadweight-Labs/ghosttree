@@ -41,31 +41,31 @@ type app struct {
 	oidcName      string // display name of the identity provider; empty = unnamed
 }
 type pageData struct {
-	Title, NavSection, Person, CSRFToken, Error, Code string
-	OIDC, Paste, NeedsName                            bool
-	Admin, Approved, Interactive                      bool
-	DeviceMachine, DeviceRemote, DeviceStarted        string
-	Tokens                                            []tokenRow
-	Requests                                          []requestdomain.SearchHit
-	Request                                           requestdomain.Detail
-	RequestThreads                                    []coordThreadView
-	KnowledgeV                                        *knowledgeView
-	KnowledgeItemV                                    *knowledgeItemView
-	ReviewV                                           *reviewView
-	Sessions                                          []store.Session
-	Chunks                                            []store.Chunk
-	SessionID                                         int64
-	SessionsV                                         *sessionsView
-	SessionV                                          *sessionView
-	Project, Preview                                  string
-	Coord                                             coordPageView
-	Orgs                                              orgsView
-	Invite                                            bool
-	ProviderName                                      string
-	Bootstrap, TokenOpen                              bool
-	Shell                                             shellView
-	Overview                                          overviewView
-	Agents                                            agentsView
+	Title, NavSection, Person, CSRFToken, Error, Code, BackURL string
+	OIDC, Paste, NeedsName                                     bool
+	Admin, Approved, Interactive                               bool
+	DeviceMachine, DeviceRemote, DeviceStarted                 string
+	Tokens                                                     []tokenRow
+	Requests                                                   []requestdomain.SearchHit
+	Request                                                    requestdomain.Detail
+	RequestThreads                                             []coordThreadView
+	KnowledgeV                                                 *knowledgeView
+	KnowledgeItemV                                             *knowledgeItemView
+	ReviewV                                                    *reviewView
+	Sessions                                                   []store.Session
+	Chunks                                                     []store.Chunk
+	SessionID                                                  int64
+	SessionsV                                                  *sessionsView
+	SessionV                                                   *sessionView
+	Project, Preview                                           string
+	Coord                                                      coordPageView
+	Orgs                                                       orgsView
+	Invite                                                     bool
+	ProviderName                                               string
+	Bootstrap, TokenOpen                                       bool
+	Shell                                                      shellView
+	Overview                                                   overviewView
+	Agents                                                     agentsView
 	// Refresh: Sekunden bis zum automatischen Neuladen (0 = nie).
 	Refresh int
 }
@@ -210,7 +210,7 @@ func (a *app) renderBrowser(w http.ResponseWriter, r *http.Request, name string,
 		data.NavSection = "review"
 	case "sessions", "session":
 		data.NavSection = "sessions"
-	case "coord":
+	case "coord", "roomforbidden", "roomnotfound":
 		data.NavSection = "coord"
 	case "context":
 		data.NavSection = "context"

@@ -126,6 +126,13 @@ var messages = map[string]string{
 
 	// Räume (Chat).
 	"coord.title":                      "Rooms",
+	"coord.forbidden.title":            "This room is not open to you",
+	"coord.forbidden.body":             "Ask a project owner or lead if you need to read it.",
+	"coord.forbidden.back":             "Back to rooms",
+	"coord.forbidden.overview":         "Back to the overview",
+	"coord.notfound.title":             "This room does not exist",
+	"coord.notfound.body":              "The link may be old, or the room is not open to you.",
+	"coord.readonly":                   "Read only",
 	"coord.rooms":                      "Rooms",
 	"coord.conversation":               "Conversation",
 	"coord.context":                    "Room details",

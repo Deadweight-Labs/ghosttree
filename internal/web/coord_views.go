@@ -122,7 +122,9 @@ type coordRoomDetailView struct {
 	CanManage, CanLeave bool
 	// CanDirect: the viewer's rank lets a standing instruction be a directive;
 	// below it the same gesture is a standing request.
-	CanDirect              bool
+	CanDirect bool
+	// CanPost: a post from the viewer would be accepted in this room.
+	CanPost                bool
 	FormID, StandingFormID string
 	Zone                   string
 	ReplyTo                int64
@@ -150,6 +152,9 @@ type coordThreadDetailView struct {
 	FormID                                 string
 	ReplyTo                                int64
 	ReplyTarget                            *coordReplyView
+	// CanSetState: the viewer is the thread's author or a room manager and
+	// has a membership, so the state change would be accepted.
+	CanSetState bool
 }
 
 type coordMessageView struct {
@@ -169,6 +174,7 @@ type coordMessageView struct {
 	ThreadURL        string
 	ReplyURL         string
 	CanPromote       bool
+	CanReply         bool
 	CSRFToken        string
 	GroupStart       bool
 	// Own marks the viewer's own human posts (right-aligned blue bubbles).

@@ -24,6 +24,24 @@ Versioning, with pre-1.0 compatibility rules described in
   box are stored as LF. The Edit button on a review card opens the form. Known
   limit: the knowledge list without a project loads at most 400 entries and
   filters them afterwards when access is enforced.
+- Fixed: owners, leads, members and reviewers read the project room in the
+  browser without an agent of their own in it, as the access matrix allows
+  (coordination, project room: read from member up). Writing is unchanged
+  (spec 7.5: roles never grant write access): posting, directives and
+  requests, ending a directive, threads and promoting a message still need an
+  active membership, an agent of one's own in the room. Without it the room
+  shows a quiet "Read only" line instead of the composer, and no "Start
+  thread", "New thread", promote or end button. The room tabs list every
+  project room they may open, and the Room link on the agents page no longer
+  ends in a bare "403". Only a signed-in web session reads by role; personal,
+  device, legacy and pasted tokens and agent tokens, guests and strangers are
+  unchanged, and direct messages are unchanged. A room the viewer may not open
+  shows a designed page: "not open to you" (403, with a way back that leads
+  somewhere) or "does not exist" (404); the 404 page is byte-identical for a
+  missing room and for a room in a project the viewer cannot see. A machine
+  room without membership is now "does not exist" too, so host names cannot be
+  enumerated. The fade at the top of a conversation appears only once it is
+  scrolled, so a short history shows its first message in full.
 - Fixed: guests no longer learn that hidden sessions exist through knowledge
   or by ending work. Knowledge from distillation points at a session by its
   address, and only when the guest may read that session; otherwise the
