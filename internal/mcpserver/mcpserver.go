@@ -130,6 +130,7 @@ type RememberInput struct {
 type SessionsInput struct {
 	Query       string `json:"query,omitempty" jsonschema:"full text search across session transcripts"`
 	SessionID   int64  `json:"session_id,omitempty" jsonschema:"read this session instead of listing"`
+	SessionRef  string `json:"session_ref,omitempty" jsonschema:"read the session with this address (listed as @address when no number is shown) instead of listing"`
 	Project     string `json:"project,omitempty" jsonschema:"list or search another project's sessions, given as a normalized remote like github.com/owner/repo"`
 	AllProjects bool   `json:"all_projects,omitempty" jsonschema:"cover every project instead of the current one"`
 	Limit       int    `json:"limit,omitempty" jsonschema:"maximum results (default 20)"`
@@ -468,8 +469,8 @@ func (s *Server) handleSessions(ctx context.Context, _ *mcp.CallToolRequest, in 
 	if limit <= 0 {
 		limit = 20
 	}
-	if in.SessionID != 0 {
-		chunks, err := s.client.ReadSession(in.SessionID, 0, limit)
+	if in.SessionID != 0 || in.SessionRef != "" {
+		chunks, err := s.client.ReadSessionRef(store.SessionRef{ID: in.SessionID, PublicID: in.SessionRef}, 0, limit)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -562,12 +563,21 @@ func renderKnowledgeFull(k store.Knowledge) string {
 	return header + "\n\n" + k.Body + "\n"
 }
 
+// sessionLabel nennt die Session, wie man sie wieder anspricht: Mitglieder mit
+// der Nummer, Gäste (der Server nennt ihnen keine) mit der Adresse.
+func sessionLabel(se store.Session) string {
+	if se.ID == 0 && se.PublicID != "" {
+		return "@" + se.PublicID
+	}
+	return fmt.Sprintf("#%d", se.ID)
+}
+
 func renderSession(se store.Session) string {
-	return fmt.Sprintf("- #%d %s %s %s (%s)\n", se.ID, se.Harness, se.Scope.Project, se.Scope.Branch, se.LastSeenAt)
+	return fmt.Sprintf("- %s %s %s %s (%s)\n", sessionLabel(se), se.Harness, se.Scope.Project, se.Scope.Branch, se.LastSeenAt)
 }
 
 func renderHit(h store.SessionHit) string {
-	return fmt.Sprintf("- #%d %s %s %s (%s) — %s\n", h.Session.ID, h.Session.Harness,
+	return fmt.Sprintf("- %s %s %s %s (%s) — %s\n", sessionLabel(h.Session), h.Session.Harness,
 		h.Session.Scope.Project, h.Session.Scope.Branch, h.Session.LastSeenAt, oneLine(h.Snippet))
 }
 

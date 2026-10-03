@@ -3,7 +3,9 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"strconv"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 )
@@ -25,7 +27,41 @@ type Session struct {
 	// freigegeben (Spec 8.1). Owner und Lead brauchen die Freigabe nicht.
 	// Gesetzt wird es nur über SetSessionShared, nie aus einem Upload.
 	Shared bool `json:"shared,omitempty"`
+	// Visibility ist die Freigabestufe: private, project (Mitglieder) oder
+	// guests (Mitglieder und Gäste). Shared ist true ab project.
+	Visibility string `json:"visibility,omitempty"`
+	// PublicID ist die Adresse in der Weboberfläche: zufällig, ohne Zählfolge.
+	PublicID string `json:"public_id,omitempty"`
+	// Title: ai-title der Session, sonst die erste Nutzernachricht (gekürzt).
+	Title string `json:"title,omitempty"`
+	// Messages zählt Nutzer- und Assistententexte (aus dem Index).
+	Messages int `json:"messages,omitempty"`
 }
+
+// SessionRef ist, womit ein Client eine Session anspricht: Mitglieder kennen die
+// laufende Nummer, Gäste nur die zufällige Adresse.
+type SessionRef struct {
+	ID       int64  `json:"id,omitempty"`
+	PublicID string `json:"public_id,omitempty"`
+}
+
+// PathSegment ist der Teil des Pfads /api/sessions/{ref}.
+func (r SessionRef) PathSegment() string {
+	if r.ID != 0 {
+		return strconv.FormatInt(r.ID, 10)
+	}
+	return r.PublicID
+}
+
+// Zero: weder Nummer noch Adresse bekannt.
+func (r SessionRef) Zero() bool { return r.ID == 0 && r.PublicID == "" }
+
+// Freigabestufen einer Session.
+const (
+	VisPrivate = "private"
+	VisProject = "project"
+	VisGuests  = "guests"
+)
 
 type Chunk struct {
 	Seq  int    `json:"seq"`
@@ -45,7 +81,7 @@ type SessionHit struct {
 	Snippet string  `json:"snippet"`
 }
 
-const sessionCols = `id, harness, external_id, project, branch, machine, cwd, started_at, last_seen_at, account_id, shared`
+const sessionCols = `id, harness, external_id, project, branch, machine, cwd, started_at, last_seen_at, account_id, shared, visibility, public_id, title, msg_count`
 
 func (s *Store) UpsertSession(sess Session) (int64, error) {
 	if s.writer != nil {
@@ -63,8 +99,12 @@ func (s *Store) UpsertSession(sess Session) (int64, error) {
 	// dasselbe Konto und dieselbe Maschine (eine leere gespeicherte Maschine
 	// darf gesetzt werden). Sonst liefert RETURNING keine Zeile.
 	var id int64
-	err := s.db.QueryRow(`INSERT INTO sessions(harness, external_id, project, branch, machine, cwd, started_at, last_seen_at, account_id)
-		VALUES(?,?,?,?,?,?,?,?,?)
+	publicID, err := newPublicID()
+	if err != nil {
+		return 0, err
+	}
+	err = s.db.QueryRow(`INSERT INTO sessions(harness, external_id, project, branch, machine, cwd, started_at, last_seen_at, account_id, public_id)
+		VALUES(?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(harness, external_id) DO UPDATE SET
 		  project = excluded.project, branch = excluded.branch, machine = excluded.machine,
 		  cwd = excluded.cwd, last_seen_at = excluded.last_seen_at, account_id = excluded.account_id
@@ -72,7 +112,7 @@ func (s *Store) UpsertSession(sess Session) (int64, error) {
 		  AND (sessions.machine = '' OR sessions.machine = excluded.machine)
 		RETURNING id`,
 		sess.Harness, sess.ExternalID, sess.Scope.Project, sess.Scope.Branch, sess.Scope.Machine,
-		sess.CWD, sess.StartedAt, now(), account, owner).Scan(&id)
+		sess.CWD, sess.StartedAt, now(), account, publicID, owner).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, ErrSessionCollision
 	}
@@ -126,12 +166,33 @@ func (s *Store) AppendChunkBatches(batches []ChunkBatch) error {
 		return err
 	}
 	defer stmt.Close()
+	harness := map[int64]string{}
+	var fresh []chunkRow
 	for _, batch := range batches {
-		for _, c := range batch.Chunks {
-			if _, err := stmt.Exec(batch.SessionID, c.Seq, c.Role, c.Text, c.Raw); err != nil {
+		h, ok := harness[batch.SessionID]
+		if !ok {
+			if err := tx.QueryRow(`SELECT harness FROM sessions WHERE id = ?`, batch.SessionID).Scan(&h); err != nil {
 				return err
 			}
+			harness[batch.SessionID] = h
 		}
+		for _, c := range batch.Chunks {
+			res, err := stmt.Exec(batch.SessionID, c.Seq, c.Role, c.Text, c.Raw)
+			if err != nil {
+				return err
+			}
+			// Nur ein wirklich neuer Chunk wird indiziert.
+			if n, _ := res.RowsAffected(); n == 1 {
+				id, err := res.LastInsertId()
+				if err != nil {
+					return err
+				}
+				fresh = append(fresh, chunkRow{id: id, sessionID: batch.SessionID, seq: c.Seq, harness: h, raw: c.Raw})
+			}
+		}
+	}
+	if err := indexChunks(tx, fresh); err != nil {
+		return err
 	}
 	return tx.Commit()
 }
@@ -176,6 +237,115 @@ func (s *Store) ListSessionsOwned(filter scope.Axes, limit int, ownerPrincipalID
 		return nil, err
 	}
 	return out, nil
+}
+
+// ListSessionsVisible liefert die neuesten Sessions, für die keep gilt, höchstens
+// limit viele. Die Sichtbarkeit entscheidet vor dem Abschneiden: wer nur einen
+// Teil des Bestands sehen darf, bekommt dieselbe Antwort, egal wie viele und wie
+// aktuelle verborgene Sessions es gibt (#2447). pre schränkt die Abfrage schon
+// in SQL auf die lesbare Menge ein; keep prüft die übrigen Zeilen (nil: alle).
+func (s *Store) ListSessionsVisible(filter scope.Axes, limit int, ownerPrincipalID string, keep func(Session) bool, pre SessionPrefilter) ([]Session, error) {
+	if s.reader != nil {
+		return s.reader.ListSessionsVisible(filter, limit, ownerPrincipalID, keep, pre)
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	where, args := filter.FilterWhere()
+	if ownerPrincipalID != "" {
+		id, ok := accountNumericID(ownerPrincipalID)
+		if !ok {
+			return []Session{}, nil
+		}
+		where += ` AND (CASE WHEN account_id = 0 THEN ? ELSE account_id END) = ?`
+		args = append(args, instanceOwnerID(s.db), id)
+	}
+	where, args = pre.apply(where, args)
+	out := []Session{}
+	err := s.eachSession(where, args, func(sess Session) (bool, error) {
+		if keep == nil || keep(sess) {
+			out = append(out, sess)
+		}
+		return len(out) < limit, nil
+	})
+	return out, err
+}
+
+// visibleSessionIDs sind die Nummern der Sessions, für die keep gilt.
+func (s *Store) visibleSessionIDs(filter scope.Axes, keep func(Session) bool, pre SessionPrefilter) ([]int64, error) {
+	where, args := filter.FilterWhere()
+	where, args = pre.apply(where, args)
+	ids := []int64{}
+	err := s.eachSession(where, args, func(sess Session) (bool, error) {
+		if keep == nil || keep(sess) {
+			ids = append(ids, sess.ID)
+		}
+		return true, nil
+	})
+	return ids, err
+}
+
+func idsJSONOf(ids []int64) string {
+	b, _ := json.Marshal(ids)
+	return string(b)
+}
+
+// eachSession ruft fn für die Sessions, neueste zuerst, bis fn false liefert.
+// Die Reihenfolge steht mit einer einzigen Abfrage fest (nur die Nummern, eine
+// Anweisung ist ein Schnappschuss); die Zeilen kommen danach seitenweise nach
+// Nummer. So verschiebt ein Upload, der last_seen_at ändert, während gelesen
+// wird, weder Zeilen noch doppelt sie, und es bleibt keine Abfrage offen,
+// während fn läuft.
+func (s *Store) eachSession(where string, args []any, fn func(Session) (bool, error)) error {
+	const page = 500
+	rows, err := s.db.Query(`SELECT id FROM sessions WHERE `+where+` ORDER BY last_seen_at DESC, id DESC`, args...)
+	if err != nil {
+		return err
+	}
+	var order []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		order = append(order, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	for start := 0; start < len(order); start += page {
+		end := min(start+page, len(order))
+		ids := order[start:end]
+		rows, err := s.db.Query(`SELECT `+sessionCols+` FROM sessions WHERE id IN (SELECT value FROM json_each(?))`, idsJSONOf(ids))
+		if err != nil {
+			return err
+		}
+		got, err := scanSessions(rows)
+		if err != nil {
+			return err
+		}
+		if err := s.fillSessionOwners(got); err != nil {
+			return err
+		}
+		byID := make(map[int64]Session, len(got))
+		for _, sess := range got {
+			byID[sess.ID] = sess
+		}
+		for _, id := range ids {
+			sess, ok := byID[id]
+			if !ok {
+				continue
+			}
+			more, err := fn(sess)
+			if err != nil || !more {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // SessionsPendingDistillation returns sessions that have never been distilled
@@ -294,38 +464,91 @@ func (s *Store) SearchSessions(q string, filter scope.Axes, excludeSession strin
 	if s.reader != nil {
 		return s.reader.SearchSessions(q, filter, excludeSession, limit)
 	}
+	return s.SearchSessionsVisible(q, filter, excludeSession, limit, nil, SessionPrefilter{})
+}
+
+// SearchSessionsVisible sucht nur in Sessions, für die keep gilt, und schneidet
+// erst danach auf limit ab. Die lesbare Menge steht vor der Suche fest und geht
+// als Liste in die Abfrage: der Rang verborgener Treffer kann so weder
+// verdrängen noch verraten, wie viele es gibt (#2447). Ohne keep sucht sie im
+// ganzen Bestand.
+func (s *Store) SearchSessionsVisible(q string, filter scope.Axes, excludeSession string, limit int, keep func(Session) bool, pre SessionPrefilter) ([]SessionHit, error) {
+	if s.reader != nil {
+		return s.reader.SearchSessionsVisible(q, filter, excludeSession, limit, keep, pre)
+	}
 	if limit <= 0 {
 		limit = 20
 	}
 	where, args := filter.FilterWhere()
 	args = append([]any{ftsQuery(q), excludeSession, excludeSession}, args...)
+	if keep != nil || pre.Where != "" {
+		ids, err := s.visibleSessionIDs(filter, keep, pre)
+		if err != nil {
+			return nil, err
+		}
+		if len(ids) == 0 {
+			return []SessionHit{}, nil
+		}
+		where += ` AND se.id IN (SELECT value FROM json_each(?))`
+		args = append(args, idsJSONOf(ids))
+	}
 	args = append(args, limit)
-	rows, err := s.db.Query(`SELECT `+prefix(sessionCols, "se.")+`, c.seq,
-		snippet(chunks_fts, 0, '', '', '…', 12)
-		FROM chunks_fts f
-		JOIN session_chunks c ON c.id = f.rowid
+	// bm25 (f.rank) hängt vom ganzen Index ab, auch von verborgenen Sessions:
+	// wer nur eine Teilmenge lesen darf, bekommt die Reihenfolge allein aus
+	// der lesbaren Menge.
+	order := "h.r"
+	if !pre.Unrestricted && (keep != nil || pre.Where != "") {
+		order = "COUNT(*) OVER (PARTITION BY se.id) DESC, se.last_seen_at DESC, se.id DESC, c.seq"
+	}
+	// snippet() liest den Text jeder Zeile, die es liefert: in der CTE liefe es
+	// für jeden Treffer des ganzen Index. Sie führt nur Zeile und Rang; den
+	// Ausschnitt gibt es danach für die höchstens limit Ergebniszeilen.
+	rows, err := s.db.Query(`WITH h AS MATERIALIZED (SELECT rowid AS cid, rank AS r FROM chunks_fts WHERE chunks_fts MATCH ?)
+		SELECT `+prefix(sessionCols, "se.")+`, c.seq, h.cid
+		FROM h
+		JOIN session_chunks c ON c.id = h.cid
 		JOIN sessions se ON se.id = c.session_id
-		WHERE chunks_fts MATCH ? AND (? = '' OR se.external_id != ?) AND `+where+`
-		ORDER BY f.rank LIMIT ?`, args...)
+		WHERE (? = '' OR se.external_id != ?) AND `+where+`
+		ORDER BY `+order+` LIMIT ?`, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	out := []SessionHit{}
+	var cids []int64
 	for rows.Next() {
 		var h SessionHit
-		if err := rows.Scan(&h.Session.ID, &h.Session.Harness, &h.Session.ExternalID,
-			&h.Session.Scope.Project, &h.Session.Scope.Branch, &h.Session.Scope.Machine,
-			&h.Session.CWD, &h.Session.StartedAt, &h.Session.LastSeenAt, &h.Session.AccountID, &h.Session.Shared,
-			&h.Seq, &h.Snippet); err != nil {
+		var cid int64
+		if err := scanSession(rows, &h.Session, &h.Seq, &cid); err != nil {
 			return nil, err
 		}
 		out = append(out, h)
+		cids = append(cids, cid)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	rows.Close()
+	if len(cids) > 0 {
+		snips := map[int64]string{}
+		// Je Treffer ein Punktzugriff über rowid; ein IN über json_each nutzte
+		// den FTS5-Index nicht und führte MATCH noch einmal über alles aus.
+		for _, cid := range cids {
+			if _, done := snips[cid]; done {
+				continue
+			}
+			var snip string
+			err := s.db.QueryRow(`SELECT snippet(chunks_fts, 0, '', '', '…', 12) FROM chunks_fts
+				WHERE rowid=? AND chunks_fts MATCH ?`, cid, ftsQuery(q)).Scan(&snip)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return nil, err
+			}
+			snips[cid] = snip
+		}
+		for i := range out {
+			out[i].Snippet = snips[cids[i]]
+		}
+	}
 	one := make([]Session, len(out))
 	for i := range out {
 		one[i] = out[i].Session
@@ -339,14 +562,32 @@ func (s *Store) SearchSessions(q string, filter scope.Axes, excludeSession strin
 	return out, nil
 }
 
+// scanSession liest die Spalten von sessionCols und danach extra.
+func scanSession(rows interface{ Scan(...any) error }, s *Session, extra ...any) error {
+	var shared int
+	dest := []any{&s.ID, &s.Harness, &s.ExternalID,
+		&s.Scope.Project, &s.Scope.Branch, &s.Scope.Machine,
+		&s.CWD, &s.StartedAt, &s.LastSeenAt, &s.AccountID, &shared, &s.Visibility, &s.PublicID, &s.Title, &s.Messages}
+	if err := rows.Scan(append(dest, extra...)...); err != nil {
+		return err
+	}
+	// Eine alte Zeile mit shared=1 ohne Stufe ist eine Freigabe für Mitglieder.
+	if shared != 0 && (s.Visibility == "" || s.Visibility == VisPrivate) {
+		s.Visibility = VisProject
+	}
+	if s.Visibility == "" {
+		s.Visibility = VisPrivate
+	}
+	s.Shared = s.Visibility != VisPrivate
+	return nil
+}
+
 func scanSessions(rows *sql.Rows) ([]Session, error) {
 	defer rows.Close()
 	out := []Session{}
 	for rows.Next() {
 		var s Session
-		if err := rows.Scan(&s.ID, &s.Harness, &s.ExternalID,
-			&s.Scope.Project, &s.Scope.Branch, &s.Scope.Machine,
-			&s.CWD, &s.StartedAt, &s.LastSeenAt, &s.AccountID, &s.Shared); err != nil {
+		if err := scanSession(rows, &s); err != nil {
 			return nil, err
 		}
 		out = append(out, s)
@@ -373,12 +614,15 @@ func (s *Store) SetSessionShared(id int64, accountPrincipal string, shared bool)
 	if effectiveOwner(stored, instanceOwnerID(s.db)) != acct {
 		return ErrNotSessionOwner
 	}
-	v := 0
+	level := VisPrivate
 	if shared {
-		v = 1
+		level = VisProject
+		var cur string
+		if err := s.db.QueryRow(`SELECT visibility FROM sessions WHERE id=?`, id).Scan(&cur); err == nil && cur == VisGuests {
+			level = VisGuests
+		}
 	}
-	_, err := s.db.Exec(`UPDATE sessions SET shared=? WHERE id=?`, v, id)
-	return err
+	return s.setVisibility(id, level, accountPrincipal)
 }
 
 // ErrNotSessionOwner: nur der Besitzer einer Session gibt sie frei.

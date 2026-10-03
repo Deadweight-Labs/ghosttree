@@ -54,6 +54,9 @@ type pageData struct {
 	Sessions                                          []store.Session
 	Chunks                                            []store.Chunk
 	SessionID                                         int64
+	SessionLinks                                      map[int64]string
+	SessionsV                                         *sessionsView
+	SessionV                                          *sessionView
 	Project, Preview                                  string
 	Review                                            []reviewEntry
 	Coord                                             coordPageView
@@ -139,6 +142,7 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.handle(mux, "GET /ui/review", a.requirePerson(http.HandlerFunc(a.reviewPage)))
 	a.handle(mux, "GET /ui/sessions", a.requirePerson(http.HandlerFunc(a.sessionsPage)))
 	a.handle(mux, "GET /ui/sessions/{id}", a.requirePerson(http.HandlerFunc(a.sessionPage)))
+	a.handle(mux, "POST /ui/sessions/{id}/share", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.sessionShare))))))
 	a.handle(mux, "GET /ui/context", a.requirePerson(http.HandlerFunc(a.contextPage)))
 	a.handle(mux, "GET /ui/coord", a.requirePerson(http.HandlerFunc(a.coordRoomPage)))
 	a.handle(mux, "GET /ui/coord/events", a.requirePerson(http.HandlerFunc(a.coordEvents)))
@@ -229,6 +233,9 @@ func (a *app) requestsPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pa.NoteRequestHits(page.Results)
+	for i := range page.Results {
+		page.Results[i] = pa.RequestHitView(page.Results[i])
+	}
 	a.renderBrowser(w, r, "requests", pageData{Title: "Requests", Requests: page.Results})
 }
 func (a *app) requestPage(w http.ResponseWriter, r *http.Request) {
@@ -258,7 +265,26 @@ func (a *app) requestPage(w http.ResponseWriter, r *http.Request) {
 		}
 		threadViews = append(threadViews, coordThreadView{ID: thread.ID, Title: thread.Title, Question: thread.Question, State: thread.State, URL: coordThreadURL(home.RoomKey, thread.ID)})
 	}
+	detail = a.access(r).RequestDetailView(detail)
 	a.renderBrowser(w, r, "request", pageData{Title: detail.Request.HumanID(), Request: detail, RequestThreads: threadViews})
+}
+
+// sessionLinks nennt zu Sessionnummern aus Verweisen die Adresse in der
+// Weboberfläche, nur für Sessions, die der Betrachter lesen darf. Ohne Eintrag
+// steht kein Link; die Nummer selbst erscheint nie in einer Adresse.
+func (a *app) sessionLinks(pa *store.ProjectAccess, ids []int64) map[int64]string {
+	out := map[int64]string{}
+	for _, id := range ids {
+		if _, done := out[id]; done {
+			continue
+		}
+		sess, err := a.store.SessionByID(id)
+		if err != nil || sess.PublicID == "" || !pa.CanSeeTranscript(sess) {
+			continue
+		}
+		out[id] = "/ui/sessions/" + sess.PublicID
+	}
+	return out
 }
 
 func (a *app) knowledgePage(w http.ResponseWriter, r *http.Request) {
@@ -293,11 +319,15 @@ func (a *app) reviewPage(w http.ResponseWriter, r *http.Request) {
 	}
 	entries = keep(entries, 50, pa.CanSeeKnowledge)
 	items := make([]reviewEntry, 0, len(entries))
+	var evidenceIDs []int64
 	for _, k := range entries {
 		evidence, err := a.store.EvidenceFor(k.ID)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
+		}
+		for _, ev := range evidence {
+			evidenceIDs = append(evidenceIDs, ev.SessionID)
 		}
 		recurrence, err := a.store.Recurrence(k.ID)
 		if err != nil {
@@ -314,40 +344,7 @@ func (a *app) reviewPage(w http.ResponseWriter, r *http.Request) {
 		}
 		items = append(items, reviewEntry{Knowledge: k, Evidence: evidence, MigrationEvidence: migrationProof, Recurrence: recurrence})
 	}
-	a.renderBrowser(w, r, "review", pageData{Title: "Review", Review: items})
-}
-
-func (a *app) sessionsPage(w http.ResponseWriter, r *http.Request) {
-	pa := a.access(r)
-	entries, err := a.store.ListSessions(scope.Axes{Project: scope.NormalizeRemote(r.URL.Query().Get("project"))}, a.overfetch(50))
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	entries = keep(entries, 50, pa.CanSeeSessionMeta)
-	a.renderBrowser(w, r, "sessions", pageData{Title: "Sessions", Sessions: entries})
-}
-
-func (a *app) sessionPage(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	sess, err := a.store.SessionByID(id)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	if a.accessDenied(w, r, a.access(r).CheckTranscript(sess, store.ActRead)) {
-		return
-	}
-	chunks, err := a.store.ReadSession(id, 0, 500)
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	a.renderBrowser(w, r, "session", pageData{Title: "Session " + strconv.FormatInt(id, 10), SessionID: id, Chunks: chunks})
+	a.renderBrowser(w, r, "review", pageData{Title: "Review", Review: items, SessionLinks: a.sessionLinks(pa, evidenceIDs)})
 }
 
 // projectParam ist das Projekt einer projektbezogenen Seite: das genannte,
@@ -468,6 +465,7 @@ var webRoutes = map[string]webClass{
 	"GET /ui/review":                  webProject,
 	"GET /ui/sessions":                webProject,
 	"GET /ui/sessions/{id}":           webProject,
+	"POST /ui/sessions/{id}/share":    webAdmin,
 	"GET /ui/context":                 webProject,
 	"GET /ui/coord":                   webCoord,
 	"GET /ui/coord/events":            webCoord,

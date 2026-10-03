@@ -333,7 +333,7 @@ func (a *api) checkTranscript(w http.ResponseWriter, r *http.Request, id int64) 
 // shareSession gibt ein Transkript für die Mitglieder des Projekts frei oder
 // nimmt die Freigabe zurück. Nur der Besitzer.
 func (a *api) shareSession(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(r)
+	id, ok := a.sessionPathID(r)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "bad session id")
 		return
@@ -355,20 +355,40 @@ func (a *api) shareSession(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
+	// Wer das Transkript nicht lesen darf, bekommt dieselbe 404 wie bei einer
+	// unbekannten Nummer: ein 403 verriete, dass es die Session gibt.
+	if err := a.access(r).CheckTranscript(sess, store.ActRead); errors.Is(err, store.ErrAccessNotFound) {
+		denyAccess(w, err)
+		return
+	}
 	// Teilen ist Sache des Besitzers, auch im Log-Modus: die Freigabe ändert,
 	// was andere lesen dürfen.
 	if denyAccess(w, a.access(r).CheckTranscript(sess, store.ActShare)) {
 		return
 	}
-	if err := a.st.SetSessionShared(id, principalOf(r).ID, body.Shared); err != nil {
-		if errors.Is(err, store.ErrNotSessionOwner) {
-			denyAccess(w, store.ErrAccessForbidden)
+	// Dieselbe Regel wie im Browser: Besitzer der Session und Owner des
+	// Projekts; die Stufe "mit Gästen" bleibt erhalten, solange geteilt ist.
+	level := store.VisPrivate
+	if body.Shared {
+		level = store.VisProject
+		if sess.Visibility == store.VisGuests {
+			level = store.VisGuests
+		}
+	}
+	if err := a.st.SetSessionVisibility(id, a.access(r), level); err != nil {
+		if denyAccess(w, err) {
 			return
 		}
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"id": id, "shared": body.Shared})
+	out := map[string]any{"shared": body.Shared}
+	if a.access(r).SeesSessionNumbers(sess.Scope.Project) {
+		out["id"] = id
+	} else {
+		out["public_id"] = sess.PublicID
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // checkKnowledgeRef prüft eine Aktion auf einen Eintrag, ohne den Text zu laden.

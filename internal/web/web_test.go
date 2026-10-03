@@ -6,7 +6,6 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -246,12 +245,16 @@ func TestOperatorSectionsUseStoredData(t *testing.T) {
 		t.Fatal(err)
 	}
 	client := login(t, srv, token)
+	stored, err := st.SessionByID(sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for path, want := range map[string]string{
-		"/ui/knowledge?q=SQLite": "SQLite stays",
-		"/ui/review":             "SQLite stays",
-		"/ui/sessions":           "run-1",
-		"/ui/sessions/" + strconv.FormatInt(sessionID, 10): "ledger context",
-		"/ui/context?project=p":                            "SQLite runtime",
+		"/ui/knowledge?q=SQLite":          "SQLite stays",
+		"/ui/review":                      "SQLite stays",
+		"/ui/sessions":                    "/ui/sessions/" + stored.PublicID,
+		"/ui/sessions/" + stored.PublicID: "ledger context",
+		"/ui/context?project=p":           "SQLite runtime",
 	} {
 		resp, err := client.Get(srv.URL + path)
 		if err != nil {

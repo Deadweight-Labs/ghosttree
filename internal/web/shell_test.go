@@ -289,9 +289,10 @@ func TestEveryShellPageHasLogoutWithCSRFAndMarksDetailPages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	navSession, _ := e.St.SessionByID(sid)
 	for path, key := range map[string]string{
 		"/ui/overview": "overview", "/ui/requests": "requests", "/ui/requests/" + strconv.FormatInt(detail.Request.ID, 10): "requests",
-		"/ui/sessions": "sessions", "/ui/sessions/" + strconv.FormatInt(sid, 10): "sessions",
+		"/ui/sessions": "sessions", "/ui/sessions/" + navSession.PublicID: "sessions",
 		"/ui/knowledge": "knowledge", "/ui/coord": "rooms", "/ui/orgs": "admin-org", "/ui/account/tokens": "admin-devices",
 	} {
 		_, page := fetchPage(t, e.Owner, e.Base+path)

@@ -50,14 +50,17 @@ type Evidence struct {
 }
 
 type Work struct {
-	ID        int64  `json:"id"`
-	RequestID int64  `json:"request_id"`
-	SessionID int64  `json:"session_id"`
-	Role      string `json:"role"`
-	State     string `json:"state"`
-	StartedAt string `json:"started_at"`
-	EndedAt   string `json:"ended_at,omitempty"`
-	Summary   string `json:"summary,omitempty"`
+	ID        int64 `json:"id"`
+	RequestID int64 `json:"request_id"`
+	SessionID int64 `json:"session_id,omitempty"`
+	// SessionPublicID: Adresse der Session für Betrachter, die die laufende
+	// Nummer nicht kennen dürfen; nur gesetzt, wenn sie das Transkript lesen.
+	SessionPublicID string `json:"session_public_id,omitempty"`
+	Role            string `json:"role"`
+	State           string `json:"state"`
+	StartedAt       string `json:"started_at"`
+	EndedAt         string `json:"ended_at,omitempty"`
+	Summary         string `json:"summary,omitempty"`
 }
 
 type Relation struct {
@@ -77,6 +80,10 @@ type Activity struct {
 	Person    string `json:"person"`
 	Data      string `json:"data,omitempty"`
 	CreatedAt string `json:"created_at"`
+	// SessionID: die Session, auf die sich der Eintrag bezieht (0 = keine).
+	// Nie ausgeliefert; die Sicht des Betrachters entscheidet damit, ob sie
+	// den Eintrag zeigen darf.
+	SessionID int64 `json:"-"`
 }
 
 type Detail struct {
@@ -94,11 +101,12 @@ type Detail struct {
 // Sighting ist eine Stelle, an der jemand den Wunsch geäussert hat: das Zitat
 // und genug Adresse, um es im Transkript wiederzufinden.
 type Sighting struct {
-	SessionID int64  `json:"session_id"`
-	ChunkSeq  int    `json:"chunk_seq"`
-	Quote     string `json:"quote"`
-	At        string `json:"at,omitempty"`
-	Harness   string `json:"harness,omitempty"`
+	SessionID       int64  `json:"session_id,omitempty"`
+	SessionPublicID string `json:"session_public_id,omitempty"`
+	ChunkSeq        int    `json:"chunk_seq"`
+	Quote           string `json:"quote"`
+	At              string `json:"at,omitempty"`
+	Harness         string `json:"harness,omitempty"`
 }
 
 type CreateInput struct {

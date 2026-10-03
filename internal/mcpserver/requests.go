@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -210,11 +211,20 @@ func requestDetailResult(detail requestdomain.Detail, concise bool) *mcp.CallToo
 // countSessions zählt die unabhängigen Sitzungen, nicht die Zitate: zwei Sätze
 // aus derselben Sitzung sind ein Mal geäussert, nicht zwei.
 func countSessions(sightings []requestdomain.Sighting) int {
-	seen := map[int64]bool{}
+	seen := map[string]bool{}
 	for _, sighting := range sightings {
-		seen[sighting.SessionID] = true
+		seen[sightingSession(sighting)] = true
 	}
 	return len(seen)
+}
+
+// sightingSession nennt die Session einer Fundstelle: die Adresse, wenn der
+// Betrachter die Nummer nicht kennen darf, sonst die Nummer.
+func sightingSession(s requestdomain.Sighting) string {
+	if s.SessionPublicID != "" {
+		return "@" + s.SessionPublicID
+	}
+	return strconv.FormatInt(s.SessionID, 10)
 }
 
 func pluralSessions(n int) string {
@@ -242,7 +252,7 @@ func renderRequestDetail(detail requestdomain.Detail, concise bool) string {
 	if len(detail.Sightings) > 0 {
 		fmt.Fprintf(&b, "\n\nVoiced in %s\n", pluralSessions(countSessions(detail.Sightings)))
 		for _, sighting := range detail.Sightings {
-			fmt.Fprintf(&b, "- session %d", sighting.SessionID)
+			fmt.Fprintf(&b, "- session %s", sightingSession(sighting))
 			if sighting.At != "" {
 				fmt.Fprintf(&b, " (%s)", sighting.At)
 			}

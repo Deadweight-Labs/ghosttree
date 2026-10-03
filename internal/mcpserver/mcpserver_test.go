@@ -550,3 +550,17 @@ func TestProjectPlacementReachesEveryBranch(t *testing.T) {
 		t.Errorf("project placement should reach every branch, got %+v", ks)
 	}
 }
+
+func TestGuestSessionsAreListedByAddressNotNumber(t *testing.T) {
+	member := store.Session{ID: 7, PublicID: "abcdefghijkm", Harness: "codex"}
+	guest := store.Session{PublicID: "abcdefghijkm", Harness: "codex"}
+	if got := renderSession(member); !strings.HasPrefix(got, "- #7 ") {
+		t.Errorf("member line = %q", got)
+	}
+	if got := renderSession(guest); !strings.HasPrefix(got, "- @abcdefghijkm ") {
+		t.Errorf("guest line = %q", got)
+	}
+	if got := renderHit(store.SessionHit{Session: guest, Snippet: "x"}); !strings.Contains(got, "@abcdefghijkm") || strings.Contains(got, "#0") {
+		t.Errorf("guest hit = %q", got)
+	}
+}

@@ -84,6 +84,112 @@ Versioning, with pre-1.0 compatibility rules described in
   and `Referrer-Policy: strict-origin`, and is `no-store`; the join page may load
   the self-hosted fonts. The inline script, the inline progress width and the inline `noscript` style moved into
   `shell.js` and `app.css`.
+
+- Fixed: session review round 6 (REQ-435). A viewer who may work on a request
+  (every account on a global request) keeps the real ids of work, evidence and
+  activity, so request_get and finishing work hit the same row; only viewers
+  without that right get renumbered ids. Session evidence whose ref is not a
+  session address is left out for restricted viewers, the work.finished
+  backfill of request_activity attributes a session only when exactly one work
+  row matches and does not retry the rest at every start, snippets are fetched
+  per hit by rowid, and search hits read only the handoffs of their request.
+- Fixed: session review round 5 (REQ-435). A request seen by a viewer who may
+  not know session numbers no longer carries hidden sessions: evidence that
+  cites a session is rewritten to its public address or left out, activity
+  and handoffs of unreadable sessions are omitted rather than replaced, the
+  numbering of work, evidence and activity is renumbered so gaps cannot be
+  counted, and the latest handoff in lists comes from readable sessions only
+  (API, web, search and MCP). Session search runs `snippet()` only for the
+  rows it returns, the rank order is chosen by role instead of by whether
+  something is hidden, the index byte budget counts bytes, the narrow session
+  detail no longer scrolls sideways, and MCP counts and names sightings by
+  address.
+- Fixed: session review round 4 (REQ-435). Search order no longer depends on
+  sessions you cannot read (web and `/api/search` rank restricted viewers by
+  matches in readable chunks, then recency), request details, work entries and
+  lists show a session's public address instead of its running number for
+  viewers who may not know numbers and omit unreadable sessions, the index
+  backfill rides out a full writer or a locked database instead of stopping,
+  a step reads at most its byte budget, an upload line just under the server
+  limit counts the request envelope, and stored projects are written in
+  canonical form once. Transcript blocks use the Clay cards of the v5 design,
+  your prompts are blue bubbles on the right, and message numbers show only on
+  hover or focus.
+- Changed: the Sessions page is rebuilt for reading and searching (REQ-435,
+  Sessions view). The list groups sessions by day with title, agent@machine,
+  project, branch, linked requests and knowledge, message count, duration and a
+  Live marker, filterable by project, machine, agent, time and Everyone/Mine
+  (menus show counts of the sessions you may read; guests see no counts). The search covers messages,
+  commands, tool output and, on request, thinking blocks, and groups hits per
+  session with a marked snippet that jumps into the transcript. The transcript
+  shows your prompts and the agent's text, collapses tool calls and thinking to
+  one line, cuts long output after 12 lines ("Show all N lines"), shows edits and
+  patches as diffs, lists your prompts on the left, finds text across the whole
+  session with next/previous, and loads 200 messages at a time. The owner of a
+  session or the project owner sets it to private, project members, or including
+  guests; guests see only sessions shared with them and no machine, branch or
+  owner. Session addresses are random; members may still use the running number,
+  for a guest every number looks like an unknown session. Sessions you cannot read show as "Private" rows without title or
+  link. Thinking blocks are hidden until you turn them on. Sharing with guests
+  asks first when the transcript looks like it contains credentials ("3 possible
+  secrets in this session. Share anyway?"). A block shows at most 2000 lines or
+  256 KB and a page at most 5000 lines; the rest is marked as truncated and the
+  page offers the next window.
+
+- Added: sessions are searchable and addressable by a random id (REQ-435,
+  Sessions backend). Every stored line of a session is read into one display
+  model for Claude Code and Codex (messages, prompts, thinking, tool calls with
+  input and result, diffs), and the search index now covers thinking blocks,
+  tool input and tool results, each cut to 8 KB per chunk; before, 88 % of the
+  chunks had no searchable text. Chunks stored earlier are indexed in the
+  background after the update, in small resumable steps (the server starts at
+  once; progress survives a restart). Sessions get a title (the Claude
+  `ai-title`, else the first user message) and a random web address instead of
+  the running number. A session has three sharing levels: private, project
+  members, and project including guests. Only the session's owner or the
+  project owner changes it, every change is recorded, and a guest sees only
+  sessions shared with guests, without machine, branch, path or owner. Search
+  results, counts and filter numbers are formed from the sessions the viewer
+  may read only. The session list API and `context_sessions` now give title,
+  message count and address only for sessions the caller may read and hide
+  machine, branch, path and owner from guests, also when filtering by machine
+  or branch; the legacy share route follows the same rule as the browser, so
+  the project owner may use it too. Paging cursors carry a position in the list
+  the viewer sees, never an internal id or a score. Opening a session during the
+  background indexing works in jobs of 300 chunks and no longer holds the writer
+  for the whole session; each background step is limited to about 50 ms of
+  writer time, and chunks written by a rolled-back binary after the first
+  indexing are picked up at the next start. Session uploads are limited to
+  64 MiB per request, checked for ownership before the body is read, with at
+  most two large uploads at a time; the collector sizes a request by its
+  serialized body (24 MiB) and halves one the server refuses.
+
+- Fixed: what a guest observes of sessions no longer depends on sessions they may
+  not read (REQ-435, review). Search and list choose the readable sessions before
+  ranking and cutting to the limit, so hidden hits neither push a shared session
+  out nor reveal how many exist. Guests no longer see the internal session number
+  anywhere (API, search, `context_sessions`, the response to creating a session);
+  they address a session by its random address, which `/api/sessions/{id}` and
+  `/chunks` accept in place of the number (members and older collectors of
+  members keep the number; for a guest every number answers like an unknown
+  session, so an older collector run by a guest stops uploading and needs an
+  update). A page of the
+  transcript ends between stored lines, never inside one. Times use the server's
+  zone everywhere. The credentials question when sharing with guests is a page
+  you reach by redirect, not the answer to a POST. Opening a session while the
+  background indexing runs is limited in time and bytes per step and gives up
+  after 2 seconds with what is indexed. `ctx account ... --db ./x.db` opens.
+- Fixed: more review findings on sessions. Sharing a session you may not read
+  answers 404 exactly like an unknown number (it was 403), and the answer to a
+  guest names the address instead of the number. The readable set of sessions is
+  now part of the SQL query, so a search costs the same however many hidden
+  sessions exist, and listing no longer reads a changing `last_seen_at` page by
+  page. A large upload waiting for its slot no longer uses up the server's read
+  timeout. The collector replaces a single line with a marker only when it is
+  over the server's 64 MiB limit per request; a 413 for a smaller line (a proxy
+  limit) pauses that file with a log line instead of discarding the line. A page
+  of a transcript shows at most 2000 blocks, also inside one stored line, with a
+  "truncated" note.
 - Added: `ctx join --server <url> --pair XXXX-XXXX` pairs a machine with the
   code from an invitation page (REQ-434, part 3). It opens a loopback
   listener on 127.0.0.1 only for the duration of the command, proves the

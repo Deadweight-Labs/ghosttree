@@ -119,14 +119,15 @@ func TestWebPagesFollowVisibility(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sessions := map[string]int64{}
+	sessions := map[string]string{}
 	for name, acct := range map[string]int64{"robin": 1, "mia": 3} {
 		id, err := st.UpsertSession(store.Session{Harness: "claude-code", ExternalID: "s-" + name, AccountID: acct, Scope: p})
 		if err != nil {
 			t.Fatal(err)
 		}
 		_ = st.AppendChunks(id, []store.Chunk{{Seq: 0, Role: "user", Text: "transcript of " + name, Raw: "{}"}})
-		sessions[name] = id
+		stored, _ := st.SessionByID(id)
+		sessions[name] = stored.PublicID
 	}
 	st.SetAccessMode(store.AccessMode{Enforce: true})
 	srv := httptest.NewServer(New(st))
@@ -175,18 +176,18 @@ func TestWebPagesFollowVisibility(t *testing.T) {
 		t.Errorf("member context preview lacks project knowledge")
 	}
 
-	if out := page("mia", "/ui/sessions", 200); strings.Count(out, "claude-code") != 2 {
+	if out := page("mia", "/ui/sessions", 200); strings.Count(out, `class="srow`) != 2 {
 		t.Errorf("member does not list sessions: %s", out)
 	}
-	if out := page("gus", "/ui/sessions", 200); strings.Contains(out, "claude-code") {
+	if out := page("gus", "/ui/sessions", 200); strings.Contains(out, `class="srow`) {
 		t.Errorf("guest lists sessions")
 	}
-	page("mia", "/ui/sessions/"+strconv.FormatInt(sessions["mia"], 10), 200)
-	page("mia", "/ui/sessions/"+strconv.FormatInt(sessions["robin"], 10), 404)
-	page("robin", "/ui/sessions/"+strconv.FormatInt(sessions["mia"], 10), 200)
-	page("lena", "/ui/sessions/"+strconv.FormatInt(sessions["mia"], 10), 200)
-	page("gus", "/ui/sessions/"+strconv.FormatInt(sessions["mia"], 10), 404)
-	page("nora", "/ui/sessions/"+strconv.FormatInt(sessions["mia"], 10), 404)
+	page("mia", "/ui/sessions/"+sessions["mia"], 200)
+	page("mia", "/ui/sessions/"+sessions["robin"], 404)
+	page("robin", "/ui/sessions/"+sessions["mia"], 200)
+	page("lena", "/ui/sessions/"+sessions["mia"], 200)
+	page("gus", "/ui/sessions/"+sessions["mia"], 404)
+	page("nora", "/ui/sessions/"+sessions["mia"], 404)
 	_ = http.StatusOK
 }
 

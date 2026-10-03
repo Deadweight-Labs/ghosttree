@@ -54,6 +54,9 @@ func (e *ConflictError) Error() string {
 	return fmt.Sprintf("revision conflict: head is %d by %s at %s", e.HeadRevision, e.Person, e.At)
 }
 
+// HTTPStatus ist der Statuscode der Antwort.
+func (e *APIError) HTTPStatus() int { return e.Status }
+
 func (e *APIError) Error() string {
 	return fmt.Sprintf("HTTP %d: %s: %s", e.Status, e.Code, e.Message)
 }
@@ -65,6 +68,9 @@ type StatusError struct {
 	Status int
 	Body   string
 }
+
+// HTTPStatus ist der Statuscode der Antwort.
+func (e *StatusError) HTTPStatus() int { return e.Status }
 
 func (e *StatusError) Error() string {
 	return fmt.Sprintf("%s %s: %d: %s", e.Method, e.Path, e.Status, e.Body)
@@ -303,8 +309,21 @@ func (c *Client) UpsertSession(s store.Session) (int64, error) {
 }
 
 func (c *Client) AppendChunks(id int64, chunks []store.Chunk) error {
+	return c.AppendChunksRef(store.SessionRef{ID: id}, chunks)
+}
+
+// UpsertSessionRef legt die Session an und liefert, wie der Server sie
+// anspricht: Mitglieder bekommen Nummer und Adresse, Gäste nur die Adresse.
+func (c *Client) UpsertSessionRef(s store.Session) (store.SessionRef, error) {
+	var ref store.SessionRef
+	err := c.do("POST", "/api/sessions", nil, s, &ref)
+	return ref, err
+}
+
+// AppendChunksRef lädt Chunks in die Session, die ref bezeichnet.
+func (c *Client) AppendChunksRef(ref store.SessionRef, chunks []store.Chunk) error {
 	body := map[string]any{"chunks": chunks}
-	return c.do("POST", "/api/sessions/"+strconv.FormatInt(id, 10)+"/chunks", nil, body, nil)
+	return c.do("POST", "/api/sessions/"+url.PathEscape(ref.PathSegment())+"/chunks", nil, body, nil)
 }
 
 // ShareSession gibt das Transkript einer eigenen Session für die Mitglieder des
@@ -324,12 +343,17 @@ func (c *Client) Sessions(filter scope.Axes, limit int) ([]store.Session, error)
 }
 
 func (c *Client) ReadSession(id int64, from, limit int) ([]store.Chunk, error) {
+	return c.ReadSessionRef(store.SessionRef{ID: id}, from, limit)
+}
+
+// ReadSessionRef liest eine Session über Nummer oder Adresse.
+func (c *Client) ReadSessionRef(ref store.SessionRef, from, limit int) ([]store.Chunk, error) {
 	q := url.Values{"from": {strconv.Itoa(from)}}
 	if limit > 0 {
 		q.Set("limit", strconv.Itoa(limit))
 	}
 	var out []store.Chunk
-	err := c.do("GET", "/api/sessions/"+strconv.FormatInt(id, 10), q, nil, &out)
+	err := c.do("GET", "/api/sessions/"+url.PathEscape(ref.PathSegment()), q, nil, &out)
 	return out, err
 }
 

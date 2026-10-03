@@ -62,8 +62,11 @@ var (
 type Object struct {
 	// Own: das Objekt gehört dem Aufrufer (Autor, Besitzer der Session).
 	Own bool
-	// Shared: der Besitzer hat die Session ausdrücklich freigegeben.
+	// Shared: der Besitzer hat die Session ausdrücklich freigegeben (Stufe
+	// project oder guests).
 	Shared bool
+	// Guests: die Freigabe schließt Gäste ein (Stufe guests).
+	Guests bool
 	// Confidence eines Wissenseintrags (für den Gast).
 	Confidence string
 	// Machine: Maschinen-Achse eines Wissenseintrags; nicht leer heißt, dass
@@ -110,13 +113,14 @@ func matrixAllows(role RoleInfo, res Resource, act Action, obj Object) bool {
 	case ResSessionMeta:
 		// Die eigene Session anlegen und fortschreiben darf jedes Konto; wem sie
 		// gehört, regelt der Upload (gateMachine, mayWriteSession).
-		return act == ActCreate || (act == ActRead && rank >= 2)
+		return act == ActCreate || (act == ActRead && (rank >= 2 || (rank == 1 && obj.Guests)))
 	case ResTranscript:
 		switch act {
 		case ActRead:
-			return rank >= 3 || obj.Own || (rank >= 2 && obj.Shared)
+			return rank >= 3 || obj.Own || (rank >= 2 && obj.Shared) || (rank >= 1 && obj.Guests)
 		case ActShare:
-			return obj.Own
+			// Der Besitzer der Session und der Owner des Projekts.
+			return obj.Own || rank >= 4
 		}
 	case ResRoom:
 		return (act == ActRead || act == ActCreate) && rank >= 1
@@ -525,12 +529,12 @@ func (a *ProjectAccess) CheckKnowledgeCreate(k Knowledge) error {
 
 // CanSeeSessionMeta: Metadaten (wer arbeitet wo).
 func (a *ProjectAccess) CanSeeSessionMeta(s Session) bool {
-	return a.Allow(s.Scope.Project, ResSessionMeta, ActRead, Object{Own: a.OwnsSession(s)})
+	return a.Allow(s.Scope.Project, ResSessionMeta, ActRead, Object{Own: a.OwnsSession(s), Guests: s.Visibility == VisGuests})
 }
 
 // transcriptObject braucht das Freigabe-Flag der Session.
 func (a *ProjectAccess) transcriptObject(s Session) Object {
-	return Object{Own: a.OwnsSession(s), Shared: s.Shared}
+	return Object{Own: a.OwnsSession(s), Shared: s.Shared, Guests: s.Visibility == VisGuests}
 }
 
 // CanSeeTranscript: Transkript und Rohdaten.

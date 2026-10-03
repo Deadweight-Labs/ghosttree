@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -172,7 +173,8 @@ DROP INDEX IF EXISTS request_work_one_primary;
 CREATE TABLE IF NOT EXISTS request_activity(
   id INTEGER PRIMARY KEY,
   request_id INTEGER NOT NULL REFERENCES requests(id) ON DELETE RESTRICT,
-  kind TEXT NOT NULL, person TEXT NOT NULL DEFAULT '', data TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
+  kind TEXT NOT NULL, person TEXT NOT NULL DEFAULT '', data TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
+  session_id INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS search_documents(
   id INTEGER PRIMARY KEY,
   kind TEXT NOT NULL CHECK(kind IN ('knowledge','request')),
@@ -869,7 +871,13 @@ func OpenReadOnly(path string, maxOpenConns int) (*Store, error) {
 	if !info.Mode().IsRegular() {
 		return nil, fmt.Errorf("database path %q is not a regular file", dbPath)
 	}
-	dsn := (&url.URL{Scheme: "file", Path: dbPath}).String() +
+	// Ein relativer Pfad würde als URI "file://./x.db" mit der Autorität "."
+	// gelesen; absolut hat die URI keine.
+	absPath, err := filepath.Abs(dbPath)
+	if err != nil {
+		return nil, err
+	}
+	dsn := (&url.URL{Scheme: "file", Path: absPath}).String() +
 		"?mode=ro&_pragma=foreign_keys(1)&_pragma=recursive_triggers(1)&_pragma=busy_timeout(5000)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -942,6 +950,10 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := ensureActivitySession(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := ensureCoordAgentRole(db); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -959,6 +971,14 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 		return nil, err
 	}
 	if err := migrateOrgs(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureSessionIndex(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureCanonicalSessionProjects(db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -1002,7 +1022,12 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 	}
 	db.SetMaxOpenConns(options.MaxOpenConns)
 	db.SetMaxIdleConns(options.MaxOpenConns)
-	return &Store{db: db, path: dbPath}, nil
+	st := &Store{db: db, path: dbPath}
+	if err := st.startIndexBackfill(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return st, nil
 }
 
 func storeSQLiteDSN(path string) string {

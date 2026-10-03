@@ -348,6 +348,31 @@ func pathID(r *http.Request) (int64, bool) {
 	return id, err == nil
 }
 
+// sessionPathID liest die Session aus dem Pfad: die laufende Nummer (nur
+// Mitglieder und ältere Collector von Mitgliedern) oder die zufällige Adresse (Gäste kennen nur diese). Eine
+// unbekannte Adresse liefert eine Nummer, die es nicht gibt, und verhält sich
+// damit wie jede andere unbekannte Session.
+func (a *api) sessionPathID(r *http.Request) (int64, bool) {
+	raw := r.PathValue("id")
+	if n, err := strconv.ParseInt(raw, 10, 64); err == nil && len(raw) < 12 {
+		// Die Nummer gilt nur für den, der sie kennen darf. Für einen Gast ist
+		// jede Nummer unbekannt, auch die einer Session, die er lesen darf:
+		// sonst zählte er sie durch (#2447).
+		if sess, err := a.st.SessionByID(n); err == nil && !a.access(r).SeesSessionNumbers(sess.Scope.Project) {
+			return -1, true
+		}
+		return n, true
+	}
+	if raw == "" || len(raw) > 64 {
+		return 0, false
+	}
+	sess, err := a.st.SessionByPublicID(raw)
+	if err != nil {
+		return -1, true
+	}
+	return sess.ID, true
+}
+
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
