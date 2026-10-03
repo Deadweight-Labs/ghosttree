@@ -31,7 +31,8 @@ const (
 	// classCoord: Koordination. CoordAccess entscheidet (Mitgliedschaft im Raum,
 	// beim Projektraum zusätzlich die Projektrolle).
 	classCoord routeClass = "coord"
-	// classACL: eigene ACL je Person und Projekt (Kontext-Snapshots).
+	// classACL: eigene ACL je Person und Projekt. Die Kontext-Snapshots prüfen
+	// zuerst ProjectAccess (classProject) und danach diese ACL.
 	classACL routeClass = "acl"
 	// classAdmin: Verwaltung, nur aus einer interaktiven Web-Sitzung (#2411);
 	// die API antwortet web_session_required.
@@ -64,10 +65,10 @@ var accessRoutes = map[string]routeClass{
 	"DELETE /api/projects/{id}/members/{account}": classAdmin,
 	"POST /api/projects/claim":                    classAccount,
 	"POST /api/projects/move":                     classAccount,
-	"POST /api/context-snapshots":                 classACL,
-	"GET /api/context-snapshots":                  classACL,
-	"GET /api/context-snapshots/{name}":           classACL,
-	"GET /api/context-snapshots/{name}/entries":   classACL,
+	"POST /api/context-snapshots":                 classProject,
+	"GET /api/context-snapshots":                  classProject,
+	"GET /api/context-snapshots/{name}":           classProject,
+	"GET /api/context-snapshots/{name}/entries":   classProject,
 	"POST /api/sessions":                          classProject,
 	"GET /api/sessions":                           classProject,
 	"GET /api/machines":                           classAccount,
