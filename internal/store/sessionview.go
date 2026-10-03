@@ -118,17 +118,38 @@ func (a *ProjectAccess) guestView(sess Session) Session {
 }
 
 // SeesSessionNumbers: der Betrachter darf die laufende Nummer der Sessions des
-// Projekts kennen (Mitglied ab member, oder ohne Durchsetzung).
+// Projekts kennen (Mitglied ab member, oder ohne Durchsetzung). Ein Admin ohne
+// Rolle zählt hier nicht: Zitate und Arbeit aus Transkripten hängen an dieser
+// Frage, und die darf er nur über CanSeeTranscript lesen. Die Nummer der eigenen
+// frisch angelegten Session bekommt er über GetsOwnSessionNumber.
 func (a *ProjectAccess) SeesSessionNumbers(project string) bool {
 	return !a.st.AccessEnforced() || RoleRank(a.Role(project).Role) >= 2
 }
 
-// ReadsAll: der Betrachter liest ohnehin jedes Transkript (Admin, oder ohne
-// Durchsetzung). Nur dann darf eine Suche nach bm25 ordnen, das vom ganzen
-// Index abhängt; für alle anderen wäre schon die Wahl der Ordnung ein Hinweis
-// darauf, dass es Verborgenes gibt.
+// GetsOwnSessionNumber: die Nummer der Session, die der Betrachter gerade selbst
+// anlegt. Wer irgendwo Mitglied ist, kennt laufende Nummern ohnehin (auch die
+// verborgener Sessions dazwischen); sie bei einer eigenen Session zurückzuhalten
+// schützt nichts und lässt Sessions ohne Projekt (kein Git-Remote) oder in noch
+// nicht beanspruchten Projekten für ältere Collector unerreichbar. Reine Gäste
+// (und Konten ganz ohne Rolle) bekommen sie nie (#2447, #2482).
+func (a *ProjectAccess) GetsOwnSessionNumber(project string) bool {
+	if a.SeesSessionNumbers(project) || a.IsAdmin() {
+		return true
+	}
+	for _, p := range a.Projects() {
+		if RoleRank(a.Role(p).Role) >= 2 {
+			return true
+		}
+	}
+	return false
+}
+
+// ReadsAll: der Betrachter liest ohnehin jedes Transkript, und das gilt nur
+// ohne Durchsetzung. Auch ein Admin liest unter Durchsetzung nicht alles; bm25
+// hängt vom ganzen Index ab und wäre für ihn ein Orakel über Sessions, die er
+// nicht lesen darf. Nur ohne Durchsetzung darf eine Suche danach ordnen.
 func (a *ProjectAccess) ReadsAll() bool {
-	return !a.st.AccessEnforced() || a.IsAdmin()
+	return !a.st.AccessEnforced()
 }
 
 func (a *ProjectAccess) isGuestOnly() bool {

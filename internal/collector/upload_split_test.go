@@ -1,11 +1,14 @@
 package collector
 
 import (
+	"bytes"
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
@@ -185,5 +188,84 @@ func TestLineJustBelowTheServerLimitCountsTheEnvelope(t *testing.T) {
 	got := up.chunks[1]
 	if len(got) != 1 || got[0].Seq != 0 || !strings.Contains(got[0].Raw, "omitted") {
 		t.Fatalf("chunks = %+v", got)
+	}
+}
+
+// zeroUp ist ein Uploader ohne Adressen, dessen Server die Nummer zurückhält
+// (Antwort ohne id, die der ältere Collector als 0 liest).
+type zeroUp struct {
+	fakeUp
+	upserts int
+	appends []int64
+}
+
+func (z *zeroUp) UpsertSession(s store.Session) (int64, error) { z.upserts++; return 0, nil }
+func (z *zeroUp) AppendChunks(id int64, cs []store.Chunk) error {
+	z.appends = append(z.appends, id)
+	return nil
+}
+
+func TestCollectorNeverUploadsToSessionZero(t *testing.T) {
+	dir := t.TempDir()
+	fp := filepath.Join(dir, "s.jsonl")
+	writeLines(t, fp, 2, "hi")
+	now := time.Unix(1000, 0)
+	backoffNow = func() time.Time { return now }
+	defer func() { backoffNow = time.Now }()
+	up := &zeroUp{}
+	st := newTestState(dir)
+	err := SyncFile(fp, "claude-code", up, st, "m")
+	if err == nil || !strings.Contains(err.Error(), "update ctx") {
+		t.Fatalf("want a clear error, got %v", err)
+	}
+	if len(up.appends) != 0 {
+		t.Fatalf("uploaded to %v", up.appends)
+	}
+	if f := st.Files[fp]; f != nil && (f.Offset != 0 || f.SessionID != 0) {
+		t.Errorf("state advanced: %+v", f)
+	}
+	// Backoff: no new registration right away, one after the pause.
+	if err := SyncFile(fp, "claude-code", up, st, "m"); err == nil || up.upserts != 1 {
+		t.Errorf("registered again during backoff: upserts=%d err=%v", up.upserts, err)
+	}
+	now = now.Add(time.Minute)
+	SyncFile(fp, "claude-code", up, st, "m")
+	if up.upserts != 2 || len(up.appends) != 0 {
+		t.Errorf("after backoff: upserts=%d appends=%v", up.upserts, up.appends)
+	}
+}
+
+func TestBackoffDoesNotLogPerEvent(t *testing.T) {
+	dir := t.TempDir()
+	fp := filepath.Join(dir, "s.jsonl")
+	writeLines(t, fp, 2, "hi")
+	now := time.Unix(1000, 0)
+	backoffNow = func() time.Time { return now }
+	defer func() { backoffNow = time.Now }()
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+	up := &zeroUp{}
+	st := newTestState(dir)
+	for i := 0; i < 5; i++ {
+		logSyncError(fp, SyncFile(fp, "claude-code", up, st, "m"))
+	}
+	if n := strings.Count(buf.String(), "\n"); n != 1 {
+		t.Errorf("want one log line for five events during backoff, got %d: %q", n, buf.String())
+	}
+}
+
+func TestCollectorWithoutAddressesIgnoresAnAddressOnlyState(t *testing.T) {
+	dir := t.TempDir()
+	fp := filepath.Join(dir, "s.jsonl")
+	writeLines(t, fp, 1, "hi")
+	st := newTestState(dir)
+	st.Files[fp] = &fileState{PublicID: "abcdefghijkm", MetadataVersion: 1}
+	up := &zeroUp{}
+	if err := SyncFile(fp, "claude-code", up, st, "m"); err == nil {
+		t.Fatal("expected an error")
+	}
+	if len(up.appends) != 0 {
+		t.Fatalf("uploaded to %v", up.appends)
 	}
 }
