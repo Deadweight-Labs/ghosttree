@@ -143,9 +143,9 @@ func destinationHighWater(q queryRower, kind, id string) (int64, error) {
 	return highWater, err
 }
 
-func (s *Store) projectRoomSummaries(actor, principalID, agentID string, rooms []CoordRoom) ([]CoordRoomSummary, error) {
+func (s *Store) projectRoomSummaries(actor, principalID, agentID string, rooms []CoordRoom, byRole map[string]bool) ([]CoordRoomSummary, error) {
 	if s.reader != nil {
-		return s.reader.projectRoomSummaries(actor, principalID, agentID, rooms)
+		return s.reader.projectRoomSummaries(actor, principalID, agentID, rooms, byRole)
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -154,7 +154,7 @@ func (s *Store) projectRoomSummaries(actor, principalID, agentID string, rooms [
 	defer tx.Rollback()
 	out := make([]CoordRoomSummary, 0, len(rooms))
 	for _, room := range rooms {
-		visible, err := roomVisibleInSummarySnapshot(tx, room, actor, principalID, agentID)
+		visible, err := roomVisibleInSummarySnapshot(tx, room, actor, principalID, agentID, byRole[room.Key])
 		if err != nil {
 			return nil, err
 		}
@@ -266,8 +266,11 @@ func (s *Store) projectRoomSummaries(actor, principalID, agentID string, rooms [
 	return out, nil
 }
 
-func roomVisibleInSummarySnapshot(tx *sql.Tx, room CoordRoom, actor, principalID, agentID string) (bool, error) {
+func roomVisibleInSummarySnapshot(tx *sql.Tx, room CoordRoom, actor, principalID, agentID string, byRole bool) (bool, error) {
 	var count int
+	if byRole {
+		return true, nil
+	}
 	switch room.Kind {
 	case RoomDirect, RoomGroup:
 		err := tx.QueryRow(`SELECT COUNT(*) FROM coord_room_memberships

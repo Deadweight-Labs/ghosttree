@@ -94,16 +94,30 @@ func coordHTTPError(w http.ResponseWriter, err error) {
 // nur weil er dessen Schlüssel in die URL schreibt. Spec §9: private DMs
 // dürfen nicht über Suche, Zusammenfassung oder Verknüpfung sichtbar
 // werden — eine URL ist keine Ausnahme davon.
-// roomPageError answers a room page that may not be read with the designed
-// error page; every other failure keeps its plain text.
+// roomPageError answers a room page that may not be read with a designed
+// error page; every other failure keeps its plain text. The not-found page is
+// one fixed text for a room that does not exist and for one in a project the
+// viewer may not see (#2447): nothing on it depends on the room.
 func (a *app) roomPageError(w http.ResponseWriter, r *http.Request, err error) {
-	if !errors.Is(err, store.ErrCoordForbidden) {
+	page, status, title := "", 0, ""
+	switch {
+	case errors.Is(err, store.ErrCoordForbidden):
+		page, status, title = "roomforbidden", http.StatusForbidden, msg("coord.forbidden.title")
+	case errors.Is(err, store.ErrCoordNotFound):
+		page, status, title = "roomnotfound", http.StatusNotFound, msg("coord.notfound.title")
+	default:
 		coordHTTPError(w, err)
 		return
 	}
+	// A way out that leads somewhere: the rooms when the viewer has any, the
+	// overview otherwise (a guest has no rooms to go back to).
+	back := "/ui/overview"
+	if summaries, serr := a.browserCoord(r).RoomSummaries(); serr == nil && len(summaries) > 0 {
+		back = "/ui/coord"
+	}
 	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(http.StatusForbidden)
-	a.renderBrowser(w, r, "roomforbidden", pageData{Title: msg("coord.forbidden.title")})
+	w.WriteHeader(status)
+	a.renderBrowser(w, r, page, pageData{Title: title, BackURL: back})
 }
 
 func (a *app) mayEnter(w http.ResponseWriter, r *http.Request, room string) bool {
@@ -249,6 +263,7 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 	applyMessageRoles(a.store, activeRoom.Key, detail.Messages, presentations)
 	markViewerMentions(detail.Messages, presentations, current.ID)
 	detail.CanDirect = true
+	detail.CanPost = access.CanPost(room)
 	roleRoom := false
 	if remote, ok := strings.CutPrefix(activeRoom.Key, "project:"); ok {
 		if _, claimed := a.store.ProjectByRemote(remote); claimed {
@@ -278,7 +293,7 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 			detail.Messages[i].ThreadTitle = thread.Title
 			detail.Messages[i].ThreadMeta = thread.State
 		} else {
-			detail.Messages[i].CanPromote = true
+			detail.Messages[i].CanPromote = detail.CanPost
 		}
 	}
 	if selectedText := strings.TrimSpace(r.URL.Query().Get("thread")); selectedText != "" {

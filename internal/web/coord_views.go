@@ -122,7 +122,9 @@ type coordRoomDetailView struct {
 	CanManage, CanLeave bool
 	// CanDirect: the viewer's rank lets a standing instruction be a directive;
 	// below it the same gesture is a standing request.
-	CanDirect              bool
+	CanDirect bool
+	// CanPost: a post from the viewer would be accepted in this room.
+	CanPost                bool
 	FormID, StandingFormID string
 	Zone                   string
 	ReplyTo                int64

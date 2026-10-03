@@ -185,6 +185,7 @@ summary.coord-text-action::-webkit-details-marker { display: none; }
 }
 .coord-messages > :first-child { margin-top: auto; }
 .coord-empty { margin: auto; padding: 24px 0; color: var(--clay-ink-soft); text-align: center; }
+.coord-readonly { margin: 0; padding: 14px 16px; color: var(--clay-ink-soft); text-align: center; font-size: 14px; }
 .coord-message { margin-top: 16px; min-width: 0; }
 .coord-message:first-child { margin-top: 0; }
 .coord-message-group-start { margin-top: 18px; }
