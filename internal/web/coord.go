@@ -180,7 +180,7 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 		OutgoingAttention: outgoingAttention,
 	}
 	if room == "" {
-		a.renderBrowser(w, r, "coord", pageData{Title: "Coordination", Coord: view})
+		a.renderBrowser(w, r, "coord", pageData{Title: msg("coord.title"), Coord: view})
 		return
 	}
 	if !a.mayEnter(w, r, room) {
@@ -258,9 +258,14 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 		FormID:   newCoordFormID(), StandingFormID: newCoordFormID(), Threads: buildCoordThreadViews(roomThreads),
 	}
 	detail.Room.Name = coordShortRoomName(detail.Room.Kind, detail.Room.Label)
+	for _, tab := range sidebar.Projects {
+		if tab.Key == detail.Room.Key {
+			detail.Room.Name = tab.Name
+		}
+	}
 	applyParticipantRoles(a.store, activeRoom.Key, detail.Participants)
 	a.applyParticipantControls(r, activeRoom.Key, detail.Participants)
-	applyMessageRoles(a.store, activeRoom.Key, detail.Messages, presentations)
+	applyMessageRoles(a.store, activeRoom.Key, current.ID, detail.Messages, presentations)
 	markViewerMentions(detail.Messages, presentations, current.ID)
 	detail.CanDirect = true
 	detail.CanPost = access.CanPost(room)

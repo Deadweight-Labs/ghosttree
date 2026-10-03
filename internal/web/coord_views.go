@@ -36,6 +36,21 @@ func (v coordPageView) FirstRoom() *coordRoomView {
 	return nil
 }
 
+// OnlyRoom is the one room the viewer has, or nil when there are none or
+// several.
+func (v coordPageView) OnlyRoom() *coordRoomView {
+	var found *coordRoomView
+	for _, section := range [][]coordRoomView{v.Sidebar.Projects, v.Sidebar.Machines, v.Sidebar.Private} {
+		for i := range section {
+			if found != nil {
+				return nil
+			}
+			found = &section[i]
+		}
+	}
+	return found
+}
+
 // IncomingHead is what "Needs you" shows at once; IncomingRest folds away.
 func (v coordPageView) IncomingHead() []coordAttentionView {
 	if len(v.IncomingAttention) <= coordAttentionVisible {
@@ -301,6 +316,15 @@ type coordAttentionView struct {
 
 func buildCoordSidebar(summaries []store.CoordRoomSummary, principalID, activeKey string, labels map[string]string) coordSidebarView {
 	var out coordSidebarView
+	// Project rooms carry the project's short name, the same one the project
+	// switcher and the other pages use; owner/ is added only on a clash.
+	var remotes []string
+	for _, summary := range summaries {
+		if summary.Room.Kind == store.RoomProject {
+			remotes = append(remotes, coordRoomLabel(summary.Room, principalID, labels))
+		}
+	}
+	projectNames := projectLabels(remotes)
 	for _, summary := range summaries {
 		room := coordRoomView{
 			Key: summary.Room.Key, Kind: summary.Room.Kind,
@@ -310,6 +334,9 @@ func buildCoordSidebar(summaries []store.CoordRoomSummary, principalID, activeKe
 			Active: summary.Room.Key == activeKey,
 		}
 		room.Name = coordShortRoomName(room.Kind, room.Label)
+		if room.Kind == store.RoomProject {
+			room.Name = projectNames[room.Label]
+		}
 		switch summary.Room.Kind {
 		case store.RoomMachine:
 			out.Machines = append(out.Machines, room)
@@ -683,12 +710,13 @@ func coordIdentityLabels(current store.Principal, recipients []store.CoordRecipi
 		}
 	}
 	for _, peer := range peers {
-		label := strings.TrimSpace(peer.DisplayName)
-		if label == "" {
-			label = strings.TrimSpace(peer.Person)
-		}
-		if label == "" {
-			label = "Agent"
+		// A name the person chose stays; an ID or the bare tool name becomes
+		// "Claude on freund-laptop".
+		label := peerName(peer)
+		if strings.TrimSpace(peer.DisplayName) == "" && agentMachine(peer.ExternalID) == "" {
+			if person := strings.TrimSpace(peer.Person); person != "" {
+				label = person
+			}
 		}
 		labels[peer.ExternalID] = label
 	}
@@ -844,17 +872,13 @@ func coordJoinNames(names []string) string {
 	return strings.Join(names[:len(names)-1], ", ") + " " + msg("coord.and") + " " + names[len(names)-1]
 }
 
-// coordShortRoomName shows a project room as owner/repo. The host prefix
-// pushes the repo name out of a narrow sidebar; the full name stays in title.
+// coordShortRoomName shows a project room by its repository name, as the project
+// switcher does. The full name stays in the title.
 func coordShortRoomName(kind, name string) string {
 	if kind != store.RoomProject {
 		return name
 	}
-	parts := strings.Split(strings.Trim(name, "/"), "/")
-	if len(parts) <= 2 {
-		return name
-	}
-	return strings.Join(parts[len(parts)-2:], "/")
+	return projectLabel(name)
 }
 
 func coordRoomKindOf(key string) string {
@@ -934,7 +958,7 @@ func applyParticipantRoles(st *store.Store, roomKey string, participants []coord
 // Nachricht eines Projektraums. Die Rolle kommt aus dem Store (Konto aus
 // author_principal_id bzw. effektive Agentenrolle), nie aus dem Text.
 // views und messages sind index-aligned.
-func applyMessageRoles(st *store.Store, roomKey string, views []coordMessageView, messages []store.CoordMessagePresentation) {
+func applyMessageRoles(st *store.Store, roomKey, viewerID string, views []coordMessageView, messages []store.CoordMessagePresentation) {
 	remote, ok := strings.CutPrefix(roomKey, "project:")
 	if !ok {
 		return
@@ -946,6 +970,11 @@ func applyMessageRoles(st *store.Store, roomKey string, views []coordMessageView
 	roles := st.SenderRolesInProject(remote, raw)
 	for i := range views {
 		if i < len(roles) {
+			// "Guest" next to the viewer's own agent says nothing they do not
+			// know; it stays for everyone else's.
+			if roles[i] == store.RoleGuest && raw[i].AuthorPrincipalID == viewerID {
+				continue
+			}
 			views[i].SenderRole = roles[i]
 		}
 	}

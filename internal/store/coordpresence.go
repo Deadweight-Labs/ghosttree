@@ -344,13 +344,14 @@ func idArgs(agents []presenceAgent, pick func(presenceAgent) string) []any {
 
 // presenceBatch leitet die Presence aller Agenten eines Raums mit einer festen
 // Zahl von Abfragen ab (höchstens fünf), unabhängig von der Teilnehmerzahl.
+// Für Agenten in ownOnly fließen keine Wartepunkte in die Ableitung ein.
 //
 // Zuordnung der Aktivität: nur über die vom Agenten gemeldete session_id, mit
 // exakter Gleichheit, und nur wenn die Session demselben Konto gehört wie der
 // Agent. Kein Suffix-Vergleich: eine Agenten-ID ist frei wählbar. Aktivität
 // zählt nur im Projektraum und nur aus diesem Projekt, damit niemand über den
 // Arbeitszustand erfährt, was in Projekten läuft, die er nicht sehen darf.
-func presenceBatch(db presenceDB, ref time.Time, roomKey string, agents []presenceAgent) map[string]Presence {
+func presenceBatch(db presenceDB, ref time.Time, roomKey string, agents []presenceAgent, ownOnly map[string]bool) map[string]Presence {
 	out := make(map[string]Presence, len(agents))
 	if len(agents) == 0 {
 		return out
@@ -451,7 +452,7 @@ func presenceBatch(db presenceDB, ref time.Time, roomKey string, agents []presen
 	// Wartequelle, auch für die Zykluserkennung in coordwait.go).
 	waitRows, _ := loadWaitRows(db, ref, roomKey, ids)
 	for _, r := range waitRows {
-		if in := inputs[r.Sender]; in != nil {
+		if in := inputs[r.Sender]; in != nil && !ownOnly[r.Sender] {
 			in.Waits = append(in.Waits, PresenceWait{Reason: r.Reason, At: r.At, Kind: r.Kind})
 		}
 	}

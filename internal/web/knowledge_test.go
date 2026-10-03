@@ -138,7 +138,7 @@ func TestReviewShowsEvidenceAndOnlyTheActionsTheViewerMayTake(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, owner := e.get(t, e.Owner, "/ui/review")
-	for _, want := range []string{"Pending finding", "Check the lock.", "the lock was held", `/ui/review/` + strconv.FormatInt(id, 10) + `/approve`, `/ui/review/` + strconv.FormatInt(id, 10) + `/reject`, `name="csrf_token"`, "Quarantined", "Approve", "Reject", "Edit"} {
+	for _, want := range []string{"Pending finding", "Check the lock.", "the lock was held", `/ui/review/` + strconv.FormatInt(id, 10) + `/approve`, `/ui/review/` + strconv.FormatInt(id, 10) + `/reject`, `name="csrf_token"`, "Held back", "Approve", "Reject", "Edit"} {
 		if !strings.Contains(owner, want) {
 			t.Errorf("owner review lacks %q", want)
 		}

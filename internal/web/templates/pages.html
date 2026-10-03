@@ -1,4 +1,10 @@
-{{define "context"}}{{template "head" .}}{{template "nav" .}}<main><h1>Agent Context</h1><form class="filters" method="get"><input class="clay-field" name="project" value="{{.Project}}" placeholder="Canonical project"><button class="clay-btn">Show delivered context</button><button class="clay-btn" name="preview" value="1">Preview staged too</button></form><pre class="clay-card">{{.Preview}}</pre>{{template "foot" .}}{{end}}
+{{define "context"}}{{template "head" .}}{{template "nav" .}}<main class="kn kn-context"><link rel="stylesheet" href="/static/knowledge.css">
+{{with .ContextV}}<div class="ov-head"><h1>{{t "context.title"}}</h1></div>
+{{if .Project}}<form class="kn-switch" method="get" role="group" aria-label="{{t "context.label"}}"><input type="hidden" name="project" value="{{.Project}}"><button class="ov-btn clay{{if not .Preview}} ov-btn-primary{{end}}"{{if not .Preview}} aria-pressed="true"{{end}}>{{t "context.delivered"}}</button><button class="ov-btn clay{{if .Preview}} ov-btn-primary{{end}}" name="preview" value="1"{{if .Preview}} aria-pressed="true"{{end}}>{{t "context.with_staged"}}</button></form>
+{{if .Output}}<pre class="kn-code clay"><code>{{.Output}}</code></pre>
+{{else}}<p class="ov-empty">{{if .Preview}}{{t "context.empty_staged"}}{{else}}{{t "context.empty"}}{{end}}</p><div class="kn-actions-row">{{if not .Preview}}<a class="ov-btn clay" href="?project={{.Project}}&amp;preview=1">{{t "context.with_staged"}}</a>{{else}}<a class="ov-btn clay" href="/ui/knowledge?project={{.Project}}">{{t "nav.knowledge"}}</a>{{end}}</div>{{end}}
+{{else}}<p class="ov-empty">{{t "context.pick"}}</p><div class="kn-actions-row">{{range .Choices}}<a class="ov-btn clay" href="?project={{.Remote}}" title="{{.Remote}}">{{.Label}}</a>{{end}}</div>{{end}}
+{{end}}{{template "foot" .}}{{end}}
 {{define "placeholder"}}{{template "head" .}}{{template "nav" .}}<main><h1>{{.Title}}</h1><div class="clay-card"><p>This section is connected next.</p></div>{{template "foot" .}}{{end}}
 
 {{define "requesttoolarge"}}{{template "head" .}}{{template "nav" .}}<main class="narrow-page"><h1>{{t "requests.toolarge.title"}}</h1><section class="clay-card" role="alert"><p>{{t "requests.toolarge.body"}}</p><p><a href="{{.BackURL}}">{{t "requests.toolarge.back"}}</a></p></section>{{template "foot" .}}{{end}}

@@ -116,23 +116,23 @@ func TestCoordApprovalActionsAreHonestAboutBeingARecord(t *testing.T) {
 
 func TestCoordProjectRoomsShowRepoShortNameWithFullNameInTitle(t *testing.T) {
 	page, _ := coordCompactAttentionFixture(t)
-	if !strings.Contains(page, `title="github.com/acme/compact-repo">acme/compact-repo<`) {
-		t.Errorf("sidebar project link must show owner/repo and keep the full name in title")
+	if !strings.Contains(page, `title="github.com/acme/compact-repo">compact-repo<`) {
+		t.Errorf("sidebar project link must show the repo name and keep the full name in title")
 	}
 	start := strings.Index(page, `id="coord-attention-items"`)
 	section := page[start : start+strings.Index(page[start:], "</section>")]
-	if !strings.Contains(section, `title="github.com/acme/compact-repo">acme/compact-repo<`) {
+	if !strings.Contains(section, `title="github.com/acme/compact-repo">compact-repo<`) {
 		t.Errorf("attention entries must use the short name too: %s", section)
 	}
 }
 
 func TestCoordShortRoomName(t *testing.T) {
 	for in, want := range map[string]string{
-		"github.com/acme/repo":     "acme/repo",
-		"gitlab.com/g/sub/repo":    "sub/repo",
+		"github.com/acme/repo":     "repo",
+		"gitlab.com/g/sub/repo":    "repo",
 		"repo":                     "repo",
 		"Release":                  "Release",
-		"host.example/owner/r.git": "owner/r.git",
+		"host.example/owner/r.git": "r.git",
 	} {
 		if got := coordShortRoomName(store.RoomProject, in); got != want {
 			t.Errorf("short(%q)=%q want %q", in, got, want)

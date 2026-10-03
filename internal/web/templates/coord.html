@@ -52,9 +52,9 @@
         {{if .PrivatePeers}}<p class="coord-private-hint">{{t "coord.private_hint" .PrivatePeers}}</p>{{end}}
         <div class="comp-modes">
           <div class="pill clay" role="radiogroup" aria-label="{{t "coord.mode"}}">
-            <label><input type="radio" name="mode" value="message" checked><span>{{t "coord.mode.message"}}</span></label>
-            <label><input type="radio" name="mode" value="directive"><span>{{if .CanDirect}}{{t "coord.mode.directive"}}{{else}}{{t "coord.standing_request"}}{{end}}</span></label>
-            {{if .Participants}}<label><input type="radio" name="mode" value="request"><span>{{t "coord.mode.request"}}</span></label>{{end}}
+            <label title="{{t "coord.mode.message.title"}}"><input type="radio" name="mode" value="message" checked><span>{{t "coord.mode.message"}}</span></label>
+            <label title="{{if .CanDirect}}{{t "coord.mode.directive.title"}}{{else}}{{t "coord.standing_request.title"}}{{end}}"><input type="radio" name="mode" value="directive"><span>{{if .CanDirect}}{{t "coord.mode.directive"}}{{else}}{{t "coord.standing_request"}}{{end}}</span></label>
+            {{if .Participants}}<label title="{{t "coord.mode.request.title"}}"><input type="radio" name="mode" value="request"><span>{{t "coord.mode.request"}}</span></label>{{end}}
           </div>
           <div class="comp-request">
             <div class="comp-kinds" role="group" aria-label="{{t "coord.kind"}}">
@@ -82,7 +82,7 @@
         </div>
       </form>{{end}}
       {{else}}
-      <div class="coord-welcome">{{if .Coord.FirstRoom}}<p>{{t "coord.pick_room"}}</p><a class="btn btn-primary clay" href="{{.Coord.FirstRoom.URL}}">{{t "coord.open_named" .Coord.FirstRoom.Name}}</a>{{else}}<p>{{t "coord.no_rooms"}}</p>{{end}}</div>
+      <div class="coord-welcome" data-sole-room="{{with .Coord.OnlyRoom}}{{.URL}}{{end}}">{{if .Coord.FirstRoom}}<p>{{t "coord.pick_room"}}</p><a class="btn btn-primary clay" href="{{.Coord.FirstRoom.URL}}">{{t "coord.open_named" .Coord.FirstRoom.Name}}</a>{{else}}<p>{{t "coord.no_rooms"}}</p><a class="btn btn-primary clay" href="/ui/overview?connect=1">{{t "ov.start"}}</a>{{end}}</div>
       {{end}}
     </section>
 

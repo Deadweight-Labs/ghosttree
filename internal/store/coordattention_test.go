@@ -190,6 +190,42 @@ func TestThreadMentionRollsUpWithoutRoomUnread(t *testing.T) {
 	}
 }
 
+// A thread whose visibility list leaves the viewer out adds nothing to their
+// mention, attention or needs-you counts, even though it is homed in the room.
+func TestRestrictedThreadDoesNotCountForAViewerOnNoList(t *testing.T) {
+	s, author, recipient, _, room := attentionGroupFixture(t)
+	anchor, err := author.Send(CoordMessage{DestinationKind: DestinationRoom, DestinationID: room, ClientID: "anchor", Body: "Investigate release"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	threadID, err := author.PromoteRoomMessageToTaskThread(anchor, "Investigate", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := recipient.MarkRead(DestinationRoom, room, 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := author.ThreadPost(threadID, CoordMessage{ClientID: "q", Body: "What did you find?", Intent: IntentQuestion, Mentions: []string{"person:2"}}); err != nil {
+		t.Fatal(err)
+	}
+	counts := func() (int64, int64, int64) {
+		sums, err := recipient.RoomSummaries()
+		if err != nil || len(sums) != 1 {
+			t.Fatalf("summaries %+v err=%v", sums, err)
+		}
+		return sums[0].MentionUnread, sums[0].Attention, sums[0].NeedsYou
+	}
+	if m, a, n := counts(); m != 1 || a != 1 || n == 0 {
+		t.Fatalf("before restricting: mention=%d attention=%d needs=%d", m, a, n)
+	}
+	if _, err := s.db.Exec(`INSERT INTO thread_visibility(thread_id,member_external_id) VALUES(?,?)`, threadID, "claude:somebody-else"); err != nil {
+		t.Fatal(err)
+	}
+	if m, a, n := counts(); m != 0 || a != 0 || n != 0 {
+		t.Fatalf("restricted thread counted: mention=%d attention=%d needs=%d", m, a, n)
+	}
+}
+
 func TestAttentionUsesDynamicThreadHomeACLAndPublicProjectionIsReadOnly(t *testing.T) {
 	s, author, recipient, _, room := attentionGroupFixture(t)
 	anchor, err := author.Send(CoordMessage{DestinationKind: DestinationRoom, DestinationID: room, ClientID: "anchor-private", Body: "Private task"})

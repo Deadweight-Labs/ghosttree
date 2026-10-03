@@ -38,13 +38,14 @@ func roomThreadsTx(tx *sql.Tx, roomKey string) ([]RoomThread, error) {
 	rows, err := tx.Query(`SELECT t.id,t.project,t.title,t.question,t.state,t.archived,t.person,
 			t.author_principal_id,t.created_at,t.updated_at,COALESCE(t.resolved_at,''),
 			h.room_key,COALESCE(h.anchor_message_id,0),h.created_at,COALESCE(a.sequence,0),
-			COALESCE(l.object_id,''),COALESCE(r.title,''),COALESCE(r.state,'')
+			CASE WHEN r.id IS NULL THEN '' ELSE l.object_id END,COALESCE(r.title,''),COALESCE(r.state,'')
 		FROM thread_homes h
 		JOIN threads t ON t.id=h.thread_id
 		LEFT JOIN coord_messages a ON a.id=h.anchor_message_id AND a.destination_kind='room' AND a.destination_id=h.room_key
 		LEFT JOIN thread_links l ON l.thread_id=t.id AND l.object_kind='request'
 			AND l.rowid=(SELECT MIN(l2.rowid) FROM thread_links l2 WHERE l2.thread_id=t.id AND l2.object_kind='request')
 		LEFT JOIN requests r ON l.object_id='REQ-' || r.id
+			AND (TRIM(r.project)='' OR 'project:'||TRIM(r.project)=h.room_key)
 		WHERE h.room_key=?
 		ORDER BY t.archived,t.updated_at DESC,t.id DESC`, roomKey)
 	if err != nil {
@@ -68,4 +69,16 @@ func roomThreadsTx(tx *sql.Tx, roomKey string) ([]RoomThread, error) {
 		out = append(out, item)
 	}
 	return out, rows.Err()
+}
+
+// ensureThreadHomes gives a thread opened through the API (the MCP thread_open
+// tool, before it wrote its own home) the project room as its home, so the room
+// lists it. A thread whose room does not exist stays as it is. Idempotent.
+func ensureThreadHomes(db *sql.DB) error {
+	_, err := db.Exec(`INSERT INTO thread_homes(thread_id,room_key,anchor_message_id,created_at)
+		SELECT t.id,'project:'||TRIM(t.project),NULL,t.created_at FROM threads t
+		WHERE NOT EXISTS (SELECT 1 FROM thread_homes h WHERE h.thread_id=t.id)
+		AND NOT EXISTS (SELECT 1 FROM thread_visibility v WHERE v.thread_id=t.id)
+		AND EXISTS (SELECT 1 FROM coord_rooms r WHERE r.room_key='project:'||TRIM(t.project))`)
+	return err
 }

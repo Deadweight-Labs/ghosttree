@@ -143,6 +143,12 @@ func destinationHighWater(q queryRower, kind, id string) (int64, error) {
 	return highWater, err
 }
 
+// homeVisibleToSQL is true for a thread without a visibility list or one that
+// lists the viewer (its single placeholder), matching threadAccessTx. It needs
+// the thread's home row in scope as "home".
+const homeVisibleToSQL = `(NOT EXISTS(SELECT 1 FROM thread_visibility v WHERE v.thread_id=home.thread_id)
+	OR EXISTS(SELECT 1 FROM thread_visibility v WHERE v.thread_id=home.thread_id AND v.member_external_id=?))`
+
 func (s *Store) projectRoomSummaries(actor, principalID, agentID string, rooms []CoordRoom, byRole map[string]bool) ([]CoordRoomSummary, error) {
 	if s.reader != nil {
 		return s.reader.projectRoomSummaries(actor, principalID, agentID, rooms, byRole)
@@ -203,8 +209,9 @@ func (s *Store) projectRoomSummaries(actor, principalID, agentID string, rooms [
 			  AND m.sender_external_id<>? AND mention.mentioned_external_id=?
 			  AND (m.sequence>COALESCE(read.read_through_sequence,0)
 			       OR (COALESCE(read.manual_unread_from_sequence,0)>0
-			           AND m.sequence>=read.manual_unread_from_sequence))`,
-			actor, room.Key, actor, actor).Scan(&threadMentions); err != nil {
+			           AND m.sequence>=read.manual_unread_from_sequence))
+			  AND `+homeVisibleToSQL+``,
+			actor, room.Key, actor, actor, actor).Scan(&threadMentions); err != nil {
 			return nil, err
 		}
 		summary.MentionUnread += threadMentions
@@ -216,8 +223,9 @@ func (s *Store) projectRoomSummaries(actor, principalID, agentID string, rooms [
 			  AND (m.expires_at IS NULL OR m.expires_at='' OR julianday(m.expires_at) IS NULL
 			       OR julianday(m.expires_at)>=julianday(?))
 			  AND ((m.destination_kind='room' AND m.destination_id=?)
-			       OR (m.destination_kind='discussion' AND home.room_key=?))`,
-			actor, now(), room.Key, room.Key).Scan(&summary.Attention); err != nil {
+			       OR (m.destination_kind='discussion' AND home.room_key=?))
+			  AND (m.destination_kind='room' OR `+homeVisibleToSQL+`)`,
+			actor, now(), room.Key, room.Key, actor).Scan(&summary.Attention); err != nil {
 			return nil, err
 		}
 		if err := tx.QueryRow(`SELECT COUNT(*) FROM (
@@ -237,6 +245,7 @@ func (s *Store) projectRoomSummaries(actor, principalID, agentID string, rooms [
 			  AND (m.sequence>COALESCE(read.read_through_sequence,0)
 			       OR (COALESCE(read.manual_unread_from_sequence,0)>0
 			           AND m.sequence>=read.manual_unread_from_sequence))
+			  AND `+homeVisibleToSQL+`
 			UNION
 			SELECT m.id FROM coord_attention attention
 			JOIN coord_messages m ON m.id=attention.message_id
@@ -246,10 +255,11 @@ func (s *Store) projectRoomSummaries(actor, principalID, agentID string, rooms [
 			  AND (m.expires_at IS NULL OR m.expires_at='' OR julianday(m.expires_at) IS NULL
 			       OR julianday(m.expires_at)>=julianday(?))
 			  AND ((m.destination_kind='room' AND m.destination_id=?)
-			       OR (m.destination_kind='discussion' AND home.room_key=?)))`,
+			       OR (m.destination_kind='discussion' AND home.room_key=?))
+			  AND (m.destination_kind='room' OR `+homeVisibleToSQL+`))`,
 			room.Key, actor, actor, summary.ReadThrough, summary.ManualUnreadFrom, summary.ManualUnreadFrom,
-			actor, room.Key, actor, actor,
-			actor, now(), room.Key, room.Key).Scan(&summary.NeedsYou); err != nil {
+			actor, room.Key, actor, actor, actor,
+			actor, now(), room.Key, room.Key, actor).Scan(&summary.NeedsYou); err != nil {
 			return nil, err
 		}
 		out = append(out, summary)

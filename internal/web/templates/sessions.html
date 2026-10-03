@@ -24,15 +24,15 @@
 {{if .Next}}<footer class="sfoot"><a class="clay-btn" href="{{.Next}}">{{t "sessions.show_older"}}</a></footer>{{end}}
 </section>
 {{else}}
-{{if .Empty}}<div class="sempty">{{if .Guest}}<p>{{t "sessions.empty_guest"}}</p>{{else}}<p>{{t "sessions.empty"}}</p><a class="clay-btn" href="/join/pair">{{t "sessions.connect"}}</a>{{end}}</div>
+{{if .Empty}}<div class="sempty">{{if .Guest}}<p>{{t "sessions.empty_guest"}}</p>{{else}}<p>{{t "sessions.empty"}}</p><a class="clay-btn" href="/ui/overview?connect=1">{{t "sessions.connect"}}</a>{{end}}</div>
 {{else if .NoMatch}}<div class="sempty"><p>{{t "sessions.no_match"}}</p><a class="clay-btn" href="{{.ClearFilters}}">{{t "sessions.clear_filters"}}</a></div>
 {{else}}
 <div class="spanel"><table class="stable">
-<thead><tr><th scope="col" class="c-live"><span class="visually-hidden">{{t "sessions.col_live"}}</span></th><th scope="col">{{t "sessions.col_session"}}</th><th scope="col">{{t "sessions.col_linked"}}</th><th scope="col" class="num">{{t "sessions.col_messages"}}</th><th scope="col" class="num">{{t "sessions.col_duration"}}</th><th scope="col" class="num">{{t "sessions.col_time"}}</th></tr></thead>
-{{range .Days}}<tbody><tr class="sday"><th colspan="6" scope="colgroup">{{.Label}}</th></tr>
+<thead><tr><th scope="col" class="c-live"><span class="visually-hidden">{{t "sessions.col_live"}}</span></th><th scope="col">{{t "sessions.col_session"}}</th>{{if .HasLinked}}<th scope="col">{{t "sessions.col_linked"}}</th>{{end}}<th scope="col" class="num">{{t "sessions.col_messages"}}</th><th scope="col" class="num">{{t "sessions.col_duration"}}</th><th scope="col" class="num">{{t "sessions.col_time"}}</th></tr></thead>
+{{range .Days}}<tbody><tr class="sday"><th colspan="{{if $.SessionsV.HasLinked}}6{{else}}5{{end}}" scope="colgroup">{{.Label}}</th></tr>
 {{range .Rows}}<tr class="srow{{if .Private}} is-private{{end}}"><td class="c-live">{{if .Live}}<span class="live-dot" role="img" aria-label="{{t "sessions.live"}}"></span>{{end}}</td>
 <td class="c-title">{{if .Href}}<a class="st-title" href="{{.Href}}">{{.Title}}</a>{{else}}<span class="st-title">{{.Title}}</span>{{end}}<div class="smeta">{{.Meta}}</div></td>
-<td class="c-linked">{{range .Linked}}{{if .Href}}<a href="{{.Href}}">{{.Text}}</a>{{else}}<span>{{.Text}}</span>{{end}} {{end}}</td>
+{{if $.SessionsV.HasLinked}}<td class="c-linked">{{range .Linked}}{{if .Href}}<a href="{{.Href}}">{{.Text}}</a>{{else}}<span>{{.Text}}</span>{{end}} {{end}}</td>{{end}}
 <td class="num">{{.Messages}}</td><td class="num">{{.Duration}}</td><td class="num"><time datetime="{{.Stamp}}" data-clock>{{.Time}}</time></td></tr>
 {{end}}</tbody>{{end}}
 </table>
@@ -60,7 +60,7 @@
 {{if .BackResults.Href}}<a class="back-results" href="{{.BackResults.Href}}">{{.BackResults.Text}}</a>{{end}}
 <header class="sd-head"><div class="sd-titles"><h1>{{if .Live}}<span class="live-dot" role="img" aria-label="{{t "sessions.live"}}"></span>{{end}}{{.Title}}</h1><p class="smeta">{{.Meta}}</p></div>
 <div class="sd-actions">
-{{with .Share}}<form class="share" method="post" action="{{.Action}}"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><span class="seg" role="group" aria-label="{{t "sessions.sharing"}}">{{range .Levels}}<button name="level" value="{{.Value}}"{{if .Current}} class="is-on" aria-pressed="true"{{end}}>{{.Label}}</button>{{end}}</span></form>{{end}}
+{{with .Share}}<form class="share" method="post" action="{{.Action}}"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><span class="share-label">{{t "sessions.sharing"}}</span><span class="seg" role="group" aria-label="{{t "sessions.sharing"}}">{{range .Levels}}<button name="level" value="{{.Value}}" title="{{.Title}}"{{if .Current}} class="is-on" aria-pressed="true"{{end}}>{{.Label}}</button>{{end}}</span></form>{{end}}
 <button type="button" class="clay-btn clay-btn-sm js-only" data-copy-link>{{t "sessions.copy_link"}}</button>
 </div></header>
 {{if .Created}}<p class="created"><span class="cl">{{t "sessions.created"}}</span>{{range .Created}}<a class="chip" href="{{.Href}}">{{.Text}}</a>{{end}}</p>{{end}}

@@ -49,6 +49,7 @@ type pageData struct {
 	KnowledgeV                                                 *knowledgeView
 	KnowledgeItemV                                             *knowledgeItemView
 	ReviewV                                                    *reviewView
+	ContextV                                                   *contextView
 	Sessions                                                   []store.Session
 	Chunks                                                     []store.Chunk
 	SessionID                                                  int64
@@ -253,9 +254,25 @@ func (a *app) projectParam(r *http.Request) string {
 	return selectedProject(a.shellFor(r, "knowledge"))
 }
 
+// contextView is the Agent context page: what a project's agents are given,
+// optionally with what still waits for review.
+type contextView struct {
+	Project string
+	Preview bool
+	Output  string
+	// Choices are the projects to pick from while none is chosen.
+	Choices []projectOption
+}
+
 func (a *app) contextPage(w http.ResponseWriter, r *http.Request) {
 	project := a.projectParam(r)
 	preview := r.URL.Query().Get("preview") == "1"
+	view := &contextView{Project: project, Preview: preview}
+	if project == "" {
+		view.Choices = a.shellFor(r, "context").Projects
+		a.renderBrowser(w, r, "context", pageData{Title: msg("context.title"), ContextV: view})
+		return
+	}
 	var entries []store.Knowledge
 	var err error
 	if preview {
@@ -269,11 +286,13 @@ func (a *app) contextPage(w http.ResponseWriter, r *http.Request) {
 	}
 	pa := a.access(r)
 	entries = keep(entries, 0, func(k store.Knowledge) bool { return pa.CanSeeKnowledge(k) && pa.CanDeliverKnowledge(k) })
-	output := server.RenderBootstrap(entries, 12000)
-	if preview {
-		output = server.RenderBootstrapPreview(entries, 12000)
+	if len(entries) > 0 {
+		view.Output = server.RenderBootstrap(entries, 12000)
+		if preview {
+			view.Output = server.RenderBootstrapPreview(entries, 12000)
+		}
 	}
-	a.renderBrowser(w, r, "context", pageData{Title: "Agent Context", Project: project, Preview: output})
+	a.renderBrowser(w, r, "context", pageData{Title: msg("context.title"), ContextV: view})
 }
 
 // access ist die Zugriffsprüfung der Browser-Sitzung. Sie nutzt denselben Store
