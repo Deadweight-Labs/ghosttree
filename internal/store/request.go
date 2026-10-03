@@ -193,6 +193,44 @@ func (s *Store) RequestByID(id int64) (requestdomain.Detail, error) {
 // requests apart, short enough that a page of them stays readable.
 const snippetChars = 200
 
+// requestScopeWhere is the part of a request query that says which requests
+// the caller may see at all: the scope axes and the visibility restriction.
+func requestScopeWhere(filter requestdomain.SearchFilter) ([]string, []any) {
+	var where []string
+	var args []any
+	// An unset axis on a request means "applies everywhere along it", so a
+	// caller naming a branch or machine must still see the project-wide
+	// entries. Matching exactly would hide most of the backlog.
+	for _, axis := range []struct{ col, v string }{
+		{"project", filter.Scope.Project}, {"branch", filter.Scope.Branch}, {"machine", filter.Scope.Machine},
+	} {
+		if axis.v != "" {
+			where = append(where, `(r.`+axis.col+`='' OR r.`+axis.col+`=?)`)
+			args = append(args, axis.v)
+		}
+	}
+	if filter.Restrict {
+		marks := make([]string, len(filter.Projects))
+		for i, p := range filter.Projects {
+			marks[i] = "?"
+			args = append(args, p)
+		}
+		clause := `r.project=''`
+		if len(marks) > 0 {
+			clause += ` OR r.project IN (` + strings.Join(marks, ",") + `)`
+		}
+		switch {
+		case filter.UnclaimedAll:
+			clause += ` OR r.project NOT IN (SELECT remote FROM projects)`
+		case filter.UnclaimedAuthor != "":
+			clause += ` OR (r.person=? AND r.project NOT IN (SELECT remote FROM projects))`
+			args = append(args, filter.UnclaimedAuthor)
+		}
+		where = append(where, `(`+clause+`)`)
+	}
+	return where, args
+}
+
 func (s *Store) SearchRequests(filter requestdomain.SearchFilter) (requestdomain.SearchPage, error) {
 	if s.reader != nil {
 		return s.reader.SearchRequests(filter)
@@ -228,36 +266,9 @@ func (s *Store) SearchRequests(filter requestdomain.SearchFilter) (requestdomain
 		where = append(where, `search_documents_fts MATCH ?`)
 		args = append(args, ftsQuery(filter.Query))
 	}
-	// An unset axis on a request means "applies everywhere along it", so a
-	// caller naming a branch or machine must still see the project-wide
-	// entries. Matching exactly would hide most of the backlog.
-	for _, axis := range []struct{ col, v string }{
-		{"project", filter.Scope.Project}, {"branch", filter.Scope.Branch}, {"machine", filter.Scope.Machine},
-	} {
-		if axis.v != "" {
-			where = append(where, `(r.`+axis.col+`='' OR r.`+axis.col+`=?)`)
-			args = append(args, axis.v)
-		}
-	}
-	if filter.Restrict {
-		marks := make([]string, len(filter.Projects))
-		for i, p := range filter.Projects {
-			marks[i] = "?"
-			args = append(args, p)
-		}
-		clause := `r.project=''`
-		if len(marks) > 0 {
-			clause += ` OR r.project IN (` + strings.Join(marks, ",") + `)`
-		}
-		switch {
-		case filter.UnclaimedAll:
-			clause += ` OR r.project NOT IN (SELECT remote FROM projects)`
-		case filter.UnclaimedAuthor != "":
-			clause += ` OR (r.person=? AND r.project NOT IN (SELECT remote FROM projects))`
-			args = append(args, filter.UnclaimedAuthor)
-		}
-		where = append(where, `(`+clause+`)`)
-	}
+	scopeWhere, scopeArgs := requestScopeWhere(filter)
+	where = append(where, scopeWhere...)
+	args = append(args, scopeArgs...)
 	if filter.State != "" {
 		where = append(where, `r.state=?`)
 		args = append(args, filter.State)
@@ -265,6 +276,10 @@ func (s *Store) SearchRequests(filter requestdomain.SearchFilter) (requestdomain
 	if filter.Type != "" {
 		where = append(where, `r.type=?`)
 		args = append(args, filter.Type)
+	}
+	if filter.Priority != "" {
+		where = append(where, `r.priority=?`)
+		args = append(args, filter.Priority)
 	}
 	if filter.Cursor != "" {
 		where = append(where, `r.id<?`)
@@ -490,6 +505,19 @@ func terminalRequestError(id int64, state string) error {
 	return requestdomain.NewRuleError("request_terminal", fmt.Sprintf("request REQ-%d is already %s", id, state), "terminal requests cannot be changed; create or reopen a separate request", nil)
 }
 
+// relationAddedData ist der Text des Eintrags "relation.added": die Art und das
+// Ziel ("related REQ-4", "knowledge knowledge #7"); eine externe Verknüpfung
+// steht als "<Art> ext <Verweis>".
+func relationAddedData(r requestdomain.Relation) string {
+	switch {
+	case r.OtherRequestID != 0:
+		return fmt.Sprintf("%s REQ-%d", r.Kind, r.OtherRequestID)
+	case r.KnowledgeID != 0:
+		return fmt.Sprintf("%s knowledge #%d", r.Kind, r.KnowledgeID)
+	}
+	return r.Kind + " ext " + r.ExternalRef
+}
+
 func (s *Store) AddRequestRelation(requestID int64, relation requestdomain.Relation, person string) (requestdomain.Relation, error) {
 	valid := map[string]bool{"parent": true, "related": true, "blocks": true, "duplicates": true, "supersedes": true, "knowledge": true, "external": true}
 	if !valid[relation.Kind] {
@@ -535,7 +563,7 @@ func (s *Store) AddRequestRelation(requestID int64, relation requestdomain.Relat
 	if err != nil {
 		return requestdomain.Relation{}, err
 	}
-	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at) VALUES(?,'relation.added',?,?,?)`, requestID, person, relation.Kind, ts); err != nil {
+	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at) VALUES(?,'relation.added',?,?,?)`, requestID, person, relationAddedData(relation), ts); err != nil {
 		return requestdomain.Relation{}, err
 	}
 	if err := tx.Commit(); err != nil {
