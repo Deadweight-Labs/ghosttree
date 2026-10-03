@@ -385,3 +385,65 @@ func TestOldNumberCollectorUploadsToOwnSessionInAnyProject(t *testing.T) {
 		}
 	}
 }
+
+// Lesen, Rohtext und Teilen einer Session per Nummer: fremde, verborgene,
+// unbekannte und Alt-Sessions ohne Konto (account_id 0) antworten Byte für Byte
+// gleich, in jedem Projekt und für jeden Betrachter ohne Zugriff. Die eigene
+// Nummer gilt nur für wen sie bekommen darf: ein Gast erreicht sie nicht, ein
+// Mitglied ohne Rolle im Projekt der Session schon.
+func TestSessionNumberRoutesAnswerAlikeForForeignHiddenUnknownAndLegacy(t *testing.T) {
+	f := accessAPI(t, true)
+	mk := func(ext string, account int64, project string) int64 {
+		id, err := f.st.UpsertSession(store.Session{Harness: "claude-code", ExternalID: ext, AccountID: account, Scope: scope.Axes{Project: project}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := f.st.AppendChunks(id, []store.Chunk{{Seq: 0, Role: "user", Text: "hello", Raw: "{}"}}); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	numbers := map[string]int64{
+		"foreign-in-project": mk("m-foreign", 4, accProject),
+		"foreign-elsewhere":  mk("m-foreign-q", 4, accOther),
+		"foreign-no-project": mk("m-foreign-0", 4, ""),
+		"legacy-in-project":  mk("m-legacy", 0, accProject),
+		"legacy-elsewhere":   mk("m-legacy-q", 0, accOther),
+		"legacy-no-project":  mk("m-legacy-0", 0, ""),
+	}
+	routes := []struct{ method, tail string }{{"GET", ""}, {"GET", "/raw"}, {"PUT", "/share"}}
+	body := func(tail string) any {
+		if tail == "/share" {
+			return map[string]bool{"shared": true}
+		}
+		return nil
+	}
+	for _, who := range []string{"gus", "nora", "mia"} {
+		for _, r := range routes {
+			wantCode, want := f.call(t, who, r.method, "/api/sessions/999999"+r.tail, body(r.tail))
+			if wantCode != 404 {
+				t.Errorf("%s unknown %s%s = %d, want 404", who, r.method, r.tail, wantCode)
+			}
+			for name, n := range numbers {
+				code, out := f.call(t, who, r.method, fmt.Sprintf("/api/sessions/%d%s", n, r.tail), body(r.tail))
+				if code != wantCode || out != want {
+					t.Errorf("%s %s /api/sessions/<%s>%s = %d %q, unknown = %d %q", who, r.method, name, r.tail, code, out, wantCode, want)
+				}
+			}
+		}
+	}
+
+	// Eigene Session per Nummer: der Gast bekommt sie nie, das Mitglied ohne Rolle schon.
+	guestOwn := mk("m-guest-own", 5, accProject)
+	for _, r := range routes {
+		wantCode, want := f.call(t, "gus", r.method, "/api/sessions/999999"+r.tail, body(r.tail))
+		code, out := f.call(t, "gus", r.method, fmt.Sprintf("/api/sessions/%d%s", guestOwn, r.tail), body(r.tail))
+		if code != 404 || code != wantCode || out != want {
+			t.Errorf("guest own number %s%s = %d %q, unknown = %d %q", r.method, r.tail, code, out, wantCode, want)
+		}
+	}
+	memberOwn := mk("m-member-own", 3, accOther)
+	for _, r := range routes {
+		f.expect(t, "mia", 200, r.method, fmt.Sprintf("/api/sessions/%d%s", memberOwn, r.tail), body(r.tail))
+	}
+}

@@ -29,7 +29,7 @@ func (a *ProjectAccess) seesKnowledgeNumbers(k Knowledge) bool {
 	if k.Scope.Project != "" {
 		return a.SeesSessionNumbers(k.Scope.Project)
 	}
-	if !a.st.AccessEnforced() || a.IsAdmin() {
+	if !a.st.AccessEnforced() {
 		return true
 	}
 	m := sessionRefPattern.FindStringSubmatch(k.SessionRef)
@@ -49,7 +49,7 @@ func (a *ProjectAccess) seesKnowledgeNumbers(k Knowledge) bool {
 // kennen darf. Die Antwort enthielte sie sonst umgeschrieben oder gar nicht,
 // je nachdem, ob es die Session gibt und ob er sie lesen darf (#2447, #2482).
 func (a *ProjectAccess) DropWrittenSessionNumber(k *Knowledge) {
-	if a.st.AccessEnforced() && !a.IsAdmin() && !a.SeesSessionNumbers(k.Scope.Project) && sessionRefPattern.MatchString(k.SessionRef) {
+	if a.st.AccessEnforced() && !a.SeesSessionNumbers(k.Scope.Project) && sessionRefPattern.MatchString(k.SessionRef) {
 		k.SessionRef = ""
 	}
 }

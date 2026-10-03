@@ -144,12 +144,12 @@ func (a *ProjectAccess) GetsOwnSessionNumber(project string) bool {
 	return false
 }
 
-// ReadsAll: der Betrachter liest ohnehin jedes Transkript (Admin, oder ohne
-// Durchsetzung). Nur dann darf eine Suche nach bm25 ordnen, das vom ganzen
-// Index abhängt; für alle anderen wäre schon die Wahl der Ordnung ein Hinweis
-// darauf, dass es Verborgenes gibt.
+// ReadsAll: der Betrachter liest ohnehin jedes Transkript, und das gilt nur
+// ohne Durchsetzung. Auch ein Admin liest unter Durchsetzung nicht alles; bm25
+// hängt vom ganzen Index ab und wäre für ihn ein Orakel über Sessions, die er
+// nicht lesen darf. Nur ohne Durchsetzung darf eine Suche danach ordnen.
 func (a *ProjectAccess) ReadsAll() bool {
-	return !a.st.AccessEnforced() || a.IsAdmin()
+	return !a.st.AccessEnforced()
 }
 
 func (a *ProjectAccess) isGuestOnly() bool {

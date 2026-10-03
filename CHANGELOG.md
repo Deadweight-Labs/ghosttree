@@ -19,7 +19,7 @@ Versioning, with pre-1.0 compatibility rules described in
   `~/.local/bin/ctx`) and the unit's own process, not the `ctx` on `PATH` or a
   stale pid file. A member's older collector can upload to its own session in any
   project (empty, unclaimed or claimed by someone else) with the number it was
-  given; numbers of other people's sessions still answer exactly like unknown
+  given, and can read and share its own session by that number; numbers of other people's sessions still answer exactly like unknown
   ones. While a registration is paused the collector no longer logs one line per
   file event. Development builds from before this change that understand session
   addresses but do not ask for them (between the sessions view and the Requests
