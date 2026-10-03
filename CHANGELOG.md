@@ -37,6 +37,19 @@ Versioning, with pre-1.0 compatibility rules described in
   cookie flow is gone.
 - Changed: ghosttree has a logo mark (a small "g" with eyes) in the sidebar, on
   the sign-in and invitation pages, and as favicon, with a dark variant.
+- Changed: inviting to a project no longer needs a typed project name. The
+  organization page offers a choice of the organization's projects, and for
+  organization owners also the projects only they uploaded sessions to that
+  belong to no organization yet, with "Add to organization and invite". The
+  server applies the rule of `ctx project claim` (owner of the organization, a
+  remote no other account uploaded to) and lists no foreign or shared project.
+  Claim and link happen in one transaction, so a refused link leaves no claim.
+  Project invitations default to seven days for a member and three for a guest
+  (the days field stays empty to take that default), accepted invitations stay in the list as
+  "Accepted by name", and the roles of a project sit inside the project instead
+  of a second list. An invitation link is shown once, only its hash is stored.
+  `ctx join` lists what it sets up ("Claude hooks", "MCP server", "skills",
+  "CLAUDE.md section" and so on) before it asks and again afterwards.
 - Changed: the Requests pages are redesigned in the Clay look and can edit in
   the browser. The list searches and filters by state, kind, priority and
   project, shows each request with its number, kind, priority, criteria progress, age and the

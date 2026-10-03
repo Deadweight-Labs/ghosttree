@@ -62,17 +62,38 @@ func ensureInvitationProjectRole(db *sql.DB) error {
 // Gäste 3. Es gibt keine E-Mail-Bindung: ein Link soll weitergegeben werden
 // können, die kurze Frist und der Widerruf begrenzen das.
 func (s *Store) CreateProjectInvitation(actorPrincipal string, orgID int64, remote, projectRole string, ttl time.Duration) (string, Invitation, error) {
-	type result struct {
-		code string
-		inv  Invitation
-	}
 	if s.writer != nil {
-		r, err := queueValue(s, []any{actorPrincipal, orgID, remote, projectRole, ttl}, func(d *Store, p []any) (result, error) {
+		r, err := queueValue(s, []any{actorPrincipal, orgID, remote, projectRole, ttl}, func(d *Store, p []any) (projectInvitationResult, error) {
 			code, inv, err := d.CreateProjectInvitation(p[0].(string), p[1].(int64), p[2].(string), p[3].(string), p[4].(time.Duration))
-			return result{code, inv}, err
+			return projectInvitationResult{code, inv}, err
 		})
 		return r.code, r.inv, err
 	}
+	return s.createProjectInvitation(actorPrincipal, orgID, remote, projectRole, ttl, false)
+}
+
+type projectInvitationResult struct {
+	code string
+	inv  Invitation
+}
+
+// ClaimAndInviteProject übernimmt eine unbeanspruchte Remote in die
+// Organisation und stellt den Link dafür aus, in einer einzigen Transaktion:
+// scheitert der Link (zu viele offene Einladungen, Gast ohne Durchsetzung),
+// bleibt auch die Übernahme aus. Übernehmen lässt sich nur, was
+// ListClaimableProjects nennen würde: Sessions ausschließlich des Owners.
+func (s *Store) ClaimAndInviteProject(actorPrincipal string, orgID int64, remote, projectRole string, ttl time.Duration) (string, Invitation, error) {
+	if s.writer != nil {
+		r, err := queueValue(s, []any{actorPrincipal, orgID, remote, projectRole, ttl}, func(d *Store, p []any) (projectInvitationResult, error) {
+			code, inv, err := d.ClaimAndInviteProject(p[0].(string), p[1].(int64), p[2].(string), p[3].(string), p[4].(time.Duration))
+			return projectInvitationResult{code, inv}, err
+		})
+		return r.code, r.inv, err
+	}
+	return s.createProjectInvitation(actorPrincipal, orgID, remote, projectRole, ttl, true)
+}
+
+func (s *Store) createProjectInvitation(actorPrincipal string, orgID int64, remote, projectRole string, ttl time.Duration, claim bool) (string, Invitation, error) {
 	actor, err := parsePersonPrincipalID(actorPrincipal)
 	if err != nil {
 		return "", Invitation{}, err
@@ -106,6 +127,16 @@ func (s *Store) CreateProjectInvitation(actorPrincipal string, orgID int64, remo
 	defer tx.Rollback()
 	if orgRoleTx(tx, orgID, actor) != OrgOwner {
 		return "", Invitation{}, ErrNotOrgOwner
+	}
+	if claim {
+		if _, known := projectTx(tx, remote); !known {
+			if !remoteClaimableTx(tx, actor, remote) {
+				return "", Invitation{}, ErrProjectNotFound
+			}
+			if _, err := claimProjectTx(tx, actor, remote, orgID, true); err != nil {
+				return "", Invitation{}, err
+			}
+		}
 	}
 	var projectID, projectOrg int64
 	if tx.QueryRow(`SELECT id, org_id FROM projects WHERE remote=?`, remote).Scan(&projectID, &projectOrg) != nil || projectOrg != orgID {

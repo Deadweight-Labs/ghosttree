@@ -44,3 +44,23 @@ func TestResolveComponentsRejectsUnknown(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestSetupLabelsNameEachItemInFewWords(t *testing.T) {
+	home := t.TempDir()
+	want := map[string][]string{
+		"claude":   {"Claude hooks", "Claude MCP server", "Claude skills", "CLAUDE.md section"},
+		"codex":    {"Codex hooks", "Codex MCP server", "Codex skills", "AGENTS.md section"},
+		"opencode": {"OpenCode MCP server"},
+	}
+	for harness, labels := range want {
+		got := SetupLabels(harness, home)
+		if len(got) < len(labels) || strings.Join(got[:len(labels)], "|") != strings.Join(labels, "|") {
+			t.Fatalf("%s: %v", harness, got)
+		}
+		for _, l := range got {
+			if n := len(strings.Fields(l)); n < 2 || n > 4 {
+				t.Fatalf("%s: %q is not two or three words", harness, l)
+			}
+		}
+	}
+}
