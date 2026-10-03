@@ -52,6 +52,7 @@ var writerMethodClasses = map[string]string{
 	"SessionWindow":                 "read",
 	"SessionHits":                   "read",
 	"SessionOutline":                "read",
+	"AgentWorkFor":                  "read",
 	"SessionLinks":                  "read",
 	"SessionByPublicID":             "read",
 	"AccountRoles":                  "read",

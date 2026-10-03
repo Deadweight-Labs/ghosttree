@@ -83,6 +83,10 @@ func ensureSessionIndex(db *sql.DB) error {
 	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS sessions_public_id ON sessions(public_id) WHERE public_id != ''`); err != nil {
 		return err
 	}
+	// The agents page joins coord_agents.session_id to sessions.external_id.
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS sessions_external_id ON sessions(external_id)`); err != nil {
+		return err
+	}
 	// Die alte Freigabe (shared=1) war die Stufe "Mitglieder".
 	if _, err := db.Exec(`UPDATE sessions SET visibility='project' WHERE shared=1 AND visibility='private'`); err != nil {
 		return err
