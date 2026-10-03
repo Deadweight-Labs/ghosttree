@@ -309,3 +309,60 @@ svg.i { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-widt
   .ag-card .ov-state { flex-direction: column-reverse; align-items: flex-end; gap: 4px; }
   .ag-card .ov-activity { max-width: 6rem; }
 }
+
+/* Logo mark. The picture element swaps to the dark file by system setting. */
+.mark { display: block; flex: none; width: auto; max-width: none; }
+.mark-side { display: inline-block; height: 24px; margin: -4px 8px -4px 0; vertical-align: middle; }
+.mark-hero { height: 64px; margin: 0 auto var(--space-3); }
+.shell-brand { display: inline-flex; align-items: center; }
+.login-brand { display: flex; flex-direction: column; align-items: center; }
+
+/* Invitation and pairing pages (REQ-434). */
+.join-card { width: 460px; }
+.join-card h1 { margin: var(--space-2) 0 var(--space-3); text-align: center; font-size: 24px; line-height: 1.2; overflow-wrap: anywhere; }
+.join-tag { margin: 0 0 var(--space-4); text-align: center; color: var(--clay-ink-soft); }
+.join-facts { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--space-1) var(--space-3); margin: 0 0 var(--space-5); padding: 0; list-style: none; color: var(--clay-ink-faint); font: var(--text-secondary); }
+.join-facts li { overflow-wrap: anywhere; }
+.join-facts li + li::before { content: ""; display: inline-block; inline-size: 4px; block-size: 4px; aspect-ratio: 1; margin: 0 var(--space-3) 2px 0; border-radius: 50%; background: currentColor; vertical-align: middle; }
+.join-who { display: flex; align-items: center; gap: var(--space-3); margin: 0 0 var(--space-4); }
+.join-who span:last-child { display: flex; flex-direction: column; min-width: 0; overflow-wrap: anywhere; }
+.join-who small { color: var(--clay-ink-faint); }
+.join-confirm { display: flex; align-items: center; gap: var(--space-3); margin: 0 0 var(--space-4); padding: var(--space-3) var(--space-4); border-radius: var(--clay-radius-xs); background: var(--color-surface-sunken); font-weight: 600; cursor: pointer; }
+.join-confirm input { inline-size: 20px; block-size: 20px; flex: none; accent-color: var(--clay-accent); }
+.join-confirm span { min-width: 0; overflow-wrap: anywhere; }
+.join-signout { margin: var(--space-4) 0 0; text-align: center; color: var(--clay-ink-soft); font: var(--text-secondary); }
+.join-link { padding: 0; border: 0; background: none; color: var(--clay-accent-text); font: inherit; font-weight: 600; text-decoration: underline; cursor: pointer; }
+.join-alt { margin: var(--space-4) 0 0; text-align: center; font: var(--text-secondary); }
+.join-alt a { color: var(--clay-ink-soft); }
+.join-from { margin: 0 0 var(--space-4); text-align: center; color: var(--clay-ink-soft); overflow-wrap: anywhere; }
+.join-wait { display: flex; align-items: center; gap: var(--space-2); margin: var(--space-1) 0 0; color: var(--clay-ink-soft); }
+.join-dot { inline-size: 10px; block-size: 10px; aspect-ratio: 1; flex: none; border-radius: 50%; background: var(--clay-accent); animation: join-pulse 1.4s ease-in-out infinite; }
+@keyframes join-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+@media (prefers-reduced-motion: reduce) { .join-dot { animation: none; } }
+.join-steps { display: grid; gap: var(--space-4); margin: var(--space-4) 0 var(--space-5); padding: 0; list-style: none; }
+.join-step { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: var(--space-3); align-items: start; }
+.join-step p { margin: var(--space-1) 0 0; color: var(--clay-ink-soft); font: var(--text-secondary); }
+.join-step.is-active .join-wait { font: var(--text-body); }
+.join-num { display: grid; place-items: center; inline-size: 32px; block-size: 32px; aspect-ratio: 1; border-radius: 50%; background: var(--color-surface-sunken); color: var(--clay-ink-soft); font-weight: 800; }
+.join-step.is-active .join-num { background: var(--clay-accent); color: var(--clay-accent-ink); }
+.join-cmd { display: grid; gap: var(--space-2); margin-top: var(--space-2); }
+.join-cmd code, .join-msg { display: block; padding: var(--space-3); border-radius: var(--clay-radius-xs); background: var(--color-surface-sunken); font: var(--text-mono); font-variant-ligatures: none; font-feature-settings: "liga" 0, "calt" 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.join-msg { margin: 0 0 var(--space-3); }
+.join-lead { margin: var(--space-4) 0 var(--space-3); }
+.join-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: 0 0 var(--space-3); }
+.join-actions .btn { width: auto; flex: 1 1 auto; text-align: center; text-decoration: none; }
+.join-newcode { margin: var(--space-4) 0 0; text-align: center; }
+.join-newcode .btn { width: auto; min-height: 36px; font-size: 13px; }
+.join-mobile { display: none; }
+@media (max-width: 640px), (hover: none) and (pointer: coarse) {
+  .join-desktop { display: none; }
+  .join-mobile { display: block; }
+}
+.join-codefield input { font: 700 28px/1.2 var(--font-mono); font-variant-ligatures: none; font-feature-settings: "liga" 0, "calt" 0; letter-spacing: .25em; text-align: center; text-transform: uppercase; }
+.join-codefield small { color: var(--clay-ink-faint); }
+.join-done { display: flex; flex-direction: column; align-items: center; gap: var(--space-3); margin-bottom: var(--space-4); }
+.join-done h1 { margin: 0; }
+.join-check { display: grid; place-items: center; inline-size: 64px; block-size: 64px; aspect-ratio: 1; border-radius: 50%; background: var(--color-ok-soft); color: var(--clay-ok); }
+.join-check .i { inline-size: 32px; block-size: 32px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+.join-done + .btn { display: block; text-align: center; text-decoration: none; }
+@media (max-width: 900px) { .join-card { width: 100%; padding: var(--space-5) var(--space-4) var(--space-6); } }

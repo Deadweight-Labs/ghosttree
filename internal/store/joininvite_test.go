@@ -375,3 +375,45 @@ func TestOpenProjectInvitationFollowsThePreviewValidity(t *testing.T) {
 		t.Fatal("an invitation of a demoted inviter counts as open")
 	}
 }
+
+func TestPreviewNamesTheInviterAndNothingElseAboutThem(t *testing.T) {
+	st, o := joinFixture(t)
+	code, _, err := st.CreateProjectInvitation("person:1", o.ID, joinRemote, RoleMember, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := st.PreviewInvitation(code, true)
+	if err != nil || p.Inviter != "robin" {
+		t.Fatalf("preview: %+v %v", p, err)
+	}
+	if _, err := st.PreviewInvitation("nope", true); !errors.Is(err, ErrCodeInvalid) {
+		t.Fatalf("unknown: %v", err)
+	}
+}
+
+func TestPreviewOrgInvitationShowsInviterAndOrgAndConsumesNothing(t *testing.T) {
+	st, o := joinFixture(t)
+	orgCode, _, err := st.CreateInvitation("person:1", o.ID, "", OrgMember, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		p, err := st.PreviewOrgInvitation(orgCode)
+		if err != nil || p.Inviter != "robin" || p.Org != "Alpha" || p.Project != "" {
+			t.Fatalf("preview %d: %+v %v", i, p, err)
+		}
+	}
+	projCode, _, _ := st.CreateProjectInvitation("person:1", o.ID, joinRemote, RoleMember, 0)
+	if p, err := st.PreviewOrgInvitation(projCode); err != nil || p.Project != joinRemote {
+		t.Fatalf("project invitation: %+v %v", p, err)
+	}
+	if _, err := st.PreviewOrgInvitation("nope"); !errors.Is(err, ErrCodeInvalid) {
+		t.Fatalf("unknown: %v", err)
+	}
+	if _, err := st.AcceptInvitation("person:2", orgCode); err != nil {
+		t.Fatalf("accept after previews: %v", err)
+	}
+	if _, err := st.PreviewOrgInvitation(orgCode); !errors.Is(err, ErrCodeInvalid) {
+		t.Fatalf("used invitation still previews: %v", err)
+	}
+}

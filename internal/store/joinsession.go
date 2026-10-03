@@ -52,6 +52,11 @@ const (
 	// hat. Ohne die Grenze verlängerte jeder Claim Sitzung und Cookie.
 	JoinMaxLifetime = 30 * time.Minute
 
+	// JoinClaimTTL: so lange darf ein gemeldetes Gerät auf die Freigabe warten.
+	// Danach läuft die Anfrage aus (JoinExpired) und der Code ist frei für einen
+	// neuen; ein abgebrochener Installer blockiert die Seite also nicht.
+	JoinClaimTTL = 5 * time.Minute
+
 	joinAuthTTL         = 2 * time.Minute
 	maxJoinSessions     = 1000
 	maxJoinPerInvite    = 10
@@ -72,6 +77,7 @@ const (
 	JoinDenied      = "denied"      // abgelehnt
 	JoinConnected   = "connected"   // Token ausgestellt
 	JoinCompromised = "compromised" // zweiter Claim oder zu viele falsche Bestätigungen: neuer Code nötig
+	JoinExpired     = "expired"     // gemeldet, aber nicht rechtzeitig freigegeben: neuer Code nötig
 )
 
 // Wege zum Token.
@@ -104,21 +110,22 @@ type joinSession struct {
 	state   string
 
 	// Gerät
-	mode        string
-	machine     string
-	remote      string
-	net         string // Netz (/64) des Claim, zum Vergleich mit dem Browser
-	wide        string // Netz (/48) des Claim, leer bei IPv4
-	nonce       string
-	deviceHash  string // Code-Weg: Geräte-Ablauf
-	confirmHash string
-	confirmFail int
-	challenge   string // Loopback-Weg
-	cbHost      string
-	cbPort      int
-	cbState     string
-	authHash    string
-	authExpires time.Time
+	mode         string
+	machine      string
+	remote       string
+	net          string // Netz (/64) des Claim, zum Vergleich mit dem Browser
+	wide         string // Netz (/48) des Claim, leer bei IPv4
+	nonce        string
+	deviceHash   string // Code-Weg: Geräte-Ablauf
+	confirmHash  string
+	confirmFail  int
+	challenge    string // Loopback-Weg
+	cbHost       string
+	cbPort       int
+	cbState      string
+	authHash     string
+	authExpires  time.Time
+	claimExpires time.Time // Ende der Wartezeit auf die Freigabe
 }
 
 // JoinView ist, was die Seite über die Sitzung des Kontos erfährt.
@@ -254,6 +261,13 @@ func (j *JoinSessions) compromise(s *joinSession) {
 	}
 	delete(j.byPair, hashCode(s.pair))
 	s.state, s.authHash, s.deviceHash = JoinCompromised, "", ""
+}
+
+// lapse beendet eine gemeldete, nie freigegebene Anfrage: Gerät und Codes
+// verfallen, die Sitzung bleibt, damit die Seite es sagen kann.
+func (j *JoinSessions) lapse(s *joinSession) {
+	j.compromise(s)
+	s.state = JoinExpired
 }
 
 func (j *JoinSessions) purge(now time.Time) {
@@ -402,6 +416,10 @@ func (j *JoinSessions) Bind(inviteCode, id, account string) error {
 		return err
 	}
 	s.account = account
+	if s.state == JoinClaimed {
+		// Die Wartezeit auf die Freigabe beginnt, wenn die Freigabe möglich wird.
+		s.claimExpires = now.Add(JoinClaimTTL)
+	}
 	j.byAccount[account] = s
 	delete(j.byID, s.idHash) // der Browser-Cookie hat seine Arbeit getan
 	return nil
@@ -536,6 +554,17 @@ func (j *JoinSessions) Claim(req JoinClaimRequest) (JoinClaim, error) {
 		j.fail(req.Addr, now)
 		return JoinClaim{}, ErrJoinInvalid
 	}
+	if s.state == JoinClaimed && now.Before(s.claimExpires) && s.net == netKey && strings.EqualFold(s.machine, req.Machine) {
+		// Derselbe Installer, wieder aufgerufen (etwa nach Strg-C), bevor jemand
+		// freigegeben hat: die frühere Anfrage weicht, der Code wird nicht
+		// verbrannt. Ein Gerät aus einem anderen Netz oder mit anderem Namen
+		// gilt weiter als zweiter Claim.
+		if s.deviceHash != "" {
+			j.device.DropJoin(s.deviceHash)
+		}
+		s.deviceHash, s.confirmHash, s.confirmFail = "", "", 0
+		s.state = JoinWaiting
+	}
 	if s.state != JoinWaiting {
 		if s.state == JoinClaimed {
 			j.compromise(s)
@@ -575,6 +604,7 @@ func (j *JoinSessions) Claim(req JoinClaimRequest) (JoinClaim, error) {
 	}
 	s.mode, s.machine, s.remote, s.net, s.wide, s.nonce, s.state = out.Mode, req.Machine, req.Addr, netKey, wide, nonce, JoinClaimed
 	s.extend(s.created.Add(JoinMaxLifetime))
+	s.claimExpires = now.Add(JoinClaimTTL)
 	return out, nil
 }
 
@@ -605,6 +635,10 @@ func (j *JoinSessions) live(account string, now time.Time) (*joinSession, string
 		return nil, JoinNone
 	}
 	state := s.state
+	if state == JoinClaimed && !now.Before(s.claimExpires) {
+		j.lapse(s)
+		return s, JoinExpired
+	}
 	if s.mode == JoinModeCode && (state == JoinClaimed || state == JoinApproved) && j.device.JoinStatus(s.deviceHash) == "" {
 		state = JoinNone // Ablauf weg, ohne dass ein Token ausgestellt wurde
 	}

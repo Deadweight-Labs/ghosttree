@@ -81,17 +81,32 @@ func (e pairEnv) get(t *testing.T, c *http.Client, path string) (*http.Response,
 	return resp, body(t, resp)
 }
 
+// pairOf legt die Join-Sitzung dieses Browsers an, wie es früher die
+// Einladungsseite tat (Cookie), und gibt ihren Paarungscode zurück. Die Seite
+// selbst zeigt keinen Code mehr; der Code steht erst nach der Annahme auf
+// /join/pair.
 func (e pairEnv) pairOf(t *testing.T, c *http.Client, code string) string {
 	t.Helper()
-	resp, text := e.get(t, c, "/join/"+code)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("join page: %d", resp.StatusCode)
+	return seedPair(t, e.st, c, e.srv, code)
+}
+
+func seedPair(t *testing.T, st *store.Store, c *http.Client, base, code string) string {
+	t.Helper()
+	u, _ := url.Parse(base)
+	id := ""
+	for _, ck := range c.Jar.Cookies(u) {
+		if ck.Name == "gt_join" {
+			id = ck.Value
+		}
 	}
-	pair := pairRE.FindString(text)
-	if pair == "" {
-		t.Fatalf("no pairing code on the join page: %s", text)
+	open, err := st.Join().Open(code, id)
+	if err != nil || open.Pair == "" {
+		t.Fatalf("open: %+v %v", open, err)
 	}
-	return pair
+	if open.ID != "" {
+		c.Jar.SetCookies(u, []*http.Cookie{{Name: "gt_join", Value: open.ID, Path: "/"}})
+	}
+	return open.Pair
 }
 
 func csrfOn(t *testing.T, text string) string {
@@ -163,30 +178,17 @@ func (e pairEnv) poll(t *testing.T, deviceCode string) error {
 	return err
 }
 
-func TestJoinPageShowsCommandAndPairingCodeBeforeAnyLoginAndKeepsItOnReload(t *testing.T) {
+func TestJoinPageMakesNoPairingCodeNoCookieAndNoSessionOnAnyNumberOfReloads(t *testing.T) {
 	e := newPairEnv(t)
 	b := browser(t)
-	resp, text := e.get(t, b, "/join/"+e.code)
-	pair := pairRE.FindString(text)
-	if pair == "" || !strings.Contains(text, "| sh -s -- --pair "+pair) || !strings.Contains(text, "Run only on your own machine.") {
-		t.Fatalf("no command: %s", text)
-	}
-	if strings.Contains(text[strings.Index(text, "<pre"):strings.Index(text, "</pre>")], e.code) {
-		t.Fatal("the invitation code is in the command")
-	}
-	var cookie *http.Cookie
-	for _, c := range resp.Cookies() {
-		if c.Name == "gt_join" {
-			cookie = c
+	for i := 0; i < 3; i++ {
+		resp, text := e.get(t, b, "/join/"+e.code)
+		if len(resp.Cookies()) != 0 || pairRE.FindString(text) != "" || strings.Contains(text, "install.sh") {
+			t.Fatalf("reload %d: cookies=%v %s", i, resp.Cookies(), text)
 		}
 	}
-	if cookie == nil || !cookie.HttpOnly || cookie.Path != "/" || cookie.SameSite != http.SameSiteLaxMode || strings.Contains(cookie.Value, pair) || strings.Contains(cookie.Value, e.code) {
-		t.Fatalf("cookie %+v", cookie)
-	}
-	// Dasselbe Cookie: dieselbe Sitzung, kein neues Cookie.
-	resp2, text2 := e.get(t, b, "/join/"+e.code)
-	if pairRE.FindString(text2) != pair || len(resp2.Cookies()) != 0 || e.st.Join().Sessions() != 1 {
-		t.Fatalf("reload changed the session: %d cookies=%v", e.st.Join().Sessions(), resp2.Cookies())
+	if e.st.Join().Sessions() != 0 {
+		t.Fatalf("a page view made %d sessions", e.st.Join().Sessions())
 	}
 	// Das Öffnen verbraucht nichts.
 	if _, err := e.st.PreviewInvitation(e.code, true); err != nil {
@@ -253,17 +255,18 @@ func TestJoinLoginFirstThenInstaller(t *testing.T) {
 	}
 	e.claimLoop(t, strings.ToLower(pair), "annas-laptop")
 	text = e.pairPage(t, b)
-	for _, want := range []string{"annas-laptop", "wants to connect", `value="approve"`, `value="deny"`, "Same network as this browser: <strong>yes</strong>"} {
+	for _, want := range []string{"annas-laptop", "wants to connect", `value="approve"`, `value="deny"`, "same network as this browser"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("approval page lacks %q: %s", want, text)
 		}
 	}
-	if strings.Contains(text, "Your terminal shows") {
+	if strings.Contains(text, "Code from your terminal") {
 		t.Fatal("the loopback path asks for a typed code")
 	}
-	// Meta-Refresh steht im head und die Seite bietet "Check again".
-	if i, j := strings.Index(text, `http-equiv="refresh"`), strings.Index(text, "<title>"); i < 0 || i > j || !strings.Contains(text, "Check again") {
-		t.Fatalf("refresh not in head: %s", text)
+	// Ohne Skript lädt die Seite per Meta-Refresh neu (noscript im head); mit
+	// Skript fragt join.js den Zustand ab.
+	if !strings.Contains(text, `<noscript><meta http-equiv="refresh"`) || !strings.Contains(text, `data-join-state="claimed"`) || !strings.Contains(text, "/static/join.js") {
+		t.Fatalf("no refresh and no poll marker: %s", text)
 	}
 	if _, err := e.st.PreviewInvitation(e.code, true); err == nil {
 		t.Fatal("invitation still valid after accept")
@@ -279,7 +282,7 @@ func TestJoinSameNetworkLineSaysNoForAnotherNetwork(t *testing.T) {
 	if _, err := e.st.Join().Claim(loopClaim(pair, "box", "203.0.113.5")); err != nil {
 		t.Fatal(err)
 	}
-	if text := e.pairPage(t, b); !strings.Contains(text, "Same network as this browser: <strong>no</strong>") || !strings.Contains(text, "203.0.113.5") {
+	if text := e.pairPage(t, b); !strings.Contains(text, "This is a different network") || !strings.Contains(text, "203.0.113.5") {
 		t.Fatalf("page: %s", text)
 	}
 }
@@ -292,7 +295,7 @@ func TestJoinCodeFallbackNeedsTheTerminalCodeAndDeliversThroughTheDeviceFlow(t *
 	e.accept(t, b, e.code)
 	claim := e.claimCode(t, pair, "annas-laptop")
 	text := e.pairPage(t, b)
-	if !strings.Contains(text, "Your terminal shows") || strings.Contains(text, claim.Confirm) || strings.Contains(text, claim.DeviceCode) {
+	if !strings.Contains(text, "Code from your terminal") || strings.Contains(text, claim.Confirm) || strings.Contains(text, claim.DeviceCode) {
 		t.Fatalf("approval page: %s", text)
 	}
 	if err := e.poll(t, claim.DeviceCode); !errors.Is(err, store.ErrDevicePending) {
@@ -452,7 +455,7 @@ func TestJoinConnectThisMachineForASignedInAccount(t *testing.T) {
 	b := browser(t)
 	e.signInAs(t, b, "anna")
 	text := e.pairPage(t, b)
-	if !strings.Contains(text, "Connect this machine") || strings.Contains(text, "Setup was interrupted") {
+	if !strings.Contains(text, "Get a code") || strings.Contains(text, "Setup was interrupted") {
 		t.Fatalf("start page: %s", text)
 	}
 	target, csrf := e.srv+"/join/pair", csrfOn(t, text)
@@ -468,7 +471,7 @@ func TestJoinConnectThisMachineForASignedInAccount(t *testing.T) {
 	}
 	waiting := e.pairPage(t, b)
 	first := pairRE.FindString(waiting)
-	for _, want := range []string{"| sh -s -- --pair " + first, "ctx login --server", "Open ghosttree", "Run only on your own machine."} {
+	for _, want := range []string{"| sh -s -- --pair " + first, "Open a terminal", "Waiting for your computer", "Send this to your computer", "New code"} {
 		if !strings.Contains(waiting, want) {
 			t.Errorf("waiting page lacks %q", want)
 		}
@@ -521,32 +524,25 @@ func TestJoinApproveRefusesAMachineNameOfAnotherAccount(t *testing.T) {
 }
 
 func TestJoinCommandNeedsHTTPSOrLoopbackAndIgnoresUntrustedForwardedHeaders(t *testing.T) {
-	e := newPairEnv(t)
-	// Ein Server, der keinem Proxy vertraut: X-Forwarded-* zählt nicht.
 	none, _ := proxytrust.Parse("none")
-	srv := httptest.NewServer(New(e.st, WithTrustedProxies(none)))
-	t.Cleanup(srv.Close)
-	get := func(host string, hdr map[string]string) string {
-		req, _ := http.NewRequest("GET", srv.URL+"/join/"+e.code, nil)
+	a := &app{proxies: none}
+	cmd := func(host string, hdr map[string]string) string {
+		req := httptest.NewRequest("GET", "/join/pair", nil)
 		req.Host = host
 		for k, v := range hdr {
 			req.Header.Set(k, v)
 		}
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return body(t, resp)
+		return a.joinCommand(req, "ABCD-EFGH")
 	}
-	if text := get("gt.example", nil); strings.Contains(text, "<pre") || !strings.Contains(text, "Valid until") {
-		t.Fatalf("http command for a public host: %s", text)
+	if c := cmd("gt.example", nil); c != "" {
+		t.Fatalf("http command for a public host: %s", c)
 	}
 	// X-Forwarded-Proto von einem nicht vertrauten Absender zählt nicht.
-	if text := get("gt.example", map[string]string{"X-Forwarded-Proto": "https", "X-Forwarded-Host": "gt.example"}); strings.Contains(text, "<pre") {
-		t.Fatalf("forwarded headers were believed: %s", text)
+	if c := cmd("gt.example", map[string]string{"X-Forwarded-Proto": "https", "X-Forwarded-Host": "gt.example"}); c != "" {
+		t.Fatalf("forwarded headers were believed: %s", c)
 	}
-	if text := get("localhost:8474", nil); !strings.Contains(text, "curl -fsSL http://localhost:8474/install.sh") {
-		t.Fatalf("loopback command: %s", text)
+	if c := cmd("localhost:8474", nil); !strings.Contains(c, "curl -fsSL http://localhost:8474/install.sh") {
+		t.Fatalf("loopback command: %s", c)
 	}
 }
 
@@ -590,10 +586,9 @@ func TestJoinOIDCSignInBindsTheSessionAndLandsOnThePairingPage(t *testing.T) {
 		t.Fatal(err)
 	}
 	b := newBrowser(t)
-	page, _ := b.Get(env.web.URL + "/join/" + code)
-	pair := pairRE.FindString(body(t, page))
-	if pair == "" || !strings.Contains(joinPageText(t, b, env.web.URL+"/join/"+code), `name="join" value="1"`) {
-		t.Fatalf("join page lacks pair or marker (%q)", pair)
+	pair := seedPair(t, env.store, b, env.web.URL, code)
+	if !strings.Contains(joinPageText(t, b, env.web.URL+"/join/"+code), `name="join" value="1"`) {
+		t.Fatal("join page lacks the marker")
 	}
 	// Der Installer ist schon da.
 	if _, err := env.store.Join().Claim(loopClaim(pair, "box", "127.0.0.1")); err != nil {
@@ -678,7 +673,7 @@ func TestJoinSameNetworkLineStaysWithPublicURLAndTrustedProxies(t *testing.T) {
 	pair := e.pairOf(t, b, e.code)
 	e.accept(t, b, e.code)
 	e.claimLoop(t, pair, "box")
-	if text := e.pairPage(t, b); !strings.Contains(text, "Same network as this browser") {
+	if text := e.pairPage(t, b); !strings.Contains(text, "same network as this browser") {
 		t.Fatalf("page: %s", text)
 	}
 }
@@ -694,37 +689,10 @@ func TestJoinCodeFallbackWarnsOnAnotherNetworkAndNamesTheTerminal(t *testing.T) 
 		t.Fatal(err)
 	}
 	text := e.pairPage(t, b)
-	for _, want := range []string{"Same network as this browser: <strong>no</strong>", "This is a different network.", "Your terminal shows a 4-character code"} {
+	for _, want := range []string{"This is a different network", "This is a different network.", "Code from your terminal"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("page lacks %q: %s", want, text)
 		}
-	}
-}
-
-// N2: mit Secure heißt der Cookie __Host-gt_join (Path=/, ohne Domain).
-func TestJoinCookieUsesTheHostPrefixWhereSecureApplies(t *testing.T) {
-	e := newPairEnv(t)
-	h := New(e.st, WithPublicURL("https://gt.example.test"))
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "https://gt.example.test/join/"+e.code, nil)
-	h.ServeHTTP(rec, req)
-	var cookie *http.Cookie
-	for _, c := range rec.Result().Cookies() {
-		cookie = c
-	}
-	if cookie == nil || cookie.Name != "__Host-gt_join" || !cookie.Secure || cookie.Path != "/" || cookie.Domain != "" || !cookie.HttpOnly {
-		t.Fatalf("cookie %+v", cookie)
-	}
-	// Dasselbe Cookie bringt dieselbe Sitzung zurück; der Name ohne Präfix zählt nicht.
-	before := e.st.Join().Sessions()
-	req2 := httptest.NewRequest("GET", "https://gt.example.test/join/"+e.code, nil)
-	req2.AddCookie(cookie)
-	h.ServeHTTP(httptest.NewRecorder(), req2)
-	req3 := httptest.NewRequest("GET", "https://gt.example.test/join/"+e.code, nil)
-	req3.AddCookie(&http.Cookie{Name: "gt_join", Value: cookie.Value})
-	h.ServeHTTP(httptest.NewRecorder(), req3)
-	if n := e.st.Join().Sessions(); n != before+1 {
-		t.Fatalf("sessions %d -> %d: the unprefixed cookie was accepted or the prefixed one ignored", before, n)
 	}
 }
 
@@ -764,17 +732,7 @@ func TestJoinCompromisedLoopbackPageOffersToStopTheInstaller(t *testing.T) {
 func TestJoinCookieOutlivesALateLoginAfterTheClaim(t *testing.T) {
 	e := newPairEnv(t)
 	b := browser(t)
-	resp, _ := e.get(t, b, "/join/"+e.code)
-	var maxAge int
-	for _, c := range resp.Cookies() {
-		if c.Name == "gt_join" {
-			maxAge = c.MaxAge
-		}
-	}
-	if maxAge != int(store.JoinMaxLifetime.Seconds()) {
-		t.Fatalf("cookie max-age %d", maxAge)
-	}
-	pair := pairRE.FindString(joinPageText(t, b, e.srv+"/join/"+e.code))
+	pair := e.pairOf(t, b, e.code)
 	start := e.clock.t
 	e.clock.t = start.Add(12 * time.Minute)
 	e.claimLoop(t, pair, "late-box")
@@ -786,22 +744,6 @@ func TestJoinCookieOutlivesALateLoginAfterTheClaim(t *testing.T) {
 	}
 	if text := e.pairPage(t, b); !strings.Contains(text, "late-box") || !strings.Contains(text, "wants to connect") || e.st.Join().Sessions() != 1 {
 		t.Fatalf("binding lost: sessions=%d %s", e.st.Join().Sessions(), text)
-	}
-}
-
-// R3: Sind alle Plätze belegt, steht statt des Befehls eine Zeile.
-func TestJoinPageSaysSignInFirstWhenNoSlotIsFree(t *testing.T) {
-	e := newPairEnv(t)
-	for i := 0; i < 10; i++ {
-		b := browser(t)
-		pair := e.pairOf(t, b, e.code)
-		if _, err := e.st.Join().Claim(loopClaim(pair, "m", "10."+string(rune('0'+i))+".0.1")); err != nil {
-			t.Fatal(err)
-		}
-	}
-	_, text := e.get(t, browser(t), "/join/"+e.code)
-	if strings.Contains(text, "| sh -s -- --pair") || !strings.Contains(text, "Sign in first, then connect this machine.") {
-		t.Fatalf("page: %s", text)
 	}
 }
 
@@ -822,20 +764,5 @@ func TestOIDCTypedProjectInvitationEndsOnThePairingPage(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/join/pair" {
 		t.Fatalf("callback: %d %q", resp.StatusCode, resp.Header.Get("Location"))
-	}
-}
-
-func TestJoinPageSaysJoinFirstToASignedInVisitorWhenNoSlotIsFree(t *testing.T) {
-	e := newPairEnv(t)
-	for i := 0; i < 10; i++ {
-		pair := e.pairOf(t, browser(t), e.code)
-		if _, err := e.st.Join().Claim(loopClaim(pair, "m", "10."+string(rune('0'+i))+".0.1")); err != nil {
-			t.Fatal(err)
-		}
-	}
-	b := browser(t)
-	e.signInAs(t, b, "anna")
-	if _, text := e.get(t, b, "/join/"+e.code); !strings.Contains(text, "Join first, then connect this machine.") {
-		t.Fatalf("page: %s", text)
 	}
 }

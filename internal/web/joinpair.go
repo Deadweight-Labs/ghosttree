@@ -1,9 +1,11 @@
 package web
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
@@ -38,6 +40,7 @@ type joinPairView struct {
 	Callback                              string
 	Person, AccountID, CSRFToken, Base    string
 	Refresh                               int
+	Message, MailTo                       string
 }
 
 // joinBase ist die Adresse, unter der der Server von außen erreichbar ist: die
@@ -123,6 +126,12 @@ func (a *app) joinPairPage(w http.ResponseWriter, r *http.Request) {
 	switch v.State {
 	case store.JoinWaiting:
 		view.Command = a.joinCommand(r, v.Pair)
+		if view.Command == "" {
+			// Ohne https gibt es kein Installationsskript; wer ctx schon hat, joint damit.
+			view.Command = msg("pair.fallback", view.Base, v.Pair)
+		}
+		view.Message = msg("pair.message", view.Command)
+		view.MailTo = "mailto:?subject=" + mailEscape(msg("pair.mail_subject")) + "&body=" + mailEscape(view.Message)
 		view.Refresh = 10
 	case store.JoinClaimed:
 		view.Refresh = 20
@@ -133,8 +142,25 @@ func (a *app) joinPairPage(w http.ResponseWriter, r *http.Request) {
 		// findet, sagt es; ein erster Besuch zeigt nur den Knopf.
 		view.Interrupted = r.URL.Query().Get("w") == "1"
 	}
-	a.joinHeaders(w)
+	a.joinScriptHeaders(w)
 	a.joinWrite(w, "joinpair", view)
+}
+
+// mailEscape kodiert Text für die Teile einer mailto:-Adresse (Leerzeichen
+// als %20, nie als +).
+func mailEscape(in string) string {
+	return strings.ReplaceAll(url.QueryEscape(in), "+", "%20")
+}
+
+// joinPairState meldet nur den Zustand der Sitzung dieses Kontos, damit die
+// Seite sich weiterschaltet, sobald der Server das Gerät sieht. Sie sagt nichts,
+// was die Seite nicht ohnehin zeigt; Zugang haben nur Sitzung und Konto.
+func (a *app) joinPairState(w http.ResponseWriter, r *http.Request) {
+	v := a.store.Join().View(browserPrincipal(r).ID)
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	_ = json.NewEncoder(w).Encode(map[string]string{"state": v.State, "nonce": v.Nonce})
 }
 
 // joinPairCreate legt die Sitzung an oder ersetzt sie durch einen neuen Code.
@@ -143,11 +169,11 @@ func (a *app) joinPairPage(w http.ResponseWriter, r *http.Request) {
 func (a *app) joinPairCreate(w http.ResponseWriter, r *http.Request) {
 	p := browserPrincipal(r)
 	if a.store.Join().View(p.ID).State == store.JoinNone && r.FormValue("confirm_account") != p.Label {
-		a.joinMessage(w, http.StatusBadRequest, "Please confirm your account", "Tick the box that names the account this machine will connect to.")
+		a.joinMessage(w, http.StatusBadRequest, msg("join.msg_confirm_t"), msg("join.msg_confirm_p"))
 		return
 	}
 	if _, err := a.store.Join().Create(p.ID); err != nil {
-		a.joinMessage(w, http.StatusInternalServerError, "Setup failed", "Something went wrong. Try again in a moment.")
+		a.joinMessage(w, http.StatusInternalServerError, msg("join.msg_setup_t"), msg("join.msg_setup"))
 		return
 	}
 	http.Redirect(w, r, "/join/pair", http.StatusSeeOther)
@@ -161,7 +187,7 @@ func (a *app) joinPairDecide(w http.ResponseWriter, r *http.Request) {
 	p := browserPrincipal(r)
 	approve := r.FormValue("decision") == "approve"
 	if approve && r.FormValue("confirm_account") != p.Label {
-		a.joinMessage(w, http.StatusBadRequest, "Please confirm your account", "Go back and tick the box that names the account this machine will connect to.")
+		a.joinMessage(w, http.StatusBadRequest, msg("join.msg_confirm_t"), msg("join.msg_confirm_p"))
 		return
 	}
 	check := func(machine string) error { return a.store.MachineClaimable(machine, p.ID) }
@@ -172,12 +198,12 @@ func (a *app) joinPairDecide(w http.ResponseWriter, r *http.Request) {
 	case err == nil:
 		http.Redirect(w, r, "/join/pair", http.StatusSeeOther)
 	case errors.Is(err, store.ErrJoinConfirm):
-		a.joinMessage(w, http.StatusBadRequest, "That is not the code your terminal shows", "Go back and type the code from the terminal.")
+		a.joinMessage(w, http.StatusBadRequest, msg("join.msg_badcode_t"), msg("join.msg_badcode"))
 	case errors.Is(err, store.ErrMachineTaken):
-		a.joinMessage(w, http.StatusConflict, "Machine name taken", "That machine name belongs to another account. Run the command again with a different machine name.")
+		a.joinMessage(w, http.StatusConflict, msg("join.msg_taken_t"), msg("join.msg_taken"))
 	case errors.Is(err, store.ErrJoinNotReady):
-		a.joinMessage(w, http.StatusConflict, "Nothing to approve", "No machine is waiting for this account, or the request has changed.")
+		a.joinMessage(w, http.StatusConflict, msg("join.msg_nothing_t"), msg("join.msg_nothing"))
 	default:
-		a.joinMessage(w, http.StatusInternalServerError, "Setup failed", "Something went wrong. Try again in a moment.")
+		a.joinMessage(w, http.StatusInternalServerError, msg("join.msg_setup_t"), msg("join.msg_setup"))
 	}
 }

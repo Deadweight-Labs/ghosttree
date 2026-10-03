@@ -61,6 +61,7 @@ type pageData struct {
 	Coord                                                      coordPageView
 	Orgs                                                       orgsView
 	Invite                                                     bool
+	InviteV                                                    *joinView
 	ProviderName                                               string
 	Bootstrap, TokenOpen                                       bool
 	Shell                                                      shellView
@@ -123,6 +124,7 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 		}
 	})
 	a.handle(mux, "GET /join/pair", a.requirePerson(a.requireInteractive(http.HandlerFunc(a.joinPairPage))))
+	a.handle(mux, "GET /join/pair/state", a.requirePerson(a.requireInteractive(http.HandlerFunc(a.joinPairState))))
 	a.handle(mux, "POST /join/pair", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.joinPairCreate))))))
 	a.handle(mux, "POST /join/pair/decide", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.joinPairDecide))))))
 	a.handle(mux, "POST /join/{code}/accept", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.joinAccept))))))
@@ -383,6 +385,7 @@ var webRoutes = map[string]webClass{
 	"GET /join/{code}":                webPublic,
 	"GET /join/":                      webPublic,
 	"GET /join/pair":                  webAccount,
+	"GET /join/pair/state":            webAccount,
 	"POST /join/pair":                 webAdmin,
 	"POST /join/pair/decide":          webAdmin,
 	"POST /join/{code}/accept":        webAdmin,

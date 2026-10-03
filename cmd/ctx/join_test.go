@@ -478,6 +478,9 @@ func TestJoinWithoutTerminalNeedsYes(t *testing.T) {
 	if code := cmdJoin([]string{"--server", srv.URL, "--pair", "abcd-efgh", "--no-browser"}, &out); code == 0 {
 		t.Fatalf("exit 0 without tty: %s", out.String())
 	}
+	if !strings.Contains(out.String(), "not used up") || !strings.Contains(out.String(), "ctx join --server "+srv.URL+" --pair ABCD-EFGH --no-browser --yes") {
+		t.Fatalf("no ready-made command: %s", out.String())
+	}
 	if len(srv.paths) != 0 {
 		t.Fatalf("talked to the server before knowing it can ask: %v", srv.paths)
 	}

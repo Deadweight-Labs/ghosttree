@@ -300,6 +300,18 @@ func (a *app) codePage(w http.ResponseWriter, r *http.Request) {
 	// Eine Einladung braucht lokal einen Namen; mit OIDC trägt der IdP ihn bei.
 	data.Invite = kind == store.CodeInvitation
 	data.NeedsName = kind == store.CodeBootstrap || (data.Invite && a.oidc == nil)
+	if data.Invite {
+		if p, err := a.store.PreviewOrgInvitation(code); err == nil {
+			target := p.Project
+			if target == "" {
+				target = p.Org
+			}
+			data.InviteV = &joinView{Inviter: p.Inviter, Target: target, Org: p.Org, ExpiresAt: p.ExpiresAt}
+			if p.Project == "" {
+				data.InviteV.Org = ""
+			}
+		}
+	}
 	a.render(w, "logincode", data)
 }
 func (a *app) codeSubmit(w http.ResponseWriter, r *http.Request) {

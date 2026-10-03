@@ -857,3 +857,67 @@ func TestJoinOpenEvictsWaitingBeforeCompromised(t *testing.T) {
 		t.Fatalf("dead=%v firstWaiting=%v", deadAlive, firstAlive)
 	}
 }
+
+func TestJoinClaimLapsesAfterTheWaitAndFreesTheSession(t *testing.T) {
+	st, clock := pairFixture(t)
+	j := st.Join()
+	o, _ := j.Open(testInvite, "")
+	j.Bind(testInvite, o.ID, "person:2")
+	claim, err := j.Claim(codeReq(o.Pair, "laptop", "1.1.1.1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := j.View("person:2"); v.State != JoinClaimed {
+		t.Fatalf("state %s", v.State)
+	}
+	clock.t = clock.t.Add(JoinClaimTTL + time.Second)
+	v := j.View("person:2")
+	if v.State != JoinExpired {
+		t.Fatalf("a request nobody approved must expire, got %s", v.State)
+	}
+	if _, err := j.Decide("person:2", true, "x", "", nil); !errors.Is(err, ErrJoinNotReady) {
+		t.Fatalf("decide on a lapsed request: %v", err)
+	}
+	if _, _, err := pollLater(st, clock, claim.DeviceCode); !errors.Is(err, ErrDeviceUnknown) {
+		t.Fatalf("device flow of a lapsed request lives: %v", err)
+	}
+	if _, err := j.Claim(codeReq(o.Pair, "laptop", "1.1.1.1")); !errors.Is(err, ErrJoinInvalid) {
+		t.Fatalf("a lapsed code must not be claimable: %v", err)
+	}
+	// Ein neuer Code ersetzt die abgelaufene Sitzung.
+	if _, err := j.Create("person:2"); err != nil {
+		t.Fatal(err)
+	}
+	if v := j.View("person:2"); v.State != JoinWaiting {
+		t.Fatalf("after a new code: %s", v.State)
+	}
+}
+
+func TestJoinSameInstallerMayClaimAgainBeforeApproval(t *testing.T) {
+	st, clock := pairFixture(t)
+	j := st.Join()
+	o, _ := j.Open(testInvite, "")
+	j.Bind(testInvite, o.ID, "person:2")
+	first, _ := j.Claim(codeReq(o.Pair, "laptop", "1.1.1.1"))
+	clock.t = clock.t.Add(30 * time.Second)
+	second, err := j.Claim(codeReq(o.Pair, "Laptop", "1.1.1.1"))
+	if err != nil {
+		t.Fatalf("rerun of the same installer burned the code: %v", err)
+	}
+	if second.DeviceCode == first.DeviceCode {
+		t.Fatal("the rerun must get its own device flow")
+	}
+	if _, _, err := pollLater(st, clock, first.DeviceCode); !errors.Is(err, ErrDeviceUnknown) {
+		t.Fatalf("the first device flow survived the rerun: %v", err)
+	}
+	if v := j.View("person:2"); v.State != JoinClaimed {
+		t.Fatalf("state %s", v.State)
+	}
+	// Ein anderes Gerät bleibt ein zweiter Claim.
+	if _, err := j.Claim(codeReq(o.Pair, "thief", "2.2.2.2")); !errors.Is(err, ErrJoinInvalid) {
+		t.Fatalf("another device: %v", err)
+	}
+	if v := j.View("person:2"); v.State != JoinCompromised {
+		t.Fatalf("state %s", v.State)
+	}
+}

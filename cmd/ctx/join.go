@@ -390,7 +390,15 @@ func cmdJoin(args []string, stdout io.Writer) int {
 	if !*yes {
 		t, err := joinTTY()
 		if err != nil {
-			fmt.Fprintln(stdout, "No terminal to ask on; pass --yes to continue without questions.")
+			// Noch nichts gemeldet: der Code ist unverbraucht und gilt weiter.
+			cmd := "ctx join --server " + server + " --pair " + strings.ToUpper(strings.TrimSpace(*pair))
+			if *name != "" {
+				cmd += " --name " + *name
+			}
+			if *noBrowser {
+				cmd += " --no-browser"
+			}
+			fmt.Fprintf(stdout, "This terminal cannot ask questions, so nothing was started. Your code %s is not used up.\nRun this in a terminal you can type in:\n\n  %s --yes\n", strings.ToUpper(strings.TrimSpace(*pair)), cmd)
 			return 1
 		}
 		defer t.Close()
