@@ -1,0 +1,10 @@
+{{define "agents"}}{{template "head" .}}{{template "nav" .}}<main class="ag">
+{{with .Agents}}<div class="ov-head"><h1>{{t "agents.title"}}</h1>{{if and .Cards .CanAdd}}<a class="ov-btn clay" href="{{.Connect}}">{{t "ov.connect_another"}}</a>{{end}}</div>
+{{if .Cards}}<ul class="ov-list ov-deck ag-deck clay">{{range .Cards}}<li class="ag-card is-{{.State}}"><span class="av agent clay" aria-hidden="true">{{template "icon" "agents"}}</span>
+<div class="ag-body"><div class="ag-line"><span class="ov-name">{{.Name}}</span>{{if .Machine}}<span class="ov-meta ag-machine">@{{.Machine}}</span>{{end}}</div>
+{{if .ReqID}}<a class="ag-req" href="{{.ReqHref}}"><span class="ov-id">{{.ReqID}}</span> {{.ReqTitle}}</a>{{end}}
+{{if .Post}}<p class="ag-post">{{.Post}}<span class="ov-num"> · {{.PostAge}}</span></p>{{end}}
+<div class="ag-foot"><span class="ov-meta">{{.Project}}{{if .Branch}} · {{.Branch}}{{end}}</span><a class="ag-link" href="{{.RoomHref}}">{{t "agents.room"}}</a>{{if .SessionHref}}<a class="ag-link" href="{{.SessionHref}}">{{t "agents.session"}}</a>{{end}}</div></div>
+<span class="ov-state">{{if .Activity}}<span class="ov-activity">{{.Activity}}</span>{{end}}<span class="ov-dot is-{{.State}}{{if eq .State "active"}} pulse{{end}}" title="{{.StateText}}"></span><span class="ov-num">{{.Age}}</span></span></li>{{end}}</ul>
+{{else}}<p class="ov-empty">{{t "ov.no_agents"}}</p>{{if .CanAdd}}<a class="ov-btn ov-btn-primary clay" href="{{.Connect}}">{{t "ov.connect"}}</a>{{end}}{{end}}
+{{end}}{{template "foot" .}}{{end}}

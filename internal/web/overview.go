@@ -67,6 +67,8 @@ type nextRow struct {
 
 type agentRow struct {
 	Name, Project, Activity, State, StateText, Age string
+	// The rest feeds the agents page; the overview ignores it.
+	ExternalID, RoomKey, Machine, Branch, Provider string
 }
 
 type requestRow struct {
@@ -213,6 +215,11 @@ func (d pageData) withOverview(v overviewView) pageData {
 // Agenten lesen darf. project != "" schränkt auf dieses Projekt ein.
 // Die Peers kommen über dieselbe Zugangsprüfung wie /ui/coord.
 func (a *app) overviewAgents(r *http.Request, pa *store.ProjectAccess, project string, now time.Time) ([]agentRow, error) {
+	return a.listAgents(r, pa, project, now, overviewMaxAgents)
+}
+
+// listAgents is overviewAgents with a limit, shared with the agents page.
+func (a *app) listAgents(r *http.Request, pa *store.ProjectAccess, project string, now time.Time, limit int) ([]agentRow, error) {
 	type ranked struct {
 		row    agentRow
 		signal time.Time
@@ -259,7 +266,8 @@ func (a *app) overviewAgents(r *http.Request, pa *store.ProjectAccess, project s
 				name = peer.Provider
 			}
 			out = append(out, ranked{agentRow{Name: name, Project: coordShortRoomName(store.RoomProject, remote),
-				Activity: activity, State: state, StateText: stateLabel(state), Age: shortAge(now, signal)}, signal})
+				Activity: activity, State: state, StateText: stateLabel(state), Age: shortAge(now, signal),
+				ExternalID: peer.ExternalID, RoomKey: store.RoomKeyForProject(remote), Machine: agentMachine(peer.ExternalID), Branch: peer.Branch, Provider: peer.Provider}, signal})
 		}
 	}
 	order := map[string]int{"active": 0, "idle": 1, "offline": 2}
@@ -275,7 +283,7 @@ func (a *app) overviewAgents(r *http.Request, pa *store.ProjectAccess, project s
 	rows := make([]agentRow, 0, len(out))
 	for _, o := range out {
 		rows = append(rows, o.row)
-		if len(rows) == overviewMaxAgents {
+		if len(rows) == limit {
 			break
 		}
 	}
