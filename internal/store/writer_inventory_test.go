@@ -57,7 +57,6 @@ var writerMethodClasses = map[string]string{
 	"SessionByPublicID":             "read",
 	"AccountRoles":                  "read",
 	"ProjectWriters":                "read",
-	"KnowledgeMachines":             "read",
 	"RegressionGapsVisible":         "read",
 	"RequestRef":                    "read",
 	"RequestHandoffs":               "read",

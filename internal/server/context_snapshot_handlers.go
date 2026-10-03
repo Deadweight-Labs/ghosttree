@@ -64,12 +64,6 @@ func (a *api) createContextSnapshot(w http.ResponseWriter, r *http.Request) {
 	}
 	input.ActorID = principal.ID
 	input.ActorLabel = &principal.Label
-	if pa := a.access(r); a.st.AccessEnforced() {
-		// Wissen der Maschinen-Achse gehört nur dem Besitzer der Maschine;
-		// der Snapshot enthält davon nur, was der Ersteller selbst lesen darf.
-		// Vor dem Capture gelesen: der hält eine Transaktion offen.
-		input.ExcludeMachines = pa.HiddenMachines(input.Project)
-	}
 	result, err := a.st.CreateContextSnapshot(r.Context(), input, a.snapshotLimits, nil)
 	if err != nil {
 		a.writeSnapshotError(w, err)

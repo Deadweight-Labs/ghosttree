@@ -19,8 +19,13 @@ Versioning, with pre-1.0 compatibility rules described in
   rank or higher in the project, or the instance admin; guests and accounts
   without a role could previously copy and read the whole project, including
   hidden sessions and drafts. Everyone else gets exactly the answer for a
-  snapshot that does not exist. A snapshot leaves out knowledge bound to a
-  machine its creator does not own.
+  snapshot that does not exist. Knowledge bound to a machine is never part of
+  a snapshot, whoever creates it; older snapshots that still hold such
+  entries no longer show them (entries, export, mirror), so `ctx snapshot
+  verify` reports an integrity error for those until they are re-created.
+  Projects nobody has claimed yet have no role: an account without the
+  instance admin now gets "not found" when creating a snapshot there, so its
+  agents lose snapshots until the project is claimed.
 - Fixed: ending a standing instruction needs more than room access. Only its
   author, or someone whose project rank is at least the author's (owners and
   instance admins always), can end it; anyone else gets "forbidden", and the
