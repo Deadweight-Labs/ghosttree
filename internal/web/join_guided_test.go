@@ -208,3 +208,25 @@ func TestJoinPairErrorPagesLinkBackToThePairingPage(t *testing.T) {
 		t.Fatalf("not-found page: %d", resp.StatusCode)
 	}
 }
+
+// Im Loopback-Weg kehrt der Browser zum Installer auf dem Rechner zurück; die
+// Seite sagt, dass die Freigabe dort geschehen muss. Im Code-Weg gibt es den
+// Hinweis nicht.
+func TestJoinClaimedPageSaysLoopbackApprovalHappensOnTheComputer(t *testing.T) {
+	const note = "Approve this in the browser on the computer where you ran the command."
+	for _, loopback := range []bool{true, false} {
+		e := newPairEnv(t)
+		b := browser(t)
+		e.signInAs(t, b, "anna")
+		e.accept(t, b, e.code)
+		pair := pairRE.FindString(e.pairPage(t, b))
+		if loopback {
+			e.claimLoop(t, pair, "annas-laptop")
+		} else {
+			e.claimCode(t, pair, "annas-laptop")
+		}
+		if has := strings.Contains(e.pairPage(t, b), note); has != loopback {
+			t.Errorf("loopback %v: note shown %v", loopback, has)
+		}
+	}
+}

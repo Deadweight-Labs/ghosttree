@@ -223,6 +223,10 @@ func widerKey(addr string) string {
 	return ""
 }
 
+// joinRandomHex ist die Zufallsquelle der Claims; Tests ersetzen sie, um den
+// Fehlerweg zu prüfen.
+var joinRandomHex = randomHex
+
 func randomHex(n int) (string, error) {
 	raw := make([]byte, n)
 	if _, err := rand.Read(raw); err != nil {
@@ -454,7 +458,7 @@ func (j *JoinSessions) Claim(req JoinClaimRequest) (JoinClaim, error) {
 		return JoinClaim{}, ErrDeviceBusy
 	}
 	wide := widerKey(req.Addr)
-	if loop && j.loopbackBusy(netKey, wide) {
+	if loop && j.loopbackBusy(netKey, wide, now) {
 		return JoinClaim{}, ErrDeviceBusy
 	}
 	var s *joinSession
@@ -470,36 +474,39 @@ func (j *JoinSessions) Claim(req JoinClaimRequest) (JoinClaim, error) {
 		// zweites Gerät, und die Seite soll es auch so sagen.
 		j.lapse(s)
 	}
-	if s.state == JoinClaimed && s.resumedBy(req, loop) {
-		// Derselbe Installer, wieder aufgerufen (etwa nach Strg-C), bevor jemand
-		// freigegeben hat: die frühere Anfrage weicht, der Code wird nicht
-		// verbrannt. Fehlversuche bei der Bestätigung (confirmFail) bleiben
-		// gezählt, und der Weg (Loopback oder Code) kann nicht wechseln.
-		if s.deviceHash != "" {
-			j.device.DropJoin(s.deviceHash)
-		}
-		s.deviceHash, s.confirmHash = "", ""
-		s.state = JoinWaiting
-	}
-	if s.state != JoinWaiting {
+	resumed := s.state == JoinClaimed && s.resumedBy(req, loop)
+	if s.state != JoinWaiting && !resumed {
 		if s.state == JoinClaimed {
 			j.compromise(s)
 		}
 		j.fail(req.Addr, now)
 		return JoinClaim{}, ErrJoinInvalid
 	}
-	resume, err := randomHex(16)
+	resume, err := joinRandomHex(16)
 	if err != nil {
 		return JoinClaim{}, err
 	}
-	nonce, err := randomHex(16)
+	nonce, err := joinRandomHex(16)
 	if err != nil {
 		return JoinClaim{}, err
+	}
+	if resumed {
+		// Derselbe Installer, wieder aufgerufen (etwa nach Strg-C), bevor jemand
+		// freigegeben hat: die frühere Anfrage weicht, der Code wird nicht
+		// verbrannt. Fehlversuche bei der Bestätigung (confirmFail) bleiben
+		// gezählt, und der Weg (Loopback oder Code) kann nicht wechseln. Erst
+		// nach dem Erzeugen der Zufallswerte wird die frühere Anfrage ersetzt.
+		if s.deviceHash != "" {
+			j.device.DropJoin(s.deviceHash)
+		}
+		s.deviceHash, s.confirmHash = "", ""
+		s.state = JoinWaiting
 	}
 	// Ein Claim hält Sitzung (und im Code-Weg den Geräte-Ablauf) bis zum Ende
 	// des Login-Fensters, damit eine späte Anmeldung das Gerät nicht verliert.
 	window := s.created.Add(JoinMaxLifetime).Sub(now)
-	out := JoinClaim{Mode: JoinModeCode, ExpiresIn: window, Interval: DeviceInterval, Resume: resume}
+	wait := min(window, JoinClaimTTL)
+	out := JoinClaim{Mode: JoinModeCode, ExpiresIn: wait, Interval: DeviceInterval, Resume: resume}
 	if loop {
 		out.Mode = JoinModeLoopback
 		host := req.Host
@@ -508,19 +515,25 @@ func (j *JoinSessions) Claim(req JoinClaimRequest) (JoinClaim, error) {
 		}
 		s.challenge, s.cbHost, s.cbPort, s.cbState = req.Challenge, host, req.Port, req.State
 	} else {
+		fail := func(err error) (JoinClaim, error) {
+			if resumed {
+				j.compromise(s)
+			}
+			return JoinClaim{}, err
+		}
 		start, err := j.device.StartJoin(netKey, req.Machine, req.Addr, window)
 		if err != nil {
-			return JoinClaim{}, err
+			return fail(err)
 		}
 		confirm, err := newUserCode()
 		if err != nil {
 			j.device.DropJoin(hashCode(start.DeviceCode))
-			return JoinClaim{}, err
+			return fail(err)
 		}
 		confirm = confirm[:joinConfirmLen]
 		s.deviceHash, s.confirmHash = hashCode(start.DeviceCode), hashCode(confirm)
 		out.DeviceCode, out.Confirm = start.DeviceCode, confirm
-		out.ExpiresIn, out.Interval = start.ExpiresIn, start.Interval
+		out.Interval = start.Interval
 	}
 	s.mode, s.machine, s.remote, s.net, s.wide, s.nonce, s.state = out.Mode, req.Machine, req.Addr, netKey, wide, nonce, JoinClaimed
 	s.extend(s.created.Add(JoinMaxLifetime))
@@ -536,12 +549,15 @@ func (s *joinSession) resumedBy(req JoinClaimRequest, loop bool) bool {
 		subtle.ConstantTimeCompare([]byte(hashCode(req.Resume)), []byte(s.resumeHash)) == 1
 }
 
-// loopbackBusy zählt die offenen Loopback-Claims eines Netzes (/64, im /48
+// loopbackBusy zählt die offenen, nicht abgelaufenen Loopback-Claims eines Netzes (/64, im /48
 // entsprechend mehr), wie Busy es für Geräte-Abläufe tut.
-func (j *JoinSessions) loopbackBusy(netKey, wide string) bool {
+func (j *JoinSessions) loopbackBusy(netKey, wide string, now time.Time) bool {
 	n, nw := 0, 0
 	for _, s := range j.all {
 		if s.mode != JoinModeLoopback || (s.state != JoinClaimed && s.state != JoinApproved) {
+			continue
+		}
+		if s.state == JoinClaimed && !now.Before(s.claimExpires) {
 			continue
 		}
 		if s.net == netKey {
@@ -586,7 +602,7 @@ func (j *JoinSessions) View(account string) JoinView {
 	}
 	v := JoinView{State: state, Pair: FormatUserCode(s.pair), Machine: s.machine, Remote: s.remote, Net: s.net,
 		Nonce: s.nonce, Mode: s.mode}
-	if state == JoinCompromised && s.mode == JoinModeLoopback && s.cbPort != 0 {
+	if (state == JoinCompromised || state == JoinExpired) && s.mode == JoinModeLoopback && s.cbPort != 0 {
 		v.Callback = s.callback(url.Values{"error": {"access_denied"}})
 	}
 	return v

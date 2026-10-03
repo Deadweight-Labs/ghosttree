@@ -612,10 +612,28 @@ func TestJoinFallsBackWhenNoLoopbackListenerIsPossible(t *testing.T) {
 
 // ---- Integration gegen den echten Server ----
 
+// testClock is a fake clock safe to read and advance from several goroutines.
+type testClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (c *testClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *testClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
+}
+
 type realEnv struct {
 	url   string
 	st    *store.Store
-	clock *time.Time
+	clock *testClock
 }
 
 func newRealEnv(t *testing.T) realEnv {
@@ -632,12 +650,15 @@ func newRealEnv(t *testing.T) realEnv {
 	}
 	srv := httptest.NewServer(server.New(st))
 	t.Cleanup(srv.Close)
-	now := time.Now()
-	clock := &now
-	st.Device().SetClock(func() time.Time { return *clock })
-	st.Join().SetClock(func() time.Time { return *clock })
+	clock := &testClock{now: time.Now()}
+	st.Device().SetClock(clock.Now)
+	st.Join().SetClock(clock.Now)
 	return realEnv{url: srv.URL, st: st, clock: clock}
 }
+
+// noRedirectClient stops at the 303 from /callback: the installer closes its
+// listener right after the callback, so following to /done would race it.
+var noRedirectClient = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 
 const annaID = "person:2"
 
@@ -659,12 +680,16 @@ func (e realEnv) browserApproves(t *testing.T, confirm func() string) <-chan err
 					return
 				}
 				if dec.Redirect != "" { // the browser follows the redirect to the loopback
-					resp, err := http.Get(dec.Redirect)
+					resp, err := noRedirectClient.Get(dec.Redirect)
 					if err != nil {
 						res <- err
 						return
 					}
 					resp.Body.Close()
+					if resp.StatusCode != http.StatusSeeOther {
+						res <- errors.New("callback did not answer 303")
+						return
+					}
 				}
 				res <- nil
 				return
@@ -720,7 +745,7 @@ func TestJoinIntegrationFallbackPairsThroughTheDeviceFlow(t *testing.T) {
 	var approved <-chan error
 	loginSleep = func(_ context.Context, d time.Duration) error {
 		calls++
-		*e.clock = e.clock.Add(d + time.Second)
+		e.clock.Advance(d + time.Second)
 		if calls == 1 {
 			approved = e.browserApproves(t, func() string {
 				return regexp.MustCompile(`code in your browser: ([A-Z0-9]{4})`).FindStringSubmatch(out.String())[1]
@@ -1273,12 +1298,16 @@ func (e realEnv) approveRerun(t *testing.T, oldNonce string, confirm func() stri
 					return
 				}
 				if dec.Redirect != "" {
-					resp, err := http.Get(dec.Redirect)
+					resp, err := noRedirectClient.Get(dec.Redirect)
 					if err != nil {
 						res <- err
 						return
 					}
 					resp.Body.Close()
+					if resp.StatusCode != http.StatusSeeOther {
+						res <- errors.New("callback did not answer 303")
+						return
+					}
 				}
 				res <- nil
 				return
@@ -1306,7 +1335,7 @@ func TestJoinIntegrationRerunAfterCtrlCResumesWithTheLocalToken(t *testing.T) {
 				old := loginSleep
 				t.Cleanup(func() { loginSleep = old })
 				loginSleep = func(ctx context.Context, d time.Duration) error {
-					*e.clock = e.clock.Add(d + time.Second)
+					e.clock.Advance(d + time.Second)
 					select {
 					case <-ctx.Done():
 						return ctx.Err()

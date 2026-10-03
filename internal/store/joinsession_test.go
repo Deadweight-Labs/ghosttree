@@ -821,7 +821,8 @@ func TestJoinClaimAfterTheWaitSaysTimeoutNotAnotherDevice(t *testing.T) {
 }
 
 // Das Login-Fenster endet 30 Minuten nach dem Anlegen; ein Claim verlängert es nicht.
-func TestJoinClaimExpiresInIsTheRestOfTheLoginWindow(t *testing.T) {
+// expires_in nennt aber nur, wie lange die Anfrage auf die Freigabe wartet.
+func TestJoinClaimExpiresInIsTheShorterOfWaitAndLoginWindow(t *testing.T) {
 	for name, req := range map[string]func(string) JoinClaimRequest{
 		"loopback": func(p string) JoinClaimRequest { return loopReq(p, "m", "1.1.1.1") },
 		"code":     func(p string) JoinClaimRequest { return codeReq(p, "m", "1.1.1.1") },
@@ -836,13 +837,108 @@ func TestJoinClaimExpiresInIsTheRestOfTheLoginWindow(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if want := JoinMaxLifetime - time.Minute; claim.ExpiresIn != want {
-				t.Fatalf("expires_in %v want %v", claim.ExpiresIn, want)
+			if claim.ExpiresIn != JoinClaimTTL {
+				t.Fatalf("expires_in %v want %v", claim.ExpiresIn, JoinClaimTTL)
 			}
 			clock.t = start.Add(JoinMaxLifetime + time.Second)
 			if v := j.View("person:2"); v.State != JoinNone {
 				t.Fatalf("session outlived the window: %q", v.State)
 			}
 		})
+	}
+}
+
+// Eine wiederaufgenommene Anfrage nahe am Ende des Login-Fensters meldet den
+// Rest des Fensters.
+func TestJoinClaimExpiresInNeverExceedsTheLoginWindow(t *testing.T) {
+	st, clock := pairFixture(t)
+	j := st.Join()
+	o := openPair(j, "person:2")
+	start := clock.t
+	req := loopReq(o.Pair, "m", "1.1.1.1")
+	claim, err := j.Claim(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, at := range []time.Duration{4, 8, 12, 16, 20, 24, 28} {
+		clock.t = start.Add(at * time.Minute)
+		req.Resume = claim.Resume
+		if claim, err = j.Claim(req); err != nil {
+			t.Fatalf("resume at %dm: %v", at, err)
+		}
+	}
+	if claim.ExpiresIn != 2*time.Minute {
+		t.Fatalf("expires_in %v want 2m", claim.ExpiresIn)
+	}
+}
+
+// Läuft eine Loopback-Anfrage unfreigegeben ab, führt die Seite den Browser
+// mit access_denied zurück zum Installer.
+func TestJoinExpiredLoopbackOffersTheCallbackTarget(t *testing.T) {
+	st, clock := pairFixture(t)
+	j := st.Join()
+	o := openPair(j, "person:2")
+	if _, err := j.Claim(loopReq(o.Pair, "m", "1.1.1.1")); err != nil {
+		t.Fatal(err)
+	}
+	clock.t = clock.t.Add(JoinClaimTTL + time.Second)
+	v := j.View("person:2")
+	if v.State != JoinExpired || !strings.HasPrefix(v.Callback, "http://127.0.0.1:40123/callback?") || !strings.Contains(v.Callback, "error=access_denied") {
+		t.Fatalf("view %+v", v)
+	}
+	o2 := openPair(j, "person:3")
+	if _, err := j.Claim(codeReq(o2.Pair, "m", "1.1.1.1")); err != nil {
+		t.Fatal(err)
+	}
+	clock.t = clock.t.Add(JoinClaimTTL + time.Second)
+	if v := j.View("person:3"); v.State != JoinExpired || v.Callback != "" {
+		t.Fatalf("code view %+v", v)
+	}
+}
+
+// Abgelaufene Loopback-Anfragen zählen nicht mehr gegen die Grenze je Netz.
+func TestJoinLoopbackBusyIgnoresLapsedClaims(t *testing.T) {
+	st, clock := pairFixture(t)
+	j := st.Join()
+	for i := 0; i < maxDevicePerClient; i++ {
+		o := openPair(j, fmt.Sprintf("person:%d", i+10))
+		if _, err := j.Claim(loopReq(o.Pair, "m", "5.5.5.5")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	o := openPair(j, "person:99")
+	if _, err := j.Claim(loopReq(o.Pair, "m", "5.5.5.5")); !errors.Is(err, ErrDeviceBusy) {
+		t.Fatalf("full: %v", err)
+	}
+	clock.t = clock.t.Add(JoinClaimTTL + time.Second)
+	if _, err := j.Claim(loopReq(o.Pair, "m", "5.5.5.5")); err != nil {
+		t.Fatalf("after the wait: %v", err)
+	}
+}
+
+// Schlägt das Erzeugen des Wiederaufnahme-Tokens fehl, bleibt die frühere
+// Anfrage unverändert und der Installer kann es erneut versuchen.
+func TestJoinResumeFailureKeepsTheEarlierRequest(t *testing.T) {
+	st, _ := pairFixture(t)
+	j := st.Join()
+	o := openPair(j, "person:2")
+	first, err := j.Claim(codeReq(o.Pair, "m", "1.1.1.1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	real := joinRandomHex
+	joinRandomHex = func(int) (string, error) { return "", errors.New("no entropy") }
+	req := codeReq(o.Pair, "m", "1.1.1.1")
+	req.Resume = first.Resume
+	_, err = j.Claim(req)
+	joinRandomHex = real
+	if err == nil {
+		t.Fatal("claim succeeded without randomness")
+	}
+	if v := j.View("person:2"); v.State != JoinClaimed {
+		t.Fatalf("state %s, want claimed", v.State)
+	}
+	if _, err := j.Claim(req); err != nil {
+		t.Fatalf("retry: %v", err)
 	}
 }

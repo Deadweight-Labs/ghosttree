@@ -552,9 +552,12 @@ func TestJoinSignedInPageNamesTheAccountAndOffersSignOut(t *testing.T) {
 	// Ohne Bestätigung des Kontonamens wird nichts verbraucht.
 	for _, confirm := range []string{"", "someone-else"} {
 		resp := sameOriginPostForm(t, anna, srv.URL+"/join/"+code+"/accept", url.Values{"csrf_token": {csrf}, "confirm_account": {confirm}})
-		resp.Body.Close()
+		page := body(t, resp)
 		if resp.StatusCode != http.StatusBadRequest {
 			t.Fatalf("confirm %q: %d", confirm, resp.StatusCode)
+		}
+		if !strings.Contains(page, `href="/join/`+code+`"`) || !strings.Contains(page, "Back to the invitation") {
+			t.Fatalf("confirm %q: no way back to the invitation: %s", confirm, page)
 		}
 	}
 	if _, err := st.PreviewInvitation(code, true); err != nil {

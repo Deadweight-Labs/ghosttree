@@ -14,7 +14,7 @@
 <form class="join-signout" method="post" action="/join/{{.Code}}/signout"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><span>{{t "join.not_you"}}</span> <button class="join-link">{{t "shell.sign_out"}}</button></form>
 {{else if .OIDC}}<form class="login-form" method="post" action="/ui/login/oidc"><input type="hidden" name="code" value="{{.Code}}"><input type="hidden" name="join" value="1"><button class="clay btn btn-primary">{{t "join.sign_in_join"}}</button></form>
 <p class="join-alt"><a href="/ui/login">{{t "join.have_account"}}</a></p>
-{{else}}<form class="login-form" method="post" action="/ui/login/code"><input type="hidden" name="code" value="{{.Code}}"><input type="hidden" name="join" value="1"><label class="field"><span>{{t "join.name_label"}}</span><input class="clay" name="name" maxlength="64" required autocomplete="nickname" autocapitalize="none" spellcheck="false" placeholder="{{t "login.name_placeholder"}}" value="{{.NameHint}}"></label><button class="clay btn btn-primary">{{t "join.create_join"}}</button></form>
+{{else}}<form class="login-form" method="post" action="/ui/login/code"><input type="hidden" name="code" value="{{.Code}}"><input type="hidden" name="join" value="1"><label class="field"><span>{{t "join.name_label"}}</span><input class="clay" name="name" maxlength="64" required autocomplete="nickname" autocapitalize="none" spellcheck="false" placeholder="{{t "login.name_placeholder"}}"></label><button class="clay btn btn-primary">{{t "join.create_join"}}</button></form>
 <p class="join-alt"><a href="/ui/login">{{t "join.have_account"}}</a></p>
 {{end}}{{template "joinfoot"}}{{end}}
 
@@ -32,7 +32,8 @@
 {{else if eq .State "claimed"}}<h1>{{t "pair.wants" .Machine}}</h1>
 <p class="join-from">{{t "pair.from" .Remote}}{{if and .ShowNet .SameNet}} · {{t "pair.same_net"}}{{end}}</p>
 {{if and .ShowNet (not .SameNet)}}<p class="login-error" role="alert">{{t "pair.other_net"}}</p>{{end}}
-<form class="login-form" method="post" action="/join/pair/decide"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><input type="hidden" name="nonce" value="{{.Nonce}}">
+{{if not .NeedsCode}}<p class="join-mobile">{{t "pair.loopback_mobile"}}</p>{{end}}
+<form class="login-form{{if not .NeedsCode}} join-desktop{{end}}" method="post" action="/join/pair/decide"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><input type="hidden" name="nonce" value="{{.Nonce}}">
 {{if .NeedsCode}}<label class="field join-codefield"><span>{{t "pair.code_label"}}</span><input class="clay join-code" name="confirm_code" maxlength="9" size="9" autocomplete="off" autocapitalize="characters" spellcheck="false" inputmode="text" required autofocus><small>{{t "pair.code_hint"}}</small></label>{{end}}
 {{template "joinconfirm" .}}
 <div class="join-actions"><button class="clay btn btn-primary" name="decision" value="approve">{{t "pair.approve" .Machine}}</button><button class="clay btn ghost" name="decision" value="deny" formnovalidate>{{t "pair.deny"}}</button></div></form>
@@ -48,4 +49,4 @@
 
 {{define "joinnotfound"}}{{template "joinhead"}}<h1>{{t "join.na_title"}}</h1><p>{{t "join.na_text"}}</p>{{template "joinfoot"}}{{end}}
 {{define "joinbusy"}}{{template "joinhead"}}<h1>{{t "join.busy_title"}}</h1><p>{{t "join.busy_text"}}</p>{{template "joinfoot"}}{{end}}
-{{define "joinmsg"}}{{template "joinhead"}}<h1>{{.Title}}</h1><p>{{.Message}}</p>{{if .Back}}<a class="clay btn btn-primary join-back" href="/join/pair">{{t "join.msg_back"}}</a>{{end}}{{template "joinfoot"}}{{end}}
+{{define "joinmsg"}}{{template "joinhead"}}<h1>{{.Title}}</h1><p>{{.Message}}</p>{{if .BackURL}}<a class="clay btn btn-primary join-back" href="{{.BackURL}}">{{.BackLabel}}</a>{{end}}{{template "joinfoot"}}{{end}}

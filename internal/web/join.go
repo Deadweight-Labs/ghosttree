@@ -185,7 +185,7 @@ func (a *app) joinPreview(code string) (store.InvitePreview, bool) {
 
 type joinView struct {
 	Inviter, Target, Org, RoleText, ExpiresAt string
-	NameHint, Code, CSRFToken, Person         string
+	Code, CSRFToken, Person                   string
 	Initial, Email                            string
 	SignedIn, OIDC                            bool
 }
@@ -252,7 +252,7 @@ func (a *app) joinAccept(w http.ResponseWriter, r *http.Request) {
 	// ließe sich nicht prüfen, ohne die Sitzungen zu ändern, und die Bestätigung
 	// fängt auch den Fall ab, dass das Konto alt, aber nicht das eigene ist.
 	if r.FormValue("confirm_account") != browserPrincipal(r).Label {
-		a.joinMessage(w, http.StatusBadRequest, msg("join.msg_confirm_t"), msg("join.msg_confirm_j"))
+		a.joinAcceptMessage(w, code, http.StatusBadRequest, msg("join.msg_confirm_t"), msg("join.msg_confirm_j"))
 		return
 	}
 	_, err := a.store.AcceptInvitation(browserPrincipal(r).ID, code)
@@ -262,13 +262,13 @@ func (a *app) joinAccept(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, store.ErrCodeInvalid):
 		a.joinNotFound(w)
 	case errors.Is(err, store.ErrAlreadyMember):
-		a.joinMessage(w, http.StatusConflict, msg("join.msg_already_t"), msg("join.msg_already"))
+		a.joinAcceptMessage(w, code, http.StatusConflict, msg("join.msg_already_t"), msg("join.msg_already"))
 	case errors.Is(err, store.ErrTooManyAttempts):
-		a.joinMessage(w, http.StatusTooManyRequests, msg("join.msg_many_t"), msg("join.msg_many"))
+		a.joinAcceptMessage(w, code, http.StatusTooManyRequests, msg("join.msg_many_t"), msg("join.msg_many"))
 	case errors.Is(err, store.ErrAccountDisabled):
-		a.joinMessage(w, http.StatusForbidden, msg("join.msg_disabled_t"), msg("join.msg_disabled"))
+		a.joinAcceptMessage(w, code, http.StatusForbidden, msg("join.msg_disabled_t"), msg("join.msg_disabled"))
 	default:
-		a.joinMessage(w, http.StatusInternalServerError, msg("join.msg_failed_t"), msg("join.msg_failed"))
+		a.joinAcceptMessage(w, code, http.StatusInternalServerError, msg("join.msg_failed_t"), msg("join.msg_failed"))
 	}
 }
 
@@ -296,11 +296,19 @@ func (a *app) joinAccepted(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/join/pair", http.StatusSeeOther)
 }
 
-func (a *app) joinMessage(w http.ResponseWriter, status int, title, message string) {
+// joinMessageBack zeigt eine Meldung mit einem Link zurück; ohne Ziel bleibt es
+// bei der Meldung.
+func (a *app) joinMessageBack(w http.ResponseWriter, status int, title, message, backURL, backLabel string) {
 	a.joinHeaders(w)
 	w.WriteHeader(status)
 	a.joinWrite(w, "joinmsg", struct {
-		Title, Message string
-		Back           bool
-	}{title, message, false})
+		Title, Message, BackURL, BackLabel string
+	}{title, message, backURL, backLabel})
+}
+
+// joinAcceptMessage ist die Meldung auf eine gültige, aber nicht angenommene
+// Einladung; sie führt zurück zur Einladung. Nur für Codes, die die Vorschau
+// bestanden haben, damit ungültige Codes nichts anderes als die 404 sehen.
+func (a *app) joinAcceptMessage(w http.ResponseWriter, code string, status int, title, message string) {
+	a.joinMessageBack(w, status, title, message, "/join/"+code, msg("join.msg_back_invite"))
 }

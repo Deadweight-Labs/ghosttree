@@ -28,8 +28,8 @@ import (
 // über den Geräte-Ablauf.
 //
 // Die Seite gehört dem angemeldeten Konto: Code und Gerät stehen nur dort, nie in
-// einer URL, nie in einem Log. Sie lädt sich selbst neu (meta refresh), solange
-// sie wartet; das CSP der Join-Seiten erlaubt keine Skripte.
+// einer URL, nie in einem Log. join.js fragt den Zustand ab und lädt die
+// Seite neu, sobald er sich ändert; ohne Skripte übernimmt ein meta refresh.
 
 // joinPairView ist die Sicht der Paarungsseite.
 type joinPairView struct {
@@ -38,7 +38,7 @@ type joinPairView struct {
 	SameNet, ShowNet, NeedsCode           bool
 	Interrupted                           bool
 	Callback                              string
-	Person, AccountID, CSRFToken, Base    string
+	Person, CSRFToken                     string
 	Refresh                               int
 	Message, MailIntro, MailTo            string
 	CmdParts                              []cmdPart
@@ -117,7 +117,7 @@ func (a *app) joinPairPage(w http.ResponseWriter, r *http.Request) {
 	v := a.store.Join().View(p.ID)
 	view := joinPairView{State: v.State, Pair: v.Pair, Machine: v.Machine, Remote: v.Remote, Nonce: v.Nonce,
 		SameNet: v.Net != "" && v.Net == a.joinClientKey(r), ShowNet: a.sameNetworkMeaningful(), Callback: v.Callback, NeedsCode: v.Mode == store.JoinModeCode,
-		Person: p.Label, AccountID: p.ID, CSRFToken: csrfOf(r), Base: a.joinBase(r)}
+		Person: p.Label, CSRFToken: csrfOf(r)}
 	switch v.State {
 	case store.JoinWaiting:
 		view.Command = a.joinCommand(r, v.Pair)
@@ -165,12 +165,7 @@ func (a *app) joinPairState(w http.ResponseWriter, r *http.Request) {
 // joinPairMessage ist joinMessage mit dem Weg zurück zur Paarungsseite: wer dort
 // einen Fehler bekommt, steht sonst vor einer Sackgasse.
 func (a *app) joinPairMessage(w http.ResponseWriter, status int, title, message string) {
-	a.joinHeaders(w)
-	w.WriteHeader(status)
-	a.joinWrite(w, "joinmsg", struct {
-		Title, Message string
-		Back           bool
-	}{title, message, true})
+	a.joinMessageBack(w, status, title, message, "/join/pair", msg("join.msg_back"))
 }
 
 // joinPairCreate legt die Sitzung an oder ersetzt sie durch einen neuen Code.
