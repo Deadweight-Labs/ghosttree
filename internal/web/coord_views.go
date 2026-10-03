@@ -167,8 +167,8 @@ type coordThreadDetailView struct {
 	FormID                                 string
 	ReplyTo                                int64
 	ReplyTarget                            *coordReplyView
-	// CanSetState: the viewer is the thread's author or a room manager and
-	// has a membership, so the state change would be accepted.
+	// CanSetState: the store would accept the state change: the viewer is the
+	// thread's author, a room manager, or (project room) a lead or owner.
 	CanSetState bool
 }
 
