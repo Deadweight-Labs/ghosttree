@@ -323,12 +323,15 @@ func (a *app) knowledgePage(w http.ResponseWriter, r *http.Request) {
 	}
 	project := a.projectParam(r)
 	pa := a.access(r)
-	if project != "" && a.accessDenied(w, r, pa.GateList(project, store.ResKnowledge, true)) {
+	hidden, stop := a.gateList(w, r, pa, project, store.ResKnowledge)
+	if stop {
 		return
 	}
 	var entries []store.Knowledge
 	var err error
-	if q != "" {
+	if hidden {
+		// Wie ein unbekanntes Projekt: keine Abfrage, leere Liste.
+	} else if q != "" {
 		entries, err = a.store.SearchAllKnowledge(q, scope.Axes{Project: project}, a.overfetch(knowledgeShown))
 	} else {
 		entries, err = a.store.BrowseKnowledge(project, typ, level, a.overfetch(knowledgeShown))
@@ -358,7 +361,7 @@ func (a *app) knowledgePage(w http.ResponseWriter, r *http.Request) {
 	if project != "" {
 		v.ClearHref += "?project=" + url.QueryEscape(project)
 	}
-	if v.Reviewer {
+	if v.Reviewer && !hidden {
 		pending, perr := a.store.PendingKnowledge(project, a.overfetch(reviewShown))
 		if perr == nil {
 			if n := len(keep(pending, reviewShown, pa.CanSeeKnowledge)); n > 0 {
@@ -505,13 +508,17 @@ func (a *app) fillEvidence(pa *store.ProjectAccess, k store.Knowledge, card *kno
 func (a *app) reviewPage(w http.ResponseWriter, r *http.Request) {
 	pa := a.access(r)
 	project := a.projectParam(r)
-	if project != "" && a.accessDenied(w, r, pa.GateList(project, store.ResKnowledge, true)) {
+	hidden, stop := a.gateList(w, r, pa, project, store.ResKnowledge)
+	if stop {
 		return
 	}
-	entries, err := a.store.PendingKnowledge(project, a.overfetch(reviewShown))
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
+	var entries []store.Knowledge
+	if !hidden {
+		var err error
+		if entries, err = a.store.PendingKnowledge(project, a.overfetch(reviewShown)); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
 	}
 	entries = keep(entries, reviewShown, pa.CanSeeKnowledge)
 	v := &reviewView{Guest: a.shellBaseFor(r).who.kind == viewerGuest, Result: a.resultFor(r, pa, "review", project)}

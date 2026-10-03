@@ -7,13 +7,11 @@ import (
 	"errors"
 	"html/template"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
 	"github.com/Deadweight-Labs/ghosttree/internal/proxytrust"
-	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/server"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -46,9 +44,8 @@ type pageData struct {
 	Admin, Approved, Interactive                               bool
 	DeviceMachine, DeviceRemote, DeviceStarted                 string
 	Tokens                                                     []tokenRow
-	Requests                                                   []requestdomain.SearchHit
-	Request                                                    requestdomain.Detail
-	RequestThreads                                             []coordThreadView
+	RequestsV                                                  *requestsView
+	RequestV                                                   *requestView
 	KnowledgeV                                                 *knowledgeView
 	KnowledgeItemV                                             *knowledgeItemView
 	ReviewV                                                    *reviewView
@@ -133,6 +130,13 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.handle(mux, "GET /ui/rooms", a.requirePerson(http.HandlerFunc(a.roomsAlias)))
 	a.handle(mux, "GET /ui/requests", a.requirePerson(http.HandlerFunc(a.requestsPage)))
 	a.handle(mux, "GET /ui/requests/{id}", a.requirePerson(http.HandlerFunc(a.requestPage)))
+	for suffix, h := range map[string]http.HandlerFunc{
+		"criteria": a.requestAddCriterion, "criteria/{cid}": a.requestResolve,
+		"complete": a.requestComplete, "drop": a.requestDrop,
+	} {
+		a.handle(mux, "POST /ui/requests/{id}/"+suffix, a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(h)))))
+	}
+	a.handle(mux, "POST /ui/requests/{id}/correct", a.requirePerson(a.requireInteractive(limitBodyN(requestCorrectForm, a.requestFormTooLarge(a.requireCSRF(http.HandlerFunc(a.requestCorrect)))))))
 	a.handle(mux, "GET /ui/knowledge", a.requirePerson(http.HandlerFunc(a.knowledgePage)))
 	a.handle(mux, "GET /ui/knowledge/{id}", a.requirePerson(http.HandlerFunc(a.knowledgeItemPage)))
 	a.handle(mux, "POST /ui/knowledge/{id}/edit", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.knowledgeEdit))))))
@@ -202,7 +206,7 @@ func (a *app) renderBrowser(w http.ResponseWriter, r *http.Request, name string,
 		data.NavSection = "overview"
 	case "agents":
 		data.NavSection = "agents"
-	case "requests", "request":
+	case "requests", "request", "requesttoolarge":
 		data.NavSection = "requests"
 	case "knowledge", "knowledgeitem":
 		data.NavSection = "knowledge"
@@ -220,53 +224,6 @@ func (a *app) renderBrowser(w http.ResponseWriter, r *http.Request, name string,
 		data.NavSection = "orgs"
 	}
 	a.render(w, name, data)
-}
-func (a *app) requestsPage(w http.ResponseWriter, r *http.Request) {
-	state := r.URL.Query().Get("state")
-	if _, exists := r.URL.Query()["state"]; !exists {
-		state = "open"
-	}
-	pa := a.access(r)
-	page, err := a.store.SearchRequests(pa.RequestFilter(requestdomain.SearchFilter{State: state, Query: r.URL.Query().Get("q"), Limit: 25}))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	pa.NoteRequestHits(page.Results)
-	for i := range page.Results {
-		page.Results[i] = pa.RequestHitView(page.Results[i])
-	}
-	a.renderBrowser(w, r, "requests", pageData{Title: "Requests", Requests: page.Results})
-}
-func (a *app) requestPage(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	detail, err := a.store.RequestByID(id)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	if a.accessDenied(w, r, a.access(r).Check(detail.Request.Scope.Project, store.ResRequest, store.ActRead, store.Object{})) {
-		return
-	}
-	linked, err := a.browserCoord(r).ThreadsForObject("request", detail.Request.HumanID())
-	if err != nil {
-		coordHTTPError(w, err)
-		return
-	}
-	threadViews := make([]coordThreadView, 0, len(linked))
-	for _, thread := range linked {
-		home, homeErr := a.browserCoord(r).ThreadHome(thread.ID)
-		if homeErr != nil {
-			continue
-		}
-		threadViews = append(threadViews, coordThreadView{ID: thread.ID, Title: thread.Title, Question: thread.Question, State: thread.State, URL: coordThreadURL(home.RoomKey, thread.ID)})
-	}
-	detail = a.access(r).RequestDetailView(detail)
-	a.renderBrowser(w, r, "request", pageData{Title: detail.Request.HumanID(), Request: detail, RequestThreads: threadViews})
 }
 
 // sessionLinks nennt zu Sessionnummern aus Verweisen die Adresse in der
@@ -345,6 +302,25 @@ func (a *app) accessDenied(w http.ResponseWriter, r *http.Request, err error) bo
 	return true
 }
 
+// gateList prüft eine Liste mit ausdrücklichem Projekt. Wer das Projekt nicht
+// sehen darf, bekommt dieselbe leere Liste wie bei einem unbekannten Projekt
+// (empty), nicht 404 gegen 200: der Unterschied verriete, dass es das Projekt
+// gibt. stop heißt, dass die Antwort schon geschrieben ist (403).
+func (a *app) gateList(w http.ResponseWriter, r *http.Request, pa *store.ProjectAccess, project string, res store.Resource) (empty, stop bool) {
+	if project == "" {
+		return false, false
+	}
+	err := pa.GateList(project, res, true)
+	switch {
+	case err == nil:
+		return false, false
+	case errors.Is(err, store.ErrAccessForbidden):
+		return false, a.accessDenied(w, r, err)
+	default:
+		return true, false
+	}
+}
+
 // keep behält die Einträge, die allow zulässt, höchstens limit viele (0 = alle).
 func keep[T any](in []T, limit int, allow func(T) bool) []T {
 	out := make([]T, 0, len(in))
@@ -377,71 +353,76 @@ const (
 )
 
 var webRoutes = map[string]webClass{
-	"GET /static/":                    webPublic,
-	"GET /install.sh":                 webPublic,
-	"GET /dist/{name}":                webPublic,
-	"GET /join/{code}":                webPublic,
-	"GET /join/":                      webPublic,
-	"GET /join/pair":                  webAccount,
-	"POST /join/pair":                 webAdmin,
-	"POST /join/pair/decide":          webAdmin,
-	"POST /join/{code}/accept":        webAdmin,
-	"POST /join/{code}/signout":       webAccount,
-	"GET /ui/login":                   webPublic,
-	"POST /ui/login":                  webPublic,
-	"POST /ui/login/oidc":             webPublic,
-	"GET /ui/login/oidc/callback":     webPublic,
-	"GET /ui/login/code":              webPublic,
-	"POST /ui/login/code":             webPublic,
-	"GET /{$}":                        webPublic,
-	"GET /favicon.ico":                webPublic,
-	"GET /ui/{$}":                     webPublic,
-	"GET /ui/overview":                webAccount,
-	"GET /ui/agents":                  webCoord,
-	"GET /ui/rooms":                   webCoord,
-	"POST /ui/logout":                 webAccount,
-	"GET /ui/requests":                webProject,
-	"GET /ui/requests/{id}":           webProject,
-	"GET /ui/knowledge":               webProject,
-	"GET /ui/knowledge/{id}":          webProject,
-	"POST /ui/knowledge/{id}/edit":    webAdmin,
-	"GET /ui/review":                  webProject,
-	"POST /ui/review/{id}/{verdict}":  webAdmin,
-	"GET /ui/sessions":                webProject,
-	"GET /ui/sessions/{id}":           webProject,
-	"POST /ui/sessions/{id}/share":    webAdmin,
-	"GET /ui/context":                 webProject,
-	"GET /ui/coord":                   webCoord,
-	"GET /ui/coord/events":            webCoord,
-	"GET /ui/coord/thread/{id}":       webCoord,
-	"POST /ui/coord/send":             webCoord,
-	"POST /ui/coord/thread/create":    webCoord,
-	"POST /ui/coord/thread/post":      webCoord,
-	"POST /ui/coord/thread/state":     webCoord,
-	"POST /ui/coord/read":             webCoord,
-	"POST /ui/coord/unread":           webCoord,
-	"POST /ui/coord/attention/action": webCoord,
-	"POST /ui/coord/standing/end":     webCoord,
-	"POST /ui/coord/standing/create":  webCoord,
-	"POST /ui/coord/direct/start":     webCoord,
-	"POST /ui/coord/group/create":     webCoord,
-	"POST /ui/coord/group/update":     webCoord,
-	"POST /ui/coord/group/leave":      webCoord,
-	"GET /ui/device":                  webAccount,
-	"POST /ui/device":                 webAdmin,
-	"POST /ui/device/decide":          webAdmin,
-	"POST /ui/coord/agent/control":    webAdmin,
-	"GET /ui/account/tokens":          webAccount,
-	"POST /ui/account/tokens/revoke":  webAccount,
-	"GET /ui/orgs":                    webAccount,
-	"POST /ui/orgs/invite":            webAdmin,
-	"POST /ui/orgs/invite/revoke":     webAdmin,
-	"POST /ui/orgs/member/role":       webAdmin,
-	"POST /ui/orgs/member/remove":     webAdmin,
-	"POST /ui/orgs/project/move":      webAdmin,
-	"POST /ui/orgs/project/role":      webAdmin,
-	"POST /ui/orgs/accept":            webAccount,
-	"POST /ui/orgs/default":           webAccount,
+	"GET /static/":                          webPublic,
+	"GET /install.sh":                       webPublic,
+	"GET /dist/{name}":                      webPublic,
+	"GET /join/{code}":                      webPublic,
+	"GET /join/":                            webPublic,
+	"GET /join/pair":                        webAccount,
+	"POST /join/pair":                       webAdmin,
+	"POST /join/pair/decide":                webAdmin,
+	"POST /join/{code}/accept":              webAdmin,
+	"POST /join/{code}/signout":             webAccount,
+	"GET /ui/login":                         webPublic,
+	"POST /ui/login":                        webPublic,
+	"POST /ui/login/oidc":                   webPublic,
+	"GET /ui/login/oidc/callback":           webPublic,
+	"GET /ui/login/code":                    webPublic,
+	"POST /ui/login/code":                   webPublic,
+	"GET /{$}":                              webPublic,
+	"GET /favicon.ico":                      webPublic,
+	"GET /ui/{$}":                           webPublic,
+	"GET /ui/overview":                      webAccount,
+	"GET /ui/agents":                        webCoord,
+	"GET /ui/rooms":                         webCoord,
+	"POST /ui/logout":                       webAccount,
+	"GET /ui/requests":                      webProject,
+	"GET /ui/requests/{id}":                 webProject,
+	"POST /ui/requests/{id}/criteria":       webAdmin,
+	"POST /ui/requests/{id}/criteria/{cid}": webAdmin,
+	"POST /ui/requests/{id}/correct":        webAdmin,
+	"POST /ui/requests/{id}/complete":       webAdmin,
+	"POST /ui/requests/{id}/drop":           webAdmin,
+	"GET /ui/knowledge":                     webProject,
+	"GET /ui/knowledge/{id}":                webProject,
+	"POST /ui/knowledge/{id}/edit":          webAdmin,
+	"GET /ui/review":                        webProject,
+	"POST /ui/review/{id}/{verdict}":        webAdmin,
+	"GET /ui/sessions":                      webProject,
+	"GET /ui/sessions/{id}":                 webProject,
+	"POST /ui/sessions/{id}/share":          webAdmin,
+	"GET /ui/context":                       webProject,
+	"GET /ui/coord":                         webCoord,
+	"GET /ui/coord/events":                  webCoord,
+	"GET /ui/coord/thread/{id}":             webCoord,
+	"POST /ui/coord/send":                   webCoord,
+	"POST /ui/coord/thread/create":          webCoord,
+	"POST /ui/coord/thread/post":            webCoord,
+	"POST /ui/coord/thread/state":           webCoord,
+	"POST /ui/coord/read":                   webCoord,
+	"POST /ui/coord/unread":                 webCoord,
+	"POST /ui/coord/attention/action":       webCoord,
+	"POST /ui/coord/standing/end":           webCoord,
+	"POST /ui/coord/standing/create":        webCoord,
+	"POST /ui/coord/direct/start":           webCoord,
+	"POST /ui/coord/group/create":           webCoord,
+	"POST /ui/coord/group/update":           webCoord,
+	"POST /ui/coord/group/leave":            webCoord,
+	"GET /ui/device":                        webAccount,
+	"POST /ui/device":                       webAdmin,
+	"POST /ui/device/decide":                webAdmin,
+	"POST /ui/coord/agent/control":          webAdmin,
+	"GET /ui/account/tokens":                webAccount,
+	"POST /ui/account/tokens/revoke":        webAccount,
+	"GET /ui/orgs":                          webAccount,
+	"POST /ui/orgs/invite":                  webAdmin,
+	"POST /ui/orgs/invite/revoke":           webAdmin,
+	"POST /ui/orgs/member/role":             webAdmin,
+	"POST /ui/orgs/member/remove":           webAdmin,
+	"POST /ui/orgs/project/move":            webAdmin,
+	"POST /ui/orgs/project/role":            webAdmin,
+	"POST /ui/orgs/accept":                  webAccount,
+	"POST /ui/orgs/default":                 webAccount,
 }
 
 // handle registriert eine Route und bricht ab, wenn sie nicht klassifiziert ist.

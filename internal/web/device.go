@@ -14,9 +14,12 @@ const maxDeviceForm = 4 << 10
 
 // limitBody begrenzt Formularkörper angemeldeter Seiten. requireCSRF liest den
 // Körper mit ParseForm, das ohne Grenze bis zu 10 MB annimmt.
-func limitBody(next http.Handler) http.Handler {
+func limitBody(next http.Handler) http.Handler { return limitBodyN(maxDeviceForm, next) }
+
+// limitBodyN ist limitBody mit eigener Grenze, für Formulare mit langem Text.
+func limitBodyN(limit int64, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r.Body = http.MaxBytesReader(w, r.Body, maxDeviceForm)
+		r.Body = http.MaxBytesReader(w, r.Body, limit)
 		next.ServeHTTP(w, r)
 	})
 }

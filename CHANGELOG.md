@@ -17,6 +17,16 @@ Versioning, with pre-1.0 compatibility rules described in
   of a second list. An invitation link is shown once, only its hash is stored.
   `ctx join` lists what it sets up ("Claude hooks", "MCP server", "skills",
   "CLAUDE.md section" and so on) before it asks and again afterwards.
+- Changed: the Requests pages are redesigned in the Clay look and can edit in
+  the browser. The list searches and filters by state, kind, priority and
+  project, shows each request with its number, kind, priority, criteria progress, age and the
+  readable sessions working on it, and pages back with "Show older". The
+  detail page shows the description, criteria with their proof, work, related
+  items, discussion and history. Add a criterion, resolve or waive it with
+  required proof, correct title, kind, priority and description with a reason,
+  complete with proof, or drop with a reason, each with a visible result. Rights
+  are checked on the server as for the API; a request you may not read answers
+  like an unknown one, and sessions appear only by address and only if readable.
 - Changed: the administration pages (organization with members, invitations,
   projects and project roles; devices and tokens; device approval) are redesigned
   in the Clay look and work on narrow screens. Times show as relative text with

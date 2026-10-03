@@ -116,11 +116,13 @@ type CreateInput struct {
 }
 
 type SearchFilter struct {
-	Scope  scope.Axes
-	State  string
-	Type   string
-	Query  string
-	Cursor string
+	Scope scope.Axes
+	State string
+	Type  string
+	// Priority matches the free-text priority of a request exactly.
+	Priority string
+	Query    string
+	Cursor   string
 	// FullDescription gibt die Beschreibung ungekürzt zurück. Für eine
 	// Trefferliste falsch — 24 volle Beschreibungen sprengen jedes Werkzeuglimit
 	// —, für den Dateispiegel notwendig: der gibt sich nicht als Liste aus,
