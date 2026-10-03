@@ -6,6 +6,20 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Changed: invitations and device pairing are guided. The invitation pages name
+  who invited you and to what, say in one line what ghosttree is, and ask only for
+  your name. Connecting a computer is three steps (open a terminal, copy the
+  command, confirm here) that advance on their own as soon as the server sees the
+  computer; on a phone the page offers to send the command to your computer
+  instead. The approval page has a large field for the four-character code from
+  the terminal, asks "This is me, <name>" without internal ids, and ends with
+  "<machine> is connected" and a button to the overview. A code is used up only
+  by an approved connection: a request nobody approves expires after five
+  minutes, the same installer can run again, "New code" is always offered, and an
+  installer without a terminal prints the finished command with `--yes` and
+  leaves the code unused. Codes stay single-use, short-lived and rate-limited.
+- Changed: ghosttree has a logo mark (a small "g" with eyes) in the sidebar, on
+  the sign-in and invitation pages, and as favicon, with a dark variant.
 - Changed: the Requests pages are redesigned in the Clay look and can edit in
   the browser. The list searches and filters by state, kind, priority and
   project, shows each request with its number, kind, priority, criteria progress, age and the
