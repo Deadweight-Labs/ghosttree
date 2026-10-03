@@ -50,6 +50,7 @@ func cmdInstall(args []string, stdout io.Writer) int {
 		fmt.Fprintf(stdout, "install %s: %v\n", harness, err)
 		return 1
 	}
+	restartStaleWatch(stdout)
 	doctor := "ctx doctor " + harness
 	for _, component := range only {
 		doctor += " --only " + component

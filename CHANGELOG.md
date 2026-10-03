@@ -6,6 +6,15 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Fixed: a collector from before the session addresses (older than the current ctx)
+  no longer loops forever on `403 session_owned` after the server stopped
+  returning the session number. Admins and members of any project now get the
+  number of the session they register themselves, also for sessions without a
+  Git remote; guests still get only the address, and an old client that cannot
+  read it is refused with `409 collector_too_old` ("update ctx"). The collector
+  never uploads to session 0 and retries the registration with a backoff,
+  `ctx doctor` warns when the running watch process uses a replaced or different ctx
+  binary, and `ctx install` restarts the `ghosttree-watch` user unit in that case.
 - Changed: the Requests pages are redesigned in the Clay look and can edit in
   the browser. The list searches and filters by state, kind, priority and
   project, shows each request with its number, kind, priority, criteria progress, age and the

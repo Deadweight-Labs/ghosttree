@@ -155,7 +155,7 @@ func TestGuestSessionCreationReturnsOnlyTheAddress(t *testing.T) {
 	f := accessAPI(t, true)
 	body := map[string]any{"harness": "claude-code", "external_id": "guest-agent", "scope": map[string]string{"project": accProject}}
 	var guest map[string]any
-	if err := json.Unmarshal([]byte(f.expect(t, "gus", 200, "POST", "/api/sessions", body)), &guest); err != nil {
+	if err := json.Unmarshal([]byte(f.expect(t, "gus", 200, "POST", "/api/sessions?refs=public_id", body)), &guest); err != nil {
 		t.Fatal(err)
 	}
 	if n, _ := guest["id"].(float64); n != 0 {
@@ -240,7 +240,7 @@ func TestGuestShareAnswerCarriesTheAddressNotTheNumber(t *testing.T) {
 	f := accessAPI(t, true)
 	body := map[string]any{"harness": "claude-code", "external_id": "guest-own", "scope": map[string]string{"project": accProject}}
 	var made map[string]any
-	if err := json.Unmarshal([]byte(f.expect(t, "gus", 200, "POST", "/api/sessions", body)), &made); err != nil {
+	if err := json.Unmarshal([]byte(f.expect(t, "gus", 200, "POST", "/api/sessions?refs=public_id", body)), &made); err != nil {
 		t.Fatal(err)
 	}
 	pid, _ := made["public_id"].(string)
@@ -251,5 +251,77 @@ func TestGuestShareAnswerCarriesTheAddressNotTheNumber(t *testing.T) {
 	}
 	if _, has := got["id"]; has || got["public_id"] != pid {
 		t.Errorf("guest share answer = %s", out)
+	}
+}
+
+// Sessions ohne Projekt (kein Git-Remote) gehören keinem Projekt, in dem jemand
+// eine Rolle hat. Ältere Collector kennen nur die Nummer: Admin und Mitglieder
+// irgendeines Projekts müssen sie bekommen, sonst laden sie nach /0 hoch.
+func TestOwnSessionNumberForSessionsWithoutProject(t *testing.T) {
+	f := accessAPI(t, true)
+	for _, project := range []string{"", "github.com/nobody/claimed"} {
+		for _, who := range []string{"robin", "mia", "lena"} {
+			body := map[string]any{"harness": "claude-code", "external_id": "np-" + who + project, "scope": map[string]string{"project": project}}
+			var out map[string]any
+			if err := json.Unmarshal([]byte(f.expect(t, who, 200, "POST", "/api/sessions", body)), &out); err != nil {
+				t.Fatal(err)
+			}
+			if n, _ := out["id"].(float64); n == 0 {
+				t.Errorf("%s project %q: no session number: %v", who, project, out)
+			}
+			if out["public_id"] == "" {
+				t.Errorf("%s project %q: no address: %v", who, project, out)
+			}
+		}
+	}
+}
+
+func TestGuestsWithoutRefsSupportGetCollectorTooOld(t *testing.T) {
+	f := accessAPI(t, true)
+	for _, who := range []string{"gus", "nora"} {
+		for _, project := range []string{"", accProject} {
+			if who == "nora" && project != "" {
+				continue // claimed by another organization: refused earlier
+			}
+			body := map[string]any{"harness": "claude-code", "external_id": "old-" + who + project, "scope": map[string]string{"project": project}}
+			out := f.expect(t, who, 409, "POST", "/api/sessions", body)
+			if !strings.Contains(out, "collector_too_old") || !strings.Contains(out, "update ctx") {
+				t.Errorf("%s project %q: answer = %s", who, project, out)
+			}
+			// Nothing was created by the refused request.
+			var list []store.Session
+			if err := json.Unmarshal([]byte(f.expect(t, "robin", 200, "GET", "/api/sessions?limit=500", nil)), &list); err != nil {
+				t.Fatal(err)
+			}
+			for _, s := range list {
+				if s.ExternalID == "old-"+who+project {
+					t.Errorf("%s project %q: refused request created a session", who, project)
+				}
+			}
+			// A client that understands addresses gets the address and no number.
+			body["external_id"] = "new-" + who + project
+			var out2 map[string]any
+			if err := json.Unmarshal([]byte(f.expect(t, who, 200, "POST", "/api/sessions?refs=public_id", body)), &out2); err != nil {
+				t.Fatal(err)
+			}
+			if _, has := out2["id"]; has || out2["public_id"] == "" {
+				t.Errorf("%s project %q: response = %v", who, project, out2)
+			}
+		}
+	}
+}
+
+func TestAdminSeesSessionNumbersInUnclaimedProjects(t *testing.T) {
+	f := accessAPI(t, true)
+	id, err := f.st.UpsertSession(store.Session{Harness: "claude-code", ExternalID: "home-session", AccountID: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pa := f.st.Access(store.Principal{ID: "person:1", Label: "robin"})
+	if !pa.SeesSessionNumbers("") {
+		t.Errorf("admin does not see the number of session %d without project", id)
+	}
+	if f.st.Access(store.Principal{ID: "person:5", Label: "gus"}).SeesSessionNumbers("") {
+		t.Errorf("guest sees numbers of sessions without project")
 	}
 }

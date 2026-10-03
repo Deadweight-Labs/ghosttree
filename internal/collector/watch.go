@@ -68,12 +68,25 @@ func parserFor(harness string) func([]byte) ParsedLine {
 func SyncFile(path, harness string, up Uploader, st *State, machine string) error {
 	fs := st.file(path)
 	ref := store.SessionRef{ID: fs.SessionID, PublicID: fs.PublicID}
+	if _, isRef := up.(RefUploader); !isRef && ref.ID == 0 {
+		// Ein Zustand, der nur eine Adresse kennt, taugt einem Uploader ohne
+		// Adressen nichts: neu anlegen statt nach /0 zu laden.
+		ref = store.SessionRef{}
+	}
 	if ref.Zero() || fs.MetadataVersion < 1 {
+		if wait := st.backoffLeft(path); wait > 0 {
+			return fmt.Errorf("session registration of %s paused for another %s after the server named no usable session", path, wait.Round(time.Second))
+		}
 		var err error
 		ref, err = registerSession(path, harness, up, machine)
 		if err != nil {
+			if errors.Is(err, errNoSessionRef) {
+				st.backoffFail(path)
+				log.Printf("register %s: %v", path, err)
+			}
 			return err
 		}
+		st.backoffClear(path)
 		fs.SessionID, fs.PublicID = ref.ID, ref.PublicID
 		fs.MetadataVersion = 1
 		if err := st.Save(); err != nil {
@@ -222,7 +235,13 @@ func uploadSplit(up Uploader, ref store.SessionRef, batch []store.Chunk) error {
 
 func sendChunks(up Uploader, ref store.SessionRef, batch []store.Chunk) error {
 	if ru, ok := up.(RefUploader); ok {
+		if ref.Zero() {
+			return errNoSessionRef
+		}
 		return ru.AppendChunksRef(ref, batch)
+	}
+	if ref.ID == 0 {
+		return errNoSessionRef
 	}
 	return up.AppendChunks(ref.ID, batch)
 }
@@ -268,13 +287,21 @@ func registerSession(path, harness string, up Uploader, machine string) (store.S
 	if ru, ok := up.(RefUploader); ok {
 		ref, err := ru.UpsertSessionRef(sess)
 		if err == nil && ref.Zero() {
-			err = errors.New("server named no session")
+			err = errNoSessionRef
 		}
 		return ref, err
 	}
 	id, err := up.UpsertSession(sess)
+	if err == nil && id == 0 {
+		err = errNoSessionRef
+	}
 	return store.SessionRef{ID: id}, err
 }
+
+// errNoSessionRef: der Server hat weder Nummer noch Adresse genannt (etwa weil
+// ein älterer Collector die Adresse nicht versteht). Hochgeladen wird dann nie:
+// Nummer 0 gibt es nicht, jeder Versuch endete in 403.
+var errNoSessionRef = errors.New("server named no usable session number or address (is this ctx too old? update ctx and restart ghosttree-watch)")
 
 func firstLines(path string, n int) ([][]byte, error) {
 	f, err := os.Open(path)

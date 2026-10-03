@@ -118,9 +118,28 @@ func (a *ProjectAccess) guestView(sess Session) Session {
 }
 
 // SeesSessionNumbers: der Betrachter darf die laufende Nummer der Sessions des
-// Projekts kennen (Mitglied ab member, oder ohne Durchsetzung).
+// Projekts kennen (Admin, Mitglied ab member, oder ohne Durchsetzung). Der Admin
+// liest ohnehin jedes Transkript; ihm verrät die Nummer nichts Verborgenes.
 func (a *ProjectAccess) SeesSessionNumbers(project string) bool {
-	return !a.st.AccessEnforced() || RoleRank(a.Role(project).Role) >= 2
+	return !a.st.AccessEnforced() || a.IsAdmin() || RoleRank(a.Role(project).Role) >= 2
+}
+
+// GetsOwnSessionNumber: die Nummer der Session, die der Betrachter gerade selbst
+// anlegt. Wer irgendwo Mitglied ist, kennt laufende Nummern ohnehin (auch die
+// verborgener Sessions dazwischen); sie bei einer eigenen Session zurückzuhalten
+// schützt nichts und lässt Sessions ohne Projekt (kein Git-Remote) oder in noch
+// nicht beanspruchten Projekten für ältere Collector unerreichbar. Reine Gäste
+// (und Konten ganz ohne Rolle) bekommen sie nie (#2447, #2482).
+func (a *ProjectAccess) GetsOwnSessionNumber(project string) bool {
+	if a.SeesSessionNumbers(project) {
+		return true
+	}
+	for _, p := range a.Projects() {
+		if RoleRank(a.Role(p).Role) >= 2 {
+			return true
+		}
+	}
+	return false
 }
 
 // ReadsAll: der Betrachter liest ohnehin jedes Transkript (Admin, oder ohne
