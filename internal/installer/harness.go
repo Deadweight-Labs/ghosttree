@@ -31,6 +31,11 @@ const (
 	// every tool, and it only reads a local flag file. Claude only; Codex has no
 	// measured pause interface and stays a named gap.
 	ChannelPauseGate Channel = "pause-gate"
+	// ChannelCoordInbox is how a message for the agent reaches it while it
+	// works: PostToolUse fires on every tool call inside the agent loop, with no
+	// new prompt needed, and the hook looks at the coordination inbox at most
+	// once a minute. Claude Code only; Codex's PostToolUse is not measured.
+	ChannelCoordInbox Channel = "coord-inbox"
 	// ChannelMCP is the pull side. Every harness ghosttree supports has it, and
 	// it is the only channel that answers a question rather than anticipating
 	// one.
@@ -77,7 +82,7 @@ func Harnesses() []Harness {
 		{
 			Name:       "claude",
 			Components: append([]Component(nil), componentOrder...),
-			Channels:   []Channel{ChannelSessionStart, ChannelUserPrompt, ChannelPreToolUse, ChannelPauseGate, ChannelMCP},
+			Channels:   []Channel{ChannelSessionStart, ChannelUserPrompt, ChannelPreToolUse, ChannelPauseGate, ChannelCoordInbox, ChannelMCP},
 			Delivers:   []Channel{ChannelSessionStart, ChannelUserPrompt, ChannelPreToolUse, ChannelMCP},
 			HooksPath:  func(home string) string { return filepath.Join(home, ".claude", "settings.json") },
 			RulePath:   func(home string) string { return filepath.Join(home, ".claude", "CLAUDE.md") },
@@ -196,6 +201,8 @@ func (h Harness) hookCommandFor(c Channel) (event, command, matcher string, ok b
 		return "PreToolUse", preToolHookCommand + " --harness " + h.Name, "Read|Edit|Write|NotebookEdit", true
 	case ChannelPauseGate:
 		return "PreToolUse", pauseGateHookCommand + " --harness " + h.Name, "", true
+	case ChannelCoordInbox:
+		return "PostToolUse", postToolHookCommand + " --harness " + h.Name, "", true
 	}
 	return "", "", "", false
 }

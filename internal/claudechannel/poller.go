@@ -91,6 +91,25 @@ type Poller struct {
 	readOK   bool // mindestens ein Raum wurde in diesem Durchlauf gelesen
 }
 
+// Positions is the polling position per room, and SetPositions restores it. A
+// poller that lives for one hook call needs this: without it every call would
+// start again at the shared cursor, which stays behind any message that did not
+// wake, and a mention behind a hundred such messages would never be reached.
+func (p *Poller) Positions() map[string]int64 {
+	out := make(map[string]int64, len(p.pos))
+	for room, id := range p.pos {
+		out[room] = id
+	}
+	return out
+}
+
+func (p *Poller) SetPositions(pos map[string]int64) {
+	p.pos = make(map[string]int64, len(pos))
+	for room, id := range pos {
+		p.pos[room] = id
+	}
+}
+
 // Heartbeater ist die optionale Seite einer Source, die den Abruf auf dem
 // Server vermerkt (Erreichbarkeit, REQ-360). Der Poller ruft sie höchstens
 // einmal je store.HeartbeatInterval.
