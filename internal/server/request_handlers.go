@@ -138,6 +138,13 @@ func (a *api) startRequestWork(w http.ResponseWriter, r *http.Request) {
 	if !a.checkRequest(w, r, store.RefRequest, requestID, store.ActWork) {
 		return
 	}
+	// Die Session muss dem Aufrufer gehören oder für ihn lesbar sein. Eine
+	// fremde, verborgene oder fehlende Nummer antwortet gleich (#2447).
+	if sess, err := a.st.SessionByID(body.SessionID); err != nil || !a.access(r).CanSeeTranscript(sess) {
+		a.access(r).Filtered()
+		writeRequestError(w, sql.ErrNoRows)
+		return
+	}
 	work, warnings, err := a.st.StartRequestWork(requestID, body.SessionID, body.Role, personOf(r))
 	if err != nil {
 		writeRequestError(w, err)
@@ -160,7 +167,7 @@ func (a *api) finishRequestWork(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
-	if !a.checkRequest(w, r, store.RefWork, workID, store.ActWork) || !a.checkWorkSession(w, r, workID) {
+	if !a.checkWorkAccess(w, r, workID) {
 		return
 	}
 	work, err := a.st.FinishRequestWork(workID, body.State, body.Summary, personOf(r))
@@ -348,20 +355,23 @@ func writeRequestError(w http.ResponseWriter, err error) {
 	writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "internal", "message": "request operation failed", "resolution": "retry or inspect server logs"})
 }
 
-// checkWorkSession: wer die Session-Nummern des Projekts nicht kennen darf, darf
-// nur Arbeit beenden, deren Session er lesen kann (eigene eingeschlossen). Für
-// jede andere antwortet der Pfad wie für eine unbekannte Id, sonst verriete die
-// Antwort (Stand, Rolle, work_not_active), dass es die verborgene Arbeit gibt.
-func (a *api) checkWorkSession(w http.ResponseWriter, r *http.Request, workID int64) bool {
+// checkWorkAccess prüft das Beenden von Arbeit. Wer die Session-Nummern des
+// Projekts nicht kennen darf, darf nur Arbeit beenden, an der er arbeiten darf
+// und deren Session er lesen kann (eigene eingeschlossen). Jede andere
+// Ablehnung, die Rollenprüfung eingeschlossen, antwortet wie für eine unbekannte
+// Id, sonst verriete Status oder Text (403, 404 mit anderem Body, work_not_active),
+// dass es die verborgene Arbeit gibt (#2485).
+func (a *api) checkWorkAccess(w http.ResponseWriter, r *http.Request, workID int64) bool {
 	pa := a.access(r)
 	ref, err := a.st.RequestRef(store.RefWork, workID)
 	if err != nil || pa.SeesSessionNumbers(ref.Project) {
-		return true
+		return a.checkRequest(w, r, store.RefWork, workID, store.ActWork)
 	}
-	sid, err := a.st.RequestWorkSession(workID)
-	if err == nil {
-		if sess, serr := a.st.SessionByID(sid); serr == nil && pa.CanSeeTranscript(sess) {
-			return true
+	if pa.Decide(ref.Project, store.ResRequest, store.ActWork, store.Object{Own: pa.IsAuthor(ref.Person)}).Allowed {
+		if sid, err := a.st.RequestWorkSession(workID); err == nil {
+			if sess, serr := a.st.SessionByID(sid); serr == nil && pa.CanSeeTranscript(sess) {
+				return true
+			}
 		}
 	}
 	pa.Filtered()

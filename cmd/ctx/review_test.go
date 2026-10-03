@@ -127,3 +127,17 @@ func withConfig(t *testing.T, serverURL string) {
 		t.Fatal(err)
 	}
 }
+
+// A guest's evidence carries the session address and no number; the listing
+// must show the address, never "session 0".
+func TestPendingEntryNamesSessionByPublicAddress(t *testing.T) {
+	var out bytes.Buffer
+	writePendingEntry(&out, client.PendingEntry{
+		Knowledge: store.Knowledge{ID: 7, Type: "pitfall", Confidence: "quarantined", Title: "t", Body: "b"},
+		Evidence:  []store.Evidence{{SessionPublicID: "abc123def456", ChunkSeq: 4, Quote: "q"}, {SessionID: 12, ChunkSeq: 1, Quote: "r"}},
+	})
+	got := out.String()
+	if strings.Contains(got, "session 0") || !strings.Contains(got, "session abc123def456 chunk 4") || !strings.Contains(got, "session 12 chunk 1") {
+		t.Fatalf("evidence lines wrong:\n%s", got)
+	}
+}

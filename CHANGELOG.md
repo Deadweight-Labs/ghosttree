@@ -12,7 +12,14 @@ Versioning, with pre-1.0 compatibility rules described in
   reference, its quotes and its session counts are left out, in the knowledge
   API, the search, the review list and the web pages. Ending request work whose
   session is hidden from you answers exactly like an unknown id; members still
-  end anyone's work, and everyone ends their own.
+  end anyone's work, and everyone ends their own. This now holds for project
+  requests too: a guest, a stranger and an unknown id get the same status and
+  body. Starting work needs a session you own or may read, and answers the same
+  for a hidden and a missing one. A session number sent with new knowledge is
+  dropped for anyone who may not know numbers, global knowledge follows the
+  project of the session it points at, the review list prints the address
+  instead of "session 0", and the knowledge label hands `session_ref` or
+  `session_id` straight to `context_sessions`.
 - Fixed: ending a standing instruction needs more than room access. Only its
   author, or someone whose project rank is at least the author's (owners and
   instance admins always), can end it; anyone else gets "forbidden", and the

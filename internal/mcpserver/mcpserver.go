@@ -4,6 +4,8 @@ package mcpserver
 import (
 	"context"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -531,7 +533,7 @@ func knowledgeLabel(k store.Knowledge) string {
 			activationLabel = strings.Join(activationParts, ";")
 		}
 	}
-	source := k.SessionRef
+	source := sessionSource(k.SessionRef)
 	if source == "" {
 		source = k.Origin
 	}
@@ -541,6 +543,22 @@ func knowledgeLabel(k store.Knowledge) string {
 		label += "|" + provenance
 	}
 	return label
+}
+
+var sessionSourcePattern = regexp.MustCompile(`^session:([A-Za-z0-9]+)#(\d+)$`)
+
+// sessionSource writes a session reference so its parts paste straight into
+// context_sessions: session_ref takes the bare address, session_id the number.
+func sessionSource(ref string) string {
+	m := sessionSourcePattern.FindStringSubmatch(ref)
+	if m == nil {
+		return ref
+	}
+	key := "session_ref"
+	if _, err := strconv.ParseInt(m[1], 10, 64); err == nil {
+		key = "session_id"
+	}
+	return "session|" + key + ":" + m[1] + "|chunk:" + m[2]
 }
 
 func renderKnowledge(k store.Knowledge) string {

@@ -1,12 +1,14 @@
 package store
 
+import "strconv"
+
 // KnowledgeView formt einen Wissenseintrag für den Betrachter. Wer die laufenden
 // Session-Nummern des Projekts nicht kennen darf (#2447, #2482), bekommt den
 // Verweis "session:<n>#<seq>" aus der Destillation nur als Adresse der Session
 // und nur, wenn er ihr Transkript lesen darf; sonst fehlt der Verweis, denn auch
 // seine Anwesenheit verriete eine verborgene Session.
 func (a *ProjectAccess) KnowledgeView(k Knowledge) Knowledge {
-	if a.SeesSessionNumbers(k.Scope.Project) {
+	if a.seesKnowledgeNumbers(k) {
 		return k
 	}
 	if ref, ok := rewriteSessionRef(k.SessionRef, a.readableSessionLookup()); ok {
@@ -15,6 +17,38 @@ func (a *ProjectAccess) KnowledgeView(k Knowledge) Knowledge {
 		k.SessionRef = ""
 	}
 	return k
+}
+
+// seesKnowledgeNumbers: globales Wissen hat kein Projekt, das über die Nummer
+// entschiede; dann zählt das Projekt der Session, auf die der Eintrag verweist.
+// Eine Session, die es nicht gibt, schaltet nichts frei.
+func (a *ProjectAccess) seesKnowledgeNumbers(k Knowledge) bool {
+	if k.Scope.Project != "" {
+		return a.SeesSessionNumbers(k.Scope.Project)
+	}
+	if !a.st.AccessEnforced() || a.IsAdmin() {
+		return true
+	}
+	m := sessionRefPattern.FindStringSubmatch(k.SessionRef)
+	if m == nil {
+		return false
+	}
+	id, err := strconv.ParseInt(m[1], 10, 64)
+	if err != nil {
+		return false
+	}
+	sess, err := a.st.SessionByID(id)
+	return err == nil && a.SeesSessionNumbers(sess.Scope.Project)
+}
+
+// DropWrittenSessionNumber verwirft beim Anlegen von Wissen eine numerische
+// Angabe session:<n>, wenn der Schreibende die Nummern des Projekts nicht
+// kennen darf. Die Antwort enthielte sie sonst umgeschrieben oder gar nicht,
+// je nachdem, ob es die Session gibt und ob er sie lesen darf (#2447, #2482).
+func (a *ProjectAccess) DropWrittenSessionNumber(k *Knowledge) {
+	if a.st.AccessEnforced() && !a.IsAdmin() && !a.SeesSessionNumbers(k.Scope.Project) && sessionRefPattern.MatchString(k.SessionRef) {
+		k.SessionRef = ""
+	}
 }
 
 // KnowledgeViews wendet KnowledgeView auf eine Liste an.

@@ -246,6 +246,7 @@ func (a *api) createKnowledge(w http.ResponseWriter, r *http.Request) {
 	if denyAccess(w, a.access(r).CheckKnowledgeCreate(k)) {
 		return
 	}
+	a.access(r).DropWrittenSessionNumber(&k)
 	id, err := a.st.InsertKnowledge(k)
 	if err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)
