@@ -1,0 +1,578 @@
+package web
+
+import (
+	"net/http"
+	"net/url"
+	"regexp"
+	"strconv"
+	"strings"
+	"testing"
+
+	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
+	"github.com/Deadweight-Labs/ghosttree/internal/scope"
+	"github.com/Deadweight-Labs/ghosttree/internal/store"
+)
+
+type rqSpec struct {
+	Title, Desc, Type, Priority, Project, Person string
+	Criteria                                     []string
+}
+
+func rqMake(t *testing.T, st *store.Store, s rqSpec) requestdomain.Detail {
+	t.Helper()
+	if s.Project == "" {
+		s.Project = shellProject
+	}
+	if s.Type == "" {
+		s.Type = "feature"
+	}
+	if s.Person == "" {
+		s.Person = "alice"
+	}
+	d, err := st.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: s.Type, Title: s.Title, Description: s.Desc,
+		Priority: s.Priority, Scope: scope.Axes{Project: s.Project}, Person: s.Person}, Criteria: s.Criteria})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
+func rqPath(id int64, rest string) string { return "/ui/requests/" + strconv.FormatInt(id, 10) + rest }
+
+func rqPost(t *testing.T, e shellEnv, c *http.Client, id int64, rest string, form url.Values) *http.Response {
+	t.Helper()
+	if form == nil {
+		form = url.Values{}
+	}
+	form.Set("csrf_token", renderedCSRFToken(t, c, e.Base+"/ui/requests"))
+	return sameOriginPostForm(t, c, e.Base+rqPath(id, rest), form)
+}
+
+func TestRequestListShowsTitleNumberKindPriorityProgressAndAge(t *testing.T) {
+	e := seedSessions(t)
+	d := rqMake(t, e.St, rqSpec{Title: "Ship the exporter", Desc: "Export all.", Type: "bug", Priority: "hoch", Criteria: []string{"a", "b", "c"}})
+	if err := e.St.SetCriterionState(d.Criteria[0].ID, "met", requestdomain.Evidence{Kind: "test", Ref: "go test", Person: "alice"}); err != nil {
+		t.Fatal(err)
+	}
+	rqMake(t, e.St, rqSpec{Title: "Plain feature", Type: "feature", Priority: "mittel"})
+	if _, _, err := e.St.StartRequestWork(d.Request.ID, e.id["anna-project"], "primary", "anna"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := e.St.StartRequestWork(d.Request.ID, e.id["alice-private"], "related", "alice"); err != nil {
+		t.Fatal(err)
+	}
+	code, page := e.get(t, e.Member, "/ui/requests")
+	if code != 200 {
+		t.Fatalf("status %d", code)
+	}
+	for _, want := range []string{"Ship the exporter", "REQ-" + strconv.FormatInt(d.Request.ID, 10), "Bug", "hoch", "1/3", `data-pct="33"`,
+		`href="/ui/requests/` + strconv.FormatInt(d.Request.ID, 10) + `"`, `/ui/sessions/` + e.pid["anna-project"], "/static/requests.css", `aria-current="page"`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("member list lacks %q", want)
+		}
+	}
+	if strings.Contains(page, e.pid["alice-private"]) {
+		t.Error("the list links a session the viewer may not read")
+	}
+	if strings.Contains(page, "<style") || strings.Contains(page, " style=") || strings.Contains(page, "onclick") {
+		t.Error("requests page breaks the CSP")
+	}
+	for query, want := range map[string]string{"type=bug": "Ship the exporter", "priority=mittel": "Plain feature", "q=exporter": "Ship the exporter"} {
+		_, narrowed := e.get(t, e.Member, "/ui/requests?"+query)
+		other := "Plain feature"
+		if want == other {
+			other = "Ship the exporter"
+		}
+		if !strings.Contains(narrowed, want) || strings.Contains(narrowed, other) {
+			t.Errorf("filter %s does not narrow the list", query)
+		}
+	}
+	_, prio := e.get(t, e.Member, "/ui/requests?priority=hoch")
+	if !strings.Contains(prio, `<option value="mittel">`) {
+		t.Error("the priority filter lost the other priorities")
+	}
+}
+
+func TestRequestListStateFilterAndPaging(t *testing.T) {
+	e := ovEnv(t)
+	done := rqMake(t, e.St, rqSpec{Title: "Finished one"})
+	if err := e.St.CompleteRequest(done.Request.ID, requestdomain.Evidence{Kind: "commit", Ref: "abc", Person: "alice"}); err != nil {
+		t.Fatal(err)
+	}
+	dropped := rqMake(t, e.St, rqSpec{Title: "Dropped one"})
+	if err := e.St.DropRequest(dropped.Request.ID, "not needed", "alice"); err != nil {
+		t.Fatal(err)
+	}
+	rqMake(t, e.St, rqSpec{Title: "Still open"})
+	for state, want := range map[string][]string{"": {"Still open"}, "done": {"Finished one"}, "dropped": {"Dropped one"}, "all": {"Still open", "Finished one", "Dropped one"}} {
+		_, page := fetchPage(t, e.Owner, e.Base+"/ui/requests?state="+state)
+		for _, title := range []string{"Still open", "Finished one", "Dropped one"} {
+			has := strings.Contains(page, title)
+			wanted := false
+			for _, w := range want {
+				wanted = wanted || w == title
+			}
+			if has != wanted {
+				t.Errorf("state=%q: %q shown=%v want %v", state, title, has, wanted)
+			}
+		}
+	}
+	for i := 0; i < requestsShown+3; i++ {
+		rqMake(t, e.St, rqSpec{Title: "Bulk " + strconv.Itoa(i)})
+	}
+	_, first := fetchPage(t, e.Owner, e.Base+"/ui/requests")
+	m := regexp.MustCompile(`href="(/ui/requests\?[^"]*cursor=[^"]*)"`).FindStringSubmatch(first)
+	if m == nil {
+		t.Fatal("no link to older requests")
+	}
+	_, older := fetchPage(t, e.Owner, e.Base+strings.ReplaceAll(m[1], "&amp;", "&"))
+	if !strings.Contains(older, "Still open") || strings.Contains(older, "Bulk 20") {
+		t.Error("the older page does not continue the list")
+	}
+}
+
+func TestRequestListEmptyIsOneLineAndOneAction(t *testing.T) {
+	e := ovEnv(t)
+	_, owner := fetchPage(t, e.Owner, e.Base+"/ui/requests")
+	if !strings.Contains(owner, "No requests yet.") || strings.Count(owner, `href="/ui/overview?connect=1"`) != 1 {
+		t.Error("empty list lacks the line or the single action")
+	}
+	_, guest := fetchPage(t, e.Guest, e.Base+"/ui/requests")
+	if !strings.Contains(guest, "Nothing here yet.") || strings.Contains(guest, "connect=1") {
+		t.Error("guest empty state offers an action or lacks the line")
+	}
+	_, none := fetchPage(t, e.Owner, e.Base+"/ui/requests?q=nothingmatchesthis")
+	if !strings.Contains(none, "Nothing matches.") || !strings.Contains(none, "Clear filters") {
+		t.Error("no-match state lacks its line or action")
+	}
+}
+
+func TestRequestListHidesWhatTheViewerMayNotRead(t *testing.T) {
+	e := seedSessions(t)
+	rqMake(t, e.St, rqSpec{Title: "Visible request"})
+	rqMake(t, e.St, rqSpec{Title: "SECRET-REQ", Project: shellHiddenProject})
+	hidden := rqMake(t, e.St, rqSpec{Title: "Open work", Criteria: []string{"x"}})
+	for _, who := range []string{"anna-private", "alice-private"} {
+		if _, _, err := e.St.StartRequestWork(hidden.Request.ID, e.id[who], "related", "x"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, c := range map[string]*http.Client{"member": e.Member, "guest": e.Guest, "lead": e.Lead} {
+		_, page := e.get(t, c, "/ui/requests")
+		if strings.Contains(page, "SECRET") || strings.Contains(page, shellHiddenProject) {
+			t.Errorf("%s list leaks the hidden project", name)
+		}
+		if !strings.Contains(page, "Visible request") {
+			t.Errorf("%s list lacks the visible request", name)
+		}
+	}
+	_, guest := e.get(t, e.Guest, "/ui/requests")
+	for _, leak := range []string{e.pid["anna-private"], e.pid["alice-private"], "session:", `class="rq-working"`} {
+		if strings.Contains(guest, leak) {
+			t.Errorf("guest list leaks %q", leak)
+		}
+	}
+	if code, _ := e.get(t, e.Guest, "/ui/requests?project="+url.QueryEscape(shellHiddenProject)); code != http.StatusNotFound {
+		t.Errorf("guest asking for the hidden project = %d", code)
+	}
+	_, owner := e.get(t, e.Owner, "/ui/requests")
+	if !strings.Contains(owner, "SECRET-REQ") {
+		t.Error("the owner does not see every project")
+	}
+	_, scoped := e.get(t, e.Owner, "/ui/requests?project="+url.QueryEscape(shellProject))
+	if strings.Contains(scoped, "SECRET-REQ") {
+		t.Error("the project selector does not narrow the list")
+	}
+}
+
+func TestRequestDetailShowsDescriptionCriteriaProofWorkAndRelations(t *testing.T) {
+	e := seedSessions(t)
+	d := rqMake(t, e.St, rqSpec{Title: "Detail request", Desc: "First paragraph.\n\nSecond with `code`.", Priority: "hoch", Criteria: []string{"Exports run", "Docs updated"}})
+	other := rqMake(t, e.St, rqSpec{Title: "Related one"})
+	secret := rqMake(t, e.St, rqSpec{Title: "SECRET-OTHER", Project: shellHiddenProject})
+	sess := strconv.FormatInt(e.id["anna-project"], 10)
+	priv := strconv.FormatInt(e.id["alice-private"], 10)
+	if err := e.St.SetCriterionState(d.Criteria[0].ID, "met", requestdomain.Evidence{Kind: "session", Ref: "session:" + sess + "#3", Person: "anna"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.St.SetCriterionState(d.Criteria[1].ID, "waived", requestdomain.Evidence{Kind: "session", Ref: "session:" + priv + "#9", Person: "anna"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := e.St.StartRequestWork(d.Request.ID, e.id["anna-project"], "primary", "anna"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := e.St.StartRequestWork(d.Request.ID, e.id["alice-private"], "related", "alice"); err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []requestdomain.Relation{{Kind: "related", OtherRequestID: other.Request.ID}, {Kind: "blocks", OtherRequestID: secret.Request.ID}, {Kind: "external", ExternalRef: "https://example.com/x"}} {
+		if _, err := e.St.AddRequestRelation(d.Request.ID, rel, "alice"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	code, page := e.get(t, e.Member, rqPath(d.Request.ID, ""))
+	if code != 200 {
+		t.Fatalf("status %d", code)
+	}
+	for _, want := range []string{"Detail request", "REQ-" + strconv.FormatInt(d.Request.ID, 10), "hoch", "First paragraph.", "<code>code</code>", "2/2",
+		"AC-" + strconv.FormatInt(d.Request.ID, 10) + ".1", "Exports run", `href="/ui/sessions/` + e.pid["anna-project"] + `#c3"`,
+		"Private session", "Working", "Related one", `href="/ui/requests/` + strconv.FormatInt(other.Request.ID, 10) + `"`, "https://example.com/x", "Criterion met", "Work started"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("member detail lacks %q", want)
+		}
+	}
+	for _, leak := range []string{"SECRET", "session:" + sess, "session:" + priv, e.pid["alice-private"], shellHiddenProject} {
+		if strings.Contains(page, leak) {
+			t.Errorf("member detail leaks %q", leak)
+		}
+	}
+	if regexp.MustCompile(`/ui/sessions/\d+["?#]`).MatchString(page) {
+		t.Error("a numeric session address is rendered")
+	}
+	if strings.Contains(page, "<style") || strings.Contains(page, " style=") {
+		t.Error("detail page breaks the CSP")
+	}
+}
+
+func TestRequestDetailForAGuestCarriesNoHiddenSessionAndNoNumbers(t *testing.T) {
+	e := seedSessions(t)
+	d := rqMake(t, e.St, rqSpec{Title: "Guest-visible", Criteria: []string{"One", "Two"}})
+	hid, vis := strconv.FormatInt(e.id["anna-private"], 10), strconv.FormatInt(e.id["anna-guests"], 10)
+	if err := e.St.SetCriterionState(d.Criteria[0].ID, "met", requestdomain.Evidence{Kind: "session", Ref: "session:" + hid + "#4", Person: "anna"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.St.SetCriterionState(d.Criteria[1].ID, "met", requestdomain.Evidence{Kind: "session", Ref: "session:" + vis + "#5", Person: "anna"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := e.St.StartRequestWork(d.Request.ID, e.id["anna-private"], "primary", "anna"); err != nil {
+		t.Fatal(err)
+	}
+	if err := func() error {
+		w, _, err := e.St.StartRequestWork(d.Request.ID, e.id["anna-guests"], "related", "anna")
+		if err != nil {
+			return err
+		}
+		_, err = e.St.FinishRequestWork(w.ID, "paused", "handoff-visible", "anna")
+		return err
+	}(); err != nil {
+		t.Fatal(err)
+	}
+	code, page := e.get(t, e.Guest, rqPath(d.Request.ID, ""))
+	if code != 200 {
+		t.Fatalf("status %d", code)
+	}
+	if !strings.Contains(page, `/ui/sessions/`+e.pid["anna-guests"]+`#c5`) || !strings.Contains(page, "handoff-visible") {
+		t.Error("the guest lacks the readable session link or handoff")
+	}
+	for _, leak := range []string{e.pid["anna-private"], "session:", "Private session", "#c4", "/criteria/", "/correct", "/complete", "/drop", `name="csrf_token" value="` + "x"} {
+		if strings.Contains(page, leak) {
+			t.Errorf("guest detail leaks or offers %q", leak)
+		}
+	}
+	// 2/2 criteria are met, but only one proof is readable: the hidden one is dropped, not blanked.
+	if strings.Count(page, `class="rq-evidence"`) != 1 {
+		t.Errorf("guest sees %d proofs, want 1", strings.Count(page, `class="rq-evidence"`))
+	}
+}
+
+func TestRequestDetailOfAHiddenOrUnknownRequestIsNotFoundByteForByte(t *testing.T) {
+	e := ovEnv(t)
+	hidden := rqMake(t, e.St, rqSpec{Title: "SECRET-HIDDEN", Project: shellHiddenProject})
+	for name, c := range map[string]*http.Client{"member": e.Member, "guest": e.Guest, "lead": e.Lead} {
+		c1, b1 := fetchPage(t, c, e.Base+rqPath(hidden.Request.ID, ""))
+		c2, b2 := fetchPage(t, c, e.Base+rqPath(hidden.Request.ID+1000, ""))
+		if c1 != http.StatusNotFound || c1 != c2 || b1 != b2 || strings.Contains(b1, "SECRET") {
+			t.Errorf("%s: hidden %d %q vs unknown %d %q", name, c1, b1, c2, b2)
+		}
+	}
+	if code, _ := fetchPage(t, e.Owner, e.Base+rqPath(hidden.Request.ID, "")); code != 200 {
+		t.Errorf("owner detail = %d", code)
+	}
+}
+
+func TestRequestAddCriterionResolveWithProofAndResultLine(t *testing.T) {
+	e := ovEnv(t)
+	d := rqMake(t, e.St, rqSpec{Title: "Work it", Criteria: []string{"Existing"}})
+	id := d.Request.ID
+	// A member may work on, but not edit, a request of someone else.
+	if resp := rqPost(t, e, e.Member, id, "/criteria", url.Values{"description": {"By anna"}}); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("member adding a criterion to a foreign request = %d", resp.StatusCode)
+	}
+	resp := rqPost(t, e, e.Lead, id, "/criteria", url.Values{"description": {"Brand new criterion"}})
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("lead adding a criterion = %d", resp.StatusCode)
+	}
+	_, page := fetchPage(t, e.Lead, e.Base+resp.Header.Get("Location"))
+	if !strings.Contains(page, "Criterion added: Brand new criterion") || !strings.Contains(page, `role="status"`) {
+		t.Error("no result line after adding")
+	}
+	if resp := rqPost(t, e, e.Lead, id, "/criteria", url.Values{"description": {"   "}}); resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("empty criterion = %d", resp.StatusCode)
+	}
+	det, _ := e.St.RequestByID(id)
+	if len(det.Criteria) != 2 {
+		t.Fatalf("criteria = %d", len(det.Criteria))
+	}
+	first := det.Criteria[0].ID
+	target := "/criteria/" + strconv.FormatInt(first, 10)
+	for name, form := range map[string]url.Values{
+		"no proof":       {"evidence_kind": {"commit"}, "evidence_ref": {" "}},
+		"no kind":        {"evidence_ref": {"abc"}},
+		"unknown kind":   {"evidence_kind": {"hearsay"}, "evidence_ref": {"abc"}},
+		"missing fields": {},
+	} {
+		if resp := rqPost(t, e, e.Member, id, target, form); resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s: %d", name, resp.StatusCode)
+		}
+	}
+	if det, _ := e.St.RequestByID(id); det.Criteria[0].State != "open" {
+		t.Fatal("a refused proof resolved the criterion")
+	}
+	resp = rqPost(t, e, e.Member, id, target, url.Values{"state": {"met"}, "evidence_kind": {"test"}, "evidence_ref": {"go test ./internal/web"}})
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("member resolving = %d", resp.StatusCode)
+	}
+	det, _ = e.St.RequestByID(id)
+	if det.Criteria[0].State != "met" || len(det.Criteria[0].Evidence) != 1 || det.Criteria[0].Evidence[0].Ref != "go test ./internal/web" || det.Criteria[0].Evidence[0].Person != "anna" {
+		t.Errorf("criterion not recorded with proof and person: %+v", det.Criteria[0])
+	}
+	_, page = fetchPage(t, e.Member, e.Base+resp.Header.Get("Location"))
+	if !strings.Contains(page, "Met: Existing") || !strings.Contains(page, "go test ./internal/web") {
+		t.Error("result line or proof missing after resolving")
+	}
+	// Resolving twice, or a criterion of another request, changes nothing.
+	if resp := rqPost(t, e, e.Member, id, target, url.Values{"evidence_kind": {"test"}, "evidence_ref": {"again"}}); resp.StatusCode != http.StatusConflict {
+		t.Errorf("resolving twice = %d", resp.StatusCode)
+	}
+	foreign := rqMake(t, e.St, rqSpec{Title: "Other", Criteria: []string{"theirs"}})
+	if resp := rqPost(t, e, e.Member, id, "/criteria/"+strconv.FormatInt(foreign.Criteria[0].ID, 10), url.Values{"evidence_kind": {"test"}, "evidence_ref": {"x"}}); resp.StatusCode != http.StatusNotFound {
+		t.Errorf("a criterion of another request = %d", resp.StatusCode)
+	}
+	if d2, _ := e.St.RequestByID(foreign.Request.ID); d2.Criteria[0].State != "open" {
+		t.Error("a criterion was resolved through another request")
+	}
+	// Waiving needs proof too.
+	second := det.Criteria[1].ID
+	resp = rqPost(t, e, e.Lead, id, "/criteria/"+strconv.FormatInt(second, 10), url.Values{"state": {"waived"}, "evidence_kind": {"decision"}, "evidence_ref": {"not needed"}})
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("waive = %d", resp.StatusCode)
+	}
+	if det, _ = e.St.RequestByID(id); det.Criteria[1].State != "waived" {
+		t.Error("criterion not waived")
+	}
+	// An invented result line shows nothing.
+	_, fake := fetchPage(t, e.Owner, e.Base+rqPath(id, "?done=completed"))
+	if strings.Contains(fake, "Completed.") {
+		t.Error("a made-up address claims the request is completed")
+	}
+}
+
+func TestRequestCorrectNeedsAReasonAndEditRight(t *testing.T) {
+	e := ovEnv(t)
+	d := rqMake(t, e.St, rqSpec{Title: "Old title", Desc: "Old text", Priority: "mittel", Type: "bug"})
+	id := d.Request.ID
+	form := func(m map[string]string) url.Values {
+		v := url.Values{"title": {"Old title"}, "description": {"Old text"}, "type": {"bug"}, "priority": {"mittel"}, "reason": {"it was wrong"}}
+		for k, val := range m {
+			v.Set(k, val)
+		}
+		return v
+	}
+	if resp := rqPost(t, e, e.Member, id, "/correct", form(map[string]string{"title": "Hijack"})); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("member correcting a foreign request = %d", resp.StatusCode)
+	}
+	if resp := rqPost(t, e, e.Guest, id, "/correct", form(map[string]string{"title": "Hijack"})); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("guest correcting = %d", resp.StatusCode)
+	}
+	for name, change := range map[string]map[string]string{
+		"no reason": {"title": "New", "reason": " "}, "no change": {}, "empty title": {"title": " "},
+		"bad type": {"type": "epic"}, "empty description": {"description": ""},
+	} {
+		if resp := rqPost(t, e, e.Lead, id, "/correct", form(change)); resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s: %d", name, resp.StatusCode)
+		}
+	}
+	if got, _ := e.St.RequestByID(id); got.Request.Title != "Old title" {
+		t.Fatal("a refused correction changed the request")
+	}
+	resp := rqPost(t, e, e.Lead, id, "/correct", form(map[string]string{"title": "New title", "description": "Para one\r\n\r\nPara two", "priority": "hoch", "type": "feature"}))
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("lead correcting = %d", resp.StatusCode)
+	}
+	got, _ := e.St.RequestByID(id)
+	if got.Request.Title != "New title" || got.Request.Priority != "hoch" || got.Request.Type != "feature" || got.Request.Description != "Para one\n\nPara two" {
+		t.Errorf("correction not stored: %+v", got.Request)
+	}
+	last := got.Activity[len(got.Activity)-1]
+	if last.Kind != "request.corrected" || !strings.Contains(last.Data, "it was wrong") {
+		t.Errorf("the reason is not in the activity: %+v", last)
+	}
+	_, page := fetchPage(t, e.Lead, e.Base+resp.Header.Get("Location"))
+	if !strings.Contains(page, "Saved.") || !strings.Contains(page, "New title") || !strings.Contains(page, "Corrected") {
+		t.Error("result line, new title or history entry missing")
+	}
+	// The author may correct their own request as a member.
+	own := rqMake(t, e.St, rqSpec{Title: "Anna's", Person: "anna"})
+	if resp := rqPost(t, e, e.Member, own.Request.ID, "/correct", form(map[string]string{"title": "Anna's v2"})); resp.StatusCode != http.StatusSeeOther {
+		t.Errorf("author correcting own request = %d", resp.StatusCode)
+	}
+}
+
+func TestRequestCompleteNeedsProofAndNoOpenCriterionAndDropNeedsAReason(t *testing.T) {
+	e := ovEnv(t)
+	d := rqMake(t, e.St, rqSpec{Title: "Finish me", Criteria: []string{"only one"}})
+	id := d.Request.ID
+	_, page := fetchPage(t, e.Lead, e.Base+rqPath(id, ""))
+	if strings.Contains(page, rqPath(id, "/complete")) {
+		t.Error("the complete form is offered while a criterion is open")
+	}
+	resp := rqPost(t, e, e.Lead, id, "/complete", url.Values{"evidence_kind": {"commit"}, "evidence_ref": {"abc123"}})
+	if resp.StatusCode != http.StatusSeeOther || !strings.Contains(resp.Header.Get("Location"), "fail=open_criteria") {
+		t.Fatalf("completing with an open criterion = %d %q", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	_, failed := fetchPage(t, e.Lead, e.Base+resp.Header.Get("Location"))
+	if !strings.Contains(failed, "Resolve the open criteria first.") {
+		t.Error("no failure line for the open criterion")
+	}
+	if err := e.St.SetCriterionState(d.Criteria[0].ID, "met", requestdomain.Evidence{Kind: "test", Ref: "t", Person: "alice"}); err != nil {
+		t.Fatal(err)
+	}
+	if resp := rqPost(t, e, e.Member, id, "/complete", url.Values{"evidence_kind": {"commit"}, "evidence_ref": {"abc"}}); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("member completing a foreign request = %d", resp.StatusCode)
+	}
+	if resp := rqPost(t, e, e.Lead, id, "/complete", url.Values{"evidence_kind": {"commit"}, "evidence_ref": {" "}}); resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("completing without proof = %d", resp.StatusCode)
+	}
+	resp = rqPost(t, e, e.Lead, id, "/complete", url.Values{"evidence_kind": {"commit"}, "evidence_ref": {"abc123"}})
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("completing = %d", resp.StatusCode)
+	}
+	got, _ := e.St.RequestByID(id)
+	if got.Request.State != "done" {
+		t.Errorf("state = %s", got.Request.State)
+	}
+	_, done := fetchPage(t, e.Lead, e.Base+resp.Header.Get("Location"))
+	if !strings.Contains(done, "Completed.") || strings.Contains(done, rqPath(id, "/drop")) || strings.Contains(done, rqPath(id, "/criteria\"")) {
+		t.Error("completed page lacks the result or still offers closing actions")
+	}
+	if resp := rqPost(t, e, e.Lead, id, "/complete", url.Values{"evidence_kind": {"commit"}, "evidence_ref": {"again"}}); resp.StatusCode != http.StatusConflict {
+		t.Errorf("completing twice = %d", resp.StatusCode)
+	}
+
+	drop := rqMake(t, e.St, rqSpec{Title: "Drop me"})
+	if resp := rqPost(t, e, e.Lead, drop.Request.ID, "/drop", url.Values{"reason": {"  "}}); resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("dropping without a reason = %d", resp.StatusCode)
+	}
+	if resp := rqPost(t, e, e.Guest, drop.Request.ID, "/drop", url.Values{"reason": {"nope"}}); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("guest dropping = %d", resp.StatusCode)
+	}
+	resp = rqPost(t, e, e.Lead, drop.Request.ID, "/drop", url.Values{"reason": {"no longer wanted"}})
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("dropping = %d", resp.StatusCode)
+	}
+	if got, _ := e.St.RequestByID(drop.Request.ID); got.Request.State != "dropped" {
+		t.Error("request not dropped")
+	}
+	_, page = fetchPage(t, e.Lead, e.Base+resp.Header.Get("Location"))
+	if !strings.Contains(page, "Dropped.") || !strings.Contains(page, "no longer wanted") {
+		t.Error("result line or reason missing after dropping")
+	}
+}
+
+func TestRequestActionsOnHiddenRequestsAnswerLikeUnknownOnes(t *testing.T) {
+	e := ovEnv(t)
+	hidden := rqMake(t, e.St, rqSpec{Title: "SECRET-HIDDEN", Project: shellHiddenProject, Criteria: []string{"c"}})
+	missing := hidden.Request.ID + 1000
+	actions := map[string]url.Values{
+		"/criteria": {"description": {"x"}},
+		"/criteria/" + strconv.FormatInt(hidden.Criteria[0].ID, 10): {"evidence_kind": {"test"}, "evidence_ref": {"x"}},
+		"/correct":  {"title": {"x"}, "description": {"x"}, "type": {"bug"}, "reason": {"x"}},
+		"/complete": {"evidence_kind": {"test"}, "evidence_ref": {"x"}},
+		"/drop":     {"reason": {"x"}},
+	}
+	for name, c := range map[string]*http.Client{"member": e.Member, "guest": e.Guest, "lead": e.Lead} {
+		for rest, form := range actions {
+			r1 := rqPost(t, e, c, hidden.Request.ID, rest, cloneForm(form))
+			b1 := body(t, r1)
+			miss := rest
+			if strings.HasPrefix(rest, "/criteria/") {
+				miss = "/criteria/999999"
+			}
+			r2 := rqPost(t, e, c, missing, miss, cloneForm(form))
+			b2 := body(t, r2)
+			if r1.StatusCode != http.StatusNotFound || r1.StatusCode != r2.StatusCode || b1 != b2 {
+				t.Errorf("%s %s: hidden %d %q vs unknown %d %q", name, rest, r1.StatusCode, b1, r2.StatusCode, b2)
+			}
+		}
+	}
+	got, _ := e.St.RequestByID(hidden.Request.ID)
+	if got.Request.State != "open" || got.Request.Title != "SECRET-HIDDEN" || got.Criteria[0].State != "open" || len(got.Criteria) != 1 {
+		t.Errorf("a refused request changed the hidden request: %+v", got)
+	}
+}
+
+func cloneForm(v url.Values) url.Values {
+	out := url.Values{}
+	for k, vals := range v {
+		out[k] = append([]string(nil), vals...)
+	}
+	return out
+}
+
+func TestRequestActionsNeedCSRFOriginAndAnInteractiveSession(t *testing.T) {
+	e := ovEnv(t)
+	d := rqMake(t, e.St, rqSpec{Title: "Guarded"})
+	target := e.Base + rqPath(d.Request.ID, "/drop")
+	for name, form := range map[string]url.Values{"missing": {"reason": {"x"}}, "wrong": {"csrf_token": {"nope"}, "reason": {"x"}}} {
+		if resp := sameOriginPostForm(t, e.Owner, target, form); resp.StatusCode != http.StatusForbidden {
+			t.Errorf("%s CSRF token: %d", name, resp.StatusCode)
+		}
+	}
+	token := renderedCSRFToken(t, e.Owner, e.Base+"/ui/requests")
+	form := url.Values{"csrf_token": {token}, "reason": {"x"}}
+	req, _ := http.NewRequest(http.MethodPost, target, strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "https://evil.example")
+	if resp, err := e.Owner.Do(req); err != nil || resp.StatusCode != http.StatusForbidden {
+		t.Errorf("foreign origin accepted: %v %v", resp, err)
+	}
+	req, _ = http.NewRequest(http.MethodPost, target, strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", e.Base)
+	req.Header.Set("Authorization", "Bearer not-a-session")
+	if resp, err := (&http.Client{}).Do(req); err != nil || resp.StatusCode == http.StatusSeeOther {
+		t.Errorf("a request without the browser session was accepted: %v %v", resp, err)
+	}
+	if got, _ := e.St.RequestByID(d.Request.ID); got.Request.State != "open" {
+		t.Fatal("a refused request dropped the request")
+	}
+	if resp := sameOriginPostForm(t, e.Owner, target, form); resp.StatusCode != http.StatusSeeOther {
+		t.Errorf("the interactive session with a valid token: %d", resp.StatusCode)
+	}
+	if got, _ := e.St.RequestByID(d.Request.ID); got.Request.State != "dropped" {
+		t.Error("the interactive session could not drop")
+	}
+}
+
+func TestRequestDetailOffersOnlyTheActionsTheViewerMayTake(t *testing.T) {
+	e := ovEnv(t)
+	d := rqMake(t, e.St, rqSpec{Title: "Who may", Criteria: []string{"c1"}})
+	id := d.Request.ID
+	for name, want := range map[string]struct {
+		c                      *http.Client
+		resolve, edit, closing bool
+	}{
+		"owner": {e.Owner, true, true, true}, "lead": {e.Lead, true, true, true},
+		"member": {e.Member, true, false, false}, "guest": {e.Guest, false, false, false},
+	} {
+		_, page := fetchPage(t, want.c, e.Base+rqPath(id, ""))
+		has := func(rest string) bool { return strings.Contains(page, `action="`+rqPath(id, rest)) }
+		if has("/criteria/"+strconv.FormatInt(d.Criteria[0].ID, 10)) != want.resolve || has("/correct") != want.edit || has("/drop") != want.closing || has("/criteria\"") != want.edit {
+			t.Errorf("%s sees the wrong actions", name)
+		}
+	}
+	// Everything stays in the catalog, no scripts or inline styles.
+	_, page := fetchPage(t, e.Owner, e.Base+rqPath(id, "?edit=1"))
+	if !strings.Contains(page, `id="edit" open`) {
+		t.Error("?edit=1 does not open the form")
+	}
+}

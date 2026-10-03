@@ -1,0 +1,65 @@
+{{define "rqmarks"}}<span class="kn-type">{{.TypeLabel}}</span>{{if .Priority}}<span class="rq-prio">{{.Priority}}</span>{{end}}{{if ne .State "open"}}<span class="kn-level"><span class="rq-dot is-{{.State}}" aria-hidden="true"></span>{{.StateLabel}}</span>{{end}}{{end}}
+
+{{define "rqbar"}}{{if .Total}}<span class="rq-progress"><span class="ov-num" aria-label="{{t "requests.progress"}}">{{.Progress}}</span><span class="ov-bar clay" aria-hidden="true"><i data-pct="{{.Percent}}"></i></span></span>{{end}}{{end}}
+
+{{define "rqrow"}}<li class="kn-item rq-item"><div class="kn-main"><a class="kn-title" href="{{.Href}}">{{.Title}}</a>
+<div class="kn-foot"><span class="rq-id">{{.ID}}</span>{{template "rqmarks" .}}{{if .Project}}<span class="ov-meta">{{.Project}}</span>{{end}}{{template "rqbar" .}}
+{{range .Working}}{{if .Href}}<a class="rq-working" href="{{.Href}}"><span class="ov-dot is-active pulse" aria-hidden="true"></span>{{.Text}}</a>{{else}}<span class="ov-meta">{{.Text}}</span>{{end}}{{end}}</div></div><span class="ov-num kn-age">{{.Age}}</span></li>{{end}}
+
+{{define "requests"}}{{template "head" .}}{{template "nav" .}}<main class="kn rq"><link rel="stylesheet" href="/static/knowledge.css"><link rel="stylesheet" href="/static/requests.css">
+{{with .RequestsV}}<div class="ov-head"><h1>{{t "nav.requests"}}</h1></div>
+<form class="kn-filters" method="get" action="/ui/requests" role="search"><input class="clay-field kn-q" type="search" name="q" value="{{.Q}}" placeholder="{{t "shell.search_placeholder"}}" aria-label="{{t "requests.search_label"}}" autocomplete="off">
+{{range .Selects}}<select class="clay-select" name="{{.Name}}" aria-label="{{.Label}}" data-autosubmit><option value="">{{.Label}}</option>{{range .Options}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select>{{end}}
+{{if .Project}}<input type="hidden" name="project" value="{{.Project}}">{{end}}<button class="ov-btn clay">{{t "requests.search"}}</button></form>
+{{if .Rows}}<ul class="ov-list ov-deck kn-deck clay">{{range .Rows}}{{template "rqrow" .}}{{end}}</ul>
+{{if .Older}}<a class="ov-btn clay" href="{{.Older}}">{{t "requests.older"}}</a>{{end}}
+{{else if .NoMatch}}<p class="ov-empty">{{t "requests.no_match"}}</p><a class="ov-btn clay" href="{{.ClearHref}}">{{t "requests.clear"}}</a>
+{{else if .Guest}}<p class="ov-empty">{{t "ov.nothing"}}</p>
+{{else}}<p class="ov-empty">{{t "requests.empty"}}</p><a class="ov-btn ov-btn-primary clay" href="/ui/overview?connect=1">{{t "ov.connect"}}</a>{{end}}
+{{end}}{{template "foot" .}}{{end}}
+
+{{define "request"}}{{template "head" .}}{{template "nav" .}}<main class="kn kn-detail rq rq-detail"><link rel="stylesheet" href="/static/knowledge.css"><link rel="stylesheet" href="/static/requests.css">
+{{with .RequestV}}<a class="kn-back clay clay-btn clay-btn-icon" href="{{.Back}}" aria-label="{{t "requests.back"}}">{{template "icon" "back"}}</a>
+{{with .Result}}<div class="kn-result" role="status"><span class="rq-dot is-{{.Kind}}" aria-hidden="true"></span><span class="kn-result-text">{{.Text}}</span></div>{{end}}
+<article class="kn-article"><div class="kn-marks">{{template "rqmarks" .}}{{if .Project}}<span class="ov-meta">{{.Project}}</span>{{end}}</div>
+<h1>{{.Title}}</h1>
+<p class="ov-meta kn-dots"><span class="rq-id">{{.Human}}</span>{{if .Person}}<span>{{t "requests.by" .Person}}</span>{{end}}<span class="ov-num">{{.Age}}</span>{{template "rqbar" .}}</p>
+{{template "knbody" .Blocks}}</article>
+
+{{if or .Criteria .CanEdit}}{{if .Criteria}}<section class="rq-section"><h2>{{t "requests.criteria"}}</h2>
+<ul class="ov-list ov-deck rq-criteria clay">{{range .Criteria}}<li class="rq-criterion"><span class="rq-dot is-{{.State}}" role="img" aria-label="{{.StateLabel}}"></span><div class="rq-ctext"><span class="rq-cid">{{.Human}}</span><p>{{.Text}}</p>
+{{range .Evidence}}<p class="rq-evidence"><span class="ov-meta">{{.Label}}</span>{{if .Href}}<a class="kn-link rq-ref" href="{{.Href}}"{{if eq .Kind "url"}} rel="noopener noreferrer"{{end}}>{{if .Ref}}{{.Ref}}{{else}}{{.Href}}{{end}}</a>{{else if .Ref}}<code class="rq-ref">{{.Ref}}</code>{{end}}</p>{{end}}
+{{if .CanResolve}}<details class="rq-resolve"><summary class="ov-btn clay">{{t "requests.mark_met"}}</summary>
+<form method="post" action="/ui/requests/{{$.RequestV.ID}}/criteria/{{.ID}}" class="rq-form rq-inline"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+<select class="clay-select" name="evidence_kind" aria-label="{{t "requests.field_evidence_kind"}}">{{range $.RequestV.Kinds}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select>
+<input class="clay-field" name="evidence_ref" required maxlength="2000" placeholder="{{t "requests.field_evidence"}}" aria-label="{{t "requests.field_evidence"}}" autocomplete="off">
+<button class="ov-btn ov-btn-primary clay" name="state" value="met">{{t "requests.met"}}</button><button class="ov-btn clay" name="state" value="waived">{{t "requests.waive"}}</button></form></details>{{end}}</div></li>{{end}}</ul></section>{{end}}
+{{if and .Open .CanEdit}}<form method="post" action="/ui/requests/{{.ID}}/criteria" class="rq-form rq-add"><input type="hidden" name="csrf_token" value="{{.Token}}"><input class="clay-field" name="description" required maxlength="2000" placeholder="{{t "requests.field_criterion"}}" aria-label="{{t "requests.field_criterion"}}" autocomplete="off"><button class="ov-btn clay">{{t "requests.add"}}</button></form>{{end}}{{end}}
+
+{{if .Work}}<section class="rq-section"><h2>{{t "requests.work"}}</h2><ul class="ov-list ov-deck rq-work clay">{{range .Work}}<li class="rq-workrow"><span class="ov-dot is-{{if .Active}}active pulse{{else}}idle{{end}}" aria-hidden="true"></span><div class="rq-ctext">{{if .Href}}<a class="kn-title" href="{{.Href}}">{{.Title}}</a>{{else}}<span class="kn-title">{{.Title}}</span>{{end}}<span class="ov-meta kn-dots"><span>{{.Role}}</span><span>{{.StateLabel}}</span></span>{{if .Summary}}<p>{{.Summary}}</p>{{end}}</div><span class="ov-num kn-age">{{.Age}}</span></li>{{end}}</ul></section>{{end}}
+
+{{if .Relations}}<section class="rq-section"><h2>{{t "requests.related"}}</h2><ul class="ov-list rq-rels">{{range .Relations}}<li><span class="ov-meta">{{.Label}}</span>{{if .Href}}<a class="kn-link" href="{{.Href}}"{{if eq .Kind "external"}} rel="noopener noreferrer"{{end}}>{{.Text}}</a>{{else}}<span>{{.Text}}</span>{{end}}</li>{{end}}</ul></section>{{end}}
+
+{{if .Threads}}<section class="rq-section"><h2>{{t "requests.discussion"}}</h2><ul class="ov-list rq-rels">{{range .Threads}}<li><a class="kn-link" href="{{.URL}}">{{.Title}}</a></li>{{end}}</ul></section>{{end}}
+
+{{if .CanEdit}}<section class="rq-manage">
+<details class="kn-edit clay" id="edit"{{if .EditOpen}} open{{end}}><summary>{{t "requests.edit"}}</summary>
+<form method="post" action="/ui/requests/{{.ID}}/correct"><input type="hidden" name="csrf_token" value="{{.Token}}">
+<label class="kn-field"><span>{{t "requests.field_title"}}</span><input class="clay-field" name="title" value="{{.RawTitle}}" required maxlength="500"></label>
+<label class="kn-field"><span>{{t "requests.field_kind"}}</span><select class="clay-select" name="type">{{range .Types}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select></label>
+<label class="kn-field"><span>{{t "requests.field_priority"}}</span><input class="clay-field" name="priority" value="{{.Priority}}" maxlength="64" list="rq-priorities" autocomplete="off"><datalist id="rq-priorities">{{range .Priorities}}<option value="{{.}}">{{end}}</datalist></label>
+<label class="kn-field"><span>{{t "requests.field_description"}}</span><textarea class="clay-field kn-textarea" name="description" required rows="10">{{.RawDescription}}</textarea></label>
+<label class="kn-field"><span>{{t "requests.field_reason"}}</span><input class="clay-field" name="reason" required maxlength="2000" autocomplete="off"></label>
+<button class="ov-btn ov-btn-primary clay">{{t "requests.save"}}</button></form></details>
+{{if .Open}}{{if .CanComplete}}<details class="kn-edit clay"><summary>{{t "requests.complete"}}</summary>
+<form method="post" action="/ui/requests/{{.ID}}/complete"><input type="hidden" name="csrf_token" value="{{.Token}}">
+<label class="kn-field"><span>{{t "requests.field_evidence_kind"}}</span><select class="clay-select" name="evidence_kind">{{range .Kinds}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select></label>
+<label class="kn-field"><span>{{t "requests.field_evidence"}}</span><input class="clay-field" name="evidence_ref" required maxlength="2000" autocomplete="off"></label>
+<button class="ov-btn ov-btn-primary clay">{{t "requests.complete"}}</button></form></details>{{end}}
+<details class="kn-edit clay"><summary>{{t "requests.drop"}}</summary>
+<form method="post" action="/ui/requests/{{.ID}}/drop"><input type="hidden" name="csrf_token" value="{{.Token}}">
+<label class="kn-field"><span>{{t "requests.field_drop_reason"}}</span><input class="clay-field" name="reason" required maxlength="2000" autocomplete="off"></label>
+<button class="ov-btn clay">{{t "requests.drop"}}</button></form></details>{{end}}</section>{{end}}
+
+{{if .Activity}}<section class="rq-section kn-history"><h2>{{t "requests.history"}}</h2><ul class="ov-list rq-log">{{range .Activity}}<li><span class="rq-act">{{.Label}}</span>{{if .Text}}<span class="rq-acttext">{{.Text}}</span>{{end}}<span class="ov-meta">{{.By}}</span><span class="ov-num kn-age">{{.Age}}</span></li>{{end}}</ul></section>{{end}}
+{{end}}{{template "foot" .}}{{end}}

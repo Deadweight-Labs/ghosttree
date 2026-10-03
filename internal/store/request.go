@@ -266,6 +266,10 @@ func (s *Store) SearchRequests(filter requestdomain.SearchFilter) (requestdomain
 		where = append(where, `r.type=?`)
 		args = append(args, filter.Type)
 	}
+	if filter.Priority != "" {
+		where = append(where, `r.priority=?`)
+		args = append(args, filter.Priority)
+	}
 	if filter.Cursor != "" {
 		where = append(where, `r.id<?`)
 		args = append(args, filter.Cursor)
