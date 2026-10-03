@@ -6,6 +6,14 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Fixed: owners, leads, reviewers and members read the project room in the
+  browser without an agent of their own in it, as the access matrix allows.
+  The Room link on the agents page no longer ends in a bare "403", and the
+  last post of each agent shows. Posting and ending instructions still need an
+  agent of your own in the room. A room you may not read now shows a designed
+  error page instead of plain text; guests, strangers, other projects, agent
+  tokens and direct messages are unchanged.
+
 - Fixed: guests no longer learn that hidden sessions exist through knowledge
   or by ending work. Knowledge from distillation points at a session by its
   address, and only when the guest may read that session; otherwise the

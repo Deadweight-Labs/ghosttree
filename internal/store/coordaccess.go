@@ -146,7 +146,7 @@ func (a CoordAccess) requireRoomAccess(roomKey string) (CoordRoom, error) {
 			if err != nil {
 				return CoordRoom{}, err
 			}
-			if !ok {
+			if !ok && !(room.Kind == RoomProject && a.memberReadsProjectRoom(room.Key, nil)) {
 				return CoordRoom{}, ErrCoordForbidden
 			}
 		}
@@ -160,6 +160,30 @@ func (a CoordAccess) requireRoomAccess(roomKey string) (CoordRoom, error) {
 		}
 	}
 	return room, nil
+}
+
+// memberReadsProjectRoom lets a browser viewer with the project role member or
+// higher (owner, lead, member, reviewer) read the project room without an agent
+// of their own in it, as the access matrix allows (room, read, rank 2 and up
+// here: the same line as agents). It widens reading only; posting and ending
+// instructions keep requireRoomAccessTx. A guest, a stranger and every agent
+// token stay with the membership rule.
+func (a CoordAccess) memberReadsProjectRoom(roomKey string, tx rowQuerier) bool {
+	if a.Store == nil || a.publicOnly || a.AgentExternalID != "" || !strings.HasPrefix(roomKey, "project:") {
+		return false
+	}
+	acct, ok := accountNumericID(a.Principal.ID)
+	if !ok {
+		return false
+	}
+	project := strings.TrimPrefix(roomKey, "project:")
+	var role RoleInfo
+	if tx != nil {
+		role = projectRoleTx(tx, project, acct)
+	} else {
+		role = a.Store.ProjectRole(project, a.Principal.ID)
+	}
+	return matrixAllows(role, ResAgents, ActRead, Object{})
 }
 
 func (a CoordAccess) principalOwnsPublicMembership(roomKey string) (bool, error) {
@@ -585,21 +609,35 @@ func (a CoordAccess) actorTx(tx *sql.Tx) (string, error) {
 }
 
 func (a CoordAccess) canReadTx(tx *sql.Tx, actor, kind, id string) error {
+	return a.canAccessTx(tx, actor, kind, id, false)
+}
+
+// canWriteTx is canReadTx for a mutation: it keeps the membership rule that
+// reading relaxes for project members.
+func (a CoordAccess) canWriteTx(tx *sql.Tx, actor, kind, id string) error {
+	return a.canAccessTx(tx, actor, kind, id, true)
+}
+
+func (a CoordAccess) canAccessTx(tx *sql.Tx, actor, kind, id string, write bool) error {
 	switch kind {
 	case DestinationRoom:
-		return a.requireRoomAccessTx(tx, actor, id)
+		return a.roomAccessTx(tx, actor, id, write)
 	case DestinationDiscussion:
 		threadID, err := strconv.ParseInt(id, 10, 64)
 		if err != nil || threadID <= 0 {
 			return ErrCoordNotFound
 		}
-		return a.canReadThreadTx(tx, actor, threadID)
+		return a.canAccessThreadTx(tx, actor, threadID, write)
 	default:
 		return ErrCoordNotFound
 	}
 }
 
 func (a CoordAccess) canReadThreadTx(tx *sql.Tx, actor string, threadID int64) error {
+	return a.canAccessThreadTx(tx, actor, threadID, false)
+}
+
+func (a CoordAccess) canAccessThreadTx(tx *sql.Tx, actor string, threadID int64, write bool) error {
 	var project string
 	if err := tx.QueryRow(`SELECT project FROM threads WHERE id=?`, threadID).Scan(&project); errors.Is(err, sql.ErrNoRows) {
 		return ErrCoordNotFound
@@ -609,7 +647,7 @@ func (a CoordAccess) canReadThreadTx(tx *sql.Tx, actor string, threadID int64) e
 	if home, found, err := threadHomeTx(tx, threadID); err != nil {
 		return err
 	} else if found {
-		return a.requireRoomAccessTx(tx, actor, home.RoomKey)
+		return a.roomAccessTx(tx, actor, home.RoomKey, write)
 	}
 	{
 		var restricted int
@@ -637,8 +675,18 @@ func (a CoordAccess) canReadThreadTx(tx *sql.Tx, actor string, threadID int64) e
 			// eine Lockerung: die Projektrolle gilt auch hier.
 			return a.projectRoomGate(RoomProject, RoomKeyForProject(project), ResRoom, tx)
 		}
-		return a.requireRoomAccessTx(tx, actor, RoomKeyForProject(project))
+		return a.roomAccessTx(tx, actor, RoomKeyForProject(project), write)
 	}
+}
+
+// roomAccessTx is requireRoomAccessTx for reading when write is false: a
+// project member without an agent in the room still reads it.
+func (a CoordAccess) roomAccessTx(tx *sql.Tx, actor, roomKey string, write bool) error {
+	err := a.requireRoomAccessTx(tx, actor, roomKey)
+	if !write && errors.Is(err, ErrCoordForbidden) && a.memberReadsProjectRoom(roomKey, tx) {
+		return nil
+	}
+	return err
 }
 
 func (a CoordAccess) requireRoomAccessTx(tx *sql.Tx, actor, roomKey string) error {
@@ -760,7 +808,7 @@ func (a CoordAccess) Send(message CoordMessage) (int64, error) {
 	if ReservedExternalID(actor) {
 		return 0, ErrCoordForbidden // der Präfix system: gehört dem Store
 	}
-	if err := a.canReadTx(tx, actor, message.DestinationKind, message.DestinationID); err != nil {
+	if err := a.canWriteTx(tx, actor, message.DestinationKind, message.DestinationID); err != nil {
 		return 0, err
 	}
 	if _, actionable := attentionReasonForIntent(message.Intent); actionable && len(normalizeMembers(message.Mentions)) == 0 {
@@ -1125,7 +1173,7 @@ func (a CoordAccess) SearchThreads(project, query string, includeArchived bool, 
 		return nil, err
 	}
 	if !a.publicOnly {
-		if err := a.requireRoomAccessTx(tx, actor, RoomKeyForProject(project)); err != nil {
+		if err := a.roomAccessTx(tx, actor, RoomKeyForProject(project), false); err != nil {
 			return nil, err
 		}
 	} else if err := a.projectRoomGate(RoomProject, RoomKeyForProject(project), ResRoom, tx); err != nil {
@@ -1522,7 +1570,7 @@ func (a CoordAccess) RoomThreads(roomKey string) ([]RoomThread, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := a.requireRoomAccessTx(tx, actor, roomKey); err != nil {
+	if err := a.roomAccessTx(tx, actor, roomKey, false); err != nil {
 		return nil, err
 	}
 	threads, err := roomThreadsTx(tx, roomKey)
@@ -1568,7 +1616,7 @@ func (a CoordAccess) requireThreadMutationTx(tx *sql.Tx, actor string, threadID 
 	if a.publicOnly {
 		return Thread{}, ErrCoordForbidden
 	}
-	if err := a.canReadThreadTx(tx, actor, threadID); err != nil {
+	if err := a.canAccessThreadTx(tx, actor, threadID, true); err != nil {
 		return Thread{}, err
 	}
 	row := tx.QueryRow(`SELECT id,project,title,question,state,archived,person,author_principal_id,

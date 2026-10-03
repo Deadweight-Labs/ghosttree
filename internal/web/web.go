@@ -214,7 +214,7 @@ func (a *app) renderBrowser(w http.ResponseWriter, r *http.Request, name string,
 		data.NavSection = "review"
 	case "sessions", "session":
 		data.NavSection = "sessions"
-	case "coord":
+	case "coord", "roomforbidden":
 		data.NavSection = "coord"
 	case "context":
 		data.NavSection = "context"

@@ -142,7 +142,7 @@ func navKeyFor(section string, kind viewerKind) string {
 		return "knowledge"
 	case "sessions", "session":
 		return "sessions"
-	case "coord":
+	case "coord", "roomforbidden":
 		return "rooms"
 	case "tokens", "device", "devicecheck", "devicedone":
 		if kind == viewerOwner {

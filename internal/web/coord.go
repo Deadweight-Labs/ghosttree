@@ -94,9 +94,21 @@ func coordHTTPError(w http.ResponseWriter, err error) {
 // nur weil er dessen Schlüssel in die URL schreibt. Spec §9: private DMs
 // dürfen nicht über Suche, Zusammenfassung oder Verknüpfung sichtbar
 // werden — eine URL ist keine Ausnahme davon.
+// roomPageError answers a room page that may not be read with the designed
+// error page; every other failure keeps its plain text.
+func (a *app) roomPageError(w http.ResponseWriter, r *http.Request, err error) {
+	if !errors.Is(err, store.ErrCoordForbidden) {
+		coordHTTPError(w, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusForbidden)
+	a.renderBrowser(w, r, "roomforbidden", pageData{Title: msg("coord.forbidden.title")})
+}
+
 func (a *app) mayEnter(w http.ResponseWriter, r *http.Request, room string) bool {
 	if _, err := a.browserCoord(r).Room(room); err != nil {
-		coordHTTPError(w, err)
+		a.roomPageError(w, r, err)
 		return false
 	}
 	return true
@@ -168,7 +180,7 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 	access := a.browserCoord(r)
 	activeRoom, err := access.Room(room)
 	if err != nil {
-		coordHTTPError(w, err)
+		a.roomPageError(w, r, err)
 		return
 	}
 	page, presentations, err := access.MessagePresentationWindow(store.DestinationRoom, room, window)
