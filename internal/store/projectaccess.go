@@ -524,6 +524,15 @@ func (a *ProjectAccess) CanSeeKnowledge(k Knowledge) bool {
 	return a.Allow(k.Scope.Project, ResKnowledge, ActRead, knowledgeObject(a, k))
 }
 
+// CanSeeKnowledgeHistory: der Verlauf hält frühere Fassungen ohne ihre
+// Vertrauensstufe, darunter vielleicht nie freigegebene. Er gilt deshalb wie ein
+// Eintrag der untersten Stufe: ab member, nicht für Gäste.
+func (a *ProjectAccess) CanSeeKnowledgeHistory(k Knowledge) bool {
+	obj := knowledgeObject(a, k)
+	obj.Confidence = "staged"
+	return a.Allow(k.Scope.Project, ResKnowledge, ActRead, obj)
+}
+
 // CheckKnowledge prüft eine Aktion auf einen vorhandenen Eintrag.
 func (a *ProjectAccess) CheckKnowledge(k Knowledge, act Action) error {
 	return a.Check(k.Scope.Project, ResKnowledge, act, knowledgeObject(a, k))

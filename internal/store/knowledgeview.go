@@ -1,6 +1,9 @@
 package store
 
-import "strconv"
+import (
+	"strconv"
+	"strings"
+)
 
 // KnowledgeView formt einen Wissenseintrag für den Betrachter. Wer die laufenden
 // Session-Nummern des Projekts nicht kennen darf (#2447, #2482), bekommt den
@@ -122,4 +125,23 @@ func (a *ProjectAccess) readableSessionLookup() func(int64) (string, bool) {
 		}
 		return pub, pub != ""
 	}
+}
+
+// SessionLink nennt zu einem Verweis "session:<n>#<seq>" die Adresse der
+// Session und, falls angegeben, den Fundort darin. ok ist nur wahr, wenn der
+// Betrachter das Transkript lesen darf; die Nummer verlässt die Methode nie.
+func (a *ProjectAccess) SessionLink(ref string) (publicID, fragment string, ok bool) {
+	m := sessionRefPattern.FindStringSubmatch(ref)
+	if m == nil {
+		return "", "", false
+	}
+	id, err := strconv.ParseInt(m[1], 10, 64)
+	if err != nil {
+		return "", "", false
+	}
+	pub, ok := a.readableSessionLookup()(id)
+	if !ok {
+		return "", "", false
+	}
+	return pub, strings.TrimPrefix(m[2], "#"), true
 }

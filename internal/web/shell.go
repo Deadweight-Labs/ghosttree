@@ -127,7 +127,7 @@ func (a *app) viewerOf(r *http.Request, pa *store.ProjectAccess) viewer {
 }
 
 // projectAware sind die Seiten, die ?project= auswerten.
-var projectAware = map[string]bool{"knowledge": true, "context": true, "sessions": true, "agents": true}
+var projectAware = map[string]bool{"knowledge": true, "review": true, "context": true, "sessions": true, "agents": true}
 
 // navSection ist der Eintrag der Seitenleiste, unter dem eine Seite steht.
 func navKeyFor(section string, kind viewerKind) string {
@@ -138,7 +138,7 @@ func navKeyFor(section string, kind viewerKind) string {
 		return "agents"
 	case "requests", "request":
 		return "requests"
-	case "knowledge", "review", "context":
+	case "knowledge", "knowledgeitem", "review", "context":
 		return "knowledge"
 	case "sessions", "session":
 		return "sessions"

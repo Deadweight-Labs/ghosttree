@@ -288,6 +288,7 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 	}
 	for i := range detail.Messages {
 		detail.Messages[i].CSRFToken = csrfOf(r)
+		detail.Messages[i].CanReply = detail.CanPost
 		if thread, ok := threadByAnchor[detail.Messages[i].ID]; ok && thread.URL != "" {
 			detail.Messages[i].ThreadURL = thread.URL
 			detail.Messages[i].ThreadTitle = thread.Title
@@ -345,6 +346,7 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 		markViewerMentions(threadDetail.Messages, presentations, current.ID)
 		for i := range threadDetail.Messages {
 			message := presentations[i].Message
+			threadDetail.Messages[i].CanReply = detail.CanPost
 			threadDetail.Messages[i].Own = message.AuthorKind == store.AuthorHuman && message.AuthorPrincipalID == current.ID
 		}
 		threadDetail.ReplyTo, threadDetail.ReplyTarget, parseErr = coordReplyTarget(presentations, r.URL.Query().Get("thread_reply_to"))
@@ -385,6 +387,13 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 	for _, membership := range memberships {
 		if membership.PrincipalID == humanMember(r) && membership.LeftAt == "" && membership.Manager {
 			detail.CanManage = true
+		}
+	}
+	if detail.Thread != nil && detail.CanPost {
+		for _, item := range roomThreads {
+			if item.Thread.ID == detail.Thread.ID {
+				detail.Thread.CanSetState = detail.CanManage || (item.Thread.AuthorPrincipalID != "" && item.Thread.AuthorPrincipalID == current.ID)
+			}
 		}
 	}
 	view.Active = detail

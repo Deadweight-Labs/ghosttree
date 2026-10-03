@@ -365,3 +365,41 @@ func TestAgentsPageShowsLastPostAndWorkingRoomLinkToOwnerWithoutRoomAgent(t *tes
 		}
 	}
 }
+
+// Reply links and the thread state form are write controls: a reader without
+// an own agent in the room does not get them, a member with an agent does.
+func TestReadersWithoutMembershipGetNoReplyOrThreadStateControls(t *testing.T) {
+	e := ovEnv(t)
+	room, _ := memberReadSeed(t, e)
+	if st := postRoom(t, e, e.Member, "/ui/coord/send", room, url.Values{"body": {"post-by-member"}}); st != http.StatusSeeOther {
+		t.Fatalf("member posts: %d", st)
+	}
+	if st := postRoom(t, e, e.Member, "/ui/coord/thread/create", room, url.Values{"title": {"Member thread"}}); st != http.StatusSeeOther {
+		t.Fatalf("member thread: %d", st)
+	}
+	threads, err := e.St.CoordinationFor(store.Principal{ID: "person:1", Label: "alice", TokenKind: store.WebSessionKind}, "").RoomThreads(room)
+	if err != nil || len(threads) != 1 {
+		t.Fatalf("threads %d %v", len(threads), err)
+	}
+	roomURL := e.Base + "/ui/coord?room=" + url.QueryEscape(room)
+	threadURL := e.Base + coordThreadURL(room, threads[0].Thread.ID)
+	for _, target := range []string{roomURL, threadURL} {
+		_, page := fetchPage(t, e.Owner, target)
+		if !strings.Contains(page, "post-by-member") && !strings.Contains(page, "Member thread") {
+			t.Fatalf("owner does not read %s", target)
+		}
+		for _, dead := range []string{"coord-reply-action", "/ui/coord/thread/state"} {
+			if strings.Contains(page, dead) {
+				t.Errorf("owner without membership sees %s on %s", dead, target)
+			}
+		}
+	}
+	_, page := fetchPage(t, e.Member, roomURL)
+	if !strings.Contains(page, "coord-reply-action") {
+		t.Error("member with an agent has no reply link")
+	}
+	_, page = fetchPage(t, e.Member, threadURL)
+	if !strings.Contains(page, "/ui/coord/thread/state") {
+		t.Error("member who authored the thread has no thread state form")
+	}
+}

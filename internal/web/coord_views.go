@@ -152,6 +152,9 @@ type coordThreadDetailView struct {
 	FormID                                 string
 	ReplyTo                                int64
 	ReplyTarget                            *coordReplyView
+	// CanSetState: the viewer is the thread's author or a room manager and
+	// has a membership, so the state change would be accepted.
+	CanSetState bool
 }
 
 type coordMessageView struct {
@@ -171,6 +174,7 @@ type coordMessageView struct {
 	ThreadURL        string
 	ReplyURL         string
 	CanPromote       bool
+	CanReply         bool
 	CSRFToken        string
 	GroupStart       bool
 	// Own marks the viewer's own human posts (right-aligned blue bubbles).

@@ -3,7 +3,6 @@ package web
 
 import (
 	"bytes"
-	"database/sql"
 	"embed"
 	"errors"
 	"html/template"
@@ -50,15 +49,15 @@ type pageData struct {
 	Requests                                                   []requestdomain.SearchHit
 	Request                                                    requestdomain.Detail
 	RequestThreads                                             []coordThreadView
-	Knowledge                                                  []store.Knowledge
+	KnowledgeV                                                 *knowledgeView
+	KnowledgeItemV                                             *knowledgeItemView
+	ReviewV                                                    *reviewView
 	Sessions                                                   []store.Session
 	Chunks                                                     []store.Chunk
 	SessionID                                                  int64
-	SessionLinks                                               map[int64]string
 	SessionsV                                                  *sessionsView
 	SessionV                                                   *sessionView
 	Project, Preview                                           string
-	Review                                                     []reviewEntry
 	Coord                                                      coordPageView
 	Orgs                                                       orgsView
 	Invite                                                     bool
@@ -69,12 +68,6 @@ type pageData struct {
 	Agents                                                     agentsView
 	// Refresh: Sekunden bis zum automatischen Neuladen (0 = nie).
 	Refresh int
-}
-type reviewEntry struct {
-	Knowledge         store.Knowledge
-	Evidence          []store.Evidence
-	MigrationEvidence *store.MigrationEvidence
-	Recurrence        int
 }
 
 func New(st *store.Store, opts ...Option) http.Handler {
@@ -141,7 +134,10 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.handle(mux, "GET /ui/requests", a.requirePerson(http.HandlerFunc(a.requestsPage)))
 	a.handle(mux, "GET /ui/requests/{id}", a.requirePerson(http.HandlerFunc(a.requestPage)))
 	a.handle(mux, "GET /ui/knowledge", a.requirePerson(http.HandlerFunc(a.knowledgePage)))
+	a.handle(mux, "GET /ui/knowledge/{id}", a.requirePerson(http.HandlerFunc(a.knowledgeItemPage)))
+	a.handle(mux, "POST /ui/knowledge/{id}/edit", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.knowledgeEdit))))))
 	a.handle(mux, "GET /ui/review", a.requirePerson(http.HandlerFunc(a.reviewPage)))
+	a.handle(mux, "POST /ui/review/{id}/{verdict}", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.reviewDecide))))))
 	a.handle(mux, "GET /ui/sessions", a.requirePerson(http.HandlerFunc(a.sessionsPage)))
 	a.handle(mux, "GET /ui/sessions/{id}", a.requirePerson(http.HandlerFunc(a.sessionPage)))
 	a.handle(mux, "POST /ui/sessions/{id}/share", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.sessionShare))))))
@@ -208,7 +204,7 @@ func (a *app) renderBrowser(w http.ResponseWriter, r *http.Request, name string,
 		data.NavSection = "agents"
 	case "requests", "request":
 		data.NavSection = "requests"
-	case "knowledge":
+	case "knowledge", "knowledgeitem":
 		data.NavSection = "knowledge"
 	case "review":
 		data.NavSection = "review"
@@ -289,67 +285,6 @@ func (a *app) sessionLinks(pa *store.ProjectAccess, ids []int64) map[int64]strin
 		out[id] = "/ui/sessions/" + sess.PublicID
 	}
 	return out
-}
-
-func (a *app) knowledgePage(w http.ResponseWriter, r *http.Request) {
-	q, project := r.URL.Query().Get("q"), a.projectParam(r)
-	var entries []store.Knowledge
-	var err error
-	pa := a.access(r)
-	if project != "" && a.accessDenied(w, r, pa.GateList(project, store.ResKnowledge, true)) {
-		return
-	}
-	limit := 0
-	if q != "" {
-		limit = 50
-		entries, err = a.store.SearchAllKnowledge(q, scope.Axes{Project: project}, a.overfetch(limit))
-	} else {
-		entries, err = a.store.KnowledgeForProject(project)
-	}
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	entries = pa.KnowledgeViews(keep(entries, limit, pa.CanSeeKnowledge))
-	a.renderBrowser(w, r, "knowledge", pageData{Title: "Knowledge", Knowledge: entries, Project: project})
-}
-
-func (a *app) reviewPage(w http.ResponseWriter, r *http.Request) {
-	pa := a.access(r)
-	entries, err := a.store.PendingKnowledge("", a.overfetch(50))
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	entries = keep(entries, 50, pa.CanSeeKnowledge)
-	items := make([]reviewEntry, 0, len(entries))
-	var evidenceIDs []int64
-	for _, k := range entries {
-		evidence, err := a.store.EvidenceFor(k.ID)
-		if err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
-		recurrence, err := a.store.Recurrence(k.ID)
-		if err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
-		evidence, recurrence = pa.ReadableEvidence(k.Scope.Project, evidence, recurrence)
-		for _, ev := range evidence {
-			evidenceIDs = append(evidenceIDs, ev.SessionID)
-		}
-		proof, err := a.store.MigrationEvidenceForKnowledge(k.ID)
-		var migrationProof *store.MigrationEvidence
-		if err == nil {
-			migrationProof = &proof
-		} else if err != sql.ErrNoRows {
-			http.Error(w, err.Error(), 500)
-			return
-		}
-		items = append(items, reviewEntry{Knowledge: pa.KnowledgeView(k), Evidence: evidence, MigrationEvidence: pa.MigrationEvidenceView(k.Scope.Project, migrationProof), Recurrence: recurrence})
-	}
-	a.renderBrowser(w, r, "review", pageData{Title: "Review", Review: items, SessionLinks: a.sessionLinks(pa, evidenceIDs)})
 }
 
 // projectParam ist das Projekt einer projektbezogenen Seite: das genannte,
@@ -468,7 +403,10 @@ var webRoutes = map[string]webClass{
 	"GET /ui/requests":                webProject,
 	"GET /ui/requests/{id}":           webProject,
 	"GET /ui/knowledge":               webProject,
+	"GET /ui/knowledge/{id}":          webProject,
+	"POST /ui/knowledge/{id}/edit":    webAdmin,
 	"GET /ui/review":                  webProject,
+	"POST /ui/review/{id}/{verdict}":  webAdmin,
 	"GET /ui/sessions":                webProject,
 	"GET /ui/sessions/{id}":           webProject,
 	"POST /ui/sessions/{id}/share":    webAdmin,
