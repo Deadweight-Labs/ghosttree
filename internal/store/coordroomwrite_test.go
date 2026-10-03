@@ -325,3 +325,79 @@ func TestPrivateThreadWithTheHumanOnTheList(t *testing.T) {
 		t.Errorf("unlisted role holder: %v", err)
 	}
 }
+
+// The owner here has no admin flag, so the outcome comes from the project ranks.
+func TestLeadEndsMemberRulesNotOwnerRules(t *testing.T) {
+	e := authorityFixture(t)
+	owner, lead, member := e.human("person:1"), e.human("person:2"), e.human("person:3")
+	ownerRule := e.standingBy(t, owner, e.room, "owner rule")
+	memberRule := e.standingBy(t, member, e.room, "member rule")
+	if err := lead.EndStanding(e.room, ownerRule); !errors.Is(err, ErrCoordForbidden) {
+		t.Errorf("lead ends an owner rule: %v", err)
+	}
+	if err := lead.EndStanding(e.room, memberRule); err != nil {
+		t.Errorf("lead ends a member rule: %v", err)
+	}
+	if err := owner.EndStanding(e.room, ownerRule); err != nil {
+		t.Errorf("owner ends own rule: %v", err)
+	}
+}
+
+func TestLeadChangesStateAndArchiveButNothingElse(t *testing.T) {
+	st, _ := mentionFixture(t)
+	author := st.CoordinationFor(webPrincipal("person:3", "mia"), "")
+	tid, err := author.CreateThread(Thread{Project: roleProject, Title: "project thread"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for who, id := range map[string]string{"lead": "person:2", "owner": "person:1"} {
+		a := st.CoordinationFor(webPrincipal(id, who), "")
+		if err := a.SetThreadState(tid, ThreadDeferred); err != nil {
+			t.Errorf("%s sets the state: %v", who, err)
+		}
+		if err := a.SetThreadArchived(tid, true); err != nil {
+			t.Errorf("%s archives: %v", who, err)
+		}
+		if err := a.SetThreadArchived(tid, false); err != nil {
+			t.Errorf("%s unarchives: %v", who, err)
+		}
+		if err := a.LinkThread(ThreadLink{ThreadID: tid, Kind: "request", ID: "REQ-1"}); !errors.Is(err, ErrCoordForbidden) {
+			t.Errorf("%s links: %v", who, err)
+		}
+		if _, err := a.PutThreadSummary(ThreadSummary{ThreadID: tid, Body: "s"}); !errors.Is(err, ErrCoordForbidden) {
+			t.Errorf("%s writes a summary: %v", who, err)
+		}
+		if err := a.TouchThread(tid); !errors.Is(err, ErrCoordForbidden) {
+			t.Errorf("%s touches: %v", who, err)
+		}
+	}
+}
+
+// A thread homed in a group room belongs to that room's members, even when a
+// request link gives it a project: a lead of that project is just a member.
+func TestLeadDoesNotManageAGroupThreadOfTheProject(t *testing.T) {
+	st, _ := mentionFixture(t)
+	group, err := st.CreateCoordGroup(GroupInput{Label: "g", Creator: "person:3", Members: []string{"person:3", "person:2"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := st.db.Exec(`INSERT INTO threads(project,title,question,state,archived,person,author_principal_id,created_at,updated_at)
+		VALUES(?,?,?,'open',0,'mia','person:3',?,?)`, roleProject, "group thread", "", now(), now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tid, _ := res.LastInsertId()
+	if _, err := st.db.Exec(`INSERT INTO thread_homes(thread_id,room_key,created_at) VALUES(?,?,?)`, tid, group.Key, now()); err != nil {
+		t.Fatal(err)
+	}
+	lead := st.CoordinationFor(webPrincipal("person:2", "lena"), "")
+	if lead.CanSetThreadState(tid) {
+		t.Error("lead may set the state of a group thread")
+	}
+	if err := lead.SetThreadState(tid, ThreadResolved); !errors.Is(err, ErrCoordForbidden) {
+		t.Errorf("lead resolves a group thread: %v", err)
+	}
+	if err := lead.SetThreadArchived(tid, true); !errors.Is(err, ErrCoordForbidden) {
+		t.Errorf("lead archives a group thread: %v", err)
+	}
+}

@@ -1737,7 +1737,7 @@ func (a CoordAccess) requireThreadMutation(threadID int64) (Thread, error) {
 	if err != nil {
 		return Thread{}, err
 	}
-	thread, err := a.requireThreadMutationTx(tx, actor, threadID)
+	thread, err := a.requireThreadStateTx(tx, actor, threadID)
 	if err != nil {
 		return Thread{}, err
 	}
@@ -1748,8 +1748,8 @@ func (a CoordAccess) requireThreadMutation(threadID int64) (Thread, error) {
 }
 
 // leadByRoleTx: a signed-in person (web session, no agent) with the project
-// role lead or owner may change any thread of the project, as for standing
-// instructions.
+// role lead or owner may set the state of, and archive, any thread of the
+// project room.
 func (a CoordAccess) leadByRoleTx(tx rowQuerier, project string) bool {
 	if a.AgentExternalID != "" || a.publicOnly || a.Principal.TokenKind != WebSessionKind {
 		return false
@@ -1759,7 +1759,7 @@ func (a CoordAccess) leadByRoleTx(tx rowQuerier, project string) bool {
 }
 
 // CanSetThreadState says whether the viewer may change the state of the thread
-// (author, room manager, or project lead and up): the same rule SetThreadState
+// (author, room manager, or project lead and up in the project room): the same rule SetThreadState
 // applies, so the page offers the form only where it would be accepted.
 func (a CoordAccess) CanSetThreadState(threadID int64) bool {
 	if a.Store == nil || a.publicOnly {
@@ -1770,6 +1770,17 @@ func (a CoordAccess) CanSetThreadState(threadID int64) bool {
 }
 
 func (a CoordAccess) requireThreadMutationTx(tx *sql.Tx, actor string, threadID int64) (Thread, error) {
+	return a.requireThreadChangeTx(tx, actor, threadID, false)
+}
+
+// requireThreadStateTx is requireThreadMutationTx plus the project lead and up:
+// only changing the state and archiving open to them, never links, summaries,
+// outcomes or touching.
+func (a CoordAccess) requireThreadStateTx(tx *sql.Tx, actor string, threadID int64) (Thread, error) {
+	return a.requireThreadChangeTx(tx, actor, threadID, true)
+}
+
+func (a CoordAccess) requireThreadChangeTx(tx *sql.Tx, actor string, threadID int64, leadMay bool) (Thread, error) {
 	if a.publicOnly {
 		return Thread{}, ErrCoordForbidden
 	}
@@ -1785,12 +1796,14 @@ func (a CoordAccess) requireThreadMutationTx(tx *sql.Tx, actor string, threadID 
 	if thread.AuthorPrincipalID != "" && thread.AuthorPrincipalID == a.Principal.ID {
 		return thread, nil
 	}
-	if a.leadByRoleTx(tx, thread.Project) {
-		return thread, nil
-	}
 	home, found, err := threadHomeTx(tx, threadID)
 	if err != nil {
 		return Thread{}, err
+	}
+	// The lead role is the project's: a thread homed in a group room belongs to
+	// that room's members, whatever project it is linked to.
+	if leadMay && (!found || home.RoomKey == RoomKeyForProject(thread.Project)) && a.leadByRoleTx(tx, thread.Project) {
+		return thread, nil
 	}
 	if found {
 		var manager int
@@ -1914,7 +1927,7 @@ func (a CoordAccess) SetThreadState(threadID int64, state string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := a.requireThreadMutationTx(tx, actor, threadID); err != nil {
+	if _, err := a.requireThreadStateTx(tx, actor, threadID); err != nil {
 		return err
 	}
 	ts := now()
@@ -1943,7 +1956,7 @@ func (a CoordAccess) SetThreadArchived(threadID int64, archived bool) error {
 	if err != nil {
 		return err
 	}
-	if _, err := a.requireThreadMutationTx(tx, actor, threadID); err != nil {
+	if _, err := a.requireThreadStateTx(tx, actor, threadID); err != nil {
 		return err
 	}
 	flag := 0
