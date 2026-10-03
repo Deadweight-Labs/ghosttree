@@ -54,6 +54,8 @@ const (
 	// ActWork: an einem Auftrag arbeiten (jedes Mitglied, auch an fremden).
 	ActWork  Action = "work"
 	ActShare Action = "share"
+	// ActPost: in den Projektraum schreiben (Nachricht, Antwort, Thread).
+	ActPost Action = "post"
 )
 
 var (
@@ -130,7 +132,7 @@ func matrixAllows(role RoleInfo, res Resource, act Action, obj Object) bool {
 	case ResSnapshot:
 		return (act == ActRead || act == ActCreate) && rank >= 2
 	case ResRoom:
-		return (act == ActRead || act == ActCreate) && rank >= 1
+		return ((act == ActRead || act == ActCreate) && rank >= 1) || (act == ActPost && rank >= 2)
 	case ResProject:
 		return act == ActRead && rank >= 1
 	case ResAgents:

@@ -104,10 +104,9 @@ func TestRefusedRoomPagesAreDesignedAndLeadSomewhere(t *testing.T) {
 	}
 }
 
-// Reading follows the role (matrix 8.1); writing stays with membership (spec
-// 7.5: roles never grant write access). The reader without an own agent gets
-// the room tabs and a quiet read-only line, no composer and no dead button.
-func TestOwnerWithoutAgentReadsTheRoomButCannotPost(t *testing.T) {
+// Reading and writing follow the project role (matrix 8.1, spec 7.5): owner,
+// lead and reviewer without an own agent get the room tabs and the composer.
+func TestOwnerWithoutAgentReadsTheRoomAndGetsTheComposer(t *testing.T) {
 	e := ovEnv(t)
 	room, hidden := memberReadSeed(t, e)
 	for who, c := range map[string]*http.Client{"owner": e.Owner, "lead": e.Lead, "reviewer": e.Reviewer} {
@@ -119,14 +118,18 @@ func TestOwnerWithoutAgentReadsTheRoomButCannotPost(t *testing.T) {
 		if who == "owner" && !strings.Contains(page, `href="/ui/coord?room=`+url.QueryEscape(hidden)+`"`) {
 			t.Errorf("the other readable room is not a tab")
 		}
-		if !strings.Contains(page, `class="coord-readonly"`) || !strings.Contains(page, messages["coord.readonly"]) {
-			t.Errorf("%s: no read-only line", who)
+		if strings.Contains(page, "coord-readonly") || strings.Contains(page, messages["coord.readonly"]) {
+			t.Errorf("%s: read-only line despite write access", who)
 		}
-		for _, dead := range []string{`class="coord-composer"`, "/ui/coord/thread/create", "/ui/coord/standing/create", "/ui/coord/standing/end", "/ui/coord/promote", "/ui/coord/send"} {
-			if strings.Contains(page, dead) {
-				t.Errorf("%s: dead control %s", who, dead)
+		for _, want := range []string{`class="coord-composer"`, "/ui/coord/thread/create", "/ui/coord/send"} {
+			if !strings.Contains(page, want) {
+				t.Errorf("%s: no %s", who, want)
 			}
 		}
+	}
+	_, page := fetchPage(t, e.Guest, e.Base+"/ui/coord?room="+url.QueryEscape(room))
+	if strings.Contains(page, `class="coord-composer"`) {
+		t.Error("guest sees a composer")
 	}
 }
 
@@ -142,36 +145,46 @@ func TestMemberWithAgentGetsTheComposer(t *testing.T) {
 	}
 }
 
-func TestRoleNeverGrantsWriteAccess(t *testing.T) {
-	e := ovEnv(t)
-	room, _ := memberReadSeed(t, e)
-	writes := map[string]url.Values{
-		"/ui/coord/send":            {"body": {"nope"}},
-		"/ui/coord/standing/create": {"body": {"nope"}, "confirm_scope": {"1"}},
-		"/ui/coord/thread/create":   {"title": {"Nope thread"}},
-	}
-	for who, c := range map[string]*http.Client{"owner": e.Owner, "lead": e.Lead, "reviewer": e.Reviewer} {
-		for path, form := range writes {
-			if st := postRoom(t, e, c, path, room, form); st != http.StatusForbidden {
-				t.Errorf("%s %s: %d, want 403", who, path, st)
+func TestRoleGrantsWriteAccessToOwnersAndMembersNotGuests(t *testing.T) {
+	for name, enforce := range map[string]bool{"enforced": true, "log mode": false} {
+		t.Run(name, func(t *testing.T) {
+			e := ovEnv(t)
+			e.St.SetAccessMode(store.AccessMode{Enforce: enforce})
+			room, _ := memberReadSeed(t, e)
+			for who, c := range map[string]*http.Client{"owner": e.Owner, "lead": e.Lead, "reviewer": e.Reviewer} {
+				if st := postRoom(t, e, c, "/ui/coord/send", room, url.Values{"body": {"post-by-" + who}}); st != http.StatusSeeOther {
+					t.Errorf("%s send: %d, want 303", who, st)
+				}
+				if st := postRoom(t, e, c, "/ui/coord/thread/create", room, url.Values{"title": {"Thread by " + who}}); st != http.StatusSeeOther {
+					t.Errorf("%s thread: %d, want 303", who, st)
+				}
 			}
-		}
-	}
-	_, page := fetchPage(t, e.Member, e.Base+"/ui/coord?room="+url.QueryEscape(room))
-	if strings.Contains(page, "nope") || strings.Contains(page, "Nope thread") {
-		t.Error("a refused write left a trace")
-	}
-	// The owner holds the role but not the membership: the store refuses too.
-	owner := e.St.CoordinationFor(store.Principal{ID: "person:1", Label: "alice", TokenKind: store.WebSessionKind}, "")
-	if _, err := owner.Send(store.CoordMessage{DestinationKind: store.DestinationRoom, DestinationID: room, ClientID: "o1", Body: "nope"}); !errors.Is(err, store.ErrCoordForbidden) {
-		t.Errorf("owner Send: %v", err)
-	}
-	if owner.CanPost(room) {
-		t.Error("CanPost true for an owner without membership")
-	}
-	// Reading stays open.
-	if _, err := owner.Room(room); err != nil {
-		t.Errorf("owner Room: %v", err)
+			_, page := fetchPage(t, e.Member, e.Base+"/ui/coord?room="+url.QueryEscape(room))
+			for _, want := range []string{"post-by-owner", "post-by-lead", "post-by-reviewer", "Thread by owner"} {
+				if !strings.Contains(page, want) {
+					t.Errorf("room does not show %q", want)
+				}
+			}
+			if st := postRoom(t, e, e.Guest, "/ui/coord/send", room, url.Values{"body": {"nope"}}); st != http.StatusForbidden {
+				t.Errorf("guest send: %d, want 403", st)
+			}
+			if st := postRoom(t, e, e.Guest, "/ui/coord/thread/create", room, url.Values{"title": {"Nope thread"}}); st != http.StatusForbidden {
+				t.Errorf("guest thread: %d, want 403", st)
+			}
+			_, page = fetchPage(t, e.Owner, e.Base+"/ui/coord?room="+url.QueryEscape(room))
+			if strings.Contains(page, "nope") || strings.Contains(page, "Nope thread") {
+				t.Error("a refused write left a trace")
+			}
+			owner := e.St.CoordinationFor(store.Principal{ID: "person:1", Label: "alice", TokenKind: store.WebSessionKind}, "")
+			if !owner.CanPost(room) {
+				t.Error("CanPost false for an owner")
+			}
+			// A bearer token of the same person is not a browser session.
+			tok := e.St.CoordinationFor(store.Principal{ID: "person:1", Label: "alice", TokenKind: "token"}, "")
+			if tok.CanPost(room) {
+				t.Error("CanPost true for a token principal")
+			}
+		})
 	}
 }
 
@@ -197,16 +210,13 @@ func TestMembersWithAgentWriteAsThemselves(t *testing.T) {
 	if st := postRoom(t, e, e.Guest, "/ui/coord/send", room, url.Values{"body": {"guest"}}); st != http.StatusForbidden {
 		t.Errorf("guest post: %d", st)
 	}
-	// The member ends their own instruction; the owner cannot end any (no membership).
+	// The owner ends any instruction through the role; no membership is needed.
 	standing, err := e.St.CoordinationFor(store.Principal{ID: "person:1", Label: "alice", TokenKind: store.WebSessionKind}, "").Standing(room)
 	if err != nil || len(standing) != 1 {
 		t.Fatalf("standing %v %v", len(standing), err)
 	}
-	if st := postRoom(t, e, e.Owner, "/ui/coord/standing/end", room, url.Values{"message_id": {standing[0].MessageID}}); st != http.StatusForbidden {
+	if st := postRoom(t, e, e.Owner, "/ui/coord/standing/end", room, url.Values{"message_id": {standing[0].MessageID}}); st != http.StatusSeeOther {
 		t.Errorf("owner ends without membership: %d", st)
-	}
-	if st := postRoom(t, e, e.Member, "/ui/coord/standing/end", room, url.Values{"message_id": {standing[0].MessageID}}); st != http.StatusSeeOther {
-		t.Errorf("member ends own: %d", st)
 	}
 }
 
@@ -366,9 +376,9 @@ func TestAgentsPageShowsLastPostAndWorkingRoomLinkToOwnerWithoutRoomAgent(t *tes
 	}
 }
 
-// Reply links and the thread state form are write controls: a reader without
-// an own agent in the room does not get them, a member with an agent does.
-func TestReadersWithoutMembershipGetNoReplyOrThreadStateControls(t *testing.T) {
+// Reply links are write controls: a viewer who may post (by role or by an own
+// agent) gets them; the guest cannot open the room at all.
+func TestOwnerWithoutAgentGetsReplyControls(t *testing.T) {
 	e := ovEnv(t)
 	room, _ := memberReadSeed(t, e)
 	if st := postRoom(t, e, e.Member, "/ui/coord/send", room, url.Values{"body": {"post-by-member"}}); st != http.StatusSeeOther {
@@ -388,10 +398,11 @@ func TestReadersWithoutMembershipGetNoReplyOrThreadStateControls(t *testing.T) {
 		if !strings.Contains(page, "post-by-member") && !strings.Contains(page, "Member thread") {
 			t.Fatalf("owner does not read %s", target)
 		}
-		for _, dead := range []string{"coord-reply-action", "/ui/coord/thread/state"} {
-			if strings.Contains(page, dead) {
-				t.Errorf("owner without membership sees %s on %s", dead, target)
-			}
+		if target == roomURL && !strings.Contains(page, "coord-reply-action") {
+			t.Errorf("owner without an agent has no reply link on %s", target)
+		}
+		if strings.Contains(page, "/ui/coord/thread/state") {
+			t.Errorf("owner who did not author the thread sees the state form on %s", target)
 		}
 	}
 	_, page := fetchPage(t, e.Member, roomURL)
