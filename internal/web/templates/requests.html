@@ -48,7 +48,8 @@
 <label class="kn-field"><span>{{t "requests.field_title"}}</span><input class="clay-field" name="title" value="{{.RawTitle}}" required maxlength="500"></label>
 <label class="kn-field"><span>{{t "requests.field_kind"}}</span><select class="clay-select" name="type">{{range .Types}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select></label>
 <label class="kn-field"><span>{{t "requests.field_priority"}}</span><input class="clay-field" name="priority" value="{{.Priority}}" maxlength="64" list="rq-priorities" autocomplete="off"><datalist id="rq-priorities">{{range .Priorities}}<option value="{{.}}">{{end}}</datalist></label>
-<label class="kn-field"><span>{{t "requests.field_description"}}</span><textarea class="clay-field kn-textarea" name="description" required rows="10">{{.RawDescription}}</textarea></label>
+<label class="kn-field"><span>{{t "requests.field_description"}}</span><textarea class="clay-field kn-textarea" name="description" rows="10">
+{{.RawDescription}}</textarea></label>
 <label class="kn-field"><span>{{t "requests.field_reason"}}</span><input class="clay-field" name="reason" required maxlength="2000" autocomplete="off"></label>
 <button class="ov-btn ov-btn-primary clay">{{t "requests.save"}}</button></form></details>
 {{if .Open}}{{if .CanComplete}}<details class="kn-edit clay"><summary>{{t "requests.complete"}}</summary>
@@ -61,5 +62,5 @@
 <label class="kn-field"><span>{{t "requests.field_drop_reason"}}</span><input class="clay-field" name="reason" required maxlength="2000" autocomplete="off"></label>
 <button class="ov-btn clay">{{t "requests.drop"}}</button></form></details>{{end}}</section>{{end}}
 
-{{if .Activity}}<section class="rq-section kn-history"><h2>{{t "requests.history"}}</h2><ul class="ov-list rq-log">{{range .Activity}}<li><span class="rq-act">{{.Label}}</span>{{if .Text}}<span class="rq-acttext">{{.Text}}</span>{{end}}<span class="ov-meta">{{.By}}</span><span class="ov-num kn-age">{{.Age}}</span></li>{{end}}</ul></section>{{end}}
+{{if .Activity}}<section class="rq-section kn-history"><h2>{{t "requests.history"}}</h2><ul class="ov-list rq-log">{{range .Activity}}<li><span class="rq-act">{{.Label}}</span><span class="rq-acttext{{if .Code}} rq-cid{{end}}">{{.Text}}</span><span class="ov-meta">{{.By}}</span><span class="ov-num kn-age">{{.Age}}</span></li>{{end}}</ul></section>{{end}}
 {{end}}{{template "foot" .}}{{end}}

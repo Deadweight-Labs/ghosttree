@@ -265,6 +265,8 @@ var writerMethodClasses = map[string]string{
 	"SearchKnowledgeForContext":     "read_with_best_effort",
 	"SearchRequestSessions":         "read",
 	"SearchRequests":                "read",
+	"ActiveWorkOnRequests":          "read",
+	"RequestPriorities":             "read",
 	"SearchThreads":                 "read",
 	"SearchThreadsFor":              "read",
 	"SplitThread":                   "write",

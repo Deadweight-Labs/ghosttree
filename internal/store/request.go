@@ -193,6 +193,44 @@ func (s *Store) RequestByID(id int64) (requestdomain.Detail, error) {
 // requests apart, short enough that a page of them stays readable.
 const snippetChars = 200
 
+// requestScopeWhere is the part of a request query that says which requests
+// the caller may see at all: the scope axes and the visibility restriction.
+func requestScopeWhere(filter requestdomain.SearchFilter) ([]string, []any) {
+	var where []string
+	var args []any
+	// An unset axis on a request means "applies everywhere along it", so a
+	// caller naming a branch or machine must still see the project-wide
+	// entries. Matching exactly would hide most of the backlog.
+	for _, axis := range []struct{ col, v string }{
+		{"project", filter.Scope.Project}, {"branch", filter.Scope.Branch}, {"machine", filter.Scope.Machine},
+	} {
+		if axis.v != "" {
+			where = append(where, `(r.`+axis.col+`='' OR r.`+axis.col+`=?)`)
+			args = append(args, axis.v)
+		}
+	}
+	if filter.Restrict {
+		marks := make([]string, len(filter.Projects))
+		for i, p := range filter.Projects {
+			marks[i] = "?"
+			args = append(args, p)
+		}
+		clause := `r.project=''`
+		if len(marks) > 0 {
+			clause += ` OR r.project IN (` + strings.Join(marks, ",") + `)`
+		}
+		switch {
+		case filter.UnclaimedAll:
+			clause += ` OR r.project NOT IN (SELECT remote FROM projects)`
+		case filter.UnclaimedAuthor != "":
+			clause += ` OR (r.person=? AND r.project NOT IN (SELECT remote FROM projects))`
+			args = append(args, filter.UnclaimedAuthor)
+		}
+		where = append(where, `(`+clause+`)`)
+	}
+	return where, args
+}
+
 func (s *Store) SearchRequests(filter requestdomain.SearchFilter) (requestdomain.SearchPage, error) {
 	if s.reader != nil {
 		return s.reader.SearchRequests(filter)
@@ -228,36 +266,9 @@ func (s *Store) SearchRequests(filter requestdomain.SearchFilter) (requestdomain
 		where = append(where, `search_documents_fts MATCH ?`)
 		args = append(args, ftsQuery(filter.Query))
 	}
-	// An unset axis on a request means "applies everywhere along it", so a
-	// caller naming a branch or machine must still see the project-wide
-	// entries. Matching exactly would hide most of the backlog.
-	for _, axis := range []struct{ col, v string }{
-		{"project", filter.Scope.Project}, {"branch", filter.Scope.Branch}, {"machine", filter.Scope.Machine},
-	} {
-		if axis.v != "" {
-			where = append(where, `(r.`+axis.col+`='' OR r.`+axis.col+`=?)`)
-			args = append(args, axis.v)
-		}
-	}
-	if filter.Restrict {
-		marks := make([]string, len(filter.Projects))
-		for i, p := range filter.Projects {
-			marks[i] = "?"
-			args = append(args, p)
-		}
-		clause := `r.project=''`
-		if len(marks) > 0 {
-			clause += ` OR r.project IN (` + strings.Join(marks, ",") + `)`
-		}
-		switch {
-		case filter.UnclaimedAll:
-			clause += ` OR r.project NOT IN (SELECT remote FROM projects)`
-		case filter.UnclaimedAuthor != "":
-			clause += ` OR (r.person=? AND r.project NOT IN (SELECT remote FROM projects))`
-			args = append(args, filter.UnclaimedAuthor)
-		}
-		where = append(where, `(`+clause+`)`)
-	}
+	scopeWhere, scopeArgs := requestScopeWhere(filter)
+	where = append(where, scopeWhere...)
+	args = append(args, scopeArgs...)
 	if filter.State != "" {
 		where = append(where, `r.state=?`)
 		args = append(args, filter.State)

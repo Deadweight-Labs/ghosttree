@@ -131,11 +131,12 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.handle(mux, "GET /ui/requests", a.requirePerson(http.HandlerFunc(a.requestsPage)))
 	a.handle(mux, "GET /ui/requests/{id}", a.requirePerson(http.HandlerFunc(a.requestPage)))
 	for suffix, h := range map[string]http.HandlerFunc{
-		"criteria": a.requestAddCriterion, "criteria/{cid}": a.requestResolve, "correct": a.requestCorrect,
+		"criteria": a.requestAddCriterion, "criteria/{cid}": a.requestResolve,
 		"complete": a.requestComplete, "drop": a.requestDrop,
 	} {
 		a.handle(mux, "POST /ui/requests/{id}/"+suffix, a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(h)))))
 	}
+	a.handle(mux, "POST /ui/requests/{id}/correct", a.requirePerson(a.requireInteractive(limitBodyN(requestCorrectForm, a.requireCSRF(http.HandlerFunc(a.requestCorrect))))))
 	a.handle(mux, "GET /ui/knowledge", a.requirePerson(http.HandlerFunc(a.knowledgePage)))
 	a.handle(mux, "GET /ui/knowledge/{id}", a.requirePerson(http.HandlerFunc(a.knowledgeItemPage)))
 	a.handle(mux, "POST /ui/knowledge/{id}/edit", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.knowledgeEdit))))))
@@ -299,6 +300,25 @@ func (a *app) accessDenied(w http.ResponseWriter, r *http.Request, err error) bo
 		http.NotFound(w, r)
 	}
 	return true
+}
+
+// gateList prüft eine Liste mit ausdrücklichem Projekt. Wer das Projekt nicht
+// sehen darf, bekommt dieselbe leere Liste wie bei einem unbekannten Projekt
+// (empty), nicht 404 gegen 200: der Unterschied verriete, dass es das Projekt
+// gibt. stop heißt, dass die Antwort schon geschrieben ist (403).
+func (a *app) gateList(w http.ResponseWriter, r *http.Request, pa *store.ProjectAccess, project string, res store.Resource) (empty, stop bool) {
+	if project == "" {
+		return false, false
+	}
+	err := pa.GateList(project, res, true)
+	switch {
+	case err == nil:
+		return false, false
+	case errors.Is(err, store.ErrAccessForbidden):
+		return false, a.accessDenied(w, r, err)
+	default:
+		return true, false
+	}
 }
 
 // keep behält die Einträge, die allow zulässt, höchstens limit viele (0 = alle).

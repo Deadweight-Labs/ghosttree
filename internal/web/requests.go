@@ -29,6 +29,11 @@ const (
 	activityShown   = 30
 	maxTextBytes    = 100_000
 	maxFieldBytes   = 2_000
+	maxTitleBytes   = 500
+	maxPriority     = 64
+	// Ein Formular kodiert Zeilenumbrüche und Umlaute mehrfach; die Grenze
+	// liegt über dem Dreifachen des längsten Textes.
+	requestCorrectForm = 3*maxTextBytes + 8<<10
 )
 
 var (
@@ -108,6 +113,7 @@ type relationLine struct {
 
 type activityLine struct {
 	Label, Text, By, Age string
+	Code                 bool
 }
 
 type requestResult struct {
@@ -179,12 +185,13 @@ func (a *app) requestsPage(w http.ResponseWriter, r *http.Request) {
 		typ = ""
 	}
 	priority := strings.TrimSpace(query.Get("priority"))
-	if len(priority) > 64 {
+	if len(priority) > maxPriority {
 		priority = ""
 	}
 	project := a.projectParam(r)
 	pa := a.access(r)
-	if project != "" && a.accessDenied(w, r, pa.GateList(project, store.ResRequest, true)) {
+	hidden, stop := a.gateList(w, r, pa, project, store.ResRequest)
+	if stop {
 		return
 	}
 	filter := requestdomain.SearchFilter{Scope: scope.Axes{Project: project}, Query: q, Type: typ, Limit: requestsShown, Cursor: query.Get("cursor")}
@@ -198,35 +205,45 @@ func (a *app) requestsPage(w http.ResponseWriter, r *http.Request) {
 	if _, err := strconv.ParseInt(filter.Cursor, 10, 64); err != nil {
 		filter.Cursor = ""
 	}
-	// Die Auswahl der Prioritäten kommt aus derselben Suche ohne Prioritätsfilter.
-	options := filter
-	options.Cursor = ""
 	filter.Priority = priority
-	page, err := a.store.SearchRequests(pa.RequestFilter(filter))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	pa.NoteRequestHits(page.Results)
+	var page requestdomain.SearchPage
 	priorities := map[string]bool{}
-	if priority == "" {
-		for _, h := range page.Results {
-			priorities[h.Request.Priority] = true
+	progress := map[int64]store.CriteriaProgress{}
+	var work map[int64][]store.ActiveRequestWork
+	if !hidden {
+		var err error
+		if page, err = a.store.SearchRequests(pa.RequestFilter(filter)); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
-	} else if other, oerr := a.store.SearchRequests(pa.RequestFilter(options)); oerr == nil {
-		for _, h := range other.Results {
-			priorities[h.Request.Priority] = true
+		pa.NoteRequestHits(page.Results)
+		// Die Auswahl hängt nicht von der Seite ab: alle Prioritäten der lesbaren Menge.
+		known, err := a.store.RequestPriorities(pa.RequestFilter(requestdomain.SearchFilter{Scope: scope.Axes{Project: project}}))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
-		priorities[priority] = true
-	}
-	ids := make([]int64, len(page.Results))
-	for i, h := range page.Results {
-		ids[i] = h.Request.ID
-	}
-	progress, err := a.store.CriteriaProgress(ids)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		for _, p := range known {
+			priorities[p] = true
+		}
+		if priority != "" {
+			priorities[priority] = true
+		}
+		ids, openIDs := make([]int64, len(page.Results)), []int64{}
+		for i, h := range page.Results {
+			ids[i] = h.Request.ID
+			if h.Request.State == "open" {
+				openIDs = append(openIDs, h.Request.ID)
+			}
+		}
+		if progress, err = a.store.CriteriaProgress(ids); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if work, err = a.store.ActiveWorkOnRequests(pa, openIDs); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 	now := overviewNow().UTC()
 	v := &requestsView{Q: q, Project: project, ShowProject: project == "", Guest: a.shellBaseFor(r).who.kind == viewerGuest}
@@ -246,7 +263,7 @@ func (a *app) requestsPage(w http.ResponseWriter, r *http.Request) {
 			row.Progress = strconv.Itoa(p.Done) + "/" + strconv.Itoa(p.Total)
 		}
 		if h.Request.State == "open" {
-			row.Working = a.workingChips(pa, h.Request.ID)
+			row.Working = workingChips(work[h.Request.ID])
 		}
 		v.Rows = append(v.Rows, row)
 	}
@@ -289,27 +306,19 @@ func requestSelects(state, typ, priority string, priorities map[string]bool) []f
 	return sels
 }
 
-// workingChips nennt die Sessions, die gerade an einem Auftrag arbeiten, nur
-// mit lesbarem Transkript (die Detailsicht entscheidet) und per Adresse.
-func (a *app) workingChips(pa *store.ProjectAccess, id int64) []chip {
-	detail, err := a.store.RequestByID(id)
-	if err != nil {
-		return nil
-	}
-	detail = pa.RequestDetailView(detail)
+// workingChips nennt die Sessions, die gerade an einem Auftrag arbeiten; die
+// Abfrage hat schon nur lesbare Transkripte geliefert, per Adresse.
+func workingChips(work []store.ActiveRequestWork) []chip {
 	var out []chip
 	more := 0
-	for _, wk := range detail.Work {
-		if wk.State != "active" || wk.SessionPublicID == "" {
-			continue
-		}
+	for _, wk := range work {
 		if len(out) >= requestWorkChip {
 			more++
 			continue
 		}
 		title := msg("requests.session")
-		if sess, err := a.store.SessionByPublicID(wk.SessionPublicID); err == nil && strings.TrimSpace(sess.Title) != "" {
-			title = ellipsize(sess.Title, 36)
+		if wk.Title != "" {
+			title = ellipsize(wk.Title, 36)
 		}
 		out = append(out, chip{Href: "/ui/sessions/" + wk.SessionPublicID, Text: title})
 	}
@@ -454,7 +463,7 @@ func (a *app) requestPage(w http.ResponseWriter, r *http.Request) {
 	v.CanComplete = v.Open && v.CanEdit && open == 0
 	v.Work = a.workLines(detail.Work, now)
 	v.Relations = a.relationLines(pa, detail.Relations)
-	v.Activity = activityLines(detail.Activity, humans, now)
+	v.Activity = activityLines(a.visibleActivity(pa, detail), humans, now)
 	v.Result = a.requestResult(r, raw)
 	a.renderBrowser(w, r, "request", pageData{Title: req.HumanID(), RequestV: v})
 }
@@ -483,11 +492,9 @@ func (a *app) knownPriorities(pa *store.ProjectAccess, project, current string) 
 	if current != "" {
 		set[current] = true
 	}
-	if page, err := a.store.SearchRequests(pa.RequestFilter(requestdomain.SearchFilter{Scope: scope.Axes{Project: project}, Limit: requestsShown})); err == nil {
-		for _, h := range page.Results {
-			if h.Request.Priority != "" && (project == "" || h.Request.Scope.Project == project) {
-				set[h.Request.Priority] = true
-			}
+	if known, err := a.store.RequestPriorities(pa.RequestFilter(requestdomain.SearchFilter{Scope: scope.Axes{Project: project}})); err == nil {
+		for _, p := range known {
+			set[p] = true
 		}
 	}
 	out := make([]string, 0, len(set))
@@ -533,8 +540,7 @@ func (a *app) relationLines(pa *store.ProjectAccess, rels []requestdomain.Relati
 		line := relationLine{Kind: rel.Kind, Label: label(relationKeys, rel.Kind)}
 		switch {
 		case rel.OtherRequestID != 0:
-			ref, err := a.store.RequestRef(store.RefRequest, rel.OtherRequestID)
-			if err != nil || pa.Check(ref.Project, store.ResRequest, store.ActRead, requestObject(pa, ref.Person)) != nil {
+			if !a.requestReadable(pa, rel.OtherRequestID) {
 				continue
 			}
 			other, err := a.store.RequestByID(rel.OtherRequestID)
@@ -555,6 +561,69 @@ func (a *app) relationLines(pa *store.ProjectAccess, rels []requestdomain.Relati
 			}
 		}
 		out = append(out, line)
+	}
+	return out
+}
+
+func (a *app) requestReadable(pa *store.ProjectAccess, id int64) bool {
+	ref, err := a.store.RequestRef(store.RefRequest, id)
+	return err == nil && pa.Check(ref.Project, store.ResRequest, store.ActRead, requestObject(pa, ref.Person)) == nil
+}
+
+func (a *app) knowledgeReadable(pa *store.ProjectAccess, id int64) bool {
+	k, err := a.store.KnowledgeByID(id)
+	return err == nil && pa.CanSeeKnowledge(k)
+}
+
+var removedTarget = regexp.MustCompile(`^\S+ (?:REQ-(\d+)|knowledge #(\d+))(?: |$)`)
+
+// visibleActivity lässt die Beziehungs-Einträge weg, deren Gegenüber der
+// Betrachter nicht lesen darf: im Verlauf stünde sonst, dass es sie gibt. Das
+// Ziel von "relation.added" steht nicht im Eintrag, es wird über Art und
+// Zeitpunkt der Beziehung gefunden; was sich nicht auflösen lässt (die
+// Beziehung wurde inzwischen zurückgenommen), bleibt weg.
+func (a *app) visibleActivity(pa *store.ProjectAccess, d requestdomain.Detail) []requestdomain.Activity {
+	readable := func(rel requestdomain.Relation) bool {
+		switch {
+		case rel.OtherRequestID != 0:
+			return a.requestReadable(pa, rel.OtherRequestID)
+		case rel.KnowledgeID != 0:
+			return a.knowledgeReadable(pa, rel.KnowledgeID)
+		}
+		return true
+	}
+	out := make([]requestdomain.Activity, 0, len(d.Activity))
+	for _, act := range d.Activity {
+		switch act.Kind {
+		case "relation.added":
+			found := false
+			ok := true
+			for _, rel := range d.Relations {
+				if rel.Kind == act.Data && rel.CreatedAt == act.CreatedAt {
+					found = true
+					ok = ok && readable(rel)
+				}
+			}
+			if !found || !ok {
+				continue
+			}
+		case "relation.removed":
+			m := removedTarget.FindStringSubmatch(act.Data)
+			if m == nil {
+				// Eine externe Verknüpfung nennt keine Nummer.
+				if strings.Contains(act.Data, "REQ-") || strings.Contains(act.Data, "knowledge #") {
+					continue
+				}
+				break
+			}
+			var rel requestdomain.Relation
+			rel.OtherRequestID, _ = strconv.ParseInt(m[1], 10, 64)
+			rel.KnowledgeID, _ = strconv.ParseInt(m[2], 10, 64)
+			if !readable(rel) {
+				continue
+			}
+		}
+		out = append(out, act)
 	}
 	return out
 }
@@ -585,7 +654,7 @@ func activityLines(acts []requestdomain.Activity, humans map[int64]string, now t
 			line.Text = ellipsize(sessionScrub.ReplaceAllString(act.Data, msg("requests.session")), 200)
 		case "criterion.met", "criterion.waived":
 			if n, err := strconv.ParseInt(strings.TrimPrefix(act.Data, "AC-"), 10, 64); err == nil {
-				line.Text = humans[n]
+				line.Text, line.Code = humans[n], humans[n] != ""
 			}
 		case "work.started", "work.resumed":
 			_, role, _ := strings.Cut(act.Data, "role:")
@@ -666,8 +735,10 @@ func (a *app) requestFail(w http.ResponseWriter, r *http.Request, id int64, err 
 	}
 }
 
+func lineBreaks(s string) string { return strings.NewReplacer("\r\n", "\n", "\r", "\n").Replace(s) }
+
 func cleanText(s string, limit int) (string, bool) {
-	s = strings.TrimSpace(strings.NewReplacer("\r\n", "\n", "\r", "\n").Replace(s))
+	s = strings.TrimSpace(lineBreaks(s))
 	return s, s != "" && len(s) <= limit
 }
 
@@ -735,6 +806,11 @@ func (a *app) requestResolve(w http.ResponseWriter, r *http.Request) {
 	a.requestDone(w, r, detail.Request.ID, state, url.Values{"c": {strconv.FormatInt(cid, 10)}})
 }
 
+// requestCorrect ändert nur, was sich wirklich geändert hat, und prüft Länge
+// nur dort: ein Altbestand über der Grenze bleibt korrigierbar, solange das
+// Feld unberührt bleibt. Die Beschreibung wird nicht getrimmt (ein
+// eingerückter Codeblock bleibt), nur die Zeilenumbrüche werden vereinheitlicht;
+// sie darf leer werden, wie in der API.
 func (a *app) requestCorrect(w http.ResponseWriter, r *http.Request) {
 	detail, ok := a.lookupRequest(w, r, store.ActEdit)
 	if !ok {
@@ -742,21 +818,38 @@ func (a *app) requestCorrect(w http.ResponseWriter, r *http.Request) {
 	}
 	req := detail.Request
 	reason, valid := cleanText(r.FormValue("reason"), maxFieldBytes)
-	title, titleOK := cleanText(r.FormValue("title"), 500)
-	description, descOK := cleanText(r.FormValue("description"), maxTextBytes)
-	typ := r.FormValue("type")
-	priority := strings.TrimSpace(r.FormValue("priority"))
-	if !valid || !titleOK || !descOK || len(priority) > 64 || (typ != req.Type && !slices.Contains(requestTypes, typ)) {
+	if !valid {
 		http.Error(w, "invalid input", http.StatusBadRequest)
 		return
 	}
 	patch := map[string]string{}
-	for field, pair := range map[string][2]string{
-		"title": {title, req.Title}, "description": {description, req.Description}, "type": {typ, req.Type}, "priority": {priority, req.Priority},
-	} {
-		if pair[0] != pair[1] {
-			patch[field] = pair[0]
+	if title := strings.TrimSpace(lineBreaks(r.FormValue("title"))); title != strings.TrimSpace(req.Title) {
+		if title == "" || len(title) > maxTitleBytes {
+			http.Error(w, "invalid input", http.StatusBadRequest)
+			return
 		}
+		patch["title"] = title
+	}
+	if description := lineBreaks(r.FormValue("description")); description != lineBreaks(req.Description) {
+		if len(description) > maxTextBytes {
+			http.Error(w, "invalid input", http.StatusBadRequest)
+			return
+		}
+		patch["description"] = description
+	}
+	if typ := r.FormValue("type"); typ != req.Type {
+		if !slices.Contains(requestTypes, typ) {
+			http.Error(w, "invalid input", http.StatusBadRequest)
+			return
+		}
+		patch["type"] = typ
+	}
+	if priority := strings.TrimSpace(r.FormValue("priority")); priority != strings.TrimSpace(req.Priority) {
+		if len(priority) > maxPriority {
+			http.Error(w, "invalid input", http.StatusBadRequest)
+			return
+		}
+		patch["priority"] = priority
 	}
 	if len(patch) == 0 {
 		http.Error(w, "nothing to change", http.StatusBadRequest)

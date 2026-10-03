@@ -172,8 +172,17 @@ func TestRequestListHidesWhatTheViewerMayNotRead(t *testing.T) {
 			t.Errorf("guest list leaks %q", leak)
 		}
 	}
-	if code, _ := e.get(t, e.Guest, "/ui/requests?project="+url.QueryEscape(shellHiddenProject)); code != http.StatusNotFound {
-		t.Errorf("guest asking for the hidden project = %d", code)
+	hiddenCode, hiddenPage := e.get(t, e.Guest, "/ui/requests?project="+url.QueryEscape(shellHiddenProject))
+	unknownCode, unknownPage := e.get(t, e.Guest, "/ui/requests?project="+url.QueryEscape("github.com/nobody/unknown"))
+	if hiddenCode != http.StatusOK || unknownCode != http.StatusOK {
+		t.Errorf("guest asking for hidden / unknown project = %d / %d, want 200 for both", hiddenCode, unknownCode)
+	}
+	if strings.Contains(hiddenPage, "SECRET") || strings.Contains(hiddenPage, `class="kn-item`) {
+		t.Error("the hidden project's list is not empty")
+	}
+	if strings.ReplaceAll(hiddenPage, url.QueryEscape(shellHiddenProject), "P") != strings.ReplaceAll(unknownPage, url.QueryEscape("github.com/nobody/unknown"), "P") &&
+		strings.ReplaceAll(hiddenPage, shellHiddenProject, "P") != strings.ReplaceAll(unknownPage, "github.com/nobody/unknown", "P") {
+		t.Error("a hidden project answers differently from an unknown one")
 	}
 	_, owner := e.get(t, e.Owner, "/ui/requests")
 	if !strings.Contains(owner, "SECRET-REQ") {
@@ -385,7 +394,7 @@ func TestRequestCorrectNeedsAReasonAndEditRight(t *testing.T) {
 	}
 	for name, change := range map[string]map[string]string{
 		"no reason": {"title": "New", "reason": " "}, "no change": {}, "empty title": {"title": " "},
-		"bad type": {"type": "epic"}, "empty description": {"description": ""},
+		"bad type": {"type": "epic"},
 	} {
 		if resp := rqPost(t, e, e.Lead, id, "/correct", form(change)); resp.StatusCode != http.StatusBadRequest {
 			t.Errorf("%s: %d", name, resp.StatusCode)
@@ -574,5 +583,204 @@ func TestRequestDetailOffersOnlyTheActionsTheViewerMayTake(t *testing.T) {
 	_, page := fetchPage(t, e.Owner, e.Base+rqPath(id, "?edit=1"))
 	if !strings.Contains(page, `id="edit" open`) {
 		t.Error("?edit=1 does not open the form")
+	}
+}
+
+func rqBody(t *testing.T, e shellEnv, id int64) requestdomain.Request {
+	t.Helper()
+	got, err := e.St.RequestByID(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got.Request
+}
+
+func rqCorrectForm(title, desc, reason string) url.Values {
+	return url.Values{"title": {title}, "description": {desc}, "type": {"bug"}, "priority": {"mittel"}, "reason": {reason}}
+}
+
+func TestRequestCorrectAcceptsALongDescription(t *testing.T) {
+	e := ovEnv(t)
+	d := rqMake(t, e.St, rqSpec{Title: "Long", Desc: "short", Priority: "mittel", Type: "bug"})
+	long := strings.Repeat("Zeile mit Umlauten äöü\r\n", 1500)
+	resp := rqPost(t, e, e.Lead, d.Request.ID, "/correct", rqCorrectForm("Long", long, "more detail"))
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("a description over 4 KiB = %d", resp.StatusCode)
+	}
+	if got := rqBody(t, e, d.Request.ID).Description; got != strings.ReplaceAll(long, "\r\n", "\n") {
+		t.Errorf("long description not stored (%d bytes)", len(got))
+	}
+	tooLong := strings.Repeat("x", maxTextBytes+1)
+	if resp := rqPost(t, e, e.Lead, d.Request.ID, "/correct", rqCorrectForm("Long", tooLong, "too much")); resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("a description over the limit = %d", resp.StatusCode)
+	}
+}
+
+func TestRequestCorrectMayEmptyTheDescriptionAndKeepsIndentation(t *testing.T) {
+	e := ovEnv(t)
+	d := rqMake(t, e.St, rqSpec{Title: "Keep", Desc: "old", Priority: "mittel", Type: "bug"})
+	id := d.Request.ID
+	code := "    indented code\n    more\n"
+	if resp := rqPost(t, e, e.Lead, id, "/correct", rqCorrectForm("Keep", code, "add code")); resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("correct with code = %d", resp.StatusCode)
+	}
+	if got := rqBody(t, e, id).Description; got != code {
+		t.Errorf("description was trimmed: %q", got)
+	}
+	// Only the description changed: the activity names no other field.
+	got, _ := e.St.RequestByID(id)
+	if last := got.Activity[len(got.Activity)-1]; !strings.HasPrefix(last.Data, "description — ") {
+		t.Errorf("activity names more than the changed field: %q", last.Data)
+	}
+	// An unchanged form submit from a browser (CRLF) is no change.
+	if resp := rqPost(t, e, e.Lead, id, "/correct", rqCorrectForm("Keep", strings.ReplaceAll(code, "\n", "\r\n"), "again")); resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("an unchanged description counted as a change: %d", resp.StatusCode)
+	}
+	if resp := rqPost(t, e, e.Lead, id, "/correct", rqCorrectForm("Keep", "", "no text needed")); resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("emptying the description = %d", resp.StatusCode)
+	}
+	if got := rqBody(t, e, id).Description; got != "" {
+		t.Errorf("description not emptied: %q", got)
+	}
+	_, page := fetchPage(t, e.Lead, e.Base+rqPath(id, "?edit=1"))
+	if strings.Contains(page, `<textarea class="clay-field kn-textarea" name="description" required`) {
+		t.Error("the description field is still required")
+	}
+}
+
+func TestRequestCorrectChecksLengthsOnlyOnChangedFields(t *testing.T) {
+	e := ovEnv(t)
+	legacyTitle := strings.Repeat("t", maxTitleBytes+100)
+	legacyPrio := strings.Repeat("p", maxPriority+10)
+	d := rqMake(t, e.St, rqSpec{Title: legacyTitle, Desc: "old", Priority: legacyPrio, Type: "bug"})
+	id := d.Request.ID
+	form := url.Values{"title": {legacyTitle}, "description": {"new"}, "type": {"bug"}, "priority": {legacyPrio}, "reason": {"fix text"}}
+	if resp := rqPost(t, e, e.Lead, id, "/correct", form); resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("correcting around legacy-long fields = %d", resp.StatusCode)
+	}
+	if got := rqBody(t, e, id); got.Description != "new" || got.Title != legacyTitle || got.Priority != legacyPrio {
+		t.Errorf("legacy fields were touched: %d %d", len(got.Title), len(got.Priority))
+	}
+	form.Set("title", strings.Repeat("u", maxTitleBytes+1))
+	form.Set("description", "newer")
+	if resp := rqPost(t, e, e.Lead, id, "/correct", form); resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("a changed over-long title = %d", resp.StatusCode)
+	}
+}
+
+func TestRequestCorrectWorksOnADoneRequest(t *testing.T) {
+	e := ovEnv(t)
+	d := rqMake(t, e.St, rqSpec{Title: "Finished", Desc: "old", Priority: "mittel", Type: "bug"})
+	if err := e.St.CompleteRequest(d.Request.ID, requestdomain.Evidence{Kind: "test", Ref: "go test", Person: "alice"}); err != nil {
+		t.Fatal(err)
+	}
+	resp := rqPost(t, e, e.Lead, d.Request.ID, "/correct", rqCorrectForm("Finished", "better words", "typo"))
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("correcting a done request = %d", resp.StatusCode)
+	}
+	if got := rqBody(t, e, d.Request.ID); got.Description != "better words" || got.State != "done" {
+		t.Errorf("done request after correction: %+v", got)
+	}
+}
+
+func rqActivityCount(page, label string) int {
+	return strings.Count(page, `<span class="rq-act">`+label+`</span>`)
+}
+
+func TestRequestHistoryDropsRelationEntriesAboutHiddenCounterparts(t *testing.T) {
+	e := seedSessions(t)
+	d := rqMake(t, e.St, rqSpec{Title: "Linked"})
+	visible := rqMake(t, e.St, rqSpec{Title: "Visible partner"})
+	secret := rqMake(t, e.St, rqSpec{Title: "SECRET-PARTNER", Project: shellHiddenProject})
+	hiddenKnowledge := knInsert(t, e.St, store.Knowledge{Title: "SECRET-KNOW", Body: "x", Scope: scope.Axes{Project: shellHiddenProject}, Confidence: "verified", Status: "active"})
+	for _, rel := range []requestdomain.Relation{{Kind: "related", OtherRequestID: visible.Request.ID}, {Kind: "blocks", OtherRequestID: secret.Request.ID},
+		{Kind: "knowledge", KnowledgeID: hiddenKnowledge}} {
+		if _, err := e.St.AddRequestRelation(d.Request.ID, rel, "alice"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, _ := e.St.RequestByID(d.Request.ID)
+	for _, rel := range got.Relations {
+		if rel.Kind == "blocks" {
+			if err := e.St.RemoveRequestRelation(rel.ID, "alice", "wrong way round"); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	_, member := e.get(t, e.Member, rqPath(d.Request.ID, ""))
+	if n := rqActivityCount(member, "Relation added"); n != 1 {
+		t.Errorf("member sees %d relation-added entries, want 1", n)
+	}
+	if n := rqActivityCount(member, "Relation removed"); n != 0 {
+		t.Errorf("member sees %d relation-removed entries about a hidden request, want 0", n)
+	}
+	for _, leak := range []string{"SECRET", "REQ-" + strconv.FormatInt(secret.Request.ID, 10)} {
+		if strings.Contains(member, leak) {
+			t.Errorf("member detail leaks %q", leak)
+		}
+	}
+	_, owner := e.get(t, e.Owner, rqPath(d.Request.ID, ""))
+	if n := rqActivityCount(owner, "Relation removed"); n != 1 {
+		t.Errorf("owner sees %d relation-removed entries, want 1", n)
+	}
+}
+
+func TestRequestDetailListsOnlyDiscussionsInReadableRooms(t *testing.T) {
+	e := seedSessions(t)
+	d := rqMake(t, e.St, rqSpec{Title: "Discussed"})
+	for _, project := range []string{shellProject, shellHiddenProject} {
+		if _, err := e.St.RegisterCoordAgent(store.CoordAgent{ExternalID: "claude:rooms-" + project, PrincipalID: "person:1", Person: "alice", Provider: "claude",
+			RoomKey: store.RoomKeyForProject(project)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := e.St.RegisterCoordAgent(store.CoordAgent{ExternalID: "claude:anna-room", PrincipalID: "person:2", Person: "anna", Provider: "claude",
+		RoomKey: store.RoomKeyForProject(shellProject)}); err != nil {
+		t.Fatal(err)
+	}
+	other := rqMake(t, e.St, rqSpec{Title: "Hidden anchor", Project: shellHiddenProject})
+	for title, project := range map[string]string{"Open topic": shellProject, "SECRET-THREAD": shellHiddenProject} {
+		anchor := d.Request.HumanID()
+		if project == shellHiddenProject {
+			anchor = other.Request.HumanID()
+		}
+		owner := e.St.CoordinationFor(store.Principal{ID: "person:1", Label: "alice"}, "claude:rooms-"+project)
+		id, err := owner.CreateTaskThreadInRoom(store.RoomKeyForProject(project), title, "why?", anchor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if project == shellHiddenProject {
+			if err := e.St.LinkThread(store.ThreadLink{ThreadID: id, Kind: "request", ID: d.Request.HumanID()}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	for name, c := range map[string]*http.Client{"member": e.Member, "guest": e.Guest, "lead": e.Lead} {
+		_, page := e.get(t, c, rqPath(d.Request.ID, ""))
+		if strings.Contains(page, "SECRET") || strings.Contains(page, shellHiddenProject) {
+			t.Errorf("%s sees a thread of a room it cannot read", name)
+		}
+	}
+	_, member := e.get(t, e.Member, rqPath(d.Request.ID, ""))
+	if !strings.Contains(member, "Open topic") {
+		t.Error("member lacks the discussion in the readable room")
+	}
+}
+
+func TestRequestPriorityMenuDoesNotDependOnThePage(t *testing.T) {
+	e := seedSessions(t)
+	rqMake(t, e.St, rqSpec{Title: "Oldest", Priority: "selten"})
+	for i := 0; i < requestsShown+3; i++ {
+		rqMake(t, e.St, rqSpec{Title: "Filler " + strconv.Itoa(i), Priority: "mittel"})
+	}
+	rqMake(t, e.St, rqSpec{Title: "Hidden prio", Priority: "GEHEIM", Project: shellHiddenProject})
+	for _, path := range []string{"/ui/requests", "/ui/requests?priority=mittel"} {
+		_, page := e.get(t, e.Member, path)
+		if !strings.Contains(page, `value="selten"`) || !strings.Contains(page, `value="mittel"`) {
+			t.Errorf("%s: the priority menu changes with the page", path)
+		}
+		if strings.Contains(page, "GEHEIM") {
+			t.Errorf("%s: the menu offers a priority of a hidden project", path)
+		}
 	}
 }
