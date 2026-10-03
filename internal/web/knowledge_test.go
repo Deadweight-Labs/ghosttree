@@ -520,3 +520,63 @@ func TestBodyBlocksSplitParagraphsAndCode(t *testing.T) {
 		t.Error("code-only excerpt")
 	}
 }
+
+func TestUndoRestoresTheStatusTheEntryHadBeforeRejecting(t *testing.T) {
+	e := ovEnv(t)
+	id := knInsert(t, e.St, store.Knowledge{Title: "Gone stale", Confidence: "staged"})
+	if err := e.St.UpdateKnowledgeBy(id, map[string]string{"status": "stale"}, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	resp := knDo(t, e, e.Owner, id, "reject")
+	loc := resp.Header.Get("Location")
+	if !strings.Contains(loc, "was=stale") {
+		t.Fatalf("reject -> %s lacks the previous status", loc)
+	}
+	_, page := fetchPage(t, e.Owner, e.Base+loc)
+	if !strings.Contains(page, `name="status" value="stale"`) {
+		t.Fatal("undo does not carry the previous status")
+	}
+	if resp = knPost(t, e.Owner, e.Base, "/ui/review", "/ui/review/"+strconv.FormatInt(id, 10)+"/restore", url.Values{"next": {"review"}, "status": {"stale"}}); resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("restore = %d", resp.StatusCode)
+	}
+	if k, _ := e.St.KnowledgeByID(id); k.Status != "stale" {
+		t.Errorf("after undo: %q, want stale", k.Status)
+	}
+	// Anything but active/stale falls back to active.
+	knDo(t, e, e.Owner, id, "reject")
+	knPost(t, e.Owner, e.Base, "/ui/review", "/ui/review/"+strconv.FormatInt(id, 10)+"/restore", url.Values{"next": {"review"}, "status": {"deprecated"}})
+	if k, _ := e.St.KnowledgeByID(id); k.Status != "active" {
+		t.Errorf("odd status restored as %q, want active", k.Status)
+	}
+}
+
+func TestHistoryNamesTheAuthorOfEachVersionAndSkipsStatusOnlySteps(t *testing.T) {
+	e := ovEnv(t)
+	id := knInsert(t, e.St, store.Knowledge{Title: "V-ALICE", Body: "body-alice", Person: "alice", Confidence: "staged"})
+	up := func(who string, p map[string]string) {
+		t.Helper()
+		if err := e.St.UpdateKnowledgeBy(id, p, who); err != nil {
+			t.Fatal(err)
+		}
+	}
+	up("lars", map[string]string{"title": "V-LARS", "body": "body-lars"})
+	up("lena", map[string]string{"status": "deprecated"})
+	up("lena", map[string]string{"title": "V-LENA", "body": "body-lena", "status": "active"})
+	_, page := fetchPage(t, e.Member, e.Base+"/ui/knowledge/"+strconv.FormatInt(id, 10))
+	h := page[strings.Index(page, "kn-history"):]
+	if n := strings.Count(h, "V-LARS"); n != 1 {
+		t.Errorf("version of lars shown %d times, want once (status-only steps hidden)", n)
+	}
+	if n := strings.Count(h, `<span class="ov-meta">lars</span>`); n != 1 {
+		t.Errorf("lars named %d times as author", n)
+	}
+	if n := strings.Count(h, `<span class="ov-meta">alice</span>`); n != 1 {
+		t.Errorf("alice named %d times as author", n)
+	}
+	if strings.Contains(h, `<span class="ov-meta">lena</span>`) {
+		t.Error("lena is named as author of a replaced version")
+	}
+	if i, j := strings.Index(h, "V-LARS"), strings.Index(h, `<span class="ov-meta">lars</span>`); i < 0 || j < 0 {
+		t.Error("lars version or author missing")
+	}
+}

@@ -115,6 +115,7 @@ type resultLine struct {
 	ID                  string
 	CanRestore          bool
 	Kind                string
+	Was                 string
 	Token, Next, Filter string
 }
 
@@ -416,6 +417,7 @@ func (a *app) resultFor(r *http.Request, pa *store.ProjectAccess, next, filter s
 	res := &resultLine{Token: csrfOf(r), Next: next, Filter: filter, Kind: kind, Text: msg(doneKeys[kind], pa.KnowledgeView(k).Title)}
 	res.CanRestore = kind == "rejected" && k.Status == "deprecated" && pa.CheckKnowledge(k, store.ActEdit) == nil
 	res.ID = strconv.FormatInt(id, 10)
+	res.Was = restorableStatus(r.URL.Query().Get("was"))
 	return res
 }
 
@@ -435,11 +437,23 @@ func (a *app) knowledgeItemPage(w http.ResponseWriter, r *http.Request) {
 	// Frühere Fassungen tragen keine Vertrauensstufe und sind für Gäste tabu.
 	if hist, err := a.store.KnowledgeHistory(k.ID); err == nil && pa.CanSeeKnowledgeHistory(k) {
 		now := overviewNow().UTC()
+		// hist läuft von neu nach alt. Der Autor einer Fassung ist, wer die
+		// nächstältere, inhaltlich andere Fassung ersetzt hat; die älteste stammt von der Person.
+		newer := store.KnowledgeVersion{Type: k.Type, Title: k.Title, Body: k.Body}
 		for i, h := range hist {
-			if i >= historyShown {
-				break
+			by := h.Person
+			for _, o := range hist[i+1:] {
+				if o.Type != h.Type || o.Title != h.Title || o.Body != h.Body {
+					by = o.ChangedBy
+					break
+				}
 			}
-			v.History = append(v.History, historyRow{Title: h.Title, By: h.Person, ReplacedBy: h.ChangedBy, Age: shortAge(now, parseTime(h.ChangedAt)), Blocks: bodyBlocks(h.Body, 0)})
+			unchanged := h.Type == newer.Type && h.Title == newer.Title && h.Body == newer.Body
+			newer = h
+			if unchanged || len(v.History) >= historyShown {
+				continue
+			}
+			v.History = append(v.History, historyRow{Title: h.Title, By: by, ReplacedBy: h.ChangedBy, Age: shortAge(now, parseTime(h.ChangedAt)), Blocks: bodyBlocks(h.Body, 0)})
 		}
 	}
 	v.Result = a.resultFor(r, pa, "item", "")
@@ -527,7 +541,7 @@ func (a *app) reviewDecide(w http.ResponseWriter, r *http.Request) {
 		patch = map[string]string{"status": "deprecated"}
 	case "restore":
 		act, done = store.ActEdit, "restored"
-		patch = map[string]string{"status": "active"}
+		patch = map[string]string{"status": restorableStatus(r.FormValue("status"))}
 	default:
 		http.NotFound(w, r)
 		return
@@ -557,10 +571,22 @@ func (a *app) reviewDecide(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, a.afterDecision(r, k, done), http.StatusSeeOther)
 }
 
+// restorableStatus: nur ein lebender Status wird wiederhergestellt, alles
+// andere wird active.
+func restorableStatus(s string) string {
+	if s == "stale" {
+		return s
+	}
+	return "active"
+}
+
 // afterDecision: zurück dorthin, wo entschieden wurde. Das Ziel wählt der
 // Server aus einer festen Liste, nie aus einer mitgesandten Adresse.
 func (a *app) afterDecision(r *http.Request, k store.Knowledge, done string) string {
 	q := url.Values{"done": {done}, "k": {strconv.FormatInt(k.ID, 10)}}
+	if done == "rejected" {
+		q.Set("was", restorableStatus(k.Status))
+	}
 	if r.FormValue("next") == "item" {
 		return "/ui/knowledge/" + strconv.FormatInt(k.ID, 10) + "?" + q.Encode()
 	}

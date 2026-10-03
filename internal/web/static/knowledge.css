@@ -33,7 +33,7 @@
 
 .kn-body { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .kn-body p { margin: 0; white-space: pre-line; overflow-wrap: anywhere; line-height: 1.55; }
-.kn-body code, .kn-code { font-variant-ligatures: none; }
+.kn-body code, .kn-code, .kn-textarea { font-variant-ligatures: none; }
 .kn-body code { padding: 1px 6px; border-radius: 8px; background: var(--clay-c-sunken); font-size: .875em; }
 .kn-code code { padding: 0; background: none; font-size: inherit; }
 .kn-code { margin: 0; padding: 12px 16px; border-radius: var(--clay-radius-sm); --clay-rest-h: -4; --clay-surface: var(--clay-c-sunken); color: var(--clay-ink); font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
