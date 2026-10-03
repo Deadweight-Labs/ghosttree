@@ -545,6 +545,10 @@ func knowledgeLabel(k store.Knowledge) string {
 	return label
 }
 
+// publicAddressPattern: zwölf Zeichen aus dem Alphabet der Session-Adressen
+// (ohne l, o, 0, 1).
+var publicAddressPattern = regexp.MustCompile(`^[a-km-np-z2-9]{12}$`)
+
 var sessionSourcePattern = regexp.MustCompile(`^session:([A-Za-z0-9]+)#(\d+)$`)
 
 // sessionSource writes a session reference so its parts paste straight into
@@ -555,7 +559,9 @@ func sessionSource(ref string) string {
 		return ref
 	}
 	key := "session_ref"
-	if _, err := strconv.ParseInt(m[1], 10, 64); err == nil {
+	// Am Format erkennen: eine Adresse, die zufällig nur aus Ziffern besteht,
+	// bleibt eine Adresse.
+	if _, err := strconv.ParseInt(m[1], 10, 64); err == nil && !publicAddressPattern.MatchString(m[1]) {
 		key = "session_id"
 	}
 	return "session|" + key + ":" + m[1] + "|chunk:" + m[2]

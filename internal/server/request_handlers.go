@@ -3,7 +3,10 @@ package server
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
@@ -138,19 +141,69 @@ func (a *api) startRequestWork(w http.ResponseWriter, r *http.Request) {
 	if !a.checkRequest(w, r, store.RefRequest, requestID, store.ActWork) {
 		return
 	}
-	// Die Session muss dem Aufrufer gehören oder für ihn lesbar sein. Eine
-	// fremde, verborgene oder fehlende Nummer antwortet gleich (#2447).
-	if sess, err := a.st.SessionByID(body.SessionID); err != nil || !a.access(r).CanSeeTranscript(sess) {
-		a.access(r).Filtered()
+	pa := a.access(r)
+	ref, refErr := a.st.RequestRef(store.RefRequest, requestID)
+	sees := refErr == nil && pa.SeesSessionNumbers(ref.Project)
+	// Mitglieder mit Nummernsicht dürfen jede lesbare Session anhängen; wer die
+	// Nummern nicht kennen darf, nur die eigene. Eine fremde, verborgene oder
+	// fehlende Nummer antwortet gleich (#2447).
+	if sess, err := a.st.SessionByID(body.SessionID); err != nil || !pa.CanSeeTranscript(sess) || (!sees && !pa.OwnsSession(sess)) {
+		pa.Filtered()
 		writeRequestError(w, sql.ErrNoRows)
 		return
 	}
 	work, warnings, err := a.st.StartRequestWork(requestID, body.SessionID, body.Role, personOf(r))
 	if err != nil {
-		writeRequestError(w, err)
+		writeRequestError(w, a.hideRuleRequest(r, err))
 		return
 	}
+	if !sees {
+		warnings = a.readableStartWarnings(r, requestID, work.ID)
+	}
 	writeJSON(w, http.StatusCreated, map[string]any{"work": a.workView(r, work), "warnings": warnings})
+}
+
+// hideRuleRequest ersetzt in primary_exists die REQ-Nummer, wenn der Betrachter
+// diesen Auftrag nicht lesen darf (er könnte in einem unsichtbaren Projekt
+// liegen).
+func (a *api) hideRuleRequest(r *http.Request, err error) error {
+	var rule *requestdomain.RuleError
+	if !errors.As(err, &rule) || rule.ErrorCode != "primary_exists" {
+		return err
+	}
+	if len(rule.IDs) == 1 {
+		if n, perr := strconv.ParseInt(strings.TrimPrefix(rule.IDs[0], "REQ-"), 10, 64); perr == nil {
+			pa := a.access(r)
+			if ref, rerr := a.st.RequestRef(store.RefRequest, n); rerr == nil &&
+				pa.Check(ref.Project, store.ResRequest, store.ActRead, store.Object{Own: pa.IsAuthor(ref.Person)}) == nil {
+				return err
+			}
+		}
+	}
+	return requestdomain.NewRuleError("primary_exists", "session is already working on another request", "finish or abandon that work before starting another", nil)
+}
+
+// readableStartWarnings zählt nur andere aktive Hauptarbeit, deren Session der
+// Betrachter lesen darf; verborgene Arbeit ginge sonst als Zahl mit ein.
+func (a *api) readableStartWarnings(r *http.Request, requestID, ownWork int64) []string {
+	detail, err := a.st.RequestByID(requestID)
+	if err != nil {
+		return nil
+	}
+	pa := a.access(r)
+	n := 0
+	for _, w := range detail.Work {
+		if w.ID == ownWork || w.Role != "primary" || w.State != "active" {
+			continue
+		}
+		if sess, err := a.st.SessionByID(w.SessionID); err == nil && pa.CanSeeTranscript(sess) {
+			n++
+		}
+	}
+	if n == 0 {
+		return nil
+	}
+	return []string{fmt.Sprintf("REQ-%d already has %d active primary session(s)", requestID, n)}
 }
 
 func (a *api) finishRequestWork(w http.ResponseWriter, r *http.Request) {
@@ -369,7 +422,8 @@ func (a *api) checkWorkAccess(w http.ResponseWriter, r *http.Request, workID int
 	}
 	if pa.Decide(ref.Project, store.ResRequest, store.ActWork, store.Object{Own: pa.IsAuthor(ref.Person)}).Allowed {
 		if sid, err := a.st.RequestWorkSession(workID); err == nil {
-			if sess, serr := a.st.SessionByID(sid); serr == nil && pa.CanSeeTranscript(sess) {
+			// Nur Arbeit der eigenen Session: eine lesbare, geteilte reicht nicht.
+			if sess, serr := a.st.SessionByID(sid); serr == nil && pa.OwnsSession(sess) {
 				return true
 			}
 		}

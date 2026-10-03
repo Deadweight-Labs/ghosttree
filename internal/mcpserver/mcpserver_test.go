@@ -576,6 +576,11 @@ func TestKnowledgeLabelSplitsSessionSourceForContextSessions(t *testing.T) {
 	if !strings.Contains(num, "source:session|session_id:12|chunk:3") {
 		t.Errorf("numeric label: %s", num)
 	}
+	// An address made only of digits (the alphabet has 2-9) is still an address.
+	digits := knowledgeLabel(store.Knowledge{Type: "pitfall", SessionRef: "session:234567892345#2"})
+	if !strings.Contains(digits, "source:session|session_ref:234567892345|chunk:2") {
+		t.Errorf("digit-only address label: %s", digits)
+	}
 	if other := knowledgeLabel(store.Knowledge{Type: "pitfall", SessionRef: "AGENTS.md"}); !strings.Contains(other, "source:AGENTS.md") {
 		t.Errorf("non-session source changed: %s", other)
 	}

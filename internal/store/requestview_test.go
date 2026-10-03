@@ -104,8 +104,9 @@ func TestRequestViewKeepsRealIDsForThoseWhoMayWork(t *testing.T) {
 			t.Errorf("activity id %d", a.ID)
 		}
 	}
-	if len(d.Activity) > 0 && got.Activity[0].ID != d.Activity[0].ID {
-		t.Errorf("activity renumbered for a viewer who may work: %d != %d", got.Activity[0].ID, d.Activity[0].ID)
+	// Activity ids need no write access, so they are renumbered; only the work id stays real.
+	if len(d.Activity) > 0 && got.Activity[0].ID != 1 {
+		t.Errorf("activity id = %d, want renumbered 1", got.Activity[0].ID)
 	}
 	fin, err := st.FinishRequestWork(got.Work[0].ID, "completed", "done", "mia")
 	if err != nil || fin.RequestID != last.RequestID || fin.SessionID != mine2.ID {

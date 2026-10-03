@@ -20,6 +20,13 @@ Versioning, with pre-1.0 compatibility rules described in
   project of the session it points at, the review list prints the address
   instead of "session 0", and the knowledge label hands `session_ref` or
   `session_id` straight to `context_sessions`.
+  Further: the warning on starting work counts only work whose session you
+  may read; without session numbers you start and end work only with your own
+  session, and "already working on" never names a request you cannot see; a
+  hidden project's request answers byte for byte like an unknown id on every
+  request route; activity and evidence ids are always renumbered for those
+  viewers; a session address made only of digits is no longer taken for a
+  number in the knowledge label.
 
 - Added: an Agents page in the new design. Each agent shows its machine,
   project and branch, the open request it works on, its last room post and
