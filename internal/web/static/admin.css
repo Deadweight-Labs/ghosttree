@@ -62,6 +62,7 @@
 .ad-f > span { font-size: 12.5px; font-weight: 700; color: var(--clay-ink-soft); }
 .ad-grow { flex: 1 1 14rem; }
 .ad-days { width: 7rem; }
+.ad-f select.clay-select { padding-inline-end: 36px; min-width: 8.5rem; }
 .ad-f :is(input, select) { width: 100%; min-height: 40px; border: 0; border-radius: var(--clay-radius-sm); padding: 0 14px; color: var(--clay-ink); }
 
 .ad-ready { --clay-rest-h: 7; --clay-surface: var(--clay-c-surface); margin: 0 0 var(--space-5); padding: 18px 20px; border-radius: var(--clay-radius); }
@@ -96,6 +97,7 @@
   .ad-copy, .ad-join { flex-wrap: wrap; }
   .ad-days { width: 100%; }
   .ad-code { font-size: 22px; }
+  .ad-check-card { padding: 18px 20px; }
 }
 
 /* Meta pieces separated by a dot drawn in CSS, so no separator text is needed. */

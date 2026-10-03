@@ -253,7 +253,7 @@ func (a *app) orgInvite(w http.ResponseWriter, r *http.Request) {
 	}
 	// Der Code erscheint nur in dieser Antwort, nicht in einer URL oder einem
 	// Redirect.
-	a.renderOrgs(w, r, http.StatusOK, orgsView{NewCode: code, NewExpiry: inv.ExpiresAt, NewLink: link, NewURL: a.inviteURL(code, link)}, o.Slug, "")
+	a.renderOrgs(w, r, http.StatusOK, orgsView{NewCode: code, NewExpiry: inv.ExpiresAt, NewLink: link, NewURL: a.inviteURL(r, code, link)}, o.Slug, "")
 }
 
 func (a *app) orgInviteRevoke(w http.ResponseWriter, r *http.Request) {
@@ -374,15 +374,15 @@ func (a *app) grantable(r *http.Request, actor, remote, target string) []string 
 
 // inviteURL ist der Link zu einem Einladungscode: die Beitrittsseite für ein
 // Projekt, sonst die Anmeldung mit Code.
-func (a *app) inviteURL(code string, project bool) string {
+func (a *app) inviteURL(r *http.Request, code string, project bool) string {
 	if project {
-		return a.joinURL(code)
+		return a.joinURL(r, code)
 	}
-	return a.publicOrigin + "/ui/login/code?code=" + url.QueryEscape(code)
+	return a.joinBase(r) + "/ui/login/code?code=" + url.QueryEscape(code)
 }
 
-// joinURL ist der Einladungslink; mit gesetzter GHOSTTREE_PUBLIC_URL absolut.
-func (a *app) joinURL(code string) string { return a.publicOrigin + "/join/" + code }
+// joinURL ist der absolute Einladungslink, auch ohne GHOSTTREE_PUBLIC_URL.
+func (a *app) joinURL(r *http.Request, code string) string { return a.joinBase(r) + "/join/" + code }
 
 // initialOf ist der Anfangsbuchstabe für den runden Avatar.
 func initialOf(name string) string {

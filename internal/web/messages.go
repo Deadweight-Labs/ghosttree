@@ -588,6 +588,7 @@ var messages = map[string]string{
 	"adm.device.continue":    "Continue",
 	"adm.device.readonly":    "Approving a device needs a sign-in by login, not a pasted token.",
 	"adm.device.check":       "Approve this device?",
+	"adm.device.warn":        "Only approve if you just ran ctx login.",
 	"adm.device.asks":        "Signing in as %s",
 	"adm.device.machine":     "Machine",
 	"adm.device.from":        "Requested from",
