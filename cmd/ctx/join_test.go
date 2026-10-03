@@ -478,6 +478,9 @@ func TestJoinWithoutTerminalNeedsYes(t *testing.T) {
 	if code := cmdJoin([]string{"--server", srv.URL, "--pair", "abcd-efgh", "--no-browser"}, &out); code == 0 {
 		t.Fatalf("exit 0 without tty: %s", out.String())
 	}
+	if !strings.Contains(out.String(), "not used up") || !strings.Contains(out.String(), "ctx join --server "+srv.URL+" --pair ABCD-EFGH --no-browser --yes") {
+		t.Fatalf("no ready-made command: %s", out.String())
+	}
 	if len(srv.paths) != 0 {
 		t.Fatalf("talked to the server before knowing it can ask: %v", srv.paths)
 	}
@@ -609,10 +612,28 @@ func TestJoinFallsBackWhenNoLoopbackListenerIsPossible(t *testing.T) {
 
 // ---- Integration gegen den echten Server ----
 
+// testClock is a fake clock safe to read and advance from several goroutines.
+type testClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (c *testClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *testClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
+}
+
 type realEnv struct {
 	url   string
 	st    *store.Store
-	clock *time.Time
+	clock *testClock
 }
 
 func newRealEnv(t *testing.T) realEnv {
@@ -629,12 +650,15 @@ func newRealEnv(t *testing.T) realEnv {
 	}
 	srv := httptest.NewServer(server.New(st))
 	t.Cleanup(srv.Close)
-	now := time.Now()
-	clock := &now
-	st.Device().SetClock(func() time.Time { return *clock })
-	st.Join().SetClock(func() time.Time { return *clock })
+	clock := &testClock{now: time.Now()}
+	st.Device().SetClock(clock.Now)
+	st.Join().SetClock(clock.Now)
 	return realEnv{url: srv.URL, st: st, clock: clock}
 }
+
+// noRedirectClient stops at the 303 from /callback: the installer closes its
+// listener right after the callback, so following to /done would race it.
+var noRedirectClient = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 
 const annaID = "person:2"
 
@@ -656,12 +680,16 @@ func (e realEnv) browserApproves(t *testing.T, confirm func() string) <-chan err
 					return
 				}
 				if dec.Redirect != "" { // the browser follows the redirect to the loopback
-					resp, err := http.Get(dec.Redirect)
+					resp, err := noRedirectClient.Get(dec.Redirect)
 					if err != nil {
 						res <- err
 						return
 					}
 					resp.Body.Close()
+					if resp.StatusCode != http.StatusSeeOther {
+						res <- errors.New("callback did not answer 303")
+						return
+					}
 				}
 				res <- nil
 				return
@@ -717,7 +745,7 @@ func TestJoinIntegrationFallbackPairsThroughTheDeviceFlow(t *testing.T) {
 	var approved <-chan error
 	loginSleep = func(_ context.Context, d time.Duration) error {
 		calls++
-		*e.clock = e.clock.Add(d + time.Second)
+		e.clock.Advance(d + time.Second)
 		if calls == 1 {
 			approved = e.browserApproves(t, func() string {
 				return regexp.MustCompile(`code in your browser: ([A-Z0-9]{4})`).FindStringSubmatch(out.String())[1]
@@ -1221,6 +1249,218 @@ func TestJoinAsksAlsoWhenTheNewNameDiffersOnTheSameServer(t *testing.T) {
 func TestJoinWaitsAsLongAsASessionLives(t *testing.T) {
 	if joinDefaultTimeout != 30*time.Minute || joinTimeout != joinDefaultTimeout {
 		t.Fatalf("default wait %v / %v", joinDefaultTimeout, joinTimeout)
+	}
+}
+
+// interruptWhenClaimed schickt dem Prozess ein Strg-C, sobald der Server die
+// Anfrage dieses Installers sieht.
+func (e realEnv) interruptWhenClaimed(t *testing.T) {
+	t.Helper()
+	go func() {
+		for i := 0; i < 800; i++ {
+			if e.st.Join().View(annaID).State == store.JoinClaimed {
+				syscall.Kill(os.Getpid(), syscall.SIGINT)
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+}
+
+func resumeFile(t *testing.T) (os.FileInfo, string) {
+	t.Helper()
+	st, err := os.Stat(joinResumePath())
+	if err != nil {
+		return nil, ""
+	}
+	b, _ := os.ReadFile(joinResumePath())
+	return st, string(b)
+}
+
+// approveRerun gibt frei, sobald die Anfrage eine andere Kennung trägt als vor dem
+// Abbruch (also der erneute Claim angekommen ist).
+func (e realEnv) approveRerun(t *testing.T, oldNonce string, confirm func() string) <-chan error {
+	t.Helper()
+	res := make(chan error, 1)
+	go func() {
+		deadline := time.Now().Add(8 * time.Second)
+		for time.Now().Before(deadline) {
+			v := e.st.Join().View(annaID)
+			if v.State == store.JoinClaimed && v.Nonce != oldNonce {
+				c := ""
+				for c == "" && confirm != nil && time.Now().Before(deadline) {
+					c = confirm()
+					time.Sleep(5 * time.Millisecond)
+				}
+				dec, err := e.st.Join().Decide(annaID, true, v.Nonce, c, nil)
+				if err != nil {
+					res <- err
+					return
+				}
+				if dec.Redirect != "" {
+					resp, err := noRedirectClient.Get(dec.Redirect)
+					if err != nil {
+						res <- err
+						return
+					}
+					resp.Body.Close()
+					if resp.StatusCode != http.StatusSeeOther {
+						res <- errors.New("callback did not answer 303")
+						return
+					}
+				}
+				res <- nil
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		res <- errors.New("no second claim seen")
+	}()
+	return res
+}
+
+// Strg-C nach dem Claim: der nächste Aufruf mit demselben Code weist sich mit dem
+// lokal abgelegten Token aus und verbrennt den Code nicht, in beiden Wegen.
+func TestJoinIntegrationRerunAfterCtrlCResumesWithTheLocalToken(t *testing.T) {
+	for _, mode := range []string{"loopback", "code"} {
+		t.Run(mode, func(t *testing.T) {
+			newJoinFixture(t)
+			e := newRealEnv(t)
+			pair, _ := e.st.Join().Create(annaID)
+			args := []string{"--server", e.url, "--pair", pair, "--name", "annas-box", "--yes"}
+			out := &syncBuffer{}
+			var confirm func() string
+			if mode == "code" {
+				args = append(args, "--no-browser")
+				old := loginSleep
+				t.Cleanup(func() { loginSleep = old })
+				loginSleep = func(ctx context.Context, d time.Duration) error {
+					e.clock.Advance(d + time.Second)
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					case <-time.After(5 * time.Millisecond):
+						return nil
+					}
+				}
+				confirm = func() string {
+					m := regexp.MustCompile(`code in your browser: ([A-Z0-9]{4})`).FindStringSubmatch(out.String())
+					if m == nil {
+						return ""
+					}
+					return m[1]
+				}
+			}
+			e.interruptWhenClaimed(t)
+			if code := cmdJoin(args, out); code != 1 {
+				t.Fatalf("first run exit %d: %s", code, out.String())
+			}
+			info, content := resumeFile(t)
+			if info == nil {
+				t.Fatal("no resume token kept after Ctrl-C")
+			}
+			if info.Mode().Perm() != 0o600 {
+				t.Fatalf("resume file mode %v", info.Mode().Perm())
+			}
+			if strings.Contains(content, pair) || strings.Contains(content, strings.ReplaceAll(pair, "-", "")) {
+				t.Fatalf("the pairing code is stored in the clear: %s", content)
+			}
+			v := e.st.Join().View(annaID)
+			if v.State != store.JoinClaimed {
+				t.Fatalf("state after Ctrl-C %q", v.State)
+			}
+			out = &syncBuffer{}
+			approved := e.approveRerun(t, v.Nonce, confirm)
+			if code := cmdJoin(args, out); code != 0 {
+				t.Fatalf("rerun exit %d: %s", code, out.String())
+			}
+			if err := <-approved; err != nil {
+				t.Fatal(err)
+			}
+			if _, content := resumeFile(t); content != "" {
+				t.Fatalf("resume token left after success: %s", content)
+			}
+			cfg, ok := readConfig(t)
+			if !ok {
+				t.Fatal("no config")
+			}
+			if p, ok := e.st.AuthenticatePrincipal(cfg.Token); !ok || p.ID != annaID {
+				t.Fatalf("token belongs to %+v", p)
+			}
+		})
+	}
+}
+
+// Ohne das Token (Datei weg, anderer Rechner) gilt derselbe Name und dasselbe
+// Netz nicht als Beweis: der zweite Claim sperrt die Sitzung.
+func TestJoinIntegrationRerunWithoutTheLocalTokenIsASecondClaim(t *testing.T) {
+	newJoinFixture(t)
+	e := newRealEnv(t)
+	pair, _ := e.st.Join().Create(annaID)
+	args := []string{"--server", e.url, "--pair", pair, "--name", "annas-box", "--yes"}
+	out := &syncBuffer{}
+	e.interruptWhenClaimed(t)
+	if code := cmdJoin(args, out); code != 1 {
+		t.Fatalf("first run exit %d: %s", code, out.String())
+	}
+	clearJoinResume()
+	out = &syncBuffer{}
+	if code := cmdJoin(args, out); code != 1 {
+		t.Fatalf("rerun without the token exit %d: %s", code, out.String())
+	}
+	if v := e.st.Join().View(annaID); v.State != store.JoinCompromised {
+		t.Fatalf("state %q", v.State)
+	}
+	if _, ok := readConfig(t); ok {
+		t.Fatal("config written")
+	}
+}
+
+func TestJoinResumeTokenIsBoundToServerAndCodeAndExpires(t *testing.T) {
+	newJoinFixture(t)
+	saveJoinResume("https://gt.example", "abcd-efgh", "tok-1")
+	if got := loadJoinResume("https://gt.example", "ABCD-EFGH"); got != "tok-1" {
+		t.Fatalf("same code, other spelling: %q", got)
+	}
+	for name, args := range map[string][2]string{"other server": {"https://evil.example", "abcd-efgh"}, "other code": {"https://gt.example", "wxyz-1234"}} {
+		if got := loadJoinResume(args[0], args[1]); got != "" {
+			t.Errorf("%s got the token", name)
+		}
+	}
+	b, _ := os.ReadFile(joinResumePath())
+	var r joinResume
+	json.Unmarshal(b, &r)
+	r.Expires = time.Now().Add(-time.Second).Unix()
+	b, _ = json.Marshal(r)
+	os.WriteFile(joinResumePath(), b, 0o600)
+	if got := loadJoinResume("https://gt.example", "abcd-efgh"); got != "" {
+		t.Fatal("an expired token was used")
+	}
+}
+
+// Jeder Ausgang außer Strg-C räumt das Token weg; ein Server ohne resume (alt)
+// hinterlässt keine Datei.
+func TestJoinClearsTheResumeTokenOnEveryOtherOutcome(t *testing.T) {
+	f := newJoinFixture(t)
+	_ = f
+	srv := loopbackServer(t, func(_ int, state string) string { return "/callback?error=access_denied&state=" + state })
+	srv.claimRes = func(body map[string]any) (int, string) {
+		port, _ := body["loopback_port"].(float64)
+		state, _ := body["state"].(string)
+		go func() {
+			time.Sleep(50 * time.Millisecond)
+			if resp, err := http.Get("http://127.0.0.1:" + strconv.Itoa(int(port)) + "/callback?error=access_denied&state=" + state); err == nil {
+				resp.Body.Close()
+			}
+		}()
+		return 200, `{"mode":"loopback","expires_in":600,"resume":"tok-xyz"}`
+	}
+	var out syncBuffer
+	if code := cmdJoin([]string{"--server", srv.URL, "--pair", "abcd-efgh", "--name", "box", "--yes"}, &out); code != 1 {
+		t.Fatalf("exit %d: %s", code, out.String())
+	}
+	if _, content := resumeFile(t); content != "" {
+		t.Fatalf("resume token left after a denial: %s", content)
 	}
 }
 

@@ -124,6 +124,13 @@ func (a *app) joinHeaders(w http.ResponseWriter) {
 	h.Set("Content-Type", "text/html; charset=utf-8")
 }
 
+// joinScriptHeaders erlaubt dem Paarungsablauf das eine eigene Skript
+// (/static/join.js) und Abfragen an dieselbe Herkunft; sonst bleibt alles zu.
+func (a *app) joinScriptHeaders(w http.ResponseWriter) {
+	a.joinHeaders(w)
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; base-uri 'none'; frame-ancestors 'none'")
+}
+
 // joinGate zählt den Aufruf. Es antwortet selbst, wenn die Grenze erreicht ist.
 func (a *app) joinGate(w http.ResponseWriter, r *http.Request) bool {
 	if a.joinLimits == nil {
@@ -177,19 +184,17 @@ func (a *app) joinPreview(code string) (store.InvitePreview, bool) {
 }
 
 type joinView struct {
-	Command                                 string
-	NoSlot                                  bool
-	Org, Project, Role, RoleText, ExpiresAt string
-	Code, CSRFToken, Person                 string
-	SignedIn, OIDC, NeedsName               bool
-	AccountID, Email                        string
+	Inviter, Target, Org, RoleText, ExpiresAt string
+	Code, CSRFToken, Person                   string
+	Initial, Email                            string
+	SignedIn, OIDC                            bool
 }
 
-func roleText(role string) string {
+func roleLabel(role string) string {
 	if role == store.RoleGuest {
-		return "guest, with limited access to this project"
+		return msg("join.role_guest")
 	}
-	return "member, who can work in this project"
+	return msg("join.role_member")
 }
 
 // joinSession liefert das angemeldete Konto, wenn eine interaktive Sitzung da ist.
@@ -215,22 +220,16 @@ func (a *app) joinPage(w http.ResponseWriter, r *http.Request) {
 		a.joinNotFound(w)
 		return
 	}
-	view := joinView{Org: preview.Org, Project: preview.Project, Role: preview.Role, RoleText: roleText(preview.Role),
-		ExpiresAt: preview.ExpiresAt, Code: code, OIDC: a.oidc != nil, NeedsName: a.oidc == nil}
+	// Die Seite zeigt nur Name der einladenden Person, Projekt, Organisation,
+	// Rolle und Ablauf. Eine Paarungssitzung legt erst die Annahme an (joinAccepted),
+	// ein bloßes Öffnen oder Neuladen erzeugt keinen Code.
+	view := joinView{Inviter: preview.Inviter, Target: preview.Project, Org: preview.Org, RoleText: roleLabel(preview.Role),
+		ExpiresAt: preview.ExpiresAt, Code: code, OIDC: a.oidc != nil}
 	if session, ok := a.joinSession(r); ok {
 		view.SignedIn, view.Person, view.CSRFToken = true, session.principal.Label, session.csrf
-		// Neben dem Namen die Kennung und die Adresse des Kontos: ein Name mit
-		// ähnlich aussehenden Zeichen fällt so auf.
-		view.AccountID = session.principal.ID
+		view.Initial = initialOf(view.Person)
 		if acct, err := a.store.AccountByPrincipalID(session.principal.ID); err == nil {
 			view.Email = acct.Email
-		}
-	}
-	if open, err := a.store.Join().Open(code, a.joinCookieValue(r)); err == nil {
-		view.NoSlot = open.Pair == ""
-		view.Command = a.joinCommand(r, open.Pair)
-		if open.ID != "" {
-			http.SetCookie(w, a.joinCookieFor(r, open.ID, int(store.JoinMaxLifetime.Seconds())))
 		}
 	}
 	a.joinHeaders(w)
@@ -253,23 +252,23 @@ func (a *app) joinAccept(w http.ResponseWriter, r *http.Request) {
 	// ließe sich nicht prüfen, ohne die Sitzungen zu ändern, und die Bestätigung
 	// fängt auch den Fall ab, dass das Konto alt, aber nicht das eigene ist.
 	if r.FormValue("confirm_account") != browserPrincipal(r).Label {
-		a.joinMessage(w, http.StatusBadRequest, "Please confirm your account", "Go back to the invitation and tick the box that names the account you are joining with.")
+		a.joinAcceptMessage(w, code, http.StatusBadRequest, msg("join.msg_confirm_t"), msg("join.msg_confirm_j"))
 		return
 	}
 	_, err := a.store.AcceptInvitation(browserPrincipal(r).ID, code)
 	switch {
 	case err == nil:
-		a.joinAccepted(w, r, code)
+		a.joinAccepted(w, r)
 	case errors.Is(err, store.ErrCodeInvalid):
 		a.joinNotFound(w)
 	case errors.Is(err, store.ErrAlreadyMember):
-		a.joinMessage(w, http.StatusConflict, "You already have this access", "Your account already has this role in the project or a higher one. The invitation was not used.")
+		a.joinAcceptMessage(w, code, http.StatusConflict, msg("join.msg_already_t"), msg("join.msg_already"))
 	case errors.Is(err, store.ErrTooManyAttempts):
-		a.joinMessage(w, http.StatusTooManyRequests, "Too many wrong codes", "Wait a few minutes before trying again.")
+		a.joinAcceptMessage(w, code, http.StatusTooManyRequests, msg("join.msg_many_t"), msg("join.msg_many"))
 	case errors.Is(err, store.ErrAccountDisabled):
-		a.joinMessage(w, http.StatusForbidden, "Account disabled", "This account is disabled.")
+		a.joinAcceptMessage(w, code, http.StatusForbidden, msg("join.msg_disabled_t"), msg("join.msg_disabled"))
 	default:
-		a.joinMessage(w, http.StatusInternalServerError, "Joining failed", "Something went wrong. The invitation may still be usable; try again in a moment.")
+		a.joinAcceptMessage(w, code, http.StatusInternalServerError, msg("join.msg_failed_t"), msg("join.msg_failed"))
 	}
 }
 
@@ -286,24 +285,30 @@ func (a *app) joinSignOut(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, back, http.StatusSeeOther)
 }
 
-// joinAccepted ist der Ort, an dem der Beitritt endet: die Join-Sitzung dieses
-// Browsers wird an das Konto gebunden (oder eine neue für das Konto angelegt).
-func (a *app) joinAccepted(w http.ResponseWriter, r *http.Request, code string) {
-	a.joinBind(w, r, code, browserPrincipal(r).ID)
-}
-
-// joinBind bindet die Sitzung an das Konto und leitet auf die Paarungsseite.
-func (a *app) joinBind(w http.ResponseWriter, r *http.Request, inviteCode, account string) {
-	http.SetCookie(w, a.joinCookieFor(r, "", -1))
-	if err := a.store.Join().Bind(inviteCode, a.joinCookieValue(r), account); err != nil {
+// joinAccepted ist der Ort, an dem der Beitritt endet: für das Konto entsteht
+// eine Join-Sitzung, und die Paarungsseite zeigt den Code.
+func (a *app) joinAccepted(w http.ResponseWriter, r *http.Request) {
+	account := browserPrincipal(r).ID
+	if _, err := a.store.Join().Create(account); err != nil {
 		http.Redirect(w, r, "/ui/requests", http.StatusSeeOther)
 		return
 	}
 	http.Redirect(w, r, "/join/pair", http.StatusSeeOther)
 }
 
-func (a *app) joinMessage(w http.ResponseWriter, status int, title, message string) {
+// joinMessageBack zeigt eine Meldung mit einem Link zurück; ohne Ziel bleibt es
+// bei der Meldung.
+func (a *app) joinMessageBack(w http.ResponseWriter, status int, title, message, backURL, backLabel string) {
 	a.joinHeaders(w)
 	w.WriteHeader(status)
-	a.joinWrite(w, "joinmsg", struct{ Title, Message string }{title, message})
+	a.joinWrite(w, "joinmsg", struct {
+		Title, Message, BackURL, BackLabel string
+	}{title, message, backURL, backLabel})
+}
+
+// joinAcceptMessage ist die Meldung auf eine gültige, aber nicht angenommene
+// Einladung; sie führt zurück zur Einladung. Nur für Codes, die die Vorschau
+// bestanden haben, damit ungültige Codes nichts anderes als die 404 sehen.
+func (a *app) joinAcceptMessage(w http.ResponseWriter, code string, status int, title, message string) {
+	a.joinMessageBack(w, status, title, message, "/join/"+code, msg("join.msg_back_invite"))
 }

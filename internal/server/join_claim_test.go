@@ -431,3 +431,39 @@ func TestJoinClaimMachineNameIsRestrictedToHostnameCharacters(t *testing.T) {
 		t.Fatalf("hostname-like name refused: %d %v", code, body)
 	}
 }
+
+// Die Claim-Antwort trägt das Wiederaufnahme-Token; nur damit ersetzt derselbe
+// Installer seine eigene Anfrage, gleicher Name und gleiches Netz genügen nicht.
+func TestJoinClaimReturnsAResumeTokenThatAloneAllowsAReclaim(t *testing.T) {
+	srv, st, _ := joinClockFixture(t)
+	st.AddPerson("anna")
+	pair, _ := boundSession(t, st, "person:2")
+	code, first := claimWith(t, srv, "10.0.0.1", claimBody(pair, "mine"))
+	resume, _ := first["resume"].(string)
+	if code != 200 || len(resume) != 32 {
+		t.Fatalf("claim: %d %v", code, first)
+	}
+	// Gleiches Netz, gleicher Name, aber ohne Token: zweiter Claim.
+	probe := claimBody(pair, "mine")
+	if code, body := claimWith(t, srv, "10.0.0.1", probe); code != 400 || body["error"] != "invalid_pair" {
+		t.Fatalf("reclaim without the token: %d %v", code, body)
+	}
+	if v := st.Join().View("person:2"); v.State != store.JoinCompromised {
+		t.Fatalf("state %q", v.State)
+	}
+	// Mit Token (frische Sitzung): erlaubt, und es gibt ein neues.
+	pair, _ = boundSession(t, st, "person:2")
+	_, first = claimWith(t, srv, "10.0.0.1", claimBody(pair, "mine"))
+	again := claimBody(pair, "mine")
+	again["resume"] = first["resume"]
+	code, second := claimWith(t, srv, "10.0.0.1", again)
+	if code != 200 || second["resume"] == "" || second["resume"] == first["resume"] {
+		t.Fatalf("reclaim with the token: %d %v", code, second)
+	}
+	// Zu langes Token ist ein kaputter Körper.
+	long := claimBody(pair, "mine")
+	long["resume"] = strings.Repeat("a", 65)
+	if code, body := claimWith(t, srv, "10.0.0.1", long); code != 400 || body["error"] != "invalid_request" {
+		t.Fatalf("long token: %d %v", code, body)
+	}
+}

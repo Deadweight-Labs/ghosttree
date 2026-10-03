@@ -253,15 +253,13 @@ func (a *app) finishLogin(w http.ResponseWriter, r *http.Request, account store.
 }
 
 // finishJoinLogin ist finishLogin für eine Anmeldung über die Join-Seite: das
-// Konto kommt aus der Einladung, die Join-Sitzung dieses Browsers (und damit ein
-// schon wartender Installer) wird an das Konto gebunden, und die Seite danach
-// ist die Freigabe des Geräts.
-func (a *app) finishJoinLogin(w http.ResponseWriter, r *http.Request, account store.Account, inviteCode string) {
+// Konto kommt aus der Einladung, für das Konto entsteht die Join-Sitzung, und die
+// Seite danach zeigt den Paarungscode und später die Freigabe des Geräts.
+func (a *app) finishJoinLogin(w http.ResponseWriter, r *http.Request, account store.Account) {
 	next := "/ui/requests"
-	if err := a.store.Join().Bind(inviteCode, a.joinCookieValue(r), account.ID); err == nil {
+	if _, err := a.store.Join().Create(account.ID); err == nil {
 		next = "/join/pair"
 	}
-	http.SetCookie(w, a.joinCookieFor(r, "", -1))
 	a.startSessionAt(w, r, store.Principal{ID: account.ID, Label: account.Name, TokenKind: store.WebSessionKind}, next)
 }
 
@@ -300,6 +298,18 @@ func (a *app) codePage(w http.ResponseWriter, r *http.Request) {
 	// Eine Einladung braucht lokal einen Namen; mit OIDC trägt der IdP ihn bei.
 	data.Invite = kind == store.CodeInvitation
 	data.NeedsName = kind == store.CodeBootstrap || (data.Invite && a.oidc == nil)
+	if data.Invite {
+		if p, err := a.store.PreviewOrgInvitation(code, a.store.AccessEnforced(), a.oidc != nil); err == nil {
+			target := p.Project
+			if target == "" {
+				target = p.Org
+			}
+			data.InviteV = &joinView{Inviter: p.Inviter, Target: target, Org: p.Org, ExpiresAt: p.ExpiresAt}
+			if p.Project == "" {
+				data.InviteV.Org = ""
+			}
+		}
+	}
 	a.render(w, "logincode", data)
 }
 func (a *app) codeSubmit(w http.ResponseWriter, r *http.Request) {
@@ -356,7 +366,7 @@ func (a *app) codeSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if kind == store.CodeInvitation && r.FormValue("join") == "1" {
-		a.finishJoinLogin(w, r, account, code)
+		a.finishJoinLogin(w, r, account)
 		return
 	}
 	a.finishLogin(w, r, account)

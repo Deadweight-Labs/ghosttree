@@ -18,12 +18,11 @@ import (
 
 // Join-Sitzungen (REQ-434, Paket P2): der Treffpunkt von Browser und Installer.
 //
-// Schon die Einladungsseite /join/<code> legt für eine gültige Einladung eine
-// Sitzung mit Paarungscode an (Open), gebunden an die Einladung und an den
-// Browser (Cookie), ohne die Einladung zu verbrauchen. Der Installer meldet sich
-// mit dem Code (Claim) und wartet; Anmeldung und Installation laufen also
-// parallel. Erst nach Anmeldung und Annahme wird die Sitzung an das Konto
-// gebunden (Bind); nur dieses Konto kann das Gerät freigeben (Decide).
+// Die Sitzung entsteht erst, wenn ein Konto feststeht: nach Annahme der
+// Einladung (Bind-Weg der Webseite) oder auf Wunsch eines angemeldeten Kontos
+// ("Connect this machine"). Beides ruft Create; die Sitzung gehört dem Konto, der
+// Paarungscode steht nur auf dessen Seite. Der Installer meldet sich mit dem Code
+// (Claim) und wartet; nur dieses Konto kann das Gerät freigeben (Decide).
 //
 // Zwei Wege zum Token, beide ohne dass der Paarungscode allein genügt:
 //   - Loopback (Regelfall, RFC 8252 mit PKCE): der Claim trägt code_challenge,
@@ -37,14 +36,17 @@ import (
 //     verlangt, dass er eingetippt wird; das Token kommt dann über den
 //     Geräte-Ablauf (/api/auth/device/token).
 //
-// Wer den Einladungslink hat, kann die Sitzung eines anderen nicht verdrängen:
-// Sitzungen mit Gerät (und gebundene) weichen nie einer neuen Anfrage; sind alle
-// zehn Plätze einer Einladung so belegt, bekommt die neue Anfrage keinen Befehl.
-// Loopback-Claims zählen wie Geräte-Abläufe je /64 und je /48.
+// Ein zweiter Claim auf einen gemeldeten Code verwirft die Sitzung: wer den Code
+// abfängt, kann die Sitzung nicht still übernehmen, und das Konto sieht die
+// Warnung. Die einzige Ausnahme ist derselbe Installer nach einem Abbruch
+// (Strg-C): Die Claim-Antwort trägt ein zufälliges Wiederaufnahme-Token (resume),
+// das nur der Installer kennt. Ein erneuter Claim mit dem passenden Token ersetzt
+// die eigene frühere Anfrage (gleicher Weg, Fehlversuche bei der Bestätigung
+// bleiben gezählt); ohne es gilt er wie der eines Fremden. Name und Netz des
+// Geräts taugen nicht als Beweis, beides kann ein Fremder nachahmen.
 //
-// Ein zweiter Claim auf einen gemeldeten Code verwirft die Sitzung. Der Zustand
-// liegt im Speicher; ein Neustart verwirft alles, und jeder alte Code wird wie
-// ein unbekannter behandelt.
+// Der Zustand liegt im Speicher; ein Neustart verwirft alles, und jeder alte Code
+// wird wie ein unbekannter behandelt.
 const (
 	JoinSessionTTL = 15 * time.Minute
 	// JoinMaxLifetime ist das Login-Fenster: so lange darf eine Sitzung von
@@ -52,9 +54,13 @@ const (
 	// hat. Ohne die Grenze verlängerte jeder Claim Sitzung und Cookie.
 	JoinMaxLifetime = 30 * time.Minute
 
+	// JoinClaimTTL: so lange darf ein gemeldetes Gerät auf die Freigabe warten.
+	// Danach läuft die Anfrage aus (JoinExpired) und der Code ist frei für einen
+	// neuen; ein abgebrochener Installer blockiert die Seite also nicht.
+	JoinClaimTTL = 5 * time.Minute
+
 	joinAuthTTL         = 2 * time.Minute
 	maxJoinSessions     = 1000
-	maxJoinPerInvite    = 10
 	maxJoinConfirmFails = 3
 	maxJoinFailures     = 8 // falsche Codes je /64 im Fenster
 	joinFailureWindow   = 10 * time.Minute
@@ -72,6 +78,7 @@ const (
 	JoinDenied      = "denied"      // abgelehnt
 	JoinConnected   = "connected"   // Token ausgestellt
 	JoinCompromised = "compromised" // zweiter Claim oder zu viele falsche Bestätigungen: neuer Code nötig
+	JoinExpired     = "expired"     // gemeldet, aber nicht rechtzeitig freigegeben: neuer Code nötig
 )
 
 // Wege zum Token.
@@ -95,8 +102,6 @@ var (
 
 type joinSession struct {
 	sid     string
-	idHash  string // Hash des Browser-Cookies
-	invite  string // Hash des Einladungscodes, leer ohne Einladung
 	account string // leer bis zur Bindung
 	pair    string
 	created time.Time
@@ -104,21 +109,23 @@ type joinSession struct {
 	state   string
 
 	// Gerät
-	mode        string
-	machine     string
-	remote      string
-	net         string // Netz (/64) des Claim, zum Vergleich mit dem Browser
-	wide        string // Netz (/48) des Claim, leer bei IPv4
-	nonce       string
-	deviceHash  string // Code-Weg: Geräte-Ablauf
-	confirmHash string
-	confirmFail int
-	challenge   string // Loopback-Weg
-	cbHost      string
-	cbPort      int
-	cbState     string
-	authHash    string
-	authExpires time.Time
+	mode         string
+	machine      string
+	remote       string
+	net          string // Netz (/64) des Claim, zum Vergleich mit dem Browser
+	wide         string // Netz (/48) des Claim, leer bei IPv4
+	nonce        string
+	deviceHash   string // Code-Weg: Geräte-Ablauf
+	confirmHash  string
+	confirmFail  int
+	challenge    string // Loopback-Weg
+	cbHost       string
+	cbPort       int
+	cbState      string
+	authHash     string
+	authExpires  time.Time
+	claimExpires time.Time // Ende der Wartezeit auf die Freigabe
+	resumeHash   string    // Wiederaufnahme-Token des Installers (nur Hash)
 }
 
 // JoinView ist, was die Seite über die Sitzung des Kontos erfährt.
@@ -135,12 +142,6 @@ type JoinView struct {
 	Callback string
 }
 
-// JoinOpen ist die Antwort an die Einladungsseite.
-type JoinOpen struct {
-	ID   string // Inhalt des Cookies; leer, wenn die bestehende Sitzung weiterläuft
-	Pair string
-}
-
 // JoinClaimRequest trägt, was der Installer beim Claim schickt.
 type JoinClaimRequest struct {
 	Addr, Pair, Machine string
@@ -148,6 +149,9 @@ type JoinClaimRequest struct {
 	Challenge, State string
 	Host             string
 	Port             int
+	// Resume ist das Token aus der Antwort auf den ersten Claim; nur damit darf
+	// derselbe Installer nach einem Abbruch erneut claimen.
+	Resume string
 }
 
 // JoinClaim ist die Antwort an den Installer.
@@ -156,6 +160,7 @@ type JoinClaim struct {
 	DeviceCode          string // nur Code-Weg
 	Confirm             string // nur Code-Weg
 	ExpiresIn, Interval time.Duration
+	Resume              string // Wiederaufnahme-Token; der Installer legt es lokal ab
 }
 
 // JoinDecision ist das Ergebnis einer Freigabe.
@@ -173,8 +178,8 @@ type JoinSessions struct {
 	mu        sync.Mutex
 	now       func() time.Time
 	device    *DeviceFlows
+	startFlow func(client, machine, remote string, ttl time.Duration) (DeviceStart, error)
 	all       map[string]*joinSession
-	byID      map[string]*joinSession
 	byAccount map[string]*joinSession
 	byPair    map[string]*joinSession
 	byAuth    map[string]*joinSession
@@ -182,8 +187,7 @@ type JoinSessions struct {
 }
 
 func NewJoinSessions(d *DeviceFlows) *JoinSessions {
-	return &JoinSessions{now: time.Now, device: d, all: map[string]*joinSession{}, byID: map[string]*joinSession{},
-		byAccount: map[string]*joinSession{}, byPair: map[string]*joinSession{}, byAuth: map[string]*joinSession{},
+	return &JoinSessions{now: time.Now, device: d, startFlow: d.StartJoin, all: map[string]*joinSession{}, byAccount: map[string]*joinSession{}, byPair: map[string]*joinSession{}, byAuth: map[string]*joinSession{},
 		failures: map[string][]time.Time{}}
 }
 
@@ -220,6 +224,10 @@ func widerKey(addr string) string {
 	return ""
 }
 
+// joinRandomHex ist die Zufallsquelle der Claims; Tests ersetzen sie, um den
+// Fehlerweg zu prüfen.
+var joinRandomHex = randomHex
+
 func randomHex(n int) (string, error) {
 	raw := make([]byte, n)
 	if _, err := rand.Read(raw); err != nil {
@@ -230,7 +238,6 @@ func randomHex(n int) (string, error) {
 
 func (j *JoinSessions) unlink(s *joinSession) {
 	delete(j.all, s.sid)
-	delete(j.byID, s.idHash)
 	if j.byAccount[s.account] == s {
 		delete(j.byAccount, s.account)
 	}
@@ -253,7 +260,14 @@ func (j *JoinSessions) compromise(s *joinSession) {
 		delete(j.byAuth, s.authHash)
 	}
 	delete(j.byPair, hashCode(s.pair))
-	s.state, s.authHash, s.deviceHash = JoinCompromised, "", ""
+	s.state, s.authHash, s.deviceHash, s.resumeHash = JoinCompromised, "", "", ""
+}
+
+// lapse beendet eine gemeldete, nie freigegebene Anfrage: Gerät und Codes
+// verfallen, die Sitzung bleibt, damit die Seite es sagen kann.
+func (j *JoinSessions) lapse(s *joinSession) {
+	j.compromise(s)
+	s.state = JoinExpired
 }
 
 func (j *JoinSessions) purge(now time.Time) {
@@ -265,12 +279,9 @@ func (j *JoinSessions) purge(now time.Time) {
 }
 
 // evictOldest macht Platz: zuerst Sitzungen ohne Gerät, dann die ältesten.
-func (j *JoinSessions) evictOldest(match func(*joinSession) bool) {
+func (j *JoinSessions) evictOldest() {
 	var oldest *joinSession
 	for _, s := range j.all {
-		if !match(s) {
-			continue
-		}
 		if oldest == nil || (oldest.state != JoinWaiting && s.state == JoinWaiting) ||
 			((oldest.state == JoinWaiting) == (s.state == JoinWaiting) && s.created.Before(oldest.created)) {
 			oldest = s
@@ -310,7 +321,7 @@ func (j *JoinSessions) newPair() (string, error) {
 	return "", ErrDeviceBusy
 }
 
-func (j *JoinSessions) add(now time.Time, invite, account, id string) (*joinSession, error) {
+func (j *JoinSessions) add(now time.Time, account string) (*joinSession, error) {
 	pair, err := j.newPair()
 	if err != nil {
 		return nil, err
@@ -320,95 +331,18 @@ func (j *JoinSessions) add(now time.Time, invite, account, id string) (*joinSess
 		return nil, err
 	}
 	if len(j.all) >= maxJoinSessions {
-		j.evictOldest(func(*joinSession) bool { return true })
+		j.evictOldest()
 	}
-	s := &joinSession{sid: sid, idHash: hashCode(id), invite: invite, account: account, pair: pair, created: now,
-		expires: now.Add(JoinSessionTTL), state: JoinWaiting}
+	s := &joinSession{sid: sid, account: account, pair: pair, created: now, expires: now.Add(JoinSessionTTL), state: JoinWaiting}
 	j.all[sid] = s
 	j.byPair[hashCode(pair)] = s
-	if id != "" {
-		j.byID[s.idHash] = s
-	}
-	if account != "" {
-		j.byAccount[account] = s
-	}
+	j.byAccount[account] = s
 	return s, nil
 }
 
-// Open liefert für eine gültige Einladung (der Aufrufer hat sie geprüft) die
-// Sitzung dieses Browsers: dieselbe, solange sie läuft, sonst eine neue. Die
-// Einladung wird nicht verbraucht. id ist der Inhalt des Cookies, oder leer.
-func (j *JoinSessions) Open(inviteCode, id string) (JoinOpen, error) {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	now := j.now()
-	j.purge(now)
-	invite := hashCode(inviteCode)
-	if id != "" {
-		if s := j.byID[hashCode(id)]; s != nil && s.invite == invite && s.account == "" &&
-			(s.state == JoinWaiting || s.state == JoinClaimed) {
-			return JoinOpen{Pair: FormatUserCode(s.pair)}, nil
-		}
-	}
-	count := 0
-	for _, s := range j.all {
-		if s.invite == invite {
-			count++
-		}
-	}
-	if count >= maxJoinPerInvite {
-		// Nur Sitzungen ohne Gerät und ohne Konto weichen (wartende und solche
-		// in Endzuständen); sonst gibt es für diese Anfrage keine Sitzung.
-		before := len(j.all)
-		j.evictOldest(func(s *joinSession) bool {
-			return s.invite == invite && s.account == "" &&
-				(s.state == JoinWaiting || s.state == JoinCompromised || s.state == JoinDenied)
-		})
-		if len(j.all) == before {
-			return JoinOpen{}, nil
-		}
-	}
-	newID, err := randomHex(16)
-	if err != nil {
-		return JoinOpen{}, err
-	}
-	s, err := j.add(now, invite, "", newID)
-	if err != nil {
-		return JoinOpen{}, err
-	}
-	return JoinOpen{ID: newID, Pair: FormatUserCode(s.pair)}, nil
-}
-
-// Bind bindet die Sitzung dieses Browsers an das Konto, das die Einladung
-// angenommen hat. Fehlt sie (oder gehört sie zu einer anderen Einladung), legt
-// es eine neue für das Konto an. Eine bestehende Sitzung des Kontos endet.
-func (j *JoinSessions) Bind(inviteCode, id, account string) error {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	now := j.now()
-	j.purge(now)
-	var s *joinSession
-	if id != "" {
-		s = j.byID[hashCode(id)]
-	}
-	if s == nil || s.invite != hashCode(inviteCode) || s.account != "" {
-		s = nil
-	}
-	if old := j.byAccount[account]; old != nil && old != s {
-		j.unlink(old)
-	}
-	if s == nil {
-		_, err := j.add(now, hashCode(inviteCode), account, "")
-		return err
-	}
-	s.account = account
-	j.byAccount[account] = s
-	delete(j.byID, s.idHash) // der Browser-Cookie hat seine Arbeit getan
-	return nil
-}
-
-// Create legt für das Konto eine neue, schon gebundene Sitzung an ("Connect this
-// machine"). Eine bestehende Sitzung des Kontos endet damit, samt Gerät.
+// Create legt für das Konto eine neue Sitzung an (nach der Annahme einer
+// Einladung oder bei "Connect this machine"). Eine bestehende Sitzung des Kontos
+// endet damit, samt Gerät.
 func (j *JoinSessions) Create(account string) (string, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
@@ -417,7 +351,7 @@ func (j *JoinSessions) Create(account string) (string, error) {
 	if old := j.byAccount[account]; old != nil {
 		j.unlink(old)
 	}
-	s, err := j.add(now, "", account, "")
+	s, err := j.add(now, account)
 	if err != nil {
 		return "", err
 	}
@@ -525,7 +459,7 @@ func (j *JoinSessions) Claim(req JoinClaimRequest) (JoinClaim, error) {
 		return JoinClaim{}, ErrDeviceBusy
 	}
 	wide := widerKey(req.Addr)
-	if loop && j.loopbackBusy(netKey, wide) {
+	if loop && j.loopbackBusy(netKey, wide, now) {
 		return JoinClaim{}, ErrDeviceBusy
 	}
 	var s *joinSession
@@ -536,21 +470,44 @@ func (j *JoinSessions) Claim(req JoinClaimRequest) (JoinClaim, error) {
 		j.fail(req.Addr, now)
 		return JoinClaim{}, ErrJoinInvalid
 	}
-	if s.state != JoinWaiting {
+	if s.state == JoinClaimed && !now.Before(s.claimExpires) {
+		// Die frühere Anfrage ist schon abgelaufen: das ist ein Timeout, kein
+		// zweites Gerät, und die Seite soll es auch so sagen.
+		j.lapse(s)
+	}
+	resumed := s.state == JoinClaimed && s.resumedBy(req, loop)
+	if s.state != JoinWaiting && !resumed {
 		if s.state == JoinClaimed {
 			j.compromise(s)
 		}
 		j.fail(req.Addr, now)
 		return JoinClaim{}, ErrJoinInvalid
 	}
-	nonce, err := randomHex(16)
+	resume, err := joinRandomHex(16)
 	if err != nil {
 		return JoinClaim{}, err
+	}
+	nonce, err := joinRandomHex(16)
+	if err != nil {
+		return JoinClaim{}, err
+	}
+	if resumed {
+		// Derselbe Installer, wieder aufgerufen (etwa nach Strg-C), bevor jemand
+		// freigegeben hat: die frühere Anfrage weicht, der Code wird nicht
+		// verbrannt. Fehlversuche bei der Bestätigung (confirmFail) bleiben
+		// gezählt, und der Weg (Loopback oder Code) kann nicht wechseln. Erst
+		// nach dem Erzeugen der Zufallswerte wird die frühere Anfrage ersetzt.
+		if s.deviceHash != "" {
+			j.device.DropJoin(s.deviceHash)
+		}
+		s.deviceHash, s.confirmHash = "", ""
+		s.state = JoinWaiting
 	}
 	// Ein Claim hält Sitzung (und im Code-Weg den Geräte-Ablauf) bis zum Ende
 	// des Login-Fensters, damit eine späte Anmeldung das Gerät nicht verliert.
 	window := s.created.Add(JoinMaxLifetime).Sub(now)
-	out := JoinClaim{Mode: JoinModeCode, ExpiresIn: window, Interval: DeviceInterval}
+	wait := min(window, JoinClaimTTL)
+	out := JoinClaim{Mode: JoinModeCode, ExpiresIn: wait, Interval: DeviceInterval, Resume: resume}
 	if loop {
 		out.Mode = JoinModeLoopback
 		host := req.Host
@@ -559,31 +516,49 @@ func (j *JoinSessions) Claim(req JoinClaimRequest) (JoinClaim, error) {
 		}
 		s.challenge, s.cbHost, s.cbPort, s.cbState = req.Challenge, host, req.Port, req.State
 	} else {
-		start, err := j.device.StartJoin(netKey, req.Machine, req.Addr, window)
-		if err != nil {
+		fail := func(err error) (JoinClaim, error) {
+			if resumed {
+				j.lapse(s)
+			}
 			return JoinClaim{}, err
+		}
+		start, err := j.startFlow(netKey, req.Machine, req.Addr, window)
+		if err != nil {
+			return fail(err)
 		}
 		confirm, err := newUserCode()
 		if err != nil {
 			j.device.DropJoin(hashCode(start.DeviceCode))
-			return JoinClaim{}, err
+			return fail(err)
 		}
 		confirm = confirm[:joinConfirmLen]
 		s.deviceHash, s.confirmHash = hashCode(start.DeviceCode), hashCode(confirm)
 		out.DeviceCode, out.Confirm = start.DeviceCode, confirm
-		out.ExpiresIn, out.Interval = start.ExpiresIn, start.Interval
+		out.Interval = start.Interval
 	}
 	s.mode, s.machine, s.remote, s.net, s.wide, s.nonce, s.state = out.Mode, req.Machine, req.Addr, netKey, wide, nonce, JoinClaimed
 	s.extend(s.created.Add(JoinMaxLifetime))
+	s.claimExpires = now.Add(JoinClaimTTL)
+	s.resumeHash = hashCode(resume)
 	return out, nil
 }
 
-// loopbackBusy zählt die offenen Loopback-Claims eines Netzes (/64, im /48
+// resumedBy sagt, ob der Claim vom Installer kommt, der diese Anfrage gestellt
+// hat: er kennt das Wiederaufnahme-Token und bleibt auf demselben Weg.
+func (s *joinSession) resumedBy(req JoinClaimRequest, loop bool) bool {
+	return req.Resume != "" && s.resumeHash != "" && loop == (s.mode == JoinModeLoopback) &&
+		subtle.ConstantTimeCompare([]byte(hashCode(req.Resume)), []byte(s.resumeHash)) == 1
+}
+
+// loopbackBusy zählt die offenen, nicht abgelaufenen Loopback-Claims eines Netzes (/64, im /48
 // entsprechend mehr), wie Busy es für Geräte-Abläufe tut.
-func (j *JoinSessions) loopbackBusy(netKey, wide string) bool {
+func (j *JoinSessions) loopbackBusy(netKey, wide string, now time.Time) bool {
 	n, nw := 0, 0
 	for _, s := range j.all {
 		if s.mode != JoinModeLoopback || (s.state != JoinClaimed && s.state != JoinApproved) {
+			continue
+		}
+		if s.state == JoinClaimed && !now.Before(s.claimExpires) {
 			continue
 		}
 		if s.net == netKey {
@@ -605,6 +580,10 @@ func (j *JoinSessions) live(account string, now time.Time) (*joinSession, string
 		return nil, JoinNone
 	}
 	state := s.state
+	if state == JoinClaimed && !now.Before(s.claimExpires) {
+		j.lapse(s)
+		return s, JoinExpired
+	}
 	if s.mode == JoinModeCode && (state == JoinClaimed || state == JoinApproved) && j.device.JoinStatus(s.deviceHash) == "" {
 		state = JoinNone // Ablauf weg, ohne dass ein Token ausgestellt wurde
 	}
@@ -624,7 +603,7 @@ func (j *JoinSessions) View(account string) JoinView {
 	}
 	v := JoinView{State: state, Pair: FormatUserCode(s.pair), Machine: s.machine, Remote: s.remote, Net: s.net,
 		Nonce: s.nonce, Mode: s.mode}
-	if state == JoinCompromised && s.mode == JoinModeLoopback && s.cbPort != 0 {
+	if (state == JoinCompromised || state == JoinExpired) && s.mode == JoinModeLoopback && s.cbPort != 0 {
 		v.Callback = s.callback(url.Values{"error": {"access_denied"}})
 	}
 	return v

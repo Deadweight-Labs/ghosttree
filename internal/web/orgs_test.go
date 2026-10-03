@@ -197,7 +197,7 @@ func TestLocalInvitationLinkCreatesAccountAndSession(t *testing.T) {
 	b := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	resp, _ := b.Get(srv.URL + "/ui/login/code?code=" + code)
 	page := body(t, resp)
-	if !strings.Contains(page, "Join an organization") || !strings.Contains(page, `name="name"`) {
+	if !strings.Contains(page, "alice invited you to Alpha") || !strings.Contains(page, "Your coding agents share") || strings.Contains(page, `type="password"`) || !strings.Contains(page, `name="name"`) {
 		t.Fatalf("landing page: %s", page)
 	}
 	// Ein GET verbraucht nichts.
@@ -231,7 +231,7 @@ func TestOIDCInvitationLandingPointsToTheIdentityProvider(t *testing.T) {
 	code := env.invite(t, org, "")
 	resp, _ := http.Get(env.web.URL + "/ui/login/code?code=" + code)
 	page := body(t, resp)
-	if !strings.Contains(page, "identity provider") || !strings.Contains(page, `action="/ui/login/oidc"`) || strings.Contains(page, `name="name"`) {
+	if !strings.Contains(page, "Continue and join") || !strings.Contains(page, `action="/ui/login/oidc"`) || strings.Contains(page, `name="name"`) {
 		t.Fatalf("landing page: %s", page)
 	}
 	b := newBrowser(t)

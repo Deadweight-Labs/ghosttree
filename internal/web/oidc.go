@@ -477,7 +477,7 @@ func (a *app) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		a.dropBootstrapFile()
 	}
 	if flow.Join && (outcome == store.LoginInvited || outcome == store.LoginJoined) {
-		a.finishJoinLogin(w, r, account, flow.Code)
+		a.finishJoinLogin(w, r, account)
 		return
 	}
 	a.finishLogin(w, r, account)

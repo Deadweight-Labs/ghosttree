@@ -191,13 +191,13 @@ func TestJoinPageShowsOnlyWhatTheInviteeNeedsAndSetsSafeHeaders(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status %d: %s", resp.StatusCode, page)
 	}
-	for _, want := range []string{"Alpha", joinProject, "guest", "does not use the invitation"} {
+	for _, want := range []string{"Alpha", joinProject, "Guest", "alice invited you to " + joinProject, "Your coding agents share what they learn with your team.", "<time "} {
 		if !strings.Contains(page, want) {
 			t.Errorf("page lacks %q: %s", want, page)
 		}
 	}
 	// Keine Namen anderer Personen, keine Zähler, keine Ids, kein Einlader.
-	for _, leak := range []string{"alice", "anna", "ben", "person:", "Beta"} {
+	for _, leak := range []string{"anna", "ben", "person:", "Beta"} {
 		if strings.Contains(page, leak) {
 			t.Errorf("page leaks %q", leak)
 		}
@@ -219,8 +219,8 @@ func TestJoinPageShowsOnlyWhatTheInviteeNeedsAndSetsSafeHeaders(t *testing.T) {
 	if strings.Contains(csp, "script-src") || strings.Contains(csp, "unsafe") {
 		t.Errorf("CSP allows scripts: %s", csp)
 	}
-	// Einziger Cookie: der HttpOnly-Cookie der Join-Sitzung, ohne Code darin.
-	if cookies := h.Values("Set-Cookie"); len(cookies) != 1 || !strings.HasPrefix(cookies[0], "gt_join=") || !strings.Contains(cookies[0], "HttpOnly") || strings.Contains(cookies[0], code) {
+	// Das Öffnen setzt keinen Cookie und legt keine Sitzung an.
+	if cookies := h.Values("Set-Cookie"); len(cookies) != 0 {
 		t.Errorf("cookies: %v", cookies)
 	}
 	if regexp.MustCompile(`(?i)(src|href|action)="(https?:)?//`).MatchString(page) {
@@ -288,7 +288,7 @@ func TestJoinAcceptNeedsInteractiveLoginAndCSRFAndHappensOnce(t *testing.T) {
 	// Die Seite für ein angemeldetes Konto bietet den Beitritt an.
 	page, _ := anna.Get(srv.URL + "/join/" + code)
 	text := body(t, page)
-	if !strings.Contains(text, "Join as anna") || !strings.Contains(text, `action="/join/`+code+`/accept"`) {
+	if !strings.Contains(text, "This is me, anna") || !strings.Contains(text, `action="/join/`+code+`/accept"`) {
 		t.Fatalf("signed-in page: %s", text)
 	}
 	csrf := regexp.MustCompile(`name="csrf_token" value="([^"]+)"`).FindStringSubmatch(text)[1]
@@ -540,18 +540,24 @@ func TestJoinSignedInPageNamesTheAccountAndOffersSignOut(t *testing.T) {
 	code := projectInvite(t, st, org, store.RoleMember)
 	page, _ := anna.Get(srv.URL + "/join/" + code)
 	text := body(t, page)
-	for _, want := range []string{"signed in as <strong>anna</strong> <small>(person:2)", "signed in as <strong>anna</strong>", `name="confirm_account"`, "Not you?", `action="/join/` + code + `/signout"`} {
+	for _, want := range []string{"<strong>anna</strong>", "This is me, anna", `name="confirm_account"`, "Not you?", `action="/join/` + code + `/signout"`} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("page lacks %q: %s", want, text)
 		}
+	}
+	if strings.Contains(text, "person:") {
+		t.Fatal("the page shows an internal id")
 	}
 	csrf := regexp.MustCompile(`name="csrf_token" value="([^"]+)"`).FindStringSubmatch(text)[1]
 	// Ohne Bestätigung des Kontonamens wird nichts verbraucht.
 	for _, confirm := range []string{"", "someone-else"} {
 		resp := sameOriginPostForm(t, anna, srv.URL+"/join/"+code+"/accept", url.Values{"csrf_token": {csrf}, "confirm_account": {confirm}})
-		resp.Body.Close()
+		page := body(t, resp)
 		if resp.StatusCode != http.StatusBadRequest {
 			t.Fatalf("confirm %q: %d", confirm, resp.StatusCode)
+		}
+		if !strings.Contains(page, `href="/join/`+code+`"`) || !strings.Contains(page, "Back to the invitation") {
+			t.Fatalf("confirm %q: no way back to the invitation: %s", confirm, page)
 		}
 	}
 	if _, err := st.PreviewInvitation(code, true); err != nil {

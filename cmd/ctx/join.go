@@ -8,6 +8,8 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -18,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strconv"
@@ -30,6 +33,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
 	"github.com/Deadweight-Labs/ghosttree/internal/installer"
+	"github.com/Deadweight-Labs/ghosttree/internal/privatefile"
 )
 
 // Austauschbar für Tests: Terminal, Browser, Erkennung und Installation.
@@ -60,6 +64,58 @@ var (
 )
 
 var machineNameRE = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
+
+// ---- Wiederaufnahme nach Abbruch ----
+
+// joinResumeTTL: so lange gilt das lokal abgelegte Wiederaufnahme-Token, kürzer
+// als die Sitzung des Servers.
+const joinResumeTTL = 10 * time.Minute
+
+type joinResume struct {
+	Server   string `json:"server"`
+	PairHash string `json:"pair_hash"`
+	Resume   string `json:"resume"`
+	Expires  int64  `json:"expires"`
+}
+
+func joinResumePath() string { return filepath.Join(filepath.Dir(config.Path()), "join-resume.json") }
+
+func resumePairHash(pair string) string {
+	sum := sha256.Sum256([]byte(strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(pair), "-", ""))))
+	return hex.EncodeToString(sum[:])
+}
+
+// loadJoinResume liefert das Token, das der Server beim ersten Claim dieses
+// Codes ausgab, solange es zu diesem Server und Code gehört und nicht abgelaufen
+// ist. Es beweist dem Server, dass derselbe Installer nach Strg-C erneut
+// anfragt; ohne es gilt ein zweiter Claim als fremder.
+func loadJoinResume(server, pair string) string {
+	b, err := os.ReadFile(joinResumePath())
+	if err != nil {
+		return ""
+	}
+	var r joinResume
+	if json.Unmarshal(b, &r) != nil || r.Server != server || r.PairHash != resumePairHash(pair) || time.Now().Unix() >= r.Expires {
+		return ""
+	}
+	return r.Resume
+}
+
+func saveJoinResume(server, pair, token string) {
+	if token == "" {
+		return
+	}
+	b, err := json.Marshal(joinResume{Server: server, PairHash: resumePairHash(pair), Resume: token, Expires: time.Now().Add(joinResumeTTL).Unix()})
+	if err != nil {
+		return
+	}
+	p := joinResumePath()
+	if os.MkdirAll(filepath.Dir(p), 0o755) == nil {
+		_ = privatefile.Write(p, b)
+	}
+}
+
+func clearJoinResume() { _ = os.Remove(joinResumePath()) }
 
 // terminal ist die Rückfragestelle. Sie muss /dev/tty sein, weil stdin bei
 // `curl ... | sh` die Pipe ist.
@@ -391,7 +447,15 @@ func cmdJoin(args []string, stdout io.Writer) int {
 	if !*yes {
 		t, err := joinTTY()
 		if err != nil {
-			fmt.Fprintln(stdout, "No terminal to ask on; pass --yes to continue without questions.")
+			// Noch nichts gemeldet: der Code ist unverbraucht und gilt weiter.
+			cmd := "ctx join --server " + server + " --pair " + strings.ToUpper(strings.TrimSpace(*pair))
+			if *name != "" {
+				cmd += " --name " + *name
+			}
+			if *noBrowser {
+				cmd += " --no-browser"
+			}
+			fmt.Fprintf(stdout, "This terminal cannot ask questions, so nothing was started. Your code %s is not used up.\nRun this in a terminal you can type in:\n\n  %s --yes\n", strings.ToUpper(strings.TrimSpace(*pair)), cmd)
 			return 1
 		}
 		defer t.Close()
@@ -430,6 +494,13 @@ func cmdJoin(args []string, stdout io.Writer) int {
 	}
 
 	c := client.New(config.Config{ServerURL: server})
+	// Nach einem Signal bleibt das Wiederaufnahme-Token liegen (der nächste Aufruf
+	// braucht es); jedes andere Ende räumt es weg.
+	defer func() {
+		if ctx.Err() == nil {
+			clearJoinResume()
+		}
+	}()
 	remote := os.Getenv("SSH_CONNECTION") != ""
 	var tok client.DeviceToken
 	var cb *callback
@@ -658,13 +729,14 @@ func joinLoopback(ctx context.Context, c *client.Client, cb *callback, pair, mac
 		return client.DeviceToken{}, err
 	}
 	claim, err := c.JoinClaim(ctx, client.JoinClaimRequest{
-		Pair: pair, Machine: machine,
+		Pair: pair, Machine: machine, Resume: loadJoinResume(server, pair),
 		CodeChallenge: challenge, CodeChallengeMethod: "S256",
 		LoopbackPort: cb.Port(), LoopbackHost: "127.0.0.1", State: cb.state,
 	})
 	if err != nil {
 		return client.DeviceToken{}, claimError(err)
 	}
+	saveJoinResume(server, pair, claim.Resume)
 	if claim.Mode != "loopback" {
 		return client.DeviceToken{}, errors.New(errInterrupted)
 	}
@@ -705,10 +777,11 @@ func joinLoopback(ctx context.Context, c *client.Client, cb *callback, pair, mac
 // joinCode ist der Rückfall ohne Loopback: der Bestätigungscode steht im
 // Terminal, das Token kommt über den Geräte-Ablauf.
 func joinCode(ctx context.Context, c *client.Client, pair, machine, server string, stdout io.Writer) (client.DeviceToken, error) {
-	claim, err := c.JoinClaim(ctx, client.JoinClaimRequest{Pair: pair, Machine: machine})
+	claim, err := c.JoinClaim(ctx, client.JoinClaimRequest{Pair: pair, Machine: machine, Resume: loadJoinResume(server, pair)})
 	if err != nil {
 		return client.DeviceToken{}, claimError(err)
 	}
+	saveJoinResume(server, pair, claim.Resume)
 	if claim.Mode != "code" || claim.DeviceCode == "" {
 		return client.DeviceToken{}, errors.New(errInterrupted)
 	}

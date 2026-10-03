@@ -20,6 +20,10 @@ import (
 // Bestätigungscode, den die Freigabeseite abfragt, und das Token kommt über den
 // Geräte-Ablauf (/api/auth/device/token).
 //
+// Die Antwort trägt ein zufälliges "resume". Nur wer es beim erneuten Claim
+// zurückschickt (derselbe Installer nach Strg-C), ersetzt seine eigene noch
+// nicht freigegebene Anfrage; jeder andere zweite Claim verwirft die Sitzung.
+//
 // Beobachtbar für einen Fremden ist nur: 400 invalid_pair bzw. invalid_grant für
 // jeden Code, der nicht taugt, 429 (Netz gesperrt oder zu viele offene Abläufe;
 // hängt nie vom Code ab) und 400/413 invalid_request für einen kaputten Körper
@@ -50,6 +54,7 @@ type joinClaimRequest struct {
 	LoopbackPort        int    `json:"loopback_port"`
 	LoopbackHost        string `json:"loopback_host"`
 	State               string `json:"state"`
+	Resume              string `json:"resume"`
 }
 
 func (a *api) claimJoin(w http.ResponseWriter, r *http.Request) {
@@ -64,16 +69,20 @@ func (a *api) claimJoin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	claim := store.JoinClaimRequest{Addr: a.clientAddr(r), Pair: req.Pair, Machine: machine,
-		Challenge: req.CodeChallenge, State: req.State, Host: req.LoopbackHost, Port: req.LoopbackPort}
+		Challenge: req.CodeChallenge, State: req.State, Host: req.LoopbackHost, Port: req.LoopbackPort, Resume: req.Resume}
 	if claim.Loopback() && (!claim.ValidLoopback() || req.CodeChallengeMethod != "S256") {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_request", "error_description": "loopback needs code_challenge (S256), loopback_port (1024-65535) and state"})
+		return
+	}
+	if len(req.Resume) > 64 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_request", "error_description": "resume is too long"})
 		return
 	}
 	out, err := a.st.Join().Claim(claim)
 	switch {
 	case err == nil:
 		body := map[string]any{"mode": out.Mode, "expires_in": int(out.ExpiresIn.Seconds()),
-			"verification_uri": a.requestBaseURL(r) + "/join/pair"}
+			"verification_uri": a.requestBaseURL(r) + "/join/pair", "resume": out.Resume}
 		if out.Mode == store.JoinModeLoopback {
 			body["token_endpoint"] = "/api/join/token"
 		} else {
