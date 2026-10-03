@@ -72,7 +72,7 @@ func (s *Store) CreateContextSnapshot(ctx context.Context, in snapshot.CreateInp
 		return result, err
 	}
 
-	entries, err := captureContextEntries(ctx, conn, in.Project, schemaVersion, limits)
+	entries, err := captureContextEntriesFor(ctx, conn, in.Project, schemaVersion, limits, in.ExcludeMachines)
 	if err != nil {
 		return result, err
 	}

@@ -12,6 +12,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/collector"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/snapshot"
+	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
 func (a *api) createContextSnapshot(w http.ResponseWriter, r *http.Request) {
@@ -42,6 +43,9 @@ func (a *api) createContextSnapshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	principal := principalOf(r)
+	if !a.snapshotGate(w, r, input.Project, store.ActCreate) {
+		return
+	}
 	access, err := a.st.ContextSnapshotAccess(principal.ID, input.Project)
 	if err != nil {
 		a.writeSnapshotError(w, err)
@@ -60,6 +64,12 @@ func (a *api) createContextSnapshot(w http.ResponseWriter, r *http.Request) {
 	}
 	input.ActorID = principal.ID
 	input.ActorLabel = &principal.Label
+	if pa := a.access(r); a.st.AccessEnforced() {
+		// Wissen der Maschinen-Achse gehört nur dem Besitzer der Maschine;
+		// der Snapshot enthält davon nur, was der Ersteller selbst lesen darf.
+		// Vor dem Capture gelesen: der hält eine Transaktion offen.
+		input.ExcludeMachines = pa.HiddenMachines(input.Project)
+	}
 	result, err := a.st.CreateContextSnapshot(r.Context(), input, a.snapshotLimits, nil)
 	if err != nil {
 		a.writeSnapshotError(w, err)
@@ -169,6 +179,9 @@ func (a *api) requireSnapshotRead(w http.ResponseWriter, r *http.Request, projec
 		writeSnapshotRuleError(w, http.StatusBadRequest, &snapshot.RuleError{Code: "snapshot_invalid_input"})
 		return false
 	}
+	if !a.snapshotGate(w, r, project, store.ActRead) {
+		return false
+	}
 	access, err := a.st.ContextSnapshotAccess(principalOf(r).ID, project)
 	if err != nil {
 		a.writeSnapshotError(w, err)
@@ -179,6 +192,18 @@ func (a *api) requireSnapshotRead(w http.ResponseWriter, r *http.Request, projec
 		return false
 	}
 	return true
+}
+
+// snapshotGate bindet Anlegen und Lesen an die Projektrolle (member oder
+// höher, Instanz-Admin). Wer das nicht darf, bekommt dieselbe Antwort wie bei
+// einem unbekannten Snapshot, Byte für Byte: ein 403 verriete, dass es das
+// Projekt oder den Snapshot gibt (#2447). Im Log-Modus geht alles durch.
+func (a *api) snapshotGate(w http.ResponseWriter, r *http.Request, project string, act store.Action) bool {
+	if a.access(r).Check(project, store.ResSnapshot, act, store.Object{}) == nil {
+		return true
+	}
+	writeSnapshotRuleError(w, http.StatusNotFound, &snapshot.RuleError{Code: "snapshot_not_found"})
+	return false
 }
 
 func validSnapshotProject(project string) bool {

@@ -131,6 +131,10 @@ type CreateInput struct {
 	ActorID    string        `json:"actor_id"`
 	ActorLabel *string       `json:"actor_label"`
 	SessionRef *string       `json:"session_ref"`
+	// ExcludeMachines nennt Maschinen, deren Wissen nicht in den Snapshot
+	// gehört (der Ersteller besitzt sie nicht). Nie aus dem Rumpf; der Server
+	// setzt es.
+	ExcludeMachines []string `json:"-"`
 }
 
 type CreateResult struct {

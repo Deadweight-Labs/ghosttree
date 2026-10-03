@@ -34,6 +34,11 @@ const (
 	// ResProject ist der Projekteintrag selbst (Name in Listen): sichtbar mit
 	// irgendeiner Rolle, nicht schon durch die bloße Mitgliedschaft in der Org.
 	ResProject Resource = "project"
+	// ResSnapshot ist ein Kontext-Snapshot: eine Kopie des gesamten
+	// Projektwissens (Wissen samt Entwürfen, Aufträge, Ghost-Dateien,
+	// Dokumente). Anlegen und Lesen ab member, nie für Gäste oder Fremde; die
+	// Ablehnung ist immer "nicht gefunden".
+	ResSnapshot Resource = "snapshot"
 )
 
 // Action ist, was getan werden soll.
@@ -122,6 +127,8 @@ func matrixAllows(role RoleInfo, res Resource, act Action, obj Object) bool {
 			// Der Besitzer der Session und der Owner des Projekts.
 			return obj.Own || rank >= 4
 		}
+	case ResSnapshot:
+		return (act == ActRead || act == ActCreate) && rank >= 2
 	case ResRoom:
 		return (act == ActRead || act == ActCreate) && rank >= 1
 	case ResProject:
@@ -429,6 +436,15 @@ func (a *ProjectAccess) Decide(project string, res Resource, act Action, obj Obj
 		return Decision{Allowed: true}
 	}
 	rank := RoleRank(role.Role)
+	if res == ResSnapshot {
+		// Eine Kopie des ganzen Projekts: nur der Instanz-Admin ohne Rolle, und
+		// jede Ablehnung ist 404, damit sie nichts über Projekt oder Snapshot
+		// verrät. Auch ein unbeanspruchtes Projekt öffnet sich nicht.
+		if a.IsAdmin() {
+			return Decision{Allowed: true, Reason: "instance admin"}
+		}
+		return Decision{Hidden: true, Reason: "snapshot needs member role"}
+	}
 	// Eine Remote ohne Projektzeile ist unbeansprucht. Anlegen bleibt wie bisher
 	// möglich (gateProject); der Autor sieht und ändert seine eigenen Einträge
 	// dort immer, der Instanz-Admin sieht alles, andere nichts.
@@ -655,4 +671,36 @@ func (a *ProjectAccess) GateList(project string, res Resource, perEntry bool) er
 		return nil
 	}
 	return a.Check(project, res, ActRead, Object{Confidence: "verified"})
+}
+
+// HiddenMachines nennt die Maschinen mit Wissen in diesem Projekt, die das Konto
+// nicht besitzt. Deren Wissen darf kein Auszug (Snapshot) mitnehmen.
+func (a *ProjectAccess) HiddenMachines(project string) []string {
+	var out []string
+	for _, m := range a.st.KnowledgeMachines(project) {
+		if !a.OwnsMachine(m) {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// KnowledgeMachines: die verschiedenen Maschinen-Werte des Wissens eines Projekts.
+func (s *Store) KnowledgeMachines(project string) []string {
+	if s.reader != nil {
+		return s.reader.KnowledgeMachines(project)
+	}
+	rows, err := s.db.Query(`SELECT DISTINCT machine FROM knowledge WHERE project=? AND machine<>''`, project)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var m string
+		if rows.Scan(&m) == nil {
+			out = append(out, m)
+		}
+	}
+	return out
 }

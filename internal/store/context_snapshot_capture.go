@@ -50,6 +50,8 @@ type snapshotCollector struct {
 	entries      []snapshot.Entry
 	payloadBytes int64
 	logicalBytes int64
+	// excludeMachines: Wissen dieser Maschinen kommt nicht in den Snapshot.
+	excludeMachines map[string]bool
 }
 
 func newSnapshotCollector(limits snapshot.Limits) *snapshotCollector {
@@ -236,7 +238,17 @@ type requestPayloadV1 struct {
 }
 
 func captureContextEntries(ctx context.Context, q snapshotQueryer, project string, schemaVersion uint32, limits snapshot.Limits) ([]snapshot.Entry, error) {
+	return captureContextEntriesFor(ctx, q, project, schemaVersion, limits, nil)
+}
+
+func captureContextEntriesFor(ctx context.Context, q snapshotQueryer, project string, schemaVersion uint32, limits snapshot.Limits, excludeMachines []string) ([]snapshot.Entry, error) {
 	collector := newSnapshotCollector(limits)
+	if len(excludeMachines) > 0 {
+		collector.excludeMachines = make(map[string]bool, len(excludeMachines))
+		for _, m := range excludeMachines {
+			collector.excludeMachines[m] = true
+		}
+	}
 	captures := []func(context.Context, snapshotQueryer, string, *snapshotCollector) error{
 		func(ctx context.Context, q snapshotQueryer, project string, collector *snapshotCollector) error {
 			return captureDocuments(ctx, q, project, schemaVersion, collector)
@@ -291,6 +303,9 @@ func captureKnowledge(ctx context.Context, q snapshotQueryer, project string, co
 		var pl, cl, ml string
 		if err := rows.Scan(&p.ID, &p.Type, &p.Title, &p.Body, &p.Project, &p.Branch, &p.Machine, &p.Confidence, &p.Status, &p.Origin, &p.SupersededBy, &pl, &pn, &cl, &cn, &ml, &mn, &p.Harness, &p.SessionRef, &p.ObservedAt, &p.RegressionState, &p.RegressionTest, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return err
+		}
+		if p.Machine != "" && collector.excludeMachines[p.Machine] {
+			continue
 		}
 		p.Person, p.ConfirmedBy, p.LastModifiedBy = actor(pn, pl), actor(cn, cl), actor(mn, ml)
 		p.ActivationPaths = []string{}
