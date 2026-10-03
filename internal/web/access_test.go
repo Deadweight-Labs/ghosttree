@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -159,7 +160,20 @@ func TestWebPagesFollowVisibility(t *testing.T) {
 	page("nora", reqPath, 404)
 
 	know := "/ui/knowledge?project=" + project
-	page("nora", know, 404)
+	// A hidden project filter answers like an unknown one (no existence oracle).
+	hidden := page("nora", know, 200)
+	unknown := page("nora", "/ui/knowledge?project=github.com/dw/unknown", 200)
+	if strings.Contains(hidden, "trusted pitfall") || strings.Contains(hidden, "staged note") {
+		t.Errorf("stranger sees knowledge of the hidden project")
+	}
+	csrfToken := regexp.MustCompile(`name="csrf[^"]*"(?: value="[^"]*")?`)
+	norm := func(s, proj string) string {
+		s = strings.ReplaceAll(s, proj, "PROJECT")
+		return csrfToken.ReplaceAllString(s, `name="csrf" value="X"`)
+	}
+	if norm(hidden, project) != norm(unknown, "github.com/dw/unknown") {
+		t.Errorf("hidden project knowledge list differs from unknown project list")
+	}
 	if out := page("gus", know, 200); !strings.Contains(out, "trusted pitfall") || strings.Contains(out, "staged note") {
 		t.Errorf("guest knowledge page: trusted shown=%v staged hidden=%v", strings.Contains(out, "trusted pitfall"), !strings.Contains(out, "staged note"))
 	}
