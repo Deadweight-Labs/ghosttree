@@ -11,7 +11,9 @@ Versioning, with pre-1.0 compatibility rules described in
   Messages, replies, threads and standing instructions work from the browser
   composer; guests still cannot write, direct and group rooms keep their
   membership rule, and a thread with a visibility list stays closed to a role.
-  Agent tokens and pasted sessions are not covered.
+  Agent tokens and pasted sessions are not covered. A role writer can mention
+  the agents of the room; direct and group messages still need membership.
+  Changing a thread's state needs the author, a room manager, or a lead or owner.
 - Changed: invitations and device pairing are guided. The invitation pages name
   who invited you and to what, say in one line what ghosttree is, and ask only for
   your name. Connecting a computer is three steps (open a terminal, copy the

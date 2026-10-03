@@ -715,7 +715,12 @@ func (a CoordAccess) canReadTx(tx *sql.Tx, actor, kind, id string) error {
 	return a.canAccessTx(tx, actor, kind, id, ActRead)
 }
 
-// canWriteTx is canReadTx without the role fallback: the member rule.
+// viaMembership is the access kind that ignores the project role: only an
+// active room membership counts (direct and group addressing, recipient lists).
+const viaMembership Action = ""
+
+// canWriteTx is the write gate: membership, or for a project room the project
+// role member and up in a web session (spec 7.5).
 func (a CoordAccess) canWriteTx(tx *sql.Tx, actor, kind, id string) error {
 	return a.canAccessTx(tx, actor, kind, id, ActPost)
 }
@@ -785,7 +790,8 @@ func (a CoordAccess) threadAccessTx(tx *sql.Tx, actor string, threadID int64, vi
 	return a.roomAccessTx(tx, actor, RoomKeyForProject(project), via)
 }
 
-// requireRoomAccessTx is the write gate (membership only).
+// requireRoomAccessTx is the write gate: membership, or the project role for a
+// project room (see roleOpensProjectRoom).
 func (a CoordAccess) requireRoomAccessTx(tx *sql.Tx, actor, roomKey string) error {
 	return a.roomAccessTx(tx, actor, roomKey, ActPost)
 }
@@ -1741,6 +1747,28 @@ func (a CoordAccess) requireThreadMutation(threadID int64) (Thread, error) {
 	return thread, nil
 }
 
+// leadByRoleTx: a signed-in person (web session, no agent) with the project
+// role lead or owner may change any thread of the project, as for standing
+// instructions.
+func (a CoordAccess) leadByRoleTx(tx rowQuerier, project string) bool {
+	if a.AgentExternalID != "" || a.publicOnly || a.Principal.TokenKind != WebSessionKind {
+		return false
+	}
+	acct, ok := accountNumericID(a.Principal.ID)
+	return ok && RoleRank(projectRoleTx(tx, project, acct).Role) >= RoleRank(RoleLead)
+}
+
+// CanSetThreadState says whether the viewer may change the state of the thread
+// (author, room manager, or project lead and up): the same rule SetThreadState
+// applies, so the page offers the form only where it would be accepted.
+func (a CoordAccess) CanSetThreadState(threadID int64) bool {
+	if a.Store == nil || a.publicOnly {
+		return false
+	}
+	_, err := a.requireThreadMutation(threadID)
+	return err == nil
+}
+
 func (a CoordAccess) requireThreadMutationTx(tx *sql.Tx, actor string, threadID int64) (Thread, error) {
 	if a.publicOnly {
 		return Thread{}, ErrCoordForbidden
@@ -1755,6 +1783,9 @@ func (a CoordAccess) requireThreadMutationTx(tx *sql.Tx, actor string, threadID 
 		return Thread{}, ErrCoordNotFound
 	}
 	if thread.AuthorPrincipalID != "" && thread.AuthorPrincipalID == a.Principal.ID {
+		return thread, nil
+	}
+	if a.leadByRoleTx(tx, thread.Project) {
 		return thread, nil
 	}
 	home, found, err := threadHomeTx(tx, threadID)
@@ -2233,7 +2264,7 @@ func (a CoordAccess) Recipients() ([]CoordRecipient, error) {
 	ids := make(map[string]bool)
 	for _, room := range rooms {
 		// Wer ansprechbar ist, folgt der Mitgliedschaft, nicht der Rolle.
-		if err := a.canAccessTx(tx, actor, DestinationRoom, room, ""); err != nil {
+		if err := a.canAccessTx(tx, actor, DestinationRoom, room, viaMembership); err != nil {
 			if errors.Is(err, ErrCoordNotFound) || errors.Is(err, ErrCoordForbidden) {
 				continue
 			}

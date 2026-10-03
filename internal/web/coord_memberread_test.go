@@ -401,9 +401,12 @@ func TestOwnerWithoutAgentGetsReplyControls(t *testing.T) {
 		if target == roomURL && !strings.Contains(page, "coord-reply-action") {
 			t.Errorf("owner without an agent has no reply link on %s", target)
 		}
-		if strings.Contains(page, "/ui/coord/thread/state") {
-			t.Errorf("owner who did not author the thread sees the state form on %s", target)
+		if target == threadURL && !strings.Contains(page, "/ui/coord/thread/state") {
+			t.Errorf("owner (lead and up) has no state form on %s", target)
 		}
+	}
+	if _, page := fetchPage(t, e.Reviewer, threadURL); strings.Contains(page, "/ui/coord/thread/state") {
+		t.Error("a member who did not author the thread sees the state form")
 	}
 	_, page := fetchPage(t, e.Member, roomURL)
 	if !strings.Contains(page, "coord-reply-action") {
@@ -412,5 +415,22 @@ func TestOwnerWithoutAgentGetsReplyControls(t *testing.T) {
 	_, page = fetchPage(t, e.Member, threadURL)
 	if !strings.Contains(page, "/ui/coord/thread/state") {
 		t.Error("member who authored the thread has no thread state form")
+	}
+}
+
+// A role writer can address the room's agents: the composer offers them and a
+// post with a mention is accepted. Direct messages stay with membership.
+func TestOwnerWithoutAgentMentionsAnAgentInTheRoom(t *testing.T) {
+	e := ovEnv(t)
+	room, _ := memberReadSeed(t, e)
+	_, page := fetchPage(t, e.Owner, e.Base+"/ui/coord?room="+url.QueryEscape(room))
+	if !strings.Contains(page, `name="mentions" value="claude:laptop:aaaa"`) {
+		t.Fatal("the composer does not offer the room's agent")
+	}
+	if st := postRoom(t, e, e.Owner, "/ui/coord/send", room, url.Values{"body": {"look at this"}, "mentions": {"claude:laptop:aaaa"}}); st != http.StatusSeeOther {
+		t.Errorf("owner mentions an agent: %d", st)
+	}
+	if st := postRoom(t, e, e.Guest, "/ui/coord/send", room, url.Values{"body": {"guest ping"}, "mentions": {"claude:laptop:aaaa"}}); st != http.StatusForbidden {
+		t.Errorf("guest mention: %d", st)
 	}
 }

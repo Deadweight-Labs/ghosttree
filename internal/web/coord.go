@@ -397,7 +397,7 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 	if detail.Thread != nil && detail.CanPost {
 		for _, item := range roomThreads {
 			if item.Thread.ID == detail.Thread.ID {
-				detail.Thread.CanSetState = detail.CanManage || (item.Thread.AuthorPrincipalID != "" && item.Thread.AuthorPrincipalID == current.ID)
+				detail.Thread.CanSetState = a.browserCoord(r).CanSetThreadState(item.Thread.ID)
 			}
 		}
 	}
