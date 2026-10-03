@@ -66,6 +66,7 @@ type pageData struct {
 	Bootstrap, TokenOpen                              bool
 	Shell                                             shellView
 	Overview                                          overviewView
+	Agents                                            agentsView
 	// Refresh: Sekunden bis zum automatischen Neuladen (0 = nie).
 	Refresh int
 }
@@ -135,6 +136,7 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.handle(mux, "POST /join/{code}/signout", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.joinSignOut)))))
 	a.handle(mux, "POST /ui/logout", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.logout))))
 	a.handle(mux, "GET /ui/overview", a.requirePerson(http.HandlerFunc(a.overviewPage)))
+	a.handle(mux, "GET /ui/agents", a.requirePerson(http.HandlerFunc(a.agentsPage)))
 	a.handle(mux, "GET /ui/rooms", a.requirePerson(http.HandlerFunc(a.roomsAlias)))
 	a.handle(mux, "GET /ui/requests", a.requirePerson(http.HandlerFunc(a.requestsPage)))
 	a.handle(mux, "GET /ui/requests/{id}", a.requirePerson(http.HandlerFunc(a.requestPage)))
@@ -202,6 +204,8 @@ func (a *app) renderBrowser(w http.ResponseWriter, r *http.Request, name string,
 	switch name {
 	case "overview":
 		data.NavSection = "overview"
+	case "agents":
+		data.NavSection = "agents"
 	case "requests", "request":
 		data.NavSection = "requests"
 	case "knowledge":
@@ -457,6 +461,7 @@ var webRoutes = map[string]webClass{
 	"GET /favicon.ico":                webPublic,
 	"GET /ui/{$}":                     webPublic,
 	"GET /ui/overview":                webAccount,
+	"GET /ui/agents":                  webCoord,
 	"GET /ui/rooms":                   webCoord,
 	"POST /ui/logout":                 webAccount,
 	"GET /ui/requests":                webProject,
