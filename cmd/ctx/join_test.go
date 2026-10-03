@@ -1223,3 +1223,49 @@ func TestJoinWaitsAsLongAsASessionLives(t *testing.T) {
 		t.Fatalf("default wait %v / %v", joinDefaultTimeout, joinTimeout)
 	}
 }
+
+func TestJoinListsWhatItSetsUpBeforeAskingAndAfterInstalling(t *testing.T) {
+	f := newJoinFixture(t, "y", "y", "y")
+	f.detected = []string{"claude", "codex"}
+	noSleep(t)
+	srv := fallbackServer(t)
+	var out syncBuffer
+	if code := cmdJoin([]string{"--server", srv.URL, "--pair", "abcd-efgh", "--no-browser"}, &out); code != 0 {
+		t.Fatalf("exit %d: %s", code, out.String())
+	}
+	got := out.String()
+	for _, want := range []string{"Will set up:\n  Claude hooks\n  Claude MCP server\n  Claude skills\n  CLAUDE.md section\n", "Will set up:\n  Codex hooks", "Set up:\n  Claude hooks", "  CLAUDE.md section\n  Codex hooks", "AGENTS.md section"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+	if strings.Index(got, "Will set up:") > strings.Index(got, "\nSet up:") {
+		t.Fatalf("the confirmation list must come first:\n%s", got)
+	}
+}
+
+func TestJoinYesPrintsTheSetUpListWithoutAConfirmationList(t *testing.T) {
+	f := newJoinFixture(t)
+	f.detected = []string{"codex"}
+	noSleep(t)
+	srv := fallbackServer(t)
+	var out syncBuffer
+	if code := cmdJoin([]string{"--server", srv.URL, "--pair", "abcd-efgh", "--no-browser", "--yes"}, &out); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	if strings.Contains(out.String(), "Will set up:") || !strings.Contains(out.String(), "Set up:\n  Codex hooks\n") {
+		t.Fatalf("output:\n%s", out.String())
+	}
+}
+
+func TestJoinSetUpListSkipsADeclinedHarness(t *testing.T) {
+	f := newJoinFixture(t, "y", "n")
+	f.detected = []string{"claude"}
+	noSleep(t)
+	srv := fallbackServer(t)
+	var out syncBuffer
+	cmdJoin([]string{"--server", srv.URL, "--pair", "abcd-efgh", "--no-browser"}, &out)
+	if strings.Contains(out.String(), "\nSet up:") {
+		t.Fatalf("declined install listed as set up:\n%s", out.String())
+	}
+}

@@ -2,6 +2,8 @@ package installer
 
 import (
 	"fmt"
+	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -136,4 +138,29 @@ func checkComponent(check Check) Component {
 	default:
 		return ""
 	}
+}
+
+// SetupLabels names what installing a harness sets up, two or three words per
+// item, in the order a person thinks of them. The rule file is named by its
+// real file name because that is what they will find on disk.
+func SetupLabels(harness, home string) []string {
+	h := harnessNamed(harness)
+	display := map[string]string{"claude": "Claude", "codex": "Codex", "opencode": "OpenCode"}[harness]
+	var out []string
+	for _, c := range []Component{ComponentHooks, ComponentMCP, ComponentSkills, ComponentRules} {
+		if !slices.Contains(h.Components, c) {
+			continue
+		}
+		switch c {
+		case ComponentHooks:
+			out = append(out, display+" hooks")
+		case ComponentMCP:
+			out = append(out, display+" MCP server")
+		case ComponentSkills:
+			out = append(out, display+" skills")
+		case ComponentRules:
+			out = append(out, filepath.Base(h.RulePath(home))+" section")
+		}
+	}
+	return out
 }

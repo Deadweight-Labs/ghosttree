@@ -28,7 +28,7 @@ func TestOrgPageShowsAndChangesProjectRoles(t *testing.T) {
 	base, st, alice, anna := roleWeb(t)
 	resp, _ := alice.Get(base + "/ui/orgs?org=alpha")
 	page := body(t, resp)
-	for _, want := range []string{"Project roles", webRoleProject, "/ui/orgs/project/role", "organization owner", `value="lead"`} {
+	for _, want := range []string{"<h2>Projects</h2>", webRoleProject, "/ui/orgs/project/role", "organization owner", `value="lead"`} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("owner page lacks %q: %s", want, page)
 		}
@@ -36,7 +36,7 @@ func TestOrgPageShowsAndChangesProjectRoles(t *testing.T) {
 	// Ein Member ohne Rolle sieht die Rollen, aber keine Auswahl.
 	resp, _ = anna.Get(base + "/ui/orgs?org=alpha")
 	page = body(t, resp)
-	if !strings.Contains(page, "Project roles") || strings.Contains(page, "/ui/orgs/project/role") {
+	if !strings.Contains(page, "<h2>Projects</h2>") || strings.Contains(page, "/ui/orgs/project/role") {
 		t.Fatalf("role-less member page: %s", page)
 	}
 
@@ -261,7 +261,7 @@ func TestOrgPageRoleTableHidesMembersFromGuests(t *testing.T) {
 	roles := func(c *http.Client) string {
 		resp, _ := c.Get(base + "/ui/orgs?org=alpha")
 		page := body(t, resp)
-		i := strings.Index(page, "Project roles")
+		i := strings.Index(page, "<h2>Projects</h2>")
 		if i < 0 {
 			t.Fatalf("no role table: %s", page)
 		}
@@ -284,7 +284,7 @@ func TestOrgPageRoleTableNormalisesStoredNames(t *testing.T) {
 	}
 	resp, _ := alice.Get(base + "/ui/orgs?org=alpha")
 	page := body(t, resp)
-	i := strings.Index(page, "Project roles")
+	i := strings.Index(page, "<h2>Projects</h2>")
 	if i < 0 || !strings.Contains(page[i:], "Robin") || strings.Contains(page[i:], "Ｒｏ") || strings.Contains(page, "ㅤ") {
 		t.Fatalf("raw name shown: %s", page)
 	}
