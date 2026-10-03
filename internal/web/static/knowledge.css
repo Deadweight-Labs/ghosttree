@@ -1,0 +1,86 @@
+/* Knowledge list, detail and review queue on the Clay engine. The lists are
+   plain blocks without an overflow container, so clay surfaces keep their
+   shadow; the status dot has a fixed size and is never shared with another
+   class (see .ov-dot). */
+.shell-main > main.kn { max-width: 60rem; }
+.kn-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 0 0 var(--space-5); }
+.kn-filters .clay-field { flex: 1 1 14rem; min-width: 0; min-height: 42px; width: auto; padding: 0 16px; border: 0; }
+.kn-filters .clay-select { flex: none; width: auto; min-height: 42px; padding: 0 36px 0 16px; border: 0; }
+.js .kn-filters > .ov-btn { display: none; }
+
+.kn-deck { padding: 6px 8px; }
+.kn-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: start; padding: 16px 14px; }
+.kn-item + .kn-item { border-top: 1px solid var(--clay-line); }
+.kn-main { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.kn-title { color: var(--clay-ink) !important; font-weight: 700; line-height: 1.35; text-decoration: none; overflow-wrap: anywhere; }
+.kn-title:hover { text-decoration: underline; }
+.kn-excerpt { margin: 0; color: var(--clay-ink-soft); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.kn-foot, .kn-marks { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; }
+.kn-age { padding-top: 3px; }
+.kn-link { color: var(--clay-accent-text) !important; font-size: 13px; font-weight: 600; text-decoration: none; }
+.kn-link:hover { text-decoration: underline; }
+
+.kn-type { display: inline-block; padding: 1px 10px; border-radius: 99px; background: var(--clay-c-sunken); color: var(--clay-ink-soft); font: 700 12px/1.6 var(--font-sans); letter-spacing: 0; }
+.kn-type.is-pitfall { color: var(--clay-warn); }
+.kn-type.is-decision { color: var(--clay-accent-text); }
+.kn-level, .kn-stale { display: inline-flex; align-items: center; gap: 6px; font: var(--text-secondary); color: var(--clay-ink-faint); }
+.kn-stale { color: var(--clay-warn); }
+.kn-dot { inline-size: 8px; block-size: 8px; aspect-ratio: 1; flex: none; align-self: center; border-radius: 50%; background: var(--clay-ink-faint); }
+.kn-dot.is-verified, .kn-dot.is-approved, .kn-dot.is-saved { background: var(--clay-ok); }
+.kn-dot.is-trusted { background: var(--clay-accent); }
+.kn-dot.is-staged, .kn-dot.is-restored { background: var(--clay-warn); }
+.kn-dot.is-quarantined, .kn-dot.is-rejected { background: var(--clay-danger-strong); }
+
+.kn-body { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.kn-body p { margin: 0; white-space: pre-line; overflow-wrap: anywhere; line-height: 1.55; }
+.kn-body code, .kn-code, .kn-textarea { font-variant-ligatures: none; }
+.kn-body code { padding: 1px 6px; border-radius: 8px; background: var(--clay-c-sunken); font-size: .875em; }
+.kn-code code { padding: 0; background: none; font-size: inherit; }
+.kn-code { margin: 0; padding: 12px 16px; border-radius: var(--clay-radius-sm); --clay-rest-h: -4; --clay-surface: var(--clay-c-sunken); color: var(--clay-ink); font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.kn-evidence { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }
+.kn-quote { margin: 0; padding: 2px 0 2px 14px; border-left: 3px solid var(--clay-line); display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 14px; }
+.kn-quote blockquote { flex: 0 1 auto; min-width: 0; margin: 0; color: var(--clay-ink-soft); white-space: pre-line; overflow-wrap: anywhere; }
+.kn-quote figcaption { font: var(--text-secondary); font-weight: 700; color: var(--clay-ink-faint); }
+
+.kn-cards { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 24px; }
+.kn-card { --clay-rest-h: 7; --clay-surface: var(--clay-c-surface); display: flex; flex-direction: column; gap: 14px; padding: 20px 22px; border-radius: var(--clay-radius); min-width: 0; }
+.kn-cardhead { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.kn-cardtitle { margin: 0; font-size: 18px; line-height: 1.3; overflow-wrap: anywhere; }
+.kn-cardtitle a { color: var(--clay-ink) !important; text-decoration: none; }
+.kn-cardtitle a:hover { text-decoration: underline; }
+.kn-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.kn-actions:empty { display: none; }
+.kn-actions form { margin: 0; display: contents; }
+
+.kn-result { display: flex; align-items: center; gap: 12px; margin: 0 0 var(--space-5); padding: 10px 6px; font-weight: 600; }
+.kn-result form { margin: 0 0 0 auto; }
+.kn-result-text { min-width: 0; overflow-wrap: anywhere; }
+
+.kn-back { --clay-rest-h: 3; --clay-surface: var(--clay-c-surface); display: inline-flex; align-items: center; justify-content: center; inline-size: 38px; block-size: 38px; margin: 0 0 var(--space-4); border-radius: 50%; color: var(--clay-ink) !important; }
+.kn-article { display: flex; flex-direction: column; gap: 16px; margin: 0 0 var(--space-5); }
+.kn-article h1 { margin: 0; overflow-wrap: anywhere; }
+.kn-dots { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 0; margin: 0; }
+.kn-dots > * + *::before { content: "\00b7"; display: inline-block; margin: 0 8px; color: var(--clay-ink-faint); font-weight: 400; }
+.kn-edit { --clay-rest-h: 5; --clay-surface: var(--clay-c-surface); margin: 0 0 var(--space-6); padding: 14px 20px; border-radius: var(--clay-radius); }
+.kn-edit > summary { cursor: pointer; font-weight: 700; list-style: none; }
+.kn-edit > summary::-webkit-details-marker { display: none; }
+.kn-edit form { display: flex; flex-direction: column; gap: 14px; margin-top: 16px; }
+.kn-edit form > .ov-btn { align-self: flex-start; }
+.kn-field { display: flex; flex-direction: column; gap: 6px; }
+.kn-field > span { font-weight: 700; font-size: 13.5px; }
+.kn-field :is(input, select, textarea) { width: 100%; padding: 10px 16px; border: 0; border-radius: var(--clay-radius-sm); color: var(--clay-ink); }
+.kn-textarea { min-height: 12rem; resize: vertical; font-family: var(--font-mono); font-size: 13px; line-height: 1.5; }
+.kn-edit :focus-visible, .kn-filters :focus-visible { outline: 2px solid var(--clay-accent); outline-offset: 2px; }
+
+.kn-history h2 { margin-bottom: 8px; }
+.kn-history li { padding: 10px 0; border-top: 1px solid var(--clay-line); }
+.kn-history summary { display: flex; align-items: baseline; gap: 12px; cursor: pointer; }
+.kn-hist-title { flex: 1; min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
+.kn-history details > .kn-body { margin-top: 10px; }
+
+@media (max-width: 900px) {
+  .kn-card { padding: 16px 16px; }
+  .kn-item { padding: 14px 8px; }
+  .kn-deck { padding: 4px 6px; }
+}

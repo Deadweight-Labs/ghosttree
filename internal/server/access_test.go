@@ -1009,3 +1009,30 @@ func TestAuthorCannotVerifyInAnUnclaimedRemote(t *testing.T) {
 	f.expect(t, "mia", 404, "POST", "/api/knowledge", store.Knowledge{Type: "note", Title: "own2", Body: "b", Scope: scope.Axes{Project: free}, Confidence: "verified"})
 	f.expect(t, "robin", 204, "PATCH", idPath("/api/knowledge/%d", mine.ID), map[string]string{"confidence": "verified"}) // Admin
 }
+
+// Der Verlauf hält frühere Fassungen ohne Vertrauensstufe: ein Gast darf ihn
+// nicht lesen, auch wenn er den heutigen, freigegebenen Eintrag sieht.
+func TestKnowledgeHistoryIsForMembersAndAnswersGuestsLikeAnUnknownEntry(t *testing.T) {
+	f := accessAPI(t, true)
+	id := f.id["k-robin-staged"]
+	if err := f.st.UpdateKnowledgeBy(id, map[string]string{"body": "released text", "confidence": "trusted"}, "robin"); err != nil {
+		t.Fatal(err)
+	}
+	path := idPath("/api/knowledge/%d/history", id)
+	for _, who := range []string{"robin", "lena", "mia"} {
+		if out := f.expect(t, who, 200, "GET", path, nil); !strings.Contains(out, "body of robin staged note") {
+			t.Errorf("%s does not get the history: %s", who, out)
+		}
+	}
+	f.expect(t, "gus", 200, "GET", idPath("/api/knowledge/%d", id), nil)
+	code, guest := f.call(t, "gus", "GET", path, nil)
+	_, unknown := f.call(t, "gus", "GET", "/api/knowledge/99999/history", nil)
+	if code != 404 || guest != unknown || strings.Contains(guest, "body of") {
+		t.Errorf("guest history = %d %q, unknown entry %q", code, guest, unknown)
+	}
+	f.expect(t, "nora", 404, "GET", path, nil)
+	// Maschinen-Achse: nur der Besitzer der Maschine.
+	machine := idPath("/api/knowledge/%d/history", f.id["k-machine"])
+	f.expect(t, "mia", 200, "GET", machine, nil)
+	f.expect(t, "lena", 404, "GET", machine, nil)
+}

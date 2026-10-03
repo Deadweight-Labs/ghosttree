@@ -1,0 +1,53 @@
+{{define "knrow"}}<li class="kn-item"><div class="kn-main"><a class="kn-title" href="{{.Href}}">{{.Title}}</a>{{if .Excerpt}}<p class="kn-excerpt">{{.Excerpt}}</p>{{end}}
+<div class="kn-foot">{{template "knmarks" .}}{{if .Project}}<span class="ov-meta">{{.Project}}</span>{{end}}{{if .Source}}<a class="kn-link" href="{{.Source}}">{{t "knowledge.in_session"}}</a>{{end}}</div></div><span class="ov-num kn-age">{{.Age}}</span></li>{{end}}
+
+{{define "knmarks"}}<span class="kn-type is-{{.Type}}">{{.TypeLabel}}</span><span class="kn-level"><span class="kn-dot is-{{.Level}}" aria-hidden="true"></span>{{.LevelLabel}}</span>{{if .Stale}}<span class="kn-stale">{{t "knowledge.stale"}}</span>{{end}}{{end}}
+
+{{define "knbody"}}<div class="kn-body">{{range .}}{{if .Code}}<pre class="kn-code clay"><code>{{.Text}}</code></pre>{{else}}<p>{{range .Parts}}{{if .Code}}<code>{{.Text}}</code>{{else}}{{.Text}}{{end}}{{end}}</p>{{end}}{{end}}</div>{{end}}
+
+{{define "knevidence"}}{{if or .Evidence .Proof}}<div class="kn-evidence">{{range .Evidence}}<figure class="kn-quote"><blockquote>{{.Quote}}</blockquote>{{if .Href}}<a class="kn-link" href="{{.Href}}">{{t "knowledge.in_session"}}</a>{{end}}</figure>{{end}}
+{{with .Proof}}<figure class="kn-quote kn-proof"><figcaption>{{t "knowledge.proof"}}</figcaption>{{if .Quote}}<blockquote>{{.Quote}}</blockquote>{{end}}<p class="ov-meta kn-dots"><span>{{.Source}}</span><span>{{.Digest}}</span><span>{{.Run}}</span></p></figure>{{end}}</div>{{end}}{{end}}
+
+{{define "kndecide"}}{{if .CanApprove}}<form method="post" action="/ui/review/{{.ID}}/approve"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="next" value="{{.Next}}"><input type="hidden" name="project" value="{{.Filter}}"><button class="ov-btn ov-btn-primary clay">{{t "knowledge.approve"}}</button></form>{{end}}
+{{if .CanReject}}<form method="post" action="/ui/review/{{.ID}}/reject"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="next" value="{{.Next}}"><input type="hidden" name="project" value="{{.Filter}}"><button class="ov-btn clay">{{t "knowledge.reject"}}</button></form>{{end}}
+{{if .CanRestore}}<form method="post" action="/ui/review/{{.ID}}/restore"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="next" value="{{.Next}}"><input type="hidden" name="project" value="{{.Filter}}"><button class="ov-btn clay">{{t "knowledge.restore"}}</button></form>{{end}}{{end}}
+
+{{define "knresult"}}{{with .}}<div class="kn-result" role="status"><span class="kn-dot is-{{.Kind}}" aria-hidden="true"></span><span class="kn-result-text">{{.Text}}</span>{{if .CanRestore}}<form method="post" action="/ui/review/{{.ID}}/restore"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="next" value="{{.Next}}"><input type="hidden" name="project" value="{{.Filter}}"><input type="hidden" name="status" value="{{.Was}}"><button class="ov-btn clay">{{t "knowledge.restore"}}</button></form>{{end}}</div>{{end}}{{end}}
+
+{{define "knowledge"}}{{template "head" .}}{{template "nav" .}}<main class="kn"><link rel="stylesheet" href="/static/knowledge.css">
+{{with .KnowledgeV}}<div class="ov-head"><h1>{{t "nav.knowledge"}}</h1>{{if .Pending}}<a class="ov-btn clay" href="/ui/review{{if .Project}}?project={{.Project}}{{end}}">{{t "nav.review"}} <span class="ov-num">{{.Pending}}</span></a>{{end}}</div>
+<form class="kn-filters" method="get" action="/ui/knowledge" role="search"><input class="clay-field kn-q" type="search" name="q" value="{{.Q}}" placeholder="{{t "shell.search_placeholder"}}" aria-label="{{t "shell.search_label"}}" autocomplete="off">
+{{range .Selects}}<select class="clay-select" name="{{.Name}}" aria-label="{{.Label}}" data-autosubmit><option value="">{{.Label}}</option>{{range .Options}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select>{{end}}
+{{if .Project}}<input type="hidden" name="project" value="{{.Project}}">{{end}}<button class="ov-btn clay">{{t "knowledge.search"}}</button></form>
+{{if .Rows}}<ul class="ov-list ov-deck kn-deck clay">{{range .Rows}}{{template "knrow" .}}{{end}}</ul>
+{{else if .NoMatch}}<p class="ov-empty">{{t "knowledge.no_match"}}</p><a class="ov-btn clay" href="{{.ClearHref}}">{{t "knowledge.clear"}}</a>
+{{else if .Guest}}<p class="ov-empty">{{t "ov.nothing"}}</p>
+{{else}}<p class="ov-empty">{{t "knowledge.empty"}}</p><a class="ov-btn ov-btn-primary clay" href="/ui/overview?connect=1">{{t "ov.connect"}}</a>{{end}}
+{{end}}{{template "foot" .}}{{end}}
+
+{{define "review"}}{{template "head" .}}{{template "nav" .}}<main class="kn"><link rel="stylesheet" href="/static/knowledge.css">
+{{with .ReviewV}}<div class="ov-head"><h1>{{t "nav.review"}}</h1></div>
+{{template "knresult" .Result}}
+{{if .Cards}}<ul class="kn-cards">{{range .Cards}}<li class="kn-card clay"><div class="kn-cardhead"><div class="kn-marks">{{template "knmarks" .KnowledgeRow}}{{if .Project}}<span class="ov-meta">{{.Project}}</span>{{end}}{{if .Seen}}<span class="ov-meta" title="{{t "knowledge.seen_title"}}">{{t "knowledge.seen" .Seen}}</span>{{end}}</div><span class="ov-num">{{.Age}}</span></div>
+<h2 class="kn-cardtitle"><a href="{{.Href}}">{{.Title}}</a></h2>{{template "knbody" .Blocks}}{{template "knevidence" .}}
+<div class="kn-actions">{{template "kndecide" .}}{{if .CanEdit}}<a class="ov-btn clay" href="{{.Href}}?edit=1#edit">{{t "knowledge.edit"}}</a>{{end}}</div></li>{{end}}</ul>
+{{else}}<p class="ov-empty">{{t "knowledge.review_empty"}}</p><a class="ov-btn clay" href="/ui/knowledge">{{t "nav.knowledge"}}</a>{{end}}
+{{end}}{{template "foot" .}}{{end}}
+
+{{define "knowledgeitem"}}{{template "head" .}}{{template "nav" .}}<main class="kn kn-detail"><link rel="stylesheet" href="/static/knowledge.css">
+{{with .KnowledgeItemV}}<a class="kn-back clay clay-btn clay-btn-icon" href="{{.Back}}" aria-label="{{t "knowledge.back"}}">{{template "icon" "back"}}</a>
+{{template "knresult" .Result}}
+{{with .Card}}<article class="kn-article"><div class="kn-marks">{{template "knmarks" .KnowledgeRow}}{{if .Project}}<span class="ov-meta">{{.Project}}</span>{{end}}{{if .Seen}}<span class="ov-meta" title="{{t "knowledge.seen_title"}}">{{t "knowledge.seen" .Seen}}</span>{{end}}</div>
+<h1>{{.Title}}</h1>
+<p class="ov-meta kn-dots">{{if .Person}}<span>{{t "knowledge.by" .Person}}</span>{{end}}{{if .ConfirmedBy}}<span>{{t "knowledge.confirmed_by" .ConfirmedBy}}</span>{{end}}<span class="ov-num">{{.Age}}</span>{{if .Source}}<a class="kn-link" href="{{.Source}}">{{t "knowledge.in_session"}}</a>{{end}}</p>
+{{template "knbody" .Blocks}}{{template "knevidence" .}}
+<div class="kn-actions">{{template "kndecide" .}}</div></article>
+{{if .CanEdit}}<details class="kn-edit clay" id="edit"{{if $.KnowledgeItemV.EditOpen}} open{{end}}><summary>{{t "knowledge.edit"}}</summary>
+<form method="post" action="/ui/knowledge/{{.ID}}/edit"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+<label class="kn-field"><span>{{t "knowledge.field_title"}}</span><input class="clay-field" name="title" value="{{.Title}}" required maxlength="500"></label>
+<label class="kn-field"><span>{{t "knowledge.field_type"}}</span><select class="clay-select" name="type">{{range $.KnowledgeItemV.Types}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select></label>
+<label class="kn-field"><span>{{t "knowledge.field_body"}}</span><textarea class="clay-field kn-textarea" name="body" required rows="12">{{.RawBody}}</textarea></label>
+<button class="ov-btn ov-btn-primary clay">{{t "knowledge.save"}}</button></form></details>{{end}}
+{{end}}
+{{if .History}}<section class="kn-history"><h2>{{t "knowledge.history"}}</h2><ul class="ov-list">{{range .History}}<li><details><summary><span class="kn-hist-title">{{.Title}}</span><span class="ov-meta">{{.By}}</span><span class="ov-num">{{.Age}}</span></summary>{{if .ReplacedBy}}<p class="ov-meta">{{t "knowledge.replaced_by" .ReplacedBy}}</p>{{end}}{{template "knbody" .Blocks}}</details></li>{{end}}</ul></section>{{end}}
+{{end}}{{template "foot" .}}{{end}}

@@ -207,6 +207,7 @@ var writerMethodClasses = map[string]string{
 	"KnowledgeForContext":           "read_with_best_effort",
 	"KnowledgeForProject":           "read",
 	"KnowledgeWindow":               "read",
+	"BrowseKnowledge":               "read",
 	"CriteriaProgress":              "read",
 	"KnowledgeHistory":              "read",
 	"KnowledgeTitlesForPrompt":      "read",
