@@ -181,6 +181,10 @@ summary.coord-text-action::-webkit-details-marker { display: none; }
   flex: 1 1 auto; min-height: 0; overflow-y: auto; scrollbar-width: thin; list-style: none;
   display: flex; flex-direction: column; gap: 0;
   margin: 0 calc(var(--shadow-room-x) * -1); padding: 8px var(--shadow-room-x) var(--shadow-room-y);
+}
+/* The top fade only where older messages are scrolled out of sight; a short
+   history must show its first message in full. */
+.coord-messages.is-scrolled {
   -webkit-mask-image: linear-gradient(transparent 24px, #000 60px); mask-image: linear-gradient(transparent 24px, #000 60px);
 }
 .coord-messages > :first-child { margin-top: auto; }

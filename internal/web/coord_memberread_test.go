@@ -1,6 +1,7 @@
 package web
 
 import (
+	"errors"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -103,132 +104,215 @@ func TestRefusedRoomPagesAreDesignedAndLeadSomewhere(t *testing.T) {
 	}
 }
 
-func TestOwnerWithoutAgentSeesTheRoomTabAndComposer(t *testing.T) {
+// Reading follows the role (matrix 8.1); writing stays with membership (spec
+// 7.5: roles never grant write access). The reader without an own agent gets
+// the room tabs and a quiet read-only line, no composer and no dead button.
+func TestOwnerWithoutAgentReadsTheRoomButCannotPost(t *testing.T) {
 	e := ovEnv(t)
 	room, hidden := memberReadSeed(t, e)
-	_, page := fetchPage(t, e.Owner, e.Base+"/ui/coord?room="+url.QueryEscape(room))
-	on := regexpTabOn.FindAllString(page, -1)
-	if len(on) != 1 || !strings.Contains(on[0], "x/shell") || !strings.Contains(on[0], `aria-current="page"`) {
-		t.Errorf("active tab: %v", on)
-	}
-	if !strings.Contains(page, `href="/ui/coord?room=`+url.QueryEscape(hidden)+`"`) {
-		t.Errorf("the other readable room is not a tab")
-	}
-	if !strings.Contains(page, `class="coord-composer"`) || strings.Contains(page, "coord-readonly") {
-		t.Errorf("owner has no composer")
+	for who, c := range map[string]*http.Client{"owner": e.Owner, "lead": e.Lead, "reviewer": e.Reviewer} {
+		_, page := fetchPage(t, c, e.Base+"/ui/coord?room="+url.QueryEscape(room))
+		on := regexpTabOn.FindAllString(page, -1)
+		if len(on) != 1 || !strings.Contains(on[0], "x/shell") || !strings.Contains(on[0], `aria-current="page"`) {
+			t.Errorf("%s: active tab: %v", who, on)
+		}
+		if who == "owner" && !strings.Contains(page, `href="/ui/coord?room=`+url.QueryEscape(hidden)+`"`) {
+			t.Errorf("the other readable room is not a tab")
+		}
+		if !strings.Contains(page, `class="coord-readonly"`) || !strings.Contains(page, messages["coord.readonly"]) {
+			t.Errorf("%s: no read-only line", who)
+		}
+		for _, dead := range []string{`class="coord-composer"`, "/ui/coord/thread/create", "/ui/coord/standing/create", "/ui/coord/standing/end", "/ui/coord/promote", "/ui/coord/send"} {
+			if strings.Contains(page, dead) {
+				t.Errorf("%s: dead control %s", who, dead)
+			}
+		}
 	}
 }
 
-func TestMembersWriteInTheProjectRoomWithoutOwnAgent(t *testing.T) {
+func TestMemberWithAgentGetsTheComposer(t *testing.T) {
 	e := ovEnv(t)
 	room, _ := memberReadSeed(t, e)
+	_, page := fetchPage(t, e.Member, e.Base+"/ui/coord?room="+url.QueryEscape(room))
+	if !strings.Contains(page, `class="coord-composer"`) || strings.Contains(page, "coord-readonly") {
+		t.Errorf("a member with an own agent has no composer")
+	}
+	if !strings.Contains(page, "/ui/coord/thread/create") {
+		t.Errorf("a member with an own agent cannot start a thread")
+	}
+}
+
+func TestRoleNeverGrantsWriteAccess(t *testing.T) {
+	e := ovEnv(t)
+	room, _ := memberReadSeed(t, e)
+	writes := map[string]url.Values{
+		"/ui/coord/send":            {"body": {"nope"}},
+		"/ui/coord/standing/create": {"body": {"nope"}, "confirm_scope": {"1"}},
+		"/ui/coord/thread/create":   {"title": {"Nope thread"}},
+	}
 	for who, c := range map[string]*http.Client{"owner": e.Owner, "lead": e.Lead, "reviewer": e.Reviewer} {
-		body := "post-by-" + who
-		if st := postRoom(t, e, c, "/ui/coord/send", room, url.Values{"body": {body}}); st != http.StatusSeeOther {
-			t.Fatalf("%s posts: %d", who, st)
-		}
-		_, page := fetchPage(t, c, e.Base+"/ui/coord?room="+url.QueryEscape(room))
-		if !strings.Contains(page, body) {
-			t.Errorf("%s: own post not shown", who)
-		}
-	}
-	// Sender and authority come from the person and the project role.
-	owner := e.St.CoordinationFor(store.Principal{ID: "person:1", Label: "alice", TokenKind: store.WebSessionKind}, "")
-	page, err := owner.MessageWindow(store.DestinationRoom, room, store.LatestWindow(20))
-	if err != nil {
-		t.Fatal(err)
-	}
-	roles := map[string]string{}
-	senderRoles := e.St.SenderRolesInProject(shellProject, page.Messages)
-	for i, m := range page.Messages {
-		if strings.HasPrefix(m.Body, "post-by-") {
-			if m.AuthorKind != store.AuthorHuman || m.SenderExternalID != m.AuthorPrincipalID {
-				t.Errorf("%s: author %q/%q", m.Body, m.AuthorKind, m.AuthorPrincipalID)
+		for path, form := range writes {
+			if st := postRoom(t, e, c, path, room, form); st != http.StatusForbidden {
+				t.Errorf("%s %s: %d, want 403", who, path, st)
 			}
-			roles[m.Body] = senderRoles[i]
 		}
 	}
-	for who, role := range map[string]string{"owner": store.RoleOwner, "lead": store.RoleLead, "reviewer": store.RoleMember} {
-		if roles["post-by-"+who] != role {
-			t.Errorf("%s: sender role %q, want %q", who, roles["post-by-"+who], role)
+	_, page := fetchPage(t, e.Member, e.Base+"/ui/coord?room="+url.QueryEscape(room))
+	if strings.Contains(page, "nope") || strings.Contains(page, "Nope thread") {
+		t.Error("a refused write left a trace")
+	}
+	// The owner holds the role but not the membership: the store refuses too.
+	owner := e.St.CoordinationFor(store.Principal{ID: "person:1", Label: "alice", TokenKind: store.WebSessionKind}, "")
+	if _, err := owner.Send(store.CoordMessage{DestinationKind: store.DestinationRoom, DestinationID: room, ClientID: "o1", Body: "nope"}); !errors.Is(err, store.ErrCoordForbidden) {
+		t.Errorf("owner Send: %v", err)
+	}
+	if owner.CanPost(room) {
+		t.Error("CanPost true for an owner without membership")
+	}
+	// Reading stays open.
+	if _, err := owner.Room(room); err != nil {
+		t.Errorf("owner Room: %v", err)
+	}
+}
+
+func TestMembersWithAgentWriteAsThemselves(t *testing.T) {
+	e := ovEnv(t)
+	room, _ := memberReadSeed(t, e)
+	if st := postRoom(t, e, e.Member, "/ui/coord/send", room, url.Values{"body": {"post-by-member"}}); st != http.StatusSeeOther {
+		t.Fatalf("member posts: %d", st)
+	}
+	if st := postRoom(t, e, e.Member, "/ui/coord/standing/create", room, url.Values{"body": {"rule-of-member"}, "confirm_scope": {"1"}}); st != http.StatusSeeOther {
+		t.Fatalf("member standing: %d", st)
+	}
+	if st := postRoom(t, e, e.Member, "/ui/coord/thread/create", room, url.Values{"title": {"Member thread"}}); st != http.StatusSeeOther {
+		t.Fatalf("member thread: %d", st)
+	}
+	_, page := fetchPage(t, e.Owner, e.Base+"/ui/coord?room="+url.QueryEscape(room))
+	for _, want := range []string{"post-by-member", "rule-of-member", "Member thread"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("owner does not see %q", want)
 		}
 	}
-	// The chip shows in the browser.
-	_, view := fetchPage(t, e.Member, e.Base+"/ui/coord?room="+url.QueryEscape(room))
-	if !strings.Contains(view, "post-by-lead") || !strings.Contains(view, `class="cm-role"`) {
-		t.Errorf("role chip missing")
-	}
-	// A guest never writes through this path.
+	// A guest never writes.
 	if st := postRoom(t, e, e.Guest, "/ui/coord/send", room, url.Values{"body": {"guest"}}); st != http.StatusForbidden {
 		t.Errorf("guest post: %d", st)
 	}
-}
-
-func TestStandingFollowsRankForPeopleWithoutAgent(t *testing.T) {
-	e := ovEnv(t)
-	room, _ := memberReadSeed(t, e)
-	for who, c := range map[string]*http.Client{"owner": e.Owner, "lead": e.Lead, "member": e.Member} {
-		st := postRoom(t, e, c, "/ui/coord/standing/create", room, url.Values{"body": {"rule-of-" + who}, "confirm_scope": {"1"}})
-		if st != http.StatusSeeOther {
-			t.Fatalf("%s directive: %d", who, st)
-		}
-	}
-	if st := postRoom(t, e, e.Guest, "/ui/coord/standing/create", room, url.Values{"body": {"g"}, "confirm_scope": {"1"}}); st != http.StatusForbidden {
-		t.Errorf("guest directive: %d", st)
-	}
-	// Ending keeps its rank rule: the member ends only their own.
-	ownerAccess := e.St.CoordinationFor(store.Principal{ID: "person:1", Label: "alice", TokenKind: store.WebSessionKind}, "")
-	standing, err := ownerAccess.Standing(room)
-	if err != nil || len(standing) != 3 {
+	// The member ends their own instruction; the owner cannot end any (no membership).
+	standing, err := e.St.CoordinationFor(store.Principal{ID: "person:1", Label: "alice", TokenKind: store.WebSessionKind}, "").Standing(room)
+	if err != nil || len(standing) != 1 {
 		t.Fatalf("standing %v %v", len(standing), err)
 	}
-	for _, s := range standing {
-		st := postRoom(t, e, e.Member, "/ui/coord/standing/end", room, url.Values{"message_id": {s.MessageID}})
-		own := strings.HasSuffix(s.Body, "member")
-		if own && st != http.StatusSeeOther || !own && st != http.StatusForbidden {
-			t.Errorf("member ends %q: %d", s.Body, st)
+	if st := postRoom(t, e, e.Owner, "/ui/coord/standing/end", room, url.Values{"message_id": {standing[0].MessageID}}); st != http.StatusForbidden {
+		t.Errorf("owner ends without membership: %d", st)
+	}
+	if st := postRoom(t, e, e.Member, "/ui/coord/standing/end", room, url.Values{"message_id": {standing[0].MessageID}}); st != http.StatusSeeOther {
+		t.Errorf("member ends own: %d", st)
+	}
+}
+
+// Only a web session reads by role. Every other kind of token for the same
+// account (personal, legacy, device, pasted, none) keeps the membership rule.
+func TestOnlyAWebSessionReadsByRole(t *testing.T) {
+	e := ovEnv(t)
+	room, _ := memberReadSeed(t, e)
+	for _, kind := range []string{"personal", "legacy", "device", "paste", ""} {
+		c := e.St.CoordinationFor(store.Principal{ID: "person:1", Label: "alice", TokenKind: kind}, "")
+		if _, err := c.Room(room); !errors.Is(err, store.ErrCoordForbidden) {
+			t.Errorf("token kind %q reads the room: %v", kind, err)
+		}
+		rooms, err := c.Rooms()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range rooms {
+			if r.Key == room {
+				t.Errorf("token kind %q lists the project room", kind)
+			}
 		}
 	}
+	// Real tokens of the account, as the server authenticates them.
+	personal, _, err := e.St.CreateToken("alice", store.TokenSpec{Label: "bearer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	device, _, err := e.St.CreateDeviceToken("person:1", "box")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, tok := range map[string]string{"personal bearer": personal, "device": device} {
+		p, ok := e.St.AuthenticatePrincipal(tok)
+		if !ok {
+			t.Fatalf("%s: unknown token", name)
+		}
+		if _, err := e.St.CoordinationFor(p, "").Room(room); !errors.Is(err, store.ErrCoordForbidden) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	// A session from a pasted token is not a web session either.
+	pasted := login(t, e.Srv, personal)
+	if status, page := fetchPage(t, pasted, e.Base+"/ui/coord?room="+url.QueryEscape(room)); status != http.StatusForbidden || strings.Contains(page, "migrating") {
+		t.Errorf("pasted session: %d", status)
+	}
 }
 
-func TestMembersCreateThreadsWithoutOwnAgent(t *testing.T) {
+// A machine room is never read by role: without membership it answers exactly
+// like a room that does not exist (#2447), so host names cannot be enumerated.
+func TestMachineRoomWithoutMembershipIsNotFound(t *testing.T) {
 	e := ovEnv(t)
-	room, _ := memberReadSeed(t, e)
-	if st := postRoom(t, e, e.Owner, "/ui/coord/thread/create", room, url.Values{"title": {"Owner thread"}}); st != http.StatusSeeOther {
-		t.Fatalf("owner new thread: %d", st)
+	if _, err := e.St.RegisterCoordAgent(store.CoordAgent{ExternalID: "claude:box:cccc", PrincipalID: "person:2", Person: "anna", Provider: "claude",
+		DisplayName: "box-agent", SessionID: "sess-m", RoomKey: store.RoomKeyForMachine("secret-box")}); err != nil {
+		t.Fatal(err)
 	}
-	if st := postRoom(t, e, e.Guest, "/ui/coord/thread/create", room, url.Values{"title": {"Guest thread"}}); st != http.StatusForbidden {
-		t.Errorf("guest new thread: %d", st)
+	machine := store.RoomKeyForMachine("secret-box")
+	missingKey := store.RoomKeyForMachine("no-such-box")
+	for who, c := range map[string]*http.Client{"owner": e.Owner, "lead": e.Lead, "guest": e.Guest} {
+		status, page := fetchPage(t, c, e.Base+"/ui/coord?room="+url.QueryEscape(machine))
+		missStatus, missing := fetchPage(t, c, e.Base+"/ui/coord?room="+url.QueryEscape(missingKey))
+		if status != http.StatusNotFound || missStatus != http.StatusNotFound || page != missing {
+			t.Errorf("%s: machine room %d vs missing %d (identical: %v)", who, status, missStatus, page == missing)
+		}
+		if strings.Contains(page, "secret-box") {
+			t.Errorf("%s: host name on the page", who)
+		}
 	}
-	_, page := fetchPage(t, e.Lead, e.Base+"/ui/coord?room="+url.QueryEscape(room))
-	if !strings.Contains(page, "Owner thread") {
-		t.Errorf("lead does not see the thread")
+	owner := e.St.CoordinationFor(store.Principal{ID: "person:1", Label: "alice", TokenKind: store.WebSessionKind}, "")
+	if _, err := owner.Room(machine); !errors.Is(err, store.ErrCoordNotFound) {
+		t.Errorf("owner Room: %v", err)
+	}
+	// Its member still reads it.
+	if _, err := e.St.CoordinationFor(store.Principal{ID: "person:2", Label: "anna", TokenKind: store.WebSessionKind}, "").Room(machine); err != nil {
+		t.Errorf("member of the machine room: %v", err)
 	}
 }
 
-func TestPostingNeedsTheRoleNotAnAgentToken(t *testing.T) {
+// The room list asks for the roles once and a database failure is an error,
+// not an empty list.
+func TestRoomListByRoleIsOneAnswerForRoomsAndSummaries(t *testing.T) {
 	e := ovEnv(t)
-	room, _ := memberReadSeed(t, e)
-	msg := store.CoordMessage{DestinationKind: store.DestinationRoom, DestinationID: room, ClientID: "w1", Body: "hello"}
-	web := e.St.CoordinationFor(store.Principal{ID: "person:1", Label: "alice", TokenKind: store.WebSessionKind}, "")
-	if _, err := web.Send(msg); err != nil {
-		t.Errorf("owner without agent: %v", err)
+	room, hidden := memberReadSeed(t, e)
+	lead := e.St.CoordinationFor(store.Principal{ID: "person:4", Label: "lars", TokenKind: store.WebSessionKind}, "")
+	rooms, err := lead.Rooms()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !web.CanPost(room) {
-		t.Error("CanPost false for an owner")
+	keys := map[string]bool{}
+	for _, r := range rooms {
+		keys[r.Key] = true
+	}
+	if !keys[room] || keys[hidden] {
+		t.Errorf("lead rooms: %v", keys)
+	}
+	summaries, err := lead.RoomSummaries()
+	if err != nil || len(summaries) != 1 || summaries[0].Room.Key != room {
+		t.Errorf("lead summaries: %v %v", summaries, err)
 	}
 	guest := e.St.CoordinationFor(store.Principal{ID: "person:3", Label: "gina", TokenKind: store.WebSessionKind}, "")
-	if guest.CanPost(room) {
-		t.Error("CanPost true for a guest without an agent")
-	}
-	token := e.St.CoordinationFor(store.Principal{ID: "person:1", Label: "alice", TokenKind: "agent"}, "")
-	msg.ClientID = "w2"
-	if _, err := token.Send(msg); err == nil {
-		t.Error("a person token without an agent posts")
+	if rooms, err := guest.Rooms(); err != nil || len(rooms) != 0 {
+		t.Errorf("guest rooms: %v %v", rooms, err)
 	}
 }
 
-func TestDirectMessagesToProjectAgents(t *testing.T) {
+func TestDirectMessagesStayWithMembership(t *testing.T) {
 	e := ovEnv(t)
 	room, hidden := memberReadSeed(t, e)
 	_ = room
@@ -247,10 +331,11 @@ func TestDirectMessagesToProjectAgents(t *testing.T) {
 	web := func(id, label string) store.CoordAccess {
 		return e.St.CoordinationFor(store.Principal{ID: id, Label: label, TokenKind: store.WebSessionKind}, "")
 	}
-	// The agent in x/shell belongs to person:2 (member).
+	// Direct messages are unchanged: a room counts only where the viewer may
+	// write, so the role alone does not make a project agent addressable.
 	for who, p := range map[string][2]string{"owner": {"person:1", "alice"}, "lead": {"person:4", "lars"}, "member": {"person:5", "rita"}} {
-		if !has(web(p[0], p[1]), "person:2") && !has(web(p[0], p[1]), "claude:laptop:aaaa") {
-			t.Errorf("%s without an agent cannot address the project agent", who)
+		if has(web(p[0], p[1]), "person:2") || has(web(p[0], p[1]), "claude:laptop:aaaa") {
+			t.Errorf("%s without an agent can address the project agent", who)
 		}
 	}
 	if has(web("person:3", "gina"), "person:2") || has(web("person:3", "gina"), "claude:laptop:aaaa") {

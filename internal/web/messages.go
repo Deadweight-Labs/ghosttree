@@ -92,7 +92,7 @@ var messages = map[string]string{
 	"coord.forbidden.overview":         "Back to the overview",
 	"coord.notfound.title":             "This room does not exist",
 	"coord.notfound.body":              "The link may be old, or the room is not open to you.",
-	"coord.readonly":                   "You can read this room but not post in it.",
+	"coord.readonly":                   "Read only",
 	"coord.rooms":                      "Rooms",
 	"coord.conversation":               "Conversation",
 	"coord.context":                    "Room details",

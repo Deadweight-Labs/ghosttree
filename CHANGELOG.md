@@ -6,23 +6,24 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
-- Fixed: owners, leads, members and reviewers use the project room in the
+- Fixed: owners, leads, members and reviewers read the project room in the
   browser without an agent of their own in it, as the access matrix allows
-  (coordination, project room: read and write from member up). They read it,
-  post, set directives and requests (rank rules unchanged, and ending a
-  directive keeps its rank rule), and start threads; they post as themselves,
-  with their project role as the chip on the post. The room tabs list every
-  project room they may open, the active one marked, and the Room link on the
-  agents page no longer ends in a bare "403". Because the reader of a project
-  room now counts the agents in it, an owner, lead or member without an agent
-  of their own can also start a direct message to the agents of that project,
-  and only of projects they hold a role in. Guests, strangers, other projects
-  and agent tokens are unchanged. A room the viewer may not open shows a
-  designed page: "not open to you" (403, with a way back that leads
+  (coordination, project room: read from member up). Writing is unchanged
+  (spec 7.5: roles never grant write access): posting, directives and
+  requests, ending a directive, threads and promoting a message still need an
+  active membership, an agent of one's own in the room. Without it the room
+  shows a quiet "Read only" line instead of the composer, and no "Start
+  thread", "New thread", promote or end button. The room tabs list every
+  project room they may open, and the Room link on the agents page no longer
+  ends in a bare "403". Only a signed-in web session reads by role; personal,
+  device, legacy and pasted tokens and agent tokens, guests and strangers are
+  unchanged, and direct messages are unchanged. A room the viewer may not open
+  shows a designed page: "not open to you" (403, with a way back that leads
   somewhere) or "does not exist" (404); the 404 page is byte-identical for a
-  missing room and for a room in a project the viewer cannot see. The
-  composer, "Start thread" and "New thread" appear only where a post would be
-  accepted.
+  missing room and for a room in a project the viewer cannot see. A machine
+  room without membership is now "does not exist" too, so host names cannot be
+  enumerated. The fade at the top of a conversation appears only once it is
+  scrolled, so a short history shows its first message in full.
 
 - Fixed: guests no longer learn that hidden sessions exist through knowledge
   or by ending work. Knowledge from distillation points at a session by its
