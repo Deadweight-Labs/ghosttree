@@ -966,3 +966,85 @@ func TestJoinResumeThatFailsToStartLapsesInsteadOfCompromising(t *testing.T) {
 		t.Fatalf("state %s, want expired", v.State)
 	}
 }
+
+func TestJoinClaimResolvesTheMachineNameAfterTheCodeIsChecked(t *testing.T) {
+	st, _ := pairFixture(t)
+	j := st.Join()
+	o := openPair(j, "person:2")
+	calls := 0
+	resolve := func(account, machine string, auto bool) (string, error) {
+		calls++
+		if account != "person:2" || !auto {
+			t.Errorf("resolve(%q, %q, %v)", account, machine, auto)
+		}
+		return machine + "-x", nil
+	}
+	// A wrong code never reaches the resolver: nothing about machine names leaks.
+	bad := loopReq("ZZZZ-ZZZZ", "box", "1.1.1.1")
+	bad.Auto, bad.Resolve = true, resolve
+	if _, err := j.Claim(bad); err != ErrJoinInvalid || calls != 0 {
+		t.Fatalf("wrong code: err=%v calls=%d", err, calls)
+	}
+	req := loopReq(o.Pair, "box", "1.1.1.1")
+	req.Auto, req.Resolve = true, resolve
+	out, err := j.Claim(req)
+	if err != nil || out.Machine != "box-x" || calls != 1 {
+		t.Fatalf("claim: %+v %v calls=%d", out, err, calls)
+	}
+	if v := j.View("person:2"); v.Machine != "box-x" {
+		t.Fatalf("the page shows %q", v.Machine)
+	}
+}
+
+func TestJoinClaimKeepsTheCodeWhenTheNameIsTaken(t *testing.T) {
+	st, _ := pairFixture(t)
+	j := st.Join()
+	o := openPair(j, "person:2")
+	req := loopReq(o.Pair, "box", "1.1.1.1")
+	req.Resolve = func(string, string, bool) (string, error) { return "", ErrMachineTaken }
+	if _, err := j.Claim(req); !errors.Is(err, ErrMachineTaken) {
+		t.Fatalf("err = %v", err)
+	}
+	if v := j.View("person:2"); v.State != JoinWaiting {
+		t.Fatalf("state after a refused name = %q, want waiting", v.State)
+	}
+	if _, err := j.Claim(loopReq(o.Pair, "other", "1.1.1.1")); err != nil {
+		t.Fatalf("the same code with another name: %v", err)
+	}
+}
+
+func TestJoinCancelledOnlyAffectsAJustConnectedSessionOfThatMachine(t *testing.T) {
+	st, _ := pairFixture(t)
+	j := st.Join()
+	o := openPair(j, "person:2")
+	j.Cancelled("person:2", "box")
+	if v := j.View("person:2"); v.State != JoinWaiting {
+		t.Fatalf("a waiting session changed to %q", v.State)
+	}
+	if _, err := j.Claim(loopReq(o.Pair, "box", "1.1.1.1")); err != nil {
+		t.Fatal(err)
+	}
+	dec, err := j.Decide("person:2", true, j.View("person:2").Nonce, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier, _ := pkce()
+	grant, err := j.Exchange("1.1.1.1", callbackCodeFrom(dec.Redirect), verifier)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j.Delivered(grant)
+	j.Cancelled("person:2", "another-box")
+	if v := j.View("person:2"); v.State != JoinConnected {
+		t.Fatalf("another machine's revocation changed the state to %q", v.State)
+	}
+	j.Cancelled("person:2", "BOX")
+	if v := j.View("person:2"); v.State != JoinDenied {
+		t.Fatalf("state after the installer revoked its token = %q, want denied", v.State)
+	}
+}
+
+func callbackCodeFrom(redirect string) string {
+	i := strings.Index(redirect, "code=")
+	return strings.SplitN(redirect[i+5:], "&", 2)[0]
+}

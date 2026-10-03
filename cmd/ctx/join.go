@@ -398,14 +398,17 @@ func cmdJoin(args []string, stdout io.Writer) int {
 	name := fs.String("name", "", "machine name (default: hostname)")
 	noBrowser := fs.Bool("no-browser", false, "do not use the browser on this machine; type a code in any browser instead")
 	yes := fs.Bool("yes", false, "do not ask for confirmation")
+	noWatch := fs.Bool("no-watch", false, "do not set up the collector service")
 	fs.Usage = func() {
-		fmt.Fprint(stdout, `usage: ctx join --server <url> --pair XXXX-XXXX [--name <machine>] [--no-browser] [--yes]
+		fmt.Fprint(stdout, `usage: ctx join --server <url> --pair XXXX-XXXX [--name <machine>] [--no-browser] [--yes] [--no-watch]
 
   --server      ghosttree server URL
   --pair        pairing code from the invitation page
-  --name        machine name (A-Z a-z 0-9 . _ -, default: hostname)
+  --name        machine name (A-Z a-z 0-9 . _ -, default: hostname; if another
+                account already uses it, a free one is chosen)
   --no-browser  type a code in any browser instead of using this machine's
   --yes         do not ask for confirmation
+  --no-watch    do not set up the collector service (ctx watch)
 `)
 	}
 	if err := fs.Parse(args); err != nil {
@@ -416,7 +419,7 @@ func cmdJoin(args []string, stdout io.Writer) int {
 	}
 	usage := func(msg string) int {
 		fmt.Fprintln(stdout, msg)
-		fmt.Fprintln(stdout, "usage: ctx join --server <url> --pair XXXX-XXXX [--name <machine>] [--no-browser] [--yes]")
+		fmt.Fprintln(stdout, "usage: ctx join --server <url> --pair XXXX-XXXX [--name <machine>] [--no-browser] [--yes] [--no-watch]")
 		return 2
 	}
 	server := strings.TrimRight(strings.TrimSpace(*serverURL), "/")
@@ -431,7 +434,8 @@ func cmdJoin(args []string, stdout io.Writer) int {
 		return usage("--pair must look like XXXX-XXXX")
 	}
 	machine := *name
-	if machine == "" {
+	autoName := machine == ""
+	if autoName {
 		host, _ := os.Hostname()
 		machine = normalizeMachine(host)
 	} else if !machineNameRE.MatchString(machine) {
@@ -509,11 +513,16 @@ func cmdJoin(args []string, stdout io.Writer) int {
 	}
 	if cb != nil {
 		defer cb.Close()
-		tok, err = joinLoopback(ctx, c, cb, strings.TrimSpace(*pair), machine, server, stdout)
+		tok, err = joinLoopback(ctx, c, cb, strings.TrimSpace(*pair), &machine, autoName, server, stdout)
 	} else {
-		tok, err = joinCode(ctx, c, strings.TrimSpace(*pair), machine, server, stdout)
+		tok, err = joinCode(ctx, c, strings.TrimSpace(*pair), &machine, autoName, server, stdout)
 	}
 	if err != nil {
+		var taken *machineTakenError
+		if errors.As(err, &taken) {
+			fmt.Fprint(stdout, takenMessage(taken, server, strings.ToUpper(strings.TrimSpace(*pair)), machine, !*noBrowser, *yes))
+			return 1
+		}
 		fmt.Fprintln(stdout, interruptedOr(err))
 		return 1
 	}
@@ -553,7 +562,12 @@ func cmdJoin(args []string, stdout io.Writer) int {
 	}
 	label := safe(who.Label)
 	fmt.Fprintf(stdout, "Account %s%s, machine %s\n", label, org, cfg.Machine)
-	if tty != nil && !confirm(ctx, tty, fmt.Sprintf("Connect this machine as %s? [y/N] ", label), false) {
+	// Im Loopback-Weg hat der Mensch das Konto schon im Browser dieser Maschine
+	// bestätigt (Kontoname getippt); eine zweite Frage hier wäre dieselbe. Im
+	// Code-Weg geschah die Freigabe womöglich auf einem anderen Gerät, und das
+	// Terminal ist die einzige Stelle, die zeigt, welches Konto diese Maschine
+	// bekommt: dort bleibt die Frage.
+	if tty != nil && cb == nil && !confirm(ctx, tty, fmt.Sprintf("Connect this machine as %s? [y/N] ", label), false) {
 		return abort("Cancelled. Nothing written.")
 	}
 	if err := config.Save(cfg); err != nil {
@@ -562,7 +576,11 @@ func cmdJoin(args []string, stdout io.Writer) int {
 	fmt.Fprintf(stdout, "Wrote %s\n", config.Path())
 	home, _ := os.UserHomeDir()
 	var setUp []string
-	for _, h := range joinDetect() {
+	detected := joinDetect()
+	if len(detected) == 0 {
+		fmt.Fprintf(stdout, "Connected, but Claude Code and Codex were not found on this machine, so nothing was set up for your agents.\nInstall one of them, then run: %s install claude  (or: %s install codex)\n", ctxHint(), ctxHint())
+	}
+	for _, h := range detected {
 		if ctx.Err() != nil {
 			fmt.Fprintln(stdout, "Interrupted. Connected, but not installed for your agents; run ctx install claude|codex.")
 			return 1
@@ -574,19 +592,30 @@ func cmdJoin(args []string, stdout io.Writer) int {
 				continue
 			}
 		}
-		if code := joinInstall([]string{h}, stdout); code != 0 {
+		installArgs := []string{h}
+		if *noWatch {
+			installArgs = append(installArgs, "--no-watch")
+		}
+		if code := joinInstall(installArgs, stdout); code != 0 {
 			fmt.Fprintf(stdout, "install %s failed (exit %d)\n", h, code)
 			continue
 		}
 		setUp = append(setUp, labels...)
 	}
 	printSetupList(stdout, "Set up:", setUp)
+	if hint := ctxHint(); hint != "ctx" && len(setUp) > 0 {
+		fmt.Fprintf(stdout, "Note: typing 'ctx' in a shell does not work yet because its directory is not on PATH. Your agents use the full path (%s) and are not affected.\n", hint)
+	}
 	var st bytes.Buffer
 	cmdStatus(nil, &st)
 	for _, line := range strings.Split(strings.TrimSpace(st.String()), "\n") {
-		if line != "" && !strings.HasPrefix(line, "transcripts") {
-			fmt.Fprintln(stdout, safe(line))
+		if line == "" || strings.HasPrefix(line, "transcripts") {
+			continue
 		}
+		if len(setUp) == 0 && (strings.HasPrefix(line, "claude ") || strings.HasPrefix(line, "codex ")) {
+			continue
+		}
+		fmt.Fprintln(stdout, safe(line))
 	}
 	return 0
 }
@@ -689,8 +718,37 @@ func prepareLoopback() *callback {
 	return cb
 }
 
+// machineTakenError: der Name gehört einem anderen Konto. atClaim sagt, dass
+// der Server es schon beim Anmelden meldete; dann ist der Paarungscode noch
+// unverbraucht und gilt weiter.
+type machineTakenError struct{ atClaim bool }
+
+func (*machineTakenError) Error() string { return "machine name belongs to another account" }
+
+// takenMessage nennt den genauen Befehl mit einem anderen Namen. Der Vorschlag
+// ist der Name mit Zusatz; er verrät nichts, was der Fehler nicht ohnehin sagte.
+func takenMessage(e *machineTakenError, server, pair, machine string, browser, yes bool) string {
+	suggestion := machine + "-2"
+	if len(suggestion) > 64 {
+		suggestion = "my-" + machine[:60]
+	}
+	cmd := ctxHint() + " join --server " + server + " --pair " + pair + " --name " + suggestion
+	if !browser {
+		cmd += " --no-browser"
+	}
+	if yes {
+		cmd += " --yes"
+	}
+	if e.atClaim {
+		return fmt.Sprintf("The machine name %s already belongs to another account. Your code %s is not used up.\nRun this with a name of your choice:\n\n  %s\n", safe(machine), pair, cmd)
+	}
+	return fmt.Sprintf("The machine name %s was taken by another account while you were connecting.\nGet a new code on the invitation page, then run it with a different name:\n\n  %s\n", safe(machine), strings.Replace(cmd, " --pair "+pair, " --pair <new code>", 1))
+}
+
 func claimError(err error) error {
 	switch client.ErrorCode(err) {
+	case "machine_name_taken":
+		return &machineTakenError{atClaim: true}
 	case "invalid_pair":
 		return errors.New("Pairing code is not valid, expired or already used. Open the invitation page for a new one.")
 	case "too_many_requests":
@@ -704,7 +762,7 @@ func exchangeError(err error) error {
 	case "invalid_grant":
 		return errors.New(errInterrupted)
 	case "machine_name_taken":
-		return errors.New("That machine name belongs to another account. Run again with --name <other>.")
+		return &machineTakenError{}
 	case "too_many_requests":
 		return errors.New("Too many attempts. Try again in a minute.")
 	}
@@ -723,13 +781,22 @@ func failure(err error) error {
 	return fmt.Errorf("Pairing failed: %s", safe(err.Error()))
 }
 
-func joinLoopback(ctx context.Context, c *client.Client, cb *callback, pair, machine, server string, stdout io.Writer) (client.DeviceToken, error) {
+// adoptMachine übernimmt den Namen, den der Server gewählt hat. Ein Name, den
+// der Server liefert, geht nur durch, wenn er die Regel für Namen einhält: er
+// steht danach in der Konfiguration und auf dem Terminal.
+func adoptMachine(machine *string, claimed string) {
+	if claimed != "" && machineNameRE.MatchString(claimed) {
+		*machine = claimed
+	}
+}
+
+func joinLoopback(ctx context.Context, c *client.Client, cb *callback, pair string, machineName *string, auto bool, server string, stdout io.Writer) (client.DeviceToken, error) {
 	verifier, challenge, err := newPKCE()
 	if err != nil {
 		return client.DeviceToken{}, err
 	}
 	claim, err := c.JoinClaim(ctx, client.JoinClaimRequest{
-		Pair: pair, Machine: machine, Resume: loadJoinResume(server, pair),
+		Pair: pair, Machine: *machineName, MachineAuto: auto, Resume: loadJoinResume(server, pair),
 		CodeChallenge: challenge, CodeChallengeMethod: "S256",
 		LoopbackPort: cb.Port(), LoopbackHost: "127.0.0.1", State: cb.state,
 	})
@@ -737,6 +804,8 @@ func joinLoopback(ctx context.Context, c *client.Client, cb *callback, pair, mac
 		return client.DeviceToken{}, claimError(err)
 	}
 	saveJoinResume(server, pair, claim.Resume)
+	adoptMachine(machineName, claim.Machine)
+	machine := *machineName
 	if claim.Mode != "loopback" {
 		return client.DeviceToken{}, errors.New(errInterrupted)
 	}
@@ -776,12 +845,14 @@ func joinLoopback(ctx context.Context, c *client.Client, cb *callback, pair, mac
 
 // joinCode ist der Rückfall ohne Loopback: der Bestätigungscode steht im
 // Terminal, das Token kommt über den Geräte-Ablauf.
-func joinCode(ctx context.Context, c *client.Client, pair, machine, server string, stdout io.Writer) (client.DeviceToken, error) {
-	claim, err := c.JoinClaim(ctx, client.JoinClaimRequest{Pair: pair, Machine: machine, Resume: loadJoinResume(server, pair)})
+func joinCode(ctx context.Context, c *client.Client, pair string, machineName *string, auto bool, server string, stdout io.Writer) (client.DeviceToken, error) {
+	claim, err := c.JoinClaim(ctx, client.JoinClaimRequest{Pair: pair, Machine: *machineName, MachineAuto: auto, Resume: loadJoinResume(server, pair)})
 	if err != nil {
 		return client.DeviceToken{}, claimError(err)
 	}
 	saveJoinResume(server, pair, claim.Resume)
+	adoptMachine(machineName, claim.Machine)
+	machine := *machineName
 	if claim.Mode != "code" || claim.DeviceCode == "" {
 		return client.DeviceToken{}, errors.New(errInterrupted)
 	}

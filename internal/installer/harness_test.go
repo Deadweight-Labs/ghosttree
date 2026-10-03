@@ -188,7 +188,7 @@ func TestDoctorReportsAnUnservedChannelAsAGap(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(home, ".codex", "config.toml"), []byte(codexMCPSection), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(home, ".codex", "config.toml"), []byte(codexMCPSection()), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := writeMarkerFile(filepath.Join(home, ".codex", "AGENTS.md"), ruleText); err != nil {

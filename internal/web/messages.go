@@ -96,6 +96,8 @@ var messages = map[string]string{
 	"setup.copy":              "Copy",
 	"setup.copied":            "Copied",
 	"setup.waiting":           "Waiting for your machine",
+	"setup.get_command":       "Get the install command",
+	"setup.pair_open":         "Continue on the pairing page",
 	"setup.connected":         "%s is connected",
 
 	// Wissen und Prüfung.

@@ -951,18 +951,37 @@ func TestJoinSuccessDoesNotRevoke(t *testing.T) {
 	}
 }
 
+// codeModeBrowser lets the browser approve the pairing once the terminal shows
+// its confirmation code, the way a person on another device would.
+func codeModeBrowser(t *testing.T, e realEnv, out *syncBuffer) {
+	t.Helper()
+	old := loginSleep
+	t.Cleanup(func() { loginSleep = old })
+	calls := 0
+	loginSleep = func(_ context.Context, d time.Duration) error {
+		calls++
+		e.clock.Advance(d + time.Second)
+		if calls == 1 {
+			approved := e.browserApproves(t, func() string {
+				return regexp.MustCompile(`code in your browser: ([A-Z0-9]{4})`).FindStringSubmatch(out.String())[1]
+			})
+			if err := <-approved; err != nil {
+				t.Fatal(err)
+			}
+		}
+		return nil
+	}
+}
+
 func TestJoinIntegrationDeclinedConfirmationLeavesNoValidToken(t *testing.T) {
 	f := newJoinFixture(t, "n")
 	_ = f
 	e := newRealEnv(t)
 	pair, _ := e.st.Join().Create(annaID)
-	approved := e.browserApproves(t, nil)
 	var out syncBuffer
-	if code := cmdJoin([]string{"--server", e.url, "--pair", pair, "--name", "annas-box"}, &out); code != 1 {
+	codeModeBrowser(t, e, &out)
+	if code := cmdJoin([]string{"--server", e.url, "--pair", pair, "--name", "annas-box", "--no-browser"}, &out); code != 1 {
 		t.Fatalf("exit %d: %s", code, out.String())
-	}
-	if err := <-approved; err != nil {
-		t.Fatal(err)
 	}
 	if _, ok := readConfig(t); ok {
 		t.Fatal("config written")
@@ -1167,13 +1186,10 @@ func TestJoinIntegrationDeclinedRejoinKeepsTheMachineWithItsOwner(t *testing.T) 
 		t.Fatal(err)
 	}
 	pair, _ := e.st.Join().Create(annaID)
-	approved := e.browserApproves(t, nil)
 	var out syncBuffer
-	if code := cmdJoin([]string{"--server", e.url, "--pair", pair, "--name", "laptop"}, &out); code != 1 {
+	codeModeBrowser(t, e, &out)
+	if code := cmdJoin([]string{"--server", e.url, "--pair", pair, "--name", "laptop", "--no-browser"}, &out); code != 1 {
 		t.Fatalf("exit %d: %s", code, out.String())
-	}
-	if err := <-approved; err != nil {
-		t.Fatal(err)
 	}
 	if _, _, err := e.st.CreateDeviceToken("person:3", "laptop"); !errors.Is(err, store.ErrMachineTaken) {
 		t.Fatalf("another account could take the machine: %v", err)
@@ -1507,5 +1523,144 @@ func TestJoinSetUpListSkipsADeclinedHarness(t *testing.T) {
 	cmdJoin([]string{"--server", srv.URL, "--pair", "abcd-efgh", "--no-browser"}, &out)
 	if strings.Contains(out.String(), "\nSet up:") {
 		t.Fatalf("declined install listed as set up:\n%s", out.String())
+	}
+}
+
+func TestJoinLoopbackDoesNotAskAgainAfterTheBrowserConfirmedTheAccount(t *testing.T) {
+	f := newJoinFixture(t, "y")
+	e := newRealEnv(t)
+	pair, _ := e.st.Join().Create(annaID)
+	approved := e.browserApproves(t, nil)
+	var out syncBuffer
+	if code := cmdJoin([]string{"--server", e.url, "--pair", pair, "--name", "annas-box"}, &out); code != 0 {
+		t.Fatalf("exit %d: %s", code, out.String())
+	}
+	if err := <-approved; err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range f.tty.questions() {
+		if strings.Contains(q, "Connect this machine") {
+			t.Fatalf("second confirmation asked: %q", q)
+		}
+	}
+	if _, ok := readConfig(t); !ok {
+		t.Fatalf("config not written: %s", out.String())
+	}
+}
+
+func TestJoinCodeModeStillAsksWhichAccountTheMachineBecomes(t *testing.T) {
+	f := newJoinFixture(t, "y")
+	e := newRealEnv(t)
+	pair, _ := e.st.Join().Create(annaID)
+	var out syncBuffer
+	codeModeBrowser(t, e, &out)
+	if code := cmdJoin([]string{"--server", e.url, "--pair", pair, "--name", "annas-box", "--no-browser"}, &out); code != 0 {
+		t.Fatalf("exit %d: %s", code, out.String())
+	}
+	asked := strings.Join(f.tty.questions(), "|")
+	if !strings.Contains(asked, "Connect this machine as anna?") {
+		t.Fatalf("no account question: %q", asked)
+	}
+}
+
+func TestJoinDeclinedInTheTerminalMakesTheBrowserSayNothingWasConnected(t *testing.T) {
+	newJoinFixture(t, "n")
+	e := newRealEnv(t)
+	pair, _ := e.st.Join().Create(annaID)
+	var out syncBuffer
+	codeModeBrowser(t, e, &out)
+	if code := cmdJoin([]string{"--server", e.url, "--pair", pair, "--name", "annas-box", "--no-browser"}, &out); code != 1 {
+		t.Fatalf("exit %d: %s", code, out.String())
+	}
+	if v := e.st.Join().View(annaID); v.State != store.JoinDenied {
+		t.Fatalf("browser state after a declined join = %q, want %q", v.State, store.JoinDenied)
+	}
+}
+
+func TestJoinPicksAFreeMachineNameWhenTheHostnameBelongsToAnotherAccount(t *testing.T) {
+	newJoinFixture(t)
+	host, _ := os.Hostname()
+	taken := normalizeMachine(host)
+	e := newRealEnv(t)
+	if err := e.st.ClaimMachine(taken, "person:1"); err != nil {
+		t.Fatal(err)
+	}
+	pair, _ := e.st.Join().Create(annaID)
+	approved := e.browserApproves(t, nil)
+	var out syncBuffer
+	if code := cmdJoin([]string{"--server", e.url, "--pair", pair, "--yes"}, &out); code != 0 {
+		t.Fatalf("exit %d: %s", code, out.String())
+	}
+	if err := <-approved; err != nil {
+		t.Fatal(err)
+	}
+	cfg, ok := readConfig(t)
+	if !ok || cfg.Machine == taken || !strings.HasPrefix(cfg.Machine, strings.ToLower(taken)) {
+		t.Fatalf("machine = %q (host name %q was taken)", cfg.Machine, taken)
+	}
+	if !strings.Contains(out.String(), "machine "+cfg.Machine) {
+		t.Fatalf("chosen name not shown: %s", out.String())
+	}
+}
+
+func TestJoinWithATakenExplicitNameStopsAtOnceWithTheExactCommand(t *testing.T) {
+	newJoinFixture(t)
+	e := newRealEnv(t)
+	if err := e.st.ClaimMachine("shared", "person:1"); err != nil {
+		t.Fatal(err)
+	}
+	pair, _ := e.st.Join().Create(annaID)
+	var out syncBuffer
+	if code := cmdJoin([]string{"--server", e.url, "--pair", pair, "--name", "shared", "--yes"}, &out); code != 1 {
+		t.Fatalf("exit %d: %s", code, out.String())
+	}
+	text := out.String()
+	want := "join --server " + e.url + " --pair " + pair + " --name shared-2 --yes"
+	if !strings.Contains(text, "already belongs to another account") || !strings.Contains(text, "not used up") || !strings.Contains(text, want) {
+		t.Fatalf("message lacks the command %q:\n%s", want, text)
+	}
+	if _, ok := readConfig(t); ok {
+		t.Fatal("config written")
+	}
+	// The command it printed works with the same code.
+	approved := e.browserApproves(t, nil)
+	var again syncBuffer
+	if code := cmdJoin([]string{"--server", e.url, "--pair", pair, "--name", "shared-2", "--yes"}, &again); code != 0 {
+		t.Fatalf("retry exit %d: %s", code, again.String())
+	}
+	if err := <-approved; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestJoinWithoutAnyHarnessSaysWhatToDo(t *testing.T) {
+	f := newJoinFixture(t)
+	f.detected = nil
+	srv := loopbackServer(t, func(_ int, state string) string { return "/callback?code=auth-code&state=" + state })
+	var out syncBuffer
+	if code := cmdJoin([]string{"--server", srv.URL, "--pair", "abcd-efgh", "--name", "box", "--yes"}, &out); code != 0 {
+		t.Fatalf("exit %d: %s", code, out.String())
+	}
+	text := out.String()
+	if !strings.Contains(text, "Claude Code and Codex were not found") || !strings.Contains(text, "install claude") {
+		t.Fatalf("no guidance:\n%s", text)
+	}
+	if strings.Contains(text, "claude      not installed") {
+		t.Fatalf("raw status line left in:\n%s", text)
+	}
+}
+
+func TestJoinPassesNoWatchToTheInstaller(t *testing.T) {
+	f := newJoinFixture(t)
+	f.detected = []string{"claude"}
+	var got [][]string
+	joinInstall = func(args []string, out io.Writer) int { got = append(got, args); return 0 }
+	srv := loopbackServer(t, func(_ int, state string) string { return "/callback?code=auth-code&state=" + state })
+	var out syncBuffer
+	if code := cmdJoin([]string{"--server", srv.URL, "--pair", "abcd-efgh", "--name", "box", "--yes", "--no-watch"}, &out); code != 0 {
+		t.Fatalf("exit %d: %s", code, out.String())
+	}
+	if len(got) != 1 || strings.Join(got[0], " ") != "claude --no-watch" {
+		t.Fatalf("installer args = %v", got)
 	}
 }

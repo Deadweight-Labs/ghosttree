@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
@@ -211,5 +212,51 @@ func TestReleaseAndTransferMachine(t *testing.T) {
 	}
 	if err := st.TransferMachine("squat", "nobody"); err == nil {
 		t.Fatal("transfer to an unknown account must fail")
+	}
+}
+
+func TestResolveMachineName(t *testing.T) {
+	st, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	st.AddPerson("robin")
+	st.AddPerson("Anna K.")
+	if err := st.ClaimMachine("Laptop", "person:1"); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, err := st.ResolveMachineName("person:2", "desktop", true); err != nil || got != "desktop" {
+		t.Fatalf("free name: %q %v", got, err)
+	}
+	if got, err := st.ResolveMachineName("person:1", "laptop", false); err != nil || got != "laptop" {
+		t.Fatalf("own name stays: %q %v", got, err)
+	}
+	if _, err := st.ResolveMachineName("person:2", "laptop", false); !errors.Is(err, ErrMachineTaken) {
+		t.Fatalf("explicit name taken: %v", err)
+	}
+	got, err := st.ResolveMachineName("person:2", "laptop", true)
+	if err != nil || got != "laptop-annak" {
+		t.Fatalf("auto name = %q %v", got, err)
+	}
+	if err := st.MachineClaimable(got, "person:2"); err != nil {
+		t.Fatalf("resolved name is not claimable: %v", err)
+	}
+
+	// The account-based alternative is taken as well: a random suffix follows, never a counter.
+	if err := st.ClaimMachine("laptop-annak", "person:1"); err != nil {
+		t.Fatal(err)
+	}
+	got, err = st.ResolveMachineName("person:2", "laptop", true)
+	if err != nil || !strings.HasPrefix(got, "laptop-annak-") || len(got) != len("laptop-annak-")+4 {
+		t.Fatalf("fallback name = %q %v", got, err)
+	}
+
+	long := strings.Repeat("x", 64)
+	st.ClaimMachine(long, "person:1")
+	got, err = st.ResolveMachineName("person:2", long, true)
+	if err != nil || len(got) > 64 || !strings.HasSuffix(got, "-annak") {
+		t.Fatalf("long name = %q (%d) %v", got, len(got), err)
 	}
 }

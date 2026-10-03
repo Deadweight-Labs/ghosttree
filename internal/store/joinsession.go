@@ -126,6 +126,8 @@ type joinSession struct {
 	authExpires  time.Time
 	claimExpires time.Time // Ende der Wartezeit auf die Freigabe
 	resumeHash   string    // Wiederaufnahme-Token des Installers (nur Hash)
+	auto         bool      // der Installer hat den Namen selbst gewählt (Hostname), nicht der Mensch
+	resolve      func(account, machine string, auto bool) (string, error)
 }
 
 // JoinView ist, was die Seite über die Sitzung des Kontos erfährt.
@@ -152,6 +154,14 @@ type JoinClaimRequest struct {
 	// Resume ist das Token aus der Antwort auf den ersten Claim; nur damit darf
 	// derselbe Installer nach einem Abbruch erneut claimen.
 	Resume string
+	// Auto sagt, dass Machine der Hostname ist und kein Wunsch: ist er
+	// vergeben, darf Resolve einen anderen wählen.
+	Auto bool
+	// Resolve macht aus dem Wunschnamen den Namen, unter dem das Konto der
+	// Sitzung die Maschine anmelden kann (ErrMachineTaken, wenn keiner geht). Es
+	// läuft erst, nachdem der Code geprüft ist, damit ein Fremder ohne gültigen
+	// Code nichts über Maschinennamen erfährt.
+	Resolve func(account, machine string, auto bool) (string, error)
 }
 
 // JoinClaim ist die Antwort an den Installer.
@@ -161,6 +171,7 @@ type JoinClaim struct {
 	Confirm             string // nur Code-Weg
 	ExpiresIn, Interval time.Duration
 	Resume              string // Wiederaufnahme-Token; der Installer legt es lokal ab
+	Machine             string // der Name, unter dem das Gerät angemeldet wird
 }
 
 // JoinDecision ist das Ergebnis einer Freigabe.
@@ -483,6 +494,13 @@ func (j *JoinSessions) Claim(req JoinClaimRequest) (JoinClaim, error) {
 		j.fail(req.Addr, now)
 		return JoinClaim{}, ErrJoinInvalid
 	}
+	if req.Resolve != nil {
+		machine, err := req.Resolve(s.account, req.Machine, req.Auto)
+		if err != nil {
+			return JoinClaim{}, err
+		}
+		req.Machine = machine
+	}
 	resume, err := joinRandomHex(16)
 	if err != nil {
 		return JoinClaim{}, err
@@ -507,7 +525,7 @@ func (j *JoinSessions) Claim(req JoinClaimRequest) (JoinClaim, error) {
 	// des Login-Fensters, damit eine späte Anmeldung das Gerät nicht verliert.
 	window := s.created.Add(JoinMaxLifetime).Sub(now)
 	wait := min(window, JoinClaimTTL)
-	out := JoinClaim{Mode: JoinModeCode, ExpiresIn: wait, Interval: DeviceInterval, Resume: resume}
+	out := JoinClaim{Mode: JoinModeCode, ExpiresIn: wait, Interval: DeviceInterval, Resume: resume, Machine: req.Machine}
 	if loop {
 		out.Mode = JoinModeLoopback
 		host := req.Host
@@ -540,6 +558,7 @@ func (j *JoinSessions) Claim(req JoinClaimRequest) (JoinClaim, error) {
 	s.extend(s.created.Add(JoinMaxLifetime))
 	s.claimExpires = now.Add(JoinClaimTTL)
 	s.resumeHash = hashCode(resume)
+	s.auto, s.resolve = req.Auto, req.Resolve
 	return out, nil
 }
 
@@ -637,9 +656,20 @@ func (j *JoinSessions) Decide(account string, approve bool, nonce, confirm strin
 	if check != nil {
 		// Die Prüfung fragt die Datenbank und läuft ohne Sperre; danach gilt
 		// nur, was zum aktuellen Zustand derselben Anfrage noch passt.
-		machine := s.machine
+		machine, auto, resolve := s.machine, s.auto, s.resolve
+		loopback := s.mode == JoinModeLoopback
 		j.mu.Unlock()
 		err := check(machine)
+		renamed := ""
+		if errors.Is(err, ErrMachineTaken) && auto && loopback && resolve != nil {
+			// Der Name war bei der Anmeldung frei und ist es nicht mehr; hat der
+			// Installer ihn selbst gewählt, weicht er aus, statt den Menschen
+			// vor einem Fehler stehen zu lassen. Im Code-Weg steht der Name im
+			// Geräte-Ablauf und bleibt ein Fehler.
+			if renamed, err = resolve(account, machine, true); err != nil {
+				renamed = ""
+			}
+		}
 		j.mu.Lock()
 		if err != nil {
 			j.mu.Unlock()
@@ -649,6 +679,9 @@ func (j *JoinSessions) Decide(account string, approve bool, nonce, confirm strin
 		if s == nil || state != JoinClaimed || s.machine != machine || subtle.ConstantTimeCompare([]byte(nonce), []byte(s.nonce)) != 1 {
 			j.mu.Unlock()
 			return JoinDecision{}, ErrJoinNotReady
+		}
+		if renamed != "" {
+			s.machine = renamed
 		}
 	}
 	defer j.mu.Unlock()
@@ -746,6 +779,20 @@ func (j *JoinSessions) connected(s *joinSession) {
 	s.state = JoinConnected
 	delete(j.byPair, hashCode(s.pair))
 	s.extend(j.now().Add(time.Minute))
+}
+
+// Cancelled meldet, dass der Installer das gerade ausgestellte Token selbst
+// widerrufen hat (im Terminal abgelehnt oder die Konfiguration ließ sich nicht
+// schreiben). Die Seite sagt dann, dass nichts verbunden wurde, statt
+// "verbunden" stehen zu lassen. Nur eine soeben verbundene Sitzung derselben
+// Maschine ändert sich.
+func (j *JoinSessions) Cancelled(account, machine string) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	s := j.byAccount[account]
+	if s != nil && s.state == JoinConnected && strings.EqualFold(s.machine, machine) {
+		s.state = JoinDenied
+	}
 }
 
 // Sessions zählt die Sitzungen; für Tests.

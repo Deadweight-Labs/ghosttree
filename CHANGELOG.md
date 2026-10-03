@@ -15,6 +15,36 @@ Versioning, with pre-1.0 compatibility rules described in
   the agents of the room; direct and group messages still need membership.
   Leads and owners can change the state and archiving of project threads;
   links, summaries and outcomes stay with the author and room managers.
+- Fixed: a fresh install over the invitation command works on a machine whose
+  PATH lacks `~/.local/bin` (the macOS default). `ctx install` and `ctx join`
+  write the absolute path of the running `ctx` (the stable `~/.local/bin/ctx`
+  name when it points at the same binary) into the Claude, Codex and OpenCode
+  hooks, the MCP entries and the collector service, and rewrite entries that
+  still say a bare `ctx` without touching anyone else's hooks. `ctx doctor`
+  recognises a bare or moved `ctx` that the harness cannot start and names the
+  exact fix command with the absolute path; a missing PATH entry alone is no
+  longer a failure. `install.sh` explains the PATH situation and prints the line
+  to add; `--modify-path` appends it to your shell profile (a terminal is asked
+  first, a pipe never), `--no-modify-path` never does.
+- Fixed: joining from a machine whose hostname another account already uses. The
+  server picks a free name (`<host>-<account>`, then a random suffix) for an
+  automatic hostname and says which one it chose; a name given with `--name`
+  that is taken ends the command at once with the exact command to run with
+  another `--name`, and the pairing code stays usable.
+- Added: `ctx install claude|codex` and `ctx join` set up the collector
+  (`ctx watch`) as a user service (systemd user unit, macOS LaunchAgent), update
+  an existing one and leave it alone when nothing changed. `--no-watch` skips
+  it; `ctx install watch` sets up only the service. Without a connection to a
+  server the service waits for `ctx join`. `ctx doctor` points to that command
+  instead of a file in the repository.
+- Changed: an owner without a connected machine sees the same guided install
+  command with a pairing code as an invited person, on the overview, instead of
+  `ctx login --server`. `ctx join` asks no second question in the terminal when
+  the account was just confirmed in the browser on the same machine (the code
+  path, where the browser may be another device, still asks); declining there
+  now makes the browser say that nothing was connected. Without Claude Code or
+  Codex, `ctx join` says what to install and which command to run afterwards.
+  `ctx install --help` prints the usage.
 - Changed: invitations and device pairing are guided. The invitation pages name
   who invited you and to what, say in one line what ghosttree is, and ask only for
   your name. Connecting a computer is three steps (open a terminal, copy the

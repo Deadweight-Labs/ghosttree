@@ -6,11 +6,38 @@ import (
 	"strings"
 )
 
-const codexMCPSection = `
-[mcp_servers.ghosttree]
-command = "ctx"
-args = ["mcp"]
-`
+func codexMCPSection() string { return codexMCPSectionFor(ctxCommand) }
+
+func codexMCPSectionFor(command string) string {
+	return "\n[mcp_servers.ghosttree]\ncommand = " + tomlString(command) + "\nargs = [\"mcp\"]\n"
+}
+
+// codexTableCommand reads the command value out of our table, "" when the line
+// is missing or not a plain string.
+func codexTableCommand(table string) string {
+	for _, line := range strings.Split(table, "\n") {
+		line = strings.TrimSpace(line)
+		rest, ok := strings.CutPrefix(line, "command")
+		if !ok {
+			continue
+		}
+		rest = strings.TrimSpace(rest)
+		rest, ok = strings.CutPrefix(rest, "=")
+		if !ok {
+			continue
+		}
+		rest = strings.TrimSpace(rest)
+		if len(rest) < 2 || rest[0] != '"' || rest[len(rest)-1] != '"' {
+			return ""
+		}
+		return strings.NewReplacer(`\\`, `\`, `\"`, `"`).Replace(rest[1 : len(rest)-1])
+	}
+	return ""
+}
+
+func tomlString(v string) string {
+	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(v) + `"`
+}
 
 func InstallCodex(home string) ([]Change, error) {
 	selected, _ := ResolveComponents("codex", nil)
@@ -104,7 +131,7 @@ func appendCodexMCP(path string) (Change, error) {
 	}
 	content := string(old)
 	ranges := codexOwnedTableRanges(content)
-	if len(ranges) == 1 && strings.TrimSpace(content[ranges[0][0]:ranges[0][1]]) == strings.TrimSpace(codexMCPSection) {
+	if len(ranges) == 1 && strings.TrimSpace(content[ranges[0][0]:ranges[0][1]]) == strings.TrimSpace(codexMCPSection()) {
 		return Change{Path: path, Action: "unchanged"}, nil
 	}
 	for i := len(ranges) - 1; i >= 0; i-- {
@@ -118,7 +145,7 @@ func appendCodexMCP(path string) (Change, error) {
 	if len(old) == 0 {
 		action = "created"
 	}
-	return Change{Path: path, Action: action}, writeAtomic(path, []byte(content+codexMCPSection), 0o644)
+	return Change{Path: path, Action: action}, writeAtomic(path, []byte(content+codexMCPSection()), 0o644)
 }
 
 func codexOwnedTableRanges(content string) [][2]int {

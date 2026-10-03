@@ -257,7 +257,7 @@ func TestDeviceApprovalIsACodeFieldWithoutMachineIPOrAge(t *testing.T) {
 func TestOwnerOnAnEmptyInstanceSeesGettingStartedThatSwitches(t *testing.T) {
 	e := shellWebAll(t)
 	_, page := fetchPage(t, e.Owner, e.Base+"/ui/overview")
-	for _, want := range []string{"Connect your first agent", "ctx login --server http", "data-copy", "Waiting for your machine", `http-equiv="refresh"`} {
+	for _, want := range []string{"Connect your first agent", "Get the install command", `action="/join/pair"`, `name="confirm_account"`, "Waiting for your machine", `http-equiv="refresh"`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("setup lacks %q", want)
 		}
@@ -299,7 +299,7 @@ func TestGettingStartedIsForOwnersAndAConnectedMachineDoesNotTrapThem(t *testing
 	e := shellWebAll(t)
 	for name, c := range map[string]*http.Client{"member": e.Member, "lead": e.Lead, "guest": e.Guest} {
 		_, page := fetchPage(t, c, e.Base+"/ui/overview")
-		if strings.Contains(page, "Connect your first agent") || strings.Contains(page, "ctx login") {
+		if strings.Contains(page, "Connect your first agent") || strings.Contains(page, "ctx login") || strings.Contains(page, "install command") {
 			t.Errorf("%s gets Getting started", name)
 		}
 	}
@@ -308,11 +308,11 @@ func TestGettingStartedIsForOwnersAndAConnectedMachineDoesNotTrapThem(t *testing
 		t.Error("a member without agents lacks the empty line and its action")
 	}
 	_, forced := fetchPage(t, e.Member, e.Base+"/ui/overview?connect=1")
-	if !strings.Contains(forced, "ctx login --server") || strings.Contains(forced, `http-equiv="refresh"`) {
+	if !strings.Contains(forced, "Get the install command") || strings.Contains(forced, `http-equiv="refresh"`) {
 		t.Error("the connect view is missing for a member or reloads by itself")
 	}
 	_, guestForced := fetchPage(t, e.Guest, e.Base+"/ui/overview?connect=1")
-	if strings.Contains(guestForced, "ctx login") {
+	if strings.Contains(guestForced, "ctx login") || strings.Contains(guestForced, "install command") {
 		t.Error("a guest reaches the connect view")
 	}
 	// Eine alte Verbindung ohne Agent hält den Owner nicht in Getting started.
@@ -489,5 +489,42 @@ func TestFreshInstanceFirstAccountGetsGettingStartedWithoutAnOrganization(t *tes
 	_, page = fetchPage(t, loginInteractive(t, srv, st, "bob"), srv.URL+"/ui/overview")
 	if strings.Contains(page, "Connect your first agent") {
 		t.Error("a later account gets Getting started")
+	}
+}
+
+func TestOwnerWithoutAMachineSeesTheSameGuidedInstallCommandAsAnInvitedPerson(t *testing.T) {
+	e := shellWebAll(t)
+	_, page := fetchPage(t, e.Owner, e.Base+"/ui/overview")
+	if strings.Contains(page, "ctx login") || strings.Contains(page, "curl -fsSL") {
+		t.Fatalf("the owner sees a command before asking for one:\n%s", page)
+	}
+	// Asking creates the pairing code, and the command stands on the overview.
+	form := url.Values{"confirm_account": {"alice"}, "csrf_token": {renderedCSRFToken(t, e.Owner, e.Base+"/ui/overview")}}
+	resp := sameOriginPostForm(t, e.Owner, e.Base+"/join/pair", form)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("POST /join/pair = %d", resp.StatusCode)
+	}
+	_, page = fetchPage(t, e.Owner, e.Base+"/ui/overview")
+	for _, want := range []string{"curl -fsSL", "/install.sh | sh -s -- --pair ", "data-copy", "Waiting for your machine"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("overview lacks %q:\n%s", want, page)
+		}
+	}
+	if strings.Contains(page, "ctx login --server") {
+		t.Error("the bare login command is still the first thing the owner sees")
+	}
+	pairCode := e.St.Join().View("person:1").Pair
+	_, pairPage := fetchPage(t, e.Owner, e.Base+"/join/pair")
+	if !strings.Contains(pairPage, pairCode) {
+		t.Error("the pairing page shows another code than the overview")
+	}
+	// Once the machine reported itself, approval happens on the pairing page.
+	if _, err := e.St.Join().Claim(store.JoinClaimRequest{Addr: "203.0.113.9", Pair: pairCode, Machine: "mainex"}); err != nil {
+		t.Fatal(err)
+	}
+	_, page = fetchPage(t, e.Owner, e.Base+"/ui/overview")
+	if !strings.Contains(page, `href="/join/pair"`) || strings.Contains(page, "mainex") {
+		t.Errorf("overview after the claim: %s", page)
 	}
 }

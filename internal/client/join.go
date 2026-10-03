@@ -18,6 +18,7 @@ type JoinClaimRequest struct {
 	LoopbackHost        string `json:"loopback_host,omitempty"`
 	State               string `json:"state,omitempty"`
 	Resume              string `json:"resume,omitempty"`
+	MachineAuto         bool   `json:"machine_auto,omitempty"`
 }
 
 // JoinClaim ist die Antwort auf einen Claim: Mode "loopback" oder "code".
@@ -29,6 +30,7 @@ type JoinClaim struct {
 	Interval      int    `json:"interval"`
 	TokenEndpoint string `json:"token_endpoint"`
 	Resume        string `json:"resume"`
+	Machine       string `json:"machine"`
 }
 
 // JoinClaim meldet dieses Gerät mit dem Paarungscode an. Der Aufruf ist
