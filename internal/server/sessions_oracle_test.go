@@ -311,17 +311,77 @@ func TestGuestsWithoutRefsSupportGetCollectorTooOld(t *testing.T) {
 	}
 }
 
-func TestAdminSeesSessionNumbersInUnclaimedProjects(t *testing.T) {
+// Der Admin liest alle Transkripte, aber die Nummernsicht (Zitate, Arbeit aus
+// Transkripten) hängt nicht an der Admin-Eigenschaft: SeesSessionNumbers bleibt
+// ohne Rolle im Projekt falsch; die Nummer der eigenen neuen Session bekommt er
+// über GetsOwnSessionNumber.
+func TestAdminWithoutRoleDoesNotSeeSessionNumbersGlobally(t *testing.T) {
 	f := accessAPI(t, true)
-	id, err := f.st.UpsertSession(store.Session{Harness: "claude-code", ExternalID: "home-session", AccountID: 3})
-	if err != nil {
-		t.Fatal(err)
-	}
 	pa := f.st.Access(store.Principal{ID: "person:1", Label: "robin"})
-	if !pa.SeesSessionNumbers("") {
-		t.Errorf("admin does not see the number of session %d without project", id)
+	for _, project := range []string{"", "github.com/nobody/claimed"} {
+		if pa.SeesSessionNumbers(project) {
+			t.Errorf("admin without role sees numbers of project %q", project)
+		}
+		if !pa.GetsOwnSessionNumber(project) {
+			t.Errorf("admin does not get the number of an own session in project %q", project)
+		}
 	}
 	if f.st.Access(store.Principal{ID: "person:5", Label: "gus"}).SeesSessionNumbers("") {
 		t.Errorf("guest sees numbers of sessions without project")
+	}
+}
+
+// ReadableEvidence eines globalen Eintrags: wer ohne Rolle keine Nummern sieht,
+// bekommt nur Belege lesbarer Transkripte (Nora ist in keiner Organisation).
+func TestGlobalEvidenceOfUnreadableSessionIsDropped(t *testing.T) {
+	f := accessAPI(t, true)
+	id, err := f.st.UpsertSession(store.Session{Harness: "claude-code", ExternalID: "ev-hidden", AccountID: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := []store.Evidence{{SessionID: id, Quote: "secret"}}
+	nora := f.st.Access(store.Principal{ID: "person:6", Label: "nora"})
+	if got, n := nora.ReadableEvidence("", ev, 1); len(got) != 0 || n != 0 {
+		t.Errorf("nora got evidence of a hidden session: %v %d", got, n)
+	}
+}
+
+// Ein älterer Collector kennt nur die Nummer. Mitglieder ohne Rolle im Projekt
+// der Session (leer, unbeansprucht, fremd beansprucht) bekommen sie und laden
+// damit hoch; fremde, verborgene und unbekannte Nummern antworten gleich.
+func TestOldNumberCollectorUploadsToOwnSessionInAnyProject(t *testing.T) {
+	f := accessAPI(t, true)
+	chunks := map[string]any{"chunks": []store.Chunk{{Seq: 0, Role: "user", Text: "hi", Raw: "{}"}}}
+	for _, who := range []string{"mia", "lena", "robin"} {
+		for i, project := range []string{"", "github.com/nobody/claimed", accOther} {
+			body := map[string]any{"harness": "claude-code", "external_id": fmt.Sprintf("oc-%s-%d", who, i), "scope": map[string]string{"project": project}}
+			var out map[string]any
+			if err := json.Unmarshal([]byte(f.expect(t, who, 200, "POST", "/api/sessions", body)), &out); err != nil {
+				t.Fatal(err)
+			}
+			n, _ := out["id"].(float64)
+			if n == 0 {
+				t.Fatalf("%s project %q: no number: %v", who, project, out)
+			}
+			f.expect(t, who, 204, "POST", fmt.Sprintf("/api/sessions/%d/chunks", int64(n)), chunks)
+		}
+	}
+	// Mia's number is neither usable by lena (foreign) nor distinguishable from an unknown one.
+	other, err := f.st.UpsertSession(store.Session{Harness: "claude-code", ExternalID: "oc-foreign", AccountID: 4, Scope: scope.Axes{Project: accProject}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hidden, err := f.st.UpsertSession(store.Session{Harness: "claude-code", ExternalID: "oc-hidden", AccountID: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var first string
+	for i, n := range []int64{other, hidden, 999999} {
+		out := f.expect(t, "lena", 403, "POST", fmt.Sprintf("/api/sessions/%d/chunks", n), chunks)
+		if i == 0 {
+			first = out
+		} else if out != first {
+			t.Errorf("number %d answers %q, others %q", n, out, first)
+		}
 	}
 }

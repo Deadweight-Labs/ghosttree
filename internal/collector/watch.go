@@ -75,14 +75,14 @@ func SyncFile(path, harness string, up Uploader, st *State, machine string) erro
 	}
 	if ref.Zero() || fs.MetadataVersion < 1 {
 		if wait := st.backoffLeft(path); wait > 0 {
-			return fmt.Errorf("session registration of %s paused for another %s after the server named no usable session", path, wait.Round(time.Second))
+			return fmt.Errorf("%w: %s for another %s", errRegistrationPaused, path, wait.Round(time.Second))
 		}
 		var err error
 		ref, err = registerSession(path, harness, up, machine)
 		if err != nil {
 			if errors.Is(err, errNoSessionRef) {
+				// Der Aufrufer loggt den Fehler; hier nur der Backoff.
 				st.backoffFail(path)
-				log.Printf("register %s: %v", path, err)
 			}
 			return err
 		}
@@ -298,6 +298,18 @@ func registerSession(path, harness string, up Uploader, machine string) (store.S
 	return store.SessionRef{ID: id}, err
 }
 
+// errRegistrationPaused: die Registrierung wartet auf ihren Backoff. Kein Fehler,
+// den ein Aufrufer loggen sollte: sonst schriebe jedes fsnotify-Ereignis einer
+// Datei eine Zeile.
+var errRegistrationPaused = errors.New("session registration paused after the server named no usable session")
+
+// logSyncError loggt einen Fehler von SyncFile, außer dem stillen Backoff.
+func logSyncError(path string, err error) {
+	if err != nil && !errors.Is(err, errRegistrationPaused) {
+		log.Printf("sync %s: %v", path, err)
+	}
+}
+
 // errNoSessionRef: der Server hat weder Nummer noch Adresse genannt (etwa weil
 // ein älterer Collector die Adresse nicht versteht). Hochgeladen wird dann nie:
 // Nummer 0 gibt es nicht, jeder Versuch endete in 403.
@@ -326,9 +338,7 @@ func Sweep(roots map[string]string, up Uploader, st *State, machine string) erro
 			if err != nil || d.IsDir() || !strings.HasSuffix(p, ".jsonl") {
 				return nil
 			}
-			if err := SyncFile(p, harness, up, st, machine); err != nil {
-				log.Printf("sync %s: %v", p, err)
-			}
+			logSyncError(p, SyncFile(p, harness, up, st, machine))
 			return nil
 		})
 		if err != nil && !os.IsNotExist(err) {
@@ -386,9 +396,7 @@ func Watch(roots map[string]string, up Uploader, st *State, machine string, inte
 			if ev.Op&(fsnotify.Write|fsnotify.Create) == 0 {
 				continue
 			}
-			if err := SyncFile(ev.Name, harnessOf(ev.Name), up, st, machine); err != nil {
-				log.Printf("sync %s: %v", ev.Name, err)
-			}
+			logSyncError(ev.Name, SyncFile(ev.Name, harnessOf(ev.Name), up, st, machine))
 		case err, ok := <-w.Errors:
 			if !ok {
 				return nil

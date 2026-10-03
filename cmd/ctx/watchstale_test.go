@@ -133,3 +133,69 @@ func TestInstallLeavesAHandStartedWatchAlone(t *testing.T) {
 func init() {
 	systemctlUser = func(args ...string) error { return os.ErrPermission }
 }
+
+func init() {
+	watchUnitState = func() unitState { return unitState{} }
+}
+
+func mockUnit(t *testing.T, u unitState) {
+	t.Helper()
+	old := watchUnitState
+	watchUnitState = func() unitState { return u }
+	t.Cleanup(func() { watchUnitState = old })
+}
+
+func TestParseUnitShow(t *testing.T) {
+	u := parseUnitShow("MainPID=4242\nActiveState=active\nExecStart={ path=/home/x/.local/bin/ctx ; argv[]=/home/x/.local/bin/ctx watch ; ignore_errors=no }\n")
+	if !u.Active || u.MainPID != 4242 || u.ExecPath != "/home/x/.local/bin/ctx" {
+		t.Fatalf("u = %+v", u)
+	}
+}
+
+// Das ctx auf dem PATH ist nicht maßgeblich, sondern das, was die Unit startet.
+func TestDoctorComparesWithTheUnitsExecStartNotThePath(t *testing.T) {
+	installedBinary(t) // a different ctx on PATH
+	unitBin := filepath.Join(t.TempDir(), "unit-ctx")
+	if err := os.WriteFile(unitBin, []byte("unit"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pid := fakeWatch(t, unitBin)
+	mockUnit(t, unitState{Active: true, MainPID: pid, ExecPath: unitBin})
+	c, ok := watchBinaryCheck()
+	if !ok || !c.OK {
+		t.Fatalf("false warning against the PATH ctx: %+v ok=%v", c, ok)
+	}
+}
+
+// Die pid-Datei nennt einen Prozess, der nicht mehr der Watch ist; die Unit läuft
+// mit einer anderen pid und dem richtigen Binary: keine Warnung.
+func TestDoctorIgnoresAStalePidFileWhileTheUnitRuns(t *testing.T) {
+	bin := installedBinary(t)
+	fakeWatch(t, "/usr/bin/something (deleted)") // pid file points at an unrelated process
+	proc := procRoot
+	unitPID := os.Getpid() + 100000
+	if err := os.MkdirAll(filepath.Join(proc, strconv.Itoa(unitPID)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(bin, filepath.Join(proc, strconv.Itoa(unitPID), "exe")); err != nil {
+		t.Fatal(err)
+	}
+	mockUnit(t, unitState{Active: true, MainPID: unitPID, ExecPath: bin})
+	c, ok := watchBinaryCheck()
+	if !ok || !c.OK || !strings.Contains(c.Detail, strconv.Itoa(unitPID)) {
+		t.Fatalf("check = %+v ok=%v", c, ok)
+	}
+}
+
+// Ohne Unit: ein Prozess aus der pid-Datei, der kein "watch" ist (wiederverwendete
+// pid), gilt nicht als Collector.
+func TestDoctorIgnoresAPidFileProcessThatIsNotAWatch(t *testing.T) {
+	installedBinary(t)
+	pid := fakeWatch(t, "/usr/bin/other (deleted)")
+	if err := os.WriteFile(filepath.Join(procRoot, strconv.Itoa(pid), "cmdline"), []byte("/usr/bin/other\x00--x\x00"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := watchBinaryCheck(); ok {
+		t.Fatal("a reused pid was taken for the watch")
+	}
+}

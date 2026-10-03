@@ -1,7 +1,9 @@
 package collector
 
 import (
+	"bytes"
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -230,6 +232,26 @@ func TestCollectorNeverUploadsToSessionZero(t *testing.T) {
 	SyncFile(fp, "claude-code", up, st, "m")
 	if up.upserts != 2 || len(up.appends) != 0 {
 		t.Errorf("after backoff: upserts=%d appends=%v", up.upserts, up.appends)
+	}
+}
+
+func TestBackoffDoesNotLogPerEvent(t *testing.T) {
+	dir := t.TempDir()
+	fp := filepath.Join(dir, "s.jsonl")
+	writeLines(t, fp, 2, "hi")
+	now := time.Unix(1000, 0)
+	backoffNow = func() time.Time { return now }
+	defer func() { backoffNow = time.Now }()
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+	up := &zeroUp{}
+	st := newTestState(dir)
+	for i := 0; i < 5; i++ {
+		logSyncError(fp, SyncFile(fp, "claude-code", up, st, "m"))
+	}
+	if n := strings.Count(buf.String(), "\n"); n != 1 {
+		t.Errorf("want one log line for five events during backoff, got %d: %q", n, buf.String())
 	}
 }
 

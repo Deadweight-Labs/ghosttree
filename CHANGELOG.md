@@ -15,6 +15,16 @@ Versioning, with pre-1.0 compatibility rules described in
   never uploads to session 0 and retries the registration with a backoff,
   `ctx doctor` warns when the running watch process uses a replaced or different ctx
   binary, and `ctx install` restarts the `ghosttree-watch` user unit in that case.
+  The comparison uses the binary the unit starts (`ExecStart`, else
+  `~/.local/bin/ctx`) and the unit's own process, not the `ctx` on `PATH` or a
+  stale pid file. A member's older collector can upload to its own session in any
+  project (empty, unclaimed or claimed by someone else) with the number it was
+  given; numbers of other people's sessions still answer exactly like unknown
+  ones. While a registration is paused the collector no longer logs one line per
+  file event. Development builds from before this change that understand session
+  addresses but do not ask for them (between the sessions view and the Requests
+  redesign) are refused with `409 collector_too_old` as guests; update ctx for
+  guest accounts.
 - Changed: the Requests pages are redesigned in the Clay look and can edit in
   the browser. The list searches and filters by state, kind, priority and
   project, shows each request with its number, kind, priority, criteria progress, age and the

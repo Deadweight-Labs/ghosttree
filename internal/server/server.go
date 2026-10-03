@@ -358,8 +358,14 @@ func (a *api) sessionPathID(r *http.Request) (int64, bool) {
 		// Die Nummer gilt nur für den, der sie kennen darf. Für einen Gast ist
 		// jede Nummer unbekannt, auch die einer Session, die er lesen darf:
 		// sonst zählte er sie durch (#2447).
-		if sess, err := a.st.SessionByID(n); err == nil && !a.access(r).SeesSessionNumbers(sess.Scope.Project) {
-			return -1, true
+		// Ausnahme: die eigene Session, deren Nummer der Server beim Anlegen
+		// genannt hat (GetsOwnSessionNumber); sonst liefe ein älterer Collector
+		// von Mitgliedern in Projekten ohne Rolle in 403 session_owned.
+		if sess, err := a.st.SessionByID(n); err == nil {
+			pa := a.access(r)
+			if !pa.SeesSessionNumbers(sess.Scope.Project) && !(pa.OwnsSession(sess) && pa.GetsOwnSessionNumber(sess.Scope.Project)) {
+				return -1, true
+			}
 		}
 		return n, true
 	}
