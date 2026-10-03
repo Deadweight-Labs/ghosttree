@@ -6,6 +6,12 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Changed: the web pages for knowledge and review are redesigned in the Clay
+  look. The knowledge list filters by kind and status as well as search and
+  project, each entry has a detail page with its history, and review cards show
+  the evidence with links to readable sessions. Review actions work in the
+  browser: approve, reject with undo, and edit title, text and kind, each with a
+  visible result. Rights are checked on the server per entry, as for the API.
 - Fixed: guests no longer learn that hidden sessions exist through knowledge
   or by ending work. Knowledge from distillation points at a session by its
   address, and only when the guest may read that session; otherwise the
