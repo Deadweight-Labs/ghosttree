@@ -578,8 +578,8 @@ func TestOrgPageGuestLinksNeedEnforcementAndShowAbsoluteURL(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp, _ := alice.Get(base + "/ui/orgs")
-	if page := body(t, resp); !strings.Contains(page, "Guest links are not available") || strings.Contains(page, `<option value="guest">`) {
-		t.Fatalf("page does not explain the missing guest links: %s", page)
+	if page := body(t, resp); strings.Contains(page, `<option value="guest">`) || strings.Contains(page, "GHOSTTREE_ENFORCE_ACCESS") {
+		t.Fatalf("guest option offered without enforcement: %s", page)
 	}
 	resp = postOrg(t, alice, base, "/ui/orgs/invite", url.Values{"org": {org.Slug}, "project": {joinProject}, "project_role": {"guest"}})
 	if page := body(t, resp); resp.StatusCode != http.StatusConflict || !strings.Contains(page, "GHOSTTREE_ENFORCE_ACCESS") {
@@ -588,10 +588,10 @@ func TestOrgPageGuestLinksNeedEnforcementAndShowAbsoluteURL(t *testing.T) {
 	st.SetAccessMode(store.AccessMode{Enforce: true})
 	resp = postOrg(t, alice, base, "/ui/orgs/invite", url.Values{"org": {org.Slug}, "project": {joinProject}, "project_role": {"guest"}})
 	page := body(t, resp)
-	if resp.StatusCode != http.StatusOK || !regexp.MustCompile(`<code>/join/[0-9a-f]{64}</code>`).MatchString(page) {
+	if resp.StatusCode != http.StatusOK || !regexp.MustCompile(`value="/join/[0-9a-f]{64}"`).MatchString(page) {
 		t.Fatalf("link: %d %s", resp.StatusCode, page)
 	}
-	if !strings.Contains(page, `<td data-label="Role">guest</td><td data-label="Project">`+joinProject+"</td>") {
+	if !strings.Contains(page, `<span class="ov-name">`+joinProject+`</span><span class="ov-meta ad-parts"><span>Pending</span><span>guest</span>`) {
 		t.Fatalf("the invitation list does not show project and role: %s", page)
 	}
 }

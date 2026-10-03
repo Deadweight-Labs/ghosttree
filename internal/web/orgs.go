@@ -14,7 +14,8 @@ import (
 // orgMemberRow ist eine Mitgliederzeile mit der Frage, ob es der Betrachter ist.
 type orgMemberRow struct {
 	store.OrgMemberInfo
-	Self bool
+	Self    bool
+	Initial string
 }
 
 // projectRoleRow ist ein Organisationsmitglied mit seiner Rolle in einem Projekt.
@@ -56,7 +57,7 @@ type orgsView struct {
 // Wer in mehreren ist, wählt über ?org=<slug>; sonst die Standard-Organisation.
 func (a *app) orgsPage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	a.renderOrgs(w, r, http.StatusOK, orgsView{Notice: r.URL.Query().Get("notice")}, r.URL.Query().Get("org"), "")
+	a.renderOrgs(w, r, http.StatusOK, orgsView{Notice: orgNotice(r.URL.Query().Get("notice"))}, r.URL.Query().Get("org"), "")
 }
 
 func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v orgsView, ref, errMsg string) {
@@ -64,7 +65,7 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 	me := browserPrincipal(r).ID
 	orgs, err := a.store.ListOrgs(me)
 	if err != nil {
-		http.Error(w, "could not load organizations", http.StatusInternalServerError)
+		http.Error(w, msg("adm.load_failed"), http.StatusInternalServerError)
 		return
 	}
 	v.Orgs = orgs
@@ -82,7 +83,7 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 		v.GuestLinks = a.store.AccessEnforced()
 		for _, m := range members {
 			m.Account = store.NormalizeAccountName(m.Account)
-			v.Members = append(v.Members, orgMemberRow{OrgMemberInfo: m, Self: m.AccountID == me})
+			v.Members = append(v.Members, orgMemberRow{OrgMemberInfo: m, Self: m.AccountID == me, Initial: initialOf(m.Account)})
 		}
 		var orgAll []store.OrgMemberInfo
 		v.Projects, _ = a.store.ListProjects(me, v.Selected.ID)
@@ -135,48 +136,48 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 	if status != http.StatusOK {
 		w.WriteHeader(status)
 	}
-	a.renderBrowser(w, r, "orgs", pageData{Title: "Organizations", Error: errMsg, Orgs: v})
+	a.renderBrowser(w, r, "orgs", pageData{Title: msg("adm.org.title"), Error: errMsg, Orgs: v})
 }
 
 // orgError übersetzt Store-Fehler in eine Meldung und einen Statuscode.
 func orgError(err error) (int, string) {
 	switch {
 	case errors.Is(err, store.ErrNotOrgOwner):
-		return http.StatusForbidden, "Only an organization owner can do that."
+		return http.StatusForbidden, msg("adm.err.owner_only")
 	case errors.Is(err, store.ErrOrgNotFound), errors.Is(err, store.ErrNotOrgMember):
-		return http.StatusNotFound, "Organization not found."
+		return http.StatusNotFound, msg("adm.err.org")
 	case errors.Is(err, store.ErrLastOrgOwner):
-		return http.StatusConflict, "An organization needs at least one owner."
+		return http.StatusConflict, msg("adm.err.last_owner")
 	case errors.Is(err, store.ErrNotGrantor):
-		return http.StatusForbidden, "Only a project owner or lead can change roles."
+		return http.StatusForbidden, msg("adm.err.grantor")
 	case errors.Is(err, store.ErrRoleForbidden):
-		return http.StatusForbidden, "You may not give that role to that account."
+		return http.StatusForbidden, msg("adm.err.role")
 	case errors.Is(err, store.ErrSelfPromotion):
-		return http.StatusForbidden, "You cannot raise your own role."
+		return http.StatusForbidden, msg("adm.err.self")
 	case errors.Is(err, store.ErrLastProjectOwner):
-		return http.StatusConflict, "A project needs at least one owner."
+		return http.StatusConflict, msg("adm.err.last_pro_owner")
 	case errors.Is(err, store.ErrImplicitOwner):
-		return http.StatusConflict, "Organization owners are implicit project owners; change their organization role instead."
+		return http.StatusConflict, msg("adm.err.implicit")
 	case errors.Is(err, store.ErrNoProjectRole):
-		return http.StatusNotFound, "That account holds no role in this project."
+		return http.StatusNotFound, msg("adm.err.no_role")
 	case errors.Is(err, store.ErrProjectNotFound):
-		return http.StatusNotFound, "Project not found."
+		return http.StatusNotFound, msg("adm.err.project")
 	case errors.Is(err, store.ErrInvalidInput):
-		return http.StatusBadRequest, err.Error()
+		return http.StatusBadRequest, msg("adm.err.input")
 	case errors.Is(err, store.ErrGuestLinkNeedsEnforcement):
-		return http.StatusConflict, "Guest links are not available: this server does not enforce project visibility (GHOSTTREE_ENFORCE_ACCESS=1 is not set), so a guest would see more than the invitation promises. Create a member link, or ask the operator to turn enforcement on."
+		return http.StatusConflict, msg("adm.err.guest_link")
 	case errors.Is(err, store.ErrTooManyInvites):
-		return http.StatusConflict, "Too many pending invitations; revoke some first."
+		return http.StatusConflict, msg("adm.err.too_many")
 	case errors.Is(err, store.ErrCodeInvalid):
-		return http.StatusBadRequest, "That code is invalid, expired or already used."
+		return http.StatusBadRequest, msg("adm.err.code")
 	case errors.Is(err, store.ErrInvitationEmail):
-		return http.StatusForbidden, "That invitation is bound to another email address."
+		return http.StatusForbidden, msg("adm.err.email")
 	case errors.Is(err, store.ErrAlreadyMember):
-		return http.StatusConflict, "You are already a member of that organization."
+		return http.StatusConflict, msg("adm.err.member")
 	case errors.Is(err, store.ErrTooManyAttempts):
-		return http.StatusTooManyRequests, "Too many wrong codes. Try again in a few minutes."
+		return http.StatusTooManyRequests, msg("adm.err.attempts")
 	}
-	return http.StatusInternalServerError, "Something went wrong."
+	return http.StatusInternalServerError, msg("adm.err.generic")
 }
 
 func (a *app) orgFailure(w http.ResponseWriter, r *http.Request, err error) {
@@ -192,6 +193,28 @@ func (a *app) formOrg(r *http.Request) (store.Org, error) {
 		return store.Org{}, store.ErrOrgNotFound
 	}
 	return o, nil
+}
+
+// orgNotice übersetzt den Schlüssel aus ?notice= in den Text; ein unbekannter
+// Schlüssel zeigt nichts, so kann ein Link keinen eigenen Text einschleusen.
+func orgNotice(key string) string {
+	switch key {
+	case "revoked":
+		return msg("adm.notice.revoked")
+	case "role":
+		return msg("adm.notice.role")
+	case "removed":
+		return msg("adm.notice.removed")
+	case "default":
+		return msg("adm.notice.default")
+	case "project":
+		return msg("adm.notice.project")
+	case "moved":
+		return msg("adm.notice.moved")
+	case "joined":
+		return msg("adm.notice.joined")
+	}
+	return ""
 }
 
 func orgRedirect(w http.ResponseWriter, r *http.Request, slug, notice string) {
@@ -230,7 +253,7 @@ func (a *app) orgInvite(w http.ResponseWriter, r *http.Request) {
 	}
 	// Der Code erscheint nur in dieser Antwort, nicht in einer URL oder einem
 	// Redirect.
-	a.renderOrgs(w, r, http.StatusOK, orgsView{NewCode: code, NewExpiry: inv.ExpiresAt, NewLink: link, NewURL: a.joinURL(code)}, o.Slug, "")
+	a.renderOrgs(w, r, http.StatusOK, orgsView{NewCode: code, NewExpiry: inv.ExpiresAt, NewLink: link, NewURL: a.inviteURL(code, link)}, o.Slug, "")
 }
 
 func (a *app) orgInviteRevoke(w http.ResponseWriter, r *http.Request) {
@@ -247,7 +270,7 @@ func (a *app) orgInviteRevoke(w http.ResponseWriter, r *http.Request) {
 		a.orgFailure(w, r, err)
 		return
 	}
-	orgRedirect(w, r, o.Slug, "Invitation revoked.")
+	orgRedirect(w, r, o.Slug, "revoked")
 }
 
 func (a *app) orgMemberRole(w http.ResponseWriter, r *http.Request) {
@@ -259,7 +282,7 @@ func (a *app) orgMemberRole(w http.ResponseWriter, r *http.Request) {
 		a.orgFailure(w, r, err)
 		return
 	}
-	orgRedirect(w, r, o.Slug, "Role updated.")
+	orgRedirect(w, r, o.Slug, "role")
 }
 
 func (a *app) orgMemberRemove(w http.ResponseWriter, r *http.Request) {
@@ -275,15 +298,14 @@ func (a *app) orgMemberRemove(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/ui/orgs", http.StatusSeeOther)
 		return
 	}
-	orgRedirect(w, r, o.Slug, "Member removed.")
+	orgRedirect(w, r, o.Slug, "removed")
 }
 
 func (a *app) orgProjectMove(w http.ResponseWriter, r *http.Request) {
 	o, err := a.formOrg(r)
 	if err == nil {
-		var p store.Project
-		if p, err = a.store.MoveProject(browserPrincipal(r).ID, r.FormValue("remote"), r.FormValue("to")); err == nil {
-			orgRedirect(w, r, o.Slug, p.Remote+" moved to "+p.Org+".")
+		if _, err = a.store.MoveProject(browserPrincipal(r).ID, r.FormValue("remote"), r.FormValue("to")); err == nil {
+			orgRedirect(w, r, o.Slug, "moved")
 			return
 		}
 	}
@@ -303,7 +325,7 @@ func (a *app) orgAccept(w http.ResponseWriter, r *http.Request) {
 		a.orgFailure(w, r, err)
 		return
 	}
-	orgRedirect(w, r, o.Slug, "You joined "+o.Name+".")
+	orgRedirect(w, r, o.Slug, "joined")
 }
 
 func (a *app) orgDefault(w http.ResponseWriter, r *http.Request) {
@@ -315,7 +337,7 @@ func (a *app) orgDefault(w http.ResponseWriter, r *http.Request) {
 		a.orgFailure(w, r, err)
 		return
 	}
-	orgRedirect(w, r, o.Slug, "Default organization set.")
+	orgRedirect(w, r, o.Slug, "default")
 }
 
 // orgProjectRole setzt oder entfernt (role=none) die Projektrolle eines
@@ -338,7 +360,7 @@ func (a *app) orgProjectRole(w http.ResponseWriter, r *http.Request) {
 		a.orgFailure(w, r, err)
 		return
 	}
-	orgRedirect(w, r, o.Slug, "Project role updated.")
+	orgRedirect(w, r, o.Slug, "project")
 }
 
 // grantable nennt die wählbaren Rollen, aber nur in einer interaktiven Sitzung:
@@ -350,5 +372,22 @@ func (a *app) grantable(r *http.Request, actor, remote, target string) []string 
 	return a.store.GrantableRoles(actor, remote, target)
 }
 
+// inviteURL ist der Link zu einem Einladungscode: die Beitrittsseite für ein
+// Projekt, sonst die Anmeldung mit Code.
+func (a *app) inviteURL(code string, project bool) string {
+	if project {
+		return a.joinURL(code)
+	}
+	return a.publicOrigin + "/ui/login/code?code=" + url.QueryEscape(code)
+}
+
 // joinURL ist der Einladungslink; mit gesetzter GHOSTTREE_PUBLIC_URL absolut.
 func (a *app) joinURL(code string) string { return a.publicOrigin + "/join/" + code }
+
+// initialOf ist der Anfangsbuchstabe für den runden Avatar.
+func initialOf(name string) string {
+	for _, r := range name {
+		return strings.ToUpper(string(r))
+	}
+	return "?"
+}

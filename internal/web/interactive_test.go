@@ -37,7 +37,7 @@ func TestPastedTokenSessionIsReadOnly(t *testing.T) {
 	// Lesen geht, Formulare fehlen.
 	resp, _ := pasted.Get(srv.URL + "/ui/orgs?org=alpha")
 	page := body(t, resp)
-	if resp.StatusCode != 200 || !strings.Contains(page, "read-only") || !strings.Contains(page, "anna") || !strings.Contains(page, webRoleProject) {
+	if resp.StatusCode != 200 || !strings.Contains(page, "Read-only") || !strings.Contains(page, "anna") || !strings.Contains(page, webRoleProject) {
 		t.Fatalf("pasted-token org page: %d %s", resp.StatusCode, page)
 	}
 	for _, form := range []string{"/ui/orgs/project/role", "/ui/orgs/invite", "/ui/orgs/member/role", "/ui/orgs/member/remove", "/ui/orgs/project/move"} {
@@ -75,7 +75,7 @@ func TestPastedTokenSessionIsReadOnly(t *testing.T) {
 		}
 		resp := sameOriginPostForm(t, pasted, srv.URL+path, f)
 		page := body(t, resp)
-		if resp.StatusCode != http.StatusForbidden || !strings.Contains(page, "Anmeldung per Login") || !strings.Contains(page, "login-link") {
+		if resp.StatusCode != http.StatusForbidden || !strings.Contains(page, "read-only session") || !strings.Contains(page, "login-link") {
 			t.Fatalf("%s with a pasted token: %d %s", path, resp.StatusCode, page)
 		}
 	}
