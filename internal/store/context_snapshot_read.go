@@ -10,6 +10,12 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/snapshot"
 )
 
+// snapshotEntryVisible lässt Wissen der Maschinen-Achse nie aus einem Snapshot
+// heraus: neue Snapshots nehmen es gar nicht erst auf, Altbestand (Log-Modus,
+// vor der Regel) wird beim Lesen herausgefiltert. Maschinen-Wissen gehört nur
+// dem Besitzer der Maschine, ein Snapshot gehört dem ganzen Projekt.
+const snapshotEntryVisible = ` AND NOT (domain='knowledge' AND COALESCE(json_extract(CAST(payload AS TEXT),'$.machine'),'')<>'')`
+
 const snapshotHeadColumns = `id,project,name,schema_version,state,content_digest,git_object_format,git_commit,git_ref,git_branch,git_dirty,git_worktree_fingerprint_version,git_worktree_fingerprint,allow_dirty_used,git_metadata_source,message,actor_id,actor_label,session_ref,created_at,entry_count,payload_bytes_total,counts_json`
 
 func (s *Store) ListContextSnapshots(ctx context.Context, filter snapshot.ListFilter) (snapshot.SnapshotPage, error) {
@@ -77,7 +83,7 @@ func (s *Store) ContextSnapshotEntries(ctx context.Context, project, name string
 		return snapshot.EntryPage{}, err
 	}
 	if filter.Key != "" {
-		entry, err := scanSnapshotEntry(s.db.QueryRowContext(ctx, `SELECT domain,entry_key,payload,payload_digest,payload_size FROM context_snapshot_entries WHERE snapshot_id=? AND domain=? AND entry_key=?`, snapshotID, filter.Domain, filter.Key))
+		entry, err := scanSnapshotEntry(s.db.QueryRowContext(ctx, `SELECT domain,entry_key,payload,payload_digest,payload_size FROM context_snapshot_entries WHERE snapshot_id=? AND domain=? AND entry_key=?`+snapshotEntryVisible, snapshotID, filter.Domain, filter.Key))
 		if errors.Is(err, sql.ErrNoRows) {
 			return snapshot.EntryPage{}, &snapshot.RuleError{Code: "snapshot_entry_not_found"}
 		}
@@ -99,7 +105,7 @@ func (s *Store) ContextSnapshotEntries(ctx context.Context, project, name string
 			return snapshot.EntryPage{}, &snapshot.RuleError{Code: "snapshot_invalid_cursor"}
 		}
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT domain,entry_key,payload_digest,payload_size FROM context_snapshot_entries WHERE snapshot_id=? AND (?='' OR domain=?) AND (?='' OR domain>? OR (domain=? AND entry_key>?)) ORDER BY domain,entry_key LIMIT ?`, snapshotID, filter.Domain, filter.Domain, startDomain, startDomain, startDomain, startKey, limit+1)
+	rows, err := s.db.QueryContext(ctx, `SELECT domain,entry_key,payload_digest,payload_size FROM context_snapshot_entries WHERE snapshot_id=? AND (?='' OR domain=?) AND (?='' OR domain>? OR (domain=? AND entry_key>?))`+snapshotEntryVisible+` ORDER BY domain,entry_key LIMIT ?`, snapshotID, filter.Domain, filter.Domain, startDomain, startDomain, startDomain, startKey, limit+1)
 	if err != nil {
 		return snapshot.EntryPage{}, err
 	}

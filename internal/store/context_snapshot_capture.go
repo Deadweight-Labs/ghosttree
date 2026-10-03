@@ -277,7 +277,7 @@ func actor(id sql.NullInt64, label string) snapshotActorV1 {
 }
 
 func captureKnowledge(ctx context.Context, q snapshotQueryer, project string, collector *snapshotCollector) error {
-	rows, err := q.QueryContext(ctx, `SELECT k.id,k.type,k.title,k.body,k.project,k.branch,k.machine,k.confidence,k.status,k.origin,k.superseded_by,k.person,p.id,k.confirmed_by,cp.id,k.last_modified_by,mp.id,k.harness,k.session_ref,k.observed_at,k.regression_state,k.regression_test,k.created_at,k.updated_at FROM knowledge k LEFT JOIN persons p ON p.name=k.person LEFT JOIN persons cp ON cp.name=k.confirmed_by LEFT JOIN persons mp ON mp.name=k.last_modified_by WHERE k.project=? ORDER BY k.id`, project)
+	rows, err := q.QueryContext(ctx, `SELECT k.id,k.type,k.title,k.body,k.project,k.branch,k.machine,k.confidence,k.status,k.origin,k.superseded_by,k.person,p.id,k.confirmed_by,cp.id,k.last_modified_by,mp.id,k.harness,k.session_ref,k.observed_at,k.regression_state,k.regression_test,k.created_at,k.updated_at FROM knowledge k LEFT JOIN persons p ON p.name=k.person LEFT JOIN persons cp ON cp.name=k.confirmed_by LEFT JOIN persons mp ON mp.name=k.last_modified_by WHERE k.project=? AND k.machine='' ORDER BY k.id`, project)
 	if err != nil {
 		return err
 	}
