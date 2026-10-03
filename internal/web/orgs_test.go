@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
@@ -276,5 +277,86 @@ func TestOrgPageListsOnlyProjectsWithARole(t *testing.T) {
 	page = get(alice)
 	if !strings.Contains(page, "github.com/x/shared") || !strings.Contains(page, "github.com/x/secret") {
 		t.Fatalf("owner must see every project: %s", page)
+	}
+}
+
+func uploadWebSession(t *testing.T, st *store.Store, account int64, ext, project string) {
+	t.Helper()
+	if _, err := st.UpsertSession(store.Session{Harness: "claude", ExternalID: ext, AccountID: account, Scope: scope.Axes{Project: project, Machine: "m"}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOrgInviteOffersOwnProjectsAsChoiceAndClaimsOnlyWhatTheOwnerUploaded(t *testing.T) {
+	base, st, alice, anna, org := orgWeb(t)
+	code, _, _ := st.CreateInvitation("person:1", org.ID, "", store.OrgMember, 0)
+	if _, err := st.AcceptInvitation("person:2", code); err != nil {
+		t.Fatal(err)
+	}
+	uploadWebSession(t, st, 1, "a", "github.com/x/mine")
+	uploadWebSession(t, st, 2, "b", "github.com/x/annas")
+	get := func(c *http.Client) string {
+		resp, _ := c.Get(base + "/ui/orgs?org=alpha")
+		return body(t, resp)
+	}
+	page := get(alice)
+	if strings.Contains(page, `name="project" maxlength`) || !strings.Contains(page, "Add to organization and invite") ||
+		!strings.Contains(page, `<option value="github.com/x/mine">`) || strings.Contains(page, "github.com/x/annas") {
+		t.Fatalf("owner page: %s", page)
+	}
+	// Ein Mitglied sieht weder Formular noch fremde oder eigene unbeanspruchte Projekte.
+	if page := get(anna); strings.Contains(page, "github.com/x/annas") || strings.Contains(page, "github.com/x/mine") || strings.Contains(page, "Add to organization") {
+		t.Fatalf("member page lists unclaimed projects: %s", page)
+	}
+	// Anna darf auch nicht per Hand-POST claimen.
+	if resp := postOrg(t, anna, base, "/ui/orgs/invite", url.Values{"org": {"alpha"}, "project": {"github.com/x/annas"}, "claim": {"1"}, "project_role": {"member"}}); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("member claim: %d", resp.StatusCode)
+	}
+	if _, ok := st.ProjectByRemote("github.com/x/annas"); ok {
+		t.Fatal("member claimed a project")
+	}
+	// Der Owner kann die fremde Remote nicht übernehmen, nur die eigene.
+	if resp := postOrg(t, alice, base, "/ui/orgs/invite", url.Values{"org": {"alpha"}, "project": {"github.com/x/annas"}, "claim": {"1"}, "project_role": {"member"}}); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("foreign claim: %d", resp.StatusCode)
+	}
+	if _, ok := st.ProjectByRemote("github.com/x/annas"); ok {
+		t.Fatal("owner claimed a foreign upload")
+	}
+	// Ein Gast-Link ohne Durchsetzung scheitert, ohne zu übernehmen.
+	if resp := postOrg(t, alice, base, "/ui/orgs/invite", url.Values{"org": {"alpha"}, "project": {"github.com/x/mine"}, "claim": {"1"}, "project_role": {"guest"}}); resp.StatusCode == http.StatusOK {
+		t.Fatalf("guest link: %d", resp.StatusCode)
+	}
+	if _, ok := st.ProjectByRemote("github.com/x/mine"); ok {
+		t.Fatal("a refused link left a claim behind")
+	}
+	resp := postOrg(t, alice, base, "/ui/orgs/invite", url.Values{"org": {"alpha"}, "project": {"github.com/x/mine"}, "claim": {"1"}, "project_role": {"member"}, "days": {"7"}})
+	page = body(t, resp)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(page, "/join/") || !strings.Contains(page, "shown only now") {
+		t.Fatalf("claim and invite: %d %s", resp.StatusCode, page)
+	}
+	if p, ok := st.ProjectByRemote("github.com/x/mine"); !ok || p.OrgID != org.ID {
+		t.Fatalf("project not in the org: %+v", p)
+	}
+	page = get(alice)
+	if strings.Contains(page, "Add to organization") || !strings.Contains(page, "github.com/x/mine") {
+		t.Fatalf("claimed project is still offered for claiming: %s", page)
+	}
+}
+
+func TestOrgPageShowsAcceptedInvitationsAndEmptyProjectAction(t *testing.T) {
+	base, st, alice, anna, org := orgWeb(t)
+	resp, _ := alice.Get(base + "/ui/orgs?org=alpha")
+	page := body(t, resp)
+	if !strings.Contains(page, "No projects yet") || !strings.Contains(page, `href="/ui/overview?connect=1"`) || strings.Contains(page, `name="project" maxlength`) {
+		t.Fatalf("empty state: %s", page)
+	}
+	code, _, _ := st.CreateInvitation("person:1", org.ID, "", store.OrgMember, 0)
+	if _, err := st.AcceptInvitation("person:2", code); err != nil {
+		t.Fatal(err)
+	}
+	_ = anna
+	resp, _ = alice.Get(base + "/ui/orgs?org=alpha")
+	if page := body(t, resp); !strings.Contains(page, "Accepted by anna") {
+		t.Fatalf("accepted invitation vanished: %s", page)
 	}
 }

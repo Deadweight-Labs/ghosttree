@@ -29,6 +29,7 @@ import (
 
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
+	"github.com/Deadweight-Labs/ghosttree/internal/installer"
 )
 
 // Austauschbar für Tests: Terminal, Browser, Erkennung und Installation.
@@ -488,18 +489,27 @@ func cmdJoin(args []string, stdout io.Writer) int {
 		return abort(fmt.Sprintf("save config: %v", err))
 	}
 	fmt.Fprintf(stdout, "Wrote %s\n", config.Path())
+	home, _ := os.UserHomeDir()
+	var setUp []string
 	for _, h := range joinDetect() {
 		if ctx.Err() != nil {
 			fmt.Fprintln(stdout, "Interrupted. Connected, but not installed for your agents; run ctx install claude|codex.")
 			return 1
 		}
-		if tty != nil && !confirm(ctx, tty, fmt.Sprintf("Install ghosttree for %s? [Y/n] ", h), true) {
-			continue
+		labels := installer.SetupLabels(h, home)
+		if tty != nil {
+			printSetupList(stdout, "Will set up:", labels)
+			if !confirm(ctx, tty, fmt.Sprintf("Install ghosttree for %s? [Y/n] ", h), true) {
+				continue
+			}
 		}
 		if code := joinInstall([]string{h}, stdout); code != 0 {
 			fmt.Fprintf(stdout, "install %s failed (exit %d)\n", h, code)
+			continue
 		}
+		setUp = append(setUp, labels...)
 	}
+	printSetupList(stdout, "Set up:", setUp)
 	var st bytes.Buffer
 	cmdStatus(nil, &st)
 	for _, line := range strings.Split(strings.TrimSpace(st.String()), "\n") {
@@ -508,6 +518,17 @@ func cmdJoin(args []string, stdout io.Writer) int {
 		}
 	}
 	return 0
+}
+
+// printSetupList schreibt eine knappe Liste, je Zeile zwei, drei Wörter.
+func printSetupList(w io.Writer, title string, items []string) {
+	if len(items) == 0 {
+		return
+	}
+	fmt.Fprintln(w, title)
+	for _, it := range items {
+		fmt.Fprintf(w, "  %s\n", it)
+	}
 }
 
 // interruptedOr macht aus einem Abbruch des Kontexts die übliche Meldung.

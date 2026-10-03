@@ -6,6 +6,17 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Changed: inviting to a project no longer needs a typed project name. The
+  organization page offers a choice of the organization's projects, and for
+  organization owners also the projects they uploaded sessions to that belong to
+  no organization yet, with "Add to organization and invite". The server applies
+  the rule of `ctx project claim` (owner of the organization, a remote the owner
+  uploaded themselves) and lists no foreign project to anyone else. Project
+  invitations default to seven days, accepted invitations stay in the list as
+  "Accepted by name", and the roles of a project sit inside the project instead
+  of a second list. An invitation link is shown once, only its hash is stored.
+  `ctx join` lists what it sets up ("Claude hooks", "MCP server", "skills",
+  "CLAUDE.md section" and so on) before it asks and again afterwards.
 - Changed: the administration pages (organization with members, invitations,
   projects and project roles; devices and tokens; device approval) are redesigned
   in the Clay look and work on narrow screens. Times show as relative text with

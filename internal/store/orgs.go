@@ -106,6 +106,9 @@ type Invitation struct {
 	// gesetzt.
 	ProjectRemote string `json:"project,omitempty"`
 	ProjectRole   string `json:"project_role,omitempty"`
+	// AcceptedBy und AcceptedAt stehen nur bei einer angenommenen Einladung.
+	AcceptedBy string `json:"accepted_by,omitempty"`
+	AcceptedAt string `json:"accepted_at,omitempty"`
 }
 
 type queryer interface {
@@ -771,6 +774,44 @@ func (s *Store) MoveProject(actorPrincipal, remote, toOrgRef string) (Project, e
 	return moved, tx.Commit()
 }
 
+// ListClaimableProjects nennt die Remotes, die der Owner einer Organisation
+// dort ausdrücklich übernehmen kann: Remotes ohne Projektzeile, zu denen er
+// selbst Sessions hochgeladen hat. Fremde Sessions zählen nicht, so verrät die
+// Liste nichts über Projekte anderer (#2447); übernehmen darf er mit
+// ClaimProject ohnehin jede Remote, die Liste ist die Teilmenge, die er kennt.
+// Wer nicht Owner der Organisation ist, bekommt ErrNotOrgOwner und keine Liste.
+func (s *Store) ListClaimableProjects(actorPrincipal string, orgID int64) ([]string, error) {
+	if s.reader != nil {
+		return s.reader.ListClaimableProjects(actorPrincipal, orgID)
+	}
+	actor, err := parsePersonPrincipalID(actorPrincipal)
+	if err != nil {
+		return nil, err
+	}
+	if orgRoleTx(s.db, orgID, actor) != OrgOwner {
+		return nil, ErrNotOrgOwner
+	}
+	rows, err := s.db.Query(`SELECT DISTINCT project FROM sessions
+		WHERE project != '' AND project NOT IN (SELECT remote FROM projects)
+		  AND (CASE WHEN account_id = 0 THEN ? ELSE account_id END) = ?
+		ORDER BY project LIMIT ?`, instanceOwnerID(s.db), actor, maxListRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var r string
+		if err := rows.Scan(&r); err != nil {
+			return nil, err
+		}
+		if _, err := normalizeRemote(r); err == nil {
+			out = append(out, r)
+		}
+	}
+	return out, rows.Err()
+}
+
 // ListProjects liefert die Projekte der Organisationen des Kontos. orgID 0
 // heißt: aller seiner Organisationen. Sichtbarkeit innerhalb eines Projekts
 // regelt dieser Aufruf nicht.
@@ -888,18 +929,20 @@ func (s *Store) CreateInvitation(actorPrincipal string, orgID int64, email, role
 }
 
 const invitationSelect = `SELECT i.id, i.org_id, i.role, i.email, p.name, i.created_at, i.expires_at, i.accepted_at, i.revoked_at,
-	COALESCE(pr.remote,''), i.project_role
-	FROM invitations i JOIN persons p ON p.id = i.invited_by LEFT JOIN projects pr ON pr.id = i.project_id`
+	COALESCE(pr.remote,''), i.project_role, COALESCE(ap.name,'')
+	FROM invitations i JOIN persons p ON p.id = i.invited_by LEFT JOIN projects pr ON pr.id = i.project_id
+	LEFT JOIN persons ap ON ap.id = i.accepted_by AND i.accepted_by != 0`
 
 func scanInvitation(r rowScanner) (Invitation, error) {
 	var inv Invitation
 	var accepted, revoked string
-	if err := r.Scan(&inv.ID, &inv.OrgID, &inv.Role, &inv.Email, &inv.InvitedBy, &inv.CreatedAt, &inv.ExpiresAt, &accepted, &revoked, &inv.ProjectRemote, &inv.ProjectRole); err != nil {
+	if err := r.Scan(&inv.ID, &inv.OrgID, &inv.Role, &inv.Email, &inv.InvitedBy, &inv.CreatedAt, &inv.ExpiresAt, &accepted, &revoked, &inv.ProjectRemote, &inv.ProjectRole, &inv.AcceptedBy); err != nil {
 		return Invitation{}, err
 	}
 	switch {
 	case accepted != "":
 		inv.Status = "accepted"
+		inv.AcceptedAt = accepted
 	case revoked != "":
 		inv.Status = "revoked"
 	case inv.ExpiresAt <= now():

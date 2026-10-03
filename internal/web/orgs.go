@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -44,6 +45,7 @@ type orgsView struct {
 	Members    []orgMemberRow
 	Invites    []store.Invitation
 	Projects   []store.Project
+	Claimable  []string // eigene, unbeanspruchte Remotes; nur für Owner
 	Roles      []projectRolesView
 	NewCode    string // einmalig angezeigter Einladungscode
 	NewExpiry  string
@@ -130,7 +132,11 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 			v.Roles = append(v.Roles, rv)
 		}
 		if v.Owner {
+			v.Claimable, _ = a.store.ListClaimableProjects(me, v.Selected.ID)
 			v.Invites, _ = a.store.ListInvitations(me, v.Selected.ID)
+			for i := range v.Invites {
+				v.Invites[i].AcceptedBy = store.NormalizeAccountName(v.Invites[i].AcceptedBy)
+			}
 		}
 	}
 	if status != http.StatusOK {
@@ -243,6 +249,12 @@ func (a *app) orgInvite(w http.ResponseWriter, r *http.Request) {
 	if project := strings.TrimSpace(r.FormValue("project")); project != "" {
 		// Ein Link vergibt nur member oder guest für dieses eine Projekt.
 		link = true
+		if r.FormValue("claim") == "1" {
+			if err = a.claimForInvite(browserPrincipal(r).ID, o, project, r.FormValue("project_role")); err != nil {
+				a.orgFailure(w, r, err)
+				return
+			}
+		}
 		code, inv, err = a.store.CreateProjectInvitation(browserPrincipal(r).ID, o.ID, project, r.FormValue("project_role"), ttl)
 	} else {
 		code, inv, err = a.store.CreateInvitation(browserPrincipal(r).ID, o.ID, r.FormValue("email"), r.FormValue("role"), ttl)
@@ -254,6 +266,30 @@ func (a *app) orgInvite(w http.ResponseWriter, r *http.Request) {
 	// Der Code erscheint nur in dieser Antwort, nicht in einer URL oder einem
 	// Redirect.
 	a.renderOrgs(w, r, http.StatusOK, orgsView{NewCode: code, NewExpiry: inv.ExpiresAt, NewLink: link, NewURL: a.inviteURL(r, code, link)}, o.Slug, "")
+}
+
+// claimForInvite übernimmt eine unbeanspruchte Remote in die Organisation, damit
+// sie eingeladen werden kann. Es gilt die Regel von `ctx project claim`: nur der
+// Owner der Organisation, und nur eine Remote, zu der er selbst Sessions
+// hochgeladen hat und die sonst niemandem gehört (ListClaimableProjects). Rolle
+// und Gast-Bedingung stehen vorher fest, damit ein abgelehnter Link keine
+// halbe Übernahme hinterlässt.
+func (a *app) claimForInvite(me string, o store.Org, project, role string) error {
+	if role != store.RoleMember && role != store.RoleGuest {
+		return store.ErrInvalidInput
+	}
+	if role == store.RoleGuest && !a.store.AccessEnforced() {
+		return store.ErrGuestLinkNeedsEnforcement
+	}
+	list, err := a.store.ListClaimableProjects(me, o.ID)
+	if err != nil {
+		return err
+	}
+	if !slices.Contains(list, project) {
+		return store.ErrProjectNotFound
+	}
+	_, err = a.store.ClaimProject(me, project, o.Slug)
+	return err
 }
 
 func (a *app) orgInviteRevoke(w http.ResponseWriter, r *http.Request) {

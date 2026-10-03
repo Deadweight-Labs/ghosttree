@@ -80,6 +80,7 @@ var writerMethodClasses = map[string]string{
 	"ListOrgMembers":                "read",
 	"ProjectByRemote":               "read",
 	"ListProjects":                  "read",
+	"ListClaimableProjects":         "read",
 	"ListInvitations":               "read",
 	"PreviewInvitation":             "read",
 	"OpenProjectInvitation":         "read",
