@@ -580,3 +580,22 @@ func TestHistoryNamesTheAuthorOfEachVersionAndSkipsStatusOnlySteps(t *testing.T)
 		t.Error("lars version or author missing")
 	}
 }
+
+func TestKnowledgeAndReviewListsAnswerAHiddenProjectLikeAnUnknownOne(t *testing.T) {
+	e := seedSessions(t)
+	knInsert(t, e.St, store.Knowledge{Title: "SECRET-KNOW", Scope: scope.Axes{Project: shellHiddenProject}, Confidence: "verified", Status: "active"})
+	for _, page := range []string{"/ui/knowledge", "/ui/review"} {
+		hiddenCode, hidden := e.get(t, e.Guest, page+"?project="+url.QueryEscape(shellHiddenProject))
+		unknownCode, unknown := e.get(t, e.Guest, page+"?project="+url.QueryEscape("github.com/nobody/unknown"))
+		if hiddenCode != http.StatusOK || unknownCode != http.StatusOK {
+			t.Errorf("%s: hidden / unknown project = %d / %d, want 200 for both", page, hiddenCode, unknownCode)
+		}
+		if strings.Contains(hidden, "SECRET") {
+			t.Errorf("%s: the hidden project's entry is listed", page)
+		}
+		if strings.ReplaceAll(hidden, shellHiddenProject, "P") != strings.ReplaceAll(unknown, "github.com/nobody/unknown", "P") &&
+			strings.ReplaceAll(hidden, url.QueryEscape(shellHiddenProject), "P") != strings.ReplaceAll(unknown, url.QueryEscape("github.com/nobody/unknown"), "P") {
+			t.Errorf("%s: a hidden project answers differently from an unknown one", page)
+		}
+	}
+}

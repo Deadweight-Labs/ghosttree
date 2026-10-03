@@ -9,7 +9,7 @@ import (
 )
 
 // p1Templates sind die Vorlagen, deren Texte vollständig im Katalog liegen.
-var p1Templates = []string{"templates/layout.html", "templates/login.html", "templates/overview.html", "templates/sessions.html", "templates/coord.html", "templates/knowledge.html", "templates/orgs.html", "templates/device.html"}
+var p1Templates = []string{"templates/layout.html", "templates/login.html", "templates/overview.html", "templates/sessions.html", "templates/coord.html", "templates/knowledge.html", "templates/requests.html", "templates/orgs.html", "templates/device.html"}
 
 var (
 	scriptRE   = regexp.MustCompile(`(?s)<script>.*?</script>`)
@@ -44,7 +44,7 @@ func TestP1TemplatesCarryNoTextOutsideTheCatalog(t *testing.T) {
 // isTechnicalValue erlaubt Werte, die kein Text für Menschen sind.
 func isTechnicalValue(v string) bool {
 	switch v {
-	case "message", "directive", "request", "question", "approval", "blocker", "handoff", "open", "resolved", "deferred", "withdraw":
+	case "message", "directive", "request", "question", "approval", "blocker", "handoff", "open", "resolved", "deferred", "withdraw", "met", "waived":
 		return true
 	}
 	return strings.HasPrefix(v, "/") || strings.HasPrefix(v, "1") || strings.HasPrefix(v, "REQ-") || v == "on" || v == "member" || v == "owner" || v == "guest" || v == "none" || v == "7" || v == "approve" || v == "deny" || v == "member\x00owner"
@@ -105,7 +105,7 @@ func TestMsgFormatsArgumentsAndNeverReturnsEmpty(t *testing.T) {
 	}
 }
 
-var goKeyRE = regexp.MustCompile(`"((?:shell|nav|role|login|auth|overview|ov|setup|age|sessions|coord|knowledge|adm|time|join|pair)\.[a-z0-9_.]+)"`)
+var goKeyRE = regexp.MustCompile(`"((?:shell|nav|role|login|auth|overview|ov|setup|age|sessions|coord|knowledge|requests|adm|time|join|pair)\.[a-z0-9_.]+)"`)
 
 // goMessageKeys sammelt die Schlüssel, die im Go-Code vorkommen (Navigation,
 // Rollen, Fehlertexte der Handler).
