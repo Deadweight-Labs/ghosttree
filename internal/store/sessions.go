@@ -531,23 +531,19 @@ func (s *Store) SearchSessionsVisible(q string, filter scope.Axes, excludeSessio
 	rows.Close()
 	if len(cids) > 0 {
 		snips := map[int64]string{}
-		srows, err := s.db.Query(`SELECT rowid, snippet(chunks_fts, 0, '', '', '…', 12) FROM chunks_fts
-			WHERE rowid IN (SELECT value FROM json_each(?)) AND chunks_fts MATCH ?`, idsJSONOf(cids), ftsQuery(q))
-		if err != nil {
-			return nil, err
-		}
-		for srows.Next() {
-			var id int64
+		// Je Treffer ein Punktzugriff über rowid; ein IN über json_each nutzte
+		// den FTS5-Index nicht und führte MATCH noch einmal über alles aus.
+		for _, cid := range cids {
+			if _, done := snips[cid]; done {
+				continue
+			}
 			var snip string
-			if err := srows.Scan(&id, &snip); err != nil {
-				srows.Close()
+			err := s.db.QueryRow(`SELECT snippet(chunks_fts, 0, '', '', '…', 12) FROM chunks_fts
+				WHERE rowid=? AND chunks_fts MATCH ?`, cid, ftsQuery(q)).Scan(&snip)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
 				return nil, err
 			}
-			snips[id] = snip
-		}
-		srows.Close()
-		if err := srows.Err(); err != nil {
-			return nil, err
+			snips[cid] = snip
 		}
 		for i := range out {
 			out[i].Snippet = snips[cids[i]]

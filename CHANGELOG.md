@@ -85,6 +85,14 @@ Versioning, with pre-1.0 compatibility rules described in
   the self-hosted fonts. The inline script, the inline progress width and the inline `noscript` style moved into
   `shell.js` and `app.css`.
 
+- Fixed: session review round 6 (REQ-435). A viewer who may work on a request
+  (every account on a global request) keeps the real ids of work, evidence and
+  activity, so request_get and finishing work hit the same row; only viewers
+  without that right get renumbered ids. Session evidence whose ref is not a
+  session address is left out for restricted viewers, the work.finished
+  backfill of request_activity attributes a session only when exactly one work
+  row matches and does not retry the rest at every start, snippets are fetched
+  per hit by rowid, and search hits read only the handoffs of their request.
 - Fixed: session review round 5 (REQ-435). A request seen by a viewer who may
   not know session numbers no longer carries hidden sessions: evidence that
   cites a session is rewritten to its public address or left out, activity

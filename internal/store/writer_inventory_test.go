@@ -58,6 +58,7 @@ var writerMethodClasses = map[string]string{
 	"ProjectWriters":                "read",
 	"RegressionGapsVisible":         "read",
 	"RequestRef":                    "read",
+	"RequestHandoffs":               "read",
 	"KnowledgeRef":                  "read",
 	"MigrationProject":              "read",
 	"Access":                        "administrative",

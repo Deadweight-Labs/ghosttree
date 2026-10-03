@@ -40,6 +40,11 @@ func (a *ProjectAccess) RequestDetailView(d requestdomain.Detail) requestdomain.
 		return pub, pub != ""
 	}
 	d.Request.SessionRef = ""
+	// Wer an dem Auftrag arbeiten darf (decideGlobal: jedes Konto an globalen
+	// Aufträgen), braucht die echten Nummern, um Arbeit abzuschließen oder
+	// Belege zu setzen; neu vergebene träfen fremde Zeilen. Gefiltert wird auch
+	// dann, nur die Nummern bleiben.
+	keepIDs := a.Decide(project, ResRequest, ActWork, Object{Own: a.IsAuthor(d.Request.Person)}).Allowed
 	// Alles, was an einer Session hängt, bleibt nur, wenn sie lesbar ist, und
 	// wird sonst ganz weggelassen: ein Platzhalter ließe sich mitzählen. Die
 	// laufenden Nummern von Arbeit, Beleg und Aktivität werden neu vergeben,
@@ -47,7 +52,10 @@ func (a *ProjectAccess) RequestDetailView(d requestdomain.Detail) requestdomain.
 	work := []requestdomain.Work{}
 	for _, w := range d.Work {
 		if pub, ok := lookup(w.SessionID); ok {
-			w.ID, w.SessionID, w.SessionPublicID = int64(len(work)+1), 0, pub
+			w.SessionID, w.SessionPublicID = 0, pub
+			if !keepIDs {
+				w.ID = int64(len(work) + 1)
+			}
 			work = append(work, w)
 		}
 	}
@@ -69,11 +77,14 @@ func (a *ProjectAccess) RequestDetailView(d requestdomain.Detail) requestdomain.
 		var kept []requestdomain.Evidence
 		for _, e := range criteria[i].Evidence {
 			ref, ok := rewriteSessionRef(e.Ref, lookup)
-			if !ok {
+			if !ok || (e.Kind == "session" && !sessionRefPattern.MatchString(e.Ref)) {
 				continue
 			}
 			evidenceNo++
-			e.ID, e.Ref = evidenceNo, ref
+			if !keepIDs {
+				e.ID = evidenceNo
+			}
+			e.Ref = ref
 			kept = append(kept, e)
 		}
 		criteria[i].Evidence = kept
@@ -105,7 +116,10 @@ func (a *ProjectAccess) RequestDetailView(d requestdomain.Detail) requestdomain.
 			}
 			act.Data = ref
 		}
-		act.ID, act.SessionID = int64(len(activity)+1), 0
+		if !keepIDs {
+			act.ID = int64(len(activity) + 1)
+		}
+		act.SessionID = 0
 		activity = append(activity, act)
 	}
 	d.Activity = activity
@@ -145,13 +159,10 @@ func (a *ProjectAccess) RequestHitView(h requestdomain.SearchHit) requestdomain.
 	// Die Übergabe stammt aus der jüngsten Arbeit mit lesbarer Session; die
 	// jüngste überhaupt könnte aus einer verborgenen kommen.
 	h.LatestHandoff = ""
-	if d, err := a.st.RequestByID(h.Request.ID); err == nil {
-		for _, w := range d.Work { // jüngste zuerst
-			if w.Summary == "" {
-				continue
-			}
-			if sess, err := a.st.SessionByID(w.SessionID); err == nil && a.CanSeeTranscript(sess) {
-				h.LatestHandoff = w.Summary
+	if sids, sums, err := a.st.RequestHandoffs(h.Request.ID); err == nil {
+		for i, sid := range sids { // jüngste zuerst
+			if sess, err := a.st.SessionByID(sid); err == nil && sess.PublicID != "" && a.CanSeeTranscript(sess) {
+				h.LatestHandoff = sums[i]
 				break
 			}
 		}
@@ -161,15 +172,41 @@ func (a *ProjectAccess) RequestHitView(h requestdomain.SearchHit) requestdomain.
 
 // ensureActivitySession ergänzt request_activity um die Session, auf die sich
 // ein Eintrag bezieht, und trägt sie für Altbestand nach, soweit sie sich
-// ableiten lässt. Was offen bleibt, zeigt kein eingeschränkter Betrachter.
+// eindeutig ableiten lässt. Was sich nicht zuordnen lässt, bekommt -1 (keine
+// Session lesbar, wird nicht bei jedem Start neu versucht) und zeigt kein
+// eingeschränkter Betrachter.
 func ensureActivitySession(db *sql.DB) error {
 	if err := ensureColumn(db, "request_activity", "session_id", `INTEGER NOT NULL DEFAULT 0`); err != nil {
 		return err
 	}
 	_, err := db.Exec(`UPDATE request_activity SET session_id=CAST(substr(data,9) AS INTEGER)
 		WHERE session_id=0 AND kind IN ('work.started','work.resumed') AND data LIKE 'session:%';
-		UPDATE request_activity SET session_id=COALESCE((SELECT w.session_id FROM request_work w
-			WHERE w.request_id=request_activity.request_id AND w.ended_at=request_activity.created_at AND w.summary=request_activity.data LIMIT 1),0)
+		UPDATE request_activity SET session_id=(SELECT CASE WHEN count(*)=1 THEN min(w.session_id) ELSE -1 END FROM request_work w
+			WHERE w.request_id=request_activity.request_id AND w.ended_at=request_activity.created_at AND w.summary=request_activity.data)
 		WHERE session_id=0 AND kind='work.finished'`)
 	return err
+}
+
+// RequestHandoffs liefert Session und Übergabe jeder Arbeit mit Zusammenfassung,
+// jüngste zuerst, ohne den ganzen Auftrag zu laden.
+func (s *Store) RequestHandoffs(requestID int64) ([]int64, []string, error) {
+	if s.reader != nil {
+		return s.reader.RequestHandoffs(requestID)
+	}
+	rows, err := s.db.Query(`SELECT session_id, summary FROM request_work WHERE request_id=? AND summary!='' ORDER BY id DESC`, requestID)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+	var sids []int64
+	var sums []string
+	for rows.Next() {
+		var sid int64
+		var sum string
+		if err := rows.Scan(&sid, &sum); err != nil {
+			return nil, nil, err
+		}
+		sids, sums = append(sids, sid), append(sums, sum)
+	}
+	return sids, sums, rows.Err()
 }
