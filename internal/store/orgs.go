@@ -775,10 +775,11 @@ func (s *Store) MoveProject(actorPrincipal, remote, toOrgRef string) (Project, e
 }
 
 // ListClaimableProjects nennt die Remotes, die der Owner einer Organisation
-// dort ausdrücklich übernehmen kann: Remotes ohne Projektzeile, zu denen er
-// selbst Sessions hochgeladen hat. Fremde Sessions zählen nicht, so verrät die
-// Liste nichts über Projekte anderer (#2447); übernehmen darf er mit
-// ClaimProject ohnehin jede Remote, die Liste ist die Teilmenge, die er kennt.
+// dort ausdrücklich übernehmen kann: Remotes ohne Projektzeile, zu denen
+// ausschließlich er Sessions hochgeladen hat. Sobald auch nur ein anderes
+// Konto Sessions dort hat, fehlt die Remote in der Liste, so verrät sie nichts
+// über Projekte anderer (#2447); übernehmen darf er mit ClaimProject ohnehin
+// jede Remote, die Liste ist die Teilmenge, die er kennt und die nur ihm gehört.
 // Wer nicht Owner der Organisation ist, bekommt ErrNotOrgOwner und keine Liste.
 func (s *Store) ListClaimableProjects(actorPrincipal string, orgID int64) ([]string, error) {
 	if s.reader != nil {
@@ -791,10 +792,13 @@ func (s *Store) ListClaimableProjects(actorPrincipal string, orgID int64) ([]str
 	if orgRoleTx(s.db, orgID, actor) != OrgOwner {
 		return nil, ErrNotOrgOwner
 	}
+	owner := instanceOwnerID(s.db)
 	rows, err := s.db.Query(`SELECT DISTINCT project FROM sessions
 		WHERE project != '' AND project NOT IN (SELECT remote FROM projects)
 		  AND (CASE WHEN account_id = 0 THEN ? ELSE account_id END) = ?
-		ORDER BY project LIMIT ?`, instanceOwnerID(s.db), actor, maxListRows)
+		  AND NOT EXISTS (SELECT 1 FROM sessions o WHERE o.project = sessions.project
+		        AND (CASE WHEN o.account_id = 0 THEN ? ELSE o.account_id END) != ?)
+		ORDER BY project LIMIT ?`, owner, actor, owner, actor, maxListRows)
 	if err != nil {
 		return nil, err
 	}
@@ -1394,4 +1398,19 @@ func hasControlRunes(s string) bool {
 		}
 	}
 	return false
+}
+
+// remoteClaimableTx ist die Bedingung von ListClaimableProjects für genau eine
+// Remote, innerhalb der Transaktion, in der übernommen wird.
+func remoteClaimableTx(tx execQueryer, actor int64, remote string) bool {
+	owner := instanceOwnerID(tx)
+	var mine, others int
+	if tx.QueryRow(`SELECT
+		COALESCE(SUM(CASE WHEN (CASE WHEN account_id = 0 THEN ? ELSE account_id END) = ? THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN (CASE WHEN account_id = 0 THEN ? ELSE account_id END) != ? THEN 1 ELSE 0 END), 0)
+		FROM sessions WHERE project = ?`, owner, actor, owner, actor, remote).Scan(&mine, &others) != nil {
+		return false
+	}
+	_, known := projectTx(tx, remote)
+	return mine > 0 && others == 0 && !known
 }

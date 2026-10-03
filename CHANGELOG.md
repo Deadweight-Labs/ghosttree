@@ -8,11 +8,13 @@ Versioning, with pre-1.0 compatibility rules described in
 
 - Changed: inviting to a project no longer needs a typed project name. The
   organization page offers a choice of the organization's projects, and for
-  organization owners also the projects they uploaded sessions to that belong to
-  no organization yet, with "Add to organization and invite". The server applies
-  the rule of `ctx project claim` (owner of the organization, a remote the owner
-  uploaded themselves) and lists no foreign project to anyone else. Project
-  invitations default to seven days, accepted invitations stay in the list as
+  organization owners also the projects only they uploaded sessions to that
+  belong to no organization yet, with "Add to organization and invite". The
+  server applies the rule of `ctx project claim` (owner of the organization, a
+  remote no other account uploaded to) and lists no foreign or shared project.
+  Claim and link happen in one transaction, so a refused link leaves no claim.
+  Project invitations default to seven days for a member and three for a guest
+  (the days field stays empty to take that default), accepted invitations stay in the list as
   "Accepted by name", and the roles of a project sit inside the project instead
   of a second list. An invitation link is shown once, only its hash is stored.
   `ctx join` lists what it sets up ("Claude hooks", "MCP server", "skills",

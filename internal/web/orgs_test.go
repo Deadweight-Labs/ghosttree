@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -358,5 +359,60 @@ func TestOrgPageShowsAcceptedInvitationsAndEmptyProjectAction(t *testing.T) {
 	resp, _ = alice.Get(base + "/ui/orgs?org=alpha")
 	if page := body(t, resp); !strings.Contains(page, "Accepted by anna") {
 		t.Fatalf("accepted invitation vanished: %s", page)
+	}
+}
+
+func TestOrgInviteLinkDefaultsFollowTheRoleAndSharedRemotesAreNotOffered(t *testing.T) {
+	base, st, alice, anna, org := orgWeb(t)
+	code, _, _ := st.CreateInvitation("person:1", org.ID, "", store.OrgMember, 0)
+	if _, err := st.AcceptInvitation("person:2", code); err != nil {
+		t.Fatal(err)
+	}
+	st.SetAccessMode(store.AccessMode{Enforce: true})
+	uploadWebSession(t, st, 1, "a", "github.com/x/shared")
+	uploadWebSession(t, st, 2, "b", "github.com/x/shared")
+	uploadWebSession(t, st, 1, "c", "github.com/x/mine")
+	resp, _ := alice.Get(base + "/ui/orgs?org=alpha")
+	page := body(t, resp)
+	if strings.Contains(page, "github.com/x/shared") || !strings.Contains(page, `<option value="github.com/x/mine">`) {
+		t.Fatalf("claim list: %s", page)
+	}
+	// Nur das E-Mail-Formular trägt eine feste Vorvorgabe; die Link-Formulare lassen die Tage leer.
+	if strings.Count(page, `name="days" type="number" min="1" max="30" value="7"`) != 1 {
+		t.Fatalf("link forms carry a fixed days value: %s", page)
+	}
+	if resp := postOrg(t, alice, base, "/ui/orgs/invite", url.Values{"org": {"alpha"}, "project": {"github.com/x/shared"}, "claim": {"1"}, "project_role": {"member"}}); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("shared remote by hand: %d", resp.StatusCode)
+	}
+	// Eine fremde Organisation per Hand-POST: Alice ist dort kein Owner.
+	other, err := st.CreateOrg("person:2", "Beta", "beta")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp := postOrg(t, alice, base, "/ui/orgs/invite", url.Values{"org": {"beta"}, "project": {"github.com/x/mine"}, "claim": {"1"}, "project_role": {"member"}}); resp.StatusCode == http.StatusOK {
+		t.Fatalf("foreign org by slug: %d", resp.StatusCode)
+	}
+	if p, ok := st.ProjectByRemote("github.com/x/mine"); ok {
+		t.Fatalf("claimed into a foreign org: %+v", p)
+	}
+	_ = other
+	_ = anna
+	// Standardwerte (Feld leer): Mitglied 7 Tage, Gast 3 Tage.
+	for role, want := range map[string]time.Duration{"member": 7 * 24 * time.Hour, "guest": 3 * 24 * time.Hour} {
+		resp := postOrg(t, alice, base, "/ui/orgs/invite", url.Values{"org": {"alpha"}, "project": {"github.com/x/mine"}, "claim": {"1"}, "project_role": {role}, "days": {""}})
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s link: %d %s", role, resp.StatusCode, body(t, resp))
+		}
+		invs, _ := st.ListInvitations("person:1", org.ID)
+		var newest store.Invitation
+		for _, i := range invs {
+			if i.ProjectRole == role && i.Status == "pending" {
+				newest = i
+			}
+		}
+		exp, _ := time.Parse(time.RFC3339, newest.ExpiresAt)
+		if d := time.Until(exp) - want; d > time.Minute || d < -time.Minute {
+			t.Fatalf("%s link expires in %v, want about %v", role, time.Until(exp), want)
+		}
 	}
 }

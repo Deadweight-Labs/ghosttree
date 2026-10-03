@@ -608,6 +608,7 @@ var messages = map[string]string{
 	"adm.invite.email":           "Email (optional)",
 	"adm.invite.role":            "Role",
 	"adm.invite.days":            "Days valid",
+	"adm.invite.days_default":    "7 / 3",
 	"adm.invite.create":          "Create invitation",
 	"adm.invite.project":         "Project",
 	"adm.invite.link":            "Create link",

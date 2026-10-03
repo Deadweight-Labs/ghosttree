@@ -34,6 +34,7 @@ var writerMethodClasses = map[string]string{
 	"RenameOrg":                     "write",
 	"CreateInvitation":              "write",
 	"CreateProjectInvitation":       "write",
+	"ClaimAndInviteProject":         "write",
 	"RevokeInvitation":              "write",
 	"AcceptInvitation":              "write",
 	"InviteLocal":                   "write",

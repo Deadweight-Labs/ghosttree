@@ -60,3 +60,53 @@ func TestInvitationListShowsWhoAcceptedAndWhen(t *testing.T) {
 		t.Fatalf("%+v %v", invs, err)
 	}
 }
+
+func TestListClaimableProjectsExcludesRemotesOtherAccountsUploadedTo(t *testing.T) {
+	st := orgStore(t, "robin", "anna")
+	o := mustOrg(t, st, "person:1", "Alpha", "alpha")
+	uploadAs(t, st, 1, "a", "github.com/x/shared")
+	uploadAs(t, st, 2, "b", "github.com/x/shared")
+	uploadAs(t, st, 1, "c", "github.com/x/mine")
+	got, err := st.ListClaimableProjects("person:1", o.ID)
+	if err != nil || !reflect.DeepEqual(got, []string{"github.com/x/mine"}) {
+		t.Fatalf("list %v %v", got, err)
+	}
+	if _, _, err := st.ClaimAndInviteProject("person:1", o.ID, "github.com/x/shared", RoleMember, 0); !errors.Is(err, ErrProjectNotFound) {
+		t.Fatalf("shared remote: %v", err)
+	}
+	if _, ok := st.ProjectByRemote("github.com/x/shared"); ok {
+		t.Fatal("shared remote was claimed")
+	}
+}
+
+func TestClaimAndInviteIsOneTransaction(t *testing.T) {
+	st := orgStore(t, "robin")
+	o := mustOrg(t, st, "person:1", "Alpha", "alpha")
+	uploadAs(t, st, 1, "a", "github.com/x/mine")
+	for i := 0; i < maxPendingInvitations; i++ {
+		if _, _, err := st.CreateInvitation("person:1", o.ID, "", OrgMember, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := st.ClaimAndInviteProject("person:1", o.ID, "github.com/x/mine", RoleMember, 0); !errors.Is(err, ErrTooManyInvites) {
+		t.Fatalf("cap: %v", err)
+	}
+	if _, ok := st.ProjectByRemote("github.com/x/mine"); ok {
+		t.Fatal("a refused link left the claim behind")
+	}
+	invs, _ := st.ListInvitations("person:1", o.ID)
+	for _, i := range invs {
+		if i.Status == "pending" {
+			if err := st.RevokeInvitation("person:1", o.ID, i.ID); err != nil {
+				t.Fatal(err)
+			}
+			break
+		}
+	}
+	if _, inv, err := st.ClaimAndInviteProject("person:1", o.ID, "github.com/x/mine", RoleMember, 0); err != nil || inv.ProjectRemote != "github.com/x/mine" {
+		t.Fatalf("claim and invite: %+v %v", inv, err)
+	}
+	if p, ok := st.ProjectByRemote("github.com/x/mine"); !ok || p.OrgID != o.ID {
+		t.Fatalf("not claimed: %+v", p)
+	}
+}
