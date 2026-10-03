@@ -12,6 +12,18 @@ Versioning, with pre-1.0 compatibility rules described in
   the evidence with links to readable sessions. Review actions work in the
   browser: approve, reject with undo, and edit title, text and kind, each with a
   visible result. Rights are checked on the server per entry, as for the API.
+- Fixed: saving an instruction from the browser no longer turns it into a
+  pitfall, the edit form always offers the current kind. The history of an entry
+  (page and `GET /api/knowledge/{id}/history`) is only for members and above,
+  guests get the same answer as for an unknown entry, because earlier versions
+  may never have been released. The history names the author of each version
+  and who replaced it. Approving without the right to edit sets only the status
+  of trust and the confirmer and no longer revives a stale entry; approving
+  twice answers 409 and keeps the first confirmer. Review actions on an entry a
+  guest cannot read answer 404 like an unknown id. Line endings from the text
+  box are stored as LF. The Edit button on a review card opens the form. Known
+  limit: the knowledge list without a project loads at most 400 entries and
+  filters them afterwards when access is enforced.
 - Fixed: guests no longer learn that hidden sessions exist through knowledge
   or by ending work. Knowledge from distillation points at a session by its
   address, and only when the guest may read that session; otherwise the

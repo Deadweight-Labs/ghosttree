@@ -258,6 +258,251 @@ func TestReviewActionsNeedCSRFAndAnInteractiveSession(t *testing.T) {
 	if k, _ := e.St.KnowledgeByID(id); k.Confidence != "staged" {
 		t.Error("a refused request approved the entry")
 	}
+	// A bearer-token client is not an interactive browser session.
+	req, _ = http.NewRequest(http.MethodPost, target, strings.NewReader(url.Values{"csrf_token": {token}}.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", e.Base)
+	req.Header.Set("Authorization", "Bearer not-a-session")
+	if resp, err := (&http.Client{}).Do(req); err != nil || resp.StatusCode == http.StatusSeeOther {
+		t.Errorf("a request without the browser session was accepted: %v %v", resp, err)
+	}
+	if k, _ := e.St.KnowledgeByID(id); k.Confidence != "staged" {
+		t.Error("a request without a session approved the entry")
+	}
+	// The interactive session with the right token goes through.
+	if resp := sameOriginPostForm(t, e.Owner, target, url.Values{"csrf_token": {token}}); resp.StatusCode != http.StatusSeeOther {
+		t.Errorf("interactive session with a valid token: %d", resp.StatusCode)
+	}
+	if k, _ := e.St.KnowledgeByID(id); k.Confidence != "verified" {
+		t.Error("the interactive session could not approve")
+	}
+}
+
+func knDo(t *testing.T, e shellEnv, c *http.Client, id int64, verb string) *http.Response {
+	t.Helper()
+	return knPost(t, c, e.Base, "/ui/review", "/ui/review/"+strconv.FormatInt(id, 10)+"/"+verb, url.Values{"next": {"review"}})
+}
+
+func knEdit(t *testing.T, e shellEnv, c *http.Client, id int64, form url.Values) *http.Response {
+	t.Helper()
+	path := "/ui/knowledge/" + strconv.FormatInt(id, 10)
+	return knPost(t, c, e.Base, "/ui/knowledge", path+"/edit", form)
+}
+
+func TestEditingAnInstructionKeepsItsKind(t *testing.T) {
+	e := ovEnv(t)
+	id := knInsert(t, e.St, store.Knowledge{Type: "instruction", Title: "Always lint", Body: "Run the linter.", Confidence: "trusted"})
+	_, page := fetchPage(t, e.Owner, e.Base+"/ui/knowledge/"+strconv.FormatInt(id, 10))
+	if !strings.Contains(page, `<option value="instruction" selected>`) {
+		t.Fatal("the kind select does not offer the current kind")
+	}
+	// What the browser sends on an unchanged save.
+	if resp := knEdit(t, e, e.Owner, id, url.Values{"title": {"Always lint"}, "body": {"Run the linter."}, "type": {"instruction"}}); resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("unchanged save = %d", resp.StatusCode)
+	}
+	if k, _ := e.St.KnowledgeByID(id); k.Type != "instruction" {
+		t.Errorf("an unchanged save turned the instruction into %q", k.Type)
+	}
+	if resp := knEdit(t, e, e.Owner, id, url.Values{"title": {"Always lint!"}, "body": {"Run the linter."}, "type": {"instruction"}}); resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("title edit = %d", resp.StatusCode)
+	}
+	if k, _ := e.St.KnowledgeByID(id); k.Type != "instruction" || k.Title != "Always lint!" {
+		t.Errorf("after editing the title: %q %q", k.Type, k.Title)
+	}
+	if resp := knEdit(t, e, e.Owner, id, url.Values{"title": {"Always lint!"}, "body": {"Run the linter."}, "type": {"instruction2"}}); resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("an invented kind = %d", resp.StatusCode)
+	}
+}
+
+func TestEditNormalizesLineEndingsAndKeepsNoVersionWhenNothingChanged(t *testing.T) {
+	e := ovEnv(t)
+	id := knInsert(t, e.St, store.Knowledge{Title: "Lines", Body: "one\ntwo\n\nthree", Confidence: "trusted"})
+	if resp := knEdit(t, e, e.Owner, id, url.Values{"title": {"Lines"}, "body": {"one\r\ntwo\r\n\r\nthree"}, "type": {"note"}}); resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("save = %d", resp.StatusCode)
+	}
+	if hist, _ := e.St.KnowledgeHistory(id); len(hist) != 0 {
+		t.Errorf("a browser line-ending change made %d versions", len(hist))
+	}
+	if resp := knEdit(t, e, e.Owner, id, url.Values{"title": {"Lines"}, "body": {"one\r\ntwo\r\n\r\nfour"}, "type": {"note"}}); resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("save = %d", resp.StatusCode)
+	}
+	if k, _ := e.St.KnowledgeByID(id); strings.Contains(k.Body, "\r") || k.Body != "one\ntwo\n\nfour" {
+		t.Errorf("stored body = %q", k.Body)
+	}
+}
+
+func TestApproveWithoutTheEditRightDoesNotReviveAStaleEntry(t *testing.T) {
+	e := ovEnv(t)
+	id := knInsert(t, e.St, store.Knowledge{Title: "Old plan", Type: "plan", Confidence: "trusted"})
+	if err := e.St.UpdateKnowledge(id, map[string]string{"status": "stale"}); err != nil {
+		t.Fatal(err)
+	}
+	if resp := knDo(t, e, e.Reviewer, id, "approve"); resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("reviewer approve = %d", resp.StatusCode)
+	}
+	if k, _ := e.St.KnowledgeByID(id); k.Status != "stale" || k.Confidence != "verified" || k.ConfirmedBy != "rita" {
+		t.Errorf("reviewer without edit: status %q, confirmed by %q", k.Status, k.ConfirmedBy)
+	}
+	// Nothing left to decide for the reviewer; the page offers no second approve.
+	if resp := knDo(t, e, e.Reviewer, id, "approve"); resp.StatusCode != http.StatusConflict {
+		t.Errorf("second approve of a still-stale entry = %d", resp.StatusCode)
+	}
+	if resp := knDo(t, e, e.Lead, id, "approve"); resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("lead approve = %d", resp.StatusCode)
+	}
+	if k, _ := e.St.KnowledgeByID(id); k.Status != "active" || k.ConfirmedBy != "lars" {
+		t.Errorf("lead approve: status %q, confirmed by %q", k.Status, k.ConfirmedBy)
+	}
+}
+
+func TestDecisionsInTheWrongStateConflictAndNeverRewriteTheEntry(t *testing.T) {
+	e := ovEnv(t)
+	id := knInsert(t, e.St, store.Knowledge{Title: "Settled", Confidence: "staged"})
+	if resp := knDo(t, e, e.Reviewer, id, "approve"); resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("approve = %d", resp.StatusCode)
+	}
+	before, _ := e.St.KnowledgeByID(id)
+	histBefore, _ := e.St.KnowledgeHistory(id)
+	if resp := knDo(t, e, e.Lead, id, "approve"); resp.StatusCode != http.StatusConflict {
+		t.Errorf("double approve = %d", resp.StatusCode)
+	}
+	if resp := knDo(t, e, e.Owner, id, "restore"); resp.StatusCode != http.StatusConflict {
+		t.Errorf("undo of an active entry = %d", resp.StatusCode)
+	}
+	after, _ := e.St.KnowledgeByID(id)
+	histAfter, _ := e.St.KnowledgeHistory(id)
+	if after.ConfirmedBy != before.ConfirmedBy || after.ConfirmedBy != "rita" || len(histAfter) != len(histBefore) {
+		t.Errorf("a refused decision changed the entry: confirmed by %q, versions %d -> %d", after.ConfirmedBy, len(histBefore), len(histAfter))
+	}
+	if resp := knDo(t, e, e.Owner, id, "reject"); resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("reject = %d", resp.StatusCode)
+	}
+	for _, verb := range []string{"approve", "reject"} {
+		if resp := knDo(t, e, e.Owner, id, verb); resp.StatusCode != http.StatusConflict {
+			t.Errorf("%s of a rejected entry = %d", verb, resp.StatusCode)
+		}
+	}
+}
+
+func TestKnowledgeActionsOnForeignOrUnreadableEntriesAnswerNotFound(t *testing.T) {
+	e := ovEnv(t)
+	hidden := knInsert(t, e.St, store.Knowledge{Title: "SECRET-HIDDEN", Confidence: "staged", Scope: scope.Axes{Project: shellHiddenProject}})
+	machine := knInsert(t, e.St, store.Knowledge{Title: "SECRET-MACHINE", Confidence: "trusted", Scope: scope.Axes{Project: shellProject, Machine: "mainex"}})
+	staged := knInsert(t, e.St, store.Knowledge{Title: "SECRET-STAGED", Confidence: "staged"})
+	for name, c := range map[string]*http.Client{"member": e.Member, "reviewer": e.Reviewer, "lead": e.Lead} {
+		for _, id := range []int64{hidden, machine} {
+			for _, verb := range []string{"approve", "reject", "restore"} {
+				if resp := knDo(t, e, c, id, verb); resp.StatusCode != http.StatusNotFound {
+					t.Errorf("%s %s of entry %d = %d", name, verb, id, resp.StatusCode)
+				}
+			}
+			form := url.Values{"title": {"hijack"}, "body": {"x"}, "type": {"note"}, "csrf_token": {renderedCSRFToken(t, c, e.Base+"/ui/knowledge")}}
+			if resp := sameOriginPostForm(t, c, e.Base+"/ui/knowledge/"+strconv.FormatInt(id, 10)+"/edit", form); resp.StatusCode != http.StatusNotFound {
+				t.Errorf("%s edit of entry %d = %d", name, id, resp.StatusCode)
+			}
+			if code, page := fetchPage(t, c, e.Base+"/ui/knowledge/"+strconv.FormatInt(id, 10)); code != http.StatusNotFound || strings.Contains(page, "SECRET") {
+				t.Errorf("%s detail of entry %d = %d", name, id, code)
+			}
+		}
+	}
+	for _, id := range []int64{hidden, machine} {
+		if k, _ := e.St.KnowledgeByID(id); k.Title == "hijack" || k.Confidence == "verified" || k.Status != "active" {
+			t.Errorf("a refused request changed entry %d: %+v", id, k)
+		}
+	}
+	for _, c := range []*http.Client{e.Member, e.Reviewer, e.Lead} {
+		if page := fetchBody(t, c, e.Base+"/ui/knowledge"); strings.Contains(page, "SECRET-MACHINE") || strings.Contains(page, "SECRET-HIDDEN") {
+			t.Error("the machine-axis or hidden entry shows in a list of someone else")
+		}
+	}
+	_, owner := fetchPage(t, e.Owner, e.Base+"/ui/knowledge")
+	if !strings.Contains(owner, "SECRET-MACHINE") {
+		t.Error("the machine owner does not see the machine-axis entry")
+	}
+	if code, _ := fetchPage(t, e.Owner, e.Base+"/ui/knowledge/"+strconv.FormatInt(machine, 10)); code != http.StatusOK {
+		t.Errorf("machine owner detail = %d", code)
+	}
+	if resp := knDo(t, e, e.Owner, machine, "reject"); resp.StatusCode != http.StatusSeeOther {
+		t.Errorf("machine owner reject = %d", resp.StatusCode)
+	}
+
+	// A guest gets the same answer for an unreleased entry as for one that does not exist.
+	missing := staged + 1000
+	guestPost := func(id int64, verb string) (int, string) {
+		resp := sameOriginPostForm(t, e.Guest, e.Base+"/ui/review/"+strconv.FormatInt(id, 10)+"/"+verb,
+			url.Values{"csrf_token": {renderedCSRFToken(t, e.Guest, e.Base+"/ui/knowledge")}})
+		return resp.StatusCode, body(t, resp)
+	}
+	for _, verb := range []string{"approve", "reject", "restore"} {
+		c1, b1 := guestPost(staged, verb)
+		c2, b2 := guestPost(missing, verb)
+		if c1 != http.StatusNotFound || c1 != c2 || b1 != b2 {
+			t.Errorf("guest %s: unreleased %d %q vs unknown %d %q", verb, c1, b1, c2, b2)
+		}
+	}
+	path := "/ui/knowledge/" + strconv.FormatInt(staged, 10)
+	editForm := func(id int64) *http.Response {
+		return sameOriginPostForm(t, e.Guest, e.Base+"/ui/knowledge/"+strconv.FormatInt(id, 10)+"/edit",
+			url.Values{"title": {"x"}, "body": {"x"}, "type": {"note"}, "csrf_token": {renderedCSRFToken(t, e.Guest, e.Base+"/ui/knowledge")}})
+	}
+	r1, r2 := editForm(staged), editForm(missing)
+	if r1.StatusCode != http.StatusNotFound || r1.StatusCode != r2.StatusCode || body(t, r1) != body(t, r2) {
+		t.Errorf("guest edit of %s distinguishes unreleased from unknown", path)
+	}
+	released := knInsert(t, e.St, store.Knowledge{Title: "Released", Confidence: "trusted"})
+	if resp := knDo(t, e, e.Guest, released, "approve"); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("guest approve of a released entry = %d", resp.StatusCode)
+	}
+}
+
+func TestHistoryIsForMembersAndShowsTheAuthorOfEachVersion(t *testing.T) {
+	e := ovEnv(t)
+	id := knInsert(t, e.St, store.Knowledge{Title: "Draft title", Body: "SECRET-DRAFT body", Person: "alice", Confidence: "staged"})
+	if err := e.St.UpdateKnowledgeBy(id, map[string]string{"title": "Released title", "body": "Public body", "confidence": "trusted"}, "lars"); err != nil {
+		t.Fatal(err)
+	}
+	path := e.Base + "/ui/knowledge/" + strconv.FormatInt(id, 10)
+	_, guest := fetchPage(t, e.Guest, path)
+	if !strings.Contains(guest, "Public body") {
+		t.Fatal("guest does not see the released entry")
+	}
+	for _, leak := range []string{"SECRET-DRAFT", "Draft title", "History", "kn-history"} {
+		if strings.Contains(guest, leak) {
+			t.Errorf("guest detail leaks the earlier version: %q", leak)
+		}
+	}
+	_, member := fetchPage(t, e.Member, path)
+	if !strings.Contains(member, "SECRET-DRAFT body") || !strings.Contains(member, "History") {
+		t.Error("a member does not see the history")
+	}
+	if !strings.Contains(member, `<span class="ov-meta">alice</span>`) || strings.Contains(member, `<span class="ov-meta">lars</span>`) {
+		t.Error("the history names the replacer instead of the author of the version")
+	}
+	if !strings.Contains(member, "replaced by lars") {
+		t.Error("the history does not say who replaced the version")
+	}
+}
+
+func TestReviewEditLinkOpensTheForm(t *testing.T) {
+	e := ovEnv(t)
+	id := knInsert(t, e.St, store.Knowledge{Title: "Fix me", Confidence: "staged"})
+	_, review := fetchPage(t, e.Owner, e.Base+"/ui/review")
+	link := "/ui/knowledge/" + strconv.FormatInt(id, 10) + "?edit=1#edit"
+	if !strings.Contains(review, `href="`+link+`"`) {
+		t.Fatalf("the review edit link is not %s", link)
+	}
+	_, open := fetchPage(t, e.Owner, e.Base+strings.TrimSuffix(link, "#edit"))
+	if !strings.Contains(open, `id="edit" open`) {
+		t.Error("the edit form is closed after following the edit link")
+	}
+	_, closed := fetchPage(t, e.Owner, e.Base+"/ui/knowledge/"+strconv.FormatInt(id, 10))
+	if strings.Contains(closed, `id="edit" open`) {
+		t.Error("the edit form is open without asking")
+	}
+	_, member := fetchPage(t, e.Member, e.Base+"/ui/knowledge/"+strconv.FormatInt(id, 10)+"?edit=1")
+	if strings.Contains(member, `id="edit"`) {
+		t.Error("a member gets the edit form through the query")
+	}
 }
 
 func TestBodyBlocksSplitParagraphsAndCode(t *testing.T) {

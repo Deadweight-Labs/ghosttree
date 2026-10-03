@@ -467,7 +467,19 @@ func (a *api) knowledgeHistory(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad knowledge id")
 		return
 	}
-	if !a.checkKnowledgeRef(w, r, id, store.ActRead) {
+	k, err := a.st.KnowledgeRef(id)
+	if err == nil && !a.access(r).CanSeeKnowledgeHistory(k) {
+		// Gäste sehen den Eintrag vielleicht, aber nicht, was vor der Freigabe
+		// dort stand: dieselbe Antwort wie für einen unbekannten Eintrag.
+		err = sql.ErrNoRows
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		a.access(r).Filtered()
+		writeErr(w, http.StatusNotFound, "no such knowledge entry")
+		return
+	}
+	if err != nil {
+		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
 	history, err := a.st.KnowledgeHistory(id)

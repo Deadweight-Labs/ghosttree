@@ -82,8 +82,8 @@ type evidenceRow struct {
 }
 
 type historyRow struct {
-	Title, By, Age string
-	Blocks         []bodyBlock
+	Title, By, ReplacedBy, Age string
+	Blocks                     []bodyBlock
 }
 
 type knowledgeCard struct {
@@ -131,6 +131,9 @@ type knowledgeItemView struct {
 	Result  *resultLine
 	Types   []filterOption
 	Back    string
+	// EditOpen öffnet das Formular, wenn die Seite über "Bearbeiten" der
+	// Prüfkarte erreicht wurde.
+	EditOpen bool
 }
 
 // ----------------------------------------------------------------- Textblöcke
@@ -265,11 +268,18 @@ func firstNonEmpty(values ...string) string {
 // capabilities setzt die Knöpfe einer Karte aus den Rechten am Eintrag.
 func capabilities(pa *store.ProjectAccess, k store.Knowledge, card *knowledgeCard) {
 	live := k.Status == "active" || k.Status == "stale"
-	card.CanApprove = live && (k.Confidence != "verified" || k.Status == "stale") && pa.CheckKnowledge(k, store.ActVerify) == nil
 	canEdit := pa.CheckKnowledge(k, store.ActEdit) == nil
+	card.CanApprove = live && approveChanges(k, canEdit) && pa.CheckKnowledge(k, store.ActVerify) == nil
 	card.CanReject = canEdit && live
 	card.CanRestore = canEdit && k.Status == "deprecated"
 	card.CanEdit = canEdit && k.Status != "superseded"
+}
+
+// approveChanges: ob "übernehmen" an diesem Eintrag noch etwas ändert. Wer nur
+// das Verified-Recht hat, setzt Stufe und Bestätiger; wieder aktiv wird ein
+// veralteter Eintrag nur durch das Recht, den Status zu ändern.
+func approveChanges(k store.Knowledge, canEdit bool) bool {
+	return k.Confidence != "verified" || (k.Status == "stale" && canEdit)
 }
 
 func (a *app) cardFor(r *http.Request, pa *store.ProjectAccess, k store.Knowledge, withProject bool, blockRunes int, next, filter string) knowledgeCard {
@@ -286,10 +296,15 @@ func (a *app) cardFor(r *http.Request, pa *store.ProjectAccess, k store.Knowledg
 	return card
 }
 
+// typeOptions bietet die wählbaren Arten an und immer auch die aktuelle (etwa
+// "instruction"), damit ein unveränderter Speichervorgang die Art behält.
 func typeOptions(current string) []filterOption {
-	out := make([]filterOption, 0, len(knowledgeTypes))
+	out := make([]filterOption, 0, len(knowledgeTypes)+1)
 	for _, t := range knowledgeTypes {
 		out = append(out, filterOption{Value: t, Label: typeLabel(t), Selected: t == current})
+	}
+	if current != "" && !slices.Contains(knowledgeTypes, current) {
+		out = append(out, filterOption{Value: current, Label: typeLabel(current), Selected: true})
 	}
 	return out
 }
@@ -374,6 +389,11 @@ func (a *app) lookupKnowledge(w http.ResponseWriter, r *http.Request, act store.
 		http.Error(w, err.Error(), 500)
 		return store.Knowledge{}, false
 	}
+	// Wer den Eintrag nicht lesen darf, bekommt bei jeder Aktion dieselbe
+	// Antwort wie bei einer unbekannten Nummer, nicht "verboten".
+	if act != store.ActRead && a.accessDenied(w, r, a.access(r).CheckKnowledge(k, store.ActRead)) {
+		return store.Knowledge{}, false
+	}
 	if a.accessDenied(w, r, a.access(r).CheckKnowledge(k, act)) {
 		return store.Knowledge{}, false
 	}
@@ -406,19 +426,20 @@ func (a *app) knowledgeItemPage(w http.ResponseWriter, r *http.Request) {
 	}
 	pa := a.access(r)
 	card := a.cardFor(r, pa, k, true, 0, "item", "")
-	v := &knowledgeItemView{Card: card, Types: typeOptions(k.Type), Back: "/ui/knowledge"}
+	v := &knowledgeItemView{Card: card, Types: typeOptions(k.Type), Back: "/ui/knowledge", EditOpen: card.CanEdit && r.URL.Query().Get("edit") == "1"}
 	if k.Scope.Project != "" {
 		v.Back += "?project=" + url.QueryEscape(k.Scope.Project)
 	}
 	a.fillEvidence(pa, k, &card, evidenceShown*3)
 	v.Card = card
-	if hist, err := a.store.KnowledgeHistory(k.ID); err == nil {
+	// Frühere Fassungen tragen keine Vertrauensstufe und sind für Gäste tabu.
+	if hist, err := a.store.KnowledgeHistory(k.ID); err == nil && pa.CanSeeKnowledgeHistory(k) {
 		now := overviewNow().UTC()
 		for i, h := range hist {
 			if i >= historyShown {
 				break
 			}
-			v.History = append(v.History, historyRow{Title: h.Title, By: firstNonEmpty(h.ChangedBy, h.Person), Age: shortAge(now, parseTime(h.ChangedAt)), Blocks: bodyBlocks(h.Body, 0)})
+			v.History = append(v.History, historyRow{Title: h.Title, By: h.Person, ReplacedBy: h.ChangedBy, Age: shortAge(now, parseTime(h.ChangedAt)), Blocks: bodyBlocks(h.Body, 0)})
 		}
 	}
 	v.Result = a.resultFor(r, pa, "item", "")
@@ -500,7 +521,7 @@ func (a *app) reviewDecide(w http.ResponseWriter, r *http.Request) {
 	switch verdict {
 	case "approve":
 		act, done = store.ActVerify, "approved"
-		patch = map[string]string{"confidence": "verified", "status": "active", "confirmed_by": personOf(r)}
+		patch = map[string]string{"confidence": "verified", "confirmed_by": personOf(r)}
 	case "reject":
 		act, done = store.ActEdit, "rejected"
 		patch = map[string]string{"status": "deprecated"}
@@ -516,7 +537,16 @@ func (a *app) reviewDecide(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	live := k.Status == "active" || k.Status == "stale"
-	if (verdict == "restore" && k.Status != "deprecated") || (verdict != "restore" && !live) {
+	canEdit := a.access(r).CheckKnowledge(k, store.ActEdit) == nil
+	if verdict == "approve" {
+		if canEdit && k.Status == "stale" {
+			patch["status"] = "active"
+		}
+		if !live || !approveChanges(k, canEdit) {
+			http.Error(w, "nothing to change", http.StatusConflict)
+			return
+		}
+	} else if (verdict == "restore" && k.Status != "deprecated") || (verdict == "reject" && !live) {
 		http.Error(w, "nothing to change", http.StatusConflict)
 		return
 	}
@@ -545,7 +575,12 @@ func (a *app) knowledgeEdit(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	title, body, typ := strings.TrimSpace(r.FormValue("title")), strings.TrimSpace(r.FormValue("body")), r.FormValue("type")
+	// Ein Textfeld sendet CRLF; gespeichert und verglichen wird mit LF.
+	unix := strings.NewReplacer("\r\n", "\n", "\r", "\n")
+	title, body, typ := strings.TrimSpace(unix.Replace(r.FormValue("title"))), strings.TrimSpace(unix.Replace(r.FormValue("body"))), r.FormValue("type")
+	if typ == "" {
+		typ = k.Type
+	}
 	if title == "" || body == "" || len(body) > knowledgeMaxBody || len(title) > 500 || (typ != k.Type && !slices.Contains(knowledgeTypes, typ)) {
 		http.Error(w, "invalid entry", http.StatusBadRequest)
 		return

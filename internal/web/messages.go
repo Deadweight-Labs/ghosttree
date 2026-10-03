@@ -120,7 +120,8 @@ var messages = map[string]string{
 	"knowledge.back":              "Back to knowledge",
 	"knowledge.done.approved":     "Approved: %s",
 	"knowledge.done.rejected":     "Rejected: %s",
-	"knowledge.done.restored":     "Back in the queue: %s",
+	"knowledge.done.restored":     "Restored: %s",
+	"knowledge.replaced_by":       "replaced by %s",
 	"knowledge.done.saved":        "Saved: %s",
 
 	// Räume (Chat).
