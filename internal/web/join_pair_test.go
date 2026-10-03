@@ -3,6 +3,7 @@ package web
 import (
 	"bytes"
 	"errors"
+	"html"
 	"log"
 	"log/slog"
 	"net/http"
@@ -81,34 +82,6 @@ func (e pairEnv) get(t *testing.T, c *http.Client, path string) (*http.Response,
 	return resp, body(t, resp)
 }
 
-// pairOf legt die Join-Sitzung dieses Browsers an, wie es früher die
-// Einladungsseite tat (Cookie), und gibt ihren Paarungscode zurück. Die Seite
-// selbst zeigt keinen Code mehr; der Code steht erst nach der Annahme auf
-// /join/pair.
-func (e pairEnv) pairOf(t *testing.T, c *http.Client, code string) string {
-	t.Helper()
-	return seedPair(t, e.st, c, e.srv, code)
-}
-
-func seedPair(t *testing.T, st *store.Store, c *http.Client, base, code string) string {
-	t.Helper()
-	u, _ := url.Parse(base)
-	id := ""
-	for _, ck := range c.Jar.Cookies(u) {
-		if ck.Name == "gt_join" {
-			id = ck.Value
-		}
-	}
-	open, err := st.Join().Open(code, id)
-	if err != nil || open.Pair == "" {
-		t.Fatalf("open: %+v %v", open, err)
-	}
-	if open.ID != "" {
-		c.Jar.SetCookies(u, []*http.Cookie{{Name: "gt_join", Value: open.ID, Path: "/"}})
-	}
-	return open.Pair
-}
-
 func csrfOn(t *testing.T, text string) string {
 	t.Helper()
 	m := regexp.MustCompile(`name="csrf_token" value="([^"]+)"`).FindStringSubmatch(text)
@@ -138,6 +111,11 @@ func (e pairEnv) pairPage(t *testing.T, c *http.Client) string {
 	}
 	return text
 }
+
+var tagRE = regexp.MustCompile(`<[^>]*>`)
+
+// plainText ist der Text einer Seite, wie ihn ein Kopieren aus dem Browser liefert.
+func plainText(page string) string { return html.UnescapeString(tagRE.ReplaceAllString(page, "")) }
 
 func loopClaim(pair, machine, addr string) store.JoinClaimRequest {
 	return store.JoinClaimRequest{Addr: addr, Pair: pair, Machine: machine, Challenge: strings.Repeat("A", 43), State: "state-12345678", Port: 40123}
@@ -209,18 +187,20 @@ func TestJoinInvalidInvitationsMakeNoSessionAndNoCookie(t *testing.T) {
 	}
 }
 
-// Installation vor der Anmeldung: der Installer wartet schon, dann meldet sich der Eingeladene an.
-func TestJoinInstallerFirstThenSignInWithTheInvitation(t *testing.T) {
+// Anmeldung über die Join-Seite: neues Konto, die Seite zeigt den Code, dann meldet sich der Installer und der Eingeladene gibt frei.
+func TestJoinSignInWithTheInvitationThenInstallerThenApprove(t *testing.T) {
 	e := newPairEnv(t)
 	b := browser(t)
-	pair := e.pairOf(t, b, e.code)
-	e.claimLoop(t, pair, "philipps-laptop")
-	// Anmeldung über die Join-Seite: neues Konto, Sitzung wird gebunden.
 	resp := sameOriginPostForm(t, b, e.srv+"/ui/login/code", url.Values{"code": {e.code}, "name": {"philipp"}, "join": {"1"}})
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/join/pair" {
 		t.Fatalf("sign-in: %d %s", resp.StatusCode, resp.Header.Get("Location"))
 	}
+	pair := pairRE.FindString(e.pairPage(t, b))
+	if pair == "" {
+		t.Fatal("no pairing code after sign-in")
+	}
+	e.claimLoop(t, pair, "philipps-laptop")
 	text := e.pairPage(t, b)
 	if !strings.Contains(text, "philipps-laptop") || !strings.Contains(text, "wants to connect") || !strings.Contains(text, `value="approve"`) {
 		t.Fatalf("approval page: %s", text)
@@ -243,8 +223,8 @@ func TestJoinLoginFirstThenInstaller(t *testing.T) {
 	e := newPairEnv(t)
 	b := browser(t)
 	e.signInAs(t, b, "anna")
-	pair := e.pairOf(t, b, e.code)
 	e.accept(t, b, e.code)
+	pair := pairRE.FindString(e.pairPage(t, b))
 	text := e.pairPage(t, b)
 	if !strings.Contains(text, pair) || strings.Contains(text, "wants to connect") || strings.Contains(text, `value="approve"`) {
 		t.Fatalf("waiting page: %s", text)
@@ -277,8 +257,8 @@ func TestJoinSameNetworkLineSaysNoForAnotherNetwork(t *testing.T) {
 	e := newPairEnv(t)
 	b := browser(t)
 	e.signInAs(t, b, "anna")
-	pair := e.pairOf(t, b, e.code)
 	e.accept(t, b, e.code)
+	pair := pairRE.FindString(e.pairPage(t, b))
 	if _, err := e.st.Join().Claim(loopClaim(pair, "box", "203.0.113.5")); err != nil {
 		t.Fatal(err)
 	}
@@ -291,8 +271,8 @@ func TestJoinCodeFallbackNeedsTheTerminalCodeAndDeliversThroughTheDeviceFlow(t *
 	e := newPairEnv(t)
 	b := browser(t)
 	e.signInAs(t, b, "anna")
-	pair := e.pairOf(t, b, e.code)
 	e.accept(t, b, e.code)
+	pair := pairRE.FindString(e.pairPage(t, b))
 	claim := e.claimCode(t, pair, "annas-laptop")
 	text := e.pairPage(t, b)
 	if !strings.Contains(text, "Code from your terminal") || strings.Contains(text, claim.Confirm) || strings.Contains(text, claim.DeviceCode) {
@@ -323,8 +303,8 @@ func TestJoinCodeFallbackThreeWrongCodesCompromiseTheSession(t *testing.T) {
 	e := newPairEnv(t)
 	b := browser(t)
 	e.signInAs(t, b, "anna")
-	pair := e.pairOf(t, b, e.code)
 	e.accept(t, b, e.code)
+	pair := pairRE.FindString(e.pairPage(t, b))
 	claim := e.claimCode(t, pair, "box")
 	for i := 0; i < 3; i++ {
 		e.decide(t, b, url.Values{"decision": {"approve"}, "confirm_account": {"anna"}, "confirm_code": {"WWWW"}}).Body.Close()
@@ -341,8 +321,8 @@ func TestJoinSecondClaimShowsTheWarningAndOffersANewCode(t *testing.T) {
 	e := newPairEnv(t)
 	b := browser(t)
 	e.signInAs(t, b, "anna")
-	pair := e.pairOf(t, b, e.code)
 	e.accept(t, b, e.code)
+	pair := pairRE.FindString(e.pairPage(t, b))
 	e.claimLoop(t, pair, "mine")
 	if _, err := e.st.Join().Claim(loopClaim(pair, "thief", "198.51.100.7")); err == nil {
 		t.Fatal("second claim worked")
@@ -362,8 +342,8 @@ func TestJoinApprovalNeedsInteractiveSessionCSRFOriginConfirmationAndTheShownReq
 	e := newPairEnv(t)
 	b := browser(t)
 	e.signInAs(t, b, "anna")
-	pair := e.pairOf(t, b, e.code)
 	e.accept(t, b, e.code)
+	pair := pairRE.FindString(e.pairPage(t, b))
 	e.claimLoop(t, pair, "box")
 	_, page := e.get(t, b, "/join/pair")
 	csrf, nonce := csrfOn(t, page), nonceRE.FindStringSubmatch(page)[1]
@@ -431,8 +411,8 @@ func TestJoinAnotherAccountNeitherSeesNorDecidesAnnasSession(t *testing.T) {
 	e := newPairEnv(t)
 	b := browser(t)
 	e.signInAs(t, b, "anna")
-	pair := e.pairOf(t, b, e.code)
 	e.accept(t, b, e.code)
+	pair := pairRE.FindString(e.pairPage(t, b))
 	e.claimLoop(t, pair, "annas-laptop")
 	e.st.AddPerson("ben")
 	ben := browser(t)
@@ -472,7 +452,7 @@ func TestJoinConnectThisMachineForASignedInAccount(t *testing.T) {
 	waiting := e.pairPage(t, b)
 	first := pairRE.FindString(waiting)
 	for _, want := range []string{"| sh -s -- --pair " + first, "Open a terminal", "Waiting for your computer", "Send this to your computer", "New code"} {
-		if !strings.Contains(waiting, want) {
+		if !strings.Contains(plainText(waiting), want) {
 			t.Errorf("waiting page lacks %q", want)
 		}
 	}
@@ -490,7 +470,6 @@ func TestJoinPairPageAfterLossOfTheSessionSaysSetupWasInterrupted(t *testing.T) 
 	e := newPairEnv(t)
 	b := browser(t)
 	e.signInAs(t, b, "anna")
-	e.pairOf(t, b, e.code)
 	e.accept(t, b, e.code)
 	e.clock.t = e.clock.t.Add(store.JoinSessionTTL + time.Minute) // oder ein Neustart
 	_, text := e.get(t, b, "/join/pair?w=1")
@@ -510,8 +489,8 @@ func TestJoinApproveRefusesAMachineNameOfAnotherAccount(t *testing.T) {
 	}
 	b := browser(t)
 	e.signInAs(t, b, "anna")
-	pair := e.pairOf(t, b, e.code)
 	e.accept(t, b, e.code)
+	pair := pairRE.FindString(e.pairPage(t, b))
 	e.claimLoop(t, pair, "shared-name")
 	resp := e.decide(t, b, url.Values{"decision": {"approve"}, "confirm_account": {"anna"}})
 	resp.Body.Close()
@@ -546,31 +525,30 @@ func TestJoinCommandNeedsHTTPSOrLoopbackAndIgnoresUntrustedForwardedHeaders(t *t
 	}
 }
 
-func TestJoinSignInThroughTheJoinPageBindsTheBrowsersSessionAndOnlyThen(t *testing.T) {
+func TestJoinSignInThroughTheJoinPageMakesOneSessionForThatAccountOnly(t *testing.T) {
 	e := newPairEnv(t)
 	b := browser(t)
-	pair := e.pairOf(t, b, e.code)
 	resp := sameOriginPostForm(t, b, e.srv+"/ui/login/code", url.Values{"code": {e.code}, "name": {"philipp"}, "join": {"1"}})
 	resp.Body.Close()
 	acct, _ := e.st.AccountByName("philipp")
-	if v := e.st.Join().View(acct.ID); v.State != store.JoinWaiting || v.Pair != pair {
-		t.Fatalf("session %+v (page showed %s)", v, pair)
+	v := e.st.Join().View(acct.ID)
+	if v.State != store.JoinWaiting || !strings.Contains(e.pairPage(t, b), v.Pair) || e.st.Join().Sessions() != 1 {
+		t.Fatalf("session %+v", v)
 	}
-	// Ohne Marker bleibt alles wie bisher.
+	// Ohne Marker bleibt alles wie bisher: keine Sitzung.
 	other := projectInvite(t, e.st, e.org, store.RoleMember)
 	resp = sameOriginPostForm(t, anonClient(), e.srv+"/ui/login/code", url.Values{"code": {other}, "name": {"paula"}})
 	resp.Body.Close()
-	if resp.Header.Get("Location") != "/ui/overview" {
-		t.Fatalf("without marker: %s", resp.Header.Get("Location"))
+	if resp.Header.Get("Location") != "/ui/overview" || e.st.Join().Sessions() != 1 {
+		t.Fatalf("without marker: %s sessions=%d", resp.Header.Get("Location"), e.st.Join().Sessions())
 	}
-	// Ein Browser ohne Cookie (anderes Gerät) bekommt eine eigene neue Sitzung, nie die eines anderen.
+	// Ein zweiter Eingeladener bekommt seine eigene Sitzung und einen anderen Code.
 	third := projectInvite(t, e.st, e.org, store.RoleMember)
-	pairThird := e.pairOf(t, browser(t), third)
 	resp = sameOriginPostForm(t, browser(t), e.srv+"/ui/login/code", url.Values{"code": {third}, "name": {"tina"}, "join": {"1"}})
 	resp.Body.Close()
 	tina, _ := e.st.AccountByName("tina")
-	if v := e.st.Join().View(tina.ID); v.State != store.JoinWaiting || v.Pair == pairThird {
-		t.Fatalf("cookie-less sign-in took over a session: %+v", v)
+	if tv := e.st.Join().View(tina.ID); tv.State != store.JoinWaiting || tv.Pair == v.Pair || e.st.Join().Sessions() != 2 {
+		t.Fatalf("second sign-in: %+v", tv)
 	}
 }
 
@@ -586,13 +564,8 @@ func TestJoinOIDCSignInBindsTheSessionAndLandsOnThePairingPage(t *testing.T) {
 		t.Fatal(err)
 	}
 	b := newBrowser(t)
-	pair := seedPair(t, env.store, b, env.web.URL, code)
 	if !strings.Contains(joinPageText(t, b, env.web.URL+"/join/"+code), `name="join" value="1"`) {
 		t.Fatal("join page lacks the marker")
-	}
-	// Der Installer ist schon da.
-	if _, err := env.store.Join().Claim(loopClaim(pair, "box", "127.0.0.1")); err != nil {
-		t.Fatal(err)
 	}
 	env.idp.subject, env.idp.username, env.idp.email = "sub-philipp", "philipp", "philipp@example.test"
 	resp := env.callback(t, b, env.startFlowWith(t, b, url.Values{"code": {code}, "join": {"1"}}))
@@ -604,8 +577,12 @@ func TestJoinOIDCSignInBindsTheSessionAndLandsOnThePairingPage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v := env.store.Join().View(acct.ID); v.State != store.JoinClaimed || v.Machine != "box" {
+	v := env.store.Join().View(acct.ID)
+	if v.State != store.JoinWaiting || v.Pair == "" {
 		t.Fatalf("session %+v", v)
+	}
+	if _, err := env.store.Join().Claim(loopClaim(v.Pair, "box", "127.0.0.1")); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -627,8 +604,8 @@ func TestJoinPairWritesNoLogLineWithTheCodes(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(prevSlog); log.SetOutput(prevOut) })
 	b := browser(t)
 	e.signInAs(t, b, "anna")
-	pair := e.pairOf(t, b, e.code)
 	e.accept(t, b, e.code)
+	pair := pairRE.FindString(e.pairPage(t, b))
 	e.claimLoop(t, pair, "box")
 	e.pairPage(t, b)
 	if strings.Contains(logs.String(), pair) || strings.Contains(logs.String(), e.code) {
@@ -653,8 +630,8 @@ func TestJoinSameNetworkLineIsOmittedWithPublicURLAndNoTrustedProxies(t *testing
 	e := newPairEnv(t).publicEnv(t)
 	b := browser(t)
 	e.signInAs(t, b, "anna")
-	pair := e.pairOf(t, b, e.code)
 	e.accept(t, b, e.code)
+	pair := pairRE.FindString(e.pairPage(t, b))
 	e.claimLoop(t, pair, "box")
 	text := e.pairPage(t, b)
 	if strings.Contains(text, "Same network") || strings.Contains(text, "different network") || !strings.Contains(text, "wants to connect") {
@@ -670,8 +647,8 @@ func TestJoinSameNetworkLineStaysWithPublicURLAndTrustedProxies(t *testing.T) {
 	e := newPairEnv(t).publicEnv(t, WithTrustedProxies(set))
 	b := browser(t)
 	e.signInAs(t, b, "anna")
-	pair := e.pairOf(t, b, e.code)
 	e.accept(t, b, e.code)
+	pair := pairRE.FindString(e.pairPage(t, b))
 	e.claimLoop(t, pair, "box")
 	if text := e.pairPage(t, b); !strings.Contains(text, "same network as this browser") {
 		t.Fatalf("page: %s", text)
@@ -683,8 +660,8 @@ func TestJoinCodeFallbackWarnsOnAnotherNetworkAndNamesTheTerminal(t *testing.T) 
 	e := newPairEnv(t)
 	b := browser(t)
 	e.signInAs(t, b, "anna")
-	pair := e.pairOf(t, b, e.code)
 	e.accept(t, b, e.code)
+	pair := pairRE.FindString(e.pairPage(t, b))
 	if _, err := e.st.Join().Claim(store.JoinClaimRequest{Addr: "203.0.113.5", Pair: pair, Machine: "box"}); err != nil {
 		t.Fatal(err)
 	}
@@ -701,8 +678,8 @@ func TestJoinDenyRedirectsTheBrowserToTheInstallerWithAccessDenied(t *testing.T)
 	e := newPairEnv(t)
 	b := browser(t)
 	e.signInAs(t, b, "anna")
-	pair := e.pairOf(t, b, e.code)
 	e.accept(t, b, e.code)
+	pair := pairRE.FindString(e.pairPage(t, b))
 	e.claimLoop(t, pair, "box")
 	resp := e.decide(t, b, url.Values{"decision": {"deny"}})
 	resp.Body.Close()
@@ -717,33 +694,13 @@ func TestJoinCompromisedLoopbackPageOffersToStopTheInstaller(t *testing.T) {
 	e := newPairEnv(t)
 	b := browser(t)
 	e.signInAs(t, b, "anna")
-	pair := e.pairOf(t, b, e.code)
 	e.accept(t, b, e.code)
+	pair := pairRE.FindString(e.pairPage(t, b))
 	e.claimLoop(t, pair, "mine")
 	e.st.Join().Claim(loopClaim(pair, "thief", "198.51.100.7"))
 	text := e.pairPage(t, b)
 	if !strings.Contains(text, `href="http://127.0.0.1:40123/callback?error=access_denied`) || strings.Contains(text, "thief") {
 		t.Fatalf("page: %s", text)
-	}
-}
-
-// R1: Der Cookie lebt so lange wie das Login-Fenster; Claim bei Minute 12 und
-// Anmeldung bei Minute 20 behalten dieselbe Sitzung.
-func TestJoinCookieOutlivesALateLoginAfterTheClaim(t *testing.T) {
-	e := newPairEnv(t)
-	b := browser(t)
-	pair := e.pairOf(t, b, e.code)
-	start := e.clock.t
-	e.clock.t = start.Add(12 * time.Minute)
-	e.claimLoop(t, pair, "late-box")
-	e.clock.t = start.Add(20 * time.Minute)
-	r := sameOriginPostForm(t, b, e.srv+"/ui/login/code", url.Values{"code": {e.code}, "name": {"lena"}, "join": {"1"}})
-	r.Body.Close()
-	if r.StatusCode != http.StatusSeeOther || r.Header.Get("Location") != "/join/pair" {
-		t.Fatalf("sign-in: %d %s", r.StatusCode, r.Header.Get("Location"))
-	}
-	if text := e.pairPage(t, b); !strings.Contains(text, "late-box") || !strings.Contains(text, "wants to connect") || e.st.Join().Sessions() != 1 {
-		t.Fatalf("binding lost: sessions=%d %s", e.st.Join().Sessions(), text)
 	}
 }
 

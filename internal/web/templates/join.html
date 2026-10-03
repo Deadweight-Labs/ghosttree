@@ -2,6 +2,7 @@
 {{define "joinheadr"}}<!doctype html><html lang="en" data-clay-theme="ghosttree"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="strict-origin"><meta name="robots" content="noindex,nofollow">{{if .}}<noscript><meta http-equiv="refresh" content="{{.}};url=/join/pair?w=1"></noscript><script src="/static/join.js" defer></script>{{end}}<title>{{t "join.title"}}</title><link rel="icon" href="/static/favicon.svg" type="image/svg+xml"><link rel="icon" href="/static/favicon-32.png" type="image/png" sizes="32x32"><link rel="apple-touch-icon" href="/static/apple-touch-icon.png"><link rel="stylesheet" href="/static/clay/index.css"><link rel="stylesheet" href="/static/theme.css"><link rel="stylesheet" href="/static/app.css"><link rel="stylesheet" href="/static/tokens.css"><link rel="stylesheet" href="/static/shell.css"></head><body class="ui"><main class="login join">{{template "loginbrand"}}<section class="login-card join-card clay">{{end}}
 {{define "joinfoot"}}</section></main></body></html>{{end}}
 
+{{define "joincmd"}}{{range .}}{{if .URL}}<span class="join-url">{{.Text}}</span>{{else}}<span class="join-tok">{{.Text}}</span>{{end}}{{if .Wbr}}<wbr>{{end}}{{.Sep}}{{end}}{{end}}
 {{define "joinconfirm"}}<label class="join-confirm"><input type="checkbox" name="confirm_account" value="{{.Person}}" required><span>{{t "join.confirm_me" .Person}}</span></label>{{end}}
 {{define "joinnewcode"}}<form class="join-newcode" method="post" action="/join/pair"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><button class="clay btn ghost">{{t "join.new_code"}}</button></form>{{end}}
 
@@ -18,13 +19,14 @@
 {{end}}{{template "joinfoot"}}{{end}}
 
 {{define "joinpair"}}{{template "joinheadr" .Refresh}}<div data-join-state="{{.State}}" data-join-nonce="{{.Nonce}}" hidden></div>
-{{if eq .State "waiting"}}<h1>{{t "pair.title"}}</h1>
+{{if and (eq .State "waiting") .NeedsHTTPS}}<h1>{{t "pair.needs_https"}}</h1><p>{{t "pair.needs_https_hint"}}</p>
+{{else if eq .State "waiting"}}<h1>{{t "pair.title"}}</h1>
 <div class="join-desktop"><ol class="join-steps">
 <li class="join-step is-done"><span class="join-num">1</span><div><strong>{{t "pair.step_terminal"}}</strong><p>{{t "pair.step_terminal_hint"}}</p></div></li>
-<li class="join-step is-done"><span class="join-num">2</span><div><strong>{{t "pair.step_copy"}}</strong><div class="join-cmd"><code id="join-cmd">{{.Command}}</code><button type="button" class="clay btn" data-copy="#join-cmd" data-copied="{{t "pair.copied"}}">{{t "pair.copy"}}</button></div></div></li>
+<li class="join-step is-done"><span class="join-num">2</span><div><strong>{{t "pair.step_copy"}}</strong><div class="join-cmd"><code id="join-cmd">{{template "joincmd" .CmdParts}}</code><button type="button" class="clay btn" data-copy="#join-cmd" data-copied="{{t "pair.copied"}}">{{t "pair.copy"}}</button></div></div></li>
 <li class="join-step is-active"><span class="join-num">3</span><div><strong>{{t "pair.step_confirm"}}</strong><p class="join-wait"><span class="join-dot" aria-hidden="true"></span>{{t "pair.waiting"}}</p></div></li>
 </ol></div>
-<div class="join-mobile"><p class="join-lead">{{t "pair.send_title"}}</p><pre class="join-msg" id="join-msg">{{.Message}}</pre>
+<div class="join-mobile"><p class="join-lead">{{t "pair.send_title"}}</p><pre class="join-msg" id="join-msg">{{.MailIntro}}{{template "joincmd" .CmdParts}}</pre>
 <div class="join-actions"><button type="button" class="clay btn btn-primary" data-copy="#join-msg" data-copied="{{t "pair.copied"}}">{{t "pair.copy_link"}}</button><button type="button" class="clay btn" data-share="#join-msg" hidden>{{t "pair.share"}}</button><a class="clay btn" href="{{.MailTo}}">{{t "pair.email"}}</a></div></div>
 {{template "joinnewcode" .}}
 {{else if eq .State "claimed"}}<h1>{{t "pair.wants" .Machine}}</h1>
@@ -46,4 +48,4 @@
 
 {{define "joinnotfound"}}{{template "joinhead"}}<h1>{{t "join.na_title"}}</h1><p>{{t "join.na_text"}}</p>{{template "joinfoot"}}{{end}}
 {{define "joinbusy"}}{{template "joinhead"}}<h1>{{t "join.busy_title"}}</h1><p>{{t "join.busy_text"}}</p>{{template "joinfoot"}}{{end}}
-{{define "joinmsg"}}{{template "joinhead"}}<h1>{{.Title}}</h1><p>{{.Message}}</p>{{template "joinfoot"}}{{end}}
+{{define "joinmsg"}}{{template "joinhead"}}<h1>{{.Title}}</h1><p>{{.Message}}</p>{{if .Back}}<a class="clay btn btn-primary join-back" href="/join/pair">{{t "join.msg_back"}}</a>{{end}}{{template "joinfoot"}}{{end}}

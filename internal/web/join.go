@@ -221,7 +221,7 @@ func (a *app) joinPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Die Seite zeigt nur Name der einladenden Person, Projekt, Organisation,
-	// Rolle und Ablauf. Eine Paarungssitzung legt erst die Annahme an (joinBind),
+	// Rolle und Ablauf. Eine Paarungssitzung legt erst die Annahme an (joinAccepted),
 	// ein bloßes Öffnen oder Neuladen erzeugt keinen Code.
 	view := joinView{Inviter: preview.Inviter, Target: preview.Project, Org: preview.Org, RoleText: roleLabel(preview.Role),
 		ExpiresAt: preview.ExpiresAt, Code: code, OIDC: a.oidc != nil}
@@ -258,7 +258,7 @@ func (a *app) joinAccept(w http.ResponseWriter, r *http.Request) {
 	_, err := a.store.AcceptInvitation(browserPrincipal(r).ID, code)
 	switch {
 	case err == nil:
-		a.joinAccepted(w, r, code)
+		a.joinAccepted(w, r)
 	case errors.Is(err, store.ErrCodeInvalid):
 		a.joinNotFound(w)
 	case errors.Is(err, store.ErrAlreadyMember):
@@ -285,16 +285,11 @@ func (a *app) joinSignOut(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, back, http.StatusSeeOther)
 }
 
-// joinAccepted ist der Ort, an dem der Beitritt endet: die Join-Sitzung dieses
-// Browsers wird an das Konto gebunden (oder eine neue für das Konto angelegt).
-func (a *app) joinAccepted(w http.ResponseWriter, r *http.Request, code string) {
-	a.joinBind(w, r, code, browserPrincipal(r).ID)
-}
-
-// joinBind bindet die Sitzung an das Konto und leitet auf die Paarungsseite.
-func (a *app) joinBind(w http.ResponseWriter, r *http.Request, inviteCode, account string) {
-	http.SetCookie(w, a.joinCookieFor(r, "", -1))
-	if err := a.store.Join().Bind(inviteCode, a.joinCookieValue(r), account); err != nil {
+// joinAccepted ist der Ort, an dem der Beitritt endet: für das Konto entsteht
+// eine Join-Sitzung, und die Paarungsseite zeigt den Code.
+func (a *app) joinAccepted(w http.ResponseWriter, r *http.Request) {
+	account := browserPrincipal(r).ID
+	if _, err := a.store.Join().Create(account); err != nil {
 		http.Redirect(w, r, "/ui/requests", http.StatusSeeOther)
 		return
 	}
@@ -304,5 +299,8 @@ func (a *app) joinBind(w http.ResponseWriter, r *http.Request, inviteCode, accou
 func (a *app) joinMessage(w http.ResponseWriter, status int, title, message string) {
 	a.joinHeaders(w)
 	w.WriteHeader(status)
-	a.joinWrite(w, "joinmsg", struct{ Title, Message string }{title, message})
+	a.joinWrite(w, "joinmsg", struct {
+		Title, Message string
+		Back           bool
+	}{title, message, false})
 }

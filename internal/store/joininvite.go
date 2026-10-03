@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -18,7 +19,8 @@ const (
 var ErrGuestLinkNeedsEnforcement = errors.New("guest links need access enforcement (GHOSTTREE_ENFORCE_ACCESS=1); without it a guest would see more than the page promises")
 
 // InvitePreview ist alles, was ein Inhaber des Codes vor der Anmeldung sieht.
-// Bewusst klein: keine Ids, keine Zähler, keine Namen anderer Personen.
+// Bewusst klein: keine Ids, keine Zähler, keine Namen anderer Personen; der Name
+// der einladenden Person ohne E-Mail-Domain.
 type InvitePreview struct {
 	Inviter   string // Anzeigename der einladenden Person
 	Org       string
@@ -174,27 +176,51 @@ func (s *Store) PreviewInvitation(code string, enforced bool) (InvitePreview, er
 	if errors.Is(err, sql.ErrNoRows) {
 		return InvitePreview{}, ErrCodeInvalid
 	}
+	p.Inviter = inviterDisplay(p.Inviter)
 	return p, err
 }
 
 // PreviewOrgInvitation liest eine offene Einladung in eine Organisation (mit
 // oder ohne Projekt, mit oder ohne E-Mail-Bindung), ohne etwas zu verbrauchen.
-// Gezeigt werden nur Name der einladenden Person, Organisation, Projekt (falls
-// eins) und Ablauf. Jeder Grund, aus dem sie nicht einlösbar ist, ergibt
-// ErrCodeInvalid.
-func (s *Store) PreviewOrgInvitation(code string) (InvitePreview, error) {
+// Sie zeigt nur, was die Einlösung auch gelten ließe: die einladende Person ist
+// noch Owner, ein Projekt liegt noch in der Organisation und trägt member oder
+// guest (guest nur bei durchgesetzter Sichtbarkeit), und eine an eine E-Mail
+// gebundene Einladung zeigt sich nur dort, wo ein Identitätsanbieter die Adresse
+// bestätigen kann (viaIdP). Jeder andere Fall ergibt ErrCodeInvalid, für einen
+// Fremden nicht von "unbekannt" zu unterscheiden. Gezeigt werden nur Name der
+// einladenden Person (siehe inviterDisplay), Organisation, Projekt (falls eins)
+// und Ablauf.
+func (s *Store) PreviewOrgInvitation(code string, enforced, viaIdP bool) (InvitePreview, error) {
 	if s.reader != nil {
-		return s.reader.PreviewOrgInvitation(code)
+		return s.reader.PreviewOrgInvitation(code, enforced, viaIdP)
 	}
 	var p InvitePreview
 	err := s.db.QueryRow(`SELECT ip.name, o.name, COALESCE((SELECT COALESCE(NULLIF(pr.name,''), pr.remote) FROM projects pr WHERE pr.id = i.project_id), ''), i.project_role, i.expires_at
 		FROM invitations i
 		JOIN persons ip ON ip.id = i.invited_by
 		JOIN orgs o ON o.id = i.org_id
-		WHERE i.code_hash = ? AND i.accepted_at = '' AND i.revoked_at = '' AND i.expires_at > ?`,
-		hashToken(code), now()).Scan(&p.Inviter, &p.Org, &p.Project, &p.Role, &p.ExpiresAt)
+		JOIN org_members m ON m.org_id = i.org_id AND m.account_id = i.invited_by AND m.role = ?
+		WHERE i.code_hash = ? AND i.accepted_at = '' AND i.revoked_at = '' AND i.expires_at > ?
+		  AND (i.project_id = 0 OR EXISTS (SELECT 1 FROM projects pr WHERE pr.id = i.project_id AND pr.org_id = i.org_id
+		       AND i.project_role IN (?, ?) AND (i.project_role <> ? OR ?)))
+		  AND (i.email = '' OR ?)`,
+		OrgOwner, hashToken(code), now(), RoleMember, RoleGuest, RoleGuest, enforced, viaIdP).Scan(&p.Inviter, &p.Org, &p.Project, &p.Role, &p.ExpiresAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return InvitePreview{}, ErrCodeInvalid
 	}
+	p.Inviter = inviterDisplay(p.Inviter)
 	return p, err
+}
+
+// inviterDisplay: Ein Anzeigename kann eine E-Mail-Adresse sein (OIDC
+// preferred_username). Vor der Anmeldung sieht ein Fremder den Namen, also nur
+// der lokale Teil, nie die Adresse.
+func inviterDisplay(name string) string {
+	if at := strings.Index(name, "@"); at > 0 {
+		return name[:at]
+	}
+	if strings.HasPrefix(name, "@") {
+		return strings.TrimLeft(name, "@")
+	}
+	return name
 }

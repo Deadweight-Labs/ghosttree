@@ -40,7 +40,31 @@ type joinPairView struct {
 	Callback                              string
 	Person, AccountID, CSRFToken, Base    string
 	Refresh                               int
-	Message, MailTo                       string
+	Message, MailIntro, MailTo            string
+	CmdParts                              []cmdPart
+	NeedsHTTPS                            bool
+}
+
+// cmdPart ist ein Stück des Befehls für die Anzeige. Der Umbruch soll nur an den
+// Leerzeichen fallen (ein "--pair" darf nie zerreißen); allein die Adresse darf
+// überall brechen. Der Text bleibt beim Kopieren derselbe Befehl.
+type cmdPart struct {
+	Text string
+	URL  bool
+	Sep  string
+	Wbr  bool
+}
+
+func cmdParts(command string) []cmdPart {
+	words := strings.Split(command, " ")
+	parts := make([]cmdPart, len(words))
+	for i, w := range words {
+		parts[i] = cmdPart{Text: w, URL: strings.HasPrefix(w, "http://") || strings.HasPrefix(w, "https://"), Wbr: w == "|"}
+		if i < len(words)-1 {
+			parts[i].Sep = " "
+		}
+	}
+	return parts
 }
 
 // joinBase ist die Adresse, unter der der Server von außen erreichbar ist: die
@@ -78,35 +102,6 @@ func (a *app) joinCommand(r *http.Request, pair string) string {
 	return "curl -fsSL " + base + "/install.sh | sh -s -- --pair " + pair
 }
 
-// Der Browser-Cookie der Join-Sitzung: bindet den Browser an seine Sitzung, ohne
-// dass ein Code in einer URL steht. Er gilt für alle Pfade, weil die Anmeldung
-// (/ui/login/..., OIDC-Callback) ihn braucht, und hat SameSite=Lax, damit er auf
-// dem Rückweg vom Identitätsanbieter mitkommt.
-//
-// Wo Secure gilt, heißt er __Host-gt_join: der Browser nimmt das Präfix nur mit
-// Secure, Path=/ und ohne Domain an, ein Nachbar-Subdomain kann ihn also nicht
-// setzen (Cookie-Fixierung). Über http (Entwicklung, Loopback) bleibt es gt_join.
-const joinCookie = "gt_join"
-
-func (a *app) joinCookieName(r *http.Request) string {
-	if a.secureCookies(r) {
-		return "__Host-" + joinCookie
-	}
-	return joinCookie
-}
-
-func (a *app) joinCookieFor(r *http.Request, value string, maxAge int) *http.Cookie {
-	return &http.Cookie{Name: a.joinCookieName(r), Value: value, Path: "/", HttpOnly: true,
-		Secure: a.secureCookies(r), SameSite: http.SameSiteLaxMode, MaxAge: maxAge}
-}
-
-func (a *app) joinCookieValue(r *http.Request) string {
-	if c, err := r.Cookie(a.joinCookieName(r)); err == nil && len(c.Value) <= 64 {
-		return c.Value
-	}
-	return ""
-}
-
 // sameNetworkMeaningful: "Same network" sagt nur etwas, wenn der Server die
 // echte Absenderadresse kennt. Hinter einer öffentlichen URL ohne benannte
 // vertraute Proxys sähe jeder Absender wie der Proxy aus, die Zeile wäre immer
@@ -127,9 +122,13 @@ func (a *app) joinPairPage(w http.ResponseWriter, r *http.Request) {
 	case store.JoinWaiting:
 		view.Command = a.joinCommand(r, v.Pair)
 		if view.Command == "" {
-			// Ohne https gibt es kein Installationsskript; wer ctx schon hat, joint damit.
-			view.Command = msg("pair.fallback", view.Base, v.Pair)
+			// ctx join lehnt http außerhalb von Loopback ab, ein Ersatzbefehl
+			// liefe also ins Leere: die Seite sagt stattdessen, was fehlt.
+			view.NeedsHTTPS = true
+			break
 		}
+		view.CmdParts = cmdParts(view.Command)
+		view.MailIntro = msg("pair.message", "")
 		view.Message = msg("pair.message", view.Command)
 		view.MailTo = "mailto:?subject=" + mailEscape(msg("pair.mail_subject")) + "&body=" + mailEscape(view.Message)
 		view.Refresh = 10
@@ -163,17 +162,28 @@ func (a *app) joinPairState(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"state": v.State, "nonce": v.Nonce})
 }
 
+// joinPairMessage ist joinMessage mit dem Weg zurück zur Paarungsseite: wer dort
+// einen Fehler bekommt, steht sonst vor einer Sackgasse.
+func (a *app) joinPairMessage(w http.ResponseWriter, status int, title, message string) {
+	a.joinHeaders(w)
+	w.WriteHeader(status)
+	a.joinWrite(w, "joinmsg", struct {
+		Title, Message string
+		Back           bool
+	}{title, message, true})
+}
+
 // joinPairCreate legt die Sitzung an oder ersetzt sie durch einen neuen Code.
 // Gibt es noch keine Sitzung, bestätigt das Konto seinen Namen (wie beim
 // Beitritt); ein neuer Code für eine bestehende braucht das nicht.
 func (a *app) joinPairCreate(w http.ResponseWriter, r *http.Request) {
 	p := browserPrincipal(r)
 	if a.store.Join().View(p.ID).State == store.JoinNone && r.FormValue("confirm_account") != p.Label {
-		a.joinMessage(w, http.StatusBadRequest, msg("join.msg_confirm_t"), msg("join.msg_confirm_p"))
+		a.joinPairMessage(w, http.StatusBadRequest, msg("join.msg_confirm_t"), msg("join.msg_confirm_p"))
 		return
 	}
 	if _, err := a.store.Join().Create(p.ID); err != nil {
-		a.joinMessage(w, http.StatusInternalServerError, msg("join.msg_setup_t"), msg("join.msg_setup"))
+		a.joinPairMessage(w, http.StatusInternalServerError, msg("join.msg_setup_t"), msg("join.msg_setup"))
 		return
 	}
 	http.Redirect(w, r, "/join/pair", http.StatusSeeOther)
@@ -187,7 +197,7 @@ func (a *app) joinPairDecide(w http.ResponseWriter, r *http.Request) {
 	p := browserPrincipal(r)
 	approve := r.FormValue("decision") == "approve"
 	if approve && r.FormValue("confirm_account") != p.Label {
-		a.joinMessage(w, http.StatusBadRequest, msg("join.msg_confirm_t"), msg("join.msg_confirm_p"))
+		a.joinPairMessage(w, http.StatusBadRequest, msg("join.msg_confirm_t"), msg("join.msg_confirm_p"))
 		return
 	}
 	check := func(machine string) error { return a.store.MachineClaimable(machine, p.ID) }
@@ -198,12 +208,12 @@ func (a *app) joinPairDecide(w http.ResponseWriter, r *http.Request) {
 	case err == nil:
 		http.Redirect(w, r, "/join/pair", http.StatusSeeOther)
 	case errors.Is(err, store.ErrJoinConfirm):
-		a.joinMessage(w, http.StatusBadRequest, msg("join.msg_badcode_t"), msg("join.msg_badcode"))
+		a.joinPairMessage(w, http.StatusBadRequest, msg("join.msg_badcode_t"), msg("join.msg_badcode"))
 	case errors.Is(err, store.ErrMachineTaken):
-		a.joinMessage(w, http.StatusConflict, msg("join.msg_taken_t"), msg("join.msg_taken"))
+		a.joinPairMessage(w, http.StatusConflict, msg("join.msg_taken_t"), msg("join.msg_taken"))
 	case errors.Is(err, store.ErrJoinNotReady):
-		a.joinMessage(w, http.StatusConflict, msg("join.msg_nothing_t"), msg("join.msg_nothing"))
+		a.joinPairMessage(w, http.StatusConflict, msg("join.msg_nothing_t"), msg("join.msg_nothing"))
 	default:
-		a.joinMessage(w, http.StatusInternalServerError, msg("join.msg_setup_t"), msg("join.msg_setup"))
+		a.joinPairMessage(w, http.StatusInternalServerError, msg("join.msg_setup_t"), msg("join.msg_setup"))
 	}
 }

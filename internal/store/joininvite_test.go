@@ -398,22 +398,83 @@ func TestPreviewOrgInvitationShowsInviterAndOrgAndConsumesNothing(t *testing.T) 
 		t.Fatal(err)
 	}
 	for i := 0; i < 2; i++ {
-		p, err := st.PreviewOrgInvitation(orgCode)
+		p, err := st.PreviewOrgInvitation(orgCode, false, false)
 		if err != nil || p.Inviter != "robin" || p.Org != "Alpha" || p.Project != "" {
 			t.Fatalf("preview %d: %+v %v", i, p, err)
 		}
 	}
 	projCode, _, _ := st.CreateProjectInvitation("person:1", o.ID, joinRemote, RoleMember, 0)
-	if p, err := st.PreviewOrgInvitation(projCode); err != nil || p.Project != joinRemote {
+	if p, err := st.PreviewOrgInvitation(projCode, false, false); err != nil || p.Project != joinRemote {
 		t.Fatalf("project invitation: %+v %v", p, err)
 	}
-	if _, err := st.PreviewOrgInvitation("nope"); !errors.Is(err, ErrCodeInvalid) {
+	if _, err := st.PreviewOrgInvitation("nope", false, false); !errors.Is(err, ErrCodeInvalid) {
 		t.Fatalf("unknown: %v", err)
 	}
 	if _, err := st.AcceptInvitation("person:2", orgCode); err != nil {
 		t.Fatalf("accept after previews: %v", err)
 	}
-	if _, err := st.PreviewOrgInvitation(orgCode); !errors.Is(err, ErrCodeInvalid) {
+	if _, err := st.PreviewOrgInvitation(orgCode, false, false); !errors.Is(err, ErrCodeInvalid) {
 		t.Fatalf("used invitation still previews: %v", err)
+	}
+}
+
+func TestPreviewsShowOnlyTheLocalPartOfAnEmailShapedInviterName(t *testing.T) {
+	st, o := joinFixture(t)
+	if _, err := st.db.Exec(`UPDATE persons SET name=? WHERE id=1`, "robin.grambow@example.org"); err != nil {
+		t.Fatal(err)
+	}
+	projCode, _, err := st.CreateProjectInvitation("person:1", o.ID, joinRemote, RoleMember, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	orgCode, _, err := st.CreateInvitation("person:1", o.ID, "", OrgMember, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p, err := st.PreviewInvitation(projCode, true); err != nil || p.Inviter != "robin.grambow" {
+		t.Fatalf("project preview: %+v %v", p, err)
+	}
+	if p, err := st.PreviewOrgInvitation(orgCode, true, false); err != nil || p.Inviter != "robin.grambow" {
+		t.Fatalf("org preview: %+v %v", p, err)
+	}
+}
+
+func TestPreviewOrgInvitationMatchesWhatRedemptionWouldAccept(t *testing.T) {
+	st, o := joinFixture(t)
+	bound, _, err := st.CreateInvitation("person:1", o.ID, "anna@example.org", OrgMember, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	guest, _, err := st.CreateProjectInvitation("person:1", o.ID, joinRemote, RoleGuest, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	open, _, err := st.CreateInvitation("person:1", o.ID, "", OrgMember, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Eine an eine E-Mail gebundene Einladung lässt sich ohne Identitätsanbieter
+	// nicht einlösen und zeigt sich dort auch nicht.
+	if _, err := st.PreviewOrgInvitation(bound, true, false); !errors.Is(err, ErrCodeInvalid) {
+		t.Fatalf("email-bound without an identity provider: %v", err)
+	}
+	if _, err := st.PreviewOrgInvitation(bound, true, true); err != nil {
+		t.Fatalf("email-bound with an identity provider: %v", err)
+	}
+	// Gast-Links gelten nur mit durchgesetzter Sichtbarkeit.
+	if _, err := st.PreviewOrgInvitation(guest, false, false); !errors.Is(err, ErrCodeInvalid) {
+		t.Fatalf("guest link without enforcement: %v", err)
+	}
+	if _, err := st.PreviewOrgInvitation(guest, true, false); err != nil {
+		t.Fatalf("guest link with enforcement: %v", err)
+	}
+	// Wer eingeladen hat, muss noch Owner sein.
+	if _, err := st.db.Exec(`UPDATE org_members SET role=? WHERE org_id=? AND account_id=1`, OrgMember, o.ID); err != nil {
+		t.Fatal(err)
+	}
+	for name, code := range map[string]string{"open": open, "bound": bound, "guest": guest} {
+		if _, err := st.PreviewOrgInvitation(code, true, true); !errors.Is(err, ErrCodeInvalid) {
+			t.Fatalf("%s: inviter lost ownership but the page still shows it: %v", name, err)
+		}
 	}
 }

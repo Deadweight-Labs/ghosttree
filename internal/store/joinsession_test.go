@@ -31,8 +31,6 @@ func pollLater(st *Store, clock *joinClock, deviceCode string) (DeviceApproval, 
 	return st.Device().Poll(deviceCode)
 }
 
-const testInvite = "invite-code-1"
-
 // pkce liefert Verifier und Challenge (S256).
 func pkce() (verifier, challenge string) {
 	verifier = strings.Repeat("v", 43)
@@ -45,51 +43,25 @@ func loopReq(pair, machine, addr string) JoinClaimRequest {
 	return JoinClaimRequest{Addr: addr, Pair: pair, Machine: machine, Challenge: ch, State: "state-12345678", Port: 40123}
 }
 
+type pairFor struct{ Pair string }
+
+// openPair legt die Sitzung eines Kontos an, wie es die Annahme der Einladung tut.
+func openPair(j *JoinSessions, account string) pairFor {
+	pair, err := j.Create(account)
+	if err != nil {
+		panic(err)
+	}
+	return pairFor{Pair: pair}
+}
+
 func codeReq(pair, machine, addr string) JoinClaimRequest {
 	return JoinClaimRequest{Addr: addr, Pair: pair, Machine: machine}
-}
-
-func TestJoinOpenCreatesOneSessionPerBrowserAndInvitation(t *testing.T) {
-	st, _ := pairFixture(t)
-	j := st.Join()
-	a, err := j.Open(testInvite, "")
-	if err != nil || a.ID == "" || len(a.Pair) != 9 || a.Pair[4] != '-' || NormalizeUserCode(a.Pair) == "" {
-		t.Fatalf("open: %+v %v", a, err)
-	}
-	// Dasselbe Cookie: dieselbe Sitzung, kein neues Cookie.
-	again, _ := j.Open(testInvite, a.ID)
-	if again.Pair != a.Pair || again.ID != "" || j.Sessions() != 1 {
-		t.Fatalf("reload: %+v sessions=%d", again, j.Sessions())
-	}
-	// Anderer Browser oder Cookie einer anderen Einladung: eigene Sitzung.
-	other, _ := j.Open(testInvite, "")
-	third, _ := j.Open("invite-code-2", a.ID)
-	if other.Pair == a.Pair || third.Pair == a.Pair || third.ID == "" || j.Sessions() != 3 {
-		t.Fatalf("others: %+v %+v", other, third)
-	}
-}
-
-func TestJoinOpenCapsSessionsPerInvitationAndKeepsOtherInvitations(t *testing.T) {
-	st, _ := pairFixture(t)
-	j := st.Join()
-	first, _ := j.Open("other", "")
-	for i := 0; i < maxJoinPerInvite+5; i++ {
-		if _, err := j.Open(testInvite, ""); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if n := j.Sessions(); n != maxJoinPerInvite+1 {
-		t.Fatalf("%d sessions", n)
-	}
-	if _, err := j.Claim(codeReq(first.Pair, "m", "1.1.1.1")); err != nil {
-		t.Fatalf("another invitation lost its session: %v", err)
-	}
 }
 
 func TestJoinSessionsExpire(t *testing.T) {
 	st, clock := pairFixture(t)
 	j := st.Join()
-	o, _ := j.Open(testInvite, "")
+	o := openPair(j, "person:2")
 	clock.t = clock.t.Add(JoinSessionTTL + time.Second)
 	if _, err := j.Claim(codeReq(o.Pair, "m", "1.1.1.1")); err != ErrJoinInvalid {
 		t.Fatalf("expired: %v", err)
@@ -99,20 +71,17 @@ func TestJoinSessionsExpire(t *testing.T) {
 	}
 }
 
-// Installation zuerst: Gerät meldet sich vor dem Login, Bindung kommt später.
-func TestJoinCodeModeInstallerFirstThenLoginThenApprove(t *testing.T) {
+// Code-Weg: Bestätigungscode eintippen, dann liefert der Geräte-Ablauf das Token.
+func TestJoinCodeModeApproveWithTheTerminalCode(t *testing.T) {
 	st, clock := pairFixture(t)
 	j := st.Join()
-	o, _ := j.Open(testInvite, "")
+	o := openPair(j, "person:2")
 	claim, err := j.Claim(codeReq(strings.ToLower(o.Pair), "laptop", "1.1.1.1"))
 	if err != nil || claim.Mode != JoinModeCode || len(claim.DeviceCode) != 64 || len(claim.Confirm) != 4 {
 		t.Fatalf("claim: %+v %v", claim, err)
 	}
 	if _, _, err := pollLater(st, clock, claim.DeviceCode); !errors.Is(err, ErrDevicePending) {
-		t.Fatalf("poll before login: %v", err)
-	}
-	if err := j.Bind(testInvite, o.ID, "person:2"); err != nil {
-		t.Fatal(err)
+		t.Fatalf("poll before approval: %v", err)
 	}
 	v := j.View("person:2")
 	if v.State != JoinClaimed || v.Machine != "laptop" || v.Mode != JoinModeCode || v.Nonce == "" {
@@ -142,14 +111,13 @@ func TestJoinCodeModeInstallerFirstThenLoginThenApprove(t *testing.T) {
 	}
 }
 
-// Login zuerst: Konto gebunden, Seite wartet, dann meldet sich das Gerät.
-func TestJoinLoginFirstThenInstaller(t *testing.T) {
+// Die Sitzung wartet auf ihr Gerät; erst nach dem Claim gibt es etwas freizugeben.
+func TestJoinWaitsForTheInstaller(t *testing.T) {
 	st, _ := pairFixture(t)
 	j := st.Join()
-	o, _ := j.Open(testInvite, "")
-	j.Bind(testInvite, o.ID, "person:2")
+	o := openPair(j, "person:2")
 	if v := j.View("person:2"); v.State != JoinWaiting || v.Pair != o.Pair {
-		t.Fatalf("after bind %+v", v)
+		t.Fatalf("new session %+v", v)
 	}
 	if _, err := j.Decide("person:2", true, "x", "", nil); !errors.Is(err, ErrJoinNotReady) {
 		t.Fatalf("approve without device: %v", err)
@@ -162,34 +130,14 @@ func TestJoinLoginFirstThenInstaller(t *testing.T) {
 	}
 }
 
-func TestJoinBindNeedsTheSameInvitationAndBrowser(t *testing.T) {
-	st, _ := pairFixture(t)
-	j := st.Join()
-	o, _ := j.Open(testInvite, "")
-	// Falsche Einladung oder Cookie: das Konto bekommt eine neue, eigene Sitzung.
-	j.Bind("invite-code-2", o.ID, "person:3")
-	if v := j.View("person:3"); v.State != JoinWaiting || v.Pair == o.Pair {
-		t.Fatalf("foreign bind %+v", v)
-	}
-	if _, err := j.Claim(codeReq(o.Pair, "m", "1.1.1.1")); err != nil {
-		t.Fatalf("the browser's session was taken: %v", err)
-	}
-	// Ein Konto, das schon eine Sitzung hat, behält nur die neue.
-	j.Bind(testInvite, o.ID, "person:3")
-	if j.Sessions() != 1 {
-		t.Fatalf("sessions %d", j.Sessions())
-	}
-}
-
 func exchangeFlow(t *testing.T) (*JoinSessions, JoinView, string) {
 	t.Helper()
 	st, _ := pairFixture(t)
 	j := st.Join()
-	o, _ := j.Open(testInvite, "")
+	o := openPair(j, "person:2")
 	if _, err := j.Claim(loopReq(o.Pair, "laptop", "1.1.1.1")); err != nil {
 		t.Fatal(err)
 	}
-	j.Bind(testInvite, o.ID, "person:2")
 	v := j.View("person:2")
 	dec, err := j.Decide("person:2", true, v.Nonce, "", nil)
 	if err != nil {
@@ -247,9 +195,8 @@ func TestJoinExchangeSuccessAndReuse(t *testing.T) {
 func TestJoinExchangeExpires(t *testing.T) {
 	st, clock := pairFixture(t)
 	j := st.Join()
-	o, _ := j.Open(testInvite, "")
+	o := openPair(j, "person:2")
 	j.Claim(loopReq(o.Pair, "m", "1.1.1.1"))
-	j.Bind(testInvite, o.ID, "person:2")
 	dec, _ := j.Decide("person:2", true, j.View("person:2").Nonce, "", nil)
 	clock.t = clock.t.Add(joinAuthTTL + time.Second)
 	verifier, _ := pkce()
@@ -263,7 +210,7 @@ func TestJoinExchangeExpires(t *testing.T) {
 func TestJoinThiefClaimsFirstGetsNothing(t *testing.T) {
 	st, _ := pairFixture(t)
 	j := st.Join()
-	o, _ := j.Open(testInvite, "")
+	o := openPair(j, "person:2")
 	thief := loopReq(o.Pair, "laptop", "6.6.6.6") // Gerätename wie beim Opfer
 	thief.Challenge = base64.RawURLEncoding.EncodeToString(make([]byte, 32))
 	if _, err := j.Claim(thief); err != nil {
@@ -273,7 +220,6 @@ func TestJoinThiefClaimsFirstGetsNothing(t *testing.T) {
 	if _, err := j.Claim(loopReq(o.Pair, "laptop", "1.1.1.1")); err != ErrJoinInvalid {
 		t.Fatalf("victim claim: %v", err)
 	}
-	j.Bind(testInvite, o.ID, "person:2")
 	v := j.View("person:2")
 	if v.State != JoinCompromised {
 		t.Fatalf("state %q", v.State)
@@ -291,11 +237,10 @@ func TestJoinThiefClaimsFirstGetsNothing(t *testing.T) {
 func TestJoinStolenPairCodeWithApprovedVictimStillGivesTheThiefNothing(t *testing.T) {
 	st, _ := pairFixture(t)
 	j := st.Join()
-	o, _ := j.Open(testInvite, "")
+	o := openPair(j, "person:2")
 	thief := loopReq(o.Pair, "laptop", "6.6.6.6")
 	thief.Challenge = base64.RawURLEncoding.EncodeToString(sha256Of("thief-secret-verifier-0000000000000000000000"))
 	j.Claim(thief)
-	j.Bind(testInvite, o.ID, "person:2")
 	dec, err := j.Decide("person:2", true, j.View("person:2").Nonce, "", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -316,9 +261,8 @@ func sha256Of(s string) []byte { sum := sha256.Sum256([]byte(s)); return sum[:] 
 func TestJoinCodeModeThiefCannotApproveWithoutTheTerminalCode(t *testing.T) {
 	st, clock := pairFixture(t)
 	j := st.Join()
-	o, _ := j.Open(testInvite, "")
+	o := openPair(j, "person:2")
 	claim, _ := j.Claim(codeReq(o.Pair, "laptop", "6.6.6.6"))
-	j.Bind(testInvite, o.ID, "person:2")
 	nonce := j.View("person:2").Nonce
 	for i := 0; i < maxJoinConfirmFails; i++ {
 		if _, err := j.Decide("person:2", true, nonce, "", nil); !errors.Is(err, ErrJoinConfirm) {
@@ -336,7 +280,7 @@ func TestJoinCodeModeThiefCannotApproveWithoutTheTerminalCode(t *testing.T) {
 func TestJoinSecondClaimDropsTheSessionAndItsDeviceFlow(t *testing.T) {
 	st, clock := pairFixture(t)
 	j := st.Join()
-	o, _ := j.Open(testInvite, "")
+	o := openPair(j, "person:2")
 	first, _ := j.Claim(codeReq(o.Pair, "mine", "1.1.1.1"))
 	if _, err := j.Claim(codeReq(o.Pair, "thief", "2.2.2.2")); err != ErrJoinInvalid {
 		t.Fatalf("second claim: %v", err)
@@ -344,19 +288,17 @@ func TestJoinSecondClaimDropsTheSessionAndItsDeviceFlow(t *testing.T) {
 	if _, _, err := pollLater(st, clock, first.DeviceCode); !errors.Is(err, ErrDeviceUnknown) {
 		t.Fatalf("first device flow survived: %v", err)
 	}
-	// Die Einladungsseite im selben Browser bekommt jetzt einen neuen Code.
-	again, _ := j.Open(testInvite, o.ID)
-	if again.ID == "" || again.Pair == o.Pair {
-		t.Fatalf("reload after compromise: %+v", again)
+	// Die Seite des Kontos warnt und bietet einen neuen Code an.
+	if v := j.View("person:2"); v.State != JoinCompromised {
+		t.Fatalf("state %q", v.State)
 	}
 }
 
 func TestJoinDeny(t *testing.T) {
 	st, clock := pairFixture(t)
 	j := st.Join()
-	o, _ := j.Open(testInvite, "")
+	o := openPair(j, "person:2")
 	claim, _ := j.Claim(codeReq(o.Pair, "laptop", "1.1.1.1"))
-	j.Bind(testInvite, o.ID, "person:2")
 	if _, err := j.Decide("person:2", false, j.View("person:2").Nonce, "", nil); err != nil {
 		t.Fatal(err)
 	}
@@ -414,7 +356,7 @@ func TestJoinDecideBelongsToTheBoundAccount(t *testing.T) {
 func TestJoinJoinFlowsAreInvisibleToTheUserCodeFlow(t *testing.T) {
 	st, _ := pairFixture(t)
 	j := st.Join()
-	o, _ := j.Open(testInvite, "")
+	o := openPair(j, "person:2")
 	claim, _ := j.Claim(codeReq(o.Pair, "laptop", "1.1.1.1"))
 	for _, code := range []string{o.Pair, claim.Confirm, claim.Confirm + claim.Confirm} {
 		if _, err := st.Device().Lookup(code, "person:2"); err == nil {
@@ -432,12 +374,11 @@ func TestJoinJoinFlowsAreInvisibleToTheUserCodeFlow(t *testing.T) {
 func TestJoinUnknownExpiredAndConsumedAreTheSameError(t *testing.T) {
 	st, clock := pairFixture(t)
 	j := st.Join()
-	expired, _ := j.Open("a", "")
-	consumed, _ := j.Open("b", "")
-	denied, _ := j.Open("c", "")
+	expired := openPair(j, "person:5")
+	consumed := openPair(j, "person:6")
+	denied := openPair(j, "person:4")
 	j.Claim(codeReq(consumed.Pair, "m", "1.1.1.1"))
 	j.Claim(codeReq(denied.Pair, "m", "1.1.1.2"))
-	j.Bind("c", denied.ID, "person:4")
 	j.Decide("person:4", false, j.View("person:4").Nonce, "", nil)
 	cases := map[string]string{"unknown": "BCDF-GHJK", "claimed": consumed.Pair, "denied": denied.Pair, "garbage": "not a code", "empty": ""}
 	for name, code := range cases {
@@ -453,7 +394,7 @@ func TestJoinUnknownExpiredAndConsumedAreTheSameError(t *testing.T) {
 
 func TestJoinRestartLosesSessionsNeutrally(t *testing.T) {
 	st, _ := pairFixture(t)
-	o, _ := st.Join().Open(testInvite, "")
+	o := openPair(st.Join(), "person:2")
 	fresh := NewJoinSessions(st.Device())
 	if _, err := fresh.Claim(codeReq(o.Pair, "m", "a")); err != ErrJoinInvalid {
 		t.Fatalf("claim after restart: %v", err)
@@ -529,7 +470,7 @@ func TestJoinBusyAddressAnswersTheSameForValidAndInvalidCodes(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	o, _ := j.Open(testInvite, "")
+	o := openPair(j, "person:2")
 	_, errValid := j.Claim(codeReq(o.Pair, "m", "7.7.7.7"))
 	_, errInvalid := j.Claim(codeReq("BCDF-GHJK", "m", "7.7.7.7"))
 	if !errors.Is(errValid, ErrDeviceBusy) || errValid != errInvalid {
@@ -578,57 +519,12 @@ func TestJoinSessionsAreCapped(t *testing.T) {
 	}
 }
 
-// N1: wer den Einladungslink hat, verdrängt keine Sitzung mit Gerät.
-func TestJoinOpenNeverEvictsSessionsWithADevice(t *testing.T) {
-	st, _ := pairFixture(t)
-	j := st.Join()
-	var first JoinOpen
-	for i := 0; i < maxJoinPerInvite; i++ {
-		o, err := j.Open(testInvite, "")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if i == 0 {
-			first = o
-		}
-		if _, err := j.Claim(loopReq(o.Pair, "m", fmt.Sprintf("10.0.%d.1", i))); err != nil {
-			t.Fatal(err)
-		}
-	}
-	extra, err := j.Open(testInvite, "")
-	if err != nil || extra.Pair != "" || extra.ID != "" {
-		t.Fatalf("overflow got a session: %+v %v", extra, err)
-	}
-	if n := j.Sessions(); n != maxJoinPerInvite {
-		t.Fatalf("%d sessions", n)
-	}
-	// Die erste Sitzung ist noch beansprucht und bindbar.
-	if err := j.Bind(testInvite, first.ID, "person:2"); err != nil {
-		t.Fatal(err)
-	}
-	if v := j.View("person:2"); v.State != JoinClaimed {
-		t.Fatalf("state %q", v.State)
-	}
-	// Eine Sitzung ohne Gerät weicht weiterhin.
-	st2, _ := pairFixture(t)
-	j2 := st2.Join()
-	for i := 0; i < maxJoinPerInvite; i++ {
-		j2.Open(testInvite, "")
-	}
-	if o, _ := j2.Open(testInvite, ""); o.Pair == "" {
-		t.Fatal("waiting sessions should still make room")
-	}
-}
-
 func TestJoinLoopbackClaimsAreLimitedPerNetwork(t *testing.T) {
 	st, _ := pairFixture(t)
 	j := st.Join()
 	claim := func(addr string) error {
-		o, err := j.Open(fmt.Sprintf("inv-%s-%d", addr, j.Sessions()), "")
-		if err != nil {
-			t.Fatal(err)
-		}
-		_, err = j.Claim(loopReq(o.Pair, "m", addr))
+		o := openPair(j, fmt.Sprintf("person:%s-%d", addr, j.Sessions()))
+		_, err := j.Claim(loopReq(o.Pair, "m", addr))
 		return err
 	}
 	for i := 0; i < maxDevicePerClient; i++ {
@@ -663,56 +559,12 @@ func TestJoinLoopbackClaimsAreLimitedPerNetwork(t *testing.T) {
 	}
 }
 
-// N4/R1: Claim bei Minute 12, Anmeldung bei Minute 20: die Bindung hält, die
-// Sitzung ist dieselbe; das Login-Fenster endet bei 30 Minuten.
-func TestJoinClaimedSessionSurvivesALateLoginButNotTheLoginWindow(t *testing.T) {
-	st, clock := pairFixture(t)
-	j := st.Join()
-	o, _ := j.Open(testInvite, "")
-	start := clock.t
-	clock.t = start.Add(12 * time.Minute)
-	if _, err := j.Claim(loopReq(o.Pair, "m", "1.1.1.1")); err != nil {
-		t.Fatal(err)
-	}
-	clock.t = start.Add(20 * time.Minute)
-	if err := j.Bind(testInvite, o.ID, "person:2"); err != nil {
-		t.Fatal(err)
-	}
-	if v := j.View("person:2"); v.State != JoinClaimed || v.Machine != "m" || j.Sessions() != 1 {
-		t.Fatalf("late login lost the claimed session: %+v sessions=%d", v, j.Sessions())
-	}
-	clock.t = start.Add(JoinMaxLifetime + time.Second)
-	if v := j.View("person:2"); v.State != JoinNone {
-		t.Fatalf("session outlived the window: %q", v.State)
-	}
-}
-
-// R2: Endzustände ohne Konto weichen beim Überlauf; ein Link-Inhaber füllt die Plätze nicht damit.
-func TestJoinOpenEvictsUnboundCompromisedAndDeniedSessions(t *testing.T) {
-	st, _ := pairFixture(t)
-	j := st.Join()
-	for i := 0; i < maxJoinPerInvite; i++ {
-		o, _ := j.Open(testInvite, "")
-		if _, err := j.Claim(codeReq(o.Pair, "m", fmt.Sprintf("10.1.%d.1", i))); err != nil {
-			t.Fatal(err)
-		}
-		j.Claim(codeReq(o.Pair, "thief", fmt.Sprintf("10.2.%d.1", i))) // zweiter Claim: kompromittiert
-	}
-	if o, err := j.Open(testInvite, ""); err != nil || o.Pair == "" {
-		t.Fatalf("compromised sessions blocked the slots: %+v %v", o, err)
-	}
-	if n := j.Sessions(); n != maxJoinPerInvite {
-		t.Fatalf("%d sessions", n)
-	}
-}
-
 // N6: Ablehnung und Kompromittierung sagen dem wartenden Installer Bescheid.
 func TestJoinDenyLoopbackRedirectsWithAccessDenied(t *testing.T) {
 	st, _ := pairFixture(t)
 	j := st.Join()
-	o, _ := j.Open(testInvite, "")
+	o := openPair(j, "person:2")
 	j.Claim(loopReq(o.Pair, "m", "1.1.1.1"))
-	j.Bind(testInvite, o.ID, "person:2")
 	dec, err := j.Decide("person:2", false, j.View("person:2").Nonce, "", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -722,9 +574,8 @@ func TestJoinDenyLoopbackRedirectsWithAccessDenied(t *testing.T) {
 		t.Fatalf("deny redirect %q", dec.Redirect)
 	}
 	// Code-Weg: kein Ziel.
-	o2, _ := j.Open(testInvite, "")
+	o2 := openPair(j, "person:3")
 	j.Claim(codeReq(o2.Pair, "m", "1.1.1.1"))
-	j.Bind(testInvite, o2.ID, "person:3")
 	if dec, _ := j.Decide("person:3", false, j.View("person:3").Nonce, "", nil); dec.Redirect != "" {
 		t.Fatalf("code mode redirect %q", dec.Redirect)
 	}
@@ -733,9 +584,8 @@ func TestJoinDenyLoopbackRedirectsWithAccessDenied(t *testing.T) {
 func TestJoinCompromisedLoopbackOffersTheCallbackTarget(t *testing.T) {
 	st, _ := pairFixture(t)
 	j := st.Join()
-	o, _ := j.Open(testInvite, "")
+	o := openPair(j, "person:2")
 	j.Claim(loopReq(o.Pair, "m", "1.1.1.1"))
-	j.Bind(testInvite, o.ID, "person:2")
 	if _, err := j.Claim(loopReq(o.Pair, "thief", "2.2.2.2")); err != ErrJoinInvalid {
 		t.Fatal(err)
 	}
@@ -744,9 +594,8 @@ func TestJoinCompromisedLoopbackOffersTheCallbackTarget(t *testing.T) {
 		t.Fatalf("view %+v", v)
 	}
 	// Ohne Callback-Ziel (Code-Weg) gibt es keins.
-	o2, _ := j.Open(testInvite, "")
+	o2 := openPair(j, "person:3")
 	j.Claim(codeReq(o2.Pair, "m", "1.1.1.1"))
-	j.Bind(testInvite, o2.ID, "person:3")
 	j.Claim(codeReq(o2.Pair, "thief", "2.2.2.2"))
 	if v := j.View("person:3"); v.State != JoinCompromised || v.Callback != "" {
 		t.Fatalf("view %+v", v)
@@ -761,10 +610,9 @@ func TestJoinExchangeRejectsVerifiersOutsideRFC7636(t *testing.T) {
 	sum := sha256.Sum256([]byte(bad))
 	req := loopReq("", "m", "1.1.1.1")
 	req.Challenge = base64.RawURLEncoding.EncodeToString(sum[:])
-	o, _ := j.Open(testInvite, "")
+	o := openPair(j, "person:2")
 	req.Pair = o.Pair
 	j.Claim(req)
-	j.Bind(testInvite, o.ID, "person:2")
 	dec, _ := j.Decide("person:2", true, j.View("person:2").Nonce, "", nil)
 	if _, err := j.Exchange("9.9.9.9", authCode(dec.Redirect), bad); err != ErrJoinInvalid {
 		t.Fatalf("verifier with '+' accepted: %v", err)
@@ -775,9 +623,8 @@ func TestJoinExchangeRejectsVerifiersOutsideRFC7636(t *testing.T) {
 func TestJoinDecideChecksTheMachineOutsideTheLockAndRechecksState(t *testing.T) {
 	st, _ := pairFixture(t)
 	j := st.Join()
-	o, _ := j.Open(testInvite, "")
+	o := openPair(j, "person:2")
 	j.Claim(codeReq(o.Pair, "laptop", "1.1.1.1"))
-	j.Bind(testInvite, o.ID, "person:2")
 	nonce := j.View("person:2").Nonce
 	_, err := j.Decide("person:2", true, nonce, "", func(string) error {
 		if j.mu.TryLock() {
@@ -794,75 +641,10 @@ func TestJoinDecideChecksTheMachineOutsideTheLockAndRechecksState(t *testing.T) 
 	}
 }
 
-// R1 (Runde 3): ein früher Claim hält die Sitzung bis zum Ende des Login-Fensters,
-// in beiden Wegen samt Gerät.
-func TestJoinEarlyClaimSurvivesALateLoginInBothModes(t *testing.T) {
-	for name, req := range map[string]func(string) JoinClaimRequest{
-		"loopback": func(p string) JoinClaimRequest { return loopReq(p, "m", "1.1.1.1") },
-		"code":     func(p string) JoinClaimRequest { return codeReq(p, "m", "1.1.1.1") },
-	} {
-		t.Run(name, func(t *testing.T) {
-			st, clock := pairFixture(t)
-			j := st.Join()
-			o, _ := j.Open(testInvite, "")
-			start := clock.t
-			clock.t = start.Add(time.Minute)
-			claim, err := j.Claim(req(o.Pair))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if want := JoinMaxLifetime - time.Minute; claim.ExpiresIn != want {
-				t.Fatalf("expires_in %v want %v", claim.ExpiresIn, want)
-			}
-			clock.t = start.Add(20 * time.Minute)
-			if err := j.Bind(testInvite, o.ID, "person:2"); err != nil {
-				t.Fatal(err)
-			}
-			v := j.View("person:2")
-			if v.State != JoinClaimed || v.Machine != "m" {
-				t.Fatalf("device lost: %+v", v)
-			}
-			if name == "code" {
-				confirm := claim.Confirm
-				if _, err := j.Decide("person:2", true, v.Nonce, confirm, nil); err != nil {
-					t.Fatal(err)
-				}
-				if _, _, err := st.Device().Poll(claim.DeviceCode); err != nil {
-					t.Fatalf("device flow: %v", err)
-				}
-			}
-		})
-	}
-}
-
-// Beim Überlauf weichen wartende Sitzungen vor kompromittierten.
-func TestJoinOpenEvictsWaitingBeforeCompromised(t *testing.T) {
-	st, clock := pairFixture(t)
-	j := st.Join()
-	dead, _ := j.Open(testInvite, "")
-	j.Claim(codeReq(dead.Pair, "m", "10.3.0.1"))
-	j.Claim(codeReq(dead.Pair, "thief", "10.3.0.2"))
-	var waiting []JoinOpen
-	for i := 0; i < maxJoinPerInvite-1; i++ {
-		clock.t = clock.t.Add(time.Second)
-		w, _ := j.Open(testInvite, "")
-		waiting = append(waiting, w)
-	}
-	j.Open(testInvite, "")
-	j.mu.Lock()
-	_, deadAlive := j.byID[hashCode(dead.ID)]
-	_, firstAlive := j.byID[hashCode(waiting[0].ID)]
-	j.mu.Unlock()
-	if !deadAlive || firstAlive {
-		t.Fatalf("dead=%v firstWaiting=%v", deadAlive, firstAlive)
-	}
-}
-
 func TestJoinClaimLapsesAfterTheWaitAndFreesTheSession(t *testing.T) {
 	st, clock := pairFixture(t)
 	j := st.Join()
-	o, _ := j.Open(testInvite, "")
-	j.Bind(testInvite, o.ID, "person:2")
+	o := openPair(j, "person:2")
 	claim, err := j.Claim(codeReq(o.Pair, "laptop", "1.1.1.1"))
 	if err != nil {
 		t.Fatal(err)
@@ -893,19 +675,23 @@ func TestJoinClaimLapsesAfterTheWaitAndFreesTheSession(t *testing.T) {
 	}
 }
 
-func TestJoinSameInstallerMayClaimAgainBeforeApproval(t *testing.T) {
+func TestJoinSameInstallerMayClaimAgainWithItsResumeToken(t *testing.T) {
 	st, clock := pairFixture(t)
 	j := st.Join()
-	o, _ := j.Open(testInvite, "")
-	j.Bind(testInvite, o.ID, "person:2")
-	first, _ := j.Claim(codeReq(o.Pair, "laptop", "1.1.1.1"))
+	o := openPair(j, "person:2")
+	first, err := j.Claim(codeReq(o.Pair, "laptop", "1.1.1.1"))
+	if err != nil || first.Resume == "" {
+		t.Fatalf("claim: %+v %v", first, err)
+	}
 	clock.t = clock.t.Add(30 * time.Second)
-	second, err := j.Claim(codeReq(o.Pair, "Laptop", "1.1.1.1"))
+	again := codeReq(o.Pair, "laptop", "1.1.1.1")
+	again.Resume = first.Resume
+	second, err := j.Claim(again)
 	if err != nil {
 		t.Fatalf("rerun of the same installer burned the code: %v", err)
 	}
-	if second.DeviceCode == first.DeviceCode {
-		t.Fatal("the rerun must get its own device flow")
+	if second.DeviceCode == first.DeviceCode || second.Resume == first.Resume || second.Resume == "" {
+		t.Fatal("the rerun must get its own device flow and a fresh resume token")
 	}
 	if _, _, err := pollLater(st, clock, first.DeviceCode); !errors.Is(err, ErrDeviceUnknown) {
 		t.Fatalf("the first device flow survived the rerun: %v", err)
@@ -913,11 +699,150 @@ func TestJoinSameInstallerMayClaimAgainBeforeApproval(t *testing.T) {
 	if v := j.View("person:2"); v.State != JoinClaimed {
 		t.Fatalf("state %s", v.State)
 	}
-	// Ein anderes Gerät bleibt ein zweiter Claim.
-	if _, err := j.Claim(codeReq(o.Pair, "thief", "2.2.2.2")); !errors.Is(err, ErrJoinInvalid) {
-		t.Fatalf("another device: %v", err)
+	// Das alte Token gilt nicht mehr: es wurde mit dem ersten Claim ersetzt.
+	stale := codeReq(o.Pair, "laptop", "1.1.1.1")
+	stale.Resume = first.Resume
+	if _, err := j.Claim(stale); !errors.Is(err, ErrJoinInvalid) {
+		t.Fatalf("a spent resume token worked: %v", err)
 	}
 	if v := j.View("person:2"); v.State != JoinCompromised {
 		t.Fatalf("state %s", v.State)
+	}
+}
+
+// Name und Netz beweisen nichts: ein Fremder kennt den Gerätenamen von der
+// Freigabeseite und teilt hinter NAT, CGNAT oder Proxy die Absenderadresse.
+func TestJoinSameNameAndNetworkWithoutTheResumeTokenIsASecondClaim(t *testing.T) {
+	for name, mod := range map[string]func(*JoinClaimRequest){
+		"no token":      func(*JoinClaimRequest) {},
+		"wrong token":   func(r *JoinClaimRequest) { r.Resume = strings.Repeat("0", 32) },
+		"name in caps":  func(r *JoinClaimRequest) { r.Machine = "LAPTOP" },
+		"same network":  func(r *JoinClaimRequest) { r.Addr = "1.1.1.1" },
+		"other network": func(r *JoinClaimRequest) { r.Addr = "6.6.6.6" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			st, clock := pairFixture(t)
+			j := st.Join()
+			o := openPair(j, "person:2")
+			first, _ := j.Claim(codeReq(o.Pair, "laptop", "1.1.1.1"))
+			clock.t = clock.t.Add(time.Second)
+			req := codeReq(o.Pair, "laptop", "1.1.1.1")
+			mod(&req)
+			if _, err := j.Claim(req); !errors.Is(err, ErrJoinInvalid) {
+				t.Fatalf("second claim: %v", err)
+			}
+			if v := j.View("person:2"); v.State != JoinCompromised {
+				t.Fatalf("state %s", v.State)
+			}
+			if _, _, err := pollLater(st, clock, first.DeviceCode); !errors.Is(err, ErrDeviceUnknown) {
+				t.Fatalf("the victim's device flow survived: %v", err)
+			}
+		})
+	}
+}
+
+func TestJoinResumeCannotSwitchTheMode(t *testing.T) {
+	for name, tc := range map[string]struct {
+		first, second func(string) JoinClaimRequest
+	}{
+		"loopback to code": {func(p string) JoinClaimRequest { return loopReq(p, "m", "1.1.1.1") }, func(p string) JoinClaimRequest { return codeReq(p, "m", "1.1.1.1") }},
+		"code to loopback": {func(p string) JoinClaimRequest { return codeReq(p, "m", "1.1.1.1") }, func(p string) JoinClaimRequest { return loopReq(p, "m", "1.1.1.1") }},
+	} {
+		t.Run(name, func(t *testing.T) {
+			st, _ := pairFixture(t)
+			j := st.Join()
+			o := openPair(j, "person:2")
+			first, err := j.Claim(tc.first(o.Pair))
+			if err != nil {
+				t.Fatal(err)
+			}
+			req := tc.second(o.Pair)
+			req.Resume = first.Resume
+			if _, err := j.Claim(req); !errors.Is(err, ErrJoinInvalid) {
+				t.Fatalf("mode switch with a valid token: %v", err)
+			}
+			if v := j.View("person:2"); v.State != JoinCompromised {
+				t.Fatalf("state %s", v.State)
+			}
+		})
+	}
+}
+
+func TestJoinResumeKeepsTheCountOfWrongConfirmations(t *testing.T) {
+	st, _ := pairFixture(t)
+	j := st.Join()
+	o := openPair(j, "person:2")
+	claim, _ := j.Claim(codeReq(o.Pair, "laptop", "1.1.1.1"))
+	for i := 0; i < maxJoinConfirmFails-1; i++ {
+		if _, err := j.Decide("person:2", true, j.View("person:2").Nonce, "ZZZZ", nil); !errors.Is(err, ErrJoinConfirm) {
+			t.Fatalf("try %d: %v", i, err)
+		}
+	}
+	req := codeReq(o.Pair, "laptop", "1.1.1.1")
+	req.Resume = claim.Resume
+	if _, err := j.Claim(req); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := j.Decide("person:2", true, j.View("person:2").Nonce, "ZZZZ", nil); !errors.Is(err, ErrJoinConfirm) {
+		t.Fatal(err)
+	}
+	if v := j.View("person:2"); v.State != JoinCompromised {
+		t.Fatalf("a rerun reset the wrong-code count: %s", v.State)
+	}
+}
+
+func TestJoinResumeNeedsAPendingRequest(t *testing.T) {
+	st, clock := pairFixture(t)
+	j := st.Join()
+	o := openPair(j, "person:2")
+	first, _ := j.Claim(loopReq(o.Pair, "m", "1.1.1.1"))
+	clock.t = clock.t.Add(JoinClaimTTL + time.Second)
+	req := loopReq(o.Pair, "m", "1.1.1.1")
+	req.Resume = first.Resume
+	if _, err := j.Claim(req); !errors.Is(err, ErrJoinInvalid) {
+		t.Fatalf("a lapsed request resumed: %v", err)
+	}
+}
+
+// Ein Claim auf eine abgelaufene, nie freigegebene Anfrage ist ein Timeout und
+// kein "anderes Gerät".
+func TestJoinClaimAfterTheWaitSaysTimeoutNotAnotherDevice(t *testing.T) {
+	st, clock := pairFixture(t)
+	j := st.Join()
+	o := openPair(j, "person:2")
+	j.Claim(codeReq(o.Pair, "laptop", "1.1.1.1"))
+	clock.t = clock.t.Add(JoinClaimTTL + time.Second)
+	if _, err := j.Claim(codeReq(o.Pair, "laptop", "2.2.2.2")); !errors.Is(err, ErrJoinInvalid) {
+		t.Fatalf("claim after the wait: %v", err)
+	}
+	if v := j.View("person:2"); v.State != JoinExpired {
+		t.Fatalf("state %s, want expired", v.State)
+	}
+}
+
+// Das Login-Fenster endet 30 Minuten nach dem Anlegen; ein Claim verlängert es nicht.
+func TestJoinClaimExpiresInIsTheRestOfTheLoginWindow(t *testing.T) {
+	for name, req := range map[string]func(string) JoinClaimRequest{
+		"loopback": func(p string) JoinClaimRequest { return loopReq(p, "m", "1.1.1.1") },
+		"code":     func(p string) JoinClaimRequest { return codeReq(p, "m", "1.1.1.1") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			st, clock := pairFixture(t)
+			j := st.Join()
+			o := openPair(j, "person:2")
+			start := clock.t
+			clock.t = start.Add(time.Minute)
+			claim, err := j.Claim(req(o.Pair))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := JoinMaxLifetime - time.Minute; claim.ExpiresIn != want {
+				t.Fatalf("expires_in %v want %v", claim.ExpiresIn, want)
+			}
+			clock.t = start.Add(JoinMaxLifetime + time.Second)
+			if v := j.View("person:2"); v.State != JoinNone {
+				t.Fatalf("session outlived the window: %q", v.State)
+			}
+		})
 	}
 }

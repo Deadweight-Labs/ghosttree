@@ -18,6 +18,23 @@ Versioning, with pre-1.0 compatibility rules described in
   minutes, the same installer can run again, "New code" is always offered, and an
   installer without a terminal prints the finished command with `--yes` and
   leaves the code unused. Codes stay single-use, short-lived and rate-limited.
+- Fixed: pairing after review of the guided invitation (REQ-434, REQ-435). A
+  second claim on a pairing code no longer passes for "the same installer" just
+  because it comes from the same network under the same machine name (both can
+  be copied or shared behind NAT or a proxy, and it let a thief reset the
+  confirmation count and switch to the loopback path). The claim answer now
+  carries a random `resume` token; `ctx join` keeps it in a private file next to
+  its config for ten minutes and sends it when you run the command again after
+  Ctrl-C. Only that token lets a second claim replace your own pending request
+  (same path, wrong confirmation codes stay counted); any other second claim
+  blocks the session and the page warns. A claim after the five-minute wait
+  reports a timeout instead of "another device". Over plain http (not
+  localhost) the pairing page says the server needs https instead of showing a
+  command `ctx join` would refuse. The command wraps only at spaces, so `--pair`
+  never splits. The inviting person's name is shown without any email domain,
+  and the sign-in page shows an invitation only if it could be redeemed. Error
+  pages of the pairing page link back to it. Dead code from the removed
+  cookie flow is gone.
 - Changed: ghosttree has a logo mark (a small "g" with eyes) in the sidebar, on
   the sign-in and invitation pages, and as favicon, with a dark variant.
 - Changed: the Requests pages are redesigned in the Clay look and can edit in
@@ -159,10 +176,8 @@ Versioning, with pre-1.0 compatibility rules described in
   Source Serif 4 (SIL OFL, under `internal/web/static/fonts/v5/`) replace
   IBM Plex. The rooms keep their own surface as a light panel in both modes
   until their redesign.
-- Fixed: hardening of join sessions after review (REQ-434, P2b). Sessions
-  that have a device are never evicted by further opens of the same
-  invitation, and loopback claims are limited per /64 and /48 like device
-  flows. The join cookie is `__Host-gt_join` wherever it is Secure. A session
+- Fixed: hardening of join sessions after review (REQ-434, P2b). Loopback
+  claims are limited per /64 and /48 like device flows. A session
   lives at most 30 minutes in total. Machine names in a join claim are limited
   to letters, digits, `.`, `_` and `-` (64 characters), the fallback approval
   page warns on a different network, and the "Same network" line is dropped
@@ -170,8 +185,8 @@ Versioning, with pre-1.0 compatibility rules described in
   request redirects the browser to the installer with `error=access_denied`.
   `code_challenge_method` must be `S256`, and `code_verifier` must use the
   RFC 7636 characters. A claim keeps the session and its device flow until
-  30 minutes after the invitation page was opened, so a late sign-in does not
-  lose a waiting installer (`expires_in` reports the remaining time).
+  30 minutes after the session was created (`expires_in` reports the remaining
+  time).
 - Changed: the web interface starts on a new Overview (REQ-435, second part).
   `/ui/` and the redirect after sign-in lead to `/ui/overview`, and the brand
   link too. "Next" lists what needs a decision (knowledge to review for
@@ -381,16 +396,16 @@ Versioning, with pre-1.0 compatibility rules described in
   `GHOSTTREE_PUBLIC_URL` is set but `GHOSTTREE_TRUSTED_PROXIES` is empty.
 - Added: join session and pairing code (REQ-434, second part), so that
   installation and sign-in run in parallel. Opening a valid invitation page
-  `/join/<code>` creates a join session bound to the invitation and the
-  browser (HttpOnly `gt_join` cookie, 15 minutes, never in a URL) without using
-  the invitation up, and shows the install command with a one-time pairing
-  code `XXXX-XXXX`; reloading shows the same code. Invalid invitations create
-  no session and stay byte-identical 404s. The installer calls
+  `/join/<code>` shows the invitation without creating anything; accepting it
+  (or signing in through it) creates the join session for the account, and the
+  pairing page shows the install command with a one-time pairing code
+  `XXXX-XXXX`; reloading shows the same code. Invalid invitations create no
+  session and stay byte-identical 404s. The installer calls
   `POST /api/join/claim` (no token) with the pairing code and a machine name
   and waits; after sign-in and joining, the session is bound to the account and
   only that account can approve "<machine> wants to connect" (interactive
   session, CSRF, same origin, account confirmation, bound to the shown
-  request, with a "same network as this browser" line). Either order works.
+  request, with a "same network as this browser" line).
   Preferred path (RFC 8252 with PKCE): the claim carries `code_challenge`,
   `loopback_port` and `state`; after approval the browser is redirected to
   `http://127.0.0.1:<port>/callback?code=..&state=..` and `POST /api/join/token`
