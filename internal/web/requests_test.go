@@ -530,14 +530,6 @@ func TestRequestActionsOnHiddenRequestsAnswerLikeUnknownOnes(t *testing.T) {
 	}
 }
 
-func cloneForm(v url.Values) url.Values {
-	out := url.Values{}
-	for k, vals := range v {
-		out[k] = append([]string(nil), vals...)
-	}
-	return out
-}
-
 func TestRequestActionsNeedCSRFOriginAndAnInteractiveSession(t *testing.T) {
 	e := ovEnv(t)
 	d := rqMake(t, e.St, rqSpec{Title: "Guarded"})

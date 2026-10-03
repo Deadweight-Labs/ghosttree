@@ -20,7 +20,7 @@ import (
 //go:embed templates static
 var files embed.FS
 
-var pages = template.Must(template.New("").Funcs(template.FuncMap{"t": msg}).ParseFS(files, "templates/*.html"))
+var pages = template.Must(template.New("").Funcs(template.FuncMap{"t": msg, "ago": timeTag, "lbl": adminLabel}).ParseFS(files, "templates/*.html"))
 
 type app struct {
 	store         *store.Store

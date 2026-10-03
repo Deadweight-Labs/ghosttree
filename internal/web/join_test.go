@@ -578,8 +578,8 @@ func TestOrgPageGuestLinksNeedEnforcementAndShowAbsoluteURL(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp, _ := alice.Get(base + "/ui/orgs")
-	if page := body(t, resp); !strings.Contains(page, "Guest links are not available") || strings.Contains(page, `<option value="guest">`) {
-		t.Fatalf("page does not explain the missing guest links: %s", page)
+	if page := body(t, resp); strings.Contains(page, `<option value="guest">`) || strings.Contains(page, "GHOSTTREE_ENFORCE_ACCESS") {
+		t.Fatalf("guest option offered without enforcement: %s", page)
 	}
 	resp = postOrg(t, alice, base, "/ui/orgs/invite", url.Values{"org": {org.Slug}, "project": {joinProject}, "project_role": {"guest"}})
 	if page := body(t, resp); resp.StatusCode != http.StatusConflict || !strings.Contains(page, "GHOSTTREE_ENFORCE_ACCESS") {
@@ -588,17 +588,29 @@ func TestOrgPageGuestLinksNeedEnforcementAndShowAbsoluteURL(t *testing.T) {
 	st.SetAccessMode(store.AccessMode{Enforce: true})
 	resp = postOrg(t, alice, base, "/ui/orgs/invite", url.Values{"org": {org.Slug}, "project": {joinProject}, "project_role": {"guest"}})
 	page := body(t, resp)
-	if resp.StatusCode != http.StatusOK || !regexp.MustCompile(`<code>/join/[0-9a-f]{64}</code>`).MatchString(page) {
+	if resp.StatusCode != http.StatusOK || !regexp.MustCompile(`value="http://127\.0\.0\.1:[0-9]+/join/[0-9a-f]{64}"`).MatchString(page) {
 		t.Fatalf("link: %d %s", resp.StatusCode, page)
 	}
-	if !strings.Contains(page, `<td data-label="Role">guest</td><td data-label="Project">`+joinProject+"</td>") {
+	if !strings.Contains(page, `<span class="ov-name">`+joinProject+`</span><span class="ov-meta ad-parts"><span>Pending</span><span>guest</span>`) {
 		t.Fatalf("the invitation list does not show project and role: %s", page)
 	}
 }
 
 func TestOrgPageAbsoluteJoinURLWithPublicOrigin(t *testing.T) {
 	a := &app{publicOrigin: "https://gt.example.test"}
-	if got := a.joinURL("abc"); got != "https://gt.example.test/join/abc" {
+	r := httptest.NewRequest("GET", "http://internal.test/ui/orgs", nil)
+	if got := a.joinURL(r, "abc"); got != "https://gt.example.test/join/abc" {
+		t.Fatal(got)
+	}
+}
+
+func TestOrgPageAbsoluteJoinURLWithoutPublicOrigin(t *testing.T) {
+	a := &app{}
+	r := httptest.NewRequest("GET", "http://gt.local:8080/ui/orgs", nil)
+	if got := a.joinURL(r, "abc"); got != "http://gt.local:8080/join/abc" {
+		t.Fatal(got)
+	}
+	if got := a.inviteURL(r, "c d", false); got != "http://gt.local:8080/ui/login/code?code=c+d" {
 		t.Fatal(got)
 	}
 }

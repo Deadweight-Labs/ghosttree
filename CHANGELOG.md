@@ -16,6 +16,13 @@ Versioning, with pre-1.0 compatibility rules described in
   complete with proof, or drop with a reason, each with a visible result. Rights
   are checked on the server as for the API; a request you may not read answers
   like an unknown one, and sessions appear only by address and only if readable.
+- Changed: the administration pages (organization with members, invitations,
+  projects and project roles; devices and tokens; device approval) are redesigned
+  in the Clay look and work on narrow screens. Times show as relative text with
+  the full date on hover, the invitation result is the link with a copy button,
+  and empty lists are one line with one action. Rights and the protection of the
+  last organization owner are unchanged and checked on the server. Identities
+  cannot be unlinked or relinked yet; the server has no operation for it.
 - Changed: the web pages for knowledge and review are redesigned in the Clay
   look. The knowledge list filters by kind and status as well as search and
   project, each entry has a detail page with its history, and review cards show

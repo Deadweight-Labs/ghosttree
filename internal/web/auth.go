@@ -115,7 +115,7 @@ func (a *app) requireInteractive(next http.Handler) http.Handler {
 func (a *app) notInteractive(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusForbidden)
-	a.renderBrowser(w, r, "interactive", pageData{Title: "Login required"})
+	a.renderBrowser(w, r, "interactive", pageData{Title: msg("adm.login.title"), OIDC: a.oidc != nil})
 }
 
 func (a *app) requireCSRF(next http.Handler) http.Handler {
