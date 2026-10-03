@@ -157,3 +157,48 @@ func TestActivityIDsRenumberedForWorkersWithoutNumbers(t *testing.T) {
 		t.Errorf("activity ids not renumbered: %s", out)
 	}
 }
+
+// Ein Instanz-Admin startet und beendet auch mit fremden Sessions Arbeit an
+// globalen Requests; ein Mitglied ohne Nummernsicht dort nur mit der eigenen.
+func TestAdminStartsAndEndsForeignWorkOnGlobalRequest(t *testing.T) {
+	f := accessAPI(t, true)
+	g, err := f.st.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: "g", Person: "robin"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := fmt.Sprintf("/api/requests/%d/work", g.Request.ID)
+	foreign := workSession(t, f, "adm-mia", 3, accProject)
+	if code, out := f.call(t, "rex", "POST", path, map[string]any{"session_id": foreign, "role": "related"}); code != 404 {
+		t.Errorf("member foreign start: %d %s", code, out)
+	}
+	f.expect(t, "robin", 201, "POST", path, map[string]any{"session_id": foreign, "role": "related"})
+	w, _, err := f.st.StartRequestWork(g.Request.ID, workSession(t, f, "adm-rex", 4, accProject), "related", "rex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wp := fmt.Sprintf("/api/request-work/%d", w.ID)
+	if code, out := f.call(t, "mia", "PATCH", wp, map[string]string{"state": "paused", "summary": "x"}); code != 404 {
+		t.Errorf("member foreign end: %d %s", code, out)
+	}
+	f.expect(t, "robin", 200, "PATCH", wp, map[string]string{"state": "paused", "summary": "x"})
+}
+
+// Ohne Warnung aus dem Store erscheint keine, auch wenn lesbare Arbeit existiert.
+func TestStartWarningOnlyWhenStoreWarned(t *testing.T) {
+	f := accessAPI(t, true)
+	g, err := f.st.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: "g", Person: "robin"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	shared := workSession(t, f, "sw-rex", 4, accProject)
+	if err := f.st.SetSessionVisibility(shared, f.st.Access(store.Principal{ID: "person:4", Label: "rex"}), store.VisGuests); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.st.StartRequestWork(g.Request.ID, shared, "primary", "rex"); err != nil {
+		t.Fatal(err)
+	}
+	out := f.expect(t, "gus", 201, "POST", fmt.Sprintf("/api/requests/%d/work", g.Request.ID), map[string]any{"session_id": workSession(t, f, "sw-gus", 5, accProject), "role": "related"})
+	if strings.Contains(out, "already has") {
+		t.Errorf("warning without store warning: %s", out)
+	}
+}

@@ -144,10 +144,10 @@ func (a *api) startRequestWork(w http.ResponseWriter, r *http.Request) {
 	pa := a.access(r)
 	ref, refErr := a.st.RequestRef(store.RefRequest, requestID)
 	sees := refErr == nil && pa.SeesSessionNumbers(ref.Project)
-	// Mitglieder mit Nummernsicht dürfen jede lesbare Session anhängen; wer die
-	// Nummern nicht kennen darf, nur die eigene. Eine fremde, verborgene oder
-	// fehlende Nummer antwortet gleich (#2447).
-	if sess, err := a.st.SessionByID(body.SessionID); err != nil || !pa.CanSeeTranscript(sess) || (!sees && !pa.OwnsSession(sess)) {
+	// Mitglieder mit Nummernsicht und Instanz-Admins dürfen jede lesbare Session
+	// anhängen; wer die Nummern nicht kennen darf, nur die eigene. Eine fremde,
+	// verborgene oder fehlende Nummer antwortet gleich (#2447).
+	if sess, err := a.st.SessionByID(body.SessionID); err != nil || !pa.CanSeeTranscript(sess) || (!sees && !pa.IsAdmin() && !pa.OwnsSession(sess)) {
 		pa.Filtered()
 		writeRequestError(w, sql.ErrNoRows)
 		return
@@ -157,7 +157,7 @@ func (a *api) startRequestWork(w http.ResponseWriter, r *http.Request) {
 		writeRequestError(w, a.hideRuleRequest(r, err))
 		return
 	}
-	if !sees {
+	if !sees && len(warnings) > 0 {
 		warnings = a.readableStartWarnings(r, requestID, work.ID)
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"work": a.workView(r, work), "warnings": warnings})
@@ -410,14 +410,14 @@ func writeRequestError(w http.ResponseWriter, err error) {
 
 // checkWorkAccess prüft das Beenden von Arbeit. Wer die Session-Nummern des
 // Projekts nicht kennen darf, darf nur Arbeit beenden, an der er arbeiten darf
-// und deren Session er lesen kann (eigene eingeschlossen). Jede andere
-// Ablehnung, die Rollenprüfung eingeschlossen, antwortet wie für eine unbekannte
-// Id, sonst verriete Status oder Text (403, 404 mit anderem Body, work_not_active),
-// dass es die verborgene Arbeit gibt (#2485).
+// und deren Session ihm gehört. Instanz-Admins sind ausgenommen und beenden
+// auch hängengebliebene Arbeit anderer Konten. Jede andere Ablehnung, die
+// Rollenprüfung eingeschlossen, antwortet wie für eine unbekannte Id, sonst verriete Status oder Text
+// (403, 404 mit anderem Body, work_not_active), dass es die verborgene Arbeit gibt (#2485).
 func (a *api) checkWorkAccess(w http.ResponseWriter, r *http.Request, workID int64) bool {
 	pa := a.access(r)
 	ref, err := a.st.RequestRef(store.RefWork, workID)
-	if err != nil || pa.SeesSessionNumbers(ref.Project) {
+	if err != nil || pa.IsAdmin() || pa.SeesSessionNumbers(ref.Project) {
 		return a.checkRequest(w, r, store.RefWork, workID, store.ActWork)
 	}
 	if pa.Decide(ref.Project, store.ResRequest, store.ActWork, store.Object{Own: pa.IsAuthor(ref.Person)}).Allowed {

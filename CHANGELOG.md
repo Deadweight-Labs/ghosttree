@@ -11,18 +11,21 @@ Versioning, with pre-1.0 compatibility rules described in
   address, and only when the guest may read that session; otherwise the
   reference, its quotes and its session counts are left out, in the knowledge
   API, the search, the review list and the web pages. Ending request work whose
-  session is hidden from you answers exactly like an unknown id; members still
-  end anyone's work, and everyone ends their own. This now holds for project
-  requests too: a guest, a stranger and an unknown id get the same status and
-  body. Starting work needs a session you own or may read, and answers the same
-  for a hidden and a missing one. A session number sent with new knowledge is
-  dropped for anyone who may not know numbers, global knowledge follows the
-  project of the session it points at, the review list prints the address
-  instead of "session 0", and the knowledge label hands `session_ref` or
-  `session_id` straight to `context_sessions`.
+  session is hidden from you answers exactly like an unknown id. Instance
+  admins and members of a project whose session numbers they may see end
+  anyone's work; everyone else ends only work on their own session. This now
+  holds for project requests too: a guest, a stranger and an unknown id get
+  the same status and body. Starting work answers the same for a hidden and a
+  missing session. A session number sent with new knowledge is dropped for
+  anyone who may not know numbers, global knowledge follows the project of the
+  session it points at, the review list prints the address instead of
+  "session 0", and the knowledge label hands `session_ref` or `session_id`
+  straight to `context_sessions`.
   Further: the warning on starting work counts only work whose session you
-  may read; without session numbers you start and end work only with your own
-  session, and "already working on" never names a request you cannot see; a
+  may read; without session numbers (members on global requests included) you
+  start and end work only with your own session, so another agent's legacy session
+  (account 0) now answers 404, while instance admins are exempt; and
+  "already working on" never names a request you cannot see; a
   hidden project's request answers byte for byte like an unknown id on every
   request route; activity and evidence ids are always renumbered for those
   viewers; a session address made only of digits is no longer taken for a
