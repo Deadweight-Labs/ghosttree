@@ -100,9 +100,8 @@
   .ad-check-card { padding: 18px 20px; }
 }
 
-/* Meta pieces separated by a dot drawn in CSS, so no separator text is needed. */
-.ad-parts { display: flex; flex-wrap: wrap; gap: 0 .6em; }
-.ad-parts > span + span::before { content: "·"; margin-right: .6em; color: var(--clay-ink-faint); }
+/* Meta pieces separated by spacing only: a dot would be orphaned at the start of a wrapped line. */
+.ad-parts { display: flex; flex-wrap: wrap; gap: .15em 1.3em; }
 
 /* Segmented organization switch (same recipe as sessions.css). */
 .seg { display: inline-flex; border: 1px solid var(--color-line-strong); border-radius: var(--radius-md); overflow: hidden; background: var(--color-surface-panel); }

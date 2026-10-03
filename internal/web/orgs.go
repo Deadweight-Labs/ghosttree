@@ -44,6 +44,7 @@ type orgsView struct {
 	Members    []orgMemberRow
 	Invites    []store.Invitation
 	Projects   []store.Project
+	Claimable  []string // eigene, unbeanspruchte Remotes; nur für Owner
 	Roles      []projectRolesView
 	NewCode    string // einmalig angezeigter Einladungscode
 	NewExpiry  string
@@ -130,7 +131,11 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 			v.Roles = append(v.Roles, rv)
 		}
 		if v.Owner {
+			v.Claimable, _ = a.store.ListClaimableProjects(me, v.Selected.ID)
 			v.Invites, _ = a.store.ListInvitations(me, v.Selected.ID)
+			for i := range v.Invites {
+				v.Invites[i].AcceptedBy = store.NormalizeAccountName(v.Invites[i].AcceptedBy)
+			}
 		}
 	}
 	if status != http.StatusOK {
@@ -243,7 +248,14 @@ func (a *app) orgInvite(w http.ResponseWriter, r *http.Request) {
 	if project := strings.TrimSpace(r.FormValue("project")); project != "" {
 		// Ein Link vergibt nur member oder guest für dieses eine Projekt.
 		link = true
-		code, inv, err = a.store.CreateProjectInvitation(browserPrincipal(r).ID, o.ID, project, r.FormValue("project_role"), ttl)
+		// Mit claim=1 übernimmt derselbe Store-Aufruf die Remote und stellt
+		// den Link aus (eine Transaktion): ein abgelehnter Link hinterlässt
+		// keine halbe Übernahme.
+		if r.FormValue("claim") == "1" {
+			code, inv, err = a.store.ClaimAndInviteProject(browserPrincipal(r).ID, o.ID, project, r.FormValue("project_role"), ttl)
+		} else {
+			code, inv, err = a.store.CreateProjectInvitation(browserPrincipal(r).ID, o.ID, project, r.FormValue("project_role"), ttl)
+		}
 	} else {
 		code, inv, err = a.store.CreateInvitation(browserPrincipal(r).ID, o.ID, r.FormValue("email"), r.FormValue("role"), ttl)
 	}
