@@ -192,10 +192,62 @@ func (s *Store) SenderRolesInProject(project string, msgs []CoordMessage) []stri
 		return out
 	}
 	c := newProjectAuthorityCtx(s.db, project)
+	stored := storedSenderRoles(s.db, msgs)
 	for i, m := range msgs {
+		if role, ok := stored[m.ID]; ok {
+			out[i] = role
+			continue
+		}
 		out[i] = c.sender(m).role.Role
 	}
 	return out
+}
+
+type rowsQuerier interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+}
+
+// storedSenderRoles are the roles the senders held when they sent, for the
+// messages that have one. Older messages have none and show the current role.
+func storedSenderRoles(q rowsQuerier, msgs []CoordMessage) map[int64]string {
+	out := map[int64]string{}
+	if len(msgs) == 0 {
+		return out
+	}
+	args := make([]any, len(msgs))
+	marks := make([]string, len(msgs))
+	for i, m := range msgs {
+		args[i], marks[i] = m.ID, "?"
+	}
+	rows, err := q.Query(`SELECT message_id, role FROM coord_message_sender_roles WHERE message_id IN (`+strings.Join(marks, ",")+`)`, args...)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var role string
+		if rows.Scan(&id, &role) == nil {
+			out[id] = role
+		}
+	}
+	return out
+}
+
+// recordSenderRoleTx keeps the sender's role as of now next to the message, so
+// a later change of role does not rewrite who they were when they wrote it.
+func recordSenderRoleTx(tx *sql.Tx, m CoordMessage, id int64) error {
+	roomKey := messageRoomKeyTx(tx, m.DestinationKind, m.DestinationID)
+	if !strings.HasPrefix(roomKey, "project:") {
+		return nil
+	}
+	m.ID = id
+	role := newProjectAuthorityCtx(tx, strings.TrimPrefix(roomKey, "project:")).sender(m).role.Role
+	if role == "" {
+		return nil
+	}
+	_, err := tx.Exec(`INSERT OR IGNORE INTO coord_message_sender_roles(message_id, role) VALUES(?,?)`, id, role)
+	return err
 }
 
 // CanEndStanding sagt, ob der Handelnde die Vorgabe beenden darf; die Oberfläche

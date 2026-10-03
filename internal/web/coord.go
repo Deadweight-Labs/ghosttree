@@ -72,6 +72,10 @@ func coordHTTPError(w http.ResponseWriter, err error) {
 		http.Error(w, "invalid coordination sequence", http.StatusBadRequest)
 	case errors.Is(err, store.ErrCoordUnknownRecipient):
 		http.Error(w, "coordination recipient is not available", http.StatusBadRequest)
+	case errors.Is(err, store.ErrCoordAmbiguousMention):
+		var ambiguous *store.AmbiguousMentionError
+		errors.As(err, &ambiguous)
+		http.Error(w, msg("coord.mention_ambiguous", ambiguous.Token, strings.Join(ambiguous.Candidates, ", ")), http.StatusBadRequest)
 	case errors.Is(err, store.ErrInvalidAttentionAction):
 		http.Error(w, "invalid coordination attention action", http.StatusBadRequest)
 	case errors.Is(err, store.ErrAttentionRecipientRequired):

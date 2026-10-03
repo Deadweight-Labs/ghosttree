@@ -41,7 +41,7 @@ type ThreadReadInput struct {
 
 type ThreadReplyInput struct {
 	ID   int64  `json:"id" jsonschema:"thread id"`
-	Body string `json:"body" jsonschema:"your contribution"`
+	Body string `json:"body" jsonschema:"your contribution. Write @name to address a person or agent of the project: it is resolved against the project room, and a name that fits several is refused with the candidates so nothing is delivered to the wrong one"`
 }
 
 type ThreadFindInput struct {
@@ -184,19 +184,20 @@ func (s *Server) handleThreadOpen(ctx context.Context, _ *mcp.CallToolRequest, i
 }
 
 func (s *Server) postToThread(id int64, body string) error {
+	_, err := s.postToThreadID(id, body)
+	return err
+}
+
+func (s *Server) postToThreadID(id int64, body string) (int64, error) {
 	clientID, err := newCoordClientID()
 	if err != nil {
-		return err
+		return 0, err
 	}
-	_, err = s.client.SendCoordMessage(store.CoordMessage{
+	return s.client.SendCoordMessage(store.CoordMessage{
 		DestinationKind:  store.DestinationDiscussion,
 		DestinationID:    store.ThreadDestinationID(id),
 		SenderExternalID: s.coordRef(), ClientID: clientID, Body: body,
 	})
-	if err != nil {
-		return err
-	}
-	return nil
 }
 
 func (s *Server) handleThreadReply(ctx context.Context, _ *mcp.CallToolRequest, in ThreadReplyInput) (*mcp.CallToolResult, any, error) {
@@ -206,10 +207,11 @@ func (s *Server) handleThreadReply(ctx context.Context, _ *mcp.CallToolRequest, 
 	if err := s.joinThreadProject(); err != nil {
 		return nil, nil, err
 	}
-	if err := s.postToThread(in.ID, in.Body); err != nil {
+	id, err := s.postToThreadID(in.ID, in.Body)
+	if err != nil {
 		return nil, nil, err
 	}
-	return coordText(fmt.Sprintf("posted to thread %d", in.ID)), nil, nil
+	return coordText(fmt.Sprintf("posted to thread %d", in.ID) + s.mentionNote(id, in.Body)), nil, nil
 }
 
 // handleThreadRead ist das Werkzeug, an dem sich entscheidet, ob Threads

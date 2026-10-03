@@ -214,6 +214,7 @@ var messages = map[string]string{
 	"coord.mention":                    "Address",
 	"coord.mentioned":                  "Mentioned: %s",
 	"coord.mentions_you":               "mentions you",
+	"coord.mention_ambiguous":          "@%s fits more than one: %s. Go back and type more of the name.",
 	"coord.valid_until":                "Valid until",
 	"coord.zone_server":                "Time in %s (server time)",
 	"coord.zone_local":                 "Time in your timezone",

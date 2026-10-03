@@ -719,6 +719,9 @@ CREATE TABLE IF NOT EXISTS coord_message_raw_mentions(
   message_id INTEGER NOT NULL REFERENCES coord_messages(id) ON DELETE CASCADE,
   mentioned_external_id TEXT NOT NULL,
   PRIMARY KEY(message_id,mentioned_external_id));
+CREATE TABLE IF NOT EXISTS coord_message_sender_roles(
+  message_id INTEGER PRIMARY KEY REFERENCES coord_messages(id) ON DELETE CASCADE,
+  role TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS coord_message_mentions_recipient
   ON coord_message_mentions(mentioned_external_id,message_id);
 CREATE TABLE IF NOT EXISTS coord_attention(
