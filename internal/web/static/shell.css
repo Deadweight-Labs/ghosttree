@@ -231,7 +231,7 @@ svg.i { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-widt
   --clay-rest-h: -4;
   --clay-surface: var(--clay-c-sunken);
   flex: 1; min-width: 0; min-height: 42px; padding: 0 16px; border: 0; border-radius: var(--clay-radius-sm);
-  background: var(--clay-surface); color: var(--clay-ink); font: var(--text-mono);
+  background: var(--clay-surface); color: var(--clay-ink); font: var(--text-mono); font-variant-ligatures: none; font-feature-settings: "liga" 0, "calt" 0;
 }
 
 .ov-well {

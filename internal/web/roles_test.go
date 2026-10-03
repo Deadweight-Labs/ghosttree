@@ -158,7 +158,7 @@ func TestCoordParticipantsShowRoles(t *testing.T) {
 
 // roleForm schneidet das Rollenformular eines Kontos aus der Seite.
 func roleForm(page, account string) string {
-	marker := `name="account" value="` + account + `"><select name="role"`
+	marker := `name="account" value="` + account + `"><select class="clay-select ad-sel" name="role"`
 	i := strings.Index(page, marker)
 	if i < 0 {
 		return ""

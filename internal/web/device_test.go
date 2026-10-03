@@ -84,7 +84,7 @@ func TestDeviceApprovalInBrowserIssuesBoundToken(t *testing.T) {
 	csrf := renderedCSRFToken(t, client, srv.URL+"/ui/device")
 	resp = sameOriginPostForm(t, client, srv.URL+"/ui/device", url.Values{"user_code": {strings.ToLower(start.UserCode)}, "csrf_token": {csrf}})
 	page := body(t, resp)
-	if resp.StatusCode != 200 || !strings.Contains(page, "laptop") || !strings.Contains(page, "203.0.113.9") {
+	if resp.StatusCode != 200 || !strings.Contains(page, "laptop") || !strings.Contains(page, "203.0.113.9") || !strings.Contains(page, "Only approve if you just ran ctx login.") {
 		t.Fatalf("check page: %d %s", resp.StatusCode, page)
 	}
 	resp = sameOriginPostForm(t, client, srv.URL+"/ui/device/decide", url.Values{"user_code": {start.UserCode}, "decision": {"approve"}, "csrf_token": {csrf}})

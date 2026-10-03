@@ -147,7 +147,7 @@ func TestAgentControlIsRefusedForTokenSessionsAndPlainMembers(t *testing.T) {
 	}
 	resp := e.post(t, pasted, url.Values{"action": {"pause"}})
 	page := body(t, resp)
-	if resp.StatusCode != http.StatusForbidden || !strings.Contains(page, "Anmeldung per Login") {
+	if resp.StatusCode != http.StatusForbidden || !strings.Contains(page, "read-only session") {
 		t.Fatalf("pasted-token pause = %d %s", resp.StatusCode, page)
 	}
 	if _, ok, _ := st.ActiveAgentControl(ctlAgent); ok {

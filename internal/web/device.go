@@ -30,7 +30,7 @@ func (a *app) devicePage(w http.ResponseWriter, r *http.Request) {
 	if len(code) > 32 {
 		code = ""
 	}
-	a.renderBrowser(w, r, "device", pageData{Title: "Approve a device", Code: code})
+	a.renderBrowser(w, r, "device", pageData{Title: msg("adm.device.title"), Code: code})
 }
 
 // deviceLookup prüft den eingegebenen Code und zeigt, wer ihn angefordert hat.
@@ -46,7 +46,7 @@ func (a *app) deviceLookup(w http.ResponseWriter, r *http.Request) {
 		a.deviceError(w, r, err, "")
 		return
 	}
-	a.renderBrowser(w, r, "devicecheck", pageData{Title: "Approve a device",
+	a.renderBrowser(w, r, "devicecheck", pageData{Title: msg("adm.device.title"),
 		Code: store.FormatUserCode(store.NormalizeUserCode(code)), DeviceMachine: req.Machine,
 		DeviceRemote: req.Remote, DeviceStarted: req.StartedAt.UTC().Format(time.RFC3339)})
 }
@@ -71,23 +71,23 @@ func (a *app) deviceDecide(w http.ResponseWriter, r *http.Request) {
 		a.deviceError(w, r, err, code)
 		return
 	}
-	title := "Device denied"
+	title := msg("adm.device.denied")
 	if approve {
-		title = "Device approved"
+		title = msg("adm.device.approved")
 	}
 	a.renderBrowser(w, r, "devicedone", pageData{Title: title, Approved: approve})
 }
 
 func (a *app) deviceError(w http.ResponseWriter, r *http.Request, err error, code string) {
-	status, msg := http.StatusBadRequest, "That code is not valid or has expired. Run ctx login again if it keeps failing."
+	status, text := http.StatusBadRequest, msg("adm.device.err_code")
 	if errors.Is(err, store.ErrMachineTaken) {
-		status, msg = http.StatusConflict, "That machine name belongs to another account. Run ctx login again with --machine and a different name."
+		status, text = http.StatusConflict, msg("adm.device.err_machine")
 	}
 	if errors.Is(err, store.ErrDeviceLocked) {
-		status, msg = http.StatusTooManyRequests, "Too many wrong codes. Wait a few minutes and try again."
+		status, text = http.StatusTooManyRequests, msg("adm.device.err_locked")
 	}
 	w.WriteHeader(status)
-	a.renderBrowser(w, r, "device", pageData{Title: "Approve a device", Error: msg, Code: ""})
+	a.renderBrowser(w, r, "device", pageData{Title: msg("adm.device.title"), Error: text, Code: ""})
 }
 
 type tokenRow struct {
@@ -140,7 +140,7 @@ func (a *app) tokensPage(w http.ResponseWriter, r *http.Request) {
 			Status: status, Created: t.CreatedAt, LastUsed: t.LastUsedAt, Expires: t.ExpiresAt, Revoked: t.RevokedAt,
 			Revocable: status == "active"})
 	}
-	a.renderBrowser(w, r, "tokens", pageData{Title: "Tokens", Tokens: rows, Admin: admin})
+	a.renderBrowser(w, r, "tokens", pageData{Title: msg("adm.tokens.title"), Tokens: rows, Admin: admin})
 }
 
 func (a *app) isAdmin(p store.Principal) bool {
