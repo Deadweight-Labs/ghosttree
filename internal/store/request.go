@@ -505,6 +505,19 @@ func terminalRequestError(id int64, state string) error {
 	return requestdomain.NewRuleError("request_terminal", fmt.Sprintf("request REQ-%d is already %s", id, state), "terminal requests cannot be changed; create or reopen a separate request", nil)
 }
 
+// relationAddedData ist der Text des Eintrags "relation.added": die Art und das
+// Ziel ("related REQ-4", "knowledge knowledge #7"); eine externe Verknüpfung
+// steht als "<Art> ext <Verweis>".
+func relationAddedData(r requestdomain.Relation) string {
+	switch {
+	case r.OtherRequestID != 0:
+		return fmt.Sprintf("%s REQ-%d", r.Kind, r.OtherRequestID)
+	case r.KnowledgeID != 0:
+		return fmt.Sprintf("%s knowledge #%d", r.Kind, r.KnowledgeID)
+	}
+	return r.Kind + " ext " + r.ExternalRef
+}
+
 func (s *Store) AddRequestRelation(requestID int64, relation requestdomain.Relation, person string) (requestdomain.Relation, error) {
 	valid := map[string]bool{"parent": true, "related": true, "blocks": true, "duplicates": true, "supersedes": true, "knowledge": true, "external": true}
 	if !valid[relation.Kind] {
@@ -550,7 +563,7 @@ func (s *Store) AddRequestRelation(requestID int64, relation requestdomain.Relat
 	if err != nil {
 		return requestdomain.Relation{}, err
 	}
-	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at) VALUES(?,'relation.added',?,?,?)`, requestID, person, relation.Kind, ts); err != nil {
+	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at) VALUES(?,'relation.added',?,?,?)`, requestID, person, relationAddedData(relation), ts); err != nil {
 		return requestdomain.Relation{}, err
 	}
 	if err := tx.Commit(); err != nil {

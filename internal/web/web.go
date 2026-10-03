@@ -136,7 +136,7 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	} {
 		a.handle(mux, "POST /ui/requests/{id}/"+suffix, a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(h)))))
 	}
-	a.handle(mux, "POST /ui/requests/{id}/correct", a.requirePerson(a.requireInteractive(limitBodyN(requestCorrectForm, a.requireCSRF(http.HandlerFunc(a.requestCorrect))))))
+	a.handle(mux, "POST /ui/requests/{id}/correct", a.requirePerson(a.requireInteractive(limitBodyN(requestCorrectForm, a.requestFormTooLarge(a.requireCSRF(http.HandlerFunc(a.requestCorrect)))))))
 	a.handle(mux, "GET /ui/knowledge", a.requirePerson(http.HandlerFunc(a.knowledgePage)))
 	a.handle(mux, "GET /ui/knowledge/{id}", a.requirePerson(http.HandlerFunc(a.knowledgeItemPage)))
 	a.handle(mux, "POST /ui/knowledge/{id}/edit", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.knowledgeEdit))))))
@@ -206,7 +206,7 @@ func (a *app) renderBrowser(w http.ResponseWriter, r *http.Request, name string,
 		data.NavSection = "overview"
 	case "agents":
 		data.NavSection = "agents"
-	case "requests", "request":
+	case "requests", "request", "requesttoolarge":
 		data.NavSection = "requests"
 	case "knowledge", "knowledgeitem":
 		data.NavSection = "knowledge"

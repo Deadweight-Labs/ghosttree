@@ -31,9 +31,9 @@ const (
 	maxFieldBytes   = 2_000
 	maxTitleBytes   = 500
 	maxPriority     = 64
-	// Ein Formular kodiert Zeilenumbrüche und Umlaute mehrfach; die Grenze
-	// liegt über dem Dreifachen des längsten Textes.
-	requestCorrectForm = 3*maxTextBytes + 8<<10
+	// Ein Formular kodiert Zeilenumbrüche und Umlaute mehrfach (bis zu sechs
+	// Bytes je Zeichen); die Grenze liegt über dem Sechsfachen des längsten Textes.
+	requestCorrectForm = 6*maxTextBytes + 16<<10
 )
 
 var (
@@ -190,7 +190,9 @@ func (a *app) requestsPage(w http.ResponseWriter, r *http.Request) {
 	}
 	project := a.projectParam(r)
 	pa := a.access(r)
-	hidden, stop := a.gateList(w, r, pa, project, store.ResRequest)
+	// Ein verborgenes Projekt läuft durch dieselbe Abfrage wie ein unbekanntes:
+	// RequestFilter schließt seine Zeilen aus, übrig bleiben globale Aufträge.
+	_, stop := a.gateList(w, r, pa, project, store.ResRequest)
 	if stop {
 		return
 	}
@@ -210,40 +212,38 @@ func (a *app) requestsPage(w http.ResponseWriter, r *http.Request) {
 	priorities := map[string]bool{}
 	progress := map[int64]store.CriteriaProgress{}
 	var work map[int64][]store.ActiveRequestWork
-	if !hidden {
-		var err error
-		if page, err = a.store.SearchRequests(pa.RequestFilter(filter)); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+	var err error
+	if page, err = a.store.SearchRequests(pa.RequestFilter(filter)); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	pa.NoteRequestHits(page.Results)
+	// Die Auswahl hängt nicht von der Seite ab: alle Prioritäten der lesbaren Menge.
+	known, err := a.store.RequestPriorities(pa.RequestFilter(requestdomain.SearchFilter{Scope: scope.Axes{Project: project}}))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	for _, p := range known {
+		priorities[p] = true
+	}
+	if priority != "" {
+		priorities[priority] = true
+	}
+	ids, openIDs := make([]int64, len(page.Results)), []int64{}
+	for i, h := range page.Results {
+		ids[i] = h.Request.ID
+		if h.Request.State == "open" {
+			openIDs = append(openIDs, h.Request.ID)
 		}
-		pa.NoteRequestHits(page.Results)
-		// Die Auswahl hängt nicht von der Seite ab: alle Prioritäten der lesbaren Menge.
-		known, err := a.store.RequestPriorities(pa.RequestFilter(requestdomain.SearchFilter{Scope: scope.Axes{Project: project}}))
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		for _, p := range known {
-			priorities[p] = true
-		}
-		if priority != "" {
-			priorities[priority] = true
-		}
-		ids, openIDs := make([]int64, len(page.Results)), []int64{}
-		for i, h := range page.Results {
-			ids[i] = h.Request.ID
-			if h.Request.State == "open" {
-				openIDs = append(openIDs, h.Request.ID)
-			}
-		}
-		if progress, err = a.store.CriteriaProgress(ids); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if work, err = a.store.ActiveWorkOnRequests(pa, openIDs); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
+	}
+	if progress, err = a.store.CriteriaProgress(ids); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if work, err = a.store.ActiveWorkOnRequests(pa, openIDs); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 	now := overviewNow().UTC()
 	v := &requestsView{Q: q, Project: project, ShowProject: project == "", Guest: a.shellBaseFor(r).who.kind == viewerGuest}
@@ -578,10 +578,12 @@ func (a *app) knowledgeReadable(pa *store.ProjectAccess, id int64) bool {
 var removedTarget = regexp.MustCompile(`^\S+ (?:REQ-(\d+)|knowledge #(\d+))(?: |$)`)
 
 // visibleActivity lässt die Beziehungs-Einträge weg, deren Gegenüber der
-// Betrachter nicht lesen darf: im Verlauf stünde sonst, dass es sie gibt. Das
-// Ziel von "relation.added" steht nicht im Eintrag, es wird über Art und
-// Zeitpunkt der Beziehung gefunden; was sich nicht auflösen lässt (die
-// Beziehung wurde inzwischen zurückgenommen), bleibt weg.
+// Betrachter nicht lesen darf: im Verlauf stünde sonst, dass es sie gibt.
+// "relation.added" nennt das Ziel ("<Art> REQ-N", "<Art> knowledge #N"); das
+// entscheidet. Ältere Einträge nennen nur die Art: sie werden der Reihe nach
+// je einer noch bestehenden Beziehung gleicher Art und Zeit zugeordnet (jede
+// höchstens einmal). Was sich nicht zuordnen lässt, sehen nur Betrachter, die
+// alle Beziehungen des Auftrags lesen dürfen; für alle anderen bleibt es weg.
 func (a *app) visibleActivity(pa *store.ProjectAccess, d requestdomain.Detail) []requestdomain.Activity {
 	readable := func(rel requestdomain.Relation) bool {
 		switch {
@@ -592,19 +594,37 @@ func (a *app) visibleActivity(pa *store.ProjectAccess, d requestdomain.Detail) [
 		}
 		return true
 	}
+	seesAll := pa.SeesSessionNumbers(d.Request.Scope.Project)
+	for _, rel := range d.Relations {
+		seesAll = seesAll && readable(rel)
+	}
+	used := make([]bool, len(d.Relations))
 	out := make([]requestdomain.Activity, 0, len(d.Activity))
 	for _, act := range d.Activity {
 		switch act.Kind {
 		case "relation.added":
-			found := false
+			if m := removedTarget.FindStringSubmatch(act.Data); m != nil {
+				var rel requestdomain.Relation
+				rel.OtherRequestID, _ = strconv.ParseInt(m[1], 10, 64)
+				rel.KnowledgeID, _ = strconv.ParseInt(m[2], 10, 64)
+				if !readable(rel) {
+					continue
+				}
+				break
+			}
+			if strings.Contains(act.Data, " ") {
+				// Neuer Eintrag mit externem Ziel: nichts, was verborgen sein könnte.
+				break
+			}
+			matched := false
 			ok := true
-			for _, rel := range d.Relations {
-				if rel.Kind == act.Data && rel.CreatedAt == act.CreatedAt {
-					found = true
-					ok = ok && readable(rel)
+			for i, rel := range d.Relations {
+				if !used[i] && rel.Kind == act.Data && rel.CreatedAt == act.CreatedAt {
+					used[i], matched, ok = true, true, readable(rel)
+					break
 				}
 			}
-			if !found || !ok {
+			if (matched && !ok) || (!matched && !seesAll) {
 				continue
 			}
 		case "relation.removed":
@@ -733,6 +753,24 @@ func (a *app) requestFail(w http.ResponseWriter, r *http.Request, id int64, err 
 	default:
 		http.Error(w, "could not save", http.StatusInternalServerError)
 	}
+}
+
+// requestFormTooLarge liest das Formular vor requireCSRF und antwortet auf eine
+// überschrittene Grenze mit 413 und einer gestalteten Seite, statt dass der
+// Lesefehler dort als fehlendes Token (403) erscheint.
+func (a *app) requestFormTooLarge(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			var tooBig *http.MaxBytesError
+			if errors.As(err, &tooBig) {
+				w.Header().Set("Cache-Control", "no-store")
+				w.WriteHeader(http.StatusRequestEntityTooLarge)
+				a.renderBrowser(w, r, "requesttoolarge", pageData{Title: msg("requests.toolarge.title"), BackURL: "/ui/requests"})
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func lineBreaks(s string) string { return strings.NewReplacer("\r\n", "\n", "\r", "\n").Replace(s) }

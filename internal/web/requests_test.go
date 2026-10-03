@@ -1,6 +1,7 @@
 package web
 
 import (
+	"io"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -172,17 +173,27 @@ func TestRequestListHidesWhatTheViewerMayNotRead(t *testing.T) {
 			t.Errorf("guest list leaks %q", leak)
 		}
 	}
+	if _, err := e.St.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: "Global request", Priority: "global-prio", Person: "alice"}}); err != nil {
+		t.Fatal(err)
+	}
+	rqMake(t, e.St, rqSpec{Title: "SECRET-PRIO", Priority: "secret-prio", Project: shellHiddenProject})
 	hiddenCode, hiddenPage := e.get(t, e.Guest, "/ui/requests?project="+url.QueryEscape(shellHiddenProject))
 	unknownCode, unknownPage := e.get(t, e.Guest, "/ui/requests?project="+url.QueryEscape("github.com/nobody/unknown"))
 	if hiddenCode != http.StatusOK || unknownCode != http.StatusOK {
 		t.Errorf("guest asking for hidden / unknown project = %d / %d, want 200 for both", hiddenCode, unknownCode)
 	}
-	if strings.Contains(hiddenPage, "SECRET") || strings.Contains(hiddenPage, `class="kn-item`) {
-		t.Error("the hidden project's list is not empty")
+	if strings.Contains(hiddenPage, "SECRET") {
+		t.Error("the hidden project's list shows its requests")
 	}
 	if strings.ReplaceAll(hiddenPage, url.QueryEscape(shellHiddenProject), "P") != strings.ReplaceAll(unknownPage, url.QueryEscape("github.com/nobody/unknown"), "P") &&
 		strings.ReplaceAll(hiddenPage, shellHiddenProject, "P") != strings.ReplaceAll(unknownPage, "github.com/nobody/unknown", "P") {
 		t.Error("a hidden project answers differently from an unknown one")
+	}
+	if !strings.Contains(hiddenPage, "Global request") || !strings.Contains(unknownPage, "Global request") {
+		t.Error("the global request is missing from the hidden or unknown project's list")
+	}
+	if strings.Contains(hiddenPage, "secret-prio") {
+		t.Error("the priority menu of a hidden project leaks its priorities")
 	}
 	_, owner := e.get(t, e.Owner, "/ui/requests")
 	if !strings.Contains(owner, "SECRET-REQ") {
@@ -782,5 +793,86 @@ func TestRequestPriorityMenuDoesNotDependOnThePage(t *testing.T) {
 		if strings.Contains(page, "GEHEIM") {
 			t.Errorf("%s: the menu offers a priority of a hidden project", path)
 		}
+	}
+}
+
+func TestRequestHistoryHasNoOracleForSameKindSameSecondRelations(t *testing.T) {
+	e := seedSessions(t)
+	d := rqMake(t, e.St, rqSpec{Title: "Linked"})
+	visible := rqMake(t, e.St, rqSpec{Title: "Visible partner"})
+	secret := rqMake(t, e.St, rqSpec{Title: "SECRET-PARTNER", Project: shellHiddenProject})
+	for _, id := range []int64{visible.Request.ID, secret.Request.ID, visible.Request.ID} {
+		if _, err := e.St.AddRequestRelation(d.Request.ID, requestdomain.Relation{Kind: "related", OtherRequestID: id}, "alice"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Same second for every entry, as in a fast import.
+	if _, err := e.St.DB().Exec(`UPDATE request_relations SET created_at='2030-01-01T00:00:00.000Z' WHERE request_id=?`, d.Request.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.St.DB().Exec(`UPDATE request_activity SET created_at='2030-01-01T00:00:00.000Z' WHERE request_id=? AND kind='relation.added'`, d.Request.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := e.St.RequestByID(d.Request.ID)
+	for _, rel := range got.Relations {
+		if rel.OtherRequestID == secret.Request.ID {
+			if err := e.St.RemoveRequestRelation(rel.ID, "alice", "wrong way round"); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	_, member := e.get(t, e.Member, rqPath(d.Request.ID, ""))
+	if n := rqActivityCount(member, "Relation added"); n != 2 {
+		t.Errorf("member sees %d relation-added entries, want 2 (the hidden one is gone)", n)
+	}
+	_, owner := e.get(t, e.Owner, rqPath(d.Request.ID, ""))
+	if n := rqActivityCount(owner, "Relation added"); n != 3 {
+		t.Errorf("owner sees %d relation-added entries, want 3", n)
+	}
+	if n := rqActivityCount(owner, "Relation removed"); n != 1 {
+		t.Errorf("owner sees %d relation-removed entries, want 1", n)
+	}
+}
+
+func TestRequestHistoryLegacyRelationEntriesPairOncePerRelation(t *testing.T) {
+	e := seedSessions(t)
+	d := rqMake(t, e.St, rqSpec{Title: "Linked"})
+	visible := rqMake(t, e.St, rqSpec{Title: "Visible partner"})
+	secret := rqMake(t, e.St, rqSpec{Title: "SECRET-PARTNER", Project: shellHiddenProject})
+	for _, id := range []int64{visible.Request.ID, secret.Request.ID} {
+		if _, err := e.St.AddRequestRelation(d.Request.ID, requestdomain.Relation{Kind: "related", OtherRequestID: id}, "alice"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Old entries carried only the kind.
+	if _, err := e.St.DB().Exec(`UPDATE request_activity SET data='related', created_at='2030-01-01T00:00:00.000Z' WHERE request_id=? AND kind='relation.added'`, d.Request.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.St.DB().Exec(`UPDATE request_relations SET created_at='2030-01-01T00:00:00.000Z' WHERE request_id=?`, d.Request.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, member := e.get(t, e.Member, rqPath(d.Request.ID, ""))
+	if n := rqActivityCount(member, "Relation added"); n != 1 {
+		t.Errorf("member sees %d legacy relation-added entries, want 1", n)
+	}
+	_, owner := e.get(t, e.Owner, rqPath(d.Request.ID, ""))
+	if n := rqActivityCount(owner, "Relation added"); n != 2 {
+		t.Errorf("owner sees %d legacy relation-added entries, want 2", n)
+	}
+}
+
+func TestRequestCorrectTooLargeIs413WithADesignedPage(t *testing.T) {
+	e := ovEnv(t)
+	d := rqMake(t, e.St, rqSpec{Title: "Big", Desc: "old", Priority: "mittel", Type: "bug"})
+	resp := rqPost(t, e, e.Lead, d.Request.ID, "/correct", rqCorrectForm("Big", strings.Repeat("x", requestCorrectForm+1), "too much"))
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("an oversize correction = %d, want 413", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), msg("requests.toolarge.title")) || !strings.Contains(string(body), "<nav") {
+		t.Errorf("413 answer is not the designed page: %.200s", body)
+	}
+	if got := rqBody(t, e, d.Request.ID).Description; got != "old" {
+		t.Errorf("description changed to %d bytes", len(got))
 	}
 }
