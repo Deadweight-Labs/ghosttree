@@ -238,12 +238,12 @@ func TestCoordMessagesShowSenderRole(t *testing.T) {
 		{Message: store.CoordMessage{ID: 3, Sequence: 3, SenderExternalID: "ghost", AuthorKind: store.AuthorAgent, Body: "hi"}},
 	}
 	views := buildCoordMessageViews(pres, room, nil)
-	applyMessageRoles(st, room, views, pres)
+	applyMessageRoles(st, room, "", views, pres)
 	if views[0].SenderRole != "owner" || views[1].SenderRole != "member" || views[2].SenderRole != "" {
 		t.Fatalf("roles = %q %q %q", views[0].SenderRole, views[1].SenderRole, views[2].SenderRole)
 	}
 	views = buildCoordMessageViews(pres, "machine:host", nil)
-	applyMessageRoles(st, "machine:host", views, pres)
+	applyMessageRoles(st, "machine:host", "", views, pres)
 	for _, v := range views {
 		if v.SenderRole != "" {
 			t.Fatalf("machine room shows a role: %+v", v)

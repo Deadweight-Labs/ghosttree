@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -81,6 +82,19 @@ func (s *Server) joinThreadProject() error {
 	return s.joinRoom(key)
 }
 
+// canonicalLinkID writes a request as REQ-<n>, the form a thread in a room links
+// to; agents often pass the bare number.
+func canonicalLinkID(kind, id string) string {
+	id = strings.TrimSpace(id)
+	if kind != "request" || id == "" {
+		return id
+	}
+	if _, err := strconv.ParseInt(id, 10, 64); err == nil {
+		return "REQ-" + id
+	}
+	return id
+}
+
 func (s *Server) handleThreadOpen(ctx context.Context, _ *mcp.CallToolRequest, in ThreadOpenInput) (*mcp.CallToolResult, any, error) {
 	if strings.TrimSpace(in.Title) == "" {
 		return nil, nil, fmt.Errorf("title is required — it is what someone searches for later")
@@ -95,6 +109,7 @@ func (s *Server) handleThreadOpen(ctx context.Context, _ *mcp.CallToolRequest, i
 	// Vorhandene Threads am selben Objekt vorschlagen, bevor ein zweiter
 	// entsteht. Spec §B5: vorschlagen ja, automatisch zusammenführen nein.
 	var existing []store.Thread
+	in.LinkID = canonicalLinkID(in.LinkKind, in.LinkID)
 	if in.LinkKind != "" && in.LinkID != "" {
 		existing, _ = s.client.ThreadsForObject(in.LinkKind, in.LinkID, s.coordRef())
 	}
@@ -299,7 +314,11 @@ func (s *Server) handleThreadFind(ctx context.Context, _ *mcp.CallToolRequest, i
 	var found []store.Thread
 	var err error
 	if in.ObjectKind != "" && in.ObjectID != "" {
-		found, err = s.client.ThreadsForObject(in.ObjectKind, in.ObjectID, s.coordRef())
+		found, err = s.client.ThreadsForObject(in.ObjectKind, canonicalLinkID(in.ObjectKind, in.ObjectID), s.coordRef())
+		if err == nil && len(found) == 0 && canonicalLinkID(in.ObjectKind, in.ObjectID) != in.ObjectID {
+			// Links written before the canonical form carry the bare number.
+			found, err = s.client.ThreadsForObject(in.ObjectKind, in.ObjectID, s.coordRef())
+		}
 	} else {
 		project, perr := s.threadProject()
 		if perr != nil {

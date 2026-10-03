@@ -20,7 +20,7 @@
 .kn-link { color: var(--clay-accent-text) !important; font-size: 13px; font-weight: 600; text-decoration: none; }
 .kn-link:hover { text-decoration: underline; }
 
-.kn-type { display: inline-block; padding: 1px 10px; border-radius: 99px; background: var(--clay-c-sunken); color: var(--clay-ink-soft); font: 700 12px/1.6 var(--font-sans); letter-spacing: 0; }
+.kn-type { display: inline-flex; align-items: center; gap: 5px; padding: 1px 10px; border-radius: 99px; background: var(--clay-c-sunken); color: var(--clay-ink-soft); font: 700 12px/1.6 var(--font-sans); letter-spacing: 0; }
 .kn-type.is-pitfall { color: var(--clay-warn); }
 .kn-type.is-decision { color: var(--clay-accent-text); }
 .kn-level, .kn-stale { display: inline-flex; align-items: center; gap: 6px; font: var(--text-secondary); color: var(--clay-ink-faint); }
@@ -84,3 +84,10 @@
   .kn-item { padding: 14px 8px; }
   .kn-deck { padding: 4px 6px; }
 }
+.kn-ico { inline-size: 13px; block-size: 13px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+.kn-switch { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 var(--space-4); }
+.kn-context .ov-btn[aria-pressed="true"] { pointer-events: none; }
+.kn-context pre.kn-code { overflow-x: auto; max-inline-size: 100%; }
+.kn-context pre.kn-code code { display: block; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-mono); font-variant-ligatures: none; }
+.kn-actions-row { display: flex; flex-wrap: wrap; gap: 10px; }

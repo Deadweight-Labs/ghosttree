@@ -1,11 +1,15 @@
 {{define "ovdevice"}}<form class="ov-device" method="post" action="/ui/device"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><input name="user_code" class="ov-code clay" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="32" required placeholder="{{t "ov.code"}}" aria-label="{{t "ov.code"}}"><button class="ov-btn ov-btn-primary clay">{{t "ov.approve"}}</button></form>{{end}}
 
 {{define "ovsetup"}}{{with .Overview.Setup}}<section class="ov-setup"><h1>{{.Title}}</h1>
-{{if eq .State "connected"}}<p class="ov-setup-line"><span class="ov-dot is-active" aria-hidden="true"></span><strong>{{t "setup.connected" .Machine}}</strong></p><p>{{t "setup.start"}}</p>
+{{if eq .State "connected"}}<p class="ov-setup-line"><span class="ov-dot is-active" aria-hidden="true"></span><strong>{{t "setup.connected" .Machine}}</strong></p><p class="ov-start-title">{{t "ov.start"}}</p><div class="ov-command"><pre><code id="ov-example">{{.Example}}</code></pre><button type="button" class="ov-btn clay" data-copy="#ov-example" data-copied="{{t "setup.copied"}}">{{t "setup.copy"}}</button></div>
 {{else}}<div class="ov-command"><pre><code id="ov-command">{{.Command}}</code></pre><button type="button" class="ov-btn clay" data-copy="#ov-command" data-copied="{{t "setup.copied"}}">{{t "setup.copy"}}</button></div>
 {{if .Code}}{{template "ovdevice" $}}{{end}}
 <p class="ov-setup-line"><span class="ov-dot is-wait" aria-hidden="true"></span>{{t "setup.waiting"}}</p>{{end}}
 </section>{{end}}{{end}}
+
+{{define "ovmachines"}}<ul class="ov-list ov-machines">{{range .}}<li class="ov-machine is-{{.State}}"><span class="ov-dot is-{{.State}}" aria-hidden="true"></span><span class="ov-name">{{.Name}}</span><span class="ov-meta">{{.StateText}}</span></li>{{end}}</ul>{{end}}
+
+{{define "ovstart"}}<div class="ov-start"><p class="ov-start-title">{{t "ov.start"}}</p><div class="ov-command"><pre><code id="ov-example">{{.Example}}</code></pre><button type="button" class="ov-btn clay" data-copy="#ov-example" data-copied="{{t "setup.copied"}}">{{t "setup.copy"}}</button></div></div>{{end}}
 
 {{define "ovreq"}}<li class="ov-request"><a class="ov-reqtitle" href="{{.Href}}">{{.Title}}</a><div class="ov-prog"><span class="ov-id">{{.ID}}</span>{{if .Total}}<span class="ov-num">{{.Progress}}</span>{{end}}</div>{{if .Total}}<span class="ov-bar clay" aria-hidden="true"><i data-pct="{{.Percent}}"></i></span>{{end}}</li>{{end}}
 
@@ -19,8 +23,10 @@
 <div class="ov-cols"><div class="ov-main">
 {{if .Next}}<section class="ov-section"><h2>{{t "ov.next"}}</h2><ul class="ov-list">{{range .Next}}<li class="ov-next clay"><div class="ov-text"><span class="ov-title">{{.Title}}</span><span class="ov-meta">{{.Detail}}</span></div>{{if .Href}}<a class="ov-btn ov-btn-primary clay" href="{{.Href}}">{{.HrefLabel}}</a>{{end}}</li>{{end}}</ul></section>{{end}}
 <section class="ov-section"><div class="ov-head"><h2>{{t "ov.agents"}}</h2>{{if .Agents}}<a class="ov-btn clay" href="{{.Connect}}">{{t "ov.connect_another"}}</a>{{end}}</div>
-{{if .Agents}}<ul class="ov-list ov-deck clay">{{range .Agents}}<li class="ov-agent is-{{.State}}"><span class="av agent clay" aria-hidden="true">{{template "icon" "agents"}}</span><div class="ov-text"><span class="ov-name">{{.Name}}</span><span class="ov-meta">{{.Project}}</span></div><span class="ov-activity">{{if .Activity}}{{.Activity}}{{else if ne .State "active"}}{{.StateText}}{{end}}</span><span class="ov-state"><span class="ov-dot is-{{.State}}{{if eq .State "active"}} pulse{{end}}" title="{{.StateText}}"></span><span class="ov-num">{{.Age}}</span></span></li>{{end}}</ul>
-{{else}}<p class="ov-empty">{{t "ov.no_agents"}}</p><a class="ov-btn ov-btn-primary clay" href="{{.Connect}}">{{t "ov.connect"}}</a>{{end}}</section>
+{{if .Agents}}<ul class="ov-list ov-deck clay">{{range .Agents}}<li class="ov-agent is-{{.State}}" title="{{.ExternalID}}"><span class="av agent clay" aria-hidden="true">{{template "icon" "agents"}}</span><div class="ov-text"><span class="ov-name">{{.Name}}</span><span class="ov-meta" title="{{.ProjectTitle}}">{{.Project}}</span></div><span class="ov-activity">{{if .Activity}}{{.Activity}}{{else if ne .State "active"}}{{.StateText}}{{end}}</span><span class="ov-state"><span class="ov-dot is-{{.State}}{{if eq .State "active"}} pulse{{end}}" title="{{.StateText}}"></span><span class="ov-num">{{.Age}}</span></span></li>{{end}}</ul>
+{{else if .Machines}}{{template "ovstart" .}}
+{{else}}<p class="ov-empty">{{t "ov.no_agents"}}</p><a class="ov-btn ov-btn-primary clay" href="{{.Connect}}">{{t "ov.connect"}}</a>{{end}}
+{{if .Machines}}<h3 class="ov-sub">{{t "ov.machines"}}</h3>{{template "ovmachines" .Machines}}{{end}}</section>
 </div><div class="ov-side">
 <section class="ov-section ov-well clay"><h2>{{t "ov.requests"}}</h2>{{if .Requests}}<ul class="ov-list ov-reqs">{{range .Requests}}{{template "ovreq" .}}{{end}}</ul>{{else}}<p class="ov-empty">{{t "ov.no_requests"}}</p>{{end}}</section>
 <section class="ov-section ov-learned"><h2>{{t "ov.learned"}}</h2>{{if .Learned}}<ul class="ov-list">{{range .Learned}}<li class="ov-row"><span class="ov-title">{{.Title}}</span><span class="ov-num">{{.Age}}</span></li>{{end}}</ul>{{else}}<p class="ov-empty">{{t "ov.no_learned"}}</p>{{end}}</section>

@@ -54,8 +54,8 @@ type chip struct {
 }
 
 type filterOption struct {
-	Value, Label string
-	Selected     bool
+	Value, Label, Title string
+	Selected            bool
 }
 
 type filterSelect struct {
@@ -118,11 +118,14 @@ type sessionsView struct {
 	ClearFilters   string
 	Indexing       string
 	FiltersOn      bool
+	// HasLinked: at least one listed session links a request or knowledge entry;
+	// without any, the column is left out.
+	HasLinked bool
 }
 
 type levelOption struct {
-	Value, Label string
-	Current      bool
+	Value, Label, Title string
+	Current             bool
 }
 
 type promptView struct {
@@ -579,6 +582,7 @@ func (a *app) sessionsPage(w http.ResponseWriter, r *http.Request) {
 		var lastDay string
 		for _, row := range page.Rows {
 			lr := a.listRow(row, links[row.Session.ID], now)
+			v.HasLinked = v.HasLinked || len(lr.Linked) > 0
 			label := dayLabel(parseStamp(row.Session.LastSeenAt), now)
 			if label != lastDay || len(v.Days) == 0 {
 				v.Days = append(v.Days, dayGroup{Label: label})
@@ -852,8 +856,8 @@ func (a *app) sessionPage(w http.ResponseWriter, r *http.Request) {
 	// Freigabe: nur der Besitzer der Session und der Owner des Projekts.
 	if pa.CanShareSession(sess) {
 		form := &levelForm{Action: "/ui/sessions/" + sess.PublicID + "/share"}
-		for _, l := range []struct{ v, k string }{{store.VisPrivate, "sessions.level.private"}, {store.VisProject, "sessions.level.project"}, {store.VisGuests, "sessions.level.guests"}} {
-			form.Levels = append(form.Levels, levelOption{Value: l.v, Label: msg(l.k), Current: sess.Visibility == l.v})
+		for _, l := range []struct{ v, k, title string }{{store.VisPrivate, "sessions.level.private", "sessions.level.private.title"}, {store.VisProject, "sessions.level.project", "sessions.level.project.title"}, {store.VisGuests, "sessions.level.guests", "sessions.level.guests.title"}} {
+			form.Levels = append(form.Levels, levelOption{Value: l.v, Label: msg(l.k), Title: msg(l.title), Current: sess.Visibility == l.v})
 		}
 		v.Share = form
 	}

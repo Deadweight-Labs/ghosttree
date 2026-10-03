@@ -1415,6 +1415,13 @@ func (a CoordAccess) CreateThread(thread Thread) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	// A thread opened through the API (the MCP thread_open tool) lives in its
+	// project's room like one opened in the browser; without this row the room
+	// never listed it.
+	if _, err := tx.Exec(`INSERT INTO thread_homes(thread_id,room_key,anchor_message_id,created_at) VALUES(?,?,NULL,?)`,
+		id, RoomKeyForProject(thread.Project), ts); err != nil {
+		return 0, err
+	}
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}

@@ -6,6 +6,23 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Changed: first-run clarity in the web pages. Overview and Agents show the
+  machines you signed in (connected, or last seen a while ago) and the next step,
+  "Start Claude or Codex in a project", with a command to copy; the connect page
+  switches to "connected" as soon as a machine is there. Agents read as "Claude on
+  freund-laptop" or "CLI on freund-laptop" (the raw ID is in the title), and an
+  agent counts as active only on a real sign of life, not because of a message.
+  Your own agents are listed even when your project role is too low to list a
+  project's agents. Knowledge shows Approve and Reject only where a decision is
+  open, marks status ("Waiting for review", "Held back", Trusted, Verified) with a
+  hover explanation and kinds with a small icon. The Agent context page uses the
+  project switcher, wraps its text and has empty states. In rooms the post kinds
+  read "Message", "Standing order" and "Ask", the Guest chip no longer sits on your
+  own agents, project names match the other pages, and a room with a single room
+  opens directly on small screens. Sessions drop the empty "Linked" column and
+  label the visibility choice "Visible to". Fixed: a thread opened through the API
+  (the MCP `thread_open` tool) was never listed under Threads in its room; new
+  ones are filed in the project room and existing ones are adopted on start.
 - Changed: the Requests pages are redesigned in the Clay look and can edit in
   the browser. The list searches and filters by state, kind, priority and
   project, shows each request with its number, kind, priority, criteria progress, age and the

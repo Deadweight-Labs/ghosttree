@@ -69,3 +69,14 @@ func roomThreadsTx(tx *sql.Tx, roomKey string) ([]RoomThread, error) {
 	}
 	return out, rows.Err()
 }
+
+// ensureThreadHomes gives a thread opened through the API (the MCP thread_open
+// tool, before it wrote its own home) the project room as its home, so the room
+// lists it. A thread whose room does not exist stays as it is. Idempotent.
+func ensureThreadHomes(db *sql.DB) error {
+	_, err := db.Exec(`INSERT INTO thread_homes(thread_id,room_key,anchor_message_id,created_at)
+		SELECT t.id,'project:'||t.project,NULL,t.created_at FROM threads t
+		WHERE NOT EXISTS (SELECT 1 FROM thread_homes h WHERE h.thread_id=t.id)
+		AND EXISTS (SELECT 1 FROM coord_rooms r WHERE r.room_key='project:'||t.project)`)
+	return err
+}

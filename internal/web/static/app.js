@@ -1,3 +1,10 @@
+// A narrow screen with a single room has nothing to pick: go straight in.
+(() => {
+  const welcome = document.querySelector("[data-sole-room]");
+  if (welcome && welcome.dataset.soleRoom && matchMedia("(max-width: 720px)").matches) {
+    location.replace(welcome.dataset.soleRoom);
+  }
+})();
 (() => {
   const workspace = document.querySelector(".coord-workspace");
   if (!workspace) return;

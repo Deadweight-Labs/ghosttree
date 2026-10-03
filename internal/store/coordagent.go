@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -208,6 +209,57 @@ func ensureCoordAgentPrincipalID(db *sql.DB) error {
 	}
 	_, err = db.Exec(`ALTER TABLE coord_agents ADD COLUMN principal_id TEXT NOT NULL DEFAULT ''`)
 	return err
+}
+
+// OwnAgents lists the agents a person registered themselves, in the project
+// rooms they are still part of, with the same presence as CoordPeers. It reads
+// only rows the person wrote, so it needs no role and reveals nothing about
+// anyone else: a viewer whose project role is too low to list a room's agents
+// still sees their own.
+func (s *Store) OwnAgents(accountPrincipal string) ([]CoordAgent, error) {
+	if s.reader != nil {
+		return s.reader.OwnAgents(accountPrincipal)
+	}
+	if _, ok := accountNumericID(accountPrincipal); !ok {
+		return nil, nil
+	}
+	rows, err := s.db.Query(`SELECT DISTINCT m.room_key, a.external_id
+		FROM coord_agents a JOIN coord_room_memberships m ON m.principal_id=a.external_id
+		WHERE a.principal_id=? AND m.left_at='' AND m.room_key LIKE 'project:%'`, accountPrincipal)
+	if err != nil {
+		return nil, err
+	}
+	mine := map[string]map[string]bool{}
+	for rows.Next() {
+		var room, id string
+		if err := rows.Scan(&room, &id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if mine[room] == nil {
+			mine[room] = map[string]bool{}
+		}
+		mine[room][id] = true
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	var out []CoordAgent
+	for room, ids := range mine {
+		peers, err := s.CoordPeers(room, "")
+		if err != nil {
+			return nil, err
+		}
+		for _, p := range peers {
+			if ids[p.ExternalID] {
+				out = append(out, p)
+			}
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].LastSeenAt > out[j].LastSeenAt })
+	return out, nil
 }
 
 // CoordPeers liefert die Teilnehmer eines Raums. since grenzt auf zuletzt

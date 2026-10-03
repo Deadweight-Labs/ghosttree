@@ -225,3 +225,16 @@ details.think .msg { max-width: none; margin: 4px 0 0; font: italic 400 1rem/1.5
 .blk-assistant .msg { max-width: 72ch; font: 400 1.0625rem/1.6 var(--font-serif); }
 .blk-assistant { padding: 0; }
 .blk-user header { justify-content: flex-end; }
+
+/* Sharing is a choice with a current state: a label, the options, a tick on the current one. */
+.share { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.share-label { color: var(--color-text-muted, var(--clay-ink-faint)); font-size: 13px; font-weight: 600; }
+.share .seg .is-on::before { content: "\2713\00a0"; }
+
+@media (max-width: 700px) {
+  .sd-head { flex-direction: column; align-items: stretch; }
+  .sd-titles { min-width: 0; }
+  .sd-actions { flex-wrap: wrap; flex: 1 1 auto; max-inline-size: 100%; }
+  .share { max-inline-size: 100%; }
+  .share .seg { max-inline-size: 100%; flex-wrap: wrap; }
+}
