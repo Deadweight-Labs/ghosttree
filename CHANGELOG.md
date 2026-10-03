@@ -32,6 +32,25 @@ Versioning, with pre-1.0 compatibility rules described in
   look for both spellings of a request link. Your own agent's Waiting states are
   not shown where you may not list the room's agents. Pure guests still see no
   agents of their own.
+- Fixed: a collector from before the session addresses (older than the current ctx)
+  no longer loops forever on `403 session_owned` after the server stopped
+  returning the session number. Admins and members of any project now get the
+  number of the session they register themselves, also for sessions without a
+  Git remote; guests still get only the address, and an old client that cannot
+  read it is refused with `409 collector_too_old` ("update ctx"). The collector
+  never uploads to session 0 and retries the registration with a backoff,
+  `ctx doctor` warns when the running watch process uses a replaced or different ctx
+  binary, and `ctx install` restarts the `ghosttree-watch` user unit in that case.
+  The comparison uses the binary the unit starts (`ExecStart`, else
+  `~/.local/bin/ctx`) and the unit's own process, not the `ctx` on `PATH` or a
+  stale pid file. A member's older collector can upload to its own session in any
+  project (empty, unclaimed or claimed by someone else) with the number it was
+  given, and can read and share its own session by that number; numbers of other people's sessions still answer exactly like unknown
+  ones. While a registration is paused the collector no longer logs one line per
+  file event. Development builds from before this change that understand session
+  addresses but do not ask for them (between the sessions view and the Requests
+  redesign) are refused with `409 collector_too_old` as guests; update ctx for
+  guest accounts.
 - Changed: inviting to a project no longer needs a typed project name. The
   organization page offers a choice of the organization's projects, and for
   organization owners also the projects only they uploaded sessions to that
