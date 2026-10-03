@@ -39,6 +39,12 @@ func (a *api) createSession(w http.ResponseWriter, r *http.Request) {
 	if denyAccess(w, a.access(r).Check(s.Scope.Project, store.ResSessionMeta, store.ActCreate, store.Object{Own: true})) {
 		return
 	}
+	// Ein Collector, der nur die Nummer kennt, würde bei fehlender Nummer nach
+	// /api/sessions/0/chunks laden und ewig 403 bekommen: dann gar nicht erst anlegen.
+	if !a.access(r).GetsOwnSessionNumber(s.Scope.Project) && r.URL.Query().Get("refs") != "public_id" {
+		writeCoded(w, http.StatusConflict, "collector_too_old", "this server does not hand out session numbers to your role and your collector only understands numbers: update ctx (and restart ghosttree-watch)")
+		return
+	}
 	id, err := a.st.UpsertSession(s)
 	if errors.Is(err, store.ErrSessionCollision) {
 		writeCoded(w, http.StatusConflict, "session_id_collision", "that session id already belongs to another account or machine")
@@ -51,10 +57,11 @@ func (a *api) createSession(w http.ResponseWriter, r *http.Request) {
 	a.writeSessionRef(w, r, s.Scope.Project, id)
 }
 
-// writeSessionRef antwortet auf das Anlegen einer Session. Mitglieder bekommen
-// die Nummer und die Adresse (ältere Collector brauchen die Nummer), Gäste nur
-// die Adresse: laufende Nummern, die ein Gast mit eigenen Sessions erzeugt,
-// zählten sonst die verborgenen dazwischen (#2447).
+// writeSessionRef antwortet auf das Anlegen einer Session. Wer sie selbst anlegt
+// und irgendwo Mitglied (oder Admin) ist, bekommt die Nummer und die Adresse
+// (ältere Collector brauchen die Nummer), reine Gäste nur die Adresse: laufende
+// Nummern, die ein Gast mit eigenen Sessions erzeugt, zählten sonst die
+// verborgenen dazwischen (#2447).
 func (a *api) writeSessionRef(w http.ResponseWriter, r *http.Request, project string, id int64) {
 	sess, err := a.st.SessionByID(id)
 	if err != nil {
@@ -62,7 +69,7 @@ func (a *api) writeSessionRef(w http.ResponseWriter, r *http.Request, project st
 		return
 	}
 	out := map[string]any{"public_id": sess.PublicID}
-	if a.access(r).SeesSessionNumbers(project) {
+	if a.access(r).GetsOwnSessionNumber(project) {
 		out["id"] = id
 	}
 	writeJSON(w, 200, out)

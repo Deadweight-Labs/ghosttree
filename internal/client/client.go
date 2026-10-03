@@ -316,7 +316,8 @@ func (c *Client) AppendChunks(id int64, chunks []store.Chunk) error {
 // anspricht: Mitglieder bekommen Nummer und Adresse, Gäste nur die Adresse.
 func (c *Client) UpsertSessionRef(s store.Session) (store.SessionRef, error) {
 	var ref store.SessionRef
-	err := c.do("POST", "/api/sessions", nil, s, &ref)
+	// refs=public_id sagt dem Server, dass dieser Client ohne Nummer auskommt.
+	err := c.do("POST", "/api/sessions", url.Values{"refs": {"public_id"}}, s, &ref)
 	return ref, err
 }
 

@@ -155,7 +155,7 @@ func TestGuestSessionCreationReturnsOnlyTheAddress(t *testing.T) {
 	f := accessAPI(t, true)
 	body := map[string]any{"harness": "claude-code", "external_id": "guest-agent", "scope": map[string]string{"project": accProject}}
 	var guest map[string]any
-	if err := json.Unmarshal([]byte(f.expect(t, "gus", 200, "POST", "/api/sessions", body)), &guest); err != nil {
+	if err := json.Unmarshal([]byte(f.expect(t, "gus", 200, "POST", "/api/sessions?refs=public_id", body)), &guest); err != nil {
 		t.Fatal(err)
 	}
 	if n, _ := guest["id"].(float64); n != 0 {
@@ -240,7 +240,7 @@ func TestGuestShareAnswerCarriesTheAddressNotTheNumber(t *testing.T) {
 	f := accessAPI(t, true)
 	body := map[string]any{"harness": "claude-code", "external_id": "guest-own", "scope": map[string]string{"project": accProject}}
 	var made map[string]any
-	if err := json.Unmarshal([]byte(f.expect(t, "gus", 200, "POST", "/api/sessions", body)), &made); err != nil {
+	if err := json.Unmarshal([]byte(f.expect(t, "gus", 200, "POST", "/api/sessions?refs=public_id", body)), &made); err != nil {
 		t.Fatal(err)
 	}
 	pid, _ := made["public_id"].(string)
@@ -251,5 +251,199 @@ func TestGuestShareAnswerCarriesTheAddressNotTheNumber(t *testing.T) {
 	}
 	if _, has := got["id"]; has || got["public_id"] != pid {
 		t.Errorf("guest share answer = %s", out)
+	}
+}
+
+// Sessions ohne Projekt (kein Git-Remote) gehören keinem Projekt, in dem jemand
+// eine Rolle hat. Ältere Collector kennen nur die Nummer: Admin und Mitglieder
+// irgendeines Projekts müssen sie bekommen, sonst laden sie nach /0 hoch.
+func TestOwnSessionNumberForSessionsWithoutProject(t *testing.T) {
+	f := accessAPI(t, true)
+	for _, project := range []string{"", "github.com/nobody/claimed"} {
+		for _, who := range []string{"robin", "mia", "lena"} {
+			body := map[string]any{"harness": "claude-code", "external_id": "np-" + who + project, "scope": map[string]string{"project": project}}
+			var out map[string]any
+			if err := json.Unmarshal([]byte(f.expect(t, who, 200, "POST", "/api/sessions", body)), &out); err != nil {
+				t.Fatal(err)
+			}
+			if n, _ := out["id"].(float64); n == 0 {
+				t.Errorf("%s project %q: no session number: %v", who, project, out)
+			}
+			if out["public_id"] == "" {
+				t.Errorf("%s project %q: no address: %v", who, project, out)
+			}
+		}
+	}
+}
+
+func TestGuestsWithoutRefsSupportGetCollectorTooOld(t *testing.T) {
+	f := accessAPI(t, true)
+	for _, who := range []string{"gus", "nora"} {
+		for _, project := range []string{"", accProject} {
+			if who == "nora" && project != "" {
+				continue // claimed by another organization: refused earlier
+			}
+			body := map[string]any{"harness": "claude-code", "external_id": "old-" + who + project, "scope": map[string]string{"project": project}}
+			out := f.expect(t, who, 409, "POST", "/api/sessions", body)
+			if !strings.Contains(out, "collector_too_old") || !strings.Contains(out, "update ctx") {
+				t.Errorf("%s project %q: answer = %s", who, project, out)
+			}
+			// Nothing was created by the refused request.
+			var list []store.Session
+			if err := json.Unmarshal([]byte(f.expect(t, "robin", 200, "GET", "/api/sessions?limit=500", nil)), &list); err != nil {
+				t.Fatal(err)
+			}
+			for _, s := range list {
+				if s.ExternalID == "old-"+who+project {
+					t.Errorf("%s project %q: refused request created a session", who, project)
+				}
+			}
+			// A client that understands addresses gets the address and no number.
+			body["external_id"] = "new-" + who + project
+			var out2 map[string]any
+			if err := json.Unmarshal([]byte(f.expect(t, who, 200, "POST", "/api/sessions?refs=public_id", body)), &out2); err != nil {
+				t.Fatal(err)
+			}
+			if _, has := out2["id"]; has || out2["public_id"] == "" {
+				t.Errorf("%s project %q: response = %v", who, project, out2)
+			}
+		}
+	}
+}
+
+// Der Admin liest alle Transkripte, aber die Nummernsicht (Zitate, Arbeit aus
+// Transkripten) hängt nicht an der Admin-Eigenschaft: SeesSessionNumbers bleibt
+// ohne Rolle im Projekt falsch; die Nummer der eigenen neuen Session bekommt er
+// über GetsOwnSessionNumber.
+func TestAdminWithoutRoleDoesNotSeeSessionNumbersGlobally(t *testing.T) {
+	f := accessAPI(t, true)
+	pa := f.st.Access(store.Principal{ID: "person:1", Label: "robin"})
+	for _, project := range []string{"", "github.com/nobody/claimed"} {
+		if pa.SeesSessionNumbers(project) {
+			t.Errorf("admin without role sees numbers of project %q", project)
+		}
+		if !pa.GetsOwnSessionNumber(project) {
+			t.Errorf("admin does not get the number of an own session in project %q", project)
+		}
+	}
+	if f.st.Access(store.Principal{ID: "person:5", Label: "gus"}).SeesSessionNumbers("") {
+		t.Errorf("guest sees numbers of sessions without project")
+	}
+}
+
+// ReadableEvidence eines globalen Eintrags: wer ohne Rolle keine Nummern sieht,
+// bekommt nur Belege lesbarer Transkripte (Nora ist in keiner Organisation).
+func TestGlobalEvidenceOfUnreadableSessionIsDropped(t *testing.T) {
+	f := accessAPI(t, true)
+	id, err := f.st.UpsertSession(store.Session{Harness: "claude-code", ExternalID: "ev-hidden", AccountID: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := []store.Evidence{{SessionID: id, Quote: "secret"}}
+	nora := f.st.Access(store.Principal{ID: "person:6", Label: "nora"})
+	if got, n := nora.ReadableEvidence("", ev, 1); len(got) != 0 || n != 0 {
+		t.Errorf("nora got evidence of a hidden session: %v %d", got, n)
+	}
+}
+
+// Ein älterer Collector kennt nur die Nummer. Mitglieder ohne Rolle im Projekt
+// der Session (leer, unbeansprucht, fremd beansprucht) bekommen sie und laden
+// damit hoch; fremde, verborgene und unbekannte Nummern antworten gleich.
+func TestOldNumberCollectorUploadsToOwnSessionInAnyProject(t *testing.T) {
+	f := accessAPI(t, true)
+	chunks := map[string]any{"chunks": []store.Chunk{{Seq: 0, Role: "user", Text: "hi", Raw: "{}"}}}
+	for _, who := range []string{"mia", "lena", "robin"} {
+		for i, project := range []string{"", "github.com/nobody/claimed", accOther} {
+			body := map[string]any{"harness": "claude-code", "external_id": fmt.Sprintf("oc-%s-%d", who, i), "scope": map[string]string{"project": project}}
+			var out map[string]any
+			if err := json.Unmarshal([]byte(f.expect(t, who, 200, "POST", "/api/sessions", body)), &out); err != nil {
+				t.Fatal(err)
+			}
+			n, _ := out["id"].(float64)
+			if n == 0 {
+				t.Fatalf("%s project %q: no number: %v", who, project, out)
+			}
+			f.expect(t, who, 204, "POST", fmt.Sprintf("/api/sessions/%d/chunks", int64(n)), chunks)
+		}
+	}
+	// Mia's number is neither usable by lena (foreign) nor distinguishable from an unknown one.
+	other, err := f.st.UpsertSession(store.Session{Harness: "claude-code", ExternalID: "oc-foreign", AccountID: 4, Scope: scope.Axes{Project: accProject}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hidden, err := f.st.UpsertSession(store.Session{Harness: "claude-code", ExternalID: "oc-hidden", AccountID: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var first string
+	for i, n := range []int64{other, hidden, 999999} {
+		out := f.expect(t, "lena", 403, "POST", fmt.Sprintf("/api/sessions/%d/chunks", n), chunks)
+		if i == 0 {
+			first = out
+		} else if out != first {
+			t.Errorf("number %d answers %q, others %q", n, out, first)
+		}
+	}
+}
+
+// Lesen, Rohtext und Teilen einer Session per Nummer: fremde, verborgene,
+// unbekannte und Alt-Sessions ohne Konto (account_id 0) antworten Byte für Byte
+// gleich, in jedem Projekt und für jeden Betrachter ohne Zugriff. Die eigene
+// Nummer gilt nur für wen sie bekommen darf: ein Gast erreicht sie nicht, ein
+// Mitglied ohne Rolle im Projekt der Session schon.
+func TestSessionNumberRoutesAnswerAlikeForForeignHiddenUnknownAndLegacy(t *testing.T) {
+	f := accessAPI(t, true)
+	mk := func(ext string, account int64, project string) int64 {
+		id, err := f.st.UpsertSession(store.Session{Harness: "claude-code", ExternalID: ext, AccountID: account, Scope: scope.Axes{Project: project}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := f.st.AppendChunks(id, []store.Chunk{{Seq: 0, Role: "user", Text: "hello", Raw: "{}"}}); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	numbers := map[string]int64{
+		"foreign-in-project": mk("m-foreign", 4, accProject),
+		"foreign-elsewhere":  mk("m-foreign-q", 4, accOther),
+		"foreign-no-project": mk("m-foreign-0", 4, ""),
+		"legacy-in-project":  mk("m-legacy", 0, accProject),
+		"legacy-elsewhere":   mk("m-legacy-q", 0, accOther),
+		"legacy-no-project":  mk("m-legacy-0", 0, ""),
+	}
+	routes := []struct{ method, tail string }{{"GET", ""}, {"GET", "/raw"}, {"PUT", "/share"}}
+	body := func(tail string) any {
+		if tail == "/share" {
+			return map[string]bool{"shared": true}
+		}
+		return nil
+	}
+	for _, who := range []string{"gus", "nora", "mia"} {
+		for _, r := range routes {
+			wantCode, want := f.call(t, who, r.method, "/api/sessions/999999"+r.tail, body(r.tail))
+			if wantCode != 404 {
+				t.Errorf("%s unknown %s%s = %d, want 404", who, r.method, r.tail, wantCode)
+			}
+			for name, n := range numbers {
+				code, out := f.call(t, who, r.method, fmt.Sprintf("/api/sessions/%d%s", n, r.tail), body(r.tail))
+				if code != wantCode || out != want {
+					t.Errorf("%s %s /api/sessions/<%s>%s = %d %q, unknown = %d %q", who, r.method, name, r.tail, code, out, wantCode, want)
+				}
+			}
+		}
+	}
+
+	// Eigene Session per Nummer: der Gast bekommt sie nie, das Mitglied ohne Rolle schon.
+	guestOwn := mk("m-guest-own", 5, accProject)
+	for _, r := range routes {
+		wantCode, want := f.call(t, "gus", r.method, "/api/sessions/999999"+r.tail, body(r.tail))
+		code, out := f.call(t, "gus", r.method, fmt.Sprintf("/api/sessions/%d%s", guestOwn, r.tail), body(r.tail))
+		if code != 404 || code != wantCode || out != want {
+			t.Errorf("guest own number %s%s = %d %q, unknown = %d %q", r.method, r.tail, code, out, wantCode, want)
+		}
+	}
+	memberOwn := mk("m-member-own", 3, accOther)
+	for _, r := range routes {
+		f.expect(t, "mia", 200, r.method, fmt.Sprintf("/api/sessions/%d%s", memberOwn, r.tail), body(r.tail))
 	}
 }

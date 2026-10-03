@@ -289,7 +289,11 @@ func collectorChecks(home string) []installer.Check {
 	if pid, running := watchProcess(); running {
 		active.OK = true
 		active.Detail = fmt.Sprintf("watch process pid %d", pid)
-		return append(checks, active)
+		checks = append(checks, active)
+		if c, ok := watchBinaryCheck(); ok {
+			checks = append(checks, c)
+		}
+		return checks
 	}
 	if _, err := exec.LookPath("systemctl"); err != nil {
 		active.Unverified = true
