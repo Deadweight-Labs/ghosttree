@@ -85,6 +85,17 @@ Versioning, with pre-1.0 compatibility rules described in
   the self-hosted fonts. The inline script, the inline progress width and the inline `noscript` style moved into
   `shell.js` and `app.css`.
 
+- Fixed: session review round 5 (REQ-435). A request seen by a viewer who may
+  not know session numbers no longer carries hidden sessions: evidence that
+  cites a session is rewritten to its public address or left out, activity
+  and handoffs of unreadable sessions are omitted rather than replaced, the
+  numbering of work, evidence and activity is renumbered so gaps cannot be
+  counted, and the latest handoff in lists comes from readable sessions only
+  (API, web, search and MCP). Session search runs `snippet()` only for the
+  rows it returns, the rank order is chosen by role instead of by whether
+  something is hidden, the index byte budget counts bytes, the narrow session
+  detail no longer scrolls sideways, and MCP counts and names sightings by
+  address.
 - Fixed: session review round 4 (REQ-435). Search order no longer depends on
   sessions you cannot read (web and `/api/search` rank restricted viewers by
   matches in readable chunks, then recency), request details, work entries and

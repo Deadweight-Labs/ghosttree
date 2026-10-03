@@ -365,3 +365,16 @@ func TestRequestGetDetailedIsLargerAndIncludesEvidence(t *testing.T) {
 		t.Fatalf("detailed response omits criterion evidence: %q", detailedText)
 	}
 }
+
+func TestRequestDetailCountsAndNamesSessionsByAddress(t *testing.T) {
+	d := requestdomain.Detail{
+		Request: requestdomain.Request{ID: 1, Type: "feature", Title: "t"},
+		Sightings: []requestdomain.Sighting{
+			{SessionPublicID: "abc", Quote: "a"}, {SessionPublicID: "abc", Quote: "b"}, {SessionPublicID: "def", Quote: "c"},
+		},
+	}
+	out := renderRequestDetail(d, true)
+	if !strings.Contains(out, "2 separate sessions") || !strings.Contains(out, "session @abc") || strings.Contains(out, "session 0") {
+		t.Errorf("rendered:\n%s", out)
+	}
+}

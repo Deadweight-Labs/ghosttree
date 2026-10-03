@@ -403,8 +403,8 @@ func indexGroups(tx *sql.Tx, began time.Time, batch int, after int64, next func(
 		// sprengen würde (die erste Zeile kommt immer mit); cnt ist die Zahl
 		// der Zeilen vor der Kürzung.
 		query := `SELECT id, session_id, seq, harness, raw, cnt FROM (
-			SELECT *, SUM(length(raw)) OVER (ORDER BY id) AS cum, COUNT(*) OVER () AS cnt FROM (` + inner + `))
-			WHERE cum - length(raw) < ? ORDER BY id`
+			SELECT *, SUM(length(CAST(raw AS BLOB))) OVER (ORDER BY id) AS cum, COUNT(*) OVER () AS cnt FROM (` + inner + `))
+			WHERE cum - length(CAST(raw AS BLOB)) < ? ORDER BY id`
 		args = append(args, max(maxStepBytes-size, 1))
 		rows, err := tx.Query(query, args...)
 		if err != nil {

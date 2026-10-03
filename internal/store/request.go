@@ -118,14 +118,14 @@ func (s *Store) RequestByID(id int64) (requestdomain.Detail, error) {
 			return d, err
 		}
 	}
-	activityRows, err := s.db.Query(`SELECT id,request_id,kind,person,data,created_at FROM request_activity WHERE request_id=? ORDER BY id`, id)
+	activityRows, err := s.db.Query(`SELECT id,request_id,kind,person,data,created_at,session_id FROM request_activity WHERE request_id=? ORDER BY id`, id)
 	if err != nil {
 		return d, err
 	}
 	defer activityRows.Close()
 	for activityRows.Next() {
 		var a requestdomain.Activity
-		if err := activityRows.Scan(&a.ID, &a.RequestID, &a.Kind, &a.Person, &a.Data, &a.CreatedAt); err != nil {
+		if err := activityRows.Scan(&a.ID, &a.RequestID, &a.Kind, &a.Person, &a.Data, &a.CreatedAt, &a.SessionID); err != nil {
 			return d, err
 		}
 		d.Activity = append(d.Activity, a)
@@ -613,7 +613,7 @@ func (s *Store) StartRequestWork(requestID, sessionID int64, role, person string
 	if err != nil {
 		return requestdomain.Work{}, nil, err
 	}
-	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at) VALUES(?,'work.started',?,?,?)`, requestID, person, fmt.Sprintf("session:%d role:%s", sessionID, role), ts); err != nil {
+	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at,session_id) VALUES(?,'work.started',?,?,?,?)`, requestID, person, fmt.Sprintf("session:%d role:%s", sessionID, role), ts, sessionID); err != nil {
 		return requestdomain.Work{}, nil, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -646,8 +646,8 @@ func (s *Store) resumeRequestWork(work requestdomain.Work, person string) (reque
 	if _, err := tx.Exec(`UPDATE request_work SET state='active', ended_at='' WHERE id=?`, work.ID); err != nil {
 		return requestdomain.Work{}, nil, err
 	}
-	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at) VALUES(?,'work.resumed',?,?,?)`,
-		work.RequestID, person, fmt.Sprintf("session:%d role:%s from:%s", work.SessionID, work.Role, work.State), ts); err != nil {
+	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at,session_id) VALUES(?,'work.resumed',?,?,?,?)`,
+		work.RequestID, person, fmt.Sprintf("session:%d role:%s from:%s", work.SessionID, work.Role, work.State), ts, work.SessionID); err != nil {
 		return requestdomain.Work{}, nil, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -691,7 +691,7 @@ func (s *Store) FinishRequestWork(workID int64, state, summary, person string) (
 	if _, err := tx.Exec(`UPDATE request_work SET state=?,ended_at=?,summary=? WHERE id=?`, state, ts, summary, workID); err != nil {
 		return requestdomain.Work{}, err
 	}
-	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at) VALUES(?,'work.finished',?,?,?)`, current.RequestID, person, summary, ts); err != nil {
+	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at,session_id) VALUES(?,'work.finished',?,?,?,?)`, current.RequestID, person, summary, ts, current.SessionID); err != nil {
 		return requestdomain.Work{}, err
 	}
 	if err := tx.Commit(); err != nil {

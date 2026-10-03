@@ -123,6 +123,14 @@ func (a *ProjectAccess) SeesSessionNumbers(project string) bool {
 	return !a.st.AccessEnforced() || RoleRank(a.Role(project).Role) >= 2
 }
 
+// ReadsAll: der Betrachter liest ohnehin jedes Transkript (Admin, oder ohne
+// Durchsetzung). Nur dann darf eine Suche nach bm25 ordnen, das vom ganzen
+// Index abhängt; für alle anderen wäre schon die Wahl der Ordnung ein Hinweis
+// darauf, dass es Verborgenes gibt.
+func (a *ProjectAccess) ReadsAll() bool {
+	return !a.st.AccessEnforced() || a.IsAdmin()
+}
+
 func (a *ProjectAccess) isGuestOnly() bool {
 	if !a.st.AccessEnforced() || a.IsAdmin() {
 		return false
@@ -387,7 +395,7 @@ func (s *Store) SearchTranscripts(pa *ProjectAccess, q SearchQuery) (SearchPage,
 	// bm25 rechnet mit der Dokumenthäufigkeit des ganzen Index, also auch mit
 	// verborgenen Sessions: wer nicht alles lesen darf, bekommt die Reihenfolge
 	// nur aus der lesbaren Menge (Trefferzahl, dann Aktualität).
-	restricted := len(readable) != len(all)
+	restricted := !pa.ReadsAll()
 	rankExpr := "0"
 	if q.Sort != "newest" && !restricted {
 		rankExpr = "bm25(sess_fts, 2.0, 0.5, 1.0, 0.5)"
@@ -869,6 +877,9 @@ type SessionPrefilter struct {
 	Where string
 	Args  []any
 	Exact bool
+	// Unrestricted: der Betrachter liest ohnehin alles (Admin, oder ohne
+	// Durchsetzung); die Suche darf dann nach bm25 ordnen.
+	Unrestricted bool
 }
 
 func (p SessionPrefilter) apply(where string, args []any) (string, []any) {
@@ -885,7 +896,7 @@ func (p SessionPrefilter) apply(where string, args []any) (string, []any) {
 // verborgene Sessions es gibt (#2447). Ohne Durchsetzung gilt alles.
 func (a *ProjectAccess) TranscriptPrefilter() SessionPrefilter {
 	if !a.st.AccessEnforced() {
-		return SessionPrefilter{Exact: true}
+		return SessionPrefilter{Exact: true, Unrestricted: true}
 	}
 	if !a.valid {
 		return SessionPrefilter{Where: `0`, Exact: true}
@@ -916,5 +927,5 @@ func (a *ProjectAccess) TranscriptPrefilter() SessionPrefilter {
 	if a.admin {
 		q += ` OR (project != '' AND project NOT IN (SELECT remote FROM projects))`
 	}
-	return SessionPrefilter{Where: q, Args: args, Exact: true}
+	return SessionPrefilter{Where: q, Args: args, Exact: true, Unrestricted: a.admin}
 }

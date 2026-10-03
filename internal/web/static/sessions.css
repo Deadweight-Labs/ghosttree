@@ -202,6 +202,11 @@ details.think .msg { max-width: none; margin: 4px 0 0; font: italic 400 1rem/1.5
   .prompts { position: static; max-height: 16rem; border-bottom: 1px solid var(--color-line-default); padding-bottom: var(--space-2); }
   .sd-tools { flex-wrap: wrap; }
 }
+/* Das Seiten-Padding der Shell ist hier nur 16px; ein breiterer Negativrand
+   ragte aus der Seite und erzeugte horizontales Scrollen. */
+@media (max-width: 900px) {
+  .prompts, .flow { padding-inline: 16px; margin-inline: -16px; }
+}
 @media (max-width: 700px) {
   .stable .c-linked, .stable thead th:nth-child(3), .stable .num:nth-child(5), .stable thead th:nth-child(5) { display: none; }
   .shit { grid-template-columns: 56px minmax(0, 1fr); }

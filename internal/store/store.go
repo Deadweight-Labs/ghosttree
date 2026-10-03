@@ -173,7 +173,8 @@ DROP INDEX IF EXISTS request_work_one_primary;
 CREATE TABLE IF NOT EXISTS request_activity(
   id INTEGER PRIMARY KEY,
   request_id INTEGER NOT NULL REFERENCES requests(id) ON DELETE RESTRICT,
-  kind TEXT NOT NULL, person TEXT NOT NULL DEFAULT '', data TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
+  kind TEXT NOT NULL, person TEXT NOT NULL DEFAULT '', data TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
+  session_id INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS search_documents(
   id INTEGER PRIMARY KEY,
   kind TEXT NOT NULL CHECK(kind IN ('knowledge','request')),
@@ -946,6 +947,10 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 		return nil, err
 	}
 	if err := ensureCoordWaitCycles(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureActivitySession(db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}

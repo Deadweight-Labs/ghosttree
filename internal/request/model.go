@@ -80,6 +80,10 @@ type Activity struct {
 	Person    string `json:"person"`
 	Data      string `json:"data,omitempty"`
 	CreatedAt string `json:"created_at"`
+	// SessionID: die Session, auf die sich der Eintrag bezieht (0 = keine).
+	// Nie ausgeliefert; die Sicht des Betrachters entscheidet damit, ob sie
+	// den Eintrag zeigen darf.
+	SessionID int64 `json:"-"`
 }
 
 type Detail struct {

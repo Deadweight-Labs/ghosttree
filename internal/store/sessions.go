@@ -497,12 +497,14 @@ func (s *Store) SearchSessionsVisible(q string, filter scope.Axes, excludeSessio
 	// wer nur eine Teilmenge lesen darf, bekommt die Reihenfolge allein aus
 	// der lesbaren Menge.
 	order := "h.r"
-	if keep != nil || pre.Where != "" {
+	if !pre.Unrestricted && (keep != nil || pre.Where != "") {
 		order = "COUNT(*) OVER (PARTITION BY se.id) DESC, se.last_seen_at DESC, se.id DESC, c.seq"
 	}
-	rows, err := s.db.Query(`WITH h AS MATERIALIZED (SELECT rowid AS cid, rank AS r,
-			snippet(chunks_fts, 0, '', '', '…', 12) AS snip FROM chunks_fts WHERE chunks_fts MATCH ?)
-		SELECT `+prefix(sessionCols, "se.")+`, c.seq, h.snip
+	// snippet() liest den Text jeder Zeile, die es liefert: in der CTE liefe es
+	// für jeden Treffer des ganzen Index. Sie führt nur Zeile und Rang; den
+	// Ausschnitt gibt es danach für die höchstens limit Ergebniszeilen.
+	rows, err := s.db.Query(`WITH h AS MATERIALIZED (SELECT rowid AS cid, rank AS r FROM chunks_fts WHERE chunks_fts MATCH ?)
+		SELECT `+prefix(sessionCols, "se.")+`, c.seq, h.cid
 		FROM h
 		JOIN session_chunks c ON c.id = h.cid
 		JOIN sessions se ON se.id = c.session_id
@@ -513,17 +515,44 @@ func (s *Store) SearchSessionsVisible(q string, filter scope.Axes, excludeSessio
 	}
 	defer rows.Close()
 	out := []SessionHit{}
+	var cids []int64
 	for rows.Next() {
 		var h SessionHit
-		if err := scanSession(rows, &h.Session, &h.Seq, &h.Snippet); err != nil {
+		var cid int64
+		if err := scanSession(rows, &h.Session, &h.Seq, &cid); err != nil {
 			return nil, err
 		}
 		out = append(out, h)
+		cids = append(cids, cid)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	rows.Close()
+	if len(cids) > 0 {
+		snips := map[int64]string{}
+		srows, err := s.db.Query(`SELECT rowid, snippet(chunks_fts, 0, '', '', '…', 12) FROM chunks_fts
+			WHERE rowid IN (SELECT value FROM json_each(?)) AND chunks_fts MATCH ?`, idsJSONOf(cids), ftsQuery(q))
+		if err != nil {
+			return nil, err
+		}
+		for srows.Next() {
+			var id int64
+			var snip string
+			if err := srows.Scan(&id, &snip); err != nil {
+				srows.Close()
+				return nil, err
+			}
+			snips[id] = snip
+		}
+		srows.Close()
+		if err := srows.Err(); err != nil {
+			return nil, err
+		}
+		for i := range out {
+			out[i].Snippet = snips[cids[i]]
+		}
+	}
 	one := make([]Session, len(out))
 	for i := range out {
 		one[i] = out[i].Session
