@@ -723,3 +723,40 @@ func TestOIDCTypedProjectInvitationEndsOnThePairingPage(t *testing.T) {
 		t.Fatalf("callback: %d %q", resp.StatusCode, resp.Header.Get("Location"))
 	}
 }
+
+// Die Freigabe darf auf keinem Gerät ausgeblendet werden: schmale Fenster und
+// Touch-Laptops brauchen die Knöpfe auch im Loopback-Weg.
+func TestJoinApproveFormIsNeverHiddenByAClass(t *testing.T) {
+	e := newPairEnv(t)
+	b := browser(t)
+	e.signInAs(t, b, "anna")
+	e.accept(t, b, e.code)
+	pair := pairRE.FindString(e.pairPage(t, b))
+	e.claimLoop(t, pair, "mine")
+	page := e.pairPage(t, b)
+	i := strings.Index(page, `action="/join/pair/decide"`)
+	if i < 0 || !strings.Contains(page, `value="approve"`) || !strings.Contains(page, `value="deny"`) {
+		t.Fatalf("no approval form: %s", page)
+	}
+	tag := page[strings.LastIndex(page[:i], "<form"):i]
+	if strings.Contains(tag, "join-desktop") {
+		t.Fatalf("form carries a hiding class: %s", tag)
+	}
+	if !strings.Contains(page, "join-mobile") {
+		t.Fatal("the loopback hint for small screens is gone")
+	}
+}
+
+func TestJoinExpiredLoopbackPageOffersToStopTheInstaller(t *testing.T) {
+	e := newPairEnv(t)
+	b := browser(t)
+	e.signInAs(t, b, "anna")
+	e.accept(t, b, e.code)
+	pair := pairRE.FindString(e.pairPage(t, b))
+	e.claimLoop(t, pair, "mine")
+	e.st.Join().SetClock(func() time.Time { return time.Now().Add(store.JoinClaimTTL + time.Minute) })
+	text := e.pairPage(t, b)
+	if !strings.Contains(text, `href="http://127.0.0.1:40123/callback?error=access_denied`) {
+		t.Fatalf("page: %s", text)
+	}
+}

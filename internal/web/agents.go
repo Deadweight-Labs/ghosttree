@@ -27,6 +27,8 @@ const (
 
 type agentsView struct {
 	Cards     []agentCard
+	Machines  []machineRow
+	Example   string
 	Connect   string
 	CanAdd    bool
 	Guest     bool
@@ -40,10 +42,11 @@ type agentCard struct {
 	Post, PostAge            string
 }
 
-// agentMachine is the host in an agent ID of the form claude:<host>:<uuid>.
+// agentMachine is the host in an agent ID of the form claude:<host>:<uuid> or
+// cli:<host>.
 func agentMachine(externalID string) string {
 	parts := strings.Split(externalID, ":")
-	if len(parts) == 3 {
+	if len(parts) == 3 || (len(parts) == 2 && parts[0] == "cli") {
 		return parts[1]
 	}
 	return ""
@@ -68,6 +71,12 @@ func (a *app) agentsPage(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		tokens, err := a.deviceTokens(r)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		view.Machines, view.Example = ownMachines(tokens, now), msg("setup.example")
 	}
 	a.renderBrowser(w, r, "agents", pageData{Title: msg("agents.title"), Agents: view})
 }

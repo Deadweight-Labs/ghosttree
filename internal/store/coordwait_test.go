@@ -385,7 +385,7 @@ func TestWaitQueriesStayConstantAndUseIndexes(t *testing.T) {
 			agents = append(agents, presenceAgent{ExternalID: fmt.Sprintf("claude:x:%d-%d", n, i), PrincipalID: "person:4"})
 		}
 		c := &countingDB{db: st.db}
-		presenceBatch(c, time.Now().UTC(), room, agents)
+		presenceBatch(c, time.Now().UTC(), room, agents, nil)
 		return c.n
 	}
 	if a, b := count(2), count(40); a != b || b > 6 {

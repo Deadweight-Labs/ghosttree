@@ -53,9 +53,11 @@ type overviewView struct {
 	Guest     bool
 	Next      []nextRow
 	Agents    []agentRow
+	Machines  []machineRow
 	Requests  []requestRow
 	Learned   []learnedRow
 	Connect   string
+	Example   string
 	CSRFToken string
 	NoContent bool
 }
@@ -69,6 +71,8 @@ type agentRow struct {
 	Name, Project, Activity, State, StateText, Age string
 	// The rest feeds the agents page; the overview ignores it.
 	ExternalID, RoomKey, Machine, Branch, Provider string
+	// ProjectTitle is the full remote, for the title attribute.
+	ProjectTitle string
 }
 
 type requestRow struct {
@@ -91,6 +95,8 @@ type setupView struct {
 	Title   string
 	// Code: die Sitzung darf Geräte freigeben, also zeigt die Seite das Code-Feld.
 	Code bool
+	// Example is the command that starts an agent on a connected machine.
+	Example string
 }
 
 // agentState ordnet ein Lebenszeichen ein. Ein fehlendes Signal gilt als offline.
@@ -198,6 +204,10 @@ func (a *app) overviewPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	view.Agents = agents
+	if tokens, terr := a.deviceTokens(r); terr == nil {
+		view.Machines = ownMachines(tokens, now)
+		view.Example = msg("setup.example")
+	}
 	view.Connect = "/ui/overview?connect=1"
 	if view.Next, err = a.overviewNext(r, pa, who, project, now); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -219,6 +229,9 @@ func (a *app) overviewAgents(r *http.Request, pa *store.ProjectAccess, project s
 }
 
 // listAgents is overviewAgents with a limit, shared with the agents page.
+// Besides the agents of every project the viewer may list, it always includes
+// the agents the viewer started themselves: that needs no role and says nothing
+// about anyone else.
 func (a *app) listAgents(r *http.Request, pa *store.ProjectAccess, project string, now time.Time, limit int) ([]agentRow, error) {
 	type ranked struct {
 		row    agentRow
@@ -226,6 +239,45 @@ func (a *app) listAgents(r *http.Request, pa *store.ProjectAccess, project strin
 	}
 	seen := map[string]bool{}
 	var out []ranked
+	add := func(remote string, peer store.CoordAgent) {
+		if peer.ParentExternalID != "" || seen[peer.ExternalID] {
+			return
+		}
+		seen[peer.ExternalID] = true
+		last := parseTime(peer.LastSeenAt)
+		var life time.Time
+		activity := ""
+		if p := peer.Presence; p != nil {
+			// Only evidence that the agent itself is there counts as a sign of
+			// life: a poll, or tool calls seen in its transcript. A message
+			// sent to or from it, or a wait derived from one, does not.
+			if p.Reachability.Value == store.ReachConnected {
+				life = parseTime(p.Reachability.At)
+			}
+			if p.WorkState.Value == store.WorkWorking || p.WorkState.Value == store.WorkPaused {
+				if t := parseTime(p.WorkState.At); t.After(life) {
+					life = t
+				}
+			}
+			activity = workLabel(p.WorkState.Value)
+		}
+		state := agentState(now, life)
+		if state != "active" {
+			// Not alive right now: seen at all within a day is idle, else offline.
+			activity = ""
+			state = agentState(now, last)
+			if state == "active" {
+				state = "idle"
+			}
+		}
+		signal := last
+		if life.After(signal) {
+			signal = life
+		}
+		out = append(out, ranked{agentRow{Name: peerName(peer), Project: coordShortRoomName(store.RoomProject, remote), ProjectTitle: remote,
+			Activity: activity, State: state, StateText: stateLabel(state), Age: shortAge(now, signal),
+			ExternalID: peer.ExternalID, RoomKey: store.RoomKeyForProject(remote), Machine: hostUnlessNamed(peerName(peer), agentMachine(peer.ExternalID)), Branch: peer.Branch, Provider: peer.Provider}, signal})
+	}
 	access := a.browserCoord(r)
 	remotes := slices.Sorted(slices.Values(pa.Projects()))
 	for _, remote := range remotes {
@@ -243,32 +295,19 @@ func (a *app) listAgents(r *http.Request, pa *store.ProjectAccess, project strin
 			return nil, err
 		}
 		for _, peer := range peers {
-			if peer.ParentExternalID != "" || seen[peer.ExternalID] {
-				continue
-			}
-			seen[peer.ExternalID] = true
-			signal := parseTime(peer.LastSeenAt)
-			activity := ""
-			if p := peer.Presence; p != nil {
-				for _, at := range []string{p.Reachability.At, p.WorkState.At} {
-					if t := parseTime(at); t.After(signal) {
-						signal = t
-					}
-				}
-				activity = workLabel(p.WorkState.Value)
-			}
-			state := agentState(now, signal)
-			if state != "active" {
-				activity = ""
-			}
-			name := strings.TrimSpace(peer.DisplayName)
-			if name == "" {
-				name = peer.Provider
-			}
-			out = append(out, ranked{agentRow{Name: name, Project: coordShortRoomName(store.RoomProject, remote),
-				Activity: activity, State: state, StateText: stateLabel(state), Age: shortAge(now, signal),
-				ExternalID: peer.ExternalID, RoomKey: store.RoomKeyForProject(remote), Machine: agentMachine(peer.ExternalID), Branch: peer.Branch, Provider: peer.Provider}, signal})
+			add(remote, peer)
 		}
+	}
+	own, err := a.store.OwnAgents(browserPrincipal(r).ID)
+	if err != nil {
+		return nil, err
+	}
+	for _, peer := range own {
+		remote := strings.TrimPrefix(peer.RoomKey, "project:")
+		if project != "" && remote != project {
+			continue
+		}
+		add(remote, peer)
 	}
 	order := map[string]int{"active": 0, "idle": 1, "offline": 2}
 	sort.SliceStable(out, func(i, j int) bool {
@@ -288,6 +327,52 @@ func (a *app) listAgents(r *http.Request, pa *store.ProjectAccess, project strin
 		}
 	}
 	return rows, nil
+}
+
+// hostUnlessNamed drops the host when the name already carries it.
+func hostUnlessNamed(name, host string) string {
+	if strings.Contains(name, host) {
+		return ""
+	}
+	return host
+}
+
+// peerName is how a person reads an agent: "Claude on freund-laptop". A name
+// the person chose stays; an ID or the bare provider is replaced. The raw ID
+// goes to the title of the row.
+func peerName(peer store.CoordAgent) string {
+	name := strings.TrimSpace(peer.DisplayName)
+	provider := providerLabel(peer.Provider, peer.ExternalID)
+	generic := name == "" || strings.Contains(name, ":") || strings.EqualFold(name, peer.Provider) || strings.EqualFold(name, provider)
+	if !generic {
+		return name
+	}
+	if host := agentMachine(peer.ExternalID); host != "" {
+		return msg("agent.on", provider, host)
+	}
+	return provider
+}
+
+// providerLabel names the tool behind an agent.
+func providerLabel(provider, externalID string) string {
+	kind := strings.ToLower(provider)
+	if prefix, _, ok := strings.Cut(externalID, ":"); ok && (kind == "" || kind == "ctx-cli") {
+		kind = prefix
+	}
+	switch kind {
+	case "claude", "claude-code":
+		return msg("agent.provider.claude")
+	case "codex":
+		return msg("agent.provider.codex")
+	case "opencode":
+		return msg("agent.provider.opencode")
+	case "cli", "ctx-cli":
+		return msg("agent.provider.cli")
+	}
+	if kind == "" {
+		return msg("agent.provider.unknown")
+	}
+	return strings.ToUpper(kind[:1]) + kind[1:]
 }
 
 func stateLabel(state string) string {
@@ -520,9 +605,13 @@ func (a *app) setupFor(r *http.Request, who viewer, hasContent bool, now time.Ti
 	if err != nil {
 		return nil, err
 	}
-	if machine, ok := recentMachine(tokens, now); ok {
-		view.State, view.Machine = "connected", machine
-		return view, nil
+	view.Example = msg("setup.example")
+	if machines := ownMachines(tokens, now); len(machines) > 0 {
+		// A machine is there, so the status says so, however long ago it signed in.
+		if _, recent := recentMachine(tokens, now); recent || forced {
+			view.State, view.Machine = "connected", machines[0].Name
+			return view, nil
+		}
 	}
 	if !forced && len(tokens) > 0 {
 		// Eine Maschine ist seit längerem verbunden: normale Übersicht mit
@@ -545,6 +634,68 @@ func (a *app) deviceTokens(r *http.Request) ([]store.TokenInfo, error) {
 		}
 	}
 	return out, nil
+}
+
+// machineRow is one of the viewer's own machines: connected while it was heard
+// from recently, otherwise the time it was last seen.
+type machineRow struct {
+	Name, State, StateText, Age string
+}
+
+// ownMachines folds the viewer's device tokens to one row per machine, newest
+// contact first. Only tokens of the viewer's own account are ever passed in.
+func ownMachines(tokens []store.TokenInfo, now time.Time) []machineRow {
+	type seen struct {
+		name string
+		at   time.Time
+	}
+	byName := map[string]seen{}
+	for _, t := range tokens {
+		name := strings.TrimSpace(t.Machine)
+		if name == "" {
+			continue
+		}
+		at := parseTime(t.LastUsedAt)
+		if c := parseTime(t.CreatedAt); c.After(at) {
+			at = c
+		}
+		if cur, ok := byName[name]; !ok || at.After(cur.at) {
+			byName[name] = seen{name, at}
+		}
+	}
+	list := make([]seen, 0, len(byName))
+	for _, v := range byName {
+		list = append(list, v)
+	}
+	sort.Slice(list, func(i, j int) bool {
+		if !list[i].at.Equal(list[j].at) {
+			return list[i].at.After(list[j].at)
+		}
+		return list[i].name < list[j].name
+	})
+	rows := make([]machineRow, 0, len(list))
+	for _, m := range list {
+		row := machineRow{Name: m.name, State: "active", StateText: msg("machine.connected"), Age: shortAge(now, m.at)}
+		if now.Sub(m.at) > agentActiveWithin {
+			row.State, row.StateText = "idle", msg("machine.last_seen", shortAgo(now, m.at))
+		}
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+// shortAgo writes a time as "2 min ago" for a sentence.
+func shortAgo(now, t time.Time) string {
+	d := now.Sub(t)
+	switch {
+	case d < time.Minute:
+		return msg("age.just_now")
+	case d < time.Hour:
+		return msg("age.min_ago", int(d/time.Minute))
+	case d < 48*time.Hour:
+		return msg("age.hours_ago", int(d/time.Hour))
+	}
+	return msg("age.days_ago", int(d/(24*time.Hour)))
 }
 
 func recentMachine(tokens []store.TokenInfo, now time.Time) (string, bool) {

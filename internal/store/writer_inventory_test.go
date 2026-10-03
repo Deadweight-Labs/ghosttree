@@ -41,6 +41,7 @@ var writerMethodClasses = map[string]string{
 	"SetProjectRole":                "write",
 	"RemoveProjectRole":             "write",
 	"ProjectRole":                   "read",
+	"OwnAgents":                     "read",
 	"SetSessionShared":              "write",
 	"SetSessionVisibility":          "write",
 	"IndexSession":                  "administrative",

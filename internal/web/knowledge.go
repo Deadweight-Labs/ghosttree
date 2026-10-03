@@ -61,6 +61,7 @@ type KnowledgeRow struct {
 	ID, Href, Title, Project string
 	Type, TypeLabel          string
 	Level, LevelLabel        string
+	LevelTitle, TypeTitle    string
 	Stale                    bool
 	Excerpt                  string
 	Age                      string
@@ -98,9 +99,11 @@ type knowledgeCard struct {
 	Proof       *proofView
 	CanApprove  bool
 	CanReject   bool
-	CanRestore  bool
-	CanEdit     bool
-	RawBody     string
+	// Retire: the same action as Reject, on an entry that was already decided.
+	Retire     bool
+	CanRestore bool
+	CanEdit    bool
+	RawBody    string
 	// Token, Next und Filter gehören den Formularen der Karte: CSRF-Token, die
 	// Seite, auf die nach der Entscheidung zurückgeführt wird, und die Projektwahl.
 	Token, Next, Filter string
@@ -215,7 +218,7 @@ var levelKeys = map[string]string{
 
 var doneKeys = map[string]string{
 	"approved": "knowledge.done.approved", "rejected": "knowledge.done.rejected",
-	"restored": "knowledge.done.restored", "saved": "knowledge.done.saved",
+	"retired": "knowledge.done.retired", "restored": "knowledge.done.restored", "saved": "knowledge.done.saved",
 }
 
 func typeLabel(typ string) string {
@@ -223,6 +226,19 @@ func typeLabel(typ string) string {
 		return msg(key)
 	}
 	return typ
+}
+
+// levelTitle is the tooltip of a status mark: what the status means for agents.
+func levelTitle(level string) string {
+	if key, ok := levelTitleKeys[level]; ok {
+		return msg(key)
+	}
+	return ""
+}
+
+var levelTitleKeys = map[string]string{
+	"verified": "knowledge.level.verified.title", "trusted": "knowledge.level.trusted.title",
+	"staged": "knowledge.level.staged.title", "quarantined": "knowledge.level.quarantined.title",
 }
 
 func levelLabel(level string) string {
@@ -236,7 +252,7 @@ func (a *app) knowledgeRowFor(pa *store.ProjectAccess, raw store.Knowledge, with
 	k := pa.KnowledgeView(raw)
 	row := KnowledgeRow{
 		ID: strconv.FormatInt(k.ID, 10), Href: "/ui/knowledge/" + strconv.FormatInt(k.ID, 10), Title: k.Title,
-		Type: k.Type, TypeLabel: typeLabel(k.Type), Level: k.Confidence, LevelLabel: levelLabel(k.Confidence),
+		Type: k.Type, TypeLabel: typeLabel(k.Type), Level: k.Confidence, LevelLabel: levelLabel(k.Confidence), LevelTitle: levelTitle(k.Confidence), TypeTitle: typeLabel(k.Type),
 		Stale: k.Status == "stale", Excerpt: excerpt(k.Body), Age: shortAge(overviewNow().UTC(), parseTime(firstNonEmpty(k.ObservedAt, k.CreatedAt))),
 	}
 	if withProject && k.Scope.Project != "" {
@@ -268,12 +284,24 @@ func firstNonEmpty(values ...string) string {
 
 // capabilities setzt die Knöpfe einer Karte aus den Rechten am Eintrag.
 func capabilities(pa *store.ProjectAccess, k store.Knowledge, card *knowledgeCard) {
-	live := k.Status == "active" || k.Status == "stale"
 	canEdit := pa.CheckKnowledge(k, store.ActEdit) == nil
-	card.CanApprove = live && approveChanges(k, canEdit) && pa.CheckKnowledge(k, store.ActVerify) == nil
-	card.CanReject = canEdit && live
+	open := decisionOpen(k)
+	card.CanApprove = open && approveChanges(k, canEdit) && pa.CheckKnowledge(k, store.ActVerify) == nil
+	live := k.Status == "active" || k.Status == "stale"
+	card.CanReject = live && canEdit
+	card.Retire = card.CanReject && !open
 	card.CanRestore = canEdit && k.Status == "deprecated"
 	card.CanEdit = canEdit && k.Status != "superseded"
+}
+
+// decisionOpen: someone still has to decide about this entry. A trusted or
+// verified entry has been decided; it only offers Edit. A stale one asks for a
+// look, a staged or quarantined one for a verdict.
+func decisionOpen(k store.Knowledge) bool {
+	if k.Status != "active" && k.Status != "stale" {
+		return false
+	}
+	return k.Status == "stale" || k.Confidence == "staged" || k.Confidence == "quarantined"
 }
 
 // approveChanges: ob "übernehmen" an diesem Eintrag noch etwas ändert. Wer nur
@@ -418,7 +446,7 @@ func (a *app) resultFor(r *http.Request, pa *store.ProjectAccess, next, filter s
 		return nil
 	}
 	res := &resultLine{Token: csrfOf(r), Next: next, Filter: filter, Kind: kind, Text: msg(doneKeys[kind], pa.KnowledgeView(k).Title)}
-	res.CanRestore = kind == "rejected" && k.Status == "deprecated" && pa.CheckKnowledge(k, store.ActEdit) == nil
+	res.CanRestore = (kind == "rejected" || kind == "retired") && k.Status == "deprecated" && pa.CheckKnowledge(k, store.ActEdit) == nil
 	res.ID = strconv.FormatInt(id, 10)
 	res.Was = restorableStatus(r.URL.Query().Get("was"))
 	return res
@@ -559,6 +587,9 @@ func (a *app) reviewDecide(w http.ResponseWriter, r *http.Request) {
 	}
 	live := k.Status == "active" || k.Status == "stale"
 	canEdit := a.access(r).CheckKnowledge(k, store.ActEdit) == nil
+	if verdict == "reject" && !decisionOpen(k) {
+		done = "retired"
+	}
 	if verdict == "approve" {
 		if canEdit && k.Status == "stale" {
 			patch["status"] = "active"
@@ -591,7 +622,7 @@ func restorableStatus(s string) string {
 // Server aus einer festen Liste, nie aus einer mitgesandten Adresse.
 func (a *app) afterDecision(r *http.Request, k store.Knowledge, done string) string {
 	q := url.Values{"done": {done}, "k": {strconv.FormatInt(k.ID, 10)}}
-	if done == "rejected" {
+	if done == "rejected" || done == "retired" {
 		q.Set("was", restorableStatus(k.Status))
 	}
 	if r.FormValue("next") == "item" {

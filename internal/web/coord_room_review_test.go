@@ -142,20 +142,20 @@ func TestCoordDirectivePlateNamesTheRoleAndLowRankIsAStandingRequest(t *testing.
 		return page[start : start+strings.Index(page[start:], "</article>")]
 	}
 	owner, guest := plate("Owner rule."), plate("Guest wish.")
-	if !strings.Contains(owner, `<span class="cm-role">owner</span>`) || !strings.Contains(owner, "<span>Directive</span>") {
+	if !strings.Contains(owner, `<span class="cm-role">owner</span>`) || !strings.Contains(owner, "<span>Standing order</span>") {
 		t.Errorf("owner plate: %s", owner)
 	}
-	if !strings.Contains(guest, `<span class="cm-role">guest</span>`) || !strings.Contains(guest, "Standing request") || strings.Contains(guest, "<span>Directive</span>") {
+	if !strings.Contains(guest, `<span class="cm-role">guest</span>`) || !strings.Contains(guest, "Standing note") || strings.Contains(guest, "<span>Standing order</span>") {
 		t.Errorf("a guest's standing instruction is no directive: %s", guest)
 	}
-	if g := e.page(t, e.gus); strings.Contains(g, "Never") || !strings.Contains(g, "Owner rule.") || strings.Contains(plateOf(t, g, "Owner rule."), "Standing request") {
+	if g := e.page(t, e.gus); strings.Contains(g, "Never") || !strings.Contains(g, "Owner rule.") || strings.Contains(plateOf(t, g, "Owner rule."), "Standing note") {
 		t.Errorf("a guest, who is not told the author's role, must not see an owner's directive downgraded: %s", plateOf(t, g, "Owner rule."))
 	}
 	modes := func(page string) string { return segment(t, page, `class="pill clay"`, `</div>`) }
-	if m := modes(page); !strings.Contains(m, "Directive") || strings.Contains(m, "Standing request") {
+	if m := modes(page); !strings.Contains(m, "Standing order") || strings.Contains(m, "Standing note") {
 		t.Errorf("the owner can set directives: %s", m)
 	}
-	if m := modes(e.page(t, e.gus)); !strings.Contains(m, "Standing request") || strings.Contains(m, "Directive") {
+	if m := modes(e.page(t, e.gus)); !strings.Contains(m, "Standing note") || strings.Contains(m, "Standing order") {
 		t.Errorf("a guest can only set standing requests: %s", m)
 	}
 }

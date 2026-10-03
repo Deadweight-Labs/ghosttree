@@ -104,7 +104,7 @@ func TestCoordRoomShowsADirectiveAsAPinnedPlateWithEnd(t *testing.T) {
 	appendAgent(t, st, room, "a2", "after", "")
 	page := get("/ui/coord?room=" + url.QueryEscape(room))
 	plate := messageItem(t, page, "2")
-	for _, want := range []string{`class="slab clay"`, "Directive", "Never push to main.", "All agents in x/chat", "until ended", `action="/ui/coord/standing/end"`, ">End<"} {
+	for _, want := range []string{`class="slab clay"`, "Standing order", "Never push to main.", "All agents in x/chat", "until ended", `action="/ui/coord/standing/end"`, ">End<"} {
 		if !strings.Contains(plate, want) && !strings.Contains(plate, strings.ReplaceAll(want, "x/chat", "github.com/x/chat")) {
 			t.Errorf("directive plate missing %q: %s", want, plate)
 		}

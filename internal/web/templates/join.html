@@ -33,7 +33,7 @@
 <p class="join-from">{{t "pair.from" .Remote}}{{if and .ShowNet .SameNet}} · {{t "pair.same_net"}}{{end}}</p>
 {{if and .ShowNet (not .SameNet)}}<p class="login-error" role="alert">{{t "pair.other_net"}}</p>{{end}}
 {{if not .NeedsCode}}<p class="join-mobile">{{t "pair.loopback_mobile"}}</p>{{end}}
-<form class="login-form{{if not .NeedsCode}} join-desktop{{end}}" method="post" action="/join/pair/decide"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><input type="hidden" name="nonce" value="{{.Nonce}}">
+<form class="login-form" method="post" action="/join/pair/decide"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><input type="hidden" name="nonce" value="{{.Nonce}}">
 {{if .NeedsCode}}<label class="field join-codefield"><span>{{t "pair.code_label"}}</span><input class="clay join-code" name="confirm_code" maxlength="9" size="9" autocomplete="off" autocapitalize="characters" spellcheck="false" inputmode="text" required autofocus><small>{{t "pair.code_hint"}}</small></label>{{end}}
 {{template "joinconfirm" .}}
 <div class="join-actions"><button class="clay btn btn-primary" name="decision" value="approve">{{t "pair.approve" .Machine}}</button><button class="clay btn ghost" name="decision" value="deny" formnovalidate>{{t "pair.deny"}}</button></div></form>
@@ -41,7 +41,7 @@
 {{else if eq .State "approved"}}<h1>{{t "pair.finishing" .Machine}}</h1><p class="join-wait"><span class="join-dot" aria-hidden="true"></span>{{t "pair.finishing_hint"}}</p>{{template "joinnewcode" .}}
 {{else if eq .State "connected"}}<div class="join-done"><span class="join-check" aria-hidden="true">{{template "icon" "check"}}</span><h1>{{t "pair.connected" .Machine}}</h1></div><a class="clay btn btn-primary" href="/ui/overview">{{t "pair.overview"}}</a>{{template "joinnewcode" .}}
 {{else if eq .State "denied"}}<h1>{{t "pair.denied"}}</h1><p>{{t "pair.denied_hint"}}</p>{{template "joinnewcode" .}}
-{{else if eq .State "expired"}}<h1>{{t "pair.expired"}}</h1><p>{{t "pair.expired_hint"}}</p>{{template "joinnewcode" .}}
+{{else if eq .State "expired"}}<h1>{{t "pair.expired"}}</h1><p>{{t "pair.expired_hint"}}</p>{{if .Callback}}<p><a href="{{.Callback}}">{{t "pair.stop_installer"}}</a></p>{{end}}{{template "joinnewcode" .}}
 {{else if eq .State "compromised"}}<h1>{{t "pair.compromised"}}</h1><p>{{t "pair.compromised_hint"}}</p>{{if .Callback}}<p><a href="{{.Callback}}">{{t "pair.stop_installer"}}</a></p>{{end}}{{template "joinnewcode" .}}
 {{else}}<h1>{{if .Interrupted}}{{t "pair.interrupted"}}{{else}}{{t "pair.title"}}{{end}}</h1>
 <form class="login-form" method="post" action="/join/pair"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}">{{template "joinconfirm" .}}<button class="clay btn btn-primary">{{if .Interrupted}}{{t "pair.start_again"}}{{else}}{{t "pair.get_code"}}{{end}}</button></form>

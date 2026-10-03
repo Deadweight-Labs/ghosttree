@@ -178,6 +178,7 @@ type JoinSessions struct {
 	mu        sync.Mutex
 	now       func() time.Time
 	device    *DeviceFlows
+	startFlow func(client, machine, remote string, ttl time.Duration) (DeviceStart, error)
 	all       map[string]*joinSession
 	byAccount map[string]*joinSession
 	byPair    map[string]*joinSession
@@ -186,7 +187,7 @@ type JoinSessions struct {
 }
 
 func NewJoinSessions(d *DeviceFlows) *JoinSessions {
-	return &JoinSessions{now: time.Now, device: d, all: map[string]*joinSession{}, byAccount: map[string]*joinSession{}, byPair: map[string]*joinSession{}, byAuth: map[string]*joinSession{},
+	return &JoinSessions{now: time.Now, device: d, startFlow: d.StartJoin, all: map[string]*joinSession{}, byAccount: map[string]*joinSession{}, byPair: map[string]*joinSession{}, byAuth: map[string]*joinSession{},
 		failures: map[string][]time.Time{}}
 }
 
@@ -517,11 +518,11 @@ func (j *JoinSessions) Claim(req JoinClaimRequest) (JoinClaim, error) {
 	} else {
 		fail := func(err error) (JoinClaim, error) {
 			if resumed {
-				j.compromise(s)
+				j.lapse(s)
 			}
 			return JoinClaim{}, err
 		}
-		start, err := j.device.StartJoin(netKey, req.Machine, req.Addr, window)
+		start, err := j.startFlow(netKey, req.Machine, req.Addr, window)
 		if err != nil {
 			return fail(err)
 		}

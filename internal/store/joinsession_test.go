@@ -942,3 +942,27 @@ func TestJoinResumeFailureKeepsTheEarlierRequest(t *testing.T) {
 		t.Fatalf("retry: %v", err)
 	}
 }
+
+// Scheitert das neue Gerät nach einem Resume, endet die Anfrage ehrlich als
+// abgelaufen und nicht als Fremdzugriff.
+func TestJoinResumeThatFailsToStartLapsesInsteadOfCompromising(t *testing.T) {
+	st, clock := pairFixture(t)
+	j := st.Join()
+	o := openPair(j, "person:2")
+	first, err := j.Claim(codeReq(o.Pair, "laptop", "1.1.1.1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock.t = clock.t.Add(30 * time.Second)
+	j.startFlow = func(string, string, string, time.Duration) (DeviceStart, error) {
+		return DeviceStart{}, ErrDeviceBusy
+	}
+	again := codeReq(o.Pair, "laptop", "1.1.1.1")
+	again.Resume = first.Resume
+	if _, err := j.Claim(again); !errors.Is(err, ErrDeviceBusy) {
+		t.Fatalf("claim: %v", err)
+	}
+	if v := j.View("person:2"); v.State != JoinExpired {
+		t.Fatalf("state %s, want expired", v.State)
+	}
+}

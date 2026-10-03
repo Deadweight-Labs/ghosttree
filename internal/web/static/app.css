@@ -521,3 +521,12 @@ html:not(.js) [data-coord-live-status] { display: none; }
   }
   .coord-workspace .acts .btn { min-height: 44px; }
 }
+
+/* First-run: the viewer's machines and the step after connecting. */
+.ov-sub { margin: var(--space-4) 0 var(--space-2); font: var(--text-secondary); font-weight: 700; color: var(--clay-ink-faint); }
+.ov-machines { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.ov-machine { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.ov-machine .ov-name { min-width: 0; overflow-wrap: anywhere; font-family: var(--font-mono); font-variant-ligatures: none; font-size: 14px; }
+.ov-start { display: flex; flex-direction: column; gap: 10px; margin: 0 0 var(--space-3); min-width: 0; }
+.ov-start-title { margin: 0; font-weight: 700; }
+.ov-command code { font-variant-ligatures: none; }

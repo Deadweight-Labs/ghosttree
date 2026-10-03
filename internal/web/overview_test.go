@@ -326,8 +326,9 @@ func TestGettingStartedIsForOwnersAndAConnectedMachineDoesNotTrapThem(t *testing
 	defer func(prev func() time.Time) { overviewNow = prev }(overviewNow)
 	overviewNow = func() time.Time { return time.Now().Add(time.Hour) }
 	_, owner = fetchPage(t, e.Owner, e.Base+"/ui/overview")
-	if strings.Contains(owner, "Connect your first agent") || !strings.Contains(owner, "No agents yet.") {
-		t.Errorf("an old connection without an agent keeps the owner in Getting started: %s", owner)
+	if strings.Contains(owner, "Connect your first agent") || !strings.Contains(owner, "Start Claude or Codex in a project") ||
+		!strings.Contains(owner, "oldbox") || !strings.Contains(owner, "Last seen 1 h ago") {
+		t.Errorf("an old connection without an agent should show the machine and the next step: %s", owner)
 	}
 }
 

@@ -162,7 +162,7 @@ func (a *app) joinPairState(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"state": v.State, "nonce": v.Nonce})
 }
 
-// joinPairMessage ist joinMessage mit dem Weg zurück zur Paarungsseite: wer dort
+// joinPairMessage ist joinMessageBack mit dem Weg zurück zur Paarungsseite: wer dort
 // einen Fehler bekommt, steht sonst vor einer Sackgasse.
 func (a *app) joinPairMessage(w http.ResponseWriter, status int, title, message string) {
 	a.joinMessageBack(w, status, title, message, "/join/pair", msg("join.msg_back"))

@@ -1,7 +1,9 @@
 {{define "knrow"}}<li class="kn-item"><div class="kn-main"><a class="kn-title" href="{{.Href}}">{{.Title}}</a>{{if .Excerpt}}<p class="kn-excerpt">{{.Excerpt}}</p>{{end}}
 <div class="kn-foot">{{template "knmarks" .}}{{if .Project}}<span class="ov-meta">{{.Project}}</span>{{end}}{{if .Source}}<a class="kn-link" href="{{.Source}}">{{t "knowledge.in_session"}}</a>{{end}}</div></div><span class="ov-num kn-age">{{.Age}}</span></li>{{end}}
 
-{{define "knmarks"}}<span class="kn-type is-{{.Type}}">{{.TypeLabel}}</span><span class="kn-level"><span class="kn-dot is-{{.Level}}" aria-hidden="true"></span>{{.LevelLabel}}</span>{{if .Stale}}<span class="kn-stale">{{t "knowledge.stale"}}</span>{{end}}{{end}}
+{{define "knkind"}}<svg class="kn-ico" viewBox="0 0 24 24" aria-hidden="true">{{if eq . "pitfall"}}<path d="M12 4l9 16H3zM12 10v4M12 17v.5"/>{{else if eq . "decision"}}<path d="M6 4v16M6 5h11l-2.5 4 2.5 4H6"/>{{else if eq . "plan"}}<path d="M9 6h11M9 12h11M9 18h11M4 6h.5M4 12h.5M4 18h.5"/>{{else if eq . "instruction"}}<path d="M4 7l5 5-5 5M12 18h8"/>{{else}}<path d="M6 4h9l3 3v13H6zM9 11h6M9 15h6"/>{{end}}</svg>{{end}}
+
+{{define "knmarks"}}<span class="kn-type is-{{.Type}}" title="{{.TypeTitle}}">{{template "knkind" .Type}}{{.TypeLabel}}</span><span class="kn-level" title="{{.LevelTitle}}"><span class="kn-dot is-{{.Level}}" aria-hidden="true"></span>{{.LevelLabel}}</span>{{if .Stale}}<span class="kn-stale">{{t "knowledge.stale"}}</span>{{end}}{{end}}
 
 {{define "knbody"}}<div class="kn-body">{{range .}}{{if .Code}}<pre class="kn-code clay"><code>{{.Text}}</code></pre>{{else}}<p>{{range .Parts}}{{if .Code}}<code>{{.Text}}</code>{{else}}{{.Text}}{{end}}{{end}}</p>{{end}}{{end}}</div>{{end}}
 
@@ -9,7 +11,7 @@
 {{with .Proof}}<figure class="kn-quote kn-proof"><figcaption>{{t "knowledge.proof"}}</figcaption>{{if .Quote}}<blockquote>{{.Quote}}</blockquote>{{end}}<p class="ov-meta kn-dots"><span>{{.Source}}</span><span>{{.Digest}}</span><span>{{.Run}}</span></p></figure>{{end}}</div>{{end}}{{end}}
 
 {{define "kndecide"}}{{if .CanApprove}}<form method="post" action="/ui/review/{{.ID}}/approve"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="next" value="{{.Next}}"><input type="hidden" name="project" value="{{.Filter}}"><button class="ov-btn ov-btn-primary clay">{{t "knowledge.approve"}}</button></form>{{end}}
-{{if .CanReject}}<form method="post" action="/ui/review/{{.ID}}/reject"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="next" value="{{.Next}}"><input type="hidden" name="project" value="{{.Filter}}"><button class="ov-btn clay">{{t "knowledge.reject"}}</button></form>{{end}}
+{{if .CanReject}}<form method="post" action="/ui/review/{{.ID}}/reject"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="next" value="{{.Next}}"><input type="hidden" name="project" value="{{.Filter}}"><button class="ov-btn clay">{{if .Retire}}{{t "knowledge.retire"}}{{else}}{{t "knowledge.reject"}}{{end}}</button></form>{{end}}
 {{if .CanRestore}}<form method="post" action="/ui/review/{{.ID}}/restore"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="next" value="{{.Next}}"><input type="hidden" name="project" value="{{.Filter}}"><button class="ov-btn clay">{{t "knowledge.restore"}}</button></form>{{end}}{{end}}
 
 {{define "knresult"}}{{with .}}<div class="kn-result" role="status"><span class="kn-dot is-{{.Kind}}" aria-hidden="true"></span><span class="kn-result-text">{{.Text}}</span>{{if .CanRestore}}<form method="post" action="/ui/review/{{.ID}}/restore"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="next" value="{{.Next}}"><input type="hidden" name="project" value="{{.Filter}}"><input type="hidden" name="status" value="{{.Was}}"><button class="ov-btn clay">{{t "knowledge.restore"}}</button></form>{{end}}</div>{{end}}{{end}}
