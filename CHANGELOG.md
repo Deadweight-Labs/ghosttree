@@ -46,8 +46,9 @@ Versioning, with pre-1.0 compatibility rules described in
   hidden sessions and drafts. Everyone else gets exactly the answer for a
   snapshot that does not exist. Knowledge bound to a machine is never part of
   a snapshot, whoever creates it; older snapshots that still hold such
-  entries no longer show them (entries, export, mirror), so `ctx snapshot
-  verify` reports an integrity error for those until they are re-created.
+  entries do not hide them: a full export and `ctx snapshot verify` fail with
+  an integrity error, while export with `--domain` still works. Re-create
+  such a snapshot under a new name.
   Projects nobody has claimed yet have no role: an account without the
   instance admin now gets "not found" when creating a snapshot there, so its
   agents lose snapshots until the project is claimed.
