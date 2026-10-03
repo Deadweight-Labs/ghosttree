@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -95,6 +96,35 @@ func canonicalLinkID(kind, id string) string {
 	return id
 }
 
+// threadsForObjectEitherForm asks for both spellings of a request link (REQ-n
+// and the bare number older links carry) and returns the union, newest first.
+func (s *Server) threadsForObjectEitherForm(kind, id string) ([]store.Thread, error) {
+	canonical := canonicalLinkID(kind, id)
+	found, err := s.client.ThreadsForObject(kind, canonical, s.coordRef())
+	if err != nil {
+		return nil, err
+	}
+	other := strings.TrimPrefix(canonical, "REQ-")
+	if kind != "request" || other == canonical {
+		return found, nil
+	}
+	more, err := s.client.ThreadsForObject(kind, other, s.coordRef())
+	if err != nil {
+		return found, nil
+	}
+	seen := map[int64]bool{}
+	for _, t := range found {
+		seen[t.ID] = true
+	}
+	for _, t := range more {
+		if !seen[t.ID] {
+			found = append(found, t)
+		}
+	}
+	sort.SliceStable(found, func(i, j int) bool { return found[i].UpdatedAt > found[j].UpdatedAt })
+	return found, nil
+}
+
 func (s *Server) handleThreadOpen(ctx context.Context, _ *mcp.CallToolRequest, in ThreadOpenInput) (*mcp.CallToolResult, any, error) {
 	if strings.TrimSpace(in.Title) == "" {
 		return nil, nil, fmt.Errorf("title is required — it is what someone searches for later")
@@ -110,20 +140,17 @@ func (s *Server) handleThreadOpen(ctx context.Context, _ *mcp.CallToolRequest, i
 	// entsteht. Spec §B5: vorschlagen ja, automatisch zusammenführen nein.
 	var existing []store.Thread
 	in.LinkID = canonicalLinkID(in.LinkKind, in.LinkID)
+	newThread := store.Thread{Project: project, Title: in.Title, Question: in.Question}
 	if in.LinkKind != "" && in.LinkID != "" {
-		existing, _ = s.client.ThreadsForObject(in.LinkKind, in.LinkID, s.coordRef())
+		existing, _ = s.threadsForObjectEitherForm(in.LinkKind, in.LinkID)
+		// The link travels with the thread and is checked in the same
+		// transaction: a refused link leaves no thread behind to retry into.
+		newThread.Link = &store.ThreadLink{Kind: in.LinkKind, ID: in.LinkID, Revision: in.LinkRev}
 	}
 
-	id, err := s.client.CreateThread(store.Thread{
-		Project: project, Title: in.Title, Question: in.Question}, s.coordRef())
+	id, err := s.client.CreateThread(newThread, s.coordRef())
 	if err != nil {
 		return nil, nil, err
-	}
-	if in.LinkKind != "" && in.LinkID != "" {
-		if err := s.client.LinkThread(store.ThreadLink{ThreadID: id,
-			Kind: in.LinkKind, ID: in.LinkID, Revision: in.LinkRev}, s.coordRef()); err != nil {
-			return nil, nil, err
-		}
 	}
 	if strings.TrimSpace(in.First) != "" {
 		if err := s.postToThread(id, in.First); err != nil {
@@ -314,11 +341,7 @@ func (s *Server) handleThreadFind(ctx context.Context, _ *mcp.CallToolRequest, i
 	var found []store.Thread
 	var err error
 	if in.ObjectKind != "" && in.ObjectID != "" {
-		found, err = s.client.ThreadsForObject(in.ObjectKind, canonicalLinkID(in.ObjectKind, in.ObjectID), s.coordRef())
-		if err == nil && len(found) == 0 && canonicalLinkID(in.ObjectKind, in.ObjectID) != in.ObjectID {
-			// Links written before the canonical form carry the bare number.
-			found, err = s.client.ThreadsForObject(in.ObjectKind, in.ObjectID, s.coordRef())
-		}
+		found, err = s.threadsForObjectEitherForm(in.ObjectKind, in.ObjectID)
 	} else {
 		project, perr := s.threadProject()
 		if perr != nil {

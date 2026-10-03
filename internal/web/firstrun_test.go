@@ -144,8 +144,14 @@ func TestKnowledgeDecisionsOnlyWhereOneIsOpen(t *testing.T) {
 		if got := strings.Contains(page, "/approve"); got != open {
 			t.Errorf("%s: approve shown = %v, want %v", title, got, open)
 		}
-		if got := strings.Contains(page, "/reject"); got != open {
-			t.Errorf("%s: reject shown = %v, want %v", title, got, open)
+		if !strings.Contains(page, "/reject") {
+			t.Errorf("%s: an owner can always take an entry out of use", title)
+		}
+		if got := strings.Contains(page, ">Reject<"); got != open {
+			t.Errorf("%s: Reject shown = %v, want %v", title, got, open)
+		}
+		if got := strings.Contains(page, ">Retire<"); got == open {
+			t.Errorf("%s: Retire shown = %v, want %v", title, got, !open)
 		}
 		if !strings.Contains(page, `id="edit"`) {
 			t.Errorf("%s: an owner should still be able to edit", title)
@@ -259,5 +265,87 @@ func TestSessionsListDropsTheLinkedColumnWhenNothingIsLinked(t *testing.T) {
 	}
 	if strings.Contains(page, ">Linked<") {
 		t.Error("the unexplained column title is back")
+	}
+}
+
+// A pure guest sees no agents (not even their own, on purpose), and what an
+// @-name they wrote did stays invisible: it must not tell a real hidden member
+// from an invented one.
+func TestPureGuestSeesNoAgentsAndNoOracle(t *testing.T) {
+	e := ovEnv(t)
+	room := store.RoomKeyForProject(shellProject)
+	ovAgent(t, e.St, shellProject, "claude:hidden-peer:bbbb", "hidden-peer", "person:1")
+	if _, err := e.St.RegisterCoordAgent(store.CoordAgent{ExternalID: "claude:gina-box:aaaa", PrincipalID: "person:3", Provider: "claude",
+		DisplayName: "claude:gina-box:aaaa", RoomKey: room}); err != nil {
+		t.Fatal(err)
+	}
+	pages := map[string]string{}
+	for _, target := range []string{"claude:hidden-peer:bbbb", "claude:invented:zzzz"} {
+		guest := e.St.CoordinationFor(store.Principal{ID: "person:3", Label: "gina"}, "claude:gina-box:aaaa")
+		_, _ = guest.Send(store.CoordMessage{DestinationKind: store.DestinationRoom, DestinationID: room,
+			ClientID: "q-" + target, Body: "ping", Intent: store.IntentQuestion, Mentions: []string{target}})
+		_, page := fetchPage(t, e.Guest, e.Base+"/ui/agents")
+		pages[target] = stripCSRF(page)
+	}
+	// Deliberate: a pure guest sees no agents at all, not even their own.
+	if pages["claude:hidden-peer:bbbb"] != pages["claude:invented:zzzz"] {
+		t.Error("the guest page differs between a real hidden member and an invented name")
+	}
+	if strings.Contains(pages["claude:hidden-peer:bbbb"], "gina-box") {
+		t.Errorf("a pure guest unexpectedly sees their own agent: %s", pages["claude:hidden-peer:bbbb"])
+	}
+	if strings.Contains(pages["claude:hidden-peer:bbbb"], "Waiting for") || strings.Contains(pages["claude:hidden-peer:bbbb"], "hidden-peer") {
+		t.Errorf("a wait or a hidden agent shows: %s", pages["claude:hidden-peer:bbbb"])
+	}
+}
+
+// An organization member without a project role sees their own agent there,
+// but never a wait derived from whom they wrote to.
+func TestOwnAgentWithoutRoleShowsNoWaitState(t *testing.T) {
+	e := ovEnv(t)
+	if _, err := e.St.AddPerson("nora"); err != nil {
+		t.Fatal(err)
+	}
+	org, _ := e.St.CreateOrg("person:1", "Beta", "beta")
+	code, _, _ := e.St.CreateInvitation("person:1", org.ID, "", store.OrgMember, 0)
+	if _, err := e.St.AcceptInvitation("person:6", code); err != nil {
+		t.Fatal(err)
+	}
+	nora := loginInteractive(t, e.Srv, e.St, "nora")
+	room := store.RoomKeyForProject(shellProject)
+	ovAgent(t, e.St, shellProject, "claude:hidden-peer:bbbb", "hidden-peer", "person:1")
+	if _, err := e.St.RegisterCoordAgent(store.CoordAgent{ExternalID: "claude:nora-laptop:aaaa", PrincipalID: "person:6", Provider: "claude",
+		DisplayName: "claude:nora-laptop:aaaa", RoomKey: room}); err != nil {
+		t.Fatal(err)
+	}
+	me := e.St.CoordinationFor(store.Principal{ID: "person:6", Label: "nora"}, "claude:nora-laptop:aaaa")
+	_, _ = me.Send(store.CoordMessage{DestinationKind: store.DestinationRoom, DestinationID: room,
+		ClientID: "q1", Body: "ping", Intent: store.IntentQuestion, Mentions: []string{"claude:hidden-peer:bbbb"}})
+	_, page := fetchPage(t, nora, e.Base+"/ui/agents")
+	if !strings.Contains(page, "Claude on nora-laptop") {
+		t.Fatalf("own agent missing: %s", page)
+	}
+	if strings.Contains(page, "Waiting for") {
+		t.Errorf("a derived wait shows for an agent in a room the viewer may not list")
+	}
+}
+
+func TestDecidedKnowledgeCanBeRetiredAndUndone(t *testing.T) {
+	e := ovEnv(t)
+	insertKnowledge(t, e.St, "Settled", "trusted")
+	id := knowledgeIDByTitle(t, e.St, "Settled")
+	// People without the right to edit see no such action.
+	if _, other := fetchPage(t, e.Guest, e.Base+"/ui/knowledge/"+id); strings.Contains(other, "/reject") {
+		t.Errorf("a guest is offered Retire: %s", strings.SplitAfter(other, "/reject")[0][len(strings.SplitAfter(other, "/reject")[0])-200:])
+	}
+	resp := knPost(t, e.Owner, e.Base, "/ui/knowledge/"+id, "/ui/review/"+id+"/reject", url.Values{"next": {"item"}})
+	resp.Body.Close()
+	loc := resp.Header.Get("Location")
+	if !strings.Contains(loc, "done=retired") {
+		t.Fatalf("redirect %q does not say the entry was retired (status %d)", loc, resp.StatusCode)
+	}
+	_, after := fetchPage(t, e.Owner, e.Base+loc)
+	if !strings.Contains(after, "Retired: Settled") || !strings.Contains(after, ">Undo<") {
+		t.Errorf("retiring does not read as retiring, or cannot be undone: %s", after)
 	}
 }

@@ -29,7 +29,7 @@
 .kn-dot.is-verified, .kn-dot.is-approved, .kn-dot.is-saved { background: var(--clay-ok); }
 .kn-dot.is-trusted { background: var(--clay-accent); }
 .kn-dot.is-staged, .kn-dot.is-restored { background: var(--clay-warn); }
-.kn-dot.is-quarantined, .kn-dot.is-rejected { background: var(--clay-danger-strong); }
+.kn-dot.is-quarantined, .kn-dot.is-rejected, .kn-dot.is-retired { background: var(--clay-danger-strong); }
 
 .kn-body { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .kn-body p { margin: 0; white-space: pre-line; overflow-wrap: anywhere; line-height: 1.55; }

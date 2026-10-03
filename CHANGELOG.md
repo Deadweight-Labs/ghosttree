@@ -14,7 +14,7 @@ Versioning, with pre-1.0 compatibility rules described in
   agent counts as active only on a real sign of life, not because of a message.
   Your own agents are listed even when your project role is too low to list a
   project's agents. Knowledge shows Approve and Reject only where a decision is
-  open, marks status ("Waiting for review", "Held back", Trusted, Verified) with a
+  open (a trusted or verified entry offers Retire on its page, with Undo), marks status ("Waiting for review", "Held back", Trusted, Verified) with a
   hover explanation and kinds with a small icon. The Agent context page uses the
   project switcher, wraps its text and has empty states. In rooms the post kinds
   read "Message", "Standing order" and "Ask", the Guest chip no longer sits on your
@@ -22,7 +22,16 @@ Versioning, with pre-1.0 compatibility rules described in
   opens directly on small screens. Sessions drop the empty "Linked" column and
   label the visibility choice "Visible to". Fixed: a thread opened through the API
   (the MCP `thread_open` tool) was never listed under Threads in its room; new
-  ones are filed in the project room and existing ones are adopted on start.
+  ones are filed in the project room and existing ones are adopted on start. Private
+  threads (promoted from a direct or group room) are never adopted by the project
+  room, and a thread's visibility list also applies in the room list. A request
+  title in a room's thread list only shows for a request of that project. Changed:
+  `thread_open` with a request link now checks the link first and opens nothing
+  if it is refused (not an existing request of this project, or not `REQ-n`/a
+  number), instead of leaving a thread behind; `thread_open` and `thread_find`
+  look for both spellings of a request link. Your own agent's Waiting states are
+  not shown where you may not list the room's agents. Pure guests still see no
+  agents of their own.
 - Changed: the Requests pages are redesigned in the Clay look and can edit in
   the browser. The list searches and filters by state, kind, priority and
   project, shows each request with its number, kind, priority, criteria progress, age and the

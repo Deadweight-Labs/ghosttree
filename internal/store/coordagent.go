@@ -254,6 +254,7 @@ func (s *Store) OwnAgents(accountPrincipal string) ([]CoordAgent, error) {
 		}
 		for _, p := range peers {
 			if ids[p.ExternalID] {
+				p.Presence = ownPresence(p.Presence)
 				out = append(out, p)
 			}
 		}
@@ -357,4 +358,21 @@ func (s *Store) CoordPeers(roomKey, since string) ([]CoordAgent, error) {
 		}
 	}
 	return out, nil
+}
+
+// ownPresence keeps what the agent itself shows (reachable, working, paused)
+// and drops the waiting states. Those are derived from messages to other
+// participants, so on a viewer without the right to list the room they would
+// tell whether an @-name is a real, hidden member.
+func ownPresence(p *Presence) *Presence {
+	if p == nil {
+		return nil
+	}
+	c := *p
+	switch c.WorkState.Value {
+	case WorkWaitingUser, WorkWaitingPeer, WorkBlocked:
+		c.WorkState = PresenceField{Value: WorkUnknown}
+	}
+	c.Cycle = nil
+	return &c
 }

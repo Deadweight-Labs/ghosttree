@@ -65,3 +65,25 @@ func TestOpeningTheStoreGivesHomelessThreadsTheirProjectRoom(t *testing.T) {
 		t.Fatalf("home = %q, %v; want %q", got, err, room)
 	}
 }
+
+// The waiting states are derived from messages to others; shown for an agent
+// the viewer started but may not list, they would reveal whether the @-name
+// they wrote is a real hidden member.
+func TestOwnAgentsPresenceDoesNotRevealWhoTheyWaitFor(t *testing.T) {
+	st := accessFixture(t)
+	room := RoomKeyForProject(roleProject)
+	registerRoleAgent(t, st, "claude:host-g:aaaa", "person:5", room, "guest")
+	registerRoleAgent(t, st, "claude:host-m:bbbb", "person:3", room, "member")
+	guest := st.CoordinationFor(Principal{ID: "person:5", Label: "nora"}, "claude:host-g:aaaa")
+	for i, target := range []string{"claude:host-m:bbbb", "claude:host-ghost:zzzz"} {
+		_, _ = guest.Send(CoordMessage{DestinationKind: DestinationRoom, DestinationID: room,
+			ClientID: "q" + itoa(int64(i)), Body: "ping", Intent: IntentQuestion, Mentions: []string{target}})
+	}
+	got, err := st.OwnAgents("person:5")
+	if err != nil || len(got) != 1 {
+		t.Fatalf("own agents %+v err=%v", got, err)
+	}
+	if v := got[0].Presence.WorkState.Value; v == WorkWaitingPeer || v == WorkWaitingUser || v == WorkBlocked || got[0].Presence.Cycle != nil {
+		t.Fatalf("own agent shows a wait: %+v", got[0].Presence)
+	}
+}

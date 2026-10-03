@@ -51,6 +51,9 @@ type Thread struct {
 	CreatedAt  string `json:"created_at,omitempty"`
 	UpdatedAt  string `json:"updated_at,omitempty"`
 	ResolvedAt string `json:"resolved_at,omitempty"`
+	// Link is applied together with CreateThread in one transaction: a link
+	// that is refused leaves no thread behind. Never set on reads.
+	Link *ThreadLink `json:"link,omitempty"`
 }
 
 // ThreadLink hängt einen Thread an ein bestehendes Ghosttree-Objekt. Derselbe

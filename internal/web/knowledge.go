@@ -99,9 +99,11 @@ type knowledgeCard struct {
 	Proof       *proofView
 	CanApprove  bool
 	CanReject   bool
-	CanRestore  bool
-	CanEdit     bool
-	RawBody     string
+	// Retire: the same action as Reject, on an entry that was already decided.
+	Retire     bool
+	CanRestore bool
+	CanEdit    bool
+	RawBody    string
 	// Token, Next und Filter gehören den Formularen der Karte: CSRF-Token, die
 	// Seite, auf die nach der Entscheidung zurückgeführt wird, und die Projektwahl.
 	Token, Next, Filter string
@@ -216,7 +218,7 @@ var levelKeys = map[string]string{
 
 var doneKeys = map[string]string{
 	"approved": "knowledge.done.approved", "rejected": "knowledge.done.rejected",
-	"restored": "knowledge.done.restored", "saved": "knowledge.done.saved",
+	"retired": "knowledge.done.retired", "restored": "knowledge.done.restored", "saved": "knowledge.done.saved",
 }
 
 func typeLabel(typ string) string {
@@ -285,7 +287,9 @@ func capabilities(pa *store.ProjectAccess, k store.Knowledge, card *knowledgeCar
 	canEdit := pa.CheckKnowledge(k, store.ActEdit) == nil
 	open := decisionOpen(k)
 	card.CanApprove = open && approveChanges(k, canEdit) && pa.CheckKnowledge(k, store.ActVerify) == nil
-	card.CanReject = open && canEdit
+	live := k.Status == "active" || k.Status == "stale"
+	card.CanReject = live && canEdit
+	card.Retire = card.CanReject && !open
 	card.CanRestore = canEdit && k.Status == "deprecated"
 	card.CanEdit = canEdit && k.Status != "superseded"
 }
@@ -442,7 +446,7 @@ func (a *app) resultFor(r *http.Request, pa *store.ProjectAccess, next, filter s
 		return nil
 	}
 	res := &resultLine{Token: csrfOf(r), Next: next, Filter: filter, Kind: kind, Text: msg(doneKeys[kind], pa.KnowledgeView(k).Title)}
-	res.CanRestore = kind == "rejected" && k.Status == "deprecated" && pa.CheckKnowledge(k, store.ActEdit) == nil
+	res.CanRestore = (kind == "rejected" || kind == "retired") && k.Status == "deprecated" && pa.CheckKnowledge(k, store.ActEdit) == nil
 	res.ID = strconv.FormatInt(id, 10)
 	res.Was = restorableStatus(r.URL.Query().Get("was"))
 	return res
@@ -583,6 +587,9 @@ func (a *app) reviewDecide(w http.ResponseWriter, r *http.Request) {
 	}
 	live := k.Status == "active" || k.Status == "stale"
 	canEdit := a.access(r).CheckKnowledge(k, store.ActEdit) == nil
+	if verdict == "reject" && !decisionOpen(k) {
+		done = "retired"
+	}
 	if verdict == "approve" {
 		if canEdit && k.Status == "stale" {
 			patch["status"] = "active"
@@ -615,7 +622,7 @@ func restorableStatus(s string) string {
 // Server aus einer festen Liste, nie aus einer mitgesandten Adresse.
 func (a *app) afterDecision(r *http.Request, k store.Knowledge, done string) string {
 	q := url.Values{"done": {done}, "k": {strconv.FormatInt(k.ID, 10)}}
-	if done == "rejected" {
+	if done == "rejected" || done == "retired" {
 		q.Set("was", restorableStatus(k.Status))
 	}
 	if r.FormValue("next") == "item" {

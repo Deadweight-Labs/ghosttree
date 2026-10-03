@@ -738,39 +738,43 @@ func (a CoordAccess) threadAccessTx(tx *sql.Tx, actor string, threadID int64, by
 	} else if err != nil {
 		return err
 	}
-	if home, found, err := threadHomeTx(tx, threadID); err != nil {
+	home, homed, err := threadHomeTx(tx, threadID)
+	if err != nil {
 		return err
-	} else if found {
-		return a.roomAccessTx(tx, actor, home.RoomKey, byRole)
 	}
-	{
-		var restricted int
-		if err := tx.QueryRow(`SELECT COUNT(*) FROM thread_visibility WHERE thread_id=?`, threadID).Scan(&restricted); err != nil {
+	var restricted int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM thread_visibility WHERE thread_id=?`, threadID).Scan(&restricted); err != nil {
+		return err
+	}
+	if restricted > 0 {
+		// A visibility list narrows access even when the thread has a home room.
+		if a.publicOnly {
+			return ErrCoordNotFound
+		}
+		var member int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM thread_visibility
+			WHERE thread_id=? AND member_external_id=?`, threadID, actor).Scan(&member); err != nil {
 			return err
 		}
-		if restricted > 0 {
-			if a.publicOnly {
-				return ErrCoordNotFound
-			}
-			var member int
-			if err := tx.QueryRow(`SELECT COUNT(*) FROM thread_visibility
-				WHERE thread_id=? AND member_external_id=?`, threadID, actor).Scan(&member); err != nil {
-				return err
-			}
-			if member == 0 {
-				return ErrCoordNotFound
-			}
-			// Die Thread-Liste allein genügt nicht: wer die Projektrolle verloren
-			// hat, liest auch einen eingeschränkten Thread nicht mehr.
-			return a.projectRoomGate(RoomProject, RoomKeyForProject(project), ResRoom, tx)
+		if member == 0 {
+			return ErrCoordNotFound
 		}
-		if a.publicOnly {
-			// public_only ist eine Auswahl (nur nicht eingeschränkte Threads), nie
-			// eine Lockerung: die Projektrolle gilt auch hier.
-			return a.projectRoomGate(RoomProject, RoomKeyForProject(project), ResRoom, tx)
+		if homed {
+			return a.roomAccessTx(tx, actor, home.RoomKey, byRole)
 		}
-		return a.roomAccessTx(tx, actor, RoomKeyForProject(project), byRole)
+		// Die Thread-Liste allein genügt nicht: wer die Projektrolle verloren
+		// hat, liest auch einen eingeschränkten Thread nicht mehr.
+		return a.projectRoomGate(RoomProject, RoomKeyForProject(project), ResRoom, tx)
 	}
+	if homed {
+		return a.roomAccessTx(tx, actor, home.RoomKey, byRole)
+	}
+	if a.publicOnly {
+		// public_only ist eine Auswahl (nur nicht eingeschränkte Threads), nie
+		// eine Lockerung: die Projektrolle gilt auch hier.
+		return a.projectRoomGate(RoomProject, RoomKeyForProject(project), ResRoom, tx)
+	}
+	return a.roomAccessTx(tx, actor, RoomKeyForProject(project), byRole)
 }
 
 // requireRoomAccessTx is the write gate (membership only).
@@ -1422,6 +1426,17 @@ func (a CoordAccess) CreateThread(thread Thread) (int64, error) {
 		id, RoomKeyForProject(thread.Project), ts); err != nil {
 		return 0, err
 	}
+	if l := thread.Link; l != nil && strings.TrimSpace(l.Kind) != "" && strings.TrimSpace(l.ID) != "" {
+		if l.Kind == "request" {
+			if err := validateRequestLinkTx(tx, RoomKeyForProject(thread.Project), l.ID); err != nil {
+				return 0, err
+			}
+		}
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO thread_links(thread_id,object_kind,object_id,object_revision,created_at)
+			VALUES(?,?,?,?,?)`, id, l.Kind, l.ID, l.Revision, now()); err != nil {
+			return 0, err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
@@ -1669,9 +1684,19 @@ func (a CoordAccess) RoomThreads(roomKey string) ([]RoomThread, error) {
 	if err := a.roomAccessTx(tx, actor, roomKey, true); err != nil {
 		return nil, err
 	}
-	threads, err := roomThreadsTx(tx, roomKey)
+	all, err := roomThreadsTx(tx, roomKey)
 	if err != nil {
 		return nil, err
+	}
+	threads := all[:0:0]
+	for _, item := range all {
+		// A thread with a visibility list stays out of the room list for
+		// everyone it does not name, whatever room it is homed in.
+		if err := a.canReadThreadTx(tx, actor, item.Thread.ID); err == nil {
+			threads = append(threads, item)
+		} else if !errors.Is(err, ErrCoordNotFound) && !errors.Is(err, ErrCoordForbidden) {
+			return nil, err
+		}
 	}
 	if a.guestViewForMessageTx(tx, DestinationRoom, roomKey) {
 		for i := range threads {
@@ -1809,22 +1834,8 @@ func (a CoordAccess) LinkThread(link ThreadLink) error {
 		if home, found, err := threadHomeTx(tx, link.ThreadID); err != nil {
 			return err
 		} else if found {
-			requestNumber, parseErr := strconv.ParseInt(strings.TrimPrefix(link.ID, "REQ-"), 10, 64)
-			if parseErr != nil || requestNumber <= 0 || link.ID != "REQ-"+strconv.FormatInt(requestNumber, 10) {
-				return fmt.Errorf("request link must be a canonical REQ-id")
-			}
-			var requestProject string
-			if err := tx.QueryRow(`SELECT project FROM requests WHERE id=?`, requestNumber).Scan(&requestProject); errors.Is(err, sql.ErrNoRows) {
-				return fmt.Errorf("linked request not found")
-			} else if err != nil {
+			if err := validateRequestLinkTx(tx, home.RoomKey, link.ID); err != nil {
 				return err
-			}
-			var roomKind string
-			if err := tx.QueryRow(`SELECT kind FROM coord_rooms WHERE room_key=?`, home.RoomKey).Scan(&roomKind); err != nil {
-				return err
-			}
-			if roomKind == RoomProject && requestProject != "" && requestProject != strings.TrimPrefix(home.RoomKey, "project:") {
-				return ErrCoordForbidden
 			}
 			var existingID string
 			err := tx.QueryRow(`SELECT object_id FROM thread_links WHERE thread_id=? AND object_kind='request' ORDER BY rowid LIMIT 1`, link.ThreadID).Scan(&existingID)
@@ -2715,4 +2726,28 @@ func roomKindOf(roomKey string) string {
 		return RoomProject
 	}
 	return ""
+}
+
+// validateRequestLinkTx checks a request link for a thread homed in roomKey: a
+// canonical REQ-id of an existing request that belongs to that project room.
+func validateRequestLinkTx(tx *sql.Tx, roomKey, linkID string) error {
+	requestNumber, parseErr := strconv.ParseInt(strings.TrimPrefix(linkID, "REQ-"), 10, 64)
+	if parseErr != nil || requestNumber <= 0 || linkID != "REQ-"+strconv.FormatInt(requestNumber, 10) {
+		return fmt.Errorf("request link must be a canonical REQ-id")
+	}
+	var requestProject string
+	if err := tx.QueryRow(`SELECT project FROM requests WHERE id=?`, requestNumber).Scan(&requestProject); errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("linked request not found")
+	} else if err != nil {
+		return err
+	}
+	var roomKind string
+	if err := tx.QueryRow(`SELECT kind FROM coord_rooms WHERE room_key=?`, roomKey).Scan(&roomKind); err != nil {
+		return err
+	}
+	if roomKind == RoomProject && strings.TrimSpace(requestProject) != "" &&
+		RoomKeyForProject(requestProject) != roomKey {
+		return ErrCoordForbidden
+	}
+	return nil
 }
