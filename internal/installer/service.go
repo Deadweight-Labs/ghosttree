@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // The collector (`ctx watch`) uploads transcripts; without it no session ever
@@ -63,9 +64,10 @@ func WatchServicePath(home string) string {
 }
 
 // systemdQuote makes one word safe for ExecStart: quotes around anything with
-// whitespace or quotes, and % doubled because systemd expands specifiers.
+// whitespace or quotes, % doubled because systemd expands specifiers, and $
+// doubled because it expands environment variables in ExecStart.
 func systemdQuote(w string) string {
-	w = strings.ReplaceAll(w, "%", "%%")
+	w = strings.NewReplacer("%", "%%", "$", "$$").Replace(w)
 	if !strings.ContainsAny(w, " \t\"'\\") {
 		return w
 	}
@@ -99,7 +101,10 @@ func watchPlistText(ctx, logPath string) string {
 	<key>RunAtLoad</key>
 	<true/>
 	<key>KeepAlive</key>
-	<true/>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
 	<key>ThrottleInterval</key>
 	<integer>30</integer>
 	<key>StandardOutPath</key>
@@ -124,6 +129,9 @@ func InstallWatchService(home string) ([]Change, error) {
 	if !filepath.IsAbs(ctxCommand) {
 		return []Change{{Path: path, Action: "collector service skipped: ctx path is not absolute"}}, nil
 	}
+	if strings.ContainsFunc(ctxCommand, unicode.IsControl) {
+		return nil, fmt.Errorf("ctx path %q contains a control character; install ctx to a plain path", ctxCommand)
+	}
 	var text string
 	if serviceGOOS == "darwin" {
 		text = watchPlistText(ctxCommand, filepath.Join(home, "Library", "Logs", "ghosttree-watch.log"))
@@ -133,6 +141,9 @@ func InstallWatchService(home string) ([]Change, error) {
 	old, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
 		return nil, err
+	}
+	if len(old) > 0 && string(old) != text && !isOurWatchDefinition(string(old), home) {
+		return nil, fmt.Errorf("%s exists and was not written by ghosttree, so it is left unchanged and no second collector is started. Move or delete it, then run 'ctx install watch' again", path)
 	}
 	changed := string(old) != text
 	action := "unchanged"
@@ -166,6 +177,43 @@ func InstallWatchService(home string) ([]Change, error) {
 		changes = append(changes, Change{Path: path, Action: "collector running"})
 	}
 	return changes, nil
+}
+
+// isOurWatchDefinition reports whether an existing service file is one this
+// installer wrote earlier, possibly for another ctx path: it is rebuilt from
+// the command it names and must match byte for byte.
+func isOurWatchDefinition(old, home string) bool {
+	if serviceGOOS == "darwin" {
+		const open = "<key>ProgramArguments</key>\n\t<array>\n\t\t<string>"
+		_, rest, ok := strings.Cut(old, open)
+		if !ok {
+			return false
+		}
+		escaped, _, ok := strings.Cut(rest, "</string>")
+		if !ok {
+			return false
+		}
+		var v struct {
+			S string `xml:",chardata"`
+		}
+		if xml.Unmarshal([]byte("<s>"+escaped+"</s>"), &v) != nil {
+			return false
+		}
+		return old == watchPlistText(v.S, filepath.Join(home, "Library", "Logs", "ghosttree-watch.log"))
+	}
+	for _, line := range strings.Split(old, "\n") {
+		value, ok := strings.CutPrefix(line, "ExecStart=")
+		if !ok {
+			continue
+		}
+		words := splitCommand(value)
+		if len(words) != 2 || words[1] != "watch" {
+			return false
+		}
+		ctx := strings.NewReplacer("%%", "%", "$$", "$").Replace(words[0])
+		return old == watchUnitText(ctx)
+	}
+	return false
 }
 
 func manualStartHint() string {

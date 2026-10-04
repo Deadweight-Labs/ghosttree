@@ -528,3 +528,24 @@ func TestOwnerWithoutAMachineSeesTheSameGuidedInstallCommandAsAnInvitedPerson(t 
 		t.Errorf("overview after the claim: %s", page)
 	}
 }
+
+func TestOverviewWithAPairingCodeIsNeverCached(t *testing.T) {
+	e := shellWebAll(t)
+	form := url.Values{"confirm_account": {"alice"}, "csrf_token": {renderedCSRFToken(t, e.Owner, e.Base+"/ui/overview")}}
+	resp := sameOriginPostForm(t, e.Owner, e.Base+"/join/pair", form)
+	resp.Body.Close()
+	code := e.St.Join().View("person:1").Pair
+	for _, path := range []string{"/ui/overview", "/join/pair"} {
+		resp, err := e.Owner.Get(e.Base + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		page := body(t, resp)
+		if !strings.Contains(page, code) {
+			t.Fatalf("%s does not show the pairing code", path)
+		}
+		if cc := resp.Header.Get("Cache-Control"); !strings.Contains(cc, "no-store") {
+			t.Errorf("%s shows a pairing code with Cache-Control %q", path, cc)
+		}
+	}
+}

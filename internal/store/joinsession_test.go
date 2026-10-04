@@ -1013,6 +1013,30 @@ func TestJoinClaimKeepsTheCodeWhenTheNameIsTaken(t *testing.T) {
 	}
 }
 
+func TestJoinClaimBurnsTheCodeAfterThreeTakenNames(t *testing.T) {
+	st, _ := pairFixture(t)
+	j := st.Join()
+	o := openPair(j, "person:2")
+	taken := func(string, string, bool) (string, error) { return "", ErrMachineTaken }
+	for i := 1; i <= 3; i++ {
+		req := loopReq(o.Pair, "guess", "1.1.1.1")
+		req.Resolve = taken
+		if _, err := j.Claim(req); !errors.Is(err, ErrMachineTaken) {
+			t.Fatalf("conflict %d: err = %v", i, err)
+		}
+		want := JoinWaiting
+		if i == 3 {
+			want = JoinCompromised
+		}
+		if v := j.View("person:2"); v.State != want {
+			t.Fatalf("after conflict %d the state is %q, want %q", i, v.State, want)
+		}
+	}
+	if _, err := j.Claim(loopReq(o.Pair, "free-name", "1.1.1.1")); !errors.Is(err, ErrJoinInvalid) {
+		t.Fatalf("a burned code still claims: %v", err)
+	}
+}
+
 func TestJoinCancelledOnlyAffectsAJustConnectedSessionOfThatMachine(t *testing.T) {
 	st, _ := pairFixture(t)
 	j := st.Join()

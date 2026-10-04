@@ -243,7 +243,8 @@ func (c *callback) handle(w http.ResponseWriter, r *http.Request) {
 	h := w.Header()
 	h.Set("Cache-Control", "no-store")
 	h.Set("Referrer-Policy", "no-referrer")
-	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'")
+	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'")
+	h.Set("X-Frame-Options", "DENY")
 	h.Set("X-Content-Type-Options", "nosniff")
 	if !c.hostOK(r.Host) {
 		http.Error(w, "bad host", http.StatusBadRequest)
@@ -252,6 +253,10 @@ func (c *callback) handle(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		h.Set("Allow", "GET")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !browserNavigation(r) {
+		http.Error(w, "not a top-level navigation", http.StatusForbidden)
 		return
 	}
 	switch r.URL.Path {
@@ -264,6 +269,29 @@ func (c *callback) handle(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+// browserNavigation lets through only what the redirect after the approval
+// looks like: a top-level navigation. A page that embeds the callback (iframe,
+// image, script) or fetches it carries Sec-Fetch-Mode/-Dest that say so, and a
+// plain GET navigation carries no Origin header. Clients that send no fetch
+// metadata at all (curl, older browsers) pass: the unguessable state is what
+// authenticates the request, this is the second layer.
+func browserNavigation(r *http.Request) bool {
+	if r.Header.Get("Origin") != "" {
+		return false
+	}
+	if m := r.Header.Get("Sec-Fetch-Mode"); m != "" && m != "navigate" {
+		return false
+	}
+	if d := r.Header.Get("Sec-Fetch-Dest"); d != "" && d != "document" {
+		return false
+	}
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "", "cross-site", "same-site", "same-origin", "none":
+		return true
+	}
+	return false
 }
 
 func (c *callback) callback(w http.ResponseWriter, r *http.Request) {
@@ -562,13 +590,19 @@ func cmdJoin(args []string, stdout io.Writer) int {
 	}
 	label := safe(who.Label)
 	fmt.Fprintf(stdout, "Account %s%s, machine %s\n", label, org, cfg.Machine)
-	// Im Loopback-Weg hat der Mensch das Konto schon im Browser dieser Maschine
-	// bestätigt (Kontoname getippt); eine zweite Frage hier wäre dieselbe. Im
-	// Code-Weg geschah die Freigabe womöglich auf einem anderen Gerät, und das
-	// Terminal ist die einzige Stelle, die zeigt, welches Konto diese Maschine
-	// bekommt: dort bleibt die Frage.
-	if tty != nil && cb == nil && !confirm(ctx, tty, fmt.Sprintf("Connect this machine as %s? [y/N] ", label), false) {
-		return abort("Cancelled. Nothing written.")
+	// Auch im Loopback-Weg fragt das Terminal: ein Klick im Browser beweist
+	// nicht, dass die Person vor diesem Terminal weiß, welches Konto diese
+	// Maschine bekommt (die Freigabeseite kann auf anderem Weg erreicht worden
+	// sein). Dort ist die Vorgabe "ja", im Code-Weg, wo die Freigabe auf einem
+	// anderen Gerät geschah, "nein".
+	if tty != nil {
+		prompt := fmt.Sprintf("Connect this machine as account %s? [y/N] ", label)
+		if cb != nil {
+			prompt = fmt.Sprintf("Connect this machine as account %s? [Y/n] ", label)
+		}
+		if !confirm(ctx, tty, prompt, cb != nil) {
+			return abort("Cancelled. Nothing written.")
+		}
 	}
 	if err := config.Save(cfg); err != nil {
 		return abort(fmt.Sprintf("save config: %v", err))
@@ -576,6 +610,7 @@ func cmdJoin(args []string, stdout io.Writer) int {
 	fmt.Fprintf(stdout, "Wrote %s\n", config.Path())
 	home, _ := os.UserHomeDir()
 	var setUp []string
+	codexSetUp, codexNoticeShown := false, false
 	detected := joinDetect()
 	if len(detected) == 0 {
 		fmt.Fprintf(stdout, "Connected, but Claude Code and Codex were not found on this machine, so nothing was set up for your agents.\nInstall one of them, then run: %s install claude  (or: %s install codex)\n", ctxHint(), ctxHint())
@@ -596,13 +631,21 @@ func cmdJoin(args []string, stdout io.Writer) int {
 		if *noWatch {
 			installArgs = append(installArgs, "--no-watch")
 		}
-		if code := joinInstall(installArgs, stdout); code != 0 {
+		rec := &hooksNoticeWriter{w: stdout}
+		code := joinInstall(installArgs, rec)
+		if h == "codex" && code == 0 {
+			codexSetUp, codexNoticeShown = true, rec.seen
+		}
+		if code != 0 {
 			fmt.Fprintf(stdout, "install %s failed (exit %d)\n", h, code)
 			continue
 		}
 		setUp = append(setUp, labels...)
 	}
 	printSetupList(stdout, "Set up:", setUp)
+	if codexSetUp && !codexNoticeShown {
+		fmt.Fprintln(stdout, codexHooksNotice)
+	}
 	if hint := ctxHint(); hint != "ctx" && len(setUp) > 0 {
 		fmt.Fprintf(stdout, "Note: typing 'ctx' in a shell does not work yet because its directory is not on PATH. Your agents use the full path (%s) and are not affected.\n", hint)
 	}
@@ -618,6 +661,24 @@ func cmdJoin(args []string, stdout io.Writer) int {
 		fmt.Fprintln(stdout, safe(line))
 	}
 	return 0
+}
+
+// codexHooksNotice: Codex führt neue oder geänderte Hooks erst nach der
+// Freigabe über /hooks aus.
+const codexHooksNotice = "next: run /hooks in Codex to trust the ghosttree hooks, then start a fresh Codex session"
+
+// hooksNoticeWriter leitet durch und merkt sich, ob die Installation den
+// /hooks-Hinweis schon selbst ausgegeben hat.
+type hooksNoticeWriter struct {
+	w    io.Writer
+	seen bool
+}
+
+func (h *hooksNoticeWriter) Write(p []byte) (int, error) {
+	if bytes.Contains(p, []byte("/hooks")) {
+		h.seen = true
+	}
+	return h.w.Write(p)
 }
 
 // printSetupList schreibt eine knappe Liste, je Zeile zwei, drei Wörter.
@@ -740,7 +801,7 @@ func takenMessage(e *machineTakenError, server, pair, machine string, browser, y
 		cmd += " --yes"
 	}
 	if e.atClaim {
-		return fmt.Sprintf("The machine name %s already belongs to another account. Your code %s is not used up.\nRun this with a name of your choice:\n\n  %s\n", safe(machine), pair, cmd)
+		return fmt.Sprintf("The machine name %s already belongs to another account. Your code %s is not used up yet, but it stops working after 3 refused names.\nRun this with a name of your choice:\n\n  %s\n", safe(machine), pair, cmd)
 	}
 	return fmt.Sprintf("The machine name %s was taken by another account while you were connecting.\nGet a new code on the invitation page, then run it with a different name:\n\n  %s\n", safe(machine), strings.Replace(cmd, " --pair "+pair, " --pair <new code>", 1))
 }

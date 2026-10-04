@@ -1526,7 +1526,7 @@ func TestJoinSetUpListSkipsADeclinedHarness(t *testing.T) {
 	}
 }
 
-func TestJoinLoopbackDoesNotAskAgainAfterTheBrowserConfirmedTheAccount(t *testing.T) {
+func TestJoinLoopbackStillAsksInTheTerminalWhichAccountTheMachineBecomes(t *testing.T) {
 	f := newJoinFixture(t, "y")
 	e := newRealEnv(t)
 	pair, _ := e.st.Join().Create(annaID)
@@ -1538,13 +1538,62 @@ func TestJoinLoopbackDoesNotAskAgainAfterTheBrowserConfirmedTheAccount(t *testin
 	if err := <-approved; err != nil {
 		t.Fatal(err)
 	}
-	for _, q := range f.tty.questions() {
-		if strings.Contains(q, "Connect this machine") {
-			t.Fatalf("second confirmation asked: %q", q)
-		}
+	asked := strings.Join(f.tty.questions(), "|")
+	if !strings.Contains(asked, "Connect this machine as account anna? [Y/n]") {
+		t.Fatalf("no account question with a yes default: %q", asked)
 	}
 	if _, ok := readConfig(t); !ok {
 		t.Fatalf("config not written: %s", out.String())
+	}
+}
+
+func TestJoinLoopbackDefaultsToYesOnEnter(t *testing.T) {
+	newJoinFixture(t, "")
+	e := newRealEnv(t)
+	pair, _ := e.st.Join().Create(annaID)
+	approved := e.browserApproves(t, nil)
+	var out syncBuffer
+	if code := cmdJoin([]string{"--server", e.url, "--pair", pair, "--name", "annas-box"}, &out); code != 0 {
+		t.Fatalf("exit %d: %s", code, out.String())
+	}
+	<-approved
+	if _, ok := readConfig(t); !ok {
+		t.Fatalf("config not written: %s", out.String())
+	}
+}
+
+func TestJoinLoopbackDeclinedInTheTerminalWritesNothingAndRevokes(t *testing.T) {
+	newJoinFixture(t, "n")
+	e := newRealEnv(t)
+	pair, _ := e.st.Join().Create(annaID)
+	approved := e.browserApproves(t, nil)
+	var out syncBuffer
+	if code := cmdJoin([]string{"--server", e.url, "--pair", pair, "--name", "annas-box"}, &out); code != 1 {
+		t.Fatalf("exit %d: %s", code, out.String())
+	}
+	<-approved
+	if _, ok := readConfig(t); ok {
+		t.Fatal("config written after declining")
+	}
+	if !strings.Contains(out.String(), "New token revoked") {
+		t.Errorf("token not revoked:\n%s", out.String())
+	}
+	if v := e.st.Join().View(annaID); v.State != store.JoinDenied {
+		t.Fatalf("browser state = %q, want %q", v.State, store.JoinDenied)
+	}
+}
+
+func TestJoinSaysToTrustTheCodexHooksAfterwards(t *testing.T) {
+	f := newJoinFixture(t)
+	f.detected = []string{"codex"}
+	noSleep(t)
+	srv := fallbackServer(t)
+	var out syncBuffer
+	if code := cmdJoin([]string{"--server", srv.URL, "--pair", "abcd-efgh", "--no-browser", "--yes"}, &out); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	if !strings.Contains(out.String(), "run /hooks in Codex to trust the ghosttree hooks") {
+		t.Fatalf("no /hooks notice:\n%s", out.String())
 	}
 }
 
@@ -1558,7 +1607,7 @@ func TestJoinCodeModeStillAsksWhichAccountTheMachineBecomes(t *testing.T) {
 		t.Fatalf("exit %d: %s", code, out.String())
 	}
 	asked := strings.Join(f.tty.questions(), "|")
-	if !strings.Contains(asked, "Connect this machine as anna?") {
+	if !strings.Contains(asked, "Connect this machine as account anna?") {
 		t.Fatalf("no account question: %q", asked)
 	}
 }
@@ -1662,5 +1711,67 @@ func TestJoinPassesNoWatchToTheInstaller(t *testing.T) {
 	}
 	if len(got) != 1 || strings.Join(got[0], " ") != "claude --no-watch" {
 		t.Fatalf("installer args = %v", got)
+	}
+}
+
+func TestCallbackRejectsEmbeddingFetchesAndCrossOriginRequestsAndForbidsFraming(t *testing.T) {
+	cb, err := startCallback("state-12345678")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cb.Close()
+	const path = "/callback?code=abc&state=state-12345678"
+	for _, hdr := range []map[string]string{
+		{"Sec-Fetch-Dest": "iframe", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Site": "cross-site"},
+		{"Sec-Fetch-Dest": "image", "Sec-Fetch-Mode": "no-cors", "Sec-Fetch-Site": "cross-site"},
+		{"Sec-Fetch-Mode": "cors", "Sec-Fetch-Site": "cross-site", "Origin": "https://evil.example"},
+		{"Origin": "https://evil.example"},
+		{"Sec-Fetch-Site": "bogus"},
+	} {
+		req, _ := http.NewRequest("GET", "http://"+cb.Addr()+path, nil)
+		for k, v := range hdr {
+			req.Header.Set(k, v)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("%v answered %d, want 403", hdr, resp.StatusCode)
+		}
+		if csp := resp.Header.Get("Content-Security-Policy"); !strings.Contains(csp, "frame-ancestors 'none'") {
+			t.Errorf("%v: CSP %q lacks frame-ancestors", hdr, csp)
+		}
+	}
+	select {
+	case <-cb.got:
+		t.Fatal("a rejected request delivered a code")
+	default:
+	}
+	// The real redirect after the approval: a cross-site top-level navigation.
+	done := make(chan int, 1)
+	go func() {
+		req, _ := http.NewRequest("GET", "http://"+cb.Addr()+path, nil)
+		req.Header.Set("Sec-Fetch-Site", "cross-site")
+		req.Header.Set("Sec-Fetch-Mode", "navigate")
+		req.Header.Set("Sec-Fetch-Dest", "document")
+		noFollow := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		resp, err := noFollow.Do(req)
+		if err != nil {
+			done <- 0
+			return
+		}
+		resp.Body.Close()
+		done <- resp.StatusCode
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if code, err := cb.Wait(ctx); err != nil || code != "abc" {
+		t.Fatalf("navigation not accepted: %q %v", code, err)
+	}
+	cb.Finish(nil)
+	if c := <-done; c != http.StatusSeeOther {
+		t.Fatalf("navigation answered %d", c)
 	}
 }

@@ -471,3 +471,21 @@ func TestPauseGateIsWiredWithAnEmptyMatcherForClaudeOnly(t *testing.T) {
 		t.Fatal("codex has no measured pause interface")
 	}
 }
+
+func TestTomlStringEscapesControlCharactersAndRoundTrips(t *testing.T) {
+	in := "/opt/a\"b\\c\td\ne\rf\x01g\x7fh"
+	got := tomlString(in)
+	for _, r := range got {
+		if r < 0x20 || r == 0x7f {
+			t.Fatalf("raw control character %U in %q", r, got)
+		}
+	}
+	want := `"/opt/a\"b\\c\td\ne\rf\u0001g\u007Fh"`
+	if got != want {
+		t.Errorf("tomlString = %s, want %s", got, want)
+	}
+	table := codexMCPSectionFor(in)
+	if back := codexTableCommand(table); back != in {
+		t.Errorf("round trip = %q, want %q", back, in)
+	}
+}

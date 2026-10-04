@@ -52,8 +52,13 @@ func cmdDoctor(args []string, stdout io.Writer) int {
 		return 1
 	}
 
-	defer useRunningCtx(home)()
+	restore, ctxErr := useRunningCtx(home)
+	defer restore()
 	if *fix {
+		if ctxErr != nil {
+			fmt.Fprintf(stdout, "fix not applied: %v\n", ctxErr)
+			return 1
+		}
 		for _, name := range harnesses {
 			if _, err := installer.InstallSelected(name, home, selections[name]); err != nil {
 				fmt.Fprintf(stdout, "fix %s: %v\n", name, err)

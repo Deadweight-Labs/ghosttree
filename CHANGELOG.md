@@ -24,25 +24,36 @@ Versioning, with pre-1.0 compatibility rules described in
   recognises a bare or moved `ctx` that the harness cannot start and names the
   exact fix command with the absolute path; a missing PATH entry alone is no
   longer a failure. `install.sh` explains the PATH situation and prints the line
-  to add; `--modify-path` appends it to your shell profile (a terminal is asked
-  first, a pipe never), `--no-modify-path` never does.
+  to add (quoted so an unusual directory name cannot inject anything);
+  `--modify-path` appends it to your shell profile (a terminal is asked first, a
+  pipe never), `--no-modify-path` never does. A `ctx` that runs from a temporary
+  directory or the Go build cache is never written into hooks or units: the
+  command stops with an explanation, or uses `~/.local/bin/ctx` when it exists.
+  Paths with control characters are escaped in TOML and refused in service
+  files, and `$` is escaped in systemd units.
 - Fixed: joining from a machine whose hostname another account already uses. The
   server picks a free name (`<host>-<account>`, then a random suffix) for an
   automatic hostname and says which one it chose; a name given with `--name`
   that is taken ends the command at once with the exact command to run with
-  another `--name`, and the pairing code stays usable.
+  another `--name`, and the pairing code stays usable; after three refused names
+  the code is used up and the invitation page asks for a new one.
 - Added: `ctx install claude|codex` and `ctx join` set up the collector
   (`ctx watch`) as a user service (systemd user unit, macOS LaunchAgent), update
   an existing one and leave it alone when nothing changed. `--no-watch` skips
-  it; `ctx install watch` sets up only the service. Without a connection to a
-  server the service waits for `ctx join`. `ctx doctor` points to that command
-  instead of a file in the repository.
+  it; `ctx install watch` sets up only the service. A service file that
+  ghosttree did not write is left unchanged. A second `ctx watch` on the same
+  machine (a lock file, flock) ends at once with a message instead of
+  collecting twice. Without a connection to a server the service waits for
+  `ctx join`. `ctx doctor` points to that command instead of a file in the
+  repository. After `ctx join` for Codex, run `/hooks` in Codex to trust the
+  hooks.
 - Changed: an owner without a connected machine sees the same guided install
   command with a pairing code as an invited person, on the overview, instead of
-  `ctx login --server`. `ctx join` asks no second question in the terminal when
-  the account was just confirmed in the browser on the same machine (the code
-  path, where the browser may be another device, still asks); declining there
-  now makes the browser say that nothing was connected. Without Claude Code or
+  `ctx login --server`. `ctx join` asks in the terminal, also after the browser
+  approved it on the same machine, which account this machine becomes
+  ("[Y/n]" there, "[y/N]" when the code was typed in another browser); declining
+  makes the browser say that nothing was connected. The local callback page
+  refuses embedding and non-navigation requests and forbids framing. Without Claude Code or
   Codex, `ctx join` says what to install and which command to run afterwards.
   `ctx install --help` prints the usage.
 - Changed: invitations and device pairing are guided. The invitation pages name

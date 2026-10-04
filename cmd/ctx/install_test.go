@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
 	"github.com/Deadweight-Labs/ghosttree/internal/installer"
@@ -184,7 +185,8 @@ func TestDoctorDoesNotFailWhenOnlyTheShellLacksCtx(t *testing.T) {
 
 func TestDoctorCollectorHintNamesTheCommandNotARepoFile(t *testing.T) {
 	home, ctx, _ := installHome(t)
-	defer useRunningCtx(home)()
+	restoreCtx, _ := useRunningCtx(home)
+	defer restoreCtx()
 	t.Setenv("PATH", t.TempDir()) // no systemctl: the service state is unknown
 	var fix string
 	for _, c := range collectorChecks(home) {
@@ -195,4 +197,54 @@ func TestDoctorCollectorHintNamesTheCommandNotARepoFile(t *testing.T) {
 	if strings.Contains(fix, "deploy/") || !strings.Contains(fix, ctx+" install watch") {
 		t.Fatalf("fix = %q", fix)
 	}
+}
+
+func TestInstallRefusesTemporaryCtxBinary(t *testing.T) {
+	home, _, calls := installHome(t)
+	connect(t)
+	installCtxExecutable = func(string) (string, error) { return "", installer.ErrTransientCtx }
+	for _, args := range [][]string{{"install", "claude"}, {"install", "watch"}, {"doctor", "claude", "--fix"}} {
+		var out bytes.Buffer
+		if code := run(args, &out); code != 1 {
+			t.Fatalf("%v: exit %d: %s", args, code, out.String())
+		}
+		if !strings.Contains(out.String(), "temporary location") {
+			t.Errorf("%v: message does not explain: %s", args, out.String())
+		}
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude", "settings.json")); err == nil {
+		t.Error("settings.json written despite a temporary ctx path")
+	}
+	if len(*calls) != 0 {
+		t.Errorf("service manager touched: %v", *calls)
+	}
+}
+
+func TestWatchSecondInstanceEndsCleanlyWithAMessage(t *testing.T) {
+	installHome(t)
+	connect(t)
+	release, err := acquireWatchLock(watchLockPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := acquireWatchLock(watchLockPath()); !errors.Is(err, errWatchRunning) {
+		t.Fatalf("second lock: %v", err)
+	}
+	done := make(chan int, 1)
+	var out bytes.Buffer
+	go func() { done <- run([]string{"watch"}, &out) }()
+	select {
+	case code := <-done:
+		if code != 0 || !strings.Contains(out.String(), "already running") {
+			t.Fatalf("exit %d: %s", code, out.String())
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("second ctx watch did not end")
+	}
+	release()
+	again, err := acquireWatchLock(watchLockPath())
+	if err != nil {
+		t.Fatalf("lock not free after release: %v", err)
+	}
+	again()
 }

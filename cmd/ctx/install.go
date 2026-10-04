@@ -66,12 +66,19 @@ func shellWord(w string) string {
 
 // useRunningCtx makes the installer write the absolute path of the running
 // binary and returns the function that restores the previous setting.
-func useRunningCtx(home string) func() {
+// A binary in a temporary location is an error the caller must report: the
+// configuration would otherwise point at a file that is about to disappear.
+func useRunningCtx(home string) (func(), error) {
 	prev := installer.CtxCommand()
-	if exe, err := installCtxExecutable(home); err == nil && filepath.IsAbs(exe) {
+	restore := func() { installer.SetCtxCommand(prev) }
+	exe, err := installCtxExecutable(home)
+	if errors.Is(err, installer.ErrTransientCtx) {
+		return restore, err
+	}
+	if err == nil && filepath.IsAbs(exe) {
 		installer.SetCtxCommand(exe)
 	}
-	return func() { installer.SetCtxCommand(prev) }
+	return restore, nil
 }
 
 func cmdInstall(args []string, stdout io.Writer) int {
@@ -104,7 +111,12 @@ func cmdInstall(args []string, stdout io.Writer) int {
 		fmt.Fprintf(stdout, "home dir: %v\n", err)
 		return 1
 	}
-	defer useRunningCtx(home)()
+	restore, err := useRunningCtx(home)
+	defer restore()
+	if err != nil {
+		fmt.Fprintf(stdout, "nothing installed: %v\n", err)
+		return 1
+	}
 	if harness == "watch" {
 		if len(only) != 0 {
 			fmt.Fprintln(stdout, "ctx install watch takes no --only")
@@ -140,7 +152,7 @@ func cmdInstall(args []string, stdout io.Writer) int {
 	switch harness {
 	case "codex":
 		if selected[installer.ComponentHooks] {
-			fmt.Fprintf(stdout, "next: run /hooks to trust changed ghosttree hooks, start a fresh Codex session, then %s\n", doctor)
+			fmt.Fprintf(stdout, "%s, then %s\n", codexHooksNotice, doctor)
 		} else {
 			fmt.Fprintf(stdout, "next: start a fresh Codex session, then %s\n", doctor)
 		}

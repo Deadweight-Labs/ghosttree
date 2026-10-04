@@ -145,3 +145,70 @@ func TestWatchServiceNeedsAbsoluteCtx(t *testing.T) {
 		t.Fatalf("err=%v calls=%v changes=%+v", err, log.calls, changes)
 	}
 }
+
+func TestSystemdUnitEscapesDollarAndPercent(t *testing.T) {
+	got := watchUnitText(`/home/a b/$HOME/50%/ctx`)
+	want := `ExecStart="/home/a b/$$HOME/50%%/ctx" watch`
+	if !strings.Contains(got, want) {
+		t.Errorf("unit lacks %q:\n%s", want, got)
+	}
+}
+
+func TestWatchServiceRefusesControlCharactersInThePath(t *testing.T) {
+	restore := SetServiceBackend("linux", func(string, ...string) error { return nil }, 1000)
+	defer restore()
+	home := t.TempDir()
+	useCtx(t, "/opt/ctx\nExecStartPre=/bin/evil")
+	if _, err := InstallWatchService(home); err == nil {
+		t.Fatal("a newline in the ctx path was written into the unit")
+	}
+	if _, err := os.Stat(WatchServicePath(home)); err == nil {
+		t.Error("unit file written")
+	}
+}
+
+func TestWatchServiceLeavesAForeignDefinitionAlone(t *testing.T) {
+	for _, goos := range []string{"linux", "darwin"} {
+		home := t.TempDir()
+		useCtx(t, fakeBinary(t, filepath.Join(home, ".local", "bin", "ctx")))
+		log := &ctlLog{}
+		restore := SetServiceBackend(goos, log.run, 1000)
+		path := WatchServicePath(home)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		foreign := "[Service]\nExecStart=/usr/bin/my-own-watcher --fast\n"
+		if err := os.WriteFile(path, []byte(foreign), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := InstallWatchService(home)
+		restore()
+		if err == nil || !strings.Contains(err.Error(), "not written by ghosttree") {
+			t.Fatalf("%s: err = %v", goos, err)
+		}
+		if got, _ := os.ReadFile(path); string(got) != foreign {
+			t.Errorf("%s: foreign definition overwritten:\n%s", goos, got)
+		}
+		if len(log.calls) != 0 {
+			t.Errorf("%s: service manager called: %v", goos, log.calls)
+		}
+	}
+}
+
+func TestWatchServiceUpdatesItsOwnDefinitionForAnotherPathOnBothPlatforms(t *testing.T) {
+	for _, goos := range []string{"linux", "darwin"} {
+		home := t.TempDir()
+		log := &ctlLog{}
+		restore := SetServiceBackend(goos, log.run, 1000)
+		useCtx(t, fakeBinary(t, filepath.Join(home, "a b", "$x", "ctx")))
+		if _, err := InstallWatchService(home); err != nil {
+			t.Fatal(err)
+		}
+		useCtx(t, fakeBinary(t, filepath.Join(home, ".local", "bin", "ctx")))
+		changes, err := InstallWatchService(home)
+		restore()
+		if err != nil || changes[0].Action != "updated" {
+			t.Fatalf("%s: err=%v changes=%+v", goos, err, changes)
+		}
+	}
+}

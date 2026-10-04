@@ -1,6 +1,7 @@
 package installer
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,27 +27,67 @@ func SetCtxCommand(path string) {
 // CtxCommand returns the command currently written into configurations.
 func CtxCommand() string { return ctxCommand }
 
+// ErrTransientCtx is returned when the running binary lives in a temporary
+// directory or a Go build cache: a hook or unit that points there breaks as
+// soon as the directory is cleaned.
+var ErrTransientCtx = errors.New("this ctx binary runs from a temporary location (a temp directory or the Go build cache), so no hook or service may point to it. Install ctx to a permanent place (for example ~/.local/bin/ctx) and run the command again from there")
+
+// transientRoots lists the directories whose content is not meant to last. It
+// is a seam: tests create their binaries below the temp directory.
+var transientRoots = func() []string { return []string{os.TempDir(), "/tmp", "/var/tmp"} }
+
+// isTransientPath reports whether p lies below a temporary directory (also
+// after resolving symlinks, as /tmp is /private/tmp on macOS) or inside a Go
+// build cache.
+func isTransientPath(p string) bool {
+	variants := []string{filepath.Clean(p)}
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		variants = append(variants, r)
+	}
+	for _, v := range variants {
+		for _, part := range strings.Split(filepath.ToSlash(v), "/") {
+			if strings.HasPrefix(part, "go-build") {
+				return true
+			}
+		}
+		for _, root := range transientRoots() {
+			if root == "" {
+				continue
+			}
+			roots := []string{filepath.Clean(root)}
+			if r, err := filepath.EvalSymlinks(root); err == nil {
+				roots = append(roots, r)
+			}
+			for _, r := range roots {
+				if v == r || strings.HasPrefix(v, strings.TrimRight(r, string(filepath.Separator))+string(filepath.Separator)) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 // ResolveCtxExecutable returns the path under which the running binary should
 // be written into configuration. The real file wins only if no stable name
 // points at it: ~/.local/bin/ctx survives an upgrade by atomic rename while a
-// resolved target such as a versioned Homebrew cellar path does not.
+// resolved target such as a versioned Homebrew cellar path does not. A binary
+// in a temporary location is never returned; ErrTransientCtx says so, unless
+// a permanent ctx exists at a known place.
 func ResolveCtxExecutable(home string) (string, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return "", err
 	}
-	return stableCtxPath(exe, home, os.Getenv("XDG_BIN_HOME")), nil
+	return stableCtxPath(exe, home, os.Getenv("XDG_BIN_HOME"))
 }
 
-func stableCtxPath(exe, home, xdgBin string) string {
+func stableCtxPath(exe, home, xdgBin string) (string, error) {
 	real := exe
 	if r, err := filepath.EvalSymlinks(exe); err == nil {
 		real = r
 	}
-	realInfo, err := os.Stat(real)
-	if err != nil {
-		return real
-	}
+	realInfo, statErr := os.Stat(real)
 	var candidates []string
 	if xdgBin != "" && filepath.IsAbs(xdgBin) {
 		candidates = append(candidates, filepath.Join(xdgBin, "ctx"))
@@ -59,12 +100,24 @@ func stableCtxPath(exe, home, xdgBin string) string {
 			candidates = append(candidates, abs)
 		}
 	}
+	if isTransientPath(exe) || isTransientPath(real) {
+		// Fall back to a permanent ctx that is really there.
+		for _, c := range candidates {
+			if info, err := os.Stat(c); err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0 && !isTransientPath(c) {
+				return c, nil
+			}
+		}
+		return "", ErrTransientCtx
+	}
+	if statErr != nil {
+		return real, nil
+	}
 	for _, c := range candidates {
-		if info, err := os.Stat(c); err == nil && os.SameFile(info, realInfo) {
-			return c
+		if info, err := os.Stat(c); err == nil && os.SameFile(info, realInfo) && !isTransientPath(c) {
+			return c, nil
 		}
 	}
-	return real
+	return real, nil
 }
 
 // quoteCommandWord leaves ordinary paths bare and wraps the rest in double

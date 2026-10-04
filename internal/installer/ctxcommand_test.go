@@ -2,6 +2,7 @@ package installer
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -192,16 +193,16 @@ func TestStableCtxPathPrefersTheNameOnPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", t.TempDir())
-	if got := stableCtxPath(real, home, ""); got != stable {
+	if got, _ := stableCtxPath(real, home, ""); got != stable {
 		t.Errorf("stable path = %q, want %q", got, stable)
 	}
 	// A symlink as the executable resolves to the real file, then back to the stable name.
-	if got := stableCtxPath(stable, home, ""); got != stable {
+	if got, _ := stableCtxPath(stable, home, ""); got != stable {
 		t.Errorf("from symlink = %q, want %q", got, stable)
 	}
 	// An unrelated ctx at the stable location is not mistaken for this binary.
 	other := fakeBinary(t, filepath.Join(t.TempDir(), "ctx"))
-	if got := stableCtxPath(other, home, ""); got != other {
+	if got, _ := stableCtxPath(other, home, ""); got != other {
 		t.Errorf("unrelated = %q, want %q", got, other)
 	}
 }
@@ -273,5 +274,57 @@ func TestDoctorFlagsMovedAbsolutePath(t *testing.T) {
 	}
 	if !hit {
 		t.Error("moved binary not reported")
+	}
+}
+
+func realTransientRules(t *testing.T, roots ...string) {
+	t.Helper()
+	prev := transientRoots
+	transientRoots = func() []string { return roots }
+	t.Cleanup(func() { transientRoots = prev })
+}
+
+func TestStableCtxPathRefusesTemporaryAndBuildCachePaths(t *testing.T) {
+	home := t.TempDir()
+	tmp := t.TempDir()
+	realTransientRules(t, tmp)
+	t.Setenv("PATH", t.TempDir())
+	for _, exe := range []string{
+		fakeBinary(t, filepath.Join(tmp, "x", "ctx")),
+		fakeBinary(t, filepath.Join(home, ".cache", "go-build", "ab", "ctx")),
+		fakeBinary(t, filepath.Join(home, "go-build123", "b001", "exe", "ctx")),
+	} {
+		got, err := stableCtxPath(exe, home, "")
+		if !errors.Is(err, ErrTransientCtx) || got != "" {
+			t.Errorf("%s: got %q, %v; want ErrTransientCtx", exe, got, err)
+		}
+	}
+	// A symlink in a permanent place that points into the temp dir does not help.
+	link := filepath.Join(home, "bin", "ctx")
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := fakeBinary(t, filepath.Join(tmp, "y", "ctx"))
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stableCtxPath(link, home, ""); !errors.Is(err, ErrTransientCtx) {
+		t.Errorf("symlink into temp: err = %v", err)
+	}
+}
+
+func TestStableCtxPathFallsBackToPermanentLocalBinCtx(t *testing.T) {
+	tmp := t.TempDir()
+	realTransientRules(t, tmp)
+	t.Setenv("PATH", t.TempDir())
+	permHome := t.TempDir() // a sibling of tmp, not below the configured root
+	exe := fakeBinary(t, filepath.Join(tmp, "x", "ctx"))
+	if _, err := stableCtxPath(exe, permHome, ""); err == nil {
+		t.Fatal("no ctx anywhere: want an error")
+	}
+	perm := fakeBinary(t, filepath.Join(permHome, ".local", "bin", "ctx"))
+	got, err := stableCtxPath(exe, permHome, "")
+	if err != nil || got != perm {
+		t.Fatalf("got %q, %v; want %q", got, err, perm)
 	}
 }

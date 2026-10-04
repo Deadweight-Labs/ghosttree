@@ -1,8 +1,10 @@
 package installer
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -30,13 +32,76 @@ func codexTableCommand(table string) string {
 		if len(rest) < 2 || rest[0] != '"' || rest[len(rest)-1] != '"' {
 			return ""
 		}
-		return strings.NewReplacer(`\\`, `\`, `\"`, `"`).Replace(rest[1 : len(rest)-1])
+		return tomlUnescape(rest[1 : len(rest)-1])
 	}
 	return ""
 }
 
+// tomlString writes v as a TOML basic string: backslash, quote and every
+// control character (TOML forbids them raw) are escaped.
 func tomlString(v string) string {
-	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(v) + `"`
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range v {
+		switch {
+		case r == '\\':
+			b.WriteString(`\\`)
+		case r == '"':
+			b.WriteString(`\"`)
+		case r == '\b':
+			b.WriteString(`\b`)
+		case r == '\t':
+			b.WriteString(`\t`)
+		case r == '\n':
+			b.WriteString(`\n`)
+		case r == '\f':
+			b.WriteString(`\f`)
+		case r == '\r':
+			b.WriteString(`\r`)
+		case r < 0x20 || r == 0x7f:
+			fmt.Fprintf(&b, `\u%04X`, r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
+}
+
+// tomlUnescape reverses tomlString for the escapes it writes.
+func tomlUnescape(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] != '\\' || i+1 >= len(s) {
+			b.WriteByte(s[i])
+			continue
+		}
+		i++
+		switch s[i] {
+		case 'b':
+			b.WriteByte('\b')
+		case 't':
+			b.WriteByte('\t')
+		case 'n':
+			b.WriteByte('\n')
+		case 'f':
+			b.WriteByte('\f')
+		case 'r':
+			b.WriteByte('\r')
+		case 'u':
+			if i+4 < len(s) {
+				if n, err := strconv.ParseUint(s[i+1:i+5], 16, 32); err == nil {
+					b.WriteRune(rune(n))
+					i += 4
+					continue
+				}
+			}
+			b.WriteString(`\u`)
+		default:
+			b.WriteByte(s[i])
+		}
+	}
+	return b.String()
 }
 
 func InstallCodex(home string) ([]Change, error) {

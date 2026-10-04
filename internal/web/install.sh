@@ -52,7 +52,13 @@ main() {
   # profile is only appended to on request, and never rewritten.
   path_help() {
     dir=$1
-    line="export PATH=\"$dir:\$PATH\""
+    # A directory with a quote, dollar sign, backtick, backslash or bang would
+    # turn the line into something else when the shell reads the profile; those
+    # get single quotes with every ' written as '\''.
+    case "$dir" in
+      *[\"\$\`\\\'!]*) line="export PATH='$(printf '%s' "$dir" | sed "s/'/'\\\\''/g")':\"\$PATH\"" ;;
+      *) line="export PATH=\"$dir:\$PATH\"" ;;
+    esac
     profile=$(profile_for)
     say ""
     say "Note: $dir is not on your PATH, so typing 'ctx' will not work in a new terminal yet."
@@ -64,7 +70,7 @@ main() {
       case "$reply" in y | Y | yes | YES) modify=yes ;; *) modify=no ;; esac
     fi
     if [ "$modify" = yes ]; then
-      if [ -f "$profile" ] && grep -F "$dir" "$profile" >/dev/null 2>&1; then
+      if [ -f "$profile" ] && grep -F -e "$dir" "$profile" >/dev/null 2>&1; then
         say "$profile already mentions $dir; left unchanged."
       else
         { printf '\n# added by the ghosttree installer\n%s\n' "$line"; } >>"$profile" || die "cannot write $profile"
@@ -165,6 +171,13 @@ main() {
   tar -xzf "$tmp/$archive" -C "$tmp/x" ctx || die "cannot unpack $archive"
 
   bindir=${XDG_BIN_HOME:-$HOME/.local/bin}
+  case "$bindir" in
+    /*) ;;
+    *) die "$bindir is not an absolute path; set XDG_BIN_HOME to one" ;;
+  esac
+  case "$bindir" in
+    *[[:cntrl:]]*) die "the install directory contains a control character; refusing it" ;;
+  esac
   mkdir -p "$bindir" || die "cannot create $bindir"
   if [ -L "$tmp/x/ctx" ] || [ ! -f "$tmp/x/ctx" ]; then
     die "the archive's ctx is not a regular file; nothing was installed"
