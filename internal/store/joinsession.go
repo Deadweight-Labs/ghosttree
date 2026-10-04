@@ -62,7 +62,7 @@ const (
 	joinAuthTTL            = 2 * time.Minute
 	maxJoinSessions        = 1000
 	maxJoinConfirmFails    = 3
-	maxJoinNameConflicts   = 3 // vergebene Maschinennamen je Konto und Fenster, dann ist der Code verbrannt
+	maxJoinNameConflicts   = 3 // verschiedene vergebene Wunschnamen je Konto und Fenster, dann sperrt das Konto
 	joinNameConflictWindow = JoinMaxLifetime
 	maxJoinFailures        = 8 // falsche Codes je /64 im Fenster
 	joinFailureWindow      = 10 * time.Minute
@@ -98,8 +98,7 @@ var (
 	// ErrJoinNotReady: es gibt nichts freizugeben (keine Sitzung, kein Gerät,
 	// oder die Anfrage gehört zu einem früheren Gerät).
 	ErrJoinNotReady = errors.New("no device is waiting")
-	// ErrJoinBurned: zu viele vergebene Maschinennamen; der Code ist verbraucht.
-	ErrJoinBurned = errors.New("too many machine names were refused, the pairing code is used up")
+
 	// ErrJoinConfirm: der eingegebene Bestätigungscode stimmt nicht.
 	ErrJoinConfirm = errors.New("the confirmation code does not match")
 )
@@ -168,6 +167,14 @@ type JoinClaimRequest struct {
 	Resolve func(account, machine string, auto bool) (string, error)
 }
 
+// JoinNamesLockedError: das Konto hat im Fenster zu viele verschiedene vergebene
+// Namen versucht; bis RetryAfter wird jeder Claim abgelehnt, gleich welcher Name.
+type JoinNamesLockedError struct{ RetryAfter time.Duration }
+
+func (*JoinNamesLockedError) Error() string {
+	return "too many different machine names were refused for this account, try again later"
+}
+
 // JoinClaim ist die Antwort an den Installer.
 type JoinClaim struct {
 	Mode                string
@@ -201,12 +208,12 @@ type JoinSessions struct {
 	failures  map[string][]time.Time
 	// nameConflicts zählt je Konto (nicht je Code, sonst setzte jeder neue Code
 	// den Zähler zurück) die Claims, bei denen der Wunschname vergeben war.
-	nameConflicts map[string][]time.Time
+	nameConflicts map[string]map[string]time.Time
 }
 
 func NewJoinSessions(d *DeviceFlows) *JoinSessions {
 	return &JoinSessions{now: time.Now, device: d, startFlow: d.StartJoin, all: map[string]*joinSession{}, byAccount: map[string]*joinSession{}, byPair: map[string]*joinSession{}, byAuth: map[string]*joinSession{},
-		failures: map[string][]time.Time{}, nameConflicts: map[string][]time.Time{}}
+		failures: map[string][]time.Time{}, nameConflicts: map[string]map[string]time.Time{}}
 }
 
 // Join gibt die Sitzungen dieses Stores zurück.
@@ -502,15 +509,17 @@ func (j *JoinSessions) Claim(req JoinClaimRequest) (JoinClaim, error) {
 		return JoinClaim{}, ErrJoinInvalid
 	}
 	if req.Resolve != nil {
+		// Die Sperre gilt vor jeder Namensprüfung und antwortet für freie und
+		// vergebene Namen gleich; sonst wäre sie selbst ein Orakel.
+		if wait, locked := j.nameLock(s.account, now); locked {
+			return JoinClaim{}, &JoinNamesLockedError{RetryAfter: wait}
+		}
 		machine, err := req.Resolve(s.account, req.Machine, req.Auto)
 		// Ein vergebener Wunschname zählt, auch wenn der Server ihn selbst
 		// ersetzt: sonst verriete die Antwort "<name>-<suffix>" ohne Preis, dass
-		// er vergeben ist.
+		// er vergeben ist. Derselbe Name zählt nur einmal.
 		if errors.Is(err, ErrMachineTaken) || (err == nil && machine != req.Machine) {
-			if j.noteNameConflict(s.account, now) {
-				j.compromise(s)
-				return JoinClaim{}, ErrJoinBurned
-			}
+			j.noteNameConflict(s.account, req.Machine, now)
 		}
 		if err != nil {
 			return JoinClaim{}, err
@@ -578,20 +587,53 @@ func (j *JoinSessions) Claim(req JoinClaimRequest) (JoinClaim, error) {
 	return out, nil
 }
 
-// noteNameConflict merkt einen vergebenen Namen für das Konto und sagt, ob die
-// Grenze im Fenster erreicht ist.
-func (j *JoinSessions) noteNameConflict(account string, now time.Time) bool {
+// recentNameConflicts liefert die Wunschnamen des Kontos im Fenster.
+func (j *JoinSessions) recentNameConflicts(account string, now time.Time) map[string]time.Time {
 	cutoff := now.Add(-joinNameConflictWindow)
-	if len(j.nameConflicts) >= maxJoinSessions {
-		for k, v := range j.nameConflicts {
-			if len(trimBefore(v, cutoff)) == 0 {
-				delete(j.nameConflicts, k)
-			}
+	m := j.nameConflicts[account]
+	for n, at := range m {
+		if !at.After(cutoff) {
+			delete(m, n)
 		}
 	}
-	list := append(trimBefore(j.nameConflicts[account], cutoff), now)
-	j.nameConflicts[account] = list
-	return len(list) >= maxJoinNameConflicts
+	if len(m) == 0 {
+		delete(j.nameConflicts, account)
+	}
+	return m
+}
+
+// nameLock sagt, ob das Konto gesperrt ist, und wie lange noch.
+func (j *JoinSessions) nameLock(account string, now time.Time) (time.Duration, bool) {
+	m := j.recentNameConflicts(account, now)
+	if len(m) < maxJoinNameConflicts {
+		return 0, false
+	}
+	oldest := now
+	for _, at := range m {
+		if at.Before(oldest) {
+			oldest = at
+		}
+	}
+	return max(oldest.Add(joinNameConflictWindow).Sub(now), time.Second), true
+}
+
+// noteNameConflict merkt einen vergebenen Wunschnamen für das Konto; derselbe
+// Name (ohne Groß-/Kleinschreibung) zählt nur einmal.
+func (j *JoinSessions) noteNameConflict(account, name string, now time.Time) {
+	if len(j.nameConflicts) >= maxJoinSessions {
+		for k := range j.nameConflicts {
+			j.recentNameConflicts(k, now)
+		}
+	}
+	m := j.recentNameConflicts(account, now)
+	if m == nil {
+		m = map[string]time.Time{}
+		j.nameConflicts[account] = m
+	}
+	key := strings.ToLower(name)
+	if _, seen := m[key]; !seen {
+		m[key] = now
+	}
 }
 
 // resumedBy sagt, ob der Claim vom Installer kommt, der diese Anfrage gestellt

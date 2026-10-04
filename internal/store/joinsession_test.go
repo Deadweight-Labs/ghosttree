@@ -1013,86 +1013,93 @@ func TestJoinClaimKeepsTheCodeWhenTheNameIsTaken(t *testing.T) {
 	}
 }
 
-func TestJoinClaimBurnsTheCodeAfterThreeTakenNames(t *testing.T) {
+func nameLocked(err error) bool {
+	var l *JoinNamesLockedError
+	return errors.As(err, &l)
+}
+
+func TestJoinAccountLocksAfterThreeDifferentTakenNamesAndAnswersAllNamesAlike(t *testing.T) {
 	st, _ := pairFixture(t)
 	j := st.Join()
 	o := openPair(j, "person:2")
+	free := func(_, m string, _ bool) (string, error) { return m, nil }
 	taken := func(string, string, bool) (string, error) { return "", ErrMachineTaken }
-	for i := 1; i <= 3; i++ {
-		req := loopReq(o.Pair, "guess", "1.1.1.1")
+	for i, name := range []string{"one", "two", "three"} {
+		req := loopReq(o.Pair, name, "1.1.1.1")
 		req.Resolve = taken
-		want := ErrMachineTaken
-		if i == 3 {
-			want = ErrJoinBurned
-		}
-		if _, err := j.Claim(req); !errors.Is(err, want) {
-			t.Fatalf("conflict %d: err = %v, want %v", i, err, want)
-		}
-		state := JoinWaiting
-		if i == 3 {
-			state = JoinCompromised
-		}
-		if v := j.View("person:2"); v.State != state {
-			t.Fatalf("after conflict %d the state is %q, want %q", i, v.State, state)
+		if _, err := j.Claim(req); !errors.Is(err, ErrMachineTaken) {
+			t.Fatalf("conflict %d: %v", i+1, err)
 		}
 	}
-	if _, err := j.Claim(loopReq(o.Pair, "free-name", "1.1.1.1")); !errors.Is(err, ErrJoinInvalid) {
-		t.Fatalf("a burned code still claims: %v", err)
+	// At the limit a free and a taken name get the very same answer, with a
+	// new code and with the old one, and the resolver is not even asked.
+	asked := 0
+	pair := o.Pair // the first answer uses the old code, later ones a new code (which replaces it)
+	for _, resolve := range []func(string, string, bool) (string, error){free, taken} {
+		wrapped := func(a, m string, au bool) (string, error) { asked++; return resolve(a, m, au) }
+		for range 2 {
+			req := loopReq(pair, "whatever", "1.1.1.1")
+			req.Resolve = wrapped
+			_, err := j.Claim(req)
+			var l *JoinNamesLockedError
+			if !errors.As(err, &l) || l.RetryAfter <= 0 || l.RetryAfter > joinNameConflictWindow {
+				t.Fatalf("locked answer: %v", err)
+			}
+			pair = openPair(j, "person:2").Pair
+		}
+	}
+	if asked != 0 {
+		t.Errorf("the name check ran %d times while locked", asked)
+	}
+	// Another account is unaffected; the lock ends with the window.
+	other := openPair(j, "person:3")
+	req := loopReq(other.Pair, "one", "1.1.1.1")
+	req.Resolve = taken
+	if _, err := j.Claim(req); !errors.Is(err, ErrMachineTaken) {
+		t.Fatalf("other account: %v", err)
+	}
+	now := time.Now().Add(joinNameConflictWindow + time.Minute)
+	j.SetClock(func() time.Time { return now })
+	req = loopReq(openPair(j, "person:2").Pair, "free-now", "1.1.1.1")
+	req.Resolve = free
+	if _, err := j.Claim(req); err != nil {
+		t.Fatalf("after the window: %v", err)
 	}
 }
 
-func TestJoinAutomaticReplacementCountsAsAConflictAlsoWithResume(t *testing.T) {
+func TestJoinSameTakenNameThreeTimesDoesNotLock(t *testing.T) {
+	st, _ := pairFixture(t)
+	j := st.Join()
+	taken := func(string, string, bool) (string, error) { return "", ErrMachineTaken }
+	for i := 0; i < 5; i++ {
+		o := openPair(j, "person:2")
+		req := loopReq(o.Pair, "Laptop", "1.1.1.1")
+		req.Auto, req.Resolve = true, taken
+		if _, err := j.Claim(req); !errors.Is(err, ErrMachineTaken) {
+			t.Fatalf("try %d: %v", i+1, err)
+		}
+	}
+}
+
+func TestJoinAutomaticReplacementsOfDifferentNamesCountAlsoWithResume(t *testing.T) {
 	st, _ := pairFixture(t)
 	j := st.Join()
 	o := openPair(j, "person:2")
 	replace := func(account, machine string, auto bool) (string, error) { return machine + "-x", nil }
 	var resume string
-	for i := 1; i <= 3; i++ {
-		req := loopReq(o.Pair, "box", "1.1.1.1")
+	for _, name := range []string{"a", "b", "c"} {
+		req := loopReq(o.Pair, name, "1.1.1.1")
 		req.Auto, req.Resolve, req.Resume = true, replace, resume
 		out, err := j.Claim(req)
-		if i < 3 {
-			if err != nil || out.Machine != "box-x" {
-				t.Fatalf("claim %d: %+v %v", i, out, err)
-			}
-			resume = out.Resume
-			continue
+		if err != nil || out.Machine != name+"-x" {
+			t.Fatalf("claim %s: %+v %v", name, out, err)
 		}
-		if !errors.Is(err, ErrJoinBurned) {
-			t.Fatalf("third replacement: %+v %v, want ErrJoinBurned", out, err)
-		}
+		resume = out.Resume
 	}
-}
-
-func TestJoinNameConflictsAreCountedPerAccountNotPerCode(t *testing.T) {
-	st, _ := pairFixture(t)
-	j := st.Join()
-	taken := func(string, string, bool) (string, error) { return "", ErrMachineTaken }
-	var last error
-	for i := 1; i <= 3; i++ {
-		o := openPair(j, "person:2") // a new code each time
-		req := loopReq(o.Pair, "guess", "1.1.1.1")
-		req.Resolve = taken
-		_, last = j.Claim(req)
-	}
-	if !errors.Is(last, ErrJoinBurned) {
-		t.Fatalf("three conflicts over three codes: %v", last)
-	}
-	// Another account is unaffected.
-	other := openPair(j, "person:3")
-	req := loopReq(other.Pair, "guess", "1.1.1.1")
-	req.Resolve = taken
-	if _, err := j.Claim(req); !errors.Is(err, ErrMachineTaken) {
-		t.Fatalf("other account: %v", err)
-	}
-	// The window ends: a later claim counts afresh.
-	now := time.Now().Add(joinNameConflictWindow + time.Minute)
-	j.SetClock(func() time.Time { return now })
-	o := openPair(j, "person:2")
-	req = loopReq(o.Pair, "guess", "1.1.1.1")
-	req.Resolve = taken
-	if _, err := j.Claim(req); !errors.Is(err, ErrMachineTaken) {
-		t.Fatalf("after the window: %v", err)
+	req := loopReq(o.Pair, "d", "1.1.1.1")
+	req.Auto, req.Resolve, req.Resume = true, replace, resume
+	if _, err := j.Claim(req); !nameLocked(err) {
+		t.Fatalf("fourth name: %v", err)
 	}
 }
 

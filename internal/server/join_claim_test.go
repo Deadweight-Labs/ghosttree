@@ -537,3 +537,51 @@ func TestJoinDecideRenamesAnAutomaticNameThatBecameTaken(t *testing.T) {
 		t.Fatalf("exchange: %d %v", code, tok)
 	}
 }
+
+func TestJoinClaimLockedAccountAnswersTakenAndFreeNamesAlike(t *testing.T) {
+	srv, st, _ := joinClockFixture(t)
+	st.AddPerson("anna")
+	for _, n := range []string{"m1", "m2", "m3"} {
+		st.ClaimMachine(n, "person:1")
+	}
+	pair, _ := boundSession(t, st, "person:2")
+	for _, n := range []string{"m1", "m2", "m3"} {
+		if code, out := claimWith(t, srv, "", loopbackBody(pair, n)); code != 409 || out["error"] != "machine_name_taken" {
+			t.Fatalf("%s: %d %v", n, code, out)
+		}
+	}
+	var answers []map[string]any
+	// The old code first, then new ones (a new code replaces the old).
+	for i, name := range []string{"annas-free", "m1", "annas-free", "m2"} {
+		if i == 1 || i == 2 {
+			pair = pairOf(t, st, "person:2")
+		}
+		c := struct{ pair, name string }{pair, name}
+		code, out := claimWith(t, srv, "", loopbackBody(c.pair, c.name))
+		if code != 429 || out["error"] != "names_locked" {
+			t.Fatalf("%+v: %d %v", c, code, out)
+		}
+		if secs, _ := out["retry_after"].(float64); secs <= 0 {
+			t.Errorf("no wait announced: %v", out)
+		}
+		if _, leaks := out["machine"]; leaks {
+			t.Errorf("answer carries a name: %v", out)
+		}
+		answers = append(answers, out)
+	}
+	for _, a := range answers[1:] {
+		if fmt.Sprint(a) != fmt.Sprint(answers[0]) {
+			t.Errorf("answers differ by name: %v vs %v", a, answers[0])
+		}
+	}
+	// The same name over and over never locks a different account out.
+	if code, out := claimWith(t, srv, "", loopbackBody(pairOf(t, st, "person:3"), "m1")); code != 409 {
+		t.Fatalf("other account: %d %v", code, out)
+	}
+}
+
+func pairOf(t *testing.T, st *store.Store, account string) string {
+	t.Helper()
+	p, _ := boundSession(t, st, account)
+	return p
+}

@@ -3,6 +3,7 @@ package server
 import (
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -84,6 +85,7 @@ func (a *api) claimJoin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_request", "error_description": "resume is too long"})
 		return
 	}
+	var locked *store.JoinNamesLockedError
 	out, err := a.st.Join().Claim(claim)
 	switch {
 	case err == nil:
@@ -100,8 +102,11 @@ func (a *api) claimJoin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, body)
 	case errors.Is(err, store.ErrJoinInvalid):
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_pair"})
-	case errors.Is(err, store.ErrJoinBurned):
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "code_burned", "error_description": "too many machine names were refused; get a new pairing code"})
+	case errors.As(err, &locked):
+		secs := int(locked.RetryAfter.Seconds()) + 1
+		w.Header().Set("Retry-After", strconv.Itoa(secs))
+		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "names_locked", "retry_after": secs,
+			"error_description": "too many different machine names were refused for this account; try again later"})
 	case errors.Is(err, store.ErrMachineTaken):
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "machine_name_taken", "error_description": "that machine name belongs to another account; start again with a different machine name"})
 	case errors.Is(err, store.ErrJoinLocked), errors.Is(err, store.ErrDeviceBusy):

@@ -1666,7 +1666,7 @@ func TestJoinWithATakenExplicitNameStopsAtOnceWithTheExactCommand(t *testing.T) 
 	}
 	text := out.String()
 	want := "join --server " + e.url + " --pair " + pair + " --name shared-2 --yes"
-	if !strings.Contains(text, "already belongs to another account") || !strings.Contains(text, "still works") || !strings.Contains(text, want) {
+	if !strings.Contains(text, "already belongs to another account") || !strings.Contains(text, "is not used up") || !strings.Contains(text, want) {
 		t.Fatalf("message lacks the command %q:\n%s", want, text)
 	}
 	if _, ok := readConfig(t); ok {
@@ -1798,12 +1798,12 @@ func TestCallbackAcceptsAnOriginHeaderOnARealNavigationOnly(t *testing.T) {
 	}
 }
 
-func TestClaimErrorSaysTheCodeIsUsedUpWhenBurned(t *testing.T) {
-	err := claimError(&client.StatusError{Status: 409, Body: `{"error":"code_burned"}`})
-	if err == nil || !strings.Contains(err.Error(), "used up") {
+func TestClaimErrorNamesTheWaitWhenTheAccountIsLocked(t *testing.T) {
+	err := claimError(&client.StatusError{Status: 429, Body: `{"error":"names_locked","retry_after":1500}`})
+	if err == nil || !strings.Contains(err.Error(), "about 25 minutes") || strings.Contains(err.Error(), "invitation page") {
 		t.Fatalf("err = %v", err)
 	}
-	if strings.Contains(takenMessage(&machineTakenError{atClaim: true}, "https://s", "ABCD-1234", "box", true, false), "not used up") {
-		t.Error("taken message claims the code is not used up")
+	if strings.Contains(takenMessage(&machineTakenError{atClaim: true}, "https://s", "ABCD-1234", "box", true, false), "used up after") {
+		t.Error("taken message still announces a burned code")
 	}
 }

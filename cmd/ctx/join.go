@@ -804,7 +804,7 @@ func takenMessage(e *machineTakenError, server, pair, machine string, browser, y
 		cmd += " --yes"
 	}
 	if e.atClaim {
-		return fmt.Sprintf("The machine name %s already belongs to another account. Your code %s still works, but it is used up after three refused names.\nRun this with a name of your choice:\n\n  %s\n", safe(machine), pair, cmd)
+		return fmt.Sprintf("The machine name %s already belongs to another account. Your code %s is not used up.\nRun this with a name of your choice:\n\n  %s\n", safe(machine), pair, cmd)
 	}
 	return fmt.Sprintf("The machine name %s was taken by another account while you were connecting.\nGet a new code on the invitation page, then run it with a different name:\n\n  %s\n", safe(machine), strings.Replace(cmd, " --pair "+pair, " --pair <new code>", 1))
 }
@@ -813,14 +813,33 @@ func claimError(err error) error {
 	switch client.ErrorCode(err) {
 	case "machine_name_taken":
 		return &machineTakenError{atClaim: true}
-	case "code_burned":
-		return errors.New("Too many machine names were refused, so this pairing code is used up. Open the invitation page for a new code.")
+	case "names_locked":
+		return errors.New(namesLockedMessage(err))
 	case "invalid_pair":
 		return errors.New("Pairing code is not valid, expired or already used. Open the invitation page for a new one.")
 	case "too_many_requests":
 		return errors.New("Too many attempts. Try again in a minute.")
 	}
 	return failure(err)
+}
+
+// namesLockedMessage names the wait the server announced. The code is not the
+// problem, so a new one would not help.
+func namesLockedMessage(err error) string {
+	var se *client.StatusError
+	secs := 0
+	if errors.As(err, &se) {
+		var body struct {
+			RetryAfter int `json:"retry_after"`
+		}
+		_ = json.Unmarshal([]byte(se.Body), &body)
+		secs = body.RetryAfter
+	}
+	wait := "a while"
+	if secs > 0 {
+		wait = fmt.Sprintf("about %d minutes", (secs+59)/60)
+	}
+	return "Too many different machine names were refused for this account. Wait " + wait + ", then run the same command again; a new pairing code does not help before that."
 }
 
 func exchangeError(err error) error {
