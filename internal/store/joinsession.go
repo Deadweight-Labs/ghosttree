@@ -59,15 +59,16 @@ const (
 	// neuen; ein abgebrochener Installer blockiert die Seite also nicht.
 	JoinClaimTTL = 5 * time.Minute
 
-	joinAuthTTL          = 2 * time.Minute
-	maxJoinSessions      = 1000
-	maxJoinConfirmFails  = 3
-	maxJoinNameConflicts = 3 // vergebene Maschinennamen je Paarungscode, dann ist er verbrannt
-	maxJoinFailures      = 8 // falsche Codes je /64 im Fenster
-	joinFailureWindow    = 10 * time.Minute
-	maxJoinFailureKeys   = 10000
-	joinConfirmLen       = 4
-	joinWiderFactor      = 4 // je /48 (IPv6) sind es so viele Mal mehr
+	joinAuthTTL            = 2 * time.Minute
+	maxJoinSessions        = 1000
+	maxJoinConfirmFails    = 3
+	maxJoinNameConflicts   = 3 // vergebene Maschinennamen je Konto und Fenster, dann ist der Code verbrannt
+	joinNameConflictWindow = JoinMaxLifetime
+	maxJoinFailures        = 8 // falsche Codes je /64 im Fenster
+	joinFailureWindow      = 10 * time.Minute
+	maxJoinFailureKeys     = 10000
+	joinConfirmLen         = 4
+	joinWiderFactor        = 4 // je /48 (IPv6) sind es so viele Mal mehr
 )
 
 // Zustände einer Sitzung, wie die Seite sie sieht.
@@ -97,6 +98,8 @@ var (
 	// ErrJoinNotReady: es gibt nichts freizugeben (keine Sitzung, kein Gerät,
 	// oder die Anfrage gehört zu einem früheren Gerät).
 	ErrJoinNotReady = errors.New("no device is waiting")
+	// ErrJoinBurned: zu viele vergebene Maschinennamen; der Code ist verbraucht.
+	ErrJoinBurned = errors.New("too many machine names were refused, the pairing code is used up")
 	// ErrJoinConfirm: der eingegebene Bestätigungscode stimmt nicht.
 	ErrJoinConfirm = errors.New("the confirmation code does not match")
 )
@@ -119,7 +122,6 @@ type joinSession struct {
 	deviceHash   string // Code-Weg: Geräte-Ablauf
 	confirmHash  string
 	confirmFail  int
-	nameConflict int    // Claims, die an einem vergebenen Namen scheiterten
 	challenge    string // Loopback-Weg
 	cbHost       string
 	cbPort       int
@@ -197,11 +199,14 @@ type JoinSessions struct {
 	byPair    map[string]*joinSession
 	byAuth    map[string]*joinSession
 	failures  map[string][]time.Time
+	// nameConflicts zählt je Konto (nicht je Code, sonst setzte jeder neue Code
+	// den Zähler zurück) die Claims, bei denen der Wunschname vergeben war.
+	nameConflicts map[string][]time.Time
 }
 
 func NewJoinSessions(d *DeviceFlows) *JoinSessions {
 	return &JoinSessions{now: time.Now, device: d, startFlow: d.StartJoin, all: map[string]*joinSession{}, byAccount: map[string]*joinSession{}, byPair: map[string]*joinSession{}, byAuth: map[string]*joinSession{},
-		failures: map[string][]time.Time{}}
+		failures: map[string][]time.Time{}, nameConflicts: map[string][]time.Time{}}
 }
 
 // Join gibt die Sitzungen dieses Stores zurück.
@@ -498,15 +503,16 @@ func (j *JoinSessions) Claim(req JoinClaimRequest) (JoinClaim, error) {
 	}
 	if req.Resolve != nil {
 		machine, err := req.Resolve(s.account, req.Machine, req.Auto)
-		if err != nil {
-			if errors.Is(err, ErrMachineTaken) {
-				// Wer den Code kennt, könnte Namen des Kontos erraten: jeder
-				// Fehlschlag zählt, nach drei ist der Code verbrannt (die Seite
-				// zeigt dann, dass ein neuer nötig ist).
-				if s.nameConflict++; s.nameConflict >= maxJoinNameConflicts {
-					j.compromise(s)
-				}
+		// Ein vergebener Wunschname zählt, auch wenn der Server ihn selbst
+		// ersetzt: sonst verriete die Antwort "<name>-<suffix>" ohne Preis, dass
+		// er vergeben ist.
+		if errors.Is(err, ErrMachineTaken) || (err == nil && machine != req.Machine) {
+			if j.noteNameConflict(s.account, now) {
+				j.compromise(s)
+				return JoinClaim{}, ErrJoinBurned
 			}
+		}
+		if err != nil {
 			return JoinClaim{}, err
 		}
 		req.Machine = machine
@@ -570,6 +576,22 @@ func (j *JoinSessions) Claim(req JoinClaimRequest) (JoinClaim, error) {
 	s.resumeHash = hashCode(resume)
 	s.auto, s.resolve = req.Auto, req.Resolve
 	return out, nil
+}
+
+// noteNameConflict merkt einen vergebenen Namen für das Konto und sagt, ob die
+// Grenze im Fenster erreicht ist.
+func (j *JoinSessions) noteNameConflict(account string, now time.Time) bool {
+	cutoff := now.Add(-joinNameConflictWindow)
+	if len(j.nameConflicts) >= maxJoinSessions {
+		for k, v := range j.nameConflicts {
+			if len(trimBefore(v, cutoff)) == 0 {
+				delete(j.nameConflicts, k)
+			}
+		}
+	}
+	list := append(trimBefore(j.nameConflicts[account], cutoff), now)
+	j.nameConflicts[account] = list
+	return len(list) >= maxJoinNameConflicts
 }
 
 // resumedBy sagt, ob der Claim vom Installer kommt, der diese Anfrage gestellt

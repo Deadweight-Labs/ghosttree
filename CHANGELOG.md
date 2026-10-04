@@ -35,8 +35,9 @@ Versioning, with pre-1.0 compatibility rules described in
   server picks a free name (`<host>-<account>`, then a random suffix) for an
   automatic hostname and says which one it chose; a name given with `--name`
   that is taken ends the command at once with the exact command to run with
-  another `--name`, and the pairing code stays usable; after three refused names
-  the code is used up and the invitation page asks for a new one.
+  another `--name`, and the pairing code stays usable; after three refused or automatically replaced names within a window (counted
+  per account, not per code) the code is used up (`code_burned`) and the
+  invitation page asks for a new one.
 - Added: `ctx install claude|codex` and `ctx join` set up the collector
   (`ctx watch`) as a user service (systemd user unit, macOS LaunchAgent), update
   an existing one and leave it alone when nothing changed. `--no-watch` skips

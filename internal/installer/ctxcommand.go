@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -36,32 +37,76 @@ var ErrTransientCtx = errors.New("this ctx binary runs from a temporary location
 // is a seam: tests create their binaries below the temp directory.
 var transientRoots = func() []string { return []string{os.TempDir(), "/tmp", "/var/tmp"} }
 
+var goBuildDirRE = regexp.MustCompile(`^go-build[0-9]+$`)
+
+// goCacheDir is the Go build cache: $GOCACHE, else the default under the
+// user cache directory.
+func goCacheDir() string {
+	if c := os.Getenv("GOCACHE"); c != "" && filepath.IsAbs(c) {
+		return filepath.Clean(c)
+	}
+	if d, err := os.UserCacheDir(); err == nil {
+		return filepath.Join(d, "go-build")
+	}
+	return ""
+}
+
+func within(p, root string) bool {
+	root = strings.TrimRight(filepath.Clean(root), string(filepath.Separator))
+	return p == root || strings.HasPrefix(p, root+string(filepath.Separator))
+}
+
 // isTransientPath reports whether p lies below a temporary directory (also
-// after resolving symlinks, as /tmp is /private/tmp on macOS) or inside a Go
-// build cache.
-func isTransientPath(p string) bool {
+// after resolving symlinks, as /tmp is /private/tmp on macOS), in a go test or
+// go run work directory (go-build<digits>) or in the Go build cache. A
+// temporary directory that is or contains the home directory is no temporary
+// location for this user and is ignored.
+func isTransientPath(p, home string) bool {
 	variants := []string{filepath.Clean(p)}
 	if r, err := filepath.EvalSymlinks(p); err == nil {
 		variants = append(variants, r)
 	}
+	homes := []string{}
+	if home != "" {
+		homes = append(homes, filepath.Clean(home))
+		if r, err := filepath.EvalSymlinks(home); err == nil {
+			homes = append(homes, r)
+		}
+	}
+	var roots []string
+	for _, root := range transientRoots() {
+		if root == "" {
+			continue
+		}
+		cands := []string{filepath.Clean(root)}
+		if r, err := filepath.EvalSymlinks(root); err == nil {
+			cands = append(cands, r)
+		}
+		skip := false
+		for _, c := range cands {
+			for _, h := range homes {
+				if within(h, c) {
+					skip = true
+				}
+			}
+		}
+		if !skip {
+			roots = append(roots, cands...)
+		}
+	}
+	cache := goCacheDir()
 	for _, v := range variants {
 		for _, part := range strings.Split(filepath.ToSlash(v), "/") {
-			if strings.HasPrefix(part, "go-build") {
+			if goBuildDirRE.MatchString(part) {
 				return true
 			}
 		}
-		for _, root := range transientRoots() {
-			if root == "" {
-				continue
-			}
-			roots := []string{filepath.Clean(root)}
-			if r, err := filepath.EvalSymlinks(root); err == nil {
-				roots = append(roots, r)
-			}
-			for _, r := range roots {
-				if v == r || strings.HasPrefix(v, strings.TrimRight(r, string(filepath.Separator))+string(filepath.Separator)) {
-					return true
-				}
+		if cache != "" && within(v, cache) {
+			return true
+		}
+		for _, r := range roots {
+			if within(v, r) {
+				return true
 			}
 		}
 	}
@@ -100,10 +145,10 @@ func stableCtxPath(exe, home, xdgBin string) (string, error) {
 			candidates = append(candidates, abs)
 		}
 	}
-	if isTransientPath(exe) || isTransientPath(real) {
+	if isTransientPath(exe, home) || isTransientPath(real, home) {
 		// Fall back to a permanent ctx that is really there.
 		for _, c := range candidates {
-			if info, err := os.Stat(c); err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0 && !isTransientPath(c) {
+			if info, err := os.Stat(c); err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0 && !isTransientPath(c, home) {
 				return c, nil
 			}
 		}
@@ -113,7 +158,7 @@ func stableCtxPath(exe, home, xdgBin string) (string, error) {
 		return real, nil
 	}
 	for _, c := range candidates {
-		if info, err := os.Stat(c); err == nil && os.SameFile(info, realInfo) && !isTransientPath(c) {
+		if info, err := os.Stat(c); err == nil && os.SameFile(info, realInfo) && !isTransientPath(c, home) {
 			return c, nil
 		}
 	}

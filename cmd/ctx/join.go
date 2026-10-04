@@ -278,10 +278,13 @@ func (c *callback) handle(w http.ResponseWriter, r *http.Request) {
 // metadata at all (curl, older browsers) pass: the unguessable state is what
 // authenticates the request, this is the second layer.
 func browserNavigation(r *http.Request) bool {
-	if r.Header.Get("Origin") != "" {
+	mode := r.Header.Get("Sec-Fetch-Mode")
+	// Some browsers add Origin to the redirected navigation; a real navigation
+	// is told by its fetch mode, so Origin only counts without it.
+	if r.Header.Get("Origin") != "" && mode != "navigate" {
 		return false
 	}
-	if m := r.Header.Get("Sec-Fetch-Mode"); m != "" && m != "navigate" {
+	if mode != "" && mode != "navigate" {
 		return false
 	}
 	if d := r.Header.Get("Sec-Fetch-Dest"); d != "" && d != "document" {
@@ -801,7 +804,7 @@ func takenMessage(e *machineTakenError, server, pair, machine string, browser, y
 		cmd += " --yes"
 	}
 	if e.atClaim {
-		return fmt.Sprintf("The machine name %s already belongs to another account. Your code %s is not used up yet, but it stops working after 3 refused names.\nRun this with a name of your choice:\n\n  %s\n", safe(machine), pair, cmd)
+		return fmt.Sprintf("The machine name %s already belongs to another account. Your code %s still works, but it is used up after three refused names.\nRun this with a name of your choice:\n\n  %s\n", safe(machine), pair, cmd)
 	}
 	return fmt.Sprintf("The machine name %s was taken by another account while you were connecting.\nGet a new code on the invitation page, then run it with a different name:\n\n  %s\n", safe(machine), strings.Replace(cmd, " --pair "+pair, " --pair <new code>", 1))
 }
@@ -810,6 +813,8 @@ func claimError(err error) error {
 	switch client.ErrorCode(err) {
 	case "machine_name_taken":
 		return &machineTakenError{atClaim: true}
+	case "code_burned":
+		return errors.New("Too many machine names were refused, so this pairing code is used up. Open the invitation page for a new code.")
 	case "invalid_pair":
 		return errors.New("Pairing code is not valid, expired or already used. Open the invitation page for a new one.")
 	case "too_many_requests":

@@ -1021,19 +1021,78 @@ func TestJoinClaimBurnsTheCodeAfterThreeTakenNames(t *testing.T) {
 	for i := 1; i <= 3; i++ {
 		req := loopReq(o.Pair, "guess", "1.1.1.1")
 		req.Resolve = taken
-		if _, err := j.Claim(req); !errors.Is(err, ErrMachineTaken) {
-			t.Fatalf("conflict %d: err = %v", i, err)
-		}
-		want := JoinWaiting
+		want := ErrMachineTaken
 		if i == 3 {
-			want = JoinCompromised
+			want = ErrJoinBurned
 		}
-		if v := j.View("person:2"); v.State != want {
-			t.Fatalf("after conflict %d the state is %q, want %q", i, v.State, want)
+		if _, err := j.Claim(req); !errors.Is(err, want) {
+			t.Fatalf("conflict %d: err = %v, want %v", i, err, want)
+		}
+		state := JoinWaiting
+		if i == 3 {
+			state = JoinCompromised
+		}
+		if v := j.View("person:2"); v.State != state {
+			t.Fatalf("after conflict %d the state is %q, want %q", i, v.State, state)
 		}
 	}
 	if _, err := j.Claim(loopReq(o.Pair, "free-name", "1.1.1.1")); !errors.Is(err, ErrJoinInvalid) {
 		t.Fatalf("a burned code still claims: %v", err)
+	}
+}
+
+func TestJoinAutomaticReplacementCountsAsAConflictAlsoWithResume(t *testing.T) {
+	st, _ := pairFixture(t)
+	j := st.Join()
+	o := openPair(j, "person:2")
+	replace := func(account, machine string, auto bool) (string, error) { return machine + "-x", nil }
+	var resume string
+	for i := 1; i <= 3; i++ {
+		req := loopReq(o.Pair, "box", "1.1.1.1")
+		req.Auto, req.Resolve, req.Resume = true, replace, resume
+		out, err := j.Claim(req)
+		if i < 3 {
+			if err != nil || out.Machine != "box-x" {
+				t.Fatalf("claim %d: %+v %v", i, out, err)
+			}
+			resume = out.Resume
+			continue
+		}
+		if !errors.Is(err, ErrJoinBurned) {
+			t.Fatalf("third replacement: %+v %v, want ErrJoinBurned", out, err)
+		}
+	}
+}
+
+func TestJoinNameConflictsAreCountedPerAccountNotPerCode(t *testing.T) {
+	st, _ := pairFixture(t)
+	j := st.Join()
+	taken := func(string, string, bool) (string, error) { return "", ErrMachineTaken }
+	var last error
+	for i := 1; i <= 3; i++ {
+		o := openPair(j, "person:2") // a new code each time
+		req := loopReq(o.Pair, "guess", "1.1.1.1")
+		req.Resolve = taken
+		_, last = j.Claim(req)
+	}
+	if !errors.Is(last, ErrJoinBurned) {
+		t.Fatalf("three conflicts over three codes: %v", last)
+	}
+	// Another account is unaffected.
+	other := openPair(j, "person:3")
+	req := loopReq(other.Pair, "guess", "1.1.1.1")
+	req.Resolve = taken
+	if _, err := j.Claim(req); !errors.Is(err, ErrMachineTaken) {
+		t.Fatalf("other account: %v", err)
+	}
+	// The window ends: a later claim counts afresh.
+	now := time.Now().Add(joinNameConflictWindow + time.Minute)
+	j.SetClock(func() time.Time { return now })
+	o := openPair(j, "person:2")
+	req = loopReq(o.Pair, "guess", "1.1.1.1")
+	req.Resolve = taken
+	if _, err := j.Claim(req); !errors.Is(err, ErrMachineTaken) {
+		t.Fatalf("after the window: %v", err)
 	}
 }
 

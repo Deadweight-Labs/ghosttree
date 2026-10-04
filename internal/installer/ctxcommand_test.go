@@ -288,10 +288,11 @@ func TestStableCtxPathRefusesTemporaryAndBuildCachePaths(t *testing.T) {
 	home := t.TempDir()
 	tmp := t.TempDir()
 	realTransientRules(t, tmp)
+	t.Setenv("GOCACHE", filepath.Join(home, "gocache"))
 	t.Setenv("PATH", t.TempDir())
 	for _, exe := range []string{
 		fakeBinary(t, filepath.Join(tmp, "x", "ctx")),
-		fakeBinary(t, filepath.Join(home, ".cache", "go-build", "ab", "ctx")),
+		fakeBinary(t, filepath.Join(home, "gocache", "ab", "ctx")),
 		fakeBinary(t, filepath.Join(home, "go-build123", "b001", "exe", "ctx")),
 	} {
 		got, err := stableCtxPath(exe, home, "")
@@ -326,5 +327,25 @@ func TestStableCtxPathFallsBackToPermanentLocalBinCtx(t *testing.T) {
 	got, err := stableCtxPath(exe, permHome, "")
 	if err != nil || got != perm {
 		t.Fatalf("got %q, %v; want %q", got, err, perm)
+	}
+}
+
+func TestStableCtxPathRecognisesOnlyRealBuildDirectoriesAndIgnoresATempDirThatHoldsHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GOCACHE", filepath.Join(home, "gocache"))
+	t.Setenv("PATH", t.TempDir())
+	// "go-build" in a name that is no go-build<digits> directory is just a name.
+	ok := fakeBinary(t, filepath.Join(home, "tools", "go-build-helpers", "ctx"))
+	realTransientRules(t, filepath.Dir(home)) // the temp dir contains HOME: not transient for this user
+	if got, err := stableCtxPath(ok, home, ""); err != nil || got != ok {
+		t.Errorf("got %q, %v; want %q", got, err, ok)
+	}
+	// A real go-build directory is still refused.
+	bad := fakeBinary(t, filepath.Join(home, "x", "go-build4711", "b001", "ctx"))
+	if _, err := stableCtxPath(bad, home, ""); !errors.Is(err, ErrTransientCtx) {
+		t.Errorf("go-build4711: %v", err)
+	}
+	if _, err := stableCtxPath(fakeBinary(t, filepath.Join(home, "gocache", "ab", "ctx")), home, ""); !errors.Is(err, ErrTransientCtx) {
+		t.Errorf("GOCACHE: %v", err)
 	}
 }

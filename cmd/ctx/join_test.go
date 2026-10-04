@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
 	"github.com/Deadweight-Labs/ghosttree/internal/server"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -1665,7 +1666,7 @@ func TestJoinWithATakenExplicitNameStopsAtOnceWithTheExactCommand(t *testing.T) 
 	}
 	text := out.String()
 	want := "join --server " + e.url + " --pair " + pair + " --name shared-2 --yes"
-	if !strings.Contains(text, "already belongs to another account") || !strings.Contains(text, "not used up") || !strings.Contains(text, want) {
+	if !strings.Contains(text, "already belongs to another account") || !strings.Contains(text, "still works") || !strings.Contains(text, want) {
 		t.Fatalf("message lacks the command %q:\n%s", want, text)
 	}
 	if _, ok := readConfig(t); ok {
@@ -1773,5 +1774,36 @@ func TestCallbackRejectsEmbeddingFetchesAndCrossOriginRequestsAndForbidsFraming(
 	cb.Finish(nil)
 	if c := <-done; c != http.StatusSeeOther {
 		t.Fatalf("navigation answered %d", c)
+	}
+}
+
+func TestCallbackAcceptsAnOriginHeaderOnARealNavigationOnly(t *testing.T) {
+	cb, err := startCallback("state-12345678")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cb.Close()
+	mk := func(h map[string]string) *http.Request {
+		req, _ := http.NewRequest("GET", "http://"+cb.Addr()+"/callback?code=abc&state=state-12345678", nil)
+		for k, v := range h {
+			req.Header.Set(k, v)
+		}
+		return req
+	}
+	if browserNavigation(mk(map[string]string{"Origin": "https://gt.example", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document", "Sec-Fetch-Site": "cross-site"})) != true {
+		t.Error("a navigation carrying Origin was refused")
+	}
+	if browserNavigation(mk(map[string]string{"Origin": "https://gt.example"})) {
+		t.Error("Origin without a navigation was accepted")
+	}
+}
+
+func TestClaimErrorSaysTheCodeIsUsedUpWhenBurned(t *testing.T) {
+	err := claimError(&client.StatusError{Status: 409, Body: `{"error":"code_burned"}`})
+	if err == nil || !strings.Contains(err.Error(), "used up") {
+		t.Fatalf("err = %v", err)
+	}
+	if strings.Contains(takenMessage(&machineTakenError{atClaim: true}, "https://s", "ABCD-1234", "box", true, false), "not used up") {
+		t.Error("taken message claims the code is not used up")
 	}
 }
