@@ -90,7 +90,7 @@ func tomlUnescape(s string) string {
 			b.WriteByte('\r')
 		case 'u':
 			if i+4 < len(s) {
-				if n, err := strconv.ParseUint(s[i+1:i+5], 16, 32); err == nil {
+				if n, err := strconv.ParseUint(s[i+1:i+5], 16, 16); err == nil {
 					b.WriteRune(rune(n))
 					i += 4
 					continue
