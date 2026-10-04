@@ -16,6 +16,16 @@ type orgMemberRow struct {
 	store.OrgMemberInfo
 	Self    bool
 	Initial string
+	// SoleOwner: the only owner of the organization, who can neither step
+	// down nor leave. NoProject: a member without a role in any project of the
+	// organization, shown to owners with a way to add one.
+	SoleOwner, NoProject bool
+}
+
+// inviteRow is an invitation with, for its creator while it is open, the link.
+type inviteRow struct {
+	store.Invitation
+	URL string
 }
 
 // projectRoleRow ist ein Organisationsmitglied mit seiner Rolle in einem Projekt.
@@ -38,20 +48,23 @@ type projectRolesView struct {
 
 // orgsView sammelt, was die Org-Seite zeigt.
 type orgsView struct {
-	Orgs       []store.Org
-	Selected   store.Org
-	Owner      bool
-	Members    []orgMemberRow
-	Invites    []store.Invitation
-	Projects   []store.Project
-	Claimable  []string // eigene, unbeanspruchte Remotes; nur für Owner
-	Roles      []projectRolesView
-	NewCode    string // einmalig angezeigter Einladungscode
-	NewExpiry  string
-	NewLink    bool // der Code gehört zu einer Projekt-Einladung (/join/<code>)
-	NewURL     string
-	GuestLinks bool // Gast-Links gibt es nur bei durchgesetzter Sichtbarkeit
-	Notice     string
+	Orgs      []store.Org
+	Selected  store.Org
+	Owner     bool
+	Members   []orgMemberRow
+	Invites   []inviteRow
+	Projects  []store.Project
+	Claimable []string // eigene, unbeanspruchte Remotes; nur für Owner
+	Roles     []projectRolesView
+	NewExpiry string
+	NewURL    string // Link der eben erstellten Einladung (?new=), nur für ihren Ersteller
+	// InviteProjects are the projects an invitation can be for (those of the
+	// organization plus the owner's unclaimed ones); DefaultProject is the
+	// one preselected: the last one invited to, else the first.
+	InviteProjects []string
+	DefaultProject string
+	GuestLinks     bool // Gast-Links gibt es nur bei durchgesetzter Sichtbarkeit
+	Notice         string
 }
 
 // orgsPage zeigt Mitglieder, Einladungen und Projekte einer Organisation.
@@ -82,9 +95,16 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 		v.Owner = v.Selected.Role == store.OrgOwner
 		members, _ := a.store.ListOrgMembersFor(v.Selected.ID, me, a.store.AccessEnforced())
 		v.GuestLinks = a.store.AccessEnforced()
+		owners := 0
+		for _, m := range members {
+			if m.Role == store.OrgOwner {
+				owners++
+			}
+		}
 		for _, m := range members {
 			m.Account = store.NormalizeAccountName(m.Account)
-			v.Members = append(v.Members, orgMemberRow{OrgMemberInfo: m, Self: m.AccountID == me, Initial: initialOf(m.Account)})
+			v.Members = append(v.Members, orgMemberRow{OrgMemberInfo: m, Self: m.AccountID == me, Initial: initialOf(m.Account),
+				SoleOwner: m.Role == store.OrgOwner && owners == 1})
 		}
 		var orgAll []store.OrgMemberInfo
 		v.Projects, _ = a.store.ListProjects(me, v.Selected.ID)
@@ -132,9 +152,19 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 		}
 		if v.Owner {
 			v.Claimable, _ = a.store.ListClaimableProjects(me, v.Selected.ID)
-			v.Invites, _ = a.store.ListInvitations(me, v.Selected.ID)
-			for i := range v.Invites {
-				v.Invites[i].AcceptedBy = store.NormalizeAccountName(v.Invites[i].AcceptedBy)
+			a.fillInvites(r, &v, me)
+			// Members who hold no role in any project see nothing; say so and
+			// let the owner fix it in one click.
+			inProject := map[string]bool{}
+			for _, rv := range v.Roles {
+				for _, row := range rv.Rows {
+					if row.Role != "" {
+						inProject[row.AccountID] = true
+					}
+				}
+			}
+			for i, m := range v.Members {
+				v.Members[i].NoProject = m.Role != store.OrgOwner && !inProject[m.AccountID] && len(v.Projects) > 0
 			}
 		}
 	}
@@ -230,6 +260,54 @@ func orgRedirect(w http.ResponseWriter, r *http.Request, slug, notice string) {
 	http.Redirect(w, r, "/ui/orgs?"+q.Encode(), http.StatusSeeOther)
 }
 
+// fillInvites lists the organization's invitations with the links their
+// creator may still copy, the projects an invitation can be for, and the
+// freshly created invitation named by ?new=.
+func (a *app) fillInvites(r *http.Request, v *orgsView, me string) {
+	invs, _ := a.store.ListInvitations(me, v.Selected.ID)
+	newID, _ := strconv.ParseInt(r.URL.Query().Get("new"), 10, 64)
+	for _, inv := range invs {
+		inv.AcceptedBy = store.NormalizeAccountName(inv.AcceptedBy)
+		row := inviteRow{Invitation: inv}
+		if inv.Status != "pending" {
+			a.inviteLinks.drop(inv.ID)
+		} else if link, ok := a.inviteLinks.get(inv.ID, me); ok {
+			row.URL = a.inviteURL(r, link.code, link.project)
+			if inv.ID == newID {
+				v.NewURL, v.NewExpiry = row.URL, inv.ExpiresAt
+			}
+		}
+		v.Invites = append(v.Invites, row)
+	}
+	seen := map[string]bool{}
+	for _, p := range v.Projects {
+		if !seen[p.Remote] {
+			seen[p.Remote] = true
+			v.InviteProjects = append(v.InviteProjects, p.Remote)
+		}
+	}
+	for _, remote := range v.Claimable {
+		if !seen[remote] {
+			seen[remote] = true
+			v.InviteProjects = append(v.InviteProjects, remote)
+		}
+	}
+	for _, row := range v.Invites {
+		if row.ProjectRemote != "" && seen[row.ProjectRemote] {
+			v.DefaultProject = row.ProjectRemote
+			break
+		}
+	}
+	if v.DefaultProject == "" && len(v.InviteProjects) > 0 {
+		v.DefaultProject = v.InviteProjects[0]
+	}
+}
+
+// orgInvite creates an invitation: for a project (the normal way, the person
+// lands in that project with the chosen role) or, as a side option, for the
+// organization alone. A project not yet in the organization is taken over in
+// the same step when it is one of the owner's own. The answer is a redirect to
+// the page showing the link, so a reload repeats nothing.
 func (a *app) orgInvite(w http.ResponseWriter, r *http.Request) {
 	o, err := a.formOrg(r)
 	if err != nil {
@@ -242,30 +320,35 @@ func (a *app) orgInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ttl := time.Duration(days) * 24 * time.Hour
+	me := browserPrincipal(r).ID
 	var code string
 	var inv store.Invitation
 	link := false
 	if project := strings.TrimSpace(r.FormValue("project")); project != "" {
-		// Ein Link vergibt nur member oder guest für dieses eine Projekt.
+		// A link grants member or guest for this one project; owners and leads
+		// are made by a person in the browser, never by a link.
 		link = true
-		// Mit claim=1 übernimmt derselbe Store-Aufruf die Remote und stellt
-		// den Link aus (eine Transaktion): ein abgelehnter Link hinterlässt
-		// keine halbe Übernahme.
-		if r.FormValue("claim") == "1" {
-			code, inv, err = a.store.ClaimAndInviteProject(browserPrincipal(r).ID, o.ID, project, r.FormValue("project_role"), ttl)
+		if _, known := a.store.ProjectByRemote(project); known && r.FormValue("claim") != "1" {
+			code, inv, err = a.store.CreateProjectInvitation(me, o.ID, project, r.FormValue("project_role"), ttl)
 		} else {
-			code, inv, err = a.store.CreateProjectInvitation(browserPrincipal(r).ID, o.ID, project, r.FormValue("project_role"), ttl)
+			// One call takes the remote over and issues the link (one
+			// transaction): a refused link leaves no half-done claim.
+			code, inv, err = a.store.ClaimAndInviteProject(me, o.ID, project, r.FormValue("project_role"), ttl)
 		}
 	} else {
-		code, inv, err = a.store.CreateInvitation(browserPrincipal(r).ID, o.ID, r.FormValue("email"), r.FormValue("role"), ttl)
+		code, inv, err = a.store.CreateInvitation(me, o.ID, r.FormValue("email"), r.FormValue("role"), ttl)
 	}
 	if err != nil {
 		a.orgFailure(w, r, err)
 		return
 	}
-	// Der Code erscheint nur in dieser Antwort, nicht in einer URL oder einem
-	// Redirect.
-	a.renderOrgs(w, r, http.StatusOK, orgsView{NewCode: code, NewExpiry: inv.ExpiresAt, NewLink: link, NewURL: a.inviteURL(r, code, link)}, o.Slug, "")
+	until, perr := time.Parse(time.RFC3339, inv.ExpiresAt)
+	if perr != nil {
+		until = time.Now().Add(store.MaxInvitationTTL)
+	}
+	a.inviteLinks.put(inv.ID, me, code, link, until)
+	// The slug is [a-z0-9-], so it needs no escaping, and the order stays fixed.
+	http.Redirect(w, r, "/ui/orgs?org="+o.Slug+"&new="+strconv.FormatInt(inv.ID, 10), http.StatusSeeOther)
 }
 
 func (a *app) orgInviteRevoke(w http.ResponseWriter, r *http.Request) {
@@ -281,6 +364,9 @@ func (a *app) orgInviteRevoke(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		a.orgFailure(w, r, err)
 		return
+	}
+	if id, perr := strconv.ParseInt(r.FormValue("id"), 10, 64); perr == nil {
+		a.inviteLinks.drop(id)
 	}
 	orgRedirect(w, r, o.Slug, "revoked")
 }

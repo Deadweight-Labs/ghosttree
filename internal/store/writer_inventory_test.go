@@ -100,6 +100,8 @@ var writerMethodClasses = map[string]string{
 	"AddPerson":                     "write",
 	"PrincipalValid":                "read",
 	"AddAccount":                    "write",
+	"SetOwnName":                    "write",
+	"NameLocked":                    "read",
 	"CreateAccountCode":             "write",
 	"EnsureBootstrapCode":           "write",
 	"LoginIdentity":                 "write",

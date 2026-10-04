@@ -179,8 +179,15 @@ func TestProjectsClaimMoveAndImplicitAssignment(t *testing.T) {
 	f.mustCall(t, 201, "POST", "/api/orgs", f.robin, map[string]any{"name": "Alpha", "slug": "alpha"})
 	f.mustCall(t, 201, "POST", "/api/orgs", f.robin, map[string]any{"name": "Beta", "slug": "beta"})
 	for _, org := range []string{"alpha", "beta"} {
-		inv := f.invite(t, "person:1", org, "", "owner")
+		inv := f.invite(t, "person:1", org, "", "member")
 		f.mustCall(t, 200, "POST", "/api/invitations/accept", f.ben, map[string]any{"code": inv["code"]})
+		o, err := f.st.OrgByRef(org)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := f.st.SetOrgRole("person:1", o.ID, "person:3", "owner"); err != nil {
+			t.Fatal(err)
+		}
 	}
 	inv := f.invite(t, "person:1", "alpha", "", "")
 	f.mustCall(t, 200, "POST", "/api/invitations/accept", f.anna, map[string]any{"code": inv["code"]})

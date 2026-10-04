@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -47,6 +48,10 @@ type OIDCConfig struct {
 	// Name ist der Anzeigename des Anbieters auf der Anmeldeseite ("Continue
 	// with <Name>"). Leer: die Seite nennt keinen Anbieter.
 	Name string
+	// Signup steuert den Weg "Konto anlegen" auf der Einladungsseite (OIDC
+	// prompt=create): "1" immer anbieten, "0" nie, leer nur, wenn der Anbieter
+	// "create" in prompt_values_supported der Discovery nennt.
+	Signup string
 	// HTTPClient ist für Tests austauschbar; Standard ist ein Client mit Timeout.
 	HTTPClient *http.Client
 }
@@ -61,6 +66,9 @@ func (c OIDCConfig) Enabled() bool {
 func (c OIDCConfig) Validate() error {
 	if !c.Enabled() {
 		return nil
+	}
+	if c.Signup != "" && c.Signup != "0" && c.Signup != "1" {
+		return fmt.Errorf("oidc signup must be 1, 0 or empty")
 	}
 	if c.Issuer == "" || c.ClientID == "" || c.RedirectURL == "" {
 		return errors.New("oidc needs issuer, client id and redirect url together")
@@ -190,6 +198,13 @@ type oidcClient struct {
 	mu       sync.Mutex
 	oauth    *oauth2.Config
 	verifier *oidc.IDTokenVerifier
+	provider *oidc.Provider
+	// createPrompt: die Discovery nennt prompt=create.
+	createPrompt bool
+	// Negativ-Cache und laufender Abruf der Discovery (beide unter mu).
+	failErr   error
+	failUntil time.Time
+	flight    *discoveryFlight
 }
 
 func newOIDCClient(cfg OIDCConfig) (*oidcClient, error) {
@@ -208,19 +223,71 @@ func (c *oidcClient) context(ctx context.Context) context.Context {
 	return oidc.ClientContext(ctx, c.http)
 }
 
+// discoveryFailTTL: so lange merkt sich der Client einen gescheiterten
+// Discovery-Abruf, statt den IdP bei jeder Anfrage erneut zu belasten.
+const discoveryFailTTL = 30 * time.Second
+
+// discoveryFlight ist ein laufender Discovery-Abruf, auf den andere Anfragen
+// warten (ohne Lock) statt einen eigenen zu starten.
+type discoveryFlight struct{ done chan struct{} }
+
 // ready entdeckt den Anbieter beim ersten Gebrauch statt beim Start, damit ein
 // nicht erreichbarer IdP den Server nicht am Hochfahren hindert (CLI-Tokens und
-// Login-Links bleiben dann nutzbar).
+// Login-Links bleiben dann nutzbar). Der Abruf läuft außerhalb des Locks und
+// nur einmal gleichzeitig; wer währenddessen kommt, wartet auf sein eigenes
+// Context-Ende. Ein Fehler wird kurz gemerkt (Negativ-Cache).
 func (c *oidcClient) ready(ctx context.Context) (*oauth2.Config, *oidc.IDTokenVerifier, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.oauth != nil {
-		return c.oauth, c.verifier, nil
+	for {
+		c.mu.Lock()
+		if c.oauth != nil {
+			defer c.mu.Unlock()
+			return c.oauth, c.verifier, nil
+		}
+		if c.failErr != nil && c.now().Before(c.failUntil) {
+			err := c.failErr
+			c.mu.Unlock()
+			return nil, nil, err
+		}
+		if f := c.flight; f != nil {
+			c.mu.Unlock()
+			select {
+			case <-f.done:
+				continue
+			case <-ctx.Done():
+				return nil, nil, ctx.Err()
+			}
+		}
+		f := &discoveryFlight{done: make(chan struct{})}
+		c.flight = f
+		c.mu.Unlock()
+
+		// Ein Abbruch des Anfragenden darf den gemeinsamen Abruf nicht vergiften.
+		provider, err := oidc.NewProvider(c.context(context.WithoutCancel(ctx)), c.cfg.Issuer)
+		var meta struct {
+			Prompts []string `json:"prompt_values_supported"`
+		}
+		if err == nil {
+			_ = provider.Claims(&meta)
+		}
+
+		c.mu.Lock()
+		c.flight = nil
+		if err != nil {
+			c.failErr, c.failUntil = err, c.now().Add(discoveryFailTTL)
+		} else {
+			c.failErr = nil
+			c.install(provider, slices.Contains(meta.Prompts, "create"))
+		}
+		close(f.done)
+		c.mu.Unlock()
+		if err != nil {
+			return nil, nil, err
+		}
 	}
-	provider, err := oidc.NewProvider(c.context(ctx), c.cfg.Issuer)
-	if err != nil {
-		return nil, nil, err
-	}
+}
+
+// install setzt die Ergebnisse der Discovery; c.mu ist gehalten.
+func (c *oidcClient) install(provider *oidc.Provider, createPrompt bool) {
 	endpoint := provider.Endpoint()
 	// Feste Authentifizierungsart: die automatische Erkennung wiederholte den
 	// Austausch bei jedem Fehler mit der anderen Art, und ein
@@ -236,7 +303,25 @@ func (c *oidcClient) ready(ctx context.Context) (*oauth2.Config, *oidc.IDTokenVe
 		Scopes: []string{oidc.ScopeOpenID, "email", "profile"},
 	}
 	c.verifier = provider.Verifier(&oidc.Config{ClientID: c.cfg.ClientID})
-	return c.oauth, c.verifier, nil
+	c.provider = provider
+	c.createPrompt = createPrompt
+}
+
+// signupOffered sagt, ob "Konto anlegen" angeboten wird. Ein nicht erreichbarer
+// Anbieter heißt: nein (außer bei erzwungenem "1").
+func (c *oidcClient) signupOffered(ctx context.Context) bool {
+	switch c.cfg.Signup {
+	case "0":
+		return false
+	case "1":
+		return true
+	}
+	if _, _, err := c.ready(ctx); err != nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.createPrompt
 }
 
 func randomString() (string, error) {
@@ -368,7 +453,15 @@ func (a *app) beginOIDC(w http.ResponseWriter, r *http.Request, code string) {
 		return
 	}
 	http.SetCookie(w, a.flowCookie(r, sealed, int(flowTTL.Seconds())))
-	target := oauthCfg.AuthCodeURL(state, oauth2.S256ChallengeOption(verifier), oidc.Nonce(nonce))
+	opts := []oauth2.AuthCodeOption{oauth2.S256ChallengeOption(verifier), oidc.Nonce(nonce)}
+	// Nur der Weg "Konto anlegen" der Einladungsseite schickt prompt=create, und
+	// nur, wo er angeboten wird; ein von Hand gesetztes Feld ändert sonst nichts.
+	// Und nur mit einem gültigen Einladungscode: ohne den gäbe der Server die
+	// Registrierung beim IdP jedem frei.
+	if r.FormValue("signup") == "1" && a.store.CodeKindFor(code) == store.CodeInvitation && a.oidc.signupOffered(r.Context()) {
+		opts = append(opts, oauth2.SetAuthURLParam("prompt", "create"))
+	}
+	target := oauthCfg.AuthCodeURL(state, opts...)
 	http.Redirect(w, r, target, http.StatusSeeOther)
 }
 
@@ -443,13 +536,7 @@ func (a *app) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		a.loginMessage(w, http.StatusForbidden, "auth.id_token_nonce.title", "auth.id_token_nonce.text")
 		return
 	}
-	var claims struct {
-		Email             string `json:"email"`
-		EmailVerified     bool   `json:"email_verified"`
-		PreferredUsername string `json:"preferred_username"`
-		Name              string `json:"name"`
-		AuthorizedParty   string `json:"azp"`
-	}
+	var claims profileClaims
 	if err := idToken.Claims(&claims); err != nil || idToken.Subject == "" {
 		a.loginMessage(w, http.StatusForbidden, "auth.id_token_subject.title", "auth.id_token_subject.text")
 		return
@@ -460,6 +547,12 @@ func (a *app) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		a.loginMessage(w, http.StatusForbidden, "auth.id_token_client.title", "auth.id_token_client.text")
 		return
 	}
+	// Viele Anbieter (ZITADEL ohne "User Info Inside ID Token") legen Namen
+	// nur am userinfo-Endpunkt ab. Wer im ID-Token nicht benannt ist, wird dort
+	// nachgefragt; ein Fehler dort ändert am Login nichts.
+	if !claims.named() {
+		a.oidc.mergeUserInfo(ctx, oauthCfg, token, idToken.Subject, &claims)
+	}
 	// Eine nicht bestätigte Email ist eine Behauptung des Nutzers. Sie wird
 	// nicht gespeichert und nicht zum Benennen verwendet.
 	if !claims.EmailVerified {
@@ -467,7 +560,7 @@ func (a *app) oidcCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	account, outcome, err := a.store.LoginIdentity(store.IdentityLogin{
 		Issuer: idToken.Issuer, Subject: idToken.Subject, Email: claims.Email,
-		Name: displayName(claims.PreferredUsername, claims.Name, claims.Email), Code: flow.Code,
+		Name: claims.displayName(), Code: flow.Code,
 	})
 	if err != nil {
 		a.identityRejected(w, err)
@@ -476,6 +569,8 @@ func (a *app) oidcCallback(w http.ResponseWriter, r *http.Request) {
 	if outcome == store.LoginBootstrapped {
 		a.dropBootstrapFile()
 	}
+	// A name the IdP changed reaches the sessions that are already open.
+	a.sessions.relabel(account.ID, account.Name)
 	if flow.Join && (outcome == store.LoginInvited || outcome == store.LoginJoined) {
 		a.finishJoinLogin(w, r, account)
 		return
@@ -483,16 +578,89 @@ func (a *app) oidcCallback(w http.ResponseWriter, r *http.Request) {
 	a.finishLogin(w, r, account)
 }
 
-func displayName(preferred, name, email string) string {
-	for _, v := range []string{preferred, name} {
-		if v = strings.TrimSpace(v); v != "" {
-			return v
-		}
+// profileClaims sind die Profil-Claims aus ID-Token und userinfo.
+type profileClaims struct {
+	Email             string `json:"email"`
+	EmailVerified     bool   `json:"email_verified"`
+	PreferredUsername string `json:"preferred_username"`
+	Name              string `json:"name"`
+	GivenName         string `json:"given_name"`
+	FamilyName        string `json:"family_name"`
+	Nickname          string `json:"nickname"`
+	AuthorizedParty   string `json:"azp"`
+}
+
+// fullName ist der Name, den der Anbieter für die Person selbst meldet.
+func (c profileClaims) fullName() string {
+	if n := strings.TrimSpace(c.Name); n != "" {
+		return n
 	}
-	if local, _, ok := strings.Cut(strings.TrimSpace(email), "@"); ok && local != "" {
+	return strings.TrimSpace(strings.TrimSpace(c.GivenName) + " " + strings.TrimSpace(c.FamilyName))
+}
+
+// named: das ID-Token nennt die Person schon mit ihrem Namen.
+func (c profileClaims) named() bool { return c.fullName() != "" }
+
+// displayName ist der Anzeigename: Name, Vor- und Nachname, Spitzname,
+// Benutzername. Eine E-Mail-Adresse ist nie der Anzeigename; steht nichts
+// anderes zur Verfügung, bleibt höchstens der Teil vor dem @, aus einem
+// Benutzernamen in Adressform oder aus einer bestätigten Adresse.
+func (c profileClaims) displayName() string {
+	if n := c.fullName(); n != "" {
+		return n
+	}
+	if n := strings.TrimSpace(c.Nickname); n != "" {
+		return n
+	}
+	user := strings.TrimSpace(c.PreferredUsername)
+	if user != "" && !strings.Contains(user, "@") {
+		return user
+	}
+	if local, _, ok := strings.Cut(user, "@"); ok && local != "" {
 		return local
 	}
+	if c.EmailVerified {
+		if local, _, ok := strings.Cut(strings.TrimSpace(c.Email), "@"); ok && local != "" {
+			return local
+		}
+	}
 	return ""
+}
+
+// mergeUserInfo ergänzt fehlende Claims aus dem userinfo-Endpunkt. Die Antwort
+// gilt nur, wenn ihr Subject das des ID-Tokens ist (OIDC Core 5.3.2).
+func (c *oidcClient) mergeUserInfo(ctx context.Context, cfg *oauth2.Config, token *oauth2.Token, subject string, claims *profileClaims) {
+	c.mu.Lock()
+	provider := c.provider
+	c.mu.Unlock()
+	if provider == nil {
+		return
+	}
+	info, err := provider.UserInfo(ctx, cfg.TokenSource(ctx, token))
+	if err != nil || info.Subject != subject {
+		return
+	}
+	var got profileClaims
+	if info.Claims(&got) != nil {
+		return
+	}
+	if claims.Name == "" {
+		claims.Name = got.Name
+	}
+	if claims.GivenName == "" && claims.FamilyName == "" {
+		claims.GivenName, claims.FamilyName = got.GivenName, got.FamilyName
+	}
+	if claims.Nickname == "" {
+		claims.Nickname = got.Nickname
+	}
+	if claims.PreferredUsername == "" {
+		claims.PreferredUsername = got.PreferredUsername
+	}
+	if claims.Email == "" || !claims.EmailVerified {
+		if got.Email != "" && got.EmailVerified {
+			claims.Email, claims.EmailVerified = got.Email, true
+		}
+	}
 }
 
 func (a *app) identityRejected(w http.ResponseWriter, err error) {

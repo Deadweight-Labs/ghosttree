@@ -74,7 +74,7 @@ func TestOrgInviteResultIsFormAndLinkOnly(t *testing.T) {
 			t.Errorf("help text %q is back", gone)
 		}
 	}
-	resp = postOrg(t, alice, base, "/ui/orgs/invite", url.Values{"org": {"alpha"}, "role": {"member"}, "days": {"2"}})
+	resp = postOrgFollow(t, alice, base, "/ui/orgs/invite", url.Values{"org": {"alpha"}, "role": {"member"}, "days": {"2"}})
 	page = body(t, resp)
 	if !strings.Contains(page, `class="ad-link"`) || !strings.Contains(page, "Invitation ready") || !strings.Contains(page, "data-copy") {
 		t.Fatalf("invite result lacks the link and copy action: %s", page)
@@ -181,7 +181,7 @@ func TestOrgPageGivesAMemberOnlyTheirOwnControls(t *testing.T) {
 			t.Errorf("member sees %q", hidden)
 		}
 	}
-	if !strings.Contains(page, "Leave") || !strings.Contains(page, "/ui/orgs/default") && !strings.Contains(page, "Default") {
+	if !strings.Contains(page, "Leave") || !strings.Contains(page, "For new projects") {
 		t.Errorf("member lacks own controls: %s", page)
 	}
 }

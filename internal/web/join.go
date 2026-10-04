@@ -187,7 +187,7 @@ type joinView struct {
 	Inviter, Target, Org, RoleText, ExpiresAt string
 	Code, CSRFToken, Person                   string
 	Initial, Email                            string
-	SignedIn, OIDC                            bool
+	SignedIn, OIDC, Signup                    bool
 }
 
 func roleLabel(role string) string {
@@ -224,7 +224,7 @@ func (a *app) joinPage(w http.ResponseWriter, r *http.Request) {
 	// Rolle und Ablauf. Eine Paarungssitzung legt erst die Annahme an (joinAccepted),
 	// ein bloßes Öffnen oder Neuladen erzeugt keinen Code.
 	view := joinView{Inviter: preview.Inviter, Target: preview.Project, Org: preview.Org, RoleText: roleLabel(preview.Role),
-		ExpiresAt: preview.ExpiresAt, Code: code, OIDC: a.oidc != nil}
+		ExpiresAt: preview.ExpiresAt, Code: code, OIDC: a.oidc != nil, Signup: a.oidc != nil && a.oidc.signupOffered(r.Context())}
 	if session, ok := a.joinSession(r); ok {
 		view.SignedIn, view.Person, view.CSRFToken = true, session.principal.Label, session.csrf
 		view.Initial = initialOf(view.Person)

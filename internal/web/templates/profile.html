@@ -1,0 +1,9 @@
+{{define "profile"}}{{template "head" .}}{{template "nav" .}}<main class="ad ad-narrow">
+<div class="ov-head"><h1>{{t "profile.title"}}</h1></div>
+{{if .Error}}<p class="ad-flash is-error" role="alert">{{.Error}}</p>{{end}}{{if .Profile.Notice}}<p class="ad-flash" role="status">{{.Profile.Notice}}</p>{{end}}
+{{if and .Interactive .Profile.Locked}}<p class="ad-flash" role="status">{{t "profile.err.locked"}}</p>{{end}}
+{{if and .Interactive (not .Profile.Locked)}}<form class="ad-forms clay" method="post" action="/ui/profile"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<label class="ad-f"><span>{{t "profile.name"}}</span><input class="clay-field" name="name" value="{{.Profile.Name}}" maxlength="64" autocomplete="name" required></label>
+<button class="ov-btn ov-btn-primary clay ad-save">{{t "profile.save"}}</button></form>
+{{else}}{{if not .Interactive}}<p class="ad-flash" role="status">{{t "adm.readonly"}}</p>{{end}}<ul class="ov-list ad-deck clay"><li class="ad-row"><div class="ad-body"><span class="ov-meta">{{t "profile.name"}}</span><span class="ov-name">{{.Profile.Name}}</span></div></li></ul>{{end}}
+{{template "foot" .}}{{end}}

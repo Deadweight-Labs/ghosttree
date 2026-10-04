@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -348,27 +349,64 @@ func hostUnlessNamed(name, host string) string {
 	return host
 }
 
-// peerName is how a person reads an agent: "Claude on freund-laptop". A name
-// the person chose stays; an ID or the bare provider is replaced. The raw ID
-// goes to the title of the row.
+// peerName is how a person reads an agent: "Claude · Robin · mainex" (tool,
+// owner, machine). A name the person chose stays; an ID or the bare tool name
+// is replaced. The raw ID goes to the title of the row.
 func peerName(peer store.CoordAgent) string {
-	name := strings.TrimSpace(peer.DisplayName)
-	provider := providerLabel(peer.Provider, peer.ExternalID)
-	generic := name == "" || strings.Contains(name, ":") || strings.EqualFold(name, peer.Provider) || strings.EqualFold(name, provider)
-	if !generic {
+	return agentLabel(peer.DisplayName, peer.Provider, peer.ExternalID, peer.Owner)
+}
+
+// agentLabel builds the readable name of an agent from what is known about it.
+// owner is the account name of whoever runs it ("" when not known to the
+// viewer). Session IDs are never a name, however they are spelled.
+func agentLabel(displayName, provider, externalID, owner string) string {
+	name := strings.TrimSpace(displayName)
+	tool := providerLabel(provider, externalID)
+	if name != "" && !looksLikeIdentifier(name, externalID) && !strings.EqualFold(name, provider) && !strings.EqualFold(name, tool) {
 		return name
 	}
-	if host := agentMachine(peer.ExternalID); host != "" {
-		return msg("agent.on", provider, host)
+	parts := []string{tool}
+	if owner = store.NormalizeAccountName(owner); owner != "" {
+		parts = append(parts, owner)
 	}
-	return provider
+	if host := agentMachine(externalID); host != "" {
+		parts = append(parts, host)
+	}
+	return strings.Join(parts, agentLabelSep)
+}
+
+// agentLabelSep separates the parts of an agent label.
+const agentLabelSep = " \u00b7 "
+
+var uuidLikeRE = regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`)
+
+// looksLikeIdentifier says whether a display name is really a machine
+// identifier: the agent ID itself, anything with the ID separators, a UUID, or
+// a long run of characters with digits in it and no space.
+func looksLikeIdentifier(name, externalID string) bool {
+	if name == externalID || strings.ContainsAny(name, ":/") || uuidLikeRE.MatchString(name) {
+		return true
+	}
+	return len(name) >= 20 && !strings.ContainsAny(name, " \t") && strings.ContainsAny(name, "0123456789")
+}
+
+// neutralAgentLabel names an agent by its ID alone, for viewers who may not
+// learn more (a guest): the tool when the ID says it, else "Agent".
+func neutralAgentLabel(externalID string) string {
+	if prefix, _, ok := strings.Cut(externalID, ":"); ok {
+		switch strings.ToLower(prefix) {
+		case "claude", "claude-code", "codex", "opencode", "cli":
+			return providerLabel(prefix, externalID)
+		}
+	}
+	return msg("agent.provider.unknown")
 }
 
 // providerLabel names the tool behind an agent.
 func providerLabel(provider, externalID string) string {
 	kind := strings.ToLower(provider)
-	if prefix, _, ok := strings.Cut(externalID, ":"); ok && (kind == "" || kind == "ctx-cli") {
-		kind = prefix
+	if prefix, _, ok := strings.Cut(externalID, ":"); ok && (kind == "" || kind == "ctx-cli" || kind == "unknown" || kind == "unidentified-harness") {
+		kind = strings.ToLower(prefix)
 	}
 	switch kind {
 	case "claude", "claude-code":
@@ -379,8 +417,10 @@ func providerLabel(provider, externalID string) string {
 		return msg("agent.provider.opencode")
 	case "cli", "ctx-cli":
 		return msg("agent.provider.cli")
+	case "self-declared-subagent":
+		return msg("agent.provider.subagent")
 	}
-	if kind == "" {
+	if kind == "" || kind == "unknown" || kind == "unidentified-harness" || kind == "derived" || looksLikeIdentifier(kind, "") {
 		return msg("agent.provider.unknown")
 	}
 	return strings.ToUpper(kind[:1]) + kind[1:]

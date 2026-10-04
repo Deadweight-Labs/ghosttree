@@ -97,7 +97,7 @@ func TestPreviewRejectsEveryInvalidVariantIdentically(t *testing.T) {
 	}
 	moved, _ := mk(RoleMember)
 	st.db.Exec(`UPDATE projects SET org_id=? WHERE remote=?`, mustOrg(t, st, "person:2", "Beta", "beta").ID, joinRemote)
-	ownerLink, _, _ := st.CreateInvitation("person:1", o.ID, "", OrgOwner, 0)
+	ownerLink := legacyOwnerInvitation(t, st, o.ID)
 	emailBound, _, _ := st.CreateInvitation("person:1", o.ID, "x@example.test", OrgMember, 0)
 	cases := map[string]string{
 		"unknown": "0000000000000000000000000000000000000000000000000000000000000000", "empty": "", "garbage": "../../etc/passwd",

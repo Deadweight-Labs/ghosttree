@@ -61,7 +61,7 @@
 .ad-f { display: grid; gap: 4px; min-width: 0; }
 .ad-f > span { font-size: 12.5px; font-weight: 700; color: var(--clay-ink-soft); }
 .ad-grow { flex: 1 1 14rem; }
-.ad-days { width: 7rem; }
+.ad-days { width: 9rem; flex: none; }
 .ad-f select.clay-select { padding-inline-end: 36px; min-width: 8.5rem; }
 .ad-f :is(input, select) { width: 100%; min-height: 40px; border: 0; border-radius: var(--clay-radius-sm); padding: 0 14px; color: var(--clay-ink); }
 
@@ -113,3 +113,12 @@
 .ad-fields { align-items: flex-start; }
 .ad-form { flex-wrap: nowrap; align-content: start; }
 .ad-fields { flex: none; }
+
+/* Profile form, the secondary invitation option and a link inside a list row. */
+.ad-save { justify-self: start; margin-top: var(--space-3); }
+.ad-more { margin: 0; }
+.ad-more > summary { cursor: pointer; font: var(--text-label); font-size: 13.5px; color: var(--clay-ink-soft); padding: 4px 0; }
+.ad-more[open] > summary { margin-bottom: var(--space-3); }
+.ad-body .ad-copy { margin-top: 8px; }
+.ad-form .ad-sel + .ad-sel { margin-left: 0; }
+.ad-fields > .ad-f:not(.ad-grow):not(.ad-days) { flex: none; }

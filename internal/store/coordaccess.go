@@ -21,6 +21,11 @@ type CoordRecipient struct {
 	PrincipalID string
 	Label       string
 	Kind        string
+	// Provider and Owner describe an agent recipient: the harness it reports
+	// and the account name of whoever runs it. Recipients are limited to
+	// participants the viewer may list, so these add no hidden identity.
+	Provider string
+	Owner    string
 }
 
 type StandingInput struct {
@@ -1127,6 +1132,29 @@ func (a CoordAccess) Peers(roomKey, since string) ([]CoordAgent, error) {
 		return nil, err
 	}
 	return a.Store.CoordPeers(roomKey, since)
+}
+
+// RoomPeople lists the accounts that hold a role in the project of a project
+// room, with that role, for viewers who may list the room's agents (member and
+// up). Anyone below that gets the refusal Peers gives and no list, no count:
+// who belongs to a project is not for a guest to learn (#2447). Rooms of other
+// kinds have no such list.
+func (a CoordAccess) RoomPeople(roomKey string) ([]ProjectMember, error) {
+	room, err := a.requireRoomRead(roomKey)
+	if err != nil {
+		return nil, err
+	}
+	if err := a.projectRoomGate(room.Kind, room.Key, ResAgents, nil); err != nil {
+		return nil, err
+	}
+	if room.Kind != RoomProject {
+		return nil, nil
+	}
+	people, err := a.Store.ListProjectMembers(strings.TrimPrefix(room.Key, "project:"))
+	if errors.Is(err, ErrProjectNotFound) {
+		return nil, nil
+	}
+	return people, err
 }
 
 // ProjectAgents lists the agents of a project room for a browser viewer whose
@@ -2339,9 +2367,18 @@ func (a CoordAccess) Recipients() ([]CoordRecipient, error) {
 				recipient.Kind = "agent"
 				externalID = strings.TrimPrefix(id, "agent:")
 			}
-			var label string
-			if queryErr := tx.QueryRow(`SELECT display_name FROM coord_agents WHERE external_id=?`, externalID).Scan(&label); queryErr == nil && strings.TrimSpace(label) != "" {
-				recipient.Label = label
+			var label, provider, principal string
+			if queryErr := tx.QueryRow(`SELECT display_name, provider, COALESCE(principal_id,'') FROM coord_agents WHERE external_id=?`, externalID).Scan(&label, &provider, &principal); queryErr == nil {
+				if strings.TrimSpace(label) != "" {
+					recipient.Label = label
+				}
+				recipient.Provider = provider
+				if personID, parseErr := parsePersonPrincipalID(principal); parseErr == nil {
+					var owner string
+					if tx.QueryRow(`SELECT name FROM persons WHERE id=?`, personID).Scan(&owner) == nil {
+						recipient.Owner = NormalizeAccountName(owner)
+					}
+				}
 			}
 		}
 		out = append(out, recipient)

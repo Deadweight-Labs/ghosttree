@@ -234,7 +234,7 @@ func (s *Store) PreviewOrgInvitation(code string, enforced, viaIdP bool) (Invite
 		WHERE i.code_hash = ? AND i.accepted_at = '' AND i.revoked_at = '' AND i.expires_at > ?
 		  AND (i.project_id = 0 OR EXISTS (SELECT 1 FROM projects pr WHERE pr.id = i.project_id AND pr.org_id = i.org_id
 		       AND i.project_role IN (?, ?) AND (i.project_role <> ? OR ?)))
-		  AND (i.email = '' OR ?)`,
+		  AND i.role = 'member' AND (i.email = '' OR ?)`,
 		OrgOwner, hashToken(code), now(), RoleMember, RoleGuest, RoleGuest, enforced, viaIdP).Scan(&p.Inviter, &p.Org, &p.Project, &p.Role, &p.ExpiresAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return InvitePreview{}, ErrCodeInvalid

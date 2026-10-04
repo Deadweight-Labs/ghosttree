@@ -160,7 +160,7 @@ func TestGuestWebViewsShowTypedMentionsNotDeliveredOnes(t *testing.T) {
 	inPage, inOverview := build(true)
 	outPage, outOverview := build(false)
 	for name, page := range map[string]string{"room/in": inPage, "room/out": outPage} {
-		if !strings.Contains(page, "Asks Unknown participant") {
+		if !strings.Contains(page, "Asks Claude") {
 			t.Errorf("%s: the guest does not read back what it typed", name)
 		}
 	}
@@ -444,13 +444,13 @@ func TestCoordCursorCarriesItsTime(t *testing.T) {
 func TestAttentionSenderLabelFallsBackToTheSenderID(t *testing.T) {
 	views := []coordAttentionView{{ID: 1}, {ID: 2}, {ID: 3}}
 	items := []store.AttentionItem{
-		{ID: 1, SenderID: "claude:abc"},                       // kein Etikett, Konto verborgen
+		{ID: 1, SenderID: "claude:abc"},                       // kein Etikett, Konto verborgen: nur das Werkzeug
 		{ID: 2, SenderID: "claude:def", AuthorID: "person:9"}, // Konto mit Etikett
 		{ID: 3, SenderID: "claude:ghi"},                       // Etikett vorhanden
 	}
 	labels := map[string]string{"person:9": "Nine", "claude:ghi": "Ghi"}
 	annotateCoordAttention(views, items, coordSidebarView{}, labels)
-	for i, want := range []string{"claude:abc", "Nine", "Ghi"} {
+	for i, want := range []string{"Claude", "Nine", "Ghi"} {
 		if views[i].SenderLabel != want {
 			t.Errorf("view %d label %q, want %q", i, views[i].SenderLabel, want)
 		}
