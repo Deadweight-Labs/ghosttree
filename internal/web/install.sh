@@ -4,7 +4,13 @@
 #
 # Downloads the ctx archive for this machine, checks its SHA-256 against
 # checksums.txt, and installs ctx into ~/.local/bin ($XDG_BIN_HOME if set).
-# No sudo, no tokens, no telemetry. Arguments after "--" go to `ctx join`.
+# No sudo, no tokens, no telemetry. Arguments after "--" go to `ctx join`,
+# except two that belong to this script:
+#   --modify-path     append the PATH line to your shell profile if ctx's
+#                     directory is not on PATH (never edits existing lines)
+#   --no-modify-path  never touch a shell profile and do not ask
+# Without either, a terminal gets the question (default: no); a pipe without a
+# terminal only gets the instructions.
 #
 # GHOSTTREE_DOWNLOAD_BASE replaces the download location (default: the
 # /dist/ path of the server this script came from), e.g. a release URL.
@@ -15,12 +21,67 @@
 main() {
   set -eu
 
+  modify=ask
+  for a in "$@"; do
+    shift
+    case "$a" in
+      --modify-path) modify=yes ;;
+      --no-modify-path) modify=no ;;
+      *) set -- "$@" "$a" ;;
+    esac
+  done
+
   server='__GHOSTTREE_SERVER__'
   base=${GHOSTTREE_DOWNLOAD_BASE:-$server/dist}
   base=${base%/}
 
   say() { printf '%s\n' "$*"; }
   die() { printf 'ghosttree install: %s\n' "$*" >&2; exit 1; }
+
+  # The profile a new interactive shell reads for this user's shell.
+  profile_for() {
+    case "${SHELL:-}" in
+      */zsh) printf '%s\n' "$HOME/.zshrc" ;;
+      */bash)
+        if [ "$os" = darwin ]; then printf '%s\n' "$HOME/.bash_profile"; else printf '%s\n' "$HOME/.bashrc"; fi ;;
+      *) printf '%s\n' "$HOME/.profile" ;;
+    esac
+  }
+
+  # ctx's directory is not on PATH: say what that means and how to fix it. A
+  # profile is only appended to on request, and never rewritten.
+  path_help() {
+    dir=$1
+    # A directory with a quote, dollar sign, backtick, backslash or bang would
+    # turn the line into something else when the shell reads the profile; those
+    # get single quotes with every ' written as '\''.
+    case "$dir" in
+      *[\"\$\`\\\'!]*) line="export PATH='$(printf '%s' "$dir" | sed "s/'/'\\\\''/g")':\"\$PATH\"" ;;
+      *) line="export PATH=\"$dir:\$PATH\"" ;;
+    esac
+    profile=$(profile_for)
+    say ""
+    say "Note: $dir is not on your PATH, so typing 'ctx' will not work in a new terminal yet."
+    say "The hooks and the MCP server that ctx sets up use its full path and work regardless."
+    if [ "$modify" = ask ] && ( : </dev/tty ) 2>/dev/null; then
+      printf 'Add %s to %s? [y/N] ' "$line" "$profile" >/dev/tty
+      reply=
+      read -r reply </dev/tty || reply=
+      case "$reply" in y | Y | yes | YES) modify=yes ;; *) modify=no ;; esac
+    fi
+    if [ "$modify" = yes ]; then
+      if [ -f "$profile" ] && grep -F -e "$dir" "$profile" >/dev/null 2>&1; then
+        say "$profile already mentions $dir; left unchanged."
+      else
+        { printf '\n# added by the ghosttree installer\n%s\n' "$line"; } >>"$profile" || die "cannot write $profile"
+        say "Appended the PATH line to $profile. Open a new terminal to use it."
+      fi
+    else
+      say "To fix it, add this line to $profile (or run the installer again with --modify-path):"
+      say "  $line"
+    fi
+    say ""
+  }
 
   case "$(uname -s)" in
     Linux) os=linux ;;
@@ -110,6 +171,13 @@ main() {
   tar -xzf "$tmp/$archive" -C "$tmp/x" ctx || die "cannot unpack $archive"
 
   bindir=${XDG_BIN_HOME:-$HOME/.local/bin}
+  case "$bindir" in
+    /*) ;;
+    *) die "$bindir is not an absolute path; set XDG_BIN_HOME to one" ;;
+  esac
+  case "$bindir" in
+    *[[:cntrl:]]*) die "the install directory contains a control character; refusing it" ;;
+  esac
   mkdir -p "$bindir" || die "cannot create $bindir"
   if [ -L "$tmp/x/ctx" ] || [ ! -f "$tmp/x/ctx" ]; then
     die "the archive's ctx is not a regular file; nothing was installed"
@@ -123,7 +191,7 @@ main() {
 
   case ":$PATH:" in
     *":$bindir:"*) ;;
-    *) say "Note: $bindir is not on your PATH. Add this to your shell profile: export PATH=\"$bindir:\$PATH\"" ;;
+    *) path_help "$bindir" ;;
   esac
 
   if [ "$#" -gt 0 ]; then

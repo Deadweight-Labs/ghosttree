@@ -172,9 +172,9 @@ func (h Harness) DeliversContext(c Channel) bool { return slices.Contains(h.Deli
 func (h Harness) hookCommandFor(c Channel) (event, command, matcher string, ok bool) {
 	switch c {
 	case ChannelSessionStart:
-		return "SessionStart", hookCommand + " --harness " + h.Name, "", true
+		return "SessionStart", withCtx(hookCommand) + " --harness " + h.Name, "", true
 	case ChannelUserPrompt:
-		return "UserPromptSubmit", promptHookCommand + " --harness " + h.Name, "", true
+		return "UserPromptSubmit", withCtx(promptHookCommand) + " --harness " + h.Name, "", true
 	case ChannelPreToolUse:
 		// Codex bekommt bewusst KEINEN Matcher. `exec` stand hier, weil das
 		// Rollout-Protokoll Lesezugriffe so bündelt — nur filtert Codex damit
@@ -191,11 +191,11 @@ func (h Harness) hookCommandFor(c Channel) (event, command, matcher string, ok b
 		// Nutzdaten, ob ein Pfad vorkommt, und schweigt sonst — die Filterung
 		// sitzt damit dort, wo sie überprüfbar ist.
 		if h.Name == "codex" {
-			return "PreToolUse", preToolHookCommand + " --harness " + h.Name, "", true
+			return "PreToolUse", withCtx(preToolHookCommand) + " --harness " + h.Name, "", true
 		}
-		return "PreToolUse", preToolHookCommand + " --harness " + h.Name, "Read|Edit|Write|NotebookEdit", true
+		return "PreToolUse", withCtx(preToolHookCommand) + " --harness " + h.Name, "Read|Edit|Write|NotebookEdit", true
 	case ChannelPauseGate:
-		return "PreToolUse", pauseGateHookCommand + " --harness " + h.Name, "", true
+		return "PreToolUse", withCtx(pauseGateHookCommand) + " --harness " + h.Name, "", true
 	}
 	return "", "", "", false
 }

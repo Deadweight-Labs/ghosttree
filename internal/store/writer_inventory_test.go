@@ -92,6 +92,7 @@ var writerMethodClasses = map[string]string{
 	"ReleaseMachine":                "write",
 	"TransferMachine":               "write",
 	"MachineClaimable":              "read",
+	"ResolveMachineName":            "read",
 	"ListMachines":                  "read",
 	"ListSessionsOwned":             "read",
 	"ListSessionsVisible":           "read",
