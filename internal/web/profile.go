@@ -11,6 +11,7 @@ import (
 type profileView struct {
 	Name   string
 	Notice string
+	Locked bool // guests cannot rename themselves
 }
 
 // profilePage shows the account's display name and, in an interactive session,
@@ -27,7 +28,7 @@ func (a *app) renderProfile(w http.ResponseWriter, r *http.Request, status int, 
 		http.Error(w, msg("adm.load_failed"), http.StatusInternalServerError)
 		return
 	}
-	v := profileView{Name: acct.Name}
+	v := profileView{Name: acct.Name, Locked: a.store.NameLocked(me.ID)}
 	if typed != "" {
 		v.Name = typed
 	}
@@ -51,6 +52,10 @@ func (a *app) profileSave(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/ui/profile?notice=saved", http.StatusSeeOther)
 	case errors.Is(err, store.ErrAccountNameTaken):
 		a.renderProfile(w, r, http.StatusConflict, r.FormValue("name"), msg("profile.err.taken"))
+	case errors.Is(err, store.ErrNameRateLimited):
+		a.renderProfile(w, r, http.StatusTooManyRequests, "", msg("profile.err.rate"))
+	case errors.Is(err, store.ErrNameNotAllowed):
+		a.renderProfile(w, r, http.StatusForbidden, "", msg("profile.err.locked"))
 	case errors.Is(err, store.ErrInvalidInput):
 		a.renderProfile(w, r, http.StatusBadRequest, r.FormValue("name"), msg("profile.err.invalid"))
 	default:

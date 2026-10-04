@@ -886,8 +886,10 @@ func (s *Store) CreateInvitation(actorPrincipal string, orgID int64, email, role
 	if role == "" {
 		role = OrgMember
 	}
-	if role != OrgOwner && role != OrgMember {
-		return "", Invitation{}, fmt.Errorf("%w: role must be owner or member", ErrInvalidInput)
+	// A link is a bearer secret: it never carries ownership. Owners are made
+	// by an owner in the member list.
+	if role != OrgMember {
+		return "", Invitation{}, fmt.Errorf("%w: an invitation link grants the member role only", ErrInvalidInput)
 	}
 	if ttl <= 0 {
 		ttl = DefaultInvitationTTL
@@ -1039,6 +1041,11 @@ func acceptInvitationTx(tx execQueryer, code string, account int64, verifiedEmai
 	if accepted != "" || revoked != "" || expires <= now() {
 		return Org{}, ErrCodeInvalid
 	}
+	// Ein Link vergibt nie Ownership, auch nicht aus einer Zeit, in der das
+	// noch ging.
+	if role != OrgMember {
+		return Org{}, ErrCodeInvalid
+	}
 	// Wer eingeladen hat, muss noch Owner sein: ein entzogenes Recht entwertet
 	// offene Einladungen.
 	if orgRoleTx(tx, orgID, inviter) != OrgOwner {
@@ -1154,7 +1161,7 @@ func (s *Store) acceptInvitation(acct int64, code string) (Org, error) {
 // self (0: keines) zählt dabei nicht als Kollision mit sich selbst.
 func inviteName(tx queryer, wanted string, self int64) (string, error) {
 	base := NormalizeAccountName(wanted)
-	if base == "" {
+	if base == "" || MixedScriptName(base) {
 		base = "user"
 	}
 	if r := []rune(base); len(r) > 60 {
@@ -1180,7 +1187,7 @@ func createInvitedAccountTx(tx execQueryer, name, email, code, source string, en
 	if !invitationExists(tx, code) {
 		return 0, ErrCodeInvalid
 	}
-	if NormalizeAccountName(name) == "" {
+	if n := NormalizeAccountName(name); n == "" || MixedScriptName(n) {
 		source = ""
 	}
 	name, err := inviteName(tx, name, 0)

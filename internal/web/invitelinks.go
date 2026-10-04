@@ -8,6 +8,10 @@ import (
 // maxInviteLinks bounds the memory held for links: the oldest go first.
 const maxInviteLinks = 500
 
+// maxInviteLinksPerAccount keeps one creator from pushing everybody else's
+// links out of memory: past it, that creator's own oldest link goes first.
+const maxInviteLinksPerAccount = 50
+
 type inviteLink struct {
 	account string
 	code    string
@@ -39,6 +43,14 @@ func (l *inviteLinks) put(id int64, account, code string, project bool, until ti
 		l.order = append(l.order, id)
 	}
 	l.links[id] = inviteLink{account: account, code: code, project: project, until: until}
+	for l.countLocked(account) > maxInviteLinksPerAccount {
+		for _, old := range l.order {
+			if l.links[old].account == account {
+				l.removeLocked(old)
+				break
+			}
+		}
+	}
 	for len(l.order) > maxInviteLinks {
 		delete(l.links, l.order[0])
 		l.order = l.order[1:]
@@ -64,6 +76,16 @@ func (l *inviteLinks) drop(id int64) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.removeLocked(id)
+}
+
+func (l *inviteLinks) countLocked(account string) int {
+	n := 0
+	for _, link := range l.links {
+		if link.account == account {
+			n++
+		}
+	}
+	return n
 }
 
 func (l *inviteLinks) removeLocked(id int64) {

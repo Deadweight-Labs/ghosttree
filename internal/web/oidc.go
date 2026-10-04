@@ -201,6 +201,10 @@ type oidcClient struct {
 	provider *oidc.Provider
 	// createPrompt: die Discovery nennt prompt=create.
 	createPrompt bool
+	// Negativ-Cache und laufender Abruf der Discovery (beide unter mu).
+	failErr   error
+	failUntil time.Time
+	flight    *discoveryFlight
 }
 
 func newOIDCClient(cfg OIDCConfig) (*oidcClient, error) {
@@ -219,19 +223,71 @@ func (c *oidcClient) context(ctx context.Context) context.Context {
 	return oidc.ClientContext(ctx, c.http)
 }
 
+// discoveryFailTTL: so lange merkt sich der Client einen gescheiterten
+// Discovery-Abruf, statt den IdP bei jeder Anfrage erneut zu belasten.
+const discoveryFailTTL = 30 * time.Second
+
+// discoveryFlight ist ein laufender Discovery-Abruf, auf den andere Anfragen
+// warten (ohne Lock) statt einen eigenen zu starten.
+type discoveryFlight struct{ done chan struct{} }
+
 // ready entdeckt den Anbieter beim ersten Gebrauch statt beim Start, damit ein
 // nicht erreichbarer IdP den Server nicht am Hochfahren hindert (CLI-Tokens und
-// Login-Links bleiben dann nutzbar).
+// Login-Links bleiben dann nutzbar). Der Abruf läuft außerhalb des Locks und
+// nur einmal gleichzeitig; wer währenddessen kommt, wartet auf sein eigenes
+// Context-Ende. Ein Fehler wird kurz gemerkt (Negativ-Cache).
 func (c *oidcClient) ready(ctx context.Context) (*oauth2.Config, *oidc.IDTokenVerifier, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.oauth != nil {
-		return c.oauth, c.verifier, nil
+	for {
+		c.mu.Lock()
+		if c.oauth != nil {
+			defer c.mu.Unlock()
+			return c.oauth, c.verifier, nil
+		}
+		if c.failErr != nil && c.now().Before(c.failUntil) {
+			err := c.failErr
+			c.mu.Unlock()
+			return nil, nil, err
+		}
+		if f := c.flight; f != nil {
+			c.mu.Unlock()
+			select {
+			case <-f.done:
+				continue
+			case <-ctx.Done():
+				return nil, nil, ctx.Err()
+			}
+		}
+		f := &discoveryFlight{done: make(chan struct{})}
+		c.flight = f
+		c.mu.Unlock()
+
+		// Ein Abbruch des Anfragenden darf den gemeinsamen Abruf nicht vergiften.
+		provider, err := oidc.NewProvider(c.context(context.WithoutCancel(ctx)), c.cfg.Issuer)
+		var meta struct {
+			Prompts []string `json:"prompt_values_supported"`
+		}
+		if err == nil {
+			_ = provider.Claims(&meta)
+		}
+
+		c.mu.Lock()
+		c.flight = nil
+		if err != nil {
+			c.failErr, c.failUntil = err, c.now().Add(discoveryFailTTL)
+		} else {
+			c.failErr = nil
+			c.install(provider, slices.Contains(meta.Prompts, "create"))
+		}
+		close(f.done)
+		c.mu.Unlock()
+		if err != nil {
+			return nil, nil, err
+		}
 	}
-	provider, err := oidc.NewProvider(c.context(ctx), c.cfg.Issuer)
-	if err != nil {
-		return nil, nil, err
-	}
+}
+
+// install setzt die Ergebnisse der Discovery; c.mu ist gehalten.
+func (c *oidcClient) install(provider *oidc.Provider, createPrompt bool) {
 	endpoint := provider.Endpoint()
 	// Feste Authentifizierungsart: die automatische Erkennung wiederholte den
 	// Austausch bei jedem Fehler mit der anderen Art, und ein
@@ -248,13 +304,7 @@ func (c *oidcClient) ready(ctx context.Context) (*oauth2.Config, *oidc.IDTokenVe
 	}
 	c.verifier = provider.Verifier(&oidc.Config{ClientID: c.cfg.ClientID})
 	c.provider = provider
-	var meta struct {
-		Prompts []string `json:"prompt_values_supported"`
-	}
-	if provider.Claims(&meta) == nil {
-		c.createPrompt = slices.Contains(meta.Prompts, "create")
-	}
-	return c.oauth, c.verifier, nil
+	c.createPrompt = createPrompt
 }
 
 // signupOffered sagt, ob "Konto anlegen" angeboten wird. Ein nicht erreichbarer
@@ -406,7 +456,9 @@ func (a *app) beginOIDC(w http.ResponseWriter, r *http.Request, code string) {
 	opts := []oauth2.AuthCodeOption{oauth2.S256ChallengeOption(verifier), oidc.Nonce(nonce)}
 	// Nur der Weg "Konto anlegen" der Einladungsseite schickt prompt=create, und
 	// nur, wo er angeboten wird; ein von Hand gesetztes Feld ändert sonst nichts.
-	if r.FormValue("signup") == "1" && a.oidc.signupOffered(r.Context()) {
+	// Und nur mit einem gültigen Einladungscode: ohne den gäbe der Server die
+	// Registrierung beim IdP jedem frei.
+	if r.FormValue("signup") == "1" && a.store.CodeKindFor(code) == store.CodeInvitation && a.oidc.signupOffered(r.Context()) {
 		opts = append(opts, oauth2.SetAuthURLParam("prompt", "create"))
 	}
 	target := oauthCfg.AuthCodeURL(state, opts...)

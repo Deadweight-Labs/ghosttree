@@ -24,7 +24,7 @@
 <button class="ov-btn ov-btn-primary clay">{{t "adm.invite.create"}}</button></form>
 {{else}}<div class="ad-form"><h3>{{t "adm.invite.title"}}</h3><p class="ov-meta">{{t "adm.projects.empty_hint"}}</p><a class="ov-btn ov-btn-primary clay" href="/ui/overview?connect=1">{{t "adm.projects.connect"}}</a></div>{{end}}
 <details class="ad-more"><summary>{{t "adm.invite.org_only"}}</summary><form class="ad-form" method="post" action="/ui/orgs/invite"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><input type="hidden" name="org" value="{{.Orgs.Selected.Slug}}">
-<div class="ad-fields"><label class="ad-f"><span>{{t "adm.invite.role"}}</span><select class="clay-select" name="role"><option value="member" selected>{{t "role.member"}}</option><option value="owner">{{t "role.owner"}}</option></select></label>{{template "orgs_days_field" .}}</div>
+<div class="ad-fields"><label class="ad-f"><span>{{t "adm.invite.role"}}</span><select class="clay-select" name="role"><option value="member" selected>{{t "role.member"}}</option></select></label>{{template "orgs_days_field" .}}</div>
 <button class="ov-btn clay">{{t "adm.invite.create_org"}}</button></form></details>
 </div>{{end}}
 {{if .Orgs.Invites}}<ul class="ov-list ad-deck clay">{{range .Orgs.Invites}}<li class="ad-row ad-invite" id="invite-{{.ID}}"><span class="ov-dot is-{{.Status}}" title="{{lbl "invite" .Status}}"></span>

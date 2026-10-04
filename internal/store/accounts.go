@@ -609,7 +609,7 @@ func createBootstrapAccount(tx *sql.Tx, name, email, source string) (int64, erro
 		return 0, ErrCodeInvalid
 	}
 	name = NormalizeAccountName(name)
-	if name == "" {
+	if name == "" || MixedScriptName(name) {
 		name, source = "admin", ""
 	}
 	res, err := tx.Exec(`INSERT INTO persons(name, token_hash, created_at, email, is_admin, name_source) VALUES(?,?,?,?,1,?)`,

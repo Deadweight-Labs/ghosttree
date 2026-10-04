@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 )
 
@@ -35,7 +36,7 @@ func isFallbackAccountName(name string) bool {
 // gesetzt hat. Gibt den neuen Namen zurück, sonst "".
 func syncIdPNameTx(tx *sql.Tx, id int64, current, offered string) (string, error) {
 	want := NormalizeAccountName(offered)
-	if want == "" || want == current {
+	if want == "" || want == current || MixedScriptName(want) {
 		return "", nil
 	}
 	var source string
@@ -52,10 +53,44 @@ func syncIdPNameTx(tx *sql.Tx, id int64, current, offered string) (string, error
 	if name == current {
 		return "", nil
 	}
+	if err := recordNameChangeTx(tx, id, current, name, nameSourceIdP); err != nil {
+		return "", err
+	}
 	if _, err := tx.Exec(`UPDATE persons SET name=?, name_source=? WHERE id=?`, name, nameSourceIdP, id); err != nil {
 		return "", err
 	}
 	return name, nil
+}
+
+// Grenzen für selbst gewählte Namen: höchstens maxNameChanges je Fenster.
+const (
+	maxNameChanges   = 3
+	nameChangeWindow = 24 * time.Hour
+)
+
+// recordNameChangeTx schreibt jeden Namenswechsel in das Audit-Protokoll
+// person_name_history (nur anhängen). Der alte Name bleibt für andere Konten
+// gesperrt; Platzhalter ("user", "admin") zeichnen niemanden aus und
+// reservieren nichts.
+func recordNameChangeTx(tx *sql.Tx, id int64, old, new, source string) error {
+	key := ""
+	if !isFallbackAccountName(old) {
+		key = accountNameKey(old)
+	}
+	_, err := tx.Exec(`INSERT INTO person_name_history(person_id, old_name, old_key, new_name, source, created_at) VALUES(?,?,?,?,?,?)`,
+		id, old, key, new, source, now())
+	return err
+}
+
+// accountIsGuestOnlyTx: das Konto hat eine Gast-Rolle und nirgends mehr, ist
+// weder Instanz-Admin noch Org-Owner.
+func accountIsGuestOnlyTx(tx *sql.Tx, id int64) (bool, error) {
+	var guest bool
+	err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM project_members WHERE account_id=? AND role='guest')
+		AND NOT EXISTS(SELECT 1 FROM project_members WHERE account_id=? AND role<>'guest')
+		AND NOT EXISTS(SELECT 1 FROM org_members WHERE account_id=? AND role='owner')
+		AND NOT EXISTS(SELECT 1 FROM persons WHERE id=? AND is_admin=1)`, id, id, id, id).Scan(&guest)
+	return guest, err
 }
 
 // SetOwnName ändert den Anzeigenamen eines Kontos auf Wunsch der Person. Der
@@ -80,18 +115,40 @@ func (s *Store) SetOwnName(accountID, name string) (Account, error) {
 	if !strings.ContainsFunc(name, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }) {
 		return Account{}, fmt.Errorf("%w: a name needs a letter or digit", ErrInvalidInput)
 	}
+	if MixedScriptName(name) {
+		return Account{}, fmt.Errorf("%w: a name uses one script (no mixing of, say, Latin and Cyrillic letters)", ErrInvalidInput)
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return Account{}, err
 	}
 	defer tx.Rollback()
-	if _, err := accountState(tx, id); err != nil {
+	cur, err := accountState(tx, id)
+	if err != nil {
 		return Account{}, err
+	}
+	if guest, err := accountIsGuestOnlyTx(tx, id); err != nil {
+		return Account{}, err
+	} else if guest {
+		return Account{}, ErrNameNotAllowed
 	}
 	if taken, err := accountNameTakenByOtherTx(tx, name, id); err != nil {
 		return Account{}, err
 	} else if taken {
 		return Account{}, ErrAccountNameTaken
+	}
+	if name != cur.Name {
+		var recent int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM person_name_history WHERE person_id=? AND source=? AND created_at>?`,
+			id, nameSourceUser, time.Now().UTC().Add(-nameChangeWindow).Format(time.RFC3339)).Scan(&recent); err != nil {
+			return Account{}, err
+		}
+		if recent >= maxNameChanges {
+			return Account{}, ErrNameRateLimited
+		}
+		if err := recordNameChangeTx(tx, id, cur.Name, name, nameSourceUser); err != nil {
+			return Account{}, err
+		}
 	}
 	if _, err := tx.Exec(`UPDATE persons SET name=?, name_source=? WHERE id=?`, name, nameSourceUser, id); err != nil {
 		return Account{}, err
@@ -101,4 +158,22 @@ func (s *Store) SetOwnName(accountID, name string) (Account, error) {
 		return Account{}, err
 	}
 	return a, tx.Commit()
+}
+
+// NameLocked sagt, ob das Konto seinen Namen nicht selbst ändern darf (Gast).
+func (s *Store) NameLocked(accountID string) bool {
+	if s.reader != nil {
+		return s.reader.NameLocked(accountID)
+	}
+	id, ok := accountNumericID(accountID)
+	if !ok {
+		return false
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return false
+	}
+	defer tx.Rollback()
+	locked, err := accountIsGuestOnlyTx(tx, id)
+	return err == nil && locked
 }

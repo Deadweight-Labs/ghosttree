@@ -116,13 +116,12 @@ func TestJoinEveryInvalidVariantIsByteIdentical(t *testing.T) {
 	if _, err := st.MoveProject("person:1", "github.com/alpha/moving", other.Slug); err != nil {
 		t.Fatal(err)
 	}
-	ownerInv, _, _ := st.CreateInvitation("person:1", org.ID, "", store.OrgOwner, 0)
 	orgWide, _, _ := st.CreateInvitation("person:1", org.ID, "", store.OrgMember, 0)
 	emailBound, _, _ := st.CreateInvitation("person:1", org.ID, "x@example.test", store.OrgMember, 0)
 	time.Sleep(1100 * time.Millisecond)
 
 	secrets := map[string]string{"expired": short, "used": used, "revoked": revoked, "demoted inviter": demoted,
-		"moved project": moved, "org wide owner": ownerInv, "org wide member": orgWide, "email bound": emailBound}
+		"moved project": moved, "org wide member": orgWide, "email bound": emailBound}
 	cases := map[string]string{
 		"unknown": "/join/" + strings.Repeat("ab", 32), "short": "/join/abc", "upper case": "/join/" + strings.Repeat("AB", 32),
 		"non hex": "/join/" + strings.Repeat("zz", 32), "too long": "/join/" + strings.Repeat("ab", 200), "empty": "/join/",

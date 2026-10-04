@@ -112,6 +112,16 @@ CREATE TRIGGER IF NOT EXISTS role_events_no_update BEFORE UPDATE ON role_events
   BEGIN SELECT RAISE(ABORT, 'role_events is append-only'); END;
 CREATE TRIGGER IF NOT EXISTS role_events_no_delete BEFORE DELETE ON role_events
   BEGIN SELECT RAISE(ABORT, 'role_events is append-only'); END;
+CREATE TABLE IF NOT EXISTS person_name_history(
+  id INTEGER PRIMARY KEY, person_id INTEGER NOT NULL,
+  old_name TEXT NOT NULL, old_key TEXT NOT NULL, new_name TEXT NOT NULL,
+  source TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS person_name_history_key ON person_name_history(old_key);
+CREATE INDEX IF NOT EXISTS person_name_history_person ON person_name_history(person_id, created_at);
+CREATE TRIGGER IF NOT EXISTS person_name_history_no_update BEFORE UPDATE ON person_name_history
+  BEGIN SELECT RAISE(ABORT, 'person_name_history is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS person_name_history_no_delete BEFORE DELETE ON person_name_history
+  BEGIN SELECT RAISE(ABORT, 'person_name_history is append-only'); END;
 CREATE TABLE IF NOT EXISTS context_snapshot_access(
   person_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE RESTRICT,
   project TEXT NOT NULL,

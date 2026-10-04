@@ -60,17 +60,6 @@ func TestInvitedNamesAreDisambiguated(t *testing.T) {
 	}
 }
 
-// Latin und Kyrillisch in einem Wort bleibt ein bekanntes Restrisiko (keine
-// Skeleton-Bibliothek): das Cyrillic-Р ist eine andere Zeichenfolge als P und
-// kollidiert nicht. Der Test hält das fest, damit es kein Zufall bleibt.
-func TestMixedScriptNameIsAKnownResidualRisk(t *testing.T) {
-	st := orgStore(t, "Peter")
-	taken, err := accountNameTakenTx(st.db, "Рeter")
-	if err != nil || taken {
-		t.Fatalf("documented residual risk changed: taken=%v err=%v", taken, err)
-	}
-}
-
 func TestNormalizeAccountNameIsIdempotent(t *testing.T) {
 	for _, in := range []string{
 		"e\u200d\u0301x", "Ro\u0334bin", "Ro\u0338bin", "a\u0301\u0302\u0303\u0304b", "\u0301\u200d\u0301a",

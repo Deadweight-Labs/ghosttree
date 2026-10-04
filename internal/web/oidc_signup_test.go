@@ -121,3 +121,21 @@ func TestLoginPagesSayAnInvitationLinkCreatesAnAccount(t *testing.T) {
 		}
 	}
 }
+
+func TestSignupPromptNeedsAValidInvitationCode(t *testing.T) {
+	env, valid := signupEnv(t, []string{"create"}, "1") // offered, even forced
+	for name, code := range map[string]string{
+		"no code": "", "unknown code": strings.Repeat("ab", 32), "garbage": "not-a-code",
+	} {
+		env.idp.lastPrompt = "x"
+		env.startFlowForm(t, newBrowser(t), "/ui/login/oidc", url.Values{"code": {code}, "signup": {"1"}})
+		if env.idp.lastPrompt != "" {
+			t.Errorf("%s: prompt %q sent", name, env.idp.lastPrompt)
+		}
+	}
+	env.idp.lastPrompt = ""
+	env.startFlowForm(t, newBrowser(t), "/ui/login/oidc", url.Values{"code": {valid}, "join": {"1"}, "signup": {"1"}})
+	if env.idp.lastPrompt != "create" {
+		t.Fatalf("valid code: prompt %q", env.idp.lastPrompt)
+	}
+}
