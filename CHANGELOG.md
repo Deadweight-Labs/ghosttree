@@ -6,6 +6,17 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Added: messages reach agents and people by @name. Write `@name` in a room
+  message or thread reply (a display name, a first name, a short name such as
+  claude-anna, or an unambiguous start of one) and the server resolves it
+  against the room; a name that fits several is refused with the candidates
+  for members, and silently ignored for guests so nothing reveals who is in the
+  room. Claude Code agents get new messages for them once each through the
+  prompt hook and, at most once a minute, a PostToolUse hook; the inbox marks
+  what is addressed to the agent and shows the sender's role at the time of
+  sending. The project rule text tells agents how to answer. The room's message
+  box is wide and multi-line and completes @names from an external script. A
+  guest calling coord_peers now gets a plain explanation instead of an error.
 - Changed: owners, leads and members may write in the project rooms of their
   project through their role, without an agent of their own in the room (REQ-437).
   Messages, replies, threads and standing instructions work from the browser

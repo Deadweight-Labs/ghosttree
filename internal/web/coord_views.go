@@ -273,6 +273,9 @@ type coordParticipantView struct {
 	// Presence gibt. Ein Agent ohne Beleg zeigt "unbekannt (keine Beobachtung)".
 	ReachabilityText, WorkStateText string
 	Manager, Current                bool
+	// Handle is what the composer completes after @ for this person or agent;
+	// empty when the viewer may not address them by name (a guest).
+	Handle string
 	// Role ist die Projektrolle (owner, lead, member, guest), leer außerhalb
 	// eines Projektraums; CanReview das Prüfer-Flag.
 	Role      string
