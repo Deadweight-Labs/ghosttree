@@ -272,6 +272,7 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 	if people, perr := access.RoomPeople(room); perr == nil {
 		detail.Participants = addRoomPeople(detail.Participants, people, current)
 	}
+	applyParticipantHandles(access, activeRoom.Key, detail.Participants)
 	applyParticipantRoles(a.store, activeRoom.Key, detail.Participants)
 	a.applyParticipantControls(r, activeRoom.Key, detail.Participants)
 	applyMessageRoles(a.store, activeRoom.Key, current.ID, detail.Messages, presentations)
@@ -900,4 +901,19 @@ func (a *app) coordLeaveGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/ui/coord", http.StatusSeeOther)
+}
+
+// applyParticipantHandles gives each participant the @name the composer
+// completes. A failure leaves the composer without suggestions; typing a name
+// by hand keeps working.
+func applyParticipantHandles(access store.CoordAccess, roomKey string, participants []coordParticipantView) {
+	handles, err := access.MentionHandles(roomKey)
+	if err != nil {
+		return
+	}
+	for i := range participants {
+		if !participants[i].Current {
+			participants[i].Handle = handles[participants[i].ID]
+		}
+	}
 }
