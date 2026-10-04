@@ -34,17 +34,17 @@ func TestAgentsPageShowsTheViewersOwnAgentWithoutAProjectRole(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, page := fetchPage(t, nora, e.Base+"/ui/agents")
-	if !strings.Contains(page, "Claude on nora-laptop") {
+	if !strings.Contains(page, "Claude · nora · nora-laptop") {
 		t.Fatalf("own agent missing or unreadable: %s", page)
 	}
 	if !strings.Contains(page, `title="claude:nora-laptop:aaaaaaaa-1111"`) {
 		t.Error("the raw ID should be in a title")
 	}
-	if strings.Contains(page, "alices-box") || strings.Contains(page, "CLI on") {
+	if strings.Contains(page, "alices-box") || strings.Contains(page, "CLI ·") {
 		t.Error("somebody else's agent is listed")
 	}
 	_, ov := fetchPage(t, nora, e.Base+"/ui/overview")
-	if !strings.Contains(ov, "Claude on nora-laptop") {
+	if !strings.Contains(ov, "Claude · nora · nora-laptop") {
 		t.Error("the overview lacks the own agent")
 	}
 }
@@ -54,11 +54,20 @@ func TestAgentNamesAreReadable(t *testing.T) {
 		agent store.CoordAgent
 		want  string
 	}{
-		{store.CoordAgent{ExternalID: "claude:freund-laptop:aaaaaaaa-1111", Provider: "claude", DisplayName: "claude:freund-laptop:aaaaaaaa-1111"}, "Claude on freund-laptop"},
-		{store.CoordAgent{ExternalID: "cli:freund-laptop", Provider: "ctx-cli", DisplayName: "cli:freund-laptop"}, "CLI on freund-laptop"},
-		{store.CoordAgent{ExternalID: "claude:h:uuid", Provider: "claude", DisplayName: "claude"}, "Claude on h"},
-		{store.CoordAgent{ExternalID: "codex:h:uuid", Provider: "codex"}, "Codex on h"},
-		{store.CoordAgent{ExternalID: "claude:h:uuid", Provider: "claude", DisplayName: "reviewer-bot"}, "reviewer-bot"},
+		{store.CoordAgent{Owner: "anna", ExternalID: "claude:freund-laptop:aaaaaaaa-1111", Provider: "claude", DisplayName: "claude:freund-laptop:aaaaaaaa-1111"}, "Claude · anna · freund-laptop"},
+		{store.CoordAgent{Owner: "anna", ExternalID: "cli:freund-laptop", Provider: "ctx-cli", DisplayName: "cli:freund-laptop"}, "CLI · anna · freund-laptop"},
+		{store.CoordAgent{Owner: "anna", ExternalID: "claude:h:uuid", Provider: "claude", DisplayName: "claude"}, "Claude · anna · h"},
+		{store.CoordAgent{Owner: "anna", ExternalID: "codex:h:uuid", Provider: "codex"}, "Codex · anna · h"},
+		{store.CoordAgent{Owner: "anna", ExternalID: "claude:h:uuid", Provider: "claude", DisplayName: "reviewer-bot"}, "reviewer-bot"},
+		// Session UUIDs are no names, spelled with or without a prefix.
+		{store.CoordAgent{Owner: "Robin", ExternalID: "11111111-aaaa-4bbb-8ccc-000000000001", Provider: "claude", DisplayName: "11111111-aaaa-4bbb-8ccc-000000000001"}, "Claude · Robin"},
+		{store.CoordAgent{Owner: "Robin", ExternalID: "x", Provider: "claude", DisplayName: "11111111-aaaa-4bbb-8ccc-000000000001"}, "Claude · Robin"},
+		{store.CoordAgent{ExternalID: "claude:5b1a2c3d", Provider: "unknown", DisplayName: "claude:5b1a2c3d"}, "Claude"},
+		{store.CoordAgent{Owner: "Robin", ExternalID: "derived:mainex:4242", Provider: "unidentified-harness", DisplayName: "derived:mainex:4242"}, "Agent · Robin · mainex"},
+		{store.CoordAgent{Owner: "Robin", ExternalID: "abc", Provider: "claude", DisplayName: "0123456789abcdef0123456789"}, "Claude · Robin"},
+		{store.CoordAgent{Owner: "Robin", ExternalID: "abc", Provider: "weird", DisplayName: ""}, "Weird · Robin"},
+		// A name chosen by a person stays, with or without an owner.
+		{store.CoordAgent{Owner: "Robin", ExternalID: "abc", Provider: "claude", DisplayName: "Docs reviewer"}, "Docs reviewer"},
 	}
 	for _, c := range cases {
 		if got := peerName(c.agent); got != c.want {
@@ -322,7 +331,7 @@ func TestOwnAgentWithoutRoleShowsNoWaitState(t *testing.T) {
 	_, _ = me.Send(store.CoordMessage{DestinationKind: store.DestinationRoom, DestinationID: room,
 		ClientID: "q1", Body: "ping", Intent: store.IntentQuestion, Mentions: []string{"claude:hidden-peer:bbbb"}})
 	_, page := fetchPage(t, nora, e.Base+"/ui/agents")
-	if !strings.Contains(page, "Claude on nora-laptop") {
+	if !strings.Contains(page, "Claude · nora · nora-laptop") {
 		t.Fatalf("own agent missing: %s", page)
 	}
 	if strings.Contains(page, "Waiting for") {

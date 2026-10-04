@@ -143,9 +143,14 @@ func TestProjectAssignmentRule(t *testing.T) {
 	// robin: Owner beider. anna: Mitglied von Alpha. ben: Owner beider, ohne
 	// Standard. carl: keine Org.
 	join := func(acct string, o Org, role string) {
-		code, _, _ := st.CreateInvitation("person:1", o.ID, "", role, 0)
+		code, _, _ := st.CreateInvitation("person:1", o.ID, "", OrgMember, 0)
 		if _, err := st.AcceptInvitation(acct, code); err != nil {
 			t.Fatal(err)
+		}
+		if role == OrgOwner {
+			if err := st.SetOrgRole("person:1", o.ID, acct, OrgOwner); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	join("person:2", alpha, OrgMember)
@@ -249,7 +254,6 @@ func TestMoveProject(t *testing.T) {
 	if _, err := st.MoveProject("person:2", "github.com/x/y", gamma.Slug); !errors.Is(err, ErrNotOrgOwner) {
 		t.Fatalf("moving without owning the source: %v", err)
 	}
-	st.CreateInvitation("person:1", beta.ID, "", OrgOwner, 0)
 	if _, err := st.MoveProject("person:1", "github.com/x/y", gamma.Slug); !errors.Is(err, ErrNotOrgOwner) {
 		t.Fatalf("moving without owning the target: %v", err)
 	}
@@ -388,9 +392,9 @@ func TestInvitationEmailBinding(t *testing.T) {
 	}
 
 	// Ohne gebundene E-Mail: nur der Code zählt, auch ohne E-Mail-Claim.
-	code, _, _ = st.CreateInvitation("person:1", o.ID, "", OrgOwner, 0)
+	code, _, _ = st.CreateInvitation("person:1", o.ID, "", OrgMember, 0)
 	acct, outcome, err = st.LoginIdentity(IdentityLogin{Issuer: "https://idp", Subject: "s-ben", Name: "ben", Code: code})
-	if err != nil || outcome != LoginInvited || st.OrgRole(o.ID, acct.ID) != OrgOwner {
+	if err != nil || outcome != LoginInvited || st.OrgRole(o.ID, acct.ID) != OrgMember {
 		t.Fatalf("code-only invitation: %+v %v %v", acct, outcome, err)
 	}
 	if acct.Admin {

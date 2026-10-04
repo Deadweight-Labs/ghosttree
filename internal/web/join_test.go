@@ -116,13 +116,12 @@ func TestJoinEveryInvalidVariantIsByteIdentical(t *testing.T) {
 	if _, err := st.MoveProject("person:1", "github.com/alpha/moving", other.Slug); err != nil {
 		t.Fatal(err)
 	}
-	ownerInv, _, _ := st.CreateInvitation("person:1", org.ID, "", store.OrgOwner, 0)
 	orgWide, _, _ := st.CreateInvitation("person:1", org.ID, "", store.OrgMember, 0)
 	emailBound, _, _ := st.CreateInvitation("person:1", org.ID, "x@example.test", store.OrgMember, 0)
 	time.Sleep(1100 * time.Millisecond)
 
 	secrets := map[string]string{"expired": short, "used": used, "revoked": revoked, "demoted inviter": demoted,
-		"moved project": moved, "org wide owner": ownerInv, "org wide member": orgWide, "email bound": emailBound}
+		"moved project": moved, "org wide member": orgWide, "email bound": emailBound}
 	cases := map[string]string{
 		"unknown": "/join/" + strings.Repeat("ab", 32), "short": "/join/abc", "upper case": "/join/" + strings.Repeat("AB", 32),
 		"non hex": "/join/" + strings.Repeat("zz", 32), "too long": "/join/" + strings.Repeat("ab", 200), "empty": "/join/",
@@ -478,7 +477,7 @@ func TestOrgPageCreatesProjectInvitationLinks(t *testing.T) {
 	if _, err := st.EnsureProject("person:1", joinProject); err != nil {
 		t.Fatal(err)
 	}
-	resp := postOrg(t, alice, base, "/ui/orgs/invite", url.Values{"org": {org.Slug}, "project": {joinProject}, "project_role": {"guest"}})
+	resp := postOrgFollow(t, alice, base, "/ui/orgs/invite", url.Values{"org": {org.Slug}, "project": {joinProject}, "project_role": {"guest"}})
 	page := body(t, resp)
 	m := regexp.MustCompile(`/join/([0-9a-f]{64})`).FindStringSubmatch(page)
 	if resp.StatusCode != http.StatusOK || m == nil {
@@ -592,7 +591,7 @@ func TestOrgPageGuestLinksNeedEnforcementAndShowAbsoluteURL(t *testing.T) {
 		t.Fatalf("guest link without enforcement: %d %s", resp.StatusCode, page)
 	}
 	st.SetAccessMode(store.AccessMode{Enforce: true})
-	resp = postOrg(t, alice, base, "/ui/orgs/invite", url.Values{"org": {org.Slug}, "project": {joinProject}, "project_role": {"guest"}})
+	resp = postOrgFollow(t, alice, base, "/ui/orgs/invite", url.Values{"org": {org.Slug}, "project": {joinProject}, "project_role": {"guest"}})
 	page := body(t, resp)
 	if resp.StatusCode != http.StatusOK || !regexp.MustCompile(`value="http://127\.0\.0\.1:[0-9]+/join/[0-9a-f]{64}"`).MatchString(page) {
 		t.Fatalf("link: %d %s", resp.StatusCode, page)

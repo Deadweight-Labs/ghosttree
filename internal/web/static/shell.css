@@ -369,3 +369,5 @@ svg.i { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-widt
 .join-check .i { inline-size: 32px; block-size: 32px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
 .join-done + .btn, .join-actions a.btn { display: flex; align-items: center; justify-content: center; text-decoration: none; }
 @media (max-width: 900px) { .join-card { width: 100%; padding: var(--space-5) var(--space-4) var(--space-6); } }
+
+.login-hint { margin: var(--space-4) 0 0; font: var(--text-secondary); color: var(--clay-ink-soft); text-align: center; }

@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -15,6 +16,52 @@ const MaxDisplayNameRunes = 64
 // ErrAccountNameTaken: der Name kollidiert nach NFKC und Kleinschreibung mit
 // einem vorhandenen Konto.
 var ErrAccountNameTaken = errors.New("account name is already in use (names are compared ignoring case and look-alike forms)")
+
+// ErrNameRateLimited: das Konto hat seinen Namen zu oft geändert.
+var ErrNameRateLimited = errors.New("too many name changes, try again later")
+
+// ErrNameNotAllowed: dieses Konto darf seinen Namen nicht selbst ändern (Gäste).
+var ErrNameNotAllowed = errors.New("this account may not change its name")
+
+// MixedScriptName sagt, ob die Buchstaben eines Namens aus mehr als einer
+// Schrift stammen (Latein und Kyrillisch in einem Namen sind der klassische
+// Doppelgänger-Trick). Zahlen, Leerzeichen und Satzzeichen zählen nicht. Die
+// üblichen Kombinationen ostasiatischer Namen (Han mit Kana, Bopomofo oder
+// Hangul) sind erlaubt. Das ist die einfache Alternative zu einem
+// UTS-39-Skeleton: gemischte Namen kommen gar nicht erst vor, also kann kein
+// Skeleton-Vergleich sie umgehen.
+func MixedScriptName(name string) bool {
+	seen := map[string]bool{}
+	for _, r := range name {
+		if !unicode.IsLetter(r) {
+			continue
+		}
+		for script, table := range unicode.Scripts {
+			if unicode.Is(table, r) {
+				seen[script] = true
+				break
+			}
+		}
+	}
+	if len(seen) < 2 {
+		return false
+	}
+	for _, combo := range [][]string{
+		{"Han", "Hiragana", "Katakana"}, {"Han", "Bopomofo"}, {"Han", "Hangul"},
+	} {
+		inside := true
+		for script := range seen {
+			if !slices.Contains(combo, script) {
+				inside = false
+				break
+			}
+		}
+		if inside {
+			return false
+		}
+	}
+	return true
+}
 
 // isInvisibleName: Default_Ignorable-Zeichen (Cf, Other_Default_Ignorable,
 // Variation Selectors) und die Hangul-Füller, die sichtbar leer sind.
@@ -89,8 +136,13 @@ func accountNameKey(name string) string {
 
 // accountNameTakenTx sagt, ob ein vorhandenes Konto denselben Vergleichsschlüssel hat.
 func accountNameTakenTx(q queryer, name string) (bool, error) {
+	return accountNameTakenByOtherTx(q, name, 0)
+}
+
+// accountNameTakenByOtherTx ist accountNameTakenTx ohne das Konto self.
+func accountNameTakenByOtherTx(q queryer, name string, self int64) (bool, error) {
 	key := accountNameKey(name)
-	rows, err := q.Query(`SELECT name FROM persons`)
+	rows, err := q.Query(`SELECT name FROM persons WHERE id<>?`, self)
 	if err != nil {
 		return false, err
 	}
@@ -104,5 +156,14 @@ func accountNameTakenTx(q queryer, name string) (bool, error) {
 			return true, nil
 		}
 	}
-	return false, rows.Err()
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	rows.Close()
+	// Ein abgelegter Name bleibt für alle anderen Konten gesperrt: sonst könnte
+	// jemand einen frei gewordenen Namen übernehmen und sich als die frühere
+	// Person ausgeben.
+	var retired bool
+	err = q.QueryRow(`SELECT EXISTS(SELECT 1 FROM person_name_history WHERE old_key=? AND person_id<>?)`, key, self).Scan(&retired)
+	return retired, err
 }

@@ -142,10 +142,10 @@ func TestCoordDirectivePlateNamesTheRoleAndLowRankIsAStandingRequest(t *testing.
 		return page[start : start+strings.Index(page[start:], "</article>")]
 	}
 	owner, guest := plate("Owner rule."), plate("Guest wish.")
-	if !strings.Contains(owner, `<span class="cm-role">owner</span>`) || !strings.Contains(owner, "<span>Standing order</span>") {
+	if !roleLabelRE("owner").MatchString(owner) || !strings.Contains(owner, "<span>Standing order</span>") {
 		t.Errorf("owner plate: %s", owner)
 	}
-	if !strings.Contains(guest, `<span class="cm-role">guest</span>`) || !strings.Contains(guest, "Standing note") || strings.Contains(guest, "<span>Standing order</span>") {
+	if !roleLabelRE("guest").MatchString(guest) || !strings.Contains(guest, "Standing note") || strings.Contains(guest, "<span>Standing order</span>") {
 		t.Errorf("a guest's standing instruction is no directive: %s", guest)
 	}
 	if g := e.page(t, e.gus); strings.Contains(g, "Never") || !strings.Contains(g, "Owner rule.") || strings.Contains(plateOf(t, g, "Owner rule."), "Standing note") {
@@ -170,7 +170,7 @@ func TestCoordRequestCardNamesTheSenderRoleAndKeepsItsStateAfterAnswering(t *tes
 		start := strings.LastIndex(page[:strings.Index(page, "Roles first?")], `<article class="ask clay">`)
 		return page[start : start+strings.Index(page[start:], "</article>")]
 	}
-	if c := card(); !strings.Contains(c, `<span class="cm-role">member</span>`) {
+	if c := card(); !roleLabelRE("member").MatchString(c) {
 		t.Errorf("request card lacks the sender role: %s", c)
 	}
 	items, _ := e.aliceAcc.Attention()
@@ -262,4 +262,9 @@ func plateOf(t *testing.T, page, body string) string {
 	t.Helper()
 	start := strings.LastIndex(page[:strings.Index(page, body)], `<article class="slab`)
 	return page[start : start+strings.Index(page[start:], "</article>")]
+}
+
+// roleLabelRE matches the role label of a message, whose hover text explains it.
+func roleLabelRE(role string) *regexp.Regexp {
+	return regexp.MustCompile(`<span class="cm-role" title="[^"]+">` + role + `</span>`)
 }

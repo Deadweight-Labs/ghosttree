@@ -16,4 +16,17 @@
       setTimeout(() => { button.textContent = label; }, 1800);
     });
   }
+  // The default length of an invitation depends on the role: a guest link
+  // lives shorter. The first option names the length the server will use.
+  for (const days of document.querySelectorAll("[data-days]")) {
+    const form = days.closest("form");
+    const role = form && form.querySelector("[data-role]");
+    if (!role) continue;
+    const sync = () => {
+      const first = days.options[0];
+      first.textContent = role.value === "guest" ? first.dataset.guest : first.dataset.member;
+    };
+    role.addEventListener("change", sync);
+    sync();
+  }
 })();

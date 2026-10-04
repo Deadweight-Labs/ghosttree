@@ -54,6 +54,17 @@ type fakeIdP struct {
 	extraAudiences []string
 	azp            string
 	breakChallenge bool // der IdP merkt sich eine falsche PKCE-Challenge
+
+	// userinfo ist die Antwort des userinfo-Endpunkts; nil heißt: der
+	// Endpunkt antwortet mit 500. userinfoCalls zählt die Abrufe.
+	userinfo      map[string]any
+	userinfoCalls int
+	idTokenName   map[string]any // zusätzliche Claims im ID-Token
+
+	// promptValues erscheint als prompt_values_supported in der Discovery;
+	// lastPrompt ist der prompt der letzten Autorisierungsanfrage.
+	promptValues []string
+	lastPrompt   string
 }
 
 type fakeGrant struct{ challenge, nonce, redirect string }
@@ -69,17 +80,34 @@ func newFakeIdP(t *testing.T) *fakeIdP {
 	f := &fakeIdP{t: t, key: key, secret: "s3cret", codes: map[string]fakeGrant{}, subject: "sub-1", email: "robin@example.test", username: "robin"}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]any{
+		doc := map[string]any{
 			"issuer": f.srv.URL, "authorization_endpoint": f.srv.URL + "/authorize",
-			"token_endpoint": f.srv.URL + "/token", "jwks_uri": f.srv.URL + "/jwks",
+			"token_endpoint": f.srv.URL + "/token", "jwks_uri": f.srv.URL + "/jwks", "userinfo_endpoint": f.srv.URL + "/userinfo",
 			"id_token_signing_alg_values_supported": []string{"RS256"},
-		})
+		}
+		f.mu.Lock()
+		if f.promptValues != nil {
+			doc["prompt_values_supported"] = f.promptValues
+		}
+		f.mu.Unlock()
+		json.NewEncoder(w).Encode(doc)
 	})
 	mux.HandleFunc("/jwks", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{"keys": []map[string]string{{
 			"kty": "RSA", "alg": "RS256", "use": "sig", "kid": "k1",
 			"n": b64(key.N.Bytes()), "e": b64(big.NewInt(int64(key.E)).Bytes()),
 		}}})
+	})
+	mux.HandleFunc("/userinfo", func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.userinfoCalls++
+		if f.userinfo == nil || r.Header.Get("Authorization") != "Bearer at" {
+			http.Error(w, "nope", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(f.userinfo)
 	})
 	mux.HandleFunc("/authorize", f.authorize)
 	mux.HandleFunc("/token", f.token)
@@ -100,6 +128,7 @@ func (f *fakeIdP) authorize(w http.ResponseWriter, r *http.Request) {
 	}
 	code := "code-" + q.Get("state")[:8]
 	f.mu.Lock()
+	f.lastPrompt = q.Get("prompt")
 	challenge := q.Get("code_challenge")
 	if f.breakChallenge {
 		challenge = b64([]byte("not-the-challenge"))
@@ -152,6 +181,9 @@ func (f *fakeIdP) token(w http.ResponseWriter, r *http.Request) {
 		"iss": iss, "sub": f.subject, "aud": aud, "nonce": nonce,
 		"iat": now.Add(-time.Minute).Unix(), "exp": now.Add(life).Unix(),
 		"email": f.email, "email_verified": !f.unverified, "preferred_username": f.username,
+	}
+	for k, v := range f.idTokenName {
+		claims[k] = v
 	}
 	if len(f.extraAudiences) > 0 {
 		claims["aud"] = append([]string{aud}, f.extraAudiences...)
@@ -210,13 +242,20 @@ type oidcEnv struct {
 // Instanz); sonst ist die Instanz leer.
 func newOIDCEnv(t *testing.T, withAlice bool, opts ...Option) *oidcEnv {
 	t.Helper()
+	return newOIDCEnvWith(t, newFakeIdP(t), withAlice, "", opts...)
+}
+
+// newOIDCEnvWith is newOIDCEnv with a prepared IdP and the signup setting
+// ("", "1" or "0") of the OIDC configuration.
+func newOIDCEnvWith(t *testing.T, idp *fakeIdP, withAlice bool, signup string, opts ...Option) *oidcEnv {
+	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "oidc.db")
 	st, err := store.Open(dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	env := &oidcEnv{idp: newFakeIdP(t), store: st, dbPath: dbPath}
+	env := &oidcEnv{idp: idp, store: st, dbPath: dbPath}
 	if withAlice {
 		if env.token, err = st.AddPerson("alice"); err != nil {
 			t.Fatal(err)
@@ -227,7 +266,7 @@ func newOIDCEnv(t *testing.T, withAlice bool, opts ...Option) *oidcEnv {
 	t.Cleanup(env.web.Close)
 	all := append([]Option{WithOIDC(OIDCConfig{
 		Issuer: env.idp.srv.URL, ClientID: testClientID, ClientSecret: env.idp.secret,
-		RedirectURL: env.web.URL + "/ui/login/oidc/callback",
+		RedirectURL: env.web.URL + "/ui/login/oidc/callback", Signup: signup,
 	})}, opts...)
 	handler = newApp(st, all...)
 	env.app = handler.(*appHandler).app
