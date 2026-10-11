@@ -85,3 +85,12 @@ func TestHarnessPresentSeesTheConfigDirectoryOrTheCommand(t *testing.T) {
 		t.Fatal("config directories not recognised")
 	}
 }
+
+// allHarnessesPresent makes doctor treat every harness as installed, whatever
+// the machine running the tests has on PATH.
+func allHarnessesPresent(t *testing.T) {
+	t.Helper()
+	old := doctorHarnessPresent
+	t.Cleanup(func() { doctorHarnessPresent = old })
+	doctorHarnessPresent = func(string, string) bool { return true }
+}
