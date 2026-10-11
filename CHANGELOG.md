@@ -6,6 +6,8 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Added: `ctx garden check-knowledge` (REQ-457 pilot). An opt-in gardener checks pitfalls and decisions against the code and reports whether each still holds, with commits or file:line as reasons. It stays off without an API key (`GHOSTTREE_GARDEN_KEY` or a `garden` entry in llm.json), supports `--dry-run` and a `--max-usd` budget, and with `--propose` only adds staged notes marked as coming from the gardener.
+
 - Fixed: joining from a fresh machine (REQ-438). `ctx join` now always sets up the
   collector service, also when neither Claude Code nor Codex is installed yet, and
   ends with one line saying what to install next (`--no-watch` still skips it).
