@@ -31,7 +31,7 @@ func newMixedRoleFixture(t *testing.T) *Store {
 func TestMixedRoleFacetsAndMachineFilterUseTheViewedMachine(t *testing.T) {
 	st := newMixedRoleFixture(t)
 	addSession(t, st, "x-guest", 4, roleProject, "boxa", VisGuests, transcriptWith("zebra"))
-	addSession(t, st, "y-private", 3, roleProjectB, "boxb", "", transcriptWith("zebra"))
+	addSession(t, st, "y-private", 3, roleProjectB, "boxb", VisProject, transcriptWith("zebra"))
 	gus := viewer(st, "person:5", "gus")
 
 	page, err := st.BrowseSessions(gus, SessionFilter{}, "", 50)
@@ -58,7 +58,8 @@ func TestMixedRoleFacetsAndMachineFilterUseTheViewedMachine(t *testing.T) {
 	if err != nil || len(s.Groups) != 0 || s.Sessions != 0 || s.Matches != 0 {
 		t.Errorf("search machine=boxa as a guest of that project: %+v err=%v", s, err)
 	}
-	if s, _ = st.SearchTranscripts(gus, SearchQuery{Q: "zebra", Limit: 10}); len(s.Facets.Machines) != 0 {
+	// Die Maschine des Projekts, in dem gus Mitglied ist, darf er sehen; boxa nicht.
+	if s, _ = st.SearchTranscripts(gus, SearchQuery{Q: "zebra", Limit: 10}); len(s.Facets.Machines) != 1 || s.Facets.Machines[0].Value != "boxb" {
 		t.Errorf("search machine facet leaks %v", s.Facets.Machines)
 	}
 }

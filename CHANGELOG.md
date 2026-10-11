@@ -6,6 +6,19 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Changed: private means private (REQ-438). A session that is not shared is read
+  by its owner alone: not by organization or project owners, not by leads, not by
+  the instance admin, whether in the sessions list, the transcript, the raw
+  export, search, the MCP tools, request work, snapshots or evidence quotes.
+  Shared sessions behave as before. A project owner can still withdraw a shared
+  session, but can no longer share a private one or widen a shared one.
+- Added: any signed-in account can create an organization on the Organization
+  page and becomes its owner; the way on leads to inviting someone or connecting a
+  project. Owners (and the instance admin) can rename it; the address stays.
+  `ctx org create` stays admin-only.
+- Changed: the invitation page says what you share and what your role sees:
+  sessions stay private until you share them; project members see the project's
+  knowledge, requests and room messages.
 - Added: names and invitations work for two people (REQ-438). The sign-in reads
   the display name from the identity provider's userinfo endpoint when the ID
   token carries none (name, given and family name, nickname, user name; an email

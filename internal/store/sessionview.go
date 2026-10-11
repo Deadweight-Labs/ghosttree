@@ -924,12 +924,10 @@ func (a *ProjectAccess) TranscriptPrefilter() SessionPrefilter {
 	}
 	a.loadRoles()
 	a.loadMachines()
-	var guests, members, leads []string
+	var guests, members []string
 	for remote, r := range a.roles {
 		switch rank := RoleRank(r.Role); {
-		case rank >= 3:
-			leads = append(leads, remote)
-		case rank == 2:
+		case rank >= 2:
 			members = append(members, remote)
 		case rank == 1:
 			guests = append(guests, remote)
@@ -942,11 +940,10 @@ func (a *ProjectAccess) TranscriptPrefilter() SessionPrefilter {
 	owner := a.owner
 	q := `(CASE WHEN account_id = 0 THEN ? ELSE account_id END) = ?
 		OR (visibility = 'guests' AND project IN (SELECT value FROM json_each(?)))
-		OR ((shared = 1 OR COALESCE(visibility,'') NOT IN ('','private')) AND project IN (SELECT value FROM json_each(?)))
-		OR project IN (SELECT value FROM json_each(?))`
-	args := []any{owner, a.account, list(guests), list(members), list(leads)}
+		OR ((shared = 1 OR COALESCE(visibility,'') NOT IN ('','private')) AND project IN (SELECT value FROM json_each(?)))`
+	args := []any{owner, a.account, list(guests), list(members)}
 	if a.admin {
-		q += ` OR (project != '' AND project NOT IN (SELECT remote FROM projects))`
+		q += ` OR (project != '' AND project NOT IN (SELECT remote FROM projects) AND (shared = 1 OR COALESCE(visibility,'') NOT IN ('','private')))`
 	}
 	return SessionPrefilter{Where: q, Args: args, Exact: true, Unrestricted: a.admin}
 }

@@ -324,6 +324,8 @@ svg.i { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-widt
 .join-facts { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--space-1) var(--space-3); margin: 0 0 var(--space-5); padding: 0; list-style: none; color: var(--clay-ink-faint); font: var(--text-secondary); }
 .join-facts li { overflow-wrap: anywhere; }
 .join-facts li + li::before { content: ""; display: inline-block; inline-size: 4px; block-size: 4px; aspect-ratio: 1; margin: 0 var(--space-3) 2px 0; border-radius: 50%; background: currentColor; vertical-align: middle; }
+.join-shares { margin: 0 0 var(--space-5); padding: var(--space-3) var(--space-4); list-style: none; border-radius: var(--clay-radius-xs); background: var(--color-surface-sunken); color: var(--clay-ink-soft); font: var(--text-secondary); display: grid; gap: var(--space-2); }
+.join-shares li { overflow-wrap: anywhere; }
 .join-who { display: flex; align-items: center; gap: var(--space-3); margin: 0 0 var(--space-4); }
 .join-who span:last-child { display: flex; flex-direction: column; min-width: 0; overflow-wrap: anywhere; }
 .join-who small { color: var(--clay-ink-faint); }

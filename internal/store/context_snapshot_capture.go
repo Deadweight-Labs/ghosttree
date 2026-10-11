@@ -327,7 +327,7 @@ func captureKnowledge(ctx context.Context, q snapshotQueryer, project string, co
 		if p.ActivationPaths == nil {
 			p.ActivationPaths = []string{}
 		}
-		er, err := q.QueryContext(ctx, `SELECT e.session_id,e.chunk_seq,e.quote,COALESCE(s.started_at,''),COALESCE(s.harness,'') FROM knowledge_evidence e LEFT JOIN sessions s ON s.id=e.session_id WHERE e.knowledge_id=? ORDER BY e.session_id,e.chunk_seq`, p.ID)
+		er, err := q.QueryContext(ctx, `SELECT e.session_id,e.chunk_seq,e.quote,COALESCE(s.started_at,''),COALESCE(s.harness,'') FROM knowledge_evidence e LEFT JOIN sessions s ON s.id=e.session_id WHERE e.knowledge_id=? AND (s.id IS NULL OR s.shared=1 OR COALESCE(s.visibility,'') NOT IN ('','private')) ORDER BY e.session_id,e.chunk_seq`, p.ID)
 		if err != nil {
 			return err
 		}
@@ -653,7 +653,7 @@ func captureRequestLists(ctx context.Context, q snapshotQueryer, p *requestPaylo
 	if p.Work == nil {
 		p.Work = []requestWorkV1{}
 	}
-	sr, err := q.QueryContext(ctx, `SELECT s.session_id,s.chunk_seq,s.quote,COALESCE(se.started_at,''),COALESCE(se.harness,'') FROM request_sightings s LEFT JOIN sessions se ON se.id=s.session_id WHERE s.request_id=? ORDER BY se.started_at,s.session_id,s.chunk_seq`, p.ID)
+	sr, err := q.QueryContext(ctx, `SELECT s.session_id,s.chunk_seq,s.quote,COALESCE(se.started_at,''),COALESCE(se.harness,'') FROM request_sightings s LEFT JOIN sessions se ON se.id=s.session_id WHERE s.request_id=? AND (se.id IS NULL OR se.shared=1 OR COALESCE(se.visibility,'') NOT IN ('','private')) ORDER BY se.started_at,s.session_id,s.chunk_seq`, p.ID)
 	if err != nil {
 		return err
 	}

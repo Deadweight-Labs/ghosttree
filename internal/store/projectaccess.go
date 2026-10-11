@@ -124,10 +124,13 @@ func matrixAllows(role RoleInfo, res Resource, act Action, obj Object) bool {
 	case ResTranscript:
 		switch act {
 		case ActRead:
-			return rank >= 3 || obj.Own || (rank >= 2 && obj.Shared) || (rank >= 1 && obj.Guests)
+			// Privat heißt privat: eine nicht freigegebene Session liest nur ihr
+			// Besitzer, auch kein Lead, kein Projekt-Owner (REQ-438 D).
+			return obj.Own || (rank >= 2 && obj.Shared) || (rank >= 1 && obj.Guests)
 		case ActShare:
-			// Der Besitzer der Session und der Owner des Projekts.
-			return obj.Own || rank >= 4
+			// Der Besitzer der Session; der Projekt-Owner darf eine freigegebene
+			// Session zurücknehmen, eine private nie erreichen.
+			return obj.Own || (rank >= 4 && obj.Shared)
 		}
 	case ResSnapshot:
 		return (act == ActRead || act == ActCreate) && rank >= 2
@@ -453,7 +456,8 @@ func (a *ProjectAccess) Decide(project string, res Resource, act Action, obj Obj
 	if rank == 0 && a.Unclaimed(project) {
 		// Verified setzt nie der Autor selbst: das Recht gibt es nur in einem
 		// beanspruchten Projekt (can_review, lead, owner) oder dem Admin.
-		if act == ActCreate || (obj.Own && act != ActVerify) || a.IsAdmin() {
+		hiddenSession := res == ResTranscript && !obj.Own && !obj.Shared && !obj.Guests
+		if act == ActCreate || (obj.Own && act != ActVerify) || (a.IsAdmin() && !hiddenSession) {
 			return Decision{Allowed: true, Reason: "unclaimed project"}
 		}
 	}
@@ -556,6 +560,10 @@ func (a *ProjectAccess) CheckKnowledgeCreate(k Knowledge) error {
 
 // CanSeeSessionMeta: Metadaten (wer arbeitet wo).
 func (a *ProjectAccess) CanSeeSessionMeta(s Session) bool {
+	// Eine private Session erscheint nur ihrem Besitzer, auch nicht als Zeile.
+	if !s.Shared && s.Visibility != VisGuests && !a.OwnsSession(s) && a.st.AccessEnforced() {
+		return false
+	}
 	return a.Allow(s.Scope.Project, ResSessionMeta, ActRead, Object{Own: a.OwnsSession(s), Guests: s.Visibility == VisGuests})
 }
 

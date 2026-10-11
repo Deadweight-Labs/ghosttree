@@ -9,6 +9,7 @@
 {{define "join"}}{{template "joinhead"}}<h1>{{t "join.invited" .Inviter .Target}}</h1>
 <p class="join-tag">{{t "join.tagline"}}</p>
 <ul class="join-facts"><li>{{.Org}}</li><li>{{.RoleText}}</li><li>{{t "join.expires"}} {{ago .ExpiresAt}}</li></ul>
+<ul class="join-shares"><li>{{t "join.shares.private"}}</li><li>{{if .Guest}}{{t "join.shares.guest" .Project}}{{else}}{{t "join.shares.member" .Project}}{{end}}</li></ul>
 {{if .SignedIn}}<p class="join-who"><span class="av human sm clay" aria-hidden="true">{{.Initial}}</span><span><strong>{{.Person}}</strong>{{if .Email}}<small>{{.Email}}</small>{{end}}</span></p>
 <form class="login-form" method="post" action="/join/{{.Code}}/accept"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}">{{template "joinconfirm" .}}<button class="clay btn btn-primary">{{t "join.accept"}}</button></form>
 <form class="join-signout" method="post" action="/join/{{.Code}}/signout"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><span>{{t "join.not_you"}}</span> <button class="join-link">{{t "shell.sign_out"}}</button></form>
