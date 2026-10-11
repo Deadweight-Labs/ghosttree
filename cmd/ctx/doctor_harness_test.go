@@ -94,3 +94,26 @@ func allHarnessesPresent(t *testing.T) {
 	t.Cleanup(func() { doctorHarnessPresent = old })
 	doctorHarnessPresent = func(string, string) bool { return true }
 }
+
+func TestDoctorOnlyWithoutHarnessArgumentAlsoSkipsMissingHarnesses(t *testing.T) {
+	harnessesPresent(t, "claude")
+	var out bytes.Buffer
+	cmdDoctor([]string{"--only", "hooks"}, &out)
+	text := out.String()
+	if !strings.Contains(text, "codex: not installed (skipped)") || len(harnessLines(text, "codex")) != 0 {
+		t.Fatalf("codex not skipped with --only:\n%s", text)
+	}
+	if len(harnessLines(text, "claude")) == 0 {
+		t.Fatalf("installed claude not checked with --only:\n%s", text)
+	}
+}
+
+func TestDoctorFixWithoutAnyInstalledHarnessDoesNotClaimToHaveRunInstallers(t *testing.T) {
+	harnessesPresent(t)
+	var out bytes.Buffer
+	cmdDoctor([]string{"--fix"}, &out)
+	text := out.String()
+	if strings.Contains(text, "re-ran installers") || !strings.Contains(text, "no agent installed") {
+		t.Fatalf("--fix output:\n%s", text)
+	}
+}

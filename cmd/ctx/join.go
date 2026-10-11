@@ -45,6 +45,7 @@ var (
 	joinDetect      = detectHarnesses
 	joinInstall     = cmdInstall
 	joinCollector   = joinInstallCollector
+	joinCollectorUp = waitCollectorActive
 	joinTimeout     = joinDefaultTimeout
 
 	startCallbackFunc = startCallback
@@ -418,17 +419,44 @@ func detectHarnesses() []string {
 	return found
 }
 
+// collectorOutcome is what setting up the collector service came to.
+type collectorOutcome struct {
+	Started bool     // the service manager accepted the start
+	Lines   []string // why not, in the installer's words
+	Err     error
+}
+
 // joinInstallCollector sets up the collector service for the ctx that is
 // running now: join, unlike install, has not pinned that path yet, and without
 // an absolute one the service would silently be skipped.
-func joinInstallCollector(w io.Writer, home string) int {
+func joinInstallCollector(home string) collectorOutcome {
 	restore, err := useRunningCtx(home)
 	defer restore()
 	if err != nil {
-		fmt.Fprintf(w, "collector   not set up: %v\n", err)
-		return 1
+		return collectorOutcome{Err: err}
 	}
-	return installCollector(w, home)
+	changes, started, err := installer.InstallWatchServiceStarted(home)
+	out := collectorOutcome{Started: started, Err: err}
+	if !started {
+		for _, c := range changes {
+			if strings.HasPrefix(c.Action, "collector") {
+				out.Lines = append(out.Lines, c.Action)
+			}
+		}
+	}
+	return out
+}
+
+// waitCollectorActive asks the service manager for up to two seconds whether
+// the collector is active: a start that was accepted can still die at once.
+func waitCollectorActive() bool {
+	for i := 0; i < 10; i++ {
+		if state, _ := installer.WatchServiceState(); state == installer.ServiceActive {
+			return true
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return false
 }
 
 // harnessPresent: the harness has a config directory in the home directory or
@@ -644,15 +672,18 @@ func cmdJoin(args []string, stdout io.Writer) int {
 	// The collector is set up whether or not an agent is installed yet: it
 	// picks up sessions as soon as one appears.
 	if !*noWatch {
-		var coll bytes.Buffer
-		if joinCollector(&coll, home) == 0 && strings.Contains(coll.String(), "collector running") {
-			fmt.Fprintln(stdout, "Collector running.")
-		} else {
-			for _, line := range strings.Split(strings.TrimSpace(coll.String()), "\n") {
-				if line != "" {
-					fmt.Fprintln(stdout, safe(line))
-				}
+		o := joinCollector(home)
+		switch {
+		case o.Err != nil:
+			fmt.Fprintf(stdout, "Collector not set up: %s\n", safe(o.Err.Error()))
+		case !o.Started:
+			for _, line := range o.Lines {
+				fmt.Fprintln(stdout, safe(line))
 			}
+		case joinCollectorUp():
+			fmt.Fprintln(stdout, "Collector running.")
+		default:
+			fmt.Fprintf(stdout, "Collector started, not yet active. Check with: %s\n", installer.WatchStatusHint())
 		}
 	}
 	if len(detected) == 0 {
@@ -670,10 +701,8 @@ func cmdJoin(args []string, stdout io.Writer) int {
 				continue
 			}
 		}
-		installArgs := []string{h}
-		if *noWatch {
-			installArgs = append(installArgs, "--no-watch")
-		}
+		// The collector was handled above, once and with its outcome shown.
+		installArgs := []string{h, "--no-watch"}
 		rec := &hooksNoticeWriter{w: stdout}
 		code := joinInstall(installArgs, rec)
 		if h == "codex" && code == 0 {

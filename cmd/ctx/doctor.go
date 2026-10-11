@@ -61,7 +61,7 @@ func cmdDoctor(args []string, stdout io.Writer) int {
 		for _, name := range harnesses {
 			if doctorHarnessPresent(name, home) {
 				present = append(present, name)
-			} else if len(only) == 0 {
+			} else {
 				fmt.Fprintf(stdout, "%s: not installed (skipped)\n", name)
 			}
 		}
@@ -80,7 +80,11 @@ func cmdDoctor(args []string, stdout io.Writer) int {
 				fmt.Fprintf(stdout, "fix %s: %v\n", name, err)
 			}
 		}
-		fmt.Fprint(stdout, "re-ran installers\n\n")
+		if len(harnesses) > 0 {
+			fmt.Fprint(stdout, "re-ran installers\n\n")
+		} else {
+			fmt.Fprint(stdout, "no agent installed, no installer to re-run\n\n")
+		}
 	}
 
 	var checks []installer.Check
