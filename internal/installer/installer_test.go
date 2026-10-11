@@ -353,3 +353,76 @@ func TestRuleTextNamesTheAlternativePlaceInsteadOfForbiddingComments(t *testing.
 		t.Fatal("the blanket prohibition must be gone; the rule redirects instead of forbidding")
 	}
 }
+
+func TestRuleTextTellsAgentsHowMessagesReachThemAndHowToAnswer(t *testing.T) {
+	for _, want := range []string{"coord_inbox", "thread_reply", "coord_send", "new messages for you", "@name"} {
+		if !strings.Contains(ruleText, want) {
+			t.Errorf("ruleText missing %q", want)
+		}
+	}
+}
+
+func TestClaudeWiresThePostToolUseInboxHookWithoutAMatcher(t *testing.T) {
+	home := t.TempDir()
+	for i := 0; i < 2; i++ {
+		if _, err := InstallClaude(home); err != nil {
+			t.Fatal(err)
+		}
+	}
+	settings, err := readJSONFile(filepath.Join(home, ".claude", "settings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hooks, _ := settings["hooks"].(map[string]any)
+	groups, _ := hooks["PostToolUse"].([]any)
+	if len(groups) != 1 {
+		t.Fatalf("want exactly one PostToolUse group after two installs, got %d", len(groups))
+	}
+	group, _ := groups[0].(map[string]any)
+	if matcher, _ := group["matcher"].(string); matcher != "" {
+		t.Fatalf("the inbox hook must see every tool call, matcher=%q", matcher)
+	}
+	inner, _ := group["hooks"].([]any)
+	handler, _ := inner[0].(map[string]any)
+	if cmd, _ := handler["command"].(string); !strings.HasPrefix(cmd, "ctx hook post-tool-use") || handler["timeout"] != float64(5) {
+		t.Fatalf("handler = %v", handler)
+	}
+	if harnessNamed("codex").Serves(ChannelCoordInbox) {
+		t.Fatal("codex PostToolUse is not measured; it must not be wired")
+	}
+}
+
+// The coordination hooks follow the same mechanism as every other hook: they
+// carry the absolute ctx path, and an entry written earlier with the bare name
+// is upgraded in place instead of duplicated.
+func TestCoordHooksCarryTheAbsoluteCtxPathAndUpgradeBareEntries(t *testing.T) {
+	home := t.TempDir()
+	if _, err := InstallClaude(home); err != nil {
+		t.Fatal(err)
+	}
+	abs := filepath.Join(t.TempDir(), "bin", "ctx")
+	useCtx(t, abs)
+	if _, err := InstallClaude(home); err != nil {
+		t.Fatal(err)
+	}
+	settings, err := readJSONFile(filepath.Join(home, ".claude", "settings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hooks, _ := settings["hooks"].(map[string]any)
+	for event, sub := range map[string]string{"PostToolUse": "hook post-tool-use", "UserPromptSubmit": "hook user-prompt-submit"} {
+		groups, _ := hooks[event].([]any)
+		if len(groups) != 1 {
+			t.Fatalf("%s: want one group after the upgrade, got %d", event, len(groups))
+		}
+		inner, _ := groups[0].(map[string]any)["hooks"].([]any)
+		handler, _ := inner[0].(map[string]any)
+		cmd, _ := handler["command"].(string)
+		if !strings.HasPrefix(cmd, abs+" "+sub) {
+			t.Errorf("%s command = %q, want it to start with %q", event, cmd, abs+" "+sub)
+		}
+		if handler["timeout"] != float64(5) {
+			t.Errorf("%s timeout = %v, want 5", event, handler["timeout"])
+		}
+	}
+}

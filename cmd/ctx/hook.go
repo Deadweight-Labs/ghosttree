@@ -57,6 +57,9 @@ func cmdHookWith(stdin io.Reader, args []string, stdout io.Writer) int {
 	if eventArg == "pause-gate" {
 		return pauseGate(stdin, *harness, stdout)
 	}
+	if eventArg == "post-tool-use" {
+		return postToolUse(stdin, *harness, stdout)
+	}
 	var out sessionStartOutput
 	var render func(io.Reader) string
 	switch eventArg {
@@ -81,24 +84,51 @@ func cmdHookWith(stdin io.Reader, args []string, stdout io.Writer) int {
 	}
 	raw, err := io.ReadAll(io.LimitReader(stdin, (4<<20)+1))
 	attempted := false
+	coord := ""
 	if err == nil && len(raw) <= 4<<20 && json.Unmarshal(raw, &identity) == nil &&
 		strings.TrimSpace(identity.SessionID) != "" && len(identity.SessionID) <= 4096 {
+		// Messages for the agent come with the prompt, next to what the archive
+		// has to say about it. Asked in parallel: both are short, neither may
+		// wait for the other. The coordination text has its own budget and is
+		// not counted against the memory budget.
+		coordDone := make(chan string, 1)
+		if eventArg == "user-prompt-submit" && os.Getenv("GHOSTTREE_HOOK_SYNTHETIC") != "1" {
+			go func() {
+				text, _ := coordInboxContext(raw, true)
+				coordDone <- text
+			}()
+		} else {
+			coordDone <- ""
+		}
 		text := render(bytes.NewReader(raw))
+		coord = <-coordDone
 		_ = hookbudget.Deliver(identity.SessionID, text, func(bounded string) error {
-			out.HookSpecificOutput.AdditionalContext = bounded
+			out.HookSpecificOutput.AdditionalContext = joinHookContext(bounded, coord)
 			attempted = true
 			return json.NewEncoder(stdout).Encode(out)
 		})
 	}
 	if !attempted {
+		out.HookSpecificOutput.AdditionalContext = coord
 		json.NewEncoder(stdout).Encode(out)
 	}
 	return 0
 }
 
+func joinHookContext(memory, coord string) string {
+	if strings.TrimSpace(coord) == "" {
+		return memory
+	}
+	if strings.TrimSpace(memory) == "" {
+		return coord
+	}
+	return strings.TrimRight(memory, "\n") + "\n\n" + coord
+}
+
 const hookUsage = `usage: ctx hook session-start [--harness claude|codex]
        ctx hook user-prompt-submit [--harness claude|codex]
        ctx hook pre-tool-use [--harness claude|codex]
+       ctx hook post-tool-use [--harness claude|codex]
        ctx hook pause-gate [--harness claude]`
 
 // relevanceTimeout is short because this hook sits between the keystroke and

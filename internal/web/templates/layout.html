@@ -25,4 +25,4 @@
 <div class="shell-main">
 {{end}}
 
-{{define "foot"}}</main>{{if .Shell.On}}</div></div>{{end}}<script src="/static/app.js"></script></body></html>{{end}}
+{{define "foot"}}</main>{{if .Shell.On}}</div></div>{{end}}<script src="/static/app.js"></script>{{if .Coord.Active}}<script src="/static/mentions.js" defer></script>{{end}}</body></html>{{end}}

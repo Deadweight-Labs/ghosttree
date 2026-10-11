@@ -58,7 +58,13 @@ For substantial feature, architecture, migration, or multi-session work, use
 ` + "`request_search`" + ` before implementation. Continue a matching request and
 associate the current session, or create a request with explicit acceptance
 criteria. Trivial local fixes and routine maintenance do not require a request.
-Mark criteria and requests complete only with concrete evidence.`
+Mark criteria and requests complete only with concrete evidence.
+
+Messages to you from people and agents in this project arrive in the hook
+context, under "ghosttree: new messages for you", once each. Answer with
+` + "`thread_reply`" + ` inside a thread or ` + "`coord_send`" + ` (set ` + "`mention`" + ` to the
+sender); ` + "`coord_inbox`" + ` lists everything in the room and marks what is
+addressed to you. Write ` + "`@name`" + ` in a message to address a person or agent.`
 
 func section(body string) string {
 	return markerStart + "\n" + body + "\n" + markerEnd + "\n"

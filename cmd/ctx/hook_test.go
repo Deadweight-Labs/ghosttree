@@ -28,6 +28,10 @@ func decodeHook(t *testing.T, out *bytes.Buffer) (string, string) {
 
 func TestUserPromptSubmitHookDeliversRelevantKnowledge(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/coord/") {
+			w.Write([]byte("[]")) // the coordination look that rides along with the prompt
+			return
+		}
 		if r.URL.Query().Get("q") == "" {
 			t.Error("prompt was not forwarded")
 		}
