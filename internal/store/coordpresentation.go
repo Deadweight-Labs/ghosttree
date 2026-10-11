@@ -29,7 +29,7 @@ type CoordMessagePresentation struct {
 	// Raumteilnehmer sehen; ein Gast bekommt keine (siehe Autor-Etikett).
 	MentionLabels map[string]string
 	Refs          []CoordRef
-	Delivery    CoordDeliverySummary
+	Delivery      CoordDeliverySummary
 }
 
 func (a CoordAccess) MessagePresentationWindow(kind, id string, window MessageWindow) (MessagePage, []CoordMessagePresentation, error) {
