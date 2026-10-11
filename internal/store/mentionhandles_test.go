@@ -31,6 +31,29 @@ func TestMentionHandlesResolveBackToTheirOwner(t *testing.T) {
 	}
 }
 
+// The agent reads as "Claude · Anna · mainex" in the UI (tool, owner, machine).
+// Writing that name as a handle, with the tool word the UI shows even when the
+// harness registers itself as claude-code, must reach exactly that agent and
+// never its session ID.
+func TestMentionReachesTheReadableAgentName(t *testing.T) {
+	e := authorityFixture(t)
+	const ext = "claude-code:mainex:0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9"
+	if _, err := e.st.RegisterCoordAgent(CoordAgent{ExternalID: ext, Provider: "claude-code", RoomKey: e.room, DisplayName: ext, PrincipalID: "person:2", Role: "lead"}); err != nil {
+		t.Fatal(err)
+	}
+	sender := e.human("person:1")
+	for _, body := range []string{"@claude-anna-mainex hi", "@Claude-Anna-mainex hi"} {
+		id, err := sendText(t, sender, e.room, body, "")
+		if err != nil {
+			t.Fatalf("%q: %v", body, err)
+		}
+		got := storedMentions(t, e, id)
+		if len(got) != 1 || got[0] != ext {
+			t.Errorf("%q reached %v, want %s", body, got, ext)
+		}
+	}
+}
+
 // A guest does not see the member list, so no suggestion may come from it.
 func TestMentionHandlesAreEmptyForAGuest(t *testing.T) {
 	e := guestEnv(t)

@@ -158,6 +158,14 @@ func (a CoordAccess) mentionCandidatesTx(tx *sql.Tx, actor, roomKey string) ([]m
 			}
 		}
 		if provider != "" && ownerName != "" {
+			// The tool word the UI shows ("Claude · Robin · mainex"), which for
+			// claude-code is shorter than the provider name.
+			if tool := toolWord(provider); tool != provider {
+				c.handles = addHandle(c.handles, tool+"-"+ownerName)
+				if host := agentHost(external); host != "" {
+					c.handles = addHandle(c.handles, tool+"-"+ownerName+"-"+host)
+				}
+			}
 			c.handles = addHandle(c.handles, provider+"-"+ownerName)
 			if host := agentHost(external); host != "" {
 				c.handles = addHandle(c.handles, provider+"-"+ownerName+"-"+host)
@@ -176,6 +184,13 @@ func (a CoordAccess) mentionCandidatesTx(tx *sql.Tx, actor, roomKey string) ([]m
 		out = append(out, c)
 	}
 	return out, nil
+}
+
+func toolWord(provider string) string {
+	if strings.EqualFold(provider, "claude-code") {
+		return "claude"
+	}
+	return provider
 }
 
 func personNameTx(tx *sql.Tx, principal string) string {

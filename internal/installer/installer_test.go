@@ -391,3 +391,38 @@ func TestClaudeWiresThePostToolUseInboxHookWithoutAMatcher(t *testing.T) {
 		t.Fatal("codex PostToolUse is not measured; it must not be wired")
 	}
 }
+
+// The coordination hooks follow the same mechanism as every other hook: they
+// carry the absolute ctx path, and an entry written earlier with the bare name
+// is upgraded in place instead of duplicated.
+func TestCoordHooksCarryTheAbsoluteCtxPathAndUpgradeBareEntries(t *testing.T) {
+	home := t.TempDir()
+	if _, err := InstallClaude(home); err != nil {
+		t.Fatal(err)
+	}
+	abs := filepath.Join(t.TempDir(), "bin", "ctx")
+	useCtx(t, abs)
+	if _, err := InstallClaude(home); err != nil {
+		t.Fatal(err)
+	}
+	settings, err := readJSONFile(filepath.Join(home, ".claude", "settings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hooks, _ := settings["hooks"].(map[string]any)
+	for event, sub := range map[string]string{"PostToolUse": "hook post-tool-use", "UserPromptSubmit": "hook user-prompt-submit"} {
+		groups, _ := hooks[event].([]any)
+		if len(groups) != 1 {
+			t.Fatalf("%s: want one group after the upgrade, got %d", event, len(groups))
+		}
+		inner, _ := groups[0].(map[string]any)["hooks"].([]any)
+		handler, _ := inner[0].(map[string]any)
+		cmd, _ := handler["command"].(string)
+		if !strings.HasPrefix(cmd, abs+" "+sub) {
+			t.Errorf("%s command = %q, want it to start with %q", event, cmd, abs+" "+sub)
+		}
+		if event == "PostToolUse" && handler["timeout"] != float64(5) {
+			t.Errorf("PostToolUse timeout = %v", handler["timeout"])
+		}
+	}
+}
