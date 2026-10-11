@@ -247,6 +247,7 @@ func (a *api) createKnowledge(w http.ResponseWriter, r *http.Request) {
 	}
 	// Die Zuschreibung kommt aus dem Token und ist danach unveränderlich.
 	k.Person, k.ConfirmedBy = personOf(r), ""
+	k.AuthorID = authorIDOf(r)
 	if k.Confidence == "verified" {
 		k.ConfirmedBy = k.Person
 	}
@@ -299,6 +300,7 @@ func (a *api) insertMigratedKnowledge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.Knowledge.Person = personOf(r)
+	in.Knowledge.AuthorID = authorIDOf(r)
 	in.Knowledge.Scope = scope.CanonicalAxes(in.Knowledge.Scope)
 	if denyAccess(w, a.access(r).CheckKnowledgeCreate(in.Knowledge)) {
 		return
@@ -1144,4 +1146,10 @@ func (a *api) sessionFilters(f scope.Axes, fetch int) (db, view scope.Axes, limi
 	view = scope.Axes{Machine: f.Machine, Branch: f.Branch}
 	f.Machine, f.Branch = "", ""
 	return f, view, max(fetch, 1000)
+}
+
+// authorIDOf is the numeric account of the caller, 0 when there is none.
+func authorIDOf(r *http.Request) int64 {
+	id, _ := store.AccountNumericID(principalOf(r).ID)
+	return id
 }

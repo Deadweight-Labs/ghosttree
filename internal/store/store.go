@@ -510,6 +510,13 @@ CREATE TABLE IF NOT EXISTS knowledge_versions(
   person TEXT NOT NULL DEFAULT '', changed_by TEXT NOT NULL DEFAULT '', changed_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS knowledge_versions_entry
   ON knowledge_versions(knowledge_id, changed_at DESC, id DESC);
+-- Wer einen Eintrag geschrieben hat, als unveränderliche Konto-Id. Der Name
+-- (knowledge.person) ändert sich mit dem Konto; die Zustellung von Maschinen-
+-- Wissen darf daran nicht hängen. Eine eigene Tabelle statt einer Spalte, damit
+-- die Tabellenneubauten und der laufende Dienst unberührt bleiben. Keine Zeile
+-- heißt: Altbestand vor Konten oder ein Destillat.
+CREATE TABLE IF NOT EXISTS knowledge_authors(
+  knowledge_id INTEGER PRIMARY KEY, account_id INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS knowledge_moves(
   id INTEGER PRIMARY KEY,
   knowledge_id INTEGER NOT NULL,

@@ -170,11 +170,37 @@ func (a *ProjectAccess) ownNoteOnUnclaimedMachine(obj Object, act Action) bool {
 	return false
 }
 
+// AccountNumericID is the number behind a "person:<n>" principal.
+func AccountNumericID(principalID string) (int64, bool) { return accountNumericID(principalID) }
+
+func recordAuthorTx(tx txExec, knowledgeID, accountID int64) error {
+	if accountID == 0 {
+		return nil
+	}
+	_, err := tx.Exec(`INSERT OR REPLACE INTO knowledge_authors(knowledge_id, account_id) VALUES(?,?)`, knowledgeID, accountID)
+	return err
+}
+
+// knowledgeAuthorID is the account that wrote the entry, 0 for legacy entries
+// from before accounts and for distillates.
+func (s *Store) knowledgeAuthorID(id int64) int64 {
+	if id == 0 {
+		return 0
+	}
+	if s.reader != nil {
+		return s.reader.knowledgeAuthorID(id)
+	}
+	var acct int64
+	_ = s.db.QueryRow(`SELECT account_id FROM knowledge_authors WHERE knowledge_id=?`, id).Scan(&acct)
+	return acct
+}
+
 // machineDeliveryIndex: Maschinenname -> Konto-Id des Besitzers, die Konto-Id des
 // Instanz-Owners (für Namen ohne Zeile und Altbestand) und Personenname ->
-// Konto-Id. Ein Name zählt in Kleinschreibung, mit dem heutigen Namen eines
-// Kontos und seinen früheren aus person_name_history; der heutige Name gewinnt,
-// wenn ein alter Name inzwischen ein anderes Konto trägt.
+// Konto-Id für Altbestand ohne Autor-Konto. Ein Name zählt in Kleinschreibung,
+// mit dem heutigen Namen eines Kontos; frühere Namen aus person_name_history
+// füllen nur Lücken. Treffen zwei Konten denselben Namen, steht -1 darin
+// (mehrdeutig).
 func (s *Store) machineDeliveryIndex() (map[string]int64, int64, map[string]int64) {
 	if s.reader != nil {
 		return s.reader.machineDeliveryIndex()
@@ -192,25 +218,33 @@ func (s *Store) machineDeliveryIndex() (map[string]int64, int64, map[string]int6
 		rows.Close()
 	}
 	names := map[string]int64{}
-	if rows, err := s.db.Query(`SELECT person_id, old_name FROM person_name_history`); err == nil {
+	add := func(table string, into map[string]int64, query string) {
+		rows, err := s.db.Query(query)
+		if err != nil {
+			return
+		}
+		defer rows.Close()
 		for rows.Next() {
 			var id int64
 			var name string
-			if rows.Scan(&id, &name) == nil {
-				names[strings.ToLower(strings.TrimSpace(name))] = id
+			if rows.Scan(&id, &name) != nil {
+				continue
+			}
+			key := strings.ToLower(strings.TrimSpace(name))
+			if prev, ok := into[key]; ok && prev != id {
+				into[key] = -1
+			} else {
+				into[key] = id
 			}
 		}
-		rows.Close()
 	}
-	if rows, err := s.db.Query(`SELECT id, name FROM persons`); err == nil {
-		for rows.Next() {
-			var id int64
-			var name string
-			if rows.Scan(&id, &name) == nil {
-				names[strings.ToLower(strings.TrimSpace(name))] = id
-			}
+	add("persons", names, `SELECT id, name FROM persons`)
+	old := map[string]int64{}
+	add("person_name_history", old, `SELECT person_id, old_name FROM person_name_history`)
+	for key, id := range old {
+		if _, ok := names[key]; !ok {
+			names[key] = id
 		}
-		rows.Close()
 	}
 	return owners, owner, names
 }
@@ -220,21 +254,29 @@ func (s *Store) machineDeliveryIndex() (map[string]int64, int64, map[string]int6
 // könnte ein Konto eine Anweisung auf einen noch freien Maschinennamen legen,
 // und wer den Namen später beansprucht, bekäme sie als bindende Anweisung.
 //
-// Der Autor wird ohne Groß-/Kleinschreibung und über frühere Kontonamen
-// gefunden. Ein Autor, der auf kein Konto zeigt (Altbestand mit dem Label
-// "claude"), gehört dem Instanz-Owner wie der Rest des Altbestands. Ein Eintrag
-// ganz ohne Autor (Destillat) wird wie bisher ausgeliefert. Der Eintrag bleibt
-// für seinen Autor sichtbar, wird nur nicht zugestellt.
+// Der Autor ist die unveränderliche Konto-Id des Eintrags (knowledge_authors):
+// eine Umbenennung ändert daran nichts. Nur Altbestand ohne diese Zeile wird
+// über den Namen gefunden, ohne Groß-/Kleinschreibung; ein Name, der auf zwei
+// Konten passt, wird nicht zugestellt, einer, der auf kein Konto passt (das
+// Label "claude" aus der Zeit vor Konten), gehört dem Instanz-Owner. Ein
+// Eintrag ganz ohne Autor (Destillat) wird wie bisher ausgeliefert. Der Eintrag
+// bleibt für seinen Autor sichtbar, wird nur nicht zugestellt.
 func (a *ProjectAccess) machineAuthorDelivers(k Knowledge) bool {
-	if strings.TrimSpace(k.Person) == "" {
-		// Distilled entries carry no author and belong to the machine they were
-		// distilled on; they keep reaching it.
-		return true
-	}
 	a.ownersOnce.Do(func() { a.ownerIDs, a.ownerDefault, a.authorIDs = a.st.machineDeliveryIndex() })
-	author, known := a.authorIDs[strings.ToLower(strings.TrimSpace(k.Person))]
-	if !known {
-		author = a.ownerDefault
+	author := a.st.knowledgeAuthorID(k.ID)
+	if author == 0 {
+		if strings.TrimSpace(k.Person) == "" {
+			return true
+		}
+		id, known := a.authorIDs[strings.ToLower(strings.TrimSpace(k.Person))]
+		switch {
+		case !known:
+			author = a.ownerDefault
+		case id == -1:
+			return false
+		default:
+			author = id
+		}
 	}
 	owner, claimed := a.ownerIDs[canonicalMachine(k.Scope.Machine)]
 	if !claimed {

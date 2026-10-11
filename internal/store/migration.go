@@ -390,6 +390,9 @@ func (s *Store) InsertMigrated(in MigratedEntry) (MigratedResult, error) {
 	if _, err := tx.Exec(`INSERT INTO search_documents(kind,domain_id,title,body,project,branch,machine) VALUES('knowledge',?,?,?,?,?,?)`, id, k.Title, k.Body, k.Scope.Project, k.Scope.Branch, k.Scope.Machine); err != nil {
 		return MigratedResult{}, err
 	}
+	if err := recordAuthorTx(tx, id, k.AuthorID); err != nil {
+		return MigratedResult{}, err
+	}
 	for _, pattern := range k.Activation.Paths {
 		if _, err := tx.Exec(`INSERT INTO instruction_activation_path(knowledge_id,pattern) VALUES(?,?)`, id, pattern); err != nil {
 			return MigratedResult{}, err

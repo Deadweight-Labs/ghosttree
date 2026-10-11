@@ -365,3 +365,19 @@ func TestThreadTextLimitIsTheSameOnBothPaths(t *testing.T) {
 		t.Error("the agent path accepts a question over the limit")
 	}
 }
+
+// Round 3: the API records the writing account, so the instance owner does not
+// receive a note an ordinary account planted on a free name once he claims it.
+func TestAPIWrittenMachineNoteIsNeverTheInstanceOwnersToReceive(t *testing.T) {
+	f := accessAPI(t, true)
+	title := "free-name: planted by mia"
+	f.expect(t, "mia", 200, "POST", "/api/knowledge", map[string]any{
+		"type": "instruction", "title": title, "body": "x", "scope": scope.Axes{Machine: "free-name"},
+	})
+	if err := f.st.ClaimMachine("free-name", "person:1"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(f.expect(t, "robin", 200, "GET", "/api/context/bootstrap?machine=free-name", nil), title) {
+		t.Error("the instance owner received a note written by another account")
+	}
+}
