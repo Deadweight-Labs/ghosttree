@@ -41,6 +41,9 @@ var (
 	ErrInvalidInput    = errors.New("invalid input")
 	ErrProjectClaimed  = errors.New("project belongs to another organization")
 	ErrProjectNotFound = errors.New("project not found")
+	// ErrProjectNameTaken: ein benanntes Projekt dieses Namens gibt es schon,
+	// in irgendeiner Organisation der Instanz.
+	ErrProjectNameTaken = errors.New("a project with that name already exists")
 	// ErrNoOrg: das Konto gehört keiner Organisation; ein Projekt kann ihm nicht
 	// zugeordnet werden.
 	ErrNoOrg = errors.New("account belongs to no organization")
@@ -89,6 +92,10 @@ type Project struct {
 	Org       string `json:"org"`
 	Name      string `json:"name,omitempty"`
 	CreatedAt string `json:"created_at"`
+	// Named: ein Projekt ohne Git (ID "<org>/<name>"). Das ist eine Eigenschaft
+	// der Zeile (Tabelle named_projects), nicht der ID-Form: eine hostlose Remote
+	// wie "gitserver/repo" hat dieselbe Gestalt und bleibt ein Remote-Projekt.
+	Named bool `json:"named,omitempty"`
 }
 
 // Invitation beschreibt eine Einladung ohne ihren Code. Der Klartext
@@ -565,8 +572,9 @@ func (s *Store) SetDefaultOrg(accountPrincipal string, orgID int64) error {
 
 func projectTx(q rowQuerier, remote string) (Project, bool) {
 	var p Project
-	err := q.QueryRow(`SELECT p.id, p.remote, p.org_id, o.slug, p.name, p.created_at FROM projects p JOIN orgs o ON o.id = p.org_id WHERE p.remote=?`,
-		remote).Scan(&p.ID, &p.Remote, &p.OrgID, &p.Org, &p.Name, &p.CreatedAt)
+	err := q.QueryRow(`SELECT p.id, p.remote, p.org_id, o.slug, p.name, p.created_at,
+		EXISTS(SELECT 1 FROM named_projects n WHERE n.project_id = p.id) FROM projects p JOIN orgs o ON o.id = p.org_id WHERE p.remote=?`,
+		remote).Scan(&p.ID, &p.Remote, &p.OrgID, &p.Org, &p.Name, &p.CreatedAt, &p.Named)
 	return p, err == nil
 }
 
@@ -680,7 +688,105 @@ func (s *Store) EnsureProject(accountPrincipal, remote string) (Project, error) 
 	if remote == "" || len(remote) > maxRemoteLen {
 		return Project{}, nil
 	}
+	if p, ok := projectTx(s.db, remote); ok && p.Named {
+		// Ein benanntes Projekt wird nie über einen Schreibzugriff zugeordnet.
+		return Project{}, ErrProjectNotFound
+	} else if !ok && orgNamespaceTx(s.db, remote) {
+		return Project{}, ErrProjectNotFound
+	}
+	// Ein unbekannter Wert, auch einer in der Gestalt "a/b" (eine hostlose
+	// Remote wie gitserver/repo), ist wie bisher ein Remote-Projekt: benannt ist
+	// nur, was in named_projects steht.
 	return claimInTx(s.db, accountPrincipal, remote, "", false)
+}
+
+// orgNamespaceTx sagt, ob remote ein unbekannter hostloser Zweisegment-Wert ist,
+// dessen erstes Segment ein Org-Slug ist. Dieser Namensraum gehört den
+// benannten Projekten der Organisation: ein Schreibzugriff legt dort nichts
+// implizit an, auch nicht für Mitglieder (dafür gibt es ctx project create), und
+// niemand außerhalb kann so Namen einer fremden Org besetzen oder per 409
+// abfragen. Bestehende Remote-Projekte bleiben unverändert, auch wenn später
+// eine Organisation mit passendem Slug entsteht.
+func orgNamespaceTx(q rowQuerier, remote string) bool {
+	if !scope.IsNamedProject(remote) {
+		return false
+	}
+	var n int
+	_ = q.QueryRow(`SELECT COUNT(*) FROM orgs WHERE slug=?`, remote[:strings.IndexByte(remote, '/')]).Scan(&n)
+	return n > 0
+}
+
+// CreateNamedProject legt ein Projekt ohne Git an. Die ID ist
+// "<org-slug>/<name>" (das erste Segment ohne Punkt, also nie eine Remote) und
+// nur innerhalb der Organisation eindeutig.
+// Das Projekt gehört der Organisation orgRef, leer heißt: Regel des Kontos
+// (Standard, sonst die einzige). Anlegen darf jedes Mitglied dieser Organisation;
+// der Ersteller wird Projekt-Owner.
+func (s *Store) CreateNamedProject(accountPrincipal, name, orgRef string) (Project, error) {
+	if s.writer != nil {
+		return queueValue(s, []any{accountPrincipal, name, orgRef}, func(d *Store, p []any) (Project, error) {
+			return d.CreateNamedProject(p[0].(string), p[1].(string), p[2].(string))
+		})
+	}
+	if !scope.IsProjectName(name) {
+		return Project{}, fmt.Errorf("%w: a project name is lowercase letters, digits and dashes (at most 40), for example infra", ErrInvalidInput)
+	}
+	acct, err := parsePersonPrincipalID(accountPrincipal)
+	if err != nil {
+		return Project{}, err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return Project{}, err
+	}
+	defer tx.Rollback()
+	var orgID int64
+	if orgRef != "" {
+		o, err := orgByRefTx(tx, orgRef)
+		if err != nil {
+			return Project{}, err
+		}
+		if orgRoleTx(tx, o.ID, acct) == "" {
+			return Project{}, ErrNotOrgMember
+		}
+		orgID = o.ID
+	} else if orgID, err = pickOrgTx(tx, acct); err != nil {
+		return Project{}, err
+	}
+	org, err := orgByIDTx(tx, orgID)
+	if err != nil {
+		return Project{}, err
+	}
+	// Die ID führt den Org-Slug: "acme/infra". Das erste Segment hat keinen
+	// Punkt, eine Remote meist einen Host mit Punkt. Der Name ist nur innerhalb
+	// der Organisation vergeben. Trifft die ID eine vorhandene Zeile (ein
+	// benanntes Projekt derselben Org, aber auch ein Remote-Projekt wie
+	// "acme/infra"), gilt dieselbe Antwort: der Name ist vergeben. Benannt wird
+	// das Projekt durch die Zeile in named_projects, nicht durch die ID-Form.
+	id := org.Slug + "/" + name
+	res, err := tx.Exec(`INSERT OR IGNORE INTO projects(remote, org_id, name, created_at) VALUES(?,?,?,?)`, id, orgID, name, now())
+	if err != nil {
+		return Project{}, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return Project{}, ErrProjectNameTaken
+	}
+	p, _ := projectTx(tx, id)
+	if _, err := tx.Exec(`INSERT INTO named_projects(project_id) VALUES(?)`, p.ID); err != nil {
+		return Project{}, err
+	}
+	p.Named = true
+	if _, err := tx.Exec(`INSERT INTO project_members(project_id, account_id, role, can_review, granted_by, granted_at) VALUES(?,?,?,0,?,?)`,
+		p.ID, acct, RoleOwner, acct, now()); err != nil {
+		return Project{}, err
+	}
+	if err := roleEvent(tx, id, principalOfID(acct), "", RoleOwner, principalOfID(acct), RoleViaAPI); err != nil {
+		return Project{}, err
+	}
+	if err := orgEvent(tx, orgID, "create_project", principalOfID(acct), id, ""); err != nil {
+		return Project{}, err
+	}
+	return p, tx.Commit()
 }
 
 // ClaimProject ist der ausdrückliche Weg (`ctx project claim`), nur für Owner
@@ -694,6 +800,16 @@ func (s *Store) ClaimProject(accountPrincipal, remote, orgRef string) (Project, 
 	remote, err := normalizeRemote(remote)
 	if err != nil {
 		return Project{}, err
+	}
+	p, known := projectTx(s.db, remote)
+	if known && p.Named {
+		if acct, err := parsePersonPrincipalID(accountPrincipal); err == nil && orgRoleTx(s.db, p.OrgID, acct) != "" {
+			return Project{}, fmt.Errorf("%w: %q is a project name, not a git remote; create it with ctx project create", ErrInvalidInput, remote)
+		}
+		return Project{}, ErrProjectNotFound
+	}
+	if !known && orgNamespaceTx(s.db, remote) {
+		return Project{}, ErrProjectNotFound
 	}
 	return claimInTx(s.db, accountPrincipal, remote, orgRef, true)
 }
@@ -827,7 +943,8 @@ func (s *Store) ListProjects(accountPrincipal string, orgID int64) ([]Project, e
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.db.Query(`SELECT p.id, p.remote, p.org_id, o.slug, p.name, p.created_at FROM projects p
+	rows, err := s.db.Query(`SELECT p.id, p.remote, p.org_id, o.slug, p.name, p.created_at,
+		EXISTS(SELECT 1 FROM named_projects n WHERE n.project_id = p.id) FROM projects p
 		JOIN orgs o ON o.id = p.org_id JOIN org_members m ON m.org_id = p.org_id AND m.account_id = ?
 		WHERE (? = 0 OR p.org_id = ?) ORDER BY o.slug, p.remote LIMIT ?`, acct, orgID, orgID, maxListRows)
 	if err != nil {
@@ -837,7 +954,7 @@ func (s *Store) ListProjects(accountPrincipal string, orgID int64) ([]Project, e
 	out := []Project{}
 	for rows.Next() {
 		var p Project
-		if err := rows.Scan(&p.ID, &p.Remote, &p.OrgID, &p.Org, &p.Name, &p.CreatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Remote, &p.OrgID, &p.Org, &p.Name, &p.CreatedAt, &p.Named); err != nil {
 			return nil, err
 		}
 		out = append(out, p)

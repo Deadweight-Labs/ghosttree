@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/projectlink"
 	"github.com/Deadweight-Labs/ghosttree/internal/redact"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -252,6 +253,36 @@ func tooLarge(err error) bool {
 	return errors.As(err, &h) && h.HTTPStatus() == http.StatusRequestEntityTooLarge
 }
 
+// projectOfSession bestimmt Projekt und Branch einer Sitzung aus ihrem
+// Arbeitsverzeichnis. Gilt dort ein Projekt-Marker (die nächste Grenze ist ein
+// verlinkter Ordner, siehe ResolveGitContext), schlägt er das, was das
+// Transkript selbst trägt: ein benanntes Projekt hat keinen Branch, und die
+// Git-Angaben des Harness stammen dann von einem umgebenden Repo. Sonst gilt,
+// was das Transkript trägt, und fehlt es, die Git-Auflösung.
+func projectOfSession(cwd, project, branch string) (string, string) {
+	if cwd == "" {
+		return project, branch
+	}
+	if dir, linked := projectlink.Find(cwd); dir != "" {
+		p, b := ProjectInfo(cwd)
+		if p == linked {
+			return p, ""
+		}
+		if b == "" {
+			b = branch
+		}
+		return p, b
+	}
+	if project == "" {
+		p, b := GitInfo(cwd)
+		project = p
+		if branch == "" {
+			branch = b
+		}
+	}
+	return project, branch
+}
+
 func registerSession(path, harness string, up Uploader, machine string) (store.SessionRef, error) {
 	head, err := firstLines(path, metaScanLines)
 	if err != nil {
@@ -266,13 +297,7 @@ func registerSession(path, harness string, up Uploader, machine string) (store.S
 	if externalID == "" {
 		externalID = strings.TrimSuffix(filepath.Base(path), ".jsonl")
 	}
-	if project == "" && cwd != "" {
-		p, b := GitInfo(cwd)
-		project = p
-		if branch == "" {
-			branch = b
-		}
-	}
+	project, branch = projectOfSession(cwd, project, branch)
 	started := ""
 	if fi, err := os.Stat(path); err == nil {
 		started = fi.ModTime().UTC().Format(time.RFC3339)
@@ -449,9 +474,7 @@ func sessionIdentity(path, harness, machine string) touchIdentity {
 	if externalID == "" {
 		externalID = strings.TrimSuffix(filepath.Base(path), ".jsonl")
 	}
-	if project == "" && cwd != "" {
-		project, _ = GitInfo(cwd)
-	}
+	project, _ = projectOfSession(cwd, project, "")
 	return touchIdentity{externalID: externalID, project: project, checkout: cwd}
 }
 

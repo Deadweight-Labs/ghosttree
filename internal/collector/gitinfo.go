@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/projectlink"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 )
 
@@ -17,7 +18,35 @@ type GitContext struct {
 	RepoPath string
 }
 
+// ResolveGitContext ordnet ein Arbeitsverzeichnis seinem Projekt zu. Vom
+// Verzeichnis aufwärts gewinnt die NÄCHSTE Grenze: ein Git-Repo mit Origin
+// (Identität ist die Remote) oder ein Ordner mit .ghosttree-project (Identität
+// ist das benannte Projekt). Ein Repo innerhalb eines verlinkten Ordners
+// behält seine Identität; ein verlinkter Ordner innerhalb eines Repos (oder
+// sein Wurzelordner) überschreibt es für seinen Unterbaum. Ein verlinkter
+// Ordner hat weder Branch noch Repo-Wurzel: Ghost-Dateien gibt es nur in
+// Git-Repos.
 func ResolveGitContext(cwd string) GitContext {
+	g := resolveRepoContext(cwd)
+	linkDir, linked := projectlink.Find(cwd)
+	if linkDir == "" {
+		return g
+	}
+	root := g.Root
+	if root == "" && g.Project != "" {
+		// Das Verzeichnis ist weg; die Wurzel des Repos, aus dem die Identität
+		// stammt, steht beim nächsten vorhandenen Vorfahren.
+		if anc := nearestExistingAncestor(cwd); anc != "" {
+			root, _ = gitOut(anc, "rev-parse", "--show-toplevel")
+		}
+	}
+	if g.Project != "" && !linkWins(linkDir, root) {
+		return g
+	}
+	return GitContext{Project: linked}
+}
+
+func resolveRepoContext(cwd string) GitContext {
 	project, branch := GitInfo(cwd)
 	if project == "" {
 		// The directory may be gone rather than unversioned. Worktrees under

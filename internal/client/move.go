@@ -55,7 +55,7 @@ func (c *Client) WriteTarget(explicit, current string) (string, error) {
 		return current, nil
 	}
 	list, _ := c.WritableProjects()
-	return "", fmt.Errorf("no project given and this is not inside one: name the project (project / --project)%s", writableList(list))
+	return "", fmt.Errorf("no project given and this is not inside one: name the project (project / --project)%s. In a folder without git: ctx project link <name>", writableList(list))
 }
 
 func writableList(list []string) string {

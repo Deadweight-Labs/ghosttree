@@ -24,6 +24,7 @@ var writerMethodClasses = map[string]string{
 	"GroupByID":                     "read",
 	"AddCriterion":                  "write",
 	"CreateOrg":                     "write",
+	"CreateNamedProject":            "write",
 	"SetOrgRole":                    "write",
 	"RemoveOrgMember":               "write",
 	"SetDefaultOrg":                 "write",
