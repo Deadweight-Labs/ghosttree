@@ -200,6 +200,21 @@ func TestProjectLinkRefusesAnAmbiguousShortName(t *testing.T) {
 	}
 }
 
+// gitserver/repo has the shape of a named id but is a repository: no link.
+func TestProjectLinkTreatsAHostlessRemoteAsARepository(t *testing.T) {
+	st := moveCLIFixture(t)
+	if _, err := st.EnsureProject("person:1", "git@gitserver:repo.git"); err != nil {
+		t.Fatal(err)
+	}
+	dir := inFolder(t)
+	if code, out := ctxRun("project", "link", "gitserver/repo"); code != 2 || !strings.Contains(out, "needs no link") {
+		t.Errorf("link = %d: %s", code, out)
+	}
+	if d, _ := projectlink.Find(dir); d != "" {
+		t.Error("a repository project was linked")
+	}
+}
+
 func TestProjectUnlinkMissingAndDoctorReportStaleLinks(t *testing.T) {
 	moveCLIFixture(t)
 	if code, out := ctxRun("project", "create", "notes"); code != 0 {

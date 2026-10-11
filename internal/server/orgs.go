@@ -6,7 +6,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
@@ -383,7 +382,7 @@ func (a *api) gateProject(w http.ResponseWriter, r *http.Request, project string
 		// Ein bekanntes Projekt nimmt nur Schreibzugriffe seiner Org an, auch
 		// von Konten ohne Org: sonst landeten Daten still in einer fremden Org.
 		if a.st.OrgRole(p.OrgID, principalOf(r).ID) == "" {
-			if scope.IsNamedProject(project) {
+			if p.Named {
 				// Ein benanntes Projekt einer fremden Organisation und eines,
 				// das es nicht gibt, antworten gleich.
 				writeOrgError(w, store.ErrProjectNotFound)

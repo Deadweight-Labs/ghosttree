@@ -53,7 +53,8 @@ func projectLink(c *client.Client, name string, stdout io.Writer) int {
 		// dieselbe Antwort.
 		fmt.Fprintf(stdout, "cannot write to project %q: it does not exist or you have no role in it\n", name)
 		return 1
-	case !scope.IsNamedProject(id):
+	}
+	if !isNamedProject(c, id) {
 		fmt.Fprintf(stdout, "%s is a git repository project and needs no link: its folders are recognised by their origin remote\n", id)
 		return 2
 	}
@@ -76,6 +77,21 @@ func projectLink(c *client.Client, name string, stdout io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "%s now belongs to %s (recorded on this machine only)\n", real, id)
 	return 0
+}
+
+// isNamedProject fragt den Server: benannt ist, was dort als benanntes Projekt
+// angelegt wurde, nicht jede ID der Form "a/b" (auch gitserver/repo ist eine).
+func isNamedProject(c *client.Client, id string) bool {
+	projects, err := c.ListProjects("")
+	if err != nil {
+		return false
+	}
+	for _, p := range projects {
+		if p.Remote == id {
+			return p.Named
+		}
+	}
+	return false
 }
 
 // linkedHere liefert das Projekt, das genau für diesen Ordner eingetragen ist.

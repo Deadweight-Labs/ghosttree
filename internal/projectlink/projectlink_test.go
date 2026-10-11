@@ -3,6 +3,7 @@ package projectlink
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -47,6 +48,53 @@ func TestSetFindRemoveAndPermissions(t *testing.T) {
 	}
 	if dir, _ := Find(folder); dir != "" {
 		t.Errorf("still linked: %q", dir)
+	}
+}
+
+// Every Set reads, changes and rewrites the whole registry; without the lock
+// concurrent links (several terminals, a script) lose each other's entries.
+func TestParallelSetsLoseNoLink(t *testing.T) {
+	root := isolate(t)
+	const n = 20
+	dirs := make([]string, n)
+	for i := range dirs {
+		dirs[i] = filepath.Join(root, "f", string(rune('a'+i)))
+		if err := os.MkdirAll(dirs[i], 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	for _, d := range dirs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := Set(d, "acme/infra"); err != nil {
+				errs <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+	if got := len(List()); got != n {
+		t.Errorf("%d of %d links survived", got, n)
+	}
+	// Removing in parallel loses nothing either.
+	for _, d := range dirs[:10] {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := Remove(d); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	if got := len(List()); got != n-10 {
+		t.Errorf("%d links left, want %d", got, n-10)
 	}
 }
 

@@ -7,9 +7,10 @@ Versioning, with pre-1.0 compatibility rules described in
 ## Unreleased
 
 - Added: projects without git (REQ-459). A project can have just a name. Its id is
-  `<org>/<name>` (for example `acme/infra`), unique within the organization and
-  never mistaken for a remote, which always starts with a host that has a dot;
-  you keep saying `infra`, and a short name that matches several projects (a named
+  `<org>/<name>` (for example `acme/infra`), unique within the organization. Being
+  a named project is a property of the project, not of the id's shape: remotes
+  such as `gitserver/repo` stay ordinary repository projects, and a named
+  project cannot take the id of an existing repository. You keep saying `infra`, and a short name that matches several projects (a named
   one and a repository ending in the same name, or two organizations' `infra`) is
   refused with the list instead of being picked silently. Any account that is at
   least a member of an organization creates one in the web (Organizations page,

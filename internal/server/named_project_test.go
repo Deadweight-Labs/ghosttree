@@ -59,23 +59,42 @@ func TestNamedProjectsOfOtherOrganizationsAreInvisible(t *testing.T) {
 	write := func(token, project string) (int, map[string]any) {
 		return f.call(t, "POST", "/api/knowledge", token, map[string]any{"type": "note", "title": "t", "body": "b", "scope": map[string]any{"project": project}})
 	}
-	// Anna is in beta only: alpha/infra answers exactly like a project that is not there.
-	codeOther, outOther := write(f.anna, "alpha/infra")
-	codeNone, outNone := write(f.anna, "alpha/none")
-	if codeOther != 404 || codeNone != 404 || outOther["code"] != "project_not_found" || outNone["code"] != "project_not_found" || outOther["message"] != outNone["message"] {
-		t.Errorf("foreign %d %v, unknown %d %v", codeOther, outOther, codeNone, outNone)
+	// Anna is in beta only: a named project of alpha is not hers, and says only that.
+	code, out := write(f.anna, "alpha/infra")
+	if code != 404 || out["code"] != "project_not_found" {
+		t.Errorf("foreign named project: %d %v", code, out)
+	}
+	if _, ok := f.st.ProjectByRemote("alpha/infra"); !ok {
+		t.Error("the foreign project vanished")
 	}
 }
 
-func TestAWriteToAnUnknownNamedProjectCreatesNothing(t *testing.T) {
+// Whether a project is named is a property of its row, not of the id's shape.
+// Remotes without a dotted host and with two segments (ssh://gitserver/repo.git,
+// git@gitserver:repo.git, localhost/repo) behave exactly as before this feature:
+// implicit remote projects, and a claimed one answers project_claimed.
+func TestHostlessTwoSegmentRemotesKeepWorkingOverTheAPI(t *testing.T) {
 	f := newOrgFixture(t)
 	f.mustCall(t, 201, "POST", "/api/orgs", f.robin, map[string]any{"name": "Alpha", "slug": "alpha"})
-	code, out := f.call(t, "POST", "/api/knowledge", f.robin, map[string]any{"type": "note", "title": "t", "body": "b", "scope": map[string]any{"project": "alpha/ghost"}})
-	if code != 404 || out["code"] != "project_not_found" {
-		t.Fatalf("write into an unknown name: %d %v", code, out)
+	f.mustCall(t, 201, "POST", "/api/orgs", f.robin, map[string]any{"name": "Beta", "slug": "beta"})
+	inv := f.invite(t, "person:1", "beta", "", "member")
+	f.mustCall(t, 200, "POST", "/api/invitations/accept", f.anna, map[string]any{"code": inv["code"]})
+	write := func(token, project string) (int, map[string]any) {
+		return f.call(t, "POST", "/api/knowledge", token, map[string]any{"type": "note", "title": "t", "body": "b", "scope": map[string]any{"project": project}})
 	}
-	if _, ok := f.st.ProjectByRemote("alpha/ghost"); ok {
-		t.Fatal("a project named ghost exists")
+	for _, remote := range []string{"gitserver/repo", "localhost/repo", "gitserver/other"} {
+		// First write creates the remote project in robin's organization.
+		if code, out := write(f.robin, remote); code != 200 {
+			t.Errorf("%s: implicit create = %d %v", remote, code, out)
+		}
+		p, ok := f.st.ProjectByRemote(remote)
+		if !ok || p.Named {
+			t.Errorf("%s: project = %+v, %v", remote, p, ok)
+		}
+		// Another organization is told it is claimed, as before, not "not found".
+		if code, out := write(f.carl, remote); code != 409 || out["code"] != "project_claimed" {
+			t.Errorf("%s: foreign write = %d %v", remote, code, out)
+		}
 	}
 }
 

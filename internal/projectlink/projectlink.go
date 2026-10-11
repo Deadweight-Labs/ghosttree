@@ -107,6 +107,11 @@ func Set(dir, project string) (string, error) {
 	if why := Refusal(real); why != "" {
 		return "", errors.New(why)
 	}
+	unlock, err := lock()
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
 	links := load()
 	links[real] = project
 	return real, save(links)
@@ -118,6 +123,11 @@ func Remove(dir string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	unlock, err := lock()
+	if err != nil {
+		return false, err
+	}
+	defer unlock()
 	links := load()
 	if _, ok := links[real]; !ok {
 		return false, nil
@@ -128,6 +138,11 @@ func Remove(dir string) (bool, error) {
 
 // Prune removes the links whose folder no longer exists and returns how many.
 func Prune() (int, error) {
+	unlock, err := lock()
+	if err != nil {
+		return 0, err
+	}
+	defer unlock()
 	links := load()
 	n := 0
 	for p := range links {

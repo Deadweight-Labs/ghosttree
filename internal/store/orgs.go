@@ -92,6 +92,10 @@ type Project struct {
 	Org       string `json:"org"`
 	Name      string `json:"name,omitempty"`
 	CreatedAt string `json:"created_at"`
+	// Named: ein Projekt ohne Git (ID "<org>/<name>"). Das ist eine Eigenschaft
+	// der Zeile (Tabelle named_projects), nicht der ID-Form: eine hostlose Remote
+	// wie "gitserver/repo" hat dieselbe Gestalt und bleibt ein Remote-Projekt.
+	Named bool `json:"named,omitempty"`
 }
 
 // Invitation beschreibt eine Einladung ohne ihren Code. Der Klartext
@@ -568,8 +572,9 @@ func (s *Store) SetDefaultOrg(accountPrincipal string, orgID int64) error {
 
 func projectTx(q rowQuerier, remote string) (Project, bool) {
 	var p Project
-	err := q.QueryRow(`SELECT p.id, p.remote, p.org_id, o.slug, p.name, p.created_at FROM projects p JOIN orgs o ON o.id = p.org_id WHERE p.remote=?`,
-		remote).Scan(&p.ID, &p.Remote, &p.OrgID, &p.Org, &p.Name, &p.CreatedAt)
+	err := q.QueryRow(`SELECT p.id, p.remote, p.org_id, o.slug, p.name, p.created_at,
+		EXISTS(SELECT 1 FROM named_projects n WHERE n.project_id = p.id) FROM projects p JOIN orgs o ON o.id = p.org_id WHERE p.remote=?`,
+		remote).Scan(&p.ID, &p.Remote, &p.OrgID, &p.Org, &p.Name, &p.CreatedAt, &p.Named)
 	return p, err == nil
 }
 
@@ -683,11 +688,13 @@ func (s *Store) EnsureProject(accountPrincipal, remote string) (Project, error) 
 	if remote == "" || len(remote) > maxRemoteLen {
 		return Project{}, nil
 	}
-	if scope.IsNamedProject(remote) {
-		// Ein benanntes Projekt entsteht nur ausdrücklich (CreateNamedProject);
-		// ein Schreibzugriff auf einen unbekannten Namen legt keines an.
+	if p, ok := projectTx(s.db, remote); ok && p.Named {
+		// Ein benanntes Projekt wird nie über einen Schreibzugriff zugeordnet.
 		return Project{}, ErrProjectNotFound
 	}
+	// Ein unbekannter Wert, auch einer in der Gestalt "a/b" (eine hostlose
+	// Remote wie gitserver/repo), ist wie bisher ein Remote-Projekt: benannt ist
+	// nur, was in named_projects steht.
 	return claimInTx(s.db, accountPrincipal, remote, "", false)
 }
 
@@ -733,9 +740,11 @@ func (s *Store) CreateNamedProject(accountPrincipal, name, orgRef string) (Proje
 		return Project{}, err
 	}
 	// Die ID führt den Org-Slug: "acme/infra". Das erste Segment hat keinen
-	// Punkt, eine Remote immer einen Host mit Punkt. Der Name ist damit nur
-	// innerhalb der Organisation vergeben, und niemand erfährt über ein 409,
-	// welche Namen eine fremde Organisation benutzt.
+	// Punkt, eine Remote meist einen Host mit Punkt. Der Name ist nur innerhalb
+	// der Organisation vergeben. Trifft die ID eine vorhandene Zeile (ein
+	// benanntes Projekt derselben Org, aber auch ein Remote-Projekt wie
+	// "acme/infra"), gilt dieselbe Antwort: der Name ist vergeben. Benannt wird
+	// das Projekt durch die Zeile in named_projects, nicht durch die ID-Form.
 	id := org.Slug + "/" + name
 	res, err := tx.Exec(`INSERT OR IGNORE INTO projects(remote, org_id, name, created_at) VALUES(?,?,?,?)`, id, orgID, name, now())
 	if err != nil {
@@ -745,6 +754,10 @@ func (s *Store) CreateNamedProject(accountPrincipal, name, orgRef string) (Proje
 		return Project{}, ErrProjectNameTaken
 	}
 	p, _ := projectTx(tx, id)
+	if _, err := tx.Exec(`INSERT INTO named_projects(project_id) VALUES(?)`, p.ID); err != nil {
+		return Project{}, err
+	}
+	p.Named = true
 	if _, err := tx.Exec(`INSERT INTO project_members(project_id, account_id, role, can_review, granted_by, granted_at) VALUES(?,?,?,0,?,?)`,
 		p.ID, acct, RoleOwner, acct, now()); err != nil {
 		return Project{}, err
@@ -770,7 +783,7 @@ func (s *Store) ClaimProject(accountPrincipal, remote, orgRef string) (Project, 
 	if err != nil {
 		return Project{}, err
 	}
-	if scope.IsNamedProject(remote) {
+	if p, ok := projectTx(s.db, remote); ok && p.Named {
 		return Project{}, fmt.Errorf("%w: %q is a project name, not a git remote; create it with ctx project create", ErrInvalidInput, remote)
 	}
 	return claimInTx(s.db, accountPrincipal, remote, orgRef, true)
@@ -905,7 +918,8 @@ func (s *Store) ListProjects(accountPrincipal string, orgID int64) ([]Project, e
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.db.Query(`SELECT p.id, p.remote, p.org_id, o.slug, p.name, p.created_at FROM projects p
+	rows, err := s.db.Query(`SELECT p.id, p.remote, p.org_id, o.slug, p.name, p.created_at,
+		EXISTS(SELECT 1 FROM named_projects n WHERE n.project_id = p.id) FROM projects p
 		JOIN orgs o ON o.id = p.org_id JOIN org_members m ON m.org_id = p.org_id AND m.account_id = ?
 		WHERE (? = 0 OR p.org_id = ?) ORDER BY o.slug, p.remote LIMIT ?`, acct, orgID, orgID, maxListRows)
 	if err != nil {
@@ -915,7 +929,7 @@ func (s *Store) ListProjects(accountPrincipal string, orgID int64) ([]Project, e
 	out := []Project{}
 	for rows.Next() {
 		var p Project
-		if err := rows.Scan(&p.ID, &p.Remote, &p.OrgID, &p.Org, &p.Name, &p.CreatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Remote, &p.OrgID, &p.Org, &p.Name, &p.CreatedAt, &p.Named); err != nil {
 			return nil, err
 		}
 		out = append(out, p)

@@ -3,6 +3,8 @@ package store
 import (
 	"errors"
 	"testing"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 )
 
 func TestAMemberCreatesANamedProjectAndBecomesItsOwner(t *testing.T) {
@@ -77,17 +79,58 @@ func TestANamedProjectNameIsUniquePerOrganization(t *testing.T) {
 	}
 }
 
-func TestANamedProjectIsNeverCreatedImplicitlyOrClaimed(t *testing.T) {
+// A named project is a property of the project's row. A write never turns an
+// existing named project into a plain one, and never claims it.
+func TestANamedProjectIsNeverClaimedOrReassignedByAWrite(t *testing.T) {
 	st := orgStore(t, "robin")
 	mustOrg(t, st, "person:1", "Alpha", "alpha")
-	// A stale link or a typo must not conjure a project out of a write.
-	if _, err := st.EnsureProject("person:1", "alpha/ghost"); !errors.Is(err, ErrProjectNotFound) {
-		t.Errorf("EnsureProject on a name: %v", err)
+	if _, err := st.CreateNamedProject("person:1", "infra", ""); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := st.ClaimProject("person:1", "alpha/ghost", "alpha"); !errors.Is(err, ErrInvalidInput) {
-		t.Errorf("ClaimProject on a name: %v", err)
+	if _, err := st.EnsureProject("person:1", "alpha/infra"); !errors.Is(err, ErrProjectNotFound) {
+		t.Errorf("EnsureProject on a named project: %v", err)
 	}
-	if _, ok := st.ProjectByRemote("alpha/ghost"); ok {
-		t.Error("a project appeared")
+	if _, err := st.ClaimProject("person:1", "alpha/infra", "alpha"); !errors.Is(err, ErrInvalidInput) {
+		t.Errorf("ClaimProject on a named project: %v", err)
+	}
+	if p, ok := st.ProjectByRemote("alpha/infra"); !ok || !p.Named {
+		t.Errorf("project = %+v, %v", p, ok)
+	}
+	list, _ := st.ListProjects("person:1", 0)
+	if len(list) != 1 || !list[0].Named {
+		t.Errorf("ListProjects = %+v", list)
+	}
+}
+
+// Remotes without a dotted host and with exactly two segments have the shape
+// "a/b" but are repositories: they stay implicit remote projects, can be claimed,
+// and a named project cannot take their id.
+func TestHostlessTwoSegmentRemotesStayRemoteProjects(t *testing.T) {
+	st := orgStore(t, "robin", "anna")
+	mustOrg(t, st, "person:1", "Alpha", "alpha")
+	for _, raw := range []string{"ssh://gitserver/repo.git", "git@gitserver:repo.git", "localhost/repo"} {
+		id := scope.NormalizeRemote(raw)
+		if id != "gitserver/repo" && id != "localhost/repo" {
+			t.Fatalf("fixture: %q normalized to %q", raw, id)
+		}
+		p, err := st.EnsureProject("person:1", raw)
+		if err != nil || p.Remote != id || p.Named {
+			t.Errorf("EnsureProject(%q) = %+v, %v; want an implicit remote project", raw, p, err)
+		}
+		if again, err := st.ClaimProject("person:1", raw, "alpha"); err != nil || again.Remote != id {
+			t.Errorf("ClaimProject(%q) = %+v, %v", raw, again, err)
+		}
+	}
+	// A named project whose id equals a repository's is refused.
+	st2 := orgStore(t, "robin")
+	mustOrg(t, st2, "person:1", "Gitserver", "gitserver")
+	if _, err := st2.EnsureProject("person:1", "git@gitserver:repo.git"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st2.CreateNamedProject("person:1", "repo", "gitserver"); !errors.Is(err, ErrProjectNameTaken) {
+		t.Errorf("named project over a remote project: %v", err)
+	}
+	if p, _ := st2.ProjectByRemote("gitserver/repo"); p.Named {
+		t.Error("the repository project was turned into a named one")
 	}
 }
