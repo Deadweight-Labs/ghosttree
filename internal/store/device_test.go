@@ -255,3 +255,21 @@ func TestOldDatabaseWithoutDeviceKindIsRebuilt(t *testing.T) {
 		t.Fatalf("device kind still rejected: %v", err)
 	}
 }
+
+func TestDeviceFlowMachineTakenEndsTheWaitAtOnce(t *testing.T) {
+	d, clock := newDeviceFixture(t)
+	flow, _ := d.Start("a", "taken-box", "a")
+	if err := d.RefuseMachineTaken(flow.UserCode, "person:1"); err != nil {
+		t.Fatal(err)
+	}
+	clock.advance(time.Minute)
+	if _, _, err := d.Poll(flow.DeviceCode); !errors.Is(err, ErrDeviceMachineTaken) {
+		t.Fatalf("poll after a taken name: %v", err)
+	}
+	if _, _, err := d.Poll(flow.DeviceCode); !errors.Is(err, ErrDeviceUnknown) {
+		t.Fatalf("the flow is used up: %v", err)
+	}
+	if d.Open() != 0 {
+		t.Fatalf("open flows = %d", d.Open())
+	}
+}

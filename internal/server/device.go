@@ -135,6 +135,8 @@ func (a *api) pollDeviceLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "slow_down", "interval": int(interval.Seconds())})
 	case errors.Is(err, store.ErrDeviceDenied):
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "access_denied"})
+	case errors.Is(err, store.ErrDeviceMachineTaken):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "machine_name_taken", "error_description": "that machine name belongs to another account; run ctx login with a different --machine"})
 	case errors.Is(err, store.ErrDeviceUnknown):
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "expired_token"})
 	case err != nil:
