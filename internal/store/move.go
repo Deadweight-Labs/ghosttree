@@ -151,14 +151,76 @@ func (a *ProjectAccess) WritableProjects() ([]string, error) {
 // ownNoteOnUnclaimedMachine: ein Hinweis auf eine Maschine, auf der nie ein
 // Agent lief (etwa ein ssh-Ziel), steht unter einem Namen ohne Besitzer. Dort
 // gilt der Instanz-Owner als Besitzer, und jedes andere Konto könnte seine
-// eigene Notiz nicht mehr lesen. Der Autor darf sie lesen und pflegen, bis ein
-// Konto die Maschine beansprucht; wer sie beansprucht, ist ihr Besitzer. Das
-// Recht zu bestätigen (verify) folgt daraus nicht.
+// eigene Notiz nicht mehr lesen. Der Autor darf seine Notiz immer lesen und
+// pflegen, auch wenn ein anderes Konto die Maschine später beansprucht (sie
+// wird dann nicht mehr ausgeliefert, siehe machineAuthorDelivers); anlegen darf
+// er nur, solange niemand die Maschine beansprucht hat. Verify folgt daraus nie.
 func (a *ProjectAccess) ownNoteOnUnclaimedMachine(obj Object, act Action) bool {
-	if !obj.Own || act == ActVerify {
+	if !obj.Own {
 		return false
 	}
-	a.loadMachines()
-	_, claimed := a.machines[canonicalMachine(obj.Machine)]
-	return !claimed
+	switch act {
+	case ActRead, ActEdit:
+		return true
+	case ActCreate:
+		a.loadMachines()
+		_, claimed := a.machines[canonicalMachine(obj.Machine)]
+		return !claimed
+	}
+	return false
+}
+
+// machineOwnerNames: Maschinenname -> Name des Kontos, dem sie gehört, und der
+// Name des Instanz-Owners für Namen ohne Zeile (Altbestand).
+func (s *Store) machineOwnerNames() (map[string]string, string) {
+	if s.reader != nil {
+		return s.reader.machineOwnerNames()
+	}
+	owner := instanceOwnerID(s.db)
+	var ownerName string
+	_ = s.db.QueryRow(`SELECT name FROM persons WHERE id=?`, owner).Scan(&ownerName)
+	out := map[string]string{}
+	rows, err := s.db.Query(`SELECT m.hostname, COALESCE(p.name,'') FROM machines m
+		LEFT JOIN persons p ON p.id = CASE WHEN m.account_id=0 THEN ? ELSE m.account_id END`, owner)
+	if err != nil {
+		return out, ownerName
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var host, name string
+		if rows.Scan(&host, &name) == nil {
+			out[canonicalMachine(host)] = name
+		}
+	}
+	return out, ownerName
+}
+
+// machineAuthorDelivers: Wissen für eine Maschine (ohne Projekt) wird nur
+// ausgeliefert, wenn sein Autor zum Zeitpunkt der Auslieferung Besitzer der
+// Maschine ist. Sonst könnte ein Konto eine Anweisung auf einen noch freien
+// Maschinennamen legen, und wer den Namen später beansprucht, bekäme sie als
+// bindende Anweisung. Einträge ohne Autor (Destillat, Betreiberpfade) und der
+// Altbestand des Instanz-Owners bleiben wie bisher; der Eintrag bleibt für
+// seinen Autor sichtbar, wird nur nicht zugestellt.
+func (a *ProjectAccess) machineAuthorDelivers(k Knowledge) bool {
+	if k.Person == "" {
+		return true
+	}
+	a.ownersOnce.Do(func() { a.ownerNames, a.ownerDefault = a.st.machineOwnerNames() })
+	owner, claimed := a.ownerNames[canonicalMachine(k.Scope.Machine)]
+	if !claimed {
+		owner = a.ownerDefault
+	}
+	return owner == k.Person
+}
+
+// MayMakeGlobal: ein Eintrag aus einem Projekt wird nur von Lead aufwärts (oder
+// dem Instanz-Admin) nach global gelegt. Global erreicht jede Session jedes
+// Kontos, also mehr Leser als das Projekt, aus dem er kommt; ein Mitglied darf
+// den eigenen Eintrag verschieben, aber nicht so weit ausspielen.
+func (a *ProjectAccess) MayMakeGlobal(k Knowledge) bool {
+	if k.Scope.Project == "" || a.IsAdmin() {
+		return true
+	}
+	return RoleRank(a.Role(k.Scope.Project).Role) >= 3
 }

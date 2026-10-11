@@ -120,6 +120,10 @@ func (a *api) moveKnowledge(w http.ResponseWriter, r *http.Request) {
 	if denyAccess(w, a.access(r).CheckKnowledgeCreate(dest)) {
 		return
 	}
+	if to.IsGlobal() && !a.access(r).MayMakeGlobal(k) {
+		denyAccess(w, store.ErrAccessForbidden)
+		return
+	}
 	if err := a.st.MoveKnowledge(id, to, personOf(r)); err != nil {
 		if errors.Is(err, store.ErrNothingToMove) {
 			writeCoded(w, http.StatusConflict, "nothing_to_move", err.Error())

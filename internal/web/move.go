@@ -52,9 +52,10 @@ func (a *app) knowledgeMove(w http.ResponseWriter, r *http.Request) {
 	pa := a.access(r)
 	project := strings.TrimSpace(r.FormValue("project"))
 	machine := strings.TrimSpace(r.FormValue("machine"))
-	if project != "" && machine != "" {
-		http.Error(w, "invalid input", http.StatusBadRequest)
-		return
+	// The machine field is prefilled with the entry's machine; a chosen project
+	// wins over it instead of failing the form.
+	if project != "" {
+		machine = ""
 	}
 	var to scope.Axes
 	switch {
@@ -81,6 +82,10 @@ func (a *app) knowledgeMove(w http.ResponseWriter, r *http.Request) {
 	dest := k
 	dest.Scope = to
 	if a.accessDenied(w, r, pa.CheckKnowledgeCreate(dest)) {
+		return
+	}
+	if to.IsGlobal() && !pa.MayMakeGlobal(k) {
+		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 	if err := a.store.MoveKnowledge(k.ID, to, personOf(r)); err != nil {

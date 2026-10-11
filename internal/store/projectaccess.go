@@ -297,6 +297,10 @@ type ProjectAccess struct {
 	unclaimed map[string]bool
 	writers   map[string]map[string]bool
 
+	ownersOnce   sync.Once
+	ownerNames   map[string]string
+	ownerDefault string
+
 	checks atomic.Int32
 	loads  atomic.Int32
 }
@@ -654,6 +658,9 @@ func (a *ProjectAccess) applyDelivery(project string, ok bool) bool {
 // bis ein Prüfer, Lead oder Owner ihn auf verified setzt.
 func (a *ProjectAccess) CanDeliverKnowledge(k Knowledge) bool {
 	if k.Scope.Project == "" {
+		if k.Scope.Machine != "" {
+			return a.applyDelivery("", a.machineAuthorDelivers(k))
+		}
 		return true
 	}
 	return a.applyDelivery(k.Scope.Project, a.deliverable(k.Scope.Project, k.Person, k.ConfirmedBy, k.Confidence == "verified"))

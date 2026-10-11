@@ -244,23 +244,47 @@ func TestRequestCreateNeedsAProjectAndRecordsOrigin(t *testing.T) {
 	}
 }
 
+// An agent is in one project room only. A thread for another project must not
+// register it there, and the next thread in its own project must still work:
+// own, foreign, own.
 func TestThreadOpenInAnotherProject(t *testing.T) {
-	c, _ := targetFixture(t)
+	c, st := targetFixture(t)
 	s := targetServer(c, tgtHere)
-	res, _, err := s.handleThreadOpen(context.Background(), nil, ThreadOpenInput{Title: "infra: why does the vpn flap?", Project: "infra"})
-	if err != nil {
-		t.Fatal(err)
+	open := func(in ThreadOpenInput) int64 {
+		t.Helper()
+		res, _, err := s.handleThreadOpen(context.Background(), nil, in)
+		if err != nil {
+			t.Fatalf("%+v: %v", in, err)
+		}
+		var id int64
+		if _, err := fmt.Sscanf(text(t, res), "thread %d", &id); err != nil {
+			t.Fatalf("%q: %v", text(t, res), err)
+		}
+		return id
 	}
-	var id int64
-	if _, err := fmt.Sscanf(text(t, res), "thread %d", &id); err != nil {
-		t.Fatalf("%q: %v", text(t, res), err)
+	first := open(ThreadOpenInput{Title: "own: first question", First: "my own opening"})
+	foreign := open(ThreadOpenInput{Title: "infra: why does the vpn flap?", Project: "infra", First: "seen on two hosts", Question: "Is it the MTU?"})
+	last := open(ThreadOpenInput{Title: "own: second question"})
+	for id, want := range map[int64]string{first: tgtHere, foreign: tgtInfra, last: tgtHere} {
+		th, err := st.ThreadByID(id)
+		if err != nil || th.Project != want {
+			t.Errorf("thread %d = %+v, %v; want project %s", id, th, err, want)
+		}
 	}
-	th, err := c.ThreadByID(id, s.coordRef())
-	if err != nil || th.Project != tgtInfra {
-		t.Fatalf("thread = %+v, %v", th, err)
+	// The opening contribution of the foreign thread travels with its question.
+	if th, _ := st.ThreadByID(foreign); !strings.Contains(th.Question, "Is it the MTU?") || !strings.Contains(th.Question, "seen on two hosts") {
+		t.Errorf("question = %q", th.Question)
+	}
+	// The agent is in its own room only.
+	if agents, err := st.OwnAgents("person:1"); err != nil || len(agents) != 1 || agents[0].RoomKey != store.RoomKeyForProject(tgtHere) {
+		t.Errorf("the agent was registered in the other project's room: %+v", agents)
+	}
+	// No role in the target: refused like an unknown project.
+	if _, _, err := s.handleThreadOpen(context.Background(), nil, ThreadOpenInput{Title: "x", Project: tgtForeign}); err == nil {
+		t.Error("a thread in a project without write right was opened")
 	}
 	// No project at all: refused, with the list.
-	_, _, err = targetServer(c, "").handleThreadOpen(context.Background(), nil, ThreadOpenInput{Title: "homeless question"})
+	_, _, err := targetServer(c, "").handleThreadOpen(context.Background(), nil, ThreadOpenInput{Title: "homeless question"})
 	if err == nil || !strings.Contains(err.Error(), tgtHere) {
 		t.Errorf("err = %v", err)
 	}

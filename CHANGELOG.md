@@ -24,8 +24,18 @@ Versioning, with pre-1.0 compatibility rules described in
   both places, and the move is logged (the request's activity, the entry's move
   history). Changed: requests without a project no longer appear in the ledger,
   search results or bootstrap count of any project (they stay in the lists that
-  name no project, where they can be moved); machine and global knowledge still
-  reaches every session it applies to.
+  name no project, where they can be moved: existing requests without a project
+  disappear from the project ledgers and are sorted in with `ctx request move`);
+  machine and global knowledge still reaches every session it applies to.
+  Knowledge for a machine is delivered to sessions only while its author owns that
+  machine, so nobody can plant an instruction on a free machine name for whoever
+  claims it later (the author still sees it). `thread_open` for another project
+  opens the thread on the strength of your role there and does not register the
+  session in that project's room; its opening post travels with the question.
+  Moving an entry to global needs at least the lead role in its project. Known
+  gap: a moved request still shows the handoffs of its source sessions in the
+  target until the session-visibility work of PR #94 is in (a ready test waits
+  for it).
 - Added: names and invitations work for two people (REQ-438). The sign-in reads
   the display name from the identity provider's userinfo endpoint when the ID
   token carries none (name, given and family name, nickname, user name; an email

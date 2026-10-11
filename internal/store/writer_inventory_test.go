@@ -308,6 +308,7 @@ var writerMethodClasses = map[string]string{
 	"UpdateKnowledgeBy":             "write",
 	"UpdateCoordGroup":              "write",
 	"UpdateRequest":                 "write",
+	"CreateThreadByRole":            "write",
 	"MoveKnowledge":                 "write",
 	"MoveRequest":                   "write",
 	"UpsertSession":                 "write",

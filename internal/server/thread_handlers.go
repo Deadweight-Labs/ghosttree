@@ -28,6 +28,10 @@ func (a *api) threadAccess(w http.ResponseWriter, r *http.Request) (store.CoordA
 }
 
 func (a *api) createThread(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("by_role") == "1" {
+		a.createThreadByRole(w, r)
+		return
+	}
 	access, ok := a.threadAccess(w, r)
 	if !ok {
 		return
@@ -407,4 +411,29 @@ func (a *api) touchThread(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]string{"status": "ok"})
+}
+
+// createThreadByRole opens a thread in another project than the caller's agent
+// room: the project role decides, nobody is registered in the room.
+func (a *api) createThreadByRole(w http.ResponseWriter, r *http.Request) {
+	var in store.Thread
+	if err := readJSON(r, &in); err != nil {
+		writeStoreError(w, http.StatusBadRequest, err)
+		return
+	}
+	if in.Project == "" {
+		writeErr(w, http.StatusBadRequest, "project is required")
+		return
+	}
+	a.access(r).Filtered()
+	id, err := a.st.CreateThreadByRole(principalOf(r), in)
+	if err != nil {
+		if err == store.ErrCoordForbidden || err == store.ErrCoordNotFound {
+			writeCoordAccessError(w, err)
+			return
+		}
+		writeStoreError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, 200, map[string]int64{"id": id})
 }

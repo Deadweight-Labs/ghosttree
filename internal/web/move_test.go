@@ -48,8 +48,15 @@ func TestKnowledgeMoveFormMovesToProjectMachineAndGlobal(t *testing.T) {
 		t.Fatalf("scope = %+v", k.Scope)
 	}
 	// Refusals: both targets, nothing to change, unknown project, no right.
-	if resp := move(e.Owner, url.Values{"project": {shellProject}, "machine": {"x"}}); resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("two targets = %d", resp.StatusCode)
+	// The machine field comes prefilled: a chosen project wins instead of a 400.
+	if resp := move(e.Owner, url.Values{"project": {shellProject}, "machine": {"media-vm"}}); resp.StatusCode != http.StatusSeeOther {
+		t.Errorf("project and prefilled machine = %d", resp.StatusCode)
+	}
+	if k, _ := e.St.KnowledgeByID(id); k.Scope.Project != shellProject || k.Scope.Machine != "" {
+		t.Errorf("the project did not win: %+v", k.Scope)
+	}
+	if resp := move(e.Owner, url.Values{}); resp.StatusCode != http.StatusSeeOther {
+		t.Errorf("back to global = %d", resp.StatusCode)
 	}
 	if resp := move(e.Owner, url.Values{}); resp.StatusCode != http.StatusConflict {
 		t.Errorf("global to global = %d", resp.StatusCode)

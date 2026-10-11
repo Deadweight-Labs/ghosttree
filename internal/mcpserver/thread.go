@@ -134,8 +134,19 @@ func (s *Server) handleThreadOpen(ctx context.Context, _ *mcp.CallToolRequest, i
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := s.joinRoom(store.RoomKeyForProject(project)); err != nil {
-		return nil, nil, err
+	// An agent is in exactly one project room. Its own project is joined as
+	// before; a thread for another project is opened on the strength of the
+	// account's role there, without registering the agent in that room.
+	foreign := project != s.ctxAxes.Project
+	if !foreign {
+		if err := s.joinRoom(store.RoomKeyForProject(project)); err != nil {
+			return nil, nil, err
+		}
+	} else if strings.TrimSpace(in.First) != "" {
+		// The agent cannot post in a room it is not in: the opening
+		// contribution travels with the question.
+		in.Question = strings.TrimSpace(in.Question + "\n\n" + in.First)
+		in.First = ""
 	}
 	// Vorhandene Threads am selben Objekt vorschlagen, bevor ein zweiter
 	// entsteht. Spec §B5: vorschlagen ja, automatisch zusammenführen nein.
@@ -149,7 +160,12 @@ func (s *Server) handleThreadOpen(ctx context.Context, _ *mcp.CallToolRequest, i
 		newThread.Link = &store.ThreadLink{Kind: in.LinkKind, ID: in.LinkID, Revision: in.LinkRev}
 	}
 
-	id, err := s.client.CreateThread(newThread, s.coordRef())
+	var id int64
+	if foreign {
+		id, err = s.client.CreateThreadByRole(newThread)
+	} else {
+		id, err = s.client.CreateThread(newThread, s.coordRef())
+	}
 	if err != nil {
 		return nil, nil, err
 	}
@@ -167,7 +183,9 @@ func (s *Server) handleThreadOpen(ctx context.Context, _ *mcp.CallToolRequest, i
 			fmt.Fprintf(&b, "  [%d] %s (%s)\n", t.ID, t.Title, t.State)
 		}
 	}
-	if in.DiscussNow {
+	if in.DiscussNow && foreign {
+		b.WriteString("\nNot announced: this session is not in that project's room.\n")
+	} else if in.DiscussNow {
 		if key := store.RoomKeyForProject(project); key != "" {
 			clientID, err := newCoordClientID()
 			if err == nil {
