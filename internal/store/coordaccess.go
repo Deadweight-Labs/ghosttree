@@ -565,10 +565,18 @@ func (a CoordAccess) Messages(kind, id string, afterID int64, limit int) ([]Coor
 		// Der Leser ist ein Agent: Rollen und Autorität live aus dem Zustand
 		// dieser Transaktion, nach dem Schließen des Cursors.
 		ctx := newAgentAuthorityCtx(tx, a.AgentExternalID)
+		stored := storedSenderRoles(tx, out)
 		for i := range out {
 			au := ctx.evaluate(out[i])
 			out[i].SenderRole, out[i].RecipientRole, out[i].Authority = au.SenderRole, au.RecipientRole, au.Authority
+			// Authority stays live; the role shown with it is the one the sender had.
+			if role, ok := stored[out[i].ID]; ok && au.Authority != "" {
+				out[i].SenderRole = role
+			}
 		}
+	}
+	if a.AgentExternalID != "" {
+		markAddressedToAgent(tx, out, a.AgentExternalID)
 	}
 	// Erst nach der Autoritätsberechnung: sie liest das Konto des Absenders.
 	if len(out) > 0 && a.guestViewForMessageTx(tx, kind, id) {
@@ -923,7 +931,15 @@ func (a CoordAccess) Send(message CoordMessage) (int64, error) {
 	if err := a.canWriteTx(tx, actor, message.DestinationKind, message.DestinationID); err != nil {
 		return 0, err
 	}
-	if _, actionable := attentionReasonForIntent(message.Intent); actionable && len(normalizeMembers(message.Mentions)) == 0 {
+	explicitMentions := message.Mentions
+	textRoom := mentionRoomKeyTx(tx, message.DestinationKind, message.DestinationID)
+	guestRoom := textRoom != "" && a.projectRoomGate(roomKindOf(textRoom), textRoom, ResAgents, tx) != nil
+	textIDs, typedMentions, err := a.textMentionsTx(tx, actor, textRoom, message.Body, guestRoom)
+	if err != nil {
+		return 0, err
+	}
+	message.Mentions = append(append([]string(nil), message.Mentions...), textIDs...)
+	if _, actionable := attentionReasonForIntent(message.Intent); actionable && len(normalizeMembers(message.Mentions)) == 0 && len(typedMentions) == 0 {
 		if message.DestinationKind == DestinationRoom {
 			var roomKind string
 			if err := tx.QueryRow(`SELECT kind FROM coord_rooms WHERE room_key=?`, message.DestinationID).Scan(&roomKind); err != nil {
@@ -979,6 +995,11 @@ func (a CoordAccess) Send(message CoordMessage) (int64, error) {
 			return 0, mentionErr
 		}
 		message.Mentions, rawMentions = mentions, raw
+		if guestRoom {
+			rawMentions = normalizeMembers(append(append([]string(nil), explicitMentions...), typedMentions...))
+		}
+	} else if guestRoom && len(typedMentions) > 0 {
+		rawMentions = normalizeMembers(typedMentions)
 	}
 	if message.ReplyTo != 0 {
 		var count int
@@ -1015,6 +1036,9 @@ func (a CoordAccess) Send(message CoordMessage) (int64, error) {
 		}
 	}
 	if err := insertRawMentionsTx(tx, id, rawMentions); err != nil {
+		return 0, err
+	}
+	if err := recordSenderRoleTx(tx, message, id); err != nil {
 		return 0, err
 	}
 	if message.DestinationKind == DestinationDiscussion {

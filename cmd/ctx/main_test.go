@@ -257,6 +257,7 @@ func TestExportFileIsPrivate(t *testing.T) {
 }
 
 func TestDoctorReportsUnwiredHarnesses(t *testing.T) {
+	allHarnessesPresent(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
@@ -275,6 +276,7 @@ func TestDoctorReportsUnwiredHarnesses(t *testing.T) {
 }
 
 func TestDoctorFixInstallsHarnesses(t *testing.T) {
+	allHarnessesPresent(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
@@ -374,6 +376,7 @@ func TestDoctorReportsCheckedInSpecsAndPlans(t *testing.T) {
 }
 
 func TestDoctorOnlyHooksWithoutHarnessSkipsUnsupportedHarnesses(t *testing.T) {
+	allHarnessesPresent(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
