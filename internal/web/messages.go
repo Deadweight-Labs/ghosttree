@@ -424,6 +424,7 @@ var messages = map[string]string{
 	"join.name_label":         "Your name",
 	"join.create_join":        "Create account and join",
 	"join.confirm_me":         "This is me, %s",
+	"join.confirm_first":      "Confirm first that this is your account.",
 	"join.new_code":           "New code",
 	"join.na_title":           "Invitation not available",
 	"join.na_text":            "This invitation link is not valid. It may have expired, been used, or been withdrawn. Ask the person who sent it for a new one.",

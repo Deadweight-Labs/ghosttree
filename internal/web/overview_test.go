@@ -262,8 +262,11 @@ func TestOwnerOnAnEmptyInstanceSeesGettingStartedThatSwitches(t *testing.T) {
 			t.Errorf("setup lacks %q", want)
 		}
 	}
-	if !regexp.MustCompile(`name="confirm_account"[^>]*\bchecked\b`).MatchString(page) {
-		t.Error("the confirmation box is not ticked, so the first click on the button does nothing")
+	if regexp.MustCompile(`name="confirm_account"[^>]*\bchecked\b`).MatchString(page) {
+		t.Error("the confirmation box comes ticked: the protective question is gone")
+	}
+	if !strings.Contains(page, "Confirm first that this is your account.") {
+		t.Error("the button gives no reason while the box is open")
 	}
 	if strings.Contains(page, "Agents</h2>") || strings.Contains(page, "ov-cols") {
 		t.Error("setup still shows the normal overview")

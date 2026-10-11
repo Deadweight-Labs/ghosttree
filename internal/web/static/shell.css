@@ -331,6 +331,11 @@ svg.i { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-widt
 .join-who small { color: var(--clay-ink-faint); }
 .join-confirm { display: flex; align-items: center; gap: var(--space-3); margin: 0 0 var(--space-4); padding: var(--space-3) var(--space-4); border-radius: var(--clay-radius-xs); background: var(--color-surface-sunken); font-weight: 600; cursor: pointer; }
 .join-confirm input { inline-size: 20px; block-size: 20px; flex: none; accent-color: var(--clay-accent); }
+.join-confirm-hint { display: none; margin: calc(-1 * var(--space-2)) 0 var(--space-4); font-size: var(--font-size-sm, 0.875rem); color: var(--color-text-muted); }
+/* Until the box is ticked the reason stands next to the button, and the button looks off. */
+form:has(.join-confirm input:not(:checked)) .join-confirm-hint { display: block; }
+form:has(.join-confirm input:not(:checked)) .join-confirm { outline: 2px solid var(--clay-accent); }
+form:has(.join-confirm input:not(:checked)) button.btn-primary, form:has(.join-confirm input:not(:checked)) button.ov-btn-primary { opacity: .55; }
 .join-confirm span { min-width: 0; overflow-wrap: anywhere; }
 .join-signout { margin: var(--space-4) 0 0; text-align: center; color: var(--clay-ink-soft); font: var(--text-secondary); }
 .join-link { padding: 0; border: 0; background: none; color: var(--clay-accent-text); font: inherit; font-weight: 600; text-decoration: underline; cursor: pointer; }

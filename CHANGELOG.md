@@ -11,8 +11,9 @@ Versioning, with pre-1.0 compatibility rules described in
   offer it, the API answers 409 `share_needs_project`); the sender of an @mention
   reads the mentioned person's name instead of "Someone" (everyone who may read the
   room sees the names of its participants, guests still do not); the "This is me"
-  confirmation on the connect and invitation pages comes ticked, so the button no
-  longer does nothing; `ctx login --machine NAME` with a name that belongs to
+  confirmation on the connect and invitation pages stays a question, but the button
+  now shows why it waits ("Confirm first that this is your account.") instead of
+  doing nothing; `ctx login --machine NAME` with a name that belongs to
   another account stops at once, as soon as the browser refuses it, and prints the
   exact command to run again with another name; identical agent rows ("Agent · Name
   · machine" three times) get a short tag from the session id; all absolute times
@@ -32,6 +33,18 @@ Versioning, with pre-1.0 compatibility rules described in
   its author, since a lead who moved a member's entry there would hide it from the
   project and from himself. Machine knowledge stays readable only for the owner of
   the machine.
+  Authorship is the account id, never a name: requests get an author table like
+  knowledge, a one-time start-up backfill gives legacy entries their account (the
+  name then, an earlier name next; an ambiguous name leaves the entry without an
+  owner, visible to the instance owner only; an unknown or empty label and a
+  distillate without a session belong to the instance owner, a distillate to the
+  owner of its session), and nothing is resolved by name at run time, so renaming
+  an account to "Claude" or "admin" takes nothing over. A thread cannot link, and
+  the room list does not show the title of, another author's global request.
+  Browse, search, pending, relevance and the open-request count cut other
+  authors' global entries in the query, so they cannot displace visible hits or
+  inflate counts. The relaxed list gate for lists without a project covers only
+  knowledge and requests.
 - Added: knowledge and requests are filed where they belong, not where the session
   happens to stand (REQ-458). `context_remember`, `request_create` and `thread_open`
   take an optional `project` (a remote or a short name that is unique among the
