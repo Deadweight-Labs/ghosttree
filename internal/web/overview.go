@@ -334,11 +334,58 @@ func (a *app) listAgents(r *http.Request, pa *store.ProjectAccess, project strin
 	rows := make([]agentRow, 0, len(out))
 	for _, o := range out {
 		rows = append(rows, o.row)
-		if len(rows) == limit {
-			break
-		}
+	}
+	tellAgentRowsApart(rows)
+	if len(rows) > limit {
+		rows = rows[:limit]
 	}
 	return rows, nil
+}
+
+// tellAgentRowsApart gives rows that would read the same a short tag from the
+// agent's own id ("#4821"), so three processes of one person on one machine are
+// not three identical lines. Unique names stay as they are.
+func tellAgentRowsApart(rows []agentRow) {
+	count := map[string]int{}
+	for _, r := range rows {
+		count[r.Name]++
+	}
+	used := map[string]bool{}
+	for _, r := range rows {
+		if count[r.Name] == 1 {
+			used[r.Name] = true
+		}
+	}
+	for i, r := range rows {
+		if count[r.Name] < 2 {
+			continue
+		}
+		tag := agentShortTag(r.ExternalID)
+		name := r.Name + " #" + tag
+		for n := 2; tag == "" || used[name]; n++ {
+			tag = strconv.Itoa(i+1) + "." + strconv.Itoa(n)
+			name = r.Name + " #" + tag
+		}
+		used[name] = true
+		rows[i].Name = name
+	}
+}
+
+// agentShortTag is the short session name of an agent id: the last part of it,
+// at most six characters, safe to show.
+func agentShortTag(externalID string) string {
+	parts := strings.Split(externalID, ":")
+	tail := parts[len(parts)-1]
+	var b strings.Builder
+	for _, r := range tail {
+		if b.Len() >= 6 {
+			break
+		}
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // hostUnlessNamed drops the host when the name already carries it.
