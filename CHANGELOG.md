@@ -6,6 +6,8 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Added: `ctx garden check-knowledge` (REQ-457 pilot). An opt-in gardener checks pitfalls and decisions against the code and reports whether each still holds, with commits or file:line as reasons. It stays off without an API key (`GHOSTTREE_GARDEN_KEY` or a `garden` entry in llm.json), supports `--dry-run` and a `--max-usd` budget, and with `--propose` only adds staged notes marked as coming from the gardener.
+
 - Added: knowledge and requests are filed where they belong, not where the session
   happens to stand (REQ-458). `context_remember`, `request_create` and `thread_open`
   take an optional `project` (a remote or a short name that is unique among the
