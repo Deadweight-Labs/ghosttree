@@ -88,6 +88,14 @@ func (c *Client) ClaimProject(remote, org string) (store.Project, error) {
 	return out, err
 }
 
+// CreateProject legt ein benanntes Projekt ohne Git an. org leer heißt: die
+// Standard-Organisation des Kontos.
+func (c *Client) CreateProject(name, org string) (store.Project, error) {
+	var out store.Project
+	err := c.do("POST", "/api/projects", nil, map[string]string{"name": name, "org": org}, &out)
+	return out, err
+}
+
 func (c *Client) MoveProject(remote, org string) (store.Project, error) {
 	var out store.Project
 	err := c.do("POST", "/api/projects/move", nil, map[string]string{"remote": remote, "org": org}, &out)

@@ -124,6 +124,7 @@ func (a *api) registerRoutes(mux *http.ServeMux) {
 	a.routeFunc(mux, "PUT /api/projects/{id}/members/{account}", a.setProjectMemberRole)
 	a.routeFunc(mux, "DELETE /api/projects/{id}/members/{account}", a.removeProjectMemberRole)
 	a.routeFunc(mux, "POST /api/projects/claim", a.claimProject)
+	a.routeFunc(mux, "POST /api/projects", a.createProject)
 	a.routeFunc(mux, "POST /api/projects/move", a.moveProject)
 	a.routeFunc(mux, "POST /api/context-snapshots", a.createContextSnapshot)
 	a.routeFunc(mux, "GET /api/context-snapshots", a.listContextSnapshots)

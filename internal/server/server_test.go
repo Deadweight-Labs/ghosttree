@@ -599,7 +599,7 @@ func TestGhostEndpointsStoreAndDeliver(t *testing.T) {
 	srv, token := newTestServer(t)
 
 	res := req(t, "POST", srv.URL+"/api/ghosts", token, map[string]any{
-		"project": "p", "path": "internal/store/knowledge.go", "kind": "file",
+		"project": "github.com/x/p", "path": "internal/store/knowledge.go", "kind": "file",
 		"description": "Lese- und Schreibpfade", "content_sha": "sha1",
 		"git_blob": "blob1", "line_count": 545,
 	})
@@ -609,7 +609,7 @@ func TestGhostEndpointsStoreAndDeliver(t *testing.T) {
 	res.Body.Close()
 
 	var got []store.GhostFile
-	res = req(t, "GET", srv.URL+"/api/ghosts?project=p&path=internal/store/knowledge.go&session=claude:s1", token, nil)
+	res = req(t, "GET", srv.URL+"/api/ghosts?project=github.com%2Fx%2Fp&path=internal/store/knowledge.go&session=claude:s1", token, nil)
 	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
 		t.Fatal(err)
 	}
@@ -619,7 +619,7 @@ func TestGhostEndpointsStoreAndDeliver(t *testing.T) {
 	}
 
 	// Zweiter Aufruf derselben Session: schon gesagt.
-	res = req(t, "GET", srv.URL+"/api/ghosts?project=p&path=internal/store/knowledge.go&session=claude:s1", token, nil)
+	res = req(t, "GET", srv.URL+"/api/ghosts?project=github.com%2Fx%2Fp&path=internal/store/knowledge.go&session=claude:s1", token, nil)
 	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
 		t.Fatal(err)
 	}
@@ -636,7 +636,7 @@ func TestGhostHistoryAndMoveEndpoints(t *testing.T) {
 	put := func(path, desc string) {
 		t.Helper()
 		res := req(t, "POST", srv.URL+"/api/ghosts", token, map[string]any{
-			"project": "p", "path": path, "kind": "file", "description": desc})
+			"project": "github.com/x/p", "path": path, "kind": "file", "description": desc})
 		if res.StatusCode != 200 {
 			t.Fatalf("POST /api/ghosts: %d", res.StatusCode)
 		}
@@ -646,7 +646,7 @@ func TestGhostHistoryAndMoveEndpoints(t *testing.T) {
 	put("alt.go", "die zweite Fassung")
 
 	var versions []store.GhostVersion
-	res := req(t, "GET", srv.URL+"/api/ghosts/history?project=p&path=alt.go", token, nil)
+	res := req(t, "GET", srv.URL+"/api/ghosts/history?project=github.com%2Fx%2Fp&path=alt.go", token, nil)
 	if err := json.NewDecoder(res.Body).Decode(&versions); err != nil {
 		t.Fatal(err)
 	}
@@ -658,7 +658,7 @@ func TestGhostHistoryAndMoveEndpoints(t *testing.T) {
 	// Wer den Unterschied sehen will, braucht zur abgeloesten Fassung ihren
 	// Nachfolger — und der steht nicht in der Historie, sondern ist die
 	// aktuelle Beschreibung.
-	res = req(t, "GET", srv.URL+"/api/ghosts/history?project=p&path=alt.go&chain=1", token, nil)
+	res = req(t, "GET", srv.URL+"/api/ghosts/history?project=github.com%2Fx%2Fp&path=alt.go&chain=1", token, nil)
 	if err := json.NewDecoder(res.Body).Decode(&versions); err != nil {
 		t.Fatal(err)
 	}
@@ -671,7 +671,7 @@ func TestGhostHistoryAndMoveEndpoints(t *testing.T) {
 	var counted struct {
 		Count int `json:"count"`
 	}
-	res = req(t, "GET", srv.URL+"/api/ghosts/history?project=p&path=alt.go&count=1", token, nil)
+	res = req(t, "GET", srv.URL+"/api/ghosts/history?project=github.com%2Fx%2Fp&path=alt.go&count=1", token, nil)
 	if err := json.NewDecoder(res.Body).Decode(&counted); err != nil {
 		t.Fatal(err)
 	}
@@ -681,13 +681,13 @@ func TestGhostHistoryAndMoveEndpoints(t *testing.T) {
 	}
 
 	res = req(t, "POST", srv.URL+"/api/ghosts/move", token,
-		map[string]any{"project": "p", "from": "alt.go", "to": "neu.go"})
+		map[string]any{"project": "github.com/x/p", "from": "alt.go", "to": "neu.go"})
 	if res.StatusCode != 200 {
 		t.Fatalf("POST /api/ghosts/move: %d", res.StatusCode)
 	}
 	res.Body.Close()
 
-	res = req(t, "GET", srv.URL+"/api/ghosts/history?project=p&path=neu.go", token, nil)
+	res = req(t, "GET", srv.URL+"/api/ghosts/history?project=github.com%2Fx%2Fp&path=neu.go", token, nil)
 	if err := json.NewDecoder(res.Body).Decode(&versions); err != nil {
 		t.Fatal(err)
 	}
@@ -700,11 +700,11 @@ func TestGhostHistoryAndMoveEndpoints(t *testing.T) {
 func TestGhostSearchEndpointFindsByDescription(t *testing.T) {
 	srv, token := newTestServer(t)
 	res := req(t, "POST", srv.URL+"/api/ghosts", token, map[string]any{
-		"project": "p", "path": "a.go", "kind": "file", "description": "Rangfolge nach Vertrauen",
+		"project": "github.com/x/p", "path": "a.go", "kind": "file", "description": "Rangfolge nach Vertrauen",
 	})
 	res.Body.Close()
 
-	res = req(t, "GET", srv.URL+"/api/ghosts/search?q=Vertrauen&project=p", token, nil)
+	res = req(t, "GET", srv.URL+"/api/ghosts/search?q=Vertrauen&project=github.com%2Fx%2Fp", token, nil)
 	var got []store.GhostFile
 	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
 		t.Fatal(err)

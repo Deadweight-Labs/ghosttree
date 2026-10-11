@@ -41,6 +41,9 @@ var (
 	ErrInvalidInput    = errors.New("invalid input")
 	ErrProjectClaimed  = errors.New("project belongs to another organization")
 	ErrProjectNotFound = errors.New("project not found")
+	// ErrProjectNameTaken: ein benanntes Projekt dieses Namens gibt es schon,
+	// in irgendeiner Organisation der Instanz.
+	ErrProjectNameTaken = errors.New("a project with that name already exists")
 	// ErrNoOrg: das Konto gehört keiner Organisation; ein Projekt kann ihm nicht
 	// zugeordnet werden.
 	ErrNoOrg = errors.New("account belongs to no organization")
@@ -680,7 +683,69 @@ func (s *Store) EnsureProject(accountPrincipal, remote string) (Project, error) 
 	if remote == "" || len(remote) > maxRemoteLen {
 		return Project{}, nil
 	}
+	if scope.IsNamedProject(remote) {
+		// Ein benanntes Projekt entsteht nur ausdrücklich (CreateNamedProject);
+		// ein Schreibzugriff auf einen unbekannten Namen legt keines an.
+		return Project{}, ErrProjectNotFound
+	}
 	return claimInTx(s.db, accountPrincipal, remote, "", false)
+}
+
+// CreateNamedProject legt ein Projekt ohne Git an. Die ID ist der Name selbst
+// (ein Slug ohne Punkt und "/", also nie eine Remote) und instanzweit eindeutig.
+// Das Projekt gehört der Organisation orgRef, leer heißt: Regel des Kontos
+// (Standard, sonst die einzige). Anlegen darf jedes Mitglied dieser Organisation;
+// der Ersteller wird Projekt-Owner.
+func (s *Store) CreateNamedProject(accountPrincipal, name, orgRef string) (Project, error) {
+	if s.writer != nil {
+		return queueValue(s, []any{accountPrincipal, name, orgRef}, func(d *Store, p []any) (Project, error) {
+			return d.CreateNamedProject(p[0].(string), p[1].(string), p[2].(string))
+		})
+	}
+	if !scope.IsNamedProject(name) {
+		return Project{}, fmt.Errorf("%w: a project name is lowercase letters, digits and dashes (at most 40), for example infra", ErrInvalidInput)
+	}
+	acct, err := parsePersonPrincipalID(accountPrincipal)
+	if err != nil {
+		return Project{}, err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return Project{}, err
+	}
+	defer tx.Rollback()
+	var orgID int64
+	if orgRef != "" {
+		o, err := orgByRefTx(tx, orgRef)
+		if err != nil {
+			return Project{}, err
+		}
+		if orgRoleTx(tx, o.ID, acct) == "" {
+			return Project{}, ErrNotOrgMember
+		}
+		orgID = o.ID
+	} else if orgID, err = pickOrgTx(tx, acct); err != nil {
+		return Project{}, err
+	}
+	res, err := tx.Exec(`INSERT OR IGNORE INTO projects(remote, org_id, name, created_at) VALUES(?,?,?,?)`, name, orgID, name, now())
+	if err != nil {
+		return Project{}, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return Project{}, ErrProjectNameTaken
+	}
+	p, _ := projectTx(tx, name)
+	if _, err := tx.Exec(`INSERT INTO project_members(project_id, account_id, role, can_review, granted_by, granted_at) VALUES(?,?,?,0,?,?)`,
+		p.ID, acct, RoleOwner, acct, now()); err != nil {
+		return Project{}, err
+	}
+	if err := roleEvent(tx, name, principalOfID(acct), "", RoleOwner, principalOfID(acct), RoleViaAPI); err != nil {
+		return Project{}, err
+	}
+	if err := orgEvent(tx, orgID, "create_project", principalOfID(acct), name, ""); err != nil {
+		return Project{}, err
+	}
+	return p, tx.Commit()
 }
 
 // ClaimProject ist der ausdrückliche Weg (`ctx project claim`), nur für Owner
@@ -694,6 +759,9 @@ func (s *Store) ClaimProject(accountPrincipal, remote, orgRef string) (Project, 
 	remote, err := normalizeRemote(remote)
 	if err != nil {
 		return Project{}, err
+	}
+	if scope.IsNamedProject(remote) {
+		return Project{}, fmt.Errorf("%w: %q is a project name, not a git remote; create it with ctx project create", ErrInvalidInput, remote)
 	}
 	return claimInTx(s.db, accountPrincipal, remote, orgRef, true)
 }

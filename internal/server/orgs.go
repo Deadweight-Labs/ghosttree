@@ -59,6 +59,8 @@ func writeOrgError(w http.ResponseWriter, err error) {
 		writeCoded(w, http.StatusNotFound, "no_role", err.Error())
 	case errors.Is(err, store.ErrLastOrgOwner):
 		writeCoded(w, http.StatusConflict, "last_owner", err.Error())
+	case errors.Is(err, store.ErrProjectNameTaken):
+		writeCoded(w, http.StatusConflict, "project_name_taken", err.Error())
 	case errors.Is(err, store.ErrOrgSlugTaken):
 		writeCoded(w, http.StatusConflict, "slug_taken", err.Error())
 	case errors.Is(err, store.ErrProjectClaimed):
@@ -318,6 +320,24 @@ func (a *api) listProjects(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, a.access(r).VisibleProjects(projects))
 }
 
+// createProject legt ein benanntes Projekt ohne Git an (REQ-459). Jedes Mitglied
+// der Organisation darf das; der Ersteller wird Owner.
+func (a *api) createProject(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name string `json:"name"`
+		Org  string `json:"org"`
+	}
+	if !readOrgJSON(w, r, &body) {
+		return
+	}
+	p, err := a.st.CreateNamedProject(principalOf(r).ID, body.Name, body.Org)
+	if err != nil {
+		writeOrgError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, p)
+}
+
 func (a *api) claimProject(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Remote string `json:"remote"`
@@ -372,7 +392,7 @@ func (a *api) gateProject(w http.ResponseWriter, r *http.Request, project string
 		return true
 	}
 	var unclaimed *store.ProjectUnclaimedError
-	if errors.As(err, &unclaimed) {
+	if errors.As(err, &unclaimed) || errors.Is(err, store.ErrProjectNotFound) {
 		writeOrgError(w, err)
 		return false
 	}

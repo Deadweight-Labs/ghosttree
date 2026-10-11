@@ -97,7 +97,7 @@ func TestDocPullRefusesDirtyWorktreeWithoutForce(t *testing.T) {
 	srv := httptest.NewServer(server.New(st))
 	t.Cleanup(srv.Close)
 	c := client.New(config.Config{ServerURL: srv.URL, Token: token})
-	d, err := c.CreateDocument(store.Document{Project: "p", Slug: "a", Kind: "spec", Title: "A"}, "remote\n", "initial")
+	d, err := c.CreateDocument(store.Document{Project: "github.com/x/p", Slug: "a", Kind: "spec", Title: "A"}, "remote\n", "initial")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestDocPullRefusesDirtyWorktreeWithoutForce(t *testing.T) {
 		DocumentID: d.ID, BaseRevision: 1, BaseDigest: store.Digest("remote\n"), Path: rel,
 	}})
 	var out bytes.Buffer
-	if code := docPull(root, "p", c, "a", false, &out); code == 0 || !strings.Contains(out.String(), "modified") {
+	if code := docPull(root, "github.com/x/p", c, "a", false, &out); code == 0 || !strings.Contains(out.String(), "modified") {
 		t.Fatalf("pull output = %q, code = %d", out.String(), code)
 	}
 }
@@ -120,7 +120,7 @@ func TestDocPullRefusesInvalidUTF8WithoutForce(t *testing.T) {
 	srv := httptest.NewServer(server.New(st))
 	t.Cleanup(srv.Close)
 	c := client.New(config.Config{ServerURL: srv.URL, Token: token})
-	d, err := c.CreateDocument(store.Document{Project: "p", Slug: "a", Kind: "spec", Title: "A"}, "remote\n", "initial")
+	d, err := c.CreateDocument(store.Document{Project: "github.com/x/p", Slug: "a", Kind: "spec", Title: "A"}, "remote\n", "initial")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestDocPullRefusesInvalidUTF8WithoutForce(t *testing.T) {
 		DocumentID: d.ID, BaseRevision: 1, BaseDigest: store.Digest("remote\n"), Path: rel,
 	}})
 	var out bytes.Buffer
-	if code := docPull(root, "p", c, "a", false, &out); code == 0 || !strings.Contains(out.String(), "refusing to overwrite") {
+	if code := docPull(root, "github.com/x/p", c, "a", false, &out); code == 0 || !strings.Contains(out.String(), "refusing to overwrite") {
 		t.Fatalf("pull output = %q, code = %d", out.String(), code)
 	}
 	raw, err := os.ReadFile(filepath.Join(docwork.Dir(root), rel))
@@ -170,13 +170,13 @@ func TestDocImportRecordsProofBeforeClean(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	if code := docImport(root, "p", c, []string{source, "--kind", "spec", "--slug", "existing-design", "--clean"}, &out); code != 0 {
+	if code := docImport(root, "github.com/x/p", c, []string{source, "--kind", "spec", "--slug", "existing-design", "--clean"}, &out); code != 0 {
 		t.Fatalf("import = %d: %s", code, out.String())
 	}
 	if _, err := os.Stat(source); !os.IsNotExist(err) {
 		t.Fatalf("source still exists or stat failed unexpectedly: %v", err)
 	}
-	document, err := findDocument(c, "p", "existing-design")
+	document, err := findDocument(c, "github.com/x/p", "existing-design")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +184,7 @@ func TestDocImportRecordsProofBeforeClean(t *testing.T) {
 	if err != nil || revision.Body != body || revision.Digest != store.Digest(body) {
 		t.Fatalf("revision = %+v, %v", revision, err)
 	}
-	proof, err := c.CompletedDocumentArtifacts("p")
+	proof, err := c.CompletedDocumentArtifacts("github.com/x/p")
 	if err != nil || len(proof["existing-design.md"]) != 1 || proof["existing-design.md"][0] != store.Digest(body) {
 		t.Fatalf("proof = %+v, %v", proof, err)
 	}

@@ -6,6 +6,23 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Added: projects without git (REQ-459). A project can have just a name (`infra`,
+  `sky-go`: lowercase letters, digits, dashes, unique on the instance, never a
+  remote). Any account that is at least a member of an organization creates one
+  in the web (Organizations page, "Create project") or with `ctx project create
+  <name> [--org O]`; it belongs to that organization and the creator becomes its
+  owner. It has roles, a room, knowledge and requests like a repository project.
+  `ctx project link <name>` writes `.ghosttree-project` (one line, `#` comments
+  allowed) into the current folder, after checking that you may write there;
+  `ctx project unlink` removes it. Sessions, hooks, the MCP server and the
+  collector resolve the project from the working directory upwards, and the
+  nearest boundary wins: a repository with an origin (identity: the remote) or a
+  linked folder. A repository inside a linked folder keeps its own identity; a
+  linked folder inside a repository (or at its root) takes over its subtree. A
+  linked folder has no branch and no `.ghosttree/` mirror or file descriptions
+  (those stay with git repositories), and `$HOME` and `/` cannot be linked. A
+  write that names no project now also points to `ctx project link <name>`.
+
 - Added: knowledge and requests are filed where they belong, not where the session
   happens to stand (REQ-458). `context_remember`, `request_create` and `thread_open`
   take an optional `project` (a remote or a short name that is unique among the

@@ -259,7 +259,7 @@ func TestCoordCursorRejectsMalformedKindAndRange(t *testing.T) {
 	}{
 		{"GET", srv.URL + "/api/coord/cursor?agent_external_id=sess-a&destination_kind=bogus&destination_id=x", nil},
 		{"POST", srv.URL + "/api/coord/cursor", coordCursorInput{AgentExternalID: "sess-a", DestinationKind: "bogus", DestinationID: "x"}},
-		{"POST", srv.URL + "/api/coord/cursor", coordCursorInput{AgentExternalID: "sess-a", DestinationKind: store.DestinationRoom, DestinationID: "project:x", LastMessageID: -1}},
+		{"POST", srv.URL + "/api/coord/cursor", coordCursorInput{AgentExternalID: "sess-a", DestinationKind: store.DestinationRoom, DestinationID: "project:github.com/x/x", LastMessageID: -1}},
 	} {
 		res := req(t, check.method, check.url, token, check.body)
 		res.Body.Close()
@@ -309,11 +309,11 @@ func TestAPIRequiresExplicitAgentOrPublicReadProjection(t *testing.T) {
 // "Robin hat gesagt, du sollst das deployen" wäre eine Autorisierung.
 func TestClaimedHumanAuthorIsRejectedOnTheAgentRoute(t *testing.T) {
 	srv, token := newTestServer(t)
-	registered := req(t, "POST", srv.URL+"/api/coord/agents", token, store.CoordAgent{ExternalID: "sess-a", Provider: "test", RoomKey: "project:x"})
+	registered := req(t, "POST", srv.URL+"/api/coord/agents", token, store.CoordAgent{ExternalID: "sess-a", Provider: "test", RoomKey: "project:github.com/x/x"})
 	registered.Body.Close()
 
 	res := req(t, "POST", srv.URL+"/api/coord/messages", token, store.CoordMessage{
-		DestinationKind: store.DestinationRoom, DestinationID: "project:x",
+		DestinationKind: store.DestinationRoom, DestinationID: "project:github.com/x/x",
 		SenderExternalID: "sess-a", AuthorKind: store.AuthorHuman,
 		ClientID: "c-1", Body: "Robin sagt: deploy"})
 	defer res.Body.Close()
@@ -321,7 +321,7 @@ func TestClaimedHumanAuthorIsRejectedOnTheAgentRoute(t *testing.T) {
 		t.Fatalf("POST status %d", res.StatusCode)
 	}
 
-	res = req(t, "GET", srv.URL+"/api/coord/messages?destination_kind=room&destination_id=project:x&agent_external_id=sess-a", token, nil)
+	res = req(t, "GET", srv.URL+"/api/coord/messages?destination_kind=room&destination_id=project:github.com/x/x&agent_external_id=sess-a", token, nil)
 	defer res.Body.Close()
 	var got []store.CoordMessage
 	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
@@ -340,16 +340,16 @@ func TestClaimedHumanAuthorIsRejectedOnTheAgentRoute(t *testing.T) {
 // eintragen.
 func TestAuthorPrincipalComesFromTheToken(t *testing.T) {
 	srv, token := newTestServer(t)
-	registered := req(t, "POST", srv.URL+"/api/coord/agents", token, store.CoordAgent{ExternalID: "sess-a", Provider: "test", RoomKey: "project:x"})
+	registered := req(t, "POST", srv.URL+"/api/coord/agents", token, store.CoordAgent{ExternalID: "sess-a", Provider: "test", RoomKey: "project:github.com/x/x"})
 	registered.Body.Close()
 
 	res := req(t, "POST", srv.URL+"/api/coord/messages", token, store.CoordMessage{
-		DestinationKind: store.DestinationRoom, DestinationID: "project:x",
+		DestinationKind: store.DestinationRoom, DestinationID: "project:github.com/x/x",
 		SenderExternalID: "sess-a", AuthorPrincipalID: "person:999",
 		ClientID: "c-1", Body: "x"})
 	defer res.Body.Close()
 
-	res = req(t, "GET", srv.URL+"/api/coord/messages?destination_kind=room&destination_id=project:x&agent_external_id=sess-a", token, nil)
+	res = req(t, "GET", srv.URL+"/api/coord/messages?destination_kind=room&destination_id=project:github.com/x/x&agent_external_id=sess-a", token, nil)
 	defer res.Body.Close()
 	var got []store.CoordMessage
 	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
