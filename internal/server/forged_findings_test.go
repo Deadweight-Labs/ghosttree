@@ -23,6 +23,9 @@ func TestForgedDistilledEntriesCannotBypassTheReviewGate(t *testing.T) {
 	f.expect(t, "mia", 403, "POST", "/api/knowledge", forge(foreign))
 	f.expect(t, "mia", 403, "POST", "/api/knowledge", forge("session:999999#1"))
 
+	// The migration endpoint takes the same rule.
+	f.expect(t, "mia", 403, "POST", "/api/migrated-knowledge", store.MigratedEntry{Knowledge: forge(foreign)})
+
 	var saved store.Knowledge
 	if err := json.Unmarshal([]byte(f.expect(t, "mia", 200, "POST", "/api/knowledge", forge(own))), &saved); err != nil {
 		t.Fatal(err)

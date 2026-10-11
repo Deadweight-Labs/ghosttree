@@ -31,6 +31,11 @@ func TestSnapshotLeavesOutHeldFindingsAndPrivateHandoffs(t *testing.T) {
 		      (5,'feature','WORKR','Desc','open','p','agent','Robin','','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z');
 		INSERT INTO request_work(id,request_id,session_id,role,state,started_at,summary)
 		VALUES(6,5,9,'primary','paused','2026-01-01T00:00:00Z','PRIVATE-HANDOFF'),(7,5,10,'related','paused','2026-01-01T00:00:00Z','SHARED-HANDOFF');
+		INSERT INTO request_activity(request_id,kind,person,data,created_at,session_id) VALUES
+		(5,'work.finished','Robin','ACT-PRIVATE-HANDOFF','2026-01-01T00:00:00Z',9),
+		(5,'work.finished','Robin','ACT-LEGACY-HANDOFF','2026-01-01T00:00:00Z',-1),
+		(5,'work.started','Robin','session:9 role:primary','2026-01-01T00:00:00Z',0),
+		(5,'work.finished','Robin','ACT-SHARED-HANDOFF','2026-01-01T00:00:00Z',10);
 	`); err != nil {
 		t.Fatal(err)
 	}
@@ -48,12 +53,12 @@ func TestSnapshotLeavesOutHeldFindingsAndPrivateHandoffs(t *testing.T) {
 		all.Write(e.Payload)
 	}
 	got := all.String()
-	for _, leak := range []string{"HELDK", "HELDR", "PRIVATE-HANDOFF"} {
+	for _, leak := range []string{"HELDK", "HELDR", "PRIVATE-HANDOFF", "ACT-PRIVATE-HANDOFF", "ACT-LEGACY-HANDOFF", "session:9 role"} {
 		if strings.Contains(got, leak) {
 			t.Errorf("snapshot carries %s", leak)
 		}
 	}
-	for _, keep := range []string{"OPENK", "AGENTK", "WORKR", "SHARED-HANDOFF"} {
+	for _, keep := range []string{"OPENK", "AGENTK", "WORKR", "SHARED-HANDOFF", "ACT-SHARED-HANDOFF"} {
 		if !strings.Contains(got, keep) {
 			t.Errorf("snapshot lost %s", keep)
 		}

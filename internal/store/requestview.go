@@ -111,10 +111,10 @@ func (a *ProjectAccess) RequestDetailView(d requestdomain.Detail) requestdomain.
 					sid, _ = strconv.ParseInt(num, 10, 64)
 				}
 			}
-			if sid != 0 || !numbers {
-				if _, ok := lookup(sid); !ok {
-					continue
-				}
+			// Eine Zeile ohne ermittelbare Session (Altbestand, 0 oder -1) trägt
+			// trotzdem einen Session-Bezug: als unbekannt behandeln und weglassen.
+			if _, ok := lookup(sid); !ok || sid <= 0 {
+				continue
 			}
 			if !numbers {
 				// "session:<n> role:<r>" nennt die Nummer; die Rolle allein bleibt.

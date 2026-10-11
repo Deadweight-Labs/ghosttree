@@ -16,12 +16,12 @@ Versioning, with pre-1.0 compatibility rules described in
   session's owner alone until the owner adopts them or shares the session; what an
   agent saves on purpose stays normal project knowledge. The owner releases a held
   finding to the reviewers (or discards it) but cannot verify it; if the owner
-  leaves the project, the finding goes to the review queue. A knowledge entry
+  leaves the project, the finding stays held and invisible to others until the owner returns and releases or discards it; nobody else can release it. A knowledge entry
   that cites a session must cite one of your own. Handoffs, quotes and what a
   private session works on are private like the transcript, also in snapshots.
   Upgrade note: older held-back (quarantined) findings from private sessions are
   held for their session owner from now on; they reach the review queue when the
-  owner releases them, shares the session or leaves the project.
+  owner releases them or shares the session.
 - Added: any signed-in account can create an organization on the Organization
   page and becomes its owner; the way on leads to inviting someone or connecting a
   project. Owners (and the instance admin) can rename it; the address stays.

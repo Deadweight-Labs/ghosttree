@@ -301,6 +301,9 @@ func (a *api) insertMigratedKnowledge(w http.ResponseWriter, r *http.Request) {
 	if denyAccess(w, a.access(r).CheckKnowledgeCreate(in.Knowledge)) {
 		return
 	}
+	if denyAccess(w, a.access(r).CheckWrittenSessionRef(in.Knowledge.SessionRef)) {
+		return
+	}
 	saved, err := a.st.InsertMigrated(in)
 	if err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)

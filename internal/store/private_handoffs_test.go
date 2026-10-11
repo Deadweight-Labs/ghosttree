@@ -32,6 +32,10 @@ func TestRequestViewsHideWhatHangsOnForeignPrivateSessions(t *testing.T) {
 	mustExec(`INSERT INTO request_evidence(request_id,criterion_id,kind,ref,person,created_at) VALUES(40,41,'session',?,'mia',?)`, "session:"+strconv.FormatInt(f.b.ID, 10)+"#4", tsz)
 	mustExec(`INSERT INTO request_activity(request_id,kind,person,data,created_at,session_id) VALUES(40,'work.finished','mia','MIA-HANDOFF',?,?)`, tsz, f.b.ID)
 
+	// Legacy rows without a session id (0 or -1) still carry a session reference.
+	mustExec(`INSERT INTO request_activity(request_id,kind,person,data,created_at,session_id) VALUES
+		(40,'work.finished','mia','LEGACY-HANDOFF',?,-1),(40,'work.started','mia',?,?,0)`, tsz, "session:"+strconv.FormatInt(f.b.ID, 10)+" role:related", tsz)
+
 	detail, err := f.st.RequestByID(40)
 	if err != nil {
 		t.Fatal(err)
@@ -56,7 +60,7 @@ func TestRequestViewsHideWhatHangsOnForeignPrivateSessions(t *testing.T) {
 	}
 	for _, c := range []struct{ who, label string }{{"person:1", "robin"}, {"person:2", "lena"}, {"person:4", "rex"}} {
 		got := dump(viewer(f.st, c.who, c.label).RequestDetailView(detail))
-		if strings.Contains(got, "MIA-") || strings.Contains(got, "session:"+strconv.FormatInt(f.b.ID, 10)) {
+		if strings.Contains(got, "MIA-") || strings.Contains(got, "LEGACY-") || strings.Contains(got, "session:"+strconv.FormatInt(f.b.ID, 10)) {
 			t.Errorf("%s sees what hangs on mia's private session: %s", c.label, got)
 		}
 		if c.label != "rex" && !strings.Contains(got, "REX-HANDOFF") {
@@ -139,7 +143,9 @@ func TestAdminSearchIsNotRankedOverTheWholeIndex(t *testing.T) {
 	}
 }
 
-func TestLeavingTheProjectReleasesHeldFindings(t *testing.T) {
+// Losing the role does not release anything: only the owner of the session can
+// (REQ-438 D). Nobody else's action makes a held finding visible.
+func TestLosingTheRoleKeepsHeldFindingsHeldUntilTheOwnerReturns(t *testing.T) {
 	f := newVisFixture(t)
 	ref := "session:" + strconv.FormatInt(f.b.ID, 10) + "#1"
 	res, err := f.st.db.Exec(`INSERT INTO knowledge(type,title,body,project,confidence,status,origin,session_ref,created_at,updated_at)
@@ -148,16 +154,35 @@ func TestLeavingTheProjectReleasesHeldFindings(t *testing.T) {
 		t.Fatal(err)
 	}
 	kid, _ := res.LastInsertId()
-	rex := viewer(f.st, "person:4", "rex")
-	k, _ := f.st.KnowledgeByID(kid)
-	if rex.CanSeeKnowledge(k) {
-		t.Fatal("held before the owner leaves")
+	rres, err := f.st.db.Exec(`INSERT INTO requests(type,title,description,state,project,origin,person,session_ref,created_at,updated_at)
+		VALUES('feature','orphan wish','d','open',?,'distilled','',?,?,?)`, roleProject, "session:"+strconv.FormatInt(f.b.ID, 10), tsz, tsz)
+	if err != nil {
+		t.Fatal(err)
 	}
+	rid, _ := rres.LastInsertId()
 	if err := f.st.RemoveProjectRole("person:1", roleProject, "person:3", RoleViaAPI); err != nil {
 		t.Fatal(err)
 	}
-	k, _ = f.st.KnowledgeByID(kid)
-	if k.Confidence != "staged" || !rex.CanSeeKnowledge(k) {
-		t.Errorf("after the owner left: confidence %q visible %v, want staged and visible to reviewers", k.Confidence, rex.CanSeeKnowledge(k))
+	k, _ := f.st.KnowledgeByID(kid)
+	if k.Confidence != "quarantined" {
+		t.Errorf("confidence %q after the owner lost the role, want it untouched", k.Confidence)
+	}
+	for _, c := range []struct{ who, label string }{{"person:1", "robin"}, {"person:2", "lena"}, {"person:4", "rex"}} {
+		if viewer(f.st, c.who, c.label).CanSeeKnowledge(k) {
+			t.Errorf("%s sees the held finding after the owner lost the role", c.label)
+		}
+	}
+	var person string
+	_ = f.st.db.QueryRow(`SELECT person FROM requests WHERE id=?`, rid).Scan(&person)
+	if person != "" {
+		t.Errorf("held request was rewritten to %q", person)
+	}
+	// Back in the project, the owner sees it and can release it.
+	if err := f.st.SetProjectRole("person:1", roleProject, "person:3", RoleMember, false, RoleViaAPI); err != nil {
+		t.Fatal(err)
+	}
+	mia := viewer(f.st, "person:3", "mia")
+	if !mia.CanSeeKnowledge(k) || !mia.CanReleaseKnowledge(k) {
+		t.Error("the returning owner cannot see or release her finding")
 	}
 }

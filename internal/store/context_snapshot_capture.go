@@ -286,6 +286,15 @@ func privateOriginSQL(ref string) string {
 		AND hs.shared=0 AND COALESCE(hs.visibility,'') IN ('','private'))`
 }
 
+// privateActivitySQL: ein Aktivitätseintrag, der an einer privaten oder nicht
+// zuordenbaren Session hängt (Handoff-Text, Session-Nummer, Beleg-Verweis).
+var privateActivitySQL = `(
+	(a.kind IN ('work.started','work.resumed','work.finished') AND (
+		(a.session_id>0 AND EXISTS (SELECT 1 FROM sessions hs WHERE hs.id=a.session_id AND hs.shared=0 AND COALESCE(hs.visibility,'') IN ('','private')))
+		OR (a.session_id<=0 AND a.kind='work.finished')
+		OR (a.session_id<=0 AND EXISTS (SELECT 1 FROM sessions hs WHERE a.data LIKE 'session:'||hs.id||' %' AND hs.shared=0 AND COALESCE(hs.visibility,'') IN ('','private')))))
+	OR (a.kind IN ('request.done','request.migrated','evidence.migrated') AND ` + privateOriginSQL("a.data") + `))`
+
 func captureKnowledge(ctx context.Context, q snapshotQueryer, project string, collector *snapshotCollector) error {
 	rows, err := q.QueryContext(ctx, `SELECT k.id,k.type,k.title,k.body,k.project,k.branch,k.machine,k.confidence,k.status,k.origin,k.superseded_by,k.person,p.id,k.confirmed_by,cp.id,k.last_modified_by,mp.id,k.harness,k.session_ref,k.observed_at,k.regression_state,k.regression_test,k.created_at,k.updated_at FROM knowledge k LEFT JOIN persons p ON p.name=k.person LEFT JOIN persons cp ON cp.name=k.confirmed_by LEFT JOIN persons mp ON mp.name=k.last_modified_by WHERE k.project=? AND k.machine='' AND NOT (k.origin='distilled' AND k.confidence='quarantined' AND `+privateOriginSQL("k.session_ref")+`) ORDER BY k.id`, project)
 	if err != nil {
@@ -518,7 +527,7 @@ func captureRequestLists(ctx context.Context, q snapshotQueryer, p *requestPaylo
 			cr.Close()
 			return err
 		}
-		er, err := q.QueryContext(ctx, `SELECT e.id,e.criterion_id,e.kind,e.ref,e.person,pe.id,e.created_at FROM request_evidence e LEFT JOIN persons pe ON pe.name=e.person WHERE e.criterion_id=? ORDER BY e.id`, c.ID)
+		er, err := q.QueryContext(ctx, `SELECT e.id,e.criterion_id,e.kind,e.ref,e.person,pe.id,e.created_at FROM request_evidence e LEFT JOIN persons pe ON pe.name=e.person WHERE e.criterion_id=? AND NOT (e.kind='session' AND `+privateOriginSQL("e.ref")+`) ORDER BY e.id`, c.ID)
 		if err != nil {
 			cr.Close()
 			return err
@@ -559,7 +568,7 @@ func captureRequestLists(ctx context.Context, q snapshotQueryer, p *requestPaylo
 	if p.Criteria == nil {
 		p.Criteria = []requestCriterionV1{}
 	}
-	er, err := q.QueryContext(ctx, `SELECT e.id,e.kind,e.ref,e.person,pe.id,e.created_at FROM request_evidence e LEFT JOIN persons pe ON pe.name=e.person WHERE e.request_id=? AND e.criterion_id IS NULL ORDER BY e.id`, p.ID)
+	er, err := q.QueryContext(ctx, `SELECT e.id,e.kind,e.ref,e.person,pe.id,e.created_at FROM request_evidence e LEFT JOIN persons pe ON pe.name=e.person WHERE e.request_id=? AND e.criterion_id IS NULL AND NOT (e.kind='session' AND `+privateOriginSQL("e.ref")+`) ORDER BY e.id`, p.ID)
 	if err != nil {
 		return err
 	}
@@ -610,7 +619,7 @@ func captureRequestLists(ctx context.Context, q snapshotQueryer, p *requestPaylo
 	if p.Relations == nil {
 		p.Relations = []requestRelationV1{}
 	}
-	ar, err := q.QueryContext(ctx, `SELECT a.id,a.kind,a.person,pa.id,a.data,a.created_at FROM request_activity a LEFT JOIN persons pa ON pa.name=a.person WHERE a.request_id=? ORDER BY a.id`, p.ID)
+	ar, err := q.QueryContext(ctx, `SELECT a.id,a.kind,a.person,pa.id,a.data,a.created_at FROM request_activity a LEFT JOIN persons pa ON pa.name=a.person WHERE a.request_id=? AND NOT `+privateActivitySQL+` ORDER BY a.id`, p.ID)
 	if err != nil {
 		return err
 	}

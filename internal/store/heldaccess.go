@@ -173,21 +173,3 @@ func (a CoordAccess) requestHeldTx(tx rowQuerier, reqID string) bool {
 	viewer, ok := accountNumericID(a.Principal.ID)
 	return !ok || effectiveOwner(account, instanceOwnerID(tx)) != viewer
 }
-
-// releaseHeldFindingsTx hebt die Haltung der Funde auf, die ein Konto in einem
-// Projekt hinterlässt, wenn es dort keine Rolle mehr hat: niemand könnte sie
-// sonst je freigeben. Wissen geht als gestagt in die Queue der Prüfer, ein
-// Auftrag wird auf den Namen des Kontos gestellt. Zitate aus der privaten
-// Session bleiben gefiltert.
-func releaseHeldFindingsTx(tx execQueryer, account int64, remote string) error {
-	owner := instanceOwnerID(tx)
-	const fromOwned = `EXISTS (SELECT 1 FROM sessions hs WHERE (session_ref='session:'||hs.id OR session_ref LIKE 'session:'||hs.id||'#%')
-		AND (CASE WHEN hs.account_id=0 THEN ? ELSE hs.account_id END)=?)`
-	if _, err := tx.Exec(`UPDATE knowledge SET confidence='staged' WHERE project=? AND origin='distilled' AND confidence='quarantined' AND `+fromOwned,
-		remote, owner, account); err != nil {
-		return err
-	}
-	_, err := tx.Exec(`UPDATE requests SET person=(SELECT name FROM persons WHERE id=?) WHERE project=? AND origin='distilled' AND person='' AND `+fromOwned,
-		account, remote, owner, account)
-	return err
-}
