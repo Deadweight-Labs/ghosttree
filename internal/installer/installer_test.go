@@ -421,8 +421,8 @@ func TestCoordHooksCarryTheAbsoluteCtxPathAndUpgradeBareEntries(t *testing.T) {
 		if !strings.HasPrefix(cmd, abs+" "+sub) {
 			t.Errorf("%s command = %q, want it to start with %q", event, cmd, abs+" "+sub)
 		}
-		if event == "PostToolUse" && handler["timeout"] != float64(5) {
-			t.Errorf("PostToolUse timeout = %v", handler["timeout"])
+		if handler["timeout"] != float64(5) {
+			t.Errorf("%s timeout = %v, want 5", event, handler["timeout"])
 		}
 	}
 }

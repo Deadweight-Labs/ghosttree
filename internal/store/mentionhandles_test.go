@@ -54,6 +54,42 @@ func TestMentionReachesTheReadableAgentName(t *testing.T) {
 	}
 }
 
+// An agent's display name comes from its client; it must not take a person's
+// handle. "@anna" stays Anna, however an agent names itself.
+func TestAnAgentCannotTakeAPersonsHandle(t *testing.T) {
+	e := authorityFixture(t)
+	if _, err := e.st.RegisterCoordAgent(CoordAgent{ExternalID: "a-imposter", Provider: "claude", RoomKey: e.room, DisplayName: "anna", PrincipalID: "person:3", Role: "member"}); err != nil {
+		t.Fatal(err)
+	}
+	id, err := sendText(t, e.human("person:1"), e.room, "@anna hello", "")
+	if err != nil {
+		t.Fatalf("@anna must resolve to the person, not be ambiguous: %v", err)
+	}
+	if got := storedMentions(t, e, id); len(got) != 1 || got[0] != "person:2" {
+		t.Fatalf("@anna reached %v, want person:2", got)
+	}
+}
+
+// An agent reports to the person it works for; only itself is left out.
+func TestAnAgentMayMentionItsOwnerButNotItself(t *testing.T) {
+	e := authorityFixture(t)
+	agent := e.agent("a-anna")
+	id, err := sendText(t, agent, e.room, "@anna done with the review", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := storedMentions(t, e, id); len(got) != 1 || got[0] != "person:2" {
+		t.Fatalf("agent -> owner reached %v, want person:2", got)
+	}
+	id, err = sendText(t, agent, e.room, "@a-anna talking to myself", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := storedMentions(t, e, id); len(got) != 0 {
+		t.Fatalf("self mention reached %v", got)
+	}
+}
+
 // A guest does not see the member list, so no suggestion may come from it.
 func TestMentionHandlesAreEmptyForAGuest(t *testing.T) {
 	e := guestEnv(t)

@@ -254,8 +254,10 @@ func (p *Poller) pollRoom(ctx context.Context, room store.CoordRoom) (bool, erro
 	if err != nil {
 		return false, err
 	}
-	pos, known := p.pos[room.Key]
-	if !known {
+	// The shared cursor also moves when coord_inbox reads: a known position
+	// behind it would hand over again what the agent has already seen.
+	pos := p.pos[room.Key]
+	if cursor > pos {
 		pos = cursor
 	}
 	msgs, err := p.Source.Inbox(p.Self, room, pos, inboxLimit)
@@ -271,6 +273,9 @@ func (p *Poller) pollRoom(ctx context.Context, room store.CoordRoom) (bool, erro
 	for _, m := range msgs {
 		if m.ID <= pos {
 			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return progress, err // the caller's deadline; the position so far stays
 		}
 		delivered, err := p.handle(ctx, room, m)
 		if errors.Is(err, errStalled) {

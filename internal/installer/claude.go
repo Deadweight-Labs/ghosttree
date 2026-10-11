@@ -73,7 +73,7 @@ func installClaudeSelected(home string, selected ComponentSet) ([]Change, error)
 // (A timed-out hook is fail-open in Claude Code, so this bounds the cost, it
 // is not a gate.)
 func hookTimeout(command string) int {
-	if rest, ok := ctxSubcommand(command); ok && (strings.HasPrefix(rest, "hook pause-gate") || strings.HasPrefix(rest, "hook post-tool-use")) {
+	if rest, ok := ctxSubcommand(command); ok && (strings.HasPrefix(rest, "hook pause-gate") || strings.HasPrefix(rest, "hook post-tool-use") || strings.HasPrefix(rest, "hook user-prompt-submit")) {
 		return 5
 	}
 	return 0

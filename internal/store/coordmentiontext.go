@@ -118,7 +118,9 @@ func (a CoordAccess) mentionCandidatesTx(tx *sql.Tx, actor, roomKey string) ([]m
 	}
 	ids := make([]string, 0, len(allowed))
 	for id := range allowed {
-		if id != actor && id != a.Principal.ID {
+		// A human sender is excluded under their account id as well; an agent
+		// may reach the person it works for, only itself is left out.
+		if id != actor && (actor != a.Principal.ID || id != a.Principal.ID) {
 			ids = append(ids, id)
 		}
 	}
@@ -183,7 +185,35 @@ func (a CoordAccess) mentionCandidatesTx(tx *sql.Tx, actor, roomKey string) ([]m
 		}
 		out = append(out, c)
 	}
-	return out, nil
+	return withoutHijackedHandles(out), nil
+}
+
+// withoutHijackedHandles lets people's handles win: an agent's display name and
+// provider come from its client and could otherwise take a person's handle
+// ("@rob") for itself. An agent handle that equals a person's handle is not
+// given to the agent.
+func withoutHijackedHandles(cands []mentionCandidate) []mentionCandidate {
+	person := map[string]bool{}
+	for _, c := range cands {
+		if strings.HasPrefix(c.id, "person:") {
+			for _, h := range c.handles {
+				person[h] = true
+			}
+		}
+	}
+	for i, c := range cands {
+		if strings.HasPrefix(c.id, "person:") {
+			continue
+		}
+		kept := c.handles[:0:0]
+		for _, h := range c.handles {
+			if !person[h] {
+				kept = append(kept, h)
+			}
+		}
+		cands[i].handles = kept
+	}
+	return cands
 }
 
 func toolWord(provider string) string {
