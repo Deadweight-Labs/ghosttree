@@ -201,8 +201,15 @@ func requestScopeWhere(filter requestdomain.SearchFilter) ([]string, []any) {
 	// An unset axis on a request means "applies everywhere along it", so a
 	// caller naming a branch or machine must still see the project-wide
 	// entries. Matching exactly would hide most of the backlog.
+	//
+	// The project axis is the exception: a request without a project belongs to
+	// nobody's backlog, so naming a project returns that project's requests only.
+	if filter.Scope.Project != "" {
+		where = append(where, `r.project=?`)
+		args = append(args, filter.Scope.Project)
+	}
 	for _, axis := range []struct{ col, v string }{
-		{"project", filter.Scope.Project}, {"branch", filter.Scope.Branch}, {"machine", filter.Scope.Machine},
+		{"branch", filter.Scope.Branch}, {"machine", filter.Scope.Machine},
 	} {
 		if axis.v != "" {
 			where = append(where, `(r.`+axis.col+`='' OR r.`+axis.col+`=?)`)
@@ -321,7 +328,7 @@ func (s *Store) CountOpenRequests(ax scope.Axes) (int, error) {
 	if s.reader != nil {
 		return s.reader.CountOpenRequests(ax)
 	}
-	where, args := ax.UnionWhere()
+	where, args := ax.RequestUnionWhere()
 	var count int
 	err := s.db.QueryRow(`SELECT COUNT(*) FROM requests WHERE state='open' AND `+where, args...).Scan(&count)
 	return count, err

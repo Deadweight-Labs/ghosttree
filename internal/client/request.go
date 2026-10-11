@@ -110,3 +110,12 @@ func (c *Client) AddRequestRelation(requestID int64, relation requestdomain.Rela
 	err := c.do("POST", "/api/requests/"+strconv.FormatInt(requestID, 10)+"/relations", nil, relation, &out)
 	return out, err
 }
+
+// MoveRequest legt einen Auftrag in ein anderes Projekt (Remote oder
+// eindeutiger Kurzname unter den beschreibbaren Projekten).
+func (c *Client) MoveRequest(requestID int64, project, reason string) (requestdomain.Detail, error) {
+	var out requestdomain.Detail
+	err := c.do("POST", "/api/requests/"+strconv.FormatInt(requestID, 10)+"/move", nil,
+		map[string]string{"project": project, "reason": reason}, &out)
+	return out, err
+}

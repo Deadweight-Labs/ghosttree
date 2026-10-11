@@ -189,8 +189,13 @@ func TestRequestListHidesWhatTheViewerMayNotRead(t *testing.T) {
 		strings.ReplaceAll(hiddenPage, shellHiddenProject, "P") != strings.ReplaceAll(unknownPage, "github.com/nobody/unknown", "P") {
 		t.Error("a hidden project answers differently from an unknown one")
 	}
-	if !strings.Contains(hiddenPage, "Global request") || !strings.Contains(unknownPage, "Global request") {
-		t.Error("the global request is missing from the hidden or unknown project's list")
+	// A request without a project belongs to no project's ledger (REQ-458); it
+	// stays findable in the list that names no project.
+	if strings.Contains(hiddenPage, "Global request") || strings.Contains(unknownPage, "Global request") {
+		t.Error("a request without a project shows up in a project's list")
+	}
+	if _, all := e.get(t, e.Owner, "/ui/requests"); !strings.Contains(all, "Global request") {
+		t.Error("the request without a project is nowhere")
 	}
 	if strings.Contains(hiddenPage, "secret-prio") {
 		t.Error("the priority menu of a hidden project leaks its priorities")

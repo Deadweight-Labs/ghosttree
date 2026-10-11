@@ -28,6 +28,7 @@ type ThreadOpenInput struct {
 	LinkID     string `json:"link_id,omitempty" jsonschema:"id of that object, for example 846 for a knowledge entry"`
 	LinkRev    string `json:"link_revision,omitempty" jsonschema:"revision of that object, if you mean one exact version rather than whatever it says today"`
 	DiscussNow bool   `json:"announce,omitempty" jsonschema:"also announce this thread in the project room so other agents see it exists"`
+	Project    string `json:"project,omitempty" jsonschema:"the project this thread belongs to when it is not the session's own: a remote like github.com/owner/repo or a short name that is unique among the projects you can write to"`
 }
 
 type ThreadReadInput struct {
@@ -129,11 +130,11 @@ func (s *Server) handleThreadOpen(ctx context.Context, _ *mcp.CallToolRequest, i
 	if strings.TrimSpace(in.Title) == "" {
 		return nil, nil, fmt.Errorf("title is required — it is what someone searches for later")
 	}
-	project, err := s.threadProject()
+	project, err := s.writeTarget(in.Project)
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := s.joinThreadProject(); err != nil {
+	if err := s.joinRoom(store.RoomKeyForProject(project)); err != nil {
 		return nil, nil, err
 	}
 	// Vorhandene Threads am selben Objekt vorschlagen, bevor ein zweiter
@@ -167,7 +168,7 @@ func (s *Server) handleThreadOpen(ctx context.Context, _ *mcp.CallToolRequest, i
 		}
 	}
 	if in.DiscussNow {
-		if key, err := s.roomKeyFor("project"); err == nil {
+		if key := store.RoomKeyForProject(project); key != "" {
 			clientID, err := newCoordClientID()
 			if err == nil {
 				_, _ = s.client.SendCoordMessage(store.CoordMessage{

@@ -426,6 +426,9 @@ func (a *ProjectAccess) Decide(project string, res Resource, act Action, obj Obj
 	// Maschinen-Achse: nur der Besitzer der Maschine, egal welche Rolle.
 	if res == ResKnowledge && obj.Machine != "" {
 		if !a.OwnsMachine(obj.Machine) {
+			if a.ownNoteOnUnclaimedMachine(obj, act) {
+				return Decision{Allowed: true, Reason: "own note on a machine nobody has claimed"}
+			}
 			return Decision{Hidden: true, Reason: "machine-axis knowledge of another account"}
 		}
 		return Decision{Allowed: true}

@@ -6,6 +6,26 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Added: knowledge and requests are filed where they belong, not where the session
+  happens to stand (REQ-458). `context_remember`, `request_create` and `thread_open`
+  take an optional `project` (a remote or a short name that is unique among the
+  projects you can write to), `context_remember` an optional `machine` (any name,
+  including an ssh target no agent ever ran on). A project you cannot write to
+  answers exactly like one that does not exist. Nothing falls back silently any
+  more: `scope_hint` project without a project, and a request without a project,
+  are refused with the list of projects you can write to. A note for a machine
+  without sessions is stored and reaches sessions on that machine; a machine token
+  may write notes about another machine while the name is free. Writes from MCP
+  and `ctx request create` record the session ref. Existing entries move to
+  another project, a machine or global: `ctx knowledge move <id> --project P |
+  --machine M | --global`, `ctx request move <id> --project P`, the new
+  `context_move` tool, `request_record_progress` action `correct` with `project`,
+  and a "Move" form on the knowledge and request pages. You need write access in
+  both places, and the move is logged (the request's activity, the entry's move
+  history). Changed: requests without a project no longer appear in the ledger,
+  search results or bootstrap count of any project (they stay in the lists that
+  name no project, where they can be moved); machine and global knowledge still
+  reaches every session it applies to.
 - Added: names and invitations work for two people (REQ-438). The sign-in reads
   the display name from the identity provider's userinfo endpoint when the ID
   token carries none (name, given and family name, nickname, user name; an email

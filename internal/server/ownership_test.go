@@ -62,8 +62,17 @@ func TestMachineBoundTokenWritesOnlyUnderItsMachine(t *testing.T) {
 	if code != 403 || body["code"] != "machine_bound" {
 		t.Fatalf("foreign machine with bound token: %d %v", code, body)
 	}
-	if code, _ := f.post(t, "/api/knowledge", f.annaBound, map[string]any{"type": "note", "title": "t", "body": "b", "scope": map[string]any{"machine": "mainex"}}); code != 403 {
-		t.Fatalf("knowledge under another machine: %d", code)
+	// A note about another machine is no upload in its name: the binding does not
+	// stop it while the name is free, and the name stays taken once it has an owner.
+	note := map[string]any{"type": "note", "title": "t", "body": "b", "scope": map[string]any{"machine": "mainex"}}
+	if code, _ := f.post(t, "/api/knowledge", f.annaBound, note); code != 200 {
+		t.Fatalf("note about a free machine with a bound token: %d", code)
+	}
+	if code, _ := f.post(t, "/api/sessions", f.robinLegacy, session("mainex", "r0")); code != 200 {
+		t.Fatalf("robin claims mainex: %d", code)
+	}
+	if code, body := f.post(t, "/api/knowledge", f.annaBound, note); code != 409 || body["code"] != "machine_name_taken" {
+		t.Fatalf("note about another account's machine: %d %v", code, body)
 	}
 }
 

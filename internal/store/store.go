@@ -510,6 +510,12 @@ CREATE TABLE IF NOT EXISTS knowledge_versions(
   person TEXT NOT NULL DEFAULT '', changed_by TEXT NOT NULL DEFAULT '', changed_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS knowledge_versions_entry
   ON knowledge_versions(knowledge_id, changed_at DESC, id DESC);
+CREATE TABLE IF NOT EXISTS knowledge_moves(
+  id INTEGER PRIMARY KEY,
+  knowledge_id INTEGER NOT NULL,
+  from_scope TEXT NOT NULL, to_scope TEXT NOT NULL,
+  moved_by TEXT NOT NULL DEFAULT '', moved_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS knowledge_moves_entry ON knowledge_moves(knowledge_id, id DESC);
 INSERT OR IGNORE INTO search_documents(kind,domain_id,title,body,project,branch,machine)
   SELECT 'knowledge',id,title,body,project,branch,machine FROM knowledge;
 CREATE TABLE IF NOT EXISTS documents(

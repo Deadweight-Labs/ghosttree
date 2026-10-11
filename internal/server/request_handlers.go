@@ -31,6 +31,12 @@ func (a *api) createRequest(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
+	// A backlog entry without a project would appear in nobody's ledger, so it is
+	// not created at all; the caller names the project.
+	if scope.CanonicalAxes(scope.Axes{Project: body.Project}).Project == "" {
+		writeCoded(w, http.StatusBadRequest, "project_required", "a request belongs to a project: name the project")
+		return
+	}
 	if !a.gateMachine(w, r, scope.CanonicalAxes(scope.Axes{Machine: body.Machine}).Machine, false) ||
 		!a.gateProject(w, r, scope.CanonicalAxes(scope.Axes{Project: body.Project}).Project) {
 		return

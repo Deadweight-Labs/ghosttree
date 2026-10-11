@@ -242,7 +242,7 @@ func (a *api) createKnowledge(w http.ResponseWriter, r *http.Request) {
 	if k.Scope.IsGlobal() && req.AutoScope != nil {
 		k.Scope = scope.DefaultAxes(k.Type, req.AutoScope.Context)
 	}
-	if !a.gateMachine(w, r, k.Scope.Machine, false) || !a.gateProject(w, r, k.Scope.Project) {
+	if !a.gateMachineNote(w, r, k.Scope.Machine) || !a.gateProject(w, r, k.Scope.Project) {
 		return
 	}
 	// Die Zuschreibung kommt aus dem Token und ist danach unveränderlich.
