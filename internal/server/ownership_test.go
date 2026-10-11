@@ -62,8 +62,21 @@ func TestMachineBoundTokenWritesOnlyUnderItsMachine(t *testing.T) {
 	if code != 403 || body["code"] != "machine_bound" {
 		t.Fatalf("foreign machine with bound token: %d %v", code, body)
 	}
-	if code, _ := f.post(t, "/api/knowledge", f.annaBound, map[string]any{"type": "note", "title": "t", "body": "b", "scope": map[string]any{"machine": "mainex"}}); code != 403 {
-		t.Fatalf("knowledge under another machine: %d", code)
+	// Decided on purpose (REQ-458, review): a bound token may write notes for
+	// unclaimed names and for other machines of its own account, because that is
+	// the ssh case, and it can already write project instructions that reach all
+	// of the account's machines. Another account's machine stays refused, and a
+	// note on a name its author does not own is never delivered (see
+	// TestNoteOnAnUnclaimedMachineIsNotDeliveredToWhoClaimsTheName).
+	note := map[string]any{"type": "note", "title": "t", "body": "b", "scope": map[string]any{"machine": "mainex"}}
+	if code, _ := f.post(t, "/api/knowledge", f.annaBound, note); code != 200 {
+		t.Fatalf("note about a free machine with a bound token: %d", code)
+	}
+	if code, _ := f.post(t, "/api/sessions", f.robinLegacy, session("mainex", "r0")); code != 200 {
+		t.Fatalf("robin claims mainex: %d", code)
+	}
+	if code, body := f.post(t, "/api/knowledge", f.annaBound, note); code != 409 || body["code"] != "machine_name_taken" {
+		t.Fatalf("note about another account's machine: %d %v", code, body)
 	}
 }
 

@@ -55,7 +55,7 @@ func (s *Store) InterruptedWorkFor(v SessionViewer, ax scope.Axes, idleBefore, e
 	if limit <= 0 {
 		limit = 3
 	}
-	scopeWhere, args := ax.UnionWhere()
+	scopeWhere, args := ax.RequestUnionWhere()
 	// Der Scope steht in einer Unterabfrage, weil sessions und requests beide
 	// eine Spalte project tragen und UnionWhere sie unqualifiziert nennt.
 	query := `SELECT r.id, r.type, r.title, r.priority,

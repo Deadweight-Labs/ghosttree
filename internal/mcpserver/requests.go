@@ -147,6 +147,7 @@ type RequestCreateInput struct {
 	Priority       string   `json:"priority,omitempty" jsonschema:"optional project priority"`
 	Criteria       []string `json:"criteria" jsonschema:"observable acceptance criteria"`
 	IdempotencyKey string   `json:"idempotency_key,omitempty" jsonschema:"stable retry key for this creation attempt"`
+	Project        string   `json:"project,omitempty" jsonschema:"the project this request belongs to when it is not the session's own: a remote like github.com/owner/repo or a short name that is unique among the projects you can write to"`
 }
 
 type RequestStartWorkInput struct {
@@ -182,6 +183,7 @@ type RequestProgressInput struct {
 	OtherRequestID int64  `json:"other_request_id,omitempty" jsonschema:"the object of the relation, read after the kind: request_id <kind> other_request_id"`
 	KnowledgeID    int64  `json:"knowledge_id,omitempty"`
 	ExternalRef    string `json:"external_ref,omitempty"`
+	Project        string `json:"project,omitempty" jsonschema:"with correct: move the request to this project (a remote or a short name that is unique among the projects you can write to); needs a reason"`
 }
 
 // correctionPatch collects the replacement values a correct action carries.
@@ -358,10 +360,20 @@ func (s *Server) handleRequestGet(_ context.Context, _ *mcp.CallToolRequest, in 
 
 func (s *Server) handleRequestCreate(_ context.Context, _ *mcp.CallToolRequest, in RequestCreateInput) (*mcp.CallToolResult, RequestChangeOutput, error) {
 	// Project only: a backlog entry belongs to the repository, not to the
-	// branch or machine that happened to file it.
-	ax := scope.Axes{Project: s.ctxAxes.Project}
+	// branch or machine that happened to file it. And it always has one: a
+	// request without a project used to be filed globally and turned up in every
+	// project's ledger.
+	project, err := s.writeTarget(in.Project)
+	if err != nil {
+		return nil, RequestChangeOutput{}, err
+	}
+	ax := scope.Axes{Project: project}
+	ref := s.sessionRef
+	if ref == "" {
+		ref = "mcp"
+	}
 	detail, err := s.client.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{
-		Type: in.Type, Title: in.Title, Description: in.Description, Priority: in.Priority, Scope: ax, Origin: "agent", SessionRef: "mcp",
+		Type: in.Type, Title: in.Title, Description: in.Description, Priority: in.Priority, Scope: ax, Origin: "agent", SessionRef: ref,
 	}, Criteria: in.Criteria, IdempotencyKey: in.IdempotencyKey})
 	out := changeOutput(detail, "created", 0)
 	// Creation is the one mutation that has to list its criteria: their ids
@@ -429,7 +441,21 @@ func (s *Server) handleRequestProgress(_ context.Context, _ *mcp.CallToolRequest
 	case "relation_remove":
 		err = s.client.RemoveRequestRelation(in.RelationID, in.Reason)
 	case "correct":
-		err = s.client.CorrectRequest(in.RequestID, in.correctionPatch(), in.Reason)
+		if in.Project != "" {
+			if strings.TrimSpace(in.Reason) == "" {
+				return nil, RequestChangeOutput{}, fmt.Errorf("moving a request has to say why: pass reason")
+			}
+			var project string
+			if project, err = s.writeTarget(in.Project); err != nil {
+				return nil, RequestChangeOutput{}, err
+			}
+			if _, err = s.client.MoveRequest(in.RequestID, project, in.Reason); err != nil {
+				return nil, RequestChangeOutput{}, err
+			}
+		}
+		if patch := in.correctionPatch(); len(patch) > 0 || in.Project == "" {
+			err = s.client.CorrectRequest(in.RequestID, patch, in.Reason)
+		}
 	default:
 		err = fmt.Errorf("unknown request progress action %q; use criterion_add, criterion_met, criterion_waive, complete, drop, relation_add, relation_remove, or correct", in.Action)
 	}

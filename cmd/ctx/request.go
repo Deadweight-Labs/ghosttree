@@ -19,7 +19,8 @@ const requestUsage = `usage: ctx request <command>
   list [--json]                    list open requests
   search <query> [--json]          search requests for the current project
   show <id> [--json]               show one request
-  create --type T --title T [--description D] [--ac C...] [--json]
+  create --type T --title T [--description D] [--ac C...] [--project P] [--json]
+  move <id> --project P [--reason R] [--json]
   start <id> --session N [--role primary|related] [--json]
   pause|complete-work|abandon <work-id> --summary S [--json]
   ac add <id> <criterion> [--json]
@@ -46,7 +47,7 @@ func cmdRequest(args []string, stdout io.Writer) int {
 	}
 	sub, rest := args[0], args[1:]
 	switch sub {
-	case "list", "search", "show", "create", "start", "pause", "complete-work", "abandon", "ac", "done":
+	case "list", "search", "show", "create", "move", "start", "pause", "complete-work", "abandon", "ac", "done":
 	default:
 		return requestCLIUsage(stdout)
 	}
@@ -88,10 +89,35 @@ func cmdRequest(args []string, stdout io.Writer) int {
 		key := fs.String("idempotency-key", "", "retry key")
 		var criteria repeatedString
 		fs.Var(&criteria, "ac", "acceptance criterion")
+		project := fs.String("project", "", "project the request belongs to (remote or unique short name); default: the current one")
 		if fs.Parse(rest) != nil || *typ == "" || *title == "" {
 			return requestCLIUsage(stdout)
 		}
-		detail, err := c.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: *typ, Title: *title, Description: *description, Priority: *priority, Scope: requestProjectAxes(cfg.Machine)}, Criteria: criteria, IdempotencyKey: *key})
+		// A request always belongs to a project: the named one, else the
+		// current one, else an error that lists where the account may write.
+		target, err := c.WriteTarget(*project, requestProjectAxes(cfg.Machine).Project)
+		if err != nil {
+			return writeRequestCLIError(stdout, jsonMode, 1, err)
+		}
+		detail, err := c.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: *typ, Title: *title, Description: *description, Priority: *priority, Scope: scope.Axes{Project: target}, SessionRef: currentSessionRef()}, Criteria: criteria, IdempotencyKey: *key})
+		return writeRequestCLIResult(stdout, jsonMode, detail, nil, err)
+	case "move":
+		id, flags, ok := requestIDAndFlags(rest)
+		if !ok {
+			return requestCLIUsage(stdout)
+		}
+		fs := flag.NewFlagSet("request move", flag.ContinueOnError)
+		fs.SetOutput(stdout)
+		project := fs.String("project", "", "project to move the request to (remote or unique short name)")
+		reason := fs.String("reason", "", "why it moves")
+		if fs.Parse(flags) != nil || *project == "" {
+			return requestCLIUsage(stdout)
+		}
+		target, err := c.WriteTarget(*project, "")
+		if err != nil {
+			return writeRequestCLIError(stdout, jsonMode, 1, err)
+		}
+		detail, err := c.MoveRequest(id, target, *reason)
 		return writeRequestCLIResult(stdout, jsonMode, detail, nil, err)
 	case "start":
 		id, flags, ok := requestIDAndFlags(rest)

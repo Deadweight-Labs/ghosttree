@@ -138,6 +138,10 @@ type knowledgeItemView struct {
 	// EditOpen öffnet das Formular, wenn die Seite über "Bearbeiten" der
 	// Prüfkarte erreicht wurde.
 	EditOpen bool
+	// Move ist das Verschieben-Formular (nil ohne Recht zu ändern); Moves das
+	// Protokoll bisheriger Verschiebungen.
+	Move  *moveView
+	Moves []moveRow
 }
 
 // ----------------------------------------------------------------- Textblöcke
@@ -465,6 +469,10 @@ func (a *app) knowledgeItemPage(w http.ResponseWriter, r *http.Request) {
 	}
 	a.fillEvidence(pa, k, &card, evidenceShown*3)
 	v.Card = card
+	if card.CanEdit {
+		v.Move = a.knowledgeMoveView(r, pa, k)
+	}
+	v.Moves = a.knowledgeMoveRows(pa, k)
 	// Frühere Fassungen tragen keine Vertrauensstufe und sind für Gäste tabu.
 	if hist, err := a.store.KnowledgeHistory(k.ID); err == nil && pa.CanSeeKnowledgeHistory(k) {
 		now := overviewNow().UTC()

@@ -6,6 +6,35 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Added: knowledge and requests are filed where they belong, not where the session
+  happens to stand (REQ-458). `context_remember`, `request_create` and `thread_open`
+  take an optional `project` (a remote or a short name that is unique among the
+  projects you can write to), `context_remember` an optional `machine` (any name,
+  including an ssh target no agent ever ran on). A project you cannot write to
+  answers exactly like one that does not exist. Nothing falls back silently any
+  more: `scope_hint` project without a project, and a request without a project,
+  are refused with the list of projects you can write to. A note for a machine
+  without sessions is stored and reaches sessions on that machine; a machine token
+  may write notes about another machine while the name is free. Writes from MCP
+  and `ctx request create` record the session ref. Existing entries move to
+  another project, a machine or global: `ctx knowledge move <id> --project P |
+  --machine M | --global`, `ctx request move <id> --project P`, the new
+  `context_move` tool, `request_record_progress` action `correct` with `project`,
+  and a "Move" form on the knowledge and request pages. You need write access in
+  both places, and the move is logged (the request's activity, the entry's move
+  history). Changed: requests without a project no longer appear in the ledger,
+  search results or bootstrap count of any project (they stay in the lists that
+  name no project, where they can be moved: existing requests without a project
+  disappear from the project ledgers and are sorted in with `ctx request move`);
+  machine and global knowledge still reaches every session it applies to.
+  Knowledge for a machine is delivered to sessions only while its author owns that
+  machine, so nobody can plant an instruction on a free machine name for whoever
+  claims it later (the author still sees it). `thread_open` for another project
+  opens the thread on the strength of your role there and does not register the
+  session in that project's room; its opening post travels with the question.
+  Moving an entry to global needs at least the lead role in its project. A moved
+  request keeps hiding the handoffs and quotes of private source sessions from
+  those who may not read them.
 - Changed: private means private (REQ-438). A session that is not shared is read
   by its owner alone: not by organization or project owners, not by leads, not by
   the instance admin, whether in the sessions list, the transcript, the raw

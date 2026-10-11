@@ -310,6 +310,11 @@ type ProjectAccess struct {
 	unclaimed map[string]bool
 	writers   map[string]map[string]bool
 
+	ownersOnce   sync.Once
+	ownerIDs     map[string]int64
+	ownerDefault int64
+	authorIDs    map[string]int64
+
 	checks atomic.Int32
 	loads  atomic.Int32
 }
@@ -436,12 +441,20 @@ func (a *ProjectAccess) Decide(project string, res Resource, act Action, obj Obj
 		return Decision{Hidden: true, Reason: "no account"}
 	}
 	project = strings.TrimSpace(project)
-	// Maschinen-Achse: nur der Besitzer der Maschine, egal welche Rolle.
+	// Maschinen-Achse: nur der Besitzer der Maschine, egal welche Rolle. Steht
+	// zugleich ein Projekt am Eintrag, ersetzt der Besitz der Maschine die
+	// Projektrolle nicht: gesehen wird er nur mit Projektrolle UND Maschine.
 	if res == ResKnowledge && obj.Machine != "" {
-		if !a.OwnsMachine(obj.Machine) {
+		owns := a.OwnsMachine(obj.Machine)
+		if !owns && !a.ownNoteOnUnclaimedMachine(obj, act) {
 			return Decision{Hidden: true, Reason: "machine-axis knowledge of another account"}
 		}
-		return Decision{Allowed: true}
+		if project == "" {
+			if owns {
+				return Decision{Allowed: true}
+			}
+			return Decision{Allowed: true, Reason: "own note on a machine nobody has claimed"}
+		}
 	}
 	if project == "" {
 		return a.decideGlobal(res, act, obj)
@@ -696,9 +709,18 @@ func (a *ProjectAccess) applyDelivery(project string, ok bool) bool {
 // bis ein Prüfer, Lead oder Owner ihn auf verified setzt.
 func (a *ProjectAccess) CanDeliverKnowledge(k Knowledge) bool {
 	if k.Scope.Project == "" {
+		if k.Scope.Machine != "" {
+			return a.applyDelivery("", a.machineAuthorDelivers(k))
+		}
 		return true
 	}
-	return a.applyDelivery(k.Scope.Project, a.deliverable(k.Scope.Project, k.Person, k.ConfirmedBy, k.Confidence == "verified"))
+	ok := a.deliverable(k.Scope.Project, k.Person, k.ConfirmedBy, k.Confidence == "verified")
+	// An entry with project AND machine needs both: the author is a writer of the
+	// project and owns the machine now.
+	if ok && k.Scope.Machine != "" {
+		ok = a.machineAuthorDelivers(k)
+	}
+	return a.applyDelivery(k.Scope.Project, ok)
 }
 
 // CanDeliverGhost: bei Ghost-Beschreibungen muss der Autor Schreibrecht haben.

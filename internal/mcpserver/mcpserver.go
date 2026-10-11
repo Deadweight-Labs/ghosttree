@@ -127,6 +127,8 @@ type RememberInput struct {
 	Title     string `json:"title" jsonschema:"one line summary"`
 	Body      string `json:"body" jsonschema:"the knowledge itself; for a decision, cover why it was taken, which alternatives were rejected and what the tradeoffs are"`
 	ScopeHint string `json:"scope_hint" jsonschema:"where this belongs — required, because it is a judgement nobody else can make for you: project, branch, machine or global.\nThe question that separates project from branch: does this stop being true once the branch is merged or abandoned? A migration in flight, a temporary flag, a workaround for something only this branch broke — that is branch. Anything that outlives the branch is project, and most things do.\nA branch entry is read by this branch and by every branch cut from it afterwards, never by a sibling. Machine is for facts about the box you are standing on, global for facts about how you work anywhere."`
+	Project   string `json:"project,omitempty" jsonschema:"file it under this project instead of the session's own: a remote like github.com/owner/repo or a short name that is unique among the projects you can write to. For a problem with another project's tool, work or code. Applies to scope_hint project or branch"`
+	Machine   string `json:"machine,omitempty" jsonschema:"with scope_hint machine: file it for this machine instead of the one you are on. Any machine name, including one no agent ever ran on, such as an ssh target"`
 }
 
 type SessionsInput struct {
@@ -154,8 +156,13 @@ func (s *Server) Register(srv *mcp.Server) {
 	}, s.handleGet)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "context_remember",
-		Description: "Store a pitfall, decision, note or plan in ghosttree instead of writing it into the source tree. A decision should record why it was taken, which alternatives were rejected and what the tradeoffs are, so it can be revisited later.",
+		Description: "Store a pitfall, decision, note or plan in ghosttree instead of writing it into the source tree. A decision should record why it was taken, which alternatives were rejected and what the tradeoffs are, so it can be revisited later." + targetHint,
 	}, s.handleRemember)
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "context_move",
+		Description: "Move a knowledge entry to another project, to another machine, or to global, when it was filed in the wrong place. You need write access to where it is and to where it goes. The move is recorded. To move a request, use request_record_progress with action=correct and project.",
+		Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed},
+	}, s.handleMove)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "context_sessions",
 		Description: "List or search past agent sessions, or read one session's transcript. Defaults to the current project; set project or all_projects to look further.",
@@ -180,7 +187,7 @@ func (s *Server) Register(srv *mcp.Server) {
 	mcp.AddTool(srv, &mcp.Tool{Name: "coord_touched", Description: "Has anyone else worked on this path lately? Ask before changing something another session may be in the middle of. It distinguishes the same checkout from a separate worktree, because those are different risks. Nothing is locked and no answer is a clean bill of health — absence of observation is not proof that nobody is there.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closed}}, s.handleCoordTouched)
 	mcp.AddTool(srv, &mcp.Tool{Name: "coord_dm", Description: "Talk to one peer or a small group privately, without involving the whole project room. Nobody outside the conversation can read it — not through search, not through summaries. Use it when the exchange only concerns the people in it.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleCoordDM)
 	mcp.AddTool(srv, &mcp.Tool{Name: "coord_dm_read", Description: "Read a private conversation, or list the ones you are part of. Continues from your cursor.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closed}}, s.handleCoordDMRead)
-	mcp.AddTool(srv, &mcp.Tool{Name: "thread_open", Description: "Start a lasting discussion about one question — something that outlives this session and that a later agent can pick up. Attach it to the knowledge entry, request or document it is about; a request link must be an existing request of this project (REQ-n or the number), otherwise nothing is opened. Not for chatter: a question nobody will ask again belongs in coord_send.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleThreadOpen)
+	mcp.AddTool(srv, &mcp.Tool{Name: "thread_open", Description: "Start a lasting discussion about one question — something that outlives this session and that a later agent can pick up. Attach it to the knowledge entry, request or document it is about; a request link must be an existing request of this project (REQ-n or the number), otherwise nothing is opened. Not for chatter: a question nobody will ask again belongs in coord_send. If it belongs to a different project than the current one, pass project.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleThreadOpen)
 	mcp.AddTool(srv, &mcp.Tool{Name: "thread_read", Description: "Read where a discussion stands: the working state, what is still open, what came out of it, and the posts since the summary's reach. It tells you what it left out and how to get it — it never silently truncates.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closed}}, s.handleThreadRead)
 	mcp.AddTool(srv, &mcp.Tool{Name: "thread_reply", Description: "Add a contribution to an existing discussion. Disagreeing with what is already there is the useful case — two agents agreeing does not make a guess a fact.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleThreadReply)
 	mcp.AddTool(srv, &mcp.Tool{Name: "thread_find", Description: "Find discussions by words or, better, by the object they hang on — before opening a second thread about a question someone already investigated.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closed}}, s.handleThreadFind)
@@ -188,10 +195,10 @@ func (s *Server) Register(srv *mcp.Server) {
 	mcp.AddTool(srv, &mcp.Tool{Name: "thread_propose", Description: "Record what a discussion suggests should become a decision, pitfall or request. It is a proposal, not knowledge: promoting it takes its own write and the usual review. A rejected proposal stays as a result, so the same idea is not re-argued in three months.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleThreadPropose)
 	mcp.AddTool(srv, &mcp.Tool{Name: "request_search", Description: "List or search the current project's work ledger. Works like listing issues: call it with no query to see what is open, or name a subject to narrow. A question that names no subject — \"what is left to do\" — returns the list rather than guessing. Answers with a compact list; call request_get for one entry's full text. Use it before substantial feature, architecture, migration, or multi-session work.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closed}}, s.handleRequestSearch)
 	mcp.AddTool(srv, &mcp.Tool{Name: "request_get", Description: "Get one request as readable text with its original paragraphs. Concise includes the request, description, criteria, relations, and latest work; it omits activity, older work, and criterion evidence. Use response_format=detailed for the complete history and all evidence.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closed}}, s.handleRequestGet)
-	mcp.AddTool(srv, &mcp.Tool{Name: "request_create", Description: "Create a ledger entry for substantial work when request_search found no match. Include observable acceptance criteria; do not use for trivial local fixes.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleRequestCreate)
+	mcp.AddTool(srv, &mcp.Tool{Name: "request_create", Description: "Create a ledger entry for substantial work when request_search found no match. Include observable acceptance criteria; do not use for trivial local fixes. A request always belongs to a project: the session's own, or the one you pass as project.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleRequestCreate)
 	mcp.AddTool(srv, &mcp.Tool{Name: "request_start_work", Description: "Associate a Ghosttree session with an existing request as its primary task or as related work. Repeating the same association is safe.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, IdempotentHint: true, OpenWorldHint: &closed}}, s.handleRequestStartWork)
 	mcp.AddTool(srv, &mcp.Tool{Name: "request_finish_work", Description: "End a session's work association with a paused, completed, or abandoned outcome and a concise handoff. This does not complete the request.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, IdempotentHint: true, OpenWorldHint: &closed}}, s.handleRequestFinishWork)
-	mcp.AddTool(srv, &mcp.Tool{Name: "request_record_progress", Description: "Record evidenced request progress: add or satisfy criteria, complete or drop the request, add or remove a relation, or correct what the request says. Completion without evidence or with open criteria is rejected. A correction and a relation removal each need a reason, which goes into the activity list — nothing changes silently. Answers with what changed and how many criteria remain — call request_get for the full picture.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleRequestProgress)
+	mcp.AddTool(srv, &mcp.Tool{Name: "request_record_progress", Description: "Record evidenced request progress: add or satisfy criteria, complete or drop the request, add or remove a relation, or correct what the request says. Completion without evidence or with open criteria is rejected. A correction and a relation removal each need a reason, which goes into the activity list — nothing changes silently. Answers with what changed and how many criteria remain — call request_get for the full picture. To move a request to another project, use correct with project and a reason.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleRequestProgress)
 }
 
 func Run(ctx context.Context, s *Server, version string) error {
@@ -411,24 +418,58 @@ func (s *Server) handleRemember(ctx context.Context, _ *mcp.CallToolRequest, in 
 	if in.Type == "" || in.Title == "" {
 		return nil, nil, fmt.Errorf("type and title are required")
 	}
-	k := store.Knowledge{Type: in.Type, Title: in.Title, Body: in.Body, Harness: "mcp"}
+	k := store.Knowledge{Type: in.Type, Title: in.Title, Body: in.Body, Harness: "mcp", SessionRef: s.sessionRef}
 	autoCtx := s.ctxAxes
 	// Placement is asked for rather than defaulted. A default put everything on
 	// the branch and stranded 127 entries; the correction put everything on the
 	// project, which is right more often and still nobody's decision. Where a
 	// thing belongs is a judgement about how long it stays true, and only the
 	// writer is in a position to make it.
+	//
+	// Neither is there a fallback for a missing project: an entry that cannot
+	// say where it belongs is refused, because the old fallback (the machine)
+	// filed 120 project notes under mainex.
 	switch in.ScopeHint {
 	case "project":
-		k.Scope = scope.Axes{Project: s.ctxAxes.Project}
+		if in.Machine != "" {
+			return nil, nil, fmt.Errorf("machine only goes with scope_hint machine")
+		}
+		project, err := s.writeTarget(in.Project)
+		if err != nil {
+			return nil, nil, err
+		}
+		k.Scope = scope.Axes{Project: project}
 	case "branch":
+		if in.Machine != "" {
+			return nil, nil, fmt.Errorf("machine only goes with scope_hint machine")
+		}
 		if s.ctxAxes.Branch == "" {
 			return nil, nil, fmt.Errorf("scope_hint branch, but this session is not on a named branch; use project or machine")
 		}
-		k.Scope = scope.Axes{Project: s.ctxAxes.Project, Branch: s.ctxAxes.Branch}
+		project, err := s.writeTarget(in.Project)
+		if err != nil {
+			return nil, nil, err
+		}
+		if project != s.ctxAxes.Project {
+			return nil, nil, fmt.Errorf("a branch entry belongs to this session's branch of %s; for %s use scope_hint project", s.ctxAxes.Project, project)
+		}
+		k.Scope = scope.Axes{Project: project, Branch: s.ctxAxes.Branch}
 	case "machine":
-		k.Scope = scope.Axes{Machine: s.ctxAxes.Machine}
+		if in.Project != "" {
+			return nil, nil, fmt.Errorf("a machine entry is not tied to a project; drop project")
+		}
+		machine := scope.CanonicalAxes(scope.Axes{Machine: in.Machine}).Machine
+		if machine == "" {
+			machine = s.ctxAxes.Machine
+		}
+		if machine == "" {
+			return nil, nil, fmt.Errorf("this session has no machine identity; pass machine=<name>")
+		}
+		k.Scope = scope.Axes{Machine: machine}
 	case "global":
+		if in.Project != "" || in.Machine != "" {
+			return nil, nil, fmt.Errorf("a global entry applies everywhere; drop project and machine, or use scope_hint project or machine")
+		}
 		// Empty scope plus empty context: the server's write defaults resolve
 		// to global rather than filling anything in.
 		autoCtx = scope.Axes{}

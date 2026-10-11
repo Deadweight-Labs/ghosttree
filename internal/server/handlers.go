@@ -242,11 +242,12 @@ func (a *api) createKnowledge(w http.ResponseWriter, r *http.Request) {
 	if k.Scope.IsGlobal() && req.AutoScope != nil {
 		k.Scope = scope.DefaultAxes(k.Type, req.AutoScope.Context)
 	}
-	if !a.gateMachine(w, r, k.Scope.Machine, false) || !a.gateProject(w, r, k.Scope.Project) {
+	if !a.gateMachineNote(w, r, k.Scope.Machine) || !a.gateProject(w, r, k.Scope.Project) {
 		return
 	}
 	// Die Zuschreibung kommt aus dem Token und ist danach unveränderlich.
 	k.Person, k.ConfirmedBy = personOf(r), ""
+	k.AuthorID = authorIDOf(r)
 	if k.Confidence == "verified" {
 		k.ConfirmedBy = k.Person
 	}
@@ -287,7 +288,13 @@ func (a *api) listKnowledge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pa := a.access(r)
-	writeJSON(w, 200, pa.KnowledgeViews(filterTo(ks, 0, pa.CanSeeKnowledge)))
+	keep := pa.CanSeeKnowledge
+	if r.URL.Query().Get("deliverable") == "1" {
+		// For readers that hand the content on to agents or into files (the
+		// repository mirror): the same test as the bootstrap.
+		keep = func(k store.Knowledge) bool { return pa.CanSeeKnowledge(k) && pa.CanDeliverKnowledge(k) }
+	}
+	writeJSON(w, 200, pa.KnowledgeViews(filterTo(ks, 0, keep)))
 }
 
 func (a *api) insertMigratedKnowledge(w http.ResponseWriter, r *http.Request) {
@@ -297,6 +304,7 @@ func (a *api) insertMigratedKnowledge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.Knowledge.Person = personOf(r)
+	in.Knowledge.AuthorID = authorIDOf(r)
 	in.Knowledge.Scope = scope.CanonicalAxes(in.Knowledge.Scope)
 	if denyAccess(w, a.access(r).CheckKnowledgeCreate(in.Knowledge)) {
 		return
@@ -1157,4 +1165,10 @@ func (a *api) sessionFilters(f scope.Axes, fetch int) (db, view scope.Axes, limi
 	view = scope.Axes{Machine: f.Machine, Branch: f.Branch}
 	f.Machine, f.Branch = "", ""
 	return f, view, max(fetch, 1000)
+}
+
+// authorIDOf is the numeric account of the caller, 0 when there is none.
+func authorIDOf(r *http.Request) int64 {
+	id, _ := store.AccountNumericID(principalOf(r).ID)
+	return id
 }
