@@ -3,11 +3,13 @@ package main
 import (
 	"bytes"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
@@ -113,5 +115,47 @@ func TestRequestCLICreateTargetsAndMove(t *testing.T) {
 	out.Reset()
 	if code := run([]string{"request", "move", strconv.FormatInt(id, 10), "--project", "nowhere"}, &out); code != 1 {
 		t.Errorf("move to an unknown project: %d %s", code, out.String())
+	}
+}
+
+// Round 2, B end to end: what the bootstrap would not hand out does not reach
+// the files either.
+func TestMirrorLeavesOutWhatIsNotDeliverable(t *testing.T) {
+	st := moveCLIFixture(t)
+	if _, err := st.AddAccount("bob", "", false); err != nil {
+		t.Fatal(err)
+	}
+	st.SetAccessMode(store.AccessMode{Enforce: true})
+	add := func(title, person string, ax scope.Axes) {
+		t.Helper()
+		if _, err := st.InsertKnowledge(store.Knowledge{Type: "instruction", Title: title, Body: "body " + title, Scope: ax, Person: person, Confidence: "trusted"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	add("ordinary-project-note", "alice", scope.Axes{Project: cliHere})
+	// A note by another account for a machine its author does not own.
+	add("planted-machine-note", "bob", scope.Axes{Machine: "vic-laptop"})
+	// A project note by somebody who is no writer of the project.
+	add("planted-project-note", "mallory", scope.Axes{Project: cliHere})
+	repo := gitRepo(t)
+	cfg, _ := config.Load()
+	if err := WriteMirror(client.New(cfg), scope.Axes{Project: cliHere, Machine: "vic-laptop"}, repo); err != nil {
+		t.Fatal(err)
+	}
+	var all strings.Builder
+	_ = filepath.WalkDir(filepath.Join(repo, ".ghosttree"), func(path string, d os.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			b, _ := os.ReadFile(path)
+			all.Write(b)
+		}
+		return nil
+	})
+	if !strings.Contains(all.String(), "ordinary-project-note") {
+		t.Fatal("the mirror lost ordinary knowledge")
+	}
+	for _, planted := range []string{"planted-machine-note", "planted-project-note"} {
+		if strings.Contains(all.String(), planted) {
+			t.Errorf("%s reached the mirror", planted)
+		}
 	}
 }

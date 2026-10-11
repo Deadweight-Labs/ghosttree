@@ -427,15 +427,20 @@ func (a *ProjectAccess) Decide(project string, res Resource, act Action, obj Obj
 		return Decision{Hidden: true, Reason: "no account"}
 	}
 	project = strings.TrimSpace(project)
-	// Maschinen-Achse: nur der Besitzer der Maschine, egal welche Rolle.
+	// Maschinen-Achse: nur der Besitzer der Maschine, egal welche Rolle. Steht
+	// zugleich ein Projekt am Eintrag, ersetzt der Besitz der Maschine die
+	// Projektrolle nicht: gesehen wird er nur mit Projektrolle UND Maschine.
 	if res == ResKnowledge && obj.Machine != "" {
-		if !a.OwnsMachine(obj.Machine) {
-			if a.ownNoteOnUnclaimedMachine(obj, act) {
-				return Decision{Allowed: true, Reason: "own note on a machine nobody has claimed"}
-			}
+		owns := a.OwnsMachine(obj.Machine)
+		if !owns && !a.ownNoteOnUnclaimedMachine(obj, act) {
 			return Decision{Hidden: true, Reason: "machine-axis knowledge of another account"}
 		}
-		return Decision{Allowed: true}
+		if project == "" {
+			if owns {
+				return Decision{Allowed: true}
+			}
+			return Decision{Allowed: true, Reason: "own note on a machine nobody has claimed"}
+		}
 	}
 	if project == "" {
 		return a.decideGlobal(res, act, obj)
@@ -663,7 +668,13 @@ func (a *ProjectAccess) CanDeliverKnowledge(k Knowledge) bool {
 		}
 		return true
 	}
-	return a.applyDelivery(k.Scope.Project, a.deliverable(k.Scope.Project, k.Person, k.ConfirmedBy, k.Confidence == "verified"))
+	ok := a.deliverable(k.Scope.Project, k.Person, k.ConfirmedBy, k.Confidence == "verified")
+	// An entry with project AND machine needs both: the author is a writer of the
+	// project and owns the machine now.
+	if ok && k.Scope.Machine != "" {
+		ok = a.machineAuthorDelivers(k)
+	}
+	return a.applyDelivery(k.Scope.Project, ok)
 }
 
 // CanDeliverGhost: bei Ghost-Beschreibungen muss der Autor Schreibrecht haben.

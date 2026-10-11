@@ -33,7 +33,7 @@ func WriteMirror(c *client.Client, ax scope.Axes, repoRoot string) error {
 	if ax.Machine == "" {
 		ax.Machine = c.Machine()
 	}
-	knowledge, err := c.Knowledge(ax)
+	knowledge, err := c.DeliverableKnowledge(ax)
 	if err != nil {
 		return err
 	}

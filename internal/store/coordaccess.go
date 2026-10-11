@@ -193,6 +193,8 @@ func noMembershipError(kind string) error {
 // roleOpensProjectRoom lets a signed-in person with the project role member or
 // higher (owner, lead, member, reviewer) read (ActRead) or write (ActPost) in
 // the project room without an agent of their own in it (matrix 8.1, spec 7.5).
+// Thread creation by agent and device tokens in other projects (CreateThreadByRole)
+// departs from this on purpose; see there.
 // Agent tokens, pasted sessions and guests are not covered; a thread with a
 // visibility list stays closed to a role (threadAccessTx checks the list first).
 func (a CoordAccess) roleOpensProjectRoom(roomKey string, tx rowQuerier, via Action) bool {
@@ -1428,6 +1430,9 @@ func (a CoordAccess) CreateThread(thread Thread) (int64, error) {
 	}
 	if strings.TrimSpace(thread.Title) == "" || thread.Project == "" {
 		return 0, fmt.Errorf("a thread needs a title and project")
+	}
+	if err := ValidateThreadText(thread); err != nil {
+		return 0, err
 	}
 	tx, err := a.Store.db.Begin()
 	if err != nil {

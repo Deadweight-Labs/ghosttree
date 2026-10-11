@@ -283,7 +283,13 @@ func (a *api) listKnowledge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pa := a.access(r)
-	writeJSON(w, 200, pa.KnowledgeViews(filterTo(ks, 0, pa.CanSeeKnowledge)))
+	keep := pa.CanSeeKnowledge
+	if r.URL.Query().Get("deliverable") == "1" {
+		// For readers that hand the content on to agents or into files (the
+		// repository mirror): the same test as the bootstrap.
+		keep = func(k store.Knowledge) bool { return pa.CanSeeKnowledge(k) && pa.CanDeliverKnowledge(k) }
+	}
+	writeJSON(w, 200, pa.KnowledgeViews(filterTo(ks, 0, keep)))
 }
 
 func (a *api) insertMigratedKnowledge(w http.ResponseWriter, r *http.Request) {
