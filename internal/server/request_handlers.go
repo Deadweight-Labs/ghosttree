@@ -175,7 +175,7 @@ func (a *api) hideRuleRequest(r *http.Request, err error) error {
 		if n, perr := strconv.ParseInt(strings.TrimPrefix(rule.IDs[0], "REQ-"), 10, 64); perr == nil {
 			pa := a.access(r)
 			if ref, rerr := a.st.RequestRef(store.RefRequest, n); rerr == nil &&
-				pa.Check(ref.Project, store.ResRequest, store.ActRead, store.Object{Own: pa.IsAuthor(ref.Person)}) == nil {
+				requestVisibleTo(pa, ref) {
 				return err
 			}
 		}

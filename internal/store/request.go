@@ -228,6 +228,14 @@ func requestScopeWhere(filter requestdomain.SearchFilter) ([]string, []any) {
 		}
 		where = append(where, `(`+clause+`)`)
 	}
+	if filter.HideHeld {
+		where = append(where, `NOT (r.origin='distilled' AND r.person='' AND EXISTS (
+			SELECT 1 FROM sessions hs WHERE 'session:'||hs.id = substr(r.session_ref,1,length('session:'||hs.id))
+			  AND (length(r.session_ref)=length('session:'||hs.id) OR substr(r.session_ref,length('session:'||hs.id)+1,1)='#')
+			  AND hs.shared=0 AND COALESCE(hs.visibility,'') IN ('','private')
+			  AND (CASE WHEN hs.account_id=0 THEN ? ELSE hs.account_id END) != ?))`)
+		args = append(args, filter.HeldInstanceOwner, filter.HeldViewer)
+	}
 	return where, args
 }
 

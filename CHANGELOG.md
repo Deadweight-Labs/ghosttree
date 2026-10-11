@@ -11,7 +11,10 @@ Versioning, with pre-1.0 compatibility rules described in
   the instance admin, whether in the sessions list, the transcript, the raw
   export, search, the MCP tools, request work, snapshots or evidence quotes.
   Shared sessions behave as before. A project owner can still withdraw a shared
-  session, but can no longer share a private one or widen a shared one.
+  session, but can no longer share a private one or widen a shared one. Knowledge
+  and requests the distiller derived from a private session stay visible to that
+  session's owner alone until the owner adopts them or shares the session; what an
+  agent saves on purpose stays normal project knowledge.
 - Added: any signed-in account can create an organization on the Organization
   page and becomes its owner; the way on leads to inviting someone or connecting a
   project. Owners (and the instance admin) can rename it; the address stays.

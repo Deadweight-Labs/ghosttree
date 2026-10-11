@@ -79,6 +79,9 @@ type Object struct {
 	// Machine: Maschinen-Achse eines Wissenseintrags; nicht leer heißt, dass
 	// nur der Besitzer der Maschine Zugriff hat.
 	Machine string
+	// OriginOwner: der Betrachter besitzt die private Session, aus der ein noch
+	// nicht übernommener, distillierter Eintrag stammt; er darf ihn übernehmen.
+	OriginOwner bool
 }
 
 // Decision ist das Ergebnis der Matrix.
@@ -104,9 +107,9 @@ func matrixAllows(role RoleInfo, res Resource, act Action, obj Object) bool {
 		case ActCreate:
 			return rank >= 2
 		case ActEdit:
-			return rank >= 3 || (rank == 2 && obj.Own)
+			return rank >= 3 || (rank == 2 && (obj.Own || obj.OriginOwner))
 		case ActVerify:
-			return rank >= 3 || (rank >= 2 && role.CanReview)
+			return rank >= 3 || (rank >= 2 && (role.CanReview || obj.OriginOwner))
 		}
 	case ResRequest:
 		switch act {
@@ -115,7 +118,7 @@ func matrixAllows(role RoleInfo, res Resource, act Action, obj Object) bool {
 		case ActCreate, ActWork:
 			return rank >= 2
 		case ActEdit:
-			return rank >= 3 || (rank == 2 && obj.Own)
+			return rank >= 3 || (rank == 2 && (obj.Own || obj.OriginOwner))
 		}
 	case ResSessionMeta:
 		// Die eigene Session anlegen und fortschreiben darf jedes Konto; wem sie
@@ -522,11 +525,28 @@ func (a *ProjectAccess) Check(project string, res Resource, act Action, obj Obje
 // -------- Hilfen je Ressource
 
 func knowledgeObject(a *ProjectAccess, k Knowledge) Object {
-	return Object{Own: a.IsAuthor(k.Person), Confidence: k.Confidence, Machine: k.Scope.Machine}
+	obj := Object{Own: a.IsAuthor(k.Person), Confidence: k.Confidence, Machine: k.Scope.Machine}
+	if ref := knowledgeHeldRef(k); ref != "" {
+		_, obj.OriginOwner = a.heldOrigin(ref)
+	}
+	return obj
+}
+
+// knowledgeHeld: gestagtes Wissen aus der privaten Session eines anderen Kontos.
+func (a *ProjectAccess) knowledgeHeld(k Knowledge) bool {
+	ref := knowledgeHeldRef(k)
+	if ref == "" {
+		return false
+	}
+	held, _ := a.heldOrigin(ref)
+	return held
 }
 
 // CanSeeKnowledge: Lesefilter für Listen, Suche und Bootstrap.
 func (a *ProjectAccess) CanSeeKnowledge(k Knowledge) bool {
+	if a.knowledgeHeld(k) {
+		return false
+	}
 	return a.Allow(k.Scope.Project, ResKnowledge, ActRead, knowledgeObject(a, k))
 }
 
@@ -534,6 +554,9 @@ func (a *ProjectAccess) CanSeeKnowledge(k Knowledge) bool {
 // Vertrauensstufe, darunter vielleicht nie freigegebene. Er gilt deshalb wie ein
 // Eintrag der untersten Stufe: ab member, nicht für Gäste.
 func (a *ProjectAccess) CanSeeKnowledgeHistory(k Knowledge) bool {
+	if a.knowledgeHeld(k) {
+		return false
+	}
 	obj := knowledgeObject(a, k)
 	obj.Confidence = "staged"
 	return a.Allow(k.Scope.Project, ResKnowledge, ActRead, obj)
@@ -541,6 +564,9 @@ func (a *ProjectAccess) CanSeeKnowledgeHistory(k Knowledge) bool {
 
 // CheckKnowledge prüft eine Aktion auf einen vorhandenen Eintrag.
 func (a *ProjectAccess) CheckKnowledge(k Knowledge, act Action) error {
+	if a.knowledgeHeld(k) {
+		return ErrAccessNotFound
+	}
 	return a.Check(k.Scope.Project, ResKnowledge, act, knowledgeObject(a, k))
 }
 
@@ -598,6 +624,10 @@ func (a *ProjectAccess) RequestFilter(f requestdomain.SearchFilter) requestdomai
 	}
 	f.Restrict, f.Projects = true, a.Projects()
 	f.UnclaimedAuthor, f.UnclaimedAll = a.principal.Label, a.IsAdmin()
+	// Distillierte, nicht übernommene Requests aus fremden privaten Sessions
+	// bleiben dem Besitzer dieser Session vorbehalten.
+	a.loadMachines()
+	f.HideHeld, f.HeldViewer, f.HeldInstanceOwner = true, a.account, a.owner
 	return f
 }
 
