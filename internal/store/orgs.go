@@ -691,11 +691,29 @@ func (s *Store) EnsureProject(accountPrincipal, remote string) (Project, error) 
 	if p, ok := projectTx(s.db, remote); ok && p.Named {
 		// Ein benanntes Projekt wird nie über einen Schreibzugriff zugeordnet.
 		return Project{}, ErrProjectNotFound
+	} else if !ok && orgNamespaceTx(s.db, remote) {
+		return Project{}, ErrProjectNotFound
 	}
 	// Ein unbekannter Wert, auch einer in der Gestalt "a/b" (eine hostlose
 	// Remote wie gitserver/repo), ist wie bisher ein Remote-Projekt: benannt ist
 	// nur, was in named_projects steht.
 	return claimInTx(s.db, accountPrincipal, remote, "", false)
+}
+
+// orgNamespaceTx sagt, ob remote ein unbekannter hostloser Zweisegment-Wert ist,
+// dessen erstes Segment ein Org-Slug ist. Dieser Namensraum gehört den
+// benannten Projekten der Organisation: ein Schreibzugriff legt dort nichts
+// implizit an, auch nicht für Mitglieder (dafür gibt es ctx project create), und
+// niemand außerhalb kann so Namen einer fremden Org besetzen oder per 409
+// abfragen. Bestehende Remote-Projekte bleiben unverändert, auch wenn später
+// eine Organisation mit passendem Slug entsteht.
+func orgNamespaceTx(q rowQuerier, remote string) bool {
+	if !scope.IsNamedProject(remote) {
+		return false
+	}
+	var n int
+	_ = q.QueryRow(`SELECT COUNT(*) FROM orgs WHERE slug=?`, remote[:strings.IndexByte(remote, '/')]).Scan(&n)
+	return n > 0
 }
 
 // CreateNamedProject legt ein Projekt ohne Git an. Die ID ist
@@ -783,8 +801,15 @@ func (s *Store) ClaimProject(accountPrincipal, remote, orgRef string) (Project, 
 	if err != nil {
 		return Project{}, err
 	}
-	if p, ok := projectTx(s.db, remote); ok && p.Named {
-		return Project{}, fmt.Errorf("%w: %q is a project name, not a git remote; create it with ctx project create", ErrInvalidInput, remote)
+	p, known := projectTx(s.db, remote)
+	if known && p.Named {
+		if acct, err := parsePersonPrincipalID(accountPrincipal); err == nil && orgRoleTx(s.db, p.OrgID, acct) != "" {
+			return Project{}, fmt.Errorf("%w: %q is a project name, not a git remote; create it with ctx project create", ErrInvalidInput, remote)
+		}
+		return Project{}, ErrProjectNotFound
+	}
+	if !known && orgNamespaceTx(s.db, remote) {
+		return Project{}, ErrProjectNotFound
 	}
 	return claimInTx(s.db, accountPrincipal, remote, orgRef, true)
 }

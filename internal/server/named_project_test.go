@@ -67,6 +67,21 @@ func TestNamedProjectsOfOtherOrganizationsAreInvisible(t *testing.T) {
 	if _, ok := f.st.ProjectByRemote("alpha/infra"); !ok {
 		t.Error("the foreign project vanished")
 	}
+	// An organization's namespace is not open to implicit projects: an outsider
+	// cannot occupy or probe names there, and answers look like "not found" for
+	// members too (they create projects with ctx project create).
+	for name, token := range map[string]string{"outsider": f.anna, "owner": f.robin} {
+		for _, id := range []string{"alpha/probe", "alpha/infra"} {
+			if code, out := write(token, id); name == "outsider" && (code != 404 || out["code"] != "project_not_found") {
+				t.Errorf("%s writes %s: %d %v", name, id, code, out)
+			} else if name == "owner" && id == "alpha/probe" && (code != 404 || out["code"] != "project_not_found") {
+				t.Errorf("%s writes %s: %d %v", name, id, code, out)
+			}
+		}
+	}
+	if _, ok := f.st.ProjectByRemote("alpha/probe"); ok {
+		t.Error("a project appeared in the namespace")
+	}
 }
 
 // Whether a project is named is a property of its row, not of the id's shape.
