@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
+	"strings"
 	"sync"
 
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
@@ -317,6 +318,11 @@ func filterTo[T any](in []T, limit int, keep func(T) bool) []T {
 // das Projekt lesen darf; sonst 404. Ohne Projekt gilt der Filter auf den
 // Einträgen. Der Aufruf zählt auch ohne Projekt als Prüfung.
 func (a *api) listGate(w http.ResponseWriter, r *http.Request, project string, res store.Resource) bool {
+	if strings.TrimSpace(project) == "" {
+		// Ohne Projekt begrenzt sich die Liste selbst auf die eigenen Einträge.
+		a.access(r).Filtered()
+		return true
+	}
 	return !denyAccess(w, a.access(r).Check(project, res, store.ActRead, store.Object{Confidence: "verified"}))
 }
 
@@ -482,7 +488,7 @@ func (a *api) checkDocument(w http.ResponseWriter, r *http.Request, id int64, ac
 		writeStoreError(w, http.StatusNotFound, err)
 		return false
 	}
-	return !denyAccess(w, pa.Check(d.Project, store.ResDocument, act, store.Object{Own: pa.IsAuthor(d.Person)}))
+	return !denyAccess(w, pa.Check(d.Project, store.ResDocument, act, store.Object{Own: pa.IsAuthor(d.Person), Person: d.Person}))
 }
 
 // listGateEntries ist listGate für Handler, die jeden Eintrag danach mit Own

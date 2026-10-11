@@ -6,6 +6,17 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Fixed: knowledge and requests without a project and without a machine ("global")
+  were readable by every account on the instance, a fresh account without an
+  organization included. "Global" now means "everywhere for me": such an entry is
+  visible, listed, searched, delivered (bootstrap, relevance hook, mirror, web,
+  MCP) and editable for its author's account only, the instance admin included.
+  The author is the writing account (`knowledge_authors`); for entries from before
+  accounts and for requests the author name decides, and a name no account carries
+  (or none) belongs to the instance owner. Moving an entry to global is limited to
+  its author, since a lead who moved a member's entry there would hide it from the
+  project and from himself. Machine knowledge stays readable only for the owner of
+  the machine.
 - Added: knowledge and requests are filed where they belong, not where the session
   happens to stand (REQ-458). `context_remember`, `request_create` and `thread_open`
   take an optional `project` (a remote or a short name that is unique among the

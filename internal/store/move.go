@@ -285,13 +285,10 @@ func (a *ProjectAccess) machineAuthorDelivers(k Knowledge) bool {
 	return owner == author
 }
 
-// MayMakeGlobal: ein Eintrag aus einem Projekt wird nur von Lead aufwärts (oder
-// dem Instanz-Admin) nach global gelegt. Global erreicht jede Session jedes
-// Kontos, also mehr Leser als das Projekt, aus dem er kommt; ein Mitglied darf
-// den eigenen Eintrag verschieben, aber nicht so weit ausspielen.
+// MayMakeGlobal: "global" heißt "überall für mich", es erreicht nur die Sessions
+// des Autors. Deshalb darf jeder seinen eigenen Eintrag nach global legen, ein
+// fremder aber nicht: er verschwände für den, der ihn verschiebt, und für das
+// ganze Projekt.
 func (a *ProjectAccess) MayMakeGlobal(k Knowledge) bool {
-	if k.Scope.Project == "" || a.IsAdmin() {
-		return true
-	}
-	return RoleRank(a.Role(k.Scope.Project).Role) >= 3
+	return a.ownsGlobal(Object{Person: k.Person, EntryID: k.ID})
 }

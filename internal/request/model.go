@@ -136,6 +136,9 @@ type SearchFilter struct {
 	// Cursor nicht mehr.
 	Restrict bool
 	Projects []string
+	// GlobalPersons: die Autor-Labels, deren Aufträge ohne Projekt der Betrachter
+	// als seine lesen darf; alle anderen globalen Aufträge fallen unter Restrict weg.
+	GlobalPersons []string
 	// UnclaimedAuthor: Aufträge dieses Autors in Remotes ohne Projektzeile bleiben
 	// sichtbar; UnclaimedAll (Instanz-Admin) zeigt alle dort.
 	UnclaimedAuthor string

@@ -426,7 +426,7 @@ func (a *api) checkWorkAccess(w http.ResponseWriter, r *http.Request, workID int
 	if err != nil || pa.IsAdmin() || pa.SeesSessionNumbers(ref.Project) {
 		return a.checkRequest(w, r, store.RefWork, workID, store.ActWork)
 	}
-	if pa.Decide(ref.Project, store.ResRequest, store.ActWork, store.Object{Own: pa.IsAuthor(ref.Person)}).Allowed {
+	if pa.Decide(ref.Project, store.ResRequest, store.ActWork, store.Object{Own: pa.IsAuthor(ref.Person), Person: ref.Person}).Allowed {
 		if sid, err := a.st.RequestWorkSession(workID); err == nil {
 			// Nur Arbeit der eigenen Session: eine lesbare, geteilte reicht nicht.
 			if sess, serr := a.st.SessionByID(sid); serr == nil && pa.OwnsSession(sess) {

@@ -60,7 +60,7 @@ func TestMoveTargetWithoutWriteRightIsIndistinguishableFromUnknown(t *testing.T)
 
 func TestMoveKnowledgeToProjectMachineAndGlobalIsLogged(t *testing.T) {
 	f := accessAPI(t, true)
-	id := f.id["k-mia"]
+	id := f.id["k-robin-staged"]
 	path := idPath("/api/knowledge/%d/move", id)
 
 	// A short name resolves among the projects the account can write to.
@@ -100,9 +100,9 @@ func TestMoveKnowledgeNeedsWriteRightInSourceAndTarget(t *testing.T) {
 	f.expect(t, "mia", 404, "POST", idPath("/api/knowledge/%d/move", f.id["k-other"]), map[string]any{"global": true})
 	// Target: her own entry may go where she may write, not where she may not.
 	f.expect(t, "mia", 404, "POST", idPath("/api/knowledge/%d/move", f.id["k-mia"]), map[string]any{"project": accOther})
-	// Global reaches every session of every account: a member may not send her own
-	// entry there, a lead may.
-	f.expect(t, "mia", 403, "POST", idPath("/api/knowledge/%d/move", f.id["k-mia"]), map[string]any{"global": true})
+	// Global means "everywhere for me": only the author may send an entry there.
+	// A lead who could would hide a member's entry from the project and from himself.
+	f.expect(t, "lena", 403, "POST", idPath("/api/knowledge/%d/move", f.id["k-mia"]), map[string]any{"global": true})
 	if k, _ := f.st.KnowledgeByID(f.id["k-mia"]); k.Scope.Project != accProject {
 		t.Fatalf("a refused global move changed the entry: %+v", k.Scope)
 	}
@@ -114,6 +114,9 @@ func TestMoveKnowledgeNeedsWriteRightInSourceAndTarget(t *testing.T) {
 	if k.Scope.Project != accProject {
 		t.Fatalf("a refused move changed the entry: %+v", k.Scope)
 	}
+	// The author may, and from then on nobody else sees it.
+	f.expect(t, "mia", 200, "POST", idPath("/api/knowledge/%d/move", f.id["k-mia"]), map[string]any{"global": true})
+	f.expect(t, "robin", 404, "GET", idPath("/api/knowledge/%d", f.id["k-mia"]), nil)
 }
 
 func TestMoveRequestWritesTheActivityLogAndLeavesTheOldLedger(t *testing.T) {

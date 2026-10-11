@@ -87,6 +87,11 @@ type Object struct {
 	// nicht freigegebener, distillierter Eintrag stammt; er darf ihn freigeben
 	// oder verwerfen, nie verifizieren.
 	OriginOwner bool
+	// Person und EntryID bestimmen bei Objekten ohne Projekt den Autor: EntryID
+	// ist die Wissens-Id (Autor-Konto aus knowledge_authors), Person das Label
+	// des Autors für Altbestand und Aufträge. Beides leer heißt autorlos.
+	Person  string
+	EntryID int64
 }
 
 // Decision ist das Ergebnis der Matrix.
@@ -314,6 +319,7 @@ type ProjectAccess struct {
 	ownerIDs     map[string]int64
 	ownerDefault int64
 	authorIDs    map[string]int64
+	entryAuthors map[int64]int64
 
 	checks atomic.Int32
 	loads  atomic.Int32
@@ -497,21 +503,20 @@ func (a *ProjectAccess) Decide(project string, res Resource, act Action, obj Obj
 	return d
 }
 
-// decideGlobal: Objekte ohne Projekt (globales Wissen und globale Aufträge)
-// lesen und anlegen alle Konten; ändern darf der Autor und der Instanz-Admin.
+// decideGlobal: "global" heißt "überall für mich". Wissen, Aufträge und
+// Dokumente ohne Projekt (und ohne Maschine) gehören allein ihrem Autorenkonto,
+// auch der Instanz-Admin hat keinen Sonderblick. Anlegen darf jedes Konto.
 // Sessions ohne Projekt gehören ihrem Besitzer.
 func (a *ProjectAccess) decideGlobal(res Resource, act Action, obj Object) Decision {
 	switch res {
 	case ResKnowledge, ResRequest, ResDocument:
-		switch act {
-		case ActRead, ActCreate, ActWork:
+		if act == ActCreate {
 			return Decision{Allowed: true}
-		case ActEdit, ActVerify:
-			if obj.Own || a.IsAdmin() {
-				return Decision{Allowed: true}
-			}
-			return Decision{Reason: "global entry of another author"}
 		}
+		if a.ownsGlobal(obj) {
+			return Decision{Allowed: true}
+		}
+		return Decision{Hidden: true, Reason: "global entry of another author"}
 	case ResSessionMeta, ResTranscript:
 		if res == ResSessionMeta && act == ActCreate {
 			return Decision{Allowed: true}
@@ -545,7 +550,7 @@ func (a *ProjectAccess) Check(project string, res Resource, act Action, obj Obje
 // -------- Hilfen je Ressource
 
 func knowledgeObject(a *ProjectAccess, k Knowledge) Object {
-	obj := Object{Own: a.IsAuthor(k.Person), Confidence: k.Confidence, Machine: k.Scope.Machine}
+	obj := Object{Own: a.IsAuthor(k.Person), Confidence: k.Confidence, Machine: k.Scope.Machine, Person: k.Person, EntryID: k.ID}
 	if ref := knowledgeHeldRef(k); ref != "" {
 		_, obj.OriginOwner = a.heldOrigin(ref)
 	}
@@ -643,6 +648,7 @@ func (a *ProjectAccess) RequestFilter(f requestdomain.SearchFilter) requestdomai
 		return f
 	}
 	f.Restrict, f.Projects = true, a.Projects()
+	f.GlobalPersons = a.ownGlobalPersons()
 	f.UnclaimedAuthor, f.UnclaimedAll = a.principal.Label, a.IsAdmin()
 	// Distillierte, nicht übernommene Requests aus fremden privaten Sessions
 	// bleiben dem Besitzer dieser Session vorbehalten.
@@ -730,12 +736,12 @@ func (a *ProjectAccess) CanDeliverGhost(g GhostFile) bool {
 
 // CanSeeGhost: Lesefilter für Ghost-Listen (der Autor sieht seine eigenen).
 func (a *ProjectAccess) CanSeeGhost(g GhostFile) bool {
-	return a.Allow(g.Project, ResGhost, ActRead, Object{Own: a.IsAuthor(g.Person)})
+	return a.Allow(g.Project, ResGhost, ActRead, Object{Own: a.IsAuthor(g.Person), Person: g.Person})
 }
 
 // CanSeeDocument: Lesefilter für Dokumentlisten.
 func (a *ProjectAccess) CanSeeDocument(d Document) bool {
-	return a.Allow(d.Project, ResDocument, ActRead, Object{Own: a.IsAuthor(d.Person)})
+	return a.Allow(d.Project, ResDocument, ActRead, Object{Own: a.IsAuthor(d.Person), Person: d.Person})
 }
 
 // GateList entscheidet, ob eine Liste mit ausdrücklichem Projekt überhaupt
@@ -744,6 +750,12 @@ func (a *ProjectAccess) CanSeeDocument(d Document) bool {
 // Filter dem Autor das Seine zeigt und allen anderen nichts.
 func (a *ProjectAccess) GateList(project string, res Resource, perEntry bool) error {
 	project = strings.TrimSpace(project)
+	if project == "" {
+		// Ohne Projekt liest jeder, was ihm gehört: die Liste begrenzt sich selbst
+		// auf die eigenen globalen Einträge (decideGlobal) und die Projekte des Kontos.
+		a.Filtered()
+		return nil
+	}
 	if perEntry && project != "" && a.Unclaimed(project) && a.Role(project).Role == "" {
 		a.Filtered()
 		return nil

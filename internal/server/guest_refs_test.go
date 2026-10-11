@@ -92,7 +92,7 @@ func TestStartWorkNeedsReadableSession(t *testing.T) {
 		return id
 	}
 	own, hidden := mk("s-nora", 6), mk("s-mia", 3)
-	g, err := f.st.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: "g", Person: "robin"}})
+	g, err := f.st.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: "g", Person: "nora"}})
 	if err != nil {
 		t.Fatal(err)
 	}

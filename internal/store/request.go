@@ -217,20 +217,29 @@ func requestScopeWhere(filter requestdomain.SearchFilter) ([]string, []any) {
 		}
 	}
 	if filter.Restrict {
-		marks := make([]string, len(filter.Projects))
-		for i, p := range filter.Projects {
-			marks[i] = "?"
-			args = append(args, p)
+		var clauses []string
+		// Aufträge ohne Projekt gehören ihrem Autor (GlobalPersons).
+		if len(filter.GlobalPersons) > 0 {
+			clauses = append(clauses, `(r.project='' AND r.person IN (`+placeholders(len(filter.GlobalPersons))+`))`)
+			for _, p := range filter.GlobalPersons {
+				args = append(args, p)
+			}
 		}
-		clause := `r.project=''`
-		if len(marks) > 0 {
-			clause += ` OR r.project IN (` + strings.Join(marks, ",") + `)`
+		if len(filter.Projects) > 0 {
+			clauses = append(clauses, `r.project IN (`+placeholders(len(filter.Projects))+`)`)
+			for _, p := range filter.Projects {
+				args = append(args, p)
+			}
+		}
+		clause := strings.Join(clauses, " OR ")
+		if clause == "" {
+			clause = "0"
 		}
 		switch {
 		case filter.UnclaimedAll:
-			clause += ` OR r.project NOT IN (SELECT remote FROM projects)`
+			clause += ` OR (r.project!='' AND r.project NOT IN (SELECT remote FROM projects))`
 		case filter.UnclaimedAuthor != "":
-			clause += ` OR (r.person=? AND r.project NOT IN (SELECT remote FROM projects))`
+			clause += ` OR (r.person=? AND r.project!='' AND r.project NOT IN (SELECT remote FROM projects))`
 			args = append(args, filter.UnclaimedAuthor)
 		}
 		where = append(where, `(`+clause+`)`)

@@ -156,7 +156,7 @@ func requestStateLabel(state string) string { return label(requestStateKeys, sta
 func requestURL(id int64) string { return "/ui/requests/" + strconv.FormatInt(id, 10) }
 
 func requestObject(pa *store.ProjectAccess, person string) store.Object {
-	return store.Object{Own: pa.IsAuthor(person)}
+	return store.Object{Own: pa.IsAuthor(person), Person: person}
 }
 
 // ----------------------------------------------------------------------- Liste

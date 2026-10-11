@@ -52,7 +52,7 @@ func knowledgeHeldRef(k Knowledge) string {
 // falsch, wenn der Request aus der privaten Session eines anderen Kontos
 // stammt und noch niemand ihn übernommen hat.
 func (a *ProjectAccess) RequestObject(ref ObjectRef) (obj Object, visible bool) {
-	obj = Object{Own: a.IsAuthor(ref.Person)}
+	obj = Object{Own: a.IsAuthor(ref.Person), Person: ref.Person}
 	if ref.HeldBy == "" {
 		return obj, true
 	}

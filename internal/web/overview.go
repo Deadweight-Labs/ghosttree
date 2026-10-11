@@ -490,8 +490,7 @@ func (a *app) knowledgeWindowFor(pa *store.ProjectAccess, project string) store.
 	case project != "":
 		w.Restrict, w.Projects = true, []string{project}
 	case a.store.AccessEnforced():
-		w.Restrict, w.Projects = true, pa.Projects()
-		w.UnclaimedAuthor, w.UnclaimedAll = pa.Principal().Label, pa.IsAdmin()
+		w = pa.RestrictKnowledgeWindow(w)
 	}
 	return w
 }

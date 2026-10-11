@@ -72,7 +72,7 @@ func TestRequestViewKeepsRealIDsForThoseWhoMayWork(t *testing.T) {
 	var works []requestdomain.Work
 	for i, title := range []string{"first", "second"} {
 		mine := []Session{mine1, mine2}[i]
-		c, err := st.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: title}})
+		c, err := st.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: title, Person: "mia"}})
 		if err != nil {
 			t.Fatal(err)
 		}
