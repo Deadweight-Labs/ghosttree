@@ -186,6 +186,7 @@ func (a *api) revokeOwnToken(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "server_error")
 		return
 	}
+	a.st.Join().Cancelled(p.ID, p.Machine)
 	if a.logger != nil {
 		a.logger.Info("token_self_revoked", "token_id", p.TokenID, "account", p.ID, "machine", p.Machine, "released", released)
 	}

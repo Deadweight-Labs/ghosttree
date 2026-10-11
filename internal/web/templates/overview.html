@@ -2,6 +2,12 @@
 
 {{define "ovsetup"}}{{with .Overview.Setup}}<section class="ov-setup"><h1>{{.Title}}</h1>
 {{if eq .State "connected"}}<p class="ov-setup-line"><span class="ov-dot is-active" aria-hidden="true"></span><strong>{{t "setup.connected" .Machine}}</strong></p><p class="ov-start-title">{{t "ov.start"}}</p><div class="ov-command"><pre><code id="ov-example">{{.Example}}</code></pre><button type="button" class="ov-btn clay" data-copy="#ov-example" data-copied="{{t "setup.copied"}}">{{t "setup.copy"}}</button></div>
+{{else if .Guided}}{{if .PairCommand}}<div class="ov-command"><pre><code id="ov-command">{{.PairCommand}}</code></pre><button type="button" class="ov-btn clay" data-copy="#ov-command" data-copied="{{t "setup.copied"}}">{{t "setup.copy"}}</button></div>
+{{else if .PairOpen}}<a class="ov-btn ov-btn-primary clay" href="/join/pair">{{t "setup.pair_open"}}</a>
+{{else}}<form class="ov-pair" method="post" action="/join/pair"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><label class="join-confirm"><input type="checkbox" name="confirm_account" value="{{.Person}}" required><span>{{t "join.confirm_me" .Person}}</span></label><button class="ov-btn ov-btn-primary clay">{{t "setup.get_command"}}</button></form>{{end}}
+{{if .PairCommand}}<p class="ov-setup-line"><a href="/join/pair">{{t "setup.pair_open"}}</a></p>{{end}}
+{{template "ovdevice" $}}
+<p class="ov-setup-line"><span class="ov-dot is-wait" aria-hidden="true"></span>{{t "setup.waiting"}}</p>
 {{else}}<div class="ov-command"><pre><code id="ov-command">{{.Command}}</code></pre><button type="button" class="ov-btn clay" data-copy="#ov-command" data-copied="{{t "setup.copied"}}">{{t "setup.copy"}}</button></div>
 {{if .Code}}{{template "ovdevice" $}}{{end}}
 <p class="ov-setup-line"><span class="ov-dot is-wait" aria-hidden="true"></span>{{t "setup.waiting"}}</p>{{end}}

@@ -2,6 +2,7 @@ package installer
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -27,14 +28,14 @@ type Check struct {
 func VerifyClaude(home string) []Check {
 	h := harnessNamed("claude")
 	userCfg := ClaudeUserConfigPath(home)
-	mcpCheck := jsonEntryCheck("claude mcp registration", userCfg, "mcpServers", claudeMCPEntry(), "run 'ctx install claude'")
+	mcpCheck := jsonEntryCheck("claude mcp registration", userCfg, "mcpServers", claudeMCPEntry(), "run '"+ctxRun()+" install claude'")
 	mcpCheck.Component = ComponentMCP
 	checks := []Check{mcpCheck}
 	checks = append(checks, channelChecks(h, home)...)
-	rule := ruleSectionCheck(h, "claude rule section", h.RulePath(home), "run 'ctx install claude'")
+	rule := ruleSectionCheck(h, "claude rule section", h.RulePath(home), "run '"+ctxRun()+" install claude'")
 	rule.Component = ComponentRules
 	checks = append(checks, rule)
-	skill := skillCheck(h, "claude skills", home, "run 'ctx install claude'")
+	skill := skillCheck(h, "claude skills", home, "run '"+ctxRun()+" install claude'")
 	skill.Component = ComponentSkills
 	checks = append(checks, skill)
 
@@ -44,7 +45,7 @@ func VerifyClaude(home string) []Check {
 	// no ghosttree in another.
 	if fallback := filepath.Join(home, ".claude.json"); fallback != userCfg {
 		fallbackCheck := jsonEntryCheck("claude fallback config", fallback, "mcpServers", claudeMCPEntry(),
-			"run 'CLAUDE_CONFIG_DIR= ctx install claude' so launchers that ignore CLAUDE_CONFIG_DIR find it too")
+			"run 'CLAUDE_CONFIG_DIR= "+ctxRun()+" install claude' so launchers that ignore CLAUDE_CONFIG_DIR find it too")
 		fallbackCheck.Component = ComponentMCP
 		checks = append(checks, fallbackCheck)
 	}
@@ -53,7 +54,7 @@ func VerifyClaude(home string) []Check {
 
 func VerifyCodex(home string) []Check {
 	h := harnessNamed("codex")
-	mcpCheck := codexMCPCheck(filepath.Join(home, ".codex", "config.toml"), "run 'ctx install codex'")
+	mcpCheck := codexMCPCheck(filepath.Join(home, ".codex", "config.toml"), "run '"+ctxRun()+" install codex'")
 	mcpCheck.Component = ComponentMCP
 	checks := []Check{mcpCheck}
 	checks = append(checks, channelChecks(h, home)...)
@@ -62,10 +63,10 @@ func VerifyCodex(home string) []Check {
 	trust := codexTrustCheck(home)
 	trust.Component = ComponentHooks
 	checks = append(checks, trust)
-	rule := ruleSectionCheck(h, "codex rule section", h.RulePath(home), "run 'ctx install codex'")
+	rule := ruleSectionCheck(h, "codex rule section", h.RulePath(home), "run '"+ctxRun()+" install codex'")
 	rule.Component = ComponentRules
 	checks = append(checks, rule)
-	skill := skillCheck(h, "codex skills", home, "run 'ctx install codex'")
+	skill := skillCheck(h, "codex skills", home, "run '"+ctxRun()+" install codex'")
 	skill.Component = ComponentSkills
 	return append(checks, skill)
 }
@@ -180,9 +181,9 @@ func VerifyOpencode(home string) []Check {
 	rulePath := h.RulePath(home)
 	mcpCheck := jsonEntryCheck("opencode mcp registration",
 		filepath.Join(home, ".config", "opencode", "opencode.json"),
-		"mcp", opencodeMCPEntry(), "run 'ctx install opencode'")
+		"mcp", opencodeMCPEntry(), "run '"+ctxRun()+" install opencode'")
 	mcpCheck.Component = ComponentMCP
-	rule := ruleSectionCheck(h, "opencode rule section ("+filepath.Base(rulePath)+")", rulePath, "run 'ctx install opencode'")
+	rule := ruleSectionCheck(h, "opencode rule section ("+filepath.Base(rulePath)+")", rulePath, "run '"+ctxRun()+" install opencode'")
 	rule.Component = ComponentRules
 	return []Check{mcpCheck, rule}
 }
@@ -195,12 +196,69 @@ func jsonEntryCheck(name, path, container string, want map[string]any, fix strin
 		return c
 	}
 	entries, _ := cfg[container].(map[string]any)
-	if !jsonValuesEqual(entries["ghosttree"], want) {
-		c.Detail = path + " (ghosttree entry missing or outdated)"
+	have := entries["ghosttree"]
+	if jsonValuesEqual(have, want) {
+		c.OK = true
 		return c
 	}
-	c.OK = true
+	if cmd := entryCommand(have); cmd != "" && jsonValuesEqual(have, withCommand(want, cmd)) {
+		if why := commandProblem(cmd); why != "" {
+			c.Detail = path + " (" + why + ")"
+			return c
+		}
+		c.OK = true
+		return c
+	}
+	c.Detail = path + " (ghosttree entry missing or outdated)"
 	return c
+}
+
+// entryCommand reads the command word out of an MCP entry, whether the harness
+// stores it as a string or as the first element of an argv list.
+func entryCommand(entry any) string {
+	m, _ := entry.(map[string]any)
+	switch v := m["command"].(type) {
+	case string:
+		return v
+	case []any:
+		if len(v) > 0 {
+			s, _ := v[0].(string)
+			return s
+		}
+	}
+	return ""
+}
+
+// withCommand returns the entry with its command word replaced.
+func withCommand(entry map[string]any, command string) map[string]any {
+	out := make(map[string]any, len(entry))
+	for k, v := range entry {
+		out[k] = v
+	}
+	if list, ok := entry["command"].([]any); ok && len(list) > 0 {
+		replaced := append([]any{command}, list[1:]...)
+		out["command"] = replaced
+		return out
+	}
+	out["command"] = command
+	return out
+}
+
+// commandProblem says why a configured way of starting ctx cannot work, or ""
+// when it can. A bare name is only good while the PATH of the process that
+// starts it contains ctx; the doctor can only judge its own PATH, which is
+// still the best available evidence.
+func commandProblem(command string) string {
+	if !filepath.IsAbs(command) {
+		if _, err := exec.LookPath(command); err != nil {
+			return "runs '" + command + "', which is not on PATH; the harness cannot start it"
+		}
+		return ""
+	}
+	if info, err := os.Stat(command); err != nil || info.IsDir() {
+		return "runs " + command + ", which does not exist"
+	}
+	return ""
 }
 
 func codexMCPCheck(path, fix string) Check {
@@ -211,9 +269,21 @@ func codexMCPCheck(path, fix string) Check {
 		return c
 	}
 	ranges := codexOwnedTableRanges(string(raw))
-	if len(ranges) != 1 || strings.TrimSpace(string(raw)[ranges[0][0]:ranges[0][1]]) != strings.TrimSpace(codexMCPSection) {
+	if len(ranges) != 1 {
 		c.Detail = path + " (ghosttree table missing, duplicate, or outdated)"
 		return c
+	}
+	table := strings.TrimSpace(string(raw)[ranges[0][0]:ranges[0][1]])
+	if table != strings.TrimSpace(codexMCPSection()) {
+		cmd := codexTableCommand(table)
+		if cmd == "" || table != strings.TrimSpace(codexMCPSectionFor(cmd)) {
+			c.Detail = path + " (ghosttree table missing, duplicate, or outdated)"
+			return c
+		}
+		if why := commandProblem(cmd); why != "" {
+			c.Detail = path + " (" + why + ")"
+			return c
+		}
 	}
 	c.OK = true
 	return c
@@ -237,7 +307,7 @@ func channelChecks(h Harness, home string) []Check {
 			continue
 		}
 		check := hookCheck(h.Name+" "+string(channel)+" hook", path, event, command, matcher,
-			"run 'ctx install "+h.Name+"' — this harness can fire the event and nothing is answering it")
+			"run '"+ctxRun()+" install "+h.Name+"' — this harness can fire the event and nothing is answering it")
 		check.Component = ComponentHooks
 		checks = append(checks, check)
 	}
@@ -254,14 +324,22 @@ func hookCheck(name, path, event, command, matcher, fix string) Check {
 	hooks, _ := settings["hooks"].(map[string]any)
 	groups, _ := hooks[event].([]any)
 	commandFound := false
+	problem := ""
 	for _, g := range groups {
 		group, _ := g.(map[string]any)
 		current, _ := group["matcher"].(string)
 		inner, _ := group["hooks"].([]any)
 		for _, h := range inner {
 			handler, _ := h.(map[string]any)
-			if handler["command"] != command {
-				continue
+			installed, _ := handler["command"].(string)
+			if installed != command {
+				if !sameCtxHook(installed, command) {
+					continue
+				}
+				if why := hookCommandProblem(installed); why != "" {
+					problem = why
+					continue
+				}
 			}
 			commandFound = true
 			if current == matcher {
@@ -270,8 +348,11 @@ func hookCheck(name, path, event, command, matcher, fix string) Check {
 			}
 		}
 	}
-	if commandFound {
+	switch {
+	case commandFound:
 		c.Detail = path + " (wrong matcher)"
+	case problem != "":
+		c.Detail = path + " (" + problem + ")"
 	}
 	return c
 }
@@ -305,4 +386,13 @@ func extractSection(content string) (string, bool) {
 		return "", false
 	}
 	return content[start+len(markerStart) : end], true
+}
+
+// hookCommandProblem judges the binary word of an installed hook command.
+func hookCommandProblem(command string) string {
+	words := splitCommand(command)
+	if len(words) == 0 {
+		return ""
+	}
+	return commandProblem(words[0])
 }

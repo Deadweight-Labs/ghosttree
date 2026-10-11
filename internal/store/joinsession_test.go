@@ -966,3 +966,175 @@ func TestJoinResumeThatFailsToStartLapsesInsteadOfCompromising(t *testing.T) {
 		t.Fatalf("state %s, want expired", v.State)
 	}
 }
+
+func TestJoinClaimResolvesTheMachineNameAfterTheCodeIsChecked(t *testing.T) {
+	st, _ := pairFixture(t)
+	j := st.Join()
+	o := openPair(j, "person:2")
+	calls := 0
+	resolve := func(account, machine string, auto bool) (string, error) {
+		calls++
+		if account != "person:2" || !auto {
+			t.Errorf("resolve(%q, %q, %v)", account, machine, auto)
+		}
+		return machine + "-x", nil
+	}
+	// A wrong code never reaches the resolver: nothing about machine names leaks.
+	bad := loopReq("ZZZZ-ZZZZ", "box", "1.1.1.1")
+	bad.Auto, bad.Resolve = true, resolve
+	if _, err := j.Claim(bad); err != ErrJoinInvalid || calls != 0 {
+		t.Fatalf("wrong code: err=%v calls=%d", err, calls)
+	}
+	req := loopReq(o.Pair, "box", "1.1.1.1")
+	req.Auto, req.Resolve = true, resolve
+	out, err := j.Claim(req)
+	if err != nil || out.Machine != "box-x" || calls != 1 {
+		t.Fatalf("claim: %+v %v calls=%d", out, err, calls)
+	}
+	if v := j.View("person:2"); v.Machine != "box-x" {
+		t.Fatalf("the page shows %q", v.Machine)
+	}
+}
+
+func TestJoinClaimKeepsTheCodeWhenTheNameIsTaken(t *testing.T) {
+	st, _ := pairFixture(t)
+	j := st.Join()
+	o := openPair(j, "person:2")
+	req := loopReq(o.Pair, "box", "1.1.1.1")
+	req.Resolve = func(string, string, bool) (string, error) { return "", ErrMachineTaken }
+	if _, err := j.Claim(req); !errors.Is(err, ErrMachineTaken) {
+		t.Fatalf("err = %v", err)
+	}
+	if v := j.View("person:2"); v.State != JoinWaiting {
+		t.Fatalf("state after a refused name = %q, want waiting", v.State)
+	}
+	if _, err := j.Claim(loopReq(o.Pair, "other", "1.1.1.1")); err != nil {
+		t.Fatalf("the same code with another name: %v", err)
+	}
+}
+
+func nameLocked(err error) bool {
+	var l *JoinNamesLockedError
+	return errors.As(err, &l)
+}
+
+func TestJoinAccountLocksAfterThreeDifferentTakenNamesAndAnswersAllNamesAlike(t *testing.T) {
+	st, _ := pairFixture(t)
+	j := st.Join()
+	o := openPair(j, "person:2")
+	free := func(_, m string, _ bool) (string, error) { return m, nil }
+	taken := func(string, string, bool) (string, error) { return "", ErrMachineTaken }
+	for i, name := range []string{"one", "two", "three"} {
+		req := loopReq(o.Pair, name, "1.1.1.1")
+		req.Resolve = taken
+		if _, err := j.Claim(req); !errors.Is(err, ErrMachineTaken) {
+			t.Fatalf("conflict %d: %v", i+1, err)
+		}
+	}
+	// At the limit a free and a taken name get the very same answer, with a
+	// new code and with the old one, and the resolver is not even asked.
+	asked := 0
+	pair := o.Pair // the first answer uses the old code, later ones a new code (which replaces it)
+	for _, resolve := range []func(string, string, bool) (string, error){free, taken} {
+		wrapped := func(a, m string, au bool) (string, error) { asked++; return resolve(a, m, au) }
+		for range 2 {
+			req := loopReq(pair, "whatever", "1.1.1.1")
+			req.Resolve = wrapped
+			_, err := j.Claim(req)
+			var l *JoinNamesLockedError
+			if !errors.As(err, &l) || l.RetryAfter <= 0 || l.RetryAfter > joinNameConflictWindow {
+				t.Fatalf("locked answer: %v", err)
+			}
+			pair = openPair(j, "person:2").Pair
+		}
+	}
+	if asked != 0 {
+		t.Errorf("the name check ran %d times while locked", asked)
+	}
+	// Another account is unaffected; the lock ends with the window.
+	other := openPair(j, "person:3")
+	req := loopReq(other.Pair, "one", "1.1.1.1")
+	req.Resolve = taken
+	if _, err := j.Claim(req); !errors.Is(err, ErrMachineTaken) {
+		t.Fatalf("other account: %v", err)
+	}
+	now := time.Now().Add(joinNameConflictWindow + time.Minute)
+	j.SetClock(func() time.Time { return now })
+	req = loopReq(openPair(j, "person:2").Pair, "free-now", "1.1.1.1")
+	req.Resolve = free
+	if _, err := j.Claim(req); err != nil {
+		t.Fatalf("after the window: %v", err)
+	}
+}
+
+func TestJoinSameTakenNameThreeTimesDoesNotLock(t *testing.T) {
+	st, _ := pairFixture(t)
+	j := st.Join()
+	taken := func(string, string, bool) (string, error) { return "", ErrMachineTaken }
+	for i := 0; i < 5; i++ {
+		o := openPair(j, "person:2")
+		req := loopReq(o.Pair, "Laptop", "1.1.1.1")
+		req.Auto, req.Resolve = true, taken
+		if _, err := j.Claim(req); !errors.Is(err, ErrMachineTaken) {
+			t.Fatalf("try %d: %v", i+1, err)
+		}
+	}
+}
+
+func TestJoinAutomaticReplacementsOfDifferentNamesCountAlsoWithResume(t *testing.T) {
+	st, _ := pairFixture(t)
+	j := st.Join()
+	o := openPair(j, "person:2")
+	replace := func(account, machine string, auto bool) (string, error) { return machine + "-x", nil }
+	var resume string
+	for _, name := range []string{"a", "b", "c"} {
+		req := loopReq(o.Pair, name, "1.1.1.1")
+		req.Auto, req.Resolve, req.Resume = true, replace, resume
+		out, err := j.Claim(req)
+		if err != nil || out.Machine != name+"-x" {
+			t.Fatalf("claim %s: %+v %v", name, out, err)
+		}
+		resume = out.Resume
+	}
+	req := loopReq(o.Pair, "d", "1.1.1.1")
+	req.Auto, req.Resolve, req.Resume = true, replace, resume
+	if _, err := j.Claim(req); !nameLocked(err) {
+		t.Fatalf("fourth name: %v", err)
+	}
+}
+
+func TestJoinCancelledOnlyAffectsAJustConnectedSessionOfThatMachine(t *testing.T) {
+	st, _ := pairFixture(t)
+	j := st.Join()
+	o := openPair(j, "person:2")
+	j.Cancelled("person:2", "box")
+	if v := j.View("person:2"); v.State != JoinWaiting {
+		t.Fatalf("a waiting session changed to %q", v.State)
+	}
+	if _, err := j.Claim(loopReq(o.Pair, "box", "1.1.1.1")); err != nil {
+		t.Fatal(err)
+	}
+	dec, err := j.Decide("person:2", true, j.View("person:2").Nonce, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier, _ := pkce()
+	grant, err := j.Exchange("1.1.1.1", callbackCodeFrom(dec.Redirect), verifier)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j.Delivered(grant)
+	j.Cancelled("person:2", "another-box")
+	if v := j.View("person:2"); v.State != JoinConnected {
+		t.Fatalf("another machine's revocation changed the state to %q", v.State)
+	}
+	j.Cancelled("person:2", "BOX")
+	if v := j.View("person:2"); v.State != JoinDenied {
+		t.Fatalf("state after the installer revoked its token = %q, want denied", v.State)
+	}
+}
+
+func callbackCodeFrom(redirect string) string {
+	i := strings.Index(redirect, "code=")
+	return strings.SplitN(redirect[i+5:], "&", 2)[0]
+}

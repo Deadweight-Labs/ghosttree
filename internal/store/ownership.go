@@ -194,6 +194,73 @@ func (s *Store) MachineClaimable(name, accountPrincipalID string) error {
 	return nil
 }
 
+// ResolveMachineName liefert den Namen, unter dem das Konto die Maschine
+// anmelden kann. Ist wanted frei oder schon eigen, bleibt er. Gehört er einem
+// anderen Konto, ergibt sich ErrMachineTaken, es sei denn auto ist gesetzt: dann
+// kommt "<wanted>-<Kontoname>", und ist auch der vergeben, ein Zufallssuffix.
+// Die Antwort verrät nur, was der Name-vergeben-Fehler ohnehin verriet; die
+// Alternative ist frei oder zufällig, nie die nächste freie Nummer.
+func (s *Store) ResolveMachineName(accountPrincipalID, wanted string, auto bool) (string, error) {
+	if s.reader != nil {
+		return s.reader.ResolveMachineName(accountPrincipalID, wanted, auto)
+	}
+	err := s.MachineClaimable(wanted, accountPrincipalID)
+	if err == nil {
+		return wanted, nil
+	}
+	if !errors.Is(err, ErrMachineTaken) || !auto {
+		return "", err
+	}
+	var person string
+	if id, ok := accountNumericID(accountPrincipalID); ok {
+		_ = s.db.QueryRow(`SELECT name FROM persons WHERE id=?`, id).Scan(&person)
+	}
+	suffix := machineSuffix(person)
+	candidates := []string{}
+	if suffix != "" {
+		candidates = append(candidates, joinMachineName(wanted, suffix))
+	}
+	for i := 0; i < 8; i++ {
+		r, rerr := randomHex(2)
+		if rerr != nil {
+			return "", rerr
+		}
+		candidates = append(candidates, joinMachineName(wanted, strings.Trim(suffix+"-"+r, "-")))
+	}
+	for _, c := range candidates {
+		if err := s.MachineClaimable(c, accountPrincipalID); err == nil {
+			return c, nil
+		} else if !errors.Is(err, ErrMachineTaken) {
+			return "", err
+		}
+	}
+	return "", ErrMachineTaken
+}
+
+// machineSuffix macht aus einem Kontonamen ein Namensstück: Kleinbuchstaben und
+// Ziffern, höchstens 16 Zeichen.
+func machineSuffix(person string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(person) {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		}
+		if b.Len() >= 16 {
+			break
+		}
+	}
+	return b.String()
+}
+
+// joinMachineName hängt suffix an und kürzt den Stamm, damit das Ganze in die
+// 64 Zeichen eines Maschinennamens passt.
+func joinMachineName(base, suffix string) string {
+	if room := 64 - 1 - len(suffix); len(base) > room {
+		base = base[:room]
+	}
+	return base + "-" + suffix
+}
+
 // ListMachines liefert alle Maschinen mit Besitzer; accountPrincipalID filtert
 // auf ein Konto (?owner=me), leer heißt alle.
 func (s *Store) ListMachines(accountPrincipalID string) ([]Machine, error) {

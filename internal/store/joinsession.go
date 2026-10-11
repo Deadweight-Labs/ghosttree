@@ -59,14 +59,16 @@ const (
 	// neuen; ein abgebrochener Installer blockiert die Seite also nicht.
 	JoinClaimTTL = 5 * time.Minute
 
-	joinAuthTTL         = 2 * time.Minute
-	maxJoinSessions     = 1000
-	maxJoinConfirmFails = 3
-	maxJoinFailures     = 8 // falsche Codes je /64 im Fenster
-	joinFailureWindow   = 10 * time.Minute
-	maxJoinFailureKeys  = 10000
-	joinConfirmLen      = 4
-	joinWiderFactor     = 4 // je /48 (IPv6) sind es so viele Mal mehr
+	joinAuthTTL            = 2 * time.Minute
+	maxJoinSessions        = 1000
+	maxJoinConfirmFails    = 3
+	maxJoinNameConflicts   = 3 // verschiedene vergebene Wunschnamen je Konto und Fenster, dann sperrt das Konto
+	joinNameConflictWindow = JoinMaxLifetime
+	maxJoinFailures        = 8 // falsche Codes je /64 im Fenster
+	joinFailureWindow      = 10 * time.Minute
+	maxJoinFailureKeys     = 10000
+	joinConfirmLen         = 4
+	joinWiderFactor        = 4 // je /48 (IPv6) sind es so viele Mal mehr
 )
 
 // Zustände einer Sitzung, wie die Seite sie sieht.
@@ -96,6 +98,7 @@ var (
 	// ErrJoinNotReady: es gibt nichts freizugeben (keine Sitzung, kein Gerät,
 	// oder die Anfrage gehört zu einem früheren Gerät).
 	ErrJoinNotReady = errors.New("no device is waiting")
+
 	// ErrJoinConfirm: der eingegebene Bestätigungscode stimmt nicht.
 	ErrJoinConfirm = errors.New("the confirmation code does not match")
 )
@@ -126,6 +129,8 @@ type joinSession struct {
 	authExpires  time.Time
 	claimExpires time.Time // Ende der Wartezeit auf die Freigabe
 	resumeHash   string    // Wiederaufnahme-Token des Installers (nur Hash)
+	auto         bool      // der Installer hat den Namen selbst gewählt (Hostname), nicht der Mensch
+	resolve      func(account, machine string, auto bool) (string, error)
 }
 
 // JoinView ist, was die Seite über die Sitzung des Kontos erfährt.
@@ -152,6 +157,22 @@ type JoinClaimRequest struct {
 	// Resume ist das Token aus der Antwort auf den ersten Claim; nur damit darf
 	// derselbe Installer nach einem Abbruch erneut claimen.
 	Resume string
+	// Auto sagt, dass Machine der Hostname ist und kein Wunsch: ist er
+	// vergeben, darf Resolve einen anderen wählen.
+	Auto bool
+	// Resolve macht aus dem Wunschnamen den Namen, unter dem das Konto der
+	// Sitzung die Maschine anmelden kann (ErrMachineTaken, wenn keiner geht). Es
+	// läuft erst, nachdem der Code geprüft ist, damit ein Fremder ohne gültigen
+	// Code nichts über Maschinennamen erfährt.
+	Resolve func(account, machine string, auto bool) (string, error)
+}
+
+// JoinNamesLockedError: das Konto hat im Fenster zu viele verschiedene vergebene
+// Namen versucht; bis RetryAfter wird jeder Claim abgelehnt, gleich welcher Name.
+type JoinNamesLockedError struct{ RetryAfter time.Duration }
+
+func (*JoinNamesLockedError) Error() string {
+	return "too many different machine names were refused for this account, try again later"
 }
 
 // JoinClaim ist die Antwort an den Installer.
@@ -161,6 +182,7 @@ type JoinClaim struct {
 	Confirm             string // nur Code-Weg
 	ExpiresIn, Interval time.Duration
 	Resume              string // Wiederaufnahme-Token; der Installer legt es lokal ab
+	Machine             string // der Name, unter dem das Gerät angemeldet wird
 }
 
 // JoinDecision ist das Ergebnis einer Freigabe.
@@ -184,11 +206,14 @@ type JoinSessions struct {
 	byPair    map[string]*joinSession
 	byAuth    map[string]*joinSession
 	failures  map[string][]time.Time
+	// nameConflicts zählt je Konto (nicht je Code, sonst setzte jeder neue Code
+	// den Zähler zurück) die Claims, bei denen der Wunschname vergeben war.
+	nameConflicts map[string]map[string]time.Time
 }
 
 func NewJoinSessions(d *DeviceFlows) *JoinSessions {
 	return &JoinSessions{now: time.Now, device: d, startFlow: d.StartJoin, all: map[string]*joinSession{}, byAccount: map[string]*joinSession{}, byPair: map[string]*joinSession{}, byAuth: map[string]*joinSession{},
-		failures: map[string][]time.Time{}}
+		failures: map[string][]time.Time{}, nameConflicts: map[string]map[string]time.Time{}}
 }
 
 // Join gibt die Sitzungen dieses Stores zurück.
@@ -483,6 +508,24 @@ func (j *JoinSessions) Claim(req JoinClaimRequest) (JoinClaim, error) {
 		j.fail(req.Addr, now)
 		return JoinClaim{}, ErrJoinInvalid
 	}
+	if req.Resolve != nil {
+		// Die Sperre gilt vor jeder Namensprüfung und antwortet für freie und
+		// vergebene Namen gleich; sonst wäre sie selbst ein Orakel.
+		if wait, locked := j.nameLock(s.account, now); locked {
+			return JoinClaim{}, &JoinNamesLockedError{RetryAfter: wait}
+		}
+		machine, err := req.Resolve(s.account, req.Machine, req.Auto)
+		// Ein vergebener Wunschname zählt, auch wenn der Server ihn selbst
+		// ersetzt: sonst verriete die Antwort "<name>-<suffix>" ohne Preis, dass
+		// er vergeben ist. Derselbe Name zählt nur einmal.
+		if errors.Is(err, ErrMachineTaken) || (err == nil && machine != req.Machine) {
+			j.noteNameConflict(s.account, req.Machine, now)
+		}
+		if err != nil {
+			return JoinClaim{}, err
+		}
+		req.Machine = machine
+	}
 	resume, err := joinRandomHex(16)
 	if err != nil {
 		return JoinClaim{}, err
@@ -507,7 +550,7 @@ func (j *JoinSessions) Claim(req JoinClaimRequest) (JoinClaim, error) {
 	// des Login-Fensters, damit eine späte Anmeldung das Gerät nicht verliert.
 	window := s.created.Add(JoinMaxLifetime).Sub(now)
 	wait := min(window, JoinClaimTTL)
-	out := JoinClaim{Mode: JoinModeCode, ExpiresIn: wait, Interval: DeviceInterval, Resume: resume}
+	out := JoinClaim{Mode: JoinModeCode, ExpiresIn: wait, Interval: DeviceInterval, Resume: resume, Machine: req.Machine}
 	if loop {
 		out.Mode = JoinModeLoopback
 		host := req.Host
@@ -540,7 +583,57 @@ func (j *JoinSessions) Claim(req JoinClaimRequest) (JoinClaim, error) {
 	s.extend(s.created.Add(JoinMaxLifetime))
 	s.claimExpires = now.Add(JoinClaimTTL)
 	s.resumeHash = hashCode(resume)
+	s.auto, s.resolve = req.Auto, req.Resolve
 	return out, nil
+}
+
+// recentNameConflicts liefert die Wunschnamen des Kontos im Fenster.
+func (j *JoinSessions) recentNameConflicts(account string, now time.Time) map[string]time.Time {
+	cutoff := now.Add(-joinNameConflictWindow)
+	m := j.nameConflicts[account]
+	for n, at := range m {
+		if !at.After(cutoff) {
+			delete(m, n)
+		}
+	}
+	if len(m) == 0 {
+		delete(j.nameConflicts, account)
+	}
+	return m
+}
+
+// nameLock sagt, ob das Konto gesperrt ist, und wie lange noch.
+func (j *JoinSessions) nameLock(account string, now time.Time) (time.Duration, bool) {
+	m := j.recentNameConflicts(account, now)
+	if len(m) < maxJoinNameConflicts {
+		return 0, false
+	}
+	oldest := now
+	for _, at := range m {
+		if at.Before(oldest) {
+			oldest = at
+		}
+	}
+	return max(oldest.Add(joinNameConflictWindow).Sub(now), time.Second), true
+}
+
+// noteNameConflict merkt einen vergebenen Wunschnamen für das Konto; derselbe
+// Name (ohne Groß-/Kleinschreibung) zählt nur einmal.
+func (j *JoinSessions) noteNameConflict(account, name string, now time.Time) {
+	if len(j.nameConflicts) >= maxJoinSessions {
+		for k := range j.nameConflicts {
+			j.recentNameConflicts(k, now)
+		}
+	}
+	m := j.recentNameConflicts(account, now)
+	if m == nil {
+		m = map[string]time.Time{}
+		j.nameConflicts[account] = m
+	}
+	key := strings.ToLower(name)
+	if _, seen := m[key]; !seen {
+		m[key] = now
+	}
 }
 
 // resumedBy sagt, ob der Claim vom Installer kommt, der diese Anfrage gestellt
@@ -637,9 +730,20 @@ func (j *JoinSessions) Decide(account string, approve bool, nonce, confirm strin
 	if check != nil {
 		// Die Prüfung fragt die Datenbank und läuft ohne Sperre; danach gilt
 		// nur, was zum aktuellen Zustand derselben Anfrage noch passt.
-		machine := s.machine
+		machine, auto, resolve := s.machine, s.auto, s.resolve
+		loopback := s.mode == JoinModeLoopback
 		j.mu.Unlock()
 		err := check(machine)
+		renamed := ""
+		if errors.Is(err, ErrMachineTaken) && auto && loopback && resolve != nil {
+			// Der Name war bei der Anmeldung frei und ist es nicht mehr; hat der
+			// Installer ihn selbst gewählt, weicht er aus, statt den Menschen
+			// vor einem Fehler stehen zu lassen. Im Code-Weg steht der Name im
+			// Geräte-Ablauf und bleibt ein Fehler.
+			if renamed, err = resolve(account, machine, true); err != nil {
+				renamed = ""
+			}
+		}
 		j.mu.Lock()
 		if err != nil {
 			j.mu.Unlock()
@@ -649,6 +753,9 @@ func (j *JoinSessions) Decide(account string, approve bool, nonce, confirm strin
 		if s == nil || state != JoinClaimed || s.machine != machine || subtle.ConstantTimeCompare([]byte(nonce), []byte(s.nonce)) != 1 {
 			j.mu.Unlock()
 			return JoinDecision{}, ErrJoinNotReady
+		}
+		if renamed != "" {
+			s.machine = renamed
 		}
 	}
 	defer j.mu.Unlock()
@@ -746,6 +853,20 @@ func (j *JoinSessions) connected(s *joinSession) {
 	s.state = JoinConnected
 	delete(j.byPair, hashCode(s.pair))
 	s.extend(j.now().Add(time.Minute))
+}
+
+// Cancelled meldet, dass der Installer das gerade ausgestellte Token selbst
+// widerrufen hat (im Terminal abgelehnt oder die Konfiguration ließ sich nicht
+// schreiben). Die Seite sagt dann, dass nichts verbunden wurde, statt
+// "verbunden" stehen zu lassen. Nur eine soeben verbundene Sitzung derselben
+// Maschine ändert sich.
+func (j *JoinSessions) Cancelled(account, machine string) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	s := j.byAccount[account]
+	if s != nil && s.state == JoinConnected && strings.EqualFold(s.machine, machine) {
+		s.state = JoinDenied
+	}
 }
 
 // Sessions zählt die Sitzungen; für Tests.

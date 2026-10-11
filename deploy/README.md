@@ -285,11 +285,15 @@ ctx install claude
 ctx install codex
 ctx install opencode
 ctx watch --once
-cp deploy/ghosttree-watch.service ~/.config/systemd/user/
-systemctl --user enable --now ghosttree-watch
+ctx install watch
 ctx status
 ctx doctor
 ```
+
+`ctx install claude` and `ctx install codex` set up the collector as well (a
+systemd user unit on Linux, a LaunchAgent on macOS, both with the absolute path
+of `ctx`); `--no-watch` skips it and `ctx install watch` sets up only the
+collector. `deploy/ghosttree-watch.service` is the same unit for manual setups.
 
 Installer and doctor operations can be limited to specific components:
 

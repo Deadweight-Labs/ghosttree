@@ -25,7 +25,7 @@ func hookRuntimeChecks(h Harness, home string) []Check {
 			continue
 		}
 		name := h.Name + " " + string(channel)
-		runnable := Check{Name: name + " runnable", Component: ComponentHooks, Detail: command, Fix: "run 'ctx install " + h.Name + " --only hooks'"}
+		runnable := Check{Name: name + " runnable", Component: ComponentHooks, Detail: command, Fix: "run '" + ctxRun() + " install " + h.Name + " --only hooks'"}
 		if err := hookCommandProbe(command, event); err != nil {
 			runnable.Detail = err.Error()
 		} else {
@@ -75,7 +75,7 @@ func hookRuntimeChecks(h Harness, home string) []Check {
 }
 
 func runHookCommandProbe(command, event string) error {
-	fields := strings.Fields(command)
+	fields := splitCommand(command)
 	if len(fields) == 0 {
 		return fmt.Errorf("empty hook command")
 	}

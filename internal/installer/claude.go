@@ -71,7 +71,7 @@ func installClaudeSelected(home string, selected ComponentSet) ([]Change, error)
 // (A timed-out hook is fail-open in Claude Code, so this bounds the cost, it
 // is not a gate.)
 func hookTimeout(command string) int {
-	if strings.HasPrefix(command, pauseGateHookCommand) {
+	if rest, ok := ctxSubcommand(command); ok && strings.HasPrefix(rest, "hook pause-gate") {
 		return 5
 	}
 	return 0
@@ -99,11 +99,7 @@ func addHook(path, event, command, matcher string) (Change, error) {
 			// run different subcommands and one must not be mistaken for the
 			// other, or installing the second would look like a no-op.
 			cmd, _ := hm["command"].(string)
-			legacy := command
-			if i := strings.Index(legacy, " --harness "); i >= 0 {
-				legacy = legacy[:i]
-			}
-			if cmd == command || cmd == legacy {
+			if sameCtxHook(cmd, command) {
 				migrated := cmd != command
 				if migrated {
 					hm["command"] = command
@@ -164,6 +160,26 @@ func addHook(path, event, command, matcher string) (Change, error) {
 	return Change{Path: path, Action: event + " hook added"}, writeJSONFile(path, settings)
 }
 
+// sameCtxHook reports whether an installed command is the hook we would
+// write, apart from how the binary is named (bare ctx, an older path, a path
+// that moved) and the --harness flag older installs lacked. Foreign commands
+// never match.
+func sameCtxHook(installed, want string) bool {
+	if installed == want {
+		return true
+	}
+	have, ok := ctxSubcommand(installed)
+	if !ok {
+		return false
+	}
+	target, _ := ctxSubcommand(want)
+	legacy := target
+	if i := strings.Index(legacy, " --harness "); i >= 0 {
+		legacy = legacy[:i]
+	}
+	return have == target || have == legacy
+}
+
 func registerClaudeMCP(path string) (Change, error) {
 	cfg, err := readJSONFile(path)
 	if err != nil {
@@ -185,7 +201,7 @@ func registerClaudeMCP(path string) (Change, error) {
 func claudeMCPEntry() map[string]any {
 	return map[string]any{
 		"type":    "stdio",
-		"command": "ctx",
+		"command": ctxCommand,
 		"args":    []any{"mcp"},
 		"env":     map[string]any{},
 	}

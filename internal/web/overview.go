@@ -98,6 +98,17 @@ type setupView struct {
 	Code bool
 	// Example is the command that starts an agent on a connected machine.
 	Example string
+	// Guided: the install command with a pairing code, the same one an invited
+	// person gets, instead of the bare login command. Needs an interactive
+	// session and a server reachable over https (or loopback).
+	Guided bool
+	// PairCommand is that command once the account has a pairing code; empty
+	// while there is none and the page offers to create one.
+	PairCommand string
+	// PairOpen links to the pairing page once a machine reported itself and
+	// waits for approval there.
+	PairOpen          bool
+	Person, CSRFToken string
 }
 
 // agentState ordnet ein Lebenszeichen ein. Ein fehlendes Signal gilt als offline.
@@ -646,6 +657,7 @@ func (a *app) setupFor(r *http.Request, who viewer, hasContent bool, now time.Ti
 		return nil, err
 	}
 	view.Example = msg("setup.example")
+	a.guideSetup(r, view)
 	if machines := ownMachines(tokens, now); len(machines) > 0 {
 		// A machine is there, so the status says so, however long ago it signed in.
 		if _, recent := recentMachine(tokens, now); recent || forced {
@@ -762,4 +774,29 @@ func (a *app) loginCommand(r *http.Request) string {
 		origin = "https://" + a.publicHost(r)
 	}
 	return fmt.Sprintf("ctx login --server %s", origin)
+}
+
+// guideSetup gives an owner without a connected machine the same guided install
+// command an invited person gets (REQ-438): the pairing code lives on the
+// pairing page's session, so the page either shows the command of a waiting
+// session, links to the page where the machine is approved, or offers to create
+// the code. Only an interactive session can create or approve one; otherwise,
+// and for a server not reachable over https, the login command stays.
+func (a *app) guideSetup(r *http.Request, view *setupView) {
+	if !view.Code {
+		return
+	}
+	p := browserPrincipal(r)
+	v := a.store.Join().View(p.ID)
+	if v.State == store.JoinWaiting {
+		view.PairCommand = a.joinCommand(r, v.Pair)
+		if view.PairCommand == "" {
+			return
+		}
+	} else if a.joinCommand(r, "XXXX-XXXX") == "" {
+		return
+	}
+	view.Guided = true
+	view.PairOpen = v.State == store.JoinClaimed || v.State == store.JoinApproved
+	view.Person, view.CSRFToken = p.Label, csrfOf(r)
 }

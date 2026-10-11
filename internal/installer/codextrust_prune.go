@@ -78,7 +78,7 @@ func ghosttreeTrustSections(hooksPath string) map[string]bool {
 	for event, groups := range file.Hooks {
 		for gi, group := range groups {
 			for hi, h := range group.Hooks {
-				if !strings.HasPrefix(h.Command, "ctx hook ") {
+				if !isCtxHook(h.Command) {
 					continue
 				}
 				out[fmt.Sprintf("[hooks.state.%q]", fmt.Sprintf("%s:%s:%d:%d",

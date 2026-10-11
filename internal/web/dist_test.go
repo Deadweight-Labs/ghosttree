@@ -609,3 +609,101 @@ func TestInstallScriptDownloadBaseOverride(t *testing.T) {
 		t.Errorf("source not shown:\n%s", r.out)
 	}
 }
+
+func TestInstallScriptPathHintNamesTheLineAndTheProfile(t *testing.T) {
+	srv := distServer(t, distDir(t, fakeCtx))
+	r := runInstall(t, srv.URL, []string{"SHELL=/bin/zsh"}, "")
+	if r.err != nil {
+		t.Fatalf("%v\n%s", r.err, r.out)
+	}
+	bin := filepath.Join(r.home, ".local", "bin")
+	for _, want := range []string{"is not on your PATH", "use its full path", filepath.Join(r.home, ".zshrc"), `export PATH="` + bin + `:$PATH"`, "--modify-path"} {
+		if !strings.Contains(r.out, want) {
+			t.Errorf("hint lacks %q:\n%s", want, r.out)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(r.home, ".zshrc")); err == nil {
+		t.Error("profile was created without being asked")
+	}
+}
+
+func TestInstallScriptModifyPathAppendsOnceAndKeepsTheProfile(t *testing.T) {
+	srv := distServer(t, distDir(t, fakeCtx))
+	_, sh := get(t, srv.URL+"/install.sh")
+	home := t.TempDir()
+	profile := filepath.Join(home, ".zshrc")
+	if err := os.WriteFile(profile, []byte("alias ll='ls -l'\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run := func() string {
+		cmd := exec.Command("sh", "-s", "--", "--modify-path")
+		cmd.Stdin = strings.NewReader(sh)
+		cmd.Env = []string{"HOME=" + home, "PATH=" + os.Getenv("PATH"), "XDG_BIN_HOME=", "SHELL=/bin/zsh"}
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		return string(out)
+	}
+	run()
+	run()
+	got, _ := os.ReadFile(profile)
+	line := `export PATH="` + filepath.Join(home, ".local", "bin") + `:$PATH"`
+	if !strings.HasPrefix(string(got), "alias ll='ls -l'\n") || strings.Count(string(got), line) != 1 {
+		t.Fatalf("profile:\n%s", got)
+	}
+}
+
+func TestInstallScriptNoModifyPathAndFlagsStayAwayFromJoin(t *testing.T) {
+	srv := distServer(t, distDir(t, fakeCtxWithJoin))
+	r := runInstall(t, srv.URL, []string{"SHELL=/bin/bash"}, "", "--no-modify-path", "--pair", "ABCD-1234")
+	if r.err != nil {
+		t.Fatalf("%v\n%s", r.err, r.out)
+	}
+	for _, name := range []string{".bashrc", ".bash_profile", ".profile"} {
+		if _, err := os.Stat(filepath.Join(r.home, name)); err == nil {
+			t.Errorf("%s written despite --no-modify-path", name)
+		}
+	}
+	b, _ := os.ReadFile(filepath.Join(r.home, "join-args"))
+	if got := strings.TrimSpace(string(b)); got != "--server "+srv.URL+" --pair ABCD-1234" {
+		t.Errorf("join args %q", got)
+	}
+}
+
+func TestInstallScriptPathLineIsInertForAwkwardDirectories(t *testing.T) {
+	srv := distServer(t, distDir(t, fakeCtx))
+	_, sh := get(t, srv.URL+"/install.sh")
+	home := t.TempDir()
+	bin := filepath.Join(home, `a"b$(touch pwned)'c`+"`d`\\e")
+	cmd := exec.Command("sh", "-s", "--", "--modify-path")
+	cmd.Stdin = strings.NewReader(sh)
+	cmd.Env = []string{"HOME=" + home, "PATH=" + os.Getenv("PATH"), "XDG_BIN_HOME=" + bin, "SHELL=/bin/zsh"}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	// A shell reading the profile must end up with exactly this directory on PATH and run nothing.
+	probe := exec.Command("sh", "-c", `. "$HOME/.zshrc"; printf '%s' "$PATH"`)
+	probe.Dir = home
+	probe.Env = []string{"HOME=" + home, "PATH=/usr/bin:/bin"}
+	got, err := probe.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(got), bin+":") {
+		t.Errorf("PATH after sourcing the profile = %q, want prefix %q", got, bin+":")
+	}
+	if _, err := os.Stat(filepath.Join(home, "pwned")); err == nil {
+		t.Error("the profile line executed a command substitution")
+	}
+}
+
+func TestInstallScriptRefusesRelativeOrControlCharacterInstallDirectory(t *testing.T) {
+	srv := distServer(t, distDir(t, fakeCtx))
+	for name, dir := range map[string]string{"relative": "rel/bin", "newline": "/tmp/x\nexport EVIL=1"} {
+		r := runInstall(t, srv.URL, []string{"XDG_BIN_HOME=" + dir}, "")
+		if r.err == nil || !strings.Contains(r.out, "XDG_BIN_HOME") && !strings.Contains(r.out, "control character") {
+			t.Errorf("%s: want a refusal, err=%v\n%s", name, r.err, r.out)
+		}
+	}
+}
