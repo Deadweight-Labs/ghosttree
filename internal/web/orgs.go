@@ -211,6 +211,8 @@ func orgError(err error) (int, string) {
 		return http.StatusForbidden, msg("adm.err.email")
 	case errors.Is(err, store.ErrAlreadyMember):
 		return http.StatusConflict, msg("adm.err.member")
+	case errors.Is(err, store.ErrProjectNameTaken):
+		return http.StatusConflict, msg("adm.err.project_taken")
 	case errors.Is(err, store.ErrOrgSlugTaken):
 		return http.StatusConflict, msg("adm.err.org_taken")
 	case errors.Is(err, store.ErrTooManyAttempts):
@@ -256,6 +258,8 @@ func orgNotice(key string) string {
 		return msg("adm.notice.created")
 	case "renamed":
 		return msg("adm.notice.renamed")
+	case "project_created":
+		return msg("adm.notice.project_created")
 	}
 	return ""
 }
@@ -508,6 +512,22 @@ func (a *app) orgCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/ui/orgs?org="+o.Slug+"&notice=created", http.StatusSeeOther)
+}
+
+// orgProjectCreate legt ein Projekt ohne Git an. Das darf jedes Mitglied der
+// Organisation; wer es anlegt, wird sein Owner.
+func (a *app) orgProjectCreate(w http.ResponseWriter, r *http.Request) {
+	o, err := a.formOrg(r)
+	if err != nil {
+		a.orgFailure(w, r, err)
+		return
+	}
+	name := strings.ToLower(strings.TrimSpace(r.FormValue("name")))
+	if _, err := a.store.CreateNamedProject(browserPrincipal(r).ID, name, o.Slug); err != nil {
+		a.orgFailure(w, r, err)
+		return
+	}
+	orgRedirect(w, r, o.Slug, "project_created")
 }
 
 // orgRename benennt eine Organisation um. Das dürfen ihre Owner und ein

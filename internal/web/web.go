@@ -184,6 +184,7 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 		"/ui/orgs/member/role": a.orgMemberRole, "/ui/orgs/member/remove": a.orgMemberRemove,
 		"/ui/orgs/project/move": a.orgProjectMove, "/ui/orgs/project/role": a.orgProjectRole,
 		"/ui/orgs/create": a.orgCreate, "/ui/orgs/rename": a.orgRename,
+		"/ui/orgs/project/create": a.orgProjectCreate,
 	} {
 		a.handle(mux, "POST "+path, a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(h)))))
 	}
@@ -456,6 +457,7 @@ var webRoutes = map[string]webClass{
 	"POST /ui/orgs/member/remove":           webAdmin,
 	"POST /ui/orgs/project/move":            webAdmin,
 	"POST /ui/orgs/project/role":            webAdmin,
+	"POST /ui/orgs/project/create":          webAdmin,
 	"POST /ui/orgs/create":                  webAdmin,
 	"POST /ui/orgs/rename":                  webAdmin,
 	"POST /ui/orgs/accept":                  webAccount,

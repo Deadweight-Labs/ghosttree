@@ -104,6 +104,8 @@ CREATE TABLE IF NOT EXISTS project_members(
   granted_by INTEGER NOT NULL DEFAULT 0, granted_at TEXT NOT NULL,
   PRIMARY KEY(project_id, account_id));
 CREATE INDEX IF NOT EXISTS project_members_account ON project_members(account_id);
+CREATE TABLE IF NOT EXISTS named_projects(
+  project_id INTEGER PRIMARY KEY REFERENCES projects(id) ON DELETE RESTRICT);
 CREATE TABLE IF NOT EXISTS role_events(
   id INTEGER PRIMARY KEY, scope TEXT NOT NULL, subject TEXT NOT NULL,
   old_role TEXT NOT NULL DEFAULT '', new_role TEXT NOT NULL DEFAULT '',

@@ -66,6 +66,7 @@ var accessRoutes = map[string]routeClass{
 	"PUT /api/projects/{id}/members/{account}":    classAdmin,
 	"DELETE /api/projects/{id}/members/{account}": classAdmin,
 	"POST /api/projects/claim":                    classAccount,
+	"POST /api/projects":                          classAccount,
 	"POST /api/projects/move":                     classAccount,
 	"POST /api/context-snapshots":                 classProject,
 	"GET /api/context-snapshots":                  classProject,

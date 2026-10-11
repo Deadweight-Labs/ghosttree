@@ -45,6 +45,34 @@ Versioning, with pre-1.0 compatibility rules described in
   authors' global entries in the query, so they cannot displace visible hits or
   inflate counts. The relaxed list gate for lists without a project covers only
   knowledge and requests.
+- Added: projects without git (REQ-459). A project can have just a name. Its id is
+  `<org>/<name>` (for example `acme/infra`), unique within the organization. Being
+  a named project is a property of the project, not of the id's shape: remotes
+  such as `gitserver/repo` stay ordinary repository projects, and a named
+  project cannot take the id of an existing repository, and an organization's slug
+  is its namespace: a write never creates a repository project `<org>/<x>`
+  implicitly (use `ctx project create`). You keep saying `infra`, and a short name that matches several projects (a named
+  one and a repository ending in the same name, or two organizations' `infra`) is
+  refused with the list instead of being picked silently. Any account that is at
+  least a member of an organization creates one in the web (Organizations page,
+  "Create project") or with `ctx project create <name> [--org O]` (account and
+  device tokens, not an agent route); the creator becomes its owner. It has roles,
+  a room, knowledge and requests like a repository project, and a project of
+  another organization answers like one that does not exist. `ctx project link
+  <name>` ties the current folder to it after checking that you may write there.
+  The link is recorded only on this machine (`~/.config/ghosttree/links.json`,
+  mode 0600); nothing inside a folder or repository decides the assignment, so a
+  repository you check out cannot move your sessions into a project. `ctx project
+  unlink` removes the link (`--missing`: all links to folders that are gone), `ctx
+  project links` lists them and `ctx doctor` reports stale ones. Sessions, hooks,
+  the MCP server and the collector resolve the project from the working directory
+  upwards, and the nearest boundary wins: a repository with an origin (identity:
+  the remote) or a linked folder. A repository inside a linked folder keeps its own
+  identity; a linked folder inside a repository, or a repository root you linked
+  yourself, takes over its subtree. A linked folder has no branch and no
+  `.ghosttree/` mirror or file descriptions (those stay with git repositories), and
+  `$HOME` and `/` cannot be linked. A write that names no project now also points to
+  `ctx project link <name>`.
 - Added: `ctx garden check-knowledge` (REQ-457 pilot). An opt-in gardener checks pitfalls and decisions against the code and reports whether each still holds, with commits or file:line as reasons. It stays off without an API key (`GHOSTTREE_GARDEN_KEY` or a `garden` entry in llm.json), supports `--dry-run` and a `--max-usd` budget, and with `--propose` only adds staged notes marked as coming from the gardener.
 
 - Added: knowledge and requests are filed where they belong, not where the session

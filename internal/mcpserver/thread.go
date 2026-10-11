@@ -71,7 +71,7 @@ type ThreadProposeInput struct {
 
 func (s *Server) threadProject() (string, error) {
 	if s.ctxAxes.Project == "" {
-		return "", fmt.Errorf("this session is not bound to a repository, so it has no project to file a thread under")
+		return "", fmt.Errorf("this session is not bound to a repository, so it has no project to file a thread under (in a folder without git: ctx project link <name>)")
 	}
 	return s.ctxAxes.Project, nil
 }
