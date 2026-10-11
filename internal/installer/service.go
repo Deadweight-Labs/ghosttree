@@ -122,15 +122,23 @@ func watchPlistText(ctx, logPath string) string {
 // session, no launchd in a container) is not an error: the file is written and
 // the returned change says what to run.
 func InstallWatchService(home string) ([]Change, error) {
+	changes, _, err := InstallWatchServiceStarted(home)
+	return changes, err
+}
+
+// InstallWatchServiceStarted is InstallWatchService that also says whether the
+// service manager accepted the start. false with a nil error means the file was
+// written, or the install skipped, but nothing was started.
+func InstallWatchServiceStarted(home string) (changes []Change, started bool, err error) {
 	path := WatchServicePath(home)
 	if path == "" {
-		return []Change{{Path: serviceGOOS, Action: "collector service not supported on this platform; run 'ctx watch'"}}, nil
+		return []Change{{Path: serviceGOOS, Action: "collector service not supported on this platform; run 'ctx watch'"}}, false, nil
 	}
 	if !filepath.IsAbs(ctxCommand) {
-		return []Change{{Path: path, Action: "collector service skipped: ctx path is not absolute"}}, nil
+		return []Change{{Path: path, Action: "collector service skipped: ctx path is not absolute"}}, false, nil
 	}
 	if strings.ContainsFunc(ctxCommand, unicode.IsControl) {
-		return nil, fmt.Errorf("ctx path %q contains a control character; install ctx to a plain path", ctxCommand)
+		return nil, false, fmt.Errorf("ctx path %q contains a control character; install ctx to a plain path", ctxCommand)
 	}
 	var text string
 	if serviceGOOS == "darwin" {
@@ -140,10 +148,10 @@ func InstallWatchService(home string) ([]Change, error) {
 	}
 	old, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
-		return nil, err
+		return nil, false, err
 	}
 	if len(old) > 0 && string(old) != text && !isOurWatchDefinition(string(old), home) {
-		return nil, fmt.Errorf("%s exists and was not written by ghosttree, so it is left unchanged and no second collector is started. Move or delete it, then run 'ctx install watch' again", path)
+		return nil, false, fmt.Errorf("%s exists and was not written by ghosttree, so it is left unchanged and no second collector is started. Move or delete it, then run 'ctx install watch' again", path)
 	}
 	changed := string(old) != text
 	action := "unchanged"
@@ -153,18 +161,18 @@ func InstallWatchService(home string) ([]Change, error) {
 			action = "created"
 		}
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		if serviceGOOS == "darwin" {
 			if err := os.MkdirAll(filepath.Join(home, "Library", "Logs"), 0o755); err != nil {
-				return nil, err
+				return nil, false, err
 			}
 		}
 		if err := writeAtomic(path, []byte(text), 0o644); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	}
-	changes := []Change{{Path: path, Action: action}}
+	changes = []Change{{Path: path, Action: action}}
 	var startErr error
 	if serviceGOOS == "darwin" {
 		startErr = startLaunchAgent(path, changed)
@@ -172,11 +180,11 @@ func InstallWatchService(home string) ([]Change, error) {
 		startErr = startSystemdUnit(changed, len(old) > 0)
 	}
 	if startErr != nil {
-		changes = append(changes, Change{Path: path, Action: "collector not started (" + startErr.Error() + "); start it with 'ctx watch' or " + manualStartHint()})
+		changes = append(changes, Change{Path: path, Action: "collector not started (" + startErr.Error() + "); start it with 'ctx watch' or " + manualStartHint() + noUserBusHint(startErr)})
 	} else {
 		changes = append(changes, Change{Path: path, Action: "collector running"})
 	}
-	return changes, nil
+	return changes, startErr == nil, nil
 }
 
 // isOurWatchDefinition reports whether an existing service file is one this
@@ -214,6 +222,46 @@ func isOurWatchDefinition(old, home string) bool {
 		return old == watchUnitText(ctx)
 	}
 	return false
+}
+
+// userBusMissing reports whether a systemctl --user failure means there is no
+// user session bus (a shell without a login session, as over a plain
+// `incus exec` or some SSH setups), not a problem with the unit itself.
+func userBusMissing(err error) bool {
+	if err == nil {
+		return false
+	}
+	// "Failed to connect to bus: No medium found" and, from newer systemd,
+	// "Failed to connect to user scope bus via local transport: ...".
+	msg := err.Error()
+	return strings.Contains(msg, "Failed to connect to") && strings.Contains(msg, "bus")
+}
+
+// noUserBusHint names the two commands that fix a missing user bus: linger
+// starts the user manager without a login, the second starts the collector in
+// it. Nothing runs with sudo on the user's behalf.
+func noUserBusHint(err error) string {
+	if serviceGOOS == "darwin" || !userBusMissing(err) {
+		return ""
+	}
+	return ". There is no user systemd session: run 'loginctl enable-linger $USER' (it may ask for authentication), then '" + CtxCommandForHumans() + " install watch'"
+}
+
+// UserBusHint is the fix text for a collector whose service state cannot be
+// read because the user bus is missing; empty on other platforms.
+func UserBusHint() string {
+	if serviceGOOS == "darwin" {
+		return ""
+	}
+	return "run 'loginctl enable-linger $USER', then '" + CtxCommandForHumans() + " install watch'"
+}
+
+// WatchStatusHint is the command that shows why the collector is not active.
+func WatchStatusHint() string {
+	if serviceGOOS == "darwin" {
+		return "launchctl print gui/" + strconv.Itoa(serviceUID()) + "/" + WatchLaunchdLabel
+	}
+	return "systemctl --user status " + WatchUnit
 }
 
 func manualStartHint() string {

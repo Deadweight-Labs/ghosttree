@@ -94,8 +94,11 @@ func TestMatrixPerRoleResourceAction(t *testing.T) {
 		// Sessions
 		{"member sees metadata", member, ResSessionMeta, ActRead, other, true},
 		{"guest does not see metadata", guest, ResSessionMeta, ActRead, other, false},
-		{"owner reads any transcript", owner, ResTranscript, ActRead, other, true},
-		{"lead reads any transcript", lead, ResTranscript, ActRead, other, true},
+		{"owner does not read a private foreign transcript", owner, ResTranscript, ActRead, other, false},
+		{"lead does not read a private foreign transcript", lead, ResTranscript, ActRead, other, false},
+		{"owner reads a shared transcript", owner, ResTranscript, ActRead, Object{Shared: true}, true},
+		{"owner withdraws a shared foreign session", owner, ResTranscript, ActShare, Object{Shared: true}, true},
+		{"owner does not reach a private foreign session", owner, ResTranscript, ActShare, other, false},
 		{"member reads own transcript", member, ResTranscript, ActRead, own, true},
 		{"member does not read foreign transcript", member, ResTranscript, ActRead, other, false},
 		{"member reads shared transcript", member, ResTranscript, ActRead, Object{Shared: true}, true},
@@ -339,7 +342,7 @@ func TestSingleAccountOrgOwnerSeesEverythingEnforced(t *testing.T) {
 			res Resource
 			act Action
 		}{{ResKnowledge, ActRead}, {ResKnowledge, ActEdit}, {ResKnowledge, ActVerify}, {ResRequest, ActEdit}, {ResDocument, ActEdit}, {ResGhost, ActEdit}, {ResSessionMeta, ActRead}, {ResTranscript, ActRead}, {ResAgents, ActRead}, {ResRoom, ActRead}} {
-			if err := pa.Check(project, c.res, c.act, Object{}); err != nil {
+			if err := pa.Check(project, c.res, c.act, Object{Own: c.res == ResTranscript}); err != nil {
 				t.Errorf("%s %s %s: %v", project, c.res, c.act, err)
 			}
 		}

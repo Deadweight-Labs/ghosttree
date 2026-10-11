@@ -158,8 +158,8 @@ func TestActivityIDsRenumberedForWorkersWithoutNumbers(t *testing.T) {
 	}
 }
 
-// Ein Instanz-Admin startet und beendet auch mit fremden Sessions Arbeit an
-// globalen Requests; ein Mitglied ohne Nummernsicht dort nur mit der eigenen.
+// Ein Instanz-Admin beendet auch fremde Arbeit an globalen Requests, startet
+// sie aber nicht mit einer fremden privaten Session; ein Mitglied ohne Nummernsicht dort nur mit der eigenen.
 func TestAdminStartsAndEndsForeignWorkOnGlobalRequest(t *testing.T) {
 	f := accessAPI(t, true)
 	g, err := f.st.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: "g", Person: "robin"}})
@@ -171,7 +171,10 @@ func TestAdminStartsAndEndsForeignWorkOnGlobalRequest(t *testing.T) {
 	if code, out := f.call(t, "rex", "POST", path, map[string]any{"session_id": foreign, "role": "related"}); code != 404 {
 		t.Errorf("member foreign start: %d %s", code, out)
 	}
-	f.expect(t, "robin", 201, "POST", path, map[string]any{"session_id": foreign, "role": "related"})
+	// A private session of another account stays out of reach, for the admin too.
+	if code, out := f.call(t, "robin", "POST", path, map[string]any{"session_id": foreign, "role": "related"}); code != 404 {
+		t.Errorf("admin foreign private start: %d %s", code, out)
+	}
 	w, _, err := f.st.StartRequestWork(g.Request.ID, workSession(t, f, "adm-rex", 4, accProject), "related", "rex")
 	if err != nil {
 		t.Fatal(err)

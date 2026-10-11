@@ -63,6 +63,25 @@ func TestAgentsPageShowsRequestPostMachineAndLinks(t *testing.T) {
 	}
 }
 
+// shareAgentSession shares the session with the project; what a private session
+// works on stays with its owner (REQ-438 D).
+func shareAgentSession(t *testing.T, st *store.Store, principal, project, external string) {
+	t.Helper()
+	sessions, err := st.ListSessions(scope.Axes{Project: project}, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range sessions {
+		if s.ExternalID == external {
+			if err := st.SetSessionVisibility(s.ID, st.Access(store.Principal{ID: principal, Label: "anna"}), store.VisProject); err != nil {
+				t.Fatal(err)
+			}
+			return
+		}
+	}
+	t.Fatalf("session %s not found", external)
+}
+
 func TestAgentsPageEmptyIsOneLineAndOneAction(t *testing.T) {
 	e := ovEnv(t)
 	_, page := fetchPage(t, e.Owner, e.Base+"/ui/agents")
@@ -77,6 +96,7 @@ func TestAgentsPageEmptyIsOneLineAndOneAction(t *testing.T) {
 func TestAgentsPageHidesWhatTheViewerMayNotSee(t *testing.T) {
 	e := ovEnv(t)
 	agentsSeed(t, e.St, shellProject, "claude:laptop:aaaa", "sess-a", "Visible work", "visible post")
+	shareAgentSession(t, e.St, "person:2", shellProject, "sess-a")
 	hiddenPID := agentsSeedFor(t, e.St, "person:1", shellHiddenProject, "claude:secret-host:bbbb", "sess-h", "SECRET-REQ", "SECRET-POST")
 	ovAgent(t, e.St, shellProject, "claude:owner-host:cccc", "owner-agent", "person:1")
 	// anna is a plain member in the shell project only.
@@ -184,6 +204,7 @@ func TestAgentsPagePrefersPrimaryWork(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	shareAgentSession(t, e.St, "person:2", shellProject, "sess-p")
 	_, page := fetchPage(t, e.Owner, e.Base+"/ui/agents")
 	if !strings.Contains(page, "Primary work") || strings.Contains(page, "Related work") {
 		t.Fatalf("page does not show the primary work: %s", page)

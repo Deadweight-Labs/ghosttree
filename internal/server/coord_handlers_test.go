@@ -860,7 +860,8 @@ func TestPathActivityMasksSessionIDsForOrdinaryMembers(t *testing.T) {
 	if err := f.st.SetProjectRole("person:1", apiRoleProject, "person:3", store.RoleLead, false, store.RoleViaAPI); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.st.UpsertSession(store.Session{Harness: "claude", ExternalID: "uuid-r", Scope: scope.Axes{Project: apiRoleProject}}); err != nil {
+	uuidR, err := f.st.UpsertSession(store.Session{Harness: "claude", ExternalID: "uuid-r", Scope: scope.Axes{Project: apiRoleProject}})
+	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.st.RegisterCoordAgent(store.CoordAgent{ExternalID: "claude:h:robin", Provider: "claude", PrincipalID: "person:1",
@@ -897,8 +898,16 @@ func TestPathActivityMasksSessionIDsForOrdinaryMembers(t *testing.T) {
 	if got := seen(f.anna, ""); len(got) != 1 || got[0] != "claude:h:robin" {
 		t.Fatalf("a member must see the agent, not the session id: %v", got)
 	}
+	// A private session of another account stays masked for leads as well
+	// (REQ-438 D); once it is shared a lead sees the session id.
+	if got := seen(f.ben, ""); len(got) != 1 || got[0] != "claude:h:robin" {
+		t.Fatalf("a lead must not see the id of a foreign private session: %v", got)
+	}
+	if err := f.st.SetSessionVisibility(uuidR, f.st.Access(store.Principal{ID: "person:1", Label: "robin"}), store.VisProject); err != nil {
+		t.Fatal(err)
+	}
 	if got := seen(f.ben, ""); len(got) != 1 || got[0] != "uuid-r" {
-		t.Fatalf("a lead sees the session id: %v", got)
+		t.Fatalf("a lead sees the session id of a shared session: %v", got)
 	}
 	if got := seen(f.robin, ""); len(got) != 1 || got[0] != "uuid-r" {
 		t.Fatalf("the owner of the row sees the session id: %v", got)

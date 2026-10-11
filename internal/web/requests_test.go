@@ -240,10 +240,14 @@ func TestRequestDetailShowsDescriptionCriteriaProofWorkAndRelations(t *testing.T
 	}
 	for _, want := range []string{"Detail request", "REQ-" + strconv.FormatInt(d.Request.ID, 10), "hoch", "First paragraph.", "<code>code</code>", "2/2",
 		"AC-" + strconv.FormatInt(d.Request.ID, 10) + ".1", "Exports run", `href="/ui/sessions/` + e.pid["anna-project"] + `#c3"`,
-		"Private session", "Working", "Related one", `href="/ui/requests/` + strconv.FormatInt(other.Request.ID, 10) + `"`, "https://example.com/x", "Criterion met", "Work started"} {
+		"Working", "Related one", `href="/ui/requests/` + strconv.FormatInt(other.Request.ID, 10) + `"`, "https://example.com/x", "Criterion met", "Work started"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("member detail lacks %q", want)
 		}
+	}
+	// Work on a private session of another account leaves no row, not even a placeholder.
+	if strings.Contains(page, "Private session") {
+		t.Error("member detail shows a placeholder row for private work")
 	}
 	for _, leak := range []string{"SECRET", "session:" + sess, "session:" + priv, e.pid["alice-private"], shellHiddenProject} {
 		if strings.Contains(page, leak) {

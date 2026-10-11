@@ -32,10 +32,39 @@ Versioning, with pre-1.0 compatibility rules described in
   claims it later (the author still sees it). `thread_open` for another project
   opens the thread on the strength of your role there and does not register the
   session in that project's room; its opening post travels with the question.
-  Moving an entry to global needs at least the lead role in its project. Known
-  gap: a moved request still shows the handoffs of its source sessions in the
-  target until the session-visibility work of PR #94 is in (a ready test waits
-  for it).
+  Moving an entry to global needs at least the lead role in its project. A moved
+  request keeps hiding the handoffs and quotes of private source sessions from
+  those who may not read them.
+- Changed: private means private (REQ-438). A session that is not shared is read
+  by its owner alone: not by organization or project owners, not by leads, not by
+  the instance admin, whether in the sessions list, the transcript, the raw
+  export, search, the MCP tools, request work, snapshots or evidence quotes.
+  Shared sessions behave as before. A project owner can still withdraw a shared
+  session, but can no longer share a private one or widen a shared one. Knowledge
+  and requests the distiller derived from a private session stay visible to that
+  session's owner alone until the owner adopts them or shares the session; what an
+  agent saves on purpose stays normal project knowledge. The owner releases a held
+  finding to the reviewers (or discards it) but cannot verify it; if the owner
+  leaves the project, the finding stays held and invisible to others until the owner returns and releases or discards it; nobody else can release it. A knowledge entry
+  that cites a session must cite one of your own. Handoffs, quotes and what a
+  private session works on are private like the transcript, also in snapshots.
+  Upgrade note: older held-back (quarantined) findings from private sessions are
+  held for their session owner from now on; they reach the review queue when the
+  owner releases them or shares the session.
+- Added: any signed-in account can create an organization on the Organization
+  page and becomes its owner; the way on leads to inviting someone or connecting a
+  project. Owners (and the instance admin) can rename it; the address stays.
+  `ctx org create` stays admin-only.
+- Changed: the invitation page says what you share and what your role sees:
+  sessions stay private until you share them; project members see the project's
+  knowledge, requests and room messages.
+- Fixed: joining from a fresh machine (REQ-438). `ctx join` now always sets up the
+  collector service, also when neither Claude Code nor Codex is installed yet, and
+  ends with one line saying what to install next (`--no-watch` still skips it).
+  `ctx doctor` without a harness checks only the harnesses that are installed and
+  lists the others as "not installed (skipped)" instead of failing; `ctx doctor
+  codex` still checks codex. When systemd has no user session bus, the message now
+  names the fix: `loginctl enable-linger $USER`, then `ctx install watch`.
 - Added: names and invitations work for two people (REQ-438). The sign-in reads
   the display name from the identity provider's userinfo endpoint when the ID
   token carries none (name, given and family name, nickname, user name; an email
@@ -57,6 +86,17 @@ Versioning, with pre-1.0 compatibility rules described in
   guests cannot change it. An organization link never makes an owner. A slow or
   failing identity provider no longer stalls other requests, and a failed
   discovery is remembered for 30 seconds.
+- Added: messages reach agents and people by @name. Write `@name` in a room
+  message or thread reply (a display name, a first name, a short name such as
+  claude-anna, or an unambiguous start of one) and the server resolves it
+  against the room; a name that fits several is refused with the candidates
+  for members, and silently ignored for guests so nothing reveals who is in the
+  room. Claude Code agents get new messages for them once each through the
+  prompt hook and, at most once a minute, a PostToolUse hook; the inbox marks
+  what is addressed to the agent and shows the sender's role at the time of
+  sending. The project rule text tells agents how to answer. The room's message
+  box is wide and multi-line and completes @names from an external script. A
+  guest calling coord_peers now gets a plain explanation instead of an error.
 - Changed: owners, leads and members may write in the project rooms of their
   project through their role, without an agent of their own in the room (REQ-437).
   Messages, replies, threads and standing instructions work from the browser

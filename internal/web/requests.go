@@ -354,12 +354,22 @@ func (a *app) lookupRequest(w http.ResponseWriter, r *http.Request, act store.Ac
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return requestdomain.Detail{}, false
 	}
-	obj := store.Object{Own: pa.IsAuthor(ref.Person)}
+	obj, visible := pa.RequestObject(ref)
+	if !visible {
+		// Aus der privaten Session eines anderen Kontos: wie eine unbekannte Nummer.
+		pa.Filtered()
+		http.NotFound(w, r)
+		return requestdomain.Detail{}, false
+	}
 	if act != store.ActRead && a.accessDenied(w, r, pa.Check(ref.Project, store.ResRequest, store.ActRead, obj)) {
 		return requestdomain.Detail{}, false
 	}
 	if a.accessDenied(w, r, pa.Check(ref.Project, store.ResRequest, act, obj)) {
 		return requestdomain.Detail{}, false
+	}
+	if act != store.ActRead && pa.RequestHeldOwner(ref) {
+		// Der Besitzer der Herkunfts-Session übernimmt den Auftrag.
+		_ = a.store.ClaimDistilledRequest(id, store.RefRequest, personOf(r))
 	}
 	detail, err := a.store.RequestByID(id)
 	if err != nil {
@@ -572,7 +582,11 @@ func (a *app) relationLines(pa *store.ProjectAccess, rels []requestdomain.Relati
 
 func (a *app) requestReadable(pa *store.ProjectAccess, id int64) bool {
 	ref, err := a.store.RequestRef(store.RefRequest, id)
-	return err == nil && pa.Check(ref.Project, store.ResRequest, store.ActRead, requestObject(pa, ref.Person)) == nil
+	if err != nil {
+		return false
+	}
+	obj, visible := pa.RequestObject(ref)
+	return visible && pa.Check(ref.Project, store.ResRequest, store.ActRead, obj) == nil
 }
 
 func (a *app) knowledgeReadable(pa *store.ProjectAccess, id int64) bool {

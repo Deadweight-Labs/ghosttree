@@ -44,6 +44,8 @@ var (
 	joinCanOpen     = canOpenBrowser
 	joinDetect      = detectHarnesses
 	joinInstall     = cmdInstall
+	joinCollector   = joinInstallCollector
+	joinCollectorUp = waitCollectorActive
 	joinTimeout     = joinDefaultTimeout
 
 	startCallbackFunc = startCallback
@@ -410,13 +412,65 @@ func detectHarnesses() []string {
 	home, _ := os.UserHomeDir()
 	var found []string
 	for _, h := range []string{"claude", "codex"} {
-		if st, err := os.Stat(home + "/." + h); err == nil && st.IsDir() {
-			found = append(found, h)
-		} else if _, err := exec.LookPath(h); err == nil {
+		if harnessPresent(h, home) {
 			found = append(found, h)
 		}
 	}
 	return found
+}
+
+// collectorOutcome is what setting up the collector service came to.
+type collectorOutcome struct {
+	Started bool     // the service manager accepted the start
+	Lines   []string // why not, in the installer's words
+	Err     error
+}
+
+// joinInstallCollector sets up the collector service for the ctx that is
+// running now: join, unlike install, has not pinned that path yet, and without
+// an absolute one the service would silently be skipped.
+func joinInstallCollector(home string) collectorOutcome {
+	restore, err := useRunningCtx(home)
+	defer restore()
+	if err != nil {
+		return collectorOutcome{Err: err}
+	}
+	changes, started, err := installer.InstallWatchServiceStarted(home)
+	out := collectorOutcome{Started: started, Err: err}
+	if !started {
+		for _, c := range changes {
+			if strings.HasPrefix(c.Action, "collector") {
+				out.Lines = append(out.Lines, c.Action)
+			}
+		}
+	}
+	return out
+}
+
+// waitCollectorActive asks the service manager for up to two seconds whether
+// the collector is active: a start that was accepted can still die at once.
+func waitCollectorActive() bool {
+	for i := 0; i < 10; i++ {
+		if state, _ := installer.WatchServiceState(); state == installer.ServiceActive {
+			return true
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return false
+}
+
+// harnessPresent: the harness has a config directory in the home directory or
+// its command is on PATH. join and doctor share this test.
+func harnessPresent(h, home string) bool {
+	dir := home + "/." + h
+	if h == "opencode" {
+		dir = home + "/.config/opencode"
+	}
+	if st, err := os.Stat(dir); err == nil && st.IsDir() {
+		return true
+	}
+	_, err := exec.LookPath(h)
+	return err == nil
 }
 
 // ---- Befehl ----
@@ -615,8 +669,25 @@ func cmdJoin(args []string, stdout io.Writer) int {
 	var setUp []string
 	codexSetUp, codexNoticeShown := false, false
 	detected := joinDetect()
+	// The collector is set up whether or not an agent is installed yet: it
+	// picks up sessions as soon as one appears.
+	if !*noWatch {
+		o := joinCollector(home)
+		switch {
+		case o.Err != nil:
+			fmt.Fprintf(stdout, "Collector not set up: %s\n", safe(o.Err.Error()))
+		case !o.Started:
+			for _, line := range o.Lines {
+				fmt.Fprintln(stdout, safe(line))
+			}
+		case joinCollectorUp():
+			fmt.Fprintln(stdout, "Collector running.")
+		default:
+			fmt.Fprintf(stdout, "Collector started, not yet active. Check with: %s\n", installer.WatchStatusHint())
+		}
+	}
 	if len(detected) == 0 {
-		fmt.Fprintf(stdout, "Connected, but Claude Code and Codex were not found on this machine, so nothing was set up for your agents.\nInstall one of them, then run: %s install claude  (or: %s install codex)\n", ctxHint(), ctxHint())
+		fmt.Fprintf(stdout, "Connected. Install Claude Code or Codex, then run: %s install claude|codex\n", ctxHint())
 	}
 	for _, h := range detected {
 		if ctx.Err() != nil {
@@ -630,10 +701,8 @@ func cmdJoin(args []string, stdout io.Writer) int {
 				continue
 			}
 		}
-		installArgs := []string{h}
-		if *noWatch {
-			installArgs = append(installArgs, "--no-watch")
-		}
+		// The collector was handled above, once and with its outcome shown.
+		installArgs := []string{h, "--no-watch"}
 		rec := &hooksNoticeWriter{w: stdout}
 		code := joinInstall(installArgs, rec)
 		if h == "codex" && code == 0 {

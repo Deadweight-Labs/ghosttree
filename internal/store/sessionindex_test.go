@@ -251,8 +251,8 @@ func TestSearchOnlySeesTheReadableSet(t *testing.T) {
 		who, label string
 		want       []string
 	}{
-		{"person:1", "robin", []string{"a-robin-private", "b-mia-private", "c-rex-project", "d-rex-guests", "e-rex-private"}},
-		{"person:2", "lena", []string{"a-robin-private", "b-mia-private", "c-rex-project", "d-rex-guests", "e-rex-private"}},
+		{"person:1", "robin", []string{"a-robin-private", "c-rex-project", "d-rex-guests"}},
+		{"person:2", "lena", []string{"c-rex-project", "d-rex-guests"}},
 		{"person:3", "mia", []string{"b-mia-private", "c-rex-project", "d-rex-guests"}},
 		{"person:4", "rex", []string{"c-rex-project", "d-rex-guests", "e-rex-private"}},
 		{"person:5", "gus", []string{"d-rex-guests"}},
@@ -294,26 +294,55 @@ func TestSnippetsNeverComeFromHiddenSessions(t *testing.T) {
 	}
 }
 
-func TestBrowseShowsPrivateRowsToMembersButNeverTheirContent(t *testing.T) {
+// Privat heißt privat: eine fremde private Session erscheint weder als Zeile
+// noch mit Inhalt, auch nicht dem Owner oder Lead (REQ-438 D).
+func TestBrowseHidesForeignPrivateSessionsEvenFromOwnerAndLead(t *testing.T) {
 	f := newVisFixture(t)
-	page, err := f.st.BrowseSessions(viewer(f.st, "person:3", "mia"), SessionFilter{}, "", 50)
-	if err != nil {
-		t.Fatal(err)
+	for _, c := range []struct {
+		who, label string
+		want       []string
+	}{
+		{"person:1", "robin", []string{"a-robin-private", "c-rex-project", "d-rex-guests"}},
+		{"person:2", "lena", []string{"c-rex-project", "d-rex-guests"}},
+		{"person:3", "mia", []string{"b-mia-private", "c-rex-project", "d-rex-guests"}},
+	} {
+		page, err := f.st.BrowseSessions(viewer(f.st, c.who, c.label), SessionFilter{}, "", 50)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := map[string]bool{}
+		for _, r := range page.Rows {
+			got[r.Session.ExternalID] = true
+			if !r.Readable || r.Session.Title == "" {
+				t.Errorf("%s: row %s readable=%v title=%q", c.label, r.Session.ExternalID, r.Readable, r.Session.Title)
+			}
+		}
+		if !sameKeys(got, c.want...) {
+			t.Errorf("%s lists %v, want %v", c.label, got, c.want)
+		}
 	}
-	if len(page.Rows) != 5 {
-		t.Fatalf("member sees %d rows, want all 5 as metadata", len(page.Rows))
+}
+
+// Instanz-Admin ohne Rolle in einem unbeanspruchten Projekt liest ebenfalls
+// keine fremde private Session, eine geteilte schon.
+func TestAdminDoesNotReadPrivateSessionsInUnclaimedProjects(t *testing.T) {
+	st := accessFixture(t)
+	st.SetAccessMode(AccessMode{Enforce: true})
+	priv := addSession(t, st, "p", 3, "github.com/dw/unclaimed", "box", "", transcriptWith("zebra"))
+	pub := addSession(t, st, "q", 3, "github.com/dw/unclaimed", "box", VisProject, transcriptWith("zebra"))
+	admin := viewer(st, "person:1", "robin")
+	if !admin.IsAdmin() {
+		t.Skip("person:1 is not the instance admin in this fixture")
 	}
-	for _, r := range page.Rows {
-		readable := r.Session.ExternalID == "b-mia-private" || r.Session.ExternalID == "c-rex-project" || r.Session.ExternalID == "d-rex-guests"
-		if r.Readable != readable {
-			t.Errorf("%s readable=%v, want %v", r.Session.ExternalID, r.Readable, readable)
-		}
-		if !r.Readable && (r.Session.Title != "" || r.Session.Messages != 0 || r.Session.PublicID != "") {
-			t.Errorf("unreadable row exposes content or an address: %+v", r.Session)
-		}
-		if r.Readable && r.Session.Title == "" {
-			t.Errorf("readable row lacks a title")
-		}
+	if admin.CanSeeTranscript(priv) {
+		t.Error("admin reads a private session of another account")
+	}
+	if !admin.CanSeeTranscript(pub) {
+		t.Error("admin must keep reading shared sessions in unclaimed projects")
+	}
+	_, got := searchIDs(t, st, admin, "zebra")
+	if !sameKeys(got, "q") {
+		t.Errorf("admin search sees %v, want only the shared session", got)
 	}
 }
 
@@ -393,7 +422,8 @@ func TestVisibilityLevelsOpenTheMatrixStepwise(t *testing.T) {
 		{"owner of session shares", member, ResTranscript, ActShare, Object{Own: true}, true},
 		{"foreign member cannot share", member, ResTranscript, ActShare, Object{}, false},
 		{"lead cannot share foreign", lead, ResTranscript, ActShare, Object{}, false},
-		{"project owner shares foreign", owner, ResTranscript, ActShare, Object{}, true},
+		{"project owner does not reach a private foreign session", owner, ResTranscript, ActShare, Object{}, false},
+		{"project owner reaches a shared foreign session", owner, ResTranscript, ActShare, Object{Shared: true}, true},
 	} {
 		if got := MatrixAllows(c.role, c.res, c.act, c.obj); got != c.want {
 			t.Errorf("%s: %v, want %v", c.name, got, c.want)
@@ -418,9 +448,17 @@ func TestSetSessionVisibilityIsForTheOwnerAndTheProjectOwner(t *testing.T) {
 			t.Errorf("%s changed a foreign session's visibility", who.label)
 		}
 	}
-	// Der Projekt-Owner darf.
-	if err := st.SetSessionVisibility(f.e.ID, viewer(st, "person:1", "robin"), VisProject); err != nil {
-		t.Errorf("project owner: %v", err)
+	// Der Projekt-Owner erreicht eine private Session nie, weitet eine
+	// geteilte nicht aus, darf sie aber zurücknehmen.
+	robin := viewer(st, "person:1", "robin")
+	if err := st.SetSessionVisibility(f.e.ID, robin, VisProject); err == nil {
+		t.Error("project owner shared a private session of another account")
+	}
+	if err := st.SetSessionVisibility(f.c.ID, robin, VisGuests); err == nil {
+		t.Error("project owner widened a session of another account")
+	}
+	if err := st.SetSessionVisibility(f.c.ID, robin, VisPrivate); err != nil {
+		t.Errorf("project owner withdrawing a shared session: %v", err)
 	}
 	if err := st.SetSessionVisibility(f.b.ID, viewer(st, "person:3", "mia"), VisPrivate); err != nil {
 		t.Fatal(err)

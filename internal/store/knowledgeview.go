@@ -69,7 +69,21 @@ func (a *ProjectAccess) KnowledgeViews(ks []Knowledge) []Knowledge {
 // und die Zahl der Sessions zählte die verborgenen mit.
 func (a *ProjectAccess) ReadableEvidence(project string, ev []Evidence, sessions int) ([]Evidence, int) {
 	if a.SeesSessionNumbers(project) {
-		return ev, sessions
+		// Mitglieder kennen die Nummern, ein Zitat aus der privaten Session
+		// eines anderen Kontos bleibt trotzdem weg (REQ-438 D).
+		kept := make([]Evidence, 0, len(ev))
+		seen := map[int64]bool{}
+		for _, e := range ev {
+			if sess, err := a.st.SessionByID(e.SessionID); err == nil && !a.CanSeeTranscript(sess) {
+				continue
+			}
+			kept = append(kept, e)
+			seen[e.SessionID] = true
+		}
+		if len(kept) == len(ev) {
+			return ev, sessions
+		}
+		return kept, len(seen)
 	}
 	lookup := a.readableSessionLookup()
 	kept := []Evidence{}
@@ -87,7 +101,7 @@ func (a *ProjectAccess) ReadableEvidence(project string, ev []Evidence, sessions
 // Adresse der Session.
 func (a *ProjectAccess) EvidenceView(project string, ev []Evidence, sessions int) ([]Evidence, int) {
 	if a.SeesSessionNumbers(project) {
-		return ev, sessions
+		return a.ReadableEvidence(project, ev, sessions)
 	}
 	lookup := a.readableSessionLookup()
 	kept, n := a.ReadableEvidence(project, ev, sessions)

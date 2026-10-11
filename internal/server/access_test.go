@@ -310,7 +310,8 @@ func TestRequestsMatrixEnforced(t *testing.T) {
 func TestSessionsAndTranscriptsMatrixEnforced(t *testing.T) {
 	f := accessAPI(t, true)
 	robin, mia, rex := f.id["s-robin"], f.id["s-mia"], f.id["s-rex"]
-	// Metadaten: Mitglieder sehen alle, der Gast keine, der Fremde keine.
+	// Private Sessions sieht nur ihr Besitzer, auch kein Owner oder Lead; der
+	// Gast und der Fremde nichts.
 	count := func(who string) int {
 		var ss []store.Session
 		if err := json.Unmarshal([]byte(f.expect(t, who, 200, "GET", "/api/sessions?project="+accProject, nil)), &ss); err != nil {
@@ -318,18 +319,21 @@ func TestSessionsAndTranscriptsMatrixEnforced(t *testing.T) {
 		}
 		return len(ss)
 	}
-	for who, want := range map[string]int{"robin": 3, "lena": 3, "mia": 3, "rex": 3, "gus": 0, "nora": 0} {
+	for who, want := range map[string]int{"robin": 1, "lena": 0, "mia": 1, "rex": 1, "gus": 0, "nora": 0} {
 		if got := count(who); got != want {
 			t.Errorf("%s lists %d sessions, want %d", who, got, want)
 		}
 	}
-	// Transkript und Rohdaten: Owner und Lead alle, Member das Eigene.
+	// Transkript und Rohdaten: nur der Besitzer, auch Owner und Lead lesen
+	// private Sessions anderer nicht.
 	for _, path := range []string{"/api/sessions/%d", "/api/sessions/%d/raw"} {
 		for _, who := range []string{"robin", "lena"} {
-			for _, id := range []int64{robin, mia, rex} {
-				f.expect(t, who, 200, "GET", idPath(path, id), nil)
+			for _, id := range []int64{mia, rex} {
+				f.expect(t, who, 404, "GET", idPath(path, id), nil)
 			}
 		}
+		f.expect(t, "lena", 404, "GET", idPath(path, robin), nil)
+		f.expect(t, "robin", 200, "GET", idPath(path, robin), nil)
 		f.expect(t, "mia", 200, "GET", idPath(path, mia), nil)
 		f.expect(t, "mia", 404, "GET", idPath(path, rex), nil)
 		f.expect(t, "mia", 404, "GET", idPath(path, robin), nil)
@@ -342,7 +346,7 @@ func TestSessionsAndTranscriptsMatrixEnforced(t *testing.T) {
 	if strings.Contains(out, "secretterm rex") || strings.Contains(out, "secretterm robin") || !strings.Contains(out, "secretterm mia") {
 		t.Errorf("member search: %s", out)
 	}
-	if out = f.expect(t, "lena", 200, "GET", "/api/search?q=secretterm&kind=sessions", nil); strings.Count(out, "secretterm") < 3 {
+	if out = f.expect(t, "lena", 200, "GET", "/api/search?q=secretterm&kind=sessions", nil); strings.Contains(out, "secretterm") {
 		t.Errorf("lead search: %s", out)
 	}
 	if out = f.expect(t, "nora", 200, "GET", "/api/search?q=secretterm&kind=sessions", nil); strings.Contains(out, "secretterm") {
@@ -351,7 +355,7 @@ func TestSessionsAndTranscriptsMatrixEnforced(t *testing.T) {
 
 	// Teilen: nur der Besitzer; danach lesen Mitglieder, der Gast weiter nicht.
 	share := map[string]bool{"shared": true}
-	f.expect(t, "lena", 403, "PUT", idPath("/api/sessions/%d/share", rex), share)
+	f.expect(t, "lena", 404, "PUT", idPath("/api/sessions/%d/share", rex), share)
 	f.expect(t, "nora", 404, "PUT", idPath("/api/sessions/%d/share", rex), share)
 	f.expect(t, "rex", 200, "PUT", idPath("/api/sessions/%d/share", rex), share)
 	f.expect(t, "mia", 200, "GET", idPath("/api/sessions/%d", rex), nil)

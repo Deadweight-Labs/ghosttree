@@ -2,7 +2,6 @@ package server
 
 import (
 	"encoding/json"
-	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -249,13 +248,9 @@ func TestNoteOnAnUnclaimedMachineIsNotDeliveredToWhoClaimsTheName(t *testing.T) 
 }
 
 // A moved request must not carry the handoffs of private source sessions into
-// the target project. The visibility of session-derived text on every request
-// path is PR #94's work; this test is ready for it. Remove the skip after the
-// rebase on #94 (or run with GHOSTTREE_NEEDS_94=1).
+// the target project: the request views filter session-derived text by
+// CanSeeTranscript (#94).
 func TestMovedRequestDoesNotShowPrivateSessionHandoffsInTheTarget(t *testing.T) {
-	if os.Getenv("GHOSTTREE_NEEDS_94") != "1" {
-		t.Skip("needs #94: request views filter session-derived text by CanSeeTranscript")
-	}
 	f := accessAPI(t, true)
 	id := f.id["r-mia"]
 	work, _, err := f.st.StartRequestWork(id, f.id["s-mia"], "primary", "mia")

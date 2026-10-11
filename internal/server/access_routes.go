@@ -446,13 +446,26 @@ func (a *api) checkRequest(w http.ResponseWriter, r *http.Request, kind store.Re
 		writeRequestError(w, err)
 		return false
 	}
-	err = pa.Check(ref.Project, store.ResRequest, act, store.Object{Own: pa.IsAuthor(ref.Person)})
+	obj, visible := pa.RequestObject(ref)
+	if !visible {
+		// Aus der privaten Session eines anderen Kontos: wie eine unbekannte Id.
+		writeRequestError(w, sql.ErrNoRows)
+		return false
+	}
+	err = pa.Check(ref.Project, store.ResRequest, act, obj)
 	if errors.Is(err, store.ErrAccessNotFound) {
 		// Verborgenes Projekt: Body wie bei einer unbekannten Id.
 		writeRequestError(w, sql.ErrNoRows)
 		return false
 	}
-	return !denyAccess(w, err)
+	if denyAccess(w, err) {
+		return false
+	}
+	if act != store.ActRead && pa.RequestHeldOwner(ref) {
+		// Der Besitzer der Herkunfts-Session übernimmt den Auftrag.
+		_ = a.st.ClaimDistilledRequest(id, kind, personOf(r))
+	}
+	return true
 }
 
 func (a *api) noteRequestHits(r *http.Request, hits []requestdomain.SearchHit) {
@@ -477,4 +490,10 @@ func (a *api) checkDocument(w http.ResponseWriter, r *http.Request, id int64, ac
 // Autor das Seine, allen anderen nichts.
 func (a *api) listGateEntries(w http.ResponseWriter, r *http.Request, project string, res store.Resource) bool {
 	return !denyAccess(w, a.access(r).GateList(project, res, true))
+}
+
+// requestVisibleTo: der Betrachter darf den Auftrag lesen.
+func requestVisibleTo(pa *store.ProjectAccess, ref store.ObjectRef) bool {
+	obj, visible := pa.RequestObject(ref)
+	return visible && pa.Check(ref.Project, store.ResRequest, store.ActRead, obj) == nil
 }

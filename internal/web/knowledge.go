@@ -222,7 +222,7 @@ var levelKeys = map[string]string{
 
 var doneKeys = map[string]string{
 	"approved": "knowledge.done.approved", "rejected": "knowledge.done.rejected",
-	"retired": "knowledge.done.retired", "restored": "knowledge.done.restored", "saved": "knowledge.done.saved",
+	"released": "knowledge.done.released", "retired": "knowledge.done.retired", "restored": "knowledge.done.restored", "saved": "knowledge.done.saved",
 }
 
 func typeLabel(typ string) string {
@@ -290,7 +290,7 @@ func firstNonEmpty(values ...string) string {
 func capabilities(pa *store.ProjectAccess, k store.Knowledge, card *knowledgeCard) {
 	canEdit := pa.CheckKnowledge(k, store.ActEdit) == nil
 	open := decisionOpen(k)
-	card.CanApprove = open && approveChanges(k, canEdit) && pa.CheckKnowledge(k, store.ActVerify) == nil
+	card.CanApprove = open && approveChanges(k, canEdit) && (pa.CheckKnowledge(k, store.ActVerify) == nil || pa.CanReleaseKnowledge(k))
 	live := k.Status == "active" || k.Status == "stale"
 	card.CanReject = live && canEdit
 	card.Retire = card.CanReject && !open
@@ -579,6 +579,14 @@ func (a *app) reviewDecide(w http.ResponseWriter, r *http.Request) {
 	case "approve":
 		act, done = store.ActVerify, "approved"
 		patch = map[string]string{"confidence": "verified", "confirmed_by": personOf(r)}
+		// Der Besitzer der privaten Herkunfts-Session gibt einen gehaltenen Fund
+		// nur frei; er landet dann in der Queue der Prüfer.
+		if id, perr := strconv.ParseInt(r.PathValue("id"), 10, 64); perr == nil {
+			if k, kerr := a.store.KnowledgeByID(id); kerr == nil && a.access(r).CanReleaseKnowledge(k) && a.access(r).CheckKnowledge(k, store.ActVerify) != nil {
+				act, done = store.ActRelease, "released"
+				patch = map[string]string{"confidence": "staged", "confirmed_by": ""}
+			}
+		}
 	case "reject":
 		act, done = store.ActEdit, "rejected"
 		patch = map[string]string{"status": "deprecated"}
