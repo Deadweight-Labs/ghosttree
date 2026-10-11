@@ -386,6 +386,10 @@ func (a *api) shareSession(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := a.st.SetSessionVisibility(id, a.access(r), level); err != nil {
+		if errors.Is(err, store.ErrShareNeedsProject) {
+			writeCoded(w, http.StatusConflict, "share_needs_project", err.Error())
+			return
+		}
 		if denyAccess(w, err) {
 			return
 		}

@@ -750,3 +750,35 @@ func TestSessionPagesDoNotChangeWhenHiddenSessionsAreAdded(t *testing.T) {
 		}
 	}
 }
+
+// Eine Session ohne Projekt bietet kein Teilen an, und ein direkter Aufruf wird
+// mit einer klaren Meldung abgelehnt (Abnahme 2026-10-11, Befund 2).
+func TestSessionWithoutProjectOffersNoSharing(t *testing.T) {
+	e := seedSessions(t)
+	id, err := e.St.UpsertSession(store.Session{Harness: "claude-code", ExternalID: "ext-no-project", AccountID: 2, Scope: scope.Axes{Machine: "laptop"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.St.AppendChunks(id, work("zebrafish")); err != nil {
+		t.Fatal(err)
+	}
+	sess, _ := e.St.SessionByID(id)
+	e.pid["anna-no-project"] = sess.PublicID
+	code, page := e.get(t, e.Member, "/ui/sessions/"+sess.PublicID)
+	if code != http.StatusOK {
+		t.Fatalf("own session without project: %d", code)
+	}
+	if strings.Contains(page, "/share") {
+		t.Error("a session without project offers to share")
+	}
+	resp := postShare(t, e, e.Member, "anna-no-project", store.VisProject)
+	if resp.StatusCode != http.StatusConflict {
+		t.Errorf("share without project = %d", resp.StatusCode)
+	}
+	if !strings.Contains(body(t, resp), "no project") {
+		t.Error("the refusal does not say why")
+	}
+	if got, _ := e.St.SessionByID(id); got.Shared {
+		t.Error("the refused share took effect")
+	}
+}

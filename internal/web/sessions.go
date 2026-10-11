@@ -857,9 +857,16 @@ func (a *app) sessionPage(w http.ResponseWriter, r *http.Request) {
 	if pa.CanShareSession(sess) {
 		form := &levelForm{Action: "/ui/sessions/" + sess.PublicID + "/share"}
 		for _, l := range []struct{ v, k, title string }{{store.VisPrivate, "sessions.level.private", "sessions.level.private.title"}, {store.VisProject, "sessions.level.project", "sessions.level.project.title"}, {store.VisGuests, "sessions.level.guests", "sessions.level.guests.title"}} {
+			// Ohne Projekt gibt es niemanden, mit dem sich teilen ließe: nur "privat",
+			// und das nur, um eine frühere Freigabe zurückzunehmen.
+			if sess.Scope.Project == "" && l.v != store.VisPrivate {
+				continue
+			}
 			form.Levels = append(form.Levels, levelOption{Value: l.v, Label: msg(l.k), Title: msg(l.title), Current: sess.Visibility == l.v})
 		}
-		v.Share = form
+		if sess.Scope.Project != "" || (sess.Visibility != "" && sess.Visibility != store.VisPrivate) {
+			v.Share = form
+		}
 	}
 
 	// Rückfrage vor dem Teilen mit Gästen, wenn das Transkript Zugangsdaten
@@ -1077,6 +1084,8 @@ func (a *app) sessionShare(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "forbidden", http.StatusForbidden)
 		case errors.Is(err, store.ErrAccessNotFound):
 			a.sessionMissing(w, r)
+		case errors.Is(err, store.ErrShareNeedsProject):
+			http.Error(w, err.Error(), http.StatusConflict)
 		default:
 			http.Error(w, "could not change the setting", http.StatusInternalServerError)
 		}
