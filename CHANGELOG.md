@@ -6,6 +6,21 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Fixed (acceptance run of two people, 2026-10-11): a session that belongs to no
+  project can no longer be shared with "Project members" (the web form does not
+  offer it, the API answers 409 `share_needs_project`); the sender of an @mention
+  reads the mentioned person's name instead of "Someone" (everyone who may read the
+  room sees the names of its participants, guests still do not); the "This is me"
+  confirmation on the connect and invitation pages comes ticked, so the button no
+  longer does nothing; `ctx login --machine NAME` with a name that belongs to
+  another account stops at once, as soon as the browser refuses it, and prints the
+  exact command to run again with another name; identical agent rows ("Agent · Name
+  · machine" three times) get a short tag from the session id; all absolute times
+  of the web pages are shown in the browser's time zone (the list and the detail
+  of a session no longer disagree). A mention that names a person reaches the
+  person; a running agent gets it when the mention names the agent (for example
+  `@claude-name`), and the hooks deliver it, which a new test with two accounts
+  covers for both `UserPromptSubmit` and `PostToolUse`.
 - Fixed: knowledge and requests without a project and without a machine ("global")
   were readable by every account on the instance, a fresh account without an
   organization included. "Global" now means "everywhere for me": such an entry is

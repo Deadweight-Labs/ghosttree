@@ -782,3 +782,30 @@ func TestSessionWithoutProjectOffersNoSharing(t *testing.T) {
 		t.Error("the refused share took effect")
 	}
 }
+
+// The list showed the browser's clock and the detail the server's: 20:51 against
+// "11 Oct 18:51". Every absolute time is now a <time> element that localtime.js
+// rewrites in the reader's zone (acceptance finding 10).
+func TestAbsoluteTimesAreMarkedForTheReadersTimeZone(t *testing.T) {
+	e := seedSessions(t)
+	_, detail := e.get(t, e.Owner, "/ui/sessions/"+e.pid["alice-private"])
+	if !regexp.MustCompile(`<time datetime="[^"]+" data-local="datetime">`).MatchString(detail) {
+		t.Errorf("the start time of a session is plain text:\n%s", detail)
+	}
+	if !strings.Contains(detail, `/static/localtime.js`) {
+		t.Error("the page does not load the script that rewrites times")
+	}
+	_, found := e.get(t, e.Owner, "/ui/sessions?q=zebrafish")
+	if !regexp.MustCompile(`<time datetime="[^"]+" data-local="daytime" data-today="Today" data-yesterday="Yesterday">`).MatchString(found) {
+		t.Errorf("the day and clock of a search hit are plain text:\n%s", found)
+	}
+	script := string(mustReadEmbedded(t, "static/localtime.js"))
+	for _, want := range []string{"time[data-local]", "clock", "datetime", "daytime", "title", "getHours"} {
+		if !strings.Contains(script, want) {
+			t.Errorf("localtime.js lacks %q", want)
+		}
+	}
+	if got := string(timeTag("2026-10-11T18:51:00Z")); !strings.Contains(got, `data-local="title"`) {
+		t.Errorf("the tooltip of a relative time stays in UTC: %s", got)
+	}
+}
