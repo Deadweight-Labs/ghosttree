@@ -90,8 +90,73 @@ func TestWatchServiceWithoutUserBusIsNotAnError(t *testing.T) {
 	if !strings.Contains(last, "not started") || !strings.Contains(last, "systemctl --user enable --now ghosttree-watch.service") {
 		t.Fatalf("last change = %q", last)
 	}
+	for _, want := range []string{"loginctl enable-linger $USER", "install watch"} {
+		if !strings.Contains(last, want) {
+			t.Fatalf("no %q in %q", want, last)
+		}
+	}
+	if strings.Contains(last, "sudo") {
+		t.Fatalf("hint must not run sudo: %q", last)
+	}
 	if _, statErr := os.Stat(filepath.Join(home, ".config", "systemd", "user", "ghosttree-watch.service")); statErr != nil {
 		t.Fatal("unit was not written")
+	}
+}
+
+func TestUserBusMissingRecognisesOldAndNewSystemdWording(t *testing.T) {
+	for _, msg := range []string{
+		"exit status 1: Failed to connect to bus: No medium found",
+		"exit status 1: Failed to connect to bus: No such file or directory",
+		"exit status 1: Failed to connect to user scope bus via local transport: $DBUS_SESSION_BUS_ADDRESS and $XDG_RUNTIME_DIR not defined",
+	} {
+		if !userBusMissing(errors.New(msg)) {
+			t.Errorf("not recognised: %s", msg)
+		}
+	}
+	for _, msg := range []string{"Unit file is masked", "Failed to connect to the network", "bus error"} {
+		if userBusMissing(errors.New(msg)) {
+			t.Errorf("wrongly recognised: %s", msg)
+		}
+	}
+	if userBusMissing(nil) {
+		t.Error("nil is not a missing bus")
+	}
+}
+
+func TestWatchServiceNewSystemdBusTextGetsTheLingerHint(t *testing.T) {
+	home := t.TempDir()
+	useCtx(t, fakeBinary(t, filepath.Join(home, "ctx")))
+	log := &ctlLog{fail: map[string]error{"daemon-reload": errors.New("exit status 1: Failed to connect to user scope bus via local transport: $DBUS_SESSION_BUS_ADDRESS and $XDG_RUNTIME_DIR not defined")}}
+	defer SetServiceBackend("linux", log.run, 1000)()
+	changes, started, err := InstallWatchServiceStarted(home)
+	if err != nil || started {
+		t.Fatalf("started=%v err=%v", started, err)
+	}
+	if last := changes[len(changes)-1].Action; !strings.Contains(last, "loginctl enable-linger $USER") {
+		t.Fatalf("no linger hint: %q", last)
+	}
+}
+
+func TestInstallWatchServiceStartedReportsTheStart(t *testing.T) {
+	home := t.TempDir()
+	useCtx(t, fakeBinary(t, filepath.Join(home, "ctx")))
+	defer SetServiceBackend("linux", (&ctlLog{}).run, 1000)()
+	if _, started, err := InstallWatchServiceStarted(home); err != nil || !started {
+		t.Fatalf("started=%v err=%v", started, err)
+	}
+}
+
+func TestWatchServiceOtherFailuresGetNoLingerHint(t *testing.T) {
+	home := t.TempDir()
+	useCtx(t, fakeBinary(t, filepath.Join(home, "ctx")))
+	log := &ctlLog{fail: map[string]error{"daemon-reload": errors.New("Unit file is masked")}}
+	defer SetServiceBackend("linux", log.run, 1000)()
+	changes, err := InstallWatchService(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if last := changes[len(changes)-1].Action; strings.Contains(last, "enable-linger") {
+		t.Fatalf("linger hint for an unrelated failure: %q", last)
 	}
 }
 

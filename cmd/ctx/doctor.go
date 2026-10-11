@@ -24,6 +24,9 @@ import (
 // "is it running", doctor answers "would a fresh agent session actually reach
 // ghosttree". Installing is idempotent but one-shot, and nothing else notices
 // when a harness config drifts out from under it.
+// doctorHarnessPresent is a seam for tests.
+var doctorHarnessPresent = harnessPresent
+
 func cmdDoctor(args []string, stdout io.Writer) int {
 	harness := ""
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
@@ -51,6 +54,19 @@ func cmdDoctor(args []string, stdout io.Writer) int {
 		fmt.Fprintf(stdout, "cannot determine home directory: %v\n", err)
 		return 1
 	}
+	if harness == "" {
+		// Without a harness argument only what is installed is checked; a
+		// missing one is not a failure of this machine.
+		present := harnesses[:0:0]
+		for _, name := range harnesses {
+			if doctorHarnessPresent(name, home) {
+				present = append(present, name)
+			} else {
+				fmt.Fprintf(stdout, "%s: not installed (skipped)\n", name)
+			}
+		}
+		harnesses = present
+	}
 
 	restore, ctxErr := useRunningCtx(home)
 	defer restore()
@@ -64,7 +80,11 @@ func cmdDoctor(args []string, stdout io.Writer) int {
 				fmt.Fprintf(stdout, "fix %s: %v\n", name, err)
 			}
 		}
-		fmt.Fprint(stdout, "re-ran installers\n\n")
+		if len(harnesses) > 0 {
+			fmt.Fprint(stdout, "re-ran installers\n\n")
+		} else {
+			fmt.Fprint(stdout, "no agent installed, no installer to re-run\n\n")
+		}
 	}
 
 	var checks []installer.Check
@@ -320,6 +340,11 @@ func collectorChecks(home string) []installer.Check {
 	default:
 		active.Unverified = true
 		active.Detail = detail + " and no watch pid observed"
+		if strings.HasPrefix(detail, "systemd user") {
+			if hint := installer.UserBusHint(); hint != "" {
+				active.Fix = hint + ", or 'ctx watch' in a terminal"
+			}
+		}
 	}
 	return append(checks, active)
 }

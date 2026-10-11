@@ -6,6 +6,13 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Fixed: joining from a fresh machine (REQ-438). `ctx join` now always sets up the
+  collector service, also when neither Claude Code nor Codex is installed yet, and
+  ends with one line saying what to install next (`--no-watch` still skips it).
+  `ctx doctor` without a harness checks only the harnesses that are installed and
+  lists the others as "not installed (skipped)" instead of failing; `ctx doctor
+  codex` still checks codex. When systemd has no user session bus, the message now
+  names the fix: `loginctl enable-linger $USER`, then `ctx install watch`.
 - Added: names and invitations work for two people (REQ-438). The sign-in reads
   the display name from the identity provider's userinfo endpoint when the ID
   token carries none (name, given and family name, nickname, user name; an email
