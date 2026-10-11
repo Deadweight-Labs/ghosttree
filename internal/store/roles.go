@@ -360,6 +360,9 @@ func (s *Store) changeProjectRole(actorPrincipal, remote, targetPrincipal, newRo
 		if _, err := tx.Exec(`DELETE FROM project_members WHERE project_id=? AND account_id=?`, pid, target); err != nil {
 			return err
 		}
+		if err := releaseHeldFindingsTx(tx, target, remote); err != nil {
+			return err
+		}
 	} else {
 		review := 0
 		if canReview {
@@ -540,6 +543,9 @@ func dropProjectRolesTx(tx execQueryer, actor, via, where string, args ...any) e
 	}
 	for _, d := range list {
 		if _, err := tx.Exec(`DELETE FROM project_members WHERE project_id=? AND account_id=?`, d.pid, d.account); err != nil {
+			return err
+		}
+		if err := releaseHeldFindingsTx(tx, d.account, d.remote); err != nil {
 			return err
 		}
 		if err := roleEvent(tx, d.remote, principalOfID(d.account), roleLabel(d.role, d.review == 1), "", actor, via); err != nil {

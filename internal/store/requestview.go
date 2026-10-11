@@ -16,35 +16,38 @@ import (
 // verriete, dass es die Session gibt.
 func (a *ProjectAccess) RequestDetailView(d requestdomain.Detail) requestdomain.Detail {
 	project := d.Request.Scope.Project
-	if a.SeesSessionNumbers(project) {
-		work := make([]requestdomain.Work, len(d.Work))
-		copy(work, d.Work)
-		for i := range work {
-			if sess, err := a.st.SessionByID(work[i].SessionID); err == nil && a.CanSeeTranscript(sess) {
-				work[i].SessionPublicID = sess.PublicID
-			}
-		}
-		d.Work = work
-		return d
-	}
+	// Mitglieder kennen die Nummern der Sessions, sehen aber, was an einer
+	// privaten Session eines anderen Kontos hängt (Zitat, Übergabe, Beleg,
+	// Aktivität), ebenso wenig wie ihr Transkript.
+	numbers := a.SeesSessionNumbers(project)
 	readable := map[int64]string{}
+	known := map[int64]bool{}
 	lookup := func(id int64) (string, bool) {
 		if pub, ok := readable[id]; ok {
-			return pub, pub != ""
+			return pub, known[id]
 		}
-		pub := ""
-		if sess, err := a.st.SessionByID(id); err == nil && sess.PublicID != "" && a.CanSeeTranscript(sess) {
-			pub = sess.PublicID
+		pub, ok := "", false
+		if sess, err := a.st.SessionByID(id); err == nil {
+			if a.CanSeeTranscript(sess) && (sess.PublicID != "" || numbers) {
+				pub, ok = sess.PublicID, true
+			}
+		} else {
+			// Eine Session, die es nicht mehr gibt, hält nichts zurück.
+			ok = numbers
 		}
-		readable[id] = pub
-		return pub, pub != ""
+		readable[id], known[id] = pub, ok
+		return pub, ok
 	}
-	d.Request.SessionRef = ""
+	if numbers {
+		d.Request.SessionRef = a.visibleSessionRef(d.Request.SessionRef, lookup)
+	} else {
+		d.Request.SessionRef = ""
+	}
 	// Wer an dem Auftrag arbeiten darf (decideGlobal: jedes Konto an globalen
 	// Aufträgen), braucht die echten Arbeits-Ids, um Arbeit abzuschließen; neu
 	// vergebene träfen fremde Zeilen. Gefiltert wird auch dann, nur diese Ids
 	// bleiben (Aktivität und Beleg werden immer neu nummeriert).
-	keepIDs := a.Decide(project, ResRequest, ActWork, Object{Own: a.IsAuthor(d.Request.Person)}).Allowed
+	keepIDs := numbers || a.Decide(project, ResRequest, ActWork, Object{Own: a.IsAuthor(d.Request.Person)}).Allowed
 	// Alles, was an einer Session hängt, bleibt nur, wenn sie lesbar ist, und
 	// wird sonst ganz weggelassen: ein Platzhalter ließe sich mitzählen. Die
 	// laufenden Nummern von Arbeit, Beleg und Aktivität werden neu vergeben,
@@ -52,7 +55,10 @@ func (a *ProjectAccess) RequestDetailView(d requestdomain.Detail) requestdomain.
 	work := []requestdomain.Work{}
 	for _, w := range d.Work {
 		if pub, ok := lookup(w.SessionID); ok {
-			w.SessionID, w.SessionPublicID = 0, pub
+			w.SessionPublicID = pub
+			if !numbers {
+				w.SessionID = 0
+			}
 			if !keepIDs {
 				w.ID = int64(len(work) + 1)
 			}
@@ -64,7 +70,10 @@ func (a *ProjectAccess) RequestDetailView(d requestdomain.Detail) requestdomain.
 		sightings := []requestdomain.Sighting{}
 		for _, s := range d.Sightings {
 			if pub, ok := lookup(s.SessionID); ok {
-				s.SessionID, s.SessionPublicID = 0, pub
+				s.SessionPublicID = pub
+				if !numbers {
+					s.SessionID = 0
+				}
 				sightings = append(sightings, s)
 			}
 		}
@@ -77,13 +86,15 @@ func (a *ProjectAccess) RequestDetailView(d requestdomain.Detail) requestdomain.
 		var kept []requestdomain.Evidence
 		for _, e := range criteria[i].Evidence {
 			ref, ok := rewriteSessionRef(e.Ref, lookup)
-			if !ok || (e.Kind == "session" && !sessionRefPattern.MatchString(e.Ref)) {
+			if !ok || (!numbers && e.Kind == "session" && !sessionRefPattern.MatchString(e.Ref)) {
 				continue
 			}
-			// Keine Route nimmt eine Beleg-Id an: immer neu vergeben.
-			evidenceNo++
-			e.ID = evidenceNo
-			e.Ref = ref
+			if !numbers {
+				// Keine Route nimmt eine Beleg-Id an: immer neu vergeben.
+				evidenceNo++
+				e.ID = evidenceNo
+				e.Ref = ref
+			}
 			kept = append(kept, e)
 		}
 		criteria[i].Evidence = kept
@@ -100,28 +111,44 @@ func (a *ProjectAccess) RequestDetailView(d requestdomain.Detail) requestdomain.
 					sid, _ = strconv.ParseInt(num, 10, 64)
 				}
 			}
-			if _, ok := lookup(sid); !ok {
-				continue
+			if sid != 0 || !numbers {
+				if _, ok := lookup(sid); !ok {
+					continue
+				}
 			}
-			// "session:<n> role:<r>" nennt die Nummer; die Rolle allein bleibt.
-			if rest, ok := strings.CutPrefix(act.Data, "session:"); ok && (act.Kind == "work.started" || act.Kind == "work.resumed") {
-				_, role, _ := strings.Cut(rest, " ")
-				act.Data = role
+			if !numbers {
+				// "session:<n> role:<r>" nennt die Nummer; die Rolle allein bleibt.
+				if rest, ok := strings.CutPrefix(act.Data, "session:"); ok && (act.Kind == "work.started" || act.Kind == "work.resumed") {
+					_, role, _ := strings.Cut(rest, " ")
+					act.Data = role
+				}
 			}
 		case "request.done", "request.migrated":
 			ref, ok := rewriteSessionRef(act.Data, lookup)
 			if !ok {
 				continue
 			}
-			act.Data = ref
+			if !numbers {
+				act.Data = ref
+			}
 		}
-		// Auch eine Aktivitäts-Id braucht kein Schreibzugriff: immer neu vergeben.
-		act.ID = int64(len(activity) + 1)
-		act.SessionID = 0
+		if !numbers {
+			// Auch eine Aktivitäts-Id braucht kein Schreibzugriff: immer neu vergeben.
+			act.ID = int64(len(activity) + 1)
+			act.SessionID = 0
+		}
 		activity = append(activity, act)
 	}
 	d.Activity = activity
 	return d
+}
+
+// visibleSessionRef lässt einen Verweis auf eine unlesbare Session weg.
+func (a *ProjectAccess) visibleSessionRef(ref string, lookup func(int64) (string, bool)) string {
+	if _, ok := rewriteSessionRef(ref, lookup); !ok {
+		return ""
+	}
+	return ref
 }
 
 var sessionRefPattern = regexp.MustCompile(`^session:(\d+)(#.*)?$`)
@@ -149,23 +176,47 @@ func rewriteSessionRef(ref string, lookup func(int64) (string, bool)) (string, b
 // verrät: den Verweis des Auftrags und die Zahl der Sessions, in denen der
 // Wunsch fiel (sie zählt auch unlesbare).
 func (a *ProjectAccess) RequestHitView(h requestdomain.SearchHit) requestdomain.SearchHit {
-	if a.SeesSessionNumbers(h.Request.Scope.Project) {
-		return h
+	numbers := a.SeesSessionNumbers(h.Request.Scope.Project)
+	if !numbers {
+		h.Request.SessionRef = ""
+	} else if _, ok := rewriteSessionRef(h.Request.SessionRef, func(id int64) (string, bool) {
+		sess, err := a.st.SessionByID(id)
+		return "", err != nil || a.CanSeeTranscript(sess)
+	}); !ok {
+		h.Request.SessionRef = ""
 	}
-	h.Request.SessionRef = ""
-	h.Sightings = 0
+	// Die Zahl zählt nur Sessions mit lesbarem Transkript.
+	if h.Sightings > 0 {
+		h.Sightings = a.readableSightings(h.Request.ID)
+	}
 	// Die Übergabe stammt aus der jüngsten Arbeit mit lesbarer Session; die
 	// jüngste überhaupt könnte aus einer verborgenen kommen.
 	h.LatestHandoff = ""
 	if sids, sums, err := a.st.RequestHandoffs(h.Request.ID); err == nil {
 		for i, sid := range sids { // jüngste zuerst
-			if sess, err := a.st.SessionByID(sid); err == nil && sess.PublicID != "" && a.CanSeeTranscript(sess) {
+			if sess, err := a.st.SessionByID(sid); err == nil && a.CanSeeTranscript(sess) {
 				h.LatestHandoff = sums[i]
 				break
 			}
 		}
 	}
 	return h
+}
+
+// readableSightings zählt die Sessions mit lesbarem Transkript, in denen der
+// Wunsch fiel.
+func (a *ProjectAccess) readableSightings(requestID int64) int {
+	ids, err := a.st.RequestSightingSessions(requestID)
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, id := range ids {
+		if sess, err := a.st.SessionByID(id); err == nil && a.CanSeeTranscript(sess) {
+			n++
+		}
+	}
+	return n
 }
 
 // ensureActivitySession ergänzt request_activity um die Session, auf die sich
@@ -207,4 +258,25 @@ func (s *Store) RequestHandoffs(requestID int64) ([]int64, []string, error) {
 		sids, sums = append(sids, sid), append(sums, sum)
 	}
 	return sids, sums, rows.Err()
+}
+
+// RequestSightingSessions nennt die Sessions, in denen ein Wunsch fiel.
+func (s *Store) RequestSightingSessions(requestID int64) ([]int64, error) {
+	if s.reader != nil {
+		return s.reader.RequestSightingSessions(requestID)
+	}
+	rows, err := s.db.Query(`SELECT DISTINCT session_id FROM request_sightings WHERE request_id=?`, requestID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }

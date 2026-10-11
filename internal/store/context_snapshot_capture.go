@@ -276,8 +276,18 @@ func actor(id sql.NullInt64, label string) snapshotActorV1 {
 	return snapshotActorV1{ID: "name:" + label, Label: label}
 }
 
+// privateOriginSQL: der Verweis ref ("session:N" oder "session:N#seq") nennt eine
+// Session, die nicht freigegeben ist. Ein Snapshot gehört allen Lesern des
+// Projekts, deshalb enthält er nichts, was an einer privaten Session hängt:
+// weder gehaltene Funde noch Zitate noch Übergaben (REQ-438 D), auch nicht die
+// des Erzeugers selbst.
+func privateOriginSQL(ref string) string {
+	return `EXISTS (SELECT 1 FROM sessions hs WHERE (` + ref + `='session:'||hs.id OR ` + ref + ` LIKE 'session:'||hs.id||'#%')
+		AND hs.shared=0 AND COALESCE(hs.visibility,'') IN ('','private'))`
+}
+
 func captureKnowledge(ctx context.Context, q snapshotQueryer, project string, collector *snapshotCollector) error {
-	rows, err := q.QueryContext(ctx, `SELECT k.id,k.type,k.title,k.body,k.project,k.branch,k.machine,k.confidence,k.status,k.origin,k.superseded_by,k.person,p.id,k.confirmed_by,cp.id,k.last_modified_by,mp.id,k.harness,k.session_ref,k.observed_at,k.regression_state,k.regression_test,k.created_at,k.updated_at FROM knowledge k LEFT JOIN persons p ON p.name=k.person LEFT JOIN persons cp ON cp.name=k.confirmed_by LEFT JOIN persons mp ON mp.name=k.last_modified_by WHERE k.project=? AND k.machine='' ORDER BY k.id`, project)
+	rows, err := q.QueryContext(ctx, `SELECT k.id,k.type,k.title,k.body,k.project,k.branch,k.machine,k.confidence,k.status,k.origin,k.superseded_by,k.person,p.id,k.confirmed_by,cp.id,k.last_modified_by,mp.id,k.harness,k.session_ref,k.observed_at,k.regression_state,k.regression_test,k.created_at,k.updated_at FROM knowledge k LEFT JOIN persons p ON p.name=k.person LEFT JOIN persons cp ON cp.name=k.confirmed_by LEFT JOIN persons mp ON mp.name=k.last_modified_by WHERE k.project=? AND k.machine='' AND NOT (k.origin='distilled' AND k.confidence='quarantined' AND `+privateOriginSQL("k.session_ref")+`) ORDER BY k.id`, project)
 	if err != nil {
 		return err
 	}
@@ -451,7 +461,7 @@ func captureDocuments(ctx context.Context, q snapshotQueryer, project string, sc
 }
 
 func captureRequests(ctx context.Context, q snapshotQueryer, project string, collector *snapshotCollector) error {
-	rows, err := q.QueryContext(ctx, `SELECT r.id,r.type,r.title,r.description,r.state,r.priority,r.project,r.branch,r.machine,r.origin,r.person,p.id,r.session_ref,r.created_at,r.updated_at FROM requests r LEFT JOIN persons p ON p.name=r.person WHERE r.project=? ORDER BY r.id`, project)
+	rows, err := q.QueryContext(ctx, `SELECT r.id,r.type,r.title,r.description,r.state,r.priority,r.project,r.branch,r.machine,r.origin,r.person,p.id,r.session_ref,r.created_at,r.updated_at FROM requests r LEFT JOIN persons p ON p.name=r.person WHERE r.project=? AND NOT (r.origin='distilled' AND r.person='' AND `+privateOriginSQL("r.session_ref")+`) ORDER BY r.id`, project)
 	if err != nil {
 		return err
 	}
@@ -627,7 +637,7 @@ func captureRequestLists(ctx context.Context, q snapshotQueryer, p *requestPaylo
 	if p.Activity == nil {
 		p.Activity = []requestActivityV1{}
 	}
-	wr, err := q.QueryContext(ctx, `SELECT w.id,w.session_id,w.role,w.state,w.started_at,w.ended_at,w.summary FROM request_work w WHERE w.request_id=? ORDER BY w.id`, p.ID)
+	wr, err := q.QueryContext(ctx, `SELECT w.id,w.session_id,w.role,w.state,w.started_at,w.ended_at,w.summary FROM request_work w WHERE w.request_id=? AND NOT EXISTS (SELECT 1 FROM sessions hs WHERE hs.id=w.session_id AND hs.shared=0 AND COALESCE(hs.visibility,'') IN ('','private')) ORDER BY w.id`, p.ID)
 	if err != nil {
 		return err
 	}

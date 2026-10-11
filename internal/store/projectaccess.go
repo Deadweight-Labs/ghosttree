@@ -51,6 +51,10 @@ const (
 	ActEdit Action = "edit"
 	// ActVerify: confidence=verified setzen.
 	ActVerify Action = "verify"
+	// ActRelease: der Besitzer der privaten Herkunfts-Session hebt die Haltung
+	// eines distillierten Fundes auf (confidence staged); verifizieren darf er
+	// ihn damit nicht, das bleibt den Prüfern.
+	ActRelease Action = "release"
 	// ActWork: an einem Auftrag arbeiten (jedes Mitglied, auch an fremden).
 	ActWork  Action = "work"
 	ActShare Action = "share"
@@ -80,7 +84,8 @@ type Object struct {
 	// nur der Besitzer der Maschine Zugriff hat.
 	Machine string
 	// OriginOwner: der Betrachter besitzt die private Session, aus der ein noch
-	// nicht übernommener, distillierter Eintrag stammt; er darf ihn übernehmen.
+	// nicht freigegebener, distillierter Eintrag stammt; er darf ihn freigeben
+	// oder verwerfen, nie verifizieren.
 	OriginOwner bool
 }
 
@@ -109,7 +114,9 @@ func matrixAllows(role RoleInfo, res Resource, act Action, obj Object) bool {
 		case ActEdit:
 			return rank >= 3 || (rank == 2 && (obj.Own || obj.OriginOwner))
 		case ActVerify:
-			return rank >= 3 || (rank >= 2 && (role.CanReview || obj.OriginOwner))
+			return rank >= 3 || (rank >= 2 && role.CanReview)
+		case ActRelease:
+			return rank >= 2 && obj.OriginOwner
 		}
 	case ResRequest:
 		switch act {
@@ -720,4 +727,14 @@ func (a *ProjectAccess) GateList(project string, res Resource, perEntry bool) er
 		return nil
 	}
 	return a.Check(project, res, ActRead, Object{Confidence: "verified"})
+}
+
+// Viewer beschreibt den Betrachter für Abfragen, die private Sessions anderer
+// Konten selbst ausschließen.
+func (a *ProjectAccess) Viewer() SessionViewer {
+	if !a.st.AccessEnforced() {
+		return SessionViewer{}
+	}
+	a.loadMachines()
+	return SessionViewer{Enforced: true, Account: a.account, Owner: a.owner}
 }

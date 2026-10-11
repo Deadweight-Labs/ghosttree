@@ -35,6 +35,23 @@ func (s *Store) InterruptedWork(ax scope.Axes, idleBefore, excludeSession string
 	if s.reader != nil {
 		return s.reader.InterruptedWork(ax, idleBefore, excludeSession, limit)
 	}
+	return s.InterruptedWorkFor(SessionViewer{}, ax, idleBefore, excludeSession, limit)
+}
+
+// SessionViewer sagt, wessen private Sessions eine Abfrage zeigen darf. Der
+// Nullwert (Enforced false) zeigt alles. Eine Übergabe aus einer privaten
+// Session ist privat wie ihr Transkript (REQ-438 D).
+type SessionViewer struct {
+	Enforced       bool
+	Account, Owner int64
+}
+
+// InterruptedWorkFor ist InterruptedWork für einen Betrachter: Arbeit aus einer
+// privaten Session eines anderen Kontos zählt nicht.
+func (s *Store) InterruptedWorkFor(v SessionViewer, ax scope.Axes, idleBefore, excludeSession string, limit int) ([]InterruptedThread, error) {
+	if s.reader != nil {
+		return s.reader.InterruptedWorkFor(v, ax, idleBefore, excludeSession, limit)
+	}
 	if limit <= 0 {
 		limit = 3
 	}
@@ -51,9 +68,15 @@ func (s *Store) InterruptedWork(ax scope.Axes, idleBefore, excludeSession string
 		WHERE w.request_id IN (SELECT id FROM requests WHERE state='open' AND ` + scopeWhere + `)
 		  AND (w.state='paused' OR (w.state='active' AND se.last_seen_at < ?))
 		  AND (? = '' OR se.external_id != ?)
+		  AND (? = 0 OR se.shared=1 OR COALESCE(se.visibility,'') NOT IN ('','private')
+		       OR (CASE WHEN se.account_id=0 THEN ? ELSE se.account_id END) = ?)
 		GROUP BY r.id
 		ORDER BY since DESC LIMIT ?`
-	args = append(args, idleBefore, excludeSession, excludeSession, limit)
+	enforced := 0
+	if v.Enforced {
+		enforced = 1
+	}
+	args = append(args, idleBefore, excludeSession, excludeSession, enforced, v.Owner, v.Account, limit)
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, err

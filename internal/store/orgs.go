@@ -531,6 +531,19 @@ func (s *Store) RemoveOrgMember(actorPrincipal string, orgID int64, targetPrinci
 		`m.account_id=? AND p.org_id=?`, target, orgID); err != nil {
 		return err
 	}
+	// Auch ein Org-Owner ohne eigene Projektzeile verliert seine Rolle.
+	if _, err := tx.Exec(`UPDATE knowledge SET confidence='staged' WHERE origin='distilled' AND confidence='quarantined'
+		AND project IN (SELECT remote FROM projects WHERE org_id=?)
+		AND EXISTS (SELECT 1 FROM sessions hs WHERE (session_ref='session:'||hs.id OR session_ref LIKE 'session:'||hs.id||'#%')
+			AND (CASE WHEN hs.account_id=0 THEN ? ELSE hs.account_id END)=?)`, orgID, instanceOwnerID(tx), target); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE requests SET person=(SELECT name FROM persons WHERE id=?) WHERE origin='distilled' AND person=''
+		AND project IN (SELECT remote FROM projects WHERE org_id=?)
+		AND EXISTS (SELECT 1 FROM sessions hs WHERE (session_ref='session:'||hs.id OR session_ref LIKE 'session:'||hs.id||'#%')
+			AND (CASE WHEN hs.account_id=0 THEN ? ELSE hs.account_id END)=?)`, target, orgID, instanceOwnerID(tx), target); err != nil {
+		return err
+	}
 	// Ein Standard, auf den das Konto keinen Zugriff mehr hat, wird gelöscht
 	// statt zu wirken.
 	if _, err := tx.Exec(`UPDATE persons SET default_org_id=0 WHERE id=? AND default_org_id=?`, target, orgID); err != nil {

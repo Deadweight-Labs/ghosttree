@@ -549,8 +549,8 @@ func (a *api) pathActivity(w http.ResponseWriter, r *http.Request) {
 
 // shapePathActivity schließt den Fragenden selbst aus (auch unter seiner
 // gemeldeten Session-UUID, nicht nur unter der Agenten-ID) und maskiert die
-// Session-Kennung für alle außer dem Eigentümer der Zeile und Leads des
-// Projekts: die UUID ist der Schlüssel, unter dem Aktivität zugeordnet wird,
+// Session-Kennung für alle außer dem Eigentümer der Zeile und, bei einer
+// freigegebenen Session, Leads des Projekts: die UUID ist der Schlüssel, unter dem Aktivität zugeordnet wird,
 // und soll nicht jedem Mitglied als Name für fremde Sessions dienen. Statt ihrer
 // steht der Agent, der sie gemeldet hat, sonst nichts. Im Log-Modus des
 // Zugriffsschalters bleibt alles sichtbar.
@@ -565,14 +565,16 @@ func (a *api) shapePathActivity(r *http.Request, project, exclude string, in []s
 		}
 	}
 	lead := store.RoleRank(a.st.ProjectRole(project, me.ID).Role) >= store.RoleRank(store.RoleLead)
-	mask := a.st.AccessEnforced() && !lead
+	enforced := a.st.AccessEnforced()
 	owner := a.st.OwnerAccountID()
 	out := make([]store.PathActivity, 0, len(in))
 	for _, e := range in {
 		if skip[e.SessionExternalID] {
 			continue
 		}
-		if mask {
+		// Leads sehen die Kennung einer fremden Session nur, wenn sie freigegeben
+		// ist; eine private bleibt auch ihnen verborgen (REQ-438 D).
+		if enforced && (!lead || !a.st.SessionIsShared(e.SessionExternalID)) {
 			rowAccount := e.AccountID
 			if rowAccount == 0 {
 				rowAccount = owner

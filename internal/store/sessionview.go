@@ -898,7 +898,7 @@ type SessionPrefilter struct {
 	Where string
 	Args  []any
 	Exact bool
-	// Unrestricted: der Betrachter liest ohnehin alles (Admin, oder ohne
+	// Unrestricted: der Betrachter liest ohnehin alles (ohne
 	// Durchsetzung); die Suche darf dann nach bm25 ordnen.
 	Unrestricted bool
 }
@@ -945,5 +945,5 @@ func (a *ProjectAccess) TranscriptPrefilter() SessionPrefilter {
 	if a.admin {
 		q += ` OR (project != '' AND project NOT IN (SELECT remote FROM projects) AND (shared = 1 OR COALESCE(visibility,'') NOT IN ('','private')))`
 	}
-	return SessionPrefilter{Where: q, Args: args, Exact: true, Unrestricted: a.admin}
+	return SessionPrefilter{Where: q, Args: args, Exact: true}
 }

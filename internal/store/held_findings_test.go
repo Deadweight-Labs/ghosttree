@@ -71,10 +71,19 @@ func TestDistilledFindingsFromPrivateSessionsAreHeldForTheSessionOwner(t *testin
 	if !mia.CanSeeKnowledge(know(kid)) || reqs("person:3", "mia") != 1 {
 		t.Fatal("the owner of the session does not see her findings")
 	}
-	if err := mia.CheckKnowledge(know(kid), ActVerify); err != nil {
-		t.Fatalf("the owner cannot adopt: %v", err)
+	// The owner releases the finding to the reviewers; verifying is not hers.
+	if err := mia.CheckKnowledge(know(kid), ActVerify); err == nil {
+		t.Fatal("the owner of the session may verify her own finding")
 	}
-	if err := f.st.UpdateKnowledgeBy(kid, map[string]string{"confidence": "verified", "confirmed_by": "mia"}, "mia"); err != nil {
+	if !mia.CanReleaseKnowledge(know(kid)) {
+		t.Fatal("the owner cannot release her finding")
+	}
+	for _, c := range others {
+		if viewer(f.st, c.who, c.label).CanReleaseKnowledge(know(kid)) {
+			t.Errorf("%s may release a finding of another account", c.label)
+		}
+	}
+	if err := f.st.UpdateKnowledgeBy(kid, map[string]string{"confidence": "staged", "confirmed_by": ""}, "mia"); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.st.ClaimDistilledRequest(rid, RefRequest, "mia"); err != nil {
