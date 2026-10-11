@@ -4,7 +4,7 @@
 # machine with a running collector.
 #
 #   scripts/e2e/fresh-vm.sh [--server-url http://127.0.0.1:18480] [--vm gt-fresh]
-#                           [--scenario all|plain|taken|nobus] [--src DIR] [--create-vm] [--keep-vm-running]
+#                           [--scenario all|plain|taken|nobus] [--src DIR] [--create-vm] [--keep-vm-running] [--cleanup]
 #
 # What it does, per scenario (the VM is reset to its snapshot "clean" first):
 #   1. builds the ctx archives (scripts/build-dist.sh) and a ctx for the host,
@@ -33,6 +33,9 @@
 # (scripts/e2e/tcpfwd.py: host bridge address -> loopback, VM loopback -> host
 # bridge address). Incus cannot proxy loopback into a VM.
 #
+# --cleanup removes the ufw rules this script left behind (comment gt-fresh-vm,
+# for instance after GT_KEEP_UFW=1 or a killed run) and exits.
+#
 # Host changes: with an active ufw, two narrow rules on the Incus bridge are
 # added (DHCP and the server port from the bridge subnet) and removed on exit
 # (GT_KEEP_UFW=1 keeps them). Needs passwordless sudo for that; otherwise the
@@ -41,6 +44,7 @@
 #
 # Needs: incus (user in incus-admin), go, curl, python3, sqlite3, git, flock.
 set -uo pipefail
+umask 077
 
 SERVER_URL=${GT_SERVER_URL:-http://127.0.0.1:18480}
 VM=${GT_VM:-gt-fresh}
@@ -48,7 +52,8 @@ SNAP=${GT_SNAPSHOT:-clean}
 SCENARIO=all
 CREATE_VM=0
 KEEP_VM=0
-WORK=${GT_WORK:-/tmp/gt-fresh-vm}
+WORK=${GT_WORK:-/tmp/gt-fresh-vm-$(id -u)}
+CLEANUP=0
 BRIDGE=${GT_BRIDGE:-incusbr0}
 IMAGE=${GT_IMAGE:-images:ubuntu/24.04}
 VM_USER=robin
@@ -65,6 +70,7 @@ while [ $# -gt 0 ]; do
     --src) SRC=$2; shift 2 ;;
     --create-vm) CREATE_VM=1; shift ;;
     --keep-vm-running) KEEP_VM=1; shift ;;
+    --cleanup) CLEANUP=1; shift ;;
     -h | --help) sed -n '2,/^set -uo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -76,19 +82,40 @@ case $SERVER_URL in
 esac
 SERVER_URL=${SERVER_URL/localhost/127.0.0.1}
 PORT=${SERVER_URL##*:}
+case $PORT in '' | *[!0-9]*) echo "--server-url needs a numeric port" >&2; exit 2 ;; esac
+if [ "$PORT" -lt 1024 ] || [ "$PORT" -gt 65535 ]; then echo "port must be 1024-65535" >&2; exit 2; fi
+case $BRIDGE in '' | *[!A-Za-z0-9_.-]* ) echo "bad bridge name: $BRIDGE" >&2; exit 2 ;; esac
+[ "${#BRIDGE}" -le 15 ] || { echo "bad bridge name: $BRIDGE" >&2; exit 2; }
+case $VM in '' | *[!A-Za-z0-9-]*) echo "bad VM name: $VM" >&2; exit 2 ;; esac
 case $SCENARIO in all | plain | taken | nobus) ;; *) echo "--scenario: all|plain|taken|nobus" >&2; exit 2 ;; esac
 
 for t in incus go curl python3 sqlite3 git; do
   command -v "$t" >/dev/null || { echo "missing tool: $t" >&2; exit 2; }
 done
 
-mkdir -p "$WORK"
+# $WORK is wiped between runs, so it must be ours: absolute, below a real
+# directory, and either new/empty or marked by an earlier run.
+case $WORK in /?*) ;; *) echo "GT_WORK must be an absolute path" >&2; exit 2 ;; esac
+case $WORK in / | /tmp | /home | "$HOME" | "$HOME"/) echo "refusing GT_WORK=$WORK" >&2; exit 2 ;; esac
+MARKER="$WORK/.gt-fresh-vm-work"
+if [ -e "$WORK" ] && [ ! -f "$MARKER" ] && [ -n "$(ls -A "$WORK" 2>/dev/null)" ]; then
+  echo "refusing GT_WORK=$WORK: not empty and not created by this script (no $MARKER)" >&2; exit 2
+fi
+mkdir -p "$WORK" && : >"$MARKER" || { echo "cannot create $WORK" >&2; exit 2; }
+safe_rm() { # remove paths, only below a marked $WORK
+  local p
+  [ -f "$MARKER" ] || return 1
+  for p in "$@"; do
+    case $p in "$WORK"/?*) rm -rf -- "$p" ;; *) echo "refusing to remove $p" >&2; return 1 ;; esac
+  done
+}
 exec 9>"$WORK/lock"
 flock -n 9 || { echo "another run holds $WORK/lock" >&2; exit 2; }
 
 REPORT="$WORK/report.txt"
 : >"$REPORT"
 FAILS=0
+CLEANUP_FAILED=0
 t0=$(date +%s)
 say() { printf '%s\n' "$*" | tee -a "$REPORT"; }
 step() { say ""; say "== [$(($(date +%s) - t0))s] $*"; }
@@ -108,32 +135,68 @@ DB="$WORK/data/ghosttree.db"
 BRIDGE_IP=$(incus network get "$BRIDGE" ipv4.address 2>/dev/null | cut -d/ -f1)
 BRIDGE_NET=$(incus network get "$BRIDGE" ipv4.address 2>/dev/null)
 BRIDGE_NET=${BRIDGE_NET%.*}.0/24
-[ -n "$BRIDGE_IP" ] || { echo "cannot read ipv4.address of $BRIDGE" >&2; exit 2; }
+if ! printf '%s' "$BRIDGE_IP" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}$'; then
+  echo "cannot read an IPv4 ipv4.address of $BRIDGE (got '$BRIDGE_IP')" >&2; exit 2
+fi
 
 UFW_ADDED=()
-ufw_rule() { # ufw_rule add|del ARGS...
-  local op=$1; shift
-  if [ "$op" = add ]; then sudo -n ufw allow "$@" >/dev/null 2>&1; else sudo -n ufw delete allow "$@" >/dev/null 2>&1; fi
+UFW_TAG=gt-fresh-vm
+# One function per rule so every value stays a separate, quoted argument.
+ufw_dhcp() { # add|del
+  if [ "$1" = add ]; then
+    sudo -n ufw allow in on "$BRIDGE" to any port 67 proto udp comment "$UFW_TAG-dhcp"
+  else
+    sudo -n ufw delete allow in on "$BRIDGE" to any port 67 proto udp
+  fi
+}
+ufw_srv() { # add|del
+  if [ "$1" = add ]; then
+    sudo -n ufw allow in on "$BRIDGE" from "$BRIDGE_NET" to "$BRIDGE_IP" port "$PORT" proto tcp comment "$UFW_TAG-server"
+  else
+    sudo -n ufw delete allow in on "$BRIDGE" from "$BRIDGE_NET" to "$BRIDGE_IP" port "$PORT" proto tcp
+  fi
 }
 setup_ufw() {
   command -v ufw >/dev/null || return 0
   sudo -n ufw status 2>/dev/null | grep -q "Status: active" || return 0
-  local rules=(
-    "in on $BRIDGE to any port 67 proto udp comment gt-fresh-vm-dhcp"
-    "in on $BRIDGE from $BRIDGE_NET to $BRIDGE_IP port $PORT proto tcp comment gt-fresh-vm-server"
-  )
-  local r
-  for r in "${rules[@]}"; do
-    # shellcheck disable=SC2086
-    if ufw_rule add $r; then UFW_ADDED+=("${r% comment *}"); else
-      info "ufw is active and sudo -n failed; run: sudo ufw allow $r"
+  local r out
+  for r in dhcp srv; do
+    # A rule that is already there is not ours to remove afterwards.
+    if out=$(ufw_"$r" add 2>&1); then
+      case $out in
+        *"existing rule"*) info "ufw rule '$r' already existed, left in place" ;;
+        *) UFW_ADDED+=("$r") ;;
+      esac
+    else
+      info "ufw is active and the rule '$r' could not be added (sudo -n failed?): $out"
     fi
   done
 }
+# Delete every rule carrying the gt-fresh-vm comment, highest number first.
+ufw_cleanup() {
+  local n found=0
+  while read -r n; do
+    [ -n "$n" ] || continue
+    found=1
+    sudo -n ufw --force delete "$n" >/dev/null 2>&1 || echo "could not delete ufw rule $n" >&2
+  done < <(sudo -n ufw status numbered 2>/dev/null | sed -n "s/^\[ *\([0-9]*\)\].*# $UFW_TAG.*/\1/p" | sort -rn)
+  [ "$found" = 1 ] && echo "removed ufw rules tagged $UFW_TAG" || echo "no ufw rules tagged $UFW_TAG"
+}
 
-kill_pidfile() { [ -f "$1" ] && kill "$(cat "$1")" 2>/dev/null; rm -f "$1"; return 0; }
-stop_server() { kill_pidfile "$WORK/server.pid"; }
-stop_fwd() { kill_pidfile "$WORK/fwd.pid"; }
+# Kill only a process whose command line still names what we started.
+kill_pidfile() { # kill_pidfile PIDFILE EXPECTED_SUBSTRING
+  local pid
+  [ -f "$1" ] || return 0
+  pid=$(cat "$1")
+  case $pid in '' | *[!0-9]*) rm -f "$1"; return 0 ;; esac
+  if [ -r "/proc/$pid/cmdline" ] && tr '\0' ' ' <"/proc/$pid/cmdline" | grep -q -- "$2"; then
+    kill "$pid" 2>/dev/null
+  fi
+  rm -f "$1"
+  return 0
+}
+stop_server() { kill_pidfile "$WORK/server.pid" "$WORK/ctx"; }
+stop_fwd() { kill_pidfile "$WORK/fwd.pid" tcpfwd.py; }
 cleanup() {
   stop_server
   stop_fwd
@@ -141,10 +204,14 @@ cleanup() {
   if [ "${GT_KEEP_UFW:-0}" != 1 ]; then
     local r
     for r in "${UFW_ADDED[@]:-}"; do
-      # shellcheck disable=SC2086
-      [ -n "$r" ] && ufw_rule del $r
+      [ -n "$r" ] || continue
+      ufw_"$r" del >/dev/null 2>&1 || {
+        echo "FAIL  could not remove ufw rule '$r'; run: $0 --cleanup" | tee -a "$REPORT" >&2
+        CLEANUP_FAILED=1
+      }
     done
   fi
+  [ "$CLEANUP_FAILED" = 1 ] && exit 1
 }
 trap cleanup EXIT
 
@@ -160,7 +227,7 @@ build() {
 
 start_server() {
   stop_server
-  rm -rf "$WORK/data" "$HOST_HOME"
+  safe_rm "$WORK/data" "$HOST_HOME"
   mkdir -p "$WORK/data" "$HOST_HOME/.config/ghosttree"
   GHOSTTREE_ENFORCE_ACCESS=1 GHOSTTREE_DIST_DIR="$WORK/dist" \
     sh -c 'echo $$ >"$1"; exec "$2" serve --db "$3" --listen "127.0.0.1:$4"' _ "$WORK/server.pid" "$WORK/ctx" "$DB" "$PORT" \
@@ -345,7 +412,7 @@ run_scenario() { # run_scenario NAME PRECLAIMED_MACHINE BUS(1|0)
   if accept_invitation; then pass "pairing page shows: $INSTALL_CMD"; else fail "accept invitation / read command"; return; fi
   case $INSTALL_CMD in
     "curl -fsSL $SERVER_URL/install.sh | sh -s -- --pair "*) pass "command points at the server and has a pairing code" ;;
-    *) fail "unexpected command shape: $INSTALL_CMD" ;;
+    *) fail "unexpected command shape, not running it: $INSTALL_CMD"; return ;;
   esac
 
   step "scenario '$name': run exactly that command in the VM as $VM_USER"
@@ -453,6 +520,7 @@ print(c)'
 
 # --------------------------------------------------------------------- main
 say "fresh-vm e2e on $(git -C "$SRC" rev-parse --short HEAD) ($(git -C "$SRC" rev-parse --abbrev-ref HEAD)), server $SERVER_URL, VM $VM, $(date -u +%FT%TZ)"
+[ "$CLEANUP" = 1 ] && { ufw_cleanup; exit 0; }
 build
 setup_ufw
 [ "$CREATE_VM" = 1 ] && { vm_create || { echo "VM creation failed" >&2; exit 1; }; }
