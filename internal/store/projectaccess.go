@@ -298,8 +298,9 @@ type ProjectAccess struct {
 	writers   map[string]map[string]bool
 
 	ownersOnce   sync.Once
-	ownerNames   map[string]string
-	ownerDefault string
+	ownerIDs     map[string]int64
+	ownerDefault int64
+	authorIDs    map[string]int64
 
 	checks atomic.Int32
 	loads  atomic.Int32

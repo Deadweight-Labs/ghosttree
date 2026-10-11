@@ -170,48 +170,77 @@ func (a *ProjectAccess) ownNoteOnUnclaimedMachine(obj Object, act Action) bool {
 	return false
 }
 
-// machineOwnerNames: Maschinenname -> Name des Kontos, dem sie gehört, und der
-// Name des Instanz-Owners für Namen ohne Zeile (Altbestand).
-func (s *Store) machineOwnerNames() (map[string]string, string) {
+// machineDeliveryIndex: Maschinenname -> Konto-Id des Besitzers, die Konto-Id des
+// Instanz-Owners (für Namen ohne Zeile und Altbestand) und Personenname ->
+// Konto-Id. Ein Name zählt in Kleinschreibung, mit dem heutigen Namen eines
+// Kontos und seinen früheren aus person_name_history; der heutige Name gewinnt,
+// wenn ein alter Name inzwischen ein anderes Konto trägt.
+func (s *Store) machineDeliveryIndex() (map[string]int64, int64, map[string]int64) {
 	if s.reader != nil {
-		return s.reader.machineOwnerNames()
+		return s.reader.machineDeliveryIndex()
 	}
 	owner := instanceOwnerID(s.db)
-	var ownerName string
-	_ = s.db.QueryRow(`SELECT name FROM persons WHERE id=?`, owner).Scan(&ownerName)
-	out := map[string]string{}
-	rows, err := s.db.Query(`SELECT m.hostname, COALESCE(p.name,'') FROM machines m
-		LEFT JOIN persons p ON p.id = CASE WHEN m.account_id=0 THEN ? ELSE m.account_id END`, owner)
-	if err != nil {
-		return out, ownerName
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var host, name string
-		if rows.Scan(&host, &name) == nil {
-			out[canonicalMachine(host)] = name
+	owners := map[string]int64{}
+	if rows, err := s.db.Query(`SELECT hostname, account_id FROM machines`); err == nil {
+		for rows.Next() {
+			var host string
+			var id int64
+			if rows.Scan(&host, &id) == nil {
+				owners[canonicalMachine(host)] = effectiveOwner(id, owner)
+			}
 		}
+		rows.Close()
 	}
-	return out, ownerName
+	names := map[string]int64{}
+	if rows, err := s.db.Query(`SELECT person_id, old_name FROM person_name_history`); err == nil {
+		for rows.Next() {
+			var id int64
+			var name string
+			if rows.Scan(&id, &name) == nil {
+				names[strings.ToLower(strings.TrimSpace(name))] = id
+			}
+		}
+		rows.Close()
+	}
+	if rows, err := s.db.Query(`SELECT id, name FROM persons`); err == nil {
+		for rows.Next() {
+			var id int64
+			var name string
+			if rows.Scan(&id, &name) == nil {
+				names[strings.ToLower(strings.TrimSpace(name))] = id
+			}
+		}
+		rows.Close()
+	}
+	return owners, owner, names
 }
 
-// machineAuthorDelivers: Wissen für eine Maschine (ohne Projekt) wird nur
-// ausgeliefert, wenn sein Autor zum Zeitpunkt der Auslieferung Besitzer der
-// Maschine ist. Sonst könnte ein Konto eine Anweisung auf einen noch freien
-// Maschinennamen legen, und wer den Namen später beansprucht, bekäme sie als
-// bindende Anweisung. Einträge ohne Autor (Destillat, Betreiberpfade) und der
-// Altbestand des Instanz-Owners bleiben wie bisher; der Eintrag bleibt für
-// seinen Autor sichtbar, wird nur nicht zugestellt.
+// machineAuthorDelivers: Wissen für eine Maschine wird nur ausgeliefert, wenn
+// sein Autor zum Zeitpunkt der Auslieferung Besitzer der Maschine ist. Sonst
+// könnte ein Konto eine Anweisung auf einen noch freien Maschinennamen legen,
+// und wer den Namen später beansprucht, bekäme sie als bindende Anweisung.
+//
+// Der Autor wird ohne Groß-/Kleinschreibung und über frühere Kontonamen
+// gefunden. Ein Autor, der auf kein Konto zeigt (Altbestand mit dem Label
+// "claude"), gehört dem Instanz-Owner wie der Rest des Altbestands. Ein Eintrag
+// ganz ohne Autor (Destillat) wird wie bisher ausgeliefert. Der Eintrag bleibt
+// für seinen Autor sichtbar, wird nur nicht zugestellt.
 func (a *ProjectAccess) machineAuthorDelivers(k Knowledge) bool {
-	if k.Person == "" {
+	if strings.TrimSpace(k.Person) == "" {
+		// Distilled entries carry no author and belong to the machine they were
+		// distilled on; they keep reaching it.
 		return true
 	}
-	a.ownersOnce.Do(func() { a.ownerNames, a.ownerDefault = a.st.machineOwnerNames() })
-	owner, claimed := a.ownerNames[canonicalMachine(k.Scope.Machine)]
+	a.ownersOnce.Do(func() { a.ownerIDs, a.ownerDefault, a.authorIDs = a.st.machineDeliveryIndex() })
+	author, known := a.authorIDs[strings.ToLower(strings.TrimSpace(k.Person))]
+	if !known {
+		author = a.ownerDefault
+	}
+	owner, claimed := a.ownerIDs[canonicalMachine(k.Scope.Machine)]
 	if !claimed {
 		owner = a.ownerDefault
 	}
-	return owner == k.Person
+	return owner == author
 }
 
 // MayMakeGlobal: ein Eintrag aus einem Projekt wird nur von Lead aufwärts (oder
