@@ -24,7 +24,11 @@ type CoordMessagePresentation struct {
 	Reply       *CoordReplyPreview
 	ReplyCount  int64
 	Mentions    []string
-	Refs        []CoordRef
+	// MentionLabels: Name der erwähnten Personen (Principal-ID -> Kontoname).
+	// Wer den Raum lesen darf und kein Gast ist, darf die Namen der
+	// Raumteilnehmer sehen; ein Gast bekommt keine (siehe Autor-Etikett).
+	MentionLabels map[string]string
+	Refs          []CoordRef
 	Delivery    CoordDeliverySummary
 }
 
@@ -148,6 +152,27 @@ func coordMessagePresentationsTx(tx *sql.Tx, kind, destinationID string, message
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
+	}
+	if !guest {
+		for i := range out {
+			for _, mention := range out[i].Mentions {
+				personID, perr := parsePersonPrincipalID(mention)
+				if perr != nil {
+					continue
+				}
+				var name string
+				if tx.QueryRow(`SELECT name FROM persons WHERE id=?`, personID).Scan(&name) != nil {
+					continue
+				}
+				if name = NormalizeAccountName(name); name == "" {
+					continue
+				}
+				if out[i].MentionLabels == nil {
+					out[i].MentionLabels = map[string]string{}
+				}
+				out[i].MentionLabels[mention] = name
+			}
+		}
 	}
 
 	rows, err = tx.Query(`SELECT m.id,r.ref_kind,r.ref_id,r.ref_revision FROM coord_messages m

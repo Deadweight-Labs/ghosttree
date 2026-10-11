@@ -563,6 +563,12 @@ func buildCoordMessageViews(messages []store.CoordMessagePresentation, roomKey s
 		view.Name, view.Machine = coordSplitAgentName(shown, message.AuthorKind)
 		view.Initials = coordInitials(readableAuthor(author))
 		for _, mention := range presentation.Mentions {
+			// The store names people the viewer may see in this room; the sender
+			// reads the name of whom he mentioned, not "Someone".
+			if name := strings.TrimSpace(presentation.MentionLabels[mention]); name != "" {
+				view.Mentions = append(view.Mentions, name)
+				continue
+			}
 			view.Mentions = append(view.Mentions, coordIdentityLabel(mention, labels))
 		}
 		view.MentionsText = coordJoinNames(view.Mentions)
