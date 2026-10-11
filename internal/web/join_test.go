@@ -547,6 +547,12 @@ func TestJoinSignedInPageNamesTheAccountAndOffersSignOut(t *testing.T) {
 	if strings.Contains(text, "person:") {
 		t.Fatal("the page shows an internal id")
 	}
+	// The confirmation only says "this is the person who is signed in". It comes
+	// ticked, so the button never does nothing for a person who has not seen the
+	// box (acceptance finding 7).
+	if !regexp.MustCompile(`<input type="checkbox" name="confirm_account"[^>]*\bchecked\b`).MatchString(text) {
+		t.Fatalf("the confirmation is not ticked by default: %s", text)
+	}
 	csrf := regexp.MustCompile(`name="csrf_token" value="([^"]+)"`).FindStringSubmatch(text)[1]
 	// Ohne Bestätigung des Kontonamens wird nichts verbraucht.
 	for _, confirm := range []string{"", "someone-else"} {
