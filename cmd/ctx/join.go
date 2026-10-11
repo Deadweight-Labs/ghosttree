@@ -44,7 +44,7 @@ var (
 	joinCanOpen     = canOpenBrowser
 	joinDetect      = detectHarnesses
 	joinInstall     = cmdInstall
-	joinCollector   = installCollector
+	joinCollector   = joinInstallCollector
 	joinTimeout     = joinDefaultTimeout
 
 	startCallbackFunc = startCallback
@@ -418,6 +418,19 @@ func detectHarnesses() []string {
 	return found
 }
 
+// joinInstallCollector sets up the collector service for the ctx that is
+// running now: join, unlike install, has not pinned that path yet, and without
+// an absolute one the service would silently be skipped.
+func joinInstallCollector(w io.Writer, home string) int {
+	restore, err := useRunningCtx(home)
+	defer restore()
+	if err != nil {
+		fmt.Fprintf(w, "collector   not set up: %v\n", err)
+		return 1
+	}
+	return installCollector(w, home)
+}
+
 // harnessPresent: the harness has a config directory in the home directory or
 // its command is on PATH. join and doctor share this test.
 func harnessPresent(h, home string) bool {
@@ -632,7 +645,7 @@ func cmdJoin(args []string, stdout io.Writer) int {
 	// picks up sessions as soon as one appears.
 	if !*noWatch {
 		var coll bytes.Buffer
-		if joinCollector(&coll, home) == 0 && !strings.Contains(coll.String(), "not started") {
+		if joinCollector(&coll, home) == 0 && strings.Contains(coll.String(), "collector running") {
 			fmt.Fprintln(stdout, "Collector running.")
 		} else {
 			for _, line := range strings.Split(strings.TrimSpace(coll.String()), "\n") {

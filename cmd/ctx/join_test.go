@@ -103,7 +103,11 @@ func newJoinFixture(t *testing.T, answers ...string) *joinFixture {
 	t.Cleanup(func() {
 		joinTTY, joinOpenBrowser, joinDetect, joinInstall, joinTimeout, joinHasDisplay, joinCanOpen, joinCollector = oldTTY, oldOpen, oldDetect, oldInstall, oldTimeout, oldDisplay, oldCan, oldColl
 	})
-	joinCollector = func(io.Writer, string) int { f.collectors++; return 0 }
+	joinCollector = func(w io.Writer, _ string) int {
+		f.collectors++
+		io.WriteString(w, "collector running\n")
+		return 0
+	}
 	joinTTY = func() (terminal, error) { return f.tty, nil }
 	joinOpenBrowser = func(u string) error { f.opened = append(f.opened, u); return nil }
 	joinDetect = func() []string { return f.detected }
@@ -1733,6 +1737,23 @@ func TestJoinShowsWhyTheCollectorDidNotStart(t *testing.T) {
 	text := out.String()
 	if strings.Contains(text, "Collector running.") || !strings.Contains(text, "loginctl enable-linger $USER") {
 		t.Fatalf("collector failure not shown:\n%s", text)
+	}
+}
+
+func TestJoinDoesNotClaimTheCollectorRunsWhenItWasSkipped(t *testing.T) {
+	f := newJoinFixture(t)
+	f.detected = nil
+	joinCollector = func(w io.Writer, _ string) int {
+		io.WriteString(w, "collector service skipped: ctx path is not absolute\n")
+		return 0
+	}
+	srv := loopbackServer(t, func(_ int, state string) string { return "/callback?code=auth-code&state=" + state })
+	var out syncBuffer
+	if code := cmdJoin([]string{"--server", srv.URL, "--pair", "abcd-efgh", "--name", "box", "--yes"}, &out); code != 0 {
+		t.Fatalf("exit %d: %s", code, out.String())
+	}
+	if text := out.String(); strings.Contains(text, "Collector running.") || !strings.Contains(text, "skipped") {
+		t.Fatalf("skipped collector reported as running:\n%s", text)
 	}
 }
 
