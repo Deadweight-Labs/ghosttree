@@ -4,7 +4,7 @@
 # machine with a running collector.
 #
 #   scripts/e2e/fresh-vm.sh [--server-url http://127.0.0.1:18480] [--vm gt-fresh]
-#                           [--scenario all|plain|taken] [--create-vm] [--keep-vm-running]
+#                           [--scenario all|plain|taken|nobus] [--src DIR] [--create-vm] [--keep-vm-running]
 #
 # What it does, per scenario (the VM is reset to its snapshot "clean" first):
 #   1. builds the ctx archives (scripts/build-dist.sh) and a ctx for the host,
@@ -17,8 +17,13 @@
 #      on PATH, approves the machine on the pairing page with the code ctx prints,
 #   5. checks doctor, hook/MCP paths, the collector service, a fake Claude
 #      transcript reaching the server, and a VM reboot with linger.
+# The VM user has a login session (linger) before the join, as a person on a
+# terminal has. There is no Claude Code or Codex yet: the join must still leave
+# the collector running, and `ctx doctor` without argument must be green.
 # Scenario "taken": the machine name equals one that another account already
 # holds; ctx join must pick a free name and not abort.
+# Scenario "nobus": no user session bus at join time; the output must name the
+# fix (loginctl enable-linger $USER, then ctx install watch), which is then run.
 # No Claude Code is installed in the VM; `ctx install claude` runs against an
 # empty ~/.claude.
 #
@@ -49,12 +54,15 @@ IMAGE=${GT_IMAGE:-images:ubuntu/24.04}
 VM_USER=robin
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO=$(cd "$HERE/../.." && pwd)
+# The tree the server and ctx archives are built from (default: this checkout).
+SRC=${GT_SRC:-$REPO}
 
 while [ $# -gt 0 ]; do
   case $1 in
     --server-url) SERVER_URL=$2; shift 2 ;;
     --vm) VM=$2; shift 2 ;;
     --scenario) SCENARIO=$2; shift 2 ;;
+    --src) SRC=$2; shift 2 ;;
     --create-vm) CREATE_VM=1; shift ;;
     --keep-vm-running) KEEP_VM=1; shift ;;
     -h | --help) sed -n '2,/^set -uo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -68,7 +76,7 @@ case $SERVER_URL in
 esac
 SERVER_URL=${SERVER_URL/localhost/127.0.0.1}
 PORT=${SERVER_URL##*:}
-case $SCENARIO in all | plain | taken) ;; *) echo "--scenario: all|plain|taken" >&2; exit 2 ;; esac
+case $SCENARIO in all | plain | taken | nobus) ;; *) echo "--scenario: all|plain|taken|nobus" >&2; exit 2 ;; esac
 
 for t in incus go curl python3 sqlite3 git; do
   command -v "$t" >/dev/null || { echo "missing tool: $t" >&2; exit 2; }
@@ -141,8 +149,8 @@ cleanup() {
 trap cleanup EXIT
 
 build() {
-  step "build: ctx archives (scripts/build-dist.sh) and host ctx from $(git -C "$REPO" rev-parse --short HEAD)"
-  if ! ( cd "$REPO" && VERSION="0.0.0-vmtest" sh scripts/build-dist.sh "$WORK/dist" >"$WORK/build.log" 2>&1 \
+  step "build: ctx archives (scripts/build-dist.sh) and host ctx from $(git -C "$SRC" rev-parse --short HEAD) in $SRC"
+  if ! ( cd "$SRC" && VERSION="0.0.0-vmtest" sh scripts/build-dist.sh "$WORK/dist" >"$WORK/build.log" 2>&1 \
         && go build -o "$WORK/ctx" ./cmd/ctx >>"$WORK/build.log" 2>&1 ); then
     tail -20 "$WORK/build.log" | indent
     echo "build failed" >&2; exit 1
@@ -314,8 +322,8 @@ wait_sql() {
 }
 
 # ---------------------------------------------------------------- scenarios
-run_scenario() { # run_scenario NAME PRECLAIMED_MACHINE
-  local name=$1 pre=$2 cts
+run_scenario() { # run_scenario NAME PRECLAIMED_MACHINE BUS(1|0)
+  local name=$1 pre=$2 bus=$3 cts
   step "scenario '$name': fresh server, accounts, organization, invitation"
   start_server || { fail "server start"; return; }
   start_fwd
@@ -323,6 +331,11 @@ run_scenario() { # run_scenario NAME PRECLAIMED_MACHINE
   vm_reset || { fail "VM reset"; return; }
   pass "VM reset to '$SNAP' and reachable"
   local before
+  if [ "$bus" = 1 ]; then
+    vmroot loginctl enable-linger "$VM_USER"
+    for i in $(seq 1 20); do vmroot test -S "/run/user/$vmid/bus" && break; sleep 1; done
+    check "user session bus present before the join (login session)" vmroot test -S "/run/user/$vmid/bus"
+  fi
   before=$(vmx sh -c 'ls -A ~ | tr "\n" " "')
   info "VM home before install: $before"
   if vmx sh -c 'command -v ctx curl sha256sum' >"$WORK/pre.out" 2>&1; then :; fi
@@ -369,18 +382,28 @@ run_scenario() { # run_scenario NAME PRECLAIMED_MACHINE
   [ "$row" = "${machine:-x}|2" ] && pass "server lists machine '$machine' for account freund (id 2)" || fail "server machines row: '${row:-none}'"
   check "ctx status reports server reachable" bash -c "incus exec '$VM' --user $vmid --env HOME=/home/$VM_USER -- /home/$VM_USER/.local/bin/ctx status | grep -q 'server .*reachable'"
   info "after join, before any harness: $(vmx /home/$VM_USER/.local/bin/ctx status 2>&1 | grep -E '^(watch|claude|codex)' | tr -s ' ' | tr '\n' ';')"
-  grep -q 'not found on this machine' "$WORK/join.log" && info "HURDLE: join on a machine without Claude/Codex sets nothing up, collector not installed"
+  if [ "$bus" = 1 ]; then
+    grep -q '^Collector running\.' "$WORK/join.log" && pass "join output: Collector running." || fail "join output has no 'Collector running.'"
+    grep -q 'Install Claude Code or Codex, then run: .*install claude|codex' "$WORK/join.log" && pass "join output names the next step for the agent" || fail "join output has no 'Install Claude Code or Codex' line"
+    check "collector service active right after the join, without any agent installed" bash -c "[ \"\$(incus exec '$VM' --user $vmid --env XDG_RUNTIME_DIR=/run/user/$vmid -- systemctl --user is-active ghosttree-watch)\" = active ]"
+    step "scenario '$name': ctx doctor without argument on the machine as joined (no agent installed)"
+    vmx /home/$VM_USER/.local/bin/ctx doctor >"$WORK/doctor0.out" 2>&1; local drc=$?
+    indent <"$WORK/doctor0.out"
+    [ "$drc" = 0 ] && pass "ctx doctor (no argument) exit 0" || fail "ctx doctor (no argument) exit $drc"
+    ! grep -q ' FAIL ' "$WORK/doctor0.out" && pass "ctx doctor (no argument): no FAIL lines" || fail "ctx doctor (no argument) has FAIL lines"
+    for h in claude codex opencode; do
+      grep -q "^$h: not installed (skipped)" "$WORK/doctor0.out" && pass "doctor skips $h" || fail "doctor has no skip line for $h"
+    done
+  else
+    grep -q 'loginctl enable-linger \$USER' "$WORK/join.log" && pass "no user bus: join output names 'loginctl enable-linger \$USER'" || fail "no user bus and no linger hint in the join output"
+    grep -q 'install watch' "$WORK/join.log" && pass "no user bus: hint names 'ctx install watch'" || fail "hint lacks 'install watch'"
+  fi
 
-  step "scenario '$name': ctx doctor on the machine as joined"
-  vmx /home/$VM_USER/.local/bin/ctx doctor >"$WORK/doctor0.out" 2>&1; local drc=$?
-  info "ctx doctor (all harnesses, none installed) exit $drc: $(grep -c ' FAIL ' "$WORK/doctor0.out") FAIL lines"
-
-  step "scenario '$name': ctx install claude against an empty ~/.claude (no user session bus yet)"
+  step "scenario '$name': ctx install claude against an empty ~/.claude"
   vmx mkdir -p /home/$VM_USER/.claude
   vmx /home/$VM_USER/.local/bin/ctx install claude >"$WORK/install-claude.out" 2>&1; local irc=$?
   indent <"$WORK/install-claude.out"
   [ "$irc" = 0 ] && pass "ctx install claude exit 0" || fail "ctx install claude exit $irc"
-  grep -q 'collector not started' "$WORK/install-claude.out" && info "without a user bus: $(grep 'collector not started' "$WORK/install-claude.out" | sed 's/.*collector not started/collector not started/' | cut -c1-120)"
   check "settings.json hook commands are absolute paths" vmx python3 -c '
 import json,sys
 s=json.load(open("/home/robin/.claude/settings.json"))
@@ -393,10 +416,12 @@ c=json.load(open("/home/robin/.claude.json"))["mcpServers"]["ghosttree"]["comman
 assert c.startswith("/"), c
 print(c)'
 
-  step "scenario '$name': login session (linger), collector service"
-  vmroot loginctl enable-linger "$VM_USER"
-  for i in $(seq 1 20); do vmroot test -S "/run/user/$vmid/bus" && break; sleep 1; done
-  vmx /home/$VM_USER/.local/bin/ctx install watch 2>&1 | indent
+  step "scenario '$name': collector service"
+  if [ "$bus" != 1 ]; then
+    vmroot loginctl enable-linger "$VM_USER"
+    for i in $(seq 1 20); do vmroot test -S "/run/user/$vmid/bus" && break; sleep 1; done
+    vmx /home/$VM_USER/.local/bin/ctx install watch 2>&1 | indent
+  fi
   check "ghosttree-watch.service active" bash -c "[ \"\$(incus exec '$VM' --user $vmid --env XDG_RUNTIME_DIR=/run/user/$vmid -- systemctl --user is-active ghosttree-watch)\" = active ]"
   vmx /home/$VM_USER/.local/bin/ctx doctor claude >"$WORK/doctor1.out" 2>&1; drc=$?
   say "--- ctx doctor claude ---"; indent <"$WORK/doctor1.out"
@@ -412,7 +437,7 @@ print(c)'
   local q="select machine||'|'||msg_count from sessions where external_id='fake-$name' and account_id=2 and msg_count>=2"
   if row=$(wait_sql 100 "$q"); then pass "session fake-$name on the server within the poll window: $row"; else fail "fake session did not reach the server in 100 s (collector polls every 30 s)"; tail -5 "$WORK/server.log" | cut -c1-200 | indent; fi
 
-  if [ -z "$pre" ]; then
+  if [ -z "$pre" ] && [ "$bus" = 1 ]; then
     step "scenario '$name': VM reboot, linger keeps the collector"
     incus restart "$VM" || fail "VM restart"
     vm_wait_agent; vm_wait_net
@@ -427,12 +452,13 @@ print(c)'
 }
 
 # --------------------------------------------------------------------- main
-say "fresh-vm e2e on $(git -C "$REPO" rev-parse --short HEAD) ($(git -C "$REPO" rev-parse --abbrev-ref HEAD)), server $SERVER_URL, VM $VM, $(date -u +%FT%TZ)"
+say "fresh-vm e2e on $(git -C "$SRC" rev-parse --short HEAD) ($(git -C "$SRC" rev-parse --abbrev-ref HEAD)), server $SERVER_URL, VM $VM, $(date -u +%FT%TZ)"
 build
 setup_ufw
 [ "$CREATE_VM" = 1 ] && { vm_create || { echo "VM creation failed" >&2; exit 1; }; }
-case $SCENARIO in all | plain) run_scenario plain "" ;; esac
-case $SCENARIO in all | taken) run_scenario taken "$VM" ;; esac
+case $SCENARIO in all | plain) run_scenario plain "" 1 ;; esac
+case $SCENARIO in all | taken) run_scenario taken "$VM" 1 ;; esac
+case $SCENARIO in all | nobus) run_scenario nobus "" 0 ;; esac
 
 step "summary ($(($(date +%s) - t0)) s)"
 if [ "$FAILS" = 0 ]; then say "ALL CHECKS PASSED"; else say "$FAILS CHECK(S) FAILED"; fi
