@@ -57,7 +57,7 @@ type KnowledgeWindow struct {
 	// GlobalAccount und GlobalPersons: Einträge ohne Projekt gehören ihrem Autor,
 	// dem Konto aus knowledge_authors oder, ohne diese Zeile, dem Label.
 	GlobalAccount int64
-	GlobalPersons []string
+	GlobalOwner   bool
 	Limit         int
 	Offset        int
 }
@@ -83,15 +83,9 @@ func (s *Store) KnowledgeWindow(w KnowledgeWindow) ([]Knowledge, error) {
 		args = append(args, w.Since)
 	}
 	if w.Restrict {
-		own := `id IN (SELECT knowledge_id FROM knowledge_authors WHERE account_id=?)`
-		args = append(args, w.GlobalAccount)
-		if len(w.GlobalPersons) > 0 {
-			own += ` OR (id NOT IN (SELECT knowledge_id FROM knowledge_authors) AND person IN (` + placeholders(len(w.GlobalPersons)) + `))`
-			for _, p := range w.GlobalPersons {
-				args = append(args, p)
-			}
-		}
-		clause := `(project='' AND (` + own + `))`
+		own, gargs := ownKnowledgeSQL("", w.GlobalAccount, w.GlobalOwner)
+		args = append(args, gargs...)
+		clause := `(project='' AND machine='' AND ` + own + `)`
 		if len(w.Projects) > 0 {
 			clause += ` OR project IN (` + placeholders(len(w.Projects)) + `)`
 			for _, p := range w.Projects {

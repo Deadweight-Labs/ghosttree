@@ -517,6 +517,10 @@ CREATE INDEX IF NOT EXISTS knowledge_versions_entry
 -- heißt: Altbestand vor Konten oder ein Destillat.
 CREATE TABLE IF NOT EXISTS knowledge_authors(
   knowledge_id INTEGER PRIMARY KEY, account_id INTEGER NOT NULL);
+-- Dasselbe für Aufträge. account_id 0: ohne Besitzer, nur der Instanz-Owner sieht
+-- einen globalen Auftrag so. Gelesen wird nur diese Id, nie der Name.
+CREATE TABLE IF NOT EXISTS request_authors(
+  request_id INTEGER PRIMARY KEY, account_id INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS knowledge_moves(
   id INTEGER PRIMARY KEY,
   knowledge_id INTEGER NOT NULL,
@@ -1001,6 +1005,10 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 		return nil, err
 	}
 	if err := migrateOrgs(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := backfillAuthors(db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}

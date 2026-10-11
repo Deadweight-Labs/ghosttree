@@ -47,7 +47,7 @@ func (a *ProjectAccess) RequestDetailView(d requestdomain.Detail) requestdomain.
 	// Aufträgen), braucht die echten Arbeits-Ids, um Arbeit abzuschließen; neu
 	// vergebene träfen fremde Zeilen. Gefiltert wird auch dann, nur diese Ids
 	// bleiben (Aktivität und Beleg werden immer neu nummeriert).
-	keepIDs := numbers || a.Decide(project, ResRequest, ActWork, Object{Own: a.IsAuthor(d.Request.Person), Person: d.Request.Person}).Allowed
+	keepIDs := numbers || a.Decide(project, ResRequest, ActWork, Object{Own: a.ownsRequest(d.Request.ID), RequestID: d.Request.ID}).Allowed
 	// Alles, was an einer Session hängt, bleibt nur, wenn sie lesbar ist, und
 	// wird sonst ganz weggelassen: ein Platzhalter ließe sich mitzählen. Die
 	// laufenden Nummern von Arbeit, Beleg und Aktivität werden neu vergeben,

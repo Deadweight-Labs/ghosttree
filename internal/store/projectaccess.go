@@ -87,11 +87,11 @@ type Object struct {
 	// nicht freigegebener, distillierter Eintrag stammt; er darf ihn freigeben
 	// oder verwerfen, nie verifizieren.
 	OriginOwner bool
-	// Person und EntryID bestimmen bei Objekten ohne Projekt den Autor: EntryID
-	// ist die Wissens-Id (Autor-Konto aus knowledge_authors), Person das Label
-	// des Autors für Altbestand und Aufträge. Beides leer heißt autorlos.
-	Person  string
-	EntryID int64
+	// EntryID (Wissen) und RequestID (Auftrag) bestimmen bei Objekten ohne Projekt
+	// den Autor: die Konto-Id aus knowledge_authors und request_authors, nie ein
+	// Name. Beides 0 heißt ohne Besitzer.
+	EntryID   int64
+	RequestID int64
 }
 
 // Decision ist das Ergebnis der Matrix.
@@ -315,11 +315,11 @@ type ProjectAccess struct {
 	unclaimed map[string]bool
 	writers   map[string]map[string]bool
 
-	ownersOnce   sync.Once
-	ownerIDs     map[string]int64
-	ownerDefault int64
-	authorIDs    map[string]int64
-	entryAuthors map[int64]int64
+	ownersOnce     sync.Once
+	ownerIDs       map[string]int64
+	ownerDefault   int64
+	entryAuthors   map[int64]int64
+	requestAuthors map[int64]int64
 
 	checks atomic.Int32
 	loads  atomic.Int32
@@ -550,7 +550,7 @@ func (a *ProjectAccess) Check(project string, res Resource, act Action, obj Obje
 // -------- Hilfen je Ressource
 
 func knowledgeObject(a *ProjectAccess, k Knowledge) Object {
-	obj := Object{Own: a.IsAuthor(k.Person), Confidence: k.Confidence, Machine: k.Scope.Machine, Person: k.Person, EntryID: k.ID}
+	obj := Object{Own: a.ownsKnowledge(k), Confidence: k.Confidence, Machine: k.Scope.Machine, EntryID: k.ID}
 	if ref := knowledgeHeldRef(k); ref != "" {
 		_, obj.OriginOwner = a.heldOrigin(ref)
 	}
@@ -648,7 +648,7 @@ func (a *ProjectAccess) RequestFilter(f requestdomain.SearchFilter) requestdomai
 		return f
 	}
 	f.Restrict, f.Projects = true, a.Projects()
-	f.GlobalPersons = a.ownGlobalPersons()
+	f.GlobalAccount, f.GlobalOwner = a.account, a.IsInstanceOwner()
 	f.UnclaimedAuthor, f.UnclaimedAll = a.principal.Label, a.IsAdmin()
 	// Distillierte, nicht übernommene Requests aus fremden privaten Sessions
 	// bleiben dem Besitzer dieser Session vorbehalten.
@@ -736,13 +736,18 @@ func (a *ProjectAccess) CanDeliverGhost(g GhostFile) bool {
 
 // CanSeeGhost: Lesefilter für Ghost-Listen (der Autor sieht seine eigenen).
 func (a *ProjectAccess) CanSeeGhost(g GhostFile) bool {
-	return a.Allow(g.Project, ResGhost, ActRead, Object{Own: a.IsAuthor(g.Person), Person: g.Person})
+	return a.Allow(g.Project, ResGhost, ActRead, Object{Own: a.IsAuthor(g.Person)})
 }
 
 // CanSeeDocument: Lesefilter für Dokumentlisten.
 func (a *ProjectAccess) CanSeeDocument(d Document) bool {
-	return a.Allow(d.Project, ResDocument, ActRead, Object{Own: a.IsAuthor(d.Person), Person: d.Person})
+	return a.Allow(d.Project, ResDocument, ActRead, Object{Own: a.IsAuthor(d.Person)})
 }
+
+// globalListResource: nur Wissen und Aufträge haben globale Einträge, die sich
+// die Liste selbst auf die eigenen begrenzt; jede andere Ressource ohne Projekt
+// geht wie vorher durch die Matrix.
+func globalListResource(res Resource) bool { return res == ResKnowledge || res == ResRequest }
 
 // GateList entscheidet, ob eine Liste mit ausdrücklichem Projekt überhaupt
 // angefragt werden darf. perEntry sagt, dass der Aufrufer jeden Eintrag danach
@@ -750,7 +755,7 @@ func (a *ProjectAccess) CanSeeDocument(d Document) bool {
 // Filter dem Autor das Seine zeigt und allen anderen nichts.
 func (a *ProjectAccess) GateList(project string, res Resource, perEntry bool) error {
 	project = strings.TrimSpace(project)
-	if project == "" {
+	if project == "" && globalListResource(res) {
 		// Ohne Projekt liest jeder, was ihm gehört: die Liste begrenzt sich selbst
 		// auf die eigenen globalen Einträge (decideGlobal) und die Projekte des Kontos.
 		a.Filtered()

@@ -6,9 +6,9 @@ import "strings"
 // abgelöst, nicht verworfen), neueste zuerst, höchstens limit. project, typ und
 // confidence engen ein, wenn sie gesetzt sind. Die feine Prüfung je Eintrag
 // bleibt beim Aufrufer.
-func (s *Store) BrowseKnowledge(project, typ, confidence string, limit int) ([]Knowledge, error) {
+func (s *Store) BrowseKnowledge(project, typ, confidence string, limit int, viewer ...SessionViewer) ([]Knowledge, error) {
 	if s.reader != nil {
-		return s.reader.BrowseKnowledge(project, typ, confidence, limit)
+		return s.reader.BrowseKnowledge(project, typ, confidence, limit, viewer...)
 	}
 	if limit <= 0 || limit > 400 {
 		limit = 400
@@ -21,8 +21,9 @@ func (s *Store) BrowseKnowledge(project, typ, confidence string, limit int) ([]K
 			args = append(args, f.val)
 		}
 	}
+	cond, args := withGlobalScope(strings.Join(where, ` AND `), args, "", viewer)
 	args = append(args, limit)
-	rows, err := s.db.Query(`SELECT `+knowledgeCols+` FROM knowledge WHERE `+strings.Join(where, ` AND `)+
+	rows, err := s.db.Query(`SELECT `+knowledgeCols+` FROM knowledge WHERE `+cond+
 		` ORDER BY created_at DESC, id DESC LIMIT ?`, args...)
 	if err != nil {
 		return nil, err

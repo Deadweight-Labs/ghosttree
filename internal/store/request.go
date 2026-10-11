@@ -68,6 +68,9 @@ func (s *Store) CreateRequest(in requestdomain.CreateInput) (requestdomain.Detai
 	if _, err := tx.Exec(`INSERT INTO search_documents(kind,domain_id,title,body,project,branch,machine) VALUES('request',?,?,?,?,?,?)`, id, r.Title, r.Description, r.Scope.Project, r.Scope.Branch, r.Scope.Machine); err != nil {
 		return requestdomain.Detail{}, err
 	}
+	if err := recordRequestAuthorTx(tx, id, authorForWriteTx(tx, in.AuthorID, r.Person, r.Origin, r.SessionRef)); err != nil {
+		return requestdomain.Detail{}, err
+	}
 	if err := tx.Commit(); err != nil {
 		return requestdomain.Detail{}, err
 	}
@@ -218,13 +221,10 @@ func requestScopeWhere(filter requestdomain.SearchFilter) ([]string, []any) {
 	}
 	if filter.Restrict {
 		var clauses []string
-		// Aufträge ohne Projekt gehören ihrem Autor (GlobalPersons).
-		if len(filter.GlobalPersons) > 0 {
-			clauses = append(clauses, `(r.project='' AND r.person IN (`+placeholders(len(filter.GlobalPersons))+`))`)
-			for _, p := range filter.GlobalPersons {
-				args = append(args, p)
-			}
-		}
+		// Aufträge ohne Projekt gehören ihrem Autor (Konto-Id).
+		own, gargs := ownRequestSQL("r", filter.GlobalAccount, filter.GlobalOwner)
+		clauses = append(clauses, `(r.project='' AND `+own+`)`)
+		args = append(args, gargs...)
 		if len(filter.Projects) > 0 {
 			clauses = append(clauses, `r.project IN (`+placeholders(len(filter.Projects))+`)`)
 			for _, p := range filter.Projects {
@@ -362,6 +362,11 @@ func (s *Store) CountOpenRequestsFor(v SessionViewer, ax scope.Axes) (int, error
 			  AND hs.shared=0 AND COALESCE(hs.visibility,'') IN ('','private')
 			  AND (CASE WHEN hs.account_id=0 THEN ? ELSE hs.account_id END) != ?))`
 		args = append(args, v.Owner, v.Account)
+		// A request without a project counts only for its author, the instance
+		// owner included for those without an owner.
+		own, oargs := ownRequestSQL("requests", v.Account, v.isInstanceOwner())
+		q += ` AND (project!='' OR ` + own + `)`
+		args = append(args, oargs...)
 	}
 	var count int
 	err := s.db.QueryRow(q, args...).Scan(&count)

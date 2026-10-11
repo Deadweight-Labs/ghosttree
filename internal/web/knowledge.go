@@ -364,9 +364,9 @@ func (a *app) knowledgePage(w http.ResponseWriter, r *http.Request) {
 	if hidden {
 		// Wie ein unbekanntes Projekt: keine Abfrage, leere Liste.
 	} else if q != "" {
-		entries, err = a.store.SearchAllKnowledge(q, scope.Axes{Project: project}, a.overfetch(knowledgeShown))
+		entries, err = a.store.SearchAllKnowledge(q, scope.Axes{Project: project}, a.overfetch(knowledgeShown), pa.Viewer())
 	} else {
-		entries, err = a.store.BrowseKnowledge(project, typ, level, a.overfetch(knowledgeShown))
+		entries, err = a.store.BrowseKnowledge(project, typ, level, a.overfetch(knowledgeShown), pa.Viewer())
 	}
 	if err != nil {
 		http.Error(w, err.Error(), 500)
@@ -394,7 +394,7 @@ func (a *app) knowledgePage(w http.ResponseWriter, r *http.Request) {
 		v.ClearHref += "?project=" + url.QueryEscape(project)
 	}
 	if v.Reviewer && !hidden {
-		pending, perr := a.store.PendingKnowledge(project, a.overfetch(reviewShown))
+		pending, perr := a.store.PendingKnowledge(project, a.overfetch(reviewShown), pa.Viewer())
 		if perr == nil {
 			if n := len(keep(pending, reviewShown, pa.CanSeeKnowledge)); n > 0 {
 				v.Pending = strconv.Itoa(n)
@@ -551,7 +551,7 @@ func (a *app) reviewPage(w http.ResponseWriter, r *http.Request) {
 	var entries []store.Knowledge
 	if !hidden {
 		var err error
-		if entries, err = a.store.PendingKnowledge(project, a.overfetch(reviewShown)); err != nil {
+		if entries, err = a.store.PendingKnowledge(project, a.overfetch(reviewShown), pa.Viewer()); err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}

@@ -904,8 +904,10 @@ func TestUnclaimedRemoteRules(t *testing.T) {
 
 func TestGlobalDocumentsAndRegressionCountStayVisible(t *testing.T) {
 	f := accessAPI(t, true)
-	// Ohne Projekt: wie globales Wissen lesbar statt 404.
-	f.expect(t, "mia", 200, "GET", "/api/documents", nil)
+	// Dokumente gehören immer zu einem Projekt: ohne Projekt gibt es nichts zu
+	// lesen, und die Lockerung der Liste gilt nur für Wissen und Aufträge.
+	f.expect(t, "mia", 404, "GET", "/api/documents", nil)
+	f.expect(t, "mia", 200, "GET", "/api/documents?project="+accProject, nil)
 	// Die Zahl der Unbeurteilten zählt nur Sichtbares.
 	for _, who := range []string{"mia", "nora"} {
 		var out struct {

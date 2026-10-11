@@ -174,9 +174,6 @@ func (a *ProjectAccess) ownNoteOnUnclaimedMachine(obj Object, act Action) bool {
 func AccountNumericID(principalID string) (int64, bool) { return accountNumericID(principalID) }
 
 func recordAuthorTx(tx txExec, knowledgeID, accountID int64) error {
-	if accountID == 0 {
-		return nil
-	}
 	_, err := tx.Exec(`INSERT OR REPLACE INTO knowledge_authors(knowledge_id, account_id) VALUES(?,?)`, knowledgeID, accountID)
 	return err
 }
@@ -195,13 +192,11 @@ func (s *Store) knowledgeAuthorID(id int64) int64 {
 	return acct
 }
 
-// machineDeliveryIndex: Maschinenname -> Konto-Id des Besitzers, die Konto-Id des
-// Instanz-Owners (für Namen ohne Zeile und Altbestand) und Personenname ->
-// Konto-Id für Altbestand ohne Autor-Konto. Ein Name zählt in Kleinschreibung,
-// mit dem heutigen Namen eines Kontos; frühere Namen aus person_name_history
-// füllen nur Lücken. Treffen zwei Konten denselben Namen, steht -1 darin
-// (mehrdeutig).
-func (s *Store) machineDeliveryIndex() (map[string]int64, int64, map[string]int64) {
+// machineDeliveryIndex: Maschinenname -> Konto-Id des Besitzers und die Konto-Id
+// des Instanz-Owners (für Namen ohne Zeile und Altbestand). Namen von Personen
+// werden hier nicht mehr aufgelöst: die Autorschaft steht als Konto-Id in
+// knowledge_authors.
+func (s *Store) machineDeliveryIndex() (map[string]int64, int64) {
 	if s.reader != nil {
 		return s.reader.machineDeliveryIndex()
 	}
@@ -217,36 +212,7 @@ func (s *Store) machineDeliveryIndex() (map[string]int64, int64, map[string]int6
 		}
 		rows.Close()
 	}
-	names := map[string]int64{}
-	add := func(table string, into map[string]int64, query string) {
-		rows, err := s.db.Query(query)
-		if err != nil {
-			return
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var id int64
-			var name string
-			if rows.Scan(&id, &name) != nil {
-				continue
-			}
-			key := strings.ToLower(strings.TrimSpace(name))
-			if prev, ok := into[key]; ok && prev != id {
-				into[key] = -1
-			} else {
-				into[key] = id
-			}
-		}
-	}
-	add("persons", names, `SELECT id, name FROM persons`)
-	old := map[string]int64{}
-	add("person_name_history", old, `SELECT person_id, old_name FROM person_name_history`)
-	for key, id := range old {
-		if _, ok := names[key]; !ok {
-			names[key] = id
-		}
-	}
-	return owners, owner, names
+	return owners, owner
 }
 
 // machineAuthorDelivers: Wissen für eine Maschine wird nur ausgeliefert, wenn
@@ -254,29 +220,16 @@ func (s *Store) machineDeliveryIndex() (map[string]int64, int64, map[string]int6
 // könnte ein Konto eine Anweisung auf einen noch freien Maschinennamen legen,
 // und wer den Namen später beansprucht, bekäme sie als bindende Anweisung.
 //
-// Der Autor ist die unveränderliche Konto-Id des Eintrags (knowledge_authors):
-// eine Umbenennung ändert daran nichts. Nur Altbestand ohne diese Zeile wird
-// über den Namen gefunden, ohne Groß-/Kleinschreibung; ein Name, der auf zwei
-// Konten passt, wird nicht zugestellt, einer, der auf kein Konto passt (das
-// Label "claude" aus der Zeit vor Konten), gehört dem Instanz-Owner. Ein
-// Eintrag ganz ohne Autor (Destillat) wird wie bisher ausgeliefert. Der Eintrag
+// Der Autor ist die unveränderliche Konto-Id des Eintrags (knowledge_authors,
+// beim Schreiben oder einmalig bei der Rückfüllung gesetzt): eine Umbenennung
+// ändert daran nichts. Ohne Besitzer gilt der Instanz-Owner. Der Eintrag
 // bleibt für seinen Autor sichtbar, wird nur nicht zugestellt.
 func (a *ProjectAccess) machineAuthorDelivers(k Knowledge) bool {
-	a.ownersOnce.Do(func() { a.ownerIDs, a.ownerDefault, a.authorIDs = a.st.machineDeliveryIndex() })
+	a.loadOwners()
 	author := a.st.knowledgeAuthorID(k.ID)
 	if author == 0 {
-		if strings.TrimSpace(k.Person) == "" {
-			return true
-		}
-		id, known := a.authorIDs[strings.ToLower(strings.TrimSpace(k.Person))]
-		switch {
-		case !known:
-			author = a.ownerDefault
-		case id == -1:
-			return false
-		default:
-			author = id
-		}
+		// Ohne Besitzer: gehört dem Instanz-Owner.
+		author = a.ownerDefault
 	}
 	owner, claimed := a.ownerIDs[canonicalMachine(k.Scope.Machine)]
 	if !claimed {
@@ -290,5 +243,5 @@ func (a *ProjectAccess) machineAuthorDelivers(k Knowledge) bool {
 // fremder aber nicht: er verschwände für den, der ihn verschiebt, und für das
 // ganze Projekt.
 func (a *ProjectAccess) MayMakeGlobal(k Knowledge) bool {
-	return a.ownsGlobal(Object{Person: k.Person, EntryID: k.ID})
+	return a.ownsGlobal(Object{EntryID: k.ID})
 }
