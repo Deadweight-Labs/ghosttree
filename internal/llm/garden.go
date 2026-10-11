@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,6 +51,25 @@ const (
 // a failure: the gardener is an option and stays off without one.
 var ErrGardenDisabled = errors.New("gardener is off: no API key configured (set GHOSTTREE_GARDEN_KEY or a \"garden\" entry with api_key_file/credential in llm.json)")
 
+// checkBaseURL keeps the API key off the wire in the clear: https only, with
+// plain http allowed for a server on this machine (a test double or a proxy).
+func checkBaseURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return fmt.Errorf("gardener base_url %q is not a URL", raw)
+	}
+	if u.Scheme == "https" {
+		return nil
+	}
+	switch u.Hostname() {
+	case "localhost", "127.0.0.1", "::1":
+		if u.Scheme == "http" {
+			return nil
+		}
+	}
+	return fmt.Errorf("gardener base_url must be https (http only for localhost), got %q", u.Scheme+"://"+u.Host)
+}
+
 type gardenFile struct {
 	Garden *struct {
 		BaseURL          string  `json:"base_url"`
@@ -66,7 +86,6 @@ type gardenFile struct {
 // key file is only read when named explicitly, never guessed.
 func LoadGardenConfig() (GardenConfig, error) {
 	out := GardenConfig{Config: Config{Format: "anthropic", BaseURL: defaultGardenBaseURL, Model: DefaultGardenModel}}
-	out.InputUSDPerMTok, out.OutputUSDPerMTok = 0, 0
 	path := os.Getenv("GHOSTTREE_LLM_CONFIG")
 	if path == "" {
 		if dir, err := os.UserConfigDir(); err == nil {
@@ -93,6 +112,9 @@ func LoadGardenConfig() (GardenConfig, error) {
 	}
 	if m := os.Getenv("GHOSTTREE_GARDEN_MODEL"); m != "" {
 		out.Model = m
+	}
+	if err := checkBaseURL(out.BaseURL); err != nil {
+		return out, err
 	}
 	if out.InputUSDPerMTok == 0 && out.OutputUSDPerMTok == 0 && out.Model == DefaultGardenModel {
 		out.InputUSDPerMTok, out.OutputUSDPerMTok = defaultGardenInUSD, defaultGardenOutUSD

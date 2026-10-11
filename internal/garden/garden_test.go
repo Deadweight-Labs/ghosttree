@@ -61,7 +61,10 @@ var price = Pricing{InUSDPerMTok: 2, OutUSDPerMTok: 10}
 
 func TestRefsAndContextComeFromTheCheckout(t *testing.T) {
 	repo := newRepo(t)
-	cc := repo.Gather(entry(1, "`SessionDistillationExists` in internal/distill.go und `GoneSymbol`"), ContextChars)
+	cc, err := repo.Gather(entry(1, "`SessionDistillationExists` in internal/distill.go und `GoneSymbol`"), ContextChars)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !cc.HasRefs() {
 		t.Fatal("expected refs")
 	}

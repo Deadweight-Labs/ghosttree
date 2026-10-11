@@ -3,6 +3,7 @@ package garden
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -27,9 +28,32 @@ type Sink interface {
 // ProposalRef is the session reference that ties a proposal to its subject.
 func ProposalRef(id int64) string { return fmt.Sprintf("%s%d", refPrefix, id) }
 
-// IsProposalFor reports whether k is a gardener proposal about entry id.
+// IsProposalFor reports whether k is a gardener proposal about entry id, in
+// whatever state it is now.
 func IsProposalFor(k store.Knowledge, id int64) bool {
-	return k.Harness == Harness && k.SessionRef == ProposalRef(id) && k.Status != "deprecated"
+	return k.Harness == Harness && k.SessionRef == ProposalRef(id)
+}
+
+// alreadyProposed says whether this entry has had a gardener proposal that
+// still stands for its current wording. A rejected proposal counts too: a
+// person said no, and asking again every night would make that meaningless.
+// Only a change to the entry after the proposal was made reopens the question.
+func alreadyProposed(existing []store.Knowledge, e Entry) bool {
+	changed := parseTime(e.UpdatedAt)
+	for _, k := range existing {
+		if !IsProposalFor(k, e.ID) {
+			continue
+		}
+		if changed.IsZero() || !changed.After(parseTime(k.CreatedAt)) {
+			return true
+		}
+	}
+	return false
+}
+
+func parseTime(s string) time.Time {
+	t, _ := time.Parse(time.RFC3339Nano, s)
+	return t
 }
 
 // Proposal builds the new entry for a stale or correction verdict. It is a
@@ -74,14 +98,7 @@ func Propose(sink Sink, project string, existing []store.Knowledge, verdicts []V
 		if !ok {
 			continue
 		}
-		dup := false
-		for _, e := range existing {
-			if IsProposalFor(e, v.Entry.ID) {
-				dup = true
-				break
-			}
-		}
-		if dup {
+		if alreadyProposed(existing, v.Entry) {
 			continue
 		}
 		if _, err := sink.Remember(k, scope.Axes{Project: project}); err != nil {

@@ -90,7 +90,7 @@ Antworte mit genau einem JSON-Objekt und sonst nichts:
 - correction: Im Kern gültig, aber ein Detail stimmt nicht mehr. "correction" enthält den korrigierten Text; sonst weglassen.
 - unclear: Der Kontext reicht für kein Urteil.
 - reason: ein bis drei Sätze, die konkrete Commits (Hash) oder Datei:Zeile nennen.
-- evidence: nur Commit-Hashes und Datei:Zeile, die wörtlich im Kontext stehen. Bei stale und correction ist Evidenz Pflicht.
+- evidence: nur Commit-Hashes (so lang wie im Kontext, mindestens 10 Zeichen) und exakte Datei:Zeile ohne Bereiche, die wörtlich im Kontext stehen. Bei stale und correction ist Evidenz Pflicht.
 - Eine historische Entscheidung oder ein Pitfall der Form "wir haben X an Datum bewusst nicht getan" bleibt gültig, solange die Begründung zutrifft, auch wenn der Code sich weiterentwickelt hat.`
 
 func userPrompt(e Entry, cc CodeContext) string {
@@ -105,8 +105,15 @@ func Check(ctx context.Context, repo *Repo, entries []Entry, opt Options) Result
 	res := Result{DryRun: opt.DryRun, MaxUSD: opt.MaxUSD}
 	failures, sent := 0, 0
 	for i, e := range entries {
-		cc := repo.Gather(e, ContextChars)
+		cc, gerr := repo.Gather(e, ContextChars)
 		v := Verdict{Entry: e, Files: cc.Files, Symbols: cc.Symbols}
+		if gerr != nil {
+			// Could not look is not the same as nothing there: no model call,
+			// and no verdict that would read as "gone".
+			v.Kind, v.Reason = Failed, "Code-Kontext nicht lesbar, kein Modellaufruf: "+gerr.Error()
+			res.Verdicts = append(res.Verdicts, v)
+			continue
+		}
 		if !cc.HasRefs() {
 			v.Kind, v.Reason = Skipped, "der Eintrag nennt weder Datei noch Symbol, das sich im Code nachschlagen ließe"
 			res.Verdicts = append(res.Verdicts, v)
@@ -138,6 +145,11 @@ func Check(ctx context.Context, repo *Repo, entries []Entry, opt Options) Result
 		text, usage, err := opt.Model.CompleteWithUsage(ctx, systemPrompt, []llm.Message{{Role: "user", Content: userPrompt(e, cc)}}, MaxOutputTokens)
 		v.In, v.Out = usage.InputTokens, usage.OutputTokens
 		v.CostUSD = opt.Pricing.Cost(usage.InputTokens, usage.OutputTokens)
+		if err != nil && usage.InputTokens == 0 && usage.OutputTokens == 0 {
+			// A timeout or a 5xx may still have been billed and reports no
+			// usage. Count the worst case rather than nothing.
+			v.In, v.Out, v.CostUSD = in, MaxOutputTokens, worst
+		}
 		res.Spent += v.CostUSD
 		if err != nil {
 			failures++
@@ -177,7 +189,7 @@ func applyAnswer(v *Verdict, text string, cc CodeContext) {
 		return
 	}
 	v.Reason, v.Correction = strings.TrimSpace(a.Reason), strings.TrimSpace(a.Correction)
-	v.Evidence, v.Unverified = splitEvidence(cc.Text, a.Evidence)
+	v.Evidence, v.Unverified = splitEvidence(cc, a.Evidence)
 	switch a.Verdict {
 	case Holds, Unclear:
 		v.Kind = a.Verdict
@@ -196,16 +208,22 @@ func applyAnswer(v *Verdict, text string, cc CodeContext) {
 	}
 }
 
-var lineRef = regexp.MustCompile(`^(.+?):(\d+)(?:[-:]\d+)?$`)
+var (
+	lineRef    = regexp.MustCompile(`^([^\s:]+):(\d+)$`)
+	fullHashRe = regexp.MustCompile(`^[0-9a-f]{10,40}$`)
+)
 
-// splitEvidence separates citations that appear in the context from the rest.
-func splitEvidence(ctxText string, refs []string) (ok, bad []string) {
+// splitEvidence separates citations the context supports from the rest. Only
+// two shapes count: an exact file:line that appears on a line of the context,
+// and a commit hash of at least ten characters that is a prefix of, or extends,
+// one in the context's log. Free text, ranges and short hashes do not.
+func splitEvidence(cc CodeContext, refs []string) (ok, bad []string) {
 	for _, r := range refs {
 		r = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(r), "commit "))
 		if r == "" {
 			continue
 		}
-		if verifies(ctxText, r) {
+		if verifies(cc, r) {
 			ok = append(ok, r)
 		} else {
 			bad = append(bad, r)
@@ -214,12 +232,17 @@ func splitEvidence(ctxText string, refs []string) (ok, bad []string) {
 	return ok, bad
 }
 
-func verifies(ctxText, ref string) bool {
-	if hashRe.MatchString(ref) {
-		return strings.Contains(ctxText, ref[:7])
+func verifies(cc CodeContext, ref string) bool {
+	if fullHashRe.MatchString(ref) {
+		for _, h := range cc.Hashes {
+			if strings.HasPrefix(ref, h) || strings.HasPrefix(h, ref) {
+				return true
+			}
+		}
+		return false
 	}
 	if m := lineRef.FindStringSubmatch(ref); m != nil {
-		return strings.Contains(ctxText, m[1]+":"+m[2]+":") || strings.Contains(ctxText, m[1]+"-"+m[2]+"-")
+		return cc.Lines[m[1]+":"+m[2]]
 	}
-	return strings.Contains(ctxText, ref)
+	return false
 }

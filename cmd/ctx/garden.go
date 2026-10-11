@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"sort"
 	"strings"
@@ -71,7 +72,9 @@ func cmdGarden(args []string, stdout io.Writer) int {
 	propose := fs.Bool("propose", false, "file stale/correction verdicts as staged gardener notes")
 	out := fs.String("out", "", "write the report to this file")
 	fs.Usage = func() { fmt.Fprintln(stdout, gardenUsage) }
-	if fs.Parse(args[1:]) != nil || *maxUSD <= 0 || *limit < 0 {
+	// NaN compares false with everything and +Inf is no cap at all, so
+	// neither may reach the budget check.
+	if fs.Parse(args[1:]) != nil || !(*maxUSD > 0) || math.IsInf(*maxUSD, 0) || *limit < 0 {
 		fmt.Fprintln(stdout, gardenUsage)
 		return 2
 	}
@@ -107,6 +110,10 @@ func cmdGarden(args []string, stdout io.Writer) int {
 		fmt.Fprintln(stdout, "need a git checkout with an origin remote, or --repo and --project")
 		return 2
 	}
+	if err := verifyCheckout(root, project); err != nil {
+		fmt.Fprintln(stdout, err)
+		return 2
+	}
 	repo, err := garden.OpenRepo(root)
 	if err != nil {
 		fmt.Fprintln(stdout, err)
@@ -135,6 +142,20 @@ func cmdGarden(args []string, stdout io.Writer) int {
 	return runGardenCheck(client.New(sc), repo, project, opts, model, pricing, *out, stdout)
 }
 
+// verifyCheckout refuses a checkout whose origin is not the project being
+// checked. Against the wrong repository nearly every symbol is missing, and
+// every entry would come back stale.
+func verifyCheckout(root, project string) error {
+	origin, _ := collector.GitInfo(root)
+	if origin == "" {
+		return fmt.Errorf("%s has no origin remote, so it cannot be matched to %s", root, project)
+	}
+	if origin != scope.NormalizeRemote(project) {
+		return fmt.Errorf("%s is a checkout of %s, not of %s; refusing to compare them", root, origin, project)
+	}
+	return nil
+}
+
 func runGardenCheck(st gardenStore, repo *garden.Repo, project string, opts gardenOpts, model llm.UsageClient, pricing garden.Pricing, outPath string, stdout io.Writer) int {
 	all, err := st.ProjectKnowledge(project, false)
 	if err != nil {
@@ -146,7 +167,7 @@ func runGardenCheck(st gardenStore, repo *garden.Repo, project string, opts gard
 		if !opts.Types[k.Type] || k.Status != "active" || k.Scope.Project != project || k.Harness == garden.Harness {
 			continue
 		}
-		entries = append(entries, garden.Entry{ID: k.ID, Type: k.Type, Title: k.Title, Body: k.Body, ObservedAt: k.ObservedAt, CreatedAt: k.CreatedAt})
+		entries = append(entries, garden.Entry{ID: k.ID, Type: k.Type, Title: k.Title, Body: k.Body, ObservedAt: k.ObservedAt, CreatedAt: k.CreatedAt, UpdatedAt: k.UpdatedAt})
 	}
 	// Oldest observation first: those are the ones most likely to have been
 	// overtaken, and a limited run should spend itself there.
@@ -162,6 +183,28 @@ func runGardenCheck(st gardenStore, repo *garden.Repo, project string, opts gard
 	var report bytes.Buffer
 	garden.WriteReport(&report, project, res, time.Now())
 
+	// The report comes first: the model calls are paid for, and nothing that
+	// goes wrong afterwards may cost the person the result. If the file cannot
+	// be written the report goes to stdout instead.
+	code := 0
+	written := false
+	if outPath != "" {
+		if err := writePrivate(outPath, report.Bytes()); err != nil {
+			fmt.Fprintf(stdout, "write report: %v; printing it instead\n", err)
+			code = 1
+		} else {
+			written = true
+			verb := "spent"
+			if opts.DryRun {
+				verb = "estimated"
+			}
+			fmt.Fprintf(stdout, "report: %s (%d entries, %s $%.4f)\n", outPath, len(res.Verdicts), verb, res.Spent)
+		}
+	}
+	if !written {
+		stdout.Write(report.Bytes())
+	}
+
 	if opts.Propose && !opts.DryRun {
 		existing, err := st.ProjectKnowledge(project, true)
 		if err != nil {
@@ -170,23 +213,13 @@ func runGardenCheck(st gardenStore, repo *garden.Repo, project string, opts gard
 		}
 		n, err := garden.Propose(st, project, existing, res.Verdicts)
 		if err != nil {
-			fmt.Fprintln(stdout, err)
+			fmt.Fprintf(stdout, "%v (%d proposals filed before the failure; the report above is complete)\n", err, n)
 			return 1
 		}
-		fmt.Fprintf(&report, "\n%d Vorschläge als staged-Notiz mit Herkunft gardener abgelegt (ctx review).\n", n)
+		fmt.Fprintf(stdout, "%d proposals filed as staged notes from the gardener (see 'ctx review')\n", n)
 	}
-	if outPath != "" {
-		if err := os.WriteFile(outPath, report.Bytes(), 0o644); err != nil {
-			fmt.Fprintf(stdout, "write report: %v\n", err)
-			return 1
-		}
-		verb := "spent"
-		if opts.DryRun {
-			verb = "estimated"
-		}
-		fmt.Fprintf(stdout, "report: %s (%d entries, %s $%.4f)\n", outPath, len(res.Verdicts), verb, res.Spent)
-	} else {
-		stdout.Write(report.Bytes())
+	if code != 0 {
+		return code
 	}
 	switch res.StoppedBy {
 	case "budget":
@@ -196,6 +229,16 @@ func runGardenCheck(st gardenStore, repo *garden.Repo, project string, opts gard
 		return 1
 	}
 	return 0
+}
+
+// writePrivate writes the report readable by its owner only: it quotes the
+// project's knowledge and code, and an existing file keeps its old mode unless
+// it is set again.
+func writePrivate(path string, b []byte) error {
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o600)
 }
 
 func joinTypes(m map[string]bool) string {
