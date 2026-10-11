@@ -193,6 +193,8 @@ func noMembershipError(kind string) error {
 // roleOpensProjectRoom lets a signed-in person with the project role member or
 // higher (owner, lead, member, reviewer) read (ActRead) or write (ActPost) in
 // the project room without an agent of their own in it (matrix 8.1, spec 7.5).
+// Thread creation by agent and device tokens in other projects (CreateThreadByRole)
+// departs from this on purpose; see there.
 // Agent tokens, pasted sessions and guests are not covered; a thread with a
 // visibility list stays closed to a role (threadAccessTx checks the list first).
 func (a CoordAccess) roleOpensProjectRoom(roomKey string, tx rowQuerier, via Action) bool {
@@ -1453,6 +1455,9 @@ func (a CoordAccess) CreateThread(thread Thread) (int64, error) {
 	if strings.TrimSpace(thread.Title) == "" || thread.Project == "" {
 		return 0, fmt.Errorf("a thread needs a title and project")
 	}
+	if err := ValidateThreadText(thread); err != nil {
+		return 0, err
+	}
 	tx, err := a.Store.db.Begin()
 	if err != nil {
 		return 0, err
@@ -1496,6 +1501,9 @@ func (a CoordAccess) CreateThread(thread Thread) (int64, error) {
 		if l.Kind == "request" {
 			if err := validateRequestLinkTx(tx, RoomKeyForProject(thread.Project), l.ID); err != nil {
 				return 0, err
+			}
+			if a.requestHeldTx(tx, l.ID) {
+				return 0, errLinkedRequestNotFound
 			}
 		}
 		if _, err := tx.Exec(`INSERT OR IGNORE INTO thread_links(thread_id,object_kind,object_id,object_revision,created_at)
@@ -1653,6 +1661,9 @@ func (a CoordAccess) createTaskThread(roomKey string, anchorMessageID int64, tit
 			return 0, err
 		}
 		if kind == RoomProject && requestProject != "" && requestProject != project {
+			return 0, errLinkedRequestNotFound
+		}
+		if a.requestHeldTx(tx, requestID) {
 			return 0, errLinkedRequestNotFound
 		}
 		if project == roomKey && requestProject != "" {
@@ -1940,6 +1951,9 @@ func (a CoordAccess) LinkThread(link ThreadLink) error {
 		} else if found {
 			if err := validateRequestLinkTx(tx, home.RoomKey, link.ID); err != nil {
 				return err
+			}
+			if a.requestHeldTx(tx, link.ID) {
+				return errLinkedRequestNotFound
 			}
 			var existingID string
 			err := tx.QueryRow(`SELECT object_id FROM thread_links WHERE thread_id=? AND object_kind='request' ORDER BY rowid LIMIT 1`, link.ThreadID).Scan(&existingID)

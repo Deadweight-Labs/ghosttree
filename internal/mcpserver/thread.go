@@ -28,6 +28,7 @@ type ThreadOpenInput struct {
 	LinkID     string `json:"link_id,omitempty" jsonschema:"id of that object, for example 846 for a knowledge entry"`
 	LinkRev    string `json:"link_revision,omitempty" jsonschema:"revision of that object, if you mean one exact version rather than whatever it says today"`
 	DiscussNow bool   `json:"announce,omitempty" jsonschema:"also announce this thread in the project room so other agents see it exists"`
+	Project    string `json:"project,omitempty" jsonschema:"the project this thread belongs to when it is not the session's own: a remote like github.com/owner/repo or a short name that is unique among the projects you can write to"`
 }
 
 type ThreadReadInput struct {
@@ -129,12 +130,23 @@ func (s *Server) handleThreadOpen(ctx context.Context, _ *mcp.CallToolRequest, i
 	if strings.TrimSpace(in.Title) == "" {
 		return nil, nil, fmt.Errorf("title is required — it is what someone searches for later")
 	}
-	project, err := s.threadProject()
+	project, err := s.writeTarget(in.Project)
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := s.joinThreadProject(); err != nil {
-		return nil, nil, err
+	// An agent is in exactly one project room. Its own project is joined as
+	// before; a thread for another project is opened on the strength of the
+	// account's role there, without registering the agent in that room.
+	foreign := project != s.ctxAxes.Project
+	if !foreign {
+		if err := s.joinRoom(store.RoomKeyForProject(project)); err != nil {
+			return nil, nil, err
+		}
+	} else if strings.TrimSpace(in.First) != "" {
+		// The agent cannot post in a room it is not in: the opening
+		// contribution travels with the question.
+		in.Question = strings.TrimSpace(in.Question + "\n\n" + in.First)
+		in.First = ""
 	}
 	// Vorhandene Threads am selben Objekt vorschlagen, bevor ein zweiter
 	// entsteht. Spec §B5: vorschlagen ja, automatisch zusammenführen nein.
@@ -148,7 +160,12 @@ func (s *Server) handleThreadOpen(ctx context.Context, _ *mcp.CallToolRequest, i
 		newThread.Link = &store.ThreadLink{Kind: in.LinkKind, ID: in.LinkID, Revision: in.LinkRev}
 	}
 
-	id, err := s.client.CreateThread(newThread, s.coordRef())
+	var id int64
+	if foreign {
+		id, err = s.client.CreateThreadByRole(newThread)
+	} else {
+		id, err = s.client.CreateThread(newThread, s.coordRef())
+	}
 	if err != nil {
 		return nil, nil, err
 	}
@@ -166,8 +183,10 @@ func (s *Server) handleThreadOpen(ctx context.Context, _ *mcp.CallToolRequest, i
 			fmt.Fprintf(&b, "  [%d] %s (%s)\n", t.ID, t.Title, t.State)
 		}
 	}
-	if in.DiscussNow {
-		if key, err := s.roomKeyFor("project"); err == nil {
+	if in.DiscussNow && foreign {
+		b.WriteString("\nNot announced: this session is not in that project's room.\n")
+	} else if in.DiscussNow {
+		if key := store.RoomKeyForProject(project); key != "" {
 			clientID, err := newCoordClientID()
 			if err == nil {
 				_, _ = s.client.SendCoordMessage(store.CoordMessage{

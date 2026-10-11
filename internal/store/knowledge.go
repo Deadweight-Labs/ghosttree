@@ -29,6 +29,10 @@ type Knowledge struct {
 	LastModifiedBy string          `json:"last_modified_by,omitempty"`
 	Harness        string          `json:"harness,omitempty"`
 	SessionRef     string          `json:"session_ref,omitempty"`
+	// AuthorID is the writing account, set by the server from the token and never
+	// read from a request. It is stored in knowledge_authors; zero means legacy
+	// or distilled.
+	AuthorID int64 `json:"-"`
 	// ObservedAt is when the entry was seen; CreatedAt is when it was written
 	// down. For anything a person or an agent typed the two coincide. For a
 	// distilled entry they do not, and the difference is what tells a reader
@@ -227,6 +231,9 @@ func (s *Store) InsertKnowledge(k Knowledge) (int64, error) {
 		return 0, err
 	}
 	if _, err := tx.Exec(`INSERT INTO search_documents(kind,domain_id,title,body,project,branch,machine) VALUES('knowledge',?,?,?,?,?,?)`, id, k.Title, k.Body, k.Scope.Project, k.Scope.Branch, k.Scope.Machine); err != nil {
+		return 0, err
+	}
+	if err := recordAuthorTx(tx, id, k.AuthorID); err != nil {
 		return 0, err
 	}
 	for _, pattern := range k.Activation.Paths {

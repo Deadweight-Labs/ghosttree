@@ -51,6 +51,7 @@ type orgsView struct {
 	Orgs      []store.Org
 	Selected  store.Org
 	Owner     bool
+	CanRename bool // Owner oder Instanz-Admin
 	Members   []orgMemberRow
 	Invites   []inviteRow
 	Projects  []store.Project
@@ -93,6 +94,7 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 	}
 	if v.Selected.ID != 0 {
 		v.Owner = v.Selected.Role == store.OrgOwner
+		v.CanRename = v.Owner || a.isAdmin(browserPrincipal(r))
 		members, _ := a.store.ListOrgMembersFor(v.Selected.ID, me, a.store.AccessEnforced())
 		v.GuestLinks = a.store.AccessEnforced()
 		owners := 0
@@ -209,6 +211,8 @@ func orgError(err error) (int, string) {
 		return http.StatusForbidden, msg("adm.err.email")
 	case errors.Is(err, store.ErrAlreadyMember):
 		return http.StatusConflict, msg("adm.err.member")
+	case errors.Is(err, store.ErrOrgSlugTaken):
+		return http.StatusConflict, msg("adm.err.org_taken")
 	case errors.Is(err, store.ErrTooManyAttempts):
 		return http.StatusTooManyRequests, msg("adm.err.attempts")
 	}
@@ -248,6 +252,10 @@ func orgNotice(key string) string {
 		return msg("adm.notice.moved")
 	case "joined":
 		return msg("adm.notice.joined")
+	case "created":
+		return msg("adm.notice.created")
+	case "renamed":
+		return msg("adm.notice.renamed")
 	}
 	return ""
 }
@@ -488,4 +496,40 @@ func initialOf(name string) string {
 		return strings.ToUpper(string(r))
 	}
 	return "?"
+}
+
+// orgCreate legt eine Organisation an; jedes angemeldete Konto darf das und wird
+// deren Owner. Name und Adresse prüft der Store wie bei `ctx org create`. Danach
+// geht es auf die Organisationsseite zum Einladen bzw. zum Projekt.
+func (a *app) orgCreate(w http.ResponseWriter, r *http.Request) {
+	o, err := a.store.CreateOrg(browserPrincipal(r).ID, r.FormValue("name"), "")
+	if err != nil {
+		a.orgFailure(w, r, err)
+		return
+	}
+	http.Redirect(w, r, "/ui/orgs?org="+o.Slug+"&notice=created", http.StatusSeeOther)
+}
+
+// orgRename benennt eine Organisation um. Das dürfen ihre Owner und ein
+// Instanz-Admin; die Adresse (Slug) bleibt, damit Links gültig bleiben.
+func (a *app) orgRename(w http.ResponseWriter, r *http.Request) {
+	me := browserPrincipal(r)
+	admin := a.isAdmin(me)
+	o, err := a.formOrg(r)
+	if err != nil && admin {
+		// Ein Instanz-Admin darf jede Organisation umbenennen, auch ohne Mitglied zu sein.
+		o, err = a.store.OrgByRef(r.FormValue("org"))
+	}
+	if err == nil {
+		if a.store.OrgRole(o.ID, me.ID) != store.OrgOwner && admin {
+			_, err = a.store.RenameOrgAsAdmin(me.ID, o.ID, r.FormValue("name"), "")
+		} else {
+			_, err = a.store.RenameOrg(me.ID, o.ID, r.FormValue("name"), "")
+		}
+	}
+	if err != nil {
+		a.orgFailure(w, r, err)
+		return
+	}
+	orgRedirect(w, r, o.Slug, "renamed")
 }

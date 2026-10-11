@@ -57,36 +57,31 @@ func TestSessionMetadataAPIFollowsTheViewerPerRole(t *testing.T) {
 				t.Errorf("guest %s leaks %q: %s", path, leak, out)
 			}
 		}
-		// Member: a foreign private session is metadata only.
+		// Member: a foreign private session is not there at all.
 		out = f.expect(t, "mia", 200, "GET", path, nil)
-		if strings.Contains(out, "Rex private title") {
+		if strings.Contains(out, "Rex private title") || strings.Contains(out, "feat/y") {
 			t.Errorf("member %s sees the title of a foreign private session: %s", path, out)
 		}
 		if !strings.Contains(out, "Mia private title") || !strings.Contains(out, "Guest shared title") {
 			t.Errorf("member %s lacks what she may read: %s", path, out)
 		}
-		// Owner reads everything.
+		// Project owner: shared sessions yes, private ones of others never.
 		out = f.expect(t, "robin", 200, "GET", path, nil)
-		if !strings.Contains(out, "Rex private title") || !strings.Contains(out, "rex-box") {
+		if strings.Contains(out, "Rex private title") || strings.Contains(out, "Mia private title") || !strings.Contains(out, "rex-box") {
 			t.Errorf("owner %s: %s", path, out)
 		}
 	}
-	// The member still sees that the private session exists (metadata).
-	var ss []store.Session
-	if err := json.Unmarshal([]byte(f.expect(t, "mia", 200, "GET", list, nil)), &ss); err != nil {
-		t.Fatal(err)
-	}
-	foreign := 0
-	for _, s := range ss {
-		if s.ID == f.id["p-rex"] {
-			foreign++
-			if s.Title != "" || s.Messages != 0 || s.PublicID != "" {
-				t.Errorf("foreign private row carries content: %+v", s)
+	// Not even a row remains of a foreign private session, for anyone else.
+	for _, who := range []string{"mia", "robin", "lena"} {
+		var ss []store.Session
+		if err := json.Unmarshal([]byte(f.expect(t, who, 200, "GET", list, nil)), &ss); err != nil {
+			t.Fatal(err)
+		}
+		for _, s := range ss {
+			if s.ID == f.id["p-rex"] {
+				t.Errorf("%s lists the private session of rex: %+v", who, s)
 			}
 		}
-	}
-	if foreign != 1 {
-		t.Errorf("member lost the metadata row of a foreign session: %d", foreign)
 	}
 }
 
@@ -112,10 +107,12 @@ func TestLegacyShareRouteFollowsTheShareAction(t *testing.T) {
 	f := accessAPI(t, true)
 	mia := f.id["s-mia"]
 	share := map[string]bool{"shared": true}
-	f.expect(t, "lena", 403, "PUT", idPath("/api/sessions/%d/share", mia), share)
-	// The project owner may share any session, like in the browser.
-	f.expect(t, "robin", 200, "PUT", idPath("/api/sessions/%d/share", mia), share)
+	// Nobody but the owner reaches a private session, not even to share it.
+	f.expect(t, "lena", 404, "PUT", idPath("/api/sessions/%d/share", mia), share)
+	f.expect(t, "robin", 404, "PUT", idPath("/api/sessions/%d/share", mia), share)
+	f.expect(t, "mia", 200, "PUT", idPath("/api/sessions/%d/share", mia), share)
 	f.expect(t, "rex", 200, "GET", idPath("/api/sessions/%d", mia), nil)
+	// The project owner may withdraw a shared session.
 	f.expect(t, "robin", 200, "PUT", idPath("/api/sessions/%d/share", mia), map[string]bool{"shared": false})
 	f.expect(t, "rex", 404, "GET", idPath("/api/sessions/%d", mia), nil)
 }

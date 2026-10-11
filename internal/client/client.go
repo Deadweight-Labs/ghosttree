@@ -438,6 +438,16 @@ func (c *Client) Knowledge(ax scope.Axes) ([]store.Knowledge, error) {
 	return out, err
 }
 
+// DeliverableKnowledge is Knowledge limited to what may be handed on to agents
+// and files: the server applies the delivery test of the bootstrap.
+func (c *Client) DeliverableKnowledge(ax scope.Axes) ([]store.Knowledge, error) {
+	q := axesQuery(ax)
+	q.Set("deliverable", "1")
+	var out []store.Knowledge
+	err := c.do("GET", "/api/knowledge", q, nil, &out)
+	return out, err
+}
+
 func (c *Client) ProjectKnowledge(project string, includeArchived bool) ([]store.Knowledge, error) {
 	q := axesQuery(scope.Axes{Project: project})
 	if includeArchived {

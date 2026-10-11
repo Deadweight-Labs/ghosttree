@@ -10,6 +10,9 @@ import (
 type ObjectRef struct {
 	Project string
 	Person  string
+	// HeldBy: bei einem noch nicht übernommenen, distillierten Auftrag die
+	// Herkunfts-Session ("session:N"), sonst leer.
+	HeldBy string
 }
 
 // RequestRefKind benennt, welche Id RequestRef auf einen Auftrag zurückführt.
@@ -25,6 +28,8 @@ const (
 // RequestRef löst eine Auftrags-, Kriterien-, Arbeits- oder Relations-Id auf
 // Projekt und Autor des Auftrags auf. Eine leichte Abfrage, damit die Prüfung
 // nicht den ganzen Auftrag lädt. sql.ErrNoRows, wenn es die Id nicht gibt.
+const heldCol = `CASE WHEN r.origin='distilled' AND r.person='' THEN r.session_ref ELSE '' END`
+
 func (s *Store) RequestRef(kind RequestRefKind, id int64) (ObjectRef, error) {
 	if s.reader != nil {
 		return s.reader.RequestRef(kind, id)
@@ -32,18 +37,18 @@ func (s *Store) RequestRef(kind RequestRefKind, id int64) (ObjectRef, error) {
 	var q string
 	switch kind {
 	case RefRequest:
-		q = `SELECT r.project, r.person FROM requests r WHERE r.id=?`
+		q = `SELECT r.project, r.person, ` + heldCol + ` FROM requests r WHERE r.id=?`
 	case RefCriterion:
-		q = `SELECT r.project, r.person FROM request_criteria c JOIN requests r ON r.id=c.request_id WHERE c.id=?`
+		q = `SELECT r.project, r.person, ` + heldCol + ` FROM request_criteria c JOIN requests r ON r.id=c.request_id WHERE c.id=?`
 	case RefWork:
-		q = `SELECT r.project, r.person FROM request_work w JOIN requests r ON r.id=w.request_id WHERE w.id=?`
+		q = `SELECT r.project, r.person, ` + heldCol + ` FROM request_work w JOIN requests r ON r.id=w.request_id WHERE w.id=?`
 	case RefRelation:
-		q = `SELECT r.project, r.person FROM request_relations x JOIN requests r ON r.id=x.request_id WHERE x.id=?`
+		q = `SELECT r.project, r.person, ` + heldCol + ` FROM request_relations x JOIN requests r ON r.id=x.request_id WHERE x.id=?`
 	default:
 		return ObjectRef{}, fmt.Errorf("unknown request ref kind %q", kind)
 	}
 	var ref ObjectRef
-	err := s.db.QueryRow(q, id).Scan(&ref.Project, &ref.Person)
+	err := s.db.QueryRow(q, id).Scan(&ref.Project, &ref.Person, &ref.HeldBy)
 	if err == sql.ErrNoRows {
 		return ObjectRef{}, sql.ErrNoRows
 	}
@@ -68,8 +73,8 @@ func (s *Store) KnowledgeRef(id int64) (Knowledge, error) {
 	}
 	var k Knowledge
 	k.ID = id
-	err := s.db.QueryRow(`SELECT project, branch, machine, confidence, person FROM knowledge WHERE id=?`, id).
-		Scan(&k.Scope.Project, &k.Scope.Branch, &k.Scope.Machine, &k.Confidence, &k.Person)
+	err := s.db.QueryRow(`SELECT project, branch, machine, confidence, person, origin, session_ref FROM knowledge WHERE id=?`, id).
+		Scan(&k.Scope.Project, &k.Scope.Branch, &k.Scope.Machine, &k.Confidence, &k.Person, &k.Origin, &k.SessionRef)
 	return k, err
 }
 

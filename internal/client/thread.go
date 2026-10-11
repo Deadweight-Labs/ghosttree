@@ -20,6 +20,16 @@ func (c *Client) CreateThread(t store.Thread, agentExternalID string) (int64, er
 	return out.ID, err
 }
 
+// CreateThreadByRole opens a thread in a project other than the agent's own
+// room, on the strength of the account's role there.
+func (c *Client) CreateThreadByRole(t store.Thread) (int64, error) {
+	var out struct {
+		ID int64 `json:"id"`
+	}
+	err := c.do("POST", "/api/threads", url.Values{"by_role": {"1"}}, t, &out)
+	return out.ID, err
+}
+
 func (c *Client) SearchThreads(project, query string, includeArchived bool, limit int, agentExternalID string) ([]store.Thread, error) {
 	q := agentQuery(agentExternalID)
 	q.Set("project", project)

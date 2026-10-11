@@ -121,6 +121,11 @@ func TestMirrorAsksForTheSameScopeUnionASessionReads(t *testing.T) {
 	if len(asked["lineage"]) == 0 {
 		t.Fatalf("lineage was not passed on: %v", asked)
 	}
+	// The mirror is a file copy for whoever checks the repo out: it asks for what
+	// may be handed on, not for everything the account may read.
+	if asked.Get("deliverable") != "1" {
+		t.Fatalf("the mirror does not ask for deliverable knowledge only: %v", asked)
+	}
 }
 
 // Der Ghost-Baum liegt im selben Verzeichnis und darf beim Schreiben des

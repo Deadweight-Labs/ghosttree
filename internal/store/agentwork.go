@@ -64,7 +64,8 @@ func (s *Store) AgentWorkFor(pa *ProjectAccess, externalIDs []string) (map[strin
 		if w.SessionPublicID == "" {
 			w.SessionPublicID = pa.MetaView(h.sess).PublicID
 		}
-		if w.RequestID == 0 && h.request != 0 && pa.CanSeeProject(h.project, ResRequest) {
+		// Wovon eine private Session handelt, steht im Auftrag nicht für Fremde.
+		if w.RequestID == 0 && h.request != 0 && pa.CanSeeProject(h.project, ResRequest) && pa.CanSeeTranscript(h.sess) {
 			w.RequestID, w.RequestTitle = h.request, h.title
 		}
 		out[h.agent] = w

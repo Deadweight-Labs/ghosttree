@@ -89,6 +89,8 @@ func TestOrgFormsNeedCSRFAndSameOrigin(t *testing.T) {
 		"/ui/orgs/invite/revoke": {"org": {"alpha"}, "id": {"1"}},
 		"/ui/orgs/accept":        {"code": {"x"}},
 		"/ui/orgs/default":       {"org": {"alpha"}},
+		"/ui/orgs/create":        {"name": {"Sneaky"}},
+		"/ui/orgs/rename":        {"org": {"alpha"}, "name": {"Sneaky"}},
 	}
 	for path, form := range forms {
 		for name, token := range map[string]string{"missing": "", "wrong": "nope"} {
@@ -117,6 +119,12 @@ func TestOrgFormsNeedCSRFAndSameOrigin(t *testing.T) {
 	}
 	if members, _ := st.ListOrgMembers(org.ID); len(members) != 1 || members[0].Role != store.OrgOwner {
 		t.Fatalf("a rejected form changed something: %+v", members)
+	}
+	if o, _ := st.OrgByRef("alpha"); o.Name != "Alpha" {
+		t.Fatalf("a rejected form renamed the organization: %q", o.Name)
+	}
+	if _, err := st.OrgByRef("sneaky"); err == nil {
+		t.Fatal("a rejected form created an organization")
 	}
 	if invs, _ := st.ListInvitations("person:1", org.ID); len(invs) != 0 {
 		t.Fatalf("a rejected form created an invitation: %+v", invs)

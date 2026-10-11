@@ -189,8 +189,13 @@ func TestRequestListHidesWhatTheViewerMayNotRead(t *testing.T) {
 		strings.ReplaceAll(hiddenPage, shellHiddenProject, "P") != strings.ReplaceAll(unknownPage, "github.com/nobody/unknown", "P") {
 		t.Error("a hidden project answers differently from an unknown one")
 	}
-	if !strings.Contains(hiddenPage, "Global request") || !strings.Contains(unknownPage, "Global request") {
-		t.Error("the global request is missing from the hidden or unknown project's list")
+	// A request without a project belongs to no project's ledger (REQ-458); it
+	// stays findable in the list that names no project.
+	if strings.Contains(hiddenPage, "Global request") || strings.Contains(unknownPage, "Global request") {
+		t.Error("a request without a project shows up in a project's list")
+	}
+	if _, all := e.get(t, e.Owner, "/ui/requests"); !strings.Contains(all, "Global request") {
+		t.Error("the request without a project is nowhere")
 	}
 	if strings.Contains(hiddenPage, "secret-prio") {
 		t.Error("the priority menu of a hidden project leaks its priorities")
@@ -235,10 +240,14 @@ func TestRequestDetailShowsDescriptionCriteriaProofWorkAndRelations(t *testing.T
 	}
 	for _, want := range []string{"Detail request", "REQ-" + strconv.FormatInt(d.Request.ID, 10), "hoch", "First paragraph.", "<code>code</code>", "2/2",
 		"AC-" + strconv.FormatInt(d.Request.ID, 10) + ".1", "Exports run", `href="/ui/sessions/` + e.pid["anna-project"] + `#c3"`,
-		"Private session", "Working", "Related one", `href="/ui/requests/` + strconv.FormatInt(other.Request.ID, 10) + `"`, "https://example.com/x", "Criterion met", "Work started"} {
+		"Working", "Related one", `href="/ui/requests/` + strconv.FormatInt(other.Request.ID, 10) + `"`, "https://example.com/x", "Criterion met", "Work started"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("member detail lacks %q", want)
 		}
+	}
+	// Work on a private session of another account leaves no row, not even a placeholder.
+	if strings.Contains(page, "Private session") {
+		t.Error("member detail shows a placeholder row for private work")
 	}
 	for _, leak := range []string{"SECRET", "session:" + sess, "session:" + priv, e.pid["alice-private"], shellHiddenProject} {
 		if strings.Contains(page, leak) {

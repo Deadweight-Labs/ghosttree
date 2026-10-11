@@ -242,11 +242,12 @@ func (a *api) createKnowledge(w http.ResponseWriter, r *http.Request) {
 	if k.Scope.IsGlobal() && req.AutoScope != nil {
 		k.Scope = scope.DefaultAxes(k.Type, req.AutoScope.Context)
 	}
-	if !a.gateMachine(w, r, k.Scope.Machine, false) || !a.gateProject(w, r, k.Scope.Project) {
+	if !a.gateMachineNote(w, r, k.Scope.Machine) || !a.gateProject(w, r, k.Scope.Project) {
 		return
 	}
 	// Die Zuschreibung kommt aus dem Token und ist danach unveränderlich.
 	k.Person, k.ConfirmedBy = personOf(r), ""
+	k.AuthorID = authorIDOf(r)
 	if k.Confidence == "verified" {
 		k.ConfirmedBy = k.Person
 	}
@@ -254,6 +255,10 @@ func (a *api) createKnowledge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.access(r).DropWrittenSessionNumber(&k)
+	// Ein Verweis auf eine Session gilt nur für die eigene.
+	if denyAccess(w, a.access(r).CheckWrittenSessionRef(k.SessionRef)) {
+		return
+	}
 	id, err := a.st.InsertKnowledge(k)
 	if err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)
@@ -283,7 +288,13 @@ func (a *api) listKnowledge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pa := a.access(r)
-	writeJSON(w, 200, pa.KnowledgeViews(filterTo(ks, 0, pa.CanSeeKnowledge)))
+	keep := pa.CanSeeKnowledge
+	if r.URL.Query().Get("deliverable") == "1" {
+		// For readers that hand the content on to agents or into files (the
+		// repository mirror): the same test as the bootstrap.
+		keep = func(k store.Knowledge) bool { return pa.CanSeeKnowledge(k) && pa.CanDeliverKnowledge(k) }
+	}
+	writeJSON(w, 200, pa.KnowledgeViews(filterTo(ks, 0, keep)))
 }
 
 func (a *api) insertMigratedKnowledge(w http.ResponseWriter, r *http.Request) {
@@ -293,8 +304,12 @@ func (a *api) insertMigratedKnowledge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.Knowledge.Person = personOf(r)
+	in.Knowledge.AuthorID = authorIDOf(r)
 	in.Knowledge.Scope = scope.CanonicalAxes(in.Knowledge.Scope)
 	if denyAccess(w, a.access(r).CheckKnowledgeCreate(in.Knowledge)) {
+		return
+	}
+	if denyAccess(w, a.access(r).CheckWrittenSessionRef(in.Knowledge.SessionRef)) {
 		return
 	}
 	saved, err := a.st.InsertMigrated(in)
@@ -565,6 +580,18 @@ func (a *api) patchKnowledge(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if confidence, ok := patch["confidence"]; ok {
+		// Der Besitzer der privaten Herkunfts-Session gibt einen gehaltenen Fund
+		// frei (staged), verifizieren darf er ihn nicht.
+		if ref, err := a.st.KnowledgeRef(id); err == nil && confidence == "staged" && a.access(r).CanReleaseKnowledge(ref) &&
+			a.access(r).CheckKnowledge(ref, store.ActVerify) != nil {
+			patch["confirmed_by"] = ""
+			if err := a.st.UpdateKnowledgeBy(id, patch, personOf(r)); err != nil {
+				writeStoreError(w, http.StatusBadRequest, err)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		if !a.checkKnowledgeRef(w, r, id, store.ActVerify) {
 			return
 		}
@@ -691,7 +718,7 @@ func (a *api) bootstrap(w http.ResponseWriter, r *http.Request) {
 	entries = filterTo(entries, 0, func(k store.Knowledge) bool { return pa.CanSeeKnowledge(k) && pa.CanDeliverKnowledge(k) })
 	openRequests := 0
 	if pa.CanSeeProject(axesFromQuery(r).Project, store.ResRequest) {
-		if openRequests, err = a.st.CountOpenRequests(axesFromQuery(r)); err != nil {
+		if openRequests, err = a.st.CountOpenRequestsFor(pa.Viewer(), axesFromQuery(r)); err != nil {
 			writeStoreError(w, http.StatusInternalServerError, err)
 			return
 		}
@@ -712,7 +739,7 @@ func (a *api) bootstrap(w http.ResponseWriter, r *http.Request) {
 	if !pa.Allow(axesFromQuery(r).Project, store.ResSessionMeta, store.ActRead, store.Object{}) {
 		return
 	}
-	if threads, err := a.st.InterruptedWork(axesFromQuery(r),
+	if threads, err := a.st.InterruptedWorkFor(pa.Viewer(), axesFromQuery(r),
 		time.Now().UTC().Add(-interruptedWindow).Format(time.RFC3339),
 		r.URL.Query().Get("session"), maxInterruptedThreads); err == nil {
 		fmt.Fprint(w, renderInterrupted(threads, time.Now().UTC()))
@@ -725,7 +752,7 @@ func (a *api) interrupted(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, []store.InterruptedThread{})
 		return
 	}
-	threads, err := a.st.InterruptedWork(axesFromQuery(r),
+	threads, err := a.st.InterruptedWorkFor(a.access(r).Viewer(), axesFromQuery(r),
 		time.Now().UTC().Add(-interruptedWindow).Format(time.RFC3339),
 		r.URL.Query().Get("session"), maxInterruptedThreads)
 	if err != nil {
@@ -1138,4 +1165,10 @@ func (a *api) sessionFilters(f scope.Axes, fetch int) (db, view scope.Axes, limi
 	view = scope.Axes{Machine: f.Machine, Branch: f.Branch}
 	f.Machine, f.Branch = "", ""
 	return f, view, max(fetch, 1000)
+}
+
+// authorIDOf is the numeric account of the caller, 0 when there is none.
+func authorIDOf(r *http.Request) int64 {
+	id, _ := store.AccountNumericID(principalOf(r).ID)
+	return id
 }

@@ -94,12 +94,17 @@ func (a Axes) Same(b Axes) bool {
 // descends from. Equality alone meant a branch cut from develop could not see
 // develop, which is the opposite of what a working tree does — it carries the
 // files it was cut from, and the ghost tree is supposed to grow the same way.
-func (a Axes) UnionWhere() (string, []any) {
-	clauses := []string{`(project = '' AND branch = '' AND machine = '')`}
+func (a Axes) UnionWhere() (string, []any) { return a.unionWhere(true) }
+
+func (a Axes) unionWhere(withProjectless bool) (string, []any) {
+	var clauses []string
 	var args []any
-	if a.Machine != "" {
-		clauses = append(clauses, `(project = '' AND branch = '' AND machine = ?)`)
-		args = append(args, a.Machine)
+	if withProjectless {
+		clauses = append(clauses, `(project = '' AND branch = '' AND machine = '')`)
+		if a.Machine != "" {
+			clauses = append(clauses, `(project = '' AND branch = '' AND machine = ?)`)
+			args = append(args, a.Machine)
+		}
 	}
 	if a.Project != "" {
 		if a.AnyBranch {
@@ -121,6 +126,18 @@ func (a Axes) UnionWhere() (string, []any) {
 		}
 	}
 	return "(" + strings.Join(clauses, " OR ") + ")", args
+}
+
+// RequestUnionWhere is UnionWhere for requests: only requests that belong to a
+// project. A request without a project used to be mixed into the ledger of every
+// project; machine facts have to reach every session on the machine, a backlog
+// entry does not belong everywhere. Without a project in the context nothing
+// narrows the ledger, so the global clauses stay for that case.
+func (a Axes) RequestUnionWhere() (string, []any) {
+	if a.Project == "" {
+		return a.UnionWhere()
+	}
+	return a.unionWhere(false)
 }
 
 // readableBranches is the current branch plus its ancestors. A sibling branch

@@ -41,6 +41,8 @@ func run(args []string, stdout io.Writer) int {
 		return cmdReview(rest, stdout)
 	case "regression":
 		return cmdRegression(rest, stdout)
+	case "knowledge":
+		return cmdKnowledge(rest, stdout)
 	case "request":
 		return cmdRequest(rest, stdout)
 	case "ghost":
@@ -121,7 +123,8 @@ const usage = `usage: ctx <command>
   export   write a session's original transcript as JSONL
   review   approve or reject distilled knowledge
   regression  say which test guards a fixed defect, and list the fixes none does
-  request  search and manage the work ledger
+  request  search and manage the work ledger (create, move, ...)
+  knowledge  move a knowledge entry to another project, machine or global
   ghost    read description history or archive confirmed-deleted paths
   doc      write, publish, and read long-form documents
   migrate  move repository agent artifacts into ghosttree

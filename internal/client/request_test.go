@@ -7,6 +7,7 @@ import (
 
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
+	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/server"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
@@ -20,7 +21,7 @@ func TestRequestClientRoundtripAndStructuredError(t *testing.T) {
 	c := New(config.Config{ServerURL: srv.URL, Token: token})
 
 	detail, err := c.CreateRequest(requestdomain.CreateInput{
-		Request:  requestdomain.Request{Type: "feature", Title: "client", Description: "body"},
+		Request:  requestdomain.Request{Type: "feature", Title: "client", Description: "body", Scope: scope.Axes{Project: "github.com/x/y"}},
 		Criteria: []string{"works"},
 	})
 	if err != nil {

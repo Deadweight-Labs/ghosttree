@@ -98,14 +98,14 @@ func TestKnowledgeEmptyIsOneLineAndOneAction(t *testing.T) {
 
 func TestKnowledgeGuestSeesOnlyReleasedEntriesAndNoSessionNumbers(t *testing.T) {
 	e := seedSessions(t)
-	trusted := knInsert(t, e.St, store.Knowledge{Title: "Released lesson", Confidence: "trusted", SessionRef: "session:" + strconv.FormatInt(e.id["anna-private"], 10) + "#3"})
+	trusted := knInsert(t, e.St, store.Knowledge{Title: "Released lesson", Confidence: "trusted", SessionRef: "session:" + strconv.FormatInt(e.id["anna-project"], 10) + "#3"})
 	knInsert(t, e.St, store.Knowledge{Title: "SECRET-STAGED", Confidence: "staged"})
 	knInsert(t, e.St, store.Knowledge{Title: "SECRET-HIDDEN", Confidence: "trusted", Scope: scope.Axes{Project: shellHiddenProject}})
 	_, page := e.get(t, e.Guest, "/ui/knowledge")
 	if !strings.Contains(page, "Released lesson") {
 		t.Fatal("guest does not see the released entry")
 	}
-	for _, leak := range []string{"SECRET", "session:", e.pid["anna-private"], "/ui/review", `data-nav="knowledge-review"`} {
+	for _, leak := range []string{"SECRET", "session:", e.pid["anna-project"], "/ui/review", `data-nav="knowledge-review"`} {
 		if strings.Contains(page, leak) {
 			t.Errorf("guest list leaks %q", leak)
 		}
@@ -118,7 +118,7 @@ func TestKnowledgeGuestSeesOnlyReleasedEntriesAndNoSessionNumbers(t *testing.T) 
 	}
 	// The member reads that session and gets the link, never the number.
 	_, member := e.get(t, e.Owner, "/ui/knowledge")
-	if !strings.Contains(member, `href="/ui/sessions/`+e.pid["anna-private"]+`#c3"`) || strings.Contains(member, "session:") {
+	if !strings.Contains(member, `href="/ui/sessions/`+e.pid["anna-project"]+`#c3"`) || strings.Contains(member, "session:") {
 		t.Error("the owner link to the readable source is missing or shows the reference")
 	}
 	secret := knInsert(t, e.St, store.Knowledge{Title: "SECRET-STAGED-2", Confidence: "staged"})

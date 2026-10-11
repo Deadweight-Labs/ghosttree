@@ -43,6 +43,7 @@ var (
 	requestDoneMsg = map[string]string{
 		"added": "requests.done.added", "met": "requests.done.met", "waived": "requests.done.waived",
 		"corrected": "requests.done.corrected", "completed": "requests.done.completed", "dropped": "requests.done.dropped",
+		"moved": "requests.done.moved",
 	}
 )
 
@@ -143,6 +144,9 @@ type requestView struct {
 	EditOpen                       bool
 	Back                           string
 	Token                          string
+	// MoveProjects sind die Projekte, in die der Betrachter den Auftrag legen
+	// darf; leer heißt: kein Formular.
+	MoveProjects []filterOption
 }
 
 func requestTypeLabel(typ string) string { return label(requestTypeKeys, typ) }
@@ -350,12 +354,22 @@ func (a *app) lookupRequest(w http.ResponseWriter, r *http.Request, act store.Ac
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return requestdomain.Detail{}, false
 	}
-	obj := store.Object{Own: pa.IsAuthor(ref.Person)}
+	obj, visible := pa.RequestObject(ref)
+	if !visible {
+		// Aus der privaten Session eines anderen Kontos: wie eine unbekannte Nummer.
+		pa.Filtered()
+		http.NotFound(w, r)
+		return requestdomain.Detail{}, false
+	}
 	if act != store.ActRead && a.accessDenied(w, r, pa.Check(ref.Project, store.ResRequest, store.ActRead, obj)) {
 		return requestdomain.Detail{}, false
 	}
 	if a.accessDenied(w, r, pa.Check(ref.Project, store.ResRequest, act, obj)) {
 		return requestdomain.Detail{}, false
+	}
+	if act != store.ActRead && pa.RequestHeldOwner(ref) {
+		// Der Besitzer der Herkunfts-Session übernimmt den Auftrag.
+		_ = a.store.ClaimDistilledRequest(id, store.RefRequest, personOf(r))
 	}
 	detail, err := a.store.RequestByID(id)
 	if err != nil {
@@ -438,6 +452,7 @@ func (a *app) requestPage(w http.ResponseWriter, r *http.Request) {
 	v.EditOpen = v.CanEdit && r.URL.Query().Get("edit") == "1"
 	if v.CanEdit {
 		v.Priorities = a.knownPriorities(pa, project, req.Priority)
+		v.MoveProjects = writableOptions(pa, project)
 	}
 	open := 0
 	humans := map[int64]string{}
@@ -567,7 +582,11 @@ func (a *app) relationLines(pa *store.ProjectAccess, rels []requestdomain.Relati
 
 func (a *app) requestReadable(pa *store.ProjectAccess, id int64) bool {
 	ref, err := a.store.RequestRef(store.RefRequest, id)
-	return err == nil && pa.Check(ref.Project, store.ResRequest, store.ActRead, requestObject(pa, ref.Person)) == nil
+	if err != nil {
+		return false
+	}
+	obj, visible := pa.RequestObject(ref)
+	return visible && pa.Check(ref.Project, store.ResRequest, store.ActRead, obj) == nil
 }
 
 func (a *app) knowledgeReadable(pa *store.ProjectAccess, id int64) bool {
@@ -649,7 +668,7 @@ func (a *app) visibleActivity(pa *store.ProjectAccess, d requestdomain.Detail) [
 }
 
 var activityKinds = map[string]string{
-	"request.created": "requests.act.created", "request.corrected": "requests.act.corrected", "request.done": "requests.act.done",
+	"request.created": "requests.act.created", "request.corrected": "requests.act.corrected", "request.moved": "requests.act.moved", "request.done": "requests.act.done",
 	"request.dropped": "requests.act.dropped", "request.migrated": "requests.act.migrated", "criterion.added": "requests.act.criterion_added",
 	"criterion.met": "requests.act.criterion_met", "criterion.waived": "requests.act.criterion_waived",
 	"relation.added": "requests.act.relation_added", "relation.removed": "requests.act.relation_removed",
@@ -670,7 +689,7 @@ func activityLines(acts []requestdomain.Activity, humans map[int64]string, now t
 			line.Label = msg(key)
 		}
 		switch act.Kind {
-		case "criterion.added", "request.dropped", "request.corrected", "work.finished", "request.done":
+		case "criterion.added", "request.dropped", "request.corrected", "request.moved", "work.finished", "request.done":
 			line.Text = ellipsize(sessionScrub.ReplaceAllString(act.Data, msg("requests.session")), 200)
 		case "criterion.met", "criterion.waived":
 			if n, err := strconv.ParseInt(strings.TrimPrefix(act.Data, "AC-"), 10, 64); err == nil {

@@ -140,6 +140,12 @@ type SearchFilter struct {
 	// sichtbar; UnclaimedAll (Instanz-Admin) zeigt alle dort.
 	UnclaimedAuthor string
 	UnclaimedAll    bool
+	// HideHeld lässt distillierte, noch nicht übernommene Aufträge aus privaten
+	// Sessions anderer Konten weg (HeldViewer ist das Konto des Betrachters,
+	// HeldInstanceOwner der Besitzer von Altbestand ohne Konto).
+	HideHeld          bool
+	HeldViewer        int64
+	HeldInstanceOwner int64
 }
 
 type SearchHit struct {

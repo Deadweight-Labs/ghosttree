@@ -52,6 +52,11 @@
 {{.RawDescription}}</textarea></label>
 <label class="kn-field"><span>{{t "requests.field_reason"}}</span><input class="clay-field" name="reason" required maxlength="2000" autocomplete="off"></label>
 <button class="ov-btn ov-btn-primary clay">{{t "requests.save"}}</button></form></details>
+{{if .MoveProjects}}<details class="kn-edit clay"><summary>{{t "move.title"}}</summary>
+<form method="post" action="/ui/requests/{{.ID}}/move"><input type="hidden" name="csrf_token" value="{{.Token}}">
+<label class="kn-field"><span>{{t "move.field_project"}}</span><select class="clay-select" name="project">{{range .MoveProjects}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select></label>
+<label class="kn-field"><span>{{t "move.field_reason"}}</span><input class="clay-field" name="reason" required maxlength="2000" autocomplete="off"></label>
+<button class="ov-btn ov-btn-primary clay">{{t "move.title"}}</button></form></details>{{end}}
 {{if .Open}}{{if .CanComplete}}<details class="kn-edit clay"><summary>{{t "requests.complete"}}</summary>
 <form method="post" action="/ui/requests/{{.ID}}/complete"><input type="hidden" name="csrf_token" value="{{.Token}}">
 <label class="kn-field"><span>{{t "requests.field_evidence_kind"}}</span><select class="clay-select" name="evidence_kind">{{range .Kinds}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select></label>

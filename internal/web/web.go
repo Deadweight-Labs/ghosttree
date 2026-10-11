@@ -141,9 +141,11 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	} {
 		a.handle(mux, "POST /ui/requests/{id}/"+suffix, a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(h)))))
 	}
+	a.handle(mux, "POST /ui/requests/{id}/move", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.requestMove))))))
 	a.handle(mux, "POST /ui/requests/{id}/correct", a.requirePerson(a.requireInteractive(limitBodyN(requestCorrectForm, a.requestFormTooLarge(a.requireCSRF(http.HandlerFunc(a.requestCorrect)))))))
 	a.handle(mux, "GET /ui/knowledge", a.requirePerson(http.HandlerFunc(a.knowledgePage)))
 	a.handle(mux, "GET /ui/knowledge/{id}", a.requirePerson(http.HandlerFunc(a.knowledgeItemPage)))
+	a.handle(mux, "POST /ui/knowledge/{id}/move", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.knowledgeMove))))))
 	a.handle(mux, "POST /ui/knowledge/{id}/edit", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.knowledgeEdit))))))
 	a.handle(mux, "GET /ui/review", a.requirePerson(http.HandlerFunc(a.reviewPage)))
 	a.handle(mux, "POST /ui/review/{id}/{verdict}", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.reviewDecide))))))
@@ -181,6 +183,7 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 		"/ui/orgs/invite": a.orgInvite, "/ui/orgs/invite/revoke": a.orgInviteRevoke,
 		"/ui/orgs/member/role": a.orgMemberRole, "/ui/orgs/member/remove": a.orgMemberRemove,
 		"/ui/orgs/project/move": a.orgProjectMove, "/ui/orgs/project/role": a.orgProjectRole,
+		"/ui/orgs/create": a.orgCreate, "/ui/orgs/rename": a.orgRename,
 	} {
 		a.handle(mux, "POST "+path, a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(h)))))
 	}
@@ -409,11 +412,13 @@ var webRoutes = map[string]webClass{
 	"POST /ui/requests/{id}/criteria":       webAdmin,
 	"POST /ui/requests/{id}/criteria/{cid}": webAdmin,
 	"POST /ui/requests/{id}/correct":        webAdmin,
+	"POST /ui/requests/{id}/move":           webAdmin,
 	"POST /ui/requests/{id}/complete":       webAdmin,
 	"POST /ui/requests/{id}/drop":           webAdmin,
 	"GET /ui/knowledge":                     webProject,
 	"GET /ui/knowledge/{id}":                webProject,
 	"POST /ui/knowledge/{id}/edit":          webAdmin,
+	"POST /ui/knowledge/{id}/move":          webAdmin,
 	"GET /ui/review":                        webProject,
 	"POST /ui/review/{id}/{verdict}":        webAdmin,
 	"GET /ui/sessions":                      webProject,
@@ -451,6 +456,8 @@ var webRoutes = map[string]webClass{
 	"POST /ui/orgs/member/remove":           webAdmin,
 	"POST /ui/orgs/project/move":            webAdmin,
 	"POST /ui/orgs/project/role":            webAdmin,
+	"POST /ui/orgs/create":                  webAdmin,
+	"POST /ui/orgs/rename":                  webAdmin,
 	"POST /ui/orgs/accept":                  webAccount,
 	"POST /ui/orgs/default":                 webAccount,
 }

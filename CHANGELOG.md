@@ -8,6 +8,58 @@ Versioning, with pre-1.0 compatibility rules described in
 
 - Added: `ctx garden check-knowledge` (REQ-457 pilot). An opt-in gardener checks pitfalls and decisions against the code and reports whether each still holds, with commits or file:line as reasons. It stays off without an API key (`GHOSTTREE_GARDEN_KEY` or a `garden` entry in llm.json), supports `--dry-run` and a `--max-usd` budget, and with `--propose` only adds staged notes marked as coming from the gardener.
 
+- Added: knowledge and requests are filed where they belong, not where the session
+  happens to stand (REQ-458). `context_remember`, `request_create` and `thread_open`
+  take an optional `project` (a remote or a short name that is unique among the
+  projects you can write to), `context_remember` an optional `machine` (any name,
+  including an ssh target no agent ever ran on). A project you cannot write to
+  answers exactly like one that does not exist. Nothing falls back silently any
+  more: `scope_hint` project without a project, and a request without a project,
+  are refused with the list of projects you can write to. A note for a machine
+  without sessions is stored and reaches sessions on that machine; a machine token
+  may write notes about another machine while the name is free. Writes from MCP
+  and `ctx request create` record the session ref. Existing entries move to
+  another project, a machine or global: `ctx knowledge move <id> --project P |
+  --machine M | --global`, `ctx request move <id> --project P`, the new
+  `context_move` tool, `request_record_progress` action `correct` with `project`,
+  and a "Move" form on the knowledge and request pages. You need write access in
+  both places, and the move is logged (the request's activity, the entry's move
+  history). Changed: requests without a project no longer appear in the ledger,
+  search results or bootstrap count of any project (they stay in the lists that
+  name no project, where they can be moved: existing requests without a project
+  disappear from the project ledgers and are sorted in with `ctx request move`);
+  machine and global knowledge still reaches every session it applies to.
+  Knowledge for a machine is delivered to sessions only while its author owns that
+  machine, so nobody can plant an instruction on a free machine name for whoever
+  claims it later (the author still sees it). `thread_open` for another project
+  opens the thread on the strength of your role there and does not register the
+  session in that project's room; its opening post travels with the question.
+  Moving an entry to global needs at least the lead role in its project. A moved
+  request keeps hiding the handoffs and quotes of private source sessions from
+  those who may not read them.
+- Changed: private means private (REQ-438). A session that is not shared is read
+  by its owner alone: not by organization or project owners, not by leads, not by
+  the instance admin, whether in the sessions list, the transcript, the raw
+  export, search, the MCP tools, request work, snapshots or evidence quotes.
+  Shared sessions behave as before. A project owner can still withdraw a shared
+  session, but can no longer share a private one or widen a shared one. Knowledge
+  and requests the distiller derived from a private session stay visible to that
+  session's owner alone until the owner adopts them or shares the session; what an
+  agent saves on purpose stays normal project knowledge. The owner releases a held
+  finding to the reviewers (or discards it) but cannot verify it; if the owner
+  leaves the project, the finding stays held and invisible to others until the owner returns and releases or discards it; nobody else can release it. A knowledge entry
+  that cites a session must cite one of your own. Handoffs, quotes and what a
+  private session works on are private like the transcript, also in snapshots.
+  Upgrade note: older held-back (quarantined) findings from private sessions are
+  held for their session owner from now on; they reach the review queue when the
+  owner releases them or shares the session.
+- Added: any signed-in account can create an organization on the Organization
+  page and becomes its owner; the way on leads to inviting someone or connecting a
+  project. Owners (and the instance admin) can rename it; the address stays.
+  `ctx org create` stays admin-only.
+- Changed: the invitation page says what you share and what your role sees:
+  sessions stay private until you share them; project members see the project's
+  knowledge, requests and room messages.
 - Fixed: joining from a fresh machine (REQ-438). `ctx join` now always sets up the
   collector service, also when neither Claude Code nor Codex is installed yet, and
   ends with one line saying what to install next (`--no-watch` still skips it).

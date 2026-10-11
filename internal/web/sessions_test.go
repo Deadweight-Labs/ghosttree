@@ -128,10 +128,13 @@ func TestSessionListShowsTitlesWithRandomAddressesToTheOwner(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("status %d", code)
 	}
-	for _, name := range []string{"alice-private", "anna-private", "anna-project", "anna-guests", "hidden-project"} {
+	for _, name := range []string{"alice-private", "anna-project", "anna-guests", "hidden-project"} {
 		if !strings.Contains(page, `href="/ui/sessions/`+e.pid[name]+`"`) {
 			t.Errorf("owner list lacks %s", name)
 		}
+	}
+	if strings.Contains(page, e.pid["anna-private"]) {
+		t.Error("the owner's list shows a private session of another account")
 	}
 	if !strings.Contains(page, "Fix the zebrafish login") {
 		t.Error("title missing")
@@ -141,7 +144,7 @@ func TestSessionListShowsTitlesWithRandomAddressesToTheOwner(t *testing.T) {
 	}
 }
 
-func TestSessionListShowsMembersPrivateRowsWithoutLinkOrTitle(t *testing.T) {
+func TestSessionListHidesForeignPrivateSessionsCompletely(t *testing.T) {
 	e := seedSessions(t)
 	_, page := e.get(t, e.Member, "/ui/sessions")
 	for _, name := range []string{"anna-private", "anna-project", "anna-guests"} {
@@ -152,8 +155,8 @@ func TestSessionListShowsMembersPrivateRowsWithoutLinkOrTitle(t *testing.T) {
 	if strings.Contains(page, e.pid["alice-private"]) {
 		t.Error("the foreign private session's address is rendered")
 	}
-	if n := strings.Count(page, `class="srow is-private"`); n != 1 {
-		t.Errorf("%d private rows, want 1", n)
+	if n := strings.Count(page, `class="srow is-private"`); n != 0 {
+		t.Errorf("%d private rows, want none: foreign private sessions leave no row", n)
 	}
 	// Das Hidden-Projekt hat der Member nicht.
 	if strings.Contains(page, e.pid["hidden-project"]) || strings.Contains(page, "feat/hidden-project") {
@@ -222,6 +225,9 @@ func TestSessionListFiltersAndFacetCounts(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = e.St.AppendChunks(cx, chunks(uLine("a codex session about parsing")))
+	if err := e.St.SetSessionVisibility(cx, e.St.Access(store.Principal{ID: "person:2", Label: "anna"}), store.VisProject); err != nil {
+		t.Fatal(err)
+	}
 	cxSess, _ := e.St.SessionByID(cx)
 	_, page := e.get(t, e.Owner, "/ui/sessions?agent=codex")
 	if !strings.Contains(page, cxSess.PublicID) || strings.Contains(page, e.pid["anna-guests"]) {
@@ -235,7 +241,7 @@ func TestSessionListFiltersAndFacetCounts(t *testing.T) {
 	if strings.Contains(page, e.pid["alice-private"]) {
 		t.Error("machine filter does not narrow the list")
 	}
-	if !strings.Contains(page, "laptop (4)") || !strings.Contains(page, "mainex (2)") {
+	if !strings.Contains(page, "laptop (3)") || !strings.Contains(page, "mainex (2)") {
 		t.Errorf("facet counts missing or wrong: %s", regexp.MustCompile(`<select[^>]*name="machine".*?</select>`).FindString(page))
 	}
 }
@@ -259,7 +265,7 @@ func TestSessionListPagesWithAnOlderLink(t *testing.T) {
 	}
 	next := strings.ReplaceAll(m[1], "&amp;", "&")
 	_, page2 := e.get(t, e.Owner, next)
-	if strings.Count(page2, `class="srow`) != 15 || strings.Contains(page2, "cursor=") {
+	if strings.Count(page2, `class="srow`) != 14 || strings.Contains(page2, "cursor=") {
 		t.Errorf("second page: rows=%d", strings.Count(page2, `class="srow`))
 	}
 }
@@ -281,7 +287,7 @@ func TestSessionSearchShowsKindedHitsWithMarkedSnippets(t *testing.T) {
 		t.Error("thinking in Everything")
 	}
 	m := regexp.MustCompile(`(\d+) matches in (\d+) sessions`).FindStringSubmatch(page)
-	if m == nil || m[2] != "5" {
+	if m == nil || m[2] != "4" {
 		t.Errorf("found line = %v", m)
 	}
 	// Treffer springen in den Kontext.
@@ -308,7 +314,7 @@ func TestSessionSearchOnlyUsesWhatTheViewerMayRead(t *testing.T) {
 	}{
 		{"member", e.Member, []string{"anna-private", "anna-project", "anna-guests"}, []string{"alice-private", "hidden-project"}},
 		{"guest", e.Guest, []string{"anna-guests"}, []string{"alice-private", "anna-private", "anna-project", "hidden-project"}},
-		{"lead", e.Lead, []string{"alice-private", "anna-private", "anna-project", "anna-guests"}, []string{"hidden-project"}},
+		{"lead", e.Lead, []string{"anna-project", "anna-guests"}, []string{"alice-private", "anna-private", "hidden-project"}},
 	} {
 		_, page := e.get(t, c.client, "/ui/sessions?q=zebrafish")
 		for _, w := range c.want {
@@ -528,8 +534,11 @@ func TestSessionDetailAccessPerRole(t *testing.T) {
 		name   string
 		want   int
 	}{
-		{"owner", e.Owner, "anna-private", 200},
-		{"lead", e.Lead, "anna-private", 200},
+		{"owner foreign private", e.Owner, "anna-private", 404},
+		{"owner own private", e.Owner, "alice-private", 200},
+		{"lead foreign private", e.Lead, "anna-private", 404},
+		{"lead foreign private 2", e.Lead, "alice-private", 404},
+		{"lead shared", e.Lead, "anna-project", 200},
 		{"member own", e.Member, "anna-private", 200},
 		{"member foreign private", e.Member, "alice-private", 404},
 		{"member shared", e.Reviewer, "anna-project", 200},

@@ -276,6 +276,18 @@ func (s *Store) SessionOwnedBy(sessionExternalID, principalID string) bool {
 	return err == nil && n > 0
 }
 
+// SessionIsShared sagt, ob eine Session mit dieser Kennung freigegeben ist. Eine
+// unbekannte gilt als nicht freigegeben.
+func (s *Store) SessionIsShared(sessionExternalID string) bool {
+	if s.reader != nil {
+		return s.reader.SessionIsShared(sessionExternalID)
+	}
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM sessions WHERE external_id=?
+		AND (shared=1 OR COALESCE(visibility,'') NOT IN ('','private'))`, sessionExternalID).Scan(&n)
+	return err == nil && n > 0
+}
+
 // OwnerAccountID ist das Konto, dem Altbestand ohne Konto gehört.
 func (s *Store) OwnerAccountID() int64 {
 	if s.reader != nil {

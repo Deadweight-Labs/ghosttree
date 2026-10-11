@@ -1356,6 +1356,21 @@ func (s *Store) RenameOrg(actorPrincipal string, orgID int64, name, slug string)
 			return d.RenameOrg(p[0].(string), p[1].(int64), p[2].(string), p[3].(string))
 		})
 	}
+	return s.renameOrg(actorPrincipal, orgID, name, slug, false)
+}
+
+// RenameOrgAsAdmin ist RenameOrg für einen Instanz-Admin, der nicht Owner der
+// Organisation ist. Ob der Aufrufer Admin ist, prüft er selbst.
+func (s *Store) RenameOrgAsAdmin(actorPrincipal string, orgID int64, name, slug string) (Org, error) {
+	if s.writer != nil {
+		return queueValue(s, []any{actorPrincipal, orgID, name, slug}, func(d *Store, p []any) (Org, error) {
+			return d.RenameOrgAsAdmin(p[0].(string), p[1].(int64), p[2].(string), p[3].(string))
+		})
+	}
+	return s.renameOrg(actorPrincipal, orgID, name, slug, true)
+}
+
+func (s *Store) renameOrg(actorPrincipal string, orgID int64, name, slug string, admin bool) (Org, error) {
 	actor, err := parsePersonPrincipalID(actorPrincipal)
 	if err != nil {
 		return Org{}, err
@@ -1373,7 +1388,7 @@ func (s *Store) RenameOrg(actorPrincipal string, orgID int64, name, slug string)
 		return Org{}, err
 	}
 	defer tx.Rollback()
-	if orgRoleTx(tx, orgID, actor) != OrgOwner {
+	if !admin && orgRoleTx(tx, orgID, actor) != OrgOwner {
 		return Org{}, ErrNotOrgOwner
 	}
 	old, err := orgByIDTx(tx, orgID)

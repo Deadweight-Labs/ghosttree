@@ -50,6 +50,12 @@
 <label class="kn-field"><span>{{t "knowledge.field_type"}}</span><select class="clay-select" name="type">{{range $.KnowledgeItemV.Types}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select></label>
 <label class="kn-field"><span>{{t "knowledge.field_body"}}</span><textarea class="clay-field kn-textarea" name="body" required rows="12">{{.RawBody}}</textarea></label>
 <button class="ov-btn ov-btn-primary clay">{{t "knowledge.save"}}</button></form></details>{{end}}
+{{with $.KnowledgeItemV.Move}}<details class="kn-edit clay"><summary>{{t "move.title"}}</summary>
+<form method="post" action="/ui/knowledge/{{$.KnowledgeItemV.Card.ID}}/move"><input type="hidden" name="csrf_token" value="{{.Token}}">
+<label class="kn-field"><span>{{t "move.field_project"}}</span><select class="clay-select" name="project"><option value=""{{if .GlobalSelected}} selected{{end}}>{{t "move.global"}}</option>{{range .Projects}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select></label>
+<label class="kn-field"><span>{{t "move.field_machine"}}</span><input class="clay-field" name="machine" value="{{.Machine}}" maxlength="100" autocomplete="off"></label>
+<button class="ov-btn ov-btn-primary clay">{{t "move.title"}}</button></form></details>{{end}}
 {{end}}
+{{if .Moves}}<section class="kn-history"><h2>{{t "move.history"}}</h2><ul class="ov-list">{{range .Moves}}<li><span class="kn-hist-title">{{.Text}}</span><span class="ov-meta">{{.By}}</span><span class="ov-num">{{.Age}}</span></li>{{end}}</ul></section>{{end}}
 {{if .History}}<section class="kn-history"><h2>{{t "knowledge.history"}}</h2><ul class="ov-list">{{range .History}}<li><details><summary><span class="kn-hist-title">{{.Title}}</span><span class="ov-meta">{{.By}}</span><span class="ov-num">{{.Age}}</span></summary>{{if .ReplacedBy}}<p class="ov-meta">{{t "knowledge.replaced_by" .ReplacedBy}}</p>{{end}}{{template "knbody" .Blocks}}</details></li>{{end}}</ul></section>{{end}}
 {{end}}{{template "foot" .}}{{end}}
