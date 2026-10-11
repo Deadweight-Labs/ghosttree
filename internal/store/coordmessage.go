@@ -77,7 +77,17 @@ type CoordMessage struct {
 	// Leser, die die Mitglieder des Projektraums nicht sehen (Gast). Der Wert
 	// ist Nutzereingabe: Anzeigende Clients müssen ihn entschärfen.
 	SenderDisplayName string `json:"sender_display_name,omitempty"`
+	// ToYou is derived like Authority and only set in answers to an agent: the
+	// message mentions this agent, or sits in a private room with it. It never
+	// says who else was mentioned.
+	ToYou string `json:"to_you,omitempty"`
 }
+
+// Values of CoordMessage.ToYou.
+const (
+	ToYouMention = "mention"
+	ToYouDirect  = "direct"
+)
 
 // CoordRef verbindet eine Nachricht mit einem bestehenden Ghosttree-Objekt.
 // Ohne das ist eine Abstimmung nur Text; damit ist sie der Weg zurück zu der
