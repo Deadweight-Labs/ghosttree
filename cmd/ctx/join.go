@@ -44,6 +44,7 @@ var (
 	joinCanOpen     = canOpenBrowser
 	joinDetect      = detectHarnesses
 	joinInstall     = cmdInstall
+	joinCollector   = installCollector
 	joinTimeout     = joinDefaultTimeout
 
 	startCallbackFunc = startCallback
@@ -410,13 +411,25 @@ func detectHarnesses() []string {
 	home, _ := os.UserHomeDir()
 	var found []string
 	for _, h := range []string{"claude", "codex"} {
-		if st, err := os.Stat(home + "/." + h); err == nil && st.IsDir() {
-			found = append(found, h)
-		} else if _, err := exec.LookPath(h); err == nil {
+		if harnessPresent(h, home) {
 			found = append(found, h)
 		}
 	}
 	return found
+}
+
+// harnessPresent: the harness has a config directory in the home directory or
+// its command is on PATH. join and doctor share this test.
+func harnessPresent(h, home string) bool {
+	dir := home + "/." + h
+	if h == "opencode" {
+		dir = home + "/.config/opencode"
+	}
+	if st, err := os.Stat(dir); err == nil && st.IsDir() {
+		return true
+	}
+	_, err := exec.LookPath(h)
+	return err == nil
 }
 
 // ---- Befehl ----
@@ -615,8 +628,22 @@ func cmdJoin(args []string, stdout io.Writer) int {
 	var setUp []string
 	codexSetUp, codexNoticeShown := false, false
 	detected := joinDetect()
+	// The collector is set up whether or not an agent is installed yet: it
+	// picks up sessions as soon as one appears.
+	if !*noWatch {
+		var coll bytes.Buffer
+		if joinCollector(&coll, home) == 0 && !strings.Contains(coll.String(), "not started") {
+			fmt.Fprintln(stdout, "Collector running.")
+		} else {
+			for _, line := range strings.Split(strings.TrimSpace(coll.String()), "\n") {
+				if line != "" {
+					fmt.Fprintln(stdout, safe(line))
+				}
+			}
+		}
+	}
 	if len(detected) == 0 {
-		fmt.Fprintf(stdout, "Connected, but Claude Code and Codex were not found on this machine, so nothing was set up for your agents.\nInstall one of them, then run: %s install claude  (or: %s install codex)\n", ctxHint(), ctxHint())
+		fmt.Fprintf(stdout, "Connected. Install Claude Code or Codex, then run: %s install claude|codex\n", ctxHint())
 	}
 	for _, h := range detected {
 		if ctx.Err() != nil {

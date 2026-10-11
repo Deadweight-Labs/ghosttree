@@ -172,7 +172,7 @@ func InstallWatchService(home string) ([]Change, error) {
 		startErr = startSystemdUnit(changed, len(old) > 0)
 	}
 	if startErr != nil {
-		changes = append(changes, Change{Path: path, Action: "collector not started (" + startErr.Error() + "); start it with 'ctx watch' or " + manualStartHint()})
+		changes = append(changes, Change{Path: path, Action: "collector not started (" + startErr.Error() + "); start it with 'ctx watch' or " + manualStartHint() + noUserBusHint(startErr)})
 	} else {
 		changes = append(changes, Change{Path: path, Action: "collector running"})
 	}
@@ -214,6 +214,32 @@ func isOurWatchDefinition(old, home string) bool {
 		return old == watchUnitText(ctx)
 	}
 	return false
+}
+
+// userBusMissing reports whether a systemctl --user failure means there is no
+// user session bus (a shell without a login session, as over a plain
+// `incus exec` or some SSH setups), not a problem with the unit itself.
+func userBusMissing(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "Failed to connect to bus")
+}
+
+// noUserBusHint names the two commands that fix a missing user bus: linger
+// starts the user manager without a login, the second starts the collector in
+// it. Nothing runs with sudo on the user's behalf.
+func noUserBusHint(err error) string {
+	if serviceGOOS == "darwin" || !userBusMissing(err) {
+		return ""
+	}
+	return ". There is no user systemd session: run 'loginctl enable-linger $USER' (it may ask for authentication), then '" + CtxCommandForHumans() + " install watch'"
+}
+
+// UserBusHint is the fix text for a collector whose service state cannot be
+// read because the user bus is missing; empty on other platforms.
+func UserBusHint() string {
+	if serviceGOOS == "darwin" {
+		return ""
+	}
+	return "run 'loginctl enable-linger $USER', then '" + CtxCommandForHumans() + " install watch'"
 }
 
 func manualStartHint() string {

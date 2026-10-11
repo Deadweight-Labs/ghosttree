@@ -84,10 +84,11 @@ func (f *fakeTTY) questions() []string {
 }
 
 type joinFixture struct {
-	tty      *fakeTTY
-	opened   []string
-	installs []string
-	detected []string
+	tty        *fakeTTY
+	opened     []string
+	installs   []string
+	detected   []string
+	collectors int
 }
 
 // newJoinFixture isoliert Konfiguration und Umgebung und ersetzt alles, was das
@@ -98,10 +99,11 @@ func newJoinFixture(t *testing.T, answers ...string) *joinFixture {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("SSH_CONNECTION", "")
 	f := &joinFixture{tty: &fakeTTY{answers: answers}}
-	oldTTY, oldOpen, oldDetect, oldInstall, oldTimeout, oldDisplay, oldCan := joinTTY, joinOpenBrowser, joinDetect, joinInstall, joinTimeout, joinHasDisplay, joinCanOpen
+	oldTTY, oldOpen, oldDetect, oldInstall, oldTimeout, oldDisplay, oldCan, oldColl := joinTTY, joinOpenBrowser, joinDetect, joinInstall, joinTimeout, joinHasDisplay, joinCanOpen, joinCollector
 	t.Cleanup(func() {
-		joinTTY, joinOpenBrowser, joinDetect, joinInstall, joinTimeout, joinHasDisplay, joinCanOpen = oldTTY, oldOpen, oldDetect, oldInstall, oldTimeout, oldDisplay, oldCan
+		joinTTY, joinOpenBrowser, joinDetect, joinInstall, joinTimeout, joinHasDisplay, joinCanOpen, joinCollector = oldTTY, oldOpen, oldDetect, oldInstall, oldTimeout, oldDisplay, oldCan, oldColl
 	})
+	joinCollector = func(io.Writer, string) int { f.collectors++; return 0 }
 	joinTTY = func() (terminal, error) { return f.tty, nil }
 	joinOpenBrowser = func(u string) error { f.opened = append(f.opened, u); return nil }
 	joinDetect = func() []string { return f.detected }
@@ -1692,11 +1694,45 @@ func TestJoinWithoutAnyHarnessSaysWhatToDo(t *testing.T) {
 		t.Fatalf("exit %d: %s", code, out.String())
 	}
 	text := out.String()
-	if !strings.Contains(text, "Claude Code and Codex were not found") || !strings.Contains(text, "install claude") {
+	if !strings.Contains(text, "Install Claude Code or Codex, then run: "+ctxHint()+" install claude|codex") || !strings.Contains(text, "Collector running.") {
 		t.Fatalf("no guidance:\n%s", text)
+	}
+	if f.collectors != 1 {
+		t.Fatalf("collector set up %d times, want once even without an agent", f.collectors)
 	}
 	if strings.Contains(text, "claude      not installed") {
 		t.Fatalf("raw status line left in:\n%s", text)
+	}
+}
+
+func TestJoinNoWatchSkipsTheCollectorWithoutAnyHarness(t *testing.T) {
+	f := newJoinFixture(t)
+	f.detected = nil
+	srv := loopbackServer(t, func(_ int, state string) string { return "/callback?code=auth-code&state=" + state })
+	var out syncBuffer
+	if code := cmdJoin([]string{"--server", srv.URL, "--pair", "abcd-efgh", "--name", "box", "--yes", "--no-watch"}, &out); code != 0 {
+		t.Fatalf("exit %d: %s", code, out.String())
+	}
+	if f.collectors != 0 || strings.Contains(out.String(), "Collector running.") {
+		t.Fatalf("collector set up despite --no-watch (%d):\n%s", f.collectors, out.String())
+	}
+}
+
+func TestJoinShowsWhyTheCollectorDidNotStart(t *testing.T) {
+	f := newJoinFixture(t)
+	f.detected = nil
+	joinCollector = func(w io.Writer, _ string) int {
+		io.WriteString(w, "collector not started (exit status 1: Failed to connect to bus); run loginctl enable-linger $USER"+"\n")
+		return 0
+	}
+	srv := loopbackServer(t, func(_ int, state string) string { return "/callback?code=auth-code&state=" + state })
+	var out syncBuffer
+	if code := cmdJoin([]string{"--server", srv.URL, "--pair", "abcd-efgh", "--name", "box", "--yes"}, &out); code != 0 {
+		t.Fatalf("exit %d: %s", code, out.String())
+	}
+	text := out.String()
+	if strings.Contains(text, "Collector running.") || !strings.Contains(text, "loginctl enable-linger $USER") {
+		t.Fatalf("collector failure not shown:\n%s", text)
 	}
 }
 

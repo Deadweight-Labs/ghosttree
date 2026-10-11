@@ -90,8 +90,30 @@ func TestWatchServiceWithoutUserBusIsNotAnError(t *testing.T) {
 	if !strings.Contains(last, "not started") || !strings.Contains(last, "systemctl --user enable --now ghosttree-watch.service") {
 		t.Fatalf("last change = %q", last)
 	}
+	for _, want := range []string{"loginctl enable-linger $USER", "install watch"} {
+		if !strings.Contains(last, want) {
+			t.Fatalf("no %q in %q", want, last)
+		}
+	}
+	if strings.Contains(last, "sudo") {
+		t.Fatalf("hint must not run sudo: %q", last)
+	}
 	if _, statErr := os.Stat(filepath.Join(home, ".config", "systemd", "user", "ghosttree-watch.service")); statErr != nil {
 		t.Fatal("unit was not written")
+	}
+}
+
+func TestWatchServiceOtherFailuresGetNoLingerHint(t *testing.T) {
+	home := t.TempDir()
+	useCtx(t, fakeBinary(t, filepath.Join(home, "ctx")))
+	log := &ctlLog{fail: map[string]error{"daemon-reload": errors.New("Unit file is masked")}}
+	defer SetServiceBackend("linux", log.run, 1000)()
+	changes, err := InstallWatchService(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if last := changes[len(changes)-1].Action; strings.Contains(last, "enable-linger") {
+		t.Fatalf("linger hint for an unrelated failure: %q", last)
 	}
 }
 
