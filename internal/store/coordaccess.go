@@ -1497,6 +1497,9 @@ func (a CoordAccess) CreateThread(thread Thread) (int64, error) {
 			if err := validateRequestLinkTx(tx, RoomKeyForProject(thread.Project), l.ID); err != nil {
 				return 0, err
 			}
+			if a.requestHeldTx(tx, l.ID) {
+				return 0, errLinkedRequestNotFound
+			}
 		}
 		if _, err := tx.Exec(`INSERT OR IGNORE INTO thread_links(thread_id,object_kind,object_id,object_revision,created_at)
 			VALUES(?,?,?,?,?)`, id, l.Kind, l.ID, l.Revision, now()); err != nil {
@@ -1653,6 +1656,9 @@ func (a CoordAccess) createTaskThread(roomKey string, anchorMessageID int64, tit
 			return 0, err
 		}
 		if kind == RoomProject && requestProject != "" && requestProject != project {
+			return 0, errLinkedRequestNotFound
+		}
+		if a.requestHeldTx(tx, requestID) {
 			return 0, errLinkedRequestNotFound
 		}
 		if project == roomKey && requestProject != "" {
@@ -1940,6 +1946,9 @@ func (a CoordAccess) LinkThread(link ThreadLink) error {
 		} else if found {
 			if err := validateRequestLinkTx(tx, home.RoomKey, link.ID); err != nil {
 				return err
+			}
+			if a.requestHeldTx(tx, link.ID) {
+				return errLinkedRequestNotFound
 			}
 			var existingID string
 			err := tx.QueryRow(`SELECT object_id FROM thread_links WHERE thread_id=? AND object_kind='request' ORDER BY rowid LIMIT 1`, link.ThreadID).Scan(&existingID)

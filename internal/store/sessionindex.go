@@ -643,6 +643,10 @@ func (s *Store) SetSessionVisibility(id int64, pa *ProjectAccess, level string) 
 	if err != nil {
 		return ErrAccessNotFound
 	}
+	// Wer die Session nicht besitzt (Projekt-Owner), darf sie nur zurücknehmen.
+	if !pa.OwnsSession(sess) && level != VisPrivate {
+		return ErrAccessForbidden
+	}
 	d := pa.Decide(sess.Scope.Project, ResTranscript, ActShare, pa.transcriptObject(sess))
 	if !d.Allowed {
 		if d.Hidden {

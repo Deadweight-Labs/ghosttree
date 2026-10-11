@@ -228,6 +228,14 @@ func requestScopeWhere(filter requestdomain.SearchFilter) ([]string, []any) {
 		}
 		where = append(where, `(`+clause+`)`)
 	}
+	if filter.HideHeld {
+		where = append(where, `NOT (r.origin='distilled' AND r.person='' AND EXISTS (
+			SELECT 1 FROM sessions hs WHERE 'session:'||hs.id = substr(r.session_ref,1,length('session:'||hs.id))
+			  AND (length(r.session_ref)=length('session:'||hs.id) OR substr(r.session_ref,length('session:'||hs.id)+1,1)='#')
+			  AND hs.shared=0 AND COALESCE(hs.visibility,'') IN ('','private')
+			  AND (CASE WHEN hs.account_id=0 THEN ? ELSE hs.account_id END) != ?))`)
+		args = append(args, filter.HeldInstanceOwner, filter.HeldViewer)
+	}
 	return where, args
 }
 
@@ -321,9 +329,26 @@ func (s *Store) CountOpenRequests(ax scope.Axes) (int, error) {
 	if s.reader != nil {
 		return s.reader.CountOpenRequests(ax)
 	}
+	return s.CountOpenRequestsFor(SessionViewer{}, ax)
+}
+
+// CountOpenRequestsFor zählt ohne die gehaltenen Aufträge aus privaten Sessions
+// anderer Konten: die Zahl verriete sie sonst (REQ-438 D).
+func (s *Store) CountOpenRequestsFor(v SessionViewer, ax scope.Axes) (int, error) {
+	if s.reader != nil {
+		return s.reader.CountOpenRequestsFor(v, ax)
+	}
 	where, args := ax.UnionWhere()
+	q := `SELECT COUNT(*) FROM requests WHERE state='open' AND ` + where
+	if v.Enforced {
+		q += ` AND NOT (origin='distilled' AND person='' AND EXISTS (
+			SELECT 1 FROM sessions hs WHERE (session_ref='session:'||hs.id OR session_ref LIKE 'session:'||hs.id||'#%')
+			  AND hs.shared=0 AND COALESCE(hs.visibility,'') IN ('','private')
+			  AND (CASE WHEN hs.account_id=0 THEN ? ELSE hs.account_id END) != ?))`
+		args = append(args, v.Owner, v.Account)
+	}
 	var count int
-	err := s.db.QueryRow(`SELECT COUNT(*) FROM requests WHERE state='open' AND `+where, args...).Scan(&count)
+	err := s.db.QueryRow(q, args...).Scan(&count)
 	return count, err
 }
 

@@ -6,6 +6,29 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Changed: private means private (REQ-438). A session that is not shared is read
+  by its owner alone: not by organization or project owners, not by leads, not by
+  the instance admin, whether in the sessions list, the transcript, the raw
+  export, search, the MCP tools, request work, snapshots or evidence quotes.
+  Shared sessions behave as before. A project owner can still withdraw a shared
+  session, but can no longer share a private one or widen a shared one. Knowledge
+  and requests the distiller derived from a private session stay visible to that
+  session's owner alone until the owner adopts them or shares the session; what an
+  agent saves on purpose stays normal project knowledge. The owner releases a held
+  finding to the reviewers (or discards it) but cannot verify it; if the owner
+  leaves the project, the finding stays held and invisible to others until the owner returns and releases or discards it; nobody else can release it. A knowledge entry
+  that cites a session must cite one of your own. Handoffs, quotes and what a
+  private session works on are private like the transcript, also in snapshots.
+  Upgrade note: older held-back (quarantined) findings from private sessions are
+  held for their session owner from now on; they reach the review queue when the
+  owner releases them or shares the session.
+- Added: any signed-in account can create an organization on the Organization
+  page and becomes its owner; the way on leads to inviting someone or connecting a
+  project. Owners (and the instance admin) can rename it; the address stays.
+  `ctx org create` stays admin-only.
+- Changed: the invitation page says what you share and what your role sees:
+  sessions stay private until you share them; project members see the project's
+  knowledge, requests and room messages.
 - Fixed: joining from a fresh machine (REQ-438). `ctx join` now always sets up the
   collector service, also when neither Claude Code nor Codex is installed yet, and
   ends with one line saying what to install next (`--no-watch` still skips it).
