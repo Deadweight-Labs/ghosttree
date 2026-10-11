@@ -691,8 +691,9 @@ func (s *Store) EnsureProject(accountPrincipal, remote string) (Project, error) 
 	return claimInTx(s.db, accountPrincipal, remote, "", false)
 }
 
-// CreateNamedProject legt ein Projekt ohne Git an. Die ID ist der Name selbst
-// (ein Slug ohne Punkt und "/", also nie eine Remote) und instanzweit eindeutig.
+// CreateNamedProject legt ein Projekt ohne Git an. Die ID ist
+// "<org-slug>/<name>" (das erste Segment ohne Punkt, also nie eine Remote) und
+// nur innerhalb der Organisation eindeutig.
 // Das Projekt gehört der Organisation orgRef, leer heißt: Regel des Kontos
 // (Standard, sonst die einzige). Anlegen darf jedes Mitglied dieser Organisation;
 // der Ersteller wird Projekt-Owner.
@@ -702,7 +703,7 @@ func (s *Store) CreateNamedProject(accountPrincipal, name, orgRef string) (Proje
 			return d.CreateNamedProject(p[0].(string), p[1].(string), p[2].(string))
 		})
 	}
-	if !scope.IsNamedProject(name) {
+	if !scope.IsProjectName(name) {
 		return Project{}, fmt.Errorf("%w: a project name is lowercase letters, digits and dashes (at most 40), for example infra", ErrInvalidInput)
 	}
 	acct, err := parsePersonPrincipalID(accountPrincipal)
@@ -727,22 +728,31 @@ func (s *Store) CreateNamedProject(accountPrincipal, name, orgRef string) (Proje
 	} else if orgID, err = pickOrgTx(tx, acct); err != nil {
 		return Project{}, err
 	}
-	res, err := tx.Exec(`INSERT OR IGNORE INTO projects(remote, org_id, name, created_at) VALUES(?,?,?,?)`, name, orgID, name, now())
+	org, err := orgByIDTx(tx, orgID)
+	if err != nil {
+		return Project{}, err
+	}
+	// Die ID führt den Org-Slug: "acme/infra". Das erste Segment hat keinen
+	// Punkt, eine Remote immer einen Host mit Punkt. Der Name ist damit nur
+	// innerhalb der Organisation vergeben, und niemand erfährt über ein 409,
+	// welche Namen eine fremde Organisation benutzt.
+	id := org.Slug + "/" + name
+	res, err := tx.Exec(`INSERT OR IGNORE INTO projects(remote, org_id, name, created_at) VALUES(?,?,?,?)`, id, orgID, name, now())
 	if err != nil {
 		return Project{}, err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return Project{}, ErrProjectNameTaken
 	}
-	p, _ := projectTx(tx, name)
+	p, _ := projectTx(tx, id)
 	if _, err := tx.Exec(`INSERT INTO project_members(project_id, account_id, role, can_review, granted_by, granted_at) VALUES(?,?,?,0,?,?)`,
 		p.ID, acct, RoleOwner, acct, now()); err != nil {
 		return Project{}, err
 	}
-	if err := roleEvent(tx, name, principalOfID(acct), "", RoleOwner, principalOfID(acct), RoleViaAPI); err != nil {
+	if err := roleEvent(tx, id, principalOfID(acct), "", RoleOwner, principalOfID(acct), RoleViaAPI); err != nil {
 		return Project{}, err
 	}
-	if err := orgEvent(tx, orgID, "create_project", principalOfID(acct), name, ""); err != nil {
+	if err := orgEvent(tx, orgID, "create_project", principalOfID(acct), id, ""); err != nil {
 		return Project{}, err
 	}
 	return p, tx.Commit()

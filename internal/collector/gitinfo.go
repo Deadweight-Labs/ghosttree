@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/projectlink"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 )
 
@@ -27,7 +28,7 @@ type GitContext struct {
 // Git-Repos.
 func ResolveGitContext(cwd string) GitContext {
 	g := resolveRepoContext(cwd)
-	linkDir, linked := findLink(cwd)
+	linkDir, linked := projectlink.Find(cwd)
 	if linkDir == "" {
 		return g
 	}
@@ -136,11 +137,6 @@ func nearestExistingAncestor(path string) string {
 func GitInfo(cwd string) (project, branch string) {
 	if out, err := gitOut(cwd, "remote", "get-url", "origin"); err == nil {
 		project = scope.NormalizeRemote(out)
-		if scope.IsNamedProject(project) {
-			// Eine Remote ohne Host und Pfad wäre von einem benannten Projekt
-			// nicht zu unterscheiden; sie gibt kein Projekt.
-			project = ""
-		}
 	}
 	if out, err := gitOut(cwd, "rev-parse", "--abbrev-ref", "HEAD"); err == nil && out != "HEAD" {
 		branch = out

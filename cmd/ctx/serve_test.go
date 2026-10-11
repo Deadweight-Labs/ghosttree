@@ -63,7 +63,7 @@ func TestServerConcurrentTelemetrySmoke(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			body, err := json.Marshal(map[string]any{
-				"project": "github.com/x/smoke", "path": "file-" + strconv.Itoa(i), "kind": "file",
+				"project": "smoke", "path": "file-" + strconv.Itoa(i), "kind": "file",
 				"description": secret,
 			})
 			if err != nil {

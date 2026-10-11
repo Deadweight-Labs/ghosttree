@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/projectlink"
 	"github.com/Deadweight-Labs/ghosttree/internal/redact"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -262,7 +263,7 @@ func projectOfSession(cwd, project, branch string) (string, string) {
 	if cwd == "" {
 		return project, branch
 	}
-	if dir, linked := findLink(cwd); dir != "" {
+	if dir, linked := projectlink.Find(cwd); dir != "" {
 		p, b := ProjectInfo(cwd)
 		if p == linked {
 			return p, ""

@@ -7,13 +7,21 @@ import (
 	"strings"
 )
 
-// namedProject ist die Gestalt der ID eines benannten Projekts (ohne Git): ein
-// kleingeschriebener Slug. Er enthält weder Punkt noch "/", und genau daran
-// trennt er sich von jeder normalisierten Remote, die immer Host/Pfad trägt.
-var namedProject = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$`)
+// slugPart ist ein kleingeschriebener Slug ohne Punkt: Org-Slug und Name.
+const slugPart = `[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?`
 
-// IsNamedProject sagt, ob id die ID eines benannten Projekts sein kann.
+var (
+	namedProject = regexp.MustCompile(`^` + slugPart + `/` + slugPart + `$`)
+	slugName     = regexp.MustCompile(`^` + slugPart + `$`)
+)
+
+// IsNamedProject sagt, ob id die ID eines benannten Projekts (ohne Git) ist:
+// "<org-slug>/<name>". Das erste Segment hat keinen Punkt, eine Remote trägt
+// dort immer einen Host mit Punkt; so ist die ID von einer Remote zu trennen.
 func IsNamedProject(id string) bool { return namedProject.MatchString(id) }
+
+// IsProjectName sagt, ob name als Namensteil eines benannten Projekts taugt.
+func IsProjectName(name string) bool { return slugName.MatchString(name) }
 
 // ErrProjectUnresolved ist die eine Antwort auf "das Projekt gibt es nicht" und
 // "du darfst dort nicht schreiben". Beide Fälle sehen für den Aufrufer gleich
@@ -28,7 +36,7 @@ type ErrProjectAmbiguous struct {
 }
 
 func (e *ErrProjectAmbiguous) Error() string {
-	return fmt.Sprintf("%q matches several projects (%s); give the full remote", e.Name, strings.Join(e.Matches, ", "))
+	return fmt.Sprintf("%q matches several projects (%s); give the full project id", e.Name, strings.Join(e.Matches, ", "))
 }
 
 // ResolveProject löst die Projektangabe eines Schreibenden auf: eine Remote
@@ -42,15 +50,13 @@ func ResolveProject(input string, writable []string) (string, error) {
 	if want == "" {
 		return "", ErrProjectUnresolved
 	}
-	for _, p := range writable {
-		if NormalizeRemote(p) == want {
-			return NormalizeRemote(p), nil
-		}
-	}
+	// Ein genauer Treffer und ein Suffix-Treffer zählen gleich: heißt ein
+	// benanntes Projekt wie das Ende einer Remote ("acme/infra" und
+	// "github.com/acme/infra"), wird nicht still eines bevorzugt.
 	var matches []string
 	for _, p := range writable {
 		n := NormalizeRemote(p)
-		if strings.HasSuffix(n, "/"+want) {
+		if n == want || strings.HasSuffix(n, "/"+want) {
 			matches = append(matches, n)
 		}
 	}

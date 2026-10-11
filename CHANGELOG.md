@@ -6,23 +6,32 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
-- Added: projects without git (REQ-459). A project can have just a name (`infra`,
-  `sky-go`: lowercase letters, digits, dashes, unique on the instance, never a
-  remote). Any account that is at least a member of an organization creates one
-  in the web (Organizations page, "Create project") or with `ctx project create
-  <name> [--org O]`; it belongs to that organization and the creator becomes its
-  owner. It has roles, a room, knowledge and requests like a repository project.
-  `ctx project link <name>` writes `.ghosttree-project` (one line, `#` comments
-  allowed) into the current folder, after checking that you may write there;
-  `ctx project unlink` removes it. Sessions, hooks, the MCP server and the
-  collector resolve the project from the working directory upwards, and the
-  nearest boundary wins: a repository with an origin (identity: the remote) or a
-  linked folder. A repository inside a linked folder keeps its own identity; a
-  linked folder inside a repository (or at its root) takes over its subtree. A
-  linked folder has no branch and no `.ghosttree/` mirror or file descriptions
-  (those stay with git repositories), and `$HOME` and `/` cannot be linked. A
-  write that names no project now also points to `ctx project link <name>`.
-
+- Added: projects without git (REQ-459). A project can have just a name. Its id is
+  `<org>/<name>` (for example `acme/infra`), unique within the organization and
+  never mistaken for a remote, which always starts with a host that has a dot;
+  you keep saying `infra`, and a short name that matches several projects (a named
+  one and a repository ending in the same name, or two organizations' `infra`) is
+  refused with the list instead of being picked silently. Any account that is at
+  least a member of an organization creates one in the web (Organizations page,
+  "Create project") or with `ctx project create <name> [--org O]` (account and
+  device tokens, not an agent route); the creator becomes its owner. It has roles,
+  a room, knowledge and requests like a repository project, and a project of
+  another organization answers like one that does not exist. `ctx project link
+  <name>` ties the current folder to it after checking that you may write there.
+  The link is recorded only on this machine (`~/.config/ghosttree/links.json`,
+  mode 0600); nothing inside a folder or repository decides the assignment, so a
+  repository you check out cannot move your sessions into a project. `ctx project
+  unlink` removes the link (`--missing`: all links to folders that are gone), `ctx
+  project links` lists them and `ctx doctor` reports stale ones. Sessions, hooks,
+  the MCP server and the collector resolve the project from the working directory
+  upwards, and the nearest boundary wins: a repository with an origin (identity:
+  the remote) or a linked folder. A repository inside a linked folder keeps its own
+  identity; a linked folder inside a repository, or a repository root you linked
+  yourself, takes over its subtree. A linked folder has no branch and no
+  `.ghosttree/` mirror or file descriptions (those stay with git repositories), and
+  `$HOME` and `/` cannot be linked. A write that names no project now also points to
+  `ctx project link <name>`, and a write naming an unknown `<org>/<name>` creates
+  nothing.
 - Added: knowledge and requests are filed where they belong, not where the session
   happens to stand (REQ-458). `context_remember`, `request_create` and `thread_open`
   take an optional `project` (a remote or a short name that is unique among the

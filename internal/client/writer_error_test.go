@@ -22,7 +22,7 @@ func TestClientPreservesWriterRetryMetadata(t *testing.T) {
 	}))
 	defer srv.Close()
 	c := New(config.Config{ServerURL: srv.URL})
-	_, err := c.CreateDocument(store.Document{Project: "github.com/x/p", Slug: "retry", Kind: "spec", Title: "retry"}, "body", "message")
+	_, err := c.CreateDocument(store.Document{Project: "p", Slug: "retry", Kind: "spec", Title: "retry"}, "body", "message")
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) || apiErr.Status != 503 || apiErr.Code != "writer_busy" {
 		t.Fatalf("typed writer error lost: %v", err)

@@ -177,6 +177,7 @@ func selectedSharedChecks(selected map[string]bool, home string) []installer.Che
 			if len(cfgChecks) > 0 {
 				checks = append(checks, cfgChecks[0])
 			}
+			checks = append(checks, linkChecks()...)
 		case "server":
 			cfgChecks := configChecks()
 			if len(cfgChecks) > 1 {

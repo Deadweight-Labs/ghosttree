@@ -34,11 +34,13 @@ const orgUsage = `usage: ctx org <command>
 const projectUsage = `usage: ctx project <command>
 
   list [--org O]                          projects of your organizations
-  create <name> [--org O]                 new project without git (a short name such as
-                                          infra); you become its owner
+  create <name> [--org O]                 new project without git, id <org>/<name>
+                                          (name such as infra); you become its owner
   link <name>                             this folder and everything below it belongs to
-                                          the project (writes .ghosttree-project)
-  unlink                                  remove that marker from this folder
+                                          the project; recorded on this machine only
+  unlink [--missing]                      remove this folder's link (--missing: all
+                                          links to folders that are gone)
+  links                                   the folders linked on this machine
   claim [remote] [--org O]                assign a project to an organization
                                           (default remote: the current repository)
   move <remote> --org O                   web UI only (organizations page)
@@ -51,11 +53,15 @@ const projectUsage = `usage: ctx project <command>
                                           page), or --db on the server host
 
 A folder belongs to the nearest boundary above it: a git repository with an
-origin remote (the project is the remote) or a folder with .ghosttree-project
-(the project is the named one). A repository inside a linked folder keeps its
-own identity; a linked folder inside a repository takes over its subtree. Linked
-folders have no branch and no .ghosttree/ mirror, and your home directory
-cannot be linked.
+origin remote (the project is the remote) or a folder you linked with ctx
+project link (the project is the named one). Links live in
+~/.config/ghosttree/links.json on this machine; nothing inside a folder or
+repository decides the assignment. A repository inside a linked folder keeps
+its own identity; a linked folder inside a repository, or a repository root you
+linked yourself, takes over its subtree. Linked folders have no branch and no
+.ghosttree/ mirror, and your home directory and / cannot be linked. A short
+name that matches several projects (a named one and a repository ending in the
+same name) is refused: give the full id.
 
 Roles: owner > lead > member > guest. An organization owner is implicitly owner
 of every project of the organization. Roles and memberships are changed by a
@@ -286,9 +292,10 @@ func cmdProject(args []string, stdout io.Writer) int {
 	org := fs.String("org", "", "organization (slug or id)")
 	db := fs.String("db", "ghosttree.db", "database path (with --force)")
 	review := fs.Bool("review", false, "role set: also grant can_review")
+	missing := fs.Bool("missing", false, "unlink: remove all links to folders that no longer exist")
 	dbSet := false
 	switch sub {
-	case "list", "claim", "move", "roles", "role", "create", "link", "unlink":
+	case "list", "claim", "move", "roles", "role", "create", "link", "unlink", "links":
 	default:
 		fmt.Fprintln(stdout, projectUsage)
 		return 2
@@ -316,7 +323,12 @@ func cmdProject(args []string, stdout io.Writer) int {
 		if len(pos) != 0 {
 			return usage()
 		}
-		return projectUnlink(stdout)
+		return projectUnlink(*missing, stdout)
+	case "links":
+		if len(pos) != 0 {
+			return usage()
+		}
+		return projectLinks(stdout)
 	case "move":
 		if len(pos) != 1 || *org == "" {
 			return usage()
