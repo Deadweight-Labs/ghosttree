@@ -354,24 +354,7 @@ func (s *Store) UpdateKnowledgeBy(id int64, patch map[string]string, editor stri
 		if err != nil || target == 0 || target == id {
 			return fmt.Errorf("invalid superseded_by %q", raw)
 		}
-		seen := map[int64]bool{id: true}
-		for {
-			if seen[target] {
-				return fmt.Errorf("supersession would create a cycle")
-			}
-			seen[target] = true
-			var next int64
-			if err := tx.QueryRow(`SELECT superseded_by FROM knowledge WHERE id=?`, target).Scan(&next); err != nil {
-				return err
-			}
-			if next == 0 {
-				break
-			}
-			target = next
-		}
-		if _, err := tx.Exec(`WITH RECURSIVE ancestors(id) AS (
-			SELECT ? UNION ALL SELECT k.id FROM knowledge k JOIN ancestors a ON k.superseded_by=a.id
-		) UPDATE knowledge SET status='superseded',superseded_by=?,updated_at=? WHERE id IN (SELECT id FROM ancestors)`, id, target, ts); err != nil {
+		if err := markSupersededTx(tx, id, target, ts); err != nil {
 			return err
 		}
 	}
@@ -399,6 +382,30 @@ func (s *Store) UpdateKnowledgeBy(id int64, patch map[string]string, editor stri
 		return err
 	}
 	return tx.Commit()
+}
+
+// markSupersededTx sets an entry and everything it had superseded before to
+// superseded, pointing at the head of the chain that target belongs to.
+func markSupersededTx(tx *sql.Tx, id, target int64, ts string) error {
+	seen := map[int64]bool{id: true}
+	for {
+		if seen[target] {
+			return fmt.Errorf("supersession would create a cycle")
+		}
+		seen[target] = true
+		var next int64
+		if err := tx.QueryRow(`SELECT superseded_by FROM knowledge WHERE id=?`, target).Scan(&next); err != nil {
+			return err
+		}
+		if next == 0 {
+			break
+		}
+		target = next
+	}
+	_, err := tx.Exec(`WITH RECURSIVE ancestors(id) AS (
+		SELECT ? UNION ALL SELECT k.id FROM knowledge k JOIN ancestors a ON k.superseded_by=a.id
+	) UPDATE knowledge SET status='superseded',superseded_by=?,updated_at=? WHERE id IN (SELECT id FROM ancestors)`, id, target, ts)
+	return err
 }
 
 // KnowledgeVersion is a complete prior version of an entry. ChangedBy says

@@ -129,6 +129,16 @@ type RememberInput struct {
 	ScopeHint string `json:"scope_hint" jsonschema:"where this belongs — required, because it is a judgement nobody else can make for you: project, branch, machine or global.\nThe question that separates project from branch: does this stop being true once the branch is merged or abandoned? A migration in flight, a temporary flag, a workaround for something only this branch broke — that is branch. Anything that outlives the branch is project, and most things do.\nA branch entry is read by this branch and by every branch cut from it afterwards, never by a sibling. Machine is for facts about the box you are standing on, global for facts about how you work anywhere."`
 	Project   string `json:"project,omitempty" jsonschema:"file it under this project instead of the session's own: a remote like github.com/owner/repo or a short name that is unique among the projects you can write to. For a problem with another project's tool, work or code. Applies to scope_hint project or branch"`
 	Machine   string `json:"machine,omitempty" jsonschema:"with scope_hint machine: file it for this machine instead of the one you are on. Any machine name, including one no agent ever ran on, such as an ssh target"`
+	// Supersedes makes this entry the replacement of older ones, so the old ones
+	// leave search and the briefing instead of standing next to a follow-up.
+	Supersedes      []int64 `json:"supersedes,omitempty" jsonschema:"ids of older entries this one replaces because the state they describe changed. They stop appearing in search and the briefing but stay readable through their history. You need the right to edit each of them, and they must belong to the same project. Search first to find them"`
+	SupersedeReason string  `json:"supersede_reason,omitempty" jsonschema:"required with supersedes: what changed, in one sentence"`
+}
+
+// RetireInput is the context_retire tool.
+type RetireInput struct {
+	ID     int64  `json:"id" jsonschema:"the knowledge entry to retire"`
+	Reason string `json:"reason" jsonschema:"required: why the entry is no longer true or needed, for example that the thing it describes was removed"`
 }
 
 type SessionsInput struct {
@@ -156,8 +166,13 @@ func (s *Server) Register(srv *mcp.Server) {
 	}, s.handleGet)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "context_remember",
-		Description: "Store a pitfall, decision, note or plan in ghosttree instead of writing it into the source tree. A decision should record why it was taken, which alternatives were rejected and what the tradeoffs are, so it can be revisited later." + targetHint,
+		Description: "Store a pitfall, decision, note or plan in ghosttree instead of writing it into the source tree. A decision should record why it was taken, which alternatives were rejected and what the tradeoffs are, so it can be revisited later. Search with context_search first: if the entry would only update a state that is already recorded (\"X created\" followed by \"X removed again\"), pass supersedes=[the old ids] with supersede_reason instead of writing a follow-up that leaves both active. If what the old entry describes no longer exists and there is nothing new to record, use context_retire." + targetHint,
 	}, s.handleRemember)
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "context_retire",
+		Description: "Retire a knowledge entry because what it describes no longer exists or is no longer true, and there is nothing new to record (the resource was removed, the workaround is obsolete). It leaves search and the briefing and stays readable through its history. A reason is required. It needs the same right as editing the entry in the web. If the state changed rather than vanished, write the new state with context_remember and supersedes instead.",
+		Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed},
+	}, s.handleRetire)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "context_move",
 		Description: "Move a knowledge entry to another project, to another machine, or to global, when it was filed in the wrong place. You need write access to where it is and to where it goes. The move is recorded. To move a request, use request_record_progress with action=correct and project.",
@@ -479,11 +494,20 @@ func (s *Server) handleRemember(ctx context.Context, _ *mcp.CallToolRequest, in 
 	default:
 		return nil, nil, fmt.Errorf("unknown scope_hint %q; use project, branch, machine or global", in.ScopeHint)
 	}
-	saved, err := s.client.Remember(k, autoCtx)
+	if len(in.Supersedes) > 0 && strings.TrimSpace(in.SupersedeReason) == "" {
+		return nil, nil, fmt.Errorf("supersede_reason is required with supersedes: say what changed")
+	}
+	if len(in.Supersedes) == 0 && in.SupersedeReason != "" {
+		return nil, nil, fmt.Errorf("supersede_reason only goes with supersedes")
+	}
+	saved, err := s.client.RememberSuperseding(k, autoCtx, in.Supersedes, in.SupersedeReason)
 	if err != nil {
 		return nil, nil, err
 	}
 	msg := fmt.Sprintf("stored #%d [%s|%s]", saved.ID, saved.Type, scopeLabel(saved.Scope))
+	if len(in.Supersedes) > 0 {
+		msg += fmt.Sprintf("; superseded %s", idList(in.Supersedes))
+	}
 	if hint := reasoningHint(saved); hint != "" {
 		msg += "\n" + hint
 	}

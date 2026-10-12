@@ -368,12 +368,23 @@ func (c *Client) RawSession(id int64) (string, error) {
 // Remember writes a knowledge entry. When k.Scope is empty, autoCtx drives the
 // server-side write defaults.
 func (c *Client) Remember(k store.Knowledge, autoCtx scope.Axes) (store.Knowledge, error) {
+	return c.RememberSuperseding(k, autoCtx, nil, "")
+}
+
+// RememberSuperseding writes an entry and, in the same call, supersedes older
+// ones: the server checks the right on every one of them before it writes
+// anything, so a refusal leaves no follow-up entry behind.
+func (c *Client) RememberSuperseding(k store.Knowledge, autoCtx scope.Axes, supersedes []int64, reason string) (store.Knowledge, error) {
 	body := map[string]any{
 		"type": k.Type, "title": k.Title, "body": k.Body,
 		"scope": k.Scope, "confidence": k.Confidence, "status": k.Status,
 		"origin":  k.Origin,
 		"harness": k.Harness, "session_ref": k.SessionRef,
 		"auto_scope": map[string]any{"context": autoCtx},
+	}
+	if len(supersedes) > 0 {
+		body["supersedes"] = supersedes
+		body["supersede_reason"] = reason
 	}
 	var saved store.Knowledge
 	err := c.do("POST", "/api/knowledge", nil, body, &saved)

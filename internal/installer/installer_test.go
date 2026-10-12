@@ -144,6 +144,11 @@ func TestInstallClaudeRuleSection(t *testing.T) {
 	if !strings.Contains(s, "context_remember") {
 		t.Errorf("rule section must mention context_remember:\n%s", s)
 	}
+	for _, want := range []string{"Search before you write", "supersede", "context_retire"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("rule section must say %q:\n%s", want, s)
+		}
+	}
 }
 
 func failing(checks []Check) []string {

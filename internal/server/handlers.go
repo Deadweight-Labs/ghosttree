@@ -222,6 +222,10 @@ type knowledgeRequest struct {
 	AutoScope *struct {
 		Context scope.Axes `json:"context"`
 	} `json:"auto_scope"`
+	// Supersedes: older entries this one replaces, with the reason. They are
+	// checked before anything is written and hidden right after.
+	Supersedes      []int64 `json:"supersedes"`
+	SupersedeReason string  `json:"supersede_reason"`
 }
 
 func (a *api) createKnowledge(w http.ResponseWriter, r *http.Request) {
@@ -259,10 +263,19 @@ func (a *api) createKnowledge(w http.ResponseWriter, r *http.Request) {
 	if denyAccess(w, a.access(r).CheckWrittenSessionRef(k.SessionRef)) {
 		return
 	}
+	if len(req.Supersedes) > 0 && !a.checkSupersedable(w, r, k, req.Supersedes, req.SupersedeReason) {
+		return
+	}
 	id, err := a.st.InsertKnowledge(k)
 	if err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
+	}
+	if len(req.Supersedes) > 0 {
+		if err := a.st.SupersedeKnowledge(id, req.Supersedes, req.SupersedeReason, supersedeActor(r, k.Harness)); err != nil {
+			writeCoded(w, http.StatusConflict, "supersede_failed", fmt.Sprintf("stored #%d, but could not supersede: %v", id, err))
+			return
+		}
 	}
 	saved, err := a.st.KnowledgeByID(id)
 	if err != nil {
@@ -809,6 +822,13 @@ func RenderBootstrapPreview(entries []store.Knowledge, budget int) string {
 	return renderBootstrap(entries, budget, true)
 }
 
+// keepCurrentHint is the one rule about writing that the briefing repeats. An
+// agent that finds a known state changed used to file a follow-up, and old and
+// new stayed active side by side ("share created", "share removed again").
+const keepCurrentHint = "Before you write: search (context_search) for what is already known. If a known state changed, " +
+	"supersede the old entry (context_remember with supersedes=[id] and supersede_reason) instead of adding a follow-up; " +
+	"if what it describes no longer exists, retire it (context_retire with a reason).\n"
+
 func renderBootstrap(entries []store.Knowledge, budget int, includeStaged bool) string {
 	if budget <= 0 {
 		budget = defaultBudget
@@ -833,6 +853,7 @@ func renderBootstrap(entries []store.Knowledge, budget int, includeStaged bool) 
 	}
 	var b strings.Builder
 	b.WriteString("## Known context (ghosttree)\n")
+	b.WriteString(keepCurrentHint)
 	if len(instructions) > 0 {
 		b.WriteString("\n### Instructions (binding)\n")
 		for _, k := range instructions {
