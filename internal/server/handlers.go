@@ -266,16 +266,19 @@ func (a *api) createKnowledge(w http.ResponseWriter, r *http.Request) {
 	if len(req.Supersedes) > 0 && !a.checkSupersedable(w, r, k, req.Supersedes, req.SupersedeReason) {
 		return
 	}
-	id, err := a.st.InsertKnowledge(k)
+	var id int64
+	var err error
+	if len(req.Supersedes) > 0 {
+		id, err = a.st.InsertKnowledgeSuperseding(k, req.Supersedes, req.SupersedeReason, supersedeActor(r, k.Harness))
+		if writeSupersedeError(w, err) {
+			return
+		}
+	} else {
+		id, err = a.st.InsertKnowledge(k)
+	}
 	if err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
-	}
-	if len(req.Supersedes) > 0 {
-		if err := a.st.SupersedeKnowledge(id, req.Supersedes, req.SupersedeReason, supersedeActor(r, k.Harness)); err != nil {
-			writeCoded(w, http.StatusConflict, "supersede_failed", fmt.Sprintf("stored #%d, but could not supersede: %v", id, err))
-			return
-		}
 	}
 	saved, err := a.st.KnowledgeByID(id)
 	if err != nil {
@@ -825,9 +828,7 @@ func RenderBootstrapPreview(entries []store.Knowledge, budget int) string {
 // keepCurrentHint is the one rule about writing that the briefing repeats. An
 // agent that finds a known state changed used to file a follow-up, and old and
 // new stayed active side by side ("share created", "share removed again").
-const keepCurrentHint = "Before you write: search (context_search) for what is already known. If a known state changed, " +
-	"supersede the old entry (context_remember with supersedes=[id] and supersede_reason) instead of adding a follow-up; " +
-	"if what it describes no longer exists, retire it (context_retire with a reason).\n"
+const keepCurrentHint = "Before writing, search; if a known state changed, supersede the old entry (context_remember supersedes) instead of adding a follow-up.\n"
 
 func renderBootstrap(entries []store.Knowledge, budget int, includeStaged bool) string {
 	if budget <= 0 {

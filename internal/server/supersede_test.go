@@ -34,9 +34,12 @@ func TestWritingCanSupersedeAndTheOldEntryLeavesSearchBriefingAndList(t *testing
 	if err != nil || k.Status != "superseded" || k.SupersededBy != saved.ID {
 		t.Fatalf("old entry = %+v, %v", k, err)
 	}
-	search := f.expect(t, "mia", 200, "GET", "/api/search?kind=knowledge&scope=union&project="+accProject+"&q=pitfall", nil)
-	if strings.Contains(search, `"mia pitfall"`) {
-		t.Errorf("search still returns the superseded entry: %s", search)
+	search := f.expect(t, "mia", 200, "GET", "/api/search?kind=knowledge&scope=union&project="+accProject+"&q=pitfall+share", nil)
+	if strings.Contains(search, `"mia pitfall"`) || !strings.Contains(search, "share removed again") {
+		t.Errorf("search must find the new entry and not the superseded one: %s", search)
+	}
+	if other := f.expect(t, "robin", 200, "GET", "/api/search?kind=knowledge&scope=union&project="+accProject+"&q=pitfall", nil); !strings.Contains(other, "global pitfall") {
+		t.Errorf("sanity: the query must still hit other pitfalls: %s", other)
 	}
 	list := f.expect(t, "mia", 200, "GET", "/api/knowledge?project="+accProject, nil)
 	if strings.Contains(list, `"mia pitfall"`) || !strings.Contains(list, "share removed again") {
@@ -71,8 +74,8 @@ func TestSupersedeNeedsEditRightAndLeavesNoFollowUpBehind(t *testing.T) {
 		t.Errorf("member superseding a foreign entry = %d %s", code, out)
 	}
 	// A guest cannot write at all.
-	if code, _ := f.call(t, "gus", "POST", "/api/knowledge", body(f.id["k-mia"])); code != 403 && code != 404 {
-		t.Errorf("guest superseding = %d", code)
+	if code, out := f.call(t, "gus", "POST", "/api/knowledge", body(f.id["k-mia"])); code != 403 {
+		t.Errorf("guest superseding = %d %s", code, out)
 	}
 	// One entry out of two is not allowed: none is superseded, none is written.
 	if code, _ := f.call(t, "mia", "POST", "/api/knowledge", body(f.id["k-mia"], robins)); code != 403 {
@@ -82,8 +85,8 @@ func TestSupersedeNeedsEditRightAndLeavesNoFollowUpBehind(t *testing.T) {
 	if code, out := f.call(t, "mia", "POST", "/api/knowledge", newEntry(map[string]any{"supersedes": []int64{f.id["k-mia"]}})); code != 400 || !strings.Contains(out, "reason_required") {
 		t.Errorf("without reason = %d %s", code, out)
 	}
-	if code, out := f.call(t, "robin", "POST", "/api/knowledge", body(f.id["k-other"])); code != 400 || !strings.Contains(out, "other_project") {
-		t.Errorf("other project = %d %s", code, out)
+	if code, out := f.call(t, "robin", "POST", "/api/knowledge", body(f.id["k-other"])); code != 400 || !strings.Contains(out, "scope_mismatch") {
+		t.Errorf("other scope = %d %s", code, out)
 	}
 	if code, out := f.call(t, "mia", "POST", "/api/knowledge", newEntry(map[string]any{"supersedes": []int64{f.id["k-mia"]}, "supersede_reason": "x", "confidence": "staged"})); code != 400 || !strings.Contains(out, "not_deliverable") {
 		t.Errorf("held-back replacement = %d %s", code, out)
@@ -161,7 +164,7 @@ func TestRetireNeedsReasonAndTheRightOfRetireInTheWeb(t *testing.T) {
 
 func TestBriefingTellsAgentsToSupersedeInsteadOfAFollowUp(t *testing.T) {
 	out := RenderBootstrap([]store.Knowledge{{Type: "pitfall", Title: "t", Body: "b", Confidence: "trusted", Status: "active"}}, 0)
-	for _, want := range []string{"context_search", "supersedes", "follow-up", "context_retire"} {
+	for _, want := range []string{"search", "supersedes", "follow-up"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the briefing does not say %q:\n%s", want, out)
 		}

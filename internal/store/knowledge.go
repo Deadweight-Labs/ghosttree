@@ -191,6 +191,25 @@ func (s *Store) InsertKnowledge(k Knowledge) (int64, error) {
 	if s.writer != nil {
 		return queueValue(s, []any{k}, func(d *Store, p []any) (int64, error) { return d.InsertKnowledge(p[0].(Knowledge)) })
 	}
+	k = withKnowledgeDefaults(k)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	id, err := insertKnowledgeTx(tx, k)
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return id, nil
+}
+
+// withKnowledgeDefaults fills origin, confidence and status the way a plain
+// write does.
+func withKnowledgeDefaults(k Knowledge) Knowledge {
 	if k.Origin == "" {
 		k.Origin = "agent"
 	}
@@ -206,12 +225,11 @@ func (s *Store) InsertKnowledge(k Knowledge) (int64, error) {
 	if k.Status == "" {
 		k.Status = "active"
 	}
+	return k
+}
+
+func insertKnowledgeTx(tx *sql.Tx, k Knowledge) (int64, error) {
 	ts := now()
-	tx, err := s.db.Begin()
-	if err != nil {
-		return 0, err
-	}
-	defer tx.Rollback()
 	if k.ObservedAt == "" {
 		// Nobody is reporting an older sighting here: the writer is looking at
 		// the thing as they write it.
@@ -240,9 +258,6 @@ func (s *Store) InsertKnowledge(k Knowledge) (int64, error) {
 		if _, err := tx.Exec(`INSERT INTO instruction_activation_path(knowledge_id,pattern) VALUES(?,?)`, id, pattern); err != nil {
 			return 0, err
 		}
-	}
-	if err := tx.Commit(); err != nil {
-		return 0, err
 	}
 	return id, nil
 }

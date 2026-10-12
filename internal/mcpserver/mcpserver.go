@@ -171,7 +171,7 @@ func (s *Server) Register(srv *mcp.Server) {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "context_retire",
 		Description: "Retire a knowledge entry because what it describes no longer exists or is no longer true, and there is nothing new to record (the resource was removed, the workaround is obsolete). It leaves search and the briefing and stays readable through its history. A reason is required. It needs the same right as editing the entry in the web. If the state changed rather than vanished, write the new state with context_remember and supersedes instead.",
-		Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed},
+		Annotations: &mcp.ToolAnnotations{OpenWorldHint: &closed},
 	}, s.handleRetire)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "context_move",

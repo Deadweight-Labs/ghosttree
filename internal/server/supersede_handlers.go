@@ -30,10 +30,6 @@ func (a *api) checkSupersedable(w http.ResponseWriter, r *http.Request, k store.
 		writeCoded(w, http.StatusBadRequest, "reason_required", "say why the older entries are superseded (supersede_reason)")
 		return false
 	}
-	if k.Confidence == "staged" || k.Confidence == "quarantined" {
-		writeCoded(w, http.StatusBadRequest, "not_deliverable", "an entry that is held back cannot supersede another: the old one would vanish without a replacement")
-		return false
-	}
 	for _, id := range ids {
 		if !a.checkEditable(w, r, id) {
 			return false
@@ -47,8 +43,8 @@ func (a *api) checkSupersedable(w http.ResponseWriter, r *http.Request, k store.
 			writeCoded(w, http.StatusConflict, "not_current", fmt.Sprintf("#%d is %s: nothing to supersede", id, old.Status))
 			return false
 		}
-		if old.Scope.Project != k.Scope.Project {
-			writeCoded(w, http.StatusBadRequest, "other_project", fmt.Sprintf("#%d belongs to another project than the new entry", id))
+		if !old.Scope.Same(k.Scope) {
+			writeCoded(w, http.StatusBadRequest, "scope_mismatch", fmt.Sprintf("#%d is %s, the new entry is %s: the replacement needs exactly the scope of the old entry (move one of them first)", id, old.Scope.Label(), k.Scope.Label()))
 			return false
 		}
 	}
@@ -75,6 +71,29 @@ func (a *api) checkEditable(w http.ResponseWriter, r *http.Request, id int64) bo
 	return !denyAccess(w, a.access(r).CheckKnowledge(k, store.ActEdit))
 }
 
+// writeSupersedeError übersetzt die Regelfehler des Ablösens in Antworten und
+// meldet, ob es geantwortet hat. Der Store rollt dabei alles zurück: es bleibt
+// kein neuer Eintrag stehen.
+func writeSupersedeError(w http.ResponseWriter, err error) bool {
+	switch {
+	case err == nil:
+		return false
+	case errors.Is(err, store.ErrNotCurrent):
+		writeCoded(w, http.StatusConflict, "not_current", err.Error())
+	case errors.Is(err, store.ErrNotDeliverable):
+		writeCoded(w, http.StatusBadRequest, "not_deliverable", err.Error())
+	case errors.Is(err, store.ErrScopeMismatch):
+		writeCoded(w, http.StatusBadRequest, "scope_mismatch", err.Error())
+	case errors.Is(err, store.ErrReasonRequired):
+		writeCoded(w, http.StatusBadRequest, "reason_required", err.Error())
+	case errors.Is(err, store.ErrRelationInvalid), errors.Is(err, store.ErrRelationProject), errors.Is(err, store.ErrRelationExists), errors.Is(err, store.ErrRelationCycle), errors.Is(err, store.ErrRelationConflict):
+		writeCoded(w, http.StatusBadRequest, "supersede_invalid", err.Error())
+	default:
+		return false
+	}
+	return true
+}
+
 // retireKnowledge zieht einen Eintrag zurück, dessen beschriebener Zustand
 // nicht mehr existiert. Recht und Wirkung wie Zurückziehen im Web (ActEdit,
 // Status deprecated), dazu die Begründung als Pflicht.
@@ -99,8 +118,11 @@ func (a *api) retireKnowledge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.st.RetireKnowledge(id, in.Reason, personOf(r)); err != nil {
-		if errors.Is(err, store.ErrNotCurrent) {
-			writeCoded(w, http.StatusConflict, "not_current", err.Error())
+		if errors.Is(err, store.ErrHasPredecessors) {
+			writeCoded(w, http.StatusConflict, "has_predecessors", err.Error())
+			return
+		}
+		if writeSupersedeError(w, err) {
 			return
 		}
 		writeStoreError(w, http.StatusBadRequest, err)

@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/activation"
+	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 )
 
 var (
@@ -14,6 +17,15 @@ var (
 	ErrNotCurrent = errors.New("the entry is no longer current")
 	// ErrReasonRequired: Ablösen und Zurückziehen verlangen eine Begründung.
 	ErrReasonRequired = errors.New("a reason is required")
+	// ErrNotDeliverable: a replacement that is held back (staged, quarantined)
+	// would hide the old entry without anything taking its place.
+	ErrNotDeliverable = errors.New("a held-back entry cannot supersede another")
+	// ErrScopeMismatch: a replacement must live exactly where the old entry
+	// lives, or it hides project-wide knowledge from some readers only.
+	ErrScopeMismatch = errors.New("the replacement must have exactly the scope of the entry it supersedes")
+	// ErrHasPredecessors: retiring the head of a supersede chain would leave the
+	// entries it replaced hidden for good.
+	ErrHasPredecessors = errors.New("other entries were superseded by this one")
 )
 
 // KnowledgeRetirement ist eine Zeile im Protokoll eines Eintrags: wer ihn
@@ -35,11 +47,8 @@ func currentStatus(status string) bool { return status == "active" || status == 
 // superseded_by, die hier mitgesetzt werden. Die abgelösten Fassungen bleiben
 // über Historie und Detail erreichbar. Die Rechtsprüfung liegt beim Aufrufer.
 func (s *Store) SupersedeKnowledge(newID int64, oldIDs []int64, reason string, actor RelationActor) error {
-	if strings.TrimSpace(reason) == "" {
-		return fmt.Errorf("%w: say why the older entries are superseded", ErrReasonRequired)
-	}
-	if len(oldIDs) == 0 {
-		return fmt.Errorf("%w: name the entries to supersede", ErrRelationInvalid)
+	if err := checkSupersedeInput(oldIDs, reason); err != nil {
+		return err
 	}
 	if s.writer != nil {
 		return queueWrite(s, []any{newID, oldIDs, reason, actor}, func(d *Store, p []any) error {
@@ -49,6 +58,74 @@ func (s *Store) SupersedeKnowledge(newID int64, oldIDs []int64, reason string, a
 	if err := actor.valid(); err != nil {
 		return err
 	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := supersedeTx(tx, newID, oldIDs, reason, actor); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// InsertKnowledgeSuperseding writes an entry and supersedes older ones in ONE
+// transaction: if anything fails, nothing is written, so a refused supersede
+// never leaves a follow-up entry behind. Status and superseded_by of the new
+// entry are forced (a replacement is live), and the effective confidence, after
+// the defaults, must be deliverable.
+func (s *Store) InsertKnowledgeSuperseding(k Knowledge, oldIDs []int64, reason string, actor RelationActor) (int64, error) {
+	if err := checkSupersedeInput(oldIDs, reason); err != nil {
+		return 0, err
+	}
+	if err := activation.ValidateRule(k.Activation); err != nil {
+		return 0, err
+	}
+	if k.Type != "instruction" && len(k.Activation.Paths) > 0 {
+		return 0, fmt.Errorf("activation requires instruction, got %s", k.Type)
+	}
+	if s.writer != nil {
+		return queueValue(s, []any{k, oldIDs, reason, actor}, func(d *Store, p []any) (int64, error) {
+			return d.InsertKnowledgeSuperseding(p[0].(Knowledge), p[1].([]int64), p[2].(string), p[3].(RelationActor))
+		})
+	}
+	if err := actor.valid(); err != nil {
+		return 0, err
+	}
+	k.Status, k.SupersededBy = "", 0
+	k = withKnowledgeDefaults(k)
+	if k.Confidence != "trusted" && k.Confidence != "verified" {
+		return 0, fmt.Errorf("%w: it would be %s", ErrNotDeliverable, k.Confidence)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	id, err := insertKnowledgeTx(tx, k)
+	if err != nil {
+		return 0, err
+	}
+	if err := supersedeTx(tx, id, oldIDs, reason, actor); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return id, nil
+}
+
+func checkSupersedeInput(oldIDs []int64, reason string) error {
+	if strings.TrimSpace(reason) == "" {
+		return fmt.Errorf("%w: say why the older entries are superseded", ErrReasonRequired)
+	}
+	if len(oldIDs) == 0 {
+		return fmt.Errorf("%w: name the entries to supersede", ErrRelationInvalid)
+	}
+	return nil
+}
+
+func supersedeTx(tx *sql.Tx, newID int64, oldIDs []int64, reason string, actor RelationActor) error {
 	olds := slices.Clone(oldIDs)
 	slices.Sort(olds)
 	olds = slices.Compact(olds)
@@ -56,13 +133,9 @@ func (s *Store) SupersedeKnowledge(newID int64, oldIDs []int64, reason string, a
 	if actor.Via == "mcp" {
 		origin = RelOriginAgent
 	}
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
 	var status string
-	if err := tx.QueryRow(`SELECT status FROM knowledge WHERE id=?`, newID).Scan(&status); err != nil {
+	var at scope.Axes
+	if err := tx.QueryRow(`SELECT status, project, branch, machine FROM knowledge WHERE id=?`, newID).Scan(&status, &at.Project, &at.Branch, &at.Machine); err != nil {
 		return fmt.Errorf("%w: no entry #%d", ErrRelationInvalid, newID)
 	}
 	if !currentStatus(status) {
@@ -70,7 +143,8 @@ func (s *Store) SupersedeKnowledge(newID int64, oldIDs []int64, reason string, a
 	}
 	ts := now()
 	for _, id := range olds {
-		if err := tx.QueryRow(`SELECT status FROM knowledge WHERE id=?`, id).Scan(&status); err != nil {
+		var old scope.Axes
+		if err := tx.QueryRow(`SELECT status, project, branch, machine FROM knowledge WHERE id=?`, id).Scan(&status, &old.Project, &old.Branch, &old.Machine); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return fmt.Errorf("%w: no entry #%d", ErrRelationInvalid, id)
 			}
@@ -78,6 +152,9 @@ func (s *Store) SupersedeKnowledge(newID int64, oldIDs []int64, reason string, a
 		}
 		if !currentStatus(status) {
 			return fmt.Errorf("%w: #%d is %s", ErrNotCurrent, id, status)
+		}
+		if !old.Same(at) {
+			return fmt.Errorf("%w: #%d is %s, the new entry is %s; move it first, then supersede", ErrScopeMismatch, id, old.Label(), at.Label())
 		}
 		if _, err := addRelationTx(tx, RelationInput{FromID: newID, ToID: id, Kind: RelSupersedes, State: RelActive, Origin: origin, Reason: reason}, actor); err != nil {
 			return err
@@ -92,7 +169,7 @@ func (s *Store) SupersedeKnowledge(newID int64, oldIDs []int64, reason string, a
 			return err
 		}
 	}
-	return tx.Commit()
+	return nil
 }
 
 // RetireKnowledge zieht einen Eintrag zurück, dessen beschriebener Zustand
@@ -119,6 +196,13 @@ func (s *Store) RetireKnowledge(id int64, reason, by string) error {
 	}
 	if !currentStatus(status) {
 		return fmt.Errorf("%w: #%d is %s", ErrNotCurrent, id, status)
+	}
+	var heads int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM knowledge WHERE superseded_by=?`, id).Scan(&heads); err != nil {
+		return err
+	}
+	if heads > 0 {
+		return fmt.Errorf("%w: retire those first, or supersede #%d again instead", ErrHasPredecessors, id)
 	}
 	ts := now()
 	if err := archiveKnowledgeTx(tx, id, by, ts); err != nil {

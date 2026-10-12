@@ -228,6 +228,7 @@ var writerMethodClasses = map[string]string{
 	"KnowledgeMoves":                "read",
 	"KnowledgeRetirements":          "read",
 	"RetireKnowledge":               "write",
+	"InsertKnowledgeSuperseding":    "write",
 	"SupersedeKnowledge":            "write",
 	"KnowledgeTitlesForPrompt":      "read",
 	"KnowledgeUnusedSince":          "read",
