@@ -3,6 +3,7 @@ package web
 import (
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -82,10 +83,12 @@ func TestTimesAreShownInOneZone(t *testing.T) {
 		t.Errorf("clock = %q, want the local 00:30", got)
 	}
 	now := time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC) // 11:00 local
-	if got := dayAndClock("2026-10-01T22:30:00Z", now); !strings.HasPrefix(got, "Today") || !strings.HasSuffix(got, "00:30") {
-		t.Errorf("dayAndClock = %q, want today 00:30 (the stamp is on the local day of now)", got)
+	tag := string(dayAndClock("2026-10-01T22:30:00Z", now))
+	text := regexp.MustCompile(`>([^<]+)</time>`).FindStringSubmatch(tag)
+	if text == nil || !strings.HasPrefix(text[1], "Today") || !strings.HasSuffix(text[1], "00:30") {
+		t.Errorf("dayAndClock = %q, want today 00:30 (the stamp is on the local day of now)", tag)
 	}
-	meta := detailMeta(store.Session{StartedAt: "2026-10-01T22:30:00Z", LastSeenAt: "2026-10-01T22:30:00Z"})
+	meta := string(detailMeta(store.Session{StartedAt: "2026-10-01T22:30:00Z", LastSeenAt: "2026-10-01T22:30:00Z"}))
 	if !strings.Contains(meta, "00:30") {
 		t.Errorf("detail meta = %q", meta)
 	}

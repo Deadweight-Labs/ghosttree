@@ -8,6 +8,8 @@ import (
 // ObjectRef sind die zwei Felder, die die Zugriffsprüfung von einem
 // Auftragsobjekt braucht: sein Projekt und sein Autor.
 type ObjectRef struct {
+	// ID ist die Id des Auftrags (bei Teilobjekten die des Auftrags dahinter).
+	ID      int64
 	Project string
 	Person  string
 	// HeldBy: bei einem noch nicht übernommenen, distillierten Auftrag die
@@ -37,18 +39,18 @@ func (s *Store) RequestRef(kind RequestRefKind, id int64) (ObjectRef, error) {
 	var q string
 	switch kind {
 	case RefRequest:
-		q = `SELECT r.project, r.person, ` + heldCol + ` FROM requests r WHERE r.id=?`
+		q = `SELECT r.id, r.project, r.person, ` + heldCol + ` FROM requests r WHERE r.id=?`
 	case RefCriterion:
-		q = `SELECT r.project, r.person, ` + heldCol + ` FROM request_criteria c JOIN requests r ON r.id=c.request_id WHERE c.id=?`
+		q = `SELECT r.id, r.project, r.person, ` + heldCol + ` FROM request_criteria c JOIN requests r ON r.id=c.request_id WHERE c.id=?`
 	case RefWork:
-		q = `SELECT r.project, r.person, ` + heldCol + ` FROM request_work w JOIN requests r ON r.id=w.request_id WHERE w.id=?`
+		q = `SELECT r.id, r.project, r.person, ` + heldCol + ` FROM request_work w JOIN requests r ON r.id=w.request_id WHERE w.id=?`
 	case RefRelation:
-		q = `SELECT r.project, r.person, ` + heldCol + ` FROM request_relations x JOIN requests r ON r.id=x.request_id WHERE x.id=?`
+		q = `SELECT r.id, r.project, r.person, ` + heldCol + ` FROM request_relations x JOIN requests r ON r.id=x.request_id WHERE x.id=?`
 	default:
 		return ObjectRef{}, fmt.Errorf("unknown request ref kind %q", kind)
 	}
 	var ref ObjectRef
-	err := s.db.QueryRow(q, id).Scan(&ref.Project, &ref.Person, &ref.HeldBy)
+	err := s.db.QueryRow(q, id).Scan(&ref.ID, &ref.Project, &ref.Person, &ref.HeldBy)
 	if err == sql.ErrNoRows {
 		return ObjectRef{}, sql.ErrNoRows
 	}

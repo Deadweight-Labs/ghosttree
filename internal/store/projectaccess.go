@@ -87,6 +87,11 @@ type Object struct {
 	// nicht freigegebener, distillierter Eintrag stammt; er darf ihn freigeben
 	// oder verwerfen, nie verifizieren.
 	OriginOwner bool
+	// EntryID (Wissen) und RequestID (Auftrag) bestimmen bei Objekten ohne Projekt
+	// den Autor: die Konto-Id aus knowledge_authors und request_authors, nie ein
+	// Name. Beides 0 heißt ohne Besitzer.
+	EntryID   int64
+	RequestID int64
 }
 
 // Decision ist das Ergebnis der Matrix.
@@ -310,10 +315,11 @@ type ProjectAccess struct {
 	unclaimed map[string]bool
 	writers   map[string]map[string]bool
 
-	ownersOnce   sync.Once
-	ownerIDs     map[string]int64
-	ownerDefault int64
-	authorIDs    map[string]int64
+	ownersOnce     sync.Once
+	ownerIDs       map[string]int64
+	ownerDefault   int64
+	entryAuthors   map[int64]int64
+	requestAuthors map[int64]int64
 
 	checks atomic.Int32
 	loads  atomic.Int32
@@ -497,21 +503,20 @@ func (a *ProjectAccess) Decide(project string, res Resource, act Action, obj Obj
 	return d
 }
 
-// decideGlobal: Objekte ohne Projekt (globales Wissen und globale Aufträge)
-// lesen und anlegen alle Konten; ändern darf der Autor und der Instanz-Admin.
+// decideGlobal: "global" heißt "überall für mich". Wissen, Aufträge und
+// Dokumente ohne Projekt (und ohne Maschine) gehören allein ihrem Autorenkonto,
+// auch der Instanz-Admin hat keinen Sonderblick. Anlegen darf jedes Konto.
 // Sessions ohne Projekt gehören ihrem Besitzer.
 func (a *ProjectAccess) decideGlobal(res Resource, act Action, obj Object) Decision {
 	switch res {
 	case ResKnowledge, ResRequest, ResDocument:
-		switch act {
-		case ActRead, ActCreate, ActWork:
+		if act == ActCreate {
 			return Decision{Allowed: true}
-		case ActEdit, ActVerify:
-			if obj.Own || a.IsAdmin() {
-				return Decision{Allowed: true}
-			}
-			return Decision{Reason: "global entry of another author"}
 		}
+		if a.ownsGlobal(obj) {
+			return Decision{Allowed: true}
+		}
+		return Decision{Hidden: true, Reason: "global entry of another author"}
 	case ResSessionMeta, ResTranscript:
 		if res == ResSessionMeta && act == ActCreate {
 			return Decision{Allowed: true}
@@ -545,7 +550,7 @@ func (a *ProjectAccess) Check(project string, res Resource, act Action, obj Obje
 // -------- Hilfen je Ressource
 
 func knowledgeObject(a *ProjectAccess, k Knowledge) Object {
-	obj := Object{Own: a.IsAuthor(k.Person), Confidence: k.Confidence, Machine: k.Scope.Machine}
+	obj := Object{Own: a.ownsKnowledge(k), Confidence: k.Confidence, Machine: k.Scope.Machine, EntryID: k.ID}
 	if ref := knowledgeHeldRef(k); ref != "" {
 		_, obj.OriginOwner = a.heldOrigin(ref)
 	}
@@ -643,6 +648,7 @@ func (a *ProjectAccess) RequestFilter(f requestdomain.SearchFilter) requestdomai
 		return f
 	}
 	f.Restrict, f.Projects = true, a.Projects()
+	f.GlobalAccount, f.GlobalOwner = a.account, a.IsInstanceOwner()
 	f.UnclaimedAuthor, f.UnclaimedAll = a.principal.Label, a.IsAdmin()
 	// Distillierte, nicht übernommene Requests aus fremden privaten Sessions
 	// bleiben dem Besitzer dieser Session vorbehalten.
@@ -738,12 +744,23 @@ func (a *ProjectAccess) CanSeeDocument(d Document) bool {
 	return a.Allow(d.Project, ResDocument, ActRead, Object{Own: a.IsAuthor(d.Person)})
 }
 
+// globalListResource: nur Wissen und Aufträge haben globale Einträge, die sich
+// die Liste selbst auf die eigenen begrenzt; jede andere Ressource ohne Projekt
+// geht wie vorher durch die Matrix.
+func globalListResource(res Resource) bool { return res == ResKnowledge || res == ResRequest }
+
 // GateList entscheidet, ob eine Liste mit ausdrücklichem Projekt überhaupt
 // angefragt werden darf. perEntry sagt, dass der Aufrufer jeden Eintrag danach
 // filtert (mit Own); dann darf auch eine unbeanspruchte Remote durch, weil der
 // Filter dem Autor das Seine zeigt und allen anderen nichts.
 func (a *ProjectAccess) GateList(project string, res Resource, perEntry bool) error {
 	project = strings.TrimSpace(project)
+	if project == "" && globalListResource(res) {
+		// Ohne Projekt liest jeder, was ihm gehört: die Liste begrenzt sich selbst
+		// auf die eigenen globalen Einträge (decideGlobal) und die Projekte des Kontos.
+		a.Filtered()
+		return nil
+	}
 	if perEntry && project != "" && a.Unclaimed(project) && a.Role(project).Role == "" {
 		a.Filtered()
 		return nil

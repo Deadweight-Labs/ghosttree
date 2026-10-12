@@ -625,6 +625,10 @@ func (s *Store) setVisibility(id int64, level, actor string) error {
 
 var errBadVisibility = errors.New("unknown visibility level")
 
+// ErrShareNeedsProject: eine Session ohne Projekt gehört zu keiner Gruppe, mit der
+// sie sich teilen ließe; die Freigabe käme bei niemandem an.
+var ErrShareNeedsProject = errors.New("this session belongs to no project, so there is nobody to share it with; it stays private")
+
 // SetSessionVisibility stellt die Freigabestufe ein. Das darf nur der Besitzer
 // der Session und der Owner ihres Projekts; die Prüfung gilt auch im Log-Modus,
 // denn sie ist keine Lesesperre, sondern eine Änderung.
@@ -646,6 +650,9 @@ func (s *Store) SetSessionVisibility(id int64, pa *ProjectAccess, level string) 
 	// Wer die Session nicht besitzt (Projekt-Owner), darf sie nur zurücknehmen.
 	if !pa.OwnsSession(sess) && level != VisPrivate {
 		return ErrAccessForbidden
+	}
+	if level != VisPrivate && sess.Scope.Project == "" {
+		return ErrShareNeedsProject
 	}
 	d := pa.Decide(sess.Scope.Project, ResTranscript, ActShare, pa.transcriptObject(sess))
 	if !d.Allowed {

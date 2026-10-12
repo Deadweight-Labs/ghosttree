@@ -3,7 +3,7 @@
 {{define "joinfoot"}}</section></main></body></html>{{end}}
 
 {{define "joincmd"}}{{range .}}{{if .URL}}<span class="join-url">{{.Text}}</span>{{else}}<span class="join-tok">{{.Text}}</span>{{end}}{{if .Wbr}}<wbr>{{end}}{{.Sep}}{{end}}{{end}}
-{{define "joinconfirm"}}<label class="join-confirm"><input type="checkbox" name="confirm_account" value="{{.Person}}" required><span>{{t "join.confirm_me" .Person}}</span></label>{{end}}
+{{define "joinconfirm"}}<label class="join-confirm"><input type="checkbox" name="confirm_account" value="{{.Person}}" required><span>{{t "join.confirm_me" .Person}}</span></label><p class="join-confirm-hint" role="status">{{t "join.confirm_first"}}</p>{{end}}
 {{define "joinnewcode"}}<form class="join-newcode" method="post" action="/join/pair"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><button class="clay btn ghost">{{t "join.new_code"}}</button></form>{{end}}
 
 {{define "join"}}{{template "joinhead"}}<h1>{{t "join.invited" .Inviter .Target}}</h1>

@@ -287,16 +287,16 @@ func (a *app) contextPage(w http.ResponseWriter, r *http.Request) {
 	}
 	var entries []store.Knowledge
 	var err error
+	pa := a.access(r)
 	if preview {
-		entries, err = a.store.KnowledgeForActivatedPreview(scope.Axes{Project: project}, activation.Context{})
+		entries, err = a.store.KnowledgeForActivatedPreview(scope.Axes{Project: project}, activation.Context{}, pa.Viewer())
 	} else {
-		entries, err = a.store.KnowledgeForContext(scope.Axes{Project: project})
+		entries, err = a.store.KnowledgeForContext(scope.Axes{Project: project}, pa.Viewer())
 	}
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	pa := a.access(r)
 	entries = keep(entries, 0, func(k store.Knowledge) bool { return pa.CanSeeKnowledge(k) && pa.CanDeliverKnowledge(k) })
 	if len(entries) > 0 {
 		view.Output = server.RenderBootstrap(entries, 12000)

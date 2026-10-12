@@ -281,7 +281,7 @@ func (a *api) listKnowledge(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("include_archived") == "1" {
 		ks, err = a.st.KnowledgeForProject(scope.NormalizeRemote(r.URL.Query().Get("project")))
 	} else {
-		ks, err = a.st.KnowledgeForContext(axesFromQuery(r))
+		ks, err = a.st.KnowledgeForContext(axesFromQuery(r), a.access(r).Viewer())
 	}
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
@@ -424,7 +424,7 @@ func (a *api) pendingKnowledge(w http.ResponseWriter, r *http.Request) {
 	if !a.listGateEntries(w, r, scope.NormalizeRemote(r.URL.Query().Get("project")), store.ResKnowledge) {
 		return
 	}
-	ks, err := a.st.PendingKnowledge(r.URL.Query().Get("project"), a.overfetch(limit))
+	ks, err := a.st.PendingKnowledge(r.URL.Query().Get("project"), a.overfetch(limit), a.access(r).Viewer())
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
@@ -632,7 +632,7 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("scope") == "union" {
 			search = a.st.SearchKnowledgeForContext
 		}
-		ks, err := search(q, filter, fetch)
+		ks, err := search(q, filter, fetch, pa.Viewer())
 		if err != nil {
 			writeStoreError(w, http.StatusInternalServerError, err)
 			return
@@ -706,7 +706,7 @@ func (a *api) bootstrap(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
-	entries, err := a.st.KnowledgeForActivatedContext(axesFromQuery(r), actx)
+	entries, err := a.st.KnowledgeForActivatedContext(axesFromQuery(r), actx, a.access(r).Viewer())
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
@@ -776,7 +776,7 @@ func (a *api) relevant(w http.ResponseWriter, r *http.Request) {
 	}
 	pa := a.access(r)
 	pa.Filtered()
-	entries, err := a.st.RelevantKnowledge(r.URL.Query().Get("q"), axesFromQuery(r), a.overfetch(limit))
+	entries, err := a.st.RelevantKnowledge(r.URL.Query().Get("q"), axesFromQuery(r), a.overfetch(limit), a.access(r).Viewer())
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return

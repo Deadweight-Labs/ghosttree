@@ -56,6 +56,11 @@ func cmdLogin(args []string, stdout io.Writer) int {
 	defer cancel()
 	token, err := deviceLogin(ctx, client.New(cfg), cfg.Machine, stdout)
 	if err != nil {
+		var taken *machineTakenError
+		if errors.As(err, &taken) {
+			fmt.Fprint(stdout, loginTakenMessage(cfg.ServerURL, cfg.Machine))
+			return 1
+		}
 		fmt.Fprintf(stdout, "login failed: %v\n", err)
 		return 1
 	}
@@ -108,6 +113,8 @@ func deviceLogin(ctx context.Context, c *client.Client, machine string, stdout i
 			}
 		case "access_denied":
 			return client.DeviceToken{}, errors.New("the login was denied in the browser")
+		case "machine_name_taken":
+			return client.DeviceToken{}, &machineTakenError{}
 		case "expired_token":
 			return client.DeviceToken{}, errors.New("the code expired; run ctx login again")
 		default:
@@ -115,4 +122,15 @@ func deviceLogin(ctx context.Context, c *client.Client, machine string, stdout i
 		}
 	}
 	return client.DeviceToken{}, errors.New("timed out waiting for approval")
+}
+
+// loginTakenMessage says why the login stopped and names the exact command to
+// run again, with another machine name (as ctx join does for a taken name).
+func loginTakenMessage(server, machine string) string {
+	suggestion := machine + "-2"
+	if len(suggestion) > 64 {
+		suggestion = "my-" + machine[:60]
+	}
+	return fmt.Sprintf("The machine name %s already belongs to another account.\nRun this with a name of your choice:\n\n  %s login --server %s --machine %s\n",
+		safe(machine), ctxHint(), server, suggestion)
 }

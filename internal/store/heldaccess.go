@@ -52,7 +52,7 @@ func knowledgeHeldRef(k Knowledge) string {
 // falsch, wenn der Request aus der privaten Session eines anderen Kontos
 // stammt und noch niemand ihn übernommen hat.
 func (a *ProjectAccess) RequestObject(ref ObjectRef) (obj Object, visible bool) {
-	obj = Object{Own: a.IsAuthor(ref.Person)}
+	obj = Object{Own: a.ownsRequest(ref.ID), RequestID: ref.ID}
 	if ref.HeldBy == "" {
 		return obj, true
 	}
@@ -149,9 +149,15 @@ func (a CoordAccess) requestHeldTx(tx rowQuerier, reqID string) bool {
 	if err != nil {
 		return false
 	}
-	var origin, person, ref string
-	if tx.QueryRow(`SELECT origin, person, session_ref FROM requests WHERE id=?`, n).Scan(&origin, &person, &ref) != nil {
+	var project, origin, person, ref string
+	if tx.QueryRow(`SELECT project, origin, person, session_ref FROM requests WHERE id=?`, n).Scan(&project, &origin, &person, &ref) != nil {
 		return false
+	}
+	// A request without a project belongs to its author alone: linking it, or
+	// finding out that it exists, is for him only. Everybody else gets the
+	// answer for a request that is not there.
+	if strings.TrimSpace(project) == "" && !a.ownsGlobalRequestTx(tx, n) {
+		return true
 	}
 	if origin != "distilled" || person != "" {
 		return false
@@ -172,4 +178,20 @@ func (a CoordAccess) requestHeldTx(tx rowQuerier, reqID string) bool {
 	}
 	viewer, ok := accountNumericID(a.Principal.ID)
 	return !ok || effectiveOwner(account, instanceOwnerID(tx)) != viewer
+}
+
+// ownsGlobalRequestTx: the account of this access wrote the request, or the
+// request has no owner and the account is the instance owner.
+func (a CoordAccess) ownsGlobalRequestTx(q rowQuerier, requestID int64) bool {
+	account, ok := accountNumericID(a.Principal.ID)
+	if !ok {
+		return false
+	}
+	var author int64
+	_ = q.QueryRow(`SELECT account_id FROM request_authors WHERE request_id=?`, requestID).Scan(&author)
+	if author > 0 {
+		return author == account
+	}
+	owner := instanceOwnerID(q)
+	return owner != 0 && owner == account
 }

@@ -155,8 +155,8 @@ func requestStateLabel(state string) string { return label(requestStateKeys, sta
 
 func requestURL(id int64) string { return "/ui/requests/" + strconv.FormatInt(id, 10) }
 
-func requestObject(pa *store.ProjectAccess, person string) store.Object {
-	return store.Object{Own: pa.IsAuthor(person)}
+func requestObject(pa *store.ProjectAccess, id int64) store.Object {
+	return store.Object{Own: pa.OwnsRequest(id), RequestID: id}
 }
 
 // ----------------------------------------------------------------------- Liste
@@ -417,7 +417,7 @@ func (a *app) requestPage(w http.ResponseWriter, r *http.Request) {
 	}
 	pa := a.access(r)
 	req := detail.Request
-	obj := requestObject(pa, req.Person)
+	obj := requestObject(pa, req.ID)
 	project := req.Scope.Project
 	linked, err := a.browserCoord(r).ThreadsForObject("request", req.HumanID())
 	if err != nil {

@@ -81,6 +81,9 @@ func (s *Store) CreateThreadByRole(p Principal, t Thread) (int64, error) {
 			if err := validateRequestLinkTx(tx, room, l.ID); err != nil {
 				return 0, err
 			}
+			if (CoordAccess{Store: s, Principal: p}).requestHeldTx(tx, l.ID) {
+				return 0, errLinkedRequestNotFound
+			}
 		}
 		if _, err := tx.Exec(`INSERT OR IGNORE INTO thread_links(thread_id,object_kind,object_id,object_revision,created_at) VALUES(?,?,?,?,?)`, id, l.Kind, l.ID, l.Revision, ts); err != nil {
 			return 0, err

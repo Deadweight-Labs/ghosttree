@@ -417,8 +417,12 @@ func TestBootstrapContextIsFiltered(t *testing.T) {
 	}
 	for _, who := range []string{"robin", "lena", "mia", "rex", "gus"} {
 		out := bootstrap(who, accProject, "other-box")
-		if !strings.Contains(out, "mia pitfall") || !strings.Contains(out, "global pitfall") {
-			t.Errorf("%s bootstrap lacks project or global knowledge: %s", who, out)
+		if !strings.Contains(out, "mia pitfall") {
+			t.Errorf("%s bootstrap lacks project knowledge: %s", who, out)
+		}
+		// "Global" heißt "überall für mich": nur der Autor (robin) bekommt es.
+		if got := strings.Contains(out, "global pitfall"); got != (who == "robin") {
+			t.Errorf("%s bootstrap has global pitfall of robin: %v", who, got)
 		}
 	}
 	// Maschinenwissen nur für den Besitzer der Maschine, auch für Owner und Lead nicht.
@@ -430,10 +434,10 @@ func TestBootstrapContextIsFiltered(t *testing.T) {
 			t.Errorf("%s gets machine-axis knowledge of mia: %s", who, out)
 		}
 	}
-	// Ohne Rolle im Projekt: globales Wissen ja, Projektwissen nein; kein Fehler,
-	// weil der Hook in jedem Repository fragt.
+	// Ohne Rolle im Projekt: weder Projektwissen noch fremdes globales Wissen;
+	// kein Fehler, weil der Hook in jedem Repository fragt.
 	out := bootstrap("nora", accProject, "nora-box")
-	if strings.Contains(out, "mia pitfall") || !strings.Contains(out, "global pitfall") {
+	if strings.Contains(out, "mia pitfall") || strings.Contains(out, "global pitfall") {
 		t.Errorf("stranger bootstrap: %s", out)
 	}
 	if out := bootstrap("mia", accOther, "x"); strings.Contains(out, "other project pitfall") {
@@ -456,8 +460,11 @@ func TestBootstrapContextIsFiltered(t *testing.T) {
 func TestSearchKnowledgeIsFiltered(t *testing.T) {
 	f := accessAPI(t, true)
 	out := f.expect(t, "nora", 200, "GET", "/api/search?q=pitfall&kind=knowledge", nil)
-	if strings.Contains(out, "mia pitfall") || strings.Contains(out, "other project") || !strings.Contains(out, "global pitfall") {
+	if strings.Contains(out, "mia pitfall") || strings.Contains(out, "other project") || strings.Contains(out, "global pitfall") {
 		t.Errorf("stranger search: %s", out)
+	}
+	if out = f.expect(t, "robin", 200, "GET", "/api/search?q=pitfall&kind=knowledge", nil); !strings.Contains(out, "global pitfall") {
+		t.Errorf("author does not find his global entry: %s", out)
 	}
 	out = f.expect(t, "mia", 200, "GET", "/api/search?q=pitfall&kind=knowledge", nil)
 	if !strings.Contains(out, "mia pitfall") || strings.Contains(out, "other project") || strings.Contains(out, "mia machine") == false {
@@ -897,8 +904,10 @@ func TestUnclaimedRemoteRules(t *testing.T) {
 
 func TestGlobalDocumentsAndRegressionCountStayVisible(t *testing.T) {
 	f := accessAPI(t, true)
-	// Ohne Projekt: wie globales Wissen lesbar statt 404.
-	f.expect(t, "mia", 200, "GET", "/api/documents", nil)
+	// Dokumente gehören immer zu einem Projekt: ohne Projekt gibt es nichts zu
+	// lesen, und die Lockerung der Liste gilt nur für Wissen und Aufträge.
+	f.expect(t, "mia", 404, "GET", "/api/documents", nil)
+	f.expect(t, "mia", 200, "GET", "/api/documents?project="+accProject, nil)
 	// Die Zahl der Unbeurteilten zählt nur Sichtbares.
 	for _, who := range []string{"mia", "nora"} {
 		var out struct {
@@ -907,8 +916,8 @@ func TestGlobalDocumentsAndRegressionCountStayVisible(t *testing.T) {
 		_ = json.Unmarshal([]byte(f.expect(t, who, 200, "GET", "/api/knowledge/regression-gaps", nil)), &out)
 		want := map[string]int{"mia": 3, "nora": 1}[who] // mia: P-Pitfalls (k-mia, staged-note ist note) + eigene Maschine + global
 		_ = want
-		if who == "nora" && out.Unreviewed != 1 { // nur das globale Pitfall
-			t.Errorf("stranger counts %d unreviewed pitfalls, want 1", out.Unreviewed)
+		if who == "nora" && out.Unreviewed != 0 { // das globale Pitfall gehört robin
+			t.Errorf("stranger counts %d unreviewed pitfalls, want 0", out.Unreviewed)
 		}
 	}
 }

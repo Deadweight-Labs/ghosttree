@@ -23,7 +23,7 @@ func workSession(t *testing.T, f *accessAPIFixture, ext string, account int64, p
 // lesen darf; sonst verriete schon die Zahl verborgene Arbeit.
 func TestStartWarningDoesNotCountHiddenWork(t *testing.T) {
 	f := accessAPI(t, true)
-	g, err := f.st.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: "g", Person: "robin"}})
+	g, err := f.st.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: "g", Person: "nora"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +31,7 @@ func TestStartWarningDoesNotCountHiddenWork(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := fmt.Sprintf("/api/requests/%d/work", g.Request.ID)
-	for _, who := range []string{"gus", "nora"} {
+	for _, who := range []string{"nora"} {
 		acc := map[string]int64{"gus": 5, "nora": 6}[who]
 		out := f.expect(t, who, 201, "POST", path, map[string]any{"session_id": workSession(t, f, "wm-"+who, acc, accProject), "role": "primary"})
 		if strings.Contains(out, "already has") || strings.Contains(out, "active primary") {
@@ -43,7 +43,7 @@ func TestStartWarningDoesNotCountHiddenWork(t *testing.T) {
 // Ist die Arbeit lesbar (geteilte Session), bleibt die Warnung.
 func TestStartWarningCountsReadableWork(t *testing.T) {
 	f := accessAPI(t, true)
-	g, err := f.st.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: "g", Person: "robin"}})
+	g, err := f.st.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: "g", Person: "gus"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestHiddenProjectRequestAnswersLikeUnknownId(t *testing.T) {
 // fremde lesbar ist, und beendet nur Arbeit der eigenen Session.
 func TestWithoutNumberViewOnlyOwnSessionStartsAndEnds(t *testing.T) {
 	f := accessAPI(t, true)
-	g, err := f.st.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: "g", Person: "robin"}})
+	g, err := f.st.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: "g", Person: "nora"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,23 +91,23 @@ func TestWithoutNumberViewOnlyOwnSessionStartsAndEnds(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := fmt.Sprintf("/api/requests/%d/work", g.Request.ID)
-	code, unknown := f.call(t, "gus", "POST", path, map[string]any{"session_id": 99999, "role": "related"})
+	code, unknown := f.call(t, "nora", "POST", path, map[string]any{"session_id": 99999, "role": "related"})
 	if code != 404 {
 		t.Fatalf("unknown session: %d", code)
 	}
-	if code, got := f.call(t, "gus", "POST", path, map[string]any{"session_id": shared, "role": "related"}); code != 404 || got != unknown {
+	if code, got := f.call(t, "nora", "POST", path, map[string]any{"session_id": shared, "role": "related"}); code != 404 || got != unknown {
 		t.Errorf("foreign readable session start: %d %q", code, got)
 	}
 	w, _, err := f.st.StartRequestWork(g.Request.ID, shared, "related", "rex")
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, unknownWork := f.call(t, "gus", "PATCH", "/api/request-work/99999", map[string]string{"state": "paused", "summary": "x"})
-	if code, got := f.call(t, "gus", "PATCH", fmt.Sprintf("/api/request-work/%d", w.ID), map[string]string{"state": "paused", "summary": "x"}); code != 404 || got != unknownWork {
+	_, unknownWork := f.call(t, "nora", "PATCH", "/api/request-work/99999", map[string]string{"state": "paused", "summary": "x"})
+	if code, got := f.call(t, "nora", "PATCH", fmt.Sprintf("/api/request-work/%d", w.ID), map[string]string{"state": "paused", "summary": "x"}); code != 404 || got != unknownWork {
 		t.Errorf("foreign readable work end: %d %q", code, got)
 	}
 	// Die eigene Session geht weiter.
-	f.expect(t, "gus", 201, "POST", path, map[string]any{"session_id": workSession(t, f, "ow-gus", 5, accProject), "role": "related"})
+	f.expect(t, "nora", 201, "POST", path, map[string]any{"session_id": workSession(t, f, "ow-nora", 6, accProject), "role": "related"})
 }
 
 // primary_exists nennt keine REQ-Nummer aus einem Projekt, das der Betrachter
@@ -122,7 +122,7 @@ func TestPrimaryExistsDoesNotNameHiddenRequest(t *testing.T) {
 	if _, _, err := f.st.StartRequestWork(hidden.Request.ID, sid, "primary", "nora"); err != nil {
 		t.Fatal(err)
 	}
-	g, err := f.st.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: "g", Person: "robin"}})
+	g, err := f.st.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: "g", Person: "nora"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +144,7 @@ func TestActivityIDsRenumberedForWorkersWithoutNumbers(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	g, err := f.st.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: "g", Person: "robin"}})
+	g, err := f.st.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: "g", Person: "nora"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +189,7 @@ func TestAdminStartsAndEndsForeignWorkOnGlobalRequest(t *testing.T) {
 // Ohne Warnung aus dem Store erscheint keine, auch wenn lesbare Arbeit existiert.
 func TestStartWarningOnlyWhenStoreWarned(t *testing.T) {
 	f := accessAPI(t, true)
-	g, err := f.st.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: "g", Person: "robin"}})
+	g, err := f.st.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: "g", Person: "nora"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +200,7 @@ func TestStartWarningOnlyWhenStoreWarned(t *testing.T) {
 	if _, _, err := f.st.StartRequestWork(g.Request.ID, shared, "primary", "rex"); err != nil {
 		t.Fatal(err)
 	}
-	out := f.expect(t, "gus", 201, "POST", fmt.Sprintf("/api/requests/%d/work", g.Request.ID), map[string]any{"session_id": workSession(t, f, "sw-gus", 5, accProject), "role": "related"})
+	out := f.expect(t, "nora", 201, "POST", fmt.Sprintf("/api/requests/%d/work", g.Request.ID), map[string]any{"session_id": workSession(t, f, "sw-nora", 6, accProject), "role": "related"})
 	if strings.Contains(out, "already has") {
 		t.Errorf("warning without store warning: %s", out)
 	}

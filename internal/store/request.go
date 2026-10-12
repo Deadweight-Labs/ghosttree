@@ -68,6 +68,9 @@ func (s *Store) CreateRequest(in requestdomain.CreateInput) (requestdomain.Detai
 	if _, err := tx.Exec(`INSERT INTO search_documents(kind,domain_id,title,body,project,branch,machine) VALUES('request',?,?,?,?,?,?)`, id, r.Title, r.Description, r.Scope.Project, r.Scope.Branch, r.Scope.Machine); err != nil {
 		return requestdomain.Detail{}, err
 	}
+	if err := recordRequestAuthorTx(tx, id, authorForWriteTx(tx, in.AuthorID, r.Person, r.Origin, r.SessionRef)); err != nil {
+		return requestdomain.Detail{}, err
+	}
 	if err := tx.Commit(); err != nil {
 		return requestdomain.Detail{}, err
 	}
@@ -217,20 +220,26 @@ func requestScopeWhere(filter requestdomain.SearchFilter) ([]string, []any) {
 		}
 	}
 	if filter.Restrict {
-		marks := make([]string, len(filter.Projects))
-		for i, p := range filter.Projects {
-			marks[i] = "?"
-			args = append(args, p)
+		var clauses []string
+		// Aufträge ohne Projekt gehören ihrem Autor (Konto-Id).
+		own, gargs := ownRequestSQL("r", filter.GlobalAccount, filter.GlobalOwner)
+		clauses = append(clauses, `(r.project='' AND `+own+`)`)
+		args = append(args, gargs...)
+		if len(filter.Projects) > 0 {
+			clauses = append(clauses, `r.project IN (`+placeholders(len(filter.Projects))+`)`)
+			for _, p := range filter.Projects {
+				args = append(args, p)
+			}
 		}
-		clause := `r.project=''`
-		if len(marks) > 0 {
-			clause += ` OR r.project IN (` + strings.Join(marks, ",") + `)`
+		clause := strings.Join(clauses, " OR ")
+		if clause == "" {
+			clause = "0"
 		}
 		switch {
 		case filter.UnclaimedAll:
-			clause += ` OR r.project NOT IN (SELECT remote FROM projects)`
+			clause += ` OR (r.project!='' AND r.project NOT IN (SELECT remote FROM projects))`
 		case filter.UnclaimedAuthor != "":
-			clause += ` OR (r.person=? AND r.project NOT IN (SELECT remote FROM projects))`
+			clause += ` OR (r.person=? AND r.project!='' AND r.project NOT IN (SELECT remote FROM projects))`
 			args = append(args, filter.UnclaimedAuthor)
 		}
 		where = append(where, `(`+clause+`)`)
@@ -353,6 +362,11 @@ func (s *Store) CountOpenRequestsFor(v SessionViewer, ax scope.Axes) (int, error
 			  AND hs.shared=0 AND COALESCE(hs.visibility,'') IN ('','private')
 			  AND (CASE WHEN hs.account_id=0 THEN ? ELSE hs.account_id END) != ?))`
 		args = append(args, v.Owner, v.Account)
+		// A request without a project counts only for its author, the instance
+		// owner included for those without an owner.
+		own, oargs := ownRequestSQL("requests", v.Account, v.isInstanceOwner())
+		q += ` AND (project!='' OR ` + own + `)`
+		args = append(args, oargs...)
 	}
 	var count int
 	err := s.db.QueryRow(q, args...).Scan(&count)

@@ -46,14 +46,14 @@ const (
 // RelevantKnowledge returns entries that the given text gives a reason to
 // deliver, most relevant first. It returns nothing far more often than
 // something, which is the intended behaviour rather than a limitation.
-func (s *Store) RelevantKnowledge(text string, ax scope.Axes, limit int) ([]Knowledge, error) {
+func (s *Store) RelevantKnowledge(text string, ax scope.Axes, limit int, viewer ...SessionViewer) ([]Knowledge, error) {
 	if s.reader != nil {
-		return s.reader.RelevantKnowledge(text, ax, limit)
+		return s.reader.RelevantKnowledge(text, ax, limit, viewer...)
 	}
-	return s.relevantKnowledge(text, ax, limit, true)
+	return s.relevantKnowledge(text, ax, limit, true, viewer...)
 }
 
-func (s *Store) relevantKnowledge(text string, ax scope.Axes, limit int, record bool) ([]Knowledge, error) {
+func (s *Store) relevantKnowledge(text string, ax scope.Axes, limit int, record bool, viewer ...SessionViewer) ([]Knowledge, error) {
 	if limit <= 0 {
 		limit = 3
 	}
@@ -61,9 +61,12 @@ func (s *Store) relevantKnowledge(text string, ax scope.Axes, limit int, record 
 	if len(terms) == 0 {
 		return nil, nil
 	}
+	// The counts below see only what the viewer may read, so an entry of somebody
+	// else neither displaces a result nor shifts how rare a term looks.
+	scopeSQL, scopeArgs := withGlobalScope(`1=1`, nil, "knowledge", viewer)
 	var total int
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM knowledge
-		WHERE status = 'active' AND confidence != 'quarantined'`).Scan(&total); err != nil {
+		WHERE status = 'active' AND confidence != 'quarantined' AND `+scopeSQL, scopeArgs...).Scan(&total); err != nil {
 		return nil, err
 	}
 	if total == 0 {
@@ -79,7 +82,7 @@ func (s *Store) relevantKnowledge(text string, ax scope.Axes, limit int, record 
 	}
 	var rare []scored
 	for _, term := range terms {
-		n, err := s.documentFrequency(term)
+		n, err := s.documentFrequency(term, viewer...)
 		if err != nil {
 			return nil, err
 		}
@@ -108,6 +111,7 @@ func (s *Store) relevantKnowledge(text string, ax scope.Axes, limit int, record 
 	}
 
 	where, args := ax.UnionWhere()
+	where, args = withGlobalScope(where, args, "k", viewer)
 	args = append([]any{strings.Join(match, " OR ")}, args...)
 	args = append(args, limit)
 	rows, err := s.db.Query(`SELECT `+prefix(knowledgeCols, "k.")+`
@@ -131,11 +135,12 @@ func (s *Store) relevantKnowledge(text string, ax scope.Axes, limit int, record 
 	return ks, nil
 }
 
-func (s *Store) documentFrequency(term string) (int, error) {
+func (s *Store) documentFrequency(term string, viewer ...SessionViewer) (int, error) {
 	var n int
+	scopeSQL, scopeArgs := withGlobalScope(`1=1`, nil, "k", viewer)
 	err := s.db.QueryRow(`SELECT COUNT(*) FROM knowledge_fts f JOIN knowledge k ON k.id = f.rowid
-		WHERE knowledge_fts MATCH ? AND k.status = 'active' AND k.confidence != 'quarantined'`,
-		`"`+term+`"`).Scan(&n)
+		WHERE knowledge_fts MATCH ? AND k.status = 'active' AND k.confidence != 'quarantined' AND `+scopeSQL,
+		append([]any{`"` + term + `"`}, scopeArgs...)...).Scan(&n)
 	return n, err
 }
 

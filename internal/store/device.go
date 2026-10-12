@@ -45,6 +45,10 @@ var (
 	ErrDevicePending  = errors.New("authorization pending")
 	ErrDeviceSlowDown = errors.New("slow down")
 	ErrDeviceDenied   = errors.New("access denied")
+	// ErrDeviceMachineTaken: der Mensch hat im Browser bestätigt, der Name der
+	// Maschine gehört aber einem anderen Konto; der Client erfährt es sofort,
+	// statt bis zum Ablauf des Codes zu warten.
+	ErrDeviceMachineTaken = errors.New("machine name belongs to another account")
 )
 
 // DeviceStart ist, was der Start dem Client mitgibt. Die Klartext-Codes
@@ -73,7 +77,7 @@ type deviceFlow struct {
 	created, expires     time.Time
 	lastPoll             time.Time
 	interval             time.Duration
-	state                string // pending, approved, denied
+	state                string // pending, approved, denied, taken
 	account              string
 	join                 bool // Join-Paarung: ohne User-Code, nur über deviceHash ansprechbar
 }
@@ -270,6 +274,9 @@ func (d *DeviceFlows) Poll(deviceCode string) (DeviceApproval, time.Duration, er
 	case "denied":
 		d.remove(f)
 		return DeviceApproval{}, f.interval, ErrDeviceDenied
+	case "taken":
+		d.remove(f)
+		return DeviceApproval{}, f.interval, ErrDeviceMachineTaken
 	}
 	return DeviceApproval{}, f.interval, ErrDevicePending
 }
@@ -338,6 +345,19 @@ func (d *DeviceFlows) Decide(userCode, account string, approve bool) error {
 	} else {
 		f.state = "denied"
 	}
+	return nil
+}
+
+// RefuseMachineTaken beendet den Ablauf, weil der Maschinenname einem anderen
+// Konto gehört: die nächste Abfrage des Clients bekommt ErrDeviceMachineTaken.
+func (d *DeviceFlows) RefuseMachineTaken(userCode, account string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	f, err := d.find(userCode, account)
+	if err != nil {
+		return err
+	}
+	f.state = "taken"
 	return nil
 }
 

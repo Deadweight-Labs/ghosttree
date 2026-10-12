@@ -65,6 +65,10 @@ func (a *app) deviceDecide(w http.ResponseWriter, r *http.Request) {
 		// Bestätigung vergeben sieht, spart der CLI den Fehlschlag.
 		if req, err := a.store.Device().Lookup(code, browserPrincipal(r).ID); err == nil {
 			if err := a.store.MachineClaimable(req.Machine, browserPrincipal(r).ID); err != nil {
+				if errors.Is(err, store.ErrMachineTaken) {
+					// The terminal learns it now, not when the code expires.
+					_ = a.store.Device().RefuseMachineTaken(code, browserPrincipal(r).ID)
+				}
 				a.deviceError(w, r, err, "")
 				return
 			}

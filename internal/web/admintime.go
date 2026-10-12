@@ -22,7 +22,7 @@ func timeTag(stamp string) template.HTML {
 		text = msg("time.in", shortAge(t, now))
 	}
 	full := t.UTC().Format("2006-01-02 15:04 UTC")
-	return template.HTML(`<time datetime="` + html.EscapeString(t.UTC().Format(time.RFC3339)) + `" title="` + full + `">` + html.EscapeString(text) + `</time>`)
+	return template.HTML(`<time datetime="` + html.EscapeString(t.UTC().Format(time.RFC3339)) + `" data-local="title" title="` + full + `">` + html.EscapeString(text) + `</time>`)
 }
 
 // adminLabel übersetzt gespeicherte Werte (Einladungs-, Token- und Tokenart) in

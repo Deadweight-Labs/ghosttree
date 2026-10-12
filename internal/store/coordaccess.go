@@ -1663,6 +1663,7 @@ func (a CoordAccess) createTaskThread(roomKey string, anchorMessageID int64, tit
 		if kind == RoomProject && requestProject != "" && requestProject != project {
 			return 0, errLinkedRequestNotFound
 		}
+		// Also for a request without a project that is not the caller's.
 		if a.requestHeldTx(tx, requestID) {
 			return 0, errLinkedRequestNotFound
 		}
@@ -1761,7 +1762,9 @@ func (a CoordAccess) RoomThreads(roomKey string) ([]RoomThread, error) {
 	if err := a.roomAccessTx(tx, actor, roomKey, ActRead); err != nil {
 		return nil, err
 	}
-	all, err := roomThreadsTx(tx, roomKey)
+	viewer := SessionViewer{Enforced: a.Store.AccessEnforced(), Owner: instanceOwnerID(tx)}
+	viewer.Account, _ = accountNumericID(a.Principal.ID)
+	all, err := roomThreadsTx(tx, roomKey, viewer)
 	if err != nil {
 		return nil, err
 	}

@@ -70,14 +70,16 @@ func TestMachineNoteDeliveryFollowsTheAuthorAccount(t *testing.T) {
 		{"legacy entry of Anna (name, other case) on her machine", entry("ANNA", 0, "annabox"), true},
 		{"legacy entry under her old name", entry("Annie", 0, "annabox"), true},
 		{"legacy entry under an ambiguous name", entry("dup", 0, "annabox"), false},
-		{"no author at all (distillate)", entry("", 0, "beabox"), true},
+		{"no author at all: it belongs to the instance owner, not to the machine's owner", entry("", 0, "beabox"), false},
+		{"no author at all, on a free name: the instance owner's", entry("", 0, "newbox"), true},
 	} {
 		if got := delivers(tc.k); got != tc.want {
 			t.Errorf("%s: delivers = %v, want %v", tc.name, got, tc.want)
 		}
 	}
-	// A client cannot choose its author: the account is not part of the JSON.
-	if id, err := st.InsertKnowledge(Knowledge{Type: "note", Title: "x", Body: "b", Person: "robin", Scope: scope.Axes{Machine: "m"}}); err != nil || st.knowledgeAuthorID(id) != 0 {
-		t.Errorf("an entry without AuthorID got an author row: %v", err)
+	// A client cannot choose its author: the account is not part of the JSON. The
+	// store sets it once, at write time, from the writer's label.
+	if id, err := st.InsertKnowledge(Knowledge{Type: "note", Title: "x", Body: "b", Person: "robin", Scope: scope.Axes{Machine: "m"}}); err != nil || st.knowledgeAuthorID(id) != 1 {
+		t.Errorf("an entry without AuthorID did not get the writer's account: %v", err)
 	}
 }

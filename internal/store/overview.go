@@ -54,8 +54,12 @@ type KnowledgeWindow struct {
 	Projects        []string
 	UnclaimedAuthor string
 	UnclaimedAll    bool
-	Limit           int
-	Offset          int
+	// GlobalAccount und GlobalPersons: Einträge ohne Projekt gehören ihrem Autor,
+	// dem Konto aus knowledge_authors oder, ohne diese Zeile, dem Label.
+	GlobalAccount int64
+	GlobalOwner   bool
+	Limit         int
+	Offset        int
 }
 
 // KnowledgeWindow liefert neueste zuerst. Die Projektgrenze steckt in der
@@ -79,7 +83,9 @@ func (s *Store) KnowledgeWindow(w KnowledgeWindow) ([]Knowledge, error) {
 		args = append(args, w.Since)
 	}
 	if w.Restrict {
-		clause := `project=''`
+		own, gargs := ownKnowledgeSQL("", w.GlobalAccount, w.GlobalOwner)
+		args = append(args, gargs...)
+		clause := `(project='' AND machine='' AND ` + own + `)`
 		if len(w.Projects) > 0 {
 			clause += ` OR project IN (` + placeholders(len(w.Projects)) + `)`
 			for _, p := range w.Projects {
@@ -88,9 +94,9 @@ func (s *Store) KnowledgeWindow(w KnowledgeWindow) ([]Knowledge, error) {
 		}
 		switch {
 		case w.UnclaimedAll:
-			clause += ` OR project NOT IN (SELECT remote FROM projects)`
+			clause += ` OR (project!='' AND project NOT IN (SELECT remote FROM projects))`
 		case w.UnclaimedAuthor != "":
-			clause += ` OR (person=? AND project NOT IN (SELECT remote FROM projects))`
+			clause += ` OR (person=? AND project!='' AND project NOT IN (SELECT remote FROM projects))`
 			args = append(args, w.UnclaimedAuthor)
 		}
 		where = append(where, `(`+clause+`)`)

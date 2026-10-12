@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
+	"strings"
 	"sync"
 
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
@@ -318,6 +319,11 @@ func filterTo[T any](in []T, limit int, keep func(T) bool) []T {
 // das Projekt lesen darf; sonst 404. Ohne Projekt gilt der Filter auf den
 // Einträgen. Der Aufruf zählt auch ohne Projekt als Prüfung.
 func (a *api) listGate(w http.ResponseWriter, r *http.Request, project string, res store.Resource) bool {
+	if strings.TrimSpace(project) == "" && (res == store.ResKnowledge || res == store.ResRequest) {
+		// Ohne Projekt begrenzt sich die Liste selbst auf die eigenen Einträge.
+		a.access(r).Filtered()
+		return true
+	}
 	return !denyAccess(w, a.access(r).Check(project, res, store.ActRead, store.Object{Confidence: "verified"}))
 }
 
@@ -381,6 +387,10 @@ func (a *api) shareSession(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := a.st.SetSessionVisibility(id, a.access(r), level); err != nil {
+		if errors.Is(err, store.ErrShareNeedsProject) {
+			writeCoded(w, http.StatusConflict, "share_needs_project", err.Error())
+			return
+		}
 		if denyAccess(w, err) {
 			return
 		}

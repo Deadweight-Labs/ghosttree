@@ -390,7 +390,7 @@ func (s *Store) InsertMigrated(in MigratedEntry) (MigratedResult, error) {
 	if _, err := tx.Exec(`INSERT INTO search_documents(kind,domain_id,title,body,project,branch,machine) VALUES('knowledge',?,?,?,?,?,?)`, id, k.Title, k.Body, k.Scope.Project, k.Scope.Branch, k.Scope.Machine); err != nil {
 		return MigratedResult{}, err
 	}
-	if err := recordAuthorTx(tx, id, k.AuthorID); err != nil {
+	if err := recordAuthorTx(tx, id, authorForWriteTx(tx, k.AuthorID, k.Person, k.Origin, k.SessionRef)); err != nil {
 		return MigratedResult{}, err
 	}
 	for _, pattern := range k.Activation.Paths {
@@ -426,6 +426,9 @@ func insertMigratedRequest(tx *sql.Tx, in MigratedEntry, k Knowledge) (MigratedR
 	}
 	id, err := res.LastInsertId()
 	if err != nil {
+		return MigratedResult{}, err
+	}
+	if err := recordRequestAuthorTx(tx, id, authorForWriteTx(tx, 0, k.Person, "distilled", k.SessionRef)); err != nil {
 		return MigratedResult{}, err
 	}
 	if _, err := tx.Exec(`INSERT INTO migration_evidence(request_id,run_id,source,digest,item_key,quote) VALUES(?,?,?,?,?,?)`, id, in.RunID, k.SessionRef, in.Digest, in.ItemKey, in.Quote); err != nil {

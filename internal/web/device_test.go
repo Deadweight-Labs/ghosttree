@@ -1,6 +1,7 @@
 package web
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -229,5 +230,31 @@ func TestRevokingTheTokenOfABrowserSessionEndsTheSession(t *testing.T) {
 	resp, _ := noFollow.Get(srv.URL + "/ui/account/tokens")
 	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/ui/login" {
 		t.Fatalf("revoked session: %d", resp.StatusCode)
+	}
+}
+
+// Approving a machine name that belongs to another account says so in the
+// browser and ends the terminal's wait, which would otherwise run until the code
+// expires (acceptance finding 8).
+func TestDeviceApprovalOfATakenMachineNameEndsTheTerminalWait(t *testing.T) {
+	srv, st, _ := testWeb(t)
+	clock := &struct{ t time.Time }{time.Now()}
+	st.Device().SetClock(func() time.Time { return clock.t })
+	if _, err := st.AddPerson("bob"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ClaimMachine("laptop", "person:2"); err != nil {
+		t.Fatal(err)
+	}
+	start := startDevice(t, st, "laptop")
+	client := loginInteractive(t, srv, st, "alice")
+	csrf := renderedCSRFToken(t, client, srv.URL+"/ui/device")
+	resp := sameOriginPostForm(t, client, srv.URL+"/ui/device/decide", url.Values{"user_code": {start.UserCode}, "decision": {"approve"}, "csrf_token": {csrf}})
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("decide: %d", resp.StatusCode)
+	}
+	clock.t = clock.t.Add(time.Minute)
+	if _, _, err := st.Device().Poll(start.DeviceCode); !errors.Is(err, store.ErrDeviceMachineTaken) {
+		t.Fatalf("the terminal keeps waiting: %v", err)
 	}
 }

@@ -6,6 +6,45 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Fixed (acceptance run of two people, 2026-10-11): a session that belongs to no
+  project can no longer be shared with "Project members" (the web form does not
+  offer it, the API answers 409 `share_needs_project`); the sender of an @mention
+  reads the mentioned person's name instead of "Someone" (everyone who may read the
+  room sees the names of its participants, guests still do not); the "This is me"
+  confirmation on the connect and invitation pages stays a question, but the button
+  now shows why it waits ("Confirm first that this is your account.") instead of
+  doing nothing; `ctx login --machine NAME` with a name that belongs to
+  another account stops at once, as soon as the browser refuses it, and prints the
+  exact command to run again with another name; identical agent rows ("Agent · Name
+  · machine" three times) get a short tag from the session id; all absolute times
+  of the web pages are shown in the browser's time zone (the list and the detail
+  of a session no longer disagree). A mention that names a person reaches the
+  person; a running agent gets it when the mention names the agent (for example
+  `@claude-name`), and the hooks deliver it, which a new test with two accounts
+  covers for both `UserPromptSubmit` and `PostToolUse`.
+- Fixed: knowledge and requests without a project and without a machine ("global")
+  were readable by every account on the instance, a fresh account without an
+  organization included. "Global" now means "everywhere for me": such an entry is
+  visible, listed, searched, delivered (bootstrap, relevance hook, mirror, web,
+  MCP) and editable for its author's account only, the instance admin included.
+  The author is the writing account (`knowledge_authors`); for entries from before
+  accounts and for requests the author name decides, and a name no account carries
+  (or none) belongs to the instance owner. Moving an entry to global is limited to
+  its author, since a lead who moved a member's entry there would hide it from the
+  project and from himself. Machine knowledge stays readable only for the owner of
+  the machine.
+  Authorship is the account id, never a name: requests get an author table like
+  knowledge, a one-time start-up backfill gives legacy entries their account (the
+  name then, an earlier name next; an ambiguous name leaves the entry without an
+  owner, visible to the instance owner only; an unknown or empty label and a
+  distillate without a session belong to the instance owner, a distillate to the
+  owner of its session), and nothing is resolved by name at run time, so renaming
+  an account to "Claude" or "admin" takes nothing over. A thread cannot link, and
+  the room list does not show the title of, another author's global request.
+  Browse, search, pending, relevance and the open-request count cut other
+  authors' global entries in the query, so they cannot displace visible hits or
+  inflate counts. The relaxed list gate for lists without a project covers only
+  knowledge and requests.
 - Added: projects without git (REQ-459). A project can have just a name. Its id is
   `<org>/<name>` (for example `acme/infra`), unique within the organization. Being
   a named project is a property of the project, not of the id's shape: remotes

@@ -37,7 +37,7 @@ func TestAdminPagesShowRelativeTimesWithFullDate(t *testing.T) {
 	for _, path := range []string{"/ui/orgs", "/ui/account/tokens"} {
 		resp, _ := alice.Get(base + path)
 		page := body(t, resp)
-		if !regexp.MustCompile(`<time datetime="20\d\d-[^"]+Z" title="20\d\d-\d\d-\d\d \d\d:\d\d UTC">[^<]+</time>`).MatchString(page) {
+		if !regexp.MustCompile(`<time datetime="20\d\d-[^"]+Z" data-local="title" title="20\d\d-\d\d-\d\d \d\d:\d\d UTC">[^<]+</time>`).MatchString(page) {
 			t.Errorf("%s: no <time> element with full date: %s", path, page)
 		}
 		if rawStampRE.MatchString(page) {

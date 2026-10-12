@@ -64,7 +64,9 @@ func TestKnowledgeMoveFormMovesToProjectMachineAndGlobal(t *testing.T) {
 	if resp := move(e.Owner, url.Values{"project": {"github.com/nobody/x"}}); resp.StatusCode != http.StatusNotFound {
 		t.Errorf("unknown project = %d", resp.StatusCode)
 	}
-	if resp := move(e.Member, url.Values{"project": {shellProject}}); resp.StatusCode != http.StatusForbidden && resp.StatusCode != http.StatusNotFound {
+	// The entry is global by now, so it belongs to its author alone: a member does not
+	// even get the page, and takes her token from the list.
+	if resp := knPost(t, e.Member, e.Base, "/ui/knowledge", path+"/move", url.Values{"project": {shellProject}}); resp.StatusCode != http.StatusForbidden && resp.StatusCode != http.StatusNotFound {
 		t.Errorf("member move = %d", resp.StatusCode)
 	}
 	// The log says who moved it where.

@@ -547,6 +547,15 @@ func TestJoinSignedInPageNamesTheAccountAndOffersSignOut(t *testing.T) {
 	if strings.Contains(text, "person:") {
 		t.Fatal("the page shows an internal id")
 	}
+	// The protective question stays: the box is not ticked for the person. Until it
+	// is, the reason stands next to the button and the page shows the box as open
+	// (acceptance finding 7, security review of PR #101).
+	if regexp.MustCompile(`<input type="checkbox" name="confirm_account"[^>]*\bchecked\b`).MatchString(text) {
+		t.Fatalf("the confirmation is ticked for the person: %s", text)
+	}
+	if !strings.Contains(text, `class="join-confirm-hint"`) || !strings.Contains(text, "Confirm first that this is your account.") {
+		t.Fatalf("no visible reason next to the button: %s", text)
+	}
 	csrf := regexp.MustCompile(`name="csrf_token" value="([^"]+)"`).FindStringSubmatch(text)[1]
 	// Ohne Bestätigung des Kontonamens wird nichts verbraucht.
 	for _, confirm := range []string{"", "someone-else"} {

@@ -225,3 +225,19 @@ func TestBuildCoordWaitCyclesNamesTheCycleOnceAndHidesNothingElse(t *testing.T) 
 		t.Fatalf("a viewer without a peer list sees nothing: %q", lines)
 	}
 }
+
+// The sender reads the name of whom he mentioned, not "Someone".
+func TestBuildCoordMessageViewsNamesMentionedPeopleFromTheStore(t *testing.T) {
+	message := store.CoordMessage{ID: 1, Sequence: 1, SenderExternalID: "human-a", AuthorPrincipalID: "person:1", AuthorKind: store.AuthorHuman, Body: "@Freund hi"}
+	named := store.CoordMessagePresentation{Message: message, AuthorLabel: "Robin", Mentions: []string{"person:2"}, MentionLabels: map[string]string{"person:2": "Freund"}}
+	got := buildCoordMessageViews([]store.CoordMessagePresentation{named}, "project:p", map[string]string{"person:1": "Robin"})
+	if len(got[0].Mentions) != 1 || got[0].Mentions[0] != "Freund" {
+		t.Fatalf("mentions=%v, want the name", got[0].Mentions)
+	}
+	// A viewer who may not see names (guest) still gets the neutral label.
+	anonymous := store.CoordMessagePresentation{Message: message, AuthorLabel: "Robin", Mentions: []string{"person:2"}}
+	got = buildCoordMessageViews([]store.CoordMessagePresentation{anonymous}, "project:p", nil)
+	if len(got[0].Mentions) != 1 || got[0].Mentions[0] != "Someone" {
+		t.Fatalf("mentions=%v, want Someone", got[0].Mentions)
+	}
+}

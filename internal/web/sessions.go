@@ -91,9 +91,11 @@ type hitView struct {
 }
 
 type groupView struct {
-	PID, Href, Title, Meta, Count, Time string
-	Hits                                []hitView
-	MoreHref, MoreText                  string
+	PID, Href, Title, Meta, Count string
+	// Time is a <time> element: the day label and the clock in the reader's zone.
+	Time               template.HTML
+	Hits               []hitView
+	MoreHref, MoreText string
 }
 
 type sessionsView struct {
@@ -196,7 +198,7 @@ type sessionView struct {
 	Confirm             *shareConfirm
 	PID, Title          string
 	Live                bool
-	Meta                string
+	Meta                template.HTML
 	BackResults         chip
 	Created             []chip
 	Share               *levelForm
@@ -742,13 +744,18 @@ func (a *app) groupView(g store.SearchGroup, query, kind string, now time.Time) 
 	return gv
 }
 
-func dayAndClock(stamp string, now time.Time) string {
+// dayAndClock is the day and clock of a stamp as a <time> element. The text is
+// the server's zone and stays when scripts are off; app.js rewrites it in the
+// reader's zone, with the same "Today"/"Yesterday" words.
+func dayAndClock(stamp string, now time.Time) template.HTML {
 	t := parseStamp(stamp)
 	if t.IsZero() {
 		return ""
 	}
 	label := dayLabel(t, now)
-	return label + " " + t.Format("15:04")
+	return template.HTML(`<time datetime="` + html.EscapeString(t.UTC().Format(time.RFC3339)) + `" data-local="daytime" data-today="` +
+		html.EscapeString(msg("sessions.today")) + `" data-yesterday="` + html.EscapeString(msg("sessions.yesterday")) + `">` +
+		html.EscapeString(label+" "+t.Format("15:04")) + `</time>`)
 }
 
 // ------------------------------------------------------------------ Detail
@@ -857,9 +864,16 @@ func (a *app) sessionPage(w http.ResponseWriter, r *http.Request) {
 	if pa.CanShareSession(sess) {
 		form := &levelForm{Action: "/ui/sessions/" + sess.PublicID + "/share"}
 		for _, l := range []struct{ v, k, title string }{{store.VisPrivate, "sessions.level.private", "sessions.level.private.title"}, {store.VisProject, "sessions.level.project", "sessions.level.project.title"}, {store.VisGuests, "sessions.level.guests", "sessions.level.guests.title"}} {
+			// Ohne Projekt gibt es niemanden, mit dem sich teilen ließe: nur "privat",
+			// und das nur, um eine frühere Freigabe zurückzunehmen.
+			if sess.Scope.Project == "" && l.v != store.VisPrivate {
+				continue
+			}
 			form.Levels = append(form.Levels, levelOption{Value: l.v, Label: msg(l.k), Title: msg(l.title), Current: sess.Visibility == l.v})
 		}
-		v.Share = form
+		if sess.Scope.Project != "" || (sess.Visibility != "" && sess.Visibility != store.VisPrivate) {
+			v.Share = form
+		}
 	}
 
 	// Rückfrage vor dem Teilen mit Gästen, wenn das Transkript Zugangsdaten
@@ -1031,18 +1045,20 @@ func linkChip(l store.SessionLink) chip {
 	return chip{Href: "/ui/knowledge", Text: msg("sessions.knowledge_ref", l.ID)}
 }
 
-func detailMeta(s store.Session) string {
-	parts := []string{sessionMeta(s)}
+// detailMeta is the line under the title of a session. Its start time is a
+// <time> element that app.js shows in the reader's zone, like every other time.
+func detailMeta(s store.Session) template.HTML {
+	parts := []string{html.EscapeString(sessionMeta(s))}
 	if t := parseStamp(s.StartedAt); !t.IsZero() {
-		parts = append(parts, t.Format("2 Jan 15:04"))
+		parts = append(parts, `<time datetime="`+html.EscapeString(t.UTC().Format(time.RFC3339))+`" data-local="datetime">`+html.EscapeString(t.Format("2 Jan 15:04"))+`</time>`)
 	}
 	if d := formatDuration(s.StartedAt, s.LastSeenAt); d != "" {
-		parts = append(parts, d)
+		parts = append(parts, html.EscapeString(d))
 	}
 	if s.Messages > 0 {
-		parts = append(parts, msg("sessions.n_messages", s.Messages))
+		parts = append(parts, html.EscapeString(msg("sessions.n_messages", s.Messages)))
 	}
-	return strings.Join(parts, " · ")
+	return template.HTML(strings.Join(parts, " · "))
 }
 
 // sessionShare stellt die Freigabestufe ein (POST, CSRF, interaktive Sitzung).
@@ -1077,6 +1093,8 @@ func (a *app) sessionShare(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "forbidden", http.StatusForbidden)
 		case errors.Is(err, store.ErrAccessNotFound):
 			a.sessionMissing(w, r)
+		case errors.Is(err, store.ErrShareNeedsProject):
+			http.Error(w, err.Error(), http.StatusConflict)
 		default:
 			http.Error(w, "could not change the setting", http.StatusInternalServerError)
 		}

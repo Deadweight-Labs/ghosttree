@@ -21,7 +21,7 @@ func TestFinishWorkOfHiddenSessionLooksLikeUnknownId(t *testing.T) {
 		}
 		return id
 	}
-	global, err := f.st.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: "global", Person: "robin"}})
+	global, err := f.st.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: "global", Person: "nora"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,9 @@ func TestFinishWorkOfHiddenSessionLooksLikeUnknownId(t *testing.T) {
 		t.Fatalf("hidden work: %d %q, want 404 %q", code, got, unknown)
 	}
 	// Auch ein zweiter Versuch, nachdem sie beendet wurde, bleibt gleich.
-	f.expect(t, "gus", 200, "PATCH", path(hidden), body)
+	if _, err := f.st.FinishRequestWork(hidden, "paused", "x", "gus"); err != nil {
+		t.Fatal(err)
+	}
 	if code, got = f.call(t, "nora", "PATCH", path(hidden), body); code != 404 || got != unknown {
 		t.Fatalf("finished hidden work: %d %q", code, got)
 	}

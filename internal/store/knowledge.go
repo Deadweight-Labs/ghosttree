@@ -233,7 +233,7 @@ func (s *Store) InsertKnowledge(k Knowledge) (int64, error) {
 	if _, err := tx.Exec(`INSERT INTO search_documents(kind,domain_id,title,body,project,branch,machine) VALUES('knowledge',?,?,?,?,?,?)`, id, k.Title, k.Body, k.Scope.Project, k.Scope.Branch, k.Scope.Machine); err != nil {
 		return 0, err
 	}
-	if err := recordAuthorTx(tx, id, k.AuthorID); err != nil {
+	if err := recordAuthorTx(tx, id, authorForWriteTx(tx, k.AuthorID, k.Person, k.Origin, k.SessionRef)); err != nil {
 		return 0, err
 	}
 	for _, pattern := range k.Activation.Paths {
@@ -290,17 +290,18 @@ var patchable = map[string]bool{"title": true, "body": true, "confidence": true,
 // a flat list is fine for eleven entries and unusable at the several hundred a
 // full distiller run produces, and judging findings is easier one repository at
 // a time than in a stream that jumps between them.
-func (s *Store) PendingKnowledge(project string, limit int) ([]Knowledge, error) {
+func (s *Store) PendingKnowledge(project string, limit int, viewer ...SessionViewer) ([]Knowledge, error) {
 	if s.reader != nil {
-		return s.reader.PendingKnowledge(project, limit)
+		return s.reader.PendingKnowledge(project, limit, viewer...)
 	}
 	if limit <= 0 {
 		limit = 50
 	}
+	where, args := withGlobalScope(`((status = 'active' AND confidence IN ('quarantined','staged')) OR status = 'stale')
+		  AND (? = '' OR project = ?)`, []any{project, project}, "", viewer)
 	rows, err := s.db.Query(`SELECT `+knowledgeCols+` FROM knowledge
-		WHERE ((status = 'active' AND confidence IN ('quarantined','staged')) OR status = 'stale')
-		  AND (? = '' OR project = ?)
-		ORDER BY created_at DESC, id DESC LIMIT ?`, project, project, limit)
+		WHERE `+where+`
+		ORDER BY created_at DESC, id DESC LIMIT ?`, append(args, limit)...)
 	if err != nil {
 		return nil, err
 	}
@@ -517,33 +518,34 @@ const corroboration = `MAX(
 // processing order, which says nothing about the entries.
 const deliveryOrder = trustOrder + `, ` + corroboration + ` DESC, search_hits DESC, ` + observationTime + ` DESC, id DESC`
 
-func (s *Store) KnowledgeForContext(ax scope.Axes) ([]Knowledge, error) {
+func (s *Store) KnowledgeForContext(ax scope.Axes, viewer ...SessionViewer) ([]Knowledge, error) {
 	if s.reader != nil {
-		return s.reader.KnowledgeForContext(ax)
+		return s.reader.KnowledgeForContext(ax, viewer...)
 	}
-	return s.KnowledgeForActivatedContext(ax, activation.Context{})
+	return s.KnowledgeForActivatedContext(ax, activation.Context{}, viewer...)
 }
 
-func (s *Store) KnowledgeForActivatedContext(ax scope.Axes, ctx activation.Context) ([]Knowledge, error) {
+func (s *Store) KnowledgeForActivatedContext(ax scope.Axes, ctx activation.Context, viewer ...SessionViewer) ([]Knowledge, error) {
 	if s.reader != nil {
-		return s.reader.KnowledgeForActivatedContext(ax, ctx)
+		return s.reader.KnowledgeForActivatedContext(ax, ctx, viewer...)
 	}
-	return s.knowledgeForActivatedContext(ax, ctx, false)
+	return s.knowledgeForActivatedContext(ax, ctx, false, viewer)
 }
 
-func (s *Store) KnowledgeForActivatedPreview(ax scope.Axes, ctx activation.Context) ([]Knowledge, error) {
+func (s *Store) KnowledgeForActivatedPreview(ax scope.Axes, ctx activation.Context, viewer ...SessionViewer) ([]Knowledge, error) {
 	if s.reader != nil {
-		return s.reader.KnowledgeForActivatedPreview(ax, ctx)
+		return s.reader.KnowledgeForActivatedPreview(ax, ctx, viewer...)
 	}
-	return s.knowledgeForActivatedContext(ax, ctx, true)
+	return s.knowledgeForActivatedContext(ax, ctx, true, viewer)
 }
 
-func (s *Store) knowledgeForActivatedContext(ax scope.Axes, ctx activation.Context, includeStaged bool) ([]Knowledge, error) {
+func (s *Store) knowledgeForActivatedContext(ax scope.Axes, ctx activation.Context, includeStaged bool, viewer []SessionViewer) ([]Knowledge, error) {
 	ctx, err := activation.NormalizeContext(ctx)
 	if err != nil {
 		return nil, err
 	}
 	where, args := ax.UnionWhere()
+	where, args = withGlobalScope(where, args, "", viewer)
 	confidenceWhere := `confidence IN ('trusted','verified')`
 	if includeStaged {
 		confidenceWhere = `confidence != 'quarantined'`
@@ -587,21 +589,23 @@ func (s *Store) KnowledgeForProject(project string) ([]Knowledge, error) {
 }
 
 // SearchKnowledge matches only the axes the caller set.
-func (s *Store) SearchKnowledge(q string, filter scope.Axes, limit int) ([]Knowledge, error) {
+func (s *Store) SearchKnowledge(q string, filter scope.Axes, limit int, viewer ...SessionViewer) ([]Knowledge, error) {
 	if s.reader != nil {
-		return s.reader.SearchKnowledge(q, filter, limit)
+		return s.reader.SearchKnowledge(q, filter, limit, viewer...)
 	}
 	where, args := filter.FilterWhere()
+	where, args = withGlobalScope(where, args, "k", viewer)
 	return s.searchKnowledge(q, where, args, limit)
 }
 
 // SearchAllKnowledge is the operator view, including entries hidden from
 // agents because they are quarantined, deprecated, or archived.
-func (s *Store) SearchAllKnowledge(q string, filter scope.Axes, limit int) ([]Knowledge, error) {
+func (s *Store) SearchAllKnowledge(q string, filter scope.Axes, limit int, viewer ...SessionViewer) ([]Knowledge, error) {
 	if s.reader != nil {
-		return s.reader.SearchAllKnowledge(q, filter, limit)
+		return s.reader.SearchAllKnowledge(q, filter, limit, viewer...)
 	}
 	where, args := filter.FilterWhere()
+	where, args = withGlobalScope(where, args, "k", viewer)
 	if limit <= 0 {
 		limit = 50
 	}
@@ -619,11 +623,12 @@ func (s *Store) SearchAllKnowledge(q string, filter scope.Axes, limit int) ([]Kn
 // SearchKnowledgeForContext searches the same union a session reads: global,
 // machine, project and their combinations. Without it, a session on a branch
 // could not find global or project-level knowledge.
-func (s *Store) SearchKnowledgeForContext(q string, ax scope.Axes, limit int) ([]Knowledge, error) {
+func (s *Store) SearchKnowledgeForContext(q string, ax scope.Axes, limit int, viewer ...SessionViewer) ([]Knowledge, error) {
 	if s.reader != nil {
-		return s.reader.SearchKnowledgeForContext(q, ax, limit)
+		return s.reader.SearchKnowledgeForContext(q, ax, limit, viewer...)
 	}
 	where, args := ax.UnionWhere()
+	where, args = withGlobalScope(where, args, "k", viewer)
 	return s.searchKnowledge(q, where, args, limit)
 }
 

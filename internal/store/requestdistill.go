@@ -113,6 +113,10 @@ func (s *Store) ApplyRequestDistillation(sessionID int64, digest, promptVersion 
 				VALUES('request',?,?,?,?,'','')`, id, item.Title, item.Body, ax.Project); err != nil {
 				return 0, err
 			}
+			// A distilled request belongs to the owner of the session it came from.
+			if err := recordRequestAuthorTx(tx, id, authorForWriteTx(tx, 0, "", "distilled", ref)); err != nil {
+				return 0, err
+			}
 			created++
 		}
 		if _, err := tx.Exec(`INSERT OR IGNORE INTO request_sightings(request_id,session_id,chunk_seq,quote)

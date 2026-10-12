@@ -216,7 +216,7 @@ func TestTitleIsAITitleElseFirstUserMessage(t *testing.T) {
 
 func TestMessageCountComesFromTheIndex(t *testing.T) {
 	st := orgStore(t, "robin")
-	s := addSession(t, st, "s", 1, "", "m", "", transcriptWith("zebra"))
+	s := addSession(t, st, "s", 1, "github.com/x/rt", "m", "", transcriptWith("zebra"))
 	// 1 prompt + 2 assistant texts; thinking, tool calls and results do not count.
 	if s.Messages != 3 {
 		t.Errorf("messages = %d, want 3", s.Messages)
@@ -993,7 +993,7 @@ func TestIndexSurvivesTheWriterQueue(t *testing.T) {
 	if _, err := st.AddPerson("robin"); err != nil {
 		t.Fatal(err)
 	}
-	s := addSession(t, st, "s", 1, "", "m", "", transcriptWith("zebra"))
+	s := addSession(t, st, "s", 1, "github.com/x/rt", "m", "", transcriptWith("zebra"))
 	if err := st.IndexSession(s.ID); err != nil {
 		t.Fatal(err)
 	}

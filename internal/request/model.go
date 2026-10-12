@@ -113,6 +113,9 @@ type CreateInput struct {
 	Request        Request  `json:"request"`
 	Criteria       []string `json:"criteria"`
 	IdempotencyKey string   `json:"idempotency_key,omitempty"`
+	// AuthorID is the writing account, set by the server from the token; zero
+	// lets the store resolve the person label of the writer once, at write time.
+	AuthorID int64 `json:"-"`
 }
 
 type SearchFilter struct {
@@ -136,6 +139,11 @@ type SearchFilter struct {
 	// Cursor nicht mehr.
 	Restrict bool
 	Projects []string
+	// GlobalAccount: das Konto, dessen Aufträge ohne Projekt der Betrachter lesen
+	// darf (seine eigenen); GlobalOwner (Instanz-Owner) bekommt zusätzlich die
+	// ohne Besitzer. Alle anderen globalen Aufträge fallen unter Restrict weg.
+	GlobalAccount int64
+	GlobalOwner   bool
 	// UnclaimedAuthor: Aufträge dieses Autors in Remotes ohne Projektzeile bleiben
 	// sichtbar; UnclaimedAll (Instanz-Admin) zeigt alle dort.
 	UnclaimedAuthor string

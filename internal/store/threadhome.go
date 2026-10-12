@@ -34,7 +34,12 @@ func threadHomeTx(tx *sql.Tx, threadID int64) (ThreadHome, bool, error) {
 	return home, err == nil, err
 }
 
-func roomThreadsTx(tx *sql.Tx, roomKey string) ([]RoomThread, error) {
+func roomThreadsTx(tx *sql.Tx, roomKey string, viewer SessionViewer) ([]RoomThread, error) {
+	// The title and state of a request without a project show only to its author;
+	// without enforcement the join stays as it was.
+	own, ownArgs := ownRequestSQL("r", viewer.Account, viewer.isInstanceOwner())
+	args := append([]any{!viewer.Enforced}, ownArgs...)
+	args = append(args, roomKey)
 	rows, err := tx.Query(`SELECT t.id,t.project,t.title,t.question,t.state,t.archived,t.person,
 			t.author_principal_id,t.created_at,t.updated_at,COALESCE(t.resolved_at,''),
 			h.room_key,COALESCE(h.anchor_message_id,0),h.created_at,COALESCE(a.sequence,0),
@@ -45,9 +50,9 @@ func roomThreadsTx(tx *sql.Tx, roomKey string) ([]RoomThread, error) {
 		LEFT JOIN thread_links l ON l.thread_id=t.id AND l.object_kind='request'
 			AND l.rowid=(SELECT MIN(l2.rowid) FROM thread_links l2 WHERE l2.thread_id=t.id AND l2.object_kind='request')
 		LEFT JOIN requests r ON l.object_id='REQ-' || r.id
-			AND (TRIM(r.project)='' OR 'project:'||TRIM(r.project)=h.room_key)
+			AND ((TRIM(r.project)='' AND (? OR `+own+`)) OR 'project:'||TRIM(r.project)=h.room_key)
 		WHERE h.room_key=?
-		ORDER BY t.archived,t.updated_at DESC,t.id DESC`, roomKey)
+		ORDER BY t.archived,t.updated_at DESC,t.id DESC`, args...)
 	if err != nil {
 		return nil, err
 	}
