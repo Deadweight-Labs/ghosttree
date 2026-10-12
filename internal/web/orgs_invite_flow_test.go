@@ -51,7 +51,7 @@ func TestInvitingIsOneFlowWithAProjectAndARoleAndSurvivesAReload(t *testing.T) {
 		t.Fatal("the page with the link must not be cached")
 	}
 	page = body(t, ready)
-	code := between(page, base+"/join/", `"`)
+	code := between(page, base+"/join/", `<`)
 	if !strings.Contains(page, "Invitation ready") || len(code) != 64 {
 		t.Fatalf("link missing after the redirect: %s", page)
 	}

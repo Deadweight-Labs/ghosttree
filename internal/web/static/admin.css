@@ -70,8 +70,9 @@
 .ad-copy { display: flex; gap: var(--space-3); margin: 0 0 var(--space-2); }
 .ad-link {
   --clay-rest-h: -4; --clay-surface: var(--clay-c-sunken);
-  flex: 1; min-width: 0; min-height: 42px; padding: 0 16px; border: 0; border-radius: var(--clay-radius-sm);
-  background: var(--clay-surface); color: var(--clay-ink); font-size: 13px; text-overflow: ellipsis;
+  flex: 1; min-width: 0; min-height: 42px; padding: 10px 16px; border: 0; border-radius: var(--clay-radius-sm);
+  background: var(--clay-surface); color: var(--clay-ink); font-size: 13px; line-height: 1.45;
+  display: block; user-select: all; overflow-wrap: anywhere; word-break: break-all;
 }
 
 .ad-details { padding: 4px 10px; }

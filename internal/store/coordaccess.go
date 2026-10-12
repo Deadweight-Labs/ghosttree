@@ -2507,7 +2507,57 @@ func (a CoordAccess) mentionTargetsTx(tx *sql.Tx, actor, roomKey string) (map[st
 			allowed[owner] = true
 		}
 	}
+	readers, err := projectRoomReadersTx(tx, roomKey)
+	if err != nil {
+		return nil, err
+	}
+	for _, id := range readers {
+		allowed[id] = true
+	}
 	return allowed, nil
+}
+
+// projectRoomReadersTx are the accounts that may read the project room, with
+// or without an agent in it: the same role rule projectRoomGate applies to the
+// viewer (ProjectRole + matrixAllows). Anyone without a role in the project is
+// not listed, so a mention can neither reach nor confirm such an account.
+// Other room kinds have no project and return nothing.
+func projectRoomReadersTx(tx *sql.Tx, roomKey string) ([]string, error) {
+	remote, ok := strings.CutPrefix(roomKey, "project:")
+	if !ok {
+		return nil, nil
+	}
+	project, claimed := projectTx(tx, remote)
+	if !claimed {
+		return nil, nil
+	}
+	rows, err := tx.Query(`SELECT account_id FROM org_members WHERE org_id=? ORDER BY account_id`, project.OrgID)
+	if err != nil {
+		return nil, err
+	}
+	var accounts []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		accounts = append(accounts, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, id := range accounts {
+		if matrixAllows(projectRoleTx(tx, remote, id), ResRoom, ActRead, Object{}) {
+			out = append(out, "person:"+strconv.FormatInt(id, 10))
+		}
+	}
+	return out, nil
 }
 
 // resolveMentionsTx liefert die Erwähnungen, die wirklich gespeichert werden.

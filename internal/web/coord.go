@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -279,6 +280,7 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 	markViewerMentions(detail.Messages, presentations, current.ID)
 	detail.CanDirect = true
 	detail.CanPost = access.CanPost(room)
+	detail.UnreachedNote = coordUnreachedNote(r.URL.Query().Get("unreached"))
 	roleRoom := false
 	if remote, ok := strings.CutPrefix(activeRoom.Key, "project:"); ok {
 		if _, claimed := a.store.ProjectByRemote(remote); claimed {
@@ -690,7 +692,29 @@ func (a *app) coordSend(w http.ResponseWriter, r *http.Request) {
 		coordHTTPError(w, err)
 		return
 	}
-	http.Redirect(w, r, "/ui/coord?room="+url.QueryEscape(room), http.StatusSeeOther)
+	target := "/ui/coord?room=" + url.QueryEscape(room)
+	// A failed lookup only costs the hint; the message is stored.
+	if unreached, uerr := a.browserCoord(r).UnreachedMentions(room, body); uerr == nil && len(unreached) > 0 {
+		target += "&unreached=" + url.QueryEscape(strings.Join(unreached, ","))
+	}
+	http.Redirect(w, r, target, http.StatusSeeOther)
+}
+
+var unreachedTokenPattern = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{N}._:-]{0,63}$`)
+
+// coordUnreachedNote is the hint under the room after a send, built from the
+// query so that only well-formed @names are echoed.
+func coordUnreachedNote(raw string) string {
+	var names []string
+	for _, token := range strings.Split(raw, ",") {
+		if unreachedTokenPattern.MatchString(token) && len(names) < 5 {
+			names = append(names, "@"+token)
+		}
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	return msg("coord.unreached", strings.Join(names, ", "))
 }
 
 func validCoordComposerIntent(intent string) bool {

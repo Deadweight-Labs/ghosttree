@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"strconv"
 	"sync"
 	"time"
@@ -236,9 +237,25 @@ func (a *app) joinPage(w http.ResponseWriter, r *http.Request) {
 		if acct, err := a.store.AccountByPrincipalID(session.principal.ID); err == nil {
 			view.Email = acct.Email
 		}
+		if a.store.InvitationCovered(session.principal.ID, code) {
+			a.joinAlreadyMember(w, preview)
+			return
+		}
 	}
 	a.joinHeaders(w)
 	a.joinWrite(w, "join", view)
+}
+
+// joinAlreadyMember tells a signed-in member that the link gives them nothing
+// new, with a way into the project. The invitation stays unused.
+func (a *app) joinAlreadyMember(w http.ResponseWriter, p store.InvitePreview) {
+	a.joinHeaders(w)
+	target := "/ui/overview"
+	if p.Remote != "" {
+		target = "/ui/knowledge?project=" + url.QueryEscape(p.Remote)
+	}
+	a.joinWrite(w, "joinmember", struct{ Title, URL string }{
+		msg("join.member_title", firstNonEmpty(p.Project, p.Org)), target})
 }
 
 // joinAccept löst die Einladung für das angemeldete Konto ein. Aufgerufen wird
@@ -267,7 +284,8 @@ func (a *app) joinAccept(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, store.ErrCodeInvalid):
 		a.joinNotFound(w)
 	case errors.Is(err, store.ErrAlreadyMember):
-		a.joinAcceptMessage(w, code, http.StatusConflict, msg("join.msg_already_t"), msg("join.msg_already"))
+		preview, _ := a.joinPreview(code)
+		a.joinAlreadyMember(w, preview)
 	case errors.Is(err, store.ErrTooManyAttempts):
 		a.joinAcceptMessage(w, code, http.StatusTooManyRequests, msg("join.msg_many_t"), msg("join.msg_many"))
 	case errors.Is(err, store.ErrAccountDisabled):

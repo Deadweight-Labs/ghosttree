@@ -1,5 +1,5 @@
 {{define "orgs_days_field"}}<label class="ad-f ad-days"><span>{{t "adm.invite.valid"}}</span><select class="clay-select" name="days" data-days><option value="" data-member="{{t "adm.invite.dn" 7}}" data-guest="{{t "adm.invite.dn" 3}}">{{t "adm.invite.dn" 7}}</option><option value="1">{{t "adm.invite.d1"}}</option><option value="3">{{t "adm.invite.dn" 3}}</option><option value="14">{{t "adm.invite.dn" 14}}</option><option value="30">{{t "adm.invite.dn" 30}}</option></select></label>{{end}}
-{{define "orgs_copy"}}<div class="ad-copy"><input class="ad-link" readonly value="{{.}}" aria-label="{{t "adm.invite.link_label"}}" data-select><button type="button" class="ov-btn ov-btn-primary clay ad-btn js-only" data-copy data-done="{{t "adm.copied"}}">{{t "adm.copy"}}</button></div>{{end}}
+{{define "orgs_copy"}}<div class="ad-copy"><code class="ad-link" tabindex="0" aria-label="{{t "adm.invite.link_label"}}" data-select>{{.}}</code><button type="button" class="ov-btn ov-btn-primary clay ad-btn js-only" data-copy data-done="{{t "adm.copied"}}">{{t "adm.copy"}}</button></div>{{end}}
 {{define "orgs"}}{{template "head" .}}{{template "nav" .}}<main class="ad">
 <div class="ov-head"><h1>{{t "adm.org.title"}}</h1></div>
 {{if .Error}}<p class="ad-flash is-error" role="alert">{{.Error}}</p>{{end}}{{if .Orgs.Notice}}<p class="ad-flash" role="status">{{.Orgs.Notice}}</p>{{end}}

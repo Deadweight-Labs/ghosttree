@@ -1139,6 +1139,46 @@ func invitationExists(q rowQuerier, code string) bool {
 	return q.QueryRow(`SELECT 1 FROM invitations WHERE code_hash=?`, hashToken(code)).Scan(&one) == nil
 }
 
+// invitationCoverage sagt, ob ein Konto durch eine Einladung nichts bekäme:
+// eine Org-Einladung bringt einem Mitglied nichts, ein Org-Owner hat schon alles,
+// und ein Konto, das die Organisation schon hat, kann über eine Projekt-Einladung
+// eine Projektrolle bekommen, aber nie eine niedrigere oder gleiche. Die Rolle
+// des Kontos im Projekt (leer ohne Eintrag) kommt für das Ereignis mit zurück.
+func invitationCoverage(tx rowQuerier, orgID, projectID int64, projectRole string, account int64) (orgRole, currentProject string, covered bool) {
+	orgRole = orgRoleTx(tx, orgID, account)
+	if projectID == 0 && orgRole != "" || orgRole == OrgOwner {
+		return orgRole, "", true
+	}
+	if projectID != 0 {
+		_ = tx.QueryRow(`SELECT role FROM project_members WHERE project_id=? AND account_id=?`, projectID, account).Scan(&currentProject)
+		if RoleRank(currentProject) >= RoleRank(projectRole) {
+			return orgRole, currentProject, true
+		}
+	}
+	return orgRole, currentProject, false
+}
+
+// InvitationCovered: das Konto hat mit dieser Einladung nichts zu gewinnen, weil
+// es die Rolle oder eine höhere schon hat. Liest nur, verbraucht nichts. Ein
+// unbrauchbarer Code oder ein Fehler ergibt false.
+func (s *Store) InvitationCovered(accountPrincipal, code string) bool {
+	if s.reader != nil {
+		return s.reader.InvitationCovered(accountPrincipal, code)
+	}
+	account, err := parsePersonPrincipalID(accountPrincipal)
+	if err != nil {
+		return false
+	}
+	var orgID, projectID int64
+	var projectRole string
+	if s.db.QueryRow(`SELECT org_id, project_id, project_role FROM invitations WHERE code_hash=? AND accepted_at='' AND revoked_at='' AND expires_at>?`,
+		hashToken(code), now()).Scan(&orgID, &projectID, &projectRole) != nil {
+		return false
+	}
+	_, _, covered := invitationCoverage(s.db, orgID, projectID, projectRole, account)
+	return covered
+}
+
 // acceptInvitationTx löst eine Einladung für ein existierendes Konto ein. Alle
 // Prüfungen laufen vor dem Verbrauch, ein Fehlschlag verbraucht sie nicht.
 // verifiedEmail muss vom Aufrufer verifiziert sein (IdP-Claim email_verified)
@@ -1187,18 +1227,9 @@ func acceptInvitationTx(tx execQueryer, code string, account int64, verifiedEmai
 	if email != "" && !(verifiedEmail != "" && strings.EqualFold(email, strings.TrimSpace(verifiedEmail))) {
 		return Org{}, ErrInvitationEmail
 	}
-	orgRole := orgRoleTx(tx, orgID, account)
-	if projectID == 0 && orgRole != "" || orgRole == OrgOwner {
+	orgRole, currentProject, covered := invitationCoverage(tx, orgID, projectID, projectRole, account)
+	if covered {
 		return Org{}, ErrAlreadyMember
-	}
-	// Ein Konto, das die Organisation schon hat, kann über eine Projekt-Einladung
-	// eine Projektrolle bekommen, aber nie eine niedrigere oder gleiche.
-	var currentProject string
-	if projectID != 0 {
-		_ = tx.QueryRow(`SELECT role FROM project_members WHERE project_id=? AND account_id=?`, projectID, account).Scan(&currentProject)
-		if RoleRank(currentProject) >= RoleRank(projectRole) {
-			return Org{}, ErrAlreadyMember
-		}
 	}
 	res, err := tx.Exec(`UPDATE invitations SET accepted_by=?, accepted_at=? WHERE id=? AND accepted_at='' AND revoked_at=''`, account, now(), id)
 	if err != nil {

@@ -79,6 +79,15 @@ func TestOrgInviteResultIsFormAndLinkOnly(t *testing.T) {
 	if !strings.Contains(page, `class="ad-link"`) || !strings.Contains(page, "Invitation ready") || !strings.Contains(page, "data-copy") {
 		t.Fatalf("invite result lacks the link and copy action: %s", page)
 	}
+	// The link is text on the page (selectable, wrapping), not only the payload of
+	// the copy button and not a field that cuts it short.
+	if !regexp.MustCompile(`<code class="ad-link"[^>]*data-select>https?://[^<]+/join/[0-9a-f]{20,}</code>`).MatchString(page) &&
+		!regexp.MustCompile(`<code class="ad-link"[^>]*data-select>[^<]*[0-9a-f]{40,}[^<]*</code>`).MatchString(page) {
+		t.Errorf("the invitation link is not shown as text: %s", page)
+	}
+	if strings.Contains(page, `<input class="ad-link"`) {
+		t.Errorf("the link is a truncating input again")
+	}
 	if !regexp.MustCompile(`>in \d+[hd]<`).MatchString(page) {
 		t.Errorf("expiry is not relative: %s", page)
 	}

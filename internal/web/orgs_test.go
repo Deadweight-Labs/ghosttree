@@ -145,7 +145,7 @@ func TestOrgInviteAcceptRoleMoveAndRemoveInTheBrowser(t *testing.T) {
 	// beim Ersteller sichtbar, solange die Einladung offen ist.
 	resp := postOrgFollow(t, alice, base, "/ui/orgs/invite", url.Values{"org": {"alpha"}, "role": {"member"}, "days": {"3"}})
 	page := body(t, resp)
-	code := between(page, "/ui/login/code?code=", `"`)
+	code := between(page, "/ui/login/code?code=", `<`)
 	if resp.StatusCode != 200 || len(code) != 64 {
 		t.Fatalf("invite: %d %s", resp.StatusCode, page)
 	}

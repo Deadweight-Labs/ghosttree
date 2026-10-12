@@ -410,3 +410,47 @@ func markAddressedToAgent(q rowsQuerier, msgs []CoordMessage, agent string) {
 		}
 	}
 }
+
+// UnreachedMentions are the typed @names of body that resolve to nobody in the
+// room, for a hint after sending. Only someone who sees the member list gets an
+// answer: for a guest it would tell who is not in the room, so a guest gets
+// nothing. Ambiguous names are not listed; sending them fails with its own hint.
+func (a CoordAccess) UnreachedMentions(roomKey, body string) ([]string, error) {
+	tokens := textMentionTokens(body)
+	if len(tokens) == 0 || roomKey == "" {
+		return nil, nil
+	}
+	reader := a.Store
+	if reader.reader != nil {
+		reader = reader.reader
+	}
+	tx, err := reader.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	actor, err := a.actorTx(tx)
+	if err != nil {
+		return nil, err
+	}
+	if actor == "" {
+		return nil, ErrCoordForbidden
+	}
+	if err := a.canReadTx(tx, actor, DestinationRoom, roomKey); err != nil {
+		return nil, err
+	}
+	if a.projectRoomGate(roomKindOf(roomKey), roomKey, ResAgents, tx) != nil {
+		return nil, nil
+	}
+	candidates, err := a.mentionCandidatesTx(tx, actor, roomKey)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, token := range tokens {
+		if hit, ambiguous := resolveMentionToken(candidates, token); hit == nil && len(ambiguous) == 0 {
+			out = append(out, token)
+		}
+	}
+	return out, nil
+}

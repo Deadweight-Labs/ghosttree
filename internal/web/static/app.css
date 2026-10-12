@@ -298,6 +298,7 @@ summary.coord-text-action::-webkit-details-marker { display: none; }
 }
 .coord-composer > .coord-reply, .coord-composer > .coord-private-hint { grid-column: 1 / -1; grid-row: 1; }
 .coord-private-hint { margin: 0; color: var(--clay-ink-faint); font-size: 12.5px; }
+.coord-composer > .coord-note { grid-column: 1 / -1; grid-row: 1; margin: 0; }
 .comp-modes, .comp { display: contents; }
 .comp-request { grid-column: 1 / -1; grid-row: 2; display: none; flex-direction: column; gap: 8px; }
 .comp-kinds, .comp-to { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }

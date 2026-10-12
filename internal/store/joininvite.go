@@ -25,6 +25,7 @@ type InvitePreview struct {
 	Inviter   string // Anzeigename der einladenden Person
 	Org       string
 	Project   string
+	Remote    string // Remote des Projekts, leer bei einer Einladung in die Organisation
 	Role      string
 	ExpiresAt string
 }
@@ -195,7 +196,7 @@ func (s *Store) PreviewInvitation(code string, enforced bool) (InvitePreview, er
 		return s.reader.PreviewInvitation(code, enforced)
 	}
 	var p InvitePreview
-	err := s.db.QueryRow(`SELECT ip.name, o.name, COALESCE(NULLIF(pr.name,''), pr.remote), i.project_role, i.expires_at
+	err := s.db.QueryRow(`SELECT ip.name, o.name, COALESCE(NULLIF(pr.name,''), pr.remote), pr.remote, i.project_role, i.expires_at
 		FROM invitations i
 		JOIN persons ip ON ip.id = i.invited_by
 		JOIN orgs o ON o.id = i.org_id
@@ -203,7 +204,7 @@ func (s *Store) PreviewInvitation(code string, enforced bool) (InvitePreview, er
 		JOIN projects pr ON pr.id = i.project_id AND pr.org_id = i.org_id
 		WHERE i.code_hash = ? AND i.accepted_at = '' AND i.revoked_at = '' AND i.expires_at > ?
 		  AND i.email = '' AND i.project_role IN (?, ?) AND (i.project_role <> ? OR ?)`,
-		OrgOwner, hashToken(code), now(), RoleMember, RoleGuest, RoleGuest, enforced).Scan(&p.Inviter, &p.Org, &p.Project, &p.Role, &p.ExpiresAt)
+		OrgOwner, hashToken(code), now(), RoleMember, RoleGuest, RoleGuest, enforced).Scan(&p.Inviter, &p.Org, &p.Project, &p.Remote, &p.Role, &p.ExpiresAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return InvitePreview{}, ErrCodeInvalid
 	}
