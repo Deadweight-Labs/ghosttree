@@ -100,8 +100,17 @@ func cmdHookWith(stdin io.Reader, args []string, stdout io.Writer) int {
 		} else {
 			coordDone <- ""
 		}
+		// Announcing the session runs beside them for the same reason.
+		registerDone := make(chan struct{})
+		go func() {
+			defer close(registerDone)
+			if eventArg != "pre-tool-use" && os.Getenv("GHOSTTREE_HOOK_SYNTHETIC") != "1" {
+				registerHookSession(raw, *harness, eventArg == "session-start")
+			}
+		}()
 		text := render(bytes.NewReader(raw))
 		coord = <-coordDone
+		<-registerDone
 		_ = hookbudget.Deliver(identity.SessionID, text, func(bounded string) error {
 			out.HookSpecificOutput.AdditionalContext = joinHookContext(bounded, coord)
 			attempted = true
