@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -133,6 +134,18 @@ func (a *app) mayEnter(w http.ResponseWriter, r *http.Request, room string) bool
 	return true
 }
 
+// roomsInScope lässt von den Projekträumen nur den des gewählten Projekts in
+// der Liste. Maschinen-, Direkt- und Gruppenräume gehören keinem Projekt und
+// bleiben; der geöffnete Raum bleibt immer.
+func roomsInScope(summaries []store.CoordRoomSummary, project, active string) []store.CoordRoomSummary {
+	if project == "" {
+		return summaries
+	}
+	return slices.DeleteFunc(slices.Clone(summaries), func(s store.CoordRoomSummary) bool {
+		return s.Room.Kind == store.RoomProject && s.Room.Key != "project:"+project && s.Room.Key != active
+	})
+}
+
 func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 	room := r.URL.Query().Get("room")
 	eventCursor, err := a.store.LatestCoordEventSequence()
@@ -145,6 +158,7 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	summaries = roomsInScope(summaries, selectedProject(a.shellFor(r, "coord")), room)
 	recipients, err := a.browserCoord(r).Recipients()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

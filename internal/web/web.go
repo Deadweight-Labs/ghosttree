@@ -258,7 +258,8 @@ func (a *app) sessionLinks(pa *store.ProjectAccess, ids []int64) map[int64]strin
 }
 
 // projectParam ist das Projekt einer projektbezogenen Seite: das genannte,
-// sonst das in der Hülle vorgewählte (nur Nicht-Owner haben eines).
+// sonst das in der Hülle gewählte (?project=, Cookie oder bei Nicht-Owner das
+// erste eigene).
 func (a *app) projectParam(r *http.Request) string {
 	if p := scope.NormalizeRemote(r.URL.Query().Get("project")); p != "" {
 		return p
