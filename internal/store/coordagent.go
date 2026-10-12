@@ -154,6 +154,9 @@ func (s *Store) RegisterCoordAgent(a CoordAgent) (int64, error) {
 			parent_external_id,capabilities,registered_at,last_seen_at,role,session_id)
 		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,COALESCE(NULLIF(?,''),'member'),?)
 		ON CONFLICT(external_id) DO UPDATE SET
+			provider=CASE WHEN coord_agents.provider IN ('unknown','unidentified-harness','')
+				AND excluded.provider NOT IN ('unknown','unidentified-harness','')
+				THEN excluded.provider ELSE coord_agents.provider END,
 			display_name=excluded.display_name, person=excluded.person,
 			principal_id=CASE WHEN coord_agents.principal_id='' THEN excluded.principal_id ELSE coord_agents.principal_id END,
 			cwd=excluded.cwd, branch=excluded.branch, worktree=excluded.worktree,
