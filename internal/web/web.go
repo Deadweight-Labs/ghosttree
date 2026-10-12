@@ -257,11 +257,12 @@ func (a *app) sessionLinks(pa *store.ProjectAccess, ids []int64) map[int64]strin
 	return out
 }
 
-// projectParam ist das Projekt einer projektbezogenen Seite: das genannte,
-// sonst das in der Hülle gewählte (?project=, Cookie oder bei Nicht-Owner das
-// erste eigene).
+// projectParam ist das Projekt einer projektbezogenen Seite und löst genau wie
+// die Auswahl im Kopf auf (projectOptions): ein nutzbares ?project=, sonst das
+// Cookie, sonst "" für alle Projekte. Nur ein Admin ohne Rolle im genannten
+// Projekt darf es trotzdem öffnen; die Abfrage filtert nach seinen Rechten.
 func (a *app) projectParam(r *http.Request) string {
-	if p := scope.NormalizeRemote(r.URL.Query().Get("project")); p != "" {
+	if p := scope.NormalizeRemote(r.URL.Query().Get("project")); p != "" && a.access(r).IsAdmin() {
 		return p
 	}
 	return selectedProject(a.shellFor(r, "knowledge"))
@@ -283,6 +284,13 @@ func (a *app) contextPage(w http.ResponseWriter, r *http.Request) {
 	view := &contextView{Project: project, Preview: preview}
 	if project == "" {
 		view.Choices = a.shellFor(r, "context").Projects
+		// Wer nur ein Projekt sieht, braucht keine Auswahl.
+		if len(view.Choices) == 1 {
+			q := r.URL.Query()
+			q.Set("project", view.Choices[0].Remote)
+			http.Redirect(w, r, "/ui/context?"+q.Encode(), http.StatusSeeOther)
+			return
+		}
 		a.renderBrowser(w, r, "context", pageData{Title: msg("context.title"), ContextV: view})
 		return
 	}

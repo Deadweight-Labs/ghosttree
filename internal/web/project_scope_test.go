@@ -118,8 +118,8 @@ func TestProjectWithoutAccessIsIgnoredAndNeverLeaked(t *testing.T) {
 	if strings.Contains(page, shellHiddenProject) {
 		t.Error("a stale cookie leaked a project name")
 	}
-	if selectedOption(page) != shellProject {
-		t.Errorf("stale cookie did not fall back to the first project: %q", selectedOption(page))
+	if selectedOption(page) != "" {
+		t.Errorf("stale cookie did not fall back to all projects: %q", selectedOption(page))
 	}
 }
 
@@ -202,28 +202,42 @@ func TestLogoutForgetsTheSelection(t *testing.T) {
 	}
 }
 
-func TestSelectOptionsCarryTheirOwnColours(t *testing.T) {
-	raw, err := files.ReadFile("static/shell.css")
+// cssDeclarations gives the declarations of the rule whose selector list is
+// exactly selector, so a test does not depend on spacing or property order.
+func cssDeclarations(t *testing.T, sheet, selector string) map[string]string {
+	t.Helper()
+	raw, err := files.ReadFile("static/" + sheet)
 	if err != nil {
 		t.Fatal(err)
 	}
-	css := string(raw)
-	for _, want := range []string{"select { color-scheme: light dark; }", "select option, select optgroup { background-color: var(--clay-c-surface); color: var(--clay-ink); }"} {
-		if !strings.Contains(css, want) {
-			t.Errorf("shell.css lacks %q: the open list would inherit the system canvas", want)
+	rule := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(selector) + `\s*\{([^}]*)\}`).FindStringSubmatch(string(raw))
+	if rule == nil {
+		t.Fatalf("%s has no rule for %q", sheet, selector)
+	}
+	out := map[string]string{}
+	for _, decl := range strings.Split(rule[1], ";") {
+		if name, value, ok := strings.Cut(decl, ":"); ok {
+			out[strings.TrimSpace(name)] = strings.Join(strings.Fields(value), " ")
 		}
+	}
+	return out
+}
+
+func TestSelectOptionsCarryTheirOwnColours(t *testing.T) {
+	if got := cssDeclarations(t, "shell.css", "select")["color-scheme"]; got != "light dark" {
+		t.Errorf("select color-scheme=%q, want light dark", got)
+	}
+	options := cssDeclarations(t, "shell.css", "select option, select optgroup")
+	if options["background-color"] != "var(--clay-c-surface)" || options["color"] != "var(--clay-ink)" {
+		t.Errorf("options inherit the system canvas instead of the clay tokens: %v", options)
 	}
 }
 
 func TestConnectRowsKeepApartAndWrap(t *testing.T) {
-	raw, err := files.ReadFile("static/shell.css")
-	if err != nil {
-		t.Fatal(err)
+	if got := cssDeclarations(t, "shell.css", ".ov-pair")["margin"]; got != "0 0 var(--space-5)" {
+		t.Errorf(".ov-pair margin=%q: the install button would sit on the code field", got)
 	}
-	css := string(raw)
-	for _, want := range []string{".ov-pair { margin: 0 0 var(--space-5); }", ".ov-device { display: flex; flex-wrap: wrap;"} {
-		if !strings.Contains(css, want) {
-			t.Errorf("shell.css lacks %q: the install button would sit on the code field", want)
-		}
+	if got := cssDeclarations(t, "shell.css", ".ov-device")["flex-wrap"]; got != "wrap" {
+		t.Errorf(".ov-device flex-wrap=%q: the code row cannot wrap on narrow screens", got)
 	}
 }

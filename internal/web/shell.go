@@ -36,9 +36,9 @@ type shellMemoKey struct{}
 // shellMemo hängt an der Anfrage (requirePerson) und hält die Hülle.
 type shellMemo struct{ base *shellBase }
 
-// shellBaseFor liefert Betrachter und Projektliste mit der Vorauswahl "erstes
-// eigenes Projekt", wo "All projects" nicht zur Wahl steht. Ohne Memo in der
-// Anfrage (Tests) wird jedes Mal gerechnet.
+// shellBaseFor liefert Betrachter und Projektliste. Ohne gültige Wahl gilt für
+// alle "All projects", das heißt alle Projekte, in denen der Betrachter eine
+// Rolle hat. Ohne Memo in der Anfrage (Tests) wird jedes Mal gerechnet.
 func (a *app) shellBaseFor(r *http.Request) shellBase {
 	memo, _ := r.Context().Value(shellMemoKey{}).(*shellMemo)
 	if memo != nil && memo.base != nil {
@@ -49,11 +49,6 @@ func (a *app) shellBaseFor(r *http.Request) shellBase {
 	pa := a.access(r)
 	b := shellBase{who: a.viewerOf(r, pa)}
 	b.projects, b.all = a.projectOptions(r, pa)
-	// Ohne gültiges ?project= bekommt, wer nicht "All projects" wählen kann, sein
-	// erstes Projekt vorgewählt. Ein Projektname ohne Rolle wirkt wie keiner.
-	if b.who.kind != viewerOwner && b.all && len(b.projects) > 0 {
-		b.projects[0].Selected, b.all = true, false
-	}
 	if memo != nil {
 		stored := b
 		stored.projects = slices.Clone(b.projects)
@@ -172,7 +167,7 @@ func (a *app) shellFor(r *http.Request, name string) shellView {
 	item := func(key, label, href string) navItem {
 		return navItem{Key: key, Label: label, Href: href, Current: key == current}
 	}
-	v := shellView{On: true, RoleKey: who.roleKey, Host: a.publicHost(r), CanAll: kind == viewerOwner}
+	v := shellView{On: true, RoleKey: who.roleKey, Host: a.publicHost(r), CanAll: kind == viewerOwner || len(base.projects) > 1}
 	if label := strings.TrimSpace(browserPrincipal(r).Label); label != "" {
 		v.Initial = strings.ToUpper(string([]rune(label)[:1]))
 	}
@@ -252,6 +247,22 @@ func chosenProject(r *http.Request) (remote string, explicit bool) {
 	return "", false
 }
 
+// resolveProject ist das Projekt, das gilt: ein nutzbares ?project=, sonst das
+// Cookie, sonst "" (All projects). Nutzbar heißt: unter den sichtbaren Projekten
+// des Betrachters. Ein leeres ?project= wählt ausdrücklich "All projects".
+func resolveProject(r *http.Request, visible []string) string {
+	chosen, explicit := chosenProject(r)
+	if explicit && (chosen == "" || slices.Contains(visible, chosen)) {
+		return chosen
+	}
+	if c, err := r.Cookie(projectCookie); err == nil {
+		if remote := scope.NormalizeRemote(c.Value); slices.Contains(visible, remote) {
+			return remote
+		}
+	}
+	return ""
+}
+
 // rememberProject legt eine ausdrückliche Wahl im Cookie ab. "All projects"
 // löscht es; ein Projekt ohne Rolle wird nicht gemerkt.
 func (a *app) rememberProject(w http.ResponseWriter, r *http.Request) {
@@ -282,21 +293,13 @@ func (a *app) projectOptions(r *http.Request, pa *store.ProjectAccess) ([]projec
 	if err != nil {
 		return nil, true
 	}
-	chosen, explicit := chosenProject(r)
 	var visible []string
 	for _, p := range list {
 		if pa.Role(p.Remote).Role != "" {
 			visible = append(visible, p.Remote)
 		}
 	}
-	// Ein unbrauchbares ?project= fällt auf das Cookie zurück, ein leeres nicht.
-	if explicit && chosen != "" && !slices.Contains(visible, chosen) {
-		if c, err := r.Cookie(projectCookie); err == nil {
-			chosen = scope.NormalizeRemote(c.Value)
-		} else {
-			chosen = ""
-		}
-	}
+	chosen := resolveProject(r, visible)
 	labels := projectLabels(visible)
 	var out []projectOption
 	found := false

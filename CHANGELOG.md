@@ -11,7 +11,10 @@ Versioning, with pre-1.0 compatibility rules described in
   white), the same holds for every other selection list in the web interface. The
   chosen project is kept for the browser session in a cookie, so it stays when you
   open another page; an explicit `?project=` replaces it, "All projects" and signing
-  out clear it, and a project you have no role in is ignored. Overview, agents,
+  out clear it, and a project you have no role in is ignored. Without a choice
+  everyone sees "All projects" (all projects they have a role in, never more), and
+  anyone with more than one project can pick it. The rooms badge always counts every
+  project; only the room list follows the selection. Overview, agents,
   sessions, knowledge, requests and the rooms list follow the selection; the
   sessions list no longer has a second project filter. The account and
   administration pages (organization, devices, profile) show no project selector.

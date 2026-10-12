@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -97,6 +98,20 @@ func (s coordSidebarView) BadgeLabel() string {
 		}
 	}
 	return msg("coord.badge_unread")
+}
+
+// inProject lässt von den Projekträumen der Liste nur den des gewählten
+// Projekts. Maschinen-, Direkt- und Gruppenräume gehören keinem Projekt, der
+// geöffnete Raum bleibt immer. Attention (und damit das Badge) bleibt
+// unberührt: ein Treffer in einem anderen Projekt darf nicht verschwinden.
+func (s coordSidebarView) inProject(project, active string) coordSidebarView {
+	if project == "" {
+		return s
+	}
+	s.Projects = slices.DeleteFunc(slices.Clone(s.Projects), func(r coordRoomView) bool {
+		return r.Key != "project:"+project && r.Key != active
+	})
+	return s
 }
 
 // room finds a room by key across every sidebar section.
