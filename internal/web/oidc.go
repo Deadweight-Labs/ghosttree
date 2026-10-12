@@ -575,6 +575,12 @@ func (a *app) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		a.finishJoinLogin(w, r, account)
 		return
 	}
+	// A known member who follows an invitation they cannot gain from lands on the
+	// invitation page, which says so, instead of silently on the overview.
+	if flow.Join && outcome == store.LoginExisting && a.store.InvitationCovered(account.ID, flow.Code) {
+		a.startSessionAt(w, r, store.Principal{ID: account.ID, Label: account.Name, TokenKind: store.WebSessionKind}, "/join/"+flow.Code)
+		return
+	}
 	a.finishLogin(w, r, account)
 }
 

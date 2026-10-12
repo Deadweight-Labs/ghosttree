@@ -108,9 +108,16 @@ func TestRequestCLICreateTargetsAndMove(t *testing.T) {
 	if code := run([]string{"request", "move", strconv.FormatInt(id, 10), "--project", cliHere, "--reason", "wrong repo"}, &out); code != 0 {
 		t.Fatalf("move: %d %s", code, out.String())
 	}
+	if want := "moved REQ-" + strconv.FormatInt(id, 10) + " to "; !strings.HasPrefix(out.String(), want) || strings.Count(out.String(), "\n") != 1 {
+		t.Errorf("move prints %q, want one line starting %q", out.String(), want)
+	}
 	d, _ := st.RequestByID(id)
 	if d.Request.Scope.Project != cliHere || d.Activity[len(d.Activity)-1].Kind != "request.moved" {
 		t.Errorf("request = %+v", d)
+	}
+	out.Reset()
+	if code := run([]string{"request", "move", strconv.FormatInt(id, 10), "--project", cliInfra, "--json"}, &out); code != 0 || !strings.Contains(out.String(), `"ok":true`) || !strings.Contains(out.String(), `"request"`) {
+		t.Errorf("move --json changed: %d %s", code, out.String())
 	}
 	out.Reset()
 	if code := run([]string{"request", "move", strconv.FormatInt(id, 10), "--project", "nowhere"}, &out); code != 1 {

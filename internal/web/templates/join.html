@@ -50,6 +50,7 @@
 <form class="login-form" method="post" action="/join/pair"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}">{{template "joinconfirm" .}}<button class="clay btn btn-primary">{{if .Interrupted}}{{t "pair.start_again"}}{{else}}{{t "pair.get_code"}}{{end}}</button></form>
 {{end}}{{template "joinfoot"}}{{end}}
 
+{{define "joinmember"}}{{template "joinhead"}}<h1>{{.Title}}</h1><a class="clay btn btn-primary join-back" href="{{.URL}}">{{t "join.member_open"}}</a>{{template "joinfoot"}}{{end}}
 {{define "joinnotfound"}}{{template "joinhead"}}<h1>{{t "join.na_title"}}</h1><p>{{t "join.na_text"}}</p>{{template "joinfoot"}}{{end}}
 {{define "joinbusy"}}{{template "joinhead"}}<h1>{{t "join.busy_title"}}</h1><p>{{t "join.busy_text"}}</p>{{template "joinfoot"}}{{end}}
 {{define "joinmsg"}}{{template "joinhead"}}<h1>{{.Title}}</h1><p>{{.Message}}</p>{{if .BackURL}}<a class="clay btn btn-primary join-back" href="{{.BackURL}}">{{.BackLabel}}</a>{{end}}{{template "joinfoot"}}{{end}}

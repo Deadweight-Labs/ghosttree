@@ -6,6 +6,17 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Fixed (second acceptance run, 2026-10-12): an @mention of a person reaches every
+  account that may read the project room, also one who is only in the web and has no
+  agent in the room; accounts without a role in the project are still not reached
+  and not confirmed. A name that reaches no one shows a quiet "@name reached no one"
+  line under the room after sending (not for guests). An invitation link opened by
+  someone who already has the role or a higher one says "You are already a member
+  of ..." with a link to the project and is not used up, also after signing in
+  through the invitation page. A freshly created invitation link is shown as
+  selectable text next to the Copy button instead of a field that cuts it off.
+  `ctx request move` prints one line (`moved REQ-n to <project>`); `--json` is
+  unchanged.
 - Fixed (acceptance run of two people, 2026-10-11): a session that belongs to no
   project can no longer be shared with "Project members" (the web form does not
   offer it, the API answers 409 `share_needs_project`); the sender of an @mention

@@ -49,6 +49,7 @@
       <form class="coord-composer" method="post" action="/ui/coord/send" data-coord-draft-key="room-composer-{{.Room.Key}}">
         <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="room" value="{{.Room.Key}}"><input type="hidden" name="form_id" value="{{.FormID}}">{{if .ReplyTo}}<input type="hidden" name="reply_to" value="{{.ReplyTo}}">{{end}}
         {{with .ReplyTarget}}<aside class="coord-reply">{{.Head}}<p>{{.Body}}</p><a href="{{$.Coord.Active.Room.URL}}#coord-message-body">{{t "coord.reply_clear"}}</a></aside>{{end}}
+        {{if .UnreachedNote}}<p class="coord-note" role="status">{{.UnreachedNote}}</p>{{end}}
         {{if .PrivatePeers}}<p class="coord-private-hint">{{t "coord.private_hint" .PrivatePeers}}</p>{{end}}
         <div class="comp-modes">
           <div class="pill clay" role="radiogroup" aria-label="{{t "coord.mode"}}">

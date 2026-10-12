@@ -118,6 +118,10 @@ func cmdRequest(args []string, stdout io.Writer) int {
 			return writeRequestCLIError(stdout, jsonMode, 1, err)
 		}
 		detail, err := c.MoveRequest(id, target, *reason)
+		if err == nil && !jsonMode {
+			fmt.Fprintf(stdout, "moved REQ-%d to %s\n", detail.Request.ID, detail.Request.Scope.Label())
+			return 0
+		}
 		return writeRequestCLIResult(stdout, jsonMode, detail, nil, err)
 	case "start":
 		id, flags, ok := requestIDAndFlags(rest)

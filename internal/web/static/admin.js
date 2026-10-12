@@ -1,15 +1,22 @@
 (() => {
-  for (const input of document.querySelectorAll("[data-select]")) {
-    input.addEventListener("focus", () => input.select());
+  const selectAll = (el) => {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+  };
+  for (const link of document.querySelectorAll("[data-select]")) {
+    link.addEventListener("focus", () => selectAll(link));
   }
   for (const button of document.querySelectorAll("[data-copy]")) {
-    const input = button.parentElement.querySelector("input");
+    const link = button.parentElement.querySelector("[data-select]");
     const label = button.textContent;
     button.addEventListener("click", async () => {
       try {
-        await navigator.clipboard.writeText(input.value);
+        await navigator.clipboard.writeText(link.textContent.trim());
       } catch (_) {
-        input.select();
+        selectAll(link);
         document.execCommand("copy");
       }
       button.textContent = button.dataset.done || label;

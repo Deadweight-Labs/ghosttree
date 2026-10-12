@@ -602,7 +602,7 @@ func TestOrgPageGuestLinksNeedEnforcementAndShowAbsoluteURL(t *testing.T) {
 	st.SetAccessMode(store.AccessMode{Enforce: true})
 	resp = postOrgFollow(t, alice, base, "/ui/orgs/invite", url.Values{"org": {org.Slug}, "project": {joinProject}, "project_role": {"guest"}})
 	page := body(t, resp)
-	if resp.StatusCode != http.StatusOK || !regexp.MustCompile(`value="http://127\.0\.0\.1:[0-9]+/join/[0-9a-f]{64}"`).MatchString(page) {
+	if resp.StatusCode != http.StatusOK || !regexp.MustCompile(`data-select>http://127\.0\.0\.1:[0-9]+/join/[0-9a-f]{64}<`).MatchString(page) {
 		t.Fatalf("link: %d %s", resp.StatusCode, page)
 	}
 	if !strings.Contains(page, `<span class="ov-name">`+joinProject+`</span><span class="ov-meta ad-parts"><span>Pending</span><span>guest</span>`) {

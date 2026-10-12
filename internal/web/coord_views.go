@@ -148,6 +148,8 @@ type coordRoomDetailView struct {
 	Thread                 *coordThreadDetailView
 	PrivateNote            string
 	PrivatePeers           string
+	// UnreachedNote: the @names of the last post that reached no one.
+	UnreachedNote string
 }
 
 type coordThreadView struct {
