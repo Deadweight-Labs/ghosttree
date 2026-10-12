@@ -54,6 +54,11 @@ func registerHookSession(raw []byte, harness string, force bool) {
 	if !force && state.LastRegister != 0 && now.Sub(time.Unix(state.LastRegister, 0)) < coordHookInterval {
 		return
 	}
+	// The attempt counts even when it fails or finds nothing to join (no
+	// config, no repository), so that a dead server costs one short wait a
+	// minute and a repo-less session does not run git on every tool call.
+	state.LastRegister = now.Unix()
+	saveCoordState(path, state)
 	cfg, err := config.Load()
 	if err != nil {
 		return
@@ -63,19 +68,29 @@ func registerHookSession(raw []byte, harness string, force bool) {
 		cwd, _ = os.Getwd()
 	}
 	git := collector.ResolveGitContext(cwd)
-	if git.Project == "" {
-		return
+	room, branch := state.RegisterRoom, state.RegisterBranch
+	switch {
+	case room == "":
+		// First join: the room of the first repository a hook saw the session in.
+		if git.Project == "" {
+			return
+		}
+		room, branch = store.RoomKeyForProject(git.Project), git.Branch
+	case git.Project != "" && store.RoomKeyForProject(git.Project) == room:
+		branch = git.Branch
 	}
+	// Once joined, the room stays: a session that moved into another repository
+	// must not be announced there, because the server binds it to one project
+	// room and would refuse its coord calls afterwards.
 	session := agentSessionFromEnv()
 	if session == "" && store.ValidExternalID(in.SessionID) {
 		session = in.SessionID
 	}
-	// The attempt counts even when it fails, so that a dead server costs one
-	// short wait a minute and not one per tool call.
-	state.LastRegister = now.Unix()
-	saveCoordState(path, state)
-	_, _ = client.NewWithTimeout(cfg, registerHookDeadline).RegisterCoordAgent(store.CoordAgent{
-		ExternalID: self, Provider: harness, RoomKey: store.RoomKeyForProject(git.Project),
-		DisplayName: self, Branch: git.Branch, Role: agentRoleFromEnv(), SessionID: session,
-	})
+	if _, err := client.NewWithTimeout(cfg, registerHookDeadline).RegisterCoordAgent(store.CoordAgent{
+		ExternalID: self, Provider: harness, RoomKey: room,
+		DisplayName: self, Branch: branch, Role: agentRoleFromEnv(), SessionID: session,
+	}); err == nil {
+		state.RegisterRoom, state.RegisterBranch = room, branch
+		saveCoordState(path, state)
+	}
 }

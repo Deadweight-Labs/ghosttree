@@ -104,7 +104,9 @@ func cmdHookWith(stdin io.Reader, args []string, stdout io.Writer) int {
 		registerDone := make(chan struct{})
 		go func() {
 			defer close(registerDone)
-			if eventArg != "pre-tool-use" && os.Getenv("GHOSTTREE_HOOK_SYNTHETIC") != "1" {
+			// Claude's tool calls announce themselves through post-tool-use;
+			// Codex has no such hook, so its pre-tool-use is the heartbeat.
+			if (eventArg != "pre-tool-use" || *harness == "codex") && os.Getenv("GHOSTTREE_HOOK_SYNTHETIC") != "1" {
 				registerHookSession(raw, *harness, eventArg == "session-start")
 			}
 		}()

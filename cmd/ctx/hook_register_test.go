@@ -106,7 +106,7 @@ func TestRegistrationHookLeavesSubagentsAndRepoLessSessionsOut(t *testing.T) {
 	if _, ok := registeredPeer(t, e, "sess-hook-sub"); ok {
 		t.Fatal("a subagent call must not register a card of its own")
 	}
-	runHookAs(t, "session-start", "claude", map[string]any{"cwd": "/tmp", "session_id": "sess-hook-norepo"})
+	runHookAs(t, "session-start", "claude", map[string]any{"cwd": t.TempDir(), "session_id": "sess-hook-norepo"})
 	if _, ok := registeredPeer(t, e, "sess-hook-norepo"); ok {
 		t.Fatal("outside a repository there is no project room to join")
 	}

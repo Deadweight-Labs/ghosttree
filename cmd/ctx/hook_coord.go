@@ -51,6 +51,10 @@ type coordHookState struct {
 	// LastRegister is when the session last announced itself (hook_register.go).
 	// It lives in its own file: the prompt hook runs both in parallel.
 	LastRegister int64 `json:"last_register,omitempty"`
+	// RegisterRoom and RegisterBranch pin the room the session first joined:
+	// later hooks may run from another repository the session moved into.
+	RegisterRoom   string `json:"register_room,omitempty"`
+	RegisterBranch string `json:"register_branch,omitempty"`
 }
 
 func coordStateFile(self string) (string, error) {
@@ -277,8 +281,14 @@ func postToolUse(stdin io.Reader, harness string, stdout io.Writer) int {
 	out.HookSpecificOutput.HookEventName = "PostToolUse"
 	if os.Getenv("GHOSTTREE_HOOK_SYNTHETIC") != "1" {
 		if raw, err := io.ReadAll(io.LimitReader(stdin, 4<<20)); err == nil {
-			registerHookSession(raw, harness, false)
+			// Beside the inbox look, so a hanging server costs one deadline.
+			registerDone := make(chan struct{})
+			go func() {
+				defer close(registerDone)
+				registerHookSession(raw, harness, false)
+			}()
 			text, polled := coordInboxContext(raw, false)
+			<-registerDone
 			out.HookSpecificOutput.AdditionalContext = text
 			if polled && (harness == "claude" || harness == "codex") {
 				_ = hookstate.Record(harness, "PostToolUse")
