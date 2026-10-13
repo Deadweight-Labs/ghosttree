@@ -542,7 +542,6 @@ var messages = map[string]string{
 	"sessions.search_label":        "Search all sessions",
 	"sessions.search_placeholder":  "Search all sessions",
 	"sessions.clear_search":        "Clear search",
-	"sessions.all_projects":        "All projects",
 	"sessions.all_machines":        "All machines",
 	"sessions.any_agent":           "Any agent",
 	"sessions.any_time":            "Any time",

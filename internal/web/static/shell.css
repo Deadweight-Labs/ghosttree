@@ -46,6 +46,13 @@ svg.i { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-widt
   background-size: 5px 5px; background-repeat: no-repeat;
 }
 .clay-field, .clay-select, .clay-textarea { --clay-surface: var(--clay-c-sunken); }
+/* The open list is painted by the browser from the options' own colours. The
+   select itself is transparent, so without these the ink of the scheme can land
+   on the system's white. */
+select { color-scheme: light dark; }
+select option, select optgroup { background-color: var(--clay-c-surface); color: var(--clay-ink); }
+select option:checked { background-color: var(--color-accent-soft); color: var(--clay-accent-text); }
+select option:disabled { color: var(--clay-ink-faint); }
 .field { display: grid; gap: var(--space-2); margin: 0 0 var(--space-4); }
 .field > span { font-weight: 700; font-size: 13.5px; }
 .field input {
@@ -226,7 +233,10 @@ svg.i { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-widt
 .ov-dot.is-wait { background: var(--clay-warn); }
 .ov-dot.pulse { box-shadow: 0 0 0 4px color-mix(in srgb, var(--clay-ok) 22%, transparent); }
 
-.ov-device { display: flex; gap: var(--space-3); margin: 0 0 var(--space-4); }
+.ov-device { display: flex; flex-wrap: wrap; gap: var(--space-3); margin: 0 0 var(--space-4); }
+.ov-device .ov-code { flex: 1 1 12rem; }
+/* The raised button casts its shadow below itself; the row after it needs room. */
+.ov-pair { margin: 0 0 var(--space-5); }
 .ov-code {
   --clay-rest-h: -4;
   --clay-surface: var(--clay-c-sunken);

@@ -176,6 +176,8 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 	sidebar := buildCoordSidebar(summaries, humanMember(r), room, labels)
 	annotateCoordAttention(incomingAttention, attention, sidebar, attentionLabels)
 	annotateCoordAttention(outgoingAttention, attention, sidebar, attentionLabels)
+	// Badge und Aufmerksamkeit zählen alle Räume; nur die Liste folgt dem Projekt.
+	sidebar = sidebar.inProject(selectedProject(a.shellFor(r, "coord")), room)
 	view := coordPageView{
 		Texts:             coordClientTexts(),
 		EventCursor:       a.sealCoordCursor(browserPrincipal(r), eventCursor, time.Now()),

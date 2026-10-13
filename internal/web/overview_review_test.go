@@ -145,7 +145,7 @@ func TestGuestInOneProjectAndMemberInAnotherSeesOnlyWhatEachRoleAllows(t *testin
 	if err := e.St.SetProjectRole("person:1", shellHiddenProject, account, store.RoleMember, false, store.RoleViaCLI); err != nil {
 		t.Fatal(err)
 	}
-	ovAgent(t, e.St, shellProject, "claude:a", "AGENT-IN-A", account)
+	ovAgent(t, e.St, shellProject, "claude:a", "AGENT-IN-A", "person:1")
 	ovAgent(t, e.St, shellHiddenProject, "claude:b", "AGENT-IN-B", account)
 	c := loginInteractive(t, e.Srv, e.St, "mia")
 	_, page := fetchPage(t, c, e.Base+"/ui/overview")

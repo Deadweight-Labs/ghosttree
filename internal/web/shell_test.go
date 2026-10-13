@@ -262,20 +262,29 @@ func TestKnowledgeReviewAndContextAreForReviewersLeadsAndOwnersOnly(t *testing.T
 	}
 }
 
-func TestAllProjectsIsOfferedToOwnersOnly(t *testing.T) {
+func TestAllProjectsIsTheDefaultAndOfferedWithMoreThanOneProject(t *testing.T) {
 	e := shellWebAll(t)
 	_, page := fetchPage(t, e.Owner, e.Base+"/ui/overview")
 	if !strings.Contains(page, `<option value="" selected>All projects`) {
 		t.Error("owner lacks All projects")
 	}
+	// One project: nothing to choose between, nothing is preselected.
 	for name, c := range map[string]*http.Client{"member": e.Member, "guest": e.Guest, "lead": e.Lead} {
 		_, page := fetchPage(t, c, e.Base+"/ui/overview")
 		if strings.Contains(page, "All projects") {
-			t.Errorf("%s is offered All projects", name)
+			t.Errorf("%s with one project is offered All projects", name)
 		}
-		if strings.Contains(page, `value="" disabled`) || !regexp.MustCompile(`<option value="`+regexp.QuoteMeta(shellProject)+`" title="`+regexp.QuoteMeta(shellProject)+`" selected`).MatchString(page) {
-			t.Errorf("%s selector does not preselect the first project", name)
+		if selectedOption(page) != "" {
+			t.Errorf("%s has %q preselected, want no filter", name, selectedOption(page))
 		}
+	}
+	// Two projects: everyone gets All projects, and it is the default.
+	if err := e.St.SetProjectRole("person:1", shellHiddenProject, "person:2", store.RoleMember, false, store.RoleViaCLI); err != nil {
+		t.Fatal(err)
+	}
+	_, page = fetchPage(t, e.Member, e.Base+"/ui/overview")
+	if !strings.Contains(page, `<option value="" selected>All projects`) {
+		t.Error("a member of two projects is not offered All projects as the default")
 	}
 }
 

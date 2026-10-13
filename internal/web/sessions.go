@@ -477,6 +477,9 @@ func (a *app) sessionsPage(w http.ResponseWriter, r *http.Request) {
 	who := a.viewerOf(r, pa)
 	guest := who.kind == viewerGuest
 	filter, keep := sessionFilterFromQuery(r, guest)
+	// Das Projekt kommt aus der Auswahl im Kopf, nicht aus einem eigenen Filter.
+	filter.Project = selectedProject(a.shellFor(r, "sessions"))
+	keep.Del("project")
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
 	if utf8.RuneCountInString(query) > maxQueryRunes {
 		query = string([]rune(query)[:maxQueryRunes])
@@ -600,8 +603,6 @@ func (a *app) sessionsPage(w http.ResponseWriter, r *http.Request) {
 		v.ClearFilters = "/ui/sessions"
 	}
 
-	chosenProject := filter.Project
-	v.Selects = append(v.Selects, facetSelect("project", msg("sessions.all_projects"), facets.Projects, chosenProject, projectName, !guest))
 	if !guest && len(facets.Machines) > 0 || filter.Machine != "" {
 		v.Selects = append(v.Selects, facetSelect("machine", msg("sessions.all_machines"), facets.Machines, filter.Machine, func(s string) string { return s }, !guest))
 	}

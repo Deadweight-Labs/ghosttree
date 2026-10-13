@@ -36,9 +36,9 @@ type shellMemoKey struct{}
 // shellMemo hängt an der Anfrage (requirePerson) und hält die Hülle.
 type shellMemo struct{ base *shellBase }
 
-// shellBaseFor liefert Betrachter und Projektliste mit der Vorauswahl "erstes
-// eigenes Projekt", wo "All projects" nicht zur Wahl steht. Ohne Memo in der
-// Anfrage (Tests) wird jedes Mal gerechnet.
+// shellBaseFor liefert Betrachter und Projektliste. Ohne gültige Wahl gilt für
+// alle "All projects", das heißt alle Projekte, in denen der Betrachter eine
+// Rolle hat. Ohne Memo in der Anfrage (Tests) wird jedes Mal gerechnet.
 func (a *app) shellBaseFor(r *http.Request) shellBase {
 	memo, _ := r.Context().Value(shellMemoKey{}).(*shellMemo)
 	if memo != nil && memo.base != nil {
@@ -49,11 +49,6 @@ func (a *app) shellBaseFor(r *http.Request) shellBase {
 	pa := a.access(r)
 	b := shellBase{who: a.viewerOf(r, pa)}
 	b.projects, b.all = a.projectOptions(r, pa)
-	// Ohne gültiges ?project= bekommt, wer nicht "All projects" wählen kann, sein
-	// erstes Projekt vorgewählt. Ein Projektname ohne Rolle wirkt wie keiner.
-	if b.who.kind != viewerOwner && b.all && len(b.projects) > 0 {
-		b.projects[0].Selected, b.all = true, false
-	}
 	if memo != nil {
 		stored := b
 		stored.projects = slices.Clone(b.projects)
@@ -127,7 +122,11 @@ func (a *app) viewerOf(r *http.Request, pa *store.ProjectAccess) viewer {
 }
 
 // projectAware sind die Seiten, die ?project= auswerten.
-var projectAware = map[string]bool{"knowledge": true, "review": true, "context": true, "sessions": true, "agents": true, "requests": true}
+var projectAware = map[string]bool{"overview": true, "knowledge": true, "review": true, "context": true, "sessions": true, "agents": true, "requests": true, "coord": true}
+
+// projectNeutral sind die Seiten über Konto und Verwaltung. Sie filtern nach
+// nichts; die Projektauswahl steht dort nicht, damit sie keinen Filter vortäuscht.
+var projectNeutral = map[string]bool{"orgs": true, "tokens": true, "device": true, "devicecheck": true, "devicedone": true, "interactive": true, "profile": true}
 
 // navSection ist der Eintrag der Seitenleiste, unter dem eine Seite steht.
 func navKeyFor(section string, kind viewerKind) string {
@@ -168,7 +167,7 @@ func (a *app) shellFor(r *http.Request, name string) shellView {
 	item := func(key, label, href string) navItem {
 		return navItem{Key: key, Label: label, Href: href, Current: key == current}
 	}
-	v := shellView{On: true, RoleKey: who.roleKey, Host: a.publicHost(r), CanAll: kind == viewerOwner}
+	v := shellView{On: true, RoleKey: who.roleKey, Host: a.publicHost(r), CanAll: kind == viewerOwner || len(base.projects) > 1}
 	if label := strings.TrimSpace(browserPrincipal(r).Label); label != "" {
 		v.Initial = strings.ToUpper(string([]rune(label)[:1]))
 	}
@@ -208,7 +207,9 @@ func (a *app) shellFor(r *http.Request, name string) shellView {
 	} else if name == "request" {
 		v.ProjectAction = "/ui/requests"
 	}
-	v.Projects, v.AllSelected = base.projects, base.all
+	if !projectNeutral[name] {
+		v.Projects, v.AllSelected = base.projects, base.all
+	}
 	return v
 }
 
@@ -223,20 +224,82 @@ func (a *app) publicHost(r *http.Request) string {
 	return r.Host
 }
 
+// projectCookie hält die Projektauswahl für die Browsersitzung, damit sie beim
+// Wechsel der Seite bleibt. Der Wert ist nur ein Wunsch: er gilt erst, wenn der
+// Betrachter im Projekt eine Rolle hat.
+const projectCookie = "gt_project"
+
+func (a *app) projectCookieFor(r *http.Request, value string, maxAge int) *http.Cookie {
+	return &http.Cookie{Name: projectCookie, Value: value, Path: "/", HttpOnly: true,
+		Secure: a.secureCookies(r), SameSite: http.SameSiteLaxMode, MaxAge: maxAge}
+}
+
+// chosenProject ist das Projekt, das die Anfrage meint: ?project= (leer heißt
+// "All projects"), sonst das Cookie. explicit sagt, ob ?project= vorkam.
+func chosenProject(r *http.Request) (remote string, explicit bool) {
+	q := r.URL.Query()
+	if q.Has("project") {
+		return scope.NormalizeRemote(q.Get("project")), true
+	}
+	if c, err := r.Cookie(projectCookie); err == nil {
+		return scope.NormalizeRemote(c.Value), false
+	}
+	return "", false
+}
+
+// resolveProject ist das Projekt, das gilt: ein nutzbares ?project=, sonst das
+// Cookie, sonst "" (All projects). Nutzbar heißt: unter den sichtbaren Projekten
+// des Betrachters. Ein leeres ?project= wählt ausdrücklich "All projects".
+func resolveProject(r *http.Request, visible []string) string {
+	chosen, explicit := chosenProject(r)
+	if explicit && (chosen == "" || slices.Contains(visible, chosen)) {
+		return chosen
+	}
+	if c, err := r.Cookie(projectCookie); err == nil {
+		if remote := scope.NormalizeRemote(c.Value); slices.Contains(visible, remote) {
+			return remote
+		}
+	}
+	return ""
+}
+
+// rememberProject legt eine ausdrückliche Wahl im Cookie ab. "All projects"
+// löscht es; ein Projekt ohne Rolle wird nicht gemerkt.
+func (a *app) rememberProject(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet || !r.URL.Query().Has("project") {
+		return
+	}
+	remote, _ := chosenProject(r)
+	if remote == "" {
+		if _, err := r.Cookie(projectCookie); err == nil {
+			http.SetCookie(w, a.projectCookieFor(r, "", -1))
+		}
+		return
+	}
+	if pa := a.access(r); pa.Role(remote).Role == "" {
+		return
+	}
+	if c, err := r.Cookie(projectCookie); err == nil && c.Value == remote {
+		return
+	}
+	http.SetCookie(w, a.projectCookieFor(r, remote, 0))
+}
+
 // projectOptions listet die Projekte, in denen der Betrachter eine Rolle hat,
-// und markiert das gewählte (?project=). Projekte ohne Rolle erscheinen nie.
+// und markiert das gewählte (?project=, sonst das Cookie). Projekte ohne Rolle
+// erscheinen nie und gelten als nicht gewählt.
 func (a *app) projectOptions(r *http.Request, pa *store.ProjectAccess) ([]projectOption, bool) {
 	list, err := a.store.ListProjects(browserPrincipal(r).ID, 0)
 	if err != nil {
 		return nil, true
 	}
-	chosen := scope.NormalizeRemote(r.URL.Query().Get("project"))
 	var visible []string
 	for _, p := range list {
 		if pa.Role(p.Remote).Role != "" {
 			visible = append(visible, p.Remote)
 		}
 	}
+	chosen := resolveProject(r, visible)
 	labels := projectLabels(visible)
 	var out []projectOption
 	found := false
