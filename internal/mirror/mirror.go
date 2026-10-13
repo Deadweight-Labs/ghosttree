@@ -228,7 +228,7 @@ func index(in Input, knowledgeCount int) string {
 	b.WriteString("    ls .ghosttree/requests/open/                   # what is open\n")
 	b.WriteString("    cat .ghosttree/tree/<path>.md                  # what a file does\n\n")
 	b.WriteString("Each file names its scope, its type and who wrote it. Entry `#42` is `knowledge/*/42-*.md`; `REQ-7` is `requests/*/REQ-7-*.md`.\n\n")
-	b.WriteString("Where ghosttree is available as a tool, it sees more than this directory: session transcripts (`context_sessions`), unreviewed and superseded knowledge (`context_search`), and the criteria and evidence behind each request (`request_get`).\n")
+	b.WriteString("Where ghosttree is available as a tool, it sees more than this directory: session transcripts (`context_sessions`), unreviewed knowledge (`context_search`; superseded or retired entries stay readable by id with `knowledge_id`), and the criteria and evidence behind each request (`request_get`).\n")
 	b.WriteString(footer())
 	return b.String()
 }

@@ -529,6 +529,12 @@ CREATE TABLE IF NOT EXISTS knowledge_moves(
   from_scope TEXT NOT NULL, to_scope TEXT NOT NULL,
   moved_by TEXT NOT NULL DEFAULT '', moved_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS knowledge_moves_entry ON knowledge_moves(knowledge_id, id DESC);
+CREATE TABLE IF NOT EXISTS knowledge_retirements(
+  id INTEGER PRIMARY KEY,
+  knowledge_id INTEGER NOT NULL,
+  reason TEXT NOT NULL,
+  retired_by TEXT NOT NULL DEFAULT '', retired_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS knowledge_retirements_entry ON knowledge_retirements(knowledge_id, id DESC);
 INSERT OR IGNORE INTO search_documents(kind,domain_id,title,body,project,branch,machine)
   SELECT 'knowledge',id,title,body,project,branch,machine FROM knowledge;
 CREATE TABLE IF NOT EXISTS documents(

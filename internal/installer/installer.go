@@ -31,6 +31,11 @@ rather than in source comments. Search prior knowledge with ` + "`context_search
 before re-deriving it. Call ` + "`context_get`" + ` again with repository-relative paths
 before working in another subtree.
 
+Search before you write. When a known state changes, supersede the old entry
+(` + "`context_remember`" + ` with ` + "`supersedes`" + ` and ` + "`supersede_reason`" + `) instead of adding
+a follow-up that leaves both active. When what an entry describes no longer
+exists, retire it with ` + "`context_retire`" + ` and a reason.
+
 What a file or directory DOES belongs in its ghost file. Whenever you are about
 to write an explanatory comment that serves later readers more than the person
 in front of you — and whenever you create a file — put that text at the path

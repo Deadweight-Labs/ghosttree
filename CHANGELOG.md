@@ -6,6 +6,17 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Added (REQ-465): agents can replace outdated knowledge instead of stacking a
+  follow-up next to it. `context_remember` takes `supersedes` (ids of older
+  entries) and `supersede_reason`; `ctx knowledge add --supersedes ID,ID
+  --reason R` does the same on the command line. The superseded entries leave
+  search, the briefing and the web list, and stay readable through their detail
+  page and history. New `context_retire` / `ctx knowledge retire <id> --reason R`
+  retires an entry whose subject no longer exists (HTTP `POST
+  /api/knowledge/{id}/retire`), with the same right as Retire in the web. The
+  briefing, the tool descriptions and the installed rule section now say:
+  search before writing, supersede when a known state changed, retire when the
+  thing is gone.
 - Fixed (project selector): the open project list is readable in the light and the
   dark scheme (the options no longer take the light text colour onto the system's
   white), the same holds for every other selection list in the web interface. The

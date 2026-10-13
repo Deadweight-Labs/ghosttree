@@ -158,6 +158,7 @@ func (a *api) registerRoutes(mux *http.ServeMux) {
 	a.routeFunc(mux, "GET /api/knowledge/{id}/history", a.knowledgeHistory)
 	a.routeFunc(mux, "PATCH /api/knowledge/{id}", a.patchKnowledge)
 	a.routeFunc(mux, "POST /api/knowledge/{id}/move", a.moveKnowledge)
+	a.routeFunc(mux, "POST /api/knowledge/{id}/retire", a.retireKnowledge)
 	a.routeFunc(mux, "PUT /api/knowledge/{id}/regression", a.setRegressionCover)
 	a.routeFunc(mux, "GET /api/knowledge/regression-gaps", a.regressionGaps)
 	a.routeFunc(mux, "POST /api/migrated-knowledge", a.insertMigratedKnowledge)

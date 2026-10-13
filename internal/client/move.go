@@ -73,3 +73,12 @@ func (c *Client) MoveKnowledge(id int64, project, machine string, global bool) (
 		map[string]any{"project": project, "machine": machine, "global": global}, &out)
 	return out, err
 }
+
+// RetireKnowledge zieht einen Eintrag zurück, dessen beschriebener Zustand
+// nicht mehr existiert. Die Begründung ist Pflicht.
+func (c *Client) RetireKnowledge(id int64, reason string) (store.Knowledge, error) {
+	var out store.Knowledge
+	err := c.do("POST", "/api/knowledge/"+strconv.FormatInt(id, 10)+"/retire", nil,
+		map[string]any{"reason": reason}, &out)
+	return out, err
+}

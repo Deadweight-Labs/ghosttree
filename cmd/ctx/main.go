@@ -124,7 +124,7 @@ const usage = `usage: ctx <command>
   review   approve or reject distilled knowledge
   regression  say which test guards a fixed defect, and list the fixes none does
   request  search and manage the work ledger (create, move, ...)
-  knowledge  move a knowledge entry to another project, machine or global
+  knowledge  add (optionally superseding older entries), retire or move a knowledge entry
   ghost    read description history or archive confirmed-deleted paths
   doc      write, publish, and read long-form documents
   migrate  move repository agent artifacts into ghosttree

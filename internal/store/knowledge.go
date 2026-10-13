@@ -191,6 +191,25 @@ func (s *Store) InsertKnowledge(k Knowledge) (int64, error) {
 	if s.writer != nil {
 		return queueValue(s, []any{k}, func(d *Store, p []any) (int64, error) { return d.InsertKnowledge(p[0].(Knowledge)) })
 	}
+	k = withKnowledgeDefaults(k)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	id, err := insertKnowledgeTx(tx, k)
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return id, nil
+}
+
+// withKnowledgeDefaults fills origin, confidence and status the way a plain
+// write does.
+func withKnowledgeDefaults(k Knowledge) Knowledge {
 	if k.Origin == "" {
 		k.Origin = "agent"
 	}
@@ -206,12 +225,11 @@ func (s *Store) InsertKnowledge(k Knowledge) (int64, error) {
 	if k.Status == "" {
 		k.Status = "active"
 	}
+	return k
+}
+
+func insertKnowledgeTx(tx *sql.Tx, k Knowledge) (int64, error) {
 	ts := now()
-	tx, err := s.db.Begin()
-	if err != nil {
-		return 0, err
-	}
-	defer tx.Rollback()
 	if k.ObservedAt == "" {
 		// Nobody is reporting an older sighting here: the writer is looking at
 		// the thing as they write it.
@@ -240,9 +258,6 @@ func (s *Store) InsertKnowledge(k Knowledge) (int64, error) {
 		if _, err := tx.Exec(`INSERT INTO instruction_activation_path(knowledge_id,pattern) VALUES(?,?)`, id, pattern); err != nil {
 			return 0, err
 		}
-	}
-	if err := tx.Commit(); err != nil {
-		return 0, err
 	}
 	return id, nil
 }
@@ -354,24 +369,7 @@ func (s *Store) UpdateKnowledgeBy(id int64, patch map[string]string, editor stri
 		if err != nil || target == 0 || target == id {
 			return fmt.Errorf("invalid superseded_by %q", raw)
 		}
-		seen := map[int64]bool{id: true}
-		for {
-			if seen[target] {
-				return fmt.Errorf("supersession would create a cycle")
-			}
-			seen[target] = true
-			var next int64
-			if err := tx.QueryRow(`SELECT superseded_by FROM knowledge WHERE id=?`, target).Scan(&next); err != nil {
-				return err
-			}
-			if next == 0 {
-				break
-			}
-			target = next
-		}
-		if _, err := tx.Exec(`WITH RECURSIVE ancestors(id) AS (
-			SELECT ? UNION ALL SELECT k.id FROM knowledge k JOIN ancestors a ON k.superseded_by=a.id
-		) UPDATE knowledge SET status='superseded',superseded_by=?,updated_at=? WHERE id IN (SELECT id FROM ancestors)`, id, target, ts); err != nil {
+		if err := markSupersededTx(tx, id, target, ts); err != nil {
 			return err
 		}
 	}
@@ -399,6 +397,30 @@ func (s *Store) UpdateKnowledgeBy(id int64, patch map[string]string, editor stri
 		return err
 	}
 	return tx.Commit()
+}
+
+// markSupersededTx sets an entry and everything it had superseded before to
+// superseded, pointing at the head of the chain that target belongs to.
+func markSupersededTx(tx *sql.Tx, id, target int64, ts string) error {
+	seen := map[int64]bool{id: true}
+	for {
+		if seen[target] {
+			return fmt.Errorf("supersession would create a cycle")
+		}
+		seen[target] = true
+		var next int64
+		if err := tx.QueryRow(`SELECT superseded_by FROM knowledge WHERE id=?`, target).Scan(&next); err != nil {
+			return err
+		}
+		if next == 0 {
+			break
+		}
+		target = next
+	}
+	_, err := tx.Exec(`WITH RECURSIVE ancestors(id) AS (
+		SELECT ? UNION ALL SELECT k.id FROM knowledge k JOIN ancestors a ON k.superseded_by=a.id
+	) UPDATE knowledge SET status='superseded',superseded_by=?,updated_at=? WHERE id IN (SELECT id FROM ancestors)`, id, target, ts)
+	return err
 }
 
 // KnowledgeVersion is a complete prior version of an entry. ChangedBy says
