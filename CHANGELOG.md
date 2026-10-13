@@ -17,6 +17,20 @@ Versioning, with pre-1.0 compatibility rules described in
   briefing, the tool descriptions and the installed rule section now say:
   search before writing, supersede when a known state changed, retire when the
   thing is gone.
+- Fixed (project selector): the open project list is readable in the light and the
+  dark scheme (the options no longer take the light text colour onto the system's
+  white), the same holds for every other selection list in the web interface. The
+  chosen project is kept for the browser session in a cookie, so it stays when you
+  open another page; an explicit `?project=` replaces it, "All projects" and signing
+  out clear it, and a project you have no role in is ignored. Without a choice
+  everyone sees "All projects" (all projects they have a role in, never more), and
+  anyone with more than one project can pick it. The rooms badge always counts every
+  project; only the room list follows the selection. Overview, agents,
+  sessions, knowledge, requests and the rooms list follow the selection; the
+  sessions list no longer has a second project filter. The account and
+  administration pages (organization, devices, profile) show no project selector.
+  The "Get the install command" button on the connect page no longer sits on the
+  code field below it, and the code row wraps on narrow screens.
 - Fixed (second acceptance run, 2026-10-12): an @mention of a person reaches every
   account that may read the project room, also one who is only in the web and has no
   agent in the room; accounts without a role in the project are still not reached

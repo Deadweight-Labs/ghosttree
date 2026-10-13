@@ -95,7 +95,9 @@ func (a *app) requirePerson(next http.Handler) http.Handler {
 				ctx := context.WithValue(r.Context(), personKey{}, session.principal)
 				ctx = context.WithValue(ctx, csrfKey{}, session.csrf)
 				ctx = context.WithValue(ctx, shellMemoKey{}, &shellMemo{})
-				next.ServeHTTP(w, r.WithContext(ctx))
+				r = r.WithContext(ctx)
+				a.rememberProject(w, r)
+				next.ServeHTTP(w, r)
 				return
 			}
 		}
@@ -388,6 +390,7 @@ func (a *app) logout(w http.ResponseWriter, r *http.Request) {
 		a.sessions.remove(cookie.Value)
 	}
 	http.SetCookie(w, a.sessionCookieFor(r, "", -1))
+	http.SetCookie(w, a.projectCookieFor(r, "", -1))
 	http.Redirect(w, r, "/ui/login", http.StatusSeeOther)
 }
 
