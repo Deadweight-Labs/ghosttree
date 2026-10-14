@@ -166,6 +166,8 @@ var messages = map[string]string{
 	"knowledge.done.retired":            "Retired: %s",
 	"knowledge.done.restored":           "Restored: %s",
 	"knowledge.replaced_by":             "replaced by %s",
+	"knowledge.closure.retired":         "Retired",
+	"knowledge.closure.superseded":      "Replaced by",
 	"knowledge.done.saved":              "Saved: %s",
 
 	// Räume (Chat).

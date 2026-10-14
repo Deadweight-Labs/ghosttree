@@ -133,13 +133,16 @@ func supersedeTx(tx *sql.Tx, newID int64, oldIDs []int64, reason string, actor R
 	if actor.Via == "mcp" {
 		origin = RelOriginAgent
 	}
-	var status string
+	var status, confidence string
 	var at scope.Axes
-	if err := tx.QueryRow(`SELECT status, project, branch, machine FROM knowledge WHERE id=?`, newID).Scan(&status, &at.Project, &at.Branch, &at.Machine); err != nil {
+	if err := tx.QueryRow(`SELECT status, confidence, project, branch, machine FROM knowledge WHERE id=?`, newID).Scan(&status, &confidence, &at.Project, &at.Branch, &at.Machine); err != nil {
 		return fmt.Errorf("%w: no entry #%d", ErrRelationInvalid, newID)
 	}
 	if !currentStatus(status) {
 		return fmt.Errorf("%w: #%d is %s and cannot supersede another entry", ErrNotCurrent, newID, status)
+	}
+	if confidence != "trusted" && confidence != "verified" {
+		return fmt.Errorf("%w: #%d is %s", ErrNotDeliverable, newID, confidence)
 	}
 	ts := now()
 	for _, id := range olds {
@@ -237,4 +240,60 @@ func (s *Store) KnowledgeRetirements(id int64) ([]KnowledgeRetirement, error) {
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// KnowledgeClosure sagt, wie und warum ein Eintrag aus dem Umlauf genommen
+// wurde: abgelöst (mit Begründung der Relation) oder zurückgezogen (mit
+// Begründung aus dem Rückzugs-Protokoll).
+type KnowledgeClosure struct {
+	Kind         string `json:"kind"` // superseded|retired
+	Reason       string `json:"reason"`
+	By           string `json:"by"`
+	At           string `json:"at"`
+	SupersededBy int64  `json:"superseded_by,omitempty"`
+}
+
+// Summary is the one line a reader gets of a closure: what happened, by whom,
+// when, and why.
+func (c KnowledgeClosure) Summary() string {
+	what := "retired"
+	if c.Kind == "superseded" {
+		what = fmt.Sprintf("superseded by #%d", c.SupersededBy)
+	}
+	who := c.By
+	if len(c.At) >= 10 {
+		who = strings.TrimSpace(who + " " + c.At[:10])
+	}
+	if who != "" {
+		what += " (" + who + ")"
+	}
+	return what + ": " + c.Reason
+}
+
+// KnowledgeClosure liefert den Abschluss eines abgelösten oder zurückgezogenen
+// Eintrags, sonst nil. Die Sichtprüfung liegt beim Aufrufer.
+func (s *Store) KnowledgeClosure(k Knowledge) (*KnowledgeClosure, error) {
+	if s.reader != nil {
+		return s.reader.KnowledgeClosure(k)
+	}
+	switch k.Status {
+	case "superseded":
+		rels, err := s.RelationsOf(k.ID)
+		if err != nil {
+			return nil, err
+		}
+		for i := len(rels) - 1; i >= 0; i-- {
+			r := rels[i]
+			if r.Kind == RelSupersedes && r.ToID == k.ID && r.FromID == k.SupersededBy && r.State == RelActive {
+				return &KnowledgeClosure{Kind: "superseded", Reason: r.Reason, By: r.CreatedBy, At: r.CreatedAt, SupersededBy: r.FromID}, nil
+			}
+		}
+	case "deprecated":
+		log, err := s.KnowledgeRetirements(k.ID)
+		if err != nil || len(log) == 0 {
+			return nil, err
+		}
+		return &KnowledgeClosure{Kind: "retired", Reason: log[0].Reason, By: log[0].RetiredBy, At: log[0].RetiredAt}, nil
+	}
+	return nil, nil
 }

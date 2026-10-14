@@ -87,6 +87,12 @@ type historyRow struct {
 	Blocks                     []bodyBlock
 }
 
+// closureRow says how and why an entry left circulation: the label (retired,
+// replaced by), the entry that replaced it, who, when, and the reason.
+type closureRow struct {
+	Label, Href, Title, By, Age, Reason string
+}
+
 type knowledgeCard struct {
 	KnowledgeRow
 	Blocks      []bodyBlock
@@ -140,8 +146,9 @@ type knowledgeItemView struct {
 	EditOpen bool
 	// Move ist das Verschieben-Formular (nil ohne Recht zu ändern); Moves das
 	// Protokoll bisheriger Verschiebungen.
-	Move  *moveView
-	Moves []moveRow
+	Move    *moveView
+	Moves   []moveRow
+	Closure *closureRow
 }
 
 // ----------------------------------------------------------------- Textblöcke
@@ -473,6 +480,7 @@ func (a *app) knowledgeItemPage(w http.ResponseWriter, r *http.Request) {
 		v.Move = a.knowledgeMoveView(r, pa, k)
 	}
 	v.Moves = a.knowledgeMoveRows(pa, k)
+	v.Closure = a.closureRowFor(pa, k)
 	// Frühere Fassungen tragen keine Vertrauensstufe und sind für Gäste tabu.
 	if hist, err := a.store.KnowledgeHistory(k.ID); err == nil && pa.CanSeeKnowledgeHistory(k) {
 		now := overviewNow().UTC()
@@ -497,6 +505,24 @@ func (a *app) knowledgeItemPage(w http.ResponseWriter, r *http.Request) {
 	}
 	v.Result = a.resultFor(r, pa, "item", "")
 	a.renderBrowser(w, r, "knowledgeitem", pageData{Title: k.Title, KnowledgeItemV: v})
+}
+
+func (a *app) closureRowFor(pa *store.ProjectAccess, k store.Knowledge) *closureRow {
+	c := pa.KnowledgeClosure(k)
+	if c == nil {
+		return nil
+	}
+	row := &closureRow{Label: msg("knowledge.closure.retired"), By: c.By, Age: shortAge(overviewNow().UTC(), parseTime(c.At)), Reason: c.Reason}
+	if c.Kind == "superseded" {
+		next, err := a.store.KnowledgeByID(c.SupersededBy)
+		if err != nil {
+			return nil
+		}
+		row.Label = msg("knowledge.closure.superseded")
+		row.Href = "/ui/knowledge/" + strconv.FormatInt(next.ID, 10)
+		row.Title = pa.KnowledgeView(next).Title
+	}
+	return row
 }
 
 // fillEvidence hängt Belege, Wiederholungen und Herkunftsnachweis an eine

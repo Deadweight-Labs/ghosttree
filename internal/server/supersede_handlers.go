@@ -135,3 +135,47 @@ func (a *api) retireKnowledge(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, a.access(r).KnowledgeView(saved))
 }
+
+// supersedeKnowledge macht einen bestehenden Eintrag zum Ablöser älterer
+// Einträge. Verlangt wird das Recht zum Ändern am neuen wie an jedem alten
+// Eintrag; geprüft wird alles, bevor etwas geschrieben wird.
+func (a *api) supersedeKnowledge(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(r)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "bad knowledge id")
+		return
+	}
+	var in struct {
+		Supersedes []int64 `json:"supersedes"`
+		Reason     string  `json:"reason"`
+		Via        string  `json:"via"`
+	}
+	if err := readJSON(r, &in); err != nil {
+		writeStoreError(w, http.StatusBadRequest, err)
+		return
+	}
+	if !a.checkEditable(w, r, id) {
+		return
+	}
+	newer, err := a.st.KnowledgeByID(id)
+	if err != nil {
+		writeStoreError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if !a.checkSupersedable(w, r, newer, in.Supersedes, in.Reason) {
+		return
+	}
+	if err := a.st.SupersedeKnowledge(id, in.Supersedes, in.Reason, supersedeActor(r, in.Via)); err != nil {
+		if writeSupersedeError(w, err) {
+			return
+		}
+		writeStoreError(w, http.StatusBadRequest, err)
+		return
+	}
+	saved, err := a.st.KnowledgeByID(id)
+	if err != nil {
+		writeStoreError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, a.access(r).KnowledgeView(saved))
+}

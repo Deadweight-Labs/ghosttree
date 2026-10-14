@@ -61,6 +61,10 @@
 .kn-article { display: flex; flex-direction: column; gap: 16px; margin: 0 0 var(--space-5); }
 .kn-article h1 { margin: 0; overflow-wrap: anywhere; }
 .kn-dots { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 0; margin: 0; }
+.kn-closure { display: flex; flex-direction: column; gap: 4px; padding: 10px 14px; border-left: 3px solid var(--clay-line); }
+.kn-closure p { margin: 0; }
+.kn-closure-label { font-weight: 600; }
+.kn-closure-reason { overflow-wrap: anywhere; }
 .kn-dots > * + *::before { content: "\00b7"; display: inline-block; margin: 0 8px; color: var(--clay-ink-faint); font-weight: 400; }
 .kn-edit { --clay-rest-h: 5; --clay-surface: var(--clay-c-surface); margin: 0 0 var(--space-6); padding: 14px 20px; border-radius: var(--clay-radius); }
 .kn-edit > summary { cursor: pointer; font-weight: 700; list-style: none; }

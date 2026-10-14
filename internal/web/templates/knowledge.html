@@ -42,6 +42,7 @@
 {{with .Card}}<article class="kn-article"><div class="kn-marks">{{template "knmarks" .KnowledgeRow}}{{if .Project}}<span class="ov-meta">{{.Project}}</span>{{end}}{{if .Seen}}<span class="ov-meta" title="{{t "knowledge.seen_title"}}">{{t "knowledge.seen" .Seen}}</span>{{end}}</div>
 <h1>{{.Title}}</h1>
 <p class="ov-meta kn-dots">{{if .Person}}<span>{{t "knowledge.by" .Person}}</span>{{end}}{{if .ConfirmedBy}}<span>{{t "knowledge.confirmed_by" .ConfirmedBy}}</span>{{end}}<span class="ov-num">{{.Age}}</span>{{if .Source}}<a class="kn-link" href="{{.Source}}">{{t "knowledge.in_session"}}</a>{{end}}</p>
+{{with $.KnowledgeItemV.Closure}}<div class="kn-closure"><p class="ov-meta kn-dots"><span class="kn-closure-label">{{.Label}}{{if .Href}} <a class="kn-link" href="{{.Href}}">{{.Title}}</a>{{end}}</span>{{if .By}}<span>{{.By}}</span>{{end}}<span class="ov-num">{{.Age}}</span></p><p class="kn-closure-reason">{{.Reason}}</p></div>{{end}}
 {{template "knbody" .Blocks}}{{template "knevidence" .}}
 <div class="kn-actions">{{template "kndecide" .}}</div></article>
 {{if .CanEdit}}<details class="kn-edit clay" id="edit"{{if $.KnowledgeItemV.EditOpen}} open{{end}}><summary>{{t "knowledge.edit"}}</summary>

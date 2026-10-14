@@ -6,6 +6,18 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Changed (REQ-466): follow-ups to hook-registered sessions and to superseding
+  knowledge. A session registered by a hook gets a readable `display_name`
+  ("Claude · repository") instead of its session id, and a name an agent already
+  has is no longer overwritten by a registration that offers only the id. A
+  session whose hooks fired within the activity window shows as working, so its
+  card says active instead of idle. `ctx knowledge supersede <id> --old ID,ID
+  --reason R` (HTTP `POST /api/knowledge/{id}/supersede`, MCP `context_supersede`)
+  marks an existing entry as the replacement of older ones. The reason of a
+  retired or superseded entry shows in `ctx knowledge show <id>`,
+  `context_search` with `knowledge_id`, `GET /api/knowledge/{id}` (`closure`) and
+  the entry page in the web. `ctx knowledge retire --help` and the new
+  subcommands print their own help.
 - Added (REQ-465): agents can replace outdated knowledge instead of stacking a
   follow-up next to it. `context_remember` takes `supersedes` (ids of older
   entries) and `supersede_reason`; `ctx knowledge add --supersedes ID,ID
