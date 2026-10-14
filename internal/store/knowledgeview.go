@@ -159,3 +159,24 @@ func (a *ProjectAccess) SessionLink(ref string) (publicID, fragment string, ok b
 	}
 	return pub, strings.TrimPrefix(m[2], "#"), true
 }
+
+// KnowledgeClosure ist der Abschluss eines Eintrags (abgelöst oder
+// zurückgezogen, mit Begründung), soweit der Betrachter ihn sehen darf: wie die
+// Historie nicht für Gäste, und eine Ablösung nur, wenn er den ablösenden
+// Eintrag lesen darf.
+func (a *ProjectAccess) KnowledgeClosure(k Knowledge) *KnowledgeClosure {
+	if !a.CanSeeKnowledgeHistory(k) {
+		return nil
+	}
+	c, err := a.st.KnowledgeClosure(k)
+	if err != nil || c == nil {
+		return nil
+	}
+	if c.SupersededBy != 0 {
+		next, err := a.st.KnowledgeRef(c.SupersededBy)
+		if err != nil || a.CheckKnowledge(next, ActRead) != nil {
+			return nil
+		}
+	}
+	return c
+}

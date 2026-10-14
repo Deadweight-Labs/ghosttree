@@ -45,6 +45,9 @@ type CoordAgent struct {
 	// SessionID ist die Transkript-Session des Harness, die der Agent bei der
 	// Anmeldung meldet. Nur Eingabe: Peer-Antworten tragen sie nie.
 	SessionID string `json:"session_id,omitempty"`
+	// HookActivity is set by a registration that a hook of the session itself
+	// fired: the session did something right now. Input only.
+	HookActivity bool `json:"hook_activity,omitempty"`
 	// Presence ist nur in Peer-Antworten gesetzt, beim Lesen abgeleitet.
 	Presence *Presence `json:"presence,omitempty"`
 }
@@ -95,6 +98,29 @@ func RoomKeyForMachine(host string) string {
 	return "machine:" + strings.TrimSpace(host)
 }
 
+// ReadableAgentName is the name an agent gets when it only has a session id: the
+// tool and the repository, "Claude · ghosttree". It is empty when the tool is
+// not known, so that nobody invents one.
+func ReadableAgentName(provider, project string) string {
+	var tool string
+	switch strings.ToLower(provider) {
+	case "claude":
+		tool = "Claude"
+	case "codex":
+		tool = "Codex"
+	default:
+		return ""
+	}
+	project = strings.Trim(strings.TrimSpace(project), "/")
+	if i := strings.LastIndex(project, "/"); i >= 0 {
+		project = project[i+1:]
+	}
+	if project == "" {
+		return tool
+	}
+	return tool + " \u00b7 " + project
+}
+
 // RegisterCoordAgent meldet eine Session in einem weiteren Raum an. Die
 // Anmeldung ist idempotent über external_id und atomar an PrincipalID gebunden.
 // room_key auf coord_agents bleibt als Kompatibilitätswert der Erstanmeldung
@@ -117,6 +143,15 @@ func (s *Store) RegisterCoordAgent(a CoordAgent) (int64, error) {
 	at := a.RegisteredAt
 	if at == "" {
 		at = now()
+	}
+	// An agent that offers no name, or only its own id, keeps the name it has.
+	displayName := a.DisplayName
+	if strings.TrimSpace(displayName) == "" {
+		displayName = a.ExternalID
+	}
+	hookAt := ""
+	if a.HookActivity {
+		hookAt = at
 	}
 	kind := ""
 	switch {
@@ -151,23 +186,25 @@ func (s *Store) RegisterCoordAgent(a CoordAgent) (int64, error) {
 	}
 	result, err := tx.Exec(`INSERT INTO coord_agents(
 			external_id,provider,room_key,display_name,person,principal_id,cwd,branch,worktree,
-			parent_external_id,capabilities,registered_at,last_seen_at,role,session_id)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,COALESCE(NULLIF(?,''),'member'),?)
+			parent_external_id,capabilities,registered_at,last_seen_at,role,session_id,last_hook_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,COALESCE(NULLIF(?,''),'member'),?,?)
 		ON CONFLICT(external_id) DO UPDATE SET
 			provider=CASE WHEN coord_agents.provider IN ('unknown','unidentified-harness','')
 				AND excluded.provider NOT IN ('unknown','unidentified-harness','')
 				THEN excluded.provider ELSE coord_agents.provider END,
-			display_name=excluded.display_name, person=excluded.person,
+			display_name=CASE WHEN excluded.display_name=excluded.external_id THEN coord_agents.display_name ELSE excluded.display_name END,
+			person=excluded.person,
 			principal_id=CASE WHEN coord_agents.principal_id='' THEN excluded.principal_id ELSE coord_agents.principal_id END,
 			cwd=excluded.cwd, branch=excluded.branch, worktree=excluded.worktree,
 			capabilities=excluded.capabilities, last_seen_at=excluded.last_seen_at,
 			role=COALESCE(NULLIF(?,''),coord_agents.role),
-			session_id=COALESCE(NULLIF(excluded.session_id,''),coord_agents.session_id)
+			session_id=COALESCE(NULLIF(excluded.session_id,''),coord_agents.session_id),
+			last_hook_at=COALESCE(NULLIF(excluded.last_hook_at,''),coord_agents.last_hook_at)
 		WHERE (coord_agents.principal_id<>'' AND coord_agents.principal_id=excluded.principal_id)
 		   OR (coord_agents.principal_id='' AND coord_agents.person<>'' AND coord_agents.person=excluded.person AND excluded.principal_id<>'')
 		   OR (coord_agents.principal_id='' AND coord_agents.person='' AND excluded.principal_id='' AND excluded.person='')`,
-		a.ExternalID, a.Provider, a.RoomKey, a.DisplayName, a.Person, a.PrincipalID, a.Cwd,
-		a.Branch, a.Worktree, a.ParentExternalID, a.Capabilities, at, at, a.Role, a.SessionID, a.Role)
+		a.ExternalID, a.Provider, a.RoomKey, displayName, a.Person, a.PrincipalID, a.Cwd,
+		a.Branch, a.Worktree, a.ParentExternalID, a.Capabilities, at, at, a.Role, a.SessionID, hookAt, a.Role)
 	if err != nil {
 		return 0, err
 	}
@@ -287,7 +324,7 @@ func (s *Store) coordPeers(roomKey, since string, ownOnly map[string]bool) ([]Co
 	query := `SELECT a.id,a.external_id,a.provider,m.room_key,a.display_name,
 			COALESCE(person,''),COALESCE(cwd,''),COALESCE(branch,''),
 			COALESCE(worktree,''),COALESCE(parent_external_id,''),
-			COALESCE(capabilities,''),registered_at,last_seen_at,COALESCE(a.principal_id,''),a.role,a.last_poll_at,a.session_id
+			COALESCE(capabilities,''),registered_at,last_seen_at,COALESCE(a.principal_id,''),a.role,a.last_poll_at,a.session_id,a.last_hook_at
 		FROM coord_agents a JOIN coord_room_memberships m ON m.principal_id=a.external_id
 		WHERE m.room_key=? AND m.left_at=''`
 	args := []any{roomKey}
@@ -303,19 +340,20 @@ func (s *Store) coordPeers(roomKey, since string, ownOnly map[string]bool) ([]Co
 	defer rows.Close()
 	var out []CoordAgent
 	var principals []string
-	var polls, sessions []string
+	var polls, sessions, hooks []string
 	for rows.Next() {
 		var a CoordAgent
-		var principal, poll, session string
+		var principal, poll, session, hook string
 		if err := rows.Scan(&a.ID, &a.ExternalID, &a.Provider, &a.RoomKey,
 			&a.DisplayName, &a.Person, &a.Cwd, &a.Branch, &a.Worktree,
-			&a.ParentExternalID, &a.Capabilities, &a.RegisteredAt, &a.LastSeenAt, &principal, &a.RequestedRole, &poll, &session); err != nil {
+			&a.ParentExternalID, &a.Capabilities, &a.RegisteredAt, &a.LastSeenAt, &principal, &a.RequestedRole, &poll, &session, &hook); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
 		principals = append(principals, principal)
 		polls = append(polls, poll)
 		sessions = append(sessions, session)
+		hooks = append(hooks, hook)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -338,7 +376,7 @@ func (s *Store) coordPeers(roomKey, since string, ownOnly map[string]bool) ([]Co
 	}
 	agents := make([]presenceAgent, len(out))
 	for i := range out {
-		agents[i] = presenceAgent{ExternalID: out[i].ExternalID, PrincipalID: principals[i], SessionID: sessions[i], LastPoll: polls[i]}
+		agents[i] = presenceAgent{ExternalID: out[i].ExternalID, PrincipalID: principals[i], SessionID: sessions[i], LastPoll: polls[i], LastHook: hooks[i]}
 	}
 	derived := presenceBatch(s.db, time.Now().UTC(), roomKey, agents, ownOnly)
 	// Wartekreise über alle Mitglieder des Raums, unabhängig vom since-Filter.

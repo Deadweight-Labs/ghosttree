@@ -141,6 +141,13 @@ type RetireInput struct {
 	Reason string `json:"reason" jsonschema:"required: why the entry is no longer true or needed, for example that the thing it describes was removed"`
 }
 
+// SupersedeInput is the context_supersede tool.
+type SupersedeInput struct {
+	ID         int64   `json:"id" jsonschema:"the existing entry that replaces the older ones"`
+	Supersedes []int64 `json:"supersedes" jsonschema:"ids of the older entries it replaces because the state they describe changed"`
+	Reason     string  `json:"reason" jsonschema:"required: what changed, in one sentence"`
+}
+
 type SessionsInput struct {
 	Query       string `json:"query,omitempty" jsonschema:"full text search across session transcripts"`
 	SessionID   int64  `json:"session_id,omitempty" jsonschema:"read this session instead of listing"`
@@ -173,6 +180,11 @@ func (s *Server) Register(srv *mcp.Server) {
 		Description: "Retire a knowledge entry because what it describes no longer exists or is no longer true, and there is nothing new to record (the resource was removed, the workaround is obsolete). It leaves search and the briefing and stays readable through its history. A reason is required. It needs the same right as editing the entry in the web. If the state changed rather than vanished, write the new state with context_remember and supersedes instead.",
 		Annotations: &mcp.ToolAnnotations{OpenWorldHint: &closed},
 	}, s.handleRetire)
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "context_supersede",
+		Description: "Mark an entry that already exists as the replacement of older entries, when you notice only afterwards that it makes them obsolete (to do it while writing, pass supersedes to context_remember). The older entries leave search and the briefing and stay readable through their history. A reason is required. You need the right to edit the replacement and each older entry, and all of them must belong to the same project and scope.",
+		Annotations: &mcp.ToolAnnotations{OpenWorldHint: &closed},
+	}, s.handleSupersede)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "context_move",
 		Description: "Move a knowledge entry to another project, to another machine, or to global, when it was filed in the wrong place. You need write access to where it is and to where it goes. The move is recorded. To move a request, use request_record_progress with action=correct and project.",
@@ -648,6 +660,9 @@ func renderKnowledgeFull(k store.Knowledge) string {
 	header := fmt.Sprintf("# #%d %s\n[%s]", k.ID, k.Title, knowledgeLabel(k))
 	if k.ObservedAt != "" {
 		header += " observed:" + k.ObservedAt
+	}
+	if k.Closure != nil {
+		header += "\n" + k.Closure.Summary()
 	}
 	return header + "\n\n" + k.Body + "\n"
 }

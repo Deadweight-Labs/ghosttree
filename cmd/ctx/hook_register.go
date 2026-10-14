@@ -69,6 +69,9 @@ func registerHookSession(raw []byte, harness string, force bool) {
 	}
 	git := collector.ResolveGitContext(cwd)
 	room, branch := state.RegisterRoom, state.RegisterBranch
+	// Only the first join offers a name; later refreshes leave whatever name the
+	// session has by then untouched.
+	var name string
 	switch {
 	case room == "":
 		// First join: the room of the first repository a hook saw the session in.
@@ -76,6 +79,7 @@ func registerHookSession(raw []byte, harness string, force bool) {
 			return
 		}
 		room, branch = store.RoomKeyForProject(git.Project), git.Branch
+		name = store.ReadableAgentName(harness, git.Project)
 	case git.Project != "" && store.RoomKeyForProject(git.Project) == room:
 		branch = git.Branch
 	}
@@ -88,7 +92,7 @@ func registerHookSession(raw []byte, harness string, force bool) {
 	}
 	if _, err := client.NewWithTimeout(cfg, registerHookDeadline).RegisterCoordAgent(store.CoordAgent{
 		ExternalID: self, Provider: harness, RoomKey: room,
-		DisplayName: self, Branch: branch, Role: agentRoleFromEnv(), SessionID: session,
+		DisplayName: name, Branch: branch, Role: agentRoleFromEnv(), SessionID: session, HookActivity: true,
 	}); err == nil {
 		state.RegisterRoom, state.RegisterBranch = room, branch
 		saveCoordState(path, state)

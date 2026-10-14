@@ -496,6 +496,7 @@ func (a *api) getKnowledge(w http.ResponseWriter, r *http.Request) {
 	if denyAccess(w, a.access(r).CheckKnowledge(k, store.ActRead)) {
 		return
 	}
+	k.Closure = a.access(r).KnowledgeClosure(k)
 	writeJSON(w, 200, a.access(r).KnowledgeView(k))
 }
 

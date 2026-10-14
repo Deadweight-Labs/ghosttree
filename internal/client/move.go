@@ -82,3 +82,12 @@ func (c *Client) RetireKnowledge(id int64, reason string) (store.Knowledge, erro
 		map[string]any{"reason": reason}, &out)
 	return out, err
 }
+
+// SupersedeKnowledge macht den bestehenden Eintrag id zum Ablöser der älteren
+// Einträge. Die Begründung ist Pflicht, via nennt den Weg (cli, mcp).
+func (c *Client) SupersedeKnowledge(id int64, supersedes []int64, reason, via string) (store.Knowledge, error) {
+	var out store.Knowledge
+	err := c.do("POST", "/api/knowledge/"+strconv.FormatInt(id, 10)+"/supersede", nil,
+		map[string]any{"supersedes": supersedes, "reason": reason, "via": via}, &out)
+	return out, err
+}

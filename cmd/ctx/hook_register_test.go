@@ -64,8 +64,11 @@ func TestSessionStartRegistersTheSessionWithoutACoordCall(t *testing.T) {
 		if p.Provider != c.harness {
 			t.Errorf("provider = %q, want %q", p.Provider, c.harness)
 		}
-		if p.DisplayName != c.id {
-			t.Errorf("display name = %q", p.DisplayName)
+		if want := store.ReadableAgentName(c.harness, registerProject); p.DisplayName != want || p.DisplayName == c.id {
+			t.Errorf("display name = %q, want %q", p.DisplayName, want)
+		}
+		if p.Presence == nil || p.Presence.WorkState.Value != store.WorkWorking {
+			t.Errorf("a session whose hook just fired must show as working: %+v", p.Presence)
 		}
 	}
 }

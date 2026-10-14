@@ -47,6 +47,9 @@ type Knowledge struct {
 	RegressionTest  string `json:"regression_test,omitempty"`
 	CreatedAt       string `json:"created_at"`
 	UpdatedAt       string `json:"updated_at"`
+	// Closure is set only on the detail read of an entry that was superseded or
+	// retired.
+	Closure *KnowledgeClosure `json:"closure,omitempty"`
 }
 
 // KnowledgeProvenance is the compact attribution shared by every read view.

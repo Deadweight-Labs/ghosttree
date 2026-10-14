@@ -47,7 +47,7 @@ const (
 var PresenceGaps = []string{
 	"ended is never produced: no session-end hook or collector event exists, so a silent agent is unknown, not ended",
 	"no self-report channel for waiting_user: it is only derived from an open question or approval addressed to a person",
-	"working is seen only through tool calls that touch a path (collector transcript scan); Bash-only work and model streaming are invisible",
+	"working is seen only through tool calls that touch a path (collector transcript scan) and through the hooks of the session; Bash-only work without hooks and model streaming are invisible",
 	"codex agents have no pause path and no matching hook signal; their work state is mostly unknown",
 	"working needs a session id registered by the agent (ctx claude); agents without one stay unknown, and so does every direct or group room, where no project scopes the activity",
 }
@@ -218,6 +218,9 @@ func ensureCoordAgentPresence(db *sql.DB) error {
 	if err := ensureCoordAgentColumn(db, "session_id", `TEXT NOT NULL DEFAULT ''`); err != nil {
 		return err
 	}
+	if err := ensureCoordAgentColumn(db, "last_hook_at", `TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
 	_, err := db.Exec(`CREATE INDEX IF NOT EXISTS coord_messages_sender ON coord_messages(sender_external_id,id);
 		CREATE INDEX IF NOT EXISTS coord_attention_message ON coord_attention(message_id,state)`)
 	return err
@@ -339,7 +342,7 @@ type presenceDB interface {
 
 // presenceAgent sind die Angaben, aus denen die Belege gesucht werden.
 type presenceAgent struct {
-	ExternalID, PrincipalID, SessionID, LastPoll string
+	ExternalID, PrincipalID, SessionID, LastPoll, LastHook string
 }
 
 func placeholders(n int) string {
@@ -370,7 +373,7 @@ func presenceBatch(db presenceDB, ref time.Time, roomKey string, agents []presen
 	}
 	inputs := make(map[string]*PresenceInput, len(agents))
 	for _, a := range agents {
-		inputs[a.ExternalID] = &PresenceInput{LastPollAt: a.LastPoll}
+		inputs[a.ExternalID] = &PresenceInput{LastPollAt: a.LastPoll, LastActivityAt: a.LastHook}
 	}
 	ids := idArgs(agents, func(a presenceAgent) string { return a.ExternalID })
 

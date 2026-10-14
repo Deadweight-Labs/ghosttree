@@ -226,6 +226,7 @@ var writerMethodClasses = map[string]string{
 	"CriteriaProgress":              "read",
 	"KnowledgeHistory":              "read",
 	"KnowledgeMoves":                "read",
+	"KnowledgeClosure":              "read",
 	"KnowledgeRetirements":          "read",
 	"RetireKnowledge":               "write",
 	"InsertKnowledgeSuperseding":    "write",
