@@ -524,7 +524,7 @@ func finishGarden(st gardenStore, project string, opts gardenOpts, res garden.Re
 	case "limit":
 		fmt.Fprintf(stdout, "stopped: %s\n", res.LimitHit)
 		return 3
-	case "errors":
+	case "errors", "tamper":
 		return 1
 	}
 	return 0

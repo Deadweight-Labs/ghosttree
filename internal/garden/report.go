@@ -82,6 +82,8 @@ func WriteReport(w io.Writer, project string, res Result, at time.Time) {
 		fmt.Fprintf(w, "**Abgebrochen:** %s; der Rest ist unten als \"nicht geprüft\" aufgeführt.\n\n", res.LimitHit)
 	case "errors":
 		fmt.Fprintf(w, "**Abgebrochen:** wiederholte Fehler beim Modellaufruf.\n\n")
+	case "tamper":
+		fmt.Fprintf(w, "**Abgebrochen:** eine Session hat den Checkout verändert, ihr Ergebnis wurde verworfen. Das darf nicht passieren; die Berechtigungsregeln prüfen.\n\n")
 	}
 
 	if res.Agent && len(res.Sessions) > 0 {

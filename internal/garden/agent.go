@@ -484,6 +484,13 @@ func validateRelation(repo *Repo, r agentRelation, known map[int64]Entry) (Relat
 	return rel, ""
 }
 
+// Status is the working tree state of the checkout, one line per change. It is
+// empty for a clean tree; sessions are not supposed to change anything, so any
+// difference before and after one is a sign that a rule did not hold.
+func (r *Repo) Status() (string, error) {
+	return r.git("status", "--porcelain", "--untracked-files=all")
+}
+
 // SessionRunner starts one agent session. The real one runs Claude Code; tests
 // stand in for it.
 type SessionRunner interface {
@@ -556,6 +563,7 @@ func CheckAgent(ctx context.Context, repo *Repo, entries []Entry, opt AgentOptio
 		}
 	}
 	fails := 0
+	statusBefore, statusErr := repo.Status()
 	for i, p := range pkgs {
 		if opt.Gate != nil {
 			if hit := opt.Gate(); hit != nil {
@@ -575,6 +583,21 @@ func CheckAgent(ctx context.Context, repo *Repo, entries []Entry, opt AgentOptio
 		st := SessionStat{Name: p.Name, Entries: len(p.Entries), Turns: out.Turns, Usage: out.Usage, ReportedUSD: out.ReportedUSD, Denials: out.Denials, Tools: out.Tools}
 		st.CostUSD = opt.Pricing.CostUsage(out.Usage)
 		res.Spent += st.CostUSD
+		if after, serr := repo.Status(); statusErr == nil && (serr != nil || after != statusBefore) {
+			// Whatever it was, the session changed the checkout it was only
+			// meant to read. Nothing it said is taken, and the run ends.
+			st.Err = "der Checkout wurde während der Session verändert, Ergebnis verworfen, Lauf beendet"
+			res.Sessions = append(res.Sessions, st)
+			if opt.OnSession != nil {
+				opt.OnSession(st, true)
+			}
+			for _, e := range p.Entries {
+				res.Verdicts = append(res.Verdicts, Verdict{Entry: e, Kind: Failed, Reason: "Session verworfen: " + st.Err})
+			}
+			res.StoppedBy = "tamper"
+			rest(i + 1)
+			return res
+		}
 		var val Validated
 		if err == nil {
 			val, err = ValidateAnswer(repo, out.Text, p, opt.Known)

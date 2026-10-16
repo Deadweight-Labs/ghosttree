@@ -180,8 +180,11 @@ var (
 	}
 	agentDenied = []string{
 		"Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch", "Task", "Agent",
-		// git writes a file with --output; the allowlist matches by prefix.
-		"Bash(git log:*--output*)", "Bash(git show:*--output*)", "Bash(git blame:*--output*)",
+		// git writes a file with --output, and takes any unambiguous
+		// abbreviation of it; the allowlist matches by prefix, so this is
+		// denied for every command. (The "git log:*--output*" form does not
+		// match: measured on Claude Code 2.1.301.)
+		"Bash(*--ou*)",
 		"mcp__ghosttree__context_remember", "mcp__ghosttree__context_retire", "mcp__ghosttree__context_supersede",
 		"mcp__ghosttree__context_move", "mcp__ghosttree__context_describe_file",
 	}

@@ -246,7 +246,7 @@ func TestClaudeArgsAreLockedDown(t *testing.T) {
 			t.Errorf("allowlist lacks %s", w)
 		}
 	}
-	for _, w := range []string{"context_remember", "context_retire", "Edit", "Write", "WebFetch", "context_describe_file"} {
+	for _, w := range []string{"context_remember", "context_retire", "Edit", "Write", "WebFetch", "context_describe_file", "Bash(*--ou*)"} {
 		if strings.Contains(allowed, w) {
 			t.Errorf("allowlist contains %s", w)
 		}
@@ -486,5 +486,32 @@ func TestClaudeRunnerTimeoutKillsTheSessionAndSaysSo(t *testing.T) {
 	_, err := r.RunSession(context.Background(), SessionSpec{MaxTurns: 20})
 	if err == nil || !strings.Contains(err.Error(), "abgebrochen") || time.Since(start) > 10*time.Second {
 		t.Fatalf("%v after %v", err, time.Since(start))
+	}
+}
+
+func TestCheckAgentDiscardsASessionThatChangedTheCheckout(t *testing.T) {
+	repo := newRepo(t)
+	vandal := func(s SessionSpec) (SessionResult, error) {
+		if err := os.WriteFile(filepath.Join(repo.Root, "geschrieben.txt"), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return holdsAll(s)
+	}
+	fr := &fakeRunner{answers: []func(SessionSpec) (SessionResult, error){vandal}}
+	var judged int
+	res := CheckAgent(context.Background(), repo, agentEntries(8), AgentOptions{
+		Runner: fr, Pricing: price, MaxUSD: 5, Sessions: 2, PerSession: 4, Turns: 30,
+		OnJudged: func(Verdict) { judged++ },
+	})
+	if res.StoppedBy != "tamper" || judged != 0 || len(fr.specs) != 1 || len(res.Verdicts) != 8 {
+		t.Fatalf("stopped=%q judged=%d sessions=%d verdicts=%d", res.StoppedBy, judged, len(fr.specs), len(res.Verdicts))
+	}
+	for _, v := range res.Verdicts {
+		if v.Kind == Holds {
+			t.Errorf("a verdict of the tampering session was kept: %+v", v)
+		}
+	}
+	if res.Spent <= 0 {
+		t.Error("the tampering session was still paid for")
 	}
 }
