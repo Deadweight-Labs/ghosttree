@@ -68,6 +68,8 @@ type orgsView struct {
 	Notice         string
 	// Explain is the administrator's block on "Kurz erklärt"; nil for anyone else.
 	Explain *explainAdminView
+	// Garden is the same for the gardener; nil for anyone else.
+	Garden *gardenAdminView
 }
 
 // orgsPage zeigt Mitglieder, Einladungen und Projekte einer Organisation.
@@ -89,6 +91,7 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 	}
 	v.Orgs = orgs
 	v.Explain = a.explainAdminFor(r)
+	v.Garden = a.gardenAdminFor(r)
 	for _, o := range orgs {
 		if o.Slug == ref || (v.Selected.ID == 0 && o.Default && ref == "") {
 			v.Selected = o

@@ -144,22 +144,30 @@ func (f *fakeStore) ExplainSource(kind string, id int64) (Source, error) {
 	}
 	return s, nil
 }
-func (f *fakeStore) ExplainUsageOn(day string) (Usage, error) {
+func (f *fakeStore) LLMUsageOn(job, day string) (Usage, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	u := f.usage[day]
 	u.Day = day
 	return u, nil
 }
-func (f *fakeStore) AddExplainUsage(day string, calls, failures, in, out int) error {
+func (f *fakeStore) LLMUsageMonth(job, month string) (Usage, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var sum Usage
+	for day, u := range f.usage {
+		if day[:7] == month {
+			sum = sum.Add(u)
+		}
+	}
+	return sum, nil
+}
+func (f *fakeStore) AddLLMUsage(job, day string, add Usage) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	u := f.usage[day]
-	u.Calls += calls
-	u.Failures += failures
-	u.InputTokens += in
-	u.OutputTokens += out
-	f.usage[day] = u
+	u.Day = day
+	f.usage[day] = u.Add(add)
 	return nil
 }
 func (f *fakeStore) ExplainCandidates(scan int) ([]Candidate, error) { return f.cands, nil }
@@ -260,7 +268,7 @@ func TestDailyCapStopsGenerationAndStaysQuiet(t *testing.T) {
 		f.put(KindKnowledge, i, "p", "T", "Text "+string(rune('a'+i)))
 	}
 	c := &fakeLLM{reply: goodReply}
-	s := svcWith(f, c, Limits{DailyCalls: 2})
+	s := svcWith(f, c, Limits{Day: Limit{Calls: 2}})
 	for i := int64(1); i <= 3; i++ {
 		s.View(KindKnowledge, i)
 		s.Wait()
@@ -280,7 +288,7 @@ func TestDailyCapStopsGenerationAndStaysQuiet(t *testing.T) {
 	g.put(KindKnowledge, 1, "p", "T", "x")
 	g.usage["2026-10-16"] = Usage{InputTokens: 900, OutputTokens: 100}
 	c2 := &fakeLLM{reply: goodReply}
-	s2 := svcWith(g, c2, Limits{DailyTokens: 1000})
+	s2 := svcWith(g, c2, Limits{Day: Limit{Tokens: 1000}})
 	s2.View(KindKnowledge, 1)
 	s2.Wait()
 	if c2.calls != 0 {
@@ -439,7 +447,7 @@ func TestBackfillWorksTheQueueInOrderAndStopsAtTheLimitAndTheCap(t *testing.T) {
 	if _, ok, _ := f.Explanation(KindKnowledge, 5); ok {
 		t.Error("went past the limit")
 	}
-	capped := svcWith(newFakeStore(), c, Limits{DailyCalls: 1})
+	capped := svcWith(newFakeStore(), c, Limits{Day: Limit{Calls: 1}})
 	capped.st.(*fakeStore).put(KindKnowledge, 1, "p", "T", "a")
 	capped.st.(*fakeStore).put(KindKnowledge, 2, "p", "T", "b")
 	capped.st.(*fakeStore).cands = []Candidate{{KindKnowledge, 1}, {KindKnowledge, 2}}
@@ -482,5 +490,76 @@ func TestBurstOfViewsQueuesOnlyAFewCalls(t *testing.T) {
 	s.Wait()
 	if n > maxQueued {
 		t.Errorf("%d generations queued at once", n)
+	}
+}
+
+// meteredLLM reports usage including cache tokens, like the Anthropic wire format.
+type meteredLLM struct {
+	fakeLLM
+	usage llm.Usage
+}
+
+func (c *meteredLLM) CompleteWithUsage(ctx context.Context, system string, msgs []llm.Message, maxTokens int) (string, llm.Usage, error) {
+	out, err := c.Complete(ctx, system, msgs, maxTokens)
+	return out, c.usage, err
+}
+
+func meteredSvc(f *fakeStore, c llm.Client, lim Limits) *Service {
+	return New(f, c, Config{Language: "de", Model: "claude-haiku-5-5", Limits: lim, Metered: true,
+		Price: llm.Price{InUSD: 1, OutUSD: 5}, PriceKnown: true,
+		Now: func() time.Time { return time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC) }})
+}
+
+func TestCacheTokensAndCostAreStoredAtTheirOwnPrices(t *testing.T) {
+	f := newFakeStore()
+	f.put(KindKnowledge, 1, "p", "T", "Text")
+	c := &meteredLLM{fakeLLM: fakeLLM{reply: goodReply}, usage: llm.Usage{InputTokens: 100, OutputTokens: 50, CacheReadTokens: 10000, CacheWriteTokens: 2000}}
+	s := meteredSvc(f, c, Limits{})
+	if err := s.Generate(context.Background(), KindKnowledge, 1); err != nil {
+		t.Fatal(err)
+	}
+	u, _ := s.Today()
+	if u.CacheReadTokens != 10000 || u.CacheWriteTokens != 2000 || u.InputTokens != 100 {
+		t.Fatalf("usage %+v", u)
+	}
+	// 100*1 + 50*5 + 10000*0.1 + 2000*1.25 = 3850 per million = $0.00385
+	if got := u.CostUSD(); got < 0.003849 || got > 0.003851 {
+		t.Errorf("cost %.6f, want 0.00385", got)
+	}
+	if u.Tokens() != 12150 {
+		t.Errorf("tokens %d: cache tokens must count", u.Tokens())
+	}
+}
+
+func TestMonthlyCapHoldsAcrossDaysAndNamesItself(t *testing.T) {
+	f := newFakeStore()
+	f.usage["2026-10-02"] = Usage{Calls: 5}
+	f.put(KindKnowledge, 1, "p", "T", "Text")
+	c := &fakeLLM{reply: goodReply}
+	s := svcWith(f, c, Limits{Month: Limit{Calls: 5}})
+	err := s.Generate(context.Background(), KindKnowledge, 1)
+	if !errors.Is(err, ErrLimit) || !strings.Contains(err.Error(), "monthly calls") {
+		t.Fatalf("got %v", err)
+	}
+	if c.calls != 0 {
+		t.Error("the model was called over the monthly cap")
+	}
+	// Last month does not count.
+	g := newFakeStore()
+	g.usage["2026-09-30"] = Usage{Calls: 500}
+	g.put(KindKnowledge, 1, "p", "T", "Text")
+	if err := svcWith(g, &fakeLLM{reply: goodReply}, Limits{Month: Limit{Calls: 5}}).Generate(context.Background(), KindKnowledge, 1); err != nil {
+		t.Fatalf("september usage blocked october: %v", err)
+	}
+}
+
+func TestDollarCapStopsOnceTheCostIsUsedUp(t *testing.T) {
+	f := newFakeStore()
+	f.usage["2026-10-16"] = Usage{CostMicroUSD: 2_000_000}
+	f.put(KindKnowledge, 1, "p", "T", "Text")
+	c := &fakeLLM{reply: goodReply}
+	err := svcWith(f, c, Limits{Day: Limit{USD: 2}}).Generate(context.Background(), KindKnowledge, 1)
+	if !errors.Is(err, ErrLimit) || c.calls != 0 {
+		t.Fatalf("err %v, calls %d", err, c.calls)
 	}
 }

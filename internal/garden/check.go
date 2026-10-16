@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/llm"
+	"github.com/Deadweight-Labs/ghosttree/internal/llmusage"
 )
 
 // Verdict kinds. Only Stale and Correction ever lead to a proposal.
@@ -18,7 +19,7 @@ const (
 	Unclear    = "unclear"
 	Skipped    = "skipped" // nothing in the entry can be looked up; no call was made
 	Failed     = "failed"
-	NotRun     = "not-run" // budget ran out before this entry
+	NotRun     = "not-run" // budget or a limit ran out before this entry
 )
 
 const (
@@ -41,10 +42,19 @@ const (
 
 func EstimateTokens(chars int) int { return chars / charsPerToken }
 
-type Pricing struct{ InUSDPerMTok, OutUSDPerMTok float64 }
+// Pricing is USD per million tokens. The cache prices are optional: when 0
+// they follow the input price (reads a tenth, writes 1.25 times).
+type Pricing struct{ InUSDPerMTok, OutUSDPerMTok, CacheReadUSDPerMTok, CacheWriteUSDPerMTok float64 }
 
+// Cost is the cost of plain input and output tokens, as the dry run estimates it.
 func (p Pricing) Cost(in, out int) float64 {
-	return float64(in)/1e6*p.InUSDPerMTok + float64(out)/1e6*p.OutUSDPerMTok
+	return p.CostUsage(llm.Usage{InputTokens: in, OutputTokens: out})
+}
+
+// CostUsage is the cost of one call as the provider reported it: cache reads and
+// writes at their own prices, not at the input price and not for free.
+func (p Pricing) CostUsage(u llm.Usage) float64 {
+	return llm.Price{InUSD: p.InUSDPerMTok, OutUSD: p.OutUSDPerMTok, CacheReadUSD: p.CacheReadUSDPerMTok, CacheWriteUSD: p.CacheWriteUSDPerMTok}.Cost(u)
 }
 
 type Verdict struct {
@@ -57,7 +67,10 @@ type Verdict struct {
 	Files      []string
 	Symbols    []string
 	In, Out    int // tokens: provider-reported, or estimated for a dry run
-	CostUSD    float64
+	// CacheRead and CacheWrite are the provider's cache token counts; they are
+	// not part of In.
+	CacheRead, CacheWrite int
+	CostUSD               float64
 }
 
 type Options struct {
@@ -68,6 +81,15 @@ type Options struct {
 	// Limit caps how many entries are sent to the model (0 = all). Entries
 	// that cannot be looked up cost nothing and do not count.
 	Limit int
+	// Gate is asked before every call and names the cap (day or month, in
+	// dollars, calls or tokens) that is used up, or returns nil. The run stops
+	// cleanly at the first one it names.
+	Gate func() *llmusage.Reached
+	// OnCall sees every call that was made, with what the provider reported.
+	OnCall func(v Verdict, u llm.Usage, failed bool)
+	// OnJudged sees every entry that got a verdict from the model, so the
+	// caller can remember that it was looked at.
+	OnJudged func(v Verdict)
 }
 
 // Result is a whole run. Spent is what the provider reported (or, in a dry
@@ -76,9 +98,13 @@ type Result struct {
 	Verdicts      []Verdict
 	Spent         float64
 	UpperBoundUSD float64
-	StoppedBy     string // "" | "budget" | "errors"
-	DryRun        bool
-	MaxUSD        float64
+	StoppedBy     string // "" | "budget" | "limit" | "errors"
+	// LimitHit says which cap it was when StoppedBy is "limit".
+	LimitHit string
+	DryRun   bool
+	MaxUSD   float64
+	// Rotation says what was left out before the run because it was not due.
+	Rotation Rotation
 }
 
 const systemPrompt = `Du prüfst einen Wissens-Eintrag (Pitfall oder Decision) eines Softwareprojekts gegen den aktuellen Code. Du entscheidest nichts, du machst einen Vorschlag, den ein Mensch prüft.
@@ -120,6 +146,9 @@ func Check(ctx context.Context, repo *Repo, entries []Entry, opt Options) Result
 		if !cc.HasRefs() {
 			v.Kind, v.Reason = Skipped, "der Eintrag nennt weder Datei noch Symbol, das sich im Code nachschlagen ließe"
 			res.Verdicts = append(res.Verdicts, v)
+			if opt.OnJudged != nil && !opt.DryRun {
+				opt.OnJudged(v)
+			}
 			continue
 		}
 		in := EstimateTokens(len(systemPrompt) + len(userPrompt(e, cc)))
@@ -138,6 +167,15 @@ func Check(ctx context.Context, repo *Repo, entries []Entry, opt Options) Result
 			res.Verdicts = append(res.Verdicts, v)
 			continue
 		}
+		if opt.Gate != nil {
+			if hit := opt.Gate(); hit != nil {
+				res.StoppedBy, res.LimitHit = "limit", hit.Error()
+				for _, rest := range entries[i:] {
+					res.Verdicts = append(res.Verdicts, Verdict{Entry: rest, Kind: NotRun, Reason: "Grenze erreicht, nicht geprüft"})
+				}
+				return res
+			}
+		}
 		if res.Spent+worst > opt.MaxUSD {
 			res.StoppedBy = "budget"
 			for _, rest := range entries[i:] {
@@ -146,14 +184,18 @@ func Check(ctx context.Context, repo *Repo, entries []Entry, opt Options) Result
 			return res
 		}
 		text, usage, err := opt.Model.CompleteWithUsage(ctx, systemPrompt, []llm.Message{{Role: "user", Content: userPrompt(e, cc)}}, MaxOutputTokens)
-		v.In, v.Out = usage.InputTokens, usage.OutputTokens
-		v.CostUSD = opt.Pricing.Cost(usage.InputTokens, usage.OutputTokens)
-		if err != nil && usage.InputTokens == 0 && usage.OutputTokens == 0 {
+		v.In, v.Out, v.CacheRead, v.CacheWrite = usage.InputTokens, usage.OutputTokens, usage.CacheReadTokens, usage.CacheWriteTokens
+		v.CostUSD = opt.Pricing.CostUsage(usage)
+		if err != nil && usage.InputTokens+usage.OutputTokens+usage.CacheReadTokens+usage.CacheWriteTokens == 0 {
 			// A timeout or a 5xx may still have been billed and reports no
 			// usage. Count the worst case rather than nothing.
 			v.In, v.Out, v.CostUSD = in, MaxOutputTokens, worst
+			usage = llm.Usage{InputTokens: in, OutputTokens: MaxOutputTokens}
 		}
 		res.Spent += v.CostUSD
+		if opt.OnCall != nil {
+			opt.OnCall(v, usage, err != nil)
+		}
 		if err != nil {
 			failures++
 			v.Kind, v.Reason = Failed, err.Error()
@@ -170,6 +212,9 @@ func Check(ctx context.Context, repo *Repo, entries []Entry, opt Options) Result
 		failures = 0
 		applyAnswer(&v, text, cc)
 		res.Verdicts = append(res.Verdicts, v)
+		if opt.OnJudged != nil && v.Kind != Failed {
+			opt.OnJudged(v)
+		}
 	}
 	return res
 }

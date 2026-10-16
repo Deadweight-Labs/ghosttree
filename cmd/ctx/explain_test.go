@@ -91,7 +91,7 @@ func TestExplainBackfillWritesTheMissingOnesWithinTheLimit(t *testing.T) {
 	if !ok || e.Source != explain.SourceGenerated || e.Language != "de" || e.Model != "m1" || e.Text != cliReply {
 		t.Errorf("stored: %+v", e)
 	}
-	if u, _ := st.ExplainUsageOn(time.Now().UTC().Format("2006-01-02")); u.Calls != 2 || u.Tokens() == 0 {
+	if u, _ := st.LLMUsageOn("explain", time.Now().UTC().Format("2006-01-02")); u.Calls != 2 || u.Tokens() == 0 {
 		t.Errorf("usage: %+v", u)
 	}
 }
@@ -102,12 +102,12 @@ func TestExplainBackfillStopsAtTheDailyCapAndStatusShowsIt(t *testing.T) {
 	if code := cmdExplain([]string{"backfill", "--db", db, "--limit", "10", "--daily-calls", "1"}, &out); code != 0 {
 		t.Fatalf("exit %d: %s", code, out.String())
 	}
-	if !strings.Contains(out.String(), "stopped at the daily cap") || calls.Load() != 1 {
+	if !strings.Contains(out.String(), "stopped: daily calls limit reached") || calls.Load() != 1 {
 		t.Errorf("%s (%d calls)", out.String(), calls.Load())
 	}
 	out.Reset()
 	cmdExplain([]string{"status", "--db", db, "--daily-calls", "1"}, &out)
-	for _, want := range []string{"model: m1", "1 calls (cap 1)", "stored: 0 by agents, 1 generated", "missing or outdated: 1"} {
+	for _, want := range []string{"model: m1", "(cap 1 calls", "this month: 1 calls", "stored: 0 by agents, 1 generated", "missing or outdated: 1"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("status lacks %q: %s", want, out.String())
 		}
@@ -139,21 +139,24 @@ func TestExplainUsageAndArguments(t *testing.T) {
 
 func TestServeReadsTheExplainSettingsFromFlagsAndEnvironment(t *testing.T) {
 	t.Setenv(envExplain, "")
-	t.Setenv(envExplainDailyCalls, "")
-	t.Setenv(envExplainDailyTokens, "")
+	t.Setenv("GHOSTTREE_LLM_CONFIG", filepath.Join(t.TempDir(), "absent.json"))
+	t.Setenv("GHOSTTREE_EXPLAIN_DAILY_CALLS", "")
+	t.Setenv("GHOSTTREE_EXPLAIN_DAILY_TOKENS", "")
+	os.Unsetenv("GHOSTTREE_EXPLAIN_DAILY_CALLS")
+	os.Unsetenv("GHOSTTREE_EXPLAIN_DAILY_TOKENS")
 	cfg, err := parseServeConfig([]string{"--language", "de"}, &bytes.Buffer{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Explain.Mode != "auto" || cfg.Explain.DailyCalls != defaultExplainDailyCalls || cfg.Explain.DailyTokens != defaultExplainDailyTokens || cfg.Explain.Language != "de" {
+	if cfg.Explain.Mode != "auto" || cfg.Explain.Limits.Day.Calls != 200 || cfg.Explain.Limits.Day.Tokens != 400000 || cfg.Explain.Limits.Month.Any() || cfg.Explain.Language != "de" {
 		t.Errorf("defaults: %+v", cfg.Explain)
 	}
-	t.Setenv(envExplainDailyCalls, "7")
+	t.Setenv("GHOSTTREE_EXPLAIN_DAILY_CALLS", "7")
 	cfg, err = parseServeConfig([]string{"--explain", "off", "--explain-daily-tokens", "99", "--explain-model", "small"}, &bytes.Buffer{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Explain.Mode != "off" || cfg.Explain.DailyCalls != 7 || cfg.Explain.DailyTokens != 99 || cfg.Explain.Model != "small" {
+	if cfg.Explain.Mode != "off" || cfg.Explain.Limits.Day.Calls != 7 || cfg.Explain.Limits.Day.Tokens != 99 || cfg.Explain.Model != "small" {
 		t.Errorf("overrides: %+v", cfg.Explain)
 	}
 	if _, err := parseServeConfig([]string{"--explain", "maybe"}, &bytes.Buffer{}); err == nil {

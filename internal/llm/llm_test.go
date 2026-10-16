@@ -182,3 +182,41 @@ func TestLoadConfigFailsWhenCredentialIsUnavailableAndNoFileNamed(t *testing.T) 
 		t.Fatal("LoadConfig accepted an unreachable credential with no named fallback")
 	}
 }
+
+func TestAnthropicUsageKeepsCacheTokensAndSendsMaxTokens(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&got)
+		w.Write([]byte(`{"content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":50,"output_tokens":7,"cache_read_input_tokens":3000,"cache_creation_input_tokens":400}}`))
+	}))
+	defer srv.Close()
+	c, _ := New(Config{Format: "anthropic", BaseURL: srv.URL, APIKey: "k", Model: "m"})
+	_, u, err := c.(UsageClient).CompleteWithUsage(context.Background(), "s", []Message{{Role: "user", Content: "x"}}, 4096)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u != (Usage{InputTokens: 50, OutputTokens: 7, CacheReadTokens: 3000, CacheWriteTokens: 400}) {
+		t.Fatalf("usage %+v", u)
+	}
+	if got["max_tokens"] != float64(4096) {
+		t.Errorf("max_tokens = %v, want 4096", got["max_tokens"])
+	}
+}
+
+func TestPriceCostsEveryTokenClassAtItsOwnRate(t *testing.T) {
+	p, ok := DefaultPrice("claude-sonnet-5-5")
+	if !ok {
+		t.Fatal("no price for sonnet 5.5")
+	}
+	// $2 in, $10 out, cache read $0.20, cache write $2.50 per million.
+	got := p.Cost(Usage{InputTokens: 1_000_000, OutputTokens: 1_000_000, CacheReadTokens: 1_000_000, CacheWriteTokens: 1_000_000})
+	if got < 14.699 || got > 14.701 {
+		t.Fatalf("cost %.4f, want 14.70", got)
+	}
+	if _, ok := DefaultPrice("some-unknown-model"); ok {
+		t.Error("an unknown model must have no default price")
+	}
+	if p, ok := (Config{Model: "x", InputUSDPerMTok: 1, OutputUSDPerMTok: 2}).Price(); !ok || p.InUSD != 1 {
+		t.Errorf("configured price ignored: %+v", p)
+	}
+}

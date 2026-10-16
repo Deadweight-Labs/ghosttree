@@ -9,6 +9,7 @@ import (
 
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
+	"github.com/Deadweight-Labs/ghosttree/internal/garden"
 )
 
 const reviewUsage = `usage: ctx review [--project <remote>] [--limit <n>]
@@ -147,7 +148,26 @@ func listPending(c *client.Client, project string, limit int, stdout io.Writer) 
 		fmt.Fprintln(stdout, "nothing awaiting review")
 		return 0
 	}
+	// The gardener's proposals come together under one line, so that a
+	// morning's review reads as one batch from one source.
+	var gardener, others []client.PendingEntry
 	for _, p := range pending {
+		if p.Knowledge.Harness == garden.Harness {
+			gardener = append(gardener, p)
+		} else {
+			others = append(others, p)
+		}
+	}
+	if len(gardener) > 0 {
+		fmt.Fprintf(stdout, "Der Gärtner schlägt vor: %d Vorschläge\n\n", len(gardener))
+		for _, p := range gardener {
+			writePendingEntry(stdout, p)
+		}
+		if len(others) > 0 {
+			fmt.Fprintln(stdout)
+		}
+	}
+	for _, p := range others {
 		writePendingEntry(stdout, p)
 	}
 	fmt.Fprintf(stdout, "\n%d awaiting review - approve with 'ctx review approve <id>'\n", len(pending))

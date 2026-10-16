@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/llmusage"
 	"github.com/Deadweight-Labs/ghosttree/internal/privatefile"
 	"github.com/Deadweight-Labs/ghosttree/internal/proxytrust"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
@@ -38,6 +39,8 @@ type serveConfig struct {
 	DistDir        string
 	TrustedProxies proxytrust.Set
 	Explain        ExplainConfig
+	// GardenLimits are shown to administrators; the gardener itself runs as a command.
+	GardenLimits llmusage.Limits
 }
 
 const (
@@ -126,8 +129,7 @@ func parseServeConfig(args []string, output io.Writer) (serveConfig, error) {
 	}
 	fs.StringVar(&cfg.Explain.Mode, "explain", explainMode, "\"In short\" notes: auto (generate missing ones when a model is configured) or off (env "+envExplain+")")
 	fs.StringVar(&cfg.Explain.Model, "explain-model", os.Getenv(envExplainModel), "model for the notes, overriding the provider configuration (env "+envExplainModel+")")
-	fs.IntVar(&cfg.Explain.DailyCalls, "explain-daily-calls", envInt(envExplainDailyCalls, defaultExplainDailyCalls), "cap of model calls for the notes per day, 0 = none (env "+envExplainDailyCalls+")")
-	fs.IntVar(&cfg.Explain.DailyTokens, "explain-daily-tokens", envInt(envExplainDailyTokens, defaultExplainDailyTokens), "cap of tokens for the notes per day, 0 = none (env "+envExplainDailyTokens+")")
+	explainLimits := addLimitFlags(fs, llmusage.JobExplain, "explain-")
 	trusted := fs.String("trusted-proxies", os.Getenv(envTrustedProxies), "comma-separated CIDRs/IPs of reverse proxies whose X-Forwarded-Proto/Host are believed; loopback is always trusted, nothing else by default (env "+envTrustedProxies+")")
 	// Das Secret gibt es bewusst nur über die Umgebung: ein Flag stünde in der Prozessliste.
 	cfg.OIDC.ClientSecret = os.Getenv(envOIDCClientSecret)
@@ -147,6 +149,14 @@ func parseServeConfig(args []string, output io.Writer) (serveConfig, error) {
 	}
 	cfg.Language = lang
 	cfg.Explain.Language = lang
+	if cfg.Explain.Limits, err = explainLimits(); err != nil {
+		return serveConfig{}, err
+	}
+	gardenLimits, err := jobLimits(llmusage.JobGarden)
+	if err != nil {
+		return serveConfig{}, err
+	}
+	cfg.GardenLimits = gardenLimits
 	if cfg.Explain.Mode != "auto" && cfg.Explain.Mode != "off" {
 		return serveConfig{}, fmt.Errorf("--explain must be auto or off, got %q", cfg.Explain.Mode)
 	}
@@ -353,6 +363,7 @@ func buildServerHandler(st *store.Store, cfg serveConfig, stderr io.Writer) http
 	explainCfg := cfg.Explain
 	explainCfg.Language = cfg.Language
 	webOptions = append(webOptions, web.WithExplainer(newExplainer(st, explainCfg, logger)))
+	webOptions = append(webOptions, web.WithGardenLimits(cfg.GardenLimits))
 	root.Handle("/", web.New(st, webOptions...))
 	return root
 }

@@ -9,10 +9,12 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/explain"
 	"github.com/Deadweight-Labs/ghosttree/internal/humantask"
 	"github.com/Deadweight-Labs/ghosttree/internal/llm"
+	"github.com/Deadweight-Labs/ghosttree/internal/llmusage"
 	"github.com/Deadweight-Labs/ghosttree/internal/pain"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -267,7 +269,7 @@ func TestQuestionExplanationOnTheRoomCardAndTheAttentionCard(t *testing.T) {
 
 func TestAdminSeesWhatExplanationsCostAndOthersDoNot(t *testing.T) {
 	model := &fakeModel{reply: deNote}
-	h := withExplainer(t, model, "de", explain.Limits{DailyCalls: 1, DailyTokens: 100000})
+	h := withExplainer(t, model, "de", explain.Limits{Day: explain.Limit{Calls: 1, Tokens: 100000}})
 	e := ovEnv(t)
 	for _, title := range []string{"Eins", "Zwei"} {
 		knInsert(t, e.St, store.Knowledge{Type: "pitfall", Title: title, Body: "text " + title, Confidence: "staged"})
@@ -280,13 +282,13 @@ func TestAdminSeesWhatExplanationsCostAndOthersDoNot(t *testing.T) {
 		t.Fatalf("the daily cap of one call was not kept: %d", model.calls)
 	}
 	_, admin := fetchPage(t, e.Owner, e.Base+"/ui/orgs")
-	for _, want := range []string{"Kurz erklärt", "1 von 1 Aufrufen heute", "Token heute", "test-model, Deutsch", "Tagesgrenze erreicht", "1 erzeugt"} {
+	for _, want := range []string{"Kurz erklärt", "Kurz erklärt: heute 1 von 1 Aufrufen", "von 100000 Token", "in diesem Monat 1 Aufruf", "test-model, Deutsch", "Tagesgrenze erreicht (1 von 1 Aufrufen)", "1 erzeugt"} {
 		if !strings.Contains(admin, want) {
 			t.Errorf("admin block lacks %q", want)
 		}
 	}
 	_, member := fetchPage(t, e.Member, e.Base+"/ui/orgs")
-	if strings.Contains(member, "Aufrufen heute") || strings.Contains(member, `id="explain"`) {
+	if strings.Contains(member, "Aufrufen") || strings.Contains(member, `id="explain"`) {
 		t.Error("a member sees the usage")
 	}
 }
@@ -312,5 +314,41 @@ func TestExplainScriptAndStylesAreServedAndPollOnlyWhileWaiting(t *testing.T) {
 		if !strings.Contains(js, want) {
 			t.Errorf("script lacks %q", want)
 		}
+	}
+}
+
+func TestAdminSeesTheGardenerInOneSentenceWithItsLimitsAndMembersDoNot(t *testing.T) {
+	withExplainer(t, nil, "de", explain.Limits{})
+	testWebOptions = append(testWebOptions, WithGardenLimits(llmusage.Limits{Month: llmusage.Limit{USD: 20, Tokens: 5_000_000}}))
+	e := ovEnv(t)
+	today := time.Now().UTC().Format("2006-01-02")
+	if err := e.St.AddLLMUsage(llmusage.JobGarden, today, llmusage.Usage{Calls: 12, InputTokens: 1000, OutputTokens: 200, CacheReadTokens: 9000, CostMicroUSD: 1_500_000}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.St.SaveGardenCheck("github.com/x/p", store.GardenCheck{KnowledgeID: 1, CheckedAt: "2026-10-01T00:00:00Z", Commit: "a", EntryHash: "h", Verdict: "holds"}); err != nil {
+		t.Fatal(err)
+	}
+	_, admin := fetchPage(t, e.Owner, e.Base+"/ui/orgs")
+	for _, want := range []string{`id="garden"`, "Gärtner: heute 1,50 $, 12 Aufrufe, 10200 Token, in diesem Monat 1,50 $ von 20,00 $, 12 Aufrufe, 10200 von 5000000 Token.", "1 Einträge bisher geprüft, die älteste Prüfung ist vom 2026-10-01"} {
+		if !strings.Contains(admin, want) {
+			t.Errorf("admin page lacks %q", want)
+		}
+	}
+	_, member := fetchPage(t, e.Member, e.Base+"/ui/orgs")
+	if strings.Contains(member, `id="garden"`) || strings.Contains(member, "Gärtner: heute") {
+		t.Error("a member sees the gardener's usage")
+	}
+}
+
+func TestUsageSentenceNamesTheLimitThatIsUsedUp(t *testing.T) {
+	day := llmusage.Usage{Calls: 5}
+	month := llmusage.Usage{Calls: 5, CostMicroUSD: 3_000_000}
+	_, limit := usageSentence(langEN, llmusage.JobGarden, day, month, llmusage.Limits{Month: llmusage.Limit{USD: 3}})
+	if limit != "Monthly limit reached ($3.00 of $3.00). New calls wait." {
+		t.Errorf("limit line %q", limit)
+	}
+	sentence, limit := usageSentence(langEN, llmusage.JobExplain, llmusage.Usage{}, llmusage.Usage{}, llmusage.Limits{})
+	if sentence != "In short: nothing yet today, nothing yet this month." || limit != "" {
+		t.Errorf("%q %q", sentence, limit)
 	}
 }
