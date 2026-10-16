@@ -74,6 +74,40 @@ func findClaude(argv0 string) (string, error) {
 	return "", fmt.Errorf("%s not found in PATH (set %s to its path)", name, claudeBinEnv)
 }
 
+// ctxBinaryForChannel liefert den Pfad für den Channel-Server in der
+// MCP-Konfiguration. Unter macOS ist os.Executable() der Pfad, mit dem der Kernel
+// gestartet hat, also der ghclaude-Link; ohne Auflösung würde der Channel-Server
+// als ghclaude starten und wieder claude aufrufen.
+func ctxBinaryForChannel() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	if r, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = r
+	}
+	return exe, nil
+}
+
+// asGhclaude sagt, ob ein Aufruf claude starten soll. Der Channel-Server wird
+// mit "channel ..." gestartet und ist immer ctx, auch wenn der Pfad (Kopie oder
+// Hardlink auf ctx) ghclaude heißt; sonst entstünde eine Rekursion.
+func asGhclaude(argv []string) bool {
+	if len(argv) == 0 || !invokedAsGhclaude(argv[0]) {
+		return false
+	}
+	return len(argv) < 2 || argv[1] != "channel"
+}
+
+// ownLink: der Link gehört zu ctx, wenn er auf den Namen von ctx daneben
+// zeigt oder auf dieselbe Datei führt. Jeder andere Link ist fremd.
+func ownLink(link, target, ctxPath string) bool {
+	if t, err := os.Readlink(link); err == nil && t == target {
+		return true
+	}
+	return sameFile(link, ctxPath)
+}
+
 // runGhclaude startet claude mit dem Channel und reicht alle Argumente
 // unverändert durch. Es ersetzt den Prozess (exec): Exit-Code, Signale und
 // stdin/stdout für stream-json gehören damit claude selbst. Die MCP-Konfiguration
@@ -94,7 +128,7 @@ func runGhclaude(argv0 string, args []string, stdout io.Writer) int {
 		fmt.Fprintf(os.Stderr, "ghclaude: %v\n", err)
 		return 1
 	}
-	exe, err := os.Executable()
+	exe, err := ctxBinaryForChannel()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ghclaude: locate ctx binary: %v\n", err)
 		return 1
@@ -141,7 +175,8 @@ func ghclaudeLink(home string) (link, target, ctxPath string, err error) {
 }
 
 // ensureGhclaude legt den Symlink an; ein vorhandener, richtiger bleibt, ein
-// falscher Symlink wird ersetzt, eine fremde Datei nie angefasst.
+// kaputter Link auf ctx wird erneuert, ein fremder Link oder eine fremde Datei
+// nie angefasst.
 func ensureGhclaude(home string) (action, link string, err error) {
 	link, target, ctxPath, err := ghclaudeLink(home)
 	if err != nil {
@@ -154,6 +189,9 @@ func ensureGhclaude(home string) (action, link string, err error) {
 	case lerr == nil:
 		if sameFile(link, ctxPath) {
 			return "unchanged", link, nil
+		}
+		if !ownLink(link, target, ctxPath) {
+			return "", link, fmt.Errorf("%s is a link to something else; left alone", link)
 		}
 		if err := os.Remove(link); err != nil {
 			return "", link, err
@@ -173,7 +211,7 @@ func ensureGhclaude(home string) (action, link string, err error) {
 // removeGhclaude löscht den Symlink, aber nur einen Link; eine fremde Datei
 // gleichen Namens bleibt.
 func removeGhclaude(home string) (removed bool, link string, err error) {
-	link, _, _, err = ghclaudeLink(home)
+	link, target, ctxPath, err := ghclaudeLink(home)
 	if err != nil {
 		return false, "", err
 	}
@@ -187,6 +225,9 @@ func removeGhclaude(home string) (removed bool, link string, err error) {
 	if st.Mode()&os.ModeSymlink == 0 {
 		return false, link, fmt.Errorf("%s is not a link; left alone", link)
 	}
+	if !ownLink(link, target, ctxPath) {
+		return false, link, fmt.Errorf("%s is a link to something else; left alone", link)
+	}
 	return true, link, os.Remove(link)
 }
 
@@ -194,7 +235,7 @@ func removeGhclaude(home string) (removed bool, link string, err error) {
 // Ohne Symlink ist das kein Fehler: ghclaude ist freiwillig.
 func ghclaudeCheck(home string) installer.Check {
 	c := installer.Check{Name: "ghclaude"}
-	link, _, ctxPath, err := ghclaudeLink(home)
+	link, target, ctxPath, err := ghclaudeLink(home)
 	if err != nil {
 		c.Unverified, c.Detail = true, "not checked: "+err.Error()
 		return c
@@ -210,7 +251,9 @@ func ghclaudeCheck(home string) installer.Check {
 		c.Detail = link + " is not a link to ctx"
 	case !sameFile(link, ctxPath):
 		c.Detail = link + " does not lead to " + ctxPath
-		c.Fix = "run '" + shellWord(ctxPath) + " install ghclaude'"
+		if ownLink(link, target, ctxPath) {
+			c.Fix = "run '" + shellWord(ctxPath) + " install ghclaude'"
+		}
 	default:
 		c.OK, c.Detail = true, link
 	}
@@ -281,8 +324,8 @@ func cmdInstallGhclaude(stdout io.Writer, home string) int {
 
 const uninstallUsage = `usage: ctx uninstall ghclaude
 
-  ghclaude  remove the ghclaude link next to ctx (only a link; a regular file
-            of that name is left alone)
+  ghclaude  remove the ghclaude link next to ctx (only our link; a regular file
+            or a link elsewhere is left alone)
 `
 
 func cmdUninstall(args []string, stdout io.Writer) int {

@@ -248,7 +248,7 @@ func TestInstallGhclaudeLinksWithoutAQuestionAndNeverTouchesAForeignFile(t *test
 	if code := run([]string{"install", "ghclaude"}, &out); code != 0 || !sameFile(link, ctx) {
 		t.Fatalf("exit %d, link ok %v:\n%s", code, sameFile(link, ctx), out.String())
 	}
-	// A stale link is replaced.
+	// A link of the user's own to something else is not ours.
 	if err := os.Remove(link); err != nil {
 		t.Fatal(err)
 	}
@@ -256,8 +256,22 @@ func TestInstallGhclaudeLinksWithoutAQuestionAndNeverTouchesAForeignFile(t *test
 		t.Fatal(err)
 	}
 	out.Reset()
-	if code := run([]string{"install", "ghclaude"}, &out); code != 0 || !sameFile(link, ctx) || !strings.Contains(out.String(), "updated") {
-		t.Fatalf("stale link not replaced (exit %d):\n%s", code, out.String())
+	if code := run([]string{"install", "ghclaude"}, &out); code == 0 {
+		t.Fatalf("replaced a foreign link:\n%s", out.String())
+	}
+	if got, _ := os.Readlink(link); got != "elsewhere" {
+		t.Errorf("foreign link changed to %q", got)
+	}
+	// A link that names ctx by an absolute path is ours and gets renewed.
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(ctx, link); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := run([]string{"install", "ghclaude"}, &out); code != 0 || !strings.Contains(out.String(), "unchanged") {
+		t.Fatalf("own link: exit %d:\n%s", code, out.String())
 	}
 	// A regular file of that name is not ours.
 	if err := os.Remove(link); err != nil {
@@ -303,6 +317,18 @@ func TestUninstallGhclaudeRemovesOnlyTheLink(t *testing.T) {
 	if b, _ := os.ReadFile(link); string(b) != "mine" {
 		t.Errorf("foreign file changed: %q", b)
 	}
+	// A link elsewhere is the user's own.
+	os.Remove(link)
+	if err := os.Symlink("/bin/true", link); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := run([]string{"uninstall", "ghclaude"}, &out); code == 0 {
+		t.Errorf("removed a foreign link:\n%s", out.String())
+	}
+	if got, _ := os.Readlink(link); got != "/bin/true" {
+		t.Errorf("foreign link changed to %q", got)
+	}
 }
 
 func TestDoctorChecksTheGhclaudeLink(t *testing.T) {
@@ -323,14 +349,14 @@ func TestDoctorChecksTheGhclaudeLink(t *testing.T) {
 		t.Fatal(err)
 	}
 	c = ghclaudeCheck(home)
-	if c.OK || c.Unverified || !strings.Contains(c.Fix, "install ghclaude") {
-		t.Errorf("broken link must fail with a fix: %+v", c)
+	if c.OK || c.Unverified || c.Fix != "" {
+		t.Errorf("foreign link must fail without a fix: %+v", c)
 	}
-	// doctor --fix renews a broken link.
+	// doctor --fix leaves a foreign link alone.
 	var out bytes.Buffer
 	run([]string{"doctor", "--fix", "--only", "ghclaude"}, &out)
-	if !sameFile(link, ctx) {
-		t.Errorf("doctor --fix did not renew the link:\n%s", out.String())
+	if got, _ := os.Readlink(link); got != "gone" {
+		t.Errorf("doctor --fix touched a foreign link: %q\n%s", got, out.String())
 	}
 	if !strings.Contains(out.String(), "ghclaude") {
 		t.Errorf("doctor output lacks ghclaude:\n%s", out.String())
@@ -352,5 +378,82 @@ func TestJoinOffersGhclaudeAtItsOwnTerminalAndHintsWithoutOne(t *testing.T) {
 	offerGhclaude(context.Background(), &out, tty, os.Getenv("HOME"))
 	if !sameFile(link, ctx) || len(tty.asked) != 1 {
 		t.Fatalf("default answer must install: asked %q\n%s", tty.asked, out.String())
+	}
+}
+
+// On macOS os.Executable() is the path the kernel started, the ghclaude link.
+// The channel server entry must name ctx, never ghclaude, and a ghclaude
+// started with "channel" must stay ctx.
+func TestGhclaudeChannelEntryNeverNamesGhclaudeAndChannelStaysCtx(t *testing.T) {
+	if asGhclaude([]string{"/x/ghclaude", "channel", "--agent", "claude:x:1"}) {
+		t.Error("ghclaude channel ... must run ctx, not claude")
+	}
+	if !asGhclaude([]string{"/x/ghclaude"}) || !asGhclaude([]string{"/x/ghclaude", "-p", "channel"}) {
+		t.Error("other ghclaude calls start claude")
+	}
+	if asGhclaude([]string{"/x/ctx", "channel"}) {
+		t.Error("ctx is not ghclaude")
+	}
+	dir := t.TempDir()
+	real := filepath.Join(dir, "ctx")
+	if err := os.WriteFile(real, []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "ghclaude")
+	if err := os.Symlink("ctx", link); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := filepath.EvalSymlinks(link)
+	if err != nil || filepath.Base(resolved) == "ghclaude" {
+		t.Fatalf("link not resolved: %q %v", resolved, err)
+	}
+}
+
+func TestJoinAsksAboutGhclaudeExactlyOnce(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		answers []string
+		linked  bool
+		asked   int
+	}{
+		{"default answer installs", []string{"y", "y", "y", "y"}, true, 1},
+		{"no declines", []string{"y", "y", "n", "n"}, false, 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newJoinFixture(t, c.answers...)
+			f.detected = []string{"claude"}
+			dir := filepath.Join(os.Getenv("HOME"), "opt")
+			ctx := filepath.Join(dir, "ctx")
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(ctx, []byte("#!/bin/sh\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			prev := installCtxExecutable
+			installCtxExecutable = func(string) (string, error) { return ctx, nil }
+			t.Cleanup(func() { installCtxExecutable = prev })
+			noSleep(t)
+			srv := fallbackServer(t)
+			var out syncBuffer
+			if code := cmdJoin([]string{"--server", srv.URL, "--pair", "abcd-efgh", "--no-browser"}, &out); code != 0 {
+				t.Fatalf("exit %d: %s", code, out.String())
+			}
+			n := 0
+			for _, q := range f.tty.questions() {
+				if strings.Contains(q, "Install ghclaude?") {
+					n++
+				}
+			}
+			if n != c.asked {
+				t.Errorf("asked %d times, want %d: %q", n, c.asked, f.tty.questions())
+			}
+			if got := sameFile(filepath.Join(dir, "ghclaude"), ctx); got != c.linked {
+				t.Errorf("link present = %v, want %v\n%s", got, c.linked, out.String())
+			}
+			if len(f.installs) != 1 || f.installs[0] != "claude" {
+				t.Errorf("installs %v", f.installs)
+			}
+		})
 	}
 }

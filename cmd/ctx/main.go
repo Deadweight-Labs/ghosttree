@@ -153,7 +153,7 @@ const usage = `usage: ctx <command>
   version  print version`
 
 func main() {
-	if invokedAsGhclaude(os.Args[0]) {
+	if asGhclaude(os.Args) {
 		os.Exit(runGhclaude(os.Args[0], os.Args[1:], os.Stdout))
 	}
 	os.Exit(run(os.Args[1:], os.Stdout))
