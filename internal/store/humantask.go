@@ -93,7 +93,7 @@ func (a *ProjectAccess) CreateHumanTask(in humantask.CreateInput, actor humantas
 		}
 	}
 	if requestID == 0 {
-		return humantask.Task{}, requestdomain.NewRuleError("request_required", "a human task hangs on a request",
+		return humantask.Task{}, requestdomain.NewRuleError("request_required", "a human task hangs on a request: request_start_work first, or give request_id",
 			"request_start_work first, or give request_id", nil)
 	}
 	ref, err := st.RequestRef(RefRequest, requestID)

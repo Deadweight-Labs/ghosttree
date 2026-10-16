@@ -287,6 +287,26 @@ func renderRequestDetail(detail requestdomain.Detail, concise bool) string {
 			b.WriteByte('\n')
 		}
 	}
+	if len(detail.Pains) > 0 {
+		b.WriteString("\nMotivated by\n")
+		for _, p := range detail.Pains {
+			fmt.Fprintf(&b, "- PAIN-%d [%s] %s", p.ID, p.State, p.Title)
+			if p.Remaining != "" {
+				fmt.Fprintf(&b, " (remaining: %s)", p.Remaining)
+			}
+			b.WriteByte('\n')
+		}
+	}
+	if len(detail.Tasks) > 0 {
+		b.WriteString("\nHuman tasks\n")
+		for _, t := range detail.Tasks {
+			fmt.Fprintf(&b, "- TASK-%d [%s|%s] %s", t.ID, t.Kind, t.State, t.Title)
+			if t.Location != "" {
+				fmt.Fprintf(&b, " -> %s", t.Location)
+			}
+			b.WriteByte('\n')
+		}
+	}
 	if len(detail.Work) > 0 {
 		b.WriteString("\nWork\n")
 		for _, work := range detail.Work {

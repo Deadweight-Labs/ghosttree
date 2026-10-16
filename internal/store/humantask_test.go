@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/humantask"
+	"github.com/Deadweight-Labs/ghosttree/internal/pain"
+	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 )
 
@@ -314,5 +316,79 @@ func TestMatrixPainAndTask(t *testing.T) {
 		if got := MatrixAllows(r.role, r.res, r.act, r.obj); got != r.want {
 			t.Errorf("%s: got %v, want %v", r.name, got, r.want)
 		}
+	}
+}
+
+// The same flows through the runtime writer: payloads are cloned and replayed on
+// the writer, so a payload the cloner cannot own, or a read that sneaks into the
+// writer path, only shows here.
+func TestPainAndTasksThroughTheRuntimeWriter(t *testing.T) {
+	s, err := OpenRuntime(t.TempDir()+"/rt.db", DefaultWriterConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	if _, err := s.AddPerson("robin"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddPerson("lena"); err != nil {
+		t.Fatal(err)
+	}
+	org := mustOrg(t, s, "person:1", "Alpha", "alpha")
+	code, _, _ := s.CreateInvitation("person:1", org.ID, "", OrgMember, 0)
+	if _, err := s.AcceptInvitation("person:2", code); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.EnsureProject("person:1", roleProject); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetProjectRole("person:1", roleProject, "person:2", RoleMember, false, RoleViaAPI); err != nil {
+		t.Fatal(err)
+	}
+	s.SetAccessMode(AccessMode{Enforce: true})
+	robin := s.Access(Principal{ID: "person:1", Label: "robin"})
+	lena := s.Access(Principal{ID: "person:2", Label: "lena"})
+	rd, err := s.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: "r", Scope: scope.Axes{Project: roleProject}, Person: "robin"}, Criteria: []string{"c"}, AuthorID: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := robin.CreatePain(CreatePainInput{Project: roleProject, Title: "p", Motivates: []pain.Target{{RequestID: rd.Request.ID}, {ExternalRef: "x"}}, Actor: pain.Actor{Person: "robin"}, AuthorID: 1})
+	if err != nil || len(d.Motivates) != 2 {
+		t.Fatalf("create pain: %+v %v", d, err)
+	}
+	if _, err := lena.SetPainState(d.Pain.ID, pain.Mitigated, "Rest", pain.Evidence{Kind: "commit", Ref: "abc"}, "", pain.Actor{AccountID: 2, Person: "lena"}); err != nil {
+		t.Fatalf("state: %v", err)
+	}
+	title := "neu"
+	if _, err := robin.CorrectPain(d.Pain.ID, &title, nil, "r", pain.Actor{Person: "robin"}); err != nil {
+		t.Fatalf("correct: %v", err)
+	}
+	if err := robin.RemovePainLink(d.Motivates[1].ID, "weg", pain.Actor{Person: "robin"}); err != nil {
+		t.Fatalf("unlink: %v", err)
+	}
+	if _, err := robin.AddPainLink(d.Pain.ID, pain.Target{ExternalRef: "y"}, pain.Actor{}); err != nil {
+		t.Fatalf("link: %v", err)
+	}
+	task, err := robin.CreateHumanTask(humantask.CreateInput{RequestID: rd.Request.ID, Kind: "file", Title: "t", Location: "./x", Assignee: "lena"}, humantask.Actor{AccountID: 1, Person: "robin"})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	if _, err := lena.MarkTasksDone([]int64{task.ID}, "ok", humantask.Actor{AccountID: 2, Person: "lena", Web: true}); err != nil {
+		t.Fatalf("done: %v", err)
+	}
+	if _, err := robin.ReopenHumanTask(task.ID, "nochmal", humantask.Actor{AccountID: 1}); err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	if _, err := lena.MarkTasksDone([]int64{task.ID}, "ok", humantask.Actor{AccountID: 2, Web: true}); err != nil {
+		t.Fatalf("done again: %v", err)
+	}
+	if _, err := robin.ConfirmHumanTask(task.ID, humantask.Actor{AccountID: 1, SessionID: 3}); err != nil {
+		t.Fatalf("confirm: %v", err)
+	}
+	if w, err := s.WaitingTasksFor(robin, roleProject, 5); err != nil || len(w.Open)+len(w.Done) != 0 {
+		t.Errorf("waiting after confirm: %+v %v", w, err)
+	}
+	if got, err := s.ListHumanTasks(robin, TaskFilter{Project: roleProject, State: "all"}); err != nil || len(got) != 1 || got[0].State != humantask.Confirmed {
+		t.Errorf("list: %+v %v", got, err)
 	}
 }
