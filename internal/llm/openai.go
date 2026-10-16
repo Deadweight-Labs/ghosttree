@@ -81,7 +81,7 @@ func (c *httpClient) post(ctx context.Context, path string, payload, out any) er
 	} else {
 		req.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
 	}
-	client := &http.Client{Timeout: 2 * time.Minute}
+	client := newHTTPClient(req.URL, 2*time.Minute)
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
