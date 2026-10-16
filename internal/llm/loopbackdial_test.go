@@ -24,7 +24,7 @@ func TestHTTPClientRefusesDialToNonLoopbackAtConnectTime(t *testing.T) {
 
 func TestHTTPClientRefusesMixedAnswerAtConnectTime(t *testing.T) {
 	stubResolver(t, []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("203.0.113.7")}, nil)
-	if _, err := loopbackTarget("allgemein:1"); err == nil {
+	if _, err := loopbackTargets("allgemein:1"); err == nil {
 		t.Fatal("mixed answer must be refused")
 	}
 }
@@ -67,4 +67,18 @@ func TestHTTPSClientKeepsDefaultTransport(t *testing.T) {
 	if c := newHTTPClient(u, time.Second); c.Transport != nil {
 		t.Fatal("https must use the default transport")
 	}
+}
+
+func TestHTTPClientFallsBackToSecondLoopbackAddress(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) }))
+	defer srv.Close()
+	_, port, _ := net.SplitHostPort(srv.Listener.Addr().String())
+	// ::1 first, where nothing listens on this port; the server is on 127.0.0.1.
+	stubResolver(t, []net.IP{net.ParseIP("::1"), net.ParseIP("127.0.0.1")}, nil)
+	req, _ := http.NewRequest(http.MethodGet, "http://allgemein:"+port+"/x", nil)
+	resp, err := newHTTPClient(req.URL, 5*time.Second).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
 }
