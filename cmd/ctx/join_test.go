@@ -321,12 +321,16 @@ type fakeServer struct {
 	claims    []map[string]any
 	revoked   []string
 	exchanges []map[string]string
-	paths     []string
-	claimRes  func(map[string]any) (int, string)
+	// statusBodies sind die Körper der Fragen nach einer Ablehnung.
+	statusBodies []string
+	paths        []string
+	claimRes     func(map[string]any) (int, string)
 	// tokenRes, wenn gesetzt, beantwortet den Tausch statt der festen Antwort.
 	tokenRes func(map[string]string) (int, string)
-	pollRes  []string
-	whoami   string
+	// statusRes, wenn gesetzt, beantwortet die Frage nach einer Ablehnung.
+	statusRes func() string
+	pollRes   []string
+	whoami    string
 }
 
 func newFakeServer(t *testing.T) *fakeServer {
@@ -357,6 +361,14 @@ func newFakeServer(t *testing.T) *fakeServer {
 		case "/api/tokens/self":
 			f.revoked = append(f.revoked, r.Method+" "+r.Header.Get("Authorization"))
 			w.WriteHeader(204)
+		case "/api/join/status":
+			raw, _ := io.ReadAll(r.Body)
+			f.statusBodies = append(f.statusBodies, string(raw))
+			if f.statusRes != nil {
+				io.WriteString(w, f.statusRes())
+				return
+			}
+			w.WriteHeader(404)
 		case "/api/join/token":
 			var body map[string]string
 			json.NewDecoder(r.Body).Decode(&body)

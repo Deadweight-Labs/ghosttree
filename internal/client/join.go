@@ -49,6 +49,16 @@ func (c *Client) JoinExchange(ctx context.Context, code, verifier string) (Devic
 	return out, err
 }
 
+// JoinDenied fragt, ob der Antrag im Browser abgelehnt wurde (nur mit dem
+// code_verifier der Sitzung).
+func (c *Client) JoinDenied(ctx context.Context, verifier string) (bool, error) {
+	var out struct {
+		State string `json:"state"`
+	}
+	err := c.anonymous().doContext(ctx, "POST", "/api/join/status", nil, map[string]string{"code_verifier": verifier}, &out)
+	return out.State == "denied", err
+}
+
 // ErrorCode liefert das Feld "error" einer OAuth-artigen Fehlerantwort
 // (invalid_pair, invalid_grant, machine_name_taken, too_many_requests) oder "".
 func ErrorCode(err error) string {

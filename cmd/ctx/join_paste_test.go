@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -290,6 +291,74 @@ func TestNormalizePasted(t *testing.T) {
 	} {
 		if got := normalizePasted(in); got != want {
 			t.Errorf("normalizePasted(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// Im reinen Paste-Weg gibt es keinen Callback: eine Ablehnung im Browser erfährt
+// das Terminal beim Server und wartet nicht bis zum Ablauf.
+func TestJoinPasteOnlyLearnsOfADenialFromTheServer(t *testing.T) {
+	old := joinDeniedInterval
+	t.Cleanup(func() { joinDeniedInterval = old })
+	joinDeniedInterval = 10 * time.Millisecond
+	tty := newPasteTTY("y")
+	srv := newPasteServer(t)
+	var asked atomic.Int32
+	srv.statusRes = func() string {
+		if asked.Add(1) < 3 {
+			return `{"state":"pending"}`
+		}
+		return `{"state":"denied"}`
+	}
+	f := newJoinFixture(t)
+	joinTTY = func() (terminal, error) { return tty, nil }
+	joinHasDisplay = func() bool { return false }
+	_ = f
+	var out syncBuffer
+	start := time.Now()
+	code := cmdJoin([]string{"--server", srv.URL, "--pair", "abcd-efgh", "--name", "box"}, &out)
+	if code == 0 || !strings.Contains(out.String(), "Denied in the browser.") || time.Since(start) > 5*time.Second {
+		t.Fatalf("exit %d after %v: %s", code, time.Since(start), out.String())
+	}
+	if len(srv.codes()) != 0 {
+		t.Fatalf("a code was exchanged after the denial: %v", srv.codes())
+	}
+	if len(srv.statusBodies) == 0 || srv.statusBodies[0] == "" {
+		t.Fatal("the status request carried no verifier")
+	}
+	if strings.Contains(strings.Join(srv.statusBodies, ""), goodCode) {
+		t.Fatal("status request leaked a code")
+	}
+}
+
+// The loopback page of a finished setup closes the window the browser opened for
+// it, and says so where the browser refuses to.
+func TestJoinDonePageTriesToCloseItselfUnderAStrictPolicy(t *testing.T) {
+	cb, err := startCallback("state-12345678")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cb.Close()
+	resp, err := http.Get("http://" + cb.Addr() + "/done")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	csp := resp.Header.Get("Content-Security-Policy")
+	if !strings.Contains(string(b), "You can close this tab") || !strings.Contains(string(b), "<script>window.close()</script>") ||
+		!strings.Contains(csp, "script-src '"+closeScriptHash+"'") {
+		t.Fatalf("page %q csp %q", b, csp)
+	}
+	for _, path := range []string{"/failed"} {
+		r, err := http.Get("http://" + cb.Addr() + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(r.Body)
+		r.Body.Close()
+		if strings.Contains(string(body), "<script") || strings.Contains(r.Header.Get("Content-Security-Policy"), "script-src") {
+			t.Fatalf("%s runs a script: %q", path, body)
 		}
 	}
 }

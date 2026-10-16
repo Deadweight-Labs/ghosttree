@@ -915,6 +915,28 @@ func (j *JoinSessions) Exchange(addr, code, verifier string) (JoinGrant, error) 
 	return JoinGrant{Account: s.account, Machine: s.machine, sid: s.sid}, nil
 }
 
+// DeniedFor sagt dem Installer, der den code_verifier seiner Sitzung kennt, ob
+// das Konto sie im Browser abgelehnt hat. Das ist die einzige Auskunft: sie
+// nennt weder Code noch Konto, und wer den Verifier nicht kennt, erfährt nichts.
+// Auf dem reinen Paste-Weg gibt es keinen Callback, über den das Terminal eine
+// Ablehnung sonst erführe.
+func (j *JoinSessions) DeniedFor(verifier string) bool {
+	if len(verifier) < 43 || len(verifier) > 128 || !allBytes(verifier, stateChars) {
+		return false
+	}
+	sum := sha256.Sum256([]byte(verifier))
+	want := []byte(base64.RawURLEncoding.EncodeToString(sum[:]))
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.purge(j.now())
+	for _, s := range j.all {
+		if s.state == JoinDenied && s.challenge != "" && subtle.ConstantTimeCompare(want, []byte(s.challenge)) == 1 {
+			return true
+		}
+	}
+	return false
+}
+
 // Delivered meldet, dass das Token ausgestellt ist (Loopback-Weg).
 func (j *JoinSessions) Delivered(g JoinGrant) {
 	j.mu.Lock()

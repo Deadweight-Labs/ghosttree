@@ -310,7 +310,11 @@ func (c *callback) handle(w http.ResponseWriter, r *http.Request) {
 	case "/callback":
 		c.callback(w, r)
 	case "/done":
-		writePage(w, pageDone)
+		// Das zweite Fenster, das die Seite für den Loopback öffnete, schließt
+		// sich selbst; ein Tab, den der Mensch selbst geöffnet hat, bleibt stehen
+		// und sagt es. Nur dieses eine Skript ist erlaubt (Hash statt 'unsafe-inline').
+		h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; script-src '"+closeScriptHash+"'; frame-ancestors 'none'")
+		writePageScript(w, pageDone, closeScript)
 	case "/failed":
 		writePage(w, pageFailed)
 	default:
@@ -385,6 +389,19 @@ func (c *callback) callback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, target, http.StatusSeeOther)
 }
 
+const closeScript = "window.close()"
+
+// closeScriptHash ist der CSP-Hash von closeScript.
+var closeScriptHash = func() string {
+	sum := sha256.Sum256([]byte(closeScript))
+	return "sha256-" + base64.StdEncoding.EncodeToString(sum[:])
+}()
+
+func writePageScript(w http.ResponseWriter, msg, script string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprintf(w, "<!doctype html><meta charset=utf-8><title>ghosttree</title><p style=\"font:16px system-ui;margin:3em\">%s</p><script>%s</script>\n", msg, script)
+}
+
 func writePage(w http.ResponseWriter, msg string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintf(w, "<!doctype html><meta charset=utf-8><title>ghosttree</title><p style=\"font:16px system-ui;margin:3em\">%s</p>\n", msg)
@@ -414,6 +431,12 @@ func (c *callback) Finish(err error) {
 }
 
 func (c *callback) Close() {
+	if c.used.Load() {
+		// Der Browser folgt der Weiterleitung auf /done mit einer neuen Anfrage;
+		// ein sofort geschlossener Listener ließe das Fenster auf einer
+		// Fehlerseite stehen, statt sich zu schließen.
+		time.Sleep(600 * time.Millisecond)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if c.srv.Shutdown(ctx) != nil {
@@ -1041,7 +1064,11 @@ const (
 // oder aus dem Terminal (pt, wenn es das Einfügen kann). Was zuerst kommt, gewinnt;
 // das andere wird beendet, bevor awaitCode zurückkehrt, damit eine liegengebliebene
 // Leseroutine nicht die nächste Antwort verschluckt.
-func awaitCode(ctx context.Context, cb *callback, pt pasteTerminal, stdout io.Writer) (string, codeSource, error) {
+//
+// watch (wenn gesetzt) fragt den Server, ob der Antrag im Browser abgelehnt wurde:
+// ohne Callback (reiner Paste-Weg) erführe das Terminal die Ablehnung sonst nie.
+// Es liefert true bei Ablehnung und kehrt sonst erst mit dem Kontext zurück.
+func awaitCode(ctx context.Context, cb *callback, pt pasteTerminal, watch func(context.Context) bool, stdout io.Writer) (string, codeSource, error) {
 	wctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	type result struct {
@@ -1078,6 +1105,16 @@ func awaitCode(ctx context.Context, cb *callback, pt pasteTerminal, stdout io.Wr
 			ch <- result{"", fromPaste, errors.New("no valid code entered")}
 		}()
 	}
+	if watch != nil {
+		n++
+		go func() {
+			if watch(wctx) {
+				ch <- result{"", fromCallback, errDenied}
+				return
+			}
+			ch <- result{"", fromCallback, wctx.Err()}
+		}()
+	}
 	finish := func(r result) (string, codeSource, error) {
 		cancel()
 		for left := n - 1; left > 0; left-- {
@@ -1101,6 +1138,26 @@ func awaitCode(ctx context.Context, cb *callback, pt pasteTerminal, stdout io.Wr
 		}
 	}
 	return "", fromCallback, errors.New(errInterrupted)
+}
+
+// joinDeniedInterval ist der Abstand, in dem das Terminal nach einer Ablehnung fragt.
+var joinDeniedInterval = 3 * time.Second
+
+// watchDenied fragt den Server, bis der Antrag abgelehnt ist oder der Kontext endet.
+// Ein Netzfehler zählt nicht als Ablehnung; die Anfrage wird einfach wiederholt.
+func watchDenied(c *client.Client, verifier string) func(context.Context) bool {
+	return func(ctx context.Context) bool {
+		for {
+			select {
+			case <-ctx.Done():
+				return false
+			case <-time.After(joinDeniedInterval):
+			}
+			if denied, err := c.JoinDenied(ctx, verifier); err == nil && denied {
+				return true
+			}
+		}
+	}
 }
 
 func joinBrowser(ctx context.Context, c *client.Client, cb *callback, pt pasteTerminal, pair string, machineName *string, auto bool, server string, stdout io.Writer) (client.DeviceToken, error) {
@@ -1140,10 +1197,12 @@ func joinBrowser(ctx context.Context, c *client.Client, cb *callback, pt pasteTe
 	wctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
 	for {
-		code, src, err := awaitCode(wctx, cb, pt, stdout)
+		code, src, err := awaitCode(wctx, cb, pt, watchDenied(c, verifier), stdout)
 		switch {
 		case errors.Is(err, errDenied):
-			cb.Finish(err)
+			if cb != nil {
+				cb.Finish(err)
+			}
 			return client.DeviceToken{}, errors.New("Denied in the browser.")
 		case errors.Is(err, context.DeadlineExceeded):
 			return client.DeviceToken{}, errors.New(errInterrupted)
