@@ -6,6 +6,13 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Added (REQ-434): `scripts/e2e/join-order.sh` runs the invitation flow end to end
+  in both orders with real binaries, the server's own `/install.sh` and throw-away
+  HOMEs, without a VM or identity provider: browser first (the pairing page waits,
+  then the installer claims and the page asks for approval) and installer first
+  (the installer waits for the approval; the first look at the page already shows
+  the question). Each run ends with a token that belongs to the invited account.
+
 - Changed (REQ-466): follow-ups to hook-registered sessions and to superseding
   knowledge. A session registered by a hook gets a readable `display_name`
   ("Claude · repository") instead of its session id, and a name an agent already
