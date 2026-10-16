@@ -6,6 +6,7 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Fixed: "Kurz erklärt" failed on about one object in five with "no text content": the model's thinking used up the 800-token output ceiling. The ceiling is now 4096, the error names the stop reason and block types, and the background path logs failures as warnings.
 - Added: limits for the model jobs, shared by the gardener (`garden`) and "Kurz erklärt"
   (`explain`). Each job has a daily and a monthly cap (UTC) in dollars, calls and tokens;
   0 or an empty value means unlimited. Set them with `GHOSTTREE_<JOB>_<DAILY|MONTHLY>_<USD|CALLS|TOKENS>`
