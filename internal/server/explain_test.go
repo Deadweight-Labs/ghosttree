@@ -146,3 +146,76 @@ func TestReplayedRequestCreateKeepsTheExistingExplanationState(t *testing.T) {
 		t.Error("a replay stored an explanation for a request it did not create")
 	}
 }
+
+func idemCreate(f *accessAPIFixture, t *testing.T, who string, code int, project, key, extra string) string {
+	t.Helper()
+	body := map[string]any{"type": "feature", "title": "Idem " + project, "description": "SECRET-DESC", "project": project, "idempotency_key": key}
+	if extra != "" {
+		body["explanation"] = extra
+	}
+	return f.expect(t, who, code, "POST", "/api/requests", body)
+}
+
+// The idempotency key is unique instance-wide, so only the same author in the
+// same project may replay it; every other hit is a 409 that returns nothing.
+func TestIdempotencyKeyFromAnotherScopeIsConflictWithoutData(t *testing.T) {
+	f := accessAPI(t, true)
+	first := idemCreate(f, t, "mia", 201, accProject, "k-scope", "")
+	var rd struct {
+		Request struct{ ID int64 } `json:"request"`
+	}
+	if err := json.Unmarshal([]byte(first), &rd); err != nil {
+		t.Fatal(err)
+	}
+
+	// Same author, same project: a retry returns the same request.
+	again := idemCreate(f, t, "mia", 201, accProject, "k-scope", "")
+	var rd2 struct {
+		Request struct{ ID int64 } `json:"request"`
+	}
+	if err := json.Unmarshal([]byte(again), &rd2); err != nil || rd2.Request.ID != rd.Request.ID {
+		t.Fatalf("retry returned %s, want request %d", again, rd.Request.ID)
+	}
+
+	// Another person in the same project.
+	out := idemCreate(f, t, "lena", 409, accProject, "k-scope", "")
+	if !strings.Contains(out, "idempotency_key_conflict") || strings.Contains(out, "SECRET-DESC") || strings.Contains(out, accProject) {
+		t.Errorf("conflict body leaks or misses code: %s", out)
+	}
+
+	// Another project: robin's request lives in accOther, mia posts into accProject.
+	foreign := idemCreate(f, t, "robin", 201, accOther, "k-foreign", "")
+	var fd struct {
+		Request struct{ ID int64 } `json:"request"`
+	}
+	if err := json.Unmarshal([]byte(foreign), &fd); err != nil {
+		t.Fatal(err)
+	}
+	out = idemCreate(f, t, "mia", 409, accProject, "k-foreign", agentNote)
+	if !strings.Contains(out, "idempotency_key_conflict") || strings.Contains(out, "SECRET-DESC") || strings.Contains(out, accOther) {
+		t.Errorf("conflict body leaks: %s", out)
+	}
+	if _, ok, _ := f.st.Explanation(explain.KindRequest, fd.Request.ID); ok {
+		t.Errorf("a refused create stored an explanation on request %d", fd.Request.ID)
+	}
+}
+
+func TestIdempotentRetryWithExplanationKeepsTheStoredOne(t *testing.T) {
+	f := accessAPI(t, true)
+	first := idemCreate(f, t, "mia", 201, accProject, "k-expl", agentNote)
+	var rd struct {
+		Request struct{ ID int64 } `json:"request"`
+	}
+	if err := json.Unmarshal([]byte(first), &rd); err != nil {
+		t.Fatal(err)
+	}
+	before, ok, _ := f.st.Explanation(explain.KindRequest, rd.Request.ID)
+	if !ok {
+		t.Fatal("first create stored no explanation")
+	}
+	idemCreate(f, t, "mia", 201, accProject, "k-expl", "Eine ganz andere Erklärung, die ebenfalls lang genug sein sollte, um angenommen zu werden.")
+	after, _, _ := f.st.Explanation(explain.KindRequest, rd.Request.ID)
+	if after.Text != before.Text {
+		t.Errorf("retry replaced the explanation: %q -> %q", before.Text, after.Text)
+	}
+}

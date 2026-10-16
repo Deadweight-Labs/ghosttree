@@ -6,6 +6,10 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Fixed: `POST /api/requests` with an idempotency key that already belongs to another
+  project or another author now answers 409 `idempotency_key_conflict` without any
+  data of the existing request; only the same author in the same project replays.
+  Explanation context lines no longer name requests bound to a machine.
 - Added: server language. `GHOSTTREE_LANGUAGE=de` (or `ctx serve --language de`) shows the
   whole web interface in German, including the sign-in, invitation and pairing
   pages, relative times, weekdays, dates and the greeting; `en` stays the default.

@@ -87,6 +87,9 @@ type Activity struct {
 }
 
 type Detail struct {
+	// Replayed: CreateRequest found the same author's earlier request for the
+	// idempotency key instead of inserting one.
+	Replayed  bool        `json:"-"`
 	Request   Request     `json:"request"`
 	Criteria  []Criterion `json:"criteria"`
 	Relations []Relation  `json:"relations"`
