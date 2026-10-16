@@ -29,6 +29,8 @@ type SessionResult struct {
 	// Denials counts tool calls the permission rules refused. A session that
 	// keeps running into them is working with a wrong allowlist.
 	Denials int
+	// DeniedCalls names what was refused (tool and the start of its input).
+	DeniedCalls []string
 	// Tools counts the tool calls the session made, by name.
 	Tools map[string]int
 }
@@ -111,9 +113,19 @@ func ParseStream(r io.Reader) (SessionResult, error) {
 					if ev.Usage != nil {
 						res.Usage = ev.Usage.llm()
 					}
-					var den []json.RawMessage
+					var den []struct {
+						Tool  string          `json:"tool_name"`
+						Input json.RawMessage `json:"tool_input"`
+					}
 					if json.Unmarshal(ev.PermissionDenials, &den) == nil {
 						res.Denials = len(den)
+						for _, d := range den {
+							in := strings.Join(strings.Fields(string(d.Input)), " ")
+							if len(in) > 100 {
+								in = in[:100]
+							}
+							res.DeniedCalls = append(res.DeniedCalls, d.Tool+" "+in)
+						}
 					}
 				}
 			}

@@ -120,6 +120,9 @@ func WriteReport(w io.Writer, project string, res Result, at time.Time) {
 				}
 				fmt.Fprintf(w, "  - Werkzeuge: %s\n", strings.Join(parts, ", "))
 			}
+			for _, d := range s.DeniedCalls {
+				fmt.Fprintf(w, "  - verweigert: %s\n", d)
+			}
 			for _, r := range s.Rejected {
 				fmt.Fprintf(w, "  - verworfen: %s\n", r)
 			}

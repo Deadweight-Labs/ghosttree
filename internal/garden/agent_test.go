@@ -187,7 +187,7 @@ func TestParseStreamTakesUsageIncludingCacheFromTheResult(t *testing.T) {
 	if r.Tools["Grep"] != 1 || r.Tools["mcp__ghosttree__context_search"] != 1 {
 		t.Errorf("tools: %v", r.Tools)
 	}
-	if r.Usage != want || r.Turns != 3 || r.Denials != 1 || r.ReportedUSD != 0.5 || r.Text != `{"verdicts":[]}` {
+	if len(r.DeniedCalls) != 1 || !strings.HasPrefix(r.DeniedCalls[0], "Bash") || r.Usage != want || r.Turns != 3 || r.Denials != 1 || r.ReportedUSD != 0.5 || r.Text != `{"verdicts":[]}` {
 		t.Fatalf("%+v", r)
 	}
 }
