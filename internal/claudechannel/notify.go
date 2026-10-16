@@ -61,6 +61,16 @@ func NewNotification(room store.CoordRoom, m store.CoordMessage, content string)
 	if name := store.NormalizeAccountName(m.SenderDisplayName); name != "" && m.AuthorKind == store.AuthorHuman {
 		meta["sender_name"] = name
 	}
+	if m.AuthorKind != store.AuthorHuman && m.AuthorKind != store.AuthorSystem {
+		// Wer ein Agent ist und woran er nach eigener Auskunft arbeitet. Beides
+		// kommt live vom Server; die Notiz ist Selbstauskunft des Absenders.
+		if label := store.SafeLabel(m.SenderLabel); label != "" {
+			meta["sender_label"] = label
+		}
+		if note := store.SafeNote(m.SenderWorkNote); note != "" {
+			meta["sender_work_note"] = note
+		}
+	}
 	for key, value := range map[string]string{
 		"sender_role": m.SenderRole, "recipient_role": m.RecipientRole, "authority": m.Authority,
 	} {

@@ -92,7 +92,7 @@ func registerHookSession(raw []byte, harness string, force bool) {
 	}
 	if _, err := client.NewWithTimeout(cfg, registerHookDeadline).RegisterCoordAgent(store.CoordAgent{
 		ExternalID: self, Provider: harness, RoomKey: room,
-		DisplayName: name, Branch: branch, Role: agentRoleFromEnv(), SessionID: session, HookActivity: true,
+		DisplayName: name, Branch: branch, Machine: cfg.Machine, Role: agentRoleFromEnv(), SessionID: session, HookActivity: true,
 	}); err == nil {
 		state.RegisterRoom, state.RegisterBranch = room, branch
 		saveCoordState(path, state)

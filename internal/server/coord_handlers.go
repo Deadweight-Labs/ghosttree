@@ -34,6 +34,8 @@ func writeCoordAccessError(w http.ResponseWriter, err error) {
 	case errors.Is(err, store.ErrCoordAmbiguousMention):
 		// Only members reach this: a guest never gets an error for a name.
 		writeErr(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, store.ErrBroadcastLimited):
+		writeErr(w, http.StatusTooManyRequests, err.Error())
 	case errors.Is(err, store.ErrInvalidAttentionAction), errors.Is(err, store.ErrAttentionRecipientRequired):
 		writeErr(w, http.StatusBadRequest, "invalid coordination attention action")
 	case errors.Is(err, store.ErrAttentionClosed):
@@ -288,6 +290,40 @@ func (a *api) registerCoordAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]int64{"id": id})
+}
+
+// setCoordStatus setzt "woran ich arbeite" für eine Session des Aufrufers. Eine
+// leere Notiz löscht sie.
+func (a *api) setCoordStatus(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		AgentExternalID string `json:"agent_external_id"`
+		Note            string `json:"note"`
+	}
+	if err := readJSON(r, &in); err != nil {
+		writeStoreError(w, http.StatusBadRequest, err)
+		return
+	}
+	if in.AgentExternalID == "" {
+		writeErr(w, http.StatusBadRequest, "agent_external_id is required")
+		return
+	}
+	if _, ok := accountOf(principalOf(r)); !ok {
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	note, err := a.st.SetCoordWorkNote(in.AgentExternalID, principalOf(r).ID, in.Note)
+	switch {
+	case errors.Is(err, store.ErrInvalidInput):
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	case errors.Is(err, store.ErrWorkNoteNotOwner), errors.Is(err, store.ErrCoordForbidden):
+		writeErr(w, http.StatusForbidden, "that session is not yours")
+		return
+	case err != nil:
+		writeStoreError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, 200, map[string]string{"note": note})
 }
 
 func (a *api) coordPeers(w http.ResponseWriter, r *http.Request) {

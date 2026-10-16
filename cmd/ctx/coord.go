@@ -23,6 +23,9 @@ import (
 const coordUsage = `usage: ctx coord <command>
 
   peers [--machine] [repo]        who else is registered in this room
+  status [--clear] [text]         say in one sentence (200 characters) what you
+                                  work on, e.g. "PR #77 feat/mac-sync"; shown
+                                  to the room as self-reported. No secrets.
   send <text> [--mention <agent>] [--intent <kind>] [--machine] [repo]
                                   say something to the other agents; a mention
                                   wakes that agent if its harness can. --intent
@@ -30,6 +33,8 @@ const coordUsage = `usage: ctx coord <command>
                                   asks the mentioned agent for an answer and
                                   needs --mention
   inbox [--machine] [--all] [repo] read what others said since your cursor
+                                  @agents (or @agenten) in the text reaches every
+                                  agent seen working in the last 15 minutes
   rooms                           private conversations you take part in
   sessions                        codex sessions this machine can deliver to
   deliver <thread> [--machine]    hand the unread messages of a room to a
@@ -132,6 +137,7 @@ func cmdCoord(args []string, stdout io.Writer) int {
 
 	machine := false
 	all := false
+	clear := false
 	var positional []string
 	var mentions []string
 	var intentFlag, agentName string
@@ -165,6 +171,8 @@ func cmdCoord(args []string, stdout io.Writer) int {
 			machine = true
 		case "--all":
 			all = true
+		case "--clear":
+			clear = true
 		default:
 			positional = append(positional, a)
 		}
@@ -203,7 +211,7 @@ func cmdCoord(args []string, stdout io.Writer) int {
 	// während am selben Raum gerade jemand mitliest.
 	if code == 0 {
 		if _, err := c.RegisterCoordAgent(store.CoordAgent{
-			ExternalID: me, Provider: "ctx-cli", RoomKey: room, DisplayName: me,
+			ExternalID: me, Provider: "ctx-cli", RoomKey: room, DisplayName: me, Machine: cfg.Machine,
 		}); err != nil && sub != "rooms" {
 			if msg, rejected := coordJoinFailure(err, me, room, cfg.Machine); rejected {
 				fmt.Fprintln(stdout, msg)
@@ -224,8 +232,35 @@ func cmdCoord(args []string, stdout io.Writer) int {
 			return 0
 		}
 		for _, p := range peers {
+			name := p.DisplayName
+			if p.Label != "" {
+				name = p.Label
+			}
 			fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\tlast observed %s\n",
-				p.ExternalID, p.DisplayName, p.Provider, p.Branch, p.LastSeenAt)
+				p.ExternalID, name, p.Provider, p.Branch, p.LastSeenAt)
+			if p.WorkNote != "" {
+				fmt.Fprintf(stdout, "\tworking on (self-reported): %s\n", p.WorkNote)
+			}
+		}
+		return 0
+
+	case "status":
+		note := strings.TrimSpace(strings.Join(positionalText(positional), " "))
+		if clear {
+			note = ""
+		} else if note == "" {
+			fmt.Fprintln(stdout, "say what you work on, or use --clear")
+			return 2
+		}
+		stored, err := c.SetCoordStatus(me, note)
+		if err != nil {
+			fmt.Fprintf(stdout, "status: %s\n", coordAPIMessage(err))
+			return 1
+		}
+		if stored == "" {
+			fmt.Fprintln(stdout, "work note cleared")
+		} else {
+			fmt.Fprintf(stdout, "work note set: %s\n", stored)
 		}
 		return 0
 

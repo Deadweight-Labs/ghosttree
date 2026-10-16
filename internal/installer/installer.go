@@ -71,6 +71,13 @@ context, under "ghosttree: new messages for you", once each. Answer with
 sender); ` + "`coord_inbox`" + ` lists everything in the room and marks what is
 addressed to you. Write ` + "`@name`" + ` in a message to address a person or agent.
 
+When you start work on a PR or branch, say so with ` + "`coord_status`" + ` (one
+sentence, at most 200 characters, for example "PR #77 feat/mac-sync, room sync");
+update it when it changes and clear it with an empty note when you are done.
+Others see it as self-reported next to your name in ` + "`coord_peers`" + ` and on your
+messages. Never put a secret in it. ` + "`@agents`" + ` in a message reaches every agent
+of the project seen working in the last 15 minutes.
+
 A problem without a solution belongs in ` + "`pain_record`" + `, not in a request
 (requests need criteria). Never set a pain to resolved just because a request
 is finished: use ` + "`pain_update`" + ` with evidence, and for mitigated with ` + "`remaining`" + `.

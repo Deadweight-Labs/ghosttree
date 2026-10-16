@@ -77,6 +77,10 @@ func coordHTTPError(w http.ResponseWriter, err error) {
 		var ambiguous *store.AmbiguousMentionError
 		errors.As(err, &ambiguous)
 		http.Error(w, msg("coord.mention_ambiguous", ambiguous.Token, strings.Join(ambiguous.Candidates, ", ")), http.StatusBadRequest)
+	case errors.Is(err, store.ErrBroadcastLimited):
+		var limited *store.BroadcastLimitedError
+		errors.As(err, &limited)
+		http.Error(w, msg("coord.broadcast_limited", int(limited.Wait.Minutes())+1), http.StatusTooManyRequests)
 	case errors.Is(err, store.ErrInvalidAttentionAction):
 		http.Error(w, "invalid coordination attention action", http.StatusBadRequest)
 	case errors.Is(err, store.ErrAttentionRecipientRequired):
@@ -276,6 +280,7 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 		detail.Participants = addRoomPeople(detail.Participants, people, current)
 	}
 	applyParticipantHandles(access, activeRoom.Key, detail.Participants)
+	detail.Broadcast = coordCanBroadcast(activeRoom.Kind, detail.Participants)
 	applyParticipantRoles(a.store, activeRoom.Key, detail.Participants)
 	a.applyParticipantControls(r, activeRoom.Key, detail.Participants)
 	applyMessageRoles(a.store, activeRoom.Key, current.ID, detail.Messages, presentations)
@@ -682,7 +687,7 @@ func (a *app) coordSend(w http.ResponseWriter, r *http.Request) {
 		ReplyTo:   replyTo,
 		ExpiresAt: expiresAt,
 	}
-	msg.Mentions = splitCoordPrincipals(r.Form["mentions"]...)
+	msg.Mentions, msg.Body = coordBroadcastChip(splitCoordPrincipals(r.Form["mentions"]...), msg.Body)
 	msg.Intent = strings.TrimSpace(r.FormValue("intent"))
 	if !validCoordComposerIntent(msg.Intent) {
 		http.Error(w, "a valid intent is required", http.StatusBadRequest)
@@ -942,4 +947,44 @@ func applyParticipantHandles(access store.CoordAccess, roomKey string, participa
 			participants[i].Handle = handles[participants[i].ID]
 		}
 	}
+}
+
+// coordBroadcastToken is the value of the composer chip that addresses every
+// active agent of the room. It is not a principal: the server resolves the
+// @agents token in the text, so the chip only writes it.
+const coordBroadcastToken = "@agents"
+
+// coordBroadcastValue is the form value of that chip.
+const coordBroadcastValue = "all-agents"
+
+// coordBroadcastChip takes the broadcast chip out of the mentions and puts the
+// token in front of the text, unless the text already carries it.
+func coordBroadcastChip(mentions []string, body string) ([]string, string) {
+	kept := mentions[:0:0]
+	chip := false
+	for _, m := range mentions {
+		if m == coordBroadcastValue {
+			chip = true
+			continue
+		}
+		kept = append(kept, m)
+	}
+	if chip && !strings.Contains(strings.ToLower(body), coordBroadcastToken) && !strings.Contains(strings.ToLower(body), "@agenten") {
+		body = coordBroadcastToken + " " + body
+	}
+	return kept, body
+}
+
+// coordCanBroadcast says whether the composer offers the chip: project and
+// machine rooms with at least one agent the viewer may address.
+func coordCanBroadcast(kind string, participants []coordParticipantView) bool {
+	if kind != store.RoomProject && kind != store.RoomMachine {
+		return false
+	}
+	for _, p := range participants {
+		if !p.Current && !p.ListOnly && !p.Human {
+			return true
+		}
+	}
+	return false
 }

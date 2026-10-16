@@ -77,6 +77,12 @@ type CoordMessage struct {
 	// Leser, die die Mitglieder des Projektraums nicht sehen (Gast). Der Wert
 	// ist Nutzereingabe: Anzeigende Clients müssen ihn entschärfen.
 	SenderDisplayName string `json:"sender_display_name,omitempty"`
+	// SenderLabel (Person · Maschine · Branch) und SenderWorkNote gehören einem
+	// Agenten als Absender, werden live gelesen und nie gespeichert. Die Notiz
+	// ist vom Agenten selbst gemeldet und ungeprüft. Beides fehlt in der
+	// Gastsicht.
+	SenderLabel    string `json:"sender_label,omitempty"`
+	SenderWorkNote string `json:"sender_work_note,omitempty"`
 	// ToYou is derived like Authority and only set in answers to an agent: the
 	// message mentions this agent, or sits in a private room with it. It never
 	// says who else was mentioned.

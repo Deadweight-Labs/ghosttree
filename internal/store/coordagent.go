@@ -18,16 +18,26 @@ var (
 // Prozess. Niemand hier ist Parent eines anderen: ParentExternalID erklärt die
 // Herkunft eines Subagenten und bestimmt nicht, wer ihn erreichen darf.
 type CoordAgent struct {
-	ID               int64  `json:"id,omitempty"`
-	ExternalID       string `json:"external_id"`
-	Provider         string `json:"provider"`
-	RoomKey          string `json:"room_key"`
-	DisplayName      string `json:"display_name"`
-	Person           string `json:"person,omitempty"`
-	PrincipalID      string `json:"principal_id,omitempty"`
-	Cwd              string `json:"cwd,omitempty"`
-	Branch           string `json:"branch,omitempty"`
-	Worktree         string `json:"worktree,omitempty"`
+	ID          int64  `json:"id,omitempty"`
+	ExternalID  string `json:"external_id"`
+	Provider    string `json:"provider"`
+	RoomKey     string `json:"room_key"`
+	DisplayName string `json:"display_name"`
+	Person      string `json:"person,omitempty"`
+	PrincipalID string `json:"principal_id,omitempty"`
+	Cwd         string `json:"cwd,omitempty"`
+	Branch      string `json:"branch,omitempty"`
+	Worktree    string `json:"worktree,omitempty"`
+	// Machine ist der Rechnername, den der Agent bei der Anmeldung selbst meldet.
+	Machine string `json:"machine,omitempty"`
+	// WorkNote ist der Satz "woran ich arbeite", vom Agenten selbst gemeldet
+	// und ungeprüft; WorkNoteAt sagt, wann. Beides nur in Antworten, die
+	// Anmeldung setzt es nie (dafür gibt es SetCoordWorkNote).
+	WorkNote   string `json:"work_note,omitempty"`
+	WorkNoteAt string `json:"work_note_at,omitempty"`
+	// Label ist der eindeutige Anzeigename Person · Maschine · Branch, nur in
+	// Antworten und abgeleitet.
+	Label            string `json:"label,omitempty"`
 	ParentExternalID string `json:"parent_external_id,omitempty"`
 	Capabilities     string `json:"capabilities,omitempty"`
 	RegisteredAt     string `json:"registered_at,omitempty"`
@@ -186,8 +196,8 @@ func (s *Store) RegisterCoordAgent(a CoordAgent) (int64, error) {
 	}
 	result, err := tx.Exec(`INSERT INTO coord_agents(
 			external_id,provider,room_key,display_name,person,principal_id,cwd,branch,worktree,
-			parent_external_id,capabilities,registered_at,last_seen_at,role,session_id,last_hook_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,COALESCE(NULLIF(?,''),'member'),?,?)
+			parent_external_id,capabilities,registered_at,last_seen_at,role,session_id,last_hook_at,machine)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,COALESCE(NULLIF(?,''),'member'),?,?,?)
 		ON CONFLICT(external_id) DO UPDATE SET
 			provider=CASE WHEN coord_agents.provider IN ('unknown','unidentified-harness','')
 				AND excluded.provider NOT IN ('unknown','unidentified-harness','')
@@ -199,12 +209,13 @@ func (s *Store) RegisterCoordAgent(a CoordAgent) (int64, error) {
 			capabilities=excluded.capabilities, last_seen_at=excluded.last_seen_at,
 			role=COALESCE(NULLIF(?,''),coord_agents.role),
 			session_id=COALESCE(NULLIF(excluded.session_id,''),coord_agents.session_id),
-			last_hook_at=COALESCE(NULLIF(excluded.last_hook_at,''),coord_agents.last_hook_at)
+			last_hook_at=COALESCE(NULLIF(excluded.last_hook_at,''),coord_agents.last_hook_at),
+			machine=COALESCE(NULLIF(excluded.machine,''),coord_agents.machine)
 		WHERE (coord_agents.principal_id<>'' AND coord_agents.principal_id=excluded.principal_id)
 		   OR (coord_agents.principal_id='' AND coord_agents.person<>'' AND coord_agents.person=excluded.person AND excluded.principal_id<>'')
 		   OR (coord_agents.principal_id='' AND coord_agents.person='' AND excluded.principal_id='' AND excluded.person='')`,
 		a.ExternalID, a.Provider, a.RoomKey, displayName, a.Person, a.PrincipalID, a.Cwd,
-		a.Branch, a.Worktree, a.ParentExternalID, a.Capabilities, at, at, a.Role, a.SessionID, hookAt, a.Role)
+		a.Branch, a.Worktree, a.ParentExternalID, a.Capabilities, at, at, a.Role, a.SessionID, hookAt, CleanMachine(a.Machine), a.Role)
 	if err != nil {
 		return 0, err
 	}
@@ -324,7 +335,8 @@ func (s *Store) coordPeers(roomKey, since string, ownOnly map[string]bool) ([]Co
 	query := `SELECT a.id,a.external_id,a.provider,m.room_key,a.display_name,
 			COALESCE(person,''),COALESCE(cwd,''),COALESCE(branch,''),
 			COALESCE(worktree,''),COALESCE(parent_external_id,''),
-			COALESCE(capabilities,''),registered_at,last_seen_at,COALESCE(a.principal_id,''),a.role,a.last_poll_at,a.session_id,a.last_hook_at
+			COALESCE(capabilities,''),registered_at,last_seen_at,COALESCE(a.principal_id,''),a.role,a.last_poll_at,a.session_id,a.last_hook_at,
+			a.machine,a.work_note,a.work_note_at
 		FROM coord_agents a JOIN coord_room_memberships m ON m.principal_id=a.external_id
 		WHERE m.room_key=? AND m.left_at=''`
 	args := []any{roomKey}
@@ -346,7 +358,8 @@ func (s *Store) coordPeers(roomKey, since string, ownOnly map[string]bool) ([]Co
 		var principal, poll, session, hook string
 		if err := rows.Scan(&a.ID, &a.ExternalID, &a.Provider, &a.RoomKey,
 			&a.DisplayName, &a.Person, &a.Cwd, &a.Branch, &a.Worktree,
-			&a.ParentExternalID, &a.Capabilities, &a.RegisteredAt, &a.LastSeenAt, &principal, &a.RequestedRole, &poll, &session, &hook); err != nil {
+			&a.ParentExternalID, &a.Capabilities, &a.RegisteredAt, &a.LastSeenAt, &principal, &a.RequestedRole, &poll, &session, &hook,
+			&a.Machine, &a.WorkNote, &a.WorkNoteAt); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -373,6 +386,10 @@ func (s *Store) coordPeers(roomKey, since string, ownOnly map[string]bool) ([]Co
 			id = n
 		}
 		out[i].Owner = names[id]
+		out[i].Label = AgentLabel(out[i].Owner, out[i].Machine, out[i].Branch)
+		if !WorkNoteFresh(out[i].WorkNoteAt, time.Now().UTC()) {
+			out[i].WorkNote, out[i].WorkNoteAt = "", ""
+		}
 	}
 	agents := make([]presenceAgent, len(out))
 	for i := range out {

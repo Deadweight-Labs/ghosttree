@@ -189,3 +189,13 @@ func TestTheRuleTextNamesTheWholeMirror(t *testing.T) {
 		}
 	}
 }
+
+// Der Regeltext sagt den Agenten, dass sie ihre Arbeit melden können und was
+// @agents bedeutet.
+func TestTheRuleTextNamesWorkStatusAndBroadcast(t *testing.T) {
+	for _, want := range []string{"coord_status", "@agents", "self-reported"} {
+		if !strings.Contains(ruleText, want) {
+			t.Errorf("the rule text does not mention %q", want)
+		}
+	}
+}

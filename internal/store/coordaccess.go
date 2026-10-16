@@ -563,6 +563,9 @@ func (a CoordAccess) Messages(kind, id string, afterID int64, limit int) ([]Coor
 	if err := fillSenderDisplayNamesTx(tx, a, kind, id, out); err != nil {
 		return nil, err
 	}
+	if err := fillAgentSendersTx(tx, a, kind, id, out); err != nil {
+		return nil, err
+	}
 	if a.AgentExternalID != "" {
 		// Der Leser ist ein Agent: Rollen und Autorität live aus dem Zustand
 		// dieser Transaktion, nach dem Schließen des Cursors.
@@ -694,6 +697,9 @@ func (a CoordAccess) MessageWindow(kind, id string, window MessageWindow) (Messa
 	}
 	page, err := coordMessageWindowTx(tx, kind, id, window)
 	if err != nil {
+		return MessagePage{}, err
+	}
+	if err := fillAgentSendersTx(tx, a, kind, id, page.Messages); err != nil {
 		return MessagePage{}, err
 	}
 	if len(page.Messages) > 0 && a.guestViewForMessageTx(tx, kind, id) {
@@ -1018,6 +1024,7 @@ func (a CoordAccess) Send(message CoordMessage) (int64, error) {
 	message.AuthorPrincipalID = a.Principal.ID
 	message.AuthorKind = a.authorKind()
 	message.SenderRole, message.RecipientRole, message.Authority, message.SenderDisplayName = "", "", "", ""
+	message.SenderLabel, message.SenderWorkNote = "", ""
 	// Ein Wartekreis wird vor dem Senden abgeglichen, damit einer, der
 	// zwischenzeitlich abgelaufen ist, als aufgelöst gilt, bevor diese Nachricht
 	// ihn neu schließt; und danach, weil sie ihn schließen kann.

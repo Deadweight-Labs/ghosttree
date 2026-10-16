@@ -935,3 +935,23 @@ func TestChannelSubprocessCarriesAuthorityInMeta(t *testing.T) {
 		t.Fatalf("meta = %v", meta)
 	}
 }
+
+// @agents im Text ohne mention-Liste umgeht kein Limit: der Server lässt nur
+// einen Broadcast je Fenster zu, und der Versand zählt gegen das Sendelimit.
+func TestChannelBroadcastTokenIsLimited(t *testing.T) {
+	e := newChannelEnv(t)
+	tools := newTools(e.b)
+	tools.machineRoom = store.RoomKeyForMachine("chanbox")
+	clock := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	tools.now = func() time.Time { return clock }
+	if _, _, err := tools.handleSend(context.Background(), nil, channelSendInput{Text: "@agents status 1", Room: "machine"}); err != nil {
+		t.Fatalf("first broadcast: %v", err)
+	}
+	if n := len(tools.limiter.times); n != 1 {
+		t.Errorf("the broadcast was counted %d times by the send limiter, want 1", n)
+	}
+	_, _, err := tools.handleSend(context.Background(), nil, channelSendInput{Text: "@agents ganz neuer Text", Room: "machine"})
+	if err == nil || !strings.Contains(err.Error(), "broadcast limited") {
+		t.Fatalf("second broadcast must be refused, got %v", err)
+	}
+}

@@ -187,6 +187,7 @@ func (a *api) registerRoutes(mux *http.ServeMux) {
 	a.routeFunc(mux, "GET /api/ghosts/reviews", a.ghostReviews)
 	a.routeFunc(mux, "POST /api/coord/agents", a.registerCoordAgent)
 	a.routeFunc(mux, "GET /api/coord/agents", a.coordPeers)
+	a.routeFunc(mux, "POST /api/coord/status", a.setCoordStatus)
 	a.routeFunc(mux, "POST /api/coord/messages", a.sendCoordMessage)
 	a.routeFunc(mux, "GET /api/coord/messages", a.coordInbox)
 	a.routeFunc(mux, "GET /api/coord/messages/{id}/mentions", a.coordMessageMentions)

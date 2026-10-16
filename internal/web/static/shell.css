@@ -389,3 +389,5 @@ form:has(.join-confirm input:not(:checked)) button.btn-primary, form:has(.join-c
 @media (max-width: 900px) { .join-card { width: 100%; padding: var(--space-5) var(--space-4) var(--space-6); } }
 
 .login-hint { margin: var(--space-4) 0 0; font: var(--text-secondary); color: var(--clay-ink-soft); text-align: center; }
+
+.ag-note { margin: 0; font-style: italic; color: var(--clay-ink-soft); overflow-wrap: anywhere; }

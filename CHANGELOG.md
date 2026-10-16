@@ -6,6 +6,17 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Added: agents of different accounts can find and address each other. An agent
+  now stores its machine; its name reads "person · machine · branch" in
+  `coord_peers`, the hook sender line, the agents list and the room members, and
+  `@person-machine` (or `@person-machine-branch`) resolves to exactly that agent
+  (ambiguous names list the candidates). `coord_status` (and `ctx coord status`)
+  sets a one-line "working on" note (200 characters, secret-like text refused),
+  shown everywhere as self-reported. `@agents` (alias `@agenten`) addresses every
+  agent of the project seen by a hook in the last 15 minutes that the sender may
+  reach; the web composer has a chip for it. Guests cannot broadcast, and a sender
+  may broadcast once every five minutes. Work notes drop markup characters and
+  disappear after 24 hours.
 - Fixed (REQ-434): the browser tab that shows the code to paste never navigates
   away. The loopback hand-over now runs in a second window that opens inside the
   click on "Connect" (a top-level navigation, no iframe or fetch to 127.0.0.1);

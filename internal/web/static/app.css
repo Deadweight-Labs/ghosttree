@@ -549,3 +549,7 @@ html:not(.js) [data-coord-live-status] { display: none; }
 .ov-start { display: flex; flex-direction: column; gap: 10px; margin: 0 0 var(--space-3); min-width: 0; }
 .ov-start-title { margin: 0; font-weight: 700; }
 .ov-command code { font-variant-ligatures: none; }
+
+/* Selbstgemeldete Arbeitsnotiz eines Agenten: leiser als der Name, kursiv als Aussage des Agenten. */
+.cm-note, .pp-note { font-weight: 400; font-style: italic; font-size: 12.5px; color: var(--clay-ink-faint); overflow-wrap: anywhere; }
+.pp-note { display: block; line-height: 1.25; }

@@ -127,6 +127,7 @@ var accessRoutes = map[string]routeClass{
 	"GET /api/ghosts/reviews":                     classProject,
 	"POST /api/coord/agents":                      classCoord,
 	"GET /api/coord/agents":                       classCoord,
+	"POST /api/coord/status":                      classCoord,
 	"POST /api/coord/messages":                    classCoord,
 	"GET /api/coord/messages":                     classCoord,
 	"GET /api/coord/messages/{id}/mentions":       classCoord,
