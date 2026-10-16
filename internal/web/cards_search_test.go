@@ -121,7 +121,7 @@ func TestTaskCardsShowPathAndCheckAsCommandsAndTheWholeDescription(t *testing.T)
 	tpTask(t, e, shellProject, req.Request.ID, humantask.CreateInput{Kind: "file", Title: "Put the dump in place", Description: desc,
 		Location: "/srv/arkon/import/2026-10/schema-dump.sql", CheckHint: "test -s /srv/arkon/import/2026-10/schema-dump.sql\nsha256sum -c schema-dump.sha256"})
 	tpTask(t, e, shellProject, req.Request.ID, humantask.CreateInput{Title: "Nothing to point at"})
-	for _, path := range []string{"/ui/tasks", "/ui/overview"} {
+	for _, path := range []string{"/ui/tasks"} {
 		_, page := fetchPage(t, e.Member, e.Base+path)
 		if strings.Count(page, `class="g-card clay"`) != 2 {
 			t.Fatalf("%s: want two cards", path)

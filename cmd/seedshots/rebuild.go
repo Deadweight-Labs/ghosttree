@@ -364,6 +364,14 @@ func seedRebuild(path string) map[string]string {
 			age time.Duration
 		}{-1_000_000 - id, k.age})
 	}
+	// Der Gärtner hat in der letzten Nacht auch Einträge geprüft, die in
+	// Ordnung sind: davon spricht der Bericht ("hat N Einträge geprüft").
+	for i, id := range kids {
+		if items[i].harness == "gardener" {
+			continue
+		}
+		must(st.SaveGardenCheck(items[i].project, store.GardenCheck{KnowledgeID: id, CheckedAt: time.Now().UTC().Add(-5*time.Hour - time.Duration(i)*time.Minute).Format(time.RFC3339), Verdict: "holds"}))
+	}
 	// Bestehendes Wissen (nicht in Review), damit die Wissensseite nicht leer wirkt.
 	for i, t := range [][2]string{
 		{"Deploy läuft über den Tag-Push", "Ein Tag v* startet die Release-Pipeline; Prod wird von Hand ausgerollt."},

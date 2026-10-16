@@ -24,3 +24,20 @@
     setTimeout(() => button.classList.remove("is-done"), 1500);
   });
 })();
+
+// Auswahlleiste der Review: erscheint ab der ersten Auswahl und zählt mit.
+(() => {
+  const bar = document.querySelector("[data-bulk]");
+  if (!bar) return;
+  const boxes = () => document.querySelectorAll('input.g-sel[form="gbulk"]');
+  const update = () => {
+    const n = [...boxes()].filter((box) => box.checked).length;
+    bar.classList.toggle("is-idle", n === 0);
+    const count = bar.querySelector("[data-bulk-count]");
+    if (count && n > 0) count.textContent = (bar.dataset.fmt || "").replace(/\d+/, String(n));
+  };
+  document.addEventListener("change", (event) => {
+    if (event.target.matches && event.target.matches("input.g-sel")) update();
+  });
+  update();
+})();

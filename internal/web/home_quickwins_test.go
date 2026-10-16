@@ -136,7 +136,7 @@ func TestNextShowsQuestionsBeforeProposalsAndBundlesThem(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, page := fetchPage(t, e.Reviewer, e.Base+"/ui/overview")
-	q, p := strings.Index(page, "Which of the two schemas?"), strings.Index(page, "3 proposals wait for review")
+	q, p := strings.Index(page, "Which of the two schemas?"), strings.Index(page, "3 knowledge proposals are waiting for you")
 	if q < 0 || p < 0 || q > p {
 		t.Fatalf("question at %d, proposals at %d: the question must come first", q, p)
 	}
@@ -161,10 +161,10 @@ func TestHomeAgentRowsSayWhatTheAgentWorksOn(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, page := fetchPage(t, e.Member, e.Base+"/ui/overview")
-	if !strings.Contains(page, `<span class="ov-name">Roles first</span>`) {
+	if !strings.Contains(page, `<h3 class="g-title">Roles first</h3>`) {
 		t.Errorf("the request title is not the headline: %s", page)
 	}
-	if !strings.Contains(page, `<span class="ov-name">Reading the audit</span>`) {
+	if !strings.Contains(page, `<h3 class="g-title">Reading the audit</h3>`) {
 		t.Error("the work note is not the headline of an agent without a request")
 	}
 	if !strings.Contains(page, `title="claude:laptop:aaaa1111"`) {
@@ -189,8 +189,8 @@ func TestHomeAndRoomAgreeThatTheAgentWaitsOnAPerson(t *testing.T) {
 	_, home := fetchPage(t, e.Owner, e.Base+"/ui/overview")
 	row := home[strings.Index(home, `title="claude:waiter"`):]
 	row = row[:strings.Index(row, "</li>")]
-	if !strings.Contains(row, "Waiting on you") || !strings.Contains(row, "is-waiting_user") {
-		t.Errorf("home row: %s", row)
+	if !strings.Contains(row, "Waiting on you") || !strings.Contains(row, `class="g-dot is-wait"`) || strings.Contains(row, "is-work") {
+		t.Errorf("home row: text and dot must say the same: %s", row)
 	}
 	_, room := fetchPage(t, e.Owner, e.Base+"/ui/coord?room="+url.QueryEscape(store.RoomKeyForProject(shellProject)))
 	if !strings.Contains(room, "Waiting on you") {
@@ -446,11 +446,11 @@ func TestWaitingOnYouIsRelativeToTheViewer(t *testing.T) {
 		row := home[i:]
 		return row[:strings.Index(row, "</li>")]
 	}
-	if row := rowOf(e.Owner); !strings.Contains(row, "Waiting on you") || !strings.Contains(row, "is-waiting_user") {
+	if row := rowOf(e.Owner); !strings.Contains(row, "Waiting on you") || !strings.Contains(row, `class="g-dot is-wait"`) || strings.Contains(row, "is-work") {
 		t.Errorf("the person asked: %s", row)
 	}
 	row := rowOf(e.Member)
-	if strings.Contains(row, "Waiting on you") || strings.Contains(row, "is-waiting_user") || !strings.Contains(row, "Waiting for a person") {
+	if strings.Contains(row, "Waiting on you") || !strings.Contains(row, "Waiting for person") {
 		t.Errorf("someone else: %s", row)
 	}
 	_, theirRoom := fetchPage(t, e.Member, e.Base+"/ui/coord?room="+url.QueryEscape(room))

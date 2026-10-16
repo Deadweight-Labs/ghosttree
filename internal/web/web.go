@@ -159,6 +159,7 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.handle(mux, "POST /ui/knowledge/{id}/move", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.knowledgeMove))))))
 	a.handle(mux, "POST /ui/knowledge/{id}/edit", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.knowledgeEdit))))))
 	a.handle(mux, "GET /ui/review", a.requirePerson(http.HandlerFunc(a.reviewPage)))
+	a.handle(mux, "POST /ui/review/bulk", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.reviewBulk))))))
 	a.handle(mux, "POST /ui/review/{id}/{verdict}", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.reviewDecide))))))
 	a.handle(mux, "GET /ui/sessions", a.requirePerson(http.HandlerFunc(a.sessionsPage)))
 	a.handle(mux, "GET /ui/sessions/{id}", a.requirePerson(http.HandlerFunc(a.sessionPage)))
@@ -445,6 +446,7 @@ var webRoutes = map[string]webClass{
 	"POST /ui/knowledge/{id}/move":          webAdmin,
 	"GET /ui/review":                        webProject,
 	"GET /ui/search":                        webProject,
+	"POST /ui/review/bulk":                  webAdmin,
 	"POST /ui/review/{id}/{verdict}":        webAdmin,
 	"GET /ui/sessions":                      webProject,
 	"GET /ui/sessions/{id}":                 webProject,

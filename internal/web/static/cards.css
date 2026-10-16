@@ -232,3 +232,23 @@
 .g-dot.is-mitigated { background: transparent; box-shadow: inset 0 0 0 2px var(--clay-warn); }
 .g-dot.is-resolved { background: var(--clay-ok); }
 .g-dot.is-obsolete { background: transparent; box-shadow: inset 0 0 0 2px var(--clay-ink-faint); }
+
+/* Start */
+.g-foot--start { justify-content: flex-start; }
+.g-after { padding: 0 4px; margin: -24px 0 var(--g-group-gap); }
+.g-pad { padding: 0 4px; }
+.g-dot.pulse { box-shadow: 0 0 0 4px color-mix(in srgb, var(--clay-ok) 22%, transparent); }
+.g-agent[title] { cursor: default; }
+.g-row .g-btn { justify-self: end; }
+.g-sep { margin: 0 .45em; color: var(--clay-ink-faint); }
+
+/* Gaertner-Bericht */
+.g-report { grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 16px 24px; margin-bottom: var(--g-card-gap); }
+.g-report-text { display: grid; gap: 4px; min-width: 0; }
+.g-acts { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.g-hint { align-items: start; }
+.g-hint > .g-sel { margin-top: 4px; justify-self: center; }
+.g-hint .g-verdict { margin-bottom: 4px; }
+.g-hint .g-text { margin-top: 4px; color: var(--clay-ink-soft); }
+.g-hint .g-fold { margin-top: 4px; }
+.js .g-bulk.is-idle { display: none; }

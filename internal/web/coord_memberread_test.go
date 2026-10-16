@@ -367,7 +367,7 @@ func TestAgentsPageShowsLastPostAndWorkingRoomLinkToOwnerWithoutRoomAgent(t *tes
 			t.Errorf("%s: last post or room link missing", who)
 		}
 		_, overview := fetchPage(t, c, e.Base+"/ui/overview")
-		if !strings.Contains(overview, "worker-sess-a") {
+		if !strings.Contains(overview, "feat/sess-a") {
 			t.Errorf("%s: overview lacks the agent", who)
 		}
 		if status, _ := fetchPage(t, c, e.Base+"/ui/coord?room="+url.QueryEscape(room)); status != 200 {

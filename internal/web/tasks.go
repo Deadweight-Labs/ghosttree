@@ -143,31 +143,6 @@ func (a *app) taskRows(l lang, pa *store.ProjectAccess, tasks []humantask.Task) 
 	return rows
 }
 
-// overviewWaiting is the block "Waiting on you": open tasks the viewer can mark
-// done. A guest sees only what is assigned to them; the store filter decides.
-func (a *app) overviewWaiting(r *http.Request, pa *store.ProjectAccess, project string) (*tasksView, error) {
-	l := a.langFor(r)
-	var out []taskRow
-	for _, p := range visibleProjects(pa, project) {
-		tasks, err := a.store.ListHumanTasks(pa, store.TaskFilter{Project: p, State: humantask.Open, Mine: true, Limit: tasksShown})
-		if err != nil {
-			return nil, err
-		}
-		for _, row := range a.taskRows(l, pa, tasks) {
-			if row.CanDone {
-				out = append(out, row)
-			}
-		}
-	}
-	if len(out) > overviewMaxWaiting {
-		out = out[:overviewMaxWaiting]
-	}
-	// The block is there with nothing in it too: it is where a person looks.
-	v := &tasksView{Rows: out, Project: project, Token: csrfOf(r), Back: "overview", Any: len(out) > 0}
-	v.split()
-	return v, nil
-}
-
 func anyDoable(rows []taskRow) bool {
 	for _, row := range rows {
 		if row.CanDone {

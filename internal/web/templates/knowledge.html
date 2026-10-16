@@ -37,13 +37,29 @@
 {{if .CanReject}}<form method="post" action="/ui/review/{{.ID}}/reject"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="next" value="{{.Next}}"><input type="hidden" name="project" value="{{.Filter}}"><button class="g-btn g-btn--ghost">{{if .Retire}}{{t "knowledge.retire"}}{{else}}{{t "knowledge.reject"}}{{end}}</button></form>{{end}}
 {{if .CanApprove}}<form method="post" action="/ui/review/{{.ID}}/approve"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="next" value="{{.Next}}"><input type="hidden" name="project" value="{{.Filter}}"><button class="g-btn g-btn--primary clay">{{t "knowledge.approve"}}</button></form>{{end}}</div></li>{{end}}
 
+{{define "gardenhint"}}<li class="g-row g-hint">{{if .Selectable}}<input class="g-sel" type="checkbox" form="gbulk" name="id" value="{{.ID}}" aria-label="{{t "review.select"}}">{{else}}<span></span>{{end}}
+<div><span class="g-verdict">{{template "icon" "warn"}}{{.Verdict}}</span><h3 class="g-title"><a href="{{.Href}}">{{.Subject}}</a></h3><p class="g-src">{{.Project}}{{template "gsep"}}<span{{if .Old}} class="g-age is-old"{{end}}>{{.Age}}</span></p>{{if .Reason}}<p class="g-text">{{.Reason}}</p>{{end}}{{template "gexplain" .Explain}}</div>
+<div class="g-acts">{{if .CanReject}}<form method="post" action="/ui/review/{{.ID}}/reject"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="next" value="{{.Next}}"><input type="hidden" name="project" value="{{.Filter}}"><input type="hidden" name="source" value="gardener"><button class="g-btn g-btn--ghost">{{t "knowledge.reject"}}</button></form>{{end}}
+{{if .CanApprove}}<form method="post" action="/ui/review/{{.ID}}/approve"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="next" value="{{.Next}}"><input type="hidden" name="project" value="{{.Filter}}"><input type="hidden" name="source" value="gardener"><button class="g-btn clay">{{t "knowledge.approve"}}</button></form>{{end}}</div></li>{{end}}
+
+{{define "gardenall"}}<form method="post" action="/ui/review/bulk"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="source" value="gardener"><input type="hidden" name="project" value="{{.Filter}}"><input type="hidden" name="verdict" value="{{.Verdict}}">{{range .IDs}}<input type="hidden" name="id" value="{{.}}">{{end}}<button class="g-btn{{if .Primary}} g-btn--primary clay{{else}} g-btn--ghost{{end}}">{{.Label}}</button></form>{{end}}
+
+{{define "gardenblock"}}{{with .}}<section class="g-group" id="gardener">
+<div class="g-card clay g-report"><div class="g-report-text"><span class="g-kind">{{template "icon" "garden"}}{{t "usage.job.garden"}}</span><h3 class="g-title">{{.Title}}</h3>{{if .Source}}<p class="g-src">{{.Source}}</p>{{end}}</div>
+<div class="g-acts">{{with .AllReject}}{{template "gardenall" .}}{{end}}{{with .AllApprove}}{{template "gardenall" .}}{{end}}</div></div>
+<ul class="g-deck clay">{{range .Rows}}{{template "gardenhint" .}}{{end}}</ul>
+{{if .Any}}<form id="gbulk" method="post" action="/ui/review/bulk"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="source" value="gardener"><input type="hidden" name="project" value="{{.Filter}}">
+<div class="g-bulk clay is-idle" data-bulk data-fmt="{{t "review.bulk.selected" 0}}"><span class="g-lead" data-bulk-count>{{t "review.bulk.some"}}</span>{{if .RejectIDs}}<button class="g-btn" name="verdict" value="reject">{{t "knowledge.reject"}}</button>{{end}}{{if .ApproveIDs}}<button class="g-btn g-btn--primary clay" name="verdict" value="approve">{{t "knowledge.approve"}}</button>{{end}}</div></form>{{end}}
+</section>{{end}}{{end}}
+
 {{define "review"}}{{template "head" .}}{{template "nav" .}}<main class="g-page kn"><link rel="stylesheet" href="/static/knowledge.css">
 {{with .ReviewV}}<header class="g-page-head"><h1>{{t "nav.knowledge"}}</h1></header>{{template "ktabs" $}}
 {{template "knresult" .Result}}
+{{template "gardenblock" .Garden}}
 {{if .Groups}}{{range .Groups}}<section class="g-group">{{if $.ReviewV.Titled}}<h2 class="g-group-head"><span>{{.Label}}<span class="g-count">{{.Count}}</span></span></h2>{{end}}
 <ul class="g-stack">{{range .Shown}}{{template "revcard" .}}{{end}}</ul>
 {{if .More}}<details class="g-more"><summary>{{t "knowledge.review_more" (len .More) .Label}}</summary><ul class="g-stack">{{range .More}}{{template "revcard" .}}{{end}}</ul></details>{{end}}</section>{{end}}
-{{else}}<p class="g-empty">{{t "knowledge.review_empty"}}</p>{{end}}
+{{else if .Empty}}<p class="g-empty">{{t "knowledge.review_empty"}}</p>{{end}}
 {{end}}{{template "foot" .}}{{end}}
 
 {{define "knowledgeitem"}}{{template "head" .}}{{template "nav" .}}<main class="kn kn-detail"><link rel="stylesheet" href="/static/knowledge.css">
