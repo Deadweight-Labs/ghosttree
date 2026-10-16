@@ -46,6 +46,8 @@ var (
 	ErrNotExplainable = errors.New("object cannot be explained")
 	// ErrDisabled means no model is configured.
 	ErrDisabled = errors.New("explanations are not generated: no model configured")
+	// ErrBatchTaken means an object of a batch about to be sent already waits in another one.
+	ErrBatchTaken = errors.New("object is already part of an open batch")
 )
 
 // ValidKind reports whether kind is one of the explained object kinds.

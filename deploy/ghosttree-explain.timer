@@ -1,0 +1,10 @@
+[Unit]
+Description=ghosttree "In short" batches, hourly
+
+[Timer]
+OnBootSec=15m
+OnUnitActiveSec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

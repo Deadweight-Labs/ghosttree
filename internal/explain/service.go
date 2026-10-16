@@ -43,6 +43,19 @@ type Store interface {
 	// ExplainCandidates lists objects in the order they should be explained:
 	// the review queue first. It does not look at explanations.
 	ExplainCandidates(scan int) ([]Candidate, error)
+	// ExplainCreatedAt is when the object was created.
+	ExplainCreatedAt(kind string, id int64) (time.Time, error)
+
+	// The batch records (see batch.go).
+	RecordExplainBatch(providerID, model, language string, items []BatchItem) (int64, error)
+	ReserveExplainBatch(model, language string, items []BatchItem) (int64, error)
+	ActivateExplainBatch(batchID int64, providerID string) error
+	OpenExplainBatches() ([]OpenBatch, error)
+	PendingExplainBatchItems(batchID int64) ([]BatchItem, error)
+	FinishExplainBatchItem(batchID int64, customID, state, errText, day string, u Usage) error
+	CloseExplainBatch(batchID int64, state string) error
+	ExplainBatchBlocked(failedSince string) (map[string]bool, error)
+	ExplainBatched(kind string, id int64, hash, failedSince string) (bool, error)
 }
 
 // Config configures a Service.
@@ -61,6 +74,12 @@ type Config struct {
 	PriceKnown bool
 	Timeout    time.Duration
 	Now        func() time.Time
+	// Batch is the asynchronous path used for everything but new objects; nil
+	// when the client has none. BatchMaxRequests and BatchMaxBytes override the
+	// provider's size limits (zero keeps them), for tests.
+	Batch            llm.BatchClient
+	BatchMaxRequests int
+	BatchMaxBytes    int
 }
 
 // ErrLimit means a daily or monthly cap is used up. The error that wraps it
@@ -180,9 +199,11 @@ type View struct {
 // Empty reports that there is nothing to show and nothing to wait for.
 func (v View) Empty() bool { return v.Text == "" && !v.Pending }
 
-// View returns the block of an object. It never waits for the model: a missing
-// or outdated explanation starts generation in the background and the page
-// shows it on the next look. Without a model configured it only shows what an
+// View returns the block of an object. It never waits for the model: a new
+// object without any explanation starts generation in the background and the
+// page shows it on the next look. Older objects, outdated texts and texts in
+// another language are left to the batch (SubmitBatches), so that opening a page
+// never starts bulk work. Without a model configured it only shows what an
 // agent wrote for the current text.
 func (s *Service) View(kind string, id int64) View {
 	if s == nil || s.st == nil || !ValidKind(kind) {
@@ -196,15 +217,16 @@ func (s *Service) View(kind string, id int64) View {
 	if err != nil {
 		return View{}
 	}
-	fresh := ok && e.ContentHash == src.Hash
-	if fresh {
-		v := View{Text: e.Text, Generated: e.Source == SourceGenerated}
+	if ok && e.ContentHash == src.Hash {
 		// A generated text in another language than the server's is shown until
-		// the new one is there.
-		if v.Generated && e.Language != s.cfg.Language {
-			s.start(kind, id, src)
-		}
-		return v
+		// the batch has written the new one.
+		return View{Text: e.Text, Generated: e.Source == SourceGenerated}
+	}
+	if ok {
+		// Outdated: the text it explains has changed. The page shows nothing and
+		// the next batch writes a new one; one-by-one generation is only for
+		// objects that have no explanation at all.
+		return View{}
 	}
 	return View{Pending: s.start(kind, id, src)}
 }
@@ -252,6 +274,15 @@ const (
 // running for the object.
 func (s *Service) start(kind string, id int64, src Source) bool {
 	if !s.Enabled() || src.Project == "" {
+		return false
+	}
+	// Only new objects are explained one by one, and not while a batch already
+	// carries them (or failed on them a moment ago).
+	created, err := s.st.ExplainCreatedAt(kind, id)
+	if err != nil || s.cfg.Now().Sub(created) > NewObjectWindow {
+		return false
+	}
+	if batched, err := s.st.ExplainBatched(kind, id, src.Hash, s.failedSince()); err != nil || batched {
 		return false
 	}
 	k := key(kind, id)
@@ -389,69 +420,6 @@ func (s *Service) complete(ctx context.Context, system, user string) (string, ll
 }
 
 func estimateTokens(s string) int { return (utf8.RuneCountInString(s) + 3) / 4 }
-
-// Report is the result of a backfill run.
-type Report struct {
-	Generated int
-	Fresh     int
-	Failed    int
-	// Stopped says why the run ended before the limit: "limit" (a daily or
-	// monthly cap), "none" (nothing left) or "" (it ran to the requested number).
-	Stopped string
-	// LimitHit names the cap that stopped the run, for example "daily calls
-	// limit reached: 200 of 200".
-	LimitHit string
-	Errors   []string
-}
-
-// Backfill explains up to limit objects that lack a current explanation, the
-// review queue first. It stops cleanly at a daily or monthly cap.
-func (s *Service) Backfill(ctx context.Context, limit int) (Report, error) {
-	var r Report
-	if !s.Enabled() {
-		return r, ErrDisabled
-	}
-	scan := limit*10 + 200
-	cands, err := s.st.ExplainCandidates(scan)
-	if err != nil {
-		return r, err
-	}
-	for _, c := range cands {
-		if r.Generated >= limit {
-			return r, nil
-		}
-		if ctx.Err() != nil {
-			return r, ctx.Err()
-		}
-		src, err := s.st.ExplainSource(c.Kind, c.ID)
-		if err != nil || src.Project == "" {
-			continue
-		}
-		e, ok, err := s.st.Explanation(c.Kind, c.ID)
-		if err != nil {
-			return r, err
-		}
-		if ok && e.ContentHash == src.Hash && (e.Source != SourceGenerated || e.Language == s.cfg.Language) {
-			r.Fresh++
-			continue
-		}
-		switch err := s.Generate(ctx, c.Kind, c.ID); {
-		case err == nil:
-			r.Generated++
-		case errors.Is(err, ErrLimit):
-			r.Stopped = "limit"
-			r.LimitHit = strings.TrimPrefix(err.Error(), ErrLimit.Error()+": ")
-			return r, nil
-		default:
-			r.Failed++
-			if len(r.Errors) < 5 {
-				r.Errors = append(r.Errors, fmt.Sprintf("%s %d: %v", c.Kind, c.ID, err))
-			}
-		}
-	}
-	r.Stopped = "none"
-	return r, nil
-}
 
 // --------------------------------------------------------------------- Prompt
 

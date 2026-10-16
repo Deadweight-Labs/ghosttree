@@ -99,10 +99,12 @@ func onlyLoopback(host string) bool {
 // plain http allowed for a server on this machine. That is localhost, a
 // loopback address, or a hostname that resolves only to loopback addresses
 // (a tunnel to a shared proxy that routes by Host header, named in /etc/hosts).
-func checkBaseURL(raw string) error {
+func checkBaseURL(raw string) error { return checkBaseURLFor("gardener", raw) }
+
+func checkBaseURLFor(who, raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" {
-		return fmt.Errorf("gardener base_url %q is not a URL", raw)
+		return fmt.Errorf("%s base_url %q is not a URL", who, raw)
 	}
 	if u.Scheme == "https" {
 		return nil
@@ -110,7 +112,7 @@ func checkBaseURL(raw string) error {
 	if u.Scheme == "http" && onlyLoopback(u.Hostname()) {
 		return nil
 	}
-	return fmt.Errorf("gardener base_url must be https (http only for hosts that resolve to loopback), got %q", u.Scheme+"://"+u.Host)
+	return fmt.Errorf("%s base_url must be https (http only for hosts that resolve to loopback), got %q", who, u.Scheme+"://"+u.Host)
 }
 
 type gardenFile struct {
