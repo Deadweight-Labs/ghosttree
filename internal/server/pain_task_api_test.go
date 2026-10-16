@@ -186,6 +186,10 @@ func TestPainAPICriteria(t *testing.T) {
 	if len(list) != 1 {
 		t.Errorf("list: %+v", list)
 	}
+	details := decode[[]pain.Detail](t, f.expect(t, "mia", 200, "GET", "/api/pains?detail=1&state=all&project="+accProject, nil))
+	if len(details) != 1 || len(details[0].Motivates) == 0 || len(details[0].Events) == 0 {
+		t.Errorf("detail list: %+v", details)
+	}
 	f.expect(t, "nora", 404, "GET", "/api/pains?project="+accProject, nil)
 	f.expect(t, "mia", 400, "GET", "/api/pains", nil)
 

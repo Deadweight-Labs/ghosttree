@@ -67,7 +67,9 @@ func (a *app) painsPage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	pa := a.access(r)
 	project := selectedProject(a.shellFor(r, "pains"))
-	state := r.URL.Query().Get("state")
+	// Every state, active and mitigated first: a resolved pain with its
+	// evidence has to stay findable.
+	state := "all"
 	v := &painsView{Project: project, ShowProject: project == ""}
 	for _, p := range visibleProjects(pa, project) {
 		list, err := pa.SearchPains(pain.Filter{Project: p, State: state, Limit: painsShown})
@@ -113,7 +115,7 @@ func (a *app) painPage(w http.ResponseWriter, r *http.Request) {
 		Blocks: bodyBlocks(p.Body, 0), Token: csrfOf(r), Back: "/ui/pains?project=" + url.QueryEscape(p.Project)}
 	v.CanWork = pa.CheckPain(p, store.ActWork) == nil
 	for _, s := range pain.States {
-		v.States = append(v.States, filterOption{Value: s, Label: label(painStateKeys, s), Selected: false})
+		v.States = append(v.States, filterOption{Value: s, Label: label(painStateKeys, s), Selected: s == p.State})
 	}
 	for _, k := range pain.EvidenceKinds {
 		v.EvidenceKinds = append(v.EvidenceKinds, filterOption{Value: k, Label: label(painEvidenceKeys, k), Selected: k == "commit"})
@@ -153,8 +155,10 @@ func (a *app) painPage(w http.ResponseWriter, r *http.Request) {
 		}
 		v.Events = append(v.Events, line)
 	}
-	switch r.URL.Query().Get("done") {
-	case "state":
+	switch {
+	case r.URL.Query().Get("fail") != "":
+		v.Result = &requestResult{Text: msg(painFailKey(r.URL.Query().Get("fail"))), Kind: "failed", Fail: true}
+	case r.URL.Query().Get("done") == "state":
 		v.Result = &requestResult{Text: msg("pains.result.state"), Kind: "done"}
 	}
 	a.renderBrowser(w, r, "pain", pageData{Title: p.HumanID(), PainV: v})
@@ -199,6 +203,10 @@ func (a *app) painState(w http.ResponseWriter, r *http.Request) {
 		ev = pain.Evidence{}
 	}
 	if _, err := a.access(r).SetPainState(id, to, r.FormValue("remaining"), ev, r.FormValue("note"), actor); err != nil {
+		if code := requestdomain.Code(err); code != "" {
+			http.Redirect(w, r, painURL(id)+"?fail="+url.QueryEscape(code), http.StatusSeeOther)
+			return
+		}
 		a.painFail(w, r, err)
 		return
 	}
@@ -218,4 +226,22 @@ func linkDataText(data string) string {
 		return rest
 	}
 	return data
+}
+
+// painFailKey maps the fail= value of a redirect to its message; unknown values
+// read as a plain failure.
+func painFailKey(code string) string {
+	switch code {
+	case "remaining_required":
+		return "pains.result.remaining_required"
+	case "evidence_required":
+		return "pains.result.evidence_required"
+	case "evidence_invalid":
+		return "pains.result.evidence_invalid"
+	case "note_required":
+		return "pains.result.note_required"
+	case "invalid_transition":
+		return "pains.result.invalid_transition"
+	}
+	return "pains.result.failed"
 }

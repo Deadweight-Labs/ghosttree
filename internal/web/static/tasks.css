@@ -7,6 +7,7 @@
 .tk-title { font-weight: 500; cursor: pointer; overflow-wrap: anywhere; }
 .tk-kind { margin-inline-end: 0.5rem; font-weight: 400; font-size: 0.8em; letter-spacing: 0.04em; text-transform: uppercase; color: var(--clay-ink-faint); }
 .tk-where { justify-self: start; max-inline-size: 100%; overflow-wrap: anywhere; font-size: 0.85em; color: var(--clay-ink-soft, var(--clay-ink-faint)); }
+.tk-desc { margin: 0; font-size: 0.9em; color: var(--clay-ink-soft, var(--clay-ink-faint)); overflow-wrap: anywhere; }
 .tk-said { margin: 0; font-size: 0.9em; color: var(--clay-ink-soft, var(--clay-ink-faint)); }
 .tk-said::before { content: "\201C"; }
 .tk-said::after { content: "\201D"; }

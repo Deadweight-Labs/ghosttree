@@ -42,6 +42,9 @@ type Task struct {
 	// HandoffSession is the session that wrote the handoff; the bootstrap shows
 	// the handoff only where the viewer may read that session.
 	HandoffSession int64 `json:"-"`
+	// CanConfirm tells the bootstrap whether the viewer may confirm or reopen
+	// this task; it is set per viewer and never stored or delivered as JSON.
+	CanConfirm bool `json:"-"`
 	// Account columns decide visibility and never leave the server.
 	AssigneeAccount  int64 `json:"-"`
 	CreatedByAccount int64 `json:"-"`
@@ -108,5 +111,5 @@ func InvalidTransition(from, to string) error {
 }
 
 func ReasonRequired() error {
-	return ruleErr("reason_required", "this change needs a reason", "say why in note")
+	return ruleErr("reason_required", "this change needs a reason", "give a reason")
 }

@@ -85,6 +85,18 @@ func (a *api) searchPains(w http.ResponseWriter, r *http.Request) {
 		writePainError(w, err)
 		return
 	}
+	if q.Get("detail") == "1" {
+		// One call with the edges and history of every hit, for the mirror, so
+		// a session start does not make one request per pain.
+		details := make([]pain.Detail, 0, len(list))
+		for _, p := range list {
+			if d, err := a.access(r).PainDetailView(p.ID); err == nil {
+				details = append(details, d)
+			}
+		}
+		writeJSON(w, http.StatusOK, details)
+		return
+	}
 	writeJSON(w, http.StatusOK, list)
 }
 

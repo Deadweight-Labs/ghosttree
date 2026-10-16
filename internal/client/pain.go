@@ -43,6 +43,20 @@ func (c *Client) SearchPains(project, state, query string, requestID int64, limi
 	return out, err
 }
 
+// SearchPainDetails is SearchPains with edges and history in one call.
+func (c *Client) SearchPainDetails(project, state string, limit int) ([]pain.Detail, error) {
+	q := url.Values{"project": {project}, "detail": {"1"}}
+	if state != "" {
+		q.Set("state", state)
+	}
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	var out []pain.Detail
+	err := c.do("GET", "/api/pains", q, nil, &out)
+	return out, err
+}
+
 func (c *Client) SetPainState(id int64, state, remaining string, ev pain.Evidence, note string, sessionID int64) (pain.Detail, error) {
 	var out pain.Detail
 	err := c.do("POST", painPath(id)+"/state", nil, map[string]any{

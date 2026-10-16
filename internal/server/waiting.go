@@ -58,9 +58,23 @@ func renderWaiting(w humantask.Waiting) string {
 	}
 	var b strings.Builder
 	b.WriteString("\n## Waiting on the human (ghosttree)\n")
-	if len(w.Done) > 0 {
+	var confirmable, others []humantask.Task
+	for _, t := range w.Done {
+		if t.CanConfirm {
+			confirmable = append(confirmable, t)
+		} else {
+			others = append(others, t)
+		}
+	}
+	if len(confirmable) > 0 {
 		b.WriteString("\nDone by the human, not yet confirmed. Check each against its check line, then human_task_resolve with action confirm, or action reopen with a reason:\n")
-		for _, t := range w.Done {
+		for _, t := range confirmable {
+			b.WriteString(waitingLine(t, true))
+		}
+	}
+	if len(others) > 0 {
+		b.WriteString("\nDone by the human, waiting for their creator to confirm (nothing for you to do):\n")
+		for _, t := range others {
 			b.WriteString(waitingLine(t, true))
 		}
 	}

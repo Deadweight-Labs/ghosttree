@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/humantask"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
@@ -32,6 +33,7 @@ type taskRow struct {
 	Human, Kind, Title string
 	KindLabel, Where   string
 	Req, ReqHref       string
+	Desc               string
 	State, StateLabel  string
 	Note, By, Age      string
 	Project            string
@@ -62,9 +64,10 @@ func visibleProjects(pa *store.ProjectAccess, project string) []string {
 // the viewer may read that request.
 func (a *app) taskRows(pa *store.ProjectAccess, tasks []humantask.Task) []taskRow {
 	rows := make([]taskRow, 0, len(tasks))
+	readable := map[int64]bool{}
 	for _, t := range tasks {
 		row := taskRow{ID: t.ID, Human: t.HumanID(), Kind: t.Kind, Title: t.Title, KindLabel: label(taskKindKeys, t.Kind),
-			Where: t.Location, State: t.State, Project: t.Project, Age: shortAge(overviewNow().UTC(), parseTime(t.UpdatedAt)),
+			Where: t.Location, Desc: ellipsize(oneLineText(t.Description), 240), State: t.State, Project: t.Project, Age: shortAge(overviewNow().UTC(), parseTime(t.UpdatedAt)),
 			CanDone: t.State == humantask.Open && pa.CheckTask(t, store.ActWork) == nil}
 		if t.State != humantask.Open {
 			row.StateLabel = label(taskStateKeys, t.State)
@@ -72,7 +75,12 @@ func (a *app) taskRows(pa *store.ProjectAccess, tasks []humantask.Task) []taskRo
 		if t.State == humantask.Done {
 			row.Note, row.By = t.DoneNote, t.DoneBy
 		}
-		if a.requestReadable(pa, t.RequestID) {
+		ok, seen := readable[t.RequestID]
+		if !seen {
+			ok = a.requestReadable(pa, t.RequestID)
+			readable[t.RequestID] = ok
+		}
+		if ok {
 			row.Req, row.ReqHref = fmt.Sprintf("REQ-%d", t.RequestID), requestURL(t.RequestID)
 		}
 		rows = append(rows, row)
@@ -131,8 +139,8 @@ func (a *app) tasksPage(w http.ResponseWriter, r *http.Request) {
 	v := &tasksView{Rows: a.taskRows(pa, all), Project: project, Token: csrfOf(r), Back: "tasks"}
 	v.Any = anyDoable(v.Rows)
 	switch {
-	case r.URL.Query().Get("fail") == "secret":
-		v.Result = &requestResult{Text: msg("tasks.result.secret"), Kind: "failed", Fail: true}
+	case r.URL.Query().Get("fail") != "":
+		v.Result = &requestResult{Text: msg(taskFailKey(r.URL.Query().Get("fail"))), Kind: "failed", Fail: true}
 	case r.URL.Query().Get("done") == "1":
 		v.Result = &requestResult{Text: msg("tasks.result.done"), Kind: "done"}
 	}
@@ -194,8 +202,12 @@ func (a *app) taskFail(w http.ResponseWriter, r *http.Request, q url.Values, err
 	case requestdomain.Code(err) == "secret_detected":
 		q.Set("fail", "secret")
 		http.Redirect(w, r, "/ui/tasks"+queryOf(q), http.StatusSeeOther)
+	case requestdomain.Code(err) == "invalid_transition":
+		q.Set("fail", "changed")
+		http.Redirect(w, r, "/ui/tasks"+queryOf(q), http.StatusSeeOther)
 	case requestdomain.Code(err) != "":
-		http.Error(w, "invalid input", http.StatusBadRequest)
+		q.Set("fail", "failed")
+		http.Redirect(w, r, "/ui/tasks"+queryOf(q), http.StatusSeeOther)
 	case errors.Is(err, sql.ErrNoRows):
 		http.NotFound(w, r)
 	default:
@@ -211,3 +223,17 @@ func (a *app) registerPainTaskPages(mux *http.ServeMux) {
 	a.handle(mux, "GET /ui/pains/{id}", a.requirePerson(http.HandlerFunc(a.painPage)))
 	a.handle(mux, "POST /ui/pains/{id}/state", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.painState))))))
 }
+
+// taskFailKey maps the fail= value of a redirect to its message; anything else
+// reads as a plain failure, so the query string cannot inject text.
+func taskFailKey(code string) string {
+	switch code {
+	case "secret":
+		return "tasks.result.secret"
+	case "changed":
+		return "tasks.result.changed"
+	}
+	return "tasks.result.failed"
+}
+
+func oneLineText(s string) string { return strings.Join(strings.Fields(s), " ") }

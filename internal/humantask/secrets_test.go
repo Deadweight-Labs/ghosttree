@@ -43,6 +43,14 @@ func TestCheckTextRejectsSecretsAndKeepsPaths(t *testing.T) {
 			}
 		}
 	}
+	for name, text := range map[string]string{
+		"base64 secret": "key is wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+		"bare 64 hex":   "hmac " + rep("0f", 32),
+	} {
+		if err := CheckText("note", text); err == nil {
+			t.Errorf("%s was not detected: %q", name, text)
+		}
+	}
 	negatives := map[string]string{
 		"git sha":   "commit " + rep("a", 40),
 		"sha256":    "digest " + rep("0f", 32),

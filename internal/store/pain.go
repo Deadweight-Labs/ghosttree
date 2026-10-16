@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/pain"
@@ -496,9 +497,28 @@ func (s *Store) painDetail(pa *ProjectAccess, id int64) (pain.Detail, error) {
 				e.EvidenceKind, e.EvidenceRef = "", ""
 			}
 		}
+		if e.EvidenceKind == "session" && !pa.sessionEvidenceVisible(p.Project, e.EvidenceRef) {
+			e.EvidenceKind, e.EvidenceRef = "", ""
+		}
 		d.Events = append(d.Events, e)
 	}
 	return d, nil
+}
+
+// sessionEvidenceVisible: a session reference names a transcript. Request
+// evidence withholds it from viewers who may not read it; so does a pain. A
+// numeric reference must be a session the viewer can read, a public address is
+// shown to those who see session numbers at all.
+func (a *ProjectAccess) sessionEvidenceVisible(project, ref string) bool {
+	if !a.SeesSessionNumbers(project) {
+		return false
+	}
+	digits := strings.TrimPrefix(strings.TrimSpace(ref), "#")
+	if n, err := strconv.ParseInt(digits, 10, 64); err == nil {
+		sess, err := a.st.SessionByID(n)
+		return err == nil && a.CanSeeTranscript(sess)
+	}
+	return true
 }
 
 // linkDataVisible says whether the target named in a history line is one the
@@ -566,6 +586,13 @@ func (a *ProjectAccess) SearchPains(f pain.Filter) ([]pain.Pain, error) {
 	}
 	if f.Limit > 200 {
 		f.Limit = 200
+	}
+	if f.RequestID != 0 {
+		// An edge to a request the viewer cannot read must not be provable
+		// through the filter.
+		if _, err := a.resolveLinkTarget(f.Project, "request", f.RequestID); err != nil {
+			return []pain.Pain{}, nil
+		}
 	}
 	rows, err := a.st.painRows(f)
 	if err != nil {

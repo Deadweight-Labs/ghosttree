@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/pain"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -149,6 +150,14 @@ func (s *Server) handlePainSearch(_ context.Context, _ *mcp.CallToolRequest, in 
 }
 
 func (s *Server) handlePainUpdate(_ context.Context, _ *mcp.CallToolRequest, in PainUpdateInput) (*mcp.CallToolResult, PainOutput, error) {
+	// Check everything that could fail on the input alone before the first
+	// write, so a rejected call has changed nothing.
+	if in.State == "" && in.Title == "" && in.Body == "" && len(in.LinkAdd) == 0 && len(in.LinkRemove) == 0 {
+		return nil, PainOutput{}, fmt.Errorf("nothing to update: give state, title, body, link_add or link_remove")
+	}
+	if (in.Title != "" || in.Body != "" || len(in.LinkRemove) > 0) && strings.TrimSpace(in.Reason) == "" {
+		return nil, PainOutput{}, fmt.Errorf("correcting title or text and removing links need a reason; nothing was changed")
+	}
 	session := s.currentSessionID()
 	var d pain.Detail
 	var err error

@@ -26,6 +26,9 @@ var (
 	entropyToken = regexp.MustCompile(`^[A-Za-z0-9_-]{32,}$`)
 	hexOnly      = regexp.MustCompile(`^[0-9a-fA-F]+$`)
 	uuidRe       = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+	wideToken    = regexp.MustCompile(`^[A-Za-z0-9/+=_-]{32,}$`)
+	hasUpper     = regexp.MustCompile(`[A-Z]`)
+	hasLower     = regexp.MustCompile(`[a-z]`)
 	hasLetter    = regexp.MustCompile(`[A-Za-z]`)
 	hasDigit     = regexp.MustCompile(`[0-9]`)
 )
@@ -50,12 +53,25 @@ func detect(text string) string {
 			return p.name
 		}
 	}
-	for _, tok := range strings.Fields(text) {
-		tok = strings.Trim(tok, `.,;:()[]{}<>"'`+"`")
+	prev := ""
+	for _, raw := range strings.Fields(text) {
+		tok := strings.Trim(raw, `.,;:()[]{}<>"'`+"`")
+		before := prev
+		prev = strings.ToLower(tok)
+		if hasLetter.MatchString(tok) && hasDigit.MatchString(tok) {
+			if wideToken.MatchString(tok) && strings.ContainsAny(tok, "/+=") {
+				// Base64 style (an AWS secret key has 40 characters with / and +).
+				// Paths stay out: they need mixed case and no dot on top of the length.
+				if len(tok) >= 40 && hasUpper.MatchString(tok) && hasLower.MatchString(tok) {
+					return "long random token"
+				}
+				continue
+			}
+		}
 		if !entropyToken.MatchString(tok) || !hasLetter.MatchString(tok) || !hasDigit.MatchString(tok) {
 			continue
 		}
-		if uuidRe.MatchString(tok) || (hexOnly.MatchString(tok) && (len(tok) == 40 || len(tok) == 64)) {
+		if uuidRe.MatchString(tok) || (hexOnly.MatchString(tok) && isDigestContext(len(tok), before)) {
 			continue
 		}
 		return "long random token"
@@ -71,4 +87,21 @@ func CheckFields(fields ...string) *requestdomain.RuleError {
 		}
 	}
 	return nil
+}
+
+// isDigestContext: a hex token is a Git SHA (40) or a digest (64) only when the
+// word before it says so. A bare 64-hex value may be a raw 256-bit key.
+func isDigestContext(n int, before string) bool {
+	if n == 40 {
+		return true
+	}
+	if n != 64 {
+		return false
+	}
+	for _, w := range []string{"sha", "digest", "hash", "checksum", "commit", "sum"} {
+		if strings.Contains(before, w) {
+			return true
+		}
+	}
+	return false
 }

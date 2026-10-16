@@ -168,6 +168,26 @@ func (a *ProjectAccess) CanSeeTask(t humantask.Task) bool {
 	return a.Allow(t.Project, ResTask, ActRead, a.taskObject(t))
 }
 
+// canSeeTaskVia is CanSeeTask plus the request it hangs on: a member does not
+// get title and location of a task whose request is hidden from them. A task
+// assigned to the viewer stays visible, the assignment is the grant. cache holds
+// the answers per request for one call.
+func (a *ProjectAccess) canSeeTaskVia(t humantask.Task, cache map[int64]bool) bool {
+	if !a.CanSeeTask(t) {
+		return false
+	}
+	if a.valid && a.account != 0 && t.AssigneeAccount == a.account {
+		return true
+	}
+	ok, seen := cache[t.RequestID]
+	if !seen {
+		ref, err := a.st.RequestRef(RefRequest, t.RequestID)
+		ok = err == nil && requestReadable(a, ref)
+		cache[t.RequestID] = ok
+	}
+	return ok
+}
+
 // CheckTask checks an action on a task. A task the viewer may not read answers
 // like an unknown one, whatever the action.
 func (a *ProjectAccess) CheckTask(t humantask.Task, act Action) error {

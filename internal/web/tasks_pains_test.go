@@ -202,8 +202,12 @@ func TestPainsPageDetailAndStateChange(t *testing.T) {
 	if code, _ := fetchPage(t, e.Member, e.Base+"/ui/pains/9999"); code != http.StatusNotFound {
 		t.Errorf("unknown pain = %d", code)
 	}
-	if resp := tpPost(t, e, e.Member, "/ui/pains/"+strconv.FormatInt(d.Pain.ID, 10)+"/state", url.Values{"state": {"mitigated"}, "evidence_kind": {"commit"}, "evidence_ref": {"abc123"}}); resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("mitigated without remaining = %d", resp.StatusCode)
+	if resp := tpPost(t, e, e.Member, "/ui/pains/"+strconv.FormatInt(d.Pain.ID, 10)+"/state", url.Values{"state": {"mitigated"}, "evidence_kind": {"commit"}, "evidence_ref": {"abc123"}}); resp.StatusCode != http.StatusSeeOther || !strings.Contains(resp.Header.Get("Location"), "fail=remaining_required") {
+		t.Errorf("mitigated without remaining = %d %s", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	_, failed := fetchPage(t, e.Member, e.Base+painURL(d.Pain.ID)+"?fail=remaining_required")
+	if !strings.Contains(failed, "Say what is still unsolved.") {
+		t.Errorf("the rule failure is not shown on the page")
 	}
 	resp := tpPost(t, e, e.Member, "/ui/pains/"+strconv.FormatInt(d.Pain.ID, 10)+"/state", url.Values{"state": {"mitigated"}, "remaining": {"search still reads whole"}, "evidence_kind": {"commit"}, "evidence_ref": {"abc123"}})
 	if resp.StatusCode != http.StatusSeeOther {
@@ -232,5 +236,44 @@ func TestKnowledgePageNamesThePainsAnEntryMotivates(t *testing.T) {
 	_, page := fetchPage(t, e.Member, e.Base+"/ui/knowledge/"+strconv.FormatInt(kid, 10))
 	if !strings.Contains(page, "Motivated by") || !strings.Contains(page, "Writes are all or nothing") {
 		t.Errorf("knowledge page lacks the pain: %s", page)
+	}
+}
+
+func TestTaskDescriptionShowsAndAFailedDoneExplainsItself(t *testing.T) {
+	e := ovEnv(t)
+	req := rqMake(t, e.St, rqSpec{Title: "Ship it"})
+	task := tpTask(t, e, shellProject, req.Request.ID, humantask.CreateInput{Title: "Create the key", Description: "Test key, read-only scope"})
+	_, page := fetchPage(t, e.Member, e.Base+"/ui/tasks")
+	if !strings.Contains(page, "Test key, read-only scope") {
+		t.Error("the description is not shown")
+	}
+	id := strconv.FormatInt(task.ID, 10)
+	if resp := tpPost(t, e, e.Member, "/ui/tasks/done", url.Values{"id": {id}}); resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("done = %d", resp.StatusCode)
+	}
+	// The second submit hits a task that is no longer open.
+	resp := tpPost(t, e, e.Member, "/ui/tasks/done", url.Values{"id": {id}})
+	if resp.StatusCode != http.StatusSeeOther || !strings.Contains(resp.Header.Get("Location"), "fail=changed") {
+		t.Fatalf("second done = %d %s", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	_, after := fetchPage(t, e.Member, e.Base+resp.Header.Get("Location"))
+	if !strings.Contains(after, "Someone changed this already") {
+		t.Error("the failure is not explained")
+	}
+}
+
+func TestResolvedPainStaysInTheList(t *testing.T) {
+	e := ovEnv(t)
+	pa := tpOwner(e)
+	d, err := pa.CreatePain(store.CreatePainInput{Project: shellProject, Title: "Gone again", Actor: pain.Actor{AccountID: 1, Person: "alice"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pa.SetPainState(d.Pain.ID, "resolved", "", pain.Evidence{Kind: "commit", Ref: "abc123"}, "", pain.Actor{AccountID: 1, Person: "alice"}); err != nil {
+		t.Fatal(err)
+	}
+	_, list := fetchPage(t, e.Member, e.Base+"/ui/pains")
+	if !strings.Contains(list, "Gone again") || !strings.Contains(list, "Resolved") {
+		t.Errorf("a resolved pain vanished from the list: %s", list)
 	}
 }

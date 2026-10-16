@@ -118,6 +118,13 @@ func TestPainToolsOverTheWire(t *testing.T) {
 	if got, failed := callTool(t, session, "pain_update", map[string]any{"id": 1}); !failed {
 		t.Errorf("an update without anything: %s", got)
 	}
+	// A title change without a reason is refused before the state moves.
+	if got, failed := callTool(t, session, "pain_update", map[string]any{"id": 1, "state": "resolved", "evidence_kind": "commit", "evidence_ref": "abc", "title": "Neu"}); !failed || !strings.Contains(got, "reason") {
+		t.Errorf("title without reason: %v %s", failed, got)
+	}
+	if got, _ := callTool(t, session, "pain_get", map[string]any{"id": 1}); strings.Contains(got, "resolved") {
+		t.Errorf("the state moved although the call was refused: %s", got)
+	}
 }
 
 func TestHumanTaskToolsOverTheWire(t *testing.T) {

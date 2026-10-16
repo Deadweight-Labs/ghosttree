@@ -2,6 +2,9 @@ package store
 
 import (
 	"errors"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -279,7 +282,7 @@ func TestPainDoesNotAgeAndDoesNotResolveWithItsRequest(t *testing.T) {
 	if err := w.st.CompleteRequest(rid, ev); err != nil {
 		t.Fatal(err)
 	}
-	// Hintergrundläufe: nichts davon schreibt Schmerzen.
+	// Zehn Jahre später: nur das Alter ändert sich, nie der Zustand.
 	w.st.DB().Exec(`UPDATE pains SET created_at='2016-01-01T00:00:00Z'`)
 	after, _ := w.st.PainByID(d.Pain.ID)
 	if after.State != pain.Mitigated || after.Remaining != before.Remaining || after.UpdatedAt != before.UpdatedAt {
@@ -359,5 +362,37 @@ func TestPainAndTaskSchemaIsIdempotentOnAnExistingDatabase(t *testing.T) {
 			t.Fatalf("open %d: %v", i, err)
 		}
 		st.Close()
+	}
+}
+
+// Kein Altern heißt: kein Hintergrundlauf (Stale, Retention, Destillation,
+// Reaper) schreibt Schmerzen. Es gibt dafür keine Testnaht, die man aufrufen
+// könnte, also belegt dieser Test es an der Quelle: nur pain.go enthält
+// schreibende SQL-Anweisungen auf die Tabelle pains.
+func TestOnlyPainGoWritesThePainsTable(t *testing.T) {
+	writers := []string{"UPDATE pains", "DELETE FROM pains", "INSERT INTO pains", "INSERT OR REPLACE INTO pains"}
+	err := filepath.WalkDir("../..", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() && (d.Name() == ".git" || d.Name() == "node_modules") {
+			return filepath.SkipDir
+		}
+		if d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for _, w := range writers {
+			if strings.Contains(string(raw), w) && filepath.Base(path) != "pain.go" && filepath.Base(path) != "pain_schema.go" {
+				t.Errorf("%s writes the pains table (%q): a pain must not change state outside SetPainState/CorrectPain", path, w)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }

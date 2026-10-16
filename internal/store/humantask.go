@@ -85,6 +85,11 @@ func (a *ProjectAccess) CreateHumanTask(in humantask.CreateInput, actor humantas
 		if !ok || (requestID != 0 && requestID != wreq) {
 			return humantask.Task{}, workInvalid()
 		}
+		// A work id of a request the viewer cannot read answers like an
+		// unknown one: work ids are global and sequential.
+		if wref, err := st.RequestRef(RefRequest, wreq); err != nil || !requestReadable(a, wref) {
+			return humantask.Task{}, workInvalid()
+		}
 		requestID = wreq
 	}
 	if requestID == 0 && in.SessionID > 0 {
@@ -410,8 +415,9 @@ func (s *Store) ListHumanTasks(pa *ProjectAccess, f TaskFilter) ([]humantask.Tas
 		return nil, err
 	}
 	out := make([]humantask.Task, 0, len(rows))
+	cache := map[int64]bool{}
 	for _, t := range rows {
-		if pa.CanSeeTask(t) {
+		if pa.canSeeTaskVia(t, cache) {
 			out = append(out, t)
 			if len(out) >= f.Limit {
 				break
@@ -465,25 +471,32 @@ func (s *Store) WaitingTasksFor(pa *ProjectAccess, project string, limit int) (h
 	if err != nil {
 		return w, err
 	}
-	for _, t := range rows {
-		if !pa.CanSeeTask(t) {
-			continue
-		}
+	// The handoff check costs queries per row, so it runs only for the rows
+	// that land in the capped lists.
+	finish := func(t humantask.Task) humantask.Task {
 		if t.HandoffSession != 0 {
 			if sess, err := s.SessionByID(t.HandoffSession); err != nil || !pa.CanSeeTranscript(sess) {
 				t.Handoff = ""
 			}
 		}
+		t.CanConfirm = t.State == humantask.Done && pa.CheckTask(t, ActEdit) == nil
+		return t
+	}
+	cache := map[int64]bool{}
+	for _, t := range rows {
+		if !pa.canSeeTaskVia(t, cache) {
+			continue
+		}
 		if t.State == humantask.Done {
 			if len(w.Done) < limit {
-				w.Done = append(w.Done, t)
+				w.Done = append(w.Done, finish(t))
 			} else {
 				w.MoreDone++
 			}
 			continue
 		}
 		if len(w.Open) < limit {
-			w.Open = append(w.Open, t)
+			w.Open = append(w.Open, finish(t))
 		} else {
 			w.MoreOpen++
 		}

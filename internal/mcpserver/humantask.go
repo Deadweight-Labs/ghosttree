@@ -58,13 +58,22 @@ func taskOutput(t humantask.Task) HumanTaskOutput {
 		CheckHint: t.CheckHint, RequestID: t.RequestID, Assignee: t.Assignee, DoneNote: t.DoneNote, DoneVia: t.DoneVia, StateNote: t.StateNote}
 }
 
-// currentSessionID finds the session this process belongs to the way
-// request_start_work does: the newest recently active session of this project,
-// branch and machine. Zero when there is none; callers then go without.
+// currentSessionID finds the session this process belongs to. The session the
+// harness reported (registeredSession) wins; only without it does the guess of
+// request_start_work apply: the newest recently active session of this
+// project, branch and machine, which is wrong when two agents share all three.
+// Zero when there is none; callers then go without.
 func (s *Server) currentSessionID() int64 {
-	sessions, err := s.client.Sessions(scope.Axes{Project: s.ctxAxes.Project}, 20)
+	sessions, err := s.client.Sessions(scope.Axes{Project: s.ctxAxes.Project}, 50)
 	if err != nil {
 		return 0
+	}
+	if own := s.registeredSession(); own != "" {
+		for _, candidate := range sessions {
+			if candidate.ExternalID == own {
+				return candidate.ID
+			}
+		}
 	}
 	cutoff := time.Now().Add(-30 * time.Minute)
 	for _, candidate := range sessions {

@@ -95,13 +95,9 @@ func WriteMirror(c *client.Client, ax scope.Axes, repoRoot string) error {
 
 	// Pains: a failure here must not stop the rest of the mirror.
 	var pains []mirror.PainView
-	if list, err := c.SearchPains(project, "all", "", 0, 200); err == nil {
-		for _, p := range list {
-			view := mirror.PainView{Pain: p}
-			if d, err := c.GetPain(p.ID); err == nil {
-				view.Motivates, view.Events = d.Motivates, d.Events
-			}
-			pains = append(pains, view)
+	if list, err := c.SearchPainDetails(project, "all", 200); err == nil {
+		for _, d := range list {
+			pains = append(pains, mirror.PainView{Pain: d.Pain, Motivates: d.Motivates, Events: d.Events})
 		}
 	}
 
