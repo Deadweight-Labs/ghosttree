@@ -34,3 +34,6 @@ IPAddressAllow=localhost
 LockPersonality=yes
 ProtectKernelTunables=yes
 ProtectControlGroups=yes
+# Other processes (and their environments) are not visible to the session.
+ProtectProc=invisible
+ProcSubset=pid

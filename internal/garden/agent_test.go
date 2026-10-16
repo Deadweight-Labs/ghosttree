@@ -241,12 +241,12 @@ func TestClaudeArgsAreLockedDown(t *testing.T) {
 		t.Errorf("tool set: %s", val("--tools"))
 	}
 	allowed := val("--allowedTools")
-	for _, w := range []string{"Bash(git log:*)", "Bash(git show:*)", "Bash(git blame:*)", "mcp__ghosttree__context_search", "mcp__ghosttree__context_get"} {
+	for _, w := range []string{"Bash(git log:*)", "Bash(git show:*)", "Read(//r/**)", "mcp__ghosttree__context_search", "mcp__ghosttree__context_get"} {
 		if !strings.Contains(allowed, w) {
 			t.Errorf("allowlist lacks %s", w)
 		}
 	}
-	for _, w := range []string{"context_remember", "context_retire", "Edit", "Write", "WebFetch", "context_describe_file", "Bash(*--ou*)"} {
+	for _, w := range []string{"context_remember", "context_retire", "Edit", "Write", "WebFetch", "context_describe_file", "Bash(*--ou*)", "Bash(git blame:*)", "Bash(*--contents*)", "Bash(*ignore-rev*)"} {
 		if strings.Contains(allowed, w) {
 			t.Errorf("allowlist contains %s", w)
 		}
@@ -513,5 +513,138 @@ func TestCheckAgentDiscardsASessionThatChangedTheCheckout(t *testing.T) {
 	}
 	if res.Spent <= 0 {
 		t.Error("the tampering session was still paid for")
+	}
+}
+
+func TestClaudeArgsReadOnlyInsideTheCheckoutAndNoBlame(t *testing.T) {
+	c := ClaudeConfig{RepoRoot: "/srv/repo"}
+	args, err := c.Args(SessionSpec{MaxTurns: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	get := func(flag string) string {
+		for i, a := range args {
+			if a == flag {
+				return args[i+1]
+			}
+		}
+		return ""
+	}
+	allowed := strings.Split(get("--allowedTools"), ",")
+	for _, a := range allowed {
+		if a == "Read" || strings.Contains(a, "blame") {
+			t.Errorf("allowed %q", a)
+		}
+		// Every Bash form that is allowed takes only git log or git show.
+		if strings.HasPrefix(a, "Bash(") && !strings.HasPrefix(a, "Bash(git log:") && !strings.HasPrefix(a, "Bash(git show:") {
+			t.Errorf("unexpected Bash form %q", a)
+		}
+	}
+	if !contains(allowed, "Read(//srv/repo/**)") {
+		t.Errorf("Read is not scoped to the checkout: %v", allowed)
+	}
+	denied := get("--disallowedTools")
+	for _, d := range []string{"Read(//proc/**)", "Read(//etc/**)", "Grep(//proc/**)", "Bash(git blame:*)", "Bash(*--contents*)"} {
+		if !strings.Contains(denied, d) {
+			t.Errorf("denylist lacks %s", d)
+		}
+	}
+	// A checkout below a system directory is not locked out by it.
+	args, _ = ClaudeConfig{RepoRoot: "/run/gt/repo"}.Args(SessionSpec{MaxTurns: 20})
+	for i, a := range args {
+		if a == "--disallowedTools" && strings.Contains(args[i+1], "Read(//run/**)") {
+			t.Error("denied the directory the checkout lies in")
+		}
+	}
+	if _, err := (ClaudeConfig{RepoRoot: "rel"}).Args(SessionSpec{MaxTurns: 20}); err == nil {
+		t.Error("relative repo root accepted")
+	}
+}
+
+func lookedFrom(t *testing.T, stream string) *Looked {
+	t.Helper()
+	r, _ := ParseStream(strings.NewReader(stream))
+	return r.Looked
+}
+
+func TestEvidenceMustHaveBeenSeenBySession(t *testing.T) {
+	repo := newRepo(t)
+	h := head(t, repo)
+	stream := `{"type":"assistant","message":{"id":"a","content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/work/internal/distill.go"}},{"type":"tool_use","id":"t2","name":"Bash","input":{"command":"git log"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t2","content":"` + h[:12] + ` add distill"}]}}
+`
+	lk := lookedFrom(t, stream)
+	if !lk.Has("internal/distill.go:3") || !lk.Has(h[:12]) || !lk.Has(h) {
+		t.Error("read file and printed hash must count")
+	}
+	if lk.Has("go.mod:1") || lk.Has("deadbeef1234") {
+		t.Error("what the session never saw must not count")
+	}
+	pkg := Package{Entries: []Entry{{ID: 1, Title: "a", Body: "internal/distill.go"}, {ID: 2, Title: "b", Body: "internal/distill.go"}}}
+	text := `{"verdicts":[{"id":1,"verdict":"stale","reason":"x","evidence":["internal/distill.go:3"]},{"id":2,"verdict":"stale","reason":"x","evidence":["internal/distill.go:1"]}]}`
+	v, err := validateAnswer(repo, text, pkg, nil, lk)
+	if err != nil || v.Verdicts[0].Kind != Stale {
+		t.Fatalf("%+v %v", v, err)
+	}
+	// Same file, never opened by a session that saw nothing.
+	v, _ = validateAnswer(repo, text, pkg, nil, &Looked{Read: map[string]bool{}})
+	if v.Verdicts[0].Kind != Unclear || v.Verdicts[1].Kind != Unclear || len(v.Verdicts[0].Unverified) != 1 {
+		t.Errorf("unseen evidence must not hold a stale verdict: %+v", v.Verdicts)
+	}
+}
+
+func TestParseStreamBudgetCutKeepsLastAnswerText(t *testing.T) {
+	in := `{"type":"assistant","message":{"id":"a","content":[{"type":"text","text":"{\"verdicts\":[]}"}]}}
+{"type":"result","subtype":"error_max_budget_usd","is_error":false,"num_turns":9}
+`
+	r, err := ParseStream(strings.NewReader(in))
+	if err == nil || r.Text != `{"verdicts":[]}` {
+		t.Fatalf("%+v %v", r, err)
+	}
+}
+
+func TestCheckAgentKeepsPartialAnswerOfSessionCutOffByALimit(t *testing.T) {
+	repo := newRepo(t)
+	cut := func(s SessionSpec) (SessionResult, error) {
+		r, _ := holdsAll(s)
+		r.Looked = &Looked{Read: map[string]bool{}}
+		r.Tools = map[string]int{"Grep": 3}
+		return r, errors.New("die Session endete mit error_max_budget_usd")
+	}
+	fr := &fakeRunner{answers: []func(SessionSpec) (SessionResult, error){cut}}
+	var judged, failed int
+	res := CheckAgent(context.Background(), repo, agentEntries(3), AgentOptions{
+		Runner: fr, Pricing: price, MaxUSD: 5, Sessions: 1, PerSession: 3, Turns: 30,
+		OnSession: func(_ SessionStat, f bool) {
+			if f {
+				failed++
+			}
+		},
+		OnJudged: func(Verdict) { judged++ },
+	})
+	if judged != 3 || failed != 0 || len(res.Sessions) != 1 || !strings.Contains(res.Sessions[0].Err, "Teilergebnis") {
+		t.Fatalf("judged=%d failed=%d %+v", judged, failed, res.Sessions)
+	}
+	// The cap is generous: twice the share, within what is left.
+	if b := fr.specs[0].BudgetUSD; b != 5 {
+		t.Errorf("budget %f", b)
+	}
+}
+
+func TestCheckAgentSessionWithoutAnyToolCallJudgesNothing(t *testing.T) {
+	repo := newRepo(t)
+	lazy := func(s SessionSpec) (SessionResult, error) {
+		r, _ := holdsAll(s)
+		r.Looked = &Looked{Read: map[string]bool{}}
+		return r, nil
+	}
+	fr := &fakeRunner{answers: []func(SessionSpec) (SessionResult, error){lazy}}
+	var judged int
+	res := CheckAgent(context.Background(), repo, agentEntries(3), AgentOptions{
+		Runner: fr, Pricing: price, MaxUSD: 5, Sessions: 1, PerSession: 3, Turns: 30,
+		OnJudged: func(Verdict) { judged++ },
+	})
+	if judged != 0 || res.Verdicts[0].Kind != Failed {
+		t.Fatalf("judged=%d %+v", judged, res.Verdicts)
 	}
 }

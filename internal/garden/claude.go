@@ -33,6 +33,39 @@ type SessionResult struct {
 	DeniedCalls []string
 	// Tools counts the tool calls the session made, by name.
 	Tools map[string]int
+	// Looked is what the session looked at. Nil for a runner that does not track it.
+	Looked *Looked
+}
+
+// Looked is what a session actually looked at: the files it read and everything
+// its tools printed. A citation only counts if the session got to see it.
+type Looked struct {
+	Read map[string]bool
+	Out  strings.Builder
+}
+
+const maxSeenOut = 16 << 20
+
+// Has says whether a citation (a "path:line" or a commit hash) turned up in
+// the session: a file it read or that a tool listed, a hash a tool printed.
+func (s *Looked) Has(ref string) bool {
+	if s == nil {
+		return true
+	}
+	ref = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(ref), "commit "))
+	if m := lineRef.FindStringSubmatch(ref); m != nil {
+		f := strings.TrimPrefix(m[1], "./")
+		for p := range s.Read {
+			if p == f || strings.HasSuffix(p, "/"+f) {
+				return true
+			}
+		}
+		return strings.Contains(s.Out.String(), f)
+	}
+	if len(ref) >= 8 {
+		return strings.Contains(strings.ToLower(s.Out.String()), strings.ToLower(ref[:8]))
+	}
+	return false
 }
 
 type streamUsage struct {
@@ -46,6 +79,28 @@ func (u streamUsage) llm() llm.Usage {
 	return llm.Usage{InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, CacheReadTokens: u.CacheReadInputTokens, CacheWriteTokens: u.CacheCreationInputTokens}
 }
 
+type streamBlock struct {
+	Type    string          `json:"type"`
+	ID      string          `json:"id"`
+	Name    string          `json:"name"`
+	Text    string          `json:"text"`
+	Input   json.RawMessage `json:"input"`
+	Content json.RawMessage `json:"content"`
+}
+
+// blocks reads a message's content, which is a string or a list of blocks.
+func blocks(raw json.RawMessage) []streamBlock {
+	var out []streamBlock
+	if json.Unmarshal(raw, &out) == nil {
+		return out
+	}
+	var str string
+	if json.Unmarshal(raw, &str) == nil && str != "" {
+		return []streamBlock{{Type: "text", Text: str}}
+	}
+	return nil
+}
+
 type streamEvent struct {
 	Type              string          `json:"type"`
 	Subtype           string          `json:"subtype"`
@@ -56,13 +111,9 @@ type streamEvent struct {
 	Usage             *streamUsage    `json:"usage"`
 	PermissionDenials json.RawMessage `json:"permission_denials"`
 	Message           *struct {
-		ID      string       `json:"id"`
-		Usage   *streamUsage `json:"usage"`
-		Content []struct {
-			Type string `json:"type"`
-			ID   string `json:"id"`
-			Name string `json:"name"`
-		} `json:"content"`
+		ID      string          `json:"id"`
+		Usage   *streamUsage    `json:"usage"`
+		Content json.RawMessage `json:"content"`
 	} `json:"message"`
 }
 
@@ -72,7 +123,9 @@ type streamEvent struct {
 // a killed session still counts what it used.
 func ParseStream(r io.Reader) (SessionResult, error) {
 	var res SessionResult
+	res.Looked = &Looked{Read: map[string]bool{}}
 	var sum llm.Usage
+	var lastText string
 	seen := map[string]bool{}
 	seenTool := map[string]bool{}
 	gotResult := false
@@ -83,15 +136,43 @@ func ParseStream(r io.Reader) (SessionResult, error) {
 			var ev streamEvent
 			if json.Unmarshal(t, &ev) == nil {
 				switch ev.Type {
+				case "user":
+					if ev.Message != nil {
+						for _, c := range blocks(ev.Message.Content) {
+							if c.Type != "tool_result" {
+								continue
+							}
+							for _, p := range blocks(c.Content) {
+								if res.Looked.Out.Len() < maxSeenOut {
+									res.Looked.Out.WriteString(p.Text)
+									res.Looked.Out.WriteByte('\n')
+								}
+							}
+							var str string
+							if json.Unmarshal(c.Content, &str) == nil && res.Looked.Out.Len() < maxSeenOut {
+								res.Looked.Out.WriteString(str)
+								res.Looked.Out.WriteByte('\n')
+							}
+						}
+					}
 				case "assistant":
 					if ev.Message != nil {
-						for _, c := range ev.Message.Content {
+						for _, c := range blocks(ev.Message.Content) {
+							if c.Type == "text" && strings.TrimSpace(c.Text) != "" {
+								lastText = c.Text
+							}
 							if c.Type == "tool_use" && c.ID != "" && !seenTool[c.ID] {
 								seenTool[c.ID] = true
 								if res.Tools == nil {
 									res.Tools = map[string]int{}
 								}
 								res.Tools[c.Name]++
+								var in struct {
+									FilePath string `json:"file_path"`
+								}
+								if json.Unmarshal(c.Input, &in) == nil && in.FilePath != "" {
+									res.Looked.Read[strings.TrimPrefix(in.FilePath, "./")] = true
+								}
 							}
 						}
 					}
@@ -145,6 +226,11 @@ func ParseStream(r io.Reader) (SessionResult, error) {
 		res.Usage = sum
 	}
 	if res.IsError || res.Subtype != "success" {
+		// A session cut off by a limit still said things on the way; what it
+		// wrote last may already be the answer, so it is handed on.
+		if res.Text == "" {
+			res.Text = lastText
+		}
 		return res, fmt.Errorf("die Session endete mit %s", firstNonEmpty(res.Subtype, "Fehler"))
 	}
 	return res, nil
@@ -181,13 +267,17 @@ type ClaudeConfig struct {
 	ParentEnv []string
 }
 
+// systemDeny are places a session never reads, wherever the checkout is (unless
+// it lies inside one, see Args). Read is only allowed inside the checkout anyway.
+var systemDeny = []string{"/proc", "/sys", "/etc", "/run", "/root", "/dev"}
+
 // Tools the session may use. Nothing in here writes: Edit, Write and friends are
 // not even in the tool set, and are denied again below.
 var (
 	agentBuiltinTools = []string{"Read", "Grep", "Glob", "Bash"}
 	agentAllowed      = []string{
-		"Read", "Grep", "Glob",
-		"Bash(git log:*)", "Bash(git show:*)", "Bash(git blame:*)",
+		"Grep", "Glob",
+		"Bash(git log:*)", "Bash(git show:*)",
 		"mcp__ghosttree__context_search", "mcp__ghosttree__context_get",
 	}
 	agentDenied = []string{
@@ -197,6 +287,10 @@ var (
 		// denied for every command. (The "git log:*--output*" form does not
 		// match: measured on Claude Code 2.1.301.)
 		"Bash(*--ou*)",
+		// git blame prints any file with --contents (and -S / --ignore-revs-file
+		// read one); the deny-read list does not reach Bash. Blame is not
+		// allowed at all, and these stay denied for every command.
+		"Bash(git blame:*)", "Bash(*--contents*)", "Bash(*ignore-rev*)",
 		"mcp__ghosttree__context_remember", "mcp__ghosttree__context_retire", "mcp__ghosttree__context_supersede",
 		"mcp__ghosttree__context_move", "mcp__ghosttree__context_describe_file",
 	}
@@ -205,7 +299,24 @@ var (
 // Args is the claude command line of one session. The prompt goes in on stdin.
 func (c ClaudeConfig) Args(s SessionSpec) ([]string, error) {
 	denied := append([]string{}, agentDenied...)
-	for _, p := range c.DenyRead {
+	allowed := append([]string{}, agentAllowed...)
+	// Read only inside the checkout: the deny list below names the secrets
+	// we know of, this is what holds for the ones we do not.
+	if c.RepoRoot != "" {
+		if !filepath.IsAbs(c.RepoRoot) {
+			return nil, fmt.Errorf("repo root %q is not absolute", c.RepoRoot)
+		}
+		allowed = append(allowed, "Read(/"+c.RepoRoot+"/**)")
+	} else {
+		allowed = append(allowed, "Read")
+	}
+	deny := append([]string{}, c.DenyRead...)
+	for _, d := range systemDeny {
+		if c.RepoRoot != d && !strings.HasPrefix(c.RepoRoot, d+"/") {
+			deny = append(deny, d)
+		}
+	}
+	for _, p := range deny {
 		if !filepath.IsAbs(p) {
 			return nil, fmt.Errorf("deny-read path %q is not absolute", p)
 		}
@@ -215,7 +326,7 @@ func (c ClaudeConfig) Args(s SessionSpec) ([]string, error) {
 		"-p", "--output-format", "stream-json", "--verbose",
 		"--permission-mode", "dontAsk",
 		"--tools", strings.Join(agentBuiltinTools, ","),
-		"--allowedTools", strings.Join(agentAllowed, ","),
+		"--allowedTools", strings.Join(allowed, ","),
 		"--disallowedTools", strings.Join(denied, ","),
 		"--setting-sources", "user",
 		"--no-session-persistence",
