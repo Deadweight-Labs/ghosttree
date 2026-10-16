@@ -64,6 +64,7 @@ type painView struct {
 func painURL(id int64) string { return "/ui/pains/" + strconv.FormatInt(id, 10) }
 
 func (a *app) painsPage(w http.ResponseWriter, r *http.Request) {
+	l := a.langFor(r)
 	w.Header().Set("Cache-Control", "no-store")
 	pa := a.access(r)
 	project := selectedProject(a.shellFor(r, "pains"))
@@ -78,7 +79,7 @@ func (a *app) painsPage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		for _, p := range list {
-			row := painRow{ID: p.ID, Human: p.HumanID(), Title: p.Title, Href: painURL(p.ID), State: p.State, StateLabel: label(painStateKeys, p.State), Remaining: p.Remaining}
+			row := painRow{ID: p.ID, Human: p.HumanID(), Title: p.Title, Href: painURL(p.ID), State: p.State, StateLabel: label(l, painStateKeys, p.State), Remaining: p.Remaining}
 			if v.ShowProject {
 				row.Project = lastSegment(p.Project)
 			}
@@ -86,7 +87,7 @@ func (a *app) painsPage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	v.Empty = len(v.Rows) == 0
-	a.renderBrowser(w, r, "pains", pageData{Title: msg("pains.title"), PainsV: v})
+	a.renderBrowser(w, r, "pains", pageData{Title: l.msg("pains.title"), PainsV: v})
 }
 
 func lastSegment(project string) string {
@@ -97,6 +98,7 @@ func lastSegment(project string) string {
 }
 
 func (a *app) painPage(w http.ResponseWriter, r *http.Request) {
+	l := a.langFor(r)
 	w.Header().Set("Cache-Control", "no-store")
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
@@ -111,14 +113,14 @@ func (a *app) painPage(w http.ResponseWriter, r *http.Request) {
 	}
 	p := detail.Pain
 	v := &painView{ID: p.ID, Human: p.HumanID(), Title: p.Title, Project: lastSegment(p.Project), Person: p.Person,
-		State: p.State, StateLabel: label(painStateKeys, p.State), Remaining: p.Remaining, Age: shortAge(overviewNow().UTC(), parseTime(p.CreatedAt)),
+		State: p.State, StateLabel: label(l, painStateKeys, p.State), Remaining: p.Remaining, Age: shortAge(l, overviewNow().UTC(), parseTime(p.CreatedAt)),
 		Blocks: bodyBlocks(p.Body, 0), Token: csrfOf(r), Back: "/ui/pains?project=" + url.QueryEscape(p.Project)}
 	v.CanWork = pa.CheckPain(p, store.ActWork) == nil
 	for _, s := range pain.States {
-		v.States = append(v.States, filterOption{Value: s, Label: label(painStateKeys, s), Selected: s == p.State})
+		v.States = append(v.States, filterOption{Value: s, Label: label(l, painStateKeys, s), Selected: s == p.State})
 	}
 	for _, k := range pain.EvidenceKinds {
-		v.EvidenceKinds = append(v.EvidenceKinds, filterOption{Value: k, Label: label(painEvidenceKeys, k), Selected: k == "commit"})
+		v.EvidenceKinds = append(v.EvidenceKinds, filterOption{Value: k, Label: label(l, painEvidenceKeys, k), Selected: k == "commit"})
 	}
 	for _, l := range detail.Motivates {
 		line := painLinkLine{Kind: l.Kind}
@@ -138,14 +140,14 @@ func (a *app) painPage(w http.ResponseWriter, r *http.Request) {
 	now := overviewNow().UTC()
 	for i := len(detail.Events) - 1; i >= 0; i-- {
 		e := detail.Events[i]
-		line := painEventLine{Label: label(painEventKeys, e.Kind), By: e.Person, Age: shortAge(now, parseTime(e.CreatedAt))}
+		line := painEventLine{Label: label(l, painEventKeys, e.Kind), By: e.Person, Age: shortAge(l, now, parseTime(e.CreatedAt))}
 		switch e.Kind {
 		case "state":
-			line.Label = label(painStateKeys, e.ToState)
+			line.Label = label(l, painStateKeys, e.ToState)
 			line.Text = firstNonEmpty(e.Remaining, e.Note)
 			if e.EvidenceKind != "" {
-				ev := a.evidenceLineFor(pa, p.Project, requestdomain.Evidence{Kind: e.EvidenceKind, Ref: e.EvidenceRef})
-				ev.Label = label(painEvidenceKeys, e.EvidenceKind)
+				ev := a.evidenceLineFor(l, pa, p.Project, requestdomain.Evidence{Kind: e.EvidenceKind, Ref: e.EvidenceRef})
+				ev.Label = label(l, painEvidenceKeys, e.EvidenceKind)
 				line.Evidence = &ev
 			}
 		case "corrected":
@@ -157,9 +159,9 @@ func (a *app) painPage(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case r.URL.Query().Get("fail") != "":
-		v.Result = &requestResult{Text: msg(painFailKey(r.URL.Query().Get("fail"))), Kind: "failed", Fail: true}
+		v.Result = &requestResult{Text: l.msg(painFailKey(r.URL.Query().Get("fail"))), Kind: "failed", Fail: true}
 	case r.URL.Query().Get("done") == "state":
-		v.Result = &requestResult{Text: msg("pains.result.state"), Kind: "done"}
+		v.Result = &requestResult{Text: l.msg("pains.result.state"), Kind: "done"}
 	}
 	a.renderBrowser(w, r, "pain", pageData{Title: p.HumanID(), PainV: v})
 }

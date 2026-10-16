@@ -139,20 +139,20 @@ func agentState(now, signal time.Time) string {
 }
 
 // shortAge schreibt ein Alter knapp: now, 5m, 3h, 2d.
-func shortAge(now, t time.Time) string {
+func shortAge(l lang, now, t time.Time) string {
 	if t.IsZero() {
 		return ""
 	}
 	d := now.Sub(t)
 	switch {
 	case d < time.Minute:
-		return msg("age.now")
+		return l.msg("age.now")
 	case d < time.Hour:
-		return strconv.Itoa(int(d/time.Minute)) + "m"
+		return l.msg("age.short.min", int(d/time.Minute))
 	case d < 48*time.Hour:
-		return strconv.Itoa(int(d/time.Hour)) + "h"
+		return l.msg("age.short.hours", int(d/time.Hour))
 	}
-	return strconv.Itoa(int(d/(24*time.Hour))) + "d"
+	return l.msg("age.short.days", int(d/(24*time.Hour)))
 }
 
 func parseTime(s string) time.Time {
@@ -177,6 +177,7 @@ func selectedProject(sh shellView) string {
 }
 
 func (a *app) overviewPage(w http.ResponseWriter, r *http.Request) {
+	l := a.langFor(r)
 	w.Header().Set("Cache-Control", "no-store")
 	now := overviewNow().UTC()
 	pa := a.access(r)
@@ -184,7 +185,7 @@ func (a *app) overviewPage(w http.ResponseWriter, r *http.Request) {
 	shell := a.shellFor(r, "overview")
 	project := selectedProject(shell)
 	view := overviewView{Guest: who.kind == viewerGuest, CSRFToken: csrfOf(r)}
-	data := pageData{Title: msg("overview.title")}
+	data := pageData{Title: l.msg("overview.title")}
 
 	var agents []agentRow
 	var err error
@@ -198,7 +199,7 @@ func (a *app) overviewPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if view.Learned, err = a.overviewLearned(pa, project, now); err != nil {
+	if view.Learned, err = a.overviewLearned(l, pa, project, now); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -235,8 +236,8 @@ func (a *app) overviewPage(w http.ResponseWriter, r *http.Request) {
 	}
 	view.Agents = agents
 	if tokens, terr := a.deviceTokens(r); terr == nil {
-		view.Machines = ownMachines(tokens, now)
-		view.Example = msg("setup.example")
+		view.Machines = ownMachines(l, tokens, now)
+		view.Example = l.msg("setup.example")
 	}
 	view.Connect = "/ui/overview?connect=1"
 	if view.Next, err = a.overviewNext(r, pa, who, project, now); err != nil {
@@ -296,6 +297,7 @@ func agentWorkTitle(w store.AgentWork, row agentRow) string {
 // the agents the viewer started themselves: that needs no role and says nothing
 // about anyone else.
 func (a *app) listAgents(r *http.Request, pa *store.ProjectAccess, project string, now time.Time, limit int) ([]agentRow, error) {
+	l := a.langFor(r)
 	type ranked struct {
 		row    agentRow
 		signal time.Time
@@ -328,13 +330,13 @@ func (a *app) listAgents(r *http.Request, pa *store.ProjectAccess, project strin
 					life = t
 				}
 			}
-			activity = workLabel(p.WorkState.Value)
+			activity = workLabel(l, p.WorkState.Value)
 			switch p.WorkState.Value {
 			case store.WorkWaitingUser:
 				if asked[peer.ExternalID] {
 					flag = p.WorkState.Value
 				} else {
-					neutral = msg("ov.work.waiting_person")
+					neutral = l.msg("ov.work.waiting_person")
 					activity = neutral
 				}
 			case store.WorkStuck:
@@ -356,15 +358,15 @@ func (a *app) listAgents(r *http.Request, pa *store.ProjectAccess, project strin
 		if flag != "" {
 			// An agent that waits for a person, or hangs mid-turn, says so even
 			// when its last sign of life is old: "Idle" would hide it.
-			activity = workLabel(flag)
+			activity = workLabel(l, flag)
 		}
 		signal := last
 		if life.After(signal) {
 			signal = life
 		}
-		out = append(out, ranked{agentRow{Name: peerName(peer), BareName: peerName(peer), Flag: flag, Project: coordShortRoomName(store.RoomProject, remote), ProjectTitle: remote,
-			Activity: activity, State: state, StateText: stateLabel(state), Age: shortAge(now, signal),
-			ExternalID: peer.ExternalID, RoomKey: store.RoomKeyForProject(remote), Machine: hostUnlessNamed(peerName(peer), agentMachine(peer.ExternalID)), Branch: peer.Branch, Provider: peer.Provider, WorkNote: peer.WorkNote}, signal})
+		out = append(out, ranked{agentRow{Name: peerName(l, peer), BareName: peerName(l, peer), Flag: flag, Project: coordShortRoomName(store.RoomProject, remote), ProjectTitle: remote,
+			Activity: activity, State: state, StateText: stateLabel(l, state), Age: shortAge(l, now, signal),
+			ExternalID: peer.ExternalID, RoomKey: store.RoomKeyForProject(remote), Machine: hostUnlessNamed(peerName(l, peer), agentMachine(peer.ExternalID)), Branch: peer.Branch, Provider: peer.Provider, WorkNote: peer.WorkNote}, signal})
 	}
 	access := a.browserCoord(r)
 	remotes := slices.Sorted(slices.Values(pa.Projects()))
@@ -478,20 +480,20 @@ func hostUnlessNamed(name, host string) string {
 // peerName is how a person reads an agent: "Claude · Robin · mainex" (tool,
 // owner, machine). A name the person chose stays; an ID or the bare tool name
 // is replaced. The raw ID goes to the title of the row.
-func peerName(peer store.CoordAgent) string {
+func peerName(l lang, peer store.CoordAgent) string {
 	// A peer that reported its machine has a unique name: Person · Machine · Branch.
 	if peer.Label != "" && peer.Machine != "" {
 		return peer.Label
 	}
-	return agentLabel(peer.DisplayName, peer.Provider, peer.ExternalID, peer.Owner)
+	return agentLabel(l, peer.DisplayName, peer.Provider, peer.ExternalID, peer.Owner)
 }
 
 // agentLabel builds the readable name of an agent from what is known about it.
 // owner is the account name of whoever runs it ("" when not known to the
 // viewer). Session IDs are never a name, however they are spelled.
-func agentLabel(displayName, provider, externalID, owner string) string {
+func agentLabel(l lang, displayName, provider, externalID, owner string) string {
 	name := strings.TrimSpace(displayName)
-	tool := providerLabel(provider, externalID)
+	tool := providerLabel(l, provider, externalID)
 	if name != "" && !looksLikeIdentifier(name, externalID) && !strings.EqualFold(name, provider) && !strings.EqualFold(name, tool) {
 		return name
 	}
@@ -522,48 +524,48 @@ func looksLikeIdentifier(name, externalID string) bool {
 
 // neutralAgentLabel names an agent by its ID alone, for viewers who may not
 // learn more (a guest): the tool when the ID says it, else "Agent".
-func neutralAgentLabel(externalID string) string {
+func neutralAgentLabel(l lang, externalID string) string {
 	if prefix, _, ok := strings.Cut(externalID, ":"); ok {
 		switch strings.ToLower(prefix) {
 		case "claude", "claude-code", "codex", "opencode", "cli":
-			return providerLabel(prefix, externalID)
+			return providerLabel(l, prefix, externalID)
 		}
 	}
-	return msg("agent.provider.unknown")
+	return l.msg("agent.provider.unknown")
 }
 
 // providerLabel names the tool behind an agent.
-func providerLabel(provider, externalID string) string {
+func providerLabel(l lang, provider, externalID string) string {
 	kind := strings.ToLower(provider)
 	if prefix, _, ok := strings.Cut(externalID, ":"); ok && (kind == "" || kind == "ctx-cli" || kind == "unknown" || kind == "unidentified-harness") {
 		kind = strings.ToLower(prefix)
 	}
 	switch kind {
 	case "claude", "claude-code":
-		return msg("agent.provider.claude")
+		return l.msg("agent.provider.claude")
 	case "codex":
-		return msg("agent.provider.codex")
+		return l.msg("agent.provider.codex")
 	case "opencode":
-		return msg("agent.provider.opencode")
+		return l.msg("agent.provider.opencode")
 	case "cli", "ctx-cli":
-		return msg("agent.provider.cli")
+		return l.msg("agent.provider.cli")
 	case "self-declared-subagent":
-		return msg("agent.provider.subagent")
+		return l.msg("agent.provider.subagent")
 	}
 	if kind == "" || kind == "unknown" || kind == "unidentified-harness" || kind == "derived" || looksLikeIdentifier(kind, "") {
-		return msg("agent.provider.unknown")
+		return l.msg("agent.provider.unknown")
 	}
 	return strings.ToUpper(kind[:1]) + kind[1:]
 }
 
-func stateLabel(state string) string {
+func stateLabel(l lang, state string) string {
 	switch state {
 	case "active":
-		return msg("ov.state.active")
+		return l.msg("ov.state.active")
 	case "idle":
-		return msg("ov.state.idle")
+		return l.msg("ov.state.idle")
 	}
-	return msg("ov.state.offline")
+	return l.msg("ov.state.offline")
 }
 
 // askedViewer is the set of agents that have an open question, approval or
@@ -578,20 +580,20 @@ func askedViewer(items []store.AttentionItem) map[string]bool {
 	return asked
 }
 
-func workLabel(v string) string {
+func workLabel(l lang, v string) string {
 	switch v {
 	case store.WorkWorking:
-		return msg("ov.work.working")
+		return l.msg("ov.work.working")
 	case store.WorkWaitingUser:
-		return msg("ov.work.waiting_user")
+		return l.msg("ov.work.waiting_user")
 	case store.WorkWaitingPeer:
-		return msg("ov.work.waiting_peer")
+		return l.msg("ov.work.waiting_peer")
 	case store.WorkBlocked:
-		return msg("ov.work.blocked")
+		return l.msg("ov.work.blocked")
 	case store.WorkPaused:
-		return msg("ov.work.paused")
+		return l.msg("ov.work.paused")
 	case store.WorkStuck:
-		return msg("ov.work.stuck")
+		return l.msg("ov.work.stuck")
 	}
 	return ""
 }
@@ -679,7 +681,7 @@ func (a *app) overviewHasKnowledge(pa *store.ProjectAccess, project string) (boo
 	return len(found) > 0, err
 }
 
-func (a *app) overviewLearned(pa *store.ProjectAccess, project string, now time.Time) ([]learnedRow, error) {
+func (a *app) overviewLearned(l lang, pa *store.ProjectAccess, project string, now time.Time) ([]learnedRow, error) {
 	w := a.knowledgeWindowFor(pa, project)
 	w.Since = now.Add(-learnedWindow).Format(time.RFC3339)
 	pa.Filtered()
@@ -691,7 +693,7 @@ func (a *app) overviewLearned(pa *store.ProjectAccess, project string, now time.
 	}
 	rows := make([]learnedRow, len(entries))
 	for i, k := range entries {
-		rows[i] = learnedRow{Title: k.Title, Age: shortAge(now, parseTime(k.CreatedAt))}
+		rows[i] = learnedRow{Title: k.Title, Age: shortAge(l, now, parseTime(k.CreatedAt))}
 	}
 	return rows, nil
 }
@@ -702,6 +704,7 @@ func (a *app) overviewLearned(pa *store.ProjectAccess, project string, now time.
 // die ein Agent wartet, geht so nie hinter Vorschlägen verloren. Offene
 // Geräte-Logins gehören nicht dazu (siehe setupView).
 func (a *app) overviewNext(r *http.Request, pa *store.ProjectAccess, who viewer, project string, now time.Time) ([]nextRow, error) {
+	l := a.langFor(r)
 	rows, err := a.overviewAttention(r, now)
 	if err != nil {
 		return nil, err
@@ -726,18 +729,18 @@ func (a *app) overviewNext(r *http.Request, pa *store.ProjectAccess, who viewer,
 					oldest = t
 				}
 			}
-			title := msg("ov.proposals", len(pending))
+			title := l.msg("ov.proposals", len(pending))
 			switch {
 			case len(pending) == 1:
-				title = msg("ov.proposals_one")
+				title = l.msg("ov.proposals_one")
 			case len(pending) >= overviewMaxProposals:
-				title = msg("ov.proposals_more", overviewMaxProposals)
+				title = l.msg("ov.proposals_more", overviewMaxProposals)
 			}
 			detail := ""
 			if now.Sub(oldest) >= 48*time.Hour {
-				detail = msg("ov.proposals_oldest", shortAge(now, oldest))
+				detail = l.msg("ov.proposals_oldest", shortAge(l, now, oldest))
 			}
-			rows = append(rows, nextRow{Title: title, Detail: detail, Href: "/ui/review", HrefLabel: msg("ov.review")})
+			rows = append(rows, nextRow{Title: title, Detail: detail, Href: "/ui/review", HrefLabel: l.msg("ov.review")})
 		}
 	}
 	return rows, nil
@@ -746,6 +749,7 @@ func (a *app) overviewNext(r *http.Request, pa *store.ProjectAccess, who viewer,
 // overviewAttention nimmt nur offene Anliegen, deren Empfänger der Betrachter
 // ist. CoordAccess.Attention lässt schon alles weg, was er nicht lesen darf.
 func (a *app) overviewAttention(r *http.Request, now time.Time) ([]nextRow, error) {
+	l := a.langFor(r)
 	access := a.browserCoord(r)
 	items, err := access.Attention()
 	if errors.Is(err, store.ErrCoordNotFound) || errors.Is(err, store.ErrCoordForbidden) {
@@ -756,7 +760,7 @@ func (a *app) overviewAttention(r *http.Request, now time.Time) ([]nextRow, erro
 		return nil, err
 	}
 	current := browserPrincipal(r)
-	labels := coordIdentityLabels(current, nil)
+	labels := coordIdentityLabels(l, current, nil)
 	seenRooms := map[string]bool{}
 	for _, item := range items {
 		if !item.IsRecipient || item.State != store.AttentionOpen || item.HomeRoomKey == "" || seenRooms[item.HomeRoomKey] {
@@ -764,12 +768,12 @@ func (a *app) overviewAttention(r *http.Request, now time.Time) ([]nextRow, erro
 		}
 		seenRooms[item.HomeRoomKey] = true
 		if peers, err := access.Peers(item.HomeRoomKey, ""); err == nil {
-			for id, label := range coordIdentityLabels(current, nil, peers...) {
+			for id, label := range coordIdentityLabels(l, current, nil, peers...) {
 				labels[id] = label
 			}
 		}
 	}
-	views, _ := buildCoordAttentionViews(items, "", labels)
+	views, _ := buildCoordAttentionViews(l, items, "", labels)
 	byID := make(map[int64]store.AttentionItem, len(items))
 	for _, item := range items {
 		byID[item.ID] = item
@@ -777,10 +781,10 @@ func (a *app) overviewAttention(r *http.Request, now time.Time) ([]nextRow, erro
 	var rows []nextRow
 	for _, v := range views {
 		item := byID[v.ID]
-		room := coordShortRoomName(coordRoomKindOf(item.HomeRoomKey), coordRoomLabel(store.CoordRoom{Key: item.HomeRoomKey}, "", labels))
+		room := coordShortRoomName(coordRoomKindOf(item.HomeRoomKey), coordRoomLabel(l, store.CoordRoom{Key: item.HomeRoomKey}, "", labels))
 		title := oneLine(v.Preview, 110)
-		parts := []string{coordSenderLabel(item, labels), room, shortAge(now, parseTime(item.CreatedAt))}
-		rows = append(rows, nextRow{Title: title, Detail: strings.Join(parts, " · "), Href: v.URL, HrefLabel: msg("ov.open_room")})
+		parts := []string{coordSenderLabel(l, item, labels), room, shortAge(l, now, parseTime(item.CreatedAt))}
+		rows = append(rows, nextRow{Title: title, Detail: strings.Join(parts, " · "), Href: v.URL, HrefLabel: l.msg("ov.open_room")})
 	}
 	return rows, nil
 }
@@ -800,21 +804,22 @@ func oneLine(s string, limit int) string {
 // weder Agenten noch Requests noch Wissen vorkommen. Eine laufende Instanz zeigt immer
 // die Übersicht. Der Befehl nennt nur die Adresse dieses Servers.
 func (a *app) setupFor(r *http.Request, who viewer, hasContent bool, now time.Time) (*setupView, error) {
+	l := a.langFor(r)
 	forced := r.URL.Query().Get("connect") != ""
 	if !forced && (hasContent || who.kind != viewerOwner) {
 		return nil, nil
 	}
-	view := &setupView{State: "waiting", Title: msg("setup.title_first"), Command: a.loginCommand(r), Code: interactive(r)}
+	view := &setupView{State: "waiting", Title: l.msg("setup.title_first"), Command: a.loginCommand(r), Code: interactive(r)}
 	if forced {
-		view.Title = msg("setup.title")
+		view.Title = l.msg("setup.title")
 	}
 	tokens, err := a.deviceTokens(r)
 	if err != nil {
 		return nil, err
 	}
-	view.Example = msg("setup.example")
+	view.Example = l.msg("setup.example")
 	a.guideSetup(r, view)
-	if machines := ownMachines(tokens, now); len(machines) > 0 {
+	if machines := ownMachines(l, tokens, now); len(machines) > 0 {
 		// A machine is there, so the status says so, however long ago it signed in.
 		if _, recent := recentMachine(tokens, now); recent || forced {
 			view.State, view.Machine = "connected", machines[0].Name
@@ -852,7 +857,7 @@ type machineRow struct {
 
 // ownMachines folds the viewer's device tokens to one row per machine, newest
 // contact first. Only tokens of the viewer's own account are ever passed in.
-func ownMachines(tokens []store.TokenInfo, now time.Time) []machineRow {
+func ownMachines(l lang, tokens []store.TokenInfo, now time.Time) []machineRow {
 	type seen struct {
 		name string
 		at   time.Time
@@ -883,9 +888,9 @@ func ownMachines(tokens []store.TokenInfo, now time.Time) []machineRow {
 	})
 	rows := make([]machineRow, 0, len(list))
 	for _, m := range list {
-		row := machineRow{Name: m.name, State: "active", StateText: msg("machine.connected"), Age: shortAge(now, m.at)}
+		row := machineRow{Name: m.name, State: "active", StateText: l.msg("machine.connected"), Age: shortAge(l, now, m.at)}
 		if now.Sub(m.at) > agentActiveWithin {
-			row.State, row.StateText = "idle", msg("machine.last_seen", shortAgo(now, m.at))
+			row.State, row.StateText = "idle", l.msg("machine.last_seen", shortAgo(l, now, m.at))
 		}
 		rows = append(rows, row)
 	}
@@ -893,17 +898,17 @@ func ownMachines(tokens []store.TokenInfo, now time.Time) []machineRow {
 }
 
 // shortAgo writes a time as "2 min ago" for a sentence.
-func shortAgo(now, t time.Time) string {
+func shortAgo(l lang, now, t time.Time) string {
 	d := now.Sub(t)
 	switch {
 	case d < time.Minute:
-		return msg("age.just_now")
+		return l.msg("age.just_now")
 	case d < time.Hour:
-		return msg("age.min_ago", int(d/time.Minute))
+		return l.msg("age.min_ago", int(d/time.Minute))
 	case d < 48*time.Hour:
-		return msg("age.hours_ago", int(d/time.Hour))
+		return l.msg("age.hours_ago", int(d/time.Hour))
 	}
-	return msg("age.days_ago", int(d/(24*time.Hour)))
+	return l.msg("age.days_ago", int(d/(24*time.Hour)))
 }
 
 func recentMachine(tokens []store.TokenInfo, now time.Time) (string, bool) {

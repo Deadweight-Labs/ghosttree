@@ -31,7 +31,7 @@ func TestBuildCoordSidebarSeparatesRoomKindsAndUnifiesAttentionSignals(t *testin
 	}
 
 	labels := map[string]string{"person:1": "Robin", "sess-a": "Build Agent"}
-	got := buildCoordSidebar(summaries, "person:1", "group:g", labels)
+	got := buildCoordSidebar(langEN, summaries, "person:1", "group:g", labels)
 	if len(got.Attention) != 2 || len(got.Machines) != 1 || len(got.Projects) != 1 || len(got.Private) != 2 {
 		t.Fatalf("unexpected sections: %+v", got)
 	}
@@ -54,18 +54,18 @@ func TestBuildCoordMessageViewsMarksConsecutiveAuthorGroups(t *testing.T) {
 		{Message: store.CoordMessage{ID: 4, Sequence: 4, SenderExternalID: "agent-a", AuthorKind: store.AuthorAgent, Body: "three"}, AuthorLabel: "Build Agent"},
 		{Message: store.CoordMessage{ID: 5, Sequence: 5, SenderExternalID: "agent-a", AuthorKind: store.AuthorAgent, Body: "reply"}, AuthorLabel: "Build Agent", Reply: &store.CoordReplyPreview{Sequence: 1}},
 	}
-	got := buildCoordMessageViews(messages, "project:p", nil)
+	got := buildCoordMessageViews(langEN, messages, "project:p", nil)
 	if len(got) != 5 || !got[0].GroupStart || got[1].GroupStart || !got[2].GroupStart || !got[3].GroupStart || !got[4].GroupStart {
 		t.Fatalf("room message grouping=%+v", got)
 	}
-	thread := buildCoordThreadMessageViews(messages, "project:p", 7, nil)
+	thread := buildCoordThreadMessageViews(langEN, messages, "project:p", 7, nil)
 	if len(thread) != 5 || !thread[0].GroupStart || thread[1].GroupStart || !thread[2].GroupStart || !thread[3].GroupStart || !thread[4].GroupStart {
 		t.Fatalf("thread message grouping=%+v", thread)
 	}
 }
 
 func TestThreadAttentionURLCarriesServerCursorBeforeFragment(t *testing.T) {
-	views, _ := buildCoordAttentionViews([]store.AttentionItem{{
+	views, _ := buildCoordAttentionViews(langEN, []store.AttentionItem{{
 		ID: 1, DestinationKind: store.DestinationDiscussion, DestinationID: "7",
 		HomeRoomKey: "group:private room", Sequence: 3, State: store.AttentionOpen, IsRecipient: true,
 	}}, "")
@@ -83,7 +83,7 @@ func TestThreadAttentionURLCarriesServerCursorBeforeFragment(t *testing.T) {
 }
 
 func TestAttentionViewsSeparateIncomingAndNameEveryOutgoingRecipient(t *testing.T) {
-	incoming, outgoing := buildCoordAttentionViews([]store.AttentionItem{
+	incoming, outgoing := buildCoordAttentionViews(langEN, []store.AttentionItem{
 		{ID: 1, State: store.AttentionOpen, RecipientID: "person:2", IsRecipient: true, Reason: store.AttentionQuestion},
 		{ID: 2, State: store.AttentionOpen, RecipientID: "person:2", CanWithdraw: true, Reason: store.AttentionHandoff},
 		{ID: 3, State: store.AttentionOpen, RecipientID: "person:3", CanWithdraw: true, Reason: store.AttentionHandoff},
@@ -108,7 +108,7 @@ func TestBuildCoordMessageViewsPreservesUntrustedText(t *testing.T) {
 	time.Local = time.FixedZone("CEST", 2*60*60)
 	t.Cleanup(func() { time.Local = previous })
 
-	got := buildCoordMessageViews([]store.CoordMessagePresentation{{
+	got := buildCoordMessageViews(langEN, []store.CoordMessagePresentation{{
 		Message: store.CoordMessage{ID: 9, Sequence: 4, SenderExternalID: "raw-agent", AuthorKind: store.AuthorAgent,
 			Body: "<script>alert(1)</script>", CreatedAt: "2026-09-18T08:00:00Z"},
 		AuthorLabel: "<agent>", Mentions: []string{"sess-b"},
@@ -132,7 +132,7 @@ func TestBuildCoordParticipantsUsesCanonicalLabelsAndHonestPresence(t *testing.T
 		ExternalID: "sess-peer-secret", DisplayName: "Build Agent", Provider: "codex",
 		Worktree: "/worktrees/ui", Branch: "feat/ui", LastSeenAt: "2026-09-18T10:00:00Z",
 	}}
-	got := buildCoordParticipants(room, peers, nil, current, map[string]string{"person:2": "Alex"})
+	got := buildCoordParticipants(langEN, room, peers, nil, current, map[string]string{"person:2": "Alex"})
 	if len(got) != 3 {
 		t.Fatalf("participants=%+v", got)
 	}
@@ -158,7 +158,7 @@ func TestBuildCoordStandingViewsSeparatesRawAndDisplayTimestamp(t *testing.T) {
 	time.Local = time.FixedZone("CEST", 2*60*60)
 	t.Cleanup(func() { time.Local = previous })
 
-	got := buildCoordStandingViews([]store.StandingInstruction{{
+	got := buildCoordStandingViews(langEN, []store.StandingInstruction{{
 		MessageID: "9", Person: "Robin", Body: "Release stoppen", CreatedAt: "2026-09-18T08:30:00Z",
 	}}, nil)
 	if len(got) != 1 || got[0].CreatedAt != "2026-09-18T08:30:00Z" || got[0].DisplayTimestamp != "18.09.2026, 10:30" {
@@ -168,10 +168,10 @@ func TestBuildCoordStandingViewsSeparatesRawAndDisplayTimestamp(t *testing.T) {
 
 func TestUnknownPrincipalLabelsAreNotRenderedAsIdentifiers(t *testing.T) {
 	room := store.CoordRoom{Key: "direct:d", Kind: store.RoomDirect, Members: []string{"person:1", "person:secret"}}
-	if got := coordRoomLabel(room, "person:1", nil); strings.Contains(got, "person:secret") {
+	if got := coordRoomLabel(langEN, room, "person:1", nil); strings.Contains(got, "person:secret") {
 		t.Fatalf("raw principal leaked through room label: %q", got)
 	}
-	participants := buildCoordParticipants(room, nil, nil, store.Principal{ID: "person:1", Label: "Robin"}, nil)
+	participants := buildCoordParticipants(langEN, room, nil, nil, store.Principal{ID: "person:1", Label: "Robin"}, nil)
 	for _, participant := range participants {
 		if strings.Contains(participant.Label, "person:") {
 			t.Fatalf("raw principal leaked through participant: %+v", participant)
@@ -190,7 +190,7 @@ func TestBuildCoordParticipantsShowsOriginAndAgeAndNeverInventsIdle(t *testing.T
 		{ExternalID: "b", DisplayName: "Silent", Provider: "claude"},
 	}
 	byLabel := map[string]coordParticipantView{}
-	for _, p := range buildCoordParticipants(room, peers, nil, current, nil) {
+	for _, p := range buildCoordParticipants(langEN, room, peers, nil, current, nil) {
 		byLabel[p.Label] = p
 	}
 	if got := byLabel["Polling"]; got.ReachabilityText != "connected (observed, 12 s ago)" || got.WorkStateText != "waiting for peer (derived, 2 min ago)" {
@@ -230,13 +230,13 @@ func TestBuildCoordWaitCyclesNamesTheCycleOnceAndHidesNothingElse(t *testing.T) 
 func TestBuildCoordMessageViewsNamesMentionedPeopleFromTheStore(t *testing.T) {
 	message := store.CoordMessage{ID: 1, Sequence: 1, SenderExternalID: "human-a", AuthorPrincipalID: "person:1", AuthorKind: store.AuthorHuman, Body: "@Freund hi"}
 	named := store.CoordMessagePresentation{Message: message, AuthorLabel: "Robin", Mentions: []string{"person:2"}, MentionLabels: map[string]string{"person:2": "Freund"}}
-	got := buildCoordMessageViews([]store.CoordMessagePresentation{named}, "project:p", map[string]string{"person:1": "Robin"})
+	got := buildCoordMessageViews(langEN, []store.CoordMessagePresentation{named}, "project:p", map[string]string{"person:1": "Robin"})
 	if len(got[0].Mentions) != 1 || got[0].Mentions[0] != "Freund" {
 		t.Fatalf("mentions=%v, want the name", got[0].Mentions)
 	}
 	// A viewer who may not see names (guest) still gets the neutral label.
 	anonymous := store.CoordMessagePresentation{Message: message, AuthorLabel: "Robin", Mentions: []string{"person:2"}}
-	got = buildCoordMessageViews([]store.CoordMessagePresentation{anonymous}, "project:p", nil)
+	got = buildCoordMessageViews(langEN, []store.CoordMessagePresentation{anonymous}, "project:p", nil)
 	if len(got[0].Mentions) != 1 || got[0].Mentions[0] != "Someone" {
 		t.Fatalf("mentions=%v, want Someone", got[0].Mentions)
 	}

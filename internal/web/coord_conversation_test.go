@@ -151,7 +151,7 @@ if (hidden.value !== "120") throw new Error("hidden offset not stamped: " + hidd
 
 func TestCoordRoutineDeliveryStateIsNotShown(t *testing.T) {
 	build := func(d store.CoordDeliverySummary) string {
-		got := buildCoordMessageViews([]store.CoordMessagePresentation{{
+		got := buildCoordMessageViews(langEN, []store.CoordMessagePresentation{{
 			Message: store.CoordMessage{ID: 1, Sequence: 1, AuthorKind: store.AuthorAgent, Body: "x"}, Delivery: d,
 		}}, "project:p", nil)
 		return got[0].Delivery

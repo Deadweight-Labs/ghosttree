@@ -7,11 +7,11 @@
 (() => {
   const pad = (n) => String(n).padStart(2, "0");
   const hm = (d) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  const dm = (d) => d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  const dm = (d) => d.toLocaleDateString(document.documentElement.lang || undefined, { day: "numeric", month: "short" });
   const sameDay = (a, b) =>
     a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
   const full = (d) =>
-    `${d.toLocaleDateString(undefined, { day: "2-digit", month: "2-digit", year: "numeric" })}, ${hm(d)}`;
+    `${d.toLocaleDateString(document.documentElement.lang || undefined, { day: "2-digit", month: "2-digit", year: "numeric" })}, ${hm(d)}`;
   const kinds = {
     clock: (d, now) => (sameDay(d, now) ? hm(d) : `${dm(d)} ${hm(d)}`),
     datetime: (d) => `${dm(d)} ${hm(d)}`,
@@ -21,7 +21,7 @@
       if (sameDay(d, now) && el.dataset.today) return `${el.dataset.today} ${hm(d)}`;
       if (sameDay(d, yesterday) && el.dataset.yesterday) return `${el.dataset.yesterday} ${hm(d)}`;
       const weekday = d.getFullYear() === now.getFullYear()
-        ? `${d.toLocaleDateString(undefined, { weekday: "short" })} ${dm(d)}`
+        ? `${d.toLocaleDateString(document.documentElement.lang || undefined, { weekday: "short" })} ${dm(d)}`
         : `${dm(d)} ${d.getFullYear()}`;
       return `${weekday} ${hm(d)}`;
     },

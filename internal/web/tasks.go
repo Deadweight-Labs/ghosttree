@@ -68,15 +68,15 @@ func visibleProjects(pa *store.ProjectAccess, project string) []string {
 // taskRows turns tasks into rows. Everything passed in already went through
 // ProjectAccess.CanSeeTask (ListHumanTasks); the request link shows only when
 // the viewer may read that request.
-func (a *app) taskRows(pa *store.ProjectAccess, tasks []humantask.Task) []taskRow {
+func (a *app) taskRows(l lang, pa *store.ProjectAccess, tasks []humantask.Task) []taskRow {
 	rows := make([]taskRow, 0, len(tasks))
 	readable := map[int64]bool{}
 	for _, t := range tasks {
-		row := taskRow{ID: t.ID, Human: t.HumanID(), Kind: t.Kind, Title: t.Title, KindLabel: label(taskKindKeys, t.Kind),
-			Where: t.Location, Desc: ellipsize(oneLineText(t.Description), 240), State: t.State, Project: t.Project, Age: shortAge(overviewNow().UTC(), parseTime(t.UpdatedAt)),
+		row := taskRow{ID: t.ID, Human: t.HumanID(), Kind: t.Kind, Title: t.Title, KindLabel: label(l, taskKindKeys, t.Kind),
+			Where: t.Location, Desc: ellipsize(oneLineText(t.Description), 240), State: t.State, Project: t.Project, Age: shortAge(l, overviewNow().UTC(), parseTime(t.UpdatedAt)),
 			CanDone: t.State == humantask.Open && pa.CheckTask(t, store.ActWork) == nil}
 		if t.State != humantask.Open {
-			row.StateLabel = label(taskStateKeys, t.State)
+			row.StateLabel = label(l, taskStateKeys, t.State)
 		}
 		if t.State == humantask.Done {
 			row.Note, row.By = t.DoneNote, t.DoneBy
@@ -97,13 +97,14 @@ func (a *app) taskRows(pa *store.ProjectAccess, tasks []humantask.Task) []taskRo
 // overviewWaiting is the block "Waiting on you": open tasks the viewer can mark
 // done. A guest sees only what is assigned to them; the store filter decides.
 func (a *app) overviewWaiting(r *http.Request, pa *store.ProjectAccess, project string) (*tasksView, error) {
+	l := a.langFor(r)
 	var out []taskRow
 	for _, p := range visibleProjects(pa, project) {
 		tasks, err := a.store.ListHumanTasks(pa, store.TaskFilter{Project: p, State: humantask.Open, Mine: true, Limit: tasksShown})
 		if err != nil {
 			return nil, err
 		}
-		for _, row := range a.taskRows(pa, tasks) {
+		for _, row := range a.taskRows(l, pa, tasks) {
 			if row.CanDone {
 				out = append(out, row)
 			}
@@ -126,6 +127,7 @@ func anyDoable(rows []taskRow) bool {
 }
 
 func (a *app) tasksPage(w http.ResponseWriter, r *http.Request) {
+	l := a.langFor(r)
 	w.Header().Set("Cache-Control", "no-store")
 	pa := a.access(r)
 	project := selectedProject(a.shellFor(r, "tasks"))
@@ -150,7 +152,7 @@ func (a *app) tasksPage(w http.ResponseWriter, r *http.Request) {
 	}
 	order := map[string]int{humantask.Open: 0, humantask.Done: 1, humantask.Confirmed: 2, humantask.Dropped: 3}
 	slices.SortStableFunc(all, func(x, y humantask.Task) int { return order[x.State] - order[y.State] })
-	v := &tasksView{Rows: a.taskRows(pa, all), Project: project, Token: csrfOf(r), Back: "tasks"}
+	v := &tasksView{Rows: a.taskRows(l, pa, all), Project: project, Token: csrfOf(r), Back: "tasks"}
 	v.Everyone = everyone
 	if everyone {
 		v.Who = "all"
@@ -158,11 +160,11 @@ func (a *app) tasksPage(w http.ResponseWriter, r *http.Request) {
 	v.Any = anyDoable(v.Rows)
 	switch {
 	case r.URL.Query().Get("fail") != "":
-		v.Result = &requestResult{Text: msg(taskFailKey(r.URL.Query().Get("fail"))), Kind: "failed", Fail: true}
+		v.Result = &requestResult{Text: l.msg(taskFailKey(r.URL.Query().Get("fail"))), Kind: "failed", Fail: true}
 	case r.URL.Query().Get("done") == "1":
-		v.Result = &requestResult{Text: msg("tasks.result.done"), Kind: "done"}
+		v.Result = &requestResult{Text: l.msg("tasks.result.done"), Kind: "done"}
 	}
-	a.renderBrowser(w, r, "tasks", pageData{Title: msg("tasks.title"), TasksV: v})
+	a.renderBrowser(w, r, "tasks", pageData{Title: l.msg("tasks.title"), TasksV: v})
 }
 
 // tasksDone marks the ticked tasks done in one go: all or none. The form has a

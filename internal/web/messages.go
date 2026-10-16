@@ -1,11 +1,9 @@
 package web
 
-import "fmt"
-
-// messages ist der Textkatalog der Oberfläche: Schlüssel -> englischer Text.
-// Vorlagen holen Texte mit {{t "schlüssel"}}, Handler mit msg. Ein späteres
-// Deutsch ersetzt diese Tabelle, nicht die Vorlagen. Platzhalter sind %s und
-// stehen höchstens einmal je Text.
+// messages ist der englische Textkatalog der Oberfläche: Schlüssel -> Text.
+// Vorlagen holen Texte mit {{t "schlüssel"}}, Handler mit l.msg (lang.go). Das
+// Deutsch steht in messages_de.go mit denselben Schlüsseln. Platzhalter sind
+// %s und stehen höchstens einmal je Text.
 var messages = map[string]string{
 	// Hülle: Navigation, Kopf, Kontomenü.
 	"shell.title":              "ghosttree — %s",
@@ -66,6 +64,9 @@ var messages = map[string]string{
 
 	// Startseite.
 	"age.now":                 "now",
+	"age.short.min":           "%dm",
+	"age.short.hours":         "%dh",
+	"age.short.days":          "%dd",
 	"age.just_now":            "just now",
 	"age.min_ago":             "%d min ago",
 	"age.hours_ago":           "%d h ago",
@@ -958,19 +959,8 @@ var messages = map[string]string{
 	"adm.login.action":   "Sign in",
 	"adm.login.command":  "ctx account login-link <name> --url https://host --db <path>",
 
-	"time.ago": "%s ago",
-	"time.in":  "in %s",
-}
-
-// msg liefert den Text zu einem Schlüssel. Ein unbekannter Schlüssel kommt als
-// er selbst zurück, damit ein Tippfehler sichtbar wird statt leer zu bleiben.
-func msg(key string, args ...any) string {
-	text, ok := messages[key]
-	if !ok {
-		return key
-	}
-	if len(args) == 0 {
-		return text
-	}
-	return fmt.Sprintf(text, args...)
+	"page.coordination": "Coordination",
+	"page.placeholder":  "This section is connected next.",
+	"time.ago":          "%s ago",
+	"time.in":           "in %s",
 }

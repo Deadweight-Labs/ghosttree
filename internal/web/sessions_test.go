@@ -805,7 +805,7 @@ func TestAbsoluteTimesAreMarkedForTheReadersTimeZone(t *testing.T) {
 			t.Errorf("localtime.js lacks %q", want)
 		}
 	}
-	if got := string(timeTag("2026-10-11T18:51:00Z")); !strings.Contains(got, `data-local="title"`) {
+	if got := string(timeTag(langEN, "2026-10-11T18:51:00Z")); !strings.Contains(got, `data-local="title"`) {
 		t.Errorf("the tooltip of a relative time stays in UTC: %s", got)
 	}
 }

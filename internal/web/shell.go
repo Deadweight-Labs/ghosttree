@@ -255,6 +255,7 @@ func selectedProjectOf(base shellBase) string {
 // project (or all they can see): assigned to them, or for everyone. It counts
 // what ListHumanTasks lets through, nothing else, and once per request.
 func (a *app) openTaskCount(r *http.Request, project string) int {
+	l := a.langFor(r)
 	memo, _ := r.Context().Value(shellMemoKey{}).(*shellMemo)
 	if memo != nil && memo.tasksSet {
 		return memo.tasks
@@ -266,7 +267,7 @@ func (a *app) openTaskCount(r *http.Request, project string) int {
 		if err != nil {
 			continue
 		}
-		for _, row := range a.taskRows(pa, tasks) {
+		for _, row := range a.taskRows(l, pa, tasks) {
 			if row.CanDone {
 				n++
 			}

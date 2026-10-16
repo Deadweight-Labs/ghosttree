@@ -61,9 +61,9 @@ var (
 )
 
 // label gibt den Text zu einem Wert, sonst den Wert selbst.
-func label(keys map[string]string, v string) string {
+func label(l lang, keys map[string]string, v string) string {
 	if key, ok := keys[v]; ok {
-		return msg(key)
+		return l.msg(key)
 	}
 	return v
 }
@@ -159,9 +159,9 @@ type requestView struct {
 	MoveProjects []filterOption
 }
 
-func requestTypeLabel(typ string) string { return label(requestTypeKeys, typ) }
+func requestTypeLabel(l lang, typ string) string { return label(l, requestTypeKeys, typ) }
 
-func requestStateLabel(state string) string { return label(requestStateKeys, state) }
+func requestStateLabel(l lang, state string) string { return label(l, requestStateKeys, state) }
 
 func requestURL(id int64) string { return "/ui/requests/" + strconv.FormatInt(id, 10) }
 
@@ -188,6 +188,7 @@ func requestListHref(q url.Values, cursor string) string {
 }
 
 func (a *app) requestsPage(w http.ResponseWriter, r *http.Request) {
+	l := a.langFor(r)
 	query := r.URL.Query()
 	q := strings.TrimSpace(query.Get("q"))
 	state := query.Get("state")
@@ -265,9 +266,9 @@ func (a *app) requestsPage(w http.ResponseWriter, r *http.Request) {
 		h := pa.RequestHitView(raw)
 		row := requestListRow{
 			Href: requestURL(h.Request.ID), ID: h.Request.HumanID(), Title: h.Request.Title,
-			Type: h.Request.Type, TypeLabel: requestTypeLabel(h.Request.Type), Priority: h.Request.Priority,
-			State: h.Request.State, StateLabel: requestStateLabel(h.Request.State),
-			Age: shortAge(now, parseTime(h.Request.CreatedAt)),
+			Type: h.Request.Type, TypeLabel: requestTypeLabel(l, h.Request.Type), Priority: h.Request.Priority,
+			State: h.Request.State, StateLabel: requestStateLabel(l, h.Request.State),
+			Age: shortAge(l, now, parseTime(h.Request.CreatedAt)),
 		}
 		if project == "" && h.Request.Scope.Project != "" {
 			row.Project = path.Base(h.Request.Scope.Project)
@@ -277,31 +278,31 @@ func (a *app) requestsPage(w http.ResponseWriter, r *http.Request) {
 			row.Progress = strconv.Itoa(p.Done) + "/" + strconv.Itoa(p.Total)
 		}
 		if h.Request.State == "open" {
-			row.Working = workingChips(work[h.Request.ID])
+			row.Working = workingChips(l, work[h.Request.ID])
 		}
 		v.Rows = append(v.Rows, row)
 	}
 	if page.NextCursor != "" {
 		v.Older = requestListHref(query, page.NextCursor)
 	}
-	v.Selects = requestSelects(state, typ, priority, priorities)
+	v.Selects = requestSelects(l, state, typ, priority, priorities)
 	v.HasFilters = q != "" || state != "" || typ != "" || priority != ""
 	v.Empty, v.NoMatch = len(v.Rows) == 0 && !v.HasFilters && filter.Cursor == "", len(v.Rows) == 0 && (v.HasFilters || filter.Cursor != "")
 	v.ClearHref = "/ui/requests"
 	if project != "" {
 		v.ClearHref += "?project=" + url.QueryEscape(project)
 	}
-	a.renderBrowser(w, r, "requests", pageData{Title: "Requests", Project: project, RequestsV: v})
+	a.renderBrowser(w, r, "requests", pageData{Title: l.msg("nav.requests"), Project: project, RequestsV: v})
 }
 
-func requestSelects(state, typ, priority string, priorities map[string]bool) []filterSelect {
-	stateSel := filterSelect{Name: "state", Label: requestStateLabel("open")}
+func requestSelects(l lang, state, typ, priority string, priorities map[string]bool) []filterSelect {
+	stateSel := filterSelect{Name: "state", Label: requestStateLabel(l, "open")}
 	for _, s := range requestStates {
-		stateSel.Options = append(stateSel.Options, filterOption{Value: s, Label: requestStateLabel(s), Selected: s == state})
+		stateSel.Options = append(stateSel.Options, filterOption{Value: s, Label: requestStateLabel(l, s), Selected: s == state})
 	}
-	typeSel := filterSelect{Name: "type", Label: msg("requests.all_types")}
+	typeSel := filterSelect{Name: "type", Label: l.msg("requests.all_types")}
 	for _, t := range requestTypes {
-		typeSel.Options = append(typeSel.Options, filterOption{Value: t, Label: requestTypeLabel(t), Selected: t == typ})
+		typeSel.Options = append(typeSel.Options, filterOption{Value: t, Label: requestTypeLabel(l, t), Selected: t == typ})
 	}
 	sels := []filterSelect{stateSel, typeSel}
 	delete(priorities, "")
@@ -311,7 +312,7 @@ func requestSelects(state, typ, priority string, priorities map[string]bool) []f
 			list = append(list, p)
 		}
 		slices.Sort(list)
-		prSel := filterSelect{Name: "priority", Label: msg("requests.all_priorities")}
+		prSel := filterSelect{Name: "priority", Label: l.msg("requests.all_priorities")}
 		for _, p := range list {
 			prSel.Options = append(prSel.Options, filterOption{Value: p, Label: p, Selected: p == priority})
 		}
@@ -322,7 +323,7 @@ func requestSelects(state, typ, priority string, priorities map[string]bool) []f
 
 // workingChips nennt die Sessions, die gerade an einem Auftrag arbeiten; die
 // Abfrage hat schon nur lesbare Transkripte geliefert, per Adresse.
-func workingChips(work []store.ActiveRequestWork) []chip {
+func workingChips(l lang, work []store.ActiveRequestWork) []chip {
 	var out []chip
 	more := 0
 	for _, wk := range work {
@@ -330,7 +331,7 @@ func workingChips(work []store.ActiveRequestWork) []chip {
 			more++
 			continue
 		}
-		title := msg("requests.session")
+		title := l.msg("requests.session")
 		if wk.Title != "" {
 			title = ellipsize(wk.Title, 36)
 		}
@@ -392,8 +393,8 @@ func (a *app) lookupRequest(w http.ResponseWriter, r *http.Request, act store.Ac
 var pubRefPattern = regexp.MustCompile(`^session:([A-Za-z0-9_-]+)(#.*)?$`)
 var sessionScrub = regexp.MustCompile(`session:[^\s#]+(#\S*)?`)
 
-func (a *app) evidenceLineFor(pa *store.ProjectAccess, project string, e requestdomain.Evidence) evidenceLine {
-	line := evidenceLine{Kind: e.Kind, Label: evidenceLabel(e.Kind), Ref: e.Ref}
+func (a *app) evidenceLineFor(l lang, pa *store.ProjectAccess, project string, e requestdomain.Evidence) evidenceLine {
+	line := evidenceLine{Kind: e.Kind, Label: evidenceLabel(l, e.Kind), Ref: e.Ref}
 	switch e.Kind {
 	case "session":
 		line.Ref = ""
@@ -409,7 +410,7 @@ func (a *app) evidenceLineFor(pa *store.ProjectAccess, project string, e request
 			return line
 		}
 		line.Href = "/ui/sessions/" + pub + fragmentOf(frag)
-		line.Ref = msg("requests.open_session")
+		line.Ref = l.msg("requests.open_session")
 	case "url":
 		if strings.HasPrefix(e.Ref, "https://") || strings.HasPrefix(e.Ref, "http://") {
 			line.Href = e.Ref
@@ -418,9 +419,10 @@ func (a *app) evidenceLineFor(pa *store.ProjectAccess, project string, e request
 	return line
 }
 
-func evidenceLabel(kind string) string { return label(evidenceKeys, kind) }
+func evidenceLabel(l lang, kind string) string { return label(l, evidenceKeys, kind) }
 
 func (a *app) requestPage(w http.ResponseWriter, r *http.Request) {
+	l := a.langFor(r)
 	detail, ok := a.lookupRequest(w, r, store.ActRead)
 	if !ok {
 		return
@@ -431,7 +433,7 @@ func (a *app) requestPage(w http.ResponseWriter, r *http.Request) {
 	project := req.Scope.Project
 	linked, err := a.browserCoord(r).ThreadsForObject("request", req.HumanID())
 	if err != nil {
-		coordHTTPError(w, err)
+		coordHTTPError(l, w, err)
 		return
 	}
 	var threads []coordThreadView
@@ -446,12 +448,12 @@ func (a *app) requestPage(w http.ResponseWriter, r *http.Request) {
 	detail = pa.RequestDetailView(detail)
 	now := overviewNow().UTC()
 	v := &requestView{
-		ID: req.ID, Human: req.HumanID(), Title: req.Title, Type: req.Type, TypeLabel: requestTypeLabel(req.Type),
-		Priority: req.Priority, State: req.State, StateLabel: requestStateLabel(req.State), Person: req.Person,
-		Age: shortAge(now, parseTime(req.CreatedAt)), Blocks: bodyBlocks(req.Description, 0), Threads: threads,
+		ID: req.ID, Human: req.HumanID(), Title: req.Title, Type: req.Type, TypeLabel: requestTypeLabel(l, req.Type),
+		Priority: req.Priority, State: req.State, StateLabel: requestStateLabel(l, req.State), Person: req.Person,
+		Age: shortAge(l, now, parseTime(req.CreatedAt)), Blocks: bodyBlocks(req.Description, 0), Threads: threads,
 		Open: req.State == "open", Token: csrfOf(r), Back: "/ui/requests",
 		RawTitle: req.Title, RawDescription: req.Description,
-		Types: requestTypeOptions(req.Type), Kinds: evidenceKindOptions(),
+		Types: requestTypeOptions(l, req.Type), Kinds: evidenceKindOptions(l),
 	}
 	if project != "" {
 		v.Project = path.Base(project)
@@ -467,7 +469,7 @@ func (a *app) requestPage(w http.ResponseWriter, r *http.Request) {
 	open := 0
 	humans := map[int64]string{}
 	for _, c := range detail.Criteria {
-		line := criterionLine{ID: c.ID, Human: c.HumanID(), Text: c.Description, State: c.State, StateLabel: criterionStateLabel(c.State),
+		line := criterionLine{ID: c.ID, Human: c.HumanID(), Text: c.Description, State: c.State, StateLabel: criterionStateLabel(l, c.State),
 			CanResolve: v.Open && v.CanWork && c.State == "open"}
 		humans[c.ID] = c.HumanID()
 		if c.State == "open" {
@@ -476,7 +478,7 @@ func (a *app) requestPage(w http.ResponseWriter, r *http.Request) {
 			v.Done++
 		}
 		for _, e := range c.Evidence {
-			line.Evidence = append(line.Evidence, a.evidenceLineFor(pa, project, e))
+			line.Evidence = append(line.Evidence, a.evidenceLineFor(l, pa, project, e))
 		}
 		v.Criteria = append(v.Criteria, line)
 	}
@@ -486,37 +488,37 @@ func (a *app) requestPage(w http.ResponseWriter, r *http.Request) {
 		v.Progress = strconv.Itoa(v.Done) + "/" + strconv.Itoa(v.Total)
 	}
 	v.CanComplete = v.Open && v.CanEdit && open == 0
-	v.Work = a.workLines(detail.Work, now)
-	v.Relations = a.relationLines(pa, detail.Relations)
+	v.Work = a.workLines(l, detail.Work, now)
+	v.Relations = a.relationLines(l, pa, detail.Relations)
 	for _, p := range detail.Pains {
-		v.Pains = append(v.Pains, requestPainLine{Href: painURL(p.ID), Title: p.Title, StateLabel: label(painStateKeys, p.State), Remaining: p.Remaining})
+		v.Pains = append(v.Pains, requestPainLine{Href: painURL(p.ID), Title: p.Title, StateLabel: label(l, painStateKeys, p.State), Remaining: p.Remaining})
 	}
 	for _, t := range detail.Tasks {
-		line := requestTaskLine{KindLabel: label(taskKindKeys, t.Kind), Title: t.Title, Where: t.Location}
+		line := requestTaskLine{KindLabel: label(l, taskKindKeys, t.Kind), Title: t.Title, Where: t.Location}
 		if t.State != "open" {
-			line.StateLabel = label(taskStateKeys, t.State)
+			line.StateLabel = label(l, taskStateKeys, t.State)
 		}
 		v.Tasks = append(v.Tasks, line)
 	}
-	v.Activity = activityLines(a.visibleActivity(pa, detail), humans, now)
+	v.Activity = activityLines(l, a.visibleActivity(pa, detail), humans, now)
 	v.Result = a.requestResult(r, raw)
 	a.renderBrowser(w, r, "request", pageData{Title: req.HumanID(), RequestV: v})
 }
 
-func criterionStateLabel(state string) string { return label(criterionKeys, state) }
+func criterionStateLabel(l lang, state string) string { return label(l, criterionKeys, state) }
 
-func requestTypeOptions(current string) []filterOption {
+func requestTypeOptions(l lang, current string) []filterOption {
 	out := make([]filterOption, 0, len(requestTypes))
 	for _, t := range requestTypes {
-		out = append(out, filterOption{Value: t, Label: requestTypeLabel(t), Selected: t == current})
+		out = append(out, filterOption{Value: t, Label: requestTypeLabel(l, t), Selected: t == current})
 	}
 	return out
 }
 
-func evidenceKindOptions() []filterOption {
+func evidenceKindOptions(l lang) []filterOption {
 	out := make([]filterOption, 0, len(evidenceKinds))
 	for i, k := range evidenceKinds {
-		out = append(out, filterOption{Value: k, Label: evidenceLabel(k), Selected: i == 0})
+		out = append(out, filterOption{Value: k, Label: evidenceLabel(l, k), Selected: i == 0})
 	}
 	return out
 }
@@ -540,15 +542,15 @@ func (a *app) knownPriorities(pa *store.ProjectAccess, project, current string) 
 	return out
 }
 
-func (a *app) workLines(work []requestdomain.Work, now time.Time) []workLine {
+func (a *app) workLines(l lang, work []requestdomain.Work, now time.Time) []workLine {
 	var out []workLine
 	for _, wk := range work {
-		line := workLine{Role: label(roleKeys, wk.Role), State: wk.State, StateLabel: label(workKeys, wk.State),
-			Summary: wk.Summary, Active: wk.State == "active", Age: shortAge(now, parseTime(firstNonEmpty(wk.EndedAt, wk.StartedAt)))}
-		line.Title = msg("requests.private_session")
+		line := workLine{Role: label(l, roleKeys, wk.Role), State: wk.State, StateLabel: label(l, workKeys, wk.State),
+			Summary: wk.Summary, Active: wk.State == "active", Age: shortAge(l, now, parseTime(firstNonEmpty(wk.EndedAt, wk.StartedAt)))}
+		line.Title = l.msg("requests.private_session")
 		if wk.SessionPublicID != "" {
 			line.Href = "/ui/sessions/" + wk.SessionPublicID
-			line.Title = msg("requests.session")
+			line.Title = l.msg("requests.session")
 			if sess, err := a.store.SessionByPublicID(wk.SessionPublicID); err == nil && strings.TrimSpace(sess.Title) != "" {
 				line.Title = ellipsize(sess.Title, 80)
 			}
@@ -569,10 +571,10 @@ func (a *app) workLines(work []requestdomain.Work, now time.Time) []workLine {
 
 // relationLines zeigt nur Gegenstellen, die der Betrachter lesen darf: eine
 // Nummer aus einem verborgenen Projekt verriete, dass es sie gibt.
-func (a *app) relationLines(pa *store.ProjectAccess, rels []requestdomain.Relation) []relationLine {
+func (a *app) relationLines(l lang, pa *store.ProjectAccess, rels []requestdomain.Relation) []relationLine {
 	var out []relationLine
 	for _, rel := range rels {
-		line := relationLine{Kind: rel.Kind, Label: label(relationKeys, rel.Kind)}
+		line := relationLine{Kind: rel.Kind, Label: label(l, relationKeys, rel.Kind)}
 		switch {
 		case rel.OtherRequestID != 0:
 			if !a.requestReadable(pa, rel.OtherRequestID) {
@@ -702,18 +704,18 @@ var activityKinds = map[string]string{
 // activityLines schreibt den Verlauf neu auf: Sessionnummern und Zeilen-Ids
 // verlassen den Server nie, die Aktivitäten (schon vom Betrachter gefiltert)
 // stehen neu nach alt.
-func activityLines(acts []requestdomain.Activity, humans map[int64]string, now time.Time) []activityLine {
+func activityLines(l lang, acts []requestdomain.Activity, humans map[int64]string, now time.Time) []activityLine {
 	out := make([]activityLine, 0, len(acts))
 	for i := len(acts) - 1; i >= 0 && len(out) < activityShown; i-- {
 		act := acts[i]
 		key, ok := activityKinds[act.Kind]
-		line := activityLine{Label: act.Kind, By: act.Person, Age: shortAge(now, parseTime(act.CreatedAt))}
+		line := activityLine{Label: act.Kind, By: act.Person, Age: shortAge(l, now, parseTime(act.CreatedAt))}
 		if ok {
-			line.Label = msg(key)
+			line.Label = l.msg(key)
 		}
 		switch act.Kind {
 		case "criterion.added", "request.dropped", "request.corrected", "request.moved", "work.finished", "request.done":
-			line.Text = ellipsize(sessionScrub.ReplaceAllString(act.Data, msg("requests.session")), 200)
+			line.Text = ellipsize(sessionScrub.ReplaceAllString(act.Data, l.msg("requests.session")), 200)
 		case "pain.linked", "pain.unlinked", "task.created", "task.done", "task.confirmed", "task.reopened", "task.dropped":
 			line.Text = ellipsize(act.Data, 200)
 		case "criterion.met", "criterion.waived":
@@ -727,7 +729,7 @@ func activityLines(acts []requestdomain.Activity, humans map[int64]string, now t
 				role = act.Data
 			}
 			if _, ok := roleKeys[role]; ok {
-				line.Text = label(roleKeys, role)
+				line.Text = label(l, roleKeys, role)
 			}
 		}
 		out = append(out, line)
@@ -738,9 +740,10 @@ func activityLines(acts []requestdomain.Activity, humans map[int64]string, now t
 // requestResult ist die Ergebniszeile nach einer Aktion. Sie erscheint nur,
 // wenn der Zustand sie stützt; eine erfundene Adresse zeigt nichts.
 func (a *app) requestResult(r *http.Request, d requestdomain.Detail) *requestResult {
+	l := a.langFor(r)
 	q := r.URL.Query()
 	if fail := q.Get("fail"); fail == "open_criteria" && d.Request.State == "open" {
-		return &requestResult{Text: msg("requests.fail.open_criteria"), Kind: "failed", Fail: true}
+		return &requestResult{Text: l.msg("requests.fail.open_criteria"), Kind: "failed", Fail: true}
 	}
 	kind := q.Get("done")
 	key, ok := requestDoneMsg[kind]
@@ -756,7 +759,7 @@ func (a *app) requestResult(r *http.Request, d requestdomain.Detail) *requestRes
 		}
 		for _, c := range d.Criteria {
 			if c.ID == n && (kind == "added" || c.State == kind) {
-				res.Text = msg(key, ellipsize(c.Description, 80))
+				res.Text = l.msg(key, ellipsize(c.Description, 80))
 			}
 		}
 		if res.Text == "" {
@@ -766,14 +769,14 @@ func (a *app) requestResult(r *http.Request, d requestdomain.Detail) *requestRes
 		if d.Request.State != "done" {
 			return nil
 		}
-		res.Text = msg(key)
+		res.Text = l.msg(key)
 	case "dropped":
 		if d.Request.State != "dropped" {
 			return nil
 		}
-		res.Text = msg(key)
+		res.Text = l.msg(key)
 	default:
-		res.Text = msg(key)
+		res.Text = l.msg(key)
 	}
 	return res
 }
@@ -809,7 +812,7 @@ func (a *app) requestFormTooLarge(next http.Handler) http.Handler {
 			if errors.As(err, &tooBig) {
 				w.Header().Set("Cache-Control", "no-store")
 				w.WriteHeader(http.StatusRequestEntityTooLarge)
-				a.renderBrowser(w, r, "requesttoolarge", pageData{Title: msg("requests.toolarge.title"), BackURL: "/ui/requests"})
+				a.renderBrowser(w, r, "requesttoolarge", pageData{Title: a.langFor(r).msg("requests.toolarge.title"), BackURL: "/ui/requests"})
 				return
 			}
 		}

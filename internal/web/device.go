@@ -29,16 +29,18 @@ func limitBodyN(limit int64, next http.Handler) http.Handler {
 // ?user_code= füllt es vor, bestätigt aber nichts: erst ein POST mit
 // CSRF-Token entscheidet.
 func (a *app) devicePage(w http.ResponseWriter, r *http.Request) {
+	l := a.langFor(r)
 	w.Header().Set("Cache-Control", "no-store")
 	code := r.URL.Query().Get("user_code")
 	if len(code) > 32 {
 		code = ""
 	}
-	a.renderBrowser(w, r, "device", pageData{Title: msg("adm.device.title"), Code: code})
+	a.renderBrowser(w, r, "device", pageData{Title: l.msg("adm.device.title"), Code: code})
 }
 
 // deviceLookup prüft den eingegebenen Code und zeigt, wer ihn angefordert hat.
 func (a *app) deviceLookup(w http.ResponseWriter, r *http.Request) {
+	l := a.langFor(r)
 	w.Header().Set("Cache-Control", "no-store")
 	code := strings.TrimSpace(r.FormValue("user_code"))
 	req, err := a.store.Device().Lookup(code, browserPrincipal(r).ID)
@@ -50,7 +52,7 @@ func (a *app) deviceLookup(w http.ResponseWriter, r *http.Request) {
 		a.deviceError(w, r, err, "")
 		return
 	}
-	a.renderBrowser(w, r, "devicecheck", pageData{Title: msg("adm.device.title"),
+	a.renderBrowser(w, r, "devicecheck", pageData{Title: l.msg("adm.device.title"),
 		Code: store.FormatUserCode(store.NormalizeUserCode(code)), DeviceMachine: req.Machine,
 		DeviceRemote: req.Remote, DeviceStarted: req.StartedAt.UTC().Format(time.RFC3339)})
 }
@@ -58,6 +60,7 @@ func (a *app) deviceLookup(w http.ResponseWriter, r *http.Request) {
 // deviceDecide bestätigt oder verweigert. Die Maschine, die die CLI nannte,
 // wird mit dem Token des Kontos verbunden, sobald die CLI es abholt.
 func (a *app) deviceDecide(w http.ResponseWriter, r *http.Request) {
+	l := a.langFor(r)
 	w.Header().Set("Cache-Control", "no-store")
 	code := strings.TrimSpace(r.FormValue("user_code"))
 	approve := r.FormValue("decision") == "approve"
@@ -79,23 +82,24 @@ func (a *app) deviceDecide(w http.ResponseWriter, r *http.Request) {
 		a.deviceError(w, r, err, code)
 		return
 	}
-	title := msg("adm.device.denied")
+	title := l.msg("adm.device.denied")
 	if approve {
-		title = msg("adm.device.approved")
+		title = l.msg("adm.device.approved")
 	}
 	a.renderBrowser(w, r, "devicedone", pageData{Title: title, Approved: approve})
 }
 
 func (a *app) deviceError(w http.ResponseWriter, r *http.Request, err error, code string) {
-	status, text := http.StatusBadRequest, msg("adm.device.err_code")
+	l := a.langFor(r)
+	status, text := http.StatusBadRequest, l.msg("adm.device.err_code")
 	if errors.Is(err, store.ErrMachineTaken) {
-		status, text = http.StatusConflict, msg("adm.device.err_machine")
+		status, text = http.StatusConflict, l.msg("adm.device.err_machine")
 	}
 	if errors.Is(err, store.ErrDeviceLocked) {
-		status, text = http.StatusTooManyRequests, msg("adm.device.err_locked")
+		status, text = http.StatusTooManyRequests, l.msg("adm.device.err_locked")
 	}
 	w.WriteHeader(status)
-	a.renderBrowser(w, r, "device", pageData{Title: msg("adm.device.title"), Error: text, Code: ""})
+	a.renderBrowser(w, r, "device", pageData{Title: l.msg("adm.device.title"), Error: text, Code: ""})
 }
 
 type tokenRow struct {
@@ -164,6 +168,7 @@ func tokenKindLabel(kind string) string {
 
 // tokensPage listet die Tokens des Kontos; Administratoren sehen alle.
 func (a *app) tokensPage(w http.ResponseWriter, r *http.Request) {
+	l := a.langFor(r)
 	w.Header().Set("Cache-Control", "no-store")
 	principal := browserPrincipal(r)
 	admin := a.isAdmin(principal)
@@ -199,7 +204,7 @@ func (a *app) tokensPage(w http.ResponseWriter, r *http.Request) {
 			Revocable: status == "active", Tracked: tokenTracked(t, now, since), Unused: tokenIsUnused(t, now, principal.TokenID, since)})
 	}
 	sortTokenRows(rows)
-	data := pageData{Title: msg("adm.tokens.title"), Tokens: rows, Admin: admin}
+	data := pageData{Title: l.msg("adm.tokens.title"), Tokens: rows, Admin: admin}
 	for _, row := range rows {
 		if row.Unused {
 			data.UnusedTokens++
@@ -209,7 +214,7 @@ func (a *app) tokensPage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if n, err := strconv.Atoi(r.URL.Query().Get("revoked")); err == nil && n > 0 {
-		data.TokenResult = msg("adm.tokens.revoke_unused_done", n)
+		data.TokenResult = l.msg("adm.tokens.revoke_unused_done", n)
 	}
 	a.renderBrowser(w, r, "tokens", data)
 }

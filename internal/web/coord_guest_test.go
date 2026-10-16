@@ -449,7 +449,7 @@ func TestAttentionSenderLabelFallsBackToTheSenderID(t *testing.T) {
 		{ID: 3, SenderID: "claude:ghi"},                       // Etikett vorhanden
 	}
 	labels := map[string]string{"person:9": "Nine", "claude:ghi": "Ghi"}
-	annotateCoordAttention(views, items, coordSidebarView{}, labels)
+	annotateCoordAttention(langEN, views, items, coordSidebarView{}, labels)
 	for i, want := range []string{"Claude", "Nine", "Ghi"} {
 		if views[i].SenderLabel != want {
 			t.Errorf("view %d label %q, want %q", i, views[i].SenderLabel, want)

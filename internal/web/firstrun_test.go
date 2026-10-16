@@ -70,7 +70,7 @@ func TestAgentNamesAreReadable(t *testing.T) {
 		{store.CoordAgent{Owner: "Robin", ExternalID: "abc", Provider: "claude", DisplayName: "Docs reviewer"}, "Docs reviewer"},
 	}
 	for _, c := range cases {
-		if got := peerName(c.agent); got != c.want {
+		if got := peerName(langEN, c.agent); got != c.want {
 			t.Errorf("peerName(%s) = %q, want %q", c.agent.ExternalID, got, c.want)
 		}
 	}
@@ -219,13 +219,13 @@ func TestGuestChipIsHiddenOnTheViewersOwnMessages(t *testing.T) {
 		{Message: store.CoordMessage{ID: 1, Sequence: 1, SenderExternalID: "cli:mine", AuthorPrincipalID: "person:2", AuthorKind: store.AuthorAgent, Body: "mine"}},
 		{Message: store.CoordMessage{ID: 2, Sequence: 2, SenderExternalID: "cli:theirs", AuthorPrincipalID: "person:2", AuthorKind: store.AuthorAgent, Body: "theirs"}},
 	}
-	views := buildCoordMessageViews(pres, room, nil)
-	applyMessageRoles(st, room, "person:2", views, pres)
+	views := buildCoordMessageViews(langEN, pres, room, nil)
+	applyMessageRoles(langEN, st, room, "person:2", views, pres)
 	if views[0].SenderRole != "" || views[1].SenderRole != "" {
 		t.Errorf("own guest messages carry a chip: %q %q", views[0].SenderRole, views[1].SenderRole)
 	}
-	views = buildCoordMessageViews(pres, room, nil)
-	applyMessageRoles(st, room, "person:1", views, pres)
+	views = buildCoordMessageViews(langEN, pres, room, nil)
+	applyMessageRoles(langEN, st, room, "person:1", views, pres)
 	if views[0].SenderRole != "guest" {
 		t.Errorf("someone else's guest agent lost its chip: %q", views[0].SenderRole)
 	}
