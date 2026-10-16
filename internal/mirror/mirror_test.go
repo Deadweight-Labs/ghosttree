@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/pain"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -276,4 +277,51 @@ func keys(m map[string]string) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+func TestPainsAreMirroredByStateWithEdgesAndEvidenceButNoNotesOrSessions(t *testing.T) {
+	in := sampleInput()
+	in.Pains = []PainView{{
+		Pain:      pain.Pain{ID: 7, Project: "github.com/x/y", Title: "Reading only works whole", Body: "Every read returns all text.", State: "mitigated", Remaining: "search still reads whole", Person: "alice"},
+		Motivates: []pain.Link{{ID: 1, Kind: "request", RequestID: 177, Title: "Ein offener Faden"}, {ID: 2, Kind: "knowledge", KnowledgeID: 42, Title: "Null Treffer"}, {ID: 3, Kind: "external", ExternalRef: "https://example.test/issue/1"}},
+		Events: []pain.Event{
+			{Kind: "state", ToState: "mitigated", EvidenceKind: "commit", EvidenceRef: "abc123", Note: "PRIVATE-NOTE", Person: "alice"},
+			{Kind: "state", ToState: "mitigated", EvidenceKind: "session", EvidenceRef: "session:55"},
+		},
+	}}
+	got := docsByPath(Build(in))
+	body, ok := got["pains/mitigated/PAIN-7-reading-only-works-whole.md"]
+	if !ok {
+		t.Fatalf("no pain file: %v", got)
+	}
+	for _, want := range []string{"# PAIN-7 Reading only works whole", "Remaining: search still reads whole", "Every read returns all text.", "- REQ-177 Ein offener Faden", "- #42 Null Treffer", "https://example.test/issue/1", "commit: abc123"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("pain file lacks %q:\n%s", want, body)
+		}
+	}
+	for _, bad := range []string{"PRIVATE-NOTE", "alice", "session:55"} {
+		if strings.Contains(body, bad) {
+			t.Errorf("pain file carries %q", bad)
+		}
+	}
+	if !strings.Contains(got["requests/open/REQ-177-ein-offener-faden-meldet-sich-von-selbst.md"], "PAIN-7 Reading only works whole (mitigated)") {
+		t.Error("the request does not name the pain that motivates it")
+	}
+	if !strings.Contains(got["knowledge/pitfall/42-null-treffer-sehen-aus-wie-gibt-es-nicht.md"], "## Motivated by") {
+		t.Error("the knowledge entry does not name the pain that motivates it")
+	}
+	if !strings.Contains(got["INDEX.md"], "`pains/` — 1 pain") {
+		t.Error("the index does not list the pains")
+	}
+}
+
+func TestTheMirrorHasNoPainsDirectoryWithoutPains(t *testing.T) {
+	for path := range docsByPath(Build(sampleInput())) {
+		if strings.HasPrefix(path, "pains/") {
+			t.Errorf("unexpected %s", path)
+		}
+	}
+	if strings.Contains(docsByPath(Build(sampleInput()))["INDEX.md"], "pains/") {
+		t.Error("index names pains although there are none")
+	}
 }

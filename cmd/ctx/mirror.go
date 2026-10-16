@@ -93,6 +93,18 @@ func WriteMirror(c *client.Client, ax scope.Axes, repoRoot string) error {
 		return err
 	}
 
+	// Pains: a failure here must not stop the rest of the mirror.
+	var pains []mirror.PainView
+	if list, err := c.SearchPains(project, "all", "", 0, 200); err == nil {
+		for _, p := range list {
+			view := mirror.PainView{Pain: p}
+			if d, err := c.GetPain(p.ID); err == nil {
+				view.Motivates, view.Events = d.Motivates, d.Events
+			}
+			pains = append(pains, view)
+		}
+	}
+
 	// Wie voll der Baum daneben ist. Fehlschlagen darf das: eine Zahl weniger im
 	// Index ist hinnehmbar, ein nicht geschriebener Spiegel nicht.
 	described, paths := treeFill(c, project, repoRoot)
@@ -106,6 +118,7 @@ func WriteMirror(c *client.Client, ax scope.Axes, repoRoot string) error {
 		DoneShown:     len(done),
 		DoneTotal:     doneTotal,
 		Threads:       views,
+		Pains:         pains,
 		TreeDescribed: described,
 		TreePaths:     paths,
 		At:            time.Now().UTC().Format(time.RFC3339),
