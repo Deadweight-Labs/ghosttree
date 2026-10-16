@@ -271,7 +271,7 @@ func (c *httpClient) fetchBatch(ctx context.Context, batchID string) (batchEnvel
 }
 
 func doAndRead(req *http.Request, timeout time.Duration) ([]byte, error) {
-	client := &http.Client{Timeout: timeout}
+	client := newHTTPClient(req.URL, timeout)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
