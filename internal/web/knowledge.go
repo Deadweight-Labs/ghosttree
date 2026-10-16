@@ -149,6 +149,8 @@ type knowledgeItemView struct {
 	Move    *moveView
 	Moves   []moveRow
 	Closure *closureRow
+	// Pains are the pains this entry motivates, as far as the viewer may read them.
+	Pains []requestPainLine
 }
 
 // ----------------------------------------------------------------- Textblöcke
@@ -481,6 +483,9 @@ func (a *app) knowledgeItemPage(w http.ResponseWriter, r *http.Request) {
 	}
 	v.Moves = a.knowledgeMoveRows(pa, k)
 	v.Closure = a.closureRowFor(pa, k)
+	for _, p := range pa.PainsFor("knowledge", k.ID) {
+		v.Pains = append(v.Pains, requestPainLine{Href: painURL(p.ID), Title: p.Title, StateLabel: label(painStateKeys, p.State)})
+	}
 	// Frühere Fassungen tragen keine Vertrauensstufe und sind für Gäste tabu.
 	if hist, err := a.store.KnowledgeHistory(k.ID); err == nil && pa.CanSeeKnowledgeHistory(k) {
 		now := overviewNow().UTC()

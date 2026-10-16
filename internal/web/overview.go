@@ -52,6 +52,7 @@ var overviewNow = time.Now
 type overviewView struct {
 	Setup     *setupView
 	Guest     bool
+	Waiting   *tasksView
 	Next      []nextRow
 	Agents    []agentRow
 	Machines  []machineRow
@@ -210,8 +211,12 @@ func (a *app) overviewPage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if view.Waiting, err = a.overviewWaiting(r, pa, project); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	if view.Guest {
-		view.NoContent = len(view.Requests) == 0 && len(view.Learned) == 0
+		view.NoContent = len(view.Requests) == 0 && len(view.Learned) == 0 && view.Waiting == nil
 		a.renderBrowser(w, r, "overview", data.withOverview(view))
 		return
 	}
