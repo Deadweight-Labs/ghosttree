@@ -10,5 +10,7 @@ import (
 // real service.
 func TestMain(m *testing.M) {
 	installCtxExecutable = func(string) (string, error) { return "ctx", nil }
+	// A developer's terminal must never be asked a question by a test.
+	installTTY = func() (terminal, error) { return nil, os.ErrNotExist }
 	os.Exit(m.Run())
 }

@@ -29,6 +29,8 @@ func run(args []string, stdout io.Writer) int {
 		return cmdClaude(rest, stdout)
 	case "install":
 		return cmdInstall(rest, stdout)
+	case "uninstall":
+		return cmdUninstall(rest, stdout)
 	case "hook":
 		return cmdHook(rest, stdout)
 	case "status":
@@ -112,7 +114,9 @@ const usage = `usage: ctx <command>
   mcp      run the MCP server (stdio)
   channel  serve coordination messages as a Claude Code channel (stdio, opt-in at session start)
   claude   start Claude Code with the ghosttree channel (opt-in launcher)
-  install  set up a harness (claude|codex|opencode)
+  ghclaude  not a command: a link to ctx that starts claude with the channel, all arguments unchanged
+  install  set up a harness (claude|codex|opencode) or ghclaude
+  uninstall  remove ghclaude
   setup    write client config (server URL + token)
   login    sign this machine in through the browser (device login)
   join     pair this machine with a pairing code from an invitation page
@@ -149,5 +153,8 @@ const usage = `usage: ctx <command>
   version  print version`
 
 func main() {
+	if invokedAsGhclaude(os.Args[0]) {
+		os.Exit(runGhclaude(os.Args[0], os.Args[1:], os.Stdout))
+	}
 	os.Exit(run(os.Args[1:], os.Stdout))
 }
