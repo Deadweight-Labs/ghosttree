@@ -57,7 +57,7 @@ var (
 	relationKeys     = map[string]string{"parent": "requests.rel.parent", "related": "requests.rel.related", "blocks": "requests.rel.blocks", "duplicates": "requests.rel.duplicates",
 		"supersedes": "requests.rel.supersedes", "knowledge": "requests.rel.knowledge", "external": "requests.rel.external"}
 	evidenceKeys = map[string]string{"commit": "requests.evidence.commit", "test": "requests.evidence.test", "file": "requests.evidence.file", "decision": "requests.evidence.decision",
-		"url": "requests.evidence.url", "session": "requests.evidence.session"}
+		"url": "requests.evidence.url", "session": "requests.evidence.session", "request": "requests.evidence.request"}
 )
 
 // label gibt den Text zu einem Wert, sonst den Wert selbst.
@@ -112,6 +112,14 @@ type relationLine struct {
 	Kind, Label, Text, Href string
 }
 
+type requestPainLine struct {
+	Href, Title, StateLabel, Remaining string
+}
+
+type requestTaskLine struct {
+	KindLabel, Title, Where, StateLabel string
+}
+
 type activityLine struct {
 	Label, Text, By, Age string
 	Code                 bool
@@ -133,6 +141,8 @@ type requestView struct {
 	Criteria                       []criterionLine
 	Work                           []workLine
 	Relations                      []relationLine
+	Pains                          []requestPainLine
+	Tasks                          []requestTaskLine
 	Threads                        []coordThreadView
 	Activity                       []activityLine
 	Result                         *requestResult
@@ -478,6 +488,16 @@ func (a *app) requestPage(w http.ResponseWriter, r *http.Request) {
 	v.CanComplete = v.Open && v.CanEdit && open == 0
 	v.Work = a.workLines(detail.Work, now)
 	v.Relations = a.relationLines(pa, detail.Relations)
+	for _, p := range detail.Pains {
+		v.Pains = append(v.Pains, requestPainLine{Href: painURL(p.ID), Title: p.Title, StateLabel: label(painStateKeys, p.State), Remaining: p.Remaining})
+	}
+	for _, t := range detail.Tasks {
+		line := requestTaskLine{KindLabel: label(taskKindKeys, t.Kind), Title: t.Title, Where: t.Location}
+		if t.State != "open" {
+			line.StateLabel = label(taskStateKeys, t.State)
+		}
+		v.Tasks = append(v.Tasks, line)
+	}
 	v.Activity = activityLines(a.visibleActivity(pa, detail), humans, now)
 	v.Result = a.requestResult(r, raw)
 	a.renderBrowser(w, r, "request", pageData{Title: req.HumanID(), RequestV: v})
@@ -674,6 +694,9 @@ var activityKinds = map[string]string{
 	"relation.added": "requests.act.relation_added", "relation.removed": "requests.act.relation_removed",
 	"work.started": "requests.act.work_started", "work.resumed": "requests.act.work_resumed", "work.finished": "requests.act.work_finished",
 	"evidence.migrated": "requests.act.evidence_migrated",
+	"pain.linked":       "requests.act.pain_linked", "pain.unlinked": "requests.act.pain_unlinked",
+	"task.created": "requests.act.task_created", "task.done": "requests.act.task_done", "task.confirmed": "requests.act.task_confirmed",
+	"task.reopened": "requests.act.task_reopened", "task.dropped": "requests.act.task_dropped",
 }
 
 // activityLines schreibt den Verlauf neu auf: Sessionnummern und Zeilen-Ids
@@ -691,6 +714,8 @@ func activityLines(acts []requestdomain.Activity, humans map[int64]string, now t
 		switch act.Kind {
 		case "criterion.added", "request.dropped", "request.corrected", "request.moved", "work.finished", "request.done":
 			line.Text = ellipsize(sessionScrub.ReplaceAllString(act.Data, msg("requests.session")), 200)
+		case "pain.linked", "pain.unlinked", "task.created", "task.done", "task.confirmed", "task.reopened", "task.dropped":
+			line.Text = ellipsize(act.Data, 200)
 		case "criterion.met", "criterion.waived":
 			if n, err := strconv.ParseInt(strings.TrimPrefix(act.Data, "AC-"), 10, 64); err == nil {
 				line.Text, line.Code = humans[n], humans[n] != ""

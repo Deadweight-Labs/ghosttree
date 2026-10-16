@@ -1,0 +1,16 @@
+{{define "taskform"}}<form class="tk-form" method="post" action="/ui/tasks/done"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="back" value="{{.Back}}">{{if .Project}}<input type="hidden" name="project" value="{{.Project}}">{{end}}
+<ul class="ov-list ov-deck clay tk-list">{{range .Rows}}{{template "taskrow" .}}{{end}}</ul>
+{{if .Any}}<div class="tk-actions"><input class="clay-field tk-note" name="note" maxlength="500" autocomplete="off" placeholder="{{t "tasks.note"}}" aria-label="{{t "tasks.note"}}"><button class="ov-btn ov-btn-primary clay">{{t "tasks.done"}}</button></div>{{end}}</form>{{end}}
+
+{{define "taskrow"}}<li class="tk-row{{if not .CanDone}} is-closed{{end}}">{{if .CanDone}}<input class="tk-box" type="checkbox" name="id" value="{{.ID}}" id="task-{{.ID}}" aria-label="{{.Title}}">{{else}}<span class="tk-box tk-void" aria-hidden="true"></span>{{end}}
+<div class="tk-text"><label{{if .CanDone}} for="task-{{.ID}}"{{end}} class="tk-title"><span class="tk-kind">{{.KindLabel}}</span>{{.Title}}</label>
+{{if .Where}}<code class="tk-where">{{.Where}}</code>{{end}}
+{{if .Desc}}<p class="tk-desc">{{.Desc}}</p>{{end}}
+{{if .Note}}<p class="tk-said">{{.Note}}</p>{{end}}</div>
+<div class="tk-side">{{if .StateLabel}}<span class="ov-meta">{{.StateLabel}}</span>{{end}}{{if .Req}}<a class="kn-link rq-id" href="{{.ReqHref}}">{{.Req}}</a>{{end}}</div></li>{{end}}
+
+{{define "tasks"}}{{template "head" .}}{{template "nav" .}}<main class="kn rq tk"><link rel="stylesheet" href="/static/knowledge.css"><link rel="stylesheet" href="/static/requests.css"><link rel="stylesheet" href="/static/tasks.css">
+{{with .TasksV}}<div class="ov-head"><h1>{{t "tasks.title"}}</h1></div>
+{{with .Result}}<div class="kn-result" role="status"><span class="rq-dot is-{{.Kind}}" aria-hidden="true"></span><span class="kn-result-text">{{.Text}}</span></div>{{end}}
+{{if .Rows}}{{template "taskform" .}}{{else}}<p class="ov-empty">{{t "tasks.empty"}}</p>{{end}}
+{{end}}{{template "foot" .}}{{end}}

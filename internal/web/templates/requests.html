@@ -7,7 +7,7 @@
 {{range .Working}}{{if .Href}}<a class="rq-working" href="{{.Href}}"><span class="ov-dot is-active pulse" aria-hidden="true"></span>{{.Text}}</a>{{else}}<span class="ov-meta">{{.Text}}</span>{{end}}{{end}}</div></div><span class="ov-num kn-age">{{.Age}}</span></li>{{end}}
 
 {{define "requests"}}{{template "head" .}}{{template "nav" .}}<main class="kn rq"><link rel="stylesheet" href="/static/knowledge.css"><link rel="stylesheet" href="/static/requests.css">
-{{with .RequestsV}}<div class="ov-head"><h1>{{t "nav.requests"}}</h1></div>
+{{with .RequestsV}}<div class="ov-head"><h1>{{t "nav.requests"}}</h1><a class="ov-btn clay" href="/ui/pains{{if .Project}}?project={{.Project}}{{end}}">{{t "pains.title"}}</a></div>
 <form class="kn-filters" method="get" action="/ui/requests" role="search"><input class="clay-field kn-q" type="search" name="q" value="{{.Q}}" placeholder="{{t "shell.search_placeholder"}}" aria-label="{{t "requests.search_label"}}" autocomplete="off">
 {{range .Selects}}<select class="clay-select" name="{{.Name}}" aria-label="{{.Label}}" data-autosubmit><option value="">{{.Label}}</option>{{range .Options}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select>{{end}}
 {{if .Project}}<input type="hidden" name="project" value="{{.Project}}">{{end}}<button class="ov-btn clay">{{t "requests.search"}}</button></form>
@@ -39,6 +39,10 @@
 {{if .Work}}<section class="rq-section"><h2>{{t "requests.work"}}</h2><ul class="ov-list ov-deck rq-work clay">{{range .Work}}<li class="rq-workrow"><span class="ov-dot is-{{if .Active}}active pulse{{else}}idle{{end}}" aria-hidden="true"></span><div class="rq-ctext">{{if .Href}}<a class="kn-title" href="{{.Href}}">{{.Title}}</a>{{else}}<span class="kn-title">{{.Title}}</span>{{end}}<span class="ov-meta kn-dots"><span>{{.Role}}</span><span>{{.StateLabel}}</span></span>{{if .Summary}}<p>{{.Summary}}</p>{{end}}</div><span class="ov-num kn-age">{{.Age}}</span></li>{{end}}</ul></section>{{end}}
 
 {{if .Relations}}<section class="rq-section"><h2>{{t "requests.related"}}</h2><ul class="ov-list rq-rels">{{range .Relations}}<li><span class="ov-meta">{{.Label}}</span>{{if .Href}}<a class="kn-link" href="{{.Href}}"{{if eq .Kind "external"}} rel="noopener noreferrer"{{end}}>{{.Text}}</a>{{else}}<span>{{.Text}}</span>{{end}}</li>{{end}}</ul></section>{{end}}
+
+{{if .Pains}}<section class="rq-section"><h2>{{t "requests.pains"}}</h2><ul class="ov-list rq-rels">{{range .Pains}}<li><span class="ov-meta">{{.StateLabel}}</span><a class="kn-link" href="{{.Href}}">{{.Title}}</a>{{if .Remaining}}<span class="ov-meta">{{.Remaining}}</span>{{end}}</li>{{end}}</ul></section>{{end}}
+
+{{if .Tasks}}<section class="rq-section"><h2>{{t "requests.tasks"}}</h2><ul class="ov-list rq-rels">{{range .Tasks}}<li><span class="ov-meta">{{.KindLabel}}</span><span>{{.Title}}</span>{{if .Where}}<code class="rq-ref">{{.Where}}</code>{{end}}{{if .StateLabel}}<span class="ov-meta">{{.StateLabel}}</span>{{end}}</li>{{end}}</ul></section>{{end}}
 
 {{if .Threads}}<section class="rq-section"><h2>{{t "requests.discussion"}}</h2><ul class="ov-list rq-rels">{{range .Threads}}<li><a class="kn-link" href="{{.URL}}">{{.Title}}</a></li>{{end}}</ul></section>{{end}}
 

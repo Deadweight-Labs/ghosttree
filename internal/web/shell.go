@@ -135,7 +135,7 @@ func navKeyFor(section string, kind viewerKind) string {
 		return "overview"
 	case "agents":
 		return "agents"
-	case "requests", "request", "requesttoolarge":
+	case "requests", "request", "requesttoolarge", "tasks", "pains", "pain":
 		return "requests"
 	case "knowledge", "knowledgeitem", "review", "context":
 		return "knowledge"

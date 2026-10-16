@@ -750,6 +750,11 @@ func (a *api) bootstrap(w http.ResponseWriter, r *http.Request) {
 		}
 		fmt.Fprintf(w, "\n## Work ledger (ghosttree)\n\n%d open %s in this scope. For substantial feature, architecture, migration, or multi-session work, search the request ledger first; continue a match or create one with explicit acceptance criteria. Trivial local fixes and routine maintenance do not require a request.\n", openRequests, plural)
 	}
+	// Vor der Prüfung auf Session-Metadaten: ein Gast mit einer zugewiesenen
+	// Aufgabe liest keine Sessions und bekommt den Abschnitt trotzdem.
+	if waiting, err := a.st.WaitingTasksFor(pa, axesFromQuery(r).Project, waitingMaxEach); err == nil {
+		fmt.Fprint(w, renderWaiting(waiting))
+	}
 	// Der Zähler sagt, dass es etwas gibt; erst diese Zeile sagt, dass etwas
 	// angefangen und liegengeblieben ist. Ein Fehler kostet nur die Auskunft:
 	// der Bootstrap ist bis hierhin schon geschrieben.

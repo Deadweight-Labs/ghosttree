@@ -152,6 +152,7 @@ func (a *api) registerRoutes(mux *http.ServeMux) {
 	a.routeFunc(mux, "PATCH /api/requests/{id}", a.correctRequest)
 	a.routeFunc(mux, "POST /api/requests/{id}/move", a.moveRequest)
 	a.routeFunc(mux, "DELETE /api/request-relations/{id}", a.removeRequestRelation)
+	a.registerPainTaskRoutes(mux)
 	a.routeFunc(mux, "POST /api/knowledge", a.createKnowledge)
 	a.routeFunc(mux, "GET /api/knowledge", a.listKnowledge)
 	a.routeFunc(mux, "GET /api/knowledge/pending", a.pendingKnowledge)

@@ -39,6 +39,10 @@ const (
 	// Dokumente). Anlegen und Lesen ab member, nie für Gäste oder Fremde; die
 	// Ablehnung ist immer "nicht gefunden".
 	ResSnapshot Resource = "snapshot"
+	// ResPain ist ein Schmerz (Problem ohne Lösung), ResTask eine Aufgabe für
+	// Menschen. Beide haben immer ein Projekt.
+	ResPain Resource = "pain"
+	ResTask Resource = "task"
 )
 
 // Action ist, was getan werden soll.
@@ -92,6 +96,10 @@ type Object struct {
 	// Name. Beides 0 heißt ohne Besitzer.
 	EntryID   int64
 	RequestID int64
+	// Assigned: der Betrachter ist der Zugewiesene einer Aufgabe. Unassigned:
+	// niemand ist zugewiesen.
+	Assigned   bool
+	Unassigned bool
 }
 
 // Decision ist das Ergebnis der Matrix.
@@ -131,6 +139,26 @@ func matrixAllows(role RoleInfo, res Resource, act Action, obj Object) bool {
 			return rank >= 2
 		case ActEdit:
 			return rank >= 3 || (rank == 2 && (obj.Own || obj.OriginOwner))
+		}
+	case ResPain:
+		switch act {
+		case ActRead:
+			return rank >= 1
+		case ActCreate, ActWork:
+			return rank >= 2
+		case ActEdit:
+			return rank >= 3 || (rank == 2 && obj.Own)
+		}
+	case ResTask:
+		switch act {
+		case ActRead:
+			return rank >= 2 || (rank == 1 && obj.Assigned)
+		case ActCreate:
+			return rank >= 2
+		case ActWork:
+			return rank >= 3 || (rank == 2 && (obj.Assigned || obj.Unassigned)) || (rank == 1 && obj.Assigned)
+		case ActEdit:
+			return rank >= 3 || (rank == 2 && obj.Own)
 		}
 	case ResSessionMeta:
 		// Die eigene Session anlegen und fortschreiben darf jedes Konto; wem sie

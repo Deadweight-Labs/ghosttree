@@ -96,6 +96,27 @@ type Detail struct {
 	// nicht sein kann: der Wortlaut. Leer bei allem, was ein Mensch geschrieben
 	// hat — dort ist die Beschreibung selbst die Quelle.
 	Sightings []Sighting `json:"sightings,omitempty"`
+	// Pains are the problems this request was written to answer; Tasks are what
+	// it waits on from a human. Both are filled per viewer by RequestDetailView.
+	Pains []PainRef `json:"pains,omitempty"`
+	Tasks []TaskRef `json:"tasks,omitempty"`
+}
+
+// PainRef is a pain that motivates a request, as far as the viewer may read it.
+type PainRef struct {
+	ID        int64  `json:"id"`
+	Title     string `json:"title"`
+	State     string `json:"state"`
+	Remaining string `json:"remaining,omitempty"`
+}
+
+// TaskRef is a human task hanging on a request, as far as the viewer may read it.
+type TaskRef struct {
+	ID       int64  `json:"id"`
+	Kind     string `json:"kind"`
+	Title    string `json:"title"`
+	State    string `json:"state"`
+	Location string `json:"location,omitempty"`
 }
 
 // Sighting ist eine Stelle, an der jemand den Wunsch geäussert hat: das Zitat

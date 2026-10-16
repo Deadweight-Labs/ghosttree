@@ -15,6 +15,19 @@ Versioning, with pre-1.0 compatibility rules described in
   script the plain form post still works. A denial in the browser now also reaches
   a terminal that only waits for a pasted code (`POST /api/join/status`, answered
   only to the holder of the PKCE verifier).
+- Added (REQ-174, REQ-476): pains and tasks for humans. A pain records a problem
+  without a solution (`PAIN-n`, states active, mitigated, resolved, obsolete;
+  mitigated needs what remains, mitigated and resolved need evidence; a pain never
+  ages and a finished request does not resolve it) and motivates requests,
+  decisions or external references. A task for a human is what only a person can
+  provide (secret, file, input, action): the agent states where it should live,
+  never the value, and token-like text is refused. Tasks hang on a request, go
+  open, done, confirmed (or dropped, reopened), appear in the session bootstrap
+  and in the overview block "Waiting on you". MCP: `pain_record`, `pain_get`,
+  `pain_search`, `pain_update`, `human_task_create`, `human_task_list`,
+  `human_task_resolve`. CLI: `ctx pain`, `ctx task`. HTTP: `/api/pains`,
+  `/api/tasks`. Web: `/ui/tasks`, `/ui/pains`. Pains are mirrored to
+  `.ghosttree/pains/`; tasks are not.
 - Changed (REQ-434): `ctx join` always offers a code to paste, no flag needed.
   After the approval the browser shows a short-lived one-time code with a copy
   button next to the usual hand-over to the terminal; the terminal waits for the

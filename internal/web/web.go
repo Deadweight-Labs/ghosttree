@@ -47,6 +47,9 @@ type pageData struct {
 	Tokens                                                     []tokenRow
 	RequestsV                                                  *requestsView
 	RequestV                                                   *requestView
+	TasksV                                                     *tasksView
+	PainsV                                                     *painsView
+	PainV                                                      *painView
 	KnowledgeV                                                 *knowledgeView
 	KnowledgeItemV                                             *knowledgeItemView
 	ReviewV                                                    *reviewView
@@ -143,6 +146,7 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	}
 	a.handle(mux, "POST /ui/requests/{id}/move", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.requestMove))))))
 	a.handle(mux, "POST /ui/requests/{id}/correct", a.requirePerson(a.requireInteractive(limitBodyN(requestCorrectForm, a.requestFormTooLarge(a.requireCSRF(http.HandlerFunc(a.requestCorrect)))))))
+	a.registerPainTaskPages(mux)
 	a.handle(mux, "GET /ui/knowledge", a.requirePerson(http.HandlerFunc(a.knowledgePage)))
 	a.handle(mux, "GET /ui/knowledge/{id}", a.requirePerson(http.HandlerFunc(a.knowledgeItemPage)))
 	a.handle(mux, "POST /ui/knowledge/{id}/move", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.knowledgeMove))))))
@@ -471,6 +475,12 @@ var webRoutes = map[string]webClass{
 	"POST /ui/orgs/rename":                  webAdmin,
 	"POST /ui/orgs/accept":                  webAccount,
 	"POST /ui/orgs/default":                 webAccount,
+
+	"GET /ui/tasks":             webProject,
+	"POST /ui/tasks/done":       webAdmin,
+	"GET /ui/pains":             webProject,
+	"GET /ui/pains/{id}":        webProject,
+	"POST /ui/pains/{id}/state": webAdmin,
 }
 
 // handle registriert eine Route und bricht ab, wenn sie nicht klassifiziert ist.

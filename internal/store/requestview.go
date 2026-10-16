@@ -123,6 +123,12 @@ func (a *ProjectAccess) RequestDetailView(d requestdomain.Detail) requestdomain.
 					act.Data = role
 				}
 			}
+		case "task.created", "task.done", "task.confirmed", "task.reopened", "task.dropped":
+			// Human tasks follow their own visibility: a guest does not see the
+			// line that says one exists.
+			if !a.Decide(project, ResTask, ActRead, Object{}).Allowed {
+				continue
+			}
 		case "request.done", "request.migrated":
 			ref, ok := rewriteSessionRef(act.Data, lookup)
 			if !ok {
@@ -140,6 +146,7 @@ func (a *ProjectAccess) RequestDetailView(d requestdomain.Detail) requestdomain.
 		activity = append(activity, act)
 	}
 	d.Activity = activity
+	d.Pains, d.Tasks = a.requestAttachments(d.Request.ID)
 	return d
 }
 

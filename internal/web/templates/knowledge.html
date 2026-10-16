@@ -57,6 +57,7 @@
 <label class="kn-field"><span>{{t "move.field_machine"}}</span><input class="clay-field" name="machine" value="{{.Machine}}" maxlength="100" autocomplete="off"></label>
 <button class="ov-btn ov-btn-primary clay">{{t "move.title"}}</button></form></details>{{end}}
 {{end}}
+{{if .Pains}}<section class="kn-history"><h2>{{t "knowledge.motivated_by"}}</h2><ul class="ov-list rq-rels">{{range .Pains}}<li><span class="ov-meta">{{.StateLabel}}</span><a class="kn-link" href="{{.Href}}">{{.Title}}</a></li>{{end}}</ul></section>{{end}}
 {{if .Moves}}<section class="kn-history"><h2>{{t "move.history"}}</h2><ul class="ov-list">{{range .Moves}}<li><span class="kn-hist-title">{{.Text}}</span><span class="ov-meta">{{.By}}</span><span class="ov-num">{{.Age}}</span></li>{{end}}</ul></section>{{end}}
 {{if .History}}<section class="kn-history"><h2>{{t "knowledge.history"}}</h2><ul class="ov-list">{{range .History}}<li><details><summary><span class="kn-hist-title">{{.Title}}</span><span class="ov-meta">{{.By}}</span><span class="ov-num">{{.Age}}</span></summary>{{if .ReplacedBy}}<p class="ov-meta">{{t "knowledge.replaced_by" .ReplacedBy}}</p>{{end}}{{template "knbody" .Blocks}}</details></li>{{end}}</ul></section>{{end}}
 {{end}}{{template "foot" .}}{{end}}

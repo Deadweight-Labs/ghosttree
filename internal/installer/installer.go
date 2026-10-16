@@ -69,7 +69,18 @@ Messages to you from people and agents in this project arrive in the hook
 context, under "ghosttree: new messages for you", once each. Answer with
 ` + "`thread_reply`" + ` inside a thread or ` + "`coord_send`" + ` (set ` + "`mention`" + ` to the
 sender); ` + "`coord_inbox`" + ` lists everything in the room and marks what is
-addressed to you. Write ` + "`@name`" + ` in a message to address a person or agent.`
+addressed to you. Write ` + "`@name`" + ` in a message to address a person or agent.
+
+A problem without a solution belongs in ` + "`pain_record`" + `, not in a request
+(requests need criteria). Never set a pain to resolved just because a request
+is finished: use ` + "`pain_update`" + ` with evidence, and for mitigated with ` + "`remaining`" + `.
+
+What only the human can provide (a key, a file, a decision, a manual step) you
+create with ` + "`human_task_create`" + `, with where it lives and how to check it, instead
+of saying it in chat. Never write a secret or file contents into it, only where
+it lives; token patterns are refused (a heuristic, not a guarantee). Never set
+a task to done yourself. Check what the human marked done, then call
+` + "`human_task_resolve`" + ` with confirm or reopen.`
 
 func section(body string) string {
 	return markerStart + "\n" + body + "\n" + markerEnd + "\n"
