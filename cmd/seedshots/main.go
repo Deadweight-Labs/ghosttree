@@ -4,7 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/humantask"
+	"github.com/Deadweight-Labs/ghosttree/internal/pain"
+	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
+	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
@@ -58,6 +63,58 @@ func main() {
 		must(err)
 		out[k] = c
 	}
+	if len(os.Args) > 2 && os.Args[2] == "pain-tasks" {
+		seedPainTasks(st, project, out)
+	}
 	json.NewEncoder(os.Stdout).Encode(out)
 	fmt.Fprintln(os.Stderr, "seeded")
+}
+
+// seedPainTasks adds what the pain and task pages show: requests, tasks in each
+// state, pains, a device token for Robin (so ctx can talk to the server) and a
+// note standing in for the long list of pains that the migration script replaces.
+func seedPainTasks(st *store.Store, project string, out map[string]string) {
+	robin := st.Access(store.Principal{ID: "person:1", Label: "Robin"})
+	lena := st.Access(store.Principal{ID: "person:2", Label: "Lena Berger"})
+	robinActor := humantask.Actor{AccountID: 1, Person: "Robin"}
+	req := func(title string) int64 {
+		d, err := st.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: title, Scope: scope.Axes{Project: project}, Person: "Robin"}, Criteria: []string{"Works end to end"}})
+		must(err)
+		return d.Request.ID
+	}
+	billing := req("Connect Stripe for billing")
+	schema := req("Migrate the schema to the new store")
+	task := func(in humantask.CreateInput) humantask.Task {
+		in.Project = project
+		t, err := robin.CreateHumanTask(in, robinActor)
+		must(err)
+		return t
+	}
+	task(humantask.CreateInput{RequestID: billing, Kind: "secret", Title: "Create the Stripe key", Location: "Agent Vault: stripe/prod", CheckHint: "the entry exists in the vault"})
+	task(humantask.CreateInput{RequestID: schema, Kind: "file", Title: "Put the schema dump in place", Location: "./db/schema.sql", CheckHint: "file exists and ends with COMMIT"})
+	task(humantask.CreateInput{RequestID: billing, Kind: "input", Title: "Decide on the price tiers", Assignee: "Lena Berger"})
+	finished := task(humantask.CreateInput{RequestID: billing, Kind: "action", Title: "Enable the webhook in the Stripe dashboard"})
+	_, err := lena.MarkTasksDone([]int64{finished.ID}, "enabled, endpoint answers 200", humantask.Actor{AccountID: 2, Person: "Lena Berger", Web: true})
+	must(err)
+	actor := pain.Actor{AccountID: 1, Person: "Robin"}
+	mk := func(title, body string, to ...pain.Target) int64 {
+		d, err := robin.CreatePain(store.CreatePainInput{Project: project, Title: title, Body: body, Motivates: to, Actor: actor})
+		must(err)
+		return d.Pain.ID
+	}
+	mk("Reading only works whole", "A read returns the full text, even when only one section is needed.", pain.Target{RequestID: schema})
+	half := mk("There is no draft state", "Saving means shipped, searchable and delivered at once.", pain.Target{RequestID: billing}, pain.Target{ExternalRef: "https://example.test/issues/12"})
+	_, err = robin.SetPainState(half, "mitigated", "Drafts exist for documents but not for knowledge entries.", pain.Evidence{Kind: "request", Ref: "REQ-" + strconv.FormatInt(schema, 10)}, "", actor)
+	must(err)
+	done := mk("Reviewers cannot see what changed", "")
+	_, err = robin.SetPainState(done, "resolved", "", pain.Evidence{Kind: "commit", Ref: "3b9fecd"}, "", actor)
+	must(err)
+	note, err := st.InsertKnowledge(store.Knowledge{Type: "note", Title: "PAINS: why a long document is better off in the repo today",
+		Body:  "P1 - NO DIFF, NO VERSIONS.\nA spec is written in versions.\n\nP2 - WRITING IS ALL OR NOTHING.\nOne call carries the whole body.\n\nP3 - READING IS ALL OR NOTHING.\nThe whole entry goes into the context.\n",
+		Scope: scope.Axes{Project: project}, Person: "Robin", Confidence: "trusted"})
+	must(err)
+	out["source_note"] = strconv.FormatInt(note, 10)
+	token, _, err := st.CreateDeviceToken("person:1", "demo")
+	must(err)
+	out["robin_token"] = token
 }

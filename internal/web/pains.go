@@ -149,7 +149,7 @@ func (a *app) painPage(w http.ResponseWriter, r *http.Request) {
 		case "corrected":
 			line.Text = e.Note
 		case "link_added", "link_removed":
-			line.Text = ellipsize(sessionScrub.ReplaceAllString(e.Data, msg("requests.session")), 120)
+			line.Text = ellipsize(linkDataText(e.Data), 120)
 		}
 		v.Events = append(v.Events, line)
 	}
@@ -203,4 +203,19 @@ func (a *app) painState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, painURL(id)+"?done=state", http.StatusSeeOther)
+}
+
+// linkDataText writes the target of a link event ("request:1", "knowledge:3",
+// "external:text") the way the rest of the page names it.
+func linkDataText(data string) string {
+	kind, rest, _ := strings.Cut(data, ":")
+	switch kind {
+	case "request":
+		return "REQ-" + rest
+	case "knowledge":
+		return "#" + rest
+	case "external":
+		return rest
+	}
+	return data
 }
