@@ -111,6 +111,16 @@ func backfillOrgGuests(db *sql.DB) error {
 			WHERE o.account_id=pm.account_id AND op.org_id=p.org_id AND o.role<>'guest')`); err != nil {
 		return err
 	}
+	// Wer nur über eine angenommene Projekt-Einladung (gleich welche Rolle) in
+	// die Org kam und nie eine Org-Einladung angenommen hat.
+	if _, err := tx.Exec(`INSERT OR IGNORE INTO org_guests(org_id, account_id)
+		SELECT DISTINCT i.org_id, i.accepted_by FROM invitations i
+		JOIN org_members om ON om.org_id=i.org_id AND om.account_id=i.accepted_by AND om.role='member'
+		WHERE i.project_id<>0 AND i.accepted_at<>'' AND NOT EXISTS (
+			SELECT 1 FROM invitations w WHERE w.org_id=i.org_id AND w.accepted_by=i.accepted_by
+			AND w.project_id=0 AND w.accepted_at<>'')`); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(`INSERT OR IGNORE INTO org_state(key, value) VALUES('guest_backfill', ?)`, now()); err != nil {
 		return err
 	}

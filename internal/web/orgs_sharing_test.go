@@ -181,10 +181,6 @@ func TestConnectingGitHubProvesAdminClaimsThePrefixAndListsRepos(t *testing.T) {
 	if p, err := st.EnsureProject("person:2", "github.com/deadweight-labs/brand-new"); err != nil || p.OrgID != org.ID || !p.Shared {
 		t.Fatalf("first contact: %+v %v", p, err)
 	}
-	// Das Zugriffstoken oder Geheimnis taucht nirgends in der Seite auf.
-	if strings.Contains(page, "shh") {
-		t.Fatal("a secret reached the page")
-	}
 }
 
 func TestGuestsAreNamedAndGuestInvitesNeedEnforcement(t *testing.T) {

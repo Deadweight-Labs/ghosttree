@@ -1272,8 +1272,9 @@ func acceptInvitationTx(tx execQueryer, code string, account int64, verifiedEmai
 		if _, err := tx.Exec(`INSERT INTO org_members(org_id, account_id, role, joined_at) VALUES(?,?,?,?)`, orgID, account, role, now()); err != nil {
 			return Org{}, err
 		}
-		// Wer nur für ein Projekt als Gast kommt, bleibt Gast der Organisation.
-		if projectID != 0 && projectRole == RoleGuest {
+		// Wer nur für ein Projekt eingeladen wird, bleibt Gast der Organisation,
+		// gleich welche Rolle der Link im Projekt trägt.
+		if projectID != 0 {
 			if _, err := tx.Exec(`INSERT OR IGNORE INTO org_guests(org_id, account_id) VALUES(?,?)`, orgID, account); err != nil {
 				return Org{}, err
 			}

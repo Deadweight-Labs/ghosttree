@@ -133,8 +133,10 @@ func (g *GitHub) Prove(ctx context.Context, code, redirectURI string) ([]Account
 				FullName string `json:"full_name"`
 			}
 			path := fmt.Sprintf("/orgs/%s/repos?type=all&per_page=100&page=%d", url.PathEscape(m.Org.Login), page)
+			// Der Admin-Nachweis liegt vor; eine Org, deren Repos GitHub nicht
+			// herausgibt, wird ohne weitere Repos angeboten statt alle zu verwerfen.
 			if err := g.get(ctx, token, path, &repos); err != nil {
-				return nil, err
+				break
 			}
 			for _, r := range repos {
 				acct.Repos = append(acct.Repos, "github.com/"+strings.ToLower(r.FullName))
