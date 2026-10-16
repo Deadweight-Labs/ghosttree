@@ -2,11 +2,13 @@
 """Run a command on a pseudo terminal, answer its prompts, capture values.
 
   ptyrun.py --log FILE [--answer REGEX=REPLY]... [--capture REGEX=FILE]... \
-            [--timeout SECONDS] -- COMMAND [ARG...]
+            [--feed REGEX=FILE]... [--timeout SECONDS] -- COMMAND [ARG...]
 
 `ctx join` asks its questions on /dev/tty, so the fresh-VM test needs a real
 terminal. Each --answer fires once, when REGEX shows up in the output; each
---capture writes the first group of REGEX to FILE once. The exit status is the
+--capture writes the first group of REGEX to FILE once. Each --feed types the
+content of FILE (one line) once REGEX has shown up and FILE exists, which is how
+a test pastes a code that only exists later. The exit status is the
 command's (124 on timeout).
 """
 import argparse
@@ -24,6 +26,7 @@ def main():
     ap.add_argument("--log", required=True)
     ap.add_argument("--answer", action="append", default=[])
     ap.add_argument("--capture", action="append", default=[])
+    ap.add_argument("--feed", action="append", default=[])
     ap.add_argument("--timeout", type=float, default=300)
     ap.add_argument("cmd", nargs=argparse.REMAINDER)
     a = ap.parse_args()
@@ -32,6 +35,7 @@ def main():
         ap.error("no command")
     answers = [(re.compile(x.rsplit("=", 1)[0]), x.rsplit("=", 1)[1]) for x in a.answer]
     captures = [(re.compile(x.rsplit("=", 1)[0]), x.rsplit("=", 1)[1]) for x in a.capture]
+    feeds = [(re.compile(x.rsplit("=", 1)[0]), x.rsplit("=", 1)[1]) for x in a.feed]
     fired = set()
 
     pid, fd = pty.fork()
@@ -46,6 +50,13 @@ def main():
                 os.kill(pid, signal.SIGTERM)
                 status = 124
                 break
+            for i, (rx, path) in enumerate(feeds):
+                if ("f", i) not in fired and rx.search(buf) and os.path.exists(path):
+                    with open(path) as f:
+                        line = f.read().strip()
+                    if line:
+                        fired.add(("f", i))
+                        os.write(fd, (line + "\n").encode())
             r, _, _ = select.select([fd], [], [], 0.5)
             if r:
                 try:

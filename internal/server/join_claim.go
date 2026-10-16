@@ -21,6 +21,12 @@ import (
 // Bestätigungscode, den die Freigabeseite abfragt, und das Token kommt über den
 // Geräte-Ablauf (/api/auth/device/token).
 //
+// Nur code_challenge, ohne Port und state: Paste-Weg für ein Terminal, das keinen
+// Loopback erreicht (SSH, kein Browser-Öffner). Die Freigabeseite zeigt dann den
+// einmaligen Code zum Einfügen; getauscht wird er wie im Loopback-Weg nur mit
+// dem code_verifier. Im Loopback-Weg zeigt die Seite denselben Code zusätzlich,
+// und was zuerst ankommt, gewinnt (der Code gilt für genau einen Tausch).
+//
 // Die Antwort trägt ein zufälliges "resume". Nur wer es beim erneuten Claim
 // zurückschickt (derselbe Installer nach Strg-C), ersetzt seine eigene noch
 // nicht freigegebene Anfrage; jeder andere zweite Claim verwirft die Sitzung.
@@ -91,7 +97,7 @@ func (a *api) claimJoin(w http.ResponseWriter, r *http.Request) {
 	case err == nil:
 		body := map[string]any{"mode": out.Mode, "expires_in": int(out.ExpiresIn.Seconds()), "machine": out.Machine,
 			"verification_uri": a.requestBaseURL(r) + "/join/pair", "resume": out.Resume}
-		if out.Mode == store.JoinModeLoopback {
+		if out.Mode == store.JoinModeLoopback || out.Mode == store.JoinModePaste {
 			body["token_endpoint"] = "/api/join/token"
 		} else {
 			body["token_endpoint"] = "/api/auth/device/token"
@@ -122,7 +128,7 @@ type joinTokenRequest struct {
 	CodeVerifier string `json:"code_verifier"`
 }
 
-// exchangeJoin tauscht den Code vom Loopback-Callback gegen das Token (PKCE).
+// exchangeJoin tauscht den Code (vom Loopback-Callback oder eingefügt) gegen das Token (PKCE).
 func (a *api) exchangeJoin(w http.ResponseWriter, r *http.Request) {
 	var req joinTokenRequest
 	if !readDeviceBody(w, r, &req) {

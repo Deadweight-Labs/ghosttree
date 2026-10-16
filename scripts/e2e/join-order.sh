@@ -11,13 +11,21 @@
 #      runs and claims before the browser looks at the pairing page again; the
 #      first look then already shows the approval question.
 #
+#   C  paste beats the browser: the installer has a loopback listener and a
+#      terminal, but the browser never reaches it; the code the page shows after
+#      the approval is typed into the terminal.
+#   D  no display (SSH, no browser opener): no loopback at all, link and paste
+#      only; the code is typed in lower case and in groups, as people do.
+#
 # Each run uses the exact command the pairing page shows, the archives built by
 # scripts/build-dist.sh and the server's own /install.sh, the loopback PKCE path
 # (a fake xdg-open stands in for the browser and records the address it is
 # given; the script plays the browser by posting the approval and following the
-# redirect to the installer's 127.0.0.1 listener). At the end the machine's
-# config must hold a token that belongs to the invited account, and the token of
-# the other account must not appear.
+# address the page then navigates to, the installer's 127.0.0.1 listener). C and
+# D run on a pseudo terminal (ptyrun.py) because the code is typed into /dev/tty.
+# At the end the machine's config must hold a token that belongs to the invited
+# account, and the token of the other account must not appear. No code the page
+# showed may appear in the server log.
 #
 # Needs: go, curl, tar, sh. Nothing outside the temp directory is touched: the
 # installer runs with its own HOME, with ~/.local/bin not on PATH and without the
@@ -134,6 +142,23 @@ start_installer() { # NAME CMD; background, output in $WORK/NAME.out
   LAST_PID=$!
 }
 
+# Like start_installer, on a pseudo terminal, so the installer can read what is
+# pasted. FEED is the file the script writes the code to later; DISPLAY=0 leaves
+# the display out (no loopback possible).
+start_installer_pty() { # NAME CMD FEEDFILE [nodisplay]
+  local name=$1 cmd=$2 feed=$3 home=$WORK/home-$1 disp=:0
+  mkdir -p "$home"
+  [ "${4:-}" = nodisplay ] && disp=""
+  printf '#!/bin/sh\necho "$@" >> "%s/opened-%s.log"\n' "$WORK" "$name" >"$WORK/bin/xdg-open"
+  chmod +x "$WORK/bin/xdg-open"
+  python3 "$HERE/ptyrun.py" --log "$WORK/$name.out" --timeout 120 --answer "profile\\? \\[y/N\\]=n" --feed "Paste the code=$feed" -- \
+    env -i HOME="$home" USER=e2e LOGNAME=e2e SHELL=/bin/sh ${disp:+DISPLAY=$disp} XDG_CONFIG_HOME="$home/.config" \
+    PATH="$WORK/bin:/usr/local/bin:/usr/bin:/bin" TMPDIR="$WORK" TERM=dumb \
+    sh -c "$cmd --yes --no-watch --name $name" >/dev/null 2>&1 &
+  BG_PIDS+=($!)
+  LAST_PID=$!
+}
+
 wait_for() { # SECONDS COMMAND...
   local n=$(( $1 * 5 )); shift
   while [ "$n" -gt 0 ]; do "$@" && return 0; sleep 0.2; n=$((n - 1)); done
@@ -142,7 +167,7 @@ wait_for() { # SECONDS COMMAND...
 
 state_is() { [ "$(pair_page "$1" | page_state)" = "$2" ]; }
 
-approve() { # ACCOUNT -> follows the redirect to the installer's listener
+approve_only() { # ACCOUNT -> approves; the page that follows is kept in $WORK/approved-ACCOUNT.html
   local acct=$1 jar=$WORK/jar-$1 page csrf nonce loc
   page=$(pair_page "$acct") || return 1
   csrf=$(printf '%s' "$page" | form_value csrf_token)
@@ -150,7 +175,22 @@ approve() { # ACCOUNT -> follows the redirect to the installer's listener
   loc=$(curl -s -b "$jar" -c "$jar" -H "Origin: $SERVER_URL" -o /dev/null -w '%{redirect_url}' \
     --data-urlencode "csrf_token=$csrf" -d "nonce=$nonce" -d "confirm_account=$acct" -d decision=approve \
     "$SERVER_URL/join/pair/decide")
-  case $loc in http://127.0.0.1:*/callback\?code=*) ;; *) echo "approve gave '$loc'"; return 1 ;; esac
+  [ "$loc" = "$SERVER_URL/join/pair" ] || { echo "approve gave '$loc'"; return 1; }
+  pair_page "$acct" >"$WORK/approved-$acct.html"
+}
+
+html_unescape() { python3 -c 'import html,sys;print(html.unescape(sys.stdin.read().strip()))'; }
+go_url() { grep -o 'data-join-go="[^"]*"' "$WORK/approved-$1.html" | head -1 | cut -d'"' -f2 | html_unescape; }
+paste_code() { grep -o 'id="join-paste-code"[^>]*>[^<]*' "$WORK/approved-$1.html" | head -1 | sed 's/.*>//'; }
+SHOWN_CODES=()
+
+approve() { # ACCOUNT -> the page navigates the browser to the installer's listener
+  local acct=$1 loc
+  approve_only "$acct" || return 1
+  [ -n "$(paste_code "$acct")" ] || { echo "the page after the approval shows no code"; return 1; }
+  SHOWN_CODES+=("$(paste_code "$acct")")
+  loc=$(go_url "$acct")
+  case $loc in http://127.0.0.1:*/callback\?code=*) ;; *) echo "page navigates to '$loc'"; return 1 ;; esac
   curl -fs -o /dev/null "$loc"
 }
 
@@ -196,8 +236,53 @@ printf '%s' "$page" | grep -q "machine-b" && pass "B: the question names the mac
 approve berta && pass "B: approved, installer's callback reached" || fail "B: approve"
 check_machine machine-b berta anna
 
+step "C: paste beats the browser (the loopback is never reached)"
+make_invitation || { fail "C: no invitation"; exit 1; }
+accept_invitation carla || fail "C: accept"
+cmd=$(pair_page carla | command_from_page)
+[ -n "$cmd" ] || { fail "C: no command"; exit 1; }
+start_installer_pty machine-c "$cmd" "$WORK/feed-c"
+wait_for 30 state_is carla claimed && pass "C: the page shows the approval question" || fail "C: page never showed the claim"
+approve_only carla && pass "C: approved" || fail "C: approve"
+code_c=$(paste_code carla)
+[ -n "$code_c" ] && printf '%s' "$code_c" | grep -Eq '^[A-Z0-9]{4}(-[A-Z0-9]{4}){4}$' && pass "C: the page shows a code to copy" || fail "C: no code on the page: '$code_c'"
+[ -n "$(go_url carla)" ] && pass "C: the page also hands the browser to the loopback" || fail "C: no loopback target on the page"
+SHOWN_CODES+=("$code_c")
+grep -q "Paste the code" "$WORK/machine-c.out" && pass "C: the terminal offered the paste prompt next to the browser" || fail "C: no paste prompt"
+printf '%s\n' "$code_c" >"$WORK/feed-c"
+check_machine machine-c carla anna
+# The browser reaches the loopback late, after the paste already won: it gets the
+# success page and the installer does not exchange anything a second time.
+late=$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' "$(go_url carla)")
+case $late in "303 "*/done|"000 "*) pass "C: a late callback is harmless ($late)" ;; *) fail "C: a late callback answered '$late'" ;; esac
+c_pid=$LAST_PID
+wait_for 30 sh -c "! kill -0 $c_pid 2>/dev/null" && pass "C: the installer has ended" || fail "C: the installer is still running"
+[ "$(curl -s -o /dev/null -w '%{http_code}' "$(go_url carla)")" = 000 ] && pass "C: the loopback is gone after the join" || fail "C: the loopback still answers"
+
+step "D: no display, link and paste only"
+make_invitation || { fail "D: no invitation"; exit 1; }
+accept_invitation dora || fail "D: accept"
+cmd=$(pair_page dora | command_from_page)
+[ -n "$cmd" ] || { fail "D: no command"; exit 1; }
+start_installer_pty machine-d "$cmd" "$WORK/feed-d" nodisplay
+wait_for 30 state_is dora claimed && pass "D: the page shows the approval question" || fail "D: page never showed the claim"
+pair_page dora | grep -q "on the computer where you ran the command" && fail "D: the page promises a loopback that does not exist" || pass "D: no loopback promise on the page"
+approve_only dora && pass "D: approved" || fail "D: approve"
+code_d=$(paste_code dora)
+[ -n "$code_d" ] && [ -z "$(go_url dora)" ] && pass "D: code shown, browser is not sent anywhere" || fail "D: code '$code_d' go '$(go_url dora)'"
+SHOWN_CODES+=("$code_d")
+[ ! -s "$WORK/opened-machine-d.log" ] && pass "D: no browser was opened" || fail "D: a browser was opened"
+grep -q "Open this link in your browser" "$WORK/machine-d.out" && pass "D: the terminal prints the link" || fail "D: no link printed"
+printf '%s\n' "$code_d" | tr 'A-Z' 'a-z' >"$WORK/feed-d"
+check_machine machine-d dora anna
+
 step "pairing codes in the server log"
 if grep -Eq '[A-Z0-9]{4}-[A-Z0-9]{4}' "$WORK/server.log"; then fail "a pairing-code-shaped string is in the server log"; else pass "none"; fi
+for c in "${SHOWN_CODES[@]}"; do
+  [ -n "$c" ] || continue
+  if grep -qiF -- "$c" "$WORK/server.log" || grep -qiF -- "${c//-/}" "$WORK/server.log"; then fail "a code shown on the page is in the server log"; fi
+done
+pass "none of the ${#SHOWN_CODES[@]} codes the page showed is in the log"
 
 echo
 if [ "$FAILS" -eq 0 ]; then echo "ALL PASS"; else echo "$FAILS FAILED"; exit 1; fi
