@@ -159,7 +159,7 @@ func TestTokenPageListsOwnTokensAndRevocationIsImmediate(t *testing.T) {
 	bobClient := login(t, srv, bobLegacy)
 	resp, _ := bobClient.Get(srv.URL + "/ui/account/tokens")
 	page := body(t, resp)
-	for _, want := range []string{"legacy", "device", "manual", "bob-laptop", "runner", "never"} {
+	for _, want := range []string{"legacy", "device", "manual", "bob-laptop", "runner", "not recorded yet"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("token page lacks %q", want)
 		}

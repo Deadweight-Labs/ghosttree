@@ -317,6 +317,8 @@ var writerMethodClasses = map[string]string{
 	"ToolCallsPerProject":           "read",
 	"TouchMachine":                  "best_effort",
 	"TouchThread":                   "write",
+	"TouchToken":                    "best_effort",
+	"TokenUseTrackingSince":         "read",
 	"UnbindBranchScope":             "write",
 	"UpdateKnowledge":               "write",
 	"UpdateKnowledgeBy":             "write",
@@ -465,7 +467,7 @@ func inspectWriterInventory(src writerSource, classes map[string]string) []strin
 			issues = append(issues, name+": stale inventory entry")
 		}
 	}
-	for _, name := range []string{"bumpUsage", "TouchMachine"} {
+	for _, name := range []string{"bumpUsage", "TouchMachine", "TouchToken"} {
 		if fn := src.methods[name]; fn != nil && !hasRuntimeRoute(fn, "bookkeeper") {
 			issues = append(issues, name+": best-effort bypass")
 		}
@@ -518,7 +520,7 @@ func hasRuntimeRoute(fn *ast.FuncDecl, field string) bool {
 						case "writer":
 							routed = routed || sel.Sel.Name == "admitChunks"
 						case "bookkeeper":
-							routed = routed || sel.Sel.Name == "coalesceUsage" || sel.Sel.Name == "coalesceMachine"
+							routed = routed || sel.Sel.Name == "coalesceUsage" || sel.Sel.Name == "coalesceMachine" || sel.Sel.Name == "coalesceToken"
 						}
 					}
 					return true
@@ -563,7 +565,7 @@ func runtimeBranchUsesOnlyDispatch(node ast.Node, receiver, field string) bool {
 				}
 			}
 			if target, ok := call.Fun.(*ast.SelectorExpr); ok && isField(target.X, receiver, field) {
-				approved = (field == "reader") || (field == "writer" && (target.Sel.Name == "admitChunks" || target.Sel.Name == "reject")) || (field == "bookkeeper" && (target.Sel.Name == "coalesceUsage" || target.Sel.Name == "coalesceMachine"))
+				approved = (field == "reader") || (field == "writer" && (target.Sel.Name == "admitChunks" || target.Sel.Name == "reject")) || (field == "bookkeeper" && (target.Sel.Name == "coalesceUsage" || target.Sel.Name == "coalesceMachine" || target.Sel.Name == "coalesceToken"))
 			}
 			if approved {
 				for i, arg := range call.Args {

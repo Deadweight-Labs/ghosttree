@@ -261,7 +261,7 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 			Label: coordRoomLabel(activeRoom, humanMember(r), labels), URL: coordRoomURL(activeRoom.Key, "", 0), Active: true},
 		Messages:     buildCoordMessageViews(presentations, room, labels),
 		Zone:         time.Now().Format("MST"),
-		Participants: buildCoordParticipants(activeRoom, peers, memberships, current, labels),
+		Participants: othersWaitNeutral(buildCoordParticipants(activeRoom, peers, memberships, current, labels), askedViewer(attention)),
 		WaitCycles:   buildCoordWaitCycles(peers, labels),
 		Standing:     buildCoordStandingViews(standing, labels), HighWater: page.HighWater,
 		HasOlder: page.HasOlder, HasNewer: page.HasNewer,

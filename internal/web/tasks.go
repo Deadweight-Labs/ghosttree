@@ -51,7 +51,9 @@ type tasksView struct {
 	// Everyone: the list shows every task the viewer may see, not only those
 	// for them. Switch is the link to the other list.
 	Everyone bool
-	Switch   string
+	// Who is the filter value that goes back with the done form, "all" for Everyone.
+	Who    string
+	Switch string
 }
 
 // visibleProjects names the projects a list covers: the selected one, or every
@@ -150,6 +152,9 @@ func (a *app) tasksPage(w http.ResponseWriter, r *http.Request) {
 	slices.SortStableFunc(all, func(x, y humantask.Task) int { return order[x.State] - order[y.State] })
 	v := &tasksView{Rows: a.taskRows(pa, all), Project: project, Token: csrfOf(r), Back: "tasks"}
 	v.Everyone = everyone
+	if everyone {
+		v.Who = "all"
+	}
 	v.Any = anyDoable(v.Rows)
 	switch {
 	case r.URL.Query().Get("fail") != "":
@@ -176,6 +181,9 @@ func (a *app) tasksDone(w http.ResponseWriter, r *http.Request) {
 	q := url.Values{}
 	if project := r.FormValue("project"); project != "" {
 		q.Set("project", project)
+	}
+	if r.FormValue("who") == "all" && back == "/ui/tasks" {
+		q.Set("who", "all")
 	}
 	if len(ids) == 0 {
 		http.Redirect(w, r, back+queryOf(q), http.StatusSeeOther)

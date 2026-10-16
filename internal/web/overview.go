@@ -302,6 +302,12 @@ func (a *app) listAgents(r *http.Request, pa *store.ProjectAccess, project strin
 	}
 	seen := map[string]bool{}
 	var out []ranked
+	// The presence of an agent says it waits for a person, not for whom. Only
+	// the person asked is "waited on"; everyone else sees a neutral label.
+	var asked map[string]bool
+	if items, err := a.browserCoord(r).Attention(); err == nil {
+		asked = askedViewer(items)
+	}
 	add := func(remote string, peer store.CoordAgent) {
 		if peer.ParentExternalID != "" || seen[peer.ExternalID] {
 			return
@@ -309,7 +315,7 @@ func (a *app) listAgents(r *http.Request, pa *store.ProjectAccess, project strin
 		seen[peer.ExternalID] = true
 		last := parseTime(peer.LastSeenAt)
 		var life time.Time
-		activity, flag := "", ""
+		activity, flag, neutral := "", "", ""
 		if p := peer.Presence; p != nil {
 			// Only evidence that the agent itself is there counts as a sign of
 			// life: a poll, or tool calls seen in its transcript. A message
@@ -324,7 +330,14 @@ func (a *app) listAgents(r *http.Request, pa *store.ProjectAccess, project strin
 			}
 			activity = workLabel(p.WorkState.Value)
 			switch p.WorkState.Value {
-			case store.WorkWaitingUser, store.WorkStuck:
+			case store.WorkWaitingUser:
+				if asked[peer.ExternalID] {
+					flag = p.WorkState.Value
+				} else {
+					neutral = msg("ov.work.waiting_person")
+					activity = neutral
+				}
+			case store.WorkStuck:
 				flag = p.WorkState.Value
 			}
 		}
@@ -336,6 +349,9 @@ func (a *app) listAgents(r *http.Request, pa *store.ProjectAccess, project strin
 			if state == "active" {
 				state = "idle"
 			}
+		}
+		if neutral != "" {
+			activity = neutral
 		}
 		if flag != "" {
 			// An agent that waits for a person, or hangs mid-turn, says so even
@@ -548,6 +564,18 @@ func stateLabel(state string) string {
 		return msg("ov.state.idle")
 	}
 	return msg("ov.state.offline")
+}
+
+// askedViewer is the set of agents that have an open question, approval or
+// handoff addressed to the viewer. "Waiting on you" is only true for those.
+func askedViewer(items []store.AttentionItem) map[string]bool {
+	asked := map[string]bool{}
+	for _, item := range items {
+		if item.IsRecipient && item.State == store.AttentionOpen && item.SenderID != "" {
+			asked[item.SenderID] = true
+		}
+	}
+	return asked
 }
 
 func workLabel(v string) string {

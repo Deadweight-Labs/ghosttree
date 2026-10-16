@@ -297,6 +297,7 @@ func (a *api) auth(next http.Handler) http.Handler {
 			writeErr(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
+		a.st.TouchToken(principal.TokenID)
 		if record := requestRecordFromContext(r.Context()); record != nil {
 			record.actor = principal.Label
 		}

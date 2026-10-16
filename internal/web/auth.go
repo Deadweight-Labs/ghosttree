@@ -257,6 +257,7 @@ func (a *app) loginSubmit(w http.ResponseWriter, r *http.Request) {
 		a.loginRejected(w, http.StatusUnauthorized, "login.error_token", true)
 		return
 	}
+	a.store.TouchToken(principal.TokenID)
 	a.startSession(w, r, principal)
 }
 

@@ -106,25 +106,51 @@ type tokenRow struct {
 	// Unused: never used, and old enough that it is not simply waiting for its
 	// first call. These are what "Revoke unused" revokes.
 	Unused bool
+	// Tracked: use of this token has been recorded long enough for an empty
+	// last use to mean "never".
+	Tracked bool
 }
 
-// tokenUnusedGrace is how old a token that was never used has to be before it
-// counts as unused: a login that just finished has not made its first call yet.
-const tokenUnusedGrace = time.Hour
+// tokenUnusedGrace is how long a token has to have been observed without a
+// single call before it counts as unused. Observed means: since it was issued
+// or since use tracking began, whichever is later. A token used only now and
+// then must have had the chance to show up.
+const tokenUnusedGrace = 14 * 24 * time.Hour
+
+// tokenTracked says whether a token has been observed for the grace period.
+func tokenTracked(t store.TokenInfo, now, since time.Time) bool {
+	observed := parseTime(t.CreatedAt)
+	if since.IsZero() || observed.IsZero() {
+		return false
+	}
+	if since.After(observed) {
+		observed = since
+	}
+	return now.Sub(observed) >= tokenUnusedGrace
+}
 
 // tokenIsUnused says whether a token is active, was never used and is older
 // than the grace period. The token the current session signed in with is never
 // unused, whatever its last-used column says: revoking it would end the very
 // session that asks.
-func tokenIsUnused(t store.TokenInfo, now time.Time, current int64) bool {
+func tokenIsUnused(t store.TokenInfo, now time.Time, current int64, since time.Time) bool {
+	if since.IsZero() {
+		return false
+	}
 	if t.RevokedAt != "" || t.LastUsedAt != "" || (current != 0 && t.ID == current) {
 		return false
 	}
 	if t.ExpiresAt != "" && t.ExpiresAt <= now.Format(time.RFC3339) {
 		return false
 	}
-	created := parseTime(t.CreatedAt)
-	return !created.IsZero() && now.Sub(created) >= tokenUnusedGrace
+	observed := parseTime(t.CreatedAt)
+	if observed.IsZero() {
+		return false
+	}
+	if since.After(observed) {
+		observed = since
+	}
+	return now.Sub(observed) >= tokenUnusedGrace
 }
 
 // tokenKindLabel übersetzt die gespeicherte Art in die angezeigte: 'cli' sind
@@ -154,6 +180,7 @@ func (a *app) tokensPage(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now().UTC()
 	nowText := now.Format(time.RFC3339)
+	since := parseTime(a.store.TokenUseTrackingSince())
 	rows := make([]tokenRow, 0, len(tokens))
 	for _, t := range tokens {
 		status := "active"
@@ -169,13 +196,16 @@ func (a *app) tokensPage(w http.ResponseWriter, r *http.Request) {
 		}
 		rows = append(rows, tokenRow{ID: t.ID, Account: account, Label: t.Label, Kind: tokenKindLabel(t.Kind), Machine: t.Machine,
 			Status: status, Created: t.CreatedAt, LastUsed: t.LastUsedAt, Expires: t.ExpiresAt, Revoked: t.RevokedAt,
-			Revocable: status == "active", Unused: tokenIsUnused(t, now, principal.TokenID)})
+			Revocable: status == "active", Tracked: tokenTracked(t, now, since), Unused: tokenIsUnused(t, now, principal.TokenID, since)})
 	}
 	sortTokenRows(rows)
 	data := pageData{Title: msg("adm.tokens.title"), Tokens: rows, Admin: admin}
 	for _, row := range rows {
 		if row.Unused {
 			data.UnusedTokens++
+			if row.Account != principal.Label {
+				data.UnusedForeign = true
+			}
 		}
 	}
 	if n, err := strconv.Atoi(r.URL.Query().Get("revoked")); err == nil && n > 0 {
@@ -226,10 +256,11 @@ func (a *app) tokensRevokeUnused(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now().UTC()
+	since := parseTime(a.store.TokenUseTrackingSince())
 	var ids []int64
 	foreign := false
 	for _, t := range tokens {
-		if !tokenIsUnused(t, now, principal.TokenID) {
+		if !tokenIsUnused(t, now, principal.TokenID, since) {
 			continue
 		}
 		if t.AccountID != "" && t.AccountID != principal.ID {

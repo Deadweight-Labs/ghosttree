@@ -67,7 +67,7 @@ var PresenceGaps = []string{
 	"ended is never produced: no session-end hook or collector event exists, so a silent agent is unknown, not ended",
 	"no self-report channel for waiting_user: it is only derived from an open question or approval addressed to a person",
 	"working is seen only through tool calls that touch a path (collector transcript scan) and through the hooks of the session; Bash-only work without hooks and model streaming are invisible",
-	"stuck needs the Stop hook (claude only, installed by ctx install): without a first turn end an agent is never called stuck, and a turn cut short with Esc fires no Stop, so it reads as stuck until StuckMaxAge",
+	"stuck needs the Stop hook (claude only, installed by ctx install): without a first turn end an agent is never called stuck, and a turn cut short with Esc fires no Stop, so it reads as stuck until StuckMaxAge; a single tool call or a permission prompt that runs longer than StuckAfter also reads as stuck, because the pause gate (PreToolUse) must never wait on the server and Notification is not wired",
 	"codex agents have no pause path and no matching hook signal; their work state is mostly unknown",
 	"working needs a session id registered by the agent (ctx claude); agents without one stay unknown, and so does every direct or group room, where no project scopes the activity",
 }

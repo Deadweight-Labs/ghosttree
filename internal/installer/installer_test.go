@@ -467,6 +467,35 @@ func TestClaudeWiresTheStopHookAndCodexDoesNot(t *testing.T) {
 	}
 }
 
+// A turn that ends on an API or rate-limit error fires StopFailure, not Stop.
+// Without it such an agent would read "Stuck?" until StuckMaxAge.
+func TestClaudeWiresStopFailureToTheTurnEndHook(t *testing.T) {
+	home := t.TempDir()
+	if _, err := InstallClaude(home); err != nil {
+		t.Fatal(err)
+	}
+	settings, err := readJSONFile(filepath.Join(home, ".claude", "settings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hooks, _ := settings["hooks"].(map[string]any)
+	groups, _ := hooks["StopFailure"].([]any)
+	if len(groups) != 1 {
+		t.Fatalf("want one StopFailure group, got %d", len(groups))
+	}
+	inner, _ := groups[0].(map[string]any)["hooks"].([]any)
+	handler, _ := inner[0].(map[string]any)
+	if cmd, _ := handler["command"].(string); !strings.HasPrefix(cmd, "ctx hook turn-end") {
+		t.Fatalf("handler = %v", handler)
+	}
+	if harnessNamed("codex").Serves(ChannelTurnFail) {
+		t.Fatal("codex must not get StopFailure")
+	}
+	if err := runHookCommandProbe("echo {}", "StopFailure"); err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+}
+
 func TestProbeAcceptsTheStopHooksEmptyObject(t *testing.T) {
 	if err := runHookCommandProbe("echo {}", "Stop"); err != nil {
 		t.Fatalf("a Stop hook answering {} must pass the probe: %v", err)

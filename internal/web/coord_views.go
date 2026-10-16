@@ -854,6 +854,17 @@ func presenceText(f store.PresenceField) (value, text string) {
 	return value, fmt.Sprintf("%s (%s, %s)", value, msg(originKeys[f.Origin]), coordAge(f.AgeSeconds))
 }
 
+// othersWaitNeutral keeps "Waiting on you" for the agents that asked the
+// viewer; an agent waiting for someone else reads "Waiting for a person".
+func othersWaitNeutral(parts []coordParticipantView, asked map[string]bool) []coordParticipantView {
+	for i := range parts {
+		if parts[i].WorkKey == store.WorkWaitingUser && !parts[i].Human && !asked[parts[i].ID] {
+			parts[i].StatusLabel = msg("ov.work.waiting_person")
+		}
+	}
+	return parts
+}
+
 func buildCoordParticipants(room store.CoordRoom, peers []store.CoordAgent, memberships []store.RoomMembership, current store.Principal, labels map[string]string) []coordParticipantView {
 	byID := make(map[string]coordParticipantView)
 	for _, member := range room.Members {

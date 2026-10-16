@@ -46,6 +46,7 @@ type pageData struct {
 	DeviceMachine, DeviceRemote, DeviceStarted                 string
 	Tokens                                                     []tokenRow
 	UnusedTokens                                               int
+	UnusedForeign                                              bool
 	TokenResult                                                string
 	RequestsV                                                  *requestsView
 	RequestV                                                   *requestView

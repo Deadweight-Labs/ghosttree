@@ -42,6 +42,10 @@ const (
 	// delivers nothing to the model. Claude Code only: Codex's Stop is not
 	// measured, so a Codex agent is never called stuck.
 	ChannelTurnEnd Channel = "turn-end"
+	// ChannelTurnFail is StopFailure, which Claude Code fires instead of Stop
+	// when a turn ends on an API or rate-limit error. It reports the same thing
+	// as Stop: the turn is over, so the agent is not stuck.
+	ChannelTurnFail Channel = "turn-fail"
 	// ChannelMCP is the pull side. Every harness ghosttree supports has it, and
 	// it is the only channel that answers a question rather than anticipating
 	// one.
@@ -88,7 +92,7 @@ func Harnesses() []Harness {
 		{
 			Name:       "claude",
 			Components: append([]Component(nil), componentOrder...),
-			Channels:   []Channel{ChannelSessionStart, ChannelUserPrompt, ChannelPreToolUse, ChannelPauseGate, ChannelCoordInbox, ChannelTurnEnd, ChannelMCP},
+			Channels:   []Channel{ChannelSessionStart, ChannelUserPrompt, ChannelPreToolUse, ChannelPauseGate, ChannelCoordInbox, ChannelTurnEnd, ChannelTurnFail, ChannelMCP},
 			Delivers:   []Channel{ChannelSessionStart, ChannelUserPrompt, ChannelPreToolUse, ChannelMCP},
 			HooksPath:  func(home string) string { return filepath.Join(home, ".claude", "settings.json") },
 			RulePath:   func(home string) string { return filepath.Join(home, ".claude", "CLAUDE.md") },
@@ -211,6 +215,8 @@ func (h Harness) hookCommandFor(c Channel) (event, command, matcher string, ok b
 		return "PostToolUse", withCtx(postToolHookCommand) + " --harness " + h.Name, "", true
 	case ChannelTurnEnd:
 		return "Stop", withCtx(turnEndHookCommand) + " --harness " + h.Name, "", true
+	case ChannelTurnFail:
+		return "StopFailure", withCtx(turnEndHookCommand) + " --harness " + h.Name, "", true
 	}
 	return "", "", "", false
 }
