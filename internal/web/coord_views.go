@@ -143,6 +143,9 @@ type coordRoomDetailView struct {
 	Room         coordRoomView
 	Messages     []coordMessageView
 	Participants []coordParticipantView
+	// ToDefault is the addressee the composer starts with: the sender of the
+	// message being answered, empty for the whole room.
+	ToDefault string
 	// Broadcast: the composer offers the chip for all active agents.
 	Broadcast bool
 	// WaitCycles: je Kreis gegenseitigen Wartens eine Zeile, aus der Presence
@@ -228,6 +231,10 @@ type coordMessageView struct {
 	// Clock is the local time of day; Timestamp stays the exact value.
 	Clock        string
 	MentionsText string
+	// To reads "an Robin" or "an alle": the addressee in the message head.
+	// PeerOnly marks a message from an agent to agents only.
+	To       string
+	PeerOnly bool
 	// ThreadTitle and ThreadMeta describe the task thread anchored here.
 	ThreadTitle, ThreadMeta string
 	Directive               *coordDirectiveView
@@ -325,6 +332,9 @@ type coordParticipantView struct {
 	// not because they joined the room: they are listed but not offered as a
 	// recipient, since only room members can be addressed.
 	ListOnly bool
+	// AskURL leads to the open question this agent has for the viewer; empty
+	// when there is none.
+	AskURL string
 	// ReachKey and WorkKey are the raw store values; empty without evidence.
 	ReachKey, WorkKey string
 }
@@ -586,14 +596,18 @@ func buildCoordMessageViews(l lang, messages []store.CoordMessagePresentation, r
 			System:     message.AuthorKind == store.AuthorSystem,
 			Clock:      coordClock(l, message.CreatedAt),
 		}
-		shown := author
+		shown, labelled := author, false
 		if message.AuthorKind == store.AuthorAgent {
 			// The stored label turns "@" into "_"; the peer label keeps the machine.
 			if label := strings.TrimSpace(labels[message.SenderExternalID]); label != "" {
-				shown = label
+				shown, labelled = label, true
 			}
 		}
-		shown = readableAuthor(l, shown)
+		// A peer label "Person · Machine · feat/x" holds a slash and would pass
+		// for a raw ID; only the fallback author text needs the check.
+		if !labelled {
+			shown = readableAuthor(l, shown)
+		}
 		view.Name, view.Machine = coordSplitAgentName(shown, message.AuthorKind)
 		view.Initials = coordInitials(readableAuthor(l, author))
 		if message.AuthorKind == store.AuthorAgent {
@@ -609,6 +623,15 @@ func buildCoordMessageViews(l lang, messages []store.CoordMessagePresentation, r
 			view.Mentions = append(view.Mentions, coordIdentityLabel(l, mention, labels))
 		}
 		view.MentionsText = coordJoinNames(l, view.Mentions)
+		switch {
+		case store.BodyHasBroadcast(message.Body):
+			view.To = l.msg("coord.to_agents")
+		case len(view.Mentions) > 0:
+			view.To = l.msg("coord.to", view.MentionsText)
+		default:
+			view.To = l.msg("coord.to_all")
+		}
+		view.PeerOnly = coordPeerOnly(message.AuthorKind, message.Intent, presentation.Mentions)
 		if presentation.Reply != nil {
 			view.Reply = &coordReplyView{Sequence: presentation.Reply.Sequence, Author: readableAuthor(l, presentation.Reply.Author), Body: presentation.Reply.Body, Missing: presentation.Reply.Missing, Lang: l}
 			if !view.Reply.Missing {
@@ -939,6 +962,7 @@ func buildCoordParticipants(l lang, room store.CoordRoom, peers []store.CoordAge
 	for i := range out {
 		decorateCoordParticipant(l, &out[i])
 	}
+	out = dedupeAgents(out)
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Current != out[j].Current {
 			return out[i].Current

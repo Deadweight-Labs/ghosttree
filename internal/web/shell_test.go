@@ -73,6 +73,13 @@ func fetchPage(t *testing.T, c *http.Client, url string) (int, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if loc := resp.Header.Get("Location"); resp.StatusCode == http.StatusFound && strings.HasPrefix(loc, "/ui/coord?room=") && strings.Contains(url, "/ui/coord") && !strings.Contains(url, "room=") {
+		// /ui/coord lands in the room with the latest event.
+		resp.Body.Close()
+		if resp, err = c.Get(url[:strings.Index(url, "/ui/")] + loc); err != nil {
+			t.Fatal(err)
+		}
+	}
 	status := resp.StatusCode
 	return status, body(t, resp)
 }

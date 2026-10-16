@@ -43,7 +43,6 @@ func TestCoordEventStructureRetainsProgressiveSurfaceHooks(t *testing.T) {
 		`class="coord-thread-messages"`,
 		`data-coord-draft-key=`,
 		`data-coord-focus-key=`,
-		`data-coord-drawer-target=`,
 		`data-coord-live-status`,
 	} {
 		if !strings.Contains(template, hook) {

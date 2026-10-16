@@ -89,7 +89,7 @@ func TestCoordRoomGroupsConsecutiveMessagesOfOneSender(t *testing.T) {
 	if !strings.Contains(first, "<strong>claude</strong>") || !strings.Contains(first, `<span class="cm-host">@apps-vm</span>`) || !strings.Contains(first, "av agent") {
 		t.Errorf("agent identity: %s", first)
 	}
-	if own := messageItem(t, page, "3"); !strings.Contains(own, "<strong>You</strong>") || strings.Contains(own, "coord-message-avatar") {
+	if own := messageItem(t, page, "3"); !strings.Contains(own, "<strong>You</strong>") || !strings.Contains(own, "to everyone") {
 		t.Errorf("own message: %s", own)
 	}
 }
@@ -128,7 +128,7 @@ func TestCoordRoomShowsARequestToThePersonAsAnAnswerableCard(t *testing.T) {
 	appendAgent(t, st, room, "q1", "Roles first or column first?", store.IntentQuestion, "person:1")
 	page := get("/ui/coord?room=" + url.QueryEscape(room))
 	card := messageItem(t, page, "1")
-	for _, want := range []string{`class="ask clay"`, "Asks robin", "Roles first or column first?", `name="action" value="answer"`, "Answered", ">Reply<", "just asked", `name="attention_id"`} {
+	for _, want := range []string{`class="rm-msg is-ask"`, "Asks robin", "Roles first or column first?", `name="action" value="answer"`, "Answered", ">Reply<", "just asked", `name="attention_id"`} {
 		if !strings.Contains(card, want) {
 			t.Errorf("request card missing %q: %s", want, card)
 		}
@@ -158,20 +158,23 @@ func TestCoordRoomBubblesEscapeTheirBody(t *testing.T) {
 	}
 }
 
-func TestCoordComposerOffersTheThreeModesWithTheirOwnSubmit(t *testing.T) {
+func TestCoordComposerAddressesWithChipsAndKeepsItsSubmits(t *testing.T) {
 	_, _, room, get := chatFixture(t)
 	page := get("/ui/coord?room=" + url.QueryEscape(room))
 	for _, want := range []string{
-		`name="mode" value="message" checked`, `name="mode" value="directive"`, `name="mode" value="request"`,
+		`name="mentions" value="" checked`, `name="mentions" value="all-agents"`,
 		`formaction="/ui/coord/standing/create" name="confirm_scope" value="1"`,
-		`name="intent" value="question"`, `<textarea id="coord-message-body" name="body"`,
+		`name="intent" value="question"`, `<textarea id="coord-message-body" name="body"`, `class="btn ghost rm-ask"`,
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("composer missing %q", want)
 		}
 	}
-	if strings.Contains(page, `name="intent" value="question" checked`) {
-		t.Error("no request kind is preselected; a plain message carries none")
+	if strings.Contains(page, `name="mode"`) || strings.Contains(page, `name="intent" value="question" checked`) {
+		t.Error("no mode pill and no request kind preselected; a plain message carries none")
+	}
+	if strings.Contains(page, `id="coord-context"`) && strings.Contains(page, "coord-attention-list") {
+		t.Error("the right column with \"needs you\" is gone from the room")
 	}
 }
 

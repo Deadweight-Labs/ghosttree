@@ -36,7 +36,7 @@ func TestMentionOfAProjectMemberWithoutAgentIsMarkedForThem(t *testing.T) {
 	if target.Query().Get("unreached") != "" {
 		t.Errorf("a reached name is reported as unreached: %s", target)
 	}
-	if !strings.Contains(senderPage, "Mentioned: lars") || strings.Contains(senderPage, "reached no one") {
+	if !strings.Contains(senderPage, "to lars") || strings.Contains(senderPage, "reached no one") {
 		t.Errorf("the sender does not read who was mentioned: %s", senderPage)
 	}
 	_, leadPage := fetchPage(t, e.Lead, roomURL)
