@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // Usage is the provider's own token count for one call, the only exact figure
@@ -51,8 +53,47 @@ const (
 // a failure: the gardener is an option and stays off without one.
 var ErrGardenDisabled = errors.New("gardener is off: no API key configured (set GHOSTTREE_GARDEN_KEY or a \"garden\" entry with api_key_file/credential in llm.json)")
 
+// resolveHost looks a hostname up for checkBaseURL. It is a variable so tests
+// can stand in for DNS and /etc/hosts.
+var resolveHost = func(host string) ([]net.IP, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	ips := make([]net.IP, 0, len(addrs))
+	for _, a := range addrs {
+		ips = append(ips, a.IP)
+	}
+	return ips, nil
+}
+
+// onlyLoopback reports whether host is, or resolves exclusively to, loopback
+// addresses. A failed lookup or any non-loopback answer is false (fail closed).
+func onlyLoopback(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	ips, err := resolveHost(host)
+	if err != nil || len(ips) == 0 {
+		return false
+	}
+	for _, ip := range ips {
+		if !ip.IsLoopback() {
+			return false
+		}
+	}
+	return true
+}
+
 // checkBaseURL keeps the API key off the wire in the clear: https only, with
-// plain http allowed for a server on this machine (a test double or a proxy).
+// plain http allowed for a server on this machine. That is localhost, a
+// loopback address, or a hostname that resolves only to loopback addresses
+// (a tunnel to a shared proxy that routes by Host header, named in /etc/hosts).
 func checkBaseURL(raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" {
@@ -61,13 +102,10 @@ func checkBaseURL(raw string) error {
 	if u.Scheme == "https" {
 		return nil
 	}
-	switch u.Hostname() {
-	case "localhost", "127.0.0.1", "::1":
-		if u.Scheme == "http" {
-			return nil
-		}
+	if u.Scheme == "http" && onlyLoopback(u.Hostname()) {
+		return nil
 	}
-	return fmt.Errorf("gardener base_url must be https (http only for localhost), got %q", u.Scheme+"://"+u.Host)
+	return fmt.Errorf("gardener base_url must be https (http only for hosts that resolve to loopback), got %q", u.Scheme+"://"+u.Host)
 }
 
 type gardenFile struct {
