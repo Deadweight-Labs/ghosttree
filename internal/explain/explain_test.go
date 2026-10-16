@@ -113,6 +113,10 @@ type fakeStore struct {
 	usage  map[string]Usage
 	cands  []Candidate
 	onSave func()
+
+	created map[string]time.Time
+	batches []*fakeBatch
+	items   map[string]*fakeBatchItem // customID+batch -> item
 }
 
 func newFakeStore() *fakeStore {
@@ -173,6 +177,14 @@ func (f *fakeStore) AddLLMUsage(job, day string, add Usage) error {
 	return nil
 }
 func (f *fakeStore) ExplainCandidates(scan int) ([]Candidate, error) { return f.cands, nil }
+func (f *fakeStore) ExplainCreatedAt(kind string, id int64) (time.Time, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if t, ok := f.created[key(kind, id)]; ok {
+		return t, nil
+	}
+	return time.Date(2026, 10, 16, 11, 0, 0, 0, time.UTC), nil
+}
 
 type fakeLLM struct {
 	mu    sync.Mutex
@@ -226,7 +238,7 @@ func TestViewGeneratesInTheBackgroundAndShowsTheTextOnTheNextLook(t *testing.T) 
 	}
 }
 
-func TestEditedObjectGetsANewExplanationAndTheOldOneIsNotShown(t *testing.T) {
+func TestEditedObjectShowsNothingAndIsLeftToTheBatch(t *testing.T) {
 	f := newFakeStore()
 	f.put(KindRequest, 4, "p", "Alt", "Text")
 	c := &fakeLLM{reply: goodReply}
@@ -235,12 +247,31 @@ func TestEditedObjectGetsANewExplanationAndTheOldOneIsNotShown(t *testing.T) {
 	s.Wait()
 	f.put(KindRequest, 4, "p", "Neu", "Text")
 	v := s.View(KindRequest, 4)
-	if v.Text != "" {
-		t.Errorf("an explanation of the old text is shown: %q", v.Text)
+	if !v.Empty() {
+		t.Errorf("an explanation of the old text is shown or awaited: %+v", v)
 	}
 	s.Wait()
-	if c.calls != 2 {
-		t.Errorf("edited object was not explained again: %d calls", c.calls)
+	if c.calls != 1 {
+		t.Errorf("a page view generated a second explanation of an edited object: %d calls", c.calls)
+	}
+}
+
+func TestOnlyNewObjectsAreExplainedWhenAPageIsOpened(t *testing.T) {
+	f := newFakeStore()
+	f.put(KindKnowledge, 1, "p", "Neu", "gestern geschrieben")
+	f.put(KindKnowledge, 2, "p", "Alt", "vor einem Monat geschrieben")
+	f.created = map[string]time.Time{key(KindKnowledge, 2): time.Date(2026, 9, 10, 0, 0, 0, 0, time.UTC)}
+	c := &fakeLLM{reply: goodReply}
+	s := svcWith(f, c, Limits{})
+	if v := s.View(KindKnowledge, 2); !v.Empty() {
+		t.Errorf("an old object started generation: %+v", v)
+	}
+	if v := s.View(KindKnowledge, 1); !v.Pending {
+		t.Errorf("a new object did not: %+v", v)
+	}
+	s.Wait()
+	if c.calls != 1 {
+		t.Errorf("%d calls, want 1", c.calls)
 	}
 }
 
@@ -369,28 +400,19 @@ func TestResultForAnObjectEditedMeanwhileIsDiscarded(t *testing.T) {
 	}
 }
 
-func TestLanguageChangeRegeneratesGeneratedTextsButNotAgentTexts(t *testing.T) {
+func TestLanguageChangeKeepsTheOldTextUntilTheBatchReplacesIt(t *testing.T) {
 	f := newFakeStore()
 	f.put(KindKnowledge, 1, "p", "T", "gen")
-	f.put(KindKnowledge, 2, "p", "T", "agent")
-	h1, h2 := f.src[key(KindKnowledge, 1)].Hash, f.src[key(KindKnowledge, 2)].Hash
+	h1 := f.src[key(KindKnowledge, 1)].Hash
 	f.exp[key(KindKnowledge, 1)] = Explanation{Kind: KindKnowledge, ObjectID: 1, Text: "An English generated explanation text.", Language: "en", Source: SourceGenerated, ContentHash: h1}
-	f.exp[key(KindKnowledge, 2)] = Explanation{Kind: KindKnowledge, ObjectID: 2, Text: "An agent wrote this explanation text.", Language: "", Source: SourceAgent, ContentHash: h2}
 	c := &fakeLLM{reply: goodReply}
 	s := svcWith(f, c, Limits{}) // server language de
 	if v := s.View(KindKnowledge, 1); v.Text != "An English generated explanation text." {
 		t.Errorf("the old text must stay until the new one is there: %+v", v)
 	}
-	s.View(KindKnowledge, 2)
 	s.Wait()
-	if c.calls != 1 {
-		t.Errorf("%d calls, want 1 (agent text untouched)", c.calls)
-	}
-	if e, _, _ := f.Explanation(KindKnowledge, 1); e.Language != "de" || e.Text != goodReply {
-		t.Errorf("not regenerated in the server language: %+v", e)
-	}
-	if e, _, _ := f.Explanation(KindKnowledge, 2); e.Source != SourceAgent {
-		t.Error("agent text replaced")
+	if c.calls != 0 {
+		t.Errorf("a page view regenerated for the language: %d calls", c.calls)
 	}
 }
 
@@ -421,46 +443,6 @@ func TestFailureIsRetriedLaterAndNotOnEveryLook(t *testing.T) {
 	if u, _ := s.Today(); u.Failures != 0 {
 		// the usage day moved with the clock; the failure was booked the day before
 		_ = u
-	}
-}
-
-func TestBackfillWorksTheQueueInOrderAndStopsAtTheLimitAndTheCap(t *testing.T) {
-	f := newFakeStore()
-	for i := int64(1); i <= 5; i++ {
-		f.put(KindKnowledge, i, "p", "T", "Text "+string(rune('a'+i)))
-		f.cands = append(f.cands, Candidate{KindKnowledge, i})
-	}
-	// 2 is current already, 3 is not explainable
-	f.exp[key(KindKnowledge, 2)] = Explanation{Kind: KindKnowledge, ObjectID: 2, Text: "Schon da und aktuell erklärt.", Language: "de", Source: SourceGenerated, ContentHash: f.src[key(KindKnowledge, 2)].Hash}
-	f.put(KindKnowledge, 3, "", "T", "ohne Projekt")
-	c := &fakeLLM{reply: goodReply}
-	s := svcWith(f, c, Limits{})
-	rep, err := s.Backfill(context.Background(), 2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if rep.Generated != 2 || rep.Fresh != 1 || c.calls != 2 {
-		t.Errorf("report %+v calls %d", rep, c.calls)
-	}
-	if _, ok, _ := f.Explanation(KindKnowledge, 1); !ok {
-		t.Error("the first in the queue was skipped")
-	}
-	if _, ok, _ := f.Explanation(KindKnowledge, 4); !ok {
-		t.Error("the second missing one was skipped")
-	}
-	if _, ok, _ := f.Explanation(KindKnowledge, 5); ok {
-		t.Error("went past the limit")
-	}
-	capped := svcWith(newFakeStore(), c, Limits{Day: Limit{Calls: 1}})
-	capped.st.(*fakeStore).put(KindKnowledge, 1, "p", "T", "a")
-	capped.st.(*fakeStore).put(KindKnowledge, 2, "p", "T", "b")
-	capped.st.(*fakeStore).cands = []Candidate{{KindKnowledge, 1}, {KindKnowledge, 2}}
-	rep, _ = capped.Backfill(context.Background(), 10)
-	if rep.Generated != 1 || rep.Stopped != "limit" {
-		t.Errorf("cap: %+v", rep)
-	}
-	if _, err := svcWith(f, nil, Limits{}).Backfill(context.Background(), 1); !errors.Is(err, ErrDisabled) {
-		t.Errorf("without a model: %v", err)
 	}
 }
 

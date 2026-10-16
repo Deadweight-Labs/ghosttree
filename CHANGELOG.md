@@ -6,6 +6,8 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Changed: "Kurz erklärt" writes the backlog in bulk through the Anthropic Message Batches API at half the price: `ctx explain backfill --batch` collects finished batches, then submits one batch for every object without a current note (several if the API's size limits need it), `--collect` only collects. Batch ids are stored, so nothing is sent twice while its batch is open, and an object whose entry failed is left alone for a day. Batch usage is counted at 50 % in `llm_usage`. One-by-one `backfill` is gone.
+- Changed: the model for notes is its own `explain` entry in `llm.json` (or `GHOSTTREE_EXPLAIN_KEY`), never the top-level provider or the gardener's entry. Without a key, or while the key file is missing, nothing is sent. Opening a page generates a note only for new objects (younger than a day, no note at all) and not for objects in an open batch; changed objects, older ones and language changes wait for the batch. Sample units: `deploy/ghosttree-explain.{service,timer,path}`.
 - Fixed: "Kurz erklärt" failed on about one object in five with "no text content": the model's thinking used up the 800-token output ceiling. The ceiling is now 4096, the error names the stop reason and block types, and the background path logs failures as warnings.
 - Added: limits for the model jobs, shared by the gardener (`garden`) and "Kurz erklärt"
   (`explain`). Each job has a daily and a monthly cap (UTC) in dollars, calls and tokens;

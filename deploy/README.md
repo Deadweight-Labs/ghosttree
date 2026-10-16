@@ -323,3 +323,20 @@ sqlite3 ~/.local/share/ghosttree/ghosttree.db ".backup '/tmp/ghosttree.db'"
 Verify the copied database with `PRAGMA integrity_check`, put it in the server's
 state directory while the service is stopped, and then point each client at the
 new private URL with `ctx setup`.
+
+## "In short" notes (batch)
+
+`ghosttree-explain.service` runs `ctx explain backfill --batch`: it collects
+finished Message Batches, then submits one batch for every object that has no
+current note. `ghosttree-explain.timer` runs it hourly, which is cheap while a
+batch is open (nothing is sent twice) and picks results up within the hour.
+`ghosttree-explain.path` starts a first run when the key file is written, and
+`ConditionPathExists=` keeps the service from doing anything while it is
+missing. The key belongs to the `explain` entry of `llm.json` (see the main
+README); the sample uses a systemd credential, so write
+`{"explain": {"credential": "explain-key"}}` there.
+
+```sh
+install -m 600 /dev/null /etc/ghosttree/explain-key   # then paste the key into it
+systemctl enable --now ghosttree-explain.timer ghosttree-explain.path
+```

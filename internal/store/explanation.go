@@ -34,6 +34,31 @@ CREATE TABLE IF NOT EXISTS explain_usage(
   failures INTEGER NOT NULL DEFAULT 0,
   input_tokens INTEGER NOT NULL DEFAULT 0,
   output_tokens INTEGER NOT NULL DEFAULT 0);
+-- A batch of explanations at the provider. The result arrives hours later in
+-- another process run, so without these rows the next run could not tell an
+-- object that is being explained from one that was never sent.
+CREATE TABLE IF NOT EXISTS explain_batches(
+  id INTEGER PRIMARY KEY,
+  provider_batch_id TEXT NOT NULL UNIQUE,
+  state TEXT NOT NULL CHECK(state IN ('open','collected','failed')),
+  model TEXT NOT NULL DEFAULT '',
+  language TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+-- content_hash is the text as it stood when it was sent; the result is stored
+-- only if the object still has it. state: pending (sent, not read yet),
+-- saved, stale (object changed meanwhile), superseded (a current text exists
+-- already) or failed (the entry failed; blocks a resubmission for a while).
+CREATE TABLE IF NOT EXISTS explain_batch_items(
+  batch_id INTEGER NOT NULL REFERENCES explain_batches(id) ON DELETE CASCADE,
+  custom_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  object_id INTEGER NOT NULL,
+  content_hash TEXT NOT NULL,
+  state TEXT NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','saved','stale','superseded','failed')),
+  error TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY(batch_id, custom_id));
+CREATE INDEX IF NOT EXISTS explain_batch_items_object ON explain_batch_items(kind, object_id, content_hash);
 `
 
 func ensureExplanations(db *sql.DB) error {

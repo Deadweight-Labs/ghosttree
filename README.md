@@ -390,26 +390,51 @@ transcripts. A note is outdated when the text it explains changed, or, if it was
 generated, when `GHOSTTREE_LANGUAGE` changed. The text and the model output
 pass the same secret check as human tasks.
 
-The server needs a model only for generating. It uses the provider
-configuration of the distiller: `GHOSTTREE_LLM_CONFIG` (or
-`~/.config/ghosttree/llm.json`) with `format`, `base_url`, `model` and an
-`api_key_file` or systemd `credential`. Without it the server runs as before and
-shows only what agents wrote. For a systemd unit, pass the file and the key as
-`Environment=GHOSTTREE_LLM_CONFIG=...` and `LoadCredential=`.
+A new object gets its note from the model when its page is opened, one call
+in the background. Everything else, the whole backlog, objects that changed and
+notes in another language, is written in bulk through the Message Batches API at
+half the price. Opening a page never starts bulk work.
+
+The model has its own provider: the `explain` entry of `llm.json`
+(`GHOSTTREE_LLM_CONFIG`, or `~/.config/ghosttree/llm.json`), an Anthropic API key
+from the console organisation that pays for it:
+
+```json
+{"explain": {"base_url": "https://api.anthropic.com", "model": "claude-haiku-5-5",
+             "api_key_file": "/etc/ghosttree/explain-key"}}
+```
+
+`base_url` and `model` are the values shown; `credential` (a systemd
+credential) replaces `api_key_file`, and `GHOSTTREE_EXPLAIN_KEY` replaces both.
+The entry is never filled in from the top-level provider of the distiller or from
+the gardener's entry: a proxy or an OpenAI key left there must not receive these
+calls. Without a key, or while the key file does not exist yet, nothing is sent
+and `ctx explain status` says which file it waits for.
 
 - `GHOSTTREE_EXPLAIN=auto|off` (`--explain`) switches generation, default `auto`.
-- `GHOSTTREE_EXPLAIN_MODEL` (`--explain-model`) picks a cheaper model than the distiller's.
+- `GHOSTTREE_EXPLAIN_MODEL` (`--explain-model`) overrides the model of the entry.
 - `GHOSTTREE_EXPLAIN_DAILY_CALLS` (default 200) and `GHOSTTREE_EXPLAIN_DAILY_TOKENS`
-  (default 400000) cap one UTC day, 0 means no cap. Server and backfill share the cap.
-  Token counts are the provider's own for the `anthropic` format and an estimate
-  (four characters a token) otherwise.
+  (default 400000) cap one UTC day, 0 means no cap; see `ctx cost` for the monthly
+  and dollar caps. Server and batches share the cap, and objects that wait in an
+  open batch count as calls. Batch usage is counted at 50 % of the list price.
 - Administrators see calls, tokens, failures and the last days on the Organization page.
 
-A page never waits for the model: it shows the block once it exists. A nightly run
-works the queue, the review queue first:
+A page never waits for the model: it shows the block once it exists. The bulk
+path runs from a timer, the review queue first:
 
-    ctx explain backfill --db /var/lib/ghosttree/ghosttree.db --limit 100
+    ctx explain backfill --db /var/lib/ghosttree/ghosttree.db --batch
+    ctx explain backfill --db /var/lib/ghosttree/ghosttree.db --collect
     ctx explain status --db /var/lib/ghosttree/ghosttree.db
+
+`--batch` first collects every finished batch (saving its notes with the same
+cleaning and secret check, counting its tokens), then submits one batch for each
+object without a current note; several batches if the 100,000 request or 256 MB
+limit of the API requires it. Batch ids are kept in the database, so an object
+that waits in an open batch is not sent again, and one whose entry failed (an
+error, or cut off at the 4096 token output limit) is left alone for a day. A
+result for an object that changed in the meantime is discarded and the object is
+sent again. `--collect` only collects. `deploy/ghosttree-explain.*` run `--batch`
+hourly and start a first run when the key file appears.
 
 ## Privacy and security
 
