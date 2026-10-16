@@ -173,6 +173,7 @@ const streamFixture = `{"type":"system","subtype":"init","model":"claude-sonnet-
 {"type":"assistant","message":{"id":"m1","usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":100,"cache_creation_input_tokens":1000}}}
 {"type":"assistant","message":{"id":"m1","usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":100,"cache_creation_input_tokens":1000}}}
 {"type":"user","message":{"content":"x"}}
+{"type":"assistant","message":{"id":"m2","content":[{"type":"tool_use","id":"t1","name":"Grep"},{"type":"tool_use","id":"t2","name":"mcp__ghosttree__context_search"}],"usage":{"input_tokens":20,"output_tokens":7,"cache_read_input_tokens":1100,"cache_creation_input_tokens":0}}}
 {"type":"assistant","message":{"id":"m2","usage":{"input_tokens":20,"output_tokens":7,"cache_read_input_tokens":1100,"cache_creation_input_tokens":0}}}
 {"type":"result","subtype":"success","is_error":false,"num_turns":3,"result":"{\"verdicts\":[]}","total_cost_usd":0.5,"permission_denials":[{"tool_name":"Bash"}],"usage":{"input_tokens":30,"output_tokens":12,"cache_read_input_tokens":1200,"cache_creation_input_tokens":1000}}
 `
@@ -183,6 +184,9 @@ func TestParseStreamTakesUsageIncludingCacheFromTheResult(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := llm.Usage{InputTokens: 30, OutputTokens: 12, CacheReadTokens: 1200, CacheWriteTokens: 1000}
+	if r.Tools["Grep"] != 1 || r.Tools["mcp__ghosttree__context_search"] != 1 {
+		t.Errorf("tools: %v", r.Tools)
+	}
 	if r.Usage != want || r.Turns != 3 || r.Denials != 1 || r.ReportedUSD != 0.5 || r.Text != `{"verdicts":[]}` {
 		t.Fatalf("%+v", r)
 	}

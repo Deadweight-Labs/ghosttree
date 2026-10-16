@@ -99,6 +99,18 @@ func WriteReport(w io.Writer, project string, res Result, at time.Time) {
 				fmt.Fprintf(w, ", FEHLER: %s", s.Err)
 			}
 			fmt.Fprintln(w)
+			if len(s.Tools) > 0 {
+				var names []string
+				for n := range s.Tools {
+					names = append(names, n)
+				}
+				sort.Strings(names)
+				var parts []string
+				for _, n := range names {
+					parts = append(parts, fmt.Sprintf("%s %d", n, s.Tools[n]))
+				}
+				fmt.Fprintf(w, "  - Werkzeuge: %s\n", strings.Join(parts, ", "))
+			}
 			for _, r := range s.Rejected {
 				fmt.Fprintf(w, "  - verworfen: %s\n", r)
 			}

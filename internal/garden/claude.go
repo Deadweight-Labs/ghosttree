@@ -29,6 +29,8 @@ type SessionResult struct {
 	// Denials counts tool calls the permission rules refused. A session that
 	// keeps running into them is working with a wrong allowlist.
 	Denials int
+	// Tools counts the tool calls the session made, by name.
+	Tools map[string]int
 }
 
 type streamUsage struct {
@@ -52,8 +54,13 @@ type streamEvent struct {
 	Usage             *streamUsage    `json:"usage"`
 	PermissionDenials json.RawMessage `json:"permission_denials"`
 	Message           *struct {
-		ID    string       `json:"id"`
-		Usage *streamUsage `json:"usage"`
+		ID      string       `json:"id"`
+		Usage   *streamUsage `json:"usage"`
+		Content []struct {
+			Type string `json:"type"`
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"content"`
 	} `json:"message"`
 }
 
@@ -65,6 +72,7 @@ func ParseStream(r io.Reader) (SessionResult, error) {
 	var res SessionResult
 	var sum llm.Usage
 	seen := map[string]bool{}
+	seenTool := map[string]bool{}
 	gotResult := false
 	br := bufio.NewReaderSize(r, 1<<20)
 	for {
@@ -74,6 +82,17 @@ func ParseStream(r io.Reader) (SessionResult, error) {
 			if json.Unmarshal(t, &ev) == nil {
 				switch ev.Type {
 				case "assistant":
+					if ev.Message != nil {
+						for _, c := range ev.Message.Content {
+							if c.Type == "tool_use" && c.ID != "" && !seenTool[c.ID] {
+								seenTool[c.ID] = true
+								if res.Tools == nil {
+									res.Tools = map[string]int{}
+								}
+								res.Tools[c.Name]++
+							}
+						}
+					}
 					if ev.Message != nil && ev.Message.Usage != nil && ev.Message.ID != "" && !seen[ev.Message.ID] {
 						seen[ev.Message.ID] = true
 						u := ev.Message.Usage.llm()

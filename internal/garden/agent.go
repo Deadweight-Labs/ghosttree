@@ -44,6 +44,7 @@ type SessionStat struct {
 	// ReportedUSD is the cost Claude Code itself reported, for comparison.
 	ReportedUSD float64
 	Denials     int
+	Tools       map[string]int
 	Err         string
 	Judged      int
 	Rejected    []string
@@ -571,7 +572,7 @@ func CheckAgent(ctx context.Context, repo *Repo, entries []Entry, opt AgentOptio
 		}
 		spec := SessionSpec{Name: p.Name, Prompt: PackagePrompt(p, opt.Project, opt.Turns), MaxTurns: opt.Turns, BudgetUSD: budget}
 		out, err := opt.Runner.RunSession(ctx, spec)
-		st := SessionStat{Name: p.Name, Entries: len(p.Entries), Turns: out.Turns, Usage: out.Usage, ReportedUSD: out.ReportedUSD, Denials: out.Denials}
+		st := SessionStat{Name: p.Name, Entries: len(p.Entries), Turns: out.Turns, Usage: out.Usage, ReportedUSD: out.ReportedUSD, Denials: out.Denials, Tools: out.Tools}
 		st.CostUSD = opt.Pricing.CostUsage(out.Usage)
 		res.Spent += st.CostUSD
 		var val Validated
