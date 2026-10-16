@@ -103,7 +103,7 @@ func TestSandboxProbeUsesTheSettingsOfTheUnit(t *testing.T) {
 	}
 	// And it names what must fail.
 	b, _ := os.ReadFile(filepath.Join(root, "garden-sandbox-probe.sh"))
-	for _, want := range []string{"/var/lib/ghosttree/data", "/var/lib/ghosttree/private", "/var/backups", "/home", "/root", "$garden/repo/probe-write", "expect_ok   \"Checkout lesen\""} {
+	for _, want := range []string{"/var/lib/ghosttree/data", "/var/lib/ghosttree/private", "/var/backups", "/home", "/root", "$garden/repo/probe-write", "expect_ok   \"Checkout lesen\"", "Client-Konfiguration lesen", "PROBE_ALLOW_MISSING"} {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("probe does not try %s", want)
 		}

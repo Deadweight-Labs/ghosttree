@@ -309,7 +309,9 @@ func (c ClaudeConfig) Args(s SessionSpec) ([]string, error) {
 		return nil, fmt.Errorf("repo root %q is not absolute", c.RepoRoot)
 	}
 	allowed := AgentAllowed(c.RepoRoot, c.CtxBin != "")
-	deny := append([]string{}, c.DenyRead...)
+	// .git holds the remote URL (possibly with credentials) and the object
+	// store; history is reached through the git tools, never through Read.
+	deny := append([]string{filepath.Join(c.RepoRoot, ".git")}, c.DenyRead...)
 	for _, d := range systemDeny {
 		if c.RepoRoot != d && !strings.HasPrefix(c.RepoRoot, d+"/") {
 			deny = append(deny, d)

@@ -374,7 +374,10 @@ func agentDenyRead(root, claudeDir, db, keyFile string) []string {
 // checked. Against the wrong repository nearly every symbol is missing, and
 // every entry would come back stale.
 func verifyCheckout(root, project string) error {
-	origin, _ := collector.GitInfo(root)
+	var origin string
+	if out, err := garden.SafeGit(root, "config", "--get", "remote.origin.url").Output(); err == nil {
+		origin = scope.NormalizeRemote(strings.TrimSpace(string(out)))
+	}
 	if origin == "" {
 		return fmt.Errorf("%s has no origin remote, so it cannot be matched to %s", root, project)
 	}
@@ -576,7 +579,10 @@ func finishGarden(st gardenStore, project string, opts gardenOpts, res garden.Re
 	case "limit":
 		fmt.Fprintf(stdout, "stopped: %s\n", res.LimitHit)
 		return 3
-	case "errors", "tamper":
+	case "errors", "tamper", "baseline":
+		if res.StoppedBy == "baseline" {
+			fmt.Fprintf(stdout, "stopped: %s\n", res.LimitHit)
+		}
 		return 1
 	}
 	return 0

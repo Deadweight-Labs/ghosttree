@@ -80,9 +80,6 @@ func (f *fakeAPI) handle(w http.ResponseWriter, r *http.Request) {
 	body, _ := io.ReadAll(r.Body)
 	f.mu.Lock()
 	f.log = append(f.log, r.Method+" "+r.URL.Path)
-	if os.Getenv("GT_DUMP") != "" {
-		os.WriteFile(fmt.Sprintf("/tmp/gt491/req%d.json", len(f.log)), body, 0o644)
-	}
 	f.mu.Unlock()
 	if !strings.HasPrefix(r.URL.Path, "/v1/messages") {
 		w.Header().Set("Content-Type", "application/json")
@@ -190,6 +187,7 @@ func newMatcherEnv(t *testing.T) *matcherEnv {
 	writeFile(t, filepath.Join(e.checkout, "innen.txt"), "SENTINEL-IN\n")
 	writeFile(t, filepath.Join(e.checkout, "sub", "tief.txt"), "SENTINEL-DEEP\n")
 	writeFile(t, filepath.Join(e.outside, "aussen.txt"), "SENTINEL-OUT\n")
+	writeFile(t, filepath.Join(e.checkout, ".git", "config"), "SENTINEL-GITCONFIG\n")
 	if err := os.Symlink(e.outside, filepath.Join(e.checkout, "link")); err != nil {
 		t.Fatal(err)
 	}
@@ -231,6 +229,8 @@ func TestRealMatcherHoldsReadGrepGlobToTheCheckout(t *testing.T) {
 		{"Grep im Checkout", "Grep", map[string]any{"pattern": "SENTINEL", "output_mode": "content"}, "SENTINEL-IN", "SENTINEL-OUT"},
 		{"Grep mit Pfad im Checkout", "Grep", map[string]any{"pattern": "SENTINEL", "path": filepath.Join(e.checkout, "sub"), "output_mode": "content"}, "SENTINEL-DEEP", "SENTINEL-OUT"},
 		{"Glob im Checkout", "Glob", map[string]any{"pattern": "**/*.txt"}, "tief.txt", "aussen.txt"},
+		{"Read in .git", "Read", map[string]any{"file_path": filepath.Join(e.checkout, ".git", "config")}, "", "SENTINEL-GITCONFIG"},
+		{"Grep in .git", "Grep", map[string]any{"pattern": "SENTINEL", "path": filepath.Join(e.checkout, ".git"), "output_mode": "content"}, "", "SENTINEL-GITCONFIG"},
 		{"Read außerhalb", "Read", map[string]any{"file_path": filepath.Join(e.outside, "aussen.txt")}, "", "SENTINEL-OUT"},
 		{"Grep außerhalb", "Grep", map[string]any{"pattern": "SENTINEL", "path": e.outside, "output_mode": "content"}, "", "SENTINEL-OUT"},
 		{"Grep außerhalb, nur Dateinamen", "Grep", map[string]any{"pattern": "SENTINEL", "path": e.outside}, "", "aussen.txt"},

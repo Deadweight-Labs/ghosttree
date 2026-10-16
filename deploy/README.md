@@ -306,6 +306,14 @@ session is treated as untrusted:
   open the database from there, so it keeps its memory in
   `garden/state/state.json` (`--state-file`) instead of `--db`.
 
+The ghosttree MCP server of a session (`ctx mcp`, for `context_search` and
+`context_get`) reads its client config from `$HOME/.config/ghosttree/config.json`
+with the `HOME` of the unit, so with the example unit from
+`/var/lib/ghosttree/garden/claude/.config/ghosttree/config.json` (`server_url`
+and the token of the gardener). The old `garden/home/.config/ghosttree` is not
+visible in the sandbox any more; move the file. The probe checks that it is
+readable (`CLIENT_CONFIG` for another place).
+
 Layout under `/var/lib/ghosttree/garden`: `repo/` (checkout, owned by root,
 updated by `ghosttree-garden-update.service`), `bin/` (the `claude` binary, pass
 `--claude`), `run.sh`, `state/`, `reports/`, `claude/` (writable by

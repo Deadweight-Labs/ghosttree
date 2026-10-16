@@ -53,6 +53,9 @@ func TestClaudeArgsAreLockedDown(t *testing.T) {
 			t.Errorf("denylist lacks %s", w)
 		}
 	}
+	if !strings.Contains(denied, "Read(//r/.git/**)") || !strings.Contains(denied, "Read(//r/.git)") {
+		t.Errorf(".git of the checkout must not be readable: %s", denied)
+	}
 	if !strings.Contains(denied, "Read(//srv/x/private/**)") {
 		t.Errorf("deny-read missing: %s", denied)
 	}
@@ -481,6 +484,21 @@ func TestCheckAgentDiscardsASessionThatTouchedWhatGitStatusDoesNotShow(t *testin
 		".git/info/exclude": func(r *Repo) {
 			writeFile(t, filepath.Join(r.Root, ".git", "info", "exclude"), "alles\n")
 		},
+		".git/HEAD": func(r *Repo) {
+			writeFile(t, filepath.Join(r.Root, ".git", "HEAD"), "ref: refs/heads/anderswo\n")
+		},
+		".git/config.worktree": func(r *Repo) {
+			writeFile(t, filepath.Join(r.Root, ".git", "config.worktree"), "[core]\n\tfsmonitor = /bin/true\n")
+		},
+		".git/hooks als Symlink": func(r *Repo) {
+			hooks := filepath.Join(r.Root, ".git", "hooks")
+			if err := os.RemoveAll(hooks); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(t.TempDir(), hooks); err != nil {
+				t.Fatal(err)
+			}
+		},
 	}
 	for name, tamper := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -508,6 +526,26 @@ func TestCheckAgentDiscardsASessionThatTouchedWhatGitStatusDoesNotShow(t *testin
 				t.Fatalf("stopped=%q judged=%d sessions=%d", res.StoppedBy, judged, len(fr.specs))
 			}
 		})
+	}
+}
+
+func TestCheckAgentRunsNothingWithoutAReadableBaseline(t *testing.T) {
+	repo := newRepo(t)
+	hook := filepath.Join(repo.Root, ".git", "hooks", "gesperrt")
+	writeFile(t, hook, "x")
+	if err := os.Chmod(hook, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(hook, 0o600) })
+	if _, err := os.ReadFile(hook); err == nil {
+		t.Skip("file stays readable (running as root)")
+	}
+	fr := &fakeRunner{answers: []func(SessionSpec) (SessionResult, error){holdsAll}}
+	res := CheckAgent(context.Background(), repo, agentEntries(4), AgentOptions{
+		Runner: fr, Pricing: price, MaxUSD: 5, Sessions: 1, PerSession: 4, Turns: 30,
+	})
+	if res.StoppedBy != "baseline" || len(fr.specs) != 0 {
+		t.Fatalf("stopped=%q sessions=%d", res.StoppedBy, len(fr.specs))
 	}
 }
 

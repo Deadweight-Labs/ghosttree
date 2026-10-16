@@ -577,6 +577,19 @@ func CheckAgent(ctx context.Context, repo *Repo, entries []Entry, opt AgentOptio
 	fails := 0
 	statusBefore, statusErr := repo.Status()
 	printBefore, printErr := repo.Fingerprint()
+	if printErr != nil || statusErr != nil {
+		// Without a baseline the check after a session would be skipped
+		// silently; better to run nothing than sessions nobody can verify.
+		res.StoppedBy = "baseline"
+		res.LimitHit = "Ausgangszustand des Checkouts nicht lesbar"
+		if printErr != nil {
+			res.LimitHit += ": " + printErr.Error()
+		} else {
+			res.LimitHit += ": " + statusErr.Error()
+		}
+		rest(0)
+		return res
+	}
 	for i, p := range pkgs {
 		if opt.Gate != nil {
 			if hit := opt.Gate(); hit != nil {
@@ -605,8 +618,8 @@ func CheckAgent(ctx context.Context, repo *Repo, entries []Entry, opt AgentOptio
 		// The fingerprint of .git/config and .git/hooks is taken first and
 		// without git: a planted hook or config must never get to run.
 		printAfter, perr := repo.Fingerprint()
-		changed := printErr == nil && (perr != nil || printAfter != printBefore)
-		if !changed && statusErr == nil {
+		changed := perr != nil || printAfter != printBefore
+		if !changed {
 			after, serr := repo.Status()
 			changed = serr != nil || after != statusBefore
 		}

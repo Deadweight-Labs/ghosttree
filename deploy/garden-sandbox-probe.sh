@@ -12,8 +12,12 @@
 #
 # Paths can be set in the environment for a layout other than the example unit:
 #   GARDEN_DIR (default /var/lib/ghosttree/garden)
-#   FORBIDDEN_FILES  space separated files that must not be readable. Default:
-#                    one probe file in each place the unit hides.
+#   FORBIDDEN_FILES  additional space separated files that must not be readable.
+#   CLIENT_CONFIG    ghosttree client config of the session's MCP server
+#                    (default $GARDEN_DIR/claude/.config/ghosttree/config.json)
+#   PROBE_ALLOW_MISSING=1  do not fail when a path that must be unreadable
+#                    does not exist on this machine (the probe then proves
+#                    nothing for it)
 set -u
 
 print_only=0
@@ -24,6 +28,10 @@ fi
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 unit="${1:-$here/ghosttree-garden.service}"
 garden="${GARDEN_DIR:-/var/lib/ghosttree/garden}"
+client_config="${CLIENT_CONFIG:-$garden/claude/.config/ghosttree/config.json}"
+# What the sandbox must hide has to exist outside of it, otherwise "could not
+# read" only means "is not there".
+hidden_paths="/var/lib/ghosttree/data /var/lib/ghosttree/private /var/lib/ghosttree/backups /var/backups /etc/ghosttree/server.env"
 
 # Settings of the [Service] section that make up the sandbox. Everything else
 # (ExecStart, Environment, timeouts, ...) is left out of the probe.
@@ -61,6 +69,7 @@ expect_ok() {
 }
 garden="$GARDEN_DIR"
 expect_ok   "Checkout lesen"                     test -r "$garden/repo/.git/HEAD"
+expect_ok   "Client-Konfiguration lesen"         test -r "$CLIENT_CONFIG"
 expect_fail "Checkout beschreiben"               sh -c "echo x > $garden/repo/probe-write"
 expect_fail "Checkout verändern (.git/config)"   sh -c "echo x >> $garden/repo/.git/config"
 expect_fail "ghosttree-Daten lesen"              ls /var/lib/ghosttree/data
@@ -80,7 +89,7 @@ done
 exit $fails
 '
 
-cmd=(systemd-run --quiet --pipe --wait --collect "${props[@]}" -E "GARDEN_DIR=$garden" -E "FORBIDDEN_FILES=${FORBIDDEN_FILES:-}" /bin/bash -c "$checks")
+cmd=(systemd-run --quiet --pipe --wait --collect "${props[@]}" -E "GARDEN_DIR=$garden" -E "CLIENT_CONFIG=$client_config" -E "FORBIDDEN_FILES=${FORBIDDEN_FILES:-}" /bin/bash -c "$checks")
 
 if [ "$print_only" = 1 ]; then
 	printf '%q ' "${cmd[@]}"
@@ -89,6 +98,16 @@ if [ "$print_only" = 1 ]; then
 fi
 if [ "$(id -u)" -ne 0 ]; then
 	echo "the probe starts a transient unit and needs root" >&2
+	exit 2
+fi
+missing=0
+for p in $hidden_paths $FORBIDDEN_FILES; do
+	if [ ! -e "$p" ]; then
+		echo "missing outside the sandbox: $p (the probe would prove nothing for it)" >&2
+		missing=1
+	fi
+done
+if [ "$missing" = 1 ] && [ "${PROBE_ALLOW_MISSING:-0}" != 1 ]; then
 	exit 2
 fi
 "${cmd[@]}"
