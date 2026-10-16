@@ -248,68 +248,67 @@ func firstNonEmpty(s ...string) string {
 // ClaudeConfig is how a session is started. Everything that decides what the
 // session may do is here, and none of it comes from the checkout it reads.
 type ClaudeConfig struct {
-	Bin       string
-	Model     string
-	RepoRoot  string
-	ConfigDir string
-	// CtxBin is the ctx binary that serves the ghosttree MCP tools; empty
-	// means the session gets no MCP server at all.
+	Bin      string
+	Model    string
+	RepoRoot string
+	// ConfigRoot is the directory under which every session gets its own, empty
+	// CLAUDE_CONFIG_DIR (and HOME). It must be set: a session that fell back to
+	// the settings of whoever runs it could widen its own rights.
+	ConfigRoot string
+	// CtxBin is the ctx binary that serves the ghosttree MCP tools and the git
+	// tool; empty means the session gets neither.
 	CtxBin string
 	// DenyRead lists absolute paths (files or directories) the session may not read.
 	DenyRead []string
 	Timeout  time.Duration
-	// BaseURL and Token, when set, point the session at a proxy or API. Left
-	// empty the settings.json of the config directory decides.
+	// BaseURL and Token point the session at a proxy or API; Token is the one
+	// value that assigns the session to its account.
 	BaseURL, Token string
 	// APIKey is a real API key for api.anthropic.com.
 	APIKey string
-	// ParentEnv is the environment to take pass-through variables from.
+	// ParentEnv is the environment to take the few pass-through variables from.
 	ParentEnv []string
 }
+
+// ErrNoConfigRoot is returned when a session is started without a config root.
+var ErrNoConfigRoot = fmt.Errorf("kein Konfigurationsverzeichnis für die Sessions (--claude-dir): der Agent-Modus startet nicht ohne ein eigenes, leeres")
 
 // systemDeny are places a session never reads, wherever the checkout is (unless
 // it lies inside one, see Args). Read is only allowed inside the checkout anyway.
 var systemDeny = []string{"/proc", "/sys", "/etc", "/run", "/root", "/dev"}
 
-// Tools the session may use. Nothing in here writes: Edit, Write and friends are
-// not even in the tool set, and are denied again below.
+// Tools the session may use. Nothing in here writes or runs a program: there
+// is no Bash, and git is reached through a fixed MCP tool (gittool.go).
 var (
-	agentBuiltinTools = []string{"Read", "Grep", "Glob", "Bash"}
-	agentAllowed      = []string{
-		"Grep", "Glob",
-		"Bash(git log:*)", "Bash(git show:*)",
-		"mcp__ghosttree__context_search", "mcp__ghosttree__context_get",
-	}
-	agentDenied = []string{
-		"Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch", "Task", "Agent",
-		// git writes a file with --output, and takes any unambiguous
-		// abbreviation of it; the allowlist matches by prefix, so this is
-		// denied for every command. (The "git log:*--output*" form does not
-		// match: measured on Claude Code 2.1.301.)
-		"Bash(*--ou*)",
-		// git blame prints any file with --contents (and -S / --ignore-revs-file
-		// read one); the deny-read list does not reach Bash. Blame is not
-		// allowed at all, and these stay denied for every command.
-		"Bash(git blame:*)", "Bash(*--contents*)", "Bash(*ignore-rev*)",
+	agentBuiltinTools = []string{"Read", "Grep", "Glob"}
+	agentDenied       = []string{
+		"Bash", "PowerShell", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch", "Task", "Agent",
 		"mcp__ghosttree__context_remember", "mcp__ghosttree__context_retire", "mcp__ghosttree__context_supersede",
 		"mcp__ghosttree__context_move", "mcp__ghosttree__context_describe_file",
 	}
 )
 
+// AgentAllowed is the allowlist of a session for a checkout. Grep and Glob are
+// not allowed by name: a bare "Grep" would let them search anywhere. They are
+// read-only tools, run in the checkout (the session's working directory), and
+// Claude Code applies the Read rules to the directory they search, so they
+// reach what Read(//checkout/**) allows and nothing else.
+func AgentAllowed(repoRoot string, withMCP bool) []string {
+	allowed := []string{"Read(/" + repoRoot + "/**)"}
+	allowed = append(allowed, GitToolNames...)
+	if withMCP {
+		allowed = append(allowed, "mcp__ghosttree__context_search", "mcp__ghosttree__context_get")
+	}
+	return allowed
+}
+
 // Args is the claude command line of one session. The prompt goes in on stdin.
 func (c ClaudeConfig) Args(s SessionSpec) ([]string, error) {
 	denied := append([]string{}, agentDenied...)
-	allowed := append([]string{}, agentAllowed...)
-	// Read only inside the checkout: the deny list below names the secrets
-	// we know of, this is what holds for the ones we do not.
-	if c.RepoRoot != "" {
-		if !filepath.IsAbs(c.RepoRoot) {
-			return nil, fmt.Errorf("repo root %q is not absolute", c.RepoRoot)
-		}
-		allowed = append(allowed, "Read(/"+c.RepoRoot+"/**)")
-	} else {
-		allowed = append(allowed, "Read")
+	if c.RepoRoot == "" || !filepath.IsAbs(c.RepoRoot) {
+		return nil, fmt.Errorf("repo root %q is not absolute", c.RepoRoot)
 	}
+	allowed := AgentAllowed(c.RepoRoot, c.CtxBin != "")
 	deny := append([]string{}, c.DenyRead...)
 	for _, d := range systemDeny {
 		if c.RepoRoot != d && !strings.HasPrefix(c.RepoRoot, d+"/") {
@@ -320,7 +319,7 @@ func (c ClaudeConfig) Args(s SessionSpec) ([]string, error) {
 		if !filepath.IsAbs(p) {
 			return nil, fmt.Errorf("deny-read path %q is not absolute", p)
 		}
-		denied = append(denied, "Read(/"+p+"/**)", "Read(/"+p+")", "Grep(/"+p+"/**)")
+		denied = append(denied, "Read(/"+p+"/**)", "Read(/"+p+")")
 	}
 	args := []string{
 		"-p", "--output-format", "stream-json", "--verbose",
@@ -339,29 +338,52 @@ func (c ClaudeConfig) Args(s SessionSpec) ([]string, error) {
 	if s.BudgetUSD > 0 {
 		args = append(args, "--max-budget-usd", fmt.Sprintf("%.2f", s.BudgetUSD))
 	}
-	cfg := `{"mcpServers":{}}`
+	servers := map[string]any{}
 	if c.CtxBin != "" {
-		b, _ := json.Marshal(map[string]any{"mcpServers": map[string]any{"ghosttree": map[string]any{"command": c.CtxBin, "args": []string{"mcp"}}}})
-		cfg = string(b)
+		// The MCP servers get what they need by their own env entry, so the
+		// session's own environment can stay small.
+		env := map[string]string{}
+		for _, kv := range c.ParentEnv {
+			k, v, _ := strings.Cut(kv, "=")
+			if mcpEnv[k] {
+				env[k] = v
+			}
+		}
+		servers["ghosttree"] = map[string]any{"command": c.CtxBin, "args": []string{"mcp"}, "env": env}
+		servers[GitServerName] = map[string]any{"command": c.CtxBin, "args": []string{"garden", "git-mcp", "--repo", c.RepoRoot}, "env": map[string]string{"PATH": envOf(c.ParentEnv, "PATH")}}
 	}
-	args = append(args, "--mcp-config", cfg, "--strict-mcp-config")
+	b, _ := json.Marshal(map[string]any{"mcpServers": servers})
+	args = append(args, "--mcp-config", string(b), "--strict-mcp-config")
 	return args, nil
 }
 
-// passEnv are the variables a session inherits: where things are, not what is
-// secret. The garden key, the database path and the like stay behind.
-var passEnv = map[string]bool{
-	"PATH": true, "HOME": true, "LANG": true, "LC_ALL": true, "TMPDIR": true, "USER": true,
-	"SSL_CERT_FILE": true, "SSL_CERT_DIR": true, "GIT_CONFIG_GLOBAL": true, "GIT_CONFIG_NOSYSTEM": true,
-	"HTTP_PROXY": true, "HTTPS_PROXY": true, "NO_PROXY": true, "http_proxy": true, "https_proxy": true, "no_proxy": true,
+func envOf(env []string, key string) string {
+	for _, kv := range env {
+		if k, v, ok := strings.Cut(kv, "="); ok && k == key {
+			return v
+		}
+	}
+	return ""
 }
 
-// Environ builds the session's environment from scratch.
-func (c ClaudeConfig) Environ() []string {
+// mcpEnv is what the ghosttree MCP server needs to find its client config.
+var mcpEnv = map[string]bool{"HOME": true, "XDG_CONFIG_HOME": true, "PATH": true}
+
+// passEnv are the only variables a session inherits from its parent: where
+// programs and certificates are, not what is secret. Everything else, the
+// garden key, the database path, proxy URLs with credentials, GIT_* and the
+// rest, stays behind. HOME is not among them; it is the run's own directory.
+var passEnv = map[string]bool{
+	"PATH": true, "LANG": true, "LC_ALL": true, "SSL_CERT_FILE": true, "SSL_CERT_DIR": true,
+}
+
+// Environ builds the session's environment from scratch. runDir is the empty
+// directory of this run.
+func (c ClaudeConfig) Environ(runDir string) []string {
 	var env []string
 	for _, kv := range c.ParentEnv {
 		k, _, _ := strings.Cut(kv, "=")
-		if passEnv[k] || strings.HasPrefix(k, "XDG_") {
+		if passEnv[k] {
 			env = append(env, kv)
 		}
 	}
@@ -370,10 +392,9 @@ func (c ClaudeConfig) Environ() []string {
 			env = append(env, k+"="+v)
 		}
 	}
-	add("CLAUDE_CONFIG_DIR", c.ConfigDir)
-	if c.ConfigDir != "" {
-		add("XDG_CACHE_HOME", filepath.Join(c.ConfigDir, "cache"))
-	}
+	add("CLAUDE_CONFIG_DIR", runDir)
+	add("HOME", runDir)
+	add("XDG_CACHE_HOME", filepath.Join(runDir, "cache"))
 	add("ANTHROPIC_BASE_URL", c.BaseURL)
 	add("ANTHROPIC_AUTH_TOKEN", c.Token)
 	add("ANTHROPIC_API_KEY", c.APIKey)
@@ -387,10 +408,26 @@ type ClaudeRunner struct{ Config ClaudeConfig }
 
 func (r ClaudeRunner) RunSession(ctx context.Context, s SessionSpec) (SessionResult, error) {
 	c := r.Config
+	if c.ConfigRoot == "" {
+		return SessionResult{}, ErrNoConfigRoot
+	}
+	if !filepath.IsAbs(c.ConfigRoot) {
+		return SessionResult{}, fmt.Errorf("config root %q is not absolute", c.ConfigRoot)
+	}
 	args, err := c.Args(s)
 	if err != nil {
 		return SessionResult{}, err
 	}
+	if err := os.MkdirAll(c.ConfigRoot, 0o700); err != nil {
+		return SessionResult{}, err
+	}
+	// A directory of its own, empty at the start and gone at the end: nothing a
+	// session leaves behind (settings, hooks, memory) reaches the next one.
+	runDir, err := os.MkdirTemp(c.ConfigRoot, "run-")
+	if err != nil {
+		return SessionResult{}, err
+	}
+	defer os.RemoveAll(runDir)
 	if c.Timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, c.Timeout)
@@ -398,7 +435,7 @@ func (r ClaudeRunner) RunSession(ctx context.Context, s SessionSpec) (SessionRes
 	}
 	cmd := exec.CommandContext(ctx, c.Bin, args...)
 	cmd.Dir = c.RepoRoot
-	cmd.Env = c.Environ()
+	cmd.Env = c.Environ(runDir)
 	cmd.Stdin = strings.NewReader(s.Prompt)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }

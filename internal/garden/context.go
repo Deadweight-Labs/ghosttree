@@ -89,7 +89,7 @@ func OpenRepo(root string) (*Repo, error) {
 }
 
 func (r *Repo) git(args ...string) (string, error) {
-	cmd := exec.Command("git", append([]string{"-C", r.Root}, args...)...)
+	cmd := SafeGit(r.Root, args...)
 	out, err := cmd.Output()
 	if ee, ok := err.(*exec.ExitError); ok {
 		// Exit 1 without output is how git grep says "no match". Any other

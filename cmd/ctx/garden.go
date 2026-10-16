@@ -45,12 +45,12 @@ Two ways to run it:
                between entries, and answers with JSON. ctx checks that JSON
                (every verdict needs a citation that exists in the checkout, every
                relation a verbatim quote of each entry) before anything is filed.
-               The session can read the checkout (Read, Grep, Glob, git log/show/
-               blame) and search ghosttree read-only; it cannot write, has no
+               The session can read the checkout (Read, Grep, Glob, only below it; git_log and
+               git_show as fixed tools, no Bash) and search ghosttree read-only; it cannot write, has no
                network but the model proxy and ghosttree, never bypasses
-               permissions. Needs the claude binary and a settings.json in its
-               config directory (or the "garden" entry) naming the proxy; no
-               API key. Cost is metered from the stream's token usage, cache
+               permissions. Every session gets its own empty config directory under
+               --claude-dir (required) and an environment of a few variables; no
+               key in it. Cost is metered from the stream's token usage, cache
                included, as job garden (one call per turn).
   --mode api   One Messages API call per entry, as before. Needs an API key.
 
@@ -58,13 +58,17 @@ Two ways to run it:
                session gets (default 30); --turns most turns of a session (default
                60); --limit caps the entries of the whole run
   --claude, --claude-dir, --no-mcp
-               the claude binary; the directory it keeps its state in (also
-               GHOSTTREE_GARDEN_CLAUDE_DIR, holds settings.json); no ghosttree tools
+               the claude binary; the directory under which each session gets an empty one (also
+               GHOSTTREE_GARDEN_CLAUDE_DIR); no ghosttree tools
 
 In api mode it is an option and stays off without an API key: set GHOSTTREE_GARDEN_KEY, or a
 "garden" entry with api_key_file or credential in llm.json. Without a key the
 command stops and does nothing (a dry run is the one exception: it reads, counts
 and calls nothing).
+
+  --state-file the same memory as --db, kept in a JSON file of its own. The
+               sandboxed unit uses it, because the session runs in that unit
+               and must not reach the database. Not together with --db.
 
   --dry-run    count tokens and cost, call nothing
   --max-usd    stop cleanly before a call that could exceed this budget (default 2)
@@ -125,6 +129,9 @@ type gardenOpts struct {
 }
 
 func cmdGarden(args []string, stdout io.Writer) int {
+	if len(args) > 0 && args[0] == "git-mcp" {
+		return cmdGardenGitMCP(args[1:], stdout)
+	}
 	if len(args) == 0 || args[0] != "check-knowledge" {
 		fmt.Fprintln(stdout, gardenUsage)
 		return 2
@@ -140,13 +147,14 @@ func cmdGarden(args []string, stdout io.Writer) int {
 	propose := fs.Bool("propose", false, "file stale/correction verdicts as staged gardener notes")
 	out := fs.String("out", "", "write the report to this file")
 	dbPath := fs.String("db", "", "ghosttree database: remember checks and usage between runs")
+	stateFile := fs.String("state-file", "", "the same memory as --db, in a JSON file of its own (for a sandbox that cannot reach the database)")
 	mode := fs.String("mode", "agent", "agent (Claude Code sessions) or api (one call per entry)")
 	sessions := fs.Int("sessions", 4, "agent mode: most sessions per run")
 	perSession := fs.Int("per-session", 30, "agent mode: most entries per session")
 	turns := fs.Int("turns", 60, "agent mode: most turns per session")
 	sessionTimeout := fs.Duration("session-timeout", 40*time.Minute, "agent mode: a session running longer is killed")
 	claudeBin := fs.String("claude", os.Getenv("GHOSTTREE_CLAUDE"), "agent mode: path of the claude binary")
-	claudeDir := fs.String("claude-dir", os.Getenv("GHOSTTREE_GARDEN_CLAUDE_DIR"), "agent mode: CLAUDE_CONFIG_DIR of the sessions (holds settings.json)")
+	claudeDir := fs.String("claude-dir", os.Getenv("GHOSTTREE_GARDEN_CLAUDE_DIR"), "agent mode: directory under which every session gets its own empty CLAUDE_CONFIG_DIR (required)")
 	noMCP := fs.Bool("no-mcp", false, "agent mode: give the sessions no ghosttree tools")
 	minAge := fs.Int("min-age", 14, "days; an entry looked at more recently is left out unless it or its code changed (0 = off)")
 	limits := addLimitFlags(fs, llmusage.JobGarden, "")
@@ -225,7 +233,18 @@ func cmdGarden(args []string, stdout io.Writer) int {
 	}
 	opts := gardenOpts{Types: map[string]bool{}, Limit: *limit, MaxUSD: *maxUSD, DryRun: *dryRun, Propose: *propose,
 		Limits: lim, MinAge: time.Duration(*minAge) * 24 * time.Hour}
-	if *dbPath != "" {
+	if *stateFile != "" && *dbPath != "" {
+		fmt.Fprintln(stdout, "--db and --state-file exclude each other")
+		return 2
+	}
+	if *stateFile != "" {
+		fst, err := openFileState(*stateFile)
+		if err != nil {
+			fmt.Fprintf(stdout, "open state file: %v\n", err)
+			return 1
+		}
+		opts.State = fst
+	} else if *dbPath != "" {
 		st, err := store.Open(*dbPath)
 		if err != nil {
 			fmt.Fprintf(stdout, "open db: %v\n", err)
@@ -249,7 +268,7 @@ func cmdGarden(args []string, stdout io.Writer) int {
 				fmt.Fprintln(stdout, err)
 				return 1
 			}
-			cc := garden.ClaudeConfig{Bin: bin, Model: cfg.Model, RepoRoot: repo.Root, ConfigDir: *claudeDir,
+			cc := garden.ClaudeConfig{Bin: bin, Model: cfg.Model, RepoRoot: repo.Root, ConfigRoot: *claudeDir,
 				Timeout: *sessionTimeout, ParentEnv: os.Environ()}
 			if !*noMCP {
 				if cc.CtxBin, err = os.Executable(); err != nil {
@@ -264,18 +283,51 @@ func cmdGarden(args []string, stdout io.Writer) int {
 					cc.BaseURL, cc.Token = cfg.BaseURL, cfg.APIKey
 				}
 			}
-			if *claudeDir != "" {
-				if err := os.MkdirAll(*claudeDir, 0o700); err != nil {
-					fmt.Fprintf(stdout, "claude dir: %v\n", err)
-					return 1
-				}
+			if *claudeDir == "" {
+				fmt.Fprintln(stdout, garden.ErrNoConfigRoot)
+				return 1
+			}
+			abs, aerr := filepath.Abs(*claudeDir)
+			if aerr != nil {
+				fmt.Fprintf(stdout, "claude dir: %v\n", aerr)
+				return 1
+			}
+			*claudeDir, cc.ConfigRoot = abs, abs
+			if err := os.MkdirAll(*claudeDir, 0o700); err != nil {
+				fmt.Fprintf(stdout, "claude dir: %v\n", err)
+				return 1
 			}
 			cc.DenyRead = agentDenyRead(repo.Root, *claudeDir, *dbPath, cfg.APIKeyFile)
+			if *stateFile != "" {
+				cc.DenyRead = append(cc.DenyRead, *stateFile)
+			}
 			opts.Runner = garden.ClaudeRunner{Config: cc}
 		}
 		return runGardenAgent(client.New(sc), repo, project, opts, pricing, *out, stdout)
 	}
 	return runGardenCheck(client.New(sc), repo, project, opts, model, pricing, *out, stdout)
+}
+
+// cmdGardenGitMCP serves the fixed git tools of an agent session on stdio. It
+// is started by Claude Code from the session's MCP config, never by hand.
+func cmdGardenGitMCP(args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("garden git-mcp", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	root := fs.String("repo", "", "checkout the git tools look at")
+	if fs.Parse(args) != nil || *root == "" || !filepath.IsAbs(*root) {
+		fmt.Fprintln(os.Stderr, "usage: ctx garden git-mcp --repo <absolute path>")
+		return 2
+	}
+	repo, err := garden.OpenRepo(*root)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "git-mcp: %v\n", err)
+		return 1
+	}
+	if err := garden.RunGitServer(context.Background(), repo, version); err != nil {
+		fmt.Fprintf(os.Stderr, "git-mcp: %v\n", err)
+		return 1
+	}
+	return 0
 }
 
 // agentDenyRead lists what a session may not read even though the tools could
