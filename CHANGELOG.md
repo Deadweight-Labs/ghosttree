@@ -6,6 +6,32 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Added: limits for the model jobs, shared by the gardener (`garden`) and "Kurz erklärt"
+  (`explain`). Each job has a daily and a monthly cap (UTC) in dollars, calls and tokens;
+  0 or an empty value means unlimited. Set them with `GHOSTTREE_<JOB>_<DAILY|MONTHLY>_<USD|CALLS|TOKENS>`
+  (for example `GHOSTTREE_GARDEN_MONTHLY_USD=50`), with the `limits` entry of `llm.json`
+  (`{"limits":{"garden":{"monthly":{"usd":50}}}}`) or with flags (`--monthly-usd`, `--daily-calls`
+  and so on on `ctx garden check-knowledge` and `ctx explain backfill`; `--explain-monthly-usd`
+  and so on on `ctx serve`); flags win over the environment, the environment over the file.
+  "Kurz erklärt" keeps 200 calls and 400000 tokens a day as its default, the gardener has no
+  cap besides `--max-usd` per run. Usage is stored per job and day (`llm_usage`, additive; the old
+  `explain_usage` rows are carried over), so a monthly cap holds across restarts and between server
+  and command line. A run that reaches a cap stops cleanly, says which one it was and exits 3.
+  `ctx cost` shows usage per job, day and month next to the limits; administrators see one
+  sentence per job on the organisation page.
+- Fixed: cache tokens are now counted. `cache_read_input_tokens` and `cache_creation_input_tokens`
+  from the Anthropic response count as tokens and are priced at their own rates (reads a tenth,
+  writes 1.25 times the input price unless `cache_read_usd_per_mtok` / `cache_write_usd_per_mtok`
+  are set), in the gardener and in "Kurz erklärt". Behind a caching proxy the reported input was
+  far too low before. A dollar cap needs a price: built in for `claude-sonnet-5-5` and
+  `claude-haiku-5-5`, otherwise `input_usd_per_mtok` and `output_usd_per_mtok` in `llm.json`.
+- Added: the gardener rotates. `ctx garden check-knowledge --db <path>` remembers per entry when and
+  against which commit it looked (`garden_checks`, additive). The next run takes entries it has never
+  seen first, then the ones looked at longest ago, and leaves out what is unchanged since (the entry,
+  and the files and symbols it names) or was looked at less than `--min-age` days ago (default 14).
+  The report starts with "Der Gärtner hat N Einträge geprüft, M Vorschläge", and `ctx review` lists
+  the gardener's proposals together.
+- Fixed: `ctx cost` failed on a database without distilled sessions.
 - Fixed: `POST /api/requests` with an idempotency key that already belongs to another
   project or another author now answers 409 `idempotency_key_conflict` without any
   data of the existing request; only the same author in the same project replays.

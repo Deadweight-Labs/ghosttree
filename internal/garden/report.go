@@ -26,6 +26,9 @@ func WriteReport(w io.Writer, project string, res Result, at time.Time) {
 	}
 	fmt.Fprintf(w, "# Gärtner: Wissen gegen Code, %s\n\n", project)
 	fmt.Fprintf(w, "%s am %s. Der Gärtner schlägt vor, er entscheidet nicht.\n\n", mode, at.UTC().Format("2006-01-02 15:04 UTC"))
+	if !res.DryRun {
+		fmt.Fprintf(w, "%s\n\n", Headline(res.Verdicts))
+	}
 	fmt.Fprintf(w, "Einträge: %d. ", len(res.Verdicts))
 	var parts []string
 	for _, k := range []string{Holds, Stale, Correction, Unclear, Skipped, Failed, NotRun} {
@@ -38,18 +41,27 @@ func WriteReport(w io.Writer, project string, res Result, at time.Time) {
 		}
 	}
 	fmt.Fprintf(w, "%s.\n\n", strings.Join(parts, ", "))
-	var in, out int
+	if sum := res.Rotation.Summary(); sum != "" {
+		fmt.Fprintf(w, "%s\n\n", sum)
+	}
+	var in, out, cacheRead, cacheWrite int
 	for _, v := range res.Verdicts {
-		in, out = in+v.In, out+v.Out
+		in, out, cacheRead, cacheWrite = in+v.In, out+v.Out, cacheRead+v.CacheRead, cacheWrite+v.CacheWrite
 	}
 	if res.DryRun {
 		fmt.Fprintf(w, "Geschätzt: %d Eingabe- und %d Ausgabe-Tokens, ca. $%.4f; Obergrenze bei vollen Antworten $%.4f.\n\n", in, out, res.Spent, res.UpperBoundUSD)
 	} else {
-		fmt.Fprintf(w, "Gemessen: %d Eingabe- und %d Ausgabe-Tokens, $%.4f von höchstens $%.2f.\n\n", in, out, res.Spent, res.MaxUSD)
+		fmt.Fprintf(w, "Gemessen: %d Eingabe- und %d Ausgabe-Tokens", in, out)
+		if cacheRead+cacheWrite > 0 {
+			fmt.Fprintf(w, " (dazu %d aus dem Cache gelesen, %d in den Cache geschrieben)", cacheRead, cacheWrite)
+		}
+		fmt.Fprintf(w, ", $%.4f von höchstens $%.2f.\n\n", res.Spent, res.MaxUSD)
 	}
 	switch res.StoppedBy {
 	case "budget":
 		fmt.Fprintf(w, "**Abgebrochen:** Budgetdeckel erreicht; der Rest ist unten als \"nicht geprüft\" aufgeführt.\n\n")
+	case "limit":
+		fmt.Fprintf(w, "**Abgebrochen:** %s; der Rest ist unten als \"nicht geprüft\" aufgeführt.\n\n", res.LimitHit)
 	case "errors":
 		fmt.Fprintf(w, "**Abgebrochen:** wiederholte Fehler beim Modellaufruf.\n\n")
 	}
@@ -82,9 +94,25 @@ func WriteReport(w io.Writer, project string, res Result, at time.Time) {
 		if v.Correction != "" && v.Kind == Correction {
 			fmt.Fprintf(w, "- Vorschlag:\n\n  > %s\n", strings.ReplaceAll(v.Correction, "\n", "\n  > "))
 		}
-		if v.In > 0 {
-			fmt.Fprintf(w, "- Tokens %d / %d, $%.4f\n", v.In, v.Out, v.CostUSD)
+		if v.In > 0 || v.CacheRead > 0 || v.CacheWrite > 0 {
+			fmt.Fprintf(w, "- Tokens %d / %d, Cache %d gelesen / %d geschrieben, $%.4f\n", v.In, v.Out, v.CacheRead, v.CacheWrite, v.CostUSD)
 		}
 		fmt.Fprintln(w)
 	}
+}
+
+// Headline is the morning sentence: how many entries the model judged and how
+// many of those led to a proposal.
+func Headline(vs []Verdict) string {
+	checked, proposals := 0, 0
+	for _, v := range vs {
+		switch v.Kind {
+		case Holds, Unclear:
+			checked++
+		case Stale, Correction:
+			checked++
+			proposals++
+		}
+	}
+	return fmt.Sprintf("Der Gärtner hat %d Einträge geprüft, %d Vorschläge.", checked, proposals)
 }

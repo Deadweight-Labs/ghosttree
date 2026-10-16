@@ -8,6 +8,7 @@ import (
 
 	"github.com/Deadweight-Labs/ghosttree/internal/explain"
 	"github.com/Deadweight-Labs/ghosttree/internal/humantask"
+	"github.com/Deadweight-Labs/ghosttree/internal/llmusage"
 	"github.com/Deadweight-Labs/ghosttree/internal/pain"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
@@ -77,11 +78,11 @@ func TestExplanationWorksThroughTheRuntimeWriter(t *testing.T) {
 	if err := st.SaveAgentExplanation(explain.KindKnowledge, id, note); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AddExplainUsage("2026-10-16", 1, 0, 100, 40); err != nil {
+	if err := st.AddLLMUsage("explain", "2026-10-16", llmusage.Usage{Calls: 1, Failures: 0, InputTokens: 100, OutputTokens: 40}); err != nil {
 		t.Fatal(err)
 	}
 	e, ok, _ := st.Explanation(explain.KindKnowledge, id)
-	u, _ := st.ExplainUsageOn("2026-10-16")
+	u, _ := st.LLMUsageOn("explain", "2026-10-16")
 	if !ok || e.Text != note || u.Calls != 1 || u.Tokens() != 140 {
 		t.Errorf("%+v %v %+v", e, ok, u)
 	}
@@ -225,17 +226,17 @@ func TestCandidatesStartWithTheReviewQueue(t *testing.T) {
 func TestUsageAddsUpPerDayAndCountsBySource(t *testing.T) {
 	st, _ := Open(":memory:")
 	defer st.Close()
-	_ = st.AddExplainUsage("2026-10-15", 2, 1, 1000, 200)
-	_ = st.AddExplainUsage("2026-10-16", 1, 0, 300, 100)
-	_ = st.AddExplainUsage("2026-10-16", 1, 1, 200, 0)
-	u, _ := st.ExplainUsageOn("2026-10-16")
+	_ = st.AddLLMUsage("explain", "2026-10-15", llmusage.Usage{Calls: 2, Failures: 1, InputTokens: 1000, OutputTokens: 200})
+	_ = st.AddLLMUsage("explain", "2026-10-16", llmusage.Usage{Calls: 1, Failures: 0, InputTokens: 300, OutputTokens: 100})
+	_ = st.AddLLMUsage("explain", "2026-10-16", llmusage.Usage{Calls: 1, Failures: 1, InputTokens: 200, OutputTokens: 0})
+	u, _ := st.LLMUsageOn("explain", "2026-10-16")
 	if u.Calls != 2 || u.Failures != 1 || u.InputTokens != 500 || u.OutputTokens != 100 {
 		t.Errorf("%+v", u)
 	}
-	if none, _ := st.ExplainUsageOn("2026-01-01"); none.Calls != 0 || none.Day != "2026-01-01" {
+	if none, _ := st.LLMUsageOn("explain", "2026-01-01"); none.Calls != 0 || none.Day != "2026-01-01" {
 		t.Errorf("%+v", none)
 	}
-	days, _ := st.ExplainUsageRecent(7)
+	days, _ := st.LLMUsageRecent("explain", 7)
 	if len(days) != 2 || days[0].Day != "2026-10-16" {
 		t.Errorf("%+v", days)
 	}
@@ -387,4 +388,92 @@ func TestMachineBoundRequestTitleIsNotContextLine(t *testing.T) {
 	if err != nil || strings.Contains(strings.Join(psrc.Context, "\n"), "MACHINE SECRET TITLE") {
 		t.Errorf("pain context leaks: %+v %v", psrc.Context, err)
 	}
+}
+
+func TestLLMUsageIsStoredPerJobAndDayAndSumsPerMonth(t *testing.T) {
+	st := openLLMMem(t)
+	add := func(job, day string, calls int, in, cr, cw int, micro int64) {
+		t.Helper()
+		if err := st.AddLLMUsage(job, day, llmusage.Usage{Calls: calls, InputTokens: in, OutputTokens: 1, CacheReadTokens: cr, CacheWriteTokens: cw, CostMicroUSD: micro}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	add("garden", "2026-10-01", 2, 100, 1000, 10, 5_000)
+	add("garden", "2026-10-01", 1, 50, 0, 0, 1_000)
+	add("garden", "2026-10-16", 3, 10, 5, 5, 2_000)
+	add("garden", "2026-09-30", 9, 9, 9, 9, 9_000_000)
+	add("explain", "2026-10-16", 4, 4, 0, 0, 40)
+	d, _ := st.LLMUsageOn("garden", "2026-10-01")
+	if d.Calls != 3 || d.InputTokens != 150 || d.CacheReadTokens != 1000 || d.CostMicroUSD != 6_000 {
+		t.Fatalf("day %+v", d)
+	}
+	m, _ := st.LLMUsageMonth("garden", "2026-10")
+	if m.Calls != 6 || m.CacheWriteTokens != 15 || m.CostMicroUSD != 8_000 {
+		t.Fatalf("month %+v (september must not count)", m)
+	}
+	if x, _ := st.LLMUsageMonth("explain", "2026-10"); x.Calls != 4 {
+		t.Fatalf("jobs must be kept apart: %+v", x)
+	}
+	if rows, _ := st.LLMUsageRecent("garden", 2); len(rows) != 2 || rows[0].Day != "2026-10-16" {
+		t.Fatalf("recent %+v", rows)
+	}
+	// The old explain API reads and writes the same rows.
+	if err := st.AddLLMUsage("explain", "2026-10-16", llmusage.Usage{Calls: 1, Failures: 0, InputTokens: 5, OutputTokens: 5}); err != nil {
+		t.Fatal(err)
+	}
+	if u, _ := st.LLMUsageOn("explain", "2026-10-16"); u.Calls != 5 {
+		t.Fatalf("explain usage %+v", u)
+	}
+}
+
+func TestOldExplainUsageIsCarriedIntoTheNewTableOnOpen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "gt.db")
+	st, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.db.Exec(`INSERT INTO explain_usage(day, calls, failures, input_tokens, output_tokens) VALUES('2026-10-10', 7, 1, 700, 70)`); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	st, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	u, _ := st.LLMUsageOn("explain", "2026-10-10")
+	if u.Calls != 7 || u.InputTokens != 700 || u.Failures != 1 {
+		t.Fatalf("legacy row lost: %+v", u)
+	}
+}
+
+func TestGardenChecksAreRememberedPerProjectAndEntry(t *testing.T) {
+	st := openLLMMem(t)
+	if err := st.SaveGardenCheck("p", GardenCheck{KnowledgeID: 5, CheckedAt: "2026-10-01T00:00:00Z", Commit: "abc", EntryHash: "h1", Verdict: "holds"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SaveGardenCheck("p", GardenCheck{KnowledgeID: 5, CheckedAt: "2026-10-16T00:00:00Z", Commit: "def", EntryHash: "h2", Verdict: "stale"}); err != nil {
+		t.Fatal(err)
+	}
+	_ = st.SaveGardenCheck("other", GardenCheck{KnowledgeID: 5, Commit: "zzz"})
+	got, err := st.GardenChecks("p")
+	if err != nil || len(got) != 1 || got[5].Commit != "def" || got[5].Verdict != "stale" {
+		t.Fatalf("%+v %v", got, err)
+	}
+	if n, oldest, _ := st.GardenCheckSummary(); n != 2 || oldest == "" {
+		t.Fatalf("summary %d %q", n, oldest)
+	}
+	if err := st.SaveGardenCheck("", GardenCheck{KnowledgeID: 1}); err == nil {
+		t.Error("a check without a project was accepted")
+	}
+}
+
+func openLLMMem(t *testing.T) *Store {
+	t.Helper()
+	st, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	return st
 }

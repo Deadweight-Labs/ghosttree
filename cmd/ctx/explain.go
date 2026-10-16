@@ -9,22 +9,17 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/explain"
 	"github.com/Deadweight-Labs/ghosttree/internal/llm"
+	"github.com/Deadweight-Labs/ghosttree/internal/llmusage"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
 const (
-	envExplain            = "GHOSTTREE_EXPLAIN"
-	envExplainModel       = "GHOSTTREE_EXPLAIN_MODEL"
-	envExplainDailyCalls  = "GHOSTTREE_EXPLAIN_DAILY_CALLS"
-	envExplainDailyTokens = "GHOSTTREE_EXPLAIN_DAILY_TOKENS"
-
-	defaultExplainDailyCalls  = 200
-	defaultExplainDailyTokens = 400000
+	envExplain      = "GHOSTTREE_EXPLAIN"
+	envExplainModel = "GHOSTTREE_EXPLAIN_MODEL"
 )
 
 const explainUsage = `usage: ctx explain backfill --db <path> [--limit N] [--dry-run]
@@ -40,8 +35,11 @@ from the provider configuration (GHOSTTREE_LLM_CONFIG, or
   --limit        explain at most this many objects (default 50)
   --dry-run      count what is missing, call nothing
   --language     en or de (default: GHOSTTREE_LANGUAGE, else en)
-  --daily-calls  cap per day over server and backfill together (default 200, 0 = none)
-  --daily-tokens cap per day (default 400000, 0 = none)
+  --daily-calls, --daily-tokens, --daily-usd, --monthly-calls, --monthly-tokens,
+  --monthly-usd  caps over server and backfill together; 0 or empty = unlimited.
+                 Default: 200 calls and 400000 tokens a day, no monthly cap. They
+                 can also be set in the "limits" entry of llm.json or with
+                 GHOSTTREE_EXPLAIN_DAILY_CALLS and the like (see 'ctx cost').
   --model        override the model of the provider configuration
 
 Without a provider configuration nothing is generated and the command says so.`
@@ -50,18 +48,17 @@ Without a provider configuration nothing is generated and the command says so.`
 type ExplainConfig struct {
 	// Mode is "auto" (use the model when the provider configuration loads) or
 	// "off"; empty counts as off so that tests never pick up a user's file.
-	Mode        string
-	Model       string
-	DailyCalls  int
-	DailyTokens int
-	Language    string
+	Mode     string
+	Model    string
+	Limits   llmusage.Limits
+	Language string
 }
 
 // newExplainer builds the service. Without a loadable provider configuration it
 // is read-only (agent-written explanations show, nothing is generated); that is
 // the normal state of a server that has no key, not an error.
 func newExplainer(st explain.Store, cfg ExplainConfig, logger *slog.Logger) *explain.Service {
-	ec := explain.Config{Language: cfg.Language, Limits: explain.Limits{DailyCalls: cfg.DailyCalls, DailyTokens: cfg.DailyTokens}}
+	ec := explain.Config{Language: cfg.Language, Limits: cfg.Limits}
 	if cfg.Mode != "auto" {
 		return explain.New(st, nil, ec)
 	}
@@ -79,15 +76,13 @@ func newExplainer(st explain.Store, cfg ExplainConfig, logger *slog.Logger) *exp
 		return explain.New(st, nil, ec)
 	}
 	ec.Model, ec.Metered = lc.Model, lc.Format == "anthropic"
-	logger.Info("explain_model", "model", lc.Model, "format", lc.Format, "language", ec.Language, "daily_calls", cfg.DailyCalls, "daily_tokens", cfg.DailyTokens)
-	return explain.New(st, client, ec)
-}
-
-func envInt(name string, def int) int {
-	if v, err := strconv.Atoi(os.Getenv(name)); err == nil && v >= 0 {
-		return v
+	ec.Price, ec.PriceKnown = lc.Price()
+	if !ec.PriceKnown && (cfg.Limits.Day.USD > 0 || cfg.Limits.Month.USD > 0) {
+		logger.Warn("explain_usd_limit_without_price", "model", lc.Model, "hint", "set input_usd_per_mtok and output_usd_per_mtok in llm.json; a dollar cap cannot stop anything without them")
 	}
-	return def
+	logger.Info("explain_model", "model", lc.Model, "format", lc.Format, "language", ec.Language,
+		"daily", cfg.Limits.Day.Text(), "monthly", cfg.Limits.Month.Text())
+	return explain.New(st, client, ec)
 }
 
 func cmdExplain(args []string, stdout io.Writer) int {
@@ -101,12 +96,16 @@ func cmdExplain(args []string, stdout io.Writer) int {
 	limit := fs.Int("limit", 50, "explain at most this many objects")
 	dry := fs.Bool("dry-run", false, "count what is missing, call nothing")
 	language := fs.String("language", os.Getenv(envLanguage), "en or de")
-	calls := fs.Int("daily-calls", envInt(envExplainDailyCalls, defaultExplainDailyCalls), "cap of model calls per day (0 = none)")
-	tokens := fs.Int("daily-tokens", envInt(envExplainDailyTokens, defaultExplainDailyTokens), "cap of tokens per day (0 = none)")
+	limits := addLimitFlags(fs, llmusage.JobExplain, "")
 	model := fs.String("model", os.Getenv(envExplainModel), "model, overriding the provider configuration")
 	fs.Usage = func() { fmt.Fprintln(stdout, explainUsage) }
-	if fs.Parse(args[1:]) != nil || *dbPath == "" || *limit < 0 || *calls < 0 || *tokens < 0 {
+	if fs.Parse(args[1:]) != nil || *dbPath == "" || *limit < 0 {
 		fmt.Fprintln(stdout, explainUsage)
+		return 2
+	}
+	lim, err := limits()
+	if err != nil {
+		fmt.Fprintln(stdout, err)
 		return 2
 	}
 	lang := *language
@@ -120,7 +119,7 @@ func cmdExplain(args []string, stdout io.Writer) int {
 	}
 	defer st.Close()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	svc := newExplainer(st, ExplainConfig{Mode: "auto", Model: *model, DailyCalls: *calls, DailyTokens: *tokens, Language: lang}, logger)
+	svc := newExplainer(st, ExplainConfig{Mode: "auto", Model: *model, Limits: lim, Language: lang}, logger)
 	return runExplain(args[0], svc, st, *limit, *dry, stdout)
 }
 
@@ -138,7 +137,9 @@ func runExplain(sub string, svc *explain.Service, st *store.Store, limit int, dr
 		} else {
 			fmt.Fprintln(stdout, "no model configured: nothing is generated (agent-written explanations still show)")
 		}
-		fmt.Fprintf(stdout, "today: %d calls (cap %s), %d tokens (cap %s), %d failed\n", today.Calls, capText(lim.DailyCalls), today.Tokens(), capText(lim.DailyTokens), today.Failures)
+		month, _ := svc.Month()
+		fmt.Fprintf(stdout, "today: %d calls, %d tokens, $%.4f, %d failed (cap %s)\n", today.Calls, today.Tokens(), today.CostUSD(), today.Failures, lim.Day.Text())
+		fmt.Fprintf(stdout, "this month: %d calls, %d tokens, $%.4f (cap %s)\n", month.Calls, month.Tokens(), month.CostUSD(), lim.Month.Text())
 		fmt.Fprintf(stdout, "stored: %d by agents, %d generated\n", agent, generated)
 		missing, err := countMissing(svc, st)
 		if err == nil {
@@ -160,7 +161,7 @@ func runExplain(sub string, svc *explain.Service, st *store.Store, limit int, dr
 	fmt.Fprintf(stdout, "generated %d, already current %d, failed %d", report.Generated, report.Fresh, report.Failed)
 	switch report.Stopped {
 	case "limit":
-		fmt.Fprint(stdout, ", stopped at the daily cap")
+		fmt.Fprintf(stdout, ", stopped: %s", report.LimitHit)
 	case "none":
 		fmt.Fprint(stdout, ", nothing left")
 	}
@@ -169,13 +170,6 @@ func runExplain(sub string, svc *explain.Service, st *store.Store, limit int, dr
 		fmt.Fprintf(stdout, "  %s\n", e)
 	}
 	return 0
-}
-
-func capText(n int) string {
-	if n <= 0 {
-		return "none"
-	}
-	return strconv.Itoa(n)
 }
 
 // countMissing counts the candidates without a current explanation.

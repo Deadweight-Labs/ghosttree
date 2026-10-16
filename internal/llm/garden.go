@@ -16,7 +16,12 @@ import (
 // Usage is the provider's own token count for one call, the only exact figure
 // there is. Complete returns text alone, so spend that goes through it cannot
 // be metered.
-type Usage struct{ InputTokens, OutputTokens int }
+//
+// InputTokens counts only what the provider did not serve from its prompt
+// cache. Cache reads and writes are reported separately and billed at their own
+// prices, so a cost taken from InputTokens alone is too low behind a caching
+// proxy.
+type Usage struct{ InputTokens, OutputTokens, CacheReadTokens, CacheWriteTokens int }
 
 // UsageClient is a Client that also reports what a call consumed.
 type UsageClient interface {
@@ -35,18 +40,18 @@ func (c *httpClient) CompleteWithUsage(ctx context.Context, system string, msgs 
 // from the distiller's provider: the gardener is paid from the API credits of
 // one console organisation, and an OpenAI key left over from the distiller
 // must never be picked up for it by accident.
+//
+// Prices are the embedded Config's InputUSDPerMTok and friends, read from the
+// "garden" entry. Cache prices are optional: left out they are derived from the
+// input price (reads a tenth, writes 1.25 times).
 type GardenConfig struct {
 	Config
-	InputUSDPerMTok  float64
-	OutputUSDPerMTok float64
 }
 
 // DefaultGardenModel and its prices (USD per million tokens, synchronous).
 const (
 	DefaultGardenModel   = "claude-sonnet-5-5"
 	defaultGardenBaseURL = "https://api.anthropic.com"
-	defaultGardenInUSD   = 2.0
-	defaultGardenOutUSD  = 10.0
 )
 
 // ErrGardenDisabled means no key was configured. It is the normal state, not
@@ -110,12 +115,14 @@ func checkBaseURL(raw string) error {
 
 type gardenFile struct {
 	Garden *struct {
-		BaseURL          string  `json:"base_url"`
-		Model            string  `json:"model"`
-		APIKeyFile       string  `json:"api_key_file"`
-		Credential       string  `json:"credential"`
-		InputUSDPerMTok  float64 `json:"input_usd_per_mtok"`
-		OutputUSDPerMTok float64 `json:"output_usd_per_mtok"`
+		BaseURL              string  `json:"base_url"`
+		Model                string  `json:"model"`
+		APIKeyFile           string  `json:"api_key_file"`
+		Credential           string  `json:"credential"`
+		InputUSDPerMTok      float64 `json:"input_usd_per_mtok"`
+		OutputUSDPerMTok     float64 `json:"output_usd_per_mtok"`
+		CacheReadUSDPerMTok  float64 `json:"cache_read_usd_per_mtok"`
+		CacheWriteUSDPerMTok float64 `json:"cache_write_usd_per_mtok"`
 	} `json:"garden"`
 }
 
@@ -147,6 +154,7 @@ func LoadGardenConfig() (GardenConfig, error) {
 		}
 		out.APIKeyFile, out.Credential = g.APIKeyFile, g.Credential
 		out.InputUSDPerMTok, out.OutputUSDPerMTok = g.InputUSDPerMTok, g.OutputUSDPerMTok
+		out.CacheReadUSDPerMTok, out.CacheWriteUSDPerMTok = g.CacheReadUSDPerMTok, g.CacheWriteUSDPerMTok
 	}
 	if m := os.Getenv("GHOSTTREE_GARDEN_MODEL"); m != "" {
 		out.Model = m
@@ -154,8 +162,10 @@ func LoadGardenConfig() (GardenConfig, error) {
 	if err := checkBaseURL(out.BaseURL); err != nil {
 		return out, err
 	}
-	if out.InputUSDPerMTok == 0 && out.OutputUSDPerMTok == 0 && out.Model == DefaultGardenModel {
-		out.InputUSDPerMTok, out.OutputUSDPerMTok = defaultGardenInUSD, defaultGardenOutUSD
+	if out.InputUSDPerMTok == 0 && out.OutputUSDPerMTok == 0 {
+		if p, ok := DefaultPrice(out.Model); ok {
+			out.InputUSDPerMTok, out.OutputUSDPerMTok = p.InUSD, p.OutUSD
+		}
 	}
 	if key := strings.TrimSpace(os.Getenv("GHOSTTREE_GARDEN_KEY")); key != "" {
 		out.APIKey = key

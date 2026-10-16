@@ -20,6 +20,21 @@ type Config struct {
 	// systemd unit receives a secret without it living in the state directory.
 	Credential string `json:"credential"`
 	Model      string `json:"model"`
+	// Prices (USD per million tokens) for a model without a built-in list
+	// price; zero fields fall back to DefaultPrice and the cache ratios.
+	InputUSDPerMTok      float64 `json:"input_usd_per_mtok"`
+	OutputUSDPerMTok     float64 `json:"output_usd_per_mtok"`
+	CacheReadUSDPerMTok  float64 `json:"cache_read_usd_per_mtok"`
+	CacheWriteUSDPerMTok float64 `json:"cache_write_usd_per_mtok"`
+}
+
+// Price is what the configured model costs; false when it is not known, in
+// which case dollar figures cannot be computed.
+func (c Config) Price() (Price, bool) {
+	if c.InputUSDPerMTok > 0 && c.OutputUSDPerMTok > 0 {
+		return Price{InUSD: c.InputUSDPerMTok, OutUSD: c.OutputUSDPerMTok, CacheReadUSD: c.CacheReadUSDPerMTok, CacheWriteUSD: c.CacheWriteUSDPerMTok}, true
+	}
+	return DefaultPrice(c.Model)
 }
 
 type Message struct{ Role, Content string }

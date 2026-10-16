@@ -22,14 +22,17 @@ func (c *httpClient) completeAnthropicUsage(ctx context.Context, system string, 
 			Text string `json:"text"`
 		} `json:"content"`
 		Usage struct {
-			InputTokens  int `json:"input_tokens"`
-			OutputTokens int `json:"output_tokens"`
+			InputTokens      int `json:"input_tokens"`
+			OutputTokens     int `json:"output_tokens"`
+			CacheReadTokens  int `json:"cache_read_input_tokens"`
+			CacheWriteTokens int `json:"cache_creation_input_tokens"`
 		} `json:"usage"`
 	}
 	if err := c.post(ctx, "/v1/messages", payload, &out); err != nil {
 		return "", Usage{}, err
 	}
-	usage := Usage{InputTokens: out.Usage.InputTokens, OutputTokens: out.Usage.OutputTokens}
+	usage := Usage{InputTokens: out.Usage.InputTokens, OutputTokens: out.Usage.OutputTokens,
+		CacheReadTokens: out.Usage.CacheReadTokens, CacheWriteTokens: out.Usage.CacheWriteTokens}
 	for _, block := range out.Content {
 		if block.Type == "text" {
 			return block.Text, usage, nil

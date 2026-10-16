@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/explain"
+	"github.com/Deadweight-Labs/ghosttree/internal/llmusage"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
@@ -173,17 +174,16 @@ func (a *app) originFor(l lang, pa *store.ProjectAccess, project, sessionHref st
 	return out
 }
 
-// explainAdminView is the administrator's view of what the explanations cost.
+// explainAdminView is the administrator's view of "Kurz erklärt".
 type explainAdminView struct {
 	State     string
 	ModelLine string
-	Today     string
-	Tokens    string
-	Failures  string
-	Limited   bool
-	Counts    string
-	Days      []explainDayRow
-	CapsLabel string
+	// Usage is one sentence on what the job used today and this month.
+	Usage string
+	// Limit names the cap that is used up, empty while there is room.
+	Limit  string
+	Counts string
+	Days   []explainDayRow
 }
 
 type explainDayRow struct{ Day, Calls, Tokens string }
@@ -203,26 +203,15 @@ func (a *app) explainAdmin(l lang) *explainAdminView {
 		v.State = l.msg("explain.admin.on")
 		v.ModelLine = l.msg("explain.admin.model_line", a.explain.Model(), language)
 	}
-	lim := a.explain.Limits()
-	u, err := a.explain.Today()
-	if err == nil {
-		v.Today = l.msg("explain.admin.calls_free", u.Calls)
-		if lim.DailyCalls > 0 {
-			v.Today = l.msg("explain.admin.calls", u.Calls, lim.DailyCalls)
-		}
-		v.Tokens = l.msg("explain.admin.tokens_free", u.Tokens())
-		if lim.DailyTokens > 0 {
-			v.Tokens = l.msg("explain.admin.tokens", u.Tokens(), lim.DailyTokens)
-		}
-		if u.Failures > 0 {
-			v.Failures = l.msg("explain.admin.failures", u.Failures)
-		}
-		v.Limited = (lim.DailyCalls > 0 && u.Calls >= lim.DailyCalls) || (lim.DailyTokens > 0 && u.Tokens() >= lim.DailyTokens)
+	day, errD := a.explain.Today()
+	month, errM := a.explain.Month()
+	if errD == nil && errM == nil {
+		v.Usage, v.Limit = usageSentence(l, llmusage.JobExplain, day, month, a.explain.Limits())
 	}
 	if agent, generated, err := a.store.ExplanationCounts(); err == nil {
 		v.Counts = l.msg("explain.admin.counts", agent, generated)
 	}
-	if days, err := a.store.ExplainUsageRecent(7); err == nil {
+	if days, err := a.store.LLMUsageRecent(llmusage.JobExplain, 7); err == nil {
 		for _, d := range days {
 			v.Days = append(v.Days, explainDayRow{Day: d.Day, Calls: strconv.Itoa(d.Calls), Tokens: strconv.Itoa(d.Tokens())})
 		}

@@ -11,26 +11,19 @@ import (
 
 	"github.com/Deadweight-Labs/ghosttree/internal/humantask"
 	"github.com/Deadweight-Labs/ghosttree/internal/llm"
+	"github.com/Deadweight-Labs/ghosttree/internal/llmusage"
 )
 
-// Usage is what one day cost. Tokens are the provider's own figure when the
+// Usage is what a period cost. Tokens are the provider's own figure when the
 // wire format reports one and an estimate (four characters a token) otherwise.
-type Usage struct {
-	Day          string `json:"day"`
-	Calls        int    `json:"calls"`
-	Failures     int    `json:"failures"`
-	InputTokens  int    `json:"input_tokens"`
-	OutputTokens int    `json:"output_tokens"`
-}
+type Usage = llmusage.Usage
 
-// Tokens is the total of one day.
-func (u Usage) Tokens() int { return u.InputTokens + u.OutputTokens }
+// Limits cap the day and the month, by dollars, calls and tokens. Zero means
+// no cap on that figure.
+type Limits = llmusage.Limits
 
-// Limits cap one day. Zero means no cap on that figure.
-type Limits struct {
-	DailyCalls  int
-	DailyTokens int
-}
+// Limit is one period's cap.
+type Limit = llmusage.Limit
 
 // Candidate is an object that may still need an explanation.
 type Candidate struct {
@@ -43,8 +36,9 @@ type Store interface {
 	Explanation(kind string, id int64) (Explanation, bool, error)
 	SaveExplanation(e Explanation) error
 	ExplainSource(kind string, id int64) (Source, error)
-	ExplainUsageOn(day string) (Usage, error)
-	AddExplainUsage(day string, calls, failures, inputTokens, outputTokens int) error
+	LLMUsageOn(job, day string) (Usage, error)
+	LLMUsageMonth(job, month string) (Usage, error)
+	AddLLMUsage(job, day string, u Usage) error
 	// ExplainCandidates lists objects in the order they should be explained:
 	// the review queue first. It does not look at explanations.
 	ExplainCandidates(scan int) ([]Candidate, error)
@@ -59,12 +53,18 @@ type Config struct {
 	// Metered says the client reports exact token counts.
 	Metered bool
 	Limits  Limits
-	Timeout time.Duration
-	Now     func() time.Time
+	// Price turns tokens into dollars; PriceKnown is false for a model whose
+	// price is not known, in which case cost stays 0 and a dollar limit cannot
+	// stop anything.
+	Price      llm.Price
+	PriceKnown bool
+	Timeout    time.Duration
+	Now        func() time.Time
 }
 
-// ErrLimit means today's cap is used up.
-var ErrLimit = errors.New("daily explanation limit reached")
+// ErrLimit means a daily or monthly cap is used up. The error that wraps it
+// says which one.
+var ErrLimit = errors.New("explanation limit reached")
 
 // errChanged: the object was edited while the model worked; the result would
 // describe the old text.
@@ -76,6 +76,12 @@ type Service struct {
 	st     Store
 	client llm.Client
 	cfg    Config
+
+	// capMu serialises the cap check with the reservation of a call, and
+	// reserved counts calls that passed the check but are not yet recorded, so
+	// two calls started together cannot both pass a cap of one.
+	capMu    sync.Mutex
+	reserved int
 
 	mu       sync.Mutex
 	inflight map[string]bool
@@ -104,7 +110,7 @@ func (s *Service) Enabled() bool { return s != nil && s.client != nil }
 // Language is the language explanations are generated in.
 func (s *Service) Language() string { return s.cfg.Language }
 
-// Limits are the daily caps in force.
+// Limits are the caps in force.
 func (s *Service) Limits() Limits { return s.cfg.Limits }
 
 // Model is the model name recorded on generated explanations.
@@ -115,16 +121,50 @@ func (s *Service) Wait() { s.wg.Wait() }
 
 func (s *Service) day() string { return s.cfg.Now().UTC().Format("2006-01-02") }
 
-// Today is the usage of the current day.
-func (s *Service) Today() (Usage, error) { return s.st.ExplainUsageOn(s.day()) }
+func (s *Service) month() string { return s.cfg.Now().UTC().Format("2006-01") }
 
-func (s *Service) capReached() (bool, error) {
-	u, err := s.Today()
+// Today is the usage of the current day.
+func (s *Service) Today() (Usage, error) { return s.st.LLMUsageOn(llmusage.JobExplain, s.day()) }
+
+// Month is the usage of the current month.
+func (s *Service) Month() (Usage, error) { return s.st.LLMUsageMonth(llmusage.JobExplain, s.month()) }
+
+// capReached says which cap is used up, or nil. Calls that were reserved but
+// not yet recorded count as made.
+func (s *Service) capReached() (*llmusage.Reached, error) {
+	day, err := s.Today()
 	if err != nil {
-		return false, err
+		return nil, err
 	}
-	l := s.cfg.Limits
-	return (l.DailyCalls > 0 && u.Calls >= l.DailyCalls) || (l.DailyTokens > 0 && u.Tokens() >= l.DailyTokens), nil
+	month, err := s.Month()
+	if err != nil {
+		return nil, err
+	}
+	day.Calls += s.reserved
+	month.Calls += s.reserved
+	return s.cfg.Limits.Check(day, month), nil
+}
+
+// reserve passes the cap check and holds a place for one call. The caller
+// releases it once the call's usage is stored.
+func (s *Service) reserve() error {
+	s.capMu.Lock()
+	defer s.capMu.Unlock()
+	full, err := s.capReached()
+	if err != nil {
+		return err
+	}
+	if full != nil {
+		return fmt.Errorf("%w: %s", ErrLimit, full.Error())
+	}
+	s.reserved++
+	return nil
+}
+
+func (s *Service) release() {
+	s.capMu.Lock()
+	s.reserved--
+	s.capMu.Unlock()
 }
 
 // View is what a page shows for one object.
@@ -225,7 +265,10 @@ func (s *Service) start(kind string, id int64, src Source) bool {
 		return false
 	}
 	s.mu.Unlock()
-	if full, err := s.capReached(); err != nil || full {
+	s.capMu.Lock()
+	full, err := s.capReached()
+	s.capMu.Unlock()
+	if err != nil || full != nil {
 		return false
 	}
 	s.mu.Lock()
@@ -276,11 +319,15 @@ func (s *Service) Generate(ctx context.Context, kind string, id int64) error {
 	if rule := humantask.CheckFields(fields...); rule != nil {
 		return fmt.Errorf("not sent to the model: %s", rule.Message)
 	}
-	if full, err := s.capReached(); err != nil {
+	if err := s.reserve(); err != nil {
 		return err
-	} else if full {
-		return ErrLimit
 	}
+	released := false
+	defer func() {
+		if !released {
+			s.release()
+		}
+	}()
 	system, user := Prompt(s.cfg.Language, src)
 	out, usage, callErr := s.complete(ctx, system, user)
 	failures := 0
@@ -291,9 +338,16 @@ func (s *Service) Generate(ctx context.Context, kind string, id int64) error {
 			usage.InputTokens = (len(system) + len(user)) / 4
 		}
 	}
-	if err := s.st.AddExplainUsage(s.day(), 1, failures, usage.InputTokens, usage.OutputTokens); err != nil && callErr == nil {
+	rec := Usage{Calls: 1, Failures: failures, InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens,
+		CacheReadTokens: usage.CacheReadTokens, CacheWriteTokens: usage.CacheWriteTokens}
+	if s.cfg.PriceKnown {
+		rec.CostMicroUSD = llmusage.MicroUSD(s.cfg.Price.Cost(usage))
+	}
+	if err := s.st.AddLLMUsage(llmusage.JobExplain, s.day(), rec); err != nil && callErr == nil {
 		callErr = err
 	}
+	s.release()
+	released = true
 	if callErr != nil {
 		return callErr
 	}
@@ -331,14 +385,17 @@ type Report struct {
 	Generated int
 	Fresh     int
 	Failed    int
-	// Stopped says why the run ended before the limit: "limit" (daily cap),
-	// "none" (nothing left) or "" (it ran to the requested number).
+	// Stopped says why the run ended before the limit: "limit" (a daily or
+	// monthly cap), "none" (nothing left) or "" (it ran to the requested number).
 	Stopped string
-	Errors  []string
+	// LimitHit names the cap that stopped the run, for example "daily calls
+	// limit reached: 200 of 200".
+	LimitHit string
+	Errors   []string
 }
 
 // Backfill explains up to limit objects that lack a current explanation, the
-// review queue first. It stops cleanly at the daily cap.
+// review queue first. It stops cleanly at a daily or monthly cap.
 func (s *Service) Backfill(ctx context.Context, limit int) (Report, error) {
 	var r Report
 	if !s.Enabled() {
@@ -373,6 +430,7 @@ func (s *Service) Backfill(ctx context.Context, limit int) (Report, error) {
 			r.Generated++
 		case errors.Is(err, ErrLimit):
 			r.Stopped = "limit"
+			r.LimitHit = strings.TrimPrefix(err.Error(), ErrLimit.Error()+": ")
 			return r, nil
 		default:
 			r.Failed++

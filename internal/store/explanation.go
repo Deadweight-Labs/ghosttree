@@ -107,55 +107,6 @@ func (s *Store) SaveAgentExplanation(kind string, id int64, text string) error {
 	})
 }
 
-// ExplainUsageOn returns the usage of one UTC day (zero when nothing ran).
-func (s *Store) ExplainUsageOn(day string) (explain.Usage, error) {
-	if s.reader != nil {
-		return s.reader.ExplainUsageOn(day)
-	}
-	u := explain.Usage{Day: day}
-	err := s.db.QueryRow(`SELECT calls, failures, input_tokens, output_tokens FROM explain_usage WHERE day = ?`, day).
-		Scan(&u.Calls, &u.Failures, &u.InputTokens, &u.OutputTokens)
-	if errors.Is(err, sql.ErrNoRows) {
-		return u, nil
-	}
-	return u, err
-}
-
-// AddExplainUsage adds to the usage of one day.
-func (s *Store) AddExplainUsage(day string, calls, failures, inputTokens, outputTokens int) error {
-	if s.writer != nil {
-		return queueWrite(s, []any{day, calls, failures, inputTokens, outputTokens}, func(d *Store, p []any) error {
-			return d.AddExplainUsage(p[0].(string), p[1].(int), p[2].(int), p[3].(int), p[4].(int))
-		})
-	}
-	_, err := s.db.Exec(`INSERT INTO explain_usage(day, calls, failures, input_tokens, output_tokens) VALUES(?,?,?,?,?)
-		ON CONFLICT(day) DO UPDATE SET calls=calls+excluded.calls, failures=failures+excluded.failures,
-		  input_tokens=input_tokens+excluded.input_tokens, output_tokens=output_tokens+excluded.output_tokens`,
-		day, calls, failures, inputTokens, outputTokens)
-	return err
-}
-
-// ExplainUsageRecent returns the last days of usage, newest first.
-func (s *Store) ExplainUsageRecent(days int) ([]explain.Usage, error) {
-	if s.reader != nil {
-		return s.reader.ExplainUsageRecent(days)
-	}
-	rows, err := s.db.Query(`SELECT day, calls, failures, input_tokens, output_tokens FROM explain_usage ORDER BY day DESC LIMIT ?`, days)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []explain.Usage
-	for rows.Next() {
-		var u explain.Usage
-		if err := rows.Scan(&u.Day, &u.Calls, &u.Failures, &u.InputTokens, &u.OutputTokens); err != nil {
-			return nil, err
-		}
-		out = append(out, u)
-	}
-	return out, rows.Err()
-}
-
 // ExplanationCounts says how many explanations exist by source.
 func (s *Store) ExplanationCounts() (agent, generated int, err error) {
 	if s.reader != nil {

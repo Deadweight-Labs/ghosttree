@@ -11,6 +11,7 @@ import (
 
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
 	"github.com/Deadweight-Labs/ghosttree/internal/explain"
+	"github.com/Deadweight-Labs/ghosttree/internal/llmusage"
 	"github.com/Deadweight-Labs/ghosttree/internal/proxytrust"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/server"
@@ -38,6 +39,7 @@ type app struct {
 	oidcName      string           // display name of the identity provider; empty = unnamed
 	language      lang             // server language (GHOSTTREE_LANGUAGE); empty = en
 	explain       *explain.Service // "Kurz erklärt"; nil = off
+	gardenLimits  llmusage.Limits  // caps of the gardener, shown to administrators
 }
 type pageData struct {
 	Title, NavSection, Person, CSRFToken, Error, Code, BackURL string

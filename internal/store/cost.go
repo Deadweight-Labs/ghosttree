@@ -56,7 +56,7 @@ func (s *Store) DistillCost(groupBy, since string) ([]CostRow, error) {
 		selectGroup, groupClause = group, " GROUP BY "+group
 	}
 	rows, err := s.db.Query(`SELECT `+selectGroup+`,
-			COUNT(DISTINCT b.id), COUNT(*), SUM(i.prompt_tokens), SUM(i.completion_tokens)
+			COUNT(DISTINCT b.id), COUNT(*), COALESCE(SUM(i.prompt_tokens), 0), COALESCE(SUM(i.completion_tokens), 0)
 		FROM distill_batch_items i
 		JOIN distill_batches b ON b.id = i.batch_id
 		JOIN sessions se ON se.id = i.session_id
