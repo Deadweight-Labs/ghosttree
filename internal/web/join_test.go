@@ -605,7 +605,7 @@ func TestOrgPageGuestLinksNeedEnforcementAndShowAbsoluteURL(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || !regexp.MustCompile(`data-select>http://127\.0\.0\.1:[0-9]+/join/[0-9a-f]{64}<`).MatchString(page) {
 		t.Fatalf("link: %d %s", resp.StatusCode, page)
 	}
-	if !strings.Contains(page, `<span class="ov-name">`+joinProject+`</span><span class="ov-meta ad-parts"><span>Pending</span><span>guest</span>`) {
+	if !strings.Contains(page, `<span class="ov-name">`+joinProject+`</span><span class="ov-meta adm-parts"><span>Pending</span><span>guest</span>`) {
 		t.Fatalf("the invitation list does not show project and role: %s", page)
 	}
 }
