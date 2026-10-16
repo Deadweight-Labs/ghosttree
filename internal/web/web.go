@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
+	"github.com/Deadweight-Labs/ghosttree/internal/explain"
 	"github.com/Deadweight-Labs/ghosttree/internal/proxytrust"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/server"
@@ -33,9 +34,10 @@ type app struct {
 	joinLimits    *joinLimiter
 	inviteLinks   *inviteLinks
 	distSums      distCache
-	distDir       string // ctx archives + checksums.txt served at /dist/; empty = off
-	oidcName      string // display name of the identity provider; empty = unnamed
-	language      lang   // server language (GHOSTTREE_LANGUAGE); empty = en
+	distDir       string           // ctx archives + checksums.txt served at /dist/; empty = off
+	oidcName      string           // display name of the identity provider; empty = unnamed
+	language      lang             // server language (GHOSTTREE_LANGUAGE); empty = en
+	explain       *explain.Service // "Kurz erklärt"; nil = off
 }
 type pageData struct {
 	Title, NavSection, Person, CSRFToken, Error, Code, BackURL string

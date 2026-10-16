@@ -251,8 +251,9 @@ type coordDirectiveView struct {
 type coordRequestView struct {
 	Title, Waiting string
 	// State names how a closed request ended, e.g. "Answered · robin".
-	State string
-	Items []coordAttentionView
+	State   string
+	Items   []coordAttentionView
+	Explain *explainView
 }
 
 type coordReplyView struct {
@@ -353,6 +354,7 @@ type coordAttentionView struct {
 	Private                  bool
 	CoordinationOnlyApproval bool
 	Actions                  []coordAttentionActionView
+	Explain                  *explainView
 }
 
 func buildCoordSidebar(l lang, summaries []store.CoordRoomSummary, principalID, activeKey string, labels map[string]string) coordSidebarView {

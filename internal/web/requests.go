@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/explain"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -131,6 +132,7 @@ type requestResult struct {
 }
 
 type requestView struct {
+	Explain                        *explainView
 	ID                             int64
 	Human, Title, Project          string
 	Type, TypeLabel, Priority      string
@@ -459,6 +461,7 @@ func (a *app) requestPage(w http.ResponseWriter, r *http.Request) {
 		v.Project = path.Base(project)
 		v.Back += "?project=" + url.QueryEscape(project)
 	}
+	v.Explain = a.explainFor(l, explain.KindRequest, req.ID)
 	v.CanEdit = pa.Check(project, store.ResRequest, store.ActEdit, obj) == nil
 	v.CanWork = pa.Check(project, store.ResRequest, store.ActWork, obj) == nil
 	v.EditOpen = v.CanEdit && r.URL.Query().Get("edit") == "1"

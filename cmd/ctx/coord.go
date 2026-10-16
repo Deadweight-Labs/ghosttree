@@ -26,12 +26,13 @@ const coordUsage = `usage: ctx coord <command>
   status [--clear] [text]         say in one sentence (200 characters) what you
                                   work on, e.g. "PR #77 feat/mac-sync"; shown
                                   to the room as self-reported. No secrets.
-  send <text> [--mention <agent>] [--intent <kind>] [--machine] [repo]
+  send <text> [--mention <agent>] [--intent <kind>] [--explanation <text>] [--machine] [repo]
                                   say something to the other agents; a mention
                                   wakes that agent if its harness can. --intent
                                   (question, approval, blocker, handoff, ack)
                                   asks the mentioned agent for an answer and
-                                  needs --mention
+                                  needs --mention. --explanation gives the
+                                  people a plain-language note for a question
   inbox [--machine] [--all] [repo] read what others said since your cursor
                                   @agents (or @agenten) in the text reaches every
                                   agent seen working in the last 15 minutes
@@ -140,7 +141,7 @@ func cmdCoord(args []string, stdout io.Writer) int {
 	clear := false
 	var positional []string
 	var mentions []string
-	var intentFlag, agentName string
+	var intentFlag, agentName, explanation string
 	for i := 0; i < len(rest); i++ {
 		a := rest[i]
 		switch a {
@@ -156,7 +157,7 @@ func cmdCoord(args []string, stdout io.Writer) int {
 			} else {
 				mentions = append(mentions, v)
 			}
-		case "--intent", "--agent-name":
+		case "--intent", "--agent-name", "--explanation":
 			if i+1 >= len(rest) || strings.HasPrefix(rest[i+1], "-") {
 				fmt.Fprintf(stdout, "%s needs a value\n", a)
 				return 2
@@ -164,6 +165,8 @@ func cmdCoord(args []string, stdout io.Writer) int {
 			i++
 			if a == "--intent" {
 				intentFlag = rest[i]
+			} else if a == "--explanation" {
+				explanation = rest[i]
 			} else {
 				agentName = rest[i]
 			}
@@ -199,6 +202,10 @@ func cmdCoord(args []string, stdout io.Writer) int {
 	}
 	if intent != "" && sub != "send" {
 		fmt.Fprintln(stdout, "--intent only applies to send")
+		return 2
+	}
+	if explanation != "" && sub != "send" {
+		fmt.Fprintln(stdout, "--explanation only applies to send")
 		return 2
 	}
 
@@ -277,7 +284,7 @@ func cmdCoord(args []string, stdout io.Writer) int {
 		id, err := c.SendCoordMessage(store.CoordMessage{
 			DestinationKind: store.DestinationRoom, DestinationID: room,
 			SenderExternalID: me, ClientID: newCoordClientID(), Body: body,
-			Mentions: mentions, Intent: intent,
+			Mentions: mentions, Intent: intent, Explanation: explanation,
 		})
 		if err != nil {
 			fmt.Fprintf(stdout, "send: %s\n", coordAPIMessage(err))

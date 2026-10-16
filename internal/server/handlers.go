@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
+	"github.com/Deadweight-Labs/ghosttree/internal/explain"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -266,6 +267,11 @@ func (a *api) createKnowledge(w http.ResponseWriter, r *http.Request) {
 	if len(req.Supersedes) > 0 && !a.checkSupersedable(w, r, k, req.Supersedes, req.SupersedeReason) {
 		return
 	}
+	explanation, ok := checkExplanation(w, k.Explanation)
+	if !ok {
+		return
+	}
+	k.Explanation = ""
 	var id int64
 	var err error
 	if len(req.Supersedes) > 0 {
@@ -280,6 +286,7 @@ func (a *api) createKnowledge(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
+	a.saveExplanation(explain.KindKnowledge, id, explanation)
 	saved, err := a.st.KnowledgeByID(id)
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)

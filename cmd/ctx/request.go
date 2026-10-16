@@ -19,7 +19,7 @@ const requestUsage = `usage: ctx request <command>
   list [--json]                    list open requests
   search <query> [--json]          search requests for the current project
   show <id> [--json]               show one request
-  create --type T --title T [--description D] [--ac C...] [--project P] [--json]
+  create --type T --title T [--description D] [--ac C...] [--explanation E] [--project P] [--json]
   move <id> --project P [--reason R] [--json]
   start <id> --session N [--role primary|related] [--json]
   pause|complete-work|abandon <work-id> --summary S [--json]
@@ -90,6 +90,7 @@ func cmdRequest(args []string, stdout io.Writer) int {
 		var criteria repeatedString
 		fs.Var(&criteria, "ac", "acceptance criterion")
 		project := fs.String("project", "", "project the request belongs to (remote or unique short name); default: the current one")
+		explanation := fs.String("explanation", "", "short plain-language note for the people who read the ledger")
 		if fs.Parse(rest) != nil || *typ == "" || *title == "" {
 			return requestCLIUsage(stdout)
 		}
@@ -99,7 +100,7 @@ func cmdRequest(args []string, stdout io.Writer) int {
 		if err != nil {
 			return writeRequestCLIError(stdout, jsonMode, 1, err)
 		}
-		detail, err := c.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: *typ, Title: *title, Description: *description, Priority: *priority, Scope: scope.Axes{Project: target}, SessionRef: currentSessionRef()}, Criteria: criteria, IdempotencyKey: *key})
+		detail, err := c.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: *typ, Title: *title, Description: *description, Priority: *priority, Scope: scope.Axes{Project: target}, SessionRef: currentSessionRef()}, Criteria: criteria, IdempotencyKey: *key, Explanation: *explanation})
 		return writeRequestCLIResult(stdout, jsonMode, detail, nil, err)
 	case "move":
 		id, flags, ok := requestIDAndFlags(rest)

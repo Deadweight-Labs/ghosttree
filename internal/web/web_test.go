@@ -14,6 +14,10 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
+// testWebOptions are applied by testWeb; tests that need options set them and
+// restore the default with t.Cleanup.
+var testWebOptions []Option
+
 func testWeb(t *testing.T) (*httptest.Server, *store.Store, string) {
 	t.Helper()
 	st, err := store.Open(t.TempDir() + "/web.db")
@@ -25,7 +29,7 @@ func testWeb(t *testing.T) (*httptest.Server, *store.Store, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(New(st))
+	srv := httptest.NewServer(New(st, testWebOptions...))
 	t.Cleanup(srv.Close)
 	return srv, st, token
 }

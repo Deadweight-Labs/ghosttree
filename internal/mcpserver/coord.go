@@ -30,10 +30,11 @@ type CoordSendInput struct {
 	ReplyTo int64 `json:"reply_to,omitempty" jsonschema:"id of the message you are answering"`
 	// Expires ist für Meldungen mit Verfallsdatum. Ohne sie steht 'der Port
 	// ist 20 Sekunden weg' morgen noch als gegenwärtige Lage da.
-	Expires string `json:"expires_at,omitempty" jsonschema:"RFC3339 time after which this stops being current, for time-critical notices like 'the API is down for 20 seconds'. It stays readable as history either way"`
-	Mention string `json:"mention,omitempty" jsonschema:"session id of one peer who should get this promptly rather than bundled with ordinary room traffic"`
-	Intent  string `json:"intent,omitempty" jsonschema:"question, approval, blocker, handoff or ack. The first four ask the mentioned peer for an answer or a decision: they open an attention item for them, take part in wait-cycle detection, and need mention. Omit it for plain information"`
-	As      string `json:"as,omitempty" jsonschema:"post as a named subagent of this session, for example \"tests\" or \"frontend\". Use it when you are a subagent so peers can address you directly. It is a self-declaration: ghosttree cannot verify it, and the peer list says so"`
+	Expires     string `json:"expires_at,omitempty" jsonschema:"RFC3339 time after which this stops being current, for time-critical notices like 'the API is down for 20 seconds'. It stays readable as history either way"`
+	Mention     string `json:"mention,omitempty" jsonschema:"session id of one peer who should get this promptly rather than bundled with ordinary room traffic"`
+	Intent      string `json:"intent,omitempty" jsonschema:"question, approval, blocker, handoff or ack. The first four ask the mentioned peer for an answer or a decision: they open an attention item for them, take part in wait-cycle detection, and need mention. Omit it for plain information"`
+	Explanation string `json:"explanation,omitempty" jsonschema:"only with question, approval, blocker or handoff, which people have to answer: optional \"Kurz erklärt\" for the humans who will read this: two to four plain sentences, in the language the people of the project use. Say what it is about in everyday words (the mechanism, not the jargon), why it matters (who it affects, when), what has to be done or decided, and your recommendation. No markdown, no links, never a secret. You know the context the server does not; without it the server generates one later from the text alone"`
+	As          string `json:"as,omitempty" jsonschema:"post as a named subagent of this session, for example \"tests\" or \"frontend\". Use it when you are a subagent so peers can address you directly. It is a self-declaration: ghosttree cannot verify it, and the peer list says so"`
 }
 
 type CoordInboxInput struct {
@@ -206,7 +207,7 @@ func (s *Server) handleCoordSend(ctx context.Context, _ *mcp.CallToolRequest, in
 	msg := store.CoordMessage{
 		DestinationKind: store.DestinationRoom, DestinationID: key,
 		SenderExternalID: sender, ClientID: clientID,
-		Body: in.Body, ReplyTo: in.ReplyTo, ExpiresAt: in.Expires, Intent: intent,
+		Body: in.Body, ReplyTo: in.ReplyTo, ExpiresAt: in.Expires, Intent: intent, Explanation: in.Explanation,
 	}
 	if in.As != "" {
 		msg.ParentExternalID = s.coordRef()

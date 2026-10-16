@@ -66,6 +66,8 @@ type orgsView struct {
 	DefaultProject string
 	GuestLinks     bool // Gast-Links gibt es nur bei durchgesetzter Sichtbarkeit
 	Notice         string
+	// Explain is the administrator's block on "Kurz erklärt"; nil for anyone else.
+	Explain *explainAdminView
 }
 
 // orgsPage zeigt Mitglieder, Einladungen und Projekte einer Organisation.
@@ -86,6 +88,7 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 		return
 	}
 	v.Orgs = orgs
+	v.Explain = a.explainAdminFor(r)
 	for _, o := range orgs {
 		if o.Slug == ref || (v.Selected.ID == 0 && o.Default && ref == "") {
 			v.Selected = o

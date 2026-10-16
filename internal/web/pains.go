@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/explain"
 	"github.com/Deadweight-Labs/ghosttree/internal/pain"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -59,6 +60,7 @@ type painView struct {
 	EvidenceKinds                     []filterOption
 	Token, Back                       string
 	Result                            *requestResult
+	Explain                           *explainView
 }
 
 func painURL(id int64) string { return "/ui/pains/" + strconv.FormatInt(id, 10) }
@@ -116,6 +118,7 @@ func (a *app) painPage(w http.ResponseWriter, r *http.Request) {
 		State: p.State, StateLabel: label(l, painStateKeys, p.State), Remaining: p.Remaining, Age: shortAge(l, overviewNow().UTC(), parseTime(p.CreatedAt)),
 		Blocks: bodyBlocks(p.Body, 0), Token: csrfOf(r), Back: "/ui/pains?project=" + url.QueryEscape(p.Project)}
 	v.CanWork = pa.CheckPain(p, store.ActWork) == nil
+	v.Explain = a.explainFor(l, explain.KindPain, p.ID)
 	for _, s := range pain.States {
 		v.States = append(v.States, filterOption{Value: s, Label: label(l, painStateKeys, s), Selected: s == p.State})
 	}

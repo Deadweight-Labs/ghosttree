@@ -15,7 +15,7 @@ import (
 )
 
 const knowledgeUsage = `usage: ctx knowledge move <id> --project P | --machine M | --global
-       ctx knowledge add --type T --title X --body B --scope S [--supersedes ID[,ID...] --reason R]
+       ctx knowledge add --type T --title X --body B --scope S [--explanation E] [--supersedes ID[,ID...] --reason R]
        ctx knowledge supersede <id> --old ID[,ID...] --reason R
        ctx knowledge retire <id> --reason R
        ctx knowledge show <id>
@@ -36,6 +36,8 @@ add     Writes a pitfall, decision, note or plan. Search first. When a known
 
   --scope S     project, branch, machine or global (required)
   --project P   with --scope project: another project than the current one
+  --explanation E  two to four plain sentences for the people who review it:
+                what it is about, why it matters, what you recommend
 
 supersede  Marks the existing entry <id> as the replacement of older entries,
         when you notice only afterwards that it makes them obsolete.
@@ -112,6 +114,7 @@ func cmdKnowledgeAdd(args []string, stdout io.Writer) int {
 	project := fs.String("project", "", "with --scope project: another project")
 	supersedes := fs.String("supersedes", "", "comma-separated ids of older entries this one replaces")
 	reason := fs.String("reason", "", "with --supersedes: what changed")
+	explanation := fs.String("explanation", "", "short plain-language note for the people who review it")
 	if fs.Parse(args) != nil {
 		return 2
 	}
@@ -138,7 +141,7 @@ func cmdKnowledgeAdd(args []string, stdout io.Writer) int {
 		return 1
 	}
 	return addKnowledge(client.New(cfg), currentAxes(cfg.Machine),
-		store.Knowledge{Type: *typ, Title: *title, Body: *body, Harness: "cli"},
+		store.Knowledge{Type: *typ, Title: *title, Body: *body, Harness: "cli", Explanation: *explanation},
 		*scopeFlag, *project, ids, *reason, stdout)
 }
 

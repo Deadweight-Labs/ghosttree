@@ -37,6 +37,7 @@ type serveConfig struct {
 	Language       string
 	DistDir        string
 	TrustedProxies proxytrust.Set
+	Explain        ExplainConfig
 }
 
 const (
@@ -119,6 +120,14 @@ func parseServeConfig(args []string, output io.Writer) (serveConfig, error) {
 	fs.StringVar(&cfg.PublicURL, "public-url", os.Getenv(envPublicURL), "external base URL, e.g. https://ghosttree.example.com; an https URL makes every cookie Secure (env "+envPublicURL+")")
 	fs.StringVar(&cfg.DistDir, "dist-dir", os.Getenv(envDistDir), "directory with ctx_<version>_<os>_<arch>.tar.gz archives and checksums.txt; enables /install.sh and /dist/ (env "+envDistDir+")")
 	fs.StringVar(&cfg.Language, "language", os.Getenv(envLanguage), "language of the web interface: en (default) or de (env "+envLanguage+")")
+	explainMode := os.Getenv(envExplain)
+	if explainMode == "" {
+		explainMode = "auto"
+	}
+	fs.StringVar(&cfg.Explain.Mode, "explain", explainMode, "\"In short\" notes: auto (generate missing ones when a model is configured) or off (env "+envExplain+")")
+	fs.StringVar(&cfg.Explain.Model, "explain-model", os.Getenv(envExplainModel), "model for the notes, overriding the provider configuration (env "+envExplainModel+")")
+	fs.IntVar(&cfg.Explain.DailyCalls, "explain-daily-calls", envInt(envExplainDailyCalls, defaultExplainDailyCalls), "cap of model calls for the notes per day, 0 = none (env "+envExplainDailyCalls+")")
+	fs.IntVar(&cfg.Explain.DailyTokens, "explain-daily-tokens", envInt(envExplainDailyTokens, defaultExplainDailyTokens), "cap of tokens for the notes per day, 0 = none (env "+envExplainDailyTokens+")")
 	trusted := fs.String("trusted-proxies", os.Getenv(envTrustedProxies), "comma-separated CIDRs/IPs of reverse proxies whose X-Forwarded-Proto/Host are believed; loopback is always trusted, nothing else by default (env "+envTrustedProxies+")")
 	// Das Secret gibt es bewusst nur über die Umgebung: ein Flag stünde in der Prozessliste.
 	cfg.OIDC.ClientSecret = os.Getenv(envOIDCClientSecret)
@@ -137,6 +146,10 @@ func parseServeConfig(args []string, output io.Writer) (serveConfig, error) {
 		return serveConfig{}, fmt.Errorf("--language: %w", err)
 	}
 	cfg.Language = lang
+	cfg.Explain.Language = lang
+	if cfg.Explain.Mode != "auto" && cfg.Explain.Mode != "off" {
+		return serveConfig{}, fmt.Errorf("--explain must be auto or off, got %q", cfg.Explain.Mode)
+	}
 	if cfg.PublicURL != "" {
 		u, err := url.Parse(cfg.PublicURL)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil ||
@@ -337,6 +350,9 @@ func buildServerHandler(st *store.Store, cfg serveConfig, stderr io.Writer) http
 		webOptions = append(webOptions, web.WithOIDC(cfg.OIDC))
 	}
 	webOptions = append(webOptions, web.WithLanguage(cfg.Language))
+	explainCfg := cfg.Explain
+	explainCfg.Language = cfg.Language
+	webOptions = append(webOptions, web.WithExplainer(newExplainer(st, explainCfg, logger)))
 	root.Handle("/", web.New(st, webOptions...))
 	return root
 }

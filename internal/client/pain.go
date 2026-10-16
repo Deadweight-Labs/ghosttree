@@ -11,9 +11,15 @@ func painPath(id int64) string { return "/api/pains/" + strconv.FormatInt(id, 10
 
 // CreatePain records a problem without a solution.
 func (c *Client) CreatePain(project, title, body string, motivates []pain.Target, sessionID int64) (pain.Detail, error) {
+	return c.CreatePainExplained(project, title, body, "", motivates, sessionID)
+}
+
+// CreatePainExplained is CreatePain with the agent's "Kurz erklärt" text.
+func (c *Client) CreatePainExplained(project, title, body, explanation string, motivates []pain.Target, sessionID int64) (pain.Detail, error) {
 	var out pain.Detail
 	err := c.do("POST", "/api/pains", nil, map[string]any{
 		"project": project, "title": title, "body": body, "motivates": motivates, "session_id": sessionID,
+		"explanation": explanation,
 	}, &out)
 	return out, err
 }

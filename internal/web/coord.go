@@ -182,6 +182,8 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 	sidebar := buildCoordSidebar(l, summaries, humanMember(r), room, labels)
 	annotateCoordAttention(l, incomingAttention, attention, sidebar, attentionLabels)
 	annotateCoordAttention(l, outgoingAttention, attention, sidebar, attentionLabels)
+	a.explainAttention(l, incomingAttention, attention)
+	a.explainAttention(l, outgoingAttention, attention)
 	// Badge und Aufmerksamkeit zählen alle Räume; nur die Liste folgt dem Projekt.
 	sidebar = sidebar.inProject(selectedProject(a.shellFor(r, "coord")), room)
 	view := coordPageView{
@@ -302,6 +304,7 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 		detail.Standing[i].CanEnd = access.CanEndStanding(activeRoom.Key, detail.Standing[i].MessageID)
 	}
 	decorateCoordMessages(l, detail.Messages, presentations, current.ID, activeRoom.Key, detail.Room.Label, detail.Standing, append(append([]coordAttentionView{}, incomingAttention...), outgoingAttention...), roleRoom, time.Now())
+	a.explainMessages(l, detail.Messages)
 	applyRequestStates(l, detail.Messages, presentations, activeRoom.Key, attention, attentionLabels)
 	detail.ReplyTo, detail.ReplyTarget, err = coordReplyTarget(l, presentations, r.URL.Query().Get("reply_to"))
 	if err != nil {

@@ -50,6 +50,9 @@ type Knowledge struct {
 	// Closure is set only on the detail read of an entry that was superseded or
 	// retired.
 	Closure *KnowledgeClosure `json:"closure,omitempty"`
+	// Explanation is the agent's "Kurz erklärt" text, sent when an entry is
+	// written. The server stores it beside the entry; reads never fill it.
+	Explanation string `json:"explanation,omitempty"`
 }
 
 // KnowledgeProvenance is the compact attribution shared by every read view.

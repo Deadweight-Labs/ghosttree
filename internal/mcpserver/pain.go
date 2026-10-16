@@ -29,10 +29,11 @@ func targets(in []PainTargetInput) []pain.Target {
 }
 
 type PainRecordInput struct {
-	Project   string            `json:"project,omitempty" jsonschema:"the project this problem belongs to when it is not the session's own: a remote like github.com/owner/repo or a short name that is unique among the projects you can write to"`
-	Title     string            `json:"title" jsonschema:"the problem in one line, without a solution"`
-	Body      string            `json:"body,omitempty" jsonschema:"what goes wrong, for whom, and how you noticed. No solution here"`
-	Motivates []PainTargetInput `json:"motivates,omitempty" jsonschema:"requests, decisions or external references that exist because of this problem"`
+	Project     string            `json:"project,omitempty" jsonschema:"the project this problem belongs to when it is not the session's own: a remote like github.com/owner/repo or a short name that is unique among the projects you can write to"`
+	Title       string            `json:"title" jsonschema:"the problem in one line, without a solution"`
+	Body        string            `json:"body,omitempty" jsonschema:"what goes wrong, for whom, and how you noticed. No solution here"`
+	Motivates   []PainTargetInput `json:"motivates,omitempty" jsonschema:"requests, decisions or external references that exist because of this problem"`
+	Explanation string            `json:"explanation,omitempty" jsonschema:"optional \"Kurz erklärt\" for the humans who will read this: two to four plain sentences, in the language the people of the project use. Say what it is about in everyday words (the mechanism, not the jargon), why it matters (who it affects, when), what has to be done or decided, and your recommendation. No markdown, no links, never a secret. You know the context the server does not; without it the server generates one later from the text alone"`
 }
 
 type PainGetInput struct {
@@ -117,7 +118,7 @@ func (s *Server) handlePainRecord(_ context.Context, _ *mcp.CallToolRequest, in 
 	if err != nil {
 		return nil, PainOutput{}, err
 	}
-	d, err := s.client.CreatePain(project, in.Title, in.Body, targets(in.Motivates), s.currentSessionID())
+	d, err := s.client.CreatePainExplained(project, in.Title, in.Body, in.Explanation, targets(in.Motivates), s.currentSessionID())
 	if err != nil {
 		return nil, PainOutput{}, err
 	}
@@ -209,7 +210,7 @@ func (s *Server) handlePainUpdate(_ context.Context, _ *mcp.CallToolRequest, in 
 func (s *Server) registerPainTools(srv *mcp.Server) {
 	closed := false
 	additive := false
-	mcp.AddTool(srv, &mcp.Tool{Name: "pain_record", Description: "Record a problem without a solution. If you already have a solution, write a request. A pain needs only a title; it has no criteria and is not finished by work, it is mitigated or resolved with evidence." + targetHint, Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handlePainRecord)
+	mcp.AddTool(srv, &mcp.Tool{Name: "pain_record", Description: "Record a problem without a solution. If you already have a solution, write a request. A pain needs only a title; it has no criteria and is not finished by work, it is mitigated or resolved with evidence. Add explanation, a short plain-language note for the people who read the problems." + targetHint, Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handlePainRecord)
 	mcp.AddTool(srv, &mcp.Tool{Name: "pain_get", Description: "Read one pain with its state, what is still unsolved, what it motivates and its history.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closed}}, s.handlePainGet)
 	mcp.AddTool(srv, &mcp.Tool{Name: "pain_search", Description: "List the current project's pains. Without a state it lists active and mitigated ones; a pain never ages out.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closed}}, s.handlePainSearch)
 	mcp.AddTool(srv, &mcp.Tool{Name: "pain_update", Description: "Change a pain: move its state, correct title or text, add or remove what it motivates. mitigated needs remaining (what is still unsolved) and evidence; resolved needs evidence; obsolete and returning to active need a note. A finished request does not set a pain to resolved by itself: say so here with evidence.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handlePainUpdate)

@@ -134,6 +134,9 @@ type CreateInput struct {
 	Request        Request  `json:"request"`
 	Criteria       []string `json:"criteria"`
 	IdempotencyKey string   `json:"idempotency_key,omitempty"`
+	// Explanation is the agent's "Kurz erklärt" text. It travels with the call
+	// to the server, which stores it beside the request; it is not part of it.
+	Explanation string `json:"-"`
 	// AuthorID is the writing account, set by the server from the token; zero
 	// lets the store resolve the person label of the writer once, at write time.
 	AuthorID int64 `json:"-"`

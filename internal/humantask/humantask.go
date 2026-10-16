@@ -68,6 +68,9 @@ type CreateInput struct {
 	// human whose session the agent is), because "anyone" on a project of two
 	// is two people each assuming the other one will do it.
 	Everyone bool `json:"everyone,omitempty"`
+	// Explanation is the agent's "Kurz erklärt" text for the person who has to
+	// act. The server stores it beside the task; it is not part of the task.
+	Explanation string `json:"explanation,omitempty"`
 }
 
 // Actor is who performs a change. Web is true only for an interactive web session.

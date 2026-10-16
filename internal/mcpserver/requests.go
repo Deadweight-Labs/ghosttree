@@ -148,6 +148,7 @@ type RequestCreateInput struct {
 	Criteria       []string `json:"criteria" jsonschema:"observable acceptance criteria"`
 	IdempotencyKey string   `json:"idempotency_key,omitempty" jsonschema:"stable retry key for this creation attempt"`
 	Project        string   `json:"project,omitempty" jsonschema:"the project this request belongs to when it is not the session's own: a remote like github.com/owner/repo or a short name that is unique among the projects you can write to"`
+	Explanation    string   `json:"explanation,omitempty" jsonschema:"optional \"Kurz erklärt\" for the humans who will read this: two to four plain sentences, in the language the people of the project use. Say what it is about in everyday words (the mechanism, not the jargon), why it matters (who it affects, when), what has to be done or decided, and your recommendation. No markdown, no links, never a secret. You know the context the server does not; without it the server generates one later from the text alone"`
 }
 
 type RequestStartWorkInput struct {
@@ -394,7 +395,7 @@ func (s *Server) handleRequestCreate(_ context.Context, _ *mcp.CallToolRequest, 
 	}
 	detail, err := s.client.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{
 		Type: in.Type, Title: in.Title, Description: in.Description, Priority: in.Priority, Scope: ax, Origin: "agent", SessionRef: ref,
-	}, Criteria: in.Criteria, IdempotencyKey: in.IdempotencyKey})
+	}, Criteria: in.Criteria, IdempotencyKey: in.IdempotencyKey, Explanation: in.Explanation})
 	out := changeOutput(detail, "created", 0)
 	// Creation is the one mutation that has to list its criteria: their ids
 	// exist nowhere else yet, and without them the next step is a request_get

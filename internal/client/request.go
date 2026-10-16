@@ -14,6 +14,9 @@ func (c *Client) CreateRequest(in requestdomain.CreateInput) (requestdomain.Deta
 		"origin": r.Origin, "session_ref": r.SessionRef,
 		"criteria": in.Criteria, "idempotency_key": in.IdempotencyKey,
 	}
+	if in.Explanation != "" {
+		body["explanation"] = in.Explanation
+	}
 	var out requestdomain.Detail
 	err := c.do("POST", "/api/requests", nil, body, &out)
 	return out, err

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/explain"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
@@ -99,12 +100,16 @@ type knowledgeCard struct {
 	Person      string
 	ConfirmedBy string
 	Origin      string
-	Seen        string
-	Evidence    []evidenceRow
-	MoreEvid    bool
-	Proof       *proofView
-	CanApprove  bool
-	CanReject   bool
+	// Explain is the block "Kurz erklärt"; From is the line above it that says
+	// which project and which context the entry comes from.
+	Explain    *explainView
+	From       *originView
+	Seen       string
+	Evidence   []evidenceRow
+	MoreEvid   bool
+	Proof      *proofView
+	CanApprove bool
+	CanReject  bool
 	// Retire: the same action as Reject, on an entry that was already decided.
 	Retire     bool
 	CanRestore bool
@@ -336,6 +341,13 @@ func (a *app) cardFor(r *http.Request, pa *store.ProjectAccess, k store.Knowledg
 	if card.CanEdit {
 		card.RawBody = k.Body
 	}
+	// The header of a card in an all-projects list already names the project.
+	fromProject := k.Scope.Project
+	if withProject {
+		fromProject = ""
+	}
+	card.From = a.originFor(l, pa, fromProject, card.Source, k.Title, k.Body)
+	card.Explain = a.explainFor(l, explain.KindKnowledge, k.ID)
 	return card
 }
 
