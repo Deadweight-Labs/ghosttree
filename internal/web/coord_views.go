@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"slices"
@@ -660,12 +661,9 @@ func markViewerMentions(views []coordMessageView, messages []store.CoordMessageP
 	}
 }
 
-// errCoordExpiryInvalid carries its text from the message catalog.
-var errCoordExpiryInvalid error = coordExpiryError{}
-
-type coordExpiryError struct{}
-
-func (coordExpiryError) Error() string { return langEN.msg("coord.expiry_invalid") }
+// errCoordExpiryInvalid is translated where it is answered, from the message
+// catalog of the request's language.
+var errCoordExpiryInvalid = errors.New("invalid expiry")
 
 // parseCoordExpiry turns a datetime-local value (no zone) into RFC3339 UTC.
 // offset is the browser's minutes east of UTC for that very date (set by

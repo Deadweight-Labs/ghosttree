@@ -68,7 +68,7 @@ func coordHTTPError(l lang, w http.ResponseWriter, err error) {
 	case errors.Is(err, store.ErrAnchorAlreadyThreaded):
 		http.Error(w, "coordination message already has a different task thread", http.StatusConflict)
 	case errors.Is(err, store.ErrCoordInvalidExpiry):
-		http.Error(w, errCoordExpiryInvalid.Error(), http.StatusBadRequest)
+		http.Error(w, l.msg("coord.expiry_invalid"), http.StatusBadRequest)
 	case errors.Is(err, store.ErrCoordInvalidSequence):
 		http.Error(w, "invalid coordination sequence", http.StatusBadRequest)
 	case errors.Is(err, store.ErrCoordUnknownRecipient):
@@ -684,7 +684,7 @@ func (a *app) coordSend(w http.ResponseWriter, r *http.Request) {
 
 	expiresAt, err := parseCoordExpiry(r.FormValue("expires_at"), r.FormValue("expires_offset"), time.Local)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		coordHTTPError(l, w, store.ErrCoordInvalidExpiry)
 		return
 	}
 	msg := store.CoordMessage{
@@ -791,7 +791,7 @@ func (a *app) coordCreateStanding(w http.ResponseWriter, r *http.Request) {
 	mentions := splitCoordPrincipals(r.Form["mentions"]...)
 	expiresAt, err := parseCoordExpiry(r.FormValue("expires_at"), r.FormValue("expires_offset"), time.Local)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		coordHTTPError(l, w, store.ErrCoordInvalidExpiry)
 		return
 	}
 	_, err = a.browserCoord(r).CreateStanding(store.StandingInput{RoomKey: room, ClientID: newFormClientID(r), Body: body, ExpiresAt: expiresAt, Mentions: mentions})

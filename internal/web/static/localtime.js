@@ -5,13 +5,16 @@
 // date and time), datetime, full, daytime (Today/Yesterday words come from the
 // element), title (tooltip only, the text is already relative).
 (() => {
+  // English keeps the visitor's own locale as before; other server languages set the format.
+  const pageLang = document.documentElement.lang;
+  const lang = pageLang && pageLang !== "en" ? pageLang : undefined;
   const pad = (n) => String(n).padStart(2, "0");
   const hm = (d) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  const dm = (d) => d.toLocaleDateString(document.documentElement.lang || undefined, { day: "numeric", month: "short" });
+  const dm = (d) => d.toLocaleDateString(lang, { day: "numeric", month: "short" });
   const sameDay = (a, b) =>
     a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
   const full = (d) =>
-    `${d.toLocaleDateString(document.documentElement.lang || undefined, { day: "2-digit", month: "2-digit", year: "numeric" })}, ${hm(d)}`;
+    `${d.toLocaleDateString(lang, { day: "2-digit", month: "2-digit", year: "numeric" })}, ${hm(d)}`;
   const kinds = {
     clock: (d, now) => (sameDay(d, now) ? hm(d) : `${dm(d)} ${hm(d)}`),
     datetime: (d) => `${dm(d)} ${hm(d)}`,
@@ -21,7 +24,7 @@
       if (sameDay(d, now) && el.dataset.today) return `${el.dataset.today} ${hm(d)}`;
       if (sameDay(d, yesterday) && el.dataset.yesterday) return `${el.dataset.yesterday} ${hm(d)}`;
       const weekday = d.getFullYear() === now.getFullYear()
-        ? `${d.toLocaleDateString(document.documentElement.lang || undefined, { weekday: "short" })} ${dm(d)}`
+        ? `${d.toLocaleDateString(lang, { weekday: "short" })} ${dm(d)}`
         : `${dm(d)} ${d.getFullYear()}`;
       return `${weekday} ${hm(d)}`;
     },

@@ -3,6 +3,7 @@ package web
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -158,4 +159,49 @@ func getURL(t *testing.T, c *http.Client, url string) *http.Response {
 		t.Fatal(err)
 	}
 	return resp
+}
+
+func TestGermanServerTranslatesPublicAndAccountPages(t *testing.T) {
+	de, token := testWebLang(t, "de")
+	en, enToken := testWebLang(t, "en")
+	deClient, enClient := login(t, de, token), login(t, en, enToken)
+	for _, path := range []string{
+		"/join/x", "/join/pair", "/ui/login/code", "/ui/device", "/ui/account/tokens",
+		"/ui/profile", "/ui/sessions", "/ui/agents", "/ui/requests",
+	} {
+		deResp := getURL(t, deClient, de.URL+path)
+		enResp := getURL(t, enClient, en.URL+path)
+		if deResp.StatusCode != enResp.StatusCode {
+			t.Errorf("%s: status %d in de, %d in en", path, deResp.StatusCode, enResp.StatusCode)
+		}
+		deBody, enBody := body(t, deResp), body(t, enResp)
+		if strings.Contains(deBody, "<html") && !strings.Contains(deBody, `<html lang="de"`) {
+			t.Errorf("%s on a German server lacks <html lang=\"de\">", path)
+		}
+		if deBody == enBody {
+			t.Errorf("%s is identical in German and English", path)
+		}
+	}
+}
+
+func TestGermanServerAnswersInvalidExpiryInGerman(t *testing.T) {
+	st, err := store.Open(t.TempDir() + "/web.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	token, err := st.AddPerson("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	room := store.RoomKeyForProject("github.com/x/y")
+	materializeWebRoom(t, st, room)
+	de := httptest.NewServer(New(st, WithLanguage("de")))
+	t.Cleanup(de.Close)
+	client := login(t, de, token)
+	resp := authenticatedPostForm(t, client, de.URL+"/ui/coord/standing/create", url.Values{"room": {room}, "body": {"Regel"}, "confirm_scope": {"1"}, "expires_at": {"kein Datum"}})
+	got := body(t, resp)
+	if resp.StatusCode != http.StatusBadRequest || !strings.Contains(got, langDE.msg("coord.expiry_invalid")) {
+		t.Errorf("status %d body %q, want 400 with the German expiry text", resp.StatusCode, got)
+	}
 }
