@@ -426,9 +426,11 @@ and `ctx explain status` says which file it waits for.
 A page never waits for the model: it shows the block once it exists. The bulk
 path runs from a timer, the review queue first:
 
-    ctx explain backfill --db /var/lib/ghosttree/ghosttree.db --batch
-    ctx explain backfill --db /var/lib/ghosttree/ghosttree.db --collect
-    ctx explain status --db /var/lib/ghosttree/ghosttree.db
+```sh
+ctx explain backfill --db /var/lib/ghosttree/ghosttree.db --batch
+ctx explain backfill --db /var/lib/ghosttree/ghosttree.db --collect
+ctx explain status --db /var/lib/ghosttree/ghosttree.db
+```
 
 `--batch` first collects every finished batch (saving its notes with the same
 cleaning and secret check, counting its tokens), then submits one batch for each
