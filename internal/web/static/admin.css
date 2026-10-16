@@ -2,132 +2,132 @@
    tokens. Builds on shell.css (.ov-*, .av, .seg); tokens only. Clay surfaces cast
    up to 30px of shadow, so nothing here clips (no overflow on a surface). */
 
-.ad { max-width: 60rem; }
-.ad-narrow { max-width: 34rem; }
-.ad-sec { margin: 0 0 var(--space-6); }
-.ad-sec > h2 { margin-bottom: 14px; }
+.adm { max-width: 60rem; }
+.adm-narrow { max-width: 34rem; }
+.adm-sec { margin: 0 0 var(--space-6); }
+.adm-sec > h2 { margin-bottom: 14px; }
 .js-only { display: none; }
 .js .js-only { display: inline-flex; }
 
-.ad-flash {
+.adm-flash {
   margin: 0 0 var(--space-4); padding: 10px 16px; border-radius: var(--radius-md);
   background: var(--color-accent-soft); color: var(--color-text-primary); font-weight: 600; overflow-wrap: anywhere;
 }
-.ad-flash.is-error { background: var(--color-danger-soft); }
+.adm-flash.is-error { background: var(--color-danger-soft); }
 
-.ad-switch { margin: 0 0 var(--space-4); max-width: 100%; flex-wrap: wrap; }
-.ad-org { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0 0 var(--space-5); }
-.ad-org h2 { margin: 0; font: var(--text-detail-title); }
-.ad-org form { margin: 0; }
+.adm-switch { margin: 0 0 var(--space-4); max-width: 100%; flex-wrap: wrap; }
+.adm-org { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0 0 var(--space-5); }
+.adm-org h2 { margin: 0; font: var(--text-detail-title); }
+.adm-org form { margin: 0; }
 
-.ad-pill {
+.adm-pill {
   display: inline-flex; align-items: center; min-height: 24px; padding: 0 10px; border-radius: var(--radius-round);
   background: var(--color-neutral-soft); color: var(--color-text-secondary); font: var(--text-label); white-space: nowrap;
 }
-.ad-pill.is-strong { background: var(--color-accent-soft); color: var(--color-accent-text); }
-.ad-pill.is-soft { background: transparent; box-shadow: inset 0 0 0 1px var(--color-line-default); }
+.adm-pill.is-strong { background: var(--color-accent-soft); color: var(--color-accent-text); }
+.adm-pill.is-soft { background: transparent; box-shadow: inset 0 0 0 1px var(--color-line-default); }
 
 /* Row lists on a clay deck, same recipe as the agents page. */
-.ad-deck {
+.adm-deck {
   --clay-rest-h: 7;
   --clay-surface: var(--clay-c-surface);
   margin: 0 0 14px; padding: 6px 10px; border-radius: var(--clay-radius);
 }
-.ad-row { display: flex; align-items: center; gap: 14px; padding: 12px 8px; }
-.ad-row + .ad-row { border-top: 1px solid var(--clay-line); }
-.ad-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.ad-acts { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; margin-left: auto; }
-.ad-acts form, .ad-form { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.ad-mono, .ad-link, .ad-code, .ad-dl dd.ad-mono {
+.adm-row { display: flex; align-items: center; gap: 14px; padding: 12px 8px; }
+.adm-row + .adm-row { border-top: 1px solid var(--clay-line); }
+.adm-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.adm-acts { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; margin-left: auto; }
+.adm-acts form, .adm-form { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.adm-mono, .adm-link, .adm-code, .adm-dl dd.adm-mono {
   font-family: var(--font-mono); font-variant-ligatures: none; font-feature-settings: "liga" 0, "calt" 0; overflow-wrap: anywhere;
 }
-.ad-mono { font-size: 13.5px; }
-.ad-btn { min-height: 32px; padding: 0 14px; font-size: 13.5px; }
-.ad-sel { width: auto; min-height: 34px; padding-block: 0; }
-.ad-check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--clay-ink-soft); white-space: nowrap; }
+.adm-mono { font-size: 13.5px; }
+.adm-btn { min-height: 32px; padding: 0 14px; font-size: 13.5px; }
+.adm-sel { width: auto; min-height: 34px; padding-block: 0; }
+.adm-check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--clay-ink-soft); white-space: nowrap; }
 
-.ad-row .ov-dot { align-self: center; }
+.adm-row .ov-dot { align-self: center; }
 .ov-dot.is-pending { background: var(--clay-warn); }
 .ov-dot.is-accepted { background: var(--clay-ok); }
 .ov-dot.is-expired, .ov-dot.is-revoked { background: transparent; box-shadow: inset 0 0 0 2px var(--clay-ink-faint); }
-.ad-token.is-revoked .ov-name, .ad-token.is-expired .ov-name { opacity: .6; }
+.adm-token.is-revoked .ov-name, .adm-token.is-expired .ov-name { opacity: .6; }
 
 /* Invitation forms in one well; fields on a sunken surface. */
-.ad-forms { --clay-rest-h: 7; --clay-surface: var(--clay-c-surface); display: grid; gap: var(--space-5); margin: 0 0 14px; padding: 18px 20px; border-radius: var(--clay-radius); }
-.ad-form { align-items: stretch; flex-direction: column; gap: var(--space-3); }
-.ad-form h3 { margin: 0; font: var(--text-label); font-size: 13.5px; color: var(--clay-ink-soft); }
-.ad-form > .ov-btn { align-self: flex-start; }
-.ad-fields { display: flex; flex-wrap: wrap; gap: var(--space-3); }
-.ad-f { display: grid; gap: 4px; min-width: 0; }
-.ad-f > span { font-size: 12.5px; font-weight: 700; color: var(--clay-ink-soft); }
-.ad-grow { flex: 1 1 14rem; }
-.ad-days { width: 9rem; flex: none; }
-.ad-f select.clay-select { padding-inline-end: 36px; min-width: 8.5rem; }
-.ad-f :is(input, select) { width: 100%; min-height: 40px; border: 0; border-radius: var(--clay-radius-sm); padding: 0 14px; color: var(--clay-ink); }
+.adm-forms { --clay-rest-h: 7; --clay-surface: var(--clay-c-surface); display: grid; gap: var(--space-5); margin: 0 0 14px; padding: 18px 20px; border-radius: var(--clay-radius); }
+.adm-form { align-items: stretch; flex-direction: column; gap: var(--space-3); }
+.adm-form h3 { margin: 0; font: var(--text-label); font-size: 13.5px; color: var(--clay-ink-soft); }
+.adm-form > .ov-btn { align-self: flex-start; }
+.adm-fields { display: flex; flex-wrap: wrap; gap: var(--space-3); }
+.adm-f { display: grid; gap: 4px; min-width: 0; }
+.adm-f > span { font-size: 12.5px; font-weight: 700; color: var(--clay-ink-soft); }
+.adm-grow { flex: 1 1 14rem; }
+.adm-days { width: 9rem; flex: none; }
+.adm-f select.clay-select { padding-inline-end: 36px; min-width: 8.5rem; }
+.adm-f :is(input, select) { width: 100%; min-height: 40px; border: 0; border-radius: var(--clay-radius-sm); padding: 0 14px; color: var(--clay-ink); }
 
-.ad-ready { --clay-rest-h: 7; --clay-surface: var(--clay-c-surface); margin: 0 0 var(--space-5); padding: 18px 20px; border-radius: var(--clay-radius); }
-.ad-ready h2 { margin-bottom: var(--space-3); }
-.ad-copy { display: flex; gap: var(--space-3); margin: 0 0 var(--space-2); }
-.ad-link {
+.adm-ready { --clay-rest-h: 7; --clay-surface: var(--clay-c-surface); margin: 0 0 var(--space-5); padding: 18px 20px; border-radius: var(--clay-radius); }
+.adm-ready h2 { margin-bottom: var(--space-3); }
+.adm-copy { display: flex; gap: var(--space-3); margin: 0 0 var(--space-2); }
+.adm-link {
   --clay-rest-h: -4; --clay-surface: var(--clay-c-sunken);
   flex: 1; min-width: 0; min-height: 42px; padding: 10px 16px; border: 0; border-radius: var(--clay-radius-sm);
   background: var(--clay-surface); color: var(--clay-ink); font-size: 13px; line-height: 1.45;
   display: block; user-select: all; overflow-wrap: anywhere; word-break: break-all;
 }
 
-.ad-details { padding: 4px 10px; }
-.ad-details summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; padding: 12px 8px; cursor: pointer; }
-.ad-details[open] summary { border-bottom: 1px solid var(--clay-line); }
+.adm-details { padding: 4px 10px; }
+.adm-details summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; padding: 12px 8px; cursor: pointer; }
+.adm-details[open] summary { border-bottom: 1px solid var(--clay-line); }
 
-.ad-join { display: flex; gap: var(--space-3); max-width: 34rem; }
-.ad-join .ov-code { flex: 1; }
-.ad-rename { display: flex; gap: var(--space-2); align-items: center; margin-left: auto; }
-.ad-rename .ov-code { width: 14rem; max-width: 100%; }
+.adm-join { display: flex; gap: var(--space-3); max-width: 34rem; }
+.adm-join .ov-code { flex: 1; }
+.adm-rename { display: flex; gap: var(--space-2); align-items: center; margin-left: auto; }
+.adm-rename .ov-code { width: 14rem; max-width: 100%; }
 
-.ad-check-card { padding: 22px 24px; }
-.ad-code { margin: 0 0 var(--space-4); font-size: 28px; font-weight: 400; letter-spacing: .08em; }
-.ad-dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 18px; margin: 0 0 var(--space-3); }
-.ad-dl dt { color: var(--clay-ink-faint); font-size: 13px; font-weight: 700; }
-.ad-dl dd { margin: 0; }
-.ad-decide { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-top: var(--space-4); }
+.adm-check-card { padding: 22px 24px; }
+.adm-code { margin: 0 0 var(--space-4); font-size: 28px; font-weight: 400; letter-spacing: .08em; }
+.adm-dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 18px; margin: 0 0 var(--space-3); }
+.adm-dl dt { color: var(--clay-ink-faint); font-size: 13px; font-weight: 700; }
+.adm-dl dd { margin: 0; }
+.adm-decide { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-top: var(--space-4); }
 
 @media (max-width: 900px) {
-  .ad-deck { padding: 4px 6px; }
-  .ad-row { flex-wrap: wrap; gap: 8px 12px; padding: 12px 6px; }
-  .ad-body { flex-basis: 0; min-width: 8rem; }
-  .ad-acts { flex-basis: 100%; justify-content: flex-start; margin-left: 0; }
-  .ad-forms, .ad-ready { padding: 16px; }
-  .ad-copy, .ad-join { flex-wrap: wrap; }
-  .ad-days { width: 100%; }
-  .ad-code { font-size: 22px; }
-  .ad-check-card { padding: 18px 20px; }
+  .adm-deck { padding: 4px 6px; }
+  .adm-row { flex-wrap: wrap; gap: 8px 12px; padding: 12px 6px; }
+  .adm-body { flex-basis: 0; min-width: 8rem; }
+  .adm-acts { flex-basis: 100%; justify-content: flex-start; margin-left: 0; }
+  .adm-forms, .adm-ready { padding: 16px; }
+  .adm-copy, .adm-join { flex-wrap: wrap; }
+  .adm-days { width: 100%; }
+  .adm-code { font-size: 22px; }
+  .adm-check-card { padding: 18px 20px; }
 }
 
 /* Meta pieces separated by spacing only: a dot would be orphaned at the start of a wrapped line. */
-.ad-parts { display: flex; flex-wrap: wrap; gap: .15em 1.3em; }
+.adm-parts { display: flex; flex-wrap: wrap; gap: .15em 1.3em; }
 
 /* Segmented organization switch (same recipe as sessions.css). */
 .seg { display: inline-flex; border: 1px solid var(--color-line-strong); border-radius: var(--radius-md); overflow: hidden; background: var(--color-surface-panel); }
 .seg a { padding: 5px 13px; color: var(--color-text-secondary) !important; font: 600 13px/1.3 var(--font-sans); text-decoration: none; white-space: nowrap; }
 .seg a + a { border-left: 1px solid var(--color-line-default); }
 .seg .is-on { background: var(--color-surface-selected); color: var(--color-accent-text) !important; }
-.ad-f { align-content: start; }
-.ad-f :is(input, select) { height: 42px; }
-.ad-fields { align-items: flex-start; }
-.ad-form { flex-wrap: nowrap; align-content: start; }
-.ad-fields { flex: none; }
+.adm-f { align-content: start; }
+.adm-f :is(input, select) { height: 42px; }
+.adm-fields { align-items: flex-start; }
+.adm-form { flex-wrap: nowrap; align-content: start; }
+.adm-fields { flex: none; }
 
 /* Profile form, the secondary invitation option and a link inside a list row. */
-.ad-save { justify-self: start; margin-top: var(--space-3); }
-.ad-more { margin: 0; }
-.ad-more > summary { cursor: pointer; font: var(--text-label); font-size: 13.5px; color: var(--clay-ink-soft); padding: 4px 0; }
-.ad-more[open] > summary { margin-bottom: var(--space-3); }
-.ad-body .ad-copy { margin-top: 8px; }
-.ad-form .ad-sel + .ad-sel { margin-left: 0; }
-.ad-fields > .ad-f:not(.ad-grow):not(.ad-days) { flex: none; }
+.adm-save { justify-self: start; margin-top: var(--space-3); }
+.adm-more { margin: 0; }
+.adm-more > summary { cursor: pointer; font: var(--text-label); font-size: 13.5px; color: var(--clay-ink-soft); padding: 4px 0; }
+.adm-more[open] > summary { margin-bottom: var(--space-3); }
+.adm-body .adm-copy { margin-top: 8px; }
+.adm-form .adm-sel + .adm-sel { margin-left: 0; }
+.adm-fields > .adm-f:not(.adm-grow):not(.adm-days) { flex: none; }
 
 /* Tokens never used stay in the list but recede; "Revoke unused" asks first. */
-.ad-token.is-unused .ad-body { opacity: .62; }
-.ad-never { font-weight: 700; }
-.ad-unused { margin: 0 0 var(--space-4); }
-.ad-unused > form { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); margin-top: var(--space-3); }
+.adm-token.is-unused .adm-body { opacity: .62; }
+.adm-never { font-weight: 700; }
+.adm-unused { margin: 0 0 var(--space-4); }
+.adm-unused > form { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); margin-top: var(--space-3); }

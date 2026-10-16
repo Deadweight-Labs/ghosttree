@@ -1,6 +1,7 @@
 package web
 
 import (
+	"io/fs"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -76,16 +77,16 @@ func TestOrgInviteResultIsFormAndLinkOnly(t *testing.T) {
 	}
 	resp = postOrgFollow(t, alice, base, "/ui/orgs/invite", url.Values{"org": {"alpha"}, "role": {"member"}, "days": {"2"}})
 	page = body(t, resp)
-	if !strings.Contains(page, `class="ad-link"`) || !strings.Contains(page, "Invitation ready") || !strings.Contains(page, "data-copy") {
+	if !strings.Contains(page, `class="adm-link"`) || !strings.Contains(page, "Invitation ready") || !strings.Contains(page, "data-copy") {
 		t.Fatalf("invite result lacks the link and copy action: %s", page)
 	}
 	// The link is text on the page (selectable, wrapping), not only the payload of
 	// the copy button and not a field that cuts it short.
-	if !regexp.MustCompile(`<code class="ad-link"[^>]*data-select>https?://[^<]+/join/[0-9a-f]{20,}</code>`).MatchString(page) &&
-		!regexp.MustCompile(`<code class="ad-link"[^>]*data-select>[^<]*[0-9a-f]{40,}[^<]*</code>`).MatchString(page) {
+	if !regexp.MustCompile(`<code class="adm-link"[^>]*data-select>https?://[^<]+/join/[0-9a-f]{20,}</code>`).MatchString(page) &&
+		!regexp.MustCompile(`<code class="adm-link"[^>]*data-select>[^<]*[0-9a-f]{40,}[^<]*</code>`).MatchString(page) {
 		t.Errorf("the invitation link is not shown as text: %s", page)
 	}
-	if strings.Contains(page, `<input class="ad-link"`) {
+	if strings.Contains(page, `<input class="adm-link"`) {
 		t.Errorf("the link is a truncating input again")
 	}
 	if !regexp.MustCompile(`>in \d+[hd]<`).MatchString(page) {
@@ -282,5 +283,46 @@ func TestLoginRequiredPageIsEnglishAndShort(t *testing.T) {
 	page := body(t, resp)
 	if resp.StatusCode != http.StatusForbidden || strings.Contains(page, "Diese Aktion") || strings.Contains(page, "Anmeldung per Login") || !strings.Contains(page, "read-only session") {
 		t.Fatalf("login required page: %d %s", resp.StatusCode, page)
+	}
+}
+
+// Werbeblocker (EasyList) blenden Klassen wie .ad-row, .ad-link, .ad-btn und
+// .ad-body aus. Die Verwaltungsseiten hießen früher .ad-*: Mitgliederzeilen,
+// Einladungslink und Knöpfe fehlten dann im Browser, obwohl sie im HTML standen.
+func TestMarkupAvoidsClassNamesAdBlockersHide(t *testing.T) {
+	adLike := regexp.MustCompile(`^(ad|ads|advert[a-z]*)(-.*)?$`)
+	classAttr := regexp.MustCompile(`class="([^"{}]*)"`)
+	cssClass := regexp.MustCompile(`\.([A-Za-z_][A-Za-z0-9_-]*)`)
+	check := func(path string, names []string) {
+		for _, n := range names {
+			if adLike.MatchString(n) {
+				t.Errorf("%s uses class %q, which ad blockers hide", path, n)
+			}
+		}
+	}
+	err := fs.WalkDir(files, ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		data, err := files.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		var names []string
+		switch {
+		case strings.HasSuffix(path, ".html"):
+			for _, m := range classAttr.FindAllStringSubmatch(string(data), -1) {
+				names = append(names, strings.Fields(m[1])...)
+			}
+		case strings.HasSuffix(path, ".css"):
+			for _, m := range cssClass.FindAllStringSubmatch(string(data), -1) {
+				names = append(names, m[1])
+			}
+		}
+		check(path, names)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
