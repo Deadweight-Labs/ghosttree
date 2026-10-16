@@ -34,6 +34,23 @@ func TestGardenRefusesACheckoutOfAnotherProject(t *testing.T) {
 	}
 }
 
+// The origin is read with neutral git settings: a global config of the
+// service user (or the parent environment) must not rewrite it.
+func TestVerifyCheckoutReadsOriginWithNeutralGit(t *testing.T) {
+	repo := gardenRepo(t)
+	if out, err := exec.Command("git", "-C", repo.Root, "remote", "add", "origin", "https://github.com/O/R.git").CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	cfg := filepath.Join(t.TempDir(), "gitconfig")
+	if err := os.WriteFile(cfg, []byte("[url \"https://example.invalid/\"]\n\tinsteadOf = https://github.com/\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", cfg)
+	if err := verifyCheckout(repo.Root, gardenProject); err != nil {
+		t.Fatalf("origin was read through foreign git config: %v", err)
+	}
+}
+
 // Point 4: NaN and Inf must not turn the budget off.
 func TestGardenRejectsNonFiniteBudget(t *testing.T) {
 	for _, v := range []string{"NaN", "Inf", "+Inf", "-1", "0"} {
