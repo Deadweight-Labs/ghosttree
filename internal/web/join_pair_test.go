@@ -209,12 +209,18 @@ func TestJoinSignInWithTheInvitationThenInstallerThenApprove(t *testing.T) {
 	if v := e.st.Join().View(acct.ID); v.State != store.JoinClaimed {
 		t.Fatalf("session %q", v.State)
 	}
-	// Freigabe: Loopback-Weg, 303 auf den beim Claim genannten Port.
+	// Freigabe: Loopback-Weg. Die Seite bleibt, zeigt den Code zum Einfügen und
+	// schickt den Browser einmal auf den beim Claim genannten Port.
 	resp = e.decide(t, b, url.Values{"decision": {"approve"}, "confirm_account": {"philipp"}})
 	resp.Body.Close()
-	loc := resp.Header.Get("Location")
-	if resp.StatusCode != http.StatusSeeOther || !strings.HasPrefix(loc, "http://127.0.0.1:40123/callback?code=") || !strings.Contains(loc, "state=state-12345678") {
-		t.Fatalf("approve: %d %q", resp.StatusCode, loc)
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/join/pair" {
+		t.Fatalf("approve: %d %q", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	page := e.pairPage(t, b)
+	m := regexp.MustCompile(`data-join-go="http://127\.0\.0\.1:40123/callback\?code=([A-Z0-9]+)&amp;state=state-12345678"`).FindStringSubmatch(page)
+	shown := regexp.MustCompile(`id="join-paste-code"[^>]*>([A-Z0-9-]+)<`).FindStringSubmatch(page)
+	if m == nil || shown == nil || strings.ReplaceAll(shown[1], "-", "") != m[1] || !strings.Contains(page, "Paste this code there") {
+		t.Fatalf("approved page: %s", page)
 	}
 }
 
@@ -758,5 +764,35 @@ func TestJoinExpiredLoopbackPageOffersToStopTheInstaller(t *testing.T) {
 	text := e.pairPage(t, b)
 	if !strings.Contains(text, `href="http://127.0.0.1:40123/callback?error=access_denied`) {
 		t.Fatalf("page: %s", text)
+	}
+}
+
+// Ohne Loopback (Terminal per SSH): die Seite zeigt nach der Freigabe den Code zum
+// Einfügen und schickt den Browser nirgendwohin.
+func TestJoinPasteOnlyApprovalShowsTheCodeAndNavigatesNowhere(t *testing.T) {
+	e := newPairEnv(t)
+	b := browser(t)
+	e.signInAs(t, b, "anna")
+	e.accept(t, b, e.code)
+	pair := pairRE.FindString(e.pairPage(t, b))
+	if _, err := e.st.Join().Claim(store.JoinClaimRequest{Addr: "127.0.0.1", Pair: pair, Machine: "far-box", Challenge: strings.Repeat("A", 43)}); err != nil {
+		t.Fatal(err)
+	}
+	text := e.pairPage(t, b)
+	if !strings.Contains(text, "far-box") || strings.Contains(text, "Code from your terminal") || strings.Contains(text, "on the computer where you ran the command") {
+		t.Fatalf("approval page: %s", text)
+	}
+	resp := e.decide(t, b, url.Values{"decision": {"approve"}, "confirm_account": {"anna"}})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/join/pair" {
+		t.Fatalf("approve: %d %q", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	page := e.pairPage(t, b)
+	shown := regexp.MustCompile(`id="join-paste-code"[^>]*>([A-Z0-9]{4}(?:-[A-Z0-9]{4}){4})<`).FindStringSubmatch(page)
+	if shown == nil || !strings.Contains(page, "Paste this code in your terminal") || strings.Contains(page, "data-join-go") || !strings.Contains(page, "data-copy") {
+		t.Fatalf("paste page: %s", page)
+	}
+	if resp, _ := e.get(t, b, "/join/pair"); !strings.Contains(resp.Header.Get("Cache-Control"), "no-store") {
+		t.Fatalf("the page with the code may be cached: %q", resp.Header.Get("Cache-Control"))
 	}
 }

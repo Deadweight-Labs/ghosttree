@@ -323,8 +323,10 @@ type fakeServer struct {
 	exchanges []map[string]string
 	paths     []string
 	claimRes  func(map[string]any) (int, string)
-	pollRes   []string
-	whoami    string
+	// tokenRes, wenn gesetzt, beantwortet den Tausch statt der festen Antwort.
+	tokenRes func(map[string]string) (int, string)
+	pollRes  []string
+	whoami   string
 }
 
 func newFakeServer(t *testing.T) *fakeServer {
@@ -359,6 +361,12 @@ func newFakeServer(t *testing.T) *fakeServer {
 			var body map[string]string
 			json.NewDecoder(r.Body).Decode(&body)
 			f.exchanges = append(f.exchanges, body)
+			if f.tokenRes != nil {
+				code, res := f.tokenRes(body)
+				w.WriteHeader(code)
+				io.WriteString(w, res)
+				return
+			}
 			io.WriteString(w, `{"access_token":"tok-secret-1","token_type":"bearer","machine":"box","token_id":7}`)
 		case "/api/whoami":
 			if h := r.Header.Get("Authorization"); h != "Bearer tok-secret-1" && h != "Bearer old-token" {
@@ -485,7 +493,7 @@ func TestJoinWithoutTerminalNeedsYes(t *testing.T) {
 	if code := cmdJoin([]string{"--server", srv.URL, "--pair", "abcd-efgh", "--no-browser"}, &out); code == 0 {
 		t.Fatalf("exit 0 without tty: %s", out.String())
 	}
-	if !strings.Contains(out.String(), "not used up") || !strings.Contains(out.String(), "ctx join --server "+srv.URL+" --pair ABCD-EFGH --no-browser --yes") {
+	if !strings.Contains(out.String(), "not used up") || !strings.Contains(out.String(), "ctx join --server "+srv.URL+" --pair ABCD-EFGH --yes") {
 		t.Fatalf("no ready-made command: %s", out.String())
 	}
 	if len(srv.paths) != 0 {
@@ -1907,7 +1915,7 @@ func TestClaimErrorNamesTheWaitWhenTheAccountIsLocked(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "about 25 minutes") || strings.Contains(err.Error(), "invitation page") {
 		t.Fatalf("err = %v", err)
 	}
-	if strings.Contains(takenMessage(&machineTakenError{atClaim: true}, "https://s", "ABCD-1234", "box", true, false), "used up after") {
+	if strings.Contains(takenMessage(&machineTakenError{atClaim: true}, "https://s", "ABCD-1234", "box", false), "used up after") {
 		t.Error("taken message still announces a burned code")
 	}
 }
