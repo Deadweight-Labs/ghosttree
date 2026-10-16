@@ -80,6 +80,15 @@ func cmdDoctor(args []string, stdout io.Writer) int {
 				fmt.Fprintf(stdout, "fix %s: %v\n", name, err)
 			}
 		}
+		// Ein vorhandener, aber falscher ghclaude-Link wird erneuert; wer
+		// keinen hat, bekommt hier keinen.
+		if link, _, _, err := ghclaudeLink(home); err == nil {
+			if st, err := os.Lstat(link); err == nil && st.Mode()&os.ModeSymlink != 0 {
+				if _, _, err := ensureGhclaude(home); err != nil {
+					fmt.Fprintf(stdout, "fix ghclaude: %v\n", err)
+				}
+			}
+		}
 		if len(harnesses) > 0 {
 			fmt.Fprint(stdout, "re-ran installers\n\n")
 		} else {
@@ -99,7 +108,7 @@ func cmdDoctor(args []string, stdout io.Writer) int {
 	return 1
 }
 
-var sharedDoctorOrder = []string{"binary", "client", "server", "collector", "tree", "budget"}
+var sharedDoctorOrder = []string{"binary", "client", "server", "collector", "tree", "budget", "ghclaude"}
 
 func resolveDoctorScope(harness string, only []string) ([]string, map[string]installer.ComponentSet, map[string]bool, error) {
 	harnesses := []string{"claude", "codex", "opencode"}
@@ -172,6 +181,8 @@ func selectedSharedChecks(selected map[string]bool, home string) []installer.Che
 		switch component {
 		case "binary":
 			checks = append(checks, binaryCheck())
+		case "ghclaude":
+			checks = append(checks, ghclaudeCheck(home))
 		case "client":
 			cfgChecks := configChecks()
 			if len(cfgChecks) > 0 {

@@ -25,6 +25,7 @@ func (v *repeatedStrings) Set(value string) error {
 
 const installUsage = `usage: ctx install claude|codex|opencode [--only component]... [--no-watch]
        ctx install watch
+       ctx install ghclaude
 
   claude, codex, opencode  wire the harness: hooks, MCP server, rules, skills.
                            claude and codex also set up the collector service.
@@ -32,7 +33,10 @@ const installUsage = `usage: ctx install claude|codex|opencode [--only component
                            systemd user unit on Linux, a LaunchAgent on macOS)
   --only component         install only this component (mcp, hooks, rules,
                            skills; repeatable)
+  ghclaude                 link ghclaude next to ctx: starts claude with the
+                           ghosttree channel, all arguments unchanged
   --no-watch               do not set up the collector service
+  --no-ghclaude            do not offer ghclaude (install claude)
 `
 
 // Replaceable for tests: the binary whose path goes into configuration.
@@ -97,6 +101,7 @@ func cmdInstall(args []string, stdout io.Writer) int {
 	var only repeatedStrings
 	fs.Var(&only, "only", "install only this component (repeatable)")
 	noWatch := fs.Bool("no-watch", false, "do not set up the collector service")
+	noGhclaude := fs.Bool("no-ghclaude", false, "do not offer ghclaude")
 	if err := fs.Parse(args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -116,6 +121,13 @@ func cmdInstall(args []string, stdout io.Writer) int {
 	if err != nil {
 		fmt.Fprintf(stdout, "nothing installed: %v\n", err)
 		return 1
+	}
+	if harness == ghclaudeName {
+		if len(only) != 0 {
+			fmt.Fprintln(stdout, "ctx install ghclaude takes no --only")
+			return 2
+		}
+		return cmdInstallGhclaude(stdout, home)
 	}
 	if harness == "watch" {
 		if len(only) != 0 {
@@ -157,6 +169,9 @@ func cmdInstall(args []string, stdout io.Writer) int {
 			fmt.Fprintf(stdout, "next: start a fresh Codex session, then %s\n", doctor)
 		}
 	case "claude":
+		if len(only) == 0 && !*noGhclaude {
+			installGhclaudeOffer(stdout, home)
+		}
 		fmt.Fprintf(stdout, "next: restart Claude Code or start a fresh session, then %s\n", doctor)
 	case "opencode":
 		fmt.Fprintf(stdout, "next: restart OpenCode or start a fresh session, then %s\n", doctor)

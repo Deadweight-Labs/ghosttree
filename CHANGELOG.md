@@ -6,6 +6,12 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Added: `ghclaude`, a link to `ctx` that starts Claude Code with the ghosttree
+  channel and passes all arguments through unchanged, so it can be entered as the
+  Claude executable in a GUI. `ctx install claude` and `ctx join` offer it once,
+  `ctx install ghclaude` / `ctx uninstall ghclaude` manage it and `ctx doctor`
+  checks it. Measured: it wakes idle agents only in an interactive terminal; a
+  non-interactive claude (`-p`, Agent SDK) ignores the channel.
 - Changed (web): quick wins from the UI persona audit. The start page is now
   "Home". Tasks and pains are tabs next to Requests (`/ui/tasks`, `/ui/pains`), the
   navigation keeps "Requests" lit there and shows the number of open tasks for you.

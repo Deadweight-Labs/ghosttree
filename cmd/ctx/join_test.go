@@ -1816,7 +1816,7 @@ func TestJoinLeavesTheCollectorToItselfWhenInstallingForAnAgent(t *testing.T) {
 	if code := cmdJoin([]string{"--server", srv.URL, "--pair", "abcd-efgh", "--name", "box", "--yes"}, &out); code != 0 {
 		t.Fatalf("exit %d: %s", code, out.String())
 	}
-	if len(got) != 1 || strings.Join(got[0], " ") != "claude --no-watch" || f.collectors != 1 {
+	if len(got) != 1 || strings.Join(got[0], " ") != "claude --no-watch --no-ghclaude" || f.collectors != 1 {
 		t.Fatalf("installer args = %v, collector set up %d times; the collector is set up once, by join", got, f.collectors)
 	}
 	if strings.Count(out.String(), "Collector running.") != 1 {
@@ -1834,7 +1834,7 @@ func TestJoinPassesNoWatchToTheInstaller(t *testing.T) {
 	if code := cmdJoin([]string{"--server", srv.URL, "--pair", "abcd-efgh", "--name", "box", "--yes", "--no-watch"}, &out); code != 0 {
 		t.Fatalf("exit %d: %s", code, out.String())
 	}
-	if len(got) != 1 || strings.Join(got[0], " ") != "claude --no-watch" {
+	if len(got) != 1 || strings.Join(got[0], " ") != "claude --no-watch --no-ghclaude" {
 		t.Fatalf("installer args = %v", got)
 	}
 }

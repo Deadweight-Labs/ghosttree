@@ -181,6 +181,35 @@ research-preview feature; ghosttree is not on Anthropic's allowlist, so
 confirm it at every start. Team and Enterprise plans can switch channels off
 (`channelsEnabled`).
 
+#### ghclaude: the channel without typing `ctx claude`
+
+`ghclaude` is a link to `ctx` in the same directory. When ctx is started under
+that name it runs `claude` with the channel and passes every argument through
+unchanged (it replaces itself with claude, so exit code, signals and
+stdin/stdout are claude's). It looks for `claude` like `ctx claude` does
+(`GHOSTTREE_CLAUDE_BIN`, then `PATH`) and, because a GUI such as T3 often has a
+shorter `PATH`, next to itself. `ctx install claude` and `ctx join` ask once
+(`Install ghclaude? [Y/n]`, on `/dev/tty`; without a terminal nothing is created
+and the command to run is printed). `ctx install ghclaude` creates it without a
+question, `ctx uninstall ghclaude` removes only that link, and `ctx doctor`
+checks that it leads to ctx. A shell alias would not do: T3 starts Claude
+through the Agent SDK with a path to the executable, and an alias hides what runs.
+
+Measured with Claude Code 2.1.296 (2026-10-16, claude.ai login, `--model sonnet`,
+local server, throwaway ghosttree config): the channel works only in an
+interactive session. A non-interactive `claude` (`-p`, also with
+`--input-format stream-json --output-format stream-json`, the way the Agent SDK
+starts it) accepts `--dangerously-load-development-channels` without error, shows no
+confirmation dialog and does not block, but never registers the channel: the
+debug log has no `Channel notifications registered`, and a message sent to the
+idle session stays `injected` and starts no turn (the interactive run in the same
+setup was `acked` and answered). So `ghclaude` set as the Claude executable in T3
+starts the session but does not wake it; it wakes idle agents in a terminal.
+Channels also need a claude.ai login: with `ANTHROPIC_AUTH_TOKEN` and a custom
+`ANTHROPIC_BASE_URL` Claude Code reports `channels feature is not currently
+available` even interactively. `--resume` under `-p` was not run separately; it
+takes the same code path as the other `-p` runs.
+
 What was measured (Claude Code 2.1.284, `ctx channel --capabilities`):
 
 | Capability | State |

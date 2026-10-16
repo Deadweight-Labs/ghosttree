@@ -795,6 +795,10 @@ func cmdJoin(args []string, stdout io.Writer) int {
 		}
 		// The collector was handled above, once and with its outcome shown.
 		installArgs := []string{h, "--no-watch"}
+		if h == "claude" {
+			// join fragt nach ghclaude selbst, am eigenen Terminal.
+			installArgs = append(installArgs, "--no-ghclaude")
+		}
 		rec := &hooksNoticeWriter{w: stdout}
 		code := joinInstall(installArgs, rec)
 		if h == "codex" && code == 0 {
@@ -805,6 +809,9 @@ func cmdJoin(args []string, stdout io.Writer) int {
 			continue
 		}
 		setUp = append(setUp, labels...)
+		if h == "claude" {
+			offerGhclaude(ctx, stdout, tty, home)
+		}
 	}
 	printSetupList(stdout, "Set up:", setUp)
 	if codexSetUp && !codexNoticeShown {
