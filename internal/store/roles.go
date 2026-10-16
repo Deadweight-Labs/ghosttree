@@ -86,6 +86,9 @@ type RoleInfo struct {
 	// Implicit: die Rolle kommt aus der Organisation (Org-Owner), nicht aus einer
 	// gespeicherten Zeile.
 	Implicit bool `json:"implicit,omitempty"`
+	// Inherited: die Rolle ist die Standardrolle eines mit der Org geteilten
+	// Projekts, keine gespeicherte Zeile.
+	Inherited bool `json:"inherited,omitempty"`
 }
 
 // ProjectMember ist eine Zeile der Rollenliste eines Projekts.
@@ -95,6 +98,7 @@ type ProjectMember struct {
 	Role      string `json:"role"`
 	CanReview bool   `json:"can_review"`
 	Implicit  bool   `json:"implicit,omitempty"`
+	Inherited bool   `json:"inherited,omitempty"`
 	GrantedBy string `json:"granted_by,omitempty"`
 	GrantedAt string `json:"granted_at,omitempty"`
 }
@@ -116,14 +120,17 @@ func projectRoleTx(q rowQuerier, remote string, account int64) RoleInfo {
 	var role string
 	var review int
 	_ = q.QueryRow(`SELECT role, can_review FROM project_members WHERE project_id=? AND account_id=?`, pid, account).Scan(&role, &review)
-	return deriveRole(orgRole, role, review == 1)
+	return deriveRole(orgRole, role, review == 1, projectShareDefaultTx(q, pid, orgID, account))
 }
 
 // deriveRole ist die Ableitung selbst: Org-Owner sind implizit Owner, sonst
 // zählt die gespeicherte Zeile. Einzel- und Sammelabfrage (AccountRoles) teilen
 // sie, damit es nur eine Regel gibt.
-func deriveRole(orgRole, memberRole string, review bool) RoleInfo {
+func deriveRole(orgRole, memberRole string, review, shareDefault bool) RoleInfo {
 	info := RoleInfo{Role: memberRole, CanReview: review}
+	if memberRole == "" && shareDefault {
+		info.Role, info.Inherited = DefaultSharedRole, true
+	}
 	if orgRole == OrgOwner {
 		info.Implicit = memberRole != RoleOwner
 		info.Role = RoleOwner
@@ -146,7 +153,9 @@ func (s *Store) AccountRoles(accountPrincipal string) (map[string]RoleInfo, bool
 	}
 	var admin int
 	_ = s.db.QueryRow(`SELECT is_admin FROM persons WHERE id=?`, id).Scan(&admin)
-	rows, err := s.db.Query(`SELECT p.remote, om.role, COALESCE(pm.role,''), COALESCE(pm.can_review,0)
+	rows, err := s.db.Query(`SELECT p.remote, om.role, COALESCE(pm.role,''), COALESCE(pm.can_review,0),
+			EXISTS(SELECT 1 FROM shared_projects sp WHERE sp.project_id=p.id)
+			AND NOT EXISTS(SELECT 1 FROM org_guests og WHERE og.org_id=p.org_id AND og.account_id=om.account_id)
 		FROM projects p
 		JOIN org_members om ON om.org_id=p.org_id AND om.account_id=?
 		LEFT JOIN project_members pm ON pm.project_id=p.id AND pm.account_id=?`, id, id)
@@ -157,8 +166,9 @@ func (s *Store) AccountRoles(accountPrincipal string) (map[string]RoleInfo, bool
 	for rows.Next() {
 		var remote, orgRole, role string
 		var review int
-		if rows.Scan(&remote, &orgRole, &role, &review) == nil {
-			out[remote] = deriveRole(orgRole, role, review == 1)
+		var share bool
+		if rows.Scan(&remote, &orgRole, &role, &review, &share) == nil {
+			out[remote] = deriveRole(orgRole, role, review == 1, share)
 		}
 	}
 	return out, admin == 1
@@ -475,7 +485,8 @@ func (s *Store) ListProjectMembers(remote string) ([]ProjectMember, error) {
 	rows, err := s.db.Query(`SELECT o.account_id, p.name, o.role, COALESCE(m.role,''), COALESCE(m.can_review,0), COALESCE(m.granted_by,0), COALESCE(m.granted_at,'')
 		FROM org_members o JOIN persons p ON p.id=o.account_id
 		LEFT JOIN project_members m ON m.project_id=? AND m.account_id=o.account_id
-		WHERE o.org_id=? AND (o.role='owner' OR m.role IS NOT NULL) ORDER BY p.name LIMIT ?`, pid, orgID, maxListRows)
+		WHERE o.org_id=? AND (o.role='owner' OR m.role IS NOT NULL OR (?=1 AND NOT EXISTS(SELECT 1 FROM org_guests og WHERE og.org_id=o.org_id AND og.account_id=o.account_id)))
+		ORDER BY p.name LIMIT ?`, pid, orgID, boolInt(projectSharedTx(s.db, pid)), maxListRows)
 	if err != nil {
 		return nil, err
 	}
@@ -495,6 +506,8 @@ func (s *Store) ListProjectMembers(remote string) ([]ProjectMember, error) {
 		}
 		if orgRole == OrgOwner {
 			m.Implicit, m.Role = stored != RoleOwner, RoleOwner
+		} else if stored == "" {
+			m.Role, m.Inherited = DefaultSharedRole, true
 		}
 		out = append(out, m)
 	}
@@ -614,7 +627,9 @@ func (s *Store) ProjectWriters(remote string) map[string]bool {
 		JOIN org_members om ON om.org_id=pr.org_id
 		JOIN persons p ON p.id=om.account_id
 		LEFT JOIN project_members pm ON pm.project_id=pr.id AND pm.account_id=p.id
-		WHERE pr.remote=? AND (om.role=? OR pm.role IN (?,?,?))`, remote, OrgOwner, RoleOwner, RoleLead, RoleMember)
+		WHERE pr.remote=? AND (om.role=? OR pm.role IN (?,?,?)
+			OR (pm.role IS NULL AND EXISTS(SELECT 1 FROM shared_projects sp WHERE sp.project_id=pr.id)
+				AND NOT EXISTS(SELECT 1 FROM org_guests og WHERE og.org_id=pr.org_id AND og.account_id=p.id)))`, remote, OrgOwner, RoleOwner, RoleLead, RoleMember)
 	if err != nil {
 		return out
 	}

@@ -410,7 +410,9 @@ func (a CoordAccess) roleReadableProjectRooms(have []CoordRoom) ([]CoordRoom, er
 		reader = reader.reader
 	}
 	rows, err := reader.db.Query(`SELECT r.room_key,r.kind,r.label,r.created_at,
-			om.role, COALESCE(pm.role,''), COALESCE(pm.can_review,0)
+			om.role, COALESCE(pm.role,''), COALESCE(pm.can_review,0),
+			EXISTS(SELECT 1 FROM shared_projects sp WHERE sp.project_id=p.id)
+			AND NOT EXISTS(SELECT 1 FROM org_guests og WHERE og.org_id=p.org_id AND og.account_id=om.account_id)
 		FROM coord_rooms r
 		JOIN projects p ON r.room_key='project:'||p.remote
 		JOIN org_members om ON om.org_id=p.org_id AND om.account_id=?
@@ -429,10 +431,11 @@ func (a CoordAccess) roleReadableProjectRooms(have []CoordRoom) ([]CoordRoom, er
 		var room CoordRoom
 		var orgRole, role string
 		var review int
-		if err := rows.Scan(&room.Key, &room.Kind, &room.Label, &room.CreatedAt, &orgRole, &role, &review); err != nil {
+		var share bool
+		if err := rows.Scan(&room.Key, &room.Kind, &room.Label, &room.CreatedAt, &orgRole, &role, &review, &share); err != nil {
 			return nil, err
 		}
-		if seen[room.Key] || !matrixAllows(deriveRole(orgRole, role, review == 1), ResAgents, ActRead, Object{}) {
+		if seen[room.Key] || !matrixAllows(deriveRole(orgRole, role, review == 1, share), ResAgents, ActRead, Object{}) {
 			continue
 		}
 		out = append(out, room)

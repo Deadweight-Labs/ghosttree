@@ -104,6 +104,27 @@ CREATE TABLE IF NOT EXISTS project_members(
   granted_by INTEGER NOT NULL DEFAULT 0, granted_at TEXT NOT NULL,
   PRIMARY KEY(project_id, account_id));
 CREATE INDEX IF NOT EXISTS project_members_account ON project_members(account_id);
+CREATE TABLE IF NOT EXISTS shared_projects(
+  project_id INTEGER PRIMARY KEY REFERENCES projects(id) ON DELETE RESTRICT);
+CREATE TABLE IF NOT EXISTS org_guests(
+  org_id INTEGER NOT NULL REFERENCES orgs(id) ON DELETE RESTRICT,
+  account_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE RESTRICT,
+  PRIMARY KEY(org_id, account_id));
+CREATE TABLE IF NOT EXISTS git_sources(
+  id INTEGER PRIMARY KEY,
+  org_id INTEGER NOT NULL REFERENCES orgs(id) ON DELETE RESTRICT,
+  kind TEXT NOT NULL, login TEXT NOT NULL,
+  connected_by INTEGER NOT NULL, connected_at TEXT NOT NULL,
+  UNIQUE(kind, login));
+CREATE TABLE IF NOT EXISTS git_source_repos(
+  source_id INTEGER NOT NULL REFERENCES git_sources(id) ON DELETE CASCADE,
+  remote TEXT NOT NULL, PRIMARY KEY(source_id, remote));
+CREATE TABLE IF NOT EXISTS org_prefixes(
+  id INTEGER PRIMARY KEY,
+  org_id INTEGER NOT NULL REFERENCES orgs(id) ON DELETE RESTRICT,
+  prefix TEXT NOT NULL UNIQUE,
+  visibility TEXT NOT NULL CHECK(visibility IN ('shared','private')),
+  created_by INTEGER NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS named_projects(
   project_id INTEGER PRIMARY KEY REFERENCES projects(id) ON DELETE RESTRICT);
 CREATE TABLE IF NOT EXISTS role_events(
@@ -1029,6 +1050,10 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 		return nil, err
 	}
 	if err := migrateOrgs(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := backfillOrgGuests(db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
