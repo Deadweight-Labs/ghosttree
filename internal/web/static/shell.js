@@ -56,7 +56,7 @@
   if (today) {
     const now = new Date();
     today.dateTime = now.toISOString().slice(0, 10);
-    today.textContent = now.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" });
+    today.textContent = now.toLocaleDateString(document.documentElement.lang || undefined, { weekday: "short", day: "numeric", month: "short" });
   }
   const greet = document.querySelector("[data-greet-morning]");
   if (greet) {

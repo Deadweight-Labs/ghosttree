@@ -364,6 +364,15 @@ its own; limit it at the reverse proxy. Keep one ctx version per directory.
 Cautious readers can fetch the script, read it, and
 run it afterwards.
 
+### Interface language
+
+The web interface speaks English by default. `GHOSTTREE_LANGUAGE=de` (or
+`ctx serve --language de`) switches the whole interface, including the sign-in
+and invitation pages, dates and times, to German. The language is resolved per
+request; today it comes from this server setting. Text that people or agents
+wrote is shown as written, and the texts meant for agents (bootstrap, MCP
+descriptions, rules) stay English.
+
 ## Privacy and security
 
 Ghosttree may hold source paths, prompts, command output, and operational

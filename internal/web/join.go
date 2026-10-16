@@ -134,6 +134,7 @@ func (a *app) joinScriptHeaders(w http.ResponseWriter) {
 
 // joinGate zählt den Aufruf. Es antwortet selbst, wenn die Grenze erreicht ist.
 func (a *app) joinGate(w http.ResponseWriter, r *http.Request) bool {
+	l := a.langFor(r)
 	if a.joinLimits == nil {
 		return true
 	}
@@ -143,13 +144,13 @@ func (a *app) joinGate(w http.ResponseWriter, r *http.Request) bool {
 	a.joinHeaders(w)
 	w.Header().Set("Retry-After", strconv.Itoa(int(joinWindow/time.Second)))
 	w.WriteHeader(http.StatusTooManyRequests)
-	a.joinWrite(w, "joinbusy", nil)
+	a.joinWrite(l, w, "joinbusy", nil)
 	return false
 }
 
-func (a *app) joinWrite(w http.ResponseWriter, name string, data any) {
+func (a *app) joinWrite(l lang, w http.ResponseWriter, name string, data any) {
 	var out bytes.Buffer
-	if err := pages.ExecuteTemplate(&out, name, data); err != nil {
+	if err := l.page().ExecuteTemplate(&out, name, data); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -157,10 +158,10 @@ func (a *app) joinWrite(w http.ResponseWriter, name string, data any) {
 }
 
 // joinNotFound ist die eine Antwort für jeden Code, der nicht taugt.
-func (a *app) joinNotFound(w http.ResponseWriter) {
+func (a *app) joinNotFound(l lang, w http.ResponseWriter) {
 	a.joinHeaders(w)
 	w.WriteHeader(http.StatusNotFound)
-	a.joinWrite(w, "joinnotfound", nil)
+	a.joinWrite(l, w, "joinnotfound", nil)
 }
 
 func wellFormedJoinCode(code string) bool {
@@ -195,11 +196,11 @@ type joinView struct {
 	Project string
 }
 
-func roleLabel(role string) string {
+func roleLabel(l lang, role string) string {
 	if role == store.RoleGuest {
-		return msg("join.role_guest")
+		return l.msg("join.role_guest")
 	}
-	return msg("join.role_member")
+	return l.msg("join.role_member")
 }
 
 // joinSession liefert das angemeldete Konto, wenn eine interaktive Sitzung da ist.
@@ -216,20 +217,21 @@ func (a *app) joinSession(r *http.Request) (browserSession, bool) {
 }
 
 func (a *app) joinPage(w http.ResponseWriter, r *http.Request) {
+	l := a.langFor(r)
 	if !a.joinGate(w, r) {
 		return
 	}
 	code := r.PathValue("code")
 	preview, ok := a.joinPreview(code)
 	if !ok {
-		a.joinNotFound(w)
+		a.joinNotFound(l, w)
 		return
 	}
 	// Die Seite zeigt nur Name der einladenden Person, Projekt, Organisation,
 	// Rolle und Ablauf. Eine Paarungssitzung legt erst die Annahme an (joinAccepted),
 	// ein bloßes Öffnen oder Neuladen erzeugt keinen Code.
-	view := joinView{Inviter: preview.Inviter, Target: preview.Project, Org: preview.Org, RoleText: roleLabel(preview.Role),
-		ExpiresAt: preview.ExpiresAt, Guest: preview.Role == store.RoleGuest, Project: firstNonEmpty(preview.Project, msg("join.shares.project")),
+	view := joinView{Inviter: preview.Inviter, Target: preview.Project, Org: preview.Org, RoleText: roleLabel(l, preview.Role),
+		ExpiresAt: preview.ExpiresAt, Guest: preview.Role == store.RoleGuest, Project: firstNonEmpty(preview.Project, l.msg("join.shares.project")),
 		Code: code, OIDC: a.oidc != nil, Signup: a.oidc != nil && a.oidc.signupOffered(r.Context())}
 	if session, ok := a.joinSession(r); ok {
 		view.SignedIn, view.Person, view.CSRFToken = true, session.principal.Label, session.csrf
@@ -238,35 +240,36 @@ func (a *app) joinPage(w http.ResponseWriter, r *http.Request) {
 			view.Email = acct.Email
 		}
 		if a.store.InvitationCovered(session.principal.ID, code) {
-			a.joinAlreadyMember(w, preview)
+			a.joinAlreadyMember(l, w, preview)
 			return
 		}
 	}
 	a.joinHeaders(w)
-	a.joinWrite(w, "join", view)
+	a.joinWrite(l, w, "join", view)
 }
 
 // joinAlreadyMember tells a signed-in member that the link gives them nothing
 // new, with a way into the project. The invitation stays unused.
-func (a *app) joinAlreadyMember(w http.ResponseWriter, p store.InvitePreview) {
+func (a *app) joinAlreadyMember(l lang, w http.ResponseWriter, p store.InvitePreview) {
 	a.joinHeaders(w)
 	target := "/ui/overview"
 	if p.Remote != "" {
 		target = "/ui/knowledge?project=" + url.QueryEscape(p.Remote)
 	}
-	a.joinWrite(w, "joinmember", struct{ Title, URL string }{
-		msg("join.member_title", firstNonEmpty(p.Project, p.Org)), target})
+	a.joinWrite(l, w, "joinmember", struct{ Title, URL string }{
+		l.msg("join.member_title", firstNonEmpty(p.Project, p.Org)), target})
 }
 
 // joinAccept löst die Einladung für das angemeldete Konto ein. Aufgerufen wird
 // es hinter requirePerson, requireInteractive und requireCSRF.
 func (a *app) joinAccept(w http.ResponseWriter, r *http.Request) {
+	l := a.langFor(r)
 	if !a.joinGate(w, r) {
 		return
 	}
 	code := r.PathValue("code")
 	if _, ok := a.joinPreview(code); !ok {
-		a.joinNotFound(w)
+		a.joinNotFound(l, w)
 		return
 	}
 	// Wer hier als fremdes Konto angemeldet ist (etwa durch einen untergeschobenen
@@ -274,7 +277,7 @@ func (a *app) joinAccept(w http.ResponseWriter, r *http.Request) {
 	// ließe sich nicht prüfen, ohne die Sitzungen zu ändern, und die Bestätigung
 	// fängt auch den Fall ab, dass das Konto alt, aber nicht das eigene ist.
 	if r.FormValue("confirm_account") != browserPrincipal(r).Label {
-		a.joinAcceptMessage(w, code, http.StatusBadRequest, msg("join.msg_confirm_t"), msg("join.msg_confirm_j"))
+		a.joinAcceptMessage(l, w, code, http.StatusBadRequest, l.msg("join.msg_confirm_t"), l.msg("join.msg_confirm_j"))
 		return
 	}
 	_, err := a.store.AcceptInvitation(browserPrincipal(r).ID, code)
@@ -282,16 +285,16 @@ func (a *app) joinAccept(w http.ResponseWriter, r *http.Request) {
 	case err == nil:
 		a.joinAccepted(w, r)
 	case errors.Is(err, store.ErrCodeInvalid):
-		a.joinNotFound(w)
+		a.joinNotFound(l, w)
 	case errors.Is(err, store.ErrAlreadyMember):
 		preview, _ := a.joinPreview(code)
-		a.joinAlreadyMember(w, preview)
+		a.joinAlreadyMember(l, w, preview)
 	case errors.Is(err, store.ErrTooManyAttempts):
-		a.joinAcceptMessage(w, code, http.StatusTooManyRequests, msg("join.msg_many_t"), msg("join.msg_many"))
+		a.joinAcceptMessage(l, w, code, http.StatusTooManyRequests, l.msg("join.msg_many_t"), l.msg("join.msg_many"))
 	case errors.Is(err, store.ErrAccountDisabled):
-		a.joinAcceptMessage(w, code, http.StatusForbidden, msg("join.msg_disabled_t"), msg("join.msg_disabled"))
+		a.joinAcceptMessage(l, w, code, http.StatusForbidden, l.msg("join.msg_disabled_t"), l.msg("join.msg_disabled"))
 	default:
-		a.joinAcceptMessage(w, code, http.StatusInternalServerError, msg("join.msg_failed_t"), msg("join.msg_failed"))
+		a.joinAcceptMessage(l, w, code, http.StatusInternalServerError, l.msg("join.msg_failed_t"), l.msg("join.msg_failed"))
 	}
 }
 
@@ -321,10 +324,10 @@ func (a *app) joinAccepted(w http.ResponseWriter, r *http.Request) {
 
 // joinMessageBack zeigt eine Meldung mit einem Link zurück; ohne Ziel bleibt es
 // bei der Meldung.
-func (a *app) joinMessageBack(w http.ResponseWriter, status int, title, message, backURL, backLabel string) {
+func (a *app) joinMessageBack(l lang, w http.ResponseWriter, status int, title, message, backURL, backLabel string) {
 	a.joinHeaders(w)
 	w.WriteHeader(status)
-	a.joinWrite(w, "joinmsg", struct {
+	a.joinWrite(l, w, "joinmsg", struct {
 		Title, Message, BackURL, BackLabel string
 	}{title, message, backURL, backLabel})
 }
@@ -332,6 +335,6 @@ func (a *app) joinMessageBack(w http.ResponseWriter, status int, title, message,
 // joinAcceptMessage ist die Meldung auf eine gültige, aber nicht angenommene
 // Einladung; sie führt zurück zur Einladung. Nur für Codes, die die Vorschau
 // bestanden haben, damit ungültige Codes nichts anderes als die 404 sehen.
-func (a *app) joinAcceptMessage(w http.ResponseWriter, code string, status int, title, message string) {
-	a.joinMessageBack(w, status, title, message, "/join/"+code, msg("join.msg_back_invite"))
+func (a *app) joinAcceptMessage(l lang, w http.ResponseWriter, code string, status int, title, message string) {
+	a.joinMessageBack(l, w, status, title, message, "/join/"+code, l.msg("join.msg_back_invite"))
 }

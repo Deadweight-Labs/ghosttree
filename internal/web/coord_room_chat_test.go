@@ -183,7 +183,7 @@ func TestCoordWaitingNamesTheAgeOfARequest(t *testing.T) {
 		"2026-10-02T09:00:00Z": "waiting 3 h",
 		"2026-09-29T12:00:00Z": "waiting 3 d",
 	} {
-		if got := coordWaiting(created, now); got != want {
+		if got := coordWaiting(langEN, created, now); got != want {
 			t.Errorf("coordWaiting(%s) = %q, want %q", created, got, want)
 		}
 	}

@@ -127,9 +127,10 @@ func (a *app) requireInteractive(next http.Handler) http.Handler {
 }
 
 func (a *app) notInteractive(w http.ResponseWriter, r *http.Request) {
+	l := a.langFor(r)
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusForbidden)
-	a.renderBrowser(w, r, "interactive", pageData{Title: msg("adm.login.title"), OIDC: a.oidc != nil})
+	a.renderBrowser(w, r, "interactive", pageData{Title: l.msg("adm.login.title"), OIDC: a.oidc != nil})
 }
 
 func (a *app) requireCSRF(next http.Handler) http.Handler {
@@ -231,30 +232,32 @@ func codeHeaders(w http.ResponseWriter) {
 }
 
 // loginRejected zeigt die Anmeldeseite mit dem Fehler im Formular.
-func (a *app) loginRejected(w http.ResponseWriter, status int, errKey string, tokenOpen bool) {
+func (a *app) loginRejected(l lang, w http.ResponseWriter, status int, errKey string, tokenOpen bool) {
 	codeHeaders(w)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
-	data := a.loginData(msg("login.title"), msg(errKey))
+	data := a.loginData(l.msg("login.title"), l.msg(errKey))
 	data.TokenOpen = tokenOpen
-	a.render(w, "login", data)
+	a.render(l, w, "login", data)
 }
 
 func (a *app) loginPage(w http.ResponseWriter, r *http.Request) {
+	l := a.langFor(r)
 	codeHeaders(w)
-	a.render(w, "login", a.loginData(msg("login.title"), ""))
+	a.render(l, w, "login", a.loginData(l.msg("login.title"), ""))
 }
 func (a *app) loginSubmit(w http.ResponseWriter, r *http.Request) {
+	l := a.langFor(r)
 	if !parseLoginForm(w, r) {
 		return
 	}
 	if !a.pasteLoginAllowed() {
-		a.loginMessage(w, http.StatusForbidden, "auth.token_disabled.title", "auth.token_disabled.text")
+		a.loginMessage(l, w, http.StatusForbidden, "auth.token_disabled.title", "auth.token_disabled.text")
 		return
 	}
 	principal, ok := a.store.AuthenticatePrincipal(r.FormValue("token"))
 	if !ok {
-		a.loginRejected(w, http.StatusUnauthorized, "login.error_token", true)
+		a.loginRejected(l, w, http.StatusUnauthorized, "login.error_token", true)
 		return
 	}
 	a.store.TouchToken(principal.TokenID)
@@ -301,10 +304,11 @@ func (a *app) startSessionAt(w http.ResponseWriter, r *http.Request, principal s
 // geschieht per POST: Mail- und Chat-Vorschauen rufen Links per GET ab und
 // würden sonst den Einmal-Code verbrauchen.
 func (a *app) codePage(w http.ResponseWriter, r *http.Request) {
+	l := a.langFor(r)
 	code := strings.TrimSpace(r.URL.Query().Get("code"))
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Referrer-Policy", "strict-origin")
-	data := a.loginData(msg("login.code_title"), "")
+	data := a.loginData(l.msg("login.code_title"), "")
 	data.Code = code
 	kind := ""
 	if code != "" {
@@ -325,9 +329,10 @@ func (a *app) codePage(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	a.render(w, "logincode", data)
+	a.render(l, w, "logincode", data)
 }
 func (a *app) codeSubmit(w http.ResponseWriter, r *http.Request) {
+	l := a.langFor(r)
 	w.Header().Set("Referrer-Policy", "strict-origin")
 	if !parseLoginForm(w, r) {
 		return
@@ -373,11 +378,11 @@ func (a *app) codeSubmit(w http.ResponseWriter, r *http.Request) {
 		err = store.ErrCodeInvalid
 	}
 	if errors.Is(err, store.ErrCodeInvalid) {
-		a.loginRejected(w, http.StatusForbidden, "login.error_code", false)
+		a.loginRejected(l, w, http.StatusForbidden, "login.error_code", false)
 		return
 	}
 	if err != nil {
-		a.identityRejected(w, err)
+		a.identityRejected(l, w, err)
 		return
 	}
 	if kind == store.CodeInvitation && r.FormValue("join") == "1" {

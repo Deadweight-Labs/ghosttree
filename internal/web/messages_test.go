@@ -9,7 +9,7 @@ import (
 )
 
 // p1Templates sind die Vorlagen, deren Texte vollständig im Katalog liegen.
-var p1Templates = []string{"templates/layout.html", "templates/login.html", "templates/overview.html", "templates/sessions.html", "templates/coord.html", "templates/knowledge.html", "templates/requests.html", "templates/orgs.html", "templates/device.html", "templates/profile.html", "templates/tasks.html", "templates/pains.html"}
+var p1Templates = []string{"templates/layout.html", "templates/login.html", "templates/overview.html", "templates/sessions.html", "templates/coord.html", "templates/knowledge.html", "templates/requests.html", "templates/orgs.html", "templates/device.html", "templates/profile.html", "templates/tasks.html", "templates/pains.html", "templates/agentcontrol.html", "templates/agents.html", "templates/join.html", "templates/pages.html"}
 
 var (
 	scriptRE   = regexp.MustCompile(`(?s)<script>.*?</script>`)
@@ -29,7 +29,7 @@ func TestP1TemplatesCarryNoTextOutsideTheCatalog(t *testing.T) {
 		// Aktionen durch einen Marker ersetzen: was übrig bleibt, ist Literal.
 		stripped := scriptRE.ReplaceAllString(actionRE.ReplaceAllString(src, "\x00"), "")
 		for _, m := range textNodeRE.FindAllStringSubmatch(stripped, -1) {
-			if txt := strings.Trim(m[1], " \t\r\n\x00"); txt != "" {
+			if txt := strings.Trim(m[1], " \t\r\n\x00"); txt != "" && !isSeparator(txt) {
 				t.Errorf("%s: literal text %q outside the catalog", name, txt)
 			}
 		}
@@ -41,10 +41,19 @@ func TestP1TemplatesCarryNoTextOutsideTheCatalog(t *testing.T) {
 	}
 }
 
+// isSeparator erlaubt Zeichen, die in keiner Sprache übersetzt werden.
+func isSeparator(s string) bool {
+	switch s {
+	case "·", "@", "1", "2", "3":
+		return true
+	}
+	return false
+}
+
 // isTechnicalValue erlaubt Werte, die kein Text für Menschen sind.
 func isTechnicalValue(v string) bool {
 	switch v {
-	case "message", "directive", "request", "question", "approval", "blocker", "handoff", "open", "resolved", "deferred", "all-agents", "withdraw", "met", "waived":
+	case "resume", "pause", "interrupt", "message", "directive", "request", "question", "approval", "blocker", "handoff", "open", "resolved", "deferred", "all-agents", "withdraw", "met", "waived":
 		return true
 	}
 	return strings.HasPrefix(v, "/") || strings.HasPrefix(v, "1") || strings.HasPrefix(v, "REQ-") || v == "on" || v == "member" || v == "owner" || v == "guest" || v == "none" || v == "7" || v == "approve" || v == "deny" || v == "member\x00owner" || regexp.MustCompile(`^[0-9]+$`).MatchString(v)
@@ -105,7 +114,7 @@ func TestMsgFormatsArgumentsAndNeverReturnsEmpty(t *testing.T) {
 	}
 }
 
-var goKeyRE = regexp.MustCompile(`"((?:shell|nav|role|login|auth|overview|ov|setup|age|agent|machine|sessions|coord|knowledge|requests|adm|time|join|pair|profile|tasks|pains)\.[a-z0-9_.]+)"`)
+var goKeyRE = regexp.MustCompile(`"((?:shell|nav|role|login|auth|overview|ov|setup|age|agent|machine|sessions|coord|knowledge|requests|adm|time|join|pair|profile|tasks|pains|page)\.[a-z0-9_.]+)"`)
 
 // goMessageKeys sammelt die Schlüssel, die im Go-Code vorkommen (Navigation,
 // Rollen, Fehlertexte der Handler).
@@ -119,7 +128,7 @@ func goMessageKeys(t *testing.T) []string {
 	var keys []string
 	for _, e := range entries {
 		name := e.Name()
-		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") || name == "messages.go" {
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") || name == "messages.go" || name == "messages_de.go" {
 			continue
 		}
 		raw, err := os.ReadFile(name)

@@ -234,17 +234,17 @@ var doneKeys = map[string]string{
 	"released": "knowledge.done.released", "retired": "knowledge.done.retired", "restored": "knowledge.done.restored", "saved": "knowledge.done.saved",
 }
 
-func typeLabel(typ string) string {
+func typeLabel(l lang, typ string) string {
 	if key, ok := typeKeys[typ]; ok {
-		return msg(key)
+		return l.msg(key)
 	}
 	return typ
 }
 
 // levelTitle is the tooltip of a status mark: what the status means for agents.
-func levelTitle(level string) string {
+func levelTitle(l lang, level string) string {
 	if key, ok := levelTitleKeys[level]; ok {
-		return msg(key)
+		return l.msg(key)
 	}
 	return ""
 }
@@ -254,19 +254,19 @@ var levelTitleKeys = map[string]string{
 	"staged": "knowledge.level.staged.title", "quarantined": "knowledge.level.quarantined.title",
 }
 
-func levelLabel(level string) string {
+func levelLabel(l lang, level string) string {
 	if key, ok := levelKeys[level]; ok {
-		return msg(key)
+		return l.msg(key)
 	}
 	return level
 }
 
-func (a *app) knowledgeRowFor(pa *store.ProjectAccess, raw store.Knowledge, withProject bool) KnowledgeRow {
+func (a *app) knowledgeRowFor(l lang, pa *store.ProjectAccess, raw store.Knowledge, withProject bool) KnowledgeRow {
 	k := pa.KnowledgeView(raw)
 	row := KnowledgeRow{
 		ID: strconv.FormatInt(k.ID, 10), Href: "/ui/knowledge/" + strconv.FormatInt(k.ID, 10), Title: k.Title,
-		Type: k.Type, TypeLabel: typeLabel(k.Type), Level: k.Confidence, LevelLabel: levelLabel(k.Confidence), LevelTitle: levelTitle(k.Confidence), TypeTitle: typeLabel(k.Type),
-		Stale: k.Status == "stale", Excerpt: excerpt(k.Body), Age: shortAge(overviewNow().UTC(), parseTime(firstNonEmpty(k.ObservedAt, k.CreatedAt))),
+		Type: k.Type, TypeLabel: typeLabel(l, k.Type), Level: k.Confidence, LevelLabel: levelLabel(l, k.Confidence), LevelTitle: levelTitle(l, k.Confidence), TypeTitle: typeLabel(l, k.Type),
+		Stale: k.Status == "stale", Excerpt: excerpt(k.Body), Age: shortAge(l, overviewNow().UTC(), parseTime(firstNonEmpty(k.ObservedAt, k.CreatedAt))),
 	}
 	if withProject && k.Scope.Project != "" {
 		row.Project = path.Base(k.Scope.Project)
@@ -325,9 +325,10 @@ func approveChanges(k store.Knowledge, canEdit bool) bool {
 }
 
 func (a *app) cardFor(r *http.Request, pa *store.ProjectAccess, k store.Knowledge, withProject bool, blockRunes int, next, filter string) knowledgeCard {
+	l := a.langFor(r)
 	view := pa.KnowledgeView(k)
 	card := knowledgeCard{
-		KnowledgeRow: a.knowledgeRowFor(pa, k, withProject), Blocks: bodyBlocks(view.Body, blockRunes),
+		KnowledgeRow: a.knowledgeRowFor(l, pa, k, withProject), Blocks: bodyBlocks(view.Body, blockRunes),
 		Person: view.Person, ConfirmedBy: view.ConfirmedBy, Origin: view.Origin,
 		Token: csrfOf(r), Next: next, Filter: filter,
 	}
@@ -340,13 +341,13 @@ func (a *app) cardFor(r *http.Request, pa *store.ProjectAccess, k store.Knowledg
 
 // typeOptions bietet die wählbaren Arten an und immer auch die aktuelle (etwa
 // "instruction"), damit ein unveränderter Speichervorgang die Art behält.
-func typeOptions(current string) []filterOption {
+func typeOptions(l lang, current string) []filterOption {
 	out := make([]filterOption, 0, len(knowledgeTypes)+1)
 	for _, t := range knowledgeTypes {
-		out = append(out, filterOption{Value: t, Label: typeLabel(t), Selected: t == current})
+		out = append(out, filterOption{Value: t, Label: typeLabel(l, t), Selected: t == current})
 	}
 	if current != "" && !slices.Contains(knowledgeTypes, current) {
-		out = append(out, filterOption{Value: current, Label: typeLabel(current), Selected: true})
+		out = append(out, filterOption{Value: current, Label: typeLabel(l, current), Selected: true})
 	}
 	return out
 }
@@ -354,6 +355,7 @@ func typeOptions(current string) []filterOption {
 // ---------------------------------------------------------------------- Liste
 
 func (a *app) knowledgePage(w http.ResponseWriter, r *http.Request) {
+	l := a.langFor(r)
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	typ, level := r.URL.Query().Get("type"), r.URL.Query().Get("level")
 	if !slices.Contains(knowledgeTypes, typ) {
@@ -388,12 +390,12 @@ func (a *app) knowledgePage(w http.ResponseWriter, r *http.Request) {
 	who := a.shellBaseFor(r).who
 	v := &knowledgeView{Q: q, Type: typ, Level: level, Project: project, Guest: who.kind == viewerGuest, Reviewer: who.reviewer}
 	for _, k := range entries {
-		v.Rows = append(v.Rows, a.knowledgeRowFor(pa, k, project == ""))
+		v.Rows = append(v.Rows, a.knowledgeRowFor(l, pa, k, project == ""))
 	}
-	typeSel := filterSelect{Name: "type", Label: msg("knowledge.all_types"), Options: typeOptions(typ)}
-	levelSel := filterSelect{Name: "level", Label: msg("knowledge.all_levels")}
-	for _, l := range knowledgeLevel {
-		levelSel.Options = append(levelSel.Options, filterOption{Value: l, Label: levelLabel(l), Selected: l == level})
+	typeSel := filterSelect{Name: "type", Label: l.msg("knowledge.all_types"), Options: typeOptions(l, typ)}
+	levelSel := filterSelect{Name: "level", Label: l.msg("knowledge.all_levels")}
+	for _, lv := range knowledgeLevel {
+		levelSel.Options = append(levelSel.Options, filterOption{Value: lv, Label: levelLabel(l, lv), Selected: lv == level})
 	}
 	v.Selects = []filterSelect{typeSel, levelSel}
 	filtered := q != "" || typ != "" || level != ""
@@ -413,7 +415,7 @@ func (a *app) knowledgePage(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	a.renderBrowser(w, r, "knowledge", pageData{Title: "Knowledge", Project: project, KnowledgeV: v})
+	a.renderBrowser(w, r, "knowledge", pageData{Title: l.msg("nav.knowledge"), Project: project, KnowledgeV: v})
 }
 
 // --------------------------------------------------------------------- Detail
@@ -446,6 +448,7 @@ func (a *app) lookupKnowledge(w http.ResponseWriter, r *http.Request, act store.
 }
 
 func (a *app) resultFor(r *http.Request, pa *store.ProjectAccess, next, filter string) *resultLine {
+	l := a.langFor(r)
 	kind := r.URL.Query().Get("done")
 	if _, ok := doneKeys[kind]; !ok {
 		return nil
@@ -458,7 +461,7 @@ func (a *app) resultFor(r *http.Request, pa *store.ProjectAccess, next, filter s
 	if err != nil || !pa.CanSeeKnowledge(k) {
 		return nil
 	}
-	res := &resultLine{Token: csrfOf(r), Next: next, Filter: filter, Kind: kind, Text: msg(doneKeys[kind], pa.KnowledgeView(k).Title)}
+	res := &resultLine{Token: csrfOf(r), Next: next, Filter: filter, Kind: kind, Text: l.msg(doneKeys[kind], pa.KnowledgeView(k).Title)}
 	res.CanRestore = (kind == "rejected" || kind == "retired") && k.Status == "deprecated" && pa.CheckKnowledge(k, store.ActEdit) == nil
 	res.ID = strconv.FormatInt(id, 10)
 	res.Was = restorableStatus(r.URL.Query().Get("was"))
@@ -466,13 +469,14 @@ func (a *app) resultFor(r *http.Request, pa *store.ProjectAccess, next, filter s
 }
 
 func (a *app) knowledgeItemPage(w http.ResponseWriter, r *http.Request) {
+	l := a.langFor(r)
 	k, ok := a.lookupKnowledge(w, r, store.ActRead)
 	if !ok {
 		return
 	}
 	pa := a.access(r)
 	card := a.cardFor(r, pa, k, true, 0, "item", "")
-	v := &knowledgeItemView{Card: card, Types: typeOptions(k.Type), Back: "/ui/knowledge", EditOpen: card.CanEdit && r.URL.Query().Get("edit") == "1"}
+	v := &knowledgeItemView{Card: card, Types: typeOptions(l, k.Type), Back: "/ui/knowledge", EditOpen: card.CanEdit && r.URL.Query().Get("edit") == "1"}
 	if k.Scope.Project != "" {
 		v.Back += "?project=" + url.QueryEscape(k.Scope.Project)
 	}
@@ -481,10 +485,10 @@ func (a *app) knowledgeItemPage(w http.ResponseWriter, r *http.Request) {
 	if card.CanEdit {
 		v.Move = a.knowledgeMoveView(r, pa, k)
 	}
-	v.Moves = a.knowledgeMoveRows(pa, k)
-	v.Closure = a.closureRowFor(pa, k)
+	v.Moves = a.knowledgeMoveRows(l, pa, k)
+	v.Closure = a.closureRowFor(l, pa, k)
 	for _, p := range pa.PainsFor("knowledge", k.ID) {
-		v.Pains = append(v.Pains, requestPainLine{Href: painURL(p.ID), Title: p.Title, StateLabel: label(painStateKeys, p.State)})
+		v.Pains = append(v.Pains, requestPainLine{Href: painURL(p.ID), Title: p.Title, StateLabel: label(l, painStateKeys, p.State)})
 	}
 	// Frühere Fassungen tragen keine Vertrauensstufe und sind für Gäste tabu.
 	if hist, err := a.store.KnowledgeHistory(k.ID); err == nil && pa.CanSeeKnowledgeHistory(k) {
@@ -505,25 +509,25 @@ func (a *app) knowledgeItemPage(w http.ResponseWriter, r *http.Request) {
 			if unchanged || len(v.History) >= historyShown {
 				continue
 			}
-			v.History = append(v.History, historyRow{Title: h.Title, By: by, ReplacedBy: h.ChangedBy, Age: shortAge(now, parseTime(h.ChangedAt)), Blocks: bodyBlocks(h.Body, 0)})
+			v.History = append(v.History, historyRow{Title: h.Title, By: by, ReplacedBy: h.ChangedBy, Age: shortAge(l, now, parseTime(h.ChangedAt)), Blocks: bodyBlocks(h.Body, 0)})
 		}
 	}
 	v.Result = a.resultFor(r, pa, "item", "")
 	a.renderBrowser(w, r, "knowledgeitem", pageData{Title: k.Title, KnowledgeItemV: v})
 }
 
-func (a *app) closureRowFor(pa *store.ProjectAccess, k store.Knowledge) *closureRow {
+func (a *app) closureRowFor(l lang, pa *store.ProjectAccess, k store.Knowledge) *closureRow {
 	c := pa.KnowledgeClosure(k)
 	if c == nil {
 		return nil
 	}
-	row := &closureRow{Label: msg("knowledge.closure.retired"), By: c.By, Age: shortAge(overviewNow().UTC(), parseTime(c.At)), Reason: c.Reason}
+	row := &closureRow{Label: l.msg("knowledge.closure.retired"), By: c.By, Age: shortAge(l, overviewNow().UTC(), parseTime(c.At)), Reason: c.Reason}
 	if c.Kind == "superseded" {
 		next, err := a.store.KnowledgeByID(c.SupersededBy)
 		if err != nil {
 			return nil
 		}
-		row.Label = msg("knowledge.closure.superseded")
+		row.Label = l.msg("knowledge.closure.superseded")
 		row.Href = "/ui/knowledge/" + strconv.FormatInt(next.ID, 10)
 		row.Title = pa.KnowledgeView(next).Title
 	}
@@ -573,6 +577,7 @@ func (a *app) fillEvidence(pa *store.ProjectAccess, k store.Knowledge, card *kno
 // --------------------------------------------------------------------- Prüfung
 
 func (a *app) reviewPage(w http.ResponseWriter, r *http.Request) {
+	l := a.langFor(r)
 	pa := a.access(r)
 	project := a.projectParam(r)
 	hidden, stop := a.gateList(w, r, pa, project, store.ResKnowledge)
@@ -595,7 +600,7 @@ func (a *app) reviewPage(w http.ResponseWriter, r *http.Request) {
 		v.Cards = append(v.Cards, card)
 	}
 	v.Empty = len(v.Cards) == 0
-	a.renderBrowser(w, r, "review", pageData{Title: "Review", Project: project, ReviewV: v})
+	a.renderBrowser(w, r, "review", pageData{Title: l.msg("nav.review"), Project: project, ReviewV: v})
 }
 
 // reviewDecide setzt, was das Backend kennt: übernehmen (verified, mit dem

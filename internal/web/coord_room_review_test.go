@@ -266,5 +266,5 @@ func plateOf(t *testing.T, page, body string) string {
 
 // roleLabelRE matches the role label of a message, whose hover text explains it.
 func roleLabelRE(role string) *regexp.Regexp {
-	return regexp.MustCompile(`<span class="cm-role" title="[^"]+">` + role + `</span>`)
+	return regexp.MustCompile(`<span class="cm-role" title="[^"]+">` + msg("role."+role) + `</span>`)
 }

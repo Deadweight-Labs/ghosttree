@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"slices"
@@ -74,6 +75,7 @@ type coordSidebarView struct {
 	Machines  []coordRoomView
 	Projects  []coordRoomView
 	Private   []coordRoomView
+	Lang      lang
 }
 
 // BadgeCount is the one number shown on the narrow-layout rooms button:
@@ -92,12 +94,13 @@ func (s coordSidebarView) BadgeCount() int64 {
 }
 
 func (s coordSidebarView) BadgeLabel() string {
+	l := s.Lang
 	for _, room := range s.Attention {
 		if room.NeedsYou > 0 {
-			return msg("coord.badge_needs")
+			return l.msg("coord.badge_needs")
 		}
 	}
-	return msg("coord.badge_unread")
+	return l.msg("coord.badge_unread")
 }
 
 // inProject lässt von den Projekträumen der Liste nur den des gewählten
@@ -197,6 +200,8 @@ type coordMessageView struct {
 	// SenderRole ist die Rolle des Absenders im Projekt des Raums, live vom
 	// Server berechnet; leer außerhalb von Projekträumen.
 	SenderRole string
+	// SenderRoleLabel is the role as the page shows it, in the server language.
+	SenderRoleLabel string
 	// SenderRoleTitle says in a sentence what that role may do.
 	SenderRoleTitle string
 	// WorkNote is the agent sender's self-reported "working on" line.
@@ -254,26 +259,30 @@ type coordReplyView struct {
 	Sequence          int64
 	Author, Body, URL string
 	Missing           bool
+	Lang              lang
 }
 
 // Head reads "Reply to #12 · Mia".
 func (r coordReplyView) Head() string {
-	return msg("coord.reply_to", r.Sequence) + " · " + r.Author
+	l := r.Lang
+	return l.msg("coord.reply_to", r.Sequence) + " · " + r.Author
 }
 
 type coordRefView struct {
 	Kind, ID, Revision string
 	Mutable            bool
+	Lang               lang
 }
 
 // Text names a reference: kind:id, the pinned revision or "(current state)".
 func (r coordRefView) Text() string {
+	l := r.Lang
 	text := r.Kind + ":" + r.ID
 	if r.Revision != "" {
 		return text + "@" + r.Revision
 	}
 	if r.Mutable {
-		return text + " " + msg("coord.ref_head")
+		return text + " " + l.msg("coord.ref_head")
 	}
 	return text
 }
@@ -346,21 +355,21 @@ type coordAttentionView struct {
 	Actions                  []coordAttentionActionView
 }
 
-func buildCoordSidebar(summaries []store.CoordRoomSummary, principalID, activeKey string, labels map[string]string) coordSidebarView {
-	var out coordSidebarView
+func buildCoordSidebar(l lang, summaries []store.CoordRoomSummary, principalID, activeKey string, labels map[string]string) coordSidebarView {
+	out := coordSidebarView{Lang: l}
 	// Project rooms carry the project's short name, the same one the project
 	// switcher and the other pages use; owner/ is added only on a clash.
 	var remotes []string
 	for _, summary := range summaries {
 		if summary.Room.Kind == store.RoomProject {
-			remotes = append(remotes, coordRoomLabel(summary.Room, principalID, labels))
+			remotes = append(remotes, coordRoomLabel(l, summary.Room, principalID, labels))
 		}
 	}
 	projectNames := projectLabels(remotes)
 	for _, summary := range summaries {
 		room := coordRoomView{
 			Key: summary.Room.Key, Kind: summary.Room.Kind,
-			Label:  coordRoomLabel(summary.Room, principalID, labels),
+			Label:  coordRoomLabel(l, summary.Room, principalID, labels),
 			URL:    coordRoomURL(summary.Room.Key, "", 0),
 			Unread: summary.Unread, Mentions: summary.MentionUnread, Attention: summary.Attention, NeedsYou: summary.NeedsYou,
 			Active: summary.Room.Key == activeKey,
@@ -384,7 +393,7 @@ func buildCoordSidebar(summaries []store.CoordRoomSummary, principalID, activeKe
 	return out
 }
 
-func buildCoordAttentionViews(items []store.AttentionItem, csrfToken string, labelIndexes ...map[string]string) (incoming, outgoing []coordAttentionView) {
+func buildCoordAttentionViews(l lang, items []store.AttentionItem, csrfToken string, labelIndexes ...map[string]string) (incoming, outgoing []coordAttentionView) {
 	var labels map[string]string
 	if len(labelIndexes) > 0 {
 		labels = labelIndexes[0]
@@ -393,7 +402,7 @@ func buildCoordAttentionViews(items []store.AttentionItem, csrfToken string, lab
 		if item.State != store.AttentionOpen {
 			continue
 		}
-		recipientLabel := coordIdentityLabel(item.RecipientID, labels)
+		recipientLabel := coordIdentityLabel(l, item.RecipientID, labels)
 		view := coordAttentionView{
 			ID: item.ID, Sequence: item.Sequence, Reason: item.Reason, State: item.State,
 			Body: item.Body, Preview: coordAttentionPreview(item.Body), RecipientID: item.RecipientID, RecipientLabel: recipientLabel,
@@ -413,17 +422,17 @@ func buildCoordAttentionViews(items []store.AttentionItem, csrfToken string, lab
 		if item.State == store.AttentionOpen && item.IsRecipient {
 			switch item.Reason {
 			case store.AttentionQuestion:
-				view.Actions = append(view.Actions, coordAttentionActionView{Value: store.AttentionActionAnswer, Label: msg("coord.action.answer")})
+				view.Actions = append(view.Actions, coordAttentionActionView{Value: store.AttentionActionAnswer, Label: l.msg("coord.action.answer")})
 			case store.AttentionApproval:
-				view.Actions = append(view.Actions, coordAttentionActionView{Value: store.AttentionActionApprove, Label: msg("coord.action.approve")}, coordAttentionActionView{Value: store.AttentionActionReject, Label: msg("coord.action.reject")})
+				view.Actions = append(view.Actions, coordAttentionActionView{Value: store.AttentionActionApprove, Label: l.msg("coord.action.approve")}, coordAttentionActionView{Value: store.AttentionActionReject, Label: l.msg("coord.action.reject")})
 			case store.AttentionBlocker:
-				view.Actions = append(view.Actions, coordAttentionActionView{Value: store.AttentionActionResolve, Label: msg("coord.action.resolve")})
+				view.Actions = append(view.Actions, coordAttentionActionView{Value: store.AttentionActionResolve, Label: l.msg("coord.action.resolve")})
 			case store.AttentionHandoff:
-				view.Actions = append(view.Actions, coordAttentionActionView{Value: store.AttentionActionAccept, Label: msg("coord.action.accept")})
+				view.Actions = append(view.Actions, coordAttentionActionView{Value: store.AttentionActionAccept, Label: l.msg("coord.action.accept")})
 			}
-			view.Actions = append(view.Actions, coordAttentionActionView{Value: store.AttentionActionDismiss, Label: msg("coord.action.dismiss")})
+			view.Actions = append(view.Actions, coordAttentionActionView{Value: store.AttentionActionDismiss, Label: l.msg("coord.action.dismiss")})
 		}
-		view.ReasonLabel = coordAttentionReasonLabel(item.Reason)
+		view.ReasonLabel = coordAttentionReasonLabel(l, item.Reason)
 		view.Primary, view.Inline, view.More = splitCoordAttentionActions(item.Reason, view.Actions)
 		if view.Incoming {
 			incoming = append(incoming, view)
@@ -439,22 +448,22 @@ func buildCoordAttentionViews(items []store.AttentionItem, csrfToken string, lab
 // cards from direct or group rooms as private. Only rooms the viewer belongs
 // to reach this point: CoordAccess.Attention drops every item whose
 // destination the viewer cannot read.
-func annotateCoordAttention(views []coordAttentionView, items []store.AttentionItem, sidebar coordSidebarView, labels map[string]string) {
+func annotateCoordAttention(l lang, views []coordAttentionView, items []store.AttentionItem, sidebar coordSidebarView, labels map[string]string) {
 	byID := make(map[int64]store.AttentionItem, len(items))
 	for _, item := range items {
 		byID[item.ID] = item
 	}
 	for i := range views {
 		item := byID[views[i].ID]
-		views[i].SenderLabel = coordSenderLabel(item, labels)
+		views[i].SenderLabel = coordSenderLabel(l, item, labels)
 		if room, ok := sidebar.room(item.HomeRoomKey); ok {
 			views[i].RoomLabel, views[i].RoomTitle = room.Name, room.Label
 			views[i].Private = room.Kind == store.RoomDirect || room.Kind == store.RoomGroup
 			if room.Kind == store.RoomDirect {
-				views[i].RoomLabel, views[i].RoomTitle = msg("coord.direct_message"), ""
+				views[i].RoomLabel, views[i].RoomTitle = l.msg("coord.direct_message"), ""
 			}
 		} else {
-			full := coordRoomLabel(store.CoordRoom{Key: item.HomeRoomKey}, "", labels)
+			full := coordRoomLabel(l, store.CoordRoom{Key: item.HomeRoomKey}, "", labels)
 			views[i].RoomLabel, views[i].RoomTitle = coordShortRoomName(coordRoomKindOf(item.HomeRoomKey), full), full
 		}
 	}
@@ -524,7 +533,7 @@ func buildCoordThreadViews(in []store.RoomThread) []coordThreadView {
 	return out
 }
 
-func coordRoomLabel(room store.CoordRoom, principalID string, labels map[string]string) string {
+func coordRoomLabel(l lang, room store.CoordRoom, principalID string, labels map[string]string) string {
 	if label := strings.TrimSpace(room.Label); label != "" {
 		return label
 	}
@@ -533,7 +542,7 @@ func coordRoomLabel(room store.CoordRoom, principalID string, labels map[string]
 		var peers []string
 		for _, member := range room.Members {
 			if member != principalID {
-				peers = append(peers, coordIdentityLabel(member, labels))
+				peers = append(peers, coordIdentityLabel(l, member, labels))
 			}
 		}
 		if len(peers) > 0 {
@@ -547,7 +556,7 @@ func coordRoomLabel(room store.CoordRoom, principalID string, labels map[string]
 	return room.Key
 }
 
-func buildCoordMessageViews(messages []store.CoordMessagePresentation, roomKey string, labels map[string]string) []coordMessageView {
+func buildCoordMessageViews(l lang, messages []store.CoordMessagePresentation, roomKey string, labels map[string]string) []coordMessageView {
 	out := make([]coordMessageView, 0, len(messages))
 	previousAuthorID, previousAuthorKind, previousCard := "", "", false
 	for _, presentation := range messages {
@@ -573,7 +582,7 @@ func buildCoordMessageViews(messages []store.CoordMessagePresentation, roomKey s
 			ReplyCount: presentation.ReplyCount,
 			GroupStart: groupStart,
 			System:     message.AuthorKind == store.AuthorSystem,
-			Clock:      coordClock(message.CreatedAt),
+			Clock:      coordClock(l, message.CreatedAt),
 		}
 		shown := author
 		if message.AuthorKind == store.AuthorAgent {
@@ -582,9 +591,9 @@ func buildCoordMessageViews(messages []store.CoordMessagePresentation, roomKey s
 				shown = label
 			}
 		}
-		shown = readableAuthor(shown)
+		shown = readableAuthor(l, shown)
 		view.Name, view.Machine = coordSplitAgentName(shown, message.AuthorKind)
-		view.Initials = coordInitials(readableAuthor(author))
+		view.Initials = coordInitials(readableAuthor(l, author))
 		if message.AuthorKind == store.AuthorAgent {
 			view.WorkNote = strings.TrimSpace(message.SenderWorkNote)
 		}
@@ -595,31 +604,31 @@ func buildCoordMessageViews(messages []store.CoordMessagePresentation, roomKey s
 				view.Mentions = append(view.Mentions, name)
 				continue
 			}
-			view.Mentions = append(view.Mentions, coordIdentityLabel(mention, labels))
+			view.Mentions = append(view.Mentions, coordIdentityLabel(l, mention, labels))
 		}
-		view.MentionsText = coordJoinNames(view.Mentions)
+		view.MentionsText = coordJoinNames(l, view.Mentions)
 		if presentation.Reply != nil {
-			view.Reply = &coordReplyView{Sequence: presentation.Reply.Sequence, Author: readableAuthor(presentation.Reply.Author), Body: presentation.Reply.Body, Missing: presentation.Reply.Missing}
+			view.Reply = &coordReplyView{Sequence: presentation.Reply.Sequence, Author: readableAuthor(l, presentation.Reply.Author), Body: presentation.Reply.Body, Missing: presentation.Reply.Missing, Lang: l}
 			if !view.Reply.Missing {
 				view.Reply.URL = coordRoomURL(roomKey, "around", view.Reply.Sequence) + "#message-" + strconv.FormatInt(view.Reply.Sequence, 10)
 			}
 		}
 		for _, ref := range presentation.Refs {
-			view.Refs = append(view.Refs, coordRefView{Kind: ref.Kind, ID: ref.ID, Revision: ref.Revision, Mutable: ref.MutableHead})
+			view.Refs = append(view.Refs, coordRefView{Kind: ref.Kind, ID: ref.ID, Revision: ref.Revision, Mutable: ref.MutableHead, Lang: l})
 		}
 		d := presentation.Delivery
 		parts := []string{}
 		if d.Acked > 0 {
-			parts = append(parts, msg("coord.delivery.acked", d.Acked))
+			parts = append(parts, l.msg("coord.delivery.acked", d.Acked))
 		}
 		if d.Injected > 0 {
-			parts = append(parts, msg("coord.delivery.injected", d.Injected))
+			parts = append(parts, l.msg("coord.delivery.injected", d.Injected))
 		}
 		if d.Fetched > 0 {
-			parts = append(parts, msg("coord.delivery.fetched", d.Fetched))
+			parts = append(parts, l.msg("coord.delivery.fetched", d.Fetched))
 		}
 		if d.Stored > 0 {
-			parts = append(parts, msg("coord.delivery.stored", d.Stored))
+			parts = append(parts, l.msg("coord.delivery.stored", d.Stored))
 		}
 		// "stored" is where every message starts, so a message that is only
 		// stored carries no news; anything past it, or a recipient lagging
@@ -652,12 +661,9 @@ func markViewerMentions(views []coordMessageView, messages []store.CoordMessageP
 	}
 }
 
-// errCoordExpiryInvalid carries its text from the message catalog.
-var errCoordExpiryInvalid error = coordExpiryError{}
-
-type coordExpiryError struct{}
-
-func (coordExpiryError) Error() string { return msg("coord.expiry_invalid") }
+// errCoordExpiryInvalid is translated where it is answered, from the message
+// catalog of the request's language.
+var errCoordExpiryInvalid = errors.New("invalid expiry")
 
 // parseCoordExpiry turns a datetime-local value (no zone) into RFC3339 UTC.
 // offset is the browser's minutes east of UTC for that very date (set by
@@ -688,8 +694,8 @@ func parseCoordExpiry(raw, offset string, server *time.Location) (string, error)
 	return "", errCoordExpiryInvalid
 }
 
-func buildCoordThreadMessageViews(messages []store.CoordMessagePresentation, room string, threadID int64, labels map[string]string) []coordMessageView {
-	out := buildCoordMessageViews(messages, "", labels)
+func buildCoordThreadMessageViews(l lang, messages []store.CoordMessagePresentation, room string, threadID int64, labels map[string]string) []coordMessageView {
+	out := buildCoordMessageViews(l, messages, "", labels)
 	for i := range out {
 		out[i].ReplyURL = coordThreadReplyURL(room, threadID, out[i].ID, out[i].Sequence)
 		if out[i].Reply != nil && !out[i].Reply.Missing {
@@ -699,7 +705,7 @@ func buildCoordThreadMessageViews(messages []store.CoordMessagePresentation, roo
 	return out
 }
 
-func coordReplyTarget(presentations []store.CoordMessagePresentation, raw string) (int64, *coordReplyView, error) {
+func coordReplyTarget(l lang, presentations []store.CoordMessagePresentation, raw string) (int64, *coordReplyView, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return 0, nil, nil
@@ -716,27 +722,27 @@ func coordReplyTarget(presentations []store.CoordMessagePresentation, raw string
 		if author == "" {
 			author = strings.TrimSpace(presentation.Message.SenderExternalID)
 		}
-		return id, &coordReplyView{Sequence: presentation.Message.Sequence, Author: readableAuthor(author), Body: presentation.Message.Body}, nil
+		return id, &coordReplyView{Sequence: presentation.Message.Sequence, Author: readableAuthor(l, author), Body: presentation.Message.Body, Lang: l}, nil
 	}
 	return 0, nil, fmt.Errorf("reply target is not in this destination window")
 }
 
-func buildCoordStandingViews(in []store.StandingInstruction, labels map[string]string) []coordStandingView {
+func buildCoordStandingViews(l lang, in []store.StandingInstruction, labels map[string]string) []coordStandingView {
 	out := make([]coordStandingView, 0, len(in))
 	for _, item := range in {
 		view := coordStandingView{MessageID: item.MessageID, Person: item.Person, Body: item.Body, CreatedAt: item.CreatedAt, DisplayTimestamp: coordDisplayTimestamp(item.CreatedAt)}
 		for _, target := range item.Targets {
-			view.Targets = append(view.Targets, coordIdentityLabel(target, labels))
+			view.Targets = append(view.Targets, coordIdentityLabel(l, target, labels))
 		}
 		out = append(out, view)
 	}
 	return out
 }
 
-func buildCoordRecipientViews(recipients []store.CoordRecipient) []coordRecipientView {
+func buildCoordRecipientViews(l lang, recipients []store.CoordRecipient) []coordRecipientView {
 	out := make([]coordRecipientView, 0, len(recipients))
 	for _, recipient := range recipients {
-		label := coordRecipientLabel(recipient)
+		label := coordRecipientLabel(l, recipient)
 		out = append(out, coordRecipientView{ID: recipient.PrincipalID, Label: label, Kind: recipient.Kind, Option: label + " · " + recipient.Kind})
 	}
 	return out
@@ -744,27 +750,27 @@ func buildCoordRecipientViews(recipients []store.CoordRecipient) []coordRecipien
 
 // coordRecipientLabel is how a recipient reads in the pickers: people by their
 // name, agents as "Claude · Robin · mainex" instead of their session ID.
-func coordRecipientLabel(recipient store.CoordRecipient) string {
+func coordRecipientLabel(l lang, recipient store.CoordRecipient) string {
 	if recipient.Kind == "person" {
 		return strings.TrimSpace(recipient.Label)
 	}
-	return agentLabel(recipient.Label, recipient.Provider, strings.TrimPrefix(recipient.PrincipalID, "agent:"), recipient.Owner)
+	return agentLabel(l, recipient.Label, recipient.Provider, strings.TrimPrefix(recipient.PrincipalID, "agent:"), recipient.Owner)
 }
 
-func coordIdentityLabels(current store.Principal, recipients []store.CoordRecipient, peers ...store.CoordAgent) map[string]string {
+func coordIdentityLabels(l lang, current store.Principal, recipients []store.CoordRecipient, peers ...store.CoordAgent) map[string]string {
 	labels := make(map[string]string, len(recipients)+len(peers)+1)
 	if strings.TrimSpace(current.ID) != "" && strings.TrimSpace(current.Label) != "" {
 		labels[current.ID] = strings.TrimSpace(current.Label)
 	}
 	for _, recipient := range recipients {
-		if label := coordRecipientLabel(recipient); label != "" {
+		if label := coordRecipientLabel(l, recipient); label != "" {
 			labels[recipient.PrincipalID] = label
 		}
 	}
 	for _, peer := range peers {
 		// A name the person chose stays; an ID or the bare tool name becomes
 		// "Claude on freund-laptop".
-		label := peerName(peer)
+		label := peerName(l, peer)
 		if strings.TrimSpace(peer.DisplayName) == "" && agentMachine(peer.ExternalID) == "" {
 			if person := strings.TrimSpace(peer.Person); person != "" {
 				label = person
@@ -775,33 +781,33 @@ func coordIdentityLabels(current store.Principal, recipients []store.CoordRecipi
 	return labels
 }
 
-func coordIdentityLabel(id string, labels map[string]string) string {
+func coordIdentityLabel(l lang, id string, labels map[string]string) string {
 	if label := strings.TrimSpace(labels[id]); label != "" {
 		return label
 	}
-	return neutralIdentityLabel(id)
+	return neutralIdentityLabel(l, id)
 }
 
 // neutralIdentityLabel names a participant by the shape of its ID alone, for
 // anyone not entitled to more: "Someone" for a person, the tool for an agent
 // ("Claude", else "Agent"). The ID itself never shows, and the label is
 // the same whether or not the participant exists.
-func neutralIdentityLabel(id string) string {
+func neutralIdentityLabel(l lang, id string) string {
 	id = strings.TrimSpace(id)
 	switch {
 	case id == "":
-		return msg("coord.unknown_participant")
+		return l.msg("coord.unknown_participant")
 	case strings.HasPrefix(id, "person:"):
-		return msg("coord.someone")
+		return l.msg("coord.someone")
 	}
-	return neutralAgentLabel(strings.TrimPrefix(id, "agent:"))
+	return neutralAgentLabel(l, strings.TrimPrefix(id, "agent:"))
 }
 
 // readableAuthor replaces an author label that is a raw ID (what a viewer who
 // may not see names is given) by the neutral label.
-func readableAuthor(label string) string {
+func readableAuthor(l lang, label string) string {
 	if strings.HasPrefix(label, "person:") || strings.HasPrefix(label, "agent:") || looksLikeIdentifier(label, "") {
-		return neutralIdentityLabel(label)
+		return neutralIdentityLabel(l, label)
 	}
 	return label
 }
@@ -809,7 +815,7 @@ func readableAuthor(label string) string {
 // coordSenderLabel: Etikett des Absenders, sonst das des Kontos, sonst die
 // bloße Absender-ID (die Agenten-ID, die auch ein Gast sehen darf) statt
 // "Unbekannter Teilnehmer".
-func coordSenderLabel(item store.AttentionItem, labels map[string]string) string {
+func coordSenderLabel(l lang, item store.AttentionItem, labels map[string]string) string {
 	if label := strings.TrimSpace(labels[item.SenderID]); label != "" {
 		return label
 	}
@@ -817,9 +823,9 @@ func coordSenderLabel(item store.AttentionItem, labels map[string]string) string
 		return label
 	}
 	if id := strings.TrimSpace(item.SenderID); id != "" {
-		return neutralIdentityLabel(id)
+		return neutralIdentityLabel(l, id)
 	}
-	return coordIdentityLabel(item.AuthorID, labels)
+	return coordIdentityLabel(l, item.AuthorID, labels)
 }
 
 var presenceKeys = map[string]string{
@@ -832,43 +838,43 @@ var originKeys = map[string]string{
 	store.OriginObserved: "coord.origin.observed", store.OriginSelfReported: "coord.origin.self_reported", store.OriginDerived: "coord.origin.derived",
 }
 
-func coordAge(seconds int64) string {
+func coordAge(l lang, seconds int64) string {
 	switch {
 	case seconds < 60:
-		return msg("coord.age.seconds", seconds)
+		return l.msg("coord.age.seconds", seconds)
 	case seconds < 3600:
-		return msg("coord.age.minutes", seconds/60)
+		return l.msg("coord.age.minutes", seconds/60)
 	default:
-		return msg("coord.age.hours", seconds/3600)
+		return l.msg("coord.age.hours", seconds/3600)
 	}
 }
 
 // presenceText bildet ein Presence-Feld ab. Ohne Herkunft gibt es keinen Beleg:
 // das steht dann da, statt eines Werts, der mehr behauptet.
-func presenceText(f store.PresenceField) (value, text string) {
+func presenceText(l lang, f store.PresenceField) (value, text string) {
 	key := presenceKeys[f.Value]
 	if key == "" || f.Origin == "" {
-		return msg("coord.presence.unknown"), msg("coord.presence.no_evidence")
+		return l.msg("coord.presence.unknown"), l.msg("coord.presence.no_evidence")
 	}
-	value = msg(key)
-	return value, fmt.Sprintf("%s (%s, %s)", value, msg(originKeys[f.Origin]), coordAge(f.AgeSeconds))
+	value = l.msg(key)
+	return value, fmt.Sprintf("%s (%s, %s)", value, l.msg(originKeys[f.Origin]), coordAge(l, f.AgeSeconds))
 }
 
 // othersWaitNeutral keeps "Waiting on you" for the agents that asked the
 // viewer; an agent waiting for someone else reads "Waiting for a person".
-func othersWaitNeutral(parts []coordParticipantView, asked map[string]bool) []coordParticipantView {
+func othersWaitNeutral(l lang, parts []coordParticipantView, asked map[string]bool) []coordParticipantView {
 	for i := range parts {
 		if parts[i].WorkKey == store.WorkWaitingUser && !parts[i].Human && !asked[parts[i].ID] {
-			parts[i].StatusLabel = msg("ov.work.waiting_person")
+			parts[i].StatusLabel = l.msg("ov.work.waiting_person")
 		}
 	}
 	return parts
 }
 
-func buildCoordParticipants(room store.CoordRoom, peers []store.CoordAgent, memberships []store.RoomMembership, current store.Principal, labels map[string]string) []coordParticipantView {
+func buildCoordParticipants(l lang, room store.CoordRoom, peers []store.CoordAgent, memberships []store.RoomMembership, current store.Principal, labels map[string]string) []coordParticipantView {
 	byID := make(map[string]coordParticipantView)
 	for _, member := range room.Members {
-		byID[member] = coordParticipantView{ID: member, Label: coordIdentityLabel(member, labels), Current: member == current.ID, Reachability: coordParticipantUnknown, WorkState: coordParticipantUnknown}
+		byID[member] = coordParticipantView{ID: member, Label: coordIdentityLabel(l, member, labels), Current: member == current.ID, Reachability: coordParticipantUnknown, WorkState: coordParticipantUnknown}
 	}
 	for _, peer := range peers {
 		label := strings.TrimSpace(labels[peer.ExternalID])
@@ -892,8 +898,8 @@ func buildCoordParticipants(room store.CoordRoom, peers []store.CoordAgent, memb
 		if peer.Presence != nil {
 			pr = *peer.Presence
 		}
-		view.Reachability, view.ReachabilityText = presenceText(pr.Reachability)
-		view.WorkState, view.WorkStateText = presenceText(pr.WorkState)
+		view.Reachability, view.ReachabilityText = presenceText(l, pr.Reachability)
+		view.WorkState, view.WorkStateText = presenceText(l, pr.WorkState)
 		if pr.Reachability.Origin != "" {
 			view.ReachKey = pr.Reachability.Value
 		}
@@ -908,7 +914,7 @@ func buildCoordParticipants(room store.CoordRoom, peers []store.CoordAgent, memb
 	if label := strings.TrimSpace(current.Label); label != "" {
 		currentParticipant.Label = label
 	} else if currentParticipant.Label == "" {
-		currentParticipant.Label = coordIdentityLabel(current.ID, labels)
+		currentParticipant.Label = coordIdentityLabel(l, current.ID, labels)
 	}
 	byID[current.ID] = currentParticipant
 	for _, membership := range memberships {
@@ -918,7 +924,7 @@ func buildCoordParticipants(room store.CoordRoom, peers []store.CoordAgent, memb
 		participant := byID[membership.PrincipalID]
 		participant.ID = membership.PrincipalID
 		if participant.Label == "" {
-			participant.Label = coordIdentityLabel(membership.PrincipalID, labels)
+			participant.Label = coordIdentityLabel(l, membership.PrincipalID, labels)
 		}
 		participant.Manager = membership.Manager
 		participant.Current = membership.PrincipalID == current.ID
@@ -929,7 +935,7 @@ func buildCoordParticipants(room store.CoordRoom, peers []store.CoordAgent, memb
 		out = append(out, participant)
 	}
 	for i := range out {
-		decorateCoordParticipant(&out[i])
+		decorateCoordParticipant(l, &out[i])
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Current != out[j].Current {
@@ -949,14 +955,14 @@ func coordDisplayTimestamp(raw string) string {
 }
 
 // coordJoinNames joins names as "A", "A and B" or "A, B and C".
-func coordJoinNames(names []string) string {
+func coordJoinNames(l lang, names []string) string {
 	switch len(names) {
 	case 0:
 		return ""
 	case 1:
 		return names[0]
 	}
-	return strings.Join(names[:len(names)-1], ", ") + " " + msg("coord.and") + " " + names[len(names)-1]
+	return strings.Join(names[:len(names)-1], ", ") + " " + l.msg("coord.and") + " " + names[len(names)-1]
 }
 
 // coordShortRoomName shows a project room by its repository name, as the project
@@ -975,16 +981,16 @@ func coordRoomKindOf(key string) string {
 	return ""
 }
 
-func coordAttentionReasonLabel(reason string) string {
+func coordAttentionReasonLabel(l lang, reason string) string {
 	switch reason {
 	case store.AttentionQuestion:
-		return msg("coord.reason.question")
+		return l.msg("coord.reason.question")
 	case store.AttentionApproval:
-		return msg("coord.reason.approval")
+		return l.msg("coord.reason.approval")
 	case store.AttentionBlocker:
-		return msg("coord.reason.blocker")
+		return l.msg("coord.reason.blocker")
 	case store.AttentionHandoff:
-		return msg("coord.reason.handoff")
+		return l.msg("coord.reason.handoff")
 	}
 	return reason
 }
@@ -1027,7 +1033,7 @@ func coordAttentionPreview(body string) string {
 // applyParticipantRoles ergänzt die Rolle der menschlichen Teilnehmer
 // (person:<id>) im Projekt des Raums. Agenten tragen ihre effektive Rolle schon
 // aus der Peer-Liste. Außerhalb eines Projektraums bleibt alles leer.
-func applyParticipantRoles(st *store.Store, roomKey string, participants []coordParticipantView) {
+func applyParticipantRoles(l lang, st *store.Store, roomKey string, participants []coordParticipantView) {
 	remote, ok := strings.CutPrefix(roomKey, "project:")
 	if !ok {
 		return
@@ -1039,7 +1045,7 @@ func applyParticipantRoles(st *store.Store, roomKey string, participants []coord
 		info := st.ProjectRole(remote, participants[i].ID)
 		participants[i].Role, participants[i].CanReview = info.Role, info.CanReview
 		if participants[i].StatusLabel == "" && info.Role != "" {
-			participants[i].StatusLabel = msg("role." + info.Role)
+			participants[i].StatusLabel = l.msg("role." + info.Role)
 		}
 	}
 }
@@ -1048,7 +1054,7 @@ func applyParticipantRoles(st *store.Store, roomKey string, participants []coord
 // and the people who joined the room. people is empty for viewers who may not
 // see it (guests), so nothing is added for them. Each person shows with their
 // role; those not in the room are marked ListOnly.
-func addRoomPeople(parts []coordParticipantView, people []store.ProjectMember, current store.Principal) []coordParticipantView {
+func addRoomPeople(l lang, parts []coordParticipantView, people []store.ProjectMember, current store.Principal) []coordParticipantView {
 	have := make(map[string]bool, len(parts))
 	for _, p := range parts {
 		have[p.ID] = true
@@ -1060,9 +1066,9 @@ func addRoomPeople(parts []coordParticipantView, people []store.ProjectMember, c
 		p := coordParticipantView{ID: person.AccountID, Label: store.NormalizeAccountName(person.Account), Role: person.Role,
 			CanReview: person.CanReview, Current: person.AccountID == current.ID, ListOnly: true,
 			Reachability: coordParticipantUnknown, WorkState: coordParticipantUnknown}
-		decorateCoordParticipant(&p)
+		decorateCoordParticipant(l, &p)
 		if !p.Current {
-			p.StatusLabel = msg("role." + person.Role)
+			p.StatusLabel = l.msg("role." + person.Role)
 		}
 		parts = append(parts, p)
 	}
@@ -1079,7 +1085,7 @@ func addRoomPeople(parts []coordParticipantView, people []store.ProjectMember, c
 // Nachricht eines Projektraums. Die Rolle kommt aus dem Store (Konto aus
 // author_principal_id bzw. effektive Agentenrolle), nie aus dem Text.
 // views und messages sind index-aligned.
-func applyMessageRoles(st *store.Store, roomKey, viewerID string, views []coordMessageView, messages []store.CoordMessagePresentation) {
+func applyMessageRoles(l lang, st *store.Store, roomKey, viewerID string, views []coordMessageView, messages []store.CoordMessagePresentation) {
 	remote, ok := strings.CutPrefix(roomKey, "project:")
 	if !ok {
 		return
@@ -1097,7 +1103,8 @@ func applyMessageRoles(st *store.Store, roomKey, viewerID string, views []coordM
 				continue
 			}
 			views[i].SenderRole = roles[i]
-			views[i].SenderRoleTitle = roleTitle(roles[i])
+			views[i].SenderRoleLabel = l.msg("role." + roles[i])
+			views[i].SenderRoleTitle = roleTitle(l, roles[i])
 		}
 	}
 }
@@ -1166,7 +1173,7 @@ func coordInitials(label string) string {
 }
 
 // coordClock is the local time of day for today and a short date before it.
-func coordClock(raw string) string {
+func coordClock(l lang, raw string) string {
 	parsed, err := time.Parse(time.RFC3339, raw)
 	if err != nil {
 		return raw
@@ -1175,11 +1182,11 @@ func coordClock(raw string) string {
 	if local.YearDay() == time.Now().YearDay() && local.Year() == time.Now().Year() {
 		return local.Format("15:04")
 	}
-	return local.Format("2 Jan 15:04")
+	return l.dateTime(local)
 }
 
 // coordWaiting words how long an open request has been waiting.
-func coordWaiting(created string, now time.Time) string {
+func coordWaiting(l lang, created string, now time.Time) string {
 	parsed, err := time.Parse(time.RFC3339, created)
 	if err != nil {
 		return ""
@@ -1187,41 +1194,41 @@ func coordWaiting(created string, now time.Time) string {
 	d := now.Sub(parsed)
 	switch {
 	case d < time.Minute:
-		return msg("coord.waiting_now")
+		return l.msg("coord.waiting_now")
 	case d < time.Hour:
-		return msg("coord.waiting", msg("coord.age.min", int64(d/time.Minute)))
+		return l.msg("coord.waiting", l.msg("coord.age.min", int64(d/time.Minute)))
 	case d < 48*time.Hour:
-		return msg("coord.waiting", msg("coord.age.h", int64(d/time.Hour)))
+		return l.msg("coord.waiting", l.msg("coord.age.h", int64(d/time.Hour)))
 	}
-	return msg("coord.waiting", msg("coord.age.d", int64(d/(24*time.Hour))))
+	return l.msg("coord.waiting", l.msg("coord.age.d", int64(d/(24*time.Hour))))
 }
 
 // decorateCoordParticipant derives the compact status of the participant list
 // from the evidence the store reported, never from the absence of evidence.
-func decorateCoordParticipant(p *coordParticipantView) {
+func decorateCoordParticipant(l lang, p *coordParticipantView) {
 	p.Human = strings.HasPrefix(p.ID, "person:")
 	p.Initials = coordInitials(p.Label)
 	switch {
 	case p.Current:
-		p.Dot, p.StatusLabel = "active", msg("coord.you")
+		p.Dot, p.StatusLabel = "active", l.msg("coord.you")
 	case p.Human:
 		p.Dot = "off"
 	case p.ReachKey == store.ReachEnded:
-		p.Dot, p.StatusLabel = "off", msg("coord.presence.ended")
+		p.Dot, p.StatusLabel = "off", l.msg("coord.presence.ended")
 	case p.WorkKey == store.WorkWorking:
-		p.Dot, p.StatusLabel = "active", msg("ov.work.working")
+		p.Dot, p.StatusLabel = "active", l.msg("ov.work.working")
 	case p.WorkKey == store.WorkWaitingUser:
-		p.Dot, p.StatusLabel = "wait", msg("ov.work.waiting_user")
+		p.Dot, p.StatusLabel = "wait", l.msg("ov.work.waiting_user")
 	case p.WorkKey == store.WorkWaitingPeer:
-		p.Dot, p.StatusLabel = "wait", msg("ov.work.waiting_peer")
+		p.Dot, p.StatusLabel = "wait", l.msg("ov.work.waiting_peer")
 	case p.WorkKey == store.WorkBlocked:
-		p.Dot, p.StatusLabel = "bad", msg("ov.work.blocked")
+		p.Dot, p.StatusLabel = "bad", l.msg("ov.work.blocked")
 	case p.WorkKey == store.WorkStuck:
-		p.Dot, p.StatusLabel = "bad", msg("ov.work.stuck")
+		p.Dot, p.StatusLabel = "bad", l.msg("ov.work.stuck")
 	case p.WorkKey == store.WorkPaused:
-		p.Dot, p.StatusLabel = "quiet", msg("ov.work.paused")
+		p.Dot, p.StatusLabel = "quiet", l.msg("ov.work.paused")
 	case p.ReachKey == store.ReachConnected:
-		p.Dot, p.StatusLabel = "quiet", msg("coord.presence.connected")
+		p.Dot, p.StatusLabel = "quiet", l.msg("coord.presence.connected")
 	default:
 		p.Dot = "off"
 	}
@@ -1230,7 +1237,7 @@ func decorateCoordParticipant(p *coordParticipantView) {
 // decorateCoordMessages adds what depends on the viewer and on the room: own
 // bubbles, directive plates, request cards with the open attention entries for
 // the very message, and the waiting time. views and pres are index-aligned.
-func decorateCoordMessages(views []coordMessageView, pres []store.CoordMessagePresentation, viewerID, roomKey, roomLabel string, standing []coordStandingView, attention []coordAttentionView, roleRoom bool, now time.Time) {
+func decorateCoordMessages(l lang, views []coordMessageView, pres []store.CoordMessagePresentation, viewerID, roomKey, roomLabel string, standing []coordStandingView, attention []coordAttentionView, roleRoom bool, now time.Time) {
 	activeStanding := make(map[string]coordStandingView, len(standing))
 	for _, item := range standing {
 		activeStanding[item.MessageID] = item
@@ -1247,12 +1254,12 @@ func decorateCoordMessages(views []coordMessageView, pres []store.CoordMessagePr
 			item, ok := activeStanding[id]
 			scope := item.Scope
 			if !ok {
-				scope = coordStandingScope(views[i].Mentions, roomLabel)
+				scope = coordStandingScope(l, views[i].Mentions, roomLabel)
 			}
 			views[i].Directive = &coordDirectiveView{Active: ok, CanEnd: ok && item.CanEnd, MessageID: id, RoomKey: roomKey, Scope: scope,
 				Request: roleRoom && views[i].SenderRole != "" && !coordCanDirect(views[i].SenderRole)}
 		case isAttentionIntent(message.Intent):
-			request := &coordRequestView{Title: coordRequestTitle(message.Intent, views[i].MentionsText)}
+			request := &coordRequestView{Title: coordRequestTitle(l, message.Intent, views[i].MentionsText)}
 			seen := map[int64]bool{}
 			for _, item := range attention {
 				if item.Thread || item.RoomKey != roomKey || item.Sequence != message.Sequence || seen[item.ID] {
@@ -1262,7 +1269,7 @@ func decorateCoordMessages(views []coordMessageView, pres []store.CoordMessagePr
 				request.Items = append(request.Items, item)
 			}
 			if len(request.Items) > 0 {
-				request.Waiting = coordWaiting(message.CreatedAt, now)
+				request.Waiting = coordWaiting(l, message.CreatedAt, now)
 			}
 			views[i].Request = request
 		}
@@ -1292,7 +1299,7 @@ var coordClosedKeys = map[string]string{
 
 // applyRequestStates names how closed requests ended, from the viewer's own
 // attention entries for that message.
-func applyRequestStates(views []coordMessageView, pres []store.CoordMessagePresentation, roomKey string, items []store.AttentionItem, labels map[string]string) {
+func applyRequestStates(l lang, views []coordMessageView, pres []store.CoordMessagePresentation, roomKey string, items []store.AttentionItem, labels map[string]string) {
 	for i := range views {
 		if i >= len(pres) || views[i].Request == nil || len(views[i].Request.Items) > 0 {
 			continue
@@ -1303,18 +1310,18 @@ func applyRequestStates(views []coordMessageView, pres []store.CoordMessagePrese
 				continue
 			}
 			if key, ok := coordClosedKeys[item.Reason+"."+item.State]; ok {
-				parts = append(parts, msg(key)+" · "+coordIdentityLabel(item.RecipientID, labels))
+				parts = append(parts, l.msg(key)+" · "+coordIdentityLabel(l, item.RecipientID, labels))
 			}
 		}
 		views[i].Request.State = strings.Join(parts, ", ")
 	}
 }
 
-func coordStandingScope(targets []string, roomLabel string) string {
+func coordStandingScope(l lang, targets []string, roomLabel string) string {
 	if len(targets) == 0 {
-		return msg("coord.scope_all", roomLabel)
+		return l.msg("coord.scope_all", roomLabel)
 	}
-	return msg("coord.scope_targets", coordJoinNames(targets))
+	return l.msg("coord.scope_targets", coordJoinNames(l, targets))
 }
 
 var coordRequestTitleKeys = map[string][2]string{
@@ -1326,12 +1333,12 @@ var coordRequestTitleKeys = map[string][2]string{
 
 // coordRequestTitle is the card heading: the kind alone, or the kind with the
 // people it is addressed to ("Asks Robin").
-func coordRequestTitle(intent, who string) string {
+func coordRequestTitle(l lang, intent, who string) string {
 	keys := coordRequestTitleKeys[intent]
 	if who == "" {
-		return msg(keys[0])
+		return l.msg(keys[0])
 	}
-	return msg(keys[1], who)
+	return l.msg(keys[1], who)
 }
 
 var coordClientTextKeys = []string{
@@ -1343,10 +1350,10 @@ var coordClientTextKeys = []string{
 
 // coordClientTexts is the catalog slice the page script needs, as JSON for a
 // data attribute (the policy forbids inline script, not data).
-func coordClientTexts() string {
+func coordClientTexts(l lang) string {
 	texts := make(map[string]string, len(coordClientTextKeys))
 	for _, key := range coordClientTextKeys {
-		texts[key[strings.LastIndex(key, ".")+1:]] = msg(key)
+		texts[key[strings.LastIndex(key, ".")+1:]] = l.msg(key)
 	}
 	raw, err := json.Marshal(texts)
 	if err != nil {
@@ -1356,16 +1363,16 @@ func coordClientTexts() string {
 }
 
 // roleTitle explains a project role in a sentence, for the hover text of its label.
-func roleTitle(role string) string {
+func roleTitle(l lang, role string) string {
 	switch role {
 	case store.RoleOwner:
-		return msg("role.owner.title")
+		return l.msg("role.owner.title")
 	case store.RoleLead:
-		return msg("role.lead.title")
+		return l.msg("role.lead.title")
 	case store.RoleMember:
-		return msg("role.member.title")
+		return l.msg("role.member.title")
 	case store.RoleGuest:
-		return msg("role.guest.title")
+		return l.msg("role.guest.title")
 	}
 	return ""
 }

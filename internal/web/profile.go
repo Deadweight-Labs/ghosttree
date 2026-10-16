@@ -22,10 +22,11 @@ func (a *app) profilePage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) renderProfile(w http.ResponseWriter, r *http.Request, status int, typed, errMsg string) {
+	l := a.langFor(r)
 	me := browserPrincipal(r)
 	acct, err := a.store.AccountByPrincipalID(me.ID)
 	if err != nil {
-		http.Error(w, msg("adm.load_failed"), http.StatusInternalServerError)
+		http.Error(w, l.msg("adm.load_failed"), http.StatusInternalServerError)
 		return
 	}
 	v := profileView{Name: acct.Name, Locked: a.store.NameLocked(me.ID)}
@@ -33,17 +34,18 @@ func (a *app) renderProfile(w http.ResponseWriter, r *http.Request, status int, 
 		v.Name = typed
 	}
 	if r.URL.Query().Get("notice") == "saved" {
-		v.Notice = msg("profile.saved")
+		v.Notice = l.msg("profile.saved")
 	}
 	if status != http.StatusOK {
 		w.WriteHeader(status)
 	}
-	a.renderBrowser(w, r, "profile", pageData{Title: msg("profile.title"), Error: errMsg, Profile: v})
+	a.renderBrowser(w, r, "profile", pageData{Title: l.msg("profile.title"), Error: errMsg, Profile: v})
 }
 
 // profileSave changes the display name. The store cleans and checks it; a
 // rejected name is shown again with the reason, never echoed unescaped.
 func (a *app) profileSave(w http.ResponseWriter, r *http.Request) {
+	l := a.langFor(r)
 	me := browserPrincipal(r)
 	acct, err := a.store.SetOwnName(me.ID, r.FormValue("name"))
 	switch {
@@ -51,14 +53,14 @@ func (a *app) profileSave(w http.ResponseWriter, r *http.Request) {
 		a.sessions.relabel(acct.ID, acct.Name)
 		http.Redirect(w, r, "/ui/profile?notice=saved", http.StatusSeeOther)
 	case errors.Is(err, store.ErrAccountNameTaken):
-		a.renderProfile(w, r, http.StatusConflict, r.FormValue("name"), msg("profile.err.taken"))
+		a.renderProfile(w, r, http.StatusConflict, r.FormValue("name"), l.msg("profile.err.taken"))
 	case errors.Is(err, store.ErrNameRateLimited):
-		a.renderProfile(w, r, http.StatusTooManyRequests, "", msg("profile.err.rate"))
+		a.renderProfile(w, r, http.StatusTooManyRequests, "", l.msg("profile.err.rate"))
 	case errors.Is(err, store.ErrNameNotAllowed):
-		a.renderProfile(w, r, http.StatusForbidden, "", msg("profile.err.locked"))
+		a.renderProfile(w, r, http.StatusForbidden, "", l.msg("profile.err.locked"))
 	case errors.Is(err, store.ErrInvalidInput):
-		a.renderProfile(w, r, http.StatusBadRequest, r.FormValue("name"), msg("profile.err.invalid"))
+		a.renderProfile(w, r, http.StatusBadRequest, r.FormValue("name"), l.msg("profile.err.invalid"))
 	default:
-		http.Error(w, msg("adm.err.generic"), http.StatusInternalServerError)
+		http.Error(w, l.msg("adm.err.generic"), http.StatusInternalServerError)
 	}
 }

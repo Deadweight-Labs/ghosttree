@@ -56,11 +56,11 @@ func TestAdminTimeTagIsRelativeBothWays(t *testing.T) {
 		{now.Add(5*24*60*60*1e9 + 60*1e9).Format("2006-01-02T15:04:05Z"), "in 5d"},
 		{now.Format("2006-01-02T15:04:05Z"), ">now<"},
 	} {
-		if got := string(timeTag(c.stamp)); !strings.Contains(got, c.want) {
+		if got := string(timeTag(langEN, c.stamp)); !strings.Contains(got, c.want) {
 			t.Errorf("timeTag(%s) = %s, want %s", c.stamp, got, c.want)
 		}
 	}
-	if timeTag("garbage") != "" || timeTag("") != "" {
+	if timeTag(langEN, "garbage") != "" || timeTag(langEN, "") != "" {
 		t.Error("an unreadable stamp must render nothing")
 	}
 }
@@ -237,7 +237,7 @@ func TestAdminEmptyStatesAreOneLineAndOneAction(t *testing.T) {
 		t.Error("the old explanation is back")
 	}
 	var sb strings.Builder
-	if err := pages.ExecuteTemplate(&sb, "tokens", pageData{Interactive: true}); err != nil {
+	if err := langEN.page().ExecuteTemplate(&sb, "tokens", pageData{Interactive: true}); err != nil {
 		t.Fatal(err)
 	}
 	if page := sb.String(); !strings.Contains(page, "No tokens yet.") || !strings.Contains(page, `href="/ui/device"`) {

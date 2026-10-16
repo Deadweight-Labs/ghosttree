@@ -429,13 +429,14 @@ func (a *app) oidcStart(w http.ResponseWriter, r *http.Request) {
 // Bootstrap- oder Einladungscode). Der Anbieterknopf und das Codefeld mit
 // Enter laufen beide hierüber.
 func (a *app) beginOIDC(w http.ResponseWriter, r *http.Request, code string) {
+	l := a.langFor(r)
 	if len(code) > maxCodeLength {
 		http.Error(w, "code too long", http.StatusBadRequest)
 		return
 	}
 	oauthCfg, _, err := a.oidc.ready(r.Context())
 	if err != nil {
-		a.loginMessage(w, http.StatusBadGateway, "auth.idp_unreachable.title",
+		a.loginMessage(l, w, http.StatusBadGateway, "auth.idp_unreachable.title",
 			"auth.idp_unreachable.text")
 		return
 	}
@@ -484,6 +485,7 @@ func parseLoginForm(w http.ResponseWriter, r *http.Request) bool {
 // oidcCallback schließt den Ablauf ab. Der State muss in Parameter, Cookie und
 // serverseitigem Ablauf übereinstimmen (Login-CSRF), der Ablauf ist einmalig.
 func (a *app) oidcCallback(w http.ResponseWriter, r *http.Request) {
+	l := a.langFor(r)
 	if a.oidc == nil {
 		http.NotFound(w, r)
 		return
@@ -497,54 +499,54 @@ func (a *app) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		flow, valid = a.oidc.seal.open(cookie.Value)
 	}
 	if !valid || subtle.ConstantTimeCompare([]byte(flow.State), []byte(state)) != 1 {
-		a.loginMessage(w, http.StatusBadRequest, "auth.not_verified.title",
+		a.loginMessage(l, w, http.StatusBadRequest, "auth.not_verified.title",
 			"auth.not_verified.text")
 		return
 	}
 	now := a.oidc.now()
 	expires := time.Unix(flow.Expires, 0)
 	if !now.Before(expires) || !a.oidc.used.use(state, now, expires) {
-		a.loginMessage(w, http.StatusBadRequest, "auth.sign_in_expired.title", "auth.sign_in_expired.text")
+		a.loginMessage(l, w, http.StatusBadRequest, "auth.sign_in_expired.title", "auth.sign_in_expired.text")
 		return
 	}
 	if e := r.URL.Query().Get("error"); e != "" {
-		a.loginMessage(w, http.StatusForbidden, "auth.sso_reported.title", "auth.sso_reported.text", e)
+		a.loginMessage(l, w, http.StatusForbidden, "auth.sso_reported.title", "auth.sso_reported.text", e)
 		return
 	}
 	oauthCfg, verifier, err := a.oidc.ready(r.Context())
 	if err != nil {
-		a.loginMessage(w, http.StatusBadGateway, "auth.idp_unreachable_retry.title", "auth.idp_unreachable_retry.text")
+		a.loginMessage(l, w, http.StatusBadGateway, "auth.idp_unreachable_retry.title", "auth.idp_unreachable_retry.text")
 		return
 	}
 	ctx := a.oidc.context(r.Context())
 	token, err := oauthCfg.Exchange(ctx, r.URL.Query().Get("code"), oauth2.VerifierOption(flow.Verifier))
 	if err != nil {
-		a.loginMessage(w, http.StatusBadGateway, "auth.idp_rejected.title", "auth.idp_rejected.text")
+		a.loginMessage(l, w, http.StatusBadGateway, "auth.idp_rejected.title", "auth.idp_rejected.text")
 		return
 	}
 	rawID, _ := token.Extra("id_token").(string)
 	if rawID == "" {
-		a.loginMessage(w, http.StatusBadGateway, "auth.no_id_token.title", "auth.no_id_token.text")
+		a.loginMessage(l, w, http.StatusBadGateway, "auth.no_id_token.title", "auth.no_id_token.text")
 		return
 	}
 	idToken, err := verifier.Verify(ctx, rawID)
 	if err != nil {
-		a.loginMessage(w, http.StatusForbidden, "auth.id_token_invalid.title", "auth.id_token_invalid.text")
+		a.loginMessage(l, w, http.StatusForbidden, "auth.id_token_invalid.title", "auth.id_token_invalid.text")
 		return
 	}
 	if subtle.ConstantTimeCompare([]byte(idToken.Nonce), []byte(flow.Nonce)) != 1 {
-		a.loginMessage(w, http.StatusForbidden, "auth.id_token_nonce.title", "auth.id_token_nonce.text")
+		a.loginMessage(l, w, http.StatusForbidden, "auth.id_token_nonce.title", "auth.id_token_nonce.text")
 		return
 	}
 	var claims profileClaims
 	if err := idToken.Claims(&claims); err != nil || idToken.Subject == "" {
-		a.loginMessage(w, http.StatusForbidden, "auth.id_token_subject.title", "auth.id_token_subject.text")
+		a.loginMessage(l, w, http.StatusForbidden, "auth.id_token_subject.title", "auth.id_token_subject.text")
 		return
 	}
 	// OIDC Core 3.1.3.7: bei mehreren Audiences oder gesetztem azp muss azp
 	// dieser Client sein.
 	if (len(idToken.Audience) > 1 || claims.AuthorizedParty != "") && claims.AuthorizedParty != a.oidc.cfg.ClientID {
-		a.loginMessage(w, http.StatusForbidden, "auth.id_token_client.title", "auth.id_token_client.text")
+		a.loginMessage(l, w, http.StatusForbidden, "auth.id_token_client.title", "auth.id_token_client.text")
 		return
 	}
 	// Viele Anbieter (ZITADEL ohne "User Info Inside ID Token") legen Namen
@@ -563,7 +565,7 @@ func (a *app) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		Name: claims.displayName(), Code: flow.Code,
 	})
 	if err != nil {
-		a.identityRejected(w, err)
+		a.identityRejected(l, w, err)
 		return
 	}
 	if outcome == store.LoginBootstrapped {
@@ -669,22 +671,22 @@ func (c *oidcClient) mergeUserInfo(ctx context.Context, cfg *oauth2.Config, toke
 	}
 }
 
-func (a *app) identityRejected(w http.ResponseWriter, err error) {
+func (a *app) identityRejected(l lang, w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, store.ErrNoAccountForIdentity):
-		a.loginMessage(w, http.StatusForbidden, "auth.no_account.title",
+		a.loginMessage(l, w, http.StatusForbidden, "auth.no_account.title",
 			"auth.no_account.text")
 	case errors.Is(err, store.ErrCodeInvalid):
-		a.loginMessage(w, http.StatusForbidden, "auth.code_not_accepted.title", "auth.code_not_accepted.text")
+		a.loginMessage(l, w, http.StatusForbidden, "auth.code_not_accepted.title", "auth.code_not_accepted.text")
 	case errors.Is(err, store.ErrAccountHasIdentity):
-		a.loginMessage(w, http.StatusForbidden, "auth.already_connected.title", "auth.already_connected.text")
+		a.loginMessage(l, w, http.StatusForbidden, "auth.already_connected.title", "auth.already_connected.text")
 	case errors.Is(err, store.ErrInvitationEmail):
-		a.loginMessage(w, http.StatusForbidden, "auth.invitation_email.title",
+		a.loginMessage(l, w, http.StatusForbidden, "auth.invitation_email.title",
 			"auth.invitation_email.text")
 	case errors.Is(err, store.ErrTooManyAttempts):
-		a.loginMessage(w, http.StatusTooManyRequests, "auth.too_many_codes.title", "auth.too_many_codes.text")
+		a.loginMessage(l, w, http.StatusTooManyRequests, "auth.too_many_codes.title", "auth.too_many_codes.text")
 	case errors.Is(err, store.ErrAccountDisabled):
-		a.loginMessage(w, http.StatusForbidden, "auth.account_disabled.title", "auth.account_disabled.text")
+		a.loginMessage(l, w, http.StatusForbidden, "auth.account_disabled.title", "auth.account_disabled.text")
 	default:
 		http.Error(w, "sign-in failed", http.StatusInternalServerError)
 	}
@@ -697,11 +699,11 @@ func (a *app) dropBootstrapFile() {
 }
 
 // loginMessage zeigt eine eigene Seite statt eines nackten Fehlertexts.
-func (a *app) loginMessage(w http.ResponseWriter, status int, titleKey, textKey string, args ...any) {
+func (a *app) loginMessage(l lang, w http.ResponseWriter, status int, titleKey, textKey string, args ...any) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
-	a.render(w, "loginmsg", pageData{Title: msg(titleKey), Error: msg(textKey, args...)})
+	a.render(l, w, "loginmsg", pageData{Title: l.msg(titleKey), Error: l.msg(textKey, args...)})
 }
 
 // isJoinInvitation: ein im Codefeld eingegebener gültiger Einladungscode eines

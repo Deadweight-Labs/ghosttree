@@ -71,16 +71,18 @@ type orgsView struct {
 // orgsPage zeigt Mitglieder, Einladungen und Projekte einer Organisation.
 // Wer in mehreren ist, wählt über ?org=<slug>; sonst die Standard-Organisation.
 func (a *app) orgsPage(w http.ResponseWriter, r *http.Request) {
+	l := a.langFor(r)
 	w.Header().Set("Cache-Control", "no-store")
-	a.renderOrgs(w, r, http.StatusOK, orgsView{Notice: orgNotice(r.URL.Query().Get("notice"))}, r.URL.Query().Get("org"), "")
+	a.renderOrgs(w, r, http.StatusOK, orgsView{Notice: orgNotice(l, r.URL.Query().Get("notice"))}, r.URL.Query().Get("org"), "")
 }
 
 func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v orgsView, ref, errMsg string) {
+	l := a.langFor(r)
 	w.Header().Set("Cache-Control", "no-store")
 	me := browserPrincipal(r).ID
 	orgs, err := a.store.ListOrgs(me)
 	if err != nil {
-		http.Error(w, msg("adm.load_failed"), http.StatusInternalServerError)
+		http.Error(w, l.msg("adm.load_failed"), http.StatusInternalServerError)
 		return
 	}
 	v.Orgs = orgs
@@ -173,56 +175,57 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 	if status != http.StatusOK {
 		w.WriteHeader(status)
 	}
-	a.renderBrowser(w, r, "orgs", pageData{Title: msg("adm.org.title"), Error: errMsg, Orgs: v})
+	a.renderBrowser(w, r, "orgs", pageData{Title: l.msg("adm.org.title"), Error: errMsg, Orgs: v})
 }
 
 // orgError übersetzt Store-Fehler in eine Meldung und einen Statuscode.
-func orgError(err error) (int, string) {
+func orgError(l lang, err error) (int, string) {
 	switch {
 	case errors.Is(err, store.ErrNotOrgOwner):
-		return http.StatusForbidden, msg("adm.err.owner_only")
+		return http.StatusForbidden, l.msg("adm.err.owner_only")
 	case errors.Is(err, store.ErrOrgNotFound), errors.Is(err, store.ErrNotOrgMember):
-		return http.StatusNotFound, msg("adm.err.org")
+		return http.StatusNotFound, l.msg("adm.err.org")
 	case errors.Is(err, store.ErrLastOrgOwner):
-		return http.StatusConflict, msg("adm.err.last_owner")
+		return http.StatusConflict, l.msg("adm.err.last_owner")
 	case errors.Is(err, store.ErrNotGrantor):
-		return http.StatusForbidden, msg("adm.err.grantor")
+		return http.StatusForbidden, l.msg("adm.err.grantor")
 	case errors.Is(err, store.ErrRoleForbidden):
-		return http.StatusForbidden, msg("adm.err.role")
+		return http.StatusForbidden, l.msg("adm.err.role")
 	case errors.Is(err, store.ErrSelfPromotion):
-		return http.StatusForbidden, msg("adm.err.self")
+		return http.StatusForbidden, l.msg("adm.err.self")
 	case errors.Is(err, store.ErrLastProjectOwner):
-		return http.StatusConflict, msg("adm.err.last_pro_owner")
+		return http.StatusConflict, l.msg("adm.err.last_pro_owner")
 	case errors.Is(err, store.ErrImplicitOwner):
-		return http.StatusConflict, msg("adm.err.implicit")
+		return http.StatusConflict, l.msg("adm.err.implicit")
 	case errors.Is(err, store.ErrNoProjectRole):
-		return http.StatusNotFound, msg("adm.err.no_role")
+		return http.StatusNotFound, l.msg("adm.err.no_role")
 	case errors.Is(err, store.ErrProjectNotFound):
-		return http.StatusNotFound, msg("adm.err.project")
+		return http.StatusNotFound, l.msg("adm.err.project")
 	case errors.Is(err, store.ErrInvalidInput):
-		return http.StatusBadRequest, msg("adm.err.input")
+		return http.StatusBadRequest, l.msg("adm.err.input")
 	case errors.Is(err, store.ErrGuestLinkNeedsEnforcement):
-		return http.StatusConflict, msg("adm.err.guest_link")
+		return http.StatusConflict, l.msg("adm.err.guest_link")
 	case errors.Is(err, store.ErrTooManyInvites):
-		return http.StatusConflict, msg("adm.err.too_many")
+		return http.StatusConflict, l.msg("adm.err.too_many")
 	case errors.Is(err, store.ErrCodeInvalid):
-		return http.StatusBadRequest, msg("adm.err.code")
+		return http.StatusBadRequest, l.msg("adm.err.code")
 	case errors.Is(err, store.ErrInvitationEmail):
-		return http.StatusForbidden, msg("adm.err.email")
+		return http.StatusForbidden, l.msg("adm.err.email")
 	case errors.Is(err, store.ErrAlreadyMember):
-		return http.StatusConflict, msg("adm.err.member")
+		return http.StatusConflict, l.msg("adm.err.member")
 	case errors.Is(err, store.ErrProjectNameTaken):
-		return http.StatusConflict, msg("adm.err.project_taken")
+		return http.StatusConflict, l.msg("adm.err.project_taken")
 	case errors.Is(err, store.ErrOrgSlugTaken):
-		return http.StatusConflict, msg("adm.err.org_taken")
+		return http.StatusConflict, l.msg("adm.err.org_taken")
 	case errors.Is(err, store.ErrTooManyAttempts):
-		return http.StatusTooManyRequests, msg("adm.err.attempts")
+		return http.StatusTooManyRequests, l.msg("adm.err.attempts")
 	}
-	return http.StatusInternalServerError, msg("adm.err.generic")
+	return http.StatusInternalServerError, l.msg("adm.err.generic")
 }
 
 func (a *app) orgFailure(w http.ResponseWriter, r *http.Request, err error) {
-	status, msg := orgError(err)
+	l := a.langFor(r)
+	status, msg := orgError(l, err)
 	a.renderOrgs(w, r, status, orgsView{}, r.FormValue("org"), msg)
 }
 
@@ -238,28 +241,28 @@ func (a *app) formOrg(r *http.Request) (store.Org, error) {
 
 // orgNotice übersetzt den Schlüssel aus ?notice= in den Text; ein unbekannter
 // Schlüssel zeigt nichts, so kann ein Link keinen eigenen Text einschleusen.
-func orgNotice(key string) string {
+func orgNotice(l lang, key string) string {
 	switch key {
 	case "revoked":
-		return msg("adm.notice.revoked")
+		return l.msg("adm.notice.revoked")
 	case "role":
-		return msg("adm.notice.role")
+		return l.msg("adm.notice.role")
 	case "removed":
-		return msg("adm.notice.removed")
+		return l.msg("adm.notice.removed")
 	case "default":
-		return msg("adm.notice.default")
+		return l.msg("adm.notice.default")
 	case "project":
-		return msg("adm.notice.project")
+		return l.msg("adm.notice.project")
 	case "moved":
-		return msg("adm.notice.moved")
+		return l.msg("adm.notice.moved")
 	case "joined":
-		return msg("adm.notice.joined")
+		return l.msg("adm.notice.joined")
 	case "created":
-		return msg("adm.notice.created")
+		return l.msg("adm.notice.created")
 	case "renamed":
-		return msg("adm.notice.renamed")
+		return l.msg("adm.notice.renamed")
 	case "project_created":
-		return msg("adm.notice.project_created")
+		return l.msg("adm.notice.project_created")
 	}
 	return ""
 }

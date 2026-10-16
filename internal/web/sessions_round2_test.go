@@ -24,7 +24,7 @@ func TestAPageCutNeverSplitsTheBlocksOfOneLine(t *testing.T) {
 	}
 	cs := chunks(uLine("first"), aLine(blocks...), uLine("after the big line"))
 	sess := store.Session{Harness: "claude-code"}
-	out, cut := buildBlocks(sess, cs, newHighlighter(""), 0, false, true, false, nil)
+	out, cut := buildBlocks(langEN, sess, cs, newHighlighter(""), 0, false, true, false, nil)
 	parts := 0
 	for _, b := range out {
 		if b.Kind == "assistant" {
@@ -52,7 +52,7 @@ func TestABlockCapHoldsInsideOneStoredLineAndSaysSo(t *testing.T) {
 		blocks = append(blocks, tb("part"))
 	}
 	cs := chunks(uLine("first"), aLine(blocks...), uLine("after the big line"))
-	out, cut := buildBlocks(store.Session{Harness: "claude-code"}, cs, newHighlighter(""), 0, false, true, false, nil)
+	out, cut := buildBlocks(langEN, store.Session{Harness: "claude-code"}, cs, newHighlighter(""), 0, false, true, false, nil)
 	parts, notes := 0, 0
 	for _, b := range out {
 		switch b.Kind {
@@ -83,12 +83,12 @@ func TestTimesAreShownInOneZone(t *testing.T) {
 		t.Errorf("clock = %q, want the local 00:30", got)
 	}
 	now := time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC) // 11:00 local
-	tag := string(dayAndClock("2026-10-01T22:30:00Z", now))
+	tag := string(dayAndClock(langEN, "2026-10-01T22:30:00Z", now))
 	text := regexp.MustCompile(`>([^<]+)</time>`).FindStringSubmatch(tag)
 	if text == nil || !strings.HasPrefix(text[1], "Today") || !strings.HasSuffix(text[1], "00:30") {
 		t.Errorf("dayAndClock = %q, want today 00:30 (the stamp is on the local day of now)", tag)
 	}
-	meta := string(detailMeta(store.Session{StartedAt: "2026-10-01T22:30:00Z", LastSeenAt: "2026-10-01T22:30:00Z"}))
+	meta := string(detailMeta(langEN, store.Session{StartedAt: "2026-10-01T22:30:00Z", LastSeenAt: "2026-10-01T22:30:00Z"}))
 	if !strings.Contains(meta, "00:30") {
 		t.Errorf("detail meta = %q", meta)
 	}

@@ -30,26 +30,27 @@ type coordControlView struct {
 	Who       string
 }
 
-func controlView(c store.AgentControl) (label, detail string) {
-	name := msg("age.control.pause")
+func controlView(l lang, c store.AgentControl) (label, detail string) {
+	name := l.msg("age.control.pause")
 	if c.Action == store.ControlInterrupt {
-		name = msg("age.control.interrupt")
+		name = l.msg("age.control.interrupt")
 	}
 	switch c.State {
 	case store.ControlRequested:
-		return msg("age.control.requested", name), msg("age.control.requested.detail")
+		return l.msg("age.control.requested", name), l.msg("age.control.requested.detail")
 	case store.ControlAcknowledged:
-		return msg("age.control.acknowledged"), msg("age.control.acknowledged.detail")
+		return l.msg("age.control.acknowledged"), l.msg("age.control.acknowledged.detail")
 	case store.ControlEffective:
-		return msg("age.control.effective"), msg("age.control.effective.detail")
+		return l.msg("age.control.effective"), l.msg("age.control.effective.detail")
 	case store.ControlResumed:
-		return msg("age.control.resumed"), msg("age.control.resumed.detail")
+		return l.msg("age.control.resumed"), l.msg("age.control.resumed.detail")
 	}
 	return "", ""
 }
 
 // applyParticipantControls ergänzt jeden Claude-Agenten um seinen Pausenstand.
 func (a *app) applyParticipantControls(r *http.Request, roomKey string, participants []coordParticipantView) {
+	l := a.langFor(r)
 	actor := browserPrincipal(r)
 	for i := range participants {
 		p := &participants[i]
@@ -66,22 +67,22 @@ func (a *app) applyParticipantControls(r *http.Request, roomKey string, particip
 		v := &coordControlView{Agent: p.ID, Room: roomKey, CSRFToken: csrfOf(r), CanControl: a.store.MayControlAgent(actor, p.ID),
 			CanResume: a.store.MayResumeAgentControl(actor, p.ID)}
 		if c, ok, err := a.store.LatestAgentControl(p.ID); err == nil && ok {
-			v.Label, v.Detail = controlView(c)
+			v.Label, v.Detail = controlView(l, c)
 			v.Active = c.State != store.ControlResumed
 			v.Who = c.RequestedByLabel
 			if c.State == store.ControlResumed {
 				v.Who = c.ResumedByLabel
 			}
 			if c.Gap != "" && v.Active {
-				v.Gap = msg("age.control.gap")
+				v.Gap = l.msg("age.control.gap")
 			}
-			v.Blocked = blockedSummary(c)
+			v.Blocked = blockedSummary(l, c)
 		}
 		p.Control = v
 	}
 }
 
-func blockedSummary(c store.AgentControl) string {
+func blockedSummary(l lang, c store.AgentControl) string {
 	acks := 0
 	subs := map[string]bool{}
 	var names []string
@@ -99,9 +100,9 @@ func blockedSummary(c store.AgentControl) string {
 		return ""
 	}
 	if len(names) > 0 {
-		return msg("age.control.blocked_by", acks, strings.Join(names, ", "))
+		return l.msg("age.control.blocked_by", acks, strings.Join(names, ", "))
 	}
-	return msg("age.control.blocked", acks)
+	return l.msg("age.control.blocked", acks)
 }
 
 // coordAgentControl nimmt Pause, Unterbrechung und Fortsetzen entgegen. Die

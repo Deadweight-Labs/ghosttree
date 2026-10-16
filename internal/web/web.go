@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"embed"
 	"errors"
-	"html/template"
 	"net/http"
 	"strings"
 	"sync"
@@ -19,8 +18,6 @@ import (
 
 //go:embed templates static
 var files embed.FS
-
-var pages = template.Must(template.New("").Funcs(template.FuncMap{"t": msg, "ago": timeTag, "lbl": adminLabel}).ParseFS(files, "templates/*.html"))
 
 type app struct {
 	store         *store.Store
@@ -38,6 +35,7 @@ type app struct {
 	distSums      distCache
 	distDir       string // ctx archives + checksums.txt served at /dist/; empty = off
 	oidcName      string // display name of the identity provider; empty = unnamed
+	language      lang   // server language (GHOSTTREE_LANGUAGE); empty = en
 }
 type pageData struct {
 	Title, NavSection, Person, CSRFToken, Error, Code, BackURL string
@@ -126,7 +124,7 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.handle(mux, "GET /join/{code}", a.joinPage)
 	a.handle(mux, "GET /join/", func(w http.ResponseWriter, r *http.Request) {
 		if a.joinGate(w, r) {
-			a.joinNotFound(w)
+			a.joinNotFound(a.langFor(r), w)
 		}
 	})
 	a.handle(mux, "GET /join/pair", a.requirePerson(a.requireInteractive(http.HandlerFunc(a.joinPairPage))))
@@ -205,9 +203,9 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	return &appHandler{Handler: mux, app: a}
 }
 
-func (a *app) render(w http.ResponseWriter, name string, data pageData) {
+func (a *app) render(l lang, w http.ResponseWriter, name string, data pageData) {
 	var output bytes.Buffer
-	if err := pages.ExecuteTemplate(&output, name, data); err != nil {
+	if err := l.page().ExecuteTemplate(&output, name, data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -215,6 +213,7 @@ func (a *app) render(w http.ResponseWriter, name string, data pageData) {
 	_, _ = output.WriteTo(w)
 }
 func (a *app) renderBrowser(w http.ResponseWriter, r *http.Request, name string, data pageData) {
+	l := a.langFor(r)
 	principal := browserPrincipal(r)
 	data.Person = principal.Label
 	data.CSRFToken = csrfOf(r)
@@ -244,7 +243,7 @@ func (a *app) renderBrowser(w http.ResponseWriter, r *http.Request, name string,
 	case "profile":
 		data.NavSection = "profile"
 	}
-	a.render(w, name, data)
+	a.render(l, w, name, data)
 }
 
 // sessionLinks nennt zu Sessionnummern aus Verweisen die Adresse in der
@@ -287,6 +286,7 @@ type contextView struct {
 }
 
 func (a *app) contextPage(w http.ResponseWriter, r *http.Request) {
+	l := a.langFor(r)
 	project := a.projectParam(r)
 	preview := r.URL.Query().Get("preview") == "1"
 	view := &contextView{Project: project, Preview: preview}
@@ -299,7 +299,7 @@ func (a *app) contextPage(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, "/ui/context?"+q.Encode(), http.StatusSeeOther)
 			return
 		}
-		a.renderBrowser(w, r, "context", pageData{Title: msg("context.title"), ContextV: view})
+		a.renderBrowser(w, r, "context", pageData{Title: l.msg("context.title"), ContextV: view})
 		return
 	}
 	var entries []store.Knowledge
@@ -321,7 +321,7 @@ func (a *app) contextPage(w http.ResponseWriter, r *http.Request) {
 			view.Output = server.RenderBootstrapPreview(entries, 12000)
 		}
 	}
-	a.renderBrowser(w, r, "context", pageData{Title: msg("context.title"), ContextV: view})
+	a.renderBrowser(w, r, "context", pageData{Title: l.msg("context.title"), ContextV: view})
 }
 
 // access ist die Zugriffsprüfung der Browser-Sitzung. Sie nutzt denselben Store

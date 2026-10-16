@@ -55,7 +55,7 @@ func (a *app) browserCoord(r *http.Request) store.CoordAccess {
 	return a.store.CoordinationFor(browserPrincipal(r), "")
 }
 
-func coordHTTPError(w http.ResponseWriter, err error) {
+func coordHTTPError(l lang, w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, store.ErrCoordNotFound):
 		http.Error(w, "coordination target not found", http.StatusNotFound)
@@ -68,7 +68,7 @@ func coordHTTPError(w http.ResponseWriter, err error) {
 	case errors.Is(err, store.ErrAnchorAlreadyThreaded):
 		http.Error(w, "coordination message already has a different task thread", http.StatusConflict)
 	case errors.Is(err, store.ErrCoordInvalidExpiry):
-		http.Error(w, errCoordExpiryInvalid.Error(), http.StatusBadRequest)
+		http.Error(w, l.msg("coord.expiry_invalid"), http.StatusBadRequest)
 	case errors.Is(err, store.ErrCoordInvalidSequence):
 		http.Error(w, "invalid coordination sequence", http.StatusBadRequest)
 	case errors.Is(err, store.ErrCoordUnknownRecipient):
@@ -76,11 +76,11 @@ func coordHTTPError(w http.ResponseWriter, err error) {
 	case errors.Is(err, store.ErrCoordAmbiguousMention):
 		var ambiguous *store.AmbiguousMentionError
 		errors.As(err, &ambiguous)
-		http.Error(w, msg("coord.mention_ambiguous", ambiguous.Token, strings.Join(ambiguous.Candidates, ", ")), http.StatusBadRequest)
+		http.Error(w, l.msg("coord.mention_ambiguous", ambiguous.Token, strings.Join(ambiguous.Candidates, ", ")), http.StatusBadRequest)
 	case errors.Is(err, store.ErrBroadcastLimited):
 		var limited *store.BroadcastLimitedError
 		errors.As(err, &limited)
-		http.Error(w, msg("coord.broadcast_limited", int(limited.Wait.Minutes())+1), http.StatusTooManyRequests)
+		http.Error(w, l.msg("coord.broadcast_limited", int(limited.Wait.Minutes())+1), http.StatusTooManyRequests)
 	case errors.Is(err, store.ErrInvalidAttentionAction):
 		http.Error(w, "invalid coordination attention action", http.StatusBadRequest)
 	case errors.Is(err, store.ErrAttentionRecipientRequired):
@@ -108,14 +108,15 @@ func coordHTTPError(w http.ResponseWriter, err error) {
 // one fixed text for a room that does not exist and for one in a project the
 // viewer may not see (#2447): nothing on it depends on the room.
 func (a *app) roomPageError(w http.ResponseWriter, r *http.Request, err error) {
+	l := a.langFor(r)
 	page, status, title := "", 0, ""
 	switch {
 	case errors.Is(err, store.ErrCoordForbidden):
-		page, status, title = "roomforbidden", http.StatusForbidden, msg("coord.forbidden.title")
+		page, status, title = "roomforbidden", http.StatusForbidden, l.msg("coord.forbidden.title")
 	case errors.Is(err, store.ErrCoordNotFound):
-		page, status, title = "roomnotfound", http.StatusNotFound, msg("coord.notfound.title")
+		page, status, title = "roomnotfound", http.StatusNotFound, l.msg("coord.notfound.title")
 	default:
-		coordHTTPError(w, err)
+		coordHTTPError(l, w, err)
 		return
 	}
 	// A way out that leads somewhere: the rooms when the viewer has any, the
@@ -138,6 +139,7 @@ func (a *app) mayEnter(w http.ResponseWriter, r *http.Request, room string) bool
 }
 
 func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
+	l := a.langFor(r)
 	room := r.URL.Query().Get("room")
 	eventCursor, err := a.store.LatestCoordEventSequence()
 	if err != nil {
@@ -156,14 +158,14 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 	}
 	attention, err := a.browserCoord(r).Attention()
 	if err != nil {
-		coordHTTPError(w, err)
+		coordHTTPError(l, w, err)
 		return
 	}
 	current := browserPrincipal(r)
-	labels := coordIdentityLabels(current, recipients)
+	labels := coordIdentityLabels(l, current, recipients)
 	// Agents that wrote an attention item are named through the peers of the
 	// room it came from; Peers is ACL-checked, so this adds no hidden identity.
-	attentionLabels := coordIdentityLabels(current, recipients)
+	attentionLabels := coordIdentityLabels(l, current, recipients)
 	seenRooms := map[string]bool{}
 	for _, item := range attention {
 		if item.HomeRoomKey == "" || seenRooms[item.HomeRoomKey] {
@@ -171,27 +173,27 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 		}
 		seenRooms[item.HomeRoomKey] = true
 		if peers, err := a.browserCoord(r).Peers(item.HomeRoomKey, ""); err == nil {
-			for id, label := range coordIdentityLabels(current, nil, peers...) {
+			for id, label := range coordIdentityLabels(l, current, nil, peers...) {
 				attentionLabels[id] = label
 			}
 		}
 	}
-	incomingAttention, outgoingAttention := buildCoordAttentionViews(attention, csrfOf(r), attentionLabels)
-	sidebar := buildCoordSidebar(summaries, humanMember(r), room, labels)
-	annotateCoordAttention(incomingAttention, attention, sidebar, attentionLabels)
-	annotateCoordAttention(outgoingAttention, attention, sidebar, attentionLabels)
+	incomingAttention, outgoingAttention := buildCoordAttentionViews(l, attention, csrfOf(r), attentionLabels)
+	sidebar := buildCoordSidebar(l, summaries, humanMember(r), room, labels)
+	annotateCoordAttention(l, incomingAttention, attention, sidebar, attentionLabels)
+	annotateCoordAttention(l, outgoingAttention, attention, sidebar, attentionLabels)
 	// Badge und Aufmerksamkeit zählen alle Räume; nur die Liste folgt dem Projekt.
 	sidebar = sidebar.inProject(selectedProject(a.shellFor(r, "coord")), room)
 	view := coordPageView{
-		Texts:             coordClientTexts(),
+		Texts:             coordClientTexts(l),
 		EventCursor:       a.sealCoordCursor(browserPrincipal(r), eventCursor, time.Now()),
 		Sidebar:           sidebar,
-		Recipients:        buildCoordRecipientViews(recipients),
+		Recipients:        buildCoordRecipientViews(l, recipients),
 		IncomingAttention: incomingAttention,
 		OutgoingAttention: outgoingAttention,
 	}
 	if room == "" {
-		a.renderBrowser(w, r, "coord", pageData{Title: msg("coord.title"), Coord: view})
+		a.renderBrowser(w, r, "coord", pageData{Title: l.msg("coord.title"), Coord: view})
 		return
 	}
 	if !a.mayEnter(w, r, room) {
@@ -210,7 +212,7 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 	}
 	page, presentations, err := access.MessagePresentationWindow(store.DestinationRoom, room, window)
 	if err != nil {
-		coordHTTPError(w, err)
+		coordHTTPError(l, w, err)
 		return
 	}
 	if aroundText := strings.TrimSpace(r.URL.Query().Get("around")); aroundText != "" {
@@ -234,10 +236,10 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 		peers, err = nil, nil
 	}
 	if err != nil {
-		coordHTTPError(w, err)
+		coordHTTPError(l, w, err)
 		return
 	}
-	labels = coordIdentityLabels(current, recipients, peers...)
+	labels = coordIdentityLabels(l, current, recipients, peers...)
 	standing, err := access.Standing(room)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -245,7 +247,7 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 	}
 	roomThreads, err := access.RoomThreads(room)
 	if err != nil {
-		coordHTTPError(w, err)
+		coordHTTPError(l, w, err)
 		return
 	}
 	var memberships []store.RoomMembership
@@ -258,12 +260,12 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 	}
 	detail := &coordRoomDetailView{
 		Room: coordRoomView{Key: activeRoom.Key, Kind: activeRoom.Kind,
-			Label: coordRoomLabel(activeRoom, humanMember(r), labels), URL: coordRoomURL(activeRoom.Key, "", 0), Active: true},
-		Messages:     buildCoordMessageViews(presentations, room, labels),
+			Label: coordRoomLabel(l, activeRoom, humanMember(r), labels), URL: coordRoomURL(activeRoom.Key, "", 0), Active: true},
+		Messages:     buildCoordMessageViews(l, presentations, room, labels),
 		Zone:         time.Now().Format("MST"),
-		Participants: othersWaitNeutral(buildCoordParticipants(activeRoom, peers, memberships, current, labels), askedViewer(attention)),
+		Participants: othersWaitNeutral(l, buildCoordParticipants(l, activeRoom, peers, memberships, current, labels), askedViewer(attention)),
 		WaitCycles:   buildCoordWaitCycles(peers, labels),
-		Standing:     buildCoordStandingViews(standing, labels), HighWater: page.HighWater,
+		Standing:     buildCoordStandingViews(l, standing, labels), HighWater: page.HighWater,
 		HasOlder: page.HasOlder, HasNewer: page.HasNewer,
 		CanLeave: activeRoom.Kind == store.RoomGroup,
 		FormID:   newCoordFormID(), StandingFormID: newCoordFormID(), Threads: buildCoordThreadViews(roomThreads),
@@ -277,17 +279,17 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 	// Who has a role in the project, for the viewers who may see it; a guest
 	// gets nothing here, not even an empty marker.
 	if people, perr := access.RoomPeople(room); perr == nil {
-		detail.Participants = addRoomPeople(detail.Participants, people, current)
+		detail.Participants = addRoomPeople(l, detail.Participants, people, current)
 	}
 	applyParticipantHandles(access, activeRoom.Key, detail.Participants)
 	detail.Broadcast = coordCanBroadcast(activeRoom.Kind, detail.Participants)
-	applyParticipantRoles(a.store, activeRoom.Key, detail.Participants)
+	applyParticipantRoles(l, a.store, activeRoom.Key, detail.Participants)
 	a.applyParticipantControls(r, activeRoom.Key, detail.Participants)
-	applyMessageRoles(a.store, activeRoom.Key, current.ID, detail.Messages, presentations)
+	applyMessageRoles(l, a.store, activeRoom.Key, current.ID, detail.Messages, presentations)
 	markViewerMentions(detail.Messages, presentations, current.ID)
 	detail.CanDirect = true
 	detail.CanPost = access.CanPost(room)
-	detail.UnreachedNote = coordUnreachedNote(r.URL.Query().Get("unreached"), r.URL.Query().Get("unsent") == "1")
+	detail.UnreachedNote = coordUnreachedNote(l, r.URL.Query().Get("unreached"), r.URL.Query().Get("unsent") == "1")
 	roleRoom := false
 	if remote, ok := strings.CutPrefix(activeRoom.Key, "project:"); ok {
 		if _, claimed := a.store.ProjectByRemote(remote); claimed {
@@ -296,12 +298,12 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	for i := range detail.Standing {
-		detail.Standing[i].Scope = coordStandingScope(detail.Standing[i].Targets, detail.Room.Label)
+		detail.Standing[i].Scope = coordStandingScope(l, detail.Standing[i].Targets, detail.Room.Label)
 		detail.Standing[i].CanEnd = access.CanEndStanding(activeRoom.Key, detail.Standing[i].MessageID)
 	}
-	decorateCoordMessages(detail.Messages, presentations, current.ID, activeRoom.Key, detail.Room.Label, detail.Standing, append(append([]coordAttentionView{}, incomingAttention...), outgoingAttention...), roleRoom, time.Now())
-	applyRequestStates(detail.Messages, presentations, activeRoom.Key, attention, attentionLabels)
-	detail.ReplyTo, detail.ReplyTarget, err = coordReplyTarget(presentations, r.URL.Query().Get("reply_to"))
+	decorateCoordMessages(l, detail.Messages, presentations, current.ID, activeRoom.Key, detail.Room.Label, detail.Standing, append(append([]coordAttentionView{}, incomingAttention...), outgoingAttention...), roleRoom, time.Now())
+	applyRequestStates(l, detail.Messages, presentations, activeRoom.Key, attention, attentionLabels)
+	detail.ReplyTo, detail.ReplyTarget, err = coordReplyTarget(l, presentations, r.URL.Query().Get("reply_to"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -335,7 +337,7 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if selected == nil {
-			coordHTTPError(w, store.ErrCoordNotFound)
+			coordHTTPError(l, w, store.ErrCoordNotFound)
 			return
 		}
 		threadWindow, parseErr := coordThreadWindowFromRequest(r)
@@ -346,7 +348,7 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 		threadAround, _ := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("thread_around")), 10, 64)
 		threadPage, presentations, loadErr := access.MessagePresentationWindow(store.DestinationDiscussion, store.ThreadDestinationID(selectedID), threadWindow)
 		if loadErr != nil {
-			coordHTTPError(w, loadErr)
+			coordHTTPError(l, w, loadErr)
 			return
 		}
 		if threadAround > 0 {
@@ -363,7 +365,7 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		threadDetail := &coordThreadDetailView{
-			coordThreadView: *selected, Messages: buildCoordThreadMessageViews(presentations, room, selectedID, labels), FormID: newCoordFormID(),
+			coordThreadView: *selected, Messages: buildCoordThreadMessageViews(l, presentations, room, selectedID, labels), FormID: newCoordFormID(),
 			HighWater: threadPage.HighWater, HasOlder: threadPage.HasOlder, HasNewer: threadPage.HasNewer,
 			ClearReplyURL: coordThreadComposerURL(room, selectedID),
 		}
@@ -373,7 +375,7 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 			threadDetail.Messages[i].CanReply = detail.CanPost
 			threadDetail.Messages[i].Own = message.AuthorKind == store.AuthorHuman && message.AuthorPrincipalID == current.ID
 		}
-		threadDetail.ReplyTo, threadDetail.ReplyTarget, parseErr = coordReplyTarget(presentations, r.URL.Query().Get("thread_reply_to"))
+		threadDetail.ReplyTo, threadDetail.ReplyTarget, parseErr = coordReplyTarget(l, presentations, r.URL.Query().Get("thread_reply_to"))
 		if parseErr != nil {
 			http.Error(w, parseErr.Error(), http.StatusBadRequest)
 			return
@@ -402,10 +404,10 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 				peers = append(peers, participant.Label)
 			}
 		}
-		detail.PrivatePeers = coordJoinNames(peers)
-		detail.PrivateNote = msg("coord.private_note")
+		detail.PrivatePeers = coordJoinNames(l, peers)
+		detail.PrivateNote = l.msg("coord.private_note")
 		if detail.PrivatePeers != "" {
-			detail.PrivateNote = msg("coord.private_note_with", detail.PrivatePeers)
+			detail.PrivateNote = l.msg("coord.private_note_with", detail.PrivatePeers)
 		}
 	}
 	for _, membership := range memberships {
@@ -421,7 +423,7 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	view.Active = detail
-	data := pageData{Title: "Coordination", Coord: view}
+	data := pageData{Title: l.msg("page.coordination"), Coord: view}
 	var firstSequence, lastSequence, before, after int64
 	if len(page.Messages) > 0 {
 		firstSequence = page.Messages[0].Sequence
@@ -446,6 +448,7 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) coordThreadPage(w http.ResponseWriter, r *http.Request) {
+	l := a.langFor(r)
 	threadID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil || threadID <= 0 {
 		http.Error(w, "coordination target not found", http.StatusNotFound)
@@ -453,13 +456,14 @@ func (a *app) coordThreadPage(w http.ResponseWriter, r *http.Request) {
 	}
 	home, err := a.browserCoord(r).ThreadHome(threadID)
 	if err != nil {
-		coordHTTPError(w, err)
+		coordHTTPError(l, w, err)
 		return
 	}
 	http.Redirect(w, r, coordThreadURL(home.RoomKey, threadID), http.StatusSeeOther)
 }
 
 func (a *app) coordCreateThread(w http.ResponseWriter, r *http.Request) {
+	l := a.langFor(r)
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -481,18 +485,19 @@ func (a *app) coordCreateThread(w http.ResponseWriter, r *http.Request) {
 		threadID, err = a.browserCoord(r).CreateTaskThreadInRoom(strings.TrimSpace(r.FormValue("room")), r.FormValue("title"), r.FormValue("question"), r.FormValue("request_id"))
 	}
 	if err != nil {
-		coordHTTPError(w, err)
+		coordHTTPError(l, w, err)
 		return
 	}
 	home, err := a.browserCoord(r).ThreadHome(threadID)
 	if err != nil {
-		coordHTTPError(w, err)
+		coordHTTPError(l, w, err)
 		return
 	}
 	http.Redirect(w, r, coordThreadURL(home.RoomKey, threadID), http.StatusSeeOther)
 }
 
 func (a *app) coordPostThread(w http.ResponseWriter, r *http.Request) {
+	l := a.langFor(r)
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -515,18 +520,19 @@ func (a *app) coordPostThread(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := a.browserCoord(r).ThreadPost(threadID, store.CoordMessage{ClientID: newFormClientID(r), Body: body, Intent: intent, Mentions: mentions, ReplyTo: replyTo}); err != nil {
-		coordHTTPError(w, err)
+		coordHTTPError(l, w, err)
 		return
 	}
 	home, err := a.browserCoord(r).ThreadHome(threadID)
 	if err != nil {
-		coordHTTPError(w, err)
+		coordHTTPError(l, w, err)
 		return
 	}
 	http.Redirect(w, r, coordThreadURL(home.RoomKey, threadID), http.StatusSeeOther)
 }
 
 func (a *app) coordSetThreadState(w http.ResponseWriter, r *http.Request) {
+	l := a.langFor(r)
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -537,12 +543,12 @@ func (a *app) coordSetThreadState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.browserCoord(r).SetThreadState(threadID, strings.TrimSpace(r.FormValue("state"))); err != nil {
-		coordHTTPError(w, err)
+		coordHTTPError(l, w, err)
 		return
 	}
 	home, err := a.browserCoord(r).ThreadHome(threadID)
 	if err != nil {
-		coordHTTPError(w, err)
+		coordHTTPError(l, w, err)
 		return
 	}
 	http.Redirect(w, r, coordThreadURL(home.RoomKey, threadID), http.StatusSeeOther)
@@ -656,6 +662,7 @@ func coordOptionalReplyTo(r *http.Request) (int64, error) {
 // wäre die ganze Unterscheidung zwischen Agenten- und Menschenbeitrag ein
 // Textfeld, und "Robin hat gesagt, du sollst deployen" eine Autorisierung.
 func (a *app) coordSend(w http.ResponseWriter, r *http.Request) {
+	l := a.langFor(r)
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -677,7 +684,7 @@ func (a *app) coordSend(w http.ResponseWriter, r *http.Request) {
 
 	expiresAt, err := parseCoordExpiry(r.FormValue("expires_at"), r.FormValue("expires_offset"), time.Local)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		coordHTTPError(l, w, store.ErrCoordInvalidExpiry)
 		return
 	}
 	msg := store.CoordMessage{
@@ -702,7 +709,7 @@ func (a *app) coordSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		coordHTTPError(w, err)
+		coordHTTPError(l, w, err)
 		return
 	}
 	target := "/ui/coord?room=" + url.QueryEscape(room)
@@ -717,7 +724,7 @@ var unreachedTokenPattern = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{N}._:-]{0,
 
 // coordUnreachedNote is the hint under the room after a send, built from the
 // query so that only well-formed @names are echoed.
-func coordUnreachedNote(raw string, unsent bool) string {
+func coordUnreachedNote(l lang, raw string, unsent bool) string {
 	var names []string
 	for _, token := range strings.Split(raw, ",") {
 		if unreachedTokenPattern.MatchString(token) && len(names) < 5 {
@@ -728,9 +735,9 @@ func coordUnreachedNote(raw string, unsent bool) string {
 		return ""
 	}
 	if unsent {
-		return msg("coord.unreached_unsent", strings.Join(names, ", "))
+		return l.msg("coord.unreached_unsent", strings.Join(names, ", "))
 	}
-	return msg("coord.unreached", strings.Join(names, ", "))
+	return l.msg("coord.unreached", strings.Join(names, ", "))
 }
 
 func validCoordComposerIntent(intent string) bool {
@@ -747,6 +754,7 @@ func isAttentionIntent(intent string) bool {
 }
 
 func (a *app) coordAttentionAction(w http.ResponseWriter, r *http.Request) {
+	l := a.langFor(r)
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -757,7 +765,7 @@ func (a *app) coordAttentionAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.browserCoord(r).ResolveAttention(id, strings.TrimSpace(r.FormValue("action"))); err != nil {
-		coordHTTPError(w, err)
+		coordHTTPError(l, w, err)
 		return
 	}
 	location := "/ui/coord"
@@ -770,6 +778,7 @@ func (a *app) coordAttentionAction(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) coordCreateStanding(w http.ResponseWriter, r *http.Request) {
+	l := a.langFor(r)
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -782,12 +791,12 @@ func (a *app) coordCreateStanding(w http.ResponseWriter, r *http.Request) {
 	mentions := splitCoordPrincipals(r.Form["mentions"]...)
 	expiresAt, err := parseCoordExpiry(r.FormValue("expires_at"), r.FormValue("expires_offset"), time.Local)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		coordHTTPError(l, w, store.ErrCoordInvalidExpiry)
 		return
 	}
 	_, err = a.browserCoord(r).CreateStanding(store.StandingInput{RoomKey: room, ClientID: newFormClientID(r), Body: body, ExpiresAt: expiresAt, Mentions: mentions})
 	if err != nil {
-		coordHTTPError(w, err)
+		coordHTTPError(l, w, err)
 		return
 	}
 	http.Redirect(w, r, "/ui/coord?room="+url.QueryEscape(room), http.StatusSeeOther)
@@ -802,6 +811,7 @@ func (a *app) coordMarkUnread(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) coordSetReadState(w http.ResponseWriter, r *http.Request, unread bool) {
+	l := a.langFor(r)
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -819,7 +829,7 @@ func (a *app) coordSetReadState(w http.ResponseWriter, r *http.Request, unread b
 		err = access.MarkRead(store.DestinationRoom, room, sequence)
 	}
 	if err != nil {
-		coordHTTPError(w, err)
+		coordHTTPError(l, w, err)
 		return
 	}
 	http.Redirect(w, r, "/ui/coord?room="+url.QueryEscape(room), http.StatusSeeOther)
@@ -830,6 +840,7 @@ func (a *app) coordSetReadState(w http.ResponseWriter, r *http.Request, unread b
 // Aufgabe oder durch diese Geste, nicht dadurch, dass genug Nachrichten
 // darüber hinweggelaufen sind.
 func (a *app) coordEndStanding(w http.ResponseWriter, r *http.Request) {
+	l := a.langFor(r)
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -841,7 +852,7 @@ func (a *app) coordEndStanding(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.browserCoord(r).EndStanding(room, id); err != nil {
-		coordHTTPError(w, err)
+		coordHTTPError(l, w, err)
 		return
 	}
 	http.Redirect(w, r, "/ui/coord?room="+url.QueryEscape(room), http.StatusSeeOther)
@@ -862,6 +873,7 @@ func splitCoordPrincipals(values ...string) []string {
 }
 
 func (a *app) coordStartDirect(w http.ResponseWriter, r *http.Request) {
+	l := a.langFor(r)
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -875,13 +887,14 @@ func (a *app) coordStartDirect(w http.ResponseWriter, r *http.Request) {
 	members := []string{actor, target}
 	room := store.CoordRoom{Key: store.RoomKeyForDirect(members), Kind: store.RoomDirect, Members: members}
 	if err := a.browserCoord(r).EnsureDirect(room); err != nil {
-		coordHTTPError(w, err)
+		coordHTTPError(l, w, err)
 		return
 	}
 	http.Redirect(w, r, "/ui/coord?room="+url.QueryEscape(room.Key), http.StatusSeeOther)
 }
 
 func (a *app) coordCreateGroup(w http.ResponseWriter, r *http.Request) {
+	l := a.langFor(r)
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -896,13 +909,14 @@ func (a *app) coordCreateGroup(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "a group needs at least one other participant", http.StatusBadRequest)
 			return
 		}
-		coordHTTPError(w, err)
+		coordHTTPError(l, w, err)
 		return
 	}
 	http.Redirect(w, r, "/ui/coord?room="+url.QueryEscape(room.Key), http.StatusSeeOther)
 }
 
 func (a *app) coordUpdateGroup(w http.ResponseWriter, r *http.Request) {
+	l := a.langFor(r)
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -920,13 +934,14 @@ func (a *app) coordUpdateGroup(w http.ResponseWriter, r *http.Request) {
 		RemoveManagers: splitCoordPrincipals(r.Form["remove_managers"]...),
 	})
 	if err != nil {
-		coordHTTPError(w, err)
+		coordHTTPError(l, w, err)
 		return
 	}
 	http.Redirect(w, r, "/ui/coord?room="+url.QueryEscape(room), http.StatusSeeOther)
 }
 
 func (a *app) coordLeaveGroup(w http.ResponseWriter, r *http.Request) {
+	l := a.langFor(r)
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -937,7 +952,7 @@ func (a *app) coordLeaveGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.browserCoord(r).LeaveRoom(room, humanMember(r)); err != nil {
-		coordHTTPError(w, err)
+		coordHTTPError(l, w, err)
 		return
 	}
 	http.Redirect(w, r, "/ui/coord", http.StatusSeeOther)

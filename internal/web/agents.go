@@ -53,6 +53,7 @@ func agentMachine(externalID string) string {
 }
 
 func (a *app) agentsPage(w http.ResponseWriter, r *http.Request) {
+	l := a.langFor(r)
 	w.Header().Set("Cache-Control", "no-store")
 	now := overviewNow().UTC()
 	pa := a.access(r)
@@ -76,9 +77,9 @@ func (a *app) agentsPage(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		view.Machines, view.Example = ownMachines(tokens, now), msg("setup.example")
+		view.Machines, view.Example = ownMachines(l, tokens, now), l.msg("setup.example")
 	}
-	a.renderBrowser(w, r, "agents", pageData{Title: msg("agents.title"), Agents: view})
+	a.renderBrowser(w, r, "agents", pageData{Title: l.msg("agents.title"), Agents: view})
 }
 
 // agentCards adds request, session link and last room post to each row.
@@ -118,6 +119,7 @@ type agentPost struct{ text, age string }
 // lastPosts reads the newest room messages once per room (through the viewer's
 // CoordAccess) and keeps the latest of each agent.
 func (a *app) lastPosts(r *http.Request, rows []agentRow, now time.Time) map[string]agentPost {
+	l := a.langFor(r)
 	out := map[string]agentPost{}
 	access := a.browserCoord(r)
 	rooms := map[string]bool{}
@@ -134,7 +136,7 @@ func (a *app) lastPosts(r *http.Request, rows []agentRow, now time.Time) map[str
 			if m.AuthorKind != store.AuthorAgent || m.SenderExternalID == "" || strings.TrimSpace(m.Body) == "" {
 				continue
 			}
-			out[m.SenderExternalID] = agentPost{oneLine(m.Body, agentPostLength), shortAge(now, parseTime(m.CreatedAt))}
+			out[m.SenderExternalID] = agentPost{oneLine(m.Body, agentPostLength), shortAge(l, now, parseTime(m.CreatedAt))}
 		}
 	}
 	return out

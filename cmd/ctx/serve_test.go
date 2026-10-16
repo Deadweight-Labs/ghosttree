@@ -357,3 +357,23 @@ func TestServeAccessEnforcementFollowsTheEnvironment(t *testing.T) {
 		st.Close()
 	}
 }
+
+func TestServeLanguageFlagAndEnvironment(t *testing.T) {
+	t.Setenv(envLanguage, "")
+	cfg, err := parseServeConfig(nil, &bytes.Buffer{})
+	if err != nil || cfg.Language != "en" {
+		t.Fatalf("default language = %q, %v; want en", cfg.Language, err)
+	}
+	t.Setenv(envLanguage, "de")
+	cfg, err = parseServeConfig(nil, &bytes.Buffer{})
+	if err != nil || cfg.Language != "de" {
+		t.Fatalf("env language = %q, %v; want de", cfg.Language, err)
+	}
+	cfg, err = parseServeConfig([]string{"--language", "en"}, &bytes.Buffer{})
+	if err != nil || cfg.Language != "en" {
+		t.Fatalf("flag overrides env: %q, %v; want en", cfg.Language, err)
+	}
+	if _, err = parseServeConfig([]string{"--language", "fr"}, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "--language") {
+		t.Fatalf("unknown language error = %v, want one naming --language", err)
+	}
+}

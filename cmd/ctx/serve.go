@@ -34,6 +34,7 @@ type serveConfig struct {
 	Writer         store.WriterConfig
 	OIDC           web.OIDCConfig
 	PublicURL      string
+	Language       string
 	DistDir        string
 	TrustedProxies proxytrust.Set
 }
@@ -55,6 +56,8 @@ const (
 	// envDistDir names a directory with the ctx release archives and
 	// checksums.txt; the server then serves /install.sh and /dist/.
 	envDistDir = "GHOSTTREE_DIST_DIR"
+	// envLanguage picks the language of the web interface: en (default) or de.
+	envLanguage = "GHOSTTREE_LANGUAGE"
 )
 
 type snapshotRootValues []string
@@ -115,6 +118,7 @@ func parseServeConfig(args []string, output io.Writer) (serveConfig, error) {
 	fs.StringVar(&cfg.OIDC.Signup, "oidc-signup", os.Getenv(envOIDCSignup), "offer \"Create an account\" on invitation links (OIDC prompt=create): 1 always, 0 never, empty only when the provider lists it (env "+envOIDCSignup+")")
 	fs.StringVar(&cfg.PublicURL, "public-url", os.Getenv(envPublicURL), "external base URL, e.g. https://ghosttree.example.com; an https URL makes every cookie Secure (env "+envPublicURL+")")
 	fs.StringVar(&cfg.DistDir, "dist-dir", os.Getenv(envDistDir), "directory with ctx_<version>_<os>_<arch>.tar.gz archives and checksums.txt; enables /install.sh and /dist/ (env "+envDistDir+")")
+	fs.StringVar(&cfg.Language, "language", os.Getenv(envLanguage), "language of the web interface: en (default) or de (env "+envLanguage+")")
 	trusted := fs.String("trusted-proxies", os.Getenv(envTrustedProxies), "comma-separated CIDRs/IPs of reverse proxies whose X-Forwarded-Proto/Host are believed; loopback is always trusted, nothing else by default (env "+envTrustedProxies+")")
 	// Das Secret gibt es bewusst nur über die Umgebung: ein Flag stünde in der Prozessliste.
 	cfg.OIDC.ClientSecret = os.Getenv(envOIDCClientSecret)
@@ -128,6 +132,11 @@ func parseServeConfig(args []string, output io.Writer) (serveConfig, error) {
 	if err := cfg.OIDC.Validate(); err != nil {
 		return serveConfig{}, err
 	}
+	lang, err := web.ParseLanguage(cfg.Language)
+	if err != nil {
+		return serveConfig{}, fmt.Errorf("--language: %w", err)
+	}
+	cfg.Language = lang
 	if cfg.PublicURL != "" {
 		u, err := url.Parse(cfg.PublicURL)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil ||
@@ -327,6 +336,7 @@ func buildServerHandler(st *store.Store, cfg serveConfig, stderr io.Writer) http
 	if cfg.OIDC.Enabled() {
 		webOptions = append(webOptions, web.WithOIDC(cfg.OIDC))
 	}
+	webOptions = append(webOptions, web.WithLanguage(cfg.Language))
 	root.Handle("/", web.New(st, webOptions...))
 	return root
 }

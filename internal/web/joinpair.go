@@ -123,6 +123,7 @@ func (a *app) sameNetworkMeaningful() bool {
 // joinPairPage zeigt, je nach Zustand der Sitzung des Kontos, den Code mit
 // Befehl, die Freigabefrage oder das Ergebnis.
 func (a *app) joinPairPage(w http.ResponseWriter, r *http.Request) {
+	l := a.langFor(r)
 	p := browserPrincipal(r)
 	v := a.store.Join().View(p.ID)
 	view := joinPairView{State: v.State, Pair: v.Pair, Machine: v.Machine, Remote: v.Remote, Nonce: v.Nonce,
@@ -138,9 +139,9 @@ func (a *app) joinPairPage(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		view.CmdParts = cmdParts(view.Command)
-		view.MailIntro = msg("pair.message", "")
-		view.Message = msg("pair.message", view.Command)
-		view.MailTo = "mailto:?subject=" + mailEscape(msg("pair.mail_subject")) + "&body=" + mailEscape(view.Message)
+		view.MailIntro = l.msg("pair.message", "")
+		view.Message = l.msg("pair.message", view.Command)
+		view.MailTo = "mailto:?subject=" + mailEscape(l.msg("pair.mail_subject")) + "&body=" + mailEscape(view.Message)
 		view.Refresh = 10
 	case store.JoinClaimed:
 		view.Refresh = 20
@@ -153,7 +154,7 @@ func (a *app) joinPairPage(w http.ResponseWriter, r *http.Request) {
 		view.Interrupted = r.URL.Query().Get("w") == "1"
 	}
 	a.joinScriptHeaders(w)
-	a.joinWrite(w, "joinpair", view)
+	a.joinWrite(l, w, "joinpair", view)
 }
 
 // mailEscape kodiert Text für die Teile einer mailto:-Adresse (Leerzeichen
@@ -175,21 +176,22 @@ func (a *app) joinPairState(w http.ResponseWriter, r *http.Request) {
 
 // joinPairMessage ist joinMessageBack mit dem Weg zurück zur Paarungsseite: wer dort
 // einen Fehler bekommt, steht sonst vor einer Sackgasse.
-func (a *app) joinPairMessage(w http.ResponseWriter, status int, title, message string) {
-	a.joinMessageBack(w, status, title, message, "/join/pair", msg("join.msg_back"))
+func (a *app) joinPairMessage(l lang, w http.ResponseWriter, status int, title, message string) {
+	a.joinMessageBack(l, w, status, title, message, "/join/pair", l.msg("join.msg_back"))
 }
 
 // joinPairCreate legt die Sitzung an oder ersetzt sie durch einen neuen Code.
 // Gibt es noch keine Sitzung, bestätigt das Konto seinen Namen (wie beim
 // Beitritt); ein neuer Code für eine bestehende braucht das nicht.
 func (a *app) joinPairCreate(w http.ResponseWriter, r *http.Request) {
+	l := a.langFor(r)
 	p := browserPrincipal(r)
 	if a.store.Join().View(p.ID).State == store.JoinNone && r.FormValue("confirm_account") != p.Label {
-		a.joinPairMessage(w, http.StatusBadRequest, msg("join.msg_confirm_t"), msg("join.msg_confirm_p"))
+		a.joinPairMessage(l, w, http.StatusBadRequest, l.msg("join.msg_confirm_t"), l.msg("join.msg_confirm_p"))
 		return
 	}
 	if _, err := a.store.Join().Create(p.ID); err != nil {
-		a.joinPairMessage(w, http.StatusInternalServerError, msg("join.msg_setup_t"), msg("join.msg_setup"))
+		a.joinPairMessage(l, w, http.StatusInternalServerError, l.msg("join.msg_setup_t"), l.msg("join.msg_setup"))
 		return
 	}
 	http.Redirect(w, r, "/join/pair", http.StatusSeeOther)
@@ -205,10 +207,11 @@ func wantsJSON(r *http.Request) bool {
 // sich nichts. Beim Loopback-Weg geht der Browser nach der Freigabe auf den
 // Loopback des Installers.
 func (a *app) joinPairDecide(w http.ResponseWriter, r *http.Request) {
+	l := a.langFor(r)
 	p := browserPrincipal(r)
 	approve := r.FormValue("decision") == "approve"
 	if approve && r.FormValue("confirm_account") != p.Label {
-		a.joinPairMessage(w, http.StatusBadRequest, msg("join.msg_confirm_t"), msg("join.msg_confirm_p"))
+		a.joinPairMessage(l, w, http.StatusBadRequest, l.msg("join.msg_confirm_t"), l.msg("join.msg_confirm_p"))
 		return
 	}
 	check := func(machine string) error { return a.store.MachineClaimable(machine, p.ID) }
@@ -231,12 +234,12 @@ func (a *app) joinPairDecide(w http.ResponseWriter, r *http.Request) {
 	case err == nil:
 		http.Redirect(w, r, "/join/pair", http.StatusSeeOther)
 	case errors.Is(err, store.ErrJoinConfirm):
-		a.joinPairMessage(w, http.StatusBadRequest, msg("join.msg_badcode_t"), msg("join.msg_badcode"))
+		a.joinPairMessage(l, w, http.StatusBadRequest, l.msg("join.msg_badcode_t"), l.msg("join.msg_badcode"))
 	case errors.Is(err, store.ErrMachineTaken):
-		a.joinPairMessage(w, http.StatusConflict, msg("join.msg_taken_t"), msg("join.msg_taken"))
+		a.joinPairMessage(l, w, http.StatusConflict, l.msg("join.msg_taken_t"), l.msg("join.msg_taken"))
 	case errors.Is(err, store.ErrJoinNotReady):
-		a.joinPairMessage(w, http.StatusConflict, msg("join.msg_nothing_t"), msg("join.msg_nothing"))
+		a.joinPairMessage(l, w, http.StatusConflict, l.msg("join.msg_nothing_t"), l.msg("join.msg_nothing"))
 	default:
-		a.joinPairMessage(w, http.StatusInternalServerError, msg("join.msg_setup_t"), msg("join.msg_setup"))
+		a.joinPairMessage(l, w, http.StatusInternalServerError, l.msg("join.msg_setup_t"), l.msg("join.msg_setup"))
 	}
 }

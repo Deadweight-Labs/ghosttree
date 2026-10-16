@@ -133,7 +133,7 @@ func (a *app) requestMove(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, requestURL(detail.Request.ID)+"?"+url.Values{"done": {"moved"}}.Encode(), http.StatusSeeOther)
 }
 
-func (a *app) knowledgeMoveRows(pa *store.ProjectAccess, k store.Knowledge) []moveRow {
+func (a *app) knowledgeMoveRows(l lang, pa *store.ProjectAccess, k store.Knowledge) []moveRow {
 	moves, err := a.store.KnowledgeMoves(k.ID)
 	if err != nil || !pa.CanSeeKnowledgeHistory(k) {
 		return nil
@@ -141,7 +141,7 @@ func (a *app) knowledgeMoveRows(pa *store.ProjectAccess, k store.Knowledge) []mo
 	now := overviewNow().UTC()
 	out := make([]moveRow, 0, len(moves))
 	for _, m := range moves {
-		out = append(out, moveRow{Text: m.From + " → " + m.To, By: m.MovedBy, Age: shortAge(now, parseTime(m.MovedAt))})
+		out = append(out, moveRow{Text: m.From + " → " + m.To, By: m.MovedBy, Age: shortAge(l, now, parseTime(m.MovedAt))})
 	}
 	return out
 }

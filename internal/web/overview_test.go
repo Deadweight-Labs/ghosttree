@@ -389,7 +389,7 @@ func TestAgentStateFollowsTheLeaseWindows(t *testing.T) {
 		t.Error("no signal must read as offline")
 	}
 	for age, want := range map[time.Duration]string{10 * time.Second: "now", 5 * time.Minute: "5m", 3 * time.Hour: "3h", 72 * time.Hour: "3d"} {
-		if got := shortAge(now, now.Add(-age)); got != want {
+		if got := shortAge(langEN, now, now.Add(-age)); got != want {
 			t.Errorf("shortAge(%s) = %q, want %q", age, got, want)
 		}
 	}
