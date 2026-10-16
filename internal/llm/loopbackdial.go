@@ -25,19 +25,29 @@ func newHTTPClient(u *url.URL, timeout time.Duration) *http.Client {
 	return &http.Client{Timeout: timeout, Transport: &http.Transport{
 		Proxy: nil,
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			ip, err := loopbackTarget(addr)
+			ips, err := loopbackTargets(addr)
 			if err != nil {
 				return nil, err
 			}
 			_, port, _ := net.SplitHostPort(addr)
-			return d.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+			// A name can list ::1 and 127.0.0.1 while the server listens on
+			// one of them, so try each address, all of them loopback.
+			var last error
+			for _, ip := range ips {
+				conn, err := d.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+				if err == nil {
+					return conn, nil
+				}
+				last = err
+			}
+			return nil, last
 		},
 	}}
 }
 
-// loopbackTarget resolves addr's host now and returns a loopback address, or an
+// loopbackTargets resolves addr's host now and returns its addresses, or an
 // error if any answer is not loopback or nothing resolves.
-func loopbackTarget(addr string) (net.IP, error) {
+func loopbackTargets(addr string) ([]net.IP, error) {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		return nil, err
@@ -58,5 +68,5 @@ func loopbackTarget(addr string) (net.IP, error) {
 			return nil, fmt.Errorf("refusing plain http to %s: resolves to %s, not loopback", host, ip)
 		}
 	}
-	return ips[0], nil
+	return ips, nil
 }
