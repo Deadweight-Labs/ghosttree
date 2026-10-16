@@ -254,6 +254,10 @@ func (a *ProjectAccess) checkEvidenceRef(project string, ev pain.Evidence) (stri
 			return "", bad
 		}
 		return idRef("#", n), nil
+	case "session":
+		if canon, ok := canonicalSessionRef(ev.Ref); ok {
+			return canon, nil
+		}
 	}
 	return ev.Ref, nil
 }
@@ -401,6 +405,13 @@ func (a *ProjectAccess) RemovePainLink(linkID int64, reason string, actor pain.A
 	if err := a.CheckPain(p, ActWork); err != nil {
 		return err
 	}
+	// An edge to something the viewer may not read answers like an unknown link id.
+	if dstKind == "request" || dstKind == "knowledge" {
+		if _, err := a.resolveLinkTarget(p.Project, dstKind, dstID); err != nil {
+			a.Filtered()
+			return sql.ErrNoRows
+		}
+	}
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
 		return pain.ReasonRequired()
@@ -513,12 +524,33 @@ func (a *ProjectAccess) sessionEvidenceVisible(project, ref string) bool {
 	if !a.SeesSessionNumbers(project) {
 		return false
 	}
-	digits := strings.TrimPrefix(strings.TrimSpace(ref), "#")
-	if n, err := strconv.ParseInt(digits, 10, 64); err == nil {
-		sess, err := a.st.SessionByID(n)
-		return err == nil && a.CanSeeTranscript(sess)
+	canon, ok := canonicalSessionRef(ref)
+	if !ok {
+		return false
 	}
-	return true
+	_, ok = rewriteSessionRef(canon, func(id int64) (string, bool) {
+		sess, err := a.st.SessionByID(id)
+		if err != nil {
+			// A session that no longer exists holds nothing back (as for requests).
+			return "", true
+		}
+		return "", a.CanSeeTranscript(sess)
+	})
+	return ok
+}
+
+// canonicalSessionRef brings every spelling of a session reference (#n, n,
+// session:n, session:n#seq) to the form requests use, session:n[#seq]. Anything
+// else is not a session reference this store can resolve.
+func canonicalSessionRef(ref string) (string, bool) {
+	ref = strings.TrimSpace(ref)
+	if sessionRefPattern.MatchString(ref) {
+		return ref, true
+	}
+	if n, ok := pain.ParseNumberRef(ref, ""); ok {
+		return "session:" + strconv.FormatInt(n, 10), true
+	}
+	return "", false
 }
 
 // linkDataVisible says whether the target named in a history line is one the

@@ -396,3 +396,106 @@ func TestOnlyPainGoWritesThePainsTable(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestPainLinkRemovalFollowsTargetReadRights(t *testing.T) {
+	w := newPainWorld(t)
+	r1 := w.request(t, "sichtbar")
+	hidden, err := w.st.CreateRequest(requestdomain.CreateInput{
+		Request: requestdomain.Request{Type: "feature", Title: "geheim", Scope: scope.Axes{Project: roleProject}, Origin: "distilled", SessionRef: "session:777"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sid, err := w.st.UpsertSession(Session{Harness: "claude-code", ExternalID: "priv-rm", AccountID: 3, Scope: scope.Axes{Project: roleProject}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.st.DB().Exec(`UPDATE requests SET session_ref=? WHERE id=?`, "session:"+idRef("", sid), hidden.Request.ID)
+	d := w.newPain(t, "mia", pain.Target{RequestID: r1}, pain.Target{RequestID: hidden.Request.ID})
+	var hiddenLink, unknownLink int64 = 0, 987654
+	for _, l := range d.Motivates {
+		if l.RequestID == hidden.Request.ID {
+			hiddenLink = l.ID
+		}
+	}
+	if hiddenLink == 0 {
+		t.Fatal("hidden edge missing")
+	}
+	// Find a viewer who may work on the pain but cannot read the hidden request.
+	var viewer *ProjectAccess
+	p, _ := w.st.PainByID(d.Pain.ID)
+	for _, n := range []string{"lena", "rex", "robin"} {
+		pa := w.pa[n]
+		if pa.CheckPain(p, ActWork) == nil {
+			if _, err := pa.resolveLinkTarget(roleProject, "request", hidden.Request.ID); err != nil {
+				viewer = pa
+				break
+			}
+		}
+	}
+	if viewer == nil {
+		t.Fatal("no member with work rights but without read rights on the target")
+	}
+	got := viewer.RemovePainLink(hiddenLink, "weg", pain.Actor{})
+	want := viewer.RemovePainLink(unknownLink, "weg", pain.Actor{})
+	if got == nil || want == nil || got.Error() != want.Error() || ruleCode(got) != ruleCode(want) {
+		t.Errorf("hidden edge answers %v, unknown id answers %v", got, want)
+	}
+	var n int
+	w.st.DB().QueryRow(`SELECT COUNT(*) FROM entity_links WHERE id=?`, hiddenLink).Scan(&n)
+	if n != 1 {
+		t.Errorf("edge was removed (%d rows)", n)
+	}
+}
+
+func TestPainSessionEvidenceFollowsTranscriptRights(t *testing.T) {
+	w := newPainWorld(t)
+	sid, err := w.st.UpsertSession(Session{Harness: "claude-code", ExternalID: "priv-ev", AccountID: 3, Scope: scope.Axes{Project: roleProject}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := idRef("", sid)
+	refs := []string{"#" + n, n, "session:" + n, "session:" + n + "#4", "irgendwas:" + n, "session:abc#1"}
+	d := w.newPain(t, "mia")
+	for _, ref := range refs {
+		if _, err := w.st.DB().Exec(`INSERT INTO pain_events(pain_id,kind,evidence_kind,evidence_ref,note,person,created_at) VALUES(?,'state','session',?,'x','mia',?)`, d.Pain.ID, ref, now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	count := func(who string) (shown []string) {
+		got, err := w.pa[who].PainDetailView(d.Pain.ID)
+		if err != nil {
+			t.Fatalf("%s: %v", who, err)
+		}
+		for _, e := range got.Events {
+			if e.EvidenceKind == "session" {
+				shown = append(shown, e.EvidenceRef)
+			}
+		}
+		return shown
+	}
+	if got := count("mia"); len(got) != 4 {
+		t.Errorf("owner sees %v, want the four numeric spellings", got)
+	}
+	for _, who := range []string{"lena", "rex", "gus"} {
+		pa := w.pa[who]
+		sess, _ := w.st.SessionByID(sid)
+		if pa.CanSeeTranscript(sess) {
+			continue
+		}
+		if got := count(who); len(got) != 0 {
+			t.Errorf("%s sees session evidence %v", who, got)
+		}
+	}
+}
+
+func TestPainSessionEvidenceIsStoredCanonically(t *testing.T) {
+	for in, want := range map[string]string{"#12": "session:12", "12": "session:12", "session:12": "session:12", "session:12#3": "session:12#3"} {
+		if got, ok := canonicalSessionRef(in); !ok || got != want {
+			t.Errorf("%q -> %q %v, want %q", in, got, ok, want)
+		}
+	}
+	if _, ok := canonicalSessionRef("session:abc"); ok {
+		t.Error("unknown form accepted")
+	}
+}
