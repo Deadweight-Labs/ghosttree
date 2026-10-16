@@ -12,6 +12,13 @@
       });
     });
   }
+  // The code box copies on a click anywhere in it, like the button.
+  for (const box of document.querySelectorAll("code[data-copy]")) {
+    box.addEventListener("click", () => {
+      const button = box.parentElement && box.parentElement.querySelector("button[data-copy]");
+      if (button) button.click();
+    });
+  }
   for (const button of document.querySelectorAll("[data-share]")) {
     if (!navigator.share) continue;
     button.hidden = false;
@@ -22,6 +29,19 @@
   }
   const marker = document.querySelector("[data-join-state]");
   if (!marker) return;
+  // After the approval the browser goes to the installer's loopback once. When
+  // that fails (other machine, blocked) the code on the page is the way on, and a
+  // reload or a step back must not send the browser there again.
+  const go = document.querySelector("[data-join-go]");
+  if (go) {
+    const key = "gt-join-go:" + (marker.dataset.joinNonce || "");
+    let tried = false;
+    try { tried = sessionStorage.getItem(key) === "1"; } catch (error) { /* storage blocked */ }
+    if (!tried) {
+      try { sessionStorage.setItem(key, "1"); } catch (error) { /* storage blocked */ }
+      setTimeout(() => { location.href = go.dataset.joinGo; }, 1500);
+    }
+  }
   const state = marker.dataset.joinState;
   const nonce = marker.dataset.joinNonce || "";
   const poll = async () => {

@@ -20,10 +20,14 @@ import (
 // Freigabe und Ablehnung kommen nur vom Konto aus einer interaktiven Sitzung
 // (CSRF, gleiche Origin, Kontobestätigung, Kennung der gezeigten Anfrage).
 //
-// Zwei Wege zum Token. Loopback (Regelfall): die Entscheidung antwortet mit 303
-// auf http://127.0.0.1:<port>/callback des Installers, bei Freigabe mit code und
-// state, bei Ablehnung mit error=access_denied und state; das Token holt der
-// Installer mit dem code_verifier (POST /api/join/token). Rückfall (Code): die
+// Drei Wege zum Token. Loopback (Regelfall): nach der Freigabe zeigt die Seite
+// den einmaligen Code zum Einfügen und schickt den Browser einmal auf
+// http://127.0.0.1:<port>/callback des Installers (code und state); eine
+// Ablehnung antwortet mit 303 auf dasselbe Ziel mit error=access_denied. Das
+// Token holt der Installer mit dem code_verifier (POST /api/join/token), sei es
+// über den Callback oder über den eingefügten Code: was zuerst kommt, gewinnt.
+// Paste (kein Loopback erreichbar): dasselbe ohne Callback, die Seite zeigt nur
+// den Code. Rückfall (Code): die
 // Freigabe verlangt den im Terminal gezeigten Bestätigungscode, das Token kommt
 // über den Geräte-Ablauf.
 //
@@ -38,6 +42,8 @@ type joinPairView struct {
 	SameNet, ShowNet, NeedsCode           bool
 	Interrupted                           bool
 	Callback                              string
+	Mode                                  string
+	Code, Navigate                        string
 	Person, CSRFToken                     string
 	Refresh                               int
 	Message, MailIntro, MailTo            string
@@ -116,7 +122,7 @@ func (a *app) joinPairPage(w http.ResponseWriter, r *http.Request) {
 	p := browserPrincipal(r)
 	v := a.store.Join().View(p.ID)
 	view := joinPairView{State: v.State, Pair: v.Pair, Machine: v.Machine, Remote: v.Remote, Nonce: v.Nonce,
-		SameNet: v.Net != "" && v.Net == a.joinClientKey(r), ShowNet: a.sameNetworkMeaningful(), Callback: v.Callback, NeedsCode: v.Mode == store.JoinModeCode,
+		SameNet: v.Net != "" && v.Net == a.joinClientKey(r), ShowNet: a.sameNetworkMeaningful(), Callback: v.Callback, NeedsCode: v.Mode == store.JoinModeCode, Mode: v.Mode,
 		Person: p.Label, CSRFToken: csrfOf(r)}
 	switch v.State {
 	case store.JoinWaiting:
@@ -136,6 +142,7 @@ func (a *app) joinPairPage(w http.ResponseWriter, r *http.Request) {
 		view.Refresh = 20
 	case store.JoinApproved:
 		view.Refresh = 5
+		view.Code, view.Navigate = v.Code, v.Redirect
 	case store.JoinNone:
 		// Eine Seite, die sich selbst neu lud (w=1) und ihre Sitzung nicht mehr
 		// findet, sagt es; ein erster Besuch zeigt nur den Knopf.
@@ -198,7 +205,7 @@ func (a *app) joinPairDecide(w http.ResponseWriter, r *http.Request) {
 	check := func(machine string) error { return a.store.MachineClaimable(machine, p.ID) }
 	dec, err := a.store.Join().Decide(p.ID, approve, r.FormValue("nonce"), r.FormValue("confirm_code"), check)
 	switch {
-	case err == nil && dec.Redirect != "":
+	case err == nil && dec.Redirect != "" && !approve:
 		http.Redirect(w, r, dec.Redirect, http.StatusSeeOther)
 	case err == nil:
 		http.Redirect(w, r, "/join/pair", http.StatusSeeOther)

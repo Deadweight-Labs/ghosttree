@@ -6,6 +6,17 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Changed (REQ-434): `ctx join` always offers a code to paste, no flag needed.
+  After the approval the browser shows a short-lived one-time code with a copy
+  button next to the usual hand-over to the terminal; the terminal waits for the
+  loopback callback and for a pasted code (read from `/dev/tty`, so it also works
+  under `curl ... | sh`), and whichever comes first wins. Without a display, over
+  SSH or without a browser opener there is no loopback, only the link and the
+  pasted code. The code is bound to the PKCE verifier of that terminal, valid for
+  two minutes, usable once, rate-limited like the loopback code, looked up only by
+  hash, held in memory only (never in the database) and never logged. `--no-browser` still works as a hidden
+  alias for the old way (type the terminal's four characters in the browser) and
+  is no longer shown in the help.
 - Added (REQ-434): `scripts/e2e/join-order.sh` runs the invitation flow end to end
   in both orders with real binaries, the server's own `/install.sh` and throw-away
   HOMEs, without a VM or identity provider: browser first (the pairing page waits,

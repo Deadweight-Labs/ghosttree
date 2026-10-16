@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"log/slog"
+	"math/big"
 	"net/netip"
 	"net/url"
 	"strconv"
@@ -86,7 +87,11 @@ const (
 // Wege zum Token.
 const (
 	JoinModeLoopback = "loopback"
-	JoinModeCode     = "code"
+	// JoinModePaste: wie Loopback, nur ohne Rückweg zum Installer (CLI auf einer
+	// anderen Maschine, per SSH, ohne Browser-Öffner). Die Freigabeseite zeigt den
+	// Code, den das Terminal einfügt; getauscht wird er nur mit dem code_verifier.
+	JoinModePaste = "paste"
+	JoinModeCode  = "code"
 )
 
 var (
@@ -126,6 +131,7 @@ type joinSession struct {
 	cbPort       int
 	cbState      string
 	authHash     string
+	authCode     string // der Code im Klartext, nur im Speicher und nur bis zum Tausch oder Ablauf; die Seite zeigt ihn zum Einfügen
 	authExpires  time.Time
 	claimExpires time.Time // Ende der Wartezeit auf die Freigabe
 	resumeHash   string    // Wiederaufnahme-Token des Installers (nur Hash)
@@ -145,6 +151,10 @@ type JoinView struct {
 	// Callback: Loopback-Weg, wenn die Sitzung kompromittiert ist; Ziel, auf das
 	// der Browser den wartenden Installer abbrechen lassen kann.
 	Callback string
+	// Code und Redirect: Zustand "approved" auf dem Loopback- und Paste-Weg. Code
+	// ist der kurzlebige Code zum Einfügen (gruppiert), Redirect das Ziel, auf das
+	// die Seite den Browser einmal schickt (nur Loopback).
+	Code, Redirect string
 }
 
 // JoinClaimRequest trägt, was der Installer beim Claim schickt.
@@ -285,7 +295,7 @@ func (j *JoinSessions) compromise(s *joinSession) {
 		delete(j.byAuth, s.authHash)
 	}
 	delete(j.byPair, hashCode(s.pair))
-	s.state, s.authHash, s.deviceHash, s.resumeHash = JoinCompromised, "", "", ""
+	s.state, s.authHash, s.authCode, s.deviceHash, s.resumeHash = JoinCompromised, "", "", "", ""
 }
 
 // lapse beendet eine gemeldete, nie freigegebene Anfrage: Gerät und Codes
@@ -325,6 +335,12 @@ func (s *joinSession) extend(end time.Time) {
 	if end.After(s.expires) {
 		s.expires = end
 	}
+}
+
+// usesAuthCode: Loopback und Paste liefern denselben einmaligen Code, nur auf
+// verschiedenen Wegen zum Installer; der Code-Weg tippt einen Bestätigungscode.
+func (s *joinSession) usesAuthCode() bool {
+	return s.mode == JoinModeLoopback || s.mode == JoinModePaste
 }
 
 // callback baut das Ziel auf dem Loopback des Installers (RFC 6749 4.1.2).
@@ -455,12 +471,23 @@ func allBytes(s string, ok func(byte) bool) bool {
 // ValidLoopback prüft die Felder des Loopback-Wegs; Aufrufer melden Fehler als
 // kaputte Anfrage, unabhängig vom Code.
 func (r JoinClaimRequest) ValidLoopback() bool {
-	return len(r.Challenge) == 43 && allBytes(r.Challenge, challengeChars) &&
-		len(r.State) >= 8 && len(r.State) <= 128 && allBytes(r.State, stateChars) &&
+	if !(len(r.Challenge) == 43 && allBytes(r.Challenge, challengeChars)) {
+		return false
+	}
+	if r.Paste() {
+		return true
+	}
+	return len(r.State) >= 8 && len(r.State) <= 128 && allBytes(r.State, stateChars) &&
 		(r.Host == "" || r.Host == "127.0.0.1" || r.Host == "[::1]") && r.Port >= 1024 && r.Port <= 65535
 }
 
-// Loopback sagt, ob der Claim den Loopback-Weg verlangt.
+// Paste sagt, dass der Claim nur einen PKCE-Verifier mitbringt, keinen Loopback:
+// der Code kommt dann per Einfügen ins Terminal.
+func (r JoinClaimRequest) Paste() bool {
+	return r.Challenge != "" && r.State == "" && r.Host == "" && r.Port == 0
+}
+
+// Loopback sagt, ob der Claim einen der Wege mit PKCE verlangt (Loopback oder Paste).
 func (r JoinClaimRequest) Loopback() bool {
 	return r.Challenge != "" || r.State != "" || r.Port != 0 || r.Host != ""
 }
@@ -558,6 +585,10 @@ func (j *JoinSessions) Claim(req JoinClaimRequest) (JoinClaim, error) {
 			host = "127.0.0.1"
 		}
 		s.challenge, s.cbHost, s.cbPort, s.cbState = req.Challenge, host, req.Port, req.State
+		if req.Paste() {
+			out.Mode = JoinModePaste
+			s.cbHost, s.cbPort, s.cbState = "", 0, ""
+		}
 	} else {
 		fail := func(err error) (JoinClaim, error) {
 			if resumed {
@@ -639,7 +670,7 @@ func (j *JoinSessions) noteNameConflict(account, name string, now time.Time) {
 // resumedBy sagt, ob der Claim vom Installer kommt, der diese Anfrage gestellt
 // hat: er kennt das Wiederaufnahme-Token und bleibt auf demselben Weg.
 func (s *joinSession) resumedBy(req JoinClaimRequest, loop bool) bool {
-	return req.Resume != "" && s.resumeHash != "" && loop == (s.mode == JoinModeLoopback) &&
+	return req.Resume != "" && s.resumeHash != "" && loop == s.usesAuthCode() &&
 		subtle.ConstantTimeCompare([]byte(hashCode(req.Resume)), []byte(s.resumeHash)) == 1
 }
 
@@ -648,7 +679,7 @@ func (s *joinSession) resumedBy(req JoinClaimRequest, loop bool) bool {
 func (j *JoinSessions) loopbackBusy(netKey, wide string, now time.Time) bool {
 	n, nw := 0, 0
 	for _, s := range j.all {
-		if s.mode != JoinModeLoopback || (s.state != JoinClaimed && s.state != JoinApproved) {
+		if !s.usesAuthCode() || (s.state != JoinClaimed && s.state != JoinApproved) {
 			continue
 		}
 		if s.state == JoinClaimed && !now.Before(s.claimExpires) {
@@ -680,7 +711,7 @@ func (j *JoinSessions) live(account string, now time.Time) (*joinSession, string
 	if s.mode == JoinModeCode && (state == JoinClaimed || state == JoinApproved) && j.device.JoinStatus(s.deviceHash) == "" {
 		state = JoinNone // Ablauf weg, ohne dass ein Token ausgestellt wurde
 	}
-	if s.mode == JoinModeLoopback && state == JoinApproved && !now.Before(s.authExpires) {
+	if s.usesAuthCode() && state == JoinApproved && !now.Before(s.authExpires) {
 		state = JoinNone
 	}
 	return s, state
@@ -696,6 +727,12 @@ func (j *JoinSessions) View(account string) JoinView {
 	}
 	v := JoinView{State: state, Pair: FormatUserCode(s.pair), Machine: s.machine, Remote: s.remote, Net: s.net,
 		Nonce: s.nonce, Mode: s.mode}
+	if state == JoinApproved && s.usesAuthCode() && s.authCode != "" {
+		v.Code = FormatAuthCode(s.authCode)
+		if s.mode == JoinModeLoopback {
+			v.Redirect = s.callback(url.Values{"code": {s.authCode}})
+		}
+	}
 	if (state == JoinCompromised || state == JoinExpired) && s.mode == JoinModeLoopback && s.cbPort != 0 {
 		v.Callback = s.callback(url.Values{"error": {"access_denied"}})
 	}
@@ -731,7 +768,7 @@ func (j *JoinSessions) Decide(account string, approve bool, nonce, confirm strin
 		// Die Prüfung fragt die Datenbank und läuft ohne Sperre; danach gilt
 		// nur, was zum aktuellen Zustand derselben Anfrage noch passt.
 		machine, auto, resolve := s.machine, s.auto, s.resolve
-		loopback := s.mode == JoinModeLoopback
+		loopback := s.usesAuthCode()
 		j.mu.Unlock()
 		err := check(machine)
 		renamed := ""
@@ -774,14 +811,62 @@ func (j *JoinSessions) Decide(account string, approve bool, nonce, confirm strin
 		s.state = JoinApproved
 		return JoinDecision{}, nil
 	}
-	code, err := randomHex(32)
+	code, err := newAuthCode()
 	if err != nil {
 		return JoinDecision{}, err
 	}
-	s.authHash, s.authExpires, s.state = hashCode(code), now.Add(joinAuthTTL), JoinApproved
+	s.authHash, s.authCode, s.authExpires, s.state = hashCode(code), code, now.Add(joinAuthTTL), JoinApproved
 	j.byAuth[s.authHash] = s
 	s.extend(s.authExpires.Add(time.Minute))
+	if s.mode == JoinModePaste {
+		return JoinDecision{}, nil
+	}
 	return JoinDecision{Redirect: s.callback(url.Values{"code": {code}})}, nil
+}
+
+const authCodeLen = 20 // 22^20, gut 89 Bit; gilt höchstens joinAuthTTL und nur mit dem Verifier
+
+// newAuthCode erzeugt den einmaligen Code, der auf dem Loopback ankommt oder
+// ins Terminal eingefügt wird. Er ist lang genug, dass Raten aussichtslos ist,
+// und im Alphabet der Anzeigecodes, damit er sich fehlerfrei abtippen lässt.
+func newAuthCode() (string, error) {
+	max := big.NewInt(int64(len(UserCodeAlphabet)))
+	out := make([]byte, authCodeLen)
+	for i := range out {
+		n, err := rand.Int(rand.Reader, max)
+		if err != nil {
+			return "", err
+		}
+		out[i] = UserCodeAlphabet[n.Int64()]
+	}
+	return string(out), nil
+}
+
+// FormatAuthCode gruppiert den Code in Viererblöcke (XXXX-XXXX-...).
+func FormatAuthCode(code string) string {
+	var b strings.Builder
+	for i := 0; i < len(code); i += 4 {
+		if i > 0 {
+			b.WriteByte('-')
+		}
+		b.WriteString(code[i:min(i+4, len(code))])
+	}
+	return b.String()
+}
+
+// NormalizeAuthCode macht aus Eingabe (gruppiert, klein, mit Leerzeichen) die
+// kanonische Form oder "" für alles, was kein solcher Code sein kann.
+func NormalizeAuthCode(in string) string {
+	in = strings.ToUpper(strings.NewReplacer("-", "", " ", "", "\t", "").Replace(strings.TrimSpace(in)))
+	if len(in) != authCodeLen {
+		return ""
+	}
+	for _, c := range in {
+		if !strings.ContainsRune(UserCodeAlphabet, c) {
+			return ""
+		}
+	}
+	return in
 }
 
 // normalizeConfirm macht aus der Eingabe die kanonische Form des Bestätigungscodes
@@ -812,10 +897,13 @@ func (j *JoinSessions) Exchange(addr, code, verifier string) (JoinGrant, error) 
 	if j.lockedOut(addr, now) {
 		return JoinGrant{}, ErrJoinLocked
 	}
-	s := j.byAuth[hashCode(code)]
+	var s *joinSession
+	if canon := NormalizeAuthCode(code); canon != "" {
+		s = j.byAuth[hashCode(canon)]
+	}
 	if s != nil {
 		delete(j.byAuth, s.authHash)
-		s.authHash = ""
+		s.authHash, s.authCode = "", ""
 	}
 	sum := sha256.Sum256([]byte(verifier))
 	ok := s != nil && now.Before(s.authExpires) && s.state == JoinApproved && len(verifier) >= 43 && len(verifier) <= 128 && allBytes(verifier, stateChars) &&
