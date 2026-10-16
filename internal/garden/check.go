@@ -23,8 +23,11 @@ const (
 
 const (
 	// MaxOutputTokens caps one answer; it is also what the budget check
-	// assumes the answer costs before it exists.
-	MaxOutputTokens = 900
+	// assumes the answer costs before it exists. It has to leave room for the
+	// model's own thinking, which counts against the same limit: at 900 a
+	// pilot lost 15 of 25 answers to thinking that used it all up. Only what
+	// is actually generated is billed.
+	MaxOutputTokens = 4096
 	// ExpectedOutputTokens is the typical answer, used only for the dry-run
 	// estimate next to the upper bound.
 	ExpectedOutputTokens = 350
