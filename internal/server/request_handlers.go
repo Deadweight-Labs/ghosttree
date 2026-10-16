@@ -50,11 +50,6 @@ func (a *api) createRequest(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	replay, err := a.st.RequestKeyTaken(body.IdempotencyKey)
-	if err != nil {
-		writeStoreError(w, http.StatusInternalServerError, err)
-		return
-	}
 	detail, err := a.st.CreateRequest(requestdomain.CreateInput{
 		Request: requestdomain.Request{
 			Type: body.Type, Title: body.Title, Description: body.Description, Priority: body.Priority,
@@ -67,7 +62,7 @@ func (a *api) createRequest(w http.ResponseWriter, r *http.Request) {
 		writeRequestError(w, err)
 		return
 	}
-	if !replay {
+	if !detail.Replayed {
 		a.saveExplanation(explain.KindRequest, detail.Request.ID, explanation)
 	}
 	writeJSON(w, http.StatusCreated, a.access(r).RequestDetailView(detail))
@@ -409,7 +404,7 @@ func writeRequestError(w http.ResponseWriter, err error) {
 	var rule *requestdomain.RuleError
 	if errors.As(err, &rule) {
 		status := http.StatusBadRequest
-		if rule.ErrorCode == "open_criteria" || rule.ErrorCode == "primary_exists" || rule.ErrorCode == "work_not_active" || rule.ErrorCode == "invalid_transition" {
+		if rule.ErrorCode == "open_criteria" || rule.ErrorCode == "primary_exists" || rule.ErrorCode == "work_not_active" || rule.ErrorCode == "invalid_transition" || rule.ErrorCode == "idempotency_key_conflict" {
 			status = http.StatusConflict
 		}
 		if rule.ErrorCode == "secret_detected" {

@@ -350,3 +350,41 @@ func TestHashFollowsProjectAndState(t *testing.T) {
 		t.Error("moving to another project keeps the hash")
 	}
 }
+
+// A request bound to a machine is private to that machine's owner: its title
+// must reach neither a request reference, a task's context nor a pain's
+// "motivates" line, since those explanations are shown to every reader.
+func TestMachineBoundRequestTitleIsNotContextLine(t *testing.T) {
+	st, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ts := "'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z'"
+	res, err := st.db.Exec(`INSERT INTO requests(type,title,description,state,project,machine,origin,person,created_at,updated_at)
+		VALUES('feature','MACHINE SECRET TITLE','','open',?,'box','agent','mia',`+ts+`)`, roleProject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reqID, _ := res.LastInsertId()
+	if title, ok := st.readableRequestTitle(reqID, roleProject); ok || title != "" {
+		t.Errorf("machine-bound request resolved: %q", title)
+	}
+	kid, _ := st.InsertKnowledge(Knowledge{Type: "note", Title: "T", Body: "see REQ-" + strconv.FormatInt(reqID, 10), Scope: scope.Axes{Project: roleProject}})
+	src, err := st.ExplainSource(explain.KindKnowledge, kid)
+	if err != nil || strings.Contains(strings.Join(src.Context, "\n"), "MACHINE SECRET TITLE") {
+		t.Errorf("knowledge context leaks: %+v %v", src.Context, err)
+	}
+	pres, err := st.db.Exec(`INSERT INTO pains(project,title,body,created_at,updated_at) VALUES(?,'P','b',`+ts+`)`, roleProject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	painID, _ := pres.LastInsertId()
+	if _, err := st.db.Exec(`INSERT INTO entity_links(project,src_kind,src_id,kind,dst_kind,dst_id,created_at) VALUES(?,'pain',?,'motivates','request',?,'2026-01-01T00:00:00Z')`, roleProject, painID, reqID); err != nil {
+		t.Fatal(err)
+	}
+	psrc, err := st.ExplainSource(explain.KindPain, painID)
+	if err != nil || strings.Contains(strings.Join(psrc.Context, "\n"), "MACHINE SECRET TITLE") {
+		t.Errorf("pain context leaks: %+v %v", psrc.Context, err)
+	}
+}

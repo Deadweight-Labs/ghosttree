@@ -253,11 +253,11 @@ func (s *Store) knowledgeHeld(origin, confidence, sessionRef string) bool {
 }
 
 // readableRequestTitle returns the title of a request of the project that every
-// reader of the project may see. Held requests are left out: the explanation is
+// reader of the project may see. Held and machine-bound requests are left out: the explanation is
 // stored once and shown to all readers of the explained object.
 func (s *Store) readableRequestTitle(id int64, project string) (string, bool) {
 	var title, origin, person, ref string
-	if s.db.QueryRow(`SELECT title, origin, person, session_ref FROM requests WHERE id = ? AND project = ?`, id, project).
+	if s.db.QueryRow(`SELECT title, origin, person, session_ref FROM requests WHERE id = ? AND project = ? AND machine = ''`, id, project).
 		Scan(&title, &origin, &person, &ref) != nil {
 		return "", false
 	}
@@ -341,7 +341,7 @@ func (s *Store) painSource(id int64) (explain.Source, error) {
 		ctx = append(ctx, "Still unsolved: "+remaining)
 	}
 	rows, err := s.db.Query(`SELECT r.id, r.title, r.origin, r.person, r.session_ref FROM entity_links l JOIN requests r ON r.id = l.dst_id
-		WHERE l.src_kind = 'pain' AND l.src_id = ? AND l.dst_kind = 'request' AND r.project = ? LIMIT 10`, id, project)
+		WHERE l.src_kind = 'pain' AND l.src_id = ? AND l.dst_kind = 'request' AND r.project = ? AND r.machine = '' LIMIT 10`, id, project)
 	if err == nil {
 		shown := 0
 		for rows.Next() {
@@ -475,20 +475,3 @@ func (s *Store) ExplainCandidates(scan int) ([]explain.Candidate, error) {
 }
 
 var _ explain.Store = (*Store)(nil)
-
-// RequestKeyTaken says whether a request with this idempotency key exists. A
-// create call that finds one is a replay and returns somebody else's request.
-func (s *Store) RequestKeyTaken(key string) (bool, error) {
-	if key == "" {
-		return false, nil
-	}
-	if s.reader != nil {
-		return s.reader.RequestKeyTaken(key)
-	}
-	var id int64
-	err := s.db.QueryRow(`SELECT id FROM requests WHERE idempotency_key = ?`, key).Scan(&id)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	return err == nil, err
-}

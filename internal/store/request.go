@@ -32,12 +32,24 @@ func (s *Store) CreateRequest(in requestdomain.CreateInput) (requestdomain.Detai
 		return requestdomain.Detail{}, err
 	}
 	defer tx.Rollback()
+	author := authorForWriteTx(tx, in.AuthorID, r.Person, r.Origin, r.SessionRef)
 	if in.IdempotencyKey != "" {
 		var id int64
-		err := tx.QueryRow(`SELECT id FROM requests WHERE idempotency_key=?`, in.IdempotencyKey).Scan(&id)
+		var project, person string
+		err := tx.QueryRow(`SELECT id, project, person FROM requests WHERE idempotency_key=?`, in.IdempotencyKey).Scan(&id, &project, &person)
 		if err == nil {
+			// The key is unique across the instance, so a hit in another project or
+			// by another author is a collision, never a replay: nothing of that
+			// request is returned and the answer does not say where it lives.
+			var existing int64
+			_ = tx.QueryRow(`SELECT account_id FROM request_authors WHERE request_id=?`, id).Scan(&existing)
+			if project != r.Scope.Project || person != r.Person || existing != author {
+				return requestdomain.Detail{}, requestdomain.NewRuleError("idempotency_key_conflict", "this idempotency key is already in use", "choose a different idempotency key", nil)
+			}
 			tx.Rollback()
-			return s.RequestByID(id)
+			d, err := s.RequestByID(id)
+			d.Replayed = true
+			return d, err
 		}
 		if err != sql.ErrNoRows {
 			return requestdomain.Detail{}, err
@@ -68,7 +80,7 @@ func (s *Store) CreateRequest(in requestdomain.CreateInput) (requestdomain.Detai
 	if _, err := tx.Exec(`INSERT INTO search_documents(kind,domain_id,title,body,project,branch,machine) VALUES('request',?,?,?,?,?,?)`, id, r.Title, r.Description, r.Scope.Project, r.Scope.Branch, r.Scope.Machine); err != nil {
 		return requestdomain.Detail{}, err
 	}
-	if err := recordRequestAuthorTx(tx, id, authorForWriteTx(tx, in.AuthorID, r.Person, r.Origin, r.SessionRef)); err != nil {
+	if err := recordRequestAuthorTx(tx, id, author); err != nil {
 		return requestdomain.Detail{}, err
 	}
 	if err := tx.Commit(); err != nil {
