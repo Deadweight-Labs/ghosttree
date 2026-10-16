@@ -20,6 +20,10 @@ func must(err error) {
 }
 
 func main() {
+	if len(os.Args) > 2 && os.Args[2] == "rebuild" {
+		json.NewEncoder(os.Stdout).Encode(seedRebuild(os.Args[1]))
+		return
+	}
 	st, err := store.Open(os.Args[1])
 	must(err)
 	defer st.Close()
@@ -93,7 +97,8 @@ func seedPainTasks(st *store.Store, project string, out map[string]string) {
 	task(humantask.CreateInput{RequestID: billing, Kind: "secret", Title: "Create the Stripe key", Location: "Agent Vault: stripe/prod", CheckHint: "the entry exists in the vault"})
 	task(humantask.CreateInput{RequestID: schema, Kind: "file", Title: "Put the schema dump in place", Location: "./db/schema.sql", CheckHint: "file exists and ends with COMMIT"})
 	task(humantask.CreateInput{RequestID: billing, Kind: "input", Title: "Decide on the price tiers", Assignee: "Lena Berger"})
-	finished := task(humantask.CreateInput{RequestID: billing, Kind: "action", Title: "Enable the webhook in the Stripe dashboard"})
+	// Ohne Empfänger gehört eine Aufgabe ihrem Anleger; Lena darf nur abhaken, was ihr zugewiesen ist.
+	finished := task(humantask.CreateInput{RequestID: billing, Kind: "action", Title: "Enable the webhook in the Stripe dashboard", Assignee: "Lena Berger"})
 	_, err := lena.MarkTasksDone([]int64{finished.ID}, "enabled, endpoint answers 200", humantask.Actor{AccountID: 2, Person: "Lena Berger", Web: true})
 	must(err)
 	actor := pain.Actor{AccountID: 1, Person: "Robin"}
