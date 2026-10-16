@@ -172,3 +172,20 @@ func TestSplitBatchKeepsEveryGroupWithinBothLimits(t *testing.T) {
 		t.Errorf("requests lost: %d", total)
 	}
 }
+
+func TestAnthropicCollectSkipsAnUnreadableLineInsteadOfDroppingTheBatch(t *testing.T) {
+	f := &fakeAnthropicBatches{status: "ended"}
+	f.results = strings.Join([]string{
+		`{"custom_id":"a","result":{"type":"succeeded","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"Text A"}],"usage":{"input_tokens":1,"output_tokens":2}}}}`,
+		`{this is not json`,
+		`{"custom_id":"c","result":{"type":"succeeded","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"Text C"}],"usage":{"input_tokens":1,"output_tokens":2}}}}`,
+		`{"custom_id":"d","result":{"type":"succeeded","message":{"stop_reason":"end_tu`,
+	}, "\n")
+	got, err := anthropicBatchClient(t, f.server(t).URL).CollectBatch(context.Background(), "msgbatch_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got["a"].Content != "Text A" || got["c"].Content != "Text C" {
+		t.Errorf("%+v", got)
+	}
+}

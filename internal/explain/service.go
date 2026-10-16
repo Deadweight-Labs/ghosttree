@@ -48,6 +48,8 @@ type Store interface {
 
 	// The batch records (see batch.go).
 	RecordExplainBatch(providerID, model, language string, items []BatchItem) (int64, error)
+	ReserveExplainBatch(model, language string, items []BatchItem) (int64, error)
+	ActivateExplainBatch(batchID int64, providerID string) error
 	OpenExplainBatches() ([]OpenBatch, error)
 	PendingExplainBatchItems(batchID int64) ([]BatchItem, error)
 	FinishExplainBatchItem(batchID int64, customID, state, errText, day string, u Usage) error

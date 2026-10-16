@@ -34,13 +34,15 @@ CREATE TABLE IF NOT EXISTS explain_usage(
   failures INTEGER NOT NULL DEFAULT 0,
   input_tokens INTEGER NOT NULL DEFAULT 0,
   output_tokens INTEGER NOT NULL DEFAULT 0);
--- A batch of explanations at the provider. The result arrives hours later in
+-- A batch of explanations at the provider. It is 'submitting' from the moment
+-- the items are reserved until the provider has accepted it, so that a second
+-- run cannot send the same objects meanwhile. The result arrives hours later in
 -- another process run, so without these rows the next run could not tell an
 -- object that is being explained from one that was never sent.
 CREATE TABLE IF NOT EXISTS explain_batches(
   id INTEGER PRIMARY KEY,
   provider_batch_id TEXT NOT NULL UNIQUE,
-  state TEXT NOT NULL CHECK(state IN ('open','collected','failed')),
+  state TEXT NOT NULL CHECK(state IN ('submitting','open','collected','failed')),
   model TEXT NOT NULL DEFAULT '',
   language TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL);

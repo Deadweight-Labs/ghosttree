@@ -415,8 +415,12 @@ and `ctx explain status` says which file it waits for.
 - `GHOSTTREE_EXPLAIN_MODEL` (`--explain-model`) overrides the model of the entry.
 - `GHOSTTREE_EXPLAIN_DAILY_CALLS` (default 200) and `GHOSTTREE_EXPLAIN_DAILY_TOKENS`
   (default 400000) cap one UTC day, 0 means no cap; see `ctx cost` for the monthly
-  and dollar caps. Server and batches share the cap, and objects that wait in an
-  open batch count as calls. Batch usage is counted at 50 % of the list price.
+  and dollar caps. Server and batches share the cap. Objects that wait in an open
+  batch count as calls, and at an estimate (about 2500 tokens each, at the batch
+  price) against the token and dollar caps, so a cap holds before the money is
+  spent. **The default of 200 calls a day applies to `--batch` too**: a backlog of
+  thousands needs `GHOSTTREE_EXPLAIN_DAILY_CALLS=0` (and `..._DAILY_TOKENS=0`) in
+  `server.env`, or a dollar cap instead. Batch usage is counted at 50 % of the list price.
 - Administrators see calls, tokens, failures and the last days on the Organization page.
 
 A page never waits for the model: it shows the block once it exists. The bulk
@@ -433,7 +437,10 @@ limit of the API requires it. Batch ids are kept in the database, so an object
 that waits in an open batch is not sent again, and one whose entry failed (an
 error, or cut off at the 4096 token output limit) is left alone for a day. A
 result for an object that changed in the meantime is discarded and the object is
-sent again. `--collect` only collects. `deploy/ghosttree-explain.*` run `--batch`
+sent again. A batch is reserved in the database before it is uploaded, so two
+runs never send the same objects; a reservation whose run died is released after
+two hours, and a batch that cannot be read 48 hours after it was sent is given up
+and its objects are released. `--collect` only collects. `deploy/ghosttree-explain.*` run `--batch`
 hourly and start a first run when the key file appears.
 
 ## Privacy and security

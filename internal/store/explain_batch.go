@@ -43,15 +43,82 @@ func (s *Store) RecordExplainBatch(providerID, model, language string, items []e
 	return id, tx.Commit()
 }
 
-// OpenExplainBatches lists the batches that were sent and not collected yet,
+// ReserveExplainBatch records the items of a batch that is about to be sent, in
+// state 'submitting', so concurrent runs see them as taken. It returns
+// explain.ErrBatchTaken if one of the objects (at that text) already waits in
+// another batch.
+func (s *Store) ReserveExplainBatch(model, language string, items []explain.BatchItem) (int64, error) {
+	if len(items) == 0 {
+		return 0, fmt.Errorf("batch needs at least one item")
+	}
+	if s.writer != nil {
+		return queueValue(s, []any{model, language, items}, func(d *Store, p []any) (int64, error) {
+			return d.ReserveExplainBatch(p[0].(string), p[1].(string), p[2].([]explain.BatchItem))
+		})
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	for _, it := range items {
+		var n int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM explain_batch_items i JOIN explain_batches b ON b.id = i.batch_id
+			WHERE i.kind = ? AND i.object_id = ? AND i.content_hash = ? AND i.state = 'pending' AND b.state IN ('open','submitting')`,
+			it.Kind, it.ObjectID, it.Hash).Scan(&n); err != nil {
+			return 0, err
+		}
+		if n > 0 {
+			return 0, explain.ErrBatchTaken
+		}
+	}
+	ts := now()
+	res, err := tx.Exec(`INSERT INTO explain_batches(provider_batch_id,state,model,language,created_at,updated_at) VALUES(?,'submitting',?,?,?,?)`,
+		fmt.Sprintf("submitting-%d", time.Now().UnixNano()), model, language, ts, ts)
+	if err != nil {
+		return 0, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+	for _, it := range items {
+		if _, err := tx.Exec(`INSERT INTO explain_batch_items(batch_id,custom_id,kind,object_id,content_hash,updated_at) VALUES(?,?,?,?,?,?)`,
+			id, it.CustomID, it.Kind, it.ObjectID, it.Hash, ts); err != nil {
+			return 0, err
+		}
+	}
+	return id, tx.Commit()
+}
+
+// ActivateExplainBatch stores the provider's id of a reserved batch and opens it.
+func (s *Store) ActivateExplainBatch(batchID int64, providerID string) error {
+	if providerID == "" {
+		return fmt.Errorf("batch needs a provider id")
+	}
+	if s.writer != nil {
+		return queueWrite(s, []any{batchID, providerID}, func(d *Store, p []any) error { return d.ActivateExplainBatch(p[0].(int64), p[1].(string)) })
+	}
+	res, err := s.db.Exec(`UPDATE explain_batches SET provider_batch_id=?, state='open', updated_at=? WHERE id=? AND state='submitting'`, providerID, now(), batchID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("batch %d is not being submitted", batchID)
+	}
+	return nil
+}
+
+// OpenExplainBatches lists the batches that were sent (or are being sent) and
+// not collected yet,
 // oldest first. Items is the number still waiting for a result.
 func (s *Store) OpenExplainBatches() ([]explain.OpenBatch, error) {
 	if s.reader != nil {
 		return s.reader.OpenExplainBatches()
 	}
-	rows, err := s.db.Query(`SELECT b.id, b.provider_batch_id, b.model, b.language, b.created_at,
+	rows, err := s.db.Query(`SELECT b.id, b.provider_batch_id, b.state, b.model, b.language, b.created_at,
 		(SELECT COUNT(*) FROM explain_batch_items i WHERE i.batch_id = b.id AND i.state = 'pending')
-		FROM explain_batches b WHERE b.state = 'open' ORDER BY b.id`)
+		FROM explain_batches b WHERE b.state IN ('open','submitting') ORDER BY b.id`)
 	if err != nil {
 		return nil, err
 	}
@@ -59,7 +126,7 @@ func (s *Store) OpenExplainBatches() ([]explain.OpenBatch, error) {
 	var out []explain.OpenBatch
 	for rows.Next() {
 		var b explain.OpenBatch
-		if err := rows.Scan(&b.ID, &b.ProviderID, &b.Model, &b.Language, &b.CreatedAt, &b.Pending); err != nil {
+		if err := rows.Scan(&b.ID, &b.ProviderID, &b.State, &b.Model, &b.Language, &b.CreatedAt, &b.Pending); err != nil {
 			return nil, err
 		}
 		out = append(out, b)
@@ -157,7 +224,7 @@ func (s *Store) ExplainBatchBlocked(failedSince string) (map[string]bool, error)
 	}
 	rows, err := s.db.Query(`SELECT i.kind, i.object_id, i.content_hash FROM explain_batch_items i
 		JOIN explain_batches b ON b.id = i.batch_id
-		WHERE (i.state = 'pending' AND b.state = 'open') OR (i.state = 'failed' AND i.updated_at >= ?)`, failedSince)
+		WHERE (i.state = 'pending' AND b.state IN ('open','submitting')) OR (i.state = 'failed' AND i.updated_at >= ?)`, failedSince)
 	if err != nil {
 		return nil, err
 	}
@@ -183,7 +250,7 @@ func (s *Store) ExplainBatched(kind string, id int64, hash, failedSince string) 
 	var n int
 	err := s.db.QueryRow(`SELECT COUNT(*) FROM explain_batch_items i JOIN explain_batches b ON b.id = i.batch_id
 		WHERE i.kind = ? AND i.object_id = ? AND i.content_hash = ?
-		  AND ((i.state = 'pending' AND b.state = 'open') OR (i.state = 'failed' AND i.updated_at >= ?))`,
+		  AND ((i.state = 'pending' AND b.state IN ('open','submitting')) OR (i.state = 'failed' AND i.updated_at >= ?))`,
 		kind, id, hash, failedSince).Scan(&n)
 	return n > 0, err
 }

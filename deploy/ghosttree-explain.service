@@ -14,5 +14,7 @@ LoadCredential=explain-key:/etc/ghosttree/explain-key
 Environment=GHOSTTREE_LLM_CONFIG=/etc/ghosttree/llm.json
 EnvironmentFile=-/etc/ghosttree/server.env
 # Collecting comes first, then one batch for what is missing. Safe to run every
-# hour: an object in an open batch is not sent again.
+# hour: an object in an open batch is not sent again. The default daily caps
+# (200 calls, 400000 tokens) apply here too; set GHOSTTREE_EXPLAIN_DAILY_CALLS=0
+# and GHOSTTREE_EXPLAIN_DAILY_TOKENS=0 in server.env to explain a large backlog.
 ExecStart=/usr/local/bin/ctx explain backfill --db /var/lib/ghosttree/ghosttree.db --batch --limit 5000

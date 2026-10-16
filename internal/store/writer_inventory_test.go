@@ -319,6 +319,8 @@ var writerMethodClasses = map[string]string{
 	"ExplainSource":                 "read",
 	"ExplainCandidates":             "read",
 	"RecordExplainBatch":            "write",
+	"ReserveExplainBatch":           "write",
+	"ActivateExplainBatch":          "write",
 	"OpenExplainBatches":            "read",
 	"PendingExplainBatchItems":      "read",
 	"FinishExplainBatchItem":        "write",

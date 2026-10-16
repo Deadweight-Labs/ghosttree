@@ -41,15 +41,41 @@ func (f *fakeStore) RecordExplainBatch(providerID, model, language string, items
 	return id, nil
 }
 
+func (f *fakeStore) ReserveExplainBatch(model, language string, items []BatchItem) (int64, error) {
+	f.mu.Lock()
+	for _, it := range items {
+		if f.blocked(it.Kind, it.ObjectID, it.Hash, "9999-01-01T00:00:00Z") {
+			f.mu.Unlock()
+			return 0, ErrBatchTaken
+		}
+	}
+	f.mu.Unlock()
+	id, err := f.RecordExplainBatch("submitting", model, language, items)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.batches[id-1].state = "submitting"
+	f.batches[id-1].State = "submitting"
+	return id, err
+}
+
+func (f *fakeStore) ActivateExplainBatch(batchID int64, providerID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	b := f.batches[batchID-1]
+	b.ProviderID, b.state, b.State = providerID, "open", "open"
+	return nil
+}
+
 func (f *fakeStore) OpenExplainBatches() ([]OpenBatch, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var out []OpenBatch
 	for _, b := range f.batches {
-		if b.state != "open" {
+		if b.state != "open" && b.state != "submitting" {
 			continue
 		}
 		o := b.OpenBatch
+		o.State = b.state
 		for _, it := range f.items {
 			if it.batch == b.ID && it.state == "pending" {
 				o.Pending++
@@ -99,7 +125,7 @@ func (f *fakeStore) blocked(kind string, id int64, hash, since string) bool {
 		if it.Kind != kind || it.ObjectID != id || it.Hash != hash {
 			continue
 		}
-		if (it.state == "pending" && f.batches[it.batch-1].state == "open") || (it.state == "failed" && !it.updatedAt.Before(t)) {
+		if (it.state == "pending" && (f.batches[it.batch-1].state == "open" || f.batches[it.batch-1].state == "submitting")) || (it.state == "failed" && !it.updatedAt.Before(t)) {
 			return true
 		}
 	}
@@ -127,12 +153,15 @@ func (f *fakeStore) ExplainBatched(kind string, id int64, hash, since string) (b
 // ------------------------------------------------------------------ fake client
 
 type fakeBatchClient struct {
-	mu        sync.Mutex
-	submitted [][]llm.BatchRequest
-	done      bool
-	results   map[string]llm.BatchResult
-	submitErr error
-	collects  int
+	mu         sync.Mutex
+	submitted  [][]llm.BatchRequest
+	done       bool
+	results    map[string]llm.BatchResult
+	submitErr  error
+	collects   int
+	statusErr  error
+	collectErr error
+	onSubmit   func()
 }
 
 func (c *fakeBatchClient) SubmitBatch(ctx context.Context, reqs []llm.BatchRequest) (string, error) {
@@ -141,6 +170,11 @@ func (c *fakeBatchClient) SubmitBatch(ctx context.Context, reqs []llm.BatchReque
 	if c.submitErr != nil {
 		return "", c.submitErr
 	}
+	if c.onSubmit != nil {
+		c.mu.Unlock()
+		c.onSubmit()
+		c.mu.Lock()
+	}
 	c.submitted = append(c.submitted, reqs)
 	return fmt.Sprintf("msgbatch_%d", len(c.submitted)), nil
 }
@@ -148,6 +182,9 @@ func (c *fakeBatchClient) SubmitBatch(ctx context.Context, reqs []llm.BatchReque
 func (c *fakeBatchClient) BatchStatus(ctx context.Context, id string) (llm.BatchStatusReport, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.statusErr != nil {
+		return llm.BatchStatusReport{}, c.statusErr
+	}
 	return llm.BatchStatusReport{Done: c.done}, nil
 }
 
@@ -155,6 +192,9 @@ func (c *fakeBatchClient) CollectBatch(ctx context.Context, id string) (map[stri
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.collects++
+	if c.collectErr != nil {
+		return nil, c.collectErr
+	}
 	return c.results, nil
 }
 
@@ -455,5 +495,119 @@ func TestSubmitFailureLeavesNothingRecordedAndWithoutAClientNothingHappens(t *te
 	}
 	if _, err := svcWith(f, nil, Limits{}).CollectBatches(context.Background()); !errors.Is(err, ErrDisabled) {
 		t.Errorf("collect without a client: %v", err)
+	}
+}
+
+func TestAnUnreadableBatchIsGivenUpAfterItsMaxAgeAndReleasesItsObjects(t *testing.T) {
+	f := newFakeStore()
+	queue(f, 3)
+	bc := &fakeBatchClient{}
+	s := batchSvc(f, bc, Limits{Day: Limit{Calls: 3}})
+	if rep, _ := s.SubmitBatches(context.Background(), 100); rep.Submitted != 3 {
+		t.Fatalf("%+v", rep)
+	}
+	bc.statusErr = errors.New("HTTP 404")
+	// Young: it stays open, still counts against the cap, and is tried again.
+	rep, _ := s.CollectBatches(context.Background())
+	if rep.Open != 1 || len(rep.Errors) != 1 {
+		t.Fatalf("young: %+v", rep)
+	}
+	if rep, _ := s.SubmitBatches(context.Background(), 100); rep.Stopped != "limit" || rep.Submitted != 0 {
+		t.Fatalf("cap while open: %+v", rep)
+	}
+	// Old: given up, objects released after the failure delay, no usage booked.
+	f.batches[0].CreatedAt = s.cfg.Now().Add(-49 * time.Hour).Format(time.RFC3339)
+	rep, err := s.CollectBatches(context.Background())
+	if err != nil || rep.Open != 0 || rep.Collected != 1 || len(rep.Errors) != 1 || !strings.Contains(rep.Errors[0], "given up") {
+		t.Fatalf("old: %+v %v", rep, err)
+	}
+	if u, _ := s.Today(); u.Calls != 0 {
+		t.Errorf("giving up booked calls: %+v", u)
+	}
+	if open, _ := f.OpenExplainBatches(); len(open) != 0 {
+		t.Errorf("still open: %+v", open)
+	}
+	// Collect errors and never-finishing batches age out the same way.
+	for name, set := range map[string]func(){
+		"results":  func() { bc.statusErr, bc.done, bc.collectErr = nil, true, errors.New("decode") },
+		"finished": func() { bc.statusErr, bc.done, bc.collectErr = nil, false, nil },
+	} {
+		g := newFakeStore()
+		queue(g, 1)
+		s2 := batchSvc(g, bc, Limits{})
+		if _, err := s2.SubmitBatches(context.Background(), 10); err != nil {
+			t.Fatal(err)
+		}
+		set()
+		g.batches[0].CreatedAt = s2.cfg.Now().Add(-49 * time.Hour).Format(time.RFC3339)
+		if rep, _ := s2.CollectBatches(context.Background()); rep.Open != 0 || rep.Collected != 1 {
+			t.Errorf("%s: %+v", name, rep)
+		}
+	}
+}
+
+func TestObjectsAreReservedBeforeTheUploadAndAKilledRunIsReleased(t *testing.T) {
+	f := newFakeStore()
+	queue(f, 2)
+	bc := &fakeBatchClient{}
+	s := batchSvc(f, bc, Limits{})
+	var during SubmitReport
+	bc.onSubmit = func() {
+		bc.onSubmit = nil
+		during, _ = s.SubmitBatches(context.Background(), 100) // a second run, while the upload is going on
+	}
+	if _, err := s.SubmitBatches(context.Background(), 100); err != nil {
+		t.Fatal(err)
+	}
+	if during.Submitted != 0 || during.Pending != 2 || len(bc.submitted) != 1 {
+		t.Fatalf("concurrent run sent %+v, uploads %d", during, len(bc.submitted))
+	}
+	// A reservation another run made between reading and reserving is refused.
+	g := newFakeStore()
+	queue(g, 1)
+	s2 := batchSvc(g, bc, Limits{})
+	g.cands = nil
+	if _, err := g.ReserveExplainBatch("m", "de", []BatchItem{{CustomID: "knowledge-1", Kind: KindKnowledge, ObjectID: 1, Hash: g.src[key(KindKnowledge, 1)].Hash}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.ReserveExplainBatch("m", "de", []BatchItem{{CustomID: "knowledge-1", Kind: KindKnowledge, ObjectID: 1, Hash: g.src[key(KindKnowledge, 1)].Hash}}); !errors.Is(err, ErrBatchTaken) {
+		t.Errorf("second reservation: %v", err)
+	}
+	// The run died after reserving: still blocked while young, released after two hours.
+	if rep, _ := s2.CollectBatches(context.Background()); rep.Open != 1 || rep.Collected != 0 {
+		t.Errorf("young reservation: %+v", rep)
+	}
+	g.batches[0].CreatedAt = s2.cfg.Now().Add(-3 * time.Hour).Format(time.RFC3339)
+	if rep, _ := s2.CollectBatches(context.Background()); rep.Open != 0 || rep.Collected != 1 {
+		t.Errorf("old reservation: %+v", rep)
+	}
+	if blocked, _ := g.ExplainBatchBlocked("2000-01-01T00:00:00Z"); len(blocked) != 0 {
+		t.Errorf("still blocked: %v", blocked)
+	}
+}
+
+func TestTokenAndDollarCapsHoldBeforeTheBatchIsCollected(t *testing.T) {
+	f := newFakeStore()
+	queue(f, 50)
+	bc := &fakeBatchClient{}
+	// Each request is estimated at its input plus 1024 output tokens, about 1040.
+	s := batchSvc(f, bc, Limits{Day: Limit{Tokens: 5000}})
+	rep, err := s.SubmitBatches(context.Background(), 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Submitted < 1 || rep.Submitted > 6 || rep.Stopped != "limit" || !strings.Contains(rep.LimitHit, "tokens") {
+		t.Fatalf("token cap: %+v", rep)
+	}
+	// The open batch counts against the cap on the next run.
+	if rep, _ = s.SubmitBatches(context.Background(), 1000); rep.Submitted != 0 || rep.Stopped != "limit" {
+		t.Errorf("second run: %+v", rep)
+	}
+	// Dollars: price 1/5 per million, batch half: ~1040 tokens is about $0.0027 per request.
+	g := newFakeStore()
+	queue(g, 50)
+	rep, _ = batchSvc(g, bc, Limits{Day: Limit{USD: 0.01}}).SubmitBatches(context.Background(), 1000)
+	if rep.Submitted < 1 || rep.Submitted > 6 || rep.Stopped != "limit" || !strings.Contains(rep.LimitHit, "limit") {
+		t.Errorf("usd cap: %+v", rep)
 	}
 }

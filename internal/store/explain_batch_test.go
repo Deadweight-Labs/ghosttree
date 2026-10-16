@@ -121,3 +121,44 @@ func TestExplainCreatedAtReadsEveryKind(t *testing.T) {
 		t.Error("an unknown kind has a creation time")
 	}
 }
+
+func TestReservedBatchBlocksItsObjectsUntilActivatedOrReleased(t *testing.T) {
+	st, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	id, err := st.ReserveExplainBatch("m", "de", batchItems(1, 2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ReserveExplainBatch("m", "de", batchItems(2, 3)); err != explain.ErrBatchTaken {
+		t.Fatalf("overlapping reservation: %v", err)
+	}
+	if _, err := st.ReserveExplainBatch("m", "de", batchItems(3)); err != nil {
+		t.Fatalf("disjoint reservation: %v", err)
+	}
+	open, _ := st.OpenExplainBatches()
+	if len(open) != 2 || open[0].State != "submitting" || open[0].Pending != 2 {
+		t.Fatalf("%+v", open)
+	}
+	if b, _ := st.ExplainBatched(explain.KindKnowledge, 1, "h1", "2000-01-01T00:00:00Z"); !b {
+		t.Error("reserved object is not blocked")
+	}
+	if err := st.ActivateExplainBatch(id, "msgbatch_9"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ActivateExplainBatch(id, "msgbatch_9"); err == nil {
+		t.Error("activated twice")
+	}
+	open, _ = st.OpenExplainBatches()
+	if open[0].State != "open" || open[0].ProviderID != "msgbatch_9" {
+		t.Errorf("%+v", open)
+	}
+	if err := st.CloseExplainBatch(id, "failed"); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := st.ExplainBatched(explain.KindKnowledge, 1, "h1", "2000-01-01T00:00:00Z"); b {
+		t.Error("released object is still blocked")
+	}
+}

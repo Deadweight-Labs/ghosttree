@@ -215,7 +215,9 @@ func (c *httpClient) collectAnthropicBatch(ctx context.Context, id string) (map[
 			} `json:"result"`
 		}
 		if err := json.Unmarshal([]byte(line), &e); err != nil {
-			return nil, fmt.Errorf("decode batch result line: %w", err)
+			// One unreadable line (also a cut-off last line) must not discard
+			// the batch: its entry is missing and the caller records it as failed.
+			continue
 		}
 		// A failed entry is recorded, never returned as an error: its siblings
 		// were billed and their text must not be thrown away with it.
@@ -246,7 +248,10 @@ func (c *httpClient) collectAnthropicBatch(ctx context.Context, id string) (map[
 		}
 		out[e.CustomID] = res
 	}
-	return out, sc.Err()
+	if err := sc.Err(); err != nil && len(out) == 0 {
+		return nil, err
+	}
+	return out, nil
 }
 
 func firstNonEmpty(s ...string) string {

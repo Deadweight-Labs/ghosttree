@@ -33,10 +33,12 @@ type BatchItem struct {
 type OpenBatch struct {
 	ID         int64
 	ProviderID string
-	Model      string
-	Language   string
-	CreatedAt  string
-	Pending    int
+	// State is "open" (at the provider) or "submitting" (reserved, the provider has not answered yet).
+	State     string
+	Model     string
+	Language  string
+	CreatedAt string
+	Pending   int
 }
 
 // BatchKey names an object at a text for the blocked set.
@@ -51,6 +53,18 @@ const (
 	// alone. A failure that costs tokens (cut off at the output limit) would
 	// otherwise be paid for again at every hourly run.
 	retryFailedAfter = 24 * time.Hour
+	// maxBatchAge is how long an open batch is waited for. The provider ends a
+	// batch within 24 hours; one that cannot be read after twice that (other
+	// key, results gone) is given up so that its objects are released and stop
+	// counting against the caps.
+	maxBatchAge = 48 * time.Hour
+	// maxSubmitAge is how long a reservation may stay in "submitting": a run that
+	// was killed between reserving and the provider's answer.
+	maxSubmitAge = 2 * time.Hour
+	// Estimates for the caps, applied to requests not yet answered: the output
+	// is far below the ceiling in practice.
+	expectedOutputTokens = 1024
+	expectedWaitingInput = 1500
 	// NewObjectWindow is how young an object must be to be explained one by one
 	// when a page is opened; everything older waits for the batch.
 	NewObjectWindow = 24 * time.Hour
@@ -106,6 +120,11 @@ func (s *Service) SubmitBatches(ctx context.Context, limit int) (SubmitReport, e
 	}
 	day.Calls += waiting
 	month.Calls += waiting
+	// Open batches are not in the usage yet; count them at an estimate so that
+	// the token and dollar caps hold before the money is spent, not after.
+	wait := s.estimate(waiting*expectedWaitingInput, waiting*expectedOutputTokens)
+	wait.Calls = 0
+	day, month = day.Add(wait), month.Add(wait)
 	if full := s.cfg.Limits.Check(day, month); full != nil {
 		r.Stopped, r.LimitHit = "limit", full.Error()
 		return r, nil
@@ -127,7 +146,8 @@ func (s *Service) SubmitBatches(ctx context.Context, limit int) (SubmitReport, e
 	var reqs []llm.BatchRequest
 	var items []BatchItem
 	seen := map[string]bool{}
-	capped := false
+	capped, stopped := false, false
+	var queued Usage
 	for _, c := range cands {
 		if ctx.Err() != nil {
 			return r, ctx.Err()
@@ -166,18 +186,31 @@ func (s *Service) SubmitBatches(ctx context.Context, limit int) (SubmitReport, e
 			break
 		}
 		system, user := Prompt(s.cfg.Language, src)
+		if full := s.cfg.Limits.Check(day.Add(queued), month.Add(queued)); full != nil {
+			r.Stopped, r.LimitHit = "limit", full.Error()
+			stopped = true
+			break
+		}
+		one := s.estimate(estimateTokens(system)+estimateTokens(user), expectedOutputTokens)
+		one.Calls = 0
+		queued = queued.Add(one)
 		reqs = append(reqs, llm.BatchRequest{CustomID: id, System: system, User: user, MaxTokens: maxOutputTokens})
 		items = append(items, BatchItem{CustomID: id, Kind: c.Kind, ObjectID: c.ID, Hash: src.Hash})
 	}
 	limitHit := func() {
+		if stopped {
+			return
+		}
 		if room < limit {
 			r.Stopped, r.LimitHit = "limit", fmt.Sprintf("the calls cap leaves room for %d more", max(room, 0))
 		}
 	}
 	if len(reqs) == 0 {
-		if capped {
+		switch {
+		case stopped:
+		case capped:
 			limitHit()
-		} else {
+		default:
 			r.Stopped = "none"
 		}
 		return r, nil
@@ -187,28 +220,59 @@ func (s *Service) SubmitBatches(ctx context.Context, limit int) (SubmitReport, e
 		byID[it.CustomID] = it
 	}
 	for _, group := range llm.SplitBatch(reqs, s.cfg.Model, s.cfg.BatchMaxRequests, s.cfg.BatchMaxBytes) {
-		providerID, err := s.cfg.Batch.SubmitBatch(ctx, group)
-		if err != nil {
-			return r, fmt.Errorf("submit batch: %w", err)
-		}
 		recorded := make([]BatchItem, 0, len(group))
 		for _, g := range group {
 			recorded = append(recorded, byID[g.CustomID])
 		}
-		if _, err := s.st.RecordExplainBatch(providerID, s.cfg.Model, s.cfg.Language, recorded); err != nil {
+		// Reserved before the upload: a second run, or the next hour after a kill,
+		// sees these objects as taken.
+		rid, err := s.st.ReserveExplainBatch(s.cfg.Model, s.cfg.Language, recorded)
+		if errors.Is(err, ErrBatchTaken) {
+			r.Errors = append(r.Errors, "batch skipped: an object of it is already being sent by another run")
+			continue
+		}
+		if err != nil {
+			return r, fmt.Errorf("reserve batch: %w", err)
+		}
+		providerID, err := s.cfg.Batch.SubmitBatch(ctx, group)
+		if err != nil {
+			_ = s.st.CloseExplainBatch(rid, "failed") // nothing was accepted: release the objects
+			return r, fmt.Errorf("submit batch: %w", err)
+		}
+		var recErr error
+		for try := 0; try < 3; try++ {
+			if recErr = s.st.ActivateExplainBatch(rid, providerID); recErr == nil {
+				break
+			}
+			time.Sleep(time.Duration(try) * 200 * time.Millisecond)
+		}
+		if recErr != nil {
 			// The batch exists at the provider but is not on record; naming it
-			// is the only way to find it again.
-			return r, fmt.Errorf("batch %s was submitted but could not be recorded: %w", providerID, err)
+			// is the only way to find it again. The reservation stays and blocks
+			// the objects until it is released.
+			return r, fmt.Errorf("batch %s was submitted but could not be recorded: %w", providerID, recErr)
 		}
 		r.Batches++
 		r.Submitted += len(group)
 	}
-	if capped {
+	switch {
+	case stopped:
+	case capped:
 		limitHit()
-	} else {
+	default:
 		r.Stopped = "none"
 	}
 	return r, nil
+}
+
+// estimate is the usage of requests that have not been answered: the tokens
+// given, priced at the batch rate when the price is known.
+func (s *Service) estimate(in, out int) Usage {
+	u := Usage{Calls: 1, InputTokens: in, OutputTokens: out}
+	if s.cfg.PriceKnown {
+		u.CostMicroUSD = llmusage.MicroUSD(s.cfg.Price.Cost(llm.Usage{InputTokens: in, OutputTokens: out}) * llm.BatchPriceFactor)
+	}
+	return u
 }
 
 // CollectReport is the result of CollectBatches.
@@ -249,13 +313,39 @@ func (s *Service) CollectBatches(ctx context.Context) (CollectReport, error) {
 		if ctx.Err() != nil {
 			return r, ctx.Err()
 		}
+		age := s.batchAge(b)
+		if b.State == "submitting" {
+			if age > maxSubmitAge {
+				// The run that reserved it is gone and never recorded a provider id.
+				if err := s.st.CloseExplainBatch(b.ID, "failed"); err != nil {
+					return r, err
+				}
+				r.fail("reservation %d was never completed and is released", b.ID)
+				r.Collected++
+			} else {
+				r.Open++
+			}
+			continue
+		}
 		status, err := s.cfg.Batch.BatchStatus(ctx, b.ProviderID)
 		if err != nil {
+			if age > maxBatchAge {
+				if err := s.abandon(b, "status unreadable: "+err.Error(), &r); err != nil {
+					return r, err
+				}
+				continue
+			}
 			r.fail("batch %s: %v", b.ProviderID, err)
 			r.Open++
 			continue
 		}
 		if !status.Done {
+			if age > maxBatchAge {
+				if err := s.abandon(b, "not finished after "+maxBatchAge.String(), &r); err != nil {
+					return r, err
+				}
+				continue
+			}
 			r.Open++
 			continue
 		}
@@ -268,6 +358,12 @@ func (s *Service) CollectBatches(ctx context.Context) (CollectReport, error) {
 					return r, err
 				}
 				r.Collected++
+				continue
+			}
+			if age > maxBatchAge {
+				if err := s.abandon(b, "results unreadable: "+err.Error(), &r); err != nil {
+					return r, err
+				}
 				continue
 			}
 			r.fail("batch %s: %v", b.ProviderID, err)
@@ -291,13 +387,31 @@ func (s *Service) CollectBatches(ctx context.Context) (CollectReport, error) {
 	return r, nil
 }
 
+func (s *Service) batchAge(b OpenBatch) time.Duration {
+	t, err := time.Parse(time.RFC3339, b.CreatedAt)
+	if err != nil {
+		return 0
+	}
+	return s.cfg.Now().Sub(t)
+}
+
+// abandon gives up a batch that cannot be read any more.
+func (s *Service) abandon(b OpenBatch, why string, r *CollectReport) error {
+	if err := s.failBatch(b, why); err != nil {
+		return err
+	}
+	r.fail("batch %s given up: %s", b.ProviderID, why)
+	r.Collected++
+	return nil
+}
+
 func (s *Service) failBatch(b OpenBatch, why string) error {
 	items, err := s.st.PendingExplainBatchItems(b.ID)
 	if err != nil {
 		return err
 	}
 	for _, it := range items {
-		if err := s.st.FinishExplainBatchItem(b.ID, it.CustomID, "failed", "batch "+why, s.day(), Usage{Calls: 1, Failures: 1}); err != nil {
+		if err := s.st.FinishExplainBatchItem(b.ID, it.CustomID, "failed", "batch "+why, s.day(), Usage{Failures: 1}); err != nil {
 			return err
 		}
 	}
