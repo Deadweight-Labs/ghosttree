@@ -218,7 +218,7 @@ func TestCoordRoomRendersInGermanWithoutFallbackKeys(t *testing.T) {
 	}
 	appendAgent(t, st, room, "m1", "frage", store.IntentQuestion, "person:1")
 	page := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room))
-	for _, want := range []string{"Wer ist da", "Agenten etwas sagen", "Alle im Raum", "Als Bitte senden", ">Senden<", "an robin"} {
+	for _, want := range []string{"Wer ist da", "Agenten schreiben", "Alle im Raum", "Als Bitte senden", ">Senden<", "an robin"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("German room lacks %q", want)
 		}

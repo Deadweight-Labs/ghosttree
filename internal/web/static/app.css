@@ -573,11 +573,14 @@ body .shell-main > main.coord-workspace { height: auto; max-width: 920px; paddin
 .rm-alert ul { margin: 0; padding: 0; list-style: none; }
 .rm-here {
   --clay-rest-h: -5; --clay-surface: var(--clay-c-sunken);
-  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 32px; margin: 0; padding: 8px 24px;
+  display: grid; grid-template-columns: minmax(0, 1fr); column-gap: 32px; margin: 0; padding: 8px 24px;
   list-style: none; border-radius: var(--clay-radius);
 }
+/* One column while a few are here; two once the list gets long. */
+.rm-here:has(> li:nth-child(6)) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .rm-here-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; min-width: 0; padding: 12px 0; }
-.rm-here-item:nth-child(n+3) { border-top: 1px solid var(--clay-line); }
+.rm-here-item:nth-child(n+2) { border-top: 1px solid var(--clay-line); }
+.rm-here:has(> li:nth-child(6)) .rm-here-item:nth-child(2) { border-top: 0; }
 .rm-here-item > details, .rm-here-item > .pp-row { min-width: 0; }
 .rm-here-item .pp-row { display: grid; grid-template-columns: 9px minmax(0, 1fr) auto; align-items: center; gap: 12px; cursor: default; list-style: none; }
 .rm-here-item summary.pp-row { cursor: pointer; }
@@ -597,6 +600,7 @@ body .shell-main > main.coord-workspace { height: auto; max-width: 920px; paddin
 .coord-message, .coord-message-group-start, .coord-message-continuation, .coord-message:first-child { margin-top: 0; }
 .coord-empty { margin: 0; padding: 16px 0 24px; display: flex; align-items: center; gap: 16px; text-align: left; }
 .rm-msg { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 12px; align-items: start; max-width: 800px; }
+.rm-msg.is-ask { max-width: 884px; }
 .rm-main { min-width: 0; }
 .rm-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; margin: 0; font-size: 13px; color: var(--clay-ink-faint); }
 .rm-head strong { font-size: 14px; font-weight: 700; color: var(--clay-ink); }
@@ -610,7 +614,7 @@ body .shell-main > main.coord-workspace { height: auto; max-width: 920px; paddin
 .rm-msg.is-peer .av { opacity: .85; }
 .rm-msg.is-peer .cm-bubble { --clay-rest-h: 0; --clay-surface: transparent; padding: 0; border-radius: 0; box-shadow: none; font-size: 13px; color: var(--clay-ink-soft); }
 .rm-msg.is-peer .cm-tools { opacity: 0; }
-.rm-msg.is-ask .rm-bubble { --clay-rest-h: 6; --clay-surface: var(--clay-c-surface); margin: 8px 0 0; padding: 16px 24px 20px; max-width: 760px; border-radius: var(--clay-radius); display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.rm-msg.is-ask .rm-bubble { --clay-rest-h: 6; --clay-surface: var(--clay-c-surface); margin: 8px 0 0; padding: 16px 24px 20px; max-width: 840px; border-radius: var(--clay-radius); display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
 .rm-msg.is-ask .ask-t { margin: 0; font-size: 15px; font-weight: 400; line-height: 1.5; max-width: 68ch; }
 .rm-msg.is-ask .ask-state, .rm-msg.is-ask .coord-note { margin: 0; }
 .rm-foot { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin: 0; }
@@ -634,7 +638,7 @@ body .shell-main > main.coord-workspace { height: auto; max-width: 920px; paddin
   background: linear-gradient(to top, var(--clay-bg) calc(100% - 20px), transparent);
 }
 .rm-compose > .coord-reply, .rm-compose > .coord-note, .rm-compose > .coord-private-hint { margin: 0 0 8px; }
-.rm-compose-box { --clay-rest-h: -5; --clay-surface: var(--clay-c-sunken); display: grid; gap: 12px; max-width: 760px; padding: 12px 16px 16px; border-radius: var(--clay-radius); }
+.rm-compose-box { --clay-rest-h: -5; --clay-surface: var(--clay-c-sunken); display: grid; gap: 12px; max-width: 840px; padding: 12px 16px 16px; border-radius: var(--clay-radius); }
 .rm-compose-to { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .rm-compose-label { font-size: 13px; font-weight: 700; color: var(--clay-ink-soft); }
 .rm-compose .comp-in { grid-column: auto; grid-row: auto; min-height: 56px; max-height: 200px; padding: 8px 4px; border-radius: 0; background: transparent; box-shadow: none; font-size: 15px; }

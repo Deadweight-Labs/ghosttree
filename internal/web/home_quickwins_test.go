@@ -161,8 +161,9 @@ func TestHomeAgentRowsSayWhatTheAgentWorksOn(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, page := fetchPage(t, e.Member, e.Base+"/ui/overview")
-	if !strings.Contains(page, `<h3 class="g-title">Roles first</h3>`) {
-		t.Errorf("the request title is not the headline: %s", page)
+	// The headline links to the session of the agent, so the way in is one click.
+	if !strings.Contains(page, `<h3 class="g-title"><a href="/ui/sessions/`) || !strings.Contains(page, `>Roles first</a></h3>`) {
+		t.Errorf("the request title is not the headline, linked to the session: %s", page)
 	}
 	if !strings.Contains(page, `<h3 class="g-title">Reading the audit</h3>`) {
 		t.Error("the work note is not the headline of an agent without a request")

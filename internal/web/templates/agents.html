@@ -6,7 +6,7 @@
 {{if .ReqID}}<a class="ag-req" href="{{.ReqHref}}"><span class="ov-id">{{.ReqID}}</span> {{.ReqTitle}}</a>{{end}}
 {{if .Post}}<p class="ag-post">{{.Post}}<span class="ov-num"> · {{.PostAge}}</span></p>{{end}}
 <div class="ag-foot"><span class="ov-meta" title="{{.ProjectTitle}}">{{.Project}}{{if .Branch}} · {{.Branch}}{{end}}</span><span class="ag-links"><a class="ag-link" href="{{.RoomHref}}">{{t "agents.room"}}</a>{{if .SessionHref}}<a class="ag-link" href="{{.SessionHref}}">{{t "agents.session"}}</a>{{end}}</span></div></div>
-<span class="ov-state"><span class="ov-activity">{{if .Activity}}{{.Activity}}{{else}}{{.StateText}}{{end}}</span><span class="ov-dot is-{{.State}}{{if eq .State "active"}} pulse{{end}}" title="{{.StateText}}"></span><span class="ov-num">{{.Age}}</span></span></li>{{end}}</ul>
+<span class="ag-state"><span class="g-state{{if eq .Presence "wait_you"}} is-wait{{else if eq .Presence "stuck"}} is-stuck{{end}}"><i class="g-dot{{if eq .Presence "work"}} is-work pulse{{else if eq .Presence "wait_you"}} is-wait{{else if eq .Presence "wait_other"}} is-ring{{else if eq .Presence "stuck"}} is-stuck{{else if eq .Presence "off"}} is-off{{end}}" aria-hidden="true"></i>{{.PresenceText}}</span><span class="ov-num">{{.Age}}</span></span></li>{{end}}</ul>
 {{else if .Guest}}<p class="ov-empty">{{t "ov.nothing"}}</p>{{else if .Machines}}{{template "ovstart" .}}{{else}}<p class="ov-empty">{{t "ov.no_agents"}}</p>{{if .CanAdd}}<a class="ov-btn ov-btn-primary clay" href="{{.Connect}}">{{t "ov.connect"}}</a>{{end}}{{end}}
 {{if and .Machines (not .Guest)}}<section class="ag-machines"><h2 class="ov-sub">{{t "ov.machines"}}</h2>{{template "ovmachines" .Machines}}</section>{{end}}
 {{end}}{{template "foot" .}}{{end}}

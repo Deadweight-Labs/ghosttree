@@ -76,8 +76,10 @@ type forYouView struct {
 	Rows []forYouRow
 	// Total is the number of rows before the cut.
 	Total int
-	// More is the number of rows beyond the ones shown.
-	More int
+	// More is the number of rows beyond the ones shown, MoreHref where the first
+	// of them leads (the task list when only tasks are left out).
+	More     int
+	MoreHref string
 	// Tabs is empty when there is nobody else to switch to.
 	Tabs []forYouTab
 }
@@ -87,6 +89,8 @@ type runRow struct {
 	agentRow
 	Title, Line  string
 	Action, Href string
+	// SessionHref opens what the agent did: the title links there.
+	SessionHref string
 }
 
 type runGroup struct {
@@ -157,7 +161,7 @@ func (a *app) homeForYou(r *http.Request, pa *store.ProjectAccess, who viewer, p
 	})
 	v := &forYouView{Rows: rows, Total: len(rows)}
 	if len(v.Rows) > homeMaxRows {
-		v.More, v.Rows = len(v.Rows)-homeMaxRows, v.Rows[:homeMaxRows]
+		v.Rows, v.More, v.MoreHref = cutForYou(rows, homeMaxRows)
 	}
 	if len(v.Rows) > 0 {
 		top := &v.Rows[0]
@@ -185,6 +189,38 @@ func (a *app) homeForYou(r *http.Request, pa *store.ProjectAccess, who viewer, p
 		v.Tabs = append(v.Tabs, forYouTab{Label: l.msg("home.tab.all"), Href: "/ui/overview?wer=alle", Current: scope == "alle"})
 	}
 	return v, nil
+}
+
+// cutForYou keeps limit rows. The bundles (gardener report, proposals) are the
+// biggest queues and always stay; the single rows that fall out are the ones
+// that rank lowest of the rest. The link leads to where the left-out rows live.
+func cutForYou(rows []forYouRow, limit int) (kept []forYouRow, more int, href string) {
+	bundles := 0
+	for _, r := range rows {
+		if r.rank >= rankGarden {
+			bundles++
+		}
+	}
+	room := max(limit-bundles, 0)
+	var left []forYouRow
+	for _, r := range rows {
+		if r.rank >= rankGarden || room > 0 {
+			if r.rank < rankGarden {
+				room--
+			}
+			kept = append(kept, r)
+			continue
+		}
+		left = append(left, r)
+	}
+	href = "/ui/tasks"
+	for _, r := range left {
+		if r.rank != rankTask {
+			href = r.Href
+			break
+		}
+	}
+	return kept, len(left), href
 }
 
 type homeTask struct {
@@ -279,7 +315,7 @@ func (a *app) homeAttention(r *http.Request, now time.Time) ([]forYouRow, error)
 		room := coordShortRoomName(coordRoomKindOf(item.HomeRoomKey), coordRoomLabel(l, store.CoordRoom{Key: item.HomeRoomKey}, "", labels))
 		created := parseTime(item.CreatedAt)
 		row := forYouRow{
-			Title: oneLine(v.Preview, 110), Href: v.URL, at: created, Tone: "ask",
+			Title: questionTitle(v.Preview, 110), Href: v.URL, at: created, Tone: "ask",
 			Rest:        coordSenderLabel(l, item, labels) + agentLabelSep + room,
 			explainKind: explain.KindQuestion, explainID: item.MessageID, explainStored: item.Reason != store.AttentionQuestion,
 		}
@@ -361,6 +397,32 @@ func (a *app) homeBundles(l lang, pa *store.ProjectAccess, project string, now t
 	return rows, nil
 }
 
+// questionTitle is the line a question stands under. A long message is cut
+// where the question ends, not mid-sentence: the first sentence that asks
+// (ends in "?") if it fits, else the plain cut.
+func questionTitle(s string, limit int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	rs := []rune(s)
+	if len(rs) <= limit {
+		return s
+	}
+	start := 0
+	for i, c := range rs {
+		end := i == len(rs)-1 || ((c == '.' || c == '!' || c == '?') && rs[i+1] == ' ')
+		if !end {
+			continue
+		}
+		if c == '?' && i+1-start <= limit {
+			return strings.TrimSpace(string(rs[start : i+1]))
+		}
+		start = i + 1
+		for start < len(rs) && rs[start] == ' ' {
+			start++
+		}
+	}
+	return shortWords(s, limit)
+}
+
 // bundleFacts is the oldest creation time and the projects of a set of entries.
 func bundleFacts(entries []store.Knowledge) (time.Time, []string) {
 	var oldest time.Time
@@ -419,6 +481,9 @@ func (a *app) homeRunning(r *http.Request, pa *store.ProjectAccess, project stri
 			row.RequestRef = "REQ-" + strconv.FormatInt(w.RequestID, 10)
 		}
 		rr := runRow{agentRow: row, Title: row.Name}
+		if w.SessionPublicID != "" {
+			rr.SessionHref = "/ui/sessions/" + w.SessionPublicID
+		}
 		var line []string
 		if row.Work != "" {
 			rr.Title = row.Work

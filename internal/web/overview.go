@@ -764,6 +764,25 @@ func oneLine(s string, limit int) string {
 	return s
 }
 
+// shortWords is oneLine, but it cuts at a word boundary: "Backfill mit 'import'
+// od…" says less than "Backfill mit 'import'…". A text without a space in its
+// last fifth is cut hard, as oneLine does.
+func shortWords(s string, limit int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	rs := []rune(s)
+	if len(rs) <= limit {
+		return s
+	}
+	cut := limit
+	for i := limit; i > limit*4/5; i-- {
+		if rs[i] == ' ' {
+			cut = i
+			break
+		}
+	}
+	return strings.TrimRight(string(rs[:cut]), " ,;:.") + "…"
+}
+
 // setupFor entscheidet, ob statt der Übersicht "Connect your first agent"
 // erscheint (nie für Gäste, der Aufrufer prüft das): auf Wunsch (?connect=1)
 // für jeden, sonst nur für Owner und Admins, die keine Maschine haben (oder

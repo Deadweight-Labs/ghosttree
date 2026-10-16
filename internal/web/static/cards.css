@@ -113,12 +113,13 @@
 .g-agent { display: grid; grid-template-columns: 40px minmax(0, 1fr) 176px 112px; gap: 16px; align-items: center; padding: 14px 24px; }
 .g-agent + .g-agent { border-top: 1px solid var(--clay-line); }
 .g-agent .g-title { margin: 0; font-size: 15.5px; }
-.g-state { display: inline-flex; align-items: center; justify-content: flex-end; gap: 8px; font: var(--text-secondary); font-weight: 700; color: var(--clay-ink-soft); white-space: nowrap; }
+.g-state { display: inline-flex; align-items: center; justify-content: flex-start; gap: 8px; font: var(--text-secondary); font-weight: 700; color: var(--clay-ink-soft); white-space: nowrap; }
 .g-state.is-wait, .g-state.is-stuck { color: var(--clay-warn); }
 .g-dot { inline-size: 9px; block-size: 9px; aspect-ratio: 1; flex: none; border-radius: 50%; background: var(--clay-ink-faint); }
 .g-dot.is-work { background: var(--clay-ok); }
 .g-dot.is-wait { background: var(--clay-warn); }
 .g-dot.is-stuck { background: transparent; box-shadow: inset 0 0 0 2px var(--clay-warn); }
+.g-dot.is-ring { background: transparent; box-shadow: inset 0 0 0 2px var(--clay-ink-faint); }
 .g-dot.is-off { background: transparent; box-shadow: inset 0 0 0 2px var(--clay-ink-faint); }
 
 /* Pain */
@@ -252,3 +253,16 @@
 .g-hint .g-text { margin-top: 4px; color: var(--clay-ink-soft); }
 .g-hint .g-fold { margin-top: 4px; }
 .js .g-bulk.is-idle { display: none; }
+
+/* Pruefung 2026-10-16 */
+.g-reqlink { font: var(--text-mono); font-size: 12.5px; text-decoration: none; }
+.g-agent > span:last-child { justify-self: end; }
+.g-row.is-open:first-child { border-radius: var(--clay-radius) var(--clay-radius) 0 0; }
+.g-deck:has(> .g-row.is-open:first-child) { padding-top: 0; }
+.g-fold-b .ex { display: flex; flex-direction: column; }
+.g-fold-b .ex-head { order: 2; justify-content: flex-start; }
+.ag-state { display: grid; justify-items: end; gap: 2px; padding-top: 2px; }
+.g-check .g-cmd { align-items: flex-start; }
+.g-check .g-cmd code { white-space: normal; overflow-wrap: anywhere; overflow-x: visible; font-size: 13px; line-height: 1.5; padding: 6px 0; }
+.g-check .g-cmd > svg.i { margin-top: 9px; }
+.g-check .g-copy { margin-top: 0; }

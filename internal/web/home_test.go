@@ -428,3 +428,54 @@ func TestReviewBulkIsAllOrNothingAndChecksEveryEntry(t *testing.T) {
 		t.Error("the hidden note changed")
 	}
 }
+
+func TestCutForYouKeepsBundlesAndPointsAtWhatFellOut(t *testing.T) {
+	var rows []forYouRow
+	for i := 0; i < 8; i++ {
+		rows = append(rows, forYouRow{rank: rankTask, Href: "/ui/tasks#task-1"})
+	}
+	rows = append(rows, forYouRow{rank: rankGarden, Href: "/ui/review?source=gardener"}, forYouRow{rank: rankProposals, Href: "/ui/review"})
+	kept, more, href := cutForYou(rows, 6)
+	if len(kept) != 6 || more != 4 {
+		t.Fatalf("kept %d, more %d; want 6 and 4", len(kept), more)
+	}
+	if kept[4].rank != rankGarden || kept[5].rank != rankProposals {
+		t.Errorf("the bundles must stay: %+v", kept)
+	}
+	if href != "/ui/tasks" {
+		t.Errorf("only tasks fell out, the link leads to %q", href)
+	}
+	rows = append([]forYouRow{{rank: rankBlocks, Href: "/ui/coord?x"}}, rows...)
+	if _, _, href = cutForYou(append(rows, rows[:3]...), 3); href == "/ui/tasks" {
+		t.Errorf("a question fell out but the link leads to the task list")
+	}
+}
+
+func TestQuestionTitleCutsWhereTheQuestionEnds(t *testing.T) {
+	long := "Die Migration setzt prospects.source auf NOT NULL. In Prod gibt es 214 Zeilen ohne Quelle. Backfill mit 'import' oder verwerfen? Ohne Antwort lasse ich sie liegen und baue weiter."
+	if got, want := questionTitle(long, 80), "Backfill mit 'import' oder verwerfen?"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	if got := questionTitle("Kurz?", 80); got != "Kurz?" {
+		t.Errorf("short text must stay: %q", got)
+	}
+	if got := questionTitle(strings.Repeat("ohne Frage ", 20), 40); !strings.HasSuffix(got, "…") {
+		t.Errorf("no question: plain cut expected, got %q", got)
+	}
+}
+
+func TestShortWordsCutsAtAWordBoundary(t *testing.T) {
+	got := shortWords("Der Import schneidet bei Zeile 50.000 ab, weil der Puffer ohne Fehler überläuft", 40)
+	if got != "Der Import schneidet bei Zeile 50.000…" && !strings.HasSuffix(got, "…") {
+		t.Fatalf("got %q", got)
+	}
+	if strings.Contains(got, "abz") || strings.HasSuffix(strings.TrimSuffix(got, "…"), " ") {
+		t.Errorf("cut mid-word or left a space before the ellipsis: %q", got)
+	}
+	if got := shortWords("kurz", 40); got != "kurz" {
+		t.Errorf("short text must stay: %q", got)
+	}
+	if got := shortWords(strings.Repeat("x", 50), 40); got != strings.Repeat("x", 40)+"…" {
+		t.Errorf("no space: hard cut expected, got %q", got)
+	}
+}
