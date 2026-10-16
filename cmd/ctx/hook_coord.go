@@ -233,7 +233,7 @@ func coordHookSender(meta map[string]string) string {
 	if label := store.SafeLabel(meta["sender_label"]); label != "" {
 		out = label + " (" + id + ")"
 	}
-	if note := cutRunes(strings.Join(strings.Fields(meta["sender_work_note"]), " "), store.MaxWorkNoteRunes); note != "" {
+	if note := cutRunes(store.SafeNote(meta["sender_work_note"]), store.MaxWorkNoteRunes); note != "" {
 		out += " [working on, self-reported: " + strings.NewReplacer("[", " ", "]", " ").Replace(note) + "]"
 	}
 	return out

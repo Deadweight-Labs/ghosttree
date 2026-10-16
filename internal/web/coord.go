@@ -77,6 +77,10 @@ func coordHTTPError(w http.ResponseWriter, err error) {
 		var ambiguous *store.AmbiguousMentionError
 		errors.As(err, &ambiguous)
 		http.Error(w, msg("coord.mention_ambiguous", ambiguous.Token, strings.Join(ambiguous.Candidates, ", ")), http.StatusBadRequest)
+	case errors.Is(err, store.ErrBroadcastLimited):
+		var limited *store.BroadcastLimitedError
+		errors.As(err, &limited)
+		http.Error(w, msg("coord.broadcast_limited", int(limited.Wait.Minutes())+1), http.StatusTooManyRequests)
 	case errors.Is(err, store.ErrInvalidAttentionAction):
 		http.Error(w, "invalid coordination attention action", http.StatusBadRequest)
 	case errors.Is(err, store.ErrAttentionRecipientRequired):

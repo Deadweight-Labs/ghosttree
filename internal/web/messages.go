@@ -236,6 +236,7 @@ var messages = map[string]string{
 	"coord.mentioned":                  "Mentioned: %s",
 	"coord.mentions_you":               "mentions you",
 	"coord.unreached":                  "%s reached no one",
+	"coord.broadcast_limited":          "All agents were addressed a moment ago. Try again in %d min.",
 	"coord.mention_ambiguous":          "@%[1]s fits more than one: %[2]s. Go back and type more of the name.",
 	"coord.valid_until":                "Valid until",
 	"coord.zone_server":                "Time in %s (server time)",

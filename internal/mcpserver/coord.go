@@ -774,7 +774,7 @@ func senderLabel(m store.CoordMessage) string {
 	if label := store.SafeLabel(m.SenderLabel); label != "" {
 		out = label + " (" + id + ")"
 	}
-	if note := strings.Join(strings.Fields(m.SenderWorkNote), " "); note != "" {
+	if note := store.SafeNote(m.SenderWorkNote); note != "" {
 		out += " [working on, self-reported: " + headerSafeText(note) + "]"
 	}
 	return out

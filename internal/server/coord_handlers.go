@@ -34,6 +34,8 @@ func writeCoordAccessError(w http.ResponseWriter, err error) {
 	case errors.Is(err, store.ErrCoordAmbiguousMention):
 		// Only members reach this: a guest never gets an error for a name.
 		writeErr(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, store.ErrBroadcastLimited):
+		writeErr(w, http.StatusTooManyRequests, err.Error())
 	case errors.Is(err, store.ErrInvalidAttentionAction), errors.Is(err, store.ErrAttentionRecipientRequired):
 		writeErr(w, http.StatusBadRequest, "invalid coordination attention action")
 	case errors.Is(err, store.ErrAttentionClosed):

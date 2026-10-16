@@ -512,7 +512,9 @@ func (c *channelTools) handleSend(_ context.Context, _ *mcp.CallToolRequest, in 
 	if intent != "" && intent != store.IntentAck && len(mentions) == 0 {
 		return nil, nil, fmt.Errorf("intent %s needs a mention: say which agent should answer", intent)
 	}
-	if len(mentions) > 0 {
+	// @agents im Text zählt wie eine Mention: es erreicht mehr Agenten als jede.
+	limited := len(mentions) > 0 || store.BodyHasBroadcast(in.Text)
+	if limited {
 		if err := c.checkLimit(); err != nil {
 			return nil, nil, err
 		}
@@ -537,7 +539,7 @@ func (c *channelTools) handleSend(_ context.Context, _ *mcp.CallToolRequest, in 
 		return nil, nil, err
 	}
 	c.sentIDs.Store(clientID, id)
-	if len(mentions) > 0 {
+	if limited {
 		c.limiter.record(c.clock())
 	}
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{

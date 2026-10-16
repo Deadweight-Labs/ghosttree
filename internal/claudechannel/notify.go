@@ -6,7 +6,6 @@ import (
 	"errors"
 	"regexp"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -68,7 +67,7 @@ func NewNotification(room store.CoordRoom, m store.CoordMessage, content string)
 		if label := store.SafeLabel(m.SenderLabel); label != "" {
 			meta["sender_label"] = label
 		}
-		if note := strings.TrimSpace(m.SenderWorkNote); note != "" {
+		if note := store.SafeNote(m.SenderWorkNote); note != "" {
 			meta["sender_work_note"] = note
 		}
 	}

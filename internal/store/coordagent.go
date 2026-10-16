@@ -387,6 +387,9 @@ func (s *Store) coordPeers(roomKey, since string, ownOnly map[string]bool) ([]Co
 		}
 		out[i].Owner = names[id]
 		out[i].Label = AgentLabel(out[i].Owner, out[i].Machine, out[i].Branch)
+		if !WorkNoteFresh(out[i].WorkNoteAt, time.Now().UTC()) {
+			out[i].WorkNote, out[i].WorkNoteAt = "", ""
+		}
 	}
 	agents := make([]presenceAgent, len(out))
 	for i := range out {

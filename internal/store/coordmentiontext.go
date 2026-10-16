@@ -158,6 +158,9 @@ func (a CoordAccess) mentionCandidatesTx(tx *sql.Tx, actor, roomKey string) ([]m
 			// "@philipp-mac" Philipps Agenten auf dem Mac trifft, auch ohne Branch.
 			c.label = AgentLabel(NormalizeAccountName(ownerName), machine, branch)
 			c.handles = addHandle(c.handles, ownerName+"-"+machine)
+			if first, _, found := strings.Cut(strings.TrimSpace(ownerName), " "); found {
+				c.handles = addHandle(c.handles, first+"-"+machine)
+			}
 			if branch != "" {
 				c.handles = addHandle(c.handles, ownerName+"-"+machine+"-"+strings.ReplaceAll(branch, "/", "-"))
 			}
@@ -259,6 +262,16 @@ func agentHost(external string) string {
 	return ""
 }
 
+// uniqueHandle is the first handle of c that resolves to c alone, "" if none.
+func uniqueHandle(all []mentionCandidate, c mentionCandidate) string {
+	for _, h := range c.handles {
+		if hit, _ := resolveMentionToken(all, h); hit != nil && hit.id == c.id {
+			return h
+		}
+	}
+	return ""
+}
+
 // agentShortID is the first eight characters of the last part of the id: what
 // tells two sessions of the same person on the same machine apart.
 func agentShortID(external string) string {
@@ -317,6 +330,9 @@ func (a CoordAccess) textMentionsTx(tx *sql.Tx, actor, roomKey, body string, gue
 			// Ein Gast sieht die Mitglieder nicht und erreicht deshalb nicht
 			// alle. Der Token gehört dem Store und wird nie als Name aufgelöst.
 			if !guest {
+				if err := checkBroadcastRateTx(tx, actor); err != nil {
+					return nil, nil, err
+				}
 				active, err := broadcastIDsTx(tx, candidates)
 				if err != nil {
 					return nil, nil, err
@@ -331,12 +347,24 @@ func (a CoordAccess) textMentionsTx(tx *sql.Tx, actor, roomKey, body string, gue
 			ids = append(ids, hit.id)
 		case len(ambiguous) > 0 && !guest:
 			labels := make([]string, 0, 6)
+			counts := map[string]int{}
+			for _, c := range ambiguous {
+				counts[c.label]++
+			}
 			for i, c := range ambiguous {
 				if i == 5 {
 					labels = append(labels, "…")
 					break
 				}
-				labels = append(labels, c.label)
+				label := c.label
+				if counts[label] > 1 && !strings.HasPrefix(c.id, "person:") {
+					// Gleiche Namen (zwei Sessions, derselbe Branch): die Kurz-ID
+					// macht sie unterscheidbar und ist als Handle tippbar.
+					if h := uniqueHandle(candidates, c); h != "" {
+						label += " (@" + h + ")"
+					}
+				}
+				labels = append(labels, label)
 			}
 			return nil, nil, &AmbiguousMentionError{Token: token, Candidates: labels}
 		}

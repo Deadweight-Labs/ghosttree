@@ -19,6 +19,60 @@ const MaxWorkNoteRunes = 200
 // gilt: Sichtung durch einen Hook der Session selbst.
 const BroadcastActiveWindow = 15 * time.Minute
 
+// BroadcastWindow ist der Mindestabstand zwischen zwei Broadcasts (@agents) eines
+// Senders.
+const BroadcastWindow = 5 * time.Minute
+
+// ErrBroadcastLimited: der Sender hat gerade erst an alle Agenten gesendet.
+var ErrBroadcastLimited = errors.New("coordination broadcast limited")
+
+// BroadcastLimitedError nennt die Wartezeit.
+type BroadcastLimitedError struct{ Wait time.Duration }
+
+func (e *BroadcastLimitedError) Error() string {
+	return fmt.Sprintf("%v: @agents was used a moment ago; wait %d minutes", ErrBroadcastLimited, int(e.Wait.Minutes())+1)
+}
+
+func (e *BroadcastLimitedError) Is(target error) bool { return target == ErrBroadcastLimited }
+
+// BodyHasBroadcast sagt, ob ein Text das Broadcast-Wort enthält.
+func BodyHasBroadcast(body string) bool {
+	for _, t := range textMentionTokens(body) {
+		if IsBroadcastToken(t) {
+			return true
+		}
+	}
+	return false
+}
+
+// checkBroadcastRateTx lässt höchstens einen Broadcast je Sender und
+// BroadcastWindow zu. Gezählt werden die gespeicherten Nachrichten des Senders,
+// deren Text das Broadcast-Wort enthält.
+func checkBroadcastRateTx(tx *sql.Tx, sender string) error {
+	cutoff := time.Now().UTC().Add(-BroadcastWindow)
+	rows, err := tx.Query(`SELECT body, created_at FROM coord_messages WHERE sender_external_id=? AND created_at>=? ORDER BY id DESC LIMIT 50`,
+		sender, cutoff.Format(time.RFC3339))
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var body, created string
+		if err := rows.Scan(&body, &created); err != nil {
+			return err
+		}
+		if !BodyHasBroadcast(body) {
+			continue
+		}
+		at, perr := time.Parse(time.RFC3339, created)
+		if perr != nil {
+			at = time.Now().UTC()
+		}
+		return &BroadcastLimitedError{Wait: at.Add(BroadcastWindow).Sub(time.Now().UTC())}
+	}
+	return rows.Err()
+}
+
 // ErrWorkNoteNotOwner: die Notiz gehört zu einer Session eines anderen Kontos.
 var ErrWorkNoteNotOwner = errors.New("coordination agent belongs to another principal")
 
@@ -39,9 +93,10 @@ func CleanMachine(name string) string {
 	return strings.Trim(b.String(), ".-_")
 }
 
-// AgentLabel ist der Anzeigename eines Agenten: Person · Maschine · Arbeitstitel,
-// wobei der Arbeitstitel der Branch ist oder, wo der Betrachter ihn sehen darf,
-// der Titel des Requests. Leere Teile fallen weg; sind alle leer, ist es "".
+// AgentLabel ist der Anzeigename eines Agenten: Person · Maschine · Branch.
+// Der Request-Titel gehört bewusst nicht dazu: er ist rollenabhängig sichtbar
+// und darf weder Name noch Mention-Kennung bestimmen. Leere Teile fallen weg;
+// sind alle leer, ist es "".
 func AgentLabel(person, machine, work string) string {
 	var parts []string
 	for _, p := range []string{person, machine, work} {
@@ -74,6 +129,36 @@ func SafeLabel(s string) string {
 	return out
 }
 
+// neutralizeNote entfernt, was einen Attributwert oder ein Channel-Tag
+// brechen könnte: spitze Klammern, Anführungszeichen, Backtick und Backslash.
+func neutralizeNote(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch r {
+		case '<', '>', '"', '\'', '`', '\\':
+			return ' '
+		}
+		return r
+	}, s)
+}
+
+// WorkNoteMaxAge ist das Alter, ab dem eine Arbeitsnotiz nicht mehr angezeigt
+// wird: eine Session, die sie nicht löscht, soll nicht tagelang behaupten,
+// woran sie arbeitet.
+const WorkNoteMaxAge = 24 * time.Hour
+
+// WorkNoteFresh sagt, ob eine zum Zeitpunkt at gesetzte Notiz zu ref noch
+// gezeigt werden darf. Ein leerer oder unlesbarer Zeitpunkt zählt als alt.
+func WorkNoteFresh(at string, ref time.Time) bool {
+	t, err := time.Parse(time.RFC3339, at)
+	return err == nil && ref.Sub(t) <= WorkNoteMaxAge
+}
+
+// SafeNote entschärft eine Notiz für die Ausgabe in Kopfzeilen und
+// Attributwerten, auch wenn sie ein älterer Client gespeichert hat.
+func SafeNote(note string) string {
+	return strings.Join(strings.Fields(neutralizeNote(note)), " ")
+}
+
 // NormalizeWorkNote prüft und glättet die Arbeitsnotiz: Zeilenumbrüche und
 // Steuerzeichen werden zu Leerzeichen, höchstens 200 Zeichen, und nichts, was
 // nach einem Geheimnis aussieht (derselbe Filter wie bei Aufgaben für
@@ -86,7 +171,7 @@ func NormalizeWorkNote(note string) (string, error) {
 		}
 		b.WriteRune(r)
 	}
-	out := strings.Join(strings.Fields(b.String()), " ")
+	out := strings.Join(strings.Fields(neutralizeNote(b.String())), " ")
 	if n := utf8.RuneCountInString(out); n > MaxWorkNoteRunes {
 		return "", fmt.Errorf("%w: work note has %d characters, at most %d", ErrInvalidInput, n, MaxWorkNoteRunes)
 	}
@@ -182,11 +267,14 @@ func fillAgentSendersTx(tx *sql.Tx, a CoordAccess, kind, id string, msgs []Coord
 		}
 		w, ok := cache[m.SenderExternalID]
 		if !ok {
-			var machine, branch, note, principal string
-			err := tx.QueryRow(`SELECT machine, COALESCE(branch,''), work_note, COALESCE(principal_id,'') FROM coord_agents WHERE external_id=?`,
-				m.SenderExternalID).Scan(&machine, &branch, &note, &principal)
+			var machine, branch, note, noteAt, principal string
+			err := tx.QueryRow(`SELECT machine, COALESCE(branch,''), work_note, work_note_at, COALESCE(principal_id,'') FROM coord_agents WHERE external_id=?`,
+				m.SenderExternalID).Scan(&machine, &branch, &note, &noteAt, &principal)
 			if err != nil && !errors.Is(err, sql.ErrNoRows) {
 				return err
+			}
+			if err == nil && !WorkNoteFresh(noteAt, time.Now().UTC()) {
+				note = ""
 			}
 			if err == nil {
 				w = who{label: AgentLabel(NormalizeAccountName(personNameTx(tx, principal)), machine, branch), note: note}
@@ -194,6 +282,11 @@ func fillAgentSendersTx(tx *sql.Tx, a CoordAccess, kind, id string, msgs []Coord
 			cache[m.SenderExternalID] = w
 		}
 		m.SenderLabel, m.SenderWorkNote = w.label, w.note
+		if at, perr := time.Parse(time.RFC3339, m.CreatedAt); perr == nil && time.Since(at) > WorkNoteMaxAge {
+			// Die Notiz ist der Stand von heute; neben einer alten Nachricht
+			// würde sie etwas anderes behaupten, als damals galt.
+			m.SenderWorkNote = ""
+		}
 	}
 	return nil
 }
