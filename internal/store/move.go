@@ -117,6 +117,14 @@ func (s *Store) MoveRequest(id int64, project, person, reason string) error {
 	if _, err := tx.Exec(`UPDATE search_documents SET project=?, branch='', machine='' WHERE kind='request' AND domain_id=?`, project, id); err != nil {
 		return err
 	}
+	if _, err := tx.Exec(`UPDATE human_tasks SET project=? WHERE request_id=?`, project, id); err != nil {
+		return err
+	}
+	// Edges to the moved request now cross a project border: they would be
+	// hidden by the pain page but shown by the request page.
+	if _, err := tx.Exec(`DELETE FROM entity_links WHERE dst_kind='request' AND dst_id=? AND project!=?`, id, project); err != nil {
+		return err
+	}
 	data := fmt.Sprintf("%s → %s", from.Label(), project)
 	if strings.TrimSpace(reason) != "" {
 		data += " — " + strings.TrimSpace(reason)

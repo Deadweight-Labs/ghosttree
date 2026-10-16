@@ -334,6 +334,10 @@ var writerMethodClasses = map[string]string{
 	"MayControlAgent":               "read",
 	"MayResumeAgentControl":         "read",
 	"AgentControlGap":               "read",
+	"PainByID":                      "read",
+	"TaskByID":                      "read",
+	"ListHumanTasks":                "read",
+	"WaitingTasksFor":               "read",
 }
 
 type writerSource struct {

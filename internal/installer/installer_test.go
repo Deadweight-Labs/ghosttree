@@ -54,6 +54,14 @@ func TestInstallCodexIdempotent(t *testing.T) {
 	}
 }
 
+func TestInstalledRulesNamePainsAndHumanTasks(t *testing.T) {
+	for _, want := range []string{"pain_record", "pain_update", "human_task_create", "human_task_resolve", "done yourself", "not a guarantee"} {
+		if !strings.Contains(ruleText, want) {
+			t.Errorf("ruleText missing %q", want)
+		}
+	}
+}
+
 func TestInstalledRulesKeepPlansAndSpecsOutOfGit(t *testing.T) {
 	for _, want := range []string{"ctx doc import", ".ghosttree/edit/", "never commit specs or plans"} {
 		if !strings.Contains(ruleText, want) {

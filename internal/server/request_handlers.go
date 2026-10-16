@@ -395,8 +395,11 @@ func writeRequestError(w http.ResponseWriter, err error) {
 	var rule *requestdomain.RuleError
 	if errors.As(err, &rule) {
 		status := http.StatusBadRequest
-		if rule.ErrorCode == "open_criteria" || rule.ErrorCode == "primary_exists" || rule.ErrorCode == "work_not_active" {
+		if rule.ErrorCode == "open_criteria" || rule.ErrorCode == "primary_exists" || rule.ErrorCode == "work_not_active" || rule.ErrorCode == "invalid_transition" {
 			status = http.StatusConflict
+		}
+		if rule.ErrorCode == "secret_detected" {
+			status = http.StatusUnprocessableEntity
 		}
 		recordResponseError(w, classifyRequestError(status, "", err.Error()), err.Error())
 		writeJSON(w, status, map[string]any{

@@ -89,6 +89,10 @@ func run(args []string, stdout io.Writer) int {
 		return cmdLogin(rest, stdout)
 	case "join":
 		return cmdJoin(rest, stdout)
+	case "pain":
+		return cmdPain(rest, stdout)
+	case "task":
+		return cmdTask(rest, stdout)
 	case "help", "--help", "-h":
 		fmt.Fprintln(stdout, usage)
 		return 0
@@ -124,6 +128,8 @@ const usage = `usage: ctx <command>
   review   approve or reject distilled knowledge
   regression  say which test guards a fixed defect, and list the fixes none does
   request  search and manage the work ledger (create, move, ...)
+  pain     record a problem without a solution, follow it to mitigated or resolved
+  task     ask the human for a key, file, decision or action, and check it afterwards
   knowledge  add, show, supersede, retire or move a knowledge entry
   ghost    read description history or archive confirmed-deleted paths
   doc      write, publish, and read long-form documents
