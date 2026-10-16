@@ -231,6 +231,8 @@ var messages = map[string]string{
 	"coord.scope_targets":              "Addressed to %s, until ended",
 	"coord.more":                       "More",
 	"coord.mention":                    "Address",
+	"coord.broadcast":                  "All active agents",
+	"coord.self_reported":              "Reported by the agent itself",
 	"coord.mentioned":                  "Mentioned: %s",
 	"coord.mentions_you":               "mentions you",
 	"coord.unreached":                  "%s reached no one",

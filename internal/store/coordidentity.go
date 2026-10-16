@@ -1,0 +1,199 @@
+package store
+
+import (
+	"database/sql"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+	"unicode"
+	"unicode/utf8"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/humantask"
+)
+
+// MaxWorkNoteRunes begrenzt "woran ich arbeite".
+const MaxWorkNoteRunes = 200
+
+// BroadcastActiveWindow ist das Fenster, in dem ein Agent für @agents als aktiv
+// gilt: Sichtung durch einen Hook der Session selbst.
+const BroadcastActiveWindow = 15 * time.Minute
+
+// ErrWorkNoteNotOwner: die Notiz gehört zu einer Session eines anderen Kontos.
+var ErrWorkNoteNotOwner = errors.New("coordination agent belongs to another principal")
+
+// CleanMachine macht aus einer selbstgemeldeten Maschine einen kurzen Namen aus
+// Buchstaben, Ziffern und . _ -, klein geschrieben. Alles andere fällt weg, so
+// kann der Name weder eine Kopfzeile brechen noch eine Mention-Kennung sprengen.
+func CleanMachine(name string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(strings.TrimSpace(name)) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '.', r == '_', r == '-':
+			b.WriteRune(r)
+		}
+		if b.Len() >= 64 {
+			break
+		}
+	}
+	return strings.Trim(b.String(), ".-_")
+}
+
+// AgentLabel ist der Anzeigename eines Agenten: Person · Maschine · Arbeitstitel,
+// wobei der Arbeitstitel der Branch ist oder, wo der Betrachter ihn sehen darf,
+// der Titel des Requests. Leere Teile fallen weg; sind alle leer, ist es "".
+func AgentLabel(person, machine, work string) string {
+	var parts []string
+	for _, p := range []string{person, machine, work} {
+		if p = SafeLabel(p); p != "" {
+			parts = append(parts, p)
+		}
+	}
+	return strings.Join(parts, " · ")
+}
+
+// SafeLabel macht aus einem selbstgemeldeten Namensteil (Branch, Maschine,
+// Name) einen Text, der in einer einzeiligen Kopfzeile stehen darf: Buchstaben,
+// Ziffern, Leerzeichen und . _ - / : # @ + bleiben, alles andere (Klammern,
+// Komma, Gleichheitszeichen, Steuerzeichen) wird zu einem Leerzeichen. So kann
+// ein Branch keine Rolle oder Autorität in die Zeile schreiben.
+func SafeLabel(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case unicode.IsLetter(r), unicode.IsDigit(r), strings.ContainsRune("._-/:#@+\u00b7", r):
+			b.WriteRune(r)
+		default:
+			b.WriteByte(' ')
+		}
+	}
+	out := strings.Join(strings.Fields(b.String()), " ")
+	if utf8.RuneCountInString(out) > 120 {
+		out = string([]rune(out)[:120])
+	}
+	return out
+}
+
+// NormalizeWorkNote prüft und glättet die Arbeitsnotiz: Zeilenumbrüche und
+// Steuerzeichen werden zu Leerzeichen, höchstens 200 Zeichen, und nichts, was
+// nach einem Geheimnis aussieht (derselbe Filter wie bei Aufgaben für
+// Menschen). Leer bedeutet löschen.
+func NormalizeWorkNote(note string) (string, error) {
+	var b strings.Builder
+	for _, r := range note {
+		if unicode.IsControl(r) || unicode.IsSpace(r) || r == ' ' || r == ' ' {
+			r = ' '
+		}
+		b.WriteRune(r)
+	}
+	out := strings.Join(strings.Fields(b.String()), " ")
+	if n := utf8.RuneCountInString(out); n > MaxWorkNoteRunes {
+		return "", fmt.Errorf("%w: work note has %d characters, at most %d", ErrInvalidInput, n, MaxWorkNoteRunes)
+	}
+	if out == "" {
+		return "", nil
+	}
+	if rule := humantask.CheckText("work note", out); rule != nil {
+		return "", fmt.Errorf("%w: %s", ErrInvalidInput, rule.Message)
+	}
+	return out, nil
+}
+
+// SetCoordWorkNote setzt oder löscht (leere Notiz) die Selbstauskunft einer
+// Session. Nur das Konto, dem die Session gehört, darf das.
+func (s *Store) SetCoordWorkNote(externalID, principalID, note string) (string, error) {
+	if s.writer != nil {
+		return queueValue(s, []any{externalID, principalID, note}, func(d *Store, p []any) (string, error) {
+			return d.SetCoordWorkNote(p[0].(string), p[1].(string), p[2].(string))
+		})
+	}
+	clean, err := NormalizeWorkNote(note)
+	if err != nil {
+		return "", err
+	}
+	var owner string
+	err = s.db.QueryRow(`SELECT COALESCE(principal_id,'') FROM coord_agents WHERE external_id=?`, externalID).Scan(&owner)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrCoordForbidden
+	}
+	if err != nil {
+		return "", err
+	}
+	if owner == "" || owner != principalID {
+		return "", ErrWorkNoteNotOwner
+	}
+	at := ""
+	if clean != "" {
+		at = now()
+	}
+	if _, err := s.db.Exec(`UPDATE coord_agents SET work_note=?, work_note_at=? WHERE external_id=?`, clean, at, externalID); err != nil {
+		return "", err
+	}
+	return clean, nil
+}
+
+// IsBroadcastToken sagt, ob ein normalisierter @-Name alle aktiven Agenten
+// meint. Das Wort gehört dem Store und wird nie einem Teilnehmer als Name
+// gegeben.
+func IsBroadcastToken(token string) bool { return token == "agents" || token == "agenten" }
+
+// broadcastIDsTx sind die Kandidaten, die Agenten sind und deren Session in den
+// letzten BroadcastActiveWindow einen Hook ausgelöst hat.
+func broadcastIDsTx(tx *sql.Tx, candidates []mentionCandidate) ([]string, error) {
+	cutoff := time.Now().UTC().Add(-BroadcastActiveWindow)
+	var out []string
+	for _, c := range candidates {
+		if strings.HasPrefix(c.id, "person:") {
+			continue
+		}
+		var hook string
+		err := tx.QueryRow(`SELECT last_hook_at FROM coord_agents WHERE external_id=?`, strings.TrimPrefix(c.id, "agent:")).Scan(&hook)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if at, perr := time.Parse(time.RFC3339, hook); perr == nil && !at.Before(cutoff) {
+			out = append(out, c.id)
+		}
+	}
+	return out, nil
+}
+
+// fillAgentSendersTx setzt bei Nachrichten von Agenten den lesbaren Namen und
+// die Arbeitsnotiz des Absenders, live gelesen. Wie der Kontoname eines
+// Menschen fehlt beides in der Gastsicht: wer die Mitglieder nicht sieht,
+// erfährt auch ihre Rechner nicht.
+func fillAgentSendersTx(tx *sql.Tx, a CoordAccess, kind, id string, msgs []CoordMessage) error {
+	type who struct{ label, note string }
+	cache := map[string]who{}
+	guest, guestKnown := false, false
+	for i := range msgs {
+		m := &msgs[i]
+		if m.AuthorKind == AuthorHuman || m.AuthorKind == AuthorSystem || m.SenderExternalID == "" {
+			continue
+		}
+		if !guestKnown {
+			guest, guestKnown = a.guestViewForMessageTx(tx, kind, id), true
+		}
+		if guest {
+			return nil
+		}
+		w, ok := cache[m.SenderExternalID]
+		if !ok {
+			var machine, branch, note, principal string
+			err := tx.QueryRow(`SELECT machine, COALESCE(branch,''), work_note, COALESCE(principal_id,'') FROM coord_agents WHERE external_id=?`,
+				m.SenderExternalID).Scan(&machine, &branch, &note, &principal)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+			if err == nil {
+				w = who{label: AgentLabel(NormalizeAccountName(personNameTx(tx, principal)), machine, branch), note: note}
+			}
+			cache[m.SenderExternalID] = w
+		}
+		m.SenderLabel, m.SenderWorkNote = w.label, w.note
+	}
+	return nil
+}

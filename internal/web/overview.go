@@ -73,6 +73,8 @@ type agentRow struct {
 	Name, Project, Activity, State, StateText, Age string
 	// The rest feeds the agents page; the overview ignores it.
 	ExternalID, RoomKey, Machine, Branch, Provider string
+	// WorkNote is the agent's own "working on" line, self-reported.
+	WorkNote string
 	// ProjectTitle is the full remote, for the title attribute.
 	ProjectTitle string
 }
@@ -293,7 +295,7 @@ func (a *app) listAgents(r *http.Request, pa *store.ProjectAccess, project strin
 		}
 		out = append(out, ranked{agentRow{Name: peerName(peer), Project: coordShortRoomName(store.RoomProject, remote), ProjectTitle: remote,
 			Activity: activity, State: state, StateText: stateLabel(state), Age: shortAge(now, signal),
-			ExternalID: peer.ExternalID, RoomKey: store.RoomKeyForProject(remote), Machine: hostUnlessNamed(peerName(peer), agentMachine(peer.ExternalID)), Branch: peer.Branch, Provider: peer.Provider}, signal})
+			ExternalID: peer.ExternalID, RoomKey: store.RoomKeyForProject(remote), Machine: hostUnlessNamed(peerName(peer), agentMachine(peer.ExternalID)), Branch: peer.Branch, Provider: peer.Provider, WorkNote: peer.WorkNote}, signal})
 	}
 	access := a.browserCoord(r)
 	remotes := slices.Sorted(slices.Values(pa.Projects()))
@@ -405,6 +407,10 @@ func hostUnlessNamed(name, host string) string {
 // owner, machine). A name the person chose stays; an ID or the bare tool name
 // is replaced. The raw ID goes to the title of the row.
 func peerName(peer store.CoordAgent) string {
+	// A peer that reported its machine has a unique name: Person · Machine · Branch.
+	if peer.Label != "" && peer.Machine != "" {
+		return peer.Label
+	}
 	return agentLabel(peer.DisplayName, peer.Provider, peer.ExternalID, peer.Owner)
 }
 

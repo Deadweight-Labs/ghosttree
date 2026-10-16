@@ -53,6 +53,9 @@ func (a CoordAccess) MessagePresentationWindow(kind, id string, window MessageWi
 	if err != nil {
 		return MessagePage{}, nil, err
 	}
+	if err := fillAgentSendersTx(tx, a, kind, id, page.Messages); err != nil {
+		return MessagePage{}, nil, err
+	}
 	presented, err := coordMessagePresentationsTx(tx, kind, id, page.Messages, a.guestViewForMessageTx(tx, kind, id))
 	if err != nil {
 		return MessagePage{}, nil, err

@@ -21,6 +21,16 @@ func (c *Client) RegisterCoordAgent(a store.CoordAgent) (int64, error) {
 	return out.ID, err
 }
 
+// SetCoordStatus setzt oder löscht (leerer Text) "woran ich arbeite" für eine
+// Session dieses Kontos und gibt den gespeicherten, geglätteten Text zurück.
+func (c *Client) SetCoordStatus(agentExternalID, note string) (string, error) {
+	var out struct {
+		Note string `json:"note"`
+	}
+	err := c.do("POST", "/api/coord/status", nil, map[string]string{"agent_external_id": agentExternalID, "note": note}, &out)
+	return out.Note, err
+}
+
 // CoordPeers listet die Teilnehmer eines Raums. since darf leer sein.
 func (c *Client) CoordPeers(roomKey, since, agentExternalID string) ([]store.CoordAgent, error) {
 	q := url.Values{}

@@ -140,6 +140,8 @@ type coordRoomDetailView struct {
 	Room         coordRoomView
 	Messages     []coordMessageView
 	Participants []coordParticipantView
+	// Broadcast: the composer offers the chip for all active agents.
+	Broadcast bool
 	// WaitCycles: je Kreis gegenseitigen Wartens eine Zeile, aus der Presence
 	// der Peers (Peers ist ACL-geprüft, ein Gast bekommt keine Liste).
 	WaitCycles          []string
@@ -196,7 +198,9 @@ type coordMessageView struct {
 	// Server berechnet; leer außerhalb von Projekträumen.
 	SenderRole string
 	// SenderRoleTitle says in a sentence what that role may do.
-	SenderRoleTitle  string
+	SenderRoleTitle string
+	// WorkNote is the agent sender's self-reported "working on" line.
+	WorkNote         string
 	DisplayTimestamp string
 	Body, Intent     string
 	Expired          bool
@@ -286,7 +290,9 @@ type coordStandingView struct {
 type coordParticipantView struct {
 	ID, Label, Provider, Worktree, LastSeen, Branch string
 	DisplayTimestamp                                string
-	Reachability, WorkState                         string
+	// WorkNote is what the agent says it works on; self-reported.
+	WorkNote                string
+	Reachability, WorkState string
 	// ReachabilityText und WorkStateText tragen Wert, Herkunft und Alter
 	// ("verbunden (beobachtet, vor 12 s)"); leer bei Menschen, für die es keine
 	// Presence gibt. Ein Agent ohne Beleg zeigt "unbekannt (keine Beobachtung)".
@@ -579,6 +585,9 @@ func buildCoordMessageViews(messages []store.CoordMessagePresentation, roomKey s
 		shown = readableAuthor(shown)
 		view.Name, view.Machine = coordSplitAgentName(shown, message.AuthorKind)
 		view.Initials = coordInitials(readableAuthor(author))
+		if message.AuthorKind == store.AuthorAgent {
+			view.WorkNote = strings.TrimSpace(message.SenderWorkNote)
+		}
 		for _, mention := range presentation.Mentions {
 			// The store names people the viewer may see in this room; the sender
 			// reads the name of whom he mentioned, not "Someone".
@@ -865,7 +874,7 @@ func buildCoordParticipants(room store.CoordRoom, peers []store.CoordAgent, memb
 			ID: peer.ExternalID, Label: label, Provider: peer.Provider,
 			Worktree: peer.Worktree, LastSeen: peer.LastSeenAt, DisplayTimestamp: coordDisplayTimestamp(peer.LastSeenAt), Branch: peer.Branch,
 			Current: peer.ExternalID == current.ID, Reachability: coordParticipantUnknown, WorkState: coordParticipantUnknown,
-			Role: peer.Role, CanReview: peer.CanReview,
+			Role: peer.Role, CanReview: peer.CanReview, WorkNote: peer.WorkNote,
 		}
 		view := byID[peer.ExternalID]
 		pr := store.Presence{}

@@ -142,9 +142,9 @@ func (a CoordAccess) mentionCandidatesTx(tx *sql.Tx, actor, roomKey string) ([]m
 			continue
 		}
 		external := strings.TrimPrefix(id, "agent:")
-		var display, provider, owner string
-		err := tx.QueryRow(`SELECT display_name, provider, COALESCE(principal_id,'') FROM coord_agents WHERE external_id=?`, external).
-			Scan(&display, &provider, &owner)
+		var display, provider, owner, machine, branch string
+		err := tx.QueryRow(`SELECT display_name, provider, COALESCE(principal_id,''), machine, COALESCE(branch,'') FROM coord_agents WHERE external_id=?`, external).
+			Scan(&display, &provider, &owner, &machine, &branch)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return nil, err
 		}
@@ -152,8 +152,23 @@ func (a CoordAccess) mentionCandidatesTx(tx *sql.Tx, actor, roomKey string) ([]m
 		if owner != "" {
 			ownerName = personNameTx(tx, owner)
 		}
+		if machine != "" && ownerName != "" {
+			// Person · Maschine · Branch: unterscheidet zwei Agenten, die beide
+			// "Claude · repo" heißen. Der Name der Person steht vorn, damit
+			// "@philipp-mac" Philipps Agenten auf dem Mac trifft, auch ohne Branch.
+			c.label = AgentLabel(NormalizeAccountName(ownerName), machine, branch)
+			c.handles = addHandle(c.handles, ownerName+"-"+machine)
+			if branch != "" {
+				c.handles = addHandle(c.handles, ownerName+"-"+machine+"-"+strings.ReplaceAll(branch, "/", "-"))
+			}
+			if tool := toolWord(provider); provider != "" && tool != "" {
+				c.handles = addHandle(c.handles, tool+"-"+ownerName+"-"+machine)
+			}
+		}
 		if display != "" && display != external {
-			c.label = display
+			if c.label == id {
+				c.label = display
+			}
 			c.handles = addHandle(c.handles, display)
 			if first, _, found := strings.Cut(strings.TrimSpace(display), " "); found {
 				c.handles = addHandle(c.handles, first)
@@ -296,6 +311,19 @@ func (a CoordAccess) textMentionsTx(tx *sql.Tx, actor, roomKey, body string, gue
 	for _, token := range tokens {
 		if guest {
 			typed = append(typed, "@"+token)
+		}
+		if IsBroadcastToken(token) {
+			// @agents: alle aktiven Agenten, die dieser Sender erreichen darf.
+			// Ein Gast sieht die Mitglieder nicht und erreicht deshalb nicht
+			// alle. Der Token gehört dem Store und wird nie als Name aufgelöst.
+			if !guest {
+				active, err := broadcastIDsTx(tx, candidates)
+				if err != nil {
+					return nil, nil, err
+				}
+				ids = append(ids, active...)
+			}
+			continue
 		}
 		hit, ambiguous := resolveMentionToken(candidates, token)
 		switch {
@@ -447,7 +475,23 @@ func (a CoordAccess) UnreachedMentions(roomKey, body string) ([]string, error) {
 		return nil, err
 	}
 	var out []string
+	var active []string
+	activeKnown := false
 	for _, token := range tokens {
+		if IsBroadcastToken(token) {
+			// Ohne aktiven Agenten erreicht @agents niemanden, und das soll der
+			// Absender erfahren.
+			if !activeKnown {
+				if active, err = broadcastIDsTx(tx, candidates); err != nil {
+					return nil, err
+				}
+				activeKnown = true
+			}
+			if len(active) == 0 {
+				out = append(out, token)
+			}
+			continue
+		}
 		if hit, ambiguous := resolveMentionToken(candidates, token); hit == nil && len(ambiguous) == 0 {
 			out = append(out, token)
 		}

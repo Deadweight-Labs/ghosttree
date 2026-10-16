@@ -221,6 +221,12 @@ func ensureCoordAgentPresence(db *sql.DB) error {
 	if err := ensureCoordAgentColumn(db, "last_hook_at", `TEXT NOT NULL DEFAULT ''`); err != nil {
 		return err
 	}
+	// Additiv: Maschine und Arbeitsnotiz der Agentenidentität.
+	for _, col := range []string{"machine", "work_note", "work_note_at"} {
+		if err := ensureCoordAgentColumn(db, col, `TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
 	_, err := db.Exec(`CREATE INDEX IF NOT EXISTS coord_messages_sender ON coord_messages(sender_external_id,id);
 		CREATE INDEX IF NOT EXISTS coord_attention_message ON coord_attention(message_id,state)`)
 	return err

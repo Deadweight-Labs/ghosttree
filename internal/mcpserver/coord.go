@@ -137,7 +137,7 @@ func coordText(text string) *mcp.CallToolResult {
 func (s *Server) joinAsSubagent(roomKey, ref string) error {
 	_, err := s.client.RegisterCoordAgent(store.CoordAgent{
 		ExternalID: ref, Provider: "self-declared-subagent", RoomKey: roomKey,
-		DisplayName: ref, ParentExternalID: s.coordRef(), Branch: s.ctxAxes.Branch, Role: s.agentRole,
+		DisplayName: ref, ParentExternalID: s.coordRef(), Branch: s.ctxAxes.Branch, Machine: s.ctxAxes.Machine, Role: s.agentRole,
 	})
 	return err
 }
@@ -168,7 +168,7 @@ func (s *Server) joinRoom(roomKey string) error {
 	}
 	_, err := s.client.RegisterCoordAgent(store.CoordAgent{
 		ExternalID: s.coordRef(), Provider: provider, RoomKey: roomKey,
-		DisplayName: s.coordRef(), Branch: s.ctxAxes.Branch, Role: s.agentRole, SessionID: s.registeredSession(),
+		DisplayName: s.coordRef(), Branch: s.ctxAxes.Branch, Machine: s.ctxAxes.Machine, Role: s.agentRole, SessionID: s.registeredSession(),
 	})
 	return err
 }
@@ -330,12 +330,21 @@ func (s *Server) handleCoordPeers(ctx context.Context, _ *mcp.CallToolRequest, i
 			continue
 		}
 		shown++
-		fmt.Fprintf(&b, "%s (%s)", p.DisplayName, p.Provider)
+		// Person · Maschine · Branch, wenn bekannt: "Claude · repo" allein
+		// trifft auf mehrere Agenten zu und sagt nicht, wer da arbeitet.
+		name := p.DisplayName
+		if p.Label != "" {
+			name = p.Label
+		}
+		fmt.Fprintf(&b, "%s (%s)", name, p.Provider)
 		if p.Role != "" {
 			fmt.Fprintf(&b, ", role %s%s%s", p.Role, reviewerMark(p.CanReview), requestedMark(p))
 		}
 		if p.Owner != "" {
 			fmt.Fprintf(&b, ", owner %s", p.Owner)
+		}
+		if p.Machine != "" {
+			fmt.Fprintf(&b, ", machine %s", p.Machine)
 		}
 		if p.Branch != "" {
 			fmt.Fprintf(&b, " on %s", p.Branch)
@@ -353,6 +362,9 @@ func (s *Server) handleCoordPeers(ctx context.Context, _ *mcp.CallToolRequest, i
 			pr = *p.Presence
 		}
 		fmt.Fprintf(&b, "  %s\n", pr.Describe())
+		if p.WorkNote != "" {
+			fmt.Fprintf(&b, "  working on (self-reported, unverified): %s\n", p.WorkNote)
+		}
 	}
 	if shown == 0 {
 		return coordText(b.String() + "nobody else is registered in " + key), nil, nil
@@ -362,6 +374,32 @@ func (s *Server) handleCoordPeers(ctx context.Context, _ *mcp.CallToolRequest, i
 	// jemand gerade zuhört (Spec §A9).
 	b.WriteString("\nLast seen is an observation, not a promise that anyone is listening right now. Reachability and work state are separate; unknown means nothing was observed, never idle or ended. Gaps: " + strings.Join(store.PresenceGaps, "; ") + ".")
 	return coordText(b.String()), nil, nil
+}
+
+type CoordStatusInput struct {
+	Note string `json:"note,omitempty" jsonschema:"one sentence, at most 200 characters, what you work on, for example: PR #77 feat/mac-sync, room sync. Empty clears it. Never put secrets, tokens or private data in it: every member of the project can read it"`
+}
+
+// handleCoordStatus setzt "woran ich arbeite" für diese Session. Der Text ist
+// eine Selbstauskunft: die anderen lesen ihn als solche gekennzeichnet.
+func (s *Server) handleCoordStatus(ctx context.Context, _ *mcp.CallToolRequest, in CoordStatusInput) (*mcp.CallToolResult, any, error) {
+	key, err := s.roomKeyFor("")
+	if err != nil {
+		if key, err = s.roomKeyFor("machine"); err != nil {
+			return nil, nil, err
+		}
+	}
+	if err := s.joinRoom(key); err != nil {
+		return nil, nil, err
+	}
+	note, err := s.client.SetCoordStatus(s.coordRef(), in.Note)
+	if err != nil {
+		return nil, nil, err
+	}
+	if note == "" {
+		return coordText("work note cleared"), nil, nil
+	}
+	return coordText("work note set (shown to others as self-reported): " + note), nil, nil
 }
 
 // peersNotVisible is what an agent hears when the server will not list the
@@ -732,7 +770,26 @@ func senderLabel(m store.CoordMessage) string {
 		}
 		return id + " (human)"
 	}
-	return id
+	out := id
+	if label := store.SafeLabel(m.SenderLabel); label != "" {
+		out = label + " (" + id + ")"
+	}
+	if note := strings.Join(strings.Fields(m.SenderWorkNote), " "); note != "" {
+		out += " [working on, self-reported: " + headerSafeText(note) + "]"
+	}
+	return out
+}
+
+// headerSafeText hält Freitext auf einer Zeile und ohne eckige Klammern, damit
+// eine Notiz keine eigene Kopfzeile "[id]" vortäuschen kann.
+func headerSafeText(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r == '[' || r == ']' || r < 0x20 || r == 0x7f:
+			return ' '
+		}
+		return r
+	}, s)
 }
 
 // headerSafe ersetzt in einer Absender-ID alles außer Buchstaben, Ziffern und

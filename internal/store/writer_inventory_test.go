@@ -302,6 +302,7 @@ var writerMethodClasses = map[string]string{
 	"SetActivation":                 "write",
 	"SetContextSnapshotAccess":      "write",
 	"SetCoordCursor":                "write",
+	"SetCoordWorkNote":              "write",
 	"SetCriterionState":             "write",
 	"SetRegressionCover":            "write",
 	"SetThreadArchived":             "write",
