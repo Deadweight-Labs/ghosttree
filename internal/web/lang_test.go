@@ -76,13 +76,13 @@ func testWebLang(t *testing.T, language string) (*httptest.Server, string) {
 
 func TestGermanServerShowsGermanPagesAndEnglishStaysDefault(t *testing.T) {
 	de, token := testWebLang(t, "de")
-	login := body(t, getURL(t, http.DefaultClient, de.URL+"/ui/login"))
+	loginPage := body(t, getURL(t, http.DefaultClient, de.URL+"/ui/login"))
 	for _, want := range []string{`<html lang="de"`, `<h1>Anmelden</h1>`, `Code oder Login-Link`} {
-		if !strings.Contains(login, want) {
+		if !strings.Contains(loginPage, want) {
 			t.Errorf("German login page lacks %q", want)
 		}
 	}
-	if strings.Contains(login, "Sign in") {
+	if strings.Contains(loginPage, "Sign in") {
 		t.Error("German login page still shows English text")
 	}
 	client := login(t, de, token)

@@ -199,6 +199,8 @@ type coordMessageView struct {
 	// SenderRole ist die Rolle des Absenders im Projekt des Raums, live vom
 	// Server berechnet; leer außerhalb von Projekträumen.
 	SenderRole string
+	// SenderRoleLabel is the role as the page shows it, in the server language.
+	SenderRoleLabel string
 	// SenderRoleTitle says in a sentence what that role may do.
 	SenderRoleTitle string
 	// WorkNote is the agent sender's self-reported "working on" line.
@@ -1103,6 +1105,7 @@ func applyMessageRoles(l lang, st *store.Store, roomKey, viewerID string, views 
 				continue
 			}
 			views[i].SenderRole = roles[i]
+			views[i].SenderRoleLabel = l.msg("role." + roles[i])
 			views[i].SenderRoleTitle = roleTitle(l, roles[i])
 		}
 	}

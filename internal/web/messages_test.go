@@ -114,7 +114,7 @@ func TestMsgFormatsArgumentsAndNeverReturnsEmpty(t *testing.T) {
 	}
 }
 
-var goKeyRE = regexp.MustCompile(`"((?:shell|nav|role|login|auth|overview|ov|setup|age|agent|machine|sessions|coord|knowledge|requests|adm|time|join|pair|profile|tasks|pains)\.[a-z0-9_.]+)"`)
+var goKeyRE = regexp.MustCompile(`"((?:shell|nav|role|login|auth|overview|ov|setup|age|agent|machine|sessions|coord|knowledge|requests|adm|time|join|pair|profile|tasks|pains|page)\.[a-z0-9_.]+)"`)
 
 // goMessageKeys sammelt die Schlüssel, die im Go-Code vorkommen (Navigation,
 // Rollen, Fehlertexte der Handler).
@@ -128,7 +128,7 @@ func goMessageKeys(t *testing.T) []string {
 	var keys []string
 	for _, e := range entries {
 		name := e.Name()
-		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") || name == "messages.go" {
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") || name == "messages.go" || name == "messages_de.go" {
 			continue
 		}
 		raw, err := os.ReadFile(name)

@@ -28,6 +28,13 @@ func timeTag(l lang, stamp string) template.HTML {
 // adminLabel übersetzt gespeicherte Werte (Einladungs-, Token- und Tokenart) in
 // den angezeigten Text; ein unbekannter Wert bleibt, wie er ist.
 func adminLabel(l lang, group, value string) string {
+	if group == "prole" {
+		switch value {
+		case "owner", "lead", "member", "guest":
+			return l.msg("role." + value)
+		}
+		return value
+	}
 	switch group + "." + value {
 	case "invite.pending":
 		return l.msg("adm.status.pending")
