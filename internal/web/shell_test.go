@@ -73,6 +73,13 @@ func fetchPage(t *testing.T, c *http.Client, url string) (int, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if loc := resp.Header.Get("Location"); resp.StatusCode == http.StatusFound && strings.HasPrefix(loc, "/ui/coord?room=") && strings.Contains(url, "/ui/coord") && !strings.Contains(url, "room=") {
+		// /ui/coord lands in the room with the latest event.
+		resp.Body.Close()
+		if resp, err = c.Get(url[:strings.Index(url, "/ui/")] + loc); err != nil {
+			t.Fatal(err)
+		}
+	}
 	status := resp.StatusCode
 	return status, body(t, resp)
 }
@@ -89,16 +96,16 @@ func navKeys(page string) map[string]bool {
 
 func TestShellNavigationFollowsTheRole(t *testing.T) {
 	base, owner, member, guest := shellWeb(t)
-	workspace := []string{"overview", "agents", "sessions", "rooms", "knowledge", "requests"}
+	workspace := []string{"overview", "agents", "rooms", "knowledge", "requests"}
 	for _, tc := range []struct {
 		name   string
 		client *http.Client
 		want   []string
 		absent []string
 	}{
-		{"owner", owner, append(workspace, "admin-org", "admin-devices"), []string{"account-devices"}},
-		{"member", member, append(workspace, "account-devices"), []string{"admin-org", "admin-devices"}},
-		{"guest", guest, []string{"overview", "sessions", "knowledge", "requests"}, []string{"agents", "rooms", "admin-org", "admin-devices", "account-devices"}},
+		{"owner", owner, workspace, []string{"sessions"}},
+		{"member", member, workspace, []string{"sessions"}},
+		{"guest", guest, []string{"overview", "sessions", "knowledge", "requests"}, []string{"agents", "rooms"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			status, page := fetchPage(t, tc.client, base+"/ui/overview")
@@ -179,9 +186,9 @@ func TestShellHeaderHasSearchAndAccountMenu(t *testing.T) {
 	for name, c := range map[string]*http.Client{"owner": owner, "guest": guest} {
 		_, page := fetchPage(t, c, base+"/ui/overview")
 		for _, want := range []string{
-			`role="search"`, `action="/ui/knowledge"`, `name="q"`,
+			`role="search"`, `action="/ui/search"`, `name="q"`,
 			`method="post" action="/ui/logout"`, `name="csrf_token"`,
-			`data-account="join"`, // Join with a code im Kontomenü
+			map[string]string{"owner": `data-account="team"`, "guest": `data-account="join"`}[name], // Team & Geräte, sonst Join with a code
 		} {
 			if !strings.Contains(page, want) {
 				t.Errorf("%s header lacks %q", name, want)
@@ -230,9 +237,9 @@ func TestEveryBrowserPageUsesTheShell(t *testing.T) {
 func TestShellMarksTheCurrentSection(t *testing.T) {
 	base, owner, _, _ := shellWeb(t)
 	for path, key := range map[string]string{
-		"/ui/overview": "overview", "/ui/sessions": "sessions", "/ui/coord": "rooms",
+		"/ui/overview": "overview", "/ui/sessions": "agents", "/ui/coord": "rooms",
 		"/ui/knowledge": "knowledge", "/ui/review": "knowledge", "/ui/context": "knowledge",
-		"/ui/requests": "requests", "/ui/orgs": "admin-org", "/ui/account/tokens": "admin-devices",
+		"/ui/requests": "requests",
 	} {
 		_, page := fetchPage(t, owner, base+path)
 		if !strings.Contains(page, `data-nav="`+key+`" aria-current="page"`) {
@@ -248,15 +255,15 @@ func TestKnowledgeReviewAndContextAreForReviewersLeadsAndOwnersOnly(t *testing.T
 	e := shellWebAll(t)
 	for name, c := range map[string]*http.Client{"owner": e.Owner, "lead": e.Lead, "reviewer": e.Reviewer} {
 		_, page := fetchPage(t, c, e.Base+"/ui/review")
-		if !navKeys(page)["knowledge-review"] || !navKeys(page)["knowledge-context"] {
-			t.Errorf("%s lacks review and agent context entries", name)
+		if !strings.Contains(page, `data-tab="review"`) || !strings.Contains(page, `data-tab="context"`) {
+			t.Errorf("%s lacks the review and agent context tabs", name)
 		}
 	}
 	for name, c := range map[string]*http.Client{"member": e.Member, "guest": e.Guest} {
 		_, page := fetchPage(t, c, e.Base+"/ui/knowledge")
-		for _, k := range []string{"knowledge-review", "knowledge-context", "knowledge-search"} {
-			if navKeys(page)[k] {
-				t.Errorf("%s sees %s", name, k)
+		for _, k := range []string{"review", "context", "search"} {
+			if strings.Contains(page, `data-tab="`+k+`"`) {
+				t.Errorf("%s sees the %s tab", name, k)
 			}
 		}
 	}
@@ -301,8 +308,8 @@ func TestEveryShellPageHasLogoutWithCSRFAndMarksDetailPages(t *testing.T) {
 	navSession, _ := e.St.SessionByID(sid)
 	for path, key := range map[string]string{
 		"/ui/overview": "overview", "/ui/requests": "requests", "/ui/requests/" + strconv.FormatInt(detail.Request.ID, 10): "requests",
-		"/ui/sessions": "sessions", "/ui/sessions/" + navSession.PublicID: "sessions",
-		"/ui/knowledge": "knowledge", "/ui/coord": "rooms", "/ui/orgs": "admin-org", "/ui/account/tokens": "admin-devices",
+		"/ui/sessions": "agents", "/ui/sessions/" + navSession.PublicID: "agents",
+		"/ui/knowledge": "knowledge", "/ui/coord": "rooms",
 	} {
 		_, page := fetchPage(t, e.Owner, e.Base+path)
 		if !strings.Contains(page, `data-nav="`+key+`" aria-current="page"`) {

@@ -312,12 +312,8 @@ select option:disabled { color: var(--clay-ink-faint); }
 .ag-links { display: inline-flex; gap: 16px; white-space: nowrap; }
 .ag-link { color: var(--clay-accent-text) !important; font-size: 13px; font-weight: 600; text-decoration: none; }
 .ag-link:hover { text-decoration: underline; }
-.ag-card .ov-state { padding-top: 4px; }
-.ag-card .ov-activity { max-width: 12rem; }
 @media (max-width: 900px) {
   .ag-card { gap: 12px; padding: 12px 8px; }
-  .ag-card .ov-state { flex-direction: column-reverse; align-items: flex-end; gap: 4px; }
-  .ag-card .ov-activity { max-width: 6rem; }
 }
 
 /* Logo mark. The picture element swaps to the dark file by system setting. */

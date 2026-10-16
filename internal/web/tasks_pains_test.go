@@ -49,7 +49,7 @@ func TestWaitingBlockShowsOpenTasksForTheViewerAndNothingElse(t *testing.T) {
 	tpTask(t, e, shellHiddenProject, hidden.Request.ID, humantask.CreateInput{Title: "SECRET-TASK"})
 
 	_, page := fetchPage(t, e.Member, e.Base+"/ui/overview")
-	if !strings.Contains(page, "Waiting on you") || !strings.Contains(page, "Create the vendor key") || !strings.Contains(page, "Agent Vault: vendor/prod") {
+	if !strings.Contains(page, "For you") || !strings.Contains(page, "Create the vendor key") || !strings.Contains(page, `href="/ui/tasks#task-`) {
 		t.Errorf("member does not see the open task: %s", page)
 	}
 	if strings.Contains(page, "SECRET-TASK") {
@@ -74,7 +74,7 @@ func TestWaitingBlockIsThereWithoutTasks(t *testing.T) {
 	rqMake(t, e.St, rqSpec{Title: "Just a request"})
 	for name, c := range map[string]*http.Client{"member": e.Member, "guest": e.Guest} {
 		_, page := fetchPage(t, c, e.Base+"/ui/overview")
-		if !strings.Contains(page, "ov-waiting") || !strings.Contains(page, "Nothing waiting on you") || !strings.Contains(page, `href="/ui/tasks`) {
+		if !strings.Contains(page, "for-you") || !strings.Contains(page, "Nothing waiting on you") {
 			t.Errorf("%s: the block must show, empty, with the link: %s", name, page)
 		}
 		if strings.Contains(page, `type="checkbox"`) {
@@ -90,8 +90,12 @@ func TestMarkSeveralTasksDoneFromTheOverviewForm(t *testing.T) {
 	b := tpTask(t, e, shellProject, req.Request.ID, humantask.CreateInput{Kind: "input", Title: "Second thing"})
 	c := tpTask(t, e, shellProject, req.Request.ID, humantask.CreateInput{Title: "Third thing"})
 	_, page := fetchPage(t, e.Member, e.Base+"/ui/overview")
-	if n := strings.Count(page, `type="checkbox"`); n != 3 {
-		t.Fatalf("expected three checkboxes, got %d", n)
+	// One line per task that opens the task; ticking is done at the task.
+	if n := strings.Count(page, `href="/ui/tasks#task-`); n != 3 {
+		t.Fatalf("expected three task rows, got %d", n)
+	}
+	if strings.Contains(page, `class="g-card clay"`) || strings.Contains(page, `action="/ui/tasks/done"`) {
+		t.Fatal("the overview shows task cards or forms instead of lines")
 	}
 	if strings.Contains(page, `name="value"`) {
 		t.Error("a task form must not carry a value field")

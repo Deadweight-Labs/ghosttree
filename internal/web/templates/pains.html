@@ -1,9 +1,10 @@
-{{define "pains"}}{{template "head" .}}{{template "nav" .}}<main class="kn rq pn"><link rel="stylesheet" href="/static/knowledge.css"><link rel="stylesheet" href="/static/requests.css"><link rel="stylesheet" href="/static/tasks.css">
-{{with .PainsV}}<div class="ov-head"><h1>{{t "nav.requests"}}</h1></div>{{template "rqtabs" $}}
-{{if .Rows}}<ul class="ov-list ov-deck kn-deck clay">{{range .Rows}}<li class="kn-item rq-item"><div class="kn-main"><a class="kn-title" href="{{.Href}}">{{.Title}}</a>
-<div class="kn-foot"><span class="rq-id">{{.Human}}</span><span class="kn-level"><span class="rq-dot is-{{.State}}" aria-hidden="true"></span>{{.StateLabel}}</span>{{if .Project}}<span class="ov-meta">{{.Project}}</span>{{end}}</div>
-{{if .Remaining}}<p class="pn-remaining"><span class="ov-meta">{{t "pains.remaining"}}</span> {{.Remaining}}</p>{{end}}</div></li>{{end}}</ul>
-{{else}}<p class="ov-empty">{{t "pains.empty"}}</p>{{end}}
+{{define "painrow"}}<li class="g-pain"><span class="g-dot is-{{.State}}" aria-hidden="true"></span><div><h3 class="g-title"><a href="{{.Href}}" title="{{.Human}}">{{.Title}}</a></h3>{{if .Remaining}}<p class="g-rest"><b>{{t "pains.remaining"}}</b> {{.Remaining}}</p>{{end}}</div><div class="g-side">{{if .Project}}<span class="g-src">{{.Project}}</span>{{end}}{{if or (eq .State "resolved") (eq .State "obsolete")}}<span class="g-src">{{.StateLabel}}</span>{{end}}<span class="g-age">{{.Age}}</span></div></li>{{end}}
+
+{{define "pains"}}{{template "head" .}}{{template "nav" .}}<main class="g-page pn"><link rel="stylesheet" href="/static/knowledge.css"><link rel="stylesheet" href="/static/requests.css"><link rel="stylesheet" href="/static/tasks.css">
+{{with .PainsV}}<header class="g-page-head"><h1>{{t "nav.requests"}}</h1></header>{{template "rqtabs" $}}
+{{range .Groups}}{{if .Folded}}<details class="g-more"><summary>{{t "pains.closed" (len .Rows)}}</summary><ul class="g-deck clay">{{range .Rows}}{{template "painrow" .}}{{end}}</ul></details>
+{{else}}<section class="g-group"><h2 class="g-group-head"><span>{{.Label}}</span></h2><ul class="g-deck clay">{{range .Rows}}{{template "painrow" .}}{{end}}</ul></section>{{end}}{{end}}
+{{if .Empty}}<p class="g-empty">{{t "pains.empty"}}</p>{{end}}
 {{end}}{{template "foot" .}}{{end}}
 
 {{define "pain"}}{{template "head" .}}{{template "nav" .}}<main class="kn kn-detail rq rq-detail pn"><link rel="stylesheet" href="/static/knowledge.css"><link rel="stylesheet" href="/static/requests.css"><link rel="stylesheet" href="/static/tasks.css">

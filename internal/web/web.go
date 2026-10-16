@@ -54,6 +54,7 @@ type pageData struct {
 	RequestV                                                   *requestView
 	TasksV                                                     *tasksView
 	PainsV                                                     *painsView
+	SearchV                                                    *searchView
 	PainV                                                      *painView
 	KnowledgeV                                                 *knowledgeView
 	KnowledgeItemV                                             *knowledgeItemView
@@ -152,11 +153,13 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.handle(mux, "POST /ui/requests/{id}/move", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.requestMove))))))
 	a.handle(mux, "POST /ui/requests/{id}/correct", a.requirePerson(a.requireInteractive(limitBodyN(requestCorrectForm, a.requestFormTooLarge(a.requireCSRF(http.HandlerFunc(a.requestCorrect)))))))
 	a.registerPainTaskPages(mux)
+	a.handle(mux, "GET /ui/search", a.requirePerson(http.HandlerFunc(a.searchPage)))
 	a.handle(mux, "GET /ui/knowledge", a.requirePerson(http.HandlerFunc(a.knowledgePage)))
 	a.handle(mux, "GET /ui/knowledge/{id}", a.requirePerson(http.HandlerFunc(a.knowledgeItemPage)))
 	a.handle(mux, "POST /ui/knowledge/{id}/move", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.knowledgeMove))))))
 	a.handle(mux, "POST /ui/knowledge/{id}/edit", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.knowledgeEdit))))))
 	a.handle(mux, "GET /ui/review", a.requirePerson(http.HandlerFunc(a.reviewPage)))
+	a.handle(mux, "POST /ui/review/bulk", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.reviewBulk))))))
 	a.handle(mux, "POST /ui/review/{id}/{verdict}", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.reviewDecide))))))
 	a.handle(mux, "GET /ui/sessions", a.requirePerson(http.HandlerFunc(a.sessionsPage)))
 	a.handle(mux, "GET /ui/sessions/{id}", a.requirePerson(http.HandlerFunc(a.sessionPage)))
@@ -230,7 +233,7 @@ func (a *app) renderBrowser(w http.ResponseWriter, r *http.Request, name string,
 		data.NavSection = "agents"
 	case "requests", "request", "requesttoolarge":
 		data.NavSection = "requests"
-	case "knowledge", "knowledgeitem":
+	case "knowledge", "knowledgeitem", "search":
 		data.NavSection = "knowledge"
 	case "review":
 		data.NavSection = "review"
@@ -442,6 +445,8 @@ var webRoutes = map[string]webClass{
 	"POST /ui/knowledge/{id}/edit":          webAdmin,
 	"POST /ui/knowledge/{id}/move":          webAdmin,
 	"GET /ui/review":                        webProject,
+	"GET /ui/search":                        webProject,
+	"POST /ui/review/bulk":                  webAdmin,
 	"POST /ui/review/{id}/{verdict}":        webAdmin,
 	"GET /ui/sessions":                      webProject,
 	"GET /ui/sessions/{id}":                 webProject,

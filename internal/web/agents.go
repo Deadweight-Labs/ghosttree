@@ -96,6 +96,10 @@ func (a *app) agentCards(r *http.Request, pa *store.ProjectAccess, rows []agentR
 	cards := make([]agentCard, len(rows))
 	for i, row := range rows {
 		c := agentCard{agentRow: row, RoomHref: "/ui/coord?room=" + url.QueryEscape(row.RoomKey)}
+		if c.Branch != "" && strings.Contains(c.Name, c.Branch) {
+			// The name already ends in the branch; do not say it twice.
+			c.Branch = ""
+		}
 		if wk, ok := work[row.ExternalID]; ok {
 			if wk.RequestID != 0 {
 				c.ReqID = "REQ-" + strconv.FormatInt(wk.RequestID, 10)
@@ -136,7 +140,7 @@ func (a *app) lastPosts(r *http.Request, rows []agentRow, now time.Time) map[str
 			if m.AuthorKind != store.AuthorAgent || m.SenderExternalID == "" || strings.TrimSpace(m.Body) == "" {
 				continue
 			}
-			out[m.SenderExternalID] = agentPost{oneLine(m.Body, agentPostLength), shortAge(l, now, parseTime(m.CreatedAt))}
+			out[m.SenderExternalID] = agentPost{shortWords(m.Body, agentPostLength), shortAge(l, now, parseTime(m.CreatedAt))}
 		}
 	}
 	return out

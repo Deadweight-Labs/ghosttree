@@ -151,6 +151,7 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	summaries = coordOrderByActivity(summaries)
 	recipients, err := a.browserCoord(r).Recipients()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -195,6 +196,15 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 		OutgoingAttention: outgoingAttention,
 	}
 	if room == "" {
+		// The landing is the room with the latest event, never a picker.
+		if landing := coordLandingRoom(summaries, sidebar); landing != "" {
+			target := coordRoomURL(landing, "", 0)
+			if r.URL.Query().Has("project") {
+				target += "&project=" + url.QueryEscape(strings.TrimSpace(r.URL.Query().Get("project")))
+			}
+			http.Redirect(w, r, target, http.StatusFound)
+			return
+		}
 		a.renderBrowser(w, r, "coord", pageData{Title: l.msg("coord.title"), Coord: view})
 		return
 	}
@@ -284,6 +294,8 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 		detail.Participants = addRoomPeople(l, detail.Participants, people, current)
 	}
 	applyParticipantHandles(access, activeRoom.Key, detail.Participants)
+	applyParticipantAsks(detail.Participants, attention, activeRoom.Key)
+	detail.Participants = orderParticipantsHere(detail.Participants)
 	detail.Broadcast = coordCanBroadcast(activeRoom.Kind, detail.Participants)
 	applyParticipantRoles(l, a.store, activeRoom.Key, detail.Participants)
 	a.applyParticipantControls(r, activeRoom.Key, detail.Participants)
@@ -310,6 +322,22 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
+	}
+	if detail.ReplyTo > 0 {
+		for _, presentation := range presentations {
+			if presentation.Message.ID != detail.ReplyTo {
+				continue
+			}
+			sender := presentation.Message.SenderExternalID
+			if presentation.Message.AuthorKind == store.AuthorHuman {
+				sender = presentation.Message.AuthorPrincipalID
+			}
+			for _, participant := range detail.Participants {
+				if participant.ID == sender && !participant.Current && !participant.ListOnly {
+					detail.ToDefault = sender
+				}
+			}
+		}
 	}
 	threadByAnchor := make(map[int64]coordThreadView, len(detail.Threads))
 	for _, thread := range detail.Threads {
@@ -517,12 +545,14 @@ func (a *app) coordPostThread(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	intent := strings.TrimSpace(r.FormValue("intent"))
-	mentions := splitCoordPrincipals(r.Form["mentions"]...)
+	mentions, body := coordBroadcastChip(splitCoordPrincipals(r.Form["mentions"]...), body)
 	if !validCoordComposerIntent(intent) {
 		http.Error(w, "a valid intent is required", http.StatusBadRequest)
 		return
 	}
-	if _, err := a.browserCoord(r).ThreadPost(threadID, store.CoordMessage{ClientID: newFormClientID(r), Body: body, Intent: intent, Mentions: mentions, ReplyTo: replyTo}); err != nil {
+	_, err = a.browserCoord(r).ThreadPost(threadID, store.CoordMessage{ClientID: newFormClientID(r), Body: body, Intent: intent, Mentions: mentions, ReplyTo: replyTo})
+	unsent := errors.Is(err, store.ErrAttentionRecipientRequired) && store.BodyHasBroadcast(body)
+	if err != nil && !unsent {
 		coordHTTPError(l, w, err)
 		return
 	}
@@ -531,7 +561,13 @@ func (a *app) coordPostThread(w http.ResponseWriter, r *http.Request) {
 		coordHTTPError(l, w, err)
 		return
 	}
-	http.Redirect(w, r, coordThreadURL(home.RoomKey, threadID), http.StatusSeeOther)
+	target := coordThreadURL(home.RoomKey, threadID)
+	if unsent {
+		// A question to "all agents" while none is active stores nothing; the
+		// thread says so instead of showing an error page.
+		target = strings.TrimSuffix(target, "#coord-thread") + "&unreached=agents&unsent=1#coord-thread"
+	}
+	http.Redirect(w, r, target, http.StatusSeeOther)
 }
 
 func (a *app) coordSetThreadState(w http.ResponseWriter, r *http.Request) {

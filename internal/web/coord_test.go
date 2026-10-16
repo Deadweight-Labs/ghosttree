@@ -80,6 +80,13 @@ func renderedCSRFToken(t *testing.T, client *http.Client, pageURL string) string
 	if err != nil {
 		t.Fatal(err)
 	}
+	if loc := page.Header.Get("Location"); page.StatusCode == http.StatusFound && loc != "" {
+		// /ui/coord lands in the room with the latest event.
+		page.Body.Close()
+		if page, err = client.Get(pageURL[:strings.Index(pageURL, "/ui/")] + loc); err != nil {
+			t.Fatal(err)
+		}
+	}
 	markup, err := io.ReadAll(page.Body)
 	page.Body.Close()
 	if err != nil {
@@ -746,7 +753,7 @@ func TestCoordWorkspaceRendersAllRoomSectionsAndNewestWindow(t *testing.T) {
 	}
 
 	html := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(project))
-	for _, want := range []string{`class="rtabs`, `title="github.com/x/workspace"`, `title="mainex"`, `id="message-75"`, "Participants", "Threads"} {
+	for _, want := range []string{`class="rtabs`, `title="github.com/x/workspace"`, `title="mainex"`, `id="message-75"`, "Who is here", "Threads"} {
 		if !strings.Contains(html, want) {
 			t.Errorf("workspace missing %q", want)
 		}
@@ -765,11 +772,6 @@ func TestCoordWorkspaceRendersAllRoomSectionsAndNewestWindow(t *testing.T) {
 	for _, want := range []string{`aria-label="Rooms"`, `aria-label="Conversation"`, `aria-label="Room details"`, `aria-live="polite"`} {
 		if !strings.Contains(html, want) {
 			t.Errorf("accessible workspace contract missing %q", want)
-		}
-	}
-	for _, want := range []string{`href="#coord-context"`, `aria-controls="coord-context"`, `aria-expanded="false"`} {
-		if !strings.Contains(html, want) {
-			t.Errorf("drawer contract missing %q", want)
 		}
 	}
 }
@@ -805,33 +807,6 @@ func TestCoordAttentionRegionRendersEachSignalledRoomOnceWithExplicitCounts(t *t
 		if !strings.Contains(region, label) {
 			t.Errorf("attention row missing explicit signal %q", label)
 		}
-	}
-}
-
-func TestCoordAttentionDetailsHookExistsWhenEmptyAndPopulated(t *testing.T) {
-	srv, st, client := signedIn(t)
-	room := store.RoomKeyForProject("github.com/x/attention-details")
-	materializeWebRoom(t, st, room)
-	empty := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room))
-	if !strings.Contains(empty, `data-coord-attention-details`) {
-		t.Fatal("empty default inspector must retain the attention replacement hook")
-	}
-	if _, err := st.AppendCoordMessage(store.CoordMessage{
-		DestinationKind: store.DestinationRoom, DestinationID: room,
-		SenderExternalID: "reviewer", AuthorPrincipalID: "person:2", AuthorKind: store.AuthorHuman,
-		ClientID: "attention-detail", Body: "Antwort nötig", Intent: store.IntentQuestion,
-		Mentions: []string{"person:1"},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	populated := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room))
-	start := strings.Index(populated, `data-coord-attention-details`)
-	if start < 0 {
-		t.Fatal("populated default inspector lost the attention replacement hook")
-	}
-	end := strings.Index(populated[start:], `</div>`)
-	if end < 0 || !strings.Contains(populated[start:start+end], "Antwort nötig") {
-		t.Fatal("populated attention replacement hook must contain actionable detail")
 	}
 }
 
@@ -938,7 +913,7 @@ func TestCoordWorkspaceRendersAuthorizedIdentityLabelsAndHonestPresence(t *testi
 	html := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room))
 	for _, want := range []string{
 		"robin", "Build Agent", "Alex", "Handoff to Build Agent", "to Build Agent",
-		"<span>codex</span>", `title="Worktree: /worktrees/ui"`, ">feat/ui<",
+		"<span>codex</span>", `title="Worktree: /worktrees/ui"`, "feat/ui",
 		"Reachability: unknown (not observed)", "Work state: unknown (not observed)",
 	} {
 		if !strings.Contains(html, want) {
@@ -1063,7 +1038,7 @@ func TestCoordWorkspaceSeparatesAttentionMentionsAndUnreadAndActsWithCSRF(t *tes
 		t.Fatalf("attention=%+v err=%v", items, err)
 	}
 	page := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room))
-	for _, want := range []string{"Needs you", "Release freigeben?", "Coordination only", `action="/ui/coord/attention/action"`} {
+	for _, want := range []string{"Release freigeben?", "Coordination only", `action="/ui/coord/attention/action"`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("attention workspace missing %q", want)
 		}
@@ -1518,6 +1493,13 @@ func coordPageBody(t *testing.T, client *http.Client, target string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if loc := res.Header.Get("Location"); res.StatusCode == http.StatusFound && loc != "" && strings.HasSuffix(target, "/ui/coord") {
+		// /ui/coord lands in the room with the latest event.
+		res.Body.Close()
+		if res, err = client.Get(target[:strings.Index(target, "/ui/")] + loc); err != nil {
+			t.Fatal(err)
+		}
+	}
 	defer res.Body.Close()
 	body, err := io.ReadAll(res.Body)
 	if err != nil {
@@ -1653,50 +1635,6 @@ func coordPrivateAttentionFixture(t *testing.T) (srv *httptest.Server, st *store
 	return srv, st, client, project, direct
 }
 
-func TestCoordNeedsYouLeadsContextAndNamesSenderRoomAndPrivacy(t *testing.T) {
-	srv, _, client, project, _ := coordPrivateAttentionFixture(t)
-	page := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(project))
-	needs := strings.Index(page, "Needs you")
-	participants := strings.Index(page, ">Participants</h3>")
-	threads := strings.Index(page, "<h3>Threads</h3>")
-	if needs < 0 || participants < 0 || threads < 0 || needs > participants || needs > threads {
-		t.Fatalf("Needs you must open the context: needs=%d threads=%d participants=%d", needs, threads, participants)
-	}
-	start := strings.Index(page, `class="coord-attention-card`)
-	if start < 0 {
-		t.Fatal("no attention card rendered")
-	}
-	card := page[start : start+strings.Index(page[start:], "</article>")]
-	for _, want := range []string{"from bob", "bob", `class="coord-private-mark"`, "Private"} {
-		if !strings.Contains(card, want) {
-			t.Errorf("private attention card missing %q: %s", want, card)
-		}
-	}
-	if !strings.Contains(card, "coord-attention-origin") {
-		t.Errorf("card must carry an origin line: %s", card)
-	}
-}
-
-func TestCoordAttentionCardOfProjectRoomHasNoPrivateMark(t *testing.T) {
-	srv, st, client := signedIn(t)
-	room := store.RoomKeyForProject("github.com/x/public-card")
-	materializeWebRoom(t, st, room)
-	if _, err := st.AppendCoordMessage(store.CoordMessage{
-		DestinationKind: store.DestinationRoom, DestinationID: room,
-		SenderExternalID: "reviewer", AuthorPrincipalID: "person:2", AuthorKind: store.AuthorHuman,
-		ClientID: "q", Body: "Offene Frage", Intent: store.IntentQuestion, Mentions: []string{"person:1"},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	page := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room))
-	if strings.Contains(page, `class="coord-private-mark"`) {
-		t.Error("project room card must not be marked private")
-	}
-	if !strings.Contains(page, "public-card") || !strings.Contains(page, "coord-attention-origin") {
-		t.Error("card must name its origin room")
-	}
-}
-
 // Privacy: the attention list is ACL-filtered (store.CoordAccess.Attention
 // runs canReadTx per item). A signed-in non-member must not see the DM card,
 // its text, or the DM room anywhere, and must not enter it by URL.
@@ -1750,7 +1688,7 @@ func TestCoordDirectRoomShowsPrivateSignalInHeadAndComposer(t *testing.T) {
 	if !strings.Contains(head, "Private, only you and bob") {
 		t.Errorf("conversation head lacks the private signal: %s", head)
 	}
-	composer := page[strings.Index(page, `class="coord-composer"`):]
+	composer := page[strings.Index(page, `class="coord-composer rm-compose"`):]
 	composer = composer[:strings.Index(composer, "</form>")]
 	if !strings.Contains(composer, `class="coord-private-hint"`) || !strings.Contains(composer, "bob") {
 		t.Errorf("composer lacks the private hint: %s", composer)
@@ -1799,7 +1737,7 @@ func TestCoordParticipantsShowUnknownExplicitlyAndNeverIdle(t *testing.T) {
 	}
 	listOf := func() string {
 		page := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room))
-		list := page[strings.Index(page, `class="coord-participants"`):]
+		list := page[strings.Index(page, `class="coord-participants rm-here clay"`):]
 		return list[:strings.Index(list, "</ul>")]
 	}
 	list := listOf()
@@ -1846,8 +1784,8 @@ func TestCoordRoomsToggleCarriesTotalSignalWithAccessibleName(t *testing.T) {
 		t.Fatal(err)
 	}
 	page := coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room))
-	toggle := page[strings.Index(page, `data-coord-drawer-target="coord-context"`):]
-	toggle = toggle[:strings.Index(toggle, "</button>")]
+	toggle := page[strings.Index(page, `data-coord-rooms-count`):]
+	toggle = toggle[:strings.Index(toggle, "</span></span>")]
 	for _, want := range []string{`class="coord-count" aria-hidden="true">1</span>`, "1 need you", "data-coord-rooms-count"} {
 		if !strings.Contains(toggle, want) {
 			t.Errorf("a question with a mention is one message that needs the viewer; toggle missing %q: %s", want, toggle)

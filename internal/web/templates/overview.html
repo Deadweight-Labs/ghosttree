@@ -19,25 +19,35 @@
 
 {{define "ovreq"}}<li class="ov-request"><a class="ov-reqtitle" href="{{.Href}}">{{.Title}}</a><div class="ov-prog"><span class="ov-id">{{.ID}}</span>{{if .Total}}<span class="ov-num">{{.Progress}}</span>{{end}}</div>{{if .Total}}<span class="ov-bar clay" aria-hidden="true"><i data-pct="{{.Percent}}"></i></span>{{end}}</li>{{end}}
 
-{{define "ovwaiting"}}<section class="ov-section ov-waiting"><div class="ov-head"><h2>{{t "ov.waiting"}}</h2><a class="ov-btn clay" href="/ui/tasks{{if .Project}}?project={{.Project}}{{end}}">{{t "tasks.all"}}</a></div>{{if .Rows}}{{template "taskform" .}}{{else}}<p class="ov-empty">{{t "ov.waiting_none"}}</p>{{end}}</section>{{end}}
+{{define "gexplainopen"}}{{with .}}{{if .Pending}}{{template "explain" .}}{{else}}<details class="g-fold g-fold-ex" open><summary><span class="g-fold-t">{{.Title}}</span><span class="g-fold-p">{{lead .Text}}</span></summary><div class="g-fold-b">{{template "explain" .}}</div></details>{{end}}{{end}}{{end}}
 
-{{define "overview"}}{{template "head" .}}{{template "nav" .}}<main class="ov"><link rel="stylesheet" href="/static/tasks.css">
+{{define "gsep"}}<span class="g-sep" aria-hidden="true">·</span>{{end}}
+
+{{define "gaction"}}<a class="g-btn{{if .Primary}} g-btn--primary{{end}} clay" href="{{.Href}}">{{.Action}}</a>{{end}}
+
+{{define "foryou"}}{{with .}}<section class="g-section" id="for-you"><div class="g-section-head"><h2>{{t "home.foryou"}}{{if .Total}} <span class="g-count">{{.Total}}</span>{{end}}</h2>{{if .Tabs}}<div class="g-seg" role="group" aria-label="{{t "home.foryou.who"}}">{{range .Tabs}}<a href="{{.Href}}"{{if .Current}} aria-current="true"{{end}}>{{.Label}}</a>{{end}}</div>{{end}}</div>
+{{if .Rows}}<ul class="g-deck clay">{{range .Rows}}<li class="g-row{{if .Open}} is-open{{end}}"><span class="g-mark{{if eq .Tone "ask"}} is-ask{{else if .AgeOld}} is-warn{{end}}" aria-hidden="true">{{template "icon" .Mark}}</span><div><h3 class="g-title">{{.Title}}</h3>{{if or .Lead .Rest .Age}}<p class="g-src">{{if .Lead}}<b>{{.Lead}}</b>{{if or .Rest .Age}}{{template "gsep"}}{{end}}{{end}}{{.Rest}}{{if and .Rest .Age}}{{template "gsep"}}{{end}}{{if .Age}}<span{{if .AgeOld}} class="g-age is-old"{{end}}>{{.Age}}</span>{{end}}</p>{{end}}
+{{if .Open}}<div class="g-row-detail">{{template "gexplainopen" .Explain}}</div>{{end}}</div>
+{{template "gaction" .}}</li>{{end}}</ul>
+{{if .More}}<p class="g-src g-after"><a class="g-group-link" href="{{.MoreHref}}">{{t "home.more" .More}}</a></p>{{end}}
+{{else}}<p class="g-empty">{{t "ov.waiting_none"}}</p>{{end}}</section>{{end}}{{end}}
+
+{{define "running"}}{{with .Run}}{{if .Groups}}{{range .Groups}}<div class="g-group-head"><span>{{.Label}}</span><a class="g-group-link" href="{{.Room}}">{{t "home.room"}}</a></div>
+<ul class="g-deck clay">{{range .Rows}}<li class="g-agent" title="{{.ExternalID}}"><span class="av agent clay" aria-hidden="true">{{template "icon" "agents"}}</span><div><h3 class="g-title">{{if .SessionHref}}<a href="{{.SessionHref}}">{{.Title}}</a>{{else}}{{.Title}}{{end}}</h3>{{if .Line}}<p class="g-src">{{.Line}}</p>{{end}}</div><span class="g-state{{if eq .Presence "wait_you"}} is-wait{{else if eq .Presence "stuck"}} is-stuck{{end}}"><i class="g-dot{{if eq .Presence "work"}} is-work pulse{{else if eq .Presence "wait_you"}} is-wait{{else if eq .Presence "wait_other"}} is-ring{{else if eq .Presence "stuck"}} is-stuck{{else if eq .Presence "off"}} is-off{{end}}" aria-hidden="true"></i>{{.PresenceText}}</span><span>{{if .Href}}<a class="g-btn clay" href="{{.Href}}">{{.Action}}</a>{{end}}</span></li>{{end}}</ul>{{end}}{{end}}
+{{if .Hidden}}<p class="g-src g-after">{{if eq .Hidden 1}}{{t "home.quiet_one"}}{{else}}{{t "home.quiet" .Hidden}}{{end}}{{template "gsep"}}<a class="g-group-link" href="/ui/agents">{{t "home.all_agents"}}</a></p>{{end}}{{end}}{{end}}
+
+{{define "overview"}}{{template "head" .}}{{template "nav" .}}<main class="g-page ov">
 {{with .Overview}}{{if .Setup}}{{template "ovsetup" $}}
 {{else if .Guest}}<h1 class="visually-hidden">{{t "overview.title"}}</h1>
-{{template "ovwaiting" .Waiting}}
+{{template "foryou" .ForYou}}
 {{if .Requests}}<section class="ov-section ov-narrow"><h2>{{t "ov.requests"}}</h2><ul class="ov-list ov-reqs">{{range .Requests}}{{template "ovreq" .}}{{end}}</ul></section>{{end}}
 {{if .Learned}}<section class="ov-section ov-narrow"><h2>{{t "ov.knowledge"}}</h2><ul class="ov-list">{{range .Learned}}<li class="ov-row"><span class="ov-title">{{.Title}}</span><span class="ov-num">{{.Age}}</span></li>{{end}}</ul></section>{{end}}
 {{else}}<header class="ov-hero"><time class="ov-date" data-today></time><h1 data-greet-morning="{{t "ov.hello_morning" $.Person}}" data-greet-afternoon="{{t "ov.hello_afternoon" $.Person}}" data-greet-evening="{{t "ov.hello_evening" $.Person}}">{{t "ov.hello" $.Person}}</h1></header>
-{{template "ovwaiting" .Waiting}}
-<div class="ov-cols"><div class="ov-main">
-{{if .Next}}<section class="ov-section"><h2>{{t "ov.next"}}</h2><ul class="ov-list">{{range .Next}}<li class="ov-next clay"><div class="ov-text"><span class="ov-title">{{.Title}}</span><span class="ov-meta">{{.Detail}}</span></div>{{if .Href}}<a class="ov-btn ov-btn-primary clay" href="{{.Href}}">{{.HrefLabel}}</a>{{end}}</li>{{end}}</ul></section>{{end}}
-<section class="ov-section"><div class="ov-head"><h2>{{t "ov.agents"}}</h2>{{if .Agents}}<a class="ov-btn clay" href="{{.Connect}}">{{t "ov.connect_another"}}</a>{{end}}</div>
-{{if .Agents}}<ul class="ov-list ov-deck clay">{{range .Agents}}<li class="ov-agent is-{{.State}}{{if .Flag}} is-{{.Flag}}{{end}}" title="{{.ExternalID}}"><span class="av agent clay" aria-hidden="true">{{template "icon" "agents"}}</span><div class="ov-text"><span class="ov-name">{{if .Work}}{{.Work}}{{else}}{{.Name}}{{end}}</span><span class="ov-meta" title="{{.ProjectTitle}}">{{.Sub}}</span></div><span class="ov-activity">{{if .Activity}}{{.Activity}}{{else if ne .State "active"}}{{.StateText}}{{end}}</span><span class="ov-state"><span class="ov-dot is-{{if .Flag}}{{.Flag}}{{else}}{{.State}}{{end}}{{if and (eq .State "active") (not .Flag)}} pulse{{end}}" title="{{if .Flag}}{{.Activity}}{{else}}{{.StateText}}{{end}}"></span><span class="ov-num">{{.Age}}</span></span></li>{{end}}</ul>
+{{template "foryou" .ForYou}}
+<section class="g-section" id="running"><div class="g-section-head"><h2>{{t "home.running"}}</h2>{{if and .Run .Run.Groups}}<a class="g-btn clay" href="{{.Connect}}">{{t "ov.connect_another"}}</a>{{end}}</div>
+{{if and .Run .Run.Groups}}{{template "running" .}}
 {{else if .Machines}}{{template "ovstart" .}}
-{{else}}<p class="ov-empty">{{t "ov.no_agents"}}</p><a class="ov-btn ov-btn-primary clay" href="{{.Connect}}">{{t "ov.connect"}}</a>{{end}}
+{{else}}<p class="g-empty">{{t "ov.no_agents"}}</p><a class="g-btn g-btn--primary clay" href="{{.Connect}}">{{t "ov.connect"}}</a>{{end}}
 {{if .Machines}}<h3 class="ov-sub">{{t "ov.machines"}}</h3>{{template "ovmachines" .Machines}}{{end}}</section>
-</div><div class="ov-side">
-<section class="ov-section ov-well clay"><h2>{{t "ov.requests"}}</h2>{{if .Requests}}<ul class="ov-list ov-reqs">{{range .Requests}}{{template "ovreq" .}}{{end}}</ul>{{else}}<p class="ov-empty">{{t "ov.no_requests"}}</p>{{end}}</section>
-<section class="ov-section ov-learned"><h2>{{t "ov.learned"}}</h2>{{if .Learned}}<ul class="ov-list">{{range .Learned}}<li class="ov-row"><span class="ov-title">{{.Title}}</span><span class="ov-num">{{.Age}}</span></li>{{end}}</ul>{{else}}<p class="ov-empty">{{t "ov.no_learned"}}</p>{{end}}</section>
-</div></div>
+{{with .Week}}<section class="g-section"><div class="g-section-head"><h2>{{t "home.thisweek"}}</h2></div><p class="g-text g-pad">{{.Text}} <a class="g-group-link" href="/ui/requests">{{t "ov.requests"}}</a>{{template "gsep"}}<a class="g-group-link" href="/ui/knowledge">{{t "nav.knowledge"}}</a></p></section>{{end}}
 {{end}}{{end}}{{template "foot" .}}{{end}}

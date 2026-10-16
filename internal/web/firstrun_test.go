@@ -1,6 +1,7 @@
 package web
 
 import (
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -231,7 +232,7 @@ func TestGuestChipIsHiddenOnTheViewersOwnMessages(t *testing.T) {
 	}
 }
 
-func TestRoomsEmptyStateHasAnActionAndASingleRoomIsMarkedForMobile(t *testing.T) {
+func TestRoomsEmptyStateHasAnActionAndTheLandingIsTheRoom(t *testing.T) {
 	e := ovEnv(t)
 	if _, err := e.St.AddPerson("nora"); err != nil {
 		t.Fatal(err)
@@ -245,23 +246,13 @@ func TestRoomsEmptyStateHasAnActionAndASingleRoomIsMarkedForMobile(t *testing.T)
 		t.Error("an empty page offers a room to enter")
 	}
 	ovAgent(t, e.St, shellProject, "claude:h:one", "one", "person:2")
-	_, single := fetchPage(t, e.Member, e.Base+"/ui/coord")
-	if !strings.Contains(single, `data-sole-room="/ui/coord?room=`) {
-		t.Error("a single room is not marked for the direct jump on small screens")
+	res, err := e.Member.Get(e.Base + "/ui/coord")
+	if err != nil {
+		t.Fatal(err)
 	}
-}
-
-func TestComposerModesExplainThemselves(t *testing.T) {
-	e := ovEnv(t)
-	ovAgent(t, e.St, shellProject, "claude:h:one", "one", "person:2")
-	_, page := fetchPage(t, e.Member, e.Base+"/ui/coord?room="+url.QueryEscape(store.RoomKeyForProject(shellProject)))
-	for _, want := range []string{">Message<", ">Standing order<", `title="Stays in force for the agents until ended"`, `title="Say something in the room"`} {
-		if !strings.Contains(page, want) {
-			t.Errorf("composer lacks %q", want)
-		}
-	}
-	if strings.Contains(page, ">Directive<") {
-		t.Error("the old mode name is still shown")
+	res.Body.Close()
+	if loc := res.Header.Get("Location"); res.StatusCode != http.StatusFound || !strings.HasPrefix(loc, "/ui/coord?room=") {
+		t.Errorf("the rooms page lands in the room, got %d %q", res.StatusCode, loc)
 	}
 }
 

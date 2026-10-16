@@ -30,10 +30,20 @@ type painRow struct {
 	Human, Title, Href string
 	State, StateLabel  string
 	Remaining, Project string
+	Age                string
+}
+
+// painGroup is the pains of one state, active first; resolved and obsolete
+// ones are one folded group.
+type painGroup struct {
+	State, Label string
+	Rows         []painRow
+	Folded       bool
 }
 
 type painsView struct {
 	Rows        []painRow
+	Groups      []painGroup
 	Project     string
 	Empty       bool
 	ShowProject bool
@@ -81,11 +91,25 @@ func (a *app) painsPage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		for _, p := range list {
-			row := painRow{ID: p.ID, Human: p.HumanID(), Title: p.Title, Href: painURL(p.ID), State: p.State, StateLabel: label(l, painStateKeys, p.State), Remaining: p.Remaining}
-			if v.ShowProject {
-				row.Project = lastSegment(p.Project)
+			row := painRow{ID: p.ID, Human: p.HumanID(), Title: p.Title, Href: painURL(p.ID), State: p.State, StateLabel: label(l, painStateKeys, p.State), Remaining: p.Remaining,
+				Age: shortAge(l, overviewNow().UTC(), parseTime(p.UpdatedAt)), Project: lastSegment(p.Project)}
+			if !v.ShowProject {
+				row.Project = ""
 			}
 			v.Rows = append(v.Rows, row)
+		}
+	}
+	byState := map[string][]painRow{}
+	for _, row := range v.Rows {
+		state := row.State
+		if state == "obsolete" {
+			state = "resolved"
+		}
+		byState[state] = append(byState[state], row)
+	}
+	for _, state := range []string{"active", "mitigated", "resolved"} {
+		if rows := byState[state]; len(rows) > 0 {
+			v.Groups = append(v.Groups, painGroup{State: state, Label: label(l, painStateKeys, state), Rows: rows, Folded: state == "resolved"})
 		}
 	}
 	v.Empty = len(v.Rows) == 0

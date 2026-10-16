@@ -109,6 +109,7 @@ func parseTemplates(l lang) *template.Template {
 		"ago":  func(stamp string) template.HTML { return timeTag(l, stamp) },
 		"lbl":  func(group, value string) string { return adminLabel(l, group, value) },
 		"lang": func() string { return string(l) },
+		"lead": func(s string) string { return leadSentence(s, 200) },
 	}).ParseFS(files, "templates/*.html"))
 }
 

@@ -67,6 +67,8 @@ type KnowledgeRow struct {
 	Excerpt                  string
 	Age                      string
 	Source                   string
+	// Old: the entry has waited a week or more for its decision.
+	Old bool
 }
 
 type knowledgeView struct {
@@ -74,7 +76,6 @@ type knowledgeView struct {
 	Selects                 []filterSelect
 	Rows                    []KnowledgeRow
 	Guest, Reviewer         bool
-	Pending                 string
 	Empty, NoMatch          bool
 	ClearHref               string
 }
@@ -133,11 +134,29 @@ type resultLine struct {
 	Token, Next, Filter string
 }
 
+// reviewGroup is the pending entries of one project: the first few shown, the
+// rest behind one line, oldest first.
+type reviewGroup struct {
+	Label, Remote string
+	Shown, More   []knowledgeCard
+	Count         int
+}
+
+// reviewShownPerGroup is how many cards of a project show before the line
+// "N more in project".
+const reviewShownPerGroup = 3
+
 type reviewView struct {
 	Cards  []knowledgeCard
+	Groups []reviewGroup
+	// Titled: the group heads are shown, because more than one project is listed.
+	Titled bool
 	Result *resultLine
 	Empty  bool
 	Guest  bool
+	// Garden is the gardener's morning report; OnlyGarden narrows the page to it.
+	Garden     *gardenView
+	OnlyGarden bool
 }
 
 type knowledgeItemView struct {
@@ -272,6 +291,7 @@ func (a *app) knowledgeRowFor(l lang, pa *store.ProjectAccess, raw store.Knowled
 		ID: strconv.FormatInt(k.ID, 10), Href: "/ui/knowledge/" + strconv.FormatInt(k.ID, 10), Title: k.Title,
 		Type: k.Type, TypeLabel: typeLabel(l, k.Type), Level: k.Confidence, LevelLabel: levelLabel(l, k.Confidence), LevelTitle: levelTitle(l, k.Confidence), TypeTitle: typeLabel(l, k.Type),
 		Stale: k.Status == "stale", Excerpt: excerpt(k.Body), Age: shortAge(l, overviewNow().UTC(), parseTime(firstNonEmpty(k.ObservedAt, k.CreatedAt))),
+		Old: olderThan(firstNonEmpty(k.ObservedAt, k.CreatedAt), overviewNow().UTC(), reviewOldAfter),
 	}
 	if withProject && k.Scope.Project != "" {
 		row.Project = path.Base(k.Scope.Project)
@@ -415,17 +435,6 @@ func (a *app) knowledgePage(w http.ResponseWriter, r *http.Request) {
 	v.ClearHref = "/ui/knowledge"
 	if project != "" {
 		v.ClearHref += "?project=" + url.QueryEscape(project)
-	}
-	if v.Reviewer && !hidden {
-		pending, perr := a.store.PendingKnowledge(project, a.overfetch(reviewShown), pa.Viewer())
-		if perr == nil {
-			if n := len(keep(pending, reviewShown, pa.CanSeeKnowledge)); n > 0 {
-				v.Pending = strconv.Itoa(n)
-				if n >= reviewShown {
-					v.Pending += "+"
-				}
-			}
-		}
 	}
 	a.renderBrowser(w, r, "knowledge", pageData{Title: l.msg("nav.knowledge"), Project: project, KnowledgeV: v})
 }
@@ -606,13 +615,109 @@ func (a *app) reviewPage(w http.ResponseWriter, r *http.Request) {
 	}
 	entries = keep(entries, reviewShown, pa.CanSeeKnowledge)
 	v := &reviewView{Guest: a.shellBaseFor(r).who.kind == viewerGuest, Result: a.resultFor(r, pa, "review", project)}
+	if v.Result == nil {
+		v.Result = a.bulkResult(r)
+	}
+	// The gardener's notes lead the page as one block; the proposals of agents
+	// follow, by project.
+	var notes []store.Knowledge
+	rest := entries[:0:0]
+	for _, k := range entries {
+		if k.Harness == gardenerHarness {
+			notes = append(notes, k)
+		} else {
+			rest = append(rest, k)
+		}
+	}
+	entries = rest
+	v.OnlyGarden = r.URL.Query().Get("source") == "gardener"
+	if v.OnlyGarden {
+		entries = nil
+	}
+	// Oldest first: what has waited longest is on top of its project.
+	slices.SortStableFunc(entries, func(x, y store.Knowledge) int {
+		return strings.Compare(firstNonEmpty(x.ObservedAt, x.CreatedAt), firstNonEmpty(y.ObservedAt, y.CreatedAt))
+	})
+	slices.SortStableFunc(notes, func(x, y store.Knowledge) int {
+		return strings.Compare(firstNonEmpty(x.ObservedAt, x.CreatedAt), firstNonEmpty(y.ObservedAt, y.CreatedAt))
+	})
+	v.Garden = a.gardenBlock(r, pa, project, notes)
+	byProject := map[string]*reviewGroup{}
+	var order []string
 	for _, k := range entries {
 		card := a.cardFor(r, pa, k, project == "", reviewBodyRunes, "review", project)
 		a.fillEvidence(pa, k, &card, evidenceShown)
 		v.Cards = append(v.Cards, card)
+		g := byProject[k.Scope.Project]
+		if g == nil {
+			g = &reviewGroup{Remote: k.Scope.Project, Label: lastSegment(k.Scope.Project)}
+			byProject[k.Scope.Project] = g
+			order = append(order, k.Scope.Project)
+		}
+		g.Count++
+		g.Shown = append(g.Shown, card)
 	}
-	v.Empty = len(v.Cards) == 0
+	for _, remote := range order {
+		g := byProject[remote]
+		// One card behind "1 more" would hide a card only to show a line.
+		if len(g.Shown) > reviewShownPerGroup+1 {
+			g.Shown, g.More = g.Shown[:reviewShownPerGroup], g.Shown[reviewShownPerGroup:]
+		}
+		v.Groups = append(v.Groups, *g)
+	}
+	slices.SortStableFunc(v.Groups, func(x, y reviewGroup) int { return strings.Compare(x.Label, y.Label) })
+	v.Titled = len(v.Groups) > 1 || project == ""
+	v.Empty = len(v.Cards) == 0 && v.Garden == nil
 	a.renderBrowser(w, r, "review", pageData{Title: l.msg("nav.review"), Project: project, ReviewV: v})
+}
+
+// reviewPlan is what one decision changes: the right it needs, the patch, the
+// word for the result line, and whether there is nothing left to change.
+type reviewPlan struct {
+	act      store.Action
+	patch    map[string]string
+	done     string
+	conflict bool
+}
+
+// planDecision works out a verdict (approve, reject, restore) for one entry.
+// Single decisions and the bulk action share it, so both ask the same right and
+// refuse the same states.
+func planDecision(pa *store.ProjectAccess, k store.Knowledge, verdict, person, status string) reviewPlan {
+	var p reviewPlan
+	switch verdict {
+	case "approve":
+		p.act, p.done = store.ActVerify, "approved"
+		p.patch = map[string]string{"confidence": "verified", "confirmed_by": person}
+		// Der Besitzer der privaten Herkunfts-Session gibt einen gehaltenen Fund
+		// nur frei; er landet dann in der Queue der Prüfer.
+		if pa.CanReleaseKnowledge(k) && pa.CheckKnowledge(k, store.ActVerify) != nil {
+			p.act, p.done = store.ActRelease, "released"
+			p.patch = map[string]string{"confidence": "staged", "confirmed_by": ""}
+		}
+	case "reject":
+		p.act, p.done = store.ActEdit, "rejected"
+		p.patch = map[string]string{"status": "deprecated"}
+	case "restore":
+		p.act, p.done = store.ActEdit, "restored"
+		p.patch = map[string]string{"status": restorableStatus(status)}
+	}
+	live := k.Status == "active" || k.Status == "stale"
+	canEdit := pa.CheckKnowledge(k, store.ActEdit) == nil
+	if verdict == "reject" && !decisionOpen(k) {
+		p.done = "retired"
+	}
+	if verdict == "approve" {
+		if canEdit && k.Status == "stale" {
+			p.patch["status"] = "active"
+		}
+		if !live || !approveChanges(k, canEdit) {
+			p.conflict = true
+		}
+	} else if (verdict == "restore" && k.Status != "deprecated") || (verdict == "reject" && !live) {
+		p.conflict = true
+	}
+	return p
 }
 
 // reviewDecide setzt, was das Backend kennt: übernehmen (verified, mit dem
@@ -620,57 +725,106 @@ func (a *app) reviewPage(w http.ResponseWriter, r *http.Request) {
 // Recht prüft der Server am Eintrag, wie PATCH /api/knowledge.
 func (a *app) reviewDecide(w http.ResponseWriter, r *http.Request) {
 	verdict := r.PathValue("verdict")
-	var act store.Action
-	var patch map[string]string
-	var done string
-	switch verdict {
-	case "approve":
-		act, done = store.ActVerify, "approved"
-		patch = map[string]string{"confidence": "verified", "confirmed_by": personOf(r)}
-		// Der Besitzer der privaten Herkunfts-Session gibt einen gehaltenen Fund
-		// nur frei; er landet dann in der Queue der Prüfer.
-		if id, perr := strconv.ParseInt(r.PathValue("id"), 10, 64); perr == nil {
-			if k, kerr := a.store.KnowledgeByID(id); kerr == nil && a.access(r).CanReleaseKnowledge(k) && a.access(r).CheckKnowledge(k, store.ActVerify) != nil {
-				act, done = store.ActRelease, "released"
-				patch = map[string]string{"confidence": "staged", "confirmed_by": ""}
-			}
-		}
-	case "reject":
-		act, done = store.ActEdit, "rejected"
-		patch = map[string]string{"status": "deprecated"}
-	case "restore":
-		act, done = store.ActEdit, "restored"
-		patch = map[string]string{"status": restorableStatus(r.FormValue("status"))}
-	default:
+	if verdict != "approve" && verdict != "reject" && verdict != "restore" {
 		http.NotFound(w, r)
 		return
 	}
-	k, ok := a.lookupKnowledge(w, r, act)
+	// Wer den Eintrag nicht lesen darf, bekommt dieselbe Antwort wie bei einer
+	// unbekannten Nummer; erst danach zählt das Recht der Aktion.
+	k, ok := a.lookupKnowledge(w, r, store.ActRead)
 	if !ok {
 		return
 	}
-	live := k.Status == "active" || k.Status == "stale"
-	canEdit := a.access(r).CheckKnowledge(k, store.ActEdit) == nil
-	if verdict == "reject" && !decisionOpen(k) {
-		done = "retired"
+	pa := a.access(r)
+	plan := planDecision(pa, k, verdict, personOf(r), r.FormValue("status"))
+	if a.accessDenied(w, r, pa.CheckKnowledge(k, plan.act)) {
+		return
 	}
-	if verdict == "approve" {
-		if canEdit && k.Status == "stale" {
-			patch["status"] = "active"
-		}
-		if !live || !approveChanges(k, canEdit) {
-			http.Error(w, "nothing to change", http.StatusConflict)
-			return
-		}
-	} else if (verdict == "restore" && k.Status != "deprecated") || (verdict == "reject" && !live) {
+	if plan.conflict {
 		http.Error(w, "nothing to change", http.StatusConflict)
 		return
 	}
-	if err := a.store.UpdateKnowledgeBy(k.ID, patch, personOf(r)); err != nil {
+	if err := a.store.UpdateKnowledgeBy(k.ID, plan.patch, personOf(r)); err != nil {
 		http.Error(w, "could not save", http.StatusBadRequest)
 		return
 	}
-	http.Redirect(w, r, a.afterDecision(r, k, done), http.StatusSeeOther)
+	http.Redirect(w, r, a.afterDecision(r, k, plan.done), http.StatusSeeOther)
+}
+
+// bulkMax is how many entries one bulk decision takes.
+const bulkMax = 100
+
+// reviewBulk approves or rejects the ticked entries in one go: all or none.
+// Every entry is checked on its own first, with the right a single decision
+// needs; one that the viewer may not read answers like an unknown number, one
+// that may not be changed refuses the whole batch, and nothing is written.
+func (a *app) reviewBulk(w http.ResponseWriter, r *http.Request) {
+	verdict := r.FormValue("verdict")
+	if verdict != "approve" && verdict != "reject" {
+		http.NotFound(w, r)
+		return
+	}
+	var ids []int64
+	seen := map[int64]bool{}
+	for _, raw := range r.Form["id"] {
+		if id, err := strconv.ParseInt(raw, 10, 64); err == nil && id > 0 && !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) > bulkMax {
+		http.Error(w, "invalid input", http.StatusBadRequest)
+		return
+	}
+	pa := a.access(r)
+	person := personOf(r)
+	type decision struct {
+		k    store.Knowledge
+		plan reviewPlan
+	}
+	var todo []decision
+	for _, id := range ids {
+		k, err := a.store.KnowledgeByID(id)
+		if err == sql.ErrNoRows {
+			pa.Filtered()
+			http.NotFound(w, r)
+			return
+		}
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if a.accessDenied(w, r, pa.CheckKnowledge(k, store.ActRead)) {
+			return
+		}
+		plan := planDecision(pa, k, verdict, person, "")
+		if a.accessDenied(w, r, pa.CheckKnowledge(k, plan.act)) {
+			return
+		}
+		if plan.conflict {
+			http.Error(w, "nothing to change", http.StatusConflict)
+			return
+		}
+		todo = append(todo, decision{k, plan})
+	}
+	for _, d := range todo {
+		if err := a.store.UpdateKnowledgeBy(d.k.ID, d.plan.patch, person); err != nil {
+			http.Error(w, "could not save", http.StatusBadRequest)
+			return
+		}
+	}
+	q := url.Values{}
+	if len(todo) > 0 {
+		q.Set("done", "bulk_"+verdict)
+		q.Set("n", strconv.Itoa(len(todo)))
+	}
+	if r.FormValue("source") == "gardener" {
+		q.Set("source", "gardener")
+	}
+	if p := scope.NormalizeRemote(r.FormValue("project")); p != "" {
+		q.Set("project", p)
+	}
+	http.Redirect(w, r, "/ui/review"+queryOf(q), http.StatusSeeOther)
 }
 
 // restorableStatus: nur ein lebender Status wird wiederhergestellt, alles
@@ -694,6 +848,9 @@ func (a *app) afterDecision(r *http.Request, k store.Knowledge, done string) str
 	}
 	if p := scope.NormalizeRemote(r.FormValue("project")); p != "" {
 		q.Set("project", p)
+	}
+	if r.FormValue("source") == "gardener" {
+		q.Set("source", "gardener")
 	}
 	return "/ui/review?" + q.Encode()
 }

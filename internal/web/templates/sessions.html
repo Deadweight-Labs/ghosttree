@@ -1,7 +1,7 @@
 {{define "sessions"}}{{template "head" .}}{{template "nav" .}}<main class="sess-main">
 <link rel="stylesheet" href="/static/sessions.css">
 {{with .SessionsV}}
-<h1>{{t "nav.sessions"}}</h1>
+<h1>{{t "nav.agents"}}</h1>{{template "gtabs" $}}
 <form class="sfilters" method="get" action="/ui/sessions" role="search">
 <span class="sq"><label class="visually-hidden" for="sess-q">{{t "sessions.search_label"}}</label><input id="sess-q" class="clay-field" type="search" name="q" value="{{.Q}}" placeholder="{{t "sessions.search_placeholder"}}" autocomplete="off" data-sessions-search>{{if .Q}}<a class="sq-clear" href="{{.ClearHref}}" aria-label="{{t "sessions.clear_search"}}"></a>{{else}}<kbd aria-hidden="true">{{t "shell.search_hint"}}</kbd>{{end}}</span>
 {{range .Selects}}<select class="clay-select" name="{{.Name}}" aria-label="{{.Label}}" data-autosubmit><option value="">{{.Label}}</option>{{range .Options}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select>{{end}}

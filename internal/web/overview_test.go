@@ -90,13 +90,13 @@ func TestOverviewEveryListComesFromTheViewersVisibleSet(t *testing.T) {
 	e := ovEnv(t)
 	fillVisible(t, e.St)
 	fillHidden(t, e.St)
-	secrets := []string{"SECRET", shellHiddenProject, "claude:hidden", "0/3"}
+	secrets := []string{"SECRET", shellHiddenProject, "claude:hidden", "0 of 3"}
 	if strings.Contains(fetchBody(t, e.Owner, e.Base+"/ui/overview"), "SECRET-MACHINE") {
 		t.Error("the owner overview names a machine that only started a login")
 	}
 
 	_, owner := fetchPage(t, e.Owner, e.Base+"/ui/overview")
-	for _, want := range []string{"Visible request", "SECRET-REQ", "SECRET-LESSON", "SECRET-AGENT", "2 proposals wait for review", "1/2", "0/3"} {
+	for _, want := range []string{"Visible request", "SECRET-REQ", "SECRET-AGENT", "2 knowledge proposals are waiting for you", "1 of 2", "0 of 3", "new lessons"} {
 		if !strings.Contains(owner, want) {
 			t.Errorf("owner overview lacks %q", want)
 		}
@@ -119,7 +119,7 @@ func TestOverviewEveryListComesFromTheViewersVisibleSet(t *testing.T) {
 	}
 	for name, c := range map[string]*http.Client{"member": e.Member, "lead": e.Lead, "reviewer": e.Reviewer} {
 		_, page := fetchPage(t, c, e.Base+"/ui/overview")
-		for _, want := range []string{"Visible request", "1/2", "Visible lesson"} {
+		for _, want := range []string{"Visible request", "1 of 2", "new lesson"} {
 			if !strings.Contains(page, want) {
 				t.Errorf("%s overview lacks %q", name, want)
 			}
@@ -131,14 +131,14 @@ func TestOverviewEveryListComesFromTheViewersVisibleSet(t *testing.T) {
 		}
 	}
 	_, member := fetchPage(t, e.Member, e.Base+"/ui/overview")
-	if strings.Contains(member, "Visible proposal") || strings.Contains(member, "for review") {
+	if strings.Contains(member, "Visible proposal") || strings.Contains(member, "knowledge proposal") {
 		t.Error("a plain member is offered the review queue")
 	}
 	for name, c := range map[string]*http.Client{"reviewer": e.Reviewer, "lead": e.Lead} {
 		_, page := fetchPage(t, c, e.Base+"/ui/overview")
 		// One bundled line, counting only what the viewer may review: the
 		// proposal of the hidden project is not in the number.
-		if !strings.Contains(page, "1 proposal waits for review") || strings.Contains(page, "2 proposals") || !strings.Contains(page, `href="/ui/review"`) {
+		if !strings.Contains(page, "1 knowledge proposal is waiting for you") || strings.Contains(page, "2 knowledge proposals") || !strings.Contains(page, `href="/ui/review"`) {
 			t.Errorf("%s does not get the review candidate", name)
 		}
 	}
@@ -345,10 +345,11 @@ func TestOverviewEmptySectionsAreOneLineAndAnAction(t *testing.T) {
 	ovAgent(t, e.St, shellProject, "claude:a", "agent-a", "person:2")
 	ovAgent(t, e.St, shellProject, "claude:o", "agent-o", "person:1")
 	_, page := fetchPage(t, e.Owner, e.Base+"/ui/overview")
-	for _, want := range []string{"No open requests.", "Nothing learned this week."} {
-		if !strings.Contains(page, want) {
-			t.Errorf("empty section lacks %q", want)
-		}
+	if !strings.Contains(page, "Nothing waiting on you") {
+		t.Error("an empty For you has no line of its own")
+	}
+	if strings.Contains(page, "This week") {
+		t.Error("a week without anything to say is shown")
 	}
 	if strings.Contains(page, "ov-next") || strings.Contains(page, ">Next<") {
 		t.Error("an empty Next section is shown")
@@ -364,6 +365,8 @@ func TestOverviewHasNoCountersPillsOrBadges(t *testing.T) {
 	fillVisible(t, e.St)
 	for name, c := range map[string]*http.Client{"owner": e.Owner, "member": e.Member, "guest": e.Guest} {
 		_, page := fetchPage(t, c, e.Base+"/ui/overview")
+		// The counters of the navigation are meant (nav tests); this is the page.
+		page = page[strings.Index(page, `<div class="shell-main">`):]
 		for _, bad := range []string{"badge", "pill", "clay-card", "chip"} {
 			if strings.Contains(page, bad) {
 				t.Errorf("%s overview carries %q", name, bad)

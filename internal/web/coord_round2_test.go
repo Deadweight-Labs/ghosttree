@@ -41,59 +41,16 @@ func coordCompactAttentionFixture(t *testing.T) (string, string) {
 	return coordPageBody(t, client, srv.URL+"/ui/coord?room="+url.QueryEscape(room)), room
 }
 
-func TestCoordAttentionListShowsThreeItemsAndFoldsTheRest(t *testing.T) {
+func TestCoordRoomHasNoRightColumnWithNeedsYou(t *testing.T) {
 	page, _ := coordCompactAttentionFixture(t)
-	start := strings.Index(page, `aria-labelledby="coord-attention-items"`)
-	if start < 0 {
-		t.Fatal("Needs you section missing")
-	}
-	section := page[start : start+strings.Index(page[start:], "</section>")]
-	more := strings.Index(section, `<details class="coord-attention-more"`)
-	if more < 0 {
-		t.Fatalf("items beyond three must sit in a native details: %s", section)
-	}
-	if n := strings.Count(section[:more], `class="coord-attention-card`); n != 3 {
-		t.Errorf("visible items before the fold = %d, want 3", n)
-	}
-	if n := strings.Count(section[more:], `class="coord-attention-card`); n != 2 {
-		t.Errorf("folded items = %d, want 2", n)
-	}
-	if !strings.Contains(section[more:], "2 more") {
-		t.Errorf("fold summary must count the rest: %s", section[more:])
-	}
-	if strings.Contains(section, "<p>Eingehende Anfrage") {
-		t.Error("compact entries carry label, sender, room and link, not the body as a paragraph")
-	}
-	for _, want := range []string{"Question", "Approval", "Blocker", "Handoff", "from bob", "Go to post"} {
-		if !strings.Contains(section, want) {
-			t.Errorf("compact entry missing %q", want)
+	for _, gone := range []string{`id="coord-attention-items"`, `coord-attention-outgoing`, `coord-attention-list`, `coord-drawer-toggle`} {
+		if strings.Contains(page, gone) {
+			t.Errorf("the room has no right column any more, found %s", gone)
 		}
 	}
-}
-
-func TestCoordOutgoingAttentionIsACollapsedDisclosureWithCount(t *testing.T) {
-	page, _ := coordCompactAttentionFixture(t)
-	start := strings.Index(page, `<details class="coord-attention-outgoing `)
-	if start < 0 {
-		t.Fatal("Asked by you must be a details element")
-	}
-	open := page[start : start+strings.Index(page[start:], ">")]
-	if strings.Contains(open, "open") {
-		t.Errorf("outgoing attention must start collapsed: %s", open)
-	}
-	summary := page[start : start+strings.Index(page[start:], "</summary>")]
-	if !strings.Contains(summary, "Asked by you") || !strings.Contains(summary, "1") {
-		t.Errorf("summary needs title and count: %s", summary)
-	}
-}
-
-func TestCoordThreadsFollowTheCompactAttentionDirectly(t *testing.T) {
-	page, _ := coordCompactAttentionFixture(t)
-	needs := strings.Index(page, `id="coord-attention-items"`)
-	outgoing := strings.Index(page, `class="coord-attention-outgoing `)
-	threads := strings.Index(page, "<h3>Threads</h3>")
-	if !(needs >= 0 && needs < outgoing && outgoing < threads) {
-		t.Fatalf("order must be needs-you, outgoing, threads: %d %d %d", needs, outgoing, threads)
+	// What waits for the viewer stays reachable in the room: as cards in the conversation.
+	if !strings.Contains(page, "Eingehende Anfrage 0") || !strings.Contains(page, `class="rm-msg is-ask"`) {
+		t.Error("the questions to the viewer are cards in the conversation")
 	}
 }
 
@@ -119,11 +76,6 @@ func TestCoordProjectRoomsShowRepoShortNameWithFullNameInTitle(t *testing.T) {
 	if !strings.Contains(page, `title="github.com/acme/compact-repo">compact-repo<`) {
 		t.Errorf("sidebar project link must show the repo name and keep the full name in title")
 	}
-	start := strings.Index(page, `id="coord-attention-items"`)
-	section := page[start : start+strings.Index(page[start:], "</section>")]
-	if !strings.Contains(section, `title="github.com/acme/compact-repo">compact-repo<`) {
-		t.Errorf("attention entries must use the short name too: %s", section)
-	}
 }
 
 func TestCoordShortRoomName(t *testing.T) {
@@ -147,10 +99,11 @@ func TestCoordShortRoomName(t *testing.T) {
 // contains needle.
 func attentionCard(t *testing.T, page, needle string) string {
 	t.Helper()
-	start := strings.Index(page, `<article class="coord-attention-card" title="`+needle+`"`)
-	if start < 0 {
+	at := strings.Index(page, `<p class="ask-t">`+needle+`</p>`)
+	if at < 0 {
 		t.Fatalf("no attention card for %q", needle)
 	}
+	start := strings.LastIndex(page[:at], `<article class="rm-msg is-ask">`)
 	return page[start : start+strings.Index(page[start:], "</article>")]
 }
 
@@ -169,7 +122,7 @@ func TestCoordAttentionPreviewEscapesAgentContent(t *testing.T) {
 	if strings.Contains(page, "<script>alert(1)") {
 		t.Fatal("agent content reached the page unescaped")
 	}
-	if !strings.Contains(page, `<p class="coord-attention-preview">&lt;script&gt;alert(1)&lt;/script&gt;`) {
+	if !strings.Contains(page, `&lt;script&gt;alert(1)&lt;/script&gt;`) {
 		t.Error("preview must carry the escaped body")
 	}
 }
@@ -207,7 +160,7 @@ func TestCoordApprovalVerdictsAreVisibleAndOnlyDismissIsFolded(t *testing.T) {
 		t.Errorf("The disclosure must hold only Dismiss: %s", folded)
 	}
 	note, button := strings.Index(card, "Coordination only"), strings.Index(card, "Note approval")
-	if note < 0 || note > button || note > strings.Index(card, `class="coord-attention-row"`) {
+	if note < 0 || note > button || note > strings.Index(card, `class="acts rm-foot"`) {
 		t.Errorf("honest note must sit on the card directly above the verdict row: note=%d button=%d", note, button)
 	}
 }

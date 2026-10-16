@@ -17,7 +17,7 @@
 {{define "knresult"}}{{with .}}<div class="kn-result" role="status"><span class="kn-dot is-{{.Kind}}" aria-hidden="true"></span><span class="kn-result-text">{{.Text}}</span>{{if .CanRestore}}<form method="post" action="/ui/review/{{.ID}}/restore"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="next" value="{{.Next}}"><input type="hidden" name="project" value="{{.Filter}}"><input type="hidden" name="status" value="{{.Was}}"><button class="ov-btn clay">{{t "knowledge.restore"}}</button></form>{{end}}</div>{{end}}{{end}}
 
 {{define "knowledge"}}{{template "head" .}}{{template "nav" .}}<main class="kn"><link rel="stylesheet" href="/static/knowledge.css">
-{{with .KnowledgeV}}<div class="ov-head"><h1>{{t "nav.knowledge"}}</h1>{{if .Pending}}<a class="ov-btn clay" href="/ui/review{{if .Project}}?project={{.Project}}{{end}}">{{t "nav.review"}} <span class="ov-num">{{.Pending}}</span></a>{{end}}</div>
+{{with .KnowledgeV}}<div class="ov-head"><h1>{{t "nav.knowledge"}}</h1></div>{{template "gtabs" $}}
 <form class="kn-filters" method="get" action="/ui/knowledge" role="search"><input class="clay-field kn-q" type="search" name="q" value="{{.Q}}" placeholder="{{t "shell.search_placeholder"}}" aria-label="{{t "shell.search_label"}}" autocomplete="off">
 {{range .Selects}}<select class="clay-select" name="{{.Name}}" aria-label="{{.Label}}" data-autosubmit><option value="">{{.Label}}</option>{{range .Options}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select>{{end}}
 {{if .Project}}<input type="hidden" name="project" value="{{.Project}}">{{end}}<button class="ov-btn clay">{{t "knowledge.search"}}</button></form>
@@ -27,13 +27,39 @@
 {{else}}<p class="ov-empty">{{t "knowledge.empty"}}</p><a class="ov-btn ov-btn-primary clay" href="/ui/overview?connect=1">{{t "ov.connect"}}</a>{{end}}
 {{end}}{{template "foot" .}}{{end}}
 
-{{define "review"}}{{template "head" .}}{{template "nav" .}}<main class="kn"><link rel="stylesheet" href="/static/knowledge.css">
-{{with .ReviewV}}<div class="ov-head"><h1>{{t "nav.review"}}</h1></div>
+{{define "revcard"}}<li class="g-card g-card--tight clay">
+<div class="g-head"><div><span class="g-kind">{{template "knkind" .Type}}{{.TypeLabel}}</span><h3 class="g-title"><a href="{{.Href}}">{{.Title}}</a></h3></div><div class="g-side"><span class="g-age{{if .Old}} is-old{{end}}">{{.Age}}</span></div></div>
+<div class="g-meta"><span class="kn-level" title="{{.LevelTitle}}"><span class="kn-dot is-{{.Level}}" aria-hidden="true"></span>{{.LevelLabel}}</span>{{if .Stale}}<span class="kn-stale">{{t "knowledge.stale"}}</span>{{end}}{{template "exfrom" .From}}</div>
+{{template "gexplain" .Explain}}
+{{if .Excerpt}}<p class="g-text is-clamp">{{.Excerpt}}</p>{{end}}
+{{if or .Blocks .Evidence .Proof}}<details class="g-fold"><summary><span class="g-fold-t">{{t "tasks.details"}}</span></summary><div class="g-fold-b">{{template "knbody" .Blocks}}{{template "knevidence" .}}</div></details>{{end}}
+<div class="g-foot">{{if .CanEdit}}<a class="g-btn g-btn--ghost" href="{{.Href}}?edit=1#edit">{{t "knowledge.edit"}}</a>{{end}}
+{{if .CanReject}}<form method="post" action="/ui/review/{{.ID}}/reject"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="next" value="{{.Next}}"><input type="hidden" name="project" value="{{.Filter}}"><button class="g-btn g-btn--ghost">{{if .Retire}}{{t "knowledge.retire"}}{{else}}{{t "knowledge.reject"}}{{end}}</button></form>{{end}}
+{{if .CanApprove}}<form method="post" action="/ui/review/{{.ID}}/approve"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="next" value="{{.Next}}"><input type="hidden" name="project" value="{{.Filter}}"><button class="g-btn g-btn--primary clay">{{t "knowledge.approve"}}</button></form>{{end}}</div></li>{{end}}
+
+{{define "gardenhint"}}<li class="g-row g-hint">{{if .Selectable}}<input class="g-sel" type="checkbox" form="gbulk" name="id" value="{{.ID}}" aria-label="{{t "review.select"}}">{{else}}<span></span>{{end}}
+<div><span class="g-verdict">{{template "icon" "warn"}}{{.Verdict}}</span><h3 class="g-title"><a href="{{.Href}}">{{.Subject}}</a></h3><p class="g-src">{{.Project}}{{template "gsep"}}<span{{if .Old}} class="g-age is-old"{{end}}>{{.Age}}</span></p>{{if .Reason}}<p class="g-text">{{.Reason}}</p>{{end}}{{template "gexplain" .Explain}}</div>
+<div class="g-acts">{{if .CanReject}}<form method="post" action="/ui/review/{{.ID}}/reject"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="next" value="{{.Next}}"><input type="hidden" name="project" value="{{.Filter}}"><input type="hidden" name="source" value="gardener"><button class="g-btn g-btn--ghost">{{t "knowledge.reject"}}</button></form>{{end}}
+{{if .CanApprove}}<form method="post" action="/ui/review/{{.ID}}/approve"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="next" value="{{.Next}}"><input type="hidden" name="project" value="{{.Filter}}"><input type="hidden" name="source" value="gardener"><button class="g-btn clay">{{t "knowledge.approve"}}</button></form>{{end}}</div></li>{{end}}
+
+{{define "gardenall"}}<form method="post" action="/ui/review/bulk"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="source" value="gardener"><input type="hidden" name="project" value="{{.Filter}}"><input type="hidden" name="verdict" value="{{.Verdict}}">{{range .IDs}}<input type="hidden" name="id" value="{{.}}">{{end}}<button class="g-btn{{if .Primary}} g-btn--primary clay{{else}} g-btn--ghost{{end}}">{{.Label}}</button></form>{{end}}
+
+{{define "gardenblock"}}{{with .}}<section class="g-group" id="gardener">
+<div class="g-card clay g-report"><div class="g-report-text"><span class="g-kind">{{template "icon" "garden"}}{{t "usage.job.garden"}}</span><h3 class="g-title">{{.Title}}</h3>{{if .Source}}<p class="g-src">{{.Source}}</p>{{end}}</div>
+<div class="g-acts">{{with .AllReject}}{{template "gardenall" .}}{{end}}{{with .AllApprove}}{{template "gardenall" .}}{{end}}</div></div>
+<ul class="g-deck clay">{{range .Rows}}{{template "gardenhint" .}}{{end}}</ul>
+{{if .Any}}<form id="gbulk" method="post" action="/ui/review/bulk"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="source" value="gardener"><input type="hidden" name="project" value="{{.Filter}}">
+<div class="g-bulk clay is-idle" data-bulk data-fmt="{{t "review.bulk.selected" 0}}"><span class="g-lead" data-bulk-count>{{t "review.bulk.some"}}</span>{{if .RejectIDs}}<button class="g-btn" name="verdict" value="reject">{{t "knowledge.reject"}}</button>{{end}}{{if .ApproveIDs}}<button class="g-btn g-btn--primary clay" name="verdict" value="approve">{{t "knowledge.approve"}}</button>{{end}}</div></form>{{end}}
+</section>{{end}}{{end}}
+
+{{define "review"}}{{template "head" .}}{{template "nav" .}}<main class="g-page kn"><link rel="stylesheet" href="/static/knowledge.css">
+{{with .ReviewV}}<header class="g-page-head"><h1>{{t "nav.knowledge"}}</h1></header>{{template "ktabs" $}}
 {{template "knresult" .Result}}
-{{if .Cards}}<ul class="kn-cards">{{range .Cards}}<li class="kn-card clay"><div class="kn-cardhead"><div class="kn-marks">{{template "knmarks" .KnowledgeRow}}{{if .Project}}<span class="ov-meta">{{.Project}}</span>{{end}}{{if .Seen}}<span class="ov-meta" title="{{t "knowledge.seen_title"}}">{{t "knowledge.seen" .Seen}}</span>{{end}}</div><span class="ov-num">{{.Age}}</span></div>
-<h2 class="kn-cardtitle"><a href="{{.Href}}">{{.Title}}</a></h2>{{template "exfrom" .From}}{{template "explain" .Explain}}{{template "knbody" .Blocks}}{{template "knevidence" .}}
-<div class="kn-actions">{{template "kndecide" .}}{{if .CanEdit}}<a class="ov-btn clay" href="{{.Href}}?edit=1#edit">{{t "knowledge.edit"}}</a>{{end}}</div></li>{{end}}</ul>
-{{else}}<p class="ov-empty">{{t "knowledge.review_empty"}}</p><a class="ov-btn clay" href="/ui/knowledge">{{t "nav.knowledge"}}</a>{{end}}
+{{template "gardenblock" .Garden}}
+{{if .Groups}}{{range .Groups}}<section class="g-group">{{if $.ReviewV.Titled}}<h2 class="g-group-head"><span>{{.Label}}<span class="g-count">{{.Count}}</span></span></h2>{{end}}
+<ul class="g-stack">{{range .Shown}}{{template "revcard" .}}{{end}}</ul>
+{{if .More}}<details class="g-more"><summary>{{t "knowledge.review_more" (len .More) .Label}}</summary><ul class="g-stack">{{range .More}}{{template "revcard" .}}{{end}}</ul></details>{{end}}</section>{{end}}
+{{else if .Empty}}<p class="g-empty">{{t "knowledge.review_empty"}}</p>{{end}}
 {{end}}{{template "foot" .}}{{end}}
 
 {{define "knowledgeitem"}}{{template "head" .}}{{template "nav" .}}<main class="kn kn-detail"><link rel="stylesheet" href="/static/knowledge.css">

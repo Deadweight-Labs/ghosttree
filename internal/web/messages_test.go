@@ -56,7 +56,7 @@ func isTechnicalValue(v string) bool {
 	case "resume", "pause", "interrupt", "message", "directive", "request", "question", "approval", "blocker", "handoff", "open", "resolved", "deferred", "all-agents", "withdraw", "met", "waived":
 		return true
 	}
-	return strings.HasPrefix(v, "/") || strings.HasPrefix(v, "1") || strings.HasPrefix(v, "REQ-") || v == "on" || v == "member" || v == "owner" || v == "guest" || v == "none" || v == "7" || v == "approve" || v == "deny" || v == "member\x00owner" || regexp.MustCompile(`^[0-9]+$`).MatchString(v)
+	return strings.HasPrefix(v, "/") || strings.HasPrefix(v, "1") || strings.HasPrefix(v, "REQ-") || v == "on" || v == "member" || v == "owner" || v == "guest" || v == "none" || v == "7" || v == "approve" || v == "reject" || v == "gardener" || v == "deny" || v == "member\x00owner" || regexp.MustCompile(`^[0-9]+$`).MatchString(v)
 }
 
 func TestCatalogKeysUsedByTemplatesExistAndEveryKeyIsUsed(t *testing.T) {
@@ -114,7 +114,7 @@ func TestMsgFormatsArgumentsAndNeverReturnsEmpty(t *testing.T) {
 	}
 }
 
-var goKeyRE = regexp.MustCompile(`"((?:shell|nav|role|login|auth|overview|ov|setup|age|agent|machine|sessions|coord|knowledge|requests|adm|time|join|pair|profile|tasks|pains|page|explain|usage|garden)\.[a-z0-9_.]+)"`)
+var goKeyRE = regexp.MustCompile(`"((?:shell|nav|role|login|auth|overview|ov|setup|age|agent|machine|sessions|coord|knowledge|requests|adm|time|join|pair|profile|tasks|pains|context|search|cards|page|explain|usage|garden|home|review)\.[a-z0-9_.]+)"`)
 
 // goMessageKeys sammelt die Schlüssel, die im Go-Code vorkommen (Navigation,
 // Rollen, Fehlertexte der Handler).

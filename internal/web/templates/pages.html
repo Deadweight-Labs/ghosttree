@@ -1,5 +1,5 @@
 {{define "context"}}{{template "head" .}}{{template "nav" .}}<main class="kn kn-context"><link rel="stylesheet" href="/static/knowledge.css">
-{{with .ContextV}}<div class="ov-head"><h1>{{t "context.title"}}</h1></div>
+{{with .ContextV}}<div class="ov-head"><h1>{{t "nav.knowledge"}}</h1></div>{{template "gtabs" $}}
 {{if .Project}}<form class="kn-switch" method="get" role="group" aria-label="{{t "context.label"}}"><input type="hidden" name="project" value="{{.Project}}"><button class="ov-btn clay{{if not .Preview}} ov-btn-primary{{end}}"{{if not .Preview}} aria-pressed="true"{{end}}>{{t "context.delivered"}}</button><button class="ov-btn clay{{if .Preview}} ov-btn-primary{{end}}" name="preview" value="1"{{if .Preview}} aria-pressed="true"{{end}}>{{t "context.with_staged"}}</button></form>
 {{if .Output}}<pre class="kn-code clay"><code>{{.Output}}</code></pre>
 {{else}}<p class="ov-empty">{{if .Preview}}{{t "context.empty_staged"}}{{else}}{{t "context.empty"}}{{end}}</p><div class="kn-actions-row">{{if not .Preview}}<a class="ov-btn clay" href="?project={{.Project}}&amp;preview=1">{{t "context.with_staged"}}</a>{{else}}<a class="ov-btn clay" href="/ui/knowledge?project={{.Project}}">{{t "nav.knowledge"}}</a>{{end}}</div>{{end}}
@@ -11,3 +11,11 @@
 {{define "roomforbidden"}}{{template "head" .}}{{template "nav" .}}<main class="narrow-page"><h1>{{t "coord.forbidden.title"}}</h1><section class="clay-card" role="alert"><p>{{t "coord.forbidden.body"}}</p><p><a href="{{.BackURL}}">{{if eq .BackURL "/ui/coord"}}{{t "coord.forbidden.back"}}{{else}}{{t "coord.forbidden.overview"}}{{end}}</a></p></section>{{template "foot" .}}{{end}}
 
 {{define "roomnotfound"}}{{template "head" .}}{{template "nav" .}}<main class="narrow-page"><h1>{{t "coord.notfound.title"}}</h1><section class="clay-card" role="alert"><p>{{t "coord.notfound.body"}}</p><p><a href="{{.BackURL}}">{{if eq .BackURL "/ui/coord"}}{{t "coord.forbidden.back"}}{{else}}{{t "coord.forbidden.overview"}}{{end}}</a></p></section>{{template "foot" .}}{{end}}
+
+{{define "search"}}{{template "head" .}}{{template "nav" .}}<main class="g-page kn"><link rel="stylesheet" href="/static/knowledge.css">
+{{with .SearchV}}<header class="g-page-head"><h1>{{t "search.title"}}</h1></header>
+<form class="kn-filters" method="get" action="/ui/search" role="search"><input class="clay-field kn-q" type="search" name="q" value="{{.Q}}" minlength="2" autofocus placeholder="{{t "search.placeholder"}}" aria-label="{{t "search.label"}}" autocomplete="off"><button class="ov-btn clay">{{t "knowledge.search"}}</button></form>
+{{range .Groups}}{{$icon := .Icon}}<section class="g-group"><h2 class="g-group-head"><span>{{.Label}}</span>{{if .All}}<a class="g-group-link" href="{{.All}}">{{t "search.all"}}</a>{{end}}</h2>
+<ul class="g-deck clay">{{range .Hits}}<li><a class="g-row g-hit" href="{{.Href}}"><span class="g-mark" aria-hidden="true">{{template "icon" $icon}}</span><span class="g-hit-t">{{.Title}}</span><span class="g-src">{{.Sub}}</span></a></li>{{end}}</ul></section>{{end}}
+{{if and .Searched (not .Groups)}}<p class="g-empty">{{t "search.none"}}</p>{{end}}
+{{end}}{{template "foot" .}}{{end}}

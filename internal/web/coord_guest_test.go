@@ -149,6 +149,12 @@ func TestGuestWebViewsShowTypedMentionsNotDeliveredOnes(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if loc := resp.Header.Get("Location"); resp.StatusCode == http.StatusFound && loc != "" {
+				resp.Body.Close()
+				if resp, err = login(t, srv, tokens["gus"]).Get(srv.URL + loc); err != nil {
+					t.Fatal(err)
+				}
+			}
 			out := body(t, resp)
 			if resp.StatusCode != 200 {
 				t.Fatalf("GET %s = %d", path, resp.StatusCode)

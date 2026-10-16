@@ -121,14 +121,14 @@ func TestOwnerWithoutAgentReadsTheRoomAndGetsTheComposer(t *testing.T) {
 		if strings.Contains(page, "coord-readonly") || strings.Contains(page, messages["coord.readonly"]) {
 			t.Errorf("%s: read-only line despite write access", who)
 		}
-		for _, want := range []string{`class="coord-composer"`, "/ui/coord/thread/create", "/ui/coord/send"} {
+		for _, want := range []string{`class="coord-composer rm-compose"`, "/ui/coord/thread/create", "/ui/coord/send"} {
 			if !strings.Contains(page, want) {
 				t.Errorf("%s: no %s", who, want)
 			}
 		}
 	}
 	_, page := fetchPage(t, e.Guest, e.Base+"/ui/coord?room="+url.QueryEscape(room))
-	if strings.Contains(page, `class="coord-composer"`) {
+	if strings.Contains(page, `class="coord-composer rm-compose"`) {
 		t.Error("guest sees a composer")
 	}
 }
@@ -137,7 +137,7 @@ func TestMemberWithAgentGetsTheComposer(t *testing.T) {
 	e := ovEnv(t)
 	room, _ := memberReadSeed(t, e)
 	_, page := fetchPage(t, e.Member, e.Base+"/ui/coord?room="+url.QueryEscape(room))
-	if !strings.Contains(page, `class="coord-composer"`) || strings.Contains(page, "coord-readonly") {
+	if !strings.Contains(page, `class="coord-composer rm-compose"`) || strings.Contains(page, "coord-readonly") {
 		t.Errorf("a member with an own agent has no composer")
 	}
 	if !strings.Contains(page, "/ui/coord/thread/create") {
@@ -367,7 +367,7 @@ func TestAgentsPageShowsLastPostAndWorkingRoomLinkToOwnerWithoutRoomAgent(t *tes
 			t.Errorf("%s: last post or room link missing", who)
 		}
 		_, overview := fetchPage(t, c, e.Base+"/ui/overview")
-		if !strings.Contains(overview, "worker-sess-a") {
+		if !strings.Contains(overview, "feat/sess-a") {
 			t.Errorf("%s: overview lacks the agent", who)
 		}
 		if status, _ := fetchPage(t, c, e.Base+"/ui/coord?room="+url.QueryEscape(room)); status != 200 {

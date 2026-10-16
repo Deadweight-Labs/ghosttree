@@ -1354,6 +1354,7 @@ Versioning, with pre-1.0 compatibility rules described in
   recheck.
 - Add additive snapshot-schema startup checks without historical backfill;
   existing live context and session data remain unchanged.
+- Fixed: the home page no longer hides the biggest queue behind "and 1 more" (the knowledge proposals row fell out after ten rows, and the link led to the task list); bundles always stay and the link leads to what was left out. A question is titled by the sentence that asks it, not by the first hundred characters. Agent rows on home link to their session, "waiting for an agent" no longer looks like "waiting for you", and the agents page uses the same state for dot and words (a waiting agent showed a green dot). Task cards lose the second preview line and carry the request link in the source line; the check hint wraps instead of scrolling out of sight. The room list of who is here is one column, and a question card is wide enough to keep its actions on one line. The search page no longer lights "Knowledge" in the navigation.
 
 ## 0.1.0-rc.3 — 2026-08-29
 
