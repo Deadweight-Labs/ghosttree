@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net/url"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -23,7 +25,9 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
-const gardenUsage = `usage: ctx garden check-knowledge [--project <remote>] [--repo <dir>] [--type pitfall,decision]
+const gardenUsage = `usage: ctx garden check-knowledge [--mode agent|api] [--project <remote>] [--repo <dir>] [--type pitfall,decision]
+                                  [--sessions 4] [--turns 60] [--per-session 30] [--session-timeout 40m]
+                                  [--claude <path>] [--claude-dir <dir>] [--no-mcp]
                                   [--limit <n>] [--max-usd 2] [--dry-run] [--propose] [--out <file>]
                                   [--db <path>] [--min-age 14]
                                   [--daily-usd N] [--daily-calls N] [--daily-tokens N]
@@ -32,7 +36,32 @@ const gardenUsage = `usage: ctx garden check-knowledge [--project <remote>] [--r
 The gardener checks pitfalls and decisions against the code and says whether
 each one still holds. It proposes, a person decides.
 
-It is an option and stays off without an API key: set GHOSTTREE_GARDEN_KEY, or a
+Two ways to run it:
+
+  --mode agent (default)  A few Claude Code sessions (claude -p, stream-json) go
+               through the entries together: the entries are split into topics
+               (code area of the files they name), one session per package
+               checks them against the code, finds duplicates and contradictions
+               between entries, and answers with JSON. ctx checks that JSON
+               (every verdict needs a citation that exists in the checkout, every
+               relation a verbatim quote of each entry) before anything is filed.
+               The session can read the checkout (Read, Grep, Glob, git log/show/
+               blame) and search ghosttree read-only; it cannot write, has no
+               network but the model proxy and ghosttree, never bypasses
+               permissions. Needs the claude binary and a settings.json in its
+               config directory (or the "garden" entry) naming the proxy; no
+               API key. Cost is metered from the stream's token usage, cache
+               included, as job garden (one call per turn).
+  --mode api   One Messages API call per entry, as before. Needs an API key.
+
+  --sessions   most sessions per run (default 4); --per-session most entries a
+               session gets (default 30); --turns most turns of a session (default
+               60); --limit caps the entries of the whole run
+  --claude, --claude-dir, --no-mcp
+               the claude binary; the directory it keeps its state in (also
+               GHOSTTREE_GARDEN_CLAUDE_DIR, holds settings.json); no ghosttree tools
+
+In api mode it is an option and stays off without an API key: set GHOSTTREE_GARDEN_KEY, or a
 "garden" entry with api_key_file or credential in llm.json. Without a key the
 command stops and does nothing (a dry run is the one exception: it reads, counts
 and calls nothing).
@@ -87,6 +116,10 @@ type gardenOpts struct {
 	Limits llmusage.Limits
 	// MinAge is the window in which an unchanged entry is not looked at again.
 	MinAge time.Duration
+	// Agent mode: how many sessions, entries per session and turns per session,
+	// and what starts a session.
+	Sessions, PerSession, Turns int
+	Runner                      garden.SessionRunner
 	// Now is the clock; nil means time.Now.
 	Now func() time.Time
 }
@@ -107,12 +140,21 @@ func cmdGarden(args []string, stdout io.Writer) int {
 	propose := fs.Bool("propose", false, "file stale/correction verdicts as staged gardener notes")
 	out := fs.String("out", "", "write the report to this file")
 	dbPath := fs.String("db", "", "ghosttree database: remember checks and usage between runs")
+	mode := fs.String("mode", "agent", "agent (Claude Code sessions) or api (one call per entry)")
+	sessions := fs.Int("sessions", 4, "agent mode: most sessions per run")
+	perSession := fs.Int("per-session", 30, "agent mode: most entries per session")
+	turns := fs.Int("turns", 60, "agent mode: most turns per session")
+	sessionTimeout := fs.Duration("session-timeout", 40*time.Minute, "agent mode: a session running longer is killed")
+	claudeBin := fs.String("claude", os.Getenv("GHOSTTREE_CLAUDE"), "agent mode: path of the claude binary")
+	claudeDir := fs.String("claude-dir", os.Getenv("GHOSTTREE_GARDEN_CLAUDE_DIR"), "agent mode: CLAUDE_CONFIG_DIR of the sessions (holds settings.json)")
+	noMCP := fs.Bool("no-mcp", false, "agent mode: give the sessions no ghosttree tools")
 	minAge := fs.Int("min-age", 14, "days; an entry looked at more recently is left out unless it or its code changed (0 = off)")
 	limits := addLimitFlags(fs, llmusage.JobGarden, "")
 	fs.Usage = func() { fmt.Fprintln(stdout, gardenUsage) }
 	// NaN compares false with everything and +Inf is no cap at all, so
 	// neither may reach the budget check.
-	if fs.Parse(args[1:]) != nil || !(*maxUSD > 0) || math.IsInf(*maxUSD, 0) || *limit < 0 || *minAge < 0 {
+	if fs.Parse(args[1:]) != nil || !(*maxUSD > 0) || math.IsInf(*maxUSD, 0) || *limit < 0 || *minAge < 0 ||
+		(*mode != "agent" && *mode != "api") || *sessions < 1 || *perSession < 1 || *turns < 12 || *sessionTimeout <= 0 {
 		fmt.Fprintln(stdout, gardenUsage)
 		return 2
 	}
@@ -124,13 +166,17 @@ func cmdGarden(args []string, stdout io.Writer) int {
 
 	// Opt-in first: nothing below runs without a key, except counting.
 	cfg, err := llm.LoadGardenConfig()
-	if errors.Is(err, llm.ErrGardenDisabled) {
+	switch {
+	case errors.Is(err, llm.ErrGardenDisabled) && *mode == "agent":
+		// The sessions are paid for through the settings.json of the claude
+		// directory; no key of ours is involved.
+	case errors.Is(err, llm.ErrGardenDisabled):
 		if !*dryRun {
 			fmt.Fprintln(stdout, err)
 			return 1
 		}
 		fmt.Fprintln(stdout, "note: no gardener key configured; this dry run calls nothing, a real run would refuse")
-	} else if err != nil {
+	case err != nil:
 		fmt.Fprintf(stdout, "gardener config: %v\n", err)
 		return 1
 	}
@@ -169,7 +215,7 @@ func cmdGarden(args []string, stdout io.Writer) int {
 		return 1
 	}
 	var model llm.UsageClient
-	if !*dryRun {
+	if !*dryRun && *mode == "api" {
 		c, err := llm.New(cfg.Config)
 		if err != nil {
 			fmt.Fprintf(stdout, "gardener config: %v\n", err)
@@ -195,7 +241,81 @@ func cmdGarden(args []string, stdout io.Writer) int {
 			opts.Types[t] = true
 		}
 	}
+	if *mode == "agent" {
+		opts.Sessions, opts.PerSession, opts.Turns = *sessions, *perSession, *turns
+		if !*dryRun {
+			bin, err := garden.FindClaude(*claudeBin)
+			if err != nil {
+				fmt.Fprintln(stdout, err)
+				return 1
+			}
+			cc := garden.ClaudeConfig{Bin: bin, Model: cfg.Model, RepoRoot: repo.Root, ConfigDir: *claudeDir,
+				Timeout: *sessionTimeout, ParentEnv: os.Environ()}
+			if !*noMCP {
+				if cc.CtxBin, err = os.Executable(); err != nil {
+					fmt.Fprintf(stdout, "cannot find the ctx binary for the ghosttree tools: %v\n", err)
+					return 1
+				}
+			}
+			if cfg.APIKey != "" {
+				if u, perr := url.Parse(cfg.BaseURL); perr == nil && u.Host == "api.anthropic.com" {
+					cc.APIKey = cfg.APIKey
+				} else {
+					cc.BaseURL, cc.Token = cfg.BaseURL, cfg.APIKey
+				}
+			}
+			if *claudeDir != "" {
+				if err := os.MkdirAll(*claudeDir, 0o700); err != nil {
+					fmt.Fprintf(stdout, "claude dir: %v\n", err)
+					return 1
+				}
+			}
+			cc.DenyRead = agentDenyRead(repo.Root, *claudeDir, *dbPath, cfg.APIKeyFile)
+			opts.Runner = garden.ClaudeRunner{Config: cc}
+		}
+		return runGardenAgent(client.New(sc), repo, project, opts, pricing, *out, stdout)
+	}
 	return runGardenCheck(client.New(sc), repo, project, opts, model, pricing, *out, stdout)
+}
+
+// agentDenyRead lists what a session may not read even though the tools could
+// reach it: the usual credential places under HOME, the session's own state,
+// the database, the llm.json directory and the key file. Anything that contains
+// the checkout is left out, or the session could read nothing.
+func agentDenyRead(root, claudeDir, db, keyFile string) []string {
+	var cand []string
+	if home, err := os.UserHomeDir(); err == nil {
+		for _, d := range []string{".config", ".claude", ".ssh", ".gnupg", ".aws", ".local/share"} {
+			cand = append(cand, filepath.Join(home, d))
+		}
+	}
+	cand = append(cand, claudeDir, db, keyFile)
+	if p := os.Getenv("GHOSTTREE_LLM_CONFIG"); p != "" {
+		cand = append(cand, filepath.Dir(p))
+	} else if d, err := os.UserConfigDir(); err == nil {
+		cand = append(cand, filepath.Join(d, "ghosttree"))
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, c := range cand {
+		if c == "" {
+			continue
+		}
+		abs, err := filepath.Abs(c)
+		if err != nil || seen[abs] {
+			continue
+		}
+		if abs == root || strings.HasPrefix(root, abs+string(filepath.Separator)) {
+			continue
+		}
+		seen[abs] = true
+		out = append(out, abs)
+		if db == c {
+			// SQLite keeps its journal next to the file.
+			out = append(out, abs+"-wal", abs+"-shm")
+		}
+	}
+	return out
 }
 
 // verifyCheckout refuses a checkout whose origin is not the project being
@@ -212,18 +332,24 @@ func verifyCheckout(root, project string) error {
 	return nil
 }
 
-func runGardenCheck(st gardenStore, repo *garden.Repo, project string, opts gardenOpts, model llm.UsageClient, pricing garden.Pricing, outPath string, stdout io.Writer) int {
+// gardenDue reads the active entries of the types asked for, oldest
+// observation first. known is every one of them by id. done is true when the
+// run is over already (nothing to check, or the store could not be read) and
+// code is its exit status.
+func gardenDue(st gardenStore, project string, opts gardenOpts, stdout io.Writer) (entries []garden.Entry, known map[int64]garden.Entry, code int, done bool) {
 	all, err := st.ProjectKnowledge(project, false)
 	if err != nil {
 		fmt.Fprintf(stdout, "cannot read knowledge: %v\n", err)
-		return 1
+		return nil, nil, 1, true
 	}
-	var entries []garden.Entry
+	known = map[int64]garden.Entry{}
 	for _, k := range all {
 		if !opts.Types[k.Type] || k.Status != "active" || k.Scope.Project != project || k.Harness == garden.Harness {
 			continue
 		}
-		entries = append(entries, garden.Entry{ID: k.ID, Type: k.Type, Title: k.Title, Body: k.Body, ObservedAt: k.ObservedAt, CreatedAt: k.CreatedAt, UpdatedAt: k.UpdatedAt})
+		e := garden.Entry{ID: k.ID, Type: k.Type, Title: k.Title, Body: k.Body, ObservedAt: k.ObservedAt, CreatedAt: k.CreatedAt, UpdatedAt: k.UpdatedAt}
+		entries = append(entries, e)
+		known[e.ID] = e
 	}
 	// Oldest observation first: those are the ones most likely to have been
 	// overtaken, and a limited run should spend itself there. Rotation then
@@ -231,7 +357,71 @@ func runGardenCheck(st gardenStore, repo *garden.Repo, project string, opts gard
 	sort.SliceStable(entries, func(i, j int) bool { return entries[i].Since() < entries[j].Since() })
 	if len(entries) == 0 {
 		fmt.Fprintf(stdout, "no %s entries in %s\n", joinTypes(opts.Types), project)
-		return 0
+		return nil, known, 0, true
+	}
+	return entries, known, 0, false
+}
+
+// runGardenAgent is the agent mode: the entries due are split into packages and
+// a few Claude Code sessions check them together.
+func runGardenAgent(st gardenStore, repo *garden.Repo, project string, opts gardenOpts, pricing garden.Pricing, outPath string, stdout io.Writer) int {
+	entries, known, code, done := gardenDue(st, project, opts, stdout)
+	if done {
+		return code
+	}
+	now := time.Now
+	if opts.Now != nil {
+		now = opts.Now
+	}
+	head, _ := repo.Head()
+	var rot garden.Rotation
+	if opts.State != nil {
+		checks, err := opts.State.GardenChecks(project)
+		if err != nil {
+			fmt.Fprintf(stdout, "cannot read earlier checks: %v\n", err)
+			return 1
+		}
+		seen := make(map[int64]garden.Seen, len(checks))
+		for id, c := range checks {
+			seen[id] = garden.Seen{CheckedAt: c.CheckedAt, Commit: c.Commit, EntryHash: c.EntryHash, Verdict: c.Verdict}
+		}
+		entries, rot = garden.Rotate(repo, entries, seen, opts.MinAge, now())
+	}
+	meter := &gardenMeter{st: opts.State, limits: opts.Limits, now: now}
+	aopts := garden.AgentOptions{
+		Runner: opts.Runner, Project: project, Pricing: pricing, MaxUSD: opts.MaxUSD, DryRun: opts.DryRun,
+		Sessions: opts.Sessions, PerSession: opts.PerSession, Turns: opts.Turns, Limit: opts.Limit, Known: known,
+		Gate: meter.gate, OnSession: meter.recordSession,
+	}
+	if opts.State != nil {
+		aopts.OnJudged = func(v garden.Verdict) {
+			err := opts.State.SaveGardenCheck(project, store.GardenCheck{KnowledgeID: v.Entry.ID, CheckedAt: now().UTC().Format(time.RFC3339Nano),
+				Commit: head, EntryHash: garden.HashOf(v.Entry), Verdict: v.Kind})
+			if err != nil {
+				fmt.Fprintf(stdout, "could not remember the check of #%d: %v\n", v.Entry.ID, err)
+			}
+		}
+	}
+	if !opts.DryRun && opts.Runner == nil {
+		fmt.Fprintln(stdout, "agent mode without a session runner")
+		return 1
+	}
+	res := garden.CheckAgent(context.Background(), repo, entries, aopts)
+	res.Rotation = rot
+	if meter.err != nil {
+		fmt.Fprintf(stdout, "could not record usage: %v\n", meter.err)
+	}
+	titles := map[int64]string{}
+	for id, e := range known {
+		titles[id] = e.Title
+	}
+	return finishGarden(st, project, opts, res, outPath, stdout, titles)
+}
+
+func runGardenCheck(st gardenStore, repo *garden.Repo, project string, opts gardenOpts, model llm.UsageClient, pricing garden.Pricing, outPath string, stdout io.Writer) int {
+	entries, _, code, done := gardenDue(st, project, opts, stdout)
+	if done {
+		return code
 	}
 	now := time.Now
 	if opts.Now != nil {
@@ -271,6 +461,12 @@ func runGardenCheck(st gardenStore, repo *garden.Repo, project string, opts gard
 	if meter.err != nil {
 		fmt.Fprintf(stdout, "could not record usage: %v\n", meter.err)
 	}
+	return finishGarden(st, project, opts, res, outPath, stdout, nil)
+}
+
+// finishGarden writes the report, files the proposals and turns the way the
+// run ended into an exit status. It is the same for both modes.
+func finishGarden(st gardenStore, project string, opts gardenOpts, res garden.Result, outPath string, stdout io.Writer, titles map[int64]string) int {
 	var report bytes.Buffer
 	garden.WriteReport(&report, project, res, time.Now())
 
@@ -307,7 +503,16 @@ func runGardenCheck(st gardenStore, repo *garden.Repo, project string, opts gard
 			fmt.Fprintf(stdout, "%v (%d proposals filed before the failure; the report above is complete)\n", err, n)
 			return 1
 		}
-		fmt.Fprintf(stdout, "%s %d proposals filed as staged notes from the gardener (see 'ctx review')\n", garden.Headline(res.Verdicts), n)
+		rn, err := garden.ProposeRelations(st, project, existing, res.Relations, titles)
+		if err != nil {
+			fmt.Fprintf(stdout, "%v (%d proposals filed before the failure; the report above is complete)\n", err, n+rn)
+			return 1
+		}
+		fmt.Fprintf(stdout, "%s %d proposals filed as staged notes from the gardener (see 'ctx review')", garden.Headline(res.Verdicts), n+rn)
+		if rn > 0 {
+			fmt.Fprintf(stdout, ", %d of them about duplicates or contradictions between entries", rn)
+		}
+		fmt.Fprintln(stdout)
 	}
 	if code != 0 {
 		return code
@@ -319,7 +524,7 @@ func runGardenCheck(st gardenStore, repo *garden.Repo, project string, opts gard
 	case "limit":
 		fmt.Fprintf(stdout, "stopped: %s\n", res.LimitHit)
 		return 3
-	case "errors":
+	case "errors", "tamper":
 		return 1
 	}
 	return 0
@@ -376,6 +581,26 @@ func (m *gardenMeter) gate() *llmusage.Reached {
 func (m *gardenMeter) record(v garden.Verdict, u llm.Usage, failed bool) {
 	rec := llmusage.Usage{Calls: 1, InputTokens: u.InputTokens, OutputTokens: u.OutputTokens,
 		CacheReadTokens: u.CacheReadTokens, CacheWriteTokens: u.CacheWriteTokens, CostMicroUSD: llmusage.MicroUSD(v.CostUSD)}
+	if failed {
+		rec.Failures = 1
+	}
+	m.run = m.run.Add(rec)
+	if m.st != nil {
+		if err := m.st.AddLLMUsage(llmusage.JobGarden, m.now().UTC().Format("2006-01-02"), rec); err != nil && m.err == nil {
+			m.err = err
+		}
+	}
+}
+
+// recordSession counts one agent session. Its calls are its turns, each of which
+// is one request to the proxy.
+func (m *gardenMeter) recordSession(st garden.SessionStat, failed bool) {
+	calls := st.Turns
+	if calls < 1 {
+		calls = 1
+	}
+	rec := llmusage.Usage{Calls: calls, InputTokens: st.Usage.InputTokens, OutputTokens: st.Usage.OutputTokens,
+		CacheReadTokens: st.Usage.CacheReadTokens, CacheWriteTokens: st.Usage.CacheWriteTokens, CostMicroUSD: llmusage.MicroUSD(st.CostUSD)}
 	if failed {
 		rec.Failures = 1
 	}
