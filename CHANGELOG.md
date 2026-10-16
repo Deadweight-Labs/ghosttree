@@ -6,6 +6,12 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Added: server language. `GHOSTTREE_LANGUAGE=de` (or `ctx serve --language de`) shows the
+  whole web interface in German, including the sign-in, invitation and pairing
+  pages, relative times, weekdays, dates and the greeting; `en` stays the default.
+  The language is resolved per request (today from the server setting), so a setting
+  per person needs no rework. Both catalogs are tested for the same keys and
+  placeholders. Texts for agents (bootstrap, MCP descriptions, rules) stay English.
 - Fixed: the `@agents` brake could be circumvented. The store now marks a broadcast
   when it writes the message (`coord_messages.is_broadcast`, additive; existing
   messages of the running five-minute window are marked on upgrade) and asks
