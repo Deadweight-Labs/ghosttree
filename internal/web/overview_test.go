@@ -96,7 +96,7 @@ func TestOverviewEveryListComesFromTheViewersVisibleSet(t *testing.T) {
 	}
 
 	_, owner := fetchPage(t, e.Owner, e.Base+"/ui/overview")
-	for _, want := range []string{"Visible request", "SECRET-REQ", "SECRET-LESSON", "SECRET-AGENT", "SECRET-PROPOSAL", "1/2", "0/3"} {
+	for _, want := range []string{"Visible request", "SECRET-REQ", "SECRET-LESSON", "SECRET-AGENT", "2 proposals wait for review", "1/2", "0/3"} {
 		if !strings.Contains(owner, want) {
 			t.Errorf("owner overview lacks %q", want)
 		}
@@ -131,12 +131,14 @@ func TestOverviewEveryListComesFromTheViewersVisibleSet(t *testing.T) {
 		}
 	}
 	_, member := fetchPage(t, e.Member, e.Base+"/ui/overview")
-	if strings.Contains(member, "Visible proposal") {
+	if strings.Contains(member, "Visible proposal") || strings.Contains(member, "for review") {
 		t.Error("a plain member is offered the review queue")
 	}
 	for name, c := range map[string]*http.Client{"reviewer": e.Reviewer, "lead": e.Lead} {
 		_, page := fetchPage(t, c, e.Base+"/ui/overview")
-		if !strings.Contains(page, "Visible proposal") || !strings.Contains(page, `href="/ui/review"`) {
+		// One bundled line, counting only what the viewer may review: the
+		// proposal of the hidden project is not in the number.
+		if !strings.Contains(page, "1 proposal waits for review") || strings.Contains(page, "2 proposals") || !strings.Contains(page, `href="/ui/review"`) {
 			t.Errorf("%s does not get the review candidate", name)
 		}
 	}
@@ -169,7 +171,7 @@ func TestGuestOverviewIsIdenticalWithAndWithoutHiddenData(t *testing.T) {
 		return out
 	}
 	empty := snapshot()
-	if !strings.Contains(empty["/ui/overview"], "Nothing here yet.") {
+	if !strings.Contains(empty["/ui/overview"], "Nothing waiting on you") {
 		t.Fatal("a guest without visible content gets no neutral line")
 	}
 	// Verborgene Daten aller Arten, auch Geräte-Abläufe und Anliegen.

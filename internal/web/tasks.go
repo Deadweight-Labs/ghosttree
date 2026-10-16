@@ -48,6 +48,12 @@ type tasksView struct {
 	Back    string
 	// Any: at least one row can be ticked; without it the form has no button.
 	Any bool
+	// Everyone: the list shows every task the viewer may see, not only those
+	// for them. Switch is the link to the other list.
+	Everyone bool
+	// Who is the filter value that goes back with the done form, "all" for Everyone.
+	Who    string
+	Switch string
 }
 
 // visibleProjects names the projects a list covers: the selected one, or every
@@ -103,13 +109,11 @@ func (a *app) overviewWaiting(r *http.Request, pa *store.ProjectAccess, project 
 			}
 		}
 	}
-	if len(out) == 0 {
-		return nil, nil
-	}
 	if len(out) > overviewMaxWaiting {
 		out = out[:overviewMaxWaiting]
 	}
-	return &tasksView{Rows: out, Project: project, Token: csrfOf(r), Back: "overview", Any: true}, nil
+	// The block is there with nothing in it too: it is where a person looks.
+	return &tasksView{Rows: out, Project: project, Token: csrfOf(r), Back: "overview", Any: len(out) > 0}, nil
 }
 
 func anyDoable(rows []taskRow) bool {
@@ -125,6 +129,10 @@ func (a *app) tasksPage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	pa := a.access(r)
 	project := selectedProject(a.shellFor(r, "tasks"))
+	// Mine is the default: what is assigned to the viewer plus what is for
+	// everyone. "Everyone" lists every task the viewer may see.
+	everyone := r.URL.Query().Get("who") == "all"
+	me, _ := store.AccountNumericID(browserPrincipal(r).ID)
 	var all []humantask.Task
 	for _, p := range visibleProjects(pa, project) {
 		tasks, err := a.store.ListHumanTasks(pa, store.TaskFilter{Project: p, State: "all", Limit: tasksShown})
@@ -132,11 +140,21 @@ func (a *app) tasksPage(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		all = append(all, tasks...)
+		for _, t := range tasks {
+			// Mine keeps finished tasks too, so the note of a task for everyone
+			// that was ticked off stays where the person looks.
+			if everyone || t.AssigneeAccount == 0 || t.AssigneeAccount == me {
+				all = append(all, t)
+			}
+		}
 	}
 	order := map[string]int{humantask.Open: 0, humantask.Done: 1, humantask.Confirmed: 2, humantask.Dropped: 3}
 	slices.SortStableFunc(all, func(x, y humantask.Task) int { return order[x.State] - order[y.State] })
 	v := &tasksView{Rows: a.taskRows(pa, all), Project: project, Token: csrfOf(r), Back: "tasks"}
+	v.Everyone = everyone
+	if everyone {
+		v.Who = "all"
+	}
 	v.Any = anyDoable(v.Rows)
 	switch {
 	case r.URL.Query().Get("fail") != "":
@@ -163,6 +181,9 @@ func (a *app) tasksDone(w http.ResponseWriter, r *http.Request) {
 	q := url.Values{}
 	if project := r.FormValue("project"); project != "" {
 		q.Set("project", project)
+	}
+	if r.FormValue("who") == "all" && back == "/ui/tasks" {
+		q.Set("who", "all")
 	}
 	if len(ids) == 0 {
 		http.Redirect(w, r, back+queryOf(q), http.StatusSeeOther)

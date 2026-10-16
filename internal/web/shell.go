@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/humantask"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
@@ -15,6 +16,9 @@ type navItem struct {
 	Key, Label, Href string
 	Current          bool
 	Sub              []navItem
+	// Count is the number beside the entry (open tasks for the viewer); 0 shows
+	// nothing.
+	Count int
 }
 
 type projectOption struct {
@@ -34,7 +38,12 @@ type shellBase struct {
 type shellMemoKey struct{}
 
 // shellMemo hängt an der Anfrage (requirePerson) und hält die Hülle.
-type shellMemo struct{ base *shellBase }
+type shellMemo struct {
+	base *shellBase
+	// tasks is the number of open tasks for the viewer, once counted.
+	tasks    int
+	tasksSet bool
+}
 
 // shellBaseFor liefert Betrachter und Projektliste. Ohne gültige Wahl gilt für
 // alle "All projects", das heißt alle Projekte, in denen der Betrachter eine
@@ -59,8 +68,10 @@ func (a *app) shellBaseFor(r *http.Request) shellBase {
 
 // shellView ist, was die Hülle (Seitenleiste, Kopf, Kontomenü) für genau diesen
 // Betrachter zeigt. Alles hier stammt aus Rolle und Sichtbarkeit des
-// Betrachters; es gibt keine Zähler und keine Einträge für Bereiche, die er
-// nicht sieht (#2447).
+// Betrachters; es gibt keine Einträge für Bereiche, die er nicht sieht (#2447).
+// Der einzige Zähler sind die offenen Aufgaben für ihn, gezählt über dieselbe
+// Sichtprüfung wie die Liste selbst (ListHumanTasks): er verrät nichts, was die
+// Liste nicht zeigt.
 type shellView struct {
 	On            bool
 	Primary       []navItem
@@ -72,6 +83,8 @@ type shellView struct {
 	Initial       string
 	RoleKey       string
 	Host          string
+	// Tabs are Requests | Tasks | Pains, set on the three list pages only.
+	Tabs []navItem
 }
 
 type viewerKind int
@@ -122,7 +135,7 @@ func (a *app) viewerOf(r *http.Request, pa *store.ProjectAccess) viewer {
 }
 
 // projectAware sind die Seiten, die ?project= auswerten.
-var projectAware = map[string]bool{"overview": true, "knowledge": true, "review": true, "context": true, "sessions": true, "agents": true, "requests": true, "coord": true}
+var projectAware = map[string]bool{"overview": true, "knowledge": true, "review": true, "context": true, "sessions": true, "agents": true, "requests": true, "tasks": true, "pains": true, "coord": true}
 
 // projectNeutral sind die Seiten über Konto und Verwaltung. Sie filtern nach
 // nichts; die Projektauswahl steht dort nicht, damit sie keinen Filter vortäuscht.
@@ -192,7 +205,19 @@ func (a *app) shellFor(r *http.Request, name string) shellView {
 			sub("knowledge-context", "nav.context", "/ui/context", "context"),
 		}
 	}
-	v.Primary = append(v.Primary, knowledge, item("requests", "nav.requests", "/ui/requests"))
+	requests := item("requests", "nav.requests", "/ui/requests")
+	open := a.openTaskCount(r, selectedProjectOf(base))
+	requests.Count = open
+	v.Primary = append(v.Primary, knowledge, requests)
+	switch name {
+	case "requests", "tasks", "pains":
+		tab := func(key, label, href string) navItem {
+			return navItem{Key: key, Label: label, Href: href, Current: key == name}
+		}
+		tasks := tab("tasks", "nav.tab_tasks", "/ui/tasks")
+		tasks.Count = open
+		v.Tabs = []navItem{tab("requests", "nav.tab_requests", "/ui/requests"), tasks, tab("pains", "nav.tab_pains", "/ui/pains")}
+	}
 
 	switch kind {
 	case viewerOwner:
@@ -211,6 +236,46 @@ func (a *app) shellFor(r *http.Request, name string) shellView {
 		v.Projects, v.AllSelected = base.projects, base.all
 	}
 	return v
+}
+
+// selectedProjectOf is the project chosen in the shell, "" for all projects.
+func selectedProjectOf(base shellBase) string {
+	if base.all {
+		return ""
+	}
+	for _, p := range base.projects {
+		if p.Selected {
+			return p.Remote
+		}
+	}
+	return ""
+}
+
+// openTaskCount is the number of open tasks for the viewer in the chosen
+// project (or all they can see): assigned to them, or for everyone. It counts
+// what ListHumanTasks lets through, nothing else, and once per request.
+func (a *app) openTaskCount(r *http.Request, project string) int {
+	memo, _ := r.Context().Value(shellMemoKey{}).(*shellMemo)
+	if memo != nil && memo.tasksSet {
+		return memo.tasks
+	}
+	pa := a.access(r)
+	n := 0
+	for _, p := range visibleProjects(pa, project) {
+		tasks, err := a.store.ListHumanTasks(pa, store.TaskFilter{Project: p, State: humantask.Open, Mine: true, Limit: tasksShown})
+		if err != nil {
+			continue
+		}
+		for _, row := range a.taskRows(pa, tasks) {
+			if row.CanDone {
+				n++
+			}
+		}
+	}
+	if memo != nil {
+		memo.tasks, memo.tasksSet = n, true
+	}
+	return n
 }
 
 // publicHost ist der Host, den die Fußzeile zeigt: der der öffentlichen URL,

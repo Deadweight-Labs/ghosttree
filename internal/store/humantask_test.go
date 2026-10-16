@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -13,6 +14,9 @@ import (
 
 func (w *painWorld) task(t *testing.T, who string, in humantask.CreateInput) humantask.Task {
 	t.Helper()
+	if in.Assignee == "" {
+		in.Everyone = true // these tests are about tasks nobody in particular owns
+	}
 	acct, _ := accountNumericID(w.pa[who].principal.ID)
 	task, err := w.pa[who].CreateHumanTask(in, humantask.Actor{AccountID: acct, Person: who})
 	if err != nil {
@@ -390,5 +394,49 @@ func TestPainAndTasksThroughTheRuntimeWriter(t *testing.T) {
 	}
 	if got, err := s.ListHumanTasks(robin, TaskFilter{Project: roleProject, State: "all"}); err != nil || len(got) != 1 || got[0].State != humantask.Confirmed {
 		t.Errorf("list: %+v %v", got, err)
+	}
+}
+
+// Without a recipient a task belongs to the person who creates it, i.e. the
+// human whose session the agent is; "for everyone" is an explicit choice, and
+// "mine" is what is assigned to me plus what is for everyone.
+func TestHumanTaskWithoutRecipientBelongsToTheCreator(t *testing.T) {
+	w := newPainWorld(t)
+	rid := w.request(t, "Empfänger")
+	mia, rex := w.pa["mia"], w.pa["rex"]
+	acct, _ := accountNumericID(mia.principal.ID)
+	actor := humantask.Actor{AccountID: acct, Person: "mia"}
+
+	own, err := mia.CreateHumanTask(humantask.CreateInput{RequestID: rid, Kind: "input", Title: "default"}, actor)
+	if err != nil || own.Assignee != "mia" || own.AssigneeAccount != acct {
+		t.Fatalf("default recipient: %+v %v, want mia", own, err)
+	}
+	all, err := mia.CreateHumanTask(humantask.CreateInput{RequestID: rid, Kind: "input", Title: "alle", Everyone: true}, actor)
+	if err != nil || all.Assignee != "" || all.AssigneeAccount != 0 {
+		t.Fatalf("for everyone: %+v %v, want no assignee", all, err)
+	}
+	named, err := mia.CreateHumanTask(humantask.CreateInput{RequestID: rid, Kind: "input", Title: "rex", Assignee: "rex"}, actor)
+	if err != nil || named.Assignee != "rex" {
+		t.Fatalf("named recipient: %+v %v", named, err)
+	}
+	if _, err := mia.CreateHumanTask(humantask.CreateInput{RequestID: rid, Kind: "input", Title: "x", Assignee: "rex", Everyone: true}, actor); ruleCode(err) != "assignee_conflict" {
+		t.Fatalf("assignee and everyone together: %v", err)
+	}
+
+	titles := func(pa *ProjectAccess, f TaskFilter) string {
+		f.Project, f.State = roleProject, humantask.Open
+		list, _ := w.st.ListHumanTasks(pa, f)
+		var out []string
+		for _, task := range list {
+			out = append(out, task.Title)
+		}
+		slices.Sort(out)
+		return strings.Join(out, ",")
+	}
+	if got := titles(mia, TaskFilter{Mine: true}); got != "alle,default" {
+		t.Errorf("mia mine = %q, want her own and the one for everyone", got)
+	}
+	if got := titles(rex, TaskFilter{Mine: true}); got != "alle,rex" {
+		t.Errorf("rex mine = %q, want his own and the one for everyone, not mia's", got)
 	}
 }

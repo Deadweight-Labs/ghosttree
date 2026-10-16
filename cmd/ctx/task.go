@@ -74,7 +74,8 @@ func cmdTask(args []string, stdout io.Writer) int {
 		desc := fs.String("desc", "", "description")
 		request := fs.String("request", "", "request it hangs on; default: the work of this session")
 		work := fs.Int64("work", 0, "work id from request start")
-		assign := fs.String("assign", "", "project member")
+		assign := fs.String("assign", "", "project member; default: you")
+		everyone := fs.Bool("everyone", false, "anybody in the project may do it")
 		project := fs.String("project", "", "project; default: the current one")
 		if fs.Parse(rest) != nil || *kind == "" || *title == "" {
 			return usageErr()
@@ -84,7 +85,7 @@ func cmdTask(args []string, stdout io.Writer) int {
 			return writeRequestCLIError(stdout, jsonMode, 1, err)
 		}
 		in := humantask.CreateInput{Project: target, Kind: *kind, Title: *title, Description: *desc, Location: *where,
-			CheckHint: *check, WorkID: *work, Assignee: *assign}
+			CheckHint: *check, WorkID: *work, Assignee: *assign, Everyone: *everyone}
 		if *request != "" {
 			n, ok := pain.ParseNumberRef(*request, "REQ-")
 			if !ok {

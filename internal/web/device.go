@@ -3,6 +3,7 @@ package web
 import (
 	"errors"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -102,6 +103,54 @@ type tokenRow struct {
 	Account, Label, Kind, Machine, Status string
 	Created, LastUsed, Expires, Revoked   string
 	Revocable                             bool
+	// Unused: never used, and old enough that it is not simply waiting for its
+	// first call. These are what "Revoke unused" revokes.
+	Unused bool
+	// Tracked: use of this token has been recorded long enough for an empty
+	// last use to mean "never".
+	Tracked bool
+}
+
+// tokenUnusedGrace is how long a token has to have been observed without a
+// single call before it counts as unused. Observed means: since it was issued
+// or since use tracking began, whichever is later. A token used only now and
+// then must have had the chance to show up.
+const tokenUnusedGrace = 14 * 24 * time.Hour
+
+// tokenTracked says whether a token has been observed for the grace period.
+func tokenTracked(t store.TokenInfo, now, since time.Time) bool {
+	observed := parseTime(t.CreatedAt)
+	if since.IsZero() || observed.IsZero() {
+		return false
+	}
+	if since.After(observed) {
+		observed = since
+	}
+	return now.Sub(observed) >= tokenUnusedGrace
+}
+
+// tokenIsUnused says whether a token is active, was never used and is older
+// than the grace period. The token the current session signed in with is never
+// unused, whatever its last-used column says: revoking it would end the very
+// session that asks.
+func tokenIsUnused(t store.TokenInfo, now time.Time, current int64, since time.Time) bool {
+	if since.IsZero() {
+		return false
+	}
+	if t.RevokedAt != "" || t.LastUsedAt != "" || (current != 0 && t.ID == current) {
+		return false
+	}
+	if t.ExpiresAt != "" && t.ExpiresAt <= now.Format(time.RFC3339) {
+		return false
+	}
+	observed := parseTime(t.CreatedAt)
+	if observed.IsZero() {
+		return false
+	}
+	if since.After(observed) {
+		observed = since
+	}
+	return now.Sub(observed) >= tokenUnusedGrace
 }
 
 // tokenKindLabel übersetzt die gespeicherte Art in die angezeigte: 'cli' sind
@@ -129,7 +178,9 @@ func (a *app) tokensPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	nowText := time.Now().UTC().Format(time.RFC3339)
+	now := time.Now().UTC()
+	nowText := now.Format(time.RFC3339)
+	since := parseTime(a.store.TokenUseTrackingSince())
 	rows := make([]tokenRow, 0, len(tokens))
 	for _, t := range tokens {
 		status := "active"
@@ -145,9 +196,89 @@ func (a *app) tokensPage(w http.ResponseWriter, r *http.Request) {
 		}
 		rows = append(rows, tokenRow{ID: t.ID, Account: account, Label: t.Label, Kind: tokenKindLabel(t.Kind), Machine: t.Machine,
 			Status: status, Created: t.CreatedAt, LastUsed: t.LastUsedAt, Expires: t.ExpiresAt, Revoked: t.RevokedAt,
-			Revocable: status == "active"})
+			Revocable: status == "active", Tracked: tokenTracked(t, now, since), Unused: tokenIsUnused(t, now, principal.TokenID, since)})
 	}
-	a.renderBrowser(w, r, "tokens", pageData{Title: msg("adm.tokens.title"), Tokens: rows, Admin: admin})
+	sortTokenRows(rows)
+	data := pageData{Title: msg("adm.tokens.title"), Tokens: rows, Admin: admin}
+	for _, row := range rows {
+		if row.Unused {
+			data.UnusedTokens++
+			if row.Account != principal.Label {
+				data.UnusedForeign = true
+			}
+		}
+	}
+	if n, err := strconv.Atoi(r.URL.Query().Get("revoked")); err == nil && n > 0 {
+		data.TokenResult = msg("adm.tokens.revoke_unused_done", n)
+	}
+	a.renderBrowser(w, r, "tokens", data)
+}
+
+// sortTokenRows puts the tokens in use first, the most recently used on top;
+// what was never used follows, newest first; revoked and expired ones close the
+// list.
+func sortTokenRows(rows []tokenRow) {
+	rank := func(t tokenRow) int {
+		switch {
+		case t.Status != "active":
+			return 2
+		case t.LastUsed == "":
+			return 1
+		}
+		return 0
+	}
+	slices.SortStableFunc(rows, func(x, y tokenRow) int {
+		if rx, ry := rank(x), rank(y); rx != ry {
+			return rx - ry
+		}
+		if rank(x) == 0 && x.LastUsed != y.LastUsed {
+			return strings.Compare(y.LastUsed, x.LastUsed)
+		}
+		return strings.Compare(y.Created, x.Created)
+	})
+}
+
+// tokensRevokeUnused revokes the tokens that were never used: the person's own,
+// and for an administrator those of every account the page lists. Tokens of
+// other accounts only from an interactive session, like a single revoke.
+func (a *app) tokensRevokeUnused(w http.ResponseWriter, r *http.Request) {
+	principal := browserPrincipal(r)
+	admin := a.isAdmin(principal)
+	var tokens []store.TokenInfo
+	var err error
+	if admin {
+		tokens, err = a.store.ListAllTokens()
+	} else {
+		tokens, err = a.store.ListTokens(principal.Label)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	now := time.Now().UTC()
+	since := parseTime(a.store.TokenUseTrackingSince())
+	var ids []int64
+	foreign := false
+	for _, t := range tokens {
+		if !tokenIsUnused(t, now, principal.TokenID, since) {
+			continue
+		}
+		if t.AccountID != "" && t.AccountID != principal.ID {
+			foreign = true
+		}
+		ids = append(ids, t.ID)
+	}
+	if foreign && !interactive(r) {
+		a.notInteractive(w, r)
+		return
+	}
+	for _, id := range ids {
+		if err := a.store.RevokeToken(id); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	http.Redirect(w, r, "/ui/account/tokens?revoked="+strconv.Itoa(len(ids)), http.StatusSeeOther)
 }
 
 func (a *app) isAdmin(p store.Principal) bool {

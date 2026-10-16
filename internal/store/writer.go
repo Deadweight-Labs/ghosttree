@@ -55,6 +55,7 @@ type runtimeWriter struct {
 	bestEffortWrite                                func(int, bestEffortBatch) error
 	bestEffort                                     [bestEffortKinds]bestEffortBatch
 	bestEffortDrops                                [bestEffortKinds]atomic.Uint64
+	tokenTouched                                   map[int64]time.Time
 	batches, batchedOperations, fallbackOperations uint64
 }
 

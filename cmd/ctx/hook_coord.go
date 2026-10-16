@@ -295,7 +295,7 @@ func postToolUse(stdin io.Reader, harness string, stdout io.Writer) int {
 			registerDone := make(chan struct{})
 			go func() {
 				defer close(registerDone)
-				registerHookSession(raw, harness, false)
+				registerHookSession(raw, harness, false, store.HookTool)
 			}()
 			text, polled := coordInboxContext(raw, false)
 			<-registerDone
@@ -306,5 +306,22 @@ func postToolUse(stdin io.Reader, harness string, stdout io.Writer) int {
 		}
 	}
 	_ = json.NewEncoder(stdout).Encode(out)
+	return 0
+}
+
+// turnEnd is the Stop hook: the turn is over. It tells the server so (a turn
+// that ended is never "stuck") and answers with an empty, well-formed object,
+// because Claude Code validates a Stop hook's output and knows no
+// hookSpecificOutput for it.
+func turnEnd(stdin io.Reader, harness string, stdout io.Writer) int {
+	if os.Getenv("GHOSTTREE_HOOK_SYNTHETIC") != "1" {
+		if harness == "claude" || harness == "codex" {
+			_ = hookstate.Record(harness, "Stop")
+		}
+		if raw, err := io.ReadAll(io.LimitReader(stdin, 4<<20)); err == nil {
+			registerHookSession(raw, harness, true, store.HookTurnEnd)
+		}
+	}
+	_, _ = io.WriteString(stdout, "{}\n")
 	return 0
 }

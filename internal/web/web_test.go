@@ -107,7 +107,7 @@ func TestShellAuthAndNavigation(t *testing.T) {
 	client := login(t, srv, token)
 	resp, _ = client.Get(srv.URL + "/ui/requests")
 	html := body(t, resp)
-	for _, want := range []string{"Overview", "Agents", "Rooms", "Requests", "Knowledge", `data-clay-theme="ghosttree"`} {
+	for _, want := range []string{"Home", "Agents", "Rooms", "Requests", "Knowledge", `data-clay-theme="ghosttree"`} {
 		if !strings.Contains(html, want) {
 			t.Errorf("page missing %q", want)
 		}

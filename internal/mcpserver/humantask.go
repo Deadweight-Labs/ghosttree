@@ -19,7 +19,8 @@ type HumanTaskCreateInput struct {
 	CheckHint   string `json:"check_hint,omitempty" jsonschema:"how you will check it is done, for example that the file exists or the entry is in the vault"`
 	RequestID   int64  `json:"request_id,omitempty" jsonschema:"the request it hangs on; omit to use the request this session works on"`
 	WorkID      int64  `json:"work_id,omitempty" jsonschema:"the work from request_start_work, so the handoff travels with the task"`
-	Assignee    string `json:"assignee,omitempty" jsonschema:"the name of a project member; omit to leave it to whoever can"`
+	Assignee    string `json:"assignee,omitempty" jsonschema:"the name of a project member; omit it and the task is for the human this session belongs to"`
+	Everyone    bool   `json:"everyone,omitempty" jsonschema:"set it only when anybody in the project may do the task (not the person you work for); not together with assignee"`
 }
 
 type HumanTaskListInput struct {
@@ -92,7 +93,7 @@ func (s *Server) handleHumanTaskCreate(_ context.Context, _ *mcp.CallToolRequest
 	}
 	create := humantask.CreateInput{
 		Project: project, Kind: in.Kind, Title: in.Title, Description: in.Description, Location: in.Location,
-		CheckHint: in.CheckHint, RequestID: in.RequestID, WorkID: in.WorkID, Assignee: in.Assignee,
+		CheckHint: in.CheckHint, RequestID: in.RequestID, WorkID: in.WorkID, Assignee: in.Assignee, Everyone: in.Everyone,
 	}
 	if in.RequestID == 0 && in.WorkID == 0 {
 		create.SessionID = s.currentSessionID()

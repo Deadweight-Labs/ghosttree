@@ -6,6 +6,28 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Changed (web): quick wins from the UI persona audit. The start page is now
+  "Home". Tasks and pains are tabs next to Requests (`/ui/tasks`, `/ui/pains`), the
+  navigation keeps "Requests" lit there and shows the number of open tasks for you.
+  "Waiting on you" is always on Home (empty: "Nothing waiting on you"). In "Next"
+  agents' questions come first and all knowledge proposals are one line that links
+  to the review. Agent rows say what the agent works on (request title, work note,
+  branch) and keep the id in the tooltip. Home and the room show the same states:
+  "Waiting on you" (only for the person who was asked; everyone else reads
+  "Waiting for a person") and the new "Stuck?" (an agent in the middle of a turn
+  without any hook event for ten minutes; needs the Stop and StopFailure hooks,
+  `ctx install claude` again; subagent calls count as signs of life, a finished
+  turn or one ended by an API error is never stuck).
+  `human_task_create` without an assignee now assigns the task to the person the
+  session belongs to; `everyone` (MCP), `--everyone` (`ctx task add`) keeps it open
+  to the whole project. `/ui/tasks` filters Mine and Everyone. Organization and
+  Devices have their own icons; Devices & tokens is sorted by last use. The last
+  use of a token is now recorded when it authenticates (at most every ten
+  minutes). "never used" and "Revoke unused" appear only for tokens that stayed
+  unused for 14 days after use recording began; before that the page says "use
+  not recorded yet". An administrator without an interactive session is not
+  offered "Revoke unused" when it would reach other accounts. Ticking a task in
+  "Everyone" stays in that filter.
 - Added: agents of different accounts can find and address each other. An agent
   now stores its machine; its name reads "person · machine · branch" in
   `coord_peers`, the hook sender line, the agents list and the room members, and

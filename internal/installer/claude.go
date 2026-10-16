@@ -14,6 +14,8 @@ const (
 	pauseGateHookCommand = "ctx hook pause-gate"
 	// postToolHookCommand: the coordination inbox look inside the agent loop.
 	postToolHookCommand = "ctx hook post-tool-use"
+	// turnEndHookCommand: the Stop hook, which reports the end of a turn.
+	turnEndHookCommand = "ctx hook turn-end"
 )
 
 // ClaudeConfigDir resolves where Claude Code keeps its user config. Verified on
@@ -73,7 +75,7 @@ func installClaudeSelected(home string, selected ComponentSet) ([]Change, error)
 // (A timed-out hook is fail-open in Claude Code, so this bounds the cost, it
 // is not a gate.)
 func hookTimeout(command string) int {
-	if rest, ok := ctxSubcommand(command); ok && (strings.HasPrefix(rest, "hook pause-gate") || strings.HasPrefix(rest, "hook post-tool-use") || strings.HasPrefix(rest, "hook user-prompt-submit")) {
+	if rest, ok := ctxSubcommand(command); ok && (strings.HasPrefix(rest, "hook pause-gate") || strings.HasPrefix(rest, "hook post-tool-use") || strings.HasPrefix(rest, "hook user-prompt-submit") || strings.HasPrefix(rest, "hook turn-end")) {
 		return 5
 	}
 	return 0

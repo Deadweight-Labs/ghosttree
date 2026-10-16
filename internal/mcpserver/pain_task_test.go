@@ -34,7 +34,7 @@ func TestPainAndTaskToolsHaveSchemasAndOptionalFields(t *testing.T) {
 	optional := map[string][]string{
 		"pain_record":        {"project", "body", "motivates"},
 		"pain_update":        {"state", "remaining", "evidence_kind", "evidence_ref", "note", "title", "body", "reason", "link_add", "link_remove"},
-		"human_task_create":  {"project", "description", "location", "check_hint", "request_id", "work_id", "assignee"},
+		"human_task_create":  {"project", "description", "location", "check_hint", "request_id", "work_id", "assignee", "everyone"},
 		"human_task_list":    {"project", "state", "request_id", "mine"},
 		"human_task_resolve": {"note"},
 		"pain_search":        {"query", "state", "request_id", "limit"},

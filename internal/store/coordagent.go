@@ -58,6 +58,9 @@ type CoordAgent struct {
 	// HookActivity is set by a registration that a hook of the session itself
 	// fired: the session did something right now. Input only.
 	HookActivity bool `json:"hook_activity,omitempty"`
+	// HookEvent says which hook fired the registration (HookTurnStart,
+	// HookTool, HookTurnEnd, HookTouch); empty for any other. Input only.
+	HookEvent string `json:"hook_event,omitempty"`
 	// Presence ist nur in Peer-Antworten gesetzt, beim Lesen abgeleitet.
 	Presence *Presence `json:"presence,omitempty"`
 }
@@ -163,6 +166,17 @@ func (s *Store) RegisterCoordAgent(a CoordAgent) (int64, error) {
 	if a.HookActivity {
 		hookAt = at
 	}
+	// Der Turnzustand ändert sich nur durch ein Hook-Ereignis, das etwas über
+	// ihn sagt; ein Subagent-Aufruf (touch) hält nur das Lebenszeichen frisch.
+	turnOpen, turnTracked, turnSet := 0, 0, 0
+	if a.HookActivity {
+		switch a.HookEvent {
+		case HookTurnStart, HookTool:
+			turnOpen, turnSet = 1, 1
+		case HookTurnEnd:
+			turnTracked, turnSet = 1, 1
+		}
+	}
 	kind := ""
 	switch {
 	case strings.HasPrefix(a.RoomKey, "project:"):
@@ -196,8 +210,8 @@ func (s *Store) RegisterCoordAgent(a CoordAgent) (int64, error) {
 	}
 	result, err := tx.Exec(`INSERT INTO coord_agents(
 			external_id,provider,room_key,display_name,person,principal_id,cwd,branch,worktree,
-			parent_external_id,capabilities,registered_at,last_seen_at,role,session_id,last_hook_at,machine)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,COALESCE(NULLIF(?,''),'member'),?,?,?)
+			parent_external_id,capabilities,registered_at,last_seen_at,role,session_id,last_hook_at,machine,turn_open,turn_tracked)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,COALESCE(NULLIF(?,''),'member'),?,?,?,?,?)
 		ON CONFLICT(external_id) DO UPDATE SET
 			provider=CASE WHEN coord_agents.provider IN ('unknown','unidentified-harness','')
 				AND excluded.provider NOT IN ('unknown','unidentified-harness','')
@@ -210,12 +224,14 @@ func (s *Store) RegisterCoordAgent(a CoordAgent) (int64, error) {
 			role=COALESCE(NULLIF(?,''),coord_agents.role),
 			session_id=COALESCE(NULLIF(excluded.session_id,''),coord_agents.session_id),
 			last_hook_at=COALESCE(NULLIF(excluded.last_hook_at,''),coord_agents.last_hook_at),
-			machine=COALESCE(NULLIF(excluded.machine,''),coord_agents.machine)
+			machine=COALESCE(NULLIF(excluded.machine,''),coord_agents.machine),
+			turn_open=CASE WHEN ?=1 THEN excluded.turn_open ELSE coord_agents.turn_open END,
+			turn_tracked=MAX(coord_agents.turn_tracked,excluded.turn_tracked)
 		WHERE (coord_agents.principal_id<>'' AND coord_agents.principal_id=excluded.principal_id)
 		   OR (coord_agents.principal_id='' AND coord_agents.person<>'' AND coord_agents.person=excluded.person AND excluded.principal_id<>'')
 		   OR (coord_agents.principal_id='' AND coord_agents.person='' AND excluded.principal_id='' AND excluded.person='')`,
 		a.ExternalID, a.Provider, a.RoomKey, displayName, a.Person, a.PrincipalID, a.Cwd,
-		a.Branch, a.Worktree, a.ParentExternalID, a.Capabilities, at, at, a.Role, a.SessionID, hookAt, CleanMachine(a.Machine), a.Role)
+		a.Branch, a.Worktree, a.ParentExternalID, a.Capabilities, at, at, a.Role, a.SessionID, hookAt, CleanMachine(a.Machine), turnOpen, turnTracked, a.Role, turnSet)
 	if err != nil {
 		return 0, err
 	}
@@ -335,7 +351,7 @@ func (s *Store) coordPeers(roomKey, since string, ownOnly map[string]bool) ([]Co
 	query := `SELECT a.id,a.external_id,a.provider,m.room_key,a.display_name,
 			COALESCE(person,''),COALESCE(cwd,''),COALESCE(branch,''),
 			COALESCE(worktree,''),COALESCE(parent_external_id,''),
-			COALESCE(capabilities,''),registered_at,last_seen_at,COALESCE(a.principal_id,''),a.role,a.last_poll_at,a.session_id,a.last_hook_at,
+			COALESCE(capabilities,''),registered_at,last_seen_at,COALESCE(a.principal_id,''),a.role,a.last_poll_at,a.session_id,a.last_hook_at,a.turn_open,a.turn_tracked,
 			a.machine,a.work_note,a.work_note_at
 		FROM coord_agents a JOIN coord_room_memberships m ON m.principal_id=a.external_id
 		WHERE m.room_key=? AND m.left_at=''`
@@ -353,12 +369,14 @@ func (s *Store) coordPeers(roomKey, since string, ownOnly map[string]bool) ([]Co
 	var out []CoordAgent
 	var principals []string
 	var polls, sessions, hooks []string
+	var turnOpens, turnTrackeds []bool
 	for rows.Next() {
 		var a CoordAgent
 		var principal, poll, session, hook string
+		var turnOpen, turnTracked int
 		if err := rows.Scan(&a.ID, &a.ExternalID, &a.Provider, &a.RoomKey,
 			&a.DisplayName, &a.Person, &a.Cwd, &a.Branch, &a.Worktree,
-			&a.ParentExternalID, &a.Capabilities, &a.RegisteredAt, &a.LastSeenAt, &principal, &a.RequestedRole, &poll, &session, &hook,
+			&a.ParentExternalID, &a.Capabilities, &a.RegisteredAt, &a.LastSeenAt, &principal, &a.RequestedRole, &poll, &session, &hook, &turnOpen, &turnTracked,
 			&a.Machine, &a.WorkNote, &a.WorkNoteAt); err != nil {
 			return nil, err
 		}
@@ -367,6 +385,8 @@ func (s *Store) coordPeers(roomKey, since string, ownOnly map[string]bool) ([]Co
 		polls = append(polls, poll)
 		sessions = append(sessions, session)
 		hooks = append(hooks, hook)
+		turnOpens = append(turnOpens, turnOpen == 1)
+		turnTrackeds = append(turnTrackeds, turnTracked == 1)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -393,7 +413,7 @@ func (s *Store) coordPeers(roomKey, since string, ownOnly map[string]bool) ([]Co
 	}
 	agents := make([]presenceAgent, len(out))
 	for i := range out {
-		agents[i] = presenceAgent{ExternalID: out[i].ExternalID, PrincipalID: principals[i], SessionID: sessions[i], LastPoll: polls[i], LastHook: hooks[i]}
+		agents[i] = presenceAgent{ExternalID: out[i].ExternalID, PrincipalID: principals[i], SessionID: sessions[i], LastPoll: polls[i], LastHook: hooks[i], TurnOpen: turnOpens[i], TurnTracked: turnTrackeds[i]}
 	}
 	derived := presenceBatch(s.db, time.Now().UTC(), roomKey, agents, ownOnly)
 	// Wartekreise über alle Mitglieder des Raums, unabhängig vom since-Filter.

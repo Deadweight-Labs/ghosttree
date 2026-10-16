@@ -125,3 +125,9 @@
 .ad-body .ad-copy { margin-top: 8px; }
 .ad-form .ad-sel + .ad-sel { margin-left: 0; }
 .ad-fields > .ad-f:not(.ad-grow):not(.ad-days) { flex: none; }
+
+/* Tokens never used stay in the list but recede; "Revoke unused" asks first. */
+.ad-token.is-unused .ad-body { opacity: .62; }
+.ad-never { font-weight: 700; }
+.ad-unused { margin: 0 0 var(--space-4); }
+.ad-unused > form { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); margin-top: var(--space-3); }

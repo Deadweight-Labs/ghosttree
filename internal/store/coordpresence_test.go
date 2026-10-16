@@ -52,6 +52,25 @@ func TestDerivePresence(t *testing.T) {
 			in: PresenceInput{LastActivityAt: ago(10 * time.Second),
 				Waits: []PresenceWait{{Reason: AttentionQuestion, Kind: "peer", At: ago(time.Minute)}}},
 			reach: ReachUnknown, work: WorkWorking, workOrigin: OriginObserved, workAge: 10},
+		{name: "mid-turn and silent past the threshold is stuck, derived",
+			in:    PresenceInput{LastActivityAt: ago(StuckAfter + time.Minute), TurnOpen: true, TurnTracked: true},
+			reach: ReachUnknown, work: WorkStuck, workOrigin: OriginDerived, workAge: int64((StuckAfter + time.Minute) / time.Second)},
+		{name: "silent just under the threshold is not stuck",
+			in:    PresenceInput{LastActivityAt: ago(StuckAfter - time.Minute), TurnOpen: true, TurnTracked: true},
+			reach: ReachUnknown, work: WorkUnknown},
+		{name: "a finished turn is never stuck, however long the silence",
+			in:    PresenceInput{LastActivityAt: ago(StuckAfter + time.Hour/2), TurnOpen: false, TurnTracked: true},
+			reach: ReachUnknown, work: WorkUnknown},
+		{name: "without a Stop hook ever seen an open turn proves nothing",
+			in:    PresenceInput{LastActivityAt: ago(StuckAfter + time.Minute), TurnOpen: true},
+			reach: ReachUnknown, work: WorkUnknown},
+		{name: "long past the cap the session is gone, not stuck",
+			in:    PresenceInput{LastActivityAt: ago(StuckMaxAge + time.Minute), TurnOpen: true, TurnTracked: true},
+			reach: ReachUnknown, work: WorkUnknown},
+		{name: "an unanswered question to a person beats stuck",
+			in: PresenceInput{LastActivityAt: ago(StuckAfter + 5*time.Minute), TurnOpen: true, TurnTracked: true,
+				Waits: []PresenceWait{{Reason: AttentionQuestion, Kind: "user", At: ago(time.Minute)}}},
+			reach: ReachUnknown, work: WorkWaitingUser, workOrigin: OriginDerived, workAge: 60},
 		{name: "question newer than the activity wins",
 			in: PresenceInput{LastActivityAt: ago(90 * time.Second),
 				Waits: []PresenceWait{{Reason: AttentionQuestion, Kind: "peer", At: ago(30 * time.Second)}}},
@@ -596,5 +615,56 @@ func TestOldPathActivityTableGainsTheAccount(t *testing.T) {
 	_ = st.db.QueryRow(`SELECT COUNT(*) FROM path_activity`).Scan(&n)
 	if n != 2 {
 		t.Fatalf("the rebuilt table must key on the account: %d rows", n)
+	}
+}
+
+// The turn state follows the hook events of the session, and a subagent's call
+// only keeps the sign of life fresh.
+func TestStuckFollowsTheTurnEventsOfTheHooks(t *testing.T) {
+	st := controlFixture(t)
+	room := RoomKeyForProject(roleProject)
+	register := func(event string) {
+		t.Helper()
+		if _, err := st.RegisterCoordAgent(CoordAgent{ExternalID: controlAgent, Provider: "claude", RoomKey: room,
+			DisplayName: controlAgent, PrincipalID: "person:4", Role: "member", HookActivity: true, HookEvent: event}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	silence := func(d time.Duration) {
+		t.Helper()
+		if _, err := st.db.Exec(`UPDATE coord_agents SET last_hook_at=? WHERE external_id=?`,
+			time.Now().UTC().Add(-d).Format(time.RFC3339), controlAgent); err != nil {
+			t.Fatal(err)
+		}
+	}
+	work := func() string { return presenceOf(t, st, room, controlAgent).WorkState.Value }
+
+	register(HookTurnStart)
+	silence(StuckAfter + time.Minute)
+	if got := work(); got != WorkUnknown {
+		t.Fatalf("before any Stop hook was seen an open turn is no claim, got %s", got)
+	}
+	register(HookTurnEnd)
+	register(HookTurnStart)
+	silence(StuckAfter + time.Minute)
+	if got := work(); got != WorkStuck {
+		t.Fatalf("open turn, silent: %s, want stuck", got)
+	}
+	// A subagent call is a sign of life and leaves the turn open.
+	register(HookTouch)
+	if got := work(); got != WorkWorking {
+		t.Fatalf("subagent activity must end the silence: %s", got)
+	}
+	silence(StuckAfter + time.Minute)
+	register(HookTurnEnd)
+	silence(StuckAfter + time.Minute)
+	if got := work(); got == WorkStuck {
+		t.Fatal("a finished turn is never stuck")
+	}
+	// A touch after the turn ended must not reopen it.
+	register(HookTouch)
+	silence(StuckAfter + time.Minute)
+	if got := work(); got == WorkStuck {
+		t.Fatal("a subagent call after the turn end must not reopen the turn")
 	}
 }
