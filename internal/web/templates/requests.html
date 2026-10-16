@@ -7,7 +7,7 @@
 {{range .Working}}{{if .Href}}<a class="rq-working" href="{{.Href}}"><span class="ov-dot is-active pulse" aria-hidden="true"></span>{{.Text}}</a>{{else}}<span class="ov-meta">{{.Text}}</span>{{end}}{{end}}</div></div><span class="ov-num kn-age">{{.Age}}</span></li>{{end}}
 
 {{define "requests"}}{{template "head" .}}{{template "nav" .}}<main class="kn rq"><link rel="stylesheet" href="/static/knowledge.css"><link rel="stylesheet" href="/static/requests.css">
-{{with .RequestsV}}<div class="ov-head"><h1>{{t "nav.requests"}}</h1><a class="ov-btn clay" href="/ui/pains{{if .Project}}?project={{.Project}}{{end}}">{{t "pains.title"}}</a></div>
+{{with .RequestsV}}<div class="ov-head"><h1>{{t "nav.requests"}}</h1></div>{{template "rqtabs" $}}
 <form class="kn-filters" method="get" action="/ui/requests" role="search"><input class="clay-field kn-q" type="search" name="q" value="{{.Q}}" placeholder="{{t "shell.search_placeholder"}}" aria-label="{{t "requests.search_label"}}" autocomplete="off">
 {{range .Selects}}<select class="clay-select" name="{{.Name}}" aria-label="{{.Label}}" data-autosubmit><option value="">{{.Label}}</option>{{range .Options}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select>{{end}}
 {{if .Project}}<input type="hidden" name="project" value="{{.Project}}">{{end}}<button class="ov-btn clay">{{t "requests.search"}}</button></form>

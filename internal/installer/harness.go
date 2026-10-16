@@ -36,6 +36,12 @@ const (
 	// new prompt needed, and the hook looks at the coordination inbox at most
 	// once a minute. Claude Code only; Codex's PostToolUse is not measured.
 	ChannelCoordInbox Channel = "coord-inbox"
+	// ChannelTurnEnd is the Stop hook: it tells the server that a turn is over,
+	// which is what separates an agent that stands still because it is done
+	// from one that stands still in the middle of a turn ("Stuck?"). It
+	// delivers nothing to the model. Claude Code only: Codex's Stop is not
+	// measured, so a Codex agent is never called stuck.
+	ChannelTurnEnd Channel = "turn-end"
 	// ChannelMCP is the pull side. Every harness ghosttree supports has it, and
 	// it is the only channel that answers a question rather than anticipating
 	// one.
@@ -82,7 +88,7 @@ func Harnesses() []Harness {
 		{
 			Name:       "claude",
 			Components: append([]Component(nil), componentOrder...),
-			Channels:   []Channel{ChannelSessionStart, ChannelUserPrompt, ChannelPreToolUse, ChannelPauseGate, ChannelCoordInbox, ChannelMCP},
+			Channels:   []Channel{ChannelSessionStart, ChannelUserPrompt, ChannelPreToolUse, ChannelPauseGate, ChannelCoordInbox, ChannelTurnEnd, ChannelMCP},
 			Delivers:   []Channel{ChannelSessionStart, ChannelUserPrompt, ChannelPreToolUse, ChannelMCP},
 			HooksPath:  func(home string) string { return filepath.Join(home, ".claude", "settings.json") },
 			RulePath:   func(home string) string { return filepath.Join(home, ".claude", "CLAUDE.md") },
@@ -203,6 +209,8 @@ func (h Harness) hookCommandFor(c Channel) (event, command, matcher string, ok b
 		return "PreToolUse", withCtx(pauseGateHookCommand) + " --harness " + h.Name, "", true
 	case ChannelCoordInbox:
 		return "PostToolUse", withCtx(postToolHookCommand) + " --harness " + h.Name, "", true
+	case ChannelTurnEnd:
+		return "Stop", withCtx(turnEndHookCommand) + " --harness " + h.Name, "", true
 	}
 	return "", "", "", false
 }

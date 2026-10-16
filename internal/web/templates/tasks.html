@@ -10,7 +10,8 @@
 <div class="tk-side">{{if .StateLabel}}<span class="ov-meta">{{.StateLabel}}</span>{{end}}{{if .Req}}<a class="kn-link rq-id" href="{{.ReqHref}}">{{.Req}}</a>{{end}}</div></li>{{end}}
 
 {{define "tasks"}}{{template "head" .}}{{template "nav" .}}<main class="kn rq tk"><link rel="stylesheet" href="/static/knowledge.css"><link rel="stylesheet" href="/static/requests.css"><link rel="stylesheet" href="/static/tasks.css">
-{{with .TasksV}}<div class="ov-head"><h1>{{t "tasks.title"}}</h1></div>
+{{with .TasksV}}<div class="ov-head"><h1>{{t "nav.requests"}}</h1></div>{{template "rqtabs" $}}
+<div class="tk-who" role="group" aria-label="{{t "tasks.mine"}}"><a class="ov-btn clay{{if not .Everyone}} ov-btn-primary{{end}}" href="/ui/tasks"{{if not .Everyone}} aria-current="true"{{end}}>{{t "tasks.mine"}}</a><a class="ov-btn clay{{if .Everyone}} ov-btn-primary{{end}}" href="/ui/tasks?who=all"{{if .Everyone}} aria-current="true"{{end}}>{{t "tasks.everyone"}}</a></div>
 {{with .Result}}<div class="kn-result" role="status"><span class="rq-dot is-{{.Kind}}" aria-hidden="true"></span><span class="kn-result-text">{{.Text}}</span></div>{{end}}
 {{if .Rows}}{{template "taskform" .}}{{else}}<p class="ov-empty">{{t "tasks.empty"}}</p>{{end}}
 {{end}}{{template "foot" .}}{{end}}

@@ -391,3 +391,25 @@ form:has(.join-confirm input:not(:checked)) button.btn-primary, form:has(.join-c
 .login-hint { margin: var(--space-4) 0 0; font: var(--text-secondary); color: var(--clay-ink-soft); text-align: center; }
 
 .ag-note { margin: 0; font-style: italic; color: var(--clay-ink-soft); overflow-wrap: anywhere; }
+
+/* An agent that waits for a person or hangs mid-turn: dot and label say so. */
+.ov-dot.is-waiting_user { background: var(--clay-warn); }
+.ov-dot.is-stuck { background: transparent; box-shadow: inset 0 0 0 2px var(--clay-warn); }
+.ov-agent.is-waiting_user .ov-activity, .ov-agent.is-stuck .ov-activity { color: var(--clay-warn); font-weight: 700; }
+
+/* Open tasks beside the nav entry. */
+.shell-badge {
+  margin-left: auto; min-width: 20px; padding: 0 6px; border-radius: 99px; background: var(--clay-accent); color: var(--clay-accent-ink);
+  font: 700 11px/20px var(--font-sans, inherit); text-align: center;
+}
+
+/* Requests | Tasks | Pains. */
+.rq-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 var(--space-4); }
+.rq-tab {
+  display: inline-flex; align-items: center; gap: 8px; padding: 6px 14px; border-radius: 99px;
+  color: var(--clay-ink-soft) !important; font-weight: 600; text-decoration: none;
+}
+.rq-tab:hover { background: var(--clay-c-raised); }
+.rq-tab.is-active { background: var(--clay-c-raised); color: var(--clay-ink) !important; font-weight: 700; }
+.rq-tabcount { min-width: 18px; padding: 0 5px; border-radius: 99px; background: var(--clay-accent); color: var(--clay-accent-ink); font: 700 11px/18px var(--font-sans, inherit); text-align: center; }
+.tk-who { display: flex; gap: 10px; margin: 0 0 var(--space-4); }

@@ -60,6 +60,9 @@ func cmdHookWith(stdin io.Reader, args []string, stdout io.Writer) int {
 	if eventArg == "post-tool-use" {
 		return postToolUse(stdin, *harness, stdout)
 	}
+	if eventArg == "turn-end" {
+		return turnEnd(stdin, *harness, stdout)
+	}
 	var out sessionStartOutput
 	var render func(io.Reader) string
 	switch eventArg {
@@ -107,7 +110,14 @@ func cmdHookWith(stdin io.Reader, args []string, stdout io.Writer) int {
 			// Claude's tool calls announce themselves through post-tool-use;
 			// Codex has no such hook, so its pre-tool-use is the heartbeat.
 			if (eventArg != "pre-tool-use" || *harness == "codex") && os.Getenv("GHOSTTREE_HOOK_SYNTHETIC") != "1" {
-				registerHookSession(raw, *harness, eventArg == "session-start")
+				event := store.HookTool
+				switch eventArg {
+				case "session-start":
+					event = ""
+				case "user-prompt-submit":
+					event = store.HookTurnStart
+				}
+				registerHookSession(raw, *harness, eventArg == "session-start" || eventArg == "user-prompt-submit", event)
 			}
 		}()
 		text := render(bytes.NewReader(raw))
@@ -140,6 +150,7 @@ const hookUsage = `usage: ctx hook session-start [--harness claude|codex]
        ctx hook user-prompt-submit [--harness claude|codex]
        ctx hook pre-tool-use [--harness claude|codex]
        ctx hook post-tool-use [--harness claude|codex]
+       ctx hook turn-end [--harness claude]
        ctx hook pause-gate [--harness claude]`
 
 // relevanceTimeout is short because this hook sits between the keystroke and

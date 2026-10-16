@@ -134,6 +134,9 @@ func (a *ProjectAccess) CreateHumanTask(in humantask.CreateInput, actor humantas
 				"assign to a member of the project or leave it open", nil)
 		}
 		assignee = id
+	} else if !in.Everyone && a.valid && a.account != 0 && RoleRank(st.ProjectRole(project, principalOfID(a.account)).Role) >= 1 {
+		// No recipient named: it is for the human this session belongs to.
+		assignee = a.account
 	}
 	in.Title = strings.TrimSpace(in.Title)
 	id, err := st.commitTask(in, actor, project, requestID, workID, assignee)

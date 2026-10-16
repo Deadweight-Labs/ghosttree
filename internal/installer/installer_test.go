@@ -439,3 +439,39 @@ func TestCoordHooksCarryTheAbsoluteCtxPathAndUpgradeBareEntries(t *testing.T) {
 		}
 	}
 }
+
+// The Stop hook is what lets the server tell a finished turn from a stalled
+// one. Claude gets it, Codex does not (its Stop is not measured), and the
+// doctor's probe accepts the empty object a Stop hook answers with.
+func TestClaudeWiresTheStopHookAndCodexDoesNot(t *testing.T) {
+	home := t.TempDir()
+	if _, err := InstallClaude(home); err != nil {
+		t.Fatal(err)
+	}
+	settings, err := readJSONFile(filepath.Join(home, ".claude", "settings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hooks, _ := settings["hooks"].(map[string]any)
+	groups, _ := hooks["Stop"].([]any)
+	if len(groups) != 1 {
+		t.Fatalf("want one Stop group, got %d", len(groups))
+	}
+	inner, _ := groups[0].(map[string]any)["hooks"].([]any)
+	handler, _ := inner[0].(map[string]any)
+	if cmd, _ := handler["command"].(string); !strings.HasPrefix(cmd, "ctx hook turn-end") || handler["timeout"] != float64(5) {
+		t.Fatalf("handler = %v", handler)
+	}
+	if harnessNamed("codex").Serves(ChannelTurnEnd) {
+		t.Fatal("codex Stop is not measured; it must not be wired")
+	}
+}
+
+func TestProbeAcceptsTheStopHooksEmptyObject(t *testing.T) {
+	if err := runHookCommandProbe("echo {}", "Stop"); err != nil {
+		t.Fatalf("a Stop hook answering {} must pass the probe: %v", err)
+	}
+	if err := runHookCommandProbe("echo nonsense", "Stop"); err == nil {
+		t.Fatal("a Stop hook answering non-JSON must fail the probe")
+	}
+}

@@ -36,12 +36,14 @@ const (
 	// Agent in einem Projekt erscheint.
 	connectedShownFor = 15 * time.Minute
 
-	overviewMaxNext     = 6
-	overviewMaxReview   = 3
-	overviewMaxAgents   = 10
-	overviewMaxRequests = 6
-	overviewMaxLearned  = 5
-	setupRefreshSeconds = 5
+	overviewMaxNext = 6
+	// overviewMaxProposals: how far the count of proposals waiting for review
+	// is taken; beyond it the row says "100+".
+	overviewMaxProposals = 100
+	overviewMaxAgents    = 10
+	overviewMaxRequests  = 6
+	overviewMaxLearned   = 5
+	setupRefreshSeconds  = 5
 	// knowledgeMaxPages: so viele Seiten zu je 100 liest knowledgeKeep höchstens.
 	knowledgeMaxPages = 10
 )
@@ -71,6 +73,15 @@ type nextRow struct {
 
 type agentRow struct {
 	Name, Project, Activity, State, StateText, Age string
+	// Flag is "waiting_user" or "stuck" when the agent's work state asks for
+	// attention, from the same presence the room reads; "" otherwise.
+	Flag string
+	// Work is what the agent is working on: the title of its request, else its
+	// own work note, else its branch. BareName is Name without the short tag.
+	Work, BareName string
+	// Sub is the second line of the row: project, with the agent's name before it
+	// when Work is the headline.
+	Sub string
 	// The rest feeds the agents page; the overview ignores it.
 	ExternalID, RoomKey, Machine, Branch, Provider string
 	// WorkNote is the agent's own "working on" line, self-reported.
@@ -218,7 +229,7 @@ func (a *app) overviewPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if view.Guest {
-		view.NoContent = len(view.Requests) == 0 && len(view.Learned) == 0 && view.Waiting == nil
+		view.NoContent = len(view.Requests) == 0 && len(view.Learned) == 0
 		a.renderBrowser(w, r, "overview", data.withOverview(view))
 		return
 	}
@@ -244,7 +255,40 @@ func (d pageData) withOverview(v overviewView) pageData {
 // Agenten lesen darf. project != "" schränkt auf dieses Projekt ein.
 // Die Peers kommen über dieselbe Zugangsprüfung wie /ui/coord.
 func (a *app) overviewAgents(r *http.Request, pa *store.ProjectAccess, project string, now time.Time) ([]agentRow, error) {
-	return a.listAgents(r, pa, project, now, overviewMaxAgents)
+	rows, err := a.listAgents(r, pa, project, now, overviewMaxAgents)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, len(rows))
+	for i, row := range rows {
+		ids[i] = row.ExternalID
+	}
+	work, err := a.store.AgentWorkFor(pa, ids)
+	if err != nil {
+		return nil, err
+	}
+	for i := range rows {
+		rows[i].Work = agentWorkTitle(work[rows[i].ExternalID], rows[i])
+		rows[i].Sub = rows[i].Project
+		if rows[i].Work != "" {
+			rows[i].Sub = rows[i].BareName + agentLabelSep + rows[i].Project
+		}
+	}
+	return rows, nil
+}
+
+// agentWorkTitle is what an agent line says it is doing: the title of the open
+// request it works on (only where the viewer may read it, AgentWorkFor decides),
+// else the agent's own work note, else its branch. Nothing else: an id is no
+// answer to "what is it doing".
+func agentWorkTitle(w store.AgentWork, row agentRow) string {
+	switch {
+	case w.RequestTitle != "":
+		return oneLine(w.RequestTitle, 90)
+	case row.WorkNote != "":
+		return oneLine(row.WorkNote, 90)
+	}
+	return row.Branch
 }
 
 // listAgents is overviewAgents with a limit, shared with the agents page.
@@ -265,7 +309,7 @@ func (a *app) listAgents(r *http.Request, pa *store.ProjectAccess, project strin
 		seen[peer.ExternalID] = true
 		last := parseTime(peer.LastSeenAt)
 		var life time.Time
-		activity := ""
+		activity, flag := "", ""
 		if p := peer.Presence; p != nil {
 			// Only evidence that the agent itself is there counts as a sign of
 			// life: a poll, or tool calls seen in its transcript. A message
@@ -279,6 +323,10 @@ func (a *app) listAgents(r *http.Request, pa *store.ProjectAccess, project strin
 				}
 			}
 			activity = workLabel(p.WorkState.Value)
+			switch p.WorkState.Value {
+			case store.WorkWaitingUser, store.WorkStuck:
+				flag = p.WorkState.Value
+			}
 		}
 		state := agentState(now, life)
 		if state != "active" {
@@ -289,11 +337,16 @@ func (a *app) listAgents(r *http.Request, pa *store.ProjectAccess, project strin
 				state = "idle"
 			}
 		}
+		if flag != "" {
+			// An agent that waits for a person, or hangs mid-turn, says so even
+			// when its last sign of life is old: "Idle" would hide it.
+			activity = workLabel(flag)
+		}
 		signal := last
 		if life.After(signal) {
 			signal = life
 		}
-		out = append(out, ranked{agentRow{Name: peerName(peer), Project: coordShortRoomName(store.RoomProject, remote), ProjectTitle: remote,
+		out = append(out, ranked{agentRow{Name: peerName(peer), BareName: peerName(peer), Flag: flag, Project: coordShortRoomName(store.RoomProject, remote), ProjectTitle: remote,
 			Activity: activity, State: state, StateText: stateLabel(state), Age: shortAge(now, signal),
 			ExternalID: peer.ExternalID, RoomKey: store.RoomKeyForProject(remote), Machine: hostUnlessNamed(peerName(peer), agentMachine(peer.ExternalID)), Branch: peer.Branch, Provider: peer.Provider, WorkNote: peer.WorkNote}, signal})
 	}
@@ -330,6 +383,9 @@ func (a *app) listAgents(r *http.Request, pa *store.ProjectAccess, project strin
 	}
 	order := map[string]int{"active": 0, "idle": 1, "offline": 2}
 	sort.SliceStable(out, func(i, j int) bool {
+		if fi, fj := out[i].row.Flag != "", out[j].row.Flag != ""; fi != fj {
+			return fi
+		}
 		if oi, oj := order[out[i].row.State], order[out[j].row.State]; oi != oj {
 			return oi < oj
 		}
@@ -506,6 +562,8 @@ func workLabel(v string) string {
 		return msg("ov.work.blocked")
 	case store.WorkPaused:
 		return msg("ov.work.paused")
+	case store.WorkStuck:
+		return msg("ov.work.stuck")
 	}
 	return ""
 }
@@ -610,36 +668,49 @@ func (a *app) overviewLearned(pa *store.ProjectAccess, project string, now time.
 	return rows, nil
 }
 
-// overviewNext sammelt, was den Betrachter jetzt braucht: Wissen zur Prüfung
-// (nur wer prüfen darf) und an ihn gerichtete Anliegen in Räumen, die er lesen
-// darf. Offene Geräte-Logins gehören nicht dazu (siehe setupView).
+// overviewNext sammelt, was den Betrachter jetzt braucht: zuerst die an ihn
+// gerichteten Anliegen von Agenten in Räumen, die er lesen darf, danach, nur
+// für wer prüfen darf, EINE Zeile für alle Wissensvorschläge. Eine Frage, auf
+// die ein Agent wartet, geht so nie hinter Vorschlägen verloren. Offene
+// Geräte-Logins gehören nicht dazu (siehe setupView).
 func (a *app) overviewNext(r *http.Request, pa *store.ProjectAccess, who viewer, project string, now time.Time) ([]nextRow, error) {
-	var rows []nextRow
+	rows, err := a.overviewAttention(r, now)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) > overviewMaxNext {
+		rows = rows[:overviewMaxNext]
+	}
 	if who.reviewer {
 		w := a.knowledgeWindowFor(pa, project)
 		w.Pending = true
 		pa.Filtered()
-		pending, err := a.knowledgeKeep(w, overviewMaxReview, func(k store.Knowledge) bool {
+		pending, err := a.knowledgeKeep(w, overviewMaxProposals, func(k store.Knowledge) bool {
 			return pa.CanSeeKnowledge(k) && pa.CheckKnowledge(k, store.ActVerify) == nil
 		})
 		if err != nil {
 			return nil, err
 		}
-		for _, k := range pending {
-			detail := shortAge(now, parseTime(k.CreatedAt))
-			if k.Person != "" {
-				detail = msg("ov.proposed_by", k.Person) + " · " + detail
+		if len(pending) > 0 {
+			oldest := now
+			for _, k := range pending {
+				if t := parseTime(k.CreatedAt); !t.IsZero() && t.Before(oldest) {
+					oldest = t
+				}
 			}
-			rows = append(rows, nextRow{Title: k.Title, Detail: detail, Href: "/ui/review", HrefLabel: msg("ov.review")})
+			title := msg("ov.proposals", len(pending))
+			switch {
+			case len(pending) == 1:
+				title = msg("ov.proposals_one")
+			case len(pending) >= overviewMaxProposals:
+				title = msg("ov.proposals_more", overviewMaxProposals)
+			}
+			detail := ""
+			if now.Sub(oldest) >= 48*time.Hour {
+				detail = msg("ov.proposals_oldest", shortAge(now, oldest))
+			}
+			rows = append(rows, nextRow{Title: title, Detail: detail, Href: "/ui/review", HrefLabel: msg("ov.review")})
 		}
-	}
-	mentions, err := a.overviewAttention(r, now)
-	if err != nil {
-		return nil, err
-	}
-	rows = append(rows, mentions...)
-	if len(rows) > overviewMaxNext {
-		rows = rows[:overviewMaxNext]
 	}
 	return rows, nil
 }

@@ -28,7 +28,12 @@ func registerStateFile(self string) (string, error) {
 // same idempotent write, and it refreshes last_seen at most once per
 // coordHookInterval. force skips that interval (session start). Everything
 // fails quietly: the hook must never cost the session anything.
-func registerHookSession(raw []byte, harness string, force bool) {
+//
+// event says which hook this is (store.HookTurnStart, HookTool, HookTurnEnd), so
+// the server can tell a turn that is running from one that ended. A call that
+// carries an agent id is a subagent's: the session it belongs to is the same,
+// and the server only learns that it is alive, never that the turn moved.
+func registerHookSession(raw []byte, harness string, force bool, event string) {
 	if harness != "claude" && harness != "codex" {
 		return
 	}
@@ -37,9 +42,17 @@ func registerHookSession(raw []byte, harness string, force bool) {
 		CWD       string `json:"cwd"`
 		AgentID   string `json:"agent_id"`
 	}
-	if json.Unmarshal(raw, &in) != nil || in.AgentID != "" {
-		// A subagent gets no card of its own; its calls carry an agent id.
+	if json.Unmarshal(raw, &in) != nil {
 		return
+	}
+	if in.AgentID != "" {
+		// A subagent gets no card of its own; its calls carry an agent id and
+		// the session id of the main session. They keep that session's sign of
+		// life fresh (so a long subagent run is not "stuck"), nothing more.
+		if harness != "claude" {
+			return
+		}
+		event, force = store.HookTouch, false
 	}
 	self := hookCoordSelf(in.SessionID)
 	if !store.ValidExternalID(self) {
@@ -50,6 +63,11 @@ func registerHookSession(raw []byte, harness string, force bool) {
 		return
 	}
 	state := loadCoordState(path)
+	if in.AgentID != "" && state.RegisterRoom == "" {
+		// Only a session that already joined is kept alive by its subagents;
+		// they never open its card.
+		return
+	}
 	now := time.Now()
 	if !force && state.LastRegister != 0 && now.Sub(time.Unix(state.LastRegister, 0)) < coordHookInterval {
 		return
@@ -92,7 +110,7 @@ func registerHookSession(raw []byte, harness string, force bool) {
 	}
 	if _, err := client.NewWithTimeout(cfg, registerHookDeadline).RegisterCoordAgent(store.CoordAgent{
 		ExternalID: self, Provider: harness, RoomKey: room,
-		DisplayName: name, Branch: branch, Machine: cfg.Machine, Role: agentRoleFromEnv(), SessionID: session, HookActivity: true,
+		DisplayName: name, Branch: branch, Machine: cfg.Machine, Role: agentRoleFromEnv(), SessionID: session, HookActivity: true, HookEvent: event,
 	}); err == nil {
 		state.RegisterRoom, state.RegisterBranch = room, branch
 		saveCoordState(path, state)

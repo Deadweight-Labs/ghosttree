@@ -21,6 +21,9 @@ func tpOwner(e shellEnv) *store.ProjectAccess {
 func tpTask(t *testing.T, e shellEnv, project string, reqID int64, in humantask.CreateInput) humantask.Task {
 	t.Helper()
 	in.Project, in.RequestID = project, reqID
+	if in.Assignee == "" {
+		in.Everyone = true
+	}
 	if in.Kind == "" {
 		in.Kind = "action"
 	}
@@ -64,12 +67,19 @@ func TestWaitingBlockShowsOpenTasksForTheViewerAndNothingElse(t *testing.T) {
 	}
 }
 
-func TestWaitingBlockIsAbsentWithoutTasks(t *testing.T) {
+// The block is where a person looks for what waits on them; without tasks it
+// says so in one line instead of disappearing, and it links to the task list.
+func TestWaitingBlockIsThereWithoutTasks(t *testing.T) {
 	e := ovEnv(t)
 	rqMake(t, e.St, rqSpec{Title: "Just a request"})
-	_, page := fetchPage(t, e.Member, e.Base+"/ui/overview")
-	if strings.Contains(page, "Waiting on you") || strings.Contains(page, "ov-waiting") {
-		t.Error("the block shows without tasks")
+	for name, c := range map[string]*http.Client{"member": e.Member, "guest": e.Guest} {
+		_, page := fetchPage(t, c, e.Base+"/ui/overview")
+		if !strings.Contains(page, "ov-waiting") || !strings.Contains(page, "Nothing waiting on you") || !strings.Contains(page, `href="/ui/tasks`) {
+			t.Errorf("%s: the block must show, empty, with the link: %s", name, page)
+		}
+		if strings.Contains(page, `type="checkbox"`) {
+			t.Errorf("%s: an empty block has nothing to tick", name)
+		}
 	}
 }
 

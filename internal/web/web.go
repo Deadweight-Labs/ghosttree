@@ -45,6 +45,8 @@ type pageData struct {
 	Admin, Approved, Interactive                               bool
 	DeviceMachine, DeviceRemote, DeviceStarted                 string
 	Tokens                                                     []tokenRow
+	UnusedTokens                                               int
+	TokenResult                                                string
 	RequestsV                                                  *requestsView
 	RequestV                                                   *requestView
 	TasksV                                                     *tasksView
@@ -179,6 +181,7 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.handle(mux, "POST /ui/device/decide", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.deviceDecide))))))
 	a.handle(mux, "GET /ui/account/tokens", a.requirePerson(http.HandlerFunc(a.tokensPage)))
 	a.handle(mux, "POST /ui/account/tokens/revoke", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.tokenRevoke)))))
+	a.handle(mux, "POST /ui/account/tokens/revoke-unused", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.tokensRevokeUnused)))))
 	a.handle(mux, "GET /ui/profile", a.requirePerson(http.HandlerFunc(a.profilePage)))
 	a.handle(mux, "POST /ui/profile", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.profileSave))))))
 	a.handle(mux, "GET /ui/orgs", a.requirePerson(http.HandlerFunc(a.orgsPage)))
@@ -461,6 +464,7 @@ var webRoutes = map[string]webClass{
 	"POST /ui/coord/agent/control":          webAdmin,
 	"GET /ui/account/tokens":                webAccount,
 	"POST /ui/account/tokens/revoke":        webAccount,
+	"POST /ui/account/tokens/revoke-unused": webAccount,
 	"GET /ui/profile":                       webAccount,
 	"POST /ui/profile":                      webAdmin,
 	"GET /ui/orgs":                          webAccount,

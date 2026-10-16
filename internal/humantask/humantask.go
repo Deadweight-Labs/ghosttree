@@ -63,6 +63,11 @@ type CreateInput struct {
 	Location    string `json:"location,omitempty"`
 	CheckHint   string `json:"check_hint,omitempty"`
 	Assignee    string `json:"assignee,omitempty"`
+	// Everyone leaves the task to whoever of the project can do it. Without it
+	// and without an Assignee a task belongs to the person who creates it (the
+	// human whose session the agent is), because "anyone" on a project of two
+	// is two people each assuming the other one will do it.
+	Everyone bool `json:"everyone,omitempty"`
 }
 
 // Actor is who performs a change. Web is true only for an interactive web session.
@@ -99,6 +104,9 @@ func ValidateCreate(in CreateInput) error {
 	}
 	if strings.TrimSpace(in.Title) == "" {
 		return ruleErr("title_required", "task title is required", "say in a few words what the human has to do")
+	}
+	if in.Everyone && strings.TrimSpace(in.Assignee) != "" {
+		return ruleErr("assignee_conflict", "a task is either for one person or for everyone", "give assignee or everyone, not both")
 	}
 	if (in.Kind == "secret" || in.Kind == "file") && strings.TrimSpace(in.Location) == "" {
 		return ruleErr("location_required", "a secret or file task needs a location", "name where it should be placed (path, vault entry, env file), never the value")

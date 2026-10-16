@@ -177,8 +177,8 @@ func TestInstallQuotesCtxPathWithSpaces(t *testing.T) {
 	if _, err := InstallClaude(home); err != nil { // quoted entries are recognised as ours
 		t.Fatal(err)
 	}
-	if n := len(hookCommands(t, filepath.Join(home, ".claude", "settings.json"))); n != 5 {
-		t.Fatalf("hook count after reinstall = %d, want 5", n)
+	if n := len(hookCommands(t, filepath.Join(home, ".claude", "settings.json"))); n != 6 {
+		t.Fatalf("hook count after reinstall = %d, want 6", n)
 	}
 }
 

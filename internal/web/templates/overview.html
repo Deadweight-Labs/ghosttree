@@ -19,19 +19,20 @@
 
 {{define "ovreq"}}<li class="ov-request"><a class="ov-reqtitle" href="{{.Href}}">{{.Title}}</a><div class="ov-prog"><span class="ov-id">{{.ID}}</span>{{if .Total}}<span class="ov-num">{{.Progress}}</span>{{end}}</div>{{if .Total}}<span class="ov-bar clay" aria-hidden="true"><i data-pct="{{.Percent}}"></i></span>{{end}}</li>{{end}}
 
+{{define "ovwaiting"}}<section class="ov-section ov-waiting"><div class="ov-head"><h2>{{t "ov.waiting"}}</h2><a class="ov-btn clay" href="/ui/tasks{{if .Project}}?project={{.Project}}{{end}}">{{t "tasks.all"}}</a></div>{{if .Rows}}{{template "taskform" .}}{{else}}<p class="ov-empty">{{t "ov.waiting_none"}}</p>{{end}}</section>{{end}}
+
 {{define "overview"}}{{template "head" .}}{{template "nav" .}}<main class="ov"><link rel="stylesheet" href="/static/tasks.css">
 {{with .Overview}}{{if .Setup}}{{template "ovsetup" $}}
 {{else if .Guest}}<h1 class="visually-hidden">{{t "overview.title"}}</h1>
-{{with .Waiting}}<section class="ov-section ov-waiting"><div class="ov-head"><h2>{{t "ov.waiting"}}</h2><a class="ov-btn clay" href="/ui/tasks{{if .Project}}?project={{.Project}}{{end}}">{{t "tasks.all"}}</a></div>{{template "taskform" .}}</section>{{end}}
-{{if .NoContent}}<p class="ov-empty">{{t "ov.nothing"}}</p>{{end}}
+{{template "ovwaiting" .Waiting}}
 {{if .Requests}}<section class="ov-section ov-narrow"><h2>{{t "ov.requests"}}</h2><ul class="ov-list ov-reqs">{{range .Requests}}{{template "ovreq" .}}{{end}}</ul></section>{{end}}
 {{if .Learned}}<section class="ov-section ov-narrow"><h2>{{t "ov.knowledge"}}</h2><ul class="ov-list">{{range .Learned}}<li class="ov-row"><span class="ov-title">{{.Title}}</span><span class="ov-num">{{.Age}}</span></li>{{end}}</ul></section>{{end}}
 {{else}}<header class="ov-hero"><time class="ov-date" data-today></time><h1 data-greet-morning="{{t "ov.hello_morning" $.Person}}" data-greet-afternoon="{{t "ov.hello_afternoon" $.Person}}" data-greet-evening="{{t "ov.hello_evening" $.Person}}">{{t "ov.hello" $.Person}}</h1></header>
-{{with .Waiting}}<section class="ov-section ov-waiting"><div class="ov-head"><h2>{{t "ov.waiting"}}</h2><a class="ov-btn clay" href="/ui/tasks{{if .Project}}?project={{.Project}}{{end}}">{{t "tasks.all"}}</a></div>{{template "taskform" .}}</section>{{end}}
+{{template "ovwaiting" .Waiting}}
 <div class="ov-cols"><div class="ov-main">
 {{if .Next}}<section class="ov-section"><h2>{{t "ov.next"}}</h2><ul class="ov-list">{{range .Next}}<li class="ov-next clay"><div class="ov-text"><span class="ov-title">{{.Title}}</span><span class="ov-meta">{{.Detail}}</span></div>{{if .Href}}<a class="ov-btn ov-btn-primary clay" href="{{.Href}}">{{.HrefLabel}}</a>{{end}}</li>{{end}}</ul></section>{{end}}
 <section class="ov-section"><div class="ov-head"><h2>{{t "ov.agents"}}</h2>{{if .Agents}}<a class="ov-btn clay" href="{{.Connect}}">{{t "ov.connect_another"}}</a>{{end}}</div>
-{{if .Agents}}<ul class="ov-list ov-deck clay">{{range .Agents}}<li class="ov-agent is-{{.State}}" title="{{.ExternalID}}"><span class="av agent clay" aria-hidden="true">{{template "icon" "agents"}}</span><div class="ov-text"><span class="ov-name">{{.Name}}</span><span class="ov-meta" title="{{.ProjectTitle}}">{{.Project}}</span></div><span class="ov-activity">{{if .Activity}}{{.Activity}}{{else if ne .State "active"}}{{.StateText}}{{end}}</span><span class="ov-state"><span class="ov-dot is-{{.State}}{{if eq .State "active"}} pulse{{end}}" title="{{.StateText}}"></span><span class="ov-num">{{.Age}}</span></span></li>{{end}}</ul>
+{{if .Agents}}<ul class="ov-list ov-deck clay">{{range .Agents}}<li class="ov-agent is-{{.State}}{{if .Flag}} is-{{.Flag}}{{end}}" title="{{.ExternalID}}"><span class="av agent clay" aria-hidden="true">{{template "icon" "agents"}}</span><div class="ov-text"><span class="ov-name">{{if .Work}}{{.Work}}{{else}}{{.Name}}{{end}}</span><span class="ov-meta" title="{{.ProjectTitle}}">{{.Sub}}</span></div><span class="ov-activity">{{if .Activity}}{{.Activity}}{{else if ne .State "active"}}{{.StateText}}{{end}}</span><span class="ov-state"><span class="ov-dot is-{{if .Flag}}{{.Flag}}{{else}}{{.State}}{{end}}{{if and (eq .State "active") (not .Flag)}} pulse{{end}}" title="{{if .Flag}}{{.Activity}}{{else}}{{.StateText}}{{end}}"></span><span class="ov-num">{{.Age}}</span></span></li>{{end}}</ul>
 {{else if .Machines}}{{template "ovstart" .}}
 {{else}}<p class="ov-empty">{{t "ov.no_agents"}}</p><a class="ov-btn ov-btn-primary clay" href="{{.Connect}}">{{t "ov.connect"}}</a>{{end}}
 {{if .Machines}}<h3 class="ov-sub">{{t "ov.machines"}}</h3>{{template "ovmachines" .Machines}}{{end}}</section>

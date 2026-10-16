@@ -825,7 +825,7 @@ func coordSenderLabel(item store.AttentionItem, labels map[string]string) string
 var presenceKeys = map[string]string{
 	store.ReachConnected: "coord.presence.connected", store.ReachUnknown: "coord.presence.unknown", store.ReachEnded: "coord.presence.ended",
 	store.WorkWorking: "coord.presence.working", store.WorkWaitingUser: "coord.presence.waiting_user", store.WorkWaitingPeer: "coord.presence.waiting_peer",
-	store.WorkBlocked: "coord.presence.blocked", store.WorkPaused: "coord.presence.paused",
+	store.WorkBlocked: "coord.presence.blocked", store.WorkPaused: "coord.presence.paused", store.WorkStuck: "coord.presence.stuck",
 }
 
 var originKeys = map[string]string{
@@ -1205,6 +1205,8 @@ func decorateCoordParticipant(p *coordParticipantView) {
 		p.Dot, p.StatusLabel = "wait", msg("ov.work.waiting_peer")
 	case p.WorkKey == store.WorkBlocked:
 		p.Dot, p.StatusLabel = "bad", msg("ov.work.blocked")
+	case p.WorkKey == store.WorkStuck:
+		p.Dot, p.StatusLabel = "bad", msg("ov.work.stuck")
 	case p.WorkKey == store.WorkPaused:
 		p.Dot, p.StatusLabel = "quiet", msg("ov.work.paused")
 	case p.ReachKey == store.ReachConnected:
