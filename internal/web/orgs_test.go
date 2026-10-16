@@ -62,14 +62,14 @@ func TestOrgPageShowsMembersProjectsAndRoleDependentControls(t *testing.T) {
 	}
 	resp, _ := alice.Get(base + "/ui/orgs")
 	page := body(t, resp)
-	for _, want := range []string{"Alpha", "alice", "anna", "github.com/x/one", "Create invitation", "Make owner"} {
+	for _, want := range []string{"Alpha", "alice", "anna", "github.com/x/one", `action="/ui/orgs/invite"`, "Make owner"} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("owner page lacks %q: %s", want, page)
 		}
 	}
 	resp, _ = anna.Get(base + "/ui/orgs")
 	page = body(t, resp)
-	if strings.Contains(page, "Create invitation") || strings.Contains(page, "Make owner") {
+	if strings.Contains(page, `action="/ui/orgs/invite"`) || strings.Contains(page, "Make owner") {
 		t.Fatalf("member page: %s", page)
 	}
 	if !strings.Contains(page, "Leave") {
@@ -319,6 +319,7 @@ func TestOrgInviteOffersOwnProjectsAsChoiceAndClaimsOnlyWhatTheOwnerUploaded(t *
 	if _, err := st.AcceptInvitation("person:2", code); err != nil {
 		t.Fatal(err)
 	}
+	st.SetAccessMode(store.AccessMode{Enforce: true})
 	uploadWebSession(t, st, 1, "a", "github.com/x/mine")
 	uploadWebSession(t, st, 2, "b", "github.com/x/annas")
 	get := func(c *http.Client) string {
@@ -331,7 +332,7 @@ func TestOrgInviteOffersOwnProjectsAsChoiceAndClaimsOnlyWhatTheOwnerUploaded(t *
 		t.Fatalf("owner page: %s", page)
 	}
 	// Ein Mitglied sieht weder Formular noch fremde oder eigene unbeanspruchte Projekte.
-	if page := get(anna); strings.Contains(page, "github.com/x/annas") || strings.Contains(page, "github.com/x/mine") || strings.Contains(page, "Create invitation") {
+	if page := get(anna); strings.Contains(page, "github.com/x/annas") || strings.Contains(page, "github.com/x/mine") || strings.Contains(page, `action="/ui/orgs/invite"`) {
 		t.Fatalf("member page lists unclaimed projects: %s", page)
 	}
 	// Anna darf auch nicht per Hand-POST claimen.
@@ -348,13 +349,7 @@ func TestOrgInviteOffersOwnProjectsAsChoiceAndClaimsOnlyWhatTheOwnerUploaded(t *
 	if _, ok := st.ProjectByRemote("github.com/x/annas"); ok {
 		t.Fatal("owner claimed a foreign upload")
 	}
-	// Ein Gast-Link ohne Durchsetzung scheitert, ohne zu übernehmen.
-	if resp := postOrg(t, alice, base, "/ui/orgs/invite", url.Values{"org": {"alpha"}, "project": {"github.com/x/mine"}, "claim": {"1"}, "project_role": {"guest"}}); resp.StatusCode == http.StatusOK {
-		t.Fatalf("guest link: %d", resp.StatusCode)
-	}
-	if _, ok := st.ProjectByRemote("github.com/x/mine"); ok {
-		t.Fatal("a refused link left a claim behind")
-	}
+	// A project link is for guests only, whatever the form says.
 	resp := postOrgFollow(t, alice, base, "/ui/orgs/invite", url.Values{"org": {"alpha"}, "project": {"github.com/x/mine"}, "claim": {"1"}, "project_role": {"member"}, "days": {"7"}})
 	page = body(t, resp)
 	if resp.StatusCode != http.StatusOK || !strings.Contains(page, "/join/") || !strings.Contains(page, "stays here until it is used") {
@@ -362,6 +357,9 @@ func TestOrgInviteOffersOwnProjectsAsChoiceAndClaimsOnlyWhatTheOwnerUploaded(t *
 	}
 	if p, ok := st.ProjectByRemote("github.com/x/mine"); !ok || p.OrgID != org.ID {
 		t.Fatalf("project not in the org: %+v", p)
+	}
+	if invs, _ := st.ListInvitations("person:1", org.ID); len(invs) == 0 || invs[0].ProjectRole != store.RoleGuest {
+		t.Fatalf("a project link must grant the guest role: %+v", invs)
 	}
 	page = get(alice)
 	if strings.Contains(page, "Add to organization") || !strings.Contains(page, "github.com/x/mine") {
@@ -403,7 +401,7 @@ func TestOrgInviteLinkDefaultsFollowTheRoleAndSharedRemotesAreNotOffered(t *test
 		t.Fatalf("claim list: %s", page)
 	}
 	// Die Dauer ist eine Auswahl; ihre erste Option (leer) lässt den Server die Rolle entscheiden.
-	if strings.Count(page, `<option value="" data-member="7 days" data-guest="3 days">7 days</option>`) != 2 {
+	if strings.Count(page, `<option value="" data-member="7 days" data-guest="3 days">7 days</option>`) != 1 || !strings.Contains(page, `<option value="">3 days</option>`) {
 		t.Fatalf("the days choice does not name its default: %s", page)
 	}
 	if resp := postOrg(t, alice, base, "/ui/orgs/invite", url.Values{"org": {"alpha"}, "project": {"github.com/x/shared"}, "claim": {"1"}, "project_role": {"member"}}); resp.StatusCode != http.StatusNotFound {
@@ -424,14 +422,20 @@ func TestOrgInviteLinkDefaultsFollowTheRoleAndSharedRemotesAreNotOffered(t *test
 	_ = anna
 	// Standardwerte (Feld leer): Mitglied 7 Tage, Gast 3 Tage.
 	for role, want := range map[string]time.Duration{"member": 7 * 24 * time.Hour, "guest": 3 * 24 * time.Hour} {
-		resp := postOrgFollow(t, alice, base, "/ui/orgs/invite", url.Values{"org": {"alpha"}, "project": {"github.com/x/mine"}, "claim": {"1"}, "project_role": {role}, "days": {""}})
+		form := url.Values{"org": {"alpha"}, "days": {""}}
+		if role == "guest" {
+			form.Set("project", "github.com/x/mine")
+			form.Set("claim", "1")
+			form.Set("project_role", "guest")
+		}
+		resp := postOrgFollow(t, alice, base, "/ui/orgs/invite", form)
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("%s link: %d %s", role, resp.StatusCode, body(t, resp))
 		}
 		invs, _ := st.ListInvitations("person:1", org.ID)
 		var newest store.Invitation
 		for _, i := range invs {
-			if i.ProjectRole == role && i.Status == "pending" {
+			if (i.ProjectRole == role || (role == "member" && i.ProjectRole == "")) && i.Status == "pending" {
 				newest = i
 			}
 		}
