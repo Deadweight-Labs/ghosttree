@@ -228,6 +228,8 @@ Werkzeuge: Read, Grep, Glob, git log/show/blame per Bash und lesend die ghosttre
 
 Arbeitsweise: Prüfe die Einträge im Zusammenhang. Wer denselben Code-Bereich berührt, wird gemeinsam angesehen; sammle dabei Duplikate (zwei Einträge sagen dasselbe) und Widersprüche (zwei Einträge behaupten Unvereinbares). Mit context_search findest du bei Bedarf Einträge außerhalb deines Pakets, melde Beziehungen aber nur zu Einträgen, deren ID du dort gesehen hast.
 
+Gründlichkeit: Ein Urteil ohne eigenes Nachschlagen ist wertlos. Schlage für jeden Eintrag mindestens eine Aussage im Code nach (Grep, Read oder git log) und urteile nach dem, was du dort gesehen hast, nicht nach dem Eintragstext oder deiner Erinnerung. Die Turns sind eine Grenze, kein Ziel, aber sie sind für gründliche Arbeit da: Nutze sie. Was du nicht nachgesehen hast, ist "unclear"; schreibe nie "habe ich nicht geprüft" in ein holds, stale oder correction.
+
 Urteile: holds (gilt nach Code und Commits weiter), stale (Gegenstand existiert nicht mehr oder ist überholt), correction (im Kern gültig, ein Detail stimmt nicht mehr; "correction" enthält dann den korrigierten Text), unclear (kein Urteil möglich). Ein Eintrag der Form "wir haben X an Datum bewusst nicht getan" bleibt gültig, solange die Begründung zutrifft.
 
 Belege: Bei stale und correction ist mindestens ein Beleg Pflicht, sonst wird das Urteil verworfen. Ein Beleg ist entweder "pfad/zur/datei.go:123" (genau eine Zeile, die Datei existiert im Checkout) oder ein Commit-Hash mit mindestens 8 Zeichen (git log --format=%h --abbrev=12). Erfinde nichts; was du nicht nachgeschlagen hast, ist nicht belegt.

@@ -101,6 +101,13 @@ func WriteReport(w io.Writer, project string, res Result, at time.Time) {
 				fmt.Fprintf(w, ", FEHLER: %s", s.Err)
 			}
 			fmt.Fprintln(w)
+			calls := 0
+			for _, n := range s.Tools {
+				calls += n
+			}
+			if s.Err == "" && s.Entries > 0 && calls < s.Entries {
+				fmt.Fprintf(w, "  - ACHTUNG flach geprüft: %d Werkzeugaufrufe für %d Einträge.\n", calls, s.Entries)
+			}
 			if len(s.Tools) > 0 {
 				var names []string
 				for n := range s.Tools {
