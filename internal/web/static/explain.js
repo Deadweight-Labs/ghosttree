@@ -6,7 +6,7 @@
   window.__ghosttreeExplain = true;
   var tries = 0, max = 30, every = 3000;
   function tick() {
-    var waiting = document.querySelectorAll("[data-explain-pending]");
+    var waiting = document.querySelectorAll("[data-explain-pending]:not([data-explain-done])");
     if (!waiting.length || tries++ >= max) return;
     fetch(location.href, { credentials: "same-origin", cache: "no-store" })
       .then(function (r) { return r.ok ? r.text() : ""; })
@@ -17,6 +17,9 @@
           var next = doc.getElementById(el.id);
           if (next && !next.hasAttribute("data-explain-pending")) {
             el.replaceWith(document.importNode(next, true));
+          } else if (!next) {
+            // Die Seite kennt den Platzhalter nicht mehr: es kommt nichts mehr.
+            el.setAttribute("data-explain-done", "");
           }
         });
       })

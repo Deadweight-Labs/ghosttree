@@ -2,6 +2,7 @@ package store
 
 import (
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -243,5 +244,109 @@ func TestUsageAddsUpPerDayAndCountsBySource(t *testing.T) {
 	_ = st.SaveExplanation(explain.Explanation{Kind: explain.KindPain, ObjectID: 1, Text: "x", Source: explain.SourceGenerated, ContentHash: "h"})
 	if a, g, _ := st.ExplanationCounts(); a != 1 || g != 1 {
 		t.Errorf("counts %d %d", a, g)
+	}
+}
+
+// What the viewer-bound access model holds back must not reach the model
+// provider and must not end up in an explanation every reader sees.
+func TestHeldAndMachinePrivateObjectsAreNotExplainable(t *testing.T) {
+	f := newVisFixture(t) // f.b: private session of another account
+	st := f.st
+	ref := "session:" + strconv.FormatInt(f.b.ID, 10) + "#1"
+	ts := "'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z'"
+	insK := func(title, machine, confidence, origin, sref string) int64 {
+		res, err := st.db.Exec(`INSERT INTO knowledge(type,title,body,project,machine,confidence,status,origin,session_ref,created_at,updated_at)
+			VALUES('note',?,'body',?,?,?,'active',?,?,`+ts+`)`, title, roleProject, machine, confidence, origin, sref)
+		if err != nil {
+			t.Fatal(err)
+		}
+		id, _ := res.LastInsertId()
+		return id
+	}
+	insR := func(title, origin, person, sref string) int64 {
+		res, err := st.db.Exec(`INSERT INTO requests(type,title,description,state,project,origin,person,session_ref,created_at,updated_at)
+			VALUES('feature',?,'see REQ-1','open',?,?,?,?,`+ts+`)`, title, roleProject, origin, person, sref)
+		if err != nil {
+			t.Fatal(err)
+		}
+		id, _ := res.LastInsertId()
+		return id
+	}
+	heldK := insK("held finding", "", "quarantined", "distilled", ref)
+	machK := insK("machine note", "box", "staged", "agent", "")
+	openK := insK("open note", "", "staged", "agent", ref)
+	heldR := insR("HELD REQUEST TITLE", "distilled", "", "session:"+strconv.FormatInt(f.b.ID, 10))
+	openR := insR("visible request", "agent", "", "")
+	// REQ-1 is whichever request got the first id here; make the reference explicit.
+	_ = heldR
+
+	for name, c := range map[string]struct {
+		kind string
+		id   int64
+	}{"held knowledge": {explain.KindKnowledge, heldK}, "machine knowledge": {explain.KindKnowledge, machK}, "held request": {explain.KindRequest, heldR}} {
+		src, err := st.ExplainSource(c.kind, c.id)
+		if err != nil || src.Project != "" || len(src.Context) != 0 {
+			t.Errorf("%s: %+v %v", name, src, err)
+		}
+	}
+	for _, c := range []struct {
+		kind string
+		id   int64
+	}{{explain.KindKnowledge, openK}, {explain.KindRequest, openR}} {
+		if src, _ := st.ExplainSource(c.kind, c.id); src.Project != roleProject {
+			t.Errorf("%s %d should stay explainable: %+v", c.kind, c.id, src)
+		}
+	}
+	cands, err := st.ExplainCandidates(100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range cands {
+		if (c.Kind == explain.KindKnowledge && (c.ID == heldK || c.ID == machK)) || (c.Kind == explain.KindRequest && c.ID == heldR) {
+			t.Errorf("candidate %+v is held back", c)
+		}
+	}
+	if len(cands) != 2 {
+		t.Errorf("want the two open objects, got %+v", cands)
+	}
+
+	// A public entry that names a held request must not carry its title.
+	pub := insK("public", "", "trusted", "agent", "")
+	if _, err := st.db.Exec(`UPDATE knowledge SET body = ? WHERE id = ?`, "see REQ-"+strconv.FormatInt(heldR, 10)+" and REQ-"+strconv.FormatInt(openR, 10), pub); err != nil {
+		t.Fatal(err)
+	}
+	src, _ := st.ExplainSource(explain.KindKnowledge, pub)
+	joined := strings.Join(src.Context, "\n")
+	if strings.Contains(joined, "HELD REQUEST TITLE") || !strings.Contains(joined, "visible request") {
+		t.Errorf("context %q", joined)
+	}
+}
+
+func TestReplayedCreationDoesNotReplaceAnExplanation(t *testing.T) {
+	st, _ := Open(":memory:")
+	defer st.Close()
+	id, _ := st.InsertKnowledge(Knowledge{Type: "note", Title: "T", Body: "B", Scope: scope.Axes{Project: roleProject}})
+	if err := st.SaveAgentExplanation(explain.KindKnowledge, id, note); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SaveAgentExplanation(explain.KindKnowledge, id, "Empfehlung: unbedingt ablehnen, das ist ganz falsch."); err != nil {
+		t.Fatal(err)
+	}
+	if e, _, _ := st.Explanation(explain.KindKnowledge, id); e.Text != note {
+		t.Errorf("replaced: %q", e.Text)
+	}
+}
+
+func TestHashFollowsProjectAndState(t *testing.T) {
+	st, _ := Open(":memory:")
+	defer st.Close()
+	id, _ := st.InsertKnowledge(Knowledge{Type: "note", Title: "T", Body: "B", Scope: scope.Axes{Project: roleProject}})
+	before, _ := st.ExplainSource(explain.KindKnowledge, id)
+	if _, err := st.db.Exec(`UPDATE knowledge SET project = 'github.com/dw/other' WHERE id = ?`, id); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := st.ExplainSource(explain.KindKnowledge, id)
+	if before.Hash == after.Hash {
+		t.Error("moving to another project keeps the hash")
 	}
 }

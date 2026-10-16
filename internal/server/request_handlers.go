@@ -50,6 +50,11 @@ func (a *api) createRequest(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	replay, err := a.st.RequestKeyTaken(body.IdempotencyKey)
+	if err != nil {
+		writeStoreError(w, http.StatusInternalServerError, err)
+		return
+	}
 	detail, err := a.st.CreateRequest(requestdomain.CreateInput{
 		Request: requestdomain.Request{
 			Type: body.Type, Title: body.Title, Description: body.Description, Priority: body.Priority,
@@ -62,7 +67,9 @@ func (a *api) createRequest(w http.ResponseWriter, r *http.Request) {
 		writeRequestError(w, err)
 		return
 	}
-	a.saveExplanation(explain.KindRequest, detail.Request.ID, explanation)
+	if !replay {
+		a.saveExplanation(explain.KindRequest, detail.Request.ID, explanation)
+	}
 	writeJSON(w, http.StatusCreated, a.access(r).RequestDetailView(detail))
 }
 

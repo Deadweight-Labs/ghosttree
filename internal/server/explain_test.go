@@ -129,3 +129,20 @@ func TestCreatingWithoutAnExplanationStoresNothing(t *testing.T) {
 		t.Error("an explanation appeared from nowhere")
 	}
 }
+
+// A replayed idempotent create returns the request somebody else made; the
+// text sent with the replay must not become that request's explanation.
+func TestReplayedRequestCreateKeepsTheExistingExplanationState(t *testing.T) {
+	f := accessAPI(t, true)
+	first := f.expect(t, "mia", 201, "POST", "/api/requests", map[string]any{"type": "feature", "title": "Einmal", "project": accProject, "idempotency_key": "k-1"})
+	var rd struct {
+		Request struct{ ID int64 } `json:"request"`
+	}
+	if err := json.Unmarshal([]byte(first), &rd); err != nil {
+		t.Fatal(err)
+	}
+	f.expect(t, "mia", 201, "POST", "/api/requests", map[string]any{"type": "feature", "title": "Einmal", "project": accProject, "idempotency_key": "k-1", "explanation": agentNote})
+	if _, ok, _ := f.st.Explanation(explain.KindRequest, rd.Request.ID); ok {
+		t.Error("a replay stored an explanation for a request it did not create")
+	}
+}

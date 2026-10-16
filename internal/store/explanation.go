@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/explain"
@@ -86,6 +88,14 @@ func (s *Store) SaveAgentExplanation(kind string, id int64, text string) error {
 	text, err := explain.Clean(text)
 	if err != nil {
 		return err
+	}
+	// Only the creator of a new object sets its explanation. A replayed
+	// idempotent call returns an object somebody else made; it must not replace
+	// what is stored for it.
+	if _, found, err := s.Explanation(kind, id); err != nil {
+		return err
+	} else if found {
+		return nil
 	}
 	src, err := s.ExplainSource(kind, id)
 	if err != nil {
@@ -206,16 +216,66 @@ func (s *Store) ExplainSource(kind string, id int64) (explain.Source, error) {
 	return src, err
 }
 
+var explainOriginSession = regexp.MustCompile(`^session:(\d+)`)
+
+// originHeld says whether an object derived from a session ("session:N") still
+// belongs to the owner of that session: the session is private and access
+// control is on. Same rule as ProjectAccess.heldOrigin, without a viewer,
+// because an explanation is shown to every reader of the object and must not
+// contain what only the session owner may see.
+func (s *Store) originHeld(ref string) bool {
+	if ref == "" || !s.accessCfg().enforce.Load() {
+		return false
+	}
+	m := explainOriginSession.FindStringSubmatch(ref)
+	if m == nil {
+		return false
+	}
+	id, err := strconv.ParseInt(m[1], 10, 64)
+	if err != nil {
+		return false
+	}
+	sess, err := s.SessionByID(id)
+	if err != nil {
+		return false
+	}
+	return !sess.Shared && sess.Visibility != VisGuests
+}
+
+// requestHeld: distilled request nobody has taken over yet (see heldCol).
+func (s *Store) requestHeld(origin, person, sessionRef string) bool {
+	return origin == "distilled" && person == "" && s.originHeld(sessionRef)
+}
+
+// knowledgeHeld: distilled knowledge still in quarantine (see knowledgeHeldRef).
+func (s *Store) knowledgeHeld(origin, confidence, sessionRef string) bool {
+	return origin == "distilled" && confidence == "quarantined" && s.originHeld(sessionRef)
+}
+
+// readableRequestTitle returns the title of a request of the project that every
+// reader of the project may see. Held requests are left out: the explanation is
+// stored once and shown to all readers of the explained object.
+func (s *Store) readableRequestTitle(id int64, project string) (string, bool) {
+	var title, origin, person, ref string
+	if s.db.QueryRow(`SELECT title, origin, person, session_ref FROM requests WHERE id = ? AND project = ?`, id, project).
+		Scan(&title, &origin, &person, &ref) != nil {
+		return "", false
+	}
+	if s.requestHeld(origin, person, ref) {
+		return "", false
+	}
+	return title, true
+}
+
 // referenceContext names, in context lines, what a text points at. Only
-// requests of the same project are resolved, so a number cannot be used to read
-// another project's title.
+// requests of the same project that are not held are resolved, so a number
+// cannot be used to read another project's or a hidden request's title.
 func (s *Store) referenceContext(project, text string) []string {
 	refs := explain.References(text)
 	var out []string
 	if project != "" {
 		for _, n := range refs.Requests {
-			var title string
-			if s.db.QueryRow(`SELECT title FROM requests WHERE id = ? AND project = ?`, n, project).Scan(&title) == nil {
+			if title, ok := s.readableRequestTitle(n, project); ok {
 				out = append(out, fmt.Sprintf("Request REQ-%d: %s", n, title))
 			}
 		}
@@ -230,18 +290,31 @@ func (s *Store) referenceContext(project, text string) []string {
 }
 
 func (s *Store) knowledgeSource(id int64) (explain.Source, error) {
-	var typ, title, body, project string
-	if err := s.db.QueryRow(`SELECT type, title, body, project FROM knowledge WHERE id = ?`, id).Scan(&typ, &title, &body, &project); err != nil {
+	var typ, title, body, project, machine, origin, confidence, sessionRef string
+	if err := s.db.QueryRow(`SELECT type, title, body, project, machine, origin, confidence, session_ref FROM knowledge WHERE id = ?`, id).
+		Scan(&typ, &title, &body, &project, &machine, &origin, &confidence, &sessionRef); err != nil {
 		return explain.Source{}, err
 	}
+	hash := explain.HashOf(explain.KindKnowledge, project, typ, title, body)
+	// Machine-axis entries are readable by the machine's owner only, held ones by
+	// the owner of the private session they came from: no project text for the
+	// model, no shared explanation.
+	if machine != "" || s.knowledgeHeld(origin, confidence, sessionRef) {
+		return explain.Source{Label: typ, Title: title, Body: body, Hash: hash}, nil
+	}
 	return explain.Source{Project: project, Label: typ, Title: title, Body: body,
-		Context: s.referenceContext(project, title+"\n"+body), Hash: explain.HashOf(explain.KindKnowledge, typ, title, body)}, nil
+		Context: s.referenceContext(project, title+"\n"+body), Hash: hash}, nil
 }
 
 func (s *Store) requestSource(id int64) (explain.Source, error) {
-	var typ, title, desc, project string
-	if err := s.db.QueryRow(`SELECT type, title, description, project FROM requests WHERE id = ?`, id).Scan(&typ, &title, &desc, &project); err != nil {
+	var typ, title, desc, project, machine, origin, person, sessionRef string
+	if err := s.db.QueryRow(`SELECT type, title, description, project, machine, origin, person, session_ref FROM requests WHERE id = ?`, id).
+		Scan(&typ, &title, &desc, &project, &machine, &origin, &person, &sessionRef); err != nil {
 		return explain.Source{}, err
+	}
+	hash := explain.HashOf(explain.KindRequest, project, typ, title, desc)
+	if machine != "" || s.requestHeld(origin, person, sessionRef) {
+		return explain.Source{Label: typ, Title: title, Body: desc, Hash: hash}, nil
 	}
 	var ctx []string
 	rows, err := s.db.Query(`SELECT description FROM request_criteria WHERE request_id = ? ORDER BY number LIMIT 8`, id)
@@ -255,8 +328,7 @@ func (s *Store) requestSource(id int64) (explain.Source, error) {
 		rows.Close()
 	}
 	ctx = append(ctx, s.referenceContext(project, desc)...)
-	return explain.Source{Project: project, Label: typ, Title: title, Body: desc, Context: ctx,
-		Hash: explain.HashOf(explain.KindRequest, typ, title, desc)}, nil
+	return explain.Source{Project: project, Label: typ, Title: title, Body: desc, Context: ctx, Hash: hash}, nil
 }
 
 func (s *Store) painSource(id int64) (explain.Source, error) {
@@ -268,28 +340,30 @@ func (s *Store) painSource(id int64) (explain.Source, error) {
 	if remaining != "" {
 		ctx = append(ctx, "Still unsolved: "+remaining)
 	}
-	rows, err := s.db.Query(`SELECT r.id, r.title FROM entity_links l JOIN requests r ON r.id = l.dst_id
-		WHERE l.src_kind = 'pain' AND l.src_id = ? AND l.dst_kind = 'request' AND r.project = ? LIMIT 3`, id, project)
+	rows, err := s.db.Query(`SELECT r.id, r.title, r.origin, r.person, r.session_ref FROM entity_links l JOIN requests r ON r.id = l.dst_id
+		WHERE l.src_kind = 'pain' AND l.src_id = ? AND l.dst_kind = 'request' AND r.project = ? LIMIT 10`, id, project)
 	if err == nil {
+		shown := 0
 		for rows.Next() {
 			var n int64
-			var t string
-			if rows.Scan(&n, &t) == nil {
+			var t, origin, person, ref string
+			if rows.Scan(&n, &t, &origin, &person, &ref) == nil && shown < 3 && !s.requestHeld(origin, person, ref) {
 				ctx = append(ctx, fmt.Sprintf("Motivates request REQ-%d: %s", n, t))
+				shown++
 			}
 		}
 		rows.Close()
 	}
 	ctx = append(ctx, s.referenceContext(project, title+"\n"+body)...)
 	return explain.Source{Project: project, Label: "pain", Title: title, Body: body, Context: ctx,
-		Hash: explain.HashOf(explain.KindPain, title, body)}, nil
+		Hash: explain.HashOf(explain.KindPain, project, title, body, state, remaining)}, nil
 }
 
 func (s *Store) taskSource(id int64) (explain.Source, error) {
-	var kind, title, desc, location, hint, project string
+	var kind, title, desc, location, hint, project, state string
 	var requestID int64
-	if err := s.db.QueryRow(`SELECT kind, title, description, location, check_hint, project, request_id FROM human_tasks WHERE id = ?`, id).
-		Scan(&kind, &title, &desc, &location, &hint, &project, &requestID); err != nil {
+	if err := s.db.QueryRow(`SELECT kind, title, description, location, check_hint, project, request_id, state FROM human_tasks WHERE id = ?`, id).
+		Scan(&kind, &title, &desc, &location, &hint, &project, &requestID, &state); err != nil {
 		return explain.Source{}, err
 	}
 	body := desc
@@ -300,12 +374,11 @@ func (s *Store) taskSource(id int64) (explain.Source, error) {
 		body += "\nHow it is checked: " + hint
 	}
 	var ctx []string
-	var reqTitle string
-	if s.db.QueryRow(`SELECT title FROM requests WHERE id = ? AND project = ?`, requestID, project).Scan(&reqTitle) == nil {
+	if reqTitle, ok := s.readableRequestTitle(requestID, project); ok {
 		ctx = append(ctx, fmt.Sprintf("Hangs on request REQ-%d: %s", requestID, reqTitle))
 	}
 	return explain.Source{Project: project, Label: "task for a person (" + kind + ")", Title: title, Body: strings.TrimSpace(body), Context: ctx,
-		Hash: explain.HashOf(explain.KindTask, kind, title, desc, location, hint)}, nil
+		Hash: explain.HashOf(explain.KindTask, project, state, kind, title, desc, location, hint)}, nil
 }
 
 func (s *Store) questionSource(id int64) (explain.Source, error) {
@@ -326,7 +399,7 @@ func (s *Store) questionSource(id int64) (explain.Source, error) {
 		_ = s.db.QueryRow(`SELECT project FROM threads WHERE id = ?`, destID).Scan(&project)
 	}
 	return explain.Source{Project: project, Label: "question to the people of the project", Title: "", Body: body,
-		Context: s.referenceContext(project, body), Hash: explain.HashOf(explain.KindQuestion, intent, body)}, nil
+		Context: s.referenceContext(project, body), Hash: explain.HashOf(explain.KindQuestion, project, intent, body)}, nil
 }
 
 // --------------------------------------------------------------------- Queue
@@ -341,40 +414,81 @@ func (s *Store) ExplainCandidates(scan int) ([]explain.Candidate, error) {
 	}
 	type part struct {
 		kind, query string
+		held        func(origin, a, b string) bool
 	}
+	heldKnowledge := func(origin, confidence, ref string) bool { return s.knowledgeHeld(origin, confidence, ref) }
+	heldRequest := func(origin, person, ref string) bool { return s.requestHeld(origin, person, ref) }
 	parts := []part{
-		{explain.KindKnowledge, `SELECT id FROM knowledge WHERE project != '' AND ((status = 'active' AND confidence IN ('quarantined','staged')) OR status = 'stale') ORDER BY created_at DESC, id DESC`},
-		{explain.KindRequest, `SELECT id FROM requests WHERE project != '' AND state = 'open' ORDER BY created_at DESC, id DESC`},
-		{explain.KindPain, `SELECT id FROM pains WHERE project != '' AND state IN ('active','mitigated') ORDER BY created_at DESC, id DESC`},
-		{explain.KindTask, `SELECT id FROM human_tasks WHERE state IN ('open','done') ORDER BY created_at DESC, id DESC`},
-		{explain.KindQuestion, `SELECT DISTINCT m.id FROM coord_attention a JOIN coord_messages m ON m.id = a.message_id
-			WHERE a.reason = 'question' AND a.state = 'open' ORDER BY m.id DESC`},
-		{explain.KindKnowledge, `SELECT id FROM knowledge WHERE project != '' AND status = 'active' AND confidence IN ('trusted','verified') ORDER BY created_at DESC, id DESC`},
+		{explain.KindKnowledge, `SELECT id, origin, confidence, session_ref FROM knowledge WHERE project != '' AND machine = '' AND ((status = 'active' AND confidence IN ('quarantined','staged')) OR status = 'stale') ORDER BY created_at DESC, id DESC`, heldKnowledge},
+		{explain.KindRequest, `SELECT id, origin, person, session_ref FROM requests WHERE project != '' AND machine = '' AND state = 'open' ORDER BY created_at DESC, id DESC`, heldRequest},
+		{explain.KindPain, `SELECT id, '', '', '' FROM pains WHERE project != '' AND state IN ('active','mitigated') ORDER BY created_at DESC, id DESC`, nil},
+		{explain.KindTask, `SELECT id, '', '', '' FROM human_tasks WHERE state IN ('open','done') ORDER BY created_at DESC, id DESC`, nil},
+		{explain.KindQuestion, `SELECT DISTINCT m.id, '', '', '' FROM coord_attention a JOIN coord_messages m ON m.id = a.message_id
+			WHERE a.reason = 'question' AND a.state = 'open' ORDER BY m.id DESC`, nil},
+		{explain.KindKnowledge, `SELECT id, origin, confidence, session_ref FROM knowledge WHERE project != '' AND machine = '' AND status = 'active' AND confidence IN ('trusted','verified') ORDER BY created_at DESC, id DESC`, heldKnowledge},
 	}
 	var out []explain.Candidate
 	for _, p := range parts {
+		// Held and machine-private objects are dropped after the query, so a page
+		// can come back short; read on until the part is exhausted or enough is
+		// found. The rows are closed before the held check, which reads again.
+		for offset := 0; len(out) < scan; offset += scan {
+			type row struct {
+				id      int64
+				a, b, c string
+			}
+			rows, err := s.db.Query(p.query+` LIMIT ? OFFSET ?`, scan, offset)
+			if err != nil {
+				return nil, err
+			}
+			var page []row
+			for rows.Next() {
+				var r row
+				if err := rows.Scan(&r.id, &r.a, &r.b, &r.c); err != nil {
+					rows.Close()
+					return nil, err
+				}
+				page = append(page, r)
+			}
+			err = rows.Err()
+			rows.Close()
+			if err != nil {
+				return nil, err
+			}
+			for _, r := range page {
+				if p.held != nil && p.held(r.a, r.b, r.c) {
+					continue
+				}
+				if len(out) < scan {
+					out = append(out, explain.Candidate{Kind: p.kind, ID: r.id})
+				}
+			}
+			if len(page) < scan {
+				break
+			}
+		}
 		if len(out) >= scan {
 			break
 		}
-		rows, err := s.db.Query(p.query+` LIMIT ?`, scan-len(out))
-		if err != nil {
-			return nil, err
-		}
-		for rows.Next() {
-			var id int64
-			if err := rows.Scan(&id); err != nil {
-				rows.Close()
-				return nil, err
-			}
-			out = append(out, explain.Candidate{Kind: p.kind, ID: id})
-		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		rows.Close()
 	}
 	return out, nil
 }
 
 var _ explain.Store = (*Store)(nil)
+
+// RequestKeyTaken says whether a request with this idempotency key exists. A
+// create call that finds one is a replay and returns somebody else's request.
+func (s *Store) RequestKeyTaken(key string) (bool, error) {
+	if key == "" {
+		return false, nil
+	}
+	if s.reader != nil {
+		return s.reader.RequestKeyTaken(key)
+	}
+	var id int64
+	err := s.db.QueryRow(`SELECT id FROM requests WHERE idempotency_key = ?`, key).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
+}

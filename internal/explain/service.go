@@ -286,6 +286,10 @@ func (s *Service) Generate(ctx context.Context, kind string, id int64) error {
 	failures := 0
 	if callErr != nil {
 		failures = 1
+		// A failed or timed-out call may still have been billed: count what was sent.
+		if usage.InputTokens == 0 {
+			usage.InputTokens = (len(system) + len(user)) / 4
+		}
 	}
 	if err := s.st.AddExplainUsage(s.day(), 1, failures, usage.InputTokens, usage.OutputTokens); err != nil && callErr == nil {
 		callErr = err

@@ -314,6 +314,7 @@ var writerMethodClasses = map[string]string{
 	"ExplanationCounts":             "read",
 	"ExplainSource":                 "read",
 	"ExplainCandidates":             "read",
+	"RequestKeyTaken":               "read",
 	"SetThreadArchived":             "write",
 	"SetThreadState":                "write",
 	"StartRequestWork":              "write",
