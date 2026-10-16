@@ -29,11 +29,11 @@ func TestRequestsTasksAndPainsShareTabsAndTheNavigationStaysOnRequests(t *testin
 			t.Errorf("%s: the navigation does not mark Requests", path)
 		}
 		for _, tab := range []string{"/ui/requests", "/ui/tasks", "/ui/pains"} {
-			if !strings.Contains(page, `class="rq-tab`) || !strings.Contains(page, `href="`+tab+`"`) {
+			if !strings.Contains(page, `class="g-tab"`) || !strings.Contains(page, `href="`+tab+`"`) {
 				t.Errorf("%s lacks the tab %s", path, tab)
 			}
 		}
-		if !strings.Contains(page, `class="rq-tab is-active" href="`+current+`" aria-current="page"`) {
+		if !regexp.MustCompile(`class="g-tab" data-tab="[a-z]+" href="` + current + `" aria-current="page"`).MatchString(page) {
 			t.Errorf("%s: the current tab is not marked", path)
 		}
 		if strings.Count(page, `aria-current="page"`) != 2 {
@@ -76,7 +76,7 @@ func TestOpenTasksForMeShowAsABadgeAndCountOnlyWhatIsVisible(t *testing.T) {
 		t.Errorf("rita's badge = %q, want 1", got)
 	}
 	_, tasks := fetchPage(t, e.Member, e.Base+"/ui/tasks")
-	if !strings.Contains(tasks, `class="rq-tabcount">2</b>`) {
+	if !strings.Contains(tasks, `class="g-n">2</span>`) {
 		t.Error("the Tasks tab does not carry the number")
 	}
 	// Nothing open: no badge at all.
@@ -108,7 +108,7 @@ func TestTasksPageMineAndEveryone(t *testing.T) {
 	if !strings.Contains(mine, "For everyone") || !strings.Contains(mine, "For anna") || strings.Contains(mine, "For lars") {
 		t.Errorf("Mine = %s", mine)
 	}
-	if !strings.Contains(mine, `class="ov-btn clay ov-btn-primary" href="/ui/tasks" aria-current="true">Mine`) {
+	if !strings.Contains(mine, `href="/ui/tasks" aria-current="true">Mine`) {
 		t.Error("Mine is not the marked filter")
 	}
 	_, all := fetchPage(t, e.Member, e.Base+"/ui/tasks?who=all")
@@ -325,27 +325,28 @@ func TestTokensAreSortedByUseAndUnusedOnesCanBeRevoked(t *testing.T) {
 	}
 }
 
-// Organization and Devices have icons of their own, not the shared fallback.
-func TestOrganizationAndDevicesHaveTheirOwnIcons(t *testing.T) {
+// Team & devices is one entry of the account menu with an icon of its own, not
+// the shared fallback; a guest has none.
+func TestTeamAndDevicesAreOneMenuEntryWithItsOwnIcon(t *testing.T) {
 	e := ovEnv(t)
-	icon := func(page, key string) string {
-		i := strings.Index(page, `data-nav="`+key+`"`)
+	const fallback = `cx="9" cy="8"`
+	for name, c := range map[string]*http.Client{"owner": e.Owner, "member": e.Member} {
+		_, page := fetchPage(t, c, e.Base+"/ui/overview")
+		i := strings.Index(page, `data-account="team"`)
 		if i < 0 {
-			t.Fatalf("no nav entry %s", key)
+			t.Fatalf("%s has no Team & devices entry", name)
 		}
 		rest := page[i:]
-		return rest[strings.Index(rest, "<svg"):strings.Index(rest, "</svg>")]
+		if icon := rest[strings.Index(rest, "<svg"):strings.Index(rest, "</svg>")]; strings.Contains(icon, fallback) {
+			t.Errorf("%s: the entry falls back to the shared icon", name)
+		}
+		if strings.Count(page, `data-account="team"`) != 1 {
+			t.Errorf("%s: Team & devices must be a single entry", name)
+		}
 	}
-	_, owner := fetchPage(t, e.Owner, e.Base+"/ui/overview")
-	org, dev := icon(owner, "admin-org"), icon(owner, "admin-devices")
-	// The shared fallback is the two sliders (a circle at cx=9 cy=8).
-	const fallback = `cx="9" cy="8"`
-	if org == dev || strings.Contains(org, fallback) || strings.Contains(dev, fallback) {
-		t.Errorf("icons collide or fall back: org=%q devices=%q", org, dev)
-	}
-	_, member := fetchPage(t, e.Member, e.Base+"/ui/overview")
-	if strings.Contains(icon(member, "account-org"), fallback) || strings.Contains(icon(member, "account-devices"), fallback) {
-		t.Error("a member's entries fall back to the shared icon")
+	_, guest := fetchPage(t, e.Guest, e.Base+"/ui/overview")
+	if strings.Contains(guest, `data-account="team"`) {
+		t.Error("a guest is offered Team & devices")
 	}
 }
 

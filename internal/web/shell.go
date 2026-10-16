@@ -15,10 +15,10 @@ import (
 type navItem struct {
 	Key, Label, Href string
 	Current          bool
-	Sub              []navItem
-	// Count is the number beside the entry (open tasks for the viewer); 0 shows
-	// nothing.
+	// Count is the number beside the entry; 0 shows nothing. Quiet marks a
+	// number that is there to look at, not one that concerns the viewer.
 	Count int
+	Quiet bool
 }
 
 type projectOption struct {
@@ -43,6 +43,9 @@ type shellMemo struct {
 	// tasks is the number of open tasks for the viewer, once counted.
 	tasks    int
 	tasksSet bool
+	// review is the number of proposals waiting for the viewer's review.
+	review    int
+	reviewSet bool
 }
 
 // shellBaseFor liefert Betrachter und Projektliste. Ohne gültige Wahl gilt für
@@ -75,7 +78,6 @@ func (a *app) shellBaseFor(r *http.Request) shellBase {
 type shellView struct {
 	On            bool
 	Primary       []navItem
-	Secondary     []navItem
 	Projects      []projectOption
 	AllSelected   bool
 	CanAll        bool
@@ -83,8 +85,12 @@ type shellView struct {
 	Initial       string
 	RoleKey       string
 	Host          string
-	// Tabs are Requests | Tasks | Pains, set on the three list pages only.
-	Tabs []navItem
+	// Tabs sit under the page title: Requests | Tasks | Pains, Agents | Sessions,
+	// Search | Review | Agent context, Team | Devices. TabsLabel names them.
+	Tabs      []navItem
+	TabsLabel string
+	// Team is the account menu entry "Team & devices"; empty for a guest.
+	Team string
 }
 
 type viewerKind int
@@ -135,11 +141,11 @@ func (a *app) viewerOf(r *http.Request, pa *store.ProjectAccess) viewer {
 }
 
 // projectAware sind die Seiten, die ?project= auswerten.
-var projectAware = map[string]bool{"overview": true, "knowledge": true, "review": true, "context": true, "sessions": true, "agents": true, "requests": true, "tasks": true, "pains": true, "coord": true}
+var projectAware = map[string]bool{"overview": true, "knowledge": true, "review": true, "context": true, "sessions": true, "agents": true, "requests": true, "tasks": true, "pains": true, "coord": true, "search": true}
 
 // projectNeutral sind die Seiten über Konto und Verwaltung. Sie filtern nach
 // nichts; die Projektauswahl steht dort nicht, damit sie keinen Filter vortäuscht.
-var projectNeutral = map[string]bool{"orgs": true, "tokens": true, "device": true, "devicecheck": true, "devicedone": true, "interactive": true, "profile": true}
+var projectNeutral = map[string]bool{"request": true, "pain": true, "knowledgeitem": true, "session": true, "orgs": true, "tokens": true, "device": true, "devicecheck": true, "devicedone": true, "interactive": true, "profile": true}
 
 // navSection ist der Eintrag der Seitenleiste, unter dem eine Seite steht.
 func navKeyFor(section string, kind viewerKind) string {
@@ -150,24 +156,15 @@ func navKeyFor(section string, kind viewerKind) string {
 		return "agents"
 	case "requests", "request", "requesttoolarge", "tasks", "pains", "pain":
 		return "requests"
-	case "knowledge", "knowledgeitem", "review", "context":
+	case "knowledge", "knowledgeitem", "review", "context", "search":
 		return "knowledge"
 	case "sessions", "session":
-		return "sessions"
+		if kind == viewerGuest {
+			return "sessions"
+		}
+		return "agents"
 	case "coord", "roomforbidden", "roomnotfound":
 		return "rooms"
-	case "tokens", "device", "devicecheck", "devicedone":
-		if kind == viewerOwner {
-			return "admin-devices"
-		}
-		return "account-devices"
-	case "orgs":
-		if kind == viewerOwner {
-			return "admin-org"
-		}
-		if kind == viewerMember {
-			return "account-org"
-		}
 	}
 	return ""
 }
@@ -185,45 +182,57 @@ func (a *app) shellFor(r *http.Request, name string) shellView {
 		v.Initial = strings.ToUpper(string([]rune(label)[:1]))
 	}
 
+	// Five entries: Home, Agents, Requests, Rooms, Knowledge. A guest has no
+	// agents and no rooms; what is left of Agents for them is the sessions list.
 	v.Primary = []navItem{item("overview", "nav.overview", "/ui/overview")}
 	if kind != viewerGuest {
 		v.Primary = append(v.Primary, item("agents", "nav.agents", "/ui/agents"))
+	} else {
+		v.Primary = append(v.Primary, item("sessions", "nav.sessions", "/ui/sessions"))
 	}
-	// Sessions zeigt jeder; die Seite filtert selbst, der Eintrag verrät nichts.
-	v.Primary = append(v.Primary, item("sessions", "nav.sessions", "/ui/sessions"))
+	open := a.openTaskCount(r, selectedProjectOf(base))
+	requests := item("requests", "nav.requests", "/ui/requests")
+	requests.Count = open
+	v.Primary = append(v.Primary, requests)
 	if kind != viewerGuest {
 		v.Primary = append(v.Primary, item("rooms", "nav.rooms", "/ui/coord"))
 	}
 	knowledge := item("knowledge", "nav.knowledge", "/ui/knowledge")
-	if who.reviewer && current == "knowledge" {
-		sub := func(key, label, href, section string) navItem {
-			return navItem{Key: key, Label: label, Href: href, Current: name == section}
-		}
-		knowledge.Sub = []navItem{
-			sub("knowledge-search", "nav.search", "/ui/knowledge", "knowledge"),
-			sub("knowledge-review", "nav.review", "/ui/review", "review"),
-			sub("knowledge-context", "nav.context", "/ui/context", "context"),
-		}
+	if who.reviewer {
+		knowledge.Count, knowledge.Quiet = a.reviewCount(r, selectedProjectOf(base)), true
 	}
-	requests := item("requests", "nav.requests", "/ui/requests")
-	open := a.openTaskCount(r, selectedProjectOf(base))
-	requests.Count = open
-	v.Primary = append(v.Primary, knowledge, requests)
+	v.Primary = append(v.Primary, knowledge)
+
+	tab := func(key, label, href string, on bool) navItem {
+		return navItem{Key: key, Label: label, Href: href, Current: on}
+	}
 	switch name {
 	case "requests", "tasks", "pains":
-		tab := func(key, label, href string) navItem {
-			return navItem{Key: key, Label: label, Href: href, Current: key == name}
-		}
-		tasks := tab("tasks", "nav.tab_tasks", "/ui/tasks")
+		tasks := tab("tasks", "nav.tab_tasks", "/ui/tasks", name == "tasks")
 		tasks.Count = open
-		v.Tabs = []navItem{tab("requests", "nav.tab_requests", "/ui/requests"), tasks, tab("pains", "nav.tab_pains", "/ui/pains")}
+		v.Tabs = []navItem{tab("requests", "nav.tab_requests", "/ui/requests", name == "requests"), tasks, tab("pains", "nav.tab_pains", "/ui/pains", name == "pains")}
+		v.TabsLabel = "nav.requests"
+	case "agents", "sessions":
+		if kind != viewerGuest {
+			v.Tabs = []navItem{tab("agents", "nav.tab_agents", "/ui/agents", name == "agents"), tab("sessions", "nav.sessions", "/ui/sessions", name == "sessions")}
+			v.TabsLabel = "nav.agents"
+		}
+	case "knowledge", "review", "context":
+		if who.reviewer {
+			review := tab("review", "nav.review", "/ui/review", name == "review")
+			review.Count = knowledge.Count
+			v.Tabs = []navItem{tab("search", "nav.search", "/ui/knowledge", name == "knowledge"), review, tab("context", "nav.context", "/ui/context", name == "context")}
+			v.TabsLabel = "nav.knowledge"
+		}
+	case "orgs", "tokens":
+		if kind != viewerGuest {
+			v.Tabs = []navItem{tab("team", "nav.tab_team", "/ui/orgs", name == "orgs"), tab("devices", "nav.tab_devices", "/ui/account/tokens", name == "tokens")}
+			v.TabsLabel = "nav.team_devices"
+		}
 	}
-
-	switch kind {
-	case viewerOwner:
-		v.Secondary = []navItem{item("admin-org", "nav.organization", "/ui/orgs"), item("admin-devices", "nav.devices", "/ui/account/tokens")}
-	case viewerMember:
-		v.Secondary = []navItem{item("account-org", "nav.people", "/ui/orgs"), item("account-devices", "nav.my_devices", "/ui/account/tokens")}
+	// Organization and devices are one entry in the account menu.
+	if kind != viewerGuest {
+		v.Team = "/ui/orgs"
 	}
 
 	v.ProjectAction = "/ui/knowledge"
@@ -275,6 +284,27 @@ func (a *app) openTaskCount(r *http.Request, project string) int {
 	}
 	if memo != nil {
 		memo.tasks, memo.tasksSet = n, true
+	}
+	return n
+}
+
+// reviewCount is the number of proposals the viewer can review in the chosen
+// project, capped like the review page itself, once per request. It counts what
+// the review page lists: the same query, the same visibility check.
+func (a *app) reviewCount(r *http.Request, project string) int {
+	memo, _ := r.Context().Value(shellMemoKey{}).(*shellMemo)
+	if memo != nil && memo.reviewSet {
+		return memo.review
+	}
+	pa := a.access(r)
+	n := 0
+	if project == "" || pa.Role(project).Role != "" {
+		if pending, err := a.store.PendingKnowledge(project, a.overfetch(reviewShown), pa.Viewer()); err == nil {
+			n = len(keep(pending, reviewShown, pa.CanSeeKnowledge))
+		}
+	}
+	if memo != nil {
+		memo.review, memo.reviewSet = n, true
 	}
 	return n
 }

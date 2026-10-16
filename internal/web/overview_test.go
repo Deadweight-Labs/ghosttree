@@ -364,6 +364,8 @@ func TestOverviewHasNoCountersPillsOrBadges(t *testing.T) {
 	fillVisible(t, e.St)
 	for name, c := range map[string]*http.Client{"owner": e.Owner, "member": e.Member, "guest": e.Guest} {
 		_, page := fetchPage(t, c, e.Base+"/ui/overview")
+		// The counters of the navigation are meant (nav tests); this is the page.
+		page = page[strings.Index(page, `<div class="shell-main">`):]
 		for _, bad := range []string{"badge", "pill", "clay-card", "chip"} {
 			if strings.Contains(page, bad) {
 				t.Errorf("%s overview carries %q", name, bad)

@@ -1,18 +1,21 @@
-{{define "taskform"}}<form class="tk-form" method="post" action="/ui/tasks/done"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="back" value="{{.Back}}">{{if .Who}}<input type="hidden" name="who" value="{{.Who}}">{{end}}{{if .Project}}<input type="hidden" name="project" value="{{.Project}}">{{end}}
-<ul class="ov-list ov-deck clay tk-list">{{range .Rows}}{{template "taskrow" .}}{{end}}</ul>
-{{if .Any}}<div class="tk-actions"><input class="clay-field tk-note" name="note" maxlength="500" autocomplete="off" placeholder="{{t "tasks.note"}}" aria-label="{{t "tasks.note"}}"><button class="ov-btn ov-btn-primary clay">{{t "tasks.done"}}</button></div>{{end}}</form>{{end}}
+{{define "taskcard"}}<li class="g-card clay" id="task-{{.ID}}">
+<div class="g-head"><div><span class="g-kind">{{template "icon" .Kind}}{{.KindLabel}}</span><h3 class="g-title">{{.Title}}</h3></div><div class="g-side">{{if .Age}}<span class="g-age{{if .Old}} is-old{{end}}">{{.Age}}</span>{{end}}{{if .Req}}<a class="g-ref" href="{{.ReqHref}}">{{.Req}}</a>{{end}}</div></div>
+{{if or .ReqTitle .Project}}<p class="g-src">{{if .ReqTitle}}{{t "tasks.for"}} <b>{{.ReqTitle}}</b>{{end}}{{if and .ReqTitle .Project}} · {{end}}{{.Project}}</p>{{end}}
+{{template "gcmd" .WhereCmd}}
+{{template "gexplain" .Explain}}
+{{if or .Blocks .Check}}<details class="g-fold"><summary><span class="g-fold-t">{{t "tasks.details"}}</span><span class="g-fold-p">{{if .Lead}}{{.Lead}}{{else}}{{t "tasks.check"}}{{end}}</span></summary><div class="g-fold-b">{{template "knbody" .Blocks}}{{if .Check}}<div class="g-check"><span class="g-src"><b>{{t "tasks.check"}}</b></span><div class="g-cmd-multi">{{range .Check}}{{template "gcmd" .}}{{end}}</div></div>{{end}}</div></details>{{end}}
+{{if .CanDone}}<form class="g-foot" method="post" action="/ui/tasks/done"><input type="hidden" name="csrf_token" value="{{.Token}}"><input type="hidden" name="back" value="{{.Back}}"><input type="hidden" name="id" value="{{.ID}}">{{if .Who}}<input type="hidden" name="who" value="{{.Who}}">{{end}}{{if .Filter}}<input type="hidden" name="project" value="{{.Filter}}">{{end}}
+<details class="g-notebox"><summary class="g-btn g-btn--ghost">{{t "tasks.note_open"}}</summary><input class="clay-field g-note" name="note" maxlength="500" autocomplete="off" aria-label="{{t "tasks.note"}}" placeholder="{{t "tasks.note"}}"></details>
+<button class="g-btn g-btn--primary clay">{{t "tasks.done"}}</button></form>{{end}}</li>{{end}}
 
-{{define "taskrow"}}<li class="tk-row{{if not .CanDone}} is-closed{{end}}">{{if .CanDone}}<input class="tk-box" type="checkbox" name="id" value="{{.ID}}" id="task-{{.ID}}" aria-label="{{.Title}}">{{else}}<span class="tk-box tk-void" aria-hidden="true"></span>{{end}}
-<div class="tk-text"><label{{if .CanDone}} for="task-{{.ID}}"{{end}} class="tk-title"><span class="tk-kind">{{.KindLabel}}</span>{{.Title}}</label>
-{{template "explain" .Explain}}
-{{if .Where}}<code class="tk-where">{{.Where}}</code>{{end}}
-{{if .Desc}}<p class="tk-desc">{{.Desc}}</p>{{end}}
-{{if .Note}}<p class="tk-said">{{.Note}}</p>{{end}}</div>
-<div class="tk-side">{{if .StateLabel}}<span class="ov-meta">{{.StateLabel}}</span>{{end}}{{if .Req}}<a class="kn-link rq-id" href="{{.ReqHref}}">{{.Req}}</a>{{end}}</div></li>{{end}}
+{{define "taskclosed"}}<li class="g-row g-row--closed"><span class="g-mark" aria-hidden="true">{{template "icon" .Kind}}</span><div><h3 class="g-title">{{.Title}}</h3>{{if .Note}}<p class="g-src">{{.Note}}{{if .By}} · {{.By}}{{end}}</p>{{end}}</div><div class="g-side">{{if .StateLabel}}<span class="g-age">{{.StateLabel}}</span>{{end}}{{if .Req}}<a class="g-ref" href="{{.ReqHref}}">{{.Req}}</a>{{end}}</div></li>{{end}}
 
-{{define "tasks"}}{{template "head" .}}{{template "nav" .}}<main class="kn rq tk"><link rel="stylesheet" href="/static/knowledge.css"><link rel="stylesheet" href="/static/requests.css"><link rel="stylesheet" href="/static/tasks.css">
-{{with .TasksV}}<div class="ov-head"><h1>{{t "nav.requests"}}</h1></div>{{template "rqtabs" $}}
-<div class="tk-who" role="group" aria-label="{{t "tasks.mine"}}"><a class="ov-btn clay{{if not .Everyone}} ov-btn-primary{{end}}" href="/ui/tasks"{{if not .Everyone}} aria-current="true"{{end}}>{{t "tasks.mine"}}</a><a class="ov-btn clay{{if .Everyone}} ov-btn-primary{{end}}" href="/ui/tasks?who=all"{{if .Everyone}} aria-current="true"{{end}}>{{t "tasks.everyone"}}</a></div>
+{{define "taskcards"}}{{if .Open}}<ul class="g-stack">{{range .Open}}{{template "taskcard" .}}{{end}}</ul>{{end}}{{end}}
+
+{{define "tasks"}}{{template "head" .}}{{template "nav" .}}<main class="g-page tk"><link rel="stylesheet" href="/static/knowledge.css"><link rel="stylesheet" href="/static/requests.css">
+{{with .TasksV}}<header class="g-page-head"><h1>{{t "nav.requests"}}</h1></header>{{template "rqtabs" $}}
+<div class="g-section-head"><div class="g-seg" role="group" aria-label="{{t "tasks.mine"}}"><a href="/ui/tasks"{{if not .Everyone}} aria-current="true"{{end}}>{{t "tasks.mine"}}</a><a href="/ui/tasks?who=all"{{if .Everyone}} aria-current="true"{{end}}>{{t "tasks.everyone"}}</a></div></div>
 {{with .Result}}<div class="kn-result" role="status"><span class="rq-dot is-{{.Kind}}" aria-hidden="true"></span><span class="kn-result-text">{{.Text}}</span></div>{{end}}
-{{if .Rows}}{{template "taskform" .}}{{else}}<p class="ov-empty">{{t "tasks.empty"}}</p>{{end}}
+{{if .Open}}{{template "taskcards" .}}{{else}}<p class="g-empty">{{t "tasks.empty"}}</p>{{end}}
+{{if .Closed}}<details class="g-more"><summary>{{t "tasks.show_done" (len .Closed)}}</summary><ul class="g-deck clay">{{range .Closed}}{{template "taskclosed" .}}{{end}}</ul></details>{{end}}
 {{end}}{{template "foot" .}}{{end}}

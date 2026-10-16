@@ -90,8 +90,12 @@ func TestMarkSeveralTasksDoneFromTheOverviewForm(t *testing.T) {
 	b := tpTask(t, e, shellProject, req.Request.ID, humantask.CreateInput{Kind: "input", Title: "Second thing"})
 	c := tpTask(t, e, shellProject, req.Request.ID, humantask.CreateInput{Title: "Third thing"})
 	_, page := fetchPage(t, e.Member, e.Base+"/ui/overview")
-	if n := strings.Count(page, `type="checkbox"`); n != 3 {
-		t.Fatalf("expected three checkboxes, got %d", n)
+	// One card and one form per task, each with its own Done button.
+	if n := strings.Count(page, `class="g-card clay"`); n != 3 {
+		t.Fatalf("expected three task cards, got %d", n)
+	}
+	if n := strings.Count(page, `action="/ui/tasks/done"`); n != 3 {
+		t.Fatalf("expected three done forms, got %d", n)
 	}
 	if strings.Contains(page, `name="value"`) {
 		t.Error("a task form must not carry a value field")

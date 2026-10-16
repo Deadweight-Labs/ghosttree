@@ -67,6 +67,8 @@ type KnowledgeRow struct {
 	Excerpt                  string
 	Age                      string
 	Source                   string
+	// Old: the entry has waited a week or more for its decision.
+	Old bool
 }
 
 type knowledgeView struct {
@@ -74,7 +76,6 @@ type knowledgeView struct {
 	Selects                 []filterSelect
 	Rows                    []KnowledgeRow
 	Guest, Reviewer         bool
-	Pending                 string
 	Empty, NoMatch          bool
 	ClearHref               string
 }
@@ -133,8 +134,23 @@ type resultLine struct {
 	Token, Next, Filter string
 }
 
+// reviewGroup is the pending entries of one project: the first few shown, the
+// rest behind one line, oldest first.
+type reviewGroup struct {
+	Label, Remote string
+	Shown, More   []knowledgeCard
+	Count         int
+}
+
+// reviewShownPerGroup is how many cards of a project show before the line
+// "N more in project".
+const reviewShownPerGroup = 3
+
 type reviewView struct {
 	Cards  []knowledgeCard
+	Groups []reviewGroup
+	// Titled: the group heads are shown, because more than one project is listed.
+	Titled bool
 	Result *resultLine
 	Empty  bool
 	Guest  bool
@@ -272,6 +288,7 @@ func (a *app) knowledgeRowFor(l lang, pa *store.ProjectAccess, raw store.Knowled
 		ID: strconv.FormatInt(k.ID, 10), Href: "/ui/knowledge/" + strconv.FormatInt(k.ID, 10), Title: k.Title,
 		Type: k.Type, TypeLabel: typeLabel(l, k.Type), Level: k.Confidence, LevelLabel: levelLabel(l, k.Confidence), LevelTitle: levelTitle(l, k.Confidence), TypeTitle: typeLabel(l, k.Type),
 		Stale: k.Status == "stale", Excerpt: excerpt(k.Body), Age: shortAge(l, overviewNow().UTC(), parseTime(firstNonEmpty(k.ObservedAt, k.CreatedAt))),
+		Old: olderThan(firstNonEmpty(k.ObservedAt, k.CreatedAt), overviewNow().UTC(), reviewOldAfter),
 	}
 	if withProject && k.Scope.Project != "" {
 		row.Project = path.Base(k.Scope.Project)
@@ -415,17 +432,6 @@ func (a *app) knowledgePage(w http.ResponseWriter, r *http.Request) {
 	v.ClearHref = "/ui/knowledge"
 	if project != "" {
 		v.ClearHref += "?project=" + url.QueryEscape(project)
-	}
-	if v.Reviewer && !hidden {
-		pending, perr := a.store.PendingKnowledge(project, a.overfetch(reviewShown), pa.Viewer())
-		if perr == nil {
-			if n := len(keep(pending, reviewShown, pa.CanSeeKnowledge)); n > 0 {
-				v.Pending = strconv.Itoa(n)
-				if n >= reviewShown {
-					v.Pending += "+"
-				}
-			}
-		}
 	}
 	a.renderBrowser(w, r, "knowledge", pageData{Title: l.msg("nav.knowledge"), Project: project, KnowledgeV: v})
 }
@@ -606,11 +612,35 @@ func (a *app) reviewPage(w http.ResponseWriter, r *http.Request) {
 	}
 	entries = keep(entries, reviewShown, pa.CanSeeKnowledge)
 	v := &reviewView{Guest: a.shellBaseFor(r).who.kind == viewerGuest, Result: a.resultFor(r, pa, "review", project)}
+	// Oldest first: what has waited longest is on top of its project.
+	slices.SortStableFunc(entries, func(x, y store.Knowledge) int {
+		return strings.Compare(firstNonEmpty(x.ObservedAt, x.CreatedAt), firstNonEmpty(y.ObservedAt, y.CreatedAt))
+	})
+	byProject := map[string]*reviewGroup{}
+	var order []string
 	for _, k := range entries {
 		card := a.cardFor(r, pa, k, project == "", reviewBodyRunes, "review", project)
 		a.fillEvidence(pa, k, &card, evidenceShown)
 		v.Cards = append(v.Cards, card)
+		g := byProject[k.Scope.Project]
+		if g == nil {
+			g = &reviewGroup{Remote: k.Scope.Project, Label: lastSegment(k.Scope.Project)}
+			byProject[k.Scope.Project] = g
+			order = append(order, k.Scope.Project)
+		}
+		g.Count++
+		g.Shown = append(g.Shown, card)
 	}
+	for _, remote := range order {
+		g := byProject[remote]
+		// One card behind "1 more" would hide a card only to show a line.
+		if len(g.Shown) > reviewShownPerGroup+1 {
+			g.Shown, g.More = g.Shown[:reviewShownPerGroup], g.Shown[reviewShownPerGroup:]
+		}
+		v.Groups = append(v.Groups, *g)
+	}
+	slices.SortStableFunc(v.Groups, func(x, y reviewGroup) int { return strings.Compare(x.Label, y.Label) })
+	v.Titled = len(v.Groups) > 1 || project == ""
 	v.Empty = len(v.Cards) == 0
 	a.renderBrowser(w, r, "review", pageData{Title: l.msg("nav.review"), Project: project, ReviewV: v})
 }

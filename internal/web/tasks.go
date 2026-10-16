@@ -34,12 +34,25 @@ type taskRow struct {
 	Human, Kind, Title string
 	KindLabel, Where   string
 	Req, ReqHref       string
-	Desc               string
-	State, StateLabel  string
-	Note, By, Age      string
-	Project            string
-	CanDone            bool
-	Explain            *explainView
+	// ReqTitle is the request the task is for, shown only where the viewer may read it.
+	ReqTitle          string
+	Desc              string
+	State, StateLabel string
+	Note, By, Age     string
+	// Old: the task has been waiting for three days or more.
+	Old     bool
+	Project string
+	CanDone bool
+	Explain *explainView
+	// WhereCmd is the place as a line with a copy button, Check the hint how the
+	// agent checks the task, one line each. Blocks is the full description and
+	// Lead its first sentence.
+	WhereCmd *cmdLine
+	Check    []cmdLine
+	Blocks   []bodyBlock
+	Lead     string
+	// The form of the card.
+	Token, Back, Who, Filter string
 }
 
 type tasksView struct {
@@ -56,6 +69,26 @@ type tasksView struct {
 	// Who is the filter value that goes back with the done form, "all" for Everyone.
 	Who    string
 	Switch string
+	// Open are the tasks waiting for someone, Closed the ones already decided,
+	// shown behind one line.
+	Open, Closed []taskRow
+}
+
+// split fills the card forms and sorts the rows into open and closed; open
+// ones come oldest first, so what has waited longest is on top.
+func (v *tasksView) split() {
+	for i := range v.Rows {
+		r := &v.Rows[i]
+		r.Token, r.Back, r.Who, r.Filter = v.Token, v.Back, v.Who, v.Project
+	}
+	v.Open, v.Closed = nil, nil
+	for _, r := range v.Rows {
+		if r.State == humantask.Open {
+			v.Open = append(v.Open, r)
+		} else {
+			v.Closed = append(v.Closed, r)
+		}
+	}
 }
 
 // visibleProjects names the projects a list covers: the selected one, or every
@@ -72,11 +105,18 @@ func visibleProjects(pa *store.ProjectAccess, project string) []string {
 // the viewer may read that request.
 func (a *app) taskRows(l lang, pa *store.ProjectAccess, tasks []humantask.Task) []taskRow {
 	rows := make([]taskRow, 0, len(tasks))
-	readable := map[int64]bool{}
+	readable := map[int64]string{}
 	for _, t := range tasks {
+		now := overviewNow().UTC()
 		row := taskRow{ID: t.ID, Human: t.HumanID(), Kind: t.Kind, Title: t.Title, KindLabel: label(l, taskKindKeys, t.Kind),
-			Where: t.Location, Desc: ellipsize(oneLineText(t.Description), 240), State: t.State, Project: t.Project, Age: shortAge(l, overviewNow().UTC(), parseTime(t.UpdatedAt)),
+			Where: t.Location, Desc: ellipsize(oneLineText(t.Description), 240), State: t.State, Project: lastSegment(t.Project),
+			Age: shortAge(l, now, parseTime(t.CreatedAt)), Old: t.State == humantask.Open && olderThan(t.CreatedAt, now, taskOldAfter),
+			Blocks: bodyBlocks(t.Description, 0), Lead: leadSentence(t.Description, 200),
+			Check:   commandLines("check", t.CheckHint),
 			CanDone: t.State == humantask.Open && pa.CheckTask(t, store.ActWork) == nil}
+		if t.Location != "" {
+			row.WhereCmd = &cmdLine{Icon: t.Kind, Text: t.Location}
+		}
 		if t.State == humantask.Open || t.State == humantask.Done {
 			row.Explain = a.explainFor(l, explain.KindTask, t.ID)
 		}
@@ -86,13 +126,17 @@ func (a *app) taskRows(l lang, pa *store.ProjectAccess, tasks []humantask.Task) 
 		if t.State == humantask.Done {
 			row.Note, row.By = t.DoneNote, t.DoneBy
 		}
-		ok, seen := readable[t.RequestID]
+		title, seen := readable[t.RequestID]
 		if !seen {
-			ok = a.requestReadable(pa, t.RequestID)
-			readable[t.RequestID] = ok
+			if a.requestReadable(pa, t.RequestID) {
+				if d, err := a.store.RequestByID(t.RequestID); err == nil {
+					title = d.Request.Title
+				}
+			}
+			readable[t.RequestID] = title
 		}
-		if ok {
-			row.Req, row.ReqHref = fmt.Sprintf("REQ-%d", t.RequestID), requestURL(t.RequestID)
+		if title != "" {
+			row.Req, row.ReqHref, row.ReqTitle = fmt.Sprintf("REQ-%d", t.RequestID), requestURL(t.RequestID), title
 		}
 		rows = append(rows, row)
 	}
@@ -119,7 +163,9 @@ func (a *app) overviewWaiting(r *http.Request, pa *store.ProjectAccess, project 
 		out = out[:overviewMaxWaiting]
 	}
 	// The block is there with nothing in it too: it is where a person looks.
-	return &tasksView{Rows: out, Project: project, Token: csrfOf(r), Back: "overview", Any: len(out) > 0}, nil
+	v := &tasksView{Rows: out, Project: project, Token: csrfOf(r), Back: "overview", Any: len(out) > 0}
+	v.split()
+	return v, nil
 }
 
 func anyDoable(rows []taskRow) bool {
@@ -156,13 +202,22 @@ func (a *app) tasksPage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	order := map[string]int{humantask.Open: 0, humantask.Done: 1, humantask.Confirmed: 2, humantask.Dropped: 3}
-	slices.SortStableFunc(all, func(x, y humantask.Task) int { return order[x.State] - order[y.State] })
+	slices.SortStableFunc(all, func(x, y humantask.Task) int {
+		if c := order[x.State] - order[y.State]; c != 0 {
+			return c
+		}
+		if x.State == humantask.Open {
+			return strings.Compare(x.CreatedAt, y.CreatedAt)
+		}
+		return strings.Compare(y.UpdatedAt, x.UpdatedAt)
+	})
 	v := &tasksView{Rows: a.taskRows(l, pa, all), Project: project, Token: csrfOf(r), Back: "tasks"}
 	v.Everyone = everyone
 	if everyone {
 		v.Who = "all"
 	}
 	v.Any = anyDoable(v.Rows)
+	v.split()
 	switch {
 	case r.URL.Query().Get("fail") != "":
 		v.Result = &requestResult{Text: l.msg(taskFailKey(r.URL.Query().Get("fail"))), Kind: "failed", Fail: true}
