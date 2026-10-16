@@ -947,6 +947,7 @@ func (a CoordAccess) Send(message CoordMessage) (int64, error) {
 		return 0, err
 	}
 	message.Mentions = append(append([]string(nil), message.Mentions...), textIDs...)
+	message.IsBroadcast = textRoom != "" && !guestRoom && BodyHasBroadcast(message.Body)
 	if _, actionable := attentionReasonForIntent(message.Intent); actionable && len(normalizeMembers(message.Mentions)) == 0 && len(typedMentions) == 0 {
 		if message.DestinationKind == DestinationRoom {
 			var roomKind string

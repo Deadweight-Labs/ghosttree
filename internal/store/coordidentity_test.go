@@ -427,3 +427,106 @@ func TestBroadcastStaysInsideTheRoom(t *testing.T) {
 		t.Errorf("broadcast reached %v, want only a-ben", got)
 	}
 }
+
+func bcastLimited(err error) bool { return errors.Is(err, ErrBroadcastLimited) }
+
+// Lücke (a): viele Nachrichten zwischen zwei Broadcasts schieben den ersten
+// nicht aus dem Fenster.
+func TestBroadcastWindowSurvivesManyMessagesInBetween(t *testing.T) {
+	e := authorityFixture(t)
+	markHook(t, e, "a-ben", time.Minute)
+	human := e.human("person:1")
+	if _, err := sendText(t, human, e.room, "@agents erster", ""); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 120; i++ {
+		if _, err := sendText(t, human, e.room, "Zwischennachricht "+strings.Repeat("x", i%7)+time.Duration(i).String(), ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := sendText(t, human, e.room, "@agents zweiter", ""); !bcastLimited(err) {
+		t.Fatalf("120 messages in between must not free the window, got %v", err)
+	}
+}
+
+// Lücke (b): alle Agenten einer Person und die Person selbst teilen ein Fenster;
+// verschiedene Personen sind unabhängig.
+func TestBroadcastWindowIsSharedPerPrincipal(t *testing.T) {
+	e := authorityFixture(t)
+	markHook(t, e, "a-cleo", time.Minute)
+	if _, err := sendText(t, e.agent("a-ben"), e.room, "@agents von Agent eins", ""); err != nil {
+		t.Fatal(err)
+	}
+	// Zweiter Agent derselben Person (person:3) und die Person selbst.
+	if _, err := sendText(t, e.agent("a-ben-greedy"), e.room, "@agents von Agent zwei", ""); !bcastLimited(err) {
+		t.Errorf("second agent of the same person: want limited, got %v", err)
+	}
+	if _, err := sendText(t, e.human("person:3"), e.room, "@agents vom Menschen", ""); !bcastLimited(err) {
+		t.Errorf("the person behind the agent: want limited, got %v", err)
+	}
+	// Andere Personen haben ihr eigenes Fenster.
+	if _, err := sendText(t, e.agent("a-cleo"), e.room, "@agents Cleo", ""); err != nil {
+		t.Errorf("another person must be independent: %v", err)
+	}
+	if _, err := sendText(t, e.human("person:2"), e.room, "@agents Anna", ""); err != nil {
+		t.Errorf("another person must be independent: %v", err)
+	}
+	// Der Text allein ist nicht maßgeblich: ein Broadcast-Wort im Gast-Raum oder
+	// eine abgelehnte Nachricht verbraucht kein Kontingent.
+	var n int
+	if err := e.st.db.QueryRow(`SELECT COUNT(*) FROM coord_messages WHERE is_broadcast=1`).Scan(&n); err != nil || n != 3 {
+		t.Errorf("stored broadcasts = %d (%v), want 3", n, err)
+	}
+}
+
+// Altbestand: eine Zeile ohne Markierung (is_broadcast=0) sperrt nichts, und die
+// Migration trägt Nachrichten des laufenden Fensters nach dem Text nach.
+func TestBroadcastLegacyRowsAndBackfill(t *testing.T) {
+	e := authorityFixture(t)
+	markHook(t, e, "a-ben", time.Minute)
+	human := e.human("person:1")
+	if _, err := sendText(t, human, e.room, "@agents alt", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.st.db.Exec(`UPDATE coord_messages SET is_broadcast=0`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sendText(t, human, e.room, "@agents ohne Markierung gespeichert", ""); err != nil {
+		t.Fatalf("an unmarked old row must not block: %v", err)
+	}
+	// Spalte entfernen und neu anlegen: das Nachtragen findet den Text im Fenster.
+	if _, err := e.st.db.Exec(`DROP INDEX coord_messages_broadcast_principal; DROP INDEX coord_messages_broadcast_sender; ALTER TABLE coord_messages DROP COLUMN is_broadcast`); err != nil {
+		t.Skipf("sqlite cannot drop the column here: %v", err)
+	}
+	if err := ensureCoordMessageBroadcast(e.st.db); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sendText(t, human, e.room, "@agents nach der Migration", ""); !bcastLimited(err) {
+		t.Fatalf("backfilled window must limit, got %v", err)
+	}
+	// Zweiter Lauf ist ein No-op.
+	if err := ensureCoordMessageBroadcast(e.st.db); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Ohne Prinzipal fällt die Prüfung auf die Absenderkennung zurück.
+func TestBroadcastRateFallsBackToSenderWithoutPrincipal(t *testing.T) {
+	e := authorityFixture(t)
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := e.st.db.Exec(`INSERT INTO coord_messages(destination_kind,destination_id,sequence,sender_external_id,author_principal_id,author_kind,client_id,body,created_at,is_broadcast)
+		VALUES('room',?,9001,'legacy-agent','','agent','c1','@agents hi',?,1)`, e.room, now); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := e.st.db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if err := checkBroadcastRateTx(tx, "legacy-agent", ""); !bcastLimited(err) {
+		t.Errorf("same sender without principal: want limited, got %v", err)
+	}
+	if err := checkBroadcastRateTx(tx, "other-agent", ""); err != nil {
+		t.Errorf("other sender: %v", err)
+	}
+}

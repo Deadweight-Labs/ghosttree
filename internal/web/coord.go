@@ -287,7 +287,7 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 	markViewerMentions(detail.Messages, presentations, current.ID)
 	detail.CanDirect = true
 	detail.CanPost = access.CanPost(room)
-	detail.UnreachedNote = coordUnreachedNote(r.URL.Query().Get("unreached"))
+	detail.UnreachedNote = coordUnreachedNote(r.URL.Query().Get("unreached"), r.URL.Query().Get("unsent") == "1")
 	roleRoom := false
 	if remote, ok := strings.CutPrefix(activeRoom.Key, "project:"); ok {
 		if _, claimed := a.store.ProjectByRemote(remote); claimed {
@@ -695,6 +695,12 @@ func (a *app) coordSend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_, err = a.browserCoord(r).Send(msg)
+	if errors.Is(err, store.ErrAttentionRecipientRequired) && store.BodyHasBroadcast(msg.Body) {
+		// Frage oder Blocker an "alle aktiven Agenten", aber niemand ist aktiv:
+		// nichts wurde gesendet. Das ist ein Hinweis unter dem Raum, keine Fehlerseite.
+		http.Redirect(w, r, "/ui/coord?room="+url.QueryEscape(room)+"&unreached=agents&unsent=1", http.StatusSeeOther)
+		return
+	}
 	if err != nil {
 		coordHTTPError(w, err)
 		return
@@ -711,7 +717,7 @@ var unreachedTokenPattern = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{N}._:-]{0,
 
 // coordUnreachedNote is the hint under the room after a send, built from the
 // query so that only well-formed @names are echoed.
-func coordUnreachedNote(raw string) string {
+func coordUnreachedNote(raw string, unsent bool) string {
 	var names []string
 	for _, token := range strings.Split(raw, ",") {
 		if unreachedTokenPattern.MatchString(token) && len(names) < 5 {
@@ -720,6 +726,9 @@ func coordUnreachedNote(raw string) string {
 	}
 	if len(names) == 0 {
 		return ""
+	}
+	if unsent {
+		return msg("coord.unreached_unsent", strings.Join(names, ", "))
 	}
 	return msg("coord.unreached", strings.Join(names, ", "))
 }
