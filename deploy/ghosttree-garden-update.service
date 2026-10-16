@@ -2,12 +2,12 @@
 Description=ghosttree: Checkout fuer den Gaertner aktualisieren
 After=network-online.target
 Wants=network-online.target
-ConditionPathExists=/srv/dwl/ghosttree/garden/repo/.git
+ConditionPathExists=/var/lib/ghosttree/garden/repo/.git
 
 [Service]
 Type=oneshot
-# The checkout is owned by root and read-only for dwl; the update runs as root
-# with a readable umask so dwl can read what it writes. It lives in its own unit
+# The checkout is owned by root and read-only for the ghosttree user; the update runs as root
+# with a readable umask so that user can read what it writes. It lives in its own unit
 # because the gardener unit may reach nothing but loopback.
-Environment=GIT_CONFIG_GLOBAL=/srv/dwl/ghosttree/garden/gitconfig
-ExecStart=/bin/bash -c 'umask 022; exec /usr/bin/git -C /srv/dwl/ghosttree/garden/repo pull --ff-only --quiet'
+Environment=GIT_CONFIG_GLOBAL=/var/lib/ghosttree/garden/gitconfig
+ExecStart=/bin/bash -c 'umask 022; exec /usr/bin/git -C /var/lib/ghosttree/garden/repo pull --ff-only --quiet'

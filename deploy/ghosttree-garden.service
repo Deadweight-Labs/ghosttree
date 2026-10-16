@@ -2,32 +2,33 @@
 Description=ghosttree: Gärtner prüft Pitfalls und Decisions gegen den Code
 After=ghosttree.service network-online.target ghosttree-garden-update.service
 Wants=network-online.target ghosttree-garden-update.service
-ConditionPathExists=/srv/dwl/ghosttree/private/garden-key
-ConditionPathExists=/srv/dwl/ghosttree/garden/repo/.git
+ConditionPathExists=/etc/ghosttree/garden-key
+ConditionPathExists=/var/lib/ghosttree/garden/repo/.git
 
 [Service]
 Type=oneshot
-User=dwl
-Group=dwl
-WorkingDirectory=/srv/dwl/ghosttree/garden
-Environment=HOME=/srv/dwl/ghosttree/garden/home
-Environment=GIT_CONFIG_GLOBAL=/srv/dwl/ghosttree/garden/gitconfig
-EnvironmentFile=/srv/dwl/ghosttree/private/server.env
-ExecStart=/srv/dwl/ghosttree/garden/run.sh
+User=ghosttree
+Group=ghosttree
+WorkingDirectory=/var/lib/ghosttree/garden
+Environment=HOME=/var/lib/ghosttree/garden/home
+Environment=GIT_CONFIG_GLOBAL=/var/lib/ghosttree/garden/gitconfig
+EnvironmentFile=/etc/ghosttree/server.env
+ExecStart=/var/lib/ghosttree/garden/run.sh
 TimeoutStartSec=3h
 UMask=0077
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectHome=yes
 ProtectSystem=strict
-ReadOnlyPaths=/srv/dwl/ghosttree
+ReadOnlyPaths=/var/lib/ghosttree
 # data: the database; reports: the morning report; claude: what Claude Code keeps
 # for its sessions (settings.json, state, cache). Nothing else is writable.
-ReadWritePaths=/srv/dwl/ghosttree/data /srv/dwl/ghosttree/garden/reports /srv/dwl/ghosttree/garden/claude
+ReadWritePaths=/var/lib/ghosttree/data /var/lib/ghosttree/garden/reports /var/lib/ghosttree/garden/claude
 CapabilityBoundingSet=
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-# The model proxy (a tunnel on 127.0.0.1:18317) and the ghosttree server
-# (127.0.0.1:8474) are both on this machine; the sessions reach nothing else.
+# Loopback only: the model proxy and the ghosttree server are on this machine.
+# Against api.anthropic.com directly, replace these two lines with an allowlist
+# of that address.
 IPAddressDeny=any
 IPAddressAllow=localhost
 LockPersonality=yes
