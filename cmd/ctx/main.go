@@ -61,6 +61,8 @@ func run(args []string, stdout io.Writer) int {
 		return cmdSnapshot(rest, stdout, os.Stderr)
 	case "garden":
 		return cmdGarden(rest, stdout)
+	case "explain":
+		return cmdExplain(rest, stdout)
 	case "distill-sessions":
 		return cmdDistillSessions(rest, stdout)
 	case "usage":
@@ -142,6 +144,7 @@ const usage = `usage: ctx <command>
   mirror   write .ghosttree/ for a repository (harnesses without hooks)
   snapshot create, inspect, export, verify, and mirror immutable context marks
   garden   check knowledge against the code (opt-in, needs an API key)
+  explain  write the "In short" notes that are missing (needs a model)
   distill-sessions  extract quarantined knowledge from idle sessions
                     (--submit/--collect for the half-price batch path,
                      --reprocess-version to redo work of an older prompt)

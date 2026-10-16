@@ -14,7 +14,7 @@ import (
 
 const taskUsage = `usage: ctx task <command>
 
-  add --kind secret|file|input|action --title T [--where PLACE] [--check HINT] [--desc D]
+  add --kind secret|file|input|action --title T [--where PLACE] [--check HINT] [--desc D] [--explanation E]
       [--request N] [--work W] [--assign NAME] [--project P]
   list [--state pending|open|done|confirmed|dropped|all] [--mine] [--request N] [--project P]
   show <TASK-n|n>
@@ -72,6 +72,7 @@ func cmdTask(args []string, stdout io.Writer) int {
 		where := fs.String("where", "", "where it belongs: path, vault entry, env file; never the value")
 		check := fs.String("check", "", "how you will check it")
 		desc := fs.String("desc", "", "description")
+		explanation := fs.String("explanation", "", "why you ask and what you recommend, in a few plain sentences")
 		request := fs.String("request", "", "request it hangs on; default: the work of this session")
 		work := fs.Int64("work", 0, "work id from request start")
 		assign := fs.String("assign", "", "project member; default: you")
@@ -85,7 +86,7 @@ func cmdTask(args []string, stdout io.Writer) int {
 			return writeRequestCLIError(stdout, jsonMode, 1, err)
 		}
 		in := humantask.CreateInput{Project: target, Kind: *kind, Title: *title, Description: *desc, Location: *where,
-			CheckHint: *check, WorkID: *work, Assignee: *assign, Everyone: *everyone}
+			CheckHint: *check, WorkID: *work, Assignee: *assign, Everyone: *everyone, Explanation: *explanation}
 		if *request != "" {
 			n, ok := pain.ParseNumberRef(*request, "REQ-")
 			if !ok {

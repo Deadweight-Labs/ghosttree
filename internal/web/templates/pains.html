@@ -12,7 +12,7 @@
 <article class="kn-article"><div class="kn-marks"><span class="kn-level"><span class="rq-dot is-{{.State}}" aria-hidden="true"></span>{{.StateLabel}}</span>{{if .Project}}<span class="ov-meta">{{.Project}}</span>{{end}}</div>
 <h1>{{.Title}}</h1>
 <p class="ov-meta kn-dots"><span class="rq-id">{{.Human}}</span>{{if .Person}}<span>{{t "requests.by" .Person}}</span>{{end}}<span class="ov-num">{{.Age}}</span></p>
-{{template "knbody" .Blocks}}
+{{template "explain" .Explain}}{{template "knbody" .Blocks}}
 {{if .Remaining}}<section class="pn-left"><h2>{{t "pains.remaining"}}</h2><p>{{.Remaining}}</p></section>{{end}}</article>
 
 {{if .Motivates}}<section class="rq-section"><h2>{{t "pains.motivates"}}</h2><ul class="ov-list rq-rels">{{range .Motivates}}<li>{{if .Href}}<a class="kn-link" href="{{.Href}}"{{if eq .Kind "external"}} rel="noopener noreferrer"{{end}}>{{.Text}}</a>{{else}}<span>{{.Text}}</span>{{end}}</li>{{end}}</ul></section>{{end}}

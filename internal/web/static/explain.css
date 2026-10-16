@@ -1,0 +1,25 @@
+/* "Kurz erklärt": die Einordnung vor dem Originaltext. Ruhige Fläche mit
+   Akzentkante; welche Herkunft der Text hat, steht klein in der Kopfzeile. */
+.ex { display: flex; flex-direction: column; gap: 6px; margin: 2px 0 6px; padding: 12px 16px; min-width: 0;
+  background: var(--color-accent-soft); border-left: 3px solid var(--color-accent); border-radius: var(--clay-radius-sm); }
+.ex-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.ex-title { margin: 0; font-size: 13px; font-weight: 700; letter-spacing: .02em; color: var(--color-accent-text); }
+.ex-mark { font: var(--text-secondary); color: var(--color-text-muted); white-space: nowrap; }
+.ex-text { margin: 0; line-height: 1.55; color: var(--color-text-primary); overflow-wrap: anywhere; }
+.ex-from { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 14px; margin: 0; min-width: 0; }
+.ex-from > * { min-width: 0; overflow-wrap: anywhere; }
+.ex-proj { font-weight: 700; color: var(--color-text-secondary); }
+.ex-k { color: var(--color-text-muted); }
+.ex-from code { font-size: .875em; padding: 1px 6px; border-radius: 8px; background: var(--clay-c-sunken); }
+.tk-text .ex { margin-top: 6px; }
+.ex-admin { display: flex; flex-direction: column; gap: 8px; padding: 14px 20px; border-radius: var(--clay-radius); }
+.ex-admin p { margin: 0; }
+.ex-admin-use { display: flex; flex-wrap: wrap; gap: 4px 18px; }
+.ex-days { border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.ex-days caption { text-align: left; padding-bottom: 4px; }
+.ex-days th, .ex-days td { text-align: left; padding: 3px 18px 3px 0; }
+.ex-days th { font-weight: 600; color: var(--color-text-muted); }
+.coord-attention-card .ex { padding: 8px 12px; margin: 4px 0; }
+.coord-attention-card .ex-text { font-size: 13px; }
+.ex-days { width: auto; }
+.ex-days td { font-weight: 400; }

@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/explain"
 	"github.com/Deadweight-Labs/ghosttree/internal/humantask"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -38,6 +39,7 @@ type taskRow struct {
 	Note, By, Age      string
 	Project            string
 	CanDone            bool
+	Explain            *explainView
 }
 
 type tasksView struct {
@@ -75,6 +77,9 @@ func (a *app) taskRows(l lang, pa *store.ProjectAccess, tasks []humantask.Task) 
 		row := taskRow{ID: t.ID, Human: t.HumanID(), Kind: t.Kind, Title: t.Title, KindLabel: label(l, taskKindKeys, t.Kind),
 			Where: t.Location, Desc: ellipsize(oneLineText(t.Description), 240), State: t.State, Project: t.Project, Age: shortAge(l, overviewNow().UTC(), parseTime(t.UpdatedAt)),
 			CanDone: t.State == humantask.Open && pa.CheckTask(t, store.ActWork) == nil}
+		if t.State == humantask.Open || t.State == humantask.Done {
+			row.Explain = a.explainFor(l, explain.KindTask, t.ID)
+		}
 		if t.State != humantask.Open {
 			row.StateLabel = label(l, taskStateKeys, t.State)
 		}

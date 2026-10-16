@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/explain"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
@@ -154,11 +155,21 @@ func (a *api) sendCoordMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.Intent = intent
+	explanation, ok := checkExplanation(w, in.Explanation)
+	if !ok {
+		return
+	}
+	if explanation != "" && !attentionIntent(in.Intent) {
+		writeCoded(w, http.StatusBadRequest, "explanation_not_allowed", "an explanation goes with a question to people: set intent to question, approval, blocker or handoff")
+		return
+	}
+	in.Explanation = ""
 	id, err := a.coordAccess(r, in.SenderExternalID).Send(in)
 	if err != nil {
 		writeCoordAccessError(w, err)
 		return
 	}
+	a.saveExplanation(explain.KindQuestion, id, explanation)
 	// Gespeichert ist der einzige Zustand, den dieser Aufruf belegen kann.
 	// Alles Weitere setzt der Adapter, wenn er es beobachtet.
 	if err := a.coordAccess(r, in.SenderExternalID).MarkDelivery(id, store.DeliveryStored); err != nil {

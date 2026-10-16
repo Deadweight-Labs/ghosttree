@@ -41,6 +41,12 @@
 {{if .Interactive}}<form class="ad-join" method="post" action="/ui/orgs/project/create"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><input type="hidden" name="org" value="{{.Orgs.Selected.Slug}}"><input class="ov-code" name="name" type="text" maxlength="40" required autocomplete="off" pattern="[a-z0-9]([a-z0-9\-]*[a-z0-9])?" aria-label="{{t "adm.project.name"}}" placeholder="{{t "adm.project.name"}}"><button class="ov-btn ov-btn-primary clay">{{t "adm.project.create"}}</button></form>{{end}}</section>
 
 {{else}}<p class="ov-empty">{{t "adm.no_org"}}</p>{{end}}
+{{with .Orgs.Explain}}<section class="ad-sec" id="explain"><h2>{{t "explain.admin.title"}}</h2>
+<div class="ad-deck clay ex-admin"><p class="ex-admin-state">{{.State}}{{if .ModelLine}} <span class="ov-meta">{{.ModelLine}}</span>{{end}}</p>
+{{if .Today}}<p class="ex-admin-use"><span>{{.Today}}</span><span>{{.Tokens}}</span>{{if .Failures}}<span>{{.Failures}}</span>{{end}}</p>{{end}}
+{{if .Limited}}<p class="ad-flash is-error" role="status">{{t "explain.admin.limit"}}</p>{{end}}
+{{if .Counts}}<p class="ov-meta">{{.Counts}}</p>{{end}}
+{{if .Days}}<table class="ex-days"><caption class="ov-meta">{{t "explain.admin.days"}}</caption><thead><tr><th>{{t "explain.admin.day"}}</th><th>{{t "explain.admin.col_calls"}}</th><th>{{t "explain.admin.col_tokens"}}</th></tr></thead><tbody>{{range .Days}}<tr><td>{{.Day}}</td><td>{{.Calls}}</td><td>{{.Tokens}}</td></tr>{{end}}</tbody></table>{{end}}</div></section>{{end}}
 {{if .Interactive}}<section class="ad-sec"><h2>{{t "adm.org.new"}}</h2><form class="ad-join" method="post" action="/ui/orgs/create"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><input class="ov-code" name="name" type="text" maxlength="100" required autocomplete="off" aria-label="{{t "adm.org.name"}}" placeholder="{{t "adm.org.name"}}"><button class="ov-btn ov-btn-primary clay">{{t "adm.org.create"}}</button></form></section>{{end}}
 
 <section class="ad-sec"><h2>{{t "adm.join"}}</h2><form class="ad-join" method="post" action="/ui/orgs/accept"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><input class="ov-code" name="code" type="password" maxlength="128" autocomplete="off" required aria-label="{{t "adm.join.code"}}" placeholder="{{t "adm.join.code"}}"><button class="ov-btn ov-btn-primary clay">{{t "adm.join.button"}}</button></form></section>

@@ -87,7 +87,16 @@ create with ` + "`human_task_create`" + `, with where it lives and how to check 
 of saying it in chat. Never write a secret or file contents into it, only where
 it lives; token patterns are refused (a heuristic, not a guarantee). Never set
 a task to done yourself. Check what the human marked done, then call
-` + "`human_task_resolve`" + ` with confirm or reopen.`
+` + "`human_task_resolve`" + ` with confirm or reopen.
+
+The people who read what you write change things but do not dive into every small
+finding of an agent. So give each entry a short ` + "`explanation`" + `: ` + "`context_remember`" + `
+(every entry), ` + "`request_create`" + `, ` + "`pain_record`" + `, ` + "`human_task_create`" + `, and
+` + "`coord_send`" + ` with intent question. Two to four plain sentences in the language
+the project's people use: what it is about in everyday words, why it matters
+(who it affects, when), what has to be done or decided, and your recommendation.
+No markdown, no secret. You know the context; a text the server generates later
+only knows the entry.`
 
 func section(body string) string {
 	return markerStart + "\n" + body + "\n" + markerEnd + "\n"

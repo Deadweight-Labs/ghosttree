@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/explain"
 	"github.com/Deadweight-Labs/ghosttree/internal/pain"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -38,11 +39,12 @@ func (a *api) painActor(r *http.Request, sessionID int64) pain.Actor {
 
 func (a *api) createPain(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Project   string        `json:"project"`
-		Title     string        `json:"title"`
-		Body      string        `json:"body"`
-		Motivates []pain.Target `json:"motivates"`
-		SessionID int64         `json:"session_id"`
+		Project     string        `json:"project"`
+		Title       string        `json:"title"`
+		Body        string        `json:"body"`
+		Motivates   []pain.Target `json:"motivates"`
+		SessionID   int64         `json:"session_id"`
+		Explanation string        `json:"explanation"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)
@@ -56,6 +58,10 @@ func (a *api) createPain(w http.ResponseWriter, r *http.Request) {
 	if !a.gateProject(w, r, project) {
 		return
 	}
+	explanation, ok := checkExplanation(w, body.Explanation)
+	if !ok {
+		return
+	}
 	detail, err := a.access(r).CreatePain(store.CreatePainInput{
 		Project: project, Title: body.Title, Body: body.Body, Motivates: body.Motivates,
 		Actor: a.painActor(r, body.SessionID), AuthorID: authorIDOf(r),
@@ -64,6 +70,7 @@ func (a *api) createPain(w http.ResponseWriter, r *http.Request) {
 		writePainError(w, err)
 		return
 	}
+	a.saveExplanation(explain.KindPain, detail.Pain.ID, explanation)
 	writeJSON(w, http.StatusCreated, detail)
 }
 

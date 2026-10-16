@@ -4,6 +4,7 @@
 
 {{define "taskrow"}}<li class="tk-row{{if not .CanDone}} is-closed{{end}}">{{if .CanDone}}<input class="tk-box" type="checkbox" name="id" value="{{.ID}}" id="task-{{.ID}}" aria-label="{{.Title}}">{{else}}<span class="tk-box tk-void" aria-hidden="true"></span>{{end}}
 <div class="tk-text"><label{{if .CanDone}} for="task-{{.ID}}"{{end}} class="tk-title"><span class="tk-kind">{{.KindLabel}}</span>{{.Title}}</label>
+{{template "explain" .Explain}}
 {{if .Where}}<code class="tk-where">{{.Where}}</code>{{end}}
 {{if .Desc}}<p class="tk-desc">{{.Desc}}</p>{{end}}
 {{if .Note}}<p class="tk-said">{{.Note}}</p>{{end}}</div>

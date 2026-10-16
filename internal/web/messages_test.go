@@ -114,7 +114,7 @@ func TestMsgFormatsArgumentsAndNeverReturnsEmpty(t *testing.T) {
 	}
 }
 
-var goKeyRE = regexp.MustCompile(`"((?:shell|nav|role|login|auth|overview|ov|setup|age|agent|machine|sessions|coord|knowledge|requests|adm|time|join|pair|profile|tasks|pains|page)\.[a-z0-9_.]+)"`)
+var goKeyRE = regexp.MustCompile(`"((?:shell|nav|role|login|auth|overview|ov|setup|age|agent|machine|sessions|coord|knowledge|requests|adm|time|join|pair|profile|tasks|pains|page|explain)\.[a-z0-9_.]+)"`)
 
 // goMessageKeys sammelt die Schlüssel, die im Go-Code vorkommen (Navigation,
 // Rollen, Fehlertexte der Handler).

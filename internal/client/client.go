@@ -382,6 +382,9 @@ func (c *Client) RememberSuperseding(k store.Knowledge, autoCtx scope.Axes, supe
 		"harness": k.Harness, "session_ref": k.SessionRef,
 		"auto_scope": map[string]any{"context": autoCtx},
 	}
+	if k.Explanation != "" {
+		body["explanation"] = k.Explanation
+	}
 	if len(supersedes) > 0 {
 		body["supersedes"] = supersedes
 		body["supersede_reason"] = reason

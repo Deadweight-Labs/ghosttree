@@ -13,7 +13,7 @@ import (
 
 const painUsage = `usage: ctx pain <command>
 
-  add "title" [--body B] [--motivates REQ-98|#42|URL ...] [--project P]
+  add "title" [--body B] [--explanation E] [--motivates REQ-98|#42|URL ...] [--project P]
   list [--state active|mitigated|resolved|obsolete|all] [--request N] [--q text] [--project P]
   show <PAIN-n|n>
   state <n> <mitigated|resolved|obsolete|active> [--remaining R] [--evidence commit:abc|test:T|request:98|decision:42|url:U|file:F|session:S] [--note N]
@@ -121,6 +121,7 @@ func cmdPain(args []string, stdout io.Writer) int {
 		fs := flag.NewFlagSet("pain add", flag.ContinueOnError)
 		fs.SetOutput(stdout)
 		body := fs.String("body", "", "what goes wrong")
+		explanation := fs.String("explanation", "", "short plain-language note for the people who read the problems")
 		project := fs.String("project", "", "project (remote or unique short name); default: the current one")
 		var motivates repeatedString
 		fs.Var(&motivates, "motivates", "REQ-n, #knowledge-id or a URL / free text; repeatable")
@@ -139,7 +140,7 @@ func cmdPain(args []string, stdout io.Writer) int {
 		for _, m := range motivates {
 			targets = append(targets, parseMotivates(m))
 		}
-		d, err := c.CreatePain(target, title, *body, targets, cliSessionID(c, cfg))
+		d, err := c.CreatePainExplained(target, title, *body, *explanation, targets, cliSessionID(c, cfg))
 		return result(d, err)
 	case "list":
 		fs := flag.NewFlagSet("pain list", flag.ContinueOnError)

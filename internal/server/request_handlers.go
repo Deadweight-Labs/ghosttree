@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/explain"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -26,6 +27,7 @@ func (a *api) createRequest(w http.ResponseWriter, r *http.Request) {
 		SessionRef     string   `json:"session_ref"`
 		IdempotencyKey string   `json:"idempotency_key"`
 		Criteria       []string `json:"criteria"`
+		Explanation    string   `json:"explanation"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)
@@ -44,6 +46,10 @@ func (a *api) createRequest(w http.ResponseWriter, r *http.Request) {
 	if denyAccess(w, a.access(r).Check(scope.CanonicalAxes(scope.Axes{Project: body.Project}).Project, store.ResRequest, store.ActCreate, store.Object{Own: true})) {
 		return
 	}
+	explanation, ok := checkExplanation(w, body.Explanation)
+	if !ok {
+		return
+	}
 	detail, err := a.st.CreateRequest(requestdomain.CreateInput{
 		Request: requestdomain.Request{
 			Type: body.Type, Title: body.Title, Description: body.Description, Priority: body.Priority,
@@ -56,6 +62,7 @@ func (a *api) createRequest(w http.ResponseWriter, r *http.Request) {
 		writeRequestError(w, err)
 		return
 	}
+	a.saveExplanation(explain.KindRequest, detail.Request.ID, explanation)
 	writeJSON(w, http.StatusCreated, a.access(r).RequestDetailView(detail))
 }
 

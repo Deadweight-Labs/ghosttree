@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/explain"
 	"github.com/Deadweight-Labs/ghosttree/internal/humantask"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -29,11 +30,17 @@ func (a *api) createHumanTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.SessionID = a.callerSession(r, in.SessionID)
+	explanation, ok := checkExplanation(w, in.Explanation)
+	if !ok {
+		return
+	}
+	in.Explanation = ""
 	task, err := a.access(r).CreateHumanTask(in, a.taskActor(r, in.SessionID))
 	if err != nil {
 		writePainError(w, err)
 		return
 	}
+	a.saveExplanation(explain.KindTask, task.ID, explanation)
 	writeJSON(w, http.StatusCreated, task)
 }
 

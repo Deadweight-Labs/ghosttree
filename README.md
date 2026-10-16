@@ -373,6 +373,44 @@ request; today it comes from this server setting. Text that people or agents
 wrote is shown as written, and the texts meant for agents (bootstrap, MCP
 descriptions, rules) stay English.
 
+### "In short" (Kurz erklärt)
+
+Every knowledge entry, request, pain, task for a person and room question can
+carry a two to four sentence note in plain language: what it is about, why it
+matters, what to decide, and a recommendation. The review cards also show the
+project and where the entry comes from (request, pull request, session, code
+area) above it.
+
+Agents write the note when they create the object (`explanation` on
+`context_remember`, `request_create`, `pain_record`, `human_task_create` and
+`coord_send` with a question; `--explanation` on the `ctx` commands). Missing or
+outdated notes are generated from the object's own text and the project data
+around it (titles of the requests it names, code paths), never from session
+transcripts. A note is outdated when the text it explains changed, or, if it was
+generated, when `GHOSTTREE_LANGUAGE` changed. The text and the model output
+pass the same secret check as human tasks.
+
+The server needs a model only for generating. It uses the provider
+configuration of the distiller: `GHOSTTREE_LLM_CONFIG` (or
+`~/.config/ghosttree/llm.json`) with `format`, `base_url`, `model` and an
+`api_key_file` or systemd `credential`. Without it the server runs as before and
+shows only what agents wrote. For a systemd unit, pass the file and the key as
+`Environment=GHOSTTREE_LLM_CONFIG=...` and `LoadCredential=`.
+
+- `GHOSTTREE_EXPLAIN=auto|off` (`--explain`) switches generation, default `auto`.
+- `GHOSTTREE_EXPLAIN_MODEL` (`--explain-model`) picks a cheaper model than the distiller's.
+- `GHOSTTREE_EXPLAIN_DAILY_CALLS` (default 200) and `GHOSTTREE_EXPLAIN_DAILY_TOKENS`
+  (default 400000) cap one UTC day, 0 means no cap. Server and backfill share the cap.
+  Token counts are the provider's own for the `anthropic` format and an estimate
+  (four characters a token) otherwise.
+- Administrators see calls, tokens, failures and the last days on the Organization page.
+
+A page never waits for the model: it shows the block once it exists. A nightly run
+works the queue, the review queue first:
+
+    ctx explain backfill --db /var/lib/ghosttree/ghosttree.db --limit 100
+    ctx explain status --db /var/lib/ghosttree/ghosttree.db
+
 ## Privacy and security
 
 Ghosttree may hold source paths, prompts, command output, and operational

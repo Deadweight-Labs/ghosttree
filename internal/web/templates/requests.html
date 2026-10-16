@@ -24,7 +24,7 @@
 <article class="kn-article"><div class="kn-marks">{{template "rqmarks" .}}{{if .Project}}<span class="ov-meta">{{.Project}}</span>{{end}}</div>
 <h1>{{.Title}}</h1>
 <p class="ov-meta kn-dots"><span class="rq-id">{{.Human}}</span>{{if .Person}}<span>{{t "requests.by" .Person}}</span>{{end}}<span class="ov-num">{{.Age}}</span>{{template "rqbar" .}}</p>
-{{template "knbody" .Blocks}}</article>
+{{template "explain" .Explain}}{{template "knbody" .Blocks}}</article>
 
 {{if or .Criteria .CanEdit}}{{if .Criteria}}<section class="rq-section"><h2>{{t "requests.criteria"}}</h2>
 <ul class="ov-list ov-deck rq-criteria clay">{{range .Criteria}}<li class="rq-criterion"><span class="rq-dot is-{{.State}}" role="img" aria-label="{{.StateLabel}}"></span><div class="rq-ctext"><span class="rq-cid">{{.Human}}</span><p>{{.Text}}</p>

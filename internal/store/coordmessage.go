@@ -61,6 +61,9 @@ type CoordMessage struct {
 	CreatedAt         string     `json:"created_at,omitempty"`
 	Mentions          []string   `json:"mentions,omitempty"`
 	Refs              []CoordRef `json:"refs,omitempty"`
+	// Explanation is the agent's "Kurz erklärt" text for a question to people.
+	// Write-only: the server stores it beside the message.
+	Explanation string `json:"explanation,omitempty"`
 	// Expired ist abgeleitet und wird nicht gespeichert. Eine abgelaufene
 	// Meldung bleibt Geschichte und verschwindet nicht; sie darf nur nicht
 	// als gegenwärtig gelesen werden. "Die API ist 20 Sekunden weg" von
