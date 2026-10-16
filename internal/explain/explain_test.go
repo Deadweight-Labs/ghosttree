@@ -1,8 +1,10 @@
 package explain
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -179,12 +181,14 @@ type fakeLLM struct {
 	reply string
 	err   error
 	hook  func()
+	maxes []int
 }
 
 func (c *fakeLLM) Complete(ctx context.Context, system string, msgs []llm.Message, maxTokens int) (string, error) {
 	c.mu.Lock()
 	c.calls++
 	c.users = append(c.users, msgs[0].Content)
+	c.maxes = append(c.maxes, maxTokens)
 	reply, err, hook := c.reply, c.err, c.hook
 	c.mu.Unlock()
 	if hook != nil {
@@ -561,5 +565,38 @@ func TestDollarCapStopsOnceTheCostIsUsedUp(t *testing.T) {
 	err := svcWith(f, c, Limits{Day: Limit{USD: 2}}).Generate(context.Background(), KindKnowledge, 1)
 	if !errors.Is(err, ErrLimit) || c.calls != 0 {
 		t.Fatalf("err %v, calls %d", err, c.calls)
+	}
+}
+
+func TestGenerateLeavesRoomForThinkingAndFailureIsLogged(t *testing.T) {
+	f := newFakeStore()
+	f.put(KindKnowledge, 1, "p", "T", "x")
+	c := &fakeLLM{reply: goodReply}
+	s := svcWith(f, c, Limits{})
+	if err := s.Generate(context.Background(), KindKnowledge, 1); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.maxes) != 1 || c.maxes[0] < 4096 {
+		t.Errorf("max_tokens %v, want at least 4096 so thinking cannot eat the answer", c.maxes)
+	}
+
+	var buf bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	defer slog.SetDefault(old)
+	f.put(KindKnowledge, 2, "p", "Titel", "GEHEIMER OBJEKTTEXT")
+	c.mu.Lock()
+	c.err = &llm.NoTextError{StopReason: "max_tokens", ContentTypes: []string{"thinking"}, OutputTokens: 800, MaxTokens: 800}
+	c.mu.Unlock()
+	s.View(KindKnowledge, 2)
+	s.Wait()
+	out := buf.String()
+	for _, want := range []string{"level=WARN", "kind=knowledge", "id=2", "stop_reason"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("log %q lacks %q", out, want)
+		}
+	}
+	if strings.Contains(out, "GEHEIMER") {
+		t.Errorf("log leaks object text: %q", out)
 	}
 }

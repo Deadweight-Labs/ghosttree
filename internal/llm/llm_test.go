@@ -3,10 +3,12 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -218,5 +220,33 @@ func TestPriceCostsEveryTokenClassAtItsOwnRate(t *testing.T) {
 	}
 	if p, ok := (Config{Model: "x", InputUSDPerMTok: 1, OutputUSDPerMTok: 2}).Price(); !ok || p.InUSD != 1 {
 		t.Errorf("configured price ignored: %+v", p)
+	}
+}
+
+func TestAnthropicNoTextErrorNamesStopReasonAndBlockTypesNotContent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"stop_reason":"max_tokens","content":[{"type":"thinking","thinking":"GEHEIMER GEDANKE"}],"usage":{"input_tokens":50,"output_tokens":800}}`))
+	}))
+	defer srv.Close()
+	c, _ := New(Config{Format: "anthropic", BaseURL: srv.URL, APIKey: "k", Model: "m"})
+	_, u, err := c.(UsageClient).CompleteWithUsage(context.Background(), "s", []Message{{Role: "user", Content: "x"}}, 800)
+	var nt *NoTextError
+	if !errors.As(err, &nt) {
+		t.Fatalf("error %v is not a NoTextError", err)
+	}
+	if nt.StopReason != "max_tokens" || len(nt.ContentTypes) != 1 || nt.ContentTypes[0] != "thinking" {
+		t.Errorf("fields %+v", nt)
+	}
+	if u.OutputTokens != 800 {
+		t.Errorf("usage kept on failure: %+v", u)
+	}
+	msg := err.Error()
+	for _, want := range []string{`stop_reason="max_tokens"`, "content=[thinking]", "output_tokens=800"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("message %q lacks %q", msg, want)
+		}
+	}
+	if strings.Contains(msg, "GEHEIMER") {
+		t.Errorf("message leaks content: %q", msg)
 	}
 }

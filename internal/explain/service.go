@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -239,7 +240,12 @@ func key(kind string, id int64) string { return fmt.Sprintf("%s:%d", kind, id) }
 
 const (
 	retryAfterFailure = 10 * time.Minute
-	maxQueued         = 12
+	// maxOutputTokens is the ceiling for one reply. The model thinks before it
+	// answers and thinking counts against it: at 800 about one call in five
+	// ended in max_tokens with only a thinking block. The text itself stays
+	// short because the prompt asks for that.
+	maxOutputTokens = 4096
+	maxQueued       = 12
 )
 
 // start begins generation in the background and reports whether one is now
@@ -292,6 +298,10 @@ func (s *Service) start(kind string, id int64, src Source) bool {
 			s.failed[k] = s.cfg.Now()
 		}
 		s.mu.Unlock()
+		if err != nil {
+			// Once per object and retry pause, so a bad hour cannot flood the log.
+			slog.Warn("explain: generation failed", "kind", kind, "id", id, "reason", err.Error())
+		}
 	}()
 	return true
 }
@@ -371,10 +381,10 @@ func (s *Service) Generate(ctx context.Context, kind string, id int64) error {
 func (s *Service) complete(ctx context.Context, system, user string) (string, llm.Usage, error) {
 	msgs := []llm.Message{{Role: "user", Content: user}}
 	if uc, ok := s.client.(llm.UsageClient); ok && s.cfg.Metered {
-		out, u, err := uc.CompleteWithUsage(ctx, system, msgs, 800)
+		out, u, err := uc.CompleteWithUsage(ctx, system, msgs, maxOutputTokens)
 		return out, u, err
 	}
-	out, err := s.client.Complete(ctx, system, msgs, 800)
+	out, err := s.client.Complete(ctx, system, msgs, maxOutputTokens)
 	return out, llm.Usage{InputTokens: estimateTokens(system) + estimateTokens(user), OutputTokens: estimateTokens(out)}, err
 }
 
