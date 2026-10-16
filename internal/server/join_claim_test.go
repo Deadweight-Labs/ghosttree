@@ -585,3 +585,31 @@ func pairOf(t *testing.T, st *store.Store, account string) string {
 	p, _ := boundSession(t, st, account)
 	return p
 }
+
+// POST /api/join/status sagt dem Installer mit dem Verifier, ob der Antrag abgelehnt wurde, und sonst nichts.
+func TestJoinStatusReportsADenialOnlyToTheVerifierHolder(t *testing.T) {
+	srv, st, _ := joinClockFixture(t)
+	st.AddPerson("anna")
+	pair, _ := boundSession(t, st, "person:2")
+	claimWith(t, srv, "", loopbackBody(pair, "anna-laptop"))
+	ask := func(verifier string) string {
+		code, body := postJSON(t, srv.URL+"/api/join/status", "", map[string]string{"code_verifier": verifier})
+		if code != 200 {
+			t.Fatalf("status %d %v", code, body)
+		}
+		s, _ := body["state"].(string)
+		return s
+	}
+	if got := ask(testVerifier); got != "pending" {
+		t.Fatalf("before the decision: %q", got)
+	}
+	if _, err := st.Join().Decide("person:2", false, nonceOf(st, "person:2"), "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := ask(testVerifier); got != "denied" {
+		t.Fatalf("after the denial: %q", got)
+	}
+	if got := ask(strings.Repeat("x", 43)); got != "pending" {
+		t.Fatalf("a stranger learns %q", got)
+	}
+}

@@ -21,9 +21,13 @@ import (
 // (CSRF, gleiche Origin, Kontobestätigung, Kennung der gezeigten Anfrage).
 //
 // Drei Wege zum Token. Loopback (Regelfall): nach der Freigabe zeigt die Seite
-// den einmaligen Code zum Einfügen und schickt den Browser einmal auf
-// http://127.0.0.1:<port>/callback des Installers (code und state); eine
-// Ablehnung antwortet mit 303 auf dasselbe Ziel mit error=access_denied. Das
+// den einmaligen Code zum Einfügen; der Tab mit dem Code navigiert nie weg.
+// Den Loopback http://127.0.0.1:<port>/callback des Installers (code und state)
+// öffnet join.js als Navigation in einem zweiten Fenster, das schon im Klick auf
+// "Connect" geöffnet wird (sonst blockt der Browser es); ohne Skript oder bei
+// blockiertem Fenster bleibt der Code. Eine Ablehnung ohne Skript antwortet mit
+// 303 auf dasselbe Ziel mit error=access_denied, mit Skript fragt das Terminal sie
+// beim Server ab (POST /api/join/status). Das
 // Token holt der Installer mit dem code_verifier (POST /api/join/token), sei es
 // über den Callback oder über den eingefügten Code: was zuerst kommt, gewinnt.
 // Paste (kein Loopback erreichbar): dasselbe ohne Callback, die Seite zeigt nur
@@ -191,6 +195,11 @@ func (a *app) joinPairCreate(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/join/pair", http.StatusSeeOther)
 }
 
+// wantsJSON: der Aufruf kommt von join.js (fetch) und will keine Weiterleitung.
+func wantsJSON(r *http.Request) bool {
+	return strings.HasPrefix(r.Header.Get("Accept"), "application/json")
+}
+
 // joinPairDecide gibt das gemeldete Gerät frei oder lehnt es ab. Die Anfrage
 // trägt die Kennung des angezeigten Geräts; gehört sie zu einem anderen, ändert
 // sich nichts. Beim Loopback-Weg geht der Browser nach der Freigabe auf den
@@ -205,6 +214,18 @@ func (a *app) joinPairDecide(w http.ResponseWriter, r *http.Request) {
 	check := func(machine string) error { return a.store.MachineClaimable(machine, p.ID) }
 	dec, err := a.store.Join().Decide(p.ID, approve, r.FormValue("nonce"), r.FormValue("confirm_code"), check)
 	switch {
+	case err == nil && wantsJSON(r):
+		// join.js öffnet für den Loopback ein zweites Fenster und weist ihm das
+		// Ziel zu; der Tab mit dem Code bleibt, wo er ist. Eine Ablehnung braucht
+		// kein Fenster: das Terminal fragt sie beim Server ab.
+		navigate := ""
+		if approve {
+			navigate = dec.Redirect
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		_ = json.NewEncoder(w).Encode(map[string]string{"navigate": navigate})
 	case err == nil && dec.Redirect != "" && !approve:
 		http.Redirect(w, r, dec.Redirect, http.StatusSeeOther)
 	case err == nil:

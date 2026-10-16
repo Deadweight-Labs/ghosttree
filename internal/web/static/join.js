@@ -27,21 +27,50 @@
       if (source) navigator.share({ text: source.textContent.trim() }).catch(() => {});
     });
   }
+  // Connect and Deny: the page stays put. The installer's loopback is a top-level
+  // navigation in a second window, opened inside the click (later the browser
+  // would block it) and pointed at the loopback once the server has approved. If
+  // the window is blocked, or the loopback cannot be reached, the code on this page
+  // is the way on. Without script the plain form post still works.
+  const loopback = /^http:\/\/127\.0\.0\.1:\d+\//;
+  for (const form of document.querySelectorAll("form[data-join-popup]")) {
+    form.addEventListener("submit", async (event) => {
+      if (!window.fetch || !window.URLSearchParams) return;
+      const submitter = event.submitter;
+      const approve = !submitter || submitter.value === "approve";
+      event.preventDefault();
+      let popup = null;
+      if (approve) {
+        try { popup = window.open("about:blank", "_blank"); } catch (error) { popup = null; }
+      }
+      const body = new URLSearchParams(new FormData(form));
+      if (submitter && submitter.name) body.set(submitter.name, submitter.value);
+      const closePopup = () => { try { if (popup) popup.close(); } catch (error) { /* already gone */ } };
+      let response;
+      try {
+        response = await fetch(form.action, { method: "POST", body, cache: "no-store", credentials: "same-origin", headers: { Accept: "application/json" } });
+      } catch (error) {
+        closePopup();
+        location.reload();
+        return;
+      }
+      if (!response.ok) {
+        // The server said no (wrong confirmation, name taken, nothing waiting):
+        // the same post as a form shows its message page.
+        closePopup();
+        form.submit();
+        return;
+      }
+      try {
+        const out = await response.json();
+        if (popup && out.navigate && loopback.test(out.navigate)) popup.location.href = out.navigate;
+        else closePopup();
+      } catch (error) { closePopup(); }
+      location.reload();
+    });
+  }
   const marker = document.querySelector("[data-join-state]");
   if (!marker) return;
-  // After the approval the browser goes to the installer's loopback once. When
-  // that fails (other machine, blocked) the code on the page is the way on, and a
-  // reload or a step back must not send the browser there again.
-  const go = document.querySelector("[data-join-go]");
-  if (go) {
-    const key = "gt-join-go:" + (marker.dataset.joinNonce || "");
-    let tried = false;
-    try { tried = sessionStorage.getItem(key) === "1"; } catch (error) { /* storage blocked */ }
-    if (!tried) {
-      try { sessionStorage.setItem(key, "1"); } catch (error) { /* storage blocked */ }
-      setTimeout(() => { location.href = go.dataset.joinGo; }, 1500);
-    }
-  }
   const state = marker.dataset.joinState;
   const nonce = marker.dataset.joinNonce || "";
   const poll = async () => {

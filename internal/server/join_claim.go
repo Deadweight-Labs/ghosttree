@@ -161,6 +161,22 @@ func (a *api) exchangeJoin(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"access_token": token, "token_type": "bearer", "machine": info.Machine, "token_id": info.ID})
 }
 
+// statusJoin beantwortet dem Installer, ob sein Antrag im Browser abgelehnt wurde
+// (nur mit dem code_verifier). Alles andere heißt "pending": die Antwort verrät
+// nichts über Sitzungen, deren Verifier der Anfragende nicht kennt.
+func (a *api) statusJoin(w http.ResponseWriter, r *http.Request) {
+	var req joinTokenRequest
+	if !readDeviceBody(w, r, &req) {
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	state := "pending"
+	if a.st.Join().DeniedFor(req.CodeVerifier) {
+		state = "denied"
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"state": state})
+}
+
 // resolveJoinMachine wählt den Namen, unter dem das Konto der Join-Sitzung die
 // Maschine anmelden kann. Der Aufruf kommt erst nach der Prüfung des Codes.
 func (a *api) resolveJoinMachine(account, machine string, auto bool) (string, error) {

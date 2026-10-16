@@ -25,7 +25,7 @@ type deviceTokenRequest struct {
 }
 
 func isDevicePath(path string) bool {
-	return path == "/api/auth/device" || path == "/api/auth/device/token" || path == "/api/join/claim" || path == "/api/join/token"
+	return path == "/api/auth/device" || path == "/api/auth/device/token" || path == "/api/join/claim" || path == "/api/join/token" || path == "/api/join/status"
 }
 
 // readDeviceBody liest einen begrenzten JSON-Körper. Beide Endpunkte sind ohne

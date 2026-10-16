@@ -16,6 +16,9 @@
 #      the approval is typed into the terminal.
 #   D  no display (SSH, no browser opener): no loopback at all, link and paste
 #      only; the code is typed in lower case and in groups, as people do.
+#   E-G (with PW_FROM, Chromium): the code tab never navigates away; the loopback
+#      runs in a second window (E), is skipped when the window is blocked (F) or
+#      cannot be reached (G); the code is pasted in F and G.
 #
 # Each run uses the exact command the pairing page shows, the archives built by
 # scripts/build-dist.sh and the server's own /install.sh, the loopback PKCE path
@@ -184,13 +187,13 @@ go_url() { grep -o 'data-join-go="[^"]*"' "$WORK/approved-$1.html" | head -1 | c
 paste_code() { grep -o 'id="join-paste-code"[^>]*>[^<]*' "$WORK/approved-$1.html" | head -1 | sed 's/.*>//'; }
 SHOWN_CODES=()
 
-approve() { # ACCOUNT -> the page navigates the browser to the installer's listener
+approve() { # ACCOUNT -> a second window reaches the installer's listener (the page hands over its address)
   local acct=$1 loc
   approve_only "$acct" || return 1
   [ -n "$(paste_code "$acct")" ] || { echo "the page after the approval shows no code"; return 1; }
   SHOWN_CODES+=("$(paste_code "$acct")")
   loc=$(go_url "$acct")
-  case $loc in http://127.0.0.1:*/callback\?code=*) ;; *) echo "page navigates to '$loc'"; return 1 ;; esac
+  case $loc in http://127.0.0.1:*/callback\?code=*) ;; *) echo "page hands over '$loc'"; return 1 ;; esac
   curl -fs -o /dev/null "$loc"
 }
 
@@ -246,7 +249,7 @@ wait_for 30 state_is carla claimed && pass "C: the page shows the approval quest
 approve_only carla && pass "C: approved" || fail "C: approve"
 code_c=$(paste_code carla)
 [ -n "$code_c" ] && printf '%s' "$code_c" | grep -Eq '^[A-Z0-9]{4}(-[A-Z0-9]{4}){4}$' && pass "C: the page shows a code to copy" || fail "C: no code on the page: '$code_c'"
-[ -n "$(go_url carla)" ] && pass "C: the page also hands the browser to the loopback" || fail "C: no loopback target on the page"
+[ -n "$(go_url carla)" ] && pass "C: the page also hands the second window the loopback address" || fail "C: no loopback target on the page"
 SHOWN_CODES+=("$code_c")
 grep -q "Paste the code" "$WORK/machine-c.out" && pass "C: the terminal offered the paste prompt next to the browser" || fail "C: no paste prompt"
 printf '%s\n' "$code_c" >"$WORK/feed-c"
@@ -275,6 +278,33 @@ SHOWN_CODES+=("$code_d")
 grep -q "Open this link in your browser" "$WORK/machine-d.out" && pass "D: the terminal prints the link" || fail "D: no link printed"
 printf '%s\n' "$code_d" | tr 'A-Z' 'a-z' >"$WORK/feed-d"
 check_machine machine-d dora anna
+
+# E-G: the page keeps its tab. A real browser (Chromium via Playwright) plays the
+# person; skipped when Playwright is not installed (PW_FROM=path/to/package.json).
+popup_case() { # LETTER MODE ACCOUNT
+  local l=$1 mode=$2 acct=$3 out
+  make_invitation || { fail "$l: no invitation"; return; }
+  accept_invitation "$acct" || fail "$l: accept"
+  cmd=$(pair_page "$acct" | command_from_page)
+  [ -n "$cmd" ] || { fail "$l: no command"; return; }
+  : >"$WORK/feed-$l"
+  if [ "$mode" = popup ]; then start_installer "machine-$l" "$cmd"; else start_installer_pty "machine-$l" "$cmd" "$WORK/feed-$l"; fi
+  out=$(node "$HERE/join-popup.mjs" "$mode" "$SERVER_URL" "$WORK/jar-$acct" "$WORK/feed-$l" 2>&1) || fail "$l: browser run failed"
+  printf '%s\n' "$out" | while IFS= read -r line; do case $line in ok:*) pass "$l: ${line#ok: }" ;; *) echo "FAIL  $l: $line" ;; esac; done
+  printf '%s' "$out" | grep -q '^FAIL' && fail "$l: browser checks"
+  check_machine "machine-$l" "$acct" anna
+}
+if [ -n "${PW_FROM:-}" ] && [ -f "$PW_FROM" ]; then
+  export PW_FROM
+  step "E: the second window reaches the installer and closes itself"
+  popup_case E popup emma
+  step "F: the browser refuses the second window, the code stays and is pasted"
+  popup_case F blocked frida
+  step "G: the loopback is unreachable, the code tab stays and the code is pasted"
+  popup_case G unreachable gerda
+else
+  echo "skipping E-G (set PW_FROM=/path/to/node_modules/playwright/package.json)"
+fi
 
 step "pairing codes in the server log"
 if grep -Eq '[A-Z0-9]{4}-[A-Z0-9]{4}' "$WORK/server.log"; then fail "a pairing-code-shaped string is in the server log"; else pass "none"; fi

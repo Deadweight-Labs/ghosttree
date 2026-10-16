@@ -6,6 +6,15 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Fixed (REQ-434): the browser tab that shows the code to paste never navigates
+  away. The loopback hand-over now runs in a second window that opens inside the
+  click on "Connect" (a top-level navigation, no iframe or fetch to 127.0.0.1);
+  when the browser blocks that window or the loopback cannot be reached, the code
+  simply stays. The installer's success page closes that window, and the code tab
+  switches to "Continue in your terminal" once the terminal is done. Without
+  script the plain form post still works. A denial in the browser now also reaches
+  a terminal that only waits for a pasted code (`POST /api/join/status`, answered
+  only to the holder of the PKCE verifier).
 - Added (REQ-174, REQ-476): pains and tasks for humans. A pain records a problem
   without a solution (`PAIN-n`, states active, mitigated, resolved, obsolete;
   mitigated needs what remains, mitigated and resolved need evidence; a pain never

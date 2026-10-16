@@ -184,3 +184,33 @@ func TestJoinClaimWithPartialLoopbackFieldsStaysInvalid(t *testing.T) {
 		}
 	}
 }
+
+// Das Terminal im Paste-Weg erfährt eine Ablehnung nur mit dem eigenen Verifier,
+// und nur für die abgelehnte Sitzung.
+func TestJoinDeniedForAnswersOnlyTheHolderOfTheVerifier(t *testing.T) {
+	st, _ := pairFixture(t)
+	j := st.Join()
+	o := openPair(j, "person:2")
+	verifier, challenge := pkceFor("d")
+	if _, err := j.Claim(pasteReq(o.Pair, "far-box", "1.1.1.1", challenge)); err != nil {
+		t.Fatal(err)
+	}
+	if j.DeniedFor(verifier) {
+		t.Fatal("denied before anybody decided")
+	}
+	if _, err := j.Decide("person:2", false, j.View("person:2").Nonce, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	other, _ := pkceFor("e")
+	if !j.DeniedFor(verifier) || j.DeniedFor(other) || j.DeniedFor("") || j.DeniedFor(challenge) {
+		t.Fatal("DeniedFor must say yes only for the verifier of the denied session")
+	}
+}
+
+func TestJoinDeniedForIsFalseForAnApprovedSession(t *testing.T) {
+	st, _ := pairFixture(t)
+	verifier, _ := approvedPaste(t, st.Join(), "person:2", "f")
+	if st.Join().DeniedFor(verifier) {
+		t.Fatal("an approved session reads as denied")
+	}
+}

@@ -485,6 +485,7 @@ var messages = map[string]string{
 	"pair.paste_title":        "Paste this code in your terminal",
 	"pair.paste_wait":         "Waiting for %s",
 	"pair.connected":          "%s is connected",
+	"pair.connected_hint":     "Continue in your terminal.",
 	"pair.overview":           "Go to overview",
 	"pair.denied":             "Request denied",
 	"pair.denied_hint":        "Nothing was connected.",
