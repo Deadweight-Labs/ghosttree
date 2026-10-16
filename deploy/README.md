@@ -276,6 +276,56 @@ sudo systemctl enable --now ghosttree-distill.timer
 Generated knowledge remains quarantined until review. The bill does not, so
 start with a small limit and inspect the results.
 
+## Gardener in the sandbox
+
+`ghosttree-garden.service` runs the gardener (`ctx garden check-knowledge`) as a
+Claude Code agent. Its entries are data an attacker may have written, so the
+session is treated as untrusted:
+
+- **No Bash.** The session gets Read, Grep and Glob (only below the checkout)
+  and two fixed git tools, `git_log` and `git_show`, served by
+  `ctx garden git-mcp`. Their arguments are a hash or `HEAD`, a plain relative
+  path, a number and a text for the pickaxe; nothing is ever parsed as an option.
+- **Own config directory.** Every session gets an empty directory under
+  `--claude-dir` (also `GHOSTTREE_GARDEN_CLAUDE_DIR`), which is its
+  `CLAUDE_CONFIG_DIR` and `HOME`, and is removed afterwards. Without
+  `--claude-dir` the agent mode does not start. The proxy and the token come
+  from the `garden` entry of `llm.json`, not from a settings file.
+- **Small environment.** The session sees `PATH`, locale, certificate paths and
+  the one value that assigns it to its account. Nothing else of the unit's
+  environment reaches it.
+- **Neutral git.** `ctx` runs its own git calls with `core.hooksPath=/dev/null`,
+  no fsmonitor, no system config and an empty global config, and compares not
+  only `git status --ignored` but also `.git/config`, `.git/hooks`, `.git/info`
+  and `HEAD` before and after each session.
+- **systemd sandbox.** The unit runs as `ghosttree-garden` (create it with
+  `systemd-sysusers deploy/ghosttree-garden.sysusers`), hides everything under
+  `/var/lib/ghosttree` and binds back only the checkout (read-only), `bin/`,
+  `run.sh`, and the writable `state/`, `reports/` and `claude/`. `/home`, `/root`,
+  the database, private data and backups are not visible. The gardener cannot
+  open the database from there, so it keeps its memory in
+  `garden/state/state.json` (`--state-file`) instead of `--db`.
+
+Layout under `/var/lib/ghosttree/garden`: `repo/` (checkout, owned by root,
+updated by `ghosttree-garden-update.service`), `bin/` (the `claude` binary, pass
+`--claude`), `run.sh`, `state/`, `reports/`, `claude/` (writable by
+`ghosttree-garden`). Settings of the run (key paths, `GHOSTTREE_GARDEN_CLAUDE_DIR`,
+`--state-file`) belong in `/etc/ghosttree/garden.env` and `run.sh`, not in
+`server.env`.
+
+After installing or changing the unit, prove the sandbox on the machine:
+
+```sh
+sudo deploy/garden-sandbox-probe.sh
+```
+
+It starts a transient unit with the settings read from the installed unit file
+and tries to read the data directory, database, private data, backups, `/home`,
+`/root` and the server environment, to write the checkout and `.git/config`, and
+to reach a non-loopback address. Every one of those has to fail, reading the
+checkout has to work; otherwise the exit status is 1. `--print` shows the
+`systemd-run` command line without running it.
+
 ## Client machines
 
 ```bash
