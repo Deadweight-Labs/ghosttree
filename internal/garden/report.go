@@ -48,7 +48,25 @@ func WriteReport(w io.Writer, project string, res Result, at time.Time) {
 	for _, v := range res.Verdicts {
 		in, out, cacheRead, cacheWrite = in+v.In, out+v.Out, cacheRead+v.CacheRead, cacheWrite+v.CacheWrite
 	}
-	if res.DryRun {
+	if res.Agent {
+		var s SessionStat
+		for _, x := range res.Sessions {
+			s.Turns += x.Turns
+			s.Usage.InputTokens += x.Usage.InputTokens
+			s.Usage.OutputTokens += x.Usage.OutputTokens
+			s.Usage.CacheReadTokens += x.Usage.CacheReadTokens
+			s.Usage.CacheWriteTokens += x.Usage.CacheWriteTokens
+		}
+		in, out, cacheRead, cacheWrite = s.Usage.InputTokens, s.Usage.OutputTokens, s.Usage.CacheReadTokens, s.Usage.CacheWriteTokens
+		fmt.Fprintf(w, "Agent-Lauf: %d Sessions mit %d Turns.", len(res.Sessions), s.Turns)
+		if res.Deferred > 0 {
+			fmt.Fprintf(w, " Weitere %d fällige Einträge kommen in einem späteren Lauf dran.", res.Deferred)
+		}
+		fmt.Fprintf(w, "\n\n")
+	}
+	if res.DryRun && res.Agent {
+		fmt.Fprintf(w, "Geschätzt: nur die Aufträge, %d Eingabe-Tokens vor den Turns; was die Sessions im Lauf lesen, lässt sich nicht vorhersagen. Obergrenze ist das Budget von $%.2f.\n\n", in, res.MaxUSD)
+	} else if res.DryRun {
 		fmt.Fprintf(w, "Geschätzt: %d Eingabe- und %d Ausgabe-Tokens, ca. $%.4f; Obergrenze bei vollen Antworten $%.4f.\n\n", in, out, res.Spent, res.UpperBoundUSD)
 	} else {
 		fmt.Fprintf(w, "Gemessen: %d Eingabe- und %d Ausgabe-Tokens", in, out)
@@ -64,6 +82,73 @@ func WriteReport(w io.Writer, project string, res Result, at time.Time) {
 		fmt.Fprintf(w, "**Abgebrochen:** %s; der Rest ist unten als \"nicht geprüft\" aufgeführt.\n\n", res.LimitHit)
 	case "errors":
 		fmt.Fprintf(w, "**Abgebrochen:** wiederholte Fehler beim Modellaufruf.\n\n")
+	case "tamper":
+		fmt.Fprintf(w, "**Abgebrochen:** eine Session hat den Checkout verändert, ihr Ergebnis wurde verworfen. Das darf nicht passieren; die Berechtigungsregeln prüfen.\n\n")
+	}
+
+	if res.Agent && len(res.Sessions) > 0 {
+		fmt.Fprintf(w, "## Sessions\n")
+		for _, s := range res.Sessions {
+			fmt.Fprintf(w, "- %s: %d Einträge, %d geurteilt, %d Turns, Tokens %d / %d, Cache %d gelesen / %d geschrieben, $%.4f", s.Name, s.Entries, s.Judged, s.Turns,
+				s.Usage.InputTokens, s.Usage.OutputTokens, s.Usage.CacheReadTokens, s.Usage.CacheWriteTokens, s.CostUSD)
+			if s.ReportedUSD > 0 {
+				fmt.Fprintf(w, " (Claude Code rechnet $%.4f)", s.ReportedUSD)
+			}
+			if s.Denials > 0 {
+				fmt.Fprintf(w, ", %d Werkzeugaufrufe verweigert", s.Denials)
+			}
+			if s.Err != "" {
+				fmt.Fprintf(w, ", FEHLER: %s", s.Err)
+			}
+			fmt.Fprintln(w)
+			calls := 0
+			for _, n := range s.Tools {
+				calls += n
+			}
+			if s.Err == "" && s.Entries > 0 && calls < s.Entries {
+				fmt.Fprintf(w, "  - ACHTUNG flach geprüft: %d Werkzeugaufrufe für %d Einträge.\n", calls, s.Entries)
+			}
+			if len(s.Tools) > 0 {
+				var names []string
+				for n := range s.Tools {
+					names = append(names, n)
+				}
+				sort.Strings(names)
+				var parts []string
+				for _, n := range names {
+					parts = append(parts, fmt.Sprintf("%s %d", n, s.Tools[n]))
+				}
+				fmt.Fprintf(w, "  - Werkzeuge: %s\n", strings.Join(parts, ", "))
+			}
+			for _, d := range s.DeniedCalls {
+				fmt.Fprintf(w, "  - verweigert: %s\n", d)
+			}
+			for _, r := range s.Rejected {
+				fmt.Fprintf(w, "  - verworfen: %s\n", r)
+			}
+		}
+		fmt.Fprintln(w)
+	}
+	if len(res.Relations) > 0 {
+		fmt.Fprintf(w, "## Duplikate und Widersprüche\n")
+		for _, r := range res.Relations {
+			label := "Duplikat?"
+			if r.Kind == Contradiction {
+				label = "Widerspruch?"
+			}
+			var ids []string
+			for _, id := range r.IDs {
+				ids = append(ids, fmt.Sprintf("#%d", id))
+			}
+			fmt.Fprintf(w, "- %s %s: %s\n", label, strings.Join(ids, ", "), r.Reason)
+			for _, id := range r.IDs {
+				fmt.Fprintf(w, "  - #%d: \"%s\"\n", id, r.Quotes[id])
+			}
+			if len(r.Evidence) > 0 {
+				fmt.Fprintf(w, "  - Belege: %s\n", strings.Join(r.Evidence, ", "))
+			}
+		}
+		fmt.Fprintln(w)
 	}
 
 	order := map[string]int{Stale: 0, Correction: 1, Unclear: 2, Holds: 3, Failed: 4, Skipped: 5, NotRun: 6}

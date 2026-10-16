@@ -1,0 +1,13 @@
+[Unit]
+Description=ghosttree: Checkout fuer den Gaertner aktualisieren
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/var/lib/ghosttree/garden/repo/.git
+
+[Service]
+Type=oneshot
+# The checkout is owned by root and read-only for the ghosttree user; the update runs as root
+# with a readable umask so that user can read what it writes. It lives in its own unit
+# because the gardener unit may reach nothing but loopback.
+Environment=GIT_CONFIG_GLOBAL=/var/lib/ghosttree/garden/gitconfig
+ExecStart=/bin/bash -c 'umask 022; exec /usr/bin/git -C /var/lib/ghosttree/garden/repo pull --ff-only --quiet'

@@ -35,7 +35,7 @@ func TestWebShowsAgentIdentityAndSelfReportedNote(t *testing.T) {
 			t.Errorf("room page shows %q fewer than twice (members and sender block): %s", want, text)
 		}
 	}
-	if !strings.Contains(roomPage, `class="pp-note" title="`+messages["coord.self_reported"]+`"`) || !strings.Contains(roomPage, `class="cm-note" title="`+messages["coord.self_reported"]+`"`) {
+	if !strings.Contains(roomPage, `class="pp-title" title="`+messages["coord.self_reported"]+`"`) || !strings.Contains(roomPage, `class="cm-note" title="`+messages["coord.self_reported"]+`"`) {
 		t.Error("the note is not marked as self-reported in the member list and next to the message")
 	}
 	agents := namesGetShell(t, e, "/ui/agents")

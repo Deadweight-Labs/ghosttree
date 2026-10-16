@@ -89,6 +89,71 @@ func Proposal(project string, v Verdict) (store.Knowledge, bool) {
 	}, true
 }
 
+// RelationRef is the session reference of a proposal about entries that belong
+// together (duplicate or contradiction); it names the kind and the entries.
+func RelationRef(r Relation) string {
+	ids := make([]string, len(r.IDs))
+	for i, id := range r.IDs {
+		ids[i] = fmt.Sprint(id)
+	}
+	return fmt.Sprintf("gardener:relation:%s:%s", r.Kind, strings.Join(ids, "-"))
+}
+
+// RelationProposal builds the staged note for a duplicate or a contradiction.
+// titles maps entry id to title.
+func RelationProposal(project string, r Relation, titles map[int64]string) store.Knowledge {
+	label := "Duplikat?"
+	if r.Kind == Contradiction {
+		label = "Widerspruch?"
+	}
+	var b strings.Builder
+	var ids []string
+	fmt.Fprintf(&b, "Vorschlag des Gärtners (Herkunft gardener, nicht bestätigt): %s\n\n", label)
+	for _, id := range r.IDs {
+		ids = append(ids, fmt.Sprintf("#%d", id))
+		fmt.Fprintf(&b, "- #%d: %s\n  Zitat: \"%s\"\n", id, titles[id], r.Quotes[id])
+	}
+	fmt.Fprintf(&b, "\nBegründung: %s\n", r.Reason)
+	if len(r.Evidence) > 0 {
+		fmt.Fprintf(&b, "\nBelege: %s\n", strings.Join(r.Evidence, ", "))
+	}
+	return store.Knowledge{
+		Type:       "note",
+		Title:      fmt.Sprintf("%s%s %s: %s", titlePrefix, label, strings.Join(ids, " und "), titles[r.IDs[0]]),
+		Body:       b.String(),
+		Scope:      scope.Axes{Project: project},
+		Confidence: proposalState,
+		Status:     "active",
+		Origin:     "distilled",
+		Harness:    Harness,
+		SessionRef: RelationRef(r),
+	}
+}
+
+// ProposeRelations files one staged note per relation not already proposed
+// (in any state, so a rejection stays a rejection) and returns how many.
+func ProposeRelations(sink Sink, project string, existing []store.Knowledge, rels []Relation, titles map[int64]string) (int, error) {
+	have := map[string]bool{}
+	for _, k := range existing {
+		if k.Harness == Harness && strings.HasPrefix(k.SessionRef, "gardener:relation:") {
+			have[k.SessionRef] = true
+		}
+	}
+	written := 0
+	for _, r := range rels {
+		ref := RelationRef(r)
+		if have[ref] {
+			continue
+		}
+		have[ref] = true
+		if _, err := sink.Remember(RelationProposal(project, r, titles), scope.Axes{Project: project}); err != nil {
+			return written, fmt.Errorf("propose %s: %w", ref, err)
+		}
+		written++
+	}
+	return written, nil
+}
+
 // Propose files one staged note per stale or correction verdict and returns how
 // many it wrote. A subject that already has an open proposal is left alone, so
 // a nightly run does not pile up duplicates.

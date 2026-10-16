@@ -105,6 +105,14 @@ type Result struct {
 	MaxUSD   float64
 	// Rotation says what was left out before the run because it was not due.
 	Rotation Rotation
+	// Agent runs only: the sessions and what they cost, the packages the
+	// entries were split into, what they found between entries, and how many
+	// entries were due but did not fit into this run.
+	Agent     bool
+	Sessions  []SessionStat
+	Packages  []Package
+	Relations []Relation
+	Deferred  int
 }
 
 const systemPrompt = `Du prüfst einen Wissens-Eintrag (Pitfall oder Decision) eines Softwareprojekts gegen den aktuellen Code. Du entscheidest nichts, du machst einen Vorschlag, den ein Mensch prüft.

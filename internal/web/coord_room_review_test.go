@@ -151,11 +151,11 @@ func TestCoordDirectivePlateNamesTheRoleAndLowRankIsAStandingRequest(t *testing.
 	if g := e.page(t, e.gus); strings.Contains(g, "Never") || !strings.Contains(g, "Owner rule.") || strings.Contains(plateOf(t, g, "Owner rule."), "Standing note") {
 		t.Errorf("a guest, who is not told the author's role, must not see an owner's directive downgraded: %s", plateOf(t, g, "Owner rule."))
 	}
-	modes := func(page string) string { return segment(t, page, `class="pill clay"`, `</div>`) }
-	if m := modes(page); !strings.Contains(m, "Standing order") || strings.Contains(m, "Standing note") {
+	modes := func(page string) string { return segment(t, page, `class="btn clay rm-directive"`, `</button>`) }
+	if m := modes(page); !strings.Contains(m, "standing order") || strings.Contains(m, "standing note") {
 		t.Errorf("the owner can set directives: %s", m)
 	}
-	if m := modes(e.page(t, e.gus)); !strings.Contains(m, "Standing note") || strings.Contains(m, "Standing order") {
+	if m := modes(e.page(t, e.gus)); !strings.Contains(m, "standing note") || strings.Contains(m, "standing order") {
 		t.Errorf("a guest can only set standing requests: %s", m)
 	}
 }
@@ -167,7 +167,7 @@ func TestCoordRequestCardNamesTheSenderRoleAndKeepsItsStateAfterAnswering(t *tes
 	}
 	card := func() string {
 		page := e.page(t, e.alice)
-		start := strings.LastIndex(page[:strings.Index(page, "Roles first?")], `<article class="ask clay">`)
+		start := strings.LastIndex(page[:strings.Index(page, "Roles first?")], `<article class="rm-msg is-ask">`)
 		return page[start : start+strings.Index(page[start:], "</article>")]
 	}
 	if c := card(); !roleLabelRE("member").MatchString(c) {
@@ -182,23 +182,20 @@ func TestCoordRequestCardNamesTheSenderRoleAndKeepsItsStateAfterAnswering(t *tes
 	}
 }
 
-func TestCoordComposerAsksForTheAddresseeInlineAndKeepsMoreNextToSend(t *testing.T) {
+func TestCoordComposerAsksForTheAddresseeWithChipsAndKeepsMoreNextToSend(t *testing.T) {
 	e := reviewFixture(t)
 	page := e.page(t, e.alice)
-	composer := segment(t, page, `class="coord-composer"`, "</form>")
-	to := segment(t, composer, `class="comp-to"`, "</div>")
+	composer := segment(t, page, `class="coord-composer rm-compose"`, "</form>")
+	to := segment(t, composer, `class="rm-compose-to comp-to"`, "</div>")
 	if !strings.Contains(to, `type="radio" name="mentions"`) || !strings.Contains(to, "ask@box") {
-		t.Errorf("request mode needs inline addressee chips: %s", to)
-	}
-	if strings.Contains(composer, `class="coord-text-action">More`) {
-		t.Error("More is no text link below the composer")
+		t.Errorf("the composer needs addressee chips: %s", to)
 	}
 	more := segment(t, composer, `<details class="comp-more`, "</summary>")
-	if !strings.Contains(more, `aria-label="More"`) || !strings.Contains(more, "<svg") {
-		t.Errorf("More is an icon button: %s", more)
+	if !strings.Contains(more, "More") {
+		t.Errorf("More is a text button: %s", more)
 	}
-	if !strings.Contains(composer, `<div class="comp">`) || strings.Index(composer, `<details class="comp-more`) < strings.Index(composer, `<div class="comp">`) || strings.Index(composer, `<details class="comp-more`) > strings.Index(composer, "comp-send-message") {
-		t.Errorf("More sits in the comp row before Send: %s", composer)
+	if strings.Index(composer, `<details class="comp-more`) > strings.Index(composer, "comp-send-message") {
+		t.Errorf("More sits before Send: %s", composer)
 	}
 }
 

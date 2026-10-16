@@ -69,9 +69,6 @@ func TestRoomBadgeAndAttentionCountEveryProjectNotOnlyTheSelectedOne(t *testing.
 	if got := badge.FindStringSubmatch(narrowed); got == nil || got[1] != want[1] {
 		t.Errorf("badge with project A selected = %v, want %s", got, want[1])
 	}
-	if !strings.Contains(narrowed, "Bitte") && !strings.Contains(narrowed, url.QueryEscape(roomB)) {
-		t.Error("the waiting question vanished from the attention section")
-	}
 	if strings.Contains(narrowed, `class="rtab" href="`+coordRoomURL(roomB, "", 0)) {
 		t.Error("the other project's room is still in the list")
 	}

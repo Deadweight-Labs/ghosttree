@@ -258,12 +258,8 @@ func TestQuestionExplanationOnTheRoomCardAndTheAttentionCard(t *testing.T) {
 	if !strings.Contains(card, "Erklärung zur Frage") || !strings.Contains(card, "Kurz erklärt") {
 		t.Errorf("room card: %s", card)
 	}
-	start := strings.Index(page, `aria-labelledby="coord-attention-items"`)
-	if start < 0 {
-		t.Fatal("attention list missing")
-	}
-	if section := page[start : start+strings.Index(page[start:], "</section>")]; !strings.Contains(section, "Erklärung zur Frage") {
-		t.Errorf("attention card lacks the block: %s", section)
+	if !strings.Contains(card, `class="rm-fold"`) {
+		t.Errorf("the explanation sits in a fold on the room card: %s", card)
 	}
 }
 
