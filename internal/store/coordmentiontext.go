@@ -330,7 +330,7 @@ func (a CoordAccess) textMentionsTx(tx *sql.Tx, actor, roomKey, body string, gue
 			// Ein Gast sieht die Mitglieder nicht und erreicht deshalb nicht
 			// alle. Der Token gehört dem Store und wird nie als Name aufgelöst.
 			if !guest {
-				if err := checkBroadcastRateTx(tx, actor); err != nil {
+				if err := checkBroadcastRateTx(tx, actor, a.Principal.ID); err != nil {
 					return nil, nil, err
 				}
 				active, err := broadcastIDsTx(tx, candidates)

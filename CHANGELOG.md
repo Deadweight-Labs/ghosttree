@@ -6,6 +6,14 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Fixed: the `@agents` brake could be circumvented. The store now marks a broadcast
+  when it writes the message (`coord_messages.is_broadcast`, additive; existing
+  messages of the running five-minute window are marked on upgrade) and asks
+  without a row limit, so writing many messages in between no longer frees the
+  window. The window belongs to the account: all agents of a person and the person
+  share one. Web chip, MCP and channel use the same path. A question or blocker
+  to "All active agents" with no active agent now shows the hint under the room
+  instead of an error page.
 - Added: `ghclaude`, a link to `ctx` that starts Claude Code with the ghosttree
   channel and passes all arguments through unchanged, so it can be entered as the
   Claude executable in a GUI. `ctx install claude` and `ctx join` offer it once,

@@ -66,6 +66,9 @@ type CoordMessage struct {
 	// als gegenwärtig gelesen werden. "Die API ist 20 Sekunden weg" von
 	// gestern ist kein Grund, heute zu warten.
 	Expired bool `json:"expired,omitempty"`
+	// IsBroadcast hält fest, dass die Nachricht an @agents ging. Nur der Store
+	// setzt es beim Schreiben; es ist die Grundlage der Sendebremse.
+	IsBroadcast bool `json:"-"`
 	// SenderRole, RecipientRole und Authority sind abgeleitet, werden nie
 	// gespeichert und nur in Antworten an einen angemeldeten Agenten gesetzt.
 	// Was ein Client hier mitschickt, verwirft Send.
@@ -179,14 +182,14 @@ func appendCoordMessageTx(tx *sql.Tx, m CoordMessage) (int64, error) {
 			destination_kind,destination_id,sequence,sender_external_id,
 			author_principal_id,author_kind,parent_external_id,client_id,kind,
 			intent,priority,body,reply_to,origin_event_id,causation_id,
-			expires_at,observed_at_client,created_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			expires_at,observed_at_client,created_at,is_broadcast)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		m.DestinationKind, m.DestinationID, seq, m.SenderExternalID,
 		m.AuthorPrincipalID, m.AuthorKind, nullableText(m.ParentExternalID),
 		m.ClientID, m.Kind, m.Intent, m.Priority, m.Body,
 		nullableCoordID(m.ReplyTo), nullableText(m.OriginEventID),
 		nullableText(m.CausationID), nullableText(m.ExpiresAt),
-		nullableText(m.ObservedAtClient), m.CreatedAt)
+		nullableText(m.ObservedAtClient), m.CreatedAt, m.IsBroadcast)
 	if err != nil {
 		return 0, err
 	}

@@ -84,3 +84,20 @@ func TestComposerOffersTheBroadcastChipAndItAddressesActiveAgents(t *testing.T) 
 		t.Error("a guest is offered the broadcast chip")
 	}
 }
+
+// Frage oder Blocker an "Alle aktiven Agenten", ohne dass ein Agent aktiv ist:
+// nichts wird gesendet, die Seite zeigt einen Hinweis statt einer Fehlerseite.
+func TestBroadcastChipWithQuestionAndNoActiveAgentShowsHintNotError(t *testing.T) {
+	e := shellWebAll(t)
+	room, _ := memberReadSeed(t, e)
+	for _, intent := range []string{"question", "blocker"} {
+		form := url.Values{"body": {"wer kann das übernehmen?"}, "mentions": {"all-agents"}, "intent": {intent}}
+		if st := postRoom(t, e, e.Lead, "/ui/coord/send", room, form); st != 303 {
+			t.Fatalf("%s: send = %d, want redirect to the room", intent, st)
+		}
+	}
+	page := namesGetShell(t, e, "/ui/coord?room="+url.QueryEscape(room)+"&unreached=agents&unsent=1")
+	if !strings.Contains(visibleText(page), "@agents reached no one. Nothing was sent") {
+		t.Errorf("hint missing: %s", visibleText(page))
+	}
+}

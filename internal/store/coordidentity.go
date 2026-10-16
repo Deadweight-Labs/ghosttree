@@ -45,32 +45,105 @@ func BodyHasBroadcast(body string) bool {
 	return false
 }
 
-// checkBroadcastRateTx lässt höchstens einen Broadcast je Sender und
-// BroadcastWindow zu. Gezählt werden die gespeicherten Nachrichten des Senders,
-// deren Text das Broadcast-Wort enthält.
-func checkBroadcastRateTx(tx *sql.Tx, sender string) error {
+// checkBroadcastRateTx lässt höchstens einen Broadcast je Prinzipal und
+// BroadcastWindow zu. Maßgeblich ist die beim Schreiben gesetzte Markierung
+// is_broadcast, nicht der Text, und die Abfrage kennt kein LIMIT: Dazwischen
+// geschriebene Nachrichten schieben einen Broadcast nicht aus dem Fenster.
+// Der Prinzipal ist das Konto: alle Agenten einer Person teilen sich ein
+// Fenster. Ohne Prinzipal (Altbestand) zählt die Absenderkennung.
+func checkBroadcastRateTx(tx *sql.Tx, sender, principal string) error {
 	cutoff := time.Now().UTC().Add(-BroadcastWindow)
-	rows, err := tx.Query(`SELECT body, created_at FROM coord_messages WHERE sender_external_id=? AND created_at>=? ORDER BY id DESC LIMIT 50`,
-		sender, cutoff.Format(time.RFC3339))
+	col, key := "sender_external_id", sender
+	if principal != "" {
+		col, key = "author_principal_id", principal
+	}
+	var created string
+	err := tx.QueryRow(`SELECT created_at FROM coord_messages
+		WHERE is_broadcast=1 AND `+col+`=? AND created_at>=? ORDER BY created_at DESC LIMIT 1`,
+		key, cutoff.Format(time.RFC3339)).Scan(&created)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	at, perr := time.Parse(time.RFC3339, created)
+	if perr != nil {
+		at = time.Now().UTC()
+	}
+	return &BroadcastLimitedError{Wait: at.Add(BroadcastWindow).Sub(time.Now().UTC())}
+}
+
+// ensureCoordMessageBroadcast legt coord_messages.is_broadcast an. Beim
+// Anlegen werden die Nachrichten des laufenden Fensters nach dem Text
+// nachgetragen, damit ein Rollout kein zweites Kontingent aufmacht.
+func ensureCoordMessageBroadcast(db *sql.DB) error {
+	rows, err := db.Query(`PRAGMA table_info(coord_messages)`)
+	if err != nil {
+		return err
+	}
+	have := false
 	for rows.Next() {
-		var body, created string
-		if err := rows.Scan(&body, &created); err != nil {
+		var cid, notNull, pk int
+		var name, typ string
+		var def sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &def, &pk); err != nil {
+			rows.Close()
 			return err
 		}
-		if !BodyHasBroadcast(body) {
-			continue
+		if name == "is_broadcast" {
+			have = true
 		}
-		at, perr := time.Parse(time.RFC3339, created)
-		if perr != nil {
-			at = time.Now().UTC()
-		}
-		return &BroadcastLimitedError{Wait: at.Add(BroadcastWindow).Sub(time.Now().UTC())}
 	}
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	if !have {
+		if _, err := db.Exec(`ALTER TABLE coord_messages ADD COLUMN is_broadcast INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return err
+		}
+		if err := backfillBroadcastWindow(db); err != nil {
+			return err
+		}
+	}
+	_, err = db.Exec(`CREATE INDEX IF NOT EXISTS coord_messages_broadcast_principal
+			ON coord_messages(author_principal_id,created_at) WHERE is_broadcast=1;
+		CREATE INDEX IF NOT EXISTS coord_messages_broadcast_sender
+			ON coord_messages(sender_external_id,created_at) WHERE is_broadcast=1`)
+	return err
+}
+
+func backfillBroadcastWindow(db *sql.DB) error {
+	cutoff := time.Now().UTC().Add(-BroadcastWindow).Format(time.RFC3339)
+	rows, err := db.Query(`SELECT id, body FROM coord_messages WHERE created_at>=? AND lower(body) LIKE '%@agent%'`, cutoff)
+	if err != nil {
+		return err
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		var body string
+		if err := rows.Scan(&id, &body); err != nil {
+			rows.Close()
+			return err
+		}
+		if BodyHasBroadcast(body) {
+			ids = append(ids, id)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	for _, id := range ids {
+		if _, err := db.Exec(`UPDATE coord_messages SET is_broadcast=1 WHERE id=?`, id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ErrWorkNoteNotOwner: die Notiz gehört zu einer Session eines anderen Kontos.
