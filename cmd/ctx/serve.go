@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/forge"
 	"github.com/Deadweight-Labs/ghosttree/internal/llmusage"
 	"github.com/Deadweight-Labs/ghosttree/internal/privatefile"
 	"github.com/Deadweight-Labs/ghosttree/internal/proxytrust"
@@ -364,6 +365,7 @@ func buildServerHandler(st *store.Store, cfg serveConfig, stderr io.Writer) http
 	explainCfg.Language = cfg.Language
 	webOptions = append(webOptions, web.WithExplainer(newExplainer(st, explainCfg, logger)))
 	webOptions = append(webOptions, web.WithGardenLimits(cfg.GardenLimits))
+	webOptions = append(webOptions, web.WithSourceProver(forge.NewGitHub(forge.ConfigFromOS())))
 	root.Handle("/", web.New(st, webOptions...))
 	return root
 }

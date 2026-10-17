@@ -36,6 +36,7 @@ type projectRoleRow struct {
 	Role               string
 	CanReview          bool
 	Implicit           bool
+	Inherited          bool
 	Grantable          []string
 	Self               bool
 }
@@ -43,6 +44,10 @@ type projectRoleRow struct {
 type projectRolesView struct {
 	Remote string
 	You    string
+	// Shared: mit der Org geteilt. CanShare: der Betrachter darf das ändern.
+	Shared, CanShare bool
+	// Toggle ist der Wert, auf den der Schalter das Projekt stellt.
+	Toggle string
 	Rows   []projectRoleRow
 }
 
@@ -65,7 +70,12 @@ type orgsView struct {
 	InviteProjects []string
 	DefaultProject string
 	GuestLinks     bool // Gast-Links gibt es nur bei durchgesetzter Sichtbarkeit
-	Notice         string
+	// Quellen: verbundene GitHub-Organisationen, ihre Präfixe und, nach der
+	// Rückkehr von GitHub, die zur Wahl stehenden Organisationen.
+	Sources     []sourceRow
+	SourceReady bool
+	Pick        *sourcePick
+	Notice      string
 	// Explain is the administrator's block on "Kurz erklärt"; nil for anyone else.
 	Explain *explainAdminView
 	// Garden is the same for the gardener; nil for anyone else.
@@ -120,7 +130,9 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 		v.Projects, _ = a.store.ListProjects(me, v.Selected.ID)
 		v.Projects = a.access(r).VisibleProjects(v.Projects)
 		for _, p := range v.Projects {
-			rv := projectRolesView{Remote: p.Remote, You: a.store.ProjectRole(p.Remote, me).Role}
+			rv := projectRolesView{Remote: p.Remote, You: a.store.ProjectRole(p.Remote, me).Role, Shared: p.Shared}
+			rv.Toggle = map[bool]string{true: "0", false: "1"}[p.Shared]
+			rv.CanShare = interactive(r) && store.RoleRank(rv.You) >= store.RoleRank(store.RoleOwner)
 			// Ein Gast sieht nur den eigenen Eintrag, wie in der API
 			// (listProjectMembers).
 			guest := store.RoleRank(a.access(r).Role(p.Remote).Role) == 1 && a.store.AccessEnforced()
@@ -155,11 +167,12 @@ func (a *app) renderOrgs(w http.ResponseWriter, r *http.Request, status int, v o
 				}
 				rv.Rows = append(rv.Rows, projectRoleRow{
 					Account: store.NormalizeAccountName(m.Account), AccountID: m.AccountID, Role: m.Role, CanReview: m.CanReview,
-					Implicit: m.Implicit, Grantable: a.grantable(r, me, p.Remote, m.AccountID), Self: m.AccountID == me,
+					Implicit: m.Implicit, Inherited: m.Inherited, Grantable: a.grantable(r, me, p.Remote, m.AccountID), Self: m.AccountID == me,
 				})
 			}
 			v.Roles = append(v.Roles, rv)
 		}
+		a.fillSources(r, &v, me)
 		if v.Owner {
 			v.Claimable, _ = a.store.ListClaimableProjects(me, v.Selected.ID)
 			a.fillInvites(r, &v, me)
@@ -225,6 +238,16 @@ func orgError(l lang, err error) (int, string) {
 		return http.StatusConflict, l.msg("adm.err.org_taken")
 	case errors.Is(err, store.ErrTooManyAttempts):
 		return http.StatusTooManyRequests, l.msg("adm.err.attempts")
+	case errors.Is(err, store.ErrNotProjectOwner):
+		return http.StatusForbidden, l.msg("adm.err.not_project_owner")
+	case errors.Is(err, store.ErrPrefixUnproven):
+		return http.StatusForbidden, l.msg("adm.err.prefix_unproven")
+	case errors.Is(err, store.ErrPrefixTaken), errors.Is(err, store.ErrSourceTaken):
+		return http.StatusConflict, l.msg("adm.err.source_taken")
+	case errors.Is(err, store.ErrSourceNotFound):
+		return http.StatusNotFound, l.msg("adm.err.source_missing")
+	case sourceError(err):
+		return http.StatusConflict, l.msg("adm.err.source_off")
 	}
 	return http.StatusInternalServerError, l.msg("adm.err.generic")
 }
@@ -269,6 +292,16 @@ func orgNotice(l lang, key string) string {
 		return l.msg("adm.notice.renamed")
 	case "project_created":
 		return l.msg("adm.notice.project_created")
+	case "visibility":
+		return l.msg("adm.notice.visibility")
+	case "source_added":
+		return l.msg("adm.notice.source_added")
+	case "source_removed":
+		return l.msg("adm.notice.source_removed")
+	case "source_failed":
+		return l.msg("adm.notice.source_failed")
+	case "imported":
+		return l.msg("adm.notice.imported")
 	}
 	return ""
 }
@@ -346,15 +379,15 @@ func (a *app) orgInvite(w http.ResponseWriter, r *http.Request) {
 	var inv store.Invitation
 	link := false
 	if project := strings.TrimSpace(r.FormValue("project")); project != "" {
-		// A link grants member or guest for this one project; owners and leads
-		// are made by a person in the browser, never by a link.
+		// A project link is for guests only, whatever the form says: people who
+		// work with the organization are invited into it.
 		link = true
 		if _, known := a.store.ProjectByRemote(project); known && r.FormValue("claim") != "1" {
-			code, inv, err = a.store.CreateProjectInvitation(me, o.ID, project, r.FormValue("project_role"), ttl)
+			code, inv, err = a.store.CreateProjectInvitation(me, o.ID, project, store.RoleGuest, ttl)
 		} else {
 			// One call takes the remote over and issues the link (one
 			// transaction): a refused link leaves no half-done claim.
-			code, inv, err = a.store.ClaimAndInviteProject(me, o.ID, project, r.FormValue("project_role"), ttl)
+			code, inv, err = a.store.ClaimAndInviteProject(me, o.ID, project, store.RoleGuest, ttl)
 		}
 	} else {
 		code, inv, err = a.store.CreateInvitation(me, o.ID, r.FormValue("email"), r.FormValue("role"), ttl)

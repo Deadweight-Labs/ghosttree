@@ -80,6 +80,9 @@ type OrgMemberInfo struct {
 	Account   string `json:"account"`
 	Role      string `json:"role"`
 	JoinedAt  string `json:"joined_at"`
+	// Guest: kam über eine Gast-Einladung und sieht nur seine Projekte, nie die
+	// Standardrolle geteilter Projekte.
+	Guest bool `json:"guest,omitempty"`
 }
 
 // Project ist die Zuordnung einer normalisierten Remote zu genau einer
@@ -96,6 +99,9 @@ type Project struct {
 	// der Zeile (Tabelle named_projects), nicht der ID-Form: eine hostlose Remote
 	// wie "gitserver/repo" hat dieselbe Gestalt und bleibt ein Remote-Projekt.
 	Named bool `json:"named,omitempty"`
+	// Shared: das Projekt ist mit der Organisation geteilt; jedes Mitglied hat
+	// darin mindestens die Standardrolle.
+	Shared bool `json:"shared,omitempty"`
 }
 
 // Invitation beschreibt eine Einladung ohne ihren Code. Der Klartext
@@ -367,7 +373,9 @@ func (s *Store) ListOrgMembers(orgID int64) ([]OrgMemberInfo, error) {
 	if s.reader != nil {
 		return s.reader.ListOrgMembers(orgID)
 	}
-	rows, err := s.db.Query(`SELECT m.account_id, p.name, m.role, m.joined_at FROM org_members m
+	rows, err := s.db.Query(`SELECT m.account_id, p.name, m.role, m.joined_at,
+		EXISTS(SELECT 1 FROM org_guests g WHERE g.org_id=m.org_id AND g.account_id=m.account_id)
+		FROM org_members m
 		JOIN persons p ON p.id = m.account_id WHERE m.org_id=? ORDER BY m.role, p.name LIMIT ?`, orgID, maxListRows)
 	if err != nil {
 		return nil, err
@@ -377,7 +385,7 @@ func (s *Store) ListOrgMembers(orgID int64) ([]OrgMemberInfo, error) {
 	for rows.Next() {
 		var m OrgMemberInfo
 		var id int64
-		if err := rows.Scan(&id, &m.Account, &m.Role, &m.JoinedAt); err != nil {
+		if err := rows.Scan(&id, &m.Account, &m.Role, &m.JoinedAt, &m.Guest); err != nil {
 			return nil, err
 		}
 		m.AccountID = principalOfID(id)
@@ -431,9 +439,16 @@ func (s *Store) ListOrgMembersFor(orgID int64, viewerPrincipal string, enforced 
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	// In einer Org mit geteilten Projekten arbeiten alle Nicht-Gäste zusammen.
+	var sharedProjects int
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM shared_projects sp JOIN projects p ON p.id=sp.project_id WHERE p.org_id=?`, orgID).Scan(&sharedProjects)
+	togetherInShared := sharedProjects > 0 && !orgGuestTx(s.db, orgID, viewer)
 	self := principalOfID(viewer)
 	out := []OrgMemberInfo{}
 	for _, m := range all {
+		if togetherInShared && !m.Guest {
+			shared[m.AccountID] = true
+		}
 		if m.AccountID != self && m.Role != OrgOwner && !shared[m.AccountID] {
 			continue
 		}
@@ -538,6 +553,9 @@ func (s *Store) RemoveOrgMember(actorPrincipal string, orgID int64, targetPrinci
 		`m.account_id=? AND p.org_id=?`, target, orgID); err != nil {
 		return err
 	}
+	if _, err := tx.Exec(`DELETE FROM org_guests WHERE org_id=? AND account_id=?`, orgID, target); err != nil {
+		return err
+	}
 	// Ein Standard, auf den das Konto keinen Zugriff mehr hat, wird gelöscht
 	// statt zu wirken.
 	if _, err := tx.Exec(`UPDATE persons SET default_org_id=0 WHERE id=? AND default_org_id=?`, target, orgID); err != nil {
@@ -573,8 +591,9 @@ func (s *Store) SetDefaultOrg(accountPrincipal string, orgID int64) error {
 func projectTx(q rowQuerier, remote string) (Project, bool) {
 	var p Project
 	err := q.QueryRow(`SELECT p.id, p.remote, p.org_id, o.slug, p.name, p.created_at,
-		EXISTS(SELECT 1 FROM named_projects n WHERE n.project_id = p.id) FROM projects p JOIN orgs o ON o.id = p.org_id WHERE p.remote=?`,
-		remote).Scan(&p.ID, &p.Remote, &p.OrgID, &p.Org, &p.Name, &p.CreatedAt, &p.Named)
+		EXISTS(SELECT 1 FROM named_projects n WHERE n.project_id = p.id),
+		EXISTS(SELECT 1 FROM shared_projects sp WHERE sp.project_id = p.id) FROM projects p JOIN orgs o ON o.id = p.org_id WHERE p.remote=?`,
+		remote).Scan(&p.ID, &p.Remote, &p.OrgID, &p.Org, &p.Name, &p.CreatedAt, &p.Named, &p.Shared)
 	return p, err == nil
 }
 
@@ -641,6 +660,11 @@ func claimProjectTx(tx execQueryer, account int64, remote string, orgID int64, e
 			return Project{}, ErrProjectClaimed
 		}
 		return p, nil
+	}
+	// Ein beanspruchtes Präfix entscheidet allein: wer dort ein Repo klont, landet
+	// ohne Claim in der Org, die das Präfix hält (oder bekommt nichts).
+	if p, handled, err := assignByPrefixTx(tx, account, remote, orgID); handled {
+		return p, err
 	}
 	if orgID == 0 {
 		var err error
@@ -878,6 +902,9 @@ func (s *Store) MoveProject(actorPrincipal, remote, toOrgRef string) (Project, e
 	if _, err := tx.Exec(`UPDATE projects SET org_id=? WHERE remote=?`, to.ID, cur.Remote); err != nil {
 		return Project{}, err
 	}
+	if _, err := tx.Exec(`DELETE FROM shared_projects WHERE project_id=?`, cur.ID); err != nil {
+		return Project{}, err
+	}
 	if err := dropProjectRolesTx(tx, principalOfID(actor), RoleViaAPI, `p.remote=?`, cur.Remote); err != nil {
 		return Project{}, err
 	}
@@ -944,7 +971,8 @@ func (s *Store) ListProjects(accountPrincipal string, orgID int64) ([]Project, e
 		return nil, err
 	}
 	rows, err := s.db.Query(`SELECT p.id, p.remote, p.org_id, o.slug, p.name, p.created_at,
-		EXISTS(SELECT 1 FROM named_projects n WHERE n.project_id = p.id) FROM projects p
+		EXISTS(SELECT 1 FROM named_projects n WHERE n.project_id = p.id),
+		EXISTS(SELECT 1 FROM shared_projects sp WHERE sp.project_id = p.id) FROM projects p
 		JOIN orgs o ON o.id = p.org_id JOIN org_members m ON m.org_id = p.org_id AND m.account_id = ?
 		WHERE (? = 0 OR p.org_id = ?) ORDER BY o.slug, p.remote LIMIT ?`, acct, orgID, orgID, maxListRows)
 	if err != nil {
@@ -954,7 +982,7 @@ func (s *Store) ListProjects(accountPrincipal string, orgID int64) ([]Project, e
 	out := []Project{}
 	for rows.Next() {
 		var p Project
-		if err := rows.Scan(&p.ID, &p.Remote, &p.OrgID, &p.Org, &p.Name, &p.CreatedAt, &p.Named); err != nil {
+		if err := rows.Scan(&p.ID, &p.Remote, &p.OrgID, &p.Org, &p.Name, &p.CreatedAt, &p.Named, &p.Shared); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -1146,7 +1174,9 @@ func invitationExists(q rowQuerier, code string) bool {
 // des Kontos im Projekt (leer ohne Eintrag) kommt für das Ereignis mit zurück.
 func invitationCoverage(tx rowQuerier, orgID, projectID int64, projectRole string, account int64) (orgRole, currentProject string, covered bool) {
 	orgRole = orgRoleTx(tx, orgID, account)
-	if projectID == 0 && orgRole != "" || orgRole == OrgOwner {
+	// Ein Gast, der in die Organisation eingeladen wird, gewinnt etwas: er wird
+	// Mitglied.
+	if projectID == 0 && orgRole != "" && !orgGuestTx(tx, orgID, account) || orgRole == OrgOwner {
 		return orgRole, "", true
 	}
 	if projectID != 0 {
@@ -1240,6 +1270,18 @@ func acceptInvitationTx(tx execQueryer, code string, account int64, verifiedEmai
 	}
 	if orgRole == "" {
 		if _, err := tx.Exec(`INSERT INTO org_members(org_id, account_id, role, joined_at) VALUES(?,?,?,?)`, orgID, account, role, now()); err != nil {
+			return Org{}, err
+		}
+		// Wer nur für ein Projekt eingeladen wird, bleibt Gast der Organisation,
+		// gleich welche Rolle der Link im Projekt trägt.
+		if projectID != 0 {
+			if _, err := tx.Exec(`INSERT OR IGNORE INTO org_guests(org_id, account_id) VALUES(?,?)`, orgID, account); err != nil {
+				return Org{}, err
+			}
+		}
+	}
+	if projectID == 0 {
+		if _, err := tx.Exec(`DELETE FROM org_guests WHERE org_id=? AND account_id=?`, orgID, account); err != nil {
 			return Org{}, err
 		}
 	}
@@ -1483,6 +1525,9 @@ func (s *Store) ForceMoveProject(remote, toOrgRef string) (Project, error) {
 		return cur, nil
 	}
 	if _, err := tx.Exec(`UPDATE projects SET org_id=? WHERE remote=?`, to.ID, cur.Remote); err != nil {
+		return Project{}, err
+	}
+	if _, err := tx.Exec(`DELETE FROM shared_projects WHERE project_id=?`, cur.ID); err != nil {
 		return Project{}, err
 	}
 	if err := dropProjectRolesTx(tx, "admin", RoleViaCLI, `p.remote=?`, cur.Remote); err != nil {

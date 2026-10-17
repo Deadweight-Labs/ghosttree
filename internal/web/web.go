@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"embed"
 	"errors"
+	"github.com/Deadweight-Labs/ghosttree/internal/forge"
 	"net/http"
 	"strings"
 	"sync"
@@ -40,6 +41,8 @@ type app struct {
 	language      lang             // server language (GHOSTTREE_LANGUAGE); empty = en
 	explain       *explain.Service // "Kurz erklärt"; nil = off
 	gardenLimits  llmusage.Limits  // caps of the gardener, shown to administrators
+	prover        forge.Prover     // proof behind "connect GitHub"; nil = off
+	sourceFlows   *sourceFlows
 }
 type pageData struct {
 	Title, NavSection, Person, CSRFToken, Error, Code, BackURL string
@@ -110,7 +113,7 @@ func uiHeaders(h http.Header) {
 }
 
 func newApp(st *store.Store, opts ...Option) http.Handler {
-	a := &app{store: st, sessions: newSessions(), joinLimits: newJoinLimiter(), inviteLinks: newInviteLinks()}
+	a := &app{store: st, sessions: newSessions(), joinLimits: newJoinLimiter(), inviteLinks: newInviteLinks(), sourceFlows: newSourceFlows()}
 	for _, opt := range opts {
 		opt(a)
 	}
@@ -191,13 +194,17 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.handle(mux, "GET /ui/profile", a.requirePerson(http.HandlerFunc(a.profilePage)))
 	a.handle(mux, "POST /ui/profile", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.profileSave))))))
 	a.handle(mux, "GET /ui/orgs", a.requirePerson(http.HandlerFunc(a.orgsPage)))
+	a.handle(mux, "GET /ui/orgs/source/callback", a.requirePerson(a.requireInteractive(http.HandlerFunc(a.orgSourceCallback))))
 	// Verwaltung nur aus einer interaktiven Sitzung, nicht aus eingefügtem Token.
 	for path, h := range map[string]http.HandlerFunc{
 		"/ui/orgs/invite": a.orgInvite, "/ui/orgs/invite/revoke": a.orgInviteRevoke,
 		"/ui/orgs/member/role": a.orgMemberRole, "/ui/orgs/member/remove": a.orgMemberRemove,
 		"/ui/orgs/project/move": a.orgProjectMove, "/ui/orgs/project/role": a.orgProjectRole,
 		"/ui/orgs/create": a.orgCreate, "/ui/orgs/rename": a.orgRename,
-		"/ui/orgs/project/create": a.orgProjectCreate,
+		"/ui/orgs/project/create": a.orgProjectCreate, "/ui/orgs/project/visibility": a.orgProjectVisibility,
+		"/ui/orgs/source/connect": a.orgSourceConnect, "/ui/orgs/source/add": a.orgSourceAdd,
+		"/ui/orgs/source/remove": a.orgSourceRemove, "/ui/orgs/source/import": a.orgSourceImport,
+		"/ui/orgs/prefix/visibility": a.orgPrefixVisibility,
 	} {
 		a.handle(mux, "POST "+path, a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(h)))))
 	}
@@ -485,6 +492,13 @@ var webRoutes = map[string]webClass{
 	"POST /ui/orgs/project/move":            webAdmin,
 	"POST /ui/orgs/project/role":            webAdmin,
 	"POST /ui/orgs/project/create":          webAdmin,
+	"POST /ui/orgs/project/visibility":      webAdmin,
+	"POST /ui/orgs/source/connect":          webAdmin,
+	"POST /ui/orgs/source/add":              webAdmin,
+	"POST /ui/orgs/source/remove":           webAdmin,
+	"POST /ui/orgs/source/import":           webAdmin,
+	"POST /ui/orgs/prefix/visibility":       webAdmin,
+	"GET /ui/orgs/source/callback":          webAccount,
 	"POST /ui/orgs/create":                  webAdmin,
 	"POST /ui/orgs/rename":                  webAdmin,
 	"POST /ui/orgs/accept":                  webAccount,

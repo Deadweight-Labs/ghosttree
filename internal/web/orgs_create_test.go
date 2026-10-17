@@ -42,7 +42,7 @@ func TestAnyAccountCreatesAnOrganizationInTheWebAndBecomesItsOwner(t *testing.T)
 		}
 	}
 	// Inviting is one step away: the invitation form, or the way to connect a project first.
-	if !strings.Contains(page, "Create invitation") && !strings.Contains(page, "/ui/overview?connect=1") {
+	if !strings.Contains(page, `action="/ui/orgs/invite"`) && !strings.Contains(page, "/ui/overview?connect=1") {
 		t.Errorf("no way on to inviting or connecting a project: %s", page)
 	}
 	if !strings.Contains(page, `id="invitations"`) {

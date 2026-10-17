@@ -398,7 +398,7 @@ func (a *api) gateProject(w http.ResponseWriter, r *http.Request, project string
 		return true
 	}
 	var unclaimed *store.ProjectUnclaimedError
-	if errors.As(err, &unclaimed) || errors.Is(err, store.ErrProjectNotFound) {
+	if errors.As(err, &unclaimed) || errors.Is(err, store.ErrProjectNotFound) || errors.Is(err, store.ErrProjectClaimed) {
 		writeOrgError(w, err)
 		return false
 	}
