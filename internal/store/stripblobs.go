@@ -207,11 +207,16 @@ func writeStripped(ctx context.Context, db *sql.DB, rows []strippedRow) error {
 }
 
 // maintenanceDSN öffnet eine Datenbank für einen Wartungslauf neben dem Server:
-// nur ein längeres busy_timeout, kein Eingriff in Journal oder Schema.
-func maintenanceDSN(path string) string {
+// nur ein längeres busy_timeout, kein Eingriff in Journal oder Schema. Weitere
+// PRAGMAs (zum Beispiel "secure_delete(1)") hängen sich an.
+func maintenanceDSN(path string, pragmas ...string) string {
 	sep := "?"
 	if strings.Contains(path, "?") {
 		sep = "&"
 	}
-	return path + sep + "_pragma=busy_timeout(30000)"
+	dsn := path + sep + "_pragma=busy_timeout(30000)"
+	for _, p := range pragmas {
+		dsn += "&_pragma=" + p
+	}
+	return dsn
 }

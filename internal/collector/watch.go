@@ -169,7 +169,7 @@ func SyncFile(path, harness string, up Uploader, st *State, machine string) erro
 			Seq:  seq,
 			Role: p.Role,
 			Text: redact.Redact(p.Text),
-			Raw:  redact.Redact(stored),
+			Raw:  redact.RedactJSON(stored),
 		})
 		touches = append(touches, activityFrom(ident, trimmed)...)
 		if harness != "codex" {
