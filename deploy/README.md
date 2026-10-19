@@ -252,6 +252,47 @@ sudo systemd-run --pipe --wait --collect --quiet \
   /usr/local/bin/ctx db check --db /var/lib/ghosttree/ghosttree.db
 ```
 
+### Passwords in stored transcripts
+
+Tokens with a fixed prefix (`ghp_`, `sk-ant-`, `AKIA`, JWT, private keys) have always
+been replaced. Since REQ-526 the server and `ctx watch` also replace the value behind a
+label such as `Passwort:`, `password=`, `api_key:`, `token`, `PIN` or `Zugangsdaten`, and the
+password in `https://user:password@host`, with `[REDACTED:labeled]` or `[REDACTED:url]`;
+the label stays. Placeholders (`${DB_PASSWORD}`), code (`r.FormValue("password")`), paths
+and prose ("Passwort zurücksetzen") are left alone. New chunks are covered when they are
+stored, also those from older clients. `ctx redact-sessions` does the same for the
+chunks already stored, and for every copy of their text (`session_chunks`, `chunks_fts`,
+`chunk_index`, `sess_fts`, session titles, evidence quotes). It is safe to run while the
+server is up and can be stopped with Ctrl-C and run again:
+
+```bash
+DB=/var/lib/ghosttree/ghosttree.db
+RUN='sudo systemd-run --pipe --wait --collect --quiet -p DynamicUser=yes -p User=ghosttree -p StateDirectory=ghosttree /usr/local/bin/ctx'
+$RUN redact-sessions --db $DB --dry-run   # counts per table and kind, writes nothing, prints no value
+$RUN redact-sessions --db $DB             # replaces; a second run changes nothing
+```
+
+Take a backup first if the text might be needed. The report lists the chunks checked and
+changed, the rows cleaned per table, the replacements per kind, and the knowledge entries
+and requests whose evidence came from a changed chunk (their own text may hold a copy:
+look at them). Deleting a row from an FTS5 index only marks it as deleted; the words
+stay in the index segments until the segments are merged. The run therefore merges both
+indexes (`optimize`) at the end, which rewrites them in one statement and holds the write
+lock while it does: on a large database that can take minutes, so start it when little is
+written. `--skip-optimize` leaves that out. The run also overwrites what it frees
+(`secure_delete`) and truncates the write-ahead log.
+
+Three things it cannot reach. Pages that were already free before the run, from earlier
+updates, may hold old text until the file is rewritten: run `ctx db vacuum` once afterwards
+(see above, with the service stopped). Backups and copies
+made before the run keep the old text until they are replaced. Context snapshots are
+immutable and have no redaction path. After the run, check with a search: a part of the
+password in the search box must find nothing.
+
+What is not redacted when written: knowledge entries, requests, coordination messages and
+notes. Human tasks, explanations and work notes are refused when they look like a secret;
+an agent that copies a password into a knowledge entry stores it.
+
 ## Context snapshots
 
 Snapshot rows are immutable and have no ordinary deletion or redaction path.
