@@ -30,6 +30,12 @@ type gardenRow struct {
 	Explain                                          *explainView
 	CanApprove, CanReject                            bool
 	Token, Next, Filter                              string
+	// Lines are what the note holds beyond its reason (the test, the sketch);
+	// Refs the entries a merge keeps and replaces; Act the one action besides
+	// rejecting, for a note that has one (see review_garden_actions.go).
+	Lines []string
+	Refs  []gardenRef
+	Act   *gardenAct
 }
 
 // Selectable: the row has a tick box, because at least one bulk action is open.
@@ -76,6 +82,7 @@ func (a *app) gardenBlock(r *http.Request, pa *store.ProjectAccess, project stri
 			Explain: card.Explain, CanApprove: card.CanApprove, CanReject: card.CanReject,
 			Token: v.Token, Next: "review", Filter: project,
 		}
+		a.decorateGardenRow(l, pa, k, &row)
 		if row.CanApprove {
 			v.ApproveIDs = append(v.ApproveIDs, row.ID)
 		}
@@ -151,6 +158,16 @@ func parseGardenTitle(l lang, title string) (verdict, subject string) {
 		return l.msg("review.garden.stale"), subject
 	case "Korrektur?":
 		return l.msg("review.garden.correction"), subject
+	case "Duplikat?":
+		return l.msg("review.garden.duplicate"), subject
+	case "Widerspruch?":
+		return l.msg("review.garden.contradiction"), subject
+	case "Test vorhanden?":
+		return l.msg("review.garden.cover_existing"), subject
+	case "Test fehlt?":
+		return l.msg("review.garden.cover_sketch"), subject
+	case "Nicht testbar?":
+		return l.msg("review.garden.cover_untestable"), subject
 	}
 	return strings.TrimSpace(label), subject
 }

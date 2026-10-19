@@ -410,6 +410,40 @@ allowlist, so a gardener that must not read other projects' entries runs with
 config), is not allowed those two tools and is not told about them. The fixed
 git tools `git_log` and `git_show` stay either way.
 
+### What the gardener writes, and what only people do
+
+The gardener proposes, a person decides. With `--propose` it makes exactly these
+calls to the server besides reading, and the account of its client config
+(`garden/claude/.config/ghosttree/config.json`) needs nothing more than the role
+**member** in the project, not lead and not reviewer:
+
+- **Staged notes** with harness `gardener`, never trusted, never replacing
+  anything: stale and correction verdicts, duplicates between entries, and
+  answers to the regression question for pitfalls nobody has judged (a test that
+  exists, a sketch of a missing test, or "not testable"). The answers are checked
+  against the checkout first: a named test has to be defined in the file the
+  session read.
+- **One thread per contradiction**, linked to every entry it is about, titled as a
+  question, opened by the gardener's account with the reason and the verbatim
+  quotes as its first post. For the same entries there is never a second open
+  thread, and a thread a person closed stays closed while the entries are
+  unchanged (the thread's question records which wording it was about); once an
+  entry changes, a new thread may ask again, and the old one is left as it is.
+  To read and open threads the gardener registers as the agent `gardener:<project>`
+  in the project's room. If a thread cannot be opened the finding becomes a staged
+  note.
+
+Everything that changes an entry is a button on the review page (`/ui/review`)
+that a person presses, and the server asks that person for the right the same
+step needs elsewhere: **Merge** on a duplicate note supersedes the older entry by
+the newer one (right to change every entry involved, reason "Gärtner-Vorschlag
+#note, bestätigt von person"), **Record as covered** / **Record as not testable**
+on a regression note sets the pitfall's regression verdict (right to verify). The
+gardener has no call for any of this, and its own account, a plain member, is
+refused by the server if it tried. The server does not force `staged` on a
+client that writes as harness `gardener`; what keeps the marks honest is the
+command, and a test records every call a gardener run makes against a real server.
+
 Layout under `/var/lib/ghosttree/garden`: `repo/` (checkout, owned by root,
 updated by `ghosttree-garden-update.service`), `bin/` (the `claude` binary, pass
 `--claude`), `run.sh`, `state/`, `reports/`, `claude/` (writable by

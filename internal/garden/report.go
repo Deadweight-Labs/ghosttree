@@ -153,6 +153,8 @@ func WriteReport(w io.Writer, project string, res Result, at time.Time) {
 		fmt.Fprintln(w)
 	}
 
+	writeCovers(w, res.Covers)
+
 	order := map[string]int{Stale: 0, Correction: 1, Unclear: 2, Holds: 3, Failed: 4, Skipped: 5, NotRun: 6}
 	vs := append([]Verdict(nil), res.Verdicts...)
 	sort.SliceStable(vs, func(i, j int) bool { return order[vs[i].Kind] < order[vs[j].Kind] })
@@ -183,6 +185,48 @@ func WriteReport(w io.Writer, project string, res Result, at time.Time) {
 		}
 		if v.In > 0 || v.CacheRead > 0 || v.CacheWrite > 0 {
 			fmt.Fprintf(w, "- Tokens %d / %d, Cache %d gelesen / %d geschrieben, $%.4f\n", v.In, v.Out, v.CacheRead, v.CacheWrite, v.CostUSD)
+		}
+		fmt.Fprintln(w)
+	}
+}
+
+// writeCovers lists the answers to the regression question (job 5). The test
+// sketches have a section of their own, whole: they are the part of the answer
+// somebody has to write. The two other kinds are one line each.
+func writeCovers(w io.Writer, covers []Cover) {
+	var sketches, others []Cover
+	for _, c := range covers {
+		if c.Kind == CoverSketch {
+			sketches = append(sketches, c)
+		} else {
+			others = append(others, c)
+		}
+	}
+	if len(sketches) > 0 {
+		fmt.Fprintf(w, "## Testskizzen (Regressionsschutz)\nZu diesen Pitfalls gibt es keinen Test, der ihre Wiederkehr bemerken würde. Der Gärtner skizziert einen; geschrieben wird er von einem Menschen.\n")
+		for _, c := range sketches {
+			fmt.Fprintf(w, "- #%d %s\n  - Test: %s\n", c.Entry.ID, c.Entry.Title, c.TestID())
+			for _, l := range strings.Split(c.Steps, "\n") {
+				fmt.Fprintf(w, "    %s\n", l)
+			}
+			if c.Reason != "" {
+				fmt.Fprintf(w, "  - Begründung: %s\n", c.Reason)
+			}
+		}
+		fmt.Fprintln(w)
+	}
+	if len(others) > 0 {
+		fmt.Fprintf(w, "## Regressionsschutz: vorhandene Tests und nicht Testbares\n")
+		for _, c := range others {
+			if c.Kind == CoverExisting {
+				fmt.Fprintf(w, "- #%d %s: %s deckt ihn ab", c.Entry.ID, c.Entry.Title, c.TestID())
+			} else {
+				fmt.Fprintf(w, "- #%d %s: nicht testbar", c.Entry.ID, c.Entry.Title)
+			}
+			if c.Reason != "" {
+				fmt.Fprintf(w, " (%s)", c.Reason)
+			}
+			fmt.Fprintln(w)
 		}
 		fmt.Fprintln(w)
 	}

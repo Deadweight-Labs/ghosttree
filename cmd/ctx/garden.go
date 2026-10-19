@@ -42,9 +42,13 @@ Two ways to run it:
                through the entries together: the entries are split into topics
                (code area of the files they name), one session per package
                checks them against the code, finds duplicates and contradictions
-               between entries, and answers with JSON. ctx checks that JSON
-               (every verdict needs a citation that exists in the checkout, every
-               relation a verbatim quote of each entry) before anything is filed.
+               between entries, and for pitfalls nobody has judged says which
+               test would catch the defect's return (one that exists, a sketch of
+               one, or "not testable", at most 8 per session), and answers with
+               JSON. ctx checks that JSON (every verdict needs a citation that
+               exists in the checkout, every relation a verbatim quote of each
+               entry, every named test has to be defined in a file the session
+               read) before anything is filed.
                The session can read the checkout (Read, Grep, Glob, only below it; git_log and
                git_show as fixed tools, no Bash) and, unless --no-mcp, search ghosttree read-only; it cannot write, has no
                network but the model proxy and ghosttree, never bypasses
@@ -76,9 +80,19 @@ and calls nothing).
   --dry-run    count tokens and cost, call nothing
   --max-usd    stop cleanly before a call that could exceed this budget (default 2)
   --limit      send at most this many entries to the model
-  --propose    file stale and correction verdicts as staged notes marked as
-               coming from the gardener. Never verifies, deprecates or deletes
-               anything, and the entry checked is left untouched.
+  --propose    file what the run found, and only that:
+                 - stale and correction verdicts, duplicates between entries and
+                   answers to the regression question as staged notes marked as
+                   coming from the gardener (nothing is verified, deprecated,
+                   superseded, retired or judged: a person confirms a note on the
+                   review page, where a duplicate note offers "merge" and a
+                   regression note offers to record the test or "not testable");
+                 - each contradiction between entries as a thread, linked to
+                   all of them, marked as the gardener's, with the reason and the
+                   verbatim quotes as its first post. For the same entries there
+                   is never a second open thread, and a thread a person closed is
+                   not opened again while the entries are unchanged.
+               The entries checked are left untouched.
   --out        write the Markdown report to a file instead of stdout
   --db         the ghosttree database. With it the gardener remembers, per entry,
                when and against which commit it looked (the next run takes entries
@@ -95,10 +109,13 @@ and calls nothing).
                cleanly, names itself, and exits with status 3.`
 
 // gardenStore is what the command needs from the server: read the entries,
-// and, with --propose, add new ones. There is no patch or delete in it.
+// and, with --propose, add new ones and open threads for contradictions. There
+// is no patch, supersede, retire, regression verdict or thread state in it:
+// those are what a person does on the review page.
 type gardenStore interface {
 	ProjectKnowledge(project string, includeArchived bool) ([]store.Knowledge, error)
 	Remember(k store.Knowledge, autoCtx scope.Axes) (store.Knowledge, error)
+	garden.ThreadSink
 }
 
 // gardenState is what the gardener remembers between runs. It is the database
@@ -400,12 +417,21 @@ func gardenDue(st gardenStore, project string, opts gardenOpts, stdout io.Writer
 		fmt.Fprintf(stdout, "cannot read knowledge: %v\n", err)
 		return nil, nil, 1, true
 	}
+	// A rejected proposal of the gardener is an archived entry, and a pitfall it
+	// was already asked about is not asked again.
+	withArchived, err := st.ProjectKnowledge(project, true)
+	if err != nil {
+		fmt.Fprintf(stdout, "cannot read knowledge: %v\n", err)
+		return nil, nil, 1, true
+	}
 	known = map[int64]garden.Entry{}
 	for _, k := range all {
 		if !opts.Types[k.Type] || k.Status != "active" || k.Scope.Project != project || k.Harness == garden.Harness {
 			continue
 		}
-		e := garden.Entry{ID: k.ID, Type: k.Type, Title: k.Title, Body: k.Body, ObservedAt: k.ObservedAt, CreatedAt: k.CreatedAt, UpdatedAt: k.UpdatedAt}
+		e := garden.Entry{ID: k.ID, Type: k.Type, Title: k.Title, Body: k.Body, ObservedAt: k.ObservedAt, CreatedAt: k.CreatedAt, UpdatedAt: k.UpdatedAt,
+			Regression: k.RegressionState}
+		e.AskCover = e.Type == "pitfall" && e.Regression == "" && !garden.CoverProposed(withArchived, e)
 		entries = append(entries, e)
 		known[e.ID] = e
 	}
@@ -469,11 +495,7 @@ func runGardenAgent(st gardenStore, repo *garden.Repo, project string, opts gard
 	if meter.err != nil {
 		fmt.Fprintf(stdout, "could not record usage: %v\n", meter.err)
 	}
-	titles := map[int64]string{}
-	for id, e := range known {
-		titles[id] = e.Title
-	}
-	return finishGarden(st, project, opts, res, outPath, stdout, titles)
+	return finishGarden(st, project, opts, res, outPath, stdout, known)
 }
 
 func runGardenCheck(st gardenStore, repo *garden.Repo, project string, opts gardenOpts, model llm.UsageClient, pricing garden.Pricing, outPath string, stdout io.Writer) int {
@@ -524,7 +546,7 @@ func runGardenCheck(st gardenStore, repo *garden.Repo, project string, opts gard
 
 // finishGarden writes the report, files the proposals and turns the way the
 // run ended into an exit status. It is the same for both modes.
-func finishGarden(st gardenStore, project string, opts gardenOpts, res garden.Result, outPath string, stdout io.Writer, titles map[int64]string) int {
+func finishGarden(st gardenStore, project string, opts gardenOpts, res garden.Result, outPath string, stdout io.Writer, known map[int64]garden.Entry) int {
 	var report bytes.Buffer
 	garden.WriteReport(&report, project, res, time.Now())
 
@@ -551,26 +573,9 @@ func finishGarden(st gardenStore, project string, opts gardenOpts, res garden.Re
 	}
 
 	if opts.Propose && !opts.DryRun {
-		existing, err := st.ProjectKnowledge(project, true)
-		if err != nil {
-			fmt.Fprintf(stdout, "cannot read existing proposals: %v\n", err)
-			return 1
+		if c := proposeGarden(st, project, res, stdout, known); c != 0 {
+			return c
 		}
-		n, err := garden.Propose(st, project, existing, res.Verdicts)
-		if err != nil {
-			fmt.Fprintf(stdout, "%v (%d proposals filed before the failure; the report above is complete)\n", err, n)
-			return 1
-		}
-		rn, err := garden.ProposeRelations(st, project, existing, res.Relations, titles)
-		if err != nil {
-			fmt.Fprintf(stdout, "%v (%d proposals filed before the failure; the report above is complete)\n", err, n+rn)
-			return 1
-		}
-		fmt.Fprintf(stdout, "%s %d proposals filed as staged notes from the gardener (see 'ctx review')", garden.Headline(res.Verdicts), n+rn)
-		if rn > 0 {
-			fmt.Fprintf(stdout, ", %d of them about duplicates or contradictions between entries", rn)
-		}
-		fmt.Fprintln(stdout)
 	}
 	if code != 0 {
 		return code
@@ -587,6 +592,83 @@ func finishGarden(st gardenStore, project string, opts gardenOpts, res garden.Re
 			fmt.Fprintf(stdout, "stopped: %s\n", res.LimitHit)
 		}
 		return 1
+	}
+	return 0
+}
+
+// proposeGarden files what the run found: staged notes for verdicts, duplicates
+// and regression answers, a thread for each contradiction. It writes nothing else.
+// A contradiction whose thread cannot be opened is filed as a staged note, so the
+// finding is not lost.
+func proposeGarden(st gardenStore, project string, res garden.Result, stdout io.Writer, known map[int64]garden.Entry) int {
+	existing, err := st.ProjectKnowledge(project, true)
+	if err != nil {
+		fmt.Fprintf(stdout, "cannot read existing proposals: %v\n", err)
+		return 1
+	}
+	titles := map[int64]string{}
+	for id, e := range known {
+		titles[id] = e.Title
+	}
+	n, err := garden.Propose(st, project, existing, res.Verdicts)
+	if err != nil {
+		fmt.Fprintf(stdout, "%v (%d proposals filed before the failure; the report above is complete)\n", err, n)
+		return 1
+	}
+	var dups, contradictions []garden.Relation
+	for _, r := range res.Relations {
+		if r.Kind == garden.Contradiction {
+			contradictions = append(contradictions, r)
+		} else {
+			dups = append(dups, r)
+		}
+	}
+	rn, err := garden.ProposeRelations(st, project, existing, dups, titles)
+	if err != nil {
+		fmt.Fprintf(stdout, "%v (%d proposals filed before the failure; the report above is complete)\n", err, n+rn)
+		return 1
+	}
+	cn, err := garden.ProposeCovers(st, project, existing, res.Covers)
+	if err != nil {
+		fmt.Fprintf(stdout, "%v (%d proposals filed before the failure; the report above is complete)\n", err, n+rn+cn)
+		return 1
+	}
+	outcomes := garden.OpenContradictionThreads(st, project, existing, contradictions, known)
+	var failed []garden.Relation
+	opened, kept := 0, 0
+	for _, o := range outcomes {
+		switch o.State {
+		case garden.ThreadOpened:
+			opened++
+			fmt.Fprintf(stdout, "contradiction %v: thread %d opened\n", o.Relation.IDs, o.ThreadID)
+			if o.Warn != "" {
+				fmt.Fprintf(stdout, "  (%s)\n", o.Warn)
+			}
+		case garden.ThreadExists:
+			kept++
+			fmt.Fprintf(stdout, "contradiction %v: thread %d is open already, no second one\n", o.Relation.IDs, o.ThreadID)
+		case garden.ThreadDecided:
+			kept++
+		default:
+			failed = append(failed, o.Relation)
+			fmt.Fprintf(stdout, "contradiction %v: no thread (%v); filing a staged note instead\n", o.Relation.IDs, o.Err)
+		}
+	}
+	if len(failed) > 0 {
+		fn, err := garden.ProposeRelations(st, project, existing, failed, titles)
+		rn += fn
+		if err != nil {
+			fmt.Fprintf(stdout, "%v (%d proposals filed before the failure; the report above is complete)\n", err, n+rn+cn)
+			return 1
+		}
+	}
+	fmt.Fprintf(stdout, "%s %d proposals filed as staged notes from the gardener (see 'ctx review')", garden.Headline(res.Verdicts), n+rn+cn)
+	if rn+cn > 0 {
+		fmt.Fprintf(stdout, ", %d of them about duplicates or contradictions between entries, %d about regression protection", rn, cn)
+	}
+	fmt.Fprintln(stdout)
+	if opened+kept > 0 {
+		fmt.Fprintf(stdout, "%d contradictions opened as threads, %d already dealt with\n", opened, kept)
 	}
 	return 0
 }
