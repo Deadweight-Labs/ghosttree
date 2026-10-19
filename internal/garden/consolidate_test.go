@@ -359,11 +359,11 @@ func (f *fakeThreads) setState(id int64, state string, archived bool) {
 
 func contradiction() (Relation, map[int64]Entry) {
 	known := map[int64]Entry{
-		12: {ID: 12, Type: "decision", Title: "Dienst läuft auf orax", Body: "Der Dienst läuft auf orax und nirgends sonst."},
-		15: {ID: 15, Type: "pitfall", Title: "Dienst läuft auf apps-vm", Body: "Der Dienst läuft auf apps-vm."},
+		12: {ID: 12, Type: "decision", Title: "Dienst läuft auf server-a", Body: "Der Dienst läuft auf server-a und nirgends sonst."},
+		15: {ID: 15, Type: "pitfall", Title: "Dienst läuft auf server-b", Body: "Der Dienst läuft auf server-b."},
 	}
 	return Relation{Kind: Contradiction, IDs: []int64{12, 15}, Reason: "Zwei Orte.",
-		Quotes: map[int64]string{12: "läuft auf orax und nirgends sonst", 15: "läuft auf apps-vm"}}, known
+		Quotes: map[int64]string{12: "läuft auf server-a und nirgends sonst", 15: "läuft auf server-b"}}, known
 }
 
 const testProject = "github.com/o/r"
@@ -376,7 +376,7 @@ func TestContradictionOpensOneThreadLinkedToBothWithTheQuotes(t *testing.T) {
 		t.Fatalf("outcome = %+v", out)
 	}
 	th := f.threads[0]
-	if th.Project != testProject || !strings.HasPrefix(th.Title, "[Gärtner] Widersprechen sich #12 „Dienst läuft auf orax“ und #15") || !strings.HasSuffix(th.Title, "?") {
+	if th.Project != testProject || !strings.HasPrefix(th.Title, "[Gärtner] Widersprechen sich #12 „Dienst läuft auf server-a“ und #15") || !strings.HasSuffix(th.Title, "?") {
 		t.Errorf("title = %q", th.Title)
 	}
 	if th.Link == nil || th.Link.Kind != "knowledge" || th.Link.ID != "12" {
@@ -396,7 +396,7 @@ func TestContradictionOpensOneThreadLinkedToBothWithTheQuotes(t *testing.T) {
 	if p.DestinationKind != store.DestinationDiscussion || p.DestinationID != store.ThreadDestinationID(1) || p.SenderExternalID != ThreadAgentID(testProject) {
 		t.Errorf("post = %+v", p)
 	}
-	for _, want := range []string{"Herkunft gardener, nicht bestätigt", `Zitat: "läuft auf orax und nirgends sonst"`, `Zitat: "läuft auf apps-vm"`, "Begründung: Zwei Orte."} {
+	for _, want := range []string{"Herkunft gardener, nicht bestätigt", `Zitat: "läuft auf server-a und nirgends sonst"`, `Zitat: "läuft auf server-b"`, "Begründung: Zwei Orte."} {
 		if !strings.Contains(p.Body, want) {
 			t.Errorf("first post lacks %q:\n%s", want, p.Body)
 		}

@@ -153,7 +153,7 @@ func newProvenanceFixture(t *testing.T) *provenanceFixture {
 	rec := &writeRecorder{inner: server.New(st)}
 	srv := httptest.NewServer(rec)
 	t.Cleanup(srv.Close)
-	cfg := config.Config{ServerURL: srv.URL, Token: token, Machine: "orax"}
+	cfg := config.Config{ServerURL: srv.URL, Token: token, Machine: "server-a"}
 	if err := config.Save(cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -191,8 +191,8 @@ func newProvenanceFixture(t *testing.T) *provenanceFixture {
 		}
 		fx.ids[name] = id
 	}
-	put("where_a", "decision", "Der Dienst läuft auf orax", "Siehe cmd/x.go. Der Dienst läuft auf orax und nirgends sonst.")
-	put("where_b", "pitfall", "Der Dienst läuft auf apps-vm", "Siehe cmd/x.go. Der Dienst läuft auf apps-vm, nicht auf orax.")
+	put("where_a", "decision", "Der Dienst läuft auf server-a", "Siehe cmd/x.go. Der Dienst läuft auf server-a und nirgends sonst.")
+	put("where_b", "pitfall", "Der Dienst läuft auf server-b", "Siehe cmd/x.go. Der Dienst läuft auf server-b, nicht auf server-a.")
 	put("dup_a", "pitfall", "Die Datenbank liegt in einer Datei", "Siehe cmd/x.go. Die Datenbank liegt in einer einzigen SQLite-Datei.")
 	put("dup_b", "pitfall", "Eine Datei hält die Datenbank", "Siehe cmd/x.go. Die Datenbank liegt in einer einzigen SQLite-Datei, mehr gibt es nicht.")
 	put("tested", "pitfall", "Ein Pitfall mit Test", "Siehe cmd/x.go. Der Fall ist durch einen Test belegt.")
@@ -221,7 +221,7 @@ func newProvenanceFixture(t *testing.T) *provenanceFixture {
 		"verdicts": verdicts,
 		"relations": []map[string]any{
 			{"kind": "contradiction", "ids": []int64{ids["where_a"], ids["where_b"]}, "reason": "Zwei Orte für denselben Dienst.",
-				"quotes": []map[string]any{quote(ids["where_a"], "Der Dienst läuft auf orax und nirgends sonst"), quote(ids["where_b"], "Der Dienst läuft auf apps-vm, nicht auf orax")}},
+				"quotes": []map[string]any{quote(ids["where_a"], "Der Dienst läuft auf server-a und nirgends sonst"), quote(ids["where_b"], "Der Dienst läuft auf server-b, nicht auf server-a")}},
 			{"kind": "duplicate", "ids": []int64{ids["dup_a"], ids["dup_b"]}, "reason": "Beide sagen, dass die Datenbank in einer Datei liegt.",
 				"quotes": []map[string]any{quote(ids["dup_a"], "Die Datenbank liegt in einer einzigen SQLite-Datei"), quote(ids["dup_b"], "Die Datenbank liegt in einer einzigen SQLite-Datei, mehr gibt es nicht")}},
 		},
@@ -378,7 +378,7 @@ func TestGardenerWritesOnlyMarkedStagedProposalsAndThreadsAndNothingThatDecides(
 		t.Fatalf("no first post: %v", err)
 	}
 	if sender != garden.ThreadAgentID(provenanceProject) || postAuthor != "person:2" || !strings.Contains(post, "Herkunft gardener, nicht bestätigt") ||
-		!strings.Contains(post, `Zitat: "Der Dienst läuft auf orax und nirgends sonst"`) {
+		!strings.Contains(post, `Zitat: "Der Dienst läuft auf server-a und nirgends sonst"`) {
 		t.Errorf("first post by %s (%s):\n%s", sender, postAuthor, post)
 	}
 	// Criteria and requests: untouched.
@@ -492,7 +492,7 @@ func TestOnlyTheGardenersAccountCanFileNotesThatLookLikeTheGardeners(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	alice := client.New(config.Config{ServerURL: fx.serverURL(), Token: aliceToken, Machine: "mainex"})
+	alice := client.New(config.Config{ServerURL: fx.serverURL(), Token: aliceToken, Machine: "laptop"})
 	forged := store.Knowledge{Type: "note", Title: "[Gärtner] Test vorhanden? #5: x", Body: "Test: cmd/x_test.go:TestHoldsX", Scope: scope.Axes{Project: provenanceProject},
 		Confidence: "staged", Origin: "distilled", Harness: "gardener", SessionRef: "gardener:regression:5:existing"}
 	if _, err := alice.Remember(forged, scope.Axes{Project: provenanceProject}); err == nil || !strings.Contains(err.Error(), "gardener_reserved") {

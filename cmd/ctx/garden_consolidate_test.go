@@ -61,12 +61,12 @@ func TestGardenAsksTheRegressionQuestionOnlyOfOpenPitfalls(t *testing.T) {
 func TestGardenFilesAContradictionAsANoteWhenItsThreadCannotBeOpened(t *testing.T) {
 	repo := gardenRepo(t)
 	st := &gardenFakeStore{threadErr: errors.New("refused"), entries: []store.Knowledge{
-		{ID: 1, Type: "pitfall", Title: "eins", Body: "siehe cmd/x.go, Dienst läuft auf orax", Status: "active", Confidence: "trusted", Scope: scope.Axes{Project: gardenProject}, ObservedAt: "2000-01-01T00:00:00Z"},
-		{ID: 2, Type: "decision", Title: "zwei", Body: "siehe cmd/x.go, Dienst läuft auf apps-vm", Status: "active", Confidence: "trusted", Scope: scope.Axes{Project: gardenProject}, ObservedAt: "2000-01-02T00:00:00Z"},
+		{ID: 1, Type: "pitfall", Title: "eins", Body: "siehe cmd/x.go, Dienst läuft auf server-a", Status: "active", Confidence: "trusted", Scope: scope.Axes{Project: gardenProject}, ObservedAt: "2000-01-01T00:00:00Z"},
+		{ID: 2, Type: "decision", Title: "zwei", Body: "siehe cmd/x.go, Dienst läuft auf server-b", Status: "active", Confidence: "trusted", Scope: scope.Axes{Project: gardenProject}, ObservedAt: "2000-01-02T00:00:00Z"},
 	}}
 	fr := &gardenFakeRunner{text: func(string) string {
 		return `{"verdicts":[{"id":1,"verdict":"holds","reason":"r"},{"id":2,"verdict":"holds","reason":"r"}],` +
-			`"relations":[{"kind":"contradiction","ids":[1,2],"reason":"Ort","quotes":[{"id":1,"text":"Dienst läuft auf orax"},{"id":2,"text":"Dienst läuft auf apps-vm"}]}]}`
+			`"relations":[{"kind":"contradiction","ids":[1,2],"reason":"Ort","quotes":[{"id":1,"text":"Dienst läuft auf server-a"},{"id":2,"text":"Dienst läuft auf server-b"}]}]}`
 	}}
 	opts := gardenOpts{Types: map[string]bool{"pitfall": true, "decision": true}, MaxUSD: 1, Propose: true, Sessions: 4, PerSession: 30, Turns: 30, Runner: fr}
 	var out bytes.Buffer
