@@ -91,6 +91,19 @@ hashed session identity under `$XDG_STATE_HOME/ghosttree/context-budget` (defaul
 `~/.local/state/ghosttree/context-budget`). Missing session identity or unreadable
 accounting state suppresses automatic context. Explicit retrieval still works.
 
+The context that arrives with a prompt (`UserPromptSubmit`) is picked from the
+words of the prompt, and it is deliberately rare. A word only counts if few
+knowledge entries name it and it is also unusual in your own recent session text
+(only sessions of your own account are counted, never anyone else's), so ordinary
+words of either language never fire. An entry arrives
+once per session: what the start-up briefing already carried, or an earlier prompt
+already brought, is not sent again, and another session gets it afresh. Each entry
+names the word that brought it (`(triggered by "word")`). Unconfirmed (staged)
+entries and the gardener's notes are never sent this way. For a very rare word
+that no entry covers, one hint line may point at a request or session you can read
+(`context_search` finds more); it follows the same visibility rules as search.
+`ctx usage --relevance --db <path>` replays archived prompts through the rule.
+
 Descriptions for removed paths stay active until a move is resolved or deletion
 is explicitly confirmed. Preview selected paths with `ctx ghost archive <path>`;
 archive them with `ctx ghost archive <path> --reason "why it was removed"

@@ -666,46 +666,12 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 		res.Knowledge = pa.KnowledgeViews(filterTo(ks, limit, func(k store.Knowledge) bool { return pa.CanSeeKnowledge(k) && pa.CanDeliverKnowledge(k) }))
 	}
 	if kind == "sessions" || kind == "all" {
-		dbFilter, viewFilter, fetchSessions := a.sessionFilters(filter, fetch)
-		// Mit Durchsetzung steht die lesbare Menge vor dem Rang fest: ein
-		// verborgener Treffer darf weder einen sichtbaren verdrängen noch
-		// verraten, wie viele es gibt (#2447). Das Limit gilt danach.
-		// Die Lese-Regel steckt als SQL in der Abfrage (TranscriptPrefilter): die
-		// Zeilenprüfung läuft nur über lesbare Kandidaten, und wer ohnehin alles
-		// in seinem Filter lesen darf, braucht keine. Der Volltext-MATCH selbst
-		// läuft über den ganzen Index, die Laufzeit hängt also von den Treffern
-		// verborgener Sessions mit ab.
-		var readable func(store.Session) bool
-		var pre store.SessionPrefilter
-		if a.st.AccessEnforced() {
-			fetchSessions = limit
-			pre = pa.TranscriptPrefilter()
-			if !pre.Exact || viewFilter.Machine != "" || viewFilter.Branch != "" {
-				readable = func(sess store.Session) bool {
-					return pa.CanSeeTranscript(sess) && pa.MatchesAxes(pa.MetaView(sess), viewFilter)
-				}
-			}
-		}
-		hits, err := a.st.SearchSessionsVisible(q, dbFilter, r.URL.Query().Get("exclude_session"), fetchSessions, readable, pre)
+		hits, err := a.searchSessions(pa, q, filter, r.URL.Query().Get("exclude_session"), limit, fetch)
 		if err != nil {
 			writeStoreError(w, http.StatusInternalServerError, err)
 			return
 		}
-		// Ein Treffer zeigt einen Ausschnitt des Transkripts: es gilt die Regel
-		// für Transkripte, nicht die für Metadaten.
-		res.Sessions = res.Sessions[:0]
-		for _, h := range hits {
-			if !pa.CanSeeTranscript(h.Session) {
-				continue
-			}
-			h.Session = pa.MetaView(h.Session)
-			if pa.MatchesAxes(h.Session, viewFilter) {
-				res.Sessions = append(res.Sessions, h)
-				if len(res.Sessions) >= limit {
-					break
-				}
-			}
-		}
+		res.Sessions = hits
 	}
 	if kind == "requests" || kind == "all" {
 		page, err := a.st.SearchRequests(a.requestFilter(r, requestdomain.SearchFilter{Query: q, Scope: scope.Axes{Project: filter.Project}, Limit: limit}))
@@ -720,6 +686,53 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 		a.noteRequestHits(r, page.Results)
 	}
 	writeJSON(w, 200, res)
+}
+
+// searchSessions is the session half of search: the hits the viewer may read,
+// cut to limit, each as the viewer sees it. It is a function of its own because
+// the hint of relevance delivery has to ask the same question with the same
+// rules, so that a hint can never name a session context_search would not show.
+func (a *api) searchSessions(pa *store.ProjectAccess, q string, filter scope.Axes, excludeSession string, limit, fetch int) ([]store.SessionHit, error) {
+	dbFilter, viewFilter, fetchSessions := a.sessionFilters(filter, fetch)
+	// Mit Durchsetzung steht die lesbare Menge vor dem Rang fest: ein
+	// verborgener Treffer darf weder einen sichtbaren verdrängen noch
+	// verraten, wie viele es gibt (#2447). Das Limit gilt danach.
+	// Die Lese-Regel steckt als SQL in der Abfrage (TranscriptPrefilter): die
+	// Zeilenprüfung läuft nur über lesbare Kandidaten, und wer ohnehin alles
+	// in seinem Filter lesen darf, braucht keine. Der Volltext-MATCH selbst
+	// läuft über den ganzen Index, die Laufzeit hängt also von den Treffern
+	// verborgener Sessions mit ab.
+	var readable func(store.Session) bool
+	var pre store.SessionPrefilter
+	if a.st.AccessEnforced() {
+		fetchSessions = limit
+		pre = pa.TranscriptPrefilter()
+		if !pre.Exact || viewFilter.Machine != "" || viewFilter.Branch != "" {
+			readable = func(sess store.Session) bool {
+				return pa.CanSeeTranscript(sess) && pa.MatchesAxes(pa.MetaView(sess), viewFilter)
+			}
+		}
+	}
+	hits, err := a.st.SearchSessionsVisible(q, dbFilter, excludeSession, fetchSessions, readable, pre)
+	if err != nil {
+		return nil, err
+	}
+	// Ein Treffer zeigt einen Ausschnitt des Transkripts: es gilt die Regel
+	// für Transkripte, nicht die für Metadaten.
+	out := []store.SessionHit{}
+	for _, h := range hits {
+		if !pa.CanSeeTranscript(h.Session) {
+			continue
+		}
+		h.Session = pa.MetaView(h.Session)
+		if pa.MatchesAxes(h.Session, viewFilter) {
+			out = append(out, h)
+			if len(out) >= limit {
+				break
+			}
+		}
+	}
+	return out, nil
 }
 
 const defaultBudget = 4000
@@ -747,9 +760,14 @@ func (a *api) bootstrap(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	body, shown := renderBootstrapShown(entries, intParam(r, "budget", defaultBudget), false)
+	// Recorded before the answer goes out, so the first prompt of the session
+	// cannot be handled ahead of it. A failed write costs only a possible repeat
+	// later, and the briefing is not worth failing for that.
+	a.rememberDelivered(r, store.DeliveredByBootstrap, shown)
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 	w.WriteHeader(200)
-	fmt.Fprint(w, RenderBootstrap(entries, intParam(r, "budget", defaultBudget)))
+	fmt.Fprint(w, body)
 	if openRequests > 0 {
 		plural := "request"
 		if openRequests != 1 {
@@ -791,40 +809,6 @@ func (a *api) interrupted(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, threads)
 }
 
-// maxRelevantEntries caps what one prompt may pull in. Three is enough to
-// answer a sentence and few enough that a wrong guess stays cheap.
-const maxRelevantEntries = 3
-
-// relevant answers with knowledge the text gives a reason to deliver, or with
-// nothing at all — which is the usual case, and is an empty body rather than an
-// error.
-func (a *api) relevant(w http.ResponseWriter, r *http.Request) {
-	limit := intParam(r, "limit", maxRelevantEntries)
-	if limit > maxRelevantEntries {
-		limit = maxRelevantEntries
-	}
-	pa := a.access(r)
-	pa.Filtered()
-	entries, err := a.st.RelevantKnowledge(r.URL.Query().Get("q"), axesFromQuery(r), a.overfetch(limit), a.access(r).Viewer())
-	if err != nil {
-		writeStoreError(w, http.StatusInternalServerError, err)
-		return
-	}
-	entries = filterTo(entries, limit, func(k store.Knowledge) bool { return pa.CanSeeKnowledge(k) && pa.CanDeliverKnowledge(k) })
-	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
-	w.WriteHeader(200)
-	if len(entries) == 0 {
-		return
-	}
-	// A different heading from the bootstrap on purpose. This arrived because of
-	// what was just said, and a reader who cannot tell the two apart cannot judge
-	// why it is in front of them.
-	fmt.Fprint(w, "## Possibly relevant to what you just said (ghosttree)\n\n")
-	for _, k := range entries {
-		fmt.Fprintf(w, "- [%s|%s] %s — %s\n", k.Type, scopeLabel(k.Scope), k.Title, truncate(oneLine(k.Body), 400))
-	}
-}
-
 // renderBootstrap builds the auto-injected context package. Binding
 // instructions are always complete and first; other confirmed knowledge comes
 // before unconfirmed knowledge so a tight budget cuts uncertain material first.
@@ -844,11 +828,20 @@ func RenderBootstrapPreview(entries []store.Knowledge, budget int) string {
 const keepCurrentHint = "Before writing, search; if a known state changed, supersede the old entry (context_remember supersedes) instead of adding a follow-up.\n"
 
 func renderBootstrap(entries []store.Knowledge, budget int, includeStaged bool) string {
+	out, _ := renderBootstrapShown(entries, budget, includeStaged)
+	return out
+}
+
+// renderBootstrapShown renders the package and also returns which entries it
+// actually carries. The budget cuts entries off, and an entry that was cut was
+// not delivered: the delivery memory must not claim it was, or relevance
+// delivery would never offer it either.
+func renderBootstrapShown(entries []store.Knowledge, budget int, includeStaged bool) (string, []int64) {
 	if budget <= 0 {
 		budget = defaultBudget
 	}
 	if len(entries) == 0 {
-		return ""
+		return "", nil
 	}
 	var instructions, confirmed, staged []store.Knowledge
 	held := map[string]int{}
@@ -866,6 +859,7 @@ func renderBootstrap(entries []store.Knowledge, budget int, includeStaged bool) 
 		}
 	}
 	var b strings.Builder
+	var shown []int64
 	b.WriteString("## Known context (ghosttree)\n")
 	b.WriteString(keepCurrentHint)
 	if len(instructions) > 0 {
@@ -876,6 +870,7 @@ func renderBootstrap(entries []store.Knowledge, budget int, includeStaged bool) 
 				label += " | " + gate
 			}
 			fmt.Fprintf(&b, "- [%s] %s — %s\n", label, k.Title, oneLine(k.Body))
+			shown = append(shown, k.ID)
 		}
 	}
 	// Instructions do not compete for the context budget. Preserve the same
@@ -896,8 +891,8 @@ func renderBootstrap(entries []store.Knowledge, budget int, includeStaged bool) 
 	// The two passes exist for the reserve, not for the reader: one shared set
 	// of headings keeps them from looking like two separate sections.
 	headings := map[string]bool{}
-	truncated := writeGroups(&b, broad, broadLimit, "", headings)
-	truncated = writeGroups(&b, projectScoped, contentLimit, "", headings) || truncated
+	truncated := writeGroups(&b, broad, broadLimit, "", headings, &shown)
+	truncated = writeGroups(&b, projectScoped, contentLimit, "", headings, &shown) || truncated
 	if len(staged) > 0 && !truncated {
 		truncated = writePreviewGroup(&b, staged, contentLimit)
 	}
@@ -905,7 +900,7 @@ func renderBootstrap(entries []store.Knowledge, budget int, includeStaged bool) 
 		b.WriteString("…(truncated, use context_search for more)\n")
 	}
 	writeHeldIndex(&b, held)
-	return b.String()
+	return b.String(), shown
 }
 
 // writeHeldIndex names what was deliberately not sent. Withholding silently
@@ -1004,8 +999,8 @@ func splitByScopeBreadth(entries []store.Knowledge) (broad, projectScoped []stor
 // writeGroups appends entries grouped by type and reports whether the budget
 // ran out. header is written lazily, so an empty group prints nothing.
 // headings is shared across calls so a type printed by one pass is not printed
-// again by the next.
-func writeGroups(b *strings.Builder, entries []store.Knowledge, budget int, header string, headings map[string]bool) bool {
+// again by the next. shown collects the id of every entry that was written.
+func writeGroups(b *strings.Builder, entries []store.Knowledge, budget int, header string, headings map[string]bool, shown *[]int64) bool {
 	if len(entries) == 0 {
 		return false
 	}
@@ -1038,6 +1033,7 @@ func writeGroups(b *strings.Builder, entries []store.Knowledge, budget int, head
 				return true
 			}
 			b.WriteString(line)
+			*shown = append(*shown, k.ID)
 			wroteHeader, headings[t] = true, true
 		}
 	}
