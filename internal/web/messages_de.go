@@ -188,6 +188,8 @@ var messagesDE = map[string]string{
 	"review.garden.replaced":            "Wird ersetzt:",
 	"review.garden.record_cover":        "Als abgesichert vermerken",
 	"review.garden.record_none":         "Als nicht testbar vermerken",
+	"review.garden.about":               "Betrifft:",
+	"review.garden.unverified":          "Herkunft nicht bestätigt: keine Aktion.",
 	"review.select":                     "Auswählen",
 	"review.bulk.selected":              "%d ausgewählt",
 	"review.bulk.some":                  "Auswahl",

@@ -14,6 +14,37 @@ import (
 
 func idStr(id int64) string { return strconv.FormatInt(id, 10) }
 
+// gardenActEnv is the review environment with an account for the gardener, which
+// the server names as the gardener's, as `ctx serve` does with
+// GHOSTTREE_GARDENER_ACCOUNT. The second result is its account number.
+func gardenActEnv(t *testing.T) (shellEnv, int64) {
+	t.Helper()
+	e := ovEnv(t)
+	if _, err := e.St.AddPerson("gardener"); err != nil {
+		t.Fatal(err)
+	}
+	e.St.SetGardenerAccount("gardener")
+	id := e.St.GardenerAccountID()
+	if id == 0 {
+		t.Fatal("the gardener's account is not found")
+	}
+	return e, id
+}
+
+// gardenerWrote files a note the way the server stores what the gardener's
+// account writes: harness and reference as the note brings them, the author
+// the account number of the token.
+func gardenerWrote(t *testing.T, st *store.Store, note store.Knowledge, author int64) int64 {
+	t.Helper()
+	note.Person = "gardener"
+	note.AuthorID = author
+	got, err := st.InsertKnowledge(note)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
 // gardenEntry files an entry of the project the way a person or an agent would.
 func gardenEntry(t *testing.T, st *store.Store, project, typ, title, confidence string) int64 {
 	t.Helper()
@@ -38,12 +69,7 @@ func gardenDuplicateNote(t *testing.T, st *store.Store, project string, ids ...i
 		titles[id], quotes[id] = k.Title, "Der Dienst läuft auf dem Server"
 	}
 	note := garden.RelationProposal(project, garden.Relation{Kind: garden.Duplicate, IDs: ids, Reason: "Beide sagen dasselbe.", Quotes: quotes}, titles)
-	note.Person = "gardener"
-	got, err := st.InsertKnowledge(note)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return got
+	return gardenerWrote(t, st, note, st.GardenerAccountID())
 }
 
 // gardenCoverNote files the note the gardener writes for the regression question.
@@ -54,13 +80,7 @@ func gardenCoverNote(t *testing.T, st *store.Store, project string, pitfall int6
 		t.Fatal(err)
 	}
 	c.Entry = garden.Entry{ID: pitfall, Title: k.Title}
-	note := garden.CoverProposal(project, c)
-	note.Person = "gardener"
-	got, err := st.InsertKnowledge(note)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return got
+	return gardenerWrote(t, st, garden.CoverProposal(project, c), st.GardenerAccountID())
 }
 
 func postGardenAction(t *testing.T, e shellEnv, c *http.Client, path string) int {
@@ -105,7 +125,7 @@ func TestGardenRefsMatchWhatTheWebReads(t *testing.T) {
 }
 
 func TestDuplicateNoteOffersMergeOnlyToWhoMayDoWhatItDoes(t *testing.T) {
-	e := ovEnv(t)
+	e, _ := gardenActEnv(t)
 	older := gardenEntry(t, e.St, shellProject, "pitfall", "Dienst alt", "trusted")
 	newer := gardenEntry(t, e.St, shellProject, "pitfall", "Dienst neu", "trusted")
 	note := gardenDuplicateNote(t, e.St, shellProject, older, newer)
@@ -142,7 +162,7 @@ func TestDuplicateNoteOffersMergeOnlyToWhoMayDoWhatItDoes(t *testing.T) {
 }
 
 func TestMergeSupersedesTheOlderEntryByTheNewerAndClosesTheNote(t *testing.T) {
-	e := ovEnv(t)
+	e, _ := gardenActEnv(t)
 	older := gardenEntry(t, e.St, shellProject, "pitfall", "Dienst alt", "trusted")
 	newer := gardenEntry(t, e.St, shellProject, "pitfall", "Dienst neu", "verified")
 	note := gardenDuplicateNote(t, e.St, shellProject, older, newer)
@@ -185,7 +205,7 @@ func TestMergeSupersedesTheOlderEntryByTheNewerAndClosesTheNote(t *testing.T) {
 }
 
 func TestMergeKeepsTheNewestOfSeveralDuplicates(t *testing.T) {
-	e := ovEnv(t)
+	e, _ := gardenActEnv(t)
 	a := gardenEntry(t, e.St, shellProject, "pitfall", "Eins", "trusted")
 	b := gardenEntry(t, e.St, shellProject, "pitfall", "Zwei", "trusted")
 	c := gardenEntry(t, e.St, shellProject, "pitfall", "Drei", "trusted")
@@ -201,7 +221,7 @@ func TestMergeKeepsTheNewestOfSeveralDuplicates(t *testing.T) {
 }
 
 func TestMergeNeedsEveryRightOfSupersedeAndAPerson(t *testing.T) {
-	e := ovEnv(t)
+	e, _ := gardenActEnv(t)
 	older := gardenEntry(t, e.St, shellProject, "pitfall", "Dienst alt", "trusted")
 	newer := gardenEntry(t, e.St, shellProject, "pitfall", "Dienst neu", "trusted")
 	note := gardenDuplicateNote(t, e.St, shellProject, older, newer)
@@ -246,7 +266,7 @@ func TestMergeNeedsEveryRightOfSupersedeAndAPerson(t *testing.T) {
 }
 
 func TestMergeRefusesWhatCannotBeSuperseded(t *testing.T) {
-	e := ovEnv(t)
+	e, _ := gardenActEnv(t)
 	post := func(note int64) int {
 		return postGardenAction(t, e, e.Lead, "/ui/review/"+idStr(note)+"/merge")
 	}
@@ -293,7 +313,7 @@ func TestMergeRefusesWhatCannotBeSuperseded(t *testing.T) {
 }
 
 func TestRegressionNoteRecordsTheVerdictOnlyOnConfirmation(t *testing.T) {
-	e := ovEnv(t)
+	e, _ := gardenActEnv(t)
 	covered := gardenEntry(t, e.St, shellProject, "pitfall", "Pitfall mit Test", "trusted")
 	tool := gardenEntry(t, e.St, shellProject, "pitfall", "Pitfall über ein Werkzeug", "trusted")
 	missing := gardenEntry(t, e.St, shellProject, "pitfall", "Pitfall ohne Test", "trusted")
@@ -369,7 +389,7 @@ func TestRegressionNoteRecordsTheVerdictOnlyOnConfirmation(t *testing.T) {
 }
 
 func TestRegressionNoteDoesNotOverwriteAVerdictSomebodyGaveMeanwhile(t *testing.T) {
-	e := ovEnv(t)
+	e, _ := gardenActEnv(t)
 	p := gardenEntry(t, e.St, shellProject, "pitfall", "Pitfall", "trusted")
 	note := gardenCoverNote(t, e.St, shellProject, p, garden.Cover{Kind: garden.CoverExisting, File: "a/b_test.go", Test: "TestB"})
 	if err := e.St.SetRegressionCover(p, "uncovered", ""); err != nil {
@@ -385,7 +405,7 @@ func TestRegressionNoteDoesNotOverwriteAVerdictSomebodyGaveMeanwhile(t *testing.
 
 // A note about a project the viewer cannot read never reaches the page or an action.
 func TestGardenActionsStayInsideTheViewersProjects(t *testing.T) {
-	e := ovEnv(t)
+	e, _ := gardenActEnv(t)
 	older := gardenEntry(t, e.St, shellHiddenProject, "pitfall", "SECRET-ALT", "trusted")
 	newer := gardenEntry(t, e.St, shellHiddenProject, "pitfall", "SECRET-NEU", "trusted")
 	note := gardenDuplicateNote(t, e.St, shellHiddenProject, older, newer)

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -25,6 +27,18 @@ import (
 // Both close the note as confirmed by the person. Nothing here is reachable
 // without a person: the gardener has no call for it, and the page offers the
 // button only to someone who may do what it does.
+//
+// A note takes its target from its session reference, and the regression note
+// also the test from its text, so the page does not act on anything that merely
+// looks like a note of the gardener. It acts only when the note was written by
+// the account the server names as the gardener's (store.WrittenByGardener; the
+// API refuses everyone else the harness), has not been edited since, and when the
+// entries its title names are the ones its reference names. The card shows
+// the entries from the reference, with title and link, never the ones the title
+// claims. The test of a regression note is recorded as the note holds it: the
+// server has no checkout to check it against, so it is held to a strict shape,
+// shown whole before the button, and bound to a note nobody has changed; the
+// request that presses the button carries no test of its own.
 
 const (
 	// The session references the gardener writes (garden.RelationRef and
@@ -42,6 +56,84 @@ const (
 // errNothingToDo: the note no longer asks for anything (the entries changed, or
 // somebody was quicker).
 var errNothingToDo = errors.New("nothing to change")
+
+// errNotGardens: the note is not what it says it is, and no action is taken on it.
+var errNotGardens = errors.New("the note does not come from the gardener")
+
+// gardenTestRe is the shape of the test a regression note may name: a relative
+// file path and a function name, joined by a colon. No spaces, no "..", nothing
+// that is not part of a path or an identifier.
+var gardenTestRe = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.\-]*(?:/[A-Za-z0-9_][A-Za-z0-9_.\-]*)*:[A-Za-z_][A-Za-z0-9_]{1,119}$`)
+
+// validTestID: a test as the gardener names it, "path/to/x_test.go:TestName".
+func validTestID(t string) bool {
+	if len(t) > 300 || !gardenTestRe.MatchString(t) {
+		return false
+	}
+	file, _, _ := strings.Cut(t, ":")
+	for _, seg := range strings.Split(file, "/") {
+		if seg == ".." || seg == ".git" || seg == "." {
+			return false
+		}
+	}
+	return true
+}
+
+// titleIDs reads the entry numbers a note's title names: "[Gärtner] Duplikat?
+// #12 und #15: Titel" gives 12 and 15.
+func titleIDs(title string) ([]int64, bool) {
+	rest := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(title), "[Gärtner]"))
+	_, after, ok := strings.Cut(rest, " #")
+	if !ok {
+		return nil, false
+	}
+	list, _, ok := strings.Cut(after, ": ")
+	if !ok {
+		return nil, false
+	}
+	var ids []int64
+	for _, part := range strings.Split(list, " und #") {
+		id, err := strconv.ParseInt(part, 10, 64)
+		if err != nil || id < 1 {
+			return nil, false
+		}
+		ids = append(ids, id)
+	}
+	return ids, true
+}
+
+// sameIDs: the same set of entry numbers, in any order.
+func sameIDs(a, b []int64) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	x, y := slices.Clone(a), slices.Clone(b)
+	slices.Sort(x)
+	slices.Sort(y)
+	return slices.Equal(x, y)
+}
+
+// gardenerVouches says whether a note is the gardener's: harness and reference
+// are only a claim, so the account that wrote it has to be the one the server
+// names as the gardener's, and nobody may have changed it since (a note is
+// archived before every change, so a note with a history was edited). A failure
+// to look is returned as it is.
+func (a *app) gardenerVouches(note store.Knowledge, ids []int64) error {
+	if note.Harness != gardenerHarness || !a.store.WrittenByGardener(note) {
+		return errNotGardens
+	}
+	if got, ok := titleIDs(note.Title); !ok || !sameIDs(got, ids) {
+		return errNotGardens
+	}
+	history, err := a.store.KnowledgeHistory(note.ID)
+	if err != nil {
+		return err
+	}
+	if len(history) > 0 {
+		return errNotGardens
+	}
+	return nil
+}
 
 // parseRelationRef reads "gardener:relation:<kind>:<id>-<id>".
 func parseRelationRef(ref string) (kind string, ids []int64, ok bool) {
@@ -105,7 +197,8 @@ func gardenSketchLines(body string) []string {
 	return out
 }
 
-// openGardenNote: a note of the gardener that nobody has decided yet.
+// openGardenNote: a note that claims to be the gardener's and that nobody has
+// decided yet. That is only the claim; gardenerVouches checks the rest.
 func openGardenNote(k store.Knowledge) bool {
 	return k.Harness == gardenerHarness && k.Confidence == "staged" && k.Status == "active"
 }
@@ -156,6 +249,9 @@ func (a *app) planMerge(pa *store.ProjectAccess, note store.Knowledge) (mergePla
 	if !ok || kind != gardenKindDuplicate || len(ids) < 2 || !openGardenNote(note) {
 		return p, errNothingToDo
 	}
+	if err := a.gardenerVouches(note, ids); err != nil {
+		return p, err
+	}
 	var entries []store.Knowledge
 	for _, id := range ids {
 		k, err := a.readEntry(pa, id)
@@ -205,11 +301,14 @@ func (a *app) planCover(pa *store.ProjectAccess, note store.Knowledge) (coverPla
 	if !ok || !openGardenNote(note) {
 		return p, errNothingToDo
 	}
+	if err := a.gardenerVouches(note, []int64{id}); err != nil {
+		return p, err
+	}
 	switch kind {
 	case gardenKindExisting:
 		p.state, p.test = "covered", gardenNoteLine(note.Body, "Test")
-		if p.test == "" || strings.ContainsAny(p.test, " \t") {
-			return p, errNothingToDo
+		if !validTestID(p.test) {
+			return p, errNotGardens
 		}
 	case gardenKindUntestable:
 		p.state = "not_applicable"
@@ -238,7 +337,8 @@ type gardenAct struct {
 	Filter      string
 }
 
-// gardenRef is an entry a note speaks of, with what happens to it.
+// gardenRef is an entry a note speaks of, with what happens to it. It is always
+// an entry the reference of the note names, as the viewer may read it.
 type gardenRef struct {
 	Role, Text, Href string
 }
@@ -252,9 +352,14 @@ func entryRef(pa *store.ProjectAccess, role string, k store.Knowledge) gardenRef
 // may take it. A note that has an action does not offer plain approval, which
 // would confirm the note and change nothing.
 func (a *app) decorateGardenRow(l lang, pa *store.ProjectAccess, k store.Knowledge, row *gardenRow) {
-	if kind, _, ok := parseRelationRef(k.SessionRef); ok && kind == gardenKindDuplicate {
+	if kind, ids, ok := parseRelationRef(k.SessionRef); ok && kind == gardenKindDuplicate {
 		row.CanApprove = false
 		plan, err := a.planMerge(pa, k)
+		if errors.Is(err, errNotGardens) {
+			row.Warn = l.msg("review.garden.unverified")
+			a.showTargets(l, pa, ids, row)
+			return
+		}
 		if err != nil {
 			return
 		}
@@ -265,29 +370,52 @@ func (a *app) decorateGardenRow(l lang, pa *store.ProjectAccess, k store.Knowled
 		row.Act = &gardenAct{Path: "merge", Label: l.msg("review.garden.merge"), Token: row.Token, Filter: row.Filter}
 		return
 	}
-	_, kind, ok := parseRegressionRef(k.SessionRef)
+	id, kind, ok := parseRegressionRef(k.SessionRef)
 	if !ok {
 		return
 	}
+	// The pitfall the reference names, whatever the title says.
+	a.showTargets(l, pa, []int64{id}, row)
 	switch kind {
 	case gardenKindSketch:
 		row.Lines = gardenSketchLines(k.Body)
 		if t := gardenNoteLine(k.Body, "Test"); t != "" {
 			row.Lines = append([]string{t}, row.Lines...)
 		}
+		if err := a.gardenerVouches(k, []int64{id}); errors.Is(err, errNotGardens) {
+			row.Warn = l.msg("review.garden.unverified")
+		}
 	case gardenKindExisting, gardenKindUntestable:
 		row.CanApprove = false
 		if t := gardenNoteLine(k.Body, "Test"); t != "" {
 			row.Lines = []string{t}
 		}
-		if _, err := a.planCover(pa, k); err != nil {
+		plan, err := a.planCover(pa, k)
+		if errors.Is(err, errNotGardens) {
+			row.Warn = l.msg("review.garden.unverified")
+			return
+		}
+		if err != nil {
 			return
 		}
 		label := l.msg("review.garden.record_cover")
+		row.Lines = nil
 		if kind == gardenKindUntestable {
 			label = l.msg("review.garden.record_none")
+		} else {
+			row.Lines = []string{plan.test}
 		}
 		row.Act = &gardenAct{Path: "cover", Label: label, Token: row.Token, Filter: row.Filter}
+	}
+}
+
+// showTargets puts the entries a note's reference names on its card, with title
+// and link, as far as the viewer may read them.
+func (a *app) showTargets(l lang, pa *store.ProjectAccess, ids []int64, row *gardenRow) {
+	for _, id := range ids {
+		if k, err := a.readEntry(pa, id); err == nil {
+			row.Refs = append(row.Refs, entryRef(pa, l.msg("review.garden.about"), k))
+		}
 	}
 }
 
@@ -298,6 +426,8 @@ func (a *app) refuseGardenAction(w http.ResponseWriter, r *http.Request, err err
 		return false
 	case errors.Is(err, errNothingToDo):
 		http.Error(w, "nothing to change", http.StatusConflict)
+	case errors.Is(err, errNotGardens):
+		http.Error(w, "forbidden", http.StatusForbidden)
 	case errors.Is(err, store.ErrAccessForbidden), errors.Is(err, store.ErrAccessNotFound):
 		a.accessDenied(w, r, err)
 	default:

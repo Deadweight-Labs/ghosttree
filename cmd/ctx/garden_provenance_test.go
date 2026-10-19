@@ -90,6 +90,7 @@ var allowedGardenWrites = regexp.MustCompile(`^POST /api/(knowledge|coord/agents
 
 type provenanceFixture struct {
 	t        *testing.T
+	srv      *httptest.Server
 	st       *store.Store
 	rec      *writeRecorder
 	repo     *garden.Repo
@@ -139,6 +140,9 @@ func newProvenanceFixture(t *testing.T) *provenanceFixture {
 		t.Fatal(err)
 	}
 	st.SetAccessMode(store.AccessMode{Enforce: true})
+	// The server names the gardener's account, as GHOSTTREE_GARDENER_ACCOUNT does
+	// for ctx serve; without it the server refuses everything of the gardener's.
+	st.SetGardenerAccount("gardener")
 	token, _, err := st.CreateToken("gardener", store.TokenSpec{Label: "garden"})
 	if err != nil {
 		t.Fatal(err)
@@ -176,7 +180,7 @@ func newProvenanceFixture(t *testing.T) *provenanceFixture {
 		t.Fatal(err)
 	}
 
-	fx := &provenanceFixture{t: t, st: st, rec: rec, repo: repo, dir: dir, ids: map[string]int64{}, gardener: client.New(cfg)}
+	fx := &provenanceFixture{t: t, srv: srv, st: st, rec: rec, repo: repo, dir: dir, ids: map[string]int64{}, gardener: client.New(cfg)}
 	put := func(name, typ, title, body string) {
 		id, err := st.InsertKnowledge(store.Knowledge{Type: typ, Title: title, Body: body, Scope: scope.Axes{Project: provenanceProject},
 			Person: "alice", Confidence: "trusted", ObservedAt: "2026-01-01T00:00:00Z"})
@@ -475,3 +479,45 @@ func TestGardenerAccountCannotTakeTheStepsThatArePeoplesOnTheServer(t *testing.T
 		}
 	}
 }
+
+// (a), from the server's side: the marks of the gardener are the gardener's alone.
+// The account of a person, an owner included, cannot file a note that looks like
+// the gardener's, with the real client and the real server; and the gardener run
+// of an installation that has not named the account is refused at its first note.
+func TestOnlyTheGardenersAccountCanFileNotesThatLookLikeTheGardeners(t *testing.T) {
+	fx := newProvenanceFixture(t)
+	aliceToken, _, err := fx.st.CreateToken("alice", store.TokenSpec{Label: "t"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	alice := client.New(config.Config{ServerURL: fx.serverURL(), Token: aliceToken, Machine: "mainex"})
+	forged := store.Knowledge{Type: "note", Title: "[Gärtner] Test vorhanden? #5: x", Body: "Test: cmd/x_test.go:TestHoldsX", Scope: scope.Axes{Project: provenanceProject},
+		Confidence: "staged", Origin: "distilled", Harness: "gardener", SessionRef: "gardener:regression:5:existing"}
+	if _, err := alice.Remember(forged, scope.Axes{Project: provenanceProject}); err == nil || !strings.Contains(err.Error(), "gardener_reserved") {
+		t.Errorf("the owner filed a note that looks like the gardener's: %v", err)
+	}
+	if _, err := fx.gardener.Remember(forged, scope.Axes{Project: provenanceProject}); err != nil {
+		t.Errorf("the gardener's own account is refused: %v", err)
+	}
+
+	// The same run, on a server that names no gardener account: the first proposal is refused,
+	// and nothing is filed as the gardener's.
+	fx2 := newProvenanceFixture(t)
+	fx2.st.SetGardenerAccount("")
+	var out bytes.Buffer
+	args := []string{"check-knowledge", "--project", provenanceProject, "--repo", fx2.repo.Root, "--claude", fx2.claude,
+		"--claude-dir", filepath.Join(fx2.dir, "sessions"), "--sessions", "1", "--propose", "--no-mcp"}
+	if code := cmdGarden(args, &out); code == 0 {
+		t.Errorf("a run without a named gardener account went through:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "gardener_reserved") {
+		t.Errorf("the refusal is not shown:\n%s", out.String())
+	}
+	for _, k := range fx2.knowledge() {
+		if k.Harness == "gardener" {
+			t.Errorf("an entry of the gardener's was filed: %+v", k)
+		}
+	}
+}
+
+func (fx *provenanceFixture) serverURL() string { return fx.srv.URL }

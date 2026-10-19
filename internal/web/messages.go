@@ -187,6 +187,8 @@ var messages = map[string]string{
 	"review.garden.replaced":            "Replaced:",
 	"review.garden.record_cover":        "Record as covered",
 	"review.garden.record_none":         "Record as not testable",
+	"review.garden.about":               "Concerns:",
+	"review.garden.unverified":          "Not vouched for as the gardener's: no action.",
 	"review.select":                     "Select",
 	"review.bulk.selected":              "%d selected",
 	"review.bulk.some":                  "Selection",

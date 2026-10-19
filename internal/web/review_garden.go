@@ -36,6 +36,9 @@ type gardenRow struct {
 	Lines []string
 	Refs  []gardenRef
 	Act   *gardenAct
+	// Warn says a note claims to be the gardener's and is not vouched for: no
+	// action is offered on it.
+	Warn string
 }
 
 // Selectable: the row has a tick box, because at least one bulk action is open.

@@ -436,13 +436,31 @@ calls to the server besides reading, and the account of its client config
 Everything that changes an entry is a button on the review page (`/ui/review`)
 that a person presses, and the server asks that person for the right the same
 step needs elsewhere: **Merge** on a duplicate note supersedes the older entry by
-the newer one (right to change every entry involved, reason "Gärtner-Vorschlag
-#note, bestätigt von person"), **Record as covered** / **Record as not testable**
-on a regression note sets the pitfall's regression verdict (right to verify). The
-gardener has no call for any of this, and its own account, a plain member, is
-refused by the server if it tried. The server does not force `staged` on a
-client that writes as harness `gardener`; what keeps the marks honest is the
-command, and a test records every call a gardener run makes against a real server.
+the newer one (right to change every entry involved; the reason is "Gärtner-Vorschlag"
+with the number of the note and the name of the person), **Record as covered** and
+**Record as not testable** on a regression note set the regression verdict of the
+pitfall (right to verify). The gardener has no call for any of this, and its own
+account, a plain member, is refused by the server if it tried.
+
+**Name the gardener's account on the server.** Set `GHOSTTREE_GARDENER_ACCOUNT`
+(or `--gardener-account`) in `/etc/ghosttree/server.env` to the name of the account
+whose token is in the gardener's client config. Only that account may write entries
+with harness `gardener` or a session reference starting with `gardener:`; the API
+answers everyone else, an owner included, with 403 `gardener_reserved`. Without the
+setting nobody may, and the gardener's proposals are refused with that code, so set
+it before the first night after an update. `ctx serve` logs `gardener_account` at
+start with the name and whether an account holds it. The name is looked up on every
+write, so a renamed account stops being the gardener's. The review page acts on a
+note only if that account wrote it (the account number stored with the note, not a
+label), nobody has edited it since, and the entries its title names are the ones
+its session reference names; the card shows the entries of the reference, with title
+and link. The test a regression note names is checked for its shape (a relative
+path, a colon, a function name), shown whole on the card and recorded as the note
+holds it. The server has no checkout, so it cannot look the test up; `ctx` did
+that before it filed the note, and the account and the unedited note are what vouch
+for it. The server does not force `staged` on the gardener's own account; the
+command does, and a test records every call a gardener run makes against a real
+server.
 
 Layout under `/var/lib/ghosttree/garden`: `repo/` (checkout, owned by root,
 updated by `ghosttree-garden-update.service`), `bin/` (the `claude` binary, pass

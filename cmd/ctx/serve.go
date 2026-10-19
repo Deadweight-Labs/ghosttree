@@ -42,6 +42,10 @@ type serveConfig struct {
 	Explain        ExplainConfig
 	// GardenLimits are shown to administrators; the gardener itself runs as a command.
 	GardenLimits llmusage.Limits
+	// GardenerAccount names the account the gardener runs as. Only it may write
+	// entries with harness "gardener", and the review page only acts on notes it
+	// wrote (REQ-457). Empty: nobody may.
+	GardenerAccount string
 }
 
 const (
@@ -63,6 +67,8 @@ const (
 	envDistDir = "GHOSTTREE_DIST_DIR"
 	// envLanguage picks the language of the web interface: en (default) or de.
 	envLanguage = "GHOSTTREE_LANGUAGE"
+	// envGardenerAccount names the account the gardener's token belongs to.
+	envGardenerAccount = "GHOSTTREE_GARDENER_ACCOUNT"
 )
 
 type snapshotRootValues []string
@@ -124,6 +130,7 @@ func parseServeConfig(args []string, output io.Writer) (serveConfig, error) {
 	fs.StringVar(&cfg.PublicURL, "public-url", os.Getenv(envPublicURL), "external base URL, e.g. https://ghosttree.example.com; an https URL makes every cookie Secure (env "+envPublicURL+")")
 	fs.StringVar(&cfg.DistDir, "dist-dir", os.Getenv(envDistDir), "directory with ctx_<version>_<os>_<arch>.tar.gz archives and checksums.txt; enables /install.sh and /dist/ (env "+envDistDir+")")
 	fs.StringVar(&cfg.Language, "language", os.Getenv(envLanguage), "language of the web interface: en (default) or de (env "+envLanguage+")")
+	fs.StringVar(&cfg.GardenerAccount, "gardener-account", os.Getenv(envGardenerAccount), "name of the account the gardener runs as; only it may write entries with harness \"gardener\", the review page acts only on notes it wrote; empty: nobody may (env "+envGardenerAccount+")")
 	explainMode := os.Getenv(envExplain)
 	if explainMode == "" {
 		explainMode = "auto"
@@ -347,6 +354,8 @@ func buildServerHandler(st *store.Store, cfg serveConfig, stderr io.Writer) http
 		options = append(options, server.WithSnapshotMirror(&rootedSnapshotMirror{source: st, roots: cfg.SnapshotRoots}))
 	}
 	st.SetAccessMode(store.AccessMode{Enforce: accessEnforcedByEnv(), Logger: logger})
+	st.SetGardenerAccount(cfg.GardenerAccount)
+	logger.Info("gardener_account", "name", st.GardenerAccountName(), "found", st.GardenerAccountID() != 0, "env", envGardenerAccount)
 	apiHandler := server.New(st, options...)
 	root.Handle("/api/", apiHandler)
 	root.Handle("/metrics", apiHandler)

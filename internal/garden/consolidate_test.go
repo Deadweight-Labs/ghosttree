@@ -545,3 +545,23 @@ func mustTime(s string) time.Time {
 	}
 	return t
 }
+
+// The server reserves harness "gardener" and "gardener:" references to the
+// gardener's account (store.ReservedForGardener). Every note the gardener files has
+// to be one of those, or it would be refused, and the constants have to agree.
+func TestEveryNoteTheGardenerFilesIsReservedToItsAccount(t *testing.T) {
+	if Harness != store.GardenerHarness {
+		t.Fatalf("the gardener writes harness %q, the server reserves %q", Harness, store.GardenerHarness)
+	}
+	rel := Relation{Kind: Duplicate, IDs: []int64{1, 2}, Reason: "r", Quotes: map[int64]string{1: "a", 2: "b"}}
+	stale, _ := Proposal(testProject, Verdict{Entry: Entry{ID: 1, Title: "t"}, Kind: Stale, Reason: "r"})
+	for name, k := range map[string]store.Knowledge{
+		"stale":      stale,
+		"duplicate":  RelationProposal(testProject, rel, map[int64]string{1: "a", 2: "b"}),
+		"regression": CoverProposal(testProject, Cover{Entry: Entry{ID: 1, Title: "t"}, Kind: CoverUntestable, Reason: "ein Grund hier"}),
+	} {
+		if !store.ReservedForGardener(k) || !strings.HasPrefix(k.SessionRef, store.GardenerRefPrefix) {
+			t.Errorf("%s: harness %q reference %q are not reserved to the gardener", name, k.Harness, k.SessionRef)
+		}
+	}
+}
