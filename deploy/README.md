@@ -26,6 +26,20 @@ GHOSTTREE_PUBLIC_URL=https://ghosttree.example.com
 GHOSTTREE_TRUSTED_PROXIES=<proxy-address>
 ```
 
+To let organization owners connect a GitHub organization ("Connect GitHub" on the
+Organization page, the proof behind remote prefixes), register a GitHub OAuth app
+with the callback URL `<server address>/ui/orgs/source/callback` and give the
+server its credentials. The flow asks for the scope `read:org`; the user's access
+token is never stored. Without these variables the page shows that GitHub is not
+set up:
+
+```text
+GHOSTTREE_GITHUB_CLIENT_ID=<client id of the app>
+GHOSTTREE_GITHUB_CLIENT_SECRET_FILE=/etc/ghosttree/github-client-secret
+```
+
+`GHOSTTREE_GITHUB_CLIENT_SECRET` holds the secret directly instead of a file.
+
 Use the server's address on the trusted private network, such as NetBird, in
 the listen setting, client configuration and monitoring target. After changing
 the client URL, restart the collector and reconnect running MCP servers: they

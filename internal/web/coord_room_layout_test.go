@@ -52,6 +52,48 @@ func TestCoordRoomsPageLandsInTheRoomWithTheLatestEvent(t *testing.T) {
 	}
 }
 
+func TestCoordLandingRedirectKeepsTheProjectOnlyAsAQueryValue(t *testing.T) {
+	srv, st, room, _ := chatFixture(t)
+	other := store.RoomKeyForProject("github.com/x/other")
+	materializeWebRoom(t, st, other)
+	appendAgent(t, st, room, "m1", "newest event", "")
+	client := loginInteractive(t, srv, st, "robin")
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	for _, project := range []string{"github.com/x/other", "//evil.example/x", "https://evil.example", "a&room=other#frag", ""} {
+		res, err := client.Get(srv.URL + "/ui/coord?project=" + url.QueryEscape(" "+project+" "))
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		if res.StatusCode != http.StatusFound {
+			t.Fatalf("project %q: status = %d, want a redirect", project, res.StatusCode)
+		}
+		loc := res.Header.Get("Location")
+		if loc != coordRoomProjectURL(room, project) {
+			t.Errorf("project %q: Location = %q, want %q", project, loc, coordRoomProjectURL(room, project))
+		}
+		target, err := url.Parse(loc)
+		if err != nil {
+			t.Fatalf("project %q: Location %q does not parse: %v", project, loc, err)
+		}
+		if target.Scheme != "" || target.Host != "" || target.Path != "/ui/coord" || target.Fragment != "" {
+			t.Errorf("project %q: Location %q leaves the fixed /ui/coord path", project, loc)
+		}
+		query := target.Query()
+		if query.Get("room") != room || query.Get("project") != project || len(query) != 2 {
+			t.Errorf("project %q: query = %v, want exactly room and project", project, query)
+		}
+	}
+}
+
+func TestCoordRoomProjectURLEscapesTheProject(t *testing.T) {
+	got := coordRoomProjectURL("project:github.com/o/r", "x y&room=z")
+	want := "/ui/coord?room=project%3Agithub.com%2Fo%2Fr&project=x+y%26room%3Dz"
+	if got != want {
+		t.Errorf("coordRoomProjectURL = %q, want %q", got, want)
+	}
+}
+
 func TestCoordDedupeAgentsKeepsTheLastSeenOfTwoIdenticalLabels(t *testing.T) {
 	in := []coordParticipantView{
 		{ID: "person:1", Label: "Robin", Human: true},
