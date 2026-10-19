@@ -130,9 +130,7 @@ func TestSharingWithGuestsAsksAboutSecrets(t *testing.T) {
 		t.Fatal(err)
 	}
 	tok := "ghp_" + strings.Repeat("a1B2", 9)
-	if err := e.St.AppendChunks(id, chunks(uLine("here is a key "+tok), uLine("and again "+tok), aLine(tb("fine"), bash("x", "echo "+tok)))); err != nil {
-		t.Fatal(err)
-	}
+	appendLegacy(t, e.St, id, chunks(uLine("here is a key "+tok), uLine("and again "+tok), aLine(tb("fine"), bash("x", "echo "+tok))))
 	sess, _ := e.St.SessionByID(id)
 	post := func(form url.Values) (*http.Response, string) {
 		token := renderedCSRFToken(t, e.Member, e.Base+"/ui/sessions")
@@ -170,6 +168,47 @@ func TestSharingWithGuestsAsksAboutSecrets(t *testing.T) {
 	r := sameOriginPostForm(t, e.Member, e.Base+"/ui/sessions/"+clean+"/share", url.Values{"csrf_token": {token}, "level": {store.VisGuests}})
 	if r.StatusCode != http.StatusSeeOther {
 		t.Errorf("clean session asked a question: %d", r.StatusCode)
+	}
+}
+
+// The question before sharing with guests uses the detection the server
+// redacts with: a password behind a label counts, and a session stored since
+// the server redacts on arrival has nothing left to ask about.
+func TestSharingWithGuestsAsksAboutLabeledPasswordsInOlderSessions(t *testing.T) {
+	e := seedSessions(t)
+	open := func(name string) (int64, string) {
+		id, err := e.St.UpsertSession(store.Session{Harness: "claude-code", ExternalID: name, AccountID: 2, Scope: scope.Axes{Project: shellProject, Machine: "laptop"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		sess, _ := e.St.SessionByID(id)
+		return id, sess.PublicID
+	}
+	share := func(pid string) *http.Response {
+		token := renderedCSRFToken(t, e.Member, e.Base+"/ui/sessions")
+		return sameOriginPostForm(t, e.Member, e.Base+"/ui/sessions/"+pid+"/share", url.Values{"csrf_token": {token}, "level": {store.VisGuests}})
+	}
+
+	oldID, oldPID := open("old-password")
+	appendLegacy(t, e.St, oldID, chunks(uLine("Das Passwort ist Hx7!kQ2pz, bitte merken"), uLine("Passwort zurücksetzen dauert")))
+	resp := share(oldPID)
+	if loc := resp.Header.Get("Location"); resp.StatusCode != http.StatusSeeOther || !strings.Contains(loc, "confirm=guests") {
+		t.Fatalf("older session: %d %q, want the confirmation", resp.StatusCode, loc)
+	}
+	_, page := e.get(t, e.Member, resp.Header.Get("Location"))
+	if !strings.Contains(page, "1 possible secret in this session") || strings.Contains(page, "Hx7!kQ2pz") {
+		t.Fatalf("confirmation: %.300s", page)
+	}
+
+	newID, newPID := open("new-password")
+	if err := e.St.AppendChunks(newID, chunks(uLine("Das Passwort ist Hx7!kQ2pz, bitte merken"))); err != nil {
+		t.Fatal(err)
+	}
+	if resp := share(newPID); resp.StatusCode != http.StatusSeeOther || strings.Contains(resp.Header.Get("Location"), "confirm=") {
+		t.Fatalf("a session stored with redaction asked: %d %q", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	if got, _ := e.St.SessionByID(newID); got.Visibility != store.VisGuests {
+		t.Errorf("level = %q", got.Visibility)
 	}
 }
 

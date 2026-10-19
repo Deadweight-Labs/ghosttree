@@ -136,6 +136,30 @@ func TestCreateAndPatchDocumentRejectUnsafeSlugs(t *testing.T) {
 	}
 }
 
+// The refusal uses the same detection as the redaction of transcripts, so a
+// password behind a label is refused too, and prose and code that merely use the
+// word are not. The values are made up.
+func TestDocumentWritesRefuseLabeledPasswordsButNotProse(t *testing.T) {
+	srv, token, _ := newDocumentServer(t)
+	for i, c := range []struct {
+		body string
+		want int
+	}{
+		{"Setup\n\nPasswort: Hx7!kQ2pz\n", http.StatusBadRequest},
+		{"export DB_PASSWORD=\"s3cr3t-value\"", http.StatusBadRequest},
+		{"clone https://deploy:Hx7!kQ2pz@git.example.com/org/repo.git", http.StatusBadRequest},
+		{"Passwort zurücksetzen: password := r.FormValue(\"password\"); db: ${DB_PASSWORD}", http.StatusOK},
+	} {
+		res := req(t, "POST", srv.URL+"/api/documents", token, map[string]any{
+			"project": "p", "slug": "labeled-" + strconv.Itoa(i), "kind": "spec", "title": "T", "body": c.body,
+		})
+		res.Body.Close()
+		if res.StatusCode != c.want {
+			t.Errorf("body %q: status %d, want %d", c.body, res.StatusCode, c.want)
+		}
+	}
+}
+
 func TestDocumentWritesRejectSecretsInsteadOfRewritingThem(t *testing.T) {
 	srv, token, st := newDocumentServer(t)
 	secret := "token ghp_" + "AbCdEfGhIjKlMnOpQrStUvWxYz1234567890"

@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/blobstrip"
+	"github.com/Deadweight-Labs/ghosttree/internal/redact"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 )
 
@@ -67,8 +68,8 @@ const (
 type Chunk struct {
 	Seq  int    `json:"seq"`
 	Role string `json:"role"` // user|assistant|other
-	Text string `json:"text"` // extracted, redacted text ('' if not understood)
-	Raw  string `json:"raw"`  // full redacted JSONL line
+	Text string `json:"text"` // extracted text ('' if not understood); redacted again on arrival
+	Raw  string `json:"raw"`  // full JSONL line; redacted again on arrival, images replaced
 }
 
 type ChunkBatch struct {
@@ -120,21 +121,30 @@ func (s *Store) UpsertSession(sess Session) (int64, error) {
 	return id, err
 }
 
-// stripChunks ersetzt base64-Nutzlasten in Raw durch Platzhalter (blobstrip).
+// sanitizeChunks ersetzt base64-Nutzlasten in Raw durch Platzhalter
+// (blobstrip) und schwärzt Geheimnisse in Text und Raw (redact). Raw ist eine
+// JSON-Zeile und wird als solche geschwärzt, sie bleibt gültiges JSON. Das
+// geschieht hier und nicht nur im Sammler, damit auch ältere Clients nichts
+// Ungeschwärztes ablegen. Die Bilder gehen zuerst, damit die Schwärzung sie
+// nicht durchsuchen muss.
+//
 // Es läuft im Aufrufer, vor der Warteschlange des Schreibers: der Schreiber ist
-// ein einzelner Goroutine, und das Parsen eines mehrere MB großen Chunks gehört
-// nicht auf seine Zeit. Der übergebene Schnitt bleibt unverändert.
-func stripChunks(in []Chunk) []Chunk {
+// ein einzelner Goroutine, und das Parsen und Durchsuchen eines mehrere MB
+// großen Chunks gehört nicht auf seine Zeit. Der übergebene Schnitt bleibt
+// unverändert.
+func sanitizeChunks(in []Chunk) []Chunk {
 	var out []Chunk
 	for i := range in {
-		raw, saved := blobstrip.Strip(in[i].Raw)
-		if saved == 0 {
+		raw, _ := blobstrip.Strip(in[i].Raw)
+		raw = redact.RedactJSON(raw)
+		text := redact.Redact(in[i].Text)
+		if raw == in[i].Raw && text == in[i].Text {
 			continue
 		}
 		if out == nil {
 			out = append([]Chunk(nil), in...)
 		}
-		out[i].Raw = raw
+		out[i].Raw, out[i].Text = raw, text
 	}
 	if out == nil {
 		return in
@@ -143,7 +153,7 @@ func stripChunks(in []Chunk) []Chunk {
 }
 
 func (s *Store) AppendChunks(sessionID int64, chunks []Chunk) error {
-	chunks = stripChunks(chunks)
+	chunks = sanitizeChunks(chunks)
 	if s.writer != nil {
 		r, err := s.writer.admitChunks(context.Background(), ChunkBatch{SessionID: sessionID, Chunks: chunks})
 		if err != nil {
@@ -155,20 +165,21 @@ func (s *Store) AppendChunks(sessionID int64, chunks []Chunk) error {
 }
 
 // AppendChunkBatches schreibt Chunks mehrerer Sessions in einer Transaktion.
-// Jeder Weg in session_chunks.raw geht durch AppendChunks oder diese Methode und
-// ersetzt dabei die Bilder; appendChunkBatches schreibt nur noch.
+// Jeder Weg in session_chunks geht durch AppendChunks oder diese Methode und
+// ersetzt dabei die Bilder und schwärzt Geheimnisse; appendChunkBatches
+// schreibt nur noch.
 func (s *Store) AppendChunkBatches(batches []ChunkBatch) error {
-	batches = stripBatches(batches)
+	batches = sanitizeBatches(batches)
 	if s.writer != nil {
 		return queueWrite(s, []any{batches}, func(d *Store, p []any) error { return d.appendChunkBatches(p[0].([]ChunkBatch)) })
 	}
 	return s.appendChunkBatches(batches)
 }
 
-func stripBatches(in []ChunkBatch) []ChunkBatch {
+func sanitizeBatches(in []ChunkBatch) []ChunkBatch {
 	out := make([]ChunkBatch, len(in))
 	for i, b := range in {
-		out[i] = ChunkBatch{SessionID: b.SessionID, Chunks: stripChunks(b.Chunks)}
+		out[i] = ChunkBatch{SessionID: b.SessionID, Chunks: sanitizeChunks(b.Chunks)}
 	}
 	return out
 }
