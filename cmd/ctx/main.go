@@ -75,6 +75,8 @@ func run(args []string, stdout io.Writer) int {
 		return cmdCanonicalizeScopes(rest, stdout)
 	case "unbind-branch":
 		return cmdUnbindBranch(rest, stdout)
+	case "strip-images":
+		return cmdStripImages(rest, stdout)
 	case "person":
 		return cmdPerson(rest, stdout)
 	case "account":
@@ -130,7 +132,7 @@ const usage = `usage: ctx <command>
   project  list, claim and move projects between organizations
   status   show local setup state
   doctor   check the harness wiring for drift (--fix to repair)
-  export   write a session's original transcript as JSONL
+  export   write a session's transcript as JSONL (images as placeholders)
   review   approve or reject distilled knowledge
   regression  say which test guards a fixed defect, and list the fixes none does
   request  search and manage the work ledger (create, move, ...)
@@ -153,6 +155,7 @@ const usage = `usage: ctx <command>
   upgrade-schema  one-off knowledge table rebuild for trust tiers
   canonicalize-scopes  one-off project name backfill and duplicate merge
   unbind-branch  lift knowledge filed against a branch to its project
+  strip-images  replace stored base64 images and files with placeholders (--dry-run, runs beside the server)
   version  print version`
 
 func main() {

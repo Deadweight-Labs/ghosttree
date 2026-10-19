@@ -162,6 +162,40 @@ Stop `ghosttree.service` first for schema upgrades or commands that require
 exclusive access. Keep and verify the backup printed by `ctx upgrade-schema`
 before restarting the server.
 
+### Images in stored transcripts
+
+Screenshots and attached files arrive in session transcripts as base64 and are
+the largest part of the database, although search and the session view only use
+text. The server therefore replaces every base64 payload of 1 KB or more in a
+stored line with a short placeholder (type, size, first 16 hex digits of the
+SHA-256), and `ctx watch` does the same before uploading. Chunks stored by an
+older version still carry their images. `ctx strip-images` replaces those; it is
+safe to run while the server is up (short transactions, 30 seconds of waiting for
+a lock, `--sleep` between steps) and can be stopped with Ctrl-C and run again:
+
+```bash
+DB=/var/lib/ghosttree/ghosttree.db
+RUN='sudo systemd-run --pipe --wait --collect --quiet -p DynamicUser=yes -p User=ghosttree -p StateDirectory=ghosttree /usr/local/bin/ctx'
+$RUN strip-images --db $DB --dry-run   # counts chunks and bytes, writes nothing
+$RUN strip-images --db $DB             # replaces; a second run changes nothing
+```
+
+The image data cannot be recovered afterwards, so keep a backup if it might be
+needed. The report lists the chunks checked and replaced and the bytes saved.
+The database file does not get smaller by this: the freed pages are reused by
+new data, which already stops the growth. To give the space back to the
+filesystem, run `VACUUM` once with the service stopped. It rewrites the whole
+file, so it needs free disk space of about the size of the database and takes a
+while on a large one:
+
+```bash
+sudo systemctl stop ghosttree
+sudo systemd-run --pipe --wait --collect --quiet \
+  -p DynamicUser=yes -p User=ghosttree -p StateDirectory=ghosttree \
+  sqlite3 /var/lib/ghosttree/ghosttree.db 'PRAGMA wal_checkpoint(TRUNCATE); VACUUM;'
+sudo systemctl start ghosttree
+```
+
 ## Context snapshots
 
 Snapshot rows are immutable and have no ordinary deletion or redaction path.

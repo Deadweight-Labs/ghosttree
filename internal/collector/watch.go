@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/blobstrip"
 	"github.com/Deadweight-Labs/ghosttree/internal/projectlink"
 	"github.com/Deadweight-Labs/ghosttree/internal/redact"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
@@ -160,11 +161,15 @@ func SyncFile(path, harness string, up Uploader, st *State, machine string) erro
 			continue
 		}
 		p := parse([]byte(trimmed))
+		// Bilder zuerst heraus: sie sind der größte Teil einer Zeile, der
+		// Server ersetzt sie ohnehin, und die Redaktion muss sie nicht
+		// durchsuchen. Aktivität und Kontrollbeweis unten lesen die Originalzeile.
+		stored, _ := blobstrip.Strip(trimmed)
 		batch = append(batch, store.Chunk{
 			Seq:  seq,
 			Role: p.Role,
 			Text: redact.Redact(p.Text),
-			Raw:  redact.Redact(trimmed),
+			Raw:  redact.Redact(stored),
 		})
 		touches = append(touches, activityFrom(ident, trimmed)...)
 		if harness != "codex" {
