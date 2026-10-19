@@ -77,6 +77,8 @@ func run(args []string, stdout io.Writer) int {
 		return cmdUnbindBranch(rest, stdout)
 	case "strip-images":
 		return cmdStripImages(rest, stdout)
+	case "db":
+		return cmdDB(rest, stdout)
 	case "person":
 		return cmdPerson(rest, stdout)
 	case "account":
@@ -156,6 +158,7 @@ const usage = `usage: ctx <command>
   canonicalize-scopes  one-off project name backfill and duplicate merge
   unbind-branch  lift knowledge filed against a branch to its project
   strip-images  replace stored base64 images and files with placeholders (--dry-run, runs beside the server)
+  db       vacuum (server stopped) and check the database file; sqlite3 cannot, the schema needs ctx's SQL functions
   version  print version`
 
 func main() {
