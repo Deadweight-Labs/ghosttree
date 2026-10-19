@@ -14,8 +14,10 @@ import (
 
 const exportUsage = `usage: ctx export <session-id> [-o file]
 
-Write a session's original JSONL transcript to stdout or a file. The harnesses
-expire their own transcripts, so this is the long-term copy.`
+Write a session's JSONL transcript to stdout or a file. The harnesses expire
+their own transcripts, so this is the long-term copy. Images and other embedded
+files are not part of it: ghosttree stores a placeholder line with their type,
+size and hash instead.`
 
 // splitLeadingOperand removes the first non-flag argument and returns the
 // remaining arguments together with it.

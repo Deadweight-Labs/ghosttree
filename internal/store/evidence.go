@@ -3,9 +3,12 @@ package store
 // Evidence is one place in a transcript that supports a knowledge entry.
 // It is what makes a distilled claim checkable instead of merely plausible.
 type Evidence struct {
-	SessionID int64  `json:"session_id"`
+	SessionID int64  `json:"session_id,omitempty"`
 	ChunkSeq  int    `json:"chunk_seq"`
 	Quote     string `json:"quote"`
+	// SessionPublicID ersetzt SessionID für Betrachter, die die laufende Nummer
+	// nicht kennen dürfen (siehe ProjectAccess.EvidenceView).
+	SessionPublicID string `json:"session_public_id,omitempty"`
 }
 
 func (s *Store) AddEvidence(knowledgeID int64, ev []Evidence) error {

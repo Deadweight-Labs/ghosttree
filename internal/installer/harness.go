@@ -26,6 +26,26 @@ const (
 	// der Aufruf anfasst: der einzige Kanal, über den eine Dateibeschreibung
 	// genau dann ankommt, wenn sie zählt.
 	ChannelPreToolUse Channel = "pre-tool-use"
+	// ChannelPauseGate is not a context channel: it carries a human pause to the
+	// session (REQ-361, AC-1229). PreToolUse with an empty matcher so it fires on
+	// every tool, and it only reads a local flag file. Claude only; Codex has no
+	// measured pause interface and stays a named gap.
+	ChannelPauseGate Channel = "pause-gate"
+	// ChannelCoordInbox is how a message for the agent reaches it while it
+	// works: PostToolUse fires on every tool call inside the agent loop, with no
+	// new prompt needed, and the hook looks at the coordination inbox at most
+	// once a minute. Claude Code only; Codex's PostToolUse is not measured.
+	ChannelCoordInbox Channel = "coord-inbox"
+	// ChannelTurnEnd is the Stop hook: it tells the server that a turn is over,
+	// which is what separates an agent that stands still because it is done
+	// from one that stands still in the middle of a turn ("Stuck?"). It
+	// delivers nothing to the model. Claude Code only: Codex's Stop is not
+	// measured, so a Codex agent is never called stuck.
+	ChannelTurnEnd Channel = "turn-end"
+	// ChannelTurnFail is StopFailure, which Claude Code fires instead of Stop
+	// when a turn ends on an API or rate-limit error. It reports the same thing
+	// as Stop: the turn is over, so the agent is not stuck.
+	ChannelTurnFail Channel = "turn-fail"
 	// ChannelMCP is the pull side. Every harness ghosttree supports has it, and
 	// it is the only channel that answers a question rather than anticipating
 	// one.
@@ -72,7 +92,7 @@ func Harnesses() []Harness {
 		{
 			Name:       "claude",
 			Components: append([]Component(nil), componentOrder...),
-			Channels:   []Channel{ChannelSessionStart, ChannelUserPrompt, ChannelPreToolUse, ChannelMCP},
+			Channels:   []Channel{ChannelSessionStart, ChannelUserPrompt, ChannelPreToolUse, ChannelPauseGate, ChannelCoordInbox, ChannelTurnEnd, ChannelTurnFail, ChannelMCP},
 			Delivers:   []Channel{ChannelSessionStart, ChannelUserPrompt, ChannelPreToolUse, ChannelMCP},
 			HooksPath:  func(home string) string { return filepath.Join(home, ".claude", "settings.json") },
 			RulePath:   func(home string) string { return filepath.Join(home, ".claude", "CLAUDE.md") },
@@ -167,9 +187,9 @@ func (h Harness) DeliversContext(c Channel) bool { return slices.Contains(h.Deli
 func (h Harness) hookCommandFor(c Channel) (event, command, matcher string, ok bool) {
 	switch c {
 	case ChannelSessionStart:
-		return "SessionStart", hookCommand + " --harness " + h.Name, "", true
+		return "SessionStart", withCtx(hookCommand) + " --harness " + h.Name, "", true
 	case ChannelUserPrompt:
-		return "UserPromptSubmit", promptHookCommand + " --harness " + h.Name, "", true
+		return "UserPromptSubmit", withCtx(promptHookCommand) + " --harness " + h.Name, "", true
 	case ChannelPreToolUse:
 		// Codex bekommt bewusst KEINEN Matcher. `exec` stand hier, weil das
 		// Rollout-Protokoll Lesezugriffe so bündelt — nur filtert Codex damit
@@ -186,9 +206,17 @@ func (h Harness) hookCommandFor(c Channel) (event, command, matcher string, ok b
 		// Nutzdaten, ob ein Pfad vorkommt, und schweigt sonst — die Filterung
 		// sitzt damit dort, wo sie überprüfbar ist.
 		if h.Name == "codex" {
-			return "PreToolUse", preToolHookCommand + " --harness " + h.Name, "", true
+			return "PreToolUse", withCtx(preToolHookCommand) + " --harness " + h.Name, "", true
 		}
-		return "PreToolUse", preToolHookCommand + " --harness " + h.Name, "Read|Edit|Write|NotebookEdit", true
+		return "PreToolUse", withCtx(preToolHookCommand) + " --harness " + h.Name, "Read|Edit|Write|NotebookEdit", true
+	case ChannelPauseGate:
+		return "PreToolUse", withCtx(pauseGateHookCommand) + " --harness " + h.Name, "", true
+	case ChannelCoordInbox:
+		return "PostToolUse", withCtx(postToolHookCommand) + " --harness " + h.Name, "", true
+	case ChannelTurnEnd:
+		return "Stop", withCtx(turnEndHookCommand) + " --harness " + h.Name, "", true
+	case ChannelTurnFail:
+		return "StopFailure", withCtx(turnEndHookCommand) + " --harness " + h.Name, "", true
 	}
 	return "", "", "", false
 }

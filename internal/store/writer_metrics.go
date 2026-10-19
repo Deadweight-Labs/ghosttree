@@ -123,7 +123,7 @@ func (w *runtimeWriter) stats() WriterStats {
 	out.BatchedOperations = w.batchedOperations
 	out.FallbackOperations = w.fallbackOperations
 	for kind, batch := range w.bestEffort {
-		out.BestEffort[kind] = WriterBestEffortStats{Keys: len(batch.usage) + len(batch.machines), Bytes: batch.bytes, Active: batch.active, Dropped: w.bestEffortDrops[kind].Load()}
+		out.BestEffort[kind] = WriterBestEffortStats{Keys: len(batch.usage) + len(batch.machines) + len(batch.tokens), Bytes: batch.bytes, Active: batch.active, Dropped: w.bestEffortDrops[kind].Load()}
 	}
 	if w.closed && w.running {
 		out.DrainDuration = time.Since(w.drainStarted)

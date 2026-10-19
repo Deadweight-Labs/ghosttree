@@ -1,16 +1,108 @@
 package installer
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
-const codexMCPSection = `
-[mcp_servers.ghosttree]
-command = "ctx"
-args = ["mcp"]
-`
+func codexMCPSection() string { return codexMCPSectionFor(ctxCommand) }
+
+func codexMCPSectionFor(command string) string {
+	return "\n[mcp_servers.ghosttree]\ncommand = " + tomlString(command) + "\nargs = [\"mcp\"]\n"
+}
+
+// codexTableCommand reads the command value out of our table, "" when the line
+// is missing or not a plain string.
+func codexTableCommand(table string) string {
+	for _, line := range strings.Split(table, "\n") {
+		line = strings.TrimSpace(line)
+		rest, ok := strings.CutPrefix(line, "command")
+		if !ok {
+			continue
+		}
+		rest = strings.TrimSpace(rest)
+		rest, ok = strings.CutPrefix(rest, "=")
+		if !ok {
+			continue
+		}
+		rest = strings.TrimSpace(rest)
+		if len(rest) < 2 || rest[0] != '"' || rest[len(rest)-1] != '"' {
+			return ""
+		}
+		return tomlUnescape(rest[1 : len(rest)-1])
+	}
+	return ""
+}
+
+// tomlString writes v as a TOML basic string: backslash, quote and every
+// control character (TOML forbids them raw) are escaped.
+func tomlString(v string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range v {
+		switch {
+		case r == '\\':
+			b.WriteString(`\\`)
+		case r == '"':
+			b.WriteString(`\"`)
+		case r == '\b':
+			b.WriteString(`\b`)
+		case r == '\t':
+			b.WriteString(`\t`)
+		case r == '\n':
+			b.WriteString(`\n`)
+		case r == '\f':
+			b.WriteString(`\f`)
+		case r == '\r':
+			b.WriteString(`\r`)
+		case r < 0x20 || r == 0x7f:
+			fmt.Fprintf(&b, `\u%04X`, r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
+}
+
+// tomlUnescape reverses tomlString for the escapes it writes.
+func tomlUnescape(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] != '\\' || i+1 >= len(s) {
+			b.WriteByte(s[i])
+			continue
+		}
+		i++
+		switch s[i] {
+		case 'b':
+			b.WriteByte('\b')
+		case 't':
+			b.WriteByte('\t')
+		case 'n':
+			b.WriteByte('\n')
+		case 'f':
+			b.WriteByte('\f')
+		case 'r':
+			b.WriteByte('\r')
+		case 'u':
+			if i+4 < len(s) {
+				if n, err := strconv.ParseUint(s[i+1:i+5], 16, 16); err == nil {
+					b.WriteRune(rune(n))
+					i += 4
+					continue
+				}
+			}
+			b.WriteString(`\u`)
+		default:
+			b.WriteByte(s[i])
+		}
+	}
+	return b.String()
+}
 
 func InstallCodex(home string) ([]Change, error) {
 	selected, _ := ResolveComponents("codex", nil)
@@ -104,7 +196,7 @@ func appendCodexMCP(path string) (Change, error) {
 	}
 	content := string(old)
 	ranges := codexOwnedTableRanges(content)
-	if len(ranges) == 1 && strings.TrimSpace(content[ranges[0][0]:ranges[0][1]]) == strings.TrimSpace(codexMCPSection) {
+	if len(ranges) == 1 && strings.TrimSpace(content[ranges[0][0]:ranges[0][1]]) == strings.TrimSpace(codexMCPSection()) {
 		return Change{Path: path, Action: "unchanged"}, nil
 	}
 	for i := len(ranges) - 1; i >= 0; i-- {
@@ -118,7 +210,7 @@ func appendCodexMCP(path string) (Change, error) {
 	if len(old) == 0 {
 		action = "created"
 	}
-	return Change{Path: path, Action: action}, writeAtomic(path, []byte(content+codexMCPSection), 0o644)
+	return Change{Path: path, Action: action}, writeAtomic(path, []byte(content+codexMCPSection()), 0o644)
 }
 
 func codexOwnedTableRanges(content string) [][2]int {

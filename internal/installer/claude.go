@@ -10,6 +10,12 @@ const (
 	hookCommand        = "ctx hook session-start"
 	promptHookCommand  = "ctx hook user-prompt-submit"
 	preToolHookCommand = "ctx hook pre-tool-use"
+	// pauseGateHookCommand: the human-pause gate, matcher empty.
+	pauseGateHookCommand = "ctx hook pause-gate"
+	// postToolHookCommand: the coordination inbox look inside the agent loop.
+	postToolHookCommand = "ctx hook post-tool-use"
+	// turnEndHookCommand: the Stop hook, which reports the end of a turn.
+	turnEndHookCommand = "ctx hook turn-end"
 )
 
 // ClaudeConfigDir resolves where Claude Code keeps its user config. Verified on
@@ -63,6 +69,18 @@ func installClaudeSelected(home string, selected ComponentSet) ([]Change, error)
 	return changes, nil
 }
 
+// hookTimeout is the explicit timeout in seconds for hooks that must not run
+// on the harness default. The pause gate runs before every tool call and only
+// reads a file; a stuck process must not stall the agent for the default.
+// (A timed-out hook is fail-open in Claude Code, so this bounds the cost, it
+// is not a gate.)
+func hookTimeout(command string) int {
+	if rest, ok := ctxSubcommand(command); ok && (strings.HasPrefix(rest, "hook pause-gate") || strings.HasPrefix(rest, "hook post-tool-use") || strings.HasPrefix(rest, "hook user-prompt-submit") || strings.HasPrefix(rest, "hook turn-end")) {
+		return 5
+	}
+	return 0
+}
+
 // addHook appends to whatever is already registered for an event. Other tools
 // keep hooks here too — a lease daemon, an approval bridge — and replacing the
 // list would silently disarm them.
@@ -85,14 +103,18 @@ func addHook(path, event, command, matcher string) (Change, error) {
 			// run different subcommands and one must not be mistaken for the
 			// other, or installing the second would look like a no-op.
 			cmd, _ := hm["command"].(string)
-			legacy := command
-			if i := strings.Index(legacy, " --harness "); i >= 0 {
-				legacy = legacy[:i]
-			}
-			if cmd == command || cmd == legacy {
+			if sameCtxHook(cmd, command) {
 				migrated := cmd != command
 				if migrated {
 					hm["command"] = command
+				}
+				if want := hookTimeout(command); want > 0 {
+					if have, _ := hm["timeout"].(float64); have != float64(want) {
+						hm["timeout"] = want
+						migrated = true
+					}
+				}
+				if migrated {
 					inner[handlerIndex] = hm
 					entry["hooks"] = inner
 				}
@@ -125,9 +147,11 @@ func addHook(path, event, command, matcher string) (Change, error) {
 			}
 		}
 	}
-	entry := map[string]any{
-		"hooks": []any{map[string]any{"type": "command", "command": command}},
+	handler := map[string]any{"type": "command", "command": command}
+	if want := hookTimeout(command); want > 0 {
+		handler["timeout"] = want
 	}
+	entry := map[string]any{"hooks": []any{handler}}
 	// Der Matcher hält ctx aus jedem Bash-Aufruf heraus. Ohne ihn feuert
 	// PreToolUse auf jedem Werkzeug, und ein Prozessstart je Aufruf ist ein
 	// spürbarer Preis für eine Antwort, die es meistens nicht gibt.
@@ -138,6 +162,26 @@ func addHook(path, event, command, matcher string) (Change, error) {
 	hooks[event] = entries
 	settings["hooks"] = hooks
 	return Change{Path: path, Action: event + " hook added"}, writeJSONFile(path, settings)
+}
+
+// sameCtxHook reports whether an installed command is the hook we would
+// write, apart from how the binary is named (bare ctx, an older path, a path
+// that moved) and the --harness flag older installs lacked. Foreign commands
+// never match.
+func sameCtxHook(installed, want string) bool {
+	if installed == want {
+		return true
+	}
+	have, ok := ctxSubcommand(installed)
+	if !ok {
+		return false
+	}
+	target, _ := ctxSubcommand(want)
+	legacy := target
+	if i := strings.Index(legacy, " --harness "); i >= 0 {
+		legacy = legacy[:i]
+	}
+	return have == target || have == legacy
 }
 
 func registerClaudeMCP(path string) (Change, error) {
@@ -161,7 +205,7 @@ func registerClaudeMCP(path string) (Change, error) {
 func claudeMCPEntry() map[string]any {
 	return map[string]any{
 		"type":    "stdio",
-		"command": "ctx",
+		"command": ctxCommand,
 		"args":    []any{"mcp"},
 		"env":     map[string]any{},
 	}

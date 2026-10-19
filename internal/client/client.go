@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -53,8 +54,44 @@ func (e *ConflictError) Error() string {
 	return fmt.Sprintf("revision conflict: head is %d by %s at %s", e.HeadRevision, e.Person, e.At)
 }
 
+// HTTPStatus ist der Statuscode der Antwort.
+func (e *APIError) HTTPStatus() int { return e.Status }
+
 func (e *APIError) Error() string {
 	return fmt.Sprintf("HTTP %d: %s: %s", e.Status, e.Code, e.Message)
+}
+
+// StatusError ist eine Fehlerantwort ohne strukturierten APIError-Körper.
+type StatusError struct {
+	Method string
+	Path   string
+	Status int
+	Body   string
+}
+
+// HTTPStatus ist der Statuscode der Antwort.
+func (e *StatusError) HTTPStatus() int { return e.Status }
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("%s %s: %d: %s", e.Method, e.Path, e.Status, e.Body)
+}
+
+// IsRouteMissing sagt, ob der Server die Route gar nicht kennt. Das tut ein
+// älterer Server: der Router antwortet mit 404 und Klartext oder mit 405. Ein
+// 404 mit JSON-Körper ist dagegen eine echte Antwort des Handlers ("Ziel
+// nicht gefunden") und zählt nicht.
+func IsRouteMissing(err error) bool {
+	var se *StatusError
+	if !errors.As(err, &se) {
+		return false
+	}
+	switch se.Status {
+	case http.StatusMethodNotAllowed:
+		return true
+	case http.StatusNotFound:
+		return !strings.HasPrefix(se.Body, "{")
+	}
+	return false
 }
 
 func New(cfg config.Config) *Client {
@@ -69,12 +106,18 @@ func NewWithTimeout(cfg config.Config, d time.Duration) *Client {
 }
 
 // Relevant returns knowledge the text gives a reason to deliver. An empty
-// result is the usual answer.
-func (c *Client) Relevant(text string, ax scope.Axes, limit int) (string, error) {
+// result is the usual answer. The session is the harness session id: the server
+// remembers per session what it delivered and does not deliver it again, and
+// counts what the start-up briefing carried (Bootstrap takes the same id).
+// Without one, every call is the first of its session.
+func (c *Client) Relevant(text string, ax scope.Axes, limit int, session string) (string, error) {
 	q := axesQuery(ax)
 	q.Set("q", text)
 	if limit > 0 {
 		q.Set("limit", strconv.Itoa(limit))
+	}
+	if session != "" {
+		q.Set("session", session)
 	}
 	var md string
 	err := c.do("GET", "/api/context/relevant", q, nil, &md)
@@ -159,7 +202,7 @@ func (c *Client) doContext(ctx context.Context, method, path string, query url.V
 			}
 			return &apiErr
 		}
-		return fmt.Errorf("%s %s: %d: %s", method, path, resp.StatusCode, strings.TrimSpace(string(raw)))
+		return &StatusError{Method: method, Path: path, Status: resp.StatusCode, Body: strings.TrimSpace(string(raw))}
 	}
 	switch o := out.(type) {
 	case nil:
@@ -272,8 +315,28 @@ func (c *Client) UpsertSession(s store.Session) (int64, error) {
 }
 
 func (c *Client) AppendChunks(id int64, chunks []store.Chunk) error {
+	return c.AppendChunksRef(store.SessionRef{ID: id}, chunks)
+}
+
+// UpsertSessionRef legt die Session an und liefert, wie der Server sie
+// anspricht: Mitglieder bekommen Nummer und Adresse, Gäste nur die Adresse.
+func (c *Client) UpsertSessionRef(s store.Session) (store.SessionRef, error) {
+	var ref store.SessionRef
+	// refs=public_id sagt dem Server, dass dieser Client ohne Nummer auskommt.
+	err := c.do("POST", "/api/sessions", url.Values{"refs": {"public_id"}}, s, &ref)
+	return ref, err
+}
+
+// AppendChunksRef lädt Chunks in die Session, die ref bezeichnet.
+func (c *Client) AppendChunksRef(ref store.SessionRef, chunks []store.Chunk) error {
 	body := map[string]any{"chunks": chunks}
-	return c.do("POST", "/api/sessions/"+strconv.FormatInt(id, 10)+"/chunks", nil, body, nil)
+	return c.do("POST", "/api/sessions/"+url.PathEscape(ref.PathSegment())+"/chunks", nil, body, nil)
+}
+
+// ShareSession gibt das Transkript einer eigenen Session für die Mitglieder des
+// Projekts frei oder nimmt die Freigabe zurück.
+func (c *Client) ShareSession(id int64, shared bool) error {
+	return c.do("PUT", "/api/sessions/"+strconv.FormatInt(id, 10)+"/share", nil, map[string]bool{"shared": shared}, nil)
 }
 
 func (c *Client) Sessions(filter scope.Axes, limit int) ([]store.Session, error) {
@@ -287,12 +350,17 @@ func (c *Client) Sessions(filter scope.Axes, limit int) ([]store.Session, error)
 }
 
 func (c *Client) ReadSession(id int64, from, limit int) ([]store.Chunk, error) {
+	return c.ReadSessionRef(store.SessionRef{ID: id}, from, limit)
+}
+
+// ReadSessionRef liest eine Session über Nummer oder Adresse.
+func (c *Client) ReadSessionRef(ref store.SessionRef, from, limit int) ([]store.Chunk, error) {
 	q := url.Values{"from": {strconv.Itoa(from)}}
 	if limit > 0 {
 		q.Set("limit", strconv.Itoa(limit))
 	}
 	var out []store.Chunk
-	err := c.do("GET", "/api/sessions/"+strconv.FormatInt(id, 10), q, nil, &out)
+	err := c.do("GET", "/api/sessions/"+url.PathEscape(ref.PathSegment()), q, nil, &out)
 	return out, err
 }
 
@@ -306,12 +374,26 @@ func (c *Client) RawSession(id int64) (string, error) {
 // Remember writes a knowledge entry. When k.Scope is empty, autoCtx drives the
 // server-side write defaults.
 func (c *Client) Remember(k store.Knowledge, autoCtx scope.Axes) (store.Knowledge, error) {
+	return c.RememberSuperseding(k, autoCtx, nil, "")
+}
+
+// RememberSuperseding writes an entry and, in the same call, supersedes older
+// ones: the server checks the right on every one of them before it writes
+// anything, so a refusal leaves no follow-up entry behind.
+func (c *Client) RememberSuperseding(k store.Knowledge, autoCtx scope.Axes, supersedes []int64, reason string) (store.Knowledge, error) {
 	body := map[string]any{
 		"type": k.Type, "title": k.Title, "body": k.Body,
 		"scope": k.Scope, "confidence": k.Confidence, "status": k.Status,
 		"origin":  k.Origin,
 		"harness": k.Harness, "session_ref": k.SessionRef,
 		"auto_scope": map[string]any{"context": autoCtx},
+	}
+	if k.Explanation != "" {
+		body["explanation"] = k.Explanation
+	}
+	if len(supersedes) > 0 {
+		body["supersedes"] = supersedes
+		body["supersede_reason"] = reason
 	}
 	var saved store.Knowledge
 	err := c.do("POST", "/api/knowledge", nil, body, &saved)
@@ -373,6 +455,16 @@ func (c *Client) KnowledgeByID(id int64) (store.Knowledge, error) {
 func (c *Client) Knowledge(ax scope.Axes) ([]store.Knowledge, error) {
 	var out []store.Knowledge
 	err := c.do("GET", "/api/knowledge", axesQuery(ax), nil, &out)
+	return out, err
+}
+
+// DeliverableKnowledge is Knowledge limited to what may be handed on to agents
+// and files: the server applies the delivery test of the bootstrap.
+func (c *Client) DeliverableKnowledge(ax scope.Axes) ([]store.Knowledge, error) {
+	q := axesQuery(ax)
+	q.Set("deliverable", "1")
+	var out []store.Knowledge
+	err := c.do("GET", "/api/knowledge", q, nil, &out)
 	return out, err
 }
 

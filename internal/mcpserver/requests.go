@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -146,6 +147,8 @@ type RequestCreateInput struct {
 	Priority       string   `json:"priority,omitempty" jsonschema:"optional project priority"`
 	Criteria       []string `json:"criteria" jsonschema:"observable acceptance criteria"`
 	IdempotencyKey string   `json:"idempotency_key,omitempty" jsonschema:"stable retry key for this creation attempt"`
+	Project        string   `json:"project,omitempty" jsonschema:"the project this request belongs to when it is not the session's own: a remote like github.com/owner/repo or a short name that is unique among the projects you can write to"`
+	Explanation    string   `json:"explanation,omitempty" jsonschema:"optional \"Kurz erklärt\" for the humans who will read this: two to four plain sentences, in the language the people of the project use. Say what it is about in everyday words (the mechanism, not the jargon), why it matters (who it affects, when), what has to be done or decided, and your recommendation. No markdown, no links, never a secret. You know the context the server does not; without it the server generates one later from the text alone"`
 }
 
 type RequestStartWorkInput struct {
@@ -181,6 +184,7 @@ type RequestProgressInput struct {
 	OtherRequestID int64  `json:"other_request_id,omitempty" jsonschema:"the object of the relation, read after the kind: request_id <kind> other_request_id"`
 	KnowledgeID    int64  `json:"knowledge_id,omitempty"`
 	ExternalRef    string `json:"external_ref,omitempty"`
+	Project        string `json:"project,omitempty" jsonschema:"with correct: move the request to this project (a remote or a short name that is unique among the projects you can write to); needs a reason"`
 }
 
 // correctionPatch collects the replacement values a correct action carries.
@@ -210,11 +214,20 @@ func requestDetailResult(detail requestdomain.Detail, concise bool) *mcp.CallToo
 // countSessions zählt die unabhängigen Sitzungen, nicht die Zitate: zwei Sätze
 // aus derselben Sitzung sind ein Mal geäussert, nicht zwei.
 func countSessions(sightings []requestdomain.Sighting) int {
-	seen := map[int64]bool{}
+	seen := map[string]bool{}
 	for _, sighting := range sightings {
-		seen[sighting.SessionID] = true
+		seen[sightingSession(sighting)] = true
 	}
 	return len(seen)
+}
+
+// sightingSession nennt die Session einer Fundstelle: die Adresse, wenn der
+// Betrachter die Nummer nicht kennen darf, sonst die Nummer.
+func sightingSession(s requestdomain.Sighting) string {
+	if s.SessionPublicID != "" {
+		return "@" + s.SessionPublicID
+	}
+	return strconv.FormatInt(s.SessionID, 10)
 }
 
 func pluralSessions(n int) string {
@@ -242,7 +255,7 @@ func renderRequestDetail(detail requestdomain.Detail, concise bool) string {
 	if len(detail.Sightings) > 0 {
 		fmt.Fprintf(&b, "\n\nVoiced in %s\n", pluralSessions(countSessions(detail.Sightings)))
 		for _, sighting := range detail.Sightings {
-			fmt.Fprintf(&b, "- session %d", sighting.SessionID)
+			fmt.Fprintf(&b, "- session %s", sightingSession(sighting))
 			if sighting.At != "" {
 				fmt.Fprintf(&b, " (%s)", sighting.At)
 			}
@@ -271,6 +284,26 @@ func renderRequestDetail(detail requestdomain.Detail, concise bool) string {
 			}
 			if relation.ExternalRef != "" {
 				fmt.Fprintf(&b, " %s", relation.ExternalRef)
+			}
+			b.WriteByte('\n')
+		}
+	}
+	if len(detail.Pains) > 0 {
+		b.WriteString("\nMotivated by\n")
+		for _, p := range detail.Pains {
+			fmt.Fprintf(&b, "- PAIN-%d [%s] %s", p.ID, p.State, p.Title)
+			if p.Remaining != "" {
+				fmt.Fprintf(&b, " (remaining: %s)", p.Remaining)
+			}
+			b.WriteByte('\n')
+		}
+	}
+	if len(detail.Tasks) > 0 {
+		b.WriteString("\nHuman tasks\n")
+		for _, t := range detail.Tasks {
+			fmt.Fprintf(&b, "- TASK-%d [%s|%s] %s", t.ID, t.Kind, t.State, t.Title)
+			if t.Location != "" {
+				fmt.Fprintf(&b, " -> %s", t.Location)
 			}
 			b.WriteByte('\n')
 		}
@@ -348,11 +381,21 @@ func (s *Server) handleRequestGet(_ context.Context, _ *mcp.CallToolRequest, in 
 
 func (s *Server) handleRequestCreate(_ context.Context, _ *mcp.CallToolRequest, in RequestCreateInput) (*mcp.CallToolResult, RequestChangeOutput, error) {
 	// Project only: a backlog entry belongs to the repository, not to the
-	// branch or machine that happened to file it.
-	ax := scope.Axes{Project: s.ctxAxes.Project}
+	// branch or machine that happened to file it. And it always has one: a
+	// request without a project used to be filed globally and turned up in every
+	// project's ledger.
+	project, err := s.writeTarget(in.Project)
+	if err != nil {
+		return nil, RequestChangeOutput{}, err
+	}
+	ax := scope.Axes{Project: project}
+	ref := s.sessionRef
+	if ref == "" {
+		ref = "mcp"
+	}
 	detail, err := s.client.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{
-		Type: in.Type, Title: in.Title, Description: in.Description, Priority: in.Priority, Scope: ax, Origin: "agent", SessionRef: "mcp",
-	}, Criteria: in.Criteria, IdempotencyKey: in.IdempotencyKey})
+		Type: in.Type, Title: in.Title, Description: in.Description, Priority: in.Priority, Scope: ax, Origin: "agent", SessionRef: ref,
+	}, Criteria: in.Criteria, IdempotencyKey: in.IdempotencyKey, Explanation: in.Explanation})
 	out := changeOutput(detail, "created", 0)
 	// Creation is the one mutation that has to list its criteria: their ids
 	// exist nowhere else yet, and without them the next step is a request_get
@@ -419,7 +462,21 @@ func (s *Server) handleRequestProgress(_ context.Context, _ *mcp.CallToolRequest
 	case "relation_remove":
 		err = s.client.RemoveRequestRelation(in.RelationID, in.Reason)
 	case "correct":
-		err = s.client.CorrectRequest(in.RequestID, in.correctionPatch(), in.Reason)
+		if in.Project != "" {
+			if strings.TrimSpace(in.Reason) == "" {
+				return nil, RequestChangeOutput{}, fmt.Errorf("moving a request has to say why: pass reason")
+			}
+			var project string
+			if project, err = s.writeTarget(in.Project); err != nil {
+				return nil, RequestChangeOutput{}, err
+			}
+			if _, err = s.client.MoveRequest(in.RequestID, project, in.Reason); err != nil {
+				return nil, RequestChangeOutput{}, err
+			}
+		}
+		if patch := in.correctionPatch(); len(patch) > 0 || in.Project == "" {
+			err = s.client.CorrectRequest(in.RequestID, patch, in.Reason)
+		}
 	default:
 		err = fmt.Errorf("unknown request progress action %q; use criterion_add, criterion_met, criterion_waive, complete, drop, relation_add, relation_remove, or correct", in.Action)
 	}

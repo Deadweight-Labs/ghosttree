@@ -177,7 +177,7 @@ func TestContendedBudgetHasBoundedWait(t *testing.T) {
 	if err := Deliver("locked", "more", func(string) error { t.Fatal("ignored lock"); return nil }); err == nil {
 		t.Fatal("missing timeout")
 	}
-	if time.Since(start) > time.Second {
+	if time.Since(start) > lockWait+time.Second {
 		t.Fatal("budget blocked hook")
 	}
 }

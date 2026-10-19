@@ -31,6 +31,11 @@ rather than in source comments. Search prior knowledge with ` + "`context_search
 before re-deriving it. Call ` + "`context_get`" + ` again with repository-relative paths
 before working in another subtree.
 
+Search before you write. When a known state changes, supersede the old entry
+(` + "`context_remember`" + ` with ` + "`supersedes`" + ` and ` + "`supersede_reason`" + `) instead of adding
+a follow-up that leaves both active. When what an entry describes no longer
+exists, retire it with ` + "`context_retire`" + ` and a reason.
+
 What a file or directory DOES belongs in its ghost file. Whenever you are about
 to write an explanatory comment that serves later readers more than the person
 in front of you — and whenever you create a file — put that text at the path
@@ -58,7 +63,40 @@ For substantial feature, architecture, migration, or multi-session work, use
 ` + "`request_search`" + ` before implementation. Continue a matching request and
 associate the current session, or create a request with explicit acceptance
 criteria. Trivial local fixes and routine maintenance do not require a request.
-Mark criteria and requests complete only with concrete evidence.`
+Mark criteria and requests complete only with concrete evidence.
+
+Messages to you from people and agents in this project arrive in the hook
+context, under "ghosttree: new messages for you", once each. Answer with
+` + "`thread_reply`" + ` inside a thread or ` + "`coord_send`" + ` (set ` + "`mention`" + ` to the
+sender); ` + "`coord_inbox`" + ` lists everything in the room and marks what is
+addressed to you. Write ` + "`@name`" + ` in a message to address a person or agent.
+
+When you start work on a PR or branch, say so with ` + "`coord_status`" + ` (one
+sentence, at most 200 characters, for example "PR #77 feat/mac-sync, room sync");
+update it when it changes and clear it with an empty note when you are done.
+Others see it as self-reported next to your name in ` + "`coord_peers`" + ` and on your
+messages. Never put a secret in it. ` + "`@agents`" + ` in a message reaches every agent
+of the project seen working in the last 15 minutes.
+
+A problem without a solution belongs in ` + "`pain_record`" + `, not in a request
+(requests need criteria). Never set a pain to resolved just because a request
+is finished: use ` + "`pain_update`" + ` with evidence, and for mitigated with ` + "`remaining`" + `.
+
+What only the human can provide (a key, a file, a decision, a manual step) you
+create with ` + "`human_task_create`" + `, with where it lives and how to check it, instead
+of saying it in chat. Never write a secret or file contents into it, only where
+it lives; token patterns are refused (a heuristic, not a guarantee). Never set
+a task to done yourself. Check what the human marked done, then call
+` + "`human_task_resolve`" + ` with confirm or reopen.
+
+The people who read what you write change things but do not dive into every small
+finding of an agent. So give each entry a short ` + "`explanation`" + `: ` + "`context_remember`" + `
+(every entry), ` + "`request_create`" + `, ` + "`pain_record`" + `, ` + "`human_task_create`" + `, and
+` + "`coord_send`" + ` with intent question. Two to four plain sentences in the language
+the project's people use: what it is about in everyday words, why it matters
+(who it affects, when), what has to be done or decided, and your recommendation.
+No markdown, no secret. You know the context; a text the server generates later
+only knows the entry.`
 
 func section(body string) string {
 	return markerStart + "\n" + body + "\n" + markerEnd + "\n"

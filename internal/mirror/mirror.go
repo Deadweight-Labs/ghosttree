@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	docwork "github.com/Deadweight-Labs/ghosttree/internal/doc"
+	"github.com/Deadweight-Labs/ghosttree/internal/pain"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -43,11 +44,20 @@ type Input struct {
 	DoneShown int                       // wie viele erledigte Aufträge im Spiegel stehen
 	DoneTotal int                       // wie viele es insgesamt gibt
 
+	// Pains sind die festgehaltenen Probleme ohne Lösung, alle Zustände, so wie
+	// der Betrachter des Spiegels sie lesen darf. Aufgaben für Menschen stehen
+	// nicht hier: sie sind kurzlebig und tragen Notizen.
+	Pains []PainView
+
 	// Wie voll der Ghost-Baum ist. Ungezählt liest sich "eine Beschreibung je
 	// Datei" als Zusage, und die vielen unbeschriebenen Pfade wirken dann wie
 	// ein Mangel des Baums statt wie sein Füllstand.
 	TreeDescribed int
 	TreePaths     int
+
+	// Threads sind die laufenden Untersuchungen. Nur unbeschränkte: der
+	// Spiegel liegt im Repo und wird von jedem gelesen, der es auscheckt.
+	Threads []ThreadView
 
 	// At ist der Zeitpunkt dieses Durchlaufs. Ohne ihn sieht der Spiegel frisch
 	// aus, egal wie alt er ist — und auf einer Umgebung ohne Hook schreibt ihn
@@ -57,23 +67,35 @@ type Input struct {
 
 const projectionNote = "Projection from ghosttree. Edits to this file are lost on the next write."
 
+// PainView is a pain with the edges and history the viewer may read.
+type PainView struct {
+	Pain      pain.Pain
+	Motivates []pain.Link
+	Events    []pain.Event
+}
+
 // Build erzeugt den ganzen Spiegel. Reine Funktion: sie liest keine Datei und
 // schreibt keine, damit der Inhalt ohne Dateisystem prüfbar bleibt.
 func Build(in Input) []Doc {
 	knowledge := deliverable(in.Knowledge)
 	mentions := backlinks(knowledge, in.Requests)
+	motivated := motivators(in.Pains)
 
 	docs := make([]Doc, 0, len(knowledge)+len(in.Documents)+len(in.Requests)+1)
 	for _, k := range knowledge {
 		path := fmt.Sprintf("knowledge/%s/%d-%s.md", k.Type, k.ID, slug(k.Title))
-		docs = append(docs, Doc{Path: path, Body: knowledgeBody(k, mentions[mentionKey("#", k.ID)])})
+		docs = append(docs, Doc{Path: path, Body: knowledgeBody(k, mentions[mentionKey("#", k.ID)], motivated[mentionKey("#", k.ID)])})
 	}
 	for _, document := range in.Documents {
 		docs = append(docs, Doc{Path: documentPath(document), Body: documentBody(document)})
 	}
 	for _, hit := range in.Requests {
-		docs = append(docs, Doc{Path: requestPath(hit.Request), Body: requestBody(hit, mentions[mentionKey("REQ-", hit.Request.ID)])})
+		docs = append(docs, Doc{Path: requestPath(hit.Request), Body: requestBody(hit, mentions[mentionKey("REQ-", hit.Request.ID)], motivated[mentionKey("REQ-", hit.Request.ID)])})
 	}
+	for _, p := range in.Pains {
+		docs = append(docs, Doc{Path: painPath(p.Pain), Body: painBody(p)})
+	}
+	docs = append(docs, threadDocs(in.Threads)...)
 	docs = append(docs, Doc{Path: "INDEX.md", Body: index(in, len(knowledge))})
 	return docs
 }
@@ -92,7 +114,7 @@ func deliverable(entries []store.Knowledge) []store.Knowledge {
 	return out
 }
 
-func knowledgeBody(k store.Knowledge, mentionedBy []string) string {
+func knowledgeBody(k store.Knowledge, mentionedBy, motivatedBy []string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# #%d %s\n\n", k.ID, k.Title)
 	fmt.Fprintf(&b, "%s | %s | %s", scopeLabel(k.Scope), k.Type, k.Confidence)
@@ -105,6 +127,7 @@ func knowledgeBody(k store.Knowledge, mentionedBy []string) string {
 	b.WriteString("\n\n")
 	b.WriteString(strings.TrimRight(k.Body, "\n"))
 	b.WriteString("\n")
+	b.WriteString(motivatedSection(motivatedBy))
 	b.WriteString(backlinkSection(mentionedBy))
 	b.WriteString(footer())
 	return b.String()
@@ -141,7 +164,7 @@ func requestPath(r requestdomain.Request) string {
 	return fmt.Sprintf("requests/%s/REQ-%d-%s.md", state, r.ID, slug(r.Title))
 }
 
-func requestBody(hit requestdomain.SearchHit, mentionedBy []string) string {
+func requestBody(hit requestdomain.SearchHit, mentionedBy, motivatedBy []string) string {
 	r := hit.Request
 	var b strings.Builder
 	fmt.Fprintf(&b, "# REQ-%d %s\n\n", r.ID, r.Title)
@@ -162,6 +185,7 @@ func requestBody(hit requestdomain.SearchHit, mentionedBy []string) string {
 	// die hängen an Zuständen, die sich im Lauf einer Sitzung ändern, und ein
 	// veralteter Haken ist schlimmer als gar keiner.
 	fmt.Fprintf(&b, "\nCriteria, evidence and history: `request_get %d`\n", r.ID)
+	b.WriteString(motivatedSection(motivatedBy))
 	b.WriteString(backlinkSection(mentionedBy))
 	b.WriteString(footer())
 	return b.String()
@@ -202,6 +226,20 @@ func index(in Input, knowledgeCount int) string {
 	fmt.Fprintf(&b, "- `docs/` — %d %s, in full. This is a generated projection; local edits are overwritten.\n", len(in.Documents), plural(len(in.Documents), "document", "documents"))
 	b.WriteString("- `edit/` — local document worktree. Edit these files and publish them with `ctx doc push`; the mirror never writes here.\n")
 	fmt.Fprintf(&b, "- `requests/open/` and `requests/done/` — the work ledger; %d of %d finished ones are kept here.\n", in.DoneShown, in.DoneTotal)
+	if len(in.Threads) > 0 {
+		open := 0
+		for _, v := range in.Threads {
+			if v.Thread.State == store.ThreadOpen {
+				open++
+			}
+		}
+		fmt.Fprintf(&b, "- `threads/` — %d discussion%s, %d still open. What is being investigated, as opposed to what is settled.\n",
+			len(in.Threads), plural(len(in.Threads), "", "s"), open)
+	}
+	if len(in.Pains) > 0 {
+		fmt.Fprintf(&b, "- `pains/` — %d %s: problems recorded without a solution, by state (active, mitigated, resolved, obsolete), with what they motivate.\n",
+			len(in.Pains), plural(len(in.Pains), "pain", "pains"))
+	}
 	fmt.Fprintf(&b, "- `tree/` — descriptions for %d of %d paths in this repository, one file each.\n\n",
 		in.TreeDescribed, in.TreePaths)
 
@@ -213,7 +251,7 @@ func index(in Input, knowledgeCount int) string {
 	b.WriteString("    ls .ghosttree/requests/open/                   # what is open\n")
 	b.WriteString("    cat .ghosttree/tree/<path>.md                  # what a file does\n\n")
 	b.WriteString("Each file names its scope, its type and who wrote it. Entry `#42` is `knowledge/*/42-*.md`; `REQ-7` is `requests/*/REQ-7-*.md`.\n\n")
-	b.WriteString("Where ghosttree is available as a tool, it sees more than this directory: session transcripts (`context_sessions`), unreviewed and superseded knowledge (`context_search`), and the criteria and evidence behind each request (`request_get`).\n")
+	b.WriteString("Where ghosttree is available as a tool, it sees more than this directory: session transcripts (`context_sessions`), unreviewed knowledge (`context_search`; superseded or retired entries stay readable by id with `knowledge_id`), and the criteria and evidence behind each request (`request_get`).\n")
 	b.WriteString(footer())
 	return b.String()
 }
@@ -315,4 +353,78 @@ func slug(title string) string {
 		out = "ohne-titel"
 	}
 	return out
+}
+
+func painPath(p pain.Pain) string {
+	return fmt.Sprintf("pains/%s/PAIN-%d-%s.md", p.State, p.ID, slug(p.Title))
+}
+
+// painBody shows title, state, what remains, the text, what the pain motivates
+// and the evidence references. No notes, no person, no account ids, and no
+// session references (a number there would name a transcript).
+func painBody(v PainView) string {
+	p := v.Pain
+	var b strings.Builder
+	fmt.Fprintf(&b, "# PAIN-%d %s\n\n", p.ID, p.Title)
+	fmt.Fprintf(&b, "%s | %s\n", scopeLabel(scope.Axes{Project: p.Project}), p.State)
+	if strings.TrimSpace(p.Remaining) != "" {
+		fmt.Fprintf(&b, "\nRemaining: %s\n", strings.TrimSpace(p.Remaining))
+	}
+	if body := strings.TrimRight(p.Body, "\n"); body != "" {
+		b.WriteString("\n" + body + "\n")
+	}
+	if len(v.Motivates) > 0 {
+		b.WriteString("\n## Motivates\n\n")
+		for _, l := range v.Motivates {
+			switch l.Kind {
+			case "request":
+				fmt.Fprintf(&b, "- REQ-%d %s\n", l.RequestID, l.Title)
+			case "knowledge":
+				fmt.Fprintf(&b, "- #%d %s\n", l.KnowledgeID, l.Title)
+			default:
+				fmt.Fprintf(&b, "- %s\n", l.ExternalRef)
+			}
+		}
+	}
+	var evidence []string
+	for _, e := range v.Events {
+		if e.Kind == "state" && e.EvidenceKind != "" && e.EvidenceKind != "session" {
+			evidence = append(evidence, fmt.Sprintf("- %s: %s (%s)", e.EvidenceKind, e.EvidenceRef, e.ToState))
+		}
+	}
+	if len(evidence) > 0 {
+		b.WriteString("\n## Evidence\n\n" + strings.Join(evidence, "\n") + "\n")
+	}
+	b.WriteString(footer())
+	return b.String()
+}
+
+// motivators maps a request ("REQ-n") or knowledge entry ("#n") to the pains
+// that motivate it.
+func motivators(pains []PainView) map[string][]string {
+	out := map[string][]string{}
+	for _, v := range pains {
+		line := fmt.Sprintf("- PAIN-%d %s (%s)", v.Pain.ID, v.Pain.Title, v.Pain.State)
+		for _, l := range v.Motivates {
+			switch l.Kind {
+			case "request":
+				key := mentionKey("REQ-", l.RequestID)
+				out[key] = append(out[key], line)
+			case "knowledge":
+				key := mentionKey("#", l.KnowledgeID)
+				out[key] = append(out[key], line)
+			}
+		}
+	}
+	for k := range out {
+		sort.Strings(out[k])
+	}
+	return out
+}
+
+func motivatedSection(lines []string) string {
+	if len(lines) == 0 {
+		return ""
+	}
+	return "\n## Motivated by\n\n" + strings.Join(lines, "\n") + "\n"
 }

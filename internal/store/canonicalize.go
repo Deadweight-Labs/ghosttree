@@ -75,6 +75,7 @@ func (s *Store) canonicalizeScopes(aliases map[string]string, preview bool) (Can
 	defer tx.Rollback()
 
 	var report CanonicalizeReport
+	var otherRescoped int
 	seen := map[string]bool{}
 	for _, target := range []struct {
 		table string
@@ -84,6 +85,9 @@ func (s *Store) canonicalizeScopes(aliases map[string]string, preview bool) (Can
 		{"requests", &report.RequestsRescoped},
 		{"sessions", &report.SessionsRescoped},
 		{"search_documents", &report.DocumentsRescoped},
+		{"pains", &otherRescoped},
+		{"human_tasks", &otherRescoped},
+		{"entity_links", &otherRescoped},
 	} {
 		rows, err := tx.Query(`SELECT DISTINCT project FROM ` + target.table + ` WHERE project != ''`)
 		if err != nil {
@@ -191,8 +195,10 @@ func mergeDuplicateRequests(tx *sql.Tx) (int, []int64, error) {
 		if err := tx.QueryRow(`SELECT
 			(SELECT COUNT(*) FROM request_work WHERE request_id=?) +
 			(SELECT COUNT(*) FROM request_evidence WHERE request_id=?) +
-			(SELECT COUNT(*) FROM request_relations WHERE request_id=? OR other_request_id=?)`,
-			r.id, r.id, r.id, r.id).Scan(&attached); err != nil {
+			(SELECT COUNT(*) FROM request_relations WHERE request_id=? OR other_request_id=?) +
+			(SELECT COUNT(*) FROM human_tasks WHERE request_id=?) +
+			(SELECT COUNT(*) FROM entity_links WHERE dst_kind='request' AND dst_id=?)`,
+			r.id, r.id, r.id, r.id, r.id, r.id).Scan(&attached); err != nil {
 			return 0, nil, err
 		}
 		if attached != 0 {

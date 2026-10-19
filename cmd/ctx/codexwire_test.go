@@ -99,6 +99,10 @@ func TestUserPromptSubmitAnswersACodexPayload(t *testing.T) {
 		if got := r.URL.Query().Get("q"); got != "welches modell in ollama" {
 			t.Errorf("prompt forwarded as %q", got)
 		}
+		// Codex names its session in the same field as Claude Code.
+		if got := r.URL.Query().Get("session"); got != "01998a2b-0000-7000-8000-000000000000" {
+			t.Errorf("session id forwarded as %q, want the Codex session id", got)
+		}
 		w.Write([]byte("## Possibly relevant\n\n- [note|machine:workstation-a] Ollama inventory — …\n"))
 	}))
 	defer srv.Close()

@@ -5,21 +5,28 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 )
 
 // fileState is the per-transcript progress. The offset IS the offline queue:
 // it only advances after the server confirmed the upload, so a failed or
 // offline run replays the same lines on the next sweep.
 type fileState struct {
-	Offset          int64 `json:"offset"`
-	SessionID       int64 `json:"session_id"`
-	Seq             int   `json:"seq"`
-	MetadataVersion int   `json:"metadata_version,omitempty"`
+	Offset    int64 `json:"offset"`
+	SessionID int64 `json:"session_id"`
+	// PublicID ist die Adresse der Session, wenn der Server keine Nummer nennt
+	// (der Token gehört einem Gast).
+	PublicID        string `json:"public_id,omitempty"`
+	Seq             int    `json:"seq"`
+	MetadataVersion int    `json:"metadata_version,omitempty"`
 }
 
 type State struct {
-	mu    sync.Mutex
-	path  string
+	mu   sync.Mutex
+	path string
+	// retry hält je Transkript fest, wann die Anmeldung wieder versucht wird,
+	// nachdem der Server keine brauchbare Session genannt hat (nur im Speicher).
+	retry map[string]*retryState
 	Files map[string]*fileState `json:"files"`
 }
 
@@ -77,4 +84,48 @@ func (st *State) file(path string) *fileState {
 		st.Files[path] = f
 	}
 	return f
+}
+
+type retryState struct {
+	fails int
+	until time.Time
+}
+
+// backoffNow ist die Uhr des Backoffs; Tests setzen sie.
+var backoffNow = time.Now
+
+const (
+	backoffBase = 30 * time.Second
+	backoffMax  = 10 * time.Minute
+)
+
+func (st *State) backoffLeft(path string) time.Duration {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if r := st.retry[path]; r != nil {
+		return r.until.Sub(backoffNow())
+	}
+	return 0
+}
+
+func (st *State) backoffFail(path string) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.retry == nil {
+		st.retry = map[string]*retryState{}
+	}
+	r := st.retry[path]
+	if r == nil {
+		r = &retryState{}
+		st.retry[path] = r
+	}
+	d := backoffBase << min(r.fails, 5)
+	r.fails++
+	r.until = backoffNow().Add(min(d, backoffMax))
+}
+
+func (st *State) backoffClear(path string) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	delete(st.retry, path)
 }

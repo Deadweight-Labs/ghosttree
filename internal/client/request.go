@@ -14,6 +14,9 @@ func (c *Client) CreateRequest(in requestdomain.CreateInput) (requestdomain.Deta
 		"origin": r.Origin, "session_ref": r.SessionRef,
 		"criteria": in.Criteria, "idempotency_key": in.IdempotencyKey,
 	}
+	if in.Explanation != "" {
+		body["explanation"] = in.Explanation
+	}
 	var out requestdomain.Detail
 	err := c.do("POST", "/api/requests", nil, body, &out)
 	return out, err
@@ -108,5 +111,14 @@ func (c *Client) RemoveRequestRelation(relationID int64, reason string) error {
 func (c *Client) AddRequestRelation(requestID int64, relation requestdomain.Relation) (requestdomain.Relation, error) {
 	var out requestdomain.Relation
 	err := c.do("POST", "/api/requests/"+strconv.FormatInt(requestID, 10)+"/relations", nil, relation, &out)
+	return out, err
+}
+
+// MoveRequest legt einen Auftrag in ein anderes Projekt (Remote oder
+// eindeutiger Kurzname unter den beschreibbaren Projekten).
+func (c *Client) MoveRequest(requestID int64, project, reason string) (requestdomain.Detail, error) {
+	var out requestdomain.Detail
+	err := c.do("POST", "/api/requests/"+strconv.FormatInt(requestID, 10)+"/move", nil,
+		map[string]string{"project": project, "reason": reason}, &out)
 	return out, err
 }

@@ -12,6 +12,8 @@ import (
 
 var Kinds = []string{"spec", "plan", "investigation", "report", "other"}
 
+var datedSlugPattern = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}(-|$)`)
+
 var slugPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$`)
 
 var reservedWindowsNames = map[string]bool{
@@ -62,6 +64,11 @@ func RelPath(kind, createdAt, slug string) (string, error) {
 	}
 	if err := ValidateSlug(slug); err != nil {
 		return "", err
+	}
+	// A slug that already starts with a date is dated by its author; adding
+	// the creation date (UTC) in front would double the prefix.
+	if datedSlugPattern.MatchString(slug) {
+		return filepath.ToSlash(filepath.Join(dir, slug+".md")), nil
 	}
 	day := createdAt
 	if len(day) >= 10 {

@@ -62,7 +62,7 @@ func TestRequestAPIWorkAndCriterionLifecycle(t *testing.T) {
 		ID int64 `json:"id"`
 	}
 	_ = json.NewDecoder(sessionResp.Body).Decode(&session)
-	createResp := req(t, "POST", srv.URL+"/api/requests", token, map[string]any{"type": "change", "title": "work lifecycle"})
+	createResp := req(t, "POST", srv.URL+"/api/requests", token, map[string]any{"type": "change", "title": "work lifecycle", "project": "github.com/x/y"})
 	var detail requestdomain.Detail
 	_ = json.NewDecoder(createResp.Body).Decode(&detail)
 

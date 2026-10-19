@@ -188,7 +188,7 @@ func TestDoctorReportsAnUnservedChannelAsAGap(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(home, ".codex", "config.toml"), []byte(codexMCPSection), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(home, ".codex", "config.toml"), []byte(codexMCPSection()), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := writeMarkerFile(filepath.Join(home, ".codex", "AGENTS.md"), ruleText); err != nil {
@@ -411,5 +411,81 @@ func TestWiringPreToolUseKeepsForeignHooks(t *testing.T) {
 	}
 	if !strings.Contains(string(b), "foreign-session-lease.sh") {
 		t.Fatal("a foreign PreToolUse hook must survive installation")
+	}
+}
+
+// The pause gate is a second PreToolUse entry with an EMPTY matcher: a pause
+// must stop Bash, Task and MCP calls too, which the context hook's matcher does
+// not cover. It is idempotent, leaves the context hook alone, and Codex has none.
+func TestPauseGateIsWiredWithAnEmptyMatcherForClaudeOnly(t *testing.T) {
+	gateGroups := func(path string) (gates, context int, gateMatcher string) {
+		settings, err := readJSONFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hooks, _ := settings["hooks"].(map[string]any)
+		groups, _ := hooks["PreToolUse"].([]any)
+		for _, g := range groups {
+			group, _ := g.(map[string]any)
+			inner, _ := group["hooks"].([]any)
+			for _, h := range inner {
+				cmd, _ := h.(map[string]any)["command"].(string)
+				switch {
+				case strings.HasPrefix(cmd, pauseGateHookCommand):
+					gates++
+					gateMatcher, _ = group["matcher"].(string)
+				case strings.HasPrefix(cmd, preToolHookCommand):
+					context++
+				}
+			}
+		}
+		return
+	}
+	home := t.TempDir()
+	for i := 0; i < 2; i++ { // second run: idempotent
+		if _, err := InstallClaude(home); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gates, ctxHooks, matcher := gateGroups(filepath.Join(home, ".claude", "settings.json"))
+	if gates != 1 || ctxHooks != 1 || matcher != "" {
+		t.Fatalf("claude: gates=%d context=%d gate matcher=%q", gates, ctxHooks, matcher)
+	}
+	if h := harnessNamed("claude"); h.DeliversContext(ChannelPauseGate) || !h.Serves(ChannelPauseGate) {
+		t.Fatal("the gate is served but is not a context channel")
+	}
+	checks := channelChecks(harnessNamed("claude"), home)
+	found := false
+	for _, c := range checks {
+		if strings.Contains(c.Name, "pause-gate") {
+			found = true
+			if !c.OK {
+				t.Fatalf("doctor check fails after install: %+v", c)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("doctor has no pause-gate check")
+	}
+	if harnessNamed("codex").Serves(ChannelPauseGate) {
+		t.Fatal("codex has no measured pause interface")
+	}
+}
+
+func TestTomlStringEscapesControlCharactersAndRoundTrips(t *testing.T) {
+	in := "/opt/a\"b\\c\td\ne\rf\x01g\x7fh"
+	got := tomlString(in)
+	for _, r := range got {
+		if r < 0x20 || r == 0x7f {
+			t.Fatalf("raw control character %U in %q", r, got)
+		}
+	}
+	want := `"/opt/a\"b\\c\td\ne\rf\u0001g\u007Fh"`
+	if got != want {
+		t.Errorf("tomlString = %s, want %s", got, want)
+	}
+	table := codexMCPSectionFor(in)
+	if back := codexTableCommand(table); back != in {
+		t.Errorf("round trip = %q, want %q", back, in)
 	}
 }

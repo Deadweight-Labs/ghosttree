@@ -1,0 +1,1635 @@
+package store
+
+import (
+	"database/sql"
+	"errors"
+	"fmt"
+	"regexp"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+	"unicode"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/scope"
+)
+
+// Org-Rollen. Mehr gibt es auf Organisationsebene nicht: wer was in einem
+// Projekt darf, regeln später die Projektrollen.
+const (
+	OrgOwner  = "owner"
+	OrgMember = "member"
+
+	DefaultInvitationTTL = 7 * 24 * time.Hour
+	MaxInvitationTTL     = 30 * 24 * time.Hour
+
+	// Grenzen, damit weder ein Konto noch ein Eingabefeld die Tabellen oder den
+	// Speicher füllt.
+	maxPendingInvitations = 100
+	maxOrgNameLen         = 100
+	maxEmailLen           = 254
+	maxRemoteLen          = 300
+	maxListRows           = 5000
+)
+
+var (
+	ErrOrgNotFound     = errors.New("organization not found")
+	ErrNotOrgOwner     = errors.New("only an organization owner may do that")
+	ErrNotOrgMember    = errors.New("not a member of that organization")
+	ErrLastOrgOwner    = errors.New("an organization needs at least one owner")
+	ErrOrgSlugTaken    = errors.New("organization slug is taken")
+	ErrInvalidInput    = errors.New("invalid input")
+	ErrProjectClaimed  = errors.New("project belongs to another organization")
+	ErrProjectNotFound = errors.New("project not found")
+	// ErrProjectNameTaken: ein benanntes Projekt dieses Namens gibt es schon,
+	// in irgendeiner Organisation der Instanz.
+	ErrProjectNameTaken = errors.New("a project with that name already exists")
+	// ErrNoOrg: das Konto gehört keiner Organisation; ein Projekt kann ihm nicht
+	// zugeordnet werden.
+	ErrNoOrg = errors.New("account belongs to no organization")
+	// ErrInvitationEmail: die Einladung ist an eine E-Mail-Adresse gebunden, und
+	// der Einlösende konnte keine verifizierte gleiche Adresse vorweisen.
+	ErrInvitationEmail = errors.New("invitation is bound to another or an unverified email address")
+	ErrAlreadyMember   = errors.New("already a member of that organization")
+	ErrTooManyInvites  = errors.New("too many pending invitations")
+	// ErrTooManyAttempts: zu viele falsche Einladungs-Codes; kurz gesperrt.
+	ErrTooManyAttempts = errors.New("too many wrong codes, try again later")
+)
+
+// ProjectUnclaimedError: ein Projekt ohne Organisation, und das Konto hat
+// mehrere Organisationen ohne Standard. Es wird nicht geraten.
+type ProjectUnclaimedError struct{ Choices []string }
+
+func (e *ProjectUnclaimedError) Error() string {
+	return "project is unclaimed; choose an organization: " + strings.Join(e.Choices, ", ")
+}
+
+// Org ist eine Organisation, aus Sicht eines Kontos (Role, Default) wenn es
+// aus ListOrgs kommt.
+type Org struct {
+	ID        int64  `json:"id"`
+	Slug      string `json:"slug"`
+	Name      string `json:"name"`
+	CreatedAt string `json:"created_at"`
+	Role      string `json:"role,omitempty"`
+	Default   bool   `json:"default,omitempty"`
+}
+
+type OrgMemberInfo struct {
+	AccountID string `json:"account_id,omitempty"`
+	Account   string `json:"account"`
+	Role      string `json:"role"`
+	JoinedAt  string `json:"joined_at"`
+	// Guest: kam über eine Gast-Einladung und sieht nur seine Projekte, nie die
+	// Standardrolle geteilter Projekte.
+	Guest bool `json:"guest,omitempty"`
+}
+
+// Project ist die Zuordnung einer normalisierten Remote zu genau einer
+// Organisation. Alle anderen Tabellen führen weiter `project TEXT` und werden
+// über Remote verbunden; hier wird deshalb nichts umgeschrieben.
+type Project struct {
+	ID        int64  `json:"id"`
+	Remote    string `json:"remote"`
+	OrgID     int64  `json:"org_id"`
+	Org       string `json:"org"`
+	Name      string `json:"name,omitempty"`
+	CreatedAt string `json:"created_at"`
+	// Named: ein Projekt ohne Git (ID "<org>/<name>"). Das ist eine Eigenschaft
+	// der Zeile (Tabelle named_projects), nicht der ID-Form: eine hostlose Remote
+	// wie "gitserver/repo" hat dieselbe Gestalt und bleibt ein Remote-Projekt.
+	Named bool `json:"named,omitempty"`
+	// Shared: das Projekt ist mit der Organisation geteilt; jedes Mitglied hat
+	// darin mindestens die Standardrolle.
+	Shared bool `json:"shared,omitempty"`
+}
+
+// Invitation beschreibt eine Einladung ohne ihren Code. Der Klartext
+// existiert nur bei der Ausgabe.
+type Invitation struct {
+	ID        int64  `json:"id"`
+	OrgID     int64  `json:"org_id"`
+	Role      string `json:"role"`
+	Email     string `json:"email,omitempty"`
+	InvitedBy string `json:"invited_by"`
+	CreatedAt string `json:"created_at"`
+	ExpiresAt string `json:"expires_at"`
+	Status    string `json:"status"` // pending, expired, accepted, revoked
+	// ProjectRemote und ProjectRole sind nur bei einer Projekt-Einladung (Link)
+	// gesetzt.
+	ProjectRemote string `json:"project,omitempty"`
+	ProjectRole   string `json:"project_role,omitempty"`
+	// AcceptedBy und AcceptedAt stehen nur bei einer angenommenen Einladung.
+	AcceptedBy string `json:"accepted_by,omitempty"`
+	AcceptedAt string `json:"accepted_at,omitempty"`
+}
+
+type queryer interface {
+	rowQuerier
+	Query(query string, args ...any) (*sql.Rows, error)
+}
+
+type execQueryer interface {
+	queryer
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
+var slugPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$`)
+
+func slugFromName(name string) string {
+	var b strings.Builder
+	dash := false
+	for _, r := range strings.ToLower(name) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			dash = false
+		} else if !dash && b.Len() > 0 {
+			b.WriteByte('-')
+			dash = true
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	if len(out) > 40 {
+		out = strings.Trim(out[:40], "-")
+	}
+	return out
+}
+
+func orgEvent(q execQueryer, orgID int64, action, actor, subject, detail string) error {
+	_, err := q.Exec(`INSERT INTO org_events(org_id, action, actor, subject, detail, created_at) VALUES(?,?,?,?,?,?)`,
+		orgID, action, actor, subject, detail, now())
+	return err
+}
+
+func principalOfID(id int64) string { return "person:" + strconv.FormatInt(id, 10) }
+
+// ---------------------------------------------------------------- migration
+
+// migrateOrgs legt auf einer bestehenden Instanz die Default-Organisation an
+// und ordnet ihr alle bekannten Projekte zu. Der Instanz-Owner (kleinste
+// persons.id) wird ihr Owner; andere Konten bleiben ohne Mitgliedschaft.
+//
+// Kosten: drei CREATE TABLE im Schema (leere Tabellen), dann Lesen der kleinen
+// Tabellen requests, knowledge, documents, threads, ghost_files, coord_rooms und
+// sessions (eine Zeile je Session, nie session_chunks, nie search_documents) und
+// ein INSERT je Projekt, alles in einer Transaktion. Keine bestehende Tabelle
+// wird verändert oder umgeschrieben; deshalb gilt das Muster aus dem
+// Ownership-Schritt hier ohne neue Spalten. Der Schritt ist einmalig (Marker in
+// org_state) und läuft ohne Konto gar nicht, damit die erste später angelegte
+// Person ihn beim nächsten Öffnen auslöst.
+func migrateOrgs(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var done int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM org_state WHERE key='backfill'`).Scan(&done); err != nil {
+		return err
+	}
+	owner := instanceOwnerID(tx)
+	if done > 0 || owner == 0 {
+		return nil
+	}
+	var org sql.NullInt64
+	if err := tx.QueryRow(`SELECT MIN(id) FROM orgs`).Scan(&org); err != nil {
+		return err
+	}
+	if !org.Valid {
+		res, err := tx.Exec(`INSERT INTO orgs(slug, name, created_at) VALUES('default','Default',?)`, now())
+		if err != nil {
+			return err
+		}
+		if org.Int64, err = res.LastInsertId(); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(`INSERT OR IGNORE INTO org_members(org_id, account_id, role, joined_at) VALUES(?,?,'owner',?)`,
+		org.Int64, owner, now()); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE persons SET default_org_id=? WHERE id=? AND default_org_id=0`, org.Int64, owner); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT OR IGNORE INTO projects(remote, org_id, created_at)
+		SELECT project, ?, ? FROM (
+			SELECT project FROM requests UNION SELECT project FROM knowledge
+			UNION SELECT project FROM documents UNION SELECT project FROM threads
+			UNION SELECT project FROM ghost_files UNION SELECT project FROM sessions
+			UNION SELECT substr(room_key, 9) FROM coord_rooms WHERE kind='project')
+		WHERE project <> '' AND length(project) <= ?`, org.Int64, now(), maxRemoteLen); err != nil {
+		return err
+	}
+	if err := orgEvent(tx, org.Int64, "backfill", "", principalOfID(owner), "default organization and existing projects"); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO org_state(key, value) VALUES('backfill', ?)`, now()); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// ---------------------------------------------------------------- orgs
+
+func (s *Store) accountRowID(principal string) (int64, error) {
+	return parsePersonPrincipalID(principal)
+}
+
+func createOrgTx(tx execQueryer, name, slug string, owner int64) (Org, error) {
+	name = strings.TrimSpace(name)
+	if name == "" || len(name) > maxOrgNameLen || hasControlRunes(name) {
+		return Org{}, fmt.Errorf("%w: organization name must be 1 to %d printable characters", ErrInvalidInput, maxOrgNameLen)
+	}
+	slug = strings.ToLower(strings.TrimSpace(slug))
+	if slug == "" {
+		slug = slugFromName(name)
+	}
+	if !slugPattern.MatchString(slug) {
+		return Org{}, fmt.Errorf("%w: slug must be lowercase letters, digits and dashes (up to 40 characters)", ErrInvalidInput)
+	}
+	res, err := tx.Exec(`INSERT INTO orgs(slug, name, created_at) VALUES(?,?,?)`, slug, name, now())
+	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE") {
+			return Org{}, ErrOrgSlugTaken
+		}
+		return Org{}, err
+	}
+	id, _ := res.LastInsertId()
+	if _, err := tx.Exec(`INSERT INTO org_members(org_id, account_id, role, joined_at) VALUES(?,?,'owner',?)`, id, owner, now()); err != nil {
+		return Org{}, err
+	}
+	if _, err := tx.Exec(`UPDATE persons SET default_org_id=? WHERE id=? AND default_org_id=0`, id, owner); err != nil {
+		return Org{}, err
+	}
+	if err := orgEvent(tx, id, "create_org", principalOfID(owner), slug, name); err != nil {
+		return Org{}, err
+	}
+	return orgByIDTx(tx, id)
+}
+
+func orgByIDTx(q rowQuerier, id int64) (Org, error) {
+	var o Org
+	err := q.QueryRow(`SELECT id, slug, name, created_at FROM orgs WHERE id=?`, id).Scan(&o.ID, &o.Slug, &o.Name, &o.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Org{}, ErrOrgNotFound
+	}
+	return o, err
+}
+
+// orgByRefTx löst eine Org per Id oder Slug auf.
+func orgByRefTx(q rowQuerier, ref string) (Org, error) {
+	ref = strings.TrimSpace(ref)
+	if id, err := strconv.ParseInt(ref, 10, 64); err == nil {
+		return orgByIDTx(q, id)
+	}
+	var o Org
+	err := q.QueryRow(`SELECT id, slug, name, created_at FROM orgs WHERE slug=?`, strings.ToLower(ref)).Scan(&o.ID, &o.Slug, &o.Name, &o.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Org{}, ErrOrgNotFound
+	}
+	return o, err
+}
+
+// CreateOrg legt eine Organisation an; das Konto wird Owner. Wer Organisationen
+// anlegen darf, entscheidet der Aufrufer.
+func (s *Store) CreateOrg(ownerPrincipal, name, slug string) (Org, error) {
+	if s.writer != nil {
+		return queueValue(s, []any{ownerPrincipal, name, slug}, func(d *Store, p []any) (Org, error) {
+			return d.CreateOrg(p[0].(string), p[1].(string), p[2].(string))
+		})
+	}
+	owner, err := parsePersonPrincipalID(ownerPrincipal)
+	if err != nil {
+		return Org{}, err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return Org{}, err
+	}
+	defer tx.Rollback()
+	o, err := createOrgTx(tx, name, slug, owner)
+	if err != nil {
+		return Org{}, err
+	}
+	return o, tx.Commit()
+}
+
+func (s *Store) OrgByRef(ref string) (Org, error) {
+	if s.reader != nil {
+		return s.reader.OrgByRef(ref)
+	}
+	return orgByRefTx(s.db, ref)
+}
+
+// ListOrgs liefert die Organisationen eines Kontos mit seiner Rolle.
+func (s *Store) ListOrgs(accountPrincipal string) ([]Org, error) {
+	if s.reader != nil {
+		return s.reader.ListOrgs(accountPrincipal)
+	}
+	id, err := parsePersonPrincipalID(accountPrincipal)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.db.Query(`SELECT o.id, o.slug, o.name, o.created_at, m.role, o.id = p.default_org_id
+		FROM org_members m JOIN orgs o ON o.id = m.org_id JOIN persons p ON p.id = m.account_id
+		WHERE m.account_id=? ORDER BY o.id`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Org{}
+	for rows.Next() {
+		var o Org
+		if err := rows.Scan(&o.ID, &o.Slug, &o.Name, &o.CreatedAt, &o.Role, &o.Default); err != nil {
+			return nil, err
+		}
+		out = append(out, o)
+	}
+	return out, rows.Err()
+}
+
+// OrgRole liefert die Rolle des Kontos in der Organisation, leer ohne
+// Mitgliedschaft.
+func (s *Store) OrgRole(orgID int64, accountPrincipal string) string {
+	if s.reader != nil {
+		return s.reader.OrgRole(orgID, accountPrincipal)
+	}
+	id, err := parsePersonPrincipalID(accountPrincipal)
+	if err != nil {
+		return ""
+	}
+	return orgRoleTx(s.db, orgID, id)
+}
+
+func orgRoleTx(q rowQuerier, orgID, account int64) string {
+	var role string
+	if q.QueryRow(`SELECT role FROM org_members WHERE org_id=? AND account_id=?`, orgID, account).Scan(&role) != nil {
+		return ""
+	}
+	return role
+}
+
+func (s *Store) ListOrgMembers(orgID int64) ([]OrgMemberInfo, error) {
+	if s.reader != nil {
+		return s.reader.ListOrgMembers(orgID)
+	}
+	rows, err := s.db.Query(`SELECT m.account_id, p.name, m.role, m.joined_at,
+		EXISTS(SELECT 1 FROM org_guests g WHERE g.org_id=m.org_id AND g.account_id=m.account_id)
+		FROM org_members m
+		JOIN persons p ON p.id = m.account_id WHERE m.org_id=? ORDER BY m.role, p.name LIMIT ?`, orgID, maxListRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []OrgMemberInfo{}
+	for rows.Next() {
+		var m OrgMemberInfo
+		var id int64
+		if err := rows.Scan(&id, &m.Account, &m.Role, &m.JoinedAt, &m.Guest); err != nil {
+			return nil, err
+		}
+		m.AccountID = principalOfID(id)
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// ListOrgMembersFor ist die Mitgliederliste für einen Betrachter (enforced:
+// ob die Sichtbarkeit durchgesetzt wird). Ohne
+// durchgesetzte Sichtbarkeit sieht jedes Mitglied alle Inhalte, dann auch alle
+// Mitglieder. Mit ihr sieht ein Org-Owner alle; wer kein Owner ist, sieht die
+// Owner, sich selbst und die Konten, die mit ihm ein Projekt teilen, in dem er
+// mehr als Gast ist. Ein Gast, oder wer keine Projektrolle hat, sieht nur die
+// Owner und sich selbst. Die Ids der anderen Einträge fehlen: fortlaufende Ids
+// verrieten die Zahl der Konten (Pitfall #2447).
+func (s *Store) ListOrgMembersFor(orgID int64, viewerPrincipal string, enforced bool) ([]OrgMemberInfo, error) {
+	if s.reader != nil {
+		return s.reader.ListOrgMembersFor(orgID, viewerPrincipal, enforced)
+	}
+	all, err := s.ListOrgMembers(orgID)
+	if err != nil {
+		return nil, err
+	}
+	if !enforced {
+		return all, nil
+	}
+	viewer, err := parsePersonPrincipalID(viewerPrincipal)
+	if err != nil {
+		return []OrgMemberInfo{}, nil
+	}
+	if orgRoleTx(s.db, orgID, viewer) == OrgOwner {
+		return all, nil
+	}
+	rows, err := s.db.Query(`SELECT DISTINCT other.account_id FROM project_members mine
+		JOIN projects p ON p.id = mine.project_id AND p.org_id = ?
+		JOIN project_members other ON other.project_id = mine.project_id
+		WHERE mine.account_id = ? AND mine.role IN (?, ?, ?)`, orgID, viewer, RoleOwner, RoleLead, RoleMember)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	shared := map[string]bool{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		shared[principalOfID(id)] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// In einer Org mit geteilten Projekten arbeiten alle Nicht-Gäste zusammen.
+	var sharedProjects int
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM shared_projects sp JOIN projects p ON p.id=sp.project_id WHERE p.org_id=?`, orgID).Scan(&sharedProjects)
+	togetherInShared := sharedProjects > 0 && !orgGuestTx(s.db, orgID, viewer)
+	self := principalOfID(viewer)
+	out := []OrgMemberInfo{}
+	for _, m := range all {
+		if togetherInShared && !m.Guest {
+			shared[m.AccountID] = true
+		}
+		if m.AccountID != self && m.Role != OrgOwner && !shared[m.AccountID] {
+			continue
+		}
+		if m.AccountID != self {
+			m.AccountID = ""
+		}
+		out = append(out, m)
+	}
+	return out, nil
+}
+
+func ownerCountTx(q rowQuerier, orgID int64) int {
+	var n int
+	_ = q.QueryRow(`SELECT COUNT(*) FROM org_members WHERE org_id=? AND role='owner'`, orgID).Scan(&n)
+	return n
+}
+
+// SetOrgRole ändert die Rolle eines Mitglieds. Nur Owner; der letzte Owner kann
+// nicht herabgestuft werden.
+func (s *Store) SetOrgRole(actorPrincipal string, orgID int64, targetPrincipal, role string) error {
+	if s.writer != nil {
+		return queueWrite(s, []any{actorPrincipal, orgID, targetPrincipal, role}, func(d *Store, p []any) error {
+			return d.SetOrgRole(p[0].(string), p[1].(int64), p[2].(string), p[3].(string))
+		})
+	}
+	if role != OrgOwner && role != OrgMember {
+		return fmt.Errorf("%w: role must be owner or member", ErrInvalidInput)
+	}
+	actor, err := parsePersonPrincipalID(actorPrincipal)
+	if err != nil {
+		return err
+	}
+	target, err := parsePersonPrincipalID(targetPrincipal)
+	if err != nil {
+		return err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if orgRoleTx(tx, orgID, actor) != OrgOwner {
+		return ErrNotOrgOwner
+	}
+	old := orgRoleTx(tx, orgID, target)
+	if old == "" {
+		return ErrNotOrgMember
+	}
+	if old == OrgOwner && role != OrgOwner && ownerCountTx(tx, orgID) <= 1 {
+		return ErrLastOrgOwner
+	}
+	if old == role {
+		return nil
+	}
+	if _, err := tx.Exec(`UPDATE org_members SET role=? WHERE org_id=? AND account_id=?`, role, orgID, target); err != nil {
+		return err
+	}
+	if err := orgEvent(tx, orgID, "set_role", principalOfID(actor), principalOfID(target), old+" -> "+role); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// RemoveOrgMember entfernt ein Mitglied. Ein Owner darf jeden entfernen, jedes
+// Mitglied sich selbst; der letzte Owner bleibt.
+func (s *Store) RemoveOrgMember(actorPrincipal string, orgID int64, targetPrincipal string) error {
+	if s.writer != nil {
+		return queueWrite(s, []any{actorPrincipal, orgID, targetPrincipal}, func(d *Store, p []any) error {
+			return d.RemoveOrgMember(p[0].(string), p[1].(int64), p[2].(string))
+		})
+	}
+	actor, err := parsePersonPrincipalID(actorPrincipal)
+	if err != nil {
+		return err
+	}
+	target, err := parsePersonPrincipalID(targetPrincipal)
+	if err != nil {
+		return err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	actorRole := orgRoleTx(tx, orgID, actor)
+	if actorRole != OrgOwner && !(actor == target && actorRole != "") {
+		return ErrNotOrgOwner
+	}
+	old := orgRoleTx(tx, orgID, target)
+	if old == "" {
+		return ErrNotOrgMember
+	}
+	if old == OrgOwner && ownerCountTx(tx, orgID) <= 1 {
+		return ErrLastOrgOwner
+	}
+	if _, err := tx.Exec(`DELETE FROM org_members WHERE org_id=? AND account_id=?`, orgID, target); err != nil {
+		return err
+	}
+	// Projektrollen gehören zur Mitgliedschaft: wer geht, nimmt sie nicht mit
+	// zurück, wenn er wiederkommt.
+	if err := dropProjectRolesTx(tx, principalOfID(actor), RoleViaAPI,
+		`m.account_id=? AND p.org_id=?`, target, orgID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM org_guests WHERE org_id=? AND account_id=?`, orgID, target); err != nil {
+		return err
+	}
+	// Ein Standard, auf den das Konto keinen Zugriff mehr hat, wird gelöscht
+	// statt zu wirken.
+	if _, err := tx.Exec(`UPDATE persons SET default_org_id=0 WHERE id=? AND default_org_id=?`, target, orgID); err != nil {
+		return err
+	}
+	if err := orgEvent(tx, orgID, "remove_member", principalOfID(actor), principalOfID(target), old); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// SetDefaultOrg wählt die Organisation, der ein Konto neue Projekte zuordnet;
+// 0 löscht den Standard.
+func (s *Store) SetDefaultOrg(accountPrincipal string, orgID int64) error {
+	if s.writer != nil {
+		return queueWrite(s, []any{accountPrincipal, orgID}, func(d *Store, p []any) error {
+			return d.SetDefaultOrg(p[0].(string), p[1].(int64))
+		})
+	}
+	acct, err := parsePersonPrincipalID(accountPrincipal)
+	if err != nil {
+		return err
+	}
+	if orgID != 0 && orgRoleTx(s.db, orgID, acct) == "" {
+		return ErrNotOrgMember
+	}
+	_, err = s.db.Exec(`UPDATE persons SET default_org_id=? WHERE id=?`, orgID, acct)
+	return err
+}
+
+// ---------------------------------------------------------------- projects
+
+func projectTx(q rowQuerier, remote string) (Project, bool) {
+	var p Project
+	err := q.QueryRow(`SELECT p.id, p.remote, p.org_id, o.slug, p.name, p.created_at,
+		EXISTS(SELECT 1 FROM named_projects n WHERE n.project_id = p.id),
+		EXISTS(SELECT 1 FROM shared_projects sp WHERE sp.project_id = p.id) FROM projects p JOIN orgs o ON o.id = p.org_id WHERE p.remote=?`,
+		remote).Scan(&p.ID, &p.Remote, &p.OrgID, &p.Org, &p.Name, &p.CreatedAt, &p.Named, &p.Shared)
+	return p, err == nil
+}
+
+func normalizeRemote(remote string) (string, error) {
+	r := scope.NormalizeRemote(remote)
+	if r == "" || len(r) > maxRemoteLen || strings.ContainsAny(r, " \t\r\n") {
+		return "", fmt.Errorf("%w: remote must be a normalized git remote such as github.com/owner/repo", ErrInvalidInput)
+	}
+	return r, nil
+}
+
+func (s *Store) ProjectByRemote(remote string) (Project, bool) {
+	if s.reader != nil {
+		return s.reader.ProjectByRemote(remote)
+	}
+	return projectTx(s.db, scope.NormalizeRemote(remote))
+}
+
+// pickOrgTx wählt die Organisation für ein unbeanspruchtes Projekt: der
+// Standard des Kontos, sonst seine einzige. Bei mehreren ohne Standard wird
+// nicht geraten.
+func pickOrgTx(q queryer, account int64) (int64, error) {
+	var def int64
+	_ = q.QueryRow(`SELECT default_org_id FROM persons WHERE id=?`, account).Scan(&def)
+	if def > 0 && orgRoleTx(q, def, account) != "" {
+		return def, nil
+	}
+	rows, err := q.Query(`SELECT o.id, o.slug FROM org_members m JOIN orgs o ON o.id = m.org_id WHERE m.account_id=? ORDER BY o.id LIMIT 50`, account)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	var ids []int64
+	var slugs []string
+	for rows.Next() {
+		var id int64
+		var slug string
+		if err := rows.Scan(&id, &slug); err != nil {
+			return 0, err
+		}
+		ids, slugs = append(ids, id), append(slugs, slug)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	switch len(ids) {
+	case 0:
+		return 0, ErrNoOrg
+	case 1:
+		return ids[0], nil
+	}
+	return 0, &ProjectUnclaimedError{Choices: slugs}
+}
+
+// claimProjectTx ordnet eine unbeanspruchte Remote einer Organisation zu und
+// ist bei einer schon zugeordneten idempotent. orgID 0 heißt: Regel des Kontos.
+// Beides, der ausdrückliche Claim und der implizite beim ersten Schreiben,
+// verlangt Owner der Ziel-Org: sonst könnte ein einfaches Mitglied eine Remote
+// besetzen, bevor ihr Besitzer dort schreibt. Ein Mitglied beim impliziten
+// Schreiben lässt sie unbeansprucht (leeres Project, kein Fehler).
+func claimProjectTx(tx execQueryer, account int64, remote string, orgID int64, explicit bool) (Project, error) {
+	if p, ok := projectTx(tx, remote); ok {
+		if orgRoleTx(tx, p.OrgID, account) == "" {
+			return Project{}, ErrProjectClaimed
+		}
+		return p, nil
+	}
+	// Ein beanspruchtes Präfix entscheidet allein: wer dort ein Repo klont, landet
+	// ohne Claim in der Org, die das Präfix hält (oder bekommt nichts).
+	if p, handled, err := assignByPrefixTx(tx, account, remote, orgID); handled {
+		return p, err
+	}
+	if orgID == 0 {
+		var err error
+		if orgID, err = pickOrgTx(tx, account); err != nil {
+			return Project{}, err
+		}
+	} else if orgRoleTx(tx, orgID, account) == "" {
+		return Project{}, ErrNotOrgMember
+	}
+	if orgRoleTx(tx, orgID, account) != OrgOwner {
+		if explicit {
+			return Project{}, ErrNotOrgOwner
+		}
+		// Ein einfaches Mitglied besetzt beim Schreiben nichts: die Remote
+		// bleibt unbeansprucht, der Schreibzugriff geht durch, und der erste
+		// Owner, der dort schreibt oder claimt, gewinnt.
+		return Project{}, nil
+	}
+	if _, err := tx.Exec(`INSERT OR IGNORE INTO projects(remote, org_id, created_at) VALUES(?,?,?)`, remote, orgID, now()); err != nil {
+		return Project{}, err
+	}
+	p, _ := projectTx(tx, remote)
+	if p.OrgID != orgID {
+		return Project{}, ErrProjectClaimed
+	}
+	if err := orgEvent(tx, orgID, "claim_project", principalOfID(account), remote, ""); err != nil {
+		return Project{}, err
+	}
+	return p, nil
+}
+
+// EnsureProject ist der implizite Weg: ein Schreibzugriff auf eine unbekannte
+// Remote ordnet sie der Standard-Organisation des Schreibenden zu. Der Aufrufer
+// prüft vorher mit ProjectByRemote, ob das Projekt schon bekannt ist, damit der
+// häufige Fall keinen Schreibpfad braucht. ErrNoOrg heißt: das Konto hat keine
+// Organisation, das Projekt bleibt unbeansprucht; *ProjectUnclaimedError:
+// mehrere Organisationen ohne Standard.
+func (s *Store) EnsureProject(accountPrincipal, remote string) (Project, error) {
+	if s.writer != nil {
+		return queueValue(s, []any{accountPrincipal, remote}, func(d *Store, p []any) (Project, error) {
+			return d.EnsureProject(p[0].(string), p[1].(string))
+		})
+	}
+	remote = scope.NormalizeRemote(remote)
+	if remote == "" || len(remote) > maxRemoteLen {
+		return Project{}, nil
+	}
+	if p, ok := projectTx(s.db, remote); ok && p.Named {
+		// Ein benanntes Projekt wird nie über einen Schreibzugriff zugeordnet.
+		return Project{}, ErrProjectNotFound
+	} else if !ok && orgNamespaceTx(s.db, remote) {
+		return Project{}, ErrProjectNotFound
+	}
+	// Ein unbekannter Wert, auch einer in der Gestalt "a/b" (eine hostlose
+	// Remote wie gitserver/repo), ist wie bisher ein Remote-Projekt: benannt ist
+	// nur, was in named_projects steht.
+	return claimInTx(s.db, accountPrincipal, remote, "", false)
+}
+
+// orgNamespaceTx sagt, ob remote ein unbekannter hostloser Zweisegment-Wert ist,
+// dessen erstes Segment ein Org-Slug ist. Dieser Namensraum gehört den
+// benannten Projekten der Organisation: ein Schreibzugriff legt dort nichts
+// implizit an, auch nicht für Mitglieder (dafür gibt es ctx project create), und
+// niemand außerhalb kann so Namen einer fremden Org besetzen oder per 409
+// abfragen. Bestehende Remote-Projekte bleiben unverändert, auch wenn später
+// eine Organisation mit passendem Slug entsteht.
+func orgNamespaceTx(q rowQuerier, remote string) bool {
+	if !scope.IsNamedProject(remote) {
+		return false
+	}
+	var n int
+	_ = q.QueryRow(`SELECT COUNT(*) FROM orgs WHERE slug=?`, remote[:strings.IndexByte(remote, '/')]).Scan(&n)
+	return n > 0
+}
+
+// CreateNamedProject legt ein Projekt ohne Git an. Die ID ist
+// "<org-slug>/<name>" (das erste Segment ohne Punkt, also nie eine Remote) und
+// nur innerhalb der Organisation eindeutig.
+// Das Projekt gehört der Organisation orgRef, leer heißt: Regel des Kontos
+// (Standard, sonst die einzige). Anlegen darf jedes Mitglied dieser Organisation;
+// der Ersteller wird Projekt-Owner.
+func (s *Store) CreateNamedProject(accountPrincipal, name, orgRef string) (Project, error) {
+	if s.writer != nil {
+		return queueValue(s, []any{accountPrincipal, name, orgRef}, func(d *Store, p []any) (Project, error) {
+			return d.CreateNamedProject(p[0].(string), p[1].(string), p[2].(string))
+		})
+	}
+	if !scope.IsProjectName(name) {
+		return Project{}, fmt.Errorf("%w: a project name is lowercase letters, digits and dashes (at most 40), for example infra", ErrInvalidInput)
+	}
+	acct, err := parsePersonPrincipalID(accountPrincipal)
+	if err != nil {
+		return Project{}, err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return Project{}, err
+	}
+	defer tx.Rollback()
+	var orgID int64
+	if orgRef != "" {
+		o, err := orgByRefTx(tx, orgRef)
+		if err != nil {
+			return Project{}, err
+		}
+		if orgRoleTx(tx, o.ID, acct) == "" {
+			return Project{}, ErrNotOrgMember
+		}
+		orgID = o.ID
+	} else if orgID, err = pickOrgTx(tx, acct); err != nil {
+		return Project{}, err
+	}
+	org, err := orgByIDTx(tx, orgID)
+	if err != nil {
+		return Project{}, err
+	}
+	// Die ID führt den Org-Slug: "acme/infra". Das erste Segment hat keinen
+	// Punkt, eine Remote meist einen Host mit Punkt. Der Name ist nur innerhalb
+	// der Organisation vergeben. Trifft die ID eine vorhandene Zeile (ein
+	// benanntes Projekt derselben Org, aber auch ein Remote-Projekt wie
+	// "acme/infra"), gilt dieselbe Antwort: der Name ist vergeben. Benannt wird
+	// das Projekt durch die Zeile in named_projects, nicht durch die ID-Form.
+	id := org.Slug + "/" + name
+	res, err := tx.Exec(`INSERT OR IGNORE INTO projects(remote, org_id, name, created_at) VALUES(?,?,?,?)`, id, orgID, name, now())
+	if err != nil {
+		return Project{}, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return Project{}, ErrProjectNameTaken
+	}
+	p, _ := projectTx(tx, id)
+	if _, err := tx.Exec(`INSERT INTO named_projects(project_id) VALUES(?)`, p.ID); err != nil {
+		return Project{}, err
+	}
+	p.Named = true
+	if _, err := tx.Exec(`INSERT INTO project_members(project_id, account_id, role, can_review, granted_by, granted_at) VALUES(?,?,?,0,?,?)`,
+		p.ID, acct, RoleOwner, acct, now()); err != nil {
+		return Project{}, err
+	}
+	if err := roleEvent(tx, id, principalOfID(acct), "", RoleOwner, principalOfID(acct), RoleViaAPI); err != nil {
+		return Project{}, err
+	}
+	if err := orgEvent(tx, orgID, "create_project", principalOfID(acct), id, ""); err != nil {
+		return Project{}, err
+	}
+	return p, tx.Commit()
+}
+
+// ClaimProject ist der ausdrückliche Weg (`ctx project claim`), nur für Owner
+// der Ziel-Org.
+func (s *Store) ClaimProject(accountPrincipal, remote, orgRef string) (Project, error) {
+	if s.writer != nil {
+		return queueValue(s, []any{accountPrincipal, remote, orgRef}, func(d *Store, p []any) (Project, error) {
+			return d.ClaimProject(p[0].(string), p[1].(string), p[2].(string))
+		})
+	}
+	remote, err := normalizeRemote(remote)
+	if err != nil {
+		return Project{}, err
+	}
+	p, known := projectTx(s.db, remote)
+	if known && p.Named {
+		if acct, err := parsePersonPrincipalID(accountPrincipal); err == nil && orgRoleTx(s.db, p.OrgID, acct) != "" {
+			return Project{}, fmt.Errorf("%w: %q is a project name, not a git remote; create it with ctx project create", ErrInvalidInput, remote)
+		}
+		return Project{}, ErrProjectNotFound
+	}
+	if !known && orgNamespaceTx(s.db, remote) {
+		return Project{}, ErrProjectNotFound
+	}
+	return claimInTx(s.db, accountPrincipal, remote, orgRef, true)
+}
+
+func claimInTx(db *sql.DB, accountPrincipal, remote, orgRef string, explicit bool) (Project, error) {
+	acct, err := parsePersonPrincipalID(accountPrincipal)
+	if err != nil {
+		return Project{}, err
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return Project{}, err
+	}
+	defer tx.Rollback()
+	var orgID int64
+	if orgRef != "" {
+		o, err := orgByRefTx(tx, orgRef)
+		if err != nil {
+			return Project{}, err
+		}
+		orgID = o.ID
+	}
+	pr, err := claimProjectTx(tx, acct, remote, orgID, explicit)
+	if err != nil {
+		return Project{}, err
+	}
+	return pr, tx.Commit()
+}
+
+// MoveProject hängt ein Projekt in eine andere Organisation. Das verlangt
+// Owner-Rechte in der alten und in der neuen. Keine Tabelle mit project-Text
+// ändert sich; nur die Zuordnung.
+func (s *Store) MoveProject(actorPrincipal, remote, toOrgRef string) (Project, error) {
+	if s.writer != nil {
+		return queueValue(s, []any{actorPrincipal, remote, toOrgRef}, func(d *Store, p []any) (Project, error) {
+			return d.MoveProject(p[0].(string), p[1].(string), p[2].(string))
+		})
+	}
+	remote, err := normalizeRemote(remote)
+	if err != nil {
+		return Project{}, err
+	}
+	actor, err := parsePersonPrincipalID(actorPrincipal)
+	if err != nil {
+		return Project{}, err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return Project{}, err
+	}
+	defer tx.Rollback()
+	cur, ok := projectTx(tx, remote)
+	if !ok {
+		return Project{}, ErrProjectNotFound
+	}
+	to, err := orgByRefTx(tx, toOrgRef)
+	if err != nil {
+		return Project{}, err
+	}
+	if orgRoleTx(tx, cur.OrgID, actor) != OrgOwner || orgRoleTx(tx, to.ID, actor) != OrgOwner {
+		return Project{}, ErrNotOrgOwner
+	}
+	if cur.OrgID == to.ID {
+		return cur, nil
+	}
+	if _, err := tx.Exec(`UPDATE projects SET org_id=? WHERE remote=?`, to.ID, cur.Remote); err != nil {
+		return Project{}, err
+	}
+	if _, err := tx.Exec(`DELETE FROM shared_projects WHERE project_id=?`, cur.ID); err != nil {
+		return Project{}, err
+	}
+	if err := dropProjectRolesTx(tx, principalOfID(actor), RoleViaAPI, `p.remote=?`, cur.Remote); err != nil {
+		return Project{}, err
+	}
+	for _, id := range []int64{cur.OrgID, to.ID} {
+		if err := orgEvent(tx, id, "move_project", principalOfID(actor), cur.Remote, cur.Org+" -> "+to.Slug); err != nil {
+			return Project{}, err
+		}
+	}
+	moved, _ := projectTx(tx, cur.Remote)
+	return moved, tx.Commit()
+}
+
+// ListClaimableProjects nennt die Remotes, die der Owner einer Organisation
+// dort ausdrücklich übernehmen kann: Remotes ohne Projektzeile, zu denen
+// ausschließlich er Sessions hochgeladen hat. Sobald auch nur ein anderes
+// Konto Sessions dort hat, fehlt die Remote in der Liste, so verrät sie nichts
+// über Projekte anderer (#2447); übernehmen darf er mit ClaimProject ohnehin
+// jede Remote, die Liste ist die Teilmenge, die er kennt und die nur ihm gehört.
+// Wer nicht Owner der Organisation ist, bekommt ErrNotOrgOwner und keine Liste.
+func (s *Store) ListClaimableProjects(actorPrincipal string, orgID int64) ([]string, error) {
+	if s.reader != nil {
+		return s.reader.ListClaimableProjects(actorPrincipal, orgID)
+	}
+	actor, err := parsePersonPrincipalID(actorPrincipal)
+	if err != nil {
+		return nil, err
+	}
+	if orgRoleTx(s.db, orgID, actor) != OrgOwner {
+		return nil, ErrNotOrgOwner
+	}
+	owner := instanceOwnerID(s.db)
+	rows, err := s.db.Query(`SELECT DISTINCT project FROM sessions
+		WHERE project != '' AND project NOT IN (SELECT remote FROM projects)
+		  AND (CASE WHEN account_id = 0 THEN ? ELSE account_id END) = ?
+		  AND NOT EXISTS (SELECT 1 FROM sessions o WHERE o.project = sessions.project
+		        AND (CASE WHEN o.account_id = 0 THEN ? ELSE o.account_id END) != ?)
+		ORDER BY project LIMIT ?`, owner, actor, owner, actor, maxListRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var r string
+		if err := rows.Scan(&r); err != nil {
+			return nil, err
+		}
+		if _, err := normalizeRemote(r); err == nil {
+			out = append(out, r)
+		}
+	}
+	return out, rows.Err()
+}
+
+// ListProjects liefert die Projekte der Organisationen des Kontos. orgID 0
+// heißt: aller seiner Organisationen. Sichtbarkeit innerhalb eines Projekts
+// regelt dieser Aufruf nicht.
+func (s *Store) ListProjects(accountPrincipal string, orgID int64) ([]Project, error) {
+	if s.reader != nil {
+		return s.reader.ListProjects(accountPrincipal, orgID)
+	}
+	acct, err := parsePersonPrincipalID(accountPrincipal)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.db.Query(`SELECT p.id, p.remote, p.org_id, o.slug, p.name, p.created_at,
+		EXISTS(SELECT 1 FROM named_projects n WHERE n.project_id = p.id),
+		EXISTS(SELECT 1 FROM shared_projects sp WHERE sp.project_id = p.id) FROM projects p
+		JOIN orgs o ON o.id = p.org_id JOIN org_members m ON m.org_id = p.org_id AND m.account_id = ?
+		WHERE (? = 0 OR p.org_id = ?) ORDER BY o.slug, p.remote LIMIT ?`, acct, orgID, orgID, maxListRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Project{}
+	for rows.Next() {
+		var p Project
+		if err := rows.Scan(&p.ID, &p.Remote, &p.OrgID, &p.Org, &p.Name, &p.CreatedAt, &p.Named, &p.Shared); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// ---------------------------------------------------------------- invitations
+
+func normalizeInviteEmail(email string) (string, error) {
+	email = strings.ToLower(strings.TrimSpace(email))
+	if email == "" {
+		return "", nil
+	}
+	at := strings.LastIndex(email, "@")
+	if len(email) > maxEmailLen || at < 1 || at == len(email)-1 || strings.ContainsAny(email, " \t\r\n<>,;") {
+		return "", fmt.Errorf("%w: not an email address", ErrInvalidInput)
+	}
+	return email, nil
+}
+
+// CreateInvitation stellt eine Einladung in die Organisation aus (nur Owner)
+// und gibt den Code genau einmal zurück. Gespeichert wird nur sein Hash. Eine
+// gesetzte E-Mail bindet die Einladung: eingelöst werden kann sie dann nur mit
+// einer vom IdP verifizierten, gleichen Adresse. Ohne E-Mail genügt der Code.
+func (s *Store) CreateInvitation(actorPrincipal string, orgID int64, email, role string, ttl time.Duration) (string, Invitation, error) {
+	type result struct {
+		code string
+		inv  Invitation
+	}
+	if s.writer != nil {
+		r, err := queueValue(s, []any{actorPrincipal, orgID, email, role, ttl}, func(d *Store, p []any) (result, error) {
+			code, inv, err := d.CreateInvitation(p[0].(string), p[1].(int64), p[2].(string), p[3].(string), p[4].(time.Duration))
+			return result{code, inv}, err
+		})
+		return r.code, r.inv, err
+	}
+	actor, err := parsePersonPrincipalID(actorPrincipal)
+	if err != nil {
+		return "", Invitation{}, err
+	}
+	email, err = normalizeInviteEmail(email)
+	if err != nil {
+		return "", Invitation{}, err
+	}
+	if role == "" {
+		role = OrgMember
+	}
+	// A link is a bearer secret: it never carries ownership. Owners are made
+	// by an owner in the member list.
+	if role != OrgMember {
+		return "", Invitation{}, fmt.Errorf("%w: an invitation link grants the member role only", ErrInvalidInput)
+	}
+	if ttl <= 0 {
+		ttl = DefaultInvitationTTL
+	}
+	if ttl > MaxInvitationTTL {
+		return "", Invitation{}, fmt.Errorf("%w: invitations live at most %d days", ErrInvalidInput, int(MaxInvitationTTL/(24*time.Hour)))
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return "", Invitation{}, err
+	}
+	defer tx.Rollback()
+	if orgRoleTx(tx, orgID, actor) != OrgOwner {
+		return "", Invitation{}, ErrNotOrgOwner
+	}
+	var pending int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM invitations WHERE org_id=? AND accepted_at='' AND revoked_at='' AND expires_at>?`,
+		orgID, now()).Scan(&pending); err != nil {
+		return "", Invitation{}, err
+	}
+	if pending >= maxPendingInvitations {
+		return "", Invitation{}, ErrTooManyInvites
+	}
+	code, hash, err := newCode()
+	if err != nil {
+		return "", Invitation{}, err
+	}
+	expires := time.Now().UTC().Add(ttl).Format(time.RFC3339)
+	res, err := tx.Exec(`INSERT INTO invitations(org_id, role, email, code_hash, invited_by, created_at, expires_at) VALUES(?,?,?,?,?,?,?)`,
+		orgID, role, email, hash, actor, now(), expires)
+	if err != nil {
+		return "", Invitation{}, err
+	}
+	id, _ := res.LastInsertId()
+	if err := orgEvent(tx, orgID, "invite", principalOfID(actor), email, role); err != nil {
+		return "", Invitation{}, err
+	}
+	inv, err := invitationTx(tx, id)
+	if err != nil {
+		return "", Invitation{}, err
+	}
+	return code, inv, tx.Commit()
+}
+
+const invitationSelect = `SELECT i.id, i.org_id, i.role, i.email, p.name, i.created_at, i.expires_at, i.accepted_at, i.revoked_at,
+	COALESCE(pr.remote,''), i.project_role, COALESCE(ap.name,'')
+	FROM invitations i JOIN persons p ON p.id = i.invited_by LEFT JOIN projects pr ON pr.id = i.project_id
+	LEFT JOIN persons ap ON ap.id = i.accepted_by AND i.accepted_by != 0`
+
+func scanInvitation(r rowScanner) (Invitation, error) {
+	var inv Invitation
+	var accepted, revoked string
+	if err := r.Scan(&inv.ID, &inv.OrgID, &inv.Role, &inv.Email, &inv.InvitedBy, &inv.CreatedAt, &inv.ExpiresAt, &accepted, &revoked, &inv.ProjectRemote, &inv.ProjectRole, &inv.AcceptedBy); err != nil {
+		return Invitation{}, err
+	}
+	switch {
+	case accepted != "":
+		inv.Status = "accepted"
+		inv.AcceptedAt = accepted
+	case revoked != "":
+		inv.Status = "revoked"
+	case inv.ExpiresAt <= now():
+		inv.Status = "expired"
+	default:
+		inv.Status = "pending"
+	}
+	return inv, nil
+}
+
+func invitationTx(q rowQuerier, id int64) (Invitation, error) {
+	return scanInvitation(q.QueryRow(invitationSelect+` WHERE i.id=?`, id))
+}
+
+// ListInvitations zeigt die Einladungen einer Organisation (nur Owner), neueste
+// zuerst, ohne Codes.
+func (s *Store) ListInvitations(actorPrincipal string, orgID int64) ([]Invitation, error) {
+	if s.reader != nil {
+		return s.reader.ListInvitations(actorPrincipal, orgID)
+	}
+	actor, err := parsePersonPrincipalID(actorPrincipal)
+	if err != nil {
+		return nil, err
+	}
+	if orgRoleTx(s.db, orgID, actor) != OrgOwner {
+		return nil, ErrNotOrgOwner
+	}
+	rows, err := s.db.Query(invitationSelect+` WHERE i.org_id=? ORDER BY i.id DESC LIMIT 200`, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Invitation{}
+	for rows.Next() {
+		inv, err := scanInvitation(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, inv)
+	}
+	return out, rows.Err()
+}
+
+// RevokeInvitation zieht eine noch offene Einladung zurück (nur Owner der
+// Organisation, zu der sie gehört).
+func (s *Store) RevokeInvitation(actorPrincipal string, orgID, id int64) error {
+	if s.writer != nil {
+		return queueWrite(s, []any{actorPrincipal, orgID, id}, func(d *Store, p []any) error {
+			return d.RevokeInvitation(p[0].(string), p[1].(int64), p[2].(int64))
+		})
+	}
+	actor, err := parsePersonPrincipalID(actorPrincipal)
+	if err != nil {
+		return err
+	}
+	if orgRoleTx(s.db, orgID, actor) != OrgOwner {
+		return ErrNotOrgOwner
+	}
+	res, err := s.db.Exec(`UPDATE invitations SET revoked_at=? WHERE id=? AND org_id=? AND accepted_at='' AND revoked_at=''`, now(), id, orgID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrCodeInvalid
+	}
+	return orgEvent(s.db, orgID, "revoke_invite", principalOfID(actor), strconv.FormatInt(id, 10), "")
+}
+
+func invitationExists(q rowQuerier, code string) bool {
+	var one int
+	return q.QueryRow(`SELECT 1 FROM invitations WHERE code_hash=?`, hashToken(code)).Scan(&one) == nil
+}
+
+// invitationCoverage sagt, ob ein Konto durch eine Einladung nichts bekäme:
+// eine Org-Einladung bringt einem Mitglied nichts, ein Org-Owner hat schon alles,
+// und ein Konto, das die Organisation schon hat, kann über eine Projekt-Einladung
+// eine Projektrolle bekommen, aber nie eine niedrigere oder gleiche. Die Rolle
+// des Kontos im Projekt (leer ohne Eintrag) kommt für das Ereignis mit zurück.
+func invitationCoverage(tx rowQuerier, orgID, projectID int64, projectRole string, account int64) (orgRole, currentProject string, covered bool) {
+	orgRole = orgRoleTx(tx, orgID, account)
+	// Ein Gast, der in die Organisation eingeladen wird, gewinnt etwas: er wird
+	// Mitglied.
+	if projectID == 0 && orgRole != "" && !orgGuestTx(tx, orgID, account) || orgRole == OrgOwner {
+		return orgRole, "", true
+	}
+	if projectID != 0 {
+		_ = tx.QueryRow(`SELECT role FROM project_members WHERE project_id=? AND account_id=?`, projectID, account).Scan(&currentProject)
+		if RoleRank(currentProject) >= RoleRank(projectRole) {
+			return orgRole, currentProject, true
+		}
+	}
+	return orgRole, currentProject, false
+}
+
+// InvitationCovered: das Konto hat mit dieser Einladung nichts zu gewinnen, weil
+// es die Rolle oder eine höhere schon hat. Liest nur, verbraucht nichts. Ein
+// unbrauchbarer Code oder ein Fehler ergibt false.
+func (s *Store) InvitationCovered(accountPrincipal, code string) bool {
+	if s.reader != nil {
+		return s.reader.InvitationCovered(accountPrincipal, code)
+	}
+	account, err := parsePersonPrincipalID(accountPrincipal)
+	if err != nil {
+		return false
+	}
+	var orgID, projectID int64
+	var projectRole string
+	if s.db.QueryRow(`SELECT org_id, project_id, project_role FROM invitations WHERE code_hash=? AND accepted_at='' AND revoked_at='' AND expires_at>?`,
+		hashToken(code), now()).Scan(&orgID, &projectID, &projectRole) != nil {
+		return false
+	}
+	_, _, covered := invitationCoverage(s.db, orgID, projectID, projectRole, account)
+	return covered
+}
+
+// acceptInvitationTx löst eine Einladung für ein existierendes Konto ein. Alle
+// Prüfungen laufen vor dem Verbrauch, ein Fehlschlag verbraucht sie nicht.
+// verifiedEmail muss vom Aufrufer verifiziert sein (IdP-Claim email_verified)
+// oder leer; eine an eine Adresse gebundene Einladung verlangt Gleichheit.
+// Gültigkeit, Zustand und Einlösbarkeit melden einheitlich ErrCodeInvalid.
+func acceptInvitationTx(tx execQueryer, code string, account int64, verifiedEmail string, enforced bool) (Org, error) {
+	var id, orgID, inviter, projectID int64
+	var role, projectRole, email, expires, accepted, revoked string
+	err := tx.QueryRow(`SELECT id, org_id, role, project_id, project_role, email, invited_by, expires_at, accepted_at, revoked_at FROM invitations WHERE code_hash=?`,
+		hashToken(code)).Scan(&id, &orgID, &role, &projectID, &projectRole, &email, &inviter, &expires, &accepted, &revoked)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Org{}, ErrCodeInvalid
+	}
+	if err != nil {
+		return Org{}, err
+	}
+	if accepted != "" || revoked != "" || expires <= now() {
+		return Org{}, ErrCodeInvalid
+	}
+	// Ein Link vergibt nie Ownership, auch nicht aus einer Zeit, in der das
+	// noch ging.
+	if role != OrgMember {
+		return Org{}, ErrCodeInvalid
+	}
+	// Wer eingeladen hat, muss noch Owner sein: ein entzogenes Recht entwertet
+	// offene Einladungen.
+	if orgRoleTx(tx, orgID, inviter) != OrgOwner {
+		return Org{}, ErrCodeInvalid
+	}
+	// Eine Projekt-Einladung gilt nur, solange das Projekt in der Organisation
+	// liegt, die eingeladen hat, und trägt nur member oder guest.
+	var remote string
+	if projectID != 0 {
+		if projectRole != RoleMember && projectRole != RoleGuest {
+			return Org{}, ErrCodeInvalid
+		}
+		// Ein Gast-Link gilt nur, solange die Sichtbarkeit durchgesetzt wird.
+		if projectRole == RoleGuest && !enforced {
+			return Org{}, ErrCodeInvalid
+		}
+		var projectOrg int64
+		if tx.QueryRow(`SELECT remote, org_id FROM projects WHERE id=?`, projectID).Scan(&remote, &projectOrg) != nil || projectOrg != orgID {
+			return Org{}, ErrCodeInvalid
+		}
+	}
+	if email != "" && !(verifiedEmail != "" && strings.EqualFold(email, strings.TrimSpace(verifiedEmail))) {
+		return Org{}, ErrInvitationEmail
+	}
+	orgRole, currentProject, covered := invitationCoverage(tx, orgID, projectID, projectRole, account)
+	if covered {
+		return Org{}, ErrAlreadyMember
+	}
+	res, err := tx.Exec(`UPDATE invitations SET accepted_by=?, accepted_at=? WHERE id=? AND accepted_at='' AND revoked_at=''`, account, now(), id)
+	if err != nil {
+		return Org{}, err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return Org{}, ErrCodeInvalid
+	}
+	if orgRole == "" {
+		if _, err := tx.Exec(`INSERT INTO org_members(org_id, account_id, role, joined_at) VALUES(?,?,?,?)`, orgID, account, role, now()); err != nil {
+			return Org{}, err
+		}
+		// Wer nur für ein Projekt eingeladen wird, bleibt Gast der Organisation,
+		// gleich welche Rolle der Link im Projekt trägt.
+		if projectID != 0 {
+			if _, err := tx.Exec(`INSERT OR IGNORE INTO org_guests(org_id, account_id) VALUES(?,?)`, orgID, account); err != nil {
+				return Org{}, err
+			}
+		}
+	}
+	if projectID == 0 {
+		if _, err := tx.Exec(`DELETE FROM org_guests WHERE org_id=? AND account_id=?`, orgID, account); err != nil {
+			return Org{}, err
+		}
+	}
+	if _, err := tx.Exec(`UPDATE persons SET default_org_id=? WHERE id=? AND default_org_id=0`, orgID, account); err != nil {
+		return Org{}, err
+	}
+	detail := "invitation " + strconv.FormatInt(id, 10) + " as " + role
+	if projectID != 0 {
+		if _, err := tx.Exec(`INSERT INTO project_members(project_id, account_id, role, can_review, granted_by, granted_at) VALUES(?,?,?,0,?,?)
+			ON CONFLICT(project_id, account_id) DO UPDATE SET role=excluded.role, granted_by=excluded.granted_by, granted_at=excluded.granted_at`,
+			projectID, account, projectRole, inviter, now()); err != nil {
+			return Org{}, err
+		}
+		if err := roleEvent(tx, remote, principalOfID(account), currentProject, projectRole, principalOfID(inviter), RoleViaInvitation); err != nil {
+			return Org{}, err
+		}
+		detail = "invitation " + strconv.FormatInt(id, 10) + " as " + projectRole + " of " + remote
+	}
+	if err := orgEvent(tx, orgID, "join", principalOfID(account), principalOfID(account), detail); err != nil {
+		return Org{}, err
+	}
+	return orgByIDTx(tx, orgID)
+}
+
+// AcceptInvitation nimmt ein angemeldetes Konto in die Organisation auf. Der
+// Abgleich mit einer gebundenen E-Mail nutzt die E-Mail des Kontos, die nur aus
+// einem verifizierten IdP-Claim oder vom Betreiber stammt.
+func (s *Store) AcceptInvitation(accountPrincipal, code string) (Org, error) {
+	if s.writer != nil {
+		return queueValue(s, []any{accountPrincipal, code}, func(d *Store, p []any) (Org, error) {
+			return d.AcceptInvitation(p[0].(string), p[1].(string))
+		})
+	}
+	acct, err := parsePersonPrincipalID(accountPrincipal)
+	if err != nil {
+		return Org{}, err
+	}
+	if s.attemptLimiter().blocked(accountPrincipal) {
+		return Org{}, ErrTooManyAttempts
+	}
+	org, err := s.acceptInvitation(acct, code)
+	s.attemptLimiter().note(accountPrincipal, err)
+	return org, err
+}
+
+func (s *Store) acceptInvitation(acct int64, code string) (Org, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return Org{}, err
+	}
+	defer tx.Rollback()
+	a, err := accountState(tx, acct)
+	if err != nil {
+		return Org{}, err
+	}
+	if a.State != "active" {
+		return Org{}, ErrAccountDisabled
+	}
+	o, err := acceptInvitationTx(tx, code, acct, a.Email, s.AccessEnforced())
+	if err != nil {
+		return Org{}, err
+	}
+	return o, tx.Commit()
+}
+
+// inviteName macht aus dem Anzeigenamen einen freien Kontonamen. Das Konto
+// self (0: keines) zählt dabei nicht als Kollision mit sich selbst.
+func inviteName(tx queryer, wanted string, self int64) (string, error) {
+	base := NormalizeAccountName(wanted)
+	if base == "" || MixedScriptName(base) {
+		base = "user"
+	}
+	if r := []rune(base); len(r) > 60 {
+		base = string(r[:60])
+	}
+	name := base
+	for i := 2; i < 1000; i++ {
+		taken, err := accountNameTakenByOtherTx(tx, name, self)
+		if err != nil {
+			return "", err
+		}
+		if !taken {
+			return name, nil
+		}
+		name = base + "-" + strconv.Itoa(i)
+	}
+	return "", fmt.Errorf("no free account name for %q", wanted)
+}
+
+// createInvitedAccountTx legt das Konto zu einer Einladung an und löst sie ein;
+// scheitert die Einlösung, bleibt auch das Konto aus (Rollback des Aufrufers).
+func createInvitedAccountTx(tx execQueryer, name, email, code, source string, enforced bool) (int64, error) {
+	if !invitationExists(tx, code) {
+		return 0, ErrCodeInvalid
+	}
+	if n := NormalizeAccountName(name); n == "" || MixedScriptName(n) {
+		source = ""
+	}
+	name, err := inviteName(tx, name, 0)
+	if err != nil {
+		return 0, err
+	}
+	res, err := tx.Exec(`INSERT INTO persons(name, token_hash, created_at, email, name_source) VALUES(?,?,?,?,?)`, name, "", now(), strings.TrimSpace(email), source)
+	if err != nil {
+		return 0, err
+	}
+	id, _ := res.LastInsertId()
+	if _, err := acceptInvitationTx(tx, code, id, email, enforced); err != nil {
+		return 0, err
+	}
+	return id, nil
+}
+
+// InviteLocal legt für eine Einladung ein Konto ohne IdP an (lokaler Modus:
+// Code plus gewählter Name). Eine an eine E-Mail gebundene Einladung geht hier
+// nicht, weil ohne IdP nichts die Adresse verifiziert. Es gibt keine Sperre
+// nach Fehlversuchen: ohne Absender-Schlüssel würde ein gemeinsamer Zähler jedem
+// Unangemeldeten erlauben, die Einlösung für alle zu sperren, und ein
+// 256-Bit-Code lässt sich nicht erraten.
+func (s *Store) InviteLocal(code, name string) (Account, error) {
+	if s.writer != nil {
+		return queueValue(s, []any{code, name}, func(d *Store, p []any) (Account, error) {
+			return d.InviteLocal(p[0].(string), p[1].(string))
+		})
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return Account{}, err
+	}
+	defer tx.Rollback()
+	id, err := createInvitedAccountTx(tx, name, "", code, "", s.AccessEnforced())
+	if err != nil {
+		return Account{}, err
+	}
+	a, err := accountState(tx, id)
+	if err != nil {
+		return Account{}, err
+	}
+	return a, tx.Commit()
+}
+
+// ---------------------------------------------------------------- attempts
+
+// attemptLimiter zählt falsche Einladungs-Codes je Schlüssel (Identität oder
+// Konto). Der Speicher ist begrenzt: bei Überlauf fliegen abgelaufene und dann
+// die ältesten Schlüssel raus. Die Codes haben 256 Bit; die Sperre schützt vor
+// Aufwand und Lärm, nicht vor Raten.
+type attemptLimiter struct {
+	mu       sync.Mutex
+	now      func() time.Time
+	failures map[string][]time.Time
+}
+
+const (
+	maxInviteFailures   = 5
+	inviteFailureWindow = 10 * time.Minute
+	maxLimiterKeys      = 1000
+)
+
+// limiters hält einen Zähler je Datenbank. Der Schreibpfad arbeitet mit
+// frischen Store-Kopien (direct); ein Feld am Store ginge dabei verloren,
+// der *sql.DB bleibt derselbe.
+var limiters sync.Map
+
+func (s *Store) attemptLimiter() *attemptLimiter {
+	if l, ok := limiters.Load(s.db); ok {
+		return l.(*attemptLimiter)
+	}
+	l, _ := limiters.LoadOrStore(s.db, &attemptLimiter{now: time.Now, failures: map[string][]time.Time{}})
+	return l.(*attemptLimiter)
+}
+
+func (l *attemptLimiter) blocked(key string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	cutoff := l.now().Add(-inviteFailureWindow)
+	l.failures[key] = trimBefore(l.failures[key], cutoff)
+	if len(l.failures[key]) == 0 {
+		delete(l.failures, key)
+		return false
+	}
+	return len(l.failures[key]) >= maxInviteFailures
+}
+
+// note zählt einen Fehlschlag, der auf einen falschen Code hindeutet.
+func (l *attemptLimiter) note(key string, err error) {
+	if !errors.Is(err, ErrCodeInvalid) && !errors.Is(err, ErrInvitationEmail) {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	at := l.now()
+	if _, ok := l.failures[key]; !ok && len(l.failures) >= maxLimiterKeys {
+		cutoff := at.Add(-inviteFailureWindow)
+		var oldest string
+		var oldestAt time.Time
+		for k, v := range l.failures {
+			v = trimBefore(v, cutoff)
+			if len(v) == 0 {
+				delete(l.failures, k)
+				continue
+			}
+			if oldest == "" || v[len(v)-1].Before(oldestAt) {
+				oldest, oldestAt = k, v[len(v)-1]
+			}
+		}
+		if len(l.failures) >= maxLimiterKeys {
+			delete(l.failures, oldest)
+		}
+	}
+	l.failures[key] = append(l.failures[key], at)
+}
+
+// ForceMoveProject hängt ein Projekt ohne Rechteprüfung um (Admin-Weg mit
+// Datenbankzugriff, wie TransferMachine) und protokolliert es in org_events.
+// Damit lässt sich ein besetztes Projekt an seinen Besitzer zurückgeben.
+func (s *Store) ForceMoveProject(remote, toOrgRef string) (Project, error) {
+	if s.writer != nil {
+		return queueValue(s, []any{remote, toOrgRef}, func(d *Store, p []any) (Project, error) {
+			return d.ForceMoveProject(p[0].(string), p[1].(string))
+		})
+	}
+	remote, err := normalizeRemote(remote)
+	if err != nil {
+		return Project{}, err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return Project{}, err
+	}
+	defer tx.Rollback()
+	cur, ok := projectTx(tx, remote)
+	if !ok {
+		return Project{}, ErrProjectNotFound
+	}
+	to, err := orgByRefTx(tx, toOrgRef)
+	if err != nil {
+		return Project{}, err
+	}
+	if cur.OrgID == to.ID {
+		return cur, nil
+	}
+	if _, err := tx.Exec(`UPDATE projects SET org_id=? WHERE remote=?`, to.ID, cur.Remote); err != nil {
+		return Project{}, err
+	}
+	if _, err := tx.Exec(`DELETE FROM shared_projects WHERE project_id=?`, cur.ID); err != nil {
+		return Project{}, err
+	}
+	if err := dropProjectRolesTx(tx, "admin", RoleViaCLI, `p.remote=?`, cur.Remote); err != nil {
+		return Project{}, err
+	}
+	for _, id := range []int64{cur.OrgID, to.ID} {
+		if err := orgEvent(tx, id, "force_move_project", "admin", cur.Remote, cur.Org+" -> "+to.Slug); err != nil {
+			return Project{}, err
+		}
+	}
+	moved, _ := projectTx(tx, cur.Remote)
+	return moved, tx.Commit()
+}
+
+// RenameOrg ändert Name und optional Slug (leer = unverändert). Nur Owner.
+func (s *Store) RenameOrg(actorPrincipal string, orgID int64, name, slug string) (Org, error) {
+	if s.writer != nil {
+		return queueValue(s, []any{actorPrincipal, orgID, name, slug}, func(d *Store, p []any) (Org, error) {
+			return d.RenameOrg(p[0].(string), p[1].(int64), p[2].(string), p[3].(string))
+		})
+	}
+	return s.renameOrg(actorPrincipal, orgID, name, slug, false)
+}
+
+// RenameOrgAsAdmin ist RenameOrg für einen Instanz-Admin, der nicht Owner der
+// Organisation ist. Ob der Aufrufer Admin ist, prüft er selbst.
+func (s *Store) RenameOrgAsAdmin(actorPrincipal string, orgID int64, name, slug string) (Org, error) {
+	if s.writer != nil {
+		return queueValue(s, []any{actorPrincipal, orgID, name, slug}, func(d *Store, p []any) (Org, error) {
+			return d.RenameOrgAsAdmin(p[0].(string), p[1].(int64), p[2].(string), p[3].(string))
+		})
+	}
+	return s.renameOrg(actorPrincipal, orgID, name, slug, true)
+}
+
+func (s *Store) renameOrg(actorPrincipal string, orgID int64, name, slug string, admin bool) (Org, error) {
+	actor, err := parsePersonPrincipalID(actorPrincipal)
+	if err != nil {
+		return Org{}, err
+	}
+	name = strings.TrimSpace(name)
+	slug = strings.ToLower(strings.TrimSpace(slug))
+	if name == "" || len(name) > maxOrgNameLen || hasControlRunes(name) {
+		return Org{}, fmt.Errorf("%w: organization name must be 1 to %d printable characters", ErrInvalidInput, maxOrgNameLen)
+	}
+	if slug != "" && !slugPattern.MatchString(slug) {
+		return Org{}, fmt.Errorf("%w: slug must be lowercase letters, digits and dashes (up to 40 characters)", ErrInvalidInput)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return Org{}, err
+	}
+	defer tx.Rollback()
+	if !admin && orgRoleTx(tx, orgID, actor) != OrgOwner {
+		return Org{}, ErrNotOrgOwner
+	}
+	old, err := orgByIDTx(tx, orgID)
+	if err != nil {
+		return Org{}, err
+	}
+	if slug == "" {
+		slug = old.Slug
+	}
+	if _, err := tx.Exec(`UPDATE orgs SET name=?, slug=? WHERE id=?`, name, slug, orgID); err != nil {
+		if strings.Contains(err.Error(), "UNIQUE") {
+			return Org{}, ErrOrgSlugTaken
+		}
+		return Org{}, err
+	}
+	if err := orgEvent(tx, orgID, "rename_org", principalOfID(actor), slug, old.Name+" -> "+name); err != nil {
+		return Org{}, err
+	}
+	o, err := orgByIDTx(tx, orgID)
+	if err != nil {
+		return Org{}, err
+	}
+	return o, tx.Commit()
+}
+
+// hasControlRunes sagt, ob s Steuerzeichen (C0, DEL, C1) oder Formatzeichen
+// (Bidi-Umschalter, Zero-Width) enthält. Ein Name mit
+// ESC-Folgen könnte in einem Terminal, das ihn anzeigt, Text überschreiben.
+func hasControlRunes(s string) bool {
+	for _, r := range s {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return true
+		}
+	}
+	return false
+}
+
+// remoteClaimableTx ist die Bedingung von ListClaimableProjects für genau eine
+// Remote, innerhalb der Transaktion, in der übernommen wird.
+func remoteClaimableTx(tx execQueryer, actor int64, remote string) bool {
+	owner := instanceOwnerID(tx)
+	var mine, others int
+	if tx.QueryRow(`SELECT
+		COALESCE(SUM(CASE WHEN (CASE WHEN account_id = 0 THEN ? ELSE account_id END) = ? THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN (CASE WHEN account_id = 0 THEN ? ELSE account_id END) != ? THEN 1 ELSE 0 END), 0)
+		FROM sessions WHERE project = ?`, owner, actor, owner, actor, remote).Scan(&mine, &others) != nil {
+		return false
+	}
+	_, known := projectTx(tx, remote)
+	return mine > 0 && others == 0 && !known
+}

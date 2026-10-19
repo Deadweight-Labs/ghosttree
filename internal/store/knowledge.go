@@ -29,6 +29,10 @@ type Knowledge struct {
 	LastModifiedBy string          `json:"last_modified_by,omitempty"`
 	Harness        string          `json:"harness,omitempty"`
 	SessionRef     string          `json:"session_ref,omitempty"`
+	// AuthorID is the writing account, set by the server from the token and never
+	// read from a request. It is stored in knowledge_authors; zero means legacy
+	// or distilled.
+	AuthorID int64 `json:"-"`
 	// ObservedAt is when the entry was seen; CreatedAt is when it was written
 	// down. For anything a person or an agent typed the two coincide. For a
 	// distilled entry they do not, and the difference is what tells a reader
@@ -43,6 +47,12 @@ type Knowledge struct {
 	RegressionTest  string `json:"regression_test,omitempty"`
 	CreatedAt       string `json:"created_at"`
 	UpdatedAt       string `json:"updated_at"`
+	// Closure is set only on the detail read of an entry that was superseded or
+	// retired.
+	Closure *KnowledgeClosure `json:"closure,omitempty"`
+	// Explanation is the agent's "Kurz erklärt" text, sent when an entry is
+	// written. The server stores it beside the entry; reads never fill it.
+	Explanation string `json:"explanation,omitempty"`
 }
 
 // KnowledgeProvenance is the compact attribution shared by every read view.
@@ -187,6 +197,25 @@ func (s *Store) InsertKnowledge(k Knowledge) (int64, error) {
 	if s.writer != nil {
 		return queueValue(s, []any{k}, func(d *Store, p []any) (int64, error) { return d.InsertKnowledge(p[0].(Knowledge)) })
 	}
+	k = withKnowledgeDefaults(k)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	id, err := insertKnowledgeTx(tx, k)
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return id, nil
+}
+
+// withKnowledgeDefaults fills origin, confidence and status the way a plain
+// write does.
+func withKnowledgeDefaults(k Knowledge) Knowledge {
 	if k.Origin == "" {
 		k.Origin = "agent"
 	}
@@ -202,12 +231,11 @@ func (s *Store) InsertKnowledge(k Knowledge) (int64, error) {
 	if k.Status == "" {
 		k.Status = "active"
 	}
+	return k
+}
+
+func insertKnowledgeTx(tx *sql.Tx, k Knowledge) (int64, error) {
 	ts := now()
-	tx, err := s.db.Begin()
-	if err != nil {
-		return 0, err
-	}
-	defer tx.Rollback()
 	if k.ObservedAt == "" {
 		// Nobody is reporting an older sighting here: the writer is looking at
 		// the thing as they write it.
@@ -229,13 +257,13 @@ func (s *Store) InsertKnowledge(k Knowledge) (int64, error) {
 	if _, err := tx.Exec(`INSERT INTO search_documents(kind,domain_id,title,body,project,branch,machine) VALUES('knowledge',?,?,?,?,?,?)`, id, k.Title, k.Body, k.Scope.Project, k.Scope.Branch, k.Scope.Machine); err != nil {
 		return 0, err
 	}
+	if err := recordAuthorTx(tx, id, authorForWriteTx(tx, k.AuthorID, k.Person, k.Origin, k.SessionRef)); err != nil {
+		return 0, err
+	}
 	for _, pattern := range k.Activation.Paths {
 		if _, err := tx.Exec(`INSERT INTO instruction_activation_path(knowledge_id,pattern) VALUES(?,?)`, id, pattern); err != nil {
 			return 0, err
 		}
-	}
-	if err := tx.Commit(); err != nil {
-		return 0, err
 	}
 	return id, nil
 }
@@ -283,17 +311,18 @@ var patchable = map[string]bool{"title": true, "body": true, "confidence": true,
 // a flat list is fine for eleven entries and unusable at the several hundred a
 // full distiller run produces, and judging findings is easier one repository at
 // a time than in a stream that jumps between them.
-func (s *Store) PendingKnowledge(project string, limit int) ([]Knowledge, error) {
+func (s *Store) PendingKnowledge(project string, limit int, viewer ...SessionViewer) ([]Knowledge, error) {
 	if s.reader != nil {
-		return s.reader.PendingKnowledge(project, limit)
+		return s.reader.PendingKnowledge(project, limit, viewer...)
 	}
 	if limit <= 0 {
 		limit = 50
 	}
+	where, args := withGlobalScope(`((status = 'active' AND confidence IN ('quarantined','staged')) OR status = 'stale')
+		  AND (? = '' OR project = ?)`, []any{project, project}, "", viewer)
 	rows, err := s.db.Query(`SELECT `+knowledgeCols+` FROM knowledge
-		WHERE ((status = 'active' AND confidence IN ('quarantined','staged')) OR status = 'stale')
-		  AND (? = '' OR project = ?)
-		ORDER BY created_at DESC, id DESC LIMIT ?`, project, project, limit)
+		WHERE `+where+`
+		ORDER BY created_at DESC, id DESC LIMIT ?`, append(args, limit)...)
 	if err != nil {
 		return nil, err
 	}
@@ -346,24 +375,7 @@ func (s *Store) UpdateKnowledgeBy(id int64, patch map[string]string, editor stri
 		if err != nil || target == 0 || target == id {
 			return fmt.Errorf("invalid superseded_by %q", raw)
 		}
-		seen := map[int64]bool{id: true}
-		for {
-			if seen[target] {
-				return fmt.Errorf("supersession would create a cycle")
-			}
-			seen[target] = true
-			var next int64
-			if err := tx.QueryRow(`SELECT superseded_by FROM knowledge WHERE id=?`, target).Scan(&next); err != nil {
-				return err
-			}
-			if next == 0 {
-				break
-			}
-			target = next
-		}
-		if _, err := tx.Exec(`WITH RECURSIVE ancestors(id) AS (
-			SELECT ? UNION ALL SELECT k.id FROM knowledge k JOIN ancestors a ON k.superseded_by=a.id
-		) UPDATE knowledge SET status='superseded',superseded_by=?,updated_at=? WHERE id IN (SELECT id FROM ancestors)`, id, target, ts); err != nil {
+		if err := markSupersededTx(tx, id, target, ts); err != nil {
 			return err
 		}
 	}
@@ -391,6 +403,30 @@ func (s *Store) UpdateKnowledgeBy(id int64, patch map[string]string, editor stri
 		return err
 	}
 	return tx.Commit()
+}
+
+// markSupersededTx sets an entry and everything it had superseded before to
+// superseded, pointing at the head of the chain that target belongs to.
+func markSupersededTx(tx *sql.Tx, id, target int64, ts string) error {
+	seen := map[int64]bool{id: true}
+	for {
+		if seen[target] {
+			return fmt.Errorf("supersession would create a cycle")
+		}
+		seen[target] = true
+		var next int64
+		if err := tx.QueryRow(`SELECT superseded_by FROM knowledge WHERE id=?`, target).Scan(&next); err != nil {
+			return err
+		}
+		if next == 0 {
+			break
+		}
+		target = next
+	}
+	_, err := tx.Exec(`WITH RECURSIVE ancestors(id) AS (
+		SELECT ? UNION ALL SELECT k.id FROM knowledge k JOIN ancestors a ON k.superseded_by=a.id
+	) UPDATE knowledge SET status='superseded',superseded_by=?,updated_at=? WHERE id IN (SELECT id FROM ancestors)`, id, target, ts)
+	return err
 }
 
 // KnowledgeVersion is a complete prior version of an entry. ChangedBy says
@@ -510,33 +546,34 @@ const corroboration = `MAX(
 // processing order, which says nothing about the entries.
 const deliveryOrder = trustOrder + `, ` + corroboration + ` DESC, search_hits DESC, ` + observationTime + ` DESC, id DESC`
 
-func (s *Store) KnowledgeForContext(ax scope.Axes) ([]Knowledge, error) {
+func (s *Store) KnowledgeForContext(ax scope.Axes, viewer ...SessionViewer) ([]Knowledge, error) {
 	if s.reader != nil {
-		return s.reader.KnowledgeForContext(ax)
+		return s.reader.KnowledgeForContext(ax, viewer...)
 	}
-	return s.KnowledgeForActivatedContext(ax, activation.Context{})
+	return s.KnowledgeForActivatedContext(ax, activation.Context{}, viewer...)
 }
 
-func (s *Store) KnowledgeForActivatedContext(ax scope.Axes, ctx activation.Context) ([]Knowledge, error) {
+func (s *Store) KnowledgeForActivatedContext(ax scope.Axes, ctx activation.Context, viewer ...SessionViewer) ([]Knowledge, error) {
 	if s.reader != nil {
-		return s.reader.KnowledgeForActivatedContext(ax, ctx)
+		return s.reader.KnowledgeForActivatedContext(ax, ctx, viewer...)
 	}
-	return s.knowledgeForActivatedContext(ax, ctx, false)
+	return s.knowledgeForActivatedContext(ax, ctx, false, viewer)
 }
 
-func (s *Store) KnowledgeForActivatedPreview(ax scope.Axes, ctx activation.Context) ([]Knowledge, error) {
+func (s *Store) KnowledgeForActivatedPreview(ax scope.Axes, ctx activation.Context, viewer ...SessionViewer) ([]Knowledge, error) {
 	if s.reader != nil {
-		return s.reader.KnowledgeForActivatedPreview(ax, ctx)
+		return s.reader.KnowledgeForActivatedPreview(ax, ctx, viewer...)
 	}
-	return s.knowledgeForActivatedContext(ax, ctx, true)
+	return s.knowledgeForActivatedContext(ax, ctx, true, viewer)
 }
 
-func (s *Store) knowledgeForActivatedContext(ax scope.Axes, ctx activation.Context, includeStaged bool) ([]Knowledge, error) {
+func (s *Store) knowledgeForActivatedContext(ax scope.Axes, ctx activation.Context, includeStaged bool, viewer []SessionViewer) ([]Knowledge, error) {
 	ctx, err := activation.NormalizeContext(ctx)
 	if err != nil {
 		return nil, err
 	}
 	where, args := ax.UnionWhere()
+	where, args = withGlobalScope(where, args, "", viewer)
 	confidenceWhere := `confidence IN ('trusted','verified')`
 	if includeStaged {
 		confidenceWhere = `confidence != 'quarantined'`
@@ -580,21 +617,23 @@ func (s *Store) KnowledgeForProject(project string) ([]Knowledge, error) {
 }
 
 // SearchKnowledge matches only the axes the caller set.
-func (s *Store) SearchKnowledge(q string, filter scope.Axes, limit int) ([]Knowledge, error) {
+func (s *Store) SearchKnowledge(q string, filter scope.Axes, limit int, viewer ...SessionViewer) ([]Knowledge, error) {
 	if s.reader != nil {
-		return s.reader.SearchKnowledge(q, filter, limit)
+		return s.reader.SearchKnowledge(q, filter, limit, viewer...)
 	}
 	where, args := filter.FilterWhere()
+	where, args = withGlobalScope(where, args, "k", viewer)
 	return s.searchKnowledge(q, where, args, limit)
 }
 
 // SearchAllKnowledge is the operator view, including entries hidden from
 // agents because they are quarantined, deprecated, or archived.
-func (s *Store) SearchAllKnowledge(q string, filter scope.Axes, limit int) ([]Knowledge, error) {
+func (s *Store) SearchAllKnowledge(q string, filter scope.Axes, limit int, viewer ...SessionViewer) ([]Knowledge, error) {
 	if s.reader != nil {
-		return s.reader.SearchAllKnowledge(q, filter, limit)
+		return s.reader.SearchAllKnowledge(q, filter, limit, viewer...)
 	}
 	where, args := filter.FilterWhere()
+	where, args = withGlobalScope(where, args, "k", viewer)
 	if limit <= 0 {
 		limit = 50
 	}
@@ -612,11 +651,12 @@ func (s *Store) SearchAllKnowledge(q string, filter scope.Axes, limit int) ([]Kn
 // SearchKnowledgeForContext searches the same union a session reads: global,
 // machine, project and their combinations. Without it, a session on a branch
 // could not find global or project-level knowledge.
-func (s *Store) SearchKnowledgeForContext(q string, ax scope.Axes, limit int) ([]Knowledge, error) {
+func (s *Store) SearchKnowledgeForContext(q string, ax scope.Axes, limit int, viewer ...SessionViewer) ([]Knowledge, error) {
 	if s.reader != nil {
-		return s.reader.SearchKnowledgeForContext(q, ax, limit)
+		return s.reader.SearchKnowledgeForContext(q, ax, limit, viewer...)
 	}
 	where, args := ax.UnionWhere()
+	where, args = withGlobalScope(where, args, "k", viewer)
 	return s.searchKnowledge(q, where, args, limit)
 }
 

@@ -6,6 +6,1349 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+- Changed: stored session transcripts no longer keep base64 images and files (REQ-517, PAIN-12). Screenshots in tool results made up two thirds of the 1.7 GB the database grew by per day, yet search and the session view only ever used text. The server now replaces every base64 payload of 1 KB or more in a chunk's `raw` line with a placeholder such as `[ghosttree: Bild entfernt, image/png, 1234567 Bytes, sha256:0123456789abcdef]` (type, size of the decoded file, first 16 hex digits of its SHA-256). It covers Claude's `{"type":"base64","media_type":…,"data":…}` (also inside `tool_result`, `message.content` and `toolUseResult`), Claude Code's `toolUseResult.file.base64`, MCP `{"type":"image","data":…,"mimeType":…}` and `blob`, and `data:<mime>;base64,…` strings (Codex `input_image`), for images, PDFs and audio alike. The line stays valid JSON with the same structure and every other byte untouched; a line without a payload is stored byte for byte. Old `ctx` versions are covered because the server does it, and `ctx watch` now strips before uploading, which also saves the transfer. `ctx export` therefore writes placeholders instead of images. Base64 inside a text string (JSON in JSON, the content of a `.b64` file) is not touched.
+- Added: `ctx strip-images --db <path> [--dry-run] [--batch 200] [--sleep 50ms]` does the same for the chunks already stored. It runs beside the server (short transactions, waits for locks, walks `session_chunks` by id), is idempotent, can be stopped and resumed, and reports the chunks checked and changed and the bytes saved. The file shrinks only after `VACUUM` with the server stopped; see `deploy/README.md`. The image data is gone for good, so take a backup first.
+- Changed: knowledge that arrives with a prompt (`UserPromptSubmit`) now arrives once per session and only for words that are unusual in the reader's own language (REQ-521). The hook sends the harness session id (`session_id`, the same field in Claude Code and Codex) and the server remembers per account and session which entries it delivered, in the new table `context_deliveries` (created at open, no schema upgrade; rows older than seven days are removed whenever a delivery is recorded). The start-up briefing records what it actually carried, so a pitfall that was already in the bootstrap is not sent again when a prompt names it, while an entry the budget cut off can still arrive; without a session id nothing changes. A word is distinctive only if it also passes a second gate besides being rare among the entries: it must be unusual in the reader's own session text, so "dinge" or "gärtner" no longer fetch unrelated entries while a codename such as `hlpvpngw` does. The gate counts only chunks of sessions of the caller's own account (never anyone else's, so a prompt cannot probe whether a word is frequent in other people's sessions), in the caller's most recent sessions (at most 24 sessions or 40,000 chunks), counted in `chunks_fts` per session up to a ceiling of one chunk in two thousand of that sample (at least 8). An account with fewer than 5,000 chunks of its own has no gate, as before; a word that few chunks carry anywhere is settled with one short look at the index without counting. A word that at most two entries name now also matches the text of an entry, not only its title. Staged entries and the gardener's notes are never delivered this way. Every delivered entry ends with `(triggered by "word")`; the heading `## Possibly relevant to what you just said (ghosttree)` is unchanged. Measured on a synthetic archive of 1.14 million chunks (four accounts, sessions uploaded interleaved) and 3000 entries: 1.4 to 2.2 ms per prompt in the store for ordinary prompts, at most 55 ms for a prompt of 24 words that other accounts use all the time, whether the caller has many sessions or few. `ctx usage --relevance` shows the word behind each replayed hit and judges each prompt by the account that typed it.
+- Added: a hint line for very rare words. When no deliverable entry names such a word but a request or session the reader may see does, the answer carries one line (`- [hint] "word" also came up in session #12 on 2026-10-02. context_search finds more.`), at most one per prompt and one per word and session. It is built with the filters and views of `context_search`, never points into the session being typed in, and says nothing about material the reader cannot open.
+- Changed: the gardener's agent session is hardened (REQ-491). It has no Bash any more: git history comes through two fixed tools, `git_log` and `git_show`, served by `ctx garden git-mcp`, whose arguments are a hash or `HEAD`, a plain relative path, a count and a literal pickaxe text (options, abbreviations, `-c`, `-C`, `--exec-path`, `--output`, paths outside the checkout and option-shaped revisions are refused before git runs). Grep and Glob are no longer allowed by name, so they only reach what the Read allowlist for the checkout allows; this is tested against the real Claude Code matcher. Every session gets its own empty `CLAUDE_CONFIG_DIR` (and `HOME`) below `--claude-dir`, which is now required, and an environment cut down to an allowlist. `ctx` runs its own git calls with `core.hooksPath=/dev/null`, no fsmonitor, no system config and a neutral global config, and after each session also compares ignored files, `.git/config`, `.git/hooks`, `.git/info` and `HEAD`. `deploy/ghosttree-garden.service` is sandboxed (own user, checkout read-only, database, private data, backups, `/home` and `/root` hidden); `deploy/garden-sandbox-probe.sh` proves it. The sandbox cannot reach the database, so the gardener can keep its memory in a JSON file (`--state-file`) instead of `--db`.
+- Fixed: `ctx garden check-knowledge --no-mcp` now leaves out only the ghosttree tools (REQ-491). It used to drop the fixed git server as well, so a session had no `git_log` or `git_show`, while the allowlist and the system prompt still promised `context_search` and `context_get`. With `--no-mcp` the session has the `gardengit` server only, `context_search` and `context_get` are neither allowed nor mentioned in the prompt, and the git tools stay; without the flag nothing changes. Use it where the ghosttree tools must not reach other projects' entries (an allowlist cannot limit them to one project).
+- Added: sharing like on GitHub (REQ-490). A project is either "shared with the organization" or
+  "private": the switch sits in the project list and only project owners may use it. Shared gives
+  every organization member who is not a guest the default role `member` in that project, explicit
+  roles override it, and a member without a role of their own no longer gets a 403 or 404 in the
+  room of a shared project. Moving a project to another organization makes it private. An
+  organization can claim a remote prefix `github.com/<org>/*` and say which visibility new projects
+  under it get. A repository under a claimed prefix that is new to the server is assigned to the
+  organization on its first write contact, with the visibility of the prefix; everyone else, guests
+  and people without an organization included, gets 409 `project_claimed` and nothing is created.
+  A prefix needs proof: an organization owner connects the GitHub organization they administer
+  ("Connect GitHub" on the Organization page, an OAuth web flow with the scope `read:org` that
+  checks the admin role and lists the repositories; the access token is never stored), and the
+  connected source must name exactly that account. A GitHub organization belongs to one
+  organization, and so does a prefix; an owner can create the repositories of a connected source as
+  projects of the organization. Connecting is off until the server has the credentials of a GitHub
+  OAuth app: `GHOSTTREE_GITHUB_CLIENT_ID` and either `GHOSTTREE_GITHUB_CLIENT_SECRET` or
+  `GHOSTTREE_GITHUB_CLIENT_SECRET_FILE` (a file holding the secret); the callback URL of the app is
+  `<server address>/ui/orgs/source/callback` (`GHOSTTREE_PUBLIC_URL` if set). Without the
+  credentials the page says GitHub is not set up. The
+  Organization page is reorganized into members (with "Invite"), projects (with the visibility
+  switch), connected sources and guests. Database: new tables `shared_projects`, `org_guests`,
+  `git_sources`, `git_source_repos` and `org_prefixes` (created on start, additive), and a one-time
+  backfill, recorded as `guest_backfill` in `org_state`, that marks accounts which only came in
+  through a guest role or a project invitation as guests of that organization.
+- Changed: inviting means inviting into the organization (REQ-490). The Organization page has one
+  step for it, without project and role. Project invitation links in the web interface are for
+  guests only, whatever role the form sends. A guest stays a guest of the organization, sees only
+  their projects and never gets the default role of shared projects; a guest who is later invited
+  into the organization becomes a member.
+- Changed: the gardener runs as a real agent by default (`ctx garden check-knowledge --mode agent`). Instead of one Messages API call per entry, the entries due are split into a few topic packages (by the code area of the files they name, at most `--sessions`, default 4, of at most `--per-session`, default 30) and one headless Claude Code session per package (`claude -p`, stream-json, at most `--turns`, default 60) checks them against the code and against each other. The session reads the checkout (Read, Grep, Glob, `git log/show/blame`) and searches ghosttree read-only; it has no Edit or Write, never runs with bypassed permissions, and its environment carries no keys. Its closing JSON is validated before anything is filed: a stale or correction verdict needs a citation that exists in the checkout (a line of a tracked file or a commit), a duplicate or contradiction between entries needs a verbatim quote from each entry, anything else is dropped. A session that changed the checkout is discarded. Findings are staged gardener notes as before. Usage (tokens including cache, one call per turn) is counted as job `garden`; the report lists sessions, tools used and refused calls. The old one-call-per-entry mode stays as `--mode api`. Sample units: `deploy/ghosttree-garden{,-update}.service`, `deploy/ghosttree-garden.timer` (the unit may reach loopback only: the model proxy and ghosttree).
+- Changed: "Kurz erklärt" writes the backlog in bulk through the Anthropic Message Batches API at half the price: `ctx explain backfill --batch` collects finished batches, then submits one batch for every object without a current note (several if the API's size limits need it), `--collect` only collects. Batch ids are stored, so nothing is sent twice while its batch is open, and an object whose entry failed is left alone for a day. Batch usage is counted at 50 % in `llm_usage`. One-by-one `backfill` is gone.
+- Changed: the model for notes is its own `explain` entry in `llm.json` (or `GHOSTTREE_EXPLAIN_KEY`), never the top-level provider or the gardener's entry. Without a key, or while the key file is missing, nothing is sent. Opening a page generates a note only for new objects (younger than a day, no note at all) and not for objects in an open batch; changed objects, older ones and language changes wait for the batch. Sample units: `deploy/ghosttree-explain.{service,timer,path}`.
+- Fixed: "Kurz erklärt" failed on about one object in five with "no text content": the model's thinking used up the 800-token output ceiling. The ceiling is now 4096, the error names the stop reason and block types, and the background path logs failures as warnings.
+- Added: limits for the model jobs, shared by the gardener (`garden`) and "Kurz erklärt"
+  (`explain`). Each job has a daily and a monthly cap (UTC) in dollars, calls and tokens;
+  0 or an empty value means unlimited. Set them with `GHOSTTREE_<JOB>_<DAILY|MONTHLY>_<USD|CALLS|TOKENS>`
+  (for example `GHOSTTREE_GARDEN_MONTHLY_USD=50`), with the `limits` entry of `llm.json`
+  (`{"limits":{"garden":{"monthly":{"usd":50}}}}`) or with flags (`--monthly-usd`, `--daily-calls`
+  and so on on `ctx garden check-knowledge` and `ctx explain backfill`; `--explain-monthly-usd`
+  and so on on `ctx serve`); flags win over the environment, the environment over the file.
+  "Kurz erklärt" keeps 200 calls and 400000 tokens a day as its default, the gardener has no
+  cap besides `--max-usd` per run. Usage is stored per job and day (`llm_usage`, additive; the old
+  `explain_usage` rows are carried over), so a monthly cap holds across restarts and between server
+  and command line. A run that reaches a cap stops cleanly, says which one it was and exits 3.
+  `ctx cost` shows usage per job, day and month next to the limits; administrators see one
+  sentence per job on the organisation page.
+- Fixed: cache tokens are now counted. `cache_read_input_tokens` and `cache_creation_input_tokens`
+  from the Anthropic response count as tokens and are priced at their own rates (reads a tenth,
+  writes 1.25 times the input price unless `cache_read_usd_per_mtok` / `cache_write_usd_per_mtok`
+  are set), in the gardener and in "Kurz erklärt". Behind a caching proxy the reported input was
+  far too low before. A dollar cap needs a price: built in for `claude-sonnet-5-5` and
+  `claude-haiku-5-5`, otherwise `input_usd_per_mtok` and `output_usd_per_mtok` in `llm.json`.
+- Added: the gardener rotates. `ctx garden check-knowledge --db <path>` remembers per entry when and
+  against which commit it looked (`garden_checks`, additive). The next run takes entries it has never
+  seen first, then the ones looked at longest ago, and leaves out what is unchanged since (the entry,
+  and the files and symbols it names) or was looked at less than `--min-age` days ago (default 14).
+  The report starts with "Der Gärtner hat N Einträge geprüft, M Vorschläge", and `ctx review` lists
+  the gardener's proposals together.
+- Fixed: `ctx cost` failed on a database without distilled sessions.
+- Fixed: `POST /api/requests` with an idempotency key that already belongs to another
+  project or another author now answers 409 `idempotency_key_conflict` without any
+  data of the existing request; only the same author in the same project replays.
+  Explanation context lines no longer name requests bound to a machine.
+- Added: server language. `GHOSTTREE_LANGUAGE=de` (or `ctx serve --language de`) shows the
+  whole web interface in German, including the sign-in, invitation and pairing
+  pages, relative times, weekdays, dates and the greeting; `en` stays the default.
+  The language is resolved per request (today from the server setting), so a setting
+  per person needs no rework. Both catalogs are tested for the same keys and
+  placeholders. Texts for agents (bootstrap, MCP descriptions, rules) stay English.
+- Fixed: the `@agents` brake could be circumvented. The store now marks a broadcast
+  when it writes the message (`coord_messages.is_broadcast`, additive; existing
+  messages of the running five-minute window are marked on upgrade) and asks
+  without a row limit, so writing many messages in between no longer frees the
+  window. The window belongs to the account: all agents of a person and the person
+  share one. Web chip, MCP and channel use the same path. A question or blocker
+  to "All active agents" with no active agent now shows the hint under the room
+  instead of an error page.
+- Added: `ghclaude`, a link to `ctx` that starts Claude Code with the ghosttree
+  channel and passes all arguments through unchanged, so it can be entered as the
+  Claude executable in a GUI. `ctx install claude` and `ctx join` offer it once,
+  `ctx install ghclaude` / `ctx uninstall ghclaude` manage it and `ctx doctor`
+  checks it. Measured: it wakes idle agents only in an interactive terminal; a
+  non-interactive claude (`-p`, Agent SDK) ignores the channel.
+- Changed (web): quick wins from the UI persona audit. The start page is now
+  "Home". Tasks and pains are tabs next to Requests (`/ui/tasks`, `/ui/pains`), the
+  navigation keeps "Requests" lit there and shows the number of open tasks for you.
+  "Waiting on you" is always on Home (empty: "Nothing waiting on you"). In "Next"
+  agents' questions come first and all knowledge proposals are one line that links
+  to the review. Agent rows say what the agent works on (request title, work note,
+  branch) and keep the id in the tooltip. Home and the room show the same states:
+  "Waiting on you" (only for the person who was asked; everyone else reads
+  "Waiting for a person") and the new "Stuck?" (an agent in the middle of a turn
+  without any hook event for ten minutes; needs the Stop and StopFailure hooks,
+  `ctx install claude` again; subagent calls count as signs of life, a finished
+  turn or one ended by an API error is never stuck).
+  `human_task_create` without an assignee now assigns the task to the person the
+  session belongs to; `everyone` (MCP), `--everyone` (`ctx task add`) keeps it open
+  to the whole project. `/ui/tasks` filters Mine and Everyone. Organization and
+  Devices have their own icons; Devices & tokens is sorted by last use. The last
+  use of a token is now recorded when it authenticates (at most every ten
+  minutes). "never used" and "Revoke unused" appear only for tokens that stayed
+  unused for 14 days after use recording began; before that the page says "use
+  not recorded yet". An administrator without an interactive session is not
+  offered "Revoke unused" when it would reach other accounts. Ticking a task in
+  "Everyone" stays in that filter.
+- Added: agents of different accounts can find and address each other. An agent
+  now stores its machine; its name reads "person · machine · branch" in
+  `coord_peers`, the hook sender line, the agents list and the room members, and
+  `@person-machine` (or `@person-machine-branch`) resolves to exactly that agent
+  (ambiguous names list the candidates). `coord_status` (and `ctx coord status`)
+  sets a one-line "working on" note (200 characters, secret-like text refused),
+  shown everywhere as self-reported. `@agents` (alias `@agenten`) addresses every
+  agent of the project seen by a hook in the last 15 minutes that the sender may
+  reach; the web composer has a chip for it. Guests cannot broadcast, and a sender
+  may broadcast once every five minutes. Work notes drop markup characters and
+  disappear after 24 hours.
+- Fixed (REQ-434): the browser tab that shows the code to paste never navigates
+  away. The loopback hand-over now runs in a second window that opens inside the
+  click on "Connect" (a top-level navigation, no iframe or fetch to 127.0.0.1);
+  when the browser blocks that window or the loopback cannot be reached, the code
+  simply stays. The installer's success page closes that window, and the code tab
+  switches to "Continue in your terminal" once the terminal is done. Without
+  script the plain form post still works. A denial in the browser now also reaches
+  a terminal that only waits for a pasted code (`POST /api/join/status`, answered
+  only to the holder of the PKCE verifier).
+- Added (REQ-174, REQ-476): pains and tasks for humans. A pain records a problem
+  without a solution (`PAIN-n`, states active, mitigated, resolved, obsolete;
+  mitigated needs what remains, mitigated and resolved need evidence; a pain never
+  ages and a finished request does not resolve it) and motivates requests,
+  decisions or external references. A task for a human is what only a person can
+  provide (secret, file, input, action): the agent states where it should live,
+  never the value, and token-like text is refused. Tasks hang on a request, go
+  open, done, confirmed (or dropped, reopened), appear in the session bootstrap
+  and in the overview block "Waiting on you". MCP: `pain_record`, `pain_get`,
+  `pain_search`, `pain_update`, `human_task_create`, `human_task_list`,
+  `human_task_resolve`. CLI: `ctx pain`, `ctx task`. HTTP: `/api/pains`,
+  `/api/tasks`. Web: `/ui/tasks`, `/ui/pains`. Pains are mirrored to
+  `.ghosttree/pains/`; tasks are not.
+- Changed (REQ-434): `ctx join` always offers a code to paste, no flag needed.
+  After the approval the browser shows a short-lived one-time code with a copy
+  button next to the usual hand-over to the terminal; the terminal waits for the
+  loopback callback and for a pasted code (read from `/dev/tty`, so it also works
+  under `curl ... | sh`), and whichever comes first wins. Without a display, over
+  SSH or without a browser opener there is no loopback, only the link and the
+  pasted code. The code is bound to the PKCE verifier of that terminal, valid for
+  two minutes, usable once, rate-limited like the loopback code, looked up only by
+  hash, held in memory only (never in the database) and never logged. `--no-browser` still works as a hidden
+  alias for the old way (type the terminal's four characters in the browser) and
+  is no longer shown in the help.
+- Added (REQ-434): `scripts/e2e/join-order.sh` runs the invitation flow end to end
+  in both orders with real binaries, the server's own `/install.sh` and throw-away
+  HOMEs, without a VM or identity provider: browser first (the pairing page waits,
+  then the installer claims and the page asks for approval) and installer first
+  (the installer waits for the approval; the first look at the page already shows
+  the question). Each run ends with a token that belongs to the invited account.
+
+- Changed (REQ-466): follow-ups to hook-registered sessions and to superseding
+  knowledge. A session registered by a hook gets a readable `display_name`
+  ("Claude · repository") instead of its session id, and a name an agent already
+  has is no longer overwritten by a registration that offers only the id. A
+  session whose hooks fired within the activity window shows as working, so its
+  card says active instead of idle. `ctx knowledge supersede <id> --old ID,ID
+  --reason R` (HTTP `POST /api/knowledge/{id}/supersede`, MCP `context_supersede`)
+  marks an existing entry as the replacement of older ones. The reason of a
+  retired or superseded entry shows in `ctx knowledge show <id>`,
+  `context_search` with `knowledge_id`, `GET /api/knowledge/{id}` (`closure`) and
+  the entry page in the web. `ctx knowledge retire --help` and the new
+  subcommands print their own help.
+- Added (REQ-465): agents can replace outdated knowledge instead of stacking a
+  follow-up next to it. `context_remember` takes `supersedes` (ids of older
+  entries) and `supersede_reason`; `ctx knowledge add --supersedes ID,ID
+  --reason R` does the same on the command line. The superseded entries leave
+  search, the briefing and the web list, and stay readable through their detail
+  page and history. New `context_retire` / `ctx knowledge retire <id> --reason R`
+  retires an entry whose subject no longer exists (HTTP `POST
+  /api/knowledge/{id}/retire`), with the same right as Retire in the web. The
+  briefing, the tool descriptions and the installed rule section now say:
+  search before writing, supersede when a known state changed, retire when the
+  thing is gone.
+- Fixed (project selector): the open project list is readable in the light and the
+  dark scheme (the options no longer take the light text colour onto the system's
+  white), the same holds for every other selection list in the web interface. The
+  chosen project is kept for the browser session in a cookie, so it stays when you
+  open another page; an explicit `?project=` replaces it, "All projects" and signing
+  out clear it, and a project you have no role in is ignored. Without a choice
+  everyone sees "All projects" (all projects they have a role in, never more), and
+  anyone with more than one project can pick it. The rooms badge always counts every
+  project; only the room list follows the selection. Overview, agents,
+  sessions, knowledge, requests and the rooms list follow the selection; the
+  sessions list no longer has a second project filter. The account and
+  administration pages (organization, devices, profile) show no project selector.
+  The "Get the install command" button on the connect page no longer sits on the
+  code field below it, and the code row wraps on narrow screens.
+- Fixed (second acceptance run, 2026-10-12): an @mention of a person reaches every
+  account that may read the project room, also one who is only in the web and has no
+  agent in the room; accounts without a role in the project are still not reached
+  and not confirmed. A name that reaches no one shows a quiet "@name reached no one"
+  line under the room after sending (not for guests). An invitation link opened by
+  someone who already has the role or a higher one says "You are already a member
+  of ..." with a link to the project and is not used up, also after signing in
+  through the invitation page. A freshly created invitation link is shown as
+  selectable text next to the Copy button instead of a field that cuts it off.
+  `ctx request move` prints one line (`moved REQ-n to <project>`); `--json` is
+  unchanged.
+- Fixed (acceptance run of two people, 2026-10-11): a session that belongs to no
+  project can no longer be shared with "Project members" (the web form does not
+  offer it, the API answers 409 `share_needs_project`); the sender of an @mention
+  reads the mentioned person's name instead of "Someone" (everyone who may read the
+  room sees the names of its participants, guests still do not); the "This is me"
+  confirmation on the connect and invitation pages stays a question, but the button
+  now shows why it waits ("Confirm first that this is your account.") instead of
+  doing nothing; `ctx login --machine NAME` with a name that belongs to
+  another account stops at once, as soon as the browser refuses it, and prints the
+  exact command to run again with another name; identical agent rows ("Agent · Name
+  · machine" three times) get a short tag from the session id; all absolute times
+  of the web pages are shown in the browser's time zone (the list and the detail
+  of a session no longer disagree). A mention that names a person reaches the
+  person; a running agent gets it when the mention names the agent (for example
+  `@claude-name`), and the hooks deliver it, which a new test with two accounts
+  covers for both `UserPromptSubmit` and `PostToolUse`.
+- Fixed: knowledge and requests without a project and without a machine ("global")
+  were readable by every account on the instance, a fresh account without an
+  organization included. "Global" now means "everywhere for me": such an entry is
+  visible, listed, searched, delivered (bootstrap, relevance hook, mirror, web,
+  MCP) and editable for its author's account only, the instance admin included.
+  The author is the writing account (`knowledge_authors`); for entries from before
+  accounts and for requests the author name decides, and a name no account carries
+  (or none) belongs to the instance owner. Moving an entry to global is limited to
+  its author, since a lead who moved a member's entry there would hide it from the
+  project and from himself. Machine knowledge stays readable only for the owner of
+  the machine.
+  Authorship is the account id, never a name: requests get an author table like
+  knowledge, a one-time start-up backfill gives legacy entries their account (the
+  name then, an earlier name next; an ambiguous name leaves the entry without an
+  owner, visible to the instance owner only; an unknown or empty label and a
+  distillate without a session belong to the instance owner, a distillate to the
+  owner of its session), and nothing is resolved by name at run time, so renaming
+  an account to "Claude" or "admin" takes nothing over. A thread cannot link, and
+  the room list does not show the title of, another author's global request.
+  Browse, search, pending, relevance and the open-request count cut other
+  authors' global entries in the query, so they cannot displace visible hits or
+  inflate counts. The relaxed list gate for lists without a project covers only
+  knowledge and requests.
+- Added: projects without git (REQ-459). A project can have just a name. Its id is
+  `<org>/<name>` (for example `acme/infra`), unique within the organization. Being
+  a named project is a property of the project, not of the id's shape: remotes
+  such as `gitserver/repo` stay ordinary repository projects, and a named
+  project cannot take the id of an existing repository, and an organization's slug
+  is its namespace: a write never creates a repository project `<org>/<x>`
+  implicitly (use `ctx project create`). You keep saying `infra`, and a short name that matches several projects (a named
+  one and a repository ending in the same name, or two organizations' `infra`) is
+  refused with the list instead of being picked silently. Any account that is at
+  least a member of an organization creates one in the web (Organizations page,
+  "Create project") or with `ctx project create <name> [--org O]` (account and
+  device tokens, not an agent route); the creator becomes its owner. It has roles,
+  a room, knowledge and requests like a repository project, and a project of
+  another organization answers like one that does not exist. `ctx project link
+  <name>` ties the current folder to it after checking that you may write there.
+  The link is recorded only on this machine (`~/.config/ghosttree/links.json`,
+  mode 0600); nothing inside a folder or repository decides the assignment, so a
+  repository you check out cannot move your sessions into a project. `ctx project
+  unlink` removes the link (`--missing`: all links to folders that are gone), `ctx
+  project links` lists them and `ctx doctor` reports stale ones. Sessions, hooks,
+  the MCP server and the collector resolve the project from the working directory
+  upwards, and the nearest boundary wins: a repository with an origin (identity:
+  the remote) or a linked folder. A repository inside a linked folder keeps its own
+  identity; a linked folder inside a repository, or a repository root you linked
+  yourself, takes over its subtree. A linked folder has no branch and no
+  `.ghosttree/` mirror or file descriptions (those stay with git repositories), and
+  `$HOME` and `/` cannot be linked. A write that names no project now also points to
+  `ctx project link <name>`.
+- Added: `ctx garden check-knowledge` (REQ-457 pilot). An opt-in gardener checks pitfalls and decisions against the code and reports whether each still holds, with commits or file:line as reasons. It stays off without an API key (`GHOSTTREE_GARDEN_KEY` or a `garden` entry in llm.json), supports `--dry-run` and a `--max-usd` budget, and with `--propose` only adds staged notes marked as coming from the gardener.
+
+- Added: knowledge and requests are filed where they belong, not where the session
+  happens to stand (REQ-458). `context_remember`, `request_create` and `thread_open`
+  take an optional `project` (a remote or a short name that is unique among the
+  projects you can write to), `context_remember` an optional `machine` (any name,
+  including an ssh target no agent ever ran on). A project you cannot write to
+  answers exactly like one that does not exist. Nothing falls back silently any
+  more: `scope_hint` project without a project, and a request without a project,
+  are refused with the list of projects you can write to. A note for a machine
+  without sessions is stored and reaches sessions on that machine; a machine token
+  may write notes about another machine while the name is free. Writes from MCP
+  and `ctx request create` record the session ref. Existing entries move to
+  another project, a machine or global: `ctx knowledge move <id> --project P |
+  --machine M | --global`, `ctx request move <id> --project P`, the new
+  `context_move` tool, `request_record_progress` action `correct` with `project`,
+  and a "Move" form on the knowledge and request pages. You need write access in
+  both places, and the move is logged (the request's activity, the entry's move
+  history). Changed: requests without a project no longer appear in the ledger,
+  search results or bootstrap count of any project (they stay in the lists that
+  name no project, where they can be moved: existing requests without a project
+  disappear from the project ledgers and are sorted in with `ctx request move`);
+  machine and global knowledge still reaches every session it applies to.
+  Knowledge for a machine is delivered to sessions only while its author owns that
+  machine, so nobody can plant an instruction on a free machine name for whoever
+  claims it later (the author still sees it). `thread_open` for another project
+  opens the thread on the strength of your role there and does not register the
+  session in that project's room; its opening post travels with the question.
+  Moving an entry to global needs at least the lead role in its project. A moved
+  request keeps hiding the handoffs and quotes of private source sessions from
+  those who may not read them.
+- Changed: private means private (REQ-438). A session that is not shared is read
+  by its owner alone: not by organization or project owners, not by leads, not by
+  the instance admin, whether in the sessions list, the transcript, the raw
+  export, search, the MCP tools, request work, snapshots or evidence quotes.
+  Shared sessions behave as before. A project owner can still withdraw a shared
+  session, but can no longer share a private one or widen a shared one. Knowledge
+  and requests the distiller derived from a private session stay visible to that
+  session's owner alone until the owner adopts them or shares the session; what an
+  agent saves on purpose stays normal project knowledge. The owner releases a held
+  finding to the reviewers (or discards it) but cannot verify it; if the owner
+  leaves the project, the finding stays held and invisible to others until the owner returns and releases or discards it; nobody else can release it. A knowledge entry
+  that cites a session must cite one of your own. Handoffs, quotes and what a
+  private session works on are private like the transcript, also in snapshots.
+  Upgrade note: older held-back (quarantined) findings from private sessions are
+  held for their session owner from now on; they reach the review queue when the
+  owner releases them or shares the session.
+- Added: any signed-in account can create an organization on the Organization
+  page and becomes its owner; the way on leads to inviting someone or connecting a
+  project. Owners (and the instance admin) can rename it; the address stays.
+  `ctx org create` stays admin-only.
+- Changed: the invitation page says what you share and what your role sees:
+  sessions stay private until you share them; project members see the project's
+  knowledge, requests and room messages.
+- Fixed: joining from a fresh machine (REQ-438). `ctx join` now always sets up the
+  collector service, also when neither Claude Code nor Codex is installed yet, and
+  ends with one line saying what to install next (`--no-watch` still skips it).
+  `ctx doctor` without a harness checks only the harnesses that are installed and
+  lists the others as "not installed (skipped)" instead of failing; `ctx doctor
+  codex` still checks codex. When systemd has no user session bus, the message now
+  names the fix: `loginctl enable-linger $USER`, then `ctx install watch`.
+- Added: names and invitations work for two people (REQ-438). The sign-in reads
+  the display name from the identity provider's userinfo endpoint when the ID
+  token carries none (name, given and family name, nickname, user name; an email
+  address is never a name), refreshes it at each sign-in until the person sets one
+  on the new Profile page. Agents read as "Claude · Robin · mainex" instead of
+  their session ID, in rooms, recipient pickers and the Agents page; guests see a
+  neutral "Someone" or "Agent" and never an ID. Project rooms list everyone with a
+  role in the project, with that role, for members and up. Inviting is one flow:
+  pick the project and the role, get the invitation link; the link stays copyable
+  for its creator while the invitation is open, and a reload no longer fails.
+  Members without a project are flagged with a button to add one, the last owner
+  cannot step down or leave, and the default organization is marked "For new
+  projects". An invitation link offers "Create an account" when the identity
+  provider supports `prompt=create` (`GHOSTTREE_OIDC_SIGNUP=1` or `0` overrides),
+  and only a valid invitation code makes ghosttree send that prompt. Names are
+  protected: a name someone gave up stays reserved for them, every change is
+  written to an append-only log, a name uses a single script (no Latin and
+  Cyrillic letters mixed), a person changes it at most three times a day, and
+  guests cannot change it. An organization link never makes an owner. A slow or
+  failing identity provider no longer stalls other requests, and a failed
+  discovery is remembered for 30 seconds.
+- Added: messages reach agents and people by @name. Write `@name` in a room
+  message or thread reply (a display name, a first name, a short name such as
+  claude-anna, or an unambiguous start of one) and the server resolves it
+  against the room; a name that fits several is refused with the candidates
+  for members, and silently ignored for guests so nothing reveals who is in the
+  room. Claude Code agents get new messages for them once each through the
+  prompt hook and, at most once a minute, a PostToolUse hook; the inbox marks
+  what is addressed to the agent and shows the sender's role at the time of
+  sending. The project rule text tells agents how to answer. The room's message
+  box is wide and multi-line and completes @names from an external script. A
+  guest calling coord_peers now gets a plain explanation instead of an error.
+- Changed: owners, leads and members may write in the project rooms of their
+  project through their role, without an agent of their own in the room (REQ-437).
+  Messages, replies, threads and standing instructions work from the browser
+  composer; guests still cannot write, direct and group rooms keep their
+  membership rule, and a thread with a visibility list stays closed to a role.
+  Agent tokens and pasted sessions are not covered. A role writer can mention
+  the agents of the room; direct and group messages still need membership.
+  Leads and owners can change the state and archiving of project threads;
+  links, summaries and outcomes stay with the author and room managers.
+- Fixed: a fresh install over the invitation command works on a machine whose
+  PATH lacks `~/.local/bin` (the macOS default). `ctx install` and `ctx join`
+  write the absolute path of the running `ctx` (the stable `~/.local/bin/ctx`
+  name when it points at the same binary) into the Claude, Codex and OpenCode
+  hooks, the MCP entries and the collector service, and rewrite entries that
+  still say a bare `ctx` without touching anyone else's hooks. `ctx doctor`
+  recognises a bare or moved `ctx` that the harness cannot start and names the
+  exact fix command with the absolute path; a missing PATH entry alone is no
+  longer a failure. `install.sh` explains the PATH situation and prints the line
+  to add (quoted so an unusual directory name cannot inject anything);
+  `--modify-path` appends it to your shell profile (a terminal is asked first, a
+  pipe never), `--no-modify-path` never does. A `ctx` that runs from a temporary
+  directory or the Go build cache is never written into hooks or units: the
+  command stops with an explanation, or uses `~/.local/bin/ctx` when it exists.
+  Paths with control characters are escaped in TOML and refused in service
+  files, and `$` is escaped in systemd units.
+- Fixed: joining from a machine whose hostname another account already uses. The
+  server picks a free name (`<host>-<account>`, then a random suffix) for an
+  automatic hostname and says which one it chose; a name given with `--name`
+  that is taken ends the command at once with the exact command to run with
+  another `--name`, and the pairing code stays usable; after three different
+  refused or automatically replaced names within 30 minutes the account is
+  locked for claims (the answer no longer depends on the name, so it cannot be
+  used to probe names) and `ctx join` says how long to wait; trying the same
+  name again does not count.
+- Added: `ctx install claude|codex` and `ctx join` set up the collector
+  (`ctx watch`) as a user service (systemd user unit, macOS LaunchAgent), update
+  an existing one and leave it alone when nothing changed. `--no-watch` skips
+  it; `ctx install watch` sets up only the service. A service file that
+  ghosttree did not write is left unchanged. A second `ctx watch` on the same
+  machine (a lock file, flock) ends at once with a message instead of
+  collecting twice. Without a connection to a server the service waits for
+  `ctx join`. `ctx doctor` points to that command instead of a file in the
+  repository. After `ctx join` for Codex, run `/hooks` in Codex to trust the
+  hooks.
+- Changed: an owner without a connected machine sees the same guided install
+  command with a pairing code as an invited person, on the overview, instead of
+  `ctx login --server`. `ctx join` asks in the terminal, also after the browser
+  approved it on the same machine, which account this machine becomes
+  ("[Y/n]" there, "[y/N]" when the code was typed in another browser); declining
+  makes the browser say that nothing was connected. The local callback page
+  refuses embedding and non-navigation requests and forbids framing. Without Claude Code or
+  Codex, `ctx join` says what to install and which command to run afterwards.
+  `ctx install --help` prints the usage.
+- Changed: invitations and device pairing are guided. The invitation pages name
+  who invited you and to what, say in one line what ghosttree is, and ask only for
+  your name. Connecting a computer is three steps (open a terminal, copy the
+  command, confirm here) that advance on their own as soon as the server sees the
+  computer; on a phone the page offers to send the command to your computer
+  instead. The approval page has a large field for the four-character code from
+  the terminal, asks "This is me, <name>" without internal ids, and ends with
+  "<machine> is connected" and a button to the overview. A code is used up only
+  by an approved connection: a request nobody approves expires after five
+  minutes, the same installer can run again, "New code" is always offered, and an
+  installer without a terminal prints the finished command with `--yes` and
+  leaves the code unused. Codes stay single-use, short-lived and rate-limited.
+- Fixed: pairing after review of the guided invitation (REQ-434, REQ-435). A
+  second claim on a pairing code no longer passes for "the same installer" just
+  because it comes from the same network under the same machine name (both can
+  be copied or shared behind NAT or a proxy, and it let a thief reset the
+  confirmation count and switch to the loopback path). The claim answer now
+  carries a random `resume` token; `ctx join` keeps it in a private file next to
+  its config for ten minutes and sends it when you run the command again after
+  Ctrl-C. Only that token lets a second claim replace your own pending request
+  (same path, wrong confirmation codes stay counted); any other second claim
+  blocks the session and the page warns. A claim after the five-minute wait
+  reports a timeout instead of "another device". Over plain http (not
+  localhost) the pairing page says the server needs https instead of showing a
+  command `ctx join` would refuse. The command wraps only at spaces, so `--pair`
+  never splits. The inviting person's name is shown without any email domain,
+  and the sign-in page shows an invitation only if it could be redeemed. Error
+  pages of the pairing page link back to it. Dead code from the removed
+  cookie flow is gone.
+- Changed: ghosttree has a logo mark (a small "g" with eyes) in the sidebar, on
+  the sign-in and invitation pages, and as favicon, with a dark variant.
+- Changed: first-run clarity in the web pages. Overview and Agents show the
+  machines you signed in (connected, or last seen a while ago) and the next step,
+  "Start Claude or Codex in a project", with a command to copy; the connect page
+  switches to "connected" as soon as a machine is there. Agents read as "Claude on
+  freund-laptop" or "CLI on freund-laptop" (the raw ID is in the title), and an
+  agent counts as active only on a real sign of life, not because of a message.
+  Your own agents are listed even when your project role is too low to list a
+  project's agents. Knowledge shows Approve and Reject only where a decision is
+  open (a trusted or verified entry offers Retire on its page, with Undo), marks status ("Waiting for review", "Held back", Trusted, Verified) with a
+  hover explanation and kinds with a small icon. The Agent context page uses the
+  project switcher, wraps its text and has empty states. In rooms the post kinds
+  read "Message", "Standing order" and "Ask", the Guest chip no longer sits on your
+  own agents, project names match the other pages, and a room with a single room
+  opens directly on small screens. Sessions drop the empty "Linked" column and
+  label the visibility choice "Visible to". Fixed: a thread opened through the API
+  (the MCP `thread_open` tool) was never listed under Threads in its room; new
+  ones are filed in the project room and existing ones are adopted on start. Private
+  threads (promoted from a direct or group room) are never adopted by the project
+  room, and a thread's visibility list also applies in the room list. A request
+  title in a room's thread list only shows for a request of that project. Changed:
+  `thread_open` with a request link now checks the link first and opens nothing
+  if it is refused (not an existing request of this project, or not `REQ-n`/a
+  number), instead of leaving a thread behind; `thread_open` and `thread_find`
+  look for both spellings of a request link. Your own agent's Waiting states are
+  not shown where you may not list the room's agents. Pure guests still see no
+  agents of their own.
+- Fixed: a collector from before the session addresses (older than the current ctx)
+  no longer loops forever on `403 session_owned` after the server stopped
+  returning the session number. Admins and members of any project now get the
+  number of the session they register themselves, also for sessions without a
+  Git remote; guests still get only the address, and an old client that cannot
+  read it is refused with `409 collector_too_old` ("update ctx"). The collector
+  never uploads to session 0 and retries the registration with a backoff,
+  `ctx doctor` warns when the running watch process uses a replaced or different ctx
+  binary, and `ctx install` restarts the `ghosttree-watch` user unit in that case.
+  The comparison uses the binary the unit starts (`ExecStart`, else
+  `~/.local/bin/ctx`) and the unit's own process, not the `ctx` on `PATH` or a
+  stale pid file. A member's older collector can upload to its own session in any
+  project (empty, unclaimed or claimed by someone else) with the number it was
+  given, and can read and share its own session by that number; numbers of other people's sessions still answer exactly like unknown
+  ones. While a registration is paused the collector no longer logs one line per
+  file event. Development builds from before this change that understand session
+  addresses but do not ask for them (between the sessions view and the Requests
+  redesign) are refused with `409 collector_too_old` as guests; update ctx for
+  guest accounts.
+- Changed: inviting to a project no longer needs a typed project name. The
+  organization page offers a choice of the organization's projects, and for
+  organization owners also the projects only they uploaded sessions to that
+  belong to no organization yet, with "Add to organization and invite". The
+  server applies the rule of `ctx project claim` (owner of the organization, a
+  remote no other account uploaded to) and lists no foreign or shared project.
+  Claim and link happen in one transaction, so a refused link leaves no claim.
+  Project invitations default to seven days for a member and three for a guest
+  (the days field stays empty to take that default), accepted invitations stay in the list as
+  "Accepted by name", and the roles of a project sit inside the project instead
+  of a second list. An invitation link is shown once, only its hash is stored.
+  `ctx join` lists what it sets up ("Claude hooks", "MCP server", "skills",
+  "CLAUDE.md section" and so on) before it asks and again afterwards.
+- Changed: the Requests pages are redesigned in the Clay look and can edit in
+  the browser. The list searches and filters by state, kind, priority and
+  project, shows each request with its number, kind, priority, criteria progress, age and the
+  readable sessions working on it, and pages back with "Show older". The
+  detail page shows the description, criteria with their proof, work, related
+  items, discussion and history. Add a criterion, resolve or waive it with
+  required proof, correct title, kind, priority and description with a reason,
+  complete with proof, or drop with a reason, each with a visible result. Rights
+  are checked on the server as for the API; a request you may not read answers
+  like an unknown one, and sessions appear only by address and only if readable.
+- Changed: the administration pages (organization with members, invitations,
+  projects and project roles; devices and tokens; device approval) are redesigned
+  in the Clay look and work on narrow screens. Times show as relative text with
+  the full date on hover, the invitation result is the link with a copy button,
+  and empty lists are one line with one action. Rights and the protection of the
+  last organization owner are unchanged and checked on the server. Identities
+  cannot be unlinked or relinked yet; the server has no operation for it.
+- Changed: the web pages for knowledge and review are redesigned in the Clay
+  look. The knowledge list filters by kind and status as well as search and
+  project, each entry has a detail page with its history, and review cards show
+  the evidence with links to readable sessions. Review actions work in the
+  browser: approve, reject with undo, and edit title, text and kind, each with a
+  visible result. Rights are checked on the server per entry, as for the API.
+- Fixed: saving an instruction from the browser no longer turns it into a
+  pitfall, the edit form always offers the current kind. The history of an entry
+  (page and `GET /api/knowledge/{id}/history`) is only for members and above,
+  guests get the same answer as for an unknown entry, because earlier versions
+  may never have been released. The history names the author of each version
+  and who replaced it. Approving without the right to edit sets only the status
+  of trust and the confirmer and no longer revives a stale entry; approving
+  twice answers 409 and keeps the first confirmer. Review actions on an entry a
+  guest cannot read answer 404 like an unknown id. Line endings from the text
+  box are stored as LF. The Edit button on a review card opens the form. Known
+  limit: the knowledge list without a project loads at most 400 entries and
+  filters them afterwards when access is enforced.
+- Fixed: owners, leads, members and reviewers read the project room in the
+  browser without an agent of their own in it, as the access matrix allows
+  (coordination, project room: read from member up). Writing is unchanged
+  (spec 7.5: roles never grant write access): posting, directives and
+  requests, ending a directive, threads and promoting a message still need an
+  active membership, an agent of one's own in the room. Without it the room
+  shows a quiet "Read only" line instead of the composer, and no "Start
+  thread", "New thread", promote or end button. The room tabs list every
+  project room they may open, and the Room link on the agents page no longer
+  ends in a bare "403". Only a signed-in web session reads by role; personal,
+  device, legacy and pasted tokens and agent tokens, guests and strangers are
+  unchanged, and direct messages are unchanged. A room the viewer may not open
+  shows a designed page: "not open to you" (403, with a way back that leads
+  somewhere) or "does not exist" (404); the 404 page is byte-identical for a
+  missing room and for a room in a project the viewer cannot see. A machine
+  room without membership is now "does not exist" too, so host names cannot be
+  enumerated. The fade at the top of a conversation appears only once it is
+  scrolled, so a short history shows its first message in full.
+- Fixed: guests no longer learn that hidden sessions exist through knowledge
+  or by ending work. Knowledge from distillation points at a session by its
+  address, and only when the guest may read that session; otherwise the
+  reference, its quotes and its session counts are left out, in the knowledge
+  API, the search, the review list and the web pages. Ending request work whose
+  session is hidden from you answers exactly like an unknown id. Instance
+  admins and members of a project whose session numbers they may see end
+  anyone's work; everyone else ends only work on their own session. This now
+  holds for project requests too: a guest, a stranger and an unknown id get
+  the same status and body. Starting work answers the same for a hidden and a
+  missing session. A session number sent with new knowledge is dropped for
+  anyone who may not know numbers, global knowledge follows the project of the
+  session it points at, the review list prints the address instead of
+  "session 0", and the knowledge label hands `session_ref` or `session_id`
+  straight to `context_sessions`.
+  Further: the warning on starting work counts only work whose session you
+  may read; without session numbers (members on global requests included) you
+  start and end work only with your own session, so another agent's legacy session
+  (account 0) now answers 404, while instance admins are exempt; and
+  "already working on" never names a request you cannot see; a
+  hidden project's request answers byte for byte like an unknown id on every
+  request route; activity and evidence ids are always renumbered for those
+  viewers; a session address made only of digits is no longer taken for a
+  number in the knowledge label.
+
+- Added: an Agents page in the new design. Each agent shows its machine,
+  project and branch, the open request it works on, its last room post and
+  when it was last active, with links to its room and session. Without agents
+  the page is one line and a connect action. Agents, requests and sessions you
+  may not read stay out, and a guest sees none. Owners, leads and members see
+  the agents of their projects without needing an agent of their own in the
+  room; the Agents page and the overview list the same agents. A guest sees
+  "Nothing here yet." and no connect action.
+- Fixed: context snapshots honour project access. Creating, listing and
+  reading a snapshot (HTTP, `ctx snapshot` and the MCP tools) now needs member
+  rank or higher in the project, or the instance admin; guests and accounts
+  without a role could previously copy and read the whole project, including
+  hidden sessions and drafts. Everyone else gets exactly the answer for a
+  snapshot that does not exist. Knowledge bound to a machine is never part of
+  a snapshot, whoever creates it; older snapshots that still hold such
+  entries do not hide them: a full export and `ctx snapshot verify` fail with
+  an integrity error, while export with `--domain` still works. Re-create
+  such a snapshot under a new name.
+  Projects nobody has claimed yet have no role: an account without the
+  instance admin now gets "not found" when creating a snapshot there, so its
+  agents lose snapshots until the project is claimed.
+- Fixed: ending a standing instruction needs more than room access. Only its
+  author, or someone whose project rank is at least the author's (owners and
+  instance admins always), can end it; anyone else gets "forbidden", and the
+  room shows End only to those who may. Before, a guest could end an owner's
+  directive, also one written before the authority migration. Guests see End
+  only on their own directives and get the same answer for every other one, so
+  the button no longer reveals who outranks whom; an admin's agent does not
+  inherit the admin's right to end everything.
+- Fixed: the room's send, read and answer buttons submit in place again. The
+  page script treated every button as having its own form target and let the
+  browser post the form natively, which replaced the page with plain text on an
+  error and dropped what was typed.
+- Changed: directive plates and request cards name the sender's project role,
+  instructions from below member rank read as "Standing request", the composer
+  offers "Directive" only to those who can give one, a request asks for its
+  addressee inline, More is an icon next to Send, closed requests show how they
+  ended ("Answered · robin"), and the no-script refresh link keeps the room.
+  Agent pause texts and the mutual-wait line are English.
+- Changed: rooms are a real chat (REQ-435, fourth part). Rooms switch through a
+  dark tab pill with an unread dot, and a compact "+" starts a direct message or
+  a group. The flow groups consecutive messages of one sender, shows agents as
+  dark avatars with name and `@machine`, your own messages as blue bubbles on
+  the right, system lines small and centered, and the task thread under the
+  message. Directives are dark pinned plates with their scope and an End action;
+  requests and questions are white cards with the waiting time and their
+  answer actions. The composer has a Message / Directive / Request pill, a
+  sunken field and a round send button: Enter sends, Shift+Enter breaks the
+  line, and a directive is only set with its own button. The right column
+  lists participants with status, directives in force and threads; on narrow
+  screens it opens as a panel. Room texts are English and come from the message
+  catalog, the page works in light and dark, and live updates keep the scroll
+  position or stay at the end.
+- Changed: the web interface moves to the Clay material with a blue palette
+  (REQ-435, third part). The sidebar is a raised card, the Overview greets the
+  user and shows requests with progress bars, and every other page, the
+  sign-in and the join pages get the same buttons, fields, cards and tables.
+  Light and dark follow the system setting. Gabarito, Fragment Mono and
+  Source Serif 4 (SIL OFL, under `internal/web/static/fonts/v5/`) replace
+  IBM Plex. The rooms keep their own surface as a light panel in both modes
+  until their redesign.
+- Fixed: hardening of join sessions after review (REQ-434, P2b). Loopback
+  claims are limited per /64 and /48 like device flows. A session
+  lives at most 30 minutes in total. Machine names in a join claim are limited
+  to letters, digits, `.`, `_` and `-` (64 characters), the fallback approval
+  page warns on a different network, and the "Same network" line is dropped
+  when `GHOSTTREE_PUBLIC_URL` is set without trusted proxies. Denying a loopback
+  request redirects the browser to the installer with `error=access_denied`.
+  `code_challenge_method` must be `S256`, and `code_verifier` must use the
+  RFC 7636 characters. A claim keeps the session and its device flow until
+  30 minutes after the session was created (`expires_in` reports the remaining
+  time).
+- Changed: the web interface starts on a new Overview (REQ-435, second part).
+  `/ui/` and the redirect after sign-in lead to `/ui/overview`, and the brand
+  link too. "Next" lists what needs a decision (knowledge to review for
+  reviewers, requests addressed to you), "Agents" shows each agent as active
+  (signal within 8 minutes), idle or offline (over a day) for the rooms you take
+  part in, and the side column shows open requests with their criteria progress
+  and what was learned this week. Everything is drawn from what the viewer may
+  see; guests get only requests and knowledge, and the page is the same whether
+  or not hidden projects hold data. Owners and admins of an instance without
+  agents get one step instead: the `ctx login --server` command to copy, a field
+  for the code from the terminal (the machine is named only after the code is
+  entered, never listed), "Waiting for your machine", and the page switches by
+  itself once the machine or any request, knowledge or agent is there; an
+  instance that is already in use always shows the normal Overview. The oldest
+  account no longer counts as owner on its own; the first account of a fresh instance is an admin
+  from the start. Without a `?project=`, members and guests get their first
+  project preselected. The fonts moved to a versioned path
+  (`/static/fonts/plex-1.1-2.5/`) so long caching stays safe, and the `js` class
+  is set from `shell.js` in the page head so the narrow-screen menu no longer
+  flashes open.
+- Security: every `/ui/` page now sends a Content-Security-Policy (own origin
+  only, no inline script or style, no framing), `X-Content-Type-Options: nosniff`
+  and `Referrer-Policy: strict-origin`, and is `no-store`; the join page may load
+  the self-hosted fonts. The inline script, the inline progress width and the inline `noscript` style moved into
+  `shell.js` and `app.css`.
+
+- Fixed: session review round 6 (REQ-435). A viewer who may work on a request
+  (every account on a global request) keeps the real ids of work, evidence and
+  activity, so request_get and finishing work hit the same row; only viewers
+  without that right get renumbered ids. Session evidence whose ref is not a
+  session address is left out for restricted viewers, the work.finished
+  backfill of request_activity attributes a session only when exactly one work
+  row matches and does not retry the rest at every start, snippets are fetched
+  per hit by rowid, and search hits read only the handoffs of their request.
+- Fixed: session review round 5 (REQ-435). A request seen by a viewer who may
+  not know session numbers no longer carries hidden sessions: evidence that
+  cites a session is rewritten to its public address or left out, activity
+  and handoffs of unreadable sessions are omitted rather than replaced, the
+  numbering of work, evidence and activity is renumbered so gaps cannot be
+  counted, and the latest handoff in lists comes from readable sessions only
+  (API, web, search and MCP). Session search runs `snippet()` only for the
+  rows it returns, the rank order is chosen by role instead of by whether
+  something is hidden, the index byte budget counts bytes, the narrow session
+  detail no longer scrolls sideways, and MCP counts and names sightings by
+  address.
+- Fixed: session review round 4 (REQ-435). Search order no longer depends on
+  sessions you cannot read (web and `/api/search` rank restricted viewers by
+  matches in readable chunks, then recency), request details, work entries and
+  lists show a session's public address instead of its running number for
+  viewers who may not know numbers and omit unreadable sessions, the index
+  backfill rides out a full writer or a locked database instead of stopping,
+  a step reads at most its byte budget, an upload line just under the server
+  limit counts the request envelope, and stored projects are written in
+  canonical form once. Transcript blocks use the Clay cards of the v5 design,
+  your prompts are blue bubbles on the right, and message numbers show only on
+  hover or focus.
+- Changed: the Sessions page is rebuilt for reading and searching (REQ-435,
+  Sessions view). The list groups sessions by day with title, agent@machine,
+  project, branch, linked requests and knowledge, message count, duration and a
+  Live marker, filterable by project, machine, agent, time and Everyone/Mine
+  (menus show counts of the sessions you may read; guests see no counts). The search covers messages,
+  commands, tool output and, on request, thinking blocks, and groups hits per
+  session with a marked snippet that jumps into the transcript. The transcript
+  shows your prompts and the agent's text, collapses tool calls and thinking to
+  one line, cuts long output after 12 lines ("Show all N lines"), shows edits and
+  patches as diffs, lists your prompts on the left, finds text across the whole
+  session with next/previous, and loads 200 messages at a time. The owner of a
+  session or the project owner sets it to private, project members, or including
+  guests; guests see only sessions shared with them and no machine, branch or
+  owner. Session addresses are random; members may still use the running number,
+  for a guest every number looks like an unknown session. Sessions you cannot read show as "Private" rows without title or
+  link. Thinking blocks are hidden until you turn them on. Sharing with guests
+  asks first when the transcript looks like it contains credentials ("3 possible
+  secrets in this session. Share anyway?"). A block shows at most 2000 lines or
+  256 KB and a page at most 5000 lines; the rest is marked as truncated and the
+  page offers the next window.
+
+- Added: sessions are searchable and addressable by a random id (REQ-435,
+  Sessions backend). Every stored line of a session is read into one display
+  model for Claude Code and Codex (messages, prompts, thinking, tool calls with
+  input and result, diffs), and the search index now covers thinking blocks,
+  tool input and tool results, each cut to 8 KB per chunk; before, 88 % of the
+  chunks had no searchable text. Chunks stored earlier are indexed in the
+  background after the update, in small resumable steps (the server starts at
+  once; progress survives a restart). Sessions get a title (the Claude
+  `ai-title`, else the first user message) and a random web address instead of
+  the running number. A session has three sharing levels: private, project
+  members, and project including guests. Only the session's owner or the
+  project owner changes it, every change is recorded, and a guest sees only
+  sessions shared with guests, without machine, branch, path or owner. Search
+  results, counts and filter numbers are formed from the sessions the viewer
+  may read only. The session list API and `context_sessions` now give title,
+  message count and address only for sessions the caller may read and hide
+  machine, branch, path and owner from guests, also when filtering by machine
+  or branch; the legacy share route follows the same rule as the browser, so
+  the project owner may use it too. Paging cursors carry a position in the list
+  the viewer sees, never an internal id or a score. Opening a session during the
+  background indexing works in jobs of 300 chunks and no longer holds the writer
+  for the whole session; each background step is limited to about 50 ms of
+  writer time, and chunks written by a rolled-back binary after the first
+  indexing are picked up at the next start. Session uploads are limited to
+  64 MiB per request, checked for ownership before the body is read, with at
+  most two large uploads at a time; the collector sizes a request by its
+  serialized body (24 MiB) and halves one the server refuses.
+
+- Fixed: what a guest observes of sessions no longer depends on sessions they may
+  not read (REQ-435, review). Search and list choose the readable sessions before
+  ranking and cutting to the limit, so hidden hits neither push a shared session
+  out nor reveal how many exist. Guests no longer see the internal session number
+  anywhere (API, search, `context_sessions`, the response to creating a session);
+  they address a session by its random address, which `/api/sessions/{id}` and
+  `/chunks` accept in place of the number (members and older collectors of
+  members keep the number; for a guest every number answers like an unknown
+  session, so an older collector run by a guest stops uploading and needs an
+  update). A page of the
+  transcript ends between stored lines, never inside one. Times use the server's
+  zone everywhere. The credentials question when sharing with guests is a page
+  you reach by redirect, not the answer to a POST. Opening a session while the
+  background indexing runs is limited in time and bytes per step and gives up
+  after 2 seconds with what is indexed. `ctx account ... --db ./x.db` opens.
+- Fixed: more review findings on sessions. Sharing a session you may not read
+  answers 404 exactly like an unknown number (it was 403), and the answer to a
+  guest names the address instead of the number. The readable set of sessions is
+  now part of the SQL query, so a search costs the same however many hidden
+  sessions exist, and listing no longer reads a changing `last_seen_at` page by
+  page. A large upload waiting for its slot no longer uses up the server's read
+  timeout. The collector replaces a single line with a marker only when it is
+  over the server's 64 MiB limit per request; a 413 for a smaller line (a proxy
+  limit) pauses that file with a log line instead of discarding the line. A page
+  of a transcript shows at most 2000 blocks, also inside one stored line, with a
+  "truncated" note.
+- Added: `ctx join --server <url> --pair XXXX-XXXX` pairs a machine with the
+  code from an invitation page (REQ-434, part 3). It opens a loopback
+  listener on 127.0.0.1 only for the duration of the command, proves the
+  exchange with PKCE (S256), shows the account and organization and asks
+  before writing the client config (`--yes` skips questions). Without a
+  usable browser on the machine (`--no-browser`, SSH without a display) it
+  shows a four-character code to type in the browser instead. It then offers
+  `ctx install` for the Claude and Codex setups it finds. `ctx join --help`
+  exits 0 so the installer can detect the command. If the confirmation is
+  declined, interrupted (Ctrl-C, SIGTERM, SIGHUP) or the config cannot be
+  written, the new token is revoked at once. A repeated join on a machine that
+  is already connected asks first, because it replaces that connection. Plain
+  http is accepted only for localhost; text from the server is stripped of
+  control characters before it is shown.
+- Added: `DELETE /api/tokens/self` revokes the bearer token the request was
+  made with. The machine name is released only if that token introduced it
+  and nothing is attached to it; otherwise it stays with its owner. A second
+  call, or a web session, is refused.
+- Changed: organization names may not contain control characters.
+- Changed: the web interface has a new app shell (REQ-435, first part). A
+  left navigation (Overview, Agents, Rooms, Knowledge, Requests; Administration
+  for owners and admins, "My devices & tokens" for members) with a project
+  selector, a search field and an account menu replaces the top bar. Guests see
+  only Overview, Knowledge and Requests, and the navigation carries no counters
+  and no project they have no role in. Existing pages keep their content and
+  routes; `/ui/rooms` redirects to `/ui/coord`. The sign-in page is new: a
+  provider button (named only when `GHOSTTREE_OIDC_NAME` or `--oidc-name` is
+  set), one field for a code or pasted login link, and the person-token form
+  behind "Paste a person token"; a wrong code shows the error inside the form.
+  Design tokens and self-hosted IBM Plex Sans and Mono (SIL OFL, under
+  `/static/fonts`) replace system fonts. `/` redirects to `/ui/`, and a
+  favicon is served. All texts of the shell and sign-in page come from one
+  message catalog. On an OIDC instance, a claim, bootstrap or invitation code
+  typed into the code field (Enter) starts the provider sign-in, and a pasted
+  login or `/join/<code>` link is understood by both buttons. Below 900 px the
+  navigation folds behind a menu button.
+
+- Added: the server can serve the `ctx` installer (REQ-434, fourth part).
+  With `GHOSTTREE_DIST_DIR` (or `--dist-dir`) pointing at a directory of
+  `ctx_<version>_<os>_<arch>.tar.gz` archives and `checksums.txt`, it answers
+  `GET /install.sh` and `GET /dist/<file>` (listed files only; 404 when unset).
+  `curl -fsSL https://<server>/install.sh | sh` verifies the SHA-256, installs
+  to `~/.local/bin` without sudo, and passes arguments after `--` to
+  `ctx join`. `make dist` builds the archives and checksums for linux and
+  darwin on amd64 and arm64. The installer refuses plain http (except
+  loopback) and an ambiguous `checksums.txt`; the server serves it only for an
+  https address.
+
+- Added: invitation page `/join/<code>` (REQ-434, first part). It shows the
+  organization, project, role (member or guest) and expiry of an invitation
+  link and uses nothing up by being opened; the invitation is consumed when
+  the invitee signs in (identity provider or local code sign-in) or presses
+  "Join" in a signed-in session, once and atomically. Every code that does not
+  work (unknown, malformed, expired, used, revoked, inviter no longer owner,
+  project moved, org-wide or email-bound invitation) gets the same 404 page,
+  headers included; requests are limited per client address (30 per 10 minutes,
+  `GHOSTTREE_TRUSTED_PROXIES` honoured), never per code. The page sends
+  `Referrer-Policy: strict-origin` (not `no-referrer`, which makes browsers
+  send `Origin: null` on every POST and breaks the same-origin check; the code
+  in the path is still never passed on), `Cache-Control: no-store`, a
+  script-free CSP and `X-Robots-Tag`, and the server logs nothing for `/join/` paths. Owners
+  create project links on the organization page (member 7 days, guest 3 days
+  by default); a link never grants owner or lead. Guest links need
+  `GHOSTTREE_ENFORCE_ACCESS=1`, project links are accepted only in a browser
+  session (the token API refuses them), the signed-in page asks to confirm the
+  account name and offers "Not you? Sign out", and, when
+  `GHOSTTREE_ENFORCE_ACCESS=1` is set, an org member who is not an owner sees only
+  the owners, themselves and the accounts that share a project with them (a
+  guest or a member without a project role: only owners and themselves), without
+  other accounts' ids, in the member list (UI and API). Without enforcement
+  every member sees everyone, as before, and a guest link is not valid. A project
+  lead (and any owner, or anyone without enforcement) still sees all org members
+  in the role forms of their project and can promote role-less members. The
+  invitation list shows project and role. `/ui/orgs/accept` hands project codes
+  over to the join page. At startup the server warns when
+  `GHOSTTREE_PUBLIC_URL` is set but `GHOSTTREE_TRUSTED_PROXIES` is empty.
+- Added: join session and pairing code (REQ-434, second part), so that
+  installation and sign-in run in parallel. Opening a valid invitation page
+  `/join/<code>` shows the invitation without creating anything; accepting it
+  (or signing in through it) creates the join session for the account, and the
+  pairing page shows the install command with a one-time pairing code
+  `XXXX-XXXX`; reloading shows the same code. Invalid invitations create no
+  session and stay byte-identical 404s. The installer calls
+  `POST /api/join/claim` (no token) with the pairing code and a machine name
+  and waits; after sign-in and joining, the session is bound to the account and
+  only that account can approve "<machine> wants to connect" (interactive
+  session, CSRF, same origin, account confirmation, bound to the shown
+  request, with a "same network as this browser" line).
+  Preferred path (RFC 8252 with PKCE): the claim carries `code_challenge`,
+  `loopback_port` and `state`; after approval the browser is redirected to
+  `http://127.0.0.1:<port>/callback?code=..&state=..` and `POST /api/join/token`
+  exchanges the one-use code for the token only with the matching
+  `code_verifier`, so a thief of the pairing code gets nothing. Fallback
+  (client without a loopback listener): the claim answer carries a
+  confirmation code, the approval page asks for it, and the token comes through
+  the device flow. A second claim discards the session. Unknown, expired,
+  claimed, denied and malformed codes get the same answer; wrong codes are
+  limited per /64 (and per /48 on IPv6) and logged when they pile up. Join
+  device flows have no user code, so `/ui/device` cannot see or decide them.
+  A server restart drops sessions; the page then says "Setup was interrupted".
+  The command is shown only over https or loopback.
+- Fixed: signing in with a one-time code, login link, invitation or bootstrap
+  code in a browser ended with 403. The code pages sent
+  `Referrer-Policy: no-referrer`, so the browser posted the form with
+  `Origin: null`, which the
+  same-origin check rightly rejects. They now send `strict-origin`: the browser
+  sends the real origin, the Referer carries no path (the code is in the link's query), and
+  `Origin: null` and foreign origins are still refused.
+- Fixed: agents can now open question, approval, blocker and handoff waits.
+  `coord_send` and `ctx coord send --intent` take an optional `intent`
+  (question, approval, blocker, handoff, ack; the first four need a mention),
+  the MCP schema describes the values (no enum, so "Question" is normalised
+  rather than refused by the SDK), and the agent send route rejects `standing`,
+  `attention` and unknown intents. Before, only the web UI could create these,
+  so wait-cycle detection and attention never saw an agent-made wait.
+- Fixed: after a pause or interruption is lifted, the Claude channel tells the
+  session once ("Pause aufgehoben durch <person> (control #N) - du kannst
+  weiterarbeiten", meta `event`, `control_id`, `resumed_by`). The notification
+  wakes an idle session, so the agent continues its original task on its own
+  instead of believing it is still paused. A restarted channel does not repeat
+  it. `GET /api/agent-control` also returns the latest lifted control as
+  `resumed` when none is active.
+- Fixed: `ctx coord send` (and the other room commands) no longer swallow a
+  rejected registration. The CLI identity `cli:<machine>` belongs to one
+  project room; from a second repository the server's message ("already
+  registered in another room") is shown with a hint, coded server errors
+  (machine_bound, invalid_external_id, ...) are shown too, and
+  `--agent-name <name>` posts as `ctx:<machine>:<name>`, which also works with
+  machine-bound device tokens.
+- Added: data model for relations between knowledge entries (REQ-157, first
+  step). New tables `knowledge_relations` (kinds `supersedes` and `sibling`,
+  states proposed/active/rejected/revoked, nothing is ever deleted),
+  `knowledge_groups` (one volatility per sibling group) and the append-only
+  `knowledge_relation_events`, plus store functions to add, approve, revoke and
+  list relations and to set a group's volatility. Existing `superseded_by`
+  values are copied into active `supersedes` edges when the database is
+  opened (idempotent, one transaction, a revoked edge stays revoked, legacy
+  cycles are skipped and logged). Nothing
+  reads the new tables yet: delivery, search and the `superseded_by` patch
+  behave as before. The `superseded_by` column stays in place.
+- Added: configurable Secure cookies behind TLS and reverse proxies (REQ-236).
+  `--public-url` / `GHOSTTREE_PUBLIC_URL` (an https URL makes every cookie
+  Secure and its origin is accepted for same-origin checks) and
+  `--trusted-proxies` / `GHOSTTREE_TRUSTED_PROXIES` (CIDRs or addresses whose
+  `X-Forwarded-Proto`/`-Host` are believed; previously only loopback was).
+  Loopback stays trusted, no other peer is by default, so plain private HTTP
+  keeps working unchanged. Login and logout session cookies are now built by
+  one function and carry identical attributes. The device-login base URL and
+  rate-limit client address use the same trust set. README section "Running
+  behind TLS or a reverse proxy".
+- Added: loop guard for the Claude channel (REQ-360). A message counts as
+  low content only if it brings no new word compared to the last 6 messages of
+  the room (digits ignored, so a counter like "step 14 of 20" is no content;
+  thanks and acknowledgements do not count as words) or repeats the sender's
+  previous message. Each change of sender among such messages is a round. Any
+  new word, commit hash, file path, code block, link, REQ/AC/PR reference or a
+  message from a human resets the count. From 3 rounds the wake notification
+  carries `loop_streak=N` in its meta, only for the agent it wakes. This
+  release only observes: wakes are unchanged and the channel logs "would hold"
+  at 5. `GHOSTTREE_LOOP_GUARD=enforce` (off by default) withholds the wake at
+  5, leaves the message stored and readable by pull, and posts one ordinary
+  ack notice into the room. Padding with fresh words evades the guard on
+  purpose (false holds are worse); the send limit stays the backstop. Known
+  limitation, to resolve before enforce: pure measurement exchanges ("p50
+  12.4ms" then "11.9ms") reach hold level, because numbers are not content.
+- Mutual waiting is reported instead of managed silently. Open questions,
+  approvals and blockers between agents form a wait graph per room (a handoff
+  is not a wait; threads restricted to some participants are left out). A cycle
+  (A waits on B and B on A, or A, B, C in a ring) shows up in `coord_peers` and
+  the web room as "gegenseitiges Warten: A ↔ B (seit ...)", in the peers API as
+  `presence.cycle` on each member next to `waiting_peer`, and once per cycle as
+  a room message from `system:wait-cycle` that mentions the members and goes
+  through the normal wake rule. The message names nobody in its text, so a guest
+  who can read the room does not learn who waits. A cycle that dissolves and
+  forms again notifies again; a standing cycle never repeats. Every wait has a
+  review date (the item's own expiry, otherwise 30 minutes after it was asked,
+  marked as derived) and is flagged overdue after it; nothing is closed or
+  answered automatically. An item with its own expiry never turns overdue: once
+  expired it is no longer a current wait and drops out of the graph. The note is
+  sent at most once per 10 minutes for the same set of agents (a held-back note
+  is sent at the next change in the room once the window has passed and the cycle
+  is still active; other cycles are not affected), a cycle that only shrinks does not notify
+  again, and one that gains a member does. The prefix `system:` is now reserved:
+  agents cannot register or send under it, and system notes show as `(system)`
+  in message headers. Agents that already carry the prefix in an old database
+  are kept but can no longer send.
+  Threads without a home room deliberately do not take part in wait cycles,
+  consistent with presence, which also reads waits per room only.
+- Presence is now two separate fields with an origin. `coord_peers`, the peers
+  API (`presence` on each peer) and the participant list in the web show
+  reachability (`connected`, `unknown`, `ended`) and work state (`working`,
+  `waiting_user`, `waiting_peer`, `blocked`, `paused`, `unknown`), each with
+  origin (`observed`, `self_reported`, `derived`), time and age. Nothing claims
+  more than was seen: silence is `unknown`, never idle or ended. `connected`
+  needs a channel poll within 90 s; the channel (`ctx channel`) now reports its
+  polling through `POST /api/coord/heartbeat`, written at most once per 30 s
+  per agent and answered the same whether it wrote or not. `working` comes from
+  a session the collector saw tool calls for in the last 2 minutes (only in
+  project rooms, only for activity of that project, and only for an agent that
+  reported its session id: `ctx claude` now starts Claude Code with
+  `--session-id`, and the agent reports it at registration; there is no suffix
+  matching on agent ids), `paused` only for an effective pause (hook ack and
+  transcript proof; an acknowledged pause stays `unknown`),
+  `waiting_peer`/`waiting_user` from an open question or approval the agent
+  sent in that room, `blocked` from an open blocker. Known gaps, printed with
+  the peer list: `ended` is never produced (no session-end signal exists),
+  there is no self-report channel, Bash-only work is invisible, agents started
+  without the launcher or resumed with `--resume` stay `unknown`, and codex
+  agents have little to observe.
+- Observed activity is bound to the account that reported it.
+  `POST /api/activity` and `GET /api/activity/session` require that the caller
+  has an uploaded session with that id (a bare session id used to pass for
+  everyone, and a foreign row of another harness with the same id no longer
+  matters). `path_activity` gets `account_id` (old rows stay 0, the instance
+  owner; the table is rebuilt so a foreign row cannot shadow yours) and
+  presence reads only the agent's own account. A client `at` more than 30 s
+  ahead or 5 min behind server time is replaced by server time. While access
+  enforcement is on, `GET /api/activity/path` shows ordinary members the agent
+  that reported a session instead of its id, and hides the checkout path (the
+  owner and project leads see both). This masking is cosmetic: members can
+  read session ids through `/api/sessions`, and the account binding above is
+  the actual protection. The asker's own session is left out by its registered
+  id. The
+  collector now logs a refused activity upload (at most once a minute). Agents
+  without the launcher register the harness session id they know.
+- Fixed: `ctx doc new` and `ctx doc pull` no longer prepend the creation date
+  to the worktree filename when the slug already starts with a `YYYY-MM-DD`
+  date (it produced `2026-10-02-2026-10-02-x.md`, sometimes with two
+  different dates because the prefix is the UTC creation date). Existing
+  files with a doubled prefix are not renamed and keep working: `ctx doc pull`
+  now reuses the path already recorded for a document. To tidy one, rename
+  the file under `.ghosttree/edit/` and update its `path` in
+  `.ghosttree/edit/.state.json`; the server only stores the slug.
+
+- A plain `ack` message from an agent (not a reply, no question, approval,
+  blocker or handoff) in a direct or group room no longer wakes channel
+  agents; it stays readable by pull. Acks that reply to a request, human acks
+  and acks in project or machine rooms behave as before.
+
+- Agents now see who a human sender is. The messages API has an optional
+  `sender_display_name` (the account name, read live, human authors only,
+  withheld from guests of a project room while access enforcement is on); the
+  channel meta has `sender_name`; `coord_inbox`, `coord_dm_read` and thread
+  reads show `Robin (person:1, human)` instead of `person:1 (human)`
+  (`coord_dm_read` and thread posts had no human tag before, and thread posts
+  are now header-safe too). The name is a label the person chose, not proof of
+  identity: the sender id stays the identity, and the channel instructions and
+  the MCP legend say so. Names are normalised (NFKC, invisible characters and
+  Hangul fillers removed, only letters, digits, spaces and `. _ - '`, at most
+  64 characters). New accounts are compared ignoring case and look-alike forms:
+  an invited account whose name collides gets a `-2` style suffix, and
+  `ctx account add` or `ctx person add` refuse it. Latin and Cyrillic letters
+  inside one name, and look-alikes made with a legitimate combining mark, are
+  still not caught. Names are normalised to a fixpoint (at most two combining
+  marks per letter, overlay marks dropped) and the web shows the same
+  normalised string. Guest masking applies to project rooms; in DMs and
+  private groups members see each other as before. A guest sees sender ids instead of account names and
+  agent owner names in the coordination page, in standing instructions (the sender id) and
+  thread authors (hidden), and only their own row in the project role table of the
+  organization page. Guests also no longer receive `author_principal_id` (the
+  owner account of an agent) on messages or attention items. `ctx person add` reports the stored name.
+- A person can pause or interrupt a Claude agent that was started with
+  `ctx claude`, from the participant list of the coordination page. Allowed
+  for project role lead or above and for the owner of the agent's account,
+  from an interactive web session only (`POST /api/agent-control` answers
+  `web_session_required` to every token). The state is derived from evidence:
+  `requested`, `acknowledged` (the new `ctx hook pause-gate` PreToolUse hook
+  blocked a call and the channel reported it), `effective` (that call is also
+  stopped in the transcript, `hook_stopped_continuation`), `resumed`. The page
+  says "pausiert" only for `effective`. `ctx install claude` adds the gate as a
+  second PreToolUse entry with an empty matcher; it reads one local flag file
+  and calls no server. An interrupt is a pause: a running tool call is not
+  aborted and nothing stops while the model answers without a tool call
+  (`human_interrupt` stays a named gap). Codex has no pause (`human_pause` is a
+  named gap there). If `ctx channel` is not running the control stays
+  `requested`. An agent without a person account is refused with a named gap,
+  not left in `requested`. A pause can be lifted by the person who set it or by
+  someone with at least their project rank; the owner of the agent's account
+  as a mere member cannot lift a lead's pause. The hook entry carries
+  `timeout 5`, and `ctx doctor` reports the gate as runnable and, until a pause
+  has blocked a call, as unverified.
+- Guests no longer get the member list of a project room through the
+  recipient list. A guest may still mention: members of the room get the
+  message (as a request, never a directive), and mentions of anyone outside the
+  room are dropped silently with the same response. What a guest reads back of
+  its own posts (mentions endpoint, "Erwähnt" in the web views, standing
+  targets) is exactly what it typed, never the delivered subset, and outgoing
+  attention items, attention and delivery events and the delivery summary are not shown to guests, so nothing tells members from
+  non-members. Members and owners still see the real deliveries. The room page
+  now opens for guests, without the agent list. Both gates follow
+  `GHOSTTREE_ENFORCE_ACCESS` (log mode: old behaviour plus "would deny"). An
+  unknown mention recipient of a member is a 400 with a fixed message instead
+  of a 500 that echoed the probed id, in every mode. A legacy thread restricted
+  to a list of readers now also needs the project role.
+- The browser event stream (`/ui/coord/events`) no longer exposes the global
+  event sequence: the SSE `id:`, the resync cursor and the page's initial cursor
+  are AES-GCM sealed, opaque and different on every send, for every viewer, and
+  the event payload carries no number. Gaps between a guest's own posts could
+  otherwise count events hidden from it. An invalid, manipulated or foreign
+  cursor yields a resync instead of an error. Read events are hidden from guests
+  in project rooms like delivery events.
+- New attention items get a random positive 63-bit id instead of the next
+  row number (existing items keep theirs). A counter showed a guest which of
+  its mentions reached a member: that mention created one more item, and the id
+  of the guest's own item jumped. Attention lists are ordered by `created_at`,
+  `message_id`, `id`; nothing relies on ids being monotonic.
+- The coordination event log keeps events for ten minutes instead of the
+  last 512. A count was observable: a guest could toggle read marks and count
+  the steps until its cursor expired, 512 or 511 depending on whether a
+  hidden event was added. Pruning now depends on time only (an insert trigger
+  deletes older events); a cursor carries its own time and resyncs when it is
+  older than 9 minutes, not after a number of events. A hard cap of 100000 events remains as
+  an emergency brake.
+- Project rooms of the coordination layer need a project role. Registering an
+  agent into `project:<remote>` takes at least the guest role (org owners as
+  before); org membership alone no longer joins. `GET /api/coord/rooms` drops
+  project rooms for accounts without a role and omits the member list for
+  guests, so a membership left behind after a role or org removal shows
+  nothing. It is filtered on read, so the membership returns with the role.
+  Both follow `GHOSTTREE_ENFORCE_ACCESS`: log mode keeps the old behaviour and
+  logs "would deny". A known project now answers `not_found` for non-members
+  and members without a role alike, and `POST /api/projects/claim` no longer
+  returns id and name to org members without a role.
+- Coordination messages carry an authority for their recipient: `directive` or
+  `request`. One function, `store.AuthorityFor`, decides: a message is a
+  directive only when the sender's rank in the recipient's project is higher
+  than the recipient's and the sender is server-verified (a human from an
+  interactive browser session, or a registered agent of the posting account,
+  with its effective role). Equal rank, no role, an unverified sender, the
+  machine room and agents without a project always give `request`. DMs and
+  groups are judged in the recipient's project. The value is computed when the
+  message is read, from current roles, so a demotion takes effect at once; it
+  is never stored, and role or authority fields sent by a client are dropped.
+  The channel adds `sender_role`, `recipient_role` and `authority` to the
+  notification meta (empty values are omitted), `coord_inbox` and
+  `coord_dm_read` print the same tag with a short legend, and the web room
+  shows the sender's role next to each message. The channel instructions now
+  explain directive versus request instead of calling every event a request.
+  A directive from an agent is scoped: carry it out within the existing task and
+  permissions and confirm destructive, irreversible or outward-facing steps with
+  a human; a prompt injection at a lead agent can continue as a directive, and
+  that confirmation is the mitigation. A directive also needs the recipient's
+  account to hold a role in the project. `human` posts stored before the new
+  rule (any post without an agent id, including CLI and bearer posts) stay
+  unverified: the first start records the highest message id and only later
+  human posts count. In `coord_inbox` and `coord_dm_read` every line after the
+  first line of a body is indented, so a body cannot fake a message header, and
+  agent ids are limited to letters, digits and `: . _ - /` (160 characters).
+- Add visibility by role, behind `GHOSTTREE_ENFORCE_ACCESS`. One place,
+  `ProjectAccess`, decides for (account, project, resource, action) from
+  `Store.ProjectRole`; the API (and with it MCP and the hooks, which use the
+  API), the web pages and the project room of coordination all go through it.
+  Project knowledge, requests, documents and ghost descriptions are readable by
+  members (a guest reads only knowledge with confidence `trusted` or
+  `verified`, requests, documents and ghosts); members create and change their
+  own, owners and leads change everything, and only `can_review`, lead or owner
+  set or withdraw `confidence=verified`. The author of a knowledge entry comes
+  from the token and cannot be patched; the confirmer is the account that
+  verified it. Machine-axis knowledge is visible only to the account that owns
+  the machine, whatever its project role. Session metadata is visible to
+  members; a transcript (and its raw export and search snippets) to its owner
+  and to project owners and leads, plus members when the owner shares it with
+  the new `ctx session share <id>` (`--off` withdraws). The project room reads
+  and writes by role (a guest reads and writes, peers are shown from member),
+  direct and group rooms stay a matter of room membership only. Without a role
+  in the project the object does not exist for the caller (404); with one but
+  without the right it is 403. The bootstrap, relevant knowledge, interrupted
+  work, ghost delivery and path activity answer a caller without access with
+  what they may see (global knowledge) instead of an error, because hooks ask
+  in every repository. Without `GHOSTTREE_ENFORCE_ACCESS=1` nothing is refused:
+  the server logs `access: would deny` (account, project, resource, action,
+  reason; no content; once a minute per combination) so you can see what would
+  break before turning it on. Every route of the API and of the web UI is
+  classified in a table (`accessRoutes`, `webRoutes`); registering an
+  unclassified route aborts at startup, and tests fail if the table and the
+  registered routes differ or if a project route answers without asking
+  `ProjectAccess`. The roles of an account are loaded with one query per request.
+  `public_only=1` on threads only selects unrestricted threads and never loosens
+  the project role. In a remote nobody owns yet, the author sees and changes
+  their own entries and the instance admin sees everything; nothing else is
+  visible. Agents (bootstrap, relevant knowledge, ghost hook, search) are only
+  handed content whose author is currently at least `member` of the project
+  (ghosts: has write access); what strangers stored before a claim stays stored
+  and visible to the owner but is not delivered until a reviewer, lead or owner
+  sets the knowledge entry to `verified`. Content with no author (operator
+  paths) is delivered.
+
+- Add organizations, projects and invitations. An organization has members
+  (roles `owner` and `member`; an account can belong to several) and owns
+  projects; every project (a normalized remote such as
+  `github.com/owner/repo`) belongs to exactly one organization. A write for a
+  remote nobody owns yet assigns it to the writer's default organization, or to
+  their only one; with several organizations and no default the write is
+  refused with `409 project_unclaimed` and the choices rather than guessed, and
+  an account without any organization is not affected. An owner invites by
+  single-use code (kept only as a hash, seven days by default, 30 at most, at
+  most 100 pending per organization). Redeeming it during OIDC sign-in creates
+  the account and the membership; an invitation without an email works by the
+  code alone, one with an email also requires the identity provider to report
+  that same address as verified, otherwise nothing is created and the code stays
+  valid. Wrong codes lock the signing-in identity for ten minutes after five
+  attempts. Existing instances get a `Default` organization (slug
+  `default`; rename it with `ctx org rename`) on startup with the first account as its owner and all known
+  projects in it; the migration only reads the small tables (never session
+  chunks) and adds three empty tables, so it takes milliseconds on a large
+  database. A new instance gets a `default` organization with its bootstrap
+  account. Organizations do not change who can see what yet.
+- Add roles per project. Within a project an account is `owner`, `lead`,
+  `member` or `guest` (in that order), and `can_review` marks a reviewer; the
+  flag is not a rank. An organization owner is implicitly owner of every project
+  of the organization, derived on every lookup and never stored; organization
+  membership alone gives no role. Owners grant any role; leads grant `member` or
+  `guest` (and the reviewer flag) to accounts below lead; members and guests
+  grant nothing. Nobody raises their own role, and the last owner of a project
+  cannot be demoted or removed. Leaving an organization or moving a project
+  drops the stored roles. Every change appends to `role_events` (append-only,
+  with who, what and via web or cli-db). Roles and memberships are changed by
+  a person in the browser: the organizations page has a role select per project
+  (with the reviewer checkbox; the select shows the current role, an account
+  without a role shows a placeholder) and the organization, invitation and
+  project-move forms. `GET /api/projects/{id}/members` and `ctx project roles
+  <remote>` read them. Bearer tokens (CLI, collectors, agents) cannot change
+  them: `PUT` and `DELETE /api/projects/{id}/members/{account}`,
+  `PUT /api/orgs/{org}/members/{account}`, removing another member,
+  `POST /api/orgs/{org}/invitations` and `POST /api/projects/move` answer `403
+  web_session_required`, with or without `agent_external_id`, because a machine
+  token sits in the config of every machine an agent runs on. Leaving an
+  organization yourself, accepting an invitation, claiming a project, renaming
+  an organization, revoking an invitation and choosing a default organization
+  stay on the API: none of them gives anyone more power over other accounts.
+  `ctx project role set|remove`, `ctx org members set-role|remove`, `ctx org
+  invite` and `ctx project move` print where to go (the web UI link). The
+  operator on the server host can run them with `--db <path>` (direct database
+  access; it acts as the oldest owner of the organization, and role changes are
+  logged with `via=cli-db`). A web session started by pasting a token is
+  read-only: it shows no administration forms and the server answers them with
+  403, because that token sits in the config of every machine an agent runs on.
+  This covers project and organization roles, removing members, invitations,
+  moving projects, approving devices and revoking other accounts' tokens.
+  Sessions from OIDC, a login link or a bootstrap, claim or invitation code are
+  interactive; without OIDC the operator creates one with `ctx account
+  login-link <name> --db <path>`. Coordination posts are marked `human` only
+  when they come from such an interactive browser session; a bearer token or a
+  pasted-token session posts as `agent` with the account as sender, and the
+  channel's `sender_kind` follows. Roles are not enforced anywhere yet, so nobody
+  sees or may do less than before. Existing instances get the two tables and a
+  `role` column on `coord_agents` (default `member`) on startup; existing
+  organization members start without a stored role.
+- Add agent roles. `ctx claude --role lead|member|guest` (default `member`)
+  passes the requested role to `ctx channel` and `ctx mcp` in
+  `GHOSTTREE_AGENT_ROLE`, and both send it when they register. The effective
+  role is computed live on the server as the lower of the requested role and the
+  rank of the agent's account in the project, never above `lead`; an account
+  without a role gives `guest`, and demoting an account demotes its agents at
+  once. A request above the account's rank is capped silently rather than
+  refused (the spec says `403 role exceeds ceiling`; that would block every
+  default agent before visibility is enforced); `coord_peers` shows
+  "requested lead, effective member" when they differ. Agents never hold
+  `owner`. `coord_peers`, the
+  participant list of the coordination page (project rooms) and
+  `GET /api/coord/agents` show the effective role and the reviewer flag.
+- Add the organization API and CLI. `ctx org list|create|members|invite|
+  invitations|accept|default` and `ctx project list|claim|move` talk to the
+  server with your token (`/api/orgs`, `/api/projects`, `/api/invitations/accept`).
+  Only an instance admin creates organizations; owners invite, change roles
+  and remove members (the last owner stays) and move a project between
+  organizations they own; members only list. Non-members see an organization
+  as nonexistent. Bodies of these routes are capped at 16 KiB, and five wrong
+  codes in ten minutes lock `accept` for that account. Sessions, knowledge,
+  requests and documents written for an unknown project assign it as described
+  above (`409 project_unclaimed` lists the organizations).
+- Keep projects from being claimed out from under their owners: `ctx project
+  claim` and its API now need an owner of the target organization, and a write
+  into a project that belongs to another organization is refused with `409
+  project_claimed`, also for accounts without any organization. Writes by members
+  of the project's organization, such as the collector of the first account, are
+  unchanged. Admins hand a squatted project back with `ctx project move --force
+  <remote> --org <org> --db <path>` (database access, recorded in `org_events`).
+  `ctx org rename <org> <name> [--slug S]` renames an organization (owner).
+  Writing for a project nobody owns yet claims it only for an owner of the
+  writer's default organization; a plain member's write goes through but leaves
+  the project unclaimed, and the first owner of any organization who then writes
+  there or claims it wins it.
+- Add an Organizations page (`/ui/orgs`) with members, invitations and
+  projects: owners create invitations (the code is shown once), change roles,
+  remove members and move projects; members see the lists and can leave or join
+  with a code. All forms are CSRF protected and size limited. An invitation link
+  (`/ui/login/code?code=...`) leads to the identity provider on OIDC instances;
+  without OIDC it creates the account from the code and a chosen name (an
+  invitation bound to an email needs OIDC, since nothing else verifies the
+  address).
+- Add ownership of machines, sessions and agent identities. Machine names are
+  unique across the instance and belong to the account that first claims them
+  (`ctx login` or the first upload); a second account gets `409
+  machine_name_taken`, and a token bound to a machine can only write under that
+  machine (`403`). Every uploaded session is stamped with the account of the
+  token, and re-uploading a session id that belongs to another account or
+  machine now returns `409 session_id_collision` instead of overwriting it; the
+  same account and machine stays idempotent. Agent identities belong to the
+  registering account and cannot be taken over. Existing machines, sessions and
+  agents belong to the first account (`person:1`) without rewriting the
+  sessions table. Sessions, machines (`GET /api/machines`) and peers show their
+  `owner`, and `?owner=me` filters sessions and machines. Legacy tokens keep
+  working unchanged. Known gap: a legacy token (also one of a test person)
+  still claims a free machine name on its first upload, because the existing
+  collector uploads for new hostnames without a login; an admin frees or
+  reassigns such a name with `ctx machine release <name>` and `ctx machine
+  transfer <name> <account>` (database access, like `ctx account`).
+- Add browser pages for the device login and for tokens: `/ui/device` approves a
+  `ctx login` (signed in, CSRF protected, wrong codes lock the account briefly)
+  and `/ui/account/tokens` lists your tokens with label, machine, kind
+  (legacy, device, manual), creation date and expiry and revokes them with
+  immediate effect. Admins see and revoke every token.
+- Add `ctx login`, a device login (RFC 8628 style) against the ghosttree server:
+  the CLI shows a URL and a short user code, you approve it in the browser, and
+  the machine receives its own API token, bound to its name and stored in the
+  client config. Codes are short-lived, single use and kept only as hashes in
+  server memory; unauthenticated starts are capped per sender and cannot crowd
+  out others. A new login replaces the earlier device token of the same machine.
+- Add accounts with revocable, time-bound API tokens; each token belongs to an
+  account. Existing person-based tokens are migrated to legacy tokens on startup
+  and function unchanged. Introduce `ctx account` (add, list, tokens, token
+  create, token revoke) CLI commands; `ctx person add` is deprecated. End web
+  sessions and coordination event streams when their token is revoked or the
+  account is deactivated.
+- Add coordination rooms with delivery states (`stored < fetched < injected <
+  acked`) and monotonic read cursors, DMs and groups with principal isolation,
+  per-principal unread, and message expiry. Introduce `coord_peers`,
+  `coord_send`, `coord_inbox` MCP tools, `ctx coord` CLI, durable threads as
+  a first-class domain, file activity tracking, and a web workspace at
+  `/ui/coord`.
+- Deliver coordination messages and agent mentions into Claude Code sessions
+  through the ghosttree channel via `ctx claude`. Wake idle sessions and receive
+  at safe points with atomic, at-most-once delivery. The channel is a Claude
+  Code research-preview feature requiring the legacy `initialize` connection
+  and `--dangerously-load-development-channels` flag.
+- Wake a channel agent when its request is answered: a reply to a question-type
+  message, or to a message that mentioned the replier, now delivers instead of
+  waiting for polling. Replies to replies stay quiet.
+- Let the channel `reply` tool carry an optional `intent` so a reply to a reply
+  can ask for something again (such as a re-review) and wake the other agent;
+  such replies count against the `send` limit, plain replies still wake nobody.
+- Add a `send` tool to the Claude channel server so a channel agent can start
+  conversations (text, mention, room, intent) without a separate `ctx mcp`.
+- Tell Claude in the channel instructions that `<channel>` events are genuine
+  requests from the coordination room, and add `sender_kind` (human or agent)
+  to their meta.
+- Bound channel `send` (10 mentions per minute, 30 per 15 minutes), treat plain
+  direct and group messages as requests that a reply wakes, report duplicate
+  sends, and neutralize `<channel` tags inside message text.
 - Serialize runtime writes through a bounded queue while keeping reads on an
   independent connection pool. Batch pending session chunks, report retryable
   saturation errors, expose writer metrics, and drain accepted writes on shutdown.
@@ -46,6 +1389,7 @@ Versioning, with pre-1.0 compatibility rules described in
   recheck.
 - Add additive snapshot-schema startup checks without historical backfill;
   existing live context and session data remain unchanged.
+- Fixed: the home page no longer hides the biggest queue behind "and 1 more" (the knowledge proposals row fell out after ten rows, and the link led to the task list); bundles always stay and the link leads to what was left out. A question is titled by the sentence that asks it, not by the first hundred characters. Agent rows on home link to their session, "waiting for an agent" no longer looks like "waiting for you", and the agents page uses the same state for dot and words (a waiting agent showed a green dot). Task cards lose the second preview line and carry the request link in the source line; the check hint wraps instead of scrolling out of sight. The room list of who is here is one column, and a question card is wide enough to keep its actions on one line. The search page no longer lights "Knowledge" in the navigation.
 
 ## 0.1.0-rc.3 — 2026-08-29
 
@@ -61,3 +1405,13 @@ Versioning, with pre-1.0 compatibility rules described in
 - Initial source-available preview.
 - Keep exported transcripts and saved credentials owner-readable only.
 - Reject non-local login return targets and bound HTTP server timeouts.
+- Add OIDC sign-in for the web UI (authorization code with PKCE, discovery via
+  the issuer) configured with `--oidc-issuer`, `--oidc-client-id`,
+  `--oidc-redirect-url` (or the `GHOSTTREE_OIDC_*` variables; the client secret
+  is read from `GHOSTTREE_OIDC_CLIENT_SECRET` only). Accounts are created by
+  one-time codes, never by open registration: an empty instance writes a
+  bootstrap code to `<data dir>/bootstrap-code`, `ctx account claim-code`
+  connects an existing account to its OIDC identity, and `ctx account
+  login-link` issues a single-use login link for setups without an identity
+  provider. Web sessions now belong to an account. The token login stays until
+  an account has an OIDC identity. Session cookies are `Secure` over HTTPS.

@@ -3,12 +3,14 @@ package store
 import (
 	"math"
 	"strings"
+	"time"
 )
 
 const (
 	bestEffortDelivery = iota
 	bestEffortSearch
 	bestEffortMachine
+	bestEffortToken
 	bestEffortKinds
 	bestEffortMaxKeys       = 4096
 	bestEffortMaxBytes      = 1 << 20
@@ -18,6 +20,7 @@ const (
 type bestEffortBatch struct {
 	usage    map[int64]int64
 	machines map[string]struct{}
+	tokens   map[int64]struct{}
 	bytes    int64
 	active   bool
 }
@@ -98,6 +101,44 @@ func (w *runtimeWriter) coalesceMachine(hostname string) {
 	w.ready.Signal()
 }
 
+// coalesceToken queues the last-use write of an API token. A token is written
+// at most once per tokenTouchEvery, however often it calls.
+func (w *runtimeWriter) coalesceToken(id int64) {
+	if id == 0 {
+		return
+	}
+	if !w.mu.TryLock() {
+		w.bestEffortDrops[bestEffortToken].Add(1)
+		return
+	}
+	defer w.mu.Unlock()
+	batch := &w.bestEffort[bestEffortToken]
+	if w.closed || batch.active {
+		w.bestEffortDrops[bestEffortToken].Add(1)
+		return
+	}
+	if at, ok := w.tokenTouched[id]; ok && time.Since(at) < tokenTouchEvery {
+		return
+	}
+	if _, exists := batch.tokens[id]; exists {
+		return
+	}
+	if len(batch.tokens) >= bestEffortMaxKeys {
+		w.bestEffortDrops[bestEffortToken].Add(1)
+		return
+	}
+	if w.tokenTouched == nil || len(w.tokenTouched) >= bestEffortMaxKeys {
+		w.tokenTouched = make(map[int64]time.Time)
+	}
+	w.tokenTouched[id] = time.Now()
+	if batch.tokens == nil {
+		batch.tokens = make(map[int64]struct{})
+	}
+	batch.tokens[id] = struct{}{}
+	batch.bytes += 64
+	w.ready.Signal()
+}
+
 func (w *runtimeWriter) nextBestEffort() int {
 	for kind := range bestEffortKinds {
 		if w.bestEffort[kind].bytes > 0 {
@@ -113,6 +154,8 @@ func (w *runtimeWriter) runBestEffort(kind int, batch bestEffortBatch) {
 	if err != nil {
 		if kind == bestEffortMachine {
 			w.bestEffortDrops[kind].Add(uint64(len(batch.machines)))
+		} else if kind == bestEffortToken {
+			w.bestEffortDrops[kind].Add(uint64(len(batch.tokens)))
 		} else {
 			for _, count := range batch.usage {
 				w.bestEffortDrops[kind].Add(uint64(count))
@@ -130,7 +173,11 @@ func (s *Store) writeBestEffort(kind int, batch bestEffortBatch) error {
 	}
 	defer tx.Rollback()
 	at := now()
-	if kind == bestEffortMachine {
+	if kind == bestEffortToken {
+		if err := writeTokenUse(tx, at, batch.tokens); err != nil {
+			return err
+		}
+	} else if kind == bestEffortMachine {
 		stmt, err := tx.Prepare(`INSERT INTO machines(hostname,first_seen,last_seen) VALUES(?,?,?) ON CONFLICT(hostname) DO UPDATE SET last_seen=excluded.last_seen`)
 		if err != nil {
 			return err

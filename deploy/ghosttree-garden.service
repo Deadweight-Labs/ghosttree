@@ -1,0 +1,67 @@
+[Unit]
+Description=ghosttree: Gärtner prüft Pitfalls und Decisions gegen den Code
+After=ghosttree.service network-online.target ghosttree-garden-update.service
+Wants=network-online.target ghosttree-garden-update.service
+ConditionPathExists=/etc/ghosttree/garden-key
+ConditionPathExists=/var/lib/ghosttree/garden/repo/.git
+
+[Service]
+Type=oneshot
+# A user of its own that owns nothing but its state, reports and claude directory.
+# The users are created by deploy/ghosttree-garden.sysusers.
+User=ghosttree-garden
+Group=ghosttree-garden
+WorkingDirectory=/var/lib/ghosttree/garden
+# No HOME of its own worth reading: every session gets an empty one below claude/.
+Environment=HOME=/var/lib/ghosttree/garden/claude
+# Not server.env: the gardener has no use for the server's settings.
+EnvironmentFile=-/etc/ghosttree/garden.env
+ExecStart=/var/lib/ghosttree/garden/run.sh
+TimeoutStartSec=3h
+UMask=0077
+
+# --- Sandbox -------------------------------------------------------------
+# The session (Claude Code and the tools it starts) runs in this unit. What it
+# cannot see here it cannot read, whatever its permission rules say.
+#
+# Everything under /var/lib/ghosttree is hidden, and only what the run needs is
+# put back: the checkout read-only, the run script and the claude binary
+# read-only, the state, reports and per-session config directories writable.
+# The database, private data and the backups are not among them.
+TemporaryFileSystem=/var/lib/ghosttree:ro
+BindReadOnlyPaths=/var/lib/ghosttree/garden/repo /var/lib/ghosttree/garden/bin /var/lib/ghosttree/garden/run.sh
+BindPaths=/var/lib/ghosttree/garden/state /var/lib/ghosttree/garden/reports /var/lib/ghosttree/garden/claude
+ReadOnlyPaths=/var/lib/ghosttree/garden/repo
+# Other places that hold secrets or other people's data, named in case they are
+# not covered above ("-": fine when absent).
+InaccessiblePaths=-/home -/root -/srv -/mnt -/media -/var/backups -/var/lib/ghosttree/private -/var/lib/ghosttree/backups -/var/lib/ghosttree/data -/etc/ghosttree -/etc/ssh -/var/lib/docker -/var/lib/private
+ProtectHome=yes
+ProtectSystem=strict
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+RemoveIPC=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+# Other processes (and their environments) are not visible to the session.
+ProtectProc=invisible
+ProcSubset=pid
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# Loopback only: the model proxy and the ghosttree server are on this machine.
+# Against api.anthropic.com directly, replace these two lines with an allowlist
+# of that address.
+IPAddressDeny=any
+IPAddressAllow=localhost

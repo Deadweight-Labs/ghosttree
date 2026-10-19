@@ -21,6 +21,19 @@ import (
 // weight, because as a weight a long sentence can outvote it: five ordinary
 // words matching one entry will outrank one rare word matching another, which is
 // exactly backwards for deciding whether to speak at all.
+//
+// A word is distinctive only if it passes two gates. The first is rarity among
+// the entries, above. The second is rarity in the reader's own language,
+// measured on the text of the reader's own sessions and on nobody else's
+// (relevance_language.go): a word can be in few entries only because nobody
+// files pitfalls about it — "dinge", "things" — and a sentence that merely says
+// it is not asking for them.
+//
+// The reader should also meet an entry once. Delivery remembers, per account and
+// harness session, what it handed over — here and in the start-up briefing — and
+// does not hand it over again (context_deliveries.go). Staged entries and the
+// gardener's notes are never delivered this way, and every entry names the word
+// that brought it up, so the reader can tell a good reason from a bad one.
 const (
 	// maxDocumentFrequency is the share of the corpus a term may appear in and
 	// still count as distinctive. It is deliberately low. A looser share reads
@@ -43,99 +56,306 @@ const (
 	minTermLen = 3
 )
 
+// veryRareEntries is how few entries may name a word anywhere, title or body,
+// for the body to count as a place to look. Three hundred entries can all
+// mention "server"; only one or two will ever mention a codename, and then the
+// body is what says what the codename is. This is the same gate, tightened
+// until a mention in the body is as telling as a mention in the title.
+const veryRareEntries = 2
+
+// RelevanceQuery is one sentence, asked of the archive on behalf of a reader who
+// did not ask. Axes and Viewer say what the reader may see; Account and Session
+// say what the reader has already been shown.
+type RelevanceQuery struct {
+	Text   string
+	Axes   scope.Axes
+	Limit  int
+	Viewer []SessionViewer
+	// Account and Session name the delivery memory. With no Session nothing is
+	// remembered and nothing is held back, which is how delivery behaved before
+	// it had one.
+	Account, Session string
+	// Record counts the delivery as a use of each entry. The replay of archived
+	// prompts must not, or it would move the numbers it is later judged by.
+	Record bool
+}
+
+// RelevantHit is an entry together with the word that brought it up, so the
+// reader can see why it is in front of them and judge whether the reason holds.
+type RelevantHit struct {
+	Knowledge
+	Term string
+}
+
+// HintTerm is a very rare word of the sentence for which a hint may be due: a
+// word that passed both gates, that at most a couple of entries name, and that
+// was not hinted at yet in this session. Known are the entries that name it and
+// may be delivered, whether or not the session has seen them. If the reader may
+// see one of those the word has its answer and needs no hint; if none, the
+// archive's knowledge is silent on it, and its requests and sessions are the
+// only place left to point to.
+type HintTerm struct {
+	Term  string
+	Known []Knowledge
+}
+
+// Relevance is the answer to one sentence. Hits are entries to deliver, rarest
+// reason first; Hints are the words that may deserve a pointer instead.
+type Relevance struct {
+	Hits  []RelevantHit
+	Hints []HintTerm
+}
+
 // RelevantKnowledge returns entries that the given text gives a reason to
 // deliver, most relevant first. It returns nothing far more often than
 // something, which is the intended behaviour rather than a limitation.
-func (s *Store) RelevantKnowledge(text string, ax scope.Axes, limit int) ([]Knowledge, error) {
+func (s *Store) RelevantKnowledge(text string, ax scope.Axes, limit int, viewer ...SessionViewer) ([]Knowledge, error) {
 	if s.reader != nil {
-		return s.reader.RelevantKnowledge(text, ax, limit)
+		return s.reader.RelevantKnowledge(text, ax, limit, viewer...)
 	}
-	return s.relevantKnowledge(text, ax, limit, true)
+	return s.relevantKnowledge(text, ax, limit, true, viewer...)
 }
 
-func (s *Store) relevantKnowledge(text string, ax scope.Axes, limit int, record bool) ([]Knowledge, error) {
+// RelevantFor is RelevantKnowledge for a caller that has a session: entries the
+// session was already shown are left out, every hit says which word brought it,
+// and words that name no deliverable entry come back as candidates for a hint.
+// It reads only. Remembering what was delivered is ClaimContextDeliveries, done
+// after the caller has applied what the reader may see, so that an entry the
+// reader could not have seen is not marked as shown.
+func (s *Store) RelevantFor(q RelevanceQuery) (Relevance, error) {
+	if s.reader != nil {
+		return s.reader.RelevantFor(q)
+	}
+	return s.relevance(q)
+}
+
+func (s *Store) relevantKnowledge(text string, ax scope.Axes, limit int, record bool, viewer ...SessionViewer) ([]Knowledge, error) {
+	res, err := s.relevance(RelevanceQuery{Text: text, Axes: ax, Limit: limit, Viewer: viewer, Record: record})
+	if err != nil || len(res.Hits) == 0 {
+		return nil, err
+	}
+	return hitKnowledge(res.Hits), nil
+}
+
+func hitKnowledge(hits []RelevantHit) []Knowledge {
+	ks := make([]Knowledge, len(hits))
+	for i, h := range hits {
+		ks[i] = h.Knowledge
+	}
+	return ks
+}
+
+// deliverable is the condition, on a knowledge row aliased k, that an entry may
+// be pushed at a reader who did not ask. Quarantined material is not
+// deliverable anywhere. Staged is the unconfirmed state: the briefing keeps it
+// out and so does this, because a guess nobody has accepted is the one thing
+// that must not interrupt a sentence. The gardener's notes are suggestions about
+// other entries ("is #1498 out of date?"), staged until a person decides, and by
+// its title a word like "gardener" would fire them at every sentence that
+// mentions the gardener. A note a person confirmed is still a note about an
+// entry, not the entry, so the harness excludes it whatever its confidence.
+const deliverable = `k.status = 'active' AND k.confidence NOT IN ('quarantined', 'staged') AND k.harness != 'gardener'`
+
+// rareTerm is a word that got past both gates: df entries name it.
+type rareTerm struct {
+	term string
+	df   int
+}
+
+func (s *Store) relevance(q RelevanceQuery) (Relevance, error) {
+	var out Relevance
+	limit := q.Limit
 	if limit <= 0 {
 		limit = 3
 	}
-	terms := distinctiveTerms(text)
+	terms := distinctiveTerms(q.Text)
 	if len(terms) == 0 {
-		return nil, nil
+		return out, nil
 	}
+	// The counts below see only what the viewer may read, so an entry of somebody
+	// else neither displaces a result nor shifts how rare a term looks.
+	scopeSQL, scopeArgs := withGlobalScope(`1=1`, nil, "knowledge", q.Viewer)
 	var total int
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM knowledge
-		WHERE status = 'active' AND confidence != 'quarantined'`).Scan(&total); err != nil {
-		return nil, err
-	}
-	if total == 0 {
-		return nil, nil
+		WHERE status = 'active' AND confidence != 'quarantined' AND `+scopeSQL, scopeArgs...).Scan(&total); err != nil {
+		return out, err
 	}
 	// At least one, so a young archive where every term is technically rare
 	// still requires a term to point at a single entry rather than at several.
 	ceiling := max(1, int(float64(total)*maxDocumentFrequency))
+	// Never above the ceiling: in an archive of thirty entries a word in two of
+	// them is a fifteenth of it, and the share above already said no.
+	veryRare := min(veryRareEntries, ceiling)
 
-	type scored struct {
-		term string
-		df   int
-	}
-	var rare []scored
+	gate := s.newLanguageGate(q.Account)
+	// First gate: rare among the entries. A word in none of them stays in, for
+	// the hint; it can only fetch knowledge if at least one entry names it.
+	// Second gate: unusual in the reader's own language. Only the words that got
+	// past the first reach it, which is what keeps it cheap.
+	var rare []rareTerm
 	for _, term := range terms {
-		n, err := s.documentFrequency(term)
+		n, err := s.documentFrequency(term, ceiling+1, q.Viewer...)
 		if err != nil {
-			return nil, err
+			return out, err
 		}
-		if n > 0 && n <= ceiling {
-			rare = append(rare, scored{term, n})
+		if n > ceiling {
+			continue
+		}
+		ok, err := gate.unusual(term)
+		if err != nil {
+			return out, err
+		}
+		if ok {
+			rare = append(rare, rareTerm{term: term, df: n})
 		}
 	}
 	if len(rare) == 0 {
-		return nil, nil
-	}
-	// Only the rarest few. A long prompt turns up unusual words by accident —
-	// a pasted stack trace, a list of plugin names — and any one of them is
-	// enough to reach something if all of them are asked. Measured against real
-	// archived prompts, using every rare term fired on four sentences in five.
-	sort.Slice(rare, func(i, j int) bool { return rare[i].df < rare[j].df })
-	if len(rare) > maxRareTerms {
-		rare = rare[:maxRareTerms]
-	}
-	// Matched against the title, not the body. A term in the body means the
-	// entry mentions the thing; a term in the title means the entry is about it,
-	// and only the second is a reason to speak up unasked. What this loses is
-	// still reachable by search, which is the right place for a hunch.
-	match := make([]string, len(rare))
-	for i, r := range rare {
-		match[i] = `title : "` + r.term + `"`
+		return out, nil
 	}
 
-	where, args := ax.UnionWhere()
-	args = append([]any{strings.Join(match, " OR ")}, args...)
-	args = append(args, limit)
-	rows, err := s.db.Query(`SELECT `+prefix(knowledgeCols, "k.")+`
-		FROM knowledge_fts f JOIN knowledge k ON k.id = f.rowid
-		WHERE knowledge_fts MATCH ? AND `+where+`
-		  AND k.status = 'active' AND k.confidence != 'quarantined'
-		ORDER BY f.rank LIMIT ?`, args...)
-	if err != nil {
-		return nil, err
+	// Only the rarest few ask the index. A long prompt turns up unusual words by
+	// accident — a pasted stack trace, a list of plugin names — and any one of
+	// them is enough to reach something if all of them are asked. Measured
+	// against real archived prompts, using every rare term fired on four
+	// sentences in five.
+	var named []rareTerm
+	for _, r := range rare {
+		if r.df > 0 {
+			named = append(named, r)
+		}
 	}
-	ks, err := s.scanKnowledge(rows)
-	if err != nil {
-		return nil, err
+	// Stable, so words equally rare keep the order in which the sentence said
+	// them. Nothing breaks the tie by how common a word is in the session text:
+	// that count includes sessions the reader may not open, and an order that
+	// followed it would let a guest compare how often two words occur there.
+	sort.SliceStable(named, func(i, j int) bool { return named[i].df < named[j].df })
+	if len(named) > maxRareTerms {
+		named = named[:maxRareTerms]
+	}
+
+	where, args := q.Axes.UnionWhere()
+	where, args = withGlobalScope(where, args, "k", q.Viewer)
+	remembered := CleanSessionKey(q.Session) != ""
+	seen := map[int64]bool{}
+	// One question per word rather than one for all of them: an entry then comes
+	// with the word that fetched it, and the rarest word's entries come first,
+	// which is the order of the reasons and not of how long the sentence is.
+	for _, r := range named {
+		if len(out.Hits) >= limit {
+			break
+		}
+		// Matched against the title, not the body. A term in the body means the
+		// entry mentions the thing; a term in the title means the entry is
+		// about it, and only the second is a reason to speak up unasked. What
+		// this loses is still reachable by search, which is the right place for
+		// a hunch. The exception is a word so rare that a mention anywhere is
+		// the whole subject: a codename is rarely in a title, and what it is
+		// stands in the one entry that names it.
+		match := `title : "` + r.term + `"`
+		if r.df <= veryRare {
+			match = `"` + r.term + `"`
+		}
+		query := `SELECT ` + prefix(knowledgeCols, "k.") + `
+			FROM knowledge_fts f JOIN knowledge k ON k.id = f.rowid
+			WHERE knowledge_fts MATCH ? AND ` + where + ` AND ` + deliverable
+		qargs := append([]any{match}, args...)
+		if remembered {
+			query += ` AND NOT ` + deliveredToSessionSQL
+			qargs = append(qargs, q.Account, q.Session)
+		}
+		rows, err := s.db.Query(query+` ORDER BY f.rank LIMIT ?`, append(qargs, limit)...)
+		if err != nil {
+			return out, err
+		}
+		ks, err := s.scanKnowledge(rows)
+		if err != nil {
+			return out, err
+		}
+		for _, k := range ks {
+			if seen[k.ID] || len(out.Hits) >= limit {
+				continue
+			}
+			seen[k.ID] = true
+			out.Hits = append(out.Hits, RelevantHit{Knowledge: k, Term: r.term})
+		}
 	}
 	// Being handed an entry because it fits the moment is the strongest form of
 	// use there is, so it counts as one — this is the signal that tells a useful
 	// entry from one nobody has ever needed.
-	if record {
-		s.recordKnowledgeSearchHit(ks)
+	if q.Record && len(out.Hits) > 0 {
+		s.recordKnowledgeSearchHit(hitKnowledge(out.Hits))
 	}
-	return ks, nil
+
+	hints, err := s.hintTerms(q, rare, veryRare, where, args)
+	if err != nil {
+		return out, err
+	}
+	out.Hints = hints
+	return out, nil
 }
 
-func (s *Store) documentFrequency(term string) (int, error) {
+// hintTerms picks the words a hint may be due for: the very rare ones that this
+// session was not already pointed at, in the order the sentence said them, each
+// with the entries that name it. The order is the sentence's and not a measure of
+// rarity for the same reason as above: rarity in the session text is not
+// something a reader gets to compare.
+func (s *Store) hintTerms(q RelevanceQuery, rare []rareTerm, veryRare int, where string, args []any) ([]HintTerm, error) {
+	var hintable []rareTerm
+	for _, r := range rare {
+		if r.df <= veryRare {
+			hintable = append(hintable, r)
+		}
+	}
+	if CleanSessionKey(q.Session) != "" && len(hintable) > 0 {
+		words := make([]string, len(hintable))
+		for i, h := range hintable {
+			words[i] = h.term
+		}
+		hinted, err := s.hintedTerms(q.Account, q.Session, words)
+		if err != nil {
+			return nil, err
+		}
+		kept := hintable[:0]
+		for _, h := range hintable {
+			if !hinted[h.term] {
+				kept = append(kept, h)
+			}
+		}
+		hintable = kept
+	}
+	if len(hintable) > maxRareTerms {
+		hintable = hintable[:maxRareTerms]
+	}
+	var out []HintTerm
+	for _, h := range hintable {
+		hint := HintTerm{Term: h.term}
+		if h.df > 0 {
+			rows, err := s.db.Query(`SELECT `+prefix(knowledgeCols, "k.")+`
+				FROM knowledge_fts f JOIN knowledge k ON k.id = f.rowid
+				WHERE knowledge_fts MATCH ? AND `+where+` AND `+deliverable+` ORDER BY f.rank LIMIT ?`,
+				append(append([]any{`"` + h.term + `"`}, args...), veryRareEntries)...)
+			if err != nil {
+				return nil, err
+			}
+			if hint.Known, err = s.scanKnowledge(rows); err != nil {
+				return nil, err
+			}
+		}
+		out = append(out, hint)
+	}
+	return out, nil
+}
+
+// documentFrequency counts the active entries that name the term, up to upTo. The
+// caller only ever compares the count with the ceiling, so a word that is in
+// half the archive is ruled out after upTo rows instead of after reading them
+// all, which on a keystroke path is most of the words of an ordinary sentence.
+func (s *Store) documentFrequency(term string, upTo int, viewer ...SessionViewer) (int, error) {
 	var n int
-	err := s.db.QueryRow(`SELECT COUNT(*) FROM knowledge_fts f JOIN knowledge k ON k.id = f.rowid
-		WHERE knowledge_fts MATCH ? AND k.status = 'active' AND k.confidence != 'quarantined'`,
-		`"`+term+`"`).Scan(&n)
+	scopeSQL, scopeArgs := withGlobalScope(`1=1`, nil, "k", viewer)
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM (SELECT 1 FROM knowledge_fts f JOIN knowledge k ON k.id = f.rowid
+		WHERE knowledge_fts MATCH ? AND k.status = 'active' AND k.confidence != 'quarantined' AND `+scopeSQL+` LIMIT ?)`,
+		append(append([]any{`"` + term + `"`}, scopeArgs...), upTo)...).Scan(&n)
 	return n, err
 }
 

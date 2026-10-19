@@ -1,0 +1,58 @@
+{{define "joinhead"}}{{template "joinheadr" 0}}{{end}}
+{{define "joinheadr"}}<!doctype html><html lang="{{lang}}" data-clay-theme="ghosttree"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="strict-origin"><meta name="robots" content="noindex,nofollow">{{if .}}<noscript><meta http-equiv="refresh" content="{{.}};url=/join/pair?w=1"></noscript><script src="/static/join.js" defer></script>{{end}}<title>{{t "join.title"}}</title><link rel="icon" href="/static/favicon.svg" type="image/svg+xml"><link rel="icon" href="/static/favicon-32.png" type="image/png" sizes="32x32"><link rel="apple-touch-icon" href="/static/apple-touch-icon.png"><link rel="stylesheet" href="/static/clay/index.css"><link rel="stylesheet" href="/static/theme.css"><link rel="stylesheet" href="/static/app.css"><link rel="stylesheet" href="/static/tokens.css"><link rel="stylesheet" href="/static/shell.css"></head><body class="ui"><main class="login join">{{template "loginbrand"}}<section class="login-card join-card clay">{{end}}
+{{define "joinfoot"}}</section></main></body></html>{{end}}
+
+{{define "joincmd"}}{{range .}}{{if .URL}}<span class="join-url">{{.Text}}</span>{{else}}<span class="join-tok">{{.Text}}</span>{{end}}{{if .Wbr}}<wbr>{{end}}{{.Sep}}{{end}}{{end}}
+{{define "joinconfirm"}}<label class="join-confirm"><input type="checkbox" name="confirm_account" value="{{.Person}}" required><span>{{t "join.confirm_me" .Person}}</span></label><p class="join-confirm-hint" role="status">{{t "join.confirm_first"}}</p>{{end}}
+{{define "joinnewcode"}}<form class="join-newcode" method="post" action="/join/pair"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><button class="clay btn ghost">{{t "join.new_code"}}</button></form>{{end}}
+
+{{define "join"}}{{template "joinhead"}}<h1>{{t "join.invited" .Inviter .Target}}</h1>
+<p class="join-tag">{{t "join.tagline"}}</p>
+<ul class="join-facts"><li>{{.Org}}</li><li>{{.RoleText}}</li><li>{{t "join.expires"}} {{ago .ExpiresAt}}</li></ul>
+<ul class="join-shares"><li>{{t "join.shares.private"}}</li><li>{{if .Guest}}{{t "join.shares.guest" .Project}}{{else}}{{t "join.shares.member" .Project}}{{end}}</li></ul>
+{{if .SignedIn}}<p class="join-who"><span class="av human sm clay" aria-hidden="true">{{.Initial}}</span><span><strong>{{.Person}}</strong>{{if .Email}}<small>{{.Email}}</small>{{end}}</span></p>
+<form class="login-form" method="post" action="/join/{{.Code}}/accept"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}">{{template "joinconfirm" .}}<button class="clay btn btn-primary">{{t "join.accept"}}</button></form>
+<form class="join-signout" method="post" action="/join/{{.Code}}/signout"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><span>{{t "join.not_you"}}</span> <button class="join-link">{{t "shell.sign_out"}}</button></form>
+{{else if .OIDC}}<form class="login-form" method="post" action="/ui/login/oidc"><input type="hidden" name="code" value="{{.Code}}"><input type="hidden" name="join" value="1">{{if .Signup}}<input type="hidden" name="signup" value="1"><button class="clay btn btn-primary">{{t "join.create_account"}}</button></form>
+<form class="login-form" method="post" action="/ui/login/oidc"><input type="hidden" name="code" value="{{.Code}}"><input type="hidden" name="join" value="1"><button class="clay btn">{{t "join.sign_in_join"}}</button></form>
+{{else}}<button class="clay btn btn-primary">{{t "join.sign_in_join"}}</button></form>
+<p class="join-alt"><a href="/ui/login">{{t "join.have_account"}}</a></p>{{end}}
+{{else}}<form class="login-form" method="post" action="/ui/login/code"><input type="hidden" name="code" value="{{.Code}}"><input type="hidden" name="join" value="1"><label class="field"><span>{{t "join.name_label"}}</span><input class="clay" name="name" maxlength="64" required autocomplete="nickname" autocapitalize="none" spellcheck="false" placeholder="{{t "login.name_placeholder"}}"></label><button class="clay btn btn-primary">{{t "join.create_join"}}</button></form>
+<p class="join-alt"><a href="/ui/login">{{t "join.have_account"}}</a></p>
+{{end}}{{template "joinfoot"}}{{end}}
+
+{{define "joinpair"}}{{template "joinheadr" .Refresh}}<div data-join-state="{{.State}}" data-join-nonce="{{.Nonce}}" hidden></div>
+{{if and (eq .State "waiting") .NeedsHTTPS}}<h1>{{t "pair.needs_https"}}</h1><p>{{t "pair.needs_https_hint"}}</p>
+{{else if eq .State "waiting"}}<h1>{{t "pair.title"}}</h1>
+<div class="join-desktop"><ol class="join-steps">
+<li class="join-step is-done"><span class="join-num">1</span><div><strong>{{t "pair.step_terminal"}}</strong><p>{{t "pair.step_terminal_hint"}}</p></div></li>
+<li class="join-step is-done"><span class="join-num">2</span><div><strong>{{t "pair.step_copy"}}</strong><div class="join-cmd"><code id="join-cmd">{{template "joincmd" .CmdParts}}</code><button type="button" class="clay btn" data-copy="#join-cmd" data-copied="{{t "pair.copied"}}">{{t "pair.copy"}}</button></div></div></li>
+<li class="join-step is-active"><span class="join-num">3</span><div><strong>{{t "pair.step_confirm"}}</strong><p class="join-wait"><span class="join-dot" aria-hidden="true"></span>{{t "pair.waiting"}}</p></div></li>
+</ol></div>
+<div class="join-mobile"><p class="join-lead">{{t "pair.send_title"}}</p><pre class="join-msg" id="join-msg">{{.MailIntro}}{{template "joincmd" .CmdParts}}</pre>
+<div class="join-actions"><button type="button" class="clay btn btn-primary" data-copy="#join-msg" data-copied="{{t "pair.copied"}}">{{t "pair.copy_link"}}</button><button type="button" class="clay btn" data-share="#join-msg" hidden>{{t "pair.share"}}</button><a class="clay btn" href="{{.MailTo}}">{{t "pair.email"}}</a></div></div>
+{{template "joinnewcode" .}}
+{{else if eq .State "claimed"}}<h1>{{t "pair.wants" .Machine}}</h1>
+<p class="join-from">{{t "pair.from" .Remote}}{{if and .ShowNet .SameNet}} · {{t "pair.same_net"}}{{end}}</p>
+{{if and .ShowNet (not .SameNet)}}<p class="login-error" role="alert">{{t "pair.other_net"}}</p>{{end}}
+{{if eq .Mode "loopback"}}<p class="join-mobile">{{t "pair.loopback_mobile"}}</p>{{end}}
+<form class="login-form" method="post" action="/join/pair/decide"{{if eq .Mode "loopback"}} data-join-popup{{end}}><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><input type="hidden" name="nonce" value="{{.Nonce}}">
+{{if .NeedsCode}}<label class="field join-codefield"><span>{{t "pair.code_label"}}</span><input class="clay join-code" name="confirm_code" maxlength="9" size="9" autocomplete="off" autocapitalize="characters" spellcheck="false" inputmode="text" required autofocus><small>{{t "pair.code_hint"}}</small></label>{{end}}
+{{template "joinconfirm" .}}
+<div class="join-actions"><button class="clay btn btn-primary" name="decision" value="approve">{{t "pair.approve" .Machine}}</button><button class="clay btn ghost" name="decision" value="deny" formnovalidate>{{t "pair.deny"}}</button></div></form>
+{{template "joinnewcode" .}}
+{{else if eq .State "approved"}}{{if .Code}}{{if .Navigate}}<span data-join-go="{{.Navigate}}" hidden></span><h1>{{t "pair.finishing" .Machine}}</h1><p class="join-wait"><span class="join-dot" aria-hidden="true"></span>{{t "pair.finishing_hint"}}</p><p class="join-lead">{{t "pair.paste_stuck"}}</p>{{else}}<h1>{{t "pair.paste_title"}}</h1><p class="join-wait"><span class="join-dot" aria-hidden="true"></span>{{t "pair.paste_wait" .Machine}}</p>{{end}}
+<div class="join-cmd join-paste"><code id="join-paste-code" data-copy="#join-paste-code" data-copied="{{t "pair.copied"}}" title="{{t "pair.copy"}}">{{.Code}}</code><button type="button" class="clay btn btn-primary" data-copy="#join-paste-code" data-copied="{{t "pair.copied"}}">{{t "pair.copy"}}</button></div>
+{{else}}<h1>{{t "pair.finishing" .Machine}}</h1><p class="join-wait"><span class="join-dot" aria-hidden="true"></span>{{t "pair.finishing_hint"}}</p>{{end}}{{template "joinnewcode" .}}
+{{else if eq .State "connected"}}<div class="join-done"><span class="join-check" aria-hidden="true">{{template "icon" "check"}}</span><h1>{{t "pair.connected" .Machine}}</h1></div><p>{{t "pair.connected_hint"}}</p><a class="clay btn btn-primary" href="/ui/overview">{{t "pair.overview"}}</a>{{template "joinnewcode" .}}
+{{else if eq .State "denied"}}<h1>{{t "pair.denied"}}</h1><p>{{t "pair.denied_hint"}}</p>{{template "joinnewcode" .}}
+{{else if eq .State "expired"}}<h1>{{t "pair.expired"}}</h1><p>{{t "pair.expired_hint"}}</p>{{if .Callback}}<p><a href="{{.Callback}}">{{t "pair.stop_installer"}}</a></p>{{end}}{{template "joinnewcode" .}}
+{{else if eq .State "compromised"}}<h1>{{t "pair.compromised"}}</h1><p>{{t "pair.compromised_hint"}}</p>{{if .Callback}}<p><a href="{{.Callback}}">{{t "pair.stop_installer"}}</a></p>{{end}}{{template "joinnewcode" .}}
+{{else}}<h1>{{if .Interrupted}}{{t "pair.interrupted"}}{{else}}{{t "pair.title"}}{{end}}</h1>
+<form class="login-form" method="post" action="/join/pair"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}">{{template "joinconfirm" .}}<button class="clay btn btn-primary">{{if .Interrupted}}{{t "pair.start_again"}}{{else}}{{t "pair.get_code"}}{{end}}</button></form>
+{{end}}{{template "joinfoot"}}{{end}}
+
+{{define "joinmember"}}{{template "joinhead"}}<h1>{{.Title}}</h1><a class="clay btn btn-primary join-back" href="{{.URL}}">{{t "join.member_open"}}</a>{{template "joinfoot"}}{{end}}
+{{define "joinnotfound"}}{{template "joinhead"}}<h1>{{t "join.na_title"}}</h1><p>{{t "join.na_text"}}</p>{{template "joinfoot"}}{{end}}
+{{define "joinbusy"}}{{template "joinhead"}}<h1>{{t "join.busy_title"}}</h1><p>{{t "join.busy_text"}}</p>{{template "joinfoot"}}{{end}}
+{{define "joinmsg"}}{{template "joinhead"}}<h1>{{.Title}}</h1><p>{{.Message}}</p>{{if .BackURL}}<a class="clay btn btn-primary join-back" href="{{.BackURL}}">{{.BackLabel}}</a>{{end}}{{template "joinfoot"}}{{end}}

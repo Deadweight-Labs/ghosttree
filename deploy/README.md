@@ -17,6 +17,29 @@ create `/etc/ghosttree/server.env` before starting it:
 GHOSTTREE_LISTEN=<private-address>:8474
 ```
 
+Behind a TLS terminator add the proxy settings to the same file (the unit
+passes the environment to `ctx serve`); see "Running behind TLS or a reverse
+proxy" in the main README:
+
+```text
+GHOSTTREE_PUBLIC_URL=https://ghosttree.example.com
+GHOSTTREE_TRUSTED_PROXIES=<proxy-address>
+```
+
+To let organization owners connect a GitHub organization ("Connect GitHub" on the
+Organization page, the proof behind remote prefixes), register a GitHub OAuth app
+with the callback URL `<server address>/ui/orgs/source/callback` and give the
+server its credentials. The flow asks for the scope `read:org`; the user's access
+token is never stored. Without these variables the page shows that GitHub is not
+set up:
+
+```text
+GHOSTTREE_GITHUB_CLIENT_ID=<client id of the app>
+GHOSTTREE_GITHUB_CLIENT_SECRET_FILE=/etc/ghosttree/github-client-secret
+```
+
+`GHOSTTREE_GITHUB_CLIENT_SECRET` holds the secret directly instead of a file.
+
 Use the server's address on the trusted private network, such as NetBird, in
 the listen setting, client configuration and monitoring target. After changing
 the client URL, restart the collector and reconnect running MCP servers: they
@@ -153,6 +176,40 @@ Stop `ghosttree.service` first for schema upgrades or commands that require
 exclusive access. Keep and verify the backup printed by `ctx upgrade-schema`
 before restarting the server.
 
+### Images in stored transcripts
+
+Screenshots and attached files arrive in session transcripts as base64 and are
+the largest part of the database, although search and the session view only use
+text. The server therefore replaces every base64 payload of 1 KB or more in a
+stored line with a short placeholder (type, size, first 16 hex digits of the
+SHA-256), and `ctx watch` does the same before uploading. Chunks stored by an
+older version still carry their images. `ctx strip-images` replaces those; it is
+safe to run while the server is up (short transactions, 30 seconds of waiting for
+a lock, `--sleep` between steps) and can be stopped with Ctrl-C and run again:
+
+```bash
+DB=/var/lib/ghosttree/ghosttree.db
+RUN='sudo systemd-run --pipe --wait --collect --quiet -p DynamicUser=yes -p User=ghosttree -p StateDirectory=ghosttree /usr/local/bin/ctx'
+$RUN strip-images --db $DB --dry-run   # counts chunks and bytes, writes nothing
+$RUN strip-images --db $DB             # replaces; a second run changes nothing
+```
+
+The image data cannot be recovered afterwards, so keep a backup if it might be
+needed. The report lists the chunks checked and replaced and the bytes saved.
+The database file does not get smaller by this: the freed pages are reused by
+new data, which already stops the growth. To give the space back to the
+filesystem, run `VACUUM` once with the service stopped. It rewrites the whole
+file, so it needs free disk space of about the size of the database and takes a
+while on a large one:
+
+```bash
+sudo systemctl stop ghosttree
+sudo systemd-run --pipe --wait --collect --quiet \
+  -p DynamicUser=yes -p User=ghosttree -p StateDirectory=ghosttree \
+  sqlite3 /var/lib/ghosttree/ghosttree.db 'PRAGMA wal_checkpoint(TRUNCATE); VACUUM;'
+sudo systemctl start ghosttree
+```
+
 ## Context snapshots
 
 Snapshot rows are immutable and have no ordinary deletion or redaction path.
@@ -267,6 +324,70 @@ sudo systemctl enable --now ghosttree-distill.timer
 Generated knowledge remains quarantined until review. The bill does not, so
 start with a small limit and inspect the results.
 
+## Gardener in the sandbox
+
+`ghosttree-garden.service` runs the gardener (`ctx garden check-knowledge`) as a
+Claude Code agent. Its entries are data an attacker may have written, so the
+session is treated as untrusted:
+
+- **No Bash.** The session gets Read, Grep and Glob (only below the checkout)
+  and two fixed git tools, `git_log` and `git_show`, served by
+  `ctx garden git-mcp`. Their arguments are a hash or `HEAD`, a plain relative
+  path, a number and a text for the pickaxe; nothing is ever parsed as an option.
+- **Own config directory.** Every session gets an empty directory under
+  `--claude-dir` (also `GHOSTTREE_GARDEN_CLAUDE_DIR`), which is its
+  `CLAUDE_CONFIG_DIR` and `HOME`, and is removed afterwards. Without
+  `--claude-dir` the agent mode does not start. The proxy and the token come
+  from the `garden` entry of `llm.json`, not from a settings file.
+- **Small environment.** The session sees `PATH`, locale, certificate paths and
+  the one value that assigns it to its account. Nothing else of the unit's
+  environment reaches it.
+- **Neutral git.** `ctx` runs its own git calls with `core.hooksPath=/dev/null`,
+  no fsmonitor, no system config and an empty global config, and compares not
+  only `git status --ignored` but also `.git/config`, `.git/hooks`, `.git/info`
+  and `HEAD` before and after each session.
+- **systemd sandbox.** The unit runs as `ghosttree-garden` (create it with
+  `systemd-sysusers deploy/ghosttree-garden.sysusers`), hides everything under
+  `/var/lib/ghosttree` and binds back only the checkout (read-only), `bin/`,
+  `run.sh`, and the writable `state/`, `reports/` and `claude/`. `/home`, `/root`,
+  the database, private data and backups are not visible. The gardener cannot
+  open the database from there, so it keeps its memory in
+  `garden/state/state.json` (`--state-file`) instead of `--db`.
+
+The ghosttree MCP server of a session (`ctx mcp`, for `context_search` and
+`context_get`) reads its client config from `$HOME/.config/ghosttree/config.json`
+with the `HOME` of the unit, so with the example unit from
+`/var/lib/ghosttree/garden/claude/.config/ghosttree/config.json` (`server_url`
+and the token of the gardener). The old `garden/home/.config/ghosttree` is not
+visible in the sandbox any more; move the file. The probe checks that it is
+readable (`CLIENT_CONFIG` for another place).
+
+`context_search` and `context_get` cannot be limited to one project by an
+allowlist, so a gardener that must not read other projects' entries runs with
+`--no-mcp`: the session then gets no ghosttree server (and needs no client
+config), is not allowed those two tools and is not told about them. The fixed
+git tools `git_log` and `git_show` stay either way.
+
+Layout under `/var/lib/ghosttree/garden`: `repo/` (checkout, owned by root,
+updated by `ghosttree-garden-update.service`), `bin/` (the `claude` binary, pass
+`--claude`), `run.sh`, `state/`, `reports/`, `claude/` (writable by
+`ghosttree-garden`). Settings of the run (key paths, `GHOSTTREE_GARDEN_CLAUDE_DIR`,
+`--state-file`) belong in `/etc/ghosttree/garden.env` and `run.sh`, not in
+`server.env`.
+
+After installing or changing the unit, prove the sandbox on the machine:
+
+```sh
+sudo deploy/garden-sandbox-probe.sh
+```
+
+It starts a transient unit with the settings read from the installed unit file
+and tries to read the data directory, database, private data, backups, `/home`,
+`/root` and the server environment, to write the checkout and `.git/config`, and
+to reach a non-loopback address. Every one of those has to fail, reading the
+checkout has to work; otherwise the exit status is 1. `--print` shows the
+`systemd-run` command line without running it.
+
 ## Client machines
 
 ```bash
@@ -276,11 +397,15 @@ ctx install claude
 ctx install codex
 ctx install opencode
 ctx watch --once
-cp deploy/ghosttree-watch.service ~/.config/systemd/user/
-systemctl --user enable --now ghosttree-watch
+ctx install watch
 ctx status
 ctx doctor
 ```
+
+`ctx install claude` and `ctx install codex` set up the collector as well (a
+systemd user unit on Linux, a LaunchAgent on macOS, both with the absolute path
+of `ctx`); `--no-watch` skips it and `ctx install watch` sets up only the
+collector. `deploy/ghosttree-watch.service` is the same unit for manual setups.
 
 Installer and doctor operations can be limited to specific components:
 
@@ -310,3 +435,20 @@ sqlite3 ~/.local/share/ghosttree/ghosttree.db ".backup '/tmp/ghosttree.db'"
 Verify the copied database with `PRAGMA integrity_check`, put it in the server's
 state directory while the service is stopped, and then point each client at the
 new private URL with `ctx setup`.
+
+## "In short" notes (batch)
+
+`ghosttree-explain.service` runs `ctx explain backfill --batch`: it collects
+finished Message Batches, then submits one batch for every object that has no
+current note. `ghosttree-explain.timer` runs it hourly, which is cheap while a
+batch is open (nothing is sent twice) and picks results up within the hour.
+`ghosttree-explain.path` starts a first run when the key file is written, and
+`ConditionPathExists=` keeps the service from doing anything while it is
+missing. The key belongs to the `explain` entry of `llm.json` (see the main
+README); the sample uses a systemd credential, so write
+`{"explain": {"credential": "explain-key"}}` there.
+
+```sh
+install -m 600 /dev/null /etc/ghosttree/explain-key   # then paste the key into it
+systemctl enable --now ghosttree-explain.timer ghosttree-explain.path
+```

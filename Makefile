@@ -7,6 +7,10 @@ build-all:
 	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath -o dist/ctx-darwin-amd64 ./cmd/ctx
 	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -o dist/ctx-darwin-arm64 ./cmd/ctx
 
+# Release archives + checksums.txt for GHOSTTREE_DIST_DIR (see scripts/build-dist.sh).
+dist:
+	scripts/build-dist.sh dist/release
+
 test:
 	go test ./...
 
@@ -28,4 +32,4 @@ storebench-small:
 	go run ./cmd/storebench --backend=queued --preset=small --output=$$task_dir/queued.json; \
 	echo "reports: $$task_dir"
 
-.PHONY: build build-all test fmt-check tidy-check verify storebench-small
+.PHONY: build build-all dist test fmt-check tidy-check verify storebench-small

@@ -24,6 +24,9 @@ import (
 // "is it running", doctor answers "would a fresh agent session actually reach
 // ghosttree". Installing is idempotent but one-shot, and nothing else notices
 // when a harness config drifts out from under it.
+// doctorHarnessPresent is a seam for tests.
+var doctorHarnessPresent = harnessPresent
+
 func cmdDoctor(args []string, stdout io.Writer) int {
 	harness := ""
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
@@ -51,14 +54,46 @@ func cmdDoctor(args []string, stdout io.Writer) int {
 		fmt.Fprintf(stdout, "cannot determine home directory: %v\n", err)
 		return 1
 	}
+	if harness == "" {
+		// Without a harness argument only what is installed is checked; a
+		// missing one is not a failure of this machine.
+		present := harnesses[:0:0]
+		for _, name := range harnesses {
+			if doctorHarnessPresent(name, home) {
+				present = append(present, name)
+			} else {
+				fmt.Fprintf(stdout, "%s: not installed (skipped)\n", name)
+			}
+		}
+		harnesses = present
+	}
 
+	restore, ctxErr := useRunningCtx(home)
+	defer restore()
 	if *fix {
+		if ctxErr != nil {
+			fmt.Fprintf(stdout, "fix not applied: %v\n", ctxErr)
+			return 1
+		}
 		for _, name := range harnesses {
 			if _, err := installer.InstallSelected(name, home, selections[name]); err != nil {
 				fmt.Fprintf(stdout, "fix %s: %v\n", name, err)
 			}
 		}
-		fmt.Fprint(stdout, "re-ran installers\n\n")
+		// Ein vorhandener, aber falscher ghclaude-Link wird erneuert; wer
+		// keinen hat, bekommt hier keinen.
+		if link, _, _, err := ghclaudeLink(home); err == nil {
+			if st, err := os.Lstat(link); err == nil && st.Mode()&os.ModeSymlink != 0 {
+				if _, _, err := ensureGhclaude(home); err != nil {
+					fmt.Fprintf(stdout, "fix ghclaude: %v\n", err)
+				}
+			}
+		}
+		if len(harnesses) > 0 {
+			fmt.Fprint(stdout, "re-ran installers\n\n")
+		} else {
+			fmt.Fprint(stdout, "no agent installed, no installer to re-run\n\n")
+		}
 	}
 
 	var checks []installer.Check
@@ -73,7 +108,7 @@ func cmdDoctor(args []string, stdout io.Writer) int {
 	return 1
 }
 
-var sharedDoctorOrder = []string{"binary", "client", "server", "collector", "tree", "budget"}
+var sharedDoctorOrder = []string{"binary", "client", "server", "collector", "tree", "budget", "ghclaude"}
 
 func resolveDoctorScope(harness string, only []string) ([]string, map[string]installer.ComponentSet, map[string]bool, error) {
 	harnesses := []string{"claude", "codex", "opencode"}
@@ -146,11 +181,14 @@ func selectedSharedChecks(selected map[string]bool, home string) []installer.Che
 		switch component {
 		case "binary":
 			checks = append(checks, binaryCheck())
+		case "ghclaude":
+			checks = append(checks, ghclaudeCheck(home))
 		case "client":
 			cfgChecks := configChecks()
 			if len(cfgChecks) > 0 {
 				checks = append(checks, cfgChecks[0])
 			}
+			checks = append(checks, linkChecks()...)
 		case "server":
 			cfgChecks := configChecks()
 			if len(cfgChecks) > 1 {
@@ -233,18 +271,24 @@ func printDoctorChecks(stdout io.Writer, checks []installer.Check) bool {
 	return ok
 }
 
-// binaryCheck catches the case where the harnesses are registered to run `ctx`
-// but the binary is not on the PATH they will use.
+// binaryCheck reports whether a shell finds ctx. Harness configs written by
+// ctx install carry the absolute path and do not depend on it, so a missing
+// PATH entry only matters to someone typing ctx; configs that still run the
+// bare name fail in their own checks.
 func binaryCheck() installer.Check {
 	path, err := exec.LookPath("ctx")
-	if err != nil {
-		return installer.Check{
-			Name:   "ctx on PATH",
-			Detail: "not found (harness configs invoke bare 'ctx')",
-			Fix:    "install the binary into a directory on PATH, e.g. ~/.local/bin",
-		}
+	if err == nil {
+		return installer.Check{Name: "ctx on PATH", OK: true, Detail: path}
 	}
-	return installer.Check{Name: "ctx on PATH", OK: true, Detail: path}
+	check := installer.Check{
+		Name:       "ctx on PATH",
+		Unverified: true,
+		Detail:     "not found in a shell; harness configs written by 'ctx install' use the absolute path and are not affected",
+	}
+	if exe, err := os.Executable(); err == nil {
+		check.Fix = "to type ctx in a shell, add its directory to PATH: export PATH=\"" + filepath.Dir(exe) + ":$PATH\" in your shell profile"
+	}
+	return check
 }
 
 func collectorChecks(home string) []installer.Check {
@@ -285,33 +329,34 @@ func collectorChecks(home string) []installer.Check {
 	}
 	checks = append(checks, stateCheck)
 
-	active := installer.Check{Name: "collector active", Detail: "ghosttree-watch.service", Fix: "enable and start deploy/ghosttree-watch.service or run 'ctx watch'"}
+	active := installer.Check{Name: "collector active", Detail: "ghosttree-watch.service", Fix: "run '" + installer.CtxCommandForHumans() + " install watch' to set up the collector service, or 'ctx watch' in a terminal"}
 	if pid, running := watchProcess(); running {
 		active.OK = true
 		active.Detail = fmt.Sprintf("watch process pid %d", pid)
-		return append(checks, active)
+		checks = append(checks, active)
+		if c, ok := watchBinaryCheck(); ok {
+			checks = append(checks, c)
+		}
+		return checks
 	}
-	if _, err := exec.LookPath("systemctl"); err != nil {
-		active.Unverified = true
-		active.Detail = "systemd user manager unavailable and no watch pid observed"
-		return append(checks, active)
-	}
-	cmd := exec.Command("systemctl", "--user", "show", "ghosttree-watch.service", "--property=LoadState", "--property=ActiveState", "--value")
-	raw, err := cmd.Output()
-	if err != nil {
-		active.Unverified = true
-		active.Detail = "systemd user state unavailable and no watch pid observed"
-		return append(checks, active)
-	}
-	values := strings.Fields(string(raw))
-	if slices.Contains(values, "active") {
+	state, detail := installer.WatchServiceState()
+	switch state {
+	case installer.ServiceActive:
 		active.OK = true
-		active.Detail = "ghosttree-watch.service active"
-	} else if slices.Contains(values, "not-found") {
+		active.Detail = detail
+	case installer.ServiceMissing:
 		active.Unverified = true
-		active.Detail = "ghosttree-watch.service not installed and no watch pid observed"
-	} else {
-		active.Detail = "ghosttree-watch.service " + strings.Join(values, "/")
+		active.Detail = detail + " and no watch pid observed"
+	case installer.ServiceInactive:
+		active.Detail = detail
+	default:
+		active.Unverified = true
+		active.Detail = detail + " and no watch pid observed"
+		if strings.HasPrefix(detail, "systemd user") {
+			if hint := installer.UserBusHint(); hint != "" {
+				active.Fix = hint + ", or 'ctx watch' in a terminal"
+			}
+		}
 	}
 	return append(checks, active)
 }

@@ -342,3 +342,38 @@ func TestServeRejectsStaleSnapshotSchemaWithoutChangingCounts(t *testing.T) {
 		t.Fatalf("startup probe changed snapshot count: %d -> %d", before, after)
 	}
 }
+
+func TestServeAccessEnforcementFollowsTheEnvironment(t *testing.T) {
+	for value, want := range map[string]bool{"": false, "0": false, "true": false, "1": true} {
+		t.Setenv(envEnforceAccess, value)
+		st, err := store.Open(":memory:")
+		if err != nil {
+			t.Fatal(err)
+		}
+		buildServerHandler(st, serveConfig{SnapshotLimits: snapshot.DefaultLimits()}, io.Discard)
+		if got := st.AccessEnforced(); got != want {
+			t.Errorf("%s=%q: enforced=%v, want %v", envEnforceAccess, value, got, want)
+		}
+		st.Close()
+	}
+}
+
+func TestServeLanguageFlagAndEnvironment(t *testing.T) {
+	t.Setenv(envLanguage, "")
+	cfg, err := parseServeConfig(nil, &bytes.Buffer{})
+	if err != nil || cfg.Language != "en" {
+		t.Fatalf("default language = %q, %v; want en", cfg.Language, err)
+	}
+	t.Setenv(envLanguage, "de")
+	cfg, err = parseServeConfig(nil, &bytes.Buffer{})
+	if err != nil || cfg.Language != "de" {
+		t.Fatalf("env language = %q, %v; want de", cfg.Language, err)
+	}
+	cfg, err = parseServeConfig([]string{"--language", "en"}, &bytes.Buffer{})
+	if err != nil || cfg.Language != "en" {
+		t.Fatalf("flag overrides env: %q, %v; want en", cfg.Language, err)
+	}
+	if _, err = parseServeConfig([]string{"--language", "fr"}, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "--language") {
+		t.Fatalf("unknown language error = %v, want one naming --language", err)
+	}
+}

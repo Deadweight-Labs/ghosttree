@@ -1,0 +1,31 @@
+{{define "painrow"}}<li class="g-pain"><span class="g-dot is-{{.State}}" aria-hidden="true"></span><div><h3 class="g-title"><a href="{{.Href}}" title="{{.Human}}">{{.Title}}</a></h3>{{if .Remaining}}<p class="g-rest"><b>{{t "pains.remaining"}}</b> {{.Remaining}}</p>{{end}}</div><div class="g-side">{{if .Project}}<span class="g-src">{{.Project}}</span>{{end}}{{if or (eq .State "resolved") (eq .State "obsolete")}}<span class="g-src">{{.StateLabel}}</span>{{end}}<span class="g-age">{{.Age}}</span></div></li>{{end}}
+
+{{define "pains"}}{{template "head" .}}{{template "nav" .}}<main class="g-page pn"><link rel="stylesheet" href="/static/knowledge.css"><link rel="stylesheet" href="/static/requests.css"><link rel="stylesheet" href="/static/tasks.css">
+{{with .PainsV}}<header class="g-page-head"><h1>{{t "nav.requests"}}</h1></header>{{template "rqtabs" $}}
+{{range .Groups}}{{if .Folded}}<details class="g-more"><summary>{{t "pains.closed" (len .Rows)}}</summary><ul class="g-deck clay">{{range .Rows}}{{template "painrow" .}}{{end}}</ul></details>
+{{else}}<section class="g-group"><h2 class="g-group-head"><span>{{.Label}}</span></h2><ul class="g-deck clay">{{range .Rows}}{{template "painrow" .}}{{end}}</ul></section>{{end}}{{end}}
+{{if .Empty}}<p class="g-empty">{{t "pains.empty"}}</p>{{end}}
+{{end}}{{template "foot" .}}{{end}}
+
+{{define "pain"}}{{template "head" .}}{{template "nav" .}}<main class="kn kn-detail rq rq-detail pn"><link rel="stylesheet" href="/static/knowledge.css"><link rel="stylesheet" href="/static/requests.css"><link rel="stylesheet" href="/static/tasks.css">
+{{with .PainV}}<a class="kn-back clay clay-btn clay-btn-icon" href="{{.Back}}" aria-label="{{t "pains.back"}}">{{template "icon" "back"}}</a>
+{{with .Result}}<div class="kn-result" role="status"><span class="rq-dot is-{{.Kind}}" aria-hidden="true"></span><span class="kn-result-text">{{.Text}}</span></div>{{end}}
+<article class="kn-article"><div class="kn-marks"><span class="kn-level"><span class="rq-dot is-{{.State}}" aria-hidden="true"></span>{{.StateLabel}}</span>{{if .Project}}<span class="ov-meta">{{.Project}}</span>{{end}}</div>
+<h1>{{.Title}}</h1>
+<p class="ov-meta kn-dots"><span class="rq-id">{{.Human}}</span>{{if .Person}}<span>{{t "requests.by" .Person}}</span>{{end}}<span class="ov-num">{{.Age}}</span></p>
+{{template "explain" .Explain}}{{template "knbody" .Blocks}}
+{{if .Remaining}}<section class="pn-left"><h2>{{t "pains.remaining"}}</h2><p>{{.Remaining}}</p></section>{{end}}</article>
+
+{{if .Motivates}}<section class="rq-section"><h2>{{t "pains.motivates"}}</h2><ul class="ov-list rq-rels">{{range .Motivates}}<li>{{if .Href}}<a class="kn-link" href="{{.Href}}"{{if eq .Kind "external"}} rel="noopener noreferrer"{{end}}>{{.Text}}</a>{{else}}<span>{{.Text}}</span>{{end}}</li>{{end}}</ul></section>{{end}}
+
+{{if .CanWork}}<section class="rq-manage"><details class="kn-edit clay"><summary>{{t "pains.change"}}</summary>
+<form method="post" action="/ui/pains/{{.ID}}/state"><input type="hidden" name="csrf_token" value="{{.Token}}">
+<label class="kn-field"><span>{{t "pains.field_state"}}</span><select class="clay-select" name="state">{{range .States}}<option value="{{.Value}}">{{.Label}}</option>{{end}}</select></label>
+<label class="kn-field"><span>{{t "pains.remaining"}}</span><input class="clay-field" name="remaining" maxlength="2000" autocomplete="off"></label>
+<label class="kn-field"><span>{{t "requests.field_evidence_kind"}}</span><select class="clay-select" name="evidence_kind">{{range .EvidenceKinds}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select></label>
+<label class="kn-field"><span>{{t "requests.field_evidence"}}</span><input class="clay-field" name="evidence_ref" maxlength="2000" autocomplete="off"></label>
+<label class="kn-field"><span>{{t "pains.field_note"}}</span><input class="clay-field" name="note" maxlength="2000" autocomplete="off"></label>
+<button class="ov-btn ov-btn-primary clay">{{t "pains.save"}}</button></form></details></section>{{end}}
+
+{{if .Events}}<section class="rq-section kn-history"><h2>{{t "requests.history"}}</h2><ul class="ov-list rq-log">{{range .Events}}<li><span class="rq-act">{{.Label}}</span><span class="rq-acttext">{{.Text}}{{with .Evidence}} <span class="ov-meta">{{.Label}}</span> {{if .Href}}<a class="kn-link rq-ref" href="{{.Href}}">{{if .Ref}}{{.Ref}}{{else}}{{.Href}}{{end}}</a>{{else if .Ref}}<code class="rq-ref">{{.Ref}}</code>{{end}}{{end}}</span><span class="ov-meta">{{.By}}</span><span class="ov-num kn-age">{{.Age}}</span></li>{{end}}</ul></section>{{end}}
+{{end}}{{template "foot" .}}{{end}}

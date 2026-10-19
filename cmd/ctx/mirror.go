@@ -10,6 +10,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/mirror"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
+	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
 // doneRequestsShown begrenzt, wie viel Erledigtes im Spiegel steht. Der Ledger
@@ -32,10 +33,45 @@ func WriteMirror(c *client.Client, ax scope.Axes, repoRoot string) error {
 	if ax.Machine == "" {
 		ax.Machine = c.Machine()
 	}
-	knowledge, err := c.Knowledge(ax)
+	knowledge, err := c.DeliverableKnowledge(ax)
 	if err != nil {
 		return err
 	}
+	// Nur unbeschränkte Themen: der Spiegel liegt im Repo und wird von jedem
+	// gelesen, der es auscheckt. Ein aus einem privaten Gespräch übernommenes
+	// Thema hätte hier seinen sichersten Weg nach draußen — deshalb fragt der
+	// Spiegel ohne Teilnehmerkennung, und die Sichtbarkeitsprüfung liefert ihm
+	// dann ausschließlich projektweite.
+	threads, err := c.PublicSearchThreads(project, "", false, 100)
+	if err != nil {
+		return err
+	}
+	views := make([]mirror.ThreadView, 0, len(threads))
+	for _, t := range threads {
+		v := mirror.ThreadView{Thread: t}
+		if sum, err := c.PublicThreadSummary(t.ID); err == nil && sum.Body != "" {
+			v.Summary = sum
+			v.HasSummary = true
+			// Wie viele Beiträge die Karte nicht mehr kennt. Ohne diese Zahl
+			// liest sich eine alte Zusammenfassung wie der heutige Stand.
+			if posts, err := c.PublicCoordInbox(store.DestinationDiscussion,
+				store.ThreadDestinationID(t.ID), sum.CoversThrough, 200); err == nil {
+				for _, p := range posts {
+					if p.Sequence > sum.CoversThrough {
+						v.NewPosts++
+					}
+				}
+			}
+		}
+		if links, err := c.PublicThreadLinks(t.ID); err == nil {
+			v.Links = links
+		}
+		if outcomes, err := c.PublicThreadOutcomes(t.ID); err == nil {
+			v.Outcomes = outcomes
+		}
+		views = append(views, v)
+	}
+
 	documentHeaders, err := c.Documents(project, "", true)
 	if err != nil {
 		return err
@@ -57,6 +93,14 @@ func WriteMirror(c *client.Client, ax scope.Axes, repoRoot string) error {
 		return err
 	}
 
+	// Pains: a failure here must not stop the rest of the mirror.
+	var pains []mirror.PainView
+	if list, err := c.SearchPainDetails(project, "all", 200); err == nil {
+		for _, d := range list {
+			pains = append(pains, mirror.PainView{Pain: d.Pain, Motivates: d.Motivates, Events: d.Events})
+		}
+	}
+
 	// Wie voll der Baum daneben ist. Fehlschlagen darf das: eine Zahl weniger im
 	// Index ist hinnehmbar, ein nicht geschriebener Spiegel nicht.
 	described, paths := treeFill(c, project, repoRoot)
@@ -69,6 +113,8 @@ func WriteMirror(c *client.Client, ax scope.Axes, repoRoot string) error {
 		Requests:      append(open, done...),
 		DoneShown:     len(done),
 		DoneTotal:     doneTotal,
+		Threads:       views,
+		Pains:         pains,
 		TreeDescribed: described,
 		TreePaths:     paths,
 		At:            time.Now().UTC().Format(time.RFC3339),

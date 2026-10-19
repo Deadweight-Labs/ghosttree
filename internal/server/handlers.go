@@ -3,6 +3,7 @@ package server
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
+	"github.com/Deadweight-Labs/ghosttree/internal/explain"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -17,8 +19,7 @@ import (
 
 func (a *api) createSession(w http.ResponseWriter, r *http.Request) {
 	var s store.Session
-	if err := readJSON(r, &s); err != nil {
-		writeStoreError(w, http.StatusBadRequest, err)
+	if !readLimitedJSON(w, r, &s, maxSessionBody) {
 		return
 	}
 	if s.Harness == "" || s.ExternalID == "" {
@@ -26,28 +27,119 @@ func (a *api) createSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Scope = scope.CanonicalAxes(s.Scope)
+	if !a.gateMachine(w, r, s.Scope.Machine, true) || !a.gateProject(w, r, s.Scope.Project) {
+		return
+	}
+	// Besitz kommt aus dem Token, nie aus dem Rumpf.
+	acct, ok := accountOf(principalOf(r))
+	if !ok {
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	s.AccountID, s.Owner = acct, ""
+	if denyAccess(w, a.access(r).Check(s.Scope.Project, store.ResSessionMeta, store.ActCreate, store.Object{Own: true})) {
+		return
+	}
+	// Ein Collector, der nur die Nummer kennt, würde bei fehlender Nummer nach
+	// /api/sessions/0/chunks laden und ewig 403 bekommen: dann gar nicht erst anlegen.
+	if !a.access(r).GetsOwnSessionNumber(s.Scope.Project) && r.URL.Query().Get("refs") != "public_id" {
+		writeCoded(w, http.StatusConflict, "collector_too_old", "this server does not hand out session numbers to your role and your collector only understands numbers: update ctx (and restart ghosttree-watch)")
+		return
+	}
 	id, err := a.st.UpsertSession(s)
+	if errors.Is(err, store.ErrSessionCollision) {
+		writeCoded(w, http.StatusConflict, "session_id_collision", "that session id already belongs to another account or machine")
+		return
+	}
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
-	if s.Scope.Machine != "" {
-		a.st.TouchMachine(s.Scope.Machine)
+	a.writeSessionRef(w, r, s.Scope.Project, id)
+}
+
+// writeSessionRef antwortet auf das Anlegen einer Session. Wer sie selbst anlegt
+// und irgendwo Mitglied (oder Admin) ist, bekommt die Nummer und die Adresse
+// (ältere Collector brauchen die Nummer), reine Gäste nur die Adresse: laufende
+// Nummern, die ein Gast mit eigenen Sessions erzeugt, zählten sonst die
+// verborgenen dazwischen (#2447).
+func (a *api) writeSessionRef(w http.ResponseWriter, r *http.Request, project string, id int64) {
+	sess, err := a.st.SessionByID(id)
+	if err != nil {
+		writeStoreError(w, http.StatusInternalServerError, err)
+		return
 	}
-	writeJSON(w, 200, map[string]int64{"id": id})
+	out := map[string]any{"public_id": sess.PublicID}
+	if a.access(r).GetsOwnSessionNumber(project) {
+		out["id"] = id
+	}
+	writeJSON(w, 200, out)
+}
+
+// Grenzen der Session-Uploads. Der Collector schickt höchstens 500 Zeilen und
+// 24 MiB serialisiert je Anfrage (collector.uploadBatch, uploadBatchBytes) und
+// halbiert bei 413; die Grenze liegt darüber.
+// maxChunkBody ist eine Variable, damit der Test sie senken kann.
+var maxChunkBody int64 = 64 << 20
+
+// smallBody ist die Größe, bis zu der ein Upload ohne Platz in bigBodies
+// auskommt; darüber dürfen höchstens zwei Uploads gleichzeitig lesen.
+const smallBody = 4 << 20
+
+var bigBodies = make(chan struct{}, 2)
+
+// bodyReadWindow ist die Zeit, die ein großer Upload nach Erhalt seines Platzes
+// zum Lesen des Körpers hat (so lang wie ReadTimeout in cmd/ctx/serve.go).
+const bodyReadWindow = 30 * time.Second
+
+const maxSessionBody = 64 << 10
+
+// readLimitedJSON liest einen JSON-Körper bis limit Bytes (413 darüber).
+func readLimitedJSON(w http.ResponseWriter, r *http.Request, v any, limit int64) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
+	if err := readJSON(r, v); err != nil {
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			writeCoded(w, http.StatusRequestEntityTooLarge, "body_too_large", "request body is too large")
+		} else {
+			writeStoreError(w, http.StatusBadRequest, err)
+		}
+		return false
+	}
+	return true
 }
 
 func (a *api) appendChunks(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(r)
+	id, ok := a.sessionPathID(r)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "bad session id")
 		return
 	}
+	// Besitz und Recht vor dem Körper: wer nicht schreiben darf, bringt den
+	// Server nicht dazu, bis zu maxChunkBody Bytes zu lesen und zu decodieren.
+	if !a.mayWriteSession(w, r, id) {
+		return
+	}
+	if denyAccess(w, a.access(r).Check("", store.ResSessionMeta, store.ActCreate, store.Object{Own: true})) {
+		return
+	}
+	// Große Körper belegen viel Speicher: nur wenige gleichzeitig.
+	if r.ContentLength < 0 || r.ContentLength > smallBody {
+		select {
+		case bigBodies <- struct{}{}:
+			defer func() { <-bigBodies }()
+		case <-r.Context().Done():
+			return
+		}
+		// Das Warten auf den Platz darf nicht von der Lesefrist des Servers
+		// abgehen: sie beginnt neu, sobald der Körper gelesen werden darf. Ein
+		// Server ohne Fristen oder ein Recorder meldet ErrNotSupported.
+		_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(bodyReadWindow))
+	}
 	var body struct {
 		Chunks []store.Chunk `json:"chunks"`
 	}
-	if err := readJSON(r, &body); err != nil {
-		writeStoreError(w, http.StatusBadRequest, err)
+	if !readLimitedJSON(w, r, &body, maxChunkBody) {
 		return
 	}
 	if err := a.st.AppendChunks(id, body.Chunks); err != nil {
@@ -58,18 +150,37 @@ func (a *api) appendChunks(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) listSessions(w http.ResponseWriter, r *http.Request) {
-	sessions, err := a.st.ListSessions(axesFromQuery(r), intParam(r, "limit", 50))
+	limit := intParam(r, "limit", 50)
+	pa := a.access(r)
+	dbFilter, viewFilter, _ := a.sessionFilters(axesFromQuery(r), limit)
+	// Metadaten (wer arbeitet wo) sehen Mitglieder ab member; die eigenen
+	// Sessions bleiben dem Besitzer. Titel, Zähler und Adresse stammen aus dem
+	// Transkript und gehören nur dem, der es lesen darf; Gäste sehen weder
+	// Maschine, Branch, Pfad noch Besitzer. Die Sichtbarkeit entscheidet vor dem
+	// Abschneiden auf limit (#2447): die Antwort hängt nicht davon ab, wie viele
+	// verborgene Sessions es gibt oder wie aktuell sie sind.
+	sessions, err := a.st.ListSessionsVisible(dbFilter, limit, ownerFilter(r), func(sess store.Session) bool {
+		return pa.CanSeeSessionMeta(sess) && pa.MatchesAxes(pa.MetaView(sess), viewFilter)
+	}, store.SessionPrefilter{})
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, 200, sessions)
+	out := make([]store.Session, 0, len(sessions))
+	for _, sess := range sessions {
+		out = append(out, pa.MetaView(sess))
+	}
+	pa.Filtered()
+	writeJSON(w, 200, out)
 }
 
 func (a *api) readSession(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(r)
+	id, ok := a.sessionPathID(r)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "bad session id")
+		return
+	}
+	if !a.checkTranscript(w, r, id) {
 		return
 	}
 	chunks, err := a.st.ReadSession(id, intParam(r, "from", 0), intParam(r, "limit", 200))
@@ -84,9 +195,12 @@ func (a *api) readSession(w http.ResponseWriter, r *http.Request) {
 // The harnesses expire their own transcripts, so this is what makes ghosttree
 // the long-term copy rather than just an index of one.
 func (a *api) rawSession(w http.ResponseWriter, r *http.Request) {
-	id, ok := pathID(r)
+	id, ok := a.sessionPathID(r)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "bad session id")
+		return
+	}
+	if !a.checkTranscript(w, r, id) {
 		return
 	}
 	lines, err := a.st.SessionRaw(id)
@@ -109,6 +223,10 @@ type knowledgeRequest struct {
 	AutoScope *struct {
 		Context scope.Axes `json:"context"`
 	} `json:"auto_scope"`
+	// Supersedes: older entries this one replaces, with the reason. They are
+	// checked before anything is written and hidden right after.
+	Supersedes      []int64 `json:"supersedes"`
+	SupersedeReason string  `json:"supersede_reason"`
 }
 
 func (a *api) createKnowledge(w http.ResponseWriter, r *http.Request) {
@@ -129,33 +247,77 @@ func (a *api) createKnowledge(w http.ResponseWriter, r *http.Request) {
 	if k.Scope.IsGlobal() && req.AutoScope != nil {
 		k.Scope = scope.DefaultAxes(k.Type, req.AutoScope.Context)
 	}
-	k.Person = personOf(r)
-	id, err := a.st.InsertKnowledge(k)
+	if !a.gateMachineNote(w, r, k.Scope.Machine) || !a.gateProject(w, r, k.Scope.Project) {
+		return
+	}
+	// Die Zuschreibung kommt aus dem Token und ist danach unveränderlich.
+	k.Person, k.ConfirmedBy = personOf(r), ""
+	k.AuthorID = authorIDOf(r)
+	if k.Confidence == "verified" {
+		k.ConfirmedBy = k.Person
+	}
+	if denyAccess(w, a.access(r).CheckKnowledgeCreate(k)) {
+		return
+	}
+	a.access(r).DropWrittenSessionNumber(&k)
+	// Ein Verweis auf eine Session gilt nur für die eigene.
+	if denyAccess(w, a.access(r).CheckWrittenSessionRef(k.SessionRef)) {
+		return
+	}
+	if len(req.Supersedes) > 0 && !a.checkSupersedable(w, r, k, req.Supersedes, req.SupersedeReason) {
+		return
+	}
+	explanation, ok := checkExplanation(w, k.Explanation)
+	if !ok {
+		return
+	}
+	k.Explanation = ""
+	var id int64
+	var err error
+	if len(req.Supersedes) > 0 {
+		id, err = a.st.InsertKnowledgeSuperseding(k, req.Supersedes, req.SupersedeReason, supersedeActor(r, k.Harness))
+		if writeSupersedeError(w, err) {
+			return
+		}
+	} else {
+		id, err = a.st.InsertKnowledge(k)
+	}
 	if err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
+	a.saveExplanation(explain.KindKnowledge, id, explanation)
 	saved, err := a.st.KnowledgeByID(id)
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, 200, saved)
+	writeJSON(w, 200, a.access(r).KnowledgeView(saved))
 }
 
 func (a *api) listKnowledge(w http.ResponseWriter, r *http.Request) {
 	var ks []store.Knowledge
 	var err error
+	if !a.listGateEntries(w, r, scope.NormalizeRemote(r.URL.Query().Get("project")), store.ResKnowledge) {
+		return
+	}
 	if r.URL.Query().Get("include_archived") == "1" {
 		ks, err = a.st.KnowledgeForProject(scope.NormalizeRemote(r.URL.Query().Get("project")))
 	} else {
-		ks, err = a.st.KnowledgeForContext(axesFromQuery(r))
+		ks, err = a.st.KnowledgeForContext(axesFromQuery(r), a.access(r).Viewer())
 	}
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, 200, ks)
+	pa := a.access(r)
+	keep := pa.CanSeeKnowledge
+	if r.URL.Query().Get("deliverable") == "1" {
+		// For readers that hand the content on to agents or into files (the
+		// repository mirror): the same test as the bootstrap.
+		keep = func(k store.Knowledge) bool { return pa.CanSeeKnowledge(k) && pa.CanDeliverKnowledge(k) }
+	}
+	writeJSON(w, 200, pa.KnowledgeViews(filterTo(ks, 0, keep)))
 }
 
 func (a *api) insertMigratedKnowledge(w http.ResponseWriter, r *http.Request) {
@@ -165,7 +327,14 @@ func (a *api) insertMigratedKnowledge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.Knowledge.Person = personOf(r)
+	in.Knowledge.AuthorID = authorIDOf(r)
 	in.Knowledge.Scope = scope.CanonicalAxes(in.Knowledge.Scope)
+	if denyAccess(w, a.access(r).CheckKnowledgeCreate(in.Knowledge)) {
+		return
+	}
+	if denyAccess(w, a.access(r).CheckWrittenSessionRef(in.Knowledge.SessionRef)) {
+		return
+	}
 	saved, err := a.st.InsertMigrated(in)
 	if err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)
@@ -183,6 +352,9 @@ func (a *api) beginMigration(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
+	if denyAccess(w, a.access(r).Check(scope.NormalizeRemote(body.Project), store.ResKnowledge, store.ActCreate, store.Object{Own: true})) {
+		return
+	}
 	id, err := a.st.BeginMigration(scope.NormalizeRemote(body.Project), body.Artifacts)
 	if err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)
@@ -195,6 +367,9 @@ func (a *api) completeMigration(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathID(r)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "bad migration id")
+		return
+	}
+	if !a.checkMigration(w, r, id) {
 		return
 	}
 	if err := a.st.CompleteMigration(id); err != nil {
@@ -224,6 +399,9 @@ func (a *api) insertDocumentMigration(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "source, digest, document_id and revision are required")
 		return
 	}
+	if !a.checkMigration(w, r, id) {
+		return
+	}
 	if err := a.st.InsertDocumentMigration(id, body.Source, body.Digest, body.DocumentID, body.Revision); err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
@@ -232,6 +410,9 @@ func (a *api) insertDocumentMigration(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) completedMigrationArtifacts(w http.ResponseWriter, r *http.Request) {
+	if denyAccess(w, a.access(r).Check(scope.NormalizeRemote(r.URL.Query().Get("project")), store.ResKnowledge, store.ActCreate, store.Object{Own: true})) {
+		return
+	}
 	out, err := a.st.CompletedMigrationArtifacts(scope.NormalizeRemote(r.URL.Query().Get("project")))
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
@@ -242,6 +423,9 @@ func (a *api) completedMigrationArtifacts(w http.ResponseWriter, r *http.Request
 
 func (a *api) completedDocumentArtifacts(w http.ResponseWriter, r *http.Request) {
 	project := scope.NormalizeRemote(r.URL.Query().Get("project"))
+	if denyAccess(w, a.access(r).Check(project, store.ResKnowledge, store.ActCreate, store.Object{Own: true})) {
+		return
+	}
 	out, err := a.st.CompletedDocumentArtifacts(project)
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
@@ -259,11 +443,17 @@ type PendingEntry struct {
 }
 
 func (a *api) pendingKnowledge(w http.ResponseWriter, r *http.Request) {
-	ks, err := a.st.PendingKnowledge(r.URL.Query().Get("project"), intParam(r, "limit", 50))
+	limit := intParam(r, "limit", 50)
+	if !a.listGateEntries(w, r, scope.NormalizeRemote(r.URL.Query().Get("project")), store.ResKnowledge) {
+		return
+	}
+	ks, err := a.st.PendingKnowledge(r.URL.Query().Get("project"), a.overfetch(limit), a.access(r).Viewer())
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
+	pa := a.access(r)
+	ks = filterTo(ks, limit, pa.CanSeeKnowledge)
 	out := []PendingEntry{}
 	for _, k := range ks {
 		ev, err := a.st.EvidenceFor(k.ID)
@@ -284,7 +474,8 @@ func (a *api) pendingKnowledge(w http.ResponseWriter, r *http.Request) {
 			writeStoreError(w, http.StatusInternalServerError, proofErr)
 			return
 		}
-		out = append(out, PendingEntry{Knowledge: k, Evidence: ev, MigrationEvidence: migrationProof, Recurrence: n})
+		ev, n = pa.EvidenceView(k.Scope.Project, ev, n)
+		out = append(out, PendingEntry{Knowledge: pa.KnowledgeView(k), Evidence: ev, MigrationEvidence: pa.MigrationEvidenceView(k.Scope.Project, migrationProof), Recurrence: n})
 	}
 	writeJSON(w, 200, out)
 }
@@ -301,6 +492,7 @@ func (a *api) getKnowledge(w http.ResponseWriter, r *http.Request) {
 	}
 	k, err := a.st.KnowledgeByID(id)
 	if err == sql.ErrNoRows {
+		a.access(r).Filtered()
 		writeErr(w, http.StatusNotFound, "no such knowledge entry")
 		return
 	}
@@ -308,13 +500,32 @@ func (a *api) getKnowledge(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, 200, k)
+	if denyAccess(w, a.access(r).CheckKnowledge(k, store.ActRead)) {
+		return
+	}
+	k.Closure = a.access(r).KnowledgeClosure(k)
+	writeJSON(w, 200, a.access(r).KnowledgeView(k))
 }
 
 func (a *api) knowledgeHistory(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathID(r)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "bad knowledge id")
+		return
+	}
+	k, err := a.st.KnowledgeRef(id)
+	if err == nil && !a.access(r).CanSeeKnowledgeHistory(k) {
+		// Gäste sehen den Eintrag vielleicht, aber nicht, was vor der Freigabe
+		// dort stand: dieselbe Antwort wie für einen unbekannten Eintrag.
+		err = sql.ErrNoRows
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		a.access(r).Filtered()
+		writeErr(w, http.StatusNotFound, "no such knowledge entry")
+		return
+	}
+	if err != nil {
+		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
 	history, err := a.st.KnowledgeHistory(id)
@@ -343,6 +554,10 @@ func (a *api) setRegressionCover(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
+	// Eine Aussage über die Absicherung ist eine Beurteilung wie "verified".
+	if !a.checkKnowledgeRef(w, r, id, store.ActVerify) {
+		return
+	}
 	if err := a.st.SetRegressionCover(id, in.State, in.Test); err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
@@ -351,14 +566,17 @@ func (a *api) setRegressionCover(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) regressionGaps(w http.ResponseWriter, r *http.Request) {
-	gaps, unreviewed, err := a.st.RegressionGaps(axesFromQuery(r))
+	if !a.listGate(w, r, scope.NormalizeRemote(r.URL.Query().Get("project")), store.ResKnowledge) {
+		return
+	}
+	gaps, unreviewed, err := a.st.RegressionGapsVisible(axesFromQuery(r), a.access(r).CanSeeKnowledge)
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
 	// Die Zahl der Unbeurteilten reist mit: eine kurze Lückenliste ohne sie
 	// liest sich als Entwarnung, obwohl niemand hingesehen hat.
-	writeJSON(w, http.StatusOK, map[string]any{"gaps": gaps, "unreviewed": unreviewed})
+	writeJSON(w, http.StatusOK, map[string]any{"gaps": a.access(r).KnowledgeViews(gaps), "unreviewed": unreviewed})
 }
 
 func (a *api) patchKnowledge(w http.ResponseWriter, r *http.Request) {
@@ -373,9 +591,34 @@ func (a *api) patchKnowledge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Der Token ist die einzige vertrauenswürdige Quelle für den Bestätiger;
-	// ein mitgesendeter Name darf keine fremde Freigabe vortäuschen.
+	// ein mitgesendeter Name darf keine fremde Freigabe vortäuschen. Die
+	// Zuschreibung (person) ist nicht patchbar und bleibt dem ersten Autor.
 	delete(patch, "confirmed_by")
+	// Eine Beurteilung (confidence) verlangt lead, owner oder can_review: sie ist
+	// keine Änderung des Textes, und der Prüfer ändert fremde Einträge nicht,
+	// sondern beurteilt sie. Alles andere ist Ändern: Autor, lead, owner.
+	_, judges := patch["confidence"]
+	if len(patch) > 1 || !judges {
+		if !a.checkKnowledgeRef(w, r, id, store.ActEdit) {
+			return
+		}
+	}
 	if confidence, ok := patch["confidence"]; ok {
+		// Der Besitzer der privaten Herkunfts-Session gibt einen gehaltenen Fund
+		// frei (staged), verifizieren darf er ihn nicht.
+		if ref, err := a.st.KnowledgeRef(id); err == nil && confidence == "staged" && a.access(r).CanReleaseKnowledge(ref) &&
+			a.access(r).CheckKnowledge(ref, store.ActVerify) != nil {
+			patch["confirmed_by"] = ""
+			if err := a.st.UpdateKnowledgeBy(id, patch, personOf(r)); err != nil {
+				writeStoreError(w, http.StatusBadRequest, err)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if !a.checkKnowledgeRef(w, r, id, store.ActVerify) {
+			return
+		}
 		if confidence == "verified" {
 			patch["confirmed_by"] = personOf(r)
 		} else {
@@ -403,6 +646,9 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 	}
 	filter := axesFromQuery(r)
 	limit := intParam(r, "limit", 20)
+	pa := a.access(r)
+	fetch := a.overfetch(limit)
+	pa.Filtered()
 	res := searchResult{Knowledge: []store.Knowledge{}, Sessions: []store.SessionHit{}, Requests: []requestdomain.SearchHit{}}
 	if kind == "knowledge" || kind == "all" {
 		// scope=union searches what the session would read, not an exact match.
@@ -410,15 +656,17 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("scope") == "union" {
 			search = a.st.SearchKnowledgeForContext
 		}
-		ks, err := search(q, filter, limit)
+		ks, err := search(q, filter, fetch, pa.Viewer())
 		if err != nil {
 			writeStoreError(w, http.StatusInternalServerError, err)
 			return
 		}
-		res.Knowledge = ks
+		// Suche und Bootstrap beliefern Agenten: zusätzlich zur Sichtbarkeit gilt
+		// die Auslieferungsregel (Autor ist im Projekt aktuell member).
+		res.Knowledge = pa.KnowledgeViews(filterTo(ks, limit, func(k store.Knowledge) bool { return pa.CanSeeKnowledge(k) && pa.CanDeliverKnowledge(k) }))
 	}
 	if kind == "sessions" || kind == "all" {
-		hits, err := a.st.SearchSessions(q, filter, r.URL.Query().Get("exclude_session"), limit)
+		hits, err := a.searchSessions(pa, q, filter, r.URL.Query().Get("exclude_session"), limit, fetch)
 		if err != nil {
 			writeStoreError(w, http.StatusInternalServerError, err)
 			return
@@ -426,14 +674,65 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 		res.Sessions = hits
 	}
 	if kind == "requests" || kind == "all" {
-		page, err := a.st.SearchRequests(requestdomain.SearchFilter{Query: q, Scope: scope.Axes{Project: filter.Project}, Limit: limit})
+		page, err := a.st.SearchRequests(a.requestFilter(r, requestdomain.SearchFilter{Query: q, Scope: scope.Axes{Project: filter.Project}, Limit: limit}))
 		if err != nil {
 			writeStoreError(w, http.StatusInternalServerError, err)
 			return
 		}
+		for i := range page.Results {
+			page.Results[i] = pa.RequestHitView(page.Results[i])
+		}
 		res.Requests = page.Results
+		a.noteRequestHits(r, page.Results)
 	}
 	writeJSON(w, 200, res)
+}
+
+// searchSessions is the session half of search: the hits the viewer may read,
+// cut to limit, each as the viewer sees it. It is a function of its own because
+// the hint of relevance delivery has to ask the same question with the same
+// rules, so that a hint can never name a session context_search would not show.
+func (a *api) searchSessions(pa *store.ProjectAccess, q string, filter scope.Axes, excludeSession string, limit, fetch int) ([]store.SessionHit, error) {
+	dbFilter, viewFilter, fetchSessions := a.sessionFilters(filter, fetch)
+	// Mit Durchsetzung steht die lesbare Menge vor dem Rang fest: ein
+	// verborgener Treffer darf weder einen sichtbaren verdrängen noch
+	// verraten, wie viele es gibt (#2447). Das Limit gilt danach.
+	// Die Lese-Regel steckt als SQL in der Abfrage (TranscriptPrefilter): die
+	// Zeilenprüfung läuft nur über lesbare Kandidaten, und wer ohnehin alles
+	// in seinem Filter lesen darf, braucht keine. Der Volltext-MATCH selbst
+	// läuft über den ganzen Index, die Laufzeit hängt also von den Treffern
+	// verborgener Sessions mit ab.
+	var readable func(store.Session) bool
+	var pre store.SessionPrefilter
+	if a.st.AccessEnforced() {
+		fetchSessions = limit
+		pre = pa.TranscriptPrefilter()
+		if !pre.Exact || viewFilter.Machine != "" || viewFilter.Branch != "" {
+			readable = func(sess store.Session) bool {
+				return pa.CanSeeTranscript(sess) && pa.MatchesAxes(pa.MetaView(sess), viewFilter)
+			}
+		}
+	}
+	hits, err := a.st.SearchSessionsVisible(q, dbFilter, excludeSession, fetchSessions, readable, pre)
+	if err != nil {
+		return nil, err
+	}
+	// Ein Treffer zeigt einen Ausschnitt des Transkripts: es gilt die Regel
+	// für Transkripte, nicht die für Metadaten.
+	out := []store.SessionHit{}
+	for _, h := range hits {
+		if !pa.CanSeeTranscript(h.Session) {
+			continue
+		}
+		h.Session = pa.MetaView(h.Session)
+		if pa.MatchesAxes(h.Session, viewFilter) {
+			out = append(out, h)
+			if len(out) >= limit {
+				break
+			}
+		}
+	}
+	return out, nil
 }
 
 const defaultBudget = 4000
@@ -444,19 +743,31 @@ func (a *api) bootstrap(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
-	entries, err := a.st.KnowledgeForActivatedContext(axesFromQuery(r), actx)
+	entries, err := a.st.KnowledgeForActivatedContext(axesFromQuery(r), actx, a.access(r).Viewer())
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
-	openRequests, err := a.st.CountOpenRequests(axesFromQuery(r))
-	if err != nil {
-		writeStoreError(w, http.StatusInternalServerError, err)
-		return
+	// Was beim Sessionstart ausgeliefert wird, folgt derselben Sichtbarkeit wie
+	// jede andere Lesung: globales Wissen für alle, Projektwissen nach Rolle,
+	// Maschinenwissen nur für den Besitzer der Maschine.
+	pa := a.access(r)
+	entries = filterTo(entries, 0, func(k store.Knowledge) bool { return pa.CanSeeKnowledge(k) && pa.CanDeliverKnowledge(k) })
+	openRequests := 0
+	if pa.CanSeeProject(axesFromQuery(r).Project, store.ResRequest) {
+		if openRequests, err = a.st.CountOpenRequestsFor(pa.Viewer(), axesFromQuery(r)); err != nil {
+			writeStoreError(w, http.StatusInternalServerError, err)
+			return
+		}
 	}
+	body, shown := renderBootstrapShown(entries, intParam(r, "budget", defaultBudget), false)
+	// Recorded before the answer goes out, so the first prompt of the session
+	// cannot be handled ahead of it. A failed write costs only a possible repeat
+	// later, and the briefing is not worth failing for that.
+	a.rememberDelivered(r, store.DeliveredByBootstrap, shown)
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 	w.WriteHeader(200)
-	fmt.Fprint(w, RenderBootstrap(entries, intParam(r, "budget", defaultBudget)))
+	fmt.Fprint(w, body)
 	if openRequests > 0 {
 		plural := "request"
 		if openRequests != 1 {
@@ -464,10 +775,18 @@ func (a *api) bootstrap(w http.ResponseWriter, r *http.Request) {
 		}
 		fmt.Fprintf(w, "\n## Work ledger (ghosttree)\n\n%d open %s in this scope. For substantial feature, architecture, migration, or multi-session work, search the request ledger first; continue a match or create one with explicit acceptance criteria. Trivial local fixes and routine maintenance do not require a request.\n", openRequests, plural)
 	}
+	// Vor der Prüfung auf Session-Metadaten: ein Gast mit einer zugewiesenen
+	// Aufgabe liest keine Sessions und bekommt den Abschnitt trotzdem.
+	if waiting, err := a.st.WaitingTasksFor(pa, axesFromQuery(r).Project, waitingMaxEach); err == nil {
+		fmt.Fprint(w, renderWaiting(waiting))
+	}
 	// Der Zähler sagt, dass es etwas gibt; erst diese Zeile sagt, dass etwas
 	// angefangen und liegengeblieben ist. Ein Fehler kostet nur die Auskunft:
 	// der Bootstrap ist bis hierhin schon geschrieben.
-	if threads, err := a.st.InterruptedWork(axesFromQuery(r),
+	if !pa.Allow(axesFromQuery(r).Project, store.ResSessionMeta, store.ActRead, store.Object{}) {
+		return
+	}
+	if threads, err := a.st.InterruptedWorkFor(pa.Viewer(), axesFromQuery(r),
 		time.Now().UTC().Add(-interruptedWindow).Format(time.RFC3339),
 		r.URL.Query().Get("session"), maxInterruptedThreads); err == nil {
 		fmt.Fprint(w, renderInterrupted(threads, time.Now().UTC()))
@@ -475,7 +794,12 @@ func (a *api) bootstrap(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) interrupted(w http.ResponseWriter, r *http.Request) {
-	threads, err := a.st.InterruptedWork(axesFromQuery(r),
+	// Wie der Bootstrap: wer das Projekt nicht sieht, bekommt keine Liste.
+	if !a.access(r).Allow(axesFromQuery(r).Project, store.ResSessionMeta, store.ActRead, store.Object{}) {
+		writeJSON(w, http.StatusOK, []store.InterruptedThread{})
+		return
+	}
+	threads, err := a.st.InterruptedWorkFor(a.access(r).Viewer(), axesFromQuery(r),
 		time.Now().UTC().Add(-interruptedWindow).Format(time.RFC3339),
 		r.URL.Query().Get("session"), maxInterruptedThreads)
 	if err != nil {
@@ -483,37 +807,6 @@ func (a *api) interrupted(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, threads)
-}
-
-// maxRelevantEntries caps what one prompt may pull in. Three is enough to
-// answer a sentence and few enough that a wrong guess stays cheap.
-const maxRelevantEntries = 3
-
-// relevant answers with knowledge the text gives a reason to deliver, or with
-// nothing at all — which is the usual case, and is an empty body rather than an
-// error.
-func (a *api) relevant(w http.ResponseWriter, r *http.Request) {
-	limit := intParam(r, "limit", maxRelevantEntries)
-	if limit > maxRelevantEntries {
-		limit = maxRelevantEntries
-	}
-	entries, err := a.st.RelevantKnowledge(r.URL.Query().Get("q"), axesFromQuery(r), limit)
-	if err != nil {
-		writeStoreError(w, http.StatusInternalServerError, err)
-		return
-	}
-	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
-	w.WriteHeader(200)
-	if len(entries) == 0 {
-		return
-	}
-	// A different heading from the bootstrap on purpose. This arrived because of
-	// what was just said, and a reader who cannot tell the two apart cannot judge
-	// why it is in front of them.
-	fmt.Fprint(w, "## Possibly relevant to what you just said (ghosttree)\n\n")
-	for _, k := range entries {
-		fmt.Fprintf(w, "- [%s|%s] %s — %s\n", k.Type, scopeLabel(k.Scope), k.Title, truncate(oneLine(k.Body), 400))
-	}
 }
 
 // renderBootstrap builds the auto-injected context package. Binding
@@ -529,12 +822,26 @@ func RenderBootstrapPreview(entries []store.Knowledge, budget int) string {
 	return renderBootstrap(entries, budget, true)
 }
 
+// keepCurrentHint is the one rule about writing that the briefing repeats. An
+// agent that finds a known state changed used to file a follow-up, and old and
+// new stayed active side by side ("share created", "share removed again").
+const keepCurrentHint = "Before writing, search; if a known state changed, supersede the old entry (context_remember supersedes) instead of adding a follow-up.\n"
+
 func renderBootstrap(entries []store.Knowledge, budget int, includeStaged bool) string {
+	out, _ := renderBootstrapShown(entries, budget, includeStaged)
+	return out
+}
+
+// renderBootstrapShown renders the package and also returns which entries it
+// actually carries. The budget cuts entries off, and an entry that was cut was
+// not delivered: the delivery memory must not claim it was, or relevance
+// delivery would never offer it either.
+func renderBootstrapShown(entries []store.Knowledge, budget int, includeStaged bool) (string, []int64) {
 	if budget <= 0 {
 		budget = defaultBudget
 	}
 	if len(entries) == 0 {
-		return ""
+		return "", nil
 	}
 	var instructions, confirmed, staged []store.Knowledge
 	held := map[string]int{}
@@ -552,7 +859,9 @@ func renderBootstrap(entries []store.Knowledge, budget int, includeStaged bool) 
 		}
 	}
 	var b strings.Builder
+	var shown []int64
 	b.WriteString("## Known context (ghosttree)\n")
+	b.WriteString(keepCurrentHint)
 	if len(instructions) > 0 {
 		b.WriteString("\n### Instructions (binding)\n")
 		for _, k := range instructions {
@@ -561,6 +870,7 @@ func renderBootstrap(entries []store.Knowledge, budget int, includeStaged bool) 
 				label += " | " + gate
 			}
 			fmt.Fprintf(&b, "- [%s] %s — %s\n", label, k.Title, oneLine(k.Body))
+			shown = append(shown, k.ID)
 		}
 	}
 	// Instructions do not compete for the context budget. Preserve the same
@@ -581,8 +891,8 @@ func renderBootstrap(entries []store.Knowledge, budget int, includeStaged bool) 
 	// The two passes exist for the reserve, not for the reader: one shared set
 	// of headings keeps them from looking like two separate sections.
 	headings := map[string]bool{}
-	truncated := writeGroups(&b, broad, broadLimit, "", headings)
-	truncated = writeGroups(&b, projectScoped, contentLimit, "", headings) || truncated
+	truncated := writeGroups(&b, broad, broadLimit, "", headings, &shown)
+	truncated = writeGroups(&b, projectScoped, contentLimit, "", headings, &shown) || truncated
 	if len(staged) > 0 && !truncated {
 		truncated = writePreviewGroup(&b, staged, contentLimit)
 	}
@@ -590,7 +900,7 @@ func renderBootstrap(entries []store.Knowledge, budget int, includeStaged bool) 
 		b.WriteString("…(truncated, use context_search for more)\n")
 	}
 	writeHeldIndex(&b, held)
-	return b.String()
+	return b.String(), shown
 }
 
 // writeHeldIndex names what was deliberately not sent. Withholding silently
@@ -689,8 +999,8 @@ func splitByScopeBreadth(entries []store.Knowledge) (broad, projectScoped []stor
 // writeGroups appends entries grouped by type and reports whether the budget
 // ran out. header is written lazily, so an empty group prints nothing.
 // headings is shared across calls so a type printed by one pass is not printed
-// again by the next.
-func writeGroups(b *strings.Builder, entries []store.Knowledge, budget int, header string, headings map[string]bool) bool {
+// again by the next. shown collects the id of every entry that was written.
+func writeGroups(b *strings.Builder, entries []store.Knowledge, budget int, header string, headings map[string]bool, shown *[]int64) bool {
 	if len(entries) == 0 {
 		return false
 	}
@@ -723,6 +1033,7 @@ func writeGroups(b *strings.Builder, entries []store.Knowledge, budget int, head
 				return true
 			}
 			b.WriteString(line)
+			*shown = append(*shown, k.ID)
 			wroteHeader, headings[t] = true, true
 		}
 	}
@@ -753,6 +1064,13 @@ func (a *api) putGhost(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "project is required")
 		return
 	}
+	g.Project = scope.NormalizeRemote(g.Project)
+	if !a.gateProject(w, r, g.Project) {
+		return
+	}
+	if denyAccess(w, a.access(r).Check(g.Project, store.ResGhost, store.ActCreate, store.Object{})) {
+		return
+	}
 	g.Person = personOf(r)
 	id, err := a.st.PutGhostFile(g)
 	if err != nil {
@@ -768,12 +1086,19 @@ func (a *api) putGhost(w http.ResponseWriter, r *http.Request) {
 // 900-ms-Budget des Hooks.
 func (a *api) ghostsForPath(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	// Auslieferungspfad des Hooks: ohne Leserecht kommt eine leere Liste und es
+	// wird nichts als gesagt vermerkt.
+	if !a.access(r).Allow(scope.NormalizeRemote(q.Get("project")), store.ResGhost, store.ActRead, store.Object{}) {
+		writeJSON(w, 200, []store.GhostFile{})
+		return
+	}
 	entries, err := a.st.GhostFilesForDelivery(q.Get("project"), q.Get("path"), q.Get("session"))
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, 200, entries)
+	pa := a.access(r)
+	writeJSON(w, 200, filterTo(entries, 0, func(g store.GhostFile) bool { return pa.CanSeeGhost(g) && pa.CanDeliverGhost(g) }))
 }
 
 // ghostsMove hängt eine Beschreibung samt Historie auf einen neuen Pfad. Die
@@ -789,6 +1114,9 @@ func (a *api) ghostsMove(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
+	if denyAccess(w, a.access(r).Check(scope.NormalizeRemote(in.Project), store.ResGhost, store.ActEdit, store.Object{})) {
+		return
+	}
 	if err := a.st.MoveGhostFile(in.Project, in.From, in.To); err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
@@ -798,6 +1126,9 @@ func (a *api) ghostsMove(w http.ResponseWriter, r *http.Request) {
 
 func (a *api) ghostHistory(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	if !a.listGate(w, r, scope.NormalizeRemote(q.Get("project")), store.ResGhost) {
+		return
+	}
 	// Der Hook will nur die Zahl. Den ganzen Text zu übertragen, um ihn dann
 	// zu zählen, wäre auf einem Pfad mit 900-ms-Budget die falsche Rechnung.
 	if q.Get("count") != "" {
@@ -827,20 +1158,48 @@ func (a *api) ghostHistory(w http.ResponseWriter, r *http.Request) {
 
 func (a *api) ghostTree(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	if !a.listGateEntries(w, r, scope.NormalizeRemote(q.Get("project")), store.ResGhost) {
+		return
+	}
 	entries, err := a.st.GhostFilesUnder(q.Get("project"), q.Get("prefix"))
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, 200, entries)
+	writeJSON(w, 200, filterTo(entries, 0, a.access(r).CanSeeGhost))
 }
 
 func (a *api) searchGhosts(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	entries, err := a.st.SearchGhostFiles(q.Get("q"), q.Get("project"), intParam(r, "limit", 20))
+	pa := a.access(r)
+	if q.Get("project") != "" && !a.listGateEntries(w, r, scope.NormalizeRemote(q.Get("project")), store.ResGhost) {
+		return
+	}
+	pa.Filtered()
+	limit := intParam(r, "limit", 20)
+	entries, err := a.st.SearchGhostFiles(q.Get("q"), q.Get("project"), a.overfetch(limit))
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, 200, entries)
+	writeJSON(w, 200, filterTo(entries, limit, func(g store.GhostFile) bool { return pa.CanSeeGhost(g) && pa.CanDeliverGhost(g) }))
+}
+
+// sessionFilters trennt den Filter für die Datenbank von dem, der auf das
+// angewendet wird, was der Betrachter von einer Session sieht. Maschine und
+// Branch gelten nie auf dem Rohwert: ein Gast sähe sonst an der Trefferzahl, wo
+// eine Session läuft. Ohne Durchsetzung bleibt es beim Datenbankfilter.
+func (a *api) sessionFilters(f scope.Axes, fetch int) (db, view scope.Axes, limit int) {
+	if !a.st.AccessEnforced() || (f.Machine == "" && f.Branch == "") {
+		return f, scope.Axes{}, fetch
+	}
+	view = scope.Axes{Machine: f.Machine, Branch: f.Branch}
+	f.Machine, f.Branch = "", ""
+	return f, view, max(fetch, 1000)
+}
+
+// authorIDOf is the numeric account of the caller, 0 when there is none.
+func authorIDOf(r *http.Request) int64 {
+	id, _ := store.AccountNumericID(principalOf(r).ID)
+	return id
 }

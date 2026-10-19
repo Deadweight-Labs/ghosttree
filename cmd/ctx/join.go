@@ -1,0 +1,1302 @@
+package main
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
+	"os"
+	"os/exec"
+	"os/signal"
+	"path/filepath"
+	"regexp"
+	"runtime"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"syscall"
+	"time"
+	"unicode"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/client"
+	"github.com/Deadweight-Labs/ghosttree/internal/config"
+	"github.com/Deadweight-Labs/ghosttree/internal/installer"
+	"github.com/Deadweight-Labs/ghosttree/internal/privatefile"
+)
+
+// Austauschbar für Tests: Terminal, Browser, Erkennung und Installation.
+var (
+	joinTTY         = openDevTTY
+	joinOpenBrowser = openBrowser
+	joinHasDisplay  = hasDisplay
+	joinCanOpen     = canOpenBrowser
+	joinDetect      = detectHarnesses
+	joinInstall     = cmdInstall
+	joinCollector   = joinInstallCollector
+	joinCollectorUp = waitCollectorActive
+	joinTimeout     = joinDefaultTimeout
+
+	startCallbackFunc = startCallback
+)
+
+// joinDefaultTimeout deckt die Lebensdauer einer Join-Sitzung (30 Minuten, etwa
+// für eine lange Registrierung beim Identitätsanbieter).
+const joinDefaultTimeout = 30 * time.Minute
+
+const (
+	errInterrupted = "Setup was interrupted. Run the command again."
+	joinPairPath   = "/join/pair"
+)
+
+var (
+	pairRE        = regexp.MustCompile(`^[A-Za-z0-9]{4}-?[A-Za-z0-9]{4}$`)
+	confirmCodeRE = regexp.MustCompile(`^[A-Z0-9]{4}$`)
+)
+
+var machineNameRE = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
+
+// ---- Wiederaufnahme nach Abbruch ----
+
+// joinResumeTTL: so lange gilt das lokal abgelegte Wiederaufnahme-Token, kürzer
+// als die Sitzung des Servers.
+const joinResumeTTL = 10 * time.Minute
+
+type joinResume struct {
+	Server   string `json:"server"`
+	PairHash string `json:"pair_hash"`
+	Resume   string `json:"resume"`
+	Expires  int64  `json:"expires"`
+}
+
+func joinResumePath() string { return filepath.Join(filepath.Dir(config.Path()), "join-resume.json") }
+
+func resumePairHash(pair string) string {
+	sum := sha256.Sum256([]byte(strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(pair), "-", ""))))
+	return hex.EncodeToString(sum[:])
+}
+
+// loadJoinResume liefert das Token, das der Server beim ersten Claim dieses
+// Codes ausgab, solange es zu diesem Server und Code gehört und nicht abgelaufen
+// ist. Es beweist dem Server, dass derselbe Installer nach Strg-C erneut
+// anfragt; ohne es gilt ein zweiter Claim als fremder.
+func loadJoinResume(server, pair string) string {
+	b, err := os.ReadFile(joinResumePath())
+	if err != nil {
+		return ""
+	}
+	var r joinResume
+	if json.Unmarshal(b, &r) != nil || r.Server != server || r.PairHash != resumePairHash(pair) || time.Now().Unix() >= r.Expires {
+		return ""
+	}
+	return r.Resume
+}
+
+func saveJoinResume(server, pair, token string) {
+	if token == "" {
+		return
+	}
+	b, err := json.Marshal(joinResume{Server: server, PairHash: resumePairHash(pair), Resume: token, Expires: time.Now().Add(joinResumeTTL).Unix()})
+	if err != nil {
+		return
+	}
+	p := joinResumePath()
+	if os.MkdirAll(filepath.Dir(p), 0o755) == nil {
+		_ = privatefile.Write(p, b)
+	}
+}
+
+func clearJoinResume() { _ = os.Remove(joinResumePath()) }
+
+// terminal ist die Rückfragestelle. Sie muss /dev/tty sein, weil stdin bei
+// `curl ... | sh` die Pipe ist.
+type terminal interface {
+	Ask(prompt string) (string, error)
+	Close() error
+}
+
+type devTTY struct {
+	f *os.File
+	r *bufio.Reader
+}
+
+func openDevTTY() (terminal, error) {
+	f, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	if err != nil {
+		return nil, err
+	}
+	return &devTTY{f: f, r: bufio.NewReader(f)}, nil
+}
+
+func (t *devTTY) Ask(prompt string) (string, error) {
+	if _, err := io.WriteString(t.f, prompt); err != nil {
+		return "", err
+	}
+	line, err := t.r.ReadString('\n')
+	if err != nil && line == "" {
+		return "", err
+	}
+	return strings.TrimSpace(line), nil
+}
+
+func (t *devTTY) Close() error { return t.f.Close() }
+
+// pasteTerminal ist ein Terminal, das eine Zeile lesen und das Lesen abbrechen
+// kann. Nur so lässt sich das Einfügen neben dem Loopback anbieten, ohne dass
+// eine liegengebliebene Leseroutine die nächste Antwort (y/n) verschluckt.
+type pasteTerminal interface {
+	terminal
+	CanPaste() bool
+	Paste(ctx context.Context, prompt string) (string, error)
+}
+
+// CanPaste: das Terminal unterstützt Lesefristen, und nur dann lässt sich ein
+// Lesen abbrechen.
+func (t *devTTY) CanPaste() bool { return t.f.SetReadDeadline(time.Time{}) == nil }
+
+// Paste liest eine Zeile und endet mit dem Kontext. Beim Abbruch ist die
+// Leseroutine beendet, bevor Paste zurückkehrt; das Terminal bleibt für die
+// nächste Frage frei.
+func (t *devTTY) Paste(ctx context.Context, prompt string) (string, error) {
+	if _, err := io.WriteString(t.f, prompt); err != nil {
+		return "", err
+	}
+	stop, done := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		select {
+		case <-ctx.Done():
+			_ = t.f.SetReadDeadline(time.Now())
+		case <-stop:
+		}
+	}()
+	line, err := t.r.ReadString('\n')
+	close(stop)
+	<-done
+	_ = t.f.SetReadDeadline(time.Time{})
+	if err != nil && line == "" {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		return "", err
+	}
+	return strings.TrimSpace(line), nil
+}
+
+// ---- PKCE und State ----
+
+// newPKCE liefert einen Verifier nach RFC 7636 (43 Zeichen aus [A-Za-z0-9-_])
+// und seine S256-Challenge.
+func newPKCE() (verifier, challenge string, err error) {
+	raw := make([]byte, 32)
+	if _, err = rand.Read(raw); err != nil {
+		return "", "", err
+	}
+	verifier = base64.RawURLEncoding.EncodeToString(raw)
+	sum := sha256.Sum256([]byte(verifier))
+	return verifier, base64.RawURLEncoding.EncodeToString(sum[:]), nil
+}
+
+func newState() (string, error) {
+	raw := make([]byte, 16)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(raw), nil
+}
+
+// normalizeMachine macht aus einem Hostnamen einen Gerätenamen, den der Server
+// annimmt: nur [A-Za-z0-9._-], höchstens 64 Zeichen.
+func normalizeMachine(in string) string {
+	var b strings.Builder
+	for _, r := range strings.TrimSpace(in) {
+		if r < 128 && (r == '.' || r == '_' || r == '-' || r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z') {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('-')
+		}
+	}
+	out := b.String()
+	if len(out) > 64 {
+		out = out[:64]
+	}
+	if out == "" {
+		return "machine"
+	}
+	return out
+}
+
+// ---- Loopback-Listener ----
+
+var errDenied = errors.New("denied in the browser")
+
+type callbackResult struct {
+	code string
+	err  error
+}
+
+// callback ist der kurzlebige Listener auf 127.0.0.1, der nur für die Dauer
+// des Befehls läuft. Er nimmt genau einen gültigen GET /callback an.
+type callback struct {
+	ln    net.Listener
+	srv   *http.Server
+	state string
+	port  int
+	used  atomic.Bool
+	// settled: der Tausch lief schon über den eingefügten Code. Ein späterer
+	// Callback desselben Browsers bekommt die Erfolgsseite und liefert nichts mehr.
+	settled atomic.Bool
+	got     chan callbackResult
+	result  chan error
+}
+
+func startCallback(state string) (*callback, error) {
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		return nil, err
+	}
+	c := &callback{ln: ln, state: state, got: make(chan callbackResult, 1), result: make(chan error, 1)}
+	c.port = ln.Addr().(*net.TCPAddr).Port
+	c.srv = &http.Server{Handler: http.HandlerFunc(c.handle), ReadHeaderTimeout: 10 * time.Second}
+	go c.srv.Serve(ln)
+	return c, nil
+}
+
+func (c *callback) Addr() string { return c.ln.Addr().String() }
+func (c *callback) Port() int    { return c.port }
+
+func (c *callback) hostOK(host string) bool {
+	p := strconv.Itoa(c.port)
+	return host == "127.0.0.1:"+p || host == "localhost:"+p
+}
+
+const (
+	pageDone   = "Connected. You can close this tab."
+	pageFailed = "Setup failed. See your terminal."
+)
+
+func (c *callback) handle(w http.ResponseWriter, r *http.Request) {
+	h := w.Header()
+	h.Set("Cache-Control", "no-store")
+	h.Set("Referrer-Policy", "no-referrer")
+	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'")
+	h.Set("X-Frame-Options", "DENY")
+	h.Set("X-Content-Type-Options", "nosniff")
+	if !c.hostOK(r.Host) {
+		http.Error(w, "bad host", http.StatusBadRequest)
+		return
+	}
+	if r.Method != http.MethodGet {
+		h.Set("Allow", "GET")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !browserNavigation(r) {
+		http.Error(w, "not a top-level navigation", http.StatusForbidden)
+		return
+	}
+	switch r.URL.Path {
+	case "/callback":
+		c.callback(w, r)
+	case "/done":
+		// Das zweite Fenster, das die Seite für den Loopback öffnete, schließt
+		// sich selbst; ein Tab, den der Mensch selbst geöffnet hat, bleibt stehen
+		// und sagt es. Nur dieses eine Skript ist erlaubt (Hash statt 'unsafe-inline').
+		h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; script-src '"+closeScriptHash+"'; frame-ancestors 'none'")
+		writePageScript(w, pageDone, closeScript)
+	case "/failed":
+		writePage(w, pageFailed)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+// browserNavigation lets through only what the redirect after the approval
+// looks like: a top-level navigation. A page that embeds the callback (iframe,
+// image, script) or fetches it carries Sec-Fetch-Mode/-Dest that say so, and a
+// plain GET navigation carries no Origin header. Clients that send no fetch
+// metadata at all (curl, older browsers) pass: the unguessable state is what
+// authenticates the request, this is the second layer.
+func browserNavigation(r *http.Request) bool {
+	mode := r.Header.Get("Sec-Fetch-Mode")
+	// Some browsers add Origin to the redirected navigation; a real navigation
+	// is told by its fetch mode, so Origin only counts without it.
+	if r.Header.Get("Origin") != "" && mode != "navigate" {
+		return false
+	}
+	if mode != "" && mode != "navigate" {
+		return false
+	}
+	if d := r.Header.Get("Sec-Fetch-Dest"); d != "" && d != "document" {
+		return false
+	}
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "", "cross-site", "same-site", "same-origin", "none":
+		return true
+	}
+	return false
+}
+
+func (c *callback) callback(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	if subtle.ConstantTimeCompare([]byte(q.Get("state")), []byte(c.state)) != 1 {
+		http.Error(w, "bad state", http.StatusBadRequest)
+		return
+	}
+	if c.settled.Load() {
+		http.Redirect(w, r, "/done", http.StatusSeeOther)
+		return
+	}
+	var res callbackResult
+	switch {
+	case q.Get("error") == "access_denied":
+		res.err = errDenied
+	case q.Get("error") != "":
+		res.err = errors.New("browser reported an error")
+	default:
+		res.code = q.Get("code")
+		if res.code == "" || len(res.code) > 512 {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+	}
+	if !c.used.CompareAndSwap(false, true) {
+		http.NotFound(w, r)
+		return
+	}
+	c.got <- res
+	target := "/failed"
+	select {
+	case err := <-c.result:
+		if err == nil {
+			target = "/done"
+		}
+	case <-time.After(60 * time.Second):
+	case <-r.Context().Done():
+	}
+	// Der Code steht nur in dieser einen Adresse; danach zeigt der Browser eine saubere.
+	http.Redirect(w, r, target, http.StatusSeeOther)
+}
+
+const closeScript = "window.close()"
+
+// closeScriptHash ist der CSP-Hash von closeScript.
+var closeScriptHash = func() string {
+	sum := sha256.Sum256([]byte(closeScript))
+	return "sha256-" + base64.StdEncoding.EncodeToString(sum[:])
+}()
+
+func writePageScript(w http.ResponseWriter, msg, script string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprintf(w, "<!doctype html><meta charset=utf-8><title>ghosttree</title><p style=\"font:16px system-ui;margin:3em\">%s</p><script>%s</script>\n", msg, script)
+}
+
+func writePage(w http.ResponseWriter, msg string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprintf(w, "<!doctype html><meta charset=utf-8><title>ghosttree</title><p style=\"font:16px system-ui;margin:3em\">%s</p>\n", msg)
+}
+
+// Wait blockiert bis zum gültigen Callback, zum Abbruch des Kontexts oder zur
+// Ablehnung im Browser.
+func (c *callback) Wait(ctx context.Context) (string, error) {
+	select {
+	case res := <-c.got:
+		return res.code, res.err
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
+
+// Settle sagt, dass der Code auf anderem Weg ankam und getauscht wurde. Ein
+// Callback, der danach noch eintrifft, wird mit der Erfolgsseite beantwortet.
+func (c *callback) Settle() { c.settled.Store(true) }
+
+// Finish meldet dem wartenden Browser-Request, wie der Tausch ausging.
+func (c *callback) Finish(err error) {
+	select {
+	case c.result <- err:
+	default:
+	}
+}
+
+func (c *callback) Close() {
+	if c.used.Load() {
+		// Der Browser folgt der Weiterleitung auf /done mit einer neuen Anfrage;
+		// ein sofort geschlossener Listener ließe das Fenster auf einer
+		// Fehlerseite stehen, statt sich zu schließen.
+		time.Sleep(600 * time.Millisecond)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if c.srv.Shutdown(ctx) != nil {
+		c.srv.Close()
+	}
+	c.ln.Close()
+}
+
+// ---- Umgebung ----
+
+func hasDisplay() bool {
+	if runtime.GOOS != "linux" && runtime.GOOS != "freebsd" {
+		return true
+	}
+	return os.Getenv("DISPLAY") != "" || os.Getenv("WAYLAND_DISPLAY") != ""
+}
+
+// canOpenBrowser sagt, ob es ein Programm zum Öffnen einer Adresse gibt.
+func canOpenBrowser() bool {
+	name := "xdg-open"
+	switch runtime.GOOS {
+	case "darwin":
+		name = "open"
+	case "windows":
+		name = "rundll32"
+	}
+	_, err := exec.LookPath(name)
+	return err == nil
+}
+
+func openBrowser(u string) error {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", u)
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", u)
+	default:
+		cmd = exec.Command("xdg-open", u)
+	}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	go cmd.Wait()
+	return nil
+}
+
+func detectHarnesses() []string {
+	home, _ := os.UserHomeDir()
+	var found []string
+	for _, h := range []string{"claude", "codex"} {
+		if harnessPresent(h, home) {
+			found = append(found, h)
+		}
+	}
+	return found
+}
+
+// collectorOutcome is what setting up the collector service came to.
+type collectorOutcome struct {
+	Started bool     // the service manager accepted the start
+	Lines   []string // why not, in the installer's words
+	Err     error
+}
+
+// joinInstallCollector sets up the collector service for the ctx that is
+// running now: join, unlike install, has not pinned that path yet, and without
+// an absolute one the service would silently be skipped.
+func joinInstallCollector(home string) collectorOutcome {
+	restore, err := useRunningCtx(home)
+	defer restore()
+	if err != nil {
+		return collectorOutcome{Err: err}
+	}
+	changes, started, err := installer.InstallWatchServiceStarted(home)
+	out := collectorOutcome{Started: started, Err: err}
+	if !started {
+		for _, c := range changes {
+			if strings.HasPrefix(c.Action, "collector") {
+				out.Lines = append(out.Lines, c.Action)
+			}
+		}
+	}
+	return out
+}
+
+// waitCollectorActive asks the service manager for up to two seconds whether
+// the collector is active: a start that was accepted can still die at once.
+func waitCollectorActive() bool {
+	for i := 0; i < 10; i++ {
+		if state, _ := installer.WatchServiceState(); state == installer.ServiceActive {
+			return true
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return false
+}
+
+// harnessPresent: the harness has a config directory in the home directory or
+// its command is on PATH. join and doctor share this test.
+func harnessPresent(h, home string) bool {
+	dir := home + "/." + h
+	if h == "opencode" {
+		dir = home + "/.config/opencode"
+	}
+	if st, err := os.Stat(dir); err == nil && st.IsDir() {
+		return true
+	}
+	_, err := exec.LookPath(h)
+	return err == nil
+}
+
+// ---- Befehl ----
+
+func cmdJoin(args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("join", flag.ContinueOnError)
+	fs.SetOutput(stdout)
+	serverURL := fs.String("server", "", "ghosttree server URL")
+	pair := fs.String("pair", "", "pairing code from the invitation page (XXXX-XXXX)")
+	name := fs.String("name", "", "machine name (default: hostname)")
+	// Versteckt und nur noch für ältere Befehle: erzwingt den Weg, bei dem der
+	// Bestätigungscode im Terminal steht und im Browser eingetippt wird.
+	noBrowser := fs.Bool("no-browser", false, "")
+	yes := fs.Bool("yes", false, "do not ask for confirmation")
+	noWatch := fs.Bool("no-watch", false, "do not set up the collector service")
+	fs.Usage = func() {
+		fmt.Fprint(stdout, `usage: ctx join --server <url> --pair XXXX-XXXX [--name <machine>] [--yes] [--no-watch]
+
+  --server      ghosttree server URL
+  --pair        pairing code from the invitation page
+  --name        machine name (A-Z a-z 0-9 . _ -, default: hostname; if another
+                account already uses it, a free one is chosen)
+  --yes         do not ask for confirmation
+  --no-watch    do not set up the collector service (ctx watch)
+`)
+	}
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		return 2
+	}
+	usage := func(msg string) int {
+		fmt.Fprintln(stdout, msg)
+		fmt.Fprintln(stdout, "usage: ctx join --server <url> --pair XXXX-XXXX [--name <machine>] [--yes] [--no-watch]")
+		return 2
+	}
+	server := strings.TrimRight(strings.TrimSpace(*serverURL), "/")
+	u, err := url.Parse(server)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return usage("--server must be an http(s) URL")
+	}
+	if u.Scheme == "http" && !isLoopbackHost(u.Hostname()) {
+		return usage("--server must use https (plain http only for localhost)")
+	}
+	if fs.NArg() != 0 || !pairRE.MatchString(strings.TrimSpace(*pair)) {
+		return usage("--pair must look like XXXX-XXXX")
+	}
+	machine := *name
+	autoName := machine == ""
+	if autoName {
+		host, _ := os.Hostname()
+		machine = normalizeMachine(host)
+	} else if !machineNameRE.MatchString(machine) {
+		return usage("--name may only contain A-Z a-z 0-9 . _ - (at most 64)")
+	}
+
+	// Ein Signal gilt überall als Abbruch; nach der Ausstellung des Tokens
+	// führt Abbruch zum Widerruf.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	defer stop()
+
+	var tty terminal
+	if !*yes {
+		t, err := joinTTY()
+		if err != nil {
+			// Noch nichts gemeldet: der Code ist unverbraucht und gilt weiter.
+			cmd := "ctx join --server " + server + " --pair " + strings.ToUpper(strings.TrimSpace(*pair))
+			if *name != "" {
+				cmd += " --name " + *name
+			}
+			fmt.Fprintf(stdout, "This terminal cannot ask questions, so nothing was started. Your code %s is not used up.\nRun this in a terminal you can type in:\n\n  %s --yes\n", strings.ToUpper(strings.TrimSpace(*pair)), cmd)
+			return 1
+		}
+		defer t.Close()
+		tty = t
+	}
+	existing, loadErr := config.Load()
+	switch {
+	case loadErr != nil && !errors.Is(loadErr, os.ErrNotExist):
+		if tty != nil && !confirm(ctx, tty, fmt.Sprintf("The config at %s is unreadable. Overwrite it? [y/N] ", config.Path()), false) {
+			fmt.Fprintln(stdout, "Cancelled. Config unchanged.")
+			return 1
+		}
+	case existing.Token != "" && existing.ServerURL != "" && strings.TrimRight(existing.ServerURL, "/") != server && tty != nil:
+		if !confirm(ctx, tty, fmt.Sprintf("Replace the config for %s with %s? [y/N] ", safe(existing.ServerURL), server), false) {
+			fmt.Fprintln(stdout, "Cancelled. Config unchanged.")
+			return 1
+		}
+	}
+	// Ein erneuter Join derselben Maschine widerruft das alte Geräte-Token schon
+	// bei der Ausstellung des neuen: vorher fragen.
+	replaced := false
+	if loadErr == nil && existing.Token != "" && strings.TrimRight(existing.ServerURL, "/") == server {
+		old := client.New(config.Config{ServerURL: server, Token: existing.Token, Machine: existing.Machine})
+		if who, err := old.WhoAmIContext(ctx); err == nil {
+			same := strings.EqualFold(existing.Machine, machine)
+			q := fmt.Sprintf("This machine is already connected as %s. Joining replaces that connection. Continue? [y/N] ", safe(who.Label))
+			if !same {
+				q = fmt.Sprintf("This machine is already connected as %s (machine %s). Joining replaces the local config. Continue? [y/N] ", safe(who.Label), safe(existing.Machine))
+			}
+			if tty != nil && !confirm(ctx, tty, q, false) {
+				fmt.Fprintln(stdout, "Cancelled. Config and connection unchanged.")
+				return 1
+			}
+			replaced = same
+		}
+	}
+
+	c := client.New(config.Config{ServerURL: server})
+	// Nach einem Signal bleibt das Wiederaufnahme-Token liegen (der nächste Aufruf
+	// braucht es); jedes andere Ende räumt es weg.
+	defer func() {
+		if ctx.Err() == nil {
+			clearJoinResume()
+		}
+	}()
+	remote := os.Getenv("SSH_CONNECTION") != ""
+	var tok client.DeviceToken
+	var cb *callback
+	if !*noBrowser && !remote && joinHasDisplay() && joinCanOpen() {
+		cb = prepareLoopback()
+	}
+	if cb != nil {
+		defer cb.Close()
+	}
+	// Der Code aus dem Browser lässt sich einfügen, wo ein Terminal das Lesen
+	// abbrechen kann. Auch mit --yes: das ist keine Rückfrage, sondern Eingabe.
+	var pt pasteTerminal
+	if !*noBrowser {
+		t := tty
+		if t == nil {
+			if o, err := joinTTY(); err == nil {
+				t = o
+				defer o.Close()
+			}
+		}
+		if p, ok := t.(pasteTerminal); ok && p.CanPaste() {
+			pt = p
+		}
+	}
+	switch {
+	case *noBrowser || (cb == nil && pt == nil):
+		tok, err = joinCode(ctx, c, strings.TrimSpace(*pair), &machine, autoName, server, stdout)
+	default:
+		tok, err = joinBrowser(ctx, c, cb, pt, strings.TrimSpace(*pair), &machine, autoName, server, stdout)
+	}
+	if err != nil {
+		var taken *machineTakenError
+		if errors.As(err, &taken) {
+			fmt.Fprint(stdout, takenMessage(taken, server, strings.ToUpper(strings.TrimSpace(*pair)), machine, *yes))
+			return 1
+		}
+		fmt.Fprintln(stdout, interruptedOr(err))
+		return 1
+	}
+
+	cfg := config.Config{ServerURL: server, Token: tok.AccessToken, Machine: safe(tok.Machine)}
+	if cfg.Machine == "" {
+		cfg.Machine = machine
+	}
+	issued := client.New(cfg)
+	// Ab hier gibt es ein gültiges, noch nicht gespeichertes Token: jeder Weg
+	// ohne Speichern widerruft es.
+	abort := func(msg string) int {
+		fmt.Fprintln(stdout, msg)
+		revokeIssued(issued, stdout)
+		if replaced {
+			fmt.Fprintln(stdout, "The previous connection of this machine is no longer valid; run ctx join or ctx login to connect again.")
+		}
+		return 1
+	}
+	who, err := issued.WhoAmIContext(ctx)
+	if err != nil {
+		return abort("Could not check the new token. Nothing written.")
+	}
+	org := ""
+	if orgs, err := issued.ListOrgsContext(ctx); err == nil {
+		var names []string
+		for _, o := range orgs {
+			if o.Default {
+				names = append([]string{safe(o.Name)}, names...)
+			} else {
+				names = append(names, safe(o.Name))
+			}
+		}
+		if len(names) > 0 {
+			org = ", org " + strings.Join(names, ", ")
+		}
+	}
+	label := safe(who.Label)
+	fmt.Fprintf(stdout, "Account %s%s, machine %s\n", label, org, cfg.Machine)
+	// Auch im Loopback-Weg fragt das Terminal: ein Klick im Browser beweist
+	// nicht, dass die Person vor diesem Terminal weiß, welches Konto diese
+	// Maschine bekommt (die Freigabeseite kann auf anderem Weg erreicht worden
+	// sein). Dort ist die Vorgabe "ja", im Code-Weg, wo die Freigabe auf einem
+	// anderen Gerät geschah, "nein".
+	if tty != nil {
+		prompt := fmt.Sprintf("Connect this machine as account %s? [y/N] ", label)
+		if cb != nil {
+			prompt = fmt.Sprintf("Connect this machine as account %s? [Y/n] ", label)
+		}
+		if !confirm(ctx, tty, prompt, cb != nil) {
+			return abort("Cancelled. Nothing written.")
+		}
+	}
+	if err := config.Save(cfg); err != nil {
+		return abort(fmt.Sprintf("save config: %v", err))
+	}
+	fmt.Fprintf(stdout, "Wrote %s\n", config.Path())
+	home, _ := os.UserHomeDir()
+	var setUp []string
+	codexSetUp, codexNoticeShown := false, false
+	detected := joinDetect()
+	// The collector is set up whether or not an agent is installed yet: it
+	// picks up sessions as soon as one appears.
+	if !*noWatch {
+		o := joinCollector(home)
+		switch {
+		case o.Err != nil:
+			fmt.Fprintf(stdout, "Collector not set up: %s\n", safe(o.Err.Error()))
+		case !o.Started:
+			for _, line := range o.Lines {
+				fmt.Fprintln(stdout, safe(line))
+			}
+		case joinCollectorUp():
+			fmt.Fprintln(stdout, "Collector running.")
+		default:
+			fmt.Fprintf(stdout, "Collector started, not yet active. Check with: %s\n", installer.WatchStatusHint())
+		}
+	}
+	if len(detected) == 0 {
+		fmt.Fprintf(stdout, "Connected. Install Claude Code or Codex, then run: %s install claude|codex\n", ctxHint())
+	}
+	for _, h := range detected {
+		if ctx.Err() != nil {
+			fmt.Fprintln(stdout, "Interrupted. Connected, but not installed for your agents; run ctx install claude|codex.")
+			return 1
+		}
+		labels := installer.SetupLabels(h, home)
+		if tty != nil {
+			printSetupList(stdout, "Will set up:", labels)
+			if !confirm(ctx, tty, fmt.Sprintf("Install ghosttree for %s? [Y/n] ", h), true) {
+				continue
+			}
+		}
+		// The collector was handled above, once and with its outcome shown.
+		installArgs := []string{h, "--no-watch"}
+		if h == "claude" {
+			// join fragt nach ghclaude selbst, am eigenen Terminal.
+			installArgs = append(installArgs, "--no-ghclaude")
+		}
+		rec := &hooksNoticeWriter{w: stdout}
+		code := joinInstall(installArgs, rec)
+		if h == "codex" && code == 0 {
+			codexSetUp, codexNoticeShown = true, rec.seen
+		}
+		if code != 0 {
+			fmt.Fprintf(stdout, "install %s failed (exit %d)\n", h, code)
+			continue
+		}
+		setUp = append(setUp, labels...)
+		if h == "claude" {
+			offerGhclaude(ctx, stdout, tty, home)
+		}
+	}
+	printSetupList(stdout, "Set up:", setUp)
+	if codexSetUp && !codexNoticeShown {
+		fmt.Fprintln(stdout, codexHooksNotice)
+	}
+	if hint := ctxHint(); hint != "ctx" && len(setUp) > 0 {
+		fmt.Fprintf(stdout, "Note: typing 'ctx' in a shell does not work yet because its directory is not on PATH. Your agents use the full path (%s) and are not affected.\n", hint)
+	}
+	var st bytes.Buffer
+	cmdStatus(nil, &st)
+	for _, line := range strings.Split(strings.TrimSpace(st.String()), "\n") {
+		if line == "" || strings.HasPrefix(line, "transcripts") {
+			continue
+		}
+		if len(setUp) == 0 && (strings.HasPrefix(line, "claude ") || strings.HasPrefix(line, "codex ")) {
+			continue
+		}
+		fmt.Fprintln(stdout, safe(line))
+	}
+	return 0
+}
+
+// codexHooksNotice: Codex führt neue oder geänderte Hooks erst nach der
+// Freigabe über /hooks aus.
+const codexHooksNotice = "next: run /hooks in Codex to trust the ghosttree hooks, then start a fresh Codex session"
+
+// hooksNoticeWriter leitet durch und merkt sich, ob die Installation den
+// /hooks-Hinweis schon selbst ausgegeben hat.
+type hooksNoticeWriter struct {
+	w    io.Writer
+	seen bool
+}
+
+func (h *hooksNoticeWriter) Write(p []byte) (int, error) {
+	if bytes.Contains(p, []byte("/hooks")) {
+		h.seen = true
+	}
+	return h.w.Write(p)
+}
+
+// printSetupList schreibt eine knappe Liste, je Zeile zwei, drei Wörter.
+func printSetupList(w io.Writer, title string, items []string) {
+	if len(items) == 0 {
+		return
+	}
+	fmt.Fprintln(w, title)
+	for _, it := range items {
+		fmt.Fprintf(w, "  %s\n", it)
+	}
+}
+
+// interruptedOr macht aus einem Abbruch des Kontexts die übliche Meldung.
+func interruptedOr(err error) string {
+	if errors.Is(err, context.Canceled) {
+		return errInterrupted
+	}
+	return safe(err.Error())
+}
+
+func isLoopbackHost(h string) bool {
+	if strings.EqualFold(h, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(h)
+	return ip != nil && ip.IsLoopback()
+}
+
+// safe entfernt Steuerzeichen (C0, DEL, C1, auch ESC) und Formatzeichen (Bidi, Zero-Width) aus Text, den der Server
+// geliefert hat, damit er das Terminal nicht umschreiben und eine Rückfrage
+// nicht fälschen kann.
+func safe(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return -1
+		}
+		return r
+	}, s)
+}
+
+// revokeIssued widerruft das gerade ausgestellte, nicht gespeicherte Token, damit
+// kein ungenutztes gültiges Token zurückbleibt.
+func revokeIssued(c *client.Client, stdout io.Writer) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := c.RevokeSelf(ctx); err != nil {
+		fmt.Fprintf(stdout, "Could not revoke the new token (%s); release machine %s on the server.\n", interruptedOr(err), safe(c.Machine()))
+		return
+	}
+	fmt.Fprintln(stdout, "New token revoked.")
+}
+
+// confirm fragt auf dem Terminal. Ein Abbruch des Kontexts (Signal) während der
+// Frage zählt als Ablehnung; die blockierte Leseroutine endet mit dem Prozess.
+func confirm(ctx context.Context, t terminal, prompt string, def bool) bool {
+	// Nach einem Abbruch keine weitere Leseroutine auf demselben Terminal starten.
+	if ctx.Err() != nil {
+		return false
+	}
+	type answer struct {
+		text string
+		err  error
+	}
+	ch := make(chan answer, 1)
+	go func() {
+		a, err := t.Ask(prompt)
+		ch <- answer{a, err}
+	}()
+	var a answer
+	select {
+	case a = <-ch:
+	case <-ctx.Done():
+		return false
+	}
+	if a.err != nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(a.text)) {
+	case "y", "yes":
+		return true
+	case "":
+		return def
+	}
+	return false
+}
+
+// prepareLoopback startet den Listener; scheitert etwas, gilt der Rückfall (nil).
+func prepareLoopback() *callback {
+	state, err := newState()
+	if err != nil {
+		return nil
+	}
+	cb, err := startCallbackFunc(state)
+	if err != nil {
+		return nil
+	}
+	return cb
+}
+
+// machineTakenError: der Name gehört einem anderen Konto. atClaim sagt, dass
+// der Server es schon beim Anmelden meldete; dann ist der Paarungscode noch
+// unverbraucht und gilt weiter.
+type machineTakenError struct{ atClaim bool }
+
+func (*machineTakenError) Error() string { return "machine name belongs to another account" }
+
+// takenMessage nennt den genauen Befehl mit einem anderen Namen. Der Vorschlag
+// ist der Name mit Zusatz; er verrät nichts, was der Fehler nicht ohnehin sagte.
+func takenMessage(e *machineTakenError, server, pair, machine string, yes bool) string {
+	suggestion := machine + "-2"
+	if len(suggestion) > 64 {
+		suggestion = "my-" + machine[:60]
+	}
+	cmd := ctxHint() + " join --server " + server + " --pair " + pair + " --name " + suggestion
+	if yes {
+		cmd += " --yes"
+	}
+	if e.atClaim {
+		return fmt.Sprintf("The machine name %s already belongs to another account. Your code %s is not used up.\nRun this with a name of your choice:\n\n  %s\n", safe(machine), pair, cmd)
+	}
+	return fmt.Sprintf("The machine name %s was taken by another account while you were connecting.\nGet a new code on the invitation page, then run it with a different name:\n\n  %s\n", safe(machine), strings.Replace(cmd, " --pair "+pair, " --pair <new code>", 1))
+}
+
+func claimError(err error) error {
+	switch client.ErrorCode(err) {
+	case "machine_name_taken":
+		return &machineTakenError{atClaim: true}
+	case "names_locked":
+		return errors.New(namesLockedMessage(err))
+	case "invalid_pair":
+		return errors.New("Pairing code is not valid, expired or already used. Open the invitation page for a new one.")
+	case "too_many_requests":
+		return errors.New("Too many attempts. Try again in a minute.")
+	}
+	return failure(err)
+}
+
+// namesLockedMessage names the wait the server announced. The code is not the
+// problem, so a new one would not help.
+func namesLockedMessage(err error) string {
+	var se *client.StatusError
+	secs := 0
+	if errors.As(err, &se) {
+		var body struct {
+			RetryAfter int `json:"retry_after"`
+		}
+		_ = json.Unmarshal([]byte(se.Body), &body)
+		secs = body.RetryAfter
+	}
+	wait := "a while"
+	if secs > 0 {
+		wait = fmt.Sprintf("about %d minutes", (secs+59)/60)
+	}
+	return "Too many different machine names were refused for this account. Wait " + wait + ", then run the same command again; a new pairing code does not help before that."
+}
+
+func exchangeError(err error) error {
+	switch client.ErrorCode(err) {
+	case "invalid_grant":
+		return errors.New(errInterrupted)
+	case "machine_name_taken":
+		return &machineTakenError{}
+	case "too_many_requests":
+		return errors.New("Too many attempts. Try again in a minute.")
+	}
+	return failure(err)
+}
+
+// failure beschreibt einen Fehler ohne den Körper der Serverantwort.
+func failure(err error) error {
+	var se *client.StatusError
+	if errors.As(err, &se) {
+		return fmt.Errorf("Pairing failed (server answered %d).", se.Status)
+	}
+	if errors.Is(err, context.Canceled) {
+		return err
+	}
+	return fmt.Errorf("Pairing failed: %s", safe(err.Error()))
+}
+
+// adoptMachine übernimmt den Namen, den der Server gewählt hat. Ein Name, den
+// der Server liefert, geht nur durch, wenn er die Regel für Namen einhält: er
+// steht danach in der Konfiguration und auf dem Terminal.
+func adoptMachine(machine *string, claimed string) {
+	if claimed != "" && machineNameRE.MatchString(claimed) {
+		*machine = claimed
+	}
+}
+
+// authCodeRE: ein eingefügter Code in der Form, die der Server ausgibt
+// (20 Zeichen aus dem Alphabet der Anzeigecodes, gruppiert oder nicht).
+var authCodeRE = regexp.MustCompile(`^[BCDFGHJKMNPQRTVWX34679]{20}$`)
+
+// normalizePasted macht aus dem, was der Mensch einfügte, den Code oder "".
+func normalizePasted(in string) string {
+	in = strings.ToUpper(strings.NewReplacer("-", "", " ", "", "\t", "").Replace(strings.TrimSpace(in)))
+	if authCodeRE.MatchString(in) {
+		return in
+	}
+	return ""
+}
+
+const (
+	pastePrompt  = "Stuck here? Paste the code from the browser: "
+	pasteRetries = 3
+)
+
+// codeSource sagt, woher der Code kam; davon hängt ab, wie ein Fehlschlag zu
+// lesen ist.
+type codeSource int
+
+const (
+	fromCallback codeSource = iota
+	fromPaste
+)
+
+// awaitCode wartet auf den Code aus dem Loopback-Callback (cb, wenn es ihn gibt)
+// oder aus dem Terminal (pt, wenn es das Einfügen kann). Was zuerst kommt, gewinnt;
+// das andere wird beendet, bevor awaitCode zurückkehrt, damit eine liegengebliebene
+// Leseroutine nicht die nächste Antwort verschluckt.
+//
+// watch (wenn gesetzt) fragt den Server, ob der Antrag im Browser abgelehnt wurde:
+// ohne Callback (reiner Paste-Weg) erführe das Terminal die Ablehnung sonst nie.
+// Es liefert true bei Ablehnung und kehrt sonst erst mit dem Kontext zurück.
+func awaitCode(ctx context.Context, cb *callback, pt pasteTerminal, watch func(context.Context) bool, stdout io.Writer) (string, codeSource, error) {
+	wctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	type result struct {
+		code string
+		src  codeSource
+		err  error
+	}
+	ch := make(chan result, 2)
+	n := 0
+	if cb != nil {
+		n++
+		go func() {
+			code, err := cb.Wait(wctx)
+			ch <- result{code, fromCallback, err}
+		}()
+	}
+	if pt != nil {
+		n++
+		go func() {
+			for try := 0; try < pasteRetries; try++ {
+				line, err := pt.Paste(wctx, pastePrompt)
+				if err != nil {
+					ch <- result{"", fromPaste, err}
+					return
+				}
+				if code := normalizePasted(line); code != "" {
+					ch <- result{code, fromPaste, nil}
+					return
+				}
+				if strings.TrimSpace(line) != "" {
+					fmt.Fprintln(stdout, "That does not look like the code.")
+				}
+			}
+			ch <- result{"", fromPaste, errors.New("no valid code entered")}
+		}()
+	}
+	if watch != nil {
+		n++
+		go func() {
+			if watch(wctx) {
+				ch <- result{"", fromCallback, errDenied}
+				return
+			}
+			ch <- result{"", fromCallback, wctx.Err()}
+		}()
+	}
+	finish := func(r result) (string, codeSource, error) {
+		cancel()
+		for left := n - 1; left > 0; left-- {
+			<-ch // die anderen enden mit dem abgebrochenen Kontext
+		}
+		return r.code, r.src, r.err
+	}
+	for pending := n; pending > 0; pending-- {
+		r := <-ch
+		switch {
+		case r.err == nil, errors.Is(r.err, errDenied), ctx.Err() != nil, r.src == fromCallback:
+			return finish(r)
+		case cb == nil:
+			return finish(r)
+		}
+		// Die Eingabe endete (EOF, zu viele Fehlversuche), der Callback kann noch
+		// kommen: weiterwarten. Die Leseroutine ist damit schon beendet.
+		n--
+		if pending == 1 {
+			return r.code, r.src, r.err
+		}
+	}
+	return "", fromCallback, errors.New(errInterrupted)
+}
+
+// joinDeniedInterval ist der Abstand, in dem das Terminal nach einer Ablehnung fragt.
+var joinDeniedInterval = 3 * time.Second
+
+// watchDenied fragt den Server, bis der Antrag abgelehnt ist oder der Kontext endet.
+// Ein Netzfehler zählt nicht als Ablehnung; die Anfrage wird einfach wiederholt.
+func watchDenied(c *client.Client, verifier string) func(context.Context) bool {
+	return func(ctx context.Context) bool {
+		for {
+			select {
+			case <-ctx.Done():
+				return false
+			case <-time.After(joinDeniedInterval):
+			}
+			if denied, err := c.JoinDenied(ctx, verifier); err == nil && denied {
+				return true
+			}
+		}
+	}
+}
+
+func joinBrowser(ctx context.Context, c *client.Client, cb *callback, pt pasteTerminal, pair string, machineName *string, auto bool, server string, stdout io.Writer) (client.DeviceToken, error) {
+	verifier, challenge, err := newPKCE()
+	if err != nil {
+		return client.DeviceToken{}, err
+	}
+	req := client.JoinClaimRequest{
+		Pair: pair, Machine: *machineName, MachineAuto: auto, Resume: loadJoinResume(server, pair),
+		CodeChallenge: challenge, CodeChallengeMethod: "S256",
+	}
+	wantMode := "paste"
+	if cb != nil {
+		req.LoopbackPort, req.LoopbackHost, req.State = cb.Port(), "127.0.0.1", cb.state
+		wantMode = "loopback"
+	}
+	claim, err := c.JoinClaim(ctx, req)
+	if err != nil {
+		return client.DeviceToken{}, claimError(err)
+	}
+	saveJoinResume(server, pair, claim.Resume)
+	adoptMachine(machineName, claim.Machine)
+	machine := *machineName
+	if claim.Mode != wantMode {
+		return client.DeviceToken{}, errors.New(errInterrupted)
+	}
+	link := server + joinPairPath
+	if cb != nil && joinHasDisplay() && joinOpenBrowser(link) == nil {
+		fmt.Fprintf(stdout, "Approve %s in your browser: %s\n", machine, link)
+	} else {
+		fmt.Fprintf(stdout, "Open this link in your browser to approve %s: %s\n", machine, link)
+	}
+	wait := joinTimeout
+	if d := time.Duration(claim.ExpiresIn) * time.Second; claim.ExpiresIn > 0 && d < wait {
+		wait = d
+	}
+	wctx, cancel := context.WithTimeout(ctx, wait)
+	defer cancel()
+	for {
+		code, src, err := awaitCode(wctx, cb, pt, watchDenied(c, verifier), stdout)
+		switch {
+		case errors.Is(err, errDenied):
+			if cb != nil {
+				cb.Finish(err)
+			}
+			return client.DeviceToken{}, errors.New("Denied in the browser.")
+		case errors.Is(err, context.DeadlineExceeded):
+			return client.DeviceToken{}, errors.New(errInterrupted)
+		case err != nil:
+			return client.DeviceToken{}, err
+		}
+		// Der Tausch läuft unabhängig vom Signal-Kontext, damit ein Abbruch mitten
+		// im Tausch kein Token ausstellt, das niemand mehr sieht.
+		xctx, xcancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		tok, err := c.JoinExchange(xctx, code, verifier)
+		xcancel()
+		if cb != nil {
+			switch {
+			case src == fromCallback:
+				cb.Finish(err)
+			case err == nil:
+				// Eingefügt und getauscht: ein späterer Callback desselben Browsers
+				// bekommt nur noch die Erfolgsseite.
+				cb.Settle()
+				cb.Finish(nil)
+			}
+		}
+		if err != nil {
+			if src == fromPaste && client.ErrorCode(err) == "invalid_grant" && wctx.Err() == nil {
+				// Ein falscher oder fremder Code verbraucht den richtigen nicht.
+				fmt.Fprintln(stdout, "That code does not belong to this setup. Copy it again from the browser.")
+				continue
+			}
+			return client.DeviceToken{}, exchangeError(err)
+		}
+		return tok, nil
+	}
+}
+
+// joinCode ist der Rückfall ohne Loopback: der Bestätigungscode steht im
+// Terminal, das Token kommt über den Geräte-Ablauf.
+func joinCode(ctx context.Context, c *client.Client, pair string, machineName *string, auto bool, server string, stdout io.Writer) (client.DeviceToken, error) {
+	claim, err := c.JoinClaim(ctx, client.JoinClaimRequest{Pair: pair, Machine: *machineName, MachineAuto: auto, Resume: loadJoinResume(server, pair)})
+	if err != nil {
+		return client.DeviceToken{}, claimError(err)
+	}
+	saveJoinResume(server, pair, claim.Resume)
+	adoptMachine(machineName, claim.Machine)
+	machine := *machineName
+	if claim.Mode != "code" || claim.DeviceCode == "" {
+		return client.DeviceToken{}, errors.New(errInterrupted)
+	}
+	if !confirmCodeRE.MatchString(claim.ConfirmCode) {
+		return client.DeviceToken{}, errors.New(errInterrupted)
+	}
+	fmt.Fprintf(stdout, "Approve %s at %s - Type this code in your browser: %s\n", machine, server+joinPairPath, claim.ConfirmCode)
+	interval := time.Duration(claim.Interval) * time.Second
+	if interval <= 0 {
+		interval = 5 * time.Second
+	}
+	wait := joinTimeout
+	if d := time.Duration(claim.ExpiresIn) * time.Second; claim.ExpiresIn > 0 && d < wait {
+		wait = d
+	}
+	deadline := time.Now().Add(wait)
+	for time.Now().Before(deadline) {
+		if err := loginSleep(ctx, interval); err != nil {
+			return client.DeviceToken{}, err
+		}
+		pctx, pcancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		tok, err := c.PollDeviceLogin(pctx, claim.DeviceCode)
+		pcancel()
+		if err == nil {
+			return tok, nil
+		}
+		var pe *client.DevicePollError
+		if !errors.As(err, &pe) {
+			return client.DeviceToken{}, exchangeError(err)
+		}
+		switch pe.Code {
+		case "authorization_pending":
+		case "slow_down":
+			if pe.Interval > 0 {
+				interval = time.Duration(pe.Interval) * time.Second
+			} else {
+				interval += 5 * time.Second
+			}
+		case "access_denied":
+			return client.DeviceToken{}, errors.New("Denied in the browser.")
+		default: // expired_token und alles Unbekannte
+			return client.DeviceToken{}, errors.New(errInterrupted)
+		}
+	}
+	return client.DeviceToken{}, errors.New(errInterrupted)
+}

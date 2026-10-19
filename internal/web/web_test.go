@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"strconv"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -13,6 +13,10 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
+
+// testWebOptions are applied by testWeb; tests that need options set them and
+// restore the default with t.Cleanup.
+var testWebOptions []Option
 
 func testWeb(t *testing.T) (*httptest.Server, *store.Store, string) {
 	t.Helper()
@@ -25,7 +29,7 @@ func testWeb(t *testing.T) (*httptest.Server, *store.Store, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(New(st))
+	srv := httptest.NewServer(New(st, testWebOptions...))
 	t.Cleanup(srv.Close)
 	return srv, st, token
 }
@@ -43,10 +47,7 @@ func body(t *testing.T, resp *http.Response) string {
 func login(t *testing.T, srv *httptest.Server, token string) *http.Client {
 	t.Helper()
 	client := &http.Client{CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
-	resp, err := client.PostForm(srv.URL+"/ui/login", url.Values{"token": {token}, "next": {"/ui/requests"}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	resp := sameOriginPostForm(t, client, srv.URL+"/ui/login", url.Values{"token": {token}, "next": {"/ui/requests"}})
 	if resp.StatusCode != http.StatusSeeOther {
 		t.Fatalf("login status=%d body=%s", resp.StatusCode, body(t, resp))
 	}
@@ -56,6 +57,43 @@ func login(t *testing.T, srv *httptest.Server, token string) *http.Client {
 	}
 	client.Jar = cookieJar{cookies: cookies}
 	return client
+}
+
+// loginInteractive meldet ein Konto über einen Login-Link an. Die Sitzung ist
+// interaktiv und darf Verwaltungsformulare abschicken; login() mit eingefügtem
+// Token darf das nicht.
+func loginInteractive(t *testing.T, srv *httptest.Server, st *store.Store, account string) *http.Client {
+	t.Helper()
+	code, _, err := st.CreateAccountCode(store.CodeLogin, account)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
+	resp := sameOriginPostForm(t, client, srv.URL+"/ui/login/code", url.Values{"code": {code}})
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("login link status=%d body=%s", resp.StatusCode, body(t, resp))
+	}
+	client.Jar = cookieJar{cookies: resp.Cookies()}
+	return client
+}
+
+func sameOriginPostForm(t *testing.T, client *http.Client, target string, form url.Values) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, target, strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	u, err := url.Parse(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Origin", u.Scheme+"://"+u.Host)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp
 }
 
 type cookieJar struct{ cookies []*http.Cookie }
@@ -73,10 +111,23 @@ func TestShellAuthAndNavigation(t *testing.T) {
 	client := login(t, srv, token)
 	resp, _ = client.Get(srv.URL + "/ui/requests")
 	html := body(t, resp)
-	for _, want := range []string{"Requests", "Knowledge", "Review", "Sessions", "Agent Context", `data-clay-theme="ghosttree"`} {
+	for _, want := range []string{"Home", "Agents", "Rooms", "Requests", "Knowledge", `data-clay-theme="ghosttree"`} {
 		if !strings.Contains(html, want) {
 			t.Errorf("page missing %q", want)
 		}
+	}
+}
+
+func TestBrowserSessionCarriesStablePrincipal(t *testing.T) {
+	srv, _, token := testWeb(t)
+	client := login(t, srv, token)
+	resp, err := client.Get(srv.URL + "/ui/coord")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := body(t, resp)
+	if !strings.Contains(got, `alice`) || strings.Contains(got, `data-principal="person:1"`) {
+		t.Fatal("browser session must render the human label without exposing its stable identifier")
 	}
 }
 
@@ -92,14 +143,64 @@ func TestLoginUsesFixedReturnTarget(t *testing.T) {
 		`//evil.example`,
 		`https://evil.example`,
 	} {
-		resp, err := client.PostForm(srv.URL+"/ui/login", url.Values{"token": {token}, "next": {next}})
-		if err != nil {
-			t.Fatal(err)
-		}
+		resp := sameOriginPostForm(t, client, srv.URL+"/ui/login", url.Values{"token": {token}, "next": {next}})
 		resp.Body.Close()
-		if got := resp.Header.Get("Location"); got != "/ui/requests" {
+		if got := resp.Header.Get("Location"); got != "/ui/overview" {
 			t.Errorf("next %q redirected to %q", next, got)
 		}
+	}
+}
+
+func TestLoginRejectsCrossOrigin(t *testing.T) {
+	srv, _, token := testWeb(t)
+	client := &http.Client{CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
+	form := url.Values{"token": {token}}
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/ui/login", strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "https://evil.example")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("cross-origin login status=%d", resp.StatusCode)
+	}
+}
+
+func TestSameOriginTrustsForwardingOnlyFromLoopback(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		remoteAddr string
+		want       bool
+	}{
+		{name: "loopback proxy", remoteAddr: "127.0.0.1:43120", want: true},
+		{name: "untrusted remote", remoteAddr: "192.0.2.10:43120", want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "http://ghosttree.internal/ui/coord/send", nil)
+			req.RemoteAddr = tc.remoteAddr
+			req.Header.Set("Origin", "https://ghost.example")
+			req.Header.Set("X-Forwarded-Proto", "https")
+			req.Header.Set("X-Forwarded-Host", "ghost.example")
+			if got := (&app{}).sameOrigin(req); got != tc.want {
+				t.Fatalf("sameOrigin=%v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSameOriginRejectsMalformedForwardingFromLoopback(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "http://ghosttree.internal/ui/coord/send", nil)
+	req.RemoteAddr = "127.0.0.1:43120"
+	req.Header.Set("Origin", "http://ghosttree.internal")
+	req.Header.Set("X-Forwarded-Proto", "")
+	req.Header.Set("X-Forwarded-Host", "")
+	if (&app{}).sameOrigin(req) {
+		t.Fatal("present but empty forwarding headers fell back to the internal origin")
 	}
 }
 
@@ -148,12 +249,16 @@ func TestOperatorSectionsUseStoredData(t *testing.T) {
 		t.Fatal(err)
 	}
 	client := login(t, srv, token)
+	stored, err := st.SessionByID(sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for path, want := range map[string]string{
-		"/ui/knowledge?q=SQLite": "SQLite stays",
-		"/ui/review":             "SQLite stays",
-		"/ui/sessions":           "run-1",
-		"/ui/sessions/" + strconv.FormatInt(sessionID, 10): "ledger context",
-		"/ui/context?project=p":                            "SQLite runtime",
+		"/ui/knowledge?q=SQLite":          "SQLite stays",
+		"/ui/review":                      "SQLite stays",
+		"/ui/sessions":                    "/ui/sessions/" + stored.PublicID,
+		"/ui/sessions/" + stored.PublicID: "ledger context",
+		"/ui/context?project=p":           "SQLite runtime",
 	} {
 		resp, err := client.Get(srv.URL + path)
 		if err != nil {
@@ -167,5 +272,126 @@ func TestOperatorSectionsUseStoredData(t *testing.T) {
 	resp, _ := client.Get(srv.URL + "/ui/review")
 	if got := body(t, resp); !strings.Contains(got, "digest-proof") || !strings.Contains(got, "use sqlite") {
 		t.Errorf("review omitted migration proof: %s", got)
+	}
+}
+
+func TestWebSessionEndsWhenTokenOrAccountStopsBeingValid(t *testing.T) {
+	srv, st, _ := testWeb(t)
+	st.AddAccount("bob", "", false)
+	status := func(c *http.Client) (int, string) {
+		resp, err := c.Get(srv.URL + "/ui/requests")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode, resp.Header.Get("Location")
+	}
+	issue := func(spec store.TokenSpec) (*http.Client, int64) {
+		token, info, err := st.CreateToken("bob", spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return login(t, srv, token), info.ID
+	}
+
+	valid, _ := issue(store.TokenSpec{})
+	for i := 0; i < 2; i++ {
+		if code, _ := status(valid); code != http.StatusOK {
+			t.Fatalf("valid session request %d: %d", i, code)
+		}
+	}
+
+	revoked, id := issue(store.TokenSpec{})
+	if code, _ := status(revoked); code != http.StatusOK {
+		t.Fatalf("before revoke: %d", code)
+	}
+	if err := st.RevokeToken(id); err != nil {
+		t.Fatal(err)
+	}
+	if code, loc := status(revoked); code != http.StatusSeeOther || loc != "/ui/login" {
+		t.Fatalf("revoked session: %d %q", code, loc)
+	}
+
+	expiring, id := issue(store.TokenSpec{})
+	if _, err := st.DB().Exec(`UPDATE api_tokens SET expires_at='2020-01-01T00:00:00Z' WHERE id=?`, id); err != nil {
+		t.Fatal(err)
+	}
+	if code, loc := status(expiring); code != http.StatusSeeOther || loc != "/ui/login" {
+		t.Fatalf("expired session: %d %q", code, loc)
+	}
+
+	disabled, _ := issue(store.TokenSpec{})
+	if _, err := st.DB().Exec(`UPDATE persons SET state='disabled' WHERE name='bob'`); err != nil {
+		t.Fatal(err)
+	}
+	if code, loc := status(disabled); code != http.StatusSeeOther || loc != "/ui/login" {
+		t.Fatalf("disabled account session: %d %q", code, loc)
+	}
+	if code, loc := status(valid); code != http.StatusSeeOther || loc != "/ui/login" {
+		t.Fatalf("sibling session of disabled account: %d %q", code, loc)
+	}
+}
+
+// A form POST from a page with Referrer-Policy: no-referrer carries
+// "Origin: null" (Fetch spec). The code pages must use a policy under which
+// the browser sends the real origin.
+func TestCodePageSendsStrictOriginReferrerPolicy(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "ref.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	srv := httptest.NewServer(New(st))
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/ui/login/code?code=abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if got := resp.Header.Get("Referrer-Policy"); got != "strict-origin" {
+		t.Fatalf("Referrer-Policy=%q, want strict-origin", got)
+	}
+}
+
+func TestCodeAndOIDCStartRejectNullAndForeignOrigin(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "orig.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if _, err := st.AddPerson("alice"); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(New(st))
+	defer srv.Close()
+	code, _, err := st.CreateAccountCode(store.CodeLogin, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	post := func(path, origin string) int {
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+path, strings.NewReader(url.Values{"code": {code}}.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Origin", origin)
+		noRedirect := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		resp, err := noRedirect.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	for _, path := range []string{"/ui/login/code", "/ui/login/oidc"} {
+		for _, origin := range []string{"null", "https://evil.example"} {
+			if got := post(path, origin); got != http.StatusForbidden {
+				t.Fatalf("%s origin %q: status=%d, want 403", path, origin, got)
+			}
+			if st.CodeKindFor(code) != store.CodeLogin {
+				t.Fatalf("%s origin %q consumed the code", path, origin)
+			}
+		}
+	}
+	// The same code still works with the real origin.
+	if got := post("/ui/login/code", srv.URL); got != http.StatusSeeOther {
+		t.Fatalf("real origin: status=%d, want 303", got)
 	}
 }

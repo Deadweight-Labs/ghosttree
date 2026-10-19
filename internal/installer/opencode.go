@@ -64,7 +64,7 @@ func registerOpencodeMCP(path string) (Change, error) {
 func opencodeMCPEntry() map[string]any {
 	return map[string]any{
 		"type":    "local",
-		"command": []any{"ctx", "mcp"},
+		"command": []any{ctxCommand, "mcp"},
 		"enabled": true,
 	}
 }

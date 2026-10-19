@@ -3,10 +3,15 @@ package server
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/explain"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
+	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
 func (a *api) createRequest(w http.ResponseWriter, r *http.Request) {
@@ -22,9 +27,27 @@ func (a *api) createRequest(w http.ResponseWriter, r *http.Request) {
 		SessionRef     string   `json:"session_ref"`
 		IdempotencyKey string   `json:"idempotency_key"`
 		Criteria       []string `json:"criteria"`
+		Explanation    string   `json:"explanation"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)
+		return
+	}
+	// A backlog entry without a project would appear in nobody's ledger, so it is
+	// not created at all; the caller names the project.
+	if scope.CanonicalAxes(scope.Axes{Project: body.Project}).Project == "" {
+		writeCoded(w, http.StatusBadRequest, "project_required", "a request belongs to a project: name the project")
+		return
+	}
+	if !a.gateMachine(w, r, scope.CanonicalAxes(scope.Axes{Machine: body.Machine}).Machine, false) ||
+		!a.gateProject(w, r, scope.CanonicalAxes(scope.Axes{Project: body.Project}).Project) {
+		return
+	}
+	if denyAccess(w, a.access(r).Check(scope.CanonicalAxes(scope.Axes{Project: body.Project}).Project, store.ResRequest, store.ActCreate, store.Object{Own: true})) {
+		return
+	}
+	explanation, ok := checkExplanation(w, body.Explanation)
+	if !ok {
 		return
 	}
 	detail, err := a.st.CreateRequest(requestdomain.CreateInput{
@@ -33,27 +56,38 @@ func (a *api) createRequest(w http.ResponseWriter, r *http.Request) {
 			Scope:  scope.CanonicalAxes(scope.Axes{Project: body.Project, Branch: body.Branch, Machine: body.Machine}),
 			Origin: body.Origin, Person: personOf(r), SessionRef: body.SessionRef,
 		},
-		Criteria: body.Criteria, IdempotencyKey: body.IdempotencyKey,
+		Criteria: body.Criteria, IdempotencyKey: body.IdempotencyKey, AuthorID: authorIDOf(r),
 	})
 	if err != nil {
 		writeRequestError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, detail)
+	if !detail.Replayed {
+		a.saveExplanation(explain.KindRequest, detail.Request.ID, explanation)
+	}
+	writeJSON(w, http.StatusCreated, a.access(r).RequestDetailView(detail))
 }
 
 func (a *api) searchRequests(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	page, err := a.st.SearchRequests(requestdomain.SearchFilter{
+	if !a.listGate(w, r, axesFromQuery(r).Project, store.ResRequest) {
+		return
+	}
+	page, err := a.st.SearchRequests(a.requestFilter(r, requestdomain.SearchFilter{
 		Scope: axesFromQuery(r), Query: q.Get("q"), State: q.Get("state"),
 		Type: q.Get("type"), Cursor: q.Get("cursor"), Limit: intParam(r, "limit", 10),
 		// Nur für Aufrufer, die den ganzen Text zeigen — der Dateispiegel. Eine
 		// Trefferliste bleibt eine Trefferliste.
 		FullDescription: q.Get("full") == "1",
-	})
+	}))
 	if err != nil {
 		writeRequestError(w, err)
 		return
+	}
+	a.noteRequestHits(r, page.Results)
+	pa := a.access(r)
+	for i := range page.Results {
+		page.Results[i] = pa.RequestHitView(page.Results[i])
 	}
 	writeJSON(w, http.StatusOK, page)
 }
@@ -64,12 +98,15 @@ func (a *api) getRequest(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad request id")
 		return
 	}
+	if !a.checkRequest(w, r, store.RefRequest, id, store.ActRead) {
+		return
+	}
 	detail, err := a.st.RequestByID(id)
 	if err != nil {
 		writeRequestError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, detail)
+	writeJSON(w, http.StatusOK, a.access(r).RequestDetailView(detail))
 }
 
 func (a *api) completeRequest(w http.ResponseWriter, r *http.Request) {
@@ -86,6 +123,9 @@ func (a *api) completeRequest(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
+	if !a.checkRequest(w, r, store.RefRequest, id, store.ActEdit) {
+		return
+	}
 	err := a.st.CompleteRequest(id, requestdomain.Evidence{Kind: body.EvidenceKind, Ref: body.EvidenceRef, Person: personOf(r)})
 	if err != nil {
 		writeRequestError(w, err)
@@ -96,7 +136,7 @@ func (a *api) completeRequest(w http.ResponseWriter, r *http.Request) {
 		writeRequestError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, detail)
+	writeJSON(w, http.StatusOK, a.access(r).RequestDetailView(detail))
 }
 
 func (a *api) startRequestWork(w http.ResponseWriter, r *http.Request) {
@@ -113,12 +153,72 @@ func (a *api) startRequestWork(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
-	work, warnings, err := a.st.StartRequestWork(requestID, body.SessionID, body.Role, personOf(r))
-	if err != nil {
-		writeRequestError(w, err)
+	if !a.checkRequest(w, r, store.RefRequest, requestID, store.ActWork) {
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"work": work, "warnings": warnings})
+	pa := a.access(r)
+	ref, refErr := a.st.RequestRef(store.RefRequest, requestID)
+	sees := refErr == nil && pa.SeesSessionNumbers(ref.Project)
+	// Mitglieder mit Nummernsicht und Instanz-Admins dürfen jede lesbare Session
+	// anhängen; wer die Nummern nicht kennen darf, nur die eigene. Eine fremde,
+	// verborgene oder fehlende Nummer antwortet gleich (#2447).
+	if sess, err := a.st.SessionByID(body.SessionID); err != nil || !pa.CanSeeTranscript(sess) || (!sees && !pa.IsAdmin() && !pa.OwnsSession(sess)) {
+		pa.Filtered()
+		writeRequestError(w, sql.ErrNoRows)
+		return
+	}
+	work, warnings, err := a.st.StartRequestWork(requestID, body.SessionID, body.Role, personOf(r))
+	if err != nil {
+		writeRequestError(w, a.hideRuleRequest(r, err))
+		return
+	}
+	if !sees && len(warnings) > 0 {
+		warnings = a.readableStartWarnings(r, requestID, work.ID)
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"work": a.workView(r, work), "warnings": warnings})
+}
+
+// hideRuleRequest ersetzt in primary_exists die REQ-Nummer, wenn der Betrachter
+// diesen Auftrag nicht lesen darf (er könnte in einem unsichtbaren Projekt
+// liegen).
+func (a *api) hideRuleRequest(r *http.Request, err error) error {
+	var rule *requestdomain.RuleError
+	if !errors.As(err, &rule) || rule.ErrorCode != "primary_exists" {
+		return err
+	}
+	if len(rule.IDs) == 1 {
+		if n, perr := strconv.ParseInt(strings.TrimPrefix(rule.IDs[0], "REQ-"), 10, 64); perr == nil {
+			pa := a.access(r)
+			if ref, rerr := a.st.RequestRef(store.RefRequest, n); rerr == nil &&
+				requestVisibleTo(pa, ref) {
+				return err
+			}
+		}
+	}
+	return requestdomain.NewRuleError("primary_exists", "session is already working on another request", "finish or abandon that work before starting another", nil)
+}
+
+// readableStartWarnings zählt nur andere aktive Hauptarbeit, deren Session der
+// Betrachter lesen darf; verborgene Arbeit ginge sonst als Zahl mit ein.
+func (a *api) readableStartWarnings(r *http.Request, requestID, ownWork int64) []string {
+	detail, err := a.st.RequestByID(requestID)
+	if err != nil {
+		return nil
+	}
+	pa := a.access(r)
+	n := 0
+	for _, w := range detail.Work {
+		if w.ID == ownWork || w.Role != "primary" || w.State != "active" {
+			continue
+		}
+		if sess, err := a.st.SessionByID(w.SessionID); err == nil && pa.CanSeeTranscript(sess) {
+			n++
+		}
+	}
+	if n == 0 {
+		return nil
+	}
+	return []string{fmt.Sprintf("REQ-%d already has %d active primary session(s)", requestID, n)}
 }
 
 func (a *api) finishRequestWork(w http.ResponseWriter, r *http.Request) {
@@ -135,12 +235,15 @@ func (a *api) finishRequestWork(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
+	if !a.checkWorkAccess(w, r, workID) {
+		return
+	}
 	work, err := a.st.FinishRequestWork(workID, body.State, body.Summary, personOf(r))
 	if err != nil {
 		writeRequestError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, work)
+	writeJSON(w, http.StatusOK, a.workView(r, work))
 }
 
 func (a *api) addRequestCriterion(w http.ResponseWriter, r *http.Request) {
@@ -154,6 +257,9 @@ func (a *api) addRequestCriterion(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)
+		return
+	}
+	if !a.checkRequest(w, r, store.RefRequest, requestID, store.ActEdit) {
 		return
 	}
 	criterion, err := a.st.AddCriterion(requestID, body.Description, personOf(r))
@@ -179,6 +285,9 @@ func (a *api) setRequestCriterion(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
+	if !a.checkRequest(w, r, store.RefCriterion, criterionID, store.ActWork) {
+		return
+	}
 	if err := a.st.SetCriterionState(criterionID, body.State, requestdomain.Evidence{Kind: body.EvidenceKind, Ref: body.EvidenceRef, Person: personOf(r)}); err != nil {
 		writeRequestError(w, err)
 		return
@@ -199,6 +308,9 @@ func (a *api) dropRequest(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
+	if !a.checkRequest(w, r, store.RefRequest, requestID, store.ActEdit) {
+		return
+	}
 	if err := a.st.DropRequest(requestID, body.Reason, personOf(r)); err != nil {
 		writeRequestError(w, err)
 		return
@@ -208,7 +320,7 @@ func (a *api) dropRequest(w http.ResponseWriter, r *http.Request) {
 		writeRequestError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, detail)
+	writeJSON(w, http.StatusOK, a.access(r).RequestDetailView(detail))
 }
 
 func (a *api) addRequestRelation(w http.ResponseWriter, r *http.Request) {
@@ -220,6 +332,9 @@ func (a *api) addRequestRelation(w http.ResponseWriter, r *http.Request) {
 	var relation requestdomain.Relation
 	if err := readJSON(r, &relation); err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)
+		return
+	}
+	if !a.checkRequest(w, r, store.RefRequest, requestID, store.ActWork) {
 		return
 	}
 	saved, err := a.st.AddRequestRelation(requestID, relation, personOf(r))
@@ -244,6 +359,9 @@ func (a *api) correctRequest(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
+	if !a.checkRequest(w, r, store.RefRequest, requestID, store.ActEdit) {
+		return
+	}
 	if err := a.st.UpdateRequest(requestID, body.Patch, personOf(r), body.Reason); err != nil {
 		writeRequestError(w, err)
 		return
@@ -253,7 +371,7 @@ func (a *api) correctRequest(w http.ResponseWriter, r *http.Request) {
 		writeRequestError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, detail)
+	writeJSON(w, http.StatusOK, a.access(r).RequestDetailView(detail))
 }
 
 func (a *api) removeRequestRelation(w http.ResponseWriter, r *http.Request) {
@@ -267,6 +385,9 @@ func (a *api) removeRequestRelation(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)
+		return
+	}
+	if !a.checkRequest(w, r, store.RefRelation, relationID, store.ActWork) {
 		return
 	}
 	if err := a.st.RemoveRequestRelation(relationID, personOf(r), body.Reason); err != nil {
@@ -283,8 +404,11 @@ func writeRequestError(w http.ResponseWriter, err error) {
 	var rule *requestdomain.RuleError
 	if errors.As(err, &rule) {
 		status := http.StatusBadRequest
-		if rule.ErrorCode == "open_criteria" || rule.ErrorCode == "primary_exists" || rule.ErrorCode == "work_not_active" {
+		if rule.ErrorCode == "open_criteria" || rule.ErrorCode == "primary_exists" || rule.ErrorCode == "work_not_active" || rule.ErrorCode == "invalid_transition" || rule.ErrorCode == "idempotency_key_conflict" {
 			status = http.StatusConflict
+		}
+		if rule.ErrorCode == "secret_detected" {
+			status = http.StatusUnprocessableEntity
 		}
 		recordResponseError(w, classifyRequestError(status, "", err.Error()), err.Error())
 		writeJSON(w, status, map[string]any{
@@ -300,4 +424,39 @@ func writeRequestError(w http.ResponseWriter, err error) {
 	}
 	recordResponseError(w, classifyRequestError(http.StatusInternalServerError, "", err.Error()), err.Error())
 	writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "internal", "message": "request operation failed", "resolution": "retry or inspect server logs"})
+}
+
+// checkWorkAccess prüft das Beenden von Arbeit. Wer die Session-Nummern des
+// Projekts nicht kennen darf, darf nur Arbeit beenden, an der er arbeiten darf
+// und deren Session ihm gehört. Instanz-Admins sind ausgenommen und beenden
+// auch hängengebliebene Arbeit anderer Konten. Jede andere Ablehnung, die
+// Rollenprüfung eingeschlossen, antwortet wie für eine unbekannte Id, sonst verriete Status oder Text
+// (403, 404 mit anderem Body, work_not_active), dass es die verborgene Arbeit gibt (#2485).
+func (a *api) checkWorkAccess(w http.ResponseWriter, r *http.Request, workID int64) bool {
+	pa := a.access(r)
+	ref, err := a.st.RequestRef(store.RefWork, workID)
+	if err != nil || pa.IsAdmin() || pa.SeesSessionNumbers(ref.Project) {
+		return a.checkRequest(w, r, store.RefWork, workID, store.ActWork)
+	}
+	if pa.Decide(ref.Project, store.ResRequest, store.ActWork, store.Object{Own: pa.OwnsRequest(ref.ID), RequestID: ref.ID}).Allowed {
+		if sid, err := a.st.RequestWorkSession(workID); err == nil {
+			// Nur Arbeit der eigenen Session: eine lesbare, geteilte reicht nicht.
+			if sess, serr := a.st.SessionByID(sid); serr == nil && pa.OwnsSession(sess) {
+				return true
+			}
+		}
+	}
+	pa.Filtered()
+	writeRequestError(w, sql.ErrNoRows)
+	return false
+}
+
+// workView: wer die Session-Nummern des Projekts nicht kennen darf, bekommt sie
+// auch aus einem einzelnen Arbeitseintrag nicht zurück.
+func (a *api) workView(r *http.Request, w requestdomain.Work) requestdomain.Work {
+	detail, err := a.st.RequestByID(w.RequestID)
+	if err != nil || !a.access(r).SeesSessionNumbers(detail.Request.Scope.Project) {
+		w.SessionID = 0
+	}
+	return w
 }

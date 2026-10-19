@@ -1,0 +1,9 @@
+[Unit]
+Description=start the "In short" batch run when the explain key file is written
+
+[Path]
+PathChanged=/etc/ghosttree/explain-key
+Unit=ghosttree-explain.service
+
+[Install]
+WantedBy=multi-user.target

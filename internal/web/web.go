@@ -2,14 +2,18 @@
 package web
 
 import (
-	"database/sql"
+	"bytes"
 	"embed"
-	"html/template"
+	"errors"
+	"github.com/Deadweight-Labs/ghosttree/internal/forge"
 	"net/http"
-	"strconv"
+	"strings"
+	"sync"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
-	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
+	"github.com/Deadweight-Labs/ghosttree/internal/explain"
+	"github.com/Deadweight-Labs/ghosttree/internal/llmusage"
+	"github.com/Deadweight-Labs/ghosttree/internal/proxytrust"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/server"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -18,167 +22,529 @@ import (
 //go:embed templates static
 var files embed.FS
 
-var pages = template.Must(template.ParseFS(files, "templates/*.html"))
-
 type app struct {
-	store    *store.Store
-	sessions *sessions
+	store         *store.Store
+	sessions      *sessions
+	oidc          *oidcClient
+	bootstrapFile string
+	registered    []string
+	cursorOnce    sync.Once
+	cursorSeal    *flowSealer
+	proxies       proxytrust.Set
+	publicOrigin  string // scheme://host of GHOSTTREE_PUBLIC_URL, or empty
+	publicHTTPS   bool
+	joinLimits    *joinLimiter
+	inviteLinks   *inviteLinks
+	distSums      distCache
+	distDir       string           // ctx archives + checksums.txt served at /dist/; empty = off
+	oidcName      string           // display name of the identity provider; empty = unnamed
+	language      lang             // server language (GHOSTTREE_LANGUAGE); empty = en
+	explain       *explain.Service // "Kurz erklärt"; nil = off
+	gardenLimits  llmusage.Limits  // caps of the gardener, shown to administrators
+	prover        forge.Prover     // proof behind "connect GitHub"; nil = off
+	sourceFlows   *sourceFlows
 }
 type pageData struct {
-	Title, Person, Error string
-	Requests             []requestdomain.SearchHit
-	Request              requestdomain.Detail
-	Knowledge            []store.Knowledge
-	Sessions             []store.Session
-	Chunks               []store.Chunk
-	SessionID            int64
-	Project, Preview     string
-	Review               []reviewEntry
-}
-type reviewEntry struct {
-	Knowledge         store.Knowledge
-	Evidence          []store.Evidence
-	MigrationEvidence *store.MigrationEvidence
-	Recurrence        int
+	Title, NavSection, Person, CSRFToken, Error, Code, BackURL string
+	OIDC, Paste, NeedsName                                     bool
+	Admin, Approved, Interactive                               bool
+	DeviceMachine, DeviceRemote, DeviceStarted                 string
+	Tokens                                                     []tokenRow
+	UnusedTokens                                               int
+	UnusedForeign                                              bool
+	TokenResult                                                string
+	RequestsV                                                  *requestsView
+	RequestV                                                   *requestView
+	TasksV                                                     *tasksView
+	PainsV                                                     *painsView
+	SearchV                                                    *searchView
+	PainV                                                      *painView
+	KnowledgeV                                                 *knowledgeView
+	KnowledgeItemV                                             *knowledgeItemView
+	ReviewV                                                    *reviewView
+	ContextV                                                   *contextView
+	Sessions                                                   []store.Session
+	Chunks                                                     []store.Chunk
+	SessionID                                                  int64
+	SessionsV                                                  *sessionsView
+	SessionV                                                   *sessionView
+	Project, Preview                                           string
+	Coord                                                      coordPageView
+	Orgs                                                       orgsView
+	Invite                                                     bool
+	InviteV                                                    *joinView
+	ProviderName                                               string
+	Bootstrap, TokenOpen                                       bool
+	Shell                                                      shellView
+	Overview                                                   overviewView
+	Agents                                                     agentsView
+	Profile                                                    profileView
+	// Refresh: Sekunden bis zum automatischen Neuladen (0 = nie).
+	Refresh int
 }
 
-func New(st *store.Store) http.Handler {
-	a := &app{store: st, sessions: newSessions()}
+func New(st *store.Store, opts ...Option) http.Handler {
+	return newApp(st, opts...)
+}
+
+// appHandler gibt Tests Zugriff auf den app-Zustand hinter dem Handler.
+type appHandler struct {
+	http.Handler
+	app *app
+}
+
+// ServeHTTP setzt die Sicherheitsköpfe aller /ui/-Seiten, bevor ein Handler
+// antwortet; Handler dürfen sie überschreiben (join.go setzt eigene).
+func (h *appHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/ui" || strings.HasPrefix(r.URL.Path, "/ui/") {
+		uiHeaders(w.Header())
+	}
+	h.Handler.ServeHTTP(w, r)
+}
+
+// uiHeaders: Skripte, Stile, Schriften und Bilder nur von dieser Herkunft,
+// keine fremden Ressourcen, nicht einbettbar. form-action bleibt offen, weil der
+// Weg zum Identitätsanbieter eine Weiterleitung ist.
+func uiHeaders(h http.Header) {
+	h.Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'")
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Referrer-Policy", "strict-origin")
+	h.Set("Cache-Control", "no-store")
+}
+
+func newApp(st *store.Store, opts ...Option) http.Handler {
+	a := &app{store: st, sessions: newSessions(), joinLimits: newJoinLimiter(), inviteLinks: newInviteLinks(), sourceFlows: newSourceFlows()}
+	for _, opt := range opts {
+		opt(a)
+	}
 	mux := http.NewServeMux()
-	mux.Handle("GET /static/", http.FileServerFS(files))
-	mux.HandleFunc("GET /ui/login", a.loginPage)
-	mux.HandleFunc("POST /ui/login", a.loginSubmit)
-	mux.HandleFunc("POST /ui/logout", a.logout)
-	mux.Handle("GET /ui/requests", a.requirePerson(http.HandlerFunc(a.requestsPage)))
-	mux.Handle("GET /ui/requests/{id}", a.requirePerson(http.HandlerFunc(a.requestPage)))
-	mux.Handle("GET /ui/knowledge", a.requirePerson(http.HandlerFunc(a.knowledgePage)))
-	mux.Handle("GET /ui/review", a.requirePerson(http.HandlerFunc(a.reviewPage)))
-	mux.Handle("GET /ui/sessions", a.requirePerson(http.HandlerFunc(a.sessionsPage)))
-	mux.Handle("GET /ui/sessions/{id}", a.requirePerson(http.HandlerFunc(a.sessionPage)))
-	mux.Handle("GET /ui/context", a.requirePerson(http.HandlerFunc(a.contextPage)))
-	mux.HandleFunc("GET /ui/{$}", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/ui/requests", http.StatusSeeOther) })
-	return mux
+	a.handle(mux, "GET /static/", a.staticFiles())
+	a.handle(mux, "GET /{$}", a.rootRedirect)
+	a.handle(mux, "GET /favicon.ico", a.favicon)
+	a.handle(mux, "GET /ui/login", a.loginPage)
+	a.handle(mux, "POST /ui/login", a.requireSameOrigin(http.HandlerFunc(a.loginSubmit)))
+	a.handle(mux, "POST /ui/login/oidc", a.requireSameOrigin(http.HandlerFunc(a.oidcStart)))
+	a.handle(mux, "GET /ui/login/oidc/callback", a.oidcCallback)
+	a.handle(mux, "GET /ui/login/code", a.codePage)
+	a.handle(mux, "POST /ui/login/code", a.requireSameOrigin(http.HandlerFunc(a.codeSubmit)))
+	a.handle(mux, "GET /install.sh", a.installSh)
+	a.handle(mux, "GET /dist/{name}", a.distFile)
+	a.handle(mux, "GET /join/{code}", a.joinPage)
+	a.handle(mux, "GET /join/", func(w http.ResponseWriter, r *http.Request) {
+		if a.joinGate(w, r) {
+			a.joinNotFound(a.langFor(r), w)
+		}
+	})
+	a.handle(mux, "GET /join/pair", a.requirePerson(a.requireInteractive(http.HandlerFunc(a.joinPairPage))))
+	a.handle(mux, "GET /join/pair/state", a.requirePerson(a.requireInteractive(http.HandlerFunc(a.joinPairState))))
+	a.handle(mux, "POST /join/pair", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.joinPairCreate))))))
+	a.handle(mux, "POST /join/pair/decide", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.joinPairDecide))))))
+	a.handle(mux, "POST /join/{code}/accept", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.joinAccept))))))
+	a.handle(mux, "POST /join/{code}/signout", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.joinSignOut)))))
+	a.handle(mux, "POST /ui/logout", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.logout))))
+	a.handle(mux, "GET /ui/overview", a.requirePerson(http.HandlerFunc(a.overviewPage)))
+	a.handle(mux, "GET /ui/agents", a.requirePerson(http.HandlerFunc(a.agentsPage)))
+	a.handle(mux, "GET /ui/rooms", a.requirePerson(http.HandlerFunc(a.roomsAlias)))
+	a.handle(mux, "GET /ui/requests", a.requirePerson(http.HandlerFunc(a.requestsPage)))
+	a.handle(mux, "GET /ui/requests/{id}", a.requirePerson(http.HandlerFunc(a.requestPage)))
+	for suffix, h := range map[string]http.HandlerFunc{
+		"criteria": a.requestAddCriterion, "criteria/{cid}": a.requestResolve,
+		"complete": a.requestComplete, "drop": a.requestDrop,
+	} {
+		a.handle(mux, "POST /ui/requests/{id}/"+suffix, a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(h)))))
+	}
+	a.handle(mux, "POST /ui/requests/{id}/move", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.requestMove))))))
+	a.handle(mux, "POST /ui/requests/{id}/correct", a.requirePerson(a.requireInteractive(limitBodyN(requestCorrectForm, a.requestFormTooLarge(a.requireCSRF(http.HandlerFunc(a.requestCorrect)))))))
+	a.registerPainTaskPages(mux)
+	a.handle(mux, "GET /ui/search", a.requirePerson(http.HandlerFunc(a.searchPage)))
+	a.handle(mux, "GET /ui/knowledge", a.requirePerson(http.HandlerFunc(a.knowledgePage)))
+	a.handle(mux, "GET /ui/knowledge/{id}", a.requirePerson(http.HandlerFunc(a.knowledgeItemPage)))
+	a.handle(mux, "POST /ui/knowledge/{id}/move", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.knowledgeMove))))))
+	a.handle(mux, "POST /ui/knowledge/{id}/edit", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.knowledgeEdit))))))
+	a.handle(mux, "GET /ui/review", a.requirePerson(http.HandlerFunc(a.reviewPage)))
+	a.handle(mux, "POST /ui/review/bulk", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.reviewBulk))))))
+	a.handle(mux, "POST /ui/review/{id}/{verdict}", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.reviewDecide))))))
+	a.handle(mux, "GET /ui/sessions", a.requirePerson(http.HandlerFunc(a.sessionsPage)))
+	a.handle(mux, "GET /ui/sessions/{id}", a.requirePerson(http.HandlerFunc(a.sessionPage)))
+	a.handle(mux, "POST /ui/sessions/{id}/share", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.sessionShare))))))
+	a.handle(mux, "GET /ui/context", a.requirePerson(http.HandlerFunc(a.contextPage)))
+	a.handle(mux, "GET /ui/coord", a.requirePerson(http.HandlerFunc(a.coordRoomPage)))
+	a.handle(mux, "GET /ui/coord/events", a.requirePerson(http.HandlerFunc(a.coordEvents)))
+	a.handle(mux, "GET /ui/coord/thread/{id}", a.requirePerson(http.HandlerFunc(a.coordThreadPage)))
+	a.handle(mux, "POST /ui/coord/send", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordSend))))
+	a.handle(mux, "POST /ui/coord/thread/create", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordCreateThread))))
+	a.handle(mux, "POST /ui/coord/thread/post", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordPostThread))))
+	a.handle(mux, "POST /ui/coord/thread/state", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordSetThreadState))))
+	a.handle(mux, "POST /ui/coord/read", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordMarkRead))))
+	a.handle(mux, "POST /ui/coord/unread", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordMarkUnread))))
+	a.handle(mux, "POST /ui/coord/attention/action", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordAttentionAction))))
+	a.handle(mux, "POST /ui/coord/standing/end", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordEndStanding))))
+	a.handle(mux, "POST /ui/coord/standing/create", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordCreateStanding))))
+	a.handle(mux, "POST /ui/coord/direct/start", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordStartDirect))))
+	a.handle(mux, "POST /ui/coord/group/create", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordCreateGroup))))
+	a.handle(mux, "POST /ui/coord/group/update", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordUpdateGroup))))
+	a.handle(mux, "POST /ui/coord/group/leave", a.requirePerson(a.requireCSRF(http.HandlerFunc(a.coordLeaveGroup))))
+	a.handle(mux, "POST /ui/coord/agent/control", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.coordAgentControl))))))
+	a.handle(mux, "GET /ui/device", a.requirePerson(http.HandlerFunc(a.devicePage)))
+	a.handle(mux, "POST /ui/device", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.deviceLookup))))))
+	a.handle(mux, "POST /ui/device/decide", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.deviceDecide))))))
+	a.handle(mux, "GET /ui/account/tokens", a.requirePerson(http.HandlerFunc(a.tokensPage)))
+	a.handle(mux, "POST /ui/account/tokens/revoke", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.tokenRevoke)))))
+	a.handle(mux, "POST /ui/account/tokens/revoke-unused", a.requirePerson(limitBody(a.requireCSRF(http.HandlerFunc(a.tokensRevokeUnused)))))
+	a.handle(mux, "GET /ui/profile", a.requirePerson(http.HandlerFunc(a.profilePage)))
+	a.handle(mux, "POST /ui/profile", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.profileSave))))))
+	a.handle(mux, "GET /ui/orgs", a.requirePerson(http.HandlerFunc(a.orgsPage)))
+	a.handle(mux, "GET /ui/orgs/source/callback", a.requirePerson(a.requireInteractive(http.HandlerFunc(a.orgSourceCallback))))
+	// Verwaltung nur aus einer interaktiven Sitzung, nicht aus eingefügtem Token.
+	for path, h := range map[string]http.HandlerFunc{
+		"/ui/orgs/invite": a.orgInvite, "/ui/orgs/invite/revoke": a.orgInviteRevoke,
+		"/ui/orgs/member/role": a.orgMemberRole, "/ui/orgs/member/remove": a.orgMemberRemove,
+		"/ui/orgs/project/move": a.orgProjectMove, "/ui/orgs/project/role": a.orgProjectRole,
+		"/ui/orgs/create": a.orgCreate, "/ui/orgs/rename": a.orgRename,
+		"/ui/orgs/project/create": a.orgProjectCreate, "/ui/orgs/project/visibility": a.orgProjectVisibility,
+		"/ui/orgs/source/connect": a.orgSourceConnect, "/ui/orgs/source/add": a.orgSourceAdd,
+		"/ui/orgs/source/remove": a.orgSourceRemove, "/ui/orgs/source/import": a.orgSourceImport,
+		"/ui/orgs/prefix/visibility": a.orgPrefixVisibility,
+	} {
+		a.handle(mux, "POST "+path, a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(h)))))
+	}
+	for path, h := range map[string]http.HandlerFunc{
+		"/ui/orgs/accept": a.orgAccept, "/ui/orgs/default": a.orgDefault,
+	} {
+		a.handle(mux, "POST "+path, a.requirePerson(limitBody(a.requireCSRF(h))))
+	}
+	a.handle(mux, "GET /ui/{$}", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/ui/overview", http.StatusSeeOther) })
+	return &appHandler{Handler: mux, app: a}
 }
 
-func (a *app) render(w http.ResponseWriter, name string, data pageData) {
+func (a *app) render(l lang, w http.ResponseWriter, name string, data pageData) {
+	var output bytes.Buffer
+	if err := l.page().ExecuteTemplate(&output, name, data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := pages.ExecuteTemplate(w, name, data); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
+	_, _ = output.WriteTo(w)
 }
-func (a *app) requestsPage(w http.ResponseWriter, r *http.Request) {
-	state := r.URL.Query().Get("state")
-	if _, exists := r.URL.Query()["state"]; !exists {
-		state = "open"
+func (a *app) renderBrowser(w http.ResponseWriter, r *http.Request, name string, data pageData) {
+	l := a.langFor(r)
+	principal := browserPrincipal(r)
+	data.Person = principal.Label
+	data.CSRFToken = csrfOf(r)
+	data.Interactive = interactive(r)
+	data.Shell = a.shellFor(r, name)
+	switch name {
+	case "overview":
+		data.NavSection = "overview"
+	case "agents":
+		data.NavSection = "agents"
+	case "requests", "request", "requesttoolarge":
+		data.NavSection = "requests"
+	case "knowledge", "knowledgeitem", "search":
+		data.NavSection = "knowledge"
+	case "review":
+		data.NavSection = "review"
+	case "sessions", "session":
+		data.NavSection = "sessions"
+	case "coord", "roomforbidden", "roomnotfound":
+		data.NavSection = "coord"
+	case "context":
+		data.NavSection = "context"
+	case "tokens", "device", "devicecheck", "devicedone", "interactive":
+		data.NavSection = "tokens"
+	case "orgs":
+		data.NavSection = "orgs"
+	case "profile":
+		data.NavSection = "profile"
 	}
-	page, err := a.store.SearchRequests(requestdomain.SearchFilter{State: state, Query: r.URL.Query().Get("q"), Limit: 25})
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	a.render(w, "requests", pageData{Title: "Requests", Person: personOf(r), Requests: page.Results})
-}
-func (a *app) requestPage(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	detail, err := a.store.RequestByID(id)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	a.render(w, "request", pageData{Title: detail.Request.HumanID(), Person: personOf(r), Request: detail})
-}
-
-func (a *app) knowledgePage(w http.ResponseWriter, r *http.Request) {
-	q, project := r.URL.Query().Get("q"), scope.NormalizeRemote(r.URL.Query().Get("project"))
-	var entries []store.Knowledge
-	var err error
-	if q != "" {
-		entries, err = a.store.SearchAllKnowledge(q, scope.Axes{Project: project}, 50)
-	} else {
-		entries, err = a.store.KnowledgeForProject(project)
-	}
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	a.render(w, "knowledge", pageData{Title: "Knowledge", Person: personOf(r), Knowledge: entries, Project: project})
+	a.render(l, w, name, data)
 }
 
-func (a *app) reviewPage(w http.ResponseWriter, r *http.Request) {
-	entries, err := a.store.PendingKnowledge("", 50)
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	items := make([]reviewEntry, 0, len(entries))
-	for _, k := range entries {
-		evidence, err := a.store.EvidenceFor(k.ID)
-		if err != nil {
-			http.Error(w, err.Error(), 500)
-			return
+// sessionLinks nennt zu Sessionnummern aus Verweisen die Adresse in der
+// Weboberfläche, nur für Sessions, die der Betrachter lesen darf. Ohne Eintrag
+// steht kein Link; die Nummer selbst erscheint nie in einer Adresse.
+func (a *app) sessionLinks(pa *store.ProjectAccess, ids []int64) map[int64]string {
+	out := map[int64]string{}
+	for _, id := range ids {
+		if _, done := out[id]; done {
+			continue
 		}
-		recurrence, err := a.store.Recurrence(k.ID)
-		if err != nil {
-			http.Error(w, err.Error(), 500)
-			return
+		sess, err := a.store.SessionByID(id)
+		if err != nil || sess.PublicID == "" || !pa.CanSeeTranscript(sess) {
+			continue
 		}
-		proof, err := a.store.MigrationEvidenceForKnowledge(k.ID)
-		var migrationProof *store.MigrationEvidence
-		if err == nil {
-			migrationProof = &proof
-		} else if err != sql.ErrNoRows {
-			http.Error(w, err.Error(), 500)
-			return
-		}
-		items = append(items, reviewEntry{Knowledge: k, Evidence: evidence, MigrationEvidence: migrationProof, Recurrence: recurrence})
+		out[id] = "/ui/sessions/" + sess.PublicID
 	}
-	a.render(w, "review", pageData{Title: "Review", Person: personOf(r), Review: items})
+	return out
 }
 
-func (a *app) sessionsPage(w http.ResponseWriter, r *http.Request) {
-	entries, err := a.store.ListSessions(scope.Axes{Project: scope.NormalizeRemote(r.URL.Query().Get("project"))}, 50)
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
+// projectParam ist das Projekt einer projektbezogenen Seite und löst genau wie
+// die Auswahl im Kopf auf (projectOptions): ein nutzbares ?project=, sonst das
+// Cookie, sonst "" für alle Projekte. Nur ein Admin ohne Rolle im genannten
+// Projekt darf es trotzdem öffnen; die Abfrage filtert nach seinen Rechten.
+func (a *app) projectParam(r *http.Request) string {
+	if p := scope.NormalizeRemote(r.URL.Query().Get("project")); p != "" && a.access(r).IsAdmin() {
+		return p
 	}
-	a.render(w, "sessions", pageData{Title: "Sessions", Person: personOf(r), Sessions: entries})
+	return selectedProject(a.shellFor(r, "knowledge"))
 }
 
-func (a *app) sessionPage(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	chunks, err := a.store.ReadSession(id, 0, 500)
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	a.render(w, "session", pageData{Title: "Session " + strconv.FormatInt(id, 10), Person: personOf(r), SessionID: id, Chunks: chunks})
+// contextView is the Agent context page: what a project's agents are given,
+// optionally with what still waits for review.
+type contextView struct {
+	Project string
+	Preview bool
+	Output  string
+	// Choices are the projects to pick from while none is chosen.
+	Choices []projectOption
 }
 
 func (a *app) contextPage(w http.ResponseWriter, r *http.Request) {
-	project := scope.NormalizeRemote(r.URL.Query().Get("project"))
+	l := a.langFor(r)
+	project := a.projectParam(r)
 	preview := r.URL.Query().Get("preview") == "1"
+	view := &contextView{Project: project, Preview: preview}
+	if project == "" {
+		view.Choices = a.shellFor(r, "context").Projects
+		// Wer nur ein Projekt sieht, braucht keine Auswahl.
+		if len(view.Choices) == 1 {
+			q := r.URL.Query()
+			q.Set("project", view.Choices[0].Remote)
+			http.Redirect(w, r, "/ui/context?"+q.Encode(), http.StatusSeeOther)
+			return
+		}
+		a.renderBrowser(w, r, "context", pageData{Title: l.msg("context.title"), ContextV: view})
+		return
+	}
 	var entries []store.Knowledge
 	var err error
+	pa := a.access(r)
 	if preview {
-		entries, err = a.store.KnowledgeForActivatedPreview(scope.Axes{Project: project}, activation.Context{})
+		entries, err = a.store.KnowledgeForActivatedPreview(scope.Axes{Project: project}, activation.Context{}, pa.Viewer())
 	} else {
-		entries, err = a.store.KnowledgeForContext(scope.Axes{Project: project})
+		entries, err = a.store.KnowledgeForContext(scope.Axes{Project: project}, pa.Viewer())
 	}
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	output := server.RenderBootstrap(entries, 12000)
-	if preview {
-		output = server.RenderBootstrapPreview(entries, 12000)
+	entries = keep(entries, 0, func(k store.Knowledge) bool { return pa.CanSeeKnowledge(k) && pa.CanDeliverKnowledge(k) })
+	if len(entries) > 0 {
+		view.Output = server.RenderBootstrap(entries, 12000)
+		if preview {
+			view.Output = server.RenderBootstrapPreview(entries, 12000)
+		}
 	}
-	a.render(w, "context", pageData{Title: "Agent Context", Person: personOf(r), Project: project, Preview: output})
+	a.renderBrowser(w, r, "context", pageData{Title: l.msg("context.title"), ContextV: view})
+}
+
+// access ist die Zugriffsprüfung der Browser-Sitzung. Sie nutzt denselben Store
+// und damit denselben Schalter (GHOSTTREE_ENFORCE_ACCESS) wie die API.
+func (a *app) access(r *http.Request) *store.ProjectAccess {
+	return a.store.Access(browserPrincipal(r))
+}
+
+func (a *app) overfetch(limit int) int {
+	if a.store.AccessEnforced() {
+		return limit * 4
+	}
+	return limit
+}
+
+// accessDenied antwortet auf einen Zugriffsfehler mit 404 oder 403.
+func (a *app) accessDenied(w http.ResponseWriter, r *http.Request, err error) bool {
+	switch {
+	case err == nil:
+		return false
+	case errors.Is(err, store.ErrAccessForbidden):
+		http.Error(w, "forbidden", http.StatusForbidden)
+	default:
+		http.NotFound(w, r)
+	}
+	return true
+}
+
+// gateList prüft eine Liste mit ausdrücklichem Projekt. Wer das Projekt nicht
+// sehen darf, bekommt dieselbe leere Liste wie bei einem unbekannten Projekt
+// (empty), nicht 404 gegen 200: der Unterschied verriete, dass es das Projekt
+// gibt. stop heißt, dass die Antwort schon geschrieben ist (403).
+func (a *app) gateList(w http.ResponseWriter, r *http.Request, pa *store.ProjectAccess, project string, res store.Resource) (empty, stop bool) {
+	if project == "" {
+		return false, false
+	}
+	err := pa.GateList(project, res, true)
+	switch {
+	case err == nil:
+		return false, false
+	case errors.Is(err, store.ErrAccessForbidden):
+		return false, a.accessDenied(w, r, err)
+	default:
+		return true, false
+	}
+}
+
+// keep behält die Einträge, die allow zulässt, höchstens limit viele (0 = alle).
+func keep[T any](in []T, limit int, allow func(T) bool) []T {
+	out := make([]T, 0, len(in))
+	for _, item := range in {
+		if allow(item) {
+			out = append(out, item)
+			if limit > 0 && len(out) >= limit {
+				break
+			}
+		}
+	}
+	return out
+}
+
+// Die Routentabelle der Weboberfläche: jede Route ist klassifiziert, und ein Test
+// hält die Tabelle und die Registrierung deckungsgleich.
+type webClass string
+
+const (
+	// webPublic: ohne Sitzung erreichbar (Login, statische Dateien).
+	webPublic webClass = "public"
+	// webAccount: braucht eine Sitzung und zeigt nur Kontodaten.
+	webAccount webClass = "account"
+	// webProject: Daten eines Projekts; die Seite filtert über ProjectAccess.
+	webProject webClass = "project"
+	// webCoord: Koordination; CoordAccess entscheidet.
+	webCoord webClass = "coord"
+	// webAdmin: Verwaltung, nur aus einer interaktiven Sitzung (#2411).
+	webAdmin webClass = "admin"
+)
+
+var webRoutes = map[string]webClass{
+	"GET /static/":                          webPublic,
+	"GET /install.sh":                       webPublic,
+	"GET /dist/{name}":                      webPublic,
+	"GET /join/{code}":                      webPublic,
+	"GET /join/":                            webPublic,
+	"GET /join/pair":                        webAccount,
+	"GET /join/pair/state":                  webAccount,
+	"POST /join/pair":                       webAdmin,
+	"POST /join/pair/decide":                webAdmin,
+	"POST /join/{code}/accept":              webAdmin,
+	"POST /join/{code}/signout":             webAccount,
+	"GET /ui/login":                         webPublic,
+	"POST /ui/login":                        webPublic,
+	"POST /ui/login/oidc":                   webPublic,
+	"GET /ui/login/oidc/callback":           webPublic,
+	"GET /ui/login/code":                    webPublic,
+	"POST /ui/login/code":                   webPublic,
+	"GET /{$}":                              webPublic,
+	"GET /favicon.ico":                      webPublic,
+	"GET /ui/{$}":                           webPublic,
+	"GET /ui/overview":                      webAccount,
+	"GET /ui/agents":                        webCoord,
+	"GET /ui/rooms":                         webCoord,
+	"POST /ui/logout":                       webAccount,
+	"GET /ui/requests":                      webProject,
+	"GET /ui/requests/{id}":                 webProject,
+	"POST /ui/requests/{id}/criteria":       webAdmin,
+	"POST /ui/requests/{id}/criteria/{cid}": webAdmin,
+	"POST /ui/requests/{id}/correct":        webAdmin,
+	"POST /ui/requests/{id}/move":           webAdmin,
+	"POST /ui/requests/{id}/complete":       webAdmin,
+	"POST /ui/requests/{id}/drop":           webAdmin,
+	"GET /ui/knowledge":                     webProject,
+	"GET /ui/knowledge/{id}":                webProject,
+	"POST /ui/knowledge/{id}/edit":          webAdmin,
+	"POST /ui/knowledge/{id}/move":          webAdmin,
+	"GET /ui/review":                        webProject,
+	"GET /ui/search":                        webProject,
+	"POST /ui/review/bulk":                  webAdmin,
+	"POST /ui/review/{id}/{verdict}":        webAdmin,
+	"GET /ui/sessions":                      webProject,
+	"GET /ui/sessions/{id}":                 webProject,
+	"POST /ui/sessions/{id}/share":          webAdmin,
+	"GET /ui/context":                       webProject,
+	"GET /ui/coord":                         webCoord,
+	"GET /ui/coord/events":                  webCoord,
+	"GET /ui/coord/thread/{id}":             webCoord,
+	"POST /ui/coord/send":                   webCoord,
+	"POST /ui/coord/thread/create":          webCoord,
+	"POST /ui/coord/thread/post":            webCoord,
+	"POST /ui/coord/thread/state":           webCoord,
+	"POST /ui/coord/read":                   webCoord,
+	"POST /ui/coord/unread":                 webCoord,
+	"POST /ui/coord/attention/action":       webCoord,
+	"POST /ui/coord/standing/end":           webCoord,
+	"POST /ui/coord/standing/create":        webCoord,
+	"POST /ui/coord/direct/start":           webCoord,
+	"POST /ui/coord/group/create":           webCoord,
+	"POST /ui/coord/group/update":           webCoord,
+	"POST /ui/coord/group/leave":            webCoord,
+	"GET /ui/device":                        webAccount,
+	"POST /ui/device":                       webAdmin,
+	"POST /ui/device/decide":                webAdmin,
+	"POST /ui/coord/agent/control":          webAdmin,
+	"GET /ui/account/tokens":                webAccount,
+	"POST /ui/account/tokens/revoke":        webAccount,
+	"POST /ui/account/tokens/revoke-unused": webAccount,
+	"GET /ui/profile":                       webAccount,
+	"POST /ui/profile":                      webAdmin,
+	"GET /ui/orgs":                          webAccount,
+	"POST /ui/orgs/invite":                  webAdmin,
+	"POST /ui/orgs/invite/revoke":           webAdmin,
+	"POST /ui/orgs/member/role":             webAdmin,
+	"POST /ui/orgs/member/remove":           webAdmin,
+	"POST /ui/orgs/project/move":            webAdmin,
+	"POST /ui/orgs/project/role":            webAdmin,
+	"POST /ui/orgs/project/create":          webAdmin,
+	"POST /ui/orgs/project/visibility":      webAdmin,
+	"POST /ui/orgs/source/connect":          webAdmin,
+	"POST /ui/orgs/source/add":              webAdmin,
+	"POST /ui/orgs/source/remove":           webAdmin,
+	"POST /ui/orgs/source/import":           webAdmin,
+	"POST /ui/orgs/prefix/visibility":       webAdmin,
+	"GET /ui/orgs/source/callback":          webAccount,
+	"POST /ui/orgs/create":                  webAdmin,
+	"POST /ui/orgs/rename":                  webAdmin,
+	"POST /ui/orgs/accept":                  webAccount,
+	"POST /ui/orgs/default":                 webAccount,
+
+	"GET /ui/tasks":             webProject,
+	"POST /ui/tasks/done":       webAdmin,
+	"GET /ui/pains":             webProject,
+	"GET /ui/pains/{id}":        webProject,
+	"POST /ui/pains/{id}/state": webAdmin,
+}
+
+// handle registriert eine Route und bricht ab, wenn sie nicht klassifiziert ist.
+// h ist ein http.Handler oder eine Funktion (w, r).
+func (a *app) handle(mux *http.ServeMux, pattern string, h any) {
+	if _, ok := webRoutes[pattern]; !ok {
+		panic("web: route " + pattern + " is not classified in webRoutes")
+	}
+	a.registered = append(a.registered, pattern)
+	switch h := h.(type) {
+	case http.Handler:
+		mux.Handle(pattern, h)
+	case func(http.ResponseWriter, *http.Request):
+		mux.HandleFunc(pattern, h)
+	default:
+		panic("web: unsupported handler type for " + pattern)
+	}
+}
+
+// WebRouteClasses gibt die Tabelle zur Ansicht her.
+func WebRouteClasses() map[string]string {
+	out := make(map[string]string, len(webRoutes))
+	for pattern, class := range webRoutes {
+		out[pattern] = string(class)
+	}
+	return out
+}
+
+// staticFiles liefert die eingebetteten Dateien. Die Schriften ändern sich nur
+// mit einer neuen Schriftversion (Ordner v5) und liegen lange im Cache.
+func (a *app) staticFiles() http.Handler {
+	fileServer := http.FileServerFS(files)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/static/fonts/") {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		}
+		fileServer.ServeHTTP(w, r)
+	})
 }

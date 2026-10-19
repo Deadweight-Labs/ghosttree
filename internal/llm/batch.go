@@ -37,7 +37,14 @@ type BatchResult struct {
 	// fragment, and a fragment of JSON does not decode — which is
 	// indistinguishable from a bad answer unless it is said outright.
 	Truncated bool
+	// CacheReadTokens and CacheWriteTokens are the prompt-cache figures of the
+	// Anthropic format; they are billed at their own prices.
+	CacheReadTokens  int
+	CacheWriteTokens int
 }
+
+// BatchPriceFactor is what a batch costs relative to the synchronous call: half.
+const BatchPriceFactor = 0.5
 
 // BatchStatusReport describes a batch in flight. Done covers every terminal
 // state, not just success: a collector that treats failure as "still running"
@@ -61,7 +68,7 @@ type BatchClient interface {
 
 func (c *httpClient) SubmitBatch(ctx context.Context, reqs []BatchRequest) (string, error) {
 	if c.anthropic {
-		return "", fmt.Errorf("batch submission is only implemented for the OpenAI wire format")
+		return c.submitAnthropicBatch(ctx, reqs)
 	}
 	if len(reqs) == 0 {
 		return "", fmt.Errorf("batch is empty")
@@ -145,6 +152,9 @@ func (c *httpClient) uploadBatchFile(ctx context.Context, jsonl []byte) (string,
 }
 
 func (c *httpClient) BatchStatus(ctx context.Context, batchID string) (BatchStatusReport, error) {
+	if c.anthropic {
+		return c.anthropicBatchStatus(ctx, batchID)
+	}
 	batch, err := c.fetchBatch(ctx, batchID)
 	if err != nil {
 		return BatchStatusReport{}, err
@@ -165,6 +175,9 @@ func (c *httpClient) BatchStatus(ctx context.Context, batchID string) (BatchStat
 }
 
 func (c *httpClient) CollectBatch(ctx context.Context, batchID string) (map[string]BatchResult, error) {
+	if c.anthropic {
+		return c.collectAnthropicBatch(ctx, batchID)
+	}
 	batch, err := c.fetchBatch(ctx, batchID)
 	if err != nil {
 		return nil, err
@@ -271,7 +284,7 @@ func (c *httpClient) fetchBatch(ctx context.Context, batchID string) (batchEnvel
 }
 
 func doAndRead(req *http.Request, timeout time.Duration) ([]byte, error) {
-	client := &http.Client{Timeout: timeout}
+	client := newHTTPClient(req.URL, timeout)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err

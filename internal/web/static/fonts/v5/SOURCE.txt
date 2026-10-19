@@ -1,0 +1,8 @@
+Gabarito, Fragment Mono and Source Serif 4, latin subsets, woff2 as shipped by
+the npm packages @fontsource-variable/gabarito, @fontsource/fragment-mono and
+@fontsource-variable/source-serif-4 (SIL OFL 1.1, texts next to the files).
+
+sha256
+44c4e39bff5e76652a24a872cbebabccbcfb20f62c4633b27c1f2745cba86b56  fragment-mono-latin-400-normal.woff2
+780dd129f53815f23c37d4b786c98139c3cfa3086c391ec0bb9aa40d26e7a8fe  gabarito-latin-wght-normal.woff2
+c1df4596be5029233ed2afbb8b2f6ea20784b3fb1aa5d6b5c6519ccd85eb3dfb  source-serif-4-latin-wght-normal.woff2

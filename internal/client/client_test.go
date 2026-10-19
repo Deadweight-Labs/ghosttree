@@ -206,3 +206,40 @@ func TestClientGhostChainCarriesTheCurrentVersion(t *testing.T) {
 		t.Fatalf("die Historie bleibt ohne Kopf: %+v (%v)", hist, err)
 	}
 }
+
+// The hook hands the harness session id to the server through Relevant, and the
+// server answers once per session: the same prompt in the same session delivers
+// nothing the second time, another session or no id at all delivers again.
+func TestClientRelevantCarriesTheSessionAcrossTheWire(t *testing.T) {
+	st, _ := store.Open(":memory:")
+	t.Cleanup(func() { st.Close() })
+	token, _ := st.AddPerson("alice")
+	srv := httptest.NewServer(server.New(st))
+	t.Cleanup(srv.Close)
+
+	c := New(config.Config{ServerURL: srv.URL, Token: token, Machine: "workstation-a"})
+	ctx := scope.Axes{Project: "github.com/x/y", Machine: "workstation-a"}
+	if _, err := c.Remember(store.Knowledge{Type: "pitfall", Title: "zorblax stirbt beim Neustart", Body: "b"}, ctx); err != nil {
+		t.Fatal(err)
+	}
+	ask := func(session string) string {
+		t.Helper()
+		md, err := c.Relevant("was ist mit zorblax", ctx, 0, session)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return md
+	}
+	if md := ask("sess-1"); !strings.Contains(md, "zorblax stirbt beim Neustart") || !strings.Contains(md, `(triggered by "zorblax")`) {
+		t.Fatalf("first mention: %q", md)
+	}
+	if md := ask("sess-1"); md != "" {
+		t.Errorf("second mention in the same session: %q", md)
+	}
+	if md := ask("sess-2"); !strings.Contains(md, "zorblax stirbt beim Neustart") {
+		t.Errorf("another session: %q", md)
+	}
+	if md := ask(""); !strings.Contains(md, "zorblax stirbt beim Neustart") {
+		t.Errorf("without a session id: %q", md)
+	}
+}

@@ -32,12 +32,24 @@ func (s *Store) CreateRequest(in requestdomain.CreateInput) (requestdomain.Detai
 		return requestdomain.Detail{}, err
 	}
 	defer tx.Rollback()
+	author := authorForWriteTx(tx, in.AuthorID, r.Person, r.Origin, r.SessionRef)
 	if in.IdempotencyKey != "" {
 		var id int64
-		err := tx.QueryRow(`SELECT id FROM requests WHERE idempotency_key=?`, in.IdempotencyKey).Scan(&id)
+		var project, person string
+		err := tx.QueryRow(`SELECT id, project, person FROM requests WHERE idempotency_key=?`, in.IdempotencyKey).Scan(&id, &project, &person)
 		if err == nil {
+			// The key is unique across the instance, so a hit in another project or
+			// by another author is a collision, never a replay: nothing of that
+			// request is returned and the answer does not say where it lives.
+			var existing int64
+			_ = tx.QueryRow(`SELECT account_id FROM request_authors WHERE request_id=?`, id).Scan(&existing)
+			if project != r.Scope.Project || person != r.Person || existing != author {
+				return requestdomain.Detail{}, requestdomain.NewRuleError("idempotency_key_conflict", "this idempotency key is already in use", "choose a different idempotency key", nil)
+			}
 			tx.Rollback()
-			return s.RequestByID(id)
+			d, err := s.RequestByID(id)
+			d.Replayed = true
+			return d, err
 		}
 		if err != sql.ErrNoRows {
 			return requestdomain.Detail{}, err
@@ -66,6 +78,9 @@ func (s *Store) CreateRequest(in requestdomain.CreateInput) (requestdomain.Detai
 		return requestdomain.Detail{}, err
 	}
 	if _, err := tx.Exec(`INSERT INTO search_documents(kind,domain_id,title,body,project,branch,machine) VALUES('request',?,?,?,?,?,?)`, id, r.Title, r.Description, r.Scope.Project, r.Scope.Branch, r.Scope.Machine); err != nil {
+		return requestdomain.Detail{}, err
+	}
+	if err := recordRequestAuthorTx(tx, id, author); err != nil {
 		return requestdomain.Detail{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -118,14 +133,14 @@ func (s *Store) RequestByID(id int64) (requestdomain.Detail, error) {
 			return d, err
 		}
 	}
-	activityRows, err := s.db.Query(`SELECT id,request_id,kind,person,data,created_at FROM request_activity WHERE request_id=? ORDER BY id`, id)
+	activityRows, err := s.db.Query(`SELECT id,request_id,kind,person,data,created_at,session_id FROM request_activity WHERE request_id=? ORDER BY id`, id)
 	if err != nil {
 		return d, err
 	}
 	defer activityRows.Close()
 	for activityRows.Next() {
 		var a requestdomain.Activity
-		if err := activityRows.Scan(&a.ID, &a.RequestID, &a.Kind, &a.Person, &a.Data, &a.CreatedAt); err != nil {
+		if err := activityRows.Scan(&a.ID, &a.RequestID, &a.Kind, &a.Person, &a.Data, &a.CreatedAt, &a.SessionID); err != nil {
 			return d, err
 		}
 		d.Activity = append(d.Activity, a)
@@ -193,6 +208,65 @@ func (s *Store) RequestByID(id int64) (requestdomain.Detail, error) {
 // requests apart, short enough that a page of them stays readable.
 const snippetChars = 200
 
+// requestScopeWhere is the part of a request query that says which requests
+// the caller may see at all: the scope axes and the visibility restriction.
+func requestScopeWhere(filter requestdomain.SearchFilter) ([]string, []any) {
+	var where []string
+	var args []any
+	// An unset axis on a request means "applies everywhere along it", so a
+	// caller naming a branch or machine must still see the project-wide
+	// entries. Matching exactly would hide most of the backlog.
+	//
+	// The project axis is the exception: a request without a project belongs to
+	// nobody's backlog, so naming a project returns that project's requests only.
+	if filter.Scope.Project != "" {
+		where = append(where, `r.project=?`)
+		args = append(args, filter.Scope.Project)
+	}
+	for _, axis := range []struct{ col, v string }{
+		{"branch", filter.Scope.Branch}, {"machine", filter.Scope.Machine},
+	} {
+		if axis.v != "" {
+			where = append(where, `(r.`+axis.col+`='' OR r.`+axis.col+`=?)`)
+			args = append(args, axis.v)
+		}
+	}
+	if filter.Restrict {
+		var clauses []string
+		// Aufträge ohne Projekt gehören ihrem Autor (Konto-Id).
+		own, gargs := ownRequestSQL("r", filter.GlobalAccount, filter.GlobalOwner)
+		clauses = append(clauses, `(r.project='' AND `+own+`)`)
+		args = append(args, gargs...)
+		if len(filter.Projects) > 0 {
+			clauses = append(clauses, `r.project IN (`+placeholders(len(filter.Projects))+`)`)
+			for _, p := range filter.Projects {
+				args = append(args, p)
+			}
+		}
+		clause := strings.Join(clauses, " OR ")
+		if clause == "" {
+			clause = "0"
+		}
+		switch {
+		case filter.UnclaimedAll:
+			clause += ` OR (r.project!='' AND r.project NOT IN (SELECT remote FROM projects))`
+		case filter.UnclaimedAuthor != "":
+			clause += ` OR (r.person=? AND r.project!='' AND r.project NOT IN (SELECT remote FROM projects))`
+			args = append(args, filter.UnclaimedAuthor)
+		}
+		where = append(where, `(`+clause+`)`)
+	}
+	if filter.HideHeld {
+		where = append(where, `NOT (r.origin='distilled' AND r.person='' AND EXISTS (
+			SELECT 1 FROM sessions hs WHERE 'session:'||hs.id = substr(r.session_ref,1,length('session:'||hs.id))
+			  AND (length(r.session_ref)=length('session:'||hs.id) OR substr(r.session_ref,length('session:'||hs.id)+1,1)='#')
+			  AND hs.shared=0 AND COALESCE(hs.visibility,'') IN ('','private')
+			  AND (CASE WHEN hs.account_id=0 THEN ? ELSE hs.account_id END) != ?))`)
+		args = append(args, filter.HeldInstanceOwner, filter.HeldViewer)
+	}
+	return where, args
+}
+
 func (s *Store) SearchRequests(filter requestdomain.SearchFilter) (requestdomain.SearchPage, error) {
 	if s.reader != nil {
 		return s.reader.SearchRequests(filter)
@@ -228,17 +302,9 @@ func (s *Store) SearchRequests(filter requestdomain.SearchFilter) (requestdomain
 		where = append(where, `search_documents_fts MATCH ?`)
 		args = append(args, ftsQuery(filter.Query))
 	}
-	// An unset axis on a request means "applies everywhere along it", so a
-	// caller naming a branch or machine must still see the project-wide
-	// entries. Matching exactly would hide most of the backlog.
-	for _, axis := range []struct{ col, v string }{
-		{"project", filter.Scope.Project}, {"branch", filter.Scope.Branch}, {"machine", filter.Scope.Machine},
-	} {
-		if axis.v != "" {
-			where = append(where, `(r.`+axis.col+`='' OR r.`+axis.col+`=?)`)
-			args = append(args, axis.v)
-		}
-	}
+	scopeWhere, scopeArgs := requestScopeWhere(filter)
+	where = append(where, scopeWhere...)
+	args = append(args, scopeArgs...)
 	if filter.State != "" {
 		where = append(where, `r.state=?`)
 		args = append(args, filter.State)
@@ -246,6 +312,10 @@ func (s *Store) SearchRequests(filter requestdomain.SearchFilter) (requestdomain
 	if filter.Type != "" {
 		where = append(where, `r.type=?`)
 		args = append(args, filter.Type)
+	}
+	if filter.Priority != "" {
+		where = append(where, `r.priority=?`)
+		args = append(args, filter.Priority)
 	}
 	if filter.Cursor != "" {
 		where = append(where, `r.id<?`)
@@ -287,9 +357,31 @@ func (s *Store) CountOpenRequests(ax scope.Axes) (int, error) {
 	if s.reader != nil {
 		return s.reader.CountOpenRequests(ax)
 	}
-	where, args := ax.UnionWhere()
+	return s.CountOpenRequestsFor(SessionViewer{}, ax)
+}
+
+// CountOpenRequestsFor zählt ohne die gehaltenen Aufträge aus privaten Sessions
+// anderer Konten: die Zahl verriete sie sonst (REQ-438 D).
+func (s *Store) CountOpenRequestsFor(v SessionViewer, ax scope.Axes) (int, error) {
+	if s.reader != nil {
+		return s.reader.CountOpenRequestsFor(v, ax)
+	}
+	where, args := ax.RequestUnionWhere()
+	q := `SELECT COUNT(*) FROM requests WHERE state='open' AND ` + where
+	if v.Enforced {
+		q += ` AND NOT (origin='distilled' AND person='' AND EXISTS (
+			SELECT 1 FROM sessions hs WHERE (session_ref='session:'||hs.id OR session_ref LIKE 'session:'||hs.id||'#%')
+			  AND hs.shared=0 AND COALESCE(hs.visibility,'') IN ('','private')
+			  AND (CASE WHEN hs.account_id=0 THEN ? ELSE hs.account_id END) != ?))`
+		args = append(args, v.Owner, v.Account)
+		// A request without a project counts only for its author, the instance
+		// owner included for those without an owner.
+		own, oargs := ownRequestSQL("requests", v.Account, v.isInstanceOwner())
+		q += ` AND (project!='' OR ` + own + `)`
+		args = append(args, oargs...)
+	}
 	var count int
-	err := s.db.QueryRow(`SELECT COUNT(*) FROM requests WHERE state='open' AND `+where, args...).Scan(&count)
+	err := s.db.QueryRow(q, args...).Scan(&count)
 	return count, err
 }
 
@@ -471,6 +563,19 @@ func terminalRequestError(id int64, state string) error {
 	return requestdomain.NewRuleError("request_terminal", fmt.Sprintf("request REQ-%d is already %s", id, state), "terminal requests cannot be changed; create or reopen a separate request", nil)
 }
 
+// relationAddedData ist der Text des Eintrags "relation.added": die Art und das
+// Ziel ("related REQ-4", "knowledge knowledge #7"); eine externe Verknüpfung
+// steht als "<Art> ext <Verweis>".
+func relationAddedData(r requestdomain.Relation) string {
+	switch {
+	case r.OtherRequestID != 0:
+		return fmt.Sprintf("%s REQ-%d", r.Kind, r.OtherRequestID)
+	case r.KnowledgeID != 0:
+		return fmt.Sprintf("%s knowledge #%d", r.Kind, r.KnowledgeID)
+	}
+	return r.Kind + " ext " + r.ExternalRef
+}
+
 func (s *Store) AddRequestRelation(requestID int64, relation requestdomain.Relation, person string) (requestdomain.Relation, error) {
 	valid := map[string]bool{"parent": true, "related": true, "blocks": true, "duplicates": true, "supersedes": true, "knowledge": true, "external": true}
 	if !valid[relation.Kind] {
@@ -516,7 +621,7 @@ func (s *Store) AddRequestRelation(requestID int64, relation requestdomain.Relat
 	if err != nil {
 		return requestdomain.Relation{}, err
 	}
-	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at) VALUES(?,'relation.added',?,?,?)`, requestID, person, relation.Kind, ts); err != nil {
+	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at) VALUES(?,'relation.added',?,?,?)`, requestID, person, relationAddedData(relation), ts); err != nil {
 		return requestdomain.Relation{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -594,7 +699,7 @@ func (s *Store) StartRequestWork(requestID, sessionID int64, role, person string
 	if err != nil {
 		return requestdomain.Work{}, nil, err
 	}
-	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at) VALUES(?,'work.started',?,?,?)`, requestID, person, fmt.Sprintf("session:%d role:%s", sessionID, role), ts); err != nil {
+	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at,session_id) VALUES(?,'work.started',?,?,?,?)`, requestID, person, fmt.Sprintf("session:%d role:%s", sessionID, role), ts, sessionID); err != nil {
 		return requestdomain.Work{}, nil, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -627,8 +732,8 @@ func (s *Store) resumeRequestWork(work requestdomain.Work, person string) (reque
 	if _, err := tx.Exec(`UPDATE request_work SET state='active', ended_at='' WHERE id=?`, work.ID); err != nil {
 		return requestdomain.Work{}, nil, err
 	}
-	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at) VALUES(?,'work.resumed',?,?,?)`,
-		work.RequestID, person, fmt.Sprintf("session:%d role:%s from:%s", work.SessionID, work.Role, work.State), ts); err != nil {
+	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at,session_id) VALUES(?,'work.resumed',?,?,?,?)`,
+		work.RequestID, person, fmt.Sprintf("session:%d role:%s from:%s", work.SessionID, work.Role, work.State), ts, work.SessionID); err != nil {
 		return requestdomain.Work{}, nil, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -672,7 +777,7 @@ func (s *Store) FinishRequestWork(workID int64, state, summary, person string) (
 	if _, err := tx.Exec(`UPDATE request_work SET state=?,ended_at=?,summary=? WHERE id=?`, state, ts, summary, workID); err != nil {
 		return requestdomain.Work{}, err
 	}
-	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at) VALUES(?,'work.finished',?,?,?)`, current.RequestID, person, summary, ts); err != nil {
+	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at,session_id) VALUES(?,'work.finished',?,?,?,?)`, current.RequestID, person, summary, ts, current.SessionID); err != nil {
 		return requestdomain.Work{}, err
 	}
 	if err := tx.Commit(); err != nil {

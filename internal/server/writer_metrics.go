@@ -71,7 +71,7 @@ func writeWriterMetrics(w http.ResponseWriter, stats store.RuntimeStats) {
 	} {
 		name := "ghosttree_writer_best_effort_" + metric.name
 		writeMetricHeader(w, name, metric.help, metric.kind)
-		for kind, label := range [...]string{"delivery", "search", "machine"} {
+		for kind, label := range [...]string{"delivery", "search", "machine", "token"} {
 			b := s.BestEffort[kind]
 			var value any
 			switch metric.name {

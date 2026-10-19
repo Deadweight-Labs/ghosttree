@@ -23,13 +23,13 @@ func mcpRuntimeCheck(harness string, configOK bool) Check {
 		Name:      harness + " mcp runtime",
 		Component: ComponentMCP,
 		Detail:    "initialize, tools/list, context_get via configured stdio command",
-		Fix:       "run 'ctx install " + harness + " --only mcp' and check client/server configuration",
+		Fix:       "run '" + ctxRun() + " install " + harness + " --only mcp' and check client/server configuration",
 	}
 	if !configOK {
 		c.Detail = "not started because the configured ghosttree entry is invalid"
 		return c
 	}
-	cmd := exec.Command("ctx", "mcp")
+	cmd := exec.Command(ctxCommand, "mcp")
 	if err := probeMCPCommand(cmd); err != nil {
 		c.Detail = err.Error()
 		return c
@@ -43,7 +43,7 @@ func codexEffectiveMCPCheck(home string, configOK bool) Check {
 		Name:      "codex mcp effective config",
 		Component: ComponentMCP,
 		Detail:    "codex mcp get ghosttree",
-		Fix:       "repair ~/.codex/config.toml or run 'ctx install codex --only mcp'",
+		Fix:       "repair ~/.codex/config.toml or run '" + ctxRun() + " install codex --only mcp'",
 	}
 	if !configOK {
 		c.Detail = "not checked because the focused ghosttree table is invalid"
@@ -83,7 +83,7 @@ func runCodexEffectiveProbe(home string) (bool, error) {
 		return true, fmt.Errorf("codex rejected its effective MCP config: %v: %s", err, bounded(string(raw), 512))
 	}
 	text := string(raw)
-	for _, want := range []string{"enabled: true", "command: ctx", "args: mcp"} {
+	for _, want := range []string{"enabled: true", "command: " + ctxCommand, "args: mcp"} {
 		if !strings.Contains(text, want) {
 			return true, fmt.Errorf("codex effective MCP entry is missing %q: %s", want, bounded(text, 512))
 		}

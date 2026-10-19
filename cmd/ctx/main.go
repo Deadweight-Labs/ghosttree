@@ -23,8 +23,14 @@ func run(args []string, stdout io.Writer) int {
 		return cmdWatch(rest, stdout)
 	case "mcp":
 		return cmdMCP(rest, stdout)
+	case "channel":
+		return cmdChannel(rest, stdout)
+	case "claude":
+		return cmdClaude(rest, stdout)
 	case "install":
 		return cmdInstall(rest, stdout)
+	case "uninstall":
+		return cmdUninstall(rest, stdout)
 	case "hook":
 		return cmdHook(rest, stdout)
 	case "status":
@@ -37,6 +43,8 @@ func run(args []string, stdout io.Writer) int {
 		return cmdReview(rest, stdout)
 	case "regression":
 		return cmdRegression(rest, stdout)
+	case "knowledge":
+		return cmdKnowledge(rest, stdout)
 	case "request":
 		return cmdRequest(rest, stdout)
 	case "ghost":
@@ -45,10 +53,16 @@ func run(args []string, stdout io.Writer) int {
 		return cmdDoc(rest, stdout)
 	case "migrate":
 		return cmdMigrate(rest, stdout)
+	case "coord":
+		return cmdCoord(rest, stdout)
 	case "mirror":
 		return cmdMirror(rest, stdout)
 	case "snapshot":
 		return cmdSnapshot(rest, stdout, os.Stderr)
+	case "garden":
+		return cmdGarden(rest, stdout)
+	case "explain":
+		return cmdExplain(rest, stdout)
 	case "distill-sessions":
 		return cmdDistillSessions(rest, stdout)
 	case "usage":
@@ -61,10 +75,33 @@ func run(args []string, stdout io.Writer) int {
 		return cmdCanonicalizeScopes(rest, stdout)
 	case "unbind-branch":
 		return cmdUnbindBranch(rest, stdout)
+	case "strip-images":
+		return cmdStripImages(rest, stdout)
 	case "person":
 		return cmdPerson(rest, stdout)
+	case "account":
+		return cmdAccount(rest, stdout)
+	case "machine":
+		return cmdMachine(rest, stdout)
+	case "session":
+		return cmdSession(rest, stdout)
+	case "org":
+		return cmdOrg(rest, stdout)
+	case "project":
+		return cmdProject(rest, stdout)
 	case "setup":
 		return cmdSetup(rest, stdout)
+	case "login":
+		return cmdLogin(rest, stdout)
+	case "join":
+		return cmdJoin(rest, stdout)
+	case "pain":
+		return cmdPain(rest, stdout)
+	case "task":
+		return cmdTask(rest, stdout)
+	case "help", "--help", "-h":
+		fmt.Fprintln(stdout, usage)
+		return 0
 	case "version":
 		fmt.Fprintf(stdout, "ctx %s\n", version)
 		return 0
@@ -79,20 +116,37 @@ const usage = `usage: ctx <command>
   serve    run the ghosttree server
   watch    run the session collector daemon
   mcp      run the MCP server (stdio)
-  install  set up a harness (claude|codex|opencode)
+  channel  serve coordination messages as a Claude Code channel (stdio, opt-in at session start)
+  claude   start Claude Code with the ghosttree channel (opt-in launcher)
+  ghclaude  not a command: a link to ctx that starts claude with the channel, all arguments unchanged
+  install  set up a harness (claude|codex|opencode) or ghclaude
+  uninstall  remove ghclaude
   setup    write client config (server URL + token)
-  person   manage persons/tokens (server-side)
+  login    sign this machine in through the browser (device login)
+  join     pair this machine with a pairing code from an invitation page
+  person   manage persons/tokens (server-side; deprecated alias, see account)
+  account  manage accounts and their tokens (server-side)
+  machine  list, release and transfer machine names (server-side)
+  session  share a session's transcript with the members of its project
+  org      organizations: members, invitations, default (needs ctx login)
+  project  list, claim and move projects between organizations
   status   show local setup state
   doctor   check the harness wiring for drift (--fix to repair)
-  export   write a session's original transcript as JSONL
+  export   write a session's transcript as JSONL (images as placeholders)
   review   approve or reject distilled knowledge
   regression  say which test guards a fixed defect, and list the fixes none does
-  request  search and manage the work ledger
+  request  search and manage the work ledger (create, move, ...)
+  pain     record a problem without a solution, follow it to mitigated or resolved
+  task     ask the human for a key, file, decision or action, and check it afterwards
+  knowledge  add, show, supersede, retire or move a knowledge entry
   ghost    read description history or archive confirmed-deleted paths
   doc      write, publish, and read long-form documents
   migrate  move repository agent artifacts into ghosttree
+  coord    talk to the other agents in this repo or on this machine
   mirror   write .ghosttree/ for a repository (harnesses without hooks)
   snapshot create, inspect, export, verify, and mirror immutable context marks
+  garden   check knowledge against the code (opt-in, needs an API key)
+  explain  write the "In short" notes that are missing (needs a model)
   distill-sessions  extract quarantined knowledge from idle sessions
                     (--submit/--collect for the half-price batch path,
                      --reprocess-version to redo work of an older prompt)
@@ -101,8 +155,12 @@ const usage = `usage: ctx <command>
   upgrade-schema  one-off knowledge table rebuild for trust tiers
   canonicalize-scopes  one-off project name backfill and duplicate merge
   unbind-branch  lift knowledge filed against a branch to its project
+  strip-images  replace stored base64 images and files with placeholders (--dry-run, runs beside the server)
   version  print version`
 
 func main() {
+	if asGhclaude(os.Args) {
+		os.Exit(runGhclaude(os.Args[0], os.Args[1:], os.Stdout))
+	}
 	os.Exit(run(os.Args[1:], os.Stdout))
 }

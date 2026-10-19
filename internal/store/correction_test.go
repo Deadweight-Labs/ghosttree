@@ -184,3 +184,19 @@ func TestRemovingAnUnknownRelationSaysSo(t *testing.T) {
 		t.Error("removing a relation that does not exist reported success")
 	}
 }
+
+func TestSearchFiltersByExactPriority(t *testing.T) {
+	s := openTest(t)
+	mid := makeRequest(t, s, "Mittlerer Fall", "x")
+	high := makeRequest(t, s, "Hoher Fall", "x")
+	if err := s.UpdateRequest(high, map[string]string{"priority": "hoch"}, "alice", "wichtiger"); err != nil {
+		t.Fatal(err)
+	}
+	page, err := s.SearchRequests(requestdomain.SearchFilter{State: "open", Priority: "hoch"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Results) != 1 || page.Results[0].Request.ID != high {
+		t.Fatalf("priority filter = %+v, want only %d (not %d)", page.Results, high, mid)
+	}
+}

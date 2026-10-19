@@ -14,6 +14,7 @@ import (
 	"unicode"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
+	"github.com/Deadweight-Labs/ghosttree/internal/agentpause"
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/collector"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
@@ -53,6 +54,15 @@ func cmdHookWith(stdin io.Reader, args []string, stdout io.Writer) int {
 		fmt.Fprintln(stdout, hookUsage)
 		return 2
 	}
+	if eventArg == "pause-gate" {
+		return pauseGate(stdin, *harness, stdout)
+	}
+	if eventArg == "post-tool-use" {
+		return postToolUse(stdin, *harness, stdout)
+	}
+	if eventArg == "turn-end" {
+		return turnEnd(stdin, *harness, stdout)
+	}
 	var out sessionStartOutput
 	var render func(io.Reader) string
 	switch eventArg {
@@ -77,24 +87,71 @@ func cmdHookWith(stdin io.Reader, args []string, stdout io.Writer) int {
 	}
 	raw, err := io.ReadAll(io.LimitReader(stdin, (4<<20)+1))
 	attempted := false
+	coord := ""
 	if err == nil && len(raw) <= 4<<20 && json.Unmarshal(raw, &identity) == nil &&
 		strings.TrimSpace(identity.SessionID) != "" && len(identity.SessionID) <= 4096 {
+		// Messages for the agent come with the prompt, next to what the archive
+		// has to say about it. Asked in parallel: both are short, neither may
+		// wait for the other. The coordination text has its own budget and is
+		// not counted against the memory budget.
+		coordDone := make(chan string, 1)
+		if eventArg == "user-prompt-submit" && os.Getenv("GHOSTTREE_HOOK_SYNTHETIC") != "1" {
+			go func() {
+				text, _ := coordInboxContext(raw, true)
+				coordDone <- text
+			}()
+		} else {
+			coordDone <- ""
+		}
+		// Announcing the session runs beside them for the same reason.
+		registerDone := make(chan struct{})
+		go func() {
+			defer close(registerDone)
+			// Claude's tool calls announce themselves through post-tool-use;
+			// Codex has no such hook, so its pre-tool-use is the heartbeat.
+			if (eventArg != "pre-tool-use" || *harness == "codex") && os.Getenv("GHOSTTREE_HOOK_SYNTHETIC") != "1" {
+				event := store.HookTool
+				switch eventArg {
+				case "session-start":
+					event = ""
+				case "user-prompt-submit":
+					event = store.HookTurnStart
+				}
+				registerHookSession(raw, *harness, eventArg == "session-start" || eventArg == "user-prompt-submit", event)
+			}
+		}()
 		text := render(bytes.NewReader(raw))
+		coord = <-coordDone
+		<-registerDone
 		_ = hookbudget.Deliver(identity.SessionID, text, func(bounded string) error {
-			out.HookSpecificOutput.AdditionalContext = bounded
+			out.HookSpecificOutput.AdditionalContext = joinHookContext(bounded, coord)
 			attempted = true
 			return json.NewEncoder(stdout).Encode(out)
 		})
 	}
 	if !attempted {
+		out.HookSpecificOutput.AdditionalContext = coord
 		json.NewEncoder(stdout).Encode(out)
 	}
 	return 0
 }
 
+func joinHookContext(memory, coord string) string {
+	if strings.TrimSpace(coord) == "" {
+		return memory
+	}
+	if strings.TrimSpace(memory) == "" {
+		return coord
+	}
+	return strings.TrimRight(memory, "\n") + "\n\n" + coord
+}
+
 const hookUsage = `usage: ctx hook session-start [--harness claude|codex]
        ctx hook user-prompt-submit [--harness claude|codex]
-       ctx hook pre-tool-use [--harness claude|codex]`
+       ctx hook pre-tool-use [--harness claude|codex]
+       ctx hook post-tool-use [--harness claude|codex]
+       ctx hook turn-end [--harness claude]
+       ctx hook pause-gate [--harness claude]`
 
 // relevanceTimeout is short because this hook sits between the keystroke and
 // the answer. Knowledge that arrives late is worse than knowledge that does not
@@ -108,6 +165,11 @@ func relevantContext(stdin io.Reader) string {
 	var in struct {
 		Prompt string `json:"prompt"`
 		CWD    string `json:"cwd"`
+		// SessionID is the harness session, the same field in Claude Code's and
+		// Codex's payloads and the one the session-start hook sends to the
+		// bootstrap. It is what lets the server deliver an entry once per
+		// session instead of once per mention.
+		SessionID string `json:"session_id"`
 	}
 	json.NewDecoder(stdin).Decode(&in)
 	if strings.TrimSpace(in.Prompt) == "" {
@@ -123,7 +185,7 @@ func relevantContext(stdin io.Reader) string {
 	}
 	gitCtx := collector.ResolveGitContext(cwd)
 	md, err := client.NewWithTimeout(cfg, relevanceTimeout).Relevant(in.Prompt,
-		scope.Axes{Project: gitCtx.Project, Branch: gitCtx.Branch, Lineage: gitCtx.Lineage, Machine: cfg.Machine}, 0)
+		scope.Axes{Project: gitCtx.Project, Branch: gitCtx.Branch, Lineage: gitCtx.Lineage, Machine: cfg.Machine}, 0, in.SessionID)
 	if err != nil {
 		return ""
 	}
@@ -615,4 +677,27 @@ func renderGhostDelivery(entries []store.GhostFile, fresh map[string]ghost.Fresh
 		}
 	}
 	return b.String()
+}
+
+// pauseGate is the PreToolUse hook behind a human pause. It stats one local
+// flag file and neither loads the config, calls the server nor touches the
+// hookbudget lock: it runs before every tool call. Only its own decision fails
+// closed (a damaged flag still pauses); a missing flag, a missing identity or
+// any other harness prints nothing and exits 0, as every other hook does.
+// Codex has no measured pause interface and stays a named gap.
+func pauseGate(stdin io.Reader, harness string, stdout io.Writer) int {
+	// GHOSTTREE_HOOK_SYNTHETIC is set only by the doctor's runtime probe
+	// (internal/installer/hookprobe.go). A harness never sets it; anyone who can
+	// set it in a hook's environment can already stop the hook from running.
+	if os.Getenv("GHOSTTREE_HOOK_SYNTHETIC") == "1" {
+		// Doctor's runtime probe: a well-formed, harmless answer that blocks
+		// nothing, so the probe can tell "runs and speaks JSON" from "broken".
+		fmt.Fprintln(stdout, `{"hookSpecificOutput":{"hookEventName":"PreToolUse"}}`)
+		return 0
+	}
+	if harness != "claude" {
+		return 0
+	}
+	agentpause.Gate(coordAgentOverride(), stdin, stdout)
+	return 0
 }

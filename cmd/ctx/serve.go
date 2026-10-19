@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -15,6 +16,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/forge"
+	"github.com/Deadweight-Labs/ghosttree/internal/llmusage"
+	"github.com/Deadweight-Labs/ghosttree/internal/privatefile"
+	"github.com/Deadweight-Labs/ghosttree/internal/proxytrust"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/server"
 	"github.com/Deadweight-Labs/ghosttree/internal/snapshot"
@@ -29,7 +34,36 @@ type serveConfig struct {
 	SnapshotLimits snapshot.Limits
 	SnapshotRoots  map[string]string
 	Writer         store.WriterConfig
+	OIDC           web.OIDCConfig
+	PublicURL      string
+	Language       string
+	DistDir        string
+	TrustedProxies proxytrust.Set
+	Explain        ExplainConfig
+	// GardenLimits are shown to administrators; the gardener itself runs as a command.
+	GardenLimits llmusage.Limits
 }
+
+const (
+	envOIDCIssuer       = "GHOSTTREE_OIDC_ISSUER"
+	envOIDCClientID     = "GHOSTTREE_OIDC_CLIENT_ID"
+	envOIDCClientSecret = "GHOSTTREE_OIDC_CLIENT_SECRET"
+	envOIDCRedirectURL  = "GHOSTTREE_OIDC_REDIRECT_URL"
+	envOIDCName         = "GHOSTTREE_OIDC_NAME"
+	envOIDCSignup       = "GHOSTTREE_OIDC_SIGNUP"
+	// envEnforceAccess schaltet die Sichtbarkeit nach Rolle scharf. Ohne "1"
+	// wird nur protokolliert, was verweigert würde ("access: would deny").
+	envEnforceAccess = "GHOSTTREE_ENFORCE_ACCESS"
+	// envPublicURL and envTrustedProxies describe the TLS/proxy boundary; see
+	// the README section "Running behind TLS or a reverse proxy".
+	envPublicURL      = "GHOSTTREE_PUBLIC_URL"
+	envTrustedProxies = "GHOSTTREE_TRUSTED_PROXIES"
+	// envDistDir names a directory with the ctx release archives and
+	// checksums.txt; the server then serves /install.sh and /dist/.
+	envDistDir = "GHOSTTREE_DIST_DIR"
+	// envLanguage picks the language of the web interface: en (default) or de.
+	envLanguage = "GHOSTTREE_LANGUAGE"
+)
 
 type snapshotRootValues []string
 
@@ -82,6 +116,24 @@ func parseServeConfig(args []string, output io.Writer) (serveConfig, error) {
 	fs.Int64Var(&cfg.SnapshotLimits.MaxProjectLogicalBytes, "snapshot-max-project-bytes", limits.MaxProjectLogicalBytes, "maximum logical snapshot bytes per project")
 	fs.Int64Var(&cfg.SnapshotLimits.MaxSnapshotsPerStore, "snapshot-max-store-count", limits.MaxSnapshotsPerStore, "maximum snapshots in the store")
 	fs.Int64Var(&cfg.SnapshotLimits.MaxStoreLogicalBytes, "snapshot-max-store-bytes", limits.MaxStoreLogicalBytes, "maximum logical snapshot bytes in the store")
+	fs.StringVar(&cfg.OIDC.Issuer, "oidc-issuer", os.Getenv(envOIDCIssuer), "OIDC issuer URL, e.g. https://id.example.com (env "+envOIDCIssuer+")")
+	fs.StringVar(&cfg.OIDC.ClientID, "oidc-client-id", os.Getenv(envOIDCClientID), "OIDC client id (env "+envOIDCClientID+")")
+	fs.StringVar(&cfg.OIDC.RedirectURL, "oidc-redirect-url", os.Getenv(envOIDCRedirectURL), "OIDC redirect URL, https://<public host>/ui/login/oidc/callback (env "+envOIDCRedirectURL+")")
+	fs.StringVar(&cfg.OIDC.Name, "oidc-name", os.Getenv(envOIDCName), "provider name on the sign-in button, e.g. ZITADEL; empty names no provider (env "+envOIDCName+")")
+	fs.StringVar(&cfg.OIDC.Signup, "oidc-signup", os.Getenv(envOIDCSignup), "offer \"Create an account\" on invitation links (OIDC prompt=create): 1 always, 0 never, empty only when the provider lists it (env "+envOIDCSignup+")")
+	fs.StringVar(&cfg.PublicURL, "public-url", os.Getenv(envPublicURL), "external base URL, e.g. https://ghosttree.example.com; an https URL makes every cookie Secure (env "+envPublicURL+")")
+	fs.StringVar(&cfg.DistDir, "dist-dir", os.Getenv(envDistDir), "directory with ctx_<version>_<os>_<arch>.tar.gz archives and checksums.txt; enables /install.sh and /dist/ (env "+envDistDir+")")
+	fs.StringVar(&cfg.Language, "language", os.Getenv(envLanguage), "language of the web interface: en (default) or de (env "+envLanguage+")")
+	explainMode := os.Getenv(envExplain)
+	if explainMode == "" {
+		explainMode = "auto"
+	}
+	fs.StringVar(&cfg.Explain.Mode, "explain", explainMode, "\"In short\" notes: auto (generate missing ones when a model is configured) or off (env "+envExplain+")")
+	fs.StringVar(&cfg.Explain.Model, "explain-model", os.Getenv(envExplainModel), "model for the notes, overriding the provider configuration (env "+envExplainModel+")")
+	explainLimits := addLimitFlags(fs, llmusage.JobExplain, "explain-")
+	trusted := fs.String("trusted-proxies", os.Getenv(envTrustedProxies), "comma-separated CIDRs/IPs of reverse proxies whose X-Forwarded-Proto/Host are believed; loopback is always trusted, nothing else by default (env "+envTrustedProxies+")")
+	// Das Secret gibt es bewusst nur über die Umgebung: ein Flag stünde in der Prozessliste.
+	cfg.OIDC.ClientSecret = os.Getenv(envOIDCClientSecret)
 	fs.Var(&roots, "snapshot-root", "project mirror root as PROJECT=ABSOLUTE_PATH; repeatable")
 	if err := fs.Parse(args); err != nil {
 		return serveConfig{}, err
@@ -89,6 +141,50 @@ func parseServeConfig(args []string, output io.Writer) (serveConfig, error) {
 	if fs.NArg() != 0 {
 		return serveConfig{}, fmt.Errorf("unexpected arguments: %s", strings.Join(fs.Args(), " "))
 	}
+	if err := cfg.OIDC.Validate(); err != nil {
+		return serveConfig{}, err
+	}
+	lang, err := web.ParseLanguage(cfg.Language)
+	if err != nil {
+		return serveConfig{}, fmt.Errorf("--language: %w", err)
+	}
+	cfg.Language = lang
+	cfg.Explain.Language = lang
+	if cfg.Explain.Limits, err = explainLimits(); err != nil {
+		return serveConfig{}, err
+	}
+	gardenLimits, err := jobLimits(llmusage.JobGarden)
+	if err != nil {
+		return serveConfig{}, err
+	}
+	cfg.GardenLimits = gardenLimits
+	if cfg.Explain.Mode != "auto" && cfg.Explain.Mode != "off" {
+		return serveConfig{}, fmt.Errorf("--explain must be auto or off, got %q", cfg.Explain.Mode)
+	}
+	if cfg.PublicURL != "" {
+		u, err := url.Parse(cfg.PublicURL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil ||
+			(u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+			return serveConfig{}, fmt.Errorf("--public-url must be http(s)://host[:port] without path, got %q", cfg.PublicURL)
+		}
+		if (u.Scheme == "https" && u.Port() == "443") || (u.Scheme == "http" && u.Port() == "80") {
+			u.Host = strings.TrimSuffix(u.Host, ":"+u.Port())
+		}
+		if !web.ValidPublicHost(u.Host) {
+			return serveConfig{}, fmt.Errorf("--public-url host %q has characters outside letters, digits, . : [ ] -", u.Host)
+		}
+		cfg.PublicURL = u.Scheme + "://" + u.Host
+	}
+	if cfg.DistDir != "" {
+		if _, err := web.CheckDistDir(cfg.DistDir); err != nil {
+			return serveConfig{}, fmt.Errorf("--dist-dir %q: %w", cfg.DistDir, err)
+		}
+	}
+	proxies, err := proxytrust.Parse(*trusted)
+	if err != nil {
+		return serveConfig{}, fmt.Errorf("--trusted-proxies: %w", err)
+	}
+	cfg.TrustedProxies = proxies
 	if err := validateSnapshotLimits(cfg.SnapshotLimits); err != nil {
 		return serveConfig{}, err
 	}
@@ -182,17 +278,58 @@ func runServer(ctx context.Context, st *store.Store, cfg serveConfig, stdout, st
 		fmt.Fprintf(stdout, "apply knowledge staleness: %v\n", err)
 		return 1
 	}
+	if err := prepareBootstrapCode(st, cfg.DB, stdout); err != nil {
+		fmt.Fprintf(stdout, "bootstrap code: %v\n", err)
+		return 1
+	}
 	if ctx.Err() != nil {
 		return 0
 	}
 	fmt.Fprintf(stdout, "ghosttree %s listening on %s (db %s, ui /ui/)\n", version, cfg.Listen, cfg.DB)
+	slog.New(slog.NewJSONHandler(stderr, nil)).Info("access_mode", "enforce", accessEnforcedByEnv(), "env", envEnforceAccess,
+		"note", "without enforcement only 'access: would deny' is logged, nothing is refused")
+	if note := proxyConfigWarning(cfg); note != "" {
+		slog.New(slog.NewJSONHandler(stderr, nil)).Warn("proxy_config", "public_url", cfg.PublicURL, "note", note)
+	}
+	if cfg.DistDir != "" {
+		logger := slog.New(slog.NewJSONHandler(stderr, nil))
+		if versions, _ := web.CheckDistDir(cfg.DistDir); len(versions) > 1 {
+			logger.Warn("dist_dir", "dir", cfg.DistDir, "versions", versions, "note", "checksums.txt lists several ctx versions; install.sh refuses an ambiguous list, keep one version per directory")
+		} else if len(versions) == 0 {
+			logger.Warn("dist_dir", "dir", cfg.DistDir, "note", "checksums.txt lists no ctx_<version>_<os>_<arch>.tar.gz archive")
+		}
+		if cfg.PublicURL == "" {
+			logger.Warn("dist_dir", "note", "without "+envPublicURL+" (https) /install.sh is served only to loopback hosts or via a trusted proxy sending X-Forwarded-Proto/Host")
+		}
+	}
 	slog.New(slog.NewJSONHandler(stderr, nil)).Info("writer_config", "max_operations", cfg.Writer.MaxOperations, "max_bytes", cfg.Writer.MaxBytes, "max_batch", cfg.Writer.MaxBatch, "read_connections", cfg.Writer.ReadConnections)
-	if err := serveUntilCanceled(ctx, newHTTPServer(cfg.Listen, buildServerHandler(st, cfg, stderr))); err != nil {
+	// The session search index of chunks written before it existed is caught up
+	// in the background, in small resumable steps; serving does not wait for it.
+	indexCtx, stopIndex := context.WithCancel(ctx)
+	indexDone := make(chan struct{})
+	go func() {
+		defer close(indexDone)
+		logger := slog.New(slog.NewJSONHandler(stderr, nil))
+		started := time.Now()
+		if err := st.RunIndexBackfill(indexCtx, store.BackfillOptions{}); err != nil {
+			if indexCtx.Err() == nil {
+				logger.Error("session_index_backfill", "error", err.Error())
+			}
+			return
+		}
+		logger.Info("session_index_backfill", "state", "complete", "seconds", int(time.Since(started).Seconds()))
+	}()
+	err := serveUntilCanceled(ctx, newHTTPServer(cfg.Listen, buildServerHandler(st, cfg, stderr)))
+	stopIndex()
+	<-indexDone
+	if err != nil {
 		fmt.Fprintf(stdout, "serve: %v\n", err)
 		return 1
 	}
 	return 0
 }
+
+func accessEnforcedByEnv() bool { return os.Getenv(envEnforceAccess) == "1" }
 
 func buildServerHandler(st *store.Store, cfg serveConfig, stderr io.Writer) http.Handler {
 	root := http.NewServeMux()
@@ -201,15 +338,63 @@ func buildServerHandler(st *store.Store, cfg serveConfig, stderr io.Writer) http
 		server.WithContextSnapshotLimits(cfg.SnapshotLimits),
 		server.WithLogger(logger),
 		server.WithBuildVersion(version),
+		server.WithTrustedProxies(cfg.TrustedProxies),
+	}
+	if cfg.PublicURL != "" {
+		options = append(options, server.WithPublicURL(cfg.PublicURL))
 	}
 	if len(cfg.SnapshotRoots) > 0 {
 		options = append(options, server.WithSnapshotMirror(&rootedSnapshotMirror{source: st, roots: cfg.SnapshotRoots}))
 	}
+	st.SetAccessMode(store.AccessMode{Enforce: accessEnforcedByEnv(), Logger: logger})
 	apiHandler := server.New(st, options...)
 	root.Handle("/api/", apiHandler)
 	root.Handle("/metrics", apiHandler)
-	root.Handle("/", web.New(st))
+	webOptions := []web.Option{web.WithBootstrapFile(bootstrapCodePath(cfg.DB)), web.WithTrustedProxies(cfg.TrustedProxies)}
+	if cfg.PublicURL != "" {
+		webOptions = append(webOptions, web.WithPublicURL(cfg.PublicURL))
+	}
+	if cfg.DistDir != "" {
+		webOptions = append(webOptions, web.WithDistDir(cfg.DistDir))
+	}
+	if cfg.OIDC.Enabled() {
+		webOptions = append(webOptions, web.WithOIDC(cfg.OIDC))
+	}
+	webOptions = append(webOptions, web.WithLanguage(cfg.Language))
+	explainCfg := cfg.Explain
+	explainCfg.Language = cfg.Language
+	webOptions = append(webOptions, web.WithExplainer(newExplainer(st, explainCfg, logger)))
+	webOptions = append(webOptions, web.WithGardenLimits(cfg.GardenLimits))
+	webOptions = append(webOptions, web.WithSourceProver(forge.NewGitHub(forge.ConfigFromOS())))
+	root.Handle("/", web.New(st, webOptions...))
 	return root
+}
+
+func bootstrapCodePath(db string) string {
+	return filepath.Join(filepath.Dir(db), "bootstrap-code")
+}
+
+// prepareBootstrapCode legt auf einer leeren Instanz einen Bootstrap-Code an
+// und schreibt ihn in <Datenverzeichnis>/bootstrap-code (0600). Der Pfad wird
+// einmal gemeldet, der Code nie. Auf einer Instanz mit Konten bleibt keine
+// alte Datei liegen.
+func prepareBootstrapCode(st *store.Store, db string, stdout io.Writer) error {
+	path := bootstrapCodePath(db)
+	code, ok, err := st.EnsureBootstrapCode()
+	if err != nil {
+		return err
+	}
+	if !ok {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	if err := privatefile.Write(path, []byte(code+"\n")); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "empty instance: one-time bootstrap code written to %s (valid %s); present it on the sign-in page to create the first account\n", path, store.BootstrapCodeTTL)
+	return nil
 }
 
 type rootedSnapshotMirror struct {
@@ -249,4 +434,15 @@ func newHTTPServer(addr string, handler http.Handler) *http.Server {
 		WriteTimeout:      5 * time.Minute,
 		IdleTimeout:       2 * time.Minute,
 	}
+}
+
+// proxyConfigWarning nennt das Problem, wenn eine öffentliche URL (also ein
+// Proxy davor) gesetzt ist, aber kein vertrauenswürdiger Proxy: dann haben alle
+// Clients die Adresse des Proxys, und die Grenzen je Adresse (Einladungsseite,
+// Geräte-Login) gelten für alle zusammen.
+func proxyConfigWarning(cfg serveConfig) string {
+	if cfg.PublicURL == "" || cfg.TrustedProxies.Configured() {
+		return ""
+	}
+	return envPublicURL + " is set but " + envTrustedProxies + " is empty: behind a reverse proxy every client shares the proxy address, so the per-address limits (join page, device logins) apply to all clients together"
 }

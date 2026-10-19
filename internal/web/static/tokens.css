@@ -1,0 +1,80 @@
+/* Design tokens of the web interface (REQ-435). The palette itself lives in
+   theme.css as --clay-* values (light and dark); the names below are the
+   stable aliases the other stylesheets read with var(). Spacing, radii, type
+   scale and focus style are defined here and nowhere else. */
+
+@font-face { font-family: "Gabarito"; font-weight: 400 900; font-style: normal; font-display: swap; src: url("/static/fonts/v5/gabarito-latin-wght-normal.woff2") format("woff2"); }
+@font-face { font-family: "Fragment Mono"; font-weight: 400; font-style: normal; font-display: swap; src: url("/static/fonts/v5/fragment-mono-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "Source Serif 4"; font-weight: 200 900; font-style: normal; font-display: swap; src: url("/static/fonts/v5/source-serif-4-latin-wght-normal.woff2") format("woff2"); }
+
+:root {
+  /* Surface */
+  --color-surface-app: var(--clay-bg);
+  --color-surface-panel: var(--clay-c-surface);
+  --color-surface-sunken: var(--clay-c-sunken);
+  --color-surface-hover: var(--clay-c-raised);
+  --color-surface-selected: color-mix(in srgb, var(--clay-accent) 14%, var(--clay-c-surface));
+  --color-surface-nav: var(--clay-c-surface);
+  /* Text */
+  --color-text-primary: var(--clay-ink);
+  --color-text-secondary: var(--clay-ink-soft);
+  --color-text-muted: var(--clay-ink-faint);
+  /* Line */
+  --color-line-subtle: var(--clay-line);
+  --color-line-default: color-mix(in srgb, var(--clay-ink) 16%, transparent);
+  --color-line-strong: color-mix(in srgb, var(--clay-ink) 38%, transparent);
+  /* Accent */
+  --color-accent: var(--clay-accent);
+  --color-accent-hover: color-mix(in srgb, var(--clay-accent), var(--clay-ink) 18%);
+  --color-accent-soft: color-mix(in srgb, var(--clay-accent) 14%, var(--clay-c-surface));
+  --color-accent-text: var(--clay-accent-text);
+  --color-accent-ink: var(--clay-accent-ink);
+  /* Status: state only, each with a soft surface */
+  --color-ok: var(--clay-ok);
+  --color-ok-soft: color-mix(in srgb, var(--clay-ok) 14%, var(--clay-c-surface));
+  --color-warn: var(--clay-warn);
+  --color-warn-soft: color-mix(in srgb, var(--clay-warn) 16%, var(--clay-c-surface));
+  --color-danger: var(--clay-danger-strong);
+  --color-danger-soft: color-mix(in srgb, var(--clay-danger-strong) 14%, var(--clay-c-surface));
+  --color-info: var(--clay-accent-text);
+  --color-info-soft: var(--color-accent-soft);
+  --color-neutral: var(--clay-ink-faint);
+  --color-neutral-soft: var(--clay-c-sunken);
+
+  /* Spacing */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  /* Radii */
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 22px;
+  --radius-round: 999px;
+
+  /* Type */
+  --font-sans: var(--clay-font-ui);
+  --font-mono: var(--clay-font-mono);
+  --font-serif: var(--clay-font-serif);
+  --text-page-title: 700 30px/1.1 var(--font-sans);
+  --text-detail-title: 700 20px/1.25 var(--font-sans);
+  --text-panel-title: 700 19px/1.25 var(--font-sans);
+  --text-body: 500 15px/1.45 var(--font-sans);
+  --text-secondary: 500 13px/1.45 var(--font-sans);
+  --text-label: 700 12px/1.3 var(--font-sans);
+  --text-mono: 400 13px/1.45 var(--font-mono);
+
+  /* Focus */
+  --focus-color: var(--clay-accent);
+  --focus-ring: 0 0 0 3px color-mix(in srgb, var(--clay-accent) 35%, transparent);
+
+  /* Layout */
+  --side-width: 268px;
+  --top-height: 48px;
+  /* Clay surfaces cast up to 30px downward and 28px sideways; scroll and clip
+     containers pad by at least this much so the shadow is never cut. */
+  --shadow-room-y: 30px;
+  --shadow-room-x: 28px;
+}

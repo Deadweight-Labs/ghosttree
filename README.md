@@ -91,6 +91,19 @@ hashed session identity under `$XDG_STATE_HOME/ghosttree/context-budget` (defaul
 `~/.local/state/ghosttree/context-budget`). Missing session identity or unreadable
 accounting state suppresses automatic context. Explicit retrieval still works.
 
+The context that arrives with a prompt (`UserPromptSubmit`) is picked from the
+words of the prompt, and it is deliberately rare. A word only counts if few
+knowledge entries name it and it is also unusual in your own recent session text
+(only sessions of your own account are counted, never anyone else's), so ordinary
+words of either language never fire. An entry arrives
+once per session: what the start-up briefing already carried, or an earlier prompt
+already brought, is not sent again, and another session gets it afresh. Each entry
+names the word that brought it (`(triggered by "word")`). Unconfirmed (staged)
+entries and the gardener's notes are never sent this way. For a very rare word
+that no entry covers, one hint line may point at a request or session you can read
+(`context_search` finds more); it follows the same visibility rules as search.
+`ctx usage --relevance --db <path>` replays archived prompts through the rule.
+
 Descriptions for removed paths stay active until a move is resolved or deletion
 is explicitly confirmed. Preview selected paths with `ctx ghost archive <path>`;
 archive them with `ctx ghost archive <path> --reason "why it was removed"
@@ -145,6 +158,108 @@ revision.
 ```bash
 ctx doc import path/to/design.md --kind spec --slug storage-redesign --clean
 ```
+
+### Coordination messages in Claude Code (opt-in)
+
+`ctx claude [claude args...]` starts Claude Code with the ghosttree channel
+loaded. The aim is that `ctx coord` messages and agent mentions reach the
+session: a waiting session wakes up, a working one receives the message at
+its next tool result. Measured with Claude Code 2.1.284 (2026-09-30) and
+2.1.286 (2026-10-01, with the handshake rule below).
+The launcher generates one identity per launch (`claude:<host>:<uuid>`), writes a
+temporary MCP config for the `ghosttree-channel` server (`ctx channel --agent
+<id>`), and runs `claude --mcp-config <tmp> --dangerously-load-development-channels
+server:ghosttree-channel ...`. The identity also goes to the process environment
+as `GHOSTTREE_AGENT_ID`, which `ctx mcp` reads before any harness session id, so
+the channel and the `coord_*` tools act as the same agent. The variable changes
+only the coordination identity; search, interrupted-work handoff, and snapshots
+keep the harness session id. A `codex` or `opencode` started inside such a
+session ignores the variable (its provider prefix does not match); a `claude`
+started inside it without the launcher cannot be told apart and shares the
+identity. Arguments after the
+launcher's own flags (`--dry-run`, `--agent <id>`) pass through unchanged, the
+exit code is claude's, and the config file is removed afterwards.
+`ctx claude --dry-run` (or `GHOSTTREE_CLAUDE_DRY_RUN=1`) prints the command and
+config without starting anything. Claude answers with the channel's `reply`
+tool, which stores the answer and marks the message `acked`. It starts a new
+conversation with the channel's `send` tool: `text` (required), `mention` (list
+of agent ids), `room` (`project`, the default, or `machine`) and `intent`
+(`question`, `approval`, `blocker`, `handoff` or `ack`; the first four need a
+mention). No second `ctx mcp` entry is needed for that.
+
+This is opt-in at start: `ctx install claude` does not register the channel, and
+a running session cannot be attached later. The channel is a Claude Code
+research-preview feature; ghosttree is not on Anthropic's allowlist, so
+`--dangerously-load-development-channels` is required and Claude asks you to
+confirm it at every start. Team and Enterprise plans can switch channels off
+(`channelsEnabled`).
+
+#### ghclaude: the channel without typing `ctx claude`
+
+`ghclaude` is a link to `ctx` in the same directory. When ctx is started under
+that name it runs `claude` with the channel and passes every argument through
+unchanged (it replaces itself with claude, so exit code, signals and
+stdin/stdout are claude's). It looks for `claude` like `ctx claude` does
+(`GHOSTTREE_CLAUDE_BIN`, then `PATH`) and, because a GUI such as T3 often has a
+shorter `PATH`, next to itself. `ctx install claude` and `ctx join` ask once
+(`Install ghclaude? [Y/n]`, on `/dev/tty`; without a terminal nothing is created
+and the command to run is printed). `ctx install ghclaude` creates it without a
+question, `ctx uninstall ghclaude` removes only that link, and `ctx doctor`
+checks that it leads to ctx. A shell alias would not do: T3 starts Claude
+through the Agent SDK with a path to the executable, and an alias hides what runs.
+
+Measured with Claude Code 2.1.296 (2026-10-16, claude.ai login, `--model sonnet`,
+local server, throwaway ghosttree config): the channel works only in an
+interactive session. A non-interactive `claude` (`-p`, also with
+`--input-format stream-json --output-format stream-json`, the way the Agent SDK
+starts it) accepts `--dangerously-load-development-channels` without error, shows no
+confirmation dialog and does not block, but never registers the channel: the
+debug log has no `Channel notifications registered`, and a message sent to the
+idle session stays `injected` and starts no turn (the interactive run in the same
+setup was `acked` and answered). So `ghclaude` set as the Claude executable in T3
+starts the session but does not wake it; it wakes idle agents in a terminal.
+Channels also need a claude.ai login: with `ANTHROPIC_AUTH_TOKEN` and a custom
+`ANTHROPIC_BASE_URL` Claude Code reports `channels feature is not currently
+available` even interactively. `--resume` under `-p` was not run separately; it
+takes the same code path as the other `-p` runs.
+
+What was measured (Claude Code 2.1.284, `ctx channel --capabilities`):
+
+| Capability | State |
+| --- | --- |
+| `receive_at_safe_point` | measured |
+| `wake_idle_session` | measured |
+| `receive_for_named_subagent` | gap |
+| `human_steer` | gap |
+| `human_interrupt` | gap |
+| `activity_observation` | gap |
+
+Delivery is at-most-once: a message is claimed atomically before it is sent and
+never re-sent, so a crash between claim and write loses it. A reply wakes the
+agent that asked when its original message was a request: a message with the
+intent `question`, `approval`, `blocker` or `handoff`, or a message that is not
+itself a reply and mentions the replier by name (the mention `reply` adds
+automatically does not count). A reply to a reply, such as a thanks, does not
+wake, so a chain ends after one answer. To ask again after an answer (for
+example a re-review after a fix), call `reply` with `intent` set to `question`,
+`approval`, `blocker` or `handoff`, or use `send` with a mention; a `reply`
+without intent wakes nobody. In direct and group rooms, which have no mentions, any plain message counts as
+a request. `send` with a mention and `reply` with an attention intent accept at most 10 messages per minute and 30
+per 15 minutes per channel process and refuse beyond that; the receiving
+session also has a coordination budget of 12000 characters per 5 minutes, which
+short messages exhaust only late. `<channel` in message text is rewritten to
+`&lt;channel` so a body cannot imitate a channel event. The limits are
+spelled out in `internal/claudechannel/doc.go`. The status line may say "no MCP
+server configured with that name" while delivery works.
+
+Channels need the old `initialize` connection. Claude Code 2.1.286 first sends
+`server/discover`; if the server answers with MCP 2026-07-28, Claude Code
+registers no channel for that connection. The channel server therefore refuses
+`server/discover` with JSON-RPC -32601, and Claude Code falls back to
+`initialize` with 2025-11-25. Measured with Claude Code 2.1.286 on 2026-10-01;
+a later release may behave differently. `scripts/verify-claude-channel.sh` is a
+manual tmux check against a real session (not part of CI). It passes `--model
+opus`, because the model in a user's settings may be one Claude Code rejects.
 
 ### Inspecting a repository before migration
 
@@ -229,6 +344,120 @@ scope; payloads remain in the server store. A failed mirror refresh does not
 undo a committed snapshot. Its warning includes an operation ID that operators
 can correlate with the server log.
 
+### Serving the installer
+
+`ctx serve` can hand out the `ctx` binaries itself, so a new machine needs one
+command. Build the archives, put them where the server can read them, and point
+the server at that directory:
+
+```sh
+make dist                                  # dist/release/ctx_<version>_<os>_<arch>.tar.gz + checksums.txt
+GHOSTTREE_DIST_DIR=/srv/ghosttree-dist ctx serve ...   # or --dist-dir
+```
+
+The server then answers `GET /install.sh` and `GET /dist/<file>` (only files
+listed in `checksums.txt`; nothing else in the directory is reachable). Without
+the setting both routes return 404. A machine installs with
+
+```sh
+curl -fsSL https://<server>/install.sh | sh
+```
+
+The script picks the build for Linux or macOS (amd64, arm64; Windows only
+inside WSL), downloads the archive and `checksums.txt`, verifies the SHA-256,
+and installs `ctx` to `~/.local/bin` (`$XDG_BIN_HOME` if set), without sudo. The
+server address in the script is `GHOSTTREE_PUBLIC_URL`, or else the address the
+request came in on. `GHOSTTREE_DOWNLOAD_BASE` on the client replaces the
+download location, for example with a GitHub release URL, since the archives
+use goreleaser's layout. The installer refuses a plain-http source (except
+loopback, or `GHOSTTREE_ALLOW_HTTP=1`), and the server serves `/install.sh`
+only for an https address: set `GHOSTTREE_PUBLIC_URL`, or let a trusted proxy
+send `X-Forwarded-Proto` and `X-Forwarded-Host`. `/dist/` has no rate limit of
+its own; limit it at the reverse proxy. Keep one ctx version per directory.
+Cautious readers can fetch the script, read it, and
+run it afterwards.
+
+### Interface language
+
+The web interface speaks English by default. `GHOSTTREE_LANGUAGE=de` (or
+`ctx serve --language de`) switches the whole interface, including the sign-in
+and invitation pages, dates and times, to German. The language is resolved per
+request; today it comes from this server setting. Text that people or agents
+wrote is shown as written, and the texts meant for agents (bootstrap, MCP
+descriptions, rules) stay English.
+
+### "In short" (Kurz erklärt)
+
+Every knowledge entry, request, pain, task for a person and room question can
+carry a two to four sentence note in plain language: what it is about, why it
+matters, what to decide, and a recommendation. The review cards also show the
+project and where the entry comes from (request, pull request, session, code
+area) above it.
+
+Agents write the note when they create the object (`explanation` on
+`context_remember`, `request_create`, `pain_record`, `human_task_create` and
+`coord_send` with a question; `--explanation` on the `ctx` commands). Missing or
+outdated notes are generated from the object's own text and the project data
+around it (titles of the requests it names, code paths), never from session
+transcripts. A note is outdated when the text it explains changed, or, if it was
+generated, when `GHOSTTREE_LANGUAGE` changed. The text and the model output
+pass the same secret check as human tasks.
+
+A new object gets its note from the model when its page is opened, one call
+in the background. Everything else, the whole backlog, objects that changed and
+notes in another language, is written in bulk through the Message Batches API at
+half the price. Opening a page never starts bulk work.
+
+The model has its own provider: the `explain` entry of `llm.json`
+(`GHOSTTREE_LLM_CONFIG`, or `~/.config/ghosttree/llm.json`), an Anthropic API key
+from the console organisation that pays for it:
+
+```json
+{"explain": {"base_url": "https://api.anthropic.com", "model": "claude-haiku-5-5",
+             "api_key_file": "/etc/ghosttree/explain-key"}}
+```
+
+`base_url` and `model` are the values shown; `credential` (a systemd
+credential) replaces `api_key_file`, and `GHOSTTREE_EXPLAIN_KEY` replaces both.
+The entry is never filled in from the top-level provider of the distiller or from
+the gardener's entry: a proxy or an OpenAI key left there must not receive these
+calls. Without a key, or while the key file does not exist yet, nothing is sent
+and `ctx explain status` says which file it waits for.
+
+- `GHOSTTREE_EXPLAIN=auto|off` (`--explain`) switches generation, default `auto`.
+- `GHOSTTREE_EXPLAIN_MODEL` (`--explain-model`) overrides the model of the entry.
+- `GHOSTTREE_EXPLAIN_DAILY_CALLS` (default 200) and `GHOSTTREE_EXPLAIN_DAILY_TOKENS`
+  (default 400000) cap one UTC day, 0 means no cap; see `ctx cost` for the monthly
+  and dollar caps. Server and batches share the cap. Objects that wait in an open
+  batch count as calls, and at an estimate (about 2500 tokens each, at the batch
+  price) against the token and dollar caps, so a cap holds before the money is
+  spent. **The default of 200 calls a day applies to `--batch` too**: a backlog of
+  thousands needs `GHOSTTREE_EXPLAIN_DAILY_CALLS=0` (and `..._DAILY_TOKENS=0`) in
+  `server.env`, or a dollar cap instead. Batch usage is counted at 50 % of the list price.
+- Administrators see calls, tokens, failures and the last days on the Organization page.
+
+A page never waits for the model: it shows the block once it exists. The bulk
+path runs from a timer, the review queue first:
+
+```sh
+ctx explain backfill --db /var/lib/ghosttree/ghosttree.db --batch
+ctx explain backfill --db /var/lib/ghosttree/ghosttree.db --collect
+ctx explain status --db /var/lib/ghosttree/ghosttree.db
+```
+
+`--batch` first collects every finished batch (saving its notes with the same
+cleaning and secret check, counting its tokens), then submits one batch for each
+object without a current note; several batches if the 100,000 request or 256 MB
+limit of the API requires it. Batch ids are kept in the database, so an object
+that waits in an open batch is not sent again, and one whose entry failed (an
+error, or cut off at the 4096 token output limit) is left alone for a day. A
+result for an object that changed in the meantime is discarded and the object is
+sent again. A batch is reserved in the database before it is uploaded, so two
+runs never send the same objects; a reservation whose run died is released after
+two hours, and a batch that cannot be read 48 hours after it was sent is given up
+and its objects are released. `--collect` only collects. `deploy/ghosttree-explain.*` run `--batch`
+hourly and start a first run when the key file appears.
+
 ## Privacy and security
 
 Ghosttree may hold source paths, prompts, command output, and operational
@@ -236,6 +465,9 @@ history. Treat the server as private infrastructure:
 
 - bind it to loopback or a trusted private interface;
 - use TLS at a reverse proxy when traffic crosses an untrusted network;
+- run the reverse proxy on the same host, or list its network in
+  `--trusted-proxies`: forwarding headers are believed only from loopback and
+  from those networks (see "Running behind TLS or a reverse proxy");
 - keep person tokens out of repositories and logs;
 - back up the SQLite database and test restores;
 - review retention and access rules for your team.
@@ -250,6 +482,77 @@ existing authorization model.
 Security reports belong at
 [security@deadweightlabs.com](mailto:security@deadweightlabs.com), not in a
 public issue. See [SECURITY.md](SECURITY.md).
+
+### Running behind TLS or a reverse proxy
+
+`ctx serve` speaks plain HTTP. The browser session cookie, and the OIDC flow
+cookie, are always `HttpOnly` and `SameSite=Lax`. They get `Secure` when any of
+these holds:
+
+1. the connection itself is TLS;
+2. `--public-url` (env `GHOSTTREE_PUBLIC_URL`) is an `https://` URL, or the
+   OIDC redirect URL is `https://`;
+3. the request carries exactly one `X-Forwarded-Proto: https` and its TCP peer
+   is a trusted proxy.
+
+The login and the logout cookie are built the same way and always carry the
+same attributes. Otherwise the cookie is not `Secure`, so a private HTTP
+deployment (loopback, VPN) keeps working with no extra setting. A browser never
+sends a `Secure` cookie over HTTP, so an https setup that gets this wrong shows
+up as a login loop rather than a silent downgrade.
+
+Trusted proxies are loopback (a proxy on the same host) plus whatever you list
+in `--trusted-proxies` / `GHOSTTREE_TRUSTED_PROXIES`, a comma-separated list of
+CIDRs or addresses. A client outside that list cannot switch `Secure` on with
+a header, and its forwarding headers also make the same-origin check on form
+posts fail. List only the proxy's own address, never a network that ordinary
+clients share. `/0`, IPv4-mapped prefixes and zoned addresses are rejected at
+startup.
+
+Loopback is trusted by default. Anything that makes a remote client appear as a
+loopback peer (`ssh -L`, `socat`, a Docker port mapping or other local
+forwarder) therefore also gets its forwarding headers believed. If you run such
+forwarders, add the word `none` to the list (`GHOSTTREE_TRUSTED_PROXIES=none`,
+or `none,192.0.2.10`) to switch loopback trust off and trust only what you list.
+With `none`, a proxy on the same host is no longer believed either, so forwarding
+headers from it are ignored; enter that proxy's address explicitly in the list.
+
+The client address used to rate-limit device logins comes from
+`X-Forwarded-For`, read only when the direct peer is trusted: all header lines
+are joined and read from right to left, trusted proxies are skipped, and the
+first untrusted address is the client. Entries a client sent itself therefore
+stay to the left and are ignored.
+
+Recommended setup behind a TLS terminator on another host:
+
+```bash
+GHOSTTREE_PUBLIC_URL=https://ghosttree.example.com
+GHOSTTREE_TRUSTED_PROXIES=192.0.2.10        # the proxy's address as seen by ctx serve
+GHOSTTREE_LISTEN=192.0.2.20:8474            # private interface, not a public one
+```
+
+The proxy must forward `Host`, `X-Forwarded-Proto` and `X-Forwarded-Host`, and
+must overwrite those headers rather than append to client-supplied ones:
+
+```nginx
+location / {
+    proxy_pass http://192.0.2.20:8474;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Host $host;
+    proxy_set_header X-Forwarded-For $remote_addr;
+}
+```
+
+`X-Forwarded-For $remote_addr` overwrites whatever the client sent and is the
+recommended form. With `$proxy_add_x_forwarded_for` (append) ghosttree still
+picks the proxy-added entry, but only if the proxy is in `--trusted-proxies`.
+
+`--public-url` is the simplest switch: with it every cookie is `Secure` no
+matter what headers arrive, and requests whose `Origin` equals it are accepted
+even if the proxy forwards no headers. It also fixes the base URL printed by the
+device login. Use `--trusted-proxies` alone when one server answers under
+several host names. `ctx serve --help` lists both flags.
 
 ## Roadmap
 

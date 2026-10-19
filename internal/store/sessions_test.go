@@ -3,6 +3,7 @@ package store
 import (
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -296,5 +297,22 @@ func TestAppendChunksWaitsForExternalWriter(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("append did not resume after writer rollback")
+	}
+}
+
+func TestSearchSessionsSnippetBelongsToItsOwnChunk(t *testing.T) {
+	s := openTest(t)
+	for _, w := range []string{"alpha", "beta", "gamma"} {
+		id, _ := s.UpsertSession(Session{Harness: "codex", ExternalID: w, Scope: scope.Axes{Project: "github.com/x/y"}})
+		s.AppendChunks(id, []Chunk{{Seq: 0, Role: "user", Text: "common zebra and " + w + " detail", Raw: "{}"}})
+	}
+	hits, err := s.SearchSessions("zebra", scope.Axes{}, "", 2)
+	if err != nil || len(hits) != 2 {
+		t.Fatalf("hits = %v, err = %v", hits, err)
+	}
+	for _, h := range hits {
+		if !strings.Contains(h.Snippet, h.Session.ExternalID) {
+			t.Errorf("snippet %q does not belong to %s", h.Snippet, h.Session.ExternalID)
+		}
 	}
 }

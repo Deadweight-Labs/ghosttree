@@ -25,7 +25,7 @@ func hookRuntimeChecks(h Harness, home string) []Check {
 			continue
 		}
 		name := h.Name + " " + string(channel)
-		runnable := Check{Name: name + " runnable", Component: ComponentHooks, Detail: command, Fix: "run 'ctx install " + h.Name + " --only hooks'"}
+		runnable := Check{Name: name + " runnable", Component: ComponentHooks, Detail: command, Fix: "run '" + ctxRun() + " install " + h.Name + " --only hooks'"}
 		if err := hookCommandProbe(command, event); err != nil {
 			runnable.Detail = err.Error()
 		} else {
@@ -33,6 +33,16 @@ func hookRuntimeChecks(h Harness, home string) []Check {
 		}
 		checks = append(checks, runnable)
 
+		if channel == ChannelPauseGate {
+			// The gate writes no activity receipt (it runs before every tool
+			// call and must stay cheap), and the context hook's receipt says
+			// nothing about it. It is only ever observed when a pause blocks a
+			// call, so "active" can only be unverified.
+			checks = append(checks, Check{Name: name + " active", Component: ComponentHooks, Unverified: true,
+				Detail: "(observed only when a pause blocks a call; start a pause from the web to see an ack)",
+				Fix:    "pause a test agent from the coordination page"})
+			continue
+		}
 		active := Check{Name: name + " active", Component: ComponentHooks, Detail: hookstate.DefaultPath(), Fix: "start a fresh " + h.Name + " session and trigger the event"}
 		receipt, found, err := hookstate.Latest(h.Name, event)
 		now := time.Now().UTC()
@@ -65,7 +75,7 @@ func hookRuntimeChecks(h Harness, home string) []Check {
 }
 
 func runHookCommandProbe(command, event string) error {
-	fields := strings.Fields(command)
+	fields := splitCommand(command)
 	if len(fields) == 0 {
 		return fmt.Errorf("empty hook command")
 	}
@@ -82,6 +92,14 @@ func runHookCommandProbe(command, event string) error {
 			return fmt.Errorf("timed out running %s", command)
 		}
 		return fmt.Errorf("%s failed: %v: %s", command, err, bounded(stderr.String(), 512))
+	}
+	if event == "Stop" || event == "StopFailure" {
+		// A Stop hook has no hookSpecificOutput; a JSON object is the contract.
+		var object map[string]any
+		if err := json.Unmarshal(stdout.Bytes(), &object); err != nil {
+			return fmt.Errorf("%s returned invalid JSON: %v", command, err)
+		}
+		return nil
 	}
 	var output struct {
 		HookSpecificOutput struct {

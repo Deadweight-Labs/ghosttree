@@ -21,7 +21,19 @@ const Limit = 24000
 
 const notice = "\n\n[ghosttree: Session hook context budget reached (24000 characters). This response was shortened; further automatic context is suppressed. Fetch full context with `context_get` or start at `.ghosttree/INDEX.md`.]\n"
 
+// lockWait bounds how long a hook waits for the budget lock. The lock is held
+// across two synced receipt writes (fsync of file and directory), so on a slow
+// disk one holder takes tens of milliseconds and waiters queue behind it. A
+// timeout is still better for a hook than hanging Claude.
+const lockWait = time.Second
+
 var ErrBusy = errors.New("context budget lock timed out")
+
+// ErrNotEmitted sagt, dass emit nichts geschrieben hat. Gibt emit einen Fehler
+// zurück, der das umhüllt, rollt DeliverChannel die Reservierung zurück: nur
+// ein tatsächlicher Schreibversuch verbraucht Budget. Jeder andere Fehler
+// zählt als Schreibversuch, denn ein halb geschriebener Text ist zugestellt.
+var ErrNotEmitted = errors.New("nothing was emitted")
 
 type Receipt struct {
 	Version       int       `json:"version"`
@@ -48,7 +60,16 @@ func stateDir() (string, error) {
 	return filepath.Join(root, "ghosttree", "context-budget"), nil
 }
 
+// Deliver liefert Gedächtniskontext. Bestehender Aufrufweg; die Kanaltrennung
+// steckt in DeliverChannel.
 func Deliver(sessionID, text string, emit func(string) error) error {
+	return DeliverChannel(sessionID, ChannelMemory, text, emit)
+}
+
+// DeliverChannel führt je Kanal eine eigene Abrechnung. Der Zustand liegt in
+// einer eigenen Datei je (Session, Kanal) — dieselbe Sitzung hat damit zwei
+// unabhängige Konten, und keines kann das andere leeren.
+func DeliverChannel(sessionID, channel, text string, emit func(string) error) error {
 	if strings.TrimSpace(sessionID) == "" || len(sessionID) > 4096 {
 		return errors.New("context budget requires a session identity")
 	}
@@ -62,9 +83,16 @@ func Deliver(sessionID, text string, emit func(string) error) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	digest := sha256.Sum256([]byte(sessionID))
+	// Der Kanal geht in den Schlüssel ein, nicht nur in den Dateinamen: sonst
+	// hätte eine Sitzung mit leerem Kanalnamen denselben Hash wie der
+	// Gedächtniskanal und beide teilten sich still ein Konto.
+	digest := sha256.Sum256([]byte(channel + "\x00" + sessionID))
 	key := hex.EncodeToString(digest[:])
-	path := filepath.Join(dir, key+".json")
+	name := key + ".json"
+	if channel == ChannelCoord {
+		name = key + ".coord.json"
+	}
+	path := filepath.Join(dir, name)
 	unlock, err := lock(path + ".lock")
 	if err != nil {
 		return err
@@ -76,14 +104,30 @@ func Deliver(sessionID, text string, emit func(string) error) error {
 	} else if err != nil {
 		return err
 	}
+	// Ein rollendes Fenster erholt sich. Ein Lebenszeitbudget für Koordination
+	// hieße: ab Nachmittag kommt nichts mehr an, obwohl gerade die
+	// Abstimmungen laufen, für die es das Ganze gibt.
+	if window := ChannelWindow(channel); window > 0 && !r.StartedAt.IsZero() &&
+		time.Since(r.StartedAt) > window {
+		r = Receipt{Version: 1, SessionHash: key, StartedAt: time.Now().UTC()}
+	}
 	if r.Exhausted {
 		return emit("")
 	}
+	limit := ChannelLimit(channel)
+	cut := notice
+	if channel == ChannelCoord {
+		cut = coordNotice
+	}
 	text = strings.ToValidUTF8(text, "�")
 	n := utf8.RuneCountInString(text)
-	available := Limit - r.ReservedChars - utf8.RuneCountInString(notice)
+	wasExhausted := r.Exhausted
+	available := limit - r.ReservedChars - utf8.RuneCountInString(cut)
 	if n > available {
-		text = string([]rune(text)[:available]) + notice
+		if available < 0 {
+			available = 0
+		}
+		text = string([]rune(text)[:available]) + cut
 		n = utf8.RuneCountInString(text)
 		r.Exhausted = true
 	}
@@ -93,6 +137,15 @@ func Deliver(sessionID, text string, emit func(string) error) error {
 		return err
 	}
 	if err := emit(text); err != nil {
+		if errors.Is(err, ErrNotEmitted) {
+			// Nichts ging raus: Reservierung zurück, unter demselben Lock.
+			r.ReservedChars -= n
+			r.Exhausted = wasExhausted
+			r.UpdatedAt = time.Now().UTC()
+			if rerr := saveReceipt(path, r); rerr != nil {
+				return errors.Join(err, rerr)
+			}
+		}
 		return err
 	}
 	r.EmittedChars += n
@@ -104,7 +157,8 @@ func lock(path string) (func(), error) {
 	if err != nil {
 		return nil, err
 	}
-	deadline := time.Now().Add(100 * time.Millisecond)
+	deadline := time.Now().Add(lockWait)
+	pause := time.Millisecond
 	for {
 		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 		if err == nil {
@@ -118,7 +172,10 @@ func lock(path string) (func(), error) {
 			f.Close()
 			return nil, ErrBusy
 		}
-		time.Sleep(time.Millisecond)
+		time.Sleep(pause)
+		if pause < 8*time.Millisecond {
+			pause *= 2
+		}
 	}
 	return func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN); _ = f.Close() }, nil
 }
