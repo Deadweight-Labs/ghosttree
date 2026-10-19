@@ -46,7 +46,7 @@ Two ways to run it:
                (every verdict needs a citation that exists in the checkout, every
                relation a verbatim quote of each entry) before anything is filed.
                The session can read the checkout (Read, Grep, Glob, only below it; git_log and
-               git_show as fixed tools, no Bash) and search ghosttree read-only; it cannot write, has no
+               git_show as fixed tools, no Bash) and, unless --no-mcp, search ghosttree read-only; it cannot write, has no
                network but the model proxy and ghosttree, never bypasses
                permissions. Every session gets its own empty config directory under
                --claude-dir (required) and an environment of a few variables; no
@@ -59,7 +59,10 @@ Two ways to run it:
                60); --limit caps the entries of the whole run
   --claude, --claude-dir, --no-mcp
                the claude binary; the directory under which each session gets an empty one (also
-               GHOSTTREE_GARDEN_CLAUDE_DIR); no ghosttree tools
+               GHOSTTREE_GARDEN_CLAUDE_DIR); no ghosttree tools (context_search and
+               context_get are neither allowed nor mentioned to the session; the fixed
+               git tools git_log and git_show stay). Use it where the ghosttree tools
+               must not reach other projects' entries: they cannot be limited to one project.
 
 In api mode it is an option and stays off without an API key: set GHOSTTREE_GARDEN_KEY, or a
 "garden" entry with api_key_file or credential in llm.json. Without a key the
@@ -155,7 +158,7 @@ func cmdGarden(args []string, stdout io.Writer) int {
 	sessionTimeout := fs.Duration("session-timeout", 40*time.Minute, "agent mode: a session running longer is killed")
 	claudeBin := fs.String("claude", os.Getenv("GHOSTTREE_CLAUDE"), "agent mode: path of the claude binary")
 	claudeDir := fs.String("claude-dir", os.Getenv("GHOSTTREE_GARDEN_CLAUDE_DIR"), "agent mode: directory under which every session gets its own empty CLAUDE_CONFIG_DIR (required)")
-	noMCP := fs.Bool("no-mcp", false, "agent mode: give the sessions no ghosttree tools")
+	noMCP := fs.Bool("no-mcp", false, "agent mode: give the sessions no ghosttree tools (context_search, context_get); the fixed git tools stay")
 	minAge := fs.Int("min-age", 14, "days; an entry looked at more recently is left out unless it or its code changed (0 = off)")
 	limits := addLimitFlags(fs, llmusage.JobGarden, "")
 	fs.Usage = func() { fmt.Fprintln(stdout, gardenUsage) }
@@ -268,13 +271,13 @@ func cmdGarden(args []string, stdout io.Writer) int {
 				fmt.Fprintln(stdout, err)
 				return 1
 			}
+			// ctx serves the fixed git tools in every case; --no-mcp only leaves
+			// out the ghosttree tools.
 			cc := garden.ClaudeConfig{Bin: bin, Model: cfg.Model, RepoRoot: repo.Root, ConfigRoot: *claudeDir,
-				Timeout: *sessionTimeout, ParentEnv: os.Environ()}
-			if !*noMCP {
-				if cc.CtxBin, err = os.Executable(); err != nil {
-					fmt.Fprintf(stdout, "cannot find the ctx binary for the ghosttree tools: %v\n", err)
-					return 1
-				}
+				Timeout: *sessionTimeout, ParentEnv: os.Environ(), NoGhosttree: *noMCP}
+			if cc.CtxBin, err = os.Executable(); err != nil {
+				fmt.Fprintf(stdout, "cannot find the ctx binary for the git tools: %v\n", err)
+				return 1
 			}
 			if cfg.APIKey != "" {
 				if u, perr := url.Parse(cfg.BaseURL); perr == nil && u.Host == "api.anthropic.com" {

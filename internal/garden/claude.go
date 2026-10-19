@@ -255,9 +255,16 @@ type ClaudeConfig struct {
 	// CLAUDE_CONFIG_DIR (and HOME). It must be set: a session that fell back to
 	// the settings of whoever runs it could widen its own rights.
 	ConfigRoot string
-	// CtxBin is the ctx binary that serves the ghosttree MCP tools and the git
-	// tool; empty means the session gets neither.
+	// CtxBin is the ctx binary that serves the fixed git tools (ctx garden
+	// git-mcp) and, unless NoGhosttree is set, the ghosttree MCP tools. Empty
+	// means the session gets neither; the agent mode always sets it.
 	CtxBin string
+	// NoGhosttree leaves the ghosttree MCP server (context_search, context_get)
+	// out of the session: no server in the MCP config, no allowlist entry, no
+	// mention in the system prompt. Those tools cannot be limited to one project,
+	// so a gardener that must not read other projects' entries runs without
+	// them. The fixed git tools stay.
+	NoGhosttree bool
 	// DenyRead lists absolute paths (files or directories) the session may not read.
 	DenyRead []string
 	Timeout  time.Duration
@@ -293,14 +300,18 @@ var (
 // read-only tools, run in the checkout (the session's working directory), and
 // Claude Code applies the Read rules to the directory they search, so they
 // reach what Read(//checkout/**) allows and nothing else.
-func AgentAllowed(repoRoot string, withMCP bool) []string {
+func AgentAllowed(repoRoot string, withGhosttree bool) []string {
 	allowed := []string{"Read(/" + repoRoot + "/**)"}
 	allowed = append(allowed, GitToolNames...)
-	if withMCP {
+	if withGhosttree {
 		allowed = append(allowed, "mcp__ghosttree__context_search", "mcp__ghosttree__context_get")
 	}
 	return allowed
 }
+
+// ghosttreeTools says whether the session gets the ghosttree MCP server. The
+// allowlist, the MCP config and the system prompt all follow this one answer.
+func (c ClaudeConfig) ghosttreeTools() bool { return c.CtxBin != "" && !c.NoGhosttree }
 
 // Args is the claude command line of one session. The prompt goes in on stdin.
 func (c ClaudeConfig) Args(s SessionSpec) ([]string, error) {
@@ -308,7 +319,7 @@ func (c ClaudeConfig) Args(s SessionSpec) ([]string, error) {
 	if c.RepoRoot == "" || !filepath.IsAbs(c.RepoRoot) {
 		return nil, fmt.Errorf("repo root %q is not absolute", c.RepoRoot)
 	}
-	allowed := AgentAllowed(c.RepoRoot, c.CtxBin != "")
+	allowed := AgentAllowed(c.RepoRoot, c.ghosttreeTools())
 	// .git holds the remote URL (possibly with credentials) and the object
 	// store; history is reached through the git tools, never through Read.
 	deny := append([]string{filepath.Join(c.RepoRoot, ".git")}, c.DenyRead...)
@@ -331,7 +342,7 @@ func (c ClaudeConfig) Args(s SessionSpec) ([]string, error) {
 		"--disallowedTools", strings.Join(denied, ","),
 		"--setting-sources", "user",
 		"--no-session-persistence",
-		"--append-system-prompt", AgentSystemPrompt(),
+		"--append-system-prompt", AgentSystemPrompt(c.ghosttreeTools()),
 		"--max-turns", fmt.Sprint(s.MaxTurns),
 	}
 	if c.Model != "" {
@@ -344,14 +355,16 @@ func (c ClaudeConfig) Args(s SessionSpec) ([]string, error) {
 	if c.CtxBin != "" {
 		// The MCP servers get what they need by their own env entry, so the
 		// session's own environment can stay small.
-		env := map[string]string{}
-		for _, kv := range c.ParentEnv {
-			k, v, _ := strings.Cut(kv, "=")
-			if mcpEnv[k] {
-				env[k] = v
+		if c.ghosttreeTools() {
+			env := map[string]string{}
+			for _, kv := range c.ParentEnv {
+				k, v, _ := strings.Cut(kv, "=")
+				if mcpEnv[k] {
+					env[k] = v
+				}
 			}
+			servers["ghosttree"] = map[string]any{"command": c.CtxBin, "args": []string{"mcp"}, "env": env}
 		}
-		servers["ghosttree"] = map[string]any{"command": c.CtxBin, "args": []string{"mcp"}, "env": env}
 		servers[GitServerName] = map[string]any{"command": c.CtxBin, "args": []string{"garden", "git-mcp", "--repo", c.RepoRoot}, "env": map[string]string{"PATH": envOf(c.ParentEnv, "PATH")}}
 	}
 	b, _ := json.Marshal(map[string]any{"mcpServers": servers})

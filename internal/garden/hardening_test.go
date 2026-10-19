@@ -2,6 +2,7 @@ package garden
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -74,6 +75,158 @@ func TestClaudeArgsAreLockedDown(t *testing.T) {
 	}
 	if _, err := (ClaudeConfig{RepoRoot: "/r", DenyRead: []string{"relative"}}).Args(SessionSpec{MaxTurns: 20}); err == nil {
 		t.Error("relative deny path accepted")
+	}
+}
+
+// mcpServers returns the servers of the session's --mcp-config by name.
+func mcpServers(t *testing.T, args []string) map[string]map[string]any {
+	t.Helper()
+	var cfg struct {
+		Servers map[string]map[string]any `json:"mcpServers"`
+	}
+	if err := json.Unmarshal([]byte(argVal(t, args, "--mcp-config")), &cfg); err != nil {
+		t.Fatalf("mcp config is no JSON: %v", err)
+	}
+	return cfg.Servers
+}
+
+// --no-mcp takes away the ghosttree tools and nothing else: the MCP config has
+// only the fixed git server, the allowlist has no context_search or
+// context_get, and the system prompt does not promise them.
+func TestClaudeArgsWithoutGhosttreeKeepTheGitTools(t *testing.T) {
+	base := ClaudeConfig{Bin: "claude", RepoRoot: "/r", CtxBin: "/usr/bin/ctx", ParentEnv: []string{"HOME=/h", "PATH=/bin"}}
+	ghosttreeTools := []string{"mcp__ghosttree__context_search", "mcp__ghosttree__context_get"}
+
+	with, err := base.Args(SessionSpec{MaxTurns: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	noGT := base
+	noGT.NoGhosttree = true
+	without, err := noGT.Args(SessionSpec{MaxTurns: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// MCP config: both servers, or only the git one.
+	srv := mcpServers(t, with)
+	if len(srv) != 2 || srv["ghosttree"] == nil || srv[GitServerName] == nil {
+		t.Errorf("default config has %v, want ghosttree and %s", srv, GitServerName)
+	}
+	srv = mcpServers(t, without)
+	if len(srv) != 1 || srv["ghosttree"] != nil || srv[GitServerName] == nil {
+		t.Errorf("no-ghosttree config has %v, want only %s", srv, GitServerName)
+	}
+	if cfg := argVal(t, without, "--mcp-config"); strings.Contains(cfg, `"args":["mcp"]`) || !strings.Contains(cfg, `"args":["garden","git-mcp","--repo","/r"]`) || !strings.Contains(cfg, `"command":"/usr/bin/ctx"`) {
+		t.Errorf("git server missing or ghosttree server still configured: %s", cfg)
+	}
+	if !contains(without, "--strict-mcp-config") {
+		t.Error("--strict-mcp-config is gone")
+	}
+
+	// Allowlist: git tools in both, context_* only with the ghosttree server.
+	allowedWith, allowedWithout := strings.Split(argVal(t, with, "--allowedTools"), ","), strings.Split(argVal(t, without, "--allowedTools"), ",")
+	for _, tool := range append(append([]string{}, ghosttreeTools...), GitToolNames...) {
+		if !contains(allowedWith, tool) {
+			t.Errorf("default allowlist lacks %s", tool)
+		}
+	}
+	for _, tool := range GitToolNames {
+		if !contains(allowedWithout, tool) {
+			t.Errorf("no-ghosttree allowlist lacks %s", tool)
+		}
+	}
+	for _, a := range allowedWithout {
+		if strings.Contains(a, "ghosttree") || strings.Contains(a, "context_") {
+			t.Errorf("no-ghosttree allowlist has %q", a)
+		}
+	}
+	if !contains(allowedWithout, "Read(//r/**)") {
+		t.Errorf("Read is not scoped to the checkout: %v", allowedWithout)
+	}
+
+	// The write tools of ghosttree stay denied either way.
+	for _, a := range [][]string{with, without} {
+		if d := argVal(t, a, "--disallowedTools"); !strings.Contains(d, "mcp__ghosttree__context_remember") || !strings.Contains(d, "Bash") {
+			t.Errorf("denylist lost entries: %s", d)
+		}
+	}
+
+	// System prompt: ghosttree tools named with them, absent without; the git
+	// tools are named in both.
+	pWith, pWithout := argVal(t, with, "--append-system-prompt"), argVal(t, without, "--append-system-prompt")
+	for _, w := range []string{"context_search", "context_get", "ghosttree-Werkzeuge", "git_log", "git_show"} {
+		if !strings.Contains(pWith, w) {
+			t.Errorf("default prompt lacks %q", w)
+		}
+	}
+	for _, w := range []string{"context_search", "context_get", "ghosttree"} {
+		if strings.Contains(pWithout, w) {
+			t.Errorf("no-ghosttree prompt still mentions %q", w)
+		}
+	}
+	for _, w := range []string{"git_log", "git_show", "kein freies Bash", "Beziehungen meldest du nur zwischen Einträgen deines Pakets"} {
+		if !strings.Contains(pWithout, w) {
+			t.Errorf("no-ghosttree prompt lacks %q", w)
+		}
+	}
+
+	// Everything else is the same line, argument for argument.
+	if len(with) != len(without) {
+		t.Fatalf("argument count differs: %d vs %d", len(with), len(without))
+	}
+	differs := map[string]bool{"--allowedTools": true, "--mcp-config": true, "--append-system-prompt": true}
+	for i := range with {
+		if i > 0 && differs[with[i-1]] {
+			continue
+		}
+		if with[i] != without[i] {
+			t.Errorf("argument %d differs: %q vs %q", i, with[i], without[i])
+		}
+	}
+}
+
+func TestAgentSystemPromptNamesTheGhosttreeToolsOnlyWhenTheSessionHasThem(t *testing.T) {
+	with, without := AgentSystemPrompt(true), AgentSystemPrompt(false)
+	if with == without {
+		t.Fatal("the prompt does not depend on the ghosttree tools")
+	}
+	for _, p := range []string{with, without} {
+		if strings.Contains(p, "{{") || strings.Contains(p, "}}") {
+			t.Errorf("placeholder left in the prompt: %s", p)
+		}
+		for _, w := range []string{"git_log", "git_show", "Du bist der Gärtner", "Antworte am Ende mit genau einem JSON-Objekt", `"relations"`} {
+			if !strings.Contains(p, w) {
+				t.Errorf("prompt lacks %q", w)
+			}
+		}
+	}
+	if !strings.Contains(with, "und lesend die ghosttree-Werkzeuge context_search und context_get. Nichts davon verändert etwas.") ||
+		!strings.Contains(with, "Mit context_search findest du bei Bedarf Einträge außerhalb deines Pakets") {
+		t.Errorf("the prompt with ghosttree tools changed: %s", with)
+	}
+	if strings.Contains(without, "ghosttree") || strings.Contains(without, "context_") {
+		t.Errorf("the prompt without ghosttree tools names them: %s", without)
+	}
+}
+
+// Without a ctx binary there is no MCP server at all (only a stand-in claude is
+// started like that); NoGhosttree makes no difference there.
+func TestClaudeArgsWithoutCtxBinHaveNoServers(t *testing.T) {
+	for _, no := range []bool{false, true} {
+		args, err := ClaudeConfig{RepoRoot: "/r", NoGhosttree: no}.Args(SessionSpec{MaxTurns: 20})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if srv := mcpServers(t, args); len(srv) != 0 {
+			t.Errorf("NoGhosttree=%v: servers %v without a ctx binary", no, srv)
+		}
+		if a := argVal(t, args, "--allowedTools"); strings.Contains(a, "context_") {
+			t.Errorf("NoGhosttree=%v: allowlist %s names tools of a server that is not there", no, a)
+		}
+		if p := argVal(t, args, "--append-system-prompt"); strings.Contains(p, "context_search") {
+			t.Errorf("NoGhosttree=%v: prompt names tools of a server that is not there", no)
+		}
 	}
 }
 

@@ -3,7 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -272,6 +275,109 @@ func TestGardenAgentModeFlagsAreChecked(t *testing.T) {
 		if code := cmdGarden([]string{"check-knowledge", a}, &out); code != 2 {
 			t.Errorf("%s: exit %d", a, code)
 		}
+	}
+}
+
+// --no-mcp takes the ghosttree tools away from the session and nothing else:
+// the fixed git server (ctx itself) is started either way, only the ghosttree
+// server, its allowlist entries and its mention in the prompt go. Run through
+// cmdGarden with a stand-in for claude that records its command line.
+func TestGardenNoMCPLeavesOnlyTheGhosttreeToolsOut(t *testing.T) {
+	repo := gardenRepo(t)
+	if out, err := exec.Command("git", "-C", repo.Root, "remote", "add", "origin", "https://github.com/o/r.git").CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(gardenEntries()[:1])
+	}))
+	defer srv.Close()
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("GHOSTTREE_LLM_CONFIG", filepath.Join(dir, "absent.json"))
+	t.Setenv("GHOSTTREE_GARDEN_KEY", "")
+	cfgJSON, _ := json.Marshal(map[string]string{"server_url": srv.URL, "token": "t"})
+	if err := os.MkdirAll(filepath.Join(dir, "ghosttree"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "ghosttree", "config.json"), cfgJSON, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	record := filepath.Join(dir, "args")
+	bin := filepath.Join(dir, "claude")
+	script := "#!/bin/sh\nprintf '%s\\0' \"$@\" > " + record + "\ncat > /dev/null\ncat <<'EOF'\n" +
+		`{"type":"result","subtype":"success","is_error":false,"num_turns":1,"result":"{\"verdicts\":[{\"id\":1,\"verdict\":\"holds\",\"reason\":\"r\"}]}","usage":{"input_tokens":1,"output_tokens":1}}` + "\nEOF\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	sessionArgs := func(extra ...string) map[string]string {
+		t.Helper()
+		os.Remove(record)
+		var out bytes.Buffer
+		args := append([]string{"check-knowledge", "--project", gardenProject, "--repo", repo.Root, "--claude", bin,
+			"--claude-dir", filepath.Join(dir, "sessions"), "--sessions", "1"}, extra...)
+		if code := cmdGarden(args, &out); code != 0 {
+			t.Fatalf("exit %d: %s", code, out.String())
+		}
+		raw, err := os.ReadFile(record)
+		if err != nil {
+			t.Fatalf("claude was not started: %v\n%s", err, out.String())
+		}
+		parts := strings.Split(strings.TrimSuffix(string(raw), "\x00"), "\x00")
+		got := map[string]string{}
+		for i, a := range parts {
+			if strings.HasPrefix(a, "--") && i+1 < len(parts) {
+				got[a] = parts[i+1]
+			}
+		}
+		return got
+	}
+	servers := func(args map[string]string) map[string]map[string]any {
+		t.Helper()
+		var cfg struct {
+			Servers map[string]map[string]any `json:"mcpServers"`
+		}
+		if err := json.Unmarshal([]byte(args["--mcp-config"]), &cfg); err != nil {
+			t.Fatalf("mcp config: %v", err)
+		}
+		return cfg.Servers
+	}
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	with := sessionArgs()
+	if s := servers(with); len(s) != 2 || s["ghosttree"] == nil || s[garden.GitServerName] == nil {
+		t.Errorf("default: servers %v", s)
+	}
+	for _, w := range []string{"mcp__ghosttree__context_search", "mcp__ghosttree__context_get", "mcp__gardengit__git_log", "mcp__gardengit__git_show"} {
+		if !strings.Contains(with["--allowedTools"], w) {
+			t.Errorf("default allowlist lacks %s: %s", w, with["--allowedTools"])
+		}
+	}
+	if !strings.Contains(with["--append-system-prompt"], "context_search") {
+		t.Error("default prompt does not name the ghosttree tools")
+	}
+
+	without := sessionArgs("--no-mcp")
+	s := servers(without)
+	if len(s) != 1 || s["ghosttree"] != nil || s[garden.GitServerName] == nil {
+		t.Fatalf("--no-mcp: servers %v, want only %s", s, garden.GitServerName)
+	}
+	if s[garden.GitServerName]["command"] != self {
+		t.Errorf("git server is started with %v, want this binary %s", s[garden.GitServerName]["command"], self)
+	}
+	if strings.Contains(without["--allowedTools"], "ghosttree") || strings.Contains(without["--allowedTools"], "context_") {
+		t.Errorf("--no-mcp allowlist: %s", without["--allowedTools"])
+	}
+	for _, w := range []string{"mcp__gardengit__git_log", "mcp__gardengit__git_show"} {
+		if !strings.Contains(without["--allowedTools"], w) {
+			t.Errorf("--no-mcp allowlist lacks %s: %s", w, without["--allowedTools"])
+		}
+	}
+	if p := without["--append-system-prompt"]; strings.Contains(p, "context_") || strings.Contains(p, "ghosttree") || !strings.Contains(p, "git_log") {
+		t.Errorf("--no-mcp prompt: %s", p)
 	}
 }
 
