@@ -106,12 +106,18 @@ func NewWithTimeout(cfg config.Config, d time.Duration) *Client {
 }
 
 // Relevant returns knowledge the text gives a reason to deliver. An empty
-// result is the usual answer.
-func (c *Client) Relevant(text string, ax scope.Axes, limit int) (string, error) {
+// result is the usual answer. The session is the harness session id: the server
+// remembers per session what it delivered and does not deliver it again, and
+// counts what the start-up briefing carried (Bootstrap takes the same id).
+// Without one, every call is the first of its session.
+func (c *Client) Relevant(text string, ax scope.Axes, limit int, session string) (string, error) {
 	q := axesQuery(ax)
 	q.Set("q", text)
 	if limit > 0 {
 		q.Set("limit", strconv.Itoa(limit))
+	}
+	if session != "" {
+		q.Set("session", session)
 	}
 	var md string
 	err := c.do("GET", "/api/context/relevant", q, nil, &md)

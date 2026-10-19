@@ -165,6 +165,11 @@ func relevantContext(stdin io.Reader) string {
 	var in struct {
 		Prompt string `json:"prompt"`
 		CWD    string `json:"cwd"`
+		// SessionID is the harness session, the same field in Claude Code's and
+		// Codex's payloads and the one the session-start hook sends to the
+		// bootstrap. It is what lets the server deliver an entry once per
+		// session instead of once per mention.
+		SessionID string `json:"session_id"`
 	}
 	json.NewDecoder(stdin).Decode(&in)
 	if strings.TrimSpace(in.Prompt) == "" {
@@ -180,7 +185,7 @@ func relevantContext(stdin io.Reader) string {
 	}
 	gitCtx := collector.ResolveGitContext(cwd)
 	md, err := client.NewWithTimeout(cfg, relevanceTimeout).Relevant(in.Prompt,
-		scope.Axes{Project: gitCtx.Project, Branch: gitCtx.Branch, Lineage: gitCtx.Lineage, Machine: cfg.Machine}, 0)
+		scope.Axes{Project: gitCtx.Project, Branch: gitCtx.Branch, Lineage: gitCtx.Lineage, Machine: cfg.Machine}, 0, in.SessionID)
 	if err != nil {
 		return ""
 	}

@@ -1,12 +1,22 @@
 package store
 
-import "github.com/Deadweight-Labs/ghosttree/internal/scope"
+import (
+	"fmt"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/scope"
+)
 
 // RelevanceProbe is one archived prompt run through the relevance rule.
 type RelevanceProbe struct {
 	Project string
 	Prompt  string
 	Titles  []string
+	// Terms[i] is the word that brought Titles[i] up.
+	Terms []string
+	// Hints are the very rare words of the prompt that no entry answers. They
+	// become a pointer only if a request or a session the reader may see names
+	// them, which the replay does not decide.
+	Hints []string
 }
 
 // ProbeRelevance replays real prompts from the archive against the rule that
@@ -44,31 +54,51 @@ func (s *Store) ProbeRelevance(sample, limit int) ([]RelevanceProbe, error) {
 	// is one conversation about one subject, which is exactly the sample that
 	// would flatter the rule.
 	step := max(1, eligibleCount/sample)
-	rows, err := s.db.Query(`SELECT se.project, c.text `+eligible+`
+	rows, err := s.db.Query(`SELECT se.project, se.account_id, c.text `+eligible+`
 		AND c.rowid % ? = 0 LIMIT ?`, step, sample)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var probes []RelevanceProbe
+	var accounts []int64
 	for rows.Next() {
 		var p RelevanceProbe
-		if err := rows.Scan(&p.Project, &p.Prompt); err != nil {
+		var account int64
+		if err := rows.Scan(&p.Project, &account, &p.Prompt); err != nil {
 			return nil, err
 		}
 		probes = append(probes, p)
+		accounts = append(accounts, account)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	owner := instanceOwnerID(s.db)
 	for i := range probes {
-		// The probe must not move the counters it may later be judged by.
-		ks, err := s.relevantKnowledge(probes[i].Prompt, scope.Axes{Project: probes[i].Project}, limit, false)
+		// The probe must not move the counters it may later be judged by. It
+		// has no session, so every prompt is judged as the first of its own:
+		// the question is what the rule would say, not what a session had
+		// already been told. The language gate measures the account that typed
+		// the prompt, as it does in service, so legacy rows without an account
+		// belong to the instance owner.
+		account := accounts[i]
+		if account == 0 {
+			account = owner
+		}
+		res, err := s.relevance(RelevanceQuery{Text: probes[i].Prompt, Axes: scope.Axes{Project: probes[i].Project},
+			Limit: limit, Account: fmt.Sprintf("person:%d", account)})
 		if err != nil {
 			return nil, err
 		}
-		for _, k := range ks {
-			probes[i].Titles = append(probes[i].Titles, k.Title)
+		for _, h := range res.Hits {
+			probes[i].Titles = append(probes[i].Titles, h.Title)
+			probes[i].Terms = append(probes[i].Terms, h.Term)
+		}
+		for _, h := range res.Hints {
+			if len(h.Known) == 0 {
+				probes[i].Hints = append(probes[i].Hints, h.Term)
+			}
 		}
 	}
 	return probes, nil
