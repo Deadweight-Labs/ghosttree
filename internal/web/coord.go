@@ -200,7 +200,7 @@ func (a *app) coordRoomPage(w http.ResponseWriter, r *http.Request) {
 		if landing := coordLandingRoom(summaries, sidebar); landing != "" {
 			target := coordRoomURL(landing, "", 0)
 			if r.URL.Query().Has("project") {
-				target += "&project=" + url.QueryEscape(strings.TrimSpace(r.URL.Query().Get("project")))
+				target = coordRoomProjectURL(landing, strings.TrimSpace(r.URL.Query().Get("project")))
 			}
 			http.Redirect(w, r, target, http.StatusFound)
 			return
