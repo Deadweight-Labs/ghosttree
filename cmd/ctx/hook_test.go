@@ -35,6 +35,11 @@ func TestUserPromptSubmitHookDeliversRelevantKnowledge(t *testing.T) {
 		if r.URL.Query().Get("q") == "" {
 			t.Error("prompt was not forwarded")
 		}
+		// The server delivers an entry once per session and can only do so if it
+		// is told which session this is.
+		if got := r.URL.Query().Get("session"); got != "relevant-session" {
+			t.Errorf("session id forwarded as %q, want the harness session id", got)
+		}
 		w.Write([]byte("## Possibly relevant\n\n- [note|machine:workstation-a] Ollama inventory — …\n"))
 	}))
 	defer srv.Close()

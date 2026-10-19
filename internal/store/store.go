@@ -906,6 +906,20 @@ WHEN OLD.state IS NOT NEW.state OR OLD.rank IS NOT NEW.rank BEGIN
   SELECT 'delivery',destination_kind,destination_id,strftime('%Y-%m-%dT%H:%M:%fZ','now')
   FROM coord_messages WHERE id=NEW.message_id;
 END;
+-- What a session has already been shown, so context that arrives unasked arrives
+-- once. One row per (account, harness session, entry) or, for a hint line, per
+-- (account, harness session, word): knowledge_id is 0 and term is set. A new
+-- table, not a column on an old one, so an existing database simply gains it at
+-- the next open. Rows age out after contextDeliveryRetention.
+CREATE TABLE IF NOT EXISTS context_deliveries(
+  account_id TEXT NOT NULL,
+  session_key TEXT NOT NULL,
+  knowledge_id INTEGER NOT NULL DEFAULT 0,
+  term TEXT NOT NULL DEFAULT '',
+  via TEXT NOT NULL,
+  delivered_at TEXT NOT NULL,
+  PRIMARY KEY(account_id, session_key, knowledge_id, term));
+CREATE INDEX IF NOT EXISTS context_deliveries_age ON context_deliveries(delivered_at);
 `
 
 func Open(path string) (*Store, error) {

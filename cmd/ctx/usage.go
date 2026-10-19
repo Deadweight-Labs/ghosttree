@@ -12,6 +12,7 @@ import (
 
 const usageCmdUsage = `usage: ctx usage --db <path> [--days 30] [--limit 50]
        ctx usage --db <path> --tools [--prefix mcp__ghosttree__]
+       ctx usage --db <path> --relevance [--sample 200]
 
 List active knowledge that has not been delivered or hit within the given
 window, least used first. This is the basis for deciding whether the bootstrap
@@ -19,7 +20,12 @@ needs ranking and whether staleness should follow use rather than age.
 
 --tools answers the other half: how often a tool was actually called, per
 project. It counts archived calls, not mentions of a tool's name in prose, and
-so only covers sessions collected after calls started being archived.`
+so only covers sessions collected after calls started being archived.
+
+--relevance replays archived prompts through the rule that delivers knowledge
+unasked and shows what fired and which word brought it. Each prompt is judged
+as the first of its session and by the account that typed it, because the
+language gate counts the session text of that account only.`
 
 func cmdUsage(args []string, stdout io.Writer) int {
 	fs := flag.NewFlagSet("usage", flag.ContinueOnError)
@@ -65,8 +71,8 @@ func cmdUsage(args []string, stdout io.Writer) int {
 			}
 			shown++
 			fmt.Fprintf(stdout, "  %q\n", shorten(p.Prompt, 100))
-			for _, title := range p.Titles {
-				fmt.Fprintf(stdout, "      -> %s\n", shorten(title, 96))
+			for i, title := range p.Titles {
+				fmt.Fprintf(stdout, "      -> %s (triggered by %q)\n", shorten(title, 80), p.Terms[i])
 			}
 		}
 		return 0

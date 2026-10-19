@@ -284,6 +284,8 @@ var writerMethodClasses = map[string]string{
 	"RegressionGaps":                "read",
 	"ReleaseDistillations":          "write",
 	"RelevantKnowledge":             "read_with_best_effort",
+	"RelevantFor":                   "read_with_best_effort",
+	"ClaimContextDeliveries":        "write",
 	"RemoveRequestRelation":         "write",
 	"RequestByID":                   "read",
 	"RequestQuotes":                 "read",
