@@ -173,8 +173,8 @@ sudo systemd-run --pipe --wait --collect --quiet \
 ```
 
 Stop `ghosttree.service` first for schema upgrades or commands that require
-exclusive access. Keep and verify the backup printed by `ctx upgrade-schema`
-before restarting the server.
+exclusive access (`ctx db vacuum`). Keep and verify the backup printed by
+`ctx upgrade-schema` before restarting the server.
 
 ### Images in stored transcripts
 
@@ -198,16 +198,58 @@ The image data cannot be recovered afterwards, so keep a backup if it might be
 needed. The report lists the chunks checked and replaced and the bytes saved.
 The database file does not get smaller by this: the freed pages are reused by
 new data, which already stops the growth. To give the space back to the
-filesystem, run `VACUUM` once with the service stopped. It rewrites the whole
-file, so it needs free disk space of about the size of the database and takes a
-while on a large one:
+filesystem, run `ctx db vacuum` once with the service stopped, as described in
+the next section.
+
+### Shrinking and checking the database
+
+Deleting rows (`ctx strip-images`, a cleanup after a redaction) leaves free pages
+inside the file; it only shrinks when `VACUUM` rewrites it. Run `ctx db vacuum`
+after a large deletion, or when the file is far bigger than its content: the
+plan it prints names the share of free pages and the size to expect. Use `ctx db
+vacuum` and `ctx db check`, not the `sqlite3` CLI: the CHECK constraints of the
+snapshot tables call the SQL function `ghosttree_valid_utf8`, which only `ctx`
+registers, so `sqlite3 <db> VACUUM` and `sqlite3 <db> 'PRAGMA quick_check'` stop
+with `no such function`.
+
+`ctx db vacuum` needs the service stopped. It refuses, and changes nothing, if
+another process has the database open (it names the process; on Linux it looks
+into `/proc`, which shows processes of other users only to root), if another
+connection holds the write lock, or if there is not enough free disk space.
+That space is about the size of the live data (the file minus its free pages,
+plus a tenth and 64 MiB) twice: once for the temporary copy that `VACUUM` writes
+into `--tmpdir` (default: the directory of the database; SQLite alone would use
+`/var/tmp`), once for the new WAL beside the database. On one filesystem both
+must fit together. It checkpoints the WAL, runs `VACUUM`, checkpoints again and
+finishes with `quick_check`; the exit status is not 0 unless that says `ok`. On
+a 10.9 GB database the vacuum took about ten minutes and left 7.0 GB. It asks
+before it starts; there is no terminal in a transient unit, so pass `--yes`
+there:
 
 ```bash
 sudo systemctl stop ghosttree
 sudo systemd-run --pipe --wait --collect --quiet \
   -p DynamicUser=yes -p User=ghosttree -p StateDirectory=ghosttree \
-  sqlite3 /var/lib/ghosttree/ghosttree.db 'PRAGMA wal_checkpoint(TRUNCATE); VACUUM;'
+  /usr/local/bin/ctx db vacuum --db /var/lib/ghosttree/ghosttree.db --yes
 sudo systemctl start ghosttree
+```
+
+`--fts-optimize` first runs `optimize` on every full-text table (`chunks_fts`,
+`sess_fts`, `knowledge_fts`, ...). After rows are deleted or redacted, their
+tokens stay in the segments of the full-text index until it is optimized, and
+`VACUUM` does not touch them; use the option after a bulk deletion or redaction.
+
+`ctx db check` runs `quick_check` (`--full`: `integrity_check`, slower, also
+compares the indexes with their tables) and prints `ok` or the first findings.
+It writes nothing, so it can run while the service is up. Run it through the
+same transient unit, not as another user: SQLite skips the CHECK constraints on
+a file the user cannot write (the command says so), and `-wal` or `-shm` files
+created by another user can lock the service out.
+
+```bash
+sudo systemd-run --pipe --wait --collect --quiet \
+  -p DynamicUser=yes -p User=ghosttree -p StateDirectory=ghosttree \
+  /usr/local/bin/ctx db check --db /var/lib/ghosttree/ghosttree.db
 ```
 
 ## Context snapshots
