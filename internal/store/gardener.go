@@ -56,6 +56,9 @@ func (s *Store) GardenerAccountID() int64 {
 // GardenerAccount is the account the gardener runs as, as it is named now. The
 // name is for people to read; nothing decides by it.
 func (s *Store) GardenerAccount() (Account, bool) {
+	if s.reader != nil {
+		return s.reader.GardenerAccount()
+	}
 	id := s.GardenerAccountID()
 	if id == 0 {
 		return Account{}, false
@@ -95,6 +98,9 @@ func (s *Store) ClearGardenerAccount() error {
 // token. A browser session of that account is not: nothing the gardener writes
 // comes from one.
 func (s *Store) IsGardenerPrincipal(p Principal) bool {
+	if s.reader != nil {
+		return s.reader.IsGardenerPrincipal(p)
+	}
 	want := s.GardenerAccountID()
 	if want == 0 || p.TokenKind == WebSessionKind {
 		return false
@@ -116,6 +122,9 @@ func ReservedForGardener(k Knowledge) bool {
 // written (knowledge_authors), never a name or a label the writer sent along; an
 // entry without an author (legacy, or one that fitted two accounts) is nobody's.
 func (s *Store) WrittenByGardener(k Knowledge) bool {
+	if s.reader != nil {
+		return s.reader.WrittenByGardener(k)
+	}
 	want := s.GardenerAccountID()
 	return want != 0 && k.ID != 0 && s.knowledgeAuthorID(k.ID) == want
 }
