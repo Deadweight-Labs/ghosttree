@@ -442,25 +442,40 @@ with the number of the note and the name of the person), **Record as covered** a
 pitfall (right to verify). The gardener has no call for any of this, and its own
 account, a plain member, is refused by the server if it tried.
 
-**Name the gardener's account on the server.** Set `GHOSTTREE_GARDENER_ACCOUNT`
-(or `--gardener-account`) in `/etc/ghosttree/server.env` to the name of the account
-whose token is in the gardener's client config. Only that account may write entries
-with harness `gardener` or a session reference starting with `gardener:`; the API
-answers everyone else, an owner included, with 403 `gardener_reserved`. Without the
-setting nobody may, and the gardener's proposals are refused with that code, so set
-it before the first night after an update. `ctx serve` logs `gardener_account` at
-start with the name and whether an account holds it. The name is looked up on every
-write, so a renamed account stops being the gardener's. The review page acts on a
-note only if that account wrote it (the account number stored with the note, not a
-label), nobody has edited it since, and the entries its title names are the ones
-its session reference names; the card shows the entries of the reference, with title
-and link. The test a regression note names is checked for its shape (a relative
-path, a colon, a function name), shown whole on the card and recorded as the note
-holds it. The server has no checkout, so it cannot look the test up; `ctx` did
-that before it filed the note, and the account and the unedited note are what vouch
-for it. The server does not force `staged` on the gardener's own account; the
-command does, and a test records every call a gardener run makes against a real
-server.
+**Set the gardener's account on the server.** Only one account may write entries
+with harness `gardener` or a session reference starting with `gardener:`, and the
+review page acts only on notes it wrote: the account whose token is in the
+gardener's client config. Say which one on the server host, once:
+
+```bash
+sudo systemd-run --pipe --wait --collect --quiet \
+  -p DynamicUser=yes -p User=ghosttree -p StateDirectory=ghosttree \
+  /usr/local/bin/ctx account set-gardener <account name> --db /var/lib/ghosttree/ghosttree.db
+```
+
+(The identity is the one of "Running maintenance commands" above; run it as the
+user that owns the database if yours differs.) The command looks the account up
+once and stores its **number** in the database (`org_state`, no schema change); the
+running server uses it at once, without a restart. `ctx account list` marks it with
+`gardener=true`, `ctx account set-gardener --clear` takes the role away, and
+`ctx serve` logs `gardener_account` at start with the account and whether one is
+set. The number, not the name, is what counts: renaming the account changes
+nothing, and an account that takes its old name gets nothing. Nothing that is
+reachable over HTTP sets it. Until one is set nobody may write gardener entries:
+the API answers 403 `gardener_reserved`, which is also what the gardener's
+proposals get on a server that has not been set up, and the review page offers no
+action on a gardener note.
+
+The review page acts on a note only if that account wrote it (the account number
+stored with the note, not a label), nobody has edited it since, and the entries its
+title names are the ones its session reference names; the card shows the entries of
+the reference, with title and link. The test a regression note names is checked for
+its shape (a relative path, a colon, a function name), shown whole on the card and
+recorded as the note holds it. The server has no checkout, so it cannot look the
+test up; `ctx` did that before it filed the note, and the account and the unedited
+note are what vouch for it. The server does not force `staged` on the gardener's
+own account; the command does, and a test records every call a gardener run makes
+against a real server.
 
 Layout under `/var/lib/ghosttree/garden`: `repo/` (checkout, owned by root,
 updated by `ghosttree-garden-update.service`), `bin/` (the `claude` binary, pass

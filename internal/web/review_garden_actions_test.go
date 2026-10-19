@@ -14,19 +14,22 @@ import (
 
 func idStr(id int64) string { return strconv.FormatInt(id, 10) }
 
-// gardenActEnv is the review environment with an account for the gardener, which
-// the server names as the gardener's, as `ctx serve` does with
-// GHOSTTREE_GARDENER_ACCOUNT. The second result is its account number.
+// gardenActEnv is the review environment with an account for the gardener, set as
+// the gardener's by its number, as `ctx account set-gardener` does. The second
+// result is that number.
 func gardenActEnv(t *testing.T) (shellEnv, int64) {
 	t.Helper()
 	e := ovEnv(t)
 	if _, err := e.St.AddPerson("gardener"); err != nil {
 		t.Fatal(err)
 	}
-	e.St.SetGardenerAccount("gardener")
-	id := e.St.GardenerAccountID()
-	if id == 0 {
-		t.Fatal("the gardener's account is not found")
+	acct, err := e.St.AccountByName("gardener")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _ := store.AccountNumericID(acct.ID)
+	if err := e.St.SetGardenerAccount(id); err != nil {
+		t.Fatal(err)
 	}
 	return e, id
 }

@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 
@@ -10,10 +11,12 @@ import (
 )
 
 // REQ-457: harness "gardener" and "gardener:" references are what the review page
-// acts on, so only the account the server names as the gardener's may write them.
+// acts on, so only the account whose number is set as the gardener's (`ctx account
+// set-gardener`) may write them. The number, not a name: a name is what a person
+// may change for themselves.
 
 // gardenerAPI is the access fixture with one more account, the gardener's, which
-// is a member of the project, and named as the gardener's.
+// is a member of the project, and set as the gardener's.
 func gardenerAPI(t *testing.T) *accessAPIFixture {
 	t.Helper()
 	f := accessAPI(t, true)
@@ -34,7 +37,9 @@ func gardenerAPI(t *testing.T) *accessAPIFixture {
 	if err := f.st.SetProjectRole("person:1", accProject, "person:7", store.RoleMember, false, store.RoleViaAPI); err != nil {
 		t.Fatal(err)
 	}
-	f.st.SetGardenerAccount("gardener")
+	if err := f.st.SetGardenerAccount(7); err != nil {
+		t.Fatal(err)
+	}
 	return f
 }
 
@@ -124,18 +129,80 @@ func TestGardenerMarksCannotRideOnASupersedeOrTheMigrationPath(t *testing.T) {
 	f.expect(t, "lena", 400, "PATCH", fmt.Sprintf("/api/knowledge/%d", old), map[string]string{"session_ref": "gardener:regression:1:existing"})
 }
 
-func TestNobodyMayWriteGardenerMarksWhenNoAccountIsNamed(t *testing.T) {
+func TestNobodyMayWriteGardenerMarksWhenNoAccountIsSet(t *testing.T) {
 	f := gardenerAPI(t)
-	f.st.SetGardenerAccount("")
+	if err := f.st.ClearGardenerAccount(); err != nil {
+		t.Fatal(err)
+	}
 	out := f.expect(t, "gardener", 403, "POST", "/api/knowledge", gardenerNote("gardener", "gardener:regression:1:existing"))
-	if !strings.Contains(out, "gardener_reserved") || !strings.Contains(out, "GHOSTTREE_GARDENER_ACCOUNT") {
+	if !strings.Contains(out, "gardener_reserved") || !strings.Contains(out, "ctx account set-gardener") {
 		t.Errorf("the refusal does not say how to set it up: %s", out)
 	}
 	f.expect(t, "robin", 403, "POST", "/api/knowledge", gardenerNote("gardener", ""))
-	// A name that no account holds is the same.
-	f.st.SetGardenerAccount("nobody")
-	f.expect(t, "gardener", 403, "POST", "/api/knowledge", gardenerNote("gardener", ""))
-	// And what is not the gardener's still works for everyone, named or not.
+	// And what is not the gardener's still works for everyone, set or not.
 	f.expect(t, "gardener", 200, "POST", "/api/knowledge", gardenerNote("claude", ""))
 	f.expect(t, "mia", 200, "POST", "/api/knowledge", gardenerNote("gardenerbot", "gardener"))
+}
+
+// The role is the account's number. Renaming the gardener's account does not
+// take it away, and an account that gets the gardener's name does not get it.
+func TestTheGardenersRoleDoesNotFollowTheName(t *testing.T) {
+	f := gardenerAPI(t)
+	ref := "gardener:regression:1:existing"
+	// Whoever may rename themselves renames the gardener's account (the person who
+	// owns it) and gives its old name to the account of a member.
+	if _, err := f.st.SetOwnName("person:7", "garden-keeper"); err != nil {
+		t.Fatal(err)
+	}
+	f.expect(t, "gardener", 200, "POST", "/api/knowledge", gardenerNote("gardener", ref))
+	for _, q := range []string{`UPDATE persons SET name='garden-keeper-2' WHERE id=7`, `UPDATE persons SET name='gardener' WHERE id=3`} {
+		if _, err := f.st.DB().Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if a, _ := f.st.AccountByName("gardener"); a.ID != "person:3" {
+		t.Fatalf("the name did not move: %+v", a)
+	}
+	// mia (person:3) now carries the name "gardener".
+	out := f.expect(t, "mia", 403, "POST", "/api/knowledge", gardenerNote("gardener", ref))
+	if !strings.Contains(out, "gardener_reserved") {
+		t.Errorf("refused without saying why: %s", out)
+	}
+	f.expect(t, "mia", 403, "POST", "/api/knowledge", gardenerNote("", ref))
+	f.expect(t, "gardener", 200, "POST", "/api/knowledge", gardenerNote("gardener", ref))
+}
+
+// Nothing a person can reach over HTTP sets the gardener's account: the only
+// callers of the two functions that write it are the account command and tests.
+// The packages that answer requests (the API, the web pages, the MCP server) are
+// read for them, so a new route that did would fail here and be looked at.
+func TestNoRequestHandlerSetsTheGardenersAccount(t *testing.T) {
+	for _, dir := range []string{".", "../web", "../mcpserver", "../client"} {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+				continue
+			}
+			raw, err := os.ReadFile(dir + "/" + e.Name())
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, call := range []string{"SetGardenerAccount(", "ClearGardenerAccount(", "gardener_account"} {
+				if strings.Contains(string(raw), call) {
+					t.Errorf("%s/%s mentions %s: a request must not set the gardener's account", dir, e.Name(), call)
+				}
+			}
+		}
+	}
+	// And the account stays what it was after requests of people.
+	f := gardenerAPI(t)
+	for _, who := range []string{"robin", "lena", "mia"} {
+		f.call(t, who, "POST", "/api/knowledge", map[string]any{"type": "note", "title": "gardener_account", "body": "1", "scope": map[string]string{"project": accProject}})
+	}
+	if id := f.st.GardenerAccountID(); id != 7 {
+		t.Errorf("the gardener's account is %d after requests of people", id)
+	}
 }

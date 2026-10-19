@@ -114,25 +114,51 @@ func TestGardenActionsNeedANoteTheGardenersAccountWrote(t *testing.T) {
 	}
 }
 
-func TestGardenActionsRefuseEveryoneWhenNoGardenerAccountIsNamed(t *testing.T) {
+func TestGardenActionsRefuseEveryoneWhenNoGardenerAccountIsSet(t *testing.T) {
 	e, gardener := gardenActEnv(t)
 	f := fileForged(t, e, gardener, nil)
-	e.St.SetGardenerAccount("")
-	f.refused(t, e, "no account named")
-	// A name that no account holds is no better.
-	e.St.SetGardenerAccount("nobody-has-this-name")
-	f.refused(t, e, "an unknown name")
-	// An account that is renamed is not the gardener any more.
-	e.St.SetGardenerAccount("gardener")
-	if _, err := e.St.DB().Exec(`UPDATE persons SET name='gardener-renamed' WHERE name='gardener'`); err != nil {
+	if err := e.St.ClearGardenerAccount(); err != nil {
 		t.Fatal(err)
 	}
-	f.refused(t, e, "a renamed account")
-	if _, err := e.St.DB().Exec(`UPDATE persons SET name='gardener' WHERE name='gardener-renamed'`); err != nil {
+	f.refused(t, e, "no account set")
+	// Another account made the gardener's: what the first one wrote is not vouched for.
+	if err := e.St.SetGardenerAccount(1); err != nil {
+		t.Fatal(err)
+	}
+	f.refused(t, e, "another account set")
+	if err := e.St.SetGardenerAccount(gardener); err != nil {
 		t.Fatal(err)
 	}
 	if offered, _ := offers(t, e, f.dup, "merge"); !offered {
-		t.Error("the actions do not come back with the name")
+		t.Error("the actions do not come back with the account")
+	}
+}
+
+// The role is the account's number. Renaming the gardener's account does not take
+// the actions away, and an account that holds the gardener's old name gets none.
+func TestGardenActionsFollowTheAccountNumberAndNotTheName(t *testing.T) {
+	e, gardener := gardenActEnv(t)
+	genuine := fileForged(t, e, gardener, nil)
+	if _, err := e.St.SetOwnName("person:"+idStr(gardener), "garden-keeper"); err != nil {
+		t.Fatal(err)
+	}
+	for note, action := range map[int64]string{genuine.dup: "merge", genuine.existing: "cover", genuine.untestable: "cover"} {
+		if offered, _ := offers(t, e, note, action); !offered {
+			t.Errorf("renaming the gardener's account took %q away", action)
+		}
+	}
+	// The name "gardener" is held by the reviewer's account now (by whatever way it got there).
+	for _, q := range []string{`UPDATE persons SET name='garden-keeper-2' WHERE id=` + idStr(gardener), `UPDATE persons SET name='gardener' WHERE id=5`} {
+		if _, err := e.St.DB().Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// What that account writes, with the label "gardener" and under that name, is not the gardener's.
+	fileForged(t, e, 5, func(n *store.Knowledge) { n.Person = "gardener" }).refused(t, e, "an account that holds the gardener's name")
+	for note, action := range map[int64]string{genuine.dup: "merge", genuine.existing: "cover", genuine.untestable: "cover"} {
+		if offered, _ := offers(t, e, note, action); !offered {
+			t.Errorf("the account that holds the old name took %q away", action)
+		}
 	}
 }
 

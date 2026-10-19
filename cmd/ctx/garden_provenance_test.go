@@ -140,9 +140,11 @@ func newProvenanceFixture(t *testing.T) *provenanceFixture {
 		t.Fatal(err)
 	}
 	st.SetAccessMode(store.AccessMode{Enforce: true})
-	// The server names the gardener's account, as GHOSTTREE_GARDENER_ACCOUNT does
-	// for ctx serve; without it the server refuses everything of the gardener's.
-	st.SetGardenerAccount("gardener")
+	// The gardener's account is set by its number, as `ctx account set-gardener`
+	// does; without it the server refuses everything of the gardener's.
+	if err := st.SetGardenerAccount(2); err != nil {
+		t.Fatal(err)
+	}
 	token, _, err := st.CreateToken("gardener", store.TokenSpec{Label: "garden"})
 	if err != nil {
 		t.Fatal(err)
@@ -500,15 +502,17 @@ func TestOnlyTheGardenersAccountCanFileNotesThatLookLikeTheGardeners(t *testing.
 		t.Errorf("the gardener's own account is refused: %v", err)
 	}
 
-	// The same run, on a server that names no gardener account: the first proposal is refused,
+	// The same run, on a server with no gardener account: the first proposal is refused,
 	// and nothing is filed as the gardener's.
 	fx2 := newProvenanceFixture(t)
-	fx2.st.SetGardenerAccount("")
+	if err := fx2.st.ClearGardenerAccount(); err != nil {
+		t.Fatal(err)
+	}
 	var out bytes.Buffer
 	args := []string{"check-knowledge", "--project", provenanceProject, "--repo", fx2.repo.Root, "--claude", fx2.claude,
 		"--claude-dir", filepath.Join(fx2.dir, "sessions"), "--sessions", "1", "--propose", "--no-mcp"}
 	if code := cmdGarden(args, &out); code == 0 {
-		t.Errorf("a run without a named gardener account went through:\n%s", out.String())
+		t.Errorf("a run without a gardener account went through:\n%s", out.String())
 	}
 	if !strings.Contains(out.String(), "gardener_reserved") {
 		t.Errorf("the refusal is not shown:\n%s", out.String())

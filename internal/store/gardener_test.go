@@ -1,6 +1,7 @@
 package store
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
@@ -34,79 +35,136 @@ func TestReservedForGardenerCatchesEveryClaimToBeTheGardeners(t *testing.T) {
 	}
 }
 
-func TestTheGardenersAccountIsTheOneThatHoldsTheNameNow(t *testing.T) {
+func gardenerStore(t *testing.T, names ...string) *Store {
+	t.Helper()
 	st, err := Open(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	for _, n := range []string{"alice", "gardener", "mallory"} {
+	for _, n := range names {
 		if _, err := st.AddPerson(n); err != nil {
 			t.Fatal(err)
 		}
 	}
-	gardener := Principal{ID: "person:2", Label: "gardener", TokenKind: "token"}
+	return st
+}
 
-	// Nothing set: nobody is the gardener, not even the account of that name.
-	if st.GardenerAccountID() != 0 || st.IsGardenerPrincipal(gardener) {
-		t.Fatal("an account is the gardener's without being named")
+func tokenOf(id string) Principal { return Principal{ID: id, TokenKind: "token"} }
+
+// Nothing is the gardener until an account number is set, and the setting
+// takes an account that exists and is active.
+func TestNobodyIsTheGardenerUntilAnAccountNumberIsSet(t *testing.T) {
+	st := gardenerStore(t, "alice", "gardener", "mallory")
+	if st.GardenerAccountID() != 0 {
+		t.Fatal("an account is the gardener's before one was set")
 	}
-	st.SetGardenerAccount(" gardener ")
-	if st.GardenerAccountName() != "gardener" || st.GardenerAccountID() != 2 {
-		t.Fatalf("name %q id %d", st.GardenerAccountName(), st.GardenerAccountID())
+	if _, ok := st.GardenerAccount(); ok {
+		t.Error("an account is shown as the gardener's before one was set")
 	}
-	if !st.IsGardenerPrincipal(gardener) {
-		t.Error("the account of that name is not the gardener")
+	for _, p := range []Principal{tokenOf("person:1"), tokenOf("person:2"), tokenOf("person:3")} {
+		if st.IsGardenerPrincipal(p) {
+			t.Errorf("%s is the gardener with none set", p.ID)
+		}
+	}
+	// The account called "gardener" is not the gardener for its name.
+	if err := st.SetGardenerAccount(99); !errors.Is(err, ErrInvalidInput) {
+		t.Errorf("an account that does not exist: %v", err)
+	}
+	if err := st.SetGardenerAccount(0); !errors.Is(err, ErrInvalidInput) {
+		t.Errorf("account 0: %v", err)
+	}
+	if _, err := st.DB().Exec(`UPDATE persons SET state='disabled' WHERE id=3`); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetGardenerAccount(3); !errors.Is(err, ErrInvalidInput) {
+		t.Errorf("a disabled account: %v", err)
+	}
+	if st.GardenerAccountID() != 0 {
+		t.Fatal("a refused setting was stored")
+	}
+
+	if err := st.SetGardenerAccount(2); err != nil {
+		t.Fatal(err)
+	}
+	if a, ok := st.GardenerAccount(); !ok || st.GardenerAccountID() != 2 || a.Name != "gardener" {
+		t.Fatalf("account %+v %v id %d", a, ok, st.GardenerAccountID())
+	}
+	if !st.IsGardenerPrincipal(tokenOf("person:2")) {
+		t.Error("the account that was set is not the gardener")
 	}
 	for name, p := range map[string]Principal{
-		"another account":                  {ID: "person:1", Label: "alice", TokenKind: "token"},
-		"mallory with the label gardener":  {ID: "person:3", Label: "gardener", TokenKind: "token"},
-		"the gardener in a browser":        {ID: "person:2", Label: "gardener", TokenKind: WebSessionKind},
+		"another account":                  tokenOf("person:1"),
+		"the gardener in a browser":        {ID: "person:2", TokenKind: WebSessionKind},
 		"no principal":                     {},
-		"an id that is not an account":     {ID: "gardener", Label: "gardener"},
-		"an agent id with the same number": {ID: "agent:2", Label: "gardener"},
+		"an id that is not an account":     tokenOf("gardener"),
+		"an agent id with the same number": tokenOf("agent:2"),
+		"a number written another way":     tokenOf("person:02"),
 	} {
 		if st.IsGardenerPrincipal(p) {
 			t.Errorf("%s is the gardener", name)
 		}
 	}
-	// A name that is not an account, and the name given back to nobody.
-	st.SetGardenerAccount("nobody")
-	if st.GardenerAccountID() != 0 || st.IsGardenerPrincipal(gardener) {
-		t.Error("an unknown name names an account")
-	}
-	st.SetGardenerAccount("")
-	if st.GardenerAccountID() != 0 || st.IsGardenerPrincipal(gardener) {
-		t.Error("an empty name names an account")
-	}
-	// An account that is renamed is not the gardener any more; the name goes to whoever holds it.
-	st.SetGardenerAccount("gardener")
-	if _, err := st.DB().Exec(`UPDATE persons SET name='gardener-old' WHERE id=2`); err != nil {
+	// Taking the role away leaves nobody.
+	if err := st.ClearGardenerAccount(); err != nil {
 		t.Fatal(err)
 	}
-	if st.IsGardenerPrincipal(gardener) {
-		t.Error("a renamed account is still the gardener")
+	if st.GardenerAccountID() != 0 || st.IsGardenerPrincipal(tokenOf("person:2")) {
+		t.Error("the gardener stayed after the role was taken away")
 	}
-	if _, err := st.DB().Exec(`UPDATE persons SET name='gardener' WHERE id=3`); err != nil {
+}
+
+// A name is what a person changes for themselves, so it must carry no right: the
+// gardener's account keeps the role when it is renamed, and another account that
+// takes the name gets nothing. Both are done with the functions a person has,
+// SetOwnName (what the profile page calls).
+func TestRenamingAccountsNeitherGivesNorTakesTheGardenersRole(t *testing.T) {
+	st := gardenerStore(t, "alice", "gardener", "mallory")
+	if err := st.SetGardenerAccount(2); err != nil {
 		t.Fatal(err)
 	}
-	if !st.IsGardenerPrincipal(Principal{ID: "person:3", TokenKind: "token"}) || st.IsGardenerPrincipal(gardener) {
-		t.Error("the name does not follow the account that holds it")
+	gardener, mallory := tokenOf("person:2"), tokenOf("person:3")
+
+	// The gardener's account is renamed (by itself, the way any account may rename itself):
+	// it is still the gardener.
+	if _, err := st.SetOwnName("person:2", "garden-keeper"); err != nil {
+		t.Fatal(err)
+	}
+	if !st.IsGardenerPrincipal(gardener) || st.GardenerAccountID() != 2 {
+		t.Error("renaming the gardener's account took the role away")
+	}
+	if a, ok := st.GardenerAccount(); !ok || a.Name != "garden-keeper" {
+		t.Errorf("the account is shown as %+v", a)
+	}
+	// The store keeps an old name for the account that held it, so another account
+	// cannot take it with SetOwnName at all.
+	if _, err := st.SetOwnName("person:3", "gardener"); err == nil {
+		t.Error("another account took the name the gardener's account had")
+	}
+	// The role does not rest on that: should a name get to another account by any
+	// other way (the name the identity provider reports, an administrator's tool, a
+	// future mistake), it gives nothing, and the gardener keeps the role.
+	for _, q := range []string{
+		`UPDATE persons SET name='garden-keeper-2' WHERE id=2`,
+		`UPDATE persons SET name='gardener' WHERE id=3`,
+	} {
+		if _, err := st.DB().Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if a, _ := st.AccountByName("gardener"); a.ID != "person:3" {
+		t.Fatalf("the test did not move the name: %+v", a)
+	}
+	if st.IsGardenerPrincipal(mallory) {
+		t.Fatal("an account that holds the gardener's name became the gardener")
+	}
+	if !st.IsGardenerPrincipal(gardener) || st.GardenerAccountID() != 2 {
+		t.Error("the gardener lost the role to the account that holds its old name")
 	}
 }
 
 func TestAnEntryIsTheGardenersWhenTheGardenersAccountWroteIt(t *testing.T) {
-	st, err := Open(":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
-	for _, n := range []string{"alice", "gardener"} {
-		if _, err := st.AddPerson(n); err != nil {
-			t.Fatal(err)
-		}
-	}
-	st.SetGardenerAccount("gardener")
+	st := gardenerStore(t, "alice", "gardener")
 	write := func(author int64, person string) Knowledge {
 		id, err := st.InsertKnowledge(Knowledge{Type: "note", Title: "t", Body: "b", Scope: scope.Axes{Project: "github.com/o/r"}, Person: person, AuthorID: author, Harness: "gardener", SessionRef: "gardener:regression:1:existing"})
 		if err != nil {
@@ -118,18 +176,85 @@ func TestAnEntryIsTheGardenersWhenTheGardenersAccountWroteIt(t *testing.T) {
 		}
 		return k
 	}
-	if !st.WrittenByGardener(write(2, "gardener")) {
+	if st.WrittenByGardener(write(2, "gardener")) {
+		t.Error("an entry counts while no account is set")
+	}
+	if err := st.SetGardenerAccount(2); err != nil {
+		t.Fatal(err)
+	}
+	mine, labelled := write(2, "gardener"), write(1, "gardener")
+	if !st.WrittenByGardener(mine) {
 		t.Error("an entry of the gardener's account is not the gardener's")
 	}
 	// The label a writer sends is no proof: the author is the account number.
-	if st.WrittenByGardener(write(1, "gardener")) {
+	if st.WrittenByGardener(labelled) {
 		t.Error("the label gardener on an entry of another account counts")
 	}
 	if st.WrittenByGardener(Knowledge{}) {
 		t.Error("an entry that was never written counts")
 	}
-	st.SetGardenerAccount("")
-	if st.WrittenByGardener(write(2, "gardener")) {
-		t.Error("an entry counts while no account is named")
+	// Another account made the gardener's: the earlier entries are not its own any more.
+	if err := st.SetGardenerAccount(1); err != nil {
+		t.Fatal(err)
+	}
+	if st.WrittenByGardener(mine) || !st.WrittenByGardener(labelled) {
+		t.Error("the role did not move with the number")
+	}
+	if err := st.ClearGardenerAccount(); err != nil {
+		t.Fatal(err)
+	}
+	if st.WrittenByGardener(mine) || st.WrittenByGardener(labelled) {
+		t.Error("an entry counts after the role was taken away")
+	}
+}
+
+// The server runs the store with a writer and a read-only pool: the setting goes
+// through the writer, and every read, from either side, sees what was set. A
+// second process (ctx account set-gardener on the host) writes the same file.
+func TestGardenerAccountWorksWithTheRuntimeWriterAndFromAnotherProcess(t *testing.T) {
+	path := t.TempDir() + "/g.db"
+	st, err := OpenRuntime(path, DefaultWriterConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	for _, n := range []string{"alice", "gardener"} {
+		if _, err := st.AddPerson(n); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if st.GardenerAccountID() != 0 {
+		t.Fatal("set before anything was")
+	}
+	if err := st.SetGardenerAccount(2); err != nil {
+		t.Fatal(err)
+	}
+	if st.GardenerAccountID() != 2 || !st.IsGardenerPrincipal(tokenOf("person:2")) {
+		t.Error("the setting through the writer is not seen")
+	}
+	if err := st.SetGardenerAccount(77); err == nil {
+		t.Error("an account that does not exist was set through the writer")
+	}
+	if st.GardenerAccountID() != 2 {
+		t.Error("a refused setting changed the stored one")
+	}
+
+	// The command line opens the file itself, beside the running server.
+	other, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := other.SetGardenerAccount(1); err != nil {
+		t.Fatal(err)
+	}
+	other.Close()
+	if st.GardenerAccountID() != 1 || st.IsGardenerPrincipal(tokenOf("person:2")) || !st.IsGardenerPrincipal(tokenOf("person:1")) {
+		t.Error("the running server does not see the change of another process")
+	}
+	if err := st.ClearGardenerAccount(); err != nil {
+		t.Fatal(err)
+	}
+	if st.GardenerAccountID() != 0 {
+		t.Error("clearing through the writer is not seen")
 	}
 }

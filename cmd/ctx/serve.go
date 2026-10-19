@@ -42,10 +42,6 @@ type serveConfig struct {
 	Explain        ExplainConfig
 	// GardenLimits are shown to administrators; the gardener itself runs as a command.
 	GardenLimits llmusage.Limits
-	// GardenerAccount names the account the gardener runs as. Only it may write
-	// entries with harness "gardener", and the review page only acts on notes it
-	// wrote (REQ-457). Empty: nobody may.
-	GardenerAccount string
 }
 
 const (
@@ -67,8 +63,6 @@ const (
 	envDistDir = "GHOSTTREE_DIST_DIR"
 	// envLanguage picks the language of the web interface: en (default) or de.
 	envLanguage = "GHOSTTREE_LANGUAGE"
-	// envGardenerAccount names the account the gardener's token belongs to.
-	envGardenerAccount = "GHOSTTREE_GARDENER_ACCOUNT"
 )
 
 type snapshotRootValues []string
@@ -130,7 +124,6 @@ func parseServeConfig(args []string, output io.Writer) (serveConfig, error) {
 	fs.StringVar(&cfg.PublicURL, "public-url", os.Getenv(envPublicURL), "external base URL, e.g. https://ghosttree.example.com; an https URL makes every cookie Secure (env "+envPublicURL+")")
 	fs.StringVar(&cfg.DistDir, "dist-dir", os.Getenv(envDistDir), "directory with ctx_<version>_<os>_<arch>.tar.gz archives and checksums.txt; enables /install.sh and /dist/ (env "+envDistDir+")")
 	fs.StringVar(&cfg.Language, "language", os.Getenv(envLanguage), "language of the web interface: en (default) or de (env "+envLanguage+")")
-	fs.StringVar(&cfg.GardenerAccount, "gardener-account", os.Getenv(envGardenerAccount), "name of the account the gardener runs as; only it may write entries with harness \"gardener\", the review page acts only on notes it wrote; empty: nobody may (env "+envGardenerAccount+")")
 	explainMode := os.Getenv(envExplain)
 	if explainMode == "" {
 		explainMode = "auto"
@@ -310,6 +303,11 @@ func runServer(ctx context.Context, st *store.Store, cfg serveConfig, stdout, st
 		}
 	}
 	slog.New(slog.NewJSONHandler(stderr, nil)).Info("writer_config", "max_operations", cfg.Writer.MaxOperations, "max_bytes", cfg.Writer.MaxBytes, "max_batch", cfg.Writer.MaxBatch, "read_connections", cfg.Writer.ReadConnections)
+	if a, ok := st.GardenerAccount(); ok {
+		slog.New(slog.NewJSONHandler(stderr, nil)).Info("gardener_account", "set", true, "account", a.ID, "name", a.Name)
+	} else {
+		slog.New(slog.NewJSONHandler(stderr, nil)).Info("gardener_account", "set", false, "note", "nobody may write gardener entries; set the account with: ctx account set-gardener <name> --db <database>")
+	}
 	// The session search index of chunks written before it existed is caught up
 	// in the background, in small resumable steps; serving does not wait for it.
 	indexCtx, stopIndex := context.WithCancel(ctx)
@@ -354,8 +352,6 @@ func buildServerHandler(st *store.Store, cfg serveConfig, stderr io.Writer) http
 		options = append(options, server.WithSnapshotMirror(&rootedSnapshotMirror{source: st, roots: cfg.SnapshotRoots}))
 	}
 	st.SetAccessMode(store.AccessMode{Enforce: accessEnforcedByEnv(), Logger: logger})
-	st.SetGardenerAccount(cfg.GardenerAccount)
-	logger.Info("gardener_account", "name", st.GardenerAccountName(), "found", st.GardenerAccountID() != 0, "env", envGardenerAccount)
 	apiHandler := server.New(st, options...)
 	root.Handle("/api/", apiHandler)
 	root.Handle("/metrics", apiHandler)

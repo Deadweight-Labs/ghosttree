@@ -302,16 +302,16 @@ func (a *api) createKnowledge(w http.ResponseWriter, r *http.Request) {
 // harness "gardener" or a "gardener:" session reference is what the review page
 // offers one-click actions on (merge duplicates, record a regression verdict),
 // and it takes its target from that reference; so only the account the server
-// names as the gardener's (GHOSTTREE_GARDENER_ACCOUNT) may write one. Everyone
-// else, and everyone when no account is named, is refused before anything is
-// written, whatever else the entry says.
+// names as the gardener's (an account number, set with `ctx account set-gardener`)
+// may write one. Everyone else, and everyone when no account is set, is refused
+// before anything is written, whatever else the entry says.
 func (a *api) gateGardener(w http.ResponseWriter, r *http.Request, k store.Knowledge) bool {
 	if !store.ReservedForGardener(k) || a.st.IsGardenerPrincipal(principalOf(r)) {
 		return true
 	}
 	msg := `harness "gardener" and "gardener:" references are reserved for the account the gardener runs as`
 	if a.st.GardenerAccountID() == 0 {
-		msg += " (none is set: GHOSTTREE_GARDENER_ACCOUNT)"
+		msg += " (none is set: ctx account set-gardener <name> --db <database>)"
 	}
 	writeCoded(w, http.StatusForbidden, "gardener_reserved", msg)
 	return false

@@ -1,6 +1,8 @@
 package store
 
 import (
+	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -11,51 +13,82 @@ import (
 // gardener's is a security question: a note that only LOOKS like the gardener's
 // would make the review page act on a target the card does not show.
 //
-// The gardener's account is named by the server (GHOSTTREE_GARDENER_ACCOUNT).
-// The name is looked up whenever it is asked, so it is the account that holds the
-// name now, and an account that was renamed stops being the gardener's. Nobody
-// else may write harness "gardener" or a "gardener:" reference (the API refuses
-// it), and the review page only acts on a note the gardener's account wrote.
+// The gardener is an account NUMBER, set by whoever has the database of the
+// server in their hands (`ctx account set-gardener`), kept in org_state, and read
+// whenever it is asked. It is never an account name: a name is what a person may
+// change for themselves (SetOwnName, the name the identity provider reports), so
+// whoever could take the name would take the role. The number of an account never
+// changes and is never given out again, so renaming the gardener's account does
+// not take the role away, and renaming another account to the old name gives it
+// nothing. Nothing reachable over HTTP writes this setting.
+//
+// Without a gardener account nobody may write harness "gardener" or a "gardener:"
+// reference (the API refuses it), and the review page acts on no note of the
+// gardener's.
 const (
 	// GardenerHarness is the harness of every entry the gardener writes.
 	GardenerHarness = "gardener"
 	// GardenerRefPrefix starts the session reference of a gardener note; what
 	// follows names the kind and the entries it is about.
 	GardenerRefPrefix = "gardener:"
+
+	// gardenerAccountKey is the org_state key that holds the account number.
+	gardenerAccountKey = "gardener_account"
 )
 
-// SetGardenerAccount names the account the gardener runs as; empty names none,
-// and then nobody may write gardener entries. It is shared by the store and its
-// readers.
-func (s *Store) SetGardenerAccount(name string) {
-	n := NormalizeAccountName(strings.TrimSpace(name))
-	s.accessCfg().gardener.Store(&n)
-}
-
-// GardenerAccountName is the account name set with SetGardenerAccount.
-func (s *Store) GardenerAccountName() string {
-	if n := s.accessCfg().gardener.Load(); n != nil {
-		return *n
-	}
-	return ""
-}
-
-// GardenerAccountID is the number of the account that holds the gardener's name
-// now (the n of "person:n"), 0 when none is set or no account has the name.
+// GardenerAccountID is the number of the account the gardener runs as (the n of
+// "person:n"), 0 when none is set.
 func (s *Store) GardenerAccountID() int64 {
-	name := s.GardenerAccountName()
-	if name == "" {
+	if s.reader != nil {
+		return s.reader.GardenerAccountID()
+	}
+	var v string
+	if s.db.QueryRow(`SELECT value FROM org_state WHERE key=?`, gardenerAccountKey).Scan(&v) != nil {
 		return 0
 	}
-	acct, err := s.AccountByName(name)
-	if err != nil {
-		return 0
-	}
-	id, ok := accountNumericID(acct.ID)
-	if !ok {
+	id, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+	if err != nil || id < 1 {
 		return 0
 	}
 	return id
+}
+
+// GardenerAccount is the account the gardener runs as, as it is named now. The
+// name is for people to read; nothing decides by it.
+func (s *Store) GardenerAccount() (Account, bool) {
+	id := s.GardenerAccountID()
+	if id == 0 {
+		return Account{}, false
+	}
+	a, err := s.AccountByPrincipalID(fmt.Sprintf("person:%d", id))
+	return a, err == nil
+}
+
+// SetGardenerAccount makes the account with this number the gardener's. The
+// account has to exist and be active; the number is what is stored.
+func (s *Store) SetGardenerAccount(id int64) error {
+	if s.writer != nil {
+		return queueWrite(s, []any{id}, func(d *Store, p []any) error { return d.SetGardenerAccount(p[0].(int64)) })
+	}
+	a, err := s.AccountByPrincipalID(fmt.Sprintf("person:%d", id))
+	if err != nil {
+		return fmt.Errorf("%w: no account with the number %d", ErrInvalidInput, id)
+	}
+	if a.State != "active" {
+		return fmt.Errorf("%w: the account %s is %s, not active", ErrInvalidInput, a.Name, a.State)
+	}
+	_, err = s.db.Exec(`INSERT INTO org_state(key, value) VALUES(?, ?)
+		ON CONFLICT(key) DO UPDATE SET value=excluded.value`, gardenerAccountKey, strconv.FormatInt(id, 10))
+	return err
+}
+
+// ClearGardenerAccount takes the role away: nobody is the gardener afterwards.
+func (s *Store) ClearGardenerAccount() error {
+	if s.writer != nil {
+		return queueWrite(s, nil, func(d *Store, _ []any) error { return d.ClearGardenerAccount() })
+	}
+	_, err := s.db.Exec(`DELETE FROM org_state WHERE key=?`, gardenerAccountKey)
+	return err
 }
 
 // IsGardenerPrincipal says whether the caller is the gardener's account with a
@@ -79,9 +112,9 @@ func ReservedForGardener(k Knowledge) bool {
 }
 
 // WrittenByGardener says whether the account that wrote the entry is the
-// gardener's now. The author is the account number stored when the entry was
-// written (knowledge_authors), never a name or a label the writer sent along;
-// an entry without an author (legacy, or one that fitted two accounts) is nobody's.
+// gardener's. The author is the account number stored when the entry was
+// written (knowledge_authors), never a name or a label the writer sent along; an
+// entry without an author (legacy, or one that fitted two accounts) is nobody's.
 func (s *Store) WrittenByGardener(k Knowledge) bool {
 	want := s.GardenerAccountID()
 	return want != 0 && k.ID != 0 && s.knowledgeAuthorID(k.ID) == want

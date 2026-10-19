@@ -227,8 +227,6 @@ type accessConfig struct {
 	enforce atomic.Bool
 	logger  atomic.Pointer[slog.Logger]
 	every   atomic.Int64
-	// gardener is the name of the account the gardener runs as (gardener.go).
-	gardener atomic.Pointer[string]
 
 	mu         sync.Mutex
 	seen       map[string]accessSeen
