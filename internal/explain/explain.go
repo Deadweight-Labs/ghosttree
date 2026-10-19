@@ -108,7 +108,11 @@ var (
 	reqRef  = regexp.MustCompile(`\bREQ-(\d+)\b`)
 	pathRef = regexp.MustCompile(`\b(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+\.(?:go|md|html|js|ts|tsx|css|sql|yaml|yml|json|sh|py|rs|toml)\b`)
 	prRef   = regexp.MustCompile(`(?i)\b(?:PR|pull request)\s*#(\d+)\b`)
-	prURL   = regexp.MustCompile(`github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/(\d+)`)
+	// prURL names a GitHub pull request. The host starts at the beginning of
+	// the text, behind an optional scheme, or behind a character that belongs
+	// to neither a host name nor a path, so evil.github.com/..., xgithub.com/...
+	// and a github.com/... inside another URL's path do not match.
+	prURL = regexp.MustCompile(`(?:^|[^A-Za-z0-9_.@/-])(?:https?://)?github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/(\d+)`)
 )
 
 // Clean turns model or agent output into plain text the page may show: no
