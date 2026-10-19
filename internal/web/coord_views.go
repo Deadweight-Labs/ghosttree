@@ -489,6 +489,14 @@ func coordRoomURL(room, cursor string, sequence int64) string {
 	return "/ui/coord?" + query.Encode()
 }
 
+// coordRoomProjectURL is coordRoomURL with the project filter the browser
+// chose. The filter is free text from the request: it only ever becomes an
+// escaped query value behind the fixed /ui/coord path, never part of the path
+// or the host.
+func coordRoomProjectURL(room, project string) string {
+	return "/ui/coord?room=" + url.QueryEscape(room) + "&project=" + url.QueryEscape(project)
+}
+
 func coordThreadURL(room string, threadID int64) string {
 	query := url.Values{"room": {room}, "thread": {strconv.FormatInt(threadID, 10)}}
 	return "/ui/coord?" + query.Encode() + "#coord-thread"
