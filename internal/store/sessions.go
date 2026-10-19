@@ -7,6 +7,7 @@ import (
 	"errors"
 	"strconv"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/blobstrip"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 )
 
@@ -119,7 +120,30 @@ func (s *Store) UpsertSession(sess Session) (int64, error) {
 	return id, err
 }
 
+// stripChunks ersetzt base64-Nutzlasten in Raw durch Platzhalter (blobstrip).
+// Es läuft im Aufrufer, vor der Warteschlange des Schreibers: der Schreiber ist
+// ein einzelner Goroutine, und das Parsen eines mehrere MB großen Chunks gehört
+// nicht auf seine Zeit. Der übergebene Schnitt bleibt unverändert.
+func stripChunks(in []Chunk) []Chunk {
+	var out []Chunk
+	for i := range in {
+		raw, saved := blobstrip.Strip(in[i].Raw)
+		if saved == 0 {
+			continue
+		}
+		if out == nil {
+			out = append([]Chunk(nil), in...)
+		}
+		out[i].Raw = raw
+	}
+	if out == nil {
+		return in
+	}
+	return out
+}
+
 func (s *Store) AppendChunks(sessionID int64, chunks []Chunk) error {
+	chunks = stripChunks(chunks)
 	if s.writer != nil {
 		r, err := s.writer.admitChunks(context.Background(), ChunkBatch{SessionID: sessionID, Chunks: chunks})
 		if err != nil {
@@ -127,13 +151,29 @@ func (s *Store) AppendChunks(sessionID int64, chunks []Chunk) error {
 		}
 		return <-r.done
 	}
-	return s.AppendChunkBatches([]ChunkBatch{{SessionID: sessionID, Chunks: chunks}})
+	return s.appendChunkBatches([]ChunkBatch{{SessionID: sessionID, Chunks: chunks}})
 }
 
+// AppendChunkBatches schreibt Chunks mehrerer Sessions in einer Transaktion.
+// Jeder Weg in session_chunks.raw geht durch AppendChunks oder diese Methode und
+// ersetzt dabei die Bilder; appendChunkBatches schreibt nur noch.
 func (s *Store) AppendChunkBatches(batches []ChunkBatch) error {
+	batches = stripBatches(batches)
 	if s.writer != nil {
-		return queueWrite(s, []any{batches}, func(d *Store, p []any) error { return d.AppendChunkBatches(p[0].([]ChunkBatch)) })
+		return queueWrite(s, []any{batches}, func(d *Store, p []any) error { return d.appendChunkBatches(p[0].([]ChunkBatch)) })
 	}
+	return s.appendChunkBatches(batches)
+}
+
+func stripBatches(in []ChunkBatch) []ChunkBatch {
+	out := make([]ChunkBatch, len(in))
+	for i, b := range in {
+		out[i] = ChunkBatch{SessionID: b.SessionID, Chunks: stripChunks(b.Chunks)}
+	}
+	return out
+}
+
+func (s *Store) appendChunkBatches(batches []ChunkBatch) error {
 	if len(batches) == 0 {
 		return nil
 	}
@@ -438,8 +478,9 @@ func (s *Store) ReadSession(id int64, fromSeq, limit int) ([]Chunk, error) {
 }
 
 // SessionRaw returns every stored JSONL line of a session in file order.
-// Deliberately unpaginated: it reconstructs the original transcript, and a
-// partial transcript is not an archive.
+// Deliberately unpaginated: it reconstructs the transcript, and a partial
+// transcript is not an archive. Embedded images and files are placeholders
+// (see blobstrip), everything else is as the harness wrote it.
 func (s *Store) SessionRaw(id int64) ([]string, error) {
 	if s.reader != nil {
 		return s.reader.SessionRaw(id)
