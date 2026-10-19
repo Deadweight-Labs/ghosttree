@@ -8,6 +8,10 @@ updates:
     open-pull-requests-limit: 5
     target-branch: dev
     labels: ["dependencies", "go", "release: patch"]
+    # Minor and patch updates arrive as one pull request; majors stay separate.
+    groups:
+      go-minor-patch:
+        update-types: ["minor", "patch"]
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
@@ -16,3 +20,8 @@ updates:
     open-pull-requests-limit: 5
     target-branch: dev
     labels: ["dependencies", "ci", "release: patch"]
+    # One pull request for all actions, so the parts of one action
+    # (codeql-action init, autobuild, analyze) always move together.
+    groups:
+      actions:
+        patterns: ["*"]
