@@ -314,6 +314,12 @@ and the token of the gardener). The old `garden/home/.config/ghosttree` is not
 visible in the sandbox any more; move the file. The probe checks that it is
 readable (`CLIENT_CONFIG` for another place).
 
+`context_search` and `context_get` cannot be limited to one project by an
+allowlist, so a gardener that must not read other projects' entries runs with
+`--no-mcp`: the session then gets no ghosttree server (and needs no client
+config), is not allowed those two tools and is not told about them. The fixed
+git tools `git_log` and `git_show` stay either way.
+
 Layout under `/var/lib/ghosttree/garden`: `repo/` (checkout, owned by root,
 updated by `ghosttree-garden-update.service`), `bin/` (the `claude` binary, pass
 `--claude`), `run.sh`, `state/`, `reports/`, `claude/` (writable by
