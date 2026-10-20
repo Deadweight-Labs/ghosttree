@@ -88,7 +88,18 @@ type Fused struct {
 // the sum of 1/(RRFK+rank) over the lists it is in. Ties go to the entry that is
 // higher in the earlier list, so with the full-text ranking first the older
 // order survives wherever the lists do not disagree.
-func Fuse(lists ...[]int64) []Fused {
+func Fuse(lists ...[]int64) []Fused { return FuseWeighted(nil, lists...) }
+
+// FuseWeighted is Fuse with a weight for each list: an entry scores the sum of
+// weight/(RRFK+rank). A list without a weight (weights shorter than lists), or
+// with a weight that is not positive, counts once, so nil weights are Fuse.
+func FuseWeighted(weights []float64, lists ...[]int64) []Fused {
+	weight := func(li int) float64 {
+		if li < len(weights) && weights[li] > 0 {
+			return weights[li]
+		}
+		return 1
+	}
 	byID := map[int64]*Fused{}
 	var order []int64
 	for li, list := range lists {
@@ -103,7 +114,7 @@ func Fuse(lists ...[]int64) []Fused {
 				continue // a repeated id keeps its best position
 			}
 			f.Ranks[li] = i + 1
-			f.Score += 1 / float64(RRFK+i+1)
+			f.Score += weight(li) / float64(RRFK+i+1)
 		}
 	}
 	out := make([]Fused, 0, len(order))

@@ -163,6 +163,9 @@ func RedactSessions(ctx context.Context, path string, opts RedactSessionsOptions
 	}
 	w := redactWork{db: db, ctx: ctx, write: !opts.DryRun, lits: opts.Literals, has: has,
 		harness: map[int64]string{}, retitled: map[int64]struct{}{}, requoted: map[string]struct{}{}}
+	if w.sessionVectors, err = hasSessionEmbeddingTables(ctx, db); err != nil {
+		return rep, err
+	}
 	for _, t := range []struct {
 		names []string
 		flag  *bool
@@ -377,6 +380,9 @@ type redactWork struct {
 	// write is false for a dry run: the same steps run, nothing is written.
 	write                                 bool
 	chunksFTS, index, evidence, sightings bool
+	// sessionVectors says that the database has the vectors of the sessions: the
+	// vector of a chunk that is changed was made from the text before and goes.
+	sessionVectors bool
 	// lits are the known values (nil: none). has says whether a table exists.
 	lits     *redact.Literals
 	has      func(name string) (bool, error)
@@ -461,6 +467,15 @@ func (w *redactWork) apply(edits []redactEdit) (redactBatch, error) {
 			continue
 		}
 		res.changed++
+		if w.sessionVectors {
+			dropped, err := dropSessionEmbeddings(w.ctx, q, e.id, w.write)
+			if err != nil {
+				return res, err
+			}
+			if dropped > 0 {
+				res.tables["session_embeddings"] += dropped
+			}
+		}
 		if textChanged {
 			res.tables["session_chunks.text"]++
 			for k, v := range e.textKinds {

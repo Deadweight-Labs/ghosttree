@@ -723,6 +723,10 @@ func (a *app) groupView(l lang, g store.SearchGroup, query, kind string, now tim
 	if g.Total == 1 {
 		count = l.msg("sessions.matches_one")
 	}
+	if g.Match == store.MatchSemantic {
+		// Found by meaning: no word of the query is in it to be counted.
+		count = ""
+	}
 	gv := groupView{PID: s.PublicID, Href: "/ui/sessions/" + s.PublicID, Title: title, Meta: sessionMeta(s), Count: count, Time: dayAndClock(l, s.LastSeenAt, now)}
 	for _, h := range g.Hits {
 		q := url.Values{"at": {strconv.Itoa(h.Seq)}, "q": {query}, "back": {"1"}}

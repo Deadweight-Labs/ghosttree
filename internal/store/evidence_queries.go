@@ -108,3 +108,48 @@ func (s *Store) RequestQueries(minChars int) ([]RequestQuery, error) {
 	}
 	return out, rows.Err()
 }
+
+// SessionTitleQuery is the title of an active knowledge entry and the sessions
+// that are the evidence of it. Somebody who asks for a session with what the
+// entry says should find one of them: a session is an answer when it backs the
+// entry, whichever of them it is.
+type SessionTitleQuery struct {
+	KnowledgeID int64
+	Title       string
+	// Sessions are the numbers of the sessions of the evidence, once each, in
+	// ascending order.
+	Sessions []int64
+}
+
+// SessionTitleQueries lists the active knowledge entries that have evidence, with
+// a title of at least minChars characters (without the whitespace around it),
+// and the sessions of their evidence, in the order of the entries. It is the
+// query set of the measurement of the session search that needs no question
+// written by anybody. Most of these titles were written by a model that had read
+// the session, so they are summaries and not questions.
+func (s *Store) SessionTitleQueries(minChars int) ([]SessionTitleQuery, error) {
+	if s.reader != nil {
+		return s.reader.SessionTitleQueries(minChars)
+	}
+	rows, err := s.db.Query(`SELECT k.id, k.title, e.session_id
+		FROM knowledge k JOIN knowledge_evidence e ON e.knowledge_id = k.id JOIN sessions s ON s.id = e.session_id
+		WHERE k.status = 'active' AND length(trim(k.title)) >= ?
+		GROUP BY k.id, e.session_id ORDER BY k.id, e.session_id`, minChars)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []SessionTitleQuery
+	for rows.Next() {
+		var id, session int64
+		var title string
+		if err := rows.Scan(&id, &title, &session); err != nil {
+			return nil, err
+		}
+		if n := len(out); n == 0 || out[n-1].KnowledgeID != id {
+			out = append(out, SessionTitleQuery{KnowledgeID: id, Title: title})
+		}
+		out[len(out)-1].Sessions = append(out[len(out)-1].Sessions, session)
+	}
+	return out, rows.Err()
+}

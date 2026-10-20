@@ -698,7 +698,7 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 		res.Knowledge = pa.KnowledgeViews(delivered)
 	}
 	if kind == "sessions" || kind == "all" {
-		hits, err := a.searchSessions(pa, q, filter, r.URL.Query().Get("exclude_session"), limit, fetch)
+		hits, err := a.searchSessions(pa, q, filter, r.URL.Query().Get("exclude_session"), limit, fetch, store.SearchAuto)
 		if err != nil {
 			writeStoreError(w, http.StatusInternalServerError, err)
 			return
@@ -726,7 +726,12 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 // cut to limit, each as the viewer sees it. It is a function of its own because
 // the hint of relevance delivery has to ask the same question with the same
 // rules, so that a hint can never name a session context_search would not show.
-func (a *api) searchSessions(pa *store.ProjectAccess, q string, filter scope.Axes, excludeSession string, limit, fetch int) ([]store.SessionHit, error) {
+//
+// mode is SearchAuto for a search, which with the embedding server configured and
+// sessions switched on ranks by words and by meaning (one hit for each session,
+// marked when only the meaning found it), and SearchFullTextOnly for the hint,
+// which asks for one word and is never sent to the embedding server.
+func (a *api) searchSessions(pa *store.ProjectAccess, q string, filter scope.Axes, excludeSession string, limit, fetch int, mode store.SearchMode) ([]store.SessionHit, error) {
 	dbFilter, viewFilter, fetchSessions := a.sessionFilters(filter, fetch)
 	// Mit Durchsetzung steht die lesbare Menge vor dem Rang fest: ein
 	// verborgener Treffer darf weder einen sichtbaren verdrängen noch
@@ -747,7 +752,9 @@ func (a *api) searchSessions(pa *store.ProjectAccess, q string, filter scope.Axe
 			}
 		}
 	}
-	hits, err := a.st.SearchSessionsVisible(q, dbFilter, excludeSession, fetchSessions, readable, pre)
+	hits, err := a.st.SearchSessionsWith(q, store.SessionSearch{
+		Filter: dbFilter, ExcludeSession: excludeSession, Limit: fetchSessions, Keep: readable, Prefilter: pre, Mode: mode,
+	})
 	if err != nil {
 		return nil, err
 	}

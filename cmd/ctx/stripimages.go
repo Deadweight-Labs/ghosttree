@@ -24,7 +24,9 @@ is for the ones already in the database:
 
 The rest of each line stays byte for byte. Search and the session view only use
 text, so they do not change. The pixels are gone for good: take a backup first
-if you might want them.
+if you might want them. The vector of the session search (REQ-538) of a chunk
+that is changed is dropped in the same transaction, and the server makes it
+again from the text as it is now.
 
 It may run while the server is up. It walks session_chunks in id order and
 writes in short transactions of --batch rows (at most 64 MiB of raw data held
@@ -97,6 +99,9 @@ func reportStripImages(stdout io.Writer, r store.StripBlobsReport, dryRun, inter
 	fmt.Fprintf(stdout, "checked %d chunks that mention base64 or a media type (of %d chunks in the table)\n", r.Candidates, r.Chunks)
 	fmt.Fprintf(stdout, "chunks with embedded files %s: %d\n", verb, r.Changed)
 	fmt.Fprintf(stdout, "bytes saved: %d (%s)\n", r.SavedBytes, humanSize(r.SavedBytes))
+	if r.DroppedVectors > 0 {
+		fmt.Fprintf(stdout, "session vectors dropped, to be made again from the new text by the server: %d\n", r.DroppedVectors)
+	}
 	if !dryRun && r.Changed > 0 {
 		fmt.Fprintln(stdout, "the file shrinks only after VACUUM: stop the server, then run ctx db vacuum --db <db>")
 	}

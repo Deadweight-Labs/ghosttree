@@ -81,6 +81,10 @@ type SessionHit struct {
 	Session Session `json:"session"`
 	Seq     int     `json:"seq"`
 	Snippet string  `json:"snippet"`
+	// Match is MatchSemantic for a session that only the embedding found: the
+	// words of the query are not in it, its meaning is. Seq and Snippet are then
+	// the text that came closest. Empty for a hit the words found.
+	Match string `json:"match,omitempty"`
 }
 
 const sessionCols = `id, harness, external_id, project, branch, machine, cwd, started_at, last_seen_at, account_id, shared, visibility, public_id, title, msg_count`
@@ -531,25 +535,69 @@ func (s *Store) SearchSessionsVisible(q string, filter scope.Axes, excludeSessio
 	if limit <= 0 {
 		limit = 20
 	}
+	r, err := s.readableSessions(filter, keep, pre)
+	if err != nil {
+		return nil, err
+	}
+	if r.none {
+		return []SessionHit{}, nil
+	}
+	out, cids, err := s.ftsSessionHits(q, excludeSession, r, pre, limit)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.sessionSnippets(q, out, cids); err != nil {
+		return nil, err
+	}
+	if err := s.fillHitOwners(out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// readableSessions is the set of sessions a search looks at, as a condition on
+// the table sessions (alias se) with its arguments: the filter, and when a row
+// rule or a prefilter restricts the viewer, the numbers of the sessions that
+// pass them. none says that the filter leaves no session to look at.
+type readableSessions struct {
+	where      string
+	args       []any
+	restricted bool
+	none       bool
+}
+
+// readableSessions bildet die lesbare Menge. Sie steht vor jeder Rangbildung
+// fest (#2447); eine Suche, die Texttreffer und Vektoren verbindet, nimmt sie für
+// beide Ranglisten.
+func (s *Store) readableSessions(filter scope.Axes, keep func(Session) bool, pre SessionPrefilter) (readableSessions, error) {
 	where, args := filter.FilterWhere()
-	args = append([]any{ftsQuery(q), excludeSession, excludeSession}, args...)
+	r := readableSessions{where: where, args: args}
 	if keep != nil || pre.Where != "" {
 		ids, err := s.visibleSessionIDs(filter, keep, pre)
 		if err != nil {
-			return nil, err
+			return r, err
 		}
 		if len(ids) == 0 {
-			return []SessionHit{}, nil
+			r.none = true
+			return r, nil
 		}
-		where += ` AND se.id IN (SELECT value FROM json_each(?))`
-		args = append(args, idsJSONOf(ids))
+		r.where += ` AND se.id IN (SELECT value FROM json_each(?))`
+		r.args = append(r.args, idsJSONOf(ids))
+		r.restricted = true
 	}
+	return r, nil
+}
+
+// ftsSessionHits sind die Chunk-Treffer des Volltexts in der lesbaren Menge, beste
+// zuerst, ohne Ausschnitt und ohne Besitzer; cids sind die Chunk-Nummern dazu.
+func (s *Store) ftsSessionHits(q, excludeSession string, r readableSessions, pre SessionPrefilter, limit int) ([]SessionHit, []int64, error) {
+	args := append([]any{ftsQuery(q), excludeSession, excludeSession}, r.args...)
 	args = append(args, limit)
 	// bm25 (f.rank) hängt vom ganzen Index ab, auch von verborgenen Sessions:
 	// wer nur eine Teilmenge lesen darf, bekommt die Reihenfolge allein aus
 	// der lesbaren Menge.
 	order := "h.r"
-	if !pre.Unrestricted && (keep != nil || pre.Where != "") {
+	if !pre.Unrestricted && r.restricted {
 		order = "COUNT(*) OVER (PARTITION BY se.id) DESC, se.last_seen_at DESC, se.id DESC, c.seq"
 	}
 	// snippet() liest den Text jeder Zeile, die es liefert: in der CTE liefe es
@@ -560,10 +608,10 @@ func (s *Store) SearchSessionsVisible(q string, filter scope.Axes, excludeSessio
 		FROM h
 		JOIN session_chunks c ON c.id = h.cid
 		JOIN sessions se ON se.id = c.session_id
-		WHERE (? = '' OR se.external_id != ?) AND `+where+`
+		WHERE (? = '' OR se.external_id != ?) AND `+r.where+`
 		ORDER BY `+order+` LIMIT ?`, args...)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer rows.Close()
 	out := []SessionHit{}
@@ -572,46 +620,57 @@ func (s *Store) SearchSessionsVisible(q string, filter scope.Axes, excludeSessio
 		var h SessionHit
 		var cid int64
 		if err := scanSession(rows, &h.Session, &h.Seq, &cid); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		out = append(out, h)
 		cids = append(cids, cid)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	rows.Close()
-	if len(cids) > 0 {
-		snips := map[int64]string{}
-		// Je Treffer ein Punktzugriff über rowid; ein IN über json_each nutzte
-		// den FTS5-Index nicht und führte MATCH noch einmal über alles aus.
-		for _, cid := range cids {
-			if _, done := snips[cid]; done {
-				continue
-			}
-			var snip string
-			err := s.db.QueryRow(`SELECT snippet(chunks_fts, 0, '', '', '…', 12) FROM chunks_fts
-				WHERE rowid=? AND chunks_fts MATCH ?`, cid, ftsQuery(q)).Scan(&snip)
-			if err != nil && !errors.Is(err, sql.ErrNoRows) {
-				return nil, err
-			}
-			snips[cid] = snip
-		}
-		for i := range out {
-			out[i].Snippet = snips[cids[i]]
-		}
+	return out, cids, nil
+}
+
+// sessionSnippets setzt den Ausschnitt jedes Treffers; cids[i] ist der Chunk von
+// out[i].
+func (s *Store) sessionSnippets(q string, out []SessionHit, cids []int64) error {
+	if len(cids) == 0 {
+		return nil
 	}
+	snips := map[int64]string{}
+	// Je Treffer ein Punktzugriff über rowid; ein IN über json_each nutzte
+	// den FTS5-Index nicht und führte MATCH noch einmal über alles aus.
+	for _, cid := range cids {
+		if _, done := snips[cid]; done {
+			continue
+		}
+		var snip string
+		err := s.db.QueryRow(`SELECT snippet(chunks_fts, 0, '', '', '…', 12) FROM chunks_fts
+			WHERE rowid=? AND chunks_fts MATCH ?`, cid, ftsQuery(q)).Scan(&snip)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		snips[cid] = snip
+	}
+	for i := range out {
+		out[i].Snippet = snips[cids[i]]
+	}
+	return nil
+}
+
+// fillHitOwners trägt die Besitzer der Sessions in den Treffern nach.
+func (s *Store) fillHitOwners(out []SessionHit) error {
 	one := make([]Session, len(out))
 	for i := range out {
 		one[i] = out[i].Session
 	}
 	if err := s.fillSessionOwners(one); err != nil {
-		return nil, err
+		return err
 	}
 	for i := range out {
 		out[i].Session = one[i]
 	}
-	return out, nil
+	return nil
 }
 
 // scanSession liest die Spalten von sessionCols und danach extra.

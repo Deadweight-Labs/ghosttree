@@ -47,6 +47,18 @@ const (
 	// document is about.
 	MaxDocumentHeadRunes = 1500
 
+	// MinSessionTextRunes is the shortest text of a session that is embedded: an
+	// "ok" or a "weiter" says nothing about what the session was about, and its
+	// vector would be a neighbour of every short question.
+	MinSessionTextRunes = 20
+	// DefaultSessionVectorWeight is the weight of the embedding ranking in the
+	// reciprocal rank fusion of the session search, against 1 for the words
+	// ranking. On the natural questions of the experiment the words ranking found
+	// 77.5 % in the first ten and the vectors 97.5 %, so the vectors lead; the
+	// words stay in for names, ids and error messages, which no question
+	// measured. The other kinds fuse with equal weights.
+	DefaultSessionVectorWeight = 2.0
+
 	// DefaultMinSimilarity is the cosine below which an entry is not a neighbour
 	// of a query. Without a floor the embedding ranking has a nearest neighbour
 	// for any query, however far away, and the fusion fills a result list with
@@ -85,6 +97,11 @@ func DocumentText(title, body string) string {
 	text := truncRunes(strings.TrimSpace(strings.ToValidUTF8(body, "�")), budget)
 	return strings.TrimRight(head+text, " \t\r\n")
 }
+
+// SessionText is the text the model gets for one text of a session, a prompt or
+// the final answer of a turn: it has no title, so the title is "none" like for
+// any entry without one, and the cut is the one of every document.
+func SessionText(text string) string { return DocumentText("", text) }
 
 // RequestText is the text the model gets for a request: title, description and
 // the acceptance criteria. The state of a criterion is not part of it, so ticking

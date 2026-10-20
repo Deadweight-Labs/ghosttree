@@ -1,0 +1,550 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"regexp"
+	"strings"
+	"time"
+	"unicode/utf8"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/blobstrip"
+	"github.com/Deadweight-Labs/ghosttree/internal/embed"
+	"github.com/Deadweight-Labs/ghosttree/internal/redact"
+	"github.com/Deadweight-Labs/ghosttree/internal/transcript"
+)
+
+// The vectors of the sessions: one per text that says what a session was about,
+// the prompts a person typed and the answer each turn ended with (see
+// transcript.PickTurnTexts), not the tool calls, their results and the messages
+// in between. The job embeds them one chunk at a time, in its window at night.
+//
+// A session needs a look when it has a chunk it was not read with, when the model
+// changed, or when it has never been looked at (session_embedding_sync, see the
+// schema). A look picks the texts, makes the document of each from the stored
+// line, and compares its hash with the vector that is there. What comes out is
+// EmbedDue like for the other kinds, with the id of a chunk as the id of an item;
+// only Unchanged is different: it holds sessions, the ones that were found
+// complete.
+
+// SessionSettle is how long a session has to be quiet before the answer that ends
+// its last turn counts as final. A turn is closed when a prompt follows it; the
+// last one of a session has no such end, and while an agent works it writes a
+// message every few minutes, each of which is the last until the next one comes.
+// Embedding them would spend three seconds of the embedding server on every
+// message of a running session and keep a vector for a text that is not the
+// answer. An agent that is working uploads at least every few minutes, even
+// during a long build or while it waits for a review; half an hour of silence is
+// a person who has gone, or a session that is over.
+const SessionSettle = 30 * time.Minute
+
+var (
+	sessionPlaceholderRe = regexp.MustCompile(`\[ghosttree: [^\]]{0,300}\]`)
+	sessionImageMarkRe   = regexp.MustCompile(`\[Image(?: #\d+)?(?:: [^\]]{0,300})?\]`)
+	sessionBlankRunRe    = regexp.MustCompile(`\n{3,}`)
+	sessionSpaceRunRe    = regexp.MustCompile(`[ \t]{2,}`)
+	sessionSpanRes       = func() []*regexp.Regexp {
+		var out []*regexp.Regexp
+		for _, tag := range []string{"system-reminder", "ide_opened_file", "ide_selection", "local-command-caveat",
+			"local-command-stdout", "command-name", "command-message", "command-args", "user-prompt-submit-hook"} {
+			out = append(out, regexp.MustCompile(`(?s)<`+regexp.QuoteMeta(tag)+`>.*?</`+regexp.QuoteMeta(tag)+`>`))
+		}
+		return out
+	}()
+)
+
+// sessionDocument is the text of one chunk as the embedding server gets it, and
+// false for a chunk that has nothing worth embedding. It is made from the stored
+// line, by the way every text takes into the database: the images are replaced
+// (blobstrip), secrets are redacted in the line and in the text (redact), the
+// placeholders and image marks that are left are removed, and so are the blocks
+// a harness puts into a prompt. A text that this would change was changed on
+// arrival already; the chain is a second lock, for what reaches the database
+// another way, and what a later version of the rules finds. Then the text is cut
+// and given its prefix like every document. Its hash is the hash that decides
+// whether a vector is current.
+func sessionDocument(harness string, seq int, raw string) (string, bool) {
+	t := cleanSessionText(harness, seq, raw)
+	if utf8.RuneCountInString(t) < embed.MinSessionTextRunes {
+		return "", false
+	}
+	return embed.SessionText(t), true
+}
+
+// cleanSessionText is the text of a chunk after the chain of sessionDocument,
+// before its length is judged and before it is cut. A hit that shows the text
+// of a session found by meaning shows this one.
+func cleanSessionText(harness string, seq int, raw string) string {
+	line, _ := blobstrip.Strip(raw)
+	line = redact.RedactJSON(line)
+	t := redact.Redact(transcript.Fields(transcript.Parse(harness, seq, line)).Text)
+	t = sessionPlaceholderRe.ReplaceAllString(t, "")
+	t = sessionImageMarkRe.ReplaceAllString(t, "")
+	for _, re := range sessionSpanRes {
+		t = re.ReplaceAllString(t, "")
+	}
+	t = strings.ReplaceAll(t, "\r\n", "\n")
+	t = sessionSpaceRunRe.ReplaceAllString(t, " ")
+	t = sessionBlankRunRe.ReplaceAllString(t, "\n\n")
+	return strings.TrimSpace(strings.ToValidUTF8(t, "�"))
+}
+
+// sessionRef is a session as the job looks at it.
+type sessionRef struct {
+	id       int64
+	harness  string
+	lastSeen string
+}
+
+// sessionPicked reads the chunk index rows of a session that can carry a text and
+// picks its texts.
+func (s *Store) sessionPicked(id int64) ([]transcript.Picked, error) {
+	rows, err := s.db.Query(`SELECT chunk_id, seq, role, is_prompt, tool_calls, CASE WHEN role != '' THEN text ELSE '' END
+		FROM chunk_index WHERE session_id = ? AND (role != '' OR tool_calls > 0) ORDER BY seq`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var in []transcript.TurnRow
+	for rows.Next() {
+		var r transcript.TurnRow
+		var prompt int
+		if err := rows.Scan(&r.Chunk, &r.Seq, &r.Role, &prompt, &r.ToolCalls, &r.Text); err != nil {
+			return nil, err
+		}
+		r.Prompt = prompt == 1
+		in = append(in, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return transcript.PickTurnTexts(in), nil
+}
+
+// settledPicks drops the answer of the open turn while the session has not been
+// quiet for SessionSettle, and says so.
+func settledPicks(picks []transcript.Picked, lastSeen string, at time.Time) (wanted []transcript.Picked, waiting bool) {
+	settled := true
+	if t, err := time.Parse(time.RFC3339, lastSeen); err == nil {
+		settled = at.Sub(t) >= SessionSettle
+	}
+	for _, p := range picks {
+		if p.Open && !settled {
+			waiting = true
+			continue
+		}
+		wanted = append(wanted, p)
+	}
+	return wanted, waiting
+}
+
+// chunkRaws reads the stored lines of chunks.
+func (s *Store) chunkRaws(ids []int64) (map[int64]string, error) {
+	out := make(map[int64]string, len(ids))
+	err := s.eachChunk(ids, func(part []any) error {
+		rows, err := s.db.Query(`SELECT id, raw FROM session_chunks WHERE id IN (`+placeholders(len(part))+`)`, part...)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id int64
+			var raw string
+			if err := rows.Scan(&id, &raw); err != nil {
+				return err
+			}
+			out[id] = raw
+		}
+		return rows.Err()
+	})
+	return out, err
+}
+
+type storedVector struct{ model, prefix, hash string }
+
+// sessionVectors lists the vectors of the chunks of a session.
+func (s *Store) sessionVectors(session int64) (map[int64]storedVector, error) {
+	rows, err := s.db.Query(`SELECT e.chunk_id, e.model, e.prefix_version, e.text_hash
+		FROM session_embeddings e JOIN session_chunks c ON c.id = e.chunk_id WHERE c.session_id = ?`, session)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int64]storedVector{}
+	for rows.Next() {
+		var id int64
+		var v storedVector
+		if err := rows.Scan(&id, &v.model, &v.prefix, &v.hash); err != nil {
+			return nil, err
+		}
+		out[id] = v
+	}
+	return out, rows.Err()
+}
+
+// lookAtSession says what is due for a session: the items to embed, and whether
+// the session waits for something, which keeps it from being recorded as done.
+// It waits when its last answer has not stood long enough, and while a text of
+// it is parked (the embedding server fails on it, or refuses it): a parked text
+// is tried again at its time, and nothing else would bring the session back.
+func (s *Store) lookAtSession(k embedKind, ref sessionRef, m EmbedModel, at time.Time) (items []EmbedItem, waiting bool, err error) {
+	picks, err := s.sessionPicked(ref.id)
+	if err != nil {
+		return nil, false, err
+	}
+	wanted, waiting := settledPicks(picks, ref.lastSeen, at)
+	if len(wanted) == 0 {
+		return nil, waiting, nil
+	}
+	ids := make([]int64, len(wanted))
+	for i, p := range wanted {
+		ids[i] = p.Chunk
+	}
+	raws, err := s.chunkRaws(ids)
+	if err != nil {
+		return nil, false, err
+	}
+	stored, err := s.sessionVectors(ref.id)
+	if err != nil {
+		return nil, false, err
+	}
+	failures, err := s.embeddingFailures(k, ids)
+	if err != nil {
+		return nil, false, err
+	}
+	stamp := at.UTC().Format(time.RFC3339)
+	for _, p := range wanted {
+		raw, ok := raws[p.Chunk]
+		if !ok {
+			continue
+		}
+		doc, ok := sessionDocument(ref.harness, p.Seq, raw)
+		if !ok {
+			continue
+		}
+		hash := embed.TextHash(doc)
+		if v, ok := stored[p.Chunk]; ok && v.model == m.Model && v.prefix == m.PrefixVersion && v.hash == hash {
+			continue
+		}
+		attempts := 0
+		if f, ok := failures[p.Chunk]; ok && f.model == m.Model && f.prefix == m.PrefixVersion && f.hash == hash {
+			if f.permanent || f.retryAt > stamp {
+				waiting = true
+				continue
+			}
+			attempts = f.attempts
+		}
+		items = append(items, EmbedItem{ID: p.Chunk, Text: doc, Hash: hash, Attempts: attempts})
+	}
+	return items, waiting, nil
+}
+
+// sessionCandidates are the sessions that need a look, newest first, so that what
+// was written last is searchable first while the stock is still being caught up
+// on: the ones that were never looked at, that have a chunk since the look
+// (last_seen_at reaches read_at: same-second changes count, as for the other
+// kinds), or that have a vector of another model or text format. A session
+// without a message in the index has nothing to look at.
+func (s *Store) sessionCandidates(m EmbedModel) ([]sessionRef, error) {
+	rows, err := s.db.Query(`SELECT se.id, se.harness, se.last_seen_at FROM sessions se
+		LEFT JOIN session_embedding_sync y ON y.session_id = se.id
+		WHERE EXISTS (SELECT 1 FROM chunk_index ci WHERE ci.session_id = se.id AND ci.role != '')
+		  AND (y.session_id IS NULL OR se.last_seen_at >= y.read_at
+		       OR EXISTS (SELECT 1 FROM session_embeddings e JOIN session_chunks c ON c.id = e.chunk_id
+		                  WHERE c.session_id = se.id AND (e.model != ? OR e.prefix_version != ?)))
+		ORDER BY se.last_seen_at DESC, se.id DESC`, m.Model, m.PrefixVersion)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []sessionRef
+	for rows.Next() {
+		var r sessionRef
+		if err := rows.Scan(&r.id, &r.harness, &r.lastSeen); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// sessionEmbeddingDue is EmbeddingDue for sessions. It looks at the sessions that
+// need it, newest first, until it has limit texts; a session that turns out to
+// be complete is reported in Unchanged, and the job records it with
+// TouchEmbeddings so that it is not looked at again. While the index of the
+// chunks is still being built nothing is due: a session whose chunks are not all
+// in it would be taken for complete.
+func (s *Store) sessionEmbeddingDue(k embedKind, m EmbedModel, limit int, at time.Time) (EmbedDue, error) {
+	due := EmbedDue{ReadAt: now()}
+	if !s.IndexProgress().Done {
+		return due, nil
+	}
+	cands, err := s.sessionCandidates(m)
+	if err != nil {
+		return due, err
+	}
+	for _, c := range cands {
+		if len(due.Items) >= limit {
+			break
+		}
+		items, waiting, err := s.lookAtSession(k, c, m, at)
+		if err != nil {
+			return due, err
+		}
+		if len(items) == 0 && !waiting {
+			due.Unchanged = append(due.Unchanged, c.id)
+			continue
+		}
+		due.Items = append(due.Items, items[:min(len(items), limit-len(due.Items))]...)
+	}
+	return due, nil
+}
+
+// touchSessions records that these sessions were looked at as of readAt and had
+// nothing due.
+func (s *Store) touchSessions(ids []int64, readAt string) error {
+	return s.eachChunk(ids, func(part []any) error {
+		_, err := s.db.Exec(`INSERT INTO session_embedding_sync(session_id, read_at)
+			SELECT id, ? FROM sessions WHERE id IN (`+placeholders(len(part))+`)
+			ON CONFLICT(session_id) DO UPDATE SET read_at = excluded.read_at`, append([]any{readAt}, part...)...)
+		return err
+	})
+}
+
+// sessionEmbeddingStatus counts the texts of the sessions that can be embedded
+// now (the answer of a session that is still going does not count yet), and how
+// many of them have a vector of the configured model and text format. It counts
+// by chunk and does not read the text of a chunk that has such a vector, so a
+// text that changed is not seen here, only by the job; the text of the others is
+// read, to leave out what is too short to be embedded. Like the other kinds it
+// reads what it needs and is meant for a command.
+func (s *Store) sessionEmbeddingStatus(k embedKind, m EmbedModel) (EmbedStatus, error) {
+	var st EmbedStatus
+	stored := map[int64]storedVector{}
+	rows, err := s.db.Query(`SELECT chunk_id, model, prefix_version, text_hash FROM session_embeddings`)
+	if err != nil {
+		return st, err
+	}
+	for rows.Next() {
+		var id int64
+		var v storedVector
+		if err := rows.Scan(&id, &v.model, &v.prefix, &v.hash); err != nil {
+			rows.Close()
+			return st, err
+		}
+		stored[id] = v
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return st, err
+	}
+	failed := map[int64]parkedFailure{}
+	frows, err := s.db.Query(`SELECT chunk_id, model, prefix_version, text_hash, attempts, permanent, retry_at FROM session_embedding_failures`)
+	if err != nil {
+		return st, err
+	}
+	for frows.Next() {
+		var id int64
+		var f parkedFailure
+		var permanent int
+		if err := frows.Scan(&id, &f.model, &f.prefix, &f.hash, &f.attempts, &permanent, &f.retryAt); err != nil {
+			frows.Close()
+			return st, err
+		}
+		f.permanent = permanent != 0
+		failed[id] = f
+	}
+	err = frows.Err()
+	frows.Close()
+	if err != nil {
+		return st, err
+	}
+	srows, err := s.db.Query(`SELECT id, harness, last_seen_at FROM sessions se
+		WHERE EXISTS (SELECT 1 FROM chunk_index ci WHERE ci.session_id = se.id AND ci.role != '') ORDER BY id`)
+	if err != nil {
+		return st, err
+	}
+	var sessions []sessionRef
+	for srows.Next() {
+		var r sessionRef
+		if err := srows.Scan(&r.id, &r.harness, &r.lastSeen); err != nil {
+			srows.Close()
+			return st, err
+		}
+		sessions = append(sessions, r)
+	}
+	err = srows.Err()
+	srows.Close()
+	if err != nil {
+		return st, err
+	}
+	at := time.Now()
+	stamp := at.UTC().Format(time.RFC3339)
+	for _, ref := range sessions {
+		picks, err := s.sessionPicked(ref.id)
+		if err != nil {
+			return st, err
+		}
+		wanted, _ := settledPicks(picks, ref.lastSeen, at)
+		for _, p := range wanted {
+			v, has := stored[p.Chunk]
+			if has && v.model == m.Model && v.prefix == m.PrefixVersion {
+				st.Active++
+				st.Current++
+				continue
+			}
+			raws, err := s.chunkRaws([]int64{p.Chunk})
+			if err != nil {
+				return st, err
+			}
+			doc, ok := sessionDocument(ref.harness, p.Seq, raws[p.Chunk])
+			if !ok {
+				continue
+			}
+			st.Active++
+			if has {
+				st.OtherModel++
+			}
+			if f, ok := failed[p.Chunk]; ok && f.model == m.Model && f.prefix == m.PrefixVersion && f.hash == embed.TextHash(doc) &&
+				(f.permanent || f.retryAt > stamp) {
+				st.Parked++
+			}
+		}
+	}
+	st.Due = st.Active - st.Current
+	err = s.db.QueryRow(`SELECT last_ok_at,last_error,last_error_at,failures FROM knowledge_embedding_state WHERE id=1`).
+		Scan(&st.Job.LastOKAt, &st.Job.LastError, &st.Job.LastErrorAt, &st.Job.Failures)
+	if errors.Is(err, sql.ErrNoRows) {
+		err = nil
+	}
+	return st, err
+}
+
+// purgeSessionEmbeddings removes the vectors and failures that no text of a
+// session has any more: of chunks that are gone (a database that was written
+// without foreign keys; with them the cascade has done it), and of chunks that are
+// no longer a prompt or the last answer of a turn, which happens to the answer
+// that a session that went on after half an hour of quiet has outgrown. A chunk
+// without a row in the index is left alone: it says nothing about it. It returns
+// the number of vectors removed.
+func (s *Store) purgeSessionEmbeddings() (int, error) {
+	if !s.IndexProgress().Done {
+		return 0, nil
+	}
+	removed := 0
+	res, err := s.db.Exec(`DELETE FROM session_embeddings WHERE chunk_id NOT IN (SELECT id FROM session_chunks)`)
+	if err != nil {
+		return removed, err
+	}
+	n, _ := res.RowsAffected()
+	removed += int(n)
+	if _, err := s.db.Exec(`DELETE FROM session_embedding_failures WHERE chunk_id NOT IN (SELECT id FROM session_chunks)`); err != nil {
+		return removed, err
+	}
+	if _, err := s.db.Exec(`DELETE FROM session_embedding_sync WHERE session_id NOT IN (SELECT id FROM sessions)`); err != nil {
+		return removed, err
+	}
+	rows, err := s.db.Query(`SELECT DISTINCT c.session_id FROM session_embeddings e JOIN session_chunks c ON c.id = e.chunk_id
+		UNION SELECT DISTINCT c.session_id FROM session_embedding_failures f JOIN session_chunks c ON c.id = f.chunk_id`)
+	if err != nil {
+		return removed, err
+	}
+	var sessions []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return removed, err
+		}
+		sessions = append(sessions, id)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return removed, err
+	}
+	var stale []int64
+	for _, id := range sessions {
+		picks, err := s.sessionPicked(id)
+		if err != nil {
+			return removed, err
+		}
+		keep := make(map[int64]bool, len(picks))
+		for _, p := range picks {
+			keep[p.Chunk] = true
+		}
+		crows, err := s.db.Query(`SELECT c.id FROM session_chunks c JOIN chunk_index ci ON ci.chunk_id = c.id
+			WHERE c.session_id = ? AND (EXISTS (SELECT 1 FROM session_embeddings e WHERE e.chunk_id = c.id)
+			                         OR EXISTS (SELECT 1 FROM session_embedding_failures f WHERE f.chunk_id = c.id))`, id)
+		if err != nil {
+			return removed, err
+		}
+		for crows.Next() {
+			var chunk int64
+			if err := crows.Scan(&chunk); err != nil {
+				crows.Close()
+				return removed, err
+			}
+			if !keep[chunk] {
+				stale = append(stale, chunk)
+			}
+		}
+		err = crows.Err()
+		crows.Close()
+		if err != nil {
+			return removed, err
+		}
+	}
+	err = s.eachChunk(stale, func(part []any) error {
+		res, err := s.db.Exec(`DELETE FROM session_embeddings WHERE chunk_id IN (`+placeholders(len(part))+`)`, part...)
+		if err != nil {
+			return err
+		}
+		n, _ := res.RowsAffected()
+		removed += int(n)
+		_, err = s.db.Exec(`DELETE FROM session_embedding_failures WHERE chunk_id IN (`+placeholders(len(part))+`)`, part...)
+		return err
+	})
+	return removed, err
+}
+
+// hasSessionEmbeddingTables says whether a database has the tables of the session
+// vectors. The maintenance commands open a database without the migrations, so
+// the tables of a database that no server has started with this version are
+// missing, and there is nothing to drop.
+func hasSessionEmbeddingTables(ctx context.Context, q maintQueryer) (bool, error) {
+	var n int
+	err := q.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE name IN ('session_embeddings','session_embedding_failures','session_embedding_sync')`).Scan(&n)
+	return n == 3, err
+}
+
+// dropSessionEmbeddings removes the vector and the failure of one chunk, in the
+// transaction of the caller, and the mark "looked at" of its session when there
+// was one, and returns the number of vectors it removed (with write false it only
+// counts them). ctx redact-sessions and ctx strip-blobs call it for every chunk
+// they change: a vector made from the text before the change was derived from
+// what the change was meant to remove, and the job makes a new one from the text
+// as it is now. The session is not looked at again unless its mark goes with it.
+func dropSessionEmbeddings(ctx context.Context, q maintQueryer, chunk int64, write bool) (int64, error) {
+	if !write {
+		var n int64
+		err := q.QueryRowContext(ctx, `SELECT count(*) FROM session_embeddings WHERE chunk_id = ?`, chunk).Scan(&n)
+		return n, err
+	}
+	res, err := q.ExecContext(ctx, `DELETE FROM session_embeddings WHERE chunk_id = ?`, chunk)
+	if err != nil {
+		return 0, err
+	}
+	vectors, _ := res.RowsAffected()
+	fres, err := q.ExecContext(ctx, `DELETE FROM session_embedding_failures WHERE chunk_id = ?`, chunk)
+	if err != nil {
+		return vectors, err
+	}
+	failures, _ := fres.RowsAffected()
+	if vectors+failures > 0 {
+		_, err = q.ExecContext(ctx, `DELETE FROM session_embedding_sync WHERE session_id = (SELECT session_id FROM session_chunks WHERE id = ?)`, chunk)
+	}
+	return vectors, err
+}

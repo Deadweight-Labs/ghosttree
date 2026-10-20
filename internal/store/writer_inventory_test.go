@@ -330,6 +330,8 @@ var writerMethodClasses = map[string]string{
 	"StandingInstructions":          "read",
 	"SearchSessions":                "read",
 	"SearchSessionsVisible":         "read",
+	"SearchSessionsWith":            "read",
+	"SessionTitleQueries":           "read",
 	"SessionByID":                   "read",
 	"SessionPathActivity":           "read",
 	"SessionDistillationExists":     "read",

@@ -311,6 +311,9 @@ type SearchGroup struct {
 	Hits    []SearchHit
 	// Total: alle Treffer dieser Session; Hits zeigt die besten drei.
 	Total int
+	// Match is MatchSemantic for a session that only the embedding found: Hits is
+	// then the one text that came closest, without marked words, and Total is 0.
+	Match string
 }
 
 type SearchQuery struct {
@@ -382,6 +385,10 @@ type matchedSession struct {
 	sess  Session
 	rank  float64
 	count int
+	// semantic: only the embedding found the session; closest is its text that
+	// came closest to the query.
+	semantic bool
+	closest  sessionBest
 }
 
 // SearchTranscripts sucht in den Transkripten, die der Betrachter lesen darf.
@@ -448,6 +455,23 @@ func (s *Store) SearchTranscripts(pa *ProjectAccess, q SearchQuery) (SearchPage,
 	for i, m := range matched {
 		cands[i] = m.sess
 	}
+	// With the vectors, the sessions that only they found are candidates too: they
+	// are shown, so the facets count them.
+	vec, vecCfg := s.transcriptVectors(q, readable)
+	if vecCfg != nil {
+		byWords := make(map[int64]bool, len(matched))
+		for _, m := range matched {
+			byWords[m.sess.ID] = true
+		}
+		for i, b := range vec {
+			if i >= hybridPool {
+				break
+			}
+			if !byWords[b.session] {
+				cands = append(cands, byID[b.session])
+			}
+		}
+	}
 	page := SearchPage{Facets: pa.computeFacets(cands, q.Filter)}
 	if pa.isGuestOnly() {
 		page.Facets = pa.guestFacets(page.Facets)
@@ -481,6 +505,10 @@ func (s *Store) SearchTranscripts(pa *ProjectAccess, q SearchQuery) (SearchPage,
 		}
 		return a.sess.ID > b.sess.ID
 	})
+	if vecCfg != nil {
+		kept = pa.fuseTranscripts(kept, vec, q, byID, vecCfg)
+		page.Sessions = len(kept)
+	}
 	start := 0
 	if q.Cursor != "" {
 		start = positionAfter(kept, q.Cursor, newest)
@@ -497,6 +525,19 @@ func (s *Store) SearchTranscripts(pa *ProjectAccess, q SearchQuery) (SearchPage,
 	groups, err := s.hitsFor(pa, pageRows, expr, q.Kind)
 	if err != nil {
 		return SearchPage{}, err
+	}
+	// A session that only the embedding found has no words to mark: its hit is the
+	// text that came closest.
+	for i, m := range pageRows {
+		if !m.semantic {
+			continue
+		}
+		snippet, kind, err := s.semanticText(m.sess.Harness, m.closest)
+		if err != nil {
+			return SearchPage{}, err
+		}
+		groups[i].Match = MatchSemantic
+		groups[i].Hits = []SearchHit{{Seq: m.closest.seq, Kind: kind, Parts: []SnippetPart{{Text: snippet}}}}
 	}
 	page.Groups = groups
 	return page, nil

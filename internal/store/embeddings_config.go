@@ -48,6 +48,24 @@ type EmbedSearchConfig struct {
 	// switched on afterwards. Empty means knowledge only, which is what hybrid
 	// search was before there were other kinds.
 	Kinds []string
+	// VectorWeights gives, for a kind, the weight of its embedding ranking in the
+	// reciprocal rank fusion against 1 for the full-text ranking: a rank r of the
+	// vectors counts weight/(60+r). A kind that is not named, or has a weight that
+	// is not positive, fuses with equal weights, except sessions, whose default is
+	// embed.DefaultSessionVectorWeight: their questions are asked in sentences, which
+	// the words ranking is poor at, and measured the vectors ahead of it.
+	VectorWeights map[string]float64
+}
+
+// vectorWeight is the weight of the embedding ranking in the search of a kind.
+func (c *EmbedSearchConfig) vectorWeight(kind string) float64 {
+	if w := c.VectorWeights[kind]; w > 0 {
+		return w
+	}
+	if kind == KindSession {
+		return embed.DefaultSessionVectorWeight
+	}
+	return 1
 }
 
 // searches says whether the search of a kind uses the vectors.

@@ -12,6 +12,13 @@
 // with thousands of objects to catch up on (the ghost descriptions) does not make
 // a new pain wait for the end of it, and the pace (batch, pause, backoff, parking)
 // is the same for all of them.
+//
+// The sessions are the exception to "in turn". Their texts are many (every
+// prompt and every answer that ends a turn: 14 thousand on the installation they
+// were measured on, three seconds each) and nobody waits for them, so they come
+// last: a batch of sessions is embedded only when no other kind has anything due,
+// and only within Config.SessionWindow, a span of the clock at night. A new
+// request waits at most for the batch that is running.
 package embedjob
 
 import (
@@ -68,6 +75,10 @@ type Config struct {
 	// Kinds are the kinds of object that get vectors (see store.EmbedKinds); the
 	// job serves them in turn, in the order given. Empty means knowledge only.
 	Kinds []string
+	// SessionWindow is the span of the local clock in which the sessions are
+	// embedded, when store.KindSession is among the Kinds. Outside it they wait.
+	// The zero value is DefaultSessionWindow, midnight to six.
+	SessionWindow Window
 }
 
 // Defaults for the settings above.
@@ -121,6 +132,9 @@ func (c Config) withDefaults() Config {
 	if len(c.Kinds) == 0 {
 		c.Kinds = []string{store.KindKnowledge}
 	}
+	if c.SessionWindow == (Window{}) {
+		c.SessionWindow = DefaultSessionWindow
+	}
 	return c
 }
 
@@ -138,7 +152,11 @@ type Job struct {
 	// for the ones edited since: a text can change in a way updated_at does not
 	// show.
 	full map[string]bool
-	// next is the position in the kinds of the one that is served first by the next
+	// turn are the kinds that are served in turn, all but the sessions, which
+	// come after them (sessions says that they are among the kinds).
+	turn     []string
+	sessions bool
+	// next is the position in turn of the kind that is served first by the next
 	// step: the one after the kind that was served last.
 	next int
 	// suspect is the batch that failed with an error that may be the server's or
@@ -160,16 +178,22 @@ func New(st Store, e Embedder, cfg Config, logger *slog.Logger) *Job {
 	}
 	cfg = cfg.withDefaults()
 	full := make(map[string]bool, len(cfg.Kinds))
-	for _, k := range cfg.Kinds {
-		full[k] = true
-	}
-	return &Job{
+	j := &Job{
 		st: st, emb: e, cfg: cfg, log: logger,
 		model: store.EmbedModel{Model: e.Model(), PrefixVersion: e.PrefixVersion()},
 		sleep: sleepContext,
 		now:   time.Now,
 		full:  full,
 	}
+	for _, k := range cfg.Kinds {
+		full[k] = true
+		if k == store.KindSession {
+			j.sessions = true
+			continue
+		}
+		j.turn = append(j.turn, k)
+	}
+	return j
 }
 
 func sleepContext(ctx context.Context, d time.Duration) bool {
@@ -203,11 +227,16 @@ const purgeEvery = 10 * time.Minute
 // fails or the vectors cannot be stored; the objects stay due and the next step
 // tries them again, at the same kind. When nothing is due in any kind, it removes
 // what the vectors of vanished objects have left behind, now and then.
+//
+// The sessions are asked only when no other kind had anything, and only inside
+// their window: the other kinds are always ahead of them, whatever the hour, and
+// the sessions do not wait for the end of the night to be skipped, they simply
+// are not looked at.
 func (j *Job) Step(ctx context.Context) (Result, error) {
-	n := len(j.cfg.Kinds)
+	n := len(j.turn)
 	for i := range n {
 		at := (j.next + i) % n
-		kind := j.cfg.Kinds[at]
+		kind := j.turn[at]
 		res, err := j.stepKind(ctx, kind)
 		if err != nil {
 			return res, err
@@ -218,18 +247,36 @@ func (j *Job) Step(ctx context.Context) (Result, error) {
 			return res, nil
 		}
 	}
+	if j.sessions && j.sessionsOpen() {
+		res, err := j.stepKind(ctx, store.KindSession)
+		if err != nil {
+			return res, err
+		}
+		if res.Embedded+res.Skipped > 0 {
+			res.Kind = store.KindSession
+			return res, nil
+		}
+	}
 	j.purge()
 	return Result{}, nil
 }
 
+// sessionsOpen says whether the clock is in the window of the sessions.
+func (j *Job) sessionsOpen() bool { return j.cfg.SessionWindow.Contains(j.now()) }
+
 // purge removes the vectors that no object of their kind counts for any more. It
-// is housekeeping: a failure is logged and is not a failure of the job.
+// is housekeeping: a failure is logged and is not a failure of the job. The
+// sessions are looked through only in their window, like everything else about
+// them.
 func (j *Job) purge() {
 	if j.now().Sub(j.lastPurge) < purgeEvery {
 		return
 	}
 	j.lastPurge = j.now()
 	for _, kind := range j.cfg.Kinds {
+		if kind == store.KindSession && !j.sessionsOpen() {
+			continue
+		}
 		if removed, err := j.st.PurgeEmbeddings(kind); err != nil {
 			j.log.Warn("embed_purge", "kind", kind, "error", err.Error())
 		} else if removed > 0 {

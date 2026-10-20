@@ -61,7 +61,7 @@ func TestEmbedKindFlagsAndTheEnvironment(t *testing.T) {
 	}
 
 	for _, args := range [][]string{
-		{"--embed-kinds", "sessions"},
+		{"--embed-kinds", "widgets"},
 		{"--embed-kinds", "request,nope"},
 		// A kind whose search is on but that is not embedded has nothing to search by.
 		{"--embed-search-kinds", "pain"},
@@ -93,7 +93,7 @@ func TestServeConfigTakesTheEmbedKinds(t *testing.T) {
 	if !slices.Equal(cfg.Embed.embedKinds(), []string{store.KindKnowledge, store.KindRequest, store.KindDocument}) || !slices.Equal(cfg.Embed.searchKinds(), []string{store.KindRequest}) {
 		t.Fatalf("%+v", cfg.Embed)
 	}
-	if _, err := parseServeConfig([]string{"--db", "x.db", "--embed-kinds", "sessions"}, io.Discard); err == nil {
+	if _, err := parseServeConfig([]string{"--db", "x.db", "--embed-kinds", "widgets"}, io.Discard); err == nil {
 		t.Fatal("an unknown kind must stop the server from starting")
 	}
 }
@@ -359,7 +359,7 @@ func TestEvalSearchSetRejectsABadSetWithoutPrintingIt(t *testing.T) {
 	k := newKindsDB(t, false)
 	for name, lines := range map[string][]string{
 		"not json":       {`{"query": "geheim", "kind": "request", "target": "1"}`, `this is not json geheim`},
-		"unknown kind":   {`{"query": "geheim", "kind": "sessions", "target": "1"}`},
+		"unknown kind":   {`{"query": "geheim", "kind": "widgets", "target": "1"}`},
 		"no target":      {`{"query": "geheim", "kind": "request", "target": ""}`},
 		"no query":       {`{"query": " ", "kind": "request", "target": "1"}`},
 		"target no id":   {`{"query": "geheim", "kind": "pain", "target": "abc"}`},

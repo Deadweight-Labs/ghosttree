@@ -178,7 +178,7 @@ func (a *api) hintLine(r *http.Request, pa *store.ProjectAccess, term string, wh
 	}
 	// The session the prompt is in is left out: it contains the word because it
 	// was just typed, which says nothing.
-	hits, err := a.searchSessions(pa, term, where, session, 1, a.overfetch(1))
+	hits, err := a.searchSessions(pa, term, where, session, 1, a.overfetch(1), store.SearchFullTextOnly)
 	if err != nil {
 		return "", err
 	}

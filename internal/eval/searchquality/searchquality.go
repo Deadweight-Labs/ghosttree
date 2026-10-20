@@ -33,6 +33,9 @@ type Options struct {
 	// MinSimilarity is the cosine an entry needs to enter the embedding ranking,
 	// as the server would be configured.
 	MinSimilarity float32
+	// SessionWeight is the weight of the embedding ranking in the fusion of the
+	// session search, as the server would be configured; 0 is the default weight.
+	SessionWeight float64
 	// Pause is the wait between two query embeddings, to keep the embedding
 	// server from being the only thing the machine does.
 	Pause time.Duration

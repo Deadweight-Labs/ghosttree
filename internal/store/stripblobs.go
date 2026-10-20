@@ -41,6 +41,9 @@ type StripBlobsReport struct {
 	// LastID ist die letzte geprüfte Zeile; ein neuer Lauf dürfte hier
 	// weitermachen, braucht es aber nicht, weil er ohnehin nichts mehr ändert.
 	LastID int64
+	// DroppedVectors sind die Vektoren der Sessions (REQ-538), die zu geänderten
+	// Chunks gehörten und entfernt wurden; der Server rechnet sie nach.
+	DroppedVectors int64
 }
 
 const (
@@ -93,6 +96,10 @@ func StripSessionBlobs(ctx context.Context, path string, opts StripBlobsOptions)
 		return rep, errors.New("no session_chunks table: not a ghosttree database")
 	}
 	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM session_chunks`).Scan(&rep.Chunks); err != nil {
+		return rep, err
+	}
+	vectors, err := hasSessionEmbeddingTables(ctx, db)
+	if err != nil {
 		return rep, err
 	}
 
@@ -155,9 +162,11 @@ func StripSessionBlobs(ctx context.Context, path string, opts StripBlobsOptions)
 			return rep, nil
 		}
 		if !opts.DryRun && len(updates) > 0 {
-			if err := writeStripped(ctx, db, updates); err != nil {
+			dropped, err := writeStripped(ctx, db, updates, vectors)
+			if err != nil {
 				return fail(err)
 			}
+			rep.DroppedVectors += dropped
 		}
 		// Erst nach dem Schreiben: LastID und die Zähler beschreiben nur, was
 		// auch festgeschrieben ist.
@@ -187,23 +196,35 @@ type strippedRow struct {
 // Die erste Anweisung schreibt schon, damit die Sperre mit Wartezeit
 // (busy_timeout) erworben wird und nicht erst beim Hochstufen einer Lesesperre
 // sofort scheitert.
-func writeStripped(ctx context.Context, db *sql.DB, rows []strippedRow) error {
+//
+// Mit vectors (die Datenbank hat die Vektoren der Sessions) verschwinden in
+// derselben Transaktion die Vektoren der geänderten Chunks: der Server rechnet
+// sie aus dem neuen Text nach. Die Zahl der entfernten Vektoren geht zurück.
+func writeStripped(ctx context.Context, db *sql.DB, rows []strippedRow, vectors bool) (int64, error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer tx.Rollback()
 	stmt, err := tx.PrepareContext(ctx, `UPDATE session_chunks SET raw = ? WHERE id = ?`)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer stmt.Close()
+	var dropped int64
 	for _, r := range rows {
 		if _, err := stmt.ExecContext(ctx, r.raw, r.id); err != nil {
-			return err
+			return 0, err
+		}
+		if vectors {
+			n, err := dropSessionEmbeddings(ctx, tx, r.id, true)
+			if err != nil {
+				return 0, err
+			}
+			dropped += n
 		}
 	}
-	return tx.Commit()
+	return dropped, tx.Commit()
 }
 
 // maintenanceDSN öffnet eine Datenbank für einen Wartungslauf neben dem Server:

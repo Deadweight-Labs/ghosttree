@@ -242,8 +242,14 @@ type fusedHit struct {
 // looked at, so the first n entries of a deeper fusion are the same as the n of a
 // shallower one: pages of one result add up.
 func fuseRankings(text, vec []int64, depth, room int) []fusedHit {
+	return fuseRankingsWeighted(text, vec, depth, room, 1)
+}
+
+// fuseRankingsWeighted is fuseRankings with a weight for the embedding ranking
+// against 1 for the full-text ranking (see EmbedSearchConfig.VectorWeights).
+func fuseRankingsWeighted(text, vec []int64, depth, room int, vecWeight float64) []fusedHit {
 	var out []fusedHit
-	for _, f := range embed.Fuse(text, vec) {
+	for _, f := range embed.FuseWeighted([]float64{1, vecWeight}, text, vec) {
 		if len(out) >= depth {
 			break
 		}

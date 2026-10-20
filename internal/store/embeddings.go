@@ -184,6 +184,10 @@ func (s *Store) touchEmbeddings(kind string, ids []int64, readAt string) error {
 	if len(ids) == 0 || readAt == "" {
 		return nil
 	}
+	if k.name == KindSession {
+		// For sessions the ids are the ones of sessions (EmbedDue.Unchanged).
+		return s.touchSessions(ids, readAt)
+	}
 	// In pieces: an id list that grows with the stock would reach the limit on the
 	// number of variables of one statement.
 	return s.eachChunk(ids, func(part []any) error {
@@ -245,6 +249,9 @@ func (s *Store) PurgeEmbeddings(kind string) (int, error) {
 		return queueValue(s, []any{kind}, func(d *Store, p []any) (int, error) { return d.PurgeEmbeddings(p[0].(string)) })
 	}
 	k, err := embedKindOf(kind)
+	if err == nil && k.name == KindSession {
+		return s.purgeSessionEmbeddings()
+	}
 	if err != nil || !k.shared {
 		return 0, err
 	}
