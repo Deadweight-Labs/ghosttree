@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,6 +32,11 @@ const (
 	envEmbedPause         = "GHOSTTREE_EMBED_PAUSE"
 	envEmbedIdle          = "GHOSTTREE_EMBED_IDLE"
 	envEmbedMaxBackoff    = "GHOSTTREE_EMBED_MAX_BACKOFF"
+	// The kinds of object that are embedded, and the ones whose search uses the
+	// vectors. Without them it is knowledge, as it was before there were other
+	// kinds; with only the first, the search kinds are the same.
+	envEmbedKinds       = "GHOSTTREE_EMBED_KINDS"
+	envEmbedSearchKinds = "GHOSTTREE_EMBED_SEARCH_KINDS"
 )
 
 // embedSettings is the validated configuration.
@@ -48,9 +54,32 @@ type embedSettings struct {
 	// MinSimilarity is the cosine an entry needs to enter the embedding ranking.
 	MinSimilarity float32
 	Job           embedjob.Config
+	// Kinds are the kinds of object that get vectors, SearchKinds the ones whose
+	// search uses them (a subset). Empty Kinds means knowledge only, empty
+	// SearchKinds the same as Kinds.
+	Kinds, SearchKinds []string
+	// kindsGiven says that a flag or the environment named the kinds, as opposed
+	// to the default; "ctx embed status" then says which kind is switched on.
+	kindsGiven bool
 }
 
 func (e embedSettings) enabled() bool { return e.URL != "" }
+
+// embedKinds are the kinds the job embeds.
+func (e embedSettings) embedKinds() []string {
+	if len(e.Kinds) == 0 {
+		return []string{store.KindKnowledge}
+	}
+	return e.Kinds
+}
+
+// searchKinds are the kinds whose search uses the vectors.
+func (e embedSettings) searchKinds() []string {
+	if len(e.SearchKinds) == 0 {
+		return e.embedKinds()
+	}
+	return e.SearchKinds
+}
 
 // separateQuery says whether search queries go to another server than the
 // documents of the background job.
@@ -70,6 +99,7 @@ func (e embedSettings) queryClient() (*embed.Client, error) {
 // embedFlags holds the raw flag values; resolve parses and checks them.
 type embedFlags struct {
 	url, queryURL, model, minSimilarity, queryTimeout, batch, pause, idle, maxBackoff *string
+	kinds, searchKinds                                                                *string
 	job                                                                               bool
 }
 
@@ -83,6 +113,7 @@ func addEmbedFlags(fs *flag.FlagSet, job bool) *embedFlags {
 	f.model = fs.String("embed-model", os.Getenv(envEmbedModel), "model id sent to the embedding server and stored with every vector (default "+embed.DefaultModel+", env "+envEmbedModel+")")
 	f.minSimilarity = fs.String("embed-min-similarity", os.Getenv(envEmbedMinSimilarity), "cosine an entry needs to enter the embedding ranking: 0 for no minimum up to below 1 (default "+strconv.FormatFloat(embed.DefaultMinSimilarity, 'f', -1, 64)+", measured for the default model; env "+envEmbedMinSimilarity+")")
 	if job {
+		f.addKinds(fs)
 		f.queryTimeout = fs.String("embed-query-timeout", os.Getenv(envEmbedQueryTimeout), "how long a search waits for the query vector before it answers from full text alone (default "+embed.DefaultQueryTimeout.String()+", env "+envEmbedQueryTimeout+")")
 		f.batch = fs.String("embed-batch", os.Getenv(envEmbedBatch), "most documents in one request of the background job (default "+strconv.Itoa(embedjob.DefaultBatch)+", env "+envEmbedBatch+")")
 		f.pause = fs.String("embed-pause", os.Getenv(envEmbedPause), "wait between two batches (default "+embedjob.DefaultPause.String()+", env "+envEmbedPause+")")
@@ -90,6 +121,15 @@ func addEmbedFlags(fs *flag.FlagSet, job bool) *embedFlags {
 		f.maxBackoff = fs.String("embed-max-backoff", os.Getenv(envEmbedMaxBackoff), "longest wait after repeated failures; it starts at "+embedjob.DefaultInitialBackoff.String()+" and doubles (default "+embedjob.DefaultMaxBackoff.String()+", env "+envEmbedMaxBackoff+")")
 	}
 	return f
+}
+
+// addKinds registers --embed-kinds and --embed-search-kinds: for serve, which
+// embeds and searches by them, and for "ctx embed status", which says what a
+// configuration would do. "ctx eval search" measures any kind and takes neither.
+func (f *embedFlags) addKinds(fs *flag.FlagSet) {
+	names := strings.Join(store.EmbedKinds(), ", ")
+	f.kinds = fs.String("embed-kinds", os.Getenv(envEmbedKinds), "kinds of object that get vectors, comma-separated: "+names+", or all (default "+store.KindKnowledge+", env "+envEmbedKinds+"); a kind is embedded in the background and can be measured with ctx eval search before its search uses the vectors")
+	f.searchKinds = fs.String("embed-search-kinds", os.Getenv(envEmbedSearchKinds), "kinds whose search uses the vectors, a subset of --embed-kinds (default: all of them, env "+envEmbedSearchKinds+"); the search of every other kind answers from full text")
 }
 
 func (f *embedFlags) resolve() (embedSettings, error) {
@@ -124,6 +164,29 @@ func (f *embedFlags) resolve() (embedSettings, error) {
 			return s, fmt.Errorf("--embed-min-similarity must be a number from 0 to below 1, got %q", v)
 		}
 		s.MinSimilarity = float32(x)
+	}
+	if f.kinds != nil {
+		kinds, err := store.ParseEmbedKinds(*f.kinds)
+		if err != nil {
+			return s, fmt.Errorf("--embed-kinds: %w", err)
+		}
+		if len(kinds) == 0 {
+			kinds = []string{store.KindKnowledge}
+		}
+		s.Kinds = kinds
+		s.SearchKinds = kinds
+		s.kindsGiven = strings.TrimSpace(*f.kinds) != "" || strings.TrimSpace(*f.searchKinds) != ""
+		if strings.TrimSpace(*f.searchKinds) != "" {
+			if s.SearchKinds, err = store.ParseEmbedKinds(*f.searchKinds); err != nil {
+				return s, fmt.Errorf("--embed-search-kinds: %w", err)
+			}
+			for _, k := range s.SearchKinds {
+				if !slices.Contains(s.Kinds, k) {
+					return s, fmt.Errorf("--embed-search-kinds names %s, which --embed-kinds does not embed; add it there, or the search has no vectors to use", k)
+				}
+			}
+		}
+		s.Job.Kinds = s.Kinds
 	}
 	if !f.job {
 		return s, nil
@@ -181,7 +244,7 @@ func startEmbedding(ctx context.Context, st *store.Store, cfg embedSettings, log
 		logger.Error("embed_config", "error", err.Error())
 		return func() {}
 	}
-	search := store.EmbedSearchConfig{Embedder: c, Timeout: cfg.QueryTimeout, MinSimilarity: cfg.MinSimilarity, Logger: logger}
+	search := store.EmbedSearchConfig{Embedder: c, Timeout: cfg.QueryTimeout, MinSimilarity: cfg.MinSimilarity, Logger: logger, Kinds: cfg.searchKinds()}
 	var check *embed.ModelCheck
 	var queryClient *embed.Client
 	if cfg.separateQuery() {
@@ -193,11 +256,14 @@ func startEmbedding(ctx context.Context, st *store.Store, cfg embedSettings, log
 		search.Embedder, search.Ready = queryClient, check.Err
 	}
 	st.SetEmbedder(search)
-	job := embedjob.New(st, c, cfg.Job, logger)
+	jobConfig := cfg.Job
+	jobConfig.Kinds = cfg.embedKinds()
+	job := embedjob.New(st, c, jobConfig, logger)
 	attrs := []any{"url", c.URL(), "model", c.Model(), "prefix_version", c.PrefixVersion(),
 		"query_timeout", cfg.QueryTimeout.String(), "min_similarity", cfg.MinSimilarity, "batch", orDefault(cfg.Job.Batch, embedjob.DefaultBatch),
-		"pause", orDefault(cfg.Job.Pause, embedjob.DefaultPause).String()}
-	note := "hybrid search is on; entries are embedded in the background"
+		"pause", orDefault(cfg.Job.Pause, embedjob.DefaultPause).String(),
+		"kinds", strings.Join(jobConfig.Kinds, ","), "search_kinds", strings.Join(search.Kinds, ",")}
+	note := "hybrid search is on; objects are embedded in the background"
 	if queryClient != nil {
 		attrs = append(attrs, "query_url", queryClient.URL())
 		note += "; search queries go to their own server"
@@ -205,7 +271,7 @@ func startEmbedding(ctx context.Context, st *store.Store, cfg embedSettings, log
 	logger.Info("embed_config", append(attrs, "note", note)...)
 	if !embed.Loopback(c.URL()) {
 		logger.Warn("embed_config", "url", c.URL(),
-			"note", "the embedding server is not on this machine; the text of every active knowledge entry is sent to it")
+			"note", "the embedding server is not on this machine; the text of every embedded object ("+strings.Join(jobConfig.Kinds, ", ")+") is sent to it")
 	}
 	if queryClient != nil && !embed.Loopback(queryClient.URL()) {
 		logger.Warn("embed_config", "url", queryClient.URL(),

@@ -706,7 +706,9 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 		res.Sessions = hits
 	}
 	if kind == "requests" || kind == "all" {
-		page, err := a.st.SearchRequests(a.requestFilter(r, requestdomain.SearchFilter{Query: q, Scope: scope.Axes{Project: filter.Project}, Limit: limit}))
+		// With embeddings the requests are ranked by words and by meaning; the
+		// filter, with the visibility of the reader, is the same SQL for both.
+		page, err := a.st.SearchRequestsWith(a.requestFilter(r, requestdomain.SearchFilter{Query: q, Scope: scope.Axes{Project: filter.Project}, Limit: limit}), store.SearchAuto)
 		if err != nil {
 			writeStoreError(w, http.StatusInternalServerError, err)
 			return
@@ -1218,12 +1220,18 @@ func (a *api) searchGhosts(w http.ResponseWriter, r *http.Request) {
 	}
 	pa.Filtered()
 	limit := intParam(r, "limit", 20)
-	entries, err := a.st.SearchGhostFiles(q.Get("q"), q.Get("project"), a.overfetch(limit))
+	readable := func(g store.GhostFile) bool { return pa.CanSeeGhost(g) && pa.CanDeliverGhost(g) }
+	// The rule goes into the search: the hybrid search applies it to both rankings
+	// before it fuses them, so a description the reader may not see can neither
+	// appear nor move a visible one.
+	entries, err := a.st.SearchGhostFilesWith(q.Get("q"), store.GhostSearch{
+		Project: q.Get("project"), Limit: a.overfetch(limit), Keep: readable, Prefilter: pa.GhostPrefilter(),
+	})
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, 200, filterTo(entries, limit, func(g store.GhostFile) bool { return pa.CanSeeGhost(g) && pa.CanDeliverGhost(g) }))
+	writeJSON(w, 200, filterTo(entries, limit, readable))
 }
 
 // sessionFilters trennt den Filter für die Datenbank von dem, der auf das

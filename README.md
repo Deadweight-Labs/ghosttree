@@ -161,6 +161,12 @@ revision.
 ctx doc import path/to/design.md --kind spec --slug storage-redesign --clean
 ```
 
+`ctx doc search "words from the title or the text"` finds the active documents of
+the project (`--all-projects` for every project you may read), best first. With an
+embedding server that embeds documents it also finds one that says the same in
+other words; a hit that only the meaning found is marked `[match: semantic]`
+(see `deploy/README.md`, "Embeddings for hybrid search").
+
 ### Coordination messages in Claude Code (opt-in)
 
 `ctx claude [claude args...]` starts Claude Code with the ghosttree channel

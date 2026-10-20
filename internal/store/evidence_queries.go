@@ -37,3 +37,74 @@ func (s *Store) EvidenceQueries(minChars int) ([]EvidenceQuery, error) {
 	}
 	return out, rows.Err()
 }
+
+// The sources of RequestQueries.
+const (
+	// RequestQuerySighting: a quote of the session in which the wish was spoken,
+	// and the request that was made of it.
+	RequestQuerySighting = "sighting"
+	// RequestQueryRelation: the title of a request that is marked as a duplicate
+	// of another, or as superseding it, and the other request. Somebody who asks
+	// "is there a request for this already?" with the words of the new one should
+	// find the old.
+	RequestQueryRelation = "relation"
+)
+
+// RequestQuery is a query the ledger holds the answer to: the text, the request
+// that is the right answer, and where it comes from.
+type RequestQuery struct {
+	Source string
+	Query  string
+	Target int64
+	// Exclude is the request the text is the title of, which is not an answer to it
+	// (zero for a quote).
+	Exclude int64
+}
+
+// RequestQueries lists the queries the request ledger itself provides for the
+// search-quality measurement: the sighting quotes of at least minChars characters
+// (without the whitespace around them) with the request they led to, and, for
+// every relation that marks a request as a duplicate of another or as superseding
+// it, the title of the first with the second as the answer.
+func (s *Store) RequestQueries(minChars int) ([]RequestQuery, error) {
+	if s.reader != nil {
+		return s.reader.RequestQueries(minChars)
+	}
+	var out []RequestQuery
+	rows, err := s.db.Query(`SELECT g.request_id, g.quote FROM request_sightings g
+		JOIN requests r ON r.id = g.request_id
+		WHERE length(trim(g.quote)) >= ? ORDER BY g.id`, minChars)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		q := RequestQuery{Source: RequestQuerySighting}
+		if err := rows.Scan(&q.Target, &q.Query); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		out = append(out, q)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	rows, err = s.db.Query(`SELECT rel.request_id, rel.other_request_id, a.title FROM request_relations rel
+		JOIN requests a ON a.id = rel.request_id
+		JOIN requests b ON b.id = rel.other_request_id
+		WHERE rel.kind IN ('duplicates','supersedes') AND rel.other_request_id IS NOT NULL
+		ORDER BY rel.id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		q := RequestQuery{Source: RequestQueryRelation}
+		if err := rows.Scan(&q.Exclude, &q.Target, &q.Query); err != nil {
+			return nil, err
+		}
+		out = append(out, q)
+	}
+	return out, rows.Err()
+}

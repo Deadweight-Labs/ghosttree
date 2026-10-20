@@ -188,6 +188,10 @@ type SearchHit struct {
 	OpenCriteria  int     `json:"open_criteria"`
 	LatestHandoff string  `json:"latest_handoff,omitempty"`
 	MatchReason   string  `json:"match_reason,omitempty"`
+	// Match is set by a hybrid search, and only to "semantic" for a request that
+	// the embedding found alone: its words do not match the query, its meaning
+	// does. A request the full-text index found leaves it empty.
+	Match string `json:"match,omitempty"`
 	// Sightings zählt die unabhängigen Sessions, in denen der Wunsch fiel. Ein
 	// Eintrag aus vier Sessions ist eine Anforderung, die nicht gebaut wird;
 	// einer aus einer war vielleicht lautes Denken. Null für Handgeschriebenes.
@@ -197,6 +201,10 @@ type SearchHit struct {
 type SearchPage struct {
 	Results    []SearchHit `json:"results"`
 	NextCursor string      `json:"next_cursor,omitempty"`
+	// Truncated is set on the last page of a ranked search whose ranking by words
+	// was cut at its depth: more requests contain the words than the ranking
+	// holds, and no cursor leads to them. Narrow the query or the filter.
+	Truncated bool `json:"truncated,omitempty"`
 }
 
 type SessionHit struct {

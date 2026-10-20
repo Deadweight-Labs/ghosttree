@@ -719,14 +719,18 @@ search. A hit that only the meaning found carries `"match": "semantic"` in the
 API and `match:semantic` in the label of the MCP tool.
 
 It is optional and off by default. Without `GHOSTTREE_EMBED_URL` nothing about it
-runs and the answers are exactly those of the full-text search. Sessions and
-ghost descriptions are not embedded, nor are requests, and neither the hook that
-delivers knowledge with a prompt nor the gardener use the vectors.
+runs and the answers are exactly those of the full-text search. Besides
+knowledge, requests, pains, documents and the descriptions of paths ("ghosts")
+can be embedded and searched the same way; each kind is switched on by itself,
+see "Other kinds" below, and without a setting only knowledge is. Sessions are
+not embedded, and neither the hook that delivers knowledge with a prompt nor the
+gardener use the vectors.
 
 Inference runs in a process of its own, not in `ctx`: ghosttree stays a cgo-free
 single binary and talks to the model over HTTP on loopback. The text of every
-active knowledge entry goes to that process, so keep it on the same machine.
-`ctx serve` logs a warning when the configured address is not a loopback address.
+embedded object (by default the active knowledge entries) goes to that process,
+so keep it on the same machine. `ctx serve` logs a warning when the configured
+address is not a loopback address.
 
 ### The embedding server
 
@@ -800,6 +804,8 @@ GHOSTTREE_EMBED_URL=http://127.0.0.1:8475
 | `GHOSTTREE_EMBED_IDLE` | `--embed-idle` | `30s` |
 | `GHOSTTREE_EMBED_MAX_BACKOFF` | `--embed-max-backoff` | `5m` |
 | `GHOSTTREE_EMBED_MIN_SIMILARITY` | `--embed-min-similarity` | `0.55`; `0` is no minimum |
+| `GHOSTTREE_EMBED_KINDS` | `--embed-kinds` | `knowledge` |
+| `GHOSTTREE_EMBED_SEARCH_KINDS` | `--embed-search-kinds` | the same as `GHOSTTREE_EMBED_KINDS` |
 
 The model id names the vectors: it is stored with each of them, together with the
 version of the text formats the model card prescribes (`task: search result |
@@ -809,6 +815,106 @@ entry makes the vector out of date and the job computes it again; search only
 reads current vectors. If you exchange the model file but keep the id, the stored
 vectors have another length than the new ones; search leaves them out and logs
 `embed_vector_dimension` once a minute. Give the new model a new id.
+
+### Other kinds: requests, pains, documents and descriptions of paths
+
+Knowledge is the kind hybrid search began with. Four more can be embedded and
+searched the same way, and each one has two switches of its own, so that a kind
+can be embedded and measured before its search uses the vectors:
+
+```text
+GHOSTTREE_EMBED_KINDS=knowledge,request,pain,document,ghost
+GHOSTTREE_EMBED_SEARCH_KINDS=knowledge
+```
+
+`GHOSTTREE_EMBED_KINDS` (`--embed-kinds`) names the kinds the background job
+embeds, `GHOSTTREE_EMBED_SEARCH_KINDS` (`--embed-search-kinds`) the kinds whose
+search uses the vectors; it must be a subset of the first and defaults to all of
+it. The names are `knowledge`, `request`, `pain`, `document` and `ghost` (also
+`requests`, `pains`, `documents`, `docs`, `ghosts`, `files`), or `all`. Without
+either variable it is `knowledge`, and every answer, the cost and the stored data
+are those of knowledge alone. A kind that is embedded but not searched answers
+from full text and its queries are not sent to the embedding server. Take a kind
+in step by step: add it to `GHOSTTREE_EMBED_KINDS`, wait until `ctx embed status`
+shows nothing due, measure with `ctx eval search --set` (below), then add it to
+`GHOSTTREE_EMBED_SEARCH_KINDS` if it helps.
+
+| Kind | What is embedded | Where it is searched | Order and paging |
+| --- | --- | --- | --- |
+| `request` | title, the first 1,200 characters of the description, the acceptance criteria (their text, not their state); every state | `GET /api/search?kind=requests` (`context_search`), `GET /api/requests/search` (`request_search`, `ctx request search`), the requests page and the search page of the web UI | With a query: full-text rank (bm25 over title and description) fused with the vectors; pages are positions, the cursor is `~N`. Without a query, or for a query of ordinary words: the list by id with its cursor of ids, as before |
+| `pain` | title and text (not the state) | `GET /api/pains?q=` (`pain_search`, `ctx pain list`), the search page | The words side is what it always was: the pains that contain the query as a phrase, by state. Fused with the vectors |
+| `document` | title and the first 1,500 characters of the head revision; active documents only | `GET /api/documents?q=` and `ctx doc search`; the list of documents without `q` is unchanged | Full-text rank over title, slug and the whole head text, fused with the vectors; `limit` 20 |
+| `ghost` | the path (a directory with a closing slash) and its description | `GET /api/ghosts/search` (`context_search kind=files`) | Full-text rank over path and description, fused with the vectors |
+
+Documents had no search before; the words side of their hybrid search is a new
+full-text index, `documents_fts` (title, slug and the text of the head revision of
+every document), made when the server starts with this version (all documents in
+one go, seconds for hundreds) and kept by triggers when a revision, a title or a
+slug changes. A document that is archived is never a hit. The index is also what a
+document search answers from without embeddings.
+
+A request search that is ranked cannot continue after an id, so its `next_cursor`
+is `~N`, the number of hits already shown, and the pages are slices of one fusion:
+both rankings are read to the same depth for every page (1,000 requests each, ties
+by id), so nothing falls between two pages and nothing shows on two, however far
+one pages. For that the page size and the query must not change between the pages
+(the room for hits that only the meaning found is a share of a page: five, or half
+of a short one; it is used up once for the whole search, not once per page). The
+fusion ends where the rankings do. If the ranking by words was cut at its depth
+because more requests contain the words than that, the last page has
+`"truncated": true` (`truncated` in the output of `request_search`) and no cursor:
+more match than any cursor reaches, so narrow the query or the filter. A ranking
+by meaning that was cut loses no hit and does not set it: only its best few
+neighbours join the fusion in any case.
+
+The kind of cursor decides how the search continues, not the state of the
+embedding server. A cursor that is an id (from a page answered from the list)
+always continues the list by ids, even if the server is back, so the paging goes on
+forward instead of starting the ranking over; a cursor `~N` always continues a
+ranking, and where the embedding is not available (the server failed between two
+pages, or the kind was switched off) it is read as "skip N" in the list, which goes
+on in another order than the ranking but never jumps back.
+
+Every hit that only the meaning found carries `"match": "semantic"` in the JSON of
+the search of its kind and `match:semantic` in the label of the MCP tools
+(requests: `match_reason` says "semantic match"). Hits of the words carry nothing.
+
+The vector part sees exactly what the words part sees for that reader, and nothing
+is compared that the reader may not read. What can be put in SQL is part of both
+queries: for requests the whole rule (project roles, shared projects, requests
+without a project belong to their author, the ones in a remote nobody has claimed
+to their author and the admin, and requests distilled from the private session of
+another account are held back); for the descriptions of paths and for documents
+the projects the account has a role in (a project shared with the organisation
+gives its members theirs) and the unclaimed ones; for pains the project, which
+every pain search names (the pains group of the web search names all the projects
+the viewer sees, in one search with one embedding of the query). The row rule of the caller (can the reader see it, may it
+be delivered, is it active) is applied to both rankings before they are fused, so
+a row that is hidden can neither appear nor move another one, and at most 1,000
+rows of a ranking are checked. The vector of an object that is archived or gone is
+never read: the search reaches a vector only through its object.
+
+Vectors of these kinds live in the table `embeddings` (`kind`, `object_id`, and
+the columns of `knowledge_embeddings`: model, text format, hash, int8 vector with
+its scale, the time the text was read) and failures in `embedding_failures`.
+Knowledge keeps `knowledge_embeddings` and `knowledge_embedding_failures`: it needs
+no migration, its 2,800 vectors are not computed again, and a rollback to the
+previous release still finds them. The tables are made on start. The job serves the
+kinds in turn, one batch of one kind at a time (knowledge, requests, pains,
+documents, then descriptions of paths), with the same batch, pause, back-off and
+parking for all of them, so a kind with thousands of objects does not make a new
+pain wait. A change in a request's criteria makes its vector out of date although
+the request itself was not touched; ticking a criterion off does not. When nothing
+is due, the job removes the vectors of objects that are gone or archived, at most
+every 10 minutes.
+
+How long the first catch-up takes is not measured here. A server with about 5,500
+descriptions of paths needs about 690 batches of eight; at the default pause of 2
+seconds that is 23 minutes of waiting alone, plus what the model needs for eight
+short texts (the 5 seconds per document measured for knowledge was for texts of up
+to 2,000 characters; a description is a fraction of that), so plan for one to two
+hours, during which the other kinds keep their turn. Requests (hundreds), pains
+(dozens) and documents (hundreds, 1,500 characters each) take minutes.
 
 ### A second server for queries
 
@@ -920,12 +1026,25 @@ ctx embed status --db /var/lib/ghosttree/ghosttree.db --embed-url http://127.0.0
 
 shows how many active entries have a current vector, how many are due, how the
 job last fared (failing since, error, last progress) and whether the embedding
-server answers. With `--embed-query-url` (the same address as for `ctx serve`) it
-shows both servers, `job server` and `query server`, and a line `same model` that
-says whether the two answer the probe text alike. It only reads the database, so
-the server may keep running; run it as described in "Running maintenance
-commands". The vectors take 768 bytes per entry and live in the table
-`knowledge_embeddings`.
+server answers. The three lines about entries are knowledge; below them each
+other kind has a line of its own, for example
+
+```text
+request          embedded 412 of 469, due 57
+ghost            embedded 1204 of 5510, due 4306 (2 parked)
+```
+
+(embedded of the objects that count, due, and how many of the due are parked).
+With `--embed-kinds` and `--embed-search-kinds` (or their environment variables;
+the command cannot know which ones the running server has, so it says nothing
+about them unless it is given them) each line ends with `[embedding on, search
+off]` as that configuration would have it. With `--embed-query-url` (the same
+address as for `ctx serve`) it shows both servers, `job server` and `query
+server`, and a line `same model` that says whether the two answer the probe text
+alike. It only reads the database, so the server may keep running; run it as
+described in "Running maintenance commands". The vectors take 768 bytes per object
+and live in the table `knowledge_embeddings` (knowledge) and `embeddings` (the
+other kinds).
 
 ### When the embedding server is away
 
@@ -962,6 +1081,43 @@ serve the same model, since the numbers would then mean nothing. Wait until
 `ctx embed status` shows nothing due, or the vector rows understate the result. The quotes are passages of transcripts, closer to the
 entry than a question a person asks, so read the numbers as "finds the entry for
 the passage it came from".
+
+### Measuring the other kinds
+
+```sh
+ctx eval search --db /var/lib/ghosttree/ghosttree.db --embed-url http://127.0.0.1:8475 \
+  --set queries.jsonl --requests-builtin
+```
+
+measures requests, pains, documents, descriptions of paths and knowledge on queries
+whose right answer is known, once by words, once by vectors and once fused, through
+the search function of each kind as the instance owner sees it, reading only. Each
+line of the set is a JSON object with the query, the kind and the target:
+
+```json
+{"query": "where is the trust of an entry sorted", "kind": "ghost", "target": "github.com/dw/p:internal/store/knowledge.go"}
+{"query": "is there a request for this already", "kind": "request", "target": "412"}
+```
+
+`kind` is `request`, `ghost`, `pain`, `document` or `knowledge`; `target` is the id
+of the object, and for a description of a path `project:path` (split at the first
+colon). Other members of a line are ignored. A query is run in the project of its
+target, the way an agent asks, with ten hits; the report has a block per kind with
+n, R@1, R@3, R@10 and MRR@10 for the three rankings, how many targets no longer
+exist (they are not measured), and how many objects of the kind have a current
+vector. Nothing of a query or of an object is printed, only counts. The "words"
+row is what the search gives today: for requests the list by id of the requests
+that match (the whole list, for a query of nothing but ordinary words), for pains
+the pains that contain the query as a phrase; so the words row of requests is not
+a ranking, and part of what the fusion gains is having one.
+`--requests-builtin` adds the queries the request ledger already holds the answer
+to: the quotes of the sessions in which a wish was spoken (`request_sightings`) with
+the request that came of them, and, for every request marked as a duplicate of
+another or as superseding it, its title as the query and the other request as the
+answer (`--sample` of each, `--min-chars` for the quotes). A set made of private
+data belongs on the server and not in a repository. The run needs the embedding
+server for the queries, `--embed-query-url` as above, and the vectors of the kinds
+it measures: see `ctx embed status`.
 
 ### What a search shows that only the meaning found
 

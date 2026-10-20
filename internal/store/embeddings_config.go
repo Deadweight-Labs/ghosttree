@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -41,6 +42,20 @@ type EmbedSearchConfig struct {
 	// other failure of the embedding, and the error is the reason that is logged.
 	// Nil asks nothing.
 	Ready func() error
+	// Kinds are the kinds of object whose search uses the vectors (see EmbedKinds).
+	// The search of every other kind answers from full text alone, however many
+	// vectors there are, so that a kind can be embedded and measured first and
+	// switched on afterwards. Empty means knowledge only, which is what hybrid
+	// search was before there were other kinds.
+	Kinds []string
+}
+
+// searches says whether the search of a kind uses the vectors.
+func (c *EmbedSearchConfig) searches(kind string) bool {
+	if len(c.Kinds) == 0 {
+		return kind == KindKnowledge
+	}
+	return slices.Contains(c.Kinds, kind)
 }
 
 // embedShared is the embedding configuration of a store and its reader, set

@@ -67,13 +67,15 @@ type PainLinkOut struct {
 }
 
 type PainOutput struct {
-	Ref       string        `json:"ref"`
-	Title     string        `json:"title"`
-	State     string        `json:"state"`
-	Body      string        `json:"body,omitempty"`
-	Remaining string        `json:"remaining,omitempty"`
-	Links     []PainLinkOut `json:"links,omitempty"`
-	History   []string      `json:"history,omitempty"`
+	Ref       string `json:"ref"`
+	Title     string `json:"title"`
+	State     string `json:"state"`
+	Body      string `json:"body,omitempty"`
+	Remaining string `json:"remaining,omitempty"`
+	// Match is "semantic" for a pain that a search found by its meaning alone.
+	Match   string        `json:"match,omitempty"`
+	Links   []PainLinkOut `json:"links,omitempty"`
+	History []string      `json:"history,omitempty"`
 }
 
 type PainListOutput struct {
@@ -145,7 +147,7 @@ func (s *Server) handlePainSearch(_ context.Context, _ *mcp.CallToolRequest, in 
 	}
 	out := PainListOutput{Pains: []PainOutput{}}
 	for _, p := range list {
-		out.Pains = append(out.Pains, PainOutput{Ref: p.HumanID(), Title: p.Title, State: p.State, Remaining: p.Remaining})
+		out.Pains = append(out.Pains, PainOutput{Ref: p.HumanID(), Title: p.Title, State: p.State, Remaining: p.Remaining, Match: p.Match})
 	}
 	return requestResult(out), out, nil
 }

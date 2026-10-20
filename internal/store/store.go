@@ -1096,6 +1096,10 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := ensureEmbeddings(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := ensureExplanations(db); err != nil {
 		_ = db.Close()
 		return nil, err

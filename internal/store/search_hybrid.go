@@ -71,12 +71,8 @@ type KnowledgeSearch struct {
 	Mode      SearchMode
 }
 
-// KnowledgePrefilter is a SQL condition on the table alias k of knowledge with
-// its arguments. The zero value admits everything.
-type KnowledgePrefilter struct {
-	SQL  string
-	Args []any
-}
+// KnowledgePrefilter is a Prefilter on the table alias k of knowledge.
+type KnowledgePrefilter = Prefilter
 
 const (
 	// hybridPool is how many entries each ranking contributes to the fusion.
@@ -123,41 +119,13 @@ func (s *Store) searchKnowledgeWith(q string, o KnowledgeSearch) ([]Knowledge, e
 		}
 	}
 
-	var qvec []float32
 	sh := s.embedShared()
-	cfg := sh.cfg.Load()
-	switch {
-	case o.Mode == SearchFullTextOnly:
-	case cfg == nil:
-		if o.Mode.strict() {
-			return nil, errNoEmbedder
-		}
-	case o.Mode == SearchAuto && isListingQuery(q):
-		// A question made of ordinary words asks for a list, which no ranking
-		// answers; the full-text search says so by finding nothing.
-	default:
-		var v []float32
-		var err error
-		if cfg.Ready != nil {
-			err = cfg.Ready()
-		}
-		if err == nil {
-			ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
-			v, err = cfg.Embedder.Query(ctx, q)
-			cancel()
-		}
-		switch {
-		case err == nil:
-			qvec = v
-		case o.Mode.strict():
-			return nil, fmt.Errorf("embedding the query: %w", err)
-		default:
-			sh.logFallback(cfg, err)
-		}
+	qvec, cfg, err := s.queryVector(q, o.Mode, KindKnowledge)
+	if err != nil {
+		return nil, err
 	}
 
 	var ks []Knowledge
-	var err error
 	if qvec != nil {
 		hwhere, hargs := where, args
 		if o.Prefilter.SQL != "" {
@@ -243,16 +211,9 @@ func (s *Store) hybridKnowledge(q, where string, args []any, limit int, qvec []f
 		room = limit
 	}
 	out := []Knowledge{}
-	for _, f := range embed.Fuse(textIDs, vecIDs) {
-		if len(out) >= limit {
-			break
-		}
+	for _, f := range fuseRankings(textIDs, vecIDs, limit, room) {
 		k := byID[f.ID]
-		if f.Ranks[0] == 0 {
-			if room == 0 {
-				continue
-			}
-			room--
+		if f.Semantic {
 			k.Match = MatchSemantic
 		}
 		out = append(out, k)
@@ -268,43 +229,89 @@ const maxSemanticHits = 5
 // semantic-only hits: five, or half of a short result.
 func maxSemanticOnly(limit int) int { return min(maxSemanticHits, (limit+1)/2) }
 
-// textRanking is the full-text ranking, cut to the rows Keep allows.
-func (s *Store) textRanking(q, where string, args []any, pool int, o KnowledgeSearch) ([]Knowledge, error) {
-	scan := pool
-	if o.Keep != nil {
-		scan = keepScanCap
-	}
-	args = append([]any{ftsQuery(q)}, args...)
-	args = append(args, scan)
-	rows, err := s.db.Query(`SELECT k.id FROM knowledge_fts f JOIN knowledge k ON k.id = f.rowid
-		WHERE knowledge_fts MATCH ? AND `+where+ftsConditions(o)+`
-		ORDER BY f.rank LIMIT ?`, args...)
-	if err != nil {
-		return nil, err
-	}
-	ids, err := scanIDs(rows)
-	if err != nil {
-		return nil, err
-	}
-	return s.keptRows(ids, pool, o.Keep)
+// fusedHit is one entry of a fused ranking; Semantic says that only the
+// embedding ranking had it.
+type fusedHit struct {
+	ID       int64
+	Semantic bool
 }
 
-// vectorRanking ranks the active entries the reader may reach by the cosine of
-// their stored vector and the query vector. The scope and the global-entry rule
-// are part of the query, exactly as in the full-text ranking, so nothing outside
-// them is even compared; Keep then removes what the row-level rule hides before
-// a rank is given.
-func (s *Store) vectorRanking(qvec []float32, cfg *EmbedSearchConfig, where string, args []any, pool int, o KnowledgeSearch) ([]Knowledge, error) {
-	query := `SELECT e.knowledge_id, e.scale, e.vec FROM knowledge_embeddings e
-		JOIN knowledge k ON k.id = e.knowledge_id
-		WHERE e.model = ? AND e.prefix_version = ? AND k.status = 'active'`
-	if !o.Operator {
-		query += ` AND k.confidence != 'quarantined'`
+// fuseRankings fuses the full-text and the embedding ranking by reciprocal rank
+// and returns the first depth entries, of which at most room are semantic-only. A
+// semantic-only entry that does not fit under room is skipped and the next one is
+// looked at, so the first n entries of a deeper fusion are the same as the n of a
+// shallower one: pages of one result add up.
+func fuseRankings(text, vec []int64, depth, room int) []fusedHit {
+	var out []fusedHit
+	for _, f := range embed.Fuse(text, vec) {
+		if len(out) >= depth {
+			break
+		}
+		semantic := f.Ranks[0] == 0
+		if semantic {
+			if room <= 0 {
+				continue
+			}
+			room--
+		}
+		out = append(out, fusedHit{ID: f.ID, Semantic: semantic})
 	}
-	rows, err := s.db.Query(query+` AND `+where, append([]any{cfg.Embedder.Model(), cfg.Embedder.PrefixVersion()}, args...)...)
-	if err != nil {
-		return nil, err
+	return out
+}
+
+// queryVector embeds the query of a hybrid search of the given kind. It returns
+// a nil vector when the search is to answer from full text alone: the mode says
+// so, no embedding server is configured, the kind is not switched on for search,
+// the query asks for a list, or the server failed (which is logged, at most once
+// a minute). In the strict modes of the quality measurement, where an answer from
+// full text would be a wrong measurement, each of those is an error instead.
+func (s *Store) queryVector(q string, mode SearchMode, kind string) ([]float32, *EmbedSearchConfig, error) {
+	sh := s.embedShared()
+	cfg := sh.cfg.Load()
+	switch {
+	case mode == SearchFullTextOnly:
+		return nil, cfg, nil
+	case cfg == nil:
+		if mode.strict() {
+			return nil, nil, errNoEmbedder
+		}
+		return nil, nil, nil
+	case !cfg.searches(kind):
+		if mode.strict() {
+			return nil, cfg, fmt.Errorf("the search of %s does not use embeddings: %s is not among the configured search kinds", kind, kind)
+		}
+		return nil, cfg, nil
+	case mode == SearchAuto && isListingQuery(q):
+		// A question made of ordinary words asks for a list, which no ranking
+		// answers; the full-text search says so by finding nothing.
+		return nil, cfg, nil
 	}
+	var v []float32
+	var err error
+	if cfg.Ready != nil {
+		err = cfg.Ready()
+	}
+	if err == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
+		v, err = cfg.Embedder.Query(ctx, q)
+		cancel()
+	}
+	switch {
+	case err == nil:
+		return v, cfg, nil
+	case mode.strict():
+		return nil, cfg, fmt.Errorf("embedding the query: %w", err)
+	}
+	sh.logFallback(cfg, err)
+	return nil, cfg, nil
+}
+
+// rankByCosine reads rows of (id, scale, vec), scores each stored vector against
+// the query vector and returns the ids best first (ties by id), leaving out what
+// is below the minimum similarity. A vector of another length is not compared; it
+// is counted and said once a minute, since it means that the model behind a model
+// id was exchanged. It closes rows.
+func (s *Store) rankByCosine(rows *sql.Rows, qvec []float32, cfg *EmbedSearchConfig) ([]int64, error) {
 	defer rows.Close()
 	type scored struct {
 		id    int64
@@ -347,15 +354,59 @@ func (s *Store) vectorRanking(qvec []float32, cfg *EmbedSearchConfig, where stri
 		}
 		return 0
 	})
-	// The row rule is the expensive part: read only as deep as the full-text
-	// ranking is read, so a reader with little to see does not make every search
-	// check the whole stock.
-	if o.Keep != nil && len(all) > keepScanCap {
-		all = all[:keepScanCap]
-	}
 	ids := make([]int64, len(all))
 	for i, a := range all {
 		ids[i] = a.id
+	}
+	return ids, nil
+}
+
+// textRanking is the full-text ranking, cut to the rows Keep allows.
+func (s *Store) textRanking(q, where string, args []any, pool int, o KnowledgeSearch) ([]Knowledge, error) {
+	scan := pool
+	if o.Keep != nil {
+		scan = keepScanCap
+	}
+	args = append([]any{ftsQuery(q)}, args...)
+	args = append(args, scan)
+	rows, err := s.db.Query(`SELECT k.id FROM knowledge_fts f JOIN knowledge k ON k.id = f.rowid
+		WHERE knowledge_fts MATCH ? AND `+where+ftsConditions(o)+`
+		ORDER BY f.rank LIMIT ?`, args...)
+	if err != nil {
+		return nil, err
+	}
+	ids, err := scanIDs(rows)
+	if err != nil {
+		return nil, err
+	}
+	return s.keptRows(ids, pool, o.Keep)
+}
+
+// vectorRanking ranks the active entries the reader may reach by the cosine of
+// their stored vector and the query vector. The scope and the global-entry rule
+// are part of the query, exactly as in the full-text ranking, so nothing outside
+// them is even compared; Keep then removes what the row-level rule hides before
+// a rank is given.
+func (s *Store) vectorRanking(qvec []float32, cfg *EmbedSearchConfig, where string, args []any, pool int, o KnowledgeSearch) ([]Knowledge, error) {
+	query := `SELECT e.knowledge_id, e.scale, e.vec FROM knowledge_embeddings e
+		JOIN knowledge k ON k.id = e.knowledge_id
+		WHERE e.model = ? AND e.prefix_version = ? AND k.status = 'active'`
+	if !o.Operator {
+		query += ` AND k.confidence != 'quarantined'`
+	}
+	rows, err := s.db.Query(query+` AND `+where, append([]any{cfg.Embedder.Model(), cfg.Embedder.PrefixVersion()}, args...)...)
+	if err != nil {
+		return nil, err
+	}
+	ids, err := s.rankByCosine(rows, qvec, cfg)
+	if err != nil {
+		return nil, err
+	}
+	// The row rule is the expensive part: read only as deep as the full-text
+	// ranking is read, so a reader with little to see does not make every search
+	// check the whole stock.
+	if o.Keep != nil && len(ids) > keepScanCap {
+		ids = ids[:keepScanCap]
 	}
 	return s.keptRows(ids, pool, o.Keep)
 }

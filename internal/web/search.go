@@ -81,7 +81,7 @@ func (a *app) searchRequests(l lang, pa *store.ProjectAccess, project, q string)
 		project = "\x00hidden"
 	}
 	filter := requestdomain.SearchFilter{Scope: scope.Axes{Project: project}, Query: q, Limit: searchPerGroup + 1}
-	page, err := a.store.SearchRequests(pa.RequestFilter(filter))
+	page, err := a.store.SearchRequestsWith(pa.RequestFilter(filter), store.SearchAuto)
 	if err != nil {
 		return g
 	}
@@ -188,18 +188,24 @@ func (a *app) searchTasks(l lang, pa *store.ProjectAccess, project, q string) se
 
 func (a *app) searchPains(l lang, pa *store.ProjectAccess, project, q string) searchGroup {
 	g := searchGroup{Key: "pains", Label: l.msg("nav.tab_pains"), Icon: "warn"}
-	for _, p := range visibleProjects(pa, project) {
-		list, err := pa.SearchPains(pain.Filter{Project: p, State: "all", Query: q, Limit: searchPerGroup + 1})
-		if err != nil {
-			continue
+	projects := visibleProjects(pa, project)
+	if len(projects) == 0 {
+		return g
+	}
+	// One search over every project the viewer sees, not one per project: one
+	// embedding of the query (and one timeout), and one share of hits for meaning
+	// alone for the whole group, so that the neighbours of a project early in the
+	// alphabet do not crowd out the hit of a later one.
+	list, err := pa.SearchPains(pain.Filter{Projects: projects, State: "all", Query: q, Limit: searchPerGroup + 1})
+	if err != nil {
+		return g
+	}
+	for _, row := range list {
+		if len(g.Hits) == searchPerGroup {
+			g.All = "/ui/pains"
+			break
 		}
-		for _, row := range list {
-			if len(g.Hits) == searchPerGroup {
-				g.All = "/ui/pains"
-				return g
-			}
-			g.Hits = append(g.Hits, searchHit{Title: row.Title, Sub: lastSegment(row.Project) + " · " + label(l, painStateKeys, row.State), Href: painURL(row.ID)})
-		}
+		g.Hits = append(g.Hits, searchHit{Title: row.Title, Sub: lastSegment(row.Project) + " · " + label(l, painStateKeys, row.State), Href: painURL(row.ID)})
 	}
 	return g
 }

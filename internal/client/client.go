@@ -239,6 +239,25 @@ func (c *Client) Documents(project, kind string, includeArchived bool) ([]store.
 	return out, err
 }
 
+// SearchDocuments finds the active documents whose title, slug or text match the
+// query, best first; the ones that only the meaning of the query found carry
+// match "semantic". An empty project searches every project the account may read.
+func (c *Client) SearchDocuments(project, query, kind string, limit int) ([]store.Document, error) {
+	q := url.Values{"q": {query}}
+	if project != "" {
+		q.Set("project", project)
+	}
+	if kind != "" {
+		q.Set("kind", kind)
+	}
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	var out []store.Document
+	err := c.do("GET", "/api/documents", q, nil, &out)
+	return out, err
+}
+
 func (c *Client) Document(id int64) (store.Document, error) {
 	var out store.Document
 	err := c.do("GET", "/api/documents/"+strconv.FormatInt(id, 10), nil, nil, &out)
