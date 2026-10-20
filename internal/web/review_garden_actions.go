@@ -119,10 +119,19 @@ func sameIDs(a, b []int64) bool {
 // archived before every change, so a note with a history was edited). A failure
 // to look is returned as it is.
 func (a *app) gardenerVouches(note store.Knowledge, ids []int64) error {
+	return a.vouch(note, func() bool {
+		got, ok := titleIDs(note.Title)
+		return ok && sameIDs(got, ids)
+	})
+}
+
+// vouch is gardenerVouches for a note whose title is held to its reference by
+// titleHolds, which the kinds of note define for themselves.
+func (a *app) vouch(note store.Knowledge, titleHolds func() bool) error {
 	if note.Harness != gardenerHarness || !a.store.WrittenByGardener(note) {
 		return errNotGardens
 	}
-	if got, ok := titleIDs(note.Title); !ok || !sameIDs(got, ids) {
+	if !titleHolds() {
 		return errNotGardens
 	}
 	history, err := a.store.KnowledgeHistory(note.ID)
@@ -352,6 +361,14 @@ func entryRef(pa *store.ProjectAccess, role string, k store.Knowledge) gardenRef
 // may take it. A note that has an action does not offer plain approval, which
 // would confirm the note and change nothing.
 func (a *app) decorateGardenRow(l lang, pa *store.ProjectAccess, k store.Knowledge, row *gardenRow) {
+	if _, _, ok := parseCriterionRef(k.SessionRef); ok {
+		a.decorateCriterionRow(l, pa, k, row)
+		return
+	}
+	if strings.HasPrefix(k.SessionRef, gardenGhostRef) {
+		a.decorateGhostRow(l, pa, k, row)
+		return
+	}
 	if kind, ids, ok := parseRelationRef(k.SessionRef); ok && kind == gardenKindDuplicate {
 		row.CanApprove = false
 		plan, err := a.planMerge(pa, k)

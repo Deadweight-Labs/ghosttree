@@ -129,6 +129,46 @@ func TestGardenerMarksCannotRideOnASupersedeOrTheMigrationPath(t *testing.T) {
 	f.expect(t, "lena", 400, "PATCH", fmt.Sprintf("/api/knowledge/%d", old), map[string]string{"session_ref": "gardener:regression:1:existing"})
 }
 
+// "Proposed by the gardener, confirmed by <person>" on a description is set only by
+// the review page. Through the API nobody may claim it, not the gardener's own
+// account either (it proposes, it does not describe), and an ordinary description
+// is written as before.
+func TestNobodyMayWriteAGardenerMarkOnADescriptionThroughTheAPI(t *testing.T) {
+	f := gardenerAPI(t)
+	ghost := func(harness, ref string) map[string]any {
+		return map[string]any{"project": accProject, "path": "internal/x.go", "kind": "file", "description": "Eine Beschreibung.", "harness": harness, "session_ref": ref,
+			"content_sha": strings.Repeat("a", 64), "git_blob": strings.Repeat("b", 40), "line_count": 3}
+	}
+	count := func() int {
+		var n int
+		if err := f.st.DB().QueryRow(`SELECT COUNT(*) FROM ghost_files`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	before := count()
+	for _, who := range []string{"gardener", "robin", "lena", "rex", "mia"} {
+		for name, g := range map[string]map[string]any{
+			"harness":               ghost("gardener", ""),
+			"harness in other case": ghost("Gardener", ""),
+			"reference":             ghost("mcp", "gardener:ghost-note:5"),
+			"reference in upper":    ghost("mcp", "GARDENER:ghost-note:5"),
+		} {
+			code, out := f.call(t, who, "POST", "/api/ghosts", g)
+			if code != 403 || !strings.Contains(out, "gardener_reserved") {
+				t.Errorf("%s writing a description with a mark in its %s = %d (%s), want 403 gardener_reserved", who, name, code, strings.TrimSpace(out))
+			}
+		}
+	}
+	if n := count(); n != before {
+		t.Fatalf("%d descriptions written by refused calls", n-before)
+	}
+	f.expect(t, "mia", 200, "POST", "/api/ghosts", ghost("mcp", ""))
+	if g, err := f.st.GhostFileByPath(accProject, "internal/x.go"); err != nil || g.Harness != "mcp" || g.Person != "mia" {
+		t.Errorf("an ordinary description = %+v (%v)", g, err)
+	}
+}
+
 func TestNobodyMayWriteGardenerMarksWhenNoAccountIsSet(t *testing.T) {
 	f := gardenerAPI(t)
 	if err := f.st.ClearGardenerAccount(); err != nil {

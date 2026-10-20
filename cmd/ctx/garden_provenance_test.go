@@ -89,16 +89,19 @@ var digits = regexp.MustCompile(`[0-9]+`)
 var allowedGardenWrites = regexp.MustCompile(`^POST /api/(knowledge|coord/agents|threads|threads/[0-9]+/links|coord/messages)$`)
 
 type provenanceFixture struct {
-	t        *testing.T
-	srv      *httptest.Server
-	st       *store.Store
-	rec      *writeRecorder
-	repo     *garden.Repo
-	dir      string
-	claude   string
-	ids      map[string]int64
-	request  int64
-	gardener *client.Client
+	t       *testing.T
+	srv     *httptest.Server
+	st      *store.Store
+	rec     *writeRecorder
+	repo    *garden.Repo
+	dir     string
+	claude  string
+	ids     map[string]int64
+	request int64
+	// criterion is the open criterion of that request, head the commit of the checkout.
+	criterion int64
+	head      string
+	gardener  *client.Client
 }
 
 func newProvenanceFixture(t *testing.T) *provenanceFixture {
@@ -202,7 +205,7 @@ func newProvenanceFixture(t *testing.T) *provenanceFixture {
 		Scope: scope.Axes{Project: provenanceProject}, Person: "alice"}, Criteria: []string{"Das Kriterium ist offen"}}); err != nil {
 		t.Fatal(err)
 	} else {
-		fx.request = d.Request.ID
+		fx.request, fx.criterion = d.Request.ID, d.Criteria[0].ID
 	}
 
 	// The stand-in for Claude Code: it reads the files, then answers with a stale
@@ -237,8 +240,48 @@ func newProvenanceFixture(t *testing.T) *provenanceFixture {
 	}
 	result, _ := json.Marshal(map[string]any{"type": "result", "subtype": "success", "is_error": false, "num_turns": 3, "result": string(answer),
 		"usage": map[string]int{"input_tokens": 30, "output_tokens": 40}})
+
+	// The same stand-in answers the sessions of the ledger job and of the description
+	// job, told apart by what the task says. For the ledger it names the commit a tool
+	// printed as the proof of the open criterion; for the files it describes the one
+	// that has no description yet.
+	head, err := repo.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fx.head = head
+	toolUse := func(n int, name string, input map[string]any) string {
+		b, _ := json.Marshal(map[string]any{"type": "assistant", "message": map[string]any{"id": fmt.Sprintf("m%d", n),
+			"content": []map[string]any{{"type": "tool_use", "id": fmt.Sprintf("t%d", n), "name": name, "input": input}}, "usage": map[string]int{"input_tokens": 10, "output_tokens": 5}}})
+		return string(b)
+	}
+	toolResult := func(n int, text string) string {
+		b, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"content": []map[string]any{{"type": "tool_result", "tool_use_id": fmt.Sprintf("t%d", n), "content": text}}}})
+		return string(b)
+	}
+	finish := func(answer any) string {
+		text, _ := json.Marshal(answer)
+		b, _ := json.Marshal(map[string]any{"type": "result", "subtype": "success", "is_error": false, "num_turns": 3, "result": string(text), "usage": map[string]int{"input_tokens": 30, "output_tokens": 40}})
+		return string(b)
+	}
+	ledgerSession := strings.Join([]string{
+		toolUse(1, "mcp__gardengit__git_log", map[string]any{"max": 5}), toolResult(1, head[:12]+" 2026-01-01 t: init"),
+		finish(map[string]any{"checked": []int64{fx.request}, "criteria": []map[string]any{
+			{"request": fx.request, "criterion": fx.criterion, "reason": "Der erste Commit hat das Kriterium eingeführt.", "evidence": []map[string]any{{"kind": "commit", "ref": head[:12]}}},
+		}}),
+	}, "\n")
+	ghostSession := strings.Join([]string{
+		read(1, "cmd/x.go"),
+		finish(map[string]any{"ghosts": []map[string]any{
+			{"path": "cmd/x.go", "verdict": "describe", "description": "Die Datei hält den Einstieg des Pakets cmd. Invariante: sie hat keine Seiteneffekte beim Laden.", "reason": "noch nie beschrieben"},
+		}}),
+	}, "\n")
+	knowledgeSession := read(1, "cmd/x.go") + "\n" + read(2, "cmd/x_test.go") + "\n" + string(result)
 	fx.claude = filepath.Join(dir, "claude")
-	script := "#!/bin/sh\ncat > /dev/null\ncat <<'EOF'\n" + read(1, "cmd/x.go") + "\n" + read(2, "cmd/x_test.go") + "\n" + string(result) + "\nEOF\n"
+	script := "#!/bin/sh\nprompt=$(cat)\ncase \"$prompt\" in\n" +
+		"*'=== AUFTRAG #'*) cat <<'EOF'\n" + ledgerSession + "\nEOF\n;;\n" +
+		"*'=== PFAD '*) cat <<'EOF'\n" + ghostSession + "\nEOF\n;;\n" +
+		"*) cat <<'EOF'\n" + knowledgeSession + "\nEOF\n;;\nesac\n"
 	if err := os.WriteFile(fx.claude, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -299,7 +342,17 @@ func TestGardenerWritesOnlyMarkedStagedProposalsAndThreadsAndNothingThatDecides(
 		}
 		counts[digits.ReplaceAllString(call, "N")]++
 	}
-	want := map[string]int{"POST /api/knowledge": 5, "POST /api/coord/agents": 1, "POST /api/threads": 1, "POST /api/threads/N/links": 1, "POST /api/coord/messages": 1}
+	// Five notes of the knowledge job, one for a criterion shown as met (job 4) and one
+	// for a description (job 1). Not a single call to a description, a criterion or
+	// a request: the allowlist above has none, and these say it once more.
+	for _, w := range writes {
+		for _, never := range []string{"/api/ghosts", "/api/criteria", "/api/requests", "/api/ghosts/"} {
+			if strings.HasPrefix(w.Path, never) {
+				t.Errorf("the gardener wrote to %s %s: %s", w.Method, w.Path, w.Body)
+			}
+		}
+	}
+	want := map[string]int{"POST /api/knowledge": 7, "POST /api/coord/agents": 1, "POST /api/threads": 1, "POST /api/threads/N/links": 1, "POST /api/coord/messages": 1}
 	for call, n := range want {
 		if counts[call] != n {
 			t.Errorf("%s was called %d times, want %d (%v)", call, counts[call], n, counts)
@@ -329,8 +382,30 @@ func TestGardenerWritesOnlyMarkedStagedProposalsAndThreadsAndNothingThatDecides(
 		}
 	}
 	after := fx.knowledge()
-	if notes != 5 || len(after) != len(before)+5 {
+	if notes != 7 || len(after) != len(before)+7 {
 		t.Fatalf("%d proposals written, %d entries new", notes, len(after)-len(before))
+	}
+	// The two notes of the new jobs say what they are about with numbers and a path,
+	// and what they would change stays as it is: the criterion is open, the request is
+	// open, no description was written.
+	refs := map[string]store.Knowledge{}
+	for id, k := range after {
+		if _, old := before[id]; !old {
+			refs[k.SessionRef] = k
+		}
+	}
+	proof := refs[fmt.Sprintf("gardener:criterion:%d:%d", fx.request, fx.criterion)]
+	if proof.Title != fmt.Sprintf("[Gärtner] Erfüllt? #%d Kriterium 1: Das Kriterium ist offen", fx.request) || !strings.Contains(proof.Body, "Beleg: commit "+fx.head[:12]) {
+		t.Errorf("criterion note = %q\n%s", proof.Title, proof.Body)
+	}
+	if desc := refs["gardener:ghost:cmd/x.go"]; desc.Title != "[Gärtner] Beschreibung? cmd/x.go" || !strings.Contains(desc.Body, "Invariante: sie hat keine Seiteneffekte beim Laden.") {
+		t.Errorf("description note = %q\n%s", desc.Title, desc.Body)
+	}
+	if n := fx.count(`SELECT COUNT(*) FROM ghost_files`); n != 0 {
+		t.Errorf("%d descriptions were written", n)
+	}
+	if n := fx.count(`SELECT COUNT(*) FROM request_evidence`); n != 0 {
+		t.Errorf("%d evidence rows were written", n)
 	}
 	for id, k := range after {
 		if _, old := before[id]; old {
@@ -387,7 +462,7 @@ func TestGardenerWritesOnlyMarkedStagedProposalsAndThreadsAndNothingThatDecides(
 		t.Errorf("the request was touched: %+v %v", d, err)
 	}
 	// The contradiction is a thread, not a note; the report names what became of it.
-	if !strings.Contains(out, "thread 1 opened") || !strings.Contains(out, "5 proposals filed") {
+	if !strings.Contains(out, "thread 1 opened") || !strings.Contains(out, "5 proposals filed") || !strings.Contains(out, "1 criteria proposed as met, 1 descriptions proposed") {
 		t.Errorf("output:\n%s", out)
 	}
 	for _, k := range after {
@@ -414,7 +489,7 @@ func TestGardenerRunsAreIdempotentAndRespectWhatPeopleDecided(t *testing.T) {
 	if n := fx.count(`SELECT COUNT(*) FROM threads`); n != 1 {
 		t.Fatalf("%d threads after the second run", n)
 	}
-	if n := len(fx.knowledge()); n != 7+5 {
+	if n := len(fx.knowledge()); n != 7+7 {
 		t.Fatalf("%d entries after the second run", n)
 	}
 

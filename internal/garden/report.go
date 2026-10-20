@@ -154,6 +154,9 @@ func WriteReport(w io.Writer, project string, res Result, at time.Time) {
 	}
 
 	writeCovers(w, res.Covers)
+	writeProofs(w, res)
+	writeGhosts(w, res)
+	writeIdle(w, res)
 
 	order := map[string]int{Stale: 0, Correction: 1, Unclear: 2, Holds: 3, Failed: 4, Skipped: 5, NotRun: 6}
 	vs := append([]Verdict(nil), res.Verdicts...)
@@ -230,6 +233,82 @@ func writeCovers(w io.Writer, covers []Cover) {
 		}
 		fmt.Fprintln(w)
 	}
+}
+
+// writeProofs lists the criteria the checkout shows as fulfilled (job 4), each
+// with the evidence a person is asked to look at. Nothing in it is recorded until
+// a person confirms the note on the review page.
+func writeProofs(w io.Writer, res Result) {
+	if s := res.LedgerRotation.Summary(); s != "" && res.Agent {
+		fmt.Fprintf(w, "Ledger: %s\n\n", strings.Replace(s, "Nicht dran", "Aufträge nicht dran", 1))
+	}
+	if len(res.Proofs) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "## Ledger: erfüllte Kriterien (Vorschläge)\nDer Gärtner schlägt vor, diese Kriterien als erfüllt zu vermerken. Geschlossen wird nichts; ein Mensch bestätigt jeden Vorschlag auf der Prüfseite.\n")
+	for _, p := range res.Proofs {
+		fmt.Fprintf(w, "- #%d %s, Kriterium %d: %s\n", p.Request.ID, p.Request.Title, p.Criterion.Number, shorten(p.Criterion.Description, 160))
+		for _, it := range p.Items {
+			fmt.Fprintf(w, "  - Beleg %s: %s", it.Kind, it.Ref)
+			if it.Detail != "" {
+				fmt.Fprintf(w, " (%s)", it.Detail)
+			}
+			fmt.Fprintln(w)
+		}
+		fmt.Fprintf(w, "  - Begründung: %s\n", p.Reason)
+	}
+	fmt.Fprintln(w)
+}
+
+// writeGhosts lists the descriptions proposed (job 1), whole: they are the text a
+// person is asked to read.
+func writeGhosts(w io.Writer, res Result) {
+	if s := res.GhostRotation.Summary(); s != "" && res.Agent {
+		fmt.Fprintf(w, "%s\n\n", s)
+	}
+	if len(res.GhostNotes) == 0 && len(res.GhostKept) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "## Beschreibungen (Ghosts)\nDer Gärtner schlägt diese Beschreibungen vor. Geschrieben wird erst, wenn ein Mensch den Vorschlag auf der Prüfseite übernimmt.\n")
+	for _, g := range res.GhostNotes {
+		fmt.Fprintf(w, "- %s (%s)\n", g.Path, GhostStateLabel(g.GhostPath))
+		if g.Reason != "" {
+			fmt.Fprintf(w, "  - Begründung: %s\n", g.Reason)
+		}
+		fmt.Fprintf(w, "  > %s\n", strings.ReplaceAll(g.Description, "\n", "\n  > "))
+	}
+	if len(res.GhostKept) > 0 {
+		var ps []string
+		for _, g := range res.GhostKept {
+			ps = append(ps, g.Path)
+		}
+		fmt.Fprintf(w, "- Die bisherige Beschreibung stimmt noch (keine Änderung vorgeschlagen): %s\n", strings.Join(ps, ", "))
+	}
+	fmt.Fprintln(w)
+}
+
+// maxIdleListed bounds the list of idle requests in the report.
+const maxIdleListed = 25
+
+// writeIdle lists the open requests nobody has touched for a while, from data
+// alone: no model was asked.
+func writeIdle(w io.Writer, res Result) {
+	if res.IdleDays <= 0 || len(res.Idle) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "## Liegengeblieben\nOffene Aufträge ohne sichtbare Aktivität seit mindestens %d Tagen (angelegt, geändert, Kriterium, Beleg oder Arbeit), am längsten zuerst. Gezählt wird, was das Konto des Gärtners sehen darf: Arbeit in einer privaten Session eines anderen Kontos fehlt hier. Das ist ein Hinweis, kein Urteil.\n", res.IdleDays)
+	for i, r := range res.Idle {
+		if i == maxIdleListed {
+			fmt.Fprintf(w, "- … und %d weitere\n", len(res.Idle)-maxIdleListed)
+			break
+		}
+		fmt.Fprintf(w, "- #%d %s: seit %d Tagen, %d offene Kriterien", r.ID, r.Title, r.Days, r.OpenCriteria)
+		if r.Priority != "" {
+			fmt.Fprintf(w, ", Priorität %s", shorten(r.Priority, 40))
+		}
+		fmt.Fprintln(w)
+	}
+	fmt.Fprintln(w)
 }
 
 // Headline is the morning sentence: how many entries the model judged and how

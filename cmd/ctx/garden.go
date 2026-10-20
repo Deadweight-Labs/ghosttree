@@ -28,6 +28,7 @@ import (
 const gardenUsage = `usage: ctx garden check-knowledge [--mode agent|api] [--project <remote>] [--repo <dir>] [--type pitfall,decision]
                                   [--sessions 4] [--turns 60] [--per-session 30] [--session-timeout 40m]
                                   [--claude <path>] [--claude-dir <dir>] [--no-mcp]
+                                  [--requests 8] [--ghosts 8] [--idle-days 30]
                                   [--limit <n>] [--max-usd 2] [--dry-run] [--propose] [--out <file>]
                                   [--db <path>] [--min-age 14]
                                   [--daily-usd N] [--daily-calls N] [--daily-tokens N]
@@ -68,6 +69,29 @@ Two ways to run it:
                git tools git_log and git_show stay). Use it where the ghosttree tools
                must not reach other projects' entries: they cannot be limited to one project.
 
+  --requests, --ghosts, --idle-days  (agent mode; the ledger and the ghosts)
+               --requests N: job 4, the ledger. The N open requests (default 8, 0 = off) that
+               are due, oldest first, with their open criteria, go to one session of their own
+               (at most 8 per session). It looks in the checkout and the git history (git_log,
+               git_show) for a commit, a test or a file that shows a criterion as fulfilled.
+               ctx checks every proof: the commit exists, is in the history of HEAD and was
+               printed by a tool of the session; the test function stands in a file the session
+               read; the file exists. A proof without a valid one is dropped. The gardener does
+               not close requests and does not set criteria.
+               --ghosts N: job 1, the ghosts. The N files (default 8, 0 = off) whose description
+               is stale or missing (stale before undescribed before slightly changed; lock
+               files, test data, generated and binary files are skipped) go to a session of
+               their own, which reads each file and proposes a description in the style of the
+               existing ones, or says the old one still stands. ctx checks the file did not
+               change while the session read it, and the length of the text.
+               --idle-days D: open requests without visible activity for D days (default 30,
+               0 = no list) go into the report under "Liegengeblieben", from data alone, with
+               no model call (also with --mode api and --dry-run).
+               Both jobs remember what they looked at in the same memory as the knowledge
+               entries (--db or --state-file, under names of their own), run before the
+               knowledge sessions and share the budget of --max-usd; a failure of theirs
+               never stops the knowledge job.
+
 In api mode it is an option and stays off without an API key: set GHOSTTREE_GARDEN_KEY, or a
 "garden" entry with api_key_file or credential in llm.json. Without a key the
 command stops and does nothing (a dry run is the one exception: it reads, counts
@@ -86,7 +110,10 @@ and calls nothing).
                    coming from the gardener (nothing is verified, deprecated,
                    superseded, retired or judged: a person confirms a note on the
                    review page, where a duplicate note offers "merge" and a
-                   regression note offers to record the test or "not testable");
+                   regression note offers to record the test or "not testable"; a
+                   criterion note offers "record criterion as met" with the proof, a
+                   description note "adopt description", which shows the old and the
+                   new text);
                  - each contradiction between entries as a thread, linked to
                    all of them, marked as the gardener's, with the reason and the
                    verbatim quotes as its first post. For the same entries there
@@ -116,6 +143,7 @@ type gardenStore interface {
 	ProjectKnowledge(project string, includeArchived bool) ([]store.Knowledge, error)
 	Remember(k store.Knowledge, autoCtx scope.Axes) (store.Knowledge, error)
 	garden.ThreadSink
+	gardenReader
 }
 
 // gardenState is what the gardener remembers between runs. It is the database
@@ -140,6 +168,10 @@ type gardenOpts struct {
 	Limits llmusage.Limits
 	// MinAge is the window in which an unchanged entry is not looked at again.
 	MinAge time.Duration
+	// Requests and Ghosts are how many open requests (job 4) and files (job 1) a
+	// run takes up, 0 = off; IdleDays is the age from which an open request is
+	// listed as idle in the report, 0 = no list.
+	Requests, Ghosts, IdleDays int
 	// Agent mode: how many sessions, entries per session and turns per session,
 	// and what starts a session.
 	Sessions, PerSession, Turns int
@@ -177,11 +209,15 @@ func cmdGarden(args []string, stdout io.Writer) int {
 	claudeDir := fs.String("claude-dir", os.Getenv("GHOSTTREE_GARDEN_CLAUDE_DIR"), "agent mode: directory under which every session gets its own empty CLAUDE_CONFIG_DIR (required)")
 	noMCP := fs.Bool("no-mcp", false, "agent mode: give the sessions no ghosttree tools (context_search, context_get); the fixed git tools stay")
 	minAge := fs.Int("min-age", 14, "days; an entry looked at more recently is left out unless it or its code changed (0 = off)")
+	requests := fs.Int("requests", 8, "agent mode: open requests whose criteria are held against the history per run (0 = off)")
+	ghosts := fs.Int("ghosts", 8, "agent mode: files per run for which a description is proposed (0 = off)")
+	idleDays := fs.Int("idle-days", garden.DefaultIdleDays, "days without visible activity after which an open request is listed in the report (0 = no list)")
 	limits := addLimitFlags(fs, llmusage.JobGarden, "")
 	fs.Usage = func() { fmt.Fprintln(stdout, gardenUsage) }
 	// NaN compares false with everything and +Inf is no cap at all, so
 	// neither may reach the budget check.
 	if fs.Parse(args[1:]) != nil || !(*maxUSD > 0) || math.IsInf(*maxUSD, 0) || *limit < 0 || *minAge < 0 ||
+		*requests < 0 || *requests > maxExtraJobs || *ghosts < 0 || *ghosts > maxExtraJobs || *idleDays < 0 ||
 		(*mode != "agent" && *mode != "api") || *sessions < 1 || *perSession < 1 || *turns < 12 || *sessionTimeout <= 0 {
 		fmt.Fprintln(stdout, gardenUsage)
 		return 2
@@ -252,7 +288,7 @@ func cmdGarden(args []string, stdout io.Writer) int {
 		model = c.(llm.UsageClient)
 	}
 	opts := gardenOpts{Types: map[string]bool{}, Limit: *limit, MaxUSD: *maxUSD, DryRun: *dryRun, Propose: *propose,
-		Limits: lim, MinAge: time.Duration(*minAge) * 24 * time.Hour}
+		Limits: lim, MinAge: time.Duration(*minAge) * 24 * time.Hour, Requests: *requests, Ghosts: *ghosts, IdleDays: *idleDays}
 	if *stateFile != "" && *dbPath != "" {
 		fmt.Fprintln(stdout, "--db and --state-file exclude each other")
 		return 2
@@ -450,7 +486,7 @@ func gardenDue(st gardenStore, project string, opts gardenOpts, stdout io.Writer
 // a few Claude Code sessions check them together.
 func runGardenAgent(st gardenStore, repo *garden.Repo, project string, opts gardenOpts, pricing garden.Pricing, outPath string, stdout io.Writer) int {
 	entries, known, code, done := gardenDue(st, project, opts, stdout)
-	if done {
+	if done && (code != 0 || (opts.Requests == 0 && opts.Ghosts == 0)) {
 		return code
 	}
 	now := time.Now
@@ -459,7 +495,7 @@ func runGardenAgent(st gardenStore, repo *garden.Repo, project string, opts gard
 	}
 	head, _ := repo.Head()
 	var rot garden.Rotation
-	if opts.State != nil {
+	if opts.State != nil && len(entries) > 0 {
 		checks, err := opts.State.GardenChecks(project)
 		if err != nil {
 			fmt.Fprintf(stdout, "cannot read earlier checks: %v\n", err)
@@ -471,19 +507,29 @@ func runGardenAgent(st gardenStore, repo *garden.Repo, project string, opts gard
 		}
 		entries, rot = garden.Rotate(repo, entries, seen, opts.MinAge, now())
 	}
+	jobs := planGardenJobs(st, repo, project, opts, now(), head, stdout)
 	meter := &gardenMeter{st: opts.State, limits: opts.Limits, now: now}
 	aopts := garden.AgentOptions{
 		Runner: opts.Runner, Project: project, Pricing: pricing, MaxUSD: opts.MaxUSD, DryRun: opts.DryRun,
 		Sessions: opts.Sessions, PerSession: opts.PerSession, Turns: opts.Turns, Limit: opts.Limit, Known: known,
 		Gate: meter.gate, OnSession: meter.recordSession,
+		Ledger: jobs.Ledger, Ghosts: jobs.Ghosts, GhostSamples: jobs.Samples,
 	}
 	if opts.State != nil {
-		aopts.OnJudged = func(v garden.Verdict) {
-			err := opts.State.SaveGardenCheck(project, store.GardenCheck{KnowledgeID: v.Entry.ID, CheckedAt: now().UTC().Format(time.RFC3339Nano),
-				Commit: head, EntryHash: garden.HashOf(v.Entry), Verdict: v.Kind})
-			if err != nil {
-				fmt.Fprintf(stdout, "could not remember the check of #%d: %v\n", v.Entry.ID, err)
+		remember := func(name string, key int64, c store.GardenCheck) {
+			c.KnowledgeID, c.CheckedAt, c.Commit = key, now().UTC().Format(time.RFC3339Nano), head
+			if err := opts.State.SaveGardenCheck(name, c); err != nil {
+				fmt.Fprintf(stdout, "could not remember the check (%s %d): %v\n", name, key, err)
 			}
+		}
+		aopts.OnJudged = func(v garden.Verdict) {
+			remember(project, v.Entry.ID, store.GardenCheck{EntryHash: garden.HashOf(v.Entry), Verdict: v.Kind})
+		}
+		aopts.OnLedgerChecked = func(r garden.LedgerRequest) {
+			remember(garden.LedgerState(project), r.ID, store.GardenCheck{EntryHash: r.Hash(), Verdict: "checked"})
+		}
+		aopts.OnGhostLooked = func(g garden.GhostPath, verdict string) {
+			remember(garden.GhostState(project), garden.GhostKey(g.Path), store.GardenCheck{EntryHash: g.Stamp(), Verdict: verdict})
 		}
 	}
 	if !opts.DryRun && opts.Runner == nil {
@@ -492,6 +538,7 @@ func runGardenAgent(st gardenStore, repo *garden.Repo, project string, opts gard
 	}
 	res := garden.CheckAgent(context.Background(), repo, entries, aopts)
 	res.Rotation = rot
+	res.LedgerRotation, res.GhostRotation, res.Idle, res.IdleDays = jobs.LedgerRotation, jobs.GhostRotation, jobs.Idle, opts.IdleDays
 	if meter.err != nil {
 		fmt.Fprintf(stdout, "could not record usage: %v\n", meter.err)
 	}
@@ -538,6 +585,7 @@ func runGardenCheck(st gardenStore, repo *garden.Repo, project string, opts gard
 	}
 	res := garden.Check(context.Background(), repo, entries, gopts)
 	res.Rotation = rot
+	res.Idle, res.IdleDays = gardenIdle(st, project, opts, now(), stdout), opts.IdleDays
 	if meter.err != nil {
 		fmt.Fprintf(stdout, "could not record usage: %v\n", meter.err)
 	}
@@ -633,6 +681,16 @@ func proposeGarden(st gardenStore, project string, res garden.Result, stdout io.
 		fmt.Fprintf(stdout, "%v (%d proposals filed before the failure; the report above is complete)\n", err, n+rn+cn)
 		return 1
 	}
+	pn, err := garden.ProposeCriteria(st, project, existing, res.Proofs)
+	if err != nil {
+		fmt.Fprintf(stdout, "%v (%d proposals filed before the failure; the report above is complete)\n", err, n+rn+cn+pn)
+		return 1
+	}
+	gn, err := garden.ProposeGhosts(st, project, existing, res.GhostNotes)
+	if err != nil {
+		fmt.Fprintf(stdout, "%v (%d proposals filed before the failure; the report above is complete)\n", err, n+rn+cn+pn+gn)
+		return 1
+	}
 	outcomes := garden.OpenContradictionThreads(st, project, existing, contradictions, known)
 	var failed []garden.Relation
 	opened, kept := 0, 0
@@ -669,6 +727,9 @@ func proposeGarden(st gardenStore, project string, res garden.Result, stdout io.
 	fmt.Fprintln(stdout)
 	if opened+kept > 0 {
 		fmt.Fprintf(stdout, "%d contradictions opened as threads, %d already dealt with\n", opened, kept)
+	}
+	if pn+gn > 0 {
+		fmt.Fprintf(stdout, "%d criteria proposed as met, %d descriptions proposed, as staged notes from the gardener (see 'ctx review')\n", pn, gn)
 	}
 	return 0
 }

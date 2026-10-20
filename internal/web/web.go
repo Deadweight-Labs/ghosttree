@@ -165,6 +165,8 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.handle(mux, "POST /ui/review/bulk", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.reviewBulk))))))
 	a.handle(mux, "POST /ui/review/{id}/{verdict}", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.reviewDecide))))))
 	a.handle(mux, "POST /ui/review/{id}/merge", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.reviewMerge))))))
+	a.handle(mux, "POST /ui/review/{id}/criterion", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.reviewCriterion))))))
+	a.handle(mux, "POST /ui/review/{id}/describe", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.reviewDescribe))))))
 	a.handle(mux, "POST /ui/review/{id}/cover", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.reviewCover))))))
 	a.handle(mux, "GET /ui/sessions", a.requirePerson(http.HandlerFunc(a.sessionsPage)))
 	a.handle(mux, "GET /ui/sessions/{id}", a.requirePerson(http.HandlerFunc(a.sessionPage)))
@@ -458,6 +460,8 @@ var webRoutes = map[string]webClass{
 	"POST /ui/review/bulk":                  webAdmin,
 	"POST /ui/review/{id}/{verdict}":        webAdmin,
 	"POST /ui/review/{id}/merge":            webAdmin,
+	"POST /ui/review/{id}/criterion":        webAdmin,
+	"POST /ui/review/{id}/describe":         webAdmin,
 	"POST /ui/review/{id}/cover":            webAdmin,
 	"GET /ui/sessions":                      webProject,
 	"GET /ui/sessions/{id}":                 webProject,
