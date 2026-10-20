@@ -343,6 +343,50 @@ func cmdScore(args []string) error {
 			}
 			return out
 		}
+		// vecTop2 scores a session by the mean of its two best texts (one text:
+		// that text), a check on whether the maximum alone is what carries it.
+		vecTop2 := func(qi int) []int64 {
+			type two struct{ a, b float32 }
+			best := map[int64]*two{}
+			for i, sid := range ix.sid {
+				if !c.inC[sid] {
+					continue
+				}
+				s := sims[qi][i]
+				t := best[sid]
+				switch {
+				case t == nil:
+					best[sid] = &two{s, -2}
+				case s > t.a:
+					t.a, t.b = s, t.a
+				case s > t.b:
+					t.b = s
+				}
+			}
+			type ss struct {
+				sid int64
+				s   float32
+			}
+			all := make([]ss, 0, len(best))
+			for sid, t := range best {
+				sc := t.a
+				if t.b > -2 {
+					sc = (t.a + t.b) / 2
+				}
+				all = append(all, ss{sid, sc})
+			}
+			sort.Slice(all, func(a, b int) bool {
+				if all[a].s != all[b].s {
+					return all[a].s > all[b].s
+				}
+				return all[a].sid < all[b].sid
+			})
+			out := make([]int64, len(all))
+			for i, x := range all {
+				out[i] = x.sid
+			}
+			return out
+		}
 		for qi, q := range queries {
 			f := ftsBy[q.ID]
 			var fc []int64
@@ -358,6 +402,7 @@ func cmdScore(args []string) error {
 			put("fts_prod20", f.Prod20)
 			put("fts_corpus", fc)
 			put("vec", vall)
+			put("vec_top2", vecTop2(qi))
 			put("vec_prompt", vp)
 			put("vec_final", vf)
 			put("vec_floor", vfl)
@@ -406,6 +451,7 @@ func cmdScore(args []string) error {
 		"fts_prod20":     "FTS heute, nur die 20 Zeilen des Standards",
 		"fts_corpus":     "FTS, auf den Korpus beschränkt",
 		"vec":            "Vektor (max. Ähnlichkeit je Session)",
+		"vec_top2":       "Vektor, Mittel der zwei besten Texte je Session",
 		"vec_prompt":     "Vektor, nur Prompts",
 		"vec_final":      "Vektor, nur finale Antworten",
 		"vec_floor":      fmt.Sprintf("Vektor, Mindestähnlichkeit %.2f", *floor),
@@ -417,7 +463,7 @@ func cmdScore(args []string) error {
 		"hyb_w3":         "Hybrid RRF, Vektor Gewicht 3",
 		"hyb_prompt_cap": "Hybrid RRF, Produktionsregel, nur Prompts",
 	}
-	order := []string{"fts_full", "fts_prod20", "fts_corpus", "vec", "vec_prompt", "vec_final", "vec_floor",
+	order := []string{"fts_full", "fts_prod20", "fts_corpus", "vec", "vec_top2", "vec_prompt", "vec_final", "vec_floor",
 		"hyb_cap", "hyb_nocap", "hyb_floor_cap", "hyb_w0.5", "hyb_w2", "hyb_w3", "hyb_prompt_cap"}
 
 	// Main corpus: everything that is complete.
