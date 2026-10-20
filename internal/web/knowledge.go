@@ -404,12 +404,19 @@ func (a *app) knowledgePage(w http.ResponseWriter, r *http.Request) {
 	if stop {
 		return
 	}
+	readable := func(k store.Knowledge) bool {
+		return pa.CanSeeKnowledge(k) && (k.Status == "active" || k.Status == "stale") &&
+			(typ == "" || k.Type == typ) && (level == "" || k.Confidence == level)
+	}
 	var entries []store.Knowledge
 	var err error
 	if hidden {
 		// Wie ein unbekanntes Projekt: keine Abfrage, leere Liste.
 	} else if q != "" {
-		entries, err = a.store.SearchAllKnowledge(q, scope.Axes{Project: project}, a.overfetch(knowledgeShown), pa.Viewer())
+		entries, err = a.store.SearchKnowledgeWith(q, store.KnowledgeSearch{
+			Axes: scope.Axes{Project: project}, Operator: true,
+			Limit: a.overfetch(knowledgeShown), Viewer: pa.Viewer(), Keep: readable, Prefilter: pa.KnowledgePrefilter(),
+		})
 	} else {
 		entries, err = a.store.BrowseKnowledge(project, typ, level, a.overfetch(knowledgeShown), pa.Viewer())
 	}
@@ -417,10 +424,7 @@ func (a *app) knowledgePage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	entries = keep(entries, knowledgeShown, func(k store.Knowledge) bool {
-		return pa.CanSeeKnowledge(k) && (k.Status == "active" || k.Status == "stale") &&
-			(typ == "" || k.Type == typ) && (level == "" || k.Confidence == level)
-	})
+	entries = keep(entries, knowledgeShown, readable)
 	who := a.shellBaseFor(r).who
 	v := &knowledgeView{Q: q, Type: typ, Level: level, Project: project, Guest: who.kind == viewerGuest, Reviewer: who.reviewer}
 	for _, k := range entries {

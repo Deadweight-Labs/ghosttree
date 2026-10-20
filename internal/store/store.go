@@ -30,6 +30,8 @@ type Store struct {
 	closeErr      error
 	acfg          *accessConfig
 	accessOnce    sync.Once
+	esh           *embedShared
+	embedOnce     sync.Once
 }
 
 type OpenOptions struct {
@@ -526,6 +528,49 @@ CREATE TABLE IF NOT EXISTS ghost_reviews(
   person TEXT NOT NULL DEFAULT '',
   at TEXT NOT NULL,
   PRIMARY KEY(project, path));
+-- Vektoren für die hybride Suche (REQ-535). Eigene Tabelle und keine Spalte auf
+-- knowledge: eine neue Pflichtspalte entsteht auf einer bestehenden Datenbank
+-- nicht von selbst (#432), eine neue Tabelle bei jedem Open(). Ohne
+-- konfigurierten Embedding-Dienst bleibt sie leer und wird nie gelesen.
+--
+-- model und prefix_version gehören zu jedem Vektor, nicht zur Konfiguration: ein
+-- Wechsel des Modells oder der Textformate macht jeden vorhandenen Vektor
+-- unvergleichbar, und die Tabelle selbst sagt, was davon noch gilt. text_hash
+-- ist der SHA-256 des Dokumenttextes, der gesendet wurde; ein geänderter Titel
+-- oder Body ändert ihn. vec sind dim int8-Werte (symmetrisch quantisiert, vorher
+-- L2-normiert), scale der Faktor zurück. Kein Fremdschlüssel auf knowledge: die
+-- Zeile darf einen archivierten Eintrag überleben, gelesen wird sie nur über
+-- einen aktiven.
+--
+-- read_at ist der Zeitpunkt, zu dem der Job den Text aus dem Eintrag genommen
+-- hat (nicht der des Schreibens): ein Eintrag, der danach oder im selben
+-- Augenblick geändert wurde (knowledge.updated_at >= read_at), wird erneut
+-- angesehen, und nur der. So braucht der Job im Leerlauf nicht den Text aller
+-- Einträge, und eine Änderung während der Berechnung geht nicht verloren.
+CREATE TABLE IF NOT EXISTS knowledge_embeddings(
+  knowledge_id INTEGER PRIMARY KEY,
+  model TEXT NOT NULL, prefix_version TEXT NOT NULL, dim INTEGER NOT NULL,
+  text_hash TEXT NOT NULL, scale REAL NOT NULL, vec BLOB NOT NULL,
+  read_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+-- Ein Eintrag, den der Embedding-Dienst nicht annimmt: für eine Weile (der Dienst
+-- scheitert an genau diesem Text) oder für immer (er lehnt ihn ab). Gilt nur für
+-- diesen Text, dieses Modell und dieses Textformat; eine Änderung, ein neues
+-- Modell oder ein erfolgreicher Vektor heben es auf. Ohne das bliebe ein einziger
+-- Text, an dem der Dienst scheitert, in jedem Batch hängen und hielte den ganzen
+-- Nachlauf im Rückweichen fest.
+CREATE TABLE IF NOT EXISTS knowledge_embedding_failures(
+  knowledge_id INTEGER PRIMARY KEY,
+  model TEXT NOT NULL, prefix_version TEXT NOT NULL, text_hash TEXT NOT NULL,
+  attempts INTEGER NOT NULL, permanent INTEGER NOT NULL DEFAULT 0,
+  retry_at TEXT NOT NULL, error TEXT NOT NULL DEFAULT '', failed_at TEXT NOT NULL);
+-- Eine Zeile: wie es dem Nachrechnen zuletzt ging, damit "ctx embed status" auch
+-- bei gestopptem Server sagt, warum es hängt.
+CREATE TABLE IF NOT EXISTS knowledge_embedding_state(
+  id INTEGER PRIMARY KEY CHECK(id=1),
+  last_ok_at TEXT NOT NULL DEFAULT '',
+  last_error TEXT NOT NULL DEFAULT '', last_error_at TEXT NOT NULL DEFAULT '',
+  failures INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS knowledge_versions(
   id INTEGER PRIMARY KEY,
   knowledge_id INTEGER NOT NULL,

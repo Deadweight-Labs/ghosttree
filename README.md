@@ -55,7 +55,9 @@ happens.
 - Scoped context by repository, branch, and machine, with path-activated
   instructions.
 - Full-text search across knowledge, requests, file descriptions, and captured
-  sessions.
+  sessions. Knowledge search can optionally be hybrid: with a local embedding
+  server (`GHOSTTREE_EMBED_URL`, see `deploy/README.md`) it also finds entries by
+  meaning; without one nothing changes.
 - Incremental Claude Code and Codex transcript collection with local credential
   redaction and outage replay.
 - MCP tools for context lookup, corrections, request tracking, regression

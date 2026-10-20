@@ -676,19 +676,26 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 	pa.Filtered()
 	res := searchResult{Knowledge: []store.Knowledge{}, Sessions: []store.SessionHit{}, Requests: []requestdomain.SearchHit{}}
 	if kind == "knowledge" || kind == "all" {
+		// Suche und Bootstrap beliefern Agenten: zusätzlich zur Sichtbarkeit gilt
+		// die Auslieferungsregel (Autor ist im Projekt aktuell member).
+		readable := func(k store.Knowledge) bool { return pa.CanSeeKnowledge(k) && pa.CanDeliverKnowledge(k) }
 		// scope=union searches what the session would read, not an exact match.
-		search := a.st.SearchKnowledge
-		if r.URL.Query().Get("scope") == "union" {
-			search = a.st.SearchKnowledgeForContext
-		}
-		ks, err := search(q, filter, fetch, pa.Viewer())
+		// Die Leseregel geht mit in die Suche: die hybride Suche wendet sie vor der
+		// Rangfusion an, damit eine verborgene Zeile keine sichtbare verschiebt.
+		// Gezählt wird, was ausgeliefert wird, und nur das: der Überhang, den die
+		// Abfrage für die Filter holt, und was die Regel verwirft, ist nicht benutzt.
+		ks, err := a.st.SearchKnowledgeWith(q, store.KnowledgeSearch{
+			Axes: filter, Union: r.URL.Query().Get("scope") == "union",
+			Limit: fetch, Viewer: pa.Viewer(), Keep: readable, Prefilter: pa.KnowledgePrefilter(),
+			NoRecord: true,
+		})
 		if err != nil {
 			writeStoreError(w, http.StatusInternalServerError, err)
 			return
 		}
-		// Suche und Bootstrap beliefern Agenten: zusätzlich zur Sichtbarkeit gilt
-		// die Auslieferungsregel (Autor ist im Projekt aktuell member).
-		res.Knowledge = pa.KnowledgeViews(filterTo(ks, limit, func(k store.Knowledge) bool { return pa.CanSeeKnowledge(k) && pa.CanDeliverKnowledge(k) }))
+		delivered := filterTo(ks, limit, readable)
+		a.st.RecordKnowledgeSearchHits(delivered)
+		res.Knowledge = pa.KnowledgeViews(delivered)
 	}
 	if kind == "sessions" || kind == "all" {
 		hits, err := a.searchSessions(pa, q, filter, r.URL.Query().Get("exclude_session"), limit, fetch)

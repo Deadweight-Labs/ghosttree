@@ -53,6 +53,10 @@ type Knowledge struct {
 	// Explanation is the agent's "Kurz erklärt" text, sent when an entry is
 	// written. The server stores it beside the entry; reads never fill it.
 	Explanation string `json:"explanation,omitempty"`
+	// Match is set by a search and only when the embedding found the entry
+	// alone, as MatchSemantic. A hit of the full-text index leaves it empty,
+	// which is also how every other read leaves it.
+	Match string `json:"match,omitempty"`
 }
 
 // KnowledgeProvenance is the compact attribution shared by every read view.
@@ -616,14 +620,14 @@ func (s *Store) KnowledgeForProject(project string) ([]Knowledge, error) {
 	return s.scanKnowledge(rows)
 }
 
-// SearchKnowledge matches only the axes the caller set.
+// SearchKnowledge matches only the axes the caller set. With an embedding
+// server configured it is a hybrid search (see SearchKnowledgeWith); without
+// one it is the full-text search alone.
 func (s *Store) SearchKnowledge(q string, filter scope.Axes, limit int, viewer ...SessionViewer) ([]Knowledge, error) {
 	if s.reader != nil {
 		return s.reader.SearchKnowledge(q, filter, limit, viewer...)
 	}
-	where, args := filter.FilterWhere()
-	where, args = withGlobalScope(where, args, "k", viewer)
-	return s.searchKnowledge(q, where, args, limit)
+	return s.searchKnowledgeWith(q, KnowledgeSearch{Axes: filter, Limit: limit, Viewer: firstViewer(viewer)})
 }
 
 // SearchAllKnowledge is the operator view, including entries hidden from
@@ -632,20 +636,7 @@ func (s *Store) SearchAllKnowledge(q string, filter scope.Axes, limit int, viewe
 	if s.reader != nil {
 		return s.reader.SearchAllKnowledge(q, filter, limit, viewer...)
 	}
-	where, args := filter.FilterWhere()
-	where, args = withGlobalScope(where, args, "k", viewer)
-	if limit <= 0 {
-		limit = 50
-	}
-	args = append([]any{ftsQuery(q)}, args...)
-	args = append(args, limit)
-	rows, err := s.db.Query(`SELECT `+prefix(knowledgeCols, "k.")+`
-		FROM knowledge_fts f JOIN knowledge k ON k.id=f.rowid
-		WHERE knowledge_fts MATCH ? AND `+where+` ORDER BY f.rank LIMIT ?`, args...)
-	if err != nil {
-		return nil, err
-	}
-	return s.scanKnowledge(rows)
+	return s.searchKnowledgeWith(q, KnowledgeSearch{Axes: filter, Operator: true, Limit: limit, Viewer: firstViewer(viewer)})
 }
 
 // SearchKnowledgeForContext searches the same union a session reads: global,
@@ -655,31 +646,7 @@ func (s *Store) SearchKnowledgeForContext(q string, ax scope.Axes, limit int, vi
 	if s.reader != nil {
 		return s.reader.SearchKnowledgeForContext(q, ax, limit, viewer...)
 	}
-	where, args := ax.UnionWhere()
-	where, args = withGlobalScope(where, args, "k", viewer)
-	return s.searchKnowledge(q, where, args, limit)
-}
-
-func (s *Store) searchKnowledge(q, where string, args []any, limit int) ([]Knowledge, error) {
-	if limit <= 0 {
-		limit = 20
-	}
-	args = append([]any{ftsQuery(q)}, args...)
-	args = append(args, limit)
-	rows, err := s.db.Query(`SELECT `+prefix(knowledgeCols, "k.")+`
-		FROM knowledge_fts f JOIN knowledge k ON k.id = f.rowid
-		WHERE knowledge_fts MATCH ? AND `+where+`
-		  AND k.status = 'active' AND k.confidence != 'quarantined'
-		ORDER BY f.rank LIMIT ?`, args...)
-	if err != nil {
-		return nil, err
-	}
-	ks, err := s.scanKnowledge(rows)
-	if err != nil {
-		return nil, err
-	}
-	s.recordKnowledgeSearchHit(ks)
-	return ks, nil
+	return s.searchKnowledgeWith(q, KnowledgeSearch{Axes: ax, Union: true, Limit: limit, Viewer: firstViewer(viewer)})
 }
 
 // prefix qualifies a column list with a table alias.
