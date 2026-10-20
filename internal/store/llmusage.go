@@ -166,12 +166,14 @@ func (s *Store) SaveGardenCheck(project string, c GardenCheck) error {
 	return err
 }
 
-// GardenCheckSummary says how many entries the gardener has looked at, over all
-// projects, and when the oldest of those looks was.
+// GardenCheckSummary says how many knowledge entries the gardener has looked at,
+// over all projects, and when the oldest of those looks was. The looks of the
+// ledger and ghost jobs are kept under names with a "|" ("ledger|<project>") and
+// are not entries.
 func (s *Store) GardenCheckSummary() (n int, oldest string, err error) {
 	if s.reader != nil {
 		return s.reader.GardenCheckSummary()
 	}
-	err = s.db.QueryRow(`SELECT COUNT(*), COALESCE(MIN(checked_at), '') FROM garden_checks`).Scan(&n, &oldest)
+	err = s.db.QueryRow(`SELECT COUNT(*), COALESCE(MIN(checked_at), '') FROM garden_checks WHERE instr(project, '|') = 0`).Scan(&n, &oldest)
 	return n, oldest, err
 }

@@ -60,6 +60,31 @@ func TestBuildDocsPutsTheProvenanceInTheHeader(t *testing.T) {
 	}
 }
 
+// Eine Beschreibung, die der Gärtner vorgeschlagen und ein Mensch übernommen hat
+// (REQ-457), sagt das im Kopf: vorgeschlagen vom Gärtner, bestätigt von der
+// Person. Andere Beschreibungen bleiben, wie sie waren.
+func TestBuildDocsSaysWhenTheGardenerProposedADescriptionAndWhoConfirmedIt(t *testing.T) {
+	entries := []Entry{{Path: "a.go", Kind: "file"}, {Path: "b.go", Kind: "file"}, {Path: "c.go", Kind: "file"}}
+	described := map[string]store.GhostFile{
+		"a.go": {Path: "a.go", Kind: "file", Description: "text", DescribedAt: "2026-10-20T10:00:00Z", Person: "robin", Harness: "gardener"},
+		"b.go": {Path: "b.go", Kind: "file", Description: "text", DescribedAt: "2026-10-20T10:00:00Z", Person: "alice", Harness: "mcp"},
+		"c.go": {Path: "c.go", Kind: "file", Description: "text", DescribedAt: "2026-10-20T10:00:00Z", Harness: "gardener"},
+	}
+	byPath := map[string]string{}
+	for _, d := range BuildDocs(entries, described, nil, nil) {
+		byPath[d.Path] = d.Body
+	}
+	if !strings.Contains(byPath["a.go.md"], "beschrieben 2026-10-20 vom Gärtner vorgeschlagen, bestätigt von robin") {
+		t.Errorf("the origin of an adopted proposal is not in the header:\n%s", byPath["a.go.md"])
+	}
+	if !strings.Contains(byPath["b.go.md"], "beschrieben 2026-10-20 von alice") || strings.Contains(byPath["b.go.md"], "Gärtner") {
+		t.Errorf("an ordinary description changed its header:\n%s", byPath["b.go.md"])
+	}
+	if !strings.Contains(byPath["c.go.md"], "vom Gärtner vorgeschlagen, bestätigt\n") {
+		t.Errorf("a proposal without a person still says where it came from:\n%s", byPath["c.go.md"])
+	}
+}
+
 // Ohne diese Zeile ist ein `ls` im Ghost-Baum genau so aussagekraeftig wie ein
 // `ls` im echten Repo — naemlich gar nicht. Die Verzeichnisdatei ist der
 // einzige Ort, an dem eine Ebene auf einen Blick lesbar wird.

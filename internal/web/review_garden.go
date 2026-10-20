@@ -36,9 +36,18 @@ type gardenRow struct {
 	Lines []string
 	Refs  []gardenRef
 	Act   *gardenAct
+	// Texts are longer texts the card shows whole, each under its label (the old
+	// and the proposed description).
+	Texts []gardenText
 	// Warn says a note claims to be the gardener's and is not vouched for: no
 	// action is offered on it.
 	Warn string
+}
+
+// gardenText is a text a card shows under a label, in paragraphs.
+type gardenText struct {
+	Label string
+	Lines []string
 }
 
 // Selectable: the row has a tick box, because at least one bulk action is open.
@@ -148,6 +157,9 @@ func (a *app) gardenChecked(pa *store.ProjectAccess, project string) (int, time.
 // in another shape is shown whole.
 func parseGardenTitle(l lang, title string) (verdict, subject string) {
 	rest := strings.TrimSpace(strings.TrimPrefix(title, "[Gärtner]"))
+	if path, ok := strings.CutPrefix(rest, "Beschreibung? "); ok {
+		return l.msg("review.garden.ghost"), path
+	}
 	label, after, ok := strings.Cut(rest, " #")
 	if !ok {
 		return l.msg("review.garden.verdict"), rest
@@ -171,6 +183,8 @@ func parseGardenTitle(l lang, title string) (verdict, subject string) {
 		return l.msg("review.garden.cover_sketch"), subject
 	case "Nicht testbar?":
 		return l.msg("review.garden.cover_untestable"), subject
+	case "Erfüllt?":
+		return l.msg("review.garden.proof"), subject
 	}
 	return strings.TrimSpace(label), subject
 }

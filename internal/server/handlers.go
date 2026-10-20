@@ -1096,6 +1096,15 @@ func (a *api) putGhost(w http.ResponseWriter, r *http.Request) {
 	if denyAccess(w, a.access(r).Check(g.Project, store.ResGhost, store.ActCreate, store.Object{})) {
 		return
 	}
+	// "From the gardener, adopted by <person>" is written on a description only by
+	// the review page, when a person confirms a proposal of the gardener, with
+	// the text and the content hashes of the note the gardener's account wrote.
+	// Nobody may claim it through this call, the gardener's own account included:
+	// the gardener proposes, it does not describe.
+	if store.ReservedForGardener(store.Knowledge{Harness: g.Harness, SessionRef: g.SessionRef}) {
+		writeCoded(w, http.StatusForbidden, "gardener_reserved", `harness "gardener" and "gardener:" references on a description are set only when a person adopts a proposal of the gardener on the review page`)
+		return
+	}
 	g.Person = personOf(r)
 	id, err := a.st.PutGhostFile(g)
 	if err != nil {

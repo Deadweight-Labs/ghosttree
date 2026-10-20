@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +18,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/garden"
 	"github.com/Deadweight-Labs/ghosttree/internal/llm"
 	"github.com/Deadweight-Labs/ghosttree/internal/llmusage"
+	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
@@ -47,6 +49,41 @@ type gardenFakeStore struct {
 	posts     []store.CoordMessage
 	agents    []store.CoordAgent
 	threadErr error
+	// What jobs 4 and 1 read: the requests of the project, the stored
+	// descriptions and the paths reviewed and left empty. requestsErr makes
+	// reading the requests fail.
+	requests    []requestdomain.Detail
+	ghosts      []store.GhostFile
+	reviews     []store.GhostReview
+	requestsErr error
+}
+
+func (f *gardenFakeStore) SearchRequests(flt requestdomain.SearchFilter) (requestdomain.SearchPage, error) {
+	var page requestdomain.SearchPage
+	if f.requestsErr != nil {
+		return page, f.requestsErr
+	}
+	for _, d := range f.requests {
+		if flt.State == "" || d.Request.State == flt.State {
+			page.Results = append(page.Results, requestdomain.SearchHit{Request: d.Request})
+		}
+	}
+	return page, nil
+}
+
+func (f *gardenFakeStore) GetRequest(id int64) (requestdomain.Detail, error) {
+	for _, d := range f.requests {
+		if d.Request.ID == id {
+			return d, nil
+		}
+	}
+	return requestdomain.Detail{}, errors.New("no such request")
+}
+
+func (f *gardenFakeStore) GhostTree(string, string) ([]store.GhostFile, error) { return f.ghosts, nil }
+
+func (f *gardenFakeStore) GhostReviews(string, string) ([]store.GhostReview, error) {
+	return f.reviews, nil
 }
 
 func (f *gardenFakeStore) ProjectKnowledge(string, bool) ([]store.Knowledge, error) {

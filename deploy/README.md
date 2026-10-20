@@ -508,6 +508,15 @@ calls to the server besides reading, and the account of its client config
   exists, a sketch of a missing test, or "not testable"). The answers are checked
   against the checkout first: a named test has to be defined in the file the
   session read.
+- **Staged notes for the ledger** (job 4): "criterion `K` of request `#N` is met",
+  with a proof: a commit (it exists, is in the history of `HEAD` and a git tool
+  printed it to the session; squash commits carry the pull request number
+  `(#149)`), a test (`path/to/x_test.go:TestName`, defined in a file the session
+  read) or a file. A proposal without a valid proof is not made.
+- **Staged notes for descriptions** (job 1): a proposed ghost description for a
+  file whose description is stale or missing, with the content hashes of the file
+  as the session read it (a file that changed meanwhile is dropped) and the hash
+  of the description it would replace.
 - **One thread per contradiction**, linked to every entry it is about, titled as a
   question, opened by the gardener's account with the reason and the verbatim
   quotes as its first post. For the same entries there is never a second open
@@ -524,8 +533,59 @@ step needs elsewhere: **Merge** on a duplicate note supersedes the older entry b
 the newer one (right to change every entry involved; the reason is "Gärtner-Vorschlag"
 with the number of the note and the name of the person), **Record as covered** and
 **Record as not testable** on a regression note set the regression verdict of the
-pitfall (right to verify). The gardener has no call for any of this, and its own
-account, a plain member, is refused by the server if it tried.
+pitfall (right to verify). **Record criterion as met** on a ledger note records
+the proof of the note as the evidence of the criterion, with the call and the
+right of `request_record_progress criterion_met` (work on the request), and the
+right to verify the note; the evidence ends with "Gärtner-Vorschlag #note,
+bestätigt von person". It never closes a request. **Adopt description** on a
+description note writes the text with the call of `context_describe_file`
+(right to describe in the project, and to verify the note), after showing the
+old and the new description side by side; the ghost then carries harness
+`gardener`, the person who confirmed it, and the tree says "vom Gärtner
+vorgeschlagen, bestätigt von person". It is refused (409) when another
+description stands at the path than the one the note was written against.
+The gardener has no call for any of this. The server refuses its own account
+the steps that need more than membership (merge, verdict, thread state). Recording
+a criterion and writing a description are plain member rights, though, so for
+these two the guarantee is the program's own: `ctx garden` has no such call, a test
+records every call a run makes and allows none, and the server refuses
+the mark "gardener" on a description to everyone, the gardener's account included
+(`POST /api/ghosts` answers 403 `gardener_reserved`): only the review page sets it.
+
+What the new buttons act on is the server's own data, never a value the browser
+sends: the request, the criterion or the path come from the reference of a note the
+gardener's account wrote and nobody has edited, the title has to name the same,
+the proof and the text are the ones in the note (held to a strict shape, since the
+server has no checkout), and the form carries nothing but its token.
+
+### Ledger, descriptions and idle requests
+
+Two further jobs run in sessions of their own, before the knowledge sessions, and
+share the budget of `--max-usd` with them; a failure of theirs never stops the
+knowledge job (after two failed extra sessions the other extra sessions are
+skipped).
+
+- `--requests N` (default 8, 0 = off, at most 40): the open requests that are due,
+  oldest first, one session for up to eight of them. A request is looked at again
+  when its open criteria changed, or when the checkout moved and the last look was
+  more than `--min-age` days ago.
+- `--ghosts N` (default 8, 0 = off, at most 40): files whose description is stale,
+  then files with none, then files that changed a little. Lock files, test data,
+  generated and binary files, licences and files over 150 KB are left out, as are
+  files somebody reviewed and left empty. A file is asked again only when it or
+  its description changed.
+- `--idle-days D` (default 30, 0 = off): the section "Liegengeblieben" of the
+  report lists open requests without visible activity for D days. It is built
+  from data alone, in every mode, also with `--dry-run`. What the gardener's account
+  may not see (work in the private session of another account) does not count as
+  activity, so the list is a hint.
+
+Both jobs remember what they looked at in the same memory as the knowledge job
+(`--state-file` or `--db`) under names of their own (`ledger|<project>`,
+`ghosts|<project>`), so the request numbers never meet the entry numbers. The
+gardener's account needs the right to read requests and ghosts of the project, which
+a member has. A dry run lists the extra sessions with the tokens of their prompts.
+Their instruction is separate, so the knowledge sessions do not grow by a byte.
 
 **Set the gardener's account on the server.** Only one account may write entries
 with harness `gardener` or a session reference starting with `gardener:`, and the

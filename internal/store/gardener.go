@@ -1,9 +1,14 @@
 package store
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"path"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // The gardener (REQ-457) writes notes that a person confirms with one click, and
@@ -127,4 +132,72 @@ func (s *Store) WrittenByGardener(k Knowledge) bool {
 	}
 	want := s.GardenerAccountID()
 	return want != 0 && k.ID != 0 && s.knowledgeAuthorID(k.ID) == want
+}
+
+// GhostDescriptionHash identifies the wording of a description: the first twelve
+// hex digits of the SHA-256 of its trimmed text. A proposal of the gardener
+// records the hash of the description it would replace, and the review page
+// refuses the proposal once the description at the path is another one.
+func GhostDescriptionHash(description string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(description)))
+	return hex.EncodeToString(sum[:6])
+}
+
+// The bounds of a description the gardener proposes. The descriptions of this
+// project are 400 to 3,000 characters; a text under the lower bound says nothing
+// and one over the upper bound is a document, not a description.
+const (
+	GhostDescriptionMin = 40
+	GhostDescriptionMax = 3500
+)
+
+// CleanGhostDescription normalizes the text of a proposed description (line
+// breaks, surrounding space) and says why it is unusable, if it is: empty, too
+// short, too long, or holding control characters or invisible formatting (a
+// right-to-left override would let a card show other text than the ghost says).
+// The gardener checks a text with it before it files the note, and the review
+// page again before it writes the description.
+func CleanGhostDescription(s string) (string, string) {
+	s = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(s, "\r\n", "\n"), "\r", "\n"))
+	if s == "" {
+		return "", "leerer Text"
+	}
+	n := utf8.RuneCountInString(s)
+	if n < GhostDescriptionMin {
+		return "", fmt.Sprintf("Text zu kurz (%d Zeichen, mindestens %d)", n, GhostDescriptionMin)
+	}
+	if n > GhostDescriptionMax {
+		return "", fmt.Sprintf("Text zu lang (%d Zeichen, höchstens %d)", n, GhostDescriptionMax)
+	}
+	if !utf8.ValidString(s) {
+		return "", "Text ist kein gültiges UTF-8"
+	}
+	for _, r := range s {
+		if r == unicode.ReplacementChar || (unicode.IsControl(r) && r != '\n' && r != '\t') || (unicode.Is(unicode.Cf, r) && r != '\u200d') {
+			return "", "Text enthält Steuerzeichen"
+		}
+	}
+	return s, ""
+}
+
+// ValidGhostPath says whether a path may stand in the reference and the title
+// of a gardener note about a description: a clean relative path of the
+// repository, valid UTF-8, without control characters, backslashes, "..", ".git"
+// or ".ghosttree" segments, and at most 400 bytes. The same test is made when
+// the note is filed and when it is acted on.
+func ValidGhostPath(p string) bool {
+	if p == "" || len(p) > 400 || !utf8.ValidString(p) || strings.HasPrefix(p, "/") || strings.ContainsAny(p, "\\\x7f") || path.Clean(p) != p || p == "." {
+		return false
+	}
+	for _, r := range p {
+		if r < 0x20 || unicode.Is(unicode.Cf, r) {
+			return false
+		}
+	}
+	for i, seg := range strings.Split(p, "/") {
+		if seg == ".." || seg == ".git" || (i == 0 && seg == ".ghosttree") || strings.TrimSpace(seg) != seg {
+			return false
+		}
+	}
+	return true
 }

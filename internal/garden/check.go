@@ -115,6 +115,19 @@ type Result struct {
 	// Covers are the answers to the regression question (job 5).
 	Covers   []Cover
 	Deferred int
+	// Job 4, the ledger: the criteria the checkout shows as fulfilled, how many
+	// requests the sessions went through, what the rotation left out, and the
+	// open requests nobody has touched for IdleDays days (read from data alone).
+	Proofs         []Proof
+	LedgerChecked  int
+	LedgerRotation Rotation
+	Idle           []IdleRequest
+	IdleDays       int
+	// Job 1, the ghosts: the descriptions proposed, the paths whose description the
+	// session found right as it is, and what the selection left out.
+	GhostNotes    []GhostProposalData
+	GhostKept     []GhostPath
+	GhostRotation GhostRotation
 }
 
 const systemPrompt = `Du prüfst einen Wissens-Eintrag (Pitfall oder Decision) eines Softwareprojekts gegen den aktuellen Code. Du entscheidest nichts, du machst einen Vorschlag, den ein Mensch prüft.
