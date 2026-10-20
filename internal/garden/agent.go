@@ -248,6 +248,13 @@ func PackagePrompt(p Package, project string, maxTurns int) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Projekt: %s\nPaket: %s (%d Einträge)\n\n", project, p.Name, len(p.Entries))
 	fmt.Fprintf(&b, "Du hast höchstens %d Turns. Beginne spätestens ab Turn %d mit der Antwort; ein Lauf ohne JSON am Ende ist verloren. Viele Einträge lassen sich mit einer Suche entscheiden, gehe nicht jede Datei einzeln durch.\n\n", maxTurns, maxTurns-8)
+	asked := map[int64]bool{}
+	for _, e := range coverAsked(p) {
+		asked[e.ID] = true
+	}
+	if len(asked) > 0 {
+		b.WriteString(regressionQuestion)
+	}
 	for _, e := range p.Entries {
 		body := strings.TrimSpace(e.Body)
 		if len(body) > maxBodyLen {
@@ -257,11 +264,27 @@ func PackagePrompt(p Package, project string, maxTurns int) string {
 			}
 			body = cut + "\n[gekürzt]"
 		}
-		fmt.Fprintf(&b, "=== EINTRAG #%d (%s), beobachtet %s ===\nTitel: %s\n\n%s\n\n", e.ID, e.Type, e.Since(), e.Title, body)
+		tag := ""
+		if asked[e.ID] {
+			tag = " [Regressionsfrage]"
+		}
+		fmt.Fprintf(&b, "=== EINTRAG #%d (%s)%s, beobachtet %s ===\nTitel: %s\n\n%s\n\n", e.ID, e.Type, tag, e.Since(), e.Title, body)
 	}
 	b.WriteString("Prüfe diese Einträge jetzt und antworte mit dem JSON-Objekt.")
 	return b.String()
 }
+
+// regressionQuestion is the second question of a package that has open pitfalls
+// (job 5). It sits in the task and not in the standing instruction, so a package
+// without such a pitfall does not pay for it, and the schema of the answer only
+// grows by an optional field.
+const regressionQuestion = `Regressionsfrage: Bei den Einträgen mit [Regressionsfrage] hat noch niemand beurteilt, welcher Test die Wiederkehr des Fehlers bemerken würde. Beantworte sie zusätzlich im Feld "regression", ein Objekt je Eintrag, oder lass den Eintrag aus, wenn du keine klare Antwort hast:
+{"id":123,"kind":"existing","file":"pfad/x_test.go","test":"TestName","reason":"warum er den Fehler fängt"} (ein Test aus dem Checkout, dessen Datei du gelesen oder durchsucht hast)
+{"id":123,"kind":"sketch","file":"pfad/x_test.go","test":"TestName","steps":"3 bis 6 Zeilen: was der Test aufsetzt und prüft"} (es gibt keinen, und es ließe sich einer schreiben)
+{"id":123,"kind":"untestable","reason":"Grund"} (nichts zu testen, etwa eine Eigenschaft eines Werkzeugs)
+Eine Suche je Pitfall genügt. Der Testname ist der Name der Funktion (Go: func TestName); ctx prüft, dass sie in der Datei steht.
+
+`
 
 // The two spots of agentSystemTemplate that depend on whether the session has
 // the ghosttree tools. Without them the prompt must not promise a tool the
@@ -307,6 +330,8 @@ type agentRelation struct {
 type agentAnswer struct {
 	Verdicts  []agentVerdict  `json:"verdicts"`
 	Relations []agentRelation `json:"relations"`
+	// Regression answers the regression question; absent when none was asked.
+	Regression []agentCover `json:"regression"`
 }
 
 // extractAnswer finds the JSON object a session ended with. The model may wrap
@@ -379,6 +404,7 @@ func (r *Repo) lineExists(file, num string) bool {
 type Validated struct {
 	Verdicts  []Verdict
 	Relations []Relation
+	Covers    []Cover
 	Rejected  []string
 }
 
@@ -461,6 +487,29 @@ func validateAnswer(repo *Repo, text string, pkg Package, known map[int64]Entry,
 			continue
 		}
 		out.Relations = append(out.Relations, rel)
+	}
+	asked := map[int64]Entry{}
+	for _, e := range coverAsked(pkg) {
+		asked[e.ID] = e
+	}
+	covered := map[int64]bool{}
+	for _, a := range ans.Regression {
+		e, ok := asked[a.ID]
+		switch {
+		case !ok:
+			reject("Absicherung #%d: nicht erfragt", a.ID)
+			continue
+		case covered[a.ID]:
+			reject("Absicherung #%d: doppelt", a.ID)
+			continue
+		}
+		c, why := validateCover(repo, a, e, looked)
+		if why != "" {
+			reject("Absicherung #%d (%s): %s", a.ID, a.Kind, why)
+			continue
+		}
+		covered[a.ID] = true
+		out.Covers = append(out.Covers, c)
 	}
 	return out, nil
 }
@@ -709,6 +758,7 @@ func CheckAgent(ctx context.Context, repo *Repo, entries []Entry, opt AgentOptio
 		}
 		res.Verdicts = append(res.Verdicts, val.Verdicts...)
 		res.Relations = append(res.Relations, val.Relations...)
+		res.Covers = append(res.Covers, val.Covers...)
 	}
 	return res
 }

@@ -256,6 +256,7 @@ var levelKeys = map[string]string{
 var doneKeys = map[string]string{
 	"approved": "knowledge.done.approved", "rejected": "knowledge.done.rejected",
 	"released": "knowledge.done.released", "retired": "knowledge.done.retired", "restored": "knowledge.done.restored", "saved": "knowledge.done.saved",
+	"merged": "knowledge.done.merged", "covered": "knowledge.done.covered", "untestable": "knowledge.done.untestable",
 }
 
 func typeLabel(l lang, typ string) string {

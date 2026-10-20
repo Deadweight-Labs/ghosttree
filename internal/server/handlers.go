@@ -247,6 +247,9 @@ func (a *api) createKnowledge(w http.ResponseWriter, r *http.Request) {
 	if k.Scope.IsGlobal() && req.AutoScope != nil {
 		k.Scope = scope.DefaultAxes(k.Type, req.AutoScope.Context)
 	}
+	if !a.gateGardener(w, r, k) {
+		return
+	}
 	if !a.gateMachineNote(w, r, k.Scope.Machine) || !a.gateProject(w, r, k.Scope.Project) {
 		return
 	}
@@ -295,6 +298,25 @@ func (a *api) createKnowledge(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, a.access(r).KnowledgeView(saved))
 }
 
+// gateGardener keeps the gardener's marks the gardener's (REQ-457). An entry with
+// harness "gardener" or a "gardener:" session reference is what the review page
+// offers one-click actions on (merge duplicates, record a regression verdict),
+// and it takes its target from that reference; so only the account the server
+// names as the gardener's (an account number, set with `ctx account set-gardener`)
+// may write one. Everyone else, and everyone when no account is set, is refused
+// before anything is written, whatever else the entry says.
+func (a *api) gateGardener(w http.ResponseWriter, r *http.Request, k store.Knowledge) bool {
+	if !store.ReservedForGardener(k) || a.st.IsGardenerPrincipal(principalOf(r)) {
+		return true
+	}
+	msg := `harness "gardener" and "gardener:" references are reserved for the account the gardener runs as`
+	if a.st.GardenerAccountID() == 0 {
+		msg += " (none is set: ctx account set-gardener <name> --db <database>)"
+	}
+	writeCoded(w, http.StatusForbidden, "gardener_reserved", msg)
+	return false
+}
+
 func (a *api) listKnowledge(w http.ResponseWriter, r *http.Request) {
 	var ks []store.Knowledge
 	var err error
@@ -324,6 +346,9 @@ func (a *api) insertMigratedKnowledge(w http.ResponseWriter, r *http.Request) {
 	var in store.MigratedEntry
 	if err := readJSON(r, &in); err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)
+		return
+	}
+	if !a.gateGardener(w, r, in.Knowledge) {
 		return
 	}
 	in.Knowledge.Person = personOf(r)

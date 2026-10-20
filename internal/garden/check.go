@@ -112,7 +112,9 @@ type Result struct {
 	Sessions  []SessionStat
 	Packages  []Package
 	Relations []Relation
-	Deferred  int
+	// Covers are the answers to the regression question (job 5).
+	Covers   []Cover
+	Deferred int
 }
 
 const systemPrompt = `Du prüfst einen Wissens-Eintrag (Pitfall oder Decision) eines Softwareprojekts gegen den aktuellen Code. Du entscheidest nichts, du machst einen Vorschlag, den ein Mensch prüft.

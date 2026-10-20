@@ -17,7 +17,17 @@ const accountUsage = `usage: ctx account add <name> [--email E] [--admin] --db <
        ctx account token create <name> [--label L] [--machine M] [--expires-in 720h] --db <path>
        ctx account token revoke <id> --db <path>
        ctx account claim-code <name> --db <path>
-       ctx account login-link <name> [--url https://host] --db <path>`
+       ctx account login-link <name> [--url https://host] --db <path>
+       ctx account set-gardener <name|person:N|N> --db <path>
+       ctx account set-gardener --clear --db <path>
+
+set-gardener makes one account the gardener's, once and for good: the number of
+the account is stored (name, or person:N, or the bare number is looked up once),
+not its name, so renaming that account or giving its old name to another does not
+change who the gardener is. Only that account may write entries with harness
+"gardener" or a "gardener:" reference, and the review page acts only on notes it
+wrote. The running server picks it up at once. Without one nobody may, and the
+gardener's proposals are refused. Give it the role member in the project, not more.`
 
 // cmdAccount arbeitet wie person direkt auf der Datenbank: Konten und Tokens
 // auszustellen braucht Zugriff auf den Server-Host, nicht ein Token.
@@ -37,6 +47,8 @@ func cmdAccount(args []string, stdout io.Writer) int {
 		return cmdAccountClaimCode(args[1:], stdout)
 	case "login-link":
 		return cmdAccountLoginLink(args[1:], stdout)
+	case "set-gardener":
+		return cmdAccountSetGardener(args[1:], stdout)
 	case "token":
 		if len(args) > 1 && args[1] == "create" {
 			return cmdAccountTokenCreate(args[2:], stdout)
@@ -119,10 +131,84 @@ func cmdAccountList(args []string, stdout io.Writer) int {
 		fmt.Fprintf(stdout, "list accounts: %v\n", err)
 		return 1
 	}
+	gardener := st.GardenerAccountID()
 	for _, a := range accounts {
-		fmt.Fprintf(stdout, "%s\t%s\tstate=%s admin=%t email=%s\n", a.ID, a.Name, a.State, a.Admin, a.Email)
+		fmt.Fprintf(stdout, "%s\t%s\tstate=%s admin=%t email=%s", a.ID, a.Name, a.State, a.Admin, a.Email)
+		if id, ok := store.AccountNumericID(a.ID); ok && id == gardener {
+			fmt.Fprint(stdout, " gardener=true")
+		}
+		fmt.Fprintln(stdout)
 	}
 	return 0
+}
+
+// cmdAccountSetGardener names the account the gardener runs as. Like the other
+// account commands it works on the database itself: whoever has the host decides
+// who the gardener is, and nothing a user can do over HTTP changes it.
+func cmdAccountSetGardener(args []string, stdout io.Writer) int {
+	var unset *bool
+	_, who, db, ok := accountFlags("account set-gardener", args, stdout, func(fs *flag.FlagSet) {
+		unset = fs.Bool("clear", false, "take the role away: nobody is the gardener afterwards")
+	})
+	if !ok || (who == "") == !*unset {
+		fmt.Fprintln(stdout, "usage: ctx account set-gardener <name|person:N|N> --db <path>\n       ctx account set-gardener --clear --db <path>")
+		return 2
+	}
+	st, ok := openAccountStore(*db, stdout)
+	if !ok {
+		return 1
+	}
+	defer st.Close()
+	before, wasSet := st.GardenerAccount()
+	if *unset {
+		if err := st.ClearGardenerAccount(); err != nil {
+			fmt.Fprintf(stdout, "clear gardener account: %v\n", err)
+			return 1
+		}
+		fmt.Fprintln(stdout, "no gardener account is set: nobody may write gardener entries, and the gardener's proposals are refused")
+		return 0
+	}
+	acct, err := resolveAccountRef(st, who)
+	if err != nil {
+		fmt.Fprintf(stdout, "%v\n", err)
+		return 1
+	}
+	id, _ := store.AccountNumericID(acct.ID)
+	if err := st.SetGardenerAccount(id); err != nil {
+		fmt.Fprintf(stdout, "set gardener account: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "the gardener's account is %s (%s); the number is what counts, a rename changes nothing. The server picks it up at once.\n", acct.ID, acct.Name)
+	if acct.Admin {
+		fmt.Fprintln(stdout, "note: this account is an administrator; the gardener needs the role member in the project and no more")
+	}
+	if wasSet && before.ID != acct.ID {
+		fmt.Fprintf(stdout, "it was %s (%s); that account may not write gardener entries any more\n", before.ID, before.Name)
+	}
+	return 0
+}
+
+// resolveAccountRef finds the account a person named on the command line: a
+// number ("7" or "person:7") by its number, anything else by its name. The
+// number is what the caller stores.
+func resolveAccountRef(st *store.Store, ref string) (store.Account, error) {
+	ref = strings.TrimSpace(ref)
+	byNumber := ref
+	if _, err := strconv.ParseInt(ref, 10, 64); err == nil {
+		byNumber = "person:" + ref
+	}
+	if strings.HasPrefix(byNumber, "person:") {
+		a, err := st.AccountByPrincipalID(byNumber)
+		if err != nil {
+			return store.Account{}, fmt.Errorf("no account %s", byNumber)
+		}
+		return a, nil
+	}
+	a, err := st.AccountByName(store.NormalizeAccountName(ref))
+	if err != nil {
+		return store.Account{}, fmt.Errorf("no account named %q (ctx account list shows them)", ref)
+	}
+	return a, nil
 }
 
 func cmdAccountTokens(args []string, stdout io.Writer) int {

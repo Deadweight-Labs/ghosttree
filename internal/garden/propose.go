@@ -99,28 +99,41 @@ func RelationRef(r Relation) string {
 	return fmt.Sprintf("gardener:relation:%s:%s", r.Kind, strings.Join(ids, "-"))
 }
 
-// RelationProposal builds the staged note for a duplicate or a contradiction.
-// titles maps entry id to title.
-func RelationProposal(project string, r Relation, titles map[int64]string) store.Knowledge {
-	label := "Duplikat?"
-	if r.Kind == Contradiction {
-		label = "Widerspruch?"
+// RelationLabel is the question a relation asks, as the title and the card say it.
+func RelationLabel(kind string) string {
+	if kind == Contradiction {
+		return "Widerspruch?"
 	}
+	return "Duplikat?"
+}
+
+// relationText is what a relation says: the entries with the verbatim quote of
+// each, the reason and the evidence. It is the body of the staged note and the
+// first post of a contradiction thread.
+func relationText(r Relation, titles map[int64]string) string {
 	var b strings.Builder
-	var ids []string
-	fmt.Fprintf(&b, "Vorschlag des Gärtners (Herkunft gardener, nicht bestätigt): %s\n\n", label)
+	fmt.Fprintf(&b, "Vorschlag des Gärtners (Herkunft gardener, nicht bestätigt): %s\n\n", RelationLabel(r.Kind))
 	for _, id := range r.IDs {
-		ids = append(ids, fmt.Sprintf("#%d", id))
 		fmt.Fprintf(&b, "- #%d: %s\n  Zitat: \"%s\"\n", id, titles[id], r.Quotes[id])
 	}
 	fmt.Fprintf(&b, "\nBegründung: %s\n", r.Reason)
 	if len(r.Evidence) > 0 {
 		fmt.Fprintf(&b, "\nBelege: %s\n", strings.Join(r.Evidence, ", "))
 	}
+	return b.String()
+}
+
+// RelationProposal builds the staged note for a duplicate or a contradiction.
+// titles maps entry id to title.
+func RelationProposal(project string, r Relation, titles map[int64]string) store.Knowledge {
+	var ids []string
+	for _, id := range r.IDs {
+		ids = append(ids, fmt.Sprintf("#%d", id))
+	}
 	return store.Knowledge{
 		Type:       "note",
-		Title:      fmt.Sprintf("%s%s %s: %s", titlePrefix, label, strings.Join(ids, " und "), titles[r.IDs[0]]),
-		Body:       b.String(),
+		Title:      fmt.Sprintf("%s%s %s: %s", titlePrefix, RelationLabel(r.Kind), strings.Join(ids, " und "), titles[r.IDs[0]]),
+		Body:       relationText(r, titles),
 		Scope:      scope.Axes{Project: project},
 		Confidence: proposalState,
 		Status:     "active",
@@ -128,6 +141,19 @@ func RelationProposal(project string, r Relation, titles map[int64]string) store
 		Harness:    Harness,
 		SessionRef: RelationRef(r),
 	}
+}
+
+// RelationProposed says whether a note about this very relation exists, in any
+// state: a person has seen it, and asking again would make their answer count for
+// nothing.
+func RelationProposed(existing []store.Knowledge, r Relation) bool {
+	ref := RelationRef(r)
+	for _, k := range existing {
+		if k.Harness == Harness && k.SessionRef == ref {
+			return true
+		}
+	}
+	return false
 }
 
 // ProposeRelations files one staged note per relation not already proposed

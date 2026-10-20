@@ -303,6 +303,11 @@ func runServer(ctx context.Context, st *store.Store, cfg serveConfig, stdout, st
 		}
 	}
 	slog.New(slog.NewJSONHandler(stderr, nil)).Info("writer_config", "max_operations", cfg.Writer.MaxOperations, "max_bytes", cfg.Writer.MaxBytes, "max_batch", cfg.Writer.MaxBatch, "read_connections", cfg.Writer.ReadConnections)
+	if a, ok := st.GardenerAccount(); ok {
+		slog.New(slog.NewJSONHandler(stderr, nil)).Info("gardener_account", "set", true, "account", a.ID, "name", a.Name)
+	} else {
+		slog.New(slog.NewJSONHandler(stderr, nil)).Info("gardener_account", "set", false, "note", "nobody may write gardener entries; set the account with: ctx account set-gardener <name> --db <database>")
+	}
 	// The session search index of chunks written before it existed is caught up
 	// in the background, in small resumable steps; serving does not wait for it.
 	indexCtx, stopIndex := context.WithCancel(ctx)
