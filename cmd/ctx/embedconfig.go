@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/embed"
@@ -21,6 +23,7 @@ import (
 // full-text search it always was.
 const (
 	envEmbedURL           = "GHOSTTREE_EMBED_URL"
+	envEmbedQueryURL      = "GHOSTTREE_EMBED_QUERY_URL"
 	envEmbedModel         = "GHOSTTREE_EMBED_MODEL"
 	envEmbedMinSimilarity = "GHOSTTREE_EMBED_MIN_SIMILARITY"
 	envEmbedQueryTimeout  = "GHOSTTREE_EMBED_QUERY_TIMEOUT"
@@ -32,8 +35,14 @@ const (
 
 // embedSettings is the validated configuration.
 type embedSettings struct {
-	// URL is empty when embeddings are off.
-	URL          string
+	// URL is empty when embeddings are off. It is the server of the background
+	// job, which makes the vectors, and of the search queries unless QueryURL says
+	// otherwise.
+	URL string
+	// QueryURL is a second server that embeds only search queries, so that a query
+	// does not wait behind a batch of documents. It is empty when the queries go to
+	// URL, which is also the case when it names the same server.
+	QueryURL     string
 	Model        string
 	QueryTimeout time.Duration
 	// MinSimilarity is the cosine an entry needs to enter the embedding ranking.
@@ -43,23 +52,34 @@ type embedSettings struct {
 
 func (e embedSettings) enabled() bool { return e.URL != "" }
 
-// client builds the client for the configured server.
+// separateQuery says whether search queries go to another server than the
+// documents of the background job.
+func (e embedSettings) separateQuery() bool { return e.QueryURL != "" }
+
+// client builds the client for the server of the background job.
 func (e embedSettings) client() (*embed.Client, error) {
 	return embed.New(embed.Config{URL: e.URL, Model: e.Model})
 }
 
-// embedFlags holds the raw flag values; resolve parses and checks them.
-type embedFlags struct {
-	url, model, minSimilarity, queryTimeout, batch, pause, idle, maxBackoff *string
-	job                                                                     bool
+// queryClient builds the client for the server that embeds search queries; only
+// meaningful with separateQuery.
+func (e embedSettings) queryClient() (*embed.Client, error) {
+	return embed.New(embed.Config{URL: e.QueryURL, Model: e.Model})
 }
 
-// addEmbedFlags registers --embed-url and --embed-model, and with job also the
-// settings of the background job and of the query timeout, which only the
-// server needs.
+// embedFlags holds the raw flag values; resolve parses and checks them.
+type embedFlags struct {
+	url, queryURL, model, minSimilarity, queryTimeout, batch, pause, idle, maxBackoff *string
+	job                                                                               bool
+}
+
+// addEmbedFlags registers --embed-url, --embed-query-url and --embed-model, and
+// with job also the settings of the background job and of the query timeout,
+// which only the server needs.
 func addEmbedFlags(fs *flag.FlagSet, job bool) *embedFlags {
 	f := &embedFlags{job: job}
 	f.url = fs.String("embed-url", os.Getenv(envEmbedURL), "base URL of the embedding server, e.g. http://127.0.0.1:8475; empty turns hybrid search off (env "+envEmbedURL+")")
+	f.queryURL = fs.String("embed-query-url", os.Getenv(envEmbedQueryURL), "base URL of a second embedding server that embeds only search queries, so that a search does not wait behind the background job; it must serve the same model, and --embed-url is still needed for the job; empty uses --embed-url (env "+envEmbedQueryURL+")")
 	f.model = fs.String("embed-model", os.Getenv(envEmbedModel), "model id sent to the embedding server and stored with every vector (default "+embed.DefaultModel+", env "+envEmbedModel+")")
 	f.minSimilarity = fs.String("embed-min-similarity", os.Getenv(envEmbedMinSimilarity), "cosine an entry needs to enter the embedding ranking: 0 for no minimum up to below 1 (default "+strconv.FormatFloat(embed.DefaultMinSimilarity, 'f', -1, 64)+", measured for the default model; env "+envEmbedMinSimilarity+")")
 	if job {
@@ -84,6 +104,18 @@ func (f *embedFlags) resolve() (embedSettings, error) {
 			return s, fmt.Errorf("--embed-url: %w", err)
 		}
 		s.URL = base
+	}
+	if raw := strings.TrimSpace(*f.queryURL); raw != "" {
+		base, err := embed.ParseURL(raw)
+		if err != nil {
+			return s, fmt.Errorf("--embed-query-url: %w", err)
+		}
+		if s.URL == "" {
+			return s, errors.New("--embed-query-url needs --embed-url: the server of --embed-url makes the vectors that a query is compared with, and without them there is nothing to search")
+		}
+		if base != s.URL {
+			s.QueryURL = base
+		}
 	}
 	s.MinSimilarity = embed.DefaultMinSimilarity
 	if v := strings.TrimSpace(*f.minSimilarity); v != "" {
@@ -136,6 +168,10 @@ func (f *embedFlags) resolve() (embedSettings, error) {
 // startEmbedding turns hybrid search on and starts the background job. It
 // returns at once; the returned function waits for the job to have stopped,
 // which it does when ctx ends.
+//
+// With a separate query server the queries are embedded there, and a check in
+// the background keeps verifying that it serves the same model as the job server;
+// as long as it finds a difference, searches answer from full text.
 func startEmbedding(ctx context.Context, st *store.Store, cfg embedSettings, logger *slog.Logger) func() {
 	if !cfg.enabled() {
 		return func() {}
@@ -145,22 +181,67 @@ func startEmbedding(ctx context.Context, st *store.Store, cfg embedSettings, log
 		logger.Error("embed_config", "error", err.Error())
 		return func() {}
 	}
-	st.SetEmbedder(store.EmbedSearchConfig{Embedder: c, Timeout: cfg.QueryTimeout, MinSimilarity: cfg.MinSimilarity, Logger: logger})
+	search := store.EmbedSearchConfig{Embedder: c, Timeout: cfg.QueryTimeout, MinSimilarity: cfg.MinSimilarity, Logger: logger}
+	var check *embed.ModelCheck
+	var queryClient *embed.Client
+	if cfg.separateQuery() {
+		if queryClient, err = cfg.queryClient(); err != nil {
+			logger.Error("embed_config", "error", err.Error())
+			return func() {}
+		}
+		check = embed.NewModelCheck(queryClient, c, embed.CheckConfig{}, logger)
+		search.Embedder, search.Ready = queryClient, check.Err
+	}
+	st.SetEmbedder(search)
 	job := embedjob.New(st, c, cfg.Job, logger)
-	logger.Info("embed_config", "url", c.URL(), "model", c.Model(), "prefix_version", c.PrefixVersion(),
+	attrs := []any{"url", c.URL(), "model", c.Model(), "prefix_version", c.PrefixVersion(),
 		"query_timeout", cfg.QueryTimeout.String(), "min_similarity", cfg.MinSimilarity, "batch", orDefault(cfg.Job.Batch, embedjob.DefaultBatch),
-		"pause", orDefault(cfg.Job.Pause, embedjob.DefaultPause).String(),
-		"note", "hybrid search is on; entries are embedded in the background")
+		"pause", orDefault(cfg.Job.Pause, embedjob.DefaultPause).String()}
+	note := "hybrid search is on; entries are embedded in the background"
+	if queryClient != nil {
+		attrs = append(attrs, "query_url", queryClient.URL())
+		note += "; search queries go to their own server"
+	}
+	logger.Info("embed_config", append(attrs, "note", note)...)
 	if !embed.Loopback(c.URL()) {
 		logger.Warn("embed_config", "url", c.URL(),
 			"note", "the embedding server is not on this machine; the text of every active knowledge entry is sent to it")
 	}
-	done := make(chan struct{})
+	if queryClient != nil && !embed.Loopback(queryClient.URL()) {
+		logger.Warn("embed_config", "url", queryClient.URL(),
+			"note", "the query server is not on this machine; every search query is sent to it")
+	}
+	var wg sync.WaitGroup
+	wg.Add(1)
 	go func() {
-		defer close(done)
+		defer wg.Done()
 		job.Run(ctx)
 	}()
-	return func() { <-done }
+	if check != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			check.Run(ctx)
+		}()
+	}
+	return wg.Wait
+}
+
+// verifyServers compares the query server with the job server once, for the two
+// commands that look at the servers from outside. A *embed.DisagreementError is
+// a verdict; any other error says that a server did not answer.
+func verifyServers(cfg embedSettings) (embed.Agreement, error) {
+	job, err := cfg.client()
+	if err != nil {
+		return embed.Agreement{}, err
+	}
+	query, err := cfg.queryClient()
+	if err != nil {
+		return embed.Agreement{}, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	return embed.CompareServers(ctx, query, job)
 }
 
 func orDefault[T int | time.Duration](v, def T) T {

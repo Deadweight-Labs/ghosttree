@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -11,13 +12,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/embed"
 	"github.com/Deadweight-Labs/ghosttree/internal/eval/searchquality"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
 const evalUsage = `usage: ctx eval search --db <path> [--sample 1500] [--seed 20261020] [--min-chars 30]
-                       [--embed-url <url>] [--embed-model <id>] [--embed-min-similarity 0.55]
-                       [--pause 50ms]
+                       [--embed-url <url>] [--embed-query-url <url>] [--embed-model <id>]
+                       [--embed-min-similarity 0.55] [--pause 50ms]
 
 Measure how well the knowledge search finds an entry from a quote of the
 transcript it was distilled from. The queries are the evidence quotes
@@ -34,6 +36,12 @@ The full-text row alone is the "before", the hybrid row the "after".
 --embed-min-similarity sets the cosine an entry needs to enter the embedding
 ranking, as the server would be configured; run the measurement with several
 values to see what a threshold costs and what it saves.
+
+--embed-query-url names the second server that embeds the queries, as in ctx
+serve (--embed-url is needed too: the stored vectors are the job server's). The
+run first checks that both serve the same model and stops if they do not, since
+the numbers would mean nothing; if a server does not answer that check, it says
+so and goes on.
 
 The database is opened read-only, without migrations, and the server may keep
 running. The stored vectors are read; only the queries are sent to the embedding
@@ -90,6 +98,22 @@ func cmdEvalSearch(args []string, stdout io.Writer) int {
 			return 2
 		}
 		opts.Embedder = c
+		if cfg.separateQuery() {
+			qc, err := cfg.queryClient()
+			if err != nil {
+				fmt.Fprintf(stdout, "eval search: %v\n", err)
+				return 2
+			}
+			opts.Embedder = qc
+			var diff *embed.DisagreementError
+			switch _, err := verifyServers(cfg); {
+			case errors.As(err, &diff):
+				fmt.Fprintf(stdout, "eval search: the query server and the job server do not serve the same model, so the numbers would mean nothing: %v\n", diff)
+				return 1
+			case err != nil:
+				fmt.Fprintf(evalProgress, "could not check that the query server and the job server serve the same model: %v\n", err)
+			}
+		}
 	}
 	st, err := store.OpenReadOnly(*dbPath, 2)
 	if err != nil {

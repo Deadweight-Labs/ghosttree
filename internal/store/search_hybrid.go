@@ -136,9 +136,16 @@ func (s *Store) searchKnowledgeWith(q string, o KnowledgeSearch) ([]Knowledge, e
 		// A question made of ordinary words asks for a list, which no ranking
 		// answers; the full-text search says so by finding nothing.
 	default:
-		ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
-		v, err := cfg.Embedder.Query(ctx, q)
-		cancel()
+		var v []float32
+		var err error
+		if cfg.Ready != nil {
+			err = cfg.Ready()
+		}
+		if err == nil {
+			ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
+			v, err = cfg.Embedder.Query(ctx, q)
+			cancel()
+		}
 		switch {
 		case err == nil:
 			qvec = v

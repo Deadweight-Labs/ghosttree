@@ -6,8 +6,14 @@ Wants=network-online.target
 Requires=docker.service
 
 [Service]
-# One container, one model, loopback only. Hybrid search needs it only when
-# GHOSTTREE_EMBED_URL points here; without it ghosttree searches by words alone.
+# One container, one model, loopback only: the server of the background job that
+# computes the vectors (GHOSTTREE_EMBED_URL). Hybrid search needs it only when
+# that points here; without it ghosttree searches by words alone.
+#
+# While the job embeds documents here, a search query sent to this same server
+# waits behind them. For that, ghosttree-embed-query.service is a second server
+# with the same model for the queries alone (GHOSTTREE_EMBED_QUERY_URL); this one
+# runs fine without it, only slower for a search during the job.
 #
 # EMBED_IMAGE: pin a release tag at or after llama.cpp v0.7.0 (b11454); older
 # builds do not know the EmbeddingGemma 2 architecture.
@@ -25,10 +31,11 @@ ExecStartPre=-/usr/bin/docker rm -f ghosttree-embed
 #
 # Server arguments:
 #   --embeddings --pooling mean   the model's pooling; this is an embedding model
-#   -c 4096 -np 2                 two slots with a context of 2048 tokens each; meant
-#                                 so that a search can embed its query while a
-#                                 batch of the background job is in flight (to be
-#                                 measured on the server, see deploy/README.md)
+#   -c 4096 -np 2                 two slots with a context of 2048 tokens each. They
+#                                 share the compute threads, so a second slot does
+#                                 not let a query pass a batch in flight (measured,
+#                                 see deploy/README.md); it only keeps the context
+#                                 per text at 2048 tokens
 #   -ub 2048 -b 2048              a text of up to 2048 tokens fits one physical batch
 #   -t 2                          two threads, matching --cpus 2
 ExecStart=/usr/bin/docker run --rm --name ghosttree-embed \

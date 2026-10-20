@@ -766,12 +766,19 @@ Set every argument explicitly; defaults of `llama-server` change between release
 (v0.7.0 changed the default port). `--pooling mean` is the model's pooling. The
 context of 4096 tokens is split over two slots of 2048 each: a text is cut to
 2000 characters before it is sent (about 500 to 700 tokens of German or English
-prose, never more than 2000 even for hashes and paths), so it always fits. Two
-slots are meant to let a search embed its query while the background job has a
-batch in flight. Whether `llama-server` spreads the inputs of one request over
-both slots, so that a batch can still occupy both, is not settled here: measure
-the time of a query while the backfill runs on your server, and lower
-`--embed-batch` if searches fall back to full text during it.
+prose, never more than 2000 even for hashes and paths), so it always fits.
+
+The second slot does not let a search overtake a batch. Both slots work on the
+same compute threads, so a query sent to a server that is embedding a batch waits
+for the batch. Measured on a server with two cores while the background job
+embedded documents (batches of eight, about 5 seconds per document), every
+search took 1.59 seconds: it ran into the query timeout of 1.5 seconds and was
+answered from full text. Smaller `-ub` and `-b` do not help, because an embedding
+needs the whole text in one physical batch. What helps is a second server for the
+queries, see "A second server for queries" below. A single server keeps working
+without it: a search that comes while the job is embedding documents is answered
+from full text, which is the case during the first backfill (hours) and for a
+few seconds after every new or edited entry.
 
 ### Configuring ghosttree
 
@@ -785,6 +792,7 @@ GHOSTTREE_EMBED_URL=http://127.0.0.1:8475
 | Environment variable | Serve flag | Default |
 | --- | --- | ---: |
 | `GHOSTTREE_EMBED_URL` | `--embed-url` | empty: off |
+| `GHOSTTREE_EMBED_QUERY_URL` | `--embed-query-url` | empty: the server of `--embed-url` |
 | `GHOSTTREE_EMBED_MODEL` | `--embed-model` | `embeddinggemma-2-q8_0` |
 | `GHOSTTREE_EMBED_QUERY_TIMEOUT` | `--embed-query-timeout` | `1500ms` |
 | `GHOSTTREE_EMBED_BATCH` | `--embed-batch` | 8 |
@@ -801,6 +809,74 @@ entry makes the vector out of date and the job computes it again; search only
 reads current vectors. If you exchange the model file but keep the id, the stored
 vectors have another length than the new ones; search leaves them out and logs
 `embed_vector_dimension` once a minute. Give the new model a new id.
+
+### A second server for queries
+
+Searches and the background job can use separate embedding servers. The reason is
+the measurement above: while the job embeds documents, a query on the same server
+waits behind them, and the search falls back to full text. A second `llama-server`
+that only embeds queries is never busy with documents.
+
+`ghosttree-embed-query.service` is that server as an example: the same GGUF file,
+its own port (8476), `-t 1 -np 1 -c 1024 -ub 1024 -b 1024`, a container with
+`--cpus 1 --memory 768m --memory-swap 768m`, a read-only root filesystem, no
+capabilities, and the port published on `127.0.0.1` only. It reads `EMBED_IMAGE`
+and `EMBED_MODEL_DIR` from the same `/etc/ghosttree/embed.env` as
+`ghosttree-embed.service`, which stays the server of the background job; its own
+port is `EMBED_QUERY_PORT`, so that `EMBED_PORT` does not move it. At their limits
+the two containers take three cores and 1.75 GiB together. A query longer than the
+1024 tokens of its context (ghosttree cuts it to 1000 characters; only a text of
+rare characters comes near) is refused and that search is answered from full text.
+
+```sh
+systemctl enable --now ghosttree-embed-query
+curl -s http://127.0.0.1:8476/health
+```
+
+```text
+GHOSTTREE_EMBED_URL=http://127.0.0.1:8475
+GHOSTTREE_EMBED_QUERY_URL=http://127.0.0.1:8476
+```
+
+`GHOSTTREE_EMBED_QUERY_URL` (`--embed-query-url`, also in `ctx embed status` and
+`ctx eval search`) is the base URL of the server that embeds search queries. Empty
+means the same server as `GHOSTTREE_EMBED_URL`, which is exactly the behaviour
+without the option, and naming the same address twice counts as one server. The
+job always uses `GHOSTTREE_EMBED_URL`. Setting only the query URL is a
+configuration error and `ctx serve` does not start with it: without the job there
+are no vectors to search. The URL is checked like `GHOSTTREE_EMBED_URL` (no
+credentials, no query or fragment), and `ctx serve` warns when it is not a
+loopback address, because then every search query leaves the machine.
+
+A query vector is only worth something next to vectors of the same model, so both
+servers have to run the same GGUF file. ghosttree checks that in the background
+after the start, without holding anything up: it sends the same short fixed text
+to both servers, in the query format, and compares the two vectors. They count as
+the same model with the same number of dimensions and a cosine of at least 0.999;
+the same file on other threads or in another build differs only by rounding, far
+above that, while another model or quantisation is far below. If they differ, the
+log says `embed_models_differ` as an error with what differs, and searches use
+the vectors no longer: they are answered from full text, without an error for the
+caller, until a check finds the servers equal and the log says
+`embed_models_agree`. The background job goes on; the stored vectors are the job
+server's. To clear it, start both from the same file; after changing the model on
+both, give it a new `--embed-model` id.
+
+The check repeats every 10 minutes while the servers agree: a model is exchanged
+by someone restarting a server, a query vector of another model makes the ranking
+worse and not wrong, and each check costs two short texts, one of them in a slot
+of the server that is busy with the job. While they differ it repeats every
+minute, so the search is back one check after the fix. While a server does not
+answer (down, still loading the model, or too busy to answer in a minute) the
+check repeats after 5 seconds, then 10 and so on up to a minute, logs
+`embed_models_unverified`, and changes nothing: the last verdict stands, and
+before the first one searches run as with one server, so a job server that is
+down or busy does not switch the vector part off. The log repeats a state at most
+every 10 minutes.
+
+One server alone keeps working; leave `GHOSTTREE_EMBED_QUERY_URL` empty. The
+disadvantage is the one described above: a search that comes while the job is
+embedding documents is answered from full text.
 
 ### Backfill and upkeep
 
@@ -833,7 +909,10 @@ again with the same model, empty the table. Parked entries count as due in
 
 A database of about 2,700 entries needs roughly 20 minutes at the defaults on the
 hardware the sample was written for (a batch of eight documents in about 1.4
-seconds, plus the pause). Meanwhile search already uses the vectors that exist.
+seconds, plus the pause). On two cores of a server CPU a document took about 5
+seconds, so the first run over about 2,800 entries takes hours. Meanwhile search
+already uses the vectors that exist, and with a second server for queries it does
+so at full speed.
 
 ```sh
 ctx embed status --db /var/lib/ghosttree/ghosttree.db --embed-url http://127.0.0.1:8475
@@ -841,9 +920,12 @@ ctx embed status --db /var/lib/ghosttree/ghosttree.db --embed-url http://127.0.0
 
 shows how many active entries have a current vector, how many are due, how the
 job last fared (failing since, error, last progress) and whether the embedding
-server answers. It only reads the database, so the server may keep running; run
-it as described in "Running maintenance commands". The vectors take 768 bytes per
-entry and live in the table `knowledge_embeddings`.
+server answers. With `--embed-query-url` (the same address as for `ctx serve`) it
+shows both servers, `job server` and `query server`, and a line `same model` that
+says whether the two answer the probe text alike. It only reads the database, so
+the server may keep running; run it as described in "Running maintenance
+commands". The vectors take 768 bytes per entry and live in the table
+`knowledge_embeddings`.
 
 ### When the embedding server is away
 
@@ -852,11 +934,14 @@ server is down, slow or answers an error, the search is answered from the
 full-text ranking, as if embeddings were off; the caller sees no error. The server
 logs `embed_search_fallback` at most once a minute, with the error and the number
 of searches since the last line. A question made only of ordinary words ("what is
-left to do") is never sent to the embedding server.
+left to do") is never sent to the embedding server. With a second server for
+queries, it is that server whose absence makes a search fall back; the job server
+being down or busy does not touch searches.
 
-To turn it off, remove `GHOSTTREE_EMBED_URL` and restart; the stored vectors are
-not read any more and can stay. `ghosttree-embed.service` can be stopped at any
-time without touching ghosttree.
+To turn it off, remove `GHOSTTREE_EMBED_URL` (and `GHOSTTREE_EMBED_QUERY_URL`)
+and restart; the stored vectors are not read any more and can stay.
+`ghosttree-embed.service` and `ghosttree-embed-query.service` can be stopped at
+any time without touching ghosttree.
 
 ### Measuring what it gains
 
@@ -871,8 +956,10 @@ vectors alone and once fused. It prints n, R@1, R@3, R@10 and MRR@10 per ranking
 for all targets, for the targets that are not quarantined, and for a search that
 leaves the quarantined entries out, as the search for agents does. The full-text
 row is the "before", the hybrid row the "after". It never prints a quote or any
-text of an entry. Wait until `ctx embed status` shows nothing due, or the vector
-rows understate the result. The quotes are passages of transcripts, closer to the
+text of an entry. With a second server for queries, add `--embed-query-url`: the
+queries are embedded there, and the run stops first if the two servers do not
+serve the same model, since the numbers would then mean nothing. Wait until
+`ctx embed status` shows nothing due, or the vector rows understate the result. The quotes are passages of transcripts, closer to the
 entry than a question a person asks, so read the numbers as "finds the entry for
 the passage it came from".
 

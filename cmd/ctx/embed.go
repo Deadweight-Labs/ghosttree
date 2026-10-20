@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -12,15 +13,19 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
-const embedUsage = `usage: ctx embed status --db <path> [--embed-url <url>] [--embed-model <id>]
+const embedUsage = `usage: ctx embed status --db <path> [--embed-url <url>] [--embed-query-url <url>]
+                       [--embed-model <id>]
 
 Hybrid search keeps one vector per active knowledge entry. The server computes
 them in the background once it is started with --embed-url (env
 GHOSTTREE_EMBED_URL); see "Embeddings for hybrid search" in deploy/README.md.
+With --embed-query-url (env GHOSTTREE_EMBED_QUERY_URL) search queries are
+embedded by a second server, which must serve the same model.
 
   status  how many entries have a current vector, how many are due, how the
           background job last fared, and whether the embedding server answers
-          (the check embeds one short text)
+          (the check embeds one short text); with a second server for queries
+          also whether it answers and whether both serve the same model
 
 status reads the database without writing to it, so the server may keep
 running. A vector counts as current when it was made by the configured model,
@@ -95,8 +100,28 @@ func cmdEmbedStatus(args []string, stdout io.Writer) int {
 		fmt.Fprintln(stdout, "embedding server not configured (--embed-url or GHOSTTREE_EMBED_URL); this command does not know which server the running ctx serve uses")
 		return 0
 	}
-	fmt.Fprintf(stdout, "embedding server %s: %s\n", cfg.URL, probe(cfg))
+	if !cfg.separateQuery() {
+		fmt.Fprintf(stdout, "embedding server %s: %s\n", cfg.URL, probe(cfg, cfg.URL))
+		return 0
+	}
+	fmt.Fprintf(stdout, "job server       %s: %s\n", cfg.URL, probe(cfg, cfg.URL))
+	fmt.Fprintf(stdout, "query server     %s: %s\n", cfg.QueryURL, probe(cfg, cfg.QueryURL))
+	fmt.Fprintf(stdout, "same model       %s\n", describeAgreement(cfg))
 	return 0
+}
+
+// describeAgreement says whether the query server and the job server serve the
+// same model, as far as one probe text shows.
+func describeAgreement(cfg embedSettings) string {
+	ag, err := verifyServers(cfg)
+	var diff *embed.DisagreementError
+	switch {
+	case err == nil:
+		return fmt.Sprintf("yes (the same text has a cosine of %.5f, %d dimensions)", ag.Cosine, ag.Dimensions)
+	case errors.As(err, &diff):
+		return "NO: " + diff.Error() + "; searches answer from full text until the servers agree"
+	}
+	return "not checked: " + err.Error()
 }
 
 func describeJob(s store.EmbedStatus) string {
@@ -123,10 +148,10 @@ func orNever(s string) string {
 	return s
 }
 
-// probe checks the server the way a search would use it: health, then one real
-// query embedding, timed.
-func probe(cfg embedSettings) string {
-	c, err := cfg.client()
+// probe checks the server at url the way a search would use it: health, then
+// one real query embedding, timed.
+func probe(cfg embedSettings, url string) string {
+	c, err := embed.New(embed.Config{URL: url, Model: cfg.Model})
 	if err != nil {
 		return err.Error()
 	}
