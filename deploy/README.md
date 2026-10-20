@@ -293,6 +293,50 @@ What is not redacted when written: knowledge entries, requests, coordination mes
 notes. Human tasks, explanations and work notes are refused when they look like a secret;
 an agent that copies a password into a knowledge entry stores it.
 
+#### A known value without a label
+
+A password that has leaked and is known often stands there without any label: in a command
+line (`sed 's/<value>/…/'`), in the output of `grep`, or as single fragments (a value made of
+parts joined by symbols is indexed by the full-text search as one word per part). The rule by
+label does not find those. Name the value to `ctx redact-sessions` in a
+file, one value per line (blank lines and lines that start with `#` are ignored; a value that
+itself starts with `#` is written `\#`):
+
+```bash
+umask 077
+$EDITOR ~/known-values.txt        # the full value and each part of it, four characters or more
+ctx redact-sessions --db $DB --dry-run --literals-file ~/known-values.txt
+ctx redact-sessions --db $DB --literals-file ~/known-values.txt
+shred -u ~/known-values.txt
+```
+
+Run it as the user that owns the database, with the service up or down. The file has to be
+readable by that user. The transient `DynamicUser=yes` unit used above is another user on
+every start and cannot read your file; give it the file with systemd's `LoadCredential=` (the
+unit then finds it under `$CREDENTIALS_DIRECTORY`) instead of loosening the permissions.
+
+Every occurrence of every value becomes `[REDACTED:literal]`, with or without a label, in the
+same places as above (`text`, `raw`, `chunks_fts`, `chunk_index`, `sess_fts`, titles, evidence
+quotes, also the quotes whose chunk is gone). In `raw` the value is found as it is written
+there, also as a JSON escape (`\u0026` for `&`, `\"` for a quote), and `raw` stays valid JSON.
+A value matches in the spelling you give and in lower case, because the full-text columns do
+not tell the cases apart and fragments often turn up in lower case; give another spelling as
+a line of its own. Without `--literals-file` none of this happens.
+
+The file is a secret itself. The command refuses it (exit 2) unless group and others have no
+access to it (`chmod 600`), and refuses values shorter than four characters (exit 2), so that
+a typo cannot empty the database. A value never appears in the output or in an error message
+(they name lines and counts) and is never passed to SQL.
+
+It runs in one pass over `session_chunks` together with the label rule, so it costs only a
+little more than a run without the file (on 200,000 made-up chunks, 1.6 GB: a dry run 13.6 s
+with the values against 11.6 s without; the real run with 800 changed chunks 33 s, including
+`optimize`). It leaves knowledge entries, their versions and requests alone: they have
+history, search copies and immutable snapshots, which a command cannot clean as a whole. It
+counts the entries that hold a value and names their numbers; deciding what to do with them
+is yours. After the run, run `ctx db vacuum` (the service stopped), and check with a search
+for a part of the value.
+
 ## Context snapshots
 
 Snapshot rows are immutable and have no ordinary deletion or redaction path.
@@ -582,9 +626,11 @@ cp ~/.local/share/ghosttree/ghosttree.db /tmp/ghosttree.db
 sqlite3 ~/.local/share/ghosttree/ghosttree.db ".backup '/tmp/ghosttree.db'"
 ```
 
-Verify the copied database with `PRAGMA integrity_check`, put it in the server's
-state directory while the service is stopped, and then point each client at the
-new private URL with `ctx setup`.
+Verify the copied database with `ctx db check --db /tmp/ghosttree.db` (the
+`sqlite3` CLI cannot run `PRAGMA integrity_check` on this schema, see "Shrinking
+and checking the database"), put it in the server's state directory while the
+service is stopped, and then point each client at the new private URL with
+`ctx setup`.
 
 ## "In short" notes (batch)
 

@@ -30,8 +30,22 @@ type RedactSessionsOptions struct {
 	// SkipOptimize lässt das Zusammenführen der Volltextindizes am Ende aus.
 	// Solange es fehlt, stehen die entfernten Wörter noch in alten Segmenten.
 	SkipOptimize bool
+	// Literals nennt bekannte Werte, die überall, auch ohne Beschriftung, durch
+	// [REDACTED:literal] ersetzt werden: in text und raw (dort auch in der
+	// JSON-escapten Schreibweise), in den davon abgeleiteten Indizes, in den
+	// Titeln und in den Zitaten der Belege. nil lässt alles, wie es war.
+	Literals *redact.Literals
 	// Progress wird nach jedem Schritt mit dem bisherigen Stand aufgerufen.
 	Progress func(RedactSessionsReport)
+}
+
+// RedactHolders zählt Einträge, die einen bekannten Wert enthalten, ohne ihn zu
+// ändern.
+type RedactHolders struct {
+	// Rows sind die Zeilen der Tabelle, Owners die Nummern der Einträge, zu denen
+	// sie gehören (bei knowledge_versions der Wissenseintrag, nicht die Fassung).
+	Rows   int64
+	Owners []int64
 }
 
 // RedactSessionsReport ist das Ergebnis, auch das eines abgebrochenen Laufs.
@@ -58,9 +72,14 @@ type RedactSessionsReport struct {
 	Checkpoint string
 	// Skipped nennt Tabellen, die in dieser Datenbank fehlen.
 	Skipped []string
+	// Holders zählt, je Tabelle, Texte von Menschen und Agenten (Wissen, Fassungen
+	// des Wissens, Aufträge), die einen bekannten Wert enthalten. Nur gezählt:
+	// sie haben Verlauf, Suchkopien und Schnappschüsse (siehe RedactSessions).
+	// Nur mit Literals gefüllt, auch im Probelauf.
+	Holders map[string]RedactHolders
 }
 
-const redactQuoteMarker = "[REDACTED:quote]"
+const redactQuoteMarker = redact.QuoteMarker
 
 // RedactSessions schwärzt Geheimnisse in den gespeicherten Sitzungen, wie
 // AppendChunks es bei neuen Chunks tut, und entfernt sie aus jeder Kopie:
@@ -74,6 +93,24 @@ const redactQuoteMarker = "[REDACTED:quote]"
 //   - sessions.title, soweit er aus dem Prompt stammt
 //   - knowledge_evidence.quote und request_sightings.quote: wörtliche Zitate aus
 //     text
+//
+// Mit opts.Literals kommt vor der Beschriftungsregel hinzu, dass bekannte Werte
+// überall in diesen Kopien ersetzt werden. Der Lauf liest dafür ohnehin jede
+// Zeile von session_chunks; der Abgleich geschieht in Go auf dem, was schon
+// gelesen ist, und nicht mit instr oder MATCH in SQL: raw trägt Inhalt, der in
+// text fehlt (Denkblöcke, Werkzeugergebnisse), und der Wert steht dort auch
+// JSON-escapt, was instr nicht findet. Die Werte gelangen nie in eine
+// SQL-Anweisung. Zitate werden zusätzlich tabellenweit geprüft, auch wenn ihr
+// Chunk nicht mehr da ist.
+//
+// Wissen, Fassungen des Wissens und Aufträge werden bei Literals nur gezählt
+// (Holders), nicht geändert. Ein sauberes Ersetzen gibt es dort nicht: der
+// Wert steht auch in knowledge_versions, in search_documents und beiden
+// Volltextindizes, in Titeln und Beschreibungen von Kriterien und Aktivitäten,
+// in Erklärungen, Koordinationsnachrichten und Dokumenten, und in den
+// unveränderlichen Schnappschüssen, die keinen Löschweg haben. Einen Teil davon
+// zu ändern, ließe den Rest als falsche Sicherheit stehen; den Wert aus dem
+// Text zu nehmen ist dort eine Entscheidung des Menschen, nicht des Befehls.
 //
 // Danach werden beide Volltextindizes mit 'optimize' zusammengeführt. Das
 // 'delete' eines externen Inhalts schreibt die Wörter noch einmal als
@@ -124,7 +161,8 @@ func RedactSessions(ctx context.Context, path string, opts RedactSessionsOptions
 	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM session_chunks`).Scan(&rep.Chunks); err != nil {
 		return rep, err
 	}
-	w := redactWork{db: db, ctx: ctx, write: !opts.DryRun, harness: map[int64]string{}, retitled: map[int64]struct{}{}}
+	w := redactWork{db: db, ctx: ctx, write: !opts.DryRun, lits: opts.Literals, has: has,
+		harness: map[int64]string{}, retitled: map[int64]struct{}{}, requoted: map[string]struct{}{}}
 	for _, t := range []struct {
 		names []string
 		flag  *bool
@@ -178,9 +216,9 @@ func RedactSessions(ctx context.Context, path string, opts RedactSessionsOptions
 			last = e.id
 			held += len(e.oldText) + len(e.oldRaw)
 			clear(stats)
-			e.newText = redact.Apply(e.oldText, redact.Text, stats)
+			e.newText = w.redactField(e.oldText, redact.Text, stats)
 			e.textKinds = take(stats)
-			e.newRaw = redact.Apply(e.oldRaw, redact.JSON, stats)
+			e.newRaw = w.redactField(e.oldRaw, redact.JSON, stats)
 			e.rawKinds = take(stats)
 			if e.newText != e.oldText || e.newRaw != e.oldRaw {
 				edits = append(edits, e)
@@ -237,6 +275,18 @@ func RedactSessions(ctx context.Context, path string, opts RedactSessionsOptions
 	}
 	if titles > 0 {
 		rep.Tables["sessions.title"] += titles
+	}
+	if w.lits != nil {
+		quotes, err := w.literalQuotes()
+		if err != nil {
+			return fail(err)
+		}
+		for k, n := range quotes {
+			rep.Tables[k] += n
+		}
+		if rep.Holders, err = w.holders(); err != nil {
+			return fail(err)
+		}
 	}
 
 	if opts.DryRun {
@@ -327,8 +377,26 @@ type redactWork struct {
 	// write is false for a dry run: the same steps run, nothing is written.
 	write                                 bool
 	chunksFTS, index, evidence, sightings bool
-	harness                               map[int64]string
-	retitled                              map[int64]struct{}
+	// lits are the known values (nil: none). has says whether a table exists.
+	lits     *redact.Literals
+	has      func(name string) (bool, error)
+	harness  map[int64]string
+	retitled map[int64]struct{}
+	// requoted holds the quote rows (table/id) that requote has counted, so that
+	// a dry run does not count them a second time in literalQuotes.
+	requoted map[string]struct{}
+}
+
+// redactField applies the known values first, then the rules of the labels: a
+// value behind a label that is known stays a [REDACTED:literal] and is not read
+// again as a labeled one.
+func (w *redactWork) redactField(s string, mode redact.Mode, stats redact.Stats) string {
+	return redact.Apply(w.lits.Apply(s, mode, stats), mode, stats)
+}
+
+// redactPlain is redactField for a short plain text such as a title or a quote.
+func (w *redactWork) redactPlain(s string) string {
+	return w.redactField(s, redact.Text, nil)
 }
 
 func (w *redactWork) harnessOf(q maintQueryer, session int64) (string, error) {
@@ -578,24 +646,27 @@ func (w *redactWork) requote(q maintQueryer, e redactEdit, res *redactBatch) err
 			} else {
 				res.citedRq = append(res.citedRq, r.owner)
 			}
-			nq := redactQuote(e.oldText, e.newText, r.quote)
+			nq := redactQuote(e.oldText, e.newText, r.quote, w.redactPlain)
 			if nq == r.quote {
 				continue
 			}
 			if _, err := w.exec(q, `UPDATE `+t.table+` SET quote=? WHERE id=?`, nq, r.id); err != nil {
 				return err
 			}
+			w.requoted[redactQuoteKey(t.table, r.id)] = struct{}{}
 			res.tables[t.table+".quote"]++
 		}
 	}
 	return nil
 }
 
-func redactQuote(oldText, newText, quote string) string {
+// redactQuote returns the quote as it is to be stored. fix redacts a text the
+// way the chunk text was redacted.
+func redactQuote(oldText, newText, quote string, fix func(string) string) string {
 	if quote == "" || !strings.Contains(oldText, quote) {
-		return redact.Redact(quote)
+		return fix(quote)
 	}
-	if nq := redact.Redact(quote); nq != quote && strings.Contains(newText, nq) {
+	if nq := fix(quote); nq != quote && strings.Contains(newText, nq) {
 		return nq
 	}
 	if strings.Contains(newText, quote) {
@@ -625,7 +696,7 @@ func (w *redactWork) titles() (int64, error) {
 		if _, done := w.retitled[r.id]; done && !w.write {
 			continue // a dry run has not written the title that retitle counted
 		}
-		if r.fixed = redact.Redact(r.title); r.fixed != r.title {
+		if r.fixed = w.redactPlain(r.title); r.fixed != r.title {
 			found = append(found, r)
 		}
 	}

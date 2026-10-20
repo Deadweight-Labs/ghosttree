@@ -161,7 +161,7 @@ const usage = `usage: ctx <command>
   unbind-branch  lift knowledge filed against a branch to its project
   strip-images  replace stored base64 images and files with placeholders (--dry-run, runs beside the server)
   db       vacuum (server stopped) and check the database file; sqlite3 cannot, the schema needs ctx's SQL functions
-  redact-sessions  replace passwords and other secrets in stored transcripts and their search indexes (--dry-run, runs beside the server)
+  redact-sessions  replace passwords and other secrets in stored transcripts and their search indexes (--dry-run, runs beside the server; --literals-file names known values)
   version  print version`
 
 func main() {
