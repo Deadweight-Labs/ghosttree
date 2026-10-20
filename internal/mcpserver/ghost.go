@@ -276,5 +276,11 @@ func renderGhostHit(g store.GhostFile) string {
 	if name == "" {
 		name = "(Repo-Wurzel)"
 	}
-	return fmt.Sprintf("- %s [%s] — %s\n", name, g.Kind, body)
+	label := g.Kind
+	if g.Match != "" {
+		// Found by meaning, not by the words of the query: say so, the reader
+		// should weigh it differently from an exact word hit.
+		label += "|match:" + g.Match
+	}
+	return fmt.Sprintf("- %s [%s] — %s\n", name, label, body)
 }

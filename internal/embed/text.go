@@ -37,6 +37,15 @@ const (
 	// MaxQueryRunes bounds the latency of a search that was given a whole
 	// paragraph.
 	MaxQueryRunes = 1000
+	// MaxRequestDescriptionRunes is how much of a request's description is
+	// embedded; what is left of MaxDocumentRunes goes to its criteria, which say
+	// what the request is for and are often shorter than the story before them.
+	MaxRequestDescriptionRunes = 1200
+	// MaxDocumentHeadRunes is how much of a long-form document is embedded: its
+	// beginning, where a title, a summary or the question it answers stand. The
+	// whole text is not embedded; it would not fit and would blur what the
+	// document is about.
+	MaxDocumentHeadRunes = 1500
 
 	// DefaultMinSimilarity is the cosine below which an entry is not a neighbour
 	// of a query. Without a floor the embedding ranking has a nearest neighbour
@@ -75,6 +84,45 @@ func DocumentText(title, body string) string {
 	budget := MaxDocumentRunes - utf8.RuneCountInString(head)
 	text := truncRunes(strings.TrimSpace(strings.ToValidUTF8(body, "�")), budget)
 	return strings.TrimRight(head+text, " \t\r\n")
+}
+
+// RequestText is the text the model gets for a request: title, description and
+// the acceptance criteria. The state of a criterion is not part of it, so ticking
+// one off does not make the vector stale.
+func RequestText(title, description string, criteria []string) string {
+	body := truncRunes(strings.TrimSpace(strings.ToValidUTF8(description, "�")), MaxRequestDescriptionRunes)
+	var list []string
+	for _, c := range criteria {
+		if c = oneLine(c); c != "" {
+			list = append(list, "- "+c)
+		}
+	}
+	if len(list) > 0 {
+		if body != "" {
+			body += "\n\n"
+		}
+		body += strings.Join(list, "\n")
+	}
+	return DocumentText(title, body)
+}
+
+// GhostText is the text the model gets for the description of a path: the path
+// stands where a title does, a directory with a closing slash.
+func GhostText(path, kind, description string) string {
+	title := strings.TrimSpace(path)
+	switch {
+	case title == "":
+		title = "repository root"
+	case kind == "dir":
+		title += "/"
+	}
+	return DocumentText(title, description)
+}
+
+// DocumentHeadText is the text the model gets for a long-form document: its
+// title and the first MaxDocumentHeadRunes characters of the text.
+func DocumentHeadText(title, body string) string {
+	return DocumentText(title, truncRunes(strings.TrimSpace(strings.ToValidUTF8(body, "�")), MaxDocumentHeadRunes))
 }
 
 // TextHash identifies a document text.

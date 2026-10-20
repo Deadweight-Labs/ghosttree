@@ -1,10 +1,17 @@
-// Package embedjob keeps the vectors of knowledge entries up to date in the
-// background. It looks for active entries without a current vector (new, edited,
-// made by another model or text format), asks the embedding server for them in
-// small batches, one request at a time, and stores the result. All its state is
-// in the database, so a restart resumes where the last run stopped, and it
-// never holds up the server: it runs in a goroutine of its own, starts late,
-// pauses between batches and backs off when the embedding server fails.
+// Package embedjob keeps the vectors of the searchable objects up to date in the
+// background: knowledge entries, and, when they are switched on, requests, pains,
+// documents and the descriptions of paths. It looks for objects without a current
+// vector (new, edited, made by another model or text format), asks the embedding
+// server for them in small batches, one request at a time, and stores the result.
+// All its state is in the database, so a restart resumes where the last run
+// stopped, and it never holds up the server: it runs in a goroutine of its own,
+// starts late, pauses between batches and backs off when the embedding server
+// fails.
+//
+// One job serves all the kinds, a batch of one kind at a time, in turn: a kind
+// with thousands of objects to catch up on (the ghost descriptions) does not make
+// a new pain wait for the end of it, and the pace (batch, pause, backoff, parking)
+// is the same for all of them.
 package embedjob
 
 import (
@@ -22,10 +29,11 @@ import (
 
 // Store is the part of the store the job uses.
 type Store interface {
-	KnowledgeEmbeddingDue(m store.EmbedModel, limit int, at time.Time, full bool) (store.EmbedDue, error)
-	UpsertKnowledgeEmbedding(e store.KnowledgeEmbedding) error
-	TouchKnowledgeEmbeddings(ids []int64, readAt string) error
-	RecordEmbeddingFailure(f store.EmbeddingFailure) error
+	EmbeddingDue(kind string, m store.EmbedModel, limit int, at time.Time, full bool) (store.EmbedDue, error)
+	UpsertEmbedding(e store.Embedding) error
+	TouchEmbeddings(kind string, ids []int64, readAt string) error
+	RecordEmbedFailure(f store.EmbedFailure) error
+	PurgeEmbeddings(kind string) (int, error)
 	SetEmbedJobState(st store.EmbedJobState) error
 }
 
@@ -57,6 +65,9 @@ type Config struct {
 	Park, MaxPark time.Duration
 	// Timeout bounds one request. Default embed.DefaultBatchTimeout.
 	Timeout time.Duration
+	// Kinds are the kinds of object that get vectors (see store.EmbedKinds); the
+	// job serves them in turn, in the order given. Empty means knowledge only.
+	Kinds []string
 }
 
 // Defaults for the settings above.
@@ -107,6 +118,9 @@ func (c Config) withDefaults() Config {
 	if c.Timeout <= 0 {
 		c.Timeout = embed.DefaultBatchTimeout
 	}
+	if len(c.Kinds) == 0 {
+		c.Kinds = []string{store.KindKnowledge}
+	}
 	return c
 }
 
@@ -120,9 +134,13 @@ type Job struct {
 	sleep func(ctx context.Context, d time.Duration) bool
 	now   func() time.Time
 
-	// full asks the first looks for every entry with a vector, not only for the
-	// ones edited since: a text can change in a way updated_at does not show.
-	full bool
+	// full asks the first look at a kind for every object with a vector, not only
+	// for the ones edited since: a text can change in a way updated_at does not
+	// show.
+	full map[string]bool
+	// next is the position in the kinds of the one that is served first by the next
+	// step: the one after the kind that was served last.
+	next int
 	// suspect is the batch that failed with an error that may be the server's or
 	// one text's. The next attempt at the same batch sends the texts one by one,
 	// to find the one that makes it fail.
@@ -132,19 +150,25 @@ type Job struct {
 	lastOK      string
 	lastPersist time.Time
 	lastLogged  time.Time
+	lastPurge   time.Time
 }
 
-// New returns a job for the entries of st that e should embed.
+// New returns a job for the objects of st that e should embed.
 func New(st Store, e Embedder, cfg Config, logger *slog.Logger) *Job {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	cfg = cfg.withDefaults()
+	full := make(map[string]bool, len(cfg.Kinds))
+	for _, k := range cfg.Kinds {
+		full[k] = true
+	}
 	return &Job{
-		st: st, emb: e, cfg: cfg.withDefaults(), log: logger,
+		st: st, emb: e, cfg: cfg, log: logger,
 		model: store.EmbedModel{Model: e.Model(), PrefixVersion: e.PrefixVersion()},
 		sleep: sleepContext,
 		now:   time.Now,
-		full:  true,
+		full:  full,
 	}
 }
 
@@ -161,28 +185,72 @@ func sleepContext(ctx context.Context, d time.Duration) bool {
 
 // Result is what one step did.
 type Result struct {
+	// Kind is the kind of object the batch was of; empty when nothing was due.
+	Kind string
 	// Embedded is the number of vectors stored.
 	Embedded int
-	// Skipped is the number of entries put aside: the server refused the text for
+	// Skipped is the number of objects put aside: the server refused the text for
 	// good, or failed on it while it answered the other texts.
 	Skipped int
 }
 
-// Step embeds one batch. It returns an error when the embedding server fails or
-// the vectors cannot be stored; the entries stay due and the next step tries
-// them again.
+// purgeEvery is how often an idle job removes the vectors of objects that are
+// gone or no longer count.
+const purgeEvery = 10 * time.Minute
+
+// Step embeds one batch of the first kind, from the one after the kind served
+// last, that has something due. It returns an error when the embedding server
+// fails or the vectors cannot be stored; the objects stay due and the next step
+// tries them again, at the same kind. When nothing is due in any kind, it removes
+// what the vectors of vanished objects have left behind, now and then.
 func (j *Job) Step(ctx context.Context) (Result, error) {
+	n := len(j.cfg.Kinds)
+	for i := range n {
+		at := (j.next + i) % n
+		kind := j.cfg.Kinds[at]
+		res, err := j.stepKind(ctx, kind)
+		if err != nil {
+			return res, err
+		}
+		if res.Embedded+res.Skipped > 0 {
+			j.next = (at + 1) % n
+			res.Kind = kind
+			return res, nil
+		}
+	}
+	j.purge()
+	return Result{}, nil
+}
+
+// purge removes the vectors that no object of their kind counts for any more. It
+// is housekeeping: a failure is logged and is not a failure of the job.
+func (j *Job) purge() {
+	if j.now().Sub(j.lastPurge) < purgeEvery {
+		return
+	}
+	j.lastPurge = j.now()
+	for _, kind := range j.cfg.Kinds {
+		if removed, err := j.st.PurgeEmbeddings(kind); err != nil {
+			j.log.Warn("embed_purge", "kind", kind, "error", err.Error())
+		} else if removed > 0 {
+			j.log.Info("embed_purge", "kind", kind, "removed", removed,
+				"note", "vectors of objects that are gone or archived")
+		}
+	}
+}
+
+func (j *Job) stepKind(ctx context.Context, kind string) (Result, error) {
 	var res Result
 	at := j.now()
-	due, err := j.st.KnowledgeEmbeddingDue(j.model, j.cfg.Batch, at, j.full)
+	due, err := j.st.EmbeddingDue(kind, j.model, j.cfg.Batch, at, j.full[kind])
 	if err != nil {
 		return res, err
 	}
 	if len(due.Items) < j.cfg.Batch {
-		j.full = false // the look went through every entry there is
+		j.full[kind] = false // the look went through every object there is
 	}
 	if len(due.Unchanged) > 0 {
-		if err := j.st.TouchKnowledgeEmbeddings(due.Unchanged, due.ReadAt); err != nil {
+		if err := j.st.TouchEmbeddings(kind, due.Unchanged, due.ReadAt); err != nil {
 			return res, err
 		}
 	}
@@ -190,25 +258,25 @@ func (j *Job) Step(ctx context.Context) (Result, error) {
 	if len(items) == 0 {
 		return res, nil
 	}
-	sig := signature(items)
+	sig := kind + "|" + signature(items)
 	if sig == j.suspect {
-		return j.oneByOne(ctx, items, due.ReadAt, at)
+		return j.oneByOne(ctx, kind, items, due.ReadAt, at)
 	}
 	vecs, err := j.documents(ctx, texts(items))
 	switch {
 	case err == nil:
 		j.suspect = ""
 		for i, d := range items {
-			if err := j.store(d, vecs[i], due.ReadAt); err != nil {
+			if err := j.store(kind, d, vecs[i], due.ReadAt); err != nil {
 				return res, err
 			}
 			res.Embedded++
 		}
 		return res, nil
 	case embed.Permanent(err) && len(items) > 1:
-		return j.oneByOne(ctx, items, due.ReadAt, at)
+		return j.oneByOne(ctx, kind, items, due.ReadAt, at)
 	case embed.Permanent(err):
-		j.park(items[0], err, true, at)
+		j.park(kind, items[0], err, true, at)
 		res.Skipped++
 		return res, nil
 	case len(items) > 1:
@@ -223,7 +291,7 @@ func (j *Job) Step(ctx context.Context) (Result, error) {
 // server fails on. If the server answers none of them, it is the server: the
 // error goes back and nothing is parked. If it answers some, the ones it does
 // not answer are put aside and the rest is stored.
-func (j *Job) oneByOne(ctx context.Context, items []store.EmbedItem, readAt string, at time.Time) (Result, error) {
+func (j *Job) oneByOne(ctx context.Context, kind string, items []store.EmbedItem, readAt string, at time.Time) (Result, error) {
 	var res Result
 	type failed struct {
 		item store.EmbedItem
@@ -233,7 +301,7 @@ func (j *Job) oneByOne(ctx context.Context, items []store.EmbedItem, readAt stri
 	for _, d := range items {
 		vecs, err := j.documents(ctx, []string{d.Text})
 		if err == nil {
-			if err := j.store(d, vecs[0], readAt); err != nil {
+			if err := j.store(kind, d, vecs[0], readAt); err != nil {
 				return res, err
 			}
 			res.Embedded++
@@ -252,7 +320,7 @@ func (j *Job) oneByOne(ctx context.Context, items []store.EmbedItem, readAt stri
 		return res, bad[len(bad)-1].err
 	}
 	for _, f := range bad {
-		j.park(f.item, f.err, embed.Permanent(f.err), at)
+		j.park(kind, f.item, f.err, embed.Permanent(f.err), at)
 		res.Skipped++
 	}
 	j.suspect = ""
@@ -284,36 +352,36 @@ func (j *Job) documents(ctx context.Context, texts []string) ([][]float32, error
 	return j.emb.Documents(ctx, texts)
 }
 
-func (j *Job) store(d store.EmbedItem, vec []float32, readAt string) error {
+func (j *Job) store(kind string, d store.EmbedItem, vec []float32, readAt string) error {
 	q, scale, err := embed.Quantize(vec)
 	if err != nil {
-		return fmt.Errorf("entry %d: %w", d.ID, err)
+		return fmt.Errorf("%s %d: %w", kind, d.ID, err)
 	}
-	return j.st.UpsertKnowledgeEmbedding(store.KnowledgeEmbedding{
-		KnowledgeID: d.ID, Model: j.model.Model, PrefixVersion: j.model.PrefixVersion,
+	return j.st.UpsertEmbedding(store.Embedding{
+		Kind: kind, ObjectID: d.ID, Model: j.model.Model, PrefixVersion: j.model.PrefixVersion,
 		TextHash: d.Hash, Dim: len(q), Scale: float64(scale), Vec: q, ReadAt: readAt,
 	})
 }
 
-// park puts an entry aside, for good when the server refuses its text, else for a
-// time that doubles with every failure.
-func (j *Job) park(d store.EmbedItem, err error, permanent bool, at time.Time) {
+// park puts an object aside, for good when the server refuses its text, else for
+// a time that doubles with every failure.
+func (j *Job) park(kind string, d store.EmbedItem, err error, permanent bool, at time.Time) {
 	attempts := d.Attempts + 1
 	wait := j.cfg.ParkFor(attempts)
 	msg := strings.Join(strings.Fields(err.Error()), " ")
-	if perr := j.st.RecordEmbeddingFailure(store.EmbeddingFailure{
-		KnowledgeID: d.ID, Model: j.model.Model, PrefixVersion: j.model.PrefixVersion, TextHash: d.Hash,
+	if perr := j.st.RecordEmbedFailure(store.EmbedFailure{
+		Kind: kind, ObjectID: d.ID, Model: j.model.Model, PrefixVersion: j.model.PrefixVersion, TextHash: d.Hash,
 		Attempts: attempts, Permanent: permanent, RetryAt: at.Add(wait).UTC().Format(time.RFC3339), Error: msg,
 	}); perr != nil {
-		j.log.Warn("embed_entry_parked", "id", d.ID, "error", "not recorded: "+perr.Error())
+		j.log.Warn("embed_entry_parked", "kind", kind, "id", d.ID, "error", "not recorded: "+perr.Error())
 		return
 	}
 	if permanent {
-		j.log.Warn("embed_entry_parked", "id", d.ID, "error", msg, "attempts", attempts,
-			"note", "the embedding server refuses this text; it is left alone until the entry changes")
+		j.log.Warn("embed_entry_parked", "kind", kind, "id", d.ID, "error", msg, "attempts", attempts,
+			"note", "the embedding server refuses this text; it is left alone until the object changes")
 		return
 	}
-	j.log.Warn("embed_entry_parked", "id", d.ID, "error", msg, "attempts", attempts, "retry_in", wait.String(),
+	j.log.Warn("embed_entry_parked", "kind", kind, "id", d.ID, "error", msg, "attempts", attempts, "retry_in", wait.String(),
 		"note", "the embedding server fails on this text while it answers the others")
 }
 

@@ -13,7 +13,26 @@ type EmbedModel struct {
 	PrefixVersion string
 }
 
-// KnowledgeEmbedding is the stored vector of one entry.
+// Embedding is the stored vector of one object of a kind (see EmbedKinds).
+type Embedding struct {
+	Kind     string
+	ObjectID int64
+	Model    string
+	// PrefixVersion is the version of the query and document formats.
+	PrefixVersion string
+	// TextHash is the hash of the document text that was embedded.
+	TextHash string
+	Dim      int
+	// Scale turns the int8 values in Vec back into the unit vector.
+	Scale float64
+	Vec   []byte
+	// ReadAt is the time the job took the text from the object, as given with the
+	// item (EmbedDue.ReadAt). An object changed at or after it is looked at again,
+	// so a change made while the vector was being computed is not lost.
+	ReadAt string
+}
+
+// KnowledgeEmbedding is the stored vector of one knowledge entry.
 type KnowledgeEmbedding struct {
 	KnowledgeID   int64
 	Model         string
@@ -30,7 +49,12 @@ type KnowledgeEmbedding struct {
 	ReadAt string
 }
 
-// EmbedItem is an entry whose vector is missing or out of date: the finished
+func (e KnowledgeEmbedding) generic() Embedding {
+	return Embedding{Kind: KindKnowledge, ObjectID: e.KnowledgeID, Model: e.Model, PrefixVersion: e.PrefixVersion,
+		TextHash: e.TextHash, Dim: e.Dim, Scale: e.Scale, Vec: e.Vec, ReadAt: e.ReadAt}
+}
+
+// EmbedItem is an object whose vector is missing or out of date: the finished
 // document text to embed and its hash.
 type EmbedItem struct {
 	ID   int64
@@ -41,11 +65,12 @@ type EmbedItem struct {
 	Attempts int
 }
 
-// EmbeddingFailure parks an entry: for a time (a text on which the embedding
+// EmbedFailure parks an object: for a time (a text on which the embedding
 // server fails, perhaps) or for good (a text it refuses). It holds for this text,
 // this model and this format only; an edit or a new model tries again.
-type EmbeddingFailure struct {
-	KnowledgeID   int64
+type EmbedFailure struct {
+	Kind          string
+	ObjectID      int64
 	Model         string
 	PrefixVersion string
 	TextHash      string
@@ -58,6 +83,23 @@ type EmbeddingFailure struct {
 	Error string
 }
 
+// EmbeddingFailure is EmbedFailure for a knowledge entry.
+type EmbeddingFailure struct {
+	KnowledgeID   int64
+	Model         string
+	PrefixVersion string
+	TextHash      string
+	Attempts      int
+	Permanent     bool
+	RetryAt       string
+	Error         string
+}
+
+func (f EmbeddingFailure) generic() EmbedFailure {
+	return EmbedFailure{Kind: KindKnowledge, ObjectID: f.KnowledgeID, Model: f.Model, PrefixVersion: f.PrefixVersion,
+		TextHash: f.TextHash, Attempts: f.Attempts, Permanent: f.Permanent, RetryAt: f.RetryAt, Error: f.Error}
+}
+
 // EmbedJobState is how the background job last fared.
 type EmbedJobState struct {
 	LastOKAt    string
@@ -66,62 +108,113 @@ type EmbedJobState struct {
 	Failures    int
 }
 
-// UpsertKnowledgeEmbedding stores the vector of an entry, replacing an earlier
-// one, and clears the failure on record for the entry. The entry need not still
-// be active or unchanged: a vector of an old text carries that text's hash and is
-// replaced when the job sees the difference.
+// UpsertEmbedding stores the vector of an object, replacing an earlier one, and
+// clears the failure on record for it. The object need not still be active or
+// unchanged: a vector of an old text carries that text's hash and is replaced
+// when the job sees the difference.
+func (s *Store) UpsertEmbedding(e Embedding) error {
+	if s.writer != nil {
+		return queueWrite(s, []any{e}, func(d *Store, p []any) error { return d.UpsertEmbedding(p[0].(Embedding)) })
+	}
+	return s.putEmbedding(e)
+}
+
+// UpsertKnowledgeEmbedding is UpsertEmbedding for a knowledge entry.
 func (s *Store) UpsertKnowledgeEmbedding(e KnowledgeEmbedding) error {
 	if s.writer != nil {
 		return queueWrite(s, []any{e}, func(d *Store, p []any) error { return d.UpsertKnowledgeEmbedding(p[0].(KnowledgeEmbedding)) })
 	}
-	if e.KnowledgeID <= 0 || e.Model == "" || e.PrefixVersion == "" || e.TextHash == "" || e.ReadAt == "" ||
+	return s.putEmbedding(e.generic())
+}
+
+func (s *Store) putEmbedding(e Embedding) error {
+	k, err := embedKindOf(e.Kind)
+	if err != nil {
+		return err
+	}
+	if e.ObjectID <= 0 || e.Model == "" || e.PrefixVersion == "" || e.TextHash == "" || e.ReadAt == "" ||
 		e.Dim <= 0 || len(e.Vec) != e.Dim || math.IsNaN(e.Scale) || math.IsInf(e.Scale, 0) || e.Scale <= 0 {
-		return errors.New("invalid knowledge embedding")
+		return errors.New("invalid embedding")
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`INSERT INTO knowledge_embeddings(knowledge_id,model,prefix_version,dim,text_hash,scale,vec,read_at,updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?)
-		ON CONFLICT(knowledge_id) DO UPDATE SET model=excluded.model, prefix_version=excluded.prefix_version,
+	args := append(k.idArgs(e.ObjectID), e.Model, e.PrefixVersion, e.Dim, e.TextHash, e.Scale, e.Vec, e.ReadAt, now())
+	if _, err := tx.Exec(`INSERT INTO `+k.emb+`(`+k.idCols()+`,model,prefix_version,dim,text_hash,scale,vec,read_at,updated_at)
+		VALUES(`+k.idVals()+`,?,?,?,?,?,?,?,?)
+		ON CONFLICT(`+k.idCols()+`) DO UPDATE SET model=excluded.model, prefix_version=excluded.prefix_version,
 			dim=excluded.dim, text_hash=excluded.text_hash, scale=excluded.scale, vec=excluded.vec,
-			read_at=excluded.read_at, updated_at=excluded.updated_at`,
-		e.KnowledgeID, e.Model, e.PrefixVersion, e.Dim, e.TextHash, e.Scale, e.Vec, e.ReadAt, now()); err != nil {
+			read_at=excluded.read_at, updated_at=excluded.updated_at`, args...); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`DELETE FROM knowledge_embedding_failures WHERE knowledge_id=?`, e.KnowledgeID); err != nil {
+	if _, err := tx.Exec(`DELETE FROM `+k.fail+` WHERE `+k.keyWhere(k.fail)+k.idCol+`=?`, e.ObjectID); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
-// TouchKnowledgeEmbeddings says that the vectors of these entries were checked
-// against the text as of readAt and are still right.
+// TouchEmbeddings says that the vectors of these objects were checked against the
+// text as of readAt and are still right.
+func (s *Store) TouchEmbeddings(kind string, ids []int64, readAt string) error {
+	if s.writer != nil {
+		return queueWrite(s, []any{kind, ids, readAt}, func(d *Store, p []any) error {
+			return d.TouchEmbeddings(p[0].(string), p[1].([]int64), p[2].(string))
+		})
+	}
+	return s.touchEmbeddings(kind, ids, readAt)
+}
+
+// TouchKnowledgeEmbeddings is TouchEmbeddings for knowledge entries.
 func (s *Store) TouchKnowledgeEmbeddings(ids []int64, readAt string) error {
 	if s.writer != nil {
 		return queueWrite(s, []any{ids, readAt}, func(d *Store, p []any) error {
 			return d.TouchKnowledgeEmbeddings(p[0].([]int64), p[1].(string))
 		})
 	}
+	return s.touchEmbeddings(KindKnowledge, ids, readAt)
+}
+
+func (s *Store) touchEmbeddings(kind string, ids []int64, readAt string) error {
+	k, err := embedKindOf(kind)
+	if err != nil {
+		return err
+	}
 	if len(ids) == 0 || readAt == "" {
 		return nil
 	}
-	args := []any{readAt}
-	for _, id := range ids {
-		args = append(args, id)
-	}
-	_, err := s.db.Exec(`UPDATE knowledge_embeddings SET read_at=? WHERE knowledge_id IN (`+placeholders(len(ids))+`)`, args...)
-	return err
+	// In pieces: an id list that grows with the stock would reach the limit on the
+	// number of variables of one statement.
+	return s.eachChunk(ids, func(part []any) error {
+		_, err := s.db.Exec(`UPDATE `+k.emb+` SET read_at=? WHERE `+k.keyWhere(k.emb)+k.idCol+` IN (`+placeholders(len(part))+`)`,
+			append([]any{readAt}, part...)...)
+		return err
+	})
 }
 
-// RecordEmbeddingFailure parks an entry; see EmbeddingFailure.
+// RecordEmbedFailure parks an object; see EmbedFailure.
+func (s *Store) RecordEmbedFailure(f EmbedFailure) error {
+	if s.writer != nil {
+		return queueWrite(s, []any{f}, func(d *Store, p []any) error { return d.RecordEmbedFailure(p[0].(EmbedFailure)) })
+	}
+	return s.putEmbedFailure(f)
+}
+
+// RecordEmbeddingFailure is RecordEmbedFailure for a knowledge entry.
 func (s *Store) RecordEmbeddingFailure(f EmbeddingFailure) error {
 	if s.writer != nil {
 		return queueWrite(s, []any{f}, func(d *Store, p []any) error { return d.RecordEmbeddingFailure(p[0].(EmbeddingFailure)) })
 	}
-	if f.KnowledgeID <= 0 || f.Model == "" || f.PrefixVersion == "" || f.TextHash == "" || f.Attempts <= 0 || f.RetryAt == "" {
+	return s.putEmbedFailure(f.generic())
+}
+
+func (s *Store) putEmbedFailure(f EmbedFailure) error {
+	k, err := embedKindOf(f.Kind)
+	if err != nil {
+		return err
+	}
+	if f.ObjectID <= 0 || f.Model == "" || f.PrefixVersion == "" || f.TextHash == "" || f.Attempts <= 0 || f.RetryAt == "" {
 		return errors.New("invalid embedding failure")
 	}
 	msg := strings.Join(strings.Fields(f.Error), " ")
@@ -132,13 +225,51 @@ func (s *Store) RecordEmbeddingFailure(f EmbeddingFailure) error {
 	if f.Permanent {
 		permanent = 1
 	}
-	_, err := s.db.Exec(`INSERT INTO knowledge_embedding_failures(knowledge_id,model,prefix_version,text_hash,attempts,permanent,retry_at,error,failed_at)
-		VALUES(?,?,?,?,?,?,?,?,?)
-		ON CONFLICT(knowledge_id) DO UPDATE SET model=excluded.model, prefix_version=excluded.prefix_version,
+	args := append(k.idArgs(f.ObjectID), f.Model, f.PrefixVersion, f.TextHash, f.Attempts, permanent, f.RetryAt, msg, now())
+	_, err = s.db.Exec(`INSERT INTO `+k.fail+`(`+k.idCols()+`,model,prefix_version,text_hash,attempts,permanent,retry_at,error,failed_at)
+		VALUES(`+k.idVals()+`,?,?,?,?,?,?,?,?)
+		ON CONFLICT(`+k.idCols()+`) DO UPDATE SET model=excluded.model, prefix_version=excluded.prefix_version,
 			text_hash=excluded.text_hash, attempts=excluded.attempts, permanent=excluded.permanent,
-			retry_at=excluded.retry_at, error=excluded.error, failed_at=excluded.failed_at`,
-		f.KnowledgeID, f.Model, f.PrefixVersion, f.TextHash, f.Attempts, permanent, f.RetryAt, msg, now())
+			retry_at=excluded.retry_at, error=excluded.error, failed_at=excluded.failed_at`, args...)
 	return err
+}
+
+// PurgeEmbeddings removes the vectors and failures of objects that are gone or no
+// longer count (an archived document, a deleted ghost description). The search
+// never reads a vector but through its object, so they could not be hits anyway;
+// this keeps the table from growing with what is left behind. It returns the
+// number of vectors removed. Knowledge keeps what it has always kept: its
+// vectors outlive an archived entry, and nothing is removed.
+func (s *Store) PurgeEmbeddings(kind string) (int, error) {
+	if s.writer != nil {
+		return queueValue(s, []any{kind}, func(d *Store, p []any) (int, error) { return d.PurgeEmbeddings(p[0].(string)) })
+	}
+	k, err := embedKindOf(kind)
+	if err != nil || !k.shared {
+		return 0, err
+	}
+	gone := func(table string) string {
+		return k.keyWhere(table) + table + "." + k.idCol + ` NOT IN (SELECT ` + k.id + ` FROM ` + k.from + ` WHERE ` + k.active + `)`
+	}
+	var stale int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM ` + k.emb + ` WHERE ` + gone(k.emb)).Scan(&stale); err != nil {
+		return 0, err
+	}
+	if stale > 0 {
+		if _, err := s.db.Exec(`DELETE FROM ` + k.emb + ` WHERE ` + gone(k.emb)); err != nil {
+			return 0, err
+		}
+	}
+	var parked int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM ` + k.fail + ` WHERE ` + gone(k.fail)).Scan(&parked); err != nil {
+		return stale, err
+	}
+	if parked > 0 {
+		if _, err := s.db.Exec(`DELETE FROM ` + k.fail + ` WHERE ` + gone(k.fail)); err != nil {
+			return stale, err
+		}
+	}
+	return stale, nil
 }
 
 // SetEmbedJobState records how the background job fared.

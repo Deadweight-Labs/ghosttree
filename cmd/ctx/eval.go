@@ -20,6 +20,29 @@ import (
 const evalUsage = `usage: ctx eval search --db <path> [--sample 1500] [--seed 20261020] [--min-chars 30]
                        [--embed-url <url>] [--embed-query-url <url>] [--embed-model <id>]
                        [--embed-min-similarity 0.55] [--pause 50ms]
+                       [--set <file.jsonl>] [--requests-builtin]
+
+With --set or --requests-builtin the run measures the search of the other kinds
+instead, on queries whose right answer is known:
+
+  --set <file>        a query set, one JSON object per line:
+                      {"query": "...", "kind": "request|ghost|pain|document|knowledge",
+                       "target": "..."}
+                      target is the id of the right object; for a ghost
+                      description "project:path". Each query runs through the
+                      production search of its kind, scoped to the project of
+                      its target (as an agent asks), as the instance owner sees
+                      it. Answers per kind: n, R@1, R@3, R@10 and MRR@10 for the
+                      full-text, the embedding and the fused ranking. No query
+                      and no text of an object is printed.
+  --requests-builtin  the queries the request ledger holds the answer to: the
+                      quotes of request sightings, and the title of a request
+                      marked as a duplicate of, or as superseding, another with
+                      the other as the answer (--sample of each, --min-chars
+                      for the quotes). Both can be given; they are measured
+                      together, per block.
+
+Without them, the run measures the knowledge search on evidence quotes:
 
 Measure how well the knowledge search finds an entry from a quote of the
 transcript it was distilled from. The queries are the evidence quotes
@@ -76,6 +99,8 @@ func cmdEvalSearch(args []string, stdout io.Writer) int {
 	seed := fs.Int64("seed", 20261020, "seed of the draw")
 	minChars := fs.Int("min-chars", 30, "shortest quote that counts as a query")
 	pause := fs.Duration("pause", 50*time.Millisecond, "wait between two query embeddings")
+	setFile := fs.String("set", "", "a query set (JSON lines: query, kind, target) to measure the search of the other kinds on")
+	requestsBuiltin := fs.Bool("requests-builtin", false, "measure the request search on the queries the ledger holds the answer to")
 	embedFlagSet := addEmbedFlags(fs, false)
 	fs.Usage = func() { fmt.Fprintln(stdout, evalUsage) }
 	if err := fs.Parse(args); err != nil {
@@ -84,6 +109,20 @@ func cmdEvalSearch(args []string, stdout io.Writer) int {
 	if *dbPath == "" || fs.NArg() > 0 || *sample <= 0 || *minChars <= 0 || *pause < 0 {
 		fmt.Fprintln(stdout, evalUsage)
 		return 2
+	}
+	var set []searchquality.SetQuery
+	if *setFile != "" {
+		f, err := os.Open(*setFile)
+		if err != nil {
+			fmt.Fprintf(stdout, "eval search: %v\n", err)
+			return 1
+		}
+		set, err = searchquality.ParseSet(f)
+		f.Close()
+		if err != nil {
+			fmt.Fprintf(stdout, "eval search: %s: %v\n", *setFile, err)
+			return 1
+		}
 	}
 	cfg, err := embedFlagSet.resolve()
 	if err != nil {
@@ -124,15 +163,40 @@ func cmdEvalSearch(args []string, stdout io.Writer) int {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	rep, err := searchquality.Run(ctx, st, opts)
-	if err != nil {
-		if strings.Contains(err.Error(), "no such table") {
-			fmt.Fprintln(stdout, "The database has no embedding tables yet. Start the server once with this version; it creates them.")
+	if *setFile != "" || *requestsBuiltin {
+		if *requestsBuiltin {
+			builtin, err := searchquality.RequestSet(st, *minChars, *sample, *seed)
+			if err != nil {
+				return evalFailed(stdout, err)
+			}
+			set = append(set, builtin...)
+		}
+		if len(set) == 0 {
+			fmt.Fprintln(stdout, "eval search: there is no query to measure: the set is empty, and the ledger holds no sighting quote and no duplicate or successor relation")
 			return 1
 		}
-		fmt.Fprintf(stdout, "eval search: %v\n", err)
-		return 1
+		rep, err := searchquality.RunSet(ctx, st, opts, set)
+		if err != nil {
+			return evalFailed(stdout, err)
+		}
+		rep.Write(stdout)
+		return 0
+	}
+	rep, err := searchquality.Run(ctx, st, opts)
+	if err != nil {
+		return evalFailed(stdout, err)
 	}
 	rep.Write(stdout)
 	return 0
+}
+
+// evalFailed reports a failed run. A database from before the embedding tables
+// has to be started once with this version, which creates them.
+func evalFailed(stdout io.Writer, err error) int {
+	if strings.Contains(err.Error(), "no such table") {
+		fmt.Fprintln(stdout, "The database has no embedding tables yet. Start the server once with this version; it creates them.")
+		return 1
+	}
+	fmt.Fprintf(stdout, "eval search: %v\n", err)
+	return 1
 }

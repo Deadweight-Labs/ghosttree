@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 
@@ -14,22 +15,28 @@ import (
 )
 
 const embedUsage = `usage: ctx embed status --db <path> [--embed-url <url>] [--embed-query-url <url>]
-                       [--embed-model <id>]
+                       [--embed-model <id>] [--embed-kinds <kinds>]
+                       [--embed-search-kinds <kinds>]
 
-Hybrid search keeps one vector per active knowledge entry. The server computes
-them in the background once it is started with --embed-url (env
-GHOSTTREE_EMBED_URL); see "Embeddings for hybrid search" in deploy/README.md.
-With --embed-query-url (env GHOSTTREE_EMBED_QUERY_URL) search queries are
-embedded by a second server, which must serve the same model.
+Hybrid search keeps one vector per active knowledge entry and, for the kinds
+named in --embed-kinds (env GHOSTTREE_EMBED_KINDS), per request, pain, document
+and description of a path. The server computes them in the background once it
+is started with --embed-url (env GHOSTTREE_EMBED_URL); see "Embeddings for
+hybrid search" in deploy/README.md. With --embed-query-url (env
+GHOSTTREE_EMBED_QUERY_URL) search queries are embedded by a second server, which
+must serve the same model.
 
-  status  how many entries have a current vector, how many are due, how the
-          background job last fared, and whether the embedding server answers
-          (the check embeds one short text); with a second server for queries
-          also whether it answers and whether both serve the same model
+  status  for each kind how many objects have a current vector, how many are
+          due and how many of those are parked, how the background job last
+          fared, and whether the embedding server answers (the check embeds one
+          short text); with a second server for queries also whether it answers
+          and whether both serve the same model. With --embed-kinds and
+          --embed-search-kinds (or their environment variables) it also says
+          which kind that configuration embeds and searches by.
 
 status reads the database without writing to it, so the server may keep
 running. A vector counts as current when it was made by the configured model,
-with the current text formats, from the entry's text as it is now.`
+with the current text formats, from the object's text as it is now.`
 
 func cmdEmbed(args []string, stdout io.Writer) int {
 	if len(args) == 0 {
@@ -52,6 +59,7 @@ func cmdEmbedStatus(args []string, stdout io.Writer) int {
 	fs.SetOutput(stdout)
 	dbPath := fs.String("db", "", "path to the ghosttree database")
 	embedFlagSet := addEmbedFlags(fs, false)
+	embedFlagSet.addKinds(fs)
 	fs.Usage = func() { fmt.Fprintln(stdout, embedUsage) }
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -94,7 +102,36 @@ func cmdEmbedStatus(args []string, stdout io.Writer) int {
 		due += fmt.Sprintf(" (%d parked: the embedding server fails on or refuses their text, see embed_entry_parked in the log)", status.Parked)
 	}
 	fmt.Fprintf(stdout, "due              %s\n", due)
-	fmt.Fprintf(stdout, "background job   %s\n", describeJob(status))
+
+	// The other kinds, one line each: the objects that count, how many have a
+	// current vector, how many are due, how many of those are parked.
+	total := status
+	for _, kind := range store.EmbedKinds() {
+		if kind == store.KindKnowledge {
+			continue
+		}
+		ks, err := st.EmbeddingStatus(kind, model)
+		if err != nil {
+			if strings.Contains(err.Error(), "no such table") {
+				// A database that the server has not opened with this version yet
+				// (it creates the tables of these kinds when it starts): knowledge
+				// above is still right, and each kind says so instead of the whole
+				// command failing.
+				fmt.Fprintf(stdout, "%-16s tables not created yet; start the server once with this version%s\n", kind, describeSwitches(cfg, kind))
+				continue
+			}
+			fmt.Fprintf(stdout, "embed status: %s: %v\n", kind, err)
+			return 1
+		}
+		total.Active += ks.Active
+		total.Current += ks.Current
+		total.Due += ks.Due
+		fmt.Fprintf(stdout, "%-16s %s%s\n", kind, describeKind(ks), describeSwitches(cfg, kind))
+	}
+	if cfg.kindsGiven {
+		fmt.Fprintf(stdout, "%-16s %s%s\n", store.KindKnowledge, "(counted above)", describeSwitches(cfg, store.KindKnowledge))
+	}
+	fmt.Fprintf(stdout, "background job   %s\n", describeJob(total))
 
 	if !cfg.enabled() {
 		fmt.Fprintln(stdout, "embedding server not configured (--embed-url or GHOSTTREE_EMBED_URL); this command does not know which server the running ctx serve uses")
@@ -108,6 +145,38 @@ func cmdEmbedStatus(args []string, stdout io.Writer) int {
 	fmt.Fprintf(stdout, "query server     %s: %s\n", cfg.QueryURL, probe(cfg, cfg.QueryURL))
 	fmt.Fprintf(stdout, "same model       %s\n", describeAgreement(cfg))
 	return 0
+}
+
+// describeKind is the line of one kind: embedded of active, due, parked.
+func describeKind(s store.EmbedStatus) string {
+	out := fmt.Sprintf("embedded %d of %d, due %d", s.Current, s.Active, s.Due)
+	var notes []string
+	if s.Parked > 0 {
+		notes = append(notes, fmt.Sprintf("%d parked", s.Parked))
+	}
+	if s.OtherModel > 0 {
+		notes = append(notes, fmt.Sprintf("%d of another model or text format", s.OtherModel))
+	}
+	if len(notes) > 0 {
+		out += " (" + strings.Join(notes, ", ") + ")"
+	}
+	return out
+}
+
+// describeSwitches says whether this invocation's configuration embeds a kind
+// and uses its vectors in the search; it says nothing when the configuration was
+// not given, since the command does not know which one the running server has.
+func describeSwitches(cfg embedSettings, kind string) string {
+	if !cfg.kindsGiven {
+		return ""
+	}
+	on := func(kinds []string) string {
+		if slices.Contains(kinds, kind) {
+			return "on"
+		}
+		return "off"
+	}
+	return fmt.Sprintf("  [embedding %s, search %s]", on(cfg.embedKinds()), on(cfg.searchKinds()))
 }
 
 // describeAgreement says whether the query server and the job server serve the

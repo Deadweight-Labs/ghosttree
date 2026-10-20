@@ -22,6 +22,10 @@ type GhostFile struct {
 	SessionRef  string `json:"session_ref,omitempty"`
 	DescribedAt string `json:"described_at"`
 	UpdatedAt   string `json:"updated_at"`
+	// Match is set by a search and only to MatchSemantic: the embedding found the
+	// description alone, its words do not match the query. A hit of the full-text
+	// index leaves it empty, which is also how every other read leaves it.
+	Match string `json:"match,omitempty"`
 }
 
 const ghostCols = `id, project, path, kind, description, content_sha, git_blob,
@@ -121,10 +125,18 @@ func (s *Store) GhostFilesUnder(project, prefix string) ([]GhostFile, error) {
 // SearchGhostFiles sucht über Pfad und Beschreibung. Dieselbe Verknüpfung wie
 // beim übrigen Wissen: ftsQuery verbindet die aussagekräftigen Terme mit OR und
 // überlässt die Rangfolge bm25.
+//
+// Mit einem Embedding-Dienst und eingeschalteter Art ist es die hybride Suche
+// von SearchGhostFilesWith, ohne Zeilenregel.
 func (s *Store) SearchGhostFiles(q, project string, limit int) ([]GhostFile, error) {
 	if s.reader != nil {
 		return s.reader.SearchGhostFiles(q, project, limit)
 	}
+	return s.searchGhostFiles(q, GhostSearch{Project: project, Limit: limit})
+}
+
+// ftsGhostFiles is the full-text ranking as it has always been answered.
+func (s *Store) ftsGhostFiles(q, project string, limit int) ([]GhostFile, error) {
 	if limit <= 0 {
 		limit = 20
 	}
