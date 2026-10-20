@@ -122,7 +122,7 @@ func TestRedactSessionsCommand(t *testing.T) {
 			t.Errorf("dry run output lacks %q:\n%s", want, out.String())
 		}
 	}
-	if strings.Contains(out.String(), "merged") || strings.Contains(out.String(), "VACUUM") {
+	if strings.Contains(out.String(), "merged") || strings.Contains(strings.ToLower(out.String()), "vacuum") {
 		t.Errorf("a dry run reports writes:\n%s", out.String())
 	}
 	if st, _ := readRedactState(t, path); st != before {
@@ -134,10 +134,13 @@ func TestRedactSessionsCommand(t *testing.T) {
 	if code := cmdRedactSessions([]string{"--db", path, "--batch", "1", "--sleep", "0s"}, &out); code != 0 {
 		t.Fatalf("code %d: %s", code, out.String())
 	}
-	for _, want := range []string{"chunks with secrets replaced: 2", "full-text indexes merged: chunks_fts, sess_fts", "write-ahead log:", "VACUUM"} {
+	for _, want := range []string{"chunks with secrets replaced: 2", "full-text indexes merged: chunks_fts, sess_fts", "write-ahead log:", "ctx db vacuum --db " + path} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("output lacks %q:\n%s", want, out.String())
 		}
+	}
+	if strings.Contains(out.String(), "sqlite3") {
+		t.Errorf("the output still points to the sqlite3 CLI:\n%s", out.String())
 	}
 	// The output never holds a value.
 	for _, secret := range []string{redactTestPassword, "fakeWRD", "k7k7k7k7m2m2m2m2", "Hx7"} {
@@ -171,7 +174,7 @@ func TestRedactSessionsCommand(t *testing.T) {
 	if code := cmdRedactSessions([]string{"--db", path}, &out); code != 0 {
 		t.Fatalf("second run: code %d: %s", code, out.String())
 	}
-	if !strings.Contains(out.String(), "chunks with secrets replaced: 0") || strings.Contains(out.String(), "cleaned per table") || strings.Contains(out.String(), "VACUUM") {
+	if !strings.Contains(out.String(), "chunks with secrets replaced: 0") || strings.Contains(out.String(), "cleaned per table") || strings.Contains(strings.ToLower(out.String()), "vacuum") {
 		t.Errorf("second run output:\n%s", out.String())
 	}
 	if again, _ := readRedactState(t, path); again != after {
