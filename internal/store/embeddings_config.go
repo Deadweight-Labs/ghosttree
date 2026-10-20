@@ -34,6 +34,13 @@ type EmbedSearchConfig struct {
 	// Logger receives the one line per minute about a search that fell back.
 	// Nil means slog.Default().
 	Logger *slog.Logger
+	// Ready is asked before a search embeds its query. A non-nil error says that
+	// the query vector would not be comparable with the stored vectors, for
+	// example because the server that embeds queries serves another model than the
+	// one that made them; the search then answers from full text, like for any
+	// other failure of the embedding, and the error is the reason that is logged.
+	// Nil asks nothing.
+	Ready func() error
 }
 
 // embedShared is the embedding configuration of a store and its reader, set
