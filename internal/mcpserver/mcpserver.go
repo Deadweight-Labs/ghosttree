@@ -653,7 +653,13 @@ func renderKnowledge(k store.Knowledge) string {
 	if len([]rune(body)) > snippetChars {
 		body = string([]rune(body)[:snippetChars]) + "…"
 	}
-	return fmt.Sprintf("- #%d [%s] %s — %s\n", k.ID, knowledgeLabel(k), k.Title, body)
+	label := knowledgeLabel(k)
+	if k.Match != "" {
+		// Found by meaning, not by the words of the query: say so, the reader
+		// should weigh it differently from an exact word hit.
+		label += "|match:" + k.Match
+	}
+	return fmt.Sprintf("- #%d [%s] %s — %s\n", k.ID, label, k.Title, body)
 }
 
 // renderKnowledgeFull answers the other question: not "which entries are there"

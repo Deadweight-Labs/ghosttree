@@ -106,13 +106,17 @@ func (a *app) searchKnowledge(l lang, pa *store.ProjectAccess, project, q string
 	if project != "" && pa.GateList(project, store.ResKnowledge, true) != nil {
 		return g
 	}
-	entries, err := a.store.SearchAllKnowledge(q, scope.Axes{Project: project}, a.overfetch(searchPerGroup+1), pa.Viewer())
+	readable := func(k store.Knowledge) bool {
+		return pa.CanSeeKnowledge(k) && (k.Status == "active" || k.Status == "stale")
+	}
+	entries, err := a.store.SearchKnowledgeWith(q, store.KnowledgeSearch{
+		Axes: scope.Axes{Project: project}, Operator: true,
+		Limit: a.overfetch(searchPerGroup + 1), Viewer: pa.Viewer(), Keep: readable, Prefilter: pa.KnowledgePrefilter(),
+	})
 	if err != nil {
 		return g
 	}
-	entries = keep(entries, searchPerGroup+1, func(k store.Knowledge) bool {
-		return pa.CanSeeKnowledge(k) && (k.Status == "active" || k.Status == "stale")
-	})
+	entries = keep(entries, searchPerGroup+1, readable)
 	for i, k := range entries {
 		if i == searchPerGroup {
 			g.All = "/ui/knowledge?q=" + url.QueryEscape(q)

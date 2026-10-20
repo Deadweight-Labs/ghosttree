@@ -708,3 +708,192 @@ README); the sample uses a systemd credential, so write
 install -m 600 /dev/null /etc/ghosttree/explain-key   # then paste the key into it
 systemctl enable --now ghosttree-explain.timer ghosttree-explain.path
 ```
+
+## Embeddings for hybrid search
+
+Search finds knowledge entries by the words of the query. With an embedding
+server it also finds the ones that say the same in other words: the two
+rankings, words (full text) and meaning (vectors), are fused by reciprocal rank
+fusion (k = 60) in `context_search`, the `/api/search` endpoint and the web
+search. A hit that only the meaning found carries `"match": "semantic"` in the
+API and `match:semantic` in the label of the MCP tool.
+
+It is optional and off by default. Without `GHOSTTREE_EMBED_URL` nothing about it
+runs and the answers are exactly those of the full-text search. Sessions and
+ghost descriptions are not embedded, nor are requests, and neither the hook that
+delivers knowledge with a prompt nor the gardener use the vectors.
+
+Inference runs in a process of its own, not in `ctx`: ghosttree stays a cgo-free
+single binary and talks to the model over HTTP on loopback. The text of every
+active knowledge entry goes to that process, so keep it on the same machine.
+`ctx serve` logs a warning when the configured address is not a loopback address.
+
+### The embedding server
+
+The measured choice is EmbeddingGemma 2 (768 dimensions, text only) as the Q8_0
+GGUF of `ggml-org/embeddinggemma-2-GGUF`, about 295 MB, run by `llama-server` of
+llama.cpp from release v0.7.0 (build b11454) on. Older builds do not know the
+architecture. Download the model once:
+
+```sh
+install -d /var/lib/ghosttree-embed
+curl -L -o /var/lib/ghosttree-embed/embeddinggemma-2-Q8_0.gguf \
+  https://huggingface.co/ggml-org/embeddinggemma-2-GGUF/resolve/main/embeddinggemma-2-Q8_0.gguf
+```
+
+`ghosttree-embed.service` starts it as a container with a fixed memory limit
+(1 GiB without swap, two cores), a read-only root filesystem, no capabilities,
+the model mounted read-only and the port published on `127.0.0.1:8475` only.
+`Restart=always` brings it back after a crash or a reboot. Pin `EMBED_IMAGE` to a
+release tag (and change `EMBED_MODEL_DIR` or `EMBED_PORT` if you like) in
+`/etc/ghosttree/embed.env`, then:
+
+```sh
+systemctl enable --now ghosttree-embed
+curl -s http://127.0.0.1:8475/health        # {"status":"ok"} once the model is loaded
+```
+
+Without a container the same arguments run natively; put `MemoryMax=1G` in the
+unit instead of the container limits:
+
+```sh
+llama-server -m embeddinggemma-2-Q8_0.gguf --alias embeddinggemma-2-q8_0 \
+  --host 127.0.0.1 --port 8475 \
+  --embeddings --pooling mean -c 4096 -ub 2048 -b 2048 -np 2 -t 2
+```
+
+Set every argument explicitly; defaults of `llama-server` change between releases
+(v0.7.0 changed the default port). `--pooling mean` is the model's pooling. The
+context of 4096 tokens is split over two slots of 2048 each: a text is cut to
+2000 characters before it is sent (about 500 to 700 tokens of German or English
+prose, never more than 2000 even for hashes and paths), so it always fits. Two
+slots are meant to let a search embed its query while the background job has a
+batch in flight. Whether `llama-server` spreads the inputs of one request over
+both slots, so that a batch can still occupy both, is not settled here: measure
+the time of a query while the backfill runs on your server, and lower
+`--embed-batch` if searches fall back to full text during it.
+
+### Configuring ghosttree
+
+Put the address in `/etc/ghosttree/server.env` (the unit already reads that file)
+and restart the server:
+
+```text
+GHOSTTREE_EMBED_URL=http://127.0.0.1:8475
+```
+
+| Environment variable | Serve flag | Default |
+| --- | --- | ---: |
+| `GHOSTTREE_EMBED_URL` | `--embed-url` | empty: off |
+| `GHOSTTREE_EMBED_MODEL` | `--embed-model` | `embeddinggemma-2-q8_0` |
+| `GHOSTTREE_EMBED_QUERY_TIMEOUT` | `--embed-query-timeout` | `1500ms` |
+| `GHOSTTREE_EMBED_BATCH` | `--embed-batch` | 8 |
+| `GHOSTTREE_EMBED_PAUSE` | `--embed-pause` | `2s` |
+| `GHOSTTREE_EMBED_IDLE` | `--embed-idle` | `30s` |
+| `GHOSTTREE_EMBED_MAX_BACKOFF` | `--embed-max-backoff` | `5m` |
+| `GHOSTTREE_EMBED_MIN_SIMILARITY` | `--embed-min-similarity` | `0.55`; `0` is no minimum |
+
+The model id names the vectors: it is stored with each of them, together with the
+version of the text formats the model card prescribes (`task: search result |
+query: …` for a query, `title: … | text: …` for an entry) and a hash of the text.
+Changing the model id, the formats (a new ghosttree release) or the text of an
+entry makes the vector out of date and the job computes it again; search only
+reads current vectors. If you exchange the model file but keep the id, the stored
+vectors have another length than the new ones; search leaves them out and logs
+`embed_vector_dimension` once a minute. Give the new model a new id.
+
+### Backfill and upkeep
+
+The server computes the vectors itself, in a goroutine of its own that starts ten
+seconds after the server and never blocks it. It takes the entries that were
+edited most recently first, sends at most `--embed-batch` of them in one request,
+waits `--embed-pause` between two requests, and never has more than one request
+open. If the embedding server fails it waits 5 seconds, then 10, 20 and so on up
+to `--embed-max-backoff`, and tries again; after a restart it continues with what
+is still missing, because its state is in the database.
+
+When nothing is due it looks again every `--embed-idle`. It does not read the
+text of every entry for that: an entry is looked at again when it was edited at
+or after the time its vector was made (every change of a text goes through
+`updated_at`), and only those texts are read and compared with the hash; one look
+at every entry is made when the server starts, which finds a text that was
+changed behind the application's back. A change that leaves the text alone, such
+as a new confidence, costs no request to the embedding server.
+
+One text can make the embedding server fail while it answers the others. When a
+batch fails twice, the texts of that batch are sent one by one; the ones that
+the server answers are stored and the one it does not answer is parked in the
+table `knowledge_embedding_failures`, for 5 minutes, then 10, then 20, up to 6
+hours, and logged as `embed_entry_parked`. If the server answers none of them it
+is the server, and nothing is parked. A text that the server refuses outright (an
+HTTP 400, 413 or 422, for example a text longer than its context) is parked for
+good until the entry changes or the model or text format does; to try such texts
+again with the same model, empty the table. Parked entries count as due in
+`ctx embed status`, with their number.
+
+A database of about 2,700 entries needs roughly 20 minutes at the defaults on the
+hardware the sample was written for (a batch of eight documents in about 1.4
+seconds, plus the pause). Meanwhile search already uses the vectors that exist.
+
+```sh
+ctx embed status --db /var/lib/ghosttree/ghosttree.db --embed-url http://127.0.0.1:8475
+```
+
+shows how many active entries have a current vector, how many are due, how the
+job last fared (failing since, error, last progress) and whether the embedding
+server answers. It only reads the database, so the server may keep running; run
+it as described in "Running maintenance commands". The vectors take 768 bytes per
+entry and live in the table `knowledge_embeddings`.
+
+### When the embedding server is away
+
+A search waits at most `--embed-query-timeout` for the vector of its query. If the
+server is down, slow or answers an error, the search is answered from the
+full-text ranking, as if embeddings were off; the caller sees no error. The server
+logs `embed_search_fallback` at most once a minute, with the error and the number
+of searches since the last line. A question made only of ordinary words ("what is
+left to do") is never sent to the embedding server.
+
+To turn it off, remove `GHOSTTREE_EMBED_URL` and restart; the stored vectors are
+not read any more and can stay. `ghosttree-embed.service` can be stopped at any
+time without touching ghosttree.
+
+### Measuring what it gains
+
+```sh
+ctx eval search --db /var/lib/ghosttree/ghosttree.db --embed-url http://127.0.0.1:8475
+```
+
+takes the quotes in `knowledge_evidence` of at least 30 characters that back
+active entries (`--sample 1500` of them, drawn with `--seed 20261020`) and asks
+the production search which entry a quote leads to, once by words alone, once by
+vectors alone and once fused. It prints n, R@1, R@3, R@10 and MRR@10 per ranking
+for all targets, for the targets that are not quarantined, and for a search that
+leaves the quarantined entries out, as the search for agents does. The full-text
+row is the "before", the hybrid row the "after". It never prints a quote or any
+text of an entry. Wait until `ctx embed status` shows nothing due, or the vector
+rows understate the result. The quotes are passages of transcripts, closer to the
+entry than a question a person asks, so read the numbers as "finds the entry for
+the passage it came from".
+
+### What a search shows that only the meaning found
+
+Without a limit on similarity the embedding ranking has a nearest neighbour for
+any query, however far away, and a result list would be padded with them. Two
+things keep that in check. An entry enters the embedding ranking only with a
+cosine of at least `--embed-min-similarity` (default 0.55). The value belongs to
+EmbeddingGemma 2: on the project's own entries the best neighbour of each of 398
+quotes had a cosine of at least 0.66, about 0.78 for the median quote, so 0.55 cuts
+the tail of unrelated entries and not the answers. The quotes are longer than what
+people type and score higher than short questions; treat 0.55 as a starting value
+and re-measure on your server with `ctx eval search` and several values of
+`--embed-min-similarity`, and set it again when you change the model. And a
+search shows at most five hits that only the meaning found (at most half of a
+short result), after the hits that contain the words; so a search that finds two
+entries by their words comes back with two and a handful of neighbours, not with a
+full page.
+
+What a search counts as used (`search_hits`, which orders the bootstrap and feeds
+`ctx usage`) is what it delivers, once. The entries the search fetches beyond the
+limit to have enough left after the access rules, and the ones the rules drop,
+are not counted, with or without an embedding server.

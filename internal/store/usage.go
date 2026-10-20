@@ -24,6 +24,18 @@ func (s *Store) recordKnowledgeSearchHit(ks []Knowledge) {
 	s.bumpUsage(ks, ", search_hits = search_hits + 1")
 }
 
+// RecordKnowledgeSearchHits counts entries as answers someone went looking for.
+// The search itself does not, when asked not to (KnowledgeSearch.NoRecord): only
+// the caller knows which hits it finally delivers, and an entry that was fetched
+// to be filtered or cut away has not been used.
+func (s *Store) RecordKnowledgeSearchHits(ks []Knowledge) {
+	if s.bookkeeper != nil {
+		s.bookkeeper.coalesceUsage(ks, true)
+		return
+	}
+	s.bumpUsage(ks, ", search_hits = search_hits + 1")
+}
+
 func (s *Store) bumpUsage(ks []Knowledge, extra string) {
 	if len(ks) == 0 {
 		return

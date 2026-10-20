@@ -1,0 +1,48 @@
+[Unit]
+Description=ghosttree embedding server (llama.cpp llama-server, EmbeddingGemma 2)
+Documentation=https://github.com/Deadweight-Labs/ghosttree/blob/main/deploy/README.md
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+# One container, one model, loopback only. Hybrid search needs it only when
+# GHOSTTREE_EMBED_URL points here; without it ghosttree searches by words alone.
+#
+# EMBED_IMAGE: pin a release tag at or after llama.cpp v0.7.0 (b11454); older
+# builds do not know the EmbeddingGemma 2 architecture.
+# EMBED_MODEL_DIR holds embeddinggemma-2-Q8_0.gguf (about 295 MB), see
+# "Embeddings for hybrid search" in deploy/README.md. It is mounted read-only.
+Environment=EMBED_IMAGE=ghcr.io/ggml-org/llama.cpp:server
+Environment=EMBED_MODEL_DIR=/var/lib/ghosttree-embed
+Environment=EMBED_PORT=8475
+EnvironmentFile=-/etc/ghosttree/embed.env
+ExecStartPre=-/usr/bin/docker rm -f ghosttree-embed
+# Memory and CPU are fixed by the container, not by llama-server: 1 GiB without
+# swap, two cores. The port is published on the loopback address only; inside the
+# container the server listens on 8080, set explicitly because the default port
+# changes between llama.cpp releases.
+#
+# Server arguments:
+#   --embeddings --pooling mean   the model's pooling; this is an embedding model
+#   -c 4096 -np 2                 two slots with a context of 2048 tokens each; meant
+#                                 so that a search can embed its query while a
+#                                 batch of the background job is in flight (to be
+#                                 measured on the server, see deploy/README.md)
+#   -ub 2048 -b 2048              a text of up to 2048 tokens fits one physical batch
+#   -t 2                          two threads, matching --cpus 2
+ExecStart=/usr/bin/docker run --rm --name ghosttree-embed \
+  --memory 1g --memory-swap 1g --cpus 2 \
+  --read-only --cap-drop ALL --security-opt no-new-privileges \
+  -p 127.0.0.1:${EMBED_PORT}:8080 \
+  -v ${EMBED_MODEL_DIR}:/models:ro \
+  ${EMBED_IMAGE} \
+  -m /models/embeddinggemma-2-Q8_0.gguf --alias embeddinggemma-2-q8_0 \
+  --host 0.0.0.0 --port 8080 \
+  --embeddings --pooling mean -c 4096 -ub 2048 -b 2048 -np 2 -t 2
+ExecStop=/usr/bin/docker stop ghosttree-embed
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
