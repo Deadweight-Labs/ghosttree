@@ -18,6 +18,11 @@ type EmbedDue struct {
 	// they are not looked at again. For sessions, whose items are chunks, these are
 	// the numbers of the sessions that were looked at and found complete.
 	Unchanged []int64
+	// Seen holds, for sessions only, the generation of the mark that each session of
+	// Unchanged had when the look saw it (NoSessionMark when it saw none), in the
+	// same order. The job passes it back with TouchSessionEmbeddings, which writes the
+	// mark only if it is still that generation.
+	Seen []SessionSeen
 	// Stale are objects whose vector, or parked failure, has no text any more and
 	// is to go: the job says so with DropEmbeddings(kind, Stale). Only sessions have
 	// them (a chunk that is no longer a text of its session, or whose text is now

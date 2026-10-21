@@ -39,7 +39,7 @@ type Store interface {
 	EmbeddingDue(kind string, m store.EmbedModel, limit int, at time.Time, full bool) (store.EmbedDue, error)
 	UpsertEmbedding(e store.Embedding) error
 	TouchEmbeddings(kind string, ids []int64, readAt string) error
-	TouchSessionEmbeddings(m store.EmbedModel, ids []int64, readAt string) error
+	TouchSessionEmbeddings(m store.EmbedModel, seen []store.SessionSeen, readAt string) error
 	DropEmbeddings(kind string, ids []int64) (int, error)
 	RecordEmbedFailure(f store.EmbedFailure) error
 	PurgeEmbeddings(kind string) (int, error)
@@ -307,8 +307,9 @@ func (j *Job) stepKind(ctx context.Context, kind string) (Result, error) {
 	if len(due.Unchanged) > 0 {
 		var err error
 		if kind == store.KindSession {
-			// The mark of a session holds the model it was made under.
-			err = j.st.TouchSessionEmbeddings(j.model, due.Unchanged, due.ReadAt)
+			// The mark of a session holds the model it was made under, and is written only
+			// if it is still the one the look saw.
+			err = j.st.TouchSessionEmbeddings(j.model, due.Seen, due.ReadAt)
 		} else {
 			err = j.st.TouchEmbeddings(kind, due.Unchanged, due.ReadAt)
 		}

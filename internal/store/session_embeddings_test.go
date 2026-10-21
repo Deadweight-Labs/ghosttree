@@ -37,7 +37,7 @@ func embedSessionTexts(t *testing.T, st *Store, c *embed.Client, at time.Time) (
 			}
 		}
 		if len(due.Unchanged) > 0 {
-			if err := st.TouchSessionEmbeddings(modelOf(c), due.Unchanged, due.ReadAt); err != nil {
+			if err := st.TouchSessionEmbeddings(modelOf(c), due.Seen, due.ReadAt); err != nil {
 				t.Fatal(err)
 			}
 		}

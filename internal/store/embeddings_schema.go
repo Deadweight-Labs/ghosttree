@@ -56,8 +56,14 @@ CREATE TABLE IF NOT EXISTS embedding_failures(
 // answer has not stood long enough, a text is parked for a time) is not recorded,
 // so it stays due and is looked at again. Version 0, which no version of the rules
 // has, is a tombstone: what ctx redact-sessions and ctx strip-images leave for a
-// session whose vector they dropped. It makes the session due, and only a look
-// made after its read_at replaces it (TouchSessionEmbeddings).
+// session whose vector they dropped. It makes the session due. gen is the
+// generation of the mark: a tombstone counts it up, in the transaction that drops
+// the vector, and a look hands back the generation it saw (or that it saw no
+// mark); TouchSessionEmbeddings writes the mark only if that is still the
+// generation. A look that was made before the change, and so found the session
+// complete with the vector that is gone, can never bring the old mark back, whatever
+// the clocks say; a time stamped inside a transaction that commits later could not
+// promise that.
 //
 // The columns of the first two are those of knowledge_embeddings.
 const sessionEmbeddingsSchema = `
@@ -76,7 +82,8 @@ CREATE TABLE IF NOT EXISTS session_embedding_sync(
   read_at TEXT NOT NULL,
   version INTEGER NOT NULL DEFAULT 0,
   model TEXT NOT NULL DEFAULT '',
-  prefix_version TEXT NOT NULL DEFAULT '') WITHOUT ROWID;
+  prefix_version TEXT NOT NULL DEFAULT '',
+  gen INTEGER NOT NULL DEFAULT 0) WITHOUT ROWID;
 `
 
 // sessionSyncColumns are the columns of session_embedding_sync that a first
@@ -87,6 +94,7 @@ var sessionSyncColumns = []struct{ name, ddl string }{
 	{"version", `INTEGER NOT NULL DEFAULT 0`},
 	{"model", `TEXT NOT NULL DEFAULT ''`},
 	{"prefix_version", `TEXT NOT NULL DEFAULT ''`},
+	{"gen", `INTEGER NOT NULL DEFAULT 0`},
 }
 
 // documentsFTSSchema is the full-text index of the documents, which had none:

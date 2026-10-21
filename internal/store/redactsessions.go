@@ -467,7 +467,9 @@ func (w *redactWork) apply(edits []redactEdit) (redactBatch, error) {
 			continue
 		}
 		res.changed++
-		if w.sessionVectors != noSessionVectors {
+		// The text of a vector is made from the line (raw) alone, so a change of the
+		// text column does not touch it.
+		if rawChanged && w.sessionVectors != noSessionVectors {
 			dropped, err := dropSessionEmbeddings(w.ctx, q, w.sessionVectors, e.id, w.write)
 			if err != nil {
 				return res, err

@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -286,7 +288,7 @@ func TestSessionRulesVersionBringsMarkedSessionsBack(t *testing.T) {
 	if n, err := st.DropEmbeddings(KindSession, due.Stale); err != nil || n != 1 {
 		t.Fatalf("%d %v", n, err)
 	}
-	if err := st.TouchSessionEmbeddings(modelOf(c), due.Unchanged, due.ReadAt); err != nil {
+	if err := st.TouchSessionEmbeddings(modelOf(c), due.Seen, due.ReadAt); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.db.QueryRow(`SELECT version FROM session_embedding_sync WHERE session_id = ?`, s.ID).Scan(&version); err != nil || version != old+1 {
@@ -341,7 +343,7 @@ func TestSessionSyncTableOfAFirstVersionIsMigrated(t *testing.T) {
 		cols = append(cols, name)
 	}
 	rows.Close()
-	if want := []string{"session_id", "read_at", "version", "model", "prefix_version"}; !slices.Equal(cols, want) {
+	if want := []string{"session_id", "read_at", "version", "model", "prefix_version", "gen"}; !slices.Equal(cols, want) {
 		t.Fatalf("columns %v, want %v", cols, want)
 	}
 	due, err := st.EmbeddingDue(KindSession, modelOf(c), 10, time.Now(), false)
@@ -350,46 +352,123 @@ func TestSessionSyncTableOfAFirstVersionIsMigrated(t *testing.T) {
 	}
 }
 
-// A tombstone (what a redaction leaves for a session whose vector it dropped) is
-// replaced by a look that is later than it. A look that is earlier, or in the same
-// second, leaves it: it was made before the change, or cannot say which came first,
-// and the session is looked at once more.
-func TestSessionTombstoneIsOnlyReplacedByALaterLook(t *testing.T) {
+// The mark of a session is written by a look only if it is still the mark the look
+// saw. A redaction that drops a vector counts the generation of the mark up, in its
+// own transaction, and a look that was made before it (and found the session
+// complete with the vector that is gone) cannot bring the old mark back, whatever the
+// time stamped on the tombstone: that is taken inside a transaction that commits
+// later, so a look that started in between is later than it.
+func TestSessionMarkIsWrittenOnlyIfItIsStillTheOneTheLookSaw(t *testing.T) {
 	st := orgStore(t, "robin")
 	_, c := newFakeEmbedder(t)
-	s := addSession(t, st, "s", 1, "", "m", "", chunksOf(promptLine(0, "please look into the s1 s2 problem for me")))
-	const at = "2026-10-21T12:00:00Z"
-	if _, err := st.db.Exec(`DELETE FROM session_embedding_sync`); err != nil {
-		t.Fatal(err)
+	s := addSession(t, st, "s", 1, "", "m", "", chunksOf(
+		promptLine(0, "please look into the s1 s2 problem for me"),
+		promptLine(1, "and the second one, which is about s3 s4"),
+	))
+	first, second := chunkID(t, st, s.ID, 0), chunkID(t, st, s.ID, 1)
+	if got := embedSessionTexts(t, st, c, later(2*SessionSettle)); got != 2 {
+		t.Fatalf("%d texts embedded", got)
 	}
-	if _, err := st.db.Exec(`INSERT INTO session_embedding_sync(session_id, read_at, version, model, prefix_version) VALUES(?, ?, 0, '', '')`, s.ID, at); err != nil {
-		t.Fatal(err)
-	}
-	mark := func() (version int, readAt string) {
+	mark := func() (version int, gen int64, found bool) {
 		t.Helper()
-		if err := st.db.QueryRow(`SELECT version, read_at FROM session_embedding_sync WHERE session_id = ?`, s.ID).Scan(&version, &readAt); err != nil {
+		err := st.db.QueryRow(`SELECT version, gen FROM session_embedding_sync WHERE session_id = ?`, s.ID).Scan(&version, &gen)
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, 0, false
+		}
+		if err != nil {
 			t.Fatal(err)
 		}
-		return version, readAt
+		return version, gen, true
 	}
-	for _, readAt := range []string{"2026-10-21T11:00:00Z", at} {
-		if err := st.TouchSessionEmbeddings(modelOf(c), []int64{s.ID}, readAt); err != nil {
+	// look is a look at the session after it got a chunk, which finds it complete.
+	look := func() EmbedDue {
+		t.Helper()
+		if _, err := st.db.Exec(`UPDATE sessions SET last_seen_at = ? WHERE id = ?`, time.Now().UTC().Format(time.RFC3339), s.ID); err != nil {
 			t.Fatal(err)
 		}
-		if v, got := mark(); v != 0 || got != at {
-			t.Fatalf("a look at %s replaced the tombstone: version %d, read_at %s", readAt, v, got)
+		due, err := st.EmbeddingDue(KindSession, modelOf(c), 10, time.Now(), false)
+		if err != nil || len(due.Items) != 0 || !slices.Equal(due.Unchanged, []int64{s.ID}) || len(due.Seen) != 1 {
+			t.Fatalf("the look finds the session complete: %+v %v", due, err)
+		}
+		return due
+	}
+	tombstone := func(chunk int64) {
+		t.Helper()
+		if n, err := dropSessionEmbeddings(context.Background(), st.db, generationSessionVectors, chunk, true); err != nil || n != 1 {
+			t.Fatalf("dropped %d vectors: %v", n, err)
 		}
 	}
-	// A session with a tombstone is looked at.
-	if due, err := st.EmbeddingDue(KindSession, modelOf(c), 10, time.Now(), false); err != nil || len(due.Items) != 1 {
-		t.Fatalf("%+v %v", due, err)
+	if v, gen, found := mark(); !found || v != sessionTextVersion || gen != 0 {
+		t.Fatalf("the mark after the first run: %d %d %v", v, gen, found)
 	}
-	const newer = "2026-10-21T12:00:01Z"
-	if err := st.TouchSessionEmbeddings(modelOf(c), []int64{s.ID}, newer); err != nil {
+
+	// The look saw the mark of generation 0. The tombstone comes, and what it was
+	// stamped with is the time before the look began: the touch does not replace it.
+	due := look()
+	if due.Seen[0] != (SessionSeen{Session: s.ID, Gen: 0}) {
+		t.Fatalf("the look saw %+v", due.Seen)
+	}
+	tombstone(first)
+	read, err := time.Parse(time.RFC3339, due.ReadAt)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if v, got := mark(); v != sessionTextVersion || got != newer {
-		t.Fatalf("a later look did not replace the tombstone: version %d, read_at %s", v, got)
+	if _, err := st.db.Exec(`UPDATE session_embedding_sync SET read_at = ? WHERE session_id = ?`, read.Add(-time.Second).Format(time.RFC3339), s.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.TouchSessionEmbeddings(modelOf(c), due.Seen, due.ReadAt); err != nil {
+		t.Fatal(err)
+	}
+	if v, gen, _ := mark(); v != 0 || gen != 1 {
+		t.Fatalf("the touch of a look before the tombstone replaced it: version %d, generation %d", v, gen)
+	}
+	// The session is looked at again, the vector that was dropped is made again, and
+	// the look that saw the tombstone replaces it.
+	if got := embedSessionTexts(t, st, c, later(2*SessionSettle)); got != 1 {
+		t.Fatalf("%d texts made again", got)
+	}
+	if v, gen, _ := mark(); v != sessionTextVersion || gen != 1 {
+		t.Fatalf("the look that saw the tombstone did not replace it: version %d, generation %d", v, gen)
+	}
+
+	// A look that saw no mark does not write one where a tombstone is by now.
+	if _, err := st.db.Exec(`DELETE FROM session_embedding_sync WHERE session_id = ?`, s.ID); err != nil {
+		t.Fatal(err)
+	}
+	due = look()
+	if due.Seen[0] != (SessionSeen{Session: s.ID, Gen: NoSessionMark}) {
+		t.Fatalf("the look saw %+v", due.Seen)
+	}
+	tombstone(second)
+	if err := st.TouchSessionEmbeddings(modelOf(c), due.Seen, due.ReadAt); err != nil {
+		t.Fatal(err)
+	}
+	if v, gen, found := mark(); !found || v != 0 || gen != 1 {
+		t.Fatalf("the look that saw no mark wrote one over the tombstone: version %d, generation %d, %v", v, gen, found)
+	}
+	if got := embedSessionTexts(t, st, c, later(2*SessionSettle)); got != 1 {
+		t.Fatalf("%d texts made again", got)
+	}
+
+	// A mark that is gone by the time of the touch is not made by it: the session is
+	// looked at again.
+	due = look()
+	if _, err := st.db.Exec(`DELETE FROM session_embedding_sync WHERE session_id = ?`, s.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.TouchSessionEmbeddings(modelOf(c), due.Seen, due.ReadAt); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, found := mark(); found {
+		t.Fatal("the touch made a mark for a look that saw another one")
+	}
+	// And a look that saw the mark that is there writes it, with the model it was made under.
+	due = look()
+	if err := st.TouchSessionEmbeddings(modelOf(c), due.Seen, due.ReadAt); err != nil {
+		t.Fatal(err)
+	}
+	if v, _, found := mark(); !found || v != sessionTextVersion {
+		t.Fatalf("a look that saw no mark writes it: version %d, %v", v, found)
 	}
 }
 
@@ -458,7 +537,7 @@ func TestSessionTextRefusedForGoodDoesNotKeepItsSessionWaiting(t *testing.T) {
 	if err != nil || len(look.Items) != 0 || !slices.Equal(look.Unchanged, []int64{s.ID}) {
 		t.Fatalf("a text refused for good: %+v %v", look, err)
 	}
-	if err := st.TouchSessionEmbeddings(modelOf(c), look.Unchanged, look.ReadAt); err != nil {
+	if err := st.TouchSessionEmbeddings(modelOf(c), look.Seen, look.ReadAt); err != nil {
 		t.Fatal(err)
 	}
 	if look, err = st.EmbeddingDue(KindSession, modelOf(c), 10, time.Now(), false); err != nil || len(look.Unchanged) != 0 || len(look.Items) != 0 {

@@ -536,9 +536,11 @@ func (s *Store) SearchTranscripts(pa *ProjectAccess, q SearchQuery) (SearchPage,
 	// is made by the fusion within the filter that click gives (see
 	// computeFacetsWithVectors).
 	vec, vecCfg := s.transcriptVectors(q, readable)
-	facets := pa.computeFacets(cands, q.Filter)
+	var facets Facets
 	if vecCfg != nil {
 		facets = pa.computeFacetsWithVectors(cands, vec, byID, q.Filter, maxSemanticOnly(q.Limit))
+	} else {
+		facets = pa.computeFacets(cands, q.Filter)
 	}
 	page := SearchPage{Facets: facets}
 	if pa.isGuestOnly() {

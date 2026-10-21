@@ -958,11 +958,15 @@ the like) are removed. A text that the chain changes was changed on arrival alre
 the chain is the second lock, for what reaches the database another way and for
 what a later rule finds. The hash of the finished text decides whether a vector is
 current. `ctx redact-sessions` and `ctx strip-images` change what is stored for a
-chunk; the vector of every chunk they change is dropped in the same transaction, and
-the mark that its session is complete becomes a tombstone (version 0 and the time of
-the change), so that the server looks at the session again and a look that was made
-before the change cannot bring the old mark back. The server makes the vector again
-from the text as it is now. A dry run
+chunk; the vector of every chunk whose stored line they change is dropped in the same
+transaction (a change of the text column alone leaves it: the text of a vector is made
+from the line), and the mark that its session is complete becomes a tombstone (version
+0, and its generation counted up), so that the server looks at the session again. A
+look hands back the generation of the mark it saw, and the server writes the mark of
+a session only if it is still that generation; a look made before the change, which
+found the session complete with the vector that is gone, can therefore not bring the
+old mark back, however long the transaction of the command ran after it wrote the
+tombstone. The server makes the vector again from the text as it is now. A dry run
 drops nothing and counts what it would drop (`session_embeddings` in the report of
 `ctx redact-sessions`).
 

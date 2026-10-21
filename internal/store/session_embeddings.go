@@ -93,11 +93,25 @@ func cleanSessionText(harness string, seq int, raw string) string {
 	return strings.TrimSpace(strings.ToValidUTF8(t, "�"))
 }
 
+// NoSessionMark is the generation a look reports for a session that had no mark.
+const NoSessionMark int64 = -1
+
+// SessionSeen is a session a look found complete, with the generation of its mark
+// as the look saw it (see EmbedDue.Seen and TouchSessionEmbeddings).
+type SessionSeen struct {
+	Session int64
+	// Gen is the generation of the mark the look saw, NoSessionMark when it saw none.
+	Gen int64
+}
+
 // sessionRef is a session as the job looks at it.
 type sessionRef struct {
 	id       int64
 	harness  string
 	lastSeen string
+	// gen is the generation of the mark of the session when it was picked as a
+	// candidate, before any of its texts was read; NoSessionMark without a mark.
+	gen int64
 }
 
 // sessionPicked reads the chunk index rows of a session that can carry a text and
@@ -336,9 +350,11 @@ var sessionTextVersion = 1
 // (last_seen_at reaches read_at: same-second changes count, as for the other
 // kinds), and the ones whose mark was made under another model, text format or
 // version of the rules. A session without a message in the index has nothing to
-// look at.
+// look at. Each comes with the generation of its mark, read here, before anything
+// of the session is: a tombstone that comes after it makes the look's report of
+// the session stale (TouchSessionEmbeddings), and one that came before it is seen.
 func (s *Store) sessionCandidates(m EmbedModel) ([]sessionRef, error) {
-	rows, err := s.db.Query(`SELECT se.id, se.harness, se.last_seen_at FROM sessions se
+	rows, err := s.db.Query(`SELECT se.id, se.harness, se.last_seen_at, COALESCE(y.gen, -1) FROM sessions se
 		LEFT JOIN session_embedding_sync y ON y.session_id = se.id
 		WHERE EXISTS (SELECT 1 FROM chunk_index ci WHERE ci.session_id = se.id AND ci.role != '')
 		  AND (y.session_id IS NULL OR se.last_seen_at >= y.read_at
@@ -351,7 +367,7 @@ func (s *Store) sessionCandidates(m EmbedModel) ([]sessionRef, error) {
 	var out []sessionRef
 	for rows.Next() {
 		var r sessionRef
-		if err := rows.Scan(&r.id, &r.harness, &r.lastSeen); err != nil {
+		if err := rows.Scan(&r.id, &r.harness, &r.lastSeen, &r.gen); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -361,8 +377,9 @@ func (s *Store) sessionCandidates(m EmbedModel) ([]sessionRef, error) {
 
 // sessionEmbeddingDue is EmbeddingDue for sessions. It looks at the sessions that
 // need it, newest first, until it has limit texts. A session that turns out to be
-// complete is reported in Unchanged, and the job records it with
-// TouchSessionEmbeddings so that it is not looked at again; the vectors that the
+// complete is reported in Unchanged, with the generation of its mark in Seen, and
+// the job records it with TouchSessionEmbeddings so that it is not looked at again
+// (unless its mark has changed since, see there); the vectors that the
 // look found without a text are reported in Stale, and the job drops them. It
 // only reads: the reader of a runtime store can answer it. While the index of the
 // chunks is still being built nothing is due: a session whose chunks are not all
@@ -387,6 +404,7 @@ func (s *Store) sessionEmbeddingDue(m EmbedModel, limit int, at time.Time) (Embe
 		due.Stale = append(due.Stale, look.stale...)
 		if len(look.items) == 0 && !look.waiting {
 			due.Unchanged = append(due.Unchanged, c.id)
+			due.Seen = append(due.Seen, SessionSeen{Session: c.id, Gen: c.gen})
 			continue
 		}
 		due.Items = append(due.Items, look.items[:min(len(look.items), limit-len(due.Items))]...)
@@ -399,30 +417,57 @@ func (s *Store) sessionEmbeddingDue(m EmbedModel, limit int, at time.Time) (Embe
 // mark also holds the version of the rules that make the texts, so that the
 // session is looked at again when any of the three changes.
 //
-// A session whose mark is a tombstone (see dropSessionEmbeddings) keeps it, unless
-// the look is later than the tombstone: a look that was made before a redaction
-// dropped a vector of the session found the session complete with that vector, and
-// must not say so now that it is gone. A look after the tombstone that falls in the
-// same second as it is not taken for later either; the session is looked at once
-// more.
-func (s *Store) TouchSessionEmbeddings(m EmbedModel, ids []int64, readAt string) error {
+// It is a compare-and-swap on the generation of the mark: a session is written
+// only if its mark is still the one the look saw (EmbedDue.Seen). A look that saw
+// no mark writes none if one is there by now, and a look that saw a generation
+// leaves a mark of another one alone. That is what a tombstone relies on (see
+// dropSessionEmbeddings): a look made before a redaction dropped a vector of the
+// session found the session complete with that vector, and must not say so now that
+// it is gone. A session whose mark is gone by the time of the touch is left without
+// one, and is looked at again. The writer does it in jobs of dropBatch sessions.
+func (s *Store) TouchSessionEmbeddings(m EmbedModel, seen []SessionSeen, readAt string) error {
 	if s.writer != nil {
-		return queueWrite(s, []any{m, ids, readAt}, func(d *Store, p []any) error {
-			return d.TouchSessionEmbeddings(p[0].(EmbedModel), p[1].([]int64), p[2].(string))
-		})
-	}
-	if len(ids) == 0 || readAt == "" {
+		for start := 0; start < len(seen); start += dropBatch {
+			part := seen[start:min(start+dropBatch, len(seen))]
+			if err := queueWrite(s, []any{m, part, readAt}, func(d *Store, p []any) error {
+				return d.TouchSessionEmbeddings(p[0].(EmbedModel), p[1].([]SessionSeen), p[2].(string))
+			}); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
-	return s.eachChunk(ids, func(part []any) error {
-		_, err := s.db.Exec(`INSERT INTO session_embedding_sync(session_id, read_at, version, model, prefix_version)
-			SELECT id, ?, ?, ?, ? FROM sessions WHERE id IN (`+placeholders(len(part))+`)
-			ON CONFLICT(session_id) DO UPDATE SET read_at = excluded.read_at, version = excluded.version,
-				model = excluded.model, prefix_version = excluded.prefix_version
-			WHERE session_embedding_sync.version != 0 OR session_embedding_sync.read_at < excluded.read_at`,
-			append([]any{readAt, sessionTextVersion, m.Model, m.PrefixVersion}, part...)...)
+	if len(seen) == 0 || readAt == "" {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
 		return err
-	})
+	}
+	defer tx.Rollback()
+	renew, err := tx.Prepare(`UPDATE session_embedding_sync SET read_at = ?, version = ?, model = ?, prefix_version = ?
+		WHERE session_id = ? AND gen = ?`)
+	if err != nil {
+		return err
+	}
+	defer renew.Close()
+	first, err := tx.Prepare(`INSERT INTO session_embedding_sync(session_id, read_at, version, model, prefix_version, gen)
+		SELECT id, ?, ?, ?, ?, 0 FROM sessions WHERE id = ? ON CONFLICT(session_id) DO NOTHING`)
+	if err != nil {
+		return err
+	}
+	defer first.Close()
+	for _, one := range seen {
+		if one.Gen == NoSessionMark {
+			_, err = first.Exec(readAt, sessionTextVersion, m.Model, m.PrefixVersion, one.Session)
+		} else {
+			_, err = renew.Exec(readAt, sessionTextVersion, m.Model, m.PrefixVersion, one.Session, one.Gen)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // DropEmbeddings removes the vectors and the parked failures of objects of a
@@ -643,13 +688,13 @@ const (
 	// database without the migrations, so a database that no server has started with
 	// this version has none, and there is nothing to drop.
 	noSessionVectors sessionVectorSchema = iota
-	// unversionedSessionVectors: the tables are there, but the mark of a session is
-	// that of the first version of the table, with no version of the rules. It cannot
-	// hold a tombstone and is deleted instead; the server gives it the columns when it
+	// plainMarkSessionVectors: the tables are there, but the mark of a session is
+	// that of an earlier shape of the table, with no generation. It cannot hold a
+	// tombstone and is deleted instead; the server gives it the columns when it
 	// starts.
-	unversionedSessionVectors
-	// versionedSessionVectors: the mark can hold a tombstone.
-	versionedSessionVectors
+	plainMarkSessionVectors
+	// generationSessionVectors: the mark has a generation and can hold a tombstone.
+	generationSessionVectors
 )
 
 // hasSessionEmbeddingTables says which of the session vector tables a database has.
@@ -658,26 +703,29 @@ func hasSessionEmbeddingTables(ctx context.Context, q maintQueryer) (sessionVect
 	if err := q.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE name IN ('session_embeddings','session_embedding_failures','session_embedding_sync')`).Scan(&n); err != nil || n != 3 {
 		return noSessionVectors, err
 	}
-	var versioned int
-	if err := q.QueryRowContext(ctx, `SELECT count(*) FROM pragma_table_info('session_embedding_sync') WHERE name = 'version'`).Scan(&versioned); err != nil {
+	var columns int
+	if err := q.QueryRowContext(ctx, `SELECT count(*) FROM pragma_table_info('session_embedding_sync') WHERE name IN ('version', 'gen')`).Scan(&columns); err != nil {
 		return noSessionVectors, err
 	}
-	if versioned == 0 {
-		return unversionedSessionVectors, nil
+	if columns < 2 {
+		return plainMarkSessionVectors, nil
 	}
-	return versionedSessionVectors, nil
+	return generationSessionVectors, nil
 }
 
 // dropSessionEmbeddings removes the vector and the failure of one chunk, in the
 // transaction of the caller, and returns the number of vectors it removed (with
 // write false it only counts them). When there was a vector or a failure, the mark
 // "looked at" of the session becomes a tombstone: version 0, which no version of the
-// rules has, and the time of the change, so that the session is looked at again
-// and a touch of a look made before the change (TouchSessionEmbeddings) does not
-// bring the old mark back. ctx redact-sessions and ctx strip-blobs call it for
-// every chunk they change: a vector made from the text before the change was
-// derived from what the change was meant to remove, and the job makes a new one
-// from the text as it is now.
+// rules has, so that the session is looked at again, and its generation counted up,
+// so that a touch of a look made before the change (TouchSessionEmbeddings) does not
+// bring the old mark back. The generation is written in the transaction that drops
+// the vector, and is seen or not seen together with it; a time written there would
+// be taken before the commit, which comes after the rest of the batch, and a look
+// that started in between would be later than it. ctx redact-sessions and ctx
+// strip-images call it for every chunk whose line they change: a vector made from
+// the line before the change was derived from what the change was meant to remove,
+// and the job makes a new one from the text as it is now.
 func dropSessionEmbeddings(ctx context.Context, q maintQueryer, schema sessionVectorSchema, chunk int64, write bool) (int64, error) {
 	if !write {
 		var n int64
@@ -697,13 +745,12 @@ func dropSessionEmbeddings(ctx context.Context, q maintQueryer, schema sessionVe
 	if vectors+failures == 0 {
 		return vectors, nil
 	}
-	if schema == unversionedSessionVectors {
+	if schema == plainMarkSessionVectors {
 		_, err = q.ExecContext(ctx, `DELETE FROM session_embedding_sync WHERE session_id = (SELECT session_id FROM session_chunks WHERE id = ?)`, chunk)
 		return vectors, err
 	}
-	_, err = q.ExecContext(ctx, `INSERT INTO session_embedding_sync(session_id, read_at, version, model, prefix_version)
-		SELECT session_id, ?, 0, '', '' FROM session_chunks WHERE id = ?
-		ON CONFLICT(session_id) DO UPDATE SET read_at = max(session_embedding_sync.read_at, excluded.read_at),
-			version = 0, model = '', prefix_version = ''`, now(), chunk)
+	_, err = q.ExecContext(ctx, `INSERT INTO session_embedding_sync(session_id, read_at, version, model, prefix_version, gen)
+		SELECT session_id, ?, 0, '', '', 1 FROM session_chunks WHERE id = ?
+		ON CONFLICT(session_id) DO UPDATE SET version = 0, model = '', prefix_version = '', gen = session_embedding_sync.gen + 1`, now(), chunk)
 	return vectors, err
 }

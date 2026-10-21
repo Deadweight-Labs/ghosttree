@@ -15,7 +15,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/redact"
 )
 
-// ctx redact-sessions and ctx strip-blobs change what is stored for a chunk. A
+// ctx redact-sessions and ctx strip-images change what is stored for a chunk. A
 // vector that was made from the chunk before is made from what they take out, so
 // it goes with the change, and the job makes a new one from the text as it is
 // now. These tests run the commands on a database file, as they run in service.
@@ -276,7 +276,7 @@ func TestSessionMarkOfALookMadeBeforeARedactionDoesNotComeBack(t *testing.T) {
 	if _, err := RedactSessions(context.Background(), path, RedactSessionsOptions{Literals: lits}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.TouchSessionEmbeddings(modelOf(c), due.Unchanged, due.ReadAt); err != nil {
+	if err := s.TouchSessionEmbeddings(modelOf(c), due.Seen, due.ReadAt); err != nil {
 		t.Fatal(err)
 	}
 	var version int
@@ -293,47 +293,133 @@ func TestSessionMarkOfALookMadeBeforeARedactionDoesNotComeBack(t *testing.T) {
 	}
 }
 
-// A database whose mark of a session is that of the first version of the table, with
-// no version of the rules, cannot hold a tombstone: the command deletes the mark, as
-// it always did, and does not fail on a column that is not there. The server gives the
-// table its columns when it starts, and the session is looked at again.
-func TestMaintenanceCommandsDeleteTheMarkOfAFirstVersionTable(t *testing.T) {
+// A database whose mark of a session has no generation (the first shape of the
+// table, or the one with the model and the version of the rules) cannot hold a
+// tombstone: the command deletes the mark, as it always did, and does not fail on a
+// column that is not there. The server gives the table its columns when it starts,
+// and the session is looked at again.
+func TestMaintenanceCommandsDeleteTheMarkOfATableWithoutGenerations(t *testing.T) {
+	for name, ddl := range map[string]string{
+		"first shape":         `CREATE TABLE session_embedding_sync(session_id INTEGER NOT NULL PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE, read_at TEXT NOT NULL) WITHOUT ROWID`,
+		"with the rules only": `CREATE TABLE session_embedding_sync(session_id INTEGER NOT NULL PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE, read_at TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 0, model TEXT NOT NULL DEFAULT '', prefix_version TEXT NOT NULL DEFAULT '') WITHOUT ROWID`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			const leak = "Kakadu77Fake"
+			path, session, _, c := seedMaintained(t, leak)
+			lits, err := redact.NewLiterals([]string{leak})
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, err := sql.Open("sqlite", path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer raw.Close()
+			for _, q := range []string{`DROP TABLE session_embedding_sync`, ddl} {
+				if _, err := raw.Exec(q); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := raw.Exec(`INSERT INTO session_embedding_sync(session_id, read_at) VALUES(?, '2099-01-01T00:00:00Z')`, session); err != nil {
+				t.Fatal(err)
+			}
+			rep, err := RedactSessions(context.Background(), path, RedactSessionsOptions{Literals: lits})
+			if err != nil || rep.Tables["session_embeddings"] != 1 {
+				t.Fatalf("%v %+v", err, rep.Tables)
+			}
+			if n := rowsIn(t, raw, `SELECT count(*) FROM session_embedding_sync WHERE session_id = ?`, session); n != 0 {
+				t.Fatal("the mark of the earlier shape stayed")
+			}
+			s, err := Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			due, err := s.EmbeddingDue(KindSession, modelOf(c), 10, time.Now(), false)
+			if err != nil || len(due.Items) != 1 {
+				t.Fatalf("the session is looked at again: %+v %v", due, err)
+			}
+		})
+	}
+}
+
+// The text of a vector is made from the stored line alone. A redaction that changes
+// only the text column of a chunk (a value that is in the text and not in the line)
+// leaves its vector and the mark of its session as they are; one that changes the
+// line drops the vector and leaves a tombstone.
+func TestRedactSessionsDropsTheVectorOnlyOfAChunkWhoseLineChanged(t *testing.T) {
 	const leak = "Kakadu77Fake"
-	path, session, _, c := seedMaintained(t, leak)
+	path := filepath.Join(t.TempDir(), "ghosttree.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, c := newFakeEmbedder(t)
+	textOnly, err := s.UpsertSession(Session{Harness: "claude-code", ExternalID: "text-only"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AppendChunks(textOnly, []Chunk{
+		{Seq: 0, Role: "user", Text: "please keep the value " + leak + " in mind", Raw: promptLine(0, "please keep the value in mind for the s1 s2 job")},
+		{Seq: 1, Role: "user", Text: "and a second prompt, s3 s4", Raw: promptLine(1, "and a second prompt without any secret in it, s3 s4")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	inLine, err := s.UpsertSession(Session{Harness: "claude-code", ExternalID: "in-line"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AppendChunks(inLine, chunksOf(
+		promptLine(0, "please keep the value "+leak+" in mind for the s1 s2 job"),
+		promptLine(1, "and a second prompt without any secret in it, s3 s4"),
+	)); err != nil {
+		t.Fatal(err)
+	}
+	if got := embedSessionTexts(t, s, c, time.Now()); got != 4 {
+		t.Fatalf("%d texts embedded", got)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
 	lits, err := redact.NewLiterals([]string{leak})
 	if err != nil {
 		t.Fatal(err)
+	}
+	rep, err := RedactSessions(context.Background(), path, RedactSessionsOptions{Literals: lits})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Tables["session_chunks.text"] < 1 || rep.Tables["session_embeddings"] != 1 {
+		t.Fatalf("tables: %v", rep.Tables)
 	}
 	raw, err := sql.Open("sqlite", path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer raw.Close()
-	for _, q := range []string{
-		`DROP TABLE session_embedding_sync`,
-		`CREATE TABLE session_embedding_sync(session_id INTEGER NOT NULL PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE, read_at TEXT NOT NULL) WITHOUT ROWID`,
-	} {
-		if _, err := raw.Exec(q); err != nil {
+	if n := rowsIn(t, raw, `SELECT count(*) FROM session_chunks WHERE session_id = ? AND text LIKE ?`, textOnly, "%"+leak+"%"); n != 0 {
+		t.Fatal("the text column was not redacted: the test checks nothing")
+	}
+	vectors := func(session int64) int {
+		return rowsIn(t, raw, `SELECT count(*) FROM session_embeddings e JOIN session_chunks c ON c.id = e.chunk_id WHERE c.session_id = ?`, session)
+	}
+	if got := vectors(textOnly); got != 2 {
+		t.Fatalf("a change of the text column dropped a vector: %d left of 2", got)
+	}
+	if got := vectors(inLine); got != 1 {
+		t.Fatalf("a change of the line left %d vectors of 2, want one", got)
+	}
+	marked := func(session int64) (version int, gen int64) {
+		t.Helper()
+		if err := raw.QueryRow(`SELECT version, gen FROM session_embedding_sync WHERE session_id = ?`, session).Scan(&version, &gen); err != nil {
 			t.Fatal(err)
 		}
+		return version, gen
 	}
-	if _, err := raw.Exec(`INSERT INTO session_embedding_sync(session_id, read_at) VALUES(?, '2099-01-01T00:00:00Z')`, session); err != nil {
-		t.Fatal(err)
+	if v, gen := marked(textOnly); v != sessionTextVersion || gen != 0 {
+		t.Fatalf("the mark of the session whose text column changed: version %d, generation %d", v, gen)
 	}
-	rep, err := RedactSessions(context.Background(), path, RedactSessionsOptions{Literals: lits})
-	if err != nil || rep.Tables["session_embeddings"] != 1 {
-		t.Fatalf("%v %+v", err, rep.Tables)
-	}
-	if n := rowsIn(t, raw, `SELECT count(*) FROM session_embedding_sync WHERE session_id = ?`, session); n != 0 {
-		t.Fatal("the mark of the first version stayed")
-	}
-	s, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	due, err := s.EmbeddingDue(KindSession, modelOf(c), 10, time.Now(), false)
-	if err != nil || len(due.Items) != 1 {
-		t.Fatalf("the session is looked at again: %+v %v", due, err)
+	if v, gen := marked(inLine); v != 0 || gen != 1 {
+		t.Fatalf("the mark of the session whose line changed is no tombstone: version %d, generation %d", v, gen)
 	}
 }
