@@ -380,9 +380,9 @@ type redactWork struct {
 	// write is false for a dry run: the same steps run, nothing is written.
 	write                                 bool
 	chunksFTS, index, evidence, sightings bool
-	// sessionVectors says that the database has the vectors of the sessions: the
+	// sessionVectors says what the database has of the vectors of the sessions: the
 	// vector of a chunk that is changed was made from the text before and goes.
-	sessionVectors bool
+	sessionVectors sessionVectorSchema
 	// lits are the known values (nil: none). has says whether a table exists.
 	lits     *redact.Literals
 	has      func(name string) (bool, error)
@@ -467,8 +467,8 @@ func (w *redactWork) apply(edits []redactEdit) (redactBatch, error) {
 			continue
 		}
 		res.changed++
-		if w.sessionVectors {
-			dropped, err := dropSessionEmbeddings(w.ctx, q, e.id, w.write)
+		if w.sessionVectors != noSessionVectors {
+			dropped, err := dropSessionEmbeddings(w.ctx, q, w.sessionVectors, e.id, w.write)
 			if err != nil {
 				return res, err
 			}

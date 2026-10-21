@@ -194,6 +194,60 @@ func (a *ProjectAccess) computeFacets(cands []Session, f SessionFilter) Facets {
 	return Facets{Projects: facetOptions(proj), Machines: facetOptions(mach), Harnesses: facetOptions(harn)}
 }
 
+// computeFacetsWithVectors is computeFacets for a search that has the vectors.
+// What a value of a facet counts is what the list has after a click on it: the
+// filter of the facet's own dimension is then that value and the others are as they
+// are, and the list is made by fuseTranscripts within that filter. It has the
+// sessions the words found (words, all of them, whatever the filter) that pass the
+// filter, and of the sessions that only the vectors found (the first hybridPool of
+// vec that pass the filter, less the ones that have words) as many as the fusion
+// takes, room at most. The sessions of the words never use up the room, so the count
+// is the number of the former plus the least of room and the number of the latter.
+// A value that only the vectors have is a value of the facet when it has any.
+func (a *ProjectAccess) computeFacetsWithVectors(words []Session, vec []sessionBest, byID map[int64]Session, f SessionFilter, room int) Facets {
+	found := make(map[int64]bool, len(words))
+	for _, s := range words {
+		found[s.ID] = true
+	}
+	dims := [...]struct {
+		dim   int
+		value func(Session) string
+	}{
+		{dimProject, func(s Session) string { return s.Scope.Project }},
+		{dimMachine, func(s Session) string { return a.guestView(s).Scope.Machine }},
+		{dimHarness, func(s Session) string { return s.Harness }},
+	}
+	var options [len(dims)][]FacetOption
+	for i, d := range dims {
+		count := map[string]int{}
+		for _, s := range words {
+			if a.matchFilter(s, f, d.dim) {
+				count[d.value(s)]++
+			}
+		}
+		pooled, only := map[string]int{}, map[string]int{}
+		for _, b := range vec {
+			s, ok := byID[b.session]
+			if !ok || !a.matchFilter(s, f, d.dim) {
+				continue
+			}
+			v := d.value(s)
+			if pooled[v] >= hybridPool {
+				continue
+			}
+			pooled[v]++
+			if !found[s.ID] {
+				only[v]++
+			}
+		}
+		for v, n := range only {
+			count[v] += min(room, n)
+		}
+		options[i] = facetOptions(count)
+	}
+	return Facets{Projects: options[0], Machines: options[1], Harnesses: options[2]}
+}
+
 func (a *ProjectAccess) guestFacets(f Facets) Facets {
 	f.Machines = nil
 	return f
@@ -478,25 +532,15 @@ func (s *Store) SearchTranscripts(pa *ProjectAccess, q SearchQuery) (SearchPage,
 			return a.sess.ID > b.sess.ID
 		})
 	}
-	// With the vectors, the sessions that only they found are candidates for the
-	// facets too, but only those that the fusion takes into its list (a few: the
-	// budget for hits of meaning alone), not the neighbours it leaves out: the facets
-	// count what the list can show. The fusion is made without the filters here, as
-	// the facets of a dimension are those of the sessions that pass the filters of the
-	// others.
+	// With the vectors, a facet counts what the list shows after a click on it, which
+	// is made by the fusion within the filter that click gives (see
+	// computeFacetsWithVectors).
 	vec, vecCfg := s.transcriptVectors(q, readable)
+	facets := pa.computeFacets(cands, q.Filter)
 	if vecCfg != nil {
-		all := slices.Clone(matched)
-		order(all)
-		open := q
-		open.Filter = SessionFilter{}
-		for _, m := range pa.fuseTranscripts(all, vec, open, byID, vecCfg) {
-			if m.semantic {
-				cands = append(cands, m.sess)
-			}
-		}
+		facets = pa.computeFacetsWithVectors(cands, vec, byID, q.Filter, maxSemanticOnly(q.Limit))
 	}
-	page := SearchPage{Facets: pa.computeFacets(cands, q.Filter)}
+	page := SearchPage{Facets: facets}
 	if pa.isGuestOnly() {
 		page.Facets = pa.guestFacets(page.Facets)
 	}

@@ -421,7 +421,7 @@ func (j *Job) store(kind string, d store.EmbedItem, vec []float32, readAt string
 	}
 	return j.st.UpsertEmbedding(store.Embedding{
 		Kind: kind, ObjectID: d.ID, Model: j.model.Model, PrefixVersion: j.model.PrefixVersion,
-		TextHash: d.Hash, Dim: len(q), Scale: float64(scale), Vec: q, ReadAt: readAt,
+		TextHash: d.Hash, Dim: len(q), Scale: float64(scale), Vec: q, ReadAt: readAt, Source: d.Source,
 	})
 }
 

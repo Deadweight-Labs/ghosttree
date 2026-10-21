@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/embed"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
@@ -507,5 +508,111 @@ func TestSessionSearchPagesHoldTogether(t *testing.T) {
 	slices.Sort(seen)
 	if len(slices.Compact(slices.Clone(seen))) != len(seen) || len(seen) != 4 || strings.Count(strings.Join(kinds, ","), MatchSemantic) != 1 {
 		t.Fatalf("pages gave %v with %v", seen, kinds)
+	}
+}
+
+// clickCounts clicks every value of every facet of a search, one after the other,
+// and says how many it clicked: the list after the click holds as many sessions as
+// the facet said.
+func clickCounts(t *testing.T, st *Store, pa *ProjectAccess, q SearchQuery) int {
+	t.Helper()
+	page, err := st.SearchTranscripts(pa, q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clicked := 0
+	click := func(dim string, o FacetOption, set func(*SessionFilter)) {
+		t.Helper()
+		c := q
+		set(&c.Filter)
+		got, err := st.SearchTranscripts(pa, c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Sessions != o.Count {
+			t.Errorf("limit %d, filter %+v: the facet %s %q says %d, the list after a click on it holds %d", q.Limit, q.Filter, dim, o.Value, o.Count, got.Sessions)
+		}
+		clicked++
+	}
+	for _, o := range page.Facets.Projects {
+		click("project", o, func(f *SessionFilter) { f.Project = o.Value })
+	}
+	for _, o := range page.Facets.Machines {
+		click("machine", o, func(f *SessionFilter) { f.Machine = o.Value })
+	}
+	for _, o := range page.Facets.Harnesses {
+		click("harness", o, func(f *SessionFilter) { f.Harness = o.Value })
+	}
+	return clicked
+}
+
+// A facet says how many sessions the list holds after a click on it, and the list
+// is made within the filter of the click: the sessions the words found, and the few
+// that only the meaning found, taken from the sessions of that filter. So the
+// meaning of one project does not use up the room of another, and the other filters
+// (time, mine) are part of the count.
+func TestSessionSearchFacetCountIsWhatTheListHoldsAfterTheClick(t *testing.T) {
+	st := orgStore(t, "robin", "mia")
+	_, c := newFakeEmbedder(t)
+	const alpha, beta = "github.com/acme/alpha", "github.com/acme/beta"
+	for i := range 3 {
+		addSession(t, st, fmt.Sprintf("Aw%d", i), 1, alpha, "m1", "", userChunks(fmt.Sprintf("q1 is in this one, number %d, and little else", i)))
+	}
+	// Six more of the first project that come near the query, less than the ones of
+	// the second: another account's, and old.
+	for i := range 6 {
+		addSession(t, st, fmt.Sprintf("An%d", i), 2, alpha, "m1", "", userChunks(fmt.Sprintf("s1 s2 s3 s4 and number %d of the neighbours here", i)))
+	}
+	for i := range 6 {
+		addSession(t, st, fmt.Sprintf("Bn%d", i), 1, beta, "m2", "", userChunks(fmt.Sprintf("s1 s1 s1 s1 s1 s1 near %d", i)))
+	}
+	embedSessionTexts(t, st, c, later(2*SessionSettle))
+	st.SetEmbedder(EmbedSearchConfig{Embedder: c, Kinds: []string{KindSession}})
+	if _, err := st.db.Exec(`UPDATE sessions SET last_seen_at = '2020-01-01T00:00:00Z' WHERE external_id LIKE 'An%'`); err != nil {
+		t.Fatal(err)
+	}
+	robin := viewer(st, "person:1", "robin")
+	since := time.Now().Add(-24 * time.Hour)
+
+	// The meaning finds the second project's sessions first, so that the room for hits
+	// of meaning alone is theirs in the list as a whole.
+	page, err := st.SearchTranscripts(robin, SearchQuery{Q: "q1", Limit: 10})
+	if err != nil || page.Sessions != 3+5 {
+		t.Fatalf("%d sessions, %v", page.Sessions, err)
+	}
+	for _, g := range page.Groups {
+		if g.Match == MatchSemantic && g.Session.Scope.Project != beta {
+			t.Fatalf("the test needs the best of the meaning in the second project: %+v", g.Session.Scope)
+		}
+	}
+	// A click on the first project gives its three, and the room goes to its own.
+	want := []FacetOption{{Value: alpha, Count: 3 + 5}, {Value: beta, Count: 5}}
+	if !reflect.DeepEqual(page.Facets.Projects, want) {
+		t.Fatalf("project facet %+v, want %+v", page.Facets.Projects, want)
+	}
+
+	clicked := 0
+	for _, q := range []SearchQuery{
+		{Q: "q1", Limit: 10},
+		{Q: "q1", Limit: 2}, // the room is one
+		{Q: "q1", Limit: 10, Filter: SessionFilter{Since: since}},
+		{Q: "q1", Limit: 10, Filter: SessionFilter{Mine: true}},
+		{Q: "q1", Limit: 10, Filter: SessionFilter{Project: alpha}},
+		{Q: "q1", Limit: 10, Filter: SessionFilter{Machine: "m1", Since: since}},
+		{Q: "q1", Limit: 10, Filter: SessionFilter{Harness: "claude-code", Mine: true}},
+	} {
+		clicked += clickCounts(t, st, robin, q)
+	}
+	if clicked < 20 {
+		t.Fatalf("only %d clicks were made", clicked)
+	}
+	// With the time filter the neighbours of the first project are left out, and so
+	// is their room: its facet counts the three it has.
+	page, err = st.SearchTranscripts(robin, SearchQuery{Q: "q1", Limit: 10, Filter: SessionFilter{Since: since}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []FacetOption{{Value: alpha, Count: 3}, {Value: beta, Count: 5}}; !reflect.DeepEqual(page.Facets.Projects, want) {
+		t.Fatalf("project facet with a time filter %+v, want %+v", page.Facets.Projects, want)
 	}
 }

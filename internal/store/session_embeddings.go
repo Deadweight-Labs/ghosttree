@@ -282,8 +282,14 @@ func (s *Store) lookAtSession(ref sessionRef, m EmbedModel, at time.Time) (sessi
 			}
 			doc, ok := sessionDocument(ref.harness, p.Seq, raw)
 			if !ok {
-				// Nothing to embed any more, and what was made of it goes.
-				stale[p.Chunk] = true
+				// Nothing to embed any more, and what was made of it goes. A text that was
+				// too short all along has nothing made of it: it is not named, or every look
+				// would send the job to the writer for nothing.
+				_, vector := stored[p.Chunk]
+				_, parked := failures[p.Chunk]
+				if vector || parked {
+					stale[p.Chunk] = true
+				}
 				continue
 			}
 			hash := embed.TextHash(doc)
@@ -300,7 +306,7 @@ func (s *Store) lookAtSession(ref sessionRef, m EmbedModel, at time.Time) (sessi
 				}
 				attempts = f.attempts
 			}
-			look.items = append(look.items, EmbedItem{ID: p.Chunk, Text: doc, Hash: hash, Attempts: attempts})
+			look.items = append(look.items, EmbedItem{ID: p.Chunk, Text: doc, Hash: hash, Attempts: attempts, Source: sessionSource(raw)})
 		}
 	}
 	for id, gone := range stale {
@@ -392,6 +398,13 @@ func (s *Store) sessionEmbeddingDue(m EmbedModel, limit int, at time.Time) (Embe
 // (EmbedDue.ReadAt) with the model and text format m and found complete. The
 // mark also holds the version of the rules that make the texts, so that the
 // session is looked at again when any of the three changes.
+//
+// A session whose mark is a tombstone (see dropSessionEmbeddings) keeps it, unless
+// the look is later than the tombstone: a look that was made before a redaction
+// dropped a vector of the session found the session complete with that vector, and
+// must not say so now that it is gone. A look after the tombstone that falls in the
+// same second as it is not taken for later either; the session is looked at once
+// more.
 func (s *Store) TouchSessionEmbeddings(m EmbedModel, ids []int64, readAt string) error {
 	if s.writer != nil {
 		return queueWrite(s, []any{m, ids, readAt}, func(d *Store, p []any) error {
@@ -405,7 +418,8 @@ func (s *Store) TouchSessionEmbeddings(m EmbedModel, ids []int64, readAt string)
 		_, err := s.db.Exec(`INSERT INTO session_embedding_sync(session_id, read_at, version, model, prefix_version)
 			SELECT id, ?, ?, ?, ? FROM sessions WHERE id IN (`+placeholders(len(part))+`)
 			ON CONFLICT(session_id) DO UPDATE SET read_at = excluded.read_at, version = excluded.version,
-				model = excluded.model, prefix_version = excluded.prefix_version`,
+				model = excluded.model, prefix_version = excluded.prefix_version
+			WHERE session_embedding_sync.version != 0 OR session_embedding_sync.read_at < excluded.read_at`,
 			append([]any{readAt, sessionTextVersion, m.Model, m.PrefixVersion}, part...)...)
 		return err
 	})
@@ -586,50 +600,85 @@ func (s *Store) purgeSessionEmbeddings() (int, error) {
 	return removed, nil
 }
 
-// verifySessionVector says whether a vector with the hash of a text is still the
-// vector of the chunk: the chunk exists, its stored line still gives a text that
-// is long enough, and that text has the hash. It is called inside the transaction
-// that would store the vector, and first takes the write lock (a statement that
-// writes nothing does), so that the line it reads is the one that stays until the
-// vector is in. A vector that fails the test is not stored: it was made from a
-// text that a redaction, a removal of an image or a change of the rules has since
-// replaced, and the job makes the vector of the text that is there.
-func verifySessionVector(tx *sql.Tx, chunk int64, hash string) (bool, error) {
+// sessionSource is the hash that says which stored line a document was made
+// from (EmbedItem.Source).
+func sessionSource(raw string) string { return embed.TextHash(raw) }
+
+// verifySessionSource says whether the line of a chunk is still the line a
+// document was made from: the chunk exists and its stored line has the hash that
+// the look took from it. It is called inside the transaction that would store the
+// vector, and first takes the write lock (a statement that writes nothing does),
+// so that the line it reads is the one that stays until the vector is in. A
+// vector that fails the test is not stored: it was made from a line that a
+// redaction or a removal of an image has since replaced, and the job makes the
+// vector of the text that is there.
+//
+// The writer does the least that is sure: one read of the line and one hash, about
+// a millisecond for two megabytes, instead of the chain that makes the document
+// (blobstrip, redaction, parsing, the expressions), which took 6 to 80 milliseconds
+// on logs and tokens of that size, with every other write waiting. The document is
+// a function of the line (and of the rules, which are the code of this very
+// process), so the same line gives the same document.
+func verifySessionSource(tx *sql.Tx, chunk int64, source string) (bool, error) {
 	if _, err := tx.Exec(`UPDATE session_embedding_sync SET read_at = read_at WHERE session_id = -1`); err != nil {
 		return false, err
 	}
-	var harness, raw string
-	var seq int
-	err := tx.QueryRow(`SELECT se.harness, c.seq, c.raw FROM session_chunks c JOIN sessions se ON se.id = c.session_id WHERE c.id = ?`, chunk).
-		Scan(&harness, &seq, &raw)
+	var raw string
+	err := tx.QueryRow(`SELECT raw FROM session_chunks WHERE id = ?`, chunk).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	doc, ok := sessionDocument(harness, seq, raw)
-	return ok && embed.TextHash(doc) == hash, nil
+	return sessionSource(raw) == source, nil
 }
 
-// hasSessionEmbeddingTables says whether a database has the tables of the session
-// vectors. The maintenance commands open a database without the migrations, so
-// the tables of a database that no server has started with this version are
-// missing, and there is nothing to drop.
-func hasSessionEmbeddingTables(ctx context.Context, q maintQueryer) (bool, error) {
+// sessionVectorSchema says what a database has of the session vectors, for the
+// maintenance commands.
+type sessionVectorSchema int
+
+const (
+	// noSessionVectors: the tables are missing. The maintenance commands open a
+	// database without the migrations, so a database that no server has started with
+	// this version has none, and there is nothing to drop.
+	noSessionVectors sessionVectorSchema = iota
+	// unversionedSessionVectors: the tables are there, but the mark of a session is
+	// that of the first version of the table, with no version of the rules. It cannot
+	// hold a tombstone and is deleted instead; the server gives it the columns when it
+	// starts.
+	unversionedSessionVectors
+	// versionedSessionVectors: the mark can hold a tombstone.
+	versionedSessionVectors
+)
+
+// hasSessionEmbeddingTables says which of the session vector tables a database has.
+func hasSessionEmbeddingTables(ctx context.Context, q maintQueryer) (sessionVectorSchema, error) {
 	var n int
-	err := q.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE name IN ('session_embeddings','session_embedding_failures','session_embedding_sync')`).Scan(&n)
-	return n == 3, err
+	if err := q.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE name IN ('session_embeddings','session_embedding_failures','session_embedding_sync')`).Scan(&n); err != nil || n != 3 {
+		return noSessionVectors, err
+	}
+	var versioned int
+	if err := q.QueryRowContext(ctx, `SELECT count(*) FROM pragma_table_info('session_embedding_sync') WHERE name = 'version'`).Scan(&versioned); err != nil {
+		return noSessionVectors, err
+	}
+	if versioned == 0 {
+		return unversionedSessionVectors, nil
+	}
+	return versionedSessionVectors, nil
 }
 
 // dropSessionEmbeddings removes the vector and the failure of one chunk, in the
-// transaction of the caller, and the mark "looked at" of its session when there
-// was one, and returns the number of vectors it removed (with write false it only
-// counts them). ctx redact-sessions and ctx strip-blobs call it for every chunk
-// they change: a vector made from the text before the change was derived from
-// what the change was meant to remove, and the job makes a new one from the text
-// as it is now. The session is not looked at again unless its mark goes with it.
-func dropSessionEmbeddings(ctx context.Context, q maintQueryer, chunk int64, write bool) (int64, error) {
+// transaction of the caller, and returns the number of vectors it removed (with
+// write false it only counts them). When there was a vector or a failure, the mark
+// "looked at" of the session becomes a tombstone: version 0, which no version of the
+// rules has, and the time of the change, so that the session is looked at again
+// and a touch of a look made before the change (TouchSessionEmbeddings) does not
+// bring the old mark back. ctx redact-sessions and ctx strip-blobs call it for
+// every chunk they change: a vector made from the text before the change was
+// derived from what the change was meant to remove, and the job makes a new one
+// from the text as it is now.
+func dropSessionEmbeddings(ctx context.Context, q maintQueryer, schema sessionVectorSchema, chunk int64, write bool) (int64, error) {
 	if !write {
 		var n int64
 		err := q.QueryRowContext(ctx, `SELECT count(*) FROM session_embeddings WHERE chunk_id = ?`, chunk).Scan(&n)
@@ -645,8 +694,16 @@ func dropSessionEmbeddings(ctx context.Context, q maintQueryer, chunk int64, wri
 		return vectors, err
 	}
 	failures, _ := fres.RowsAffected()
-	if vectors+failures > 0 {
-		_, err = q.ExecContext(ctx, `DELETE FROM session_embedding_sync WHERE session_id = (SELECT session_id FROM session_chunks WHERE id = ?)`, chunk)
+	if vectors+failures == 0 {
+		return vectors, nil
 	}
+	if schema == unversionedSessionVectors {
+		_, err = q.ExecContext(ctx, `DELETE FROM session_embedding_sync WHERE session_id = (SELECT session_id FROM session_chunks WHERE id = ?)`, chunk)
+		return vectors, err
+	}
+	_, err = q.ExecContext(ctx, `INSERT INTO session_embedding_sync(session_id, read_at, version, model, prefix_version)
+		SELECT session_id, ?, 0, '', '' FROM session_chunks WHERE id = ?
+		ON CONFLICT(session_id) DO UPDATE SET read_at = max(session_embedding_sync.read_at, excluded.read_at),
+			version = 0, model = '', prefix_version = ''`, now(), chunk)
 	return vectors, err
 }

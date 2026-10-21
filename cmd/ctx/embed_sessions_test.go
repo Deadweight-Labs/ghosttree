@@ -233,26 +233,26 @@ func TestEmbedStatusShowsTheSessionsWithTheirWindowAndProgress(t *testing.T) {
 	defer func(old func() time.Time) { embedNow = old }(embedNow)
 
 	embedNow = func() time.Time { return time.Date(2026, 10, 21, 12, 0, 0, 0, time.Local) }
-	code, out := runCtx("embed", "status", "--db", d.path, "--embed-session-window", "22:00-04:00")
+	code, out := runCtx("embed", "status", "--db", d.path, "--embed-kinds", "knowledge,session", "--embed-session-window", "22:00-04:00")
 	if code != 0 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
 	// Three texts of the first session and the first of the second are embedded;
 	// the new one is due, and the answer of the first session closes with no prompt after it, so it is not yet.
 	for _, want := range []string{
-		"session          embedded 3 of 4, due 1  [window 22:00-04:00 local time of the server, opens in 10h0m0s]\n",
+		"session          embedded 3 of 4, due 1  [embedding on, search on]  [window 22:00-04:00 local time of the server, opens in 10h0m0s]\n",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
 		}
 	}
 	embedNow = func() time.Time { return time.Date(2026, 10, 21, 23, 30, 0, 0, time.Local) }
-	_, out = runCtx("embed", "status", "--db", d.path, "--embed-session-window", "22:00-04:00")
+	_, out = runCtx("embed", "status", "--db", d.path, "--embed-kinds", "knowledge,session", "--embed-session-window", "22:00-04:00")
 	if !strings.Contains(out, "[window 22:00-04:00 local time of the server, open now]") {
 		t.Errorf("the window is open at 23:30:\n%s", out)
 	}
 	// Without a window given the default is said.
-	_, out = runCtx("embed", "status", "--db", d.path)
+	_, out = runCtx("embed", "status", "--db", d.path, "--embed-kinds", "knowledge,session")
 	if !strings.Contains(out, "[window 00:00-06:00 local time of the server, ") {
 		t.Errorf("the default window is not said:\n%s", out)
 	}
@@ -260,6 +260,74 @@ func TestEmbedStatusShowsTheSessionsWithTheirWindowAndProgress(t *testing.T) {
 		if strings.Contains(out, secret) {
 			t.Fatalf("the status prints a text of a session:\n%s", out)
 		}
+	}
+}
+
+// Counting the sessions reads and cleans the line of every text that has no vector,
+// which the other kinds do not need. The command does it only when the
+// configuration names the sessions, and they are then part of the total of the
+// background job; otherwise it says so in one line and does not touch the tables
+// of the sessions (here: one of them is gone, and the line does not mind).
+func TestEmbedStatusDoesNotCountTheSessionsUnlessTheyAreEmbedded(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ghosttree.db")
+	st, err := store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := st.UpsertSession(store.Session{Harness: "claude-code", ExternalID: "only", Scope: scope.Axes{Project: "github.com/dw/p"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AppendChunks(id, sessionChunks("a prompt that is long enough to be embedded, about the boat")); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+
+	const notCounted = "session          not counted: the sessions are not among the embedded kinds"
+	for name, args := range map[string][]string{
+		"no configuration":        {},
+		"kinds without sessions":  {"--embed-kinds", "knowledge,request"},
+		"a window is no kind":     {"--embed-session-window", "22:00-04:00"},
+		"search kinds, no window": {"--embed-kinds", "knowledge,ghost", "--embed-search-kinds", "ghost"},
+	} {
+		code, out := runCtx(append([]string{"embed", "status", "--db", path}, args...)...)
+		if code != 0 || !strings.Contains(out, notCounted) {
+			t.Fatalf("%s: exit %d, no line that says the sessions are not counted:\n%s", name, code, out)
+		}
+		// The text of the session is not read, so it is not in the total either: nothing is due.
+		if !strings.Contains(out, "background job   nothing to do") || strings.Contains(out, "[window") {
+			t.Errorf("%s: the sessions are in the total or the window is said:\n%s", name, out)
+		}
+	}
+	_, out := runCtx("embed", "status", "--db", path, "--embed-kinds", "knowledge,request")
+	if !strings.Contains(out, notCounted+" (name them in --embed-kinds, for example knowledge,session)  [embedding off, search off]") {
+		t.Errorf("a configuration without sessions says them off:\n%s", out)
+	}
+
+	// Named, they are counted and part of the total.
+	code, out := runCtx("embed", "status", "--db", path, "--embed-kinds", "knowledge,session")
+	if code != 0 || !strings.Contains(out, "session          embedded 0 of 1, due 1  [embedding on, search on]  [window ") || !strings.Contains(out, "background job   no progress recorded yet") {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+
+	// The proof that the tables of the sessions are not read when the sessions are not
+	// named: without one of them the command that names them has to say so, and the
+	// command that does not name them does not notice.
+	st, err = store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DB().Exec(`DROP TABLE session_embeddings`); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	_, out = runCtx("embed", "status", "--db", path)
+	if !strings.Contains(out, notCounted) || strings.Contains(out, "tables not created yet") {
+		t.Errorf("the status without the sessions read their table:\n%s", out)
+	}
+	_, out = runCtx("embed", "status", "--db", path, "--embed-kinds", "knowledge,session")
+	if !strings.Contains(out, "session          tables not created yet") {
+		t.Errorf("the status with the sessions did not read their table:\n%s", out)
 	}
 }
 

@@ -58,7 +58,7 @@ func embedSessionTexts(t *testing.T, st *Store, c *embed.Client, at time.Time) (
 				t.Fatal(err)
 			}
 			if err := st.UpsertEmbedding(Embedding{Kind: KindSession, ObjectID: d.ID, Model: c.Model(), PrefixVersion: c.PrefixVersion(),
-				TextHash: d.Hash, Dim: len(q), Scale: float64(scale), Vec: q, ReadAt: due.ReadAt}); err != nil {
+				TextHash: d.Hash, Dim: len(q), Scale: float64(scale), Vec: q, ReadAt: due.ReadAt, Source: d.Source}); err != nil {
 				t.Fatal(err)
 			}
 			embedded++

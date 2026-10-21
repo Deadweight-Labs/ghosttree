@@ -200,7 +200,7 @@ type strippedRow struct {
 // Mit vectors (die Datenbank hat die Vektoren der Sessions) verschwinden in
 // derselben Transaktion die Vektoren der geänderten Chunks: der Server rechnet
 // sie aus dem neuen Text nach. Die Zahl der entfernten Vektoren geht zurück.
-func writeStripped(ctx context.Context, db *sql.DB, rows []strippedRow, vectors bool) (int64, error) {
+func writeStripped(ctx context.Context, db *sql.DB, rows []strippedRow, vectors sessionVectorSchema) (int64, error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
@@ -216,8 +216,8 @@ func writeStripped(ctx context.Context, db *sql.DB, rows []strippedRow, vectors 
 		if _, err := stmt.ExecContext(ctx, r.raw, r.id); err != nil {
 			return 0, err
 		}
-		if vectors {
-			n, err := dropSessionEmbeddings(ctx, tx, r.id, true)
+		if vectors != noSessionVectors {
+			n, err := dropSessionEmbeddings(ctx, tx, vectors, r.id, true)
 			if err != nil {
 				return 0, err
 			}

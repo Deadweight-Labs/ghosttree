@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -23,7 +24,7 @@ func storeVector(t *testing.T, st *Store, c *embed.Client, item EmbedItem, readA
 		t.Fatal(err)
 	}
 	return st.UpsertEmbedding(Embedding{Kind: KindSession, ObjectID: item.ID, Model: c.Model(), PrefixVersion: c.PrefixVersion(),
-		TextHash: item.Hash, Dim: len(q), Scale: float64(scale), Vec: q, ReadAt: readAt})
+		TextHash: item.Hash, Dim: len(q), Scale: float64(scale), Vec: q, ReadAt: readAt, Source: item.Source})
 }
 
 func setRaw(t *testing.T, st *Store, session int64, seq int, raw string) {
@@ -163,6 +164,85 @@ func TestSessionLookDropsAVectorAndAFailureWhoseTextIsNowTooShort(t *testing.T) 
 	}
 }
 
+// ---------------------------------------------------------------- the writer compares lines
+
+// The vector of a session carries the hash of the line its document was made from,
+// and the writer keeps it only when the stored line is that one. A vector without
+// the hash is no vector the writer can judge, and is refused; a vector of another
+// line is not stored, and is no error.
+func TestSessionVectorIsStoredOnlyWithTheHashOfTheLineThatIsStored(t *testing.T) {
+	st := orgStore(t, "robin")
+	_, c := newFakeEmbedder(t)
+	addSession(t, st, "s", 1, "", "m", "", chunksOf(promptLine(0, "please look into the s1 s2 problem for me")))
+	due, err := st.EmbeddingDue(KindSession, modelOf(c), 10, time.Now(), false)
+	if err != nil || len(due.Items) != 1 || due.Items[0].Source == "" {
+		t.Fatalf("the look gives the hash of the line with the item: %+v %v", due, err)
+	}
+	item := due.Items[0]
+
+	noHash := item
+	noHash.Source = ""
+	if err := storeVector(t, st, c, noHash, due.ReadAt); err == nil {
+		t.Fatal("a vector of a session without the hash of its line was taken")
+	}
+	other := item
+	other.Source = sessionSource("another line")
+	if err := storeVector(t, st, c, other, due.ReadAt); err != nil {
+		t.Fatalf("a vector of another line is not stored, and is no error of the job: %v", err)
+	}
+	if n := sessionVectors(t, st); n != 0 {
+		t.Fatalf("%d vectors of a line that is not stored", n)
+	}
+	if err := storeVector(t, st, c, item, due.ReadAt); err != nil || sessionVectors(t, st) != 1 {
+		t.Fatalf("%v, %d vectors", err, sessionVectors(t, st))
+	}
+}
+
+// The writer holds every other write while it checks a vector. For a prompt with a
+// log pasted into it, the chain that makes the document (images, secrets, parsing,
+// the expressions) takes many times as long as the check, which is one read of the
+// line and one hash. Times are the least of three, against a slow machine.
+func TestSessionWriterDoesNotMakeTheDocumentAgain(t *testing.T) {
+	st := orgStore(t, "robin")
+	s := addSession(t, st, "s", 1, "", "m", "", chunksOf(promptLine(0, "a prompt that is replaced below, for the s1 s2 job")))
+	// Secret-like tokens, so that the redaction has work; set straight into the line,
+	// since what arrives through the upload is redacted already.
+	raw := promptLine(0, "please look at this: "+strings.Repeat("Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijklmnopqrstuvwxyz0123456789 ", 20000))
+	setRaw(t, st, s.ID, 0, raw)
+	chunk := chunkID(t, st, s.ID, 0)
+	source := sessionSource(raw)
+
+	best := func(run func()) time.Duration {
+		var least time.Duration
+		for i := range 3 {
+			start := time.Now()
+			run()
+			if took := time.Since(start); i == 0 || took < least {
+				least = took
+			}
+		}
+		return least
+	}
+	chain := best(func() {
+		if _, ok := sessionDocument("claude-code", 0, raw); !ok {
+			t.Fatal("the line gives no document")
+		}
+	})
+	check := best(func() {
+		tx, err := st.db.Begin()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback()
+		if keep, err := verifySessionSource(tx, chunk, source); err != nil || !keep {
+			t.Fatalf("%v %v", keep, err)
+		}
+	})
+	if check*4 > chain {
+		t.Fatalf("the check in the writer takes %v, the chain that makes the document %v: the writer is doing the work of the reader", check, chain)
+	}
+}
+
 // ---------------------------------------------------------------- the rules change
 
 // The marks hold the version of the rules that make the texts, the model and the
@@ -267,6 +347,62 @@ func TestSessionSyncTableOfAFirstVersionIsMigrated(t *testing.T) {
 	due, err := st.EmbeddingDue(KindSession, modelOf(c), 10, time.Now(), false)
 	if err != nil || len(due.Items) != 1 {
 		t.Fatalf("the session of an old mark is looked at: %+v %v", due, err)
+	}
+}
+
+// A tombstone (what a redaction leaves for a session whose vector it dropped) is
+// replaced by a look that is later than it. A look that is earlier, or in the same
+// second, leaves it: it was made before the change, or cannot say which came first,
+// and the session is looked at once more.
+func TestSessionTombstoneIsOnlyReplacedByALaterLook(t *testing.T) {
+	st := orgStore(t, "robin")
+	_, c := newFakeEmbedder(t)
+	s := addSession(t, st, "s", 1, "", "m", "", chunksOf(promptLine(0, "please look into the s1 s2 problem for me")))
+	const at = "2026-10-21T12:00:00Z"
+	if _, err := st.db.Exec(`DELETE FROM session_embedding_sync`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.db.Exec(`INSERT INTO session_embedding_sync(session_id, read_at, version, model, prefix_version) VALUES(?, ?, 0, '', '')`, s.ID, at); err != nil {
+		t.Fatal(err)
+	}
+	mark := func() (version int, readAt string) {
+		t.Helper()
+		if err := st.db.QueryRow(`SELECT version, read_at FROM session_embedding_sync WHERE session_id = ?`, s.ID).Scan(&version, &readAt); err != nil {
+			t.Fatal(err)
+		}
+		return version, readAt
+	}
+	for _, readAt := range []string{"2026-10-21T11:00:00Z", at} {
+		if err := st.TouchSessionEmbeddings(modelOf(c), []int64{s.ID}, readAt); err != nil {
+			t.Fatal(err)
+		}
+		if v, got := mark(); v != 0 || got != at {
+			t.Fatalf("a look at %s replaced the tombstone: version %d, read_at %s", readAt, v, got)
+		}
+	}
+	// A session with a tombstone is looked at.
+	if due, err := st.EmbeddingDue(KindSession, modelOf(c), 10, time.Now(), false); err != nil || len(due.Items) != 1 {
+		t.Fatalf("%+v %v", due, err)
+	}
+	const newer = "2026-10-21T12:00:01Z"
+	if err := st.TouchSessionEmbeddings(modelOf(c), []int64{s.ID}, newer); err != nil {
+		t.Fatal(err)
+	}
+	if v, got := mark(); v != sessionTextVersion || got != newer {
+		t.Fatalf("a later look did not replace the tombstone: version %d, read_at %s", v, got)
+	}
+}
+
+// A text that was too short all along has no vector and no failure to drop, and the
+// look does not name it: it would send the job to the writer at every look.
+func TestSessionLookDoesNotNameATextThatWasTooShortAllAlong(t *testing.T) {
+	st := orgStore(t, "robin")
+	_, c := newFakeEmbedder(t)
+	s := addSession(t, st, "s", 1, "", "m", "", chunksOf(promptLine(0, "ok"), answerLine(1, "fine"), promptLine(2, "yes please")))
+	at := later(2 * SessionSettle)
+	due, err := st.EmbeddingDue(KindSession, modelOf(c), 10, at, false)
+	if err != nil || len(due.Stale) != 0 || len(due.Items) != 0 || !slices.Equal(due.Unchanged, []int64{s.ID}) {
+		t.Fatalf("%+v %v", due, err)
 	}
 }
 
@@ -395,14 +531,29 @@ func TestSessionEmbeddingsOnTheRuntimeStoreReadOnTheReaderWrittenInTheWriter(t *
 		t.Fatal("the job and the uploads do not come to rest: a deadlock between reader and writer")
 	}
 
-	// One session outgrows an answer; the look names it on the reader, the drop is
-	// a writer job.
-	if err := st.AppendChunks(ids[0], []Chunk{{Seq: 200, Raw: answerLine(3, "a later answer that ends the last turn of this session")}}); err != nil {
+	// One session outgrows an answer: the answer that ended its last turn is embedded,
+	// and the turn goes on with another. The look names the first on the reader, and
+	// the drop is a writer job.
+	if err := st.AppendChunks(ids[0], []Chunk{{Seq: 200, Raw: answerLine(3, "an answer that ends the last turn of this session for now")}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := embedSessionTexts(t, st, c, later(2*SessionSettle)); got != 1 {
+		t.Fatalf("%d texts embedded", got)
+	}
+	outgrown := chunkID(t, st, ids[0], 200)
+	if err := st.AppendChunks(ids[0], []Chunk{{Seq: 201, Raw: answerLine(4, "and the turn went on, so this is the answer that ends it")}}); err != nil {
 		t.Fatal(err)
 	}
 	due, err := st.EmbeddingDue(KindSession, modelOf(c), 50, later(2*SessionSettle), false)
-	if err != nil || len(due.Items) != 1 {
-		t.Fatalf("%+v %v", due, err)
+	if err != nil || len(due.Items) != 1 || !slices.Equal(due.Stale, []int64{outgrown}) {
+		t.Fatalf("the look names the answer that was outgrown: %+v %v", due, err)
+	}
+	vectors := sessionVectors(t, st)
+	if n, err := st.DropEmbeddings(KindSession, due.Stale); err != nil || n != 1 {
+		t.Fatalf("dropped %d vectors: %v", n, err)
+	}
+	if got := sessionVectors(t, st); got != vectors-1 {
+		t.Fatalf("%d vectors, want %d", got, vectors-1)
 	}
 	// Dropping a stock in small jobs: 450 ids are three or more jobs of the writer.
 	before := st.RuntimeStats().Writer.Admitted

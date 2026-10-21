@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -91,14 +92,14 @@ func TestRedactSessionsDropsTheVectorsOfTheChunksItChanges(t *testing.T) {
 		t.Fatalf("tables: %v", rep.Tables)
 	}
 	// Only the vector of the chunk that changed is gone; the mark "looked at" of its
-	// session with it, or the session would not be looked at again.
+	// session is a tombstone, or the session would not be looked at again.
 	if n := rowsIn(t, raw, `SELECT count(*) FROM session_embeddings`); n != 2 {
 		t.Fatalf("%d vectors left, want the two of the unchanged chunks", n)
 	}
 	if n := rowsIn(t, raw, `SELECT count(*) FROM session_embeddings e JOIN session_chunks c ON c.id = e.chunk_id WHERE c.seq = 0`); n != 0 {
 		t.Fatal("the vector of the changed chunk is still there")
 	}
-	if n := rowsIn(t, raw, `SELECT count(*) FROM session_embedding_sync WHERE session_id = ?`, session); n != 0 {
+	if n := rowsIn(t, raw, `SELECT count(*) FROM session_embedding_sync WHERE session_id = ? AND version = 0`, session); n != 1 {
 		t.Fatal("the session is still marked complete")
 	}
 
@@ -186,7 +187,7 @@ func TestStripBlobsDropsTheVectorsOfTheChunksItChanges(t *testing.T) {
 	if n := rowsIn(t, raw, `SELECT count(*) FROM session_embeddings`); n != 1 {
 		t.Fatalf("%d vectors left, want the one of the chunk without a picture", n)
 	}
-	if n := rowsIn(t, raw, `SELECT count(*) FROM session_embedding_sync WHERE session_id = ?`, session); n != 0 {
+	if n := rowsIn(t, raw, `SELECT count(*) FROM session_embedding_sync WHERE session_id = ? AND version = 0`, session); n != 1 {
 		t.Fatal("the session is still marked complete")
 	}
 
@@ -243,5 +244,96 @@ func TestMaintenanceCommandsRunOnADatabaseWithoutSessionVectors(t *testing.T) {
 	}
 	if rep, err := StripSessionBlobs(context.Background(), path, StripBlobsOptions{}); err != nil || rep.Changed != 1 || rep.DroppedVectors != 0 {
 		t.Fatalf("strip: %v %+v", err, rep)
+	}
+}
+
+// The look finds a session complete; a redaction then drops the vector of a chunk
+// and the mark of the session; and the touch for that look arrives afterwards. It
+// must not bring the old mark back: the session would not be looked at again until
+// it got a chunk, and the vector that is gone would not be made again.
+func TestSessionMarkOfALookMadeBeforeARedactionDoesNotComeBack(t *testing.T) {
+	const leak = "Kakadu77Fake"
+	path, session, _, c := seedMaintained(t, leak)
+	lits, err := redact.NewLiterals([]string{leak})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	// A look that is due: the session has no mark under these rules yet.
+	if _, err := s.db.Exec(`DELETE FROM session_embedding_sync`); err != nil {
+		t.Fatal(err)
+	}
+	due, err := s.EmbeddingDue(KindSession, modelOf(c), 10, time.Now(), false)
+	if err != nil || len(due.Items) != 0 || !slices.Equal(due.Unchanged, []int64{session}) {
+		t.Fatalf("the look finds the session complete: %+v %v", due, err)
+	}
+
+	// The redaction comes after the look, the touch after the redaction.
+	if _, err := RedactSessions(context.Background(), path, RedactSessionsOptions{Literals: lits}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.TouchSessionEmbeddings(modelOf(c), due.Unchanged, due.ReadAt); err != nil {
+		t.Fatal(err)
+	}
+	var version int
+	if err := s.db.QueryRow(`SELECT version FROM session_embedding_sync WHERE session_id = ?`, session).Scan(&version); err != nil || version != 0 {
+		t.Fatalf("the touch of a look before the redaction renewed the mark: version %d, %v", version, err)
+	}
+	// So the session is looked at again, and the chunk that lost its vector is due.
+	again, err := s.EmbeddingDue(KindSession, modelOf(c), 10, time.Now(), false)
+	if err != nil || len(again.Items) != 1 || len(again.Unchanged) != 0 {
+		t.Fatalf("the session is looked at again: %+v %v", again, err)
+	}
+	if got := embedSessionTexts(t, s, c, time.Now()); got != 1 {
+		t.Fatalf("%d texts made again", got)
+	}
+}
+
+// A database whose mark of a session is that of the first version of the table, with
+// no version of the rules, cannot hold a tombstone: the command deletes the mark, as
+// it always did, and does not fail on a column that is not there. The server gives the
+// table its columns when it starts, and the session is looked at again.
+func TestMaintenanceCommandsDeleteTheMarkOfAFirstVersionTable(t *testing.T) {
+	const leak = "Kakadu77Fake"
+	path, session, _, c := seedMaintained(t, leak)
+	lits, err := redact.NewLiterals([]string{leak})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	for _, q := range []string{
+		`DROP TABLE session_embedding_sync`,
+		`CREATE TABLE session_embedding_sync(session_id INTEGER NOT NULL PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE, read_at TEXT NOT NULL) WITHOUT ROWID`,
+	} {
+		if _, err := raw.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := raw.Exec(`INSERT INTO session_embedding_sync(session_id, read_at) VALUES(?, '2099-01-01T00:00:00Z')`, session); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := RedactSessions(context.Background(), path, RedactSessionsOptions{Literals: lits})
+	if err != nil || rep.Tables["session_embeddings"] != 1 {
+		t.Fatalf("%v %+v", err, rep.Tables)
+	}
+	if n := rowsIn(t, raw, `SELECT count(*) FROM session_embedding_sync WHERE session_id = ?`, session); n != 0 {
+		t.Fatal("the mark of the first version stayed")
+	}
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	due, err := s.EmbeddingDue(KindSession, modelOf(c), 10, time.Now(), false)
+	if err != nil || len(due.Items) != 1 {
+		t.Fatalf("the session is looked at again: %+v %v", due, err)
 	}
 }

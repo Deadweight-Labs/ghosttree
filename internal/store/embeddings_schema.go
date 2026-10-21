@@ -54,7 +54,10 @@ CREATE TABLE IF NOT EXISTS embedding_failures(
 // (sessionTextVersion); read_at is the time taken before the session was read,
 // like the read_at of a vector. A session that waits for something (its last
 // answer has not stood long enough, a text is parked for a time) is not recorded,
-// so it stays due and is looked at again.
+// so it stays due and is looked at again. Version 0, which no version of the rules
+// has, is a tombstone: what ctx redact-sessions and ctx strip-images leave for a
+// session whose vector they dropped. It makes the session due, and only a look
+// made after its read_at replaces it (TouchSessionEmbeddings).
 //
 // The columns of the first two are those of knowledge_embeddings.
 const sessionEmbeddingsSchema = `

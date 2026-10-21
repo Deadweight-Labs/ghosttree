@@ -958,9 +958,11 @@ the like) are removed. A text that the chain changes was changed on arrival alre
 the chain is the second lock, for what reaches the database another way and for
 what a later rule finds. The hash of the finished text decides whether a vector is
 current. `ctx redact-sessions` and `ctx strip-images` change what is stored for a
-chunk; the vector of every chunk they change is dropped in the same transaction (and
-the mark that its session is complete, so that the server looks at the session
-again), and the server makes the vector again from the text as it is now. A dry run
+chunk; the vector of every chunk they change is dropped in the same transaction, and
+the mark that its session is complete becomes a tombstone (version 0 and the time of
+the change), so that the server looks at the session again and a look that was made
+before the change cannot bring the old mark back. The server makes the vector again
+from the text as it is now. A dry run
 drops nothing and counts what it would drop (`session_embeddings` in the report of
 `ctx redact-sessions`).
 
@@ -1010,9 +1012,13 @@ having to find them. The look at a session, which only reads, names the vectors
 that have no text any more (an outgrown answer, a text now too short or empty, a
 prompt the rules now take for injected); the job drops them in small writer jobs of
 200, so uploads wait for no walk through the stock. A vector is stored only if the
-text of its chunk, made again from the stored line inside the transaction that
-stores it, still has its hash: a redaction that comes while the job embeds the
-chunk cannot leave the vector of the text before. In its idle turn, at most every 10
+stored line of its chunk is still the one the text was made from: the look gives the
+hash of the line with the item, and the writer reads the line inside the transaction
+that stores the vector and compares the hashes (a read and a hash: about a
+millisecond for two megabytes, where the chain that makes the text took 6 to 80
+milliseconds on logs and tokens of that size, with every other write waiting). A
+redaction that comes while the job embeds the chunk cannot leave the vector of the
+text before. In its idle turn, at most every 10
 minutes and at any hour, the job also removes what a database without foreign keys
 left behind (three statements on keys). A text takes about
 a kilobyte, so 14 thousand are 15 MB. The tables are made on start. A search scans
@@ -1036,7 +1042,12 @@ most five of ten hits are there by meaning alone. A query of ordinary words, the
 by time and the kinds of text of the web search that are not messages (output,
 commands, thinking) are answered by words, and so is a search while the embedding
 server does not answer. The hint a prompt brings ("this also came up in session …")
-is always by words.
+is always by words. In the web search a value of a facet (project, machine, platform)
+counts what the list holds after a click on it: the sessions the words found within
+that filter, and the few found by meaning alone, taken from the sessions within it (the
+filters of time and "mine" included). A facet may therefore say more than the list
+shows now, since the room for hits of meaning alone is spent in the project that has
+them first.
 
 **Who sees what.** The readable sessions are fixed first, with the rule of the words
 search (`TranscriptPrefilter` and, where it is not exact, the row rule): private only
@@ -1063,16 +1074,21 @@ ctx eval search --db /var/lib/ghosttree/ghosttree.db --embed-url http://127.0.0.
   --set questions.jsonl --sessions-builtin
 ```
 
-`ctx embed status` has a line for the sessions: the number of texts that count now,
-how many have a vector, how many are due, and the window with whether it is open.
+`ctx embed status` has a line for the sessions when `--embed-kinds` (or
+`GHOSTTREE_EMBED_KINDS`) names them: the number of texts that count now, how many
+have a vector, how many are due, and the window with whether it is open. The sessions
+are then part of the total of the background job.
 
 ```text
-session          embedded 2300 of 14126, due 11826  [window 00:00-06:00 local time of the server, opens in 3h12m0s]
+session          embedded 2300 of 14126, due 11826  [embedding on, search on]  [window 00:00-06:00 local time of the server, opens in 3h12m0s]
 ```
 
 It counts by chunk and does not read the text of a chunk that has a vector, so a text
 that changed is only noticed by the job, which compares hashes when it looks at a
-session.
+session. The texts that have no vector are read and cleaned to count them, which takes
+a while on a large stock: the command does it only for an installation that embeds
+sessions. Without the sessions among the kinds the line says `not counted` (and what
+to name), the sessions are not in the total, and nothing of them is read.
 
 ### A second server for queries
 

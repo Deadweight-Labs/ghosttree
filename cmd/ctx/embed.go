@@ -36,7 +36,9 @@ are embedded by a second server, which must serve the same model.
           short text); with a second server for queries also whether it answers
           and whether both serve the same model. With --embed-kinds and
           --embed-search-kinds (or their environment variables) it also says
-          which kind that configuration embeds and searches by.
+          which kind that configuration embeds and searches by. The sessions
+          are counted only when --embed-kinds names them: counting them reads
+          every text that has no vector yet, which the other kinds do not need.
 
 status reads the database without writing to it, so the server may keep
 running. A vector counts as current when it was made by the configured model,
@@ -115,6 +117,15 @@ func cmdEmbedStatus(args []string, stdout io.Writer) int {
 	total := status
 	for _, kind := range store.EmbedKinds() {
 		if kind == store.KindKnowledge {
+			continue
+		}
+		if kind == store.KindSession && !slices.Contains(cfg.embedKinds(), store.KindSession) {
+			// Counting the sessions reads and cleans the line of every text that has no
+			// vector yet: a command that took a second before would take a long time on an
+			// installation that does not embed sessions at all. They are counted when the
+			// configuration names them, and are not part of the total before.
+			fmt.Fprintf(stdout, "%-16s not counted: the sessions are not among the embedded kinds (name them in --embed-kinds, for example knowledge,session)%s\n",
+				kind, describeSwitches(cfg, kind))
 			continue
 		}
 		ks, err := st.EmbeddingStatus(kind, model)
