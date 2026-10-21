@@ -721,10 +721,12 @@ API and `match:semantic` in the label of the MCP tool.
 It is optional and off by default. Without `GHOSTTREE_EMBED_URL` nothing about it
 runs and the answers are exactly those of the full-text search. Besides
 knowledge, requests, pains, documents and the descriptions of paths ("ghosts")
-can be embedded and searched the same way; each kind is switched on by itself,
-see "Other kinds" below, and without a setting only knowledge is. Sessions are
-not embedded, and neither the hook that delivers knowledge with a prompt nor the
-gardener use the vectors.
+can be embedded and searched the same way, and so can sessions (what was typed
+and the answer each turn ended with); each kind is switched on by itself, see
+"Other kinds" and "Sessions" below, and without a setting only knowledge is.
+Neither the hook that delivers knowledge with a prompt nor the gardener use the
+vectors, and the hint that a prompt brings about an earlier session asks for one
+word and stays with the words.
 
 Inference runs in a process of its own, not in `ctx`: ghosttree stays a cgo-free
 single binary and talks to the model over HTTP on loopback. The text of every
@@ -806,6 +808,8 @@ GHOSTTREE_EMBED_URL=http://127.0.0.1:8475
 | `GHOSTTREE_EMBED_MIN_SIMILARITY` | `--embed-min-similarity` | `0.55`; `0` is no minimum |
 | `GHOSTTREE_EMBED_KINDS` | `--embed-kinds` | `knowledge` |
 | `GHOSTTREE_EMBED_SEARCH_KINDS` | `--embed-search-kinds` | the same as `GHOSTTREE_EMBED_KINDS` |
+| `GHOSTTREE_EMBED_SESSION_WINDOW` | `--embed-session-window` | `00:00-06:00`; `HH:MM-HH:MM` in the local time of the server, may cross midnight, or `always` |
+| `GHOSTTREE_EMBED_SESSION_WEIGHT` | `--embed-session-weight` | `2`; above 0 up to 100, the weight of the vectors against 1 for the words in the search of sessions |
 
 The model id names the vectors: it is stored with each of them, together with the
 version of the text formats the model card prescribes (`task: search result |
@@ -830,8 +834,11 @@ GHOSTTREE_EMBED_SEARCH_KINDS=knowledge
 `GHOSTTREE_EMBED_KINDS` (`--embed-kinds`) names the kinds the background job
 embeds, `GHOSTTREE_EMBED_SEARCH_KINDS` (`--embed-search-kinds`) the kinds whose
 search uses the vectors; it must be a subset of the first and defaults to all of
-it. The names are `knowledge`, `request`, `pain`, `document` and `ghost` (also
-`requests`, `pains`, `documents`, `docs`, `ghosts`, `files`), or `all`. Without
+it. The names are `knowledge`, `request`, `pain`, `document`, `ghost` and
+`session` (also `requests`, `pains`, `documents`, `docs`, `ghosts`, `files`,
+`sessions`), or `all`, which is the five kinds before `session`: sessions are
+embedded only when they are named (`all,session` is every kind), see "Sessions".
+Without
 either variable it is `knowledge`, and every answer, the cost and the stored data
 are those of knowledge alone. A kind that is embedded but not searched answers
 from full text and its queries are not sent to the embedding server. Take a kind
@@ -903,7 +910,8 @@ previous release still finds them. The tables are made on start. The job serves 
 kinds in turn, one batch of one kind at a time (knowledge, requests, pains,
 documents, then descriptions of paths), with the same batch, pause, back-off and
 parking for all of them, so a kind with thousands of objects does not make a new
-pain wait. A change in a request's criteria makes its vector out of date although
+pain wait. Sessions are not in that turn: they come after all the others and only
+in their window, see "Sessions". A change in a request's criteria makes its vector out of date although
 the request itself was not touched; ticking a criterion off does not. When nothing
 is due, the job removes the vectors of objects that are gone or archived, at most
 every 10 minutes.
@@ -915,6 +923,176 @@ short texts (the 5 seconds per document measured for knowledge was for texts of 
 to 2,000 characters; a description is a fraction of that), so plan for one to two
 hours, during which the other kinds keep their turn. Requests (hundreds), pains
 (dozens) and documents (hundreds, 1,500 characters each) take minutes.
+
+### Sessions
+
+Sessions are searched by what was said in them: the prompts a person typed and the
+answer each turn ended with, as one vector each. Not the tool calls, their
+results, the messages between two calls, the thinking, and nothing a harness
+injected (notices of background jobs, interrupt markers, the summary after a
+compaction, echoes of local commands). Which chunk is which comes from the search
+index of the session view (`chunk_index`) and not from `session_chunks.text`: for
+Claude Code that column holds a line `[tool call: …]` for every call, and most of
+what it counts as text is that. A text has to be at least 20 characters long after
+cleaning and is cut to 2,000 (the text format is the document format with the title
+`none`).
+
+```text
+GHOSTTREE_EMBED_KINDS=knowledge,session
+GHOSTTREE_EMBED_SEARCH_KINDS=knowledge
+GHOSTTREE_EMBED_SESSION_WINDOW=00:00-06:00
+```
+
+Without `session` in `GHOSTTREE_EMBED_KINDS` and `GHOSTTREE_EMBED_SEARCH_KINDS` the
+answers, the cost and the data are those of the release before. Take it in like the
+other kinds: embed first, measure, then search. `all` does not include sessions
+(they send what was typed and answered to the embedding server, and whoever set
+`all` before there were sessions did not agree to that): name them, alone or as
+`all,session`.
+
+**What a text is.** It is made from the stored line the way every text gets into the
+database: the images are replaced (`blobstrip`), secrets are redacted in the line and
+in the text (`redact`), then the placeholders (`[ghosttree: …]`), the image marks
+(`[Image #3]`) and the blocks a harness puts into a prompt (`<system-reminder>` and
+the like) are removed. A text that the chain changes was changed on arrival already;
+the chain is the second lock, for what reaches the database another way and for
+what a later rule finds. The hash of the finished text decides whether a vector is
+current. `ctx redact-sessions` and `ctx strip-images` change what is stored for a
+chunk; the vector of every chunk whose stored line they change is dropped in the same
+transaction (a change of the text column alone leaves it: the text of a vector is made
+from the line), and the mark that its session is complete becomes a tombstone (version
+0, and its generation counted up), so that the server looks at the session again. A
+look hands back the generation of the mark it saw, and the server writes the mark of
+a session only if it is still that generation; a look made before the change, which
+found the session complete with the vector that is gone, can therefore not bring the
+old mark back, however long the transaction of the command ran after it wrote the
+tombstone. The server makes the vector again from the text as it is now. A dry run
+drops nothing and counts what it would drop (`session_embeddings` in the report of
+`ctx redact-sessions`).
+
+**When.** A prompt is embedded as soon as the server has it. The answer that ends a
+turn is embedded when the turn is closed: a prompt that a person typed has come
+after it, or the session has been quiet for 30 minutes. Until then every message an
+agent writes between two calls would be the last one for a moment, and the server
+would spend three seconds on each and keep a vector for a text that is not the
+answer. An agent that works uploads every few minutes, also while it waits for a
+build; half an hour of silence is a person who has gone or a session that is over.
+An answer that the session outgrows after it was embedded (it went on after the
+half hour) loses its vector the next time the session is looked at, which the new
+chunk brings about.
+
+**Night work.** There are many texts: 14 thousand on the installation they were
+measured on, in 5,300 sessions, and the model needs about 3.2 seconds for one on
+two cores. The first run over such a stock takes about 13 hours, so three nights
+of six; after that a day brings some hundreds of texts, about 18 minutes of work.
+The job therefore embeds sessions only inside `GHOSTTREE_EMBED_SESSION_WINDOW`, in
+the local time of the server, by default midnight to six; `always` has no window.
+Outside it they wait and cost nothing. Every other kind goes first, at any hour: the
+sessions are asked for only when nothing else is due, so a new request waits at most
+for the batch that is running (eight texts, about 25 seconds). The texts go to the
+job server (`GHOSTTREE_EMBED_URL`) and never to the server for queries; the pace
+(batch, pause, back-off, parking of a text the server fails on) is that of the other
+kinds. The newest session comes first, so that what was written last is searchable
+first while the stock is caught up on. The state is in the database, and an
+interrupted run goes on where it stopped. While the index of the chunks is still
+being built after an update nothing is embedded: a session whose chunks are not all
+in it would be taken for complete.
+
+**Storage.** One row per text in `session_embeddings` (the chunk, model, text format,
+hash, the int8 vector with its scale, the time the text was read), failures in
+`session_embedding_failures`, and in `session_embedding_sync` the sessions that were
+looked at and found complete: all their texts are embedded, or too short to count,
+or refused by the server for good (a text that fails for a time keeps its session
+waiting, so that it is tried again at its time). Such a session is left alone until
+it gets a chunk or its mark was made under another model, text format or version of
+the rules that make the texts (`sessionTextVersion` in the code, raised with any
+change of them): a release that changes what counts as a typed prompt, which chunk
+ends a turn or how a text is cleaned thus reaches the sessions nobody writes to
+any more, and what the new rules no longer call for goes. The rows reference their
+chunk (`session_chunks.id`) and the mark its session, all `ON DELETE CASCADE`: a
+chunk that is deleted takes its vector and its failure along, a session that is
+deleted (after its chunks, which do not cascade from it) its mark, without the job
+having to find them. The look at a session, which only reads, names the vectors
+that have no text any more (an outgrown answer, a text now too short or empty, a
+prompt the rules now take for injected); the job drops them in small writer jobs of
+200, so uploads wait for no walk through the stock. A vector is stored only if the
+stored line of its chunk is still the one the text was made from: the look gives the
+hash of the line with the item, and the writer reads the line inside the transaction
+that stores the vector and compares the hashes (a read and a hash: about a
+millisecond for two megabytes, where the chain that makes the text took 6 to 80
+milliseconds on logs and tokens of that size, with every other write waiting). A
+redaction that comes while the job embeds the chunk cannot leave the vector of the
+text before. In its idle turn, at most every 10
+minutes and at any hour, the job also removes what a database without foreign keys
+left behind (three statements on keys). A text takes about
+a kilobyte, so 14 thousand are 15 MB. The tables are made on start. A search scans
+the vectors of the sessions the reader may read: some 50 ms for 14 thousand texts
+from SQLite (11 ms from memory), 225 ms at five times that; a cache of the matrix
+would pay off around 30,000 texts and is not built.
+
+**Search.** `GET /api/search?kind=sessions` (`context_search kind=sessions`,
+`context_sessions` with a query) and the web search of sessions (the page of sessions
+with a query and the sessions group of the search page) rank a query by words and by
+meaning and fuse the two rankings by reciprocal rank (k = 60), the vectors counting
+`GHOSTTREE_EMBED_SESSION_WEIGHT` times (2) against 1 for the words: on questions asked
+in sentences the vectors had the session in the first ten for nearly every question
+and the words for three of four, and the words stay in for names, ids and error
+messages, which no question measured. A session scores in the vector ranking with the
+best of its texts. The words ranking is that of sessions (in the order of their first
+hit), and what comes back is one hit per session: the first words hit, or, for a
+session that only the meaning found, the text that came closest, from its beginning.
+Such a hit carries `"match": "semantic"` (`[match:semantic]` in the MCP tools), and at
+most five of ten hits are there by meaning alone. A query of ordinary words, the sort
+by time and the kinds of text of the web search that are not messages (output,
+commands, thinking) are answered by words, and so is a search while the embedding
+server does not answer. The hint a prompt brings ("this also came up in session …")
+is always by words. In the web search a value of a facet (project, machine, platform)
+counts what the list holds after a click on it: the sessions the words found within
+that filter, and the few found by meaning alone, taken from the sessions within it (the
+filters of time and "mine" included). A facet may therefore say more than the list
+shows now, since the room for hits of meaning alone is spent in the project that has
+them first.
+
+**Who sees what.** The readable sessions are fixed first, with the rule of the words
+search (`TranscriptPrefilter` and, where it is not exact, the row rule): private only
+for the owner, shared for the members of the project, with guests for the guests. The
+vectors are compared only over those, so a session the reader may not read is not
+compared and cannot move one he may; afterwards the usual `CanSeeTranscript` and
+`MetaView` apply (a guest gets the address and the title, not the number, the machine,
+the branch, the directory or the owner). A vector never leaves the server, and the
+text a hit shows is text the reader may read.
+
+**Measuring.** `ctx eval search --set queries.jsonl` takes `"kind": "session"` with
+the number of the session, or its address, as `target`; a query runs through the
+production search over the whole instance (a session of any project may be the one).
+`--sessions-builtin` adds the titles of active knowledge entries with evidence (at
+least 15 characters, `--sessions-sample 300` of them, drawn with `--seed`, by default
+the draw of the experiment this was decided on), with any session of the evidence as
+the answer. Those are summaries written by a model and not questions, the harder set:
+on them the gain was small, on questions asked in sentences it was large. Both print
+counts only. `--embed-session-weight` sets the weight for the fused row. Run `ctx
+embed status` first.
+
+```sh
+ctx eval search --db /var/lib/ghosttree/ghosttree.db --embed-url http://127.0.0.1:8475 \
+  --set questions.jsonl --sessions-builtin
+```
+
+`ctx embed status` has a line for the sessions when `--embed-kinds` (or
+`GHOSTTREE_EMBED_KINDS`) names them: the number of texts that count now, how many
+have a vector, how many are due, and the window with whether it is open. The sessions
+are then part of the total of the background job.
+
+```text
+session          embedded 2300 of 14126, due 11826  [embedding on, search on]  [window 00:00-06:00 local time of the server, opens in 3h12m0s]
+```
+
+It counts by chunk and does not read the text of a chunk that has a vector, so a text
+that changed is only noticed by the job, which compares hashes when it looks at a
+session. The texts that have no vector are read and cleaned to count them, which takes
+a while on a large stock: the command does it only for an installation that embeds
+sessions. Without the sessions among the kinds the line says `not counted` (and what
+to name), the sessions are not in the total, and nothing of them is read.
 
 ### A second server for queries
 
@@ -1099,9 +1277,9 @@ line of the set is a JSON object with the query, the kind and the target:
 {"query": "is there a request for this already", "kind": "request", "target": "412"}
 ```
 
-`kind` is `request`, `ghost`, `pain`, `document` or `knowledge`; `target` is the id
-of the object, and for a description of a path `project:path` (split at the first
-colon). Other members of a line are ignored. A query is run in the project of its
+`kind` is `request`, `ghost`, `pain`, `document`, `knowledge` or `session`;
+`target` is the id of the object, for a description of a path `project:path` (split
+at the first colon), and for a session its number or its address. Other members of a line are ignored. A query is run in the project of its
 target, the way an agent asks, with ten hits; the report has a block per kind with
 n, R@1, R@3, R@10 and MRR@10 for the three rankings, how many targets no longer
 exist (they are not measured), and how many objects of the kind have a current

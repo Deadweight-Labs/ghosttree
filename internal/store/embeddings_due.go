@@ -15,8 +15,20 @@ type EmbedDue struct {
 	// Unchanged are objects that were edited after their vector was made, but not
 	// in the text that is embedded (a change of confidence, say). Their vectors
 	// are right; the job says so with TouchEmbeddings(kind, ids, ReadAt) so that
-	// they are not looked at again.
+	// they are not looked at again. For sessions, whose items are chunks, these are
+	// the numbers of the sessions that were looked at and found complete.
 	Unchanged []int64
+	// Seen holds, for sessions only, the generation of the mark that each session of
+	// Unchanged had when the look saw it (NoSessionMark when it saw none), in the
+	// same order. The job passes it back with TouchSessionEmbeddings, which writes the
+	// mark only if it is still that generation.
+	Seen []SessionSeen
+	// Stale are objects whose vector, or parked failure, has no text any more and
+	// is to go: the job says so with DropEmbeddings(kind, Stale). Only sessions have
+	// them (a chunk that is no longer a text of its session, or whose text is now
+	// too short); they are read, not written, by the call that finds them, because
+	// the reader of a runtime store answers it.
+	Stale []int64
 	// ReadAt is the time taken before any text was read. Pass it back with the
 	// vectors and with Unchanged.
 	ReadAt string
@@ -82,6 +94,9 @@ func (s *Store) EmbeddingDue(kind string, m EmbedModel, limit int, at time.Time,
 func (s *Store) embeddingDue(k embedKind, m EmbedModel, limit int, at time.Time, full bool) (EmbedDue, error) {
 	if limit <= 0 {
 		limit = 8
+	}
+	if k.name == KindSession {
+		return s.sessionEmbeddingDue(m, limit, at)
 	}
 	due := EmbedDue{ReadAt: now()}
 	order := ` ORDER BY ` + k.updated + ` DESC, ` + k.id + ` DESC`
@@ -229,6 +244,9 @@ func (s *Store) EmbeddingStatus(kind string, m EmbedModel) (EmbedStatus, error) 
 }
 
 func (s *Store) embeddingStatus(k embedKind, m EmbedModel) (EmbedStatus, error) {
+	if k.name == KindSession {
+		return s.sessionEmbeddingStatus(k, m)
+	}
 	var st EmbedStatus
 	stamp := time.Now().UTC().Format(time.RFC3339)
 	type row struct {

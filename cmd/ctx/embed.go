@@ -11,20 +11,24 @@ import (
 	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/embed"
+	"github.com/Deadweight-Labs/ghosttree/internal/embedjob"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
 const embedUsage = `usage: ctx embed status --db <path> [--embed-url <url>] [--embed-query-url <url>]
                        [--embed-model <id>] [--embed-kinds <kinds>]
                        [--embed-search-kinds <kinds>]
+                       [--embed-session-window <HH:MM-HH:MM>]
 
 Hybrid search keeps one vector per active knowledge entry and, for the kinds
-named in --embed-kinds (env GHOSTTREE_EMBED_KINDS), per request, pain, document
-and description of a path. The server computes them in the background once it
-is started with --embed-url (env GHOSTTREE_EMBED_URL); see "Embeddings for
-hybrid search" in deploy/README.md. With --embed-query-url (env
-GHOSTTREE_EMBED_QUERY_URL) search queries are embedded by a second server, which
-must serve the same model.
+named in --embed-kinds (env GHOSTTREE_EMBED_KINDS), per request, pain, document,
+description of a path and, for sessions, per prompt and per final answer of a
+turn. The server computes them in the background once it is started with
+--embed-url (env GHOSTTREE_EMBED_URL); see "Embeddings for hybrid search" in
+deploy/README.md. The sessions are embedded only in a span of the night
+(--embed-session-window, env GHOSTTREE_EMBED_SESSION_WINDOW) and after every
+other kind. With --embed-query-url (env GHOSTTREE_EMBED_QUERY_URL) search queries
+are embedded by a second server, which must serve the same model.
 
   status  for each kind how many objects have a current vector, how many are
           due and how many of those are parked, how the background job last
@@ -32,11 +36,16 @@ must serve the same model.
           short text); with a second server for queries also whether it answers
           and whether both serve the same model. With --embed-kinds and
           --embed-search-kinds (or their environment variables) it also says
-          which kind that configuration embeds and searches by.
+          which kind that configuration embeds and searches by. The sessions
+          are counted only when --embed-kinds names them: counting them reads
+          every text that has no vector yet, which the other kinds do not need.
 
 status reads the database without writing to it, so the server may keep
 running. A vector counts as current when it was made by the configured model,
 with the current text formats, from the object's text as it is now.`
+
+// embedNow is the clock of the status of the session window; a test replaces it.
+var embedNow = time.Now
 
 func cmdEmbed(args []string, stdout io.Writer) int {
 	if len(args) == 0 {
@@ -110,6 +119,15 @@ func cmdEmbedStatus(args []string, stdout io.Writer) int {
 		if kind == store.KindKnowledge {
 			continue
 		}
+		if kind == store.KindSession && !slices.Contains(cfg.embedKinds(), store.KindSession) {
+			// Counting the sessions reads and cleans the line of every text that has no
+			// vector yet: a command that took a second before would take a long time on an
+			// installation that does not embed sessions at all. They are counted when the
+			// configuration names them, and are not part of the total before.
+			fmt.Fprintf(stdout, "%-16s not counted: the sessions are not among the embedded kinds (name them in --embed-kinds, for example knowledge,session)%s\n",
+				kind, describeSwitches(cfg, kind))
+			continue
+		}
 		ks, err := st.EmbeddingStatus(kind, model)
 		if err != nil {
 			if strings.Contains(err.Error(), "no such table") {
@@ -117,7 +135,7 @@ func cmdEmbedStatus(args []string, stdout io.Writer) int {
 				// (it creates the tables of these kinds when it starts): knowledge
 				// above is still right, and each kind says so instead of the whole
 				// command failing.
-				fmt.Fprintf(stdout, "%-16s tables not created yet; start the server once with this version%s\n", kind, describeSwitches(cfg, kind))
+				fmt.Fprintf(stdout, "%-16s tables not created yet; start the server once with this version%s\n", kind, describeSwitches(cfg, kind)+describeWindow(cfg, kind))
 				continue
 			}
 			fmt.Fprintf(stdout, "embed status: %s: %v\n", kind, err)
@@ -126,7 +144,7 @@ func cmdEmbedStatus(args []string, stdout io.Writer) int {
 		total.Active += ks.Active
 		total.Current += ks.Current
 		total.Due += ks.Due
-		fmt.Fprintf(stdout, "%-16s %s%s\n", kind, describeKind(ks), describeSwitches(cfg, kind))
+		fmt.Fprintf(stdout, "%-16s %s%s\n", kind, describeKind(ks), describeSwitches(cfg, kind)+describeWindow(cfg, kind))
 	}
 	if cfg.kindsGiven {
 		fmt.Fprintf(stdout, "%-16s %s%s\n", store.KindKnowledge, "(counted above)", describeSwitches(cfg, store.KindKnowledge))
@@ -177,6 +195,25 @@ func describeSwitches(cfg embedSettings, kind string) string {
 		return "off"
 	}
 	return fmt.Sprintf("  [embedding %s, search %s]", on(cfg.embedKinds()), on(cfg.searchKinds()))
+}
+
+// describeWindow is the span of the clock in which the sessions are embedded, and
+// whether it is open: the sessions are not embedded at any hour, and a count that
+// does not move at noon is not a fault. Said for the sessions only.
+func describeWindow(cfg embedSettings, kind string) string {
+	if kind != store.KindSession {
+		return ""
+	}
+	w := cfg.Job.SessionWindow
+	if w == (embedjob.Window{}) {
+		w = embedjob.DefaultSessionWindow
+	}
+	now := embedNow()
+	state := "open now"
+	if wait := w.Opens(now); wait > 0 {
+		state = "opens in " + wait.Round(time.Minute).String()
+	}
+	return fmt.Sprintf("  [window %s local time of the server, %s]", w, state)
 }
 
 // describeAgreement says whether the query server and the job server serve the

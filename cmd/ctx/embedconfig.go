@@ -37,6 +37,11 @@ const (
 	// kinds; with only the first, the search kinds are the same.
 	envEmbedKinds       = "GHOSTTREE_EMBED_KINDS"
 	envEmbedSearchKinds = "GHOSTTREE_EMBED_SEARCH_KINDS"
+	// The span of the clock in which the sessions are embedded (they are many and
+	// take three nights to catch up on), and the weight of their embedding ranking
+	// in the search.
+	envEmbedSessionWindow = "GHOSTTREE_EMBED_SESSION_WINDOW"
+	envEmbedSessionWeight = "GHOSTTREE_EMBED_SESSION_WEIGHT"
 )
 
 // embedSettings is the validated configuration.
@@ -53,6 +58,9 @@ type embedSettings struct {
 	QueryTimeout time.Duration
 	// MinSimilarity is the cosine an entry needs to enter the embedding ranking.
 	MinSimilarity float32
+	// SessionWeight is the weight of the embedding ranking in the fusion of the
+	// session search, against 1 for the words.
+	SessionWeight float64
 	Job           embedjob.Config
 	// Kinds are the kinds of object that get vectors, SearchKinds the ones whose
 	// search uses them (a subset). Empty Kinds means knowledge only, empty
@@ -100,6 +108,7 @@ func (e embedSettings) queryClient() (*embed.Client, error) {
 type embedFlags struct {
 	url, queryURL, model, minSimilarity, queryTimeout, batch, pause, idle, maxBackoff *string
 	kinds, searchKinds                                                                *string
+	sessionWindow, sessionWeight                                                      *string
 	job                                                                               bool
 }
 
@@ -112,6 +121,7 @@ func addEmbedFlags(fs *flag.FlagSet, job bool) *embedFlags {
 	f.queryURL = fs.String("embed-query-url", os.Getenv(envEmbedQueryURL), "base URL of a second embedding server that embeds only search queries, so that a search does not wait behind the background job; it must serve the same model, and --embed-url is still needed for the job; empty uses --embed-url (env "+envEmbedQueryURL+")")
 	f.model = fs.String("embed-model", os.Getenv(envEmbedModel), "model id sent to the embedding server and stored with every vector (default "+embed.DefaultModel+", env "+envEmbedModel+")")
 	f.minSimilarity = fs.String("embed-min-similarity", os.Getenv(envEmbedMinSimilarity), "cosine an entry needs to enter the embedding ranking: 0 for no minimum up to below 1 (default "+strconv.FormatFloat(embed.DefaultMinSimilarity, 'f', -1, 64)+", measured for the default model; env "+envEmbedMinSimilarity+")")
+	f.sessionWeight = fs.String("embed-session-weight", os.Getenv(envEmbedSessionWeight), "weight of the embedding ranking against 1 for the words ranking in the fusion of the session search, above 0 up to 100 (default "+strconv.FormatFloat(embed.DefaultSessionVectorWeight, 'f', -1, 64)+"; env "+envEmbedSessionWeight+"); the other kinds fuse with equal weights")
 	if job {
 		f.addKinds(fs)
 		f.queryTimeout = fs.String("embed-query-timeout", os.Getenv(envEmbedQueryTimeout), "how long a search waits for the query vector before it answers from full text alone (default "+embed.DefaultQueryTimeout.String()+", env "+envEmbedQueryTimeout+")")
@@ -128,8 +138,9 @@ func addEmbedFlags(fs *flag.FlagSet, job bool) *embedFlags {
 // configuration would do. "ctx eval search" measures any kind and takes neither.
 func (f *embedFlags) addKinds(fs *flag.FlagSet) {
 	names := strings.Join(store.EmbedKinds(), ", ")
-	f.kinds = fs.String("embed-kinds", os.Getenv(envEmbedKinds), "kinds of object that get vectors, comma-separated: "+names+", or all (default "+store.KindKnowledge+", env "+envEmbedKinds+"); a kind is embedded in the background and can be measured with ctx eval search before its search uses the vectors")
+	f.kinds = fs.String("embed-kinds", os.Getenv(envEmbedKinds), "kinds of object that get vectors, comma-separated: "+names+", or all, which is every kind but session; sessions are only embedded when named (default "+store.KindKnowledge+", env "+envEmbedKinds+"); a kind is embedded in the background and can be measured with ctx eval search before its search uses the vectors")
 	f.searchKinds = fs.String("embed-search-kinds", os.Getenv(envEmbedSearchKinds), "kinds whose search uses the vectors, a subset of --embed-kinds (default: all of them, env "+envEmbedSearchKinds+"); the search of every other kind answers from full text")
+	f.sessionWindow = fs.String("embed-session-window", os.Getenv(envEmbedSessionWindow), "span of the local time of the server in which the sessions are embedded, HH:MM-HH:MM (may cross midnight) or always (default "+embedjob.DefaultSessionWindow.String()+", env "+envEmbedSessionWindow+"); outside it the sessions wait, and every other kind goes first at any hour")
 }
 
 func (f *embedFlags) resolve() (embedSettings, error) {
@@ -176,6 +187,11 @@ func (f *embedFlags) resolve() (embedSettings, error) {
 		s.Kinds = kinds
 		s.SearchKinds = kinds
 		s.kindsGiven = strings.TrimSpace(*f.kinds) != "" || strings.TrimSpace(*f.searchKinds) != ""
+		if f.sessionWindow != nil && strings.TrimSpace(*f.sessionWindow) != "" {
+			if s.Job.SessionWindow, err = embedjob.ParseWindow(*f.sessionWindow); err != nil {
+				return s, fmt.Errorf("--embed-session-window: %w", err)
+			}
+		}
 		if strings.TrimSpace(*f.searchKinds) != "" {
 			if s.SearchKinds, err = store.ParseEmbedKinds(*f.searchKinds); err != nil {
 				return s, fmt.Errorf("--embed-search-kinds: %w", err)
@@ -187,6 +203,14 @@ func (f *embedFlags) resolve() (embedSettings, error) {
 			}
 		}
 		s.Job.Kinds = s.Kinds
+	}
+	s.SessionWeight = embed.DefaultSessionVectorWeight
+	if v := strings.TrimSpace(*f.sessionWeight); v != "" {
+		x, err := strconv.ParseFloat(v, 64)
+		if err != nil || x <= 0 || x > 100 {
+			return s, fmt.Errorf("--embed-session-weight must be a number above 0 up to 100, got %q", v)
+		}
+		s.SessionWeight = x
 	}
 	if !f.job {
 		return s, nil
@@ -244,7 +268,8 @@ func startEmbedding(ctx context.Context, st *store.Store, cfg embedSettings, log
 		logger.Error("embed_config", "error", err.Error())
 		return func() {}
 	}
-	search := store.EmbedSearchConfig{Embedder: c, Timeout: cfg.QueryTimeout, MinSimilarity: cfg.MinSimilarity, Logger: logger, Kinds: cfg.searchKinds()}
+	search := store.EmbedSearchConfig{Embedder: c, Timeout: cfg.QueryTimeout, MinSimilarity: cfg.MinSimilarity, Logger: logger, Kinds: cfg.searchKinds(),
+		VectorWeights: map[string]float64{store.KindSession: cfg.SessionWeight}}
 	var check *embed.ModelCheck
 	var queryClient *embed.Client
 	if cfg.separateQuery() {
@@ -263,6 +288,13 @@ func startEmbedding(ctx context.Context, st *store.Store, cfg embedSettings, log
 		"query_timeout", cfg.QueryTimeout.String(), "min_similarity", cfg.MinSimilarity, "batch", orDefault(cfg.Job.Batch, embedjob.DefaultBatch),
 		"pause", orDefault(cfg.Job.Pause, embedjob.DefaultPause).String(),
 		"kinds", strings.Join(jobConfig.Kinds, ","), "search_kinds", strings.Join(search.Kinds, ",")}
+	if slices.Contains(jobConfig.Kinds, store.KindSession) {
+		window := jobConfig.SessionWindow
+		if window == (embedjob.Window{}) {
+			window = embedjob.DefaultSessionWindow
+		}
+		attrs = append(attrs, "session_window", window.String(), "session_weight", cfg.SessionWeight)
+	}
 	note := "hybrid search is on; objects are embedded in the background"
 	if queryClient != nil {
 		attrs = append(attrs, "query_url", queryClient.URL())

@@ -17,21 +17,29 @@ func TestParseEmbedKinds(t *testing.T) {
 		" Requests , pains ":   {KindRequest, KindPain},
 		"ghosts,docs,requests": {KindRequest, KindDocument, KindGhost},
 		"files,files":          {KindGhost},
-		"all":                  EmbedKinds(),
+		"all":                  {KindKnowledge, KindRequest, KindPain, KindDocument, KindGhost},
+		"all,session":          EmbedKinds(),
+		"session,ALL":          EmbedKinds(),
 		"ghost,knowledge":      {KindKnowledge, KindGhost},
+		"sessions":             {KindSession},
+		"Session, pain":        {KindPain, KindSession},
 	} {
 		got, err := ParseEmbedKinds(in)
 		if err != nil || !slices.Equal(got, want) {
 			t.Errorf("%q: %v %v, want %v", in, got, err, want)
 		}
 	}
-	for _, bad := range []string{"sessions", "knowledge,nope", "request;pain"} {
+	for _, bad := range []string{"widgets", "knowledge,nope", "request;pain"} {
 		if _, err := ParseEmbedKinds(bad); err == nil {
 			t.Errorf("%q accepted", bad)
 		}
 	}
 	if k, err := ParseEmbedKind("Files"); err != nil || k != KindGhost {
 		t.Errorf("%q %v", k, err)
+	}
+	// The sessions come after every other kind: the job serves them last.
+	if kinds := EmbedKinds(); kinds[len(kinds)-1] != KindSession {
+		t.Errorf("%v", kinds)
 	}
 }
 
@@ -275,7 +283,7 @@ func TestVectorsOfDifferentKindsWithTheSameIdDoNotCollide(t *testing.T) {
 	if s, err := st.KnowledgeEmbeddingStatus(modelOf(c)); err != nil || s.Current != 1 {
 		t.Fatalf("%+v %v", s, err)
 	}
-	if err := st.UpsertEmbedding(Embedding{Kind: "sessions", ObjectID: 1, Model: "m", PrefixVersion: "v", TextHash: "h", Dim: 1, Scale: 1, Vec: []byte{1}, ReadAt: "x"}); err == nil {
+	if err := st.UpsertEmbedding(Embedding{Kind: "widgets", ObjectID: 1, Model: "m", PrefixVersion: "v", TextHash: "h", Dim: 1, Scale: 1, Vec: []byte{1}, ReadAt: "x"}); err == nil {
 		t.Fatal("an unknown kind was accepted")
 	}
 }

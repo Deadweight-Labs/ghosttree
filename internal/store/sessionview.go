@@ -194,6 +194,60 @@ func (a *ProjectAccess) computeFacets(cands []Session, f SessionFilter) Facets {
 	return Facets{Projects: facetOptions(proj), Machines: facetOptions(mach), Harnesses: facetOptions(harn)}
 }
 
+// computeFacetsWithVectors is computeFacets for a search that has the vectors.
+// What a value of a facet counts is what the list has after a click on it: the
+// filter of the facet's own dimension is then that value and the others are as they
+// are, and the list is made by fuseTranscripts within that filter. It has the
+// sessions the words found (words, all of them, whatever the filter) that pass the
+// filter, and of the sessions that only the vectors found (the first hybridPool of
+// vec that pass the filter, less the ones that have words) as many as the fusion
+// takes, room at most. The sessions of the words never use up the room, so the count
+// is the number of the former plus the least of room and the number of the latter.
+// A value that only the vectors have is a value of the facet when it has any.
+func (a *ProjectAccess) computeFacetsWithVectors(words []Session, vec []sessionBest, byID map[int64]Session, f SessionFilter, room int) Facets {
+	found := make(map[int64]bool, len(words))
+	for _, s := range words {
+		found[s.ID] = true
+	}
+	dims := [...]struct {
+		dim   int
+		value func(Session) string
+	}{
+		{dimProject, func(s Session) string { return s.Scope.Project }},
+		{dimMachine, func(s Session) string { return a.guestView(s).Scope.Machine }},
+		{dimHarness, func(s Session) string { return s.Harness }},
+	}
+	var options [len(dims)][]FacetOption
+	for i, d := range dims {
+		count := map[string]int{}
+		for _, s := range words {
+			if a.matchFilter(s, f, d.dim) {
+				count[d.value(s)]++
+			}
+		}
+		pooled, only := map[string]int{}, map[string]int{}
+		for _, b := range vec {
+			s, ok := byID[b.session]
+			if !ok || !a.matchFilter(s, f, d.dim) {
+				continue
+			}
+			v := d.value(s)
+			if pooled[v] >= hybridPool {
+				continue
+			}
+			pooled[v]++
+			if !found[s.ID] {
+				only[v]++
+			}
+		}
+		for v, n := range only {
+			count[v] += min(room, n)
+		}
+		options[i] = facetOptions(count)
+	}
+	return Facets{Projects: options[0], Machines: options[1], Harnesses: options[2]}
+}
+
 func (a *ProjectAccess) guestFacets(f Facets) Facets {
 	f.Machines = nil
 	return f
@@ -311,6 +365,9 @@ type SearchGroup struct {
 	Hits    []SearchHit
 	// Total: alle Treffer dieser Session; Hits zeigt die besten drei.
 	Total int
+	// Match is MatchSemantic for a session that only the embedding found: Hits is
+	// then the one text that came closest, without marked words, and Total is 0.
+	Match string
 }
 
 type SearchQuery struct {
@@ -382,6 +439,10 @@ type matchedSession struct {
 	sess  Session
 	rank  float64
 	count int
+	// semantic: only the embedding found the session; closest is its text that
+	// came closest to the query.
+	semantic bool
+	closest  sessionBest
 }
 
 // SearchTranscripts sucht in den Transkripten, die der Betrachter lesen darf.
@@ -448,7 +509,40 @@ func (s *Store) SearchTranscripts(pa *ProjectAccess, q SearchQuery) (SearchPage,
 	for i, m := range matched {
 		cands[i] = m.sess
 	}
-	page := SearchPage{Facets: pa.computeFacets(cands, q.Filter)}
+	newest := q.Sort == "newest"
+	order := func(list []matchedSession) {
+		sort.Slice(list, func(i, j int) bool {
+			a, b := list[i], list[j]
+			if newest {
+				if a.sess.LastSeenAt != b.sess.LastSeenAt {
+					return a.sess.LastSeenAt > b.sess.LastSeenAt
+				}
+				return a.sess.ID > b.sess.ID
+			}
+			if restricted {
+				if a.count != b.count {
+					return a.count > b.count
+				}
+				if a.sess.LastSeenAt != b.sess.LastSeenAt {
+					return a.sess.LastSeenAt > b.sess.LastSeenAt
+				}
+			} else if a.rank != b.rank {
+				return a.rank < b.rank
+			}
+			return a.sess.ID > b.sess.ID
+		})
+	}
+	// With the vectors, a facet counts what the list shows after a click on it, which
+	// is made by the fusion within the filter that click gives (see
+	// computeFacetsWithVectors).
+	vec, vecCfg := s.transcriptVectors(q, readable)
+	var facets Facets
+	if vecCfg != nil {
+		facets = pa.computeFacetsWithVectors(cands, vec, byID, q.Filter, maxSemanticOnly(q.Limit))
+	} else {
+		facets = pa.computeFacets(cands, q.Filter)
+	}
+	page := SearchPage{Facets: facets}
 	if pa.isGuestOnly() {
 		page.Facets = pa.guestFacets(page.Facets)
 	}
@@ -460,27 +554,11 @@ func (s *Store) SearchTranscripts(pa *ProjectAccess, q SearchQuery) (SearchPage,
 		}
 	}
 	page.Sessions = len(kept)
-	newest := q.Sort == "newest"
-	sort.Slice(kept, func(i, j int) bool {
-		a, b := kept[i], kept[j]
-		if newest {
-			if a.sess.LastSeenAt != b.sess.LastSeenAt {
-				return a.sess.LastSeenAt > b.sess.LastSeenAt
-			}
-			return a.sess.ID > b.sess.ID
-		}
-		if restricted {
-			if a.count != b.count {
-				return a.count > b.count
-			}
-			if a.sess.LastSeenAt != b.sess.LastSeenAt {
-				return a.sess.LastSeenAt > b.sess.LastSeenAt
-			}
-		} else if a.rank != b.rank {
-			return a.rank < b.rank
-		}
-		return a.sess.ID > b.sess.ID
-	})
+	order(kept)
+	if vecCfg != nil {
+		kept = pa.fuseTranscripts(kept, vec, q, byID, vecCfg)
+		page.Sessions = len(kept)
+	}
 	start := 0
 	if q.Cursor != "" {
 		start = positionAfter(kept, q.Cursor, newest)
@@ -497,6 +575,19 @@ func (s *Store) SearchTranscripts(pa *ProjectAccess, q SearchQuery) (SearchPage,
 	groups, err := s.hitsFor(pa, pageRows, expr, q.Kind)
 	if err != nil {
 		return SearchPage{}, err
+	}
+	// A session that only the embedding found has no words to mark: its hit is the
+	// text that came closest.
+	for i, m := range pageRows {
+		if !m.semantic {
+			continue
+		}
+		snippet, kind, err := s.semanticText(m.sess.Harness, m.closest)
+		if err != nil {
+			return SearchPage{}, err
+		}
+		groups[i].Match = MatchSemantic
+		groups[i].Hits = []SearchHit{{Seq: m.closest.seq, Kind: kind, Parts: []SnippetPart{{Text: snippet}}}}
 	}
 	page.Groups = groups
 	return page, nil

@@ -275,6 +275,47 @@ func TestFuseIsReciprocalRankFusion(t *testing.T) {
 	}
 }
 
+// A weight scales what a rank in a list is worth: the vectors at weight 2 count
+// twice, and a weight that is missing or not positive counts once, so no weights
+// are Fuse.
+func TestFuseWeightedScalesTheRanksOfAList(t *testing.T) {
+	text := []int64{1, 2}
+	vector := []int64{2, 1}
+	ids := func(fs []embed.Fused) []int64 {
+		var out []int64
+		for _, f := range fs {
+			out = append(out, f.ID)
+		}
+		return out
+	}
+	// Equal weights: 1 and 2 have the same score, the text list breaks the tie.
+	if got := ids(embed.FuseWeighted([]float64{1, 1}, text, vector)); got[0] != 1 || got[1] != 2 {
+		t.Fatalf("equal weights: %v", got)
+	}
+	// The vectors counting twice put their first, 2, on top: 1/62+2/61 against 1/61+2/62.
+	fused := embed.FuseWeighted([]float64{1, 2}, text, vector)
+	if got := ids(fused); got[0] != 2 || got[1] != 1 {
+		t.Fatalf("weight 2 on the vectors: %v", got)
+	}
+	exact := 1/float64(embed.RRFK+2) + 2/float64(embed.RRFK+1)
+	if math.Abs(fused[0].Score-exact) > 1e-12 {
+		t.Fatalf("score %v, want %v", fused[0].Score, exact)
+	}
+	// Missing, zero and negative weights are 1; no weights at all are Fuse, to the bit.
+	for _, w := range [][]float64{nil, {}, {1}, {0, 0}, {-3, -1}} {
+		a, b := embed.FuseWeighted(w, text, vector), embed.Fuse(text, vector)
+		for i := range a {
+			if a[i].ID != b[i].ID || a[i].Score != b[i].Score {
+				t.Fatalf("weights %v: %+v, want the fusion without weights %+v", w, a, b)
+			}
+		}
+	}
+	// A weight on a list the entry is not in adds nothing to it.
+	if got := embed.FuseWeighted([]float64{1, 5}, []int64{7}, nil); len(got) != 1 || got[0].Score != 1/float64(embed.RRFK+1) {
+		t.Fatalf("%+v", got)
+	}
+}
+
 func TestFuseTiesFollowTheFirstList(t *testing.T) {
 	// 5 is first in the text list only, 6 first in the vector list only: equal
 	// scores, and the text list wins.

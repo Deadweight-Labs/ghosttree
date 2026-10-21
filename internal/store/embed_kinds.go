@@ -8,29 +8,41 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/embed"
 )
 
-// The kinds of object that get vectors. Sessions are meant to be one more later:
-// a kind is one entry in embedKinds (where its objects live, which of them count,
-// how their text is made) plus a ranking in the search of its own; the storage,
-// the background job and the status need nothing else.
+// The kinds of object that get vectors. A kind is one entry in embedKinds (where
+// its objects live, which of them count, how their text is made) plus a ranking
+// in the search of its own; the storage, the background job and the status need
+// nothing else. Sessions are the one kind whose objects are not rows of a table:
+// the texts to embed (what was typed, the answer each turn ended with) are picked
+// out of the chunks by the turn logic of internal/transcript, so the entry names
+// the tables of the vectors and session_embeddings.go does the rest.
 const (
 	KindKnowledge = "knowledge"
 	KindRequest   = "request"
 	KindPain      = "pain"
 	KindDocument  = "document"
 	KindGhost     = "ghost"
+	KindSession   = "session"
 )
 
 // EmbedKinds lists every kind that can be embedded, in the order the background
 // job serves them: the small kinds first, so that the ghost descriptions (one
-// per path, thousands) are never the reason a new pain waits.
+// per path, thousands) are never the reason a new pain waits. Sessions come last
+// and are served by the job only when nothing else is due, and only in their
+// time window (see embedjob.Config.SessionWindow).
 func EmbedKinds() []string {
-	return []string{KindKnowledge, KindRequest, KindPain, KindDocument, KindGhost}
+	return []string{KindKnowledge, KindRequest, KindPain, KindDocument, KindGhost, KindSession}
 }
 
 // ParseEmbedKinds reads a comma-separated list of kinds, the way
-// GHOSTTREE_EMBED_KINDS and GHOSTTREE_EMBED_SEARCH_KINDS give it. "all" means
-// every kind; the plural forms and a few synonyms (files, docs) are accepted. The
-// result is in job order without duplicates.
+// GHOSTTREE_EMBED_KINDS and GHOSTTREE_EMBED_SEARCH_KINDS give it. "all" means the
+// five kinds there were before sessions; the plural forms and a few synonyms
+// (files, docs) are accepted. The result is in job order without duplicates.
+//
+// Sessions are not part of "all", they are named. They send what people typed and
+// the agents answered to the embedding server, in thousands of texts: whoever set
+// "all" before there were sessions did not agree to that, and "all" in the search
+// kinds must stay a subset of the same "all" in the kinds that are embedded. "all,
+// session" is every kind.
 func ParseEmbedKinds(list string) ([]string, error) {
 	want := map[string]bool{}
 	for raw := range strings.SplitSeq(list, ",") {
@@ -39,7 +51,9 @@ func ParseEmbedKinds(list string) ([]string, error) {
 			continue
 		case "all":
 			for _, k := range EmbedKinds() {
-				want[k] = true
+				if k != KindSession {
+					want[k] = true
+				}
 			}
 		default:
 			kind, err := ParseEmbedKind(name)
@@ -70,6 +84,8 @@ func ParseEmbedKind(name string) (string, error) {
 		return KindDocument, nil
 	case "ghosts", "files", "file":
 		return KindGhost, nil
+	case "sessions":
+		return KindSession, nil
 	default:
 		if slices.Contains(EmbedKinds(), n) {
 			return n, nil
@@ -196,6 +212,16 @@ var embedKinds = []embedKind{
 		name: KindGhost, emb: "embeddings", fail: "embedding_failures", idCol: "object_id", shared: true,
 		from: "ghost_files g", id: "g.id", active: "1", updated: "g.updated_at",
 		texts: ghostTexts,
+	},
+	{
+		// The object is a chunk (session_chunks.id), the vector is of its text, and the
+		// chunk is one of the texts of its session. Which chunks those are, when a
+		// session has to be looked at again and what a text is before it is sent are
+		// in session_embeddings.go, which answers for this kind where the generic
+		// queries cannot (due, status, purge, touch); from, active, updated and
+		// texts are not used for it.
+		name: KindSession, emb: "session_embeddings", fail: "session_embedding_failures", idCol: "chunk_id",
+		from: "session_chunks c", id: "c.id", active: "1", updated: "c.id",
 	},
 }
 

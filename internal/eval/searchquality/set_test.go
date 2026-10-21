@@ -37,7 +37,7 @@ func TestParseSetReadsKindsAliasesAndTargets(t *testing.T) {
 func TestParseSetErrorsNameTheLineAndNeverTheQuery(t *testing.T) {
 	for name, tc := range map[string]struct{ in, want string }{
 		"not json":     {"{\"query\": \"GEHEIM\", \"kind\": \"pain\", \"target\": \"1\"}\nGEHEIM", "line 2"},
-		"kind":         {`{"query": "GEHEIM", "kind": "sessions", "target": "1"}`, "line 1: unknown kind"},
+		"kind":         {`{"query": "GEHEIM", "kind": "widgets", "target": "1"}`, "line 1: unknown kind"},
 		"target":       {`{"query": "GEHEIM", "kind": "pain", "target": "x"}`, "line 1: the target of a pain query is an id"},
 		"ghost":        {`{"query": "GEHEIM", "kind": "ghost", "target": ":path"}`, `"project:path"`},
 		"empty query":  {`{"query": "", "kind": "pain", "target": "1"}`, "must not be empty"},

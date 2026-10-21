@@ -30,6 +30,10 @@ type Embedding struct {
 	// item (EmbedDue.ReadAt). An object changed at or after it is looked at again,
 	// so a change made while the vector was being computed is not lost.
 	ReadAt string
+	// Source is the hash of the stored text the document was made from, as given
+	// with the item (EmbedItem.Source). Only the sessions have one, and need it: the
+	// writer compares it with the text that is stored now before it stores the vector.
+	Source string
 }
 
 // KnowledgeEmbedding is the stored vector of one knowledge entry.
@@ -63,6 +67,12 @@ type EmbedItem struct {
 	// Attempts is how often this very text has failed before; zero for a text
 	// without a failure on record.
 	Attempts int
+	// Source is the hash of the stored text the document was made from, for the
+	// kinds whose document is made of a large stored text by a long chain (the line
+	// of a chunk of a session). The job hands it back with the vector
+	// (Embedding.Source), and the writer then only has to see that the stored text is
+	// still that one, not to make the document again. Empty for the other kinds.
+	Source string
 }
 
 // EmbedFailure parks an object: for a time (a text on which the embedding
@@ -136,11 +146,31 @@ func (s *Store) putEmbedding(e Embedding) error {
 		e.Dim <= 0 || len(e.Vec) != e.Dim || math.IsNaN(e.Scale) || math.IsInf(e.Scale, 0) || e.Scale <= 0 {
 		return errors.New("invalid embedding")
 	}
+	if k.name == KindSession && e.Source == "" {
+		return errors.New("invalid embedding: a vector of a session needs the hash of the line it was made from")
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	if k.name == KindSession {
+		// The text of a chunk can change while the job is embedding it: a redaction
+		// that came after the job read the chunk finds no vector to drop yet, and the
+		// vector that arrives is the one of the text before. So the line is looked at
+		// again here, as it is stored now, and the vector is kept only if it is the
+		// line the job made the document from. Inside the transaction and after taking
+		// the write lock, so that nothing can change it between the check and the
+		// write; a comparison of hashes, since the writer is no place to make the
+		// document again (see verifySessionSource).
+		keep, err := verifySessionSource(tx, e.ObjectID, e.Source)
+		if err != nil {
+			return err
+		}
+		if !keep {
+			return nil
+		}
+	}
 	args := append(k.idArgs(e.ObjectID), e.Model, e.PrefixVersion, e.Dim, e.TextHash, e.Scale, e.Vec, e.ReadAt, now())
 	if _, err := tx.Exec(`INSERT INTO `+k.emb+`(`+k.idCols()+`,model,prefix_version,dim,text_hash,scale,vec,read_at,updated_at)
 		VALUES(`+k.idVals()+`,?,?,?,?,?,?,?,?)
@@ -183,6 +213,10 @@ func (s *Store) touchEmbeddings(kind string, ids []int64, readAt string) error {
 	}
 	if len(ids) == 0 || readAt == "" {
 		return nil
+	}
+	if k.name == KindSession {
+		// The mark of a session holds the model, which this call does not know.
+		return errors.New("sessions are touched with TouchSessionEmbeddings")
 	}
 	// In pieces: an id list that grows with the stock would reach the limit on the
 	// number of variables of one statement.
@@ -245,6 +279,9 @@ func (s *Store) PurgeEmbeddings(kind string) (int, error) {
 		return queueValue(s, []any{kind}, func(d *Store, p []any) (int, error) { return d.PurgeEmbeddings(p[0].(string)) })
 	}
 	k, err := embedKindOf(kind)
+	if err == nil && k.name == KindSession {
+		return s.purgeSessionEmbeddings()
+	}
 	if err != nil || !k.shared {
 		return 0, err
 	}

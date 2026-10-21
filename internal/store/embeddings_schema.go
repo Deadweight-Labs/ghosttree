@@ -36,6 +36,67 @@ CREATE TABLE IF NOT EXISTS embedding_failures(
   PRIMARY KEY(kind, object_id)) WITHOUT ROWID;
 `
 
+// sessionEmbeddingsSchema holds the vectors of the sessions, one per text (a
+// prompt, the final answer of a turn), keyed by the chunk the text is taken from:
+// session_chunks.id is one integer for the pair of session and sequence, and the
+// session of a vector is the session of its chunk. Unlike the table above these
+// reference their parent, with ON DELETE CASCADE: a chunk that is deleted takes
+// its vector and its failure along, and so does a session whose chunks are
+// deleted first (session_chunks does not cascade from sessions), without the job
+// having to find them. The job still removes what a database without foreign
+// keys left behind (PurgeEmbeddings), and the texts that are no longer picked.
+//
+// session_embedding_sync says which sessions were looked at and found complete:
+// every text they have is embedded, or is too short to count, or was refused by
+// the server for good. The job leaves such a session alone until it gets a chunk
+// (sessions.last_seen_at reaches read_at) or the mark was made under another
+// model, text format or version of the rules that make the texts
+// (sessionTextVersion); read_at is the time taken before the session was read,
+// like the read_at of a vector. A session that waits for something (its last
+// answer has not stood long enough, a text is parked for a time) is not recorded,
+// so it stays due and is looked at again. Version 0, which no version of the rules
+// has, is a tombstone: what ctx redact-sessions and ctx strip-images leave for a
+// session whose vector they dropped. It makes the session due. gen is the
+// generation of the mark: a tombstone counts it up, in the transaction that drops
+// the vector, and a look hands back the generation it saw (or that it saw no
+// mark); TouchSessionEmbeddings writes the mark only if that is still the
+// generation. A look that was made before the change, and so found the session
+// complete with the vector that is gone, can never bring the old mark back, whatever
+// the clocks say; a time stamped inside a transaction that commits later could not
+// promise that.
+//
+// The columns of the first two are those of knowledge_embeddings.
+const sessionEmbeddingsSchema = `
+CREATE TABLE IF NOT EXISTS session_embeddings(
+  chunk_id INTEGER NOT NULL PRIMARY KEY REFERENCES session_chunks(id) ON DELETE CASCADE,
+  model TEXT NOT NULL, prefix_version TEXT NOT NULL, dim INTEGER NOT NULL,
+  text_hash TEXT NOT NULL, scale REAL NOT NULL, vec BLOB NOT NULL,
+  read_at TEXT NOT NULL, updated_at TEXT NOT NULL) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS session_embedding_failures(
+  chunk_id INTEGER NOT NULL PRIMARY KEY REFERENCES session_chunks(id) ON DELETE CASCADE,
+  model TEXT NOT NULL, prefix_version TEXT NOT NULL, text_hash TEXT NOT NULL,
+  attempts INTEGER NOT NULL, permanent INTEGER NOT NULL DEFAULT 0,
+  retry_at TEXT NOT NULL, error TEXT NOT NULL DEFAULT '', failed_at TEXT NOT NULL) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS session_embedding_sync(
+  session_id INTEGER NOT NULL PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+  read_at TEXT NOT NULL,
+  version INTEGER NOT NULL DEFAULT 0,
+  model TEXT NOT NULL DEFAULT '',
+  prefix_version TEXT NOT NULL DEFAULT '',
+  gen INTEGER NOT NULL DEFAULT 0) WITHOUT ROWID;
+`
+
+// sessionSyncColumns are the columns of session_embedding_sync that a first
+// version of the table did not have; a table that was made without them gets them,
+// with values that no current model and version has, so that its sessions are
+// looked at once more.
+var sessionSyncColumns = []struct{ name, ddl string }{
+	{"version", `INTEGER NOT NULL DEFAULT 0`},
+	{"model", `TEXT NOT NULL DEFAULT ''`},
+	{"prefix_version", `TEXT NOT NULL DEFAULT ''`},
+	{"gen", `INTEGER NOT NULL DEFAULT 0`},
+}
+
 // documentsFTSSchema is the full-text index of the documents, which had none:
 // title, slug and the whole text of the head revision, keyed by the document id.
 // The triggers keep it in step. A revision becomes the head when it is inserted
@@ -68,6 +129,14 @@ END;
 func ensureEmbeddings(db *sql.DB) error {
 	if _, err := db.Exec(embeddingsSchema); err != nil {
 		return err
+	}
+	if _, err := db.Exec(sessionEmbeddingsSchema); err != nil {
+		return err
+	}
+	for _, c := range sessionSyncColumns {
+		if err := ensureColumn(db, "session_embedding_sync", c.name, c.ddl); err != nil {
+			return err
+		}
 	}
 	if _, err := db.Exec(documentsFTSSchema); err != nil {
 		return err

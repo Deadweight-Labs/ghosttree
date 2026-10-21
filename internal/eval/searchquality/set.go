@@ -23,10 +23,11 @@ import (
 // SetQuery is one query of a set with the object that is its right answer. The
 // file format is one JSON object per line:
 //
-//	{"query": "...", "kind": "request|ghost|pain|document|knowledge", "target": "..."}
+//	{"query": "...", "kind": "request|ghost|pain|document|knowledge|session", "target": "..."}
 //
 // target is the id of the object; for a ghost description it is "project:path",
-// split at the first colon. Further members are ignored.
+// split at the first colon, for a session its number or its address (the twelve
+// characters of the web view). Further members are ignored.
 type SetQuery struct {
 	Query  string `json:"query"`
 	Kind   string `json:"kind"`
@@ -38,6 +39,10 @@ type SetQuery struct {
 	// the query is made from it (the title of a request, when the other end of a
 	// duplicate relation is wanted).
 	Exclude int64 `json:"-"`
+	// Also are further objects that are as good an answer as Target (the other
+	// sessions that back a knowledge entry whose title is the query); the best
+	// rank of them all counts.
+	Also []int64 `json:"-"`
 }
 
 func (q SetQuery) label() string {
@@ -85,8 +90,26 @@ func ParseSet(r io.Reader) ([]SetQuery, error) {
 	return out, nil
 }
 
-// splitTarget reads the target of a query: an id, or project and path.
+// publicAddress says that s has the form of the address of a session in the web
+// view: twelve characters of an alphabet without l, o, 0 and 1.
+func publicAddress(s string) bool {
+	if len(s) != 12 {
+		return false
+	}
+	for _, r := range s {
+		if !strings.ContainsRune("abcdefghijkmnpqrstuvwxyz23456789", r) {
+			return false
+		}
+	}
+	return true
+}
+
+// splitTarget reads the target of a query: an id, or project and path. For a
+// session whose target is an address, id is 0 and the address is ghost[0].
 func splitTarget(q SetQuery) (id int64, ghost [2]string, err error) {
+	if q.Kind == store.KindSession && publicAddress(q.Target) {
+		return 0, [2]string{q.Target}, nil
+	}
 	if q.Kind == store.KindGhost {
 		project, path, ok := strings.Cut(q.Target, ":")
 		if !ok || project == "" {
@@ -133,6 +156,39 @@ func RequestSet(st *store.Store, minChars, sample int, seed int64) ([]SetQuery, 
 			out = append(out, SetQuery{Query: q.Query, Kind: store.KindRequest, Target: strconv.FormatInt(q.Target, 10),
 				Label: source.label, Exclude: q.Exclude})
 		}
+	}
+	return out, nil
+}
+
+// SessionTitleMinChars is the shortest title of a knowledge entry that SessionSet
+// takes for a query.
+const SessionTitleMinChars = 15
+
+// SessionSet draws the queries that the knowledge of the instance provides for
+// the session search: the title of an active entry that has evidence, with the
+// sessions of its evidence as the answers (any of them is one). sample is the
+// most queries; a larger stock is drawn from with the seed, which with the
+// defaults of ctx eval search is the draw of the experiment that the search of
+// sessions was decided on. Most titles were written by a model that had read the
+// session, so they are summaries and not questions: the set is the harder, the
+// less natural of the two kinds of query that were measured, and it needs nobody
+// to have written it.
+func SessionSet(st *store.Store, sample int, seed int64) ([]SetQuery, error) {
+	all, err := st.SessionTitleQueries(SessionTitleMinChars)
+	if err != nil {
+		return nil, err
+	}
+	if sample > 0 && len(all) > sample {
+		rng := rand.New(rand.NewPCG(uint64(seed), uint64(seed)^0x9e3779b97f4a7c15))
+		rng.Shuffle(len(all), func(i, j int) { all[i], all[j] = all[j], all[i] })
+		all = all[:sample]
+	}
+	out := make([]SetQuery, 0, len(all))
+	for _, q := range all {
+		sq := SetQuery{Query: strings.Join(strings.Fields(q.Title), " "), Kind: store.KindSession, Target: strconv.FormatInt(q.Sessions[0], 10),
+			Label: "sessions: the title of a knowledge entry, a session of its evidence wanted"}
+		sq.Also = append(sq.Also, q.Sessions[1:]...)
+		out = append(out, sq)
 	}
 	return out, nil
 }
@@ -188,6 +244,15 @@ func resolveTarget(st *store.Store, q SetQuery) (target, error) {
 	case store.KindGhost:
 		g, err := st.GhostFileByPath(ghost[0], ghost[1])
 		return target{id: g.ID, project: g.Project, path: g.Path, ok: err == nil}, notFound(err)
+	case store.KindSession:
+		var sess store.Session
+		var err error
+		if id > 0 {
+			sess, err = st.SessionByID(id)
+		} else {
+			sess, err = st.SessionByPublicID(ghost[0])
+		}
+		return target{id: sess.ID, project: sess.Scope.Project, ok: err == nil}, notFound(err)
 	}
 	return target{}, fmt.Errorf("unknown kind %q", q.Kind)
 }
@@ -238,9 +303,34 @@ func searchIDs(st *store.Store, q SetQuery, t target, mode Mode) ([]int64, error
 	case store.KindGhost:
 		hits, err := st.SearchGhostFilesWith(q.Query, store.GhostSearch{Project: t.project, Limit: limit, Mode: m})
 		return ids(len(hits), func(i int) int64 { return hits[i].ID }), err
+	case store.KindSession:
+		// The whole instance, as its owner sees it: the question asks which session,
+		// and a session of any project may be the one. The words ranking answers with
+		// a row for every chunk it found, so it is read deep enough to hold ten
+		// sessions (500 rows, as the measurement of the sessions was made); the
+		// others answer with one hit for each session. A session counts at the place
+		// of its first hit.
+		rows := limit
+		if m == store.SearchFullTextOnly {
+			rows = sessionTextRows
+		}
+		hits, err := st.SearchSessionsWith(q.Query, store.SessionSearch{Limit: rows, Prefilter: store.SessionPrefilter{Unrestricted: true}, Mode: m})
+		seen := map[int64]bool{}
+		var out []int64
+		for _, h := range hits {
+			if !seen[h.Session.ID] {
+				seen[h.Session.ID] = true
+				out = append(out, h.Session.ID)
+			}
+		}
+		return out[:min(len(out), limit)], err
 	}
 	return nil, fmt.Errorf("unknown kind %q", q.Kind)
 }
+
+// sessionTextRows is how many chunk hits of the words ranking are read to find
+// the first ten sessions among them.
+const sessionTextRows = 500
 
 // RunSet measures the full-text, the embedding and the fused ranking on a set of
 // queries with known answers, by calling the search function of the server for

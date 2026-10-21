@@ -19,28 +19,42 @@ import (
 
 const evalUsage = `usage: ctx eval search --db <path> [--sample 1500] [--seed 20261020] [--min-chars 30]
                        [--embed-url <url>] [--embed-query-url <url>] [--embed-model <id>]
-                       [--embed-min-similarity 0.55] [--pause 50ms]
+                       [--embed-min-similarity 0.55] [--embed-session-weight 2] [--pause 50ms]
                        [--set <file.jsonl>] [--requests-builtin]
+                       [--sessions-builtin] [--sessions-sample 300]
 
-With --set or --requests-builtin the run measures the search of the other kinds
-instead, on queries whose right answer is known:
+With --set, --requests-builtin or --sessions-builtin the run measures the search of
+the other kinds instead, on queries whose right answer is known:
 
   --set <file>        a query set, one JSON object per line:
-                      {"query": "...", "kind": "request|ghost|pain|document|knowledge",
+                      {"query": "...", "kind": "request|ghost|pain|document|knowledge|session",
                        "target": "..."}
                       target is the id of the right object; for a ghost
-                      description "project:path". Each query runs through the
+                      description "project:path", for a session its number or
+                      the address of the web view. Each query runs through the
                       production search of its kind, scoped to the project of
-                      its target (as an agent asks), as the instance owner sees
-                      it. Answers per kind: n, R@1, R@3, R@10 and MRR@10 for the
-                      full-text, the embedding and the fused ranking. No query
-                      and no text of an object is printed.
+                      its target (as an agent asks; sessions are searched in
+                      the whole instance, a session of any project may be the
+                      one), as the instance owner sees it. Answers per kind: n,
+                      R@1, R@3, R@10 and MRR@10 for the full-text, the embedding
+                      and the fused ranking. No query and no text of an object
+                      is printed.
   --requests-builtin  the queries the request ledger holds the answer to: the
                       quotes of request sightings, and the title of a request
                       marked as a duplicate of, or as superseding, another with
                       the other as the answer (--sample of each, --min-chars
                       for the quotes). Both can be given; they are measured
                       together, per block.
+  --sessions-builtin  the queries the knowledge holds the answer to for the
+                      session search: the title of an active entry with evidence
+                      (at least 15 characters), and any session of its evidence
+                      as the answer (--sessions-sample of them, drawn with
+                      --seed; with the defaults the draw of the experiment the
+                      search of sessions was decided on). Titles are summaries
+                      written by a model, not questions; questions go in a
+                      --set file. The fused ranking uses --embed-session-weight
+                      (env GHOSTTREE_EMBED_SESSION_WEIGHT) for the vectors.
+                      Measured together with the other sets, per block.
 
 Without them, the run measures the knowledge search on evidence quotes:
 
@@ -101,12 +115,14 @@ func cmdEvalSearch(args []string, stdout io.Writer) int {
 	pause := fs.Duration("pause", 50*time.Millisecond, "wait between two query embeddings")
 	setFile := fs.String("set", "", "a query set (JSON lines: query, kind, target) to measure the search of the other kinds on")
 	requestsBuiltin := fs.Bool("requests-builtin", false, "measure the request search on the queries the ledger holds the answer to")
+	sessionsBuiltin := fs.Bool("sessions-builtin", false, "measure the session search on the titles of knowledge entries, the sessions of their evidence being the answers")
+	sessionsSample := fs.Int("sessions-sample", 300, "number of titles drawn for --sessions-builtin")
 	embedFlagSet := addEmbedFlags(fs, false)
 	fs.Usage = func() { fmt.Fprintln(stdout, evalUsage) }
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if *dbPath == "" || fs.NArg() > 0 || *sample <= 0 || *minChars <= 0 || *pause < 0 {
+	if *dbPath == "" || fs.NArg() > 0 || *sample <= 0 || *minChars <= 0 || *pause < 0 || *sessionsSample <= 0 {
 		fmt.Fprintln(stdout, evalUsage)
 		return 2
 	}
@@ -129,7 +145,7 @@ func cmdEvalSearch(args []string, stdout io.Writer) int {
 		fmt.Fprintf(stdout, "eval search: %v\n", err)
 		return 2
 	}
-	opts := searchquality.Options{Sample: *sample, Seed: *seed, MinChars: *minChars, Pause: *pause, MinSimilarity: cfg.MinSimilarity, Progress: evalProgress}
+	opts := searchquality.Options{Sample: *sample, Seed: *seed, MinChars: *minChars, Pause: *pause, MinSimilarity: cfg.MinSimilarity, SessionWeight: cfg.SessionWeight, Progress: evalProgress}
 	if cfg.enabled() {
 		c, err := cfg.client()
 		if err != nil {
@@ -163,7 +179,7 @@ func cmdEvalSearch(args []string, stdout io.Writer) int {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if *setFile != "" || *requestsBuiltin {
+	if *setFile != "" || *requestsBuiltin || *sessionsBuiltin {
 		if *requestsBuiltin {
 			builtin, err := searchquality.RequestSet(st, *minChars, *sample, *seed)
 			if err != nil {
@@ -171,8 +187,15 @@ func cmdEvalSearch(args []string, stdout io.Writer) int {
 			}
 			set = append(set, builtin...)
 		}
+		if *sessionsBuiltin {
+			builtin, err := searchquality.SessionSet(st, *sessionsSample, *seed)
+			if err != nil {
+				return evalFailed(stdout, err)
+			}
+			set = append(set, builtin...)
+		}
 		if len(set) == 0 {
-			fmt.Fprintln(stdout, "eval search: there is no query to measure: the set is empty, and the ledger holds no sighting quote and no duplicate or successor relation")
+			fmt.Fprintln(stdout, "eval search: there is no query to measure: the set is empty, and the ledger holds no sighting quote, no duplicate or successor relation and no knowledge entry with evidence and a title")
 			return 1
 		}
 		rep, err := searchquality.RunSet(ctx, st, opts, set)
