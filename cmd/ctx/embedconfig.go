@@ -138,7 +138,7 @@ func addEmbedFlags(fs *flag.FlagSet, job bool) *embedFlags {
 // configuration would do. "ctx eval search" measures any kind and takes neither.
 func (f *embedFlags) addKinds(fs *flag.FlagSet) {
 	names := strings.Join(store.EmbedKinds(), ", ")
-	f.kinds = fs.String("embed-kinds", os.Getenv(envEmbedKinds), "kinds of object that get vectors, comma-separated: "+names+", or all (default "+store.KindKnowledge+", env "+envEmbedKinds+"); a kind is embedded in the background and can be measured with ctx eval search before its search uses the vectors")
+	f.kinds = fs.String("embed-kinds", os.Getenv(envEmbedKinds), "kinds of object that get vectors, comma-separated: "+names+", or all, which is every kind but session; sessions are only embedded when named (default "+store.KindKnowledge+", env "+envEmbedKinds+"); a kind is embedded in the background and can be measured with ctx eval search before its search uses the vectors")
 	f.searchKinds = fs.String("embed-search-kinds", os.Getenv(envEmbedSearchKinds), "kinds whose search uses the vectors, a subset of --embed-kinds (default: all of them, env "+envEmbedSearchKinds+"); the search of every other kind answers from full text")
 	f.sessionWindow = fs.String("embed-session-window", os.Getenv(envEmbedSessionWindow), "span of the local time of the server in which the sessions are embedded, HH:MM-HH:MM (may cross midnight) or always (default "+embedjob.DefaultSessionWindow.String()+", env "+envEmbedSessionWindow+"); outside it the sessions wait, and every other kind goes first at any hour")
 }

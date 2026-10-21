@@ -141,6 +141,21 @@ func (s *Store) putEmbedding(e Embedding) error {
 		return err
 	}
 	defer tx.Rollback()
+	if k.name == KindSession {
+		// The text of a chunk can change while the job is embedding it: a redaction
+		// that came after the job read the chunk finds no vector to drop yet, and the
+		// vector that arrives is the one of the text before. So the text is made
+		// again here, from the line as it is stored now, and the vector is kept only if
+		// it is the vector of that text. Inside the transaction and after taking the
+		// write lock, so that nothing can change it between the check and the write.
+		keep, err := verifySessionVector(tx, e.ObjectID, e.TextHash)
+		if err != nil {
+			return err
+		}
+		if !keep {
+			return nil
+		}
+	}
 	args := append(k.idArgs(e.ObjectID), e.Model, e.PrefixVersion, e.Dim, e.TextHash, e.Scale, e.Vec, e.ReadAt, now())
 	if _, err := tx.Exec(`INSERT INTO `+k.emb+`(`+k.idCols()+`,model,prefix_version,dim,text_hash,scale,vec,read_at,updated_at)
 		VALUES(`+k.idVals()+`,?,?,?,?,?,?,?,?)
@@ -185,8 +200,8 @@ func (s *Store) touchEmbeddings(kind string, ids []int64, readAt string) error {
 		return nil
 	}
 	if k.name == KindSession {
-		// For sessions the ids are the ones of sessions (EmbedDue.Unchanged).
-		return s.touchSessions(ids, readAt)
+		// The mark of a session holds the model, which this call does not know.
+		return errors.New("sessions are touched with TouchSessionEmbeddings")
 	}
 	// In pieces: an id list that grows with the stock would reach the limit on the
 	// number of variables of one statement.

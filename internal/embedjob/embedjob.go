@@ -39,6 +39,8 @@ type Store interface {
 	EmbeddingDue(kind string, m store.EmbedModel, limit int, at time.Time, full bool) (store.EmbedDue, error)
 	UpsertEmbedding(e store.Embedding) error
 	TouchEmbeddings(kind string, ids []int64, readAt string) error
+	TouchSessionEmbeddings(m store.EmbedModel, ids []int64, readAt string) error
+	DropEmbeddings(kind string, ids []int64) (int, error)
 	RecordEmbedFailure(f store.EmbedFailure) error
 	PurgeEmbeddings(kind string) (int, error)
 	SetEmbedJobState(st store.EmbedJobState) error
@@ -265,18 +267,16 @@ func (j *Job) Step(ctx context.Context) (Result, error) {
 func (j *Job) sessionsOpen() bool { return j.cfg.SessionWindow.Contains(j.now()) }
 
 // purge removes the vectors that no object of their kind counts for any more. It
-// is housekeeping: a failure is logged and is not a failure of the job. The
-// sessions are looked through only in their window, like everything else about
-// them.
+// is housekeeping: a failure is logged and is not a failure of the job. For the
+// sessions it is three statements on keys (what a database without foreign keys
+// leaves behind), not a look at the sessions, which is why it is not tied to
+// their window.
 func (j *Job) purge() {
 	if j.now().Sub(j.lastPurge) < purgeEvery {
 		return
 	}
 	j.lastPurge = j.now()
 	for _, kind := range j.cfg.Kinds {
-		if kind == store.KindSession && !j.sessionsOpen() {
-			continue
-		}
 		if removed, err := j.st.PurgeEmbeddings(kind); err != nil {
 			j.log.Warn("embed_purge", "kind", kind, "error", err.Error())
 		} else if removed > 0 {
@@ -296,8 +296,23 @@ func (j *Job) stepKind(ctx context.Context, kind string) (Result, error) {
 	if len(due.Items) < j.cfg.Batch {
 		j.full[kind] = false // the look went through every object there is
 	}
+	if len(due.Stale) > 0 {
+		// Vectors that have no text any more (sessions): the look that found them only
+		// read, and this is where they go, before the sessions they belong to are
+		// marked.
+		if _, err := j.st.DropEmbeddings(kind, due.Stale); err != nil {
+			return res, err
+		}
+	}
 	if len(due.Unchanged) > 0 {
-		if err := j.st.TouchEmbeddings(kind, due.Unchanged, due.ReadAt); err != nil {
+		var err error
+		if kind == store.KindSession {
+			// The mark of a session holds the model it was made under.
+			err = j.st.TouchSessionEmbeddings(j.model, due.Unchanged, due.ReadAt)
+		} else {
+			err = j.st.TouchEmbeddings(kind, due.Unchanged, due.ReadAt)
+		}
+		if err != nil {
 			return res, err
 		}
 	}

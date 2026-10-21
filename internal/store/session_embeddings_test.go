@@ -31,8 +31,13 @@ func embedSessionTexts(t *testing.T, st *Store, c *embed.Client, at time.Time) (
 		if err != nil {
 			t.Fatal(err)
 		}
+		if len(due.Stale) > 0 {
+			if _, err := st.DropEmbeddings(KindSession, due.Stale); err != nil {
+				t.Fatal(err)
+			}
+		}
 		if len(due.Unchanged) > 0 {
-			if err := st.TouchEmbeddings(KindSession, due.Unchanged, due.ReadAt); err != nil {
+			if err := st.TouchSessionEmbeddings(modelOf(c), due.Unchanged, due.ReadAt); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -189,8 +194,9 @@ func TestSessionFinalAnswerWaitsForTheTurnToClose(t *testing.T) {
 }
 
 // A session that goes on after its answer was embedded has outgrown it: the
-// answer is no longer the last of its turn, and the purge removes its vector.
-func TestSessionPurgeRemovesTheVectorOfAnAnswerThatWasOutgrown(t *testing.T) {
+// answer is no longer the last of its turn. The look at the session, which the new
+// chunk brings about, names the vector (EmbedDue.Stale), and the job drops it.
+func TestSessionVectorOfAnAnswerThatWasOutgrownIsNamedByTheLookAndDropped(t *testing.T) {
 	st := orgStore(t, "robin")
 	_, c := newFakeEmbedder(t)
 	s := addSession(t, st, "s", 1, "", "m", "", chunksOf(
@@ -204,15 +210,52 @@ func TestSessionPurgeRemovesTheVectorOfAnAnswerThatWasOutgrown(t *testing.T) {
 	if err := st.AppendChunks(s.ID, []Chunk{{Seq: 2, Raw: answerLine(2, "the answer that really ends this turn")}}); err != nil {
 		t.Fatal(err)
 	}
-	removed, err := st.PurgeEmbeddings(KindSession)
-	if err != nil || removed != 1 {
-		t.Fatalf("purge removed %d: %v", removed, err)
+	// The new answer is the last of the turn, and it has not stood long enough: it
+	// waits. The old one is named, once, by the look that the chunk brought about.
+	old := chunkID(t, st, s.ID, 1)
+	due, err := st.EmbeddingDue(KindSession, modelOf(c), 10, time.Now(), false)
+	if err != nil || len(due.Items) != 0 || len(due.Stale) != 1 || due.Stale[0] != old {
+		t.Fatalf("%+v %v", due, err)
+	}
+	// Reading does not drop it: the job does, and the session is still looked at.
+	if n := sessionVectors(t, st); n != 2 {
+		t.Fatalf("the look wrote: %d vectors", n)
+	}
+	if removed, err := st.DropEmbeddings(KindSession, due.Stale); err != nil || removed != 1 {
+		t.Fatalf("dropped %d: %v", removed, err)
 	}
 	if n := sessionVectors(t, st); n != 1 {
-		t.Fatalf("%d vectors after the purge", n)
+		t.Fatalf("%d vectors after the drop", n)
 	}
-	// The vector of the prompt stays, and the new answer is due.
+	if due, err = st.EmbeddingDue(KindSession, modelOf(c), 10, time.Now(), false); err != nil || len(due.Stale) != 0 {
+		t.Fatalf("the vector is named twice: %+v %v", due, err)
+	}
+	// The vector of the prompt stays, and the new answer is embedded when it has
+	// stood long enough.
 	embedSessionTexts(t, st, c, later(2*SessionSettle))
+	if n := sessionVectors(t, st); n != 2 {
+		t.Fatalf("%d vectors", n)
+	}
+}
+
+// An answer that the session touched again but did not outgrow keeps its vector:
+// the session is not quiet any more, which makes the answer wait, not vanish.
+func TestSessionVectorOfAnAnswerIsKeptWhileTheSessionIsTouchedAgain(t *testing.T) {
+	st := orgStore(t, "robin")
+	_, c := newFakeEmbedder(t)
+	s := addSession(t, st, "s", 1, "", "m", "", chunksOf(
+		promptLine(0, "please look into the s1 s2 problem for me"),
+		answerLine(1, "the answer that ends the only turn so far"),
+	))
+	embedSessionTexts(t, st, c, later(SessionSettle+time.Minute))
+	// A heartbeat of the collector, no chunk.
+	if _, err := st.UpsertSession(Session{Harness: "claude-code", ExternalID: "s", AccountID: 1, Scope: s.Scope}); err != nil {
+		t.Fatal(err)
+	}
+	due, err := st.EmbeddingDue(KindSession, modelOf(c), 10, time.Now(), false)
+	if err != nil || len(due.Stale) != 0 || len(due.Items) != 0 {
+		t.Fatalf("%+v %v", due, err)
+	}
 	if n := sessionVectors(t, st); n != 2 {
 		t.Fatalf("%d vectors", n)
 	}
@@ -360,6 +403,11 @@ func TestSessionVectorOfAChangedTextIsMadeAgain(t *testing.T) {
 		promptLine(0, "please look into the s1 s2 problem for me"),
 		promptLine(1, "and the second one, which is about s3 s4"),
 	))
+	// A session written a while ago: a chunk in the second of the look counts as a
+	// change, which this test must not run into.
+	if _, err := st.db.Exec(`UPDATE sessions SET last_seen_at = ?`, time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)); err != nil {
+		t.Fatal(err)
+	}
 	embedSessionTexts(t, st, c, time.Now())
 	before := srv.Inputs()
 	var hash string
@@ -370,14 +418,19 @@ func TestSessionVectorOfAChangedTextIsMadeAgain(t *testing.T) {
 	if _, err := st.db.Exec(`UPDATE session_chunks SET raw = ? WHERE session_id = ? AND seq = 1`, promptLine(1, "and the second one, rewritten and about s4 s3 now"), s.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.db.Exec(`UPDATE sessions SET last_seen_at = ? WHERE id = ?`, time.Now().Add(time.Second).UTC().Format(time.RFC3339), s.ID); err != nil {
+	// Nothing brings the session back by itself.
+	if got := dueTexts(t, st, c, time.Now()); len(got) != 0 {
+		t.Fatalf("a text that changed behind the application's back is noticed without a reason to look: %q", got)
+	}
+	// The session goes on: the look compares the hashes of all of its texts.
+	if err := st.AppendChunks(s.ID, []Chunk{{Seq: 2, Raw: promptLine(2, "and a third prompt, about the s2 s3 cache layer")}}); err != nil {
 		t.Fatal(err)
 	}
-	if got := embedSessionTexts(t, st, c, time.Now()); got != 1 {
-		t.Fatalf("%d texts made again", got)
+	if got := embedSessionTexts(t, st, c, time.Now()); got != 2 {
+		t.Fatalf("%d texts made, want the rewritten one and the new one", got)
 	}
-	if srv.Inputs() != before+1 {
-		t.Fatalf("the other text was sent again: %d -> %d", before, srv.Inputs())
+	if srv.Inputs() != before+2 {
+		t.Fatalf("the unchanged text was sent again: %d -> %d", before, srv.Inputs())
 	}
 	var now string
 	if err := st.db.QueryRow(`SELECT e.text_hash FROM session_embeddings e JOIN session_chunks c ON c.id = e.chunk_id WHERE c.session_id = ? AND c.seq = 1`, s.ID).Scan(&now); err != nil || now == hash {

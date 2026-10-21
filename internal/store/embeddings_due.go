@@ -18,6 +18,12 @@ type EmbedDue struct {
 	// they are not looked at again. For sessions, whose items are chunks, these are
 	// the numbers of the sessions that were looked at and found complete.
 	Unchanged []int64
+	// Stale are objects whose vector, or parked failure, has no text any more and
+	// is to go: the job says so with DropEmbeddings(kind, Stale). Only sessions have
+	// them (a chunk that is no longer a text of its session, or whose text is now
+	// too short); they are read, not written, by the call that finds them, because
+	// the reader of a runtime store answers it.
+	Stale []int64
 	// ReadAt is the time taken before any text was read. Pass it back with the
 	// vectors and with Unchanged.
 	ReadAt string
@@ -85,7 +91,7 @@ func (s *Store) embeddingDue(k embedKind, m EmbedModel, limit int, at time.Time,
 		limit = 8
 	}
 	if k.name == KindSession {
-		return s.sessionEmbeddingDue(k, m, limit, at)
+		return s.sessionEmbeddingDue(m, limit, at)
 	}
 	due := EmbedDue{ReadAt: now()}
 	order := ` ORDER BY ` + k.updated + ` DESC, ` + k.id + ` DESC`

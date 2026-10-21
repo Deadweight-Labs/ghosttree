@@ -34,9 +34,15 @@ func EmbedKinds() []string {
 }
 
 // ParseEmbedKinds reads a comma-separated list of kinds, the way
-// GHOSTTREE_EMBED_KINDS and GHOSTTREE_EMBED_SEARCH_KINDS give it. "all" means
-// every kind; the plural forms and a few synonyms (files, docs) are accepted. The
-// result is in job order without duplicates.
+// GHOSTTREE_EMBED_KINDS and GHOSTTREE_EMBED_SEARCH_KINDS give it. "all" means the
+// five kinds there were before sessions; the plural forms and a few synonyms
+// (files, docs) are accepted. The result is in job order without duplicates.
+//
+// Sessions are not part of "all", they are named. They send what people typed and
+// the agents answered to the embedding server, in thousands of texts: whoever set
+// "all" before there were sessions did not agree to that, and "all" in the search
+// kinds must stay a subset of the same "all" in the kinds that are embedded. "all,
+// session" is every kind.
 func ParseEmbedKinds(list string) ([]string, error) {
 	want := map[string]bool{}
 	for raw := range strings.SplitSeq(list, ",") {
@@ -45,7 +51,9 @@ func ParseEmbedKinds(list string) ([]string, error) {
 			continue
 		case "all":
 			for _, k := range EmbedKinds() {
-				want[k] = true
+				if k != KindSession {
+					want[k] = true
+				}
 			}
 		default:
 			kind, err := ParseEmbedKind(name)

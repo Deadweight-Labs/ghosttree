@@ -455,20 +455,44 @@ func (s *Store) SearchTranscripts(pa *ProjectAccess, q SearchQuery) (SearchPage,
 	for i, m := range matched {
 		cands[i] = m.sess
 	}
-	// With the vectors, the sessions that only they found are candidates too: they
-	// are shown, so the facets count them.
+	newest := q.Sort == "newest"
+	order := func(list []matchedSession) {
+		sort.Slice(list, func(i, j int) bool {
+			a, b := list[i], list[j]
+			if newest {
+				if a.sess.LastSeenAt != b.sess.LastSeenAt {
+					return a.sess.LastSeenAt > b.sess.LastSeenAt
+				}
+				return a.sess.ID > b.sess.ID
+			}
+			if restricted {
+				if a.count != b.count {
+					return a.count > b.count
+				}
+				if a.sess.LastSeenAt != b.sess.LastSeenAt {
+					return a.sess.LastSeenAt > b.sess.LastSeenAt
+				}
+			} else if a.rank != b.rank {
+				return a.rank < b.rank
+			}
+			return a.sess.ID > b.sess.ID
+		})
+	}
+	// With the vectors, the sessions that only they found are candidates for the
+	// facets too, but only those that the fusion takes into its list (a few: the
+	// budget for hits of meaning alone), not the neighbours it leaves out: the facets
+	// count what the list can show. The fusion is made without the filters here, as
+	// the facets of a dimension are those of the sessions that pass the filters of the
+	// others.
 	vec, vecCfg := s.transcriptVectors(q, readable)
 	if vecCfg != nil {
-		byWords := make(map[int64]bool, len(matched))
-		for _, m := range matched {
-			byWords[m.sess.ID] = true
-		}
-		for i, b := range vec {
-			if i >= hybridPool {
-				break
-			}
-			if !byWords[b.session] {
-				cands = append(cands, byID[b.session])
+		all := slices.Clone(matched)
+		order(all)
+		open := q
+		open.Filter = SessionFilter{}
+		for _, m := range pa.fuseTranscripts(all, vec, open, byID, vecCfg) {
+			if m.semantic {
+				cands = append(cands, m.sess)
 			}
 		}
 	}
@@ -484,27 +508,7 @@ func (s *Store) SearchTranscripts(pa *ProjectAccess, q SearchQuery) (SearchPage,
 		}
 	}
 	page.Sessions = len(kept)
-	newest := q.Sort == "newest"
-	sort.Slice(kept, func(i, j int) bool {
-		a, b := kept[i], kept[j]
-		if newest {
-			if a.sess.LastSeenAt != b.sess.LastSeenAt {
-				return a.sess.LastSeenAt > b.sess.LastSeenAt
-			}
-			return a.sess.ID > b.sess.ID
-		}
-		if restricted {
-			if a.count != b.count {
-				return a.count > b.count
-			}
-			if a.sess.LastSeenAt != b.sess.LastSeenAt {
-				return a.sess.LastSeenAt > b.sess.LastSeenAt
-			}
-		} else if a.rank != b.rank {
-			return a.rank < b.rank
-		}
-		return a.sess.ID > b.sess.ID
-	})
+	order(kept)
 	if vecCfg != nil {
 		kept = pa.fuseTranscripts(kept, vec, q, byID, vecCfg)
 		page.Sessions = len(kept)

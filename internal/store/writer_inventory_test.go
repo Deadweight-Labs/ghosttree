@@ -310,6 +310,8 @@ var writerMethodClasses = map[string]string{
 	"EmbeddingStatus":               "read",
 	"SetEmbedJobState":              "write",
 	"TouchKnowledgeEmbeddings":      "write",
+	"TouchSessionEmbeddings":        "write",
+	"DropEmbeddings":                "write",
 	"RecordEmbeddingFailure":        "write",
 	"KnowledgeEmbeddingDue":         "read",
 	"KnowledgeEmbeddingStatus":      "read",

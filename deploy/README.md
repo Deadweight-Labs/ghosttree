@@ -836,8 +836,9 @@ embeds, `GHOSTTREE_EMBED_SEARCH_KINDS` (`--embed-search-kinds`) the kinds whose
 search uses the vectors; it must be a subset of the first and defaults to all of
 it. The names are `knowledge`, `request`, `pain`, `document`, `ghost` and
 `session` (also `requests`, `pains`, `documents`, `docs`, `ghosts`, `files`,
-`sessions`), or `all`, which includes sessions: see "Sessions" for what that
-costs. Without
+`sessions`), or `all`, which is the five kinds before `session`: sessions are
+embedded only when they are named (`all,session` is every kind), see "Sessions".
+Without
 either variable it is `knowledge`, and every answer, the cost and the stored data
 are those of knowledge alone. A kind that is embedded but not searched answers
 from full text and its queries are not sent to the embedding server. Take a kind
@@ -944,7 +945,10 @@ GHOSTTREE_EMBED_SESSION_WINDOW=00:00-06:00
 
 Without `session` in `GHOSTTREE_EMBED_KINDS` and `GHOSTTREE_EMBED_SEARCH_KINDS` the
 answers, the cost and the data are those of the release before. Take it in like the
-other kinds: embed first, measure, then search. `all` includes sessions.
+other kinds: embed first, measure, then search. `all` does not include sessions
+(they send what was typed and answered to the embedding server, and whoever set
+`all` before there were sessions did not agree to that): name them, alone or as
+`all,session`.
 
 **What a text is.** It is made from the stored line the way every text gets into the
 database: the images are replaced (`blobstrip`), secrets are redacted in the line and
@@ -968,7 +972,8 @@ would spend three seconds on each and keep a vector for a text that is not the
 answer. An agent that works uploads every few minutes, also while it waits for a
 build; half an hour of silence is a person who has gone or a session that is over.
 An answer that the session outgrows after it was embedded (it went on after the
-half hour) loses its vector in the next purge.
+half hour) loses its vector the next time the session is looked at, which the new
+chunk brings about.
 
 **Night work.** There are many texts: 14 thousand on the installation they were
 measured on, in 5,300 sessions, and the model needs about 3.2 seconds for one on
@@ -990,14 +995,26 @@ in it would be taken for complete.
 **Storage.** One row per text in `session_embeddings` (the chunk, model, text format,
 hash, the int8 vector with its scale, the time the text was read), failures in
 `session_embedding_failures`, and in `session_embedding_sync` the sessions that were
-looked at and found complete: all their texts are embedded, or too short to count.
-Such a session is left alone until it gets a chunk or the model changes. The rows
-reference their chunk (`session_chunks.id`) and the mark its session, all `ON DELETE
-CASCADE`: a chunk that is deleted takes its vector and its failure along, a session
-that is deleted (after its chunks, which do not cascade from it) its mark, without
-the job having to find them. The job also removes, in its window and at most every
-10 minutes, what a database without foreign keys left behind and the vectors of
-chunks that are no longer a prompt or the last answer of a turn. A text takes about
+looked at and found complete: all their texts are embedded, or too short to count,
+or refused by the server for good (a text that fails for a time keeps its session
+waiting, so that it is tried again at its time). Such a session is left alone until
+it gets a chunk or its mark was made under another model, text format or version of
+the rules that make the texts (`sessionTextVersion` in the code, raised with any
+change of them): a release that changes what counts as a typed prompt, which chunk
+ends a turn or how a text is cleaned thus reaches the sessions nobody writes to
+any more, and what the new rules no longer call for goes. The rows reference their
+chunk (`session_chunks.id`) and the mark its session, all `ON DELETE CASCADE`: a
+chunk that is deleted takes its vector and its failure along, a session that is
+deleted (after its chunks, which do not cascade from it) its mark, without the job
+having to find them. The look at a session, which only reads, names the vectors
+that have no text any more (an outgrown answer, a text now too short or empty, a
+prompt the rules now take for injected); the job drops them in small writer jobs of
+200, so uploads wait for no walk through the stock. A vector is stored only if the
+text of its chunk, made again from the stored line inside the transaction that
+stores it, still has its hash: a redaction that comes while the job embeds the
+chunk cannot leave the vector of the text before. In its idle turn, at most every 10
+minutes and at any hour, the job also removes what a database without foreign keys
+left behind (three statements on keys). A text takes about
 a kilobyte, so 14 thousand are 15 MB. The tables are made on start. A search scans
 the vectors of the sessions the reader may read: some 50 ms for 14 thousand texts
 from SQLite (11 ms from memory), 225 ms at five times that; a cache of the matrix

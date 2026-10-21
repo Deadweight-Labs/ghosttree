@@ -489,6 +489,15 @@ func TestSessionSearchPagesHoldTogether(t *testing.T) {
 		if page.Sessions != 4 {
 			t.Fatalf("the list holds %d sessions on one page and %d on another", page.Sessions, 4)
 		}
+		// The facets count what the list holds: the three sessions that have the
+		// word and the one neighbour the budget lets in, not the six neighbours.
+		total := 0
+		for _, o := range page.Facets.Harnesses {
+			total += o.Count
+		}
+		if total != 4 {
+			t.Fatalf("the facets count %d sessions, the list holds 4: %+v", total, page.Facets)
+		}
 		if cursor = page.Next; cursor == "" {
 			break
 		}

@@ -35,6 +35,59 @@ func resolveWith(t *testing.T, job bool, args ...string) (embedSettings, error) 
 	return f.resolve()
 }
 
+// beforeSessions are the kinds "all" stands for: every kind there was before
+// sessions.
+var beforeSessions = []string{store.KindKnowledge, store.KindRequest, store.KindPain, store.KindDocument, store.KindGhost}
+
+// "all" does not send sessions to the embedding server: they are embedded only
+// when named. Whoever set "all" before there were sessions must not find the
+// transcripts at the embedding server after the update, and the two settings
+// that give the kinds must keep going together: the five kinds embedded and "all"
+// searched is a server that starts.
+func TestAllKindsDoesNotIncludeSessions(t *testing.T) {
+	t.Setenv(envEmbedKinds, "all")
+	got, err := resolveWith(t, true, "--embed-url", "http://127.0.0.1:8475")
+	if err != nil || !slices.Equal(got.Kinds, beforeSessions) || !slices.Equal(got.SearchKinds, beforeSessions) || !slices.Equal(got.Job.Kinds, beforeSessions) {
+		t.Fatalf("GHOSTTREE_EMBED_KINDS=all: %+v %v", got, err)
+	}
+	cfg, err := parseServeConfig([]string{"--db", "x.db", "--embed-url", "http://127.0.0.1:8475"}, io.Discard)
+	if err != nil || slices.Contains(cfg.Embed.embedKinds(), store.KindSession) || slices.Contains(cfg.Embed.searchKinds(), store.KindSession) {
+		t.Fatalf("a server with all kinds embeds sessions: %+v %v", cfg.Embed, err)
+	}
+
+	// The five kinds embedded and all searched: the server starts, in the environment
+	// and with flags.
+	t.Setenv(envEmbedKinds, "knowledge,request,pain,document,ghost")
+	t.Setenv(envEmbedSearchKinds, "all")
+	cfg, err = parseServeConfig([]string{"--db", "x.db", "--embed-url", "http://127.0.0.1:8475"}, io.Discard)
+	if err != nil || !slices.Equal(cfg.Embed.searchKinds(), beforeSessions) || !slices.Equal(cfg.Embed.embedKinds(), beforeSessions) {
+		t.Fatalf("five kinds embedded, all searched: %+v %v", cfg.Embed, err)
+	}
+	t.Setenv(envEmbedKinds, "")
+	t.Setenv(envEmbedSearchKinds, "")
+	if _, err := parseServeConfig([]string{"--db", "x.db", "--embed-url", "http://127.0.0.1:8475", "--embed-kinds", "knowledge,request,pain,document,ghost", "--embed-search-kinds", "all"}, io.Discard); err != nil {
+		t.Fatalf("five kinds embedded, all searched (flags): %v", err)
+	}
+
+	// Sessions are named: with all, or alone; and a search of sessions needs them
+	// embedded.
+	got, err = resolveWith(t, true, "--embed-url", "http://127.0.0.1:8475", "--embed-kinds", "all,session")
+	if err != nil || !slices.Equal(got.Kinds, store.EmbedKinds()) || !slices.Equal(got.SearchKinds, store.EmbedKinds()) {
+		t.Fatalf("all,session: %+v %v", got, err)
+	}
+	got, err = resolveWith(t, true, "--embed-url", "http://127.0.0.1:8475", "--embed-kinds", "all", "--embed-search-kinds", "knowledge")
+	if err != nil || slices.Contains(got.Kinds, store.KindSession) {
+		t.Fatalf("%+v %v", got, err)
+	}
+	if _, err := resolveWith(t, true, "--embed-url", "http://127.0.0.1:8475", "--embed-kinds", "all", "--embed-search-kinds", "session"); err == nil {
+		t.Fatal("the search of sessions without their vectors was accepted")
+	}
+	// The measurement and the status know every kind, whatever "all" says.
+	if kinds := store.EmbedKinds(); !slices.Contains(kinds, store.KindSession) || len(kinds) != len(beforeSessions)+1 {
+		t.Fatalf("%v", kinds)
+	}
+}
+
 // Without a setting it is knowledge, as before there were other kinds; the kinds
 // that are searched by default are the ones that are embedded.
 func TestEmbedKindFlagsAndTheEnvironment(t *testing.T) {
@@ -56,7 +109,7 @@ func TestEmbedKindFlagsAndTheEnvironment(t *testing.T) {
 		t.Fatalf("embed two, search one: %+v %v", got, err)
 	}
 	got, err = resolveWith(t, true, "--embed-kinds", "all", "--embed-search-kinds", "knowledge,document")
-	if err != nil || !slices.Equal(got.Kinds, store.EmbedKinds()) || !slices.Equal(got.SearchKinds, []string{store.KindKnowledge, store.KindDocument}) {
+	if err != nil || !slices.Equal(got.Kinds, beforeSessions) || !slices.Equal(got.SearchKinds, []string{store.KindKnowledge, store.KindDocument}) {
 		t.Fatalf("flags beat the environment: %+v %v", got, err)
 	}
 
