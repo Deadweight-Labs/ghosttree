@@ -21,7 +21,9 @@ migration or operational step is required.
 ## Deployment boundary
 
 The server is intended for loopback or a trusted private network. Its bearer
-tokens record a person's identity but do not provide fine-grained authorization.
+tokens identify an account. Per-project roles (owner, lead, member, guest) and
+project visibility exist, but the server enforces them only when it runs with
+`GHOSTTREE_ENFORCE_ACCESS=1`; by default it merely logs what it would refuse.
 Do not expose the server directly to the public internet. Use a private network
 or a properly configured TLS reverse proxy, protect backups, and rotate a token
 if it may have leaked.
