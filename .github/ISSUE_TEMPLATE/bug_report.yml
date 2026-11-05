@@ -12,7 +12,7 @@ body:
     attributes:
       label: Ghosttree version
       description: Paste `ctx version` or the commit hash.
-      placeholder: v0.1.0-rc.1
+      placeholder: v0.1.0-rc.3
     validations:
       required: true
   - type: dropdown

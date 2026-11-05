@@ -46,7 +46,7 @@ Claude Code / Codex / OpenCode
 ```
 
 `ctx` contains the client, server, collector, MCP server, installer, migration
-tools, and operator UI. The only runtime database is SQLite. A server can stay
+tools, and the web interface. The only runtime database is SQLite. A server can stay
 on one machine, while collectors and agent integrations run wherever work
 happens.
 
@@ -54,10 +54,11 @@ happens.
 
 - Scoped context by repository, branch, and machine, with path-activated
   instructions.
-- Full-text search across knowledge, requests, file descriptions, and captured
-  sessions. Knowledge search can optionally be hybrid: with a local embedding
-  server (`GHOSTTREE_EMBED_URL`, see `deploy/README.md`) it also finds entries by
-  meaning; without one nothing changes.
+- Full-text search across knowledge, requests, file descriptions, pains,
+  documents, and captured sessions. Search can optionally be hybrid: with a local
+  embedding server (`GHOSTTREE_EMBED_URL`, see `deploy/README.md`) it also finds
+  entries by meaning, for the kinds you switch on (`GHOSTTREE_EMBED_KINDS`);
+  without one nothing changes.
 - Incremental Claude Code and Codex transcript collection with local credential
   redaction and outage replay.
 - MCP tools for context lookup, corrections, request tracking, regression
@@ -72,7 +73,15 @@ happens.
 - Immutable named snapshots that materialize a consistent project-context
   state, bind their recorded Git provenance and entries into one digest, and
   remain independently exportable and verifiable after live context changes.
-- A read-only web interface for operators.
+- Accounts with revocable API tokens, sign-in with OIDC or one-time codes,
+  organizations, per-project roles, and invitation links with a pairing code for
+  new machines (`ctx join`, `ctx login`).
+- A web interface (`/ui/`) with an overview, the coordination rooms in which
+  people and agents talk, review of proposed knowledge, requests and pains,
+  sessions, agents, tasks for people, and organization and token administration.
+- Coordination between agents and people: rooms, direct messages, threads,
+  `@name` mentions, and delivery into Claude Code sessions through an opt-in
+  channel.
 
 Run `ctx` or `ctx <command>` without arguments to see the available command
 surface.
@@ -123,11 +132,11 @@ proxy before connecting another machine.
 ```bash
 make build
 
-./dist/ctx person add <name> --db ./ghosttree.db
+./dist/ctx account add <name> --db ./ghosttree.db
 ./dist/ctx serve --db ./ghosttree.db --listen 127.0.0.1:8474
 ```
 
-`person add` prints the token once. In another terminal:
+`account add` prints the token once. In another terminal:
 
 ```bash
 ./dist/ctx setup --server http://127.0.0.1:8474 --token <token>
@@ -484,8 +493,10 @@ The collector redacts common credential formats before upload, and document
 writes reject suspected secrets instead of rewriting them. Regex redaction is a
 last line of defense, not a guarantee. The current bearer token identifies who
 made a change. Snapshot reads, creates, and release bindings additionally
-require explicit per-project capabilities; other endpoints retain their
-existing authorization model.
+require explicit per-project capabilities. Per-project roles (owner, lead,
+member, guest) decide what an account may read and write, but they are only
+enforced when the server runs with `GHOSTTREE_ENFORCE_ACCESS=1`; without it the
+server only logs what it would have refused.
 
 Security reports belong at
 [security@deadweightlabs.com](mailto:security@deadweightlabs.com), not in a
@@ -571,7 +582,8 @@ The near-term sequence is deliberately small:
 2. Improve relevance and outcome measurement so retained context earns its
    place.
 3. Add explicit knowledge relationships and safer duplicate consolidation.
-4. Round out team administration and offer an optional managed service.
+4. Round out team administration (organizations, roles, and invitations exist
+   today) and offer an optional managed service.
 
 Docker images and package-manager distribution are not planned until there is
 real demand for them.
@@ -584,10 +596,11 @@ Ghosttree currently targets Go 1.26.
 make test
 make build
 make build-all
+make verify    # formatting, vet, race tests, and all release builds
 ```
 
-The direct dependencies are `modernc.org/sqlite`, the official MCP Go SDK, and
-`fsnotify`. Release builds set `CGO_ENABLED=0` and target Linux and macOS on
+The direct dependencies are `modernc.org/sqlite`, the official MCP Go SDK,
+`fsnotify`, `go-oidc`, and the `golang.org/x` modules `oauth2`, `sys`, and `text`. Release builds set `CGO_ENABLED=0` and target Linux and macOS on
 amd64 and arm64.
 
 ## Contributing
