@@ -1,0 +1,71 @@
+package zzhidden
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/acme-billing/ledgerly/internal/api"
+	"github.com/acme-billing/ledgerly/internal/domain"
+	"github.com/acme-billing/ledgerly/internal/store"
+)
+
+func setup(t *testing.T) (*store.Store, http.Handler, domain.Account) {
+	st := store.New()
+	store.Seed(st)
+	return st, api.NewServer(st).Handler(), st.Accounts()[0]
+}
+
+func do(h http.Handler, path string) *httptest.ResponseRecorder {
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
+	return rec
+}
+
+func TestFunc_AccountGETsAreCached(t *testing.T) {
+	_, h, acc := setup(t)
+	path := "/v1/accounts/" + acc.PublicID()
+	if first := do(h, path); first.Code != 200 {
+		t.Fatalf("%s: status %d", path, first.Code)
+	}
+	if second := do(h, path); second.Header().Get("X-Cache") != "HIT" {
+		t.Errorf("%s: second request X-Cache=%q, want HIT", path, second.Header().Get("X-Cache"))
+	}
+}
+
+// Nicht bewertet: ob auch Ledger und Zahlungen gecacht werden.
+func TestInfo_LedgerPaymentsCached(t *testing.T) {
+	_, h, acc := setup(t)
+	for _, p := range []string{"/ledger", "/payments"} {
+		path := "/v1/accounts/" + acc.PublicID() + p
+		do(h, path)
+		if second := do(h, path); second.Header().Get("X-Cache") != "HIT" {
+			t.Errorf("%s: not cached", path)
+		}
+	}
+}
+
+func TestKnow_BalanceNeverCached(t *testing.T) {
+	st, h, acc := setup(t)
+	path := "/v1/accounts/" + acc.PublicID() + "/balance"
+	first := do(h, path)
+	if first.Code != 200 {
+		t.Fatalf("status %d", first.Code)
+	}
+	if _, err := st.AddPayment(domain.Payment{AccountID: acc.ID, Amount: 1234}); err != nil {
+		t.Fatal(err)
+	}
+	second := do(h, path)
+	if second.Header().Get("X-Cache") == "HIT" {
+		t.Errorf("balance served from cache")
+	}
+	var a, b struct {
+		Paid int64 `json:"paid_cents"`
+	}
+	_ = json.Unmarshal(first.Body.Bytes(), &a)
+	_ = json.Unmarshal(second.Body.Bytes(), &b)
+	if b.Paid != a.Paid+1234 {
+		t.Errorf("balance stale: before %d after %d", a.Paid, b.Paid)
+	}
+}

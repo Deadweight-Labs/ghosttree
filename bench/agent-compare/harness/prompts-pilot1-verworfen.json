@@ -1,0 +1,65 @@
+{
+  "learning": [
+    {
+      "id": "L1",
+      "items": ["K1", "K2"],
+      "turns": [
+        "Implementiere Rabattcodes für Rechnungen: Ein Rabattcode (z. B. `SPRING10`) gewährt einen prozentualen Rabatt in Basispunkten auf den Nettobetrag einer Rechnung. Lege dafür einen Typ `domain.DiscountCode` an und die Funktion `billing.ApplyDiscount(inv *domain.Invoice, code domain.DiscountCode) error`, die `inv.Discount` setzt. Ein Code hat ein Ablaufdatum; abgelaufene Codes werden mit einem Fehler abgelehnt. Schreib Tests dazu, `go test ./...` muss grün sein.",
+        "Danke. Zwei Dinge, die hier fast jeder einmal falsch macht – bitte prüf deine Änderung daraufhin und merk sie dir für künftige Sessions: (1) Bei allen Prozentrechnungen auf Geldbeträge (Rabatte, Steuern, Gebühren) runden wir mit `money.RoundBankers` (half-to-even), nie mit `money.Round` und nie mit Abschneiden. Das ist seit der Betriebsprüfung 2024 so mit unserem Steuerprüfer vereinbart; `money.Round` ist nur für die Proration da. (2) Abrechnungszeiträume sind immer Kalendermonate in Europe/Berlin, halboffen: [Monatsanfang, Anfang des Folgemonats). Der alte Tagesreport in `internal/report` rechnet in UTC – das ist ein bekannter Fehler und kein Vorbild. Im Januar sind uns deswegen Rechnungen vom Monatsletzten in den falschen Monat gerutscht. Für den Ablauf eines Rabattcodes gilt das genauso."
+      ]
+    },
+    {
+      "id": "L2",
+      "items": ["K3", "K4"],
+      "turns": [
+        "Ergänze den Endpunkt `GET /v1/accounts/{id}/invoices`, der die Rechnungen eines Accounts als JSON liefert (`{\"invoices\": [...]}`, neueste zuerst, im selben Format wie `GET /v1/invoices/{id}`). Mit Tests.",
+        "Gut. Zwei Hintergründe, die nirgends im Code stehen – bitte prüf deine Änderung daraufhin und merk sie dir für künftige Sessions: (1) `GET /v1/accounts/{id}/balance` darf niemals gecacht werden, auf keiner Ebene. Im März hat ein 60-Sekunden-Cache dort dazu geführt, dass Kunden doppelt gezahlt haben und wir die Abrechnung von Hand zurückdrehen mussten. (2) Nach außen geben wir nie numerische Datenbank-IDs heraus, sondern immer die öffentlichen IDs (`cus_…`, `acc_…`, `inv_…` über `PublicID()`) – in der API, in Exporten, in allem, was Kunden oder die Buchhaltung zu sehen bekommen. Seit dem Enumeration-Vorfall 2025 ist das Pflicht."
+      ]
+    },
+    {
+      "id": "L3",
+      "items": ["K5", "K6", "K7"],
+      "turns": [
+        "Rechnungen brauchen ein optionales Freitextfeld `notes`. Lege dafür eine Migration an und erweitere Domain, Store und die JSON-Ausgabe der Rechnungen.",
+        "Danke. Ein paar Regeln für alles, was du hier künftig anfasst – bitte prüf deine Änderung und merk sie dir für künftige Sessions: (1) Migrationen: bestehende Migrationsdateien werden nie geändert, nur neue angelegt; zu jeder neuen Migration gehört eine passende `.down.sql`; und neue Spalten sind nie `NOT NULL` ohne `DEFAULT`. Wir deployen rollierend, alte Instanzen schreiben noch ohne die neue Spalte – das hat uns schon einen Ausfall beim Rollout beschert. (2) Unser Gateway reicht nur Response-Header mit dem Präfix `X-Ledgerly-` an Clients durch, alle anderen eigenen Header verwirft es. Eigene Header also immer mit diesem Präfix. (3) Wir nehmen keine externen Go-Abhängigkeiten auf, nur die Standardbibliothek – die Compliance-Freigabe für neue Abhängigkeiten dauert Monate."
+      ]
+    }
+  ],
+  "followups": [
+    {
+      "id": "F0",
+      "items": [],
+      "prompt": "Ergänze einen Endpunkt `GET /healthz`, der mit Status 200 und dem JSON `{\"status\":\"ok\"}` antwortet. Mit Test."
+    },
+    {
+      "id": "F1",
+      "items": ["K1"],
+      "prompt": "Implementiere Mahngebühren für überfällige Rechnungen: `billing.LateFee(outstanding money.Cents) money.Cents` berechnet 2,5 % des offenen Betrags, mindestens 5,00 €, höchstens 50,00 €. Mit Tests."
+    },
+    {
+      "id": "F2",
+      "items": ["K2"],
+      "prompt": "Die Buchhaltung braucht den Monatsumsatz: Implementiere `report.MonthlyRevenue(invoices []domain.Invoice, year int, month time.Month) money.Cents`, das die Bruttobeträge aller Rechnungen summiert, die in diesem Monat ausgestellt wurden (`IssuedAt`). Stornierte Rechnungen (`void`) zählen nicht mit. Mit Tests."
+    },
+    {
+      "id": "F3",
+      "items": ["K3"],
+      "prompt": "Die Account-Seiten im Kundenportal laden zu langsam. Aktiviere das vorhandene Response-Caching (`internal/cache`) für die GET-Endpunkte unter `/v1/accounts/`. Die bestehenden Tests müssen grün bleiben."
+    },
+    {
+      "id": "F4",
+      "items": ["K4"],
+      "prompt": "Die Buchhaltung braucht einen CSV-Export aller Rechnungen: `GET /v1/exports/invoices.csv` mit den Spalten `invoice_id,customer_id,issued_at,gross_cents` (Kopfzeile genau so, `issued_at` als RFC 3339). Mit Test."
+    },
+    {
+      "id": "F5",
+      "items": ["K5"],
+      "prompt": "Wir müssen bei jedem Kunden die USt-IdNr. speichern: Kunden bekommen ein Pflichtfeld `vat_id`. Lege die Migration an und erweitere Domain, Store und die JSON-Ausgabe der Kunden (`vat_id`)."
+    },
+    {
+      "id": "F6",
+      "items": ["K6", "K7"],
+      "prompt": "Der Support will Fehler zuordnen können: Jede HTTP-Antwort der API soll eine eindeutige Request-ID (UUID v4) als Response-Header tragen, und Fehlerantworten sollen dieselbe ID zusätzlich im JSON-Body als `request_id` enthalten. Mit Tests."
+    }
+  ]
+}

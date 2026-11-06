@@ -1,0 +1,128 @@
+package zzhidden
+
+import (
+	"context"
+	"os"
+	"regexp"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/NurRobin/NurLearn/internal/check"
+	"github.com/NurRobin/NurLearn/internal/lab"
+	"github.com/NurRobin/NurLearn/internal/task"
+)
+
+type rec struct {
+	mu   sync.Mutex
+	cmds []string
+}
+
+func (r *rec) add(c string) { r.mu.Lock(); r.cmds = append(r.cmds, c); r.mu.Unlock() }
+
+const groupFile = "root:x:0:\nwheel:x:10:alice,bob\nusers:x:100:alice\ndocker:x:999:carol\nalice:x:1000:\n"
+const passwdFile = "root:x:0:0:root:/root:/bin/bash\nalice:x:1000:1000::/home/alice:/bin/bash\n"
+
+func groupsFake(r *rec) *check.FakeExecFunc {
+	return &check.FakeExecFunc{Fn: func(cmd string) lab.Result {
+		r.add(cmd)
+		mallory := strings.Contains(cmd, "mallory")
+		switch {
+		case strings.Contains(cmd, "getent passwd"):
+			if mallory {
+				return lab.Result{ExitCode: 2}
+			}
+			return lab.Result{Stdout: "alice:x:1000:1000::/home/alice:/bin/bash\n"}
+		case strings.Contains(cmd, "getent group"):
+			for _, line := range strings.Split(strings.TrimSpace(groupFile), "\n") {
+				name := strings.SplitN(line, ":", 2)[0]
+				if strings.Contains(cmd, " "+name) {
+					return lab.Result{Stdout: line + "\n"}
+				}
+			}
+			return lab.Result{Stdout: groupFile}
+		case strings.Contains(cmd, "/etc/passwd"):
+			if strings.Contains(cmd, "grep") {
+				if mallory {
+					return lab.Result{ExitCode: 1}
+				}
+				return lab.Result{Stdout: "alice:x:1000:1000::/home/alice:/bin/bash\n"}
+			}
+			return lab.Result{Stdout: passwdFile}
+		case strings.Contains(cmd, "/etc/group"):
+			if strings.Contains(cmd, "grep") {
+				for _, line := range strings.Split(strings.TrimSpace(groupFile), "\n") {
+					name := strings.SplitN(line, ":", 2)[0]
+					if strings.Contains(cmd, name+":") || strings.Contains(cmd, " "+name) {
+						return lab.Result{Stdout: line + "\n"}
+					}
+				}
+				return lab.Result{ExitCode: 1}
+			}
+			return lab.Result{Stdout: groupFile}
+		case strings.Contains(cmd, "groups"):
+			if mallory {
+				return lab.Result{ExitCode: 1, Stderr: "groups: 'mallory': no such user\n"}
+			}
+			return lab.Result{Stdout: "alice : alice wheel users\n"}
+		case strings.Contains(cmd, "id "):
+			if mallory {
+				return lab.Result{ExitCode: 1, Stderr: "id: 'mallory': no such user\n"}
+			}
+			if regexp.MustCompile(`-(nG|Gn)\b|-G -n|-n -G|--groups --name|--name --groups`).MatchString(cmd) {
+				return lab.Result{Stdout: "alice wheel users\n"}
+			}
+			if strings.Contains(cmd, "-G") {
+				return lab.Result{Stdout: "1000 10 100\n"}
+			}
+			return lab.Result{Stdout: "uid=1000(alice) gid=1000(alice) groups=1000(alice),10(wheel),100(users)\n"}
+		}
+		return lab.Result{ExitCode: 127, Stderr: "command not found\n"}
+	}}
+}
+
+func runUG(t *testing.T, r *rec, user, group string) check.Result {
+	c, ok := check.Get("user_in_group")
+	if !ok {
+		t.Fatalf("check type user_in_group not registered")
+	}
+	spec := task.CheckSpec{ID: "ug-" + user + "-" + group, Type: "user_in_group", Params: map[string]any{"user": user, "group": group}}
+	return c.Run(context.Background(), groupsFake(r), lab.Lab{}, spec)
+}
+
+func TestFunc_UserInGroup(t *testing.T) {
+	r := &rec{}
+	if res := runUG(t, r, "alice", "wheel"); res.Status != check.StatusPass || res.ID != "ug-alice-wheel" {
+		t.Errorf("member: %+v", res)
+	}
+	if res := runUG(t, r, "alice", "docker"); res.Status != check.StatusFail {
+		t.Errorf("non-member: %+v", res)
+	}
+	if res := runUG(t, r, "mallory", "wheel"); res.Status != check.StatusUnknown {
+		t.Errorf("unknown user: %+v", res)
+	}
+}
+
+func TestKnow_LCAllC(t *testing.T) {
+	r := &rec{}
+	runUG(t, r, "alice", "wheel")
+	runUG(t, r, "mallory", "wheel")
+	if len(r.cmds) == 0 {
+		t.Fatal("no commands executed")
+	}
+	for _, c := range r.cmds {
+		if !strings.Contains(c, "LC_ALL=C") {
+			t.Errorf("command without LC_ALL=C: %q", c)
+		}
+	}
+}
+
+func TestKnow_DocumentedInPackFormat(t *testing.T) {
+	b, err := os.ReadFile("../docs/PACK-FORMAT.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`(?m)^#{2,4}\s+` + "`?" + `user(\\)?_in(\\)?_group`).Match(b) {
+		t.Error("user_in_group has no section in docs/PACK-FORMAT.md")
+	}
+}

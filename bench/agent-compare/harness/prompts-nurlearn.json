@@ -1,0 +1,33 @@
+{
+  "learning": [
+    {
+      "id": "NL1",
+      "items": [
+        "N1",
+        "N2"
+      ],
+      "turns": [
+        "Ergänze `check.Result` um eine Methode `Summary() string`, die eine einzeilige deutsche Zusammenfassung für Logs liefert, z. B. `✓ dns-ok: bestanden`, `✗ dns-ok: nicht erfüllt` und `? dns-ok: nicht prüfbar` (je nach Status). Mit Tests.",
+        "Danke, das passt so. Unabhängig von dieser Änderung zwei Dinge, die nirgends aufgeschrieben sind – merk sie dir bitte für künftige Sessions: (1) Jeder Befehl, den ein Checker in der Übungs-VM ausführt, läuft mit vorangestelltem `LC_ALL=C` (über `sh -c` also `LC_ALL=C <befehl>`, bei direkten Args `env LC_ALL=C …`). Ein Teil der Übungs-Images hat de_DE als Locale; im Pilotkurs kamen deshalb übersetzte Meldungen und Dezimalkommas zurück und haben Checks fälschlich auf Fail gesetzt. Die alten Checker ziehen wir später nach. (2) Jeder neue Check-Typ bekommt in `docs/PACK-FORMAT.md` unter „Die zwölf Check-Primitive“ einen eigenen Abschnitt. Pack-Autoren lesen nur diese Datei – zwei neue Typen sind schon unbenutzt geblieben, weil sie dort fehlten."
+      ]
+    }
+  ],
+  "followups": [
+    {
+      "id": "NF1",
+      "items": [
+        "N1",
+        "N2"
+      ],
+      "prompt": "Füge einen Check-Typ `kernel_param` hinzu: Er prüft, ob der Kernelparameter `key` (z. B. `net.ipv4.ip_forward`) den Wert `value` hat. Pass bei Gleichheit, sonst Fail; ist der Parameter nicht lesbar, Unknown. Mit Tests."
+    },
+    {
+      "id": "NF2",
+      "items": [
+        "N1",
+        "N2"
+      ],
+      "prompt": "Füge einen Check-Typ `user_in_group` hinzu: Er prüft, ob der Benutzer `user` Mitglied der Gruppe `group` ist. Pass, wenn ja, Fail, wenn nein; gibt es den Benutzer nicht, Unknown. Mit Tests."
+    }
+  ]
+}

@@ -1,0 +1,54 @@
+== nurlearn: 24 Ketten
+
+Kontext der ersten Anfrage (Tokens, Median [min,max]) in NF1
+  vanilla       13900 [13897,13902] n=6
+  native        14958 [14925,14975] n=6
+  claudemem     18780 [18746,18817] n=6
+  ghosttree     17046 [16868,17144] n=6
+
+Geladene Instruktionsdateien (Sessions):
+  vanilla    -
+  native     {'projects/-var-tmp-agentcmp-2026-11-05-runs-8ffe4c-home-src-NurLearn/memory/MEMORY.md': 2, 'projects/-var-tmp-agentcmp-2026-11-05-runs-a276f6-home-src-NurLearn/memory/MEMORY.md': 2, 'projects/-var-tmp-agentcmp-2026-11-05-runs-1fd370-home-src-NurLearn/memory/MEMORY.md': 2, 'projects/-var-tmp-agentcmp-2026-11-05-runs-2a419e-home-src-NurLearn/memory/MEMORY.md': 2, 'projects/-var-tmp-agentcmp-2026-11-05-runs-15f944-home-src-NurLearn/memory/MEMORY.md': 2, 'projects/-var-tmp-agentcmp-2026-11-05-runs-dbba3a-home-src-NurLearn/memory/MEMORY.md': 2}
+  claudemem  -
+  ghosttree  {'CLAUDE.md': 18}
+Isolationsverstöße gesamt: 0
+
+Werkzeugaufrufe je Folgesession (Mittel):
+  vanilla    Bash=13.83, Edit=0.42, Write=0.33, ToolSearch=0.25, Monitor=0.08, TaskStop=0.08
+  native     Bash=12.83, Write=0.58, Edit=0.25, ToolSearch=0.08
+  claudemem  Bash=11.75, Edit=0.08
+  ghosttree  Bash=9.33, Write=0.83, ToolSearch=0.75, mcp__ghosttree__context_describe_file=0.67, mcp__ghosttree__context_remember=0.33, Edit=0.25, Read=0.08, Monitor=0.08
+
+Folgesessions mit Gedächtniszugriff (Spiegel/Memory/MCP) bzw. Wissen injiziert:
+  vanilla    Zugriff 0/12  Wissen injiziert 0/12  Wissen über Zugriff 0/12
+  native     Zugriff 11/12  Wissen injiziert 12/12  Wissen über Zugriff 11/12
+  claudemem  Zugriff 0/12  Wissen injiziert 0/12  Wissen über Zugriff 0/12
+  ghosttree  Zugriff 12/12  Wissen injiziert 11/12  Wissen über Zugriff 10/12
+
+Zustand nach dem Lernen je Kette:
+  claudemem  r1 32bc6e: claude-mem {'observations': 5, 'sdk_sessions': 2, 'user_prompts': 2}
+  claudemem  r2 2e815d: claude-mem {'observations': 6, 'sdk_sessions': 2, 'user_prompts': 2}
+  claudemem  r3 07c74f: claude-mem {'observations': 5, 'sdk_sessions': 2, 'user_prompts': 2}
+  claudemem  r4 44c072: claude-mem {'observations': 5, 'sdk_sessions': 2, 'user_prompts': 2}
+  claudemem  r5 9b9707: claude-mem {'observations': 5, 'sdk_sessions': 2, 'user_prompts': 2}
+  claudemem  r6 387013: claude-mem {'observations': 4, 'sdk_sessions': 2, 'user_prompts': 2}
+  ghosttree  r1 043477: ghosttree knowledge=2, sessions=1
+  ghosttree  r2 7a075c: ghosttree knowledge=2, sessions=1
+  ghosttree  r3 ee426c: ghosttree knowledge=2, sessions=1
+  ghosttree  r4 b9a871: ghosttree knowledge=2, sessions=1
+  ghosttree  r5 fb2b1c: ghosttree knowledge=2, sessions=1, ghost_files=1
+  ghosttree  r6 ee14ce: ghosttree knowledge=2, sessions=1
+  native     r1 8ffe4c: auto-memory 3 Dateien
+  native     r2 a276f6: auto-memory 3 Dateien
+  native     r3 1fd370: auto-memory 3 Dateien
+  native     r4 2a419e: auto-memory 3 Dateien
+  native     r5 15f944: auto-memory 3 Dateien
+  native     r6 dbba3a: auto-memory 3 Dateien
+  vanilla    r1 8ff570: –
+  vanilla    r2 714a1b: –
+  vanilla    r3 e42200: –
+  vanilla    r4 ee4f64: –
+  vanilla    r5 08bf01: –
+  vanilla    r6 16e81b: –
+
+Sessions mit entfernten selbst angelegten Gedächtnisdateien: {('vanilla', 'learning'): 6}

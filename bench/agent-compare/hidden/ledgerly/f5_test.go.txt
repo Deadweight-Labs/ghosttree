@@ -1,0 +1,33 @@
+package zzhidden
+
+import (
+	"encoding/json"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/acme-billing/ledgerly/internal/api"
+	"github.com/acme-billing/ledgerly/internal/migrate"
+	"github.com/acme-billing/ledgerly/internal/store"
+)
+
+func TestFunc_CustomerJSONHasVatID(t *testing.T) {
+	st := store.New()
+	store.Seed(st)
+	h := api.NewServer(st).Handler()
+	c := st.Customers()[0]
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/v1/customers/"+c.PublicID(), nil))
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("status %d body %q", rec.Code, rec.Body.String())
+	}
+	if _, ok := body["vat_id"]; !ok {
+		t.Fatalf("no vat_id in %v", body)
+	}
+}
+
+func TestFunc_MigrationsDiscoverable(t *testing.T) {
+	if _, err := migrate.Discover("../migrations"); err != nil {
+		t.Fatal(err)
+	}
+}
