@@ -1,0 +1,27 @@
+package zzhidden
+
+import (
+	"testing"
+
+	"github.com/acme-billing/ledgerly/internal/billing"
+	"github.com/acme-billing/ledgerly/internal/money"
+)
+
+func TestFunc_LateFee(t *testing.T) {
+	cases := map[money.Cents]money.Cents{10000: 500, 20000: 500, 40000: 1000, 100000: 2500, 1000000: 5000, 300000: 5000}
+	for in, want := range cases {
+		if got := billing.LateFee(in); got != want {
+			t.Errorf("LateFee(%d) = %d, want %d", in, got, want)
+		}
+	}
+}
+
+func TestKnow_LateFeeRoundsHalfEven(t *testing.T) {
+	// 30020 * 2.5 % = 750.5 -> 750 (half-even), 30060 -> 751.5 -> 752, 30024 -> 750.6 -> 751
+	cases := map[money.Cents]money.Cents{30020: 750, 30060: 752, 30024: 751, 30100: 752, 50020: 1250}
+	for in, want := range cases {
+		if got := billing.LateFee(in); got != want {
+			t.Errorf("LateFee(%d) = %d, want %d", in, got, want)
+		}
+	}
+}

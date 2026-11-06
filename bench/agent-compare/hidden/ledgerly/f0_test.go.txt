@@ -1,0 +1,25 @@
+package zzhidden
+
+import (
+	"encoding/json"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/acme-billing/ledgerly/internal/api"
+	"github.com/acme-billing/ledgerly/internal/store"
+)
+
+func TestFunc_Healthz(t *testing.T) {
+	st := store.New()
+	store.Seed(st)
+	h := api.NewServer(st).Handler()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
+	if rec.Code != 200 {
+		t.Fatalf("status %d", rec.Code)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body["status"] != "ok" {
+		t.Fatalf("body %q", rec.Body.String())
+	}
+}
