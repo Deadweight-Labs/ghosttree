@@ -1,0 +1,2 @@
+# Badge images: shields.io times out often in CI and says nothing about our docs.
+^https://img\.shields\.io/
