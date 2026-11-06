@@ -57,7 +57,7 @@ const (
 	// wird nur protokolliert, was verweigert würde ("access: would deny").
 	envEnforceAccess = "GHOSTTREE_ENFORCE_ACCESS"
 	// envPublicURL and envTrustedProxies describe the TLS/proxy boundary; see
-	// the README section "Running behind TLS or a reverse proxy".
+	// the section "Running behind TLS or a reverse proxy" in docs/operations.md.
 	envPublicURL      = "GHOSTTREE_PUBLIC_URL"
 	envTrustedProxies = "GHOSTTREE_TRUSTED_PROXIES"
 	// envDistDir names a directory with the ctx release archives and

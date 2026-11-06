@@ -81,5 +81,5 @@ jobs:
       - uses: DavidAnson/markdownlint-cli2-action@696eb3f2509270d7b882d2aa68347bc676e7af34 # v25.0.0
       - uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
         with:
-          args: --no-progress README.md CONTRIBUTING.md SECURITY.md RELEASING.md CLA.md COMMUNITY-GRANT.md COMMERCIAL.md
+          args: --no-progress README.md CONTRIBUTING.md SECURITY.md RELEASING.md CLA.md COMMUNITY-GRANT.md COMMERCIAL.md docs/*.md
           fail: true
