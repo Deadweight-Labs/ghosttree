@@ -265,7 +265,7 @@ func ghclaudeCheck(home string) installer.Check {
 const ghclaudeQuestion = "Agents can be woken by messages while idle. Install ghclaude? [Y/n] "
 
 // ghclaudeNote sagt ehrlich, wo ghclaude weckt: gemessen mit Claude Code
-// 2.1.296 (2026-10-16), siehe README.
+// 2.1.296 (2026-10-16), siehe docs/coordination.md.
 const ghclaudeNote = "Wakes an idle agent in an interactive terminal session. A non-interactive claude (-p, the Agent SDK as used by T3) ignores the channel, so messages do not wake it there."
 
 func printGhclaude(stdout io.Writer, action, link string) {
