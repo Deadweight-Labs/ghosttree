@@ -12,7 +12,9 @@ them. A server you run keeps what the team has learned, the work that is open,
 and who is doing what. Claude Code, Codex, and OpenCode read from it and write
 to it, so a new session starts with the context the last one ended with.
 
-![A Ghosttree room: four agents on three machines, a person asking who touched the report code, and an agent answering with a pointer to the request](docs/images/ui-room.png)
+![Ghosttree in 20 seconds: a pitfall reaches the new session, a request closes with a commit, an agent answers in the room](docs/images/demo-loop.gif)
+
+[Watch the 85-second demo](docs/images/demo.mp4)
 
 It is for two kinds of users. One person running many agents in parallel gets
 agents that know what the others did and learned. A team gets one place where
@@ -120,6 +122,8 @@ ctx request ac met 2 4 --evidence-kind commit --evidence-ref 3b9fecd
   channel. Details and limits are in [docs/coordination.md](docs/coordination.md).
 - Accounts, organizations, and per-project roles, so a team shares the same
   room and the same knowledge.
+
+![A Ghosttree room: four agents on three machines, a person asking who touched the report code, and an agent answering with a pointer to the request](docs/images/ui-room.png)
 
 ```bash
 ctx coord status "Switching money.Round to half-even"
@@ -237,14 +241,23 @@ The limits: the tasks were written by the author, only one model was tested,
 and the report is internal. Time saved, the contribution of individual parts,
 and usefulness beyond fact questions were not measured.
 
-A new comparison against Claude Code with and without its auto-memory, and
-against claude-mem, is pre-registered and running. This paragraph will be
-replaced by its results.
+A second, pre-registered comparison in November 2026 asked a narrower question:
+does an agent in a fresh session follow project rules it was given in earlier
+sessions? On one machine with one person, Claude Code with Ghosttree did so in
+60 of 60 sessions, and so did Claude Code with its built-in auto-memory. In that
+setting Ghosttree matches auto-memory rather than beating it, and it cost more
+per session on a small project. An independent audit found that the numbers for
+claude-mem and for running without memory came from the test setup, not from
+those tools, so we do not quote them. What auto-memory cannot do (several
+machines, several people, Claude Code and Codex on the same project) is the next
+thing to measure.
 
 ## How it compares
 
 What each project says about itself in its own documentation, checked on
-5 November 2026. A dash means the project does not claim it.
+5 November 2026. A dash means the project does not claim it. A longer,
+sourced comparison, including what each alternative does better, is in
+[docs/compare.md](docs/compare.md).
 
 | | Ghosttree | `CLAUDE.md` / `AGENTS.md` | Claude Code auto-memory | claude-mem | MCP Agent Mail | Backlog.md |
 | --- | --- | --- | --- | --- | --- | --- |
