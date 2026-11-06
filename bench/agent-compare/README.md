@@ -25,10 +25,26 @@ Projektwissen aus einer früheren Session eingehalten.
 | NurLearn, 12 Folgesessions je Arm | 0/12 | 11/12 (12/12 neu bewertet) | 0/12 | 12/12 |
 
 ghosttree liegt gleichauf mit Claude Codes Auto-Memory. Auf ledgerly kostet
-es rund 42 % mehr pro Session, auf NurLearn gleich viel. Gegenüber vanilla
-und claude-mem ist der Vorsprung deutlich. Zusammenfassungen liegen in
-`results/`, Begründung, Intervalle und Grenzen im Dokument
-`agent-memory-vergleich-2026-11` (Revision 2).
+es rund 42 % mehr pro Session, auf NurLearn gleich viel.
+
+Die Spalten vanilla und claude-mem taugen nicht als Vergleich. Ein
+unabhängiges Audit (Dokument `audit-agent-memory-vergleich-2026-11`) fand:
+
+- claude-mem: Im Kopflos-Modus (`claude -p`) beendet sich Claude Code, bevor
+  der asynchrone Stop-Hook von claude-mem läuft. Dadurch entstand in keiner
+  Kette eine Session-Zusammenfassung, die claude-mem sonst beim Start
+  mitliefert. Mit nachgeholtem Stop-Hook bestand claude-mem eine
+  ungezählte Stichprobe vollständig. Der Harness gleicht das für ghosttree
+  (`ctx watch --once`) aus, für claude-mem nicht.
+- vanilla: Der Arm schrieb in den Lern-Sessions eine `CLAUDE.md`, die der
+  Harness vor der Folge-Session löscht. Das ist ein künstlicher Boden, kein
+  realistischer Nutzer ohne Gedächtnis.
+
+Belegt ist nur: ghosttree hielt Projektregeln in 60 von 60 Folge-Sessions ein,
+genauso wie die Auto-Memory. Wer den Harness erneut fährt, sollte beides
+vorher beheben. Zusammenfassungen liegen in `results/`, Begründung,
+Intervalle und Grenzen im Dokument `agent-memory-vergleich-2026-11`
+(Revision 2).
 
 ## Ablauf einer Kette
 
@@ -53,7 +69,8 @@ eigene Datenbank und ein eigener Port dazu.
 
 `projects/ledgerly/` ist das Testprojekt, ein kleiner Go-Abrechnungsdienst
 nur mit Standardbibliothek. Die zweite Messung lief auf einer Kopie eines
-privaten Projekts (NurLearn), deshalb liegt dessen Vorlage nicht im Repo.
+privaten Projekts (NurLearn). Dessen Vorlage, Aufgaben und verdeckte Tests
+liegen deshalb nicht im Repo.
 Mit `BENCH_NURLEARN_TEMPLATE` lässt sich eine eigene Kopie angeben.
 
 ## Voraussetzungen
