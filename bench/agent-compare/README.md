@@ -64,6 +64,30 @@ Mit `BENCH_NURLEARN_TEMPLATE` lässt sich eine eigene Kopie angeben.
   `ANTHROPIC_AUTH_TOKEN` exportiert und `claude` aufruft
 - `ctx` aus diesem Repo (`make build`)
 
+## Sicherheit: Agenten laufen ohne Rückfragen
+
+`bench.py` startet jede Session mit `--dangerously-skip-permissions`. Nur
+so laufen Sessions unbeaufsichtigt, und alle Arme arbeiten mit demselben
+Werkzeugumfang. Eigenes HOME, `env -i` und eigenes `TMPDIR` je Kette
+trennen **nur die Konfiguration**. Eine Sicherheitsgrenze sind sie nicht:
+Der Agent läuft unter der Benutzerkennung, die den Harness startet, und
+kann per Bash alles lesen und ändern, was dieser Benutzer darf
+(echtes HOME, SSH-Schlüssel, andere Repositories), dazu das Netz.
+
+Deshalb nur auf einer Maschine oder unter einem Konto fahren, das dafür
+vorgesehen ist:
+
+- eigener, unprivilegierter Benutzer ohne Zugriff auf persönliche Daten
+  und Schlüssel, `BENCH_BASE` und `BENCH_RUNS` gehören diesem Benutzer, oder
+- jede Kette in einem Wegwerf-Container bzw. einer VM mit eingeschränktem
+  Netz (nur der Modell-Endpunkt und die Paketquellen, die die Arme zum
+  Installieren brauchen).
+
+Eine Werkzeug-Allowlist (`--allowedTools`) statt
+`--dangerously-skip-permissions` ist möglich. Sie ändert aber, was die
+Agenten tun können, und ist dann ein anderes Messprotokoll als in der
+Messung vom 2026-11-05/06.
+
 ## Einrichten
 
 ```bash
