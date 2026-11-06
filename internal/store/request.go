@@ -3,7 +3,6 @@ package store
 import (
 	"database/sql"
 	"fmt"
-	"strconv"
 	"strings"
 
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
@@ -265,92 +264,6 @@ func requestScopeWhere(filter requestdomain.SearchFilter) ([]string, []any) {
 		args = append(args, filter.HeldInstanceOwner, filter.HeldViewer)
 	}
 	return where, args
-}
-
-func (s *Store) SearchRequests(filter requestdomain.SearchFilter) (requestdomain.SearchPage, error) {
-	if s.reader != nil {
-		return s.reader.SearchRequests(filter)
-	}
-	limit := filter.Limit
-	if limit <= 0 {
-		limit = 10
-	}
-	if limit > 25 {
-		limit = 25
-	}
-	// substr, not the full column: a search page is a list, and a list shows a
-	// snippet. Sending every description in full made twenty-four requests
-	// exceed what a tool result may return, and it is no better for a card or a
-	// terminal row. GetRequest answers with the whole text.
-	description := "substr(r.description,1," + strconv.Itoa(snippetChars) + ")"
-	if filter.FullDescription {
-		description = "r.description"
-	}
-	query := `SELECT r.id,r.type,r.title,` + description + `,r.state,r.priority,r.project,r.branch,r.machine,r.origin,r.person,r.session_ref,r.created_at,r.updated_at,
-		(SELECT COUNT(*) FROM request_criteria c WHERE c.request_id=r.id AND c.state='open'),
-		COALESCE((SELECT w.summary FROM request_work w WHERE w.request_id=r.id AND w.summary!='' ORDER BY w.id DESC LIMIT 1),''),
-		(SELECT COUNT(DISTINCT g.session_id) FROM request_sightings g WHERE g.request_id=r.id)
-		FROM requests r`
-	var where []string
-	var args []any
-	// A query of nothing but ordinary words asks to see the backlog, not to
-	// find one entry in it. Matching it would answer "was ist noch zu tun" with
-	// whichever request happens to contain all five words — measured on
-	// 2026-08-24: one of twenty-four, effectively at random.
-	if ClassifySearch(filter.Query) == SearchFullText {
-		query += ` JOIN search_documents d ON d.kind='request' AND d.domain_id=r.id JOIN search_documents_fts f ON f.rowid=d.id`
-		where = append(where, `search_documents_fts MATCH ?`)
-		args = append(args, ftsQuery(filter.Query))
-	}
-	scopeWhere, scopeArgs := requestScopeWhere(filter)
-	where = append(where, scopeWhere...)
-	args = append(args, scopeArgs...)
-	if filter.State != "" {
-		where = append(where, `r.state=?`)
-		args = append(args, filter.State)
-	}
-	if filter.Type != "" {
-		where = append(where, `r.type=?`)
-		args = append(args, filter.Type)
-	}
-	if filter.Priority != "" {
-		where = append(where, `r.priority=?`)
-		args = append(args, filter.Priority)
-	}
-	if filter.Cursor != "" {
-		where = append(where, `r.id<?`)
-		args = append(args, filter.Cursor)
-	}
-	if len(where) > 0 {
-		query += ` WHERE ` + strings.Join(where, ` AND `)
-	}
-	query += ` ORDER BY r.id DESC LIMIT ?`
-	args = append(args, limit+1)
-	rows, err := s.db.Query(query, args...)
-	if err != nil {
-		return requestdomain.SearchPage{}, err
-	}
-	defer rows.Close()
-	var page requestdomain.SearchPage
-	for rows.Next() {
-		var hit requestdomain.SearchHit
-		r := &hit.Request
-		if err := rows.Scan(&r.ID, &r.Type, &r.Title, &r.Description, &r.State, &r.Priority, &r.Scope.Project, &r.Scope.Branch, &r.Scope.Machine, &r.Origin, &r.Person, &r.SessionRef, &r.CreatedAt, &r.UpdatedAt, &hit.OpenCriteria, &hit.LatestHandoff, &hit.Sightings); err != nil {
-			return page, err
-		}
-		if filter.Query != "" {
-			hit.MatchReason = "full-text match"
-		}
-		page.Results = append(page.Results, hit)
-	}
-	if err := rows.Err(); err != nil {
-		return page, err
-	}
-	if len(page.Results) > limit {
-		page.NextCursor = fmt.Sprintf("%d", page.Results[limit-1].Request.ID)
-		page.Results = page.Results[:limit]
-	}
-	return page, nil
 }
 
 func (s *Store) CountOpenRequests(ax scope.Axes) (int, error) {

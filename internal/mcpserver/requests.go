@@ -55,6 +55,9 @@ type RequestListItem struct {
 	// Sightings counts the independent sessions that voiced this wish. Absent
 	// for anything a person wrote by hand, where the description is the source.
 	Sightings int `json:"sightings,omitempty"`
+	// Match is "semantic" for a request that a search found by its meaning alone:
+	// its words do not match the query. Absent for a hit of the words.
+	Match string `json:"match,omitempty"`
 }
 
 // maxListChars bounds the whole answer. It is enforced while building the list
@@ -63,14 +66,16 @@ type RequestListItem struct {
 const maxListChars = 6000
 
 func listFromPage(page requestdomain.SearchPage) RequestSearchOutput {
-	out := RequestSearchOutput{Results: []RequestListItem{}, NextCursor: page.NextCursor}
+	// A ranked search that was cut at its depth says so on its last page: more
+	// requests match than any cursor reaches.
+	out := RequestSearchOutput{Results: []RequestListItem{}, NextCursor: page.NextCursor, Truncated: page.Truncated}
 	size := 0
 	for _, hit := range page.Results {
 		item := RequestListItem{
 			ID: hit.Request.ID, Type: hit.Request.Type, Title: hit.Request.Title,
 			State: hit.Request.State, Priority: hit.Request.Priority,
 			OpenCriteria: hit.OpenCriteria, Handoff: firstLine(hit.LatestHandoff, 160),
-			Sightings: hit.Sightings,
+			Sightings: hit.Sightings, Match: hit.Match,
 		}
 		size += len(item.Title) + len(item.Handoff) + 64
 		if size > maxListChars && len(out.Results) > 0 {

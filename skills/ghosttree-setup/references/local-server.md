@@ -41,13 +41,25 @@ Two correct ways:
     systemctl --user stop ghosttree
     cp ~/.local/share/ghosttree/ghosttree.db /somewhere/
 
-**Or snapshot it while it runs.** SQLite can write a consistent copy of a live
-database by itself:
+**Or snapshot it while it runs.** The `sqlite3` CLI can copy a live database
+page by page, in a consistent state, with its backup command:
 
-    sqlite3 ~/.local/share/ghosttree/ghosttree.db "VACUUM INTO '/somewhere/ghosttree.db'"
+    sqlite3 ~/.local/share/ghosttree/ghosttree.db ".backup '/somewhere/ghosttree.db'"
+    chmod 600 /somewhere/ghosttree.db
 
-This is the same mechanism ghosttree uses internally to back the database up
-before a schema rebuild. Prefer it when you are unsure.
+The copy has the permissions of your umask; the database holds transcripts, so
+close it to others. Check it with ghosttree's own command, not with SQLite's
+`PRAGMA integrity_check`:
+
+    ctx db check --db /somewhere/ghosttree.db
+
+Do not use `VACUUM INTO` with the `sqlite3` CLI, and do not run `VACUUM` or
+`PRAGMA integrity_check` with it either. The tables of the context snapshots
+have CHECK constraints that call an SQL function only `ctx` registers
+(`ghosttree_valid_utf8`), so the CLI stops with `no such function`; `VACUUM INTO`
+leaves an empty file at the target. `.backup` copies pages and never evaluates
+those constraints, which is why it works. `ctx db vacuum` shrinks the file in
+place and is not a way to make a copy.
 
 After the file is on the new host, point every machine at it with `ctx setup`
 and keep going. Nothing else changes.

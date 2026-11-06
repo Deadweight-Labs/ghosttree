@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"unicode/utf8"
 
 	docwork "github.com/Deadweight-Labs/ghosttree/internal/doc"
@@ -213,6 +214,10 @@ func (a *api) patchDocument(w http.ResponseWriter, r *http.Request) {
 
 func (a *api) listDocuments(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	if strings.TrimSpace(q.Get("q")) != "" {
+		a.searchDocuments(w, r)
+		return
+	}
 	if !a.listGateEntries(w, r, scope.NormalizeRemote(q.Get("project")), store.ResDocument) {
 		return
 	}
@@ -233,6 +238,32 @@ func (a *api) listDocuments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, ds)
+}
+
+// searchDocuments is the list of documents with a query: the active documents
+// whose title, slug or text match, best first, at most limit. Without a project
+// it searches every project the reader may read. With embeddings the ranking by
+// words and the ranking by meaning are fused; the hits that only the meaning
+// found carry match "semantic". The answer holds no text, only the documents as
+// the list gives them.
+func (a *api) searchDocuments(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	project := scope.NormalizeRemote(q.Get("project"))
+	pa := a.access(r)
+	if project != "" && !a.listGateEntries(w, r, project, store.ResDocument) {
+		return
+	}
+	pa.Filtered()
+	limit := intParam(r, "limit", 20)
+	ds, err := a.st.SearchDocuments(q.Get("q"), store.DocumentSearch{
+		Project: project, Kind: q.Get("kind"), Limit: a.overfetch(limit),
+		Keep: pa.CanSeeDocument, Prefilter: pa.DocumentPrefilter(),
+	})
+	if err != nil {
+		writeStoreError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, 200, filterTo(ds, limit, pa.CanSeeDocument))
 }
 
 func (a *api) getDocument(w http.ResponseWriter, r *http.Request) {

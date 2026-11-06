@@ -45,6 +45,21 @@ func rLine(id, out string, isErr bool) string {
 	return jl(map[string]any{"type": "user", "timestamp": "2026-10-01T10:00:02Z", "message": map[string]any{"role": "user", "content": []map[string]any{block}}})
 }
 
+// appendLegacy stores chunks as they are, the way a server did before it
+// redacted on arrival: the sessions that still hold a secret are the ones
+// stored by an older version.
+func appendLegacy(t *testing.T, st *store.Store, id int64, cs []store.Chunk) {
+	t.Helper()
+	for _, c := range cs {
+		if _, err := st.DB().Exec(`INSERT INTO session_chunks(session_id, seq, role, text, raw) VALUES(?,?,?,?,?)`, id, c.Seq, c.Role, c.Text, c.Raw); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.IndexSession(id); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func chunks(lines ...string) []store.Chunk {
 	out := make([]store.Chunk, len(lines))
 	for i, l := range lines {

@@ -27,6 +27,9 @@ const docUsage = `usage: ctx doc <command>
   diff <slug> [--remote]         compare local, base, and remote text
   log <slug>                     list revisions
   ls [--kind K] [--all]          list documents and local drafts
+  search [--kind K] [--all-projects] [--limit N] <query>
+                                 find documents by title, slug and text, and by
+                                 meaning when the server embeds documents
   show <slug> [--rev N]          write one revision to stdout
   mv <slug> <new-slug>            rename without losing history
   close <slug>                   archive a document
@@ -91,6 +94,20 @@ func cmdDoc(args []string, stdout io.Writer) int {
 			return docCLIUsage(stdout)
 		}
 		return docList(gitCtx.Root, gitCtx.Project, c, *kind, *all, stdout)
+	case "search":
+		fs := flag.NewFlagSet("doc search", flag.ContinueOnError)
+		fs.SetOutput(stdout)
+		kind := fs.String("kind", "", "document kind")
+		allProjects := fs.Bool("all-projects", false, "search every project you may read, not only this one")
+		limit := fs.Int("limit", 20, "most documents to list")
+		if fs.Parse(args[1:]) != nil || fs.NArg() == 0 || *limit <= 0 {
+			return docCLIUsage(stdout)
+		}
+		project := gitCtx.Project
+		if *allProjects {
+			project = ""
+		}
+		return docSearch(project, c, strings.Join(fs.Args(), " "), *kind, *limit, stdout)
 	case "show":
 		slug, revision, ok := parseDocShowArgs(args[1:])
 		if !ok {
@@ -394,6 +411,28 @@ func docList(repoRoot, project string, c *client.Client, kind string, all bool, 
 		if kind == "" || kind == entryKind {
 			fmt.Fprintf(stdout, "%-32s %-14s %-8s %s\n", slug, entryKind, "draft", "local")
 		}
+	}
+	return 0
+}
+
+// docSearch lists the documents that match a query, best first: by the words of
+// the title, slug and text and, when the server embeds documents, by meaning. A
+// hit that only the meaning found is marked.
+func docSearch(project string, c *client.Client, query, kind string, limit int, stdout io.Writer) int {
+	documents, err := c.SearchDocuments(project, query, kind, limit)
+	if err != nil {
+		fmt.Fprintln(stdout, err)
+		return 1
+	}
+	for _, document := range documents {
+		line := fmt.Sprintf("%-32s %-14s rev %-4d %s", document.Slug, document.Kind, document.HeadRevision, document.Title)
+		if project == "" {
+			line += "  (" + document.Project + ")"
+		}
+		if document.Match != "" {
+			line += "  [match: " + document.Match + "]"
+		}
+		fmt.Fprintln(stdout, line)
 	}
 	return 0
 }

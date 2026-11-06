@@ -20,6 +20,7 @@ func OpenRuntime(path string, cfg WriterConfig) (*Store, error) {
 		return nil, err
 	}
 	s.reader.acfg = s.accessCfg()
+	s.reader.esh = s.embedShared()
 	s.writer, err = newRuntimeWriter(cfg)
 	if err != nil {
 		_ = s.Close()

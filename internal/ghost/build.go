@@ -223,7 +223,14 @@ func renderDoc(e Entry, g store.GhostFile, described bool, f Freshness, reviewed
 		date = date[:10]
 	}
 	fmt.Fprintf(&b, "beschrieben %s", date)
-	if g.Person != "" {
+	switch {
+	case g.Harness == "gardener" && g.Person != "":
+		// The server sets this mark only when a person adopted a proposal of the
+		// gardener on the review page, so it says who confirmed it.
+		fmt.Fprintf(&b, " vom Gärtner vorgeschlagen, bestätigt von %s", g.Person)
+	case g.Harness == "gardener":
+		b.WriteString(" vom Gärtner vorgeschlagen, bestätigt")
+	case g.Person != "":
 		fmt.Fprintf(&b, " von %s", g.Person)
 	}
 	// Die Frische steht hier und nicht nur im Hook: der Hook verwies für die

@@ -22,6 +22,11 @@ type Entry struct {
 	ObservedAt string
 	CreatedAt  string
 	UpdatedAt  string
+	// Regression is the regression judgement recorded for a pitfall ("" = nobody
+	// has judged it). AskCover says the gardener should put the regression question
+	// for it in this run: an open pitfall with no proposal of the gardener standing.
+	Regression string
+	AskCover   bool
 }
 
 func (e Entry) Since() string {

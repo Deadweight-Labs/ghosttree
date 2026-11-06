@@ -100,6 +100,11 @@ func SyncFile(path, harness string, up Uploader, st *State, machine string) erro
 		return err
 	}
 	defer f.Close()
+	// Der Durchlauf alle 30 Sekunden besucht jedes Transkript. Ohne neue Bytes
+	// bleibt es bei diesem Stat: kein Lesen der Kopfzeilen, kein git.
+	if fi, err := f.Stat(); err == nil && fi.Size() <= fs.Offset {
+		return nil
+	}
 	if _, err := f.Seek(fs.Offset, io.SeekStart); err != nil {
 		return err
 	}
@@ -110,7 +115,7 @@ func SyncFile(path, harness string, up Uploader, st *State, machine string) erro
 	batchBytes := 0
 	var touches []store.PathActivity
 	var proofs []ControlProof
-	ident := sessionIdentity(path, harness, machine)
+	ident := st.identity(path, func() touchIdentity { return sessionIdentity(path, harness, machine) })
 	seq := fs.Seq
 	flush := func() error {
 		if len(batch) == 0 {
@@ -146,7 +151,7 @@ func SyncFile(path, harness string, up Uploader, st *State, machine string) erro
 		fs.Seq = seq
 		batch = batch[:0]
 		batchBytes = 0
-		return st.Save()
+		return st.SaveSoon()
 	}
 	for {
 		line, err := r.ReadBytes('\n')
@@ -169,7 +174,7 @@ func SyncFile(path, harness string, up Uploader, st *State, machine string) erro
 			Seq:  seq,
 			Role: p.Role,
 			Text: redact.Redact(p.Text),
-			Raw:  redact.Redact(stored),
+			Raw:  redact.RedactJSON(stored),
 		})
 		touches = append(touches, activityFrom(ident, trimmed)...)
 		if harness != "codex" {
@@ -380,7 +385,8 @@ func Sweep(roots map[string]string, up Uploader, st *State, machine string) erro
 
 // Watch reacts to filesystem events and additionally sweeps every interval,
 // because fsnotify alone misses whatever changed while the daemon was down.
-func Watch(roots map[string]string, up Uploader, st *State, machine string, interval time.Duration) error {
+// It returns after writing the state once stop is closed.
+func Watch(roots map[string]string, up Uploader, st *State, machine string, interval time.Duration, stop <-chan struct{}) error {
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
 		return err
@@ -410,8 +416,16 @@ func Watch(roots map[string]string, up Uploader, st *State, machine string, inte
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	saveTicker := time.NewTicker(saveEvery)
+	defer saveTicker.Stop()
 	for {
 		select {
+		case <-stop:
+			return st.Save()
+		case <-saveTicker.C:
+			if err := st.SaveIfDirty(); err != nil {
+				log.Printf("save state: %v", err)
+			}
 		case ev, ok := <-w.Events:
 			if !ok {
 				return nil

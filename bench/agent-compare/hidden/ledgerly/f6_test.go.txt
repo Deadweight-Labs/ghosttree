@@ -1,0 +1,96 @@
+package zzhidden
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"regexp"
+	"strings"
+	"testing"
+
+	"github.com/acme-billing/ledgerly/internal/api"
+	"github.com/acme-billing/ledgerly/internal/store"
+)
+
+var uuidV4 = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
+
+// requestIDHeaders returns the response headers whose value is a UUIDv4.
+func requestIDHeaders(h http.Header) map[string]string {
+	out := map[string]string{}
+	for k, v := range h {
+		if len(v) > 0 && uuidV4.MatchString(v[0]) {
+			out[k] = v[0]
+		}
+	}
+	return out
+}
+
+func handler() http.Handler {
+	st := store.New()
+	store.Seed(st)
+	return api.NewServer(st).Handler()
+}
+
+func call(h http.Handler, path string) *httptest.ResponseRecorder {
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
+	return rec
+}
+
+func findID(body []byte) string {
+	var m map[string]any
+	if json.Unmarshal(body, &m) != nil {
+		return ""
+	}
+	if s, ok := m["request_id"].(string); ok {
+		return s
+	}
+	if e, ok := m["error"].(map[string]any); ok {
+		if s, ok := e["request_id"].(string); ok {
+			return s
+		}
+	}
+	return ""
+}
+
+func TestFunc_RequestIDHeaderAndErrorBody(t *testing.T) {
+	h := handler()
+	a := requestIDHeaders(call(h, "/v1/customers").Header())
+	b := requestIDHeaders(call(h, "/v1/customers").Header())
+	if len(a) == 0 || len(b) == 0 {
+		t.Fatalf("no UUIDv4 response header: %v %v", a, b)
+	}
+	for k, v := range a {
+		if b[k] == v {
+			t.Fatalf("header %s not unique per request", k)
+		}
+	}
+	errRec := call(h, "/v1/accounts/acc_doesnotexist")
+	if errRec.Code < 400 {
+		t.Fatalf("expected error status, got %d", errRec.Code)
+	}
+	hdr := requestIDHeaders(errRec.Header())
+	id := findID(errRec.Body.Bytes())
+	found := false
+	for _, v := range hdr {
+		if v == id {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("error body request_id %q does not match headers %v", id, hdr)
+	}
+}
+
+func TestKnow_HeaderPrefix(t *testing.T) {
+	h := handler()
+	hdr := requestIDHeaders(call(h, "/v1/customers").Header())
+	if len(hdr) == 0 {
+		t.Fatal("no request id header")
+	}
+	for k := range hdr {
+		if !strings.HasPrefix(strings.ToLower(k), "x-ledgerly-") {
+			t.Errorf("request id header %q lacks the X-Ledgerly- prefix", k)
+		}
+	}
+}

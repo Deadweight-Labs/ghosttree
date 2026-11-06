@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +18,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/garden"
 	"github.com/Deadweight-Labs/ghosttree/internal/llm"
 	"github.com/Deadweight-Labs/ghosttree/internal/llmusage"
+	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
@@ -40,6 +42,48 @@ func TestGardenWithoutKeyStopsWithOneLine(t *testing.T) {
 type gardenFakeStore struct {
 	entries []store.Knowledge
 	written []store.Knowledge
+	// What a thread needs: the threads opened, what they are linked to, their
+	// posts and the agents registered. threadErr makes opening a thread fail.
+	threads   []store.Thread
+	links     map[int64][]store.ThreadLink
+	posts     []store.CoordMessage
+	agents    []store.CoordAgent
+	threadErr error
+	// What jobs 4 and 1 read: the requests of the project, the stored
+	// descriptions and the paths reviewed and left empty. requestsErr makes
+	// reading the requests fail.
+	requests    []requestdomain.Detail
+	ghosts      []store.GhostFile
+	reviews     []store.GhostReview
+	requestsErr error
+}
+
+func (f *gardenFakeStore) SearchRequests(flt requestdomain.SearchFilter) (requestdomain.SearchPage, error) {
+	var page requestdomain.SearchPage
+	if f.requestsErr != nil {
+		return page, f.requestsErr
+	}
+	for _, d := range f.requests {
+		if flt.State == "" || d.Request.State == flt.State {
+			page.Results = append(page.Results, requestdomain.SearchHit{Request: d.Request})
+		}
+	}
+	return page, nil
+}
+
+func (f *gardenFakeStore) GetRequest(id int64) (requestdomain.Detail, error) {
+	for _, d := range f.requests {
+		if d.Request.ID == id {
+			return d, nil
+		}
+	}
+	return requestdomain.Detail{}, errors.New("no such request")
+}
+
+func (f *gardenFakeStore) GhostTree(string, string) ([]store.GhostFile, error) { return f.ghosts, nil }
+
+func (f *gardenFakeStore) GhostReviews(string, string) ([]store.GhostReview, error) {
+	return f.reviews, nil
 }
 
 func (f *gardenFakeStore) ProjectKnowledge(string, bool) ([]store.Knowledge, error) {
@@ -49,6 +93,56 @@ func (f *gardenFakeStore) ProjectKnowledge(string, bool) ([]store.Knowledge, err
 func (f *gardenFakeStore) Remember(k store.Knowledge, _ scope.Axes) (store.Knowledge, error) {
 	f.written = append(f.written, k)
 	return k, nil
+}
+
+func (f *gardenFakeStore) RegisterCoordAgent(a store.CoordAgent) (int64, error) {
+	f.agents = append(f.agents, a)
+	return int64(len(f.agents)), nil
+}
+
+func (f *gardenFakeStore) ThreadsForObject(kind, id, _ string) ([]store.Thread, error) {
+	var out []store.Thread
+	for _, t := range f.threads {
+		for _, l := range f.links[t.ID] {
+			if l.Kind == kind && l.ID == id {
+				out = append(out, t)
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
+func (f *gardenFakeStore) ThreadLinks(id int64, _ string) ([]store.ThreadLink, error) {
+	return f.links[id], nil
+}
+
+func (f *gardenFakeStore) CreateThread(t store.Thread, _ string) (int64, error) {
+	if f.threadErr != nil {
+		return 0, f.threadErr
+	}
+	t.ID = int64(len(f.threads) + 1)
+	t.State = store.ThreadOpen
+	if f.links == nil {
+		f.links = map[int64][]store.ThreadLink{}
+	}
+	if t.Link != nil {
+		l := *t.Link
+		l.ThreadID = t.ID
+		f.links[t.ID] = append(f.links[t.ID], l)
+	}
+	f.threads = append(f.threads, t)
+	return t.ID, nil
+}
+
+func (f *gardenFakeStore) LinkThread(l store.ThreadLink, _ string) error {
+	f.links[l.ThreadID] = append(f.links[l.ThreadID], l)
+	return nil
+}
+
+func (f *gardenFakeStore) SendCoordMessage(m store.CoordMessage) (int64, error) {
+	f.posts = append(f.posts, m)
+	return int64(len(f.posts)), nil
 }
 
 type gardenFakeModel struct{ calls int }
@@ -196,21 +290,23 @@ func TestGardenAgentFilesProposalsAndRelationsOnceAndOnlyStaged(t *testing.T) {
 	if fr.calls != 1 {
 		t.Fatalf("sessions = %d, want one for the two entries", fr.calls)
 	}
-	if len(st.written) != 2 {
-		t.Fatalf("wrote %d, want the stale proposal and the contradiction: %s", len(st.written), out.String())
+	// The contradiction is a thread now, not a note.
+	if len(st.written) != 1 || len(st.threads) != 1 || len(st.posts) != 1 {
+		t.Fatalf("wrote %d notes, %d threads, %d posts, want the stale proposal and one thread with its first post: %s",
+			len(st.written), len(st.threads), len(st.posts), out.String())
 	}
 	for _, k := range st.written {
 		if k.Harness != "gardener" || k.Confidence != "staged" || k.Status != "active" || k.Origin == "human" {
 			t.Errorf("proposal must be staged and gardener-marked: %+v", k)
 		}
 	}
-	if !strings.Contains(out.String(), "1 of them about duplicates or contradictions") {
+	if !strings.Contains(out.String(), "1 contradictions opened as threads") {
 		t.Errorf("summary line: %s", out.String())
 	}
-	before := len(st.written)
+	before, threads := len(st.written), len(st.threads)
 	runGardenAgent(st, repo, gardenProject, opts, gardenPrice, "", &out)
-	if len(st.written) != before {
-		t.Errorf("second run wrote %d more", len(st.written)-before)
+	if len(st.written) != before || len(st.threads) != threads {
+		t.Errorf("second run wrote %d notes and opened %d threads more", len(st.written)-before, len(st.threads)-threads)
 	}
 	for _, k := range st.entries {
 		if k.Confidence != "trusted" || k.Status != "active" {

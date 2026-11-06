@@ -1,0 +1,38 @@
+Ketten: {'ghosttree': 8, 'native': 8, 'vanilla': 8, 'claudemem': 8}  ausgeschlossene Sessions: 0  ausgeschlossene Ketten: [{'cid': '450385', 'arm': 'claudemem', 'rep': 4, 'error': "OSError(39, 'Directory not empty')"}]
+
+Arm        n   Erfolg [95%]          func   know   USD/Sess Tokens   Züge  Tools  Zeit(s)  injiziert memTool
+vanilla     48  0.229 [0.000,0.562]  0.938  0.229  0.213     151514   6.3   5.3    46.0   0.00      0.00
+native      48  1.000 [1.000,1.000]  1.000  1.000  0.210     158950   6.5   5.5    44.7   1.00      0.35
+claudemem   48  0.250 [0.000,0.583]  0.917  0.250  0.247     197657   6.8   5.8    52.5   0.06      0.00
+ghosttree   48  1.000 [1.000,1.000]  1.000  1.000  0.299     274273  10.2   9.2    63.1   0.79      1.00
+
+Kontraste (Punkt [95%]):
+  ghosttree-vanilla      success=0.771 [0.438,1.000]  know=0.771 [0.438,1.000]  cost=0.086 [0.066,0.108]  tool_calls=3.917 [2.896,5.021]
+  ghosttree-native       success=0.000 [0.000,0.000]  know=0.000 [0.000,0.000]  cost=0.089 [0.067,0.114]  tool_calls=3.646 [3.042,4.312]
+  ghosttree-claudemem    success=0.750 [0.417,1.000]  know=0.750 [0.396,1.000]  cost=0.052 [0.030,0.078]  tool_calls=3.438 [2.375,4.792]
+  native-vanilla         success=0.771 [0.438,1.000]
+  claudemem-vanilla      success=0.021 [-0.062,0.125]
+
+Je Aufgabe (Erfolg):
+           vanilla      native   claudemem   ghosttree
+  F0           8/8         8/8         8/8         8/8
+  F1           0/8         8/8         0/8         8/8
+  F2           0/8         8/8         0/8         8/8
+  F3           0/8         8/8         0/8         8/8
+  F4           8/8         8/8         8/8         8/8
+  F5           3/8         8/8         4/8         8/8
+  F6           0/8         8/8         0/8         8/8
+
+Je Aufgabe (Wissen injiziert / per Gedächtniswerkzeug):
+  F0       0/8/0/8     0/8/0/8     0/8/0/8     0/8/0/8
+  F1       0/8/0/8     8/8/1/8     1/8/0/8     5/8/8/8
+  F2       0/8/0/8     8/8/6/8     0/8/0/8     6/8/8/8
+  F3       0/8/0/8     8/8/5/8     0/8/0/8     6/8/8/8
+  F4       0/8/0/8     8/8/1/8     2/8/0/8     8/8/8/8
+  F5       0/8/0/8     8/8/4/8     0/8/0/8     6/8/8/8
+  F6       0/8/0/8     8/8/0/8     0/8/0/8     7/8/8/8
+
+Kontrolle F0: {"vanilla": {"n": 8, "success": 1.0, "cost_mean": 0.10915295, "tokens_mean": 89726.375, "turns_mean": 4.75, "tool_calls_mean": 3.75, "wall_mean": 17.825}, "native": {"n": 8, "success": 1.0, "cost_mean": 0.09812425, "tokens_mean": 80369.125, "turns_mean": 4.375, "tool_calls_mean": 3.375, "wall_mean": 16.55}, "claudemem": {"n": 8, "success": 1.0, "cost_mean": 0.1300743, "tokens_mean": 114024.875, "turns_mean": 5.0, "tool_calls_mean": 4.0, "wall_mean": 22.5375}, "ghosttree": {"n": 8, "success": 1.0, "cost_mean": 0.138944775, "tokens_mean": 117460.5, "turns_mean": 5.25, "tool_calls_mean": 4.25, "wall_mean": 25.225}}
+Lernkosten je Kette (USD): {'vanilla': 1.488, 'native': 1.461, 'claudemem': 1.774, 'ghosttree': 2.168}
+claude-mem Observer: {'3e4e1d': {'learn_promptNumber': 29, 'learn_inputTokens': 78, 'learn_cacheCreationInputTokens': 94459, 'learn_cacheReadInputTokens': 368263, 'learn_fullContextTokens': 462800, 'learn_outputTokens': 18117, 'learn_turns': 21, 'followup_promptNumber': 33, 'followup_inputTokens': 118, 'followup_cacheCreationInputTokens': 195177, 'followup_cacheReadInputTokens': 472697, 'followup_fullContextTokens': 667992, 'followup_outputTokens': 37568, 'followup_turns': 33}, '5b4bfc': {'learn_promptNumber': 29, 'learn_inputTokens': 86, 'learn_cacheCreationInputTokens': 96542, 'learn_cacheReadInputTokens': 400330, 'learn_fullContextTokens': 496958, 'learn_outputTokens': 21092, 'learn_turns': 23, 'followup_promptNumber': 38, 'followup_inputTokens': 138, 'followup_cacheCreationInputTokens': 189734, 'followup_cacheReadInputTokens': 505950, 'followup_fullContextTokens': 695822, 'followup_outputTokens': 37726, 'followup_turns': 38}, '81308e': {'learn_promptNumber': 29, 'learn_inputTokens': 86, 'learn_cacheCreationInputTokens': 103438, 'learn_cacheReadInputTokens': 435981, 'learn_fullContextTokens': 539505, 'learn_outputTokens': 20603, 'learn_turns': 23, 'followup_promptNumber': 44, 'followup_inputTokens': 162, 'followup_cacheCreationInputTokens': 213432, 'followup_cacheReadInputTokens': 826667, 'followup_fullContextTokens': 1040261, 'followup_outputTokens': 43986, 'followup_turns': 44}, '880299': {'learn_promptNumber': 27, 'learn_inputTokens': 86, 'learn_cacheCreationInputTokens': 100311, 'learn_cacheReadInputTokens': 444426, 'learn_fullContextTokens': 544823, 'learn_outputTokens': 17905, 'learn_turns': 23, 'followup_promptNumber': 35, 'followup_inputTokens': 138, 'followup_cacheCreationInputTokens': 191237, 'followup_cacheReadInputTokens': 516281, 'followup_fullContextTokens': 707656, 'followup_outputTokens': 32285, 'followup_turns': 38}, 'a3d71d': {'learn_promptNumber': 27, 'learn_inputTokens': 74, 'learn_cacheCreationInputTokens': 98041, 'learn_cacheReadInputTokens': 344830, 'learn_fullContextTokens': 442945, 'learn_outputTokens': 18899, 'learn_turns': 20, 'followup_promptNumber': 39, 'followup_inputTokens': 142, 'followup_cacheCreationInputTokens': 208244, 'followup_cacheReadInputTokens': 560967, 'followup_fullContextTokens': 769353, 'followup_outputTokens': 37301, 'followup_turns': 39}, 'd0cfcb': {'learn_promptNumber': 28, 'learn_inputTokens': 82, 'learn_cacheCreationInputTokens': 106378, 'learn_cacheReadInputTokens': 406940, 'learn_fullContextTokens': 513400, 'learn_outputTokens': 17583, 'learn_turns': 22, 'followup_promptNumber': 40, 'followup_inputTokens': 146, 'followup_cacheCreationInputTokens': 196202, 'followup_cacheReadInputTokens': 568037, 'followup_fullContextTokens': 764385, 'followup_outputTokens': 40477, 'followup_turns': 40}, 'e0d9f4': {'learn_promptNumber': 26, 'learn_inputTokens': 78, 'learn_cacheCreationInputTokens': 102430, 'learn_cacheReadInputTokens': 384485, 'learn_fullContextTokens': 486993, 'learn_outputTokens': 20080, 'learn_turns': 21, 'followup_promptNumber': 39, 'followup_inputTokens': 138, 'followup_cacheCreationInputTokens': 196878, 'followup_cacheReadInputTokens': 482185, 'followup_fullContextTokens': 679201, 'followup_outputTokens': 32742, 'followup_turns': 39}, 'e2ab4a': {'learn_promptNumber': 32, 'learn_inputTokens': 98, 'learn_cacheCreationInputTokens': 99040, 'learn_cacheReadInputTokens': 457577, 'learn_fullContextTokens': 556715, 'learn_outputTokens': 15048, 'learn_turns': 26, 'followup_promptNumber': 37, 'followup_inputTokens': 134, 'followup_cacheCreationInputTokens': 208685, 'followup_cacheReadInputTokens': 591847, 'followup_fullContextTokens': 800666, 'followup_outputTokens': 37078, 'followup_turns': 37}}
+Entfernte Gedächtnisdateien (Sessions): {'vanilla_learning': 24}

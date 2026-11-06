@@ -1,0 +1,28 @@
+Ketten: {'ghosttree': 6, 'claudemem': 6, 'vanilla': 6, 'native': 6}  ausgeschlossene Sessions: 0  ausgeschlossene Ketten: []
+
+Arm        n   Erfolg [95%]          func   know   USD/Sess Tokens   Züge  Tools  Zeit(s)  injiziert memTool
+vanilla     12  0.000 [0.000,0.000]  1.000  0.000  0.505     538729  14.6  15.0   163.0   0.00      0.00
+native      12  0.917 [0.750,1.000]  0.917  1.000  0.450     457265  13.3  13.8   141.0   1.00      0.92
+claudemem   12  0.000 [0.000,0.000]  1.000  0.000  0.444     502254  12.8  11.8   159.0   0.00      0.00
+ghosttree   12  1.000 [1.000,1.000]  1.000  1.000  0.426     412963  12.2  12.3   145.7   0.92      0.83
+
+Kontraste (Punkt [95%]):
+  ghosttree-vanilla      success=1.000 [1.000,1.000]  know=1.000 [1.000,1.000]  cost=-0.079 [-0.137,-0.025]  tool_calls=-2.667 [-5.583,0.250]
+  ghosttree-native       success=0.083 [0.000,0.250]  know=0.000 [0.000,0.000]  cost=-0.025 [-0.075,0.023]  tool_calls=-1.417 [-3.500,0.917]
+  ghosttree-claudemem    success=1.000 [1.000,1.000]  know=1.000 [1.000,1.000]  cost=-0.019 [-0.067,0.032]  tool_calls=0.500 [-1.583,2.917]
+  native-vanilla         success=0.917 [0.750,1.000]
+  claudemem-vanilla      success=0.000 [0.000,0.000]
+
+Je Aufgabe (Erfolg):
+           vanilla      native   claudemem   ghosttree
+  NF1           0/6         5/6         0/6         6/6
+  NF2           0/6         6/6         0/6         6/6
+
+Je Aufgabe (Wissen injiziert / per Gedächtniswerkzeug):
+  NF1       0/6/0/6     6/6/6/6     0/6/0/6     6/6/5/6
+  NF2       0/6/0/6     6/6/5/6     0/6/0/6     5/6/5/6
+
+Kontrolle F0: {}
+Lernkosten je Kette (USD): {'vanilla': 0.243, 'native': 0.247, 'claudemem': 0.3, 'ghosttree': 0.359}
+claude-mem Observer: {'07c74f': {'learn_promptNumber': 6, 'learn_inputTokens': 18, 'learn_cacheCreationInputTokens': 17370, 'learn_cacheReadInputTokens': 40995, 'learn_fullContextTokens': 58383, 'learn_outputTokens': 3077, 'learn_turns': 5, 'followup_promptNumber': 23, 'followup_inputTokens': 88, 'followup_cacheCreationInputTokens': 113816, 'followup_cacheReadInputTokens': 641271, 'followup_fullContextTokens': 755175, 'followup_outputTokens': 25442, 'followup_turns': 23}, '2e815d': {'learn_promptNumber': 6, 'learn_inputTokens': 18, 'learn_cacheCreationInputTokens': 17585, 'learn_cacheReadInputTokens': 40467, 'learn_fullContextTokens': 58070, 'learn_outputTokens': 3856, 'learn_turns': 5, 'followup_promptNumber': 27, 'followup_inputTokens': 104, 'followup_cacheCreationInputTokens': 109690, 'followup_cacheReadInputTokens': 849337, 'followup_fullContextTokens': 959131, 'followup_outputTokens': 25917, 'followup_turns': 27}, '32bc6e': {'learn_promptNumber': 6, 'learn_inputTokens': 18, 'learn_cacheCreationInputTokens': 15524, 'learn_cacheReadInputTokens': 34309, 'learn_fullContextTokens': 49851, 'learn_outputTokens': 2650, 'learn_turns': 5, 'followup_promptNumber': 25, 'followup_inputTokens': 96, 'followup_cacheCreationInputTokens': 110263, 'followup_cacheReadInputTokens': 718683, 'followup_fullContextTokens': 829042, 'followup_outputTokens': 28101, 'followup_turns': 25}, '387013': {'learn_promptNumber': 5, 'learn_inputTokens': 14, 'learn_cacheCreationInputTokens': 15036, 'learn_cacheReadInputTokens': 27280, 'learn_fullContextTokens': 42330, 'learn_outputTokens': 2062, 'learn_turns': 4, 'followup_promptNumber': 18, 'followup_inputTokens': 68, 'followup_cacheCreationInputTokens': 89821, 'followup_cacheReadInputTokens': 360103, 'followup_fullContextTokens': 449992, 'followup_outputTokens': 19906, 'followup_turns': 18}, '44c072': {'learn_promptNumber': 6, 'learn_inputTokens': 18, 'learn_cacheCreationInputTokens': 16177, 'learn_cacheReadInputTokens': 37054, 'learn_fullContextTokens': 53249, 'learn_outputTokens': 3024, 'learn_turns': 5, 'followup_promptNumber': 26, 'followup_inputTokens': 100, 'followup_cacheCreationInputTokens': 130787, 'followup_cacheReadInputTokens': 847165, 'followup_fullContextTokens': 978052, 'followup_outputTokens': 24298, 'followup_turns': 26}, '9b9707': {'learn_promptNumber': 6, 'learn_inputTokens': 18, 'learn_cacheCreationInputTokens': 16422, 'learn_cacheReadInputTokens': 37427, 'learn_fullContextTokens': 53867, 'learn_outputTokens': 2846, 'learn_turns': 5, 'followup_promptNumber': 23, 'followup_inputTokens': 88, 'followup_cacheCreationInputTokens': 100734, 'followup_cacheReadInputTokens': 571389, 'followup_fullContextTokens': 672211, 'followup_outputTokens': 25145, 'followup_turns': 23}}
+Entfernte Gedächtnisdateien (Sessions): {'vanilla_learning': 6}

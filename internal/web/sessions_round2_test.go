@@ -101,9 +101,7 @@ func TestShareConfirmationIsAPageOfItsOwnNotAPostResponse(t *testing.T) {
 		t.Fatal(err)
 	}
 	tok := "ghp_" + strings.Repeat("a1B2", 9)
-	if err := e.St.AppendChunks(id, chunks(uLine("key "+tok))); err != nil {
-		t.Fatal(err)
-	}
+	appendLegacy(t, e.St, id, chunks(uLine("key "+tok)))
 	sess, _ := e.St.SessionByID(id)
 	token := renderedCSRFToken(t, e.Member, e.Base+"/ui/sessions")
 	resp := sameOriginPostForm(t, e.Member, e.Base+"/ui/sessions/"+sess.PublicID+"/share", url.Values{"csrf_token": {token}, "level": {store.VisGuests}})

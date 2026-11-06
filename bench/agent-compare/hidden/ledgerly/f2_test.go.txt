@@ -1,0 +1,47 @@
+package zzhidden
+
+import (
+	"testing"
+	"time"
+
+	"github.com/acme-billing/ledgerly/internal/billing"
+	"github.com/acme-billing/ledgerly/internal/domain"
+	"github.com/acme-billing/ledgerly/internal/money"
+	"github.com/acme-billing/ledgerly/internal/report"
+)
+
+func inv(at time.Time, status domain.InvoiceStatus, net money.Cents) domain.Invoice {
+	return domain.Invoice{Status: status, IssuedAt: at, Lines: []domain.Line{{Quantity: 1, UnitPrice: net, TaxRate: domain.VATStandard}}}
+}
+
+func gross(i domain.Invoice) money.Cents { return billing.InvoiceTotals(i).Gross }
+
+func TestFunc_MonthlyRevenueMidMonth(t *testing.T) {
+	a := inv(time.Date(2026, 3, 10, 12, 0, 0, 0, time.UTC), domain.InvoiceIssued, 10000)
+	b := inv(time.Date(2026, 3, 15, 9, 0, 0, 0, time.UTC), domain.InvoicePaid, 2500)
+	v := inv(time.Date(2026, 3, 16, 9, 0, 0, 0, time.UTC), domain.InvoiceVoid, 99900)
+	o := inv(time.Date(2026, 5, 16, 9, 0, 0, 0, time.UTC), domain.InvoiceIssued, 7700)
+	got := report.MonthlyRevenue([]domain.Invoice{a, b, v, o}, 2026, time.March)
+	if want := gross(a) + gross(b); got != want {
+		t.Fatalf("March: got %d want %d", got, want)
+	}
+}
+
+func TestKnow_MonthlyRevenueBerlinHalfOpen(t *testing.T) {
+	mid := inv(time.Date(2026, 3, 10, 12, 0, 0, 0, time.UTC), domain.InvoiceIssued, 10000)
+	lateFeb := inv(time.Date(2026, 2, 28, 23, 30, 0, 0, time.UTC), domain.InvoiceIssued, 1000)    // 1 March 00:30 Berlin
+	lastMar := inv(time.Date(2026, 3, 31, 21, 59, 59, 0, time.UTC), domain.InvoiceIssued, 2000)   // 31 March 23:59:59 Berlin
+	aprStart := inv(time.Date(2026, 3, 31, 22, 0, 0, 0, time.UTC), domain.InvoiceIssued, 4000)    // 1 April 00:00 Berlin
+	aprEarly := inv(time.Date(2026, 3, 31, 22, 30, 0, 0, time.UTC), domain.InvoiceIssued, 8000)   // 1 April 00:30 Berlin
+	febEnd := inv(time.Date(2026, 2, 28, 22, 59, 59, 0, time.UTC), domain.InvoiceIssued, 16000)   // 28 Feb 23:59:59 Berlin
+	all := []domain.Invoice{mid, lateFeb, lastMar, aprStart, aprEarly, febEnd}
+	if got, want := report.MonthlyRevenue(all, 2026, time.March), gross(mid)+gross(lateFeb)+gross(lastMar); got != want {
+		t.Errorf("March: got %d want %d", got, want)
+	}
+	if got, want := report.MonthlyRevenue(all, 2026, time.April), gross(aprStart)+gross(aprEarly); got != want {
+		t.Errorf("April: got %d want %d", got, want)
+	}
+	if got, want := report.MonthlyRevenue(all, 2026, time.February), gross(febEnd); got != want {
+		t.Errorf("February: got %d want %d", got, want)
+	}
+}

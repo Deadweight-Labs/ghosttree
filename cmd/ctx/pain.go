@@ -175,7 +175,12 @@ func cmdPain(args []string, stdout io.Writer) int {
 			return 0
 		}
 		for _, p := range list {
-			fmt.Fprintf(stdout, "%-8s %-10s %s\n", p.HumanID(), p.State, p.Title)
+			marker := ""
+			if p.Match != "" {
+				// Found by meaning, not by the words of the query.
+				marker = "  [match: " + p.Match + "]"
+			}
+			fmt.Fprintf(stdout, "%-8s %-10s %s%s\n", p.HumanID(), p.State, p.Title, marker)
 			if p.State == pain.Mitigated {
 				fmt.Fprintf(stdout, "%-8s %-10s remaining: %s\n", "", "", p.Remaining)
 			}

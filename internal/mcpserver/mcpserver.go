@@ -653,7 +653,13 @@ func renderKnowledge(k store.Knowledge) string {
 	if len([]rune(body)) > snippetChars {
 		body = string([]rune(body)[:snippetChars]) + "…"
 	}
-	return fmt.Sprintf("- #%d [%s] %s — %s\n", k.ID, knowledgeLabel(k), k.Title, body)
+	label := knowledgeLabel(k)
+	if k.Match != "" {
+		// Found by meaning, not by the words of the query: say so, the reader
+		// should weigh it differently from an exact word hit.
+		label += "|match:" + k.Match
+	}
+	return fmt.Sprintf("- #%d [%s] %s — %s\n", k.ID, label, k.Title, body)
 }
 
 // renderKnowledgeFull answers the other question: not "which entries are there"
@@ -685,8 +691,14 @@ func renderSession(se store.Session) string {
 }
 
 func renderHit(h store.SessionHit) string {
-	return fmt.Sprintf("- %s %s %s %s (%s) — %s\n", sessionLabel(h.Session), h.Session.Harness,
-		h.Session.Scope.Project, h.Session.Scope.Branch, h.Session.LastSeenAt, oneLine(h.Snippet))
+	meta := fmt.Sprintf("%s %s %s %s (%s)", sessionLabel(h.Session), h.Session.Harness,
+		h.Session.Scope.Project, h.Session.Scope.Branch, h.Session.LastSeenAt)
+	if h.Match != "" {
+		// Found by meaning, not by the words of the query: the snippet is the text of
+		// the session that came closest, and the reader should weigh the hit that way.
+		meta += " [match:" + h.Match + "]"
+	}
+	return fmt.Sprintf("- %s — %s\n", meta, oneLine(h.Snippet))
 }
 
 func scopeLabel(ax scope.Axes) string { return ax.Label() }

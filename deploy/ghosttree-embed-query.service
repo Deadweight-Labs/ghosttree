@@ -1,0 +1,57 @@
+[Unit]
+Description=ghosttree embedding server for search queries (llama.cpp llama-server, EmbeddingGemma 2)
+Documentation=https://github.com/Deadweight-Labs/ghosttree/blob/main/deploy/README.md
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+# A second llama-server with the same model file as ghosttree-embed.service, for
+# the queries of searches alone (GHOSTTREE_EMBED_QUERY_URL). The background job
+# keeps using ghosttree-embed.service; while it embeds documents there, a query
+# on the same server waits behind them, and a search runs into its time limit
+# and is answered from full text. This server has nothing else to do, so a query
+# is answered at once. Both servers must serve the same model: ghosttree compares
+# them at start and now and then (see "A second server for queries" in
+# deploy/README.md).
+#
+# EMBED_IMAGE and EMBED_MODEL_DIR are the ones of ghosttree-embed.service and are
+# read from the same /etc/ghosttree/embed.env; the port has a name of its own so
+# that EMBED_PORT of the other unit does not move this one.
+Environment=EMBED_IMAGE=ghcr.io/ggml-org/llama.cpp:server
+Environment=EMBED_MODEL_DIR=/var/lib/ghosttree-embed
+Environment=EMBED_QUERY_PORT=8476
+EnvironmentFile=-/etc/ghosttree/embed.env
+ExecStartPre=-/usr/bin/docker rm -f ghosttree-embed-query
+# The container is smaller than the other one: one core, 768 MiB without swap (the
+# model file alone is about 295 MB). The port is published on the loopback address
+# only; inside the container the server listens on 8080, set explicitly because
+# the default port changes between llama.cpp releases.
+#
+# Server arguments:
+#   --embeddings --pooling mean   the model's pooling; this is an embedding model
+#   -c 1024 -np 1                 one slot with a context of 1024 tokens; ghosttree
+#                                 cuts a query to 1000 characters, which fits even
+#                                 for a text of one token per character. A text of
+#                                 rare characters can need more; the server then
+#                                 refuses it and that search is answered from full
+#                                 text
+#   -ub 1024 -b 1024              an embedding needs the whole text in one physical
+#                                 batch, so the batch cannot be smaller than the
+#                                 context
+#   -t 1                          one thread, matching --cpus 1
+ExecStart=/usr/bin/docker run --rm --name ghosttree-embed-query \
+  --memory 768m --memory-swap 768m --cpus 1 \
+  --read-only --cap-drop ALL --security-opt no-new-privileges \
+  -p 127.0.0.1:${EMBED_QUERY_PORT}:8080 \
+  -v ${EMBED_MODEL_DIR}:/models:ro \
+  ${EMBED_IMAGE} \
+  -m /models/embeddinggemma-2-Q8_0.gguf --alias embeddinggemma-2-q8_0 \
+  --host 0.0.0.0 --port 8080 \
+  --embeddings --pooling mean -c 1024 -ub 1024 -b 1024 -np 1 -t 1
+ExecStop=/usr/bin/docker stop ghosttree-embed-query
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

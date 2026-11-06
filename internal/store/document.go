@@ -25,6 +25,10 @@ type Document struct {
 	Person       string `json:"person"`
 	CreatedAt    string `json:"created_at"`
 	UpdatedAt    string `json:"updated_at"`
+	// Match is set by a search and only to MatchSemantic: the embedding found the
+	// document alone, its words do not match the query. A hit of the full-text
+	// index leaves it empty, which is also how every other read leaves it.
+	Match string `json:"match,omitempty"`
 }
 
 type DocumentRevision struct {

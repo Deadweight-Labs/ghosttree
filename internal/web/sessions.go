@@ -723,6 +723,10 @@ func (a *app) groupView(l lang, g store.SearchGroup, query, kind string, now tim
 	if g.Total == 1 {
 		count = l.msg("sessions.matches_one")
 	}
+	if g.Match == store.MatchSemantic {
+		// Found by meaning: no word of the query is in it to be counted.
+		count = ""
+	}
 	gv := groupView{PID: s.PublicID, Href: "/ui/sessions/" + s.PublicID, Title: title, Meta: sessionMeta(s), Count: count, Time: dayAndClock(l, s.LastSeenAt, now)}
 	for _, h := range g.Hits {
 		q := url.Values{"at": {strconv.Itoa(h.Seq)}, "q": {query}, "back": {"1"}}
@@ -1107,7 +1111,10 @@ func (a *app) sessionShare(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/ui/sessions/"+sess.PublicID, http.StatusSeeOther)
 }
 
-// countSecrets zählt mögliche Zugangsdaten im Rohtranskript.
+// countSecrets zählt mögliche Zugangsdaten im Rohtranskript. Es ist dieselbe
+// Erkennung, mit der der Server beim Speichern schwärzt (redact), auf die
+// JSON-Zeile angewandt: neue Chunks haben nichts mehr zu melden, die Frage gilt
+// dem Bestand, den ctx redact-sessions noch nicht erreicht hat.
 func (a *app) countSecrets(id int64) int {
 	n := 0
 	for from := 0; ; {
@@ -1116,7 +1123,7 @@ func (a *app) countSecrets(id int64) int {
 			return n
 		}
 		for _, c := range chunks {
-			n += len(redact.FindSecrets(c.Raw))
+			n += len(redact.FindSecretsIn(c.Raw, redact.JSON))
 			from = c.Seq + 1
 		}
 	}

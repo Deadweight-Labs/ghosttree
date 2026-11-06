@@ -221,7 +221,9 @@ func (a *app) requestsPage(w http.ResponseWriter, r *http.Request) {
 	default:
 		filter.State = state
 	}
-	if _, err := strconv.ParseInt(filter.Cursor, 10, 64); err != nil {
+	// The cursor is the id of a request, or, in a search ranked by meaning, a
+	// position (~N).
+	if !store.ValidRequestCursor(filter.Cursor) {
 		filter.Cursor = ""
 	}
 	filter.Priority = priority
@@ -230,7 +232,7 @@ func (a *app) requestsPage(w http.ResponseWriter, r *http.Request) {
 	progress := map[int64]store.CriteriaProgress{}
 	var work map[int64][]store.ActiveRequestWork
 	var err error
-	if page, err = a.store.SearchRequests(pa.RequestFilter(filter)); err != nil {
+	if page, err = a.store.SearchRequestsWith(pa.RequestFilter(filter), store.SearchAuto); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

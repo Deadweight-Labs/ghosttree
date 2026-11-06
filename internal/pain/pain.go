@@ -31,6 +31,10 @@ type Pain struct {
 	UpdatedAt string `json:"updated_at"`
 	// AuthorID is the account that wrote the pain; never delivered.
 	AuthorID int64 `json:"-"`
+	// Match is set by a search and only to "semantic": the embedding found the
+	// pain alone, its words do not match the query. A hit of the text match
+	// leaves it empty, which is also how every other read leaves it.
+	Match string `json:"match,omitempty"`
 }
 
 func (p Pain) HumanID() string { return fmt.Sprintf("PAIN-%d", p.ID) }
@@ -79,7 +83,12 @@ type Detail struct {
 
 // Filter limits SearchPains. State "" means active and mitigated, "all" every state.
 type Filter struct {
-	Project   string
+	Project string
+	// Projects, when it is not empty, is searched instead of Project, in one
+	// query: one embedding of the query, one share of hits for meaning alone for
+	// the whole list. The pains come project after project in the order given,
+	// each by state.
+	Projects  []string
 	State     string
 	Query     string
 	RequestID int64

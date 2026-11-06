@@ -68,6 +68,22 @@ func (s *Looked) Has(ref string) bool {
 	return false
 }
 
+// HasRead says whether the session opened the file with the Read tool, not
+// merely saw its name in the output of a search. A description is written from
+// what was read.
+func (s *Looked) HasRead(file string) bool {
+	if s == nil {
+		return true
+	}
+	f := strings.TrimPrefix(strings.TrimSpace(file), "./")
+	for p := range s.Read {
+		if p == f || strings.HasSuffix(p, "/"+f) {
+			return true
+		}
+	}
+	return false
+}
+
 type streamUsage struct {
 	InputTokens              int `json:"input_tokens"`
 	OutputTokens             int `json:"output_tokens"`
@@ -334,6 +350,10 @@ func (c ClaudeConfig) Args(s SessionSpec) ([]string, error) {
 		}
 		denied = append(denied, "Read(/"+p+"/**)", "Read(/"+p+")")
 	}
+	system := s.System
+	if system == "" {
+		system = AgentSystemPrompt(c.ghosttreeTools())
+	}
 	args := []string{
 		"-p", "--output-format", "stream-json", "--verbose",
 		"--permission-mode", "dontAsk",
@@ -342,7 +362,7 @@ func (c ClaudeConfig) Args(s SessionSpec) ([]string, error) {
 		"--disallowedTools", strings.Join(denied, ","),
 		"--setting-sources", "user",
 		"--no-session-persistence",
-		"--append-system-prompt", AgentSystemPrompt(c.ghosttreeTools()),
+		"--append-system-prompt", system,
 		"--max-turns", fmt.Sprint(s.MaxTurns),
 	}
 	if c.Model != "" {

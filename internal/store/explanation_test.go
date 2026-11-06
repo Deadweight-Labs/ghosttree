@@ -468,6 +468,48 @@ func TestGardenChecksAreRememberedPerProjectAndEntry(t *testing.T) {
 	}
 }
 
+// The ledger and the ghost job keep their looks in the same table under names with
+// a "|" in them; they are not knowledge entries, and the count of entries looked
+// at does not include them.
+func TestGardenChecksOfTheOtherJobsHaveANameOfTheirOwnAndAreNotEntries(t *testing.T) {
+	st := openLLMMem(t)
+	for name, id := range map[string]int64{"p": 5, "ledger|p": 5, "ghosts|p": 5} {
+		if err := st.SaveGardenCheck(name, GardenCheck{KnowledgeID: id, CheckedAt: "2026-10-01T00:00:00Z", Commit: name, Verdict: "x"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"p", "ledger|p", "ghosts|p"} {
+		got, err := st.GardenChecks(name)
+		if err != nil || len(got) != 1 || got[5].Commit != name {
+			t.Errorf("%s: %+v %v", name, got, err)
+		}
+	}
+	if n, _, _ := st.GardenCheckSummary(); n != 1 {
+		t.Errorf("%d entries looked at, want the 1 knowledge entry", n)
+	}
+}
+
+func TestGhostDescriptionsAreHashedAndCleanedTheSameWayEverywhere(t *testing.T) {
+	if GhostDescriptionHash("  Ein Text \n") != GhostDescriptionHash("Ein Text") || GhostDescriptionHash("a") == GhostDescriptionHash("b") || len(GhostDescriptionHash("")) != 12 {
+		t.Error("the hash of a description")
+	}
+	long := strings.Repeat("Wort ", 20)
+	if got, why := CleanGhostDescription("\r\n" + long + "\r\nZweite Zeile\r\n"); why != "" || got != long+"\nZweite Zeile" {
+		t.Errorf("clean = %q (%s)", got, why)
+	}
+	for in, want := range map[string]string{
+		"": "leerer Text", "kurz": "zu kurz", strings.Repeat("x", GhostDescriptionMax+1): "zu lang",
+		long + "\x00": "Steuerzeichen", long + "\x1b[0m": "Steuerzeichen", long + "\u202e": "Steuerzeichen", long + "\ufeff": "Steuerzeichen", long + "\xff": "UTF-8",
+	} {
+		if _, why := CleanGhostDescription(in); !strings.Contains(why, want) {
+			t.Errorf("%q: %q, want %q", in, why, want)
+		}
+	}
+	if _, why := CleanGhostDescription(long + "\tmit Tab\n\n👩\u200d💻 und Emoji"); why != "" {
+		t.Errorf("a text with a tab, blank lines and an emoji: %s", why)
+	}
+}
+
 func openLLMMem(t *testing.T) *Store {
 	t.Helper()
 	st, err := Open(":memory:")

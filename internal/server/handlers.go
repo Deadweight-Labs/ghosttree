@@ -247,6 +247,9 @@ func (a *api) createKnowledge(w http.ResponseWriter, r *http.Request) {
 	if k.Scope.IsGlobal() && req.AutoScope != nil {
 		k.Scope = scope.DefaultAxes(k.Type, req.AutoScope.Context)
 	}
+	if !a.gateGardener(w, r, k) {
+		return
+	}
 	if !a.gateMachineNote(w, r, k.Scope.Machine) || !a.gateProject(w, r, k.Scope.Project) {
 		return
 	}
@@ -295,6 +298,25 @@ func (a *api) createKnowledge(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, a.access(r).KnowledgeView(saved))
 }
 
+// gateGardener keeps the gardener's marks the gardener's (REQ-457). An entry with
+// harness "gardener" or a "gardener:" session reference is what the review page
+// offers one-click actions on (merge duplicates, record a regression verdict),
+// and it takes its target from that reference; so only the account the server
+// names as the gardener's (an account number, set with `ctx account set-gardener`)
+// may write one. Everyone else, and everyone when no account is set, is refused
+// before anything is written, whatever else the entry says.
+func (a *api) gateGardener(w http.ResponseWriter, r *http.Request, k store.Knowledge) bool {
+	if !store.ReservedForGardener(k) || a.st.IsGardenerPrincipal(principalOf(r)) {
+		return true
+	}
+	msg := `harness "gardener" and "gardener:" references are reserved for the account the gardener runs as`
+	if a.st.GardenerAccountID() == 0 {
+		msg += " (none is set: ctx account set-gardener <name> --db <database>)"
+	}
+	writeCoded(w, http.StatusForbidden, "gardener_reserved", msg)
+	return false
+}
+
 func (a *api) listKnowledge(w http.ResponseWriter, r *http.Request) {
 	var ks []store.Knowledge
 	var err error
@@ -324,6 +346,9 @@ func (a *api) insertMigratedKnowledge(w http.ResponseWriter, r *http.Request) {
 	var in store.MigratedEntry
 	if err := readJSON(r, &in); err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)
+		return
+	}
+	if !a.gateGardener(w, r, in.Knowledge) {
 		return
 	}
 	in.Knowledge.Person = personOf(r)
@@ -651,22 +676,29 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 	pa.Filtered()
 	res := searchResult{Knowledge: []store.Knowledge{}, Sessions: []store.SessionHit{}, Requests: []requestdomain.SearchHit{}}
 	if kind == "knowledge" || kind == "all" {
+		// Suche und Bootstrap beliefern Agenten: zusätzlich zur Sichtbarkeit gilt
+		// die Auslieferungsregel (Autor ist im Projekt aktuell member).
+		readable := func(k store.Knowledge) bool { return pa.CanSeeKnowledge(k) && pa.CanDeliverKnowledge(k) }
 		// scope=union searches what the session would read, not an exact match.
-		search := a.st.SearchKnowledge
-		if r.URL.Query().Get("scope") == "union" {
-			search = a.st.SearchKnowledgeForContext
-		}
-		ks, err := search(q, filter, fetch, pa.Viewer())
+		// Die Leseregel geht mit in die Suche: die hybride Suche wendet sie vor der
+		// Rangfusion an, damit eine verborgene Zeile keine sichtbare verschiebt.
+		// Gezählt wird, was ausgeliefert wird, und nur das: der Überhang, den die
+		// Abfrage für die Filter holt, und was die Regel verwirft, ist nicht benutzt.
+		ks, err := a.st.SearchKnowledgeWith(q, store.KnowledgeSearch{
+			Axes: filter, Union: r.URL.Query().Get("scope") == "union",
+			Limit: fetch, Viewer: pa.Viewer(), Keep: readable, Prefilter: pa.KnowledgePrefilter(),
+			NoRecord: true,
+		})
 		if err != nil {
 			writeStoreError(w, http.StatusInternalServerError, err)
 			return
 		}
-		// Suche und Bootstrap beliefern Agenten: zusätzlich zur Sichtbarkeit gilt
-		// die Auslieferungsregel (Autor ist im Projekt aktuell member).
-		res.Knowledge = pa.KnowledgeViews(filterTo(ks, limit, func(k store.Knowledge) bool { return pa.CanSeeKnowledge(k) && pa.CanDeliverKnowledge(k) }))
+		delivered := filterTo(ks, limit, readable)
+		a.st.RecordKnowledgeSearchHits(delivered)
+		res.Knowledge = pa.KnowledgeViews(delivered)
 	}
 	if kind == "sessions" || kind == "all" {
-		hits, err := a.searchSessions(pa, q, filter, r.URL.Query().Get("exclude_session"), limit, fetch)
+		hits, err := a.searchSessions(pa, q, filter, r.URL.Query().Get("exclude_session"), limit, fetch, store.SearchAuto)
 		if err != nil {
 			writeStoreError(w, http.StatusInternalServerError, err)
 			return
@@ -674,7 +706,9 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 		res.Sessions = hits
 	}
 	if kind == "requests" || kind == "all" {
-		page, err := a.st.SearchRequests(a.requestFilter(r, requestdomain.SearchFilter{Query: q, Scope: scope.Axes{Project: filter.Project}, Limit: limit}))
+		// With embeddings the requests are ranked by words and by meaning; the
+		// filter, with the visibility of the reader, is the same SQL for both.
+		page, err := a.st.SearchRequestsWith(a.requestFilter(r, requestdomain.SearchFilter{Query: q, Scope: scope.Axes{Project: filter.Project}, Limit: limit}), store.SearchAuto)
 		if err != nil {
 			writeStoreError(w, http.StatusInternalServerError, err)
 			return
@@ -692,7 +726,12 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 // cut to limit, each as the viewer sees it. It is a function of its own because
 // the hint of relevance delivery has to ask the same question with the same
 // rules, so that a hint can never name a session context_search would not show.
-func (a *api) searchSessions(pa *store.ProjectAccess, q string, filter scope.Axes, excludeSession string, limit, fetch int) ([]store.SessionHit, error) {
+//
+// mode is SearchAuto for a search, which with the embedding server configured and
+// sessions switched on ranks by words and by meaning (one hit for each session,
+// marked when only the meaning found it), and SearchFullTextOnly for the hint,
+// which asks for one word and is never sent to the embedding server.
+func (a *api) searchSessions(pa *store.ProjectAccess, q string, filter scope.Axes, excludeSession string, limit, fetch int, mode store.SearchMode) ([]store.SessionHit, error) {
 	dbFilter, viewFilter, fetchSessions := a.sessionFilters(filter, fetch)
 	// Mit Durchsetzung steht die lesbare Menge vor dem Rang fest: ein
 	// verborgener Treffer darf weder einen sichtbaren verdrängen noch
@@ -713,7 +752,9 @@ func (a *api) searchSessions(pa *store.ProjectAccess, q string, filter scope.Axe
 			}
 		}
 	}
-	hits, err := a.st.SearchSessionsVisible(q, dbFilter, excludeSession, fetchSessions, readable, pre)
+	hits, err := a.st.SearchSessionsWith(q, store.SessionSearch{
+		Filter: dbFilter, ExcludeSession: excludeSession, Limit: fetchSessions, Keep: readable, Prefilter: pre, Mode: mode,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -1071,6 +1112,15 @@ func (a *api) putGhost(w http.ResponseWriter, r *http.Request) {
 	if denyAccess(w, a.access(r).Check(g.Project, store.ResGhost, store.ActCreate, store.Object{})) {
 		return
 	}
+	// "From the gardener, adopted by <person>" is written on a description only by
+	// the review page, when a person confirms a proposal of the gardener, with
+	// the text and the content hashes of the note the gardener's account wrote.
+	// Nobody may claim it through this call, the gardener's own account included:
+	// the gardener proposes, it does not describe.
+	if store.ReservedForGardener(store.Knowledge{Harness: g.Harness, SessionRef: g.SessionRef}) {
+		writeCoded(w, http.StatusForbidden, "gardener_reserved", `harness "gardener" and "gardener:" references on a description are set only when a person adopts a proposal of the gardener on the review page`)
+		return
+	}
 	g.Person = personOf(r)
 	id, err := a.st.PutGhostFile(g)
 	if err != nil {
@@ -1177,12 +1227,18 @@ func (a *api) searchGhosts(w http.ResponseWriter, r *http.Request) {
 	}
 	pa.Filtered()
 	limit := intParam(r, "limit", 20)
-	entries, err := a.st.SearchGhostFiles(q.Get("q"), q.Get("project"), a.overfetch(limit))
+	readable := func(g store.GhostFile) bool { return pa.CanSeeGhost(g) && pa.CanDeliverGhost(g) }
+	// The rule goes into the search: the hybrid search applies it to both rankings
+	// before it fuses them, so a description the reader may not see can neither
+	// appear nor move a visible one.
+	entries, err := a.st.SearchGhostFilesWith(q.Get("q"), store.GhostSearch{
+		Project: q.Get("project"), Limit: a.overfetch(limit), Keep: readable, Prefilter: pa.GhostPrefilter(),
+	})
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, 200, filterTo(entries, limit, func(g store.GhostFile) bool { return pa.CanSeeGhost(g) && pa.CanDeliverGhost(g) }))
+	writeJSON(w, 200, filterTo(entries, limit, readable))
 }
 
 // sessionFilters trennt den Filter für die Datenbank von dem, der auf das

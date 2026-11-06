@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"syscall"
@@ -93,7 +94,13 @@ func cmdWatch(args []string, stdout io.Writer) int {
 		defer os.Remove(pid)
 	}
 	fmt.Fprintf(stdout, "watching transcripts for %s every %s\n", cfg.Machine, *interval)
-	if err := collector.Watch(roots, c, st, cfg.Machine, *interval); err != nil {
+	// Bei SIGTERM (systemctl stop/restart) noch den gebündelten Zustand schreiben.
+	stop := make(chan struct{})
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGTERM, os.Interrupt)
+	defer signal.Stop(sig)
+	go func() { <-sig; close(stop) }()
+	if err := collector.Watch(roots, c, st, cfg.Machine, *interval, stop); err != nil {
 		fmt.Fprintf(stdout, "watch: %v\n", err)
 		return 1
 	}

@@ -42,6 +42,8 @@ type serveConfig struct {
 	Explain        ExplainConfig
 	// GardenLimits are shown to administrators; the gardener itself runs as a command.
 	GardenLimits llmusage.Limits
+	// Embed configures hybrid search; without a URL it is off.
+	Embed embedSettings
 }
 
 const (
@@ -55,7 +57,7 @@ const (
 	// wird nur protokolliert, was verweigert würde ("access: would deny").
 	envEnforceAccess = "GHOSTTREE_ENFORCE_ACCESS"
 	// envPublicURL and envTrustedProxies describe the TLS/proxy boundary; see
-	// the README section "Running behind TLS or a reverse proxy".
+	// the section "Running behind TLS or a reverse proxy" in docs/operations.md.
 	envPublicURL      = "GHOSTTREE_PUBLIC_URL"
 	envTrustedProxies = "GHOSTTREE_TRUSTED_PROXIES"
 	// envDistDir names a directory with the ctx release archives and
@@ -131,6 +133,7 @@ func parseServeConfig(args []string, output io.Writer) (serveConfig, error) {
 	fs.StringVar(&cfg.Explain.Mode, "explain", explainMode, "\"In short\" notes: auto (generate missing ones when a model is configured) or off (env "+envExplain+")")
 	fs.StringVar(&cfg.Explain.Model, "explain-model", os.Getenv(envExplainModel), "model for the notes, overriding the provider configuration (env "+envExplainModel+")")
 	explainLimits := addLimitFlags(fs, llmusage.JobExplain, "explain-")
+	embedFlagSet := addEmbedFlags(fs, true)
 	trusted := fs.String("trusted-proxies", os.Getenv(envTrustedProxies), "comma-separated CIDRs/IPs of reverse proxies whose X-Forwarded-Proto/Host are believed; loopback is always trusted, nothing else by default (env "+envTrustedProxies+")")
 	// Das Secret gibt es bewusst nur über die Umgebung: ein Flag stünde in der Prozessliste.
 	cfg.OIDC.ClientSecret = os.Getenv(envOIDCClientSecret)
@@ -149,6 +152,9 @@ func parseServeConfig(args []string, output io.Writer) (serveConfig, error) {
 		return serveConfig{}, fmt.Errorf("--language: %w", err)
 	}
 	cfg.Language = lang
+	if cfg.Embed, err = embedFlagSet.resolve(); err != nil {
+		return serveConfig{}, err
+	}
 	cfg.Explain.Language = lang
 	if cfg.Explain.Limits, err = explainLimits(); err != nil {
 		return serveConfig{}, err
@@ -303,6 +309,11 @@ func runServer(ctx context.Context, st *store.Store, cfg serveConfig, stdout, st
 		}
 	}
 	slog.New(slog.NewJSONHandler(stderr, nil)).Info("writer_config", "max_operations", cfg.Writer.MaxOperations, "max_bytes", cfg.Writer.MaxBytes, "max_batch", cfg.Writer.MaxBatch, "read_connections", cfg.Writer.ReadConnections)
+	if a, ok := st.GardenerAccount(); ok {
+		slog.New(slog.NewJSONHandler(stderr, nil)).Info("gardener_account", "set", true, "account", a.ID, "name", a.Name)
+	} else {
+		slog.New(slog.NewJSONHandler(stderr, nil)).Info("gardener_account", "set", false, "note", "nobody may write gardener entries; set the account with: ctx account set-gardener <name> --db <database>")
+	}
 	// The session search index of chunks written before it existed is caught up
 	// in the background, in small resumable steps; serving does not wait for it.
 	indexCtx, stopIndex := context.WithCancel(ctx)
@@ -319,7 +330,14 @@ func runServer(ctx context.Context, st *store.Store, cfg serveConfig, stdout, st
 		}
 		logger.Info("session_index_backfill", "state", "complete", "seconds", int(time.Since(started).Seconds()))
 	}()
+	// Hybrid search and the background job that feeds it are only started with an
+	// embedding server configured. The job begins late and works in small, paused
+	// steps in a goroutine of its own, so serving does not wait for it either.
+	embedCtx, stopEmbed := context.WithCancel(ctx)
+	waitEmbed := startEmbedding(embedCtx, st, cfg.Embed, slog.New(slog.NewJSONHandler(stderr, nil)))
 	err := serveUntilCanceled(ctx, newHTTPServer(cfg.Listen, buildServerHandler(st, cfg, stderr)))
+	stopEmbed()
+	waitEmbed()
 	stopIndex()
 	<-indexDone
 	if err != nil {
