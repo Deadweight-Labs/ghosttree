@@ -7,18 +7,19 @@ request is the easiest place to start.
 
 1. Search existing issues and requests for the same problem.
 2. Open an issue before making a large behavioral or storage change.
-3. Branch from `dev` using `feature/`, `fix/`, `docs/`, `test/`, or `chore/`.
+3. Branch from `dev` using `feat/`, `fix/`, `docs/`, `test/`, or `chore/`.
 4. Keep internal plans and specs out of the repository. Use Ghosttree's document
    lifecycle when the work needs a long-form design.
 5. Add tests for changed behavior and run the local checks.
 
 ```bash
-find cmd internal skills -name '*.go' -type f -print0 | xargs -0 gofmt -w
-go vet ./...
-go test -race -count=1 ./...
-go mod tidy
-git diff --exit-code -- go.mod go.sum
+make verify
 ```
+
+`make verify` checks formatting, runs `go vet` and the race tests, checks that
+`go mod tidy` leaves `go.mod` and `go.sum` unchanged, and builds all release
+targets. To format the code first, run
+`find cmd internal skills -name '*.go' -type f -print0 | xargs -0 gofmt -w`.
 
 ## Pull requests
 

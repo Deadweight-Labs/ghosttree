@@ -19,7 +19,7 @@ GHOSTTREE_LISTEN=<private-address>:8474
 
 Behind a TLS terminator add the proxy settings to the same file (the unit
 passes the environment to `ctx serve`); see "Running behind TLS or a reverse
-proxy" in the main README:
+proxy" in [`docs/operations.md`](../docs/operations.md):
 
 ```text
 GHOSTTREE_PUBLIC_URL=https://ghosttree.example.com
@@ -700,8 +700,8 @@ current note. `ghosttree-explain.timer` runs it hourly, which is cheap while a
 batch is open (nothing is sent twice) and picks results up within the hour.
 `ghosttree-explain.path` starts a first run when the key file is written, and
 `ConditionPathExists=` keeps the service from doing anything while it is
-missing. The key belongs to the `explain` entry of `llm.json` (see the main
-README); the sample uses a systemd credential, so write
+missing. The key belongs to the `explain` entry of `llm.json` (see
+[`docs/in-short-notes.md`](../docs/in-short-notes.md)); the sample uses a systemd credential, so write
 `{"explain": {"credential": "explain-key"}}` there.
 
 ```sh
