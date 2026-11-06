@@ -18,7 +18,7 @@ payments and the reports finance needs.
 
 ## Development
 
-```
+```bash
 make test     # go test ./...
 make check    # vet, tests, migration check
 ```
