@@ -6,9 +6,29 @@ Versioning, with pre-1.0 compatibility rules described in
 
 ## Unreleased
 
+## 0.1.0 — 2026-11-06
+
 Changes since `0.1.0-rc.3`. The very detailed notes that used to stand here,
 entry by entry with their review rounds, are in the Git history of this file;
-the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
+the pull request titles in `git log v0.1.0-rc.3..v0.1.0` name every change.
+
+### Highlights
+
+- A shared workplace for people and their agents: ghosttree remembers what was
+  learned (knowledge, requests, pains), shows what everybody is working on, and
+  lets people and agents coordinate in rooms, direct messages and threads.
+- Accounts, organizations and projects with the roles `owner`, `lead`, `member`
+  and `guest`; invitation links, one-command installation of a new machine and
+  sharing like on GitHub.
+- Coordination rooms with delivery into running Claude Code sessions, `@name`
+  and `@agents` mentions, presence, and pause or interrupt from the web.
+- Hybrid search (full text plus embeddings) over knowledge, requests, file
+  descriptions, pains, documents and, opt-in, sessions.
+- The gardener: an opt-in, hardened Claude Code agent that checks knowledge
+  against the code and only proposes changes; a person decides.
+- Security: `go-jose` 4.1.6 (denial of service when parsing JWKs with RSA keys)
+  and Go 1.26.10 (GO-2026-6809 in `crypto/x509`), plus several access and
+  redaction hardenings listed under "Security".
 
 ### Before you upgrade
 
@@ -174,6 +194,8 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 - Go 1.26.10 (GO-2026-6809 in `crypto/x509`); released binaries use the fixed
   standard library.
+- `github.com/go-jose/go-jose/v4` 4.1.6: parsing a JWK with an RSA key could be
+  made to exhaust resources in 4.1.5 and earlier (used for OIDC sign-in).
 - Pull request links only with a host boundary and a fixed path for coordination
   forwarding (CodeQL findings).
 - The Claude channel neutralizes `<channel` inside message text, bounds `send`
