@@ -18,7 +18,7 @@ const packageUsage = `usage: ctx package <command>
   add [--package N] [--reason R] REQ[:optional]...                            put requests into a package (default: the current branch's)
   remove [--package N] --reason R REQ                                         take a request out; the reason goes into its activity list
   set [--package N] [--name N] [--pr N | --unlink-pr] [--state open|closed]   rename, bind to a pull request, close
-  show [--package N | --pr N | --branch B] [--review] [--json]                the package (default: the current branch's, inherited from the branch it was cut from)
+  show [--package N | --pr N | --branch B] [--project P] [--review] [--json]                the package (default: the current branch's, inherited from the branch it was cut from)
   import-relations [--project P] [--dry-run]                                  turn branch:<project>@<branch> relations into packages
 
 A request is written REQ or REQ:optional; the default role is pflicht.`
@@ -139,6 +139,7 @@ func cmdPackage(args []string, stdout io.Writer) int {
 		id := fs.Int64("package", 0, "package number")
 		pr := fs.Int64("pr", 0, "pull request number")
 		branch := fs.String("branch", "", "branch")
+		project := fs.String("project", "", "project of the branch (remote or unique short name); default: the current one")
 		review := fs.Bool("review", false, "the complete requirements list with every criterion and its evidence")
 		if _, err := parseInterspersed(fs, rest); err != nil {
 			return usageErr("")
@@ -149,6 +150,13 @@ func cmdPackage(args []string, stdout io.Writer) int {
 			d, err = c.GetPackage(*id, *review)
 		default:
 			ax := git
+			if *project != "" {
+				target, err := c.WriteTarget(*project, git.Project)
+				if err != nil {
+					return writeRequestCLIError(stdout, jsonMode, 1, err)
+				}
+				ax.Project = target
+			}
 			if *branch != "" && *branch != ax.Branch {
 				ax.Branch, ax.Lineage = *branch, nil
 			}
