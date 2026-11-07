@@ -175,12 +175,12 @@ type RequestFinishWorkInput struct {
 
 type RequestProgressInput struct {
 	RequestID      int64  `json:"request_id" jsonschema:"request being updated"`
-	Action         string `json:"action" jsonschema:"criterion_add, criterion_met, criterion_waive, complete, drop, relation_add, relation_remove, or correct"`
-	CriterionID    int64  `json:"criterion_id,omitempty" jsonschema:"criterion for met or waive"`
+	Action         string `json:"action" jsonschema:"criterion_add, criterion_met, criterion_waive, criterion_reopen, complete, drop, relation_add, relation_remove, or correct"`
+	CriterionID    int64  `json:"criterion_id,omitempty" jsonschema:"criterion for met, waive or reopen"`
 	Description    string `json:"description,omitempty" jsonschema:"new criterion description for criterion_add; the replacement description for correct"`
 	EvidenceKind   string `json:"evidence_kind,omitempty" jsonschema:"commit, test, file, decision, session, or url"`
 	EvidenceRef    string `json:"evidence_ref,omitempty" jsonschema:"concrete evidence reference"`
-	Reason         string `json:"reason,omitempty" jsonschema:"why: required for drop, for correct, and for relation_remove"`
+	Reason         string `json:"reason,omitempty" jsonschema:"why: required for drop, for correct, for criterion_reopen and for relation_remove"`
 	Title          string `json:"title,omitempty" jsonschema:"replacement title for correct"`
 	Type           string `json:"type,omitempty" jsonschema:"replacement type for correct: feature, change, bug, or investigation"`
 	Priority       string `json:"priority,omitempty" jsonschema:"replacement priority for correct"`
@@ -418,21 +418,11 @@ func (s *Server) handleRequestStartWork(_ context.Context, _ *mcp.CallToolReques
 	}
 	sessionID := in.SessionID
 	if sessionID == 0 {
-		sessions, err := s.client.Sessions(scope.Axes{Project: s.ctxAxes.Project}, 20)
+		found, err := s.ownSession()
 		if err != nil {
 			return nil, RequestWorkOutput{}, err
 		}
-		cutoff := time.Now().Add(-30 * time.Minute)
-		for _, candidate := range sessions {
-			seen, err := time.Parse(time.RFC3339Nano, candidate.LastSeenAt)
-			if err == nil && seen.After(cutoff) && (s.ctxAxes.Branch == "" || candidate.Scope.Branch == s.ctxAxes.Branch) && (s.ctxAxes.Machine == "" || candidate.Scope.Machine == s.ctxAxes.Machine) {
-				sessionID = candidate.ID
-				break
-			}
-		}
-		if sessionID == 0 {
-			return nil, RequestWorkOutput{}, fmt.Errorf("no recently active session matches this project, branch, and machine; sync the collector or provide session_id")
-		}
+		sessionID = found
 	}
 	work, warnings, err := s.client.StartRequestWork(in.RequestID, sessionID, role)
 	out := RequestWorkOutput{Work: work, Warnings: warnings}
@@ -458,6 +448,10 @@ func (s *Server) handleRequestProgress(_ context.Context, _ *mcp.CallToolRequest
 		err = s.client.SetRequestCriterion(in.CriterionID, "met", evidence)
 	case "criterion_waive":
 		err = s.client.SetRequestCriterion(in.CriterionID, "waived", evidence)
+	case "criterion_reopen":
+		// Der Rückweg des Prüfmodus: das Kriterium war erfüllt oder verzichtet,
+		// der Nachweis hält gegen den Code nicht. Die Begründung prüft der Server.
+		err = s.client.ReopenCriterion(in.CriterionID, in.Reason)
 	case "complete":
 		err = s.client.CompleteRequest(in.RequestID, evidence)
 	case "drop":
@@ -483,7 +477,7 @@ func (s *Server) handleRequestProgress(_ context.Context, _ *mcp.CallToolRequest
 			err = s.client.CorrectRequest(in.RequestID, patch, in.Reason)
 		}
 	default:
-		err = fmt.Errorf("unknown request progress action %q; use criterion_add, criterion_met, criterion_waive, complete, drop, relation_add, relation_remove, or correct", in.Action)
+		err = fmt.Errorf("unknown request progress action %q; use criterion_add, criterion_met, criterion_waive, criterion_reopen, complete, drop, relation_add, relation_remove, or correct", in.Action)
 	}
 	if err != nil {
 		return nil, RequestChangeOutput{}, err
@@ -491,4 +485,60 @@ func (s *Server) handleRequestProgress(_ context.Context, _ *mcp.CallToolRequest
 	detail, err := s.client.GetRequest(in.RequestID)
 	out := changeOutput(detail, in.Action, in.CriterionID)
 	return requestResult(out), out, err
+}
+
+// ownSession findet die Session dieses MCP-Prozesses, wenn der Agent ihre Nummer
+// nicht nennt (PAIN-57).
+//
+// Der Branch der Session-Zeile ist der vom Sessionstart: der Sammler liest ihn
+// einmal aus den ersten Zeilen des Transkripts. Der Agent legt mitten in der
+// Arbeit einen Branch an (der Ablauf aus REQ-601), und dann stimmt der Branch
+// weder der Zeile noch dem MCP-Prozess, der ihn beim Start gelesen hat, mit dem
+// des Arbeitsverzeichnisses überein. Wer nach dem Branch sucht, findet die
+// eigene Session genau dann nicht mehr, wenn er sie braucht. Deshalb, in dieser
+// Reihenfolge: die Harness-Session-ID dieses Prozesses (sicher, wo gesetzt),
+// dann das Arbeitsverzeichnis (ein Branchwechsel ändert es nicht), zuletzt der
+// Branch von früher, wie es vorher allein galt.
+func (s *Server) ownSession() (int64, error) {
+	sessions, err := s.client.Sessions(scope.Axes{Project: s.ctxAxes.Project}, 20)
+	if err != nil {
+		return 0, err
+	}
+	if s.sessionRef != "" {
+		for _, candidate := range sessions {
+			if candidate.ExternalID == s.sessionRef {
+				return candidate.ID, nil
+			}
+		}
+	}
+	cutoff := time.Now().Add(-30 * time.Minute)
+	var cwd string
+	branches := map[string]bool{}
+	if s.ctxAxes.Branch != "" {
+		branches[s.ctxAxes.Branch] = true
+	}
+	if s.live != nil {
+		l := s.live()
+		cwd = l.CWD
+		if l.Branch != "" {
+			branches[l.Branch] = true
+		}
+	}
+	recent := func(candidate store.Session) bool {
+		seen, err := time.Parse(time.RFC3339Nano, candidate.LastSeenAt)
+		return err == nil && seen.After(cutoff) && (s.ctxAxes.Machine == "" || candidate.Scope.Machine == s.ctxAxes.Machine)
+	}
+	if cwd != "" {
+		for _, candidate := range sessions {
+			if recent(candidate) && candidate.CWD == cwd {
+				return candidate.ID, nil
+			}
+		}
+	}
+	for _, candidate := range sessions {
+		if recent(candidate) && (len(branches) == 0 || branches[candidate.Scope.Branch]) {
+			return candidate.ID, nil
+		}
+	}
+	return 0, fmt.Errorf("no recently active session matches this project, working directory, and machine; sync the collector or provide session_id")
 }

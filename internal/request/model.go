@@ -74,7 +74,11 @@ type Relation struct {
 	KnowledgeID    int64  `json:"knowledge_id,omitempty"`
 	Kind           string `json:"kind"`
 	ExternalRef    string `json:"external_ref,omitempty"`
-	CreatedAt      string `json:"created_at"`
+	// PackageID: in dieses Arbeitspaket wurde die Relation übernommen (REQ-601,
+	// nur bei einer external-Relation "branch:<projekt>@<branch>"). Sie bleibt
+	// stehen, bis jemand sie bewusst entfernt.
+	PackageID int64  `json:"package_id,omitempty"`
+	CreatedAt string `json:"created_at"`
 }
 
 type Activity struct {

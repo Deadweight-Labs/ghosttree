@@ -72,6 +72,13 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 - Pains (`PAIN-n`) record a problem without a solution, and tasks for people
   record what only a person can provide (`ctx pain`, `ctx task`, the MCP tools
   `pain_*` and `human_task_*`, and the pages `/ui/pains` and `/ui/tasks`).
+- Work packages bind requests to a branch and, by number, to a pull request
+  (`ctx package`, the MCP tools `package_get`, `package_update` and
+  `package_review`). Sessions on the branch, or on one cut from it, get the
+  package in their briefing; the review view lists every criterion with its
+  evidence and Git anchor. `criterion_reopen` takes a met or waived criterion
+  back with a reason, and `ctx package import-relations` turns the old
+  `branch:<project>@<branch>` relations into packages without deleting them.
 - Agents can replace outdated knowledge (`supersedes`) or retire it
   (`context_retire`, `ctx knowledge retire`); relations between knowledge
   entries have a data model.

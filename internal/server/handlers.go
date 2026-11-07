@@ -823,6 +823,9 @@ func (a *api) bootstrap(w http.ResponseWriter, r *http.Request) {
 		}
 		fmt.Fprintf(w, "\n## Work ledger (ghosttree)\n\n%d open %s in this scope. For substantial feature, architecture, migration, or multi-session work, search the request ledger first; continue a match or create one with explicit acceptance criteria. Trivial local fixes and routine maintenance do not require a request.\n", openRequests, plural)
 	}
+	// Das Arbeitspaket des Branches (REQ-601), geerbt vom Ursprung, wenn der
+	// Branch keines hat.
+	a.writePackageBriefing(w, r, pa)
 	// Vor der Prüfung auf Session-Metadaten: ein Gast mit einer zugewiesenen
 	// Aufgabe liest keine Sessions und bekommt den Abschnitt trotzdem.
 	if waiting, err := a.st.WaitingTasksFor(pa, axesFromQuery(r).Project, waitingMaxEach); err == nil {

@@ -205,6 +205,16 @@ func cmdMCP(args []string, stdout io.Writer) int {
 		}
 		return collector.BranchLineageOf(cwd, branch)
 	})
+	// Branch und Kette werden je Aufruf neu gelesen: der Agent legt mitten in
+	// der Sitzung einen Branch an (REQ-601, PAIN-57).
+	srv.SetLive(func() mcpserver.Live {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return mcpserver.Live{}
+		}
+		g := collector.ResolveGitContext(cwd)
+		return mcpserver.Live{Branch: g.Branch, Lineage: g.Lineage, CWD: cwd}
+	})
 	srv.SetSessionRef(currentSessionRef())
 	srv.SetCoordRef(coordAgentOverride())
 	srv.SetAgentRole(agentRoleFromEnv())
