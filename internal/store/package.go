@@ -143,7 +143,9 @@ func (s *Store) PackageForBranch(project, branch string, lineage []string) (requ
 		}
 		d, err := loadPackage(s.db, id)
 		if err == nil && name != branch {
-			d.InheritedFrom = name
+			// Der gespeicherte Branch des Pakets, nicht der Name aus der Anfrage:
+			// beide sind gleich, aber nur der gespeicherte ist geprüfter Inhalt.
+			d.InheritedFrom = d.Branch
 		}
 		return d, err
 	}

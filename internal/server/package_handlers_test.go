@@ -281,7 +281,7 @@ func TestBootstrapBriefsThePackageOfTheBranch(t *testing.T) {
 		return f.expect(t, who, 200, "GET", "/api/context/bootstrap?project="+accProject+query, nil)
 	}
 	own := boot("mia", "&branch=feat/b")
-	for _, want := range []string{"## Work package (ghosttree)", `PKG-1 "Briefing-Paket" on branch feat/b`, "REQ-" + fmt.Sprint(mia) + " mia request: 2 open, 0 met", "(optional)", "Waiting on a human", "Entscheidung treffen"} {
+	for _, want := range []string{"## Work package (ghosttree)", `PKG-1: Briefing-Paket, on branch feat/b`, "REQ-" + fmt.Sprint(mia) + " mia request: 2 open, 0 met", "(optional)", "Waiting on a human", "Entscheidung treffen"} {
 		if !strings.Contains(own, want) {
 			t.Errorf("own branch briefing misses %q:\n%s", want, own)
 		}

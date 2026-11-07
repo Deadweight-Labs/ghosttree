@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"html"
 	"net/http"
 	"sort"
 	"strings"
@@ -28,7 +29,7 @@ func (a *api) writePackageBriefing(w http.ResponseWriter, r *http.Request, pa *s
 	if err != nil {
 		return
 	}
-	fmt.Fprint(w, renderPackageBriefing(pa.PackageView(detail, false), packageBriefingChars))
+	fmt.Fprint(w, html.EscapeString(renderPackageBriefing(pa.PackageView(detail, false), packageBriefingChars)))
 }
 
 // renderPackageBriefing ist der kompakte Text für den Sessionstart. Pflicht
@@ -46,7 +47,7 @@ func renderPackageBriefing(d requestdomain.PackageDetail, budget int) string {
 		return a.Open > 0 && b.Open == 0
 	})
 	var b strings.Builder
-	fmt.Fprintf(&b, "\n## Work package (ghosttree)\n\n%s %q on branch %s", d.HumanID(), d.Name, d.Branch)
+	fmt.Fprintf(&b, "\n## Work package (ghosttree)\n\n%s: %s, on branch %s", d.HumanID(), d.Name, d.Branch)
 	if d.PR > 0 {
 		fmt.Fprintf(&b, ", PR #%d", d.PR)
 	}

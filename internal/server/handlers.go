@@ -820,6 +820,7 @@ func (a *api) bootstrap(w http.ResponseWriter, r *http.Request) {
 	// later, and the briefing is not worth failing for that.
 	a.rememberDelivered(r, store.DeliveredByBootstrap, shown)
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(200)
 	fmt.Fprint(w, body)
 	if openRequests > 0 {
