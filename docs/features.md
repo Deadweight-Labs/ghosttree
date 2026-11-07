@@ -16,6 +16,14 @@ The complete list of what Ghosttree does in the current development version. The
 - Harness installation and diagnostics for Claude Code, Codex, and OpenCode.
 - A work ledger with acceptance criteria, relationships, evidence, and
   interrupted-session handoff.
+- Work packages: a branch (later a pull request) carries its requests as a
+  requirements list, each request mandatory (`pflicht`) or `optional`. A session
+  on the branch is briefed with the package at start, a branch cut from another
+  inherits that one's package, and a reviewer reads the complete list with every
+  criterion, its evidence and the Git state the evidence was written at
+  (`package_get`, `package_update`, `package_review`, `ctx package`). A criterion
+  whose evidence does not hold up is reopened with a reason
+  (`request_record_progress` with `criterion_reopen`).
 - Quarantined session distillation, review, usage measurement, recurrence
   tracking, and cost reporting.
 - Versioned documents with local drafts, optimistic concurrency, byte-preserved
