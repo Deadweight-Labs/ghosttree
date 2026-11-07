@@ -82,7 +82,7 @@ func SyncFile(path, harness string, up Uploader, st *State, machine string) erro
 		var err error
 		ref, err = registerSession(path, harness, up, machine)
 		if err != nil {
-			if errors.Is(err, errNoSessionRef) {
+			if errors.Is(err, errNoSessionRef) || isConflict(err) {
 				// Der Aufrufer loggt den Fehler; hier nur der Backoff.
 				st.backoffFail(path)
 			}
@@ -333,6 +333,15 @@ func registerSession(path, harness string, up Uploader, machine string) (store.S
 	return store.SessionRef{ID: id}, err
 }
 
+// isConflict reports whether the server refused a registration with 409
+// (session_id_collision, collector_too_old). Retrying on every sweep cannot
+// change that answer, so the file waits for its backoff like any other
+// registration the server refused.
+func isConflict(err error) bool {
+	var se interface{ HTTPStatus() int }
+	return errors.As(err, &se) && se.HTTPStatus() == http.StatusConflict
+}
+
 // errRegistrationPaused: die Registrierung wartet auf ihren Backoff. Kein Fehler,
 // den ein Aufrufer loggen sollte: sonst schriebe jedes fsnotify-Ereignis einer
 // Datei eine Zeile.
@@ -366,11 +375,23 @@ func firstLines(path string, n int) ([][]byte, error) {
 	return out, nil
 }
 
+// isTranscript reports whether p is a session transcript. Claude Code's
+// Workflow tool writes subagents/workflows/<run>/journal.jsonl, an
+// orchestration log without a session id; syncing it would register every
+// run under the session id "journal".
+func isTranscript(p string) bool {
+	if !strings.HasSuffix(p, ".jsonl") {
+		return false
+	}
+	return !(filepath.Base(p) == "journal.jsonl" &&
+		strings.Contains(filepath.ToSlash(p), "/subagents/workflows/"))
+}
+
 // Sweep syncs every transcript under the roots once.
 func Sweep(roots map[string]string, up Uploader, st *State, machine string) error {
 	for root, harness := range roots {
 		err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
-			if err != nil || d.IsDir() || !strings.HasSuffix(p, ".jsonl") {
+			if err != nil || d.IsDir() || !isTranscript(p) {
 				return nil
 			}
 			logSyncError(p, SyncFile(p, harness, up, st, machine))
@@ -434,7 +455,7 @@ func Watch(roots map[string]string, up Uploader, st *State, machine string, inte
 				addTree(ev.Name)
 				continue
 			}
-			if !strings.HasSuffix(ev.Name, ".jsonl") {
+			if !isTranscript(ev.Name) {
 				continue
 			}
 			if ev.Op&(fsnotify.Write|fsnotify.Create) == 0 {
