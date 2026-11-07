@@ -31,26 +31,81 @@ func parseBranchRef(ref string) (project, branch string, ok bool) {
 	return project, branch, true
 }
 
+// BranchRelationRequests nennt die Requests, an denen noch nicht übernommene
+// branch-Relationen hängen (im Projekt, leer = alle), mit ihrem Projekt. Das
+// ist die Lesehälfte der Übernahme: wer sie ausführt, prüft je Request, ob der
+// Aufrufer ihn sehen und bearbeiten darf, bevor er die Ids zurückgibt.
+func (s *Store) BranchRelationRequests(project string) ([]ObjectRef, error) {
+	if s.reader != nil {
+		return s.reader.BranchRelationRequests(project)
+	}
+	project = scope.NormalizeRemote(project)
+	rows, err := s.db.Query(`SELECT DISTINCT x.request_id, x.external_ref FROM request_relations x
+		WHERE x.kind='external' AND x.package_id IS NULL AND x.external_ref LIKE 'branch:%'`)
+	if err != nil {
+		return nil, err
+	}
+	var ids []int64
+	seen := map[int64]bool{}
+	for rows.Next() {
+		var id int64
+		var ref string
+		if err := rows.Scan(&id, &ref); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if p, _, ok := parseBranchRef(ref); (project == "" || (ok && p == project)) && !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	var out []ObjectRef
+	for _, id := range ids {
+		ref, err := s.RequestRef(RefRequest, id)
+		if err != nil {
+			continue
+		}
+		out = append(out, ref)
+	}
+	return out, nil
+}
+
 // ImportBranchRelations übernimmt die alten Branch-Relationen in echte
-// Arbeitspakete: je (Projekt, Branch) ein offenes Paket, jeder markierte
-// Request als Pflicht-Mitglied, danach entfällt die Relation (mit Eintrag im
-// Activity-Log des Requests).
+// Arbeitspakete, so weit der Aufrufer die Requests sehen und bearbeiten darf: je
+// (Projekt, Branch) ein offenes Paket, jeder markierte Request als Pflicht-
+// Mitglied. Die Relation selbst bleibt stehen und trägt danach die Nummer des
+// Pakets (request_relations.package_id) und einen Eintrag im Activity-Log.
+// Gelöscht wird sie hier nie: Wissen wird versioniert, nicht gelöscht (#1444),
+// und ob die alten Markierungen verschwinden, entscheidet ein Mensch.
 //
-// Idempotent: nach einem Lauf gibt es keine passenden Relationen mehr, ein
+// allowed sind die Request-Ids, die der Aufrufer bearbeiten darf
+// (ProjectAccess.ImportBranchRelations ermittelt sie); jede andere Relation wird
+// nicht angefasst und kommt nicht im Bericht vor. nil heißt: keine.
+//
+// Idempotent: eine übernommene Relation zählt beim nächsten Lauf nicht mehr, ein
 // zweiter Lauf findet nichts. Bricht ein Lauf mittendrin ab, ist nichts
-// geschrieben (eine Transaktion); ein Request, der schon Mitglied ist, verliert
-// nur seine Relation. Ein Request, dessen Projekt nicht zum Verweis passt,
-// bleibt mit seiner Relation stehen und steht im Bericht als übersprungen.
+// geschrieben (eine Transaktion). Ein Request, dessen Projekt nicht zum Verweis
+// passt, bleibt unübernommen und steht als übersprungen im Bericht. Ein Request,
+// der schon Mitglied ist, behält seine Mitgliedschaft; war er optional, wird er
+// Pflicht, denn die Markierung war der Pflichtumfang.
 //
 // project schränkt auf ein Projekt ein, leer nimmt alle. Bei dryRun läuft alles
 // in einer Transaktion, die zurückgerollt wird: der Bericht ist genau der des
 // echten Laufs.
-func (s *Store) ImportBranchRelations(project string, dryRun bool, person string) (requestdomain.ImportReport, error) {
+func (s *Store) ImportBranchRelations(project string, dryRun bool, person string, allowed []int64) (requestdomain.ImportReport, error) {
 	project = scope.NormalizeRemote(project)
 	if s.writer != nil {
-		return queueValue(s, []any{project, dryRun, person}, func(d *Store, p []any) (requestdomain.ImportReport, error) {
-			return d.ImportBranchRelations(p[0].(string), p[1].(bool), p[2].(string))
+		return queueValue(s, []any{project, dryRun, person, allowed}, func(d *Store, p []any) (requestdomain.ImportReport, error) {
+			return d.ImportBranchRelations(p[0].(string), p[1].(bool), p[2].(string), p[3].([]int64))
 		})
+	}
+	may := map[int64]bool{}
+	for _, id := range allowed {
+		may[id] = true
 	}
 	report := requestdomain.ImportReport{DryRun: dryRun, Items: []requestdomain.ImportItem{}}
 	tx, err := s.db.Begin()
@@ -63,7 +118,7 @@ func (s *Store) ImportBranchRelations(project string, dryRun bool, person string
 		ref, owner  string
 	}
 	rows, err := tx.Query(`SELECT x.id,x.request_id,x.external_ref,r.project FROM request_relations x JOIN requests r ON r.id=x.request_id
-		WHERE x.kind='external' AND x.external_ref LIKE 'branch:%' ORDER BY x.id`)
+		WHERE x.kind='external' AND x.package_id IS NULL AND x.external_ref LIKE 'branch:%' ORDER BY x.id`)
 	if err != nil {
 		return report, err
 	}
@@ -82,6 +137,9 @@ func (s *Store) ImportBranchRelations(project string, dryRun bool, person string
 	}
 	packages := map[string]requestdomain.Package{}
 	for _, rel := range relations {
+		if !may[rel.request] {
+			continue
+		}
 		refProject, branch, ok := parseBranchRef(rel.ref)
 		if !ok {
 			if project == "" {
@@ -136,11 +194,11 @@ func (s *Store) ImportBranchRelations(project string, dryRun bool, person string
 			// Mitglied an. Der Wechsel steht im Activity-Log des Requests.
 			item.Reason = "role raised to pflicht"
 		}
-		if _, err := tx.Exec(`DELETE FROM request_relations WHERE id=?`, rel.id); err != nil {
+		if _, err := tx.Exec(`UPDATE request_relations SET package_id=? WHERE id=?`, pkg.ID, rel.id); err != nil {
 			return report, err
 		}
-		data := fmt.Sprintf("external %s — übernommen in PKG-%d", rel.ref, pkg.ID)
-		if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at) VALUES(?,'relation.removed',?,?,?)`, rel.request, person, data, now()); err != nil {
+		data := fmt.Sprintf("external %s — übernommen in PKG-%d, Relation bleibt stehen", rel.ref, pkg.ID)
+		if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at) VALUES(?,'relation.taken_over',?,?,?)`, rel.request, person, data, now()); err != nil {
 			return report, err
 		}
 		report.Add(item)
@@ -149,4 +207,24 @@ func (s *Store) ImportBranchRelations(project string, dryRun bool, person string
 		return report, nil
 	}
 	return report, tx.Commit()
+}
+
+// ImportBranchRelations ist die Übernahme für einen Betrachter: Pakete und
+// Mitgliedschaften entstehen nur für Requests, die er lesen und bearbeiten darf.
+// Alle anderen bleiben unberührt und unerwähnt. Die Prüfung läuft vor der
+// Transaktion, denn sie fragt die Datenbank selbst, und innerhalb einer
+// Transaktion auf einer einzigen Verbindung hinge das.
+func (a *ProjectAccess) ImportBranchRelations(project string, dryRun bool, person string) (requestdomain.ImportReport, error) {
+	refs, err := a.st.BranchRelationRequests(project)
+	if err != nil {
+		return requestdomain.ImportReport{}, err
+	}
+	var allowed []int64
+	for _, ref := range refs {
+		obj, visible := a.RequestObject(ref)
+		if visible && a.Check(ref.Project, ResRequest, ActWork, obj) == nil {
+			allowed = append(allowed, ref.ID)
+		}
+	}
+	return a.st.ImportBranchRelations(project, dryRun, person, allowed)
 }

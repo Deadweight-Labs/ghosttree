@@ -157,14 +157,14 @@ func (s *Store) RequestByID(id int64) (requestdomain.Detail, error) {
 	if err := s.attachActivityAnchors(d.Activity); err != nil {
 		return d, err
 	}
-	relationRows, err := s.db.Query(`SELECT id,request_id,COALESCE(other_request_id,0),COALESCE(knowledge_id,0),kind,external_ref,created_at FROM request_relations WHERE request_id=? ORDER BY id`, id)
+	relationRows, err := s.db.Query(`SELECT id,request_id,COALESCE(other_request_id,0),COALESCE(knowledge_id,0),kind,external_ref,COALESCE(package_id,0),created_at FROM request_relations WHERE request_id=? ORDER BY id`, id)
 	if err != nil {
 		return d, err
 	}
 	defer relationRows.Close()
 	for relationRows.Next() {
 		var relation requestdomain.Relation
-		if err := relationRows.Scan(&relation.ID, &relation.RequestID, &relation.OtherRequestID, &relation.KnowledgeID, &relation.Kind, &relation.ExternalRef, &relation.CreatedAt); err != nil {
+		if err := relationRows.Scan(&relation.ID, &relation.RequestID, &relation.OtherRequestID, &relation.KnowledgeID, &relation.Kind, &relation.ExternalRef, &relation.PackageID, &relation.CreatedAt); err != nil {
 			return d, err
 		}
 		d.Relations = append(d.Relations, relation)

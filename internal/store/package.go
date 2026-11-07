@@ -43,9 +43,14 @@ CREATE INDEX IF NOT EXISTS work_package_requests_request ON work_package_request
 `
 
 // ensureWorkPackages legt die Tabellen additiv an und darf beliebig oft laufen.
+//
+// Dazu eine nullbare Spalte an request_relations: die Übernahme einer alten
+// branch-Relation markiert sie, statt sie zu löschen (siehe ImportBranchRelations).
 func ensureWorkPackages(db *sql.DB) error {
-	_, err := db.Exec(workPackageSchema)
-	return err
+	if _, err := db.Exec(workPackageSchema); err != nil {
+		return err
+	}
+	return ensureColumn(db, "request_relations", "package_id", `INTEGER REFERENCES work_packages(id)`)
 }
 
 func packageNotFound(id int64) error {
@@ -246,6 +251,10 @@ const (
 	memberRoleChanged = "role_changed"
 )
 
+func requestNotInProject(id int64) error {
+	return requestdomain.NewRuleError("request_not_found", fmt.Sprintf("no request REQ-%d in this project", id), "a package holds requests of its own project; check the request number", nil)
+}
+
 // addMemberTx stellt einen Request in ein Paket, idempotent: dieselbe Rolle
 // noch einmal ist ein No-op ohne Eintrag im Verlauf, eine andere Rolle wechselt
 // sie. Jede Änderung steht im Activity-Log des Requests, mit Grund, soweit
@@ -255,18 +264,16 @@ func addMemberTx(tx *sql.Tx, pkg requestdomain.Package, m requestdomain.PackageM
 	if err != nil {
 		return "", err
 	}
-	var project string
-	err = tx.QueryRow(`SELECT project FROM requests WHERE id=?`, m.RequestID).Scan(&project)
+	// Ein Request, den es nicht gibt, und einer in einem anderen Projekt
+	// antworten gleich, bis auf das letzte Zeichen: die Abfrage unterscheidet
+	// sie nicht einmal, damit die Antwort nichts über fremde Projekte verrät.
+	var found int
+	err = tx.QueryRow(`SELECT 1 FROM requests WHERE id=? AND project=?`, m.RequestID, pkg.Project).Scan(&found)
 	if err == sql.ErrNoRows {
-		return "", requestdomain.NewRuleError("request_not_found", fmt.Sprintf("no request REQ-%d", m.RequestID), "check the request number", nil)
+		return "", requestNotInProject(m.RequestID)
 	}
 	if err != nil {
 		return "", err
-	}
-	if project != pkg.Project {
-		// Gleiche Antwort wie für eine unbekannte Nummer: der Request eines
-		// fremden Projekts gibt sich nicht zu erkennen.
-		return "", requestdomain.NewRuleError("request_not_found", fmt.Sprintf("no request REQ-%d in this project", m.RequestID), "a package holds requests of its own project", nil)
 	}
 	var have string
 	err = tx.QueryRow(`SELECT role FROM work_package_requests WHERE package_id=? AND request_id=?`, pkg.ID, m.RequestID).Scan(&have)

@@ -47,20 +47,36 @@ func (a *api) registerPackageRoutes(mux *http.ServeMux) {
 
 // packageGate prüft den Zugriff auf ein Paket über sein Projekt. Ein Paket, das
 // es nicht gibt, und eines in einem verborgenen Projekt antworten gleich.
-func (a *api) packageGate(w http.ResponseWriter, r *http.Request, id int64, act store.Action) bool {
+func (a *api) packageGate(w http.ResponseWriter, r *http.Request, id int64, act store.Action) (string, bool) {
 	pa := a.access(r)
 	project, err := a.st.PackageRef(id)
 	if err != nil {
 		pa.Filtered()
 		writePackageNotFound(w, id)
-		return false
+		return "", false
 	}
 	err = pa.Check(project, store.ResRequest, act, store.Object{})
 	if errors.Is(err, store.ErrAccessNotFound) {
 		writePackageNotFound(w, id)
+		return "", false
+	}
+	return project, !denyAccess(w, err)
+}
+
+// packageRequestGate prüft einen Request, den ein Paket aufnehmen oder abgeben
+// soll, wie request_start_work den seinen: lesbar und bearbeitbar für den
+// Aufrufer, und im Projekt des Pakets. Alles andere antwortet wie eine
+// unbekannte Nummer, damit weder ein verborgener Request noch einer in einem
+// fremden Projekt sich durch die Antwort verrät. Das Paket-Recht allein reicht
+// nicht: es sagt nichts darüber, welche Requests der Aufrufer anfassen darf.
+func (a *api) packageRequestGate(w http.ResponseWriter, r *http.Request, requestID int64, project string) bool {
+	ref, err := a.st.RequestRef(store.RefRequest, requestID)
+	if err != nil || ref.Project != project {
+		a.access(r).Filtered()
+		writeRequestError(w, sql.ErrNoRows)
 		return false
 	}
-	return !denyAccess(w, err)
+	return a.checkRequest(w, r, store.RefRequest, requestID, store.ActWork)
 }
 
 func writePackageNotFound(w http.ResponseWriter, id int64) {
@@ -103,6 +119,11 @@ func (a *api) createPackage(w http.ResponseWriter, r *http.Request) {
 	}
 	if denyAccess(w, a.access(r).Check(project, store.ResRequest, store.ActCreate, store.Object{Own: true})) {
 		return
+	}
+	for _, m := range body.Requests {
+		if !a.packageRequestGate(w, r, m.RequestID, project) {
+			return
+		}
 	}
 	detail, err := a.st.CreatePackage(requestdomain.PackageInput{
 		Project: project, Branch: body.Branch, Name: body.Name, PR: body.PR,
@@ -160,7 +181,7 @@ func (a *api) getPackage(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad package id")
 		return
 	}
-	if !a.packageGate(w, r, id, store.ActRead) {
+	if _, ok := a.packageGate(w, r, id, store.ActRead); !ok {
 		return
 	}
 	detail, err := a.st.PackageByID(id)
@@ -179,7 +200,7 @@ func (a *api) reviewPackage(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad package id")
 		return
 	}
-	if !a.packageGate(w, r, id, store.ActRead) {
+	if _, ok := a.packageGate(w, r, id, store.ActRead); !ok {
 		return
 	}
 	detail, err := a.st.PackageByID(id)
@@ -201,7 +222,7 @@ func (a *api) updatePackage(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
-	if !a.packageGate(w, r, id, store.ActWork) {
+	if _, ok := a.packageGate(w, r, id, store.ActWork); !ok {
 		return
 	}
 	detail, err := a.st.UpdatePackage(id, patch)
@@ -229,8 +250,14 @@ func (a *api) addPackageRequests(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
-	if !a.packageGate(w, r, id, store.ActWork) {
+	project, ok := a.packageGate(w, r, id, store.ActWork)
+	if !ok {
 		return
+	}
+	for _, m := range body.Requests {
+		if !a.packageRequestGate(w, r, m.RequestID, project) {
+			return
+		}
 	}
 	detail, err := a.st.AddPackageRequests(id, packageMembersFromBody(body.Requests), body.Reason, personOf(r))
 	if err != nil {
@@ -254,7 +281,11 @@ func (a *api) removePackageRequest(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
-	if !a.packageGate(w, r, id, store.ActWork) {
+	project, ok := a.packageGate(w, r, id, store.ActWork)
+	if !ok {
+		return
+	}
+	if !a.packageRequestGate(w, r, body.RequestID, project) {
 		return
 	}
 	detail, err := a.st.RemovePackageRequest(id, body.RequestID, body.Reason, personOf(r))
@@ -266,9 +297,10 @@ func (a *api) removePackageRequest(w http.ResponseWriter, r *http.Request) {
 }
 
 // importBranchRelations übernimmt die Übergangs-Relationen "branch:<projekt>@<branch>"
-// in Pakete. Es schreibt Pakete und löscht Relationen, verlangt also
-// Schreibrecht im genannten Projekt (auch für den Probelauf: er zeigt, was
-// hinter dem Schreibrecht liegt). Das Projekt ist Pflicht.
+// in Pakete. Es verlangt Schreibrecht im genannten Projekt (auch für den
+// Probelauf: er zeigt, was hinter dem Schreibrecht liegt) und fasst nur
+// Requests an, die der Aufrufer lesen und bearbeiten darf. Das Projekt ist
+// Pflicht. Die Relationen bleiben stehen und werden als übernommen markiert.
 func (a *api) importBranchRelations(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Project string `json:"project"`
@@ -289,7 +321,7 @@ func (a *api) importBranchRelations(w http.ResponseWriter, r *http.Request) {
 	if denyAccess(w, a.access(r).Check(project, store.ResRequest, store.ActWork, store.Object{})) {
 		return
 	}
-	report, err := a.st.ImportBranchRelations(project, body.DryRun, personOf(r))
+	report, err := a.access(r).ImportBranchRelations(project, body.DryRun, personOf(r))
 	if err != nil {
 		writeRequestError(w, err)
 		return

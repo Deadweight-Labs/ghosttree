@@ -267,18 +267,18 @@ func TestImportBranchRelationsMovesTheMarkIntoAPackage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	dry, err := s.ImportBranchRelations(pkgProject, true, "robin")
+	dry, err := s.ImportBranchRelations(pkgProject, true, "robin", []int64{a, b, c})
 	if err != nil || !dry.DryRun || dry.Added != 1 || dry.AlreadyMember != 1 {
 		t.Fatalf("dry run = %+v %v", dry, err)
 	}
-	if d, _ := s.RequestByID(a); len(d.Relations) != 1 {
+	if d, _ := s.RequestByID(a); len(d.Relations) != 1 || d.Relations[0].PackageID != 0 {
 		t.Fatalf("the dry run changed a relation: %+v", d.Relations)
 	}
 	if got, _ := s.PackageByID(pre.ID); len(got.Members) != 1 {
 		t.Fatalf("the dry run changed the package: %+v", got.Members)
 	}
 
-	report, err := s.ImportBranchRelations(pkgProject, false, "robin")
+	report, err := s.ImportBranchRelations(pkgProject, false, "robin", []int64{a, b, c})
 	if err != nil || report.Added != 1 || report.AlreadyMember != 1 || report.Skipped != 0 || len(report.PackagesCreated) != 0 {
 		t.Fatalf("report = %+v %v", report, err)
 	}
@@ -296,20 +296,35 @@ func TestImportBranchRelationsMovesTheMarkIntoAPackage(t *testing.T) {
 		t.Fatalf("the role change is not logged: %v", activityKinds(t, s, b))
 	}
 	for _, id := range []int64{a, b} {
+		// Die Relation bleibt stehen (Versionierung statt Löschen), trägt aber das Paket.
 		d, _ := s.RequestByID(id)
-		if len(d.Relations) != 0 {
-			t.Fatalf("REQ-%d keeps its relation: %+v", id, d.Relations)
+		if len(d.Relations) != 1 || d.Relations[0].ExternalRef != ref || d.Relations[0].PackageID != pre.ID {
+			t.Fatalf("REQ-%d: relation = %+v, want it kept and marked with PKG-%d", id, d.Relations, pre.ID)
 		}
-		if !strings.Contains(strings.Join(activityKinds(t, s, id), "\n"), "relation.removed external "+ref) {
-			t.Fatalf("REQ-%d: removal not logged: %v", id, activityKinds(t, s, id))
+		if !strings.Contains(strings.Join(activityKinds(t, s, id), "\n"), "relation.taken_over external "+ref+" — übernommen in PKG-") {
+			t.Fatalf("REQ-%d: takeover not logged: %v", id, activityKinds(t, s, id))
 		}
 	}
 	if d, _ := s.RequestByID(c); len(d.Relations) != 2 {
 		t.Fatalf("an unrelated relation was touched: %+v", d.Relations)
 	}
 
-	// Zweiter Lauf: nichts mehr zu tun (das fremde Projekt gehört nicht dazu).
-	again, err := s.ImportBranchRelations(pkgProject, false, "robin")
+	// Wen der Aufrufer nicht bearbeiten darf, den fasst der Lauf nicht an und
+	// erwähnt ihn nicht, auch wenn seine Relation passt.
+	hidden := pkgRequest(t, s, "verborgen")
+	if _, err := s.AddRequestRelation(hidden, requestdomain.Relation{Kind: "external", ExternalRef: ref}, "robin"); err != nil {
+		t.Fatal(err)
+	}
+	if rep, err := s.ImportBranchRelations(pkgProject, false, "robin", []int64{a, b, c}); err != nil || len(rep.Items) != 0 {
+		t.Fatalf("a run without the right for REQ-%d = %+v %v", hidden, rep, err)
+	}
+	if d, _ := s.RequestByID(hidden); len(d.Relations) != 1 || d.Relations[0].PackageID != 0 {
+		t.Fatalf("a request the caller may not edit was touched: %+v", d.Relations)
+	}
+	if got, _ := s.PackageByID(pre.ID); len(got.Members) != 2 {
+		t.Fatalf("a request the caller may not edit became a member: %+v", got.Members)
+	}
+	again, err := s.ImportBranchRelations(pkgProject, false, "robin", []int64{a, b, c})
 	if err != nil || len(again.Items) != 0 {
 		t.Fatalf("second run = %+v %v", again, err)
 	}
@@ -319,7 +334,7 @@ func TestImportBranchRelationsMovesTheMarkIntoAPackage(t *testing.T) {
 	if _, err := s.AddRequestRelation(d2, requestdomain.Relation{Kind: "external", ExternalRef: "branch:" + pkgProject + "@feat/neu"}, "robin"); err != nil {
 		t.Fatal(err)
 	}
-	report, err = s.ImportBranchRelations("", false, "robin")
+	report, err = s.ImportBranchRelations("", false, "robin", []int64{a, b, c, d2})
 	if err != nil || len(report.PackagesCreated) != 1 || report.Added != 1 || report.Skipped != 1 {
 		// Skipped: der Verweis auf das fremde Projekt, dessen Request c nicht dorthin gehört.
 		t.Fatalf("all-projects run = %+v %v", report, err)
@@ -430,7 +445,7 @@ func TestRuntimePackageMutationsUseAdmission(t *testing.T) {
 	if _, err := s.AddPackageRequests(pkg.ID, []requestdomain.PackageMember{{RequestID: r}}, "wieder", "x"); err != nil {
 		t.Fatal(err)
 	}
-	if rep, err := s.ImportBranchRelations(pkgProject, false, "x"); err != nil || rep.Added != 1 {
+	if rep, err := s.ImportBranchRelations(pkgProject, false, "x", []int64{r}); err != nil || rep.Added != 1 {
 		t.Fatalf("import = %+v %v", rep, err)
 	}
 	d, _ := s.RequestByID(r)
@@ -446,3 +461,31 @@ func TestRuntimePackageMutationsUseAdmission(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// Ein Request, den es nicht gibt, und einer in einem fremden Projekt antworten
+// gleich: dieselbe Meldung, dieselbe Auflösung, dieselben Ids.
+func TestPackageDoesNotRevealRequestsOfOtherProjects(t *testing.T) {
+	s := openTest(t)
+	foreign, err := s.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: "geheim", Scope: scope.Axes{Project: "github.com/dw/private"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg, err := s.CreatePackage(requestdomain.PackageInput{Project: pkgProject, Branch: "feat/o"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	answer := func(id int64) string {
+		_, err := s.AddPackageRequests(pkg.ID, []requestdomain.PackageMember{{RequestID: id}}, "", "x")
+		var rule *requestdomain.RuleError
+		if !errors.As(err, &rule) {
+			t.Fatalf("REQ-%d: %v", id, err)
+		}
+		return rule.ErrorCode + "|" + rule.Message + "|" + rule.Resolution + "|" + strings.Join(rule.IDs, ",")
+	}
+	// Dieselbe Nummer für beide, sonst unterschiede sich schon die Meldung.
+	missing := answer(foreign.Request.ID + 1000)
+	got := answer(foreign.Request.ID)
+	if strings.ReplaceAll(missing, itoa(foreign.Request.ID+1000), "N") != strings.ReplaceAll(got, itoa(foreign.Request.ID), "N") {
+		t.Fatalf("a request of another project answers differently from a missing one:\n  missing: %s\n  foreign: %s", missing, got)
+	}
+}

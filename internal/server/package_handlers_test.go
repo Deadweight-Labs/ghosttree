@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
+	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 )
 
 func pkgJSON(t *testing.T, body string) requestdomain.PackageDetail {
@@ -36,7 +37,7 @@ func TestPackageAPIBindsBranchAndPullRequest(t *testing.T) {
 		t.Fatalf("created = %+v", created)
 	}
 	f.expect(t, "mia", 409, "POST", "/api/packages", map[string]any{"project": accProject, "branch": "feat/x"})
-	f.expect(t, "mia", 400, "POST", "/api/packages", map[string]any{"project": accProject, "branch": "feat/y",
+	f.expect(t, "mia", 404, "POST", "/api/packages", map[string]any{"project": accProject, "branch": "feat/y",
 		"requests": []map[string]any{{"request_id": f.id["r-other"]}}})
 	f.expect(t, "mia", 400, "POST", "/api/packages", map[string]any{"project": accProject, "branch": "feat/y",
 		"requests": []map[string]any{{"request_id": mia, "role": "wichtig"}}})
@@ -150,6 +151,109 @@ func TestImportBranchRelationsAPI(t *testing.T) {
 	got := pkgJSON(t, f.expect(t, "mia", 200, "GET", "/api/packages?project="+accProject+"&branch=feat/git-native", nil))
 	if memberRoles(got)[rid] != "pflicht" {
 		t.Fatalf("package = %+v", got)
+	}
+	// Die Relation bleibt stehen, markiert; ein zweiter Lauf findet nichts mehr.
+	detail := decode[requestdomain.Detail](t, f.expect(t, "mia", 200, "GET", idPath("/api/requests/%d", rid), nil))
+	if len(detail.Relations) != 1 || detail.Relations[0].PackageID != got.ID {
+		t.Fatalf("relations = %+v, want the old one kept and marked", detail.Relations)
+	}
+	again := decode[requestdomain.ImportReport](t, f.expect(t, "mia", 200, "POST", "/api/packages/import-branch-relations", map[string]any{"project": accProject}))
+	if len(again.Items) != 0 {
+		t.Fatalf("second run = %+v", again)
+	}
+}
+
+// heldRequest ist ein noch nicht übernommener, destillierter Request aus der
+// privaten Session von rex: mia darf ihn weder lesen noch bearbeiten.
+func heldRequest(t *testing.T, f *accessAPIFixture) int64 {
+	t.Helper()
+	d, err := f.st.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{
+		Type: "feature", Title: "privater Wunsch von rex", Origin: "distilled",
+		SessionRef: fmt.Sprintf("session:%d", f.id["s-rex"]), Scope: scope.Axes{Project: accProject}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d.Request.ID
+}
+
+// Das Paket-Recht sagt nichts darüber, welche Requests der Aufrufer anfassen
+// darf. Ein Request, den er nicht sehen darf, lässt sich weder hineinlegen noch
+// herausnehmen, und die Antwort ist dieselbe wie für eine unbekannte Nummer:
+// auch der Request eines fremden Projekts verrät sich nicht.
+func TestPackageRefusesRequestsTheCallerMayNotTouch(t *testing.T) {
+	f := accessAPI(t, true)
+	held := heldRequest(t, f)
+	pkg := pkgJSON(t, f.expect(t, "mia", 201, "POST", "/api/packages", map[string]any{
+		"project": accProject, "branch": "feat/idor", "requests": []map[string]any{{"request_id": f.id["r-mia"]}}}))
+	add := idPath("/api/packages/%d/requests", pkg.ID)
+	remove := idPath("/api/packages/%d/requests/remove", pkg.ID)
+
+	for name, probe := range map[string]func(id int64) (int, string){
+		"add": func(id int64) (int, string) {
+			return f.call(t, "mia", "POST", add, map[string]any{"requests": []map[string]any{{"request_id": id}}})
+		},
+		"remove": func(id int64) (int, string) {
+			return f.call(t, "mia", "POST", remove, map[string]any{"request_id": id, "reason": "weg"})
+		},
+		"create": func(id int64) (int, string) {
+			return f.call(t, "mia", "POST", "/api/packages", map[string]any{"project": accProject, "branch": fmt.Sprintf("feat/idor-%d", id),
+				"requests": []map[string]any{{"request_id": id}}})
+		},
+	} {
+		unknownCode, unknown := probe(99999)
+		if unknownCode != 404 {
+			t.Errorf("%s: unknown id answers %d %s", name, unknownCode, unknown)
+		}
+		for what, id := range map[string]int64{"held request": held, "request of another project": f.id["r-other"]} {
+			if code, got := probe(id); code != unknownCode || got != unknown {
+				t.Errorf("%s with a %s answers %d %q, want what an unknown id gets: %d %q", name, what, code, got, unknownCode, unknown)
+			}
+		}
+	}
+	// Nichts davon hat das Paket verändert.
+	got := pkgJSON(t, f.expect(t, "mia", 200, "GET", idPath("/api/packages/%d", pkg.ID), nil))
+	if len(got.Members) != 1 {
+		t.Fatalf("members = %+v", got.Members)
+	}
+
+	// Ein Mitglied, das der Aufrufer nicht sehen darf (hineingelegt von jemandem
+	// mit Recht), lässt sich auch nicht herausnehmen und fehlt in der Ansicht.
+	if _, err := f.st.AddPackageRequests(pkg.ID, []requestdomain.PackageMember{{RequestID: held}}, "", "rex"); err != nil {
+		t.Fatal(err)
+	}
+	if code, _ := f.call(t, "mia", "POST", remove, map[string]any{"request_id": held, "reason": "weg"}); code != 404 {
+		t.Errorf("removing a hidden member answers %d, want 404", code)
+	}
+	got = pkgJSON(t, f.expect(t, "mia", 200, "GET", idPath("/api/packages/%d?full=1", pkg.ID), nil))
+	if _, in := memberRoles(got)[held]; in || len(got.Members) != 1 || strings.Contains(fmt.Sprint(got), "privater Wunsch") {
+		t.Errorf("the view shows a request the caller may not read: %+v", got.Members)
+	}
+	if stored, _ := f.st.PackageByID(pkg.ID); len(stored.Members) != 2 {
+		t.Errorf("the hidden member was removed: %+v", stored.Members)
+	}
+}
+
+// Die Übernahme fasst nur Requests an, die der Aufrufer lesen und bearbeiten
+// darf; die anderen bleiben unberührt und stehen nicht im Bericht.
+func TestImportBranchRelationsSkipsWhatTheCallerMayNotEdit(t *testing.T) {
+	f := accessAPI(t, true)
+	held := heldRequest(t, f)
+	ref := "branch:" + accProject + "@feat/mixed"
+	for _, id := range []int64{f.id["r-mia"], held} {
+		if _, err := f.st.AddRequestRelation(id, requestdomain.Relation{Kind: "external", ExternalRef: ref}, "robin"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	report := decode[requestdomain.ImportReport](t, f.expect(t, "mia", 200, "POST", "/api/packages/import-branch-relations", map[string]any{"project": accProject}))
+	if len(report.Items) != 1 || report.Items[0].RequestID != f.id["r-mia"] || strings.Contains(fmt.Sprint(report), fmt.Sprint(held)) {
+		t.Fatalf("report = %+v", report)
+	}
+	pkg := pkgJSON(t, f.expect(t, "mia", 200, "GET", "/api/packages?project="+accProject+"&branch=feat/mixed", nil))
+	if len(pkg.Members) != 1 {
+		t.Fatalf("package = %+v", pkg)
+	}
+	if d, _ := f.st.RequestByID(held); len(d.Relations) != 1 || d.Relations[0].PackageID != 0 {
+		t.Fatalf("a request the caller may not edit was touched: %+v", d.Relations)
 	}
 }
 
