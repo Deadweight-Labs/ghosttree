@@ -54,6 +54,9 @@ type Source struct {
 	ConnectedAt string `json:"connected_at"`
 	Repos       int    `json:"repos"`
 	Imported    int    `json:"imported"`
+	// InstallationID ist die Installation der GitHub-App, über die die Quelle
+	// belegt wurde; 0 bei einer Quelle, die über die OAuth-App kam.
+	InstallationID int64 `json:"installation_id,omitempty"`
 }
 
 // SourceRepo ist ein Repo einer Quelle; Imported sagt, ob es schon ein Projekt ist.
@@ -221,10 +224,21 @@ func requireOrgOwnerTx(tx rowQuerier, orgID int64, actorPrincipal string) (int64
 // Remotes; Fremdes und Ungültiges wird verworfen. Eine Quelle gehört genau einer
 // Organisation (ErrSourceTaken).
 func (s *Store) ConnectSource(actorPrincipal string, orgID int64, kind, login string, repos []string) (Source, error) {
+	return s.ConnectSourceWithInstallation(actorPrincipal, orgID, kind, login, 0, repos)
+}
+
+// ConnectSourceWithInstallation ist ConnectSource für eine Quelle, die über die
+// Installation einer GitHub-App belegt wurde. Die Installation gehört genau
+// einer Quelle (ErrSourceTaken sonst); installationID 0 lässt eine schon
+// gespeicherte Installation unberührt.
+func (s *Store) ConnectSourceWithInstallation(actorPrincipal string, orgID int64, kind, login string, installationID int64, repos []string) (Source, error) {
 	if s.writer != nil {
-		return queueValue(s, []any{actorPrincipal, orgID, kind, login, repos}, func(d *Store, p []any) (Source, error) {
-			return d.ConnectSource(p[0].(string), p[1].(int64), p[2].(string), p[3].(string), p[4].([]string))
+		return queueValue(s, []any{actorPrincipal, orgID, kind, login, installationID, repos}, func(d *Store, p []any) (Source, error) {
+			return d.ConnectSourceWithInstallation(p[0].(string), p[1].(int64), p[2].(string), p[3].(string), p[4].(int64), p[5].([]string))
 		})
+	}
+	if installationID < 0 {
+		return Source{}, fmt.Errorf("%w: installation id", ErrInvalidInput)
 	}
 	host, ok := sourceHost(kind)
 	if !ok {
@@ -261,6 +275,18 @@ func (s *Store) ConnectSource(actorPrincipal string, orgID int64, kind, login st
 	case owner != orgID:
 		return Source{}, ErrSourceTaken
 	}
+	if installationID > 0 {
+		var other int64
+		switch err := tx.QueryRow(`SELECT id FROM git_sources WHERE installation_id=? AND id<>?`, installationID, id).Scan(&other); {
+		case err == nil:
+			return Source{}, ErrSourceTaken
+		case !errors.Is(err, sql.ErrNoRows):
+			return Source{}, err
+		}
+		if _, err := tx.Exec(`UPDATE git_sources SET installation_id=? WHERE id=?`, installationID, id); err != nil {
+			return Source{}, err
+		}
+	}
 	if repos != nil {
 		if _, err := tx.Exec(`DELETE FROM git_source_repos WHERE source_id=?`, id); err != nil {
 			return Source{}, err
@@ -289,12 +315,13 @@ func (s *Store) ConnectSource(actorPrincipal string, orgID int64, kind, login st
 
 const sourceSelect = `SELECT g.id, g.org_id, g.kind, g.login, g.connected_at,
 	(SELECT COUNT(*) FROM git_source_repos r WHERE r.source_id=g.id),
-	(SELECT COUNT(*) FROM git_source_repos r JOIN projects p ON p.remote=r.remote WHERE r.source_id=g.id AND p.org_id=g.org_id)
+	(SELECT COUNT(*) FROM git_source_repos r JOIN projects p ON p.remote=r.remote WHERE r.source_id=g.id AND p.org_id=g.org_id),
+	g.installation_id
 	FROM git_sources g`
 
 func scanSource(r rowScanner) (Source, error) {
 	var s Source
-	err := r.Scan(&s.ID, &s.OrgID, &s.Kind, &s.Login, &s.ConnectedAt, &s.Repos, &s.Imported)
+	err := r.Scan(&s.ID, &s.OrgID, &s.Kind, &s.Login, &s.ConnectedAt, &s.Repos, &s.Imported, &s.InstallationID)
 	return s, err
 }
 
@@ -650,4 +677,100 @@ func assignByPrefixTx(tx execQueryer, account int64, remote string, wantOrg int6
 	}
 	p, _ = projectTx(tx, remote)
 	return p, true, nil
+}
+
+// ---------------------------------------------------------------- GitHub-App
+
+// migrateSourceInstallation ergänzt git_sources additiv um die Installation der
+// GitHub-App. Bestehende Quellen behalten 0 (OAuth-Nachweis); ein
+// zurückgerolltes Binary ignoriert die Spalte.
+func migrateSourceInstallation(db *sql.DB) error {
+	if err := addColumnIfMissing(db, "git_sources", "installation_id", `INTEGER NOT NULL DEFAULT 0`); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+		return err
+	}
+	_, err := db.Exec(`CREATE INDEX IF NOT EXISTS git_sources_installation ON git_sources(installation_id) WHERE installation_id > 0`)
+	return err
+}
+
+// SyncInstallationRepos gleicht die Repo-Liste der Quelle mit einer Änderung ab,
+// die GitHub per Webhook meldet (Installation-ID, kein Nutzer): hinzugekommene
+// Repos kommen in die Liste der Quelle und, wenn die Organisation das Präfix
+// beansprucht, als Projekte dazu, mit der Sichtbarkeit der Präfix-Regel.
+// Entfernte Repos verlassen nur die Liste; bestehende Projekte bleiben. Eine
+// unbekannte Installation ist kein Fehler (der Webhook gilt auch für Orgs, die
+// hier nie verbunden wurden). Liefert die Zahl neu angelegter Projekte.
+func (s *Store) SyncInstallationRepos(installationID int64, add, remove []string) (int, error) {
+	if s.writer != nil {
+		return queueValue(s, []any{installationID, add, remove}, func(d *Store, p []any) (int, error) {
+			return d.SyncInstallationRepos(p[0].(int64), p[1].([]string), p[2].([]string))
+		})
+	}
+	if installationID <= 0 {
+		return 0, nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	var id, orgID int64
+	var kind, login string
+	switch err := tx.QueryRow(`SELECT id, org_id, kind, login FROM git_sources WHERE installation_id=?`, installationID).Scan(&id, &orgID, &kind, &login); {
+	case errors.Is(err, sql.ErrNoRows):
+		return 0, nil
+	case err != nil:
+		return 0, err
+	}
+	host, _ := sourceHost(kind)
+	own := func(raw string) (string, bool) {
+		remote, err := normalizeRemote(raw)
+		return remote, err == nil && strings.HasPrefix(remote, host+"/"+login+"/")
+	}
+	for _, raw := range remove {
+		if remote, ok := own(raw); ok {
+			if _, err := tx.Exec(`DELETE FROM git_source_repos WHERE source_id=? AND remote=?`, id, remote); err != nil {
+				return 0, err
+			}
+		}
+	}
+	var listed int
+	_ = tx.QueryRow(`SELECT COUNT(*) FROM git_source_repos WHERE source_id=?`, id).Scan(&listed)
+	created := 0
+	for _, raw := range add {
+		remote, ok := own(raw)
+		if !ok {
+			continue
+		}
+		res, err := tx.Exec(`INSERT OR IGNORE INTO git_source_repos(source_id, remote)
+			SELECT ?, ? WHERE ? < ?`, id, remote, listed, maxSourceRepos)
+		if err != nil {
+			return 0, err
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			listed++
+		}
+		porg, vis, claimed := prefixOrgTx(tx, remote)
+		if !claimed || porg != orgID {
+			continue
+		}
+		if _, known := projectTx(tx, remote); known {
+			continue
+		}
+		pid, err := insertProjectTx(tx, orgID, remote)
+		if err != nil {
+			return 0, err
+		}
+		if vis == VisibilityShared {
+			if _, err := tx.Exec(`INSERT OR IGNORE INTO shared_projects(project_id) VALUES(?)`, pid); err != nil {
+				return 0, err
+			}
+		}
+		created++
+	}
+	if created > 0 {
+		if err := orgEvent(tx, orgID, "import_repos", "github", kind+":"+login, fmt.Sprintf("%d projects via webhook", created)); err != nil {
+			return 0, err
+		}
+	}
+	return created, tx.Commit()
 }
