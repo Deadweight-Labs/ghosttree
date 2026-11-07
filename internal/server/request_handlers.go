@@ -57,6 +57,7 @@ func (a *api) createRequest(w http.ResponseWriter, r *http.Request) {
 			Origin: body.Origin, Person: personOf(r), SessionRef: body.SessionRef,
 		},
 		Criteria: body.Criteria, IdempotencyKey: body.IdempotencyKey, AuthorID: authorIDOf(r),
+		GitAnchor: anchorFromRequest(r),
 	})
 	if err != nil {
 		writeRequestError(w, err)
@@ -73,9 +74,14 @@ func (a *api) searchRequests(w http.ResponseWriter, r *http.Request) {
 	if !a.listGate(w, r, axesFromQuery(r).Project, store.ResRequest) {
 		return
 	}
+	anchor, ok := anchorFilterFromQuery(w, r)
+	if !ok {
+		return
+	}
 	page, err := a.st.SearchRequestsWith(a.requestFilter(r, requestdomain.SearchFilter{
 		Scope: axesFromQuery(r), Query: q.Get("q"), State: q.Get("state"),
 		Type: q.Get("type"), Cursor: q.Get("cursor"), Limit: intParam(r, "limit", 10),
+		Commit: anchor.Commit, PR: anchor.PR,
 		// Nur für Aufrufer, die den ganzen Text zeigen — der Dateispiegel. Eine
 		// Trefferliste bleibt eine Trefferliste.
 		FullDescription: q.Get("full") == "1",
@@ -126,7 +132,7 @@ func (a *api) completeRequest(w http.ResponseWriter, r *http.Request) {
 	if !a.checkRequest(w, r, store.RefRequest, id, store.ActEdit) {
 		return
 	}
-	err := a.st.CompleteRequest(id, requestdomain.Evidence{Kind: body.EvidenceKind, Ref: body.EvidenceRef, Person: personOf(r)})
+	err := a.st.CompleteRequest(id, requestdomain.Evidence{Kind: body.EvidenceKind, Ref: body.EvidenceRef, Person: personOf(r), GitAnchor: anchorFromRequest(r)})
 	if err != nil {
 		writeRequestError(w, err)
 		return
@@ -288,7 +294,7 @@ func (a *api) setRequestCriterion(w http.ResponseWriter, r *http.Request) {
 	if !a.checkRequest(w, r, store.RefCriterion, criterionID, store.ActWork) {
 		return
 	}
-	if err := a.st.SetCriterionState(criterionID, body.State, requestdomain.Evidence{Kind: body.EvidenceKind, Ref: body.EvidenceRef, Person: personOf(r)}); err != nil {
+	if err := a.st.SetCriterionState(criterionID, body.State, requestdomain.Evidence{Kind: body.EvidenceKind, Ref: body.EvidenceRef, Person: personOf(r), GitAnchor: anchorFromRequest(r)}); err != nil {
 		writeRequestError(w, err)
 		return
 	}
