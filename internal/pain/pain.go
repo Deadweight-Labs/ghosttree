@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 )
 
@@ -73,6 +74,9 @@ type Event struct {
 	Data         string `json:"data,omitempty"`
 	Person       string `json:"person,omitempty"`
 	CreatedAt    string `json:"created_at"`
+	// GitAnchor ist der Git-Stand, an dem das Ereignis geschrieben wurde
+	// (REQ-597); nil bei Ereignissen ohne Anker.
+	GitAnchor *gitanchor.Anchor `json:"git_anchor,omitempty"`
 }
 
 type Detail struct {
@@ -177,4 +181,8 @@ type Actor struct {
 	AccountID int64
 	Person    string
 	SessionID int64
+	// GitAnchor ist der Git-Stand des schreibenden Clients (REQ-597), vom
+	// Server aus dem Header gesetzt. Jedes Ereignis, das dieser Akteur
+	// auslöst, bekommt eine eigene Anker-Zeile.
+	GitAnchor *gitanchor.Anchor
 }

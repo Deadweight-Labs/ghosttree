@@ -80,7 +80,7 @@ func ghostArchiveCandidateTx(tx *sql.Tx, project, path string) (GhostArchiveCand
 	if err != nil {
 		return GhostArchiveCandidate{}, err
 	}
-	gs, err := scanGhostFiles(rows)
+	gs, err := scanGhostFilesRaw(rows)
 	if err != nil {
 		return GhostArchiveCandidate{}, err
 	}

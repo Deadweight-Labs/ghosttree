@@ -73,7 +73,11 @@ func (s *Store) CreateRequest(in requestdomain.CreateInput) (requestdomain.Detai
 			return requestdomain.Detail{}, err
 		}
 	}
-	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at) VALUES(?,'request.created',?,?,?)`, id, r.Person, r.Title, ts); err != nil {
+	anchorID, err := insertAnchorTx(tx, in.GitAnchor)
+	if err != nil {
+		return requestdomain.Detail{}, err
+	}
+	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at,anchor_id) VALUES(?,'request.created',?,?,?,?)`, id, r.Person, r.Title, ts, anchorID); err != nil {
 		return requestdomain.Detail{}, err
 	}
 	if _, err := tx.Exec(`INSERT INTO search_documents(kind,domain_id,title,body,project,branch,machine) VALUES('request',?,?,?,?,?,?)`, id, r.Title, r.Description, r.Scope.Project, r.Scope.Branch, r.Scope.Machine); err != nil {
@@ -131,6 +135,9 @@ func (s *Store) RequestByID(id int64) (requestdomain.Detail, error) {
 		if err := evidenceRows.Close(); err != nil {
 			return d, err
 		}
+		if err := s.attachEvidenceAnchors(d.Criteria[i].Evidence); err != nil {
+			return d, err
+		}
 	}
 	activityRows, err := s.db.Query(`SELECT id,request_id,kind,person,data,created_at,session_id FROM request_activity WHERE request_id=? ORDER BY id`, id)
 	if err != nil {
@@ -145,6 +152,9 @@ func (s *Store) RequestByID(id int64) (requestdomain.Detail, error) {
 		d.Activity = append(d.Activity, a)
 	}
 	if err := activityRows.Err(); err != nil {
+		return d, err
+	}
+	if err := s.attachActivityAnchors(d.Activity); err != nil {
 		return d, err
 	}
 	relationRows, err := s.db.Query(`SELECT id,request_id,COALESCE(other_request_id,0),COALESCE(knowledge_id,0),kind,external_ref,created_at FROM request_relations WHERE request_id=? ORDER BY id`, id)
@@ -254,6 +264,11 @@ func requestScopeWhere(filter requestdomain.SearchFilter) ([]string, []any) {
 			args = append(args, filter.UnclaimedAuthor)
 		}
 		where = append(where, `(`+clause+`)`)
+	}
+	if af := (AnchorFilter{Commit: filter.Commit, PR: filter.PR}); af.Active() {
+		cond, cargs := af.Where("ra.anchor_id")
+		where = append(where, `EXISTS (SELECT 1 FROM request_activity ra WHERE ra.request_id=r.id AND `+cond+`)`)
+		args = append(args, cargs...)
 	}
 	if filter.HideHeld {
 		where = append(where, `NOT (r.origin='distilled' AND r.person='' AND EXISTS (
@@ -375,10 +390,16 @@ func (s *Store) SetCriterionState(id int64, state string, evidence requestdomain
 	if _, err := tx.Exec(`UPDATE request_criteria SET state=?,updated_at=? WHERE id=?`, state, ts, id); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`INSERT INTO request_evidence(request_id,criterion_id,kind,ref,person,created_at) VALUES(?,?,?,?,?,?)`, requestID, id, evidence.Kind, evidence.Ref, evidence.Person, ts); err != nil {
+	// Ein Anker je Vorgang, von Nachweis und Aktivität geteilt: beide halten
+	// dasselbe Ereignis fest.
+	anchorID, err := insertAnchorTx(tx, evidence.GitAnchor)
+	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at) VALUES(?,?,?,?,?)`, requestID, "criterion."+state, evidence.Person, fmt.Sprintf("AC-%d", id), ts)
+	if _, err := tx.Exec(`INSERT INTO request_evidence(request_id,criterion_id,kind,ref,person,created_at,anchor_id) VALUES(?,?,?,?,?,?,?)`, requestID, id, evidence.Kind, evidence.Ref, evidence.Person, ts, anchorID); err != nil {
+		return err
+	}
+	_, err = tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at,anchor_id) VALUES(?,?,?,?,?,?)`, requestID, "criterion."+state, evidence.Person, fmt.Sprintf("AC-%d", id), ts, anchorID)
 	if err != nil {
 		return err
 	}
@@ -432,10 +453,14 @@ func (s *Store) CompleteRequest(id int64, evidence requestdomain.Evidence) error
 	if n, _ := res.RowsAffected(); n != 1 {
 		return requestdomain.NewRuleError("request_not_completable", fmt.Sprintf("request REQ-%d changed while completing", id), "reload the request and resolve its current criteria", nil)
 	}
-	if _, err := tx.Exec(`INSERT INTO request_evidence(request_id,kind,ref,person,created_at) VALUES(?,?,?,?,?)`, id, evidence.Kind, evidence.Ref, evidence.Person, ts); err != nil {
+	anchorID, err := insertAnchorTx(tx, evidence.GitAnchor)
+	if err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at) VALUES(?,'request.done',?,?,?)`, id, evidence.Person, evidence.Ref, ts); err != nil {
+	if _, err := tx.Exec(`INSERT INTO request_evidence(request_id,kind,ref,person,created_at,anchor_id) VALUES(?,?,?,?,?,?)`, id, evidence.Kind, evidence.Ref, evidence.Person, ts, anchorID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at,anchor_id) VALUES(?,'request.done',?,?,?,?)`, id, evidence.Person, evidence.Ref, ts, anchorID); err != nil {
 		return err
 	}
 	return tx.Commit()

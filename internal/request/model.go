@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 )
 
@@ -47,6 +48,9 @@ type Evidence struct {
 	Ref         string `json:"ref"`
 	Person      string `json:"person"`
 	CreatedAt   string `json:"created_at"`
+	// GitAnchor ist der Git-Stand, an dem der Nachweis geschrieben wurde
+	// (REQ-597). Beim Schreiben setzt ihn der Server aus dem Header des Clients.
+	GitAnchor *gitanchor.Anchor `json:"git_anchor,omitempty"`
 }
 
 type Work struct {
@@ -80,6 +84,9 @@ type Activity struct {
 	Person    string `json:"person"`
 	Data      string `json:"data,omitempty"`
 	CreatedAt string `json:"created_at"`
+	// GitAnchor ist der Git-Stand, an dem das Ereignis geschrieben wurde
+	// (REQ-597); nil bei Ereignissen ohne Anker.
+	GitAnchor *gitanchor.Anchor `json:"git_anchor,omitempty"`
 	// SessionID: die Session, auf die sich der Eintrag bezieht (0 = keine).
 	// Nie ausgeliefert; die Sicht des Betrachters entscheidet damit, ob sie
 	// den Eintrag zeigen darf.
@@ -137,6 +144,9 @@ type CreateInput struct {
 	Request        Request  `json:"request"`
 	Criteria       []string `json:"criteria"`
 	IdempotencyKey string   `json:"idempotency_key,omitempty"`
+	// GitAnchor ist der Git-Stand beim Anlegen (REQ-597); der Server setzt ihn
+	// aus dem Header, nie aus dem Body.
+	GitAnchor *gitanchor.Anchor `json:"-"`
 	// Explanation is the agent's "Kurz erklärt" text. It travels with the call
 	// to the server, which stores it beside the request; it is not part of it.
 	Explanation string `json:"-"`
@@ -153,6 +163,11 @@ type SearchFilter struct {
 	Priority string
 	Query    string
 	Cursor   string
+	// Commit (Präfix, mindestens 7 Hexzeichen) und PR filtern auf Aufträge,
+	// zu denen es ein Ereignis (Anlegen, Nachweis, Abschluss) auf diesem Stand
+	// gibt (REQ-597). Der Server prüft die Angabe, bevor sie hier ankommt.
+	Commit string
+	PR     int64
 	// FullDescription gibt die Beschreibung ungekürzt zurück. Für eine
 	// Trefferliste falsch — 24 volle Beschreibungen sprengen jedes Werkzeuglimit
 	// —, für den Dateispiegel notwendig: der gibt sich nicht als Liste aus,

@@ -3,6 +3,8 @@ package store
 import (
 	"database/sql"
 	"strings"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
 )
 
 // GhostFile ist die Beschreibung eines Pfades. Die Identität ist
@@ -26,6 +28,10 @@ type GhostFile struct {
 	// description alone, its words do not match the query. A hit of the full-text
 	// index leaves it empty, which is also how every other read leaves it.
 	Match string `json:"match,omitempty"`
+	// GitAnchor ist der Git-Stand, an dem diese Beschreibung geschrieben wurde
+	// (REQ-597). Der Server setzt ihn beim Schreiben aus dem Header, nie aus
+	// dem Body.
+	GitAnchor *gitanchor.Anchor `json:"git_anchor,omitempty"`
 }
 
 const ghostCols = `id, project, path, kind, description, content_sha, git_blob,
@@ -63,17 +69,25 @@ func (s *Store) PutGhostFile(g GhostFile) (int64, error) {
 	if err := archiveGhostFileTx(tx, g.Project, g.Path, ts, "ersetzt"); err != nil {
 		return 0, err
 	}
+	// Der neue Anker ersetzt den alten auf der Kopfzeile; der alte ist mit der
+	// verdrängten Fassung in der Historie (archiveGhostFileTx). Ohne Anker
+	// bleibt die Spalte leer, sie erbt nichts.
+	anchorID, err := insertAnchorTx(tx, g.GitAnchor)
+	if err != nil {
+		return 0, err
+	}
 	res, err := tx.Exec(`INSERT INTO ghost_files(project,path,kind,description,content_sha,git_blob,
-		line_count,person,harness,session_ref,described_at,updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+		line_count,person,harness,session_ref,described_at,updated_at,anchor_id)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(project,path) DO UPDATE SET
 			kind=excluded.kind, description=excluded.description,
 			content_sha=excluded.content_sha, git_blob=excluded.git_blob,
 			line_count=excluded.line_count, person=excluded.person,
 			harness=excluded.harness, session_ref=excluded.session_ref,
-			described_at=excluded.described_at, updated_at=excluded.updated_at`,
+			described_at=excluded.described_at, updated_at=excluded.updated_at,
+			anchor_id=excluded.anchor_id`,
 		g.Project, g.Path, g.Kind, g.Description, g.ContentSHA, g.GitBlob,
-		g.LineCount, g.Person, g.Harness, g.SessionRef, g.DescribedAt, ts)
+		g.LineCount, g.Person, g.Harness, g.SessionRef, g.DescribedAt, ts, anchorID)
 	if err != nil {
 		return 0, err
 	}
@@ -92,7 +106,7 @@ func (s *Store) GhostFileByPath(project, path string) (GhostFile, error) {
 	if err != nil {
 		return GhostFile{}, err
 	}
-	gs, err := scanGhostFiles(rows)
+	gs, err := s.scanGhostFiles(rows)
 	if err != nil {
 		return GhostFile{}, err
 	}
@@ -119,7 +133,7 @@ func (s *Store) GhostFilesUnder(project, prefix string) ([]GhostFile, error) {
 	if err != nil {
 		return nil, err
 	}
-	return scanGhostFiles(rows)
+	return s.scanGhostFiles(rows)
 }
 
 // SearchGhostFiles sucht über Pfad und Beschreibung. Dieselbe Verknüpfung wie
@@ -136,21 +150,48 @@ func (s *Store) SearchGhostFiles(q, project string, limit int) ([]GhostFile, err
 }
 
 // ftsGhostFiles is the full-text ranking as it has always been answered.
-func (s *Store) ftsGhostFiles(q, project string, limit int) ([]GhostFile, error) {
+func (s *Store) ftsGhostFiles(q, project string, limit int, anchor AnchorFilter) ([]GhostFile, error) {
 	if limit <= 0 {
 		limit = 20
 	}
+	where, args := `(? = '' OR g.project = ?)`, []any{ftsQuery(q), project, project}
+	if af, afArgs := anchor.Where("g.anchor_id"); af != "" {
+		where += " AND " + af
+		args = append(args, afArgs...)
+	}
 	rows, err := s.db.Query(`SELECT `+prefix(ghostCols, "g.")+`
 		FROM ghost_files_fts f JOIN ghost_files g ON g.id=f.rowid
-		WHERE ghost_files_fts MATCH ? AND (? = '' OR g.project = ?)
-		ORDER BY f.rank LIMIT ?`, ftsQuery(q), project, project, limit)
+		WHERE ghost_files_fts MATCH ? AND `+where+`
+		ORDER BY f.rank LIMIT ?`, append(args, limit)...)
 	if err != nil {
 		return nil, err
 	}
-	return scanGhostFiles(rows)
+	return s.scanGhostFiles(rows)
 }
 
-func scanGhostFiles(rows *sql.Rows) ([]GhostFile, error) {
+// scanGhostFiles liest Zeilen von ghostCols und hängt ihnen den Anker an. Nicht
+// innerhalb einer Transaktion zu benutzen: der Anker kommt über s.db, und bei
+// einer einzigen Verbindung wartete das auf die eigene Transaktion.
+func (s *Store) scanGhostFiles(rows *sql.Rows) ([]GhostFile, error) {
+	out, err := scanGhostFilesRaw(rows)
+	if err != nil || len(out) == 0 {
+		return out, err
+	}
+	ids := make([]int64, len(out))
+	for i, g := range out {
+		ids[i] = g.ID
+	}
+	anchors, err := s.anchorsFor("ghost_files", ids)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		out[i].GitAnchor = anchors[out[i].ID]
+	}
+	return out, nil
+}
+
+func scanGhostFilesRaw(rows *sql.Rows) ([]GhostFile, error) {
 	defer rows.Close()
 	out := []GhostFile{}
 	for rows.Next() {
@@ -225,7 +266,7 @@ func (s *Store) GhostFilesForDelivery(project, path, sessionKey string) ([]Ghost
 		if err != nil {
 			return nil, err
 		}
-		gs, err := scanGhostFiles(rows)
+		gs, err := scanGhostFilesRaw(rows)
 		if err != nil {
 			return nil, err
 		}
