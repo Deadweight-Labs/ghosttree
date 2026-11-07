@@ -34,7 +34,7 @@ func (a *api) callerSession(r *http.Request, id int64) int64 {
 }
 
 func (a *api) painActor(r *http.Request, sessionID int64) pain.Actor {
-	return pain.Actor{AccountID: authorIDOf(r), Person: personOf(r), SessionID: a.callerSession(r, sessionID)}
+	return pain.Actor{AccountID: authorIDOf(r), Person: personOf(r), SessionID: a.callerSession(r, sessionID), GitAnchor: anchorFromRequest(r)}
 }
 
 func (a *api) createPain(w http.ResponseWriter, r *http.Request) {

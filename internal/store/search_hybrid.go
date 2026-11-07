@@ -69,6 +69,10 @@ type KnowledgeSearch struct {
 	// narrower than Keep; Keep stays the exact rule.
 	Prefilter KnowledgePrefilter
 	Mode      SearchMode
+	// Anchor filtert nach dem Git-Anker der aktuellen Fassung (REQ-597). Er
+	// steht in der Abfrage beider Rankings, nicht erst in Keep: ein Filter auf
+	// einen Commit darf nicht an den ersten Treffern der Rangfolge hängen.
+	Anchor AnchorFilter
 }
 
 // KnowledgePrefilter is a Prefilter on the table alias k of knowledge.
@@ -111,6 +115,10 @@ func (s *Store) searchKnowledgeWith(q string, o KnowledgeSearch) ([]Knowledge, e
 		where, args = o.Axes.FilterWhere()
 	}
 	where, args = withGlobalScope(where, args, "k", []SessionViewer{o.Viewer})
+	if af, afArgs := o.Anchor.Where("k.anchor_id"); af != "" {
+		where = "(" + where + ") AND " + af
+		args = append(slices.Clone(args), afArgs...)
+	}
 	limit := o.Limit
 	if limit <= 0 {
 		limit = 20

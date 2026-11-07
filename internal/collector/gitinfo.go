@@ -91,10 +91,23 @@ func resolveRepoContext(cwd string) GitContext {
 // The alternative, treating any shared merge base as ancestry, would make every
 // branch an ancestor of every other, which is not a lineage but a repository.
 func BranchLineage(cwd, branch string) []string {
+	return branchLineageOf(cwd, branch, "HEAD")
+}
+
+// BranchLineageOf ist BranchLineage für einen benannten Branch statt für HEAD:
+// die Vorfahren, die der Branch enthält. Für eine Suche auf einem anderen
+// Branch als dem ausgecheckten (context_search mit branch). Gibt es den Branch
+// hier nicht (kein lokaler Ref), ist die Kette leer und die Suche liest auf
+// Projektebene, wie ohne Lineage.
+func BranchLineageOf(cwd, branch string) []string {
+	return branchLineageOf(cwd, branch, "refs/heads/"+branch)
+}
+
+func branchLineageOf(cwd, branch, ref string) []string {
 	if branch == "" {
 		return nil
 	}
-	out, err := gitOut(cwd, "branch", "--format=%(refname:short)", "--merged", "HEAD")
+	out, err := gitOut(cwd, "branch", "--format=%(refname:short)", "--merged", ref)
 	if err != nil {
 		// No repository, a detached head, or a git too old for --format. A
 		// session with no derivable chain reads at project scope, which is what

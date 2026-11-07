@@ -113,8 +113,12 @@ func insertLinkTx(tx txExec, painID int64, project string, t resolvedTarget, a p
 		return id, false, err
 	}
 	id, _ := res.LastInsertId()
-	if _, err := tx.Exec(`INSERT INTO pain_events(pain_id,kind,data,person,account_id,session_id,created_at) VALUES(?,'link_added',?,?,?,?,?)`,
-		painID, targetData(t), a.Person, a.AccountID, a.SessionID, ts); err != nil {
+	anchorID, err := insertAnchorTx(tx, a.GitAnchor)
+	if err != nil {
+		return 0, false, err
+	}
+	if _, err := tx.Exec(`INSERT INTO pain_events(pain_id,kind,data,person,account_id,session_id,created_at,anchor_id) VALUES(?,'link_added',?,?,?,?,?,?)`,
+		painID, targetData(t), a.Person, a.AccountID, a.SessionID, ts, anchorID); err != nil {
 		return 0, false, err
 	}
 	if t.Kind == "request" {
@@ -183,8 +187,12 @@ func (s *Store) commitPain(in CreatePainInput, targets []resolvedTarget) (int64,
 	}
 	actor := in.Actor
 	actor.AccountID = account
-	if _, err := tx.Exec(`INSERT INTO pain_events(pain_id,kind,to_state,person,account_id,session_id,created_at) VALUES(?,'created','active',?,?,?,?)`,
-		id, actor.Person, account, actor.SessionID, ts); err != nil {
+	anchorID, err := insertAnchorTx(tx, actor.GitAnchor)
+	if err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(`INSERT INTO pain_events(pain_id,kind,to_state,person,account_id,session_id,created_at,anchor_id) VALUES(?,'created','active',?,?,?,?,?)`,
+		id, actor.Person, account, actor.SessionID, ts, anchorID); err != nil {
 		return 0, err
 	}
 	for _, t := range targets {
@@ -287,8 +295,12 @@ func (s *Store) commitPainState(id int64, from, to, remaining string, ev pain.Ev
 	if _, err := tx.Exec(`UPDATE pains SET state=?,remaining=?,updated_at=? WHERE id=?`, to, remaining, ts, id); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`INSERT INTO pain_events(pain_id,kind,from_state,to_state,remaining,evidence_kind,evidence_ref,note,person,account_id,session_id,created_at)
-		VALUES(?,'state',?,?,?,?,?,?,?,?,?,?)`, id, from, to, remaining, ev.Kind, ev.Ref, note, actor.Person, actor.AccountID, actor.SessionID, ts); err != nil {
+	anchorID, err := insertAnchorTx(tx, actor.GitAnchor)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO pain_events(pain_id,kind,from_state,to_state,remaining,evidence_kind,evidence_ref,note,person,account_id,session_id,created_at,anchor_id)
+		VALUES(?,'state',?,?,?,?,?,?,?,?,?,?,?)`, id, from, to, remaining, ev.Kind, ev.Ref, note, actor.Person, actor.AccountID, actor.SessionID, ts, anchorID); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -345,8 +357,12 @@ func (s *Store) commitPainCorrection(id int64, title, body, reason, changed stri
 	if _, err := tx.Exec(`UPDATE pains SET title=?,body=?,updated_at=? WHERE id=?`, title, body, ts, id); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`INSERT INTO pain_events(pain_id,kind,note,data,person,account_id,session_id,created_at) VALUES(?,'corrected',?,?,?,?,?,?)`,
-		id, reason, changed, actor.Person, actor.AccountID, actor.SessionID, ts); err != nil {
+	anchorID, err := insertAnchorTx(tx, actor.GitAnchor)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO pain_events(pain_id,kind,note,data,person,account_id,session_id,created_at,anchor_id) VALUES(?,'corrected',?,?,?,?,?,?,?)`,
+		id, reason, changed, actor.Person, actor.AccountID, actor.SessionID, ts, anchorID); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -434,8 +450,12 @@ func (s *Store) commitPainUnlink(linkID, painID int64, t resolvedTarget, reason 
 		return err
 	}
 	ts := now()
-	if _, err := tx.Exec(`INSERT INTO pain_events(pain_id,kind,note,data,person,account_id,session_id,created_at) VALUES(?,'link_removed',?,?,?,?,?,?)`,
-		painID, reason, targetData(t), actor.Person, actor.AccountID, actor.SessionID, ts); err != nil {
+	anchorID, err := insertAnchorTx(tx, actor.GitAnchor)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO pain_events(pain_id,kind,note,data,person,account_id,session_id,created_at,anchor_id) VALUES(?,'link_removed',?,?,?,?,?,?,?)`,
+		painID, reason, targetData(t), actor.Person, actor.AccountID, actor.SessionID, ts, anchorID); err != nil {
 		return err
 	}
 	if t.Kind == "request" {
@@ -607,5 +627,21 @@ func (s *Store) painLinksAndEvents(id int64) ([]pain.Link, []pain.Event, error) 
 		}
 		events = append(events, e)
 	}
-	return links, events, erows.Err()
+	if err := erows.Err(); err != nil {
+		return nil, nil, err
+	}
+	if len(events) > 0 {
+		ids := make([]int64, len(events))
+		for i, e := range events {
+			ids[i] = e.ID
+		}
+		anchors, err := s.anchorsFor("pain_events", ids)
+		if err != nil {
+			return nil, nil, err
+		}
+		for i := range events {
+			events[i].GitAnchor = anchors[events[i].ID]
+		}
+	}
+	return links, events, nil
 }

@@ -16,6 +16,7 @@ import (
 
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
+	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/snapshot"
@@ -25,6 +26,8 @@ import (
 type Client struct {
 	cfg  config.Config
 	http *http.Client
+	// anchor ermittelt den Git-Anker für schreibende Aufrufe (SetAnchorSource).
+	anchor func() gitanchor.Anchor
 }
 
 type SearchResult struct {
@@ -160,6 +163,7 @@ func (c *Client) doContext(ctx context.Context, method, path string, query url.V
 	if c.cfg.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.cfg.Token)
 	}
+	c.setAnchor(req, method, path)
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return err
@@ -557,7 +561,12 @@ func (c *Client) SearchUnion(q, kind string, ax scope.Axes, limit int) (SearchRe
 }
 
 func (c *Client) search(q, kind string, filter scope.Axes, excludeSession string, limit int, union bool) (SearchResult, error) {
+	return c.searchWith(q, kind, filter, excludeSession, limit, union, AnchorFilter{})
+}
+
+func (c *Client) searchWith(q, kind string, filter scope.Axes, excludeSession string, limit int, union bool, af AnchorFilter) (SearchResult, error) {
 	query := axesQuery(filter)
+	af.apply(query)
 	query.Set("q", q)
 	if union {
 		query.Set("scope", "union")

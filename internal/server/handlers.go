@@ -256,6 +256,7 @@ func (a *api) createKnowledge(w http.ResponseWriter, r *http.Request) {
 	// Die Zuschreibung kommt aus dem Token und ist danach unveränderlich.
 	k.Person, k.ConfirmedBy = personOf(r), ""
 	k.AuthorID = authorIDOf(r)
+	k.GitAnchor = anchorFromRequest(r)
 	if k.Confidence == "verified" {
 		k.ConfirmedBy = k.Person
 	}
@@ -671,6 +672,10 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 	}
 	filter := axesFromQuery(r)
 	limit := intParam(r, "limit", 20)
+	anchor, ok := anchorFilterFromQuery(w, r)
+	if !ok {
+		return
+	}
 	pa := a.access(r)
 	fetch := a.overfetch(limit)
 	pa.Filtered()
@@ -687,7 +692,7 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 		ks, err := a.st.SearchKnowledgeWith(q, store.KnowledgeSearch{
 			Axes: filter, Union: r.URL.Query().Get("scope") == "union",
 			Limit: fetch, Viewer: pa.Viewer(), Keep: readable, Prefilter: pa.KnowledgePrefilter(),
-			NoRecord: true,
+			NoRecord: true, Anchor: anchor,
 		})
 		if err != nil {
 			writeStoreError(w, http.StatusInternalServerError, err)
@@ -697,7 +702,9 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 		a.st.RecordKnowledgeSearchHits(delivered)
 		res.Knowledge = pa.KnowledgeViews(delivered)
 	}
-	if kind == "sessions" || kind == "all" {
+	// Transkripte tragen keinen Git-Anker: mit einem Anker-Filter gibt es
+	// keine Session-Treffer, statt Treffer zu zeigen, die der Filter nicht prüfen kann.
+	if (kind == "sessions" || kind == "all") && !anchor.Active() {
 		hits, err := a.searchSessions(pa, q, filter, r.URL.Query().Get("exclude_session"), limit, fetch, store.SearchAuto)
 		if err != nil {
 			writeStoreError(w, http.StatusInternalServerError, err)
@@ -708,7 +715,7 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 	if kind == "requests" || kind == "all" {
 		// With embeddings the requests are ranked by words and by meaning; the
 		// filter, with the visibility of the reader, is the same SQL for both.
-		page, err := a.st.SearchRequestsWith(a.requestFilter(r, requestdomain.SearchFilter{Query: q, Scope: scope.Axes{Project: filter.Project}, Limit: limit}), store.SearchAuto)
+		page, err := a.st.SearchRequestsWith(a.requestFilter(r, requestdomain.SearchFilter{Query: q, Scope: scope.Axes{Project: filter.Project}, Limit: limit, Commit: anchor.Commit, PR: anchor.PR}), store.SearchAuto)
 		if err != nil {
 			writeStoreError(w, http.StatusInternalServerError, err)
 			return
@@ -1122,6 +1129,7 @@ func (a *api) putGhost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	g.Person = personOf(r)
+	g.GitAnchor = anchorFromRequest(r)
 	id, err := a.st.PutGhostFile(g)
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
@@ -1227,12 +1235,17 @@ func (a *api) searchGhosts(w http.ResponseWriter, r *http.Request) {
 	}
 	pa.Filtered()
 	limit := intParam(r, "limit", 20)
+	anchor, ok := anchorFilterFromQuery(w, r)
+	if !ok {
+		return
+	}
 	readable := func(g store.GhostFile) bool { return pa.CanSeeGhost(g) && pa.CanDeliverGhost(g) }
 	// The rule goes into the search: the hybrid search applies it to both rankings
 	// before it fuses them, so a description the reader may not see can neither
 	// appear nor move a visible one.
 	entries, err := a.st.SearchGhostFilesWith(q.Get("q"), store.GhostSearch{
 		Project: q.Get("project"), Limit: a.overfetch(limit), Keep: readable, Prefilter: pa.GhostPrefilter(),
+		Anchor: anchor,
 	})
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)

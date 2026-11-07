@@ -14,7 +14,9 @@ type GhostSearch struct {
 	// Prefilter is a condition in SQL on the alias g of ghost_files that every row
 	// Keep lets through satisfies; see Prefilter.
 	Prefilter Prefilter
-	Mode      SearchMode
+	// Anchor filtert nach dem Git-Anker der aktuellen Beschreibung (REQ-597).
+	Anchor AnchorFilter
+	Mode   SearchMode
 }
 
 // SearchGhostFilesWith runs a search over path and description, hybrid when an
@@ -49,7 +51,7 @@ func (s *Store) searchGhostFiles(q string, o GhostSearch) ([]GhostFile, error) {
 		}
 		s.embedShared().logFallback(cfg, err)
 	}
-	return s.ftsGhostFiles(q, o.Project, limit)
+	return s.ftsGhostFiles(q, o.Project, limit, o.Anchor)
 }
 
 func (s *Store) ghostFilesByID(ids []int64) (map[int64]GhostFile, error) {
@@ -61,7 +63,7 @@ func (s *Store) ghostFilesByID(ids []int64) (map[int64]GhostFile, error) {
 	if err != nil {
 		return nil, err
 	}
-	gs, err := scanGhostFiles(rows)
+	gs, err := s.scanGhostFiles(rows)
 	if err != nil {
 		return nil, err
 	}
@@ -75,6 +77,10 @@ func (s *Store) ghostFilesByID(ids []int64) (map[int64]GhostFile, error) {
 func (s *Store) hybridGhostFiles(q string, o GhostSearch, limit int, qvec []float32, cfg *EmbedSearchConfig) ([]GhostFile, error) {
 	pool := poolFor(limit)
 	where, args := o.Prefilter.with(`(? = '' OR g.project = ?)`, []any{o.Project, o.Project})
+	if af, afArgs := o.Anchor.Where("g.anchor_id"); af != "" {
+		where += " AND " + af
+		args = append(args, afArgs...)
+	}
 	var textIDs []int64
 	if o.Mode != SearchVectorOnly {
 		scan := pool

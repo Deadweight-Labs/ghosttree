@@ -11,6 +11,7 @@ import (
 
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
+	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -45,7 +46,14 @@ type Server struct {
 	agentRole string
 	// sessionUUID ist die Transkript-Session, wenn der Launcher sie vorgegeben hat.
 	sessionUUID string
+	// lineageOf liefert die Vorfahren eines Branches aus dem lokalen Repo
+	// (SetLineageResolver); nil ohne Repo.
+	lineageOf func(branch string) []string
 }
+
+// SetLineageResolver setzt, wie die Vorfahren eines anderen Branches als des
+// ausgecheckten bestimmt werden. Als Rückruf, weil git in collector sitzt.
+func (s *Server) SetLineageResolver(f func(branch string) []string) { s.lineageOf = f }
 
 // SetRepoRoot wird von cmd/ctx/mcp.go aus dem aufgelösten Git-Kontext gesetzt.
 func (s *Server) SetRepoRoot(root string) { s.repoRoot = root }
@@ -93,6 +101,10 @@ type SearchInput struct {
 	Project     string `json:"project,omitempty" jsonschema:"search another project instead of the current one, given as a normalized remote like github.com/owner/repo"`
 	AllProjects bool   `json:"all_projects,omitempty" jsonschema:"search every project. Use when a problem here may already have been solved elsewhere; the default stays the current project"`
 	Machine     string `json:"machine,omitempty" jsonschema:"restrict to a machine hostname"`
+	// Branch, Commit and PR filter by where an entry was written (REQ-597).
+	Branch string `json:"branch,omitempty" jsonschema:"search as on this branch: entries filed on it and on the branches it descends from (derived from the local repository). Default is the current branch"`
+	Commit string `json:"commit,omitempty" jsonschema:"only entries written at this commit: a prefix of at least 7 hexadecimal characters of the commit that was checked out when the entry was written. Sessions carry no commit and are left out"`
+	PR     int64  `json:"pr,omitempty" jsonschema:"only entries whose commit belongs to this pull request number. Entries carry a pull request number only once the GitHub connection assigns it; until then this finds nothing"`
 }
 
 // searchAxes resolves the project axis a search runs on. Scope separation is
@@ -111,6 +123,15 @@ func (s *Server) searchAxes(in SearchInput) (ax scope.Axes, crossProject bool) {
 		// Not ax.Branch = "": that removes every branch clause and hides the
 		// branch-scoped entries this flag exists to reveal.
 		ax.AnyBranch = true
+	} else if in.Branch != "" && in.Branch != ax.Branch {
+		// Another branch than the checked-out one: its ancestors are asked of the
+		// local repository. Without a resolver, or without that branch locally,
+		// the chain stays empty and the search reads project-wide plus that branch.
+		ax.Branch = in.Branch
+		ax.Lineage = nil
+		if s.lineageOf != nil {
+			ax.Lineage = s.lineageOf(in.Branch)
+		}
 	}
 	if in.Machine != "" {
 		ax.Machine = in.Machine
@@ -286,6 +307,14 @@ func (s *Server) handleSearch(ctx context.Context, _ *mcp.CallToolRequest, in Se
 	if strings.TrimSpace(in.Query) == "" {
 		return nil, nil, fmt.Errorf("give a query to search for, or a knowledge_id to read one entry in full")
 	}
+	anchor := client.AnchorFilter{Commit: gitanchor.Normalize(in.Commit), PR: in.PR}
+	if anchor.Commit != "" && !gitanchor.ValidPrefix(anchor.Commit) {
+		return nil, nil, fmt.Errorf("commit needs at least %d hexadecimal characters", gitanchor.MinPrefix)
+	}
+	if in.PR < 0 {
+		return nil, nil, fmt.Errorf("pr must be a positive pull request number")
+	}
+	anchored := anchor.Commit != "" || anchor.PR != 0
 	ax, crossProject := s.searchAxes(in)
 	if (in.Kind == "" || in.Kind == "all" || in.Kind == "requests") && store.ClassifySearch(in.Query) == store.SearchInterrupted {
 		threads, err := s.client.InterruptedWork(ax, s.sessionRef)
@@ -313,11 +342,7 @@ func (s *Server) handleSearch(ctx context.Context, _ *mcp.CallToolRequest, in Se
 	if kind == "knowledge" || kind == "all" {
 		// The scope union is what a session reads here. Across projects that
 		// union is meaningless, so the axes are matched as given instead.
-		search := s.client.SearchUnion
-		if crossProject {
-			search = s.client.Search
-		}
-		res, err := search(in.Query, "knowledge", ax, limit)
+		res, err := s.client.SearchAnchored(in.Query, "knowledge", ax, limit, !crossProject, anchor)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -337,7 +362,7 @@ func (s *Server) handleSearch(ctx context.Context, _ *mcp.CallToolRequest, in Se
 			out.WriteString(limitNote(len(res.Knowledge), limit))
 		}
 	}
-	if kind == "sessions" || kind == "all" {
+	if (kind == "sessions" || kind == "all") && !anchored {
 		// Sessions carry all three axes, so an exact filter on the full context
 		// would only ever match this very session; project is the useful scope.
 		// An empty project means every project, which is what all_projects asks for.
@@ -357,7 +382,7 @@ func (s *Server) handleSearch(ctx context.Context, _ *mcp.CallToolRequest, in Se
 	}
 	if kind == "requests" || kind == "all" {
 		filter := scope.Axes{Project: s.ctxAxes.Project}
-		res, err := s.client.Search(in.Query, "requests", filter, limit)
+		res, err := s.client.SearchAnchored(in.Query, "requests", filter, limit, false, anchor)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -372,7 +397,7 @@ func (s *Server) handleSearch(ctx context.Context, _ *mcp.CallToolRequest, in Se
 	if kind == "files" || kind == "all" {
 		// Der Ghost-Baum ist projektgebunden: ein Pfad ist nur im Repo
 		// eindeutig, zu dem er gehört.
-		res, err := s.client.SearchGhosts(in.Query, ax.Project, limit)
+		res, err := s.client.SearchGhostsAnchored(in.Query, ax.Project, limit, anchor)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -659,7 +684,27 @@ func renderKnowledge(k store.Knowledge) string {
 		// should weigh it differently from an exact word hit.
 		label += "|match:" + k.Match
 	}
-	return fmt.Sprintf("- #%d [%s] %s — %s\n", k.ID, label, k.Title, body)
+	return fmt.Sprintf("- #%d [%s%s] %s — %s\n", k.ID, label, anchorLabel(k.GitAnchor), k.Title, body)
+}
+
+// anchorLabel nennt den Git-Stand eines Treffers kurz: "|at:<commit>" mit
+// Branch, "+dirty" bei unsauberem Arbeitsverzeichnis und #PR, wenn bekannt.
+// Leer ohne Anker, damit Einträge von früher unverändert aussehen.
+func anchorLabel(a *gitanchor.Anchor) string {
+	if a == nil || a.IsZero() {
+		return ""
+	}
+	out := "|at:" + a.Short()
+	if a.Dirty {
+		out += "+dirty"
+	}
+	if a.Branch != "" {
+		out += "@" + a.Branch
+	}
+	if a.PR != nil {
+		out += fmt.Sprintf(" #%d", *a.PR)
+	}
+	return out
 }
 
 // renderKnowledgeFull answers the other question: not "which entries are there"
@@ -667,7 +712,7 @@ func renderKnowledge(k store.Knowledge) string {
 // bullets and fenced blocks it was written with are the entry, not decoration
 // around it.
 func renderKnowledgeFull(k store.Knowledge) string {
-	header := fmt.Sprintf("# #%d %s\n[%s]", k.ID, k.Title, knowledgeLabel(k))
+	header := fmt.Sprintf("# #%d %s\n[%s%s]", k.ID, k.Title, knowledgeLabel(k), anchorLabel(k.GitAnchor))
 	if k.ObservedAt != "" {
 		header += " observed:" + k.ObservedAt
 	}
