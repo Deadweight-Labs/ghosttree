@@ -413,6 +413,12 @@ func writeRequestError(w http.ResponseWriter, err error) {
 		if rule.ErrorCode == "open_criteria" || rule.ErrorCode == "primary_exists" || rule.ErrorCode == "work_not_active" || rule.ErrorCode == "invalid_transition" || rule.ErrorCode == "idempotency_key_conflict" {
 			status = http.StatusConflict
 		}
+		switch rule.ErrorCode {
+		case "package_not_found":
+			status = http.StatusNotFound
+		case "package_exists", "package_closed", "pr_taken":
+			status = http.StatusConflict
+		}
 		if rule.ErrorCode == "secret_detected" {
 			status = http.StatusUnprocessableEntity
 		}
