@@ -385,10 +385,17 @@ type OriginBackfillReport struct {
 
 // originBackfillSource beschreibt, woher eine Art ihre Session und ihren
 // Zeitpunkt bekommt. sessionExpr liefert Kennung oder Zeilen-Id der Session.
+//
+// writerExpr liefert das Konto, das den Eintrag geschrieben hat (0 = unbekannt
+// oder ohne Besitzer). Ein Kontext wird nur aus einer Session des Schreibers
+// übernommen: sonst bekäme ein Eintrag mit fremder oder erfundener session_ref
+// die Pfade aus der Session eines anderen Kontos, und die wären über den
+// Bereichsfilter lesbar. Es gibt hier bewusst keinen Ersatz durch den
+// Instanz-Owner: im Zweifel bleibt der Eintrag leer.
 type originBackfillSource struct {
-	table, sessionExpr, atExpr, from, where string
-	byRowID                                 bool
-	report                                  func(*OriginBackfillReport) *OriginBackfillKind
+	table, sessionExpr, writerExpr, atExpr, from, where string
+	byRowID                                             bool
+	report                                              func(*OriginBackfillReport) *OriginBackfillKind
 }
 
 var originBackfillSources = []originBackfillSource{
@@ -396,21 +403,27 @@ var originBackfillSources = []originBackfillSource{
 	// Eintrag, der inhaltlich überarbeitet wurde (Historie vorhanden), gehört
 	// nicht dazu: der Kontext beschreibt die Fassung, nicht den Eintrag.
 	{table: "knowledge", sessionExpr: "t.session_ref", atExpr: "t.created_at",
-		from:   "knowledge t",
-		where:  "t.session_ref<>'' AND NOT EXISTS (SELECT 1 FROM knowledge_versions v WHERE v.knowledge_id=t.id)",
-		report: func(r *OriginBackfillReport) *OriginBackfillKind { return &r.Knowledge }},
+		writerExpr: "COALESCE((SELECT a.account_id FROM knowledge_authors a WHERE a.knowledge_id=t.id),0)",
+		from:       "knowledge t",
+		where:      "t.session_ref<>'' AND NOT EXISTS (SELECT 1 FROM knowledge_versions v WHERE v.knowledge_id=t.id)",
+		report:     func(r *OriginBackfillReport) *OriginBackfillKind { return &r.Knowledge }},
 	{table: "ghost_files", sessionExpr: "t.session_ref", atExpr: "t.described_at",
-		from: "ghost_files t", where: "t.session_ref<>''",
+		// Beschreibungen haben keine Autorentabelle: nur ein Name, der genau ein
+		// Konto trägt, gilt als Schreiber.
+		writerExpr: "(SELECT CASE WHEN COUNT(*)=1 THEN MIN(p.id) ELSE 0 END FROM persons p WHERE trim(t.person)<>'' AND lower(trim(p.name))=lower(trim(t.person)))",
+		from:       "ghost_files t", where: "t.session_ref<>''",
 		report: func(r *OriginBackfillReport) *OriginBackfillKind { return &r.Ghosts }},
 	// Request: das Ereignis request.created trägt den Kontext des Anlegens, die
 	// Session steht am Request.
 	{table: "request_activity", sessionExpr: "r.session_ref", atExpr: "t.created_at",
-		from:   "request_activity t JOIN requests r ON r.id=t.request_id",
-		where:  "t.kind='request.created' AND r.session_ref<>''",
-		report: func(r *OriginBackfillReport) *OriginBackfillKind { return &r.Requests }},
+		writerExpr: "COALESCE((SELECT a.account_id FROM request_authors a WHERE a.request_id=r.id),0)",
+		from:       "request_activity t JOIN requests r ON r.id=t.request_id",
+		where:      "t.kind='request.created' AND r.session_ref<>''",
+		report:     func(r *OriginBackfillReport) *OriginBackfillKind { return &r.Requests }},
 	// Pain: das Ereignis 'created' trägt die numerische Session-Id.
 	{table: "pain_events", sessionExpr: "t.session_id", atExpr: "t.created_at",
-		from: "pain_events t", where: "t.kind='created' AND t.session_id>0", byRowID: true,
+		writerExpr: "t.account_id",
+		from:       "pain_events t", where: "t.kind='created' AND t.session_id>0", byRowID: true,
 		report: func(r *OriginBackfillReport) *OriginBackfillKind { return &r.Pains }},
 }
 
@@ -441,10 +454,11 @@ type originCandidate struct {
 	id      int64
 	session string
 	at      string
+	writer  int64
 }
 
 func (s *Store) backfillOriginSource(src originBackfillSource, kind *OriginBackfillKind, dryRun bool) error {
-	rows, err := s.db.Query(`SELECT t.id, CAST(` + src.sessionExpr + ` AS TEXT), ` + src.atExpr + ` FROM ` + src.from +
+	rows, err := s.db.Query(`SELECT t.id, CAST(` + src.sessionExpr + ` AS TEXT), ` + src.atExpr + `, ` + src.writerExpr + ` FROM ` + src.from +
 		` WHERE t.origin_id IS NULL AND ` + src.where + ` ORDER BY t.id`)
 	if err != nil {
 		return err
@@ -452,7 +466,7 @@ func (s *Store) backfillOriginSource(src originBackfillSource, kind *OriginBackf
 	var cands []originCandidate
 	for rows.Next() {
 		var c originCandidate
-		if err := rows.Scan(&c.id, &c.session, &c.at); err != nil {
+		if err := rows.Scan(&c.id, &c.session, &c.at, &c.writer); err != nil {
 			rows.Close()
 			return err
 		}
@@ -466,12 +480,12 @@ func (s *Store) backfillOriginSource(src originBackfillSource, kind *OriginBackf
 	kind.Candidates = len(cands)
 	owner := instanceOwnerID(s.db)
 	for _, c := range cands {
-		ext, account, ok := s.originSession(c.session, src.byRowID, owner)
+		ext, ok := s.originSession(c.session, src.byRowID, c.writer, owner)
 		if !ok {
 			kind.Empty++
 			continue
 		}
-		touches, err := s.originTouches(ext, account, "", c.at)
+		touches, err := s.originTouches(ext, c.writer, "", c.at)
 		if err != nil {
 			return err
 		}
@@ -504,13 +518,20 @@ func (s *Store) backfillOriginSource(src originBackfillSource, kind *OriginBackf
 	return nil
 }
 
-// originSession löst die Session eines Eintrags auf: Kennung der Session und
-// Konto, dem sie gehört. ok=false, wenn die Session unbekannt ist. Ein
-// "session:<id>"-Verweis wird über die Zeilen-Id aufgelöst, sonst gilt der Wert
-// als Kennung; ein Zusatz hinter "#" wird abgeschnitten.
-func (s *Store) originSession(ref string, byRowID bool, owner int64) (external string, account int64, ok bool) {
+// originSession löst die Session eines Eintrags auf und gibt ihre Kennung nur
+// zurück, wenn sie ausschließlich dem Schreiber des Eintrags gehört: jede
+// Session-Zeile mit dieser Kennung muss (account_id 0 gilt als Instanz-Owner)
+// auf das Konto writer zeigen. Gehört sie einem anderen Konto, gehört die
+// Kennung mehreren Konten oder ist der Schreiber unbekannt (writer 0), ist der
+// Eintrag nicht zuzuordnen und bleibt leer. Ein "session:<id>"-Verweis wird über
+// die Zeilen-Id aufgelöst, sonst gilt der Wert als Kennung; ein Zusatz hinter
+// "#" wird abgeschnitten.
+func (s *Store) originSession(ref string, byRowID bool, writer, owner int64) (external string, ok bool) {
+	if writer <= 0 {
+		return "", false
+	}
 	ref, _, _ = strings.Cut(ref, "#")
-	var rowID int64 = -1
+	rowID := int64(-1)
 	if byRowID {
 		if n, err := strconv.ParseInt(ref, 10, 64); err == nil {
 			rowID = n
@@ -520,18 +541,38 @@ func (s *Store) originSession(ref string, byRowID bool, owner int64) (external s
 			rowID = n
 		}
 	}
-	var acc int64
-	var err error
+	external = ref
 	if rowID >= 0 {
-		err = s.db.QueryRow(`SELECT external_id, CASE WHEN account_id=0 THEN ? ELSE account_id END FROM sessions WHERE id=?`, owner, rowID).Scan(&external, &acc)
-	} else {
-		external = ref
-		err = s.db.QueryRow(`SELECT CASE WHEN account_id=0 THEN ? ELSE account_id END FROM sessions WHERE external_id=? LIMIT 1`, owner, ref).Scan(&acc)
+		if err := s.db.QueryRow(`SELECT external_id FROM sessions WHERE id=?`, rowID).Scan(&external); err != nil {
+			return "", false
+		}
 	}
-	if err != nil || external == "" {
-		return "", 0, false
+	if external == "" {
+		return "", false
 	}
-	return external, acc, true
+	var total, mine int
+	if err := s.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(CASE WHEN (CASE WHEN account_id=0 THEN ? ELSE account_id END)=? THEN 1 ELSE 0 END),0)
+		FROM sessions WHERE external_id=?`, owner, writer, external).Scan(&total, &mine); err != nil || total == 0 || total != mine {
+		return "", false
+	}
+	return external, true
+}
+
+// SessionForeignTo sagt, dass es eine Session mit dieser Kennung gibt und sie
+// dem Konto nicht gehört. Eine unbekannte Kennung ist nicht fremd: die Session
+// kann noch nicht hochgeladen sein.
+func (s *Store) SessionForeignTo(sessionExternalID, principalID string) bool {
+	if s.reader != nil {
+		return s.reader.SessionForeignTo(sessionExternalID, principalID)
+	}
+	if sessionExternalID == "" {
+		return false
+	}
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sessions WHERE external_id=?`, sessionExternalID).Scan(&n); err != nil || n == 0 {
+		return false
+	}
+	return !s.SessionOwnedBy(sessionExternalID, principalID)
 }
 
 // attachKnowledgeOrigins hängt jedem Eintrag den Kontext seiner aktuellen

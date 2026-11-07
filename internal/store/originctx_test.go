@@ -1,6 +1,7 @@
 package store
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -412,7 +413,7 @@ func TestBackfillFillsWhatItCanAndLeavesTheRestEmpty(t *testing.T) {
 	if err := st.UpdateKnowledgeBy(edited, map[string]string{"body": "neu"}, "lena"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.PutGhostFile(GhostFile{Project: originProject, Path: "internal/store/a.go", Kind: "file", Description: "d", SessionRef: "sess-b"}); err != nil {
+	if _, err := st.PutGhostFile(GhostFile{Project: originProject, Path: "internal/store/a.go", Kind: "file", Description: "d", SessionRef: "sess-b", Person: "robin"}); err != nil {
 		t.Fatal(err)
 	}
 	dry, err := st.BackfillOrigins(true)
@@ -512,6 +513,139 @@ func TestPainEventsStayAppendOnlyExceptTheOriginNachtrag(t *testing.T) {
 	}
 	// Die Migration lässt den engeren Trigger beim nächsten Start in Ruhe.
 	if err := ensureOriginContexts(st.db); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func twoAccounts(t *testing.T) *Store {
+	t.Helper()
+	st := originStore(t) // robin = Konto 1, der Instanz-Owner
+	if _, err := st.AddPerson("lena"); err != nil {
+		t.Fatal(err)
+	}
+	return st
+}
+
+func sessionOf(t *testing.T, st *Store, harness, ext string, account int64) int64 {
+	t.Helper()
+	id, err := st.UpsertSession(Session{Harness: harness, ExternalID: ext, CWD: "/work/repo", Scope: scope.Axes{Project: originProject}, AccountID: account})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// Rechtetest, Nachtrag: Konto B schreibt mit der session_ref von Konto A, dann
+// bekommt der Eintrag keine Pfade von A, in keiner der vier Arten.
+func TestBackfillNeverTakesPathsFromASessionOfAnotherAccount(t *testing.T) {
+	st := twoAccounts(t)
+	lenaSession := sessionOf(t, st, "claude", "sess-lena", 2)
+	recordActivityFor(t, st, "sess-lena", 2, map[string]bool{"/work/repo/internal/secret/a.go": true})
+
+	// Robin (Konto 1) nennt die Session von Lena (Konto 2).
+	k, _ := st.InsertKnowledge(Knowledge{Type: "note", Title: "fremd", Body: "b", Person: "robin", SessionRef: "sess-lena"})
+	kOwn, _ := st.InsertKnowledge(Knowledge{Type: "note", Title: "eigen", Body: "b", Person: "lena", SessionRef: "sess-lena"})
+	kSession, _ := st.InsertKnowledge(Knowledge{Type: "note", Title: "per Zeilen-Id", Body: "b", Person: "robin", SessionRef: "session:" + strconv.FormatInt(lenaSession, 10)})
+	if _, err := st.PutGhostFile(GhostFile{Project: originProject, Path: "internal/secret/a.go", Kind: "file", Description: "d", Person: "robin", SessionRef: "sess-lena"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.PutGhostFile(GhostFile{Project: originProject, Path: "internal/secret/own.go", Kind: "file", Description: "d", Person: "lena", SessionRef: "sess-lena"}); err != nil {
+		t.Fatal(err)
+	}
+	dReq, _ := st.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: "feature", Title: "fremd",
+		Scope: scope.Axes{Project: originProject}, Person: "robin", SessionRef: "sess-lena"}, Criteria: []string{"x"}})
+	pa := st.Access(Principal{ID: "person:1", Label: "robin"})
+	dPain, err := pa.CreatePain(CreatePainInput{Project: originProject, Title: "P", AuthorID: 1, Actor: pain.Actor{Person: "robin", SessionID: lenaSession}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rep, err := st.BackfillOrigins(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Knowledge.Filled != 1 || rep.Ghosts.Filled != 1 || rep.Requests.Filled != 0 || rep.Pains.Filled != 0 {
+		t.Fatalf("report = %+v: only the entries Lena wrote herself may be filled", rep)
+	}
+	for name, id := range map[string]int64{"knowledge by name": k, "knowledge by row id": kSession} {
+		if originOfRow(t, st, "knowledge", "id=?", id) != nil {
+			t.Fatalf("%s: Robin's entry took paths from Lena's session", name)
+		}
+	}
+	if originOfRow(t, st, "knowledge", "id=?", kOwn) == nil {
+		t.Fatal("Lena's own entry must be filled")
+	}
+	if originOfRow(t, st, "ghost_files", "path=?", "internal/secret/a.go") != nil {
+		t.Fatal("Robin's ghost took paths from Lena's session")
+	}
+	if originOfRow(t, st, "ghost_files", "path=?", "internal/secret/own.go") == nil {
+		t.Fatal("Lena's own ghost must be filled")
+	}
+	if originOfRow(t, st, "request_activity", "request_id=? AND kind='request.created'", dReq.Request.ID) != nil ||
+		originOfRow(t, st, "pain_events", "pain_id=? AND kind='created'", dPain.Pain.ID) != nil {
+		t.Fatal("a request or pain took paths from Lena's session")
+	}
+	// Und die Bereichssuche findet bei Robin nichts aus Lenas Ordner.
+	f, _ := originctx.Spec{Areas: []string{"internal/secret"}}.Resolve(time.Now())
+	ks, err := st.SearchKnowledgeWith("fremd", KnowledgeSearch{Axes: scope.Axes{Project: originProject}, Union: true, Origin: f, NoRecord: true})
+	if err != nil || len(ks) != 0 {
+		t.Fatalf("area search found Robin's foreign entry: %+v (%v)", ks, err)
+	}
+}
+
+// Eine Kennung, die zwei Konten tragen, und eine Session ohne Konto (Altbestand)
+// ergeben im Zweifel keinen Kontext.
+func TestBackfillLeavesAmbiguousAndUnownedSessionsEmpty(t *testing.T) {
+	st := twoAccounts(t)
+	sessionOf(t, st, "claude", "sess-both", 1)
+	sessionOf(t, st, "codex", "sess-both", 2)
+	recordActivityFor(t, st, "sess-both", 1, map[string]bool{"/work/repo/a/b.go": true})
+	k, _ := st.InsertKnowledge(Knowledge{Type: "note", Title: "mehrdeutig", Body: "b", Person: "robin", SessionRef: "sess-both"})
+
+	// Altbestand (account_id 0) zählt als Instanz-Owner und nur für ihn.
+	sessionOf(t, st, "claude", "sess-legacy", 1)
+	if _, err := st.db.Exec(`UPDATE sessions SET account_id=0 WHERE external_id='sess-legacy'`); err != nil {
+		t.Fatal(err)
+	}
+	recordActivityFor(t, st, "sess-legacy", 0, map[string]bool{"/work/repo/legacy/x.go": true})
+	kOwner, _ := st.InsertKnowledge(Knowledge{Type: "note", Title: "owner", Body: "b", Person: "robin", SessionRef: "sess-legacy"})
+	kOther, _ := st.InsertKnowledge(Knowledge{Type: "note", Title: "other", Body: "b", Person: "lena", SessionRef: "sess-legacy"})
+	// Ein Eintrag, dessen Schreiber nicht feststeht (Name passt auf kein Konto), bleibt leer.
+	kAnon, _ := st.InsertKnowledge(Knowledge{Type: "note", Title: "anon", Body: "b", Person: "claude", SessionRef: "sess-legacy"})
+	if _, err := st.db.Exec(`UPDATE knowledge_authors SET account_id=0 WHERE knowledge_id=?`, kAnon); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := st.BackfillOrigins(false); err != nil {
+		t.Fatal(err)
+	}
+	if originOfRow(t, st, "knowledge", "id=?", k) != nil {
+		t.Fatal("an identifier two accounts carry must stay empty")
+	}
+	if originOfRow(t, st, "knowledge", "id=?", kOwner) == nil {
+		t.Fatal("a session without account belongs to the instance owner")
+	}
+	if originOfRow(t, st, "knowledge", "id=?", kOther) != nil || originOfRow(t, st, "knowledge", "id=?", kAnon) != nil {
+		t.Fatal("a session without account must not be handed to another account or to an unknown writer")
+	}
+}
+
+func TestSessionForeignToDistinguishesUnknownFromForeign(t *testing.T) {
+	st := twoAccounts(t)
+	sessionOf(t, st, "claude", "sess-lena", 2)
+	if !st.SessionForeignTo("sess-lena", "person:1") || st.SessionForeignTo("sess-lena", "person:2") || st.SessionForeignTo("noch-nicht-hochgeladen", "person:1") || st.SessionForeignTo("", "person:1") {
+		t.Fatal("foreign = exists and not owned; unknown is not foreign")
+	}
+}
+
+func recordActivityFor(t *testing.T, st *Store, session string, account int64, paths map[string]bool) {
+	t.Helper()
+	var ev []PathActivity
+	for p, w := range paths {
+		ev = append(ev, PathActivity{Project: originProject, SessionExternalID: session, Checkout: "/work/repo", Tool: "Edit", Path: p,
+			Writes: w, Quality: ActivityIntent, At: time.Now().UTC().Add(-time.Hour).Format(time.RFC3339), AccountID: account})
+	}
+	if err := st.RecordPathActivity(ev); err != nil {
 		t.Fatal(err)
 	}
 }
