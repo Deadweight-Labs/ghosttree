@@ -8,6 +8,7 @@ import (
 	"slices"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/embed"
+	"github.com/Deadweight-Labs/ghosttree/internal/originctx"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 )
 
@@ -73,6 +74,9 @@ type KnowledgeSearch struct {
 	// steht in der Abfrage beider Rankings, nicht erst in Keep: ein Filter auf
 	// einen Commit darf nicht an den ersten Treffern der Rangfolge hängen.
 	Anchor AnchorFilter
+	// Origin filtert nach Zeitpunkt und Bereich des Entstehungskontexts der
+	// aktuellen Fassung (REQ-600); ohne Kontext zählt created_at.
+	Origin originctx.Filter
 }
 
 // KnowledgePrefilter is a Prefilter on the table alias k of knowledge.
@@ -118,6 +122,10 @@ func (s *Store) searchKnowledgeWith(q string, o KnowledgeSearch) ([]Knowledge, e
 	if af, afArgs := o.Anchor.Where("k.anchor_id"); af != "" {
 		where = "(" + where + ") AND " + af
 		args = append(slices.Clone(args), afArgs...)
+	}
+	if of, ofArgs := originWhere(o.Origin, "k.origin_id", "k.created_at"); of != "" {
+		where = "(" + where + ") AND " + of
+		args = append(slices.Clone(args), ofArgs...)
 	}
 	limit := o.Limit
 	if limit <= 0 {

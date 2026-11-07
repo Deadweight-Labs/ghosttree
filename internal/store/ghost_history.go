@@ -42,9 +42,9 @@ const versionCols = `id, project, path, kind, description, content_sha, git_blob
 func archiveGhostFileTx(tx *sql.Tx, project, path, at, reason string) error {
 	_, err := tx.Exec(`INSERT INTO ghost_file_versions
 		(project,path,kind,description,content_sha,git_blob,line_count,
-		 person,harness,session_ref,described_at,replaced_at,reason,anchor_id)
+		 person,harness,session_ref,described_at,replaced_at,reason,anchor_id,origin_id)
 		SELECT project,path,kind,description,content_sha,git_blob,line_count,
-		       person,harness,session_ref,described_at,?,?,anchor_id
+		       person,harness,session_ref,described_at,?,?,anchor_id,origin_id
 		FROM ghost_files WHERE project=? AND path=?`, at, reason, project, path)
 	return err
 }
@@ -180,9 +180,9 @@ func (s *Store) MoveGhostFile(project, from, to string) error {
 	ts := now()
 	if _, err := tx.Exec(`INSERT INTO ghost_file_versions
 		(project,path,kind,description,content_sha,git_blob,line_count,
-		 person,harness,session_ref,described_at,replaced_at,reason,anchor_id)
+		 person,harness,session_ref,described_at,replaced_at,reason,anchor_id,origin_id)
 		SELECT project,?,kind,'(verschoben von '||path||')',content_sha,git_blob,line_count,
-		       person,harness,session_ref,described_at,?,'verschoben',anchor_id
+		       person,harness,session_ref,described_at,?,'verschoben',anchor_id,origin_id
 		FROM ghost_files WHERE project=? AND path=?`, to, ts, project, from); err != nil {
 		return err
 	}

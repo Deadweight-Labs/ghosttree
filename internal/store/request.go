@@ -73,11 +73,11 @@ func (s *Store) CreateRequest(in requestdomain.CreateInput) (requestdomain.Detai
 			return requestdomain.Detail{}, err
 		}
 	}
-	anchorID, err := insertAnchorTx(tx, in.GitAnchor)
+	anchorID, originID, err := insertWriteMetaTx(tx, in.GitAnchor, in.Origin)
 	if err != nil {
 		return requestdomain.Detail{}, err
 	}
-	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at,anchor_id) VALUES(?,'request.created',?,?,?,?)`, id, r.Person, r.Title, ts, anchorID); err != nil {
+	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at,anchor_id,origin_id) VALUES(?,'request.created',?,?,?,?,?)`, id, r.Person, r.Title, ts, anchorID, originID); err != nil {
 		return requestdomain.Detail{}, err
 	}
 	if _, err := tx.Exec(`INSERT INTO search_documents(kind,domain_id,title,body,project,branch,machine) VALUES('request',?,?,?,?,?,?)`, id, r.Title, r.Description, r.Scope.Project, r.Scope.Branch, r.Scope.Machine); err != nil {
@@ -270,6 +270,13 @@ func requestScopeWhere(filter requestdomain.SearchFilter) ([]string, []any) {
 		where = append(where, `EXISTS (SELECT 1 FROM request_activity ra WHERE ra.request_id=r.id AND `+cond+`)`)
 		args = append(args, cargs...)
 	}
+	if filter.Origin.Active() {
+		// Der Kontext des Requests ist der seines Anlegens.
+		cr := `(SELECT origin_id FROM request_activity WHERE request_id=r.id AND kind='request.created' ORDER BY id LIMIT 1)`
+		cond, cargs := originWhere(filter.Origin, cr, "r.created_at")
+		where = append(where, cond)
+		args = append(args, cargs...)
+	}
 	if filter.HideHeld {
 		where = append(where, `NOT (r.origin='distilled' AND r.person='' AND EXISTS (
 			SELECT 1 FROM sessions hs WHERE 'session:'||hs.id = substr(r.session_ref,1,length('session:'||hs.id))
@@ -392,14 +399,14 @@ func (s *Store) SetCriterionState(id int64, state string, evidence requestdomain
 	}
 	// Ein Anker je Vorgang, von Nachweis und Aktivität geteilt: beide halten
 	// dasselbe Ereignis fest.
-	anchorID, err := insertAnchorTx(tx, evidence.GitAnchor)
+	anchorID, originID, err := insertWriteMetaTx(tx, evidence.GitAnchor, evidence.Origin)
 	if err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`INSERT INTO request_evidence(request_id,criterion_id,kind,ref,person,created_at,anchor_id) VALUES(?,?,?,?,?,?,?)`, requestID, id, evidence.Kind, evidence.Ref, evidence.Person, ts, anchorID); err != nil {
+	if _, err := tx.Exec(`INSERT INTO request_evidence(request_id,criterion_id,kind,ref,person,created_at,anchor_id,origin_id) VALUES(?,?,?,?,?,?,?,?)`, requestID, id, evidence.Kind, evidence.Ref, evidence.Person, ts, anchorID, originID); err != nil {
 		return err
 	}
-	_, err = tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at,anchor_id) VALUES(?,?,?,?,?,?)`, requestID, "criterion."+state, evidence.Person, fmt.Sprintf("AC-%d", id), ts, anchorID)
+	_, err = tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at,anchor_id,origin_id) VALUES(?,?,?,?,?,?,?)`, requestID, "criterion."+state, evidence.Person, fmt.Sprintf("AC-%d", id), ts, anchorID, originID)
 	if err != nil {
 		return err
 	}
@@ -453,14 +460,14 @@ func (s *Store) CompleteRequest(id int64, evidence requestdomain.Evidence) error
 	if n, _ := res.RowsAffected(); n != 1 {
 		return requestdomain.NewRuleError("request_not_completable", fmt.Sprintf("request REQ-%d changed while completing", id), "reload the request and resolve its current criteria", nil)
 	}
-	anchorID, err := insertAnchorTx(tx, evidence.GitAnchor)
+	anchorID, originID, err := insertWriteMetaTx(tx, evidence.GitAnchor, evidence.Origin)
 	if err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`INSERT INTO request_evidence(request_id,kind,ref,person,created_at,anchor_id) VALUES(?,?,?,?,?,?)`, id, evidence.Kind, evidence.Ref, evidence.Person, ts, anchorID); err != nil {
+	if _, err := tx.Exec(`INSERT INTO request_evidence(request_id,kind,ref,person,created_at,anchor_id,origin_id) VALUES(?,?,?,?,?,?,?)`, id, evidence.Kind, evidence.Ref, evidence.Person, ts, anchorID, originID); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at,anchor_id) VALUES(?,'request.done',?,?,?,?)`, id, evidence.Person, evidence.Ref, ts, anchorID); err != nil {
+	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at,anchor_id,origin_id) VALUES(?,'request.done',?,?,?,?,?)`, id, evidence.Person, evidence.Ref, ts, anchorID, originID); err != nil {
 		return err
 	}
 	return tx.Commit()

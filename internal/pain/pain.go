@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
+	"github.com/Deadweight-Labs/ghosttree/internal/originctx"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 )
 
@@ -185,4 +186,7 @@ type Actor struct {
 	// Server aus dem Header gesetzt. Jedes Ereignis, das dieser Akteur
 	// auslöst, bekommt eine eigene Anker-Zeile.
 	GitAnchor *gitanchor.Anchor
+	// Origin ist der Entstehungskontext (REQ-600), vom Server aus der Session
+	// des Clients gesetzt, nie aus dem Body.
+	Origin *originctx.Context
 }
