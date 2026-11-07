@@ -224,6 +224,11 @@ func requireOrgOwnerTx(tx rowQuerier, orgID int64, actorPrincipal string) (int64
 // Remotes; Fremdes und Ungültiges wird verworfen. Eine Quelle gehört genau einer
 // Organisation (ErrSourceTaken).
 func (s *Store) ConnectSource(actorPrincipal string, orgID int64, kind, login string, repos []string) (Source, error) {
+	if s.writer != nil {
+		return queueValue(s, []any{actorPrincipal, orgID, kind, login, repos}, func(d *Store, p []any) (Source, error) {
+			return d.ConnectSource(p[0].(string), p[1].(int64), p[2].(string), p[3].(string), p[4].([]string))
+		})
+	}
 	return s.ConnectSourceWithInstallation(actorPrincipal, orgID, kind, login, 0, repos)
 }
 
