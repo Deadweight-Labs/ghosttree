@@ -47,12 +47,12 @@ func renderPackageBriefing(d requestdomain.PackageDetail, budget int) string {
 		return a.Open > 0 && b.Open == 0
 	})
 	var b strings.Builder
-	fmt.Fprintf(&b, "\n## Work package (ghosttree)\n\n%s: %s, on branch %s", d.HumanID(), d.Name, d.Branch)
+	fmt.Fprintf(&b, "\n## Work package (ghosttree)\n\n%s: %s, on branch %s", d.HumanID(), shorten(d.Name, 120), shorten(d.Branch, 120))
 	if d.PR > 0 {
 		fmt.Fprintf(&b, ", PR #%d", d.PR)
 	}
 	if d.InheritedFrom != "" {
-		fmt.Fprintf(&b, " (inherited from %s)", d.InheritedFrom)
+		fmt.Fprintf(&b, " (inherited from %s)", shorten(d.InheritedFrom, 120))
 	}
 	b.WriteString("\n")
 	openTotal, finished := 0, 0

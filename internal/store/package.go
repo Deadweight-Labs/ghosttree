@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"unicode"
 
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
@@ -178,6 +179,12 @@ func (s *Store) CreatePackage(in requestdomain.PackageInput) (requestdomain.Pack
 	}
 	if in.Name == "" {
 		in.Name = in.Branch
+	}
+	if err := checkPackageLabel(in.Branch); err != nil {
+		return requestdomain.PackageDetail{}, err
+	}
+	if err := checkPackageLabel(in.Name); err != nil {
+		return requestdomain.PackageDetail{}, err
 	}
 	if in.PR < 0 {
 		return requestdomain.PackageDetail{}, requestdomain.NewRuleError("invalid_pr", "pr must be a pull request number", "use a positive number or leave it out", nil)
@@ -412,6 +419,11 @@ func (s *Store) UpdatePackage(id int64, patch requestdomain.PackagePatch) (reque
 	if patch.Name != nil && strings.TrimSpace(*patch.Name) == "" {
 		return requestdomain.PackageDetail{}, requestdomain.NewRuleError("name_required", "a package needs a name", "pass a non-empty name", nil)
 	}
+	if patch.Name != nil {
+		if err := checkPackageLabel(strings.TrimSpace(*patch.Name)); err != nil {
+			return requestdomain.PackageDetail{}, err
+		}
+	}
 	if patch.PR != nil && *patch.PR < 0 {
 		return requestdomain.PackageDetail{}, requestdomain.NewRuleError("invalid_pr", "pr must be a pull request number", "use a positive number, or 0 to unlink", nil)
 	}
@@ -468,3 +480,20 @@ func (s *Store) UpdatePackage(id int64, patch requestdomain.PackagePatch) (reque
 	}
 	return s.PackageByID(id)
 }
+
+// checkPackageLabel hält Name und Branch eines Pakets auf einer Zeile: beide
+// landen im Sessionstart-Briefing eines Agenten, und ein Zeilenumbruch darin
+// könnte dort eigene Überschriften oder Anweisungen einschmuggeln.
+func checkPackageLabel(s string) error {
+	if len([]rune(s)) > maxPackageLabel {
+		return requestdomain.NewRuleError("label_too_long", fmt.Sprintf("package name and branch are at most %d characters", maxPackageLabel), "shorten it", nil)
+	}
+	for _, r := range s {
+		if unicode.IsControl(r) || r == '\u2028' || r == '\u2029' {
+			return requestdomain.NewRuleError("label_invalid", "package name and branch must be a single line without control characters", "remove line breaks and control characters", nil)
+		}
+	}
+	return nil
+}
+
+const maxPackageLabel = 200
