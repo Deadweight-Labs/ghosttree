@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
+	"github.com/Deadweight-Labs/ghosttree/internal/originctx"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 )
 
@@ -51,6 +52,9 @@ type Evidence struct {
 	// GitAnchor ist der Git-Stand, an dem der Nachweis geschrieben wurde
 	// (REQ-597). Beim Schreiben setzt ihn der Server aus dem Header des Clients.
 	GitAnchor *gitanchor.Anchor `json:"git_anchor,omitempty"`
+	// Origin ist der Entstehungskontext des Nachweises (REQ-600), vom Server aus
+	// der Session des Clients gesetzt. Er wird gespeichert, nicht ausgeliefert.
+	Origin *originctx.Context `json:"-"`
 }
 
 type Work struct {
@@ -151,6 +155,9 @@ type CreateInput struct {
 	// GitAnchor ist der Git-Stand beim Anlegen (REQ-597); der Server setzt ihn
 	// aus dem Header, nie aus dem Body.
 	GitAnchor *gitanchor.Anchor `json:"-"`
+	// Origin ist der Entstehungskontext beim Anlegen (REQ-600), vom Server aus
+	// der Session des Clients gesetzt, nie aus dem Body.
+	Origin *originctx.Context `json:"-"`
 	// Explanation is the agent's "Kurz erklärt" text. It travels with the call
 	// to the server, which stores it beside the request; it is not part of it.
 	Explanation string `json:"-"`
@@ -172,6 +179,10 @@ type SearchFilter struct {
 	// gibt (REQ-597). Der Server prüft die Angabe, bevor sie hier ankommt.
 	Commit string
 	PR     int64
+	// Origin filtert nach Zeitpunkt und Bereich des Entstehungskontexts beim
+	// Anlegen (REQ-600); ohne Kontext zählt created_at. Der Server löst die
+	// Angabe auf, bevor sie hier ankommt.
+	Origin originctx.Filter
 	// FullDescription gibt die Beschreibung ungekürzt zurück. Für eine
 	// Trefferliste falsch — 24 volle Beschreibungen sprengen jedes Werkzeuglimit
 	// —, für den Dateispiegel notwendig: der gibt sich nicht als Liste aus,
@@ -215,6 +226,8 @@ type SearchHit struct {
 	// Eintrag aus vier Sessions ist eine Anforderung, die nicht gebaut wird;
 	// einer aus einer war vielleicht lautes Denken. Null für Handgeschriebenes.
 	Sightings int `json:"sightings,omitempty"`
+	// OriginContext ist der Entstehungskontext des Anlegens (REQ-600), nil ohne.
+	OriginContext *originctx.Context `json:"origin_context,omitempty"`
 }
 
 type SearchPage struct {

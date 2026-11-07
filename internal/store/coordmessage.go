@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
+	"github.com/Deadweight-Labs/ghosttree/internal/originctx"
 )
 
 // Zielarten einer Nachricht. Dieselbe Primitive adressiert einen Raum und
@@ -66,6 +67,10 @@ type CoordMessage struct {
 	// GitAnchor ist der Git-Stand des sendenden Clients (REQ-597). Der Server
 	// setzt ihn aus dem Header, nie aus dem Body; ohne Header bleibt er leer.
 	GitAnchor *gitanchor.Anchor `json:"git_anchor,omitempty"`
+	// OriginContext ist der Entstehungskontext der Nachricht (REQ-600), vom
+	// Server aus der Session des Clients gesetzt, nie aus dem Body. Er wird nur
+	// gespeichert, in Raum-Antworten nicht ausgeliefert.
+	OriginContext *originctx.Context `json:"-"`
 	// Explanation is the agent's "Kurz erklärt" text for a question to people.
 	// Write-only: the server stores it beside the message.
 	Explanation string `json:"explanation,omitempty"`
@@ -186,7 +191,7 @@ func appendCoordMessageTx(tx *sql.Tx, m CoordMessage) (int64, error) {
 		return 0, err
 	}
 
-	anchorID, err := insertAnchorTx(tx, m.GitAnchor)
+	anchorID, originID, err := insertWriteMetaTx(tx, m.GitAnchor, m.OriginContext)
 	if err != nil {
 		return 0, err
 	}
@@ -194,14 +199,14 @@ func appendCoordMessageTx(tx *sql.Tx, m CoordMessage) (int64, error) {
 			destination_kind,destination_id,sequence,sender_external_id,
 			author_principal_id,author_kind,parent_external_id,client_id,kind,
 			intent,priority,body,reply_to,origin_event_id,causation_id,
-			expires_at,observed_at_client,created_at,is_broadcast,anchor_id)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			expires_at,observed_at_client,created_at,is_broadcast,anchor_id,origin_id)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		m.DestinationKind, m.DestinationID, seq, m.SenderExternalID,
 		m.AuthorPrincipalID, m.AuthorKind, nullableText(m.ParentExternalID),
 		m.ClientID, m.Kind, m.Intent, m.Priority, m.Body,
 		nullableCoordID(m.ReplyTo), nullableText(m.OriginEventID),
 		nullableText(m.CausationID), nullableText(m.ExpiresAt),
-		nullableText(m.ObservedAtClient), m.CreatedAt, m.IsBroadcast, anchorID)
+		nullableText(m.ObservedAtClient), m.CreatedAt, m.IsBroadcast, anchorID, originID)
 	if err != nil {
 		return 0, err
 	}

@@ -28,6 +28,8 @@ type Client struct {
 	http *http.Client
 	// anchor ermittelt den Git-Anker für schreibende Aufrufe (SetAnchorSource).
 	anchor func() gitanchor.Anchor
+	// originSession ist die Session, die beim Schreiben mitgeht (SetOriginSession).
+	originSession string
 }
 
 type SearchResult struct {

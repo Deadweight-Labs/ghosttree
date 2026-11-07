@@ -1,5 +1,7 @@
 package store
 
+import "github.com/Deadweight-Labs/ghosttree/internal/originctx"
+
 // GhostSearch describes one search over the descriptions of paths.
 type GhostSearch struct {
 	// Project limits the search to one project; empty means every project.
@@ -16,6 +18,8 @@ type GhostSearch struct {
 	Prefilter Prefilter
 	// Anchor filtert nach dem Git-Anker der aktuellen Beschreibung (REQ-597).
 	Anchor AnchorFilter
+	// Origin filtert nach Zeitpunkt und Bereich des Entstehungskontexts (REQ-600).
+	Origin originctx.Filter
 	Mode   SearchMode
 }
 
@@ -51,7 +55,7 @@ func (s *Store) searchGhostFiles(q string, o GhostSearch) ([]GhostFile, error) {
 		}
 		s.embedShared().logFallback(cfg, err)
 	}
-	return s.ftsGhostFiles(q, o.Project, limit, o.Anchor)
+	return s.ftsGhostFiles(q, o.Project, limit, o.Anchor, o.Origin)
 }
 
 func (s *Store) ghostFilesByID(ids []int64) (map[int64]GhostFile, error) {
@@ -80,6 +84,10 @@ func (s *Store) hybridGhostFiles(q string, o GhostSearch, limit int, qvec []floa
 	if af, afArgs := o.Anchor.Where("g.anchor_id"); af != "" {
 		where += " AND " + af
 		args = append(args, afArgs...)
+	}
+	if of, ofArgs := originWhere(o.Origin, "g.origin_id", "g.described_at"); of != "" {
+		where += " AND " + of
+		args = append(args, ofArgs...)
 	}
 	var textIDs []int64
 	if o.Mode != SearchVectorOnly {

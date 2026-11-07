@@ -11,6 +11,7 @@ import (
 
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
 	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
+	"github.com/Deadweight-Labs/ghosttree/internal/originctx"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 )
 
@@ -63,6 +64,11 @@ type Knowledge struct {
 	// nie aus dem Body; beim Lesen füllt ihn scanKnowledge. nil heißt: ohne
 	// Anker geschrieben.
 	GitAnchor *gitanchor.Anchor `json:"git_anchor,omitempty"`
+	// OriginContext ist der Entstehungskontext dieser Fassung (REQ-600): Zeit,
+	// Session und die Bereiche, in denen sie bis dahin gearbeitet hat. Beim
+	// Schreiben setzt ihn der Server aus der Session des Clients, nie aus dem
+	// Body; beim Lesen füllt ihn scanKnowledge. nil heißt: nicht ermittelbar.
+	OriginContext *originctx.Context `json:"origin_context,omitempty"`
 }
 
 // KnowledgeProvenance is the compact attribution shared by every read view.
@@ -251,16 +257,16 @@ func insertKnowledgeTx(tx *sql.Tx, k Knowledge) (int64, error) {
 		// the thing as they write it.
 		k.ObservedAt = ts
 	}
-	anchorID, err := insertAnchorTx(tx, k.GitAnchor)
+	anchorID, originID, err := insertWriteMetaTx(tx, k.GitAnchor, k.OriginContext)
 	if err != nil {
 		return 0, err
 	}
 	res, err := tx.Exec(`INSERT INTO knowledge(type, title, body, project, branch, machine,
-		confidence, status, origin, superseded_by, person, confirmed_by, last_modified_by, harness, session_ref, observed_at, created_at, updated_at, anchor_id)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		confidence, status, origin, superseded_by, person, confirmed_by, last_modified_by, harness, session_ref, observed_at, created_at, updated_at, anchor_id, origin_id)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		k.Type, k.Title, k.Body, k.Scope.Project, k.Scope.Branch, k.Scope.Machine,
 		k.Confidence, k.Status, k.Origin, k.SupersededBy,
-		k.Person, k.ConfirmedBy, k.Person, k.Harness, k.SessionRef, k.ObservedAt, ts, ts, anchorID)
+		k.Person, k.ConfirmedBy, k.Person, k.Harness, k.SessionRef, k.ObservedAt, ts, ts, anchorID, originID)
 	if err != nil {
 		return 0, err
 	}
@@ -408,11 +414,11 @@ func (s *Store) UpdateKnowledgeBy(id int64, patch map[string]string, editor stri
 	// den alten nicht: der Anker beschriebe sonst einen Code-Stand, auf dem
 	// dieser Text nie geschrieben wurde. Der alte steht in der Historie.
 	if _, ok := patch["title"]; ok {
-		sets = append(sets, "anchor_id = NULL")
+		sets = append(sets, "anchor_id = NULL", "origin_id = NULL")
 	} else if _, ok := patch["body"]; ok {
-		sets = append(sets, "anchor_id = NULL")
+		sets = append(sets, "anchor_id = NULL", "origin_id = NULL")
 	} else if _, ok := patch["type"]; ok {
-		sets = append(sets, "anchor_id = NULL")
+		sets = append(sets, "anchor_id = NULL", "origin_id = NULL")
 	}
 	if editor != "" {
 		sets = append(sets, "last_modified_by = ?")
@@ -472,8 +478,8 @@ func archiveKnowledgeTx(tx *sql.Tx, id int64, editor, changedAt string) error {
 	// Der Anker wandert mit der Fassung in die Historie (anchor_id wird kopiert,
 	// die Anker-Zeile bleibt unberührt).
 	_, err := tx.Exec(`INSERT INTO knowledge_versions
-		(knowledge_id,type,title,body,person,changed_by,changed_at,anchor_id)
-		SELECT id,type,title,body,person,?,?,anchor_id FROM knowledge WHERE id=?`,
+		(knowledge_id,type,title,body,person,changed_by,changed_at,anchor_id,origin_id)
+		SELECT id,type,title,body,person,?,?,anchor_id,origin_id FROM knowledge WHERE id=?`,
 		editor, changedAt, id)
 	return err
 }
@@ -723,6 +729,9 @@ func (s *Store) scanKnowledge(rows *sql.Rows) ([]Knowledge, error) {
 			return nil, err
 		}
 		sort.Strings(out[i].Activation.Paths)
+	}
+	if err := s.attachKnowledgeOrigins(out); err != nil {
+		return nil, err
 	}
 	if err := s.attachKnowledgeAnchors(out); err != nil {
 		return nil, err

@@ -73,6 +73,8 @@ func run(args []string, stdout io.Writer) int {
 		return cmdCost(rest, stdout)
 	case "upgrade-schema":
 		return cmdUpgradeSchema(rest, stdout)
+	case "origin":
+		return cmdOrigin(rest, stdout)
 	case "canonicalize-scopes":
 		return cmdCanonicalizeScopes(rest, stdout)
 	case "unbind-branch":
@@ -164,6 +166,7 @@ const usage = `usage: ctx <command>
   usage    list knowledge nobody has used within a window
   cost     report LLM spend and forecast the remaining backlog
   upgrade-schema  one-off knowledge table rebuild for trust tiers
+  origin               backfill the origin context (time, areas) of older entries
   canonicalize-scopes  one-off project name backfill and duplicate merge
   unbind-branch  lift knowledge filed against a branch to its project
   strip-images  replace stored base64 images and files with placeholders (--dry-run, runs beside the server)

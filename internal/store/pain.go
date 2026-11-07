@@ -113,12 +113,12 @@ func insertLinkTx(tx txExec, painID int64, project string, t resolvedTarget, a p
 		return id, false, err
 	}
 	id, _ := res.LastInsertId()
-	anchorID, err := insertAnchorTx(tx, a.GitAnchor)
+	anchorID, originID, err := insertWriteMetaTx(tx, a.GitAnchor, a.Origin)
 	if err != nil {
 		return 0, false, err
 	}
-	if _, err := tx.Exec(`INSERT INTO pain_events(pain_id,kind,data,person,account_id,session_id,created_at,anchor_id) VALUES(?,'link_added',?,?,?,?,?,?)`,
-		painID, targetData(t), a.Person, a.AccountID, a.SessionID, ts, anchorID); err != nil {
+	if _, err := tx.Exec(`INSERT INTO pain_events(pain_id,kind,data,person,account_id,session_id,created_at,anchor_id,origin_id) VALUES(?,'link_added',?,?,?,?,?,?,?)`,
+		painID, targetData(t), a.Person, a.AccountID, a.SessionID, ts, anchorID, originID); err != nil {
 		return 0, false, err
 	}
 	if t.Kind == "request" {
@@ -187,12 +187,12 @@ func (s *Store) commitPain(in CreatePainInput, targets []resolvedTarget) (int64,
 	}
 	actor := in.Actor
 	actor.AccountID = account
-	anchorID, err := insertAnchorTx(tx, actor.GitAnchor)
+	anchorID, originID, err := insertWriteMetaTx(tx, actor.GitAnchor, actor.Origin)
 	if err != nil {
 		return 0, err
 	}
-	if _, err := tx.Exec(`INSERT INTO pain_events(pain_id,kind,to_state,person,account_id,session_id,created_at,anchor_id) VALUES(?,'created','active',?,?,?,?,?)`,
-		id, actor.Person, account, actor.SessionID, ts, anchorID); err != nil {
+	if _, err := tx.Exec(`INSERT INTO pain_events(pain_id,kind,to_state,person,account_id,session_id,created_at,anchor_id,origin_id) VALUES(?,'created','active',?,?,?,?,?,?)`,
+		id, actor.Person, account, actor.SessionID, ts, anchorID, originID); err != nil {
 		return 0, err
 	}
 	for _, t := range targets {
@@ -295,12 +295,12 @@ func (s *Store) commitPainState(id int64, from, to, remaining string, ev pain.Ev
 	if _, err := tx.Exec(`UPDATE pains SET state=?,remaining=?,updated_at=? WHERE id=?`, to, remaining, ts, id); err != nil {
 		return err
 	}
-	anchorID, err := insertAnchorTx(tx, actor.GitAnchor)
+	anchorID, originID, err := insertWriteMetaTx(tx, actor.GitAnchor, actor.Origin)
 	if err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`INSERT INTO pain_events(pain_id,kind,from_state,to_state,remaining,evidence_kind,evidence_ref,note,person,account_id,session_id,created_at,anchor_id)
-		VALUES(?,'state',?,?,?,?,?,?,?,?,?,?,?)`, id, from, to, remaining, ev.Kind, ev.Ref, note, actor.Person, actor.AccountID, actor.SessionID, ts, anchorID); err != nil {
+	if _, err := tx.Exec(`INSERT INTO pain_events(pain_id,kind,from_state,to_state,remaining,evidence_kind,evidence_ref,note,person,account_id,session_id,created_at,anchor_id,origin_id)
+		VALUES(?,'state',?,?,?,?,?,?,?,?,?,?,?,?)`, id, from, to, remaining, ev.Kind, ev.Ref, note, actor.Person, actor.AccountID, actor.SessionID, ts, anchorID, originID); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -357,12 +357,12 @@ func (s *Store) commitPainCorrection(id int64, title, body, reason, changed stri
 	if _, err := tx.Exec(`UPDATE pains SET title=?,body=?,updated_at=? WHERE id=?`, title, body, ts, id); err != nil {
 		return err
 	}
-	anchorID, err := insertAnchorTx(tx, actor.GitAnchor)
+	anchorID, originID, err := insertWriteMetaTx(tx, actor.GitAnchor, actor.Origin)
 	if err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`INSERT INTO pain_events(pain_id,kind,note,data,person,account_id,session_id,created_at,anchor_id) VALUES(?,'corrected',?,?,?,?,?,?,?)`,
-		id, reason, changed, actor.Person, actor.AccountID, actor.SessionID, ts, anchorID); err != nil {
+	if _, err := tx.Exec(`INSERT INTO pain_events(pain_id,kind,note,data,person,account_id,session_id,created_at,anchor_id,origin_id) VALUES(?,'corrected',?,?,?,?,?,?,?,?)`,
+		id, reason, changed, actor.Person, actor.AccountID, actor.SessionID, ts, anchorID, originID); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -450,12 +450,12 @@ func (s *Store) commitPainUnlink(linkID, painID int64, t resolvedTarget, reason 
 		return err
 	}
 	ts := now()
-	anchorID, err := insertAnchorTx(tx, actor.GitAnchor)
+	anchorID, originID, err := insertWriteMetaTx(tx, actor.GitAnchor, actor.Origin)
 	if err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`INSERT INTO pain_events(pain_id,kind,note,data,person,account_id,session_id,created_at,anchor_id) VALUES(?,'link_removed',?,?,?,?,?,?,?)`,
-		painID, reason, targetData(t), actor.Person, actor.AccountID, actor.SessionID, ts, anchorID); err != nil {
+	if _, err := tx.Exec(`INSERT INTO pain_events(pain_id,kind,note,data,person,account_id,session_id,created_at,anchor_id,origin_id) VALUES(?,'link_removed',?,?,?,?,?,?,?,?)`,
+		painID, reason, targetData(t), actor.Person, actor.AccountID, actor.SessionID, ts, anchorID, originID); err != nil {
 		return err
 	}
 	if t.Kind == "request" {

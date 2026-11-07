@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
+	"github.com/Deadweight-Labs/ghosttree/internal/originctx"
 )
 
 // GhostFile ist die Beschreibung eines Pfades. Die Identität ist
@@ -32,6 +33,9 @@ type GhostFile struct {
 	// (REQ-597). Der Server setzt ihn beim Schreiben aus dem Header, nie aus
 	// dem Body.
 	GitAnchor *gitanchor.Anchor `json:"git_anchor,omitempty"`
+	// OriginContext ist der Entstehungskontext dieser Beschreibung (REQ-600).
+	// Der Pfad der Beschreibung selbst zählt darin als ausdrücklich genannt.
+	OriginContext *originctx.Context `json:"origin_context,omitempty"`
 }
 
 const ghostCols = `id, project, path, kind, description, content_sha, git_blob,
@@ -72,22 +76,22 @@ func (s *Store) PutGhostFile(g GhostFile) (int64, error) {
 	// Der neue Anker ersetzt den alten auf der Kopfzeile; der alte ist mit der
 	// verdrängten Fassung in der Historie (archiveGhostFileTx). Ohne Anker
 	// bleibt die Spalte leer, sie erbt nichts.
-	anchorID, err := insertAnchorTx(tx, g.GitAnchor)
+	anchorID, originID, err := insertWriteMetaTx(tx, g.GitAnchor, g.OriginContext)
 	if err != nil {
 		return 0, err
 	}
 	res, err := tx.Exec(`INSERT INTO ghost_files(project,path,kind,description,content_sha,git_blob,
-		line_count,person,harness,session_ref,described_at,updated_at,anchor_id)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+		line_count,person,harness,session_ref,described_at,updated_at,anchor_id,origin_id)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(project,path) DO UPDATE SET
 			kind=excluded.kind, description=excluded.description,
 			content_sha=excluded.content_sha, git_blob=excluded.git_blob,
 			line_count=excluded.line_count, person=excluded.person,
 			harness=excluded.harness, session_ref=excluded.session_ref,
 			described_at=excluded.described_at, updated_at=excluded.updated_at,
-			anchor_id=excluded.anchor_id`,
+			anchor_id=excluded.anchor_id, origin_id=excluded.origin_id`,
 		g.Project, g.Path, g.Kind, g.Description, g.ContentSHA, g.GitBlob,
-		g.LineCount, g.Person, g.Harness, g.SessionRef, g.DescribedAt, ts, anchorID)
+		g.LineCount, g.Person, g.Harness, g.SessionRef, g.DescribedAt, ts, anchorID, originID)
 	if err != nil {
 		return 0, err
 	}
@@ -150,7 +154,7 @@ func (s *Store) SearchGhostFiles(q, project string, limit int) ([]GhostFile, err
 }
 
 // ftsGhostFiles is the full-text ranking as it has always been answered.
-func (s *Store) ftsGhostFiles(q, project string, limit int, anchor AnchorFilter) ([]GhostFile, error) {
+func (s *Store) ftsGhostFiles(q, project string, limit int, anchor AnchorFilter, origin originctx.Filter) ([]GhostFile, error) {
 	if limit <= 0 {
 		limit = 20
 	}
@@ -158,6 +162,10 @@ func (s *Store) ftsGhostFiles(q, project string, limit int, anchor AnchorFilter)
 	if af, afArgs := anchor.Where("g.anchor_id"); af != "" {
 		where += " AND " + af
 		args = append(args, afArgs...)
+	}
+	if of, ofArgs := originWhere(origin, "g.origin_id", "g.described_at"); of != "" {
+		where += " AND " + of
+		args = append(args, ofArgs...)
 	}
 	rows, err := s.db.Query(`SELECT `+prefix(ghostCols, "g.")+`
 		FROM ghost_files_fts f JOIN ghost_files g ON g.id=f.rowid
@@ -185,8 +193,13 @@ func (s *Store) scanGhostFiles(rows *sql.Rows) ([]GhostFile, error) {
 	if err != nil {
 		return nil, err
 	}
+	origins, err := s.originsFor("ghost_files", ids)
+	if err != nil {
+		return nil, err
+	}
 	for i := range out {
 		out[i].GitAnchor = anchors[out[i].ID]
+		out[i].OriginContext = origins[out[i].ID]
 	}
 	return out, nil
 }
