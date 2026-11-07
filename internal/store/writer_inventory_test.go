@@ -50,6 +50,8 @@ var writerMethodClasses = map[string]string{
 	"CreateProjectInvitation":       "write",
 	"ClaimAndInviteProject":         "write",
 	"ConnectSource":                 "write",
+	"ConnectSourceWithInstallation": "write",
+	"SyncInstallationRepos":         "write",
 	"DisconnectSource":              "write",
 	"ClaimPrefix":                   "write",
 	"ReleasePrefix":                 "write",
