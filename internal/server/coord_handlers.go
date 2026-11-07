@@ -166,6 +166,7 @@ func (a *api) sendCoordMessage(w http.ResponseWriter, r *http.Request) {
 	in.Explanation = ""
 	// Nie aus dem Body: nur der Header trägt einen gemessenen Stand.
 	in.GitAnchor = anchorFromRequest(r)
+	in.OriginContext = a.originFor(r, "")
 	id, err := a.coordAccess(r, in.SenderExternalID).Send(in)
 	if err != nil {
 		writeCoordAccessError(w, err)

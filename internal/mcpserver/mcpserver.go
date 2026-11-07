@@ -8,10 +8,12 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
+	"github.com/Deadweight-Labs/ghosttree/internal/originctx"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -105,6 +107,10 @@ type SearchInput struct {
 	Branch string `json:"branch,omitempty" jsonschema:"search as on this branch: entries filed on it and on the branches it descends from (derived from the local repository). Default is the current branch"`
 	Commit string `json:"commit,omitempty" jsonschema:"only entries written at this commit: a prefix of at least 7 hexadecimal characters of the commit that was checked out when the entry was written. Sessions carry no commit and are left out"`
 	PR     int64  `json:"pr,omitempty" jsonschema:"only entries whose commit belongs to this pull request number. Entries carry a pull request number only once the GitHub connection assigns it; until then this finds nothing"`
+	// Since, Until and Area filter by when and where an entry arose (REQ-600).
+	Since string   `json:"since,omitempty" jsonschema:"only entries written on or after this time: a date (2026-11-01), an RFC3339 time or a relative one such as 7d, 2w, 12h. Entries filed before the origin was recorded count by their creation time"`
+	Until string   `json:"until,omitempty" jsonschema:"only entries written on or before this time, same formats as since; a date includes that whole day"`
+	Area  []string `json:"area,omitempty" jsonschema:"only entries that arose in this area: a path prefix relative to the repository root, such as internal/store. Repeat for several, an entry matching any of them counts. Entries without a recorded origin area are left out"`
 }
 
 // searchAxes resolves the project axis a search runs on. Scope separation is
@@ -314,7 +320,14 @@ func (s *Server) handleSearch(ctx context.Context, _ *mcp.CallToolRequest, in Se
 	if in.PR < 0 {
 		return nil, nil, fmt.Errorf("pr must be a positive pull request number")
 	}
-	anchored := anchor.Commit != "" || anchor.PR != 0
+	anchor.Origin = client.OriginFilter{Since: in.Since, Until: in.Until, Areas: in.Area}
+	if anchor.Origin.Active() {
+		// Gleiche Prüfung wie am Server, damit der Fehler vor dem Aufruf kommt.
+		if _, err := anchor.Origin.Resolve(time.Now()); err != nil {
+			return nil, nil, err
+		}
+	}
+	anchored := anchor.Commit != "" || anchor.PR != 0 || anchor.Origin.Active()
 	ax, crossProject := s.searchAxes(in)
 	if (in.Kind == "" || in.Kind == "all" || in.Kind == "requests") && store.ClassifySearch(in.Query) == store.SearchInterrupted {
 		threads, err := s.client.InterruptedWork(ax, s.sessionRef)
@@ -389,7 +402,7 @@ func (s *Server) handleSearch(ctx context.Context, _ *mcp.CallToolRequest, in Se
 		if len(res.Requests) > 0 {
 			out.WriteString("\n## requests\n")
 			for _, h := range res.Requests {
-				fmt.Fprintf(&out, "- [request|status=%s|type=%s|source=ledger] REQ-%d %s — %s\n", h.Request.State, h.Request.Type, h.Request.ID, h.Request.Title, h.MatchReason)
+				fmt.Fprintf(&out, "- [request|status=%s|type=%s|source=ledger%s] REQ-%d %s — %s\n", h.Request.State, h.Request.Type, originctx.Label(h.OriginContext, h.Request.CreatedAt), h.Request.ID, h.Request.Title, h.MatchReason)
 			}
 			out.WriteString(limitNote(len(res.Requests), limit))
 		}
@@ -684,7 +697,7 @@ func renderKnowledge(k store.Knowledge) string {
 		// should weigh it differently from an exact word hit.
 		label += "|match:" + k.Match
 	}
-	return fmt.Sprintf("- #%d [%s%s] %s — %s\n", k.ID, label, anchorLabel(k.GitAnchor), k.Title, body)
+	return fmt.Sprintf("- #%d [%s%s%s] %s — %s\n", k.ID, label, anchorLabel(k.GitAnchor), originctx.Label(k.OriginContext, k.CreatedAt), k.Title, body)
 }
 
 // anchorLabel nennt den Git-Stand eines Treffers kurz: "|at:<commit>" mit
@@ -712,7 +725,7 @@ func anchorLabel(a *gitanchor.Anchor) string {
 // bullets and fenced blocks it was written with are the entry, not decoration
 // around it.
 func renderKnowledgeFull(k store.Knowledge) string {
-	header := fmt.Sprintf("# #%d %s\n[%s%s]", k.ID, k.Title, knowledgeLabel(k), anchorLabel(k.GitAnchor))
+	header := fmt.Sprintf("# #%d %s\n[%s%s%s]", k.ID, k.Title, knowledgeLabel(k), anchorLabel(k.GitAnchor), originctx.Label(k.OriginContext, k.CreatedAt))
 	if k.ObservedAt != "" {
 		header += " observed:" + k.ObservedAt
 	}

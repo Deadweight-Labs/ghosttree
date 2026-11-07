@@ -42,7 +42,7 @@ func (c *Client) SearchRequests(filter requestdomain.SearchFilter) (requestdomai
 	if filter.FullDescription {
 		q.Set("full", "1")
 	}
-	AnchorFilter{Commit: filter.Commit, PR: filter.PR}.apply(q)
+	AnchorFilter{Commit: filter.Commit, PR: filter.PR, Origin: OriginFilter(filter.Origin)}.apply(q)
 	var out requestdomain.SearchPage
 	err := c.do("GET", "/api/requests/search", q, nil, &out)
 	return out, err

@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
+	"github.com/Deadweight-Labs/ghosttree/internal/originctx"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
@@ -40,9 +41,35 @@ func (c *Client) anchorHeader(method, path string) string {
 	return gitanchor.Encode(c.anchor())
 }
 
+// SetOriginSession schaltet den Entstehungskontext (REQ-600) für schreibende
+// Aufrufe ein: die Session geht im Header originctx.SessionHeader auf denselben
+// Routen mit wie der Git-Anker. Mehr sendet der Client nicht; Pfade und Bereiche
+// ermittelt der Server aus path_activity. Leer lässt den Header weg.
+func (c *Client) SetOriginSession(ref string) { c.originSession = ref }
+
 func (c *Client) setAnchor(req *http.Request, method, path string) {
 	if v := c.anchorHeader(method, path); v != "" {
 		req.Header.Set(gitanchor.Header, v)
+	}
+	if c.originSession != "" && originctx.ValidSession(c.originSession) && anchoredWrites.MatchString(method+" "+path) {
+		req.Header.Set(originctx.SessionHeader, c.originSession)
+	}
+}
+
+// OriginFilter ist die Angabe für die Lesefilter nach Entstehungskontext:
+// Zeitraum (Datum, RFC3339 oder relativ wie 7d, 2w) und Bereiche (Pfad-Präfixe,
+// ODER-verknüpft). Der Server löst sie auf; leer filtert nichts.
+type OriginFilter = originctx.Spec
+
+func applyOrigin(q url.Values, f OriginFilter) {
+	if f.Since != "" {
+		q.Set("since", f.Since)
+	}
+	if f.Until != "" {
+		q.Set("until", f.Until)
+	}
+	for _, a := range f.Areas {
+		q.Add("area", a)
 	}
 }
 
@@ -53,9 +80,14 @@ type AnchorFilter struct {
 	// PR filtert auf Einträge mit dieser PR-Nummer am Anker. Solange die
 	// PR-Zuordnung fehlt (REQ-596), liefert das nichts.
 	PR int64
+	// Origin ist der Filter nach Entstehungskontext (REQ-600): Zeitraum und
+	// Bereich. Er steht hier, damit es für die Suche eine einzige Filter-
+	// Struktur gibt, die eine Qualifier-Sprache später direkt füllen kann.
+	Origin OriginFilter
 }
 
 func (f AnchorFilter) apply(q url.Values) {
+	applyOrigin(q, f.Origin)
 	if f.Commit != "" {
 		q.Set("commit", f.Commit)
 	}

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/ghost"
+	"github.com/Deadweight-Labs/ghosttree/internal/originctx"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -282,5 +283,5 @@ func renderGhostHit(g store.GhostFile) string {
 		// should weigh it differently from an exact word hit.
 		label += "|match:" + g.Match
 	}
-	return fmt.Sprintf("- %s [%s] — %s\n", name, label, body)
+	return fmt.Sprintf("- %s [%s%s%s] — %s\n", name, label, anchorLabel(g.GitAnchor), originctx.Label(g.OriginContext, g.DescribedAt), body)
 }

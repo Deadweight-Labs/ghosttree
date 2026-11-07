@@ -197,6 +197,9 @@ func cmdMCP(args []string, stdout io.Writer) int {
 		}
 		return collector.ResolveAnchor(cwd)
 	})
+	// Dieselbe Sitzung geht auf den verankerten Routen als Kennung mit; Pfade und
+	// Bereiche ermittelt der Server (REQ-600).
+	c.SetOriginSession(currentSessionRef())
 	srv := mcpserver.NewServer(c, hctx.axes, hctx.activation)
 	srv.SetLineageResolver(func(branch string) []string {
 		cwd, err := os.Getwd()
