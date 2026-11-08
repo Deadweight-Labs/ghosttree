@@ -35,8 +35,19 @@ type Criterion struct {
 	Description string     `json:"description"`
 	State       string     `json:"state"`
 	Evidence    []Evidence `json:"evidence,omitempty"`
-	CreatedAt   string     `json:"created_at"`
-	UpdatedAt   string     `json:"updated_at"`
+	// Requirement nennt die Anforderung der Idee, aus der das Kriterium entstand
+	// (REQ-611). Nur die Ansicht für den Betrachter füllt es, und nur für Ideen,
+	// die er lesen darf.
+	Requirement *RequirementRef `json:"requirement,omitempty"`
+	CreatedAt   string          `json:"created_at"`
+	UpdatedAt   string          `json:"updated_at"`
+}
+
+// RequirementRef verweist auf eine Anforderung (Nummer ab 1) im Konzept einer Idee.
+type RequirementRef struct {
+	Idea int64  `json:"idea"`
+	No   int    `json:"no"`
+	Text string `json:"text"`
 }
 
 func (c Criterion) HumanID() string { return fmt.Sprintf("AC-%d.%d", c.RequestID, c.Number) }

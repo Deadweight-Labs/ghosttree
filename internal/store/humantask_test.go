@@ -440,3 +440,31 @@ func TestHumanTaskWithoutRecipientBelongsToTheCreator(t *testing.T) {
 		t.Errorf("rex mine = %q, want his own and the one for everyone, not mia's", got)
 	}
 }
+
+// REQ-603: die Schritte eines Tasks werden gespeichert und kommen mit dem Task
+// zurück; ein Schritt mit Token-Muster wird wie jedes andere Feld abgelehnt.
+func TestHumanTaskStepsRoundTripAndSecretCheck(t *testing.T) {
+	w := newPainWorld(t)
+	rid := w.request(t, "Verbinden")
+	steps := []humantask.Step{{Text: "GitHub öffnen"}, {Text: "App installieren", URL: "https://github.com/apps/x"}}
+	task := w.task(t, "mia", humantask.CreateInput{RequestID: rid, Kind: "action", Title: "GitHub verbinden", Steps: steps})
+	if len(task.Steps) != 2 || task.Steps[1].URL != "https://github.com/apps/x" || task.Steps[0].Text != "GitHub öffnen" {
+		t.Fatalf("steps after create: %+v", task.Steps)
+	}
+	again, err := w.st.TaskByID(task.ID)
+	if err != nil || len(again.Steps) != 2 || again.Steps[0].Text != "GitHub öffnen" {
+		t.Fatalf("steps after reload: %+v %v", again.Steps, err)
+	}
+	plain := w.task(t, "mia", humantask.CreateInput{RequestID: rid, Kind: "action", Title: "ohne Schritte"})
+	if len(plain.Steps) != 0 {
+		t.Errorf("a task without steps got %+v", plain.Steps)
+	}
+	pa := w.pa["mia"]
+	if _, err := pa.CreateHumanTask(humantask.CreateInput{RequestID: rid, Kind: "action", Title: "x", Steps: []humantask.Step{{Text: "a\nb"}}}, humantask.Actor{Person: "mia"}); ruleCode(err) != "steps_invalid" {
+		t.Errorf("bad step: %v", err)
+	}
+	leak := "ghp_" + strings.Repeat("a1B2c3D4", 5)
+	if _, err := pa.CreateHumanTask(humantask.CreateInput{RequestID: rid, Kind: "action", Title: "x", Steps: []humantask.Step{{Text: "Token " + leak}}}, humantask.Actor{Person: "mia"}); ruleCode(err) != "secret_detected" {
+		t.Errorf("secret in a step: %v", err)
+	}
+}

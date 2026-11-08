@@ -54,6 +54,7 @@ func (a *api) createThread(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
+	a.noteIdeaDiscussion(r, in.Link)
 	writeJSON(w, 200, map[string]int64{"id": id})
 }
 
@@ -247,6 +248,7 @@ func (a *api) linkThread(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
+	a.noteIdeaDiscussion(r, &in)
 	writeJSON(w, 200, map[string]string{"status": "ok"})
 }
 
@@ -435,5 +437,6 @@ func (a *api) createThreadByRole(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusBadRequest, err)
 		return
 	}
+	a.noteIdeaDiscussion(r, in.Link)
 	writeJSON(w, 200, map[string]int64{"id": id})
 }

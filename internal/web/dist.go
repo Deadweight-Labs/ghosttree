@@ -28,6 +28,10 @@ const installServerPlaceholder = "__GHOSTTREE_SERVER__"
 // layout goreleaser writes. Without it /install.sh and /dist/ answer 404.
 func WithDistDir(dir string) Option { return func(a *app) { a.distDir = dir } }
 
+// WithBuildVersion tells the pages which ctx version the server runs; templates
+// show it as .ServerVersion.
+func WithBuildVersion(v string) Option { return func(a *app) { a.buildVersion = v } }
+
 var distNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]*$`)
 
 var (

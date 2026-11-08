@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -11,7 +12,7 @@ import (
 
 const taskCols = `t.id,t.project,t.request_id,COALESCE(t.work_id,0),t.kind,t.title,t.description,t.location,t.check_hint,t.state,
 	t.assignee_account,COALESCE(pe.name,''),t.created_by_account,t.created_by_person,t.done_by_person,t.done_note,t.done_via,t.done_at,
-	t.state_note,t.confirmed_at,t.created_at,t.updated_at,COALESCE(w.summary,''),COALESCE(w.session_id,0)`
+	t.state_note,t.confirmed_at,t.created_at,t.updated_at,COALESCE(w.summary,''),COALESCE(w.session_id,0),t.steps`
 
 const taskFrom = ` FROM human_tasks t LEFT JOIN persons pe ON pe.id=t.assignee_account AND t.assignee_account>0
 	LEFT JOIN request_work w ON w.id=t.work_id`
@@ -20,10 +21,14 @@ func scanTasks(rows *sql.Rows) ([]humantask.Task, error) {
 	var out []humantask.Task
 	for rows.Next() {
 		var t humantask.Task
+		var steps string
 		if err := rows.Scan(&t.ID, &t.Project, &t.RequestID, &t.WorkID, &t.Kind, &t.Title, &t.Description, &t.Location, &t.CheckHint, &t.State,
 			&t.AssigneeAccount, &t.Assignee, &t.CreatedByAccount, &t.CreatedBy, &t.DoneBy, &t.DoneNote, &t.DoneVia, &t.DoneAt,
-			&t.StateNote, &t.ConfirmedAt, &t.CreatedAt, &t.UpdatedAt, &t.Handoff, &t.HandoffSession); err != nil {
+			&t.StateNote, &t.ConfirmedAt, &t.CreatedAt, &t.UpdatedAt, &t.Handoff, &t.HandoffSession, &steps); err != nil {
 			return nil, err
+		}
+		if steps != "" {
+			_ = json.Unmarshal([]byte(steps), &t.Steps)
 		}
 		out = append(out, t)
 	}
@@ -77,6 +82,9 @@ func (a *ProjectAccess) CreateHumanTask(in humantask.CreateInput, actor humantas
 		return humantask.Task{}, err
 	}
 	if err := humantask.CheckFields("title", in.Title, "description", in.Description, "location", in.Location, "check_hint", in.CheckHint); err != nil {
+		return humantask.Task{}, err
+	}
+	if err := humantask.CheckFields(in.StepFields()...); err != nil {
 		return humantask.Task{}, err
 	}
 	requestID, workID := in.RequestID, in.WorkID
@@ -139,6 +147,7 @@ func (a *ProjectAccess) CreateHumanTask(in humantask.CreateInput, actor humantas
 		assignee = a.account
 	}
 	in.Title = strings.TrimSpace(in.Title)
+	in.Steps = humantask.CleanSteps(in.Steps)
 	id, err := st.commitTask(in, actor, project, requestID, workID, assignee)
 	if err != nil {
 		return humantask.Task{}, err
@@ -162,10 +171,18 @@ func (s *Store) commitTask(in humantask.CreateInput, actor humantask.Actor, proj
 	if workID > 0 {
 		work = workID
 	}
+	steps := ""
+	if len(in.Steps) > 0 {
+		raw, err := json.Marshal(in.Steps)
+		if err != nil {
+			return 0, err
+		}
+		steps = string(raw)
+	}
 	res, err := tx.Exec(`INSERT INTO human_tasks(project,request_id,work_id,kind,title,description,location,check_hint,assignee_account,
-		created_by_account,created_by_person,created_session_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		created_by_account,created_by_person,created_session_id,created_at,updated_at,steps) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		project, requestID, work, in.Kind, in.Title, in.Description, strings.TrimSpace(in.Location), in.CheckHint, assignee,
-		actor.AccountID, actor.Person, actor.SessionID, ts, ts)
+		actor.AccountID, actor.Person, actor.SessionID, ts, ts, steps)
 	if err != nil {
 		return 0, err
 	}

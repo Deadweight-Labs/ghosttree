@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/links"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -58,6 +59,8 @@ type RequestListItem struct {
 	// Match is "semantic" for a request that a search found by its meaning alone:
 	// its words do not match the query. Absent for a hit of the words.
 	Match string `json:"match,omitempty"`
+	// URL is the web address of the issue: a hit carries nothing but the link.
+	URL string `json:"url,omitempty"`
 }
 
 // maxListChars bounds the whole answer. It is enforced while building the list
@@ -65,7 +68,7 @@ type RequestListItem struct {
 // has already produced the thing it was meant to prevent.
 const maxListChars = 6000
 
-func listFromPage(page requestdomain.SearchPage) RequestSearchOutput {
+func listFromPage(page requestdomain.SearchPage, b links.Builder) RequestSearchOutput {
 	// A ranked search that was cut at its depth says so on its last page: more
 	// requests match than any cursor reaches.
 	out := RequestSearchOutput{Results: []RequestListItem{}, NextCursor: page.NextCursor, Truncated: page.Truncated}
@@ -76,8 +79,9 @@ func listFromPage(page requestdomain.SearchPage) RequestSearchOutput {
 			State: hit.Request.State, Priority: hit.Request.Priority,
 			OpenCriteria: hit.OpenCriteria, Handoff: firstLine(hit.LatestHandoff, 160),
 			Sightings: hit.Sightings, Match: hit.Match,
+			URL: b.WithProject(hit.Request.Scope.Project).Issue(hit.Request.ID),
 		}
-		size += len(item.Title) + len(item.Handoff) + 64
+		size += len(item.Title) + len(item.Handoff) + len(item.URL) + 64
 		if size > maxListChars && len(out.Results) > 0 {
 			out.Truncated = true
 			break
@@ -165,6 +169,10 @@ type RequestStartWorkInput struct {
 type RequestWorkOutput struct {
 	Work     requestdomain.Work `json:"work"`
 	Warnings []string           `json:"warnings,omitempty"`
+	// IdeaBriefing is set when the request came out of an idea: the summary of
+	// its concept, the decisions already made and the open questions. Ask what is
+	// unclear as an open decision on the idea instead of in the chat.
+	IdeaBriefing string `json:"idea_briefing,omitempty"`
 }
 
 type RequestFinishWorkInput struct {
@@ -352,7 +360,7 @@ func (s *Server) handleRequestSearch(_ context.Context, _ *mcp.CallToolRequest, 
 		for _, thread := range threads {
 			out.Results = append(out.Results, RequestListItem{ID: thread.RequestID, Type: thread.Type,
 				Title: thread.Title, State: "open", Priority: thread.Priority,
-				OpenCriteria: thread.OpenCriteria, Handoff: firstLine(thread.Handoff, 160)})
+				OpenCriteria: thread.OpenCriteria, Handoff: firstLine(thread.Handoff, 160), URL: s.builder().Issue(thread.RequestID)})
 		}
 		return requestResult(out), out, err
 	}
@@ -363,7 +371,7 @@ func (s *Server) handleRequestSearch(_ context.Context, _ *mcp.CallToolRequest, 
 		interpretation = "open_request_inventory"
 	}
 	page, err := s.client.SearchRequests(requestdomain.SearchFilter{Scope: scope.Axes{Project: s.ctxAxes.Project}, Query: query, State: state, Type: in.Type, Cursor: in.Cursor, Limit: in.Limit})
-	out := listFromPage(page)
+	out := listFromPage(page, s.builder())
 	out.Interpretation = interpretation
 	return requestResult(out), out, err
 }
@@ -381,7 +389,11 @@ func (s *Server) handleRequestGet(_ context.Context, _ *mcp.CallToolRequest, in 
 		}
 	}
 	out := RequestDetailOutput{Detail: detail}
-	return requestDetailResult(detail, concise), out, err
+	res := requestDetailResult(detail, concise)
+	if err == nil {
+		res = s.withCard(res, s.builder().RequestCard(detail))
+	}
+	return res, out, err
 }
 
 func (s *Server) handleRequestCreate(_ context.Context, _ *mcp.CallToolRequest, in RequestCreateInput) (*mcp.CallToolResult, RequestChangeOutput, error) {
@@ -408,7 +420,11 @@ func (s *Server) handleRequestCreate(_ context.Context, _ *mcp.CallToolRequest, 
 	for _, c := range detail.Criteria {
 		out.Criteria = append(out.Criteria, CriterionRef{ID: c.ID, Number: c.Number, State: c.State})
 	}
-	return requestResult(out), out, err
+	res := requestResult(out)
+	if err == nil {
+		res = s.withCard(res, s.builder().RequestCard(detail))
+	}
+	return res, out, err
 }
 
 func (s *Server) handleRequestStartWork(_ context.Context, _ *mcp.CallToolRequest, in RequestStartWorkInput) (*mcp.CallToolResult, RequestWorkOutput, error) {
@@ -424,15 +440,15 @@ func (s *Server) handleRequestStartWork(_ context.Context, _ *mcp.CallToolReques
 		}
 		sessionID = found
 	}
-	work, warnings, err := s.client.StartRequestWork(in.RequestID, sessionID, role)
-	out := RequestWorkOutput{Work: work, Warnings: warnings}
-	return requestResult(out), out, err
+	work, warnings, briefing, err := s.client.StartRequestWorkBriefing(in.RequestID, sessionID, role)
+	out := RequestWorkOutput{Work: work, Warnings: warnings, IdeaBriefing: briefing}
+	return s.withRequestLink(requestResult(out), work.RequestID, err), out, err
 }
 
 func (s *Server) handleRequestFinishWork(_ context.Context, _ *mcp.CallToolRequest, in RequestFinishWorkInput) (*mcp.CallToolResult, RequestWorkOutput, error) {
 	work, err := s.client.FinishRequestWork(in.WorkID, in.State, in.Summary)
 	out := RequestWorkOutput{Work: work}
-	return requestResult(out), out, err
+	return s.withRequestLink(requestResult(out), work.RequestID, err), out, err
 }
 
 func (s *Server) handleRequestProgress(_ context.Context, _ *mcp.CallToolRequest, in RequestProgressInput) (*mcp.CallToolResult, RequestChangeOutput, error) {
@@ -484,7 +500,11 @@ func (s *Server) handleRequestProgress(_ context.Context, _ *mcp.CallToolRequest
 	}
 	detail, err := s.client.GetRequest(in.RequestID)
 	out := changeOutput(detail, in.Action, in.CriterionID)
-	return requestResult(out), out, err
+	res := requestResult(out)
+	if err == nil {
+		res = s.withCard(res, s.builder().RequestCard(detail))
+	}
+	return res, out, err
 }
 
 // ownSession findet die Session dieses MCP-Prozesses, wenn der Agent ihre Nummer

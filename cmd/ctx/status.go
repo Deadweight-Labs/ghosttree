@@ -13,6 +13,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/collector"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
 	"github.com/Deadweight-Labs/ghosttree/internal/installer"
+	ver "github.com/Deadweight-Labs/ghosttree/internal/version"
 )
 
 func cmdStatus(args []string, stdout io.Writer) int {
@@ -30,6 +31,9 @@ func cmdStatus(args []string, stdout io.Writer) int {
 			ok = false
 		} else {
 			fmt.Fprintln(stdout, "server      reachable")
+			if !printVersions(stdout, cfg, client.New(cfg)) {
+				ok = false
+			}
 		}
 	}
 
@@ -90,3 +94,32 @@ func watchProcess() (int, bool) {
 	// Signal 0 only checks that the process is still alive.
 	return pid, p.Signal(syscall.Signal(0)) == nil
 }
+
+// printVersions shows client and server version and the update channel side by
+// side and warns when the client is older than the server or too old for it.
+// It returns false only for a protocol the server no longer serves.
+func printVersions(stdout io.Writer, cfg config.Config, c *client.Client) bool {
+	cv := version
+	info, err := c.Version()
+	if err != nil {
+		fmt.Fprintf(stdout, "version     client %s (%s) | server unknown (no /api/version: an older server) | channel %s\n",
+			versionLabel(cv), ver.Channel(cv), cfg.UpdateChannel())
+		return true
+	}
+	fmt.Fprintf(stdout, "version     client %s (%s, protocol %d) | server %s (%s, protocol %d) | channel %s\n",
+		versionLabel(cv), ver.Channel(cv), ver.Protocol,
+		versionLabel(info.Version), info.Channel, info.Protocol, cfg.UpdateChannel())
+	if ver.Protocol < info.MinClient {
+		fmt.Fprintf(stdout, "warning     this client speaks protocol %d, the server needs at least %d: run 'ctx update'\n", ver.Protocol, info.MinClient)
+		return false
+	}
+	switch ver.Compare(cv, info.Version) {
+	case ver.Newer:
+		fmt.Fprintf(stdout, "warning     this client (%s) is older than the server (%s): run 'ctx update'\n", cv, info.Version)
+	case ver.Different:
+		fmt.Fprintf(stdout, "warning     client and server run different builds (%s, %s): run 'ctx update' if the server is newer\n", cv, info.Version)
+	}
+	return true
+}
+
+func versionLabel(v string) string { return ver.Label(v) }

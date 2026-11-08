@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
@@ -17,6 +18,10 @@ type Live struct {
 	Branch  string
 	Lineage []string
 	CWD     string
+	// Trunk: der Branch ist der Default-Branch des Repos oder der Default ist
+	// unbekannt. Beschreibungen von Ghost-Dateien gehören dann auf die
+	// Projektebene statt auf eine Branch-Ebene.
+	Trunk bool
 }
 
 // SetLive setzt, wie der aktuelle Git-Stand ermittelt wird. Als Rückruf, weil
@@ -137,7 +142,7 @@ func (s *Server) handlePackageGet(_ context.Context, _ *mcp.CallToolRequest, in 
 	if !found {
 		return textResult("No open work package for this branch (and none inherited from the branches it was cut from). Create one with package_update action=create."), PackageDetailOutput{}, nil
 	}
-	return textResult(requestdomain.RenderPackage(d)), PackageDetailOutput{Detail: d, Found: true}, nil
+	return s.withCard(textResult(requestdomain.RenderPackage(d)), s.builder().PackageCard(d)), PackageDetailOutput{Detail: d, Found: true}, nil
 }
 
 func (s *Server) handlePackageReview(_ context.Context, _ *mcp.CallToolRequest, in PackageGetInput) (*mcp.CallToolResult, PackageDetailOutput, error) {
@@ -148,7 +153,30 @@ func (s *Server) handlePackageReview(_ context.Context, _ *mcp.CallToolRequest, 
 	if !found {
 		return textResult("No open work package for this branch or pull request: there is no requirements list to review."), PackageDetailOutput{}, nil
 	}
-	return textResult(requestdomain.RenderPackageReview(d)), PackageDetailOutput{Detail: d, Found: true}, nil
+	text := requestdomain.RenderPackageReview(d)
+	if d.PR > 0 {
+		text += s.renderPullKnowledge(d.Project, d.PR)
+	}
+	return s.withCard(textResult(text), s.builder().PackageCard(d)), PackageDetailOutput{Detail: d, Found: true}, nil
+}
+
+// renderPullKnowledge hängt an das Lastenheft eines PRs, welches Branch-Wissen
+// auf seinen Commits entstanden ist (nach dem Merge: mit hineingegangen). Fehlt
+// die Auskunft, bleibt das Lastenheft wie es ist.
+func (s *Server) renderPullKnowledge(project string, pr int64) string {
+	brief, err := s.client.PullKnowledge(project, pr)
+	if err != nil || (len(brief.Knowledge) == 0 && len(brief.Ghosts) == 0) {
+		return ""
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "\n\nKnowledge written on PR #%d (%d entries, %d described paths):\n", pr, len(brief.Knowledge), len(brief.Ghosts))
+	for _, k := range brief.Knowledge {
+		fmt.Fprintf(&b, "- #%d [%s] %s\n", k.ID, k.Type, oneLine(k.Title))
+	}
+	for _, p := range brief.Ghosts {
+		fmt.Fprintf(&b, "- path %s\n", oneLine(p))
+	}
+	return b.String()
 }
 
 func membersOf(refs []PackageRequestRef) []requestdomain.PackageMember {
@@ -186,7 +214,7 @@ func (s *Server) handlePackageUpdate(_ context.Context, _ *mcp.CallToolRequest, 
 			return nil, PackageChangeOutput{}, err
 		}
 		out := changeOfPackage("created", d)
-		return requestResult(out), out, nil
+		return s.withCard(requestResult(out), s.builder().PackageCard(d)), out, nil
 	}
 	id := in.PackageID
 	if id == 0 {
@@ -231,5 +259,5 @@ func (s *Server) handlePackageUpdate(_ context.Context, _ *mcp.CallToolRequest, 
 		return nil, PackageChangeOutput{}, err
 	}
 	out := changeOfPackage(in.Action, d)
-	return requestResult(out), out, nil
+	return s.withCard(requestResult(out), s.builder().PackageCard(d)), out, nil
 }

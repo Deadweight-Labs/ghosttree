@@ -216,7 +216,9 @@ func cmdMCP(args []string, stdout io.Writer) int {
 			return mcpserver.Live{}
 		}
 		g := collector.ResolveGitContext(cwd)
-		return mcpserver.Live{Branch: g.Branch, Lineage: g.Lineage, CWD: cwd}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		return mcpserver.Live{Branch: g.Branch, Lineage: g.Lineage, CWD: cwd, Trunk: collector.IsDefaultBranch(ctx, cwd, g.Branch)}
 	})
 	srv.SetSessionRef(currentSessionRef())
 	srv.SetCoordRef(coordAgentOverride())

@@ -11,7 +11,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 )
 
-const ideaCols = `i.id,i.project,i.title,i.body,i.state,i.reason,i.person,i.created_at,i.updated_at,COALESCE(au.account_id,0)`
+const ideaCols = `i.id,i.project,i.title,i.body,i.state,i.reason,i.person,i.created_at,i.updated_at,COALESCE(au.account_id,0),i.phase`
 
 const ideaFrom = ` FROM ideas i LEFT JOIN idea_authors au ON au.idea_id=i.id`
 
@@ -19,9 +19,11 @@ func scanIdeas(rows *sql.Rows) ([]idea.Idea, error) {
 	var out []idea.Idea
 	for rows.Next() {
 		var i idea.Idea
-		if err := rows.Scan(&i.ID, &i.Project, &i.Title, &i.Body, &i.State, &i.Reason, &i.Person, &i.CreatedAt, &i.UpdatedAt, &i.AuthorID); err != nil {
+		var phase string
+		if err := rows.Scan(&i.ID, &i.Project, &i.Title, &i.Body, &i.State, &i.Reason, &i.Person, &i.CreatedAt, &i.UpdatedAt, &i.AuthorID, &phase); err != nil {
 			return nil, err
 		}
+		i.Phase = idea.EffectivePhase(i.State, phase)
 		out = append(out, i)
 	}
 	return out, rows.Err()
@@ -79,6 +81,9 @@ func (s *Store) attachIdeaMeta(list []idea.Idea) error {
 	for i, id := range ids {
 		args[i] = id
 	}
+	if err := s.attachIdeaWorkshopMeta(list, idx, args); err != nil {
+		return err
+	}
 	rows, err := s.db.Query(`SELECT idea_id, request_id FROM idea_requests WHERE idea_id IN (`+placeholders(len(ids))+`) ORDER BY request_id`, args...)
 	if err != nil {
 		return err
@@ -124,7 +129,21 @@ func (a *ProjectAccess) IdeaView(id int64) (idea.Idea, error) {
 	}
 	list := []idea.Idea{i}
 	a.attachIdeaLabels(list)
+	a.attachIdeaPains(list)
+	if list[0].Phase == idea.PhaseBuilding || list[0].Phase == idea.PhaseDone {
+		list[0].UncoveredRequirements = a.st.uncoveredCount(i.ID)
+	}
 	return list[0], nil
+}
+
+// attachIdeaPains hängt an jede Idee die Pains, die sie motivieren, soweit der
+// Betrachter sie lesen darf (REQ-606).
+func (a *ProjectAccess) attachIdeaPains(list []idea.Idea) {
+	for n := range list {
+		for _, p := range a.PainsFor("idea", list[n].ID) {
+			list[n].Pains = append(list[n].Pains, idea.PainRef{ID: p.ID, Title: p.Title, State: p.State})
+		}
+	}
 }
 
 func (a *ProjectAccess) attachIdeaLabels(list []idea.Idea) {
@@ -311,6 +330,7 @@ func (a *ProjectAccess) SearchIdeas(f idea.Filter) ([]idea.Idea, error) {
 		}
 	}
 	a.attachIdeaLabels(out)
+	a.attachIdeaPains(out)
 	return out, nil
 }
 
@@ -422,6 +442,9 @@ func (a *ProjectAccess) LinkIdeaRequest(id, requestID int64, by string) (idea.Id
 		}
 		return idea.Idea{}, err
 	}
+	if i.Phase == idea.PhaseConcept || i.Phase == idea.PhaseDiscussion {
+		return idea.Idea{}, requestdomain.NewRuleError("not_approved", "this idea is being worked out and is not approved yet", "approve it first; only its owner or a maintainer can", nil)
+	}
 	ref, err := a.st.RequestRef(RefRequest, requestID)
 	if err != nil || ref.Project != i.Project {
 		return idea.Idea{}, requestdomain.NewRuleError("request_not_found", fmt.Sprintf("no request REQ-%d", requestID), "name a request of the same project", nil)
@@ -448,6 +471,12 @@ func (s *Store) commitIdeaLink(id, requestID int64, by string) error {
 		return err
 	}
 	if _, err := tx.Exec(`UPDATE ideas SET state='accepted', reason='', updated_at=? WHERE id=? AND state IN ('open','dismissed')`, ts, id); err != nil {
+		return err
+	}
+	// Aus einer freigegebenen Idee wird Arbeit: in Umsetzung. Eine nie ausgearbeitete
+	// Idee, die direkt zum Issue wird, bleibt raw (Zustand angenommen): die Phasen
+	// laufen nur über die Freigabe eines Menschen.
+	if _, err := tx.Exec(`UPDATE ideas SET phase='building' WHERE id=? AND phase='approved'`, id); err != nil {
 		return err
 	}
 	return tx.Commit()

@@ -17,6 +17,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/server"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
+	"github.com/Deadweight-Labs/ghosttree/internal/version"
 )
 
 //go:embed templates static
@@ -43,6 +44,7 @@ type app struct {
 	gardenLimits  llmusage.Limits  // caps of the gardener, shown to administrators
 	prover        forge.Prover     // proof behind "connect GitHub"; nil = off
 	sourceFlows   *sourceFlows
+	buildVersion  string // ctx version of this server, for ServerVersion in pages
 }
 type pageData struct {
 	Title, NavSection, Person, CSRFToken, Error, Code, BackURL string
@@ -79,6 +81,8 @@ type pageData struct {
 	Overview                                                   overviewView
 	Agents                                                     agentsView
 	Profile                                                    profileView
+	// ServerVersion: Version dieses Servers (vX.Y.Z bzw. 0.1.0-dev+sha), leer = unbekannt.
+	ServerVersion string
 	// Refresh: Sekunden bis zum automatischen Neuladen (0 = nie).
 	Refresh int
 }
@@ -236,6 +240,7 @@ func (a *app) renderBrowser(w http.ResponseWriter, r *http.Request, name string,
 	data.Person = principal.Label
 	data.CSRFToken = csrfOf(r)
 	data.Interactive = interactive(r)
+	data.ServerVersion = version.Label(a.buildVersion)
 	data.Shell = a.shellFor(r, name)
 	switch name {
 	case "overview":

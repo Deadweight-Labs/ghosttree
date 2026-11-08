@@ -608,7 +608,7 @@ func ghostContextForPath(cfg config.Config, gitCtx collector.GitContext, session
 
 	sessionKey := "claude:" + sessionID
 	entries, err := client.NewWithTimeout(cfg, relevanceTimeout).
-		GhostsForPath(gitCtx.Project, rel, sessionKey)
+		GhostsForPathAt(gitCtx.Project, rel, sessionKey, scope.Axes{Branch: gitCtx.Branch, Lineage: gitCtx.Lineage})
 	if err != nil {
 		return ""
 	}
@@ -655,7 +655,7 @@ func ghostContextForPath(cfg config.Config, gitCtx collector.GitContext, session
 	// schliessen. Eine zweite Runde, aber nur bei Schreibwerkzeugen und nur,
 	// wenn der Pfad nicht ohnehin schon in der Auslieferung stand.
 	if writingTools[toolName] && !describedTarget {
-		if g, ok := describedNow(cfg, gitCtx.Project, rel); ok {
+		if g, ok := describedNow(cfg, gitCtx, rel); ok {
 			describedTarget = true
 			changed, reachable := ghost.ChangedLines(gitCtx.Root, g.GitBlob, blob)
 			of := lines
@@ -688,8 +688,8 @@ func pluralVersions(n int) string {
 // describedNow fragt gezielt nach einem einzelnen Pfad, ohne die
 // Einmal-je-Sitzung-Buchführung zu berühren. Schweigt bei jedem Fehler: die
 // Auskunft ist eine Zugabe, sie darf einen Werkzeugaufruf nicht aufhalten.
-func describedNow(cfg config.Config, project, rel string) (store.GhostFile, bool) {
-	got, err := client.NewWithTimeout(cfg, relevanceTimeout).GhostTree(project, rel)
+func describedNow(cfg config.Config, gitCtx collector.GitContext, rel string) (store.GhostFile, bool) {
+	got, err := client.NewWithTimeout(cfg, relevanceTimeout).GhostTreeAt(gitCtx.Project, rel, scope.Axes{Branch: gitCtx.Branch, Lineage: gitCtx.Lineage})
 	if err != nil {
 		return store.GhostFile{}, false
 	}

@@ -80,7 +80,7 @@ func (c *Client) CorrectPain(id int64, title, body *string, reason string) (pain
 func (c *Client) AddPainLink(id int64, target pain.Target, sessionID int64) (pain.Detail, error) {
 	var out pain.Detail
 	err := c.do("POST", painPath(id)+"/links", nil, map[string]any{
-		"request_id": target.RequestID, "knowledge_id": target.KnowledgeID, "external_ref": target.ExternalRef, "session_id": sessionID,
+		"request_id": target.RequestID, "knowledge_id": target.KnowledgeID, "idea_id": target.IdeaID, "external_ref": target.ExternalRef, "session_id": sessionID,
 	}, &out)
 	return out, err
 }

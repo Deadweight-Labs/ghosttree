@@ -443,12 +443,16 @@ func (a *api) createIdea(w http.ResponseWriter, r *http.Request) {
 	if !ok || !a.gateProject(w, r, project) {
 		return
 	}
-	i, err := a.access(r).CreateIdea(store.CreateIdeaInput{Project: project, Title: body.Title, Body: body.Body,
+	pa := a.access(r)
+	i, err := pa.CreateIdea(store.CreateIdeaInput{Project: project, Title: body.Title, Body: body.Body,
 		AllowDuplicate: body.AllowDuplicate, Actor: a.ideaActor(r, body.SessionID)})
 	if err != nil {
 		writeIdeaError(w, err)
 		return
 	}
+	// Die Idee ist abgelegt, ohne Rückfrage. Höchstens einmal je Idee kommt ein
+	// Vorschlag, sie auszuarbeiten; er verlangt nichts (REQ-611).
+	i.Hint = pa.ElaborationHint(i)
 	writeJSON(w, http.StatusCreated, i)
 }
 

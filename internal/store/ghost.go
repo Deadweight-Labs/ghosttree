@@ -19,6 +19,9 @@ type GhostFile struct {
 	Description string `json:"description"`
 	ContentSHA  string `json:"content_sha"`
 	GitBlob     string `json:"git_blob,omitempty"`
+	// Branch ist die Ebene der Beschreibung (#713): leer ist die Projektebene,
+	// sonst gilt sie auf diesem Branch und in davon abgezweigten (ghostbranch.go).
+	Branch      string `json:"branch,omitempty"`
 	LineCount   int    `json:"line_count"`
 	Person      string `json:"person,omitempty"`
 	Harness     string `json:"harness,omitempty"`
@@ -61,6 +64,9 @@ func (s *Store) PutGhostFile(g GhostFile) (int64, error) {
 	if g.DescribedAt == "" {
 		g.DescribedAt = ts
 	}
+	if g.Branch != "" {
+		return s.putGhostBranchFile(g, ts)
+	}
 	// Aufheben und Ersetzen gehören in dieselbe Transaktion. Sonst hinterlässt
 	// ein fehlgeschlagener Upsert eine archivierte Fassung, die nie abgelöst
 	// wurde — eine Historie, die etwas behauptet, das nicht stattgefunden hat.
@@ -70,14 +76,25 @@ func (s *Store) PutGhostFile(g GhostFile) (int64, error) {
 	}
 	defer tx.Rollback()
 
-	if err := archiveGhostFileTx(tx, g.Project, g.Path, ts, "ersetzt"); err != nil {
-		return 0, err
-	}
 	// Der neue Anker ersetzt den alten auf der Kopfzeile; der alte ist mit der
 	// verdrängten Fassung in der Historie (archiveGhostFileTx). Ohne Anker
 	// bleibt die Spalte leer, sie erbt nichts.
 	anchorID, originID, err := insertWriteMetaTx(tx, g.GitAnchor, g.OriginContext)
 	if err != nil {
+		return 0, err
+	}
+	id, err := putProjectGhostTx(tx, g, ts, "ersetzt", anchorID, originID)
+	if err != nil {
+		return 0, err
+	}
+	return id, tx.Commit()
+}
+
+// putProjectGhostTx hebt die verdrängte Fassung der Projektebene auf und
+// ersetzt sie. Gemeinsam für das Beschreiben und die Merge-Übernahme einer
+// Branch-Beschreibung (ghostbranch.go).
+func putProjectGhostTx(tx *sql.Tx, g GhostFile, ts, reason string, anchorID, originID any) (int64, error) {
+	if err := archiveGhostFileTx(tx, g.Project, g.Path, ts, reason); err != nil {
 		return 0, err
 	}
 	res, err := tx.Exec(`INSERT INTO ghost_files(project,path,kind,description,content_sha,git_blob,
@@ -95,11 +112,7 @@ func (s *Store) PutGhostFile(g GhostFile) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	id, err := res.LastInsertId()
-	if err != nil {
-		return 0, err
-	}
-	return id, tx.Commit()
+	return res.LastInsertId()
 }
 
 func (s *Store) GhostFileByPath(project, path string) (GhostFile, error) {
@@ -247,7 +260,19 @@ func ParentPaths(path string) []string {
 func (s *Store) GhostFilesForDelivery(project, path, sessionKey string) ([]GhostFile, error) {
 	if s.writer != nil {
 		return queueValue(s, []any{project, path, sessionKey}, func(d *Store, p []any) ([]GhostFile, error) {
-			return d.GhostFilesForDelivery(p[0].(string), p[1].(string), p[2].(string))
+			return d.GhostFilesForDeliveryAt(p[0].(string), p[1].(string), p[2].(string), "", nil)
+		})
+	}
+	return s.GhostFilesForDeliveryAt(project, path, sessionKey, "", nil)
+}
+
+// GhostFilesForDeliveryAt ist die Auslieferung auf einem Branch: statt der
+// Projektebene allein gilt je Pfad die Beschreibung des Branches, sonst die
+// eines Vorfahren, sonst die der Projektebene (ghostbranch.go).
+func (s *Store) GhostFilesForDeliveryAt(project, path, sessionKey, branch string, lineage []string) ([]GhostFile, error) {
+	if s.writer != nil {
+		return queueValue(s, []any{project, path, sessionKey, branch, lineage}, func(d *Store, p []any) ([]GhostFile, error) {
+			return d.GhostFilesForDeliveryAt(p[0].(string), p[1].(string), p[2].(string), p[3].(string), p[4].([]string))
 		})
 	}
 	tx, err := s.db.Begin()
@@ -275,11 +300,7 @@ func (s *Store) GhostFilesForDelivery(project, path, sessionKey string) ([]Ghost
 			sessionKey, project, p, ts); err != nil {
 			return nil, err
 		}
-		rows, err := tx.Query(`SELECT `+ghostCols+` FROM ghost_files WHERE project=? AND path=?`, project, p)
-		if err != nil {
-			return nil, err
-		}
-		gs, err := scanGhostFilesRaw(rows)
+		gs, err := ghostAtTx(tx, project, p, branch, lineage)
 		if err != nil {
 			return nil, err
 		}

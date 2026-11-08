@@ -844,6 +844,9 @@ func (a *api) bootstrap(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(200)
 	fmt.Fprint(w, body)
+	if note := a.clientVersionNote(r); note != "" {
+		fmt.Fprintf(w, "\n> ghosttree: %s\n", note)
+	}
 	if openRequests > 0 {
 		plural := "request"
 		if openRequests != 1 {
@@ -1144,6 +1147,11 @@ func (a *api) putGhost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	g.Project = scope.NormalizeRemote(g.Project)
+	g.Branch = strings.TrimSpace(g.Branch)
+	if g.Branch != "" && !store.ValidBranchName(g.Branch) {
+		writeCoded(w, http.StatusBadRequest, "invalid_branch", "the branch name must be one line without control characters")
+		return
+	}
 	if !a.gateProject(w, r, g.Project) {
 		return
 	}
@@ -1187,7 +1195,10 @@ func (a *api) ghostsForPath(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, []store.GhostFile{})
 		return
 	}
-	entries, err := a.st.GhostFilesForDelivery(q.Get("project"), q.Get("path"), q.Get("session"))
+	// Mit Branch und Abstammung gilt je Pfad die Beschreibung des Branches, sonst
+	// eines Vorfahren, sonst der Projektebene (#713); ohne Branch die Projektebene.
+	ax := axesFromQuery(r)
+	entries, err := a.st.GhostFilesForDeliveryAt(q.Get("project"), q.Get("path"), q.Get("session"), ax.Branch, ax.Lineage)
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
@@ -1256,7 +1267,8 @@ func (a *api) ghostTree(w http.ResponseWriter, r *http.Request) {
 	if !a.listGateEntries(w, r, scope.NormalizeRemote(q.Get("project")), store.ResGhost) {
 		return
 	}
-	entries, err := a.st.GhostFilesUnder(q.Get("project"), q.Get("prefix"))
+	ax := axesFromQuery(r)
+	entries, err := a.st.GhostFilesUnderAt(q.Get("project"), q.Get("prefix"), ax.Branch, ax.Lineage)
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return

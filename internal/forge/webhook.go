@@ -40,6 +40,17 @@ func VerifySignature(secret string, body []byte, header string) bool {
 // (added, removed) und beantwortet alles andere mit 204. Weder Körper noch
 // Signatur gelangen in eine Antwort oder in onError.
 func (g *GitHubApp) WebhookHandler(sync RepoSync, onError func(error)) http.Handler {
+	return g.WebhookHandlerWithPulls(sync, nil, onError)
+}
+
+// PullSync nimmt ein PR-Ereignis entgegen (REQ-597): die Zuordnung von Branch
+// zu PR-Nummer und der Merge-Stand. Alle Textfelder sind Fremddaten.
+type PullSync func(PullEvent) error
+
+// WebhookHandlerWithPulls ist WebhookHandler, dazu pull_request (opened,
+// reopened, synchronize, edited, closed) an pulls. Ohne pulls wird das Ereignis
+// wie jedes unbekannte mit 204 beantwortet.
+func (g *GitHubApp) WebhookHandlerWithPulls(sync RepoSync, pulls PullSync, onError func(error)) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", http.MethodPost)
@@ -53,6 +64,17 @@ func (g *GitHubApp) WebhookHandler(sync RepoSync, onError func(error)) http.Hand
 		}
 		if !g.WebhookConfigured() || !VerifySignature(g.cfg.WebhookSecret, body, r.Header.Get("X-Hub-Signature-256")) {
 			http.Error(w, "bad signature", http.StatusUnauthorized)
+			return
+		}
+		if ev, ok := ParsePullEvent(r.Header.Get("X-GitHub-Event"), body); ok && pulls != nil {
+			if err := pulls(ev); err != nil {
+				if onError != nil {
+					onError(err)
+				}
+				http.Error(w, "could not apply", http.StatusInternalServerError)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 		inst, add, remove := ParseRepoEvent(r.Header.Get("X-GitHub-Event"), body)
@@ -138,4 +160,83 @@ func ParseRepoEvent(event string, body []byte) (installationID int64, add, remov
 		}
 	}
 	return p.Installation.ID, add, remove
+}
+
+// PullEvent ist ein pull_request-Ereignis in der Form, die der Store braucht.
+type PullEvent struct {
+	InstallationID int64
+	// Remote ist das Repo des PRs (Base), HeadRemote das des Head-Branches; bei
+	// einem PR aus einem Fork sind sie verschieden.
+	Remote, HeadRemote string
+	Number             int64
+	Action             string
+	Title              string
+	Head, Base         string
+	DefaultBranch      string
+	MergeSHA           string
+	// State ist open, closed oder merged.
+	State string
+}
+
+// ParsePullEvent übersetzt ein pull_request-Ereignis. ok ist false für alles
+// andere, für Aktionen ohne Bedeutung hier und für kaputte Körper. Geprüft wird
+// nur die Form; Branch-Namen und Titel bereinigt der Store.
+func ParsePullEvent(event string, body []byte) (PullEvent, bool) {
+	if event != "pull_request" {
+		return PullEvent{}, false
+	}
+	var p struct {
+		Action       string `json:"action"`
+		Number       int64  `json:"number"`
+		Installation struct {
+			ID int64 `json:"id"`
+		} `json:"installation"`
+		Repository struct {
+			FullName      string `json:"full_name"`
+			DefaultBranch string `json:"default_branch"`
+		} `json:"repository"`
+		PullRequest struct {
+			Number         int64  `json:"number"`
+			Title          string `json:"title"`
+			State          string `json:"state"`
+			Merged         bool   `json:"merged"`
+			MergeCommitSHA string `json:"merge_commit_sha"`
+			Head           struct {
+				Ref  string `json:"ref"`
+				Repo *struct {
+					FullName string `json:"full_name"`
+				} `json:"repo"`
+			} `json:"head"`
+			Base struct {
+				Ref string `json:"ref"`
+			} `json:"base"`
+		} `json:"pull_request"`
+	}
+	if json.Unmarshal(body, &p) != nil {
+		return PullEvent{}, false
+	}
+	switch p.Action {
+	case "opened", "reopened", "synchronize", "edited", "closed":
+	default:
+		return PullEvent{}, false
+	}
+	n := p.PullRequest.Number
+	if n == 0 {
+		n = p.Number
+	}
+	ev := PullEvent{
+		InstallationID: p.Installation.ID, Remote: remoteOf(p.Repository.FullName), Number: n, Action: p.Action,
+		Title: p.PullRequest.Title, Head: p.PullRequest.Head.Ref, Base: p.PullRequest.Base.Ref,
+		DefaultBranch: p.Repository.DefaultBranch, MergeSHA: p.PullRequest.MergeCommitSHA, State: "open",
+	}
+	if p.PullRequest.Head.Repo != nil {
+		ev.HeadRemote = remoteOf(p.PullRequest.Head.Repo.FullName)
+	}
+	if p.Action == "closed" || p.PullRequest.State == "closed" {
+		ev.State = "closed"
+		if p.PullRequest.Merged {
+			ev.State = "merged"
+		}
+	}
+	return ev, true
 }
