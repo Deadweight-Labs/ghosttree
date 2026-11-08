@@ -1987,9 +1987,16 @@ func (a CoordAccess) LinkThread(link ThreadLink) error {
 			}
 		}
 	}
-	if _, err := tx.Exec(`INSERT OR IGNORE INTO thread_links(thread_id,object_kind,object_id,object_revision,created_at)
-		VALUES(?,?,?,?,?)`, link.ThreadID, link.Kind, link.ID, link.Revision, now()); err != nil {
+	res, err := tx.Exec(`INSERT OR IGNORE INTO thread_links(thread_id,object_kind,object_id,object_revision,created_at)
+		VALUES(?,?,?,?,?)`, link.ThreadID, link.Kind, link.ID, link.Revision, now())
+	if err != nil {
 		return err
+	}
+	// Eine Verknüpfung, die es schon gab, hält kein Ereignis fest.
+	if n, _ := res.RowsAffected(); n > 0 {
+		if err := insertThreadEventTx(tx, link.ThreadID, ThreadEventLinked, a.Principal.Label, outcomeEventData(link.Kind, link.ID, "linked"), link.GitAnchor); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }
@@ -2155,6 +2162,9 @@ func (a CoordAccess) PutThreadSummary(summary ThreadSummary) (int, error) {
 	}
 	if _, err := tx.Exec(`INSERT INTO thread_summaries(thread_id,revision,body,open_questions,covers_through_sequence,person,created_at)
 		VALUES(?,?,?,?,?,?,?)`, summary.ThreadID, next, summary.Body, summary.OpenQuestions, summary.CoversThrough, a.Principal.Label, at); err != nil {
+		return 0, err
+	}
+	if err := insertThreadEventTx(tx, summary.ThreadID, ThreadEventSummary, a.Principal.Label, "revision "+strconv.Itoa(next), summary.GitAnchor); err != nil {
 		return 0, err
 	}
 	if err := tx.Commit(); err != nil {

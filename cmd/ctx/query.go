@@ -196,6 +196,13 @@ func ideaLines(stdout io.Writer, i idea.Idea) {
 	for _, r := range i.Requests {
 		fmt.Fprintf(stdout, "became REQ-%d\n", r)
 	}
+	for _, f := range i.Features {
+		note := ""
+		if !f.Advanced {
+			note = " (description not carried forward yet)"
+		}
+		fmt.Fprintf(stdout, "changes FEAT-%d %s%s\n", f.ID, f.Name, note)
+	}
 	if len(i.Labels) > 0 {
 		var names []string
 		for _, l := range i.Labels {

@@ -241,6 +241,8 @@ func (a *api) linkThread(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.ThreadID = id
+	// Der Git-Stand kommt nur aus dem Header, nie aus dem Rumpf.
+	in.GitAnchor = anchorFromRequest(r)
 	if err := access.LinkThread(in); err != nil {
 		if err == store.ErrCoordForbidden || err == store.ErrCoordNotFound {
 			writeCoordAccessError(w, err)
@@ -315,6 +317,7 @@ func (a *api) putThreadSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.ThreadID = id
+	in.GitAnchor = anchorFromRequest(r)
 	rev, err := access.PutThreadSummary(in)
 	if err != nil {
 		writeCoordAccessError(w, err)

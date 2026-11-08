@@ -45,7 +45,39 @@ func RenderPackage(d PackageDetail) string {
 		}
 	}
 	writeWaitingTasks(&b, d)
+	writeFeatureChecks(&b, d)
 	return b.String()
+}
+
+// OpenFeatureChecks zählt die Feature-Punkte, die noch niemand angesehen hat.
+func OpenFeatureChecks(d PackageDetail) int {
+	n := 0
+	for _, f := range d.Features {
+		if f.State == FeatureCheckOpen {
+			n++
+		}
+	}
+	return n
+}
+
+// writeFeatureChecks schreibt die Punkte „Feature X: Beschreibung angepasst?“.
+func writeFeatureChecks(b *strings.Builder, d PackageDetail) {
+	if len(d.Features) == 0 {
+		return
+	}
+	b.WriteString("\nFeature descriptions this pull request touches\n")
+	for _, f := range d.Features {
+		mark := "[ ]"
+		how := fmt.Sprintf("not yet looked at; %d changed paths, e.g. %s", f.PathCount, strings.Join(f.Paths, ", "))
+		switch f.State {
+		case FeatureCheckUpdated:
+			mark, how = "[x]", fmt.Sprintf("new version %v carries this PR", f.PRRevisions)
+		case FeatureCheckUnchanged:
+			mark, how = "[x]", "checked, still right: "+f.Note
+		}
+		fmt.Fprintf(b, "- %s %s — %s\n", mark, f.Text, how)
+	}
+	b.WriteString("Write the new state with feature_update (pr=this PR), or confirm that it still holds with feature_check.\n")
 }
 
 func writeWaitingTasks(b *strings.Builder, d PackageDetail) {
@@ -109,10 +141,14 @@ func RenderPackageReview(d PackageDetail) string {
 		tasks += len(m.Tasks)
 	}
 	verdict := "READY: every mandatory criterion is met or waived with a reason"
-	if open > 0 || tasks > 0 || len(d.Uncovered) > 0 {
+	featuresOpen := OpenFeatureChecks(d)
+	if open > 0 || tasks > 0 || len(d.Uncovered) > 0 || featuresOpen > 0 {
 		verdict = fmt.Sprintf("NOT READY: %d mandatory criteria open, %d human tasks waiting", open, tasks)
 		if len(d.Uncovered) > 0 {
 			verdict += fmt.Sprintf(", %d requirements of the ideas not covered", len(d.Uncovered))
+		}
+		if featuresOpen > 0 {
+			verdict += fmt.Sprintf(", %d feature descriptions not looked at", featuresOpen)
 		}
 	}
 	if pflicht == 0 {
@@ -164,6 +200,7 @@ func RenderPackageReview(d PackageDetail) string {
 		}
 		b.WriteString("An idea counts as done only when each of its requirements has a met criterion or is waived with a reason (idea_update requirement_waive).\n")
 	}
+	writeFeatureChecks(&b, d)
 	b.WriteString("\nConfirm: request_record_progress action=criterion_met with evidence_kind and evidence_ref. Reopen what the code does not show: action=criterion_reopen with criterion_id and reason.\n")
 	return b.String()
 }

@@ -1120,6 +1120,10 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := ensureMachineSharing(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := migrateOrgs(db); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -1204,6 +1208,10 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 		return nil, err
 	}
 	if err := ensureRunbooks(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureFeatures(db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}

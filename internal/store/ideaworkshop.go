@@ -619,6 +619,9 @@ type IdeaWorkshop struct {
 	Coverage    []idea.RequirementCoverage `json:"coverage"`
 	Decisions   []idea.Decision            `json:"decisions"`
 	Attachments []idea.AttachmentMeta      `json:"attachments"`
+	// Affects sind die Features, die die Idee ändert, mit ihrer aktuellen Fassung
+	// (Ist) neben dem Konzept (Soll), soweit der Betrachter sie lesen darf (REQ-612).
+	Affects []IdeaFeature `json:"affects"`
 }
 
 // IdeaWorkshop liest die Idee mit Rohfassungen (ohne Text, eine Zeile je
@@ -653,6 +656,9 @@ func (a *ProjectAccess) IdeaWorkshop(id int64) (IdeaWorkshop, error) {
 		return w, err
 	}
 	if w.Attachments, err = a.AttachmentsOf(idea.SubjectIdea, id); err != nil {
+		return w, err
+	}
+	if w.Affects, err = a.IdeaAffects(id); err != nil {
 		return w, err
 	}
 	return w, nil

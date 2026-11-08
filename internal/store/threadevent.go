@@ -19,6 +19,10 @@ const (
 	ThreadEventOpened  = "thread.opened"
 	ThreadEventState   = "thread.state"
 	ThreadEventOutcome = "thread.outcome"
+	// ThreadEventLinked: ein Objekt wurde mit dem Thread verknüpft.
+	ThreadEventLinked = "thread.linked"
+	// ThreadEventSummary: eine neue Fassung der Zusammenfassung.
+	ThreadEventSummary = "thread.summary"
 )
 
 // ThreadEvent ist ein Schreibvorgang an einem Thread.

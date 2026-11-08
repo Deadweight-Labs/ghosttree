@@ -21,8 +21,10 @@ func (c *Client) SetAnchorSource(f func() gitanchor.Anchor) { c.anchor = f }
 
 // anchoredWrites sind die schreibenden Routen, deren Server-Handler einen Anker
 // speichern: Wissen, Ghost-Beschreibungen, Request-Fortschritt, Pains, Ideen,
-// Raum-Nachrichten (auch Antworten in Diskussionen) und Thread-Aktionen (Anlegen,
-// Zustand, Ergebnis). Die Liste steht hier und
+// Raum-Nachrichten (auch Antworten in Diskussionen), Thread-Aktionen (Anlegen,
+// Zustand, Ergebnis, Verknüpfung, Zusammenfassung), die Korrektur eines Requests
+// und Features (Anlegen, Fassungen; Zustand, Verweise und Bestätigungen
+// speichern keinen Anker und schicken ihn darum nicht). Die Liste steht hier und
 // nicht als "jedes POST", damit ein Schreibzugriff ohne Handler für den Anker
 // auch keine git-Aufrufe auslöst.
 var anchoredWrites = regexp.MustCompile(`^(` +
@@ -33,10 +35,12 @@ var anchoredWrites = regexp.MustCompile(`^(` +
 	`|POST /api/pains/\d+/(state|links)` +
 	`|PATCH /api/pains/\d+` +
 	`|POST /api/threads` +
-	`|POST /api/threads/\d+/(state|outcomes)` +
+	`|POST /api/threads/\d+/(state|outcomes|links|summary)` +
+	`|PATCH /api/requests/\d+` +
 	`|POST /api/runbooks` +
 	`|POST /api/runbooks/\d+/runs` +
 	`|POST /api/runbook-proposals/\d+/decide` +
+	`|POST /api/features|POST /api/features/\d+/versions` +
 	`)$`)
 
 // anchorHeader liefert den Header-Wert für diesen Aufruf, leer wenn keiner

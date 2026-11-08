@@ -35,6 +35,14 @@ type Knowledge struct {
 	// read from a request. It is stored in knowledge_authors; zero means legacy
 	// or distilled.
 	AuthorID int64 `json:"-"`
+	// ShareOrgIDs sind beim Anlegen die Orgs, an die der Eintrag mit
+	// Maschinen-Scope gleich freigegeben werden soll. Der Server setzt sie aus
+	// der Anfrage; sie werden nicht gespeichert (die Freigabe steht in
+	// machine_entry_shares).
+	ShareOrgIDs []int64 `json:"-"`
+	// SharedWith nennt auf der Detailansicht eines Eintrags mit Maschinen-Scope
+	// die Orgs, an die er freigegeben ist (soweit der Betrachter sie kennen darf).
+	SharedWith []string `json:"shared_with,omitempty"`
 	// ObservedAt is when the entry was seen; CreatedAt is when it was written
 	// down. For anything a person or an agent typed the two coincide. For a
 	// distilled entry they do not, and the difference is what tells a reader
@@ -277,8 +285,14 @@ func insertKnowledgeTx(tx *sql.Tx, k Knowledge) (int64, error) {
 	if _, err := tx.Exec(`INSERT INTO search_documents(kind,domain_id,title,body,project,branch,machine) VALUES('knowledge',?,?,?,?,?,?)`, id, k.Title, k.Body, k.Scope.Project, k.Scope.Branch, k.Scope.Machine); err != nil {
 		return 0, err
 	}
-	if err := recordAuthorTx(tx, id, authorForWriteTx(tx, k.AuthorID, k.Person, k.Origin, k.SessionRef)); err != nil {
+	author := authorForWriteTx(tx, k.AuthorID, k.Person, k.Origin, k.SessionRef)
+	if err := recordAuthorTx(tx, id, author); err != nil {
 		return 0, err
+	}
+	if k.Scope.Machine != "" && len(k.ShareOrgIDs) > 0 {
+		if err := insertEntryShareTx(tx, EntryKnowledge, id, k.Scope.Machine, k.ShareOrgIDs, author); err != nil {
+			return 0, err
+		}
 	}
 	for _, pattern := range k.Activation.Paths {
 		if _, err := tx.Exec(`INSERT INTO instruction_activation_path(knowledge_id,pattern) VALUES(?,?)`, id, pattern); err != nil {

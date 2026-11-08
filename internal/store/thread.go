@@ -74,6 +74,9 @@ type ThreadLink struct {
 	ID        string `json:"id"`
 	Revision  string `json:"revision,omitempty"`
 	CreatedAt string `json:"created_at,omitempty"`
+	// GitAnchor ist der Git-Stand des Schreibers (REQ-597), vom Server aus dem
+	// Header gesetzt, nie aus dem Body.
+	GitAnchor *gitanchor.Anchor `json:"-"`
 }
 
 // ThreadSummary ist eine ABGELEITETE Ansicht, kein Ersatz für den Verlauf.
@@ -89,6 +92,9 @@ type ThreadSummary struct {
 	CoversThrough int64  `json:"covers_through_sequence"`
 	Person        string `json:"person,omitempty"`
 	CreatedAt     string `json:"created_at,omitempty"`
+	// GitAnchor ist der Git-Stand des Schreibers (REQ-597), vom Server aus dem
+	// Header gesetzt, nie aus dem Body.
+	GitAnchor *gitanchor.Anchor `json:"-"`
 }
 
 // Zustände eines Thread-Ergebnisses. Ein Thread SCHLÄGT VOR; die Übernahme

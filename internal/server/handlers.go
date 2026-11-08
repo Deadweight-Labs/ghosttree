@@ -12,6 +12,7 @@ import (
 
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
 	"github.com/Deadweight-Labs/ghosttree/internal/explain"
+	"github.com/Deadweight-Labs/ghosttree/internal/feature"
 	"github.com/Deadweight-Labs/ghosttree/internal/humantask"
 	"github.com/Deadweight-Labs/ghosttree/internal/idea"
 	"github.com/Deadweight-Labs/ghosttree/internal/pain"
@@ -231,6 +232,11 @@ type knowledgeRequest struct {
 	// checked before anything is written and hidden right after.
 	Supersedes      []int64 `json:"supersedes"`
 	SupersedeReason string  `json:"supersede_reason"`
+	// ShareWithOrgs gibt einen Eintrag mit Maschinen-Scope gleich beim Anlegen an
+	// Orgs frei, für die die Maschine freigegeben ist. Fehlt das Feld, bleibt er
+	// privat, nur auf einer Maschine, die einer Org gehört, geht er an diese Org.
+	// Ein leeres Feld hält ihn auch dort privat.
+	ShareWithOrgs *[]string `json:"share_with_orgs"`
 }
 
 func (a *api) createKnowledge(w http.ResponseWriter, r *http.Request) {
@@ -254,7 +260,14 @@ func (a *api) createKnowledge(w http.ResponseWriter, r *http.Request) {
 	if !a.gateGardener(w, r, k) {
 		return
 	}
-	if !a.gateMachineNote(w, r, k.Scope.Machine) || !a.gateProject(w, r, k.Scope.Project) {
+	shareOrgs, ok := a.shareOrgsForNewEntry(w, r, k.Scope.Machine, req.ShareWithOrgs)
+	if !ok {
+		return
+	}
+	k.ShareOrgIDs = shareOrgs
+	// Ein Mitglied einer Org mit Schreib-Freigabe darf den Namen nicht tragen
+	// (DEC-5); es schreibt über die Freigabe, die CheckKnowledgeCreate prüft.
+	if (len(k.ShareOrgIDs) == 0 && !a.gateMachineNote(w, r, k.Scope.Machine)) || !a.gateProject(w, r, k.Scope.Project) {
 		return
 	}
 	// Die Zuschreibung kommt aus dem Token und ist danach unveränderlich.
@@ -291,6 +304,10 @@ func (a *api) createKnowledge(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		id, err = a.st.InsertKnowledge(k)
+	}
+	if errors.Is(err, store.ErrNoMachineShare) {
+		writeCoded(w, http.StatusConflict, "machine_not_shared", err.Error())
+		return
 	}
 	if err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)
@@ -536,6 +553,9 @@ func (a *api) getKnowledge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	k.Closure = a.access(r).KnowledgeClosure(k)
+	if k.Scope.Machine != "" {
+		k.SharedWith = a.st.EntryShareOrgs(principalOf(r), store.EntryKnowledge, k.ID)
+	}
 	writeJSON(w, 200, a.access(r).KnowledgeView(k))
 }
 
@@ -671,6 +691,7 @@ type searchResult struct {
 	// Die folgenden kommen nur aus einer Suchzeile mit Qualifiern (REQ-600).
 	Pains    []pain.Pain          `json:"pains,omitempty"`
 	Ideas    []idea.Idea          `json:"ideas,omitempty"`
+	Features []feature.Feature    `json:"features,omitempty"`
 	Criteria []store.CriterionHit `json:"criteria,omitempty"`
 	Tasks    []humantask.Task     `json:"tasks,omitempty"`
 	Files    []store.GhostFile    `json:"files,omitempty"`

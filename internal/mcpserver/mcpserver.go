@@ -164,6 +164,8 @@ type RememberInput struct {
 	Supersedes      []int64 `json:"supersedes,omitempty" jsonschema:"ids of older entries this one replaces because the state they describe changed. They stop appearing in search and the briefing but stay readable through their history. You need the right to edit each of them, and they must belong to the same project. Search first to find them"`
 	SupersedeReason string  `json:"supersede_reason,omitempty" jsonschema:"required with supersedes: what changed, in one sentence"`
 	Explanation     string  `json:"explanation,omitempty" jsonschema:"optional \"Kurz erklärt\" for the humans who will read this: two to four plain sentences, in the language the people of the project use. Say what it is about in everyday words (the mechanism, not the jargon), why it matters (who it affects, when), what has to be done or decided, and your recommendation. No markdown, no links, never a secret. You know the context the server does not; without it the server generates one later from the text alone"`
+	// ShareWithOrgs gibt einen Maschinen-Eintrag gleich an Orgs frei.
+	ShareWithOrgs []string `json:"share_with_orgs,omitempty" jsonschema:"with scope_hint machine: also share the entry with these organizations (slugs), for which a person has already shared the machine. Without it a machine entry stays private to the machine's owner; on a machine that belongs to an organization it goes to that organization"`
 }
 
 // RetireInput is the context_retire tool.
@@ -264,6 +266,8 @@ func (s *Server) Register(srv *mcp.Server) {
 	s.registerQueryTools(srv)
 	s.registerRunbookTools(srv)
 	s.registerLinkTools(srv)
+	s.registerFeatureTools(srv)
+	s.registerMachineTools(srv)
 }
 
 func Run(ctx context.Context, s *Server, version string) error {
@@ -451,7 +455,13 @@ func (s *Server) handleGet(ctx context.Context, _ *mcp.CallToolRequest, in GetIn
 		if err != nil {
 			return nil, nil, err
 		}
-		return textResult(renderGhostContext(ghosts, normalized.Paths)), nil, nil
+		text := renderGhostContext(ghosts, normalized.Paths)
+		// Die Features, in deren Bereichen diese Pfade liegen (REQ-612), kurz und
+		// mit Budget. Ein Fehler kostet nur diesen Abschnitt.
+		if fc, err := s.client.FeatureContext(s.ctxAxes.Project, normalized.Paths, "", 0); err == nil && fc.Text != "" {
+			text += fc.Text
+		}
+		return textResult(text), nil, nil
 	}
 	md, err := s.client.Bootstrap(s.ctxAxes, normalized, 0, "")
 	if err != nil {
@@ -569,7 +579,10 @@ func (s *Server) handleRemember(ctx context.Context, _ *mcp.CallToolRequest, in 
 	if len(in.Supersedes) == 0 && in.SupersedeReason != "" {
 		return nil, nil, fmt.Errorf("supersede_reason only goes with supersedes")
 	}
-	saved, err := s.client.RememberSuperseding(k, autoCtx, in.Supersedes, in.SupersedeReason)
+	if len(in.ShareWithOrgs) > 0 && in.ScopeHint != "machine" {
+		return nil, nil, fmt.Errorf("share_with_orgs only goes with scope_hint machine")
+	}
+	saved, err := s.client.RememberShared(k, autoCtx, in.Supersedes, in.SupersedeReason, in.ShareWithOrgs)
 	if err != nil {
 		return nil, nil, err
 	}

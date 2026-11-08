@@ -239,11 +239,9 @@ func (a *ProjectAccess) machineAuthorDelivers(k Knowledge) bool {
 		// Ohne Besitzer: gehört dem Instanz-Owner.
 		author = a.ownerDefault
 	}
-	owner, claimed := a.ownerIDs[canonicalMachine(k.Scope.Machine)]
-	if !claimed {
-		owner = a.ownerDefault
-	}
-	return owner == author
+	// Mit Org-Freigabe zählt auch ein Autor, der über eine Schreib-Freigabe
+	// Mitglied einer Org ist, an die der Eintrag freigegeben ist (authorEntitled).
+	return a.authorEntitled(k.Scope.Machine, author, a.sharedOrgsOf(EntryKnowledge, k.ID, k.Scope.Machine))
 }
 
 // MayMakeGlobal: "global" heißt "überall für mich", es erreicht nur die Sessions

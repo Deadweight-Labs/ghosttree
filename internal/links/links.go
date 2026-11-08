@@ -101,6 +101,17 @@ func escPath(s string) string {
 
 func num(n int64) string { return strconv.FormatInt(n, 10) }
 
+// Machine is the page of a machine (decision #4331: a machine has no repository,
+// so its page lives at /ui/m/{machine}). A name that is not a plain host name
+// gives no address.
+func (b Builder) Machine(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if !b.Valid() || !segmentRE.MatchString(name) {
+		return ""
+	}
+	return b.root() + "/m/" + esc(name)
+}
+
 // Inbox is the inbox page.
 func (b Builder) Inbox() string {
 	if !b.Valid() {
@@ -155,6 +166,10 @@ func (b Builder) Pain(n int64) string { return b.repo("/pains/" + num(n)) }
 // Idea is IDEA-n. The schema has no idea page yet; this is the address the
 // interface is asked to serve.
 func (b Builder) Idea(n int64) string { return b.repo("/ideas/" + num(n)) }
+
+// Feature is FEAT-n, the living description of what the product does. The
+// interface is asked to serve it at this address.
+func (b Builder) Feature(n int64) string { return b.repo("/features/" + num(n)) }
 
 // Decision is DEC-n, an open decision of an idea or an issue. It has no page of
 // its own in the schema yet; this is the address the interface is asked to

@@ -169,6 +169,21 @@ type IdeaWorkshopOutput struct {
 	Decisions    []DecisionOutput   `json:"decisions,omitempty"`
 	Attachments  []AttachmentOutput `json:"attachments,omitempty"`
 	Discussions  []string           `json:"discussions,omitempty"`
+	// Affects sind die Features, die die Idee ändert, mit dem Ist-Stand neben dem
+	// Konzept (Soll) (REQ-612).
+	Affects []IdeaAffectsOutput `json:"affects,omitempty"`
+}
+
+// IdeaAffectsOutput ist ein Feature, das eine Idee ändert, mit seinem Ist-Stand.
+type IdeaAffectsOutput struct {
+	Feature  string `json:"feature"`
+	Name     string `json:"name"`
+	Revision int    `json:"version"`
+	// Advanced: die Beschreibung des Features wurde für diese Idee fortgeschrieben.
+	Advanced bool   `json:"advanced"`
+	Summary  string `json:"summary,omitempty"`
+	Behavior string `json:"behavior_now,omitempty"`
+	Limits   string `json:"limits,omitempty"`
 }
 
 type AttachmentOutput struct {
@@ -206,6 +221,10 @@ func (s *Server) workshopOutput(i idea.Idea) (IdeaWorkshopOutput, error) {
 			line += fmt.Sprintf(" AC-%d.%d:%s", cc.RequestID, cc.Number, cc.State)
 		}
 		out.Requirements = append(out.Requirements, line)
+	}
+	for _, a := range ws.Affects {
+		out.Affects = append(out.Affects, IdeaAffectsOutput{Feature: fmt.Sprintf("FEAT-%d", a.ID), Name: a.Name, Revision: a.Revision, Advanced: a.Advanced,
+			Summary: a.Current.Summary, Behavior: a.Current.Behavior, Limits: a.Current.Limits})
 	}
 	for _, d := range ws.Decisions {
 		out.Decisions = append(out.Decisions, decisionOutput(d))

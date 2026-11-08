@@ -368,6 +368,9 @@ func TestSecondEditDoesNotClaimTheDescriptionIsMissing(t *testing.T) {
 		// als Auslieferung von Beschreibungen.
 		case strings.HasPrefix(r.URL.Path, "/api/runbooks"):
 			w.Write([]byte(`[]`))
+		// Ebenso die Features des Bereichs (REQ-612), parallel zu den Beschreibungen.
+		case strings.HasPrefix(r.URL.Path, "/api/features"):
+			w.Write([]byte(`{}`))
 		default:
 			mu.Lock()
 			deliveries++

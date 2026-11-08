@@ -126,6 +126,8 @@ func run(args []string, stdout io.Writer) int {
 		return cmdIdea(rest, stdout)
 	case "decision":
 		return cmdDecision(rest, stdout)
+	case "feature":
+		return cmdFeature(rest, stdout)
 	case "search":
 		return cmdSearch(rest, stdout)
 	case "label":
@@ -182,6 +184,7 @@ const usage = `usage: ctx <command>
   pain     record a problem without a solution, follow it to mitigated or resolved
   idea     record a wish without working it out, later make a request of it; or work it out (raw text, concept, images, issues)
   decision open questions on an idea or issue with variants, votes and a way to close them
+  feature  the living description of what the product does: write how a feature is now, see which pull request touches which (list, show, update, paths, export, import)
   search   search with qualifiers (is:open label:bug area:internal/store), saved searches (--preset)
   label    labels for requests, pains, ideas and knowledge, per project or org
   topic    named areas of the repository (several path prefixes under one name)

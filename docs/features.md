@@ -79,5 +79,19 @@ The complete list of what Ghosttree does in the current development version. The
 - Coordination between agents and people: rooms, direct messages, threads,
   `@name` mentions, and delivery into Claude Code sessions through an opt-in
   channel.
+- Features (`ctx feature`, `feature_get`, `feature_update`, `FEAT-n`): the living
+  description of what the product does. A feature has a name, a summary, how it
+  behaves now, its limits, how to use it (CLI, MCP, API, web interface) and the
+  repository paths it lives in. Every change is a new version that keeps who wrote
+  it, the Git state and what triggered it (idea, issues, pull request); nothing is
+  overwritten. A pull request that changes paths inside a feature gets the item
+  "Feature X: Beschreibung angepasst?" in its checklist (`ctx feature paths --pr N`
+  reports the paths), closed by a new version that names the pull request or by a
+  note that the description still holds. An idea can say which feature it changes
+  and shows that feature's description next to the wish; its implementation
+  carries the description forward. An agent working in a feature's paths gets it
+  in short, once per session and version. `ctx feature export` writes this page
+  from the features, `ctx feature import` takes its items as features
+  (`docs/features-map.json` names them and their paths).
 
 Run `ctx` or `ctx <command>` without arguments to see the available command

@@ -19,6 +19,8 @@ type ObjectFacts struct {
 	Areas    []string
 	Parents  []int64
 	Blocks   []int64
+	// Features sind die Features, auf die sich das Objekt bezieht (REQ-612).
+	Features []int64
 	// OriginAt ist der Zeitpunkt des Entstehungskontexts, leer ohne.
 	OriginAt string
 	// RequestID ist bei einem Kriterium und einer Aufgabe der Request dahinter.
@@ -94,13 +96,100 @@ func (s *Store) ObjectFacts(kind string, ids []int64) (map[int64]ObjectFacts, er
 	}
 	switch kind {
 	case "request":
-		return s.requestFacts(ids)
+		return s.withFeatureLinks(kind, ids)(s.requestFacts(ids))
 	case "criterion", "task":
 		return s.derivedFacts(kind, ids)
-	case "pain", "idea", "knowledge", "message":
+	case "pain", "knowledge", "message":
 		return s.plainFacts(kind, ids)
+	case "idea":
+		return s.withFeatureLinks(kind, ids)(s.plainFacts(kind, ids))
+	case "feature":
+		return s.featureFacts(ids)
 	}
 	return nil, fmt.Errorf("no facts for %q", kind)
+}
+
+// withFeatureLinks ergänzt die Features, auf die sich Ideen und Issues beziehen
+// (REQ-612): feature:N trifft sie.
+func (s *Store) withFeatureLinks(kind string, ids []int64) func(map[int64]ObjectFacts, error) (map[int64]ObjectFacts, error) {
+	return func(out map[int64]ObjectFacts, err error) (map[int64]ObjectFacts, error) {
+		if err != nil {
+			return out, err
+		}
+		err = chunked(ids, func(part []int64) error {
+			rows, err := s.db.Query(`SELECT ref_id, feature_id FROM feature_links WHERE kind=? AND ref_id IN (`+placeholders(len(part))+`) ORDER BY feature_id`,
+				append([]any{kind}, factIDArgs(part)...)...)
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var ref, fid int64
+				if err := rows.Scan(&ref, &fid); err != nil {
+					return err
+				}
+				f := out[ref]
+				dup := false
+				for _, x := range f.Features {
+					dup = dup || x == fid
+				}
+				if !dup {
+					f.Features = append(f.Features, fid)
+				}
+				out[ref] = f
+			}
+			return rows.Err()
+		})
+		return out, err
+	}
+}
+
+// featureFacts: Bereiche der jüngsten Fassung, Anker und PR-Nummern aller Fassungen.
+func (s *Store) featureFacts(ids []int64) (map[int64]ObjectFacts, error) {
+	out := map[int64]ObjectFacts{}
+	for _, id := range ids {
+		out[id] = ObjectFacts{}
+	}
+	err := chunked(ids, func(part []int64) error {
+		rows, err := s.db.Query(`SELECT v.feature_id, v.revision, v.areas, v.pr, v.created_at, a.commit_sha, a.branch, a.pr
+			FROM feature_versions v LEFT JOIN git_anchors a ON a.id=v.anchor_id
+			WHERE v.feature_id IN (`+placeholders(len(part))+`) ORDER BY v.revision`, factIDArgs(part)...)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var fid int64
+			var rev int
+			var areas, created string
+			var pr int64
+			var commit, branch *string
+			var apr *int64
+			if err := rows.Scan(&fid, &rev, &areas, &pr, &created, &commit, &branch, &apr); err != nil {
+				return err
+			}
+			f := out[fid]
+			// Die Bereiche der jüngsten Fassung (die Zeilen kommen nach Fassung
+			// aufsteigend, die letzte gewinnt).
+			f.Areas = decodeAreas(areas)
+			if f.OriginAt == "" {
+				f.OriginAt = created
+			}
+			if commit != nil {
+				f.addCommit(*commit)
+			}
+			if branch != nil {
+				f.addBranch(*branch)
+			}
+			f.addPR(pr)
+			if apr != nil {
+				f.addPR(*apr)
+			}
+			out[fid] = f
+		}
+		return rows.Err()
+	})
+	return out, err
 }
 
 // applyOrigins füllt Bereiche und Zeitpunkt aus den Kontexten der Zeilen einer

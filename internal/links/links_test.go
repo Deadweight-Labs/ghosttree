@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/feature"
 	"github.com/Deadweight-Labs/ghosttree/internal/humantask"
 	"github.com/Deadweight-Labs/ghosttree/internal/idea"
 	"github.com/Deadweight-Labs/ghosttree/internal/pain"
@@ -32,6 +33,7 @@ func TestURLPerKind(t *testing.T) {
 		"task":      b.Task(124),
 		"pain":      b.Pain(57),
 		"idea":      b.Idea(3),
+		"feature":   b.Feature(2),
 		"knowledge": b.Knowledge(4295),
 		"document":  b.Document("2026-11-07-oberflaeche-nach-github"),
 		"room":      b.Room(12, 0),
@@ -58,6 +60,7 @@ func TestURLPerKind(t *testing.T) {
 		"task":      srv + "/ui/tasks/124",
 		"pain":      repo + "/pains/57",
 		"idea":      repo + "/ideas/3",
+		"feature":   repo + "/features/2",
 		"knowledge": repo + "/knowledge/4295",
 		"document":  repo + "/docs/2026-11-07-oberflaeche-nach-github",
 		"room":      repo + "/rooms/12",
@@ -184,6 +187,14 @@ func TestCardPerKind(t *testing.T) {
 	check("task done", b.TaskCard(task), "Task", "done", srv+"/ui/tasks/124", "agent checks (Eintrag da) and confirms")
 	check("pain", b.PainCard(pain.Pain{ID: 57, Project: project, Title: "Qual", State: "active"}), "Pain", "active", repo+"/pains/57", "PAIN-57")
 	check("idea", b.IdeaCard(idea.Idea{ID: 3, Project: project, Title: "Idee", State: "open"}), "Idea", "open", repo+"/ideas/3", "IDEA-3", "with: human")
+	feat := feature.Feature{ID: 2, Project: project, State: feature.Active, Revision: 3, Content: feature.Content{Name: "Arbeitspakete"}}
+	check("feature", b.FeatureCard(feat), "Feature", "version 3", repo+"/features/2", "FEAT-2", "Arbeitspakete")
+	feat.Affects = []feature.Ref{{Kind: feature.KindIdea, ID: 5}}
+	check("feature with a waiting idea", b.FeatureCard(feat), "Feature", "version 3", repo+"/features/2", "carry the description forward for IDEA-5", "with: agent")
+	feat.Affects[0].Advanced = true
+	check("feature carried forward", b.FeatureCard(feat), "Feature", "version 3", repo+"/features/2", "next: none")
+	feat.State = feature.Retired
+	check("feature retired", b.FeatureCard(feat), "Feature", "retired", repo+"/features/2", "next: none")
 	check("knowledge", b.KnowledgeCard(store.Knowledge{ID: 4295, Title: "Wissen", Type: "decision", Status: "active", Scope: axes, Person: "robin"}), "Knowledge", "decision/active", repo+"/knowledge/4295", "#4295")
 	check("document", b.DocumentCard(store.Document{Slug: "plan", Title: "Plan", Project: project, Status: "active", HeadRevision: 3}), "Document", "active r3", repo+"/docs/plan", "plan")
 	check("room", b.ThreadCard(store.Thread{ID: 12, Project: project, Title: "Frage", State: "open"}, 99), "Room", "open", repo+"/rooms/12#message-99", "thread 12")
@@ -209,6 +220,8 @@ func TestParseRef(t *testing.T) {
 		{"TASK-124", Ref{Kind: KindTask, ID: 124}},
 		{"PAIN-57", Ref{Kind: KindPain, ID: 57}},
 		{"IDEA-3", Ref{Kind: KindIdea, ID: 3}},
+		{"FEAT-2", Ref{Kind: KindFeature, ID: 2}},
+		{"feat-12", Ref{Kind: KindFeature, ID: 12}},
 		{"PKG-4", Ref{Kind: KindPackage, ID: 4}},
 		{"DEC-9", Ref{Kind: KindDecision, ID: 9}},
 		{"#4295", Ref{Kind: KindKnowledge, ID: 4295}},
@@ -267,6 +280,9 @@ func (fakeAPI) GetPain(id int64) (pain.Detail, error) {
 func (fakeAPI) GetIdea(id int64) (idea.Idea, error) {
 	return idea.Idea{ID: id, Project: project, Title: "I", State: "open"}, nil
 }
+func (fakeAPI) GetFeature(id int64) (feature.Feature, error) {
+	return feature.Feature{ID: id, Project: project, State: feature.Active, Revision: 1, Content: feature.Content{Name: "F"}}, nil
+}
 func (fakeAPI) GetDecision(id int64) (idea.Decision, error) {
 	return idea.Decision{ID: id, Project: project, Subject: "idea", SubjectID: 1, Question: "Q", State: "open", Way: "human"}, nil
 }
@@ -308,6 +324,7 @@ func TestResolveEveryShortFormHasOneCanonicalURL(t *testing.T) {
 		"TASK-124":               srv + "/ui/tasks/124",
 		"PAIN-57":                repo + "/pains/57",
 		"IDEA-3":                 repo + "/ideas/3",
+		"FEAT-2":                 repo + "/features/2",
 		"DEC-9":                  repo + "/decisions/9",
 		"#4295":                  repo + "/knowledge/4295",
 		"PKG-1":                  repo + "/package/b",

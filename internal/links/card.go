@@ -5,6 +5,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/feature"
 	"github.com/Deadweight-Labs/ghosttree/internal/humantask"
 	"github.com/Deadweight-Labs/ghosttree/internal/idea"
 	"github.com/Deadweight-Labs/ghosttree/internal/pain"
@@ -264,6 +265,24 @@ func (b Builder) IdeaCard(i idea.Idea) Card {
 	return c.Sanitized()
 }
 
+// FeatureCard describes a feature: its version is the status, the next step is
+// the description an idea still has to carry forward, if there is one.
+func (b Builder) FeatureCard(f feature.Feature) Card {
+	c := Card{Kind: "Feature", Ref: fmt.Sprintf("FEAT-%d", f.ID), Title: f.Name, Status: fmt.Sprintf("version %d", f.Revision), URL: b.WithProject(f.Project).Feature(f.ID)}
+	if f.State == feature.Retired {
+		c.Status, c.Next = "retired", "none"
+		return c.Sanitized()
+	}
+	c.Next = "none"
+	for _, r := range f.Affects {
+		if r.Kind == feature.KindIdea && !r.Advanced {
+			c.Next, c.Who = fmt.Sprintf("carry the description forward for IDEA-%d (feature_update idea=%d)", r.ID, r.ID), "agent"
+			break
+		}
+	}
+	return c.Sanitized()
+}
+
 // DecisionCard describes an open decision: who has to decide is its next step.
 func (b Builder) DecisionCard(d idea.Decision) Card {
 	c := Card{Kind: "Decision", Ref: fmt.Sprintf("DEC-%d", d.ID), Title: d.Question, Status: d.State, URL: b.WithProject(d.Project).Decision(d.ID)}
@@ -290,6 +309,24 @@ func (b Builder) KnowledgeCard(k store.Knowledge) Card {
 		c.Next = "check whether it still holds"
 	}
 	return c.Sanitized()
+}
+
+// MachineCard describes a machine for the person it concerns: who owns it, how
+// the viewer stands to it and with whom it is shared.
+func (b Builder) MachineCard(m store.Machine) Card {
+	owner := m.Owner
+	if m.OwnerOrg != "" {
+		owner = m.OwnerOrg
+	}
+	shared := "not shared"
+	if len(m.Shares) > 0 {
+		var orgs []string
+		for _, sh := range m.Shares {
+			orgs = append(orgs, sh.Org+" ("+sh.Role+")")
+		}
+		shared = "shared with " + strings.Join(orgs, ", ")
+	}
+	return Card{Kind: "Machine", Ref: m.Name, Status: m.Relation, Next: shared, Who: owner, URL: b.Machine(m.Name)}.Sanitized()
 }
 
 // DocumentCard describes a document.

@@ -43,6 +43,7 @@ const (
 	KindRequest   = "request"
 	KindPain      = "pain"
 	KindIdea      = "idea"
+	KindFeature   = "feature"
 	KindCriterion = "criterion"
 	KindTask      = "task"
 	KindFile      = "file"
@@ -53,12 +54,13 @@ const (
 )
 
 // Kinds sind alle Objektarten in fester Reihenfolge.
-var Kinds = []string{KindKnowledge, KindRequest, KindPain, KindIdea, KindCriterion, KindTask, KindFile, KindMessage, KindSession}
+var Kinds = []string{KindKnowledge, KindRequest, KindPain, KindIdea, KindFeature, KindCriterion, KindTask, KindFile, KindMessage, KindSession}
 
 var kindAlias = map[string]string{
 	"knowledge": KindKnowledge, "wissen": KindKnowledge,
 	"request": KindRequest, "requests": KindRequest, "issue": KindRequest, "issues": KindRequest, "req": KindRequest,
 	"pain": KindPain, "pains": KindPain, "idea": KindIdea, "ideas": KindIdea,
+	"feature": KindFeature, "features": KindFeature, "feat": KindFeature,
 	"criterion": KindCriterion, "criteria": KindCriterion,
 	"task": KindTask, "tasks": KindTask, "file": KindFile, "files": KindFile, "ghost": KindFile,
 	"message": KindMessage, "messages": KindMessage, "nachricht": KindMessage, "session": KindSession, "sessions": KindSession,
@@ -79,6 +81,7 @@ const (
 //	criterion: open, met = done, waived = closed
 //	pain:      active und mitigated = open, resolved = done, accepted und obsolete = closed
 //	idea:      open, accepted = done, dismissed = closed
+//	feature:   hat keine Klasse (wie Wissen); is:active und is:retired sind die Zustände
 //	task:      open = open, done und confirmed = done, dropped = closed
 func StateClass(kind, state string) string {
 	switch kind {
@@ -135,7 +138,7 @@ func StateClass(kind, state string) string {
 var rawStates = map[string]bool{
 	"dropped": true, "met": true, "waived": true,
 	"active": true, "mitigated": true, "resolved": true, "obsolete": true,
-	"accepted": true, "dismissed": true, "confirmed": true,
+	"accepted": true, "dismissed": true, "confirmed": true, "retired": true,
 }
 
 // Schlüssel der Qualifier, kanonisch.
@@ -152,6 +155,7 @@ const (
 	KeyTask    = "task"
 	KeyPain    = "pain"
 	KeyIdea    = "idea"
+	KeyFeature = "feature"
 	KeyParent  = "parent"
 	KeyBlocks  = "blocks"
 	KeyAuthor  = "author"
@@ -169,6 +173,7 @@ var keyAlias = map[string]string{
 	"is": KeyIs, "kind": KeyKind, "type": KeyType, "repo": KeyRepo, "branch": KeyBranch,
 	"commit": KeyCommit, "pr": KeyPR, "package": KeyPackage, "pkg": KeyPackage,
 	"req": KeyReq, "task": KeyTask, "pain": KeyPain, "idea": KeyIdea,
+	"feature": KeyFeature, "feat": KeyFeature,
 	"parent": KeyParent, "blocks": KeyBlocks,
 	"author": KeyAuthor, "for": KeyFor, "assignee": KeyFor,
 	"label": KeyLabel, "area": KeyArea, "topic": KeyTopic,
@@ -379,7 +384,7 @@ func parseTerm(key string, neg bool, value, word string, now time.Time) (Term, e
 			return Term{}, fail(word, "%s: empty alternative", key)
 		}
 		switch key {
-		case KeyPR, KeyPackage, KeyReq, KeyTask, KeyPain, KeyIdea, KeyParent, KeyBlocks:
+		case KeyPR, KeyPackage, KeyReq, KeyTask, KeyPain, KeyIdea, KeyFeature, KeyParent, KeyBlocks:
 			n, err := parseNum(key, alt)
 			if err != nil {
 				return Term{}, fail(word, "%v", err)
@@ -883,6 +888,10 @@ type Facts struct {
 	Areas    []string
 	Parents  []int64
 	Blocks   []int64
+	// Features sind die Features, auf die sich das Objekt bezieht (REQ-612): eine
+	// Idee, die ein Feature ändert, ein Issue, das es ändert oder aus dem es
+	// entstand. Bei einem Feature selbst steht seine Nummer in Number.
+	Features []int64
 	// Created und Updated sind RFC3339; OriginAt der Zeitpunkt des
 	// Entstehungskontexts (sonst Created).
 	Created, Updated, OriginAt string
@@ -1040,6 +1049,12 @@ func matchTerm(t Term, f Facts) bool {
 		return anyNum(f.Parents, t.Nums)
 	case KeyBlocks:
 		return anyNum(f.Blocks, t.Nums)
+	case KeyFeature:
+		// feature:3 trifft FEAT-3 selbst und jedes Objekt, das sich auf es bezieht.
+		if f.Kind == KindFeature {
+			return anyNum([]int64{f.Number}, t.Nums)
+		}
+		return anyNum(f.Features, t.Nums)
 	case KeyReq, KeyTask, KeyPain, KeyIdea:
 		if !contains(numKind(t.Key), f.Kind) {
 			return false
