@@ -150,10 +150,20 @@ func (g *GitHubApp) Configured() bool {
 // WebhookConfigured: das Webhook-Secret liegt vor.
 func (g *GitHubApp) WebhookConfigured() bool { return g.Configured() && g.cfg.WebhookSecret != "" }
 
-// AuthorizeURL ist die Installationsadresse der App. Der state kommt mit dem
-// Code an die Setup-URL zurück; die Rückkehradresse ist bei der App selbst
-// hinterlegt (Setup URL).
+// AuthorizeURL ist die Nutzer-Autorisierung der App (login/oauth/authorize).
+// Sie führt auch bei schon installierter App zurück auf die Rückkehradresse mit
+// code und state. installations/new tut das nicht: GitHub leitet dort bei
+// installierter App auf die Einstellungsseite und nie zurück (beobachtet am
+// 2026-11-08). Der Admin-Nachweis kommt danach aus Prove.
 func (g *GitHubApp) AuthorizeURL(state, redirectURI string) string {
+	q := url.Values{"client_id": {g.cfg.ClientID}, "redirect_uri": {redirectURI}, "state": {state}}
+	return g.cfg.WebBase + "/login/oauth/authorize?" + q.Encode()
+}
+
+// InstallURL ist die Installationsadresse der App, für Organisationen ohne
+// Installation. Der state kommt mit dem Code an die Setup-URL zurück, die bei
+// der App selbst hinterlegt ist.
+func (g *GitHubApp) InstallURL(state string) string {
 	return g.cfg.WebBase + "/apps/" + g.cfg.Slug + "/installations/new?" + url.Values{"state": {state}}.Encode()
 }
 

@@ -263,6 +263,7 @@ func (s *Server) Register(srv *mcp.Server) {
 	s.registerPackageTools(srv)
 	s.registerQueryTools(srv)
 	s.registerRunbookTools(srv)
+	s.registerLinkTools(srv)
 }
 
 func Run(ctx context.Context, s *Server, version string) error {
@@ -312,7 +313,7 @@ func (s *Server) handleSearch(ctx context.Context, _ *mcp.CallToolRequest, in Se
 		if err != nil {
 			return nil, nil, err
 		}
-		return textResult(renderKnowledgeFull(k)), nil, nil
+		return s.withCard(textResult(renderKnowledgeFull(k)), s.builder().KnowledgeCard(k)), nil, nil
 	}
 	// Neither an id nor words: nothing to answer, and saying so beats returning
 	// the whole archive or an empty list that reads like "there is nothing".
@@ -376,7 +377,7 @@ func (s *Server) handleSearch(ctx context.Context, _ *mcp.CallToolRequest, in Se
 			out.WriteString("## knowledge\n")
 			shortened := false
 			for _, k := range res.Knowledge {
-				out.WriteString(renderKnowledge(k))
+				out.WriteString(hitLink(renderKnowledge(k), s.builder().WithProject(k.Scope.Project).Knowledge(k.ID)))
 				shortened = shortened || len([]rune(oneLine(k.Body))) > snippetChars
 			}
 			// Only said when something was actually held back. A pointer to the
@@ -401,7 +402,7 @@ func (s *Server) handleSearch(ctx context.Context, _ *mcp.CallToolRequest, in Se
 		if len(res.Sessions) > 0 {
 			out.WriteString("\n## sessions\n")
 			for _, h := range res.Sessions {
-				out.WriteString(renderHit(h))
+				out.WriteString(hitLink(renderHit(h), s.sessionURL(h.Session)))
 			}
 			out.WriteString(limitNote(len(res.Sessions), limit))
 		}
@@ -415,7 +416,8 @@ func (s *Server) handleSearch(ctx context.Context, _ *mcp.CallToolRequest, in Se
 		if len(res.Requests) > 0 {
 			out.WriteString("\n## requests\n")
 			for _, h := range res.Requests {
-				fmt.Fprintf(&out, "- [request|status=%s|type=%s|source=ledger%s] REQ-%d %s — %s\n", h.Request.State, h.Request.Type, originctx.Label(h.OriginContext, h.Request.CreatedAt), h.Request.ID, h.Request.Title, h.MatchReason)
+				out.WriteString(hitLink(fmt.Sprintf("- [request|status=%s|type=%s|source=ledger%s] REQ-%d %s — %s\n", h.Request.State, h.Request.Type, originctx.Label(h.OriginContext, h.Request.CreatedAt), h.Request.ID, h.Request.Title, h.MatchReason),
+					s.builder().WithProject(h.Request.Scope.Project).Issue(h.Request.ID)))
 			}
 			out.WriteString(limitNote(len(res.Requests), limit))
 		}
@@ -445,7 +447,7 @@ func (s *Server) handleGet(ctx context.Context, _ *mcp.CallToolRequest, in GetIn
 		return nil, nil, err
 	}
 	if len(in.Paths) > 0 {
-		ghosts, err := s.client.GhostTree(s.ctxAxes.Project, "")
+		ghosts, err := s.client.GhostTreeAt(s.ctxAxes.Project, "", s.currentAxes())
 		if err != nil {
 			return nil, nil, err
 		}
@@ -578,7 +580,7 @@ func (s *Server) handleRemember(ctx context.Context, _ *mcp.CallToolRequest, in 
 	if hint := reasoningHint(saved); hint != "" {
 		msg += "\n" + hint
 	}
-	return textResult(msg), nil, nil
+	return s.withCard(textResult(msg), s.builder().KnowledgeCard(saved)), nil, nil
 }
 
 // reasoningHint nudges decisions towards why/alternatives/tradeoffs. A decision

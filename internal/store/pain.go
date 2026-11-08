@@ -64,12 +64,15 @@ func (a *ProjectAccess) resolveTargets(project string, targets []pain.Target) ([
 		if t.KnowledgeID != 0 {
 			n++
 		}
+		if t.IdeaID != 0 {
+			n++
+		}
 		if strings.TrimSpace(t.ExternalRef) != "" {
 			n++
 		}
 		if n != 1 {
 			return nil, requestdomain.NewRuleError("link_target_required", "a link needs exactly one target",
-				"give one of request_id, knowledge_id or external_ref", nil)
+				"give one of request_id, knowledge_id, idea_id or external_ref", nil)
 		}
 		switch {
 		case t.RequestID != 0:
@@ -84,6 +87,12 @@ func (a *ProjectAccess) resolveTargets(project string, targets []pain.Target) ([
 				return nil, err
 			}
 			out = append(out, resolvedTarget{Kind: "knowledge", ID: t.KnowledgeID, Title: title})
+		case t.IdeaID != 0:
+			title, err := a.resolveLinkTarget(project, "idea", t.IdeaID)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, resolvedTarget{Kind: "idea", ID: t.IdeaID, Title: title})
 		default:
 			out = append(out, resolvedTarget{Kind: "external", Ref: strings.TrimSpace(t.ExternalRef)})
 		}
@@ -368,7 +377,7 @@ func (s *Store) commitPainCorrection(id int64, title, body, reason, changed stri
 	return tx.Commit()
 }
 
-// AddPainLink adds an edge pain -> request, knowledge entry or external text.
+// AddPainLink adds an edge pain -> request, knowledge entry, idea or external text.
 func (a *ProjectAccess) AddPainLink(id int64, target pain.Target, actor pain.Actor) (pain.Detail, error) {
 	p, err := a.st.PainByID(id)
 	if err != nil {
@@ -422,7 +431,7 @@ func (a *ProjectAccess) RemovePainLink(linkID int64, reason string, actor pain.A
 		return err
 	}
 	// An edge to something the viewer may not read answers like an unknown link id.
-	if dstKind == "request" || dstKind == "knowledge" {
+	if dstKind == "request" || dstKind == "knowledge" || dstKind == "idea" {
 		if _, err := a.resolveLinkTarget(p.Project, dstKind, dstID); err != nil {
 			a.Filtered()
 			return sql.ErrNoRows
@@ -499,7 +508,7 @@ func (s *Store) painDetail(pa *ProjectAccess, id int64) (pain.Detail, error) {
 	}
 	visible := map[string]bool{}
 	for _, l := range links {
-		key := targetData(resolvedTarget{Kind: l.Kind, ID: l.RequestID + l.KnowledgeID, Ref: l.ExternalRef})
+		key := targetData(resolvedTarget{Kind: l.Kind, ID: l.RequestID + l.KnowledgeID + l.IdeaID, Ref: l.ExternalRef})
 		switch l.Kind {
 		case "request":
 			title, err := pa.resolveLinkTarget(p.Project, "request", l.RequestID)
@@ -513,6 +522,15 @@ func (s *Store) painDetail(pa *ProjectAccess, id int64) (pain.Detail, error) {
 				continue
 			}
 			l.Title = title
+		case "idea":
+			title, err := pa.resolveLinkTarget(p.Project, "idea", l.IdeaID)
+			if err != nil {
+				continue
+			}
+			l.Title = title
+			if i, err := pa.st.IdeaByID(l.IdeaID); err == nil {
+				d.Pain.Ideas = append(d.Pain.Ideas, pain.IdeaRef{ID: i.ID, Title: i.Title, State: i.State})
+			}
 		}
 		visible[key] = true
 		d.Motivates = append(d.Motivates, l)
@@ -580,7 +598,7 @@ func (a *ProjectAccess) linkDataVisible(project, data string, current map[string
 	switch kind {
 	case "external":
 		return true
-	case "request", "knowledge":
+	case "request", "knowledge", "idea":
 		var n int64
 		fmt.Sscanf(rest, "%d", &n)
 		_, err := a.resolveLinkTarget(project, kind, n)
@@ -610,6 +628,8 @@ func (s *Store) painLinksAndEvents(id int64) ([]pain.Link, []pain.Event, error) 
 			l.RequestID = dst
 		case "knowledge":
 			l.KnowledgeID = dst
+		case "idea":
+			l.IdeaID = dst
 		}
 		links = append(links, l)
 	}

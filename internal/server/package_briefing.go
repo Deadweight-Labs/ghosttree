@@ -27,9 +27,18 @@ func (a *api) writePackageBriefing(w http.ResponseWriter, r *http.Request, pa *s
 	}
 	detail, err := a.st.PackageForBranch(ax.Project, ax.Branch, ax.Lineage)
 	if err != nil {
+		// Auch ohne Paket kehren vertagte Entscheidungen zurück, deren Auslöser
+		// zum Branch passt.
+		a.writeDueDecisions(w, pa, ax.Project, ax.Branch, "", nil)
 		return
 	}
-	fmt.Fprint(w, html.EscapeString(renderPackageBriefing(pa.PackageView(detail, false), packageBriefingChars)))
+	view := pa.PackageView(detail, false)
+	fmt.Fprint(w, html.EscapeString(renderPackageBriefing(view, packageBriefingChars)))
+	titles := make([]string, 0, len(view.Members))
+	for _, m := range view.Members {
+		titles = append(titles, m.Title)
+	}
+	a.writeDueDecisions(w, pa, ax.Project, ax.Branch, view.Name, titles)
 }
 
 // renderPackageBriefing ist der kompakte Text für den Sessionstart. Pflicht

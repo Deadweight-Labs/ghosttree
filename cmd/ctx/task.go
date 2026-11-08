@@ -9,13 +9,14 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
 	"github.com/Deadweight-Labs/ghosttree/internal/humantask"
+	"github.com/Deadweight-Labs/ghosttree/internal/links"
 	"github.com/Deadweight-Labs/ghosttree/internal/pain"
 )
 
 const taskUsage = `usage: ctx task <command>
 
   add --kind secret|file|input|action --title T [--where PLACE] [--check HINT] [--desc D] [--explanation E]
-      [--request N] [--work W] [--assign NAME] [--project P]
+      [--step "text" | --step "text | https://link" ...] [--request N] [--work W] [--assign NAME] [--project P]
   list [--state pending|open|done|confirmed|dropped|all] [--mine] [--request N] [--project P]
   show <TASK-n|n>
   done <n>... [--note N]
@@ -24,6 +25,8 @@ const taskUsage = `usage: ctx task <command>
   drop <n> --reason R
 
 --where names where a secret or file belongs (path, vault entry, env file), never the value.
+--step adds one numbered step of the walk-through (repeatable, one line, an optional link after " | ");
+the web interface shows the steps as a checklist. Without steps a hint says so.
 All commands take --json.`
 
 func taskLine(t humantask.Task) string {
@@ -56,11 +59,13 @@ func cmdTask(args []string, stdout io.Writer) int {
 	}
 	c := client.New(cfg)
 	one := func(t humantask.Task, err error) int {
+		card := cliBuilder(cfg, t.Project).TaskCard(t)
 		if err == nil && !jsonMode {
 			fmt.Fprintln(stdout, taskLine(t))
+			cliCard(stdout, card)
 			return 0
 		}
-		return writeRequestCLIResult(stdout, jsonMode, t, nil, err)
+		return writeRequestCLIResultCard(stdout, jsonMode, t, &card, err)
 	}
 	taskID := func(v string) (int64, bool) { return pain.ParseNumberRef(v, "TASK-") }
 	switch sub {
@@ -77,6 +82,8 @@ func cmdTask(args []string, stdout io.Writer) int {
 		work := fs.Int64("work", 0, "work id from request start")
 		assign := fs.String("assign", "", "project member; default: you")
 		everyone := fs.Bool("everyone", false, "anybody in the project may do it")
+		var steps repeatedString
+		fs.Var(&steps, "step", "one step of the walk-through, \"text\" or \"text | https://link\"; repeatable")
 		project := fs.String("project", "", "project; default: the current one")
 		if fs.Parse(rest) != nil || *kind == "" || *title == "" {
 			return usageErr()
@@ -87,6 +94,10 @@ func cmdTask(args []string, stdout io.Writer) int {
 		}
 		in := humantask.CreateInput{Project: target, Kind: *kind, Title: *title, Description: *desc, Location: *where,
 			CheckHint: *check, WorkID: *work, Assignee: *assign, Everyone: *everyone, Explanation: *explanation}
+		for _, st := range steps {
+			text, link, _ := strings.Cut(st, " | ")
+			in.Steps = append(in.Steps, humantask.Step{Text: strings.TrimSpace(text), URL: strings.TrimSpace(link)})
+		}
 		if *request != "" {
 			n, ok := pain.ParseNumberRef(*request, "REQ-")
 			if !ok {
@@ -97,7 +108,11 @@ func cmdTask(args []string, stdout io.Writer) int {
 		if in.RequestID == 0 && in.WorkID == 0 {
 			in.SessionID = cliSessionID(c, cfg)
 		}
-		return one(c.CreateHumanTask(in))
+		task, err := c.CreateHumanTask(in)
+		if err == nil && len(task.Steps) == 0 && !jsonMode {
+			defer fmt.Fprintln(stdout, "hint: no steps given; add --step \"...\" (one per step, \"text | link\") so the human gets a checklist")
+		}
+		return one(task, err)
 	case "list":
 		fs := flag.NewFlagSet("task list", flag.ContinueOnError)
 		fs.SetOutput(stdout)
@@ -143,10 +158,19 @@ func cmdTask(args []string, stdout io.Writer) int {
 			return usageErr()
 		}
 		t, err := c.GetHumanTask(id)
+		card := cliBuilder(cfg, t.Project).TaskCard(t)
 		if err != nil || jsonMode {
-			return writeRequestCLIResult(stdout, jsonMode, t, nil, err)
+			return writeRequestCLIResultCard(stdout, jsonMode, t, &card, err)
 		}
 		fmt.Fprintln(stdout, taskLine(t))
+		defer cliCard(stdout, card)
+		for i, st := range t.Steps {
+			line := fmt.Sprintf("  %d. %s", i+1, links.Clean(st.Text, 0))
+			if st.URL != "" {
+				line += " <" + links.Clean(st.URL, 0) + ">"
+			}
+			fmt.Fprintln(stdout, line)
+		}
 		for _, f := range [][2]string{{"description", t.Description}, {"check", t.CheckHint}, {"done by", t.DoneBy}, {"note", t.DoneNote}, {"via", t.DoneVia}, {"last reason", t.StateNote}} {
 			if f[1] != "" {
 				fmt.Fprintf(stdout, "%s: %s\n", f[0], f[1])

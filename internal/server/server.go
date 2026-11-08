@@ -61,6 +61,13 @@ func WithBuildVersion(version string) Option {
 	return func(a *api) { a.buildVersion = version }
 }
 
+// WithCapabilities adds capabilities to what /api/version reports on top of
+// the ones every build has (for example github_app, which depends on the
+// server's configuration).
+func WithCapabilities(caps ...string) Option {
+	return func(a *api) { a.extraCaps = append(a.extraCaps, caps...) }
+}
+
 func withRequestIDGenerator(generator requestIDGenerator) Option {
 	return func(a *api) { a.requestIDGenerator = generator }
 }
@@ -79,6 +86,7 @@ type api struct {
 	snapshotErrorLogger  snapshotErrorLogger
 	logger               *slog.Logger
 	buildVersion         string
+	extraCaps            []string
 	requestIDGenerator   requestIDGenerator
 	metrics              *metricsRegistry
 	registered           []string
@@ -98,6 +106,7 @@ func (a *api) registerRoutes(mux *http.ServeMux) {
 	a.routeFunc(mux, "GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	})
+	a.routeFunc(mux, "GET /api/version", a.versionInfo)
 	a.route(mux, "GET /metrics", a.metrics)
 	a.routeFunc(mux, "GET /api/whoami", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, a.whoAmI(r))
@@ -154,7 +163,10 @@ func (a *api) registerRoutes(mux *http.ServeMux) {
 	a.routeFunc(mux, "DELETE /api/request-relations/{id}", a.removeRequestRelation)
 	a.registerPainTaskRoutes(mux)
 	a.registerPackageRoutes(mux)
+	a.registerPullRoutes(mux)
+	a.registerRequestCountRoutes(mux)
 	a.registerLabelRoutes(mux)
+	a.registerIdeaWorkshopRoutes(mux)
 	a.registerRunbookRoutes(mux)
 	a.routeFunc(mux, "POST /api/knowledge", a.createKnowledge)
 	a.routeFunc(mux, "GET /api/knowledge", a.listKnowledge)
@@ -290,7 +302,7 @@ func fallbackOperationID() string {
 
 func (a *api) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/health" || r.URL.Path == "/metrics" || (r.Method == http.MethodPost && isDevicePath(r.URL.Path)) {
+		if r.URL.Path == "/api/health" || r.URL.Path == "/api/version" || r.URL.Path == "/metrics" || (r.Method == http.MethodPost && isDevicePath(r.URL.Path)) {
 			next.ServeHTTP(w, r)
 			return
 		}

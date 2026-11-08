@@ -106,7 +106,7 @@ func (s *Server) handleDescribe(ctx context.Context, _ *mcp.CallToolRequest, in 
 		return textResult(fmt.Sprintf("vermerkt: %s — angesehen, nichts zu sagen", rel)), nil, nil
 	}
 
-	g := store.GhostFile{Project: s.ctxAxes.Project, Path: rel, Description: in.Description, Harness: "mcp"}
+	g := store.GhostFile{Project: s.ctxAxes.Project, Path: rel, Description: in.Description, Harness: "mcp", Branch: s.ghostBranch()}
 	if info.IsDir() {
 		names, err := ghost.ChildNames(full)
 		if err != nil {
@@ -195,7 +195,7 @@ func (s *Server) firstMentionOf(path string) bool {
 // genau das Rauschen, gegen das die Auslieferung mit ihrer Einmal-je-Sitzung-
 // Regel antritt.
 func undescribedAncestor(s *Server, rel string) string {
-	tree, err := s.client.GhostTree(s.ctxAxes.Project, "")
+	tree, err := s.client.GhostTreeAt(s.ctxAxes.Project, "", s.currentAxes())
 	if err != nil {
 		return ""
 	}
@@ -284,4 +284,18 @@ func renderGhostHit(g store.GhostFile) string {
 		label += "|match:" + g.Match
 	}
 	return fmt.Sprintf("- %s [%s%s%s] — %s\n", name, label, anchorLabel(g.GitAnchor), originctx.Label(g.OriginContext, g.DescribedAt), body)
+}
+
+// ghostBranch ist die Ebene, auf die eine Beschreibung jetzt geschrieben wird:
+// auf einem Feature-Branch dessen Name (sie gilt dort und in abgezweigten
+// Branches und geht beim Merge auf den Base-Branch), auf dem Default-Branch
+// oder ohne Git-Stand die Projektebene (leer).
+func (s *Server) ghostBranch() string {
+	if s.live == nil {
+		return ""
+	}
+	if l := s.live(); l.Branch != "" && !l.Trunk {
+		return l.Branch
+	}
+	return ""
 }

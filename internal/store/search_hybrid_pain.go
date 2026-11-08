@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/idea"
 	"github.com/Deadweight-Labs/ghosttree/internal/pain"
 )
 
@@ -39,7 +40,40 @@ func (a *ProjectAccess) SearchPains(f pain.Filter) ([]pain.Pain, error) {
 			f.Projects = open
 		}
 	}
-	return a.st.SearchPainsWith(f, PainSearch{Keep: a.CanSeePain})
+	list, err := a.st.SearchPainsWith(f, PainSearch{Keep: a.CanSeePain})
+	if err == nil {
+		a.attachPainIdeas(list)
+	}
+	return list, err
+}
+
+// attachPainIdeas hängt an jeden Pain die Lösungsideen, die er motiviert, soweit
+// der Betrachter sie lesen darf (REQ-606).
+func (a *ProjectAccess) attachPainIdeas(list []pain.Pain) {
+	for n := range list {
+		for _, i := range a.st.ideasMotivatedBy(list[n].ID) {
+			if a.CanSeeIdea(i) {
+				list[n].Ideas = append(list[n].Ideas, pain.IdeaRef{ID: i.ID, Title: i.Title, State: i.State})
+			}
+		}
+	}
+}
+
+func (s *Store) ideasMotivatedBy(painID int64) []idea.Idea {
+	if s.reader != nil {
+		return s.reader.ideasMotivatedBy(painID)
+	}
+	rows, err := s.db.Query(`SELECT `+ideaCols+ideaFrom+` JOIN entity_links l ON l.dst_kind='idea' AND l.dst_id=i.id
+		WHERE l.src_kind='pain' AND l.src_id=? AND l.kind='motivates' ORDER BY i.id`, painID)
+	if err != nil {
+		return nil
+	}
+	list, err := scanIdeas(rows)
+	rows.Close()
+	if err != nil {
+		return nil
+	}
+	return list
 }
 
 // PainSearch describes one search over the pains of a project.

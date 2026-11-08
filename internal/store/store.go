@@ -1171,7 +1171,19 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := ensureIdeaWorkshop(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := ensureGitAnchors(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureGhostBranches(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensurePullRequests(db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}

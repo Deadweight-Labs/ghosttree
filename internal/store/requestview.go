@@ -148,6 +148,7 @@ func (a *ProjectAccess) RequestDetailView(d requestdomain.Detail) requestdomain.
 	d.Activity = activity
 	d.Pains, d.Tasks = a.requestAttachments(d.Request.ID)
 	d.Ideas, d.Labels = a.requestIdeasAndLabels(d.Request.ID)
+	a.attachRequirementRefs(&d)
 	return d
 }
 

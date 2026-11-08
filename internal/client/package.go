@@ -7,6 +7,7 @@ import (
 
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
+	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
 // IsPackageNotFound sagt, dass die Antwort "kein (offenes) Arbeitspaket" war.
@@ -111,4 +112,42 @@ func (c *Client) ImportBranchRelations(project string, dryRun bool) (requestdoma
 func (c *Client) ReopenCriterion(criterionID int64, reason string) error {
 	return c.do("POST", "/api/criteria/"+strconv.FormatInt(criterionID, 10)+"/reopen", nil,
 		map[string]string{"reason": reason}, nil)
+}
+
+// PullKnowledge liefert, was zu einem PR gesagt wurde: das Wissen mit dem Anker
+// des PRs (nach dem Merge das, was mit hineingegangen ist) und die Ghost-Pfade.
+func (c *Client) PullKnowledge(project string, pr int64) (store.PullRequestBrief, error) {
+	var out store.PullRequestBrief
+	err := c.do("GET", "/api/pulls/"+strconv.FormatInt(pr, 10)+"/knowledge", url.Values{"project": {project}}, nil, &out)
+	return out, err
+}
+
+// CountRequests zählt Requests mit der Semantik der Liste (REQ-601). state ""
+// zählt alle, sonst open, done oder dropped.
+func (c *Client) CountRequests(ax scope.Axes, state string) (int, error) {
+	q := axesQuery(ax)
+	q.Set("state", state)
+	var out struct {
+		Count int `json:"count"`
+	}
+	err := c.do("GET", "/api/requests/count", q, nil, &out)
+	return out.Count, err
+}
+
+// PackagesOfRequest nennt die Pakete, in denen ein Request steckt.
+func (c *Client) PackagesOfRequest(requestID int64) ([]requestdomain.PackageOfRequest, error) {
+	var out []requestdomain.PackageOfRequest
+	err := c.do("GET", "/api/requests/"+strconv.FormatInt(requestID, 10)+"/packages", nil, nil, &out)
+	return out, err
+}
+
+// ListPackages ist die Paketliste eines Projekts; state "" für alle.
+func (c *Client) ListPackages(project, state string) ([]requestdomain.PackageSummary, error) {
+	q := url.Values{"project": {project}}
+	if state != "" {
+		q.Set("state", state)
+	}
+	var out []requestdomain.PackageSummary
+	err := c.do("GET", "/api/packages/list", q, nil, &out)
+	return out, err
 }

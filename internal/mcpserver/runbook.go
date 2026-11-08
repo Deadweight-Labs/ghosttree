@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
+	"github.com/Deadweight-Labs/ghosttree/internal/links"
 	"github.com/Deadweight-Labs/ghosttree/internal/runbook"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -99,7 +100,7 @@ func (s *Server) handleRunbookGet(_ context.Context, _ *mcp.CallToolRequest, in 
 			} else if r.ApprovedVersion != r.Head {
 				status += fmt.Sprintf(" (approved v%d)", r.ApprovedVersion)
 			}
-			fmt.Fprintf(&b, "- %s [%s, %s]: %s\n", r.Name, status, runbook.ScopeLabel(r.Project, r.Machine), r.Purpose)
+			fmt.Fprintf(&b, "- %s [%s, %s]: %s %s\n", r.Name, status, runbook.ScopeLabel(r.Project, r.Machine), r.Purpose, s.builder().WithProject(r.Project).Runbook(r.Name))
 		}
 		return textResult(b.String()), RunbookGetOutput{List: list}, nil
 	}
@@ -111,7 +112,7 @@ func (s *Server) handleRunbookGet(_ context.Context, _ *mcp.CallToolRequest, in 
 	if err != nil {
 		return nil, RunbookGetOutput{}, err
 	}
-	return textResult(runbook.Checklist(v, values)), RunbookGetOutput{Runbook: &v}, nil
+	return s.withCard(textResult(runbook.Checklist(v, values)), s.builder().RunbookCard(links.SummaryOf(v))), RunbookGetOutput{Runbook: &v}, nil
 }
 
 func (s *Server) handleRunbookWrite(_ context.Context, _ *mcp.CallToolRequest, in RunbookWriteInput) (*mcp.CallToolResult, RunbookWriteOutput, error) {
@@ -151,7 +152,11 @@ func (s *Server) handleRunbookWrite(_ context.Context, _ *mcp.CallToolRequest, i
 		msg += ", NOT approved: it will not be delivered or run until an owner or lead runs ctx runbook approve " + in.Name
 	}
 	out := RunbookWriteOutput{ID: res.ID, Version: res.Version, Hash: res.Hash, NewVersion: res.NewVersion, Approved: res.Approved, Message: msg}
-	return textResult(msg), out, nil
+	written := runbook.Summary{Name: strings.TrimSpace(in.Name), Project: project, Purpose: spec.Purpose, Head: res.Version}
+	if res.Approved {
+		written.ApprovedVersion = res.Version
+	}
+	return s.withCard(textResult(msg), s.builder().RunbookCard(written)), out, nil
 }
 
 func (s *Server) handleRunReport(_ context.Context, _ *mcp.CallToolRequest, in RunReportInput) (*mcp.CallToolResult, RunReportOutput, error) {
@@ -176,5 +181,5 @@ func (s *Server) handleRunReport(_ context.Context, _ *mcp.CallToolRequest, in R
 	if res.ProposalID > 0 {
 		msg += fmt.Sprintf("; the deviation became proposal %d, which an owner or lead must approve", res.ProposalID)
 	}
-	return textResult(msg), RunReportOutput{RunID: res.RunID, ProposalID: res.ProposalID, Message: msg}, nil
+	return s.withCard(textResult(msg), s.builder().RunbookCard(links.SummaryOf(v))), RunReportOutput{RunID: res.RunID, ProposalID: res.ProposalID, Message: msg}, nil
 }

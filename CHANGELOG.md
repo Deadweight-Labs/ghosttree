@@ -48,6 +48,52 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   upgrade"), and private means private: a session that is not shared is read by
   its owner alone.
 
+#### Short ways between agent and human
+
+- Every answer about one object (issue, requirement, task, pain, idea, knowledge
+  entry, work package, runbook, room thread) carries its web link and a compact
+  card (title, state, next step, who); search hits carry the link only. The link
+  has no token and no login: a signed-out browser signs in and returns to that
+  very page (internal paths only).
+- `ctx open <REQ-n|TASK-n|PAIN-n|IDEA-n|#id|pr:n|commit:sha|preset:name values|path|search line>`
+  opens the page in the browser of this machine, or prints link and card over
+  ssh or without a display. The MCP tool `open_link` hands link and card to the
+  agent without opening anything.
+- Human tasks take `steps` (numbered one-line steps with optional links) next to
+  `explanation`, shown as a checklist; without steps the answer says so
+  (`ctx task add --step "text | https://link"`).
+- `ctx install` sets up the `/ghost` shortcuts (`open`, `task`, `req`, `preset`)
+  as a skill for Claude Code and Codex; `ctx doctor` checks them. An unchanged
+  `/gt` skill from an earlier install is removed (it clashed with Graphite's `gt`).
+- `ctx update [--channel stable|dev] [--pre]` replaces the binary with a signed
+  release (verified with cosign); `ctx version` also names the server's version.
+
+#### Git-native ledger
+
+- A GitHub App connects an organization: its repositories join the
+  organization in ghosttree, and pull requests are bound by webhook
+  (`ctx github sync-prs` catches up).
+- Every write to knowledge, file descriptions, requests, criteria, pains, ideas,
+  runbooks and room messages records its Git anchor (commit, branch, pull
+  request, time) and its origin (the paths and areas the session read and
+  wrote). Search filters by both: `commit:`, `pr:`, `branch:`, `since:`,
+  `until:`, `area:`, plus `label:`, `is:` and free text, in the CLI, MCP and API.
+- Labels, topics and saved searches (presets) for people and agents.
+- File descriptions can differ per branch and carry over on merge.
+- Ideas (`ctx idea`, `IDEA-n`): a quick idea needs nothing more. A larger one can
+  be worked out: raw text kept verbatim, summary, a concept with requirements,
+  a discussion thread, approval by a person in the web interface, then issues
+  whose criteria point back at the requirements. Open decisions (`ctx decision`,
+  `DEC-n`) offer variants with pros, cons, votes and images; a fixed rule says
+  whether an agent may decide (reversible, local) or a person must (security,
+  cost, data model, product, …), and deferred decisions return when their
+  trigger comes up. A pain can motivate an idea.
+- Runbooks (`ctx runbook`, `ctx run`): stored procedures with steps, checks,
+  rollback and pitfalls that surface when an agent touches a matching command
+  or path. Executable targets run without a shell, only after an operator allowed
+  that version on that machine (`ctx runbook allow --db`) and only with
+  `GHOSTTREE_RUNBOOK_EXEC=1`.
+
 #### Coordination
 
 - Coordination rooms with delivery states, direct messages and groups, durable

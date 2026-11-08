@@ -95,6 +95,13 @@ it lives; token patterns are refused (a heuristic, not a guarantee). Never set
 a task to done yourself. Check what the human marked done, then call
 ` + "`human_task_resolve`" + ` with confirm or reopen.
 
+Give a task ` + "`steps`" + ` (numbered, one line each, with a link where a page helps) and an
+` + "`explanation`" + `: the person then gets a checklist, and nothing is generated for the task
+later. Every answer about one object ends with its web link and a short card; hand
+that link to the person instead of describing where to click. ` + "`open_link`" + ` gives link
+and card for REQ-n, TASK-n, PAIN-n, #id, pr:n or preset:name values. Short commands:
+` + "`/ghost open|task|req|preset`" + ` in Claude Code, ` + "`$ghost ...`" + ` in Codex.
+
 The people who read what you write change things but do not dive into every small
 finding of an agent. So give each entry a short ` + "`explanation`" + `: ` + "`context_remember`" + `
 (every entry), ` + "`request_create`" + `, ` + "`pain_record`" + `, ` + "`human_task_create`" + `, and

@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "ideas": [
+    {
+      "title": "Ideen-Werkstatt: aus einer Rohidee wird ein Konzept mit Diskussion, Varianten, Anforderungen und Freigabe, und erst dann werden Issues daraus",
+      "body": "Eine Idee soll nicht in einem Agenten-Chat verschwinden. Anforderungen entstehen besser an der Idee als erst an den Issues.",
+      "raw": {
+        "source": "Sprachnachricht (Sprache-zu-Text), 2026-11-08, wörtlich",
+        "document": "2026-11-08-idee-ideen-werkstatt-und-features-original"
+      },
+      "summary": "Ideen sollen nach dem Ablegen nicht verloren gehen: Die Rohfassung (Sprachnachricht, Meeting-Transkript) bleibt wörtlich erhalten, ein Agent fasst sie kurz zusammen und entwirft ein Konzept mit festen Abschnitten. Menschen und Agenten diskutieren daran, offene Entscheidungen mit Varianten und Pro und Contra werden festgehalten, und erst eine freigegebene Idee wird zu Issues, deren Kriterien aus den Anforderungen des Konzepts kommen. Der umsetzende Agent bekommt Kurzfassung und getroffene Entscheidungen im Briefing, seine Rückfragen landen an der Idee.",
+      "concept": {
+        "about": "Eine Idee, die nur in einem Agenten-Chat steht, ist danach weg: der nächste Agent hat die erste Nachricht nicht mehr, macht Dinge anders oder fragt nach, obwohl es entschieden war. Anforderungen entstehen außerdem besser an der Idee als erst an den Issues.",
+        "what": "Die Idee speichert Rohfassung und Kurzfassung mit Fassungen, hat ein Konzept mit festen Abschnitten, eine Diskussion, offene Entscheidungen mit Varianten und Bildern, Stimmen je Person und einen Ablauf von der Rohidee bis zur umgesetzten Idee. Aus der freigegebenen Idee entstehen Issues und ein Arbeitspaket.",
+        "how": "Eigene Tabellen für Texte mit Fassungen, offene Entscheidungen, Varianten, Stimmen und Anhänge; die Diskussion sind die vorhandenen Threads, verknüpft mit der Idee. Freigeben und menschliche Entscheidungen sind Schritte eines Menschen in der Weboberfläche, ein Token gilt als Agent. Das Briefing eines Issues aus einer Idee trägt Kurzfassung, Entscheidungen und offene Fragen.",
+        "not": "Keine Abstimmung mit Gewichtung, keine automatische Meeting-Anbindung (der Import kommt als Datei oder Text), kein Zwang: eine Idee bleibt eine Zeile, wenn sie eine bleiben soll.",
+        "questions": "Wie genau Features aus umgesetzten Ideen entstehen, klärt REQ-612.",
+        "requirements": [
+          "Eine Idee speichert die Rohfassung unverändert und eine Kurzfassung, beides mit Fassungen",
+          "Das Konzept hat feste Abschnitte (Worum, Was, Wie, Was nicht, Offene Fragen, Anforderungen) und ist versioniert",
+          "An einer Idee gibt es eine Diskussion mit Antworten von Menschen und Agenten",
+          "Offene Entscheidungen mit Varianten, Pro und Contra, Stimmen je Person und vier Arten, sie zu schließen",
+          "Zustände Rohidee, Konzept, in Diskussion, freigegeben, in Umsetzung, umgesetzt oder verworfen; freigeben nur ein Mensch als Owner oder Maintainer",
+          "Aus einer freigegebenen Idee entstehen Issues mit Kriterien aus den Anforderungen und ein Arbeitspaket",
+          "Der Agent am Issue bekommt Kurzfassung, Entscheidungen und offene Fragen im Briefing",
+          "Eine Idee lässt sich immer mit einer Zeile ablegen, ohne Rückfrage und ohne Pflichtfelder",
+          "Bilder (PNG, JPEG, WebP) lassen sich an Idee, Antwort und Variante hängen, geprüft und mit den Rechten der Idee"
+        ]
+      },
+      "decisions": [
+        {
+          "question": "Wo liegen die Bild-Anhänge",
+          "detail": "Screenshots, Mocks und Skizzen an Ideen, Antworten und Varianten, bis 5 MB je Bild.",
+          "way": "agent",
+          "variants": [
+            { "title": "Als Blob in der Datenbank", "text": "Eine Tabelle attachments, geprüft beim Anlegen.", "pro": "Ein Backup enthält alles; die Rechte sind die der Idee.", "contra": "Die Datenbank wird größer." },
+            { "title": "Als Datei im Datenverzeichnis", "text": "Dateien neben der Datenbank, Pfad in der Tabelle.", "pro": "Die Datenbank bleibt klein.", "contra": "Ein zweites Backup, eine zweite Rechteprüfung." }
+          ]
+        },
+        {
+          "question": "Dürfen Agenten eine Idee freigeben oder menschliche Entscheidungen treffen",
+          "detail": "Freigeben heißt: so wollen wir es. Ein Token liegt in der Konfiguration jedes Rechners, auf dem ein Agent läuft.",
+          "aspects": ["security", "product"],
+          "variants": [
+            { "title": "Nur Menschen in der Websitzung", "pro": "Ein Agent kann sich nicht selbst beauftragen.", "contra": "Der Ablauf braucht die Oberfläche." },
+            { "title": "Auch Agenten mit eigener Session", "pro": "Es geht ohne Oberfläche.", "contra": "Die Angabe der Session ist keine Sicherheitsgrenze." }
+          ]
+        }
+      ]
+    }
+  ]
+}

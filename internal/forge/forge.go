@@ -43,6 +43,12 @@ type InstallProver interface {
 	ProveInstallation(ctx context.Context, code, redirectURI string, installationID int64) ([]Account, error)
 }
 
+// Installer nennt die Adresse, unter der die App für eine Organisation
+// installiert wird (GitHub-App).
+type Installer interface {
+	InstallURL(state string) string
+}
+
 // RepoLister liest die Repo-Liste einer Installation neu, ohne neuen Nachweis
 // des Nutzers (GitHub-App).
 type RepoLister interface {

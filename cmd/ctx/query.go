@@ -130,7 +130,7 @@ func cmdSearch(args []string, stdout io.Writer) int {
 			return writeRequestCLIResult(stdout, jsonMode, res, nil, err)
 		}
 		fmt.Fprintf(stdout, "search %s: %s\n", res.Preset.Name, strings.Join(res.Queries, " | "))
-		fmt.Fprint(stdout, mcpserver.RenderQualified(res.Result))
+		fmt.Fprint(stdout, mcpserver.RenderQualifiedLinked(res.Result, cliBuilder(cfg, target)))
 		return 0
 	}
 	line := strings.TrimSpace(strings.Join(positional, " "))
@@ -151,7 +151,7 @@ func cmdSearch(args []string, stdout io.Writer) int {
 	if res.Query != "" {
 		fmt.Fprintf(stdout, "query: %s\n", res.Query)
 	}
-	fmt.Fprint(stdout, mcpserver.RenderQualified(res))
+	fmt.Fprint(stdout, mcpserver.RenderQualifiedLinked(res, cliBuilder(cfg, target)))
 	return 0
 }
 
@@ -164,6 +164,9 @@ const ideaUsage = `usage: ctx idea <command>
   link <n> --request REQ-n                             link a request that came out of the idea
   dismiss <n> --reason R
   reopen <n>
+
+Worked-out ideas (raw text, summary, concept, discussion, decisions, images, issues; see also ctx decision):
+  show <n> prints all of it` + ideaWorkshopUsage + `
 
 All commands take --json.`
 
@@ -199,19 +202,26 @@ func cmdIdea(args []string, stdout io.Writer) int {
 	switch sub {
 	case "add", "list", "show", "promote", "link", "dismiss", "reopen":
 	default:
-		return usageErr()
+		if !ideaWorkshopSubs[sub] {
+			return usageErr()
+		}
 	}
 	cfg, err := config.Load()
 	if err != nil {
 		return writeRequestCLIError(stdout, jsonMode, 1, err)
 	}
 	c := client.New(cfg)
+	if code, handled := cmdIdeaWorkshop(sub, rest, stdout, jsonMode, cfg, c); handled {
+		return code
+	}
 	result := func(i idea.Idea, err error) int {
+		card := cliBuilder(cfg, i.Project).IdeaCard(i)
 		if err == nil && !jsonMode {
 			ideaLines(stdout, i)
+			cliCard(stdout, card)
 			return 0
 		}
-		return writeRequestCLIResult(stdout, jsonMode, i, nil, err)
+		return writeRequestCLIResultCard(stdout, jsonMode, i, &card, err)
 	}
 	fs := flag.NewFlagSet("idea "+sub, flag.ContinueOnError)
 	fs.SetOutput(stdout)
@@ -271,7 +281,17 @@ func cmdIdea(args []string, stdout io.Writer) int {
 	}
 	switch sub {
 	case "show":
-		return result(c.GetIdea(id))
+		if jsonMode {
+			return result(c.GetIdea(id))
+		}
+		ws, err := c.IdeaWorkshop(id)
+		if err != nil {
+			return result(idea.Idea{}, err)
+		}
+		ideaLines(stdout, ws.Idea)
+		workshopLines(stdout, ws)
+		cliCard(stdout, cliBuilder(cfg, ws.Idea.Project).IdeaCard(ws.Idea))
+		return 0
 	case "dismiss":
 		return result(c.SetIdeaState(id, idea.Dismissed, *reason))
 	case "reopen":
@@ -290,6 +310,7 @@ func cmdIdea(args []string, stdout io.Writer) int {
 		if err == nil && !jsonMode {
 			fmt.Fprintf(stdout, "created %s\n", detail.Request.HumanID())
 			ideaLines(stdout, linked)
+			cliCard(stdout, cliBuilder(cfg, linked.Project).IdeaCard(linked))
 			return 0
 		}
 		return writeRequestCLIResult(stdout, jsonMode, map[string]any{"request": detail.Request, "idea": linked}, nil, err)

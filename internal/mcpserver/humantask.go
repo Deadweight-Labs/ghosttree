@@ -11,17 +11,24 @@ import (
 )
 
 type HumanTaskCreateInput struct {
-	Project     string `json:"project,omitempty" jsonschema:"the project when it is not the session's own: a remote like github.com/owner/repo or a short name that is unique among the projects you can write to"`
-	Kind        string `json:"kind" jsonschema:"secret, file, input or action"`
-	Title       string `json:"title" jsonschema:"what the human has to do, in a few words"`
-	Description string `json:"description,omitempty" jsonschema:"why it is needed and anything the human has to know"`
-	Location    string `json:"location,omitempty" jsonschema:"where it should end up: a path, a vault entry, an env file. Required for secret and file. Never the value itself"`
-	CheckHint   string `json:"check_hint,omitempty" jsonschema:"how you will check it is done, for example that the file exists or the entry is in the vault"`
-	RequestID   int64  `json:"request_id,omitempty" jsonschema:"the request it hangs on; omit to use the request this session works on"`
-	WorkID      int64  `json:"work_id,omitempty" jsonschema:"the work from request_start_work, so the handoff travels with the task"`
-	Assignee    string `json:"assignee,omitempty" jsonschema:"the name of a project member; omit it and the task is for the human this session belongs to"`
-	Everyone    bool   `json:"everyone,omitempty" jsonschema:"set it only when anybody in the project may do the task (not the person you work for); not together with assignee"`
-	Explanation string `json:"explanation,omitempty" jsonschema:"optional \"Kurz erklärt\" for the humans who will read this: two to four plain sentences, in the language the people of the project use. Say what it is about in everyday words (the mechanism, not the jargon), why it matters (who it affects, when), what has to be done or decided, and your recommendation. No markdown, no links, never a secret. You know the context the server does not; without it the server generates one later from the text alone"`
+	Project     string               `json:"project,omitempty" jsonschema:"the project when it is not the session's own: a remote like github.com/owner/repo or a short name that is unique among the projects you can write to"`
+	Kind        string               `json:"kind" jsonschema:"secret, file, input or action"`
+	Title       string               `json:"title" jsonschema:"what the human has to do, in a few words"`
+	Description string               `json:"description,omitempty" jsonschema:"why it is needed and anything the human has to know"`
+	Location    string               `json:"location,omitempty" jsonschema:"where it should end up: a path, a vault entry, an env file. Required for secret and file. Never the value itself"`
+	CheckHint   string               `json:"check_hint,omitempty" jsonschema:"how you will check it is done, for example that the file exists or the entry is in the vault"`
+	RequestID   int64                `json:"request_id,omitempty" jsonschema:"the request it hangs on; omit to use the request this session works on"`
+	WorkID      int64                `json:"work_id,omitempty" jsonschema:"the work from request_start_work, so the handoff travels with the task"`
+	Assignee    string               `json:"assignee,omitempty" jsonschema:"the name of a project member; omit it and the task is for the human this session belongs to"`
+	Everyone    bool                 `json:"everyone,omitempty" jsonschema:"set it only when anybody in the project may do the task (not the person you work for); not together with assignee"`
+	Steps       []HumanTaskStepInput `json:"steps,omitempty" jsonschema:"the walk-through for the human: up to 12 numbered steps in the order they are done, each one line of plain text (no line breaks, no control or invisible characters) with an optional http(s) link, for example the settings page to open. The web interface shows them as a checklist. Never a secret or a login link"`
+	Explanation string               `json:"explanation,omitempty" jsonschema:"optional \"Kurz erklärt\" for the humans who will read this: two to four plain sentences, in the language the people of the project use. Say what it is about in everyday words (the mechanism, not the jargon), why it matters (who it affects, when), what has to be done or decided, and your recommendation. No markdown, no links, never a secret. You know the context the server does not; without it the server generates one later from the text alone"`
+}
+
+// HumanTaskStepInput is one step of the walk-through.
+type HumanTaskStepInput struct {
+	Text string `json:"text" jsonschema:"what the human does in this step, one line"`
+	URL  string `json:"url,omitempty" jsonschema:"optional http(s) address that helps with this step"`
 }
 
 type HumanTaskListInput struct {
@@ -49,6 +56,12 @@ type HumanTaskOutput struct {
 	DoneNote  string `json:"done_note,omitempty"`
 	DoneVia   string `json:"done_via,omitempty"`
 	StateNote string `json:"state_note,omitempty"`
+	// Steps echo the walk-through the human sees as a checklist.
+	Steps []humantask.Step `json:"steps,omitempty"`
+	// URL is set on the items of a list only; a single task carries its card.
+	URL string `json:"url,omitempty"`
+	// Hint is a friendly note on a new task that has no steps.
+	Hint string `json:"hint,omitempty"`
 }
 
 type HumanTaskListOutput struct {
@@ -57,7 +70,8 @@ type HumanTaskListOutput struct {
 
 func taskOutput(t humantask.Task) HumanTaskOutput {
 	return HumanTaskOutput{Ref: t.HumanID(), Kind: t.Kind, Title: t.Title, State: t.State, Location: t.Location,
-		CheckHint: t.CheckHint, RequestID: t.RequestID, Assignee: t.Assignee, DoneNote: t.DoneNote, DoneVia: t.DoneVia, StateNote: t.StateNote}
+		CheckHint: t.CheckHint, RequestID: t.RequestID, Assignee: t.Assignee, DoneNote: t.DoneNote, DoneVia: t.DoneVia, StateNote: t.StateNote,
+		Steps: t.Steps}
 }
 
 // currentSessionID finds the session this process belongs to. The session the
@@ -96,6 +110,9 @@ func (s *Server) handleHumanTaskCreate(_ context.Context, _ *mcp.CallToolRequest
 		Project: project, Kind: in.Kind, Title: in.Title, Description: in.Description, Location: in.Location,
 		CheckHint: in.CheckHint, RequestID: in.RequestID, WorkID: in.WorkID, Assignee: in.Assignee, Everyone: in.Everyone, Explanation: in.Explanation,
 	}
+	for _, st := range in.Steps {
+		create.Steps = append(create.Steps, humantask.Step{Text: st.Text, URL: st.URL})
+	}
 	if in.RequestID == 0 && in.WorkID == 0 {
 		create.SessionID = s.currentSessionID()
 	}
@@ -104,7 +121,10 @@ func (s *Server) handleHumanTaskCreate(_ context.Context, _ *mcp.CallToolRequest
 		return nil, HumanTaskOutput{}, err
 	}
 	out := taskOutput(task)
-	return requestResult(out), out, nil
+	if len(task.Steps) == 0 {
+		out.Hint = "No steps given: the human sees only the title and text. Next time add steps (numbered, one line each, with a link where one helps) so the task reads as a checklist."
+	}
+	return s.withCard(requestResult(out), s.builder().WithProject(task.Project).TaskCard(task)), out, nil
 }
 
 func (s *Server) handleHumanTaskList(_ context.Context, _ *mcp.CallToolRequest, in HumanTaskListInput) (*mcp.CallToolResult, HumanTaskListOutput, error) {
@@ -124,7 +144,9 @@ func (s *Server) handleHumanTaskList(_ context.Context, _ *mcp.CallToolRequest, 
 	}
 	out := HumanTaskListOutput{Tasks: []HumanTaskOutput{}}
 	for _, t := range list {
-		out.Tasks = append(out.Tasks, taskOutput(t))
+		o := taskOutput(t)
+		o.URL = s.builder().Task(t.ID)
+		out.Tasks = append(out.Tasks, o)
 	}
 	return requestResult(out), out, nil
 }
@@ -147,13 +169,13 @@ func (s *Server) handleHumanTaskResolve(_ context.Context, _ *mcp.CallToolReques
 		return nil, HumanTaskOutput{}, err
 	}
 	out := taskOutput(task)
-	return requestResult(out), out, nil
+	return s.withCard(requestResult(out), s.builder().WithProject(task.Project).TaskCard(task)), out, nil
 }
 
 func (s *Server) registerHumanTaskTools(srv *mcp.Server) {
 	closed := false
 	additive := false
-	mcp.AddTool(srv, &mcp.Tool{Name: "human_task_create", Description: "Ask the human for something only they can provide (a key, a file, a decision, an action) instead of saying it in chat, so it survives the session. Give where it should end up and how you will check it. Never write a secret or file contents into any text or location, only where it lives; text that looks like a token is rejected (a heuristic, not a guarantee: the duty stays with you). It hangs on a request: the one this session works on, or request_id. You never mark it done yourself. Add explanation, so the person understands in a few plain sentences why you ask and what you recommend." + targetHint, Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleHumanTaskCreate)
+	mcp.AddTool(srv, &mcp.Tool{Name: "human_task_create", Description: "Ask the human for something only they can provide (a key, a file, a decision, an action) instead of saying it in chat, so it survives the session. Give where it should end up and how you will check it. Never write a secret or file contents into any text or location, only where it lives; text that looks like a token is rejected (a heuristic, not a guarantee: the duty stays with you). It hangs on a request: the one this session works on, or request_id. You never mark it done yourself. Add explanation, so the person understands in a few plain sentences why you ask and what you recommend, and steps: the walk-through as numbered one-line steps with a link where one helps (a settings page, a file). The reply carries the task card with its web link; pass that link to the person." + targetHint, Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleHumanTaskCreate)
 	mcp.AddTool(srv, &mcp.Tool{Name: "human_task_list", Description: "List human tasks of the project: what is still open and what the human marked done and awaits your check.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closed}}, s.handleHumanTaskList)
 	mcp.AddTool(srv, &mcp.Tool{Name: "human_task_resolve", Description: "After the human marked a task done: check it against its check hint, then confirm; or reopen it with a reason when it is not what was asked; or drop it when it is no longer needed. Done is the human's claim, not proof.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleHumanTaskResolve)
 }

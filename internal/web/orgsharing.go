@@ -119,8 +119,16 @@ type sourceRow struct {
 // sourcePick sind die GitHub-Organisationen, in denen der Mensch Admin ist und
 // die er jetzt verbinden kann.
 type sourcePick struct {
-	Token    string
+	Token string
+	// Accounts sind alle nachgewiesenen Organisationen. Ist eine davon schon als
+	// Quelle verbunden, steht sie auch in Adopt: dann hängt "Hinzufügen" nur die
+	// nachgewiesene Installation an die bestehende Quelle ("Installation
+	// übernehmen") und lässt Präfix und Sichtbarkeit unberührt.
 	Accounts []string
+	Adopt    map[string]bool
+	// InstallURL führt zur Installation der App, für Organisationen ohne
+	// Installation. Leer, wenn der Prover keine kennt.
+	InstallURL string
 }
 
 func (a *app) sourceReady() bool { return a.prover != nil && a.prover.Configured() }
@@ -241,6 +249,17 @@ func (a *app) orgSourceAdd(w http.ResponseWriter, r *http.Request) {
 		orgRedirect(w, r, o.Slug, "source_failed")
 		return
 	}
+	for _, src := range a.sourceListFor(me, o.ID) {
+		if src.Login == proven.Login {
+			// Schon verbunden: nur die Installation (und die Repo-Liste) nachtragen.
+			if _, err := a.store.ConnectSourceWithInstallation(me, o.ID, store.SourceGitHub, proven.Login, proven.InstallationID, proven.Repos); err != nil {
+				a.orgFailure(w, r, err)
+				return
+			}
+			orgRedirect(w, r, o.Slug, "source_added")
+			return
+		}
+	}
 	visibility := store.VisibilityPrivate
 	if r.FormValue("visibility") == store.VisibilityShared {
 		visibility = store.VisibilityShared
@@ -343,10 +362,16 @@ func (a *app) fillSources(r *http.Request, v *orgsView, me string) {
 	}
 	if tok := r.URL.Query().Get("pick"); tok != "" && v.Owner {
 		if fl, ok := a.sourceFlows.get(tok, me); ok && fl.org == v.Selected.Slug {
-			pick := &sourcePick{Token: tok, Accounts: []string{}}
+			pick := &sourcePick{Token: tok, Accounts: []string{}, Adopt: map[string]bool{}}
 			for _, acct := range fl.accounts {
-				if !connected[acct.Login] {
-					pick.Accounts = append(pick.Accounts, acct.Login)
+				pick.Accounts = append(pick.Accounts, acct.Login)
+				if connected[acct.Login] {
+					pick.Adopt[acct.Login] = true
+				}
+			}
+			if ins, ok := a.prover.(forge.Installer); ok {
+				if state, err := a.sourceFlows.start(me, v.Selected.Slug); err == nil {
+					pick.InstallURL = ins.InstallURL(state)
 				}
 			}
 			v.Pick = pick

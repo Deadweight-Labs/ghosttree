@@ -42,6 +42,23 @@ type Idea struct {
 	Title   string `json:"title"`
 	Body    string `json:"body,omitempty"`
 	State   string `json:"state"`
+	// Phase ist der Stand der Ausarbeitung (REQ-611): raw, concept, discussion,
+	// approved, building, done oder dismissed. Ohne Ausarbeitung bleibt sie raw.
+	Phase string `json:"phase"`
+	// OpenDecisions zählt die offenen Entscheidungen an der Idee, HasConcept sagt,
+	// ob ein Konzept vorliegt.
+	OpenDecisions int  `json:"open_decisions,omitempty"`
+	HasConcept    bool `json:"has_concept,omitempty"`
+	// Pains sind die Probleme, die diese Idee motiviert haben (Relation „motiviert“
+	// Pain → Idee, REQ-606), soweit der Betrachter sie lesen darf.
+	Pains []PainRef `json:"pains,omitempty"`
+	// UncoveredRequirements zählt die Anforderungen des Konzepts, die noch kein
+	// erfülltes Kriterium haben und nicht erlassen sind. Sie steht nur bei einer
+	// Idee in Umsetzung oder umgesetzt.
+	UncoveredRequirements int `json:"uncovered_requirements,omitempty"`
+	// Hint ist der einmalige, nicht blockierende Vorschlag, die Idee
+	// auszuarbeiten. Er steht nur in der Antwort auf das Anlegen.
+	Hint string `json:"hint,omitempty"`
 	// Reason ist der Grund eines Verwerfens (Pflicht dort).
 	Reason    string `json:"reason,omitempty"`
 	Person    string `json:"person,omitempty"`
@@ -66,6 +83,13 @@ type Label struct {
 	Color string `json:"color"`
 }
 
+// PainRef nennt ein Problem, das eine Idee motiviert hat.
+type PainRef struct {
+	ID    int64  `json:"id"`
+	Title string `json:"title"`
+	State string `json:"state"`
+}
+
 // HumanID ist IDEA-n.
 func (i Idea) HumanID() string { return fmt.Sprintf("IDEA-%d", i.ID) }
 
@@ -84,8 +108,12 @@ type Actor struct {
 	SessionID int64
 	// SessionRef ist die Kennung der Session (Wissen verweist so).
 	SessionRef string
-	GitAnchor  *gitanchor.Anchor
-	Origin     *originctx.Context
+	// Agent sagt, dass ein Agent schreibt (die Anfrage trägt eine eigene Session).
+	// Es ist eine Angabe, keine Sicherheitsgrenze: sie bestimmt, wer eine
+	// Entscheidung als „vom Agenten“ trifft.
+	Agent     bool
+	GitAnchor *gitanchor.Anchor
+	Origin    *originctx.Context
 }
 
 // Maße.

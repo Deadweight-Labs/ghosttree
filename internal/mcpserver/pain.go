@@ -13,11 +13,12 @@ import (
 type PainTargetInput struct {
 	RequestID   int64  `json:"request_id,omitempty" jsonschema:"a request this problem motivates"`
 	KnowledgeID int64  `json:"knowledge_id,omitempty" jsonschema:"a knowledge entry, usually a decision, this problem motivates"`
-	ExternalRef string `json:"external_ref,omitempty" jsonschema:"an issue URL or an idea as free text"`
+	IdeaID      int64  `json:"idea_id,omitempty" jsonschema:"an idea, IDEA-n as a number: the solution idea this problem motivates (record it with idea_record and motivated_by_pain, or link an existing one here)"`
+	ExternalRef string `json:"external_ref,omitempty" jsonschema:"an issue URL as free text"`
 }
 
 func (t PainTargetInput) target() pain.Target {
-	return pain.Target{RequestID: t.RequestID, KnowledgeID: t.KnowledgeID, ExternalRef: t.ExternalRef}
+	return pain.Target{RequestID: t.RequestID, KnowledgeID: t.KnowledgeID, IdeaID: t.IdeaID, ExternalRef: t.ExternalRef}
 }
 
 func targets(in []PainTargetInput) []pain.Target {
@@ -73,7 +74,9 @@ type PainOutput struct {
 	Body      string `json:"body,omitempty"`
 	Remaining string `json:"remaining,omitempty"`
 	// Match is "semantic" for a pain that a search found by its meaning alone.
-	Match   string        `json:"match,omitempty"`
+	Match string `json:"match,omitempty"`
+	// URL is set on the items of a list only; a single pain carries its card.
+	URL     string        `json:"url,omitempty"`
 	Links   []PainLinkOut `json:"links,omitempty"`
 	History []string      `json:"history,omitempty"`
 }
@@ -91,6 +94,8 @@ func painOutput(d pain.Detail, withHistory bool) PainOutput {
 			target = fmt.Sprintf("REQ-%d %s", l.RequestID, l.Title)
 		case "knowledge":
 			target = fmt.Sprintf("#%d %s", l.KnowledgeID, l.Title)
+		case "idea":
+			target = fmt.Sprintf("IDEA-%d %s", l.IdeaID, l.Title)
 		}
 		out.Links = append(out.Links, PainLinkOut{ID: l.ID, Target: target})
 	}
@@ -125,7 +130,7 @@ func (s *Server) handlePainRecord(_ context.Context, _ *mcp.CallToolRequest, in 
 		return nil, PainOutput{}, err
 	}
 	out := painOutput(d, false)
-	return requestResult(out), out, nil
+	return s.withCard(requestResult(out), s.builder().PainCard(d.Pain)), out, nil
 }
 
 func (s *Server) handlePainGet(_ context.Context, _ *mcp.CallToolRequest, in PainGetInput) (*mcp.CallToolResult, PainOutput, error) {
@@ -134,7 +139,7 @@ func (s *Server) handlePainGet(_ context.Context, _ *mcp.CallToolRequest, in Pai
 		return nil, PainOutput{}, err
 	}
 	out := painOutput(d, true)
-	return requestResult(out), out, nil
+	return s.withCard(requestResult(out), s.builder().PainCard(d.Pain)), out, nil
 }
 
 func (s *Server) handlePainSearch(_ context.Context, _ *mcp.CallToolRequest, in PainSearchInput) (*mcp.CallToolResult, PainListOutput, error) {
@@ -147,7 +152,8 @@ func (s *Server) handlePainSearch(_ context.Context, _ *mcp.CallToolRequest, in 
 	}
 	out := PainListOutput{Pains: []PainOutput{}}
 	for _, p := range list {
-		out.Pains = append(out.Pains, PainOutput{Ref: p.HumanID(), Title: p.Title, State: p.State, Remaining: p.Remaining, Match: p.Match})
+		out.Pains = append(out.Pains, PainOutput{Ref: p.HumanID(), Title: p.Title, State: p.State, Remaining: p.Remaining, Match: p.Match,
+			URL: s.builder().WithProject(p.Project).Pain(p.ID)})
 	}
 	return requestResult(out), out, nil
 }
@@ -206,7 +212,7 @@ func (s *Server) handlePainUpdate(_ context.Context, _ *mcp.CallToolRequest, in 
 		}
 	}
 	out := painOutput(d, false)
-	return requestResult(out), out, nil
+	return s.withCard(requestResult(out), s.builder().PainCard(d.Pain)), out, nil
 }
 
 func (s *Server) registerPainTools(srv *mcp.Server) {

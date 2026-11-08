@@ -73,6 +73,21 @@ func DefaultBaseRef(ctx context.Context, cwd string) string {
 	return ""
 }
 
+// IsDefaultBranch sagt, ob branch der Default-Branch des Repos ist (Name aus
+// DefaultBaseRef ohne das Remote davor). Ist der Default nicht zu ermitteln,
+// gilt der Branch als Default: dann schreibt der Aufrufer auf die Projektebene,
+// wie ohne Branch-Achse, statt auf eine Ebene zu raten, die niemand liest.
+func IsDefaultBranch(ctx context.Context, cwd, branch string) bool {
+	base := DefaultBaseRef(ctx, cwd)
+	if base == "" || branch == "" {
+		return true
+	}
+	if i := strings.Index(base, "/"); i >= 0 {
+		base = base[i+1:]
+	}
+	return base == branch
+}
+
 // anchorGit ist gitOut mit Frist. GIT_OPTIONAL_LOCKS=0, damit `status` nicht
 // den Index des Arbeitsverzeichnisses neu schreibt und einem laufenden
 // git-Befehl des Agenten in die Quere kommt.

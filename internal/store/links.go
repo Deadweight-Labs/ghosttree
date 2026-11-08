@@ -35,6 +35,12 @@ func (a *ProjectAccess) resolveLinkTarget(project, kind string, id int64) (strin
 			return "", linkTargetMissing()
 		}
 		return a.st.requestTitle(id), nil
+	case "idea":
+		i, err := a.st.IdeaByID(id)
+		if err != nil || i.Project != project || !a.CanSeeIdea(i) {
+			return "", linkTargetMissing()
+		}
+		return i.Title, nil
 	case "knowledge":
 		k, err := a.st.KnowledgeRef(id)
 		if err != nil || k.Scope.Project != project || a.CheckKnowledge(k, ActRead) != nil {
