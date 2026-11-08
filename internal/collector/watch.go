@@ -75,12 +75,13 @@ func SyncFile(path, harness string, up Uploader, st *State, machine string) erro
 		// Adressen nichts: neu anlegen statt nach /0 zu laden.
 		ref = store.SessionRef{}
 	}
-	if ref.Zero() || fs.MetadataVersion < 1 {
+	if ref.Zero() || fs.MetadataVersion < 1 || lateMetadata(path, harness, fs.MetadataVersion) {
 		if wait := st.backoffLeft(path); wait > 0 {
 			return fmt.Errorf("%w: %s for another %s", errRegistrationPaused, path, wait.Round(time.Second))
 		}
 		var err error
-		ref, err = registerSession(path, harness, up, machine)
+		var complete bool
+		ref, complete, err = registerSession(path, harness, up, machine)
 		if err != nil {
 			if errors.Is(err, errNoSessionRef) {
 				// Der Aufrufer loggt den Fehler; hier nur der Backoff.
@@ -90,7 +91,10 @@ func SyncFile(path, harness string, up Uploader, st *State, machine string) erro
 		}
 		st.backoffClear(path)
 		fs.SessionID, fs.PublicID = ref.ID, ref.PublicID
-		fs.MetadataVersion = 1
+		fs.MetadataVersion = metadataPartial
+		if complete {
+			fs.MetadataVersion = metadataComplete
+		}
 		if err := st.Save(); err != nil {
 			return err
 		}
@@ -293,17 +297,56 @@ func projectOfSession(cwd, project, branch string) (string, string) {
 	return project, branch
 }
 
-func registerSession(path, harness string, up Uploader, machine string) (store.SessionRef, error) {
+// metadataPartial: registriert, aber ohne Arbeitsverzeichnis, also ohne Projekt
+// und Branch. Manche Harnesse (T3) schreiben zuerst Zeilen ohne cwd; wer die
+// Datei in diesem Moment registriert, hätte sonst für immer kein Projekt.
+// metadataComplete: registriert mit Arbeitsverzeichnis.
+const (
+	metadataPartial  = 1
+	metadataComplete = 2
+)
+
+// lateMetadataWindow begrenzt das Nachholen auf Dateien, die gerade wachsen. Eine
+// erneute Registrierung setzt last_seen_at; eine ruhende Session soll dadurch
+// nicht als aktiv erscheinen.
+const lateMetadataWindow = 24 * time.Hour
+
+// lateMetadata sagt, ob eine ohne Arbeitsverzeichnis registrierte Session jetzt
+// eines kennt und neu registriert werden soll. Nur für kürzlich geänderte
+// Dateien; ältere Zustände (Version 1 vor dieser Unterscheidung) fallen darunter.
+func lateMetadata(path, harness string, version int) bool {
+	if version != metadataPartial {
+		return false
+	}
+	fi, err := os.Stat(path)
+	if err != nil || time.Since(fi.ModTime()) > lateMetadataWindow {
+		return false
+	}
 	head, err := firstLines(path, metaScanLines)
 	if err != nil {
-		return store.SessionRef{}, err
+		return false
 	}
-	var externalID, cwd, project, branch string
+	_, cwd, _, _ := sessionMeta(path, harness, head)
+	return cwd != ""
+}
+
+func sessionMeta(path, harness string, head [][]byte) (externalID, cwd, project, branch string) {
 	if harness == "codex" {
-		externalID, cwd, project, branch = CodexSessionMeta(head)
-	} else {
-		externalID, cwd, branch = ClaudeSessionMeta(path, head)
+		return CodexSessionMeta(head)
 	}
+	externalID, cwd, branch = ClaudeSessionMeta(path, head)
+	return externalID, cwd, "", branch
+}
+
+// registerSession meldet die Session an. complete sagt, ob ihr
+// Arbeitsverzeichnis bekannt war (siehe metadataComplete).
+func registerSession(path, harness string, up Uploader, machine string) (ref store.SessionRef, complete bool, err error) {
+	head, err := firstLines(path, metaScanLines)
+	if err != nil {
+		return store.SessionRef{}, false, err
+	}
+	externalID, cwd, project, branch := sessionMeta(path, harness, head)
+	complete = cwd != ""
 	if externalID == "" {
 		externalID = strings.TrimSuffix(filepath.Base(path), ".jsonl")
 	}
@@ -324,13 +367,13 @@ func registerSession(path, harness string, up Uploader, machine string) (store.S
 		if err == nil && ref.Zero() {
 			err = errNoSessionRef
 		}
-		return ref, err
+		return ref, complete, err
 	}
 	id, err := up.UpsertSession(sess)
 	if err == nil && id == 0 {
 		err = errNoSessionRef
 	}
-	return store.SessionRef{ID: id}, err
+	return store.SessionRef{ID: id}, complete, err
 }
 
 // errRegistrationPaused: die Registrierung wartet auf ihren Backoff. Kein Fehler,
