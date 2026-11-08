@@ -97,6 +97,26 @@ func (a *ProjectAccess) requestAttachments(requestID int64) ([]requestdomain.Pai
 	return pains, tasks
 }
 
+// requestIdeasAndLabels lists the ideas a request came out of (as far as the
+// viewer may read them) and its labels.
+func (a *ProjectAccess) requestIdeasAndLabels(requestID int64) ([]requestdomain.IdeaRef, []requestdomain.LabelRef) {
+	var ideas []requestdomain.IdeaRef
+	if rows, err := a.st.ideasOfRequest(requestID); err == nil {
+		for _, i := range rows {
+			if a.CanSeeIdea(i) {
+				ideas = append(ideas, requestdomain.IdeaRef{ID: i.ID, Title: i.Title, State: i.State})
+			}
+		}
+	}
+	var labels []requestdomain.LabelRef
+	if m, err := a.st.LabelsFor("request", []int64{requestID}); err == nil {
+		for _, l := range m[requestID] {
+			labels = append(labels, requestdomain.LabelRef{Name: l.Name, Color: l.Color})
+		}
+	}
+	return ideas, labels
+}
+
 // PainsFor lists the pains that motivate a request or a knowledge entry, for
 // the viewer.
 func (a *ProjectAccess) PainsFor(dstKind string, dstID int64) []pain.Pain {

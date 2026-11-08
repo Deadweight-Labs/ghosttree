@@ -43,6 +43,14 @@ const (
 	// Menschen. Beide haben immer ein Projekt.
 	ResPain Resource = "pain"
 	ResTask Resource = "task"
+	// ResIdea ist ein Wunsch (REQ-606), ResLabel ein Label, ein Thema oder eine
+	// gespeicherte Suche eines Projekts (REQ-600). Beide haben immer ein Projekt.
+	ResIdea  Resource = "idea"
+	ResLabel Resource = "label"
+	// ResRunbook ist ein Ablauf (REQ-604): benannte Anleitung mit Schritten und
+	// optional ausführbaren Zielen. Wie Wissen gilt er für ein Projekt, eine
+	// Maschine oder beides; ohne beides gehört er seinem Autor.
+	ResRunbook Resource = "runbook"
 )
 
 // Action ist, was getan werden soll.
@@ -64,6 +72,9 @@ const (
 	ActShare Action = "share"
 	// ActPost: in den Projektraum schreiben (Nachricht, Antwort, Thread).
 	ActPost Action = "post"
+	// ActApprove: eine Fassung eines Ablaufs für die Ausführung freigeben, oder
+	// einen Vorschlag zu einem Ablauf annehmen. Nur Owner und Lead.
+	ActApprove Action = "approve"
 )
 
 var (
@@ -149,6 +160,27 @@ func matrixAllows(role RoleInfo, res Resource, act Action, obj Object) bool {
 		case ActEdit:
 			return rank >= 3 || (rank == 2 && obj.Own)
 		}
+	case ResIdea:
+		// Wie ein Pain: lesen ab Gast, anlegen und bearbeiten wie dort.
+		switch act {
+		case ActRead:
+			return rank >= 1
+		case ActCreate, ActWork:
+			return rank >= 2
+		case ActEdit:
+			return rank >= 3 || (rank == 2 && obj.Own)
+		}
+	case ResLabel:
+		// Lesen ab Gast, anlegen ab member, ändern und löschen ab lead. Ein Label
+		// zu setzen prüft das Objekt selbst (ActWork auf dem Objekt).
+		switch act {
+		case ActRead:
+			return rank >= 1
+		case ActCreate:
+			return rank >= 2
+		case ActEdit:
+			return rank >= 3
+		}
 	case ResTask:
 		switch act {
 		case ActRead:
@@ -174,6 +206,18 @@ func matrixAllows(role RoleInfo, res Resource, act Action, obj Object) bool {
 			// Der Besitzer der Session; der Projekt-Owner darf eine freigegebene
 			// Session zurücknehmen, eine private nie erreichen.
 			return obj.Own || (rank >= 4 && obj.Shared)
+		}
+	case ResRunbook:
+		switch act {
+		case ActRead, ActCreate:
+			return rank >= 2
+		case ActEdit:
+			// Wie bei Wissen (#1444): wer es besser weiß, schreibt eine neue
+			// Fassung. Ausführbar wird sie dadurch nicht, das tut erst die
+			// Freigabe.
+			return rank >= 2
+		case ActApprove:
+			return rank >= 3
 		}
 	case ResSnapshot:
 		return (act == ActRead || act == ActCreate) && rank >= 2
@@ -478,7 +522,7 @@ func (a *ProjectAccess) Decide(project string, res Resource, act Action, obj Obj
 	// Maschinen-Achse: nur der Besitzer der Maschine, egal welche Rolle. Steht
 	// zugleich ein Projekt am Eintrag, ersetzt der Besitz der Maschine die
 	// Projektrolle nicht: gesehen wird er nur mit Projektrolle UND Maschine.
-	if res == ResKnowledge && obj.Machine != "" {
+	if (res == ResKnowledge || res == ResRunbook) && obj.Machine != "" {
 		owns := a.OwnsMachine(obj.Machine)
 		if !owns && !a.ownNoteOnUnclaimedMachine(obj, act) {
 			return Decision{Hidden: true, Reason: "machine-axis knowledge of another account"}
@@ -514,7 +558,7 @@ func (a *ProjectAccess) Decide(project string, res Resource, act Action, obj Obj
 		// Verified setzt nie der Autor selbst: das Recht gibt es nur in einem
 		// beanspruchten Projekt (can_review, lead, owner) oder dem Admin.
 		hiddenSession := res == ResTranscript && !obj.Own && !obj.Shared && !obj.Guests
-		if act == ActCreate || (obj.Own && act != ActVerify) || (a.IsAdmin() && !hiddenSession) {
+		if act == ActCreate || (obj.Own && act != ActVerify && act != ActApprove) || (a.IsAdmin() && !hiddenSession) {
 			return Decision{Allowed: true, Reason: "unclaimed project"}
 		}
 	}
@@ -537,6 +581,13 @@ func (a *ProjectAccess) Decide(project string, res Resource, act Action, obj Obj
 // Sessions ohne Projekt gehören ihrem Besitzer.
 func (a *ProjectAccess) decideGlobal(res Resource, act Action, obj Object) Decision {
 	switch res {
+	case ResRunbook:
+		// Ein Ablauf ohne Projekt und Maschine gehört allein seinem Autor, auch
+		// für die Freigabe: es gibt niemanden sonst, der ihn lesen dürfte.
+		if act == ActCreate || obj.Own {
+			return Decision{Allowed: true}
+		}
+		return Decision{Hidden: true, Reason: "global runbook of another author"}
 	case ResKnowledge, ResRequest, ResDocument:
 		if act == ActCreate {
 			return Decision{Allowed: true}

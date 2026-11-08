@@ -184,12 +184,60 @@ func relevantContext(stdin io.Reader) string {
 		cwd, _ = os.Getwd()
 	}
 	gitCtx := collector.ResolveGitContext(cwd)
+	// Die Abläufe laufen daneben: ein Stichwort im Prompt ("ausrollen") liefert den
+	// passenden Ablauf, über denselben Weg und dasselbe Budget wie das Wissen.
+	runbooks := make(chan string, 1)
+	go func() {
+		runbooks <- triggeredRunbooks(cfg, gitCtx, in.SessionID, runbookTrigger{prompt: in.Prompt})
+	}()
 	md, err := client.NewWithTimeout(cfg, relevanceTimeout).Relevant(in.Prompt,
 		scope.Axes{Project: gitCtx.Project, Branch: gitCtx.Branch, Lineage: gitCtx.Lineage, Machine: cfg.Machine}, 0, in.SessionID)
+	if err != nil {
+		md = ""
+	}
+	return joinHookContext(md, <-runbooks)
+}
+
+// runbookTrigger ist, woran die Auslöser der Abläufe geprüft werden: ein Prompt,
+// ein Bash-Befehl, berührte Pfade.
+type runbookTrigger struct {
+	prompt  string
+	command string
+	paths   []string
+}
+
+// triggeredRunbooks fragt den Server, welche Abläufe zu Prompt, Befehl oder Pfaden
+// passen (REQ-604). Wie die anderen Hook-Abfragen: kurzer Timeout, Schweigen im
+// Zweifel, nie ein Fehler nach außen. Der Server liefert jeden Ablauf höchstens
+// einmal je Session und höchstens zwei je Aufruf.
+func triggeredRunbooks(cfg config.Config, gitCtx collector.GitContext, session string, t runbookTrigger) string {
+	if t.prompt == "" && t.command == "" && len(t.paths) == 0 {
+		return ""
+	}
+	md, err := client.NewWithTimeout(cfg, relevanceTimeout).TriggeredRunbooks(client.RunbookTrigger{
+		Prompt: t.prompt, Command: t.command, Paths: t.paths, RepoPath: gitCtx.RepoPath,
+		Session: session, Project: gitCtx.Project, Machine: cfg.Machine,
+	})
 	if err != nil {
 		return ""
 	}
 	return md
+}
+
+// toolCommand ist der Befehl eines Bash-Aufrufs (Claude: tool_input.command;
+// Codex liefert ihn auch als bloße Zeichenkette), sonst leer.
+func toolCommand(raw json.RawMessage) string {
+	var obj struct {
+		Command string `json:"command"`
+	}
+	if err := json.Unmarshal(raw, &obj); err == nil {
+		return obj.Command
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	return ""
 }
 
 func bootstrapContext(stdin io.Reader) string {
@@ -261,21 +309,31 @@ func ghostContext(stdin io.Reader) string {
 		cwd, _ = os.Getwd()
 	}
 	gitCtx := collector.ResolveGitContext(cwd)
-	if gitCtx.Project == "" || gitCtx.Root == "" {
-		return ""
+	var targets []string
+	if gitCtx.Project != "" && gitCtx.Root != "" {
+		targets = toolPaths(in.ToolInput, cwd, gitCtx.Root)
 	}
-	targets := toolPaths(in.ToolInput, cwd, gitCtx.Root)
+	// Die Abläufe laufen neben den Beschreibungen: ein passender Befehl (ssh prod)
+	// oder Pfad liefert den Ablauf, auch dort, wo es kein Projekt gibt.
+	command := toolCommand(in.ToolInput)
+	runbooks := make(chan string, 1)
+	go func() {
+		runbooks <- triggeredRunbooks(cfg, gitCtx, in.SessionID, runbookTrigger{command: command, paths: targets})
+	}()
+	return joinHookContext(ghostContextFor(cfg, gitCtx, in.SessionID, in.ToolName, targets), <-runbooks)
+}
+
+func ghostContextFor(cfg config.Config, gitCtx collector.GitContext, sessionID, toolName string, targets []string) string {
 	if len(targets) == 0 {
 		return ""
 	}
-
 	contexts := make([]string, len(targets))
 	var wg sync.WaitGroup
 	for i, target := range targets {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			contexts[i] = ghostContextForPath(cfg, gitCtx, in.SessionID, in.ToolName, target)
+			contexts[i] = ghostContextForPath(cfg, gitCtx, sessionID, toolName, target)
 		}()
 	}
 	wg.Wait()

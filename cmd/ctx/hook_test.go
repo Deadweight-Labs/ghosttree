@@ -32,6 +32,9 @@ func TestUserPromptSubmitHookDeliversRelevantKnowledge(t *testing.T) {
 			w.Write([]byte("[]")) // the coordination look that rides along with the prompt
 			return
 		}
+		if r.URL.Path == "/api/runbooks/triggered" {
+			return // die Abläufe fragen daneben; hier ohne Treffer
+		}
 		if r.URL.Query().Get("q") == "" {
 			t.Error("prompt was not forwarded")
 		}

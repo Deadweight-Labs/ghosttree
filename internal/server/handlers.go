@@ -12,6 +12,10 @@ import (
 
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
 	"github.com/Deadweight-Labs/ghosttree/internal/explain"
+	"github.com/Deadweight-Labs/ghosttree/internal/humantask"
+	"github.com/Deadweight-Labs/ghosttree/internal/idea"
+	"github.com/Deadweight-Labs/ghosttree/internal/pain"
+	"github.com/Deadweight-Labs/ghosttree/internal/query"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -664,6 +668,14 @@ type searchResult struct {
 	Knowledge []store.Knowledge         `json:"knowledge"`
 	Sessions  []store.SessionHit        `json:"sessions"`
 	Requests  []requestdomain.SearchHit `json:"requests"`
+	// Die folgenden kommen nur aus einer Suchzeile mit Qualifiern (REQ-600).
+	Pains    []pain.Pain          `json:"pains,omitempty"`
+	Ideas    []idea.Idea          `json:"ideas,omitempty"`
+	Criteria []store.CriterionHit `json:"criteria,omitempty"`
+	Tasks    []humantask.Task     `json:"tasks,omitempty"`
+	Files    []store.GhostFile    `json:"files,omitempty"`
+	// Query ist die Suchzeile, wie der Server sie gelesen hat.
+	Query string `json:"query,omitempty"`
 }
 
 func (a *api) search(w http.ResponseWriter, r *http.Request) {
@@ -680,6 +692,15 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 	}
 	origin, ok := originFilterFromQuery(w, r)
 	if !ok {
+		return
+	}
+	parsed, err := query.Parse(q, time.Now())
+	if err != nil {
+		writeCoded(w, http.StatusBadRequest, "invalid_query", err.Error())
+		return
+	}
+	if parsed.Qualified() {
+		a.searchQualified(w, r, parsed, kind, filter, limit, anchor, origin)
 		return
 	}
 	pa := a.access(r)
@@ -1260,18 +1281,46 @@ func (a *api) searchGhosts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	readable := func(g store.GhostFile) bool { return pa.CanSeeGhost(g) && pa.CanDeliverGhost(g) }
+	parsed, err := query.Parse(q.Get("q"), time.Now())
+	if err != nil {
+		writeCoded(w, http.StatusBadRequest, "invalid_query", err.Error())
+		return
+	}
+	project := q.Get("project")
+	fetch, keep := a.overfetch(limit), readable
+	if parsed.Qualified() {
+		// Beschreibungen kennen die Qualifier nur zum Teil (Bereich, Zeit, Anker,
+		// Autor); was sie nicht tragen, trifft nie, ein verneinter Qualifier schon.
+		ax := scope.Axes{Project: scope.NormalizeRemote(project)}
+		if parsed, ok = a.resolveQuery(w, r, parsed, &ax, &anchor, &origin); !ok {
+			return
+		}
+		if ax.Project != scope.NormalizeRemote(project) {
+			project = ax.Project
+			if !a.listGateEntries(w, r, project, store.ResGhost) {
+				return
+			}
+		}
+		if !parsed.WantsKind(query.KindFile) {
+			writeJSON(w, 200, []store.GhostFile{})
+			return
+		}
+		fetch = a.overfetch(min(max(limit*10, 100), 500))
+		q0 := parsed
+		keep = func(g store.GhostFile) bool { return readable(g) && q0.Match(ghostFacts(g)) }
+	}
 	// The rule goes into the search: the hybrid search applies it to both rankings
 	// before it fuses them, so a description the reader may not see can neither
 	// appear nor move a visible one.
-	entries, err := a.st.SearchGhostFilesWith(q.Get("q"), store.GhostSearch{
-		Project: q.Get("project"), Limit: a.overfetch(limit), Keep: readable, Prefilter: pa.GhostPrefilter(),
+	entries, err := a.st.SearchGhostFilesWith(parsed.Text, store.GhostSearch{
+		Project: project, Limit: fetch, Keep: readable, Prefilter: pa.GhostPrefilter(),
 		Anchor: anchor, Origin: origin,
 	})
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, 200, filterTo(entries, limit, readable))
+	writeJSON(w, 200, filterTo(entries, limit, keep))
 }
 
 // sessionFilters trennt den Filter für die Datenbank von dem, der auf das

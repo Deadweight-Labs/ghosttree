@@ -60,6 +60,9 @@ var anchoredTables = []string{
 	"ghost_files", "ghost_file_versions",
 	"request_evidence", "request_activity",
 	"pain_events", "coord_messages",
+	// ideas (REQ-606): der Anker und der Kontext des Anlegens stehen an der Idee
+	// selbst, die ihren Zustand später ändert, aber nie neu verankert wird.
+	"ideas",
 }
 
 // ensureGitAnchors legt Tabelle und Spalten additiv an. Wie die anderen

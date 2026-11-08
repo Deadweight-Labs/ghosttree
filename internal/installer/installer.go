@@ -82,6 +82,12 @@ A problem without a solution belongs in ` + "`pain_record`" + `, not in a reques
 (requests need criteria). Never set a pain to resolved just because a request
 is finished: use ` + "`pain_update`" + ` with evidence, and for mitigated with ` + "`remaining`" + `.
 
+A wish you voice in passing, without working it out, belongs in ` + "`idea_record`" + `
+(look in ` + "`idea_search`" + ` first); ` + "`idea_update`" + ` with promote makes a request of it.
+` + "`context_search`" + ` also takes qualifiers (is:open, label:bug, area:internal/store,
+pr:12, branch:...; the tool description lists them), and ` + "`search_preset`" + ` runs saved
+searches such as pr-ergebnis (what was done in a pull request).
+
 What only the human can provide (a key, a file, a decision, a manual step) you
 create with ` + "`human_task_create`" + `, with where it lives and how to check it, instead
 of saying it in chat. Never write a secret or file contents into it, only where
