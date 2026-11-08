@@ -333,12 +333,19 @@ func TestStartEmbeddingTurnsOnSearchAndTheJob(t *testing.T) {
 	cfg := embedSettings{URL: srv.URL, Model: embed.DefaultModel, QueryTimeout: time.Second, Job: embedjob.Config{StartDelay: -1, Pause: time.Millisecond, Idle: time.Millisecond}}
 	ctx, cancel := context.WithCancel(context.Background())
 	wait = startEmbedding(ctx, st, cfg, logger)
-	if !embedtest.Wait(ctx, 5*time.Second, func() bool { return srv.Inputs() >= 1 }) {
+	// Gewartet wird auf den gespeicherten Vektor, nicht nur auf die Anfrage an
+	// den Embedding-Server: unter Last liegt zwischen beidem genug Zeit, dass
+	// ein Abbruch direkt nach der Anfrage den Schreibvorgang verliert.
+	model := store.EmbedModel{Model: embed.DefaultModel, PrefixVersion: embed.PrefixVersion}
+	if !embedtest.Wait(ctx, 30*time.Second, func() bool {
+		s, err := st.KnowledgeEmbeddingStatus(model)
+		return err == nil && s.Current == 1
+	}) {
 		t.Fatal("the job did not embed the entry")
 	}
 	cancel()
 	wait()
-	status, err := st.KnowledgeEmbeddingStatus(store.EmbedModel{Model: embed.DefaultModel, PrefixVersion: embed.PrefixVersion})
+	status, err := st.KnowledgeEmbeddingStatus(model)
 	if err != nil || status.Current != 1 {
 		t.Fatalf("%+v %v", status, err)
 	}
