@@ -1116,6 +1116,10 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := migrateSourceInstallation(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := backfillOrgGuests(db); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -1160,6 +1164,18 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 		return nil, err
 	}
 	if err := EnsureContextSnapshotSchema(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureGitAnchors(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureWorkPackages(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureOriginContexts(db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}

@@ -152,7 +152,7 @@ func requestHitSelect(filter requestdomain.SearchFilter) string {
 		FROM requests r`
 }
 
-func scanRequestHits(rows *sql.Rows) ([]requestdomain.SearchHit, error) {
+func (s *Store) scanRequestHits(rows *sql.Rows) ([]requestdomain.SearchHit, error) {
 	defer rows.Close()
 	var out []requestdomain.SearchHit
 	for rows.Next() {
@@ -163,7 +163,11 @@ func scanRequestHits(rows *sql.Rows) ([]requestdomain.SearchHit, error) {
 		}
 		out = append(out, hit)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	return out, s.attachRequestOrigins(out)
 }
 
 // requestsByList is the list of requests as it has always been answered: ordered
@@ -204,7 +208,7 @@ func (s *Store) requestsByList(filter requestdomain.SearchFilter) (requestdomain
 	if err != nil {
 		return requestdomain.SearchPage{}, err
 	}
-	results, err := scanRequestHits(rows)
+	results, err := s.scanRequestHits(rows)
 	if err != nil {
 		return requestdomain.SearchPage{}, err
 	}
@@ -324,7 +328,7 @@ func (s *Store) hybridRequests(filter requestdomain.SearchFilter, mode SearchMod
 	if err != nil {
 		return requestdomain.SearchPage{}, err
 	}
-	loaded, err := scanRequestHits(rows)
+	loaded, err := s.scanRequestHits(rows)
 	if err != nil {
 		return requestdomain.SearchPage{}, err
 	}

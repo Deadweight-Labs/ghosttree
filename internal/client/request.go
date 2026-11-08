@@ -42,6 +42,7 @@ func (c *Client) SearchRequests(filter requestdomain.SearchFilter) (requestdomai
 	if filter.FullDescription {
 		q.Set("full", "1")
 	}
+	AnchorFilter{Commit: filter.Commit, PR: filter.PR, Origin: OriginFilter(filter.Origin)}.apply(q)
 	var out requestdomain.SearchPage
 	err := c.do("GET", "/api/requests/search", q, nil, &out)
 	return out, err
@@ -53,6 +54,8 @@ func (c *Client) GetRequest(id int64) (requestdomain.Detail, error) {
 	return out, err
 }
 
+// Der Git-Anker eines Nachweises geht nie im Body mit, sondern im Header
+// (SetAnchorSource): der Body ist nicht die Quelle.
 func (c *Client) CompleteRequest(id int64, evidence requestdomain.Evidence) error {
 	body := map[string]string{"evidence_kind": evidence.Kind, "evidence_ref": evidence.Ref}
 	return c.do("POST", "/api/requests/"+strconv.FormatInt(id, 10)+"/complete", nil, body, nil)

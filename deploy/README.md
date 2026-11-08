@@ -39,6 +39,60 @@ GHOSTTREE_GITHUB_CLIENT_SECRET_FILE=/etc/ghosttree/github-client-secret
 ```
 
 `GHOSTTREE_GITHUB_CLIENT_SECRET` holds the secret directly instead of a file.
+The OAuth app only sees public repositories, so it is the fallback for servers
+without a GitHub App.
+
+### GitHub App (all repositories, including private ones)
+
+A GitHub App installed in the organization proves that the connecting user is an
+organization admin and lists every repository the installation covers, private
+ones too, with read access to metadata only. When the App is configured it takes
+precedence over the OAuth app above; without it the OAuth app keeps working.
+
+Register the App (organization settings, Developer settings, GitHub Apps) for
+`https://ghosttree.deadweightlabs.com`:
+
+| Setting | Value |
+|---|---|
+| Callback URL (user authorization) | `https://ghosttree.deadweightlabs.com/ui/orgs/source/callback` |
+| Setup URL | `https://ghosttree.deadweightlabs.com/ui/orgs/source/callback` |
+| Request user authorization (OAuth) during installation | on (the callback needs the code to prove the user) |
+| Expire user authorization tokens | on or off, the token is used once and never stored |
+| Webhook URL | `https://ghosttree.deadweightlabs.com/api/github/webhook` |
+| Webhook secret | a long random string, also written to the secret file below |
+| Repository permissions | Metadata: read (the only permission; mandatory for every App) |
+| Organization permissions | none |
+| Subscribe to events | Repository, Installation repositories |
+| Where can this App be installed | Only on this account |
+
+No code, no write permission. The admin check uses the user's own token against
+`GET /user/memberships/orgs/{org}`; the installation account must be the
+organization and the user its admin, otherwise the connection is refused.
+`Pull requests: read` is not part of this setup: the PR lookup prepared for
+branch and PR anchors (`GitHubApp.PullRequests`) needs it and reports a missing
+permission as an error until it is added.
+
+Give the server the App's credentials. The private key (PEM, as downloaded from
+GitHub) and the webhook secret are read from files only and never logged or sent
+to the browser:
+
+```text
+GHOSTTREE_GITHUB_APP_ID=<numeric App ID>
+GHOSTTREE_GITHUB_APP_SLUG=<name in the App URL, github.com/apps/<slug>>
+GHOSTTREE_GITHUB_APP_CLIENT_ID=<client id of the App>
+GHOSTTREE_GITHUB_APP_CLIENT_SECRET_FILE=/etc/ghosttree/github-app-client-secret
+GHOSTTREE_GITHUB_APP_PRIVATE_KEY_FILE=/etc/ghosttree/github-app.pem
+GHOSTTREE_GITHUB_APP_WEBHOOK_SECRET_FILE=/etc/ghosttree/github-app-webhook-secret
+```
+
+`GHOSTTREE_GITHUB_APP_CLIENT_SECRET` holds the client secret directly instead of
+a file. Keep the files readable by the service user only (mode 0600). The webhook
+route `/api/github/webhook` exists only when the webhook secret file is set; it
+answers 401 to every request without a valid `X-Hub-Signature-256`. A new
+repository of a connected organization becomes a project with the visibility of
+the claimed prefix; removed or deleted repositories only leave the source list.
+"Create projects" on the Organization page re-reads the list from GitHub first,
+so a missed webhook delivery does no harm.
 
 Use the server's address on the trusted private network, such as NetBird, in
 the listen setting, client configuration and monitoring target. After changing

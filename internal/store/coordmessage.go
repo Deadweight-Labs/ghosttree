@@ -7,6 +7,9 @@ import (
 	"errors"
 	"strings"
 	"time"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
+	"github.com/Deadweight-Labs/ghosttree/internal/originctx"
 )
 
 // Zielarten einer Nachricht. Dieselbe Primitive adressiert einen Raum und
@@ -61,6 +64,13 @@ type CoordMessage struct {
 	CreatedAt         string     `json:"created_at,omitempty"`
 	Mentions          []string   `json:"mentions,omitempty"`
 	Refs              []CoordRef `json:"refs,omitempty"`
+	// GitAnchor ist der Git-Stand des sendenden Clients (REQ-597). Der Server
+	// setzt ihn aus dem Header, nie aus dem Body; ohne Header bleibt er leer.
+	GitAnchor *gitanchor.Anchor `json:"git_anchor,omitempty"`
+	// OriginContext ist der Entstehungskontext der Nachricht (REQ-600), vom
+	// Server aus der Session des Clients gesetzt, nie aus dem Body. Er wird nur
+	// gespeichert, in Raum-Antworten nicht ausgeliefert.
+	OriginContext *originctx.Context `json:"-"`
 	// Explanation is the agent's "Kurz erklärt" text for a question to people.
 	// Write-only: the server stores it beside the message.
 	Explanation string `json:"explanation,omitempty"`
@@ -181,18 +191,22 @@ func appendCoordMessageTx(tx *sql.Tx, m CoordMessage) (int64, error) {
 		return 0, err
 	}
 
+	anchorID, originID, err := insertWriteMetaTx(tx, m.GitAnchor, m.OriginContext)
+	if err != nil {
+		return 0, err
+	}
 	res, err := tx.Exec(`INSERT INTO coord_messages(
 			destination_kind,destination_id,sequence,sender_external_id,
 			author_principal_id,author_kind,parent_external_id,client_id,kind,
 			intent,priority,body,reply_to,origin_event_id,causation_id,
-			expires_at,observed_at_client,created_at,is_broadcast)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			expires_at,observed_at_client,created_at,is_broadcast,anchor_id,origin_id)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		m.DestinationKind, m.DestinationID, seq, m.SenderExternalID,
 		m.AuthorPrincipalID, m.AuthorKind, nullableText(m.ParentExternalID),
 		m.ClientID, m.Kind, m.Intent, m.Priority, m.Body,
 		nullableCoordID(m.ReplyTo), nullableText(m.OriginEventID),
 		nullableText(m.CausationID), nullableText(m.ExpiresAt),
-		nullableText(m.ObservedAtClient), m.CreatedAt, m.IsBroadcast)
+		nullableText(m.ObservedAtClient), m.CreatedAt, m.IsBroadcast, anchorID, originID)
 	if err != nil {
 		return 0, err
 	}
@@ -334,7 +348,23 @@ func (s *Store) CoordMessagesSince(destinationKind, destinationID string, afterI
 		m.Expired = expiredAt(m.ExpiresAt, nowTS)
 		out = append(out, m)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(out) > 0 {
+		ids := make([]int64, len(out))
+		for i, m := range out {
+			ids[i] = m.ID
+		}
+		anchors, err := s.anchorsFor("coord_messages", ids)
+		if err != nil {
+			return nil, err
+		}
+		for i := range out {
+			out[i].GitAnchor = anchors[out[i].ID]
+		}
+	}
+	return out, nil
 }
 
 // expiredAt vergleicht zwei RFC-3339-Zeitpunkte. Ein unlesbarer Zeitpunkt

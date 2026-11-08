@@ -70,7 +70,7 @@ func TestGeneralSearchLabelsRequestDomain(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := text(t, res)
-	if !strings.Contains(got, "[request|status=open|type=feature|source=ledger]") {
+	if !strings.Contains(got, "[request|status=open|type=feature|source=ledger") {
 		t.Fatalf("request provenance missing: %s", got)
 	}
 }

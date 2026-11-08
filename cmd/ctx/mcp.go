@@ -14,6 +14,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/collector"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
+	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
 	"github.com/Deadweight-Labs/ghosttree/internal/mcpserver"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/snapshot"
@@ -185,7 +186,38 @@ func cmdMCP(args []string, stdout io.Writer) int {
 	}
 	hctx := currentGitContext(cfg.Machine)
 	c := client.New(cfg)
+	// Jeder Schreibzugriff dieser Sitzung trägt den Git-Stand des
+	// Arbeitsverzeichnisses mit (REQ-597). Das Verzeichnis wird je Aufruf
+	// gelesen, weil der Agent HEAD zwischen zwei Schreibzugriffen verschiebt;
+	// ohne Git ist der Anker leer und der Schreibzugriff läuft ohne.
+	c.SetAnchorSource(func() gitanchor.Anchor {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return gitanchor.Anchor{}
+		}
+		return collector.ResolveAnchor(cwd)
+	})
+	// Dieselbe Sitzung geht auf den verankerten Routen als Kennung mit; Pfade und
+	// Bereiche ermittelt der Server (REQ-600).
+	c.SetOriginSession(currentSessionRef())
 	srv := mcpserver.NewServer(c, hctx.axes, hctx.activation)
+	srv.SetLineageResolver(func(branch string) []string {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return nil
+		}
+		return collector.BranchLineageOf(cwd, branch)
+	})
+	// Branch und Kette werden je Aufruf neu gelesen: der Agent legt mitten in
+	// der Sitzung einen Branch an (REQ-601, PAIN-57).
+	srv.SetLive(func() mcpserver.Live {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return mcpserver.Live{}
+		}
+		g := collector.ResolveGitContext(cwd)
+		return mcpserver.Live{Branch: g.Branch, Lineage: g.Lineage, CWD: cwd}
+	})
 	srv.SetSessionRef(currentSessionRef())
 	srv.SetCoordRef(coordAgentOverride())
 	srv.SetAgentRole(agentRoleFromEnv())

@@ -47,6 +47,8 @@ func run(args []string, stdout io.Writer) int {
 		return cmdKnowledge(rest, stdout)
 	case "request":
 		return cmdRequest(rest, stdout)
+	case "package":
+		return cmdPackage(rest, stdout)
 	case "ghost":
 		return cmdGhost(rest, stdout)
 	case "doc":
@@ -71,6 +73,8 @@ func run(args []string, stdout io.Writer) int {
 		return cmdCost(rest, stdout)
 	case "upgrade-schema":
 		return cmdUpgradeSchema(rest, stdout)
+	case "origin":
+		return cmdOrigin(rest, stdout)
 	case "canonicalize-scopes":
 		return cmdCanonicalizeScopes(rest, stdout)
 	case "unbind-branch":
@@ -144,6 +148,7 @@ const usage = `usage: ctx <command>
   review   approve or reject distilled knowledge
   regression  say which test guards a fixed defect, and list the fixes none does
   request  search and manage the work ledger (create, move, ...)
+  package  work packages: the requests that belong to a branch or pull request (create, add, remove, show, import-relations)
   pain     record a problem without a solution, follow it to mitigated or resolved
   task     ask the human for a key, file, decision or action, and check it afterwards
   knowledge  add, show, supersede, retire or move a knowledge entry
@@ -161,6 +166,7 @@ const usage = `usage: ctx <command>
   usage    list knowledge nobody has used within a window
   cost     report LLM spend and forecast the remaining backlog
   upgrade-schema  one-off knowledge table rebuild for trust tiers
+  origin               backfill the origin context (time, areas) of older entries
   canonicalize-scopes  one-off project name backfill and duplicate merge
   unbind-branch  lift knowledge filed against a branch to its project
   strip-images  replace stored base64 images and files with placeholders (--dry-run, runs beside the server)

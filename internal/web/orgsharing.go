@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -187,7 +188,20 @@ func (a *app) orgSourceCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 40*time.Second)
 	defer cancel()
-	accounts, err := a.prover.Prove(ctx, r.URL.Query().Get("code"), a.callbackURL(r))
+	var accounts []forge.Account
+	var err error
+	// Die Installation aus der Adresse kommt vom Browser und gilt nur als
+	// Hinweis: die GitHub-App prüft sie gegen die Installationen des Nutzers.
+	if ip, ok := a.prover.(forge.InstallProver); ok && r.URL.Query().Get("installation_id") != "" {
+		id, perr := strconv.ParseInt(r.URL.Query().Get("installation_id"), 10, 64)
+		if perr != nil || id <= 0 {
+			orgRedirect(w, r, fl.org, "source_failed")
+			return
+		}
+		accounts, err = ip.ProveInstallation(ctx, r.URL.Query().Get("code"), a.callbackURL(r), id)
+	} else {
+		accounts, err = a.prover.Prove(ctx, r.URL.Query().Get("code"), a.callbackURL(r))
+	}
 	if err != nil {
 		orgRedirect(w, r, fl.org, "source_failed")
 		return
@@ -231,7 +245,7 @@ func (a *app) orgSourceAdd(w http.ResponseWriter, r *http.Request) {
 	if r.FormValue("visibility") == store.VisibilityShared {
 		visibility = store.VisibilityShared
 	}
-	if _, err := a.store.ConnectSource(me, o.ID, store.SourceGitHub, proven.Login, proven.Repos); err != nil {
+	if _, err := a.store.ConnectSourceWithInstallation(me, o.ID, store.SourceGitHub, proven.Login, proven.InstallationID, proven.Repos); err != nil {
 		a.orgFailure(w, r, err)
 		return
 	}
@@ -257,19 +271,37 @@ func (a *app) orgSourceRemove(w http.ResponseWriter, r *http.Request) {
 func (a *app) orgSourceImport(w http.ResponseWriter, r *http.Request) {
 	o, err := a.formOrg(r)
 	if err == nil {
-		var id int64
+		var src store.Source
 		for _, s := range a.sourceListFor(browserPrincipal(r).ID, o.ID) {
 			if s.Login == strings.ToLower(strings.TrimSpace(r.FormValue("login"))) {
-				id = s.ID
+				src = s
 			}
 		}
-		_, err = a.store.ImportSourceRepos(browserPrincipal(r).ID, o.ID, id)
+		a.refreshSourceRepos(r.Context(), browserPrincipal(r).ID, o.ID, src)
+		_, err = a.store.ImportSourceRepos(browserPrincipal(r).ID, o.ID, src.ID)
 	}
 	if err != nil {
 		a.orgFailure(w, r, err)
 		return
 	}
 	orgRedirect(w, r, o.Slug, "imported")
+}
+
+// refreshSourceRepos liest die Repo-Liste einer Quelle über ihre Installation neu,
+// damit "Projekte anlegen" auch Repos erfasst, deren Webhook ausblieb. Scheitert
+// das, gilt die bisherige Liste.
+func (a *app) refreshSourceRepos(ctx context.Context, me string, orgID int64, src store.Source) {
+	lister, ok := a.prover.(forge.RepoLister)
+	if !ok || src.InstallationID <= 0 || !a.sourceReady() {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, 40*time.Second)
+	defer cancel()
+	repos, err := lister.InstallationRepos(ctx, src.InstallationID)
+	if err != nil {
+		return
+	}
+	_, _ = a.store.ConnectSourceWithInstallation(me, orgID, src.Kind, src.Login, 0, repos)
 }
 
 // orgPrefixVisibility ändert, was ein Präfix neuen Projekten als Sichtbarkeit mitgibt.

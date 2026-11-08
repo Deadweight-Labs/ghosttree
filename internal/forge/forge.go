@@ -31,6 +31,31 @@ type Prover interface {
 type Account struct {
 	Login string
 	Repos []string
+	// InstallationID ist die Installation der GitHub-App, die den Nachweis trägt;
+	// 0 beim Nachweis über die OAuth-App.
+	InstallationID int64
+}
+
+// InstallProver ist ein Prover, der die Installation aus der Rückkehr-Adresse
+// prüfen kann (GitHub-App).
+type InstallProver interface {
+	Prover
+	ProveInstallation(ctx context.Context, code, redirectURI string, installationID int64) ([]Account, error)
+}
+
+// RepoLister liest die Repo-Liste einer Installation neu, ohne neuen Nachweis
+// des Nutzers (GitHub-App).
+type RepoLister interface {
+	InstallationRepos(ctx context.Context, installationID int64) ([]string, error)
+}
+
+// Prefer wählt den Prover: die GitHub-App, sobald sie eingerichtet ist, sonst die
+// OAuth-App als Rückfall.
+func Prefer(app *GitHubApp, oauth *GitHub) Prover {
+	if app != nil && app.Configured() {
+		return app
+	}
+	return oauth
 }
 
 // ErrNotConfigured: die App-Zugangsdaten fehlen auf dem Server.

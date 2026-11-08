@@ -383,7 +383,16 @@ func buildServerHandler(st *store.Store, cfg serveConfig, stderr io.Writer) http
 	explainCfg.Language = cfg.Language
 	webOptions = append(webOptions, web.WithExplainer(newExplainer(st, explainCfg, logger)))
 	webOptions = append(webOptions, web.WithGardenLimits(cfg.GardenLimits))
-	webOptions = append(webOptions, web.WithSourceProver(forge.NewGitHub(forge.ConfigFromOS())))
+	// Die GitHub-App hat Vorrang, sobald sie eingerichtet ist; ohne sie bleibt die
+	// OAuth-App der Rückfall. Der Webhook der App antwortet nur mit gültiger Signatur.
+	ghApp := forge.NewGitHubApp(forge.AppConfigFromOS())
+	webOptions = append(webOptions, web.WithSourceProver(forge.Prefer(ghApp, forge.NewGitHub(forge.ConfigFromOS()))))
+	if ghApp.WebhookConfigured() {
+		root.Handle("/api/github/webhook", ghApp.WebhookHandler(func(installationID int64, add, remove []string) error {
+			_, err := st.SyncInstallationRepos(installationID, add, remove)
+			return err
+		}, func(err error) { logger.Error("github_webhook", "error", err.Error()) }))
+	}
 	root.Handle("/", web.New(st, webOptions...))
 	return root
 }

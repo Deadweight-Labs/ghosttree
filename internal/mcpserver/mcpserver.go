@@ -8,9 +8,12 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
+	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
+	"github.com/Deadweight-Labs/ghosttree/internal/originctx"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -45,7 +48,16 @@ type Server struct {
 	agentRole string
 	// sessionUUID ist die Transkript-Session, wenn der Launcher sie vorgegeben hat.
 	sessionUUID string
+	// lineageOf liefert die Vorfahren eines Branches aus dem lokalen Repo
+	// (SetLineageResolver); nil ohne Repo.
+	lineageOf func(branch string) []string
+	// live liefert den Git-Stand des Arbeitsverzeichnisses jetzt (SetLive).
+	live func() Live
 }
+
+// SetLineageResolver setzt, wie die Vorfahren eines anderen Branches als des
+// ausgecheckten bestimmt werden. Als Rückruf, weil git in collector sitzt.
+func (s *Server) SetLineageResolver(f func(branch string) []string) { s.lineageOf = f }
 
 // SetRepoRoot wird von cmd/ctx/mcp.go aus dem aufgelösten Git-Kontext gesetzt.
 func (s *Server) SetRepoRoot(root string) { s.repoRoot = root }
@@ -93,6 +105,14 @@ type SearchInput struct {
 	Project     string `json:"project,omitempty" jsonschema:"search another project instead of the current one, given as a normalized remote like github.com/owner/repo"`
 	AllProjects bool   `json:"all_projects,omitempty" jsonschema:"search every project. Use when a problem here may already have been solved elsewhere; the default stays the current project"`
 	Machine     string `json:"machine,omitempty" jsonschema:"restrict to a machine hostname"`
+	// Branch, Commit and PR filter by where an entry was written (REQ-597).
+	Branch string `json:"branch,omitempty" jsonschema:"search as on this branch: entries filed on it and on the branches it descends from (derived from the local repository). Default is the current branch"`
+	Commit string `json:"commit,omitempty" jsonschema:"only entries written at this commit: a prefix of at least 7 hexadecimal characters of the commit that was checked out when the entry was written. Sessions carry no commit and are left out"`
+	PR     int64  `json:"pr,omitempty" jsonschema:"only entries whose commit belongs to this pull request number. Entries carry a pull request number only once the GitHub connection assigns it; until then this finds nothing"`
+	// Since, Until and Area filter by when and where an entry arose (REQ-600).
+	Since string   `json:"since,omitempty" jsonschema:"only entries written on or after this time: a date (2026-11-01), an RFC3339 time or a relative one such as 7d, 2w, 12h. Entries filed before the origin was recorded count by their creation time"`
+	Until string   `json:"until,omitempty" jsonschema:"only entries written on or before this time, same formats as since; a date includes that whole day"`
+	Area  []string `json:"area,omitempty" jsonschema:"only entries that arose in this area: a path prefix relative to the repository root, such as internal/store. Repeat for several, an entry matching any of them counts. Entries without a recorded origin area are left out"`
 }
 
 // searchAxes resolves the project axis a search runs on. Scope separation is
@@ -111,6 +131,15 @@ func (s *Server) searchAxes(in SearchInput) (ax scope.Axes, crossProject bool) {
 		// Not ax.Branch = "": that removes every branch clause and hides the
 		// branch-scoped entries this flag exists to reveal.
 		ax.AnyBranch = true
+	} else if in.Branch != "" && in.Branch != ax.Branch {
+		// Another branch than the checked-out one: its ancestors are asked of the
+		// local repository. Without a resolver, or without that branch locally,
+		// the chain stays empty and the search reads project-wide plus that branch.
+		ax.Branch = in.Branch
+		ax.Lineage = nil
+		if s.lineageOf != nil {
+			ax.Lineage = s.lineageOf(in.Branch)
+		}
 	}
 	if in.Machine != "" {
 		ax.Machine = in.Machine
@@ -227,9 +256,10 @@ func (s *Server) Register(srv *mcp.Server) {
 	mcp.AddTool(srv, &mcp.Tool{Name: "request_create", Description: "Create a ledger entry for substantial work when request_search found no match. Include observable acceptance criteria; do not use for trivial local fixes. A request always belongs to a project: the session's own, or the one you pass as project. Add explanation, a short plain-language note for the people who will read the ledger.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleRequestCreate)
 	mcp.AddTool(srv, &mcp.Tool{Name: "request_start_work", Description: "Associate a Ghosttree session with an existing request as its primary task or as related work. Repeating the same association is safe.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, IdempotentHint: true, OpenWorldHint: &closed}}, s.handleRequestStartWork)
 	mcp.AddTool(srv, &mcp.Tool{Name: "request_finish_work", Description: "End a session's work association with a paused, completed, or abandoned outcome and a concise handoff. This does not complete the request.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, IdempotentHint: true, OpenWorldHint: &closed}}, s.handleRequestFinishWork)
-	mcp.AddTool(srv, &mcp.Tool{Name: "request_record_progress", Description: "Record evidenced request progress: add or satisfy criteria, complete or drop the request, add or remove a relation, or correct what the request says. Completion without evidence or with open criteria is rejected. A correction and a relation removal each need a reason, which goes into the activity list — nothing changes silently. Answers with what changed and how many criteria remain — call request_get for the full picture. To move a request to another project, use correct with project and a reason.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleRequestProgress)
+	mcp.AddTool(srv, &mcp.Tool{Name: "request_record_progress", Description: "Record evidenced request progress: add or satisfy criteria, reopen a met or waived criterion that its evidence does not hold up (criterion_reopen, needs a reason), complete or drop the request, add or remove a relation, or correct what the request says. Completion without evidence or with open criteria is rejected. A correction and a relation removal each need a reason, which goes into the activity list — nothing changes silently. Answers with what changed and how many criteria remain — call request_get for the full picture. To move a request to another project, use correct with project and a reason.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleRequestProgress)
 	s.registerPainTools(srv)
 	s.registerHumanTaskTools(srv)
+	s.registerPackageTools(srv)
 }
 
 func Run(ctx context.Context, s *Server, version string) error {
@@ -286,6 +316,21 @@ func (s *Server) handleSearch(ctx context.Context, _ *mcp.CallToolRequest, in Se
 	if strings.TrimSpace(in.Query) == "" {
 		return nil, nil, fmt.Errorf("give a query to search for, or a knowledge_id to read one entry in full")
 	}
+	anchor := client.AnchorFilter{Commit: gitanchor.Normalize(in.Commit), PR: in.PR}
+	if anchor.Commit != "" && !gitanchor.ValidPrefix(anchor.Commit) {
+		return nil, nil, fmt.Errorf("commit needs at least %d hexadecimal characters", gitanchor.MinPrefix)
+	}
+	if in.PR < 0 {
+		return nil, nil, fmt.Errorf("pr must be a positive pull request number")
+	}
+	anchor.Origin = client.OriginFilter{Since: in.Since, Until: in.Until, Areas: in.Area}
+	if anchor.Origin.Active() {
+		// Gleiche Prüfung wie am Server, damit der Fehler vor dem Aufruf kommt.
+		if _, err := anchor.Origin.Resolve(time.Now()); err != nil {
+			return nil, nil, err
+		}
+	}
+	anchored := anchor.Commit != "" || anchor.PR != 0 || anchor.Origin.Active()
 	ax, crossProject := s.searchAxes(in)
 	if (in.Kind == "" || in.Kind == "all" || in.Kind == "requests") && store.ClassifySearch(in.Query) == store.SearchInterrupted {
 		threads, err := s.client.InterruptedWork(ax, s.sessionRef)
@@ -313,11 +358,7 @@ func (s *Server) handleSearch(ctx context.Context, _ *mcp.CallToolRequest, in Se
 	if kind == "knowledge" || kind == "all" {
 		// The scope union is what a session reads here. Across projects that
 		// union is meaningless, so the axes are matched as given instead.
-		search := s.client.SearchUnion
-		if crossProject {
-			search = s.client.Search
-		}
-		res, err := search(in.Query, "knowledge", ax, limit)
+		res, err := s.client.SearchAnchored(in.Query, "knowledge", ax, limit, !crossProject, anchor)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -337,7 +378,7 @@ func (s *Server) handleSearch(ctx context.Context, _ *mcp.CallToolRequest, in Se
 			out.WriteString(limitNote(len(res.Knowledge), limit))
 		}
 	}
-	if kind == "sessions" || kind == "all" {
+	if (kind == "sessions" || kind == "all") && !anchored {
 		// Sessions carry all three axes, so an exact filter on the full context
 		// would only ever match this very session; project is the useful scope.
 		// An empty project means every project, which is what all_projects asks for.
@@ -357,14 +398,14 @@ func (s *Server) handleSearch(ctx context.Context, _ *mcp.CallToolRequest, in Se
 	}
 	if kind == "requests" || kind == "all" {
 		filter := scope.Axes{Project: s.ctxAxes.Project}
-		res, err := s.client.Search(in.Query, "requests", filter, limit)
+		res, err := s.client.SearchAnchored(in.Query, "requests", filter, limit, false, anchor)
 		if err != nil {
 			return nil, nil, err
 		}
 		if len(res.Requests) > 0 {
 			out.WriteString("\n## requests\n")
 			for _, h := range res.Requests {
-				fmt.Fprintf(&out, "- [request|status=%s|type=%s|source=ledger] REQ-%d %s — %s\n", h.Request.State, h.Request.Type, h.Request.ID, h.Request.Title, h.MatchReason)
+				fmt.Fprintf(&out, "- [request|status=%s|type=%s|source=ledger%s] REQ-%d %s — %s\n", h.Request.State, h.Request.Type, originctx.Label(h.OriginContext, h.Request.CreatedAt), h.Request.ID, h.Request.Title, h.MatchReason)
 			}
 			out.WriteString(limitNote(len(res.Requests), limit))
 		}
@@ -372,7 +413,7 @@ func (s *Server) handleSearch(ctx context.Context, _ *mcp.CallToolRequest, in Se
 	if kind == "files" || kind == "all" {
 		// Der Ghost-Baum ist projektgebunden: ein Pfad ist nur im Repo
 		// eindeutig, zu dem er gehört.
-		res, err := s.client.SearchGhosts(in.Query, ax.Project, limit)
+		res, err := s.client.SearchGhostsAnchored(in.Query, ax.Project, limit, anchor)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -659,7 +700,27 @@ func renderKnowledge(k store.Knowledge) string {
 		// should weigh it differently from an exact word hit.
 		label += "|match:" + k.Match
 	}
-	return fmt.Sprintf("- #%d [%s] %s — %s\n", k.ID, label, k.Title, body)
+	return fmt.Sprintf("- #%d [%s%s%s] %s — %s\n", k.ID, label, anchorLabel(k.GitAnchor), originctx.Label(k.OriginContext, k.CreatedAt), k.Title, body)
+}
+
+// anchorLabel nennt den Git-Stand eines Treffers kurz: "|at:<commit>" mit
+// Branch, "+dirty" bei unsauberem Arbeitsverzeichnis und #PR, wenn bekannt.
+// Leer ohne Anker, damit Einträge von früher unverändert aussehen.
+func anchorLabel(a *gitanchor.Anchor) string {
+	if a == nil || a.IsZero() {
+		return ""
+	}
+	out := "|at:" + a.Short()
+	if a.Dirty {
+		out += "+dirty"
+	}
+	if a.Branch != "" {
+		out += "@" + a.Branch
+	}
+	if a.PR != nil {
+		out += fmt.Sprintf(" #%d", *a.PR)
+	}
+	return out
 }
 
 // renderKnowledgeFull answers the other question: not "which entries are there"
@@ -667,7 +728,7 @@ func renderKnowledge(k store.Knowledge) string {
 // bullets and fenced blocks it was written with are the entry, not decoration
 // around it.
 func renderKnowledgeFull(k store.Knowledge) string {
-	header := fmt.Sprintf("# #%d %s\n[%s]", k.ID, k.Title, knowledgeLabel(k))
+	header := fmt.Sprintf("# #%d %s\n[%s%s%s]", k.ID, k.Title, knowledgeLabel(k), anchorLabel(k.GitAnchor), originctx.Label(k.OriginContext, k.CreatedAt))
 	if k.ObservedAt != "" {
 		header += " observed:" + k.ObservedAt
 	}
