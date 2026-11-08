@@ -13,6 +13,18 @@ import (
 )
 
 var writerMethodClasses = map[string]string{
+	"ShareMachine":                  "write",
+	"ShareMachineAsOperator":        "write",
+	"UnshareMachine":                "write",
+	"UnshareMachineAsOperator":      "write",
+	"SetMachineOwnerOrg":            "write",
+	"SetMachineOwnerOrgAsOperator":  "write",
+	"ShareEntry":                    "write",
+	"UnshareEntry":                  "write",
+	"MachinesFor":                   "read",
+	"MachineFor":                    "read",
+	"EntryShareOrgs":                "read",
+	"MachineOwnerOrgID":             "read",
 	"CreateLabel":                   "write",
 	"UpdateLabel":                   "write",
 	"DeleteLabel":                   "write",

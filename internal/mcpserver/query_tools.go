@@ -19,7 +19,7 @@ import (
 
 // searchLanguageHelp steht in der Beschreibung von context_search: die Sprache
 // in einem Absatz, damit ein Agent sie ohne Nachschlagen benutzt.
-const searchLanguageHelp = "Qualifiers (like GitHub, several allowed, - negates, comma means or, \"…\" groups): is:open|closed|done|pain|idea|issue|knowledge|<state>, kind:, type:, repo:owner/name, branch:, commit:<7+ hex>, pr:12 or pr:10..14, package:N, req:N, task:N, pain:N, idea:N, parent:N, blocks:N, author:/for: (@me is you), label:/-label:, area:<path prefix>, topic:<named area>, created:/updated:>2026-11-01 (also <, >=, a..b, 7d), since:/until: (origin time). Words that are not qualifiers search the text. An unknown qualifier is an error, not ignored. Qualified searches also cover pains, ideas, criteria, human tasks and file descriptions."
+const searchLanguageHelp = "Qualifiers (like GitHub, several allowed, - negates, comma means or, \"…\" groups): is:open|closed|done|pain|idea|feature|issue|knowledge|<state>, kind:, type:, repo:owner/name, branch:, commit:<7+ hex>, pr:12 or pr:10..14, package:N, req:N, task:N, pain:N, idea:N, feature:N (FEAT-N and everything that relates to it), parent:N, blocks:N, author:/for: (@me is you), label:/-label:, area:<path prefix>, topic:<named area>, created:/updated:>2026-11-01 (also <, >=, a..b, 7d), since:/until: (origin time). Words that are not qualifiers search the text. An unknown qualifier is an error, not ignored. Qualified searches also cover pains, ideas, features, criteria, human tasks and file descriptions."
 
 // ---- Ideen
 
@@ -594,6 +594,16 @@ func RenderQualifiedLinked(res client.SearchResult, b links.Builder) string {
 				line += " ← " + strings.Join(ps, ", ")
 			}
 			out.WriteString(hitLink(line+"\n", b.WithProject(i.Project).Idea(i.ID)))
+		}
+	}
+	if len(res.Features) > 0 {
+		out.WriteString("\n## features\n")
+		for _, f := range res.Features {
+			line := fmt.Sprintf("- [feature|state=%s|version=%d] %s %s", f.State, f.Revision, f.HumanID(), oneLine(f.Name))
+			if f.Summary != "" {
+				line += ": " + oneLine(f.Summary)
+			}
+			out.WriteString(hitLink(line+"\n", b.WithProject(f.Project).Feature(f.ID)))
 		}
 	}
 	if len(res.Tasks) > 0 {

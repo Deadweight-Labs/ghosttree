@@ -77,7 +77,7 @@ func (s *Server) withSessionCard(res *mcp.CallToolResult, in SessionsInput) *mcp
 
 // OpenLinkInput is the open_link tool.
 type OpenLinkInput struct {
-	Ref string `json:"ref" jsonschema:"what to link: REQ-n, AC-n.m or REQ-n#m (a criterion), TASK-n, PAIN-n, IDEA-n, PKG-n, #id (a knowledge entry), pr:n, commit:sha, room:n, session:id, doc:slug, runbook:name, branch:name (its checklist), preset:name followed by its values (preset:pr-ergebnis 155), a repository path, a search line like is:open label:bug, or inbox"`
+	Ref string `json:"ref" jsonschema:"what to link: REQ-n, AC-n.m or REQ-n#m (a criterion), TASK-n, PAIN-n, IDEA-n, FEAT-n (a feature), PKG-n, #id (a knowledge entry), pr:n, commit:sha, room:n, session:id, doc:slug, runbook:name, branch:name (its checklist), preset:name followed by its values (preset:pr-ergebnis 155), a repository path, a search line like is:open label:bug, or inbox"`
 }
 
 // OpenLinkOutput is the link and the card to hand to the human.

@@ -24,6 +24,15 @@ type Machine struct {
 	Owner     string `json:"owner"`
 	FirstSeen string `json:"first_seen"`
 	LastSeen  string `json:"last_seen"`
+	// OwnerOrg: die Maschine gehört einer Org (Build-Server, CI-Runner); Owner
+	// ist dann nur das Konto, das sie beansprucht hat.
+	OwnerOrg string `json:"owner_org,omitempty"`
+	// Relation, Shares und Events füllen MachinesFor und MachineFor: wie der
+	// Betrachter zur Maschine steht, an wen sie freigegeben ist und, nur für
+	// Verwalter, das Protokoll der Freigaben.
+	Relation string         `json:"relation,omitempty"`
+	Shares   []MachineShare `json:"shares,omitempty"`
+	Events   []MachineEvent `json:"events,omitempty"`
 }
 
 // migrateOwnership ergänzt machines und sessions um account_id. Beides sind
@@ -133,10 +142,10 @@ type txExec interface {
 // claimMachineTx beansprucht den Namen für das Konto; created ist wahr, wenn
 // dieser Aufruf die Zeile neu angelegt hat (der Name war vorher frei).
 func claimMachineTx(tx txExec, name string, account int64) (created bool, err error) {
-	var stored int64
+	var stored, ownerOrg int64
 	var seen string
 	at := now()
-	err = tx.QueryRow(`SELECT account_id, last_seen FROM machines WHERE hostname=?`, name).Scan(&stored, &seen)
+	err = tx.QueryRow(`SELECT account_id, last_seen, owner_org_id FROM machines WHERE hostname=?`, name).Scan(&stored, &seen, &ownerOrg)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		_, err := tx.Exec(`INSERT INTO machines(hostname, first_seen, last_seen, account_id) VALUES(?,?,?,?)`, name, at, at, account)
@@ -149,18 +158,27 @@ func claimMachineTx(tx txExec, name string, account int64) (created bool, err er
 		// Ein anderer Prozess hat den Namen zwischen Lesen und Einfügen
 		// beansprucht (kein Writer-Queue-Schutz, etwa beim CLI): wie ein
 		// Fremdname behandeln, nicht als Serverfehler.
-		if err := tx.QueryRow(`SELECT account_id, last_seen FROM machines WHERE hostname=?`, name).Scan(&stored, &seen); err != nil {
+		if err := tx.QueryRow(`SELECT account_id, last_seen, owner_org_id FROM machines WHERE hostname=?`, name).Scan(&stored, &seen, &ownerOrg); err != nil {
 			return false, err
 		}
-		if effectiveOwner(stored, instanceOwnerID(tx)) != account {
+		if !machineUsableBy(tx, stored, ownerOrg, account) {
 			return false, ErrMachineTaken
 		}
 		return false, nil
 	case err != nil:
 		return false, err
 	}
-	if effectiveOwner(stored, instanceOwnerID(tx)) != account {
+	if !machineUsableBy(tx, stored, ownerOrg, account) {
 		return false, ErrMachineTaken
+	}
+	if ownerOrg > 0 {
+		// Eine Org-Maschine behält ihren eingetragenen Beansprucher; ein anderer
+		// Maintainer meldet sich nur an.
+		if seen < time.Now().UTC().Add(-time.Minute).Format(time.RFC3339) {
+			_, err := tx.Exec(`UPDATE machines SET last_seen=? WHERE hostname=?`, at, name)
+			return false, err
+		}
+		return false, nil
 	}
 	// Aktualisieren nur, wenn nötig: der Collector ruft das bei jedem Upload.
 	if stored == 0 || seen < time.Now().UTC().Add(-time.Minute).Format(time.RFC3339) {
@@ -168,6 +186,16 @@ func claimMachineTx(tx txExec, name string, account int64) (created bool, err er
 		return false, err
 	}
 	return false, nil
+}
+
+// machineUsableBy: das Konto darf den Namen tragen: er gehört ihm, bei einer
+// Org-Maschine ist es Maintainer der Org. Mitglieder einer freigegebenen Org
+// dürfen ihn nicht tragen (DEC-5): der Name beweist nichts (#2581).
+func machineUsableBy(q rowQuerier, stored, ownerOrg, account int64) bool {
+	if ownerOrg > 0 {
+		return orgMemberRoleTx(q, ownerOrg, account) == OrgOwner
+	}
+	return effectiveOwner(stored, instanceOwnerID(q)) == account
 }
 
 // MachineClaimable meldet ErrMachineTaken, wenn der Name einem anderen Konto
@@ -180,15 +208,15 @@ func (s *Store) MachineClaimable(name, accountPrincipalID string) error {
 	if !ok {
 		return fmt.Errorf("invalid account %q", accountPrincipalID)
 	}
-	var stored int64
-	err := s.db.QueryRow(`SELECT account_id FROM machines WHERE hostname=?`, canonicalMachine(name)).Scan(&stored)
+	var stored, ownerOrg int64
+	err := s.db.QueryRow(`SELECT account_id, owner_org_id FROM machines WHERE hostname=?`, canonicalMachine(name)).Scan(&stored, &ownerOrg)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return nil
 	case err != nil:
 		return err
 	}
-	if effectiveOwner(stored, instanceOwnerID(s.db)) != account {
+	if !machineUsableBy(s.db, stored, ownerOrg, account) {
 		return ErrMachineTaken
 	}
 	return nil
@@ -279,7 +307,8 @@ func (s *Store) ListMachines(accountPrincipalID string) ([]Machine, error) {
 			return []Machine{}, nil
 		}
 	}
-	rows, err := s.db.Query(`SELECT hostname, account_id, first_seen, last_seen FROM machines ORDER BY hostname`)
+	slugs := s.orgSlugs()
+	rows, err := s.db.Query(`SELECT hostname, account_id, first_seen, last_seen, owner_org_id FROM machines ORDER BY hostname`)
 	if err != nil {
 		return nil, err
 	}
@@ -287,10 +316,11 @@ func (s *Store) ListMachines(accountPrincipalID string) ([]Machine, error) {
 	out := []Machine{}
 	for rows.Next() {
 		var m Machine
-		var stored int64
-		if err := rows.Scan(&m.Name, &stored, &m.FirstSeen, &m.LastSeen); err != nil {
+		var stored, ownerOrg int64
+		if err := rows.Scan(&m.Name, &stored, &m.FirstSeen, &m.LastSeen, &ownerOrg); err != nil {
 			return nil, err
 		}
+		m.OwnerOrg = slugs[ownerOrg]
 		id := effectiveOwner(stored, owner)
 		if want != 0 && id != want {
 			continue
@@ -344,14 +374,27 @@ func (s *Store) ReleaseMachine(name string) error {
 	if s.writer != nil {
 		return queueWrite(s, []any{name}, func(d *Store, p []any) error { return d.ReleaseMachine(p[0].(string)) })
 	}
-	res, err := s.db.Exec(`DELETE FROM machines WHERE hostname=?`, canonicalMachine(name))
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	host := canonicalMachine(name)
+	res, err := tx.Exec(`DELETE FROM machines WHERE hostname=?`, host)
 	if err != nil {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return fmt.Errorf("machine %q not found", name)
 	}
-	return nil
+	// Wer den Namen danach beansprucht, erbt keine Freigabe.
+	if err := deleteMachineSharesTx(tx, host); err != nil {
+		return err
+	}
+	if err := machineEventTx(tx, host, "release", 0, "", "", MachineViaCLIDB); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // TransferMachine überträgt einen Maschinennamen an ein anderes Konto (Admin,
@@ -371,7 +414,22 @@ func (s *Store) TransferMachine(name, account string) error {
 		return fmt.Errorf("invalid account %q", account)
 	}
 	at := now()
-	_, err = s.db.Exec(`INSERT INTO machines(hostname, first_seen, last_seen, account_id) VALUES(?,?,?,?)
-		ON CONFLICT(hostname) DO UPDATE SET account_id=excluded.account_id, claimed_by_token=0`, canonicalMachine(name), at, at, id)
-	return err
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	host := canonicalMachine(name)
+	if _, err = tx.Exec(`INSERT INTO machines(hostname, first_seen, last_seen, account_id) VALUES(?,?,?,?)
+		ON CONFLICT(hostname) DO UPDATE SET account_id=excluded.account_id, claimed_by_token=0, owner_org_id=0`, host, at, at, id); err != nil {
+		return err
+	}
+	// Die Freigaben erteilte der bisherige Besitzer; der neue entscheidet selbst.
+	if err := deleteMachineSharesTx(tx, host); err != nil {
+		return err
+	}
+	if err := machineEventTx(tx, host, "transfer", 0, account, "", MachineViaCLIDB); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

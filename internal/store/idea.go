@@ -130,6 +130,7 @@ func (a *ProjectAccess) IdeaView(id int64) (idea.Idea, error) {
 	list := []idea.Idea{i}
 	a.attachIdeaLabels(list)
 	a.attachIdeaPains(list)
+	a.attachIdeaFeatures(list)
 	if list[0].Phase == idea.PhaseBuilding || list[0].Phase == idea.PhaseDone {
 		list[0].UncoveredRequirements = a.st.uncoveredCount(i.ID)
 	}

@@ -77,6 +77,45 @@ type PackageDetail struct {
 	// erfülltes Kriterium haben und nicht erlassen sind. Nur die Prüfansicht
 	// (package_review) füllt es (REQ-611).
 	Uncovered []UncoveredRequirement `json:"uncovered_requirements,omitempty"`
+	// Features sind die Punkte „Feature X: Beschreibung angepasst?“ für einen
+	// Paket-PR: Features, in deren Bereichen der PR Pfade ändert (REQ-612). Nur
+	// gefüllt, wenn das Paket einen PR trägt und dessen Pfade gemeldet sind.
+	Features []FeatureCheck `json:"features,omitempty"`
+}
+
+// Stände eines Feature-Punktes der Checkliste.
+const (
+	// FeatureCheckOpen: die Beschreibung ist noch nicht für diesen PR angesehen.
+	FeatureCheckOpen = "open"
+	// FeatureCheckUpdated: eine neue Fassung trägt diesen PR.
+	FeatureCheckUpdated = "updated"
+	// FeatureCheckUnchanged: jemand hat geprüft, dass die Beschreibung stimmt.
+	FeatureCheckUnchanged = "unchanged"
+)
+
+// FeatureCheck ist ein Punkt der Checkliste eines PRs: ein Feature, das der PR
+// berührt, und ob seine Beschreibung dafür angesehen wurde.
+type FeatureCheck struct {
+	Feature int64  `json:"feature"`
+	Name    string `json:"name"`
+	// Text ist der Punkt, wie ihn die Checkliste zeigt.
+	Text  string `json:"text"`
+	State string `json:"state"`
+	// Revision ist die jüngste Fassung; Revisions, die den PR tragen, stehen in
+	// PRRevisions.
+	Revision    int   `json:"revision"`
+	PRRevisions []int `json:"pr_revisions,omitempty"`
+	// Paths sind einige der geänderten Pfade im Bereich des Features, PathCount
+	// ihre Zahl.
+	Paths     []string `json:"paths,omitempty"`
+	PathCount int      `json:"path_count"`
+	// Note ist die Notiz der Prüfung bei unchanged.
+	Note string `json:"note,omitempty"`
+}
+
+// FeatureCheckText ist der Wortlaut des Punktes.
+func FeatureCheckText(id int64, name string) string {
+	return fmt.Sprintf("Feature FEAT-%d %s: Beschreibung angepasst?", id, name)
 }
 
 // UncoveredRequirement ist eine Anforderung einer Idee ohne erfülltes Kriterium.

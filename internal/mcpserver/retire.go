@@ -29,7 +29,7 @@ func (s *Server) handleRetire(_ context.Context, _ *mcp.CallToolRequest, in Reti
 	if err != nil {
 		return nil, nil, err
 	}
-	return textResult(fmt.Sprintf("retired #%d (%s): it no longer appears in search or the briefing; its history stays readable", saved.ID, saved.Status)), nil, nil
+	return s.withCard(textResult(fmt.Sprintf("retired #%d (%s): it no longer appears in search or the briefing; its history stays readable", saved.ID, saved.Status)), s.builder().KnowledgeCard(saved)), nil, nil
 }
 
 func (s *Server) handleSupersede(_ context.Context, _ *mcp.CallToolRequest, in SupersedeInput) (*mcp.CallToolResult, any, error) {
@@ -43,5 +43,5 @@ func (s *Server) handleSupersede(_ context.Context, _ *mcp.CallToolRequest, in S
 	if err != nil {
 		return nil, nil, err
 	}
-	return textResult(fmt.Sprintf("#%d now supersedes %s: they no longer appear in search or the briefing; their history stays readable", saved.ID, idList(in.Supersedes))), nil, nil
+	return s.withCard(textResult(fmt.Sprintf("#%d now supersedes %s: they no longer appear in search or the briefing; their history stays readable", saved.ID, idList(in.Supersedes))), s.builder().KnowledgeCard(saved)), nil, nil
 }

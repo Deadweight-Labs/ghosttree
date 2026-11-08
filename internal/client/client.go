@@ -16,6 +16,7 @@ import (
 
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
+	"github.com/Deadweight-Labs/ghosttree/internal/feature"
 	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
 	"github.com/Deadweight-Labs/ghosttree/internal/humantask"
 	"github.com/Deadweight-Labs/ghosttree/internal/idea"
@@ -47,6 +48,7 @@ type SearchResult struct {
 	// Die folgenden kommen nur aus einer Suchzeile mit Qualifiern (REQ-600).
 	Pains    []pain.Pain          `json:"pains,omitempty"`
 	Ideas    []idea.Idea          `json:"ideas,omitempty"`
+	Features []feature.Feature    `json:"features,omitempty"`
 	Criteria []store.CriterionHit `json:"criteria,omitempty"`
 	Tasks    []humantask.Task     `json:"tasks,omitempty"`
 	Files    []store.GhostFile    `json:"files,omitempty"`
@@ -440,6 +442,14 @@ func (c *Client) Remember(k store.Knowledge, autoCtx scope.Axes) (store.Knowledg
 // ones: the server checks the right on every one of them before it writes
 // anything, so a refusal leaves no follow-up entry behind.
 func (c *Client) RememberSuperseding(k store.Knowledge, autoCtx scope.Axes, supersedes []int64, reason string) (store.Knowledge, error) {
+	return c.RememberShared(k, autoCtx, supersedes, reason, nil)
+}
+
+// RememberShared is RememberSuperseding that also shares an entry with a machine
+// scope with organizations for which the machine is shared. Without orgs the
+// entry stays private (on a machine that belongs to an organization it goes to
+// that organization, the server decides).
+func (c *Client) RememberShared(k store.Knowledge, autoCtx scope.Axes, supersedes []int64, reason string, shareWithOrgs []string) (store.Knowledge, error) {
 	body := map[string]any{
 		"type": k.Type, "title": k.Title, "body": k.Body,
 		"scope": k.Scope, "confidence": k.Confidence, "status": k.Status,
@@ -453,6 +463,9 @@ func (c *Client) RememberSuperseding(k store.Knowledge, autoCtx scope.Axes, supe
 	if len(supersedes) > 0 {
 		body["supersedes"] = supersedes
 		body["supersede_reason"] = reason
+	}
+	if len(shareWithOrgs) > 0 {
+		body["share_with_orgs"] = shareWithOrgs
 	}
 	var saved store.Knowledge
 	err := c.do("POST", "/api/knowledge", nil, body, &saved)

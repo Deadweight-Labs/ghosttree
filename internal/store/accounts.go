@@ -1011,12 +1011,17 @@ func (s *Store) RevokeOwnToken(p Principal) (released bool, err error) {
 			return false, err
 		}
 		if !others && !attached {
-			res, err := tx.Exec(`DELETE FROM machines WHERE hostname=? AND account_id=? AND claimed_by_token=?`, name, account, p.TokenID)
+			res, err := tx.Exec(`DELETE FROM machines WHERE hostname=? AND account_id=? AND claimed_by_token=? AND owner_org_id=0`, name, account, p.TokenID)
 			if err != nil {
 				return false, err
 			}
 			n, _ := res.RowsAffected()
 			released = n > 0
+			if released {
+				if err := deleteMachineSharesTx(tx, name); err != nil {
+					return false, err
+				}
+			}
 		}
 	}
 	return released, tx.Commit()

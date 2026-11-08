@@ -102,6 +102,9 @@ type Event struct {
 	// GitAnchor ist der Git-Stand, an dem das Ereignis geschrieben wurde
 	// (REQ-597); nil bei Ereignissen ohne Anker.
 	GitAnchor *gitanchor.Anchor `json:"git_anchor,omitempty"`
+	// Via ist "web" für ein Ereignis aus der Weboberfläche (REQ-597): dort gibt
+	// es keinen Git-Stand, aber die Herkunft steht am Entstehungskontext.
+	Via string `json:"via,omitempty"`
 }
 
 type Detail struct {

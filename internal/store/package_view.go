@@ -50,6 +50,9 @@ func (a *ProjectAccess) PackageView(d requestdomain.PackageDetail, full bool) re
 		viewed = append(viewed, m.RequestID)
 	}
 	d.Members = members
+	// Die Punkte „Feature X: Beschreibung angepasst?“ für den PR des Pakets
+	// (REQ-612).
+	d.Features = a.packageFeatureChecks(d.Project, d.PR)
 	if full {
 		// Anforderungen der Ideen, aus denen die Requests stammen und die noch
 		// kein erfülltes Kriterium haben (REQ-611).

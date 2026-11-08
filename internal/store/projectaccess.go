@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/feature"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 )
 
@@ -51,6 +52,9 @@ const (
 	// optional ausführbaren Zielen. Wie Wissen gilt er für ein Projekt, eine
 	// Maschine oder beides; ohne beides gehört er seinem Autor.
 	ResRunbook Resource = "runbook"
+	// ResFeature ist ein Feature (REQ-612): die lebende Beschreibung dessen, was
+	// das Produkt tut. Es hat immer ein Projekt.
+	ResFeature Resource = "feature"
 )
 
 // Action ist, was getan werden soll.
@@ -98,6 +102,14 @@ type Object struct {
 	// Machine: Maschinen-Achse eines Wissenseintrags; nicht leer heißt, dass
 	// nur der Besitzer der Maschine Zugriff hat.
 	Machine string
+	// SharedOrgs: die Orgs, an die dieser Eintrag mit Maschinen-Scope wirksam
+	// freigegeben ist (Freigabe der Maschine besteht, Eintrag liegt noch auf
+	// ihr). Leer heißt privat: nur der Besitzer der Maschine.
+	SharedOrgs []int64
+	// Unentitled: Orgs aus SharedOrgs, über die der Autor die Maschine nicht
+	// verantworten darf (keine Schreib-Freigabe für genau diese Org). Sie geben
+	// dem Betrachter keinen Zugang.
+	Unentitled []int64
 	// OriginOwner: der Betrachter besitzt die private Session, aus der ein noch
 	// nicht freigegebener, distillierter Eintrag stammt; er darf ihn freigeben
 	// oder verwerfen, nie verifizieren.
@@ -169,6 +181,19 @@ func matrixAllows(role RoleInfo, res Resource, act Action, obj Object) bool {
 			return rank >= 2
 		case ActEdit:
 			return rank >= 3 || (rank == 2 && obj.Own)
+		}
+	case ResFeature:
+		// Lesen ab Gast. Anlegen und eine neue Fassung schreiben (ActWork) ab
+		// member: die Beschreibung pflegt, wer den PR schreibt. Umbenennen,
+		// einstellen und wieder aufnehmen (ActEdit) ab lead. Die Zuordnung steht
+		// hier an einer Stelle: wer sie enger will, ändert nur diese Zeilen.
+		switch act {
+		case ActRead:
+			return rank >= 1
+		case ActCreate, ActWork:
+			return rank >= 2
+		case ActEdit:
+			return rank >= 3
 		}
 	case ResLabel:
 		// Lesen ab Gast, anlegen ab member, ändern und löschen ab lead. Ein Label
@@ -383,6 +408,9 @@ type ProjectAccess struct {
 	machOnce sync.Once
 	machines map[string]int64
 	owner    int64
+	mi       *machineIndex
+	miOnce   sync.Once
+	orgRoles map[string]string
 
 	unclaimed map[string]bool
 	writers   map[string]map[string]bool
@@ -479,23 +507,10 @@ func (a *ProjectAccess) IsAdmin() bool {
 	return a.admin
 }
 
-func (a *ProjectAccess) loadMachines() {
-	a.machOnce.Do(func() {
-		a.machines, a.owner = a.st.machineOwners()
-	})
-}
-
-// OwnsMachine: die Maschine gehört dem Konto. Altbestand und unbekannte
-// Maschinen gehören dem Instanz-Owner.
+// OwnsMachine: das Konto verwaltet die Maschine (Besitzer, bei Org-Maschinen
+// ein Maintainer). Altbestand und unbekannte Maschinen gehören dem Instanz-Owner.
 func (a *ProjectAccess) OwnsMachine(machine string) bool {
-	if !a.valid {
-		return false
-	}
-	a.loadMachines()
-	if id, ok := a.machines[canonicalMachine(machine)]; ok {
-		return id == a.account
-	}
-	return a.owner == a.account
+	return a.machineLevel(machine, nil) == levelManage
 }
 
 // OwnsSession: die Session gehört dem Konto (Altbestand dem Instanz-Owner).
@@ -519,17 +534,38 @@ func (a *ProjectAccess) Decide(project string, res Resource, act Action, obj Obj
 		return Decision{Hidden: true, Reason: "no account"}
 	}
 	project = strings.TrimSpace(project)
-	// Maschinen-Achse: nur der Besitzer der Maschine, egal welche Rolle. Steht
-	// zugleich ein Projekt am Eintrag, ersetzt der Besitz der Maschine die
-	// Projektrolle nicht: gesehen wird er nur mit Projektrolle UND Maschine.
+	// Maschinen-Achse: der Besitzer der Maschine (bei Org-Maschinen ein
+	// Maintainer) und Mitglieder einer Org, an die der Eintrag ausdrücklich
+	// freigegeben ist, soweit die Freigabe es erlaubt. Steht zugleich ein
+	// Projekt am Eintrag, ersetzt das die Projektrolle nicht: gesehen wird er
+	// nur mit Projektrolle UND Zugang zur Maschine.
 	if (res == ResKnowledge || res == ResRunbook) && obj.Machine != "" {
-		owns := a.OwnsMachine(obj.Machine)
-		if !owns && !a.ownNoteOnUnclaimedMachine(obj, act) {
-			return Decision{Hidden: true, Reason: "machine-axis knowledge of another account"}
+		level := a.machineLevel(obj.Machine, withoutOrgs(obj.SharedOrgs, obj.Unentitled))
+		note := false
+		switch {
+		case level == levelManage:
+		case level > levelNone:
+			if !shareAllows(level, res, act, obj) {
+				if act == ActRead {
+					return Decision{Hidden: true, Reason: "machine-axis knowledge is not shared with you in this state"}
+				}
+				return Decision{Reason: "machine share does not allow " + string(act)}
+			}
+		default:
+			// Der Autor liest und pflegt seine eigene Notiz auch ohne Zugang. Ist
+			// sie an eine Org freigegeben, ändert er sie nicht mehr: ein
+			// ehemaliges Mitglied bearbeitet nichts, was andere noch lesen.
+			note = a.ownNoteOnUnclaimedMachine(obj, act) && !(act == ActEdit && len(obj.SharedOrgs) > 0)
+			if !note {
+				return Decision{Hidden: true, Reason: "machine-axis knowledge of another account"}
+			}
 		}
 		if project == "" {
-			if owns {
+			switch {
+			case level == levelManage:
 				return Decision{Allowed: true}
+			case level > levelNone:
+				return Decision{Allowed: true, Reason: "machine knowledge shared with your organization"}
 			}
 			return Decision{Allowed: true, Reason: "own note on a machine nobody has claimed"}
 		}
@@ -630,6 +666,23 @@ func (a *ProjectAccess) Check(project string, res Resource, act Action, obj Obje
 
 func knowledgeObject(a *ProjectAccess, k Knowledge) Object {
 	obj := Object{Own: a.ownsKnowledge(k), Confidence: k.Confidence, Machine: k.Scope.Machine, EntryID: k.ID}
+	if k.Scope.Machine != "" {
+		obj.SharedOrgs = a.sharedOrgsOf(EntryKnowledge, k.ID, k.Scope.Machine)
+		// Eine Org zählt nur, wenn der Autor über genau sie schreiben darf.
+		if len(obj.SharedOrgs) > 0 {
+			ok := a.entitledSharedOrgs(k.Scope.Machine, a.st.knowledgeAuthorID(k.ID), obj.SharedOrgs)
+			obj.Unentitled = withoutOrgs(obj.SharedOrgs, ok)
+		}
+		if k.ID == 0 {
+			// Anlegen: gilt die Freigabe, die der Schreiber mitschickt, soweit er
+			// über diese Org freigeben darf (mayShareOnCreate).
+			for _, org := range k.ShareOrgIDs {
+				if a.mayShareOnCreate(k.Scope.Machine, org) {
+					obj.SharedOrgs = append(obj.SharedOrgs, org)
+				}
+			}
+		}
+	}
 	if ref := knowledgeHeldRef(k); ref != "" {
 		_, obj.OriginOwner = a.heldOrigin(ref)
 	}
@@ -677,6 +730,18 @@ func (a *ProjectAccess) CheckKnowledge(k Knowledge, act Action) error {
 // CheckKnowledgeCreate prüft das Anlegen; ein Eintrag mit confidence=verified
 // braucht zusätzlich das Verified-Recht.
 func (a *ProjectAccess) CheckKnowledgeCreate(k Knowledge) error {
+	if k.Scope.Machine != "" {
+		// Ohne Verwaltungsrecht über die Maschine bleibt jede Org, über die der
+		// Schreiber nicht schreiben darf, eine Verweigerung, kein stilles Weglassen.
+		a.loadMachines()
+		if a.machineLevel(k.Scope.Machine, nil) != levelManage {
+			for _, org := range k.ShareOrgIDs {
+				if !a.mayShareOnCreate(k.Scope.Machine, org) {
+					return ErrAccessForbidden
+				}
+			}
+		}
+	}
 	obj := knowledgeObject(a, k)
 	obj.Own = true
 	if err := a.Check(k.Scope.Project, ResKnowledge, ActCreate, obj); err != nil {
@@ -811,6 +876,19 @@ func (a *ProjectAccess) CanDeliverKnowledge(k Knowledge) bool {
 // CanDeliverGhost: bei Ghost-Beschreibungen muss der Autor Schreibrecht haben.
 func (a *ProjectAccess) CanDeliverGhost(g GhostFile) bool {
 	return a.applyDelivery(g.Project, a.deliverable(g.Project, g.Person, "", false))
+}
+
+// CanDeliverFeature: ein Feature darf in den Hook-Kontext und die PR-Checkliste,
+// wenn die Schreiber aller seiner Fassungen im Projekt Schreibrecht haben (eine
+// spätere Fassung eines Mitglieds kann den Text einer früheren übernehmen). Ein
+// Fremder kann in einem unbeanspruchten Projekt Features anlegen; der Text
+// erreicht die Agenten des späteren Besitzers nicht.
+func (a *ProjectAccess) CanDeliverFeature(f feature.Feature) bool {
+	ok := a.deliverable(f.Project, f.VersionPerson, "", false) && a.deliverable(f.Project, f.Person, "", false)
+	for _, p := range f.VersionPersons {
+		ok = ok && a.deliverable(f.Project, p, "", false)
+	}
+	return a.applyDelivery(f.Project, ok)
 }
 
 // CanSeeGhost: Lesefilter für Ghost-Listen (der Autor sieht seine eigenen).

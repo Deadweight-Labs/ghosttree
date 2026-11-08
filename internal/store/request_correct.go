@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 )
 
@@ -30,7 +31,10 @@ var correctable = map[string]bool{"title": true, "description": true, "type": tr
 // A finished request may be corrected too. Being done does not make a wrong
 // claim right, and that case — a completed entry whose justification collapsed —
 // is exactly the one this exists for.
-func (s *Store) UpdateRequest(id int64, patch map[string]string, person, reason string) error {
+//
+// The optional anchor (REQ-597) is the git state of the writer; the web UI
+// passes gitanchor.Web(). Only the first one counts.
+func (s *Store) UpdateRequest(id int64, patch map[string]string, person, reason string, anchor ...*gitanchor.Anchor) error {
 	if strings.TrimSpace(reason) == "" {
 		return requestdomain.NewRuleError("correction_reason_required",
 			"a correction has to say why", "pass the reason the earlier text was wrong", nil)
@@ -57,8 +61,8 @@ func (s *Store) UpdateRequest(id int64, patch map[string]string, person, reason 
 	}
 
 	if s.writer != nil {
-		return queueWrite(s, []any{id, patch, person, reason}, func(d *Store, p []any) error {
-			return d.UpdateRequest(p[0].(int64), p[1].(map[string]string), p[2].(string), p[3].(string))
+		return queueWrite(s, []any{id, patch, person, reason, firstAnchor(anchor)}, func(d *Store, p []any) error {
+			return d.UpdateRequest(p[0].(int64), p[1].(map[string]string), p[2].(string), p[3].(string), p[4].(*gitanchor.Anchor))
 		})
 	}
 
@@ -91,7 +95,11 @@ func (s *Store) UpdateRequest(id int64, patch map[string]string, person, reason 
 		return err
 	}
 	data := fmt.Sprintf("%s — %s", strings.Join(fields, ","), reason)
-	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at) VALUES(?,'request.corrected',?,?,?)`, id, person, data, ts); err != nil {
+	anchorID, originID, err := insertWriteMetaTx(tx, firstAnchor(anchor), nil)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at,anchor_id,origin_id) VALUES(?,'request.corrected',?,?,?,?,?)`, id, person, data, ts, anchorID, originID); err != nil {
 		return err
 	}
 	return tx.Commit()

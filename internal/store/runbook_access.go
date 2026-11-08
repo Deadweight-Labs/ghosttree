@@ -9,7 +9,11 @@ import (
 // für das Konto, das ihn angelegt hat; auf der Maschinen-Achse zählt die
 // Maschine wie bei Wissen.
 func (a *ProjectAccess) runbookObject(ref RunbookRef) Object {
-	return Object{Own: a.valid && ref.AuthorID > 0 && ref.AuthorID == a.account, Machine: ref.Machine}
+	obj := Object{Own: a.valid && ref.AuthorID > 0 && ref.AuthorID == a.account, Machine: ref.Machine}
+	if ref.Machine != "" {
+		obj.SharedOrgs = a.sharedOrgsOf(EntryRunbook, ref.ID, ref.Machine)
+	}
+	return obj
 }
 
 // OwnsRunbook: das Konto hat den Ablauf angelegt.

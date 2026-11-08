@@ -52,6 +52,9 @@ type Idea struct {
 	// Pains sind die Probleme, die diese Idee motiviert haben (Relation „motiviert“
 	// Pain → Idee, REQ-606), soweit der Betrachter sie lesen darf.
 	Pains []PainRef `json:"pains,omitempty"`
+	// Features sind die Features, die diese Idee ändert („betrifft FEAT-n“,
+	// REQ-612), soweit der Betrachter sie lesen darf.
+	Features []FeatureRef `json:"features,omitempty"`
 	// UncoveredRequirements zählt die Anforderungen des Konzepts, die noch kein
 	// erfülltes Kriterium haben und nicht erlassen sind. Sie steht nur bei einer
 	// Idee in Umsetzung oder umgesetzt.
@@ -88,6 +91,16 @@ type PainRef struct {
 	ID    int64  `json:"id"`
 	Title string `json:"title"`
 	State string `json:"state"`
+}
+
+// FeatureRef nennt ein Feature, das eine Idee ändert. Advanced sagt, ob die
+// Beschreibung des Features für diese Idee schon fortgeschrieben wurde.
+type FeatureRef struct {
+	ID       int64  `json:"id"`
+	Name     string `json:"name"`
+	Revision int    `json:"revision"`
+	State    string `json:"state,omitempty"`
+	Advanced bool   `json:"advanced,omitempty"`
 }
 
 // HumanID ist IDEA-n.

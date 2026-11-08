@@ -946,7 +946,7 @@ func (a *app) requestCorrect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "nothing to change", http.StatusBadRequest)
 		return
 	}
-	if err := a.store.UpdateRequest(req.ID, patch, personOf(r), reason); err != nil {
+	if err := a.store.UpdateRequest(req.ID, patch, personOf(r), reason, gitanchor.Web()); err != nil {
 		a.requestFail(w, r, req.ID, err)
 		return
 	}

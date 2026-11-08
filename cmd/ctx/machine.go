@@ -7,7 +7,24 @@ import (
 
 const machineUsage = `usage: ctx machine list --db <path>
        ctx machine release <name> --db <path>
-       ctx machine transfer <name> <account> --db <path>`
+       ctx machine transfer <name> <account> --db <path>   (also ends every share and any org ownership)
+
+  mine                                     machines that concern you: your own, those of your
+                                           organizations, those shared with them
+  show <name>                              one machine: owner, shares, latest changes
+  share-entry <knowledge|runbook> <id> <org> [--unshare]
+                                           share one machine-scoped entry with an organization
+                                           the machine is already shared with (owner only)
+
+  Sharing a machine itself is done by a person on the machine's page in the web UI. The
+  operator on the server host can do it too, logged as via=cli-db:
+  share <name> <org> [--role read|write] [--user U] [--path P] --db <path>
+  unshare <name> <org> --db <path>
+  owner-org <name> <org> --db <path>       the machine belongs to the organization (build
+                                           servers, CI runners); its maintainers manage it
+  A machine can only be shared after it signed in itself (ctx login on the machine).
+  --user and --path are notes on what the share is for; only entries shared one by one
+  are visible to the organization.`
 
 // cmdMachine arbeitet wie account direkt auf der Datenbank: Maschinennamen
 // freizugeben oder umzuhängen braucht Zugriff auf den Server-Host.
@@ -34,7 +51,11 @@ func cmdMachine(args []string, stdout io.Writer) int {
 			return 1
 		}
 		for _, m := range machines {
-			fmt.Fprintf(stdout, "%s\t%s\tlast seen %s\n", m.Name, m.Owner, m.LastSeen)
+			line := fmt.Sprintf("%s\t%s\tlast seen %s", m.Name, m.Owner, m.LastSeen)
+			if m.OwnerOrg != "" {
+				line += "\torg " + m.OwnerOrg
+			}
+			fmt.Fprintln(stdout, line)
 		}
 		return 0
 	case "release":
@@ -76,6 +97,5 @@ func cmdMachine(args []string, stdout io.Writer) int {
 		fmt.Fprintf(stdout, "machine %s now belongs to %s\n", name, args[2])
 		return 0
 	}
-	fmt.Fprintln(stdout, machineUsage)
-	return 2
+	return cmdMachineShare(args, stdout)
 }

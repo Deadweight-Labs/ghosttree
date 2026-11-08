@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/explain"
+	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
 	"github.com/Deadweight-Labs/ghosttree/internal/pain"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -226,7 +227,7 @@ func (a *app) painState(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	accountID, _ := store.AccountNumericID(browserPrincipal(r).ID)
-	actor := pain.Actor{AccountID: accountID, Person: personOf(r)}
+	actor := pain.Actor{AccountID: accountID, Person: personOf(r), GitAnchor: gitanchor.Web()}
 	ev := pain.Evidence{Kind: r.FormValue("evidence_kind"), Ref: r.FormValue("evidence_ref")}
 	if strings.TrimSpace(ev.Ref) == "" {
 		ev = pain.Evidence{}

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/feature"
 	"github.com/Deadweight-Labs/ghosttree/internal/humantask"
 	"github.com/Deadweight-Labs/ghosttree/internal/idea"
 	"github.com/Deadweight-Labs/ghosttree/internal/originctx"
@@ -43,7 +44,7 @@ func searchKinds(kindParam string, q query.Query) []string {
 	var want []string
 	switch strings.ToLower(kindParam) {
 	case "", "all":
-		want = []string{query.KindKnowledge, query.KindRequest, query.KindPain, query.KindIdea, query.KindCriterion, query.KindTask, query.KindFile, query.KindMessage, query.KindSession}
+		want = []string{query.KindKnowledge, query.KindRequest, query.KindPain, query.KindIdea, query.KindFeature, query.KindCriterion, query.KindTask, query.KindFile, query.KindMessage, query.KindSession}
 	case "messages", "message":
 		want = []string{query.KindMessage}
 	case "sessions", "session":
@@ -58,6 +59,8 @@ func searchKinds(kindParam string, q query.Query) []string {
 		want = []string{query.KindPain}
 	case "ideas", "idea":
 		want = []string{query.KindIdea}
+	case "features", "feature":
+		want = []string{query.KindFeature}
 	case "criteria", "criterion":
 		want = []string{query.KindCriterion}
 	case "tasks", "task":
@@ -104,7 +107,7 @@ func factsOf(kind string, number int64, state, typ, repo, author, assignee, crea
 	return query.Facts{
 		Kind: kind, State: state, Type: typ, Repo: repo, Number: number, Author: author, Assignee: assignee,
 		Branches: of.Branches, Commits: of.Commits, PRs: of.PRs, Packages: of.Packages, Labels: of.Labels,
-		Areas: of.Areas, Parents: of.Parents, Blocks: of.Blocks,
+		Areas: of.Areas, Parents: of.Parents, Blocks: of.Blocks, Features: of.Features,
 		Created: created, Updated: updated, OriginAt: of.OriginAt,
 	}
 }
@@ -206,6 +209,8 @@ func (a *api) qualifiedResult(w http.ResponseWriter, r *http.Request, q query.Qu
 			err = a.qualifiedPains(r, &res, q, text, project, limit, fetchBase)
 		case query.KindIdea:
 			err = a.qualifiedIdeas(r, &res, q, text, project, limit, fetchBase)
+		case query.KindFeature:
+			err = a.qualifiedFeatures(r, &res, q, text, project, limit, fetchBase)
 		case query.KindCriterion:
 			err = a.qualifiedCriteria(r, &res, q, text, project, limit, fetchBase)
 		case query.KindTask:
@@ -349,6 +354,27 @@ func (a *api) qualifiedIdeas(r *http.Request, res *searchResult, q query.Query, 
 	}
 	res.Ideas = filterTo(list, limit, func(i idea.Idea) bool {
 		return q.Match(factsOf(query.KindIdea, i.ID, i.State, "", i.Project, i.Person, "", i.CreatedAt, i.UpdatedAt, facts[i.ID]))
+	})
+	return nil
+}
+
+func (a *api) qualifiedFeatures(r *http.Request, res *searchResult, q query.Query, text, project string, limit, fetchBase int) error {
+	pa := a.access(r)
+	if err := pa.GateList(project, store.ResFeature, true); err != nil {
+		return nil
+	}
+	// Eingestellte Features bleiben suchbar (is:retired); ohne Zustandsangabe
+	// stehen alle in der Liste und die Zeile entscheidet.
+	list, err := pa.SearchFeatures(feature.Filter{Project: project, State: "all", Query: text, Limit: fetchBase})
+	if err != nil {
+		return err
+	}
+	facts, err := a.st.ObjectFacts("feature", idsOf(list, func(f feature.Feature) int64 { return f.ID }))
+	if err != nil {
+		return err
+	}
+	res.Features = filterTo(list, limit, func(f feature.Feature) bool {
+		return q.Match(factsOf(query.KindFeature, f.ID, f.State, "", f.Project, f.Person, "", f.CreatedAt, f.UpdatedAt, facts[f.ID]))
 	})
 	return nil
 }

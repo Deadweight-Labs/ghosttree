@@ -51,5 +51,5 @@ func (s *Server) handleMove(_ context.Context, _ *mcp.CallToolRequest, in MoveIn
 	if err != nil {
 		return nil, nil, err
 	}
-	return textResult(fmt.Sprintf("moved #%d to %s", saved.ID, scopeLabel(saved.Scope))), nil, nil
+	return s.withCard(textResult(fmt.Sprintf("moved #%d to %s", saved.ID, scopeLabel(saved.Scope))), s.builder().KnowledgeCard(saved)), nil, nil
 }

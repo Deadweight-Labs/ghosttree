@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/feature"
 	"github.com/Deadweight-Labs/ghosttree/internal/humantask"
 	"github.com/Deadweight-Labs/ghosttree/internal/idea"
 	"github.com/Deadweight-Labs/ghosttree/internal/pain"
@@ -25,6 +26,7 @@ const (
 	KindTask      = "task"
 	KindPain      = "pain"
 	KindIdea      = "idea"
+	KindFeature   = "feature"
 	KindDecision  = "decision"
 	KindKnowledge = "knowledge"
 	KindDocument  = "document"
@@ -41,18 +43,18 @@ const (
 	KindInbox     = "inbox"
 )
 
-// Ref is a parsed short form: REQ-596, TASK-124, PAIN-57, IDEA-3, #4295,
+// Ref is a parsed short form: REQ-596, TASK-124, PAIN-57, IDEA-3, FEAT-4, #4295,
 // pr:155, commit:2d950bf, preset:pr-ergebnis 155, a path, a search line.
 type Ref struct {
 	Kind string
-	ID   int64    // numbers: REQ, TASK, PAIN, IDEA, PKG, knowledge, room, pr
+	ID   int64    // numbers: REQ, TASK, PAIN, IDEA, FEAT, PKG, knowledge, room, pr
 	Num  int      // criterion number
 	Text string   // name, hash, path, branch, search line, session address
 	Args []string // positional values of a preset
 }
 
 var (
-	idRE        = regexp.MustCompile(`(?i)^(req|task|pain|idea|pkg|dec)-(\d+)$`)
+	idRE        = regexp.MustCompile(`(?i)^(req|task|pain|idea|feat|pkg|dec)-(\d+)$`)
 	criterionRE = regexp.MustCompile(`(?i)^(?:req-(\d+)#(\d+)|ac-(\d+)\.(\d+))$`)
 	hashRE      = regexp.MustCompile(`^[0-9a-f]{7,40}$`)
 	prefixRE    = regexp.MustCompile(`^([a-z]+):(.*)$`)
@@ -64,7 +66,7 @@ var (
 func ParseRef(input string) (Ref, error) {
 	in := strings.TrimSpace(input)
 	if in == "" {
-		return Ref{}, errors.New("name what to open: REQ-n, TASK-n, PAIN-n, IDEA-n, DEC-n, #id, pr:n, commit:sha, preset:name, a path or a search line")
+		return Ref{}, errors.New("name what to open: REQ-n, TASK-n, PAIN-n, IDEA-n, FEAT-n, DEC-n, #id, pr:n, commit:sha, preset:name, a path or a search line")
 	}
 	atoi := func(s string) int64 { n, _ := strconv.ParseInt(s, 10, 64); return n }
 	num := func(s string) int { n, _ := strconv.ParseInt(s, 10, 32); return int(n) }
@@ -75,7 +77,7 @@ func ParseRef(input string) (Ref, error) {
 		return Ref{Kind: KindCriterion, ID: atoi(m[3]), Num: num(m[4])}, nil
 	}
 	if m := idRE.FindStringSubmatch(in); m != nil {
-		kind := map[string]string{"req": KindRequest, "task": KindTask, "pain": KindPain, "idea": KindIdea, "pkg": KindPackage, "dec": KindDecision}[strings.ToLower(m[1])]
+		kind := map[string]string{"req": KindRequest, "task": KindTask, "pain": KindPain, "idea": KindIdea, "feat": KindFeature, "pkg": KindPackage, "dec": KindDecision}[strings.ToLower(m[1])]
 		return Ref{Kind: kind, ID: atoi(m[2])}, nil
 	}
 	if strings.HasPrefix(in, "#") {
@@ -157,7 +159,7 @@ func ParseRef(input string) (Ref, error) {
 	if strings.Contains(in, "/") || strings.Contains(in, ".") {
 		return Ref{Kind: KindPath, Text: in}, nil
 	}
-	return Ref{}, fmt.Errorf("cannot tell what %q is: use REQ-n, TASK-n, PAIN-n, IDEA-n, DEC-n, #id, pr:n, commit:sha, preset:name, a path or a search line like is:open", in)
+	return Ref{}, fmt.Errorf("cannot tell what %q is: use REQ-n, TASK-n, PAIN-n, IDEA-n, FEAT-n, DEC-n, #id, pr:n, commit:sha, preset:name, a path or a search line like is:open", in)
 }
 
 // API is what Resolve reads. *client.Client satisfies it; every method answers
@@ -167,6 +169,7 @@ type API interface {
 	GetHumanTask(id int64) (humantask.Task, error)
 	GetPain(id int64) (pain.Detail, error)
 	GetIdea(id int64) (idea.Idea, error)
+	GetFeature(id int64) (feature.Feature, error)
 	GetDecision(id int64) (idea.Decision, error)
 	KnowledgeByID(id int64) (store.Knowledge, error)
 	Documents(project, kind string, includeArchived bool) ([]store.Document, error)
@@ -241,6 +244,12 @@ func (e Env) Resolve(ref Ref) (Card, error) {
 			return Card{}, Unknown(fmt.Sprintf("IDEA-%d", ref.ID))
 		}
 		return b.IdeaCard(i), nil
+	case KindFeature:
+		f, err := e.API.GetFeature(ref.ID)
+		if err != nil {
+			return Card{}, Unknown(fmt.Sprintf("FEAT-%d", ref.ID))
+		}
+		return b.FeatureCard(f), nil
 	case KindDecision:
 		d, err := e.API.GetDecision(ref.ID)
 		if err != nil {

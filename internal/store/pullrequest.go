@@ -106,7 +106,8 @@ const projectAnchorIDs = `
 	UNION SELECT e.anchor_id FROM request_evidence e JOIN requests r ON r.id=e.request_id WHERE r.project=?1 AND e.anchor_id IS NOT NULL
 	UNION SELECT a.anchor_id FROM request_activity a JOIN requests r ON r.id=a.request_id WHERE r.project=?1 AND a.anchor_id IS NOT NULL
 	UNION SELECT pe.anchor_id FROM pain_events pe JOIN pains p ON p.id=pe.pain_id WHERE p.project=?1 AND pe.anchor_id IS NOT NULL
-	UNION SELECT anchor_id FROM ideas WHERE project=?1 AND anchor_id IS NOT NULL`
+	UNION SELECT anchor_id FROM ideas WHERE project=?1 AND anchor_id IS NOT NULL
+	UNION SELECT fv.anchor_id FROM feature_versions fv JOIN features f ON f.id=fv.feature_id WHERE f.project=?1 AND fv.anchor_id IS NOT NULL`
 
 // RecordPullRequest nimmt ein PR-Ereignis auf (Kriterien 3 und 4 von REQ-597):
 //

@@ -665,8 +665,13 @@ func (s *Store) painLinksAndEvents(id int64) ([]pain.Link, []pain.Event, error) 
 		if err != nil {
 			return nil, nil, err
 		}
+		via, err := s.viaFor("pain_events", ids)
+		if err != nil {
+			return nil, nil, err
+		}
 		for i := range events {
 			events[i].GitAnchor = anchors[events[i].ID]
+			events[i].Via = via[events[i].ID]
 		}
 	}
 	return links, events, nil

@@ -38,6 +38,14 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   an organization can claim a repository prefix such as `github.com/<org>/*` and
   connect GitHub to import its repositories as organization projects, and an
   invitation invites into the organization.
+- Machines can belong to a person or to an organization (build servers, CI
+  runners) and be shared with organizations as read or write. Machine knowledge
+  stays private to the owner until each entry is shared with an organization;
+  guests, strangers and former members see nothing, and withdrawing a share
+  takes its entries back. Sharing a machine is done by a person in the web
+  session, or by the operator with `ctx machine share --db`. Agents read with
+  `machine_get` and share single entries with `machine_share_entry` or
+  `share_with_orgs`.
 - Projects without Git: a project can be just a name (`<org>/<name>`), created
   with `ctx project create` or in the web interface.
 - Invitation links open a page at `/join/<code>`; a one-time pairing code
@@ -96,6 +104,15 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   whether an agent may decide (reversible, local) or a person must (security,
   cost, data model, product, …), and deferred decisions return when their
   trigger comes up. A pain can motivate an idea.
+- Features (`ctx feature`, `FEAT-n`): what the product does, written as it is now
+  (behavior, limits, usage, the paths it lives in), every change a new version
+  with who, the Git state and the idea, issues and pull request behind it. A pull
+  request that touches a feature's paths gets "Feature X: Beschreibung angepasst?"
+  in its checklist; agents working in those paths get the feature in short. An
+  idea can name the feature it changes (`concerns FEAT-n`) and carries the
+  description forward. `is:feature` and `feature:N` in the search language;
+  `ctx feature export` and `ctx feature import` generate and take over
+  `docs/features.md`.
 - Runbooks (`ctx runbook`, `ctx run`): stored procedures with steps, checks,
   rollback and pitfalls that surface when an agent touches a matching command
   or path. Executable targets run without a shell, only after an operator allowed

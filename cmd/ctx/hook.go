@@ -607,6 +607,10 @@ func ghostContextForPath(cfg config.Config, gitCtx collector.GitContext, session
 	sha, blob, lines, _ := ghost.HashFile(abs)
 
 	sessionKey := "claude:" + sessionID
+	// Die Features des Bereichs (REQ-612) laufen parallel zu den Beschreibungen,
+	// damit der Hook keinen zweiten Umlauf nacheinander wartet.
+	features := make(chan string, 1)
+	go func() { features <- featureContextForPath(cfg, gitCtx, sessionKey, rel) }()
 	entries, err := client.NewWithTimeout(cfg, relevanceTimeout).
 		GhostsForPathAt(gitCtx.Project, rel, sessionKey, scope.Axes{Branch: gitCtx.Branch, Lineage: gitCtx.Lineage})
 	if err != nil {
@@ -675,7 +679,21 @@ func ghostContextForPath(cfg config.Config, gitCtx collector.GitContext, session
 			priorVersions = n
 		}
 	}
-	return renderGhostDelivery(entries, fresh, writingTools[toolName], describedTarget, rel, priorVersions)
+	return renderGhostDelivery(entries, fresh, writingTools[toolName], describedTarget, rel, priorVersions) + <-features
+}
+
+// featureContextForPath liefert die Features, in deren Bereichen der Pfad liegt
+// (REQ-612), kurz und mit Budget, je Session einmal je Fassung. Wie die
+// Beschreibungen ist es eine Zugabe: bei jedem Fehler schweigt es.
+func featureContextForPath(cfg config.Config, gitCtx collector.GitContext, sessionKey, rel string) string {
+	if gitCtx.Project == "" {
+		return ""
+	}
+	fc, err := client.NewWithTimeout(cfg, relevanceTimeout).FeatureContext(gitCtx.Project, []string{rel}, sessionKey, 0)
+	if err != nil {
+		return ""
+	}
+	return fc.Text
 }
 
 func pluralVersions(n int) string {
