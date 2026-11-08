@@ -164,3 +164,46 @@ func TestCoordAgentNameRejectsInvalidNames(t *testing.T) {
 		t.Fatalf("want 2, got %d: %s", code, out.String())
 	}
 }
+
+// --option (wiederholbar) schlägt einer Frage Antworten vor; sie landen im
+// Posteingang des Empfängers, und Fehlgebrauch scheitert vor dem Senden.
+func TestCoordSendOptionsReachTheInboxAndAreValidatedLocally(t *testing.T) {
+	st, cfg := coordCLIEnv(t)
+	repo := coordRepo(t, "https://github.com/x/options.git")
+	c := client.New(cfg)
+	room := store.RoomKeyForProject("github.com/x/options")
+	if _, err := c.RegisterCoordAgent(store.CoordAgent{ExternalID: "sess-peer", Provider: "test", RoomKey: room}); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"coord", "send", "x", "--mention", "sess-peer", "--option", "a", "--option", "b", repo},                        // keine Frage
+		{"coord", "send", "x", "--intent", "blocker", "--mention", "sess-peer", "--option", "a", "--option", "b", repo}, // kein Vorschlag bei blocker
+		{"coord", "send", "x", "--intent", "question", "--mention", "sess-peer", "--option", "nur eine", repo},
+		{"coord", "send", "x", "--intent", "question", "--mention", "sess-peer", "--option", "a", "--option", "A", repo},
+		{"coord", "send", "x", "--intent", "question", "--mention", "sess-peer", "--option"},
+		{"coord", "inbox", "--option", "a", repo},
+	} {
+		var out bytes.Buffer
+		if code := run(args, &out); code != 2 {
+			t.Errorf("%v: want 2, got %d: %s", args, code, out.String())
+		}
+	}
+	if msgs, _ := c.CoordInbox(store.DestinationRoom, room, "sess-peer", 0, 10); len(msgs) != 0 {
+		t.Fatalf("a refused call sent something: %+v", msgs)
+	}
+	var out bytes.Buffer
+	if code := run([]string{"coord", "send", "Welche Variante?", "--intent", "question", "--mention", "sess-peer", "--option", "Variante A", "--option", "Variante B", repo}, &out); code != 0 {
+		t.Fatalf("code %d: %s", code, out.String())
+	}
+	alice := store.Principal{ID: "person:1", Label: "alice"}
+	entries, err := st.Access(alice).Inbox(st.CoordinationFor(alice, "sess-peer"), store.InboxFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Kind == store.InboxAttention && len(e.Options) == 2 && e.Options[0].Text == "Variante A" && e.Options[1].Text == "Variante B" {
+			return
+		}
+	}
+	t.Fatalf("the options did not reach the inbox: %+v", entries)
+}

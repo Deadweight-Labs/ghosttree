@@ -1191,6 +1191,14 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := ensureReactions(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureAnswerOptions(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := ensureGitAnchors(db); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -1220,6 +1228,10 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 		return nil, err
 	}
 	if err := ensureFeatures(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureCommitQueryIndexes(db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}

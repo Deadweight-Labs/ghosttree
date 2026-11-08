@@ -75,6 +75,17 @@ type InboxEntry struct {
 	HomeRoomKey     string `json:"home_room_key,omitempty"`
 	DestinationKind string `json:"destination_kind,omitempty"`
 	DestinationID   string `json:"destination_id,omitempty"`
+	// Options sind die Antwortvorschläge des Agenten (zwei bis sechs; bei einer
+	// Entscheidung ihre Varianten), ProposedBy der kurze Name des Agenten
+	// („claude“). Beides nur bei offenen Einträgen. Die Antwort mit einem Vorschlag
+	// ist ProjectAccess.QuickAnswer.
+	Options    []AnswerOption `json:"options,omitempty"`
+	ProposedBy string         `json:"proposed_by,omitempty"`
+	// QuickAnswer steht an einem erledigten Eintrag, der mit einem Vorschlag
+	// beantwortet wurde.
+	QuickAnswer *QuickAnswer `json:"quick_answer,omitempty"`
+	// sender ist die Kennung des fragenden Agenten einer Frage im Raum.
+	sender string
 }
 
 // InboxFilter wählt aus dem Posteingang.
@@ -225,6 +236,9 @@ func (a *ProjectAccess) Inbox(ca CoordAccess, f InboxFilter) ([]InboxEntry, erro
 		}
 	}
 
+	if err := a.attachAnswerInfo(open, done); err != nil {
+		return nil, err
+	}
 	// Offene: wer am längsten wartet, zuerst. Erledigte: das Jüngste zuerst.
 	slices.SortStableFunc(open, func(x, y InboxEntry) int { return strings.Compare(x.At, y.At) })
 	slices.SortStableFunc(done, func(x, y InboxEntry) int { return strings.Compare(y.At, x.At) })
@@ -235,6 +249,96 @@ func (a *ProjectAccess) Inbox(ca CoordAccess, f InboxFilter) ([]InboxEntry, erro
 }
 
 func (c CoordAccess) isZero() bool { return c.Store == nil }
+
+// attachAnswerInfo hängt den offenen Einträgen ihre Antwortvorschläge und den
+// Namen des fragenden Agenten an und den erledigten die Schnellantwort. Die
+// Einträge sind schon durch die Sichtprüfungen gegangen; hier wird nichts mehr
+// hinzugefügt, was jemand nicht lesen dürfte.
+func (a *ProjectAccess) attachAnswerInfo(open, done []InboxEntry) error {
+	byKind := func(list []InboxEntry) map[string][]int {
+		m := map[string][]int{}
+		for i, e := range list {
+			m[e.Kind] = append(m[e.Kind], i)
+		}
+		return m
+	}
+	idsOf := func(list []InboxEntry, idx []int, pick func(InboxEntry) int64) []int64 {
+		ids := make([]int64, 0, len(idx))
+		for _, i := range idx {
+			ids = append(ids, pick(list[i]))
+		}
+		return ids
+	}
+	o := byKind(open)
+	if idx := o[InboxTask]; len(idx) > 0 {
+		ids := idsOf(open, idx, func(e InboxEntry) int64 { return e.ID })
+		opts, err := a.st.answerOptionsFor(AnswerOnTask, ids)
+		if err != nil {
+			return err
+		}
+		who, err := a.st.taskProposers(ids)
+		if err != nil {
+			return err
+		}
+		for _, i := range idx {
+			if o := opts[open[i].ID]; len(o) > 0 {
+				open[i].Options, open[i].ProposedBy = o, who[open[i].ID]
+			}
+		}
+	}
+	if idx := o[InboxDecision]; len(idx) > 0 {
+		who, err := a.st.decisionProposers(idsOf(open, idx, func(e InboxEntry) int64 { return e.ID }))
+		if err != nil {
+			return err
+		}
+		for _, i := range idx {
+			if len(open[i].Options) > 0 {
+				open[i].ProposedBy = who[open[i].ID]
+			}
+		}
+	}
+	if idx := o[InboxAttention]; len(idx) > 0 {
+		ids := idsOf(open, idx, func(e InboxEntry) int64 { return e.MessageID })
+		opts, err := a.st.answerOptionsFor(AnswerOnMessage, ids)
+		if err != nil {
+			return err
+		}
+		var senders []string
+		for _, i := range idx {
+			if len(opts[open[i].MessageID]) > 0 {
+				senders = append(senders, open[i].sender)
+			}
+		}
+		providers, err := a.st.agentProviders(senders)
+		if err != nil {
+			return err
+		}
+		for _, i := range idx {
+			// Vorschläge gehören nur zu einer Frage, nicht zu einer Freigabe, einem Blocker oder einer Übergabe.
+			if m := opts[open[i].MessageID]; len(m) > 0 && open[i].Reason == AttentionQuestion {
+				open[i].Options, open[i].ProposedBy = m, providers[open[i].sender]
+			}
+		}
+	}
+	d := byKind(done)
+	for kind, subject := range map[string]string{InboxTask: AnswerOnTask, InboxDecision: AnswerOnDecision, InboxAttention: AnswerOnAttention} {
+		idx := d[kind]
+		if len(idx) == 0 {
+			continue
+		}
+		marks, err := a.st.quickAnswersFor(subject, idsOf(done, idx, func(e InboxEntry) int64 { return e.ID }))
+		if err != nil {
+			return err
+		}
+		for _, i := range idx {
+			if q, ok := marks[done[i].ID]; ok {
+				q := q
+				done[i].QuickAnswer = &q
+			}
+		}
+	}
+	return nil
+}
 
 func taskEntry(t humantask.Task, state string) InboxEntry {
 	e := InboxEntry{Kind: InboxTask, ID: t.ID, Ref: t.HumanID(), Project: t.Project, Title: oneLine(t.Title, 200), Reason: t.Kind,
@@ -255,6 +359,9 @@ func taskEntry(t humantask.Task, state string) InboxEntry {
 func decisionEntry(d idea.Decision, state string) InboxEntry {
 	e := InboxEntry{Kind: InboxDecision, ID: d.ID, Ref: fmt.Sprintf("DEC-%d", d.ID), Project: d.Project, Title: oneLine(d.Question, 200),
 		Reason: d.Decider, State: state, CreatedAt: d.CreatedAt, At: d.CreatedAt, SubjectKind: d.Subject, SubjectID: d.SubjectID}
+	if state == InboxOpen && d.Decider == idea.WayHuman {
+		e.Options = optionsOfDecision(d)
+	}
 	if state == InboxDone {
 		e.How, e.DoneBy = d.State, d.DecidedBy
 		if e.At = d.DecidedAt; e.At == "" {
@@ -267,7 +374,7 @@ func decisionEntry(d idea.Decision, state string) InboxEntry {
 func attentionEntry(item AttentionItem, state string) InboxEntry {
 	e := InboxEntry{Kind: InboxAttention, ID: item.ID, Ref: fmt.Sprintf("attention:%d", item.ID), Title: oneLine(item.Body, 200), Reason: item.Reason,
 		State: state, CreatedAt: item.CreatedAt, At: item.CreatedAt, MessageID: item.MessageID, HomeRoomKey: item.HomeRoomKey,
-		DestinationKind: item.DestinationKind, DestinationID: item.DestinationID}
+		DestinationKind: item.DestinationKind, DestinationID: item.DestinationID, sender: item.SenderID}
 	if rest, ok := strings.CutPrefix(item.HomeRoomKey, "project:"); ok {
 		e.Project = rest
 	}

@@ -50,8 +50,12 @@ func run(args []string, stdout io.Writer) int {
 		return cmdKnowledge(rest, stdout)
 	case "request":
 		return cmdRequest(rest, stdout)
+	case "pr":
+		return cmdPR(rest, stdout)
 	case "comment":
 		return cmdComment(rest, stdout)
+	case "react":
+		return cmdReact(rest, stdout)
 	case "package":
 		return cmdPackage(rest, stdout)
 	case "runbook":
@@ -180,6 +184,8 @@ const usage = `usage: ctx <command>
   regression  say which test guards a fixed defect, and list the fixes none does
   request  search and manage the work ledger (create, move, ...)
   comment  comments on an issue, idea or pain (add, list, edit, delete)
+  react    reactions on an issue, idea or comment (+1, heart, ...; --remove takes one back)
+  pr       pull requests of a project: list, show (checklist, package, what was said), commits
   package  work packages: the requests that belong to a branch or pull request (create, add, remove, show, import-relations)
   runbook  named procedures with steps, parameters and triggers (list, show, write, import, approve, allow, report)
   github   ctx github sync-prs --db PATH: operator, fetches PR numbers for existing branches from GitHub

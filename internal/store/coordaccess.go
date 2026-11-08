@@ -918,38 +918,54 @@ func (a CoordAccess) RoomSummaries() ([]CoordRoomSummary, error) {
 }
 
 func (a CoordAccess) Send(message CoordMessage) (int64, error) {
+	id, _, err := a.SendNew(message)
+	return id, err
+}
+
+// CoordSent ist das Ergebnis von SendNew.
+type CoordSent struct {
+	ID      int64
+	Created bool
+}
+
+// SendNew sendet wie Send und meldet, ob die Nachricht neu angelegt wurde.
+// Bei einer Wiederholung (gleiche Client-Id oder gleiche origin_event_id
+// desselben Absenders) ist created false und die Id die der ersten Nachricht.
+func (a CoordAccess) SendNew(message CoordMessage) (int64, bool, error) {
 	if a.Store != nil && a.Store.writer != nil {
-		return queueValue(a.Store, []any{a.Principal, a.AgentExternalID, a.publicOnly, message}, func(d *Store, p []any) (int64, error) {
-			return queuedCoordAccess(d, p).Send(p[3].(CoordMessage))
+		r, err := queueValue(a.Store, []any{a.Principal, a.AgentExternalID, a.publicOnly, message}, func(d *Store, p []any) (CoordSent, error) {
+			id, created, err := queuedCoordAccess(d, p).SendNew(p[3].(CoordMessage))
+			return CoordSent{ID: id, Created: created}, err
 		})
+		return r.ID, r.Created, err
 	}
 	if a.Store == nil || a.publicOnly {
-		return 0, ErrCoordForbidden
+		return 0, false, ErrCoordForbidden
 	}
 	tx, err := a.Store.db.Begin()
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	defer tx.Rollback()
 	actor, err := a.actorTx(tx)
 	if err != nil || actor == "" {
 		if err != nil {
-			return 0, err
+			return 0, false, err
 		}
-		return 0, ErrCoordForbidden
+		return 0, false, ErrCoordForbidden
 	}
 	if ReservedExternalID(actor) {
-		return 0, ErrCoordForbidden // der Präfix system: gehört dem Store
+		return 0, false, ErrCoordForbidden // der Präfix system: gehört dem Store
 	}
 	if err := a.canWriteTx(tx, actor, message.DestinationKind, message.DestinationID); err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	explicitMentions := message.Mentions
 	textRoom := mentionRoomKeyTx(tx, message.DestinationKind, message.DestinationID)
 	guestRoom := textRoom != "" && a.projectRoomGate(roomKindOf(textRoom), textRoom, ResAgents, tx) != nil
 	textIDs, typedMentions, err := a.textMentionsTx(tx, actor, textRoom, message.Body, guestRoom)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	message.Mentions = append(append([]string(nil), message.Mentions...), textIDs...)
 	message.IsBroadcast = textRoom != "" && !guestRoom && BodyHasBroadcast(message.Body)
@@ -957,33 +973,33 @@ func (a CoordAccess) Send(message CoordMessage) (int64, error) {
 		if message.DestinationKind == DestinationRoom {
 			var roomKind string
 			if err := tx.QueryRow(`SELECT kind FROM coord_rooms WHERE room_key=?`, message.DestinationID).Scan(&roomKind); err != nil {
-				return 0, ErrCoordNotFound
+				return 0, false, ErrCoordNotFound
 			}
 			if roomKind == RoomDirect {
 				rows, err := tx.Query(`SELECT principal_id FROM coord_room_memberships
 					WHERE room_key=? AND left_at='' AND principal_id<>? ORDER BY principal_id`, message.DestinationID, actor)
 				if err != nil {
-					return 0, err
+					return 0, false, err
 				}
 				for rows.Next() {
 					var recipient string
 					if err := rows.Scan(&recipient); err != nil {
 						rows.Close()
-						return 0, err
+						return 0, false, err
 					}
 					message.Mentions = append(message.Mentions, recipient)
 				}
 				if err := rows.Err(); err != nil {
 					rows.Close()
-					return 0, err
+					return 0, false, err
 				}
 				if err := rows.Close(); err != nil {
-					return 0, err
+					return 0, false, err
 				}
 			}
 		}
 		if len(normalizeMembers(message.Mentions)) == 0 {
-			return 0, ErrAttentionRecipientRequired
+			return 0, false, ErrAttentionRecipientRequired
 		}
 	}
 	var rawMentions []string
@@ -993,10 +1009,10 @@ func (a CoordAccess) Send(message CoordMessage) (int64, error) {
 		if message.DestinationKind == DestinationDiscussion {
 			threadID, parseErr := strconv.ParseInt(message.DestinationID, 10, 64)
 			if parseErr != nil || threadID <= 0 {
-				return 0, ErrCoordNotFound
+				return 0, false, ErrCoordNotFound
 			}
 			if home, found, homeErr := threadHomeTx(tx, threadID); homeErr != nil {
-				return 0, homeErr
+				return 0, false, homeErr
 			} else if found {
 				mentions, raw, mentionErr = a.resolveMentionsTx(tx, actor, home.RoomKey, message.Mentions)
 			} else {
@@ -1006,7 +1022,7 @@ func (a CoordAccess) Send(message CoordMessage) (int64, error) {
 			mentions, raw, mentionErr = a.resolveMentionsTx(tx, actor, message.DestinationID, message.Mentions)
 		}
 		if mentionErr != nil {
-			return 0, mentionErr
+			return 0, false, mentionErr
 		}
 		message.Mentions, rawMentions = mentions, raw
 		if guestRoom {
@@ -1020,10 +1036,10 @@ func (a CoordAccess) Send(message CoordMessage) (int64, error) {
 		if err := tx.QueryRow(`SELECT COUNT(*) FROM coord_messages
 			WHERE id=? AND destination_kind=? AND destination_id=?`, message.ReplyTo,
 			message.DestinationKind, message.DestinationID).Scan(&count); err != nil {
-			return 0, err
+			return 0, false, err
 		}
 		if count == 0 {
-			return 0, ErrCoordNotFound
+			return 0, false, ErrCoordNotFound
 		}
 	}
 	message.SenderExternalID = actor
@@ -1038,34 +1054,34 @@ func (a CoordAccess) Send(message CoordMessage) (int64, error) {
 	if reason, ok := attentionReasonForIntent(message.Intent); ok && reason != AttentionHandoff {
 		waitRoom = messageRoomKeyTx(tx, message.DestinationKind, message.DestinationID)
 		if err := reconcileWaitCyclesSafeTx(tx, waitRoom, time.Now().UTC()); err != nil {
-			return 0, err
+			return 0, false, err
 		}
 	}
-	id, err := appendCoordMessageTx(tx, message)
+	id, created, err := appendCoordMessageNewTx(tx, message)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	if waitRoom != "" {
 		if err := reconcileWaitCyclesSafeTx(tx, waitRoom, time.Now().UTC()); err != nil {
-			return 0, err
+			return 0, false, err
 		}
 	}
 	if err := insertRawMentionsTx(tx, id, rawMentions); err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	if err := recordSenderRoleTx(tx, message, id); err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	if message.DestinationKind == DestinationDiscussion {
 		threadID, _ := strconv.ParseInt(message.DestinationID, 10, 64)
 		if _, err := tx.Exec(`UPDATE threads SET updated_at=? WHERE id=?`, now(), threadID); err != nil {
-			return 0, err
+			return 0, false, err
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return 0, err
+		return 0, false, err
 	}
-	return id, nil
+	return id, created, nil
 }
 
 func (a CoordAccess) resolveLegacyThreadMentionsTx(tx *sql.Tx, actor string, threadID int64, principals []string) (kept, raw []string, err error) {

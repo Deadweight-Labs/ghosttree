@@ -22,6 +22,7 @@ type HumanTaskCreateInput struct {
 	Assignee    string               `json:"assignee,omitempty" jsonschema:"the name of a project member; omit it and the task is for the human this session belongs to"`
 	Everyone    bool                 `json:"everyone,omitempty" jsonschema:"set it only when anybody in the project may do the task (not the person you work for); not together with assignee"`
 	Steps       []HumanTaskStepInput `json:"steps,omitempty" jsonschema:"the walk-through for the human: up to 12 numbered steps in the order they are done, each one line of plain text (no line breaks, no control or invisible characters) with an optional http(s) link, for example the settings page to open. The web interface shows them as a checklist. Never a secret or a login link"`
+	Options     []string             `json:"options,omitempty" jsonschema:"only for kind input or action: two to six short answers you propose, one line each (at most 120 characters). The person sees them as buttons next to a field for their own answer; picking one marks the task done with that text as the note. Never a secret"`
 	Explanation string               `json:"explanation,omitempty" jsonschema:"optional \"Kurz erklärt\" for the humans who will read this: two to four plain sentences, in the language the people of the project use. Say what it is about in everyday words (the mechanism, not the jargon), why it matters (who it affects, when), what has to be done or decided, and your recommendation. No markdown, no links, never a secret. You know the context the server does not; without it the server generates one later from the text alone"`
 }
 
@@ -108,7 +109,7 @@ func (s *Server) handleHumanTaskCreate(_ context.Context, _ *mcp.CallToolRequest
 	}
 	create := humantask.CreateInput{
 		Project: project, Kind: in.Kind, Title: in.Title, Description: in.Description, Location: in.Location,
-		CheckHint: in.CheckHint, RequestID: in.RequestID, WorkID: in.WorkID, Assignee: in.Assignee, Everyone: in.Everyone, Explanation: in.Explanation,
+		CheckHint: in.CheckHint, RequestID: in.RequestID, WorkID: in.WorkID, Assignee: in.Assignee, Everyone: in.Everyone, Explanation: in.Explanation, Options: in.Options,
 	}
 	for _, st := range in.Steps {
 		create.Steps = append(create.Steps, humantask.Step{Text: st.Text, URL: st.URL})

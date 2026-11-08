@@ -244,3 +244,21 @@ func TestRefsRejectsBadCalls(t *testing.T) {
 		t.Errorf("without token: %d", code)
 	}
 }
+
+// Die Hover-Karte eines PRs nennt seinen Autor (den GitHub-Login), wenn GitHub ihn gemeldet hat.
+func TestRefsPullCardNamesTheAuthor(t *testing.T) {
+	f := accessAPI(t, true)
+	f.seedPull(t)
+	if _, err := f.st.RecordPullRequest(store.PullRequestChange{InstallationID: 77, Remote: accProject, HeadRemote: accProject,
+		Number: 13, Action: "opened", Title: "Mit Autor", Head: "feat/y", Base: "main", State: "open", Author: "mia-gh"}); err != nil {
+		t.Fatal(err)
+	}
+	code, body := refsGet(t, f, "mia", "pr:13", "pr:12")
+	if code != 200 {
+		t.Fatalf("code %d: %s", code, body)
+	}
+	list := decodeRefs(t, body)
+	if len(list) != 2 || list[0].Autor != "mia-gh" || list[0].Zeit == "" || list[1].Autor != "" {
+		t.Fatalf("pull cards: %+v", list)
+	}
+}

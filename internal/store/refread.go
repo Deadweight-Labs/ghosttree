@@ -8,7 +8,7 @@ import (
 )
 
 // PullRequestInfo ist die Zeile eines PRs, wie GitHub sie gemeldet hat: Titel,
-// Zustand, Branches und Zeiten. Autor und Beschreibung kennt der Store nicht.
+// Zustand, Branches und Zeiten. Der Autor ist der Login, den GitHub gemeldet hat (leer bei Altzeilen).
 type PullRequestInfo struct {
 	Project   string `json:"project"`
 	Number    int64  `json:"number"`
@@ -16,6 +16,7 @@ type PullRequestInfo struct {
 	State     string `json:"state"`
 	Head      string `json:"head"`
 	Base      string `json:"base,omitempty"`
+	Author    string `json:"author,omitempty"`
 	OpenedAt  string `json:"opened_at"`
 	UpdatedAt string `json:"updated_at"`
 	MergedAt  string `json:"merged_at,omitempty"`
@@ -29,8 +30,8 @@ func (s *Store) PullRequestOf(project string, n int64) (PullRequestInfo, error) 
 	}
 	project = scopeNormalize(project)
 	p := PullRequestInfo{Project: project, Number: n}
-	err := s.db.QueryRow(`SELECT title,state,head_ref,base_ref,opened_at,updated_at,merged_at FROM git_pull_requests WHERE project=? AND number=?`,
-		project, n).Scan(&p.Title, &p.State, &p.Head, &p.Base, &p.OpenedAt, &p.UpdatedAt, &p.MergedAt)
+	err := s.db.QueryRow(`SELECT title,state,head_ref,base_ref,author,opened_at,updated_at,merged_at FROM git_pull_requests WHERE project=? AND number=?`,
+		project, n).Scan(&p.Title, &p.State, &p.Head, &p.Base, &p.Author, &p.OpenedAt, &p.UpdatedAt, &p.MergedAt)
 	return p, err
 }
 

@@ -141,7 +141,7 @@ func Peek(b Builder, r Reader, ref Ref, project string) (Info, error) {
 		if p.Base != "" {
 			summary += " → " + p.Base
 		}
-		return infoOf(c, p.Number, summary, "", p.OpenedAt), nil
+		return infoOf(c, p.Number, summary, p.Author, p.OpenedAt), nil
 	}
 	return Info{}, Unknown("reference")
 }
