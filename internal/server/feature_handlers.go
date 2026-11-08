@@ -343,7 +343,7 @@ func (a *api) exportFeatures(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(feature.RenderDoc(r.URL.Query().Get("title"), list)))
+	_, _ = w.Write([]byte(feature.RenderDoc("", list)))
 }
 
 func (a *api) linkIdeaFeature(w http.ResponseWriter, r *http.Request) {

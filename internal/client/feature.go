@@ -3,6 +3,7 @@ package client
 import (
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/feature"
 	"github.com/Deadweight-Labs/ghosttree/internal/idea"
@@ -179,12 +180,18 @@ func (c *Client) FeatureContext(project string, paths []string, session string, 
 }
 
 // ExportFeatures liefert die aktiven Features als Markdown-Seite.
+// Den Titel setzt der Client selbst ein: der Server gibt keine Eingabe aus der
+// Anfrage in die Antwort zurück.
 func (c *Client) ExportFeatures(project, title string) (string, error) {
 	q := url.Values{"project": {project}}
-	if title != "" {
-		q.Set("title", title)
-	}
 	var out string
-	err := c.do("GET", "/api/features/export", q, nil, &out)
-	return out, err
+	if err := c.do("GET", "/api/features/export", q, nil, &out); err != nil {
+		return "", err
+	}
+	if title = strings.TrimSpace(strings.ReplaceAll(title, "\n", " ")); title != "" {
+		if _, rest, ok := strings.Cut(out, "\n"); ok && strings.HasPrefix(out, "# ") {
+			out = "# " + title + "\n" + rest
+		}
+	}
+	return out, nil
 }

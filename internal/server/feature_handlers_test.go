@@ -196,6 +196,10 @@ func TestFeatureAPIWalkThrough(t *testing.T) {
 		t.Fatalf("export:\n%s", page)
 	}
 	f.expect(t, "nora", 404, "GET", "/api/features/export?project="+url.QueryEscape(accProject), nil)
+	// Nichts aus der Anfrage geht in die Antwort zurück: den Titel setzt der Client.
+	if echoed := f.expect(t, "gus", 200, "GET", "/api/features/export?project="+url.QueryEscape(accProject)+"&title="+url.QueryEscape("<script>x</script>"), nil); strings.Contains(echoed, "<script>") {
+		t.Fatalf("the export reflects the title parameter:\n%s", echoed)
+	}
 
 	// Einstellen: der Lead, nicht das Mitglied.
 	f.expect(t, "mia", 403, "POST", featPath("/api/features/%d/state", fid), map[string]any{"state": "retired", "reason": "weg"})
