@@ -13,6 +13,13 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# The race detector makes the suite about eight times slower. Pull requests run
+# every test without it plus the concurrency tests with it; pushes to dev, main,
+# release and hotfix branches run everything under the race detector.
+env:
+  RACE: ${{ github.event_name == 'push' && '-race' || '' }}
+  RACE_SUBSET: Concurren|Race|Racing|Parallel|Simultan|Contend|SSE|Stream|Revoked|Drain|Shutdown|SIGTERM|Cursor|Writer|Pool|Queue|Crash|Watch|Lease|Lock
+
 jobs:
   policy:
     name: Pull request policy
@@ -70,6 +77,10 @@ jobs:
   go-test-web:
     name: Go tests (web)
     runs-on: ubuntu-latest
+    # Test databases live in RAM: on the runner's disk every migration commit
+    # waits for fsync, which made opening one fresh store take seconds.
+    env:
+      TMPDIR: /dev/shm
     timeout-minutes: 80
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -77,12 +88,19 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: Test web with race detector
-        run: go test -race -count=1 -timeout 70m ./internal/web/
+      - name: Test web
+        run: go test ${{ env.RACE }} -count=1 -timeout 70m ./internal/web/
+      - name: Test web concurrency with race detector
+        if: github.event_name == 'pull_request'
+        run: go test -race -count=1 -timeout 20m -run "$RACE_SUBSET" ./internal/web/
 
   go-test-rest:
     name: Go tests (rest)
     runs-on: ubuntu-latest
+    # Test databases live in RAM: on the runner's disk every migration commit
+    # waits for fsync, which made opening one fresh store take seconds.
+    env:
+      TMPDIR: /dev/shm
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -90,12 +108,19 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: Test with race detector (all packages except store and web)
-        run: go test -race -count=1 -timeout 50m $(go list ./... | grep -v -e '/internal/store$' -e '/internal/web$')
+      - name: Test all packages except store and web
+        run: go test ${{ env.RACE }} -count=1 -timeout 50m $(go list ./... | grep -v -e '/internal/store$' -e '/internal/web$')
+      - name: Test concurrency with race detector (all packages except store and web)
+        if: github.event_name == 'pull_request'
+        run: go test -race -count=1 -timeout 20m -run "$RACE_SUBSET" $(go list ./... | grep -v -e '/internal/store$' -e '/internal/web$')
 
   go-test-store:
     name: Go tests (store)
     runs-on: ubuntu-latest
+    # Test databases live in RAM: on the runner's disk every migration commit
+    # waits for fsync, which made opening one fresh store take seconds.
+    env:
+      TMPDIR: /dev/shm
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
