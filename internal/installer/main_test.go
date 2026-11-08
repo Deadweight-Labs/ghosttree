@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/testtmp"
 )
 
 // Tests build their fake binaries below the temp directory, which the real
@@ -20,7 +22,7 @@ func TestMain(m *testing.M) {
 	os.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, ".config"))
 	os.Setenv("XDG_DATA_HOME", filepath.Join(dir, ".local", "share"))
 	os.Setenv("XDG_STATE_HOME", filepath.Join(dir, ".local", "state"))
-	code := m.Run()
+	code := testtmp.Run(m)
 	os.RemoveAll(dir)
 	os.Exit(code)
 }
