@@ -226,12 +226,18 @@ func TestPreferTakesTheAppWhenConfigured(t *testing.T) {
 	}
 }
 
-func TestAuthorizeURLIsTheInstallationPage(t *testing.T) {
+func TestAuthorizeURLIsTheUserAuthorizationAndInstallURLTheInstallationPage(t *testing.T) {
 	f := newFakeApp(t)
 	u := f.app().AuthorizeURL("st8", "http://x/cb")
-	if !strings.HasPrefix(u, f.srv.URL+"/apps/ghosttree-dw/installations/new?") || !strings.Contains(u, "state=st8") ||
-		strings.Contains(u, "appsecret") || strings.Contains(u, "whsec") {
-		t.Fatalf("url: %s", u)
+	if !strings.HasPrefix(u, f.srv.URL+"/login/oauth/authorize?") || !strings.Contains(u, "state=st8") ||
+		!strings.Contains(u, "client_id=") || !strings.Contains(u, "redirect_uri=http%3A%2F%2Fx%2Fcb") ||
+		strings.Contains(u, "installations/new") || strings.Contains(u, "appsecret") || strings.Contains(u, "whsec") {
+		t.Fatalf("authorize url: %s", u)
+	}
+	i := f.app().InstallURL("st8")
+	if !strings.HasPrefix(i, f.srv.URL+"/apps/ghosttree-dw/installations/new?") || !strings.Contains(i, "state=st8") ||
+		strings.Contains(i, "appsecret") || strings.Contains(i, "whsec") {
+		t.Fatalf("install url: %s", i)
 	}
 }
 

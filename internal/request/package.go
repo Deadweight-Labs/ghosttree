@@ -73,6 +73,20 @@ type PackageDetail struct {
 	// für einen abgezweigten Branch kam. Leer beim eigenen Paket.
 	InheritedFrom string              `json:"inherited_from,omitempty"`
 	Members       []PackageMemberView `json:"members"`
+	// Uncovered sind Anforderungen von Ideen der Mitglieder, die noch kein
+	// erfülltes Kriterium haben und nicht erlassen sind. Nur die Prüfansicht
+	// (package_review) füllt es (REQ-611).
+	Uncovered []UncoveredRequirement `json:"uncovered_requirements,omitempty"`
+}
+
+// UncoveredRequirement ist eine Anforderung einer Idee ohne erfülltes Kriterium.
+// State ist none (kein Kriterium) oder open (Kriterien da, keines erfüllt).
+type UncoveredRequirement struct {
+	Idea      int64  `json:"idea"`
+	IdeaTitle string `json:"idea_title"`
+	No        int    `json:"no"`
+	Text      string `json:"text"`
+	State     string `json:"state"`
 }
 
 // PackageInput legt ein Paket an.
@@ -139,4 +153,18 @@ func (r *ImportReport) Add(item ImportItem) {
 	default:
 		r.Skipped++
 	}
+}
+
+// PackageOfRequest ist ein Paket, in dem ein Request steckt, mit seiner Rolle dort.
+type PackageOfRequest struct {
+	Package
+	Role string `json:"role"`
+}
+
+// PackageSummary ist ein Paket in einer Projektliste: Requests und offene
+// Kriterien zählen nur, was der Betrachter lesen darf.
+type PackageSummary struct {
+	Package
+	Requests     int `json:"requests"`
+	OpenCriteria int `json:"open_criteria"`
 }

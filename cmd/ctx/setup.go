@@ -24,6 +24,9 @@ func cmdSetup(args []string, stdout io.Writer) int {
 		return 2
 	}
 	cfg := config.Config{ServerURL: *serverURL, Token: *token, Machine: *machine}
+	if prev, err := config.Load(); err == nil {
+		cfg.Channel = prev.Channel // a new login keeps the update channel
+	}
 	if cfg.Machine == "" {
 		cfg.Machine, _ = os.Hostname()
 	}

@@ -177,7 +177,7 @@ func (a *api) startRequestWork(w http.ResponseWriter, r *http.Request) {
 		writeRequestError(w, sql.ErrNoRows)
 		return
 	}
-	work, warnings, err := a.st.StartRequestWork(requestID, body.SessionID, body.Role, personOf(r))
+	work, warnings, err := a.st.StartRequestWork(requestID, body.SessionID, body.Role, personOf(r), anchorFromRequest(r))
 	if err != nil {
 		writeRequestError(w, a.hideRuleRequest(r, err))
 		return
@@ -185,7 +185,13 @@ func (a *api) startRequestWork(w http.ResponseWriter, r *http.Request) {
 	if !sees && len(warnings) > 0 {
 		warnings = a.readableStartWarnings(r, requestID, work.ID)
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"work": a.workView(r, work), "warnings": warnings})
+	out := map[string]any{"work": a.workView(r, work), "warnings": warnings}
+	// Kommt der Request aus einer Idee, bekommt der Agent gleich ihre Kurzfassung,
+	// die getroffenen Entscheidungen und die offenen Fragen (REQ-611).
+	if text, err := pa.IdeaBriefingForRequest(requestID, ideaBriefingChars); err == nil && text != "" {
+		out["idea_briefing"] = text
+	}
+	writeJSON(w, http.StatusCreated, out)
 }
 
 // hideRuleRequest ersetzt in primary_exists die REQ-Nummer, wenn der Betrachter
@@ -272,7 +278,7 @@ func (a *api) addRequestCriterion(w http.ResponseWriter, r *http.Request) {
 	if !a.checkRequest(w, r, store.RefRequest, requestID, store.ActEdit) {
 		return
 	}
-	criterion, err := a.st.AddCriterion(requestID, body.Description, personOf(r))
+	criterion, err := a.st.AddCriterion(requestID, body.Description, personOf(r), anchorFromRequest(r))
 	if err != nil {
 		writeRequestError(w, err)
 		return
@@ -321,7 +327,7 @@ func (a *api) dropRequest(w http.ResponseWriter, r *http.Request) {
 	if !a.checkRequest(w, r, store.RefRequest, requestID, store.ActEdit) {
 		return
 	}
-	if err := a.st.DropRequest(requestID, body.Reason, personOf(r)); err != nil {
+	if err := a.st.DropRequest(requestID, body.Reason, personOf(r), anchorFromRequest(r)); err != nil {
 		writeRequestError(w, err)
 		return
 	}
@@ -347,7 +353,7 @@ func (a *api) addRequestRelation(w http.ResponseWriter, r *http.Request) {
 	if !a.checkRequest(w, r, store.RefRequest, requestID, store.ActWork) {
 		return
 	}
-	saved, err := a.st.AddRequestRelation(requestID, relation, personOf(r))
+	saved, err := a.st.AddRequestRelation(requestID, relation, personOf(r), anchorFromRequest(r))
 	if err != nil {
 		writeRequestError(w, err)
 		return
@@ -418,10 +424,17 @@ func writeRequestError(w http.ResponseWriter, err error) {
 			status = http.StatusConflict
 		}
 		switch rule.ErrorCode {
-		case "package_not_found", "label_not_found", "idea_not_found", "preset_not_found":
+		case "package_not_found", "label_not_found", "idea_not_found", "preset_not_found",
+			"decision_not_found", "attachment_not_found", "text_not_found", "variant_not_found", "thread_not_found":
 			status = http.StatusNotFound
-		case "package_exists", "package_closed", "pr_taken", "label_exists", "idea_duplicate", "idea_changed":
+		case "package_exists", "package_closed", "pr_taken", "label_exists", "idea_duplicate", "idea_changed",
+			"text_changed", "concept_changed", "decision_closed", "decision_changed", "decision_open", "idea_closed":
 			status = http.StatusConflict
+		case "attachment_too_large":
+			status = http.StatusRequestEntityTooLarge
+		case "human_only", "human_decision":
+			// Ein Token ist kein Mensch: der Schritt gehört in die Weboberfläche.
+			status = http.StatusForbidden
 		}
 		if rule.ErrorCode == "secret_detected" {
 			status = http.StatusUnprocessableEntity

@@ -89,7 +89,7 @@ func (a *app) requirePerson(next http.Handler) http.Handler {
 				if !a.store.PrincipalValid(session.principal) {
 					a.sessions.remove(cookie.Value)
 					http.SetCookie(w, a.sessionCookieFor(r, "", -1))
-					http.Redirect(w, r, "/ui/login", http.StatusSeeOther)
+					a.loginRedirect(w, r)
 					return
 				}
 				ctx := context.WithValue(r.Context(), personKey{}, session.principal)
@@ -101,7 +101,7 @@ func (a *app) requirePerson(next http.Handler) http.Handler {
 				return
 			}
 		}
-		http.Redirect(w, r, "/ui/login", http.StatusSeeOther)
+		a.loginRedirect(w, r)
 	})
 }
 
@@ -244,6 +244,7 @@ func (a *app) loginRejected(l lang, w http.ResponseWriter, status int, errKey st
 func (a *app) loginPage(w http.ResponseWriter, r *http.Request) {
 	l := a.langFor(r)
 	codeHeaders(w)
+	a.rememberNext(w, r)
 	a.render(l, w, "login", a.loginData(l.msg("login.title"), ""))
 }
 func (a *app) loginSubmit(w http.ResponseWriter, r *http.Request) {
@@ -284,7 +285,7 @@ func (a *app) finishJoinLogin(w http.ResponseWriter, r *http.Request, account st
 // startSession vergibt immer eine neue Sitzungs-ID und verwirft eine
 // mitgebrachte (keine Session-Fixation).
 func (a *app) startSession(w http.ResponseWriter, r *http.Request, principal store.Principal) {
-	a.startSessionAt(w, r, principal, "/ui/overview")
+	a.startSessionAt(w, r, principal, a.takeNext(w, r, "/ui/overview"))
 }
 
 func (a *app) startSessionAt(w http.ResponseWriter, r *http.Request, principal store.Principal, next string) {

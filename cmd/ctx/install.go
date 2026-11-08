@@ -27,7 +27,7 @@ const installUsage = `usage: ctx install claude|codex|opencode [--only component
        ctx install watch
        ctx install ghclaude
 
-  claude, codex, opencode  wire the harness: hooks, MCP server, rules, skills.
+  claude, codex, opencode  wire the harness: hooks, MCP server, rules, skills, and the /ghost shortcuts (open, task, req, preset; Codex: $ghost).
                            claude and codex also set up the collector service.
   watch                    set up only the collector service (ctx watch as a
                            systemd user unit on Linux, a LaunchAgent on macOS)

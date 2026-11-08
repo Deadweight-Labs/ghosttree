@@ -24,7 +24,12 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/snapshot"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
+	"github.com/Deadweight-Labs/ghosttree/internal/version"
 )
+
+// ClientVersion is the version of this ctx binary; main sets it. Every request
+// carries it so the server can tell the briefing when this client is old.
+var ClientVersion string
 
 type Client struct {
 	cfg  config.Config
@@ -142,6 +147,11 @@ func (c *Client) Relevant(text string, ax scope.Axes, limit int, session string)
 
 func (c *Client) Machine() string { return c.cfg.Machine }
 
+// ServerURL is the server's base address, the root of the web addresses that
+// cards and links carry (REQ-603). It is the address the client talks to; a
+// token never belongs to it.
+func (c *Client) ServerURL() string { return c.cfg.ServerURL }
+
 func (c *Client) WhoAmI() (store.Principal, error) {
 	var principal store.Principal
 	err := c.do("GET", "/api/whoami", nil, nil, &principal)
@@ -177,6 +187,10 @@ func (c *Client) doContext(ctx context.Context, method, path string, query url.V
 		req.Header.Set("Authorization", "Bearer "+c.cfg.Token)
 	}
 	c.setAnchor(req, method, path)
+	if ClientVersion != "" {
+		req.Header.Set("X-Ctx-Version", ClientVersion)
+		req.Header.Set("X-Ctx-Protocol", strconv.Itoa(version.Protocol))
+	}
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return err
@@ -340,6 +354,14 @@ func (c *Client) Health() error {
 		return fmt.Errorf("server reported not ok")
 	}
 	return nil
+}
+
+// Version reads GET /api/version. A server that predates the route answers 404
+// or 401; that comes back as the error, and callers treat it as "unknown".
+func (c *Client) Version() (version.Info, error) {
+	var res version.Info
+	err := c.do("GET", "/api/version", nil, nil, &res)
+	return res, err
 }
 
 func (c *Client) UpsertSession(s store.Session) (int64, error) {
@@ -701,6 +723,29 @@ func (c *Client) ghostVersions(project, path string, limit int, chain bool) ([]s
 	}
 	var out []store.GhostVersion
 	err := c.do("GET", "/api/ghosts/history", q, nil, &out)
+	return out, err
+}
+
+// GhostsForPathAt ist GhostsForPath auf einem Branch: je Pfad gilt die
+// Beschreibung des Branches, sonst eines Vorfahren, sonst der Projektebene.
+func (c *Client) GhostsForPathAt(project, path, sessionKey string, ax scope.Axes) ([]store.GhostFile, error) {
+	q := axesQuery(scope.Axes{Branch: ax.Branch, Lineage: ax.Lineage})
+	q.Set("project", project)
+	q.Set("path", path)
+	q.Set("session", sessionKey)
+	var out []store.GhostFile
+	err := c.do("GET", "/api/ghosts", q, nil, &out)
+	return out, err
+}
+
+// GhostTreeAt ist GhostTree auf einem Branch: der Baum folgt Branch und
+// Abstammung wie das Wissen.
+func (c *Client) GhostTreeAt(project, prefix string, ax scope.Axes) ([]store.GhostFile, error) {
+	q := axesQuery(scope.Axes{Branch: ax.Branch, Lineage: ax.Lineage})
+	q.Set("project", project)
+	q.Set("prefix", prefix)
+	var out []store.GhostFile
+	err := c.do("GET", "/api/ghosts/tree", q, nil, &out)
 	return out, err
 }
 

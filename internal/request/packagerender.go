@@ -109,8 +109,11 @@ func RenderPackageReview(d PackageDetail) string {
 		tasks += len(m.Tasks)
 	}
 	verdict := "READY: every mandatory criterion is met or waived with a reason"
-	if open > 0 || tasks > 0 {
+	if open > 0 || tasks > 0 || len(d.Uncovered) > 0 {
 		verdict = fmt.Sprintf("NOT READY: %d mandatory criteria open, %d human tasks waiting", open, tasks)
+		if len(d.Uncovered) > 0 {
+			verdict += fmt.Sprintf(", %d requirements of the ideas not covered", len(d.Uncovered))
+		}
 	}
 	if pflicht == 0 {
 		verdict = "EMPTY: no mandatory request in this package"
@@ -149,6 +152,17 @@ func RenderPackageReview(d PackageDetail) string {
 				fmt.Fprintf(&b, "- TASK-%d [%s|%s] %s\n", t.ID, t.Kind, t.State, t.Title)
 			}
 		}
+	}
+	if len(d.Uncovered) > 0 {
+		b.WriteString("\n## Requirements of the ideas that no met criterion covers\n")
+		for _, u := range d.Uncovered {
+			how := "no criterion yet"
+			if u.State == "open" {
+				how = "criteria exist, none is met"
+			}
+			fmt.Fprintf(&b, "- IDEA-%d#%d %s (%s)\n", u.Idea, u.No, u.Text, how)
+		}
+		b.WriteString("An idea counts as done only when each of its requirements has a met criterion or is waived with a reason (idea_update requirement_waive).\n")
 	}
 	b.WriteString("\nConfirm: request_record_progress action=criterion_met with evidence_kind and evidence_ref. Reopen what the code does not show: action=criterion_reopen with criterion_id and reason.\n")
 	return b.String()

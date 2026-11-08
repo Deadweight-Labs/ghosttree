@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 )
@@ -320,13 +321,22 @@ func (s *Store) CountOpenRequestsFor(v SessionViewer, ax scope.Axes) (int, error
 	return count, err
 }
 
-func (s *Store) AddCriterion(requestID int64, description, person string) (requestdomain.Criterion, error) {
+// firstAnchor nimmt den optionalen Git-Anker einer Schreibfunktion: ohne Angabe
+// (Weboberfläche, Verwaltungsbefehle) bleibt der Ledger-Eintrag unverankert.
+func firstAnchor(a []*gitanchor.Anchor) *gitanchor.Anchor {
+	if len(a) == 0 {
+		return nil
+	}
+	return a[0]
+}
+
+func (s *Store) AddCriterion(requestID int64, description, person string, anchor ...*gitanchor.Anchor) (requestdomain.Criterion, error) {
 	if strings.TrimSpace(description) == "" {
 		return requestdomain.Criterion{}, requestdomain.NewRuleError("criterion_required", "acceptance criterion cannot be empty", "describe an observable outcome", nil)
 	}
 	if s.writer != nil {
-		return queueValue(s, []any{requestID, description, person}, func(d *Store, p []any) (requestdomain.Criterion, error) {
-			return d.AddCriterion(p[0].(int64), p[1].(string), p[2].(string))
+		return queueValue(s, []any{requestID, description, person, firstAnchor(anchor)}, func(d *Store, p []any) (requestdomain.Criterion, error) {
+			return d.AddCriterion(p[0].(int64), p[1].(string), p[2].(string), p[3].(*gitanchor.Anchor))
 		})
 	}
 
@@ -355,7 +365,11 @@ func (s *Store) AddCriterion(requestID int64, description, person string) (reque
 	if err != nil {
 		return requestdomain.Criterion{}, err
 	}
-	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at) VALUES(?,'criterion.added',?,?,?)`, requestID, person, description, ts); err != nil {
+	anchorID, err := insertAnchorTx(tx, firstAnchor(anchor))
+	if err != nil {
+		return requestdomain.Criterion{}, err
+	}
+	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at,anchor_id) VALUES(?,'criterion.added',?,?,?,?)`, requestID, person, description, ts, anchorID); err != nil {
 		return requestdomain.Criterion{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -473,12 +487,14 @@ func (s *Store) CompleteRequest(id int64, evidence requestdomain.Evidence) error
 	return tx.Commit()
 }
 
-func (s *Store) DropRequest(id int64, reason, person string) error {
+func (s *Store) DropRequest(id int64, reason, person string, anchor ...*gitanchor.Anchor) error {
 	if strings.TrimSpace(reason) == "" {
 		return requestdomain.NewRuleError("reason_required", "dropping a request requires a reason", "explain why the requested outcome is no longer wanted", nil)
 	}
 	if s.writer != nil {
-		return queueWrite(s, []any{id, reason, person}, func(d *Store, p []any) error { return d.DropRequest(p[0].(int64), p[1].(string), p[2].(string)) })
+		return queueWrite(s, []any{id, reason, person, firstAnchor(anchor)}, func(d *Store, p []any) error {
+			return d.DropRequest(p[0].(int64), p[1].(string), p[2].(string), p[3].(*gitanchor.Anchor))
+		})
 	}
 
 	tx, err := s.db.Begin()
@@ -498,7 +514,11 @@ func (s *Store) DropRequest(id int64, reason, person string) error {
 		}
 		return terminalRequestError(id, state)
 	}
-	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at) VALUES(?,'request.dropped',?,?,?)`, id, person, reason, ts); err != nil {
+	anchorID, err := insertAnchorTx(tx, firstAnchor(anchor))
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at,anchor_id) VALUES(?,'request.dropped',?,?,?,?)`, id, person, reason, ts, anchorID); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -521,7 +541,7 @@ func relationAddedData(r requestdomain.Relation) string {
 	return r.Kind + " ext " + r.ExternalRef
 }
 
-func (s *Store) AddRequestRelation(requestID int64, relation requestdomain.Relation, person string) (requestdomain.Relation, error) {
+func (s *Store) AddRequestRelation(requestID int64, relation requestdomain.Relation, person string, anchor ...*gitanchor.Anchor) (requestdomain.Relation, error) {
 	valid := map[string]bool{"parent": true, "related": true, "blocks": true, "duplicates": true, "supersedes": true, "knowledge": true, "external": true}
 	if !valid[relation.Kind] {
 		return requestdomain.Relation{}, requestdomain.NewRuleError("invalid_relation", "unsupported request relation", "use parent, related, blocks, duplicates, supersedes, knowledge, or external", nil)
@@ -547,8 +567,8 @@ func (s *Store) AddRequestRelation(requestID int64, relation requestdomain.Relat
 		knowledge = relation.KnowledgeID
 	}
 	if s.writer != nil {
-		return queueValue(s, []any{requestID, relation, person}, func(d *Store, p []any) (requestdomain.Relation, error) {
-			return d.AddRequestRelation(p[0].(int64), p[1].(requestdomain.Relation), p[2].(string))
+		return queueValue(s, []any{requestID, relation, person, firstAnchor(anchor)}, func(d *Store, p []any) (requestdomain.Relation, error) {
+			return d.AddRequestRelation(p[0].(int64), p[1].(requestdomain.Relation), p[2].(string), p[3].(*gitanchor.Anchor))
 		})
 	}
 
@@ -566,7 +586,11 @@ func (s *Store) AddRequestRelation(requestID int64, relation requestdomain.Relat
 	if err != nil {
 		return requestdomain.Relation{}, err
 	}
-	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at) VALUES(?,'relation.added',?,?,?)`, requestID, person, relationAddedData(relation), ts); err != nil {
+	anchorID, err := insertAnchorTx(tx, firstAnchor(anchor))
+	if err != nil {
+		return requestdomain.Relation{}, err
+	}
+	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at,anchor_id) VALUES(?,'relation.added',?,?,?,?)`, requestID, person, relationAddedData(relation), ts, anchorID); err != nil {
 		return requestdomain.Relation{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -576,7 +600,7 @@ func (s *Store) AddRequestRelation(requestID int64, relation requestdomain.Relat
 	return relation, nil
 }
 
-func (s *Store) StartRequestWork(requestID, sessionID int64, role, person string) (requestdomain.Work, []string, error) {
+func (s *Store) StartRequestWork(requestID, sessionID int64, role, person string, anchor ...*gitanchor.Anchor) (requestdomain.Work, []string, error) {
 	if role != "primary" && role != "related" {
 		return requestdomain.Work{}, nil, requestdomain.NewRuleError("invalid_work_role", "work role must be primary or related", "choose primary or related", nil)
 	}
@@ -585,8 +609,8 @@ func (s *Store) StartRequestWork(requestID, sessionID int64, role, person string
 			work     requestdomain.Work
 			warnings []string
 		}
-		out, err := queueValue(s, []any{requestID, sessionID, role, person}, func(d *Store, p []any) (result, error) {
-			work, warnings, err := d.StartRequestWork(p[0].(int64), p[1].(int64), p[2].(string), p[3].(string))
+		out, err := queueValue(s, []any{requestID, sessionID, role, person, firstAnchor(anchor)}, func(d *Store, p []any) (result, error) {
+			work, warnings, err := d.StartRequestWork(p[0].(int64), p[1].(int64), p[2].(string), p[3].(string), p[4].(*gitanchor.Anchor))
 			return result{work: work, warnings: warnings}, err
 		})
 		return out.work, out.warnings, err
@@ -644,7 +668,11 @@ func (s *Store) StartRequestWork(requestID, sessionID int64, role, person string
 	if err != nil {
 		return requestdomain.Work{}, nil, err
 	}
-	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at,session_id) VALUES(?,'work.started',?,?,?,?)`, requestID, person, fmt.Sprintf("session:%d role:%s", sessionID, role), ts, sessionID); err != nil {
+	anchorID, err := insertAnchorTx(tx, firstAnchor(anchor))
+	if err != nil {
+		return requestdomain.Work{}, nil, err
+	}
+	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at,session_id,anchor_id) VALUES(?,'work.started',?,?,?,?,?)`, requestID, person, fmt.Sprintf("session:%d role:%s", sessionID, role), ts, sessionID, anchorID); err != nil {
 		return requestdomain.Work{}, nil, err
 	}
 	if err := tx.Commit(); err != nil {

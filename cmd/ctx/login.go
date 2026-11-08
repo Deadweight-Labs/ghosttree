@@ -39,6 +39,9 @@ func cmdLogin(args []string, stdout io.Writer) int {
 	}
 	existing, _ := config.Load()
 	cfg := config.Config{ServerURL: strings.TrimSpace(*serverURL), Machine: *machine}
+	if prev, err := config.Load(); err == nil {
+		cfg.Channel = prev.Channel // a new login keeps the update channel
+	}
 	if cfg.ServerURL == "" {
 		cfg.ServerURL = existing.ServerURL
 	}

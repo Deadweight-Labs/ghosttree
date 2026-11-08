@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/links"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
@@ -23,7 +24,7 @@ func TestSearchHitsSayWhenOnlyTheMeaningMatched(t *testing.T) {
 	out := listFromPage(requestdomain.SearchPage{Results: []requestdomain.SearchHit{
 		{Request: requestdomain.Request{ID: 1, Title: "by words"}},
 		{Request: requestdomain.Request{ID: 2, Title: "by meaning"}, Match: store.MatchSemantic, MatchReason: "semantic match"},
-	}, NextCursor: "~2"})
+	}, NextCursor: "~2"}, links.Builder{})
 	if len(out.Results) != 2 || out.Results[0].Match != "" || out.Results[1].Match != store.MatchSemantic || out.NextCursor != "~2" {
 		t.Fatalf("%+v", out)
 	}

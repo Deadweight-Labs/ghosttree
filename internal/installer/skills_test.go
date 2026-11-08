@@ -265,3 +265,71 @@ func TestSkillCheckRejectsInvalidFrontmatter(t *testing.T) {
 		t.Fatalf("invalid frontmatter finding = %+v", c)
 	}
 }
+
+// REQ-603: ctx install sets up the /ghost shortcuts for Claude Code and Codex, and
+// ctx doctor notices when one of them is gone.
+func TestInstallSetsUpGhostShortcutsForClaudeAndCodexAndDoctorChecksThem(t *testing.T) {
+	home := isolate(t)
+	roots := map[string]string{"claude": filepath.Join(home, ".claude", "skills"), "codex": filepath.Join(home, ".agents", "skills")}
+	for name, root := range roots {
+		h := harnessFor(t, name)
+		if _, err := installSkills(h, home); err != nil {
+			t.Fatal(err)
+		}
+		raw, err := os.ReadFile(filepath.Join(root, "ghost", "SKILL.md"))
+		if err != nil {
+			t.Fatalf("%s: ghost skill not written: %v", name, err)
+		}
+		for _, want := range []string{"name: ghost", "## open ", "## task ", "## req ", "## preset "} {
+			if !strings.Contains(string(raw), want) {
+				t.Errorf("%s: ghost skill lacks %q", name, want)
+			}
+		}
+		if c := skillCheck(h, "skills", home, "ctx install "+name); !c.OK {
+			t.Errorf("%s: doctor is not green after install: %s", name, c.Detail)
+		}
+		if err := os.Remove(filepath.Join(root, "ghost", "SKILL.md")); err != nil {
+			t.Fatal(err)
+		}
+		if c := skillCheck(h, "skills", home, "ctx install "+name); c.OK || !strings.Contains(c.Detail, "ghost/SKILL.md") {
+			t.Errorf("%s: doctor must name the missing shortcut, got ok=%v %q", name, c.OK, c.Detail)
+		}
+	}
+}
+
+// REQ-614: Der frühere Skill gt verschwindet bei der nächsten Installation,
+// aber nur, wenn die Datei unverändert so ist, wie ctx sie geschrieben hat.
+func TestInstallRemovesTheRetiredGtSkillOnlyWhenUnedited(t *testing.T) {
+	home := isolate(t)
+	h := harnessFor(t, "claude")
+	root := filepath.Join(home, ".claude", "skills")
+	old := filepath.Join(root, "gt", "SKILL.md")
+	write := func(body string, ours bool) {
+		if err := writeSkillFile(old, []byte(body)); err != nil {
+			t.Fatal(err)
+		}
+		m := readManifest()
+		if ours {
+			m[old] = sum([]byte(body))
+		} else {
+			delete(m, old)
+		}
+		if err := writeManifest(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("---\nname: gt\n---\nalt\n", true)
+	if _, err := installSkills(h, home); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(old); !os.IsNotExist(err) {
+		t.Fatalf("unedited gt skill should be gone, stat err=%v", err)
+	}
+	write("---\nname: gt\n---\nselbst geändert\n", false)
+	if _, err := installSkills(h, home); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(old); err != nil {
+		t.Fatalf("an edited gt skill must stay: %v", err)
+	}
+}

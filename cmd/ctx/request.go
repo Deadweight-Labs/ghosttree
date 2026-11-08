@@ -10,6 +10,7 @@ import (
 
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
+	"github.com/Deadweight-Labs/ghosttree/internal/links"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 )
@@ -28,10 +29,13 @@ const requestUsage = `usage: ctx request <command>
   done <id> --evidence-kind K --evidence-ref R [--json]`
 
 type requestEnvelope struct {
-	OK       bool     `json:"ok"`
-	Data     any      `json:"data,omitempty"`
-	Warnings []string `json:"warnings,omitempty"`
-	Error    any      `json:"error,omitempty"`
+	OK   bool `json:"ok"`
+	Data any  `json:"data,omitempty"`
+	// Card is the compact card of the one object the answer is about, with its
+	// web link (REQ-603).
+	Card     *links.Card `json:"card,omitempty"`
+	Warnings []string    `json:"warnings,omitempty"`
+	Error    any         `json:"error,omitempty"`
 }
 
 type repeatedString []string
@@ -78,7 +82,8 @@ func cmdRequest(args []string, stdout io.Writer) int {
 			return requestCLIUsage(stdout)
 		}
 		detail, err := c.GetRequest(id)
-		return writeRequestCLIResult(stdout, jsonMode, detail, nil, err)
+		card := cliBuilder(cfg, requestProjectAxes(cfg.Machine).Project).RequestCard(detail)
+		return writeRequestCLIResultCard(stdout, jsonMode, detail, &card, err)
 	case "create":
 		fs := flag.NewFlagSet("request create", flag.ContinueOnError)
 		fs.SetOutput(stdout)
@@ -101,7 +106,8 @@ func cmdRequest(args []string, stdout io.Writer) int {
 			return writeRequestCLIError(stdout, jsonMode, 1, err)
 		}
 		detail, err := c.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: *typ, Title: *title, Description: *description, Priority: *priority, Scope: scope.Axes{Project: target}, SessionRef: currentSessionRef()}, Criteria: criteria, IdempotencyKey: *key, Explanation: *explanation})
-		return writeRequestCLIResult(stdout, jsonMode, detail, nil, err)
+		card := cliBuilder(cfg, target).RequestCard(detail)
+		return writeRequestCLIResultCard(stdout, jsonMode, detail, &card, err)
 	case "move":
 		id, flags, ok := requestIDAndFlags(rest)
 		if !ok {
@@ -242,6 +248,27 @@ func removeBoolArg(args []string, name string) ([]string, bool) {
 }
 
 func requestCLIUsage(stdout io.Writer) int { fmt.Fprintln(stdout, requestUsage); return 2 }
+
+// writeRequestCLIResultCard is writeRequestCLIResult for an answer about one
+// object: JSON carries the card, text prints it under the data.
+func writeRequestCLIResultCard(stdout io.Writer, jsonMode bool, data any, card *links.Card, err error) int {
+	if err != nil {
+		return writeRequestCLIError(stdout, jsonMode, 1, err)
+	}
+	if jsonMode {
+		env := requestEnvelope{OK: true, Data: data}
+		if card != nil && card.URL != "" {
+			env.Card = card
+		}
+		_ = json.NewEncoder(stdout).Encode(env)
+		return 0
+	}
+	code := writeRequestCLIResult(stdout, false, data, nil, nil)
+	if card != nil {
+		cliCard(stdout, *card)
+	}
+	return code
+}
 
 func writeRequestCLIResult(stdout io.Writer, jsonMode bool, data any, warnings []string, err error) int {
 	if err != nil {

@@ -1,12 +1,20 @@
 package mcpserver
 
 import (
+	"bytes"
+	"encoding/base64"
+	"encoding/json"
+	"image"
+	"image/png"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
+	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
 var queryTools = []string{"idea_record", "idea_get", "idea_search", "idea_update", "label", "topic", "search_preset"}
@@ -206,4 +214,178 @@ func TestSearchPresetToolRunsTheBuiltinsAndSavedOnes(t *testing.T) {
 	if got, _ := callTool(t, session, "search_preset", map[string]any{"action": "list"}); !strings.Contains(got, "pr-bugs [user]") {
 		t.Errorf("saved search listed: %s", got)
 	}
+}
+
+func TestIdeaWorkshopToolsOverTheWire(t *testing.T) {
+	c, st := newTestClient(t)
+	project := "github.com/x/y"
+	session := connect(t, &Server{client: c, ctxAxes: scope.Axes{Project: project}})
+	// Anlegen mit allem, was der Agent schon hat: ohne Rückfrage in einem Aufruf.
+	raw := "  Wörtlich,\r\nso gesagt.  \n"
+	out, failed := callTool(t, session, "idea_record", map[string]any{"title": "Anmeldung per OAuth planen", "raw": raw, "raw_source": "Chat",
+		"summary": "Kurz: Anmeldung ohne Passwort.", "concept": map[string]any{"about": "Anmeldung", "requirements": []string{"Anmelden ohne Passwort", "Rechtetest"}}})
+	if failed || !strings.Contains(out, "IDEA-1") {
+		t.Fatalf("idea_record with content: %v %s", failed, out)
+	}
+	got, _ := callTool(t, session, "idea_get", map[string]any{"id": 1})
+	for _, want := range []string{`"phase":"concept"`, "Kurz: Anmeldung ohne Passwort.", "r1 Chat", `"about":"Anmeldung"`, "Rechtetest"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("idea_get lacks %q: %s", want, got)
+		}
+	}
+	// Die Rohfassung kommt unverändert zurück.
+	var text IdeaTextOutput
+	body, _ := callTool(t, session, "idea_text", map[string]any{"id": 1, "part": "raw"})
+	if err := json.Unmarshal([]byte(strings.SplitN(body, "\n", 2)[0]), &text); err != nil || text.Body != raw {
+		t.Fatalf("raw text: %q %v", body, err)
+	}
+	if got, failed := callTool(t, session, "idea_text", map[string]any{"id": 1, "part": "summary", "body": "Kurz, besser.", "base": 1}); failed || !strings.Contains(got, `"revision":2`) {
+		t.Fatalf("summary version: %v %s", failed, got)
+	}
+	if got, failed := callTool(t, session, "idea_text", map[string]any{"id": 1, "part": "summary", "body": "Veraltet", "base": 1}); !failed || !strings.Contains(got, "revision") {
+		t.Errorf("stale base: %v %s", failed, got)
+	}
+	// Offene Entscheidung mit Varianten, Stimme, Bild, Entscheiden.
+	got, failed = callTool(t, session, "decision_open", map[string]any{"idea": 1, "question": "Welcher Anbieter", "aspects": []string{"security"},
+		"variants": []map[string]any{{"title": "Eigener Server", "pro": "keine Abhängigkeit"}, {"title": "Fremddienst", "contra": "Abhängigkeit"}}})
+	if failed || !strings.Contains(got, `"ref":"DEC-1"`) || !strings.Contains(got, `"needs_a_person":true`) || !strings.Contains(got, "link: ") {
+		t.Fatalf("decision_open: %v %s", failed, got)
+	}
+	png := base64.StdEncoding.EncodeToString(testPNGBytes(t))
+	if got, failed := callTool(t, session, "idea_attach", map[string]any{"idea": 1, "owner": "variant", "decision": 1, "variant": "A", "data_base64": png, "alt": "Mock"}); failed || !strings.Contains(got, `"ref":"ATT-1"`) {
+		t.Fatalf("attach to a variant: %v %s", failed, got)
+	}
+	if got, failed := callTool(t, session, "idea_attach", map[string]any{"idea": 1, "data_base64": base64.StdEncoding.EncodeToString([]byte(`<svg onload="x"/>`))}); !failed {
+		t.Errorf("svg: %s", got)
+	}
+	dir := t.TempDir()
+	file := filepath.Join(dir, "mock.png")
+	if err := os.WriteFile(file, testPNGBytes(t), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, failed := callTool(t, session, "idea_attach", map[string]any{"idea": 1, "path": file}); failed || !strings.Contains(got, `"mime":"image/png"`) {
+		t.Fatalf("attach by path: %v %s", failed, got)
+	}
+	if got, failed := callTool(t, session, "idea_attach", map[string]any{"idea": 1, "path": dir}); !failed {
+		t.Errorf("a directory as image: %s", got)
+	}
+	if got, failed := callTool(t, session, "idea_attach", map[string]any{"idea": 1, "path": file, "data_base64": png}); !failed {
+		t.Errorf("both path and data: %s", got)
+	}
+	if got, failed := callTool(t, session, "decision_update", map[string]any{"id": 1, "action": "vote", "variant": "A", "reason": "ich würde A nehmen, weil keine Abhängigkeit"}); failed || !strings.Contains(got, "ich würde A nehmen") {
+		t.Fatalf("vote: %v %s", failed, got)
+	}
+	// Sicherheit verlangt einen Menschen; ein Token (MCP) ist keiner.
+	if got, failed := callTool(t, session, "decision_update", map[string]any{"id": 1, "action": "close", "outcome": "decided", "variant": "A", "reason": "Hoheit behalten"}); !failed || !strings.Contains(got, "person") {
+		t.Fatalf("a token closes a decision that needs a person: %v %s", failed, got)
+	}
+	// Die Weboberfläche ruft den Store als Websitzung auf.
+	web := store.Principal{ID: "person:1", Label: "alice", TokenKind: store.WebSessionKind}
+	if _, err := st.Access(web).CloseDecision(store.CloseDecisionInput{ID: 1, Outcome: "decided", Variant: "A", Reason: "Hoheit behalten", Actor: store.IdeaActorFor(web, "")}); err != nil {
+		t.Fatalf("close as a web session: %v", err)
+	}
+	got, failed = callTool(t, session, "decision_list", map[string]any{"id": 1})
+	if failed || !strings.Contains(got, `"state":"decided"`) || !strings.Contains(got, `"knowledge":"#`) {
+		t.Fatalf("decision after closing: %v %s", failed, got)
+	}
+	concept, _ := callTool(t, session, "idea_concept", map[string]any{"id": 1})
+	if !strings.Contains(concept, "DEC-1") || !strings.Contains(concept, "ATT-1") {
+		t.Errorf("the decision is not in the concept: %s", concept)
+	}
+	var knowledge int
+	st.DB().QueryRow(`SELECT COUNT(*) FROM knowledge WHERE type='decision' AND title LIKE 'DEC-1%'`).Scan(&knowledge)
+	if knowledge != 1 {
+		t.Errorf("decision knowledge entries: %d", knowledge)
+	}
+	// Vertagt kehrt mit Auslöser zurück; offene Rückfrage an der Idee.
+	callTool(t, session, "decision_open", map[string]any{"idea": 1, "question": "Wie wird exportiert"})
+	if got, failed := callTool(t, session, "decision_update", map[string]any{"id": 2, "action": "close", "outcome": "deferred"}); !failed || !strings.Contains(got, "trigger") {
+		t.Errorf("deferral without a trigger: %v %s", failed, got)
+	}
+	if got, failed := callTool(t, session, "decision_update", map[string]any{"id": 2, "action": "close", "outcome": "deferred", "trigger": "wenn wir den Export bauen"}); failed || !strings.Contains(got, `"state":"deferred"`) {
+		t.Errorf("defer: %v %s", failed, got)
+	}
+	if got, _ := callTool(t, session, "decision_list", map[string]any{"waiting_for_a_person": true}); strings.Contains(got, "DEC-2") {
+		t.Errorf("a deferred decision is in the inbox: %s", got)
+	}
+	// Freigabe und Issues.
+	if got, failed := callTool(t, session, "idea_update", map[string]any{"id": 1, "action": "issues"}); !failed || !strings.Contains(got, "approved") {
+		t.Errorf("issues before approval: %v %s", failed, got)
+	}
+	if got, failed := callTool(t, session, "idea_update", map[string]any{"id": 1, "action": "phase", "phase": "approved"}); !failed || !strings.Contains(got, "person") {
+		t.Fatalf("a token approves: %v %s", failed, got)
+	}
+	if _, err := st.Access(web).SetIdeaPhase(1, "approved", store.IdeaActorFor(web, ""), headRev(st, 1)); err != nil {
+		t.Fatalf("approve as a web session: %v", err)
+	}
+	got, failed = callTool(t, session, "idea_update", map[string]any{"id": 1, "action": "issues", "branch": "feat/anmeldung",
+		"issues": []map[string]any{{"title": "Login ohne Passwort", "requirements": []int{1, 2}}}})
+	if failed || !strings.Contains(got, `"created_request":"REQ-1"`) || !strings.Contains(got, "PKG-1") || !strings.Contains(got, `"phase":"building"`) {
+		t.Fatalf("issues: %v %s", failed, got)
+	}
+	d, _ := st.RequestByID(1)
+	if len(d.Criteria) != 2 || d.Criteria[1].Description != "Rechtetest" {
+		t.Fatalf("criteria from the requirements: %+v", d.Criteria)
+	}
+	// Eine Rückfrage aus der Umsetzung landet an der Idee.
+	if got, failed := callTool(t, session, "decision_open", map[string]any{"via_request": 1, "question": "Was mit alten Sitzungen", "way": "human"}); failed || !strings.Contains(got, `"subject":"IDEA-1"`) {
+		t.Fatalf("via_request: %v %s", failed, got)
+	}
+	if got, failed := callTool(t, session, "decision_open", map[string]any{"question": "ohne Bezug"}); !failed {
+		t.Errorf("a question about nothing: %s", got)
+	}
+}
+
+func testPNGBytes(t testing.TB) []byte {
+	t.Helper()
+	var b bytes.Buffer
+	if err := png.Encode(&b, image.NewRGBA(image.Rect(0, 0, 4, 4))); err != nil {
+		t.Fatal(err)
+	}
+	return b.Bytes()
+}
+
+// Ein Pain motiviert eine Lösungsidee (REQ-606): anlegen mit motivated_by_pain,
+// verknüpfen über pain_update, sichtbar in pain_get, idea_get, Suche und Karten.
+func TestAPainMotivatesAnIdeaOverTheWire(t *testing.T) {
+	c, _ := newTestClient(t)
+	project := "github.com/x/y"
+	session := connect(t, &Server{client: c, ctxAxes: scope.Axes{Project: project}})
+	out, failed := callTool(t, session, "pain_record", map[string]any{"title": "Schreiben geht nur ganz oder gar nicht"})
+	if failed || !strings.Contains(out, "PAIN-1") {
+		t.Fatalf("pain_record: %v %s", failed, out)
+	}
+	// Die Lösungsidee anlegen und am Pain verknüpfen, in einem Aufruf.
+	got, failed := callTool(t, session, "idea_record", map[string]any{"title": "Entwürfe speichern", "motivated_by_pain": 1})
+	if failed || !strings.Contains(got, "IDEA-1") || !strings.Contains(got, "PAIN-1 Schreiben geht nur ganz oder gar nicht") || !strings.Contains(got, "motivated by PAIN-1") {
+		t.Fatalf("idea_record with a pain: %v %s", failed, got)
+	}
+	got, _ = callTool(t, session, "pain_get", map[string]any{"id": 1})
+	if !strings.Contains(got, "IDEA-1 Entwürfe speichern") || !strings.Contains(got, "solution idea IDEA-1") {
+		t.Errorf("pain_get lacks the idea: %s", got)
+	}
+	got, _ = callTool(t, session, "idea_get", map[string]any{"id": 1})
+	if !strings.Contains(got, `"motivated_by":["PAIN-1 Schreiben`) {
+		t.Errorf("idea_get lacks the pain: %s", got)
+	}
+	// Eine bestehende Idee später verknüpfen.
+	callTool(t, session, "pain_record", map[string]any{"title": "Zweites Problem ohne Lösung"})
+	callTool(t, session, "idea_record", map[string]any{"title": "Ganz anderer Wunsch"})
+	if got, failed := callTool(t, session, "pain_update", map[string]any{"id": 2, "link_add": []map[string]any{{"idea_id": 2}}}); failed || !strings.Contains(got, "IDEA-2 Ganz anderer Wunsch") {
+		t.Fatalf("pain_update link_add idea: %v %s", failed, got)
+	}
+	if got, failed := callTool(t, session, "pain_update", map[string]any{"id": 2, "link_add": []map[string]any{{"idea_id": 99}}}); !failed || !strings.Contains(got, "target not found") {
+		t.Errorf("an idea that does not exist: %v %s", failed, got)
+	}
+	// Die Suche zeigt beide Seiten.
+	found, _ := callTool(t, session, "context_search", map[string]any{"query": "is:pain,idea", "kind": "all"})
+	if !strings.Contains(found, "PAIN-1") || !strings.Contains(found, "→ IDEA-1") || !strings.Contains(found, "← PAIN-1") {
+		t.Errorf("search lines: %s", found)
+	}
+}
+
+func headRev(st *store.Store, ideaID int64) int {
+	var n int
+	st.DB().QueryRow(`SELECT COALESCE(MAX(revision),0) FROM idea_texts WHERE idea_id=? AND part='concept'`, ideaID).Scan(&n)
+	return n
 }

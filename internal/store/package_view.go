@@ -16,6 +16,7 @@ import (
 // Sichtprüfung wie request_get, es entsteht kein zweiter Weg um sie herum.
 func (a *ProjectAccess) PackageView(d requestdomain.PackageDetail, full bool) requestdomain.PackageDetail {
 	members := make([]requestdomain.PackageMemberView, 0, len(d.Members))
+	var viewed []int64
 	for _, m := range d.Members {
 		ref, err := a.st.RequestRef(RefRequest, m.RequestID)
 		if err != nil || !requestReadable(a, ref) {
@@ -46,7 +47,13 @@ func (a *ProjectAccess) PackageView(d requestdomain.PackageDetail, full bool) re
 			m.Criteria = v.Criteria
 		}
 		members = append(members, m)
+		viewed = append(viewed, m.RequestID)
 	}
 	d.Members = members
+	if full {
+		// Anforderungen der Ideen, aus denen die Requests stammen und die noch
+		// kein erfülltes Kriterium haben (REQ-611).
+		d.Uncovered = a.uncoveredForMembers(viewed)
+	}
 	return d
 }

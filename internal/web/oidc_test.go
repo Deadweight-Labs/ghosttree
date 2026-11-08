@@ -595,8 +595,10 @@ func TestLoginLinkIsConfirmedByPostAndSingleUse(t *testing.T) {
 	}
 	resp := sameOriginPostForm(t, b, srv.URL+"/ui/login/code", url.Values{"code": {code}})
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/ui/overview" {
-		t.Fatalf("post status=%d", resp.StatusCode)
+	// REQ-603: the signed-out GET of /ui/requests above is remembered, so the
+	// sign-in leads back to exactly that page.
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/ui/requests" {
+		t.Fatalf("post status=%d location=%q", resp.StatusCode, resp.Header.Get("Location"))
 	}
 	if resp, _ := b.Get(srv.URL + "/ui/requests"); resp.StatusCode != http.StatusOK {
 		t.Fatalf("session after link: %d", resp.StatusCode)

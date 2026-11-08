@@ -42,6 +42,7 @@ const (
 
 var accessRoutes = map[string]routeClass{
 	"GET /api/health":                             classPublic,
+	"GET /api/version":                            classPublic,
 	"GET /metrics":                                classPublic,
 	"GET /api/whoami":                             classAccount,
 	"DELETE /api/tokens/self":                     classAccount,

@@ -8,17 +8,18 @@ import (
 
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
+	"github.com/Deadweight-Labs/ghosttree/internal/idea"
 	"github.com/Deadweight-Labs/ghosttree/internal/pain"
 )
 
 const painUsage = `usage: ctx pain <command>
 
-  add "title" [--body B] [--explanation E] [--motivates REQ-98|#42|URL ...] [--project P]
+  add "title" [--body B] [--explanation E] [--motivates REQ-98|IDEA-3|#42|URL ...] [--project P]
   list [--state active|mitigated|resolved|obsolete|all] [--request N] [--q text] [--project P]
   show <PAIN-n|n>
   state <n> <mitigated|resolved|obsolete|active> [--remaining R] [--evidence commit:abc|test:T|request:98|decision:42|url:U|file:F|session:S] [--note N]
   edit <n> [--title T] [--body B] --reason R
-  link <n> (--request N | --knowledge ID | --ref "text or url")
+  link <n> (--request N | --idea N | --knowledge ID | --ref "text or url")
   unlink <link-id> --reason R
 
 All commands take --json.`
@@ -37,6 +38,9 @@ func parseMotivates(v string) pain.Target {
 	v = strings.TrimSpace(v)
 	if n, ok := pain.ParseNumberRef(v, "REQ-"); ok && (strings.HasPrefix(strings.ToUpper(v), "REQ-")) {
 		return pain.Target{RequestID: n}
+	}
+	if n, ok := idea.ParseRef(v); ok && strings.HasPrefix(strings.ToUpper(v), "IDEA-") {
+		return pain.Target{IdeaID: n}
 	}
 	if strings.HasPrefix(v, "#") {
 		if n, ok := pain.ParseNumberRef(v, ""); ok {
@@ -68,6 +72,8 @@ func painDetailLines(stdout io.Writer, d pain.Detail) {
 				fmt.Fprintf(stdout, "  #%d REQ-%d %s\n", l.ID, l.RequestID, l.Title)
 			case "knowledge":
 				fmt.Fprintf(stdout, "  #%d knowledge #%d %s\n", l.ID, l.KnowledgeID, l.Title)
+			case "idea":
+				fmt.Fprintf(stdout, "  #%d IDEA-%d %s\n", l.ID, l.IdeaID, l.Title)
 			default:
 				fmt.Fprintf(stdout, "  #%d %s\n", l.ID, l.ExternalRef)
 			}
@@ -109,11 +115,13 @@ func cmdPain(args []string, stdout io.Writer) int {
 	}
 	c := client.New(cfg)
 	result := func(d pain.Detail, err error) int {
+		card := cliBuilder(cfg, d.Pain.Project).PainCard(d.Pain)
 		if err == nil && !jsonMode {
 			painDetailLines(stdout, d)
+			cliCard(stdout, card)
 			return 0
 		}
-		return writeRequestCLIResult(stdout, jsonMode, d, nil, err)
+		return writeRequestCLIResultCard(stdout, jsonMode, d, &card, err)
 	}
 	switch sub {
 	case "add":
@@ -253,11 +261,12 @@ func cmdPain(args []string, stdout io.Writer) int {
 		fs.SetOutput(stdout)
 		request := fs.Int64("request", 0, "request number")
 		knowledge := fs.Int64("knowledge", 0, "knowledge id")
+		ideaNo := fs.Int64("idea", 0, "idea number (the solution idea this pain motivates)")
 		ref := fs.String("ref", "", "external text or URL")
 		if fs.Parse(flags) != nil {
 			return usageErr()
 		}
-		return result(c.AddPainLink(id, pain.Target{RequestID: *request, KnowledgeID: *knowledge, ExternalRef: *ref}, cliSessionID(c, cfg)))
+		return result(c.AddPainLink(id, pain.Target{RequestID: *request, KnowledgeID: *knowledge, IdeaID: *ideaNo, ExternalRef: *ref}, cliSessionID(c, cfg)))
 	case "unlink":
 		pos, flags := splitLeading(rest)
 		if len(pos) != 1 {

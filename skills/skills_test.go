@@ -7,8 +7,8 @@ import (
 
 func TestBothSkillsAreEmbeddedWithFrontmatter(t *testing.T) {
 	names := Names()
-	if len(names) != 2 || names[0] != "ghosttree-onboard-repo" || names[1] != "ghosttree-setup" {
-		t.Fatalf("want both skills sorted, got %v", names)
+	if len(names) != 3 || names[0] != "ghost" || names[1] != "ghosttree-onboard-repo" || names[2] != "ghosttree-setup" {
+		t.Fatalf("want all three skills sorted, got %v", names)
 	}
 	for _, n := range names {
 		files, err := Files(n)
@@ -302,6 +302,19 @@ func TestOnboardingPublishesLongFormDocumentsOutsideGit(t *testing.T) {
 	for _, want := range []string{"ctx doc import", ".ghosttree/edit/", "must not be committed"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("document lifecycle guidance is missing %q", want)
+		}
+	}
+}
+
+// REQ-603: the /ghost shortcuts name every command and the tools behind them, so a
+// rename of a tool or a command cannot leave the skill pointing at nothing.
+func TestGtSkillCarriesTheShortCommandsAndTheirTools(t *testing.T) {
+	body := string(mustFiles(t, "ghost")["SKILL.md"])
+	for _, must := range []string{"## open ", "## task ", "## req ", "## preset ",
+		"open_link", "human_task_create", "steps", "explanation", "request_search", "request_create", "search_preset", "ctx open",
+		"carries no login", "REQ-596", "preset:pr-ergebnis 155"} {
+		if !strings.Contains(body, must) {
+			t.Errorf("gt/SKILL.md lacks %q", must)
 		}
 	}
 }

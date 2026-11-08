@@ -108,6 +108,27 @@ func installSkills(h Harness, home string) ([]Change, error) {
 			}
 		}
 	}
+	// Skills, die ghosttree früher ausgeliefert hat, verschwinden wieder,
+	// aber nur Dateien, die unverändert so sind, wie ctx sie geschrieben hat.
+	for _, name := range retiredSkills {
+		dir := filepath.Join(root, name)
+		target := filepath.Join(dir, "SKILL.md")
+		old, err := os.ReadFile(target)
+		if err != nil {
+			continue
+		}
+		if want, ok := manifest[target]; !ok || want != sum(old) {
+			changes = append(changes, Change{Path: target, Action: "kept (edited locally)"})
+			continue
+		}
+		if err := os.Remove(target); err != nil {
+			return changes, err
+		}
+		_ = os.Remove(dir)
+		delete(manifest, target)
+		dirty = true
+		changes = append(changes, Change{Path: target, Action: "removed"})
+	}
 	if dirty {
 		if err := writeManifest(manifest); err != nil {
 			return changes, err
@@ -115,6 +136,11 @@ func installSkills(h Harness, home string) ([]Change, error) {
 	}
 	return changes, nil
 }
+
+// retiredSkills hat ghosttree einmal ausgeliefert und liefert sie nicht mehr:
+// "gt" hieß der Kurzbefehl-Skill, bis er wegen des Graphite-Befehls gt zu
+// "ghost" wurde (REQ-614).
+var retiredSkills = []string{"gt"}
 
 func writeSkillFile(target string, content []byte) error {
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {

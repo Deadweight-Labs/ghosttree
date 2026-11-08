@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/client"
 )
 
 var version = "0.1.0-dev"
 
 func run(args []string, stdout io.Writer) int {
+	client.ClientVersion = version
 	if len(args) == 0 {
 		fmt.Fprintln(stdout, usage)
 		return 2
@@ -51,6 +54,8 @@ func run(args []string, stdout io.Writer) int {
 		return cmdPackage(rest, stdout)
 	case "runbook":
 		return cmdRunbook(rest, stdout)
+	case "github":
+		return cmdGithub(rest, stdout)
 	case "run":
 		return cmdRun(rest, stdout)
 	case "ghost":
@@ -107,6 +112,10 @@ func run(args []string, stdout io.Writer) int {
 		return cmdProject(rest, stdout)
 	case "setup":
 		return cmdSetup(rest, stdout)
+	case "config":
+		return cmdConfig(rest, stdout)
+	case "update":
+		return cmdUpdate(rest, stdout)
 	case "login":
 		return cmdLogin(rest, stdout)
 	case "join":
@@ -115,6 +124,8 @@ func run(args []string, stdout io.Writer) int {
 		return cmdPain(rest, stdout)
 	case "idea":
 		return cmdIdea(rest, stdout)
+	case "decision":
+		return cmdDecision(rest, stdout)
 	case "search":
 		return cmdSearch(rest, stdout)
 	case "label":
@@ -123,6 +134,8 @@ func run(args []string, stdout io.Writer) int {
 		return cmdTopic(rest, stdout)
 	case "task":
 		return cmdTask(rest, stdout)
+	case "open":
+		return cmdOpen(rest, stdout)
 	case "help", "--help", "-h":
 		fmt.Fprintln(stdout, usage)
 		return 0
@@ -146,6 +159,8 @@ const usage = `usage: ctx <command>
   install  set up a harness (claude|codex|opencode) or ghclaude
   uninstall  remove ghclaude
   setup    write client config (server URL + token)
+  config   get or set client settings (channel stable|dev)
+  update   update ctx from the stable release or the dev build (--check shows only)
   login    sign this machine in through the browser (device login)
   join     pair this machine with a pairing code from an invitation page
   person   manage persons/tokens (server-side; deprecated alias, see account)
@@ -162,13 +177,16 @@ const usage = `usage: ctx <command>
   request  search and manage the work ledger (create, move, ...)
   package  work packages: the requests that belong to a branch or pull request (create, add, remove, show, import-relations)
   runbook  named procedures with steps, parameters and triggers (list, show, write, import, approve, allow, report)
+  github   ctx github sync-prs --db PATH: operator, fetches PR numbers for existing branches from GitHub
   run      ctx run NAME [param=value...] prints a runbook's checklist; --target T --run executes an approved, locally allowed target
   pain     record a problem without a solution, follow it to mitigated or resolved
-  idea     record a wish without working it out, later make a request of it
+  idea     record a wish without working it out, later make a request of it; or work it out (raw text, concept, images, issues)
+  decision open questions on an idea or issue with variants, votes and a way to close them
   search   search with qualifiers (is:open label:bug area:internal/store), saved searches (--preset)
   label    labels for requests, pains, ideas and knowledge, per project or org
   topic    named areas of the repository (several path prefixes under one name)
   task     ask the human for a key, file, decision or action, and check it afterwards
+  open     open an object (REQ-n, TASK-n, PAIN-n, #id, pr:n, preset:..., a path) in the browser, or print its link and card
   knowledge  add, show, supersede, retire or move a knowledge entry
   ghost    read description history or archive confirmed-deleted paths
   doc      write, publish, and read long-form documents

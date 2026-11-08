@@ -1,6 +1,9 @@
 package store
 
-import "database/sql"
+import (
+	"database/sql"
+	"strings"
+)
 
 const painAndTasksSchema = `
 CREATE TABLE IF NOT EXISTS pains(
@@ -38,7 +41,7 @@ CREATE TABLE IF NOT EXISTS entity_links(
   src_kind TEXT NOT NULL CHECK(src_kind IN ('pain')),
   src_id INTEGER NOT NULL REFERENCES pains(id) ON DELETE RESTRICT,
   kind TEXT NOT NULL CHECK(kind IN ('motivates')),
-  dst_kind TEXT NOT NULL CHECK(dst_kind IN ('request','knowledge','external')),
+  dst_kind TEXT NOT NULL CHECK(dst_kind IN ('request','knowledge','external','idea')),
   dst_id INTEGER NOT NULL DEFAULT 0,
   dst_ref TEXT NOT NULL DEFAULT '',
   account_id INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL,
@@ -71,6 +74,56 @@ CREATE INDEX IF NOT EXISTS human_tasks_request ON human_tasks(request_id);
 // ensurePainAndTasks creates the tables of pains and human tasks. Idempotent;
 // no existing table is touched.
 func ensurePainAndTasks(db *sql.DB) error {
-	_, err := db.Exec(painAndTasksSchema)
-	return err
+	if _, err := db.Exec(painAndTasksSchema); err != nil {
+		return err
+	}
+	if err := allowIdeaLinkTarget(db); err != nil {
+		return err
+	}
+	// steps (REQ-603): the walk-through of a task as JSON, additive.
+	return addColumnIfMissing(db, "human_tasks", "steps", "TEXT NOT NULL DEFAULT ''")
+}
+
+// allowIdeaLinkTarget erweitert die CHECK-Bedingung von entity_links um das Ziel
+// idea (REQ-606: ein Pain motiviert eine Idee). SQLite ändert eine CHECK-Bedingung
+// nicht; die Tabelle wird neu gebaut, die Zeilen und Nummern bleiben. Eine
+// Datenbank, die das Ziel schon kennt, bleibt unberührt, der Aufruf ist
+// wiederholbar.
+func allowIdeaLinkTarget(db *sql.DB) error {
+	var ddl string
+	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type='table' AND name='entity_links'`).Scan(&ddl); err != nil {
+		return err
+	}
+	if strings.Contains(ddl, "'idea'") {
+		return nil
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, q := range []string{
+		`CREATE TABLE entity_links_new(
+  id INTEGER PRIMARY KEY,
+  project TEXT NOT NULL,
+  src_kind TEXT NOT NULL CHECK(src_kind IN ('pain')),
+  src_id INTEGER NOT NULL REFERENCES pains(id) ON DELETE RESTRICT,
+  kind TEXT NOT NULL CHECK(kind IN ('motivates')),
+  dst_kind TEXT NOT NULL CHECK(dst_kind IN ('request','knowledge','external','idea')),
+  dst_id INTEGER NOT NULL DEFAULT 0,
+  dst_ref TEXT NOT NULL DEFAULT '',
+  account_id INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL,
+  CHECK((dst_kind='external' AND dst_ref != '' AND dst_id=0) OR (dst_kind!='external' AND dst_id>0 AND dst_ref='')),
+  UNIQUE(src_kind, src_id, kind, dst_kind, dst_id, dst_ref))`,
+		`INSERT INTO entity_links_new(id,project,src_kind,src_id,kind,dst_kind,dst_id,dst_ref,account_id,created_at)
+  SELECT id,project,src_kind,src_id,kind,dst_kind,dst_id,dst_ref,account_id,created_at FROM entity_links`,
+		`DROP TABLE entity_links`,
+		`ALTER TABLE entity_links_new RENAME TO entity_links`,
+		`CREATE INDEX IF NOT EXISTS entity_links_dst ON entity_links(dst_kind, dst_id)`,
+	} {
+		if _, err := tx.Exec(q); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }

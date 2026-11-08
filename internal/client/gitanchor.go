@@ -26,7 +26,7 @@ func (c *Client) SetAnchorSource(f func() gitanchor.Anchor) { c.anchor = f }
 // auch keine git-Aufrufe auslöst.
 var anchoredWrites = regexp.MustCompile(`^(` +
 	`POST /api/(knowledge|ghosts|requests|pains|ideas|coord/messages)` +
-	`|POST /api/requests/\d+/complete` +
+	`|POST /api/requests/\d+/(complete|criteria|drop|relations|work)` +
 	`|PATCH /api/criteria/\d+` +
 	`|POST /api/criteria/\d+/reopen` +
 	`|POST /api/pains/\d+/(state|links)` +

@@ -16,7 +16,7 @@ import (
 	"strings"
 )
 
-//go:embed ghosttree-setup ghosttree-onboard-repo
+//go:embed ghosttree-setup ghosttree-onboard-repo ghost
 var FS embed.FS
 
 func Names() []string {

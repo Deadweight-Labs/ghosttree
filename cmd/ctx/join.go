@@ -705,6 +705,9 @@ func cmdJoin(args []string, stdout io.Writer) int {
 	}
 
 	cfg := config.Config{ServerURL: server, Token: tok.AccessToken, Machine: safe(tok.Machine)}
+	if prev, err := config.Load(); err == nil {
+		cfg.Channel = prev.Channel // a new login keeps the update channel
+	}
 	if cfg.Machine == "" {
 		cfg.Machine = machine
 	}

@@ -33,27 +33,40 @@ type Pain struct {
 	UpdatedAt string `json:"updated_at"`
 	// AuthorID is the account that wrote the pain; never delivered.
 	AuthorID int64 `json:"-"`
+	// Ideas are the solution ideas this pain motivates (REQ-606), as far as the
+	// viewer may read them. Filled by the detail view, the search and the card.
+	Ideas []IdeaRef `json:"ideas,omitempty"`
 	// Match is set by a search and only to "semantic": the embedding found the
 	// pain alone, its words do not match the query. A hit of the text match
 	// leaves it empty, which is also how every other read leaves it.
 	Match string `json:"match,omitempty"`
 }
 
+// IdeaRef names a solution idea of a pain.
+type IdeaRef struct {
+	ID    int64  `json:"id"`
+	Title string `json:"title"`
+	State string `json:"state"`
+}
+
 func (p Pain) HumanID() string { return fmt.Sprintf("PAIN-%d", p.ID) }
 
-// Target names what a pain motivates: exactly one of the three.
+// Target names what a pain motivates: exactly one of request, knowledge entry,
+// idea (a solution idea, REQ-606) or external text.
 type Target struct {
 	RequestID   int64  `json:"request_id,omitempty"`
 	KnowledgeID int64  `json:"knowledge_id,omitempty"`
+	IdeaID      int64  `json:"idea_id,omitempty"`
 	ExternalRef string `json:"external_ref,omitempty"`
 }
 
 // Link is a stored edge pain -> target.
 type Link struct {
 	ID          int64  `json:"id"`
-	Kind        string `json:"kind"` // request, knowledge, external
+	Kind        string `json:"kind"` // request, knowledge, idea, external
 	RequestID   int64  `json:"request_id,omitempty"`
 	KnowledgeID int64  `json:"knowledge_id,omitempty"`
+	IdeaID      int64  `json:"idea_id,omitempty"`
 	ExternalRef string `json:"external_ref,omitempty"`
 	Title       string `json:"title,omitempty"`
 }
