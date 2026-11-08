@@ -53,3 +53,16 @@ func TestInboxAnswerFormAnswersATaskForAnInteractiveSession(t *testing.T) {
 		t.Fatalf("task after the answer: %+v", got)
 	}
 }
+
+// Das Ziel nach einer Schnellantwort ohne Skript ist fest: ein next aus dem
+// Formular lenkt nirgendwohin um, auch nicht auf eine fremde Seite.
+func TestInboxAnswerFormRedirectsOnlyToTheInbox(t *testing.T) {
+	e := ovEnv(t)
+	req := rqMake(t, e.St, rqSpec{Title: "Ship it"})
+	task := tpTask(t, e, shellProject, req.Request.ID, humantask.CreateInput{Kind: "input", Title: "Welche Variante?", Options: []string{"Variante A", "Variante B"}})
+	form := url.Values{"kind": {"task"}, "id": {strconv.FormatInt(task.ID, 10)}, "option": {"1"}, "next": {"https://evil.example/steal"}}
+	resp := tpPost(t, e, e.Member, "/ui/inbox/answer", form)
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/ui/inbox" {
+		t.Fatalf("after the answer: %d to %q, want 303 to the inbox of this site", resp.StatusCode, resp.Header.Get("Location"))
+	}
+}

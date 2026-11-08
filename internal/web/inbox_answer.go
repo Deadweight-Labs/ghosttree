@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
-	"strings"
 
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -43,8 +42,10 @@ func (a *app) inboxAnswer(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if next := r.FormValue("next"); strings.HasPrefix(next, "/") && !strings.HasPrefix(next, "//") && !strings.Contains(next, "\\") {
-		http.Redirect(w, r, next, http.StatusSeeOther)
+	// Ein Formular ohne Skript kehrt in den Posteingang zurück. Das Ziel ist
+	// fest, nichts aus der Anfrage bestimmt, wohin weitergeleitet wird.
+	if r.FormValue("next") != "" {
+		http.Redirect(w, r, "/ui/inbox", http.StatusSeeOther)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
