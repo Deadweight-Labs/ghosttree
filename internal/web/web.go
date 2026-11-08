@@ -519,6 +519,7 @@ var webRoutes = map[string]webClass{
 
 	"GET /ui/tasks":             webProject,
 	"POST /ui/tasks/done":       webAdmin,
+	"POST /ui/inbox/answer":     webAdmin,
 	"GET /ui/pains":             webProject,
 	"GET /ui/pains/{id}":        webProject,
 	"POST /ui/pains/{id}/state": webAdmin,

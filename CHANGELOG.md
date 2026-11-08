@@ -133,6 +133,25 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   FEAT-n, DEC-n, #n, pr:n) to title, state, summary, author, time and link, for
   hover cards; a reference one may not read answers like one that does not
   exist. `GET /api/inbox` lists open and recently done inbox items.
+- Pull requests are readable: `GET /api/pulls` (state, branch, author, pages),
+  `GET /api/pulls/{n}` with the work package in its review view, the feature
+  checklist and what was said about the pull request, `ctx pr list|show|commits`,
+  `pull_list`, `pull_get`. The server learns the commits of a pull request over
+  the GitHub App permission "Pull requests: read" (webhook `pull_request`, and
+  `ctx github sync-prs`), never from a push webhook or the code.
+- Commits are known from two sources, merged by hash: the git anchors of the
+  ledger and the commits of pull requests. `GET /api/commits` (project or branch),
+  `GET /api/commits/{sha}` (what was said at that commit), `GET /api/pulls/{n}/commits`,
+  `GET /api/paths/commits` (commits whose entries were written while working on a
+  path), `commit_get`. Entries count and show only as far as the viewer may read them.
+- Reactions on comments, ideas and issues from a fixed list (+1, -1, laugh,
+  hooray, confused, heart, rocket, eyes), `PUT|DELETE|GET /api/reactions`,
+  `ctx react`, `reaction_set`, `reaction_list`: members react, guests read.
+- An agent can offer two to six answers with a question (`options` on `coord_send`
+  with intent question or `ctx coord send --option`, on `human_task_create` for
+  input and action tasks; the variants of an open decision count too). The inbox offers them as quick answers
+  next to the person's own; only a person in a web session can pick one, a token
+  never can.
 
 #### Coordination
 

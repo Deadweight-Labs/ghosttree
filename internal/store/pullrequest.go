@@ -34,8 +34,18 @@ CREATE INDEX IF NOT EXISTS git_pull_requests_head ON git_pull_requests(project, 
 `
 
 func ensurePullRequests(db *sql.DB) error {
-	_, err := db.Exec(pullRequestSchema)
-	return err
+	if _, err := db.Exec(pullRequestSchema); err != nil {
+		return err
+	}
+	// author: der Login, mit dem GitHub den PR gemeldet hat (additiv; Altzeilen
+	// bleiben leer, bis das nächste Ereignis oder das Nachholen ihn füllt).
+	if err := ensureColumn(db, "git_pull_requests", "author", `TEXT NOT NULL DEFAULT ''`); err != nil {
+		return fmt.Errorf("git_pull_requests.author: %w", err)
+	}
+	if _, err := db.Exec(pullCommitSchema); err != nil {
+		return err
+	}
+	return nil
 }
 
 // PullRequestChange ist ein PR-Ereignis von GitHub (Webhook oder Nachholen
@@ -55,6 +65,8 @@ type PullRequestChange struct {
 	Head, Base    string
 	DefaultBranch string
 	MergeSHA      string
+	// Author ist der Login des PR-Autors (Fremddaten, wird geprüft).
+	Author string
 	// State: open, closed oder merged.
 	State string
 }
@@ -193,16 +205,18 @@ func (s *Store) RecordPullRequest(c PullRequestChange) (PullRequestResult, error
 	if state == "merged" {
 		mergedAt = ts
 	}
-	if _, err := tx.Exec(`INSERT INTO git_pull_requests(project,number,title,state,head_ref,base_ref,default_branch,merge_sha,opened_at,updated_at,merged_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?)
+	author := cleanLogin(c.Author)
+	if _, err := tx.Exec(`INSERT INTO git_pull_requests(project,number,title,state,head_ref,base_ref,default_branch,merge_sha,opened_at,updated_at,merged_at,author)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(project,number) DO UPDATE SET
+			author=CASE WHEN excluded.author!='' THEN excluded.author ELSE git_pull_requests.author END,
 			title=CASE WHEN excluded.title!='' THEN excluded.title ELSE git_pull_requests.title END,
 			state=excluded.state, head_ref=excluded.head_ref, base_ref=excluded.base_ref,
 			default_branch=CASE WHEN excluded.default_branch!='' THEN excluded.default_branch ELSE git_pull_requests.default_branch END,
 			merge_sha=CASE WHEN excluded.merge_sha!='' THEN excluded.merge_sha ELSE git_pull_requests.merge_sha END,
 			updated_at=excluded.updated_at,
 			merged_at=CASE WHEN git_pull_requests.merged_at!='' THEN git_pull_requests.merged_at ELSE excluded.merged_at END`,
-		remote, c.Number, title, state, head, base, defaultBranch, mergeSHA, ts, ts, mergedAt); err != nil {
+		remote, c.Number, title, state, head, base, defaultBranch, mergeSHA, ts, ts, mergedAt, author); err != nil {
 		return res, err
 	}
 	if prevState == "merged" {

@@ -153,6 +153,26 @@ func (a *ProjectAccess) CreateHumanTask(in humantask.CreateInput, actor humantas
 	}
 	in.Title = strings.TrimSpace(in.Title)
 	in.Steps = humantask.CleanSteps(in.Steps)
+	if len(in.Options) > 0 {
+		// Proposals only make sense where a person types something: a secret or a
+		// file is placed, never answered.
+		if in.Kind != "input" && in.Kind != "action" {
+			return humantask.Task{}, requestdomain.NewRuleError("options_not_allowed", "answer options go with a task of kind input or action",
+				"drop the options, or make it an input or action task", nil)
+		}
+		opts, err := CleanAnswerOptions(in.Options)
+		if err != nil {
+			return humantask.Task{}, err
+		}
+		var fields []string
+		for i, o := range opts {
+			fields = append(fields, fmt.Sprintf("option %d", i+1), o)
+		}
+		if err := humantask.CheckFields(fields...); err != nil {
+			return humantask.Task{}, err
+		}
+		in.Options = opts
+	}
 	id, err := st.commitTask(in, actor, project, requestID, workID, assignee)
 	if err != nil {
 		return humantask.Task{}, err
@@ -192,6 +212,9 @@ func (s *Store) commitTask(in humantask.CreateInput, actor humantask.Actor, proj
 		return 0, err
 	}
 	id, _ := res.LastInsertId()
+	if err := insertAnswerOptionsTx(tx, AnswerOnTask, id, in.Options); err != nil {
+		return 0, err
+	}
 	if err := linkActivity(tx, requestID, "task.created", fmt.Sprintf("TASK-%d %s %s", id, in.Kind, in.Title), actor.Person, actor.SessionID, ts); err != nil {
 		return 0, err
 	}
@@ -367,6 +390,10 @@ func applyTaskChange(tx txExec, op string, t humantask.Task, reason string, acto
 	case "reopen":
 		if _, err := tx.Exec(`UPDATE human_tasks SET state='open',state_note=?,done_by_account=0,done_by_person='',done_note='',done_via='',done_at='',
 			confirmed_session_id=0,confirmed_at='',updated_at=? WHERE id=?`, reason, ts, t.ID); err != nil {
+			return err
+		}
+		// Die Schnellantwort-Markierung gehörte zur Erledigung, die es nicht mehr gibt.
+		if _, err := tx.Exec(`DELETE FROM quick_answers WHERE subject_kind=? AND subject_id=?`, AnswerOnTask, t.ID); err != nil {
 			return err
 		}
 		return linkActivity(tx, t.RequestID, "task.reopened", ref+": "+reason, actor.Person, actor.SessionID, ts)

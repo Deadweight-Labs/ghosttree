@@ -74,6 +74,10 @@ type CoordMessage struct {
 	// Explanation is the agent's "Kurz erklärt" text for a question to people.
 	// Write-only: the server stores it beside the message.
 	Explanation string `json:"explanation,omitempty"`
+	// Options are two to six short answers an agent proposes with a question to a
+	// person (intent question). Write-only: the server stores them beside the
+	// message (answer_options); a reply to the question reads them from there.
+	Options []string `json:"options,omitempty"`
 	// Expired ist abgeleitet und wird nicht gespeichert. Eine abgelaufene
 	// Meldung bleibt Geschichte und verschwindet nicht; sie darf nur nicht
 	// als gegenwärtig gelesen werden. "Die API ist 20 Sekunden weg" von
@@ -156,11 +160,25 @@ func (s *Store) AppendCoordMessage(m CoordMessage) (int64, error) {
 // would silently never expire.
 var ErrCoordInvalidExpiry = errors.New("coordination expiry is not an RFC 3339 timestamp")
 
+// ErrCoordOriginConflict: die origin_event_id gehört schon einer Nachricht
+// eines anderen Absenders oder eines anderen Ziels. Die Kennung ist instanzweit
+// eindeutig, darf aber nie auf die Nachricht eines Fremden verweisen.
+var ErrCoordOriginConflict = errors.New("origin event id belongs to another message")
+
 func appendCoordMessageTx(tx *sql.Tx, m CoordMessage) (int64, error) {
+	id, _, err := appendCoordMessageNewTx(tx, m)
+	return id, err
+}
+
+// appendCoordMessageNewTx meldet zusätzlich, ob die Nachricht neu angelegt
+// wurde. Wer an die Nachricht weiteres hängt (Optionen, Erklärung,
+// Zustellstatus), darf das nur bei created=true tun: eine Wiederholung
+// gehört dem, der sie zuerst gesendet hat.
+func appendCoordMessageNewTx(tx *sql.Tx, m CoordMessage) (id int64, created bool, err error) {
 	m = m.withDefaults()
 	if m.ExpiresAt != "" {
 		if _, err := time.Parse(time.RFC3339, m.ExpiresAt); err != nil {
-			return 0, ErrCoordInvalidExpiry
+			return 0, false, ErrCoordInvalidExpiry
 		}
 	}
 	// Systemmeldungen gehen nie durch die Wiederholungserkennung: sie kommen nur
@@ -168,9 +186,9 @@ func appendCoordMessageTx(tx *sql.Tx, m CoordMessage) (int64, error) {
 	// unterdrücken.
 	if m.AuthorKind != AuthorSystem {
 		if id, found, err := existingCoordMessage(tx, m); err != nil {
-			return 0, err
+			return 0, false, err
 		} else if found {
-			return id, nil
+			return id, false, nil
 		}
 	}
 
@@ -180,20 +198,20 @@ func appendCoordMessageTx(tx *sql.Tx, m CoordMessage) (int64, error) {
 	if _, err := tx.Exec(`INSERT OR IGNORE INTO coord_destination_sequences(
 		destination_kind,destination_id,last_sequence) VALUES(?,?,0)`,
 		m.DestinationKind, m.DestinationID); err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	if _, err := tx.Exec(`UPDATE coord_destination_sequences SET last_sequence=last_sequence+1
 		WHERE destination_kind=? AND destination_id=?`, m.DestinationKind, m.DestinationID); err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	if err := tx.QueryRow(`SELECT last_sequence FROM coord_destination_sequences
 		WHERE destination_kind=? AND destination_id=?`, m.DestinationKind, m.DestinationID).Scan(&seq); err != nil {
-		return 0, err
+		return 0, false, err
 	}
 
 	anchorID, originID, err := insertWriteMetaTx(tx, m.GitAnchor, m.OriginContext)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	res, err := tx.Exec(`INSERT INTO coord_messages(
 			destination_kind,destination_id,sequence,sender_external_id,
@@ -208,22 +226,22 @@ func appendCoordMessageTx(tx *sql.Tx, m CoordMessage) (int64, error) {
 		nullableText(m.CausationID), nullableText(m.ExpiresAt),
 		nullableText(m.ObservedAtClient), m.CreatedAt, m.IsBroadcast, anchorID, originID)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
-	id, err := res.LastInsertId()
+	id, err = res.LastInsertId()
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	for _, r := range m.Refs {
 		if _, err := tx.Exec(`INSERT OR IGNORE INTO coord_message_refs(message_id,ref_kind,ref_id,ref_revision)
 			VALUES(?,?,?,?)`, id, r.Kind, r.ID, r.Revision); err != nil {
-			return 0, err
+			return 0, false, err
 		}
 	}
 	for _, mention := range m.Mentions {
 		if _, err := tx.Exec(`INSERT OR IGNORE INTO coord_message_mentions(message_id,mentioned_external_id)
 			VALUES(?,?)`, id, mention); err != nil {
-			return 0, err
+			return 0, false, err
 		}
 	}
 	if reason, ok := attentionReasonForIntent(m.Intent); ok {
@@ -234,11 +252,11 @@ func appendCoordMessageTx(tx *sql.Tx, m CoordMessage) (int64, error) {
 		roomKey := attentionRoomKeyTx(tx, m.DestinationKind, m.DestinationID)
 		for _, recipient := range normalizeMembers(m.Mentions) {
 			if err := insertAttentionTx(tx, recipient, id, reason, state, m.CreatedAt, roomKey); err != nil {
-				return 0, err
+				return 0, false, err
 			}
 		}
 	}
-	return id, nil
+	return id, true, nil
 }
 
 // withDefaults füllt, was der Store selbst verantwortet. AuthorKind fällt
@@ -280,15 +298,24 @@ func existingCoordMessage(tx *sql.Tx, m CoordMessage) (int64, bool, error) {
 	if m.OriginEventID == "" {
 		return 0, false, nil
 	}
-	err = tx.QueryRow(`SELECT id FROM coord_messages WHERE origin_event_id=?`,
-		m.OriginEventID).Scan(&id)
+	// Die Kennung ist instanzweit eindeutig. Ein Treffer zählt nur als
+	// Wiederholung, wenn Absender (Konto und Agent) und Ziel übereinstimmen;
+	// sonst gehört die Kennung einem Fremden und der Aufruf scheitert, statt
+	// dessen Nachricht zurückzugeben.
+	var sender, principal, kind, dest string
+	err = tx.QueryRow(`SELECT id,sender_external_id,author_principal_id,destination_kind,destination_id
+		FROM coord_messages WHERE origin_event_id=?`, m.OriginEventID).
+		Scan(&id, &sender, &principal, &kind, &dest)
 	switch {
-	case err == nil:
-		return id, true, nil
 	case errors.Is(err, sql.ErrNoRows):
 		return 0, false, nil
-	default:
+	case err != nil:
 		return 0, false, err
+	case sender == m.SenderExternalID && principal == m.AuthorPrincipalID &&
+		kind == m.DestinationKind && dest == m.DestinationID:
+		return id, true, nil
+	default:
+		return 0, false, ErrCoordOriginConflict
 	}
 }
 

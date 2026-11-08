@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -25,13 +26,65 @@ func pullChange(ev forge.PullEvent) store.PullRequestChange {
 	return store.PullRequestChange{
 		InstallationID: ev.InstallationID, Remote: ev.Remote, HeadRemote: ev.HeadRemote, Number: int64(ev.Number),
 		Action: ev.Action, Title: ev.Title, Head: ev.Head, Base: ev.Base, DefaultBranch: ev.DefaultBranch,
-		MergeSHA: ev.MergeSHA, State: ev.State,
+		MergeSHA: ev.MergeSHA, Author: ev.Author, State: ev.State,
 	}
 }
 
 // pullLister ist, was das Nachholen von der GitHub-App braucht.
 type pullLister interface {
 	PullRequests(ctx context.Context, installationID int64, repo, branch string) ([]forge.PullRequest, error)
+}
+
+// commitLister ist, was das Abholen der PR-Commits von der GitHub-App braucht
+// (Recht "Pull requests: read"). Ein pullLister, der es nicht kann, bekommt keine.
+type commitLister interface {
+	PullRequestCommits(ctx context.Context, installationID int64, repo string, number int64) ([]forge.PullCommit, error)
+}
+
+// pullCommitTimeout begrenzt den Abruf der Commits eines PRs im Webhook; GitHub
+// wartet auf die Antwort nur zehn Sekunden.
+const pullCommitTimeout = 8 * time.Second
+
+// recordPullCommits holt die Commits eines PRs und speichert sie (siehe
+// store.RecordPullCommits). Ein Fehler ist nie für den Webhook fatal: die PR-Zeile
+// steht schon, die Commits kommen beim nächsten Ereignis oder mit sync-prs nach.
+func recordPullCommits(ctx context.Context, st *store.Store, l commitLister, installationID int64, project string, number int64) (store.PullCommitsResult, error) {
+	list, err := l.PullRequestCommits(ctx, installationID, project, number)
+	if err != nil {
+		return store.PullCommitsResult{}, err
+	}
+	commits := make([]store.PullCommit, 0, len(list))
+	for _, c := range list {
+		commits = append(commits, store.PullCommit{SHA: c.SHA, Author: c.Author, AuthorName: c.AuthorName, Title: c.Title, CommittedAt: c.CommittedAt})
+	}
+	return st.RecordPullCommits(store.PullCommitsChange{InstallationID: installationID, Remote: project, Number: number, Commits: commits})
+}
+
+// pullWebhook ist der Empfänger der pull_request-Ereignisse: er nimmt den PR auf
+// und holt bei opened, reopened und synchronize seine Commits. onCommitError
+// bekommt, was beim Abholen schiefging (kein Token, keine Antwort-Rümpfe); der
+// Webhook antwortet trotzdem mit Erfolg.
+func pullWebhook(st *store.Store, l commitLister, onCommitError func(error)) forge.PullSync {
+	return func(ev forge.PullEvent) error {
+		res, err := st.RecordPullRequest(pullChange(ev))
+		if err != nil {
+			return err
+		}
+		if l == nil || !res.Applied {
+			return nil
+		}
+		switch ev.Action {
+		case "opened", "reopened", "synchronize":
+		default:
+			return nil
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), pullCommitTimeout)
+		defer cancel()
+		if _, err := recordPullCommits(ctx, st, l, ev.InstallationID, res.Project, ev.Number); err != nil && onCommitError != nil {
+			onCommitError(fmt.Errorf("pull request commits of %s#%d: %w", res.Project, ev.Number, err))
+		}
+		return nil
+	}
 }
 
 func cmdGithub(args []string, stdout io.Writer) int {
@@ -74,7 +127,7 @@ func syncPulls(ctx context.Context, st *store.Store, lister pullLister, project 
 		fmt.Fprintln(stdout, "no project with a GitHub installation")
 		return 0
 	}
-	var branches, prs, tagged, failed int
+	var branches, prs, tagged, failed, commits int
 	for _, t := range targets {
 		for _, b := range t.Branches {
 			branches++
@@ -100,21 +153,45 @@ func syncPulls(ctx context.Context, st *store.Store, lister pullLister, project 
 				}
 				res, err := st.RecordPullRequest(store.PullRequestChange{
 					InstallationID: t.InstallationID, Remote: t.Project, HeadRemote: t.Project, Number: int64(pr.Number),
-					Action: "sync", Title: pr.Title, Head: pr.HeadRef, Base: pr.BaseRef, State: state,
+					Action: "sync", Title: pr.Title, Head: pr.HeadRef, Base: pr.BaseRef, Author: pr.Author, State: state,
 				})
 				if err != nil {
 					fmt.Fprintf(stdout, "%s #%d: %v\n", t.Project, pr.Number, err)
 					failed++
 					continue
 				}
-				if res.Applied {
-					prs++
-					tagged += res.AnchorsTagged
+				if !res.Applied {
+					continue
+				}
+				prs++
+				tagged += res.AnchorsTagged
+				cl, ok := lister.(commitLister)
+				if !ok {
+					continue
+				}
+				cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+				_, cerr := recordPullCommits(cctx, st, cl, t.InstallationID, t.Project, int64(pr.Number))
+				cancel()
+				switch {
+				case cerr == nil:
+					commits++
+				case errors.Is(cerr, forge.ErrRateLimited):
+					fmt.Fprintf(stdout, "GitHub rate limit reached (%v); the commits of the remaining pull requests were not fetched, run the command again later\n", cerr)
+					return 1
+				case errors.Is(cerr, forge.ErrPermissionMissing):
+					fmt.Fprintln(stdout, "the GitHub App lacks \"Pull requests: read\"; commits were not fetched")
+					return 1
+				default:
+					failed++
+					fmt.Fprintf(stdout, "%s #%d: could not read the commits (%v)\n", t.Project, pr.Number, cerr)
 				}
 			}
 		}
 	}
 	fmt.Fprintf(stdout, "%d branches asked, %d pull requests recorded, %d anchors tagged, %d failed\n", branches, prs, tagged, failed)
+	if _, ok := lister.(commitLister); ok {
+		fmt.Fprintf(stdout, "%d pull requests with their commits fetched\n", commits)
+	}
 	if failed > 0 {
 		return 1
 	}

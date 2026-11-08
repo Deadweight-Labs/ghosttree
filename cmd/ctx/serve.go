@@ -399,10 +399,7 @@ func buildServerHandler(st *store.Store, cfg serveConfig, stderr io.Writer) http
 		root.Handle("/api/github/webhook", ghApp.WebhookHandlerWithRenames(func(installationID int64, add, remove []string) error {
 			_, err := st.SyncInstallationRepos(installationID, add, remove)
 			return err
-		}, func(ev forge.PullEvent) error {
-			_, err := st.RecordPullRequest(pullChange(ev))
-			return err
-		}, func(installationID int64, from, to string) error {
+		}, pullWebhook(st, ghApp, func(err error) { logger.Error("github_pull_commits", "error", err.Error()) }), func(installationID int64, from, to string) error {
 			_, err := st.RenameInstallationRepo(installationID, from, to)
 			return err
 		}, func(err error) { logger.Error("github_webhook", "error", err.Error()) }))

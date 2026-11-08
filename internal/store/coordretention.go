@@ -79,6 +79,18 @@ func (s *Store) ApplyCoordRetention(before, activityBefore string) (RetentionRes
 		out.MessagesDeleted = int(n)
 	}
 
+	// Optionen und Schnellantwort-Vermerke hängen an der Nachricht und gehen mit
+	// ihr, damit eine wiederverwendete Nummer nichts erbt.
+	for _, stmt := range []string{
+		`DELETE FROM answer_options WHERE subject_kind='message' AND subject_id NOT IN (SELECT id FROM coord_messages)`,
+		`DELETE FROM quick_answers WHERE subject_kind='message' AND subject_id NOT IN (SELECT id FROM coord_messages)`,
+		`DELETE FROM quick_answers WHERE subject_kind='attention' AND subject_id NOT IN (SELECT id FROM coord_attention)`,
+	} {
+		if _, err := tx.Exec(stmt); err != nil {
+			return RetentionResult{}, err
+		}
+	}
+
 	res, err = tx.Exec(`DELETE FROM path_activity WHERE at < ?`, activityBefore)
 	if err != nil {
 		return RetentionResult{}, err

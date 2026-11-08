@@ -209,6 +209,7 @@ func mergeDuplicateRequests(tx *sql.Tx) (int, []int64, error) {
 			`DELETE FROM request_activity WHERE request_id=?`,
 			`DELETE FROM request_criteria WHERE request_id=?`,
 			`DELETE FROM search_documents WHERE kind='request' AND domain_id=?`,
+			`DELETE FROM reactions WHERE object_kind='request' AND object_id=?`,
 			`DELETE FROM requests WHERE id=?`,
 		} {
 			if _, err := tx.Exec(stmt, r.id); err != nil {

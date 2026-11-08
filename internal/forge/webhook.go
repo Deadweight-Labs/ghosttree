@@ -233,6 +233,8 @@ type PullEvent struct {
 	Head, Base         string
 	DefaultBranch      string
 	MergeSHA           string
+	// Author ist der Login des PR-Autors.
+	Author string
 	// State ist open, closed oder merged.
 	State string
 }
@@ -260,7 +262,10 @@ func ParsePullEvent(event string, body []byte) (PullEvent, bool) {
 			State          string `json:"state"`
 			Merged         bool   `json:"merged"`
 			MergeCommitSHA string `json:"merge_commit_sha"`
-			Head           struct {
+			User           struct {
+				Login string `json:"login"`
+			} `json:"user"`
+			Head struct {
 				Ref  string `json:"ref"`
 				Repo *struct {
 					FullName string `json:"full_name"`
@@ -286,7 +291,7 @@ func ParsePullEvent(event string, body []byte) (PullEvent, bool) {
 	ev := PullEvent{
 		InstallationID: p.Installation.ID, Remote: remoteOf(p.Repository.FullName), Number: n, Action: p.Action,
 		Title: p.PullRequest.Title, Head: p.PullRequest.Head.Ref, Base: p.PullRequest.Base.Ref,
-		DefaultBranch: p.Repository.DefaultBranch, MergeSHA: p.PullRequest.MergeCommitSHA, State: "open",
+		DefaultBranch: p.Repository.DefaultBranch, MergeSHA: p.PullRequest.MergeCommitSHA, Author: p.PullRequest.User.Login, State: "open",
 	}
 	if p.PullRequest.Head.Repo != nil {
 		ev.HeadRemote = remoteOf(p.PullRequest.Head.Repo.FullName)

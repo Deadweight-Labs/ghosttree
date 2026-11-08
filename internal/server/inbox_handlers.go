@@ -1,6 +1,8 @@
 package server
 
 import (
+	"database/sql"
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -8,10 +10,50 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
-func init() { accessRoutes["GET /api/inbox"] = classProject }
+func init() {
+	accessRoutes["GET /api/inbox"] = classProject
+	accessRoutes["POST /api/inbox/answer"] = classAdmin
+}
 
 func (a *api) registerInboxRoutes(mux *http.ServeMux) {
 	a.routeFunc(mux, "GET /api/inbox", a.listInbox)
+	a.routeFunc(mux, "POST /api/inbox/answer", a.inboxAnswerWebOnly)
+}
+
+// inboxAnswerWebOnly: eine Frage an einen Menschen beantwortet nur ein Mensch in
+// einer Web-Sitzung (ProjectAccess.QuickAnswer). Ein Token liegt in der Konfiguration
+// jeder Maschine, auf der ein Agent läuft; wer damit antworten könnte, bräuchte keinen
+// Menschen, auch der Agent nicht, der die Frage selbst gestellt hat: jeder Token
+// bekommt 403, bevor der Rumpf gelesen wird. Der Browser antwortet über POST
+// /ui/inbox/answer der Weboberfläche (mit CSRF); hier kommt nur ein Principal der
+// Web-Sitzung durch, den die Weboberfläche selbst einsetzt.
+func (a *api) inboxAnswerWebOnly(w http.ResponseWriter, r *http.Request) {
+	if principalOf(r).TokenKind != store.WebSessionKind {
+		writeCoded(w, http.StatusForbidden, "web_session_required",
+			"answering a question to people requires an interactive web session: pick the answer in the inbox of the web UI")
+		return
+	}
+	var in struct {
+		Kind            string `json:"kind"`
+		ID              int64  `json:"id"`
+		Option          string `json:"option"`
+		AgentExternalID string `json:"agent_external_id"`
+	}
+	if err := readJSON(r, &in); err != nil {
+		writeStoreError(w, http.StatusBadRequest, err)
+		return
+	}
+	res, err := a.access(r).QuickAnswer(a.coordAccess(r, in.AgentExternalID), store.QuickAnswerInput{Kind: in.Kind, ID: in.ID, Option: in.Option})
+	switch {
+	case err == nil:
+		writeJSON(w, http.StatusOK, res)
+	case errors.Is(err, store.ErrCoordNotFound), errors.Is(err, store.ErrCoordForbidden):
+		writeErr(w, http.StatusNotFound, "not found")
+	case errors.Is(err, store.ErrAccessForbidden), errors.Is(err, store.ErrAccessNotFound), errors.Is(err, sql.ErrNoRows):
+		writeErr(w, http.StatusNotFound, "not found")
+	default:
+		writeRequestError(w, err)
+	}
 }
 
 // inboxReply ist ein Eintrag des Posteingangs mit seinem Link.

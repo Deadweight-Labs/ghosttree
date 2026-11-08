@@ -76,6 +76,10 @@ type CreateInput struct {
 	// Steps is the optional walk-through: at most MaxSteps one-line steps, each
 	// with an optional http(s) link. See ValidateSteps.
 	Steps []Step `json:"steps,omitempty"`
+	// Options are two to six short answers the agent proposes (kinds input and
+	// action only). The inbox offers them as quick answers; the person can always
+	// write their own. Checked and cleaned by the store.
+	Options []string `json:"options,omitempty"`
 	// Explanation is the agent's "Kurz erklärt" text for the person who has to
 	// act. The server stores it beside the task; it is not part of the task.
 	Explanation string `json:"explanation,omitempty"`

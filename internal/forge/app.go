@@ -45,7 +45,41 @@ var (
 	// ErrPermissionMissing: die App hat für diese Abfrage keine Berechtigung
 	// (z. B. Pull requests: read fehlt).
 	ErrPermissionMissing = errors.New("the GitHub App lacks the permission for that request")
+	// ErrRateLimited: GitHub hat das Ratenlimit der Installation erreicht. Der
+	// konkrete Fehler (RateLimitError) nennt, wann es wieder geht.
+	ErrRateLimited = errors.New("github rate limit reached")
 )
+
+// RateLimitError ist die Antwort von GitHub, wenn das Ratenlimit erreicht ist
+// (429, oder 403 mit leerem X-RateLimit-Remaining oder Retry-After). Reset ist
+// der Zeitpunkt, ab dem es wieder geht, sofern GitHub ihn nannte.
+type RateLimitError struct{ Reset time.Time }
+
+func (e *RateLimitError) Error() string {
+	if e.Reset.IsZero() {
+		return "github rate limit reached"
+	}
+	return "github rate limit reached, resets at " + e.Reset.UTC().Format(time.RFC3339)
+}
+
+// Is lässt errors.Is(err, ErrRateLimited) greifen.
+func (e *RateLimitError) Is(target error) bool { return target == ErrRateLimited }
+
+// rateLimited erkennt die Antworten, die ein Ratenlimit melden.
+func rateLimited(resp *http.Response, now time.Time) (*RateLimitError, bool) {
+	limited := resp.StatusCode == http.StatusTooManyRequests ||
+		(resp.StatusCode == http.StatusForbidden && (resp.Header.Get("X-RateLimit-Remaining") == "0" || resp.Header.Get("Retry-After") != ""))
+	if !limited {
+		return nil, false
+	}
+	e := &RateLimitError{}
+	if secs, err := strconv.Atoi(strings.TrimSpace(resp.Header.Get("Retry-After"))); err == nil && secs >= 0 {
+		e.Reset = now.Add(time.Duration(secs) * time.Second)
+	} else if unix, err := strconv.ParseInt(strings.TrimSpace(resp.Header.Get("X-RateLimit-Reset")), 10, 64); err == nil && unix > 0 {
+		e.Reset = time.Unix(unix, 0)
+	}
+	return e, true
+}
 
 // AppConfig sind die Zugangsdaten der GitHub-App.
 type AppConfig struct {
@@ -288,6 +322,7 @@ type PullRequest struct {
 	HeadRef   string    `json:"head_ref"`
 	HeadSHA   string    `json:"head_sha"`
 	BaseRef   string    `json:"base_ref"`
+	Author    string    `json:"author,omitempty"`
 	URL       string    `json:"url"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -316,7 +351,10 @@ func (g *GitHubApp) PullRequests(ctx context.Context, installationID int64, repo
 		HTMLURL  string     `json:"html_url"`
 		Updated  time.Time  `json:"updated_at"`
 		MergedAt *time.Time `json:"merged_at"`
-		Head     struct {
+		User     struct {
+			Login string `json:"login"`
+		} `json:"user"`
+		Head struct {
 			Ref string `json:"ref"`
 			SHA string `json:"sha"`
 		} `json:"head"`
@@ -339,9 +377,94 @@ func (g *GitHubApp) PullRequests(ctx context.Context, installationID int64, repo
 			st = "merged"
 		}
 		out = append(out, PullRequest{Number: r.Number, Title: r.Title, State: st, Draft: r.Draft,
-			HeadRef: r.Head.Ref, HeadSHA: r.Head.SHA, BaseRef: r.Base.Ref, URL: r.HTMLURL, UpdatedAt: r.Updated})
+			HeadRef: r.Head.Ref, HeadSHA: r.Head.SHA, BaseRef: r.Base.Ref, Author: r.User.Login, URL: r.HTMLURL, UpdatedAt: r.Updated})
 	}
 	return out, nil
+}
+
+// PullCommit ist ein Commit eines PRs, wie GitHub ihn meldet.
+type PullCommit struct {
+	SHA string `json:"sha"`
+	// Author ist der GitHub-Login (leer, wenn GitHub den Autor keinem Konto
+	// zuordnet), AuthorName der Name aus dem Commit.
+	Author     string `json:"author,omitempty"`
+	AuthorName string `json:"author_name,omitempty"`
+	// Title ist die erste Zeile der Commit-Nachricht.
+	Title       string `json:"title"`
+	CommittedAt string `json:"committed_at,omitempty"`
+}
+
+const (
+	maxCommitPages = 3 // GitHub liefert für einen PR höchstens 250 Commits
+	commitsPerPage = 100
+)
+
+// PullRequestCommits liefert die Commits eines PRs in der Reihenfolge des PRs,
+// über ein auf "Pull requests: read" begrenztes Installations-Token. repo ist ein
+// normalisiertes Remote (github.com/owner/repo). Fehlt das Recht, kommt
+// ErrPermissionMissing; ist das Ratenlimit erreicht, ein RateLimitError. Das Token
+// kommt in keinen Fehler und kein Protokoll.
+func (g *GitHubApp) PullRequestCommits(ctx context.Context, installationID int64, repo string, number int64) ([]PullCommit, error) {
+	parts := strings.Split(strings.ToLower(strings.TrimSpace(repo)), "/")
+	if len(parts) != 3 || parts[0] != "github.com" || parts[1] == "" || parts[2] == "" || number <= 0 {
+		return nil, fmt.Errorf("pull request commits: repo must look like github.com/owner/repo and the number must be positive")
+	}
+	tok, err := g.installationToken(ctx, installationID, map[string]string{"pull_requests": "read"})
+	if err != nil {
+		var se *statusError
+		if errors.As(err, &se) && (se.code == http.StatusForbidden || se.code == http.StatusUnprocessableEntity) {
+			return nil, ErrPermissionMissing
+		}
+		return nil, err
+	}
+	var out []PullCommit
+	for page := 1; page <= maxCommitPages; page++ {
+		var raw []struct {
+			SHA    string `json:"sha"`
+			Commit struct {
+				Message string `json:"message"`
+				Author  struct {
+					Name string `json:"name"`
+				} `json:"author"`
+				Committer struct {
+					Date time.Time `json:"date"`
+				} `json:"committer"`
+			} `json:"commit"`
+			Author *struct {
+				Login string `json:"login"`
+			} `json:"author"`
+		}
+		path := fmt.Sprintf("/repos/%s/%s/pulls/%d/commits?per_page=%d&page=%d", url.PathEscape(parts[1]), url.PathEscape(parts[2]), number, commitsPerPage, page)
+		if err := g.getAs(ctx, tok, path, &raw); err != nil {
+			var se *statusError
+			if errors.As(err, &se) && (se.code == http.StatusForbidden || se.code == http.StatusNotFound) {
+				return nil, ErrPermissionMissing
+			}
+			return nil, err
+		}
+		for _, r := range raw {
+			c := PullCommit{SHA: r.SHA, AuthorName: r.Commit.Author.Name, Title: firstLine(r.Commit.Message)}
+			if r.Author != nil {
+				c.Author = r.Author.Login
+			}
+			if !r.Commit.Committer.Date.IsZero() {
+				c.CommittedAt = r.Commit.Committer.Date.UTC().Format(time.RFC3339)
+			}
+			out = append(out, c)
+		}
+		if len(raw) < commitsPerPage {
+			break
+		}
+	}
+	return out, nil
+}
+
+func firstLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexAny(s, "\r\n"); i >= 0 {
+		return s[:i]
+	}
+	return s
 }
 
 // ---------------------------------------------------------------- JWT und Token
@@ -454,6 +577,9 @@ func (g *GitHubApp) do(req *http.Request, v any) error {
 		return fmt.Errorf("github: %w", err)
 	}
 	if resp.StatusCode/100 != 2 {
+		if rl, ok := rateLimited(resp, g.cfg.Now()); ok {
+			return rl
+		}
 		return &statusError{code: resp.StatusCode}
 	}
 	return json.Unmarshal(body, v)

@@ -438,7 +438,7 @@ func writeRequestError(w http.ResponseWriter, err error) {
 		switch rule.ErrorCode {
 		case "package_not_found", "label_not_found", "idea_not_found", "origin_not_found", "comment_not_found", "comment_target_not_found", "preset_not_found",
 			"decision_not_found", "attachment_not_found", "text_not_found", "variant_not_found", "thread_not_found",
-			"feature_not_found", "version_not_found":
+			"feature_not_found", "version_not_found", "reaction_target_not_found":
 			status = http.StatusNotFound
 		case "package_exists", "package_closed", "pr_taken", "label_exists", "idea_duplicate", "idea_changed",
 			"text_changed", "concept_changed", "decision_closed", "decision_changed", "decision_open", "idea_closed",

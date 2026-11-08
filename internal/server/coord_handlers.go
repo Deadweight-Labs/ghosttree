@@ -29,6 +29,8 @@ func writeCoordAccessError(w http.ResponseWriter, err error) {
 		writeErr(w, http.StatusNotFound, "coordination target not found")
 	case errors.Is(err, store.ErrCoordForbidden):
 		writeErr(w, http.StatusForbidden, "coordination target forbidden")
+	case errors.Is(err, store.ErrCoordOriginConflict):
+		writeErr(w, http.StatusConflict, "origin_event_id is already used by another message")
 	case errors.Is(err, store.ErrCoordUnknownRecipient):
 		// Fester Text: die Antwort darf die geprüfte Id nicht zurückgeben.
 		writeErr(w, http.StatusBadRequest, "coordination recipient is not available")
@@ -164,15 +166,39 @@ func (a *api) sendCoordMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.Explanation = ""
+	// Antwortvorschläge gehören zu einer Frage an Menschen. Sie werden vor dem
+	// Senden geprüft: eine ungültige Liste lässt die Frage nicht halb entstehen.
+	options, err := store.CleanAnswerOptions(in.Options)
+	if err != nil {
+		writeRequestError(w, err)
+		return
+	}
+	if len(options) > 0 && in.Intent != store.IntentQuestion {
+		writeCoded(w, http.StatusBadRequest, "options_not_allowed", "answer options go with a question: set intent to question, or drop the options")
+		return
+	}
+	in.Options = nil
 	// Nie aus dem Body: nur der Header trägt einen gemessenen Stand.
 	in.GitAnchor = anchorFromRequest(r)
 	in.OriginContext = a.originFor(r, "")
-	id, err := a.coordAccess(r, in.SenderExternalID).Send(in)
+	id, created, err := a.coordAccess(r, in.SenderExternalID).SendNew(in)
 	if err != nil {
 		writeCoordAccessError(w, err)
 		return
 	}
+	if !created {
+		// Eine Wiederholung gehört dem, der sie zuerst gesendet hat: weder
+		// Erklärung noch Optionen noch Zustellstatus werden nachträglich
+		// an die vorhandene Nachricht gehängt.
+		writeJSON(w, 200, map[string]int64{"id": id})
+		return
+	}
 	a.saveExplanation(explain.KindQuestion, id, explanation)
+	if len(options) > 0 {
+		if err := a.st.SaveAnswerOptions(store.AnswerOnMessage, id, options); err != nil {
+			a.logger.Warn("answer_options_not_stored", "message", id, "error", err.Error())
+		}
+	}
 	// Gespeichert ist der einzige Zustand, den dieser Aufruf belegen kann.
 	// Alles Weitere setzt der Adapter, wenn er es beobachtet.
 	if err := a.coordAccess(r, in.SenderExternalID).MarkDelivery(id, store.DeliveryStored); err != nil {

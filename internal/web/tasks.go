@@ -277,6 +277,7 @@ func (a *app) taskFail(w http.ResponseWriter, r *http.Request, q url.Values, err
 func (a *app) registerPainTaskPages(mux *http.ServeMux) {
 	a.handle(mux, "GET /ui/tasks", a.requirePerson(http.HandlerFunc(a.tasksPage)))
 	a.handle(mux, "POST /ui/tasks/done", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.tasksDone))))))
+	a.registerInboxAnswer(mux)
 	a.handle(mux, "GET /ui/pains", a.requirePerson(http.HandlerFunc(a.painsPage)))
 	a.handle(mux, "GET /ui/pains/{id}", a.requirePerson(http.HandlerFunc(a.painPage)))
 	a.handle(mux, "POST /ui/pains/{id}/state", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.painState))))))
