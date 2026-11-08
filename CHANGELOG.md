@@ -54,7 +54,9 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   entry, work package, runbook, room thread) carries its web link and a compact
   card (title, state, next step, who); search hits carry the link only. The link
   has no token and no login: a signed-out browser signs in and returns to that
-  very page (internal paths only).
+  very page (internal paths only). This holds for the MCP tools and the `ctx`
+  commands that answer about exactly one object (room message, session, saved
+  search and document included).
 - `ctx open <REQ-n|TASK-n|PAIN-n|IDEA-n|#id|pr:n|commit:sha|preset:name values|path|search line>`
   opens the page in the browser of this machine, or prints link and card over
   ssh or without a display. The MCP tool `open_link` hands link and card to the
@@ -66,17 +68,23 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   as a skill for Claude Code and Codex; `ctx doctor` checks them. An unchanged
   `/gt` skill from an earlier install is removed (it clashed with Graphite's `gt`).
 - `ctx update [--channel stable|dev] [--pre]` replaces the binary with a signed
-  release (verified with cosign); `ctx version` also names the server's version.
+  release (verified with cosign); `--pre` also takes release candidates on the
+  stable channel; `ctx version` also names the server's version.
 
 #### Git-native ledger
 
 - A GitHub App connects an organization: its repositories join the
   organization in ghosttree, and pull requests are bound by webhook
   (`ctx github sync-prs` catches up).
+  A repository renamed on GitHub renames its project, with everything filed
+  under it.
 - Every write to knowledge, file descriptions, requests, criteria, pains, ideas,
-  runbooks and room messages records its Git anchor (commit, branch, pull
-  request, time) and its origin (the paths and areas the session read and
-  wrote). Search filters by both: `commit:`, `pr:`, `branch:`, `since:`,
+  runbooks, room messages and threads records its Git anchor (commit, branch,
+  pull request, time) and its origin (the paths and areas the session read and
+  wrote). `ctx` commands send the anchor of their working directory; edits in
+  the web interface are marked as coming from the web instead. Distilled
+  entries carry the anchor of their source session, and the gardener measures
+  staleness from an entry's anchor commit. Search filters by both: `commit:`, `pr:`, `branch:`, `since:`,
   `until:`, `area:`, plus `label:`, `is:` and free text, in the CLI, MCP and API.
 - Labels, topics and saved searches (presets) for people and agents.
 - File descriptions can differ per branch and carry over on merge.
@@ -117,7 +125,10 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 - Pains (`PAIN-n`) record a problem without a solution, and tasks for people
   record what only a person can provide (`ctx pain`, `ctx task`, the MCP tools
-  `pain_*` and `human_task_*`, and the pages `/ui/pains` and `/ui/tasks`).
+  `pain_*` and `human_task_*`, and the pages `/ui/pains` and `/ui/tasks`). A
+  pain can be accepted (`accepted`: one lives with it on purpose, with a
+  required reason); it counts as closed. Order of the states: active, mitigated,
+  accepted, resolved, obsolete.
 - Work packages bind requests to a branch and, by number, to a pull request
   (`ctx package`, the MCP tools `package_get`, `package_update` and
   `package_review`). Sessions on the branch, or on one cut from it, get the
@@ -149,6 +160,10 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 #### Search
 
+- The qualifier search (`is:`, `label:`, `area:`, `since:`, `pr:`, `branch:` and
+  more) also finds room messages and sessions (`kind:message`, `kind:session`),
+  with the rights each of them has otherwise: a message only from a room you may
+  read, private sessions stay private.
 - Hybrid search: full text and an embedding ranking, fused by reciprocal rank,
   for knowledge, requests, file descriptions, pains, documents and (opt-in)
   sessions. It needs a local embedding server (`GHOSTTREE_EMBED_URL`); a second

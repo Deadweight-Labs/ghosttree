@@ -71,7 +71,7 @@ func cmdChannel(args []string, stdout io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 	err = runChannel(ctx, channelConfig{
-		client: client.New(cfg), self: self, rooms: rooms, branch: hctx.axes.Branch, machine: cfg.Machine, role: agentRoleFromEnv(), session: registeredSessionID(),
+		client: anchoredClient(cfg), self: self, rooms: rooms, branch: hctx.axes.Branch, machine: cfg.Machine, role: agentRoleFromEnv(), session: registeredSessionID(),
 		transport: &mcp.StdioTransport{},
 	})
 	if err != nil {

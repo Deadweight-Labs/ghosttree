@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/Deadweight-Labs/ghosttree/internal/links"
 	"io"
 	"os"
 	"os/user"
@@ -13,9 +14,7 @@ import (
 	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
-	"github.com/Deadweight-Labs/ghosttree/internal/collector"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
-	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
 	"github.com/Deadweight-Labs/ghosttree/internal/runbook"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -63,18 +62,7 @@ var (
 )
 
 // runbookClient liefert den Client mit Anker und Session für schreibende Aufrufe.
-func runbookClient(cfg config.Config) *client.Client {
-	c := client.New(cfg)
-	c.SetAnchorSource(func() gitanchor.Anchor {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return gitanchor.Anchor{}
-		}
-		return collector.ResolveAnchor(cwd)
-	})
-	c.SetOriginSession(currentSessionRef())
-	return c
-}
+func runbookClient(cfg config.Config) *client.Client { return anchoredClient(cfg) }
 
 type stringsFlag []string
 
@@ -193,6 +181,7 @@ func cmdRunbook(args []string, stdout io.Writer) int {
 			return 0
 		}
 		fmt.Fprint(stdout, runbook.Checklist(v, nil))
+		cliCard(stdout, cliBuilder(cfg, v.Project).RunbookCard(links.SummaryOf(v)))
 		return 0
 	case "write", "import":
 		return runbookWrite(sub, rest, stdout, c, cfg, usage, fail)
@@ -372,6 +361,11 @@ func runbookWrite(sub string, rest []string, stdout io.Writer, c *client.Client,
 			return fail(err)
 		}
 		printRunbookWritten(stdout, pos[0], res)
+		written := runbook.Summary{Name: pos[0], Project: proj, Purpose: spec.Purpose, Head: res.Version}
+		if res.Approved {
+			written.ApprovedVersion = res.Version
+		}
+		cliCard(stdout, cliBuilder(cfg, proj).RunbookCard(written))
 		return 0
 	}
 	raw, err := os.ReadFile(pos[0])

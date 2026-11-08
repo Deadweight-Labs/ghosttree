@@ -101,7 +101,7 @@ type SearchInput struct {
 	// a second call rather than a guess. Same shape as session_id on
 	// context_sessions: list or search, or name one and read it whole.
 	KnowledgeID int64  `json:"knowledge_id,omitempty" jsonschema:"read this knowledge entry in full instead of searching. The id is on every hit; use it when a snippet is not enough, for instance for a stored plan or spec"`
-	Kind        string `json:"kind,omitempty" jsonschema:"knowledge, requests, sessions, files or all (default all). \"files\" searches the per-file and per-directory descriptions of this repository — use it to find a file by what it does rather than by what it is called"`
+	Kind        string `json:"kind,omitempty" jsonschema:"knowledge, requests, sessions, files or all (default all); with qualifiers also pains, ideas, criteria, tasks and messages (room messages you may read). \"files\" searches the per-file and per-directory descriptions of this repository — use it to find a file by what it does rather than by what it is called"`
 	AllBranches bool   `json:"all_branches,omitempty" jsonschema:"search across all branches of the project"`
 	Project     string `json:"project,omitempty" jsonschema:"search another project instead of the current one, given as a normalized remote like github.com/owner/repo"`
 	AllProjects bool   `json:"all_projects,omitempty" jsonschema:"search every project. Use when a problem here may already have been solved elsewhere; the default stays the current project"`
@@ -617,7 +617,7 @@ func (s *Server) handleSessions(ctx context.Context, _ *mcp.CallToolRequest, in 
 			}
 			fmt.Fprintf(&out, "### %s (%d)\n%s\n\n", c.Role, c.Seq, c.Text)
 		}
-		return textResult(out.String()), nil, nil
+		return s.withSessionCard(textResult(out.String()), in), nil, nil
 	}
 	// An empty project matches every project, which is what all_projects asks for.
 	filter := scope.Axes{Project: s.ctxAxes.Project}

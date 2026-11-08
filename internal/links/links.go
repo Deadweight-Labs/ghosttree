@@ -177,6 +177,15 @@ func (b Builder) Room(thread, message int64) string {
 	return u + "#message-" + num(message)
 }
 
+// RoomChat is a room by its key: the page that shows its messages. A room
+// message has no page of its own; the link leads to the room it was said in.
+func (b Builder) RoomChat(roomKey string) string {
+	if !b.Valid() || strings.TrimSpace(roomKey) == "" {
+		return ""
+	}
+	return b.root() + "/coord?room=" + url.QueryEscape(roomKey)
+}
+
 // Session is a session, by its public address or its number.
 func (b Builder) Session(id string) string { return b.repo("/sessions/" + esc(id)) }
 

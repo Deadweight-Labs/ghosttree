@@ -186,7 +186,7 @@ func cmdCoord(args []string, stdout io.Writer) int {
 		fmt.Fprintf(stdout, "no config (%s) - run 'ctx setup'\n", config.Path())
 		return 1
 	}
-	c := client.New(cfg)
+	c := anchoredClient(cfg)
 	me := coordSession(cfg)
 	if agentName != "" {
 		me = coordNamedSession(cfg.Machine, agentName)
@@ -294,6 +294,7 @@ func cmdCoord(args []string, stdout io.Writer) int {
 		// Werkzeug. Was ein anderer Harness daraus macht, weiß dieser Aufruf
 		// nicht.
 		fmt.Fprintf(stdout, "stored as %d in %s\n", id, room)
+		cliCard(stdout, clientBuilder(c, "").MessageCard(store.MessageHit{ID: id, RoomKey: room, Sender: me, Body: body}))
 		return 0
 
 	case "inbox":

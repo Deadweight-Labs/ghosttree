@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"github.com/Deadweight-Labs/ghosttree/internal/links"
 	"io"
 	"strconv"
 	"strings"
@@ -73,7 +74,7 @@ func cmdPackage(args []string, stdout io.Writer) int {
 			return usageErr("no branch here: pass --branch")
 		}
 		d, err := c.CreatePackage(target, *branch, *name, *pr, members)
-		return writePackageResult(stdout, jsonMode, d, err, false)
+		return writePackageResult(stdout, jsonMode, cliBuilder(cfg, ""), d, err, false)
 	case "add", "remove", "set":
 		fs := flag.NewFlagSet("package "+sub, flag.ContinueOnError)
 		fs.SetOutput(stdout)
@@ -105,14 +106,14 @@ func cmdPackage(args []string, stdout io.Writer) int {
 				return usageErr("name at least one request")
 			}
 			d, err = c.AddPackageRequests(*id, members, *reason)
-			return writePackageResult(stdout, jsonMode, d, err, false)
+			return writePackageResult(stdout, jsonMode, cliBuilder(cfg, ""), d, err, false)
 		case "remove":
 			members, err := parsePackageRequests(positional)
 			if err != nil || len(members) != 1 || *reason == "" {
 				return usageErr("name exactly one request and give --reason")
 			}
 			d, err = c.RemovePackageRequest(*id, members[0].RequestID, *reason)
-			return writePackageResult(stdout, jsonMode, d, err, false)
+			return writePackageResult(stdout, jsonMode, cliBuilder(cfg, ""), d, err, false)
 		default:
 			patch := requestdomain.PackagePatch{}
 			if *name != "" {
@@ -131,7 +132,7 @@ func cmdPackage(args []string, stdout io.Writer) int {
 				patch.PR = pr
 			}
 			d, err = c.UpdatePackage(*id, patch)
-			return writePackageResult(stdout, jsonMode, d, err, false)
+			return writePackageResult(stdout, jsonMode, cliBuilder(cfg, ""), d, err, false)
 		}
 	case "show":
 		fs := flag.NewFlagSet("package show", flag.ContinueOnError)
@@ -165,7 +166,7 @@ func cmdPackage(args []string, stdout io.Writer) int {
 			}
 			d, err = c.FindPackage(ax, *pr, *review)
 		}
-		return writePackageResult(stdout, jsonMode, d, err, *review)
+		return writePackageResult(stdout, jsonMode, cliBuilder(cfg, ""), d, err, *review)
 	default: // import-relations
 		fs := flag.NewFlagSet("package import-relations", flag.ContinueOnError)
 		fs.SetOutput(stdout)
@@ -225,18 +226,20 @@ func parsePackageRequests(args []string) ([]requestdomain.PackageMember, error) 
 	return out, nil
 }
 
-func writePackageResult(stdout io.Writer, jsonMode bool, d requestdomain.PackageDetail, err error, review bool) int {
+func writePackageResult(stdout io.Writer, jsonMode bool, b links.Builder, d requestdomain.PackageDetail, err error, review bool) int {
 	if err != nil {
 		return writeRequestCLIError(stdout, jsonMode, 1, err)
 	}
+	card := b.PackageCard(d)
 	if jsonMode {
-		return writeRequestCLIResult(stdout, true, d, nil, nil)
+		return writeRequestCLIResultCard(stdout, true, d, &card, nil)
 	}
 	if review {
 		fmt.Fprint(stdout, requestdomain.RenderPackageReview(d))
 	} else {
 		fmt.Fprint(stdout, requestdomain.RenderPackage(d))
 	}
+	cliCard(stdout, card)
 	return 0
 }
 

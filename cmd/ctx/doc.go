@@ -284,6 +284,7 @@ func docPull(repoRoot, project string, c *client.Client, slug string, force bool
 		return 1
 	}
 	fmt.Fprintf(stdout, "%s rev %d -> %s\n", slug, document.HeadRevision, filepath.Join(docwork.Dir(repoRoot), rel))
+	cliCard(stdout, clientBuilder(c, project).DocumentCard(document))
 	return 0
 }
 
@@ -340,6 +341,7 @@ func docPush(repoRoot, project string, c *client.Client, slug, message string, c
 		return 1
 	}
 	fmt.Fprintf(stdout, "%s rev %d\n", slug, document.HeadRevision)
+	cliCard(stdout, clientBuilder(c, project).DocumentCard(document))
 	if clean {
 		if err := os.Remove(filepath.Join(docwork.Dir(repoRoot), filepath.FromSlash(entry.Path))); err != nil {
 			fmt.Fprintf(stdout, "remove worktree copy: %v\n", err)
@@ -437,6 +439,10 @@ func docSearch(project string, c *client.Client, query, kind string, limit int, 
 	return 0
 }
 
+// docShowCardOut is where "ctx doc show" puts the card of the document, so
+// that stdout stays the document text alone.
+var docShowCardOut io.Writer = os.Stderr
+
 func docShow(project string, c *client.Client, slug string, revision int, stdout io.Writer) int {
 	document, err := findDocument(c, project, slug)
 	if err != nil {
@@ -452,6 +458,8 @@ func docShow(project string, c *client.Client, slug string, revision int, stdout
 		return 1
 	}
 	fmt.Fprint(stdout, got.Body)
+	// The body is what a pipe wants from stdout; the card goes beside it.
+	cliCard(docShowCardOut, clientBuilder(c, project).DocumentCard(document))
 	return 0
 }
 
@@ -589,11 +597,13 @@ func docClose(project string, c *client.Client, slug string, stdout io.Writer) i
 		fmt.Fprintln(stdout, err)
 		return 1
 	}
-	if _, err := c.PatchDocument(document.ID, map[string]string{"status": "archived"}); err != nil {
+	archived, err := c.PatchDocument(document.ID, map[string]string{"status": "archived"})
+	if err != nil {
 		fmt.Fprintln(stdout, err)
 		return 1
 	}
 	fmt.Fprintf(stdout, "%s archived\n", slug)
+	cliCard(stdout, clientBuilder(c, project).DocumentCard(archived))
 	return 0
 }
 
@@ -668,6 +678,7 @@ func importDocument(repoRoot, project string, c *client.Client, source, kind, sl
 		}
 	}
 	fmt.Fprintf(stdout, "%s -> document %d rev 1 sha256:%s\n", evidenceSource, document.ID, digest)
+	cliCard(stdout, clientBuilder(c, project).DocumentCard(document))
 	return 0
 }
 

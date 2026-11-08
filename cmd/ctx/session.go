@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/Deadweight-Labs/ghosttree/internal/links"
 	"io"
 	"strconv"
 
@@ -56,6 +57,14 @@ func cmdSession(args []string, stdout io.Writer) int {
 		fmt.Fprintf(stdout, "session %d shared with the members of its project\n", id)
 	} else {
 		fmt.Fprintf(stdout, "session %d is private again\n", id)
+	}
+	c := client.New(cfg)
+	project := requestProjectAxes(cfg.Machine).Project
+	env := links.Env{Builder: cliBuilder(cfg, project), API: c, Project: project}
+	if ref, err := links.ParseRef("session:" + strconv.FormatInt(id, 10)); err == nil {
+		if card, err := env.Resolve(ref); err == nil {
+			cliCard(stdout, card)
+		}
 	}
 	return 0
 }

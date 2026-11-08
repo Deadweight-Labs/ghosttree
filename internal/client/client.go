@@ -50,6 +50,7 @@ type SearchResult struct {
 	Criteria []store.CriterionHit `json:"criteria,omitempty"`
 	Tasks    []humantask.Task     `json:"tasks,omitempty"`
 	Files    []store.GhostFile    `json:"files,omitempty"`
+	Messages []store.MessageHit   `json:"messages,omitempty"`
 	// Query ist die Suchzeile, wie der Server sie gelesen hat.
 	Query string `json:"query,omitempty"`
 }

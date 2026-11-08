@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/garden"
+	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
@@ -120,5 +121,22 @@ func TestGardenFilesRegressionAnswersAsStagedNotesAfterCheckingThem(t *testing.T
 	}
 	if !strings.Contains(out.String(), "1 about regression protection") {
 		t.Errorf("summary:\n%s", out.String())
+	}
+}
+
+// The anchor commit of an entry reaches the gardener, which measures staleness
+// from it; an entry without an anchor stays with its observation date.
+func TestGardenHandsTheAnchorCommitOfAnEntryToTheCheck(t *testing.T) {
+	anchored, plain := pitfall(1, ""), pitfall(2, "")
+	anchored.GitAnchor = &gitanchor.Anchor{Commit: "aaaaaaa1111111111111111111111111111111aa", Branch: "main"}
+	st := &gardenFakeStore{entries: []store.Knowledge{anchored, plain}}
+	var out bytes.Buffer
+	entries, _, _, _ := gardenDue(st, gardenProject, gardenOpts{Types: map[string]bool{"pitfall": true}}, &out)
+	got := map[int64]string{}
+	for _, e := range entries {
+		got[e.ID] = e.AnchorCommit
+	}
+	if got[1] != anchored.GitAnchor.Commit || got[2] != "" {
+		t.Fatalf("anchor commits = %v", got)
 	}
 }

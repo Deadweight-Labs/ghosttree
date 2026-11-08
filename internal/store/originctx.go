@@ -66,6 +66,11 @@ func ensureOriginContexts(db *sql.DB) error {
 	if _, err := db.Exec(originSchema); err != nil {
 		return err
 	}
+	// via nennt den Weg, wenn es keine Agenten-Session war (Web); additiv, damit
+	// ein zurückgerolltes Binary die Spalte ignoriert.
+	if err := ensureColumn(db, "origin_contexts", "via", `TEXT NOT NULL DEFAULT ''`); err != nil {
+		return fmt.Errorf("origin_contexts.via: %w", err)
+	}
 	for _, table := range anchoredTables {
 		if err := ensureColumn(db, table, "origin_id", `INTEGER REFERENCES origin_contexts(id)`); err != nil {
 			return fmt.Errorf("%s.origin_id: %w", table, err)
@@ -122,7 +127,7 @@ func insertOriginTx(tx txExec, c *originctx.Context) (any, error) {
 	if c.Backfilled {
 		backfilled = 1
 	}
-	res, err := tx.Exec(`INSERT INTO origin_contexts(session_ref,captured_at,backfilled) VALUES(?,?,?)`, c.SessionRef, at, backfilled)
+	res, err := tx.Exec(`INSERT INTO origin_contexts(session_ref,captured_at,backfilled,via) VALUES(?,?,?,?)`, c.SessionRef, at, backfilled, c.Via)
 	if err != nil {
 		return nil, err
 	}
@@ -149,10 +154,58 @@ func insertWriteMetaTx(tx txExec, anchor *gitanchor.Anchor, origin *originctx.Co
 	if anchorID, err = insertAnchorTx(tx, anchor); err != nil {
 		return nil, nil, err
 	}
+	// Ein Schreibzugriff der Weboberfläche hat keinen Anker, aber eine Herkunft:
+	// "Web" steht am Entstehungskontext, der sonst fehlen würde.
+	if anchor.IsWeb() && anchor.IsZero() {
+		c := originctx.Context{}
+		if origin != nil {
+			c = *origin
+		}
+		c.Via = originctx.ViaWeb
+		origin = &c
+	}
 	if originID, err = insertOriginTx(tx, origin); err != nil {
 		return nil, nil, err
 	}
 	return anchorID, originID, nil
+}
+
+// viaFor liefert zu den Zeilen einer Tabelle den Weg ihres Entstehungskontexts
+// (originctx.ViaWeb), nach Zeilen-Id. Zeilen ohne Weg fehlen im Ergebnis. table
+// kommt nur aus anchoredTables.
+func (s *Store) viaFor(table string, ids []int64) (map[int64]string, error) {
+	out := map[int64]string{}
+	for len(ids) > 0 {
+		part := ids
+		if len(part) > 500 {
+			part = part[:500]
+		}
+		ids = ids[len(part):]
+		args := make([]any, len(part))
+		for i, id := range part {
+			args[i] = id
+		}
+		rows, err := s.db.Query(`SELECT t.id, o.via FROM `+table+` t JOIN origin_contexts o ON o.id=t.origin_id
+			WHERE o.via != '' AND t.id IN (`+placeholders(len(part))+`)`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var id int64
+			var via string
+			if err := rows.Scan(&id, &via); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			out[id] = via
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
 // originsFor liefert die Kontexte der Zeilen einer Tabelle, nach Zeilen-Id.
@@ -171,7 +224,7 @@ func (s *Store) originsFor(table string, ids []int64) (map[int64]*originctx.Cont
 		for i, id := range part {
 			args[i] = id
 		}
-		rows, err := s.db.Query(`SELECT t.id, o.id, o.session_ref, o.captured_at, o.backfilled FROM `+table+` t
+		rows, err := s.db.Query(`SELECT t.id, o.id, o.session_ref, o.captured_at, o.backfilled, o.via FROM `+table+` t
 			JOIN origin_contexts o ON o.id=t.origin_id WHERE t.id IN (`+placeholders(len(part))+`)`, args...)
 		if err != nil {
 			return nil, err
@@ -179,7 +232,7 @@ func (s *Store) originsFor(table string, ids []int64) (map[int64]*originctx.Cont
 		for rows.Next() {
 			var id, oid, backfilled int64
 			c := &originctx.Context{}
-			if err := rows.Scan(&id, &oid, &c.SessionRef, &c.CapturedAt, &backfilled); err != nil {
+			if err := rows.Scan(&id, &oid, &c.SessionRef, &c.CapturedAt, &backfilled, &c.Via); err != nil {
 				rows.Close()
 				return nil, err
 			}

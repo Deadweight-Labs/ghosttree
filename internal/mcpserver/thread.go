@@ -447,6 +447,10 @@ func (s *Server) handleThreadPropose(ctx context.Context, _ *mcp.CallToolRequest
 		State: store.OutcomeProposed, Note: in.Note}, s.coordRef()); err != nil {
 		return nil, nil, err
 	}
-	return coordText(fmt.Sprintf("recorded as a proposal on thread %d. It is not knowledge yet: "+
-		"promoting it needs its own write through context_remember and the usual review.", in.ID)), nil, nil
+	res := coordText(fmt.Sprintf("recorded as a proposal on thread %d. It is not knowledge yet: "+
+		"promoting it needs its own write through context_remember and the usual review.", in.ID))
+	if t, err := s.client.ThreadByID(in.ID, s.coordRef()); err == nil {
+		res = s.withCard(res, s.builder().ThreadCard(t, 0))
+	}
+	return res, nil, nil
 }

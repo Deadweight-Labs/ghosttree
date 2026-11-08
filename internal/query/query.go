@@ -46,10 +46,14 @@ const (
 	KindCriterion = "criterion"
 	KindTask      = "task"
 	KindFile      = "file"
+	// Raum-Nachrichten und Sessions haben keinen Zustand und kein Label; was sie
+	// kennen, sind Projekt, Branch, Zeit, Urheber und (Nachrichten) Anker und Bereich.
+	KindMessage = "message"
+	KindSession = "session"
 )
 
 // Kinds sind alle Objektarten in fester Reihenfolge.
-var Kinds = []string{KindKnowledge, KindRequest, KindPain, KindIdea, KindCriterion, KindTask, KindFile}
+var Kinds = []string{KindKnowledge, KindRequest, KindPain, KindIdea, KindCriterion, KindTask, KindFile, KindMessage, KindSession}
 
 var kindAlias = map[string]string{
 	"knowledge": KindKnowledge, "wissen": KindKnowledge,
@@ -57,6 +61,7 @@ var kindAlias = map[string]string{
 	"pain": KindPain, "pains": KindPain, "idea": KindIdea, "ideas": KindIdea,
 	"criterion": KindCriterion, "criteria": KindCriterion,
 	"task": KindTask, "tasks": KindTask, "file": KindFile, "files": KindFile, "ghost": KindFile,
+	"message": KindMessage, "messages": KindMessage, "nachricht": KindMessage, "session": KindSession, "sessions": KindSession,
 }
 
 // StateClasses sind die Zustandsklassen von is:.
@@ -72,7 +77,7 @@ const (
 //
 //	request:   open, done = done, dropped = closed
 //	criterion: open, met = done, waived = closed
-//	pain:      active und mitigated = open, resolved = done, obsolete = closed
+//	pain:      active und mitigated = open, resolved = done, accepted und obsolete = closed
 //	idea:      open, accepted = done, dismissed = closed
 //	task:      open = open, done und confirmed = done, dropped = closed
 func StateClass(kind, state string) string {
@@ -101,7 +106,7 @@ func StateClass(kind, state string) string {
 			return ClassOpen
 		case "resolved":
 			return ClassDone
-		case "obsolete":
+		case "accepted", "obsolete":
 			return ClassClosed
 		}
 	case KindIdea:

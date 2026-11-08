@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
@@ -487,7 +488,11 @@ func (s *Server) handleSearchPreset(_ context.Context, _ *mcp.CallToolRequest, i
 		var b strings.Builder
 		fmt.Fprintf(&b, "search %s: %s\n", run.Preset.Name, strings.Join(run.Queries, " | "))
 		b.WriteString(RenderQualifiedLinked(run.Result, s.builder()))
-		return textResult(b.String()), SearchPresetOutput{}, nil
+		res := textResult(b.String())
+		if card, ok := links.PresetCardFor(s.client, s.builder(), project, run.Preset.Name, args); ok {
+			res = s.withCard(res, card)
+		}
+		return res, SearchPresetOutput{}, nil
 	case "save":
 		project, err := s.writeTarget(in.Project)
 		if err != nil {
@@ -502,7 +507,7 @@ func (s *Server) handleSearchPreset(_ context.Context, _ *mcp.CallToolRequest, i
 			return nil, SearchPresetOutput{}, err
 		}
 		out := SearchPresetOutput{Changed: fmt.Sprintf("saved %s [%s]", p.Name, p.Scope)}
-		return requestResult(out), out, nil
+		return s.withCard(requestResult(out), s.builder().WithProject(project).PresetCard(p, nil)), out, nil
 	case "delete":
 		if in.ID == 0 {
 			return nil, SearchPresetOutput{}, fmt.Errorf("delete needs the id from list")
@@ -603,6 +608,26 @@ func RenderQualifiedLinked(res client.SearchResult, b links.Builder) string {
 			out.WriteString(renderGhostHit(g))
 		}
 	}
+	if len(res.Messages) > 0 {
+		out.WriteString("\n## room messages\n")
+		for _, m := range res.Messages {
+			room := m.RoomLabel
+			if room == "" {
+				room = m.RoomKey
+			}
+			out.WriteString(hitLink(fmt.Sprintf("- [message|room=%s|from=%s|%s] %s\n", oneLine(room), oneLine(m.Sender), m.CreatedAt, oneLine(m.Body)), b.RoomChat(m.RoomKey)))
+		}
+	}
+	if len(res.Sessions) > 0 {
+		out.WriteString("\n## sessions\n")
+		for _, h := range res.Sessions {
+			id := h.Session.PublicID
+			if id == "" {
+				id = strconv.FormatInt(h.Session.ID, 10)
+			}
+			out.WriteString(hitLink(renderHit(h), b.WithProject(h.Session.Scope.Project).Session(id)))
+		}
+	}
 	if out.Len() == 0 {
 		return "(no results)\n"
 	}
@@ -622,12 +647,12 @@ func (s *Server) qualifiedSearch(in SearchInput, parsed query.Query, anchor clie
 	switch kind {
 	case "", "all":
 		kind = "all"
-	case "knowledge", "requests", "files", "pains", "ideas", "criteria", "tasks":
-	case "sessions":
-		return textResult("(sessions carry no qualifiers; search them without)\n"), nil, nil
+	case "knowledge", "requests", "files", "pains", "ideas", "criteria", "tasks", "sessions", "messages":
 	default:
-		return nil, nil, fmt.Errorf("kind is knowledge, requests, pains, ideas, criteria, tasks, files or all")
+		return nil, nil, fmt.Errorf("kind is knowledge, requests, pains, ideas, criteria, tasks, files, sessions, messages or all")
 	}
+	// Raum-Nachrichten liest der Server in den Räumen dieses Agenten.
+	anchor.Agent = s.coordRef()
 	res, err := s.client.SearchAnchored(in.Query, kind, ax, searchLimit, !crossProject, anchor)
 	if err != nil {
 		return nil, nil, err
@@ -636,6 +661,7 @@ func (s *Server) qualifiedSearch(in SearchInput, parsed query.Query, anchor clie
 	if res.Query != "" {
 		fmt.Fprintf(&out, "query: %s\n", res.Query)
 	}
+	res.Sessions = withoutSession(res.Sessions, s.sessionRef)
 	out.WriteString(RenderQualifiedLinked(res, s.builder()))
 	return textResult(out.String()), nil, nil
 }

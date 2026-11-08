@@ -10,7 +10,7 @@ import (
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 )
 
-const painCols = `p.id,p.project,p.title,p.body,p.state,p.remaining,p.person,p.created_at,p.updated_at,COALESCE(au.account_id,0)`
+const painCols = `p.id,p.project,p.title,p.body,p.state,p.remaining,p.person,p.created_at,p.updated_at,COALESCE(au.account_id,0),p.accepted_reason`
 
 const painFrom = ` FROM pains p LEFT JOIN pain_authors au ON au.pain_id=p.id`
 
@@ -18,7 +18,7 @@ func scanPains(rows *sql.Rows) ([]pain.Pain, error) {
 	var out []pain.Pain
 	for rows.Next() {
 		var p pain.Pain
-		if err := rows.Scan(&p.ID, &p.Project, &p.Title, &p.Body, &p.State, &p.Remaining, &p.Person, &p.CreatedAt, &p.UpdatedAt, &p.AuthorID); err != nil {
+		if err := rows.Scan(&p.ID, &p.Project, &p.Title, &p.Body, &p.State, &p.Remaining, &p.Person, &p.CreatedAt, &p.UpdatedAt, &p.AuthorID, &p.AcceptedReason); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -241,7 +241,13 @@ func (a *ProjectAccess) SetPainState(id int64, to, remaining string, ev pain.Evi
 	if to != pain.Mitigated {
 		remaining = ""
 	}
-	if err := a.st.commitPainState(id, p.State, to, remaining, ev, note, actor); err != nil {
+	// The reason of an accepted pain stays on the pain; it is gone when the pain
+	// leaves the state (the history keeps it in the note of the event).
+	acceptedReason := ""
+	if to == pain.Accepted {
+		acceptedReason = note
+	}
+	if err := a.st.commitPainState(id, p.State, to, remaining, acceptedReason, ev, note, actor); err != nil {
 		return pain.Detail{}, err
 	}
 	return a.st.painDetail(a, id)
@@ -279,10 +285,10 @@ func (a *ProjectAccess) checkEvidenceRef(project string, ev pain.Evidence) (stri
 	return ev.Ref, nil
 }
 
-func (s *Store) commitPainState(id int64, from, to, remaining string, ev pain.Evidence, note string, actor pain.Actor) error {
+func (s *Store) commitPainState(id int64, from, to, remaining, acceptedReason string, ev pain.Evidence, note string, actor pain.Actor) error {
 	if s.writer != nil {
-		return queueWrite(s, []any{id, from, to, remaining, ev, note, actor}, func(d *Store, q []any) error {
-			return d.commitPainState(q[0].(int64), q[1].(string), q[2].(string), q[3].(string), q[4].(pain.Evidence), q[5].(string), q[6].(pain.Actor))
+		return queueWrite(s, []any{id, from, to, remaining, acceptedReason, ev, note, actor}, func(d *Store, q []any) error {
+			return d.commitPainState(q[0].(int64), q[1].(string), q[2].(string), q[3].(string), q[4].(string), q[5].(pain.Evidence), q[6].(string), q[7].(pain.Actor))
 		})
 	}
 	tx, err := s.db.Begin()
@@ -301,7 +307,7 @@ func (s *Store) commitPainState(id int64, from, to, remaining string, ev pain.Ev
 		from = cur
 	}
 	ts := now()
-	if _, err := tx.Exec(`UPDATE pains SET state=?,remaining=?,updated_at=? WHERE id=?`, to, remaining, ts, id); err != nil {
+	if _, err := tx.Exec(`UPDATE pains SET state=?,remaining=?,accepted_reason=?,updated_at=? WHERE id=?`, to, remaining, acceptedReason, ts, id); err != nil {
 		return err
 	}
 	anchorID, originID, err := insertWriteMetaTx(tx, actor.GitAnchor, actor.Origin)

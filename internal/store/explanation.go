@@ -310,13 +310,16 @@ func (s *Store) requestSource(id int64) (explain.Source, error) {
 }
 
 func (s *Store) painSource(id int64) (explain.Source, error) {
-	var title, body, project, state, remaining string
-	if err := s.db.QueryRow(`SELECT title, body, project, state, remaining FROM pains WHERE id = ?`, id).Scan(&title, &body, &project, &state, &remaining); err != nil {
+	var title, body, project, state, remaining, accepted string
+	if err := s.db.QueryRow(`SELECT title, body, project, state, remaining, accepted_reason FROM pains WHERE id = ?`, id).Scan(&title, &body, &project, &state, &remaining, &accepted); err != nil {
 		return explain.Source{}, err
 	}
 	ctx := []string{"State: " + state}
 	if remaining != "" {
 		ctx = append(ctx, "Still unsolved: "+remaining)
+	}
+	if accepted != "" {
+		ctx = append(ctx, "Accepted, one lives with it because: "+accepted)
 	}
 	rows, err := s.db.Query(`SELECT r.id, r.title, r.origin, r.person, r.session_ref FROM entity_links l JOIN requests r ON r.id = l.dst_id
 		WHERE l.src_kind = 'pain' AND l.src_id = ? AND l.dst_kind = 'request' AND r.project = ? AND r.machine = '' LIMIT 10`, id, project)
@@ -334,7 +337,7 @@ func (s *Store) painSource(id int64) (explain.Source, error) {
 	}
 	ctx = append(ctx, s.referenceContext(project, title+"\n"+body)...)
 	return explain.Source{Project: project, Label: "pain", Title: title, Body: body, Context: ctx,
-		Hash: explain.HashOf(explain.KindPain, project, title, body, state, remaining)}, nil
+		Hash: explain.HashOf(explain.KindPain, project, title, body, state, remaining+accepted)}, nil
 }
 
 func (s *Store) taskSource(id int64) (explain.Source, error) {

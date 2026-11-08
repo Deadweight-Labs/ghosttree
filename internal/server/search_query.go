@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -37,12 +38,16 @@ func repoRemote(v string) string {
 }
 
 // searchKinds sagt, welche Arten die Anfrage will: der Parameter kind und die
-// Qualifier zusammen. Sessions und Dateien kennen die Qualifier nicht.
+// Qualifier zusammen.
 func searchKinds(kindParam string, q query.Query) []string {
 	var want []string
 	switch strings.ToLower(kindParam) {
 	case "", "all":
-		want = []string{query.KindKnowledge, query.KindRequest, query.KindPain, query.KindIdea, query.KindCriterion, query.KindTask, query.KindFile}
+		want = []string{query.KindKnowledge, query.KindRequest, query.KindPain, query.KindIdea, query.KindCriterion, query.KindTask, query.KindFile, query.KindMessage, query.KindSession}
+	case "messages", "message":
+		want = []string{query.KindMessage}
+	case "sessions", "session":
+		want = []string{query.KindSession}
 	case "files", "file":
 		want = []string{query.KindFile}
 	case "knowledge":
@@ -178,6 +183,16 @@ func (a *api) qualifiedResult(w http.ResponseWriter, r *http.Request, q query.Qu
 			}
 		case query.KindRequest:
 			if err := a.qualifiedRequests(r, &res, q, text, ax, limit, fetchBase, anchor, origin); err != nil {
+				writeStoreError(w, http.StatusInternalServerError, err)
+				return searchResult{}, false
+			}
+		case query.KindSession:
+			if err := a.qualifiedSessions(r, &res, q, text, ax, limit, fetchBase); err != nil {
+				writeStoreError(w, http.StatusInternalServerError, err)
+				return searchResult{}, false
+			}
+		case query.KindMessage:
+			if err := a.qualifiedMessages(r, &res, q, text, project, limit, fetchBase); err != nil {
 				writeStoreError(w, http.StatusInternalServerError, err)
 				return searchResult{}, false
 			}
@@ -428,6 +443,64 @@ func (a *api) qualifiedFiles(r *http.Request, res *searchResult, q query.Query, 
 		return err
 	}
 	res.Files = filterTo(entries, limit, func(g store.GhostFile) bool { return readable(g) && q.Match(ghostFacts(g)) })
+	return nil
+}
+
+// sessionFacts: eine Session als Treffer. Sie hat Projekt, Branch, Besitzer und
+// Zeiten, keinen Zustand, kein Label und keinen Git-Anker: is:open, label:,
+// commit: und pr: treffen sie nie.
+func sessionFacts(h store.SessionHit) query.Facts {
+	s := h.Session
+	f := query.Facts{Kind: query.KindSession, Repo: s.Scope.Project, Author: s.Owner, Created: s.StartedAt, Updated: s.LastSeenAt}
+	if s.Scope.Branch != "" {
+		f.Branches = []string{s.Scope.Branch}
+	}
+	return f
+}
+
+// qualifiedSessions sucht in den Transkripten, die der Betrachter lesen darf
+// (dieselbe Regel wie die Suche ohne Qualifier: private Sessions bleiben dem
+// Besitzer). Ohne Suchwort gibt es keine Session-Treffer: das Transkript wird
+// über seinen Text gefunden, nicht aufgelistet.
+func (a *api) qualifiedSessions(r *http.Request, res *searchResult, q query.Query, text string, ax scope.Axes, limit, fetchBase int) error {
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
+	pa := a.access(r)
+	hits, err := a.searchSessions(pa, text, ax, r.URL.Query().Get("exclude_session"), fetchBase, a.overfetch(fetchBase), store.SearchAuto)
+	if err != nil {
+		return err
+	}
+	res.Sessions = filterTo(hits, limit, func(h store.SessionHit) bool { return q.Match(sessionFacts(h)) })
+	return nil
+}
+
+// messageFacts: eine Raum-Nachricht als Treffer; Anker und Bereich kommen aus
+// dem, was beim Schreiben festgehalten wurde.
+func messageFacts(h store.MessageHit, of store.ObjectFacts) query.Facts {
+	return query.Facts{
+		Kind: query.KindMessage, Repo: h.Project, Author: h.Sender,
+		Branches: of.Branches, Commits: of.Commits, PRs: of.PRs, Areas: of.Areas,
+		Created: h.CreatedAt, Updated: h.CreatedAt, OriginAt: of.OriginAt,
+	}
+}
+
+// qualifiedMessages sucht in den Raum-Nachrichten, die der Betrachter auch sonst
+// lesen darf. Die Menge der lesbaren Räume steht in der Abfrage fest
+// (CoordAccess.SearchMessages), nicht erst danach.
+func (a *api) qualifiedMessages(r *http.Request, res *searchResult, q query.Query, text, project string, limit, fetchBase int) error {
+	hits, err := a.coordAccess(r, r.URL.Query().Get("agent_external_id")).SearchMessages(project, text, fetchBase)
+	if err != nil {
+		if errors.Is(err, store.ErrCoordForbidden) || errors.Is(err, store.ErrCoordNotFound) {
+			return nil
+		}
+		return err
+	}
+	facts, err := a.st.ObjectFacts("message", idsOf(hits, func(h store.MessageHit) int64 { return h.ID }))
+	if err != nil {
+		return err
+	}
+	res.Messages = filterTo(hits, limit, func(h store.MessageHit) bool { return q.Match(messageFacts(h, facts[h.ID])) })
 	return nil
 }
 

@@ -63,6 +63,8 @@ var anchoredTables = []string{
 	// ideas (REQ-606): der Anker und der Kontext des Anlegens stehen an der Idee
 	// selbst, die ihren Zustand später ändert, aber nie neu verankert wird.
 	"ideas",
+	// thread_events (REQ-597): Anlegen, Zustandswechsel und Ergebnisse eines Threads.
+	"thread_events",
 }
 
 // ensureGitAnchors legt Tabelle und Spalten additiv an. Wie die anderen
@@ -237,8 +239,13 @@ func (s *Store) attachEvidenceAnchors(es []requestdomain.Evidence) error {
 	if err != nil {
 		return err
 	}
+	via, err := s.viaFor("request_evidence", ids)
+	if err != nil {
+		return err
+	}
 	for i := range es {
 		es[i].GitAnchor = anchors[es[i].ID]
+		es[i].Via = via[es[i].ID]
 	}
 	return nil
 }
@@ -256,8 +263,13 @@ func (s *Store) attachActivityAnchors(as []requestdomain.Activity) error {
 	if err != nil {
 		return err
 	}
+	via, err := s.viaFor("request_activity", ids)
+	if err != nil {
+		return err
+	}
 	for i := range as {
 		as[i].GitAnchor = anchors[as[i].ID]
+		as[i].Via = via[as[i].ID]
 	}
 	return nil
 }

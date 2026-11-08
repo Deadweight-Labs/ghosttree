@@ -56,6 +56,25 @@ func (s *Server) sessionURL(sess store.Session) string {
 	return s.builder().WithProject(sess.Scope.Project).Session(id)
 }
 
+// withSessionCard gives the answer that reads one session its card. The card
+// comes from the same lookup as open_link, so a session the caller may not read
+// gets none (the reading itself would have failed first).
+func (s *Server) withSessionCard(res *mcp.CallToolResult, in SessionsInput) *mcp.CallToolResult {
+	id := in.SessionRef
+	if id == "" {
+		id = strconv.FormatInt(in.SessionID, 10)
+	}
+	ref, err := links.ParseRef("session:" + id)
+	if err != nil {
+		return res
+	}
+	card, err := s.linkEnv().Resolve(ref)
+	if err != nil {
+		return res
+	}
+	return s.withCard(res, card)
+}
+
 // OpenLinkInput is the open_link tool.
 type OpenLinkInput struct {
 	Ref string `json:"ref" jsonschema:"what to link: REQ-n, AC-n.m or REQ-n#m (a criterion), TASK-n, PAIN-n, IDEA-n, PKG-n, #id (a knowledge entry), pr:n, commit:sha, room:n, session:id, doc:slug, runbook:name, branch:name (its checklist), preset:name followed by its values (preset:pr-ergebnis 155), a repository path, a search line like is:open label:bug, or inbox"`

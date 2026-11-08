@@ -42,7 +42,25 @@ type Anchor struct {
 	PR *int64 `json:"pr,omitempty"`
 	// CapturedAt setzt der Server beim Speichern.
 	CapturedAt string `json:"captured_at,omitempty"`
+	// Via sagt, auf welchem Weg der Eintrag entstand, wenn es keinen Git-Stand
+	// dazu geben kann: ViaWeb für die Bearbeitung in der Weboberfläche. Es ist
+	// nur der Transport vom Handler in den Store (der Store hält es am
+	// Entstehungskontext, nicht am Anker), kommt nie aus dem Header (Decode
+	// verwirft es) und steht in keiner Antwort.
+	Via string `json:"-"`
 }
+
+// ViaWeb kennzeichnet Einträge, die in der Weboberfläche geschrieben wurden.
+// Dort gibt es kein Arbeitsverzeichnis und also keinen Anker; statt eines
+// geratenen Stands steht die Herkunft "Web".
+const ViaWeb = "web"
+
+// Web ist der Platzhalter für einen Schreibzugriff aus der Weboberfläche: kein
+// Commit (IsZero), aber als Web gekennzeichnet.
+func Web() *Anchor { return &Anchor{Via: ViaWeb} }
+
+// IsWeb sagt, dass der Schreibzugriff aus der Weboberfläche kam.
+func (a *Anchor) IsWeb() bool { return a != nil && a.Via == ViaWeb }
 
 // IsZero sagt, dass es nichts zu speichern gibt. Der Commit ist der Kern: ohne
 // ihn sind Branch und Merge-Base allein kein Anker, sondern nur ein Name.
@@ -106,7 +124,7 @@ func Decode(value string) Anchor {
 	if json.Unmarshal(raw, &a) != nil {
 		return Anchor{}
 	}
-	a.PR, a.CapturedAt = nil, ""
+	a.PR, a.CapturedAt, a.Via = nil, "", ""
 	a.Commit = Normalize(a.Commit)
 	a.MergeBase = Normalize(a.MergeBase)
 	if !ValidPrefix(a.Commit) || len(a.MergeBase) > 64 || len(a.Branch) > 512 {

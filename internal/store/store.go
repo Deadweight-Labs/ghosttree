@@ -739,6 +739,14 @@ CREATE TABLE IF NOT EXISTS thread_outcomes(
   created_at TEXT NOT NULL,
   decided_at TEXT,
   PRIMARY KEY(thread_id,kind,ref_id));
+CREATE TABLE IF NOT EXISTS thread_events(
+  id INTEGER PRIMARY KEY,
+  thread_id INTEGER NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  person TEXT NOT NULL DEFAULT '',
+  data TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS thread_events_thread ON thread_events(thread_id,id);
 CREATE TABLE IF NOT EXISTS path_activity(
   id INTEGER PRIMARY KEY,
   project TEXT NOT NULL DEFAULT '',

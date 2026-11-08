@@ -140,7 +140,7 @@ func cmdKnowledgeAdd(args []string, stdout io.Writer) int {
 		fmt.Fprintf(stdout, "no config (%s) - run 'ctx setup'\n", config.Path())
 		return 1
 	}
-	return addKnowledge(client.New(cfg), currentAxes(cfg.Machine),
+	return addKnowledge(anchoredClient(cfg), currentAxes(cfg.Machine),
 		store.Knowledge{Type: *typ, Title: *title, Body: *body, Harness: "cli", Explanation: *explanation},
 		*scopeFlag, *project, ids, *reason, stdout)
 }
@@ -188,6 +188,7 @@ func addKnowledge(c *client.Client, here scope.Axes, k store.Knowledge, scopeHin
 		msg += "; superseded " + strings.Join(parts, ", ")
 	}
 	fmt.Fprintln(stdout, msg)
+	cliCard(stdout, clientBuilder(c, here.Project).KnowledgeCard(saved))
 	return 0
 }
 
@@ -263,6 +264,7 @@ func cmdKnowledgeRetire(args []string, stdout io.Writer) int {
 		return 1
 	}
 	fmt.Fprintf(stdout, "retired #%d\n", saved.ID)
+	cliCard(stdout, cliBuilder(cfg, requestProjectAxes(cfg.Machine).Project).KnowledgeCard(saved))
 	return 0
 }
 
@@ -305,6 +307,7 @@ func cmdKnowledgeSupersede(args []string, stdout io.Writer) int {
 		parts[i] = "#" + strconv.FormatInt(older, 10)
 	}
 	fmt.Fprintf(stdout, "#%d now supersedes %s\n", saved.ID, strings.Join(parts, ", "))
+	cliCard(stdout, cliBuilder(cfg, requestProjectAxes(cfg.Machine).Project).KnowledgeCard(saved))
 	return 0
 }
 
@@ -328,6 +331,7 @@ func cmdKnowledgeShow(args []string, stdout io.Writer) int {
 		fmt.Fprintln(stdout, k.Closure.Summary())
 	}
 	fmt.Fprintf(stdout, "\n%s\n", k.Body)
+	cliCard(stdout, cliBuilder(cfg, requestProjectAxes(cfg.Machine).Project).KnowledgeCard(k))
 	return 0
 }
 
@@ -381,5 +385,6 @@ func moveKnowledge(c *client.Client, id int64, project, machine string, global b
 		return 1
 	}
 	fmt.Fprintf(stdout, "moved #%d to %s\n", saved.ID, saved.Scope.Label())
+	cliCard(stdout, clientBuilder(c, requestProjectAxes("").Project).KnowledgeCard(saved))
 	return 0
 }

@@ -71,6 +71,11 @@ func cliBuilder(cfg config.Config, project string) links.Builder {
 	return links.New(cfg.ServerURL, project)
 }
 
+// clientBuilder is cliBuilder for code that holds the client but not the config.
+func clientBuilder(c *client.Client, project string) links.Builder {
+	return links.New(c.ServerURL(), project)
+}
+
 // cliCard prints the card of an object after its normal output.
 func cliCard(stdout io.Writer, c links.Card) {
 	if c.URL == "" {

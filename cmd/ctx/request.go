@@ -59,7 +59,7 @@ func cmdRequest(args []string, stdout io.Writer) int {
 	if err != nil {
 		return writeRequestCLIError(stdout, jsonMode, 1, err)
 	}
-	c := client.New(cfg)
+	c := anchoredClient(cfg)
 	switch sub {
 	case "list":
 		if len(rest) != 0 {
@@ -125,11 +125,13 @@ func cmdRequest(args []string, stdout io.Writer) int {
 			return writeRequestCLIError(stdout, jsonMode, 1, err)
 		}
 		detail, err := c.MoveRequest(id, target, *reason)
+		card := cliBuilder(cfg, target).RequestCard(detail)
 		if err == nil && !jsonMode {
 			fmt.Fprintf(stdout, "moved REQ-%d to %s\n", detail.Request.ID, detail.Request.Scope.Label())
+			cliCard(stdout, card)
 			return 0
 		}
-		return writeRequestCLIResult(stdout, jsonMode, detail, nil, err)
+		return writeRequestCLIResultCard(stdout, jsonMode, detail, &card, err)
 	case "start":
 		id, flags, ok := requestIDAndFlags(rest)
 		if !ok {
@@ -143,7 +145,7 @@ func cmdRequest(args []string, stdout io.Writer) int {
 			return requestCLIUsage(stdout)
 		}
 		work, warnings, err := c.StartRequestWork(id, *sessionID, *role)
-		return writeRequestCLIResult(stdout, jsonMode, work, warnings, err)
+		return writeRequestCLIResultWarnCard(stdout, jsonMode, work, warnings, requestCardOf(c, cfg, work.RequestID, err), err)
 	case "pause", "complete-work", "abandon":
 		workID, flags, ok := requestIDAndFlags(rest)
 		if !ok {
@@ -157,9 +159,9 @@ func cmdRequest(args []string, stdout io.Writer) int {
 		}
 		state := map[string]string{"pause": "paused", "complete-work": "completed", "abandon": "abandoned"}[sub]
 		work, err := c.FinishRequestWork(workID, state, *summary)
-		return writeRequestCLIResult(stdout, jsonMode, work, nil, err)
+		return writeRequestCLIResultCard(stdout, jsonMode, work, requestCardOf(c, cfg, work.RequestID, err), err)
 	case "ac":
-		return cmdRequestAC(c, rest, stdout, jsonMode)
+		return cmdRequestAC(c, cfg, rest, stdout, jsonMode)
 	case "done":
 		id, flags, ok := requestIDAndFlags(rest)
 		if !ok {
@@ -177,7 +179,8 @@ func cmdRequest(args []string, stdout io.Writer) int {
 			return writeRequestCLIError(stdout, jsonMode, 1, err)
 		}
 		detail, err := c.GetRequest(id)
-		return writeRequestCLIResult(stdout, jsonMode, detail, nil, err)
+		card := cliBuilder(cfg, detail.Request.Scope.Project).RequestCard(detail)
+		return writeRequestCLIResultCard(stdout, jsonMode, detail, &card, err)
 	default:
 		return requestCLIUsage(stdout)
 	}
@@ -191,7 +194,7 @@ func requestIDAndFlags(args []string) (int64, []string, bool) {
 	return id, args[1:], err == nil
 }
 
-func cmdRequestAC(c *client.Client, args []string, stdout io.Writer, jsonMode bool) int {
+func cmdRequestAC(c *client.Client, cfg config.Config, args []string, stdout io.Writer, jsonMode bool) int {
 	if len(args) < 3 {
 		return requestCLIUsage(stdout)
 	}
@@ -202,7 +205,7 @@ func cmdRequestAC(c *client.Client, args []string, stdout io.Writer, jsonMode bo
 	}
 	if action == "add" {
 		criterion, err := c.AddRequestCriterion(requestID, strings.Join(args[2:], " "))
-		return writeRequestCLIResult(stdout, jsonMode, criterion, nil, err)
+		return writeRequestCLIResultCard(stdout, jsonMode, criterion, requestCardOf(c, cfg, requestID, err), err)
 	}
 	if action != "met" && action != "waive" {
 		return requestCLIUsage(stdout)
@@ -227,7 +230,22 @@ func cmdRequestAC(c *client.Client, args []string, stdout io.Writer, jsonMode bo
 		return writeRequestCLIError(stdout, jsonMode, 1, err)
 	}
 	detail, err := c.GetRequest(requestID)
-	return writeRequestCLIResult(stdout, jsonMode, detail, nil, err)
+	card := cliBuilder(cfg, detail.Request.Scope.Project).RequestCard(detail)
+	return writeRequestCLIResultCard(stdout, jsonMode, detail, &card, err)
+}
+
+// requestCardOf reads the request an answer is about and gives its card; nil
+// when the answer failed or the request cannot be read again.
+func requestCardOf(c *client.Client, cfg config.Config, id int64, failed error) *links.Card {
+	if failed != nil || id == 0 {
+		return nil
+	}
+	detail, err := c.GetRequest(id)
+	if err != nil {
+		return nil
+	}
+	card := cliBuilder(cfg, detail.Request.Scope.Project).RequestCard(detail)
+	return &card
 }
 
 func requestProjectAxes(machine string) scope.Axes {
@@ -252,18 +270,23 @@ func requestCLIUsage(stdout io.Writer) int { fmt.Fprintln(stdout, requestUsage);
 // writeRequestCLIResultCard is writeRequestCLIResult for an answer about one
 // object: JSON carries the card, text prints it under the data.
 func writeRequestCLIResultCard(stdout io.Writer, jsonMode bool, data any, card *links.Card, err error) int {
+	return writeRequestCLIResultWarnCard(stdout, jsonMode, data, nil, card, err)
+}
+
+// writeRequestCLIResultWarnCard is writeRequestCLIResultCard with warnings.
+func writeRequestCLIResultWarnCard(stdout io.Writer, jsonMode bool, data any, warnings []string, card *links.Card, err error) int {
 	if err != nil {
 		return writeRequestCLIError(stdout, jsonMode, 1, err)
 	}
 	if jsonMode {
-		env := requestEnvelope{OK: true, Data: data}
+		env := requestEnvelope{OK: true, Data: data, Warnings: warnings}
 		if card != nil && card.URL != "" {
 			env.Card = card
 		}
 		_ = json.NewEncoder(stdout).Encode(env)
 		return 0
 	}
-	code := writeRequestCLIResult(stdout, false, data, nil, nil)
+	code := writeRequestCLIResult(stdout, false, data, warnings, nil)
 	if card != nil {
 		cliCard(stdout, *card)
 	}

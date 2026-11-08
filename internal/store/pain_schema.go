@@ -1,21 +1,31 @@
 package store
 
 import (
+	"context"
 	"database/sql"
+	"fmt"
 	"strings"
 )
 
-const painAndTasksSchema = `
-CREATE TABLE IF NOT EXISTS pains(
+// painsTableDDL is the definition of the pains table under a name; the rebuild
+// of an older database creates the new table under another name first.
+func painsTableDDL(name string) string {
+	return `CREATE TABLE IF NOT EXISTS ` + name + `(
   id INTEGER PRIMARY KEY,
   project TEXT NOT NULL CHECK(project != ''),
   title TEXT NOT NULL CHECK(trim(title) != ''),
   body TEXT NOT NULL DEFAULT '',
-  state TEXT NOT NULL DEFAULT 'active' CHECK(state IN ('active','mitigated','resolved','obsolete')),
+  state TEXT NOT NULL DEFAULT 'active' CHECK(state IN ('active','mitigated','accepted','resolved','obsolete')),
   remaining TEXT NOT NULL DEFAULT '',
   person TEXT NOT NULL DEFAULT '', session_ref TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-  CHECK(state != 'mitigated' OR trim(remaining) != ''));
+  accepted_reason TEXT NOT NULL DEFAULT '',
+  CHECK(state != 'mitigated' OR trim(remaining) != ''),
+  CHECK(state != 'accepted' OR trim(accepted_reason) != ''))`
+}
+
+var painAndTasksSchema = `
+` + painsTableDDL("pains") + `;
 CREATE INDEX IF NOT EXISTS pains_project_state ON pains(project, state);
 CREATE TABLE IF NOT EXISTS pain_authors(
   pain_id INTEGER PRIMARY KEY REFERENCES pains(id) ON DELETE RESTRICT, account_id INTEGER NOT NULL);
@@ -77,6 +87,9 @@ func ensurePainAndTasks(db *sql.DB) error {
 	if _, err := db.Exec(painAndTasksSchema); err != nil {
 		return err
 	}
+	if err := allowPainAccepted(db); err != nil {
+		return err
+	}
 	if err := allowIdeaLinkTarget(db); err != nil {
 		return err
 	}
@@ -123,6 +136,78 @@ func allowIdeaLinkTarget(db *sql.DB) error {
 	} {
 		if _, err := tx.Exec(q); err != nil {
 			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// allowPainAccepted (REQ-616) lets a pain be accepted: the state accepted and its
+// reason column. SQLite does not change a CHECK condition, so the table is
+// rebuilt once when its definition does not know the state yet; rows, numbers
+// and everything that points at them stay. A database that knows the state is
+// left alone, the call can be repeated.
+//
+// The tables pain_events, pain_authors and entity_links refer to pains with ON
+// DELETE RESTRICT, and the DROP of the old table would refuse while they hold
+// rows. Foreign keys are therefore switched off for the rebuild, on one
+// connection of its own (the switch is a no-op inside a transaction and per
+// connection), and checked again before the commit.
+func allowPainAccepted(db *sql.DB) error {
+	known := func(q interface {
+		QueryRow(string, ...any) *sql.Row
+	}) (bool, error) {
+		var ddl string
+		if err := q.QueryRow(`SELECT sql FROM sqlite_master WHERE type='table' AND name='pains'`).Scan(&ddl); err != nil {
+			return false, err
+		}
+		return strings.Contains(ddl, "'accepted'"), nil
+	}
+	if ok, err := known(db); err != nil || ok {
+		return err
+	}
+	ctx := context.Background()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `PRAGMA foreign_keys=OFF`); err != nil {
+		return err
+	}
+	defer conn.ExecContext(ctx, `PRAGMA foreign_keys=ON`)
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	// A second process may have done the rebuild in the meantime.
+	if ok, err := known(tx); err != nil || ok {
+		return err
+	}
+	for _, q := range []string{
+		painsTableDDL("pains_new"),
+		`INSERT INTO pains_new(id,project,title,body,state,remaining,person,session_ref,created_at,updated_at)
+  SELECT id,project,title,body,state,remaining,person,session_ref,created_at,updated_at FROM pains`,
+		`DROP TABLE pains`,
+		`ALTER TABLE pains_new RENAME TO pains`,
+		`CREATE INDEX IF NOT EXISTS pains_project_state ON pains(project, state)`,
+	} {
+		if _, err := tx.ExecContext(ctx, q); err != nil {
+			return err
+		}
+	}
+	// Only the tables that refer to pains: a check of the whole database would
+	// read every table of a large instance on startup, and an unrelated old
+	// violation elsewhere would keep the server from starting.
+	for _, table := range []string{"pain_authors", "pain_events", "entity_links"} {
+		rows, err := tx.QueryContext(ctx, `PRAGMA foreign_key_check(`+table+`)`)
+		if err != nil {
+			return err
+		}
+		broken := rows.Next()
+		rows.Close()
+		if broken {
+			return fmt.Errorf("pains rebuild: a row of %s refers to a pain that is gone", table)
 		}
 	}
 	return tx.Commit()

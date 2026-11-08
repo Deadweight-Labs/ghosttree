@@ -360,6 +360,28 @@ func (s *Store) UpdateKnowledge(id int64, patch map[string]string) error {
 // The author remains on the live entry, while the authenticated editor is
 // recorded both on the new head and on the archived version it replaced.
 func (s *Store) UpdateKnowledgeBy(id int64, patch map[string]string, editor string) error {
+	if s.writer != nil {
+		return queueWrite(s, []any{id, patch, editor}, func(d *Store, p []any) error {
+			return d.updateKnowledge(p[0].(int64), p[1].(map[string]string), p[2].(string), false)
+		})
+	}
+	return s.updateKnowledge(id, patch, editor, false)
+}
+
+// UpdateKnowledgeFromWeb is UpdateKnowledgeBy for an edit in the web interface
+// (REQ-597). A new wording written there has no anchor, and it is marked as Web
+// instead: the origin of the new revision says where it came from, and the
+// absence of a commit is then a fact and not a gap.
+func (s *Store) UpdateKnowledgeFromWeb(id int64, patch map[string]string, editor string) error {
+	if s.writer != nil {
+		return queueWrite(s, []any{id, patch, editor}, func(d *Store, p []any) error {
+			return d.updateKnowledge(p[0].(int64), p[1].(map[string]string), p[2].(string), true)
+		})
+	}
+	return s.updateKnowledge(id, patch, editor, true)
+}
+
+func (s *Store) updateKnowledge(id int64, patch map[string]string, editor string, web bool) error {
 	for col := range patch {
 		if !patchable[col] {
 			return fmt.Errorf("field %q is not patchable", col)
@@ -375,11 +397,6 @@ func (s *Store) UpdateKnowledgeBy(id int64, patch map[string]string, editor stri
 	}
 	if len(sets) == 0 && patch["superseded_by"] == "" {
 		return nil
-	}
-	if s.writer != nil {
-		return queueWrite(s, []any{id, patch, editor}, func(d *Store, p []any) error {
-			return d.UpdateKnowledgeBy(p[0].(int64), p[1].(map[string]string), p[2].(string))
-		})
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -413,12 +430,20 @@ func (s *Store) UpdateKnowledgeBy(id int64, patch map[string]string, editor stri
 	// Eine inhaltlich neue Fassung ohne eigenen Anker (Web-Bearbeitung) behält
 	// den alten nicht: der Anker beschriebe sonst einen Code-Stand, auf dem
 	// dieser Text nie geschrieben wurde. Der alte steht in der Historie.
-	if _, ok := patch["title"]; ok {
-		sets = append(sets, "anchor_id = NULL", "origin_id = NULL")
-	} else if _, ok := patch["body"]; ok {
-		sets = append(sets, "anchor_id = NULL", "origin_id = NULL")
-	} else if _, ok := patch["type"]; ok {
-		sets = append(sets, "anchor_id = NULL", "origin_id = NULL")
+	_, newTitle := patch["title"]
+	_, newBody := patch["body"]
+	_, newType := patch["type"]
+	if newTitle || newBody || newType {
+		if web {
+			originID, err := insertOriginTx(tx, &originctx.Context{Via: originctx.ViaWeb})
+			if err != nil {
+				return err
+			}
+			sets = append(sets, "anchor_id = NULL", "origin_id = ?")
+			args = append(args, originID)
+		} else {
+			sets = append(sets, "anchor_id = NULL", "origin_id = NULL")
+		}
 	}
 	if editor != "" {
 		sets = append(sets, "last_modified_by = ?")

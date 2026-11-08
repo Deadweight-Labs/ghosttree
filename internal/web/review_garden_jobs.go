@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
@@ -259,7 +260,7 @@ func (a *app) reviewCriterion(w http.ResponseWriter, r *http.Request) {
 		_ = a.store.ClaimDistilledRequest(plan.criterion.ID, store.RefCriterion, person)
 	}
 	evidence := fmt.Sprintf("%s (Gärtner-Vorschlag #%d, bestätigt von %s)", plan.evidence, note.ID, person)
-	err = a.store.SetCriterionState(plan.criterion.ID, "met", requestdomain.Evidence{Kind: plan.kind, Ref: evidence, Person: person})
+	err = a.store.SetCriterionState(plan.criterion.ID, "met", requestdomain.Evidence{Kind: plan.kind, Ref: evidence, Person: person, GitAnchor: gitanchor.Web()})
 	switch {
 	case err == nil:
 	case requestdomain.Code(err) != "", errors.Is(err, sql.ErrNoRows):
@@ -403,6 +404,7 @@ func (a *app) reviewDescribe(w http.ResponseWriter, r *http.Request) {
 		Project: plan.project, Path: plan.path, Kind: "file", Description: plan.facts.Description,
 		ContentSHA: plan.facts.SHA, GitBlob: plan.facts.Blob, LineCount: plan.facts.Lines,
 		Person: person, Harness: gardenerHarness, SessionRef: fmt.Sprintf("%s%d", gardenGhostWrittenRef, note.ID),
+		GitAnchor: gitanchor.Web(),
 	})
 	if err != nil {
 		http.Error(w, "could not save", http.StatusInternalServerError)
