@@ -256,7 +256,7 @@ func (a *api) qualifiedRequests(r *http.Request, res *searchResult, q query.Quer
 		return err
 	}
 	readableReq := a.readableRequests(pa, q, facts)
-	kept := make([]requestdomain.SearchHit, 0, min(limit, len(hits)))
+	kept := make([]requestdomain.SearchHit, 0, len(hits))
 	for _, h := range hits {
 		of := facts[h.Request.ID]
 		of.Parents, of.Blocks = readableReq(of.Parents), readableReq(of.Blocks)
