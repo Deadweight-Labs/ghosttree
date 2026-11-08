@@ -257,7 +257,10 @@ func (a *api) writeRunbook(w http.ResponseWriter, r *http.Request) {
 		writeCoded(w, http.StatusBadRequest, "invalid_runbook", err.Error())
 		return
 	}
-	if !a.gateMachineNote(w, r, ax.Machine) || !a.gateProject(w, r, ax.Project) {
+	// Mit Projekt sagt die Maschine nur, wo der Ablauf gilt; ausführbar wird er
+	// erst durch Freigabe und Erlaubnis auf der Maschine, und gesehen wird er über
+	// die Projektrolle. Der Maschinenname ist dann kein Anspruch.
+	if (ax.Project == "" && !a.gateMachineNote(w, r, ax.Machine)) || !a.gateProject(w, r, ax.Project) {
 		return
 	}
 	own := true

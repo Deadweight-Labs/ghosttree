@@ -41,6 +41,7 @@ var anchoredWrites = regexp.MustCompile(`^(` +
 	`|POST /api/runbooks/\d+/runs` +
 	`|POST /api/runbook-proposals/\d+/decide` +
 	`|POST /api/features|POST /api/features/\d+/versions` +
+	`|POST /api/comments|PATCH /api/comments/\d+` +
 	`)$`)
 
 // anchorHeader liefert den Header-Wert für diesen Aufruf, leer wenn keiner

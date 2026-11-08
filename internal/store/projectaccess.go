@@ -55,6 +55,9 @@ const (
 	// ResFeature ist ein Feature (REQ-612): die lebende Beschreibung dessen, was
 	// das Produkt tut. Es hat immer ein Projekt.
 	ResFeature Resource = "feature"
+	// ResComment ist ein Kommentar an einem Issue, einer Idee oder einem Pain. Wer
+	// das Objekt lesen darf, liest ihn; geprüft wird zusätzlich das Objekt.
+	ResComment Resource = "comment"
 )
 
 // Action ist, was getan werden soll.
@@ -79,6 +82,8 @@ const (
 	// ActApprove: eine Fassung eines Ablaufs für die Ausführung freigeben, oder
 	// einen Vorschlag zu einem Ablauf annehmen. Nur Owner und Lead.
 	ActApprove Action = "approve"
+	// ActDelete: einen Kommentar weich löschen.
+	ActDelete Action = "delete"
 )
 
 var (
@@ -99,8 +104,10 @@ type Object struct {
 	Guests bool
 	// Confidence eines Wissenseintrags (für den Gast).
 	Confidence string
-	// Machine: Maschinen-Achse eines Wissenseintrags; nicht leer heißt, dass
-	// nur der Besitzer der Maschine Zugriff hat.
+	// Machine: Maschinen-Achse eines Wissenseintrags OHNE Projekt; nicht leer
+	// heißt, dass nur der Besitzer der Maschine (und freigegebene Orgs) Zugriff
+	// hat. Bei Einträgen mit Projekt bleibt das Feld leer, dort zählt allein die
+	// Projektrolle.
 	Machine string
 	// SharedOrgs: die Orgs, an die dieser Eintrag mit Maschinen-Scope wirksam
 	// freigegeben ist (Freigabe der Maschine besteht, Eintrag liegt noch auf
@@ -194,6 +201,19 @@ func matrixAllows(role RoleInfo, res Resource, act Action, obj Object) bool {
 			return rank >= 2
 		case ActEdit:
 			return rank >= 3
+		}
+	case ResComment:
+		// Lesen ab Gast, schreiben ab member. Ändern darf nur der Autor, löschen
+		// der Autor und jeder Lead oder Owner (Moderation).
+		switch act {
+		case ActRead:
+			return rank >= 1
+		case ActCreate:
+			return rank >= 2
+		case ActEdit:
+			return rank >= 2 && obj.Own
+		case ActDelete:
+			return rank >= 3 || (rank >= 2 && obj.Own)
 		}
 	case ResLabel:
 		// Lesen ab Gast, anlegen ab member, ändern und löschen ab lead. Ein Label
@@ -536,10 +556,12 @@ func (a *ProjectAccess) Decide(project string, res Resource, act Action, obj Obj
 	project = strings.TrimSpace(project)
 	// Maschinen-Achse: der Besitzer der Maschine (bei Org-Maschinen ein
 	// Maintainer) und Mitglieder einer Org, an die der Eintrag ausdrücklich
-	// freigegeben ist, soweit die Freigabe es erlaubt. Steht zugleich ein
-	// Projekt am Eintrag, ersetzt das die Projektrolle nicht: gesehen wird er
-	// nur mit Projektrolle UND Zugang zur Maschine.
-	if (res == ResKnowledge || res == ResRunbook) && obj.Machine != "" {
+	// freigegeben ist, soweit die Freigabe es erlaubt. Sie gilt nur für Einträge
+	// OHNE Projekt. Steht ein Projekt am Eintrag (Wissen zum Betrieb eines Repos
+	// auf einer Maschine), entscheidet allein die Projektrolle über Sehen,
+	// Ändern und Ausliefern; die Maschine ist dann Zuordnung, keine zweite Hürde
+	// und keine zweite Tür (Entscheidung #4349).
+	if (res == ResKnowledge || res == ResRunbook) && obj.Machine != "" && project == "" {
 		level := a.machineLevel(obj.Machine, withoutOrgs(obj.SharedOrgs, obj.Unentitled))
 		note := false
 		switch {
@@ -560,15 +582,13 @@ func (a *ProjectAccess) Decide(project string, res Resource, act Action, obj Obj
 				return Decision{Hidden: true, Reason: "machine-axis knowledge of another account"}
 			}
 		}
-		if project == "" {
-			switch {
-			case level == levelManage:
-				return Decision{Allowed: true}
-			case level > levelNone:
-				return Decision{Allowed: true, Reason: "machine knowledge shared with your organization"}
-			}
-			return Decision{Allowed: true, Reason: "own note on a machine nobody has claimed"}
+		switch {
+		case level == levelManage:
+			return Decision{Allowed: true}
+		case level > levelNone:
+			return Decision{Allowed: true, Reason: "machine knowledge shared with your organization"}
 		}
+		return Decision{Allowed: true, Reason: "own note on a machine nobody has claimed"}
 	}
 	if project == "" {
 		return a.decideGlobal(res, act, obj)
@@ -665,8 +685,11 @@ func (a *ProjectAccess) Check(project string, res Resource, act Action, obj Obje
 // -------- Hilfen je Ressource
 
 func knowledgeObject(a *ProjectAccess, k Knowledge) Object {
-	obj := Object{Own: a.ownsKnowledge(k), Confidence: k.Confidence, Machine: k.Scope.Machine, EntryID: k.ID}
-	if k.Scope.Machine != "" {
+	obj := Object{Own: a.ownsKnowledge(k), Confidence: k.Confidence, EntryID: k.ID}
+	// Die Maschinen-Achse gibt es nur ohne Projekt; mit Projekt ist die Maschine
+	// Zuordnung und lässt Besitz und Freigaben der Maschine außen vor.
+	if k.Scope.Machine != "" && k.Scope.Project == "" {
+		obj.Machine = k.Scope.Machine
 		obj.SharedOrgs = a.sharedOrgsOf(EntryKnowledge, k.ID, k.Scope.Machine)
 		// Eine Org zählt nur, wenn der Autor über genau sie schreiben darf.
 		if len(obj.SharedOrgs) > 0 {
@@ -730,7 +753,7 @@ func (a *ProjectAccess) CheckKnowledge(k Knowledge, act Action) error {
 // CheckKnowledgeCreate prüft das Anlegen; ein Eintrag mit confidence=verified
 // braucht zusätzlich das Verified-Recht.
 func (a *ProjectAccess) CheckKnowledgeCreate(k Knowledge) error {
-	if k.Scope.Machine != "" {
+	if k.Scope.Machine != "" && k.Scope.Project == "" {
 		// Ohne Verwaltungsrecht über die Maschine bleibt jede Org, über die der
 		// Schreiber nicht schreiben darf, eine Verweigerung, kein stilles Weglassen.
 		a.loadMachines()
@@ -831,13 +854,15 @@ func (a *ProjectAccess) writersOf(project string) map[string]bool {
 
 // deliverable: der Autor ist im Projekt aktuell mindestens member. Ein leerer
 // Autor (Betreiberpfade wie der Distiller) zählt als vertrauenswürdig. Im
-// unbeanspruchten Projekt liefert der Aufrufer seine eigenen Einträge aus.
+// unbeanspruchten Projekt liefert der Aufrufer seine eigenen Einträge aus; auch
+// der Instanz-Admin darf dort fremde Einträge nur lesen, in den Kontext seiner
+// Agenten gelangen sie nicht.
 func (a *ProjectAccess) deliverable(project, author, confirmedBy string, verified bool) bool {
 	if project == "" || author == "" {
 		return true
 	}
 	if a.Unclaimed(project) {
-		return a.IsAuthor(author) || a.IsAdmin()
+		return a.IsAuthor(author)
 	}
 	w := a.writersOf(project)
 	if w[author] {
@@ -864,13 +889,10 @@ func (a *ProjectAccess) CanDeliverKnowledge(k Knowledge) bool {
 		}
 		return true
 	}
-	ok := a.deliverable(k.Scope.Project, k.Person, k.ConfirmedBy, k.Confidence == "verified")
-	// An entry with project AND machine needs both: the author is a writer of the
-	// project and owns the machine now.
-	if ok && k.Scope.Machine != "" {
-		ok = a.machineAuthorDelivers(k)
-	}
-	return a.applyDelivery(k.Scope.Project, ok)
+	// Mit Projekt gilt allein die Auslieferungssperre des Projekts (der Autor ist
+	// dort jetzt Schreiber, #2581), auch wenn eine Maschine am Eintrag steht: sie
+	// ist Zuordnung, nicht Berechtigung.
+	return a.applyDelivery(k.Scope.Project, a.deliverable(k.Scope.Project, k.Person, k.ConfirmedBy, k.Confidence == "verified"))
 }
 
 // CanDeliverGhost: bei Ghost-Beschreibungen muss der Autor Schreibrecht haben.

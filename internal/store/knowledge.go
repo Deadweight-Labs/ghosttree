@@ -259,6 +259,9 @@ func withKnowledgeDefaults(k Knowledge) Knowledge {
 }
 
 func insertKnowledgeTx(tx *sql.Tx, k Knowledge) (int64, error) {
+	if k.Scope.Project != "" && len(k.ShareOrgIDs) > 0 {
+		return 0, fmt.Errorf("%w: an entry with a project is seen through the project; machine sharing is only for entries without one", ErrInvalidInput)
+	}
 	ts := now()
 	if k.ObservedAt == "" {
 		// Nobody is reporting an older sighting here: the writer is looking at

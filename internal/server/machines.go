@@ -52,6 +52,14 @@ func (a *api) getMachine(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
+	// Die Einträge, die diese Maschine nennen und die der Fragende lesen darf:
+	// Projekt-Einträge über seine Projektrolle, reines Maschinen-Wissen als
+	// Besitzer oder über die Freigabe.
+	m.Entries, err = a.access(r).MachineEntries(m.Name)
+	if err != nil {
+		writeStoreError(w, http.StatusInternalServerError, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, m)
 }
 
@@ -180,9 +188,18 @@ func (a *api) resolveShareOrgs(r *http.Request, refs []string) ([]int64, bool) {
 // shareOrgsForNewEntry bestimmt, an welche Orgs ein neuer Eintrag mit
 // Maschinen-Scope gleich freigegeben wird. Ohne ausdrückliche Angabe bleibt er
 // privat; auf einer Maschine, die einer Org gehört, geht er an diese Org, wenn
-// ein Maintainer ihn schreibt.
-func (a *api) shareOrgsForNewEntry(w http.ResponseWriter, r *http.Request, machine string, asked *[]string) ([]int64, bool) {
+// ein Maintainer ihn schreibt. Ein Eintrag mit Projekt wird über das Projekt
+// gesehen: die Maschine ist dort Zuordnung, eine Freigabe an Orgs gibt es für
+// ihn nicht (ausdrücklich verlangt ist das ein Fehler, nie ein stilles Weglassen).
+func (a *api) shareOrgsForNewEntry(w http.ResponseWriter, r *http.Request, project, machine string, asked *[]string) ([]int64, bool) {
 	machine = strings.ToLower(strings.TrimSpace(machine))
+	if strings.TrimSpace(project) != "" {
+		if asked != nil && len(*asked) > 0 {
+			writeCoded(w, http.StatusBadRequest, "invalid_input", "share_with_orgs only goes with an entry that has a machine and no project: an entry with a project is seen through the project")
+			return nil, false
+		}
+		return nil, true
+	}
 	if asked != nil && len(*asked) > 0 {
 		if machine == "" {
 			writeCoded(w, http.StatusBadRequest, "invalid_input", "share_with_orgs needs a machine scope")

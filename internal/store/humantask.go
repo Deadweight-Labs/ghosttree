@@ -65,6 +65,11 @@ func (a *ProjectAccess) GetHumanTask(id int64) (humantask.Task, error) {
 	if err := a.CheckTask(t, ActRead); err != nil {
 		return humantask.Task{}, err
 	}
+	// Like the lists: a task on a request the viewer may not read answers like
+	// an unknown one (own assignment excepted).
+	if !a.canSeeTaskVia(t, map[int64]bool{}) {
+		return humantask.Task{}, ErrAccessNotFound
+	}
 	return t, nil
 }
 
@@ -414,13 +419,17 @@ func (a *ProjectAccess) changeTask(op string, id int64, reason string, actor hum
 }
 
 // TaskFilter limits ListHumanTasks. State: open, done, confirmed, dropped,
-// pending (open and done, the default) or all.
+// pending (open and done, the default), closed (done, confirmed or dropped: what
+// the inbox shows as finished) or all.
 type TaskFilter struct {
 	Project   string
 	State     string
 	Mine      bool
 	RequestID int64
 	Limit     int
+	// Since keeps, with State closed, only tasks finished at or after this time
+	// (RFC3339). Empty keeps all.
+	Since string
 }
 
 func (s *Store) ListHumanTasks(pa *ProjectAccess, f TaskFilter) ([]humantask.Task, error) {
@@ -456,6 +465,12 @@ func (s *Store) taskRows(f TaskFilter, account int64) ([]humantask.Task, error) 
 	case "", "pending":
 		where = append(where, `t.state IN ('open','done')`)
 	case "all":
+	case "closed":
+		where = append(where, `t.state IN ('done','confirmed','dropped')`)
+		if f.Since != "" {
+			where = append(where, `COALESCE(NULLIF(t.done_at,''),t.updated_at)>=?`)
+			args = append(args, f.Since)
+		}
 	default:
 		where = append(where, `t.state=?`)
 		args = append(args, f.State)
@@ -464,12 +479,20 @@ func (s *Store) taskRows(f TaskFilter, account int64) ([]humantask.Task, error) 
 		where = append(where, `t.request_id=?`)
 		args = append(args, f.RequestID)
 	}
-	if f.Mine {
+	if f.Mine && f.State == "closed" {
+		// What I finished or what was assigned to me.
+		where = append(where, `(t.assignee_account=? OR t.done_by_account=?)`)
+		args = append(args, account, account)
+	} else if f.Mine {
 		where = append(where, `(t.assignee_account=? OR (t.assignee_account=0 AND t.state='open'))`)
 		args = append(args, account)
 	}
+	order := `CASE t.state WHEN 'open' THEN 0 WHEN 'done' THEN 1 WHEN 'confirmed' THEN 2 ELSE 3 END, t.id`
+	if f.State == "closed" {
+		order = `COALESCE(NULLIF(t.done_at,''),t.updated_at) DESC, t.id DESC`
+	}
 	rows, err := s.db.Query(`SELECT `+taskCols+taskFrom+` WHERE `+strings.Join(where, ` AND `)+
-		` ORDER BY CASE t.state WHEN 'open' THEN 0 WHEN 'done' THEN 1 WHEN 'confirmed' THEN 2 ELSE 3 END, t.id LIMIT 2000`, args...)
+		` ORDER BY `+order+` LIMIT 2000`, args...)
 	if err != nil {
 		return nil, err
 	}

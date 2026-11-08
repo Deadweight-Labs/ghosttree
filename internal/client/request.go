@@ -17,6 +17,12 @@ func (c *Client) CreateRequest(in requestdomain.CreateInput) (requestdomain.Deta
 	if in.Explanation != "" {
 		body["explanation"] = in.Explanation
 	}
+	if in.Parent != "" {
+		body["parent"] = in.Parent
+	}
+	if len(in.DerivedFrom) > 0 {
+		body["derived_from"] = in.DerivedFrom
+	}
 	var out requestdomain.Detail
 	err := c.do("POST", "/api/requests", nil, body, &out)
 	return out, err

@@ -439,3 +439,41 @@ func TestHooksDeliverARunbookOncePerSession(t *testing.T) {
 		t.Fatalf("an unrelated command triggered it:\n%s", got)
 	}
 }
+
+// Decision #4349: a runbook for a repository on a host carries project AND machine
+// (write and import take both); the project role decides who reads it.
+func TestRunbookCLIWriteAndImportTakeProjectAndMachine(t *testing.T) {
+	st, _, file := runbookEnvCLI(t)
+	code, out := rb(t, "runbook", "write", "rollout", "--file", file, "--project", cliHere, "--machine", "Build-1")
+	if code != 0 || !strings.Contains(out, "rollout: created, version 1") {
+		t.Fatalf("write: %d %s", code, out)
+	}
+	ref, err := st.RunbookRefByScope(cliHere, "build-1", "rollout", 1)
+	if err != nil || ref.Project != cliHere || ref.Machine != "build-1" {
+		t.Fatalf("the runbook did not keep both axes: %+v %v", ref, err)
+	}
+	// "here" is this machine (mainex in the fixture).
+	if code, out := rb(t, "runbook", "write", "check-here", "--file", file, "--project", cliHere, "--machine", "here"); code != 0 {
+		t.Fatalf("write here: %d %s", code, out)
+	}
+	if ref, err := st.RunbookRefByScope(cliHere, "mainex", "check-here", 1); err != nil || ref.Machine != "mainex" {
+		t.Fatalf("here: %+v %v", ref, err)
+	}
+	// Import: a machine on the command line applies to every runbook of the file.
+	spec, _ := os.ReadFile(file)
+	batch := filepath.Join(t.TempDir(), "batch.json")
+	body := `{"runbooks":[{"name":"imported","project":"` + cliHere + `","spec":` + string(spec) + `}]}`
+	if err := os.WriteFile(batch, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code, out := rb(t, "runbook", "import", batch, "--machine", "build-2"); code != 0 {
+		t.Fatalf("import: %d %s", code, out)
+	}
+	if ref, err := st.RunbookRefByScope(cliHere, "build-2", "imported", 1); err != nil || ref.Project != cliHere {
+		t.Fatalf("imported with both axes: %+v %v", ref, err)
+	}
+	// The usage tells the rule.
+	if _, usage := rb(t, "runbook"); !strings.Contains(usage, "BOTH") {
+		t.Errorf("the usage does not state the rule: %s", usage)
+	}
+}

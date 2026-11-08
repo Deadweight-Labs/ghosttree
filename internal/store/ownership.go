@@ -33,6 +33,20 @@ type Machine struct {
 	Relation string         `json:"relation,omitempty"`
 	Shares   []MachineShare `json:"shares,omitempty"`
 	Events   []MachineEvent `json:"events,omitempty"`
+	// Entries: Wissen und Abläufe, die diese Maschine nennen und die der Fragende
+	// lesen darf: Einträge mit Projekt über seine Projektrolle, Einträge ohne
+	// Projekt als Besitzer oder über eine Freigabe. Füllt der Server beim Lesen
+	// einer einzelnen Maschine (ProjectAccess.MachineEntries).
+	Entries []MachineEntry `json:"entries,omitempty"`
+}
+
+// MachineEntry ist ein Eintrag auf der Maschinenseite.
+type MachineEntry struct {
+	Kind    string `json:"kind"` // EntryKnowledge oder EntryRunbook
+	ID      int64  `json:"id"`
+	Title   string `json:"title"`
+	Type    string `json:"type,omitempty"`
+	Project string `json:"project,omitempty"`
 }
 
 // migrateOwnership ergänzt machines und sessions um account_id. Beides sind

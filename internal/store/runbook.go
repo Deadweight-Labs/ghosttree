@@ -259,7 +259,12 @@ func runbookApplicable(ax scope.Axes, account int64) (string, []any) {
 
 // RunbookCandidates liefert die Abläufe dieses Namens, die im Kontext gelten,
 // den spezifischsten zuerst (Projekt auf Maschine vor Projekt vor Maschine vor
-// global). Die Zugriffsprüfung macht der Aufrufer.
+// global). Ein Ablauf mit einer freigegebenen Fassung steht vor jedem ohne
+// jede Freigabe, auch vor einem spezifischeren: ein Mitglied kann einen Ablauf
+// (P, M, name) anlegen, der sonst den freigegebenen (P, name) auf M verdrängte,
+// und ausgeliefert würde eine Fassung, die niemand freigegeben hat. Bei gleichem
+// Stand der Freigabe gilt der spezifischere. Die Zugriffsprüfung macht der
+// Aufrufer.
 func (s *Store) RunbookCandidates(name string, ax scope.Axes, account int64) ([]RunbookRef, error) {
 	if s.reader != nil {
 		return s.reader.RunbookCandidates(name, ax, account)
@@ -270,16 +275,49 @@ func (s *Store) RunbookCandidates(name string, ax scope.Axes, account int64) ([]
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	var out []RunbookRef
 	for rows.Next() {
 		r, err := runbookRefScan(rows)
 		if err != nil {
+			rows.Close()
 			return nil, err
 		}
 		out = append(out, r)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	// Erst schließen: mit einer einzigen Verbindung wartete die Prüfung sonst.
+	rows.Close()
+	if len(out) < 2 {
+		return out, nil
+	}
+	approved := make(map[int64]bool, len(out))
+	for _, r := range out {
+		versions, err := loadVersionRows(s.db, r.ID)
+		if err != nil {
+			return nil, err
+		}
+		for _, v := range versions {
+			if _, ok := approverOf(s.db, r, v.rowID); ok {
+				approved[r.ID] = true
+				break
+			}
+		}
+	}
+	// Ein Ablauf des Projekts geht immer vor einem ohne Projekt (nur Maschine
+	// oder global): dessen Freigabe stammt nicht aus dem Projekt. Innerhalb
+	// derselben Stufe geht ein freigegebener vor einem spezifischeren ohne jede
+	// Freigabe, sonst bleibt die Reihenfolge nach Spezifität.
+	sort.SliceStable(out, func(i, j int) bool {
+		pi, pj := out[i].Project != "", out[j].Project != ""
+		if pi != pj {
+			return pi
+		}
+		return approved[out[i].ID] && !approved[out[j].ID]
+	})
+	return out, nil
 }
 
 // RunbookRefsIn liefert alle Abläufe, die im Kontext gelten.

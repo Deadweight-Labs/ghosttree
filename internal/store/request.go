@@ -87,6 +87,11 @@ func (s *Store) CreateRequest(in requestdomain.CreateInput) (requestdomain.Detai
 	if err := recordRequestAuthorTx(tx, id, author); err != nil {
 		return requestdomain.Detail{}, err
 	}
+	if !in.Links.Empty() {
+		if err := s.insertRequestLinksTx(tx, id, r.Scope.Project, r.Person, author, in.Links, ts, in.GitAnchor, anchorID, originID, in.Origin); err != nil {
+			return requestdomain.Detail{}, err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return requestdomain.Detail{}, err
 	}
@@ -542,9 +547,9 @@ func relationAddedData(r requestdomain.Relation) string {
 }
 
 func (s *Store) AddRequestRelation(requestID int64, relation requestdomain.Relation, person string, anchor ...*gitanchor.Anchor) (requestdomain.Relation, error) {
-	valid := map[string]bool{"parent": true, "related": true, "blocks": true, "duplicates": true, "supersedes": true, "knowledge": true, "external": true}
+	valid := map[string]bool{"parent": true, "related": true, "blocks": true, "duplicates": true, "supersedes": true, "knowledge": true, "external": true, "derived": true}
 	if !valid[relation.Kind] {
-		return requestdomain.Relation{}, requestdomain.NewRuleError("invalid_relation", "unsupported request relation", "use parent, related, blocks, duplicates, supersedes, knowledge, or external", nil)
+		return requestdomain.Relation{}, requestdomain.NewRuleError("invalid_relation", "unsupported request relation", "use parent, related, blocks, duplicates, supersedes, derived, knowledge, or external", nil)
 	}
 	targets := 0
 	if relation.OtherRequestID != 0 {

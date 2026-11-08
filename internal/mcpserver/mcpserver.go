@@ -156,16 +156,16 @@ type RememberInput struct {
 	Type      string `json:"type" jsonschema:"pitfall, decision, note or plan"`
 	Title     string `json:"title" jsonschema:"one line summary"`
 	Body      string `json:"body" jsonschema:"the knowledge itself; for a decision, cover why it was taken, which alternatives were rejected and what the tradeoffs are"`
-	ScopeHint string `json:"scope_hint" jsonschema:"where this belongs — required, because it is a judgement nobody else can make for you: project, branch, machine or global.\nThe question that separates project from branch: does this stop being true once the branch is merged or abandoned? A migration in flight, a temporary flag, a workaround for something only this branch broke — that is branch. Anything that outlives the branch is project, and most things do.\nA branch entry is read by this branch and by every branch cut from it afterwards, never by a sibling. Machine is for facts about the box you are standing on, global for facts about how you work anywhere."`
+	ScopeHint string `json:"scope_hint" jsonschema:"where this belongs — required, because it is a judgement nobody else can make for you: project, branch, machine or global.\nThe question that separates project from branch: does this stop being true once the branch is merged or abandoned? A migration in flight, a temporary flag, a workaround for something only this branch broke — that is branch. Anything that outlives the branch is project, and most things do.\nA branch entry is read by this branch and by every branch cut from it afterwards, never by a sibling. Machine is for facts that concern only the host and no repository, global for facts about how you work anywhere.\nKnowledge about running a repository on a machine (how ghosttree is deployed on build-1) belongs to BOTH: use scope_hint project and also pass machine. It is then seen and delivered like any project entry, to everyone with a role in the project, and marked with the machine. Only knowledge that concerns the host alone (its users, firewall rules, a database that serves no repository) gets scope_hint machine without a project: that stays private to the machine's owner."`
 	Project   string `json:"project,omitempty" jsonschema:"file it under this project instead of the session's own: a remote like github.com/owner/repo or a short name that is unique among the projects you can write to. For a problem with another project's tool, work or code. Applies to scope_hint project or branch"`
-	Machine   string `json:"machine,omitempty" jsonschema:"with scope_hint machine: file it for this machine instead of the one you are on. Any machine name, including one no agent ever ran on, such as an ssh target"`
+	Machine   string `json:"machine,omitempty" jsonschema:"with scope_hint machine: file it for this machine instead of the one you are on. With scope_hint project: the machine this project knowledge is about (use \"here\" for the one you are on); the entry stays a project entry, seen by everyone with a role in the project, and the machine only marks where it applies. Any machine name, including one no agent ever ran on, such as an ssh target. Not with branch or global"`
 	// Supersedes makes this entry the replacement of older ones, so the old ones
 	// leave search and the briefing instead of standing next to a follow-up.
 	Supersedes      []int64 `json:"supersedes,omitempty" jsonschema:"ids of older entries this one replaces because the state they describe changed. They stop appearing in search and the briefing but stay readable through their history. You need the right to edit each of them, and they must belong to the same project. Search first to find them"`
 	SupersedeReason string  `json:"supersede_reason,omitempty" jsonschema:"required with supersedes: what changed, in one sentence"`
 	Explanation     string  `json:"explanation,omitempty" jsonschema:"optional \"Kurz erklärt\" for the humans who will read this: two to four plain sentences, in the language the people of the project use. Say what it is about in everyday words (the mechanism, not the jargon), why it matters (who it affects, when), what has to be done or decided, and your recommendation. No markdown, no links, never a secret. You know the context the server does not; without it the server generates one later from the text alone"`
 	// ShareWithOrgs gibt einen Maschinen-Eintrag gleich an Orgs frei.
-	ShareWithOrgs []string `json:"share_with_orgs,omitempty" jsonschema:"with scope_hint machine: also share the entry with these organizations (slugs), for which a person has already shared the machine. Without it a machine entry stays private to the machine's owner; on a machine that belongs to an organization it goes to that organization"`
+	ShareWithOrgs []string `json:"share_with_orgs,omitempty" jsonschema:"with scope_hint machine (no project): also share the entry with these organizations (slugs), for which a person has already shared the machine. Without it a machine entry stays private to the machine's owner; on a machine that belongs to an organization it goes to that organization. Not for an entry with a project: that one is seen through the project"`
 }
 
 // RetireInput is the context_retire tool.
@@ -206,7 +206,7 @@ func (s *Server) Register(srv *mcp.Server) {
 	}, s.handleGet)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "context_remember",
-		Description: "Store a pitfall, decision, note or plan in ghosttree instead of writing it into the source tree. A decision should record why it was taken, which alternatives were rejected and what the tradeoffs are, so it can be revisited later. Search with context_search first: if the entry would only update a state that is already recorded (\"X created\" followed by \"X removed again\"), pass supersedes=[the old ids] with supersede_reason instead of writing a follow-up that leaves both active. If what the old entry describes no longer exists and there is nothing new to record, use context_retire. Add explanation, a short plain-language note for the people who review it: they change things but do not read every agent finding in depth, so say what it is about, why it matters and what you recommend." + targetHint,
+		Description: "Store a pitfall, decision, note or plan in ghosttree instead of writing it into the source tree. A decision should record why it was taken, which alternatives were rejected and what the tradeoffs are, so it can be revisited later. Search with context_search first: if the entry would only update a state that is already recorded (\"X created\" followed by \"X removed again\"), pass supersedes=[the old ids] with supersede_reason instead of writing a follow-up that leaves both active. If what the old entry describes no longer exists and there is nothing new to record, use context_retire. Machine knowledge that belongs to a repository (running, deploying or debugging that repo on a host) gets BOTH project and machine (scope_hint project plus machine=<name>), so everyone with a role in the project reads it; only knowledge that concerns the host alone gets the machine without a project and stays private to its owner. Add explanation, a short plain-language note for the people who review it: they change things but do not read every agent finding in depth, so say what it is about, why it matters and what you recommend." + targetHint,
 	}, s.handleRemember)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "context_retire",
@@ -254,6 +254,8 @@ func (s *Server) Register(srv *mcp.Server) {
 	mcp.AddTool(srv, &mcp.Tool{Name: "thread_find", Description: "Find discussions by words or, better, by the object they hang on — before opening a second thread about a question someone already investigated.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closed}}, s.handleThreadFind)
 	mcp.AddTool(srv, &mcp.Tool{Name: "thread_resolve", Description: "Close a discussion because the question is answered, park it as deferred, or reopen it. This closes the discussion, never the work: linked requests keep their own criteria and evidence.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleThreadResolve)
 	mcp.AddTool(srv, &mcp.Tool{Name: "thread_propose", Description: "Record what a discussion suggests should become a decision, pitfall or request. It is a proposal, not knowledge: promoting it takes its own write and the usual review. A rejected proposal stays as a result, so the same idea is not re-argued in three months.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleThreadPropose)
+	mcp.AddTool(srv, &mcp.Tool{Name: "comment_add", Description: "Write a comment on an issue (REQ-n), an idea (IDEA-n) or a pain (PAIN-n) you can read. Comments are for what people reading the object should know: a finding, a decision, a question that is not an open decision. Members may comment, guests only read. It stays attributed to you and to the commit you are on. Earlier versions stay visible to every reader; delete what must no longer be seen.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleCommentAdd)
+	mcp.AddTool(srv, &mcp.Tool{Name: "comment_list", Description: "Read the comments on an issue (REQ-n), an idea (IDEA-n) or a pain (PAIN-n), oldest first, with author and time. A deleted comment stays as a placeholder without text. Earlier versions stay visible to every reader; delete what must no longer be seen.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closed}}, s.handleCommentList)
 	mcp.AddTool(srv, &mcp.Tool{Name: "request_search", Description: "List or search the current project's work ledger. Works like listing issues: call it with no query to see what is open, or name a subject to narrow. A question that names no subject — \"what is left to do\" — returns the list rather than guessing. Answers with a compact list; call request_get for one entry's full text. Use it before substantial feature, architecture, migration, or multi-session work.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closed}}, s.handleRequestSearch)
 	mcp.AddTool(srv, &mcp.Tool{Name: "request_get", Description: "Get one request as readable text with its original paragraphs. Concise includes the request, description, criteria, relations, and latest work; it omits activity, older work, and criterion evidence. Use response_format=detailed for the complete history and all evidence.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closed}}, s.handleRequestGet)
 	mcp.AddTool(srv, &mcp.Tool{Name: "request_create", Description: "Create a ledger entry for substantial work when request_search found no match. Include observable acceptance criteria; do not use for trivial local fixes. A request always belongs to a project: the session's own, or the one you pass as project. Add explanation, a short plain-language note for the people who will read the ledger.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, OpenWorldHint: &closed}}, s.handleRequestCreate)
@@ -508,6 +510,15 @@ func renderGhostContext(ghosts []store.GhostFile, paths []string) string {
 	return out.String()
 }
 
+// rememberMachine resolves the machine named for a project entry: "here" is the
+// session's own machine. An empty result means there is none to name.
+func (s *Server) rememberMachine(name string) string {
+	if strings.TrimSpace(name) == "here" {
+		return s.ctxAxes.Machine
+	}
+	return scope.CanonicalAxes(scope.Axes{Machine: name}).Machine
+}
+
 func (s *Server) handleRemember(ctx context.Context, _ *mcp.CallToolRequest, in RememberInput) (*mcp.CallToolResult, any, error) {
 	if in.Type == "" || in.Title == "" {
 		return nil, nil, fmt.Errorf("type and title are required")
@@ -525,17 +536,23 @@ func (s *Server) handleRemember(ctx context.Context, _ *mcp.CallToolRequest, in 
 	// filed 120 project notes under mainex.
 	switch in.ScopeHint {
 	case "project":
-		if in.Machine != "" {
-			return nil, nil, fmt.Errorf("machine only goes with scope_hint machine")
-		}
 		project, err := s.writeTarget(in.Project)
 		if err != nil {
 			return nil, nil, err
 		}
 		k.Scope = scope.Axes{Project: project}
+		if in.Machine != "" {
+			// Knowledge about a repository on a host: the machine is where it applies,
+			// the project decides who reads it.
+			machine := s.rememberMachine(in.Machine)
+			if machine == "" {
+				return nil, nil, fmt.Errorf("this session has no machine identity; pass machine=<name>")
+			}
+			k.Scope.Machine = machine
+		}
 	case "branch":
 		if in.Machine != "" {
-			return nil, nil, fmt.Errorf("machine only goes with scope_hint machine")
+			return nil, nil, fmt.Errorf("machine goes with scope_hint project (knowledge about a repository on a host) or machine (a fact about the host alone), not with branch")
 		}
 		if s.ctxAxes.Branch == "" {
 			return nil, nil, fmt.Errorf("scope_hint branch, but this session is not on a named branch; use project or machine")
@@ -550,7 +567,7 @@ func (s *Server) handleRemember(ctx context.Context, _ *mcp.CallToolRequest, in 
 		k.Scope = scope.Axes{Project: project, Branch: s.ctxAxes.Branch}
 	case "machine":
 		if in.Project != "" {
-			return nil, nil, fmt.Errorf("a machine entry is not tied to a project; drop project")
+			return nil, nil, fmt.Errorf("a machine entry is not tied to a project; drop project. Knowledge about a repository on a machine is a project entry that names the machine: scope_hint project with machine")
 		}
 		machine := scope.CanonicalAxes(scope.Axes{Machine: in.Machine}).Machine
 		if machine == "" {
@@ -580,7 +597,7 @@ func (s *Server) handleRemember(ctx context.Context, _ *mcp.CallToolRequest, in 
 		return nil, nil, fmt.Errorf("supersede_reason only goes with supersedes")
 	}
 	if len(in.ShareWithOrgs) > 0 && in.ScopeHint != "machine" {
-		return nil, nil, fmt.Errorf("share_with_orgs only goes with scope_hint machine")
+		return nil, nil, fmt.Errorf("share_with_orgs only goes with scope_hint machine, an entry without a project; an entry with a project is seen through the project")
 	}
 	saved, err := s.client.RememberShared(k, autoCtx, in.Supersedes, in.SupersedeReason, in.ShareWithOrgs)
 	if err != nil {

@@ -65,6 +65,8 @@ var anchoredTables = []string{
 	"ideas",
 	// thread_events (REQ-597): Anlegen, Zustandswechsel und Ergebnisse eines Threads.
 	"thread_events",
+	// comment_versions: jede Fassung eines Kommentars trägt den Stand ihres Schreibers.
+	"comment_versions",
 }
 
 // ensureGitAnchors legt Tabelle und Spalten additiv an. Wie die anderen

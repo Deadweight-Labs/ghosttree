@@ -528,14 +528,15 @@ func (s *Store) EntryShareOrgs(viewer Principal, kind string, id int64) []string
 	if !ok {
 		return nil
 	}
-	var host string
+	var host, project string
 	switch kind {
 	case EntryKnowledge:
-		_ = s.db.QueryRow(`SELECT machine FROM knowledge WHERE id=?`, id).Scan(&host)
+		_ = s.db.QueryRow(`SELECT machine, project FROM knowledge WHERE id=?`, id).Scan(&host, &project)
 	case EntryRunbook:
-		_ = s.db.QueryRow(`SELECT machine FROM runbooks WHERE id=?`, id).Scan(&host)
+		_ = s.db.QueryRow(`SELECT machine, project FROM runbooks WHERE id=?`, id).Scan(&host, &project)
 	}
-	if host == "" {
+	// Ein Eintrag mit Projekt wird über das Projekt gesehen, nicht über Freigaben.
+	if host == "" || project != "" {
 		return nil
 	}
 	ix := s.machineAccessIndex(account)
@@ -550,4 +551,79 @@ func (s *Store) EntryShareOrgs(viewer Principal, kind string, id int64) []string
 	}
 	sort.Strings(out)
 	return out
+}
+
+// machineEntryLimit begrenzt, wie viele Einträge eine Maschinenseite je Art
+// nennt: die Seite ist ein Überblick, die Suche (context_search machine=...)
+// findet den Rest.
+const machineEntryLimit = 100
+
+// MachineRefs liefert die aktiven Wissenseinträge und die Abläufe, die diese
+// Maschine am Eintrag tragen, neueste zuerst, ohne Zugriffsprüfung: wer sie
+// sehen darf, entscheidet ProjectAccess.MachineEntries.
+func (s *Store) MachineRefs(host string) ([]Knowledge, []RunbookRef, error) {
+	if s.reader != nil {
+		return s.reader.MachineRefs(host)
+	}
+	host = canonicalMachine(host)
+	rows, err := s.db.Query(`SELECT `+knowledgeCols+` FROM knowledge WHERE machine=? AND status='active' ORDER BY id DESC`, host)
+	if err != nil {
+		return nil, nil, err
+	}
+	ks, err := s.scanKnowledge(rows)
+	if err != nil {
+		return nil, nil, err
+	}
+	rrows, err := s.db.Query(`SELECT `+runbookRefCols+` FROM runbooks WHERE machine=? ORDER BY id DESC`, host)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rrows.Close()
+	var refs []RunbookRef
+	for rrows.Next() {
+		r, err := runbookRefScan(rrows)
+		if err != nil {
+			return nil, nil, err
+		}
+		refs = append(refs, r)
+	}
+	return ks, refs, rrows.Err()
+}
+
+// MachineEntries nennt die Einträge der Maschinenseite, die der Fragende lesen
+// darf. Ein Eintrag mit Projekt erscheint nur, wenn die Projektrolle ihn
+// freigibt (dieselbe Prüfung wie jede Liste), nie wegen der Maschine allein;
+// ein Eintrag ohne Projekt nur dem Besitzer der Maschine und, wenn
+// freigegeben, den Mitgliedern der Org. Gerufen wird es für eine Maschine, die
+// der Fragende erreicht (MachineFor).
+func (a *ProjectAccess) MachineEntries(host string) ([]MachineEntry, error) {
+	ks, refs, err := a.st.MachineRefs(host)
+	if err != nil {
+		return nil, err
+	}
+	a.Filtered()
+	var out []MachineEntry
+	nk := 0
+	for _, k := range ks {
+		if nk >= machineEntryLimit {
+			break
+		}
+		if !a.CanSeeKnowledge(k) {
+			continue
+		}
+		out = append(out, MachineEntry{Kind: EntryKnowledge, ID: k.ID, Title: k.Title, Type: k.Type, Project: k.Scope.Project})
+		nk++
+	}
+	nr := 0
+	for _, r := range refs {
+		if nr >= machineEntryLimit {
+			break
+		}
+		if !a.CanSeeRunbook(r) {
+			continue
+		}
+		out = append(out, MachineEntry{Kind: EntryRunbook, ID: r.ID, Title: r.Name, Project: r.Project})
+		nr++
+	}
+	return out, nil
 }

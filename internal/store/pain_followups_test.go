@@ -170,3 +170,18 @@ func TestSessionEvidenceOfAPainStaysWithThoseWhoMayReadIt(t *testing.T) {
 		t.Error("a member without transcript access reads the session reference")
 	}
 }
+
+func TestSingleTaskLookupHidesTaskOfHiddenRequest(t *testing.T) {
+	w := newPainWorld(t)
+	hidden := w.hiddenRequest(t)
+	task := w.task(t, "mia", humantask.CreateInput{RequestID: hidden, Kind: "input", Title: "unsichtbar"})
+	if _, err := w.pa["mia"].GetHumanTask(task.ID); err != nil {
+		t.Errorf("the author lost her task: %v", err)
+	}
+	for _, who := range []string{"rex", "gus"} {
+		_, got := w.pa[who].GetHumanTask(task.ID)
+		if !errors.Is(got, ErrAccessNotFound) {
+			t.Errorf("%s: a task of a hidden request answers %v, want not found", who, got)
+		}
+	}
+}

@@ -165,6 +165,9 @@ func (a *api) registerRoutes(mux *http.ServeMux) {
 	a.registerPainTaskRoutes(mux)
 	a.registerPackageRoutes(mux)
 	a.registerPullRoutes(mux)
+	a.registerRefRoutes(mux)
+	a.registerCommentRoutes(mux)
+	a.registerInboxRoutes(mux)
 	a.registerRequestCountRoutes(mux)
 	a.registerLabelRoutes(mux)
 	a.registerIdeaWorkshopRoutes(mux)
@@ -359,6 +362,16 @@ func axesFromQuery(r *http.Request) scope.Axes {
 		Lineage:   q["lineage"],
 		AnyBranch: q.Get("any_branch") == "1",
 	})
+}
+
+// guestAxes is axesFromQuery for lists a guest may read: a guest gets no
+// machine filter, it would tell a machine with entries from one without.
+func (a *api) guestAxes(r *http.Request) scope.Axes {
+	ax := axesFromQuery(r)
+	if a.access(r).IsProjectGuest(ax.Project) {
+		ax.Machine = ""
+	}
+	return ax
 }
 
 func intParam(r *http.Request, name string, def int) int {

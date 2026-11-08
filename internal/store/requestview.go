@@ -16,6 +16,9 @@ import (
 // verriete, dass es die Session gibt.
 func (a *ProjectAccess) RequestDetailView(d requestdomain.Detail) requestdomain.Detail {
 	project := d.Request.Scope.Project
+	if a.HidesMachines(project) {
+		d.Request.Scope.Machine = ""
+	}
 	// Mitglieder kennen die Nummern der Sessions, sehen aber, was an einer
 	// privaten Session eines anderen Kontos hängt (Zitat, Übergabe, Beleg,
 	// Aktivität), ebenso wenig wie ihr Transkript.
@@ -185,6 +188,9 @@ func rewriteSessionRef(ref string, lookup func(int64) (string, bool)) (string, b
 // verrät: den Verweis des Auftrags und die Zahl der Sessions, in denen der
 // Wunsch fiel (sie zählt auch unlesbare).
 func (a *ProjectAccess) RequestHitView(h requestdomain.SearchHit) requestdomain.SearchHit {
+	if a.HidesMachines(h.Request.Scope.Project) {
+		h.Request.Scope.Machine = ""
+	}
 	numbers := a.SeesSessionNumbers(h.Request.Scope.Project)
 	if !numbers {
 		h.Request.SessionRef = ""

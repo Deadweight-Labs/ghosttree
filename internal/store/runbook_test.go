@@ -438,3 +438,56 @@ func TestRunbookAllowanceIsPerVersionHashAndMachineAndNeedsTheSwitch(t *testing.
 		t.Fatalf("re-allow: %+v", s)
 	}
 }
+
+// A member may write a runbook (P, M, name) that is more specific than the
+// approved (P, name); it must not displace the approved one on M, because
+// delivery would then hand out a version nobody approved.
+func TestRunbookCandidatesPreferApprovedOverMoreSpecificUnapproved(t *testing.T) {
+	st := runbookEnv(t)
+	ctx := scope.Axes{Project: roleProject, Machine: "mainex"}
+	approved, err := st.WriteRunbook(RunbookWrite{Project: roleProject, Name: "x", Spec: rbSpec("freigegeben"), Person: "robin", AuthorID: 1, Approve: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unapproved, err := st.WriteRunbook(RunbookWrite{Project: roleProject, Machine: "mainex", Name: "x", Spec: rbSpec("ohne Freigabe"), Person: "ben", AuthorID: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs, err := st.RunbookCandidates("x", ctx, 3)
+	if err != nil || len(refs) != 2 {
+		t.Fatalf("candidates = %d %v", len(refs), err)
+	}
+	if refs[0].ID != approved.ID || refs[1].ID != unapproved.ID {
+		t.Errorf("the unapproved, more specific runbook displaces the approved one: %+v", refs)
+	}
+	// Equal footing: once the specific one is approved too, the specific one wins.
+	if _, err := st.WriteRunbook(RunbookWrite{Project: roleProject, Machine: "mainex", Name: "x", Spec: rbSpec("jetzt freigegeben"), Person: "robin", AuthorID: 1, Approve: true}); err != nil {
+		t.Fatal(err)
+	}
+	refs, _ = st.RunbookCandidates("x", ctx, 3)
+	if len(refs) != 2 || refs[0].ID != unapproved.ID {
+		t.Errorf("with both approved the more specific one must win: %+v", refs)
+	}
+}
+
+// Freigabe zählt nur innerhalb derselben Stufe: ein freigegebener Ablauf nur für
+// die Maschine verdrängt den Ablauf des Projekts nicht.
+func TestApprovedMachineRunbookDoesNotOutrankTheProjectRunbook(t *testing.T) {
+	st := runbookEnv(t)
+	ctx := scope.Axes{Project: roleProject, Machine: "mainex"}
+	project, err := st.WriteRunbook(RunbookWrite{Project: roleProject, Name: "y", Spec: rbSpec("im Projekt"), Person: "ben", AuthorID: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	machine, err := st.WriteRunbook(RunbookWrite{Machine: "mainex", Name: "y", Spec: rbSpec("nur Maschine"), Person: "robin", AuthorID: 1, Approve: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs, err := st.RunbookCandidates("y", ctx, 1)
+	if err != nil || len(refs) != 2 {
+		t.Fatalf("candidates = %d %v", len(refs), err)
+	}
+	if refs[0].ID != project.ID || refs[1].ID != machine.ID {
+		t.Errorf("an approved machine-only runbook outranks the project's runbook: %+v", refs)
+	}
+}

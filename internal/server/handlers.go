@@ -260,14 +260,16 @@ func (a *api) createKnowledge(w http.ResponseWriter, r *http.Request) {
 	if !a.gateGardener(w, r, k) {
 		return
 	}
-	shareOrgs, ok := a.shareOrgsForNewEntry(w, r, k.Scope.Machine, req.ShareWithOrgs)
+	shareOrgs, ok := a.shareOrgsForNewEntry(w, r, k.Scope.Project, k.Scope.Machine, req.ShareWithOrgs)
 	if !ok {
 		return
 	}
 	k.ShareOrgIDs = shareOrgs
 	// Ein Mitglied einer Org mit Schreib-Freigabe darf den Namen nicht tragen
-	// (DEC-5); es schreibt über die Freigabe, die CheckKnowledgeCreate prüft.
-	if (len(k.ShareOrgIDs) == 0 && !a.gateMachineNote(w, r, k.Scope.Machine)) || !a.gateProject(w, r, k.Scope.Project) {
+	// (DEC-5); es schreibt über die Freigabe, die CheckKnowledgeCreate prüft. Mit
+	// Projekt ist die Maschine Zuordnung und kein Anspruch auf den Namen: es
+	// entscheidet die Projektrolle (gateProject, CheckKnowledgeCreate).
+	if (len(k.ShareOrgIDs) == 0 && k.Scope.Project == "" && !a.gateMachineNote(w, r, k.Scope.Machine)) || !a.gateProject(w, r, k.Scope.Project) {
 		return
 	}
 	// Die Zuschreibung kommt aus dem Token und ist danach unveränderlich.
@@ -350,7 +352,7 @@ func (a *api) listKnowledge(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("include_archived") == "1" {
 		ks, err = a.st.KnowledgeForProject(scope.NormalizeRemote(r.URL.Query().Get("project")))
 	} else {
-		ks, err = a.st.KnowledgeForContext(axesFromQuery(r), a.access(r).Viewer())
+		ks, err = a.st.KnowledgeForContext(a.guestAxes(r), a.access(r).Viewer())
 	}
 	if err != nil {
 		writeStoreError(w, http.StatusInternalServerError, err)
@@ -706,7 +708,7 @@ func (a *api) search(w http.ResponseWriter, r *http.Request) {
 	if kind == "" {
 		kind = "all"
 	}
-	filter := axesFromQuery(r)
+	filter := a.guestAxes(r)
 	limit := intParam(r, "limit", 20)
 	anchor, ok := anchorFilterFromQuery(w, r)
 	if !ok {

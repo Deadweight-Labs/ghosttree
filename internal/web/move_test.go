@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
@@ -113,5 +114,28 @@ func TestRequestMoveFormMovesAndLogs(t *testing.T) {
 		if !strings.Contains(page, want) {
 			t.Errorf("the activity log lacks %q", want)
 		}
+	}
+}
+
+// An entry with project AND machine: the form preselects its project, so submitting
+// it unchanged must not drop the machine; moving it to another project does.
+func TestKnowledgeMoveFormKeepsTheMachineOfAProjectEntry(t *testing.T) {
+	e := seedSessions(t)
+	id := knInsert(t, e.St, store.Knowledge{Title: "Deploy on build-1", Type: "pitfall", Scope: scope.Axes{Project: shellProject, Machine: "build-1"}})
+	path := "/ui/knowledge/" + strconv.FormatInt(id, 10)
+	move := func(form url.Values) *http.Response {
+		return knPost(t, e.Owner, e.Base, path, path+"/move", form)
+	}
+	if resp := move(url.Values{"project": {shellProject}, "machine": {"build-1"}}); resp.StatusCode != http.StatusConflict {
+		t.Errorf("the unchanged form = %d, want nothing to change", resp.StatusCode)
+	}
+	if k, _ := e.St.KnowledgeByID(id); k.Scope.Project != shellProject || k.Scope.Machine != "build-1" {
+		t.Fatalf("the unchanged form changed the scope: %+v", k.Scope)
+	}
+	if resp := move(url.Values{"project": {shellHiddenProject}, "machine": {"build-1"}}); resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("move to another project = %d", resp.StatusCode)
+	}
+	if k, _ := e.St.KnowledgeByID(id); k.Scope.Project != shellHiddenProject || k.Scope.Machine != "" {
+		t.Errorf("scope after the move = %+v", k.Scope)
 	}
 }
