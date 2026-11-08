@@ -67,11 +67,12 @@ func ParseRef(input string) (Ref, error) {
 		return Ref{}, errors.New("name what to open: REQ-n, TASK-n, PAIN-n, IDEA-n, DEC-n, #id, pr:n, commit:sha, preset:name, a path or a search line")
 	}
 	atoi := func(s string) int64 { n, _ := strconv.ParseInt(s, 10, 64); return n }
+	num := func(s string) int { n, _ := strconv.ParseInt(s, 10, 32); return int(n) }
 	if m := criterionRE.FindStringSubmatch(in); m != nil {
 		if m[1] != "" {
-			return Ref{Kind: KindCriterion, ID: atoi(m[1]), Num: int(atoi(m[2]))}, nil
+			return Ref{Kind: KindCriterion, ID: atoi(m[1]), Num: num(m[2])}, nil
 		}
-		return Ref{Kind: KindCriterion, ID: atoi(m[3]), Num: int(atoi(m[4]))}, nil
+		return Ref{Kind: KindCriterion, ID: atoi(m[3]), Num: num(m[4])}, nil
 	}
 	if m := idRE.FindStringSubmatch(in); m != nil {
 		kind := map[string]string{"req": KindRequest, "task": KindTask, "pain": KindPain, "idea": KindIdea, "pkg": KindPackage, "dec": KindDecision}[strings.ToLower(m[1])]

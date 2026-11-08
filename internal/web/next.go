@@ -19,10 +19,10 @@ const nextTTL = 10 * 60
 // kein "//", kein Backslash, keine Steuer- und Formatzeichen) und nie die
 // Anmeldeseiten selbst. Alles andere ist leer: dann gilt das normale Ziel.
 func safeNext(raw string) string {
-	if raw == "" || len(raw) > 2048 || raw[0] != '/' {
+	if len(raw) < 2 || len(raw) > 2048 || raw[0] != '/' || raw[1] == '/' || raw[1] == '\\' {
 		return ""
 	}
-	if strings.HasPrefix(raw, "//") || strings.ContainsAny(raw, "\\") {
+	if strings.ContainsAny(raw, "\\") {
 		return ""
 	}
 	for _, r := range raw {
