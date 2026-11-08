@@ -163,6 +163,8 @@ func (a *api) qualifiedResult(w http.ResponseWriter, r *http.Request, q query.Qu
 	}
 	project := ax.Project
 	text := q.Text
+	// limit kommt aus der Anfrage: begrenzt, bevor er Slices dimensioniert.
+	limit = min(max(limit, 1), maxQualifiedLimit)
 	fetchBase := min(max(limit*10, 100), 500)
 	pa.Filtered()
 	res := searchResult{Knowledge: []store.Knowledge{}, Sessions: []store.SessionHit{}, Requests: []requestdomain.SearchHit{}, Query: q.String()}
@@ -254,7 +256,7 @@ func (a *api) qualifiedRequests(r *http.Request, res *searchResult, q query.Quer
 		return err
 	}
 	readableReq := a.readableRequests(pa, q, facts)
-	kept := make([]requestdomain.SearchHit, 0, limit)
+	kept := make([]requestdomain.SearchHit, 0, min(limit, len(hits)))
 	for _, h := range hits {
 		of := facts[h.Request.ID]
 		of.Parents, of.Blocks = readableReq(of.Parents), readableReq(of.Blocks)
@@ -428,3 +430,6 @@ func (a *api) qualifiedFiles(r *http.Request, res *searchResult, q query.Query, 
 	res.Files = filterTo(entries, limit, func(g store.GhostFile) bool { return readable(g) && q.Match(ghostFacts(g)) })
 	return nil
 }
+
+// maxQualifiedLimit ist die größte Trefferzahl je Art einer qualifizierten Suche.
+const maxQualifiedLimit = 200
