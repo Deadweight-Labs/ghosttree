@@ -99,6 +99,18 @@ func cmdRunbook(args []string, stdout io.Writer) int {
 		return 2
 	}
 	sub, rest := args[0], args[1:]
+	// Die Freigabe durch den Betreiber arbeitet direkt auf der Datenbank des
+	// Servers und braucht keine Client-Konfiguration; dort gibt es oft keine.
+	if sub == "revoke" {
+		return runbookOperatorAllow(sub, rest, stdout)
+	}
+	if sub == "allow" {
+		for _, a := range rest {
+			if a == "--db" || strings.HasPrefix(a, "--db=") {
+				return runbookOperatorAllow(sub, rest, stdout)
+			}
+		}
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintln(stdout, err)
