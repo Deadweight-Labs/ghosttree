@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -31,6 +32,9 @@ func TestUserPromptSubmitHookDeliversRelevantKnowledge(t *testing.T) {
 		if strings.HasPrefix(r.URL.Path, "/api/coord/") {
 			w.Write([]byte("[]")) // the coordination look that rides along with the prompt
 			return
+		}
+		if r.URL.Path == "/api/runbooks/triggered" {
+			return // die Abläufe fragen daneben; hier ohne Treffer
 		}
 		if r.URL.Query().Get("q") == "" {
 			t.Error("prompt was not forwarded")
@@ -353,15 +357,23 @@ func TestPreToolUseAsksForADescriptionOnlyWhenWriting(t *testing.T) {
 // Dasselbe Muster wie bei null Suchtreffern (#732).
 func TestSecondEditDoesNotClaimTheDescriptionIsMissing(t *testing.T) {
 	described := `[{"path":"internal/store/knowledge.go","kind":"file","description":"die Wissenspfade"}]`
+	var mu sync.Mutex
 	var deliveries int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		// Die gezielte Nachfrage kennt keine Einmal-je-Sitzung-Regel.
 		case strings.Contains(r.URL.Path, "/tree"):
 			w.Write([]byte(described))
+		// Die Abläufe (REQ-604) fragt der Hook parallel ab; sie zählen nicht
+		// als Auslieferung von Beschreibungen.
+		case strings.HasPrefix(r.URL.Path, "/api/runbooks"):
+			w.Write([]byte(`[]`))
 		default:
+			mu.Lock()
 			deliveries++
-			if deliveries == 1 {
+			n := deliveries
+			mu.Unlock()
+			if n == 1 {
 				w.Write([]byte(described))
 				return
 			}

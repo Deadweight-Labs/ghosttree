@@ -41,10 +41,10 @@ jobs:
           test "$(printf '%s\n' "$PR_BODY" | grep -Ec "^- \[[xX]\] \`(major|minor|patch|none)\`")" -eq 1
           printf '%s\n' "$PR_BODY" | grep -Eq '^- \[[xX]\] I have read and agree to the .*Contributor License Agreement'
 
-  quality:
-    name: Go quality
+  go-checks:
+    name: Go checks
     runs-on: ubuntu-latest
-    timeout-minutes: 110
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -61,17 +61,67 @@ jobs:
           git diff --exit-code -- go.mod go.sum
       - name: Check planned version
         run: grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$' VERSION
-      - name: Test with race detector (all packages except store)
-        run: go test -race -count=1 -timeout 80m $(go list ./... | grep -v '/internal/store$')
-      - name: Test store
-        run: go test -count=1 -timeout 15m ./internal/store/
-      - name: Test store concurrency with race detector
-        run: go test -race -count=1 -timeout 30m -run 'Concurren|Race|Racing|Contend|Admission|Writer|Pool|Runtime|Crash|Drain|Queue|AtomicAndStable' ./internal/store/
       - name: Cross-build supported targets
         run: |
           for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
             GOOS=${target%/*} GOARCH=${target#*/} CGO_ENABLED=0 go build -trimpath -o /tmp/ctx-${target%/*}-${target#*/} ./cmd/ctx
           done
+
+  go-test-web:
+    name: Go tests (web)
+    runs-on: ubuntu-latest
+    timeout-minutes: 80
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Test web with race detector
+        run: go test -race -count=1 -timeout 70m ./internal/web/
+
+  go-test-rest:
+    name: Go tests (rest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Test with race detector (all packages except store and web)
+        run: go test -race -count=1 -timeout 50m $(go list ./... | grep -v -e '/internal/store$' -e '/internal/web$')
+
+  go-test-store:
+    name: Go tests (store)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Test store
+        run: go test -count=1 -timeout 20m ./internal/store/
+      - name: Test store concurrency with race detector
+        run: go test -race -count=1 -timeout 30m -run 'Concurren|Race|Racing|Contend|Admission|Writer|Pool|Runtime|Crash|Drain|Queue|AtomicAndStable' ./internal/store/
+
+  # Required status check of dev and main; it only summarises the parallel Go jobs.
+  quality:
+    name: Go quality
+    if: always()
+    needs: [go-checks, go-test-web, go-test-rest, go-test-store]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: All Go jobs passed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "$RESULTS"
+          for r in $RESULTS; do [ "$r" = success ] || exit 1; done
 
   markdown:
     name: Markdown

@@ -418,9 +418,9 @@ func writeRequestError(w http.ResponseWriter, err error) {
 			status = http.StatusConflict
 		}
 		switch rule.ErrorCode {
-		case "package_not_found":
+		case "package_not_found", "label_not_found", "idea_not_found", "preset_not_found":
 			status = http.StatusNotFound
-		case "package_exists", "package_closed", "pr_taken":
+		case "package_exists", "package_closed", "pr_taken", "label_exists", "idea_duplicate", "idea_changed":
 			status = http.StatusConflict
 		}
 		if rule.ErrorCode == "secret_detected" {

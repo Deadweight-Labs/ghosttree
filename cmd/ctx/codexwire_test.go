@@ -96,6 +96,9 @@ func TestSessionStartAnswersACodexPayload(t *testing.T) {
 
 func TestUserPromptSubmitAnswersACodexPayload(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/runbooks/triggered" {
+			return // die Abläufe fragen daneben; hier ohne Treffer
+		}
 		if got := r.URL.Query().Get("q"); got != "welches modell in ollama" {
 			t.Errorf("prompt forwarded as %q", got)
 		}

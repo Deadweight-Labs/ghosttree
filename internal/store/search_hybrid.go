@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/embed"
 	"github.com/Deadweight-Labs/ghosttree/internal/originctx"
@@ -133,6 +134,12 @@ func (s *Store) searchKnowledgeWith(q string, o KnowledgeSearch) ([]Knowledge, e
 		if o.Operator {
 			limit = 50
 		}
+	}
+
+	if strings.TrimSpace(q) == "" {
+		// Ohne Suchwörter (nur Qualifier der Suchsprache, REQ-600) gibt es keine
+		// Rangfolge: die jüngsten Einträge, die Filter und Sichtbarkeit lassen.
+		return s.listKnowledgeFiltered(where, args, limit, o)
 	}
 
 	sh := s.embedShared()
@@ -485,4 +492,20 @@ func (s *Store) keptRows(ids []int64, want int, keep func(Knowledge) bool) ([]Kn
 		}
 	}
 	return out, nil
+}
+
+// listKnowledgeFiltered ist die Antwort auf eine Suche ohne Wörter: dieselben
+// Filter und Statusregeln wie die Volltextsuche, die jüngsten zuerst.
+func (s *Store) listKnowledgeFiltered(where string, args []any, limit int, o KnowledgeSearch) ([]Knowledge, error) {
+	if o.Prefilter.SQL != "" {
+		where = "(" + where + ") AND (" + o.Prefilter.SQL + ")"
+		args = append(slices.Clone(args), o.Prefilter.Args...)
+	}
+	args = append(slices.Clone(args), limit)
+	rows, err := s.db.Query(`SELECT `+prefix(knowledgeCols, "k.")+` FROM knowledge k
+		WHERE `+where+ftsConditions(o)+` ORDER BY k.updated_at DESC, k.id DESC LIMIT ?`, args...)
+	if err != nil {
+		return nil, err
+	}
+	return s.scanKnowledge(rows)
 }

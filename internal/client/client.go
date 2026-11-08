@@ -17,6 +17,9 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/activation"
 	"github.com/Deadweight-Labs/ghosttree/internal/config"
 	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
+	"github.com/Deadweight-Labs/ghosttree/internal/humantask"
+	"github.com/Deadweight-Labs/ghosttree/internal/idea"
+	"github.com/Deadweight-Labs/ghosttree/internal/pain"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/snapshot"
@@ -36,6 +39,14 @@ type SearchResult struct {
 	Knowledge []store.Knowledge         `json:"knowledge"`
 	Sessions  []store.SessionHit        `json:"sessions"`
 	Requests  []requestdomain.SearchHit `json:"requests"`
+	// Die folgenden kommen nur aus einer Suchzeile mit Qualifiern (REQ-600).
+	Pains    []pain.Pain          `json:"pains,omitempty"`
+	Ideas    []idea.Idea          `json:"ideas,omitempty"`
+	Criteria []store.CriterionHit `json:"criteria,omitempty"`
+	Tasks    []humantask.Task     `json:"tasks,omitempty"`
+	Files    []store.GhostFile    `json:"files,omitempty"`
+	// Query ist die Suchzeile, wie der Server sie gelesen hat.
+	Query string `json:"query,omitempty"`
 }
 
 type APIError struct {

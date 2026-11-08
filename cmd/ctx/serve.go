@@ -89,6 +89,11 @@ func cmdServe(args []string, stdout io.Writer) int {
 		return 1
 	}
 	defer st.Close()
+	// Das Ausführen von Abläufen (REQ-604, Stufe 2) ist ein Schalter und steht
+	// aus: erst der Betreiber schaltet es ein.
+	if os.Getenv("GHOSTTREE_RUNBOOK_EXEC") == "1" {
+		store.SetRunbookExecution(true)
+	}
 	code := runServer(ctx, st, cfg, stdout, os.Stderr)
 	if err := st.Close(); err != nil {
 		fmt.Fprintf(stdout, "close store: %v\n", err)

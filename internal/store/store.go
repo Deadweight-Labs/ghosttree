@@ -1167,6 +1167,10 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := ensureLabelsAndIdeas(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := ensureGitAnchors(db); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -1176,6 +1180,10 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 		return nil, err
 	}
 	if err := ensureOriginContexts(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureRunbooks(db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}

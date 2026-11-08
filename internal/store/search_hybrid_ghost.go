@@ -1,6 +1,10 @@
 package store
 
-import "github.com/Deadweight-Labs/ghosttree/internal/originctx"
+import (
+	"strings"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/originctx"
+)
 
 // GhostSearch describes one search over the descriptions of paths.
 type GhostSearch struct {
@@ -39,6 +43,11 @@ func (s *Store) searchGhostFiles(q string, o GhostSearch) ([]GhostFile, error) {
 	limit := o.Limit
 	if limit <= 0 {
 		limit = 20
+	}
+	if strings.TrimSpace(q) == "" {
+		// Ohne Suchwörter (nur Qualifier der Suchsprache, REQ-600): die zuletzt
+		// geänderten Beschreibungen, die Filter und Sichtbarkeit lassen.
+		return s.listGhostFilesFiltered(o, limit)
 	}
 	qvec, cfg, err := s.queryVector(q, o.Mode, KindGhost)
 	if err != nil {
@@ -127,4 +136,21 @@ func (s *Store) hybridGhostFiles(q string, o GhostSearch, limit int, qvec []floa
 		semantic: func(g *GhostFile) { g.Match = MatchSemantic },
 		load:     s.ghostFilesByID,
 	}, textIDs, vecIDs, pool, limit, room, o.Keep)
+}
+
+func (s *Store) listGhostFilesFiltered(o GhostSearch, limit int) ([]GhostFile, error) {
+	where, args := o.Prefilter.with(`(? = '' OR g.project = ?)`, []any{o.Project, o.Project})
+	if af, afArgs := o.Anchor.Where("g.anchor_id"); af != "" {
+		where += " AND " + af
+		args = append(args, afArgs...)
+	}
+	if of, ofArgs := originWhere(o.Origin, "g.origin_id", "g.described_at"); of != "" {
+		where += " AND " + of
+		args = append(args, ofArgs...)
+	}
+	rows, err := s.db.Query(`SELECT `+prefix(ghostCols, "g.")+` FROM ghost_files g WHERE `+where+` ORDER BY g.updated_at DESC, g.id DESC LIMIT ?`, append(args, limit)...)
+	if err != nil {
+		return nil, err
+	}
+	return s.scanGhostFiles(rows)
 }

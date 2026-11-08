@@ -14,6 +14,7 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
 	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
 	"github.com/Deadweight-Labs/ghosttree/internal/originctx"
+	"github.com/Deadweight-Labs/ghosttree/internal/query"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -95,7 +96,7 @@ type SearchInput struct {
 	// `required: missing properties: ["query"]` back from schema validation,
 	// before the handler ever ran. The handler tests below called the function
 	// directly and never saw it.
-	Query string `json:"query,omitempty" jsonschema:"what to search for. Omit only when reading one entry by knowledge_id"`
+	Query string `json:"query,omitempty" jsonschema:"what to search for: words, qualifiers or both, for example is:open label:bug area:internal/store. Omit only when reading one entry by knowledge_id. The qualifier list is in the tool description"`
 	// The id comes back on every knowledge hit, so reading one entry in full is
 	// a second call rather than a guess. Same shape as session_id on
 	// context_sessions: list or search, or name one and read it whole.
@@ -195,7 +196,7 @@ func (s *Server) Register(srv *mcp.Server) {
 	mcp.AddTool(srv, &mcp.Tool{Name: "context_snapshot_get", Description: "Read one snapshot safely: no filter returns only head and counts, domain returns at most 100 summaries, and domain plus key returns exactly one payload.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closed}}, s.handleSnapshotGet)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "context_search",
-		Description: "Search ghosttree knowledge and past session transcripts, or read one knowledge entry in full. Hits are snippets and carry an id; pass knowledge_id to get that entry's whole body back verbatim, which is how stored plans, specs and other long documents are read. Defaults to the current project, branch and machine context. Set project to search another repository, or all_projects to search every one of them — worth doing when a problem here may already have been solved elsewhere.",
+		Description: "Search ghosttree knowledge and past session transcripts, or read one knowledge entry in full. Hits are snippets and carry an id; pass knowledge_id to get that entry's whole body back verbatim, which is how stored plans, specs and other long documents are read. Defaults to the current project, branch and machine context. Set project to search another repository, or all_projects to search every one of them — worth doing when a problem here may already have been solved elsewhere. " + searchLanguageHelp,
 	}, s.handleSearch)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "context_get",
@@ -260,6 +261,8 @@ func (s *Server) Register(srv *mcp.Server) {
 	s.registerPainTools(srv)
 	s.registerHumanTaskTools(srv)
 	s.registerPackageTools(srv)
+	s.registerQueryTools(srv)
+	s.registerRunbookTools(srv)
 }
 
 func Run(ctx context.Context, s *Server, version string) error {
@@ -329,6 +332,13 @@ func (s *Server) handleSearch(ctx context.Context, _ *mcp.CallToolRequest, in Se
 		if _, err := anchor.Origin.Resolve(time.Now()); err != nil {
 			return nil, nil, err
 		}
+	}
+	parsed, err := query.Parse(in.Query, time.Now())
+	if err != nil {
+		return nil, nil, err
+	}
+	if parsed.Qualified() {
+		return s.qualifiedSearch(in, parsed, anchor)
 	}
 	anchored := anchor.Commit != "" || anchor.PR != 0 || anchor.Origin.Active()
 	ax, crossProject := s.searchAxes(in)

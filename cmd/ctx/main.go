@@ -49,6 +49,10 @@ func run(args []string, stdout io.Writer) int {
 		return cmdRequest(rest, stdout)
 	case "package":
 		return cmdPackage(rest, stdout)
+	case "runbook":
+		return cmdRunbook(rest, stdout)
+	case "run":
+		return cmdRun(rest, stdout)
 	case "ghost":
 		return cmdGhost(rest, stdout)
 	case "doc":
@@ -109,6 +113,14 @@ func run(args []string, stdout io.Writer) int {
 		return cmdJoin(rest, stdout)
 	case "pain":
 		return cmdPain(rest, stdout)
+	case "idea":
+		return cmdIdea(rest, stdout)
+	case "search":
+		return cmdSearch(rest, stdout)
+	case "label":
+		return cmdLabel(rest, stdout)
+	case "topic":
+		return cmdTopic(rest, stdout)
 	case "task":
 		return cmdTask(rest, stdout)
 	case "help", "--help", "-h":
@@ -149,7 +161,13 @@ const usage = `usage: ctx <command>
   regression  say which test guards a fixed defect, and list the fixes none does
   request  search and manage the work ledger (create, move, ...)
   package  work packages: the requests that belong to a branch or pull request (create, add, remove, show, import-relations)
+  runbook  named procedures with steps, parameters and triggers (list, show, write, import, approve, allow, report)
+  run      ctx run NAME [param=value...] prints a runbook's checklist; --target T --run executes an approved, locally allowed target
   pain     record a problem without a solution, follow it to mitigated or resolved
+  idea     record a wish without working it out, later make a request of it
+  search   search with qualifiers (is:open label:bug area:internal/store), saved searches (--preset)
+  label    labels for requests, pains, ideas and knowledge, per project or org
+  topic    named areas of the repository (several path prefixes under one name)
   task     ask the human for a key, file, decision or action, and check it afterwards
   knowledge  add, show, supersede, retire or move a knowledge entry
   ghost    read description history or archive confirmed-deleted paths

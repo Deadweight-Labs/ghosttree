@@ -118,6 +118,23 @@ type Detail struct {
 	// it waits on from a human. Both are filled per viewer by RequestDetailView.
 	Pains []PainRef `json:"pains,omitempty"`
 	Tasks []TaskRef `json:"tasks,omitempty"`
+	// Ideas are the ideas this request came out of (REQ-606), as far as the
+	// viewer may read them; Labels are the labels set on it (REQ-600).
+	Ideas  []IdeaRef  `json:"ideas,omitempty"`
+	Labels []LabelRef `json:"labels,omitempty"`
+}
+
+// IdeaRef is an idea that led to a request, as far as the viewer may read it.
+type IdeaRef struct {
+	ID    int64  `json:"id"`
+	Title string `json:"title"`
+	State string `json:"state"`
+}
+
+// LabelRef is a label set on a request.
+type LabelRef struct {
+	Name  string `json:"name"`
+	Color string `json:"color"`
 }
 
 // PainRef is a pain that motivates a request, as far as the viewer may read it.
