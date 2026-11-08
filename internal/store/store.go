@@ -189,7 +189,7 @@ CREATE TABLE IF NOT EXISTS request_relations(
   request_id INTEGER NOT NULL REFERENCES requests(id) ON DELETE RESTRICT,
   other_request_id INTEGER REFERENCES requests(id) ON DELETE RESTRICT,
   knowledge_id INTEGER REFERENCES knowledge(id) ON DELETE RESTRICT,
-  kind TEXT NOT NULL CHECK(kind IN ('parent','related','blocks','duplicates','supersedes','knowledge','external')),
+  kind TEXT NOT NULL CHECK(kind IN ('parent','related','blocks','duplicates','supersedes','knowledge','external','derived')),
   external_ref TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS request_work(
   id INTEGER PRIMARY KEY,
@@ -1187,6 +1187,10 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := ensureComments(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := ensureGitAnchors(db); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -1200,6 +1204,10 @@ func OpenWithOptions(path string, options OpenOptions) (*Store, error) {
 		return nil, err
 	}
 	if err := ensureWorkPackages(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := allowDerivedRelation(db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}

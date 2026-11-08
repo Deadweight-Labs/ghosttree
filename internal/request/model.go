@@ -198,6 +198,15 @@ type CreateInput struct {
 	// AuthorID is the writing account, set by the server from the token; zero
 	// lets the store resolve the person label of the writer once, at write time.
 	AuthorID int64 `json:"-"`
+	// Parent und DerivedFrom sind die Eltern-Issue und die Quellen so, wie der
+	// Aufrufer sie nennt (REQ-n; IDEA-n, PAIN-n, REQ-n, thread:n). Nur der Client
+	// füllt sie, um sie an den Server zu schicken; der Store liest Links.
+	Parent      string   `json:"-"`
+	DerivedFrom []string `json:"-"`
+	// Links sind die geprüften Verknüpfungen. Der Server setzt sie nach der
+	// Rechteprüfung (ProjectAccess.ResolveRequestLinks); der Store legt sie in
+	// derselben Transaktion an wie den Auftrag.
+	Links Links `json:"-"`
 }
 
 type SearchFilter struct {

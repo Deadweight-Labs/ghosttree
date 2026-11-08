@@ -2,6 +2,7 @@ package scope
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -35,12 +36,46 @@ func TestCanonicalAxesNormalizesEveryClientBoundaryValue(t *testing.T) {
 
 func TestUnionWhere(t *testing.T) {
 	sql, args := Axes{Project: "github.com/x/y", Branch: "main", Machine: "workstation-a"}.UnionWhere()
-	want := `((project = '' AND branch = '' AND machine = '') OR (project = '' AND branch = '' AND machine = ?) OR (project = ? AND branch = '' AND machine = '') OR (project = ? AND branch = ? AND machine = '') OR (project = ? AND branch = '' AND machine = ?))`
+	want := `((project = '' AND branch = '' AND machine = '') OR (project = '' AND branch = '' AND machine = ?) OR (project = ? AND branch = '') OR (project = ? AND branch = ?))`
 	if sql != want {
 		t.Errorf("sql = %s", sql)
 	}
-	if !reflect.DeepEqual(args, []any{"workstation-a", "github.com/x/y", "github.com/x/y", "main", "github.com/x/y", "workstation-a"}) {
+	if !reflect.DeepEqual(args, []any{"workstation-a", "github.com/x/y", "github.com/x/y", "main"}) {
 		t.Errorf("args = %v", args)
+	}
+}
+
+// An entry with project AND machine belongs to the project: the project clauses
+// carry no machine condition, so a session of the project reads it on any machine.
+// The only clause that names a machine is the one without a project, so a session
+// on that machine WITHOUT the project does not.
+func TestUnionWhereReadsProjectMachineEntriesOnAnyMachine(t *testing.T) {
+	sql, _ := Axes{Project: "github.com/x/y", Machine: "build-1"}.UnionWhere()
+	for _, clause := range []string{"(project = ? AND branch = '')"} {
+		if !strings.Contains(sql, clause) {
+			t.Errorf("clause %q missing: %s", clause, sql)
+		}
+	}
+	if strings.Contains(sql, "project = ? AND branch = '' AND machine") {
+		t.Errorf("a project clause still narrows by machine: %s", sql)
+	}
+	// Without the project in the context, no clause can reach a project entry.
+	sql, _ = Axes{Machine: "build-1"}.UnionWhere()
+	if strings.Contains(sql, "project = ?") {
+		t.Errorf("a session without the project reaches project entries: %s", sql)
+	}
+	// Every branch of the project, with or without a machine.
+	sql, args := Axes{Project: "github.com/x/y", AnyBranch: true}.UnionWhere()
+	if !strings.Contains(sql, "(project = ?)") || len(args) != 1 {
+		t.Errorf("any-branch sql = %s args = %v", sql, args)
+	}
+}
+
+// Requests have no machine; their clauses stay exactly as they were.
+func TestRequestUnionWhereKeepsTheMachineCondition(t *testing.T) {
+	sql, _ := Axes{Project: "github.com/x/y", Machine: "build-1"}.RequestUnionWhere()
+	if !strings.Contains(sql, "(project = ? AND branch = '' AND machine = '')") {
+		t.Errorf("request sql = %s", sql)
 	}
 }
 

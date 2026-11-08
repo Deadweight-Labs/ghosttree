@@ -118,6 +118,21 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   or path. Executable targets run without a shell, only after an operator allowed
   that version on that machine (`ctx runbook allow --db`) and only with
   `GHOSTTREE_RUNBOOK_EXEC=1`.
+- Knowledge and runbooks can carry a project and a machine at once ("deploy
+  this app on build-1"). Such an entry is seen and delivered by project role,
+  like any project entry; the machine names where it applies. Knowledge that
+  belongs to a machine alone stays private to its owner and is shared only
+  through the machine's shares.
+- Comments on issues, ideas and pains (`ctx comment`, `comment_add`,
+  `comment_list`, `/api/comments`): the author edits with versions, the author
+  or a lead deletes softly. Earlier versions stay visible to every reader.
+- A request can name its parent and what it came from when it is created
+  (`parent`, `derived_from`: an idea, a pain, another request or a thread), in
+  one step with the creation.
+- `GET /api/refs` resolves up to 50 references (REQ-n, PAIN-n, TASK-n, IDEA-n,
+  FEAT-n, DEC-n, #n, pr:n) to title, state, summary, author, time and link, for
+  hover cards; a reference one may not read answers like one that does not
+  exist. `GET /api/inbox` lists open and recently done inbox items.
 
 #### Coordination
 

@@ -50,6 +50,8 @@ func run(args []string, stdout io.Writer) int {
 		return cmdKnowledge(rest, stdout)
 	case "request":
 		return cmdRequest(rest, stdout)
+	case "comment":
+		return cmdComment(rest, stdout)
 	case "package":
 		return cmdPackage(rest, stdout)
 	case "runbook":
@@ -177,6 +179,7 @@ const usage = `usage: ctx <command>
   review   approve or reject distilled knowledge
   regression  say which test guards a fixed defect, and list the fixes none does
   request  search and manage the work ledger (create, move, ...)
+  comment  comments on an issue, idea or pain (add, list, edit, delete)
   package  work packages: the requests that belong to a branch or pull request (create, add, remove, show, import-relations)
   runbook  named procedures with steps, parameters and triggers (list, show, write, import, approve, allow, report)
   github   ctx github sync-prs --db PATH: operator, fetches PR numbers for existing branches from GitHub

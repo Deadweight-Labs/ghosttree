@@ -158,6 +158,8 @@ type RequestCreateInput struct {
 	IdempotencyKey string   `json:"idempotency_key,omitempty" jsonschema:"stable retry key for this creation attempt"`
 	Project        string   `json:"project,omitempty" jsonschema:"the project this request belongs to when it is not the session's own: a remote like github.com/owner/repo or a short name that is unique among the projects you can write to"`
 	Explanation    string   `json:"explanation,omitempty" jsonschema:"optional \"Kurz erklärt\" for the humans who will read this: two to four plain sentences, in the language the people of the project use. Say what it is about in everyday words (the mechanism, not the jargon), why it matters (who it affects, when), what has to be done or decided, and your recommendation. No markdown, no links, never a secret. You know the context the server does not; without it the server generates one later from the text alone"`
+	Parent         string   `json:"parent,omitempty" jsonschema:"optional parent issue, REQ-n of the same project, that you can read. This request becomes its child"`
+	DerivedFrom    []string `json:"derived_from,omitempty" jsonschema:"optional sources this request came out of, in the same project and readable by you: IDEA-n, PAIN-n, REQ-n or thread:n. Set at creation, in one step. An idea you may edit is accepted by it; a pain is linked as motivating this request"`
 }
 
 type RequestStartWorkInput struct {
@@ -193,7 +195,7 @@ type RequestProgressInput struct {
 	Type           string `json:"type,omitempty" jsonschema:"replacement type for correct: feature, change, bug, or investigation"`
 	Priority       string `json:"priority,omitempty" jsonschema:"replacement priority for correct"`
 	RelationID     int64  `json:"relation_id,omitempty" jsonschema:"relation to remove; request_get lists every relation with its id. Pass request_id alongside it — that is the request the edge hangs off"`
-	RelationKind   string `json:"relation_kind,omitempty" jsonschema:"parent, related, blocks, duplicates, supersedes, knowledge, or external. The edge is read subject first: request_id <kind> other_request_id. \"blocks\" therefore means request_id blocks other_request_id — the one named in request_id is the one that has to be finished first. Same for parent: request_id is the child, other_request_id is the parent."`
+	RelationKind   string `json:"relation_kind,omitempty" jsonschema:"parent, related, blocks, duplicates, supersedes, derived, knowledge, or external. The edge is read subject first: request_id <kind> other_request_id. \"blocks\" therefore means request_id blocks other_request_id — the one named in request_id is the one that has to be finished first. Same for parent: request_id is the child, other_request_id is the parent. derived: request_id came out of other_request_id."`
 	OtherRequestID int64  `json:"other_request_id,omitempty" jsonschema:"the object of the relation, read after the kind: request_id <kind> other_request_id"`
 	KnowledgeID    int64  `json:"knowledge_id,omitempty"`
 	ExternalRef    string `json:"external_ref,omitempty"`
@@ -412,7 +414,7 @@ func (s *Server) handleRequestCreate(_ context.Context, _ *mcp.CallToolRequest, 
 	}
 	detail, err := s.client.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{
 		Type: in.Type, Title: in.Title, Description: in.Description, Priority: in.Priority, Scope: ax, Origin: "agent", SessionRef: ref,
-	}, Criteria: in.Criteria, IdempotencyKey: in.IdempotencyKey, Explanation: in.Explanation})
+	}, Criteria: in.Criteria, IdempotencyKey: in.IdempotencyKey, Explanation: in.Explanation, Parent: in.Parent, DerivedFrom: in.DerivedFrom})
 	out := changeOutput(detail, "created", 0)
 	// Creation is the one mutation that has to list its criteria: their ids
 	// exist nowhere else yet, and without them the next step is a request_get

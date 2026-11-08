@@ -94,9 +94,21 @@ func (a Axes) Same(b Axes) bool {
 // descends from. Equality alone meant a branch cut from develop could not see
 // develop, which is the opposite of what a working tree does — it carries the
 // files it was cut from, and the ghost tree is supposed to grow the same way.
-func (a Axes) UnionWhere() (string, []any) { return a.unionWhere(true) }
+//
+// An entry with a project and a machine (knowledge about running a repository
+// on a host) belongs to the project: every session of the project reads it,
+// whatever machine that session is on. The machine is where it applies, not who
+// may read it. A session on that machine WITHOUT the project does not read it:
+// the entry would reach people who never had the project's role.
+func (a Axes) UnionWhere() (string, []any) { return a.unionWhere(true, true) }
 
-func (a Axes) unionWhere(withProjectless bool) (string, []any) {
+func (a Axes) unionWhere(withProjectless, projectMachines bool) (string, []any) {
+	// Requests carry no machine, so their clauses stay on the empty machine. For
+	// knowledge the machine of a project entry does not narrow who reads it.
+	onMachine := ` AND machine = ''`
+	if projectMachines {
+		onMachine = ``
+	}
 	var clauses []string
 	var args []any
 	if withProjectless {
@@ -110,17 +122,17 @@ func (a Axes) unionWhere(withProjectless bool) (string, []any) {
 		if a.AnyBranch {
 			// One clause instead of an enumeration: every branch of this
 			// project, plus the unbranched entries it subsumes.
-			clauses = append(clauses, `(project = ? AND machine = '')`)
+			clauses = append(clauses, `(project = ?`+onMachine+`)`)
 			args = append(args, a.Project)
 		} else {
-			clauses = append(clauses, `(project = ? AND branch = '' AND machine = '')`)
+			clauses = append(clauses, `(project = ? AND branch = ''`+onMachine+`)`)
 			args = append(args, a.Project)
 			for _, branch := range a.readableBranches() {
-				clauses = append(clauses, `(project = ? AND branch = ? AND machine = '')`)
+				clauses = append(clauses, `(project = ? AND branch = ?`+onMachine+`)`)
 				args = append(args, a.Project, branch)
 			}
 		}
-		if a.Machine != "" {
+		if a.Machine != "" && !projectMachines {
 			clauses = append(clauses, `(project = ? AND branch = '' AND machine = ?)`)
 			args = append(args, a.Project, a.Machine)
 		}
@@ -137,7 +149,7 @@ func (a Axes) RequestUnionWhere() (string, []any) {
 	if a.Project == "" {
 		return a.UnionWhere()
 	}
-	return a.unionWhere(false)
+	return a.unionWhere(false, false)
 }
 
 // readableBranches is the current branch plus its ancestors. A sibling branch

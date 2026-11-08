@@ -28,6 +28,10 @@ func (a *api) createRequest(w http.ResponseWriter, r *http.Request) {
 		IdempotencyKey string   `json:"idempotency_key"`
 		Criteria       []string `json:"criteria"`
 		Explanation    string   `json:"explanation"`
+		// Parent ist der Eltern-Issue (REQ-n), DerivedFrom sind die Quellen
+		// („Entstanden aus“: IDEA-n, PAIN-n, REQ-n, thread:n).
+		Parent      string   `json:"parent"`
+		DerivedFrom []string `json:"derived_from"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeStoreError(w, http.StatusBadRequest, err)
@@ -50,6 +54,14 @@ func (a *api) createRequest(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	links, err := a.access(r).ResolveRequestLinks(scope.CanonicalAxes(scope.Axes{Project: body.Project}).Project, body.Parent, body.DerivedFrom)
+	if err != nil {
+		if denyAccess(w, err) {
+			return
+		}
+		writeRequestError(w, err)
+		return
+	}
 	detail, err := a.st.CreateRequest(requestdomain.CreateInput{
 		Request: requestdomain.Request{
 			Type: body.Type, Title: body.Title, Description: body.Description, Priority: body.Priority,
@@ -57,7 +69,7 @@ func (a *api) createRequest(w http.ResponseWriter, r *http.Request) {
 			Origin: body.Origin, Person: personOf(r), SessionRef: body.SessionRef,
 		},
 		Criteria: body.Criteria, IdempotencyKey: body.IdempotencyKey, AuthorID: authorIDOf(r),
-		GitAnchor: anchorFromRequest(r), Origin: a.originFor(r, body.SessionRef),
+		GitAnchor: anchorFromRequest(r), Origin: a.originFor(r, body.SessionRef), Links: links,
 	})
 	if err != nil {
 		writeRequestError(w, err)
@@ -83,7 +95,7 @@ func (a *api) searchRequests(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	page, err := a.st.SearchRequestsWith(a.requestFilter(r, requestdomain.SearchFilter{
-		Scope: axesFromQuery(r), Query: q.Get("q"), State: q.Get("state"),
+		Scope: a.guestAxes(r), Query: q.Get("q"), State: q.Get("state"),
 		Type: q.Get("type"), Cursor: q.Get("cursor"), Limit: intParam(r, "limit", 10),
 		Commit: anchor.Commit, PR: anchor.PR, Origin: origin,
 		// Nur für Aufrufer, die den ganzen Text zeigen — der Dateispiegel. Eine
@@ -424,7 +436,7 @@ func writeRequestError(w http.ResponseWriter, err error) {
 			status = http.StatusConflict
 		}
 		switch rule.ErrorCode {
-		case "package_not_found", "label_not_found", "idea_not_found", "preset_not_found",
+		case "package_not_found", "label_not_found", "idea_not_found", "origin_not_found", "comment_not_found", "comment_target_not_found", "preset_not_found",
 			"decision_not_found", "attachment_not_found", "text_not_found", "variant_not_found", "thread_not_found",
 			"feature_not_found", "version_not_found":
 			status = http.StatusNotFound

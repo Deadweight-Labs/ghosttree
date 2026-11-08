@@ -7,10 +7,12 @@ import (
 
 // runbookObject beschreibt einen vorhandenen Ablauf für die Matrix. Eigen ist er
 // für das Konto, das ihn angelegt hat; auf der Maschinen-Achse zählt die
-// Maschine wie bei Wissen.
+// Maschine wie bei Wissen, aber nur ohne Projekt: mit Projekt entscheidet allein
+// die Projektrolle, die Maschine sagt nur, wo der Ablauf gilt.
 func (a *ProjectAccess) runbookObject(ref RunbookRef) Object {
-	obj := Object{Own: a.valid && ref.AuthorID > 0 && ref.AuthorID == a.account, Machine: ref.Machine}
-	if ref.Machine != "" {
+	obj := Object{Own: a.valid && ref.AuthorID > 0 && ref.AuthorID == a.account}
+	if ref.Machine != "" && ref.Project == "" {
+		obj.Machine = ref.Machine
 		obj.SharedOrgs = a.sharedOrgsOf(EntryRunbook, ref.ID, ref.Machine)
 	}
 	return obj
@@ -59,7 +61,10 @@ func (a *ProjectAccess) CheckRunbook(ref RunbookRef, act Action) error {
 // CheckRunbookCreate prüft das Anlegen eines neuen Ablaufs in dieser Geltung.
 func (a *ProjectAccess) CheckRunbookCreate(project, machine string) error {
 	project = scope.NormalizeRemote(project)
-	obj := Object{Own: true, Machine: canonicalMachine(machine)}
+	obj := Object{Own: true}
+	if project == "" {
+		obj.Machine = canonicalMachine(machine)
+	}
 	// Wer in diesem Projekt keine Abläufe lesen darf (ein Gast), bekommt "gibt es
 	// nicht" und erfährt nichts über das, was dort liegt.
 	if err := a.Check(project, ResRunbook, ActRead, obj); err != nil {
@@ -75,7 +80,11 @@ func (a *ProjectAccess) CheckRunbookCreate(project, machine string) error {
 // mitprotokolliert.
 func (a *ProjectAccess) MayApproveRunbook(project, machine string, ownRunbook bool) bool {
 	project = scope.NormalizeRemote(project)
-	d := a.Decide(project, ResRunbook, ActApprove, Object{Own: ownRunbook, Machine: canonicalMachine(machine)})
+	obj := Object{Own: ownRunbook}
+	if project == "" {
+		obj.Machine = canonicalMachine(machine)
+	}
+	d := a.Decide(project, ResRunbook, ActApprove, obj)
 	if !d.Allowed {
 		return false
 	}

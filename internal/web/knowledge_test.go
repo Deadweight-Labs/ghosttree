@@ -387,7 +387,13 @@ func TestDecisionsInTheWrongStateConflictAndNeverRewriteTheEntry(t *testing.T) {
 func TestKnowledgeActionsOnForeignOrUnreadableEntriesAnswerNotFound(t *testing.T) {
 	e := ovEnv(t)
 	hidden := knInsert(t, e.St, store.Knowledge{Title: "SECRET-HIDDEN", Confidence: "staged", Scope: scope.Axes{Project: shellHiddenProject}})
-	machine := knInsert(t, e.St, store.Knowledge{Title: "SECRET-MACHINE", Confidence: "trusted", Scope: scope.Axes{Project: shellProject, Machine: "mainex"}})
+	// Machine-axis knowledge has no project: only the owner of the machine reads it.
+	// (With a project the machine is only where it applies; see
+	// TestKnowledgeOfAProjectOnAMachineIsReadThroughTheProject.)
+	machine, err := e.St.InsertKnowledge(store.Knowledge{Type: "note", Title: "SECRET-MACHINE", Body: "body", Person: "alice", Confidence: "trusted", Scope: scope.Axes{Machine: "mainex"}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	staged := knInsert(t, e.St, store.Knowledge{Title: "SECRET-STAGED", Confidence: "staged"})
 	for name, c := range map[string]*http.Client{"member": e.Member, "reviewer": e.Reviewer, "lead": e.Lead} {
 		for _, id := range []int64{hidden, machine} {
@@ -596,6 +602,35 @@ func TestKnowledgeAndReviewListsAnswerAHiddenProjectLikeAnUnknownOne(t *testing.
 		if strings.ReplaceAll(hidden, shellHiddenProject, "P") != strings.ReplaceAll(unknown, "github.com/nobody/unknown", "P") &&
 			strings.ReplaceAll(hidden, url.QueryEscape(shellHiddenProject), "P") != strings.ReplaceAll(unknown, url.QueryEscape("github.com/nobody/unknown"), "P") {
 			t.Errorf("%s: a hidden project answers differently from an unknown one", page)
+		}
+	}
+}
+
+// Decision #4349: an entry with project AND machine follows the project role. The
+// members of the project read it (list and detail), whoever owns the machine; a
+// person without a role in the project gets "not found", the owner of the
+// machine included.
+func TestKnowledgeOfAProjectOnAMachineIsReadThroughTheProject(t *testing.T) {
+	e := ovEnv(t)
+	id, err := e.St.InsertKnowledge(store.Knowledge{Type: "note", Title: "PROJECT-ON-MACHINE", Body: "body", Person: "alice", Confidence: "trusted",
+		Scope: scope.Axes{Project: shellProject, Machine: "mainex"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hidden, err := e.St.InsertKnowledge(store.Knowledge{Type: "note", Title: "HIDDEN-PROJECT-ON-MACHINE", Body: "body", Person: "alice", Confidence: "trusted",
+		Scope: scope.Axes{Project: shellHiddenProject, Machine: "mainex"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]*http.Client{"member": e.Member, "reviewer": e.Reviewer, "lead": e.Lead} {
+		if code, page := fetchPage(t, c, e.Base+"/ui/knowledge/"+strconv.FormatInt(id, 10)); code != http.StatusOK || !strings.Contains(page, "PROJECT-ON-MACHINE") {
+			t.Errorf("%s detail of the project entry with a machine = %d", name, code)
+		}
+		if page := fetchBody(t, c, e.Base+"/ui/knowledge"); !strings.Contains(page, "PROJECT-ON-MACHINE") || strings.Contains(page, "HIDDEN-PROJECT-ON-MACHINE") {
+			t.Errorf("%s: the list lacks the project entry with a machine, or shows one of a project without a role", name)
+		}
+		if code, page := fetchPage(t, c, e.Base+"/ui/knowledge/"+strconv.FormatInt(hidden, 10)); code != http.StatusNotFound || strings.Contains(page, "HIDDEN-PROJECT-ON-MACHINE") {
+			t.Errorf("%s detail of an entry of a project without a role = %d", name, code)
 		}
 	}
 }

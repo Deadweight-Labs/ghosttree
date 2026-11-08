@@ -431,20 +431,30 @@ func (s *Store) commitIdeaState(id int64, from, to, reason string) error {
 // Betrachter muss die Idee bearbeiten und am Request arbeiten dürfen. Der
 // Aufrufer, der den Request kennt, prüft dessen Recht (der Handler tut es mit
 // requestGate); hier gilt nur die Idee und das gemeinsame Projekt.
+// checkIdeaLinkable: a request may be tied to an idea only by someone who may
+// edit it, and only once it is approved. Shared by LinkIdeaRequest and the
+// derived_from of a new request, so both ways ask the same.
+func (a *ProjectAccess) checkIdeaLinkable(i idea.Idea) error {
+	if err := a.CheckIdea(i, ActEdit); err != nil {
+		return err
+	}
+	if i.Phase == idea.PhaseConcept || i.Phase == idea.PhaseDiscussion {
+		return requestdomain.NewRuleError("not_approved", "this idea is being worked out and is not approved yet", "approve it first; only its owner or a maintainer can", nil)
+	}
+	return nil
+}
+
 func (a *ProjectAccess) LinkIdeaRequest(id, requestID int64, by string) (idea.Idea, error) {
 	i, err := a.st.IdeaByID(id)
 	if err != nil {
 		a.Filtered()
 		return idea.Idea{}, ideaNotFound(id)
 	}
-	if err := a.CheckIdea(i, ActEdit); err != nil {
+	if err := a.checkIdeaLinkable(i); err != nil {
 		if err == ErrAccessNotFound {
 			return idea.Idea{}, ideaNotFound(id)
 		}
 		return idea.Idea{}, err
-	}
-	if i.Phase == idea.PhaseConcept || i.Phase == idea.PhaseDiscussion {
-		return idea.Idea{}, requestdomain.NewRuleError("not_approved", "this idea is being worked out and is not approved yet", "approve it first; only its owner or a maintainer can", nil)
 	}
 	ref, err := a.st.RequestRef(RefRequest, requestID)
 	if err != nil || ref.Project != i.Project {
@@ -467,9 +477,24 @@ func (s *Store) commitIdeaLink(id, requestID int64, by string) error {
 		return err
 	}
 	defer tx.Rollback()
-	ts := now()
+	if err := linkIdeaRequestTx(tx, id, requestID, by, now(), true); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// linkIdeaRequestTx hält fest, dass der Request aus der Idee entstand. Mit
+// promote nimmt es die Idee an (angenommen, bei freigegebener Idee in Umsetzung);
+// ohne bleibt es bei der Verknüpfung. Der Weg des Anlegens eines Requests aus
+// einer Idee nutzt es mit dem Recht des Anlegenden; ResolveRequestLinks lässt nur
+// durch, wer die Idee bearbeiten darf (checkIdeaLinkable), dort ist promote
+// immer wahr.
+func linkIdeaRequestTx(tx *sql.Tx, id, requestID int64, by, ts string, promote bool) error {
 	if _, err := tx.Exec(`INSERT OR IGNORE INTO idea_requests(idea_id,request_id,linked_by,linked_at) VALUES(?,?,?,?)`, id, requestID, by, ts); err != nil {
 		return err
+	}
+	if !promote {
+		return nil
 	}
 	if _, err := tx.Exec(`UPDATE ideas SET state='accepted', reason='', updated_at=? WHERE id=? AND state IN ('open','dismissed')`, ts, id); err != nil {
 		return err
@@ -477,10 +502,8 @@ func (s *Store) commitIdeaLink(id, requestID int64, by string) error {
 	// Aus einer freigegebenen Idee wird Arbeit: in Umsetzung. Eine nie ausgearbeitete
 	// Idee, die direkt zum Issue wird, bleibt raw (Zustand angenommen): die Phasen
 	// laufen nur über die Freigabe eines Menschen.
-	if _, err := tx.Exec(`UPDATE ideas SET phase='building' WHERE id=? AND phase='approved'`, id); err != nil {
-		return err
-	}
-	return tx.Commit()
+	_, err := tx.Exec(`UPDATE ideas SET phase='building' WHERE id=? AND phase='approved'`, id)
+	return err
 }
 
 // ideasOfRequest liefert die Ideen, aus denen ein Request entstand.

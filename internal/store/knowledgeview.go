@@ -11,6 +11,9 @@ import (
 // und nur, wenn er ihr Transkript lesen darf; sonst fehlt der Verweis, denn auch
 // seine Anwesenheit verriete eine verborgene Session.
 func (a *ProjectAccess) KnowledgeView(k Knowledge) Knowledge {
+	if a.HidesMachines(k.Scope.Project) {
+		k.Scope.Machine = ""
+	}
 	if a.seesKnowledgeNumbers(k) {
 		return k
 	}
@@ -20,6 +23,20 @@ func (a *ProjectAccess) KnowledgeView(k Knowledge) Knowledge {
 		k.SessionRef = ""
 	}
 	return k
+}
+
+// HidesMachines: ein Gast des Projekts sieht keine Maschinennamen, wie bei
+// Sessions (guestView). Ohne Projekt gibt es keinen Gastrang; ohne Durchsetzung
+// sieht jeder alles.
+func (a *ProjectAccess) HidesMachines(project string) bool {
+	return project != "" && a.st.AccessEnforced() && RoleRank(a.Role(project).Role) < 2
+}
+
+// IsProjectGuest: der Betrachter ist Gast des Projekts, nicht Fremder ohne Rolle.
+// Für Filter, die ein Gast nicht bekommt; Fremde und Maschinenfreigaben ohne
+// Projektrolle bleiben davon unberührt.
+func (a *ProjectAccess) IsProjectGuest(project string) bool {
+	return project != "" && a.st.AccessEnforced() && RoleRank(a.Role(project).Role) == 1
 }
 
 // seesKnowledgeNumbers: globales Wissen hat kein Projekt, das über die Nummer

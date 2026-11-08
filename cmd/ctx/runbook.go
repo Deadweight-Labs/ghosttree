@@ -38,6 +38,13 @@ const runbookUsage = `usage: ctx runbook <command>
   proposals NAME [--state open|accepted|rejected]        proposals to change the runbook
   proposal accept|reject ID                              decide a proposal (owner or lead)
 
+A runbook for a repository on one host (how to deploy the project on build-1)
+carries BOTH: --project P (default: the current one) and --machine M. Everyone with
+a role in the project reads it; the machine says where it applies, and running it
+there still needs approval and a person's allowance on that machine. Only a
+runbook that concerns the host alone (--global --machine M) stays private to the
+machine's owner.
+
 Run a runbook with: ctx run NAME [param=value ...] [--target T [--dry-run | --run]]`
 
 const runUsage = `usage: ctx run NAME [param=value ...] [--version N] [--project P]

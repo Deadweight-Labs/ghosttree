@@ -20,7 +20,8 @@ const requestUsage = `usage: ctx request <command>
   list [--json]                    list open requests
   search <query> [--json]          search requests for the current project
   show <id> [--json]               show one request
-  create --type T --title T [--description D] [--ac C...] [--explanation E] [--project P] [--json]
+  create --type T --title T [--description D] [--ac C...] [--explanation E] [--project P]
+                                   [--parent REQ-n] [--derived-from IDEA-n|PAIN-n|REQ-n|thread:n ...] [--json]
   move <id> --project P [--reason R] [--json]
   start <id> --session N [--role primary|related] [--json]
   pause|complete-work|abandon <work-id> --summary S [--json]
@@ -96,6 +97,9 @@ func cmdRequest(args []string, stdout io.Writer) int {
 		fs.Var(&criteria, "ac", "acceptance criterion")
 		project := fs.String("project", "", "project the request belongs to (remote or unique short name); default: the current one")
 		explanation := fs.String("explanation", "", "short plain-language note for the people who read the ledger")
+		parent := fs.String("parent", "", "parent issue, REQ-n of the same project")
+		var derived repeatedString
+		fs.Var(&derived, "derived-from", "what it came out of: IDEA-n, PAIN-n, REQ-n or thread:n (repeatable)")
 		if fs.Parse(rest) != nil || *typ == "" || *title == "" {
 			return requestCLIUsage(stdout)
 		}
@@ -105,7 +109,7 @@ func cmdRequest(args []string, stdout io.Writer) int {
 		if err != nil {
 			return writeRequestCLIError(stdout, jsonMode, 1, err)
 		}
-		detail, err := c.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: *typ, Title: *title, Description: *description, Priority: *priority, Scope: scope.Axes{Project: target}, SessionRef: currentSessionRef()}, Criteria: criteria, IdempotencyKey: *key, Explanation: *explanation})
+		detail, err := c.CreateRequest(requestdomain.CreateInput{Request: requestdomain.Request{Type: *typ, Title: *title, Description: *description, Priority: *priority, Scope: scope.Axes{Project: target}, SessionRef: currentSessionRef()}, Criteria: criteria, IdempotencyKey: *key, Explanation: *explanation, Parent: *parent, DerivedFrom: derived})
 		card := cliBuilder(cfg, target).RequestCard(detail)
 		return writeRequestCLIResultCard(stdout, jsonMode, detail, &card, err)
 	case "move":

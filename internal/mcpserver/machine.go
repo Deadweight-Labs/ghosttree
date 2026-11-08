@@ -55,6 +55,20 @@ func renderMachine(m store.Machine) string {
 		}
 		b.WriteString("\n")
 	}
+	if len(m.Entries) > 0 {
+		b.WriteString("entries that name this machine (knowledge and runbooks you may read):\n")
+		for _, e := range m.Entries {
+			where := "no project"
+			if e.Project != "" {
+				where = "project " + e.Project
+			}
+			kind := e.Kind
+			if e.Type != "" {
+				kind += "/" + e.Type
+			}
+			fmt.Fprintf(&b, "- %s #%d (%s): %s\n", kind, e.ID, where, oneLine(e.Title))
+		}
+	}
 	if len(m.Events) > 0 {
 		b.WriteString("latest changes:\n")
 		for _, e := range m.Events {
@@ -124,6 +138,6 @@ func listOrNone(list []string) string {
 func (s *Server) registerMachineTools(srv *mcp.Server) {
 	closed := false
 	additive := false
-	mcp.AddTool(srv, &mcp.Tool{Name: "machine_get", Description: "Read a machine: who owns it (a person, or an organization for shared hosts such as build servers), how you stand to it, and which organizations it is shared with and with which role. Without a name it lists the machines that concern you. A machine you have no part in answers like one that does not exist. Entries shared with your organization are found with context_search machine=<name>. Sharing a machine with an organization is done by a person in the web UI; this tool only reads.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closed}}, s.handleMachineGet)
+	mcp.AddTool(srv, &mcp.Tool{Name: "machine_get", Description: "Read a machine: who owns it (a person, or an organization for shared hosts such as build servers), how you stand to it, and which organizations it is shared with and with which role. Without a name it lists the machines that concern you. A machine you have no part in answers like one that does not exist. The page also lists the knowledge and runbooks that name this machine and that you may read: those of a project through your role in the project (knowledge about running a repository on this machine), those without a project only as owner of the machine or when shared with your organization. Search them with context_search machine=<name>. Sharing a machine with an organization is done by a person in the web UI; this tool only reads.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: &closed}}, s.handleMachineGet)
 	mcp.AddTool(srv, &mcp.Tool{Name: "machine_share_entry", Description: "Share one knowledge entry or runbook that has a machine scope with an organization, or take it back. Machine knowledge is private to the machine's owner until it is shared this way, and only into organizations a person has already shared the machine with (web UI). Only the owner of the machine (for organization machines a maintainer) may do it, and only for entries whose author may still vouch for the machine. To write an entry shared from the start, pass share_with_orgs to context_remember.", Annotations: &mcp.ToolAnnotations{DestructiveHint: &additive, IdempotentHint: true, OpenWorldHint: &closed}}, s.handleMachineShareEntry)
 }

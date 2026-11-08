@@ -311,6 +311,35 @@ func (b Builder) KnowledgeCard(k store.Knowledge) Card {
 	return c.Sanitized()
 }
 
+// Comment is the page of a comment: its object, anchored at the comment.
+func (b Builder) Comment(kind string, objectID, id int64) string {
+	var u string
+	switch kind {
+	case "request":
+		u = b.Issue(objectID)
+	case "idea":
+		u = b.Idea(objectID)
+	case "pain":
+		u = b.Pain(objectID)
+	}
+	if u == "" {
+		return ""
+	}
+	return u + "#comment-" + num(id)
+}
+
+// CommentCard describes a comment: where it hangs, who wrote it, the start of
+// its text. A deleted comment shows no text.
+func (b Builder) CommentCard(c store.Comment) Card {
+	ref := map[string]string{"request": "REQ", "idea": "IDEA", "pain": "PAIN"}[c.ObjectKind]
+	card := Card{Kind: "Comment", Ref: "#" + num(c.ID), Title: c.Body, Status: fmt.Sprintf("on %s-%d", ref, c.ObjectID), Who: c.Person, Next: "none",
+		URL: b.WithProject(c.Project).Comment(c.ObjectKind, c.ObjectID, c.ID)}
+	if c.Deleted {
+		card.Title, card.Status = "", card.Status+", deleted"
+	}
+	return card.Sanitized()
+}
+
 // MachineCard describes a machine for the person it concerns: who owns it, how
 // the viewer stands to it and with whom it is shared.
 func (b Builder) MachineCard(m store.Machine) Card {

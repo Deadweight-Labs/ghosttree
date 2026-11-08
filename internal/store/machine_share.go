@@ -572,11 +572,19 @@ func (s *Store) entryMachine(kind string, id int64) (machine string, author int6
 		if author == 0 {
 			author = instanceOwnerID(s.db)
 		}
+		if k.Scope.Project != "" {
+			// Mit Projekt gilt die Projektrolle; die Maschinenfreigabe ist nur für
+			// reines Maschinen-Wissen da.
+			return "", author, nil
+		}
 		return k.Scope.Machine, author, nil
 	case EntryRunbook:
 		ref, err := s.RunbookRefByID(id)
 		if err != nil {
 			return "", 0, ErrAccessNotFound
+		}
+		if ref.Project != "" {
+			return "", ref.AuthorID, nil
 		}
 		return ref.Machine, ref.AuthorID, nil
 	}
