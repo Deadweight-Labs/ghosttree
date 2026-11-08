@@ -46,7 +46,7 @@ func (s *Store) ReopenCriterion(id int64, reason, person string, anchor *gitanch
 		return requestdomain.NewRuleError("criterion_open", "acceptance criterion is already open", "nothing to reopen", nil)
 	}
 	ts := now()
-	anchorID, err := insertAnchorTx(tx, anchor)
+	anchorID, originID, err := insertWriteMetaTx(tx, anchor, nil)
 	if err != nil {
 		return err
 	}
@@ -54,15 +54,15 @@ func (s *Store) ReopenCriterion(id int64, reason, person string, anchor *gitanch
 		return err
 	}
 	data := fmt.Sprintf("AC-%d.%d (was %s) — %s", requestID, number, criterionState, strings.TrimSpace(reason))
-	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at,anchor_id) VALUES(?,'criterion.reopened',?,?,?,?)`, requestID, person, data, ts, anchorID); err != nil {
+	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at,anchor_id,origin_id) VALUES(?,'criterion.reopened',?,?,?,?,?)`, requestID, person, data, ts, anchorID, originID); err != nil {
 		return err
 	}
 	if requestState == "done" {
 		if _, err := tx.Exec(`UPDATE requests SET state='open',updated_at=? WHERE id=?`, ts, requestID); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at,anchor_id) VALUES(?,'request.reopened',?,?,?,?)`, requestID, person,
-			fmt.Sprintf("AC-%d.%d reopened", requestID, number), ts, anchorID); err != nil {
+		if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at,anchor_id,origin_id) VALUES(?,'request.reopened',?,?,?,?,?)`, requestID, person,
+			fmt.Sprintf("AC-%d.%d reopened", requestID, number), ts, anchorID, originID); err != nil {
 			return err
 		}
 	}

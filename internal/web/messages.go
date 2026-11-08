@@ -814,6 +814,7 @@ var messages = map[string]string{
 	"pains.result.state":              "State saved.",
 	"pains.state.active":              "Active",
 	"pains.state.mitigated":           "Mitigated",
+	"pains.state.accepted":            "Accepted",
 	"pains.state.resolved":            "Resolved",
 	"pains.state.obsolete":            "Obsolete",
 	"pains.event.created":             "Recorded",

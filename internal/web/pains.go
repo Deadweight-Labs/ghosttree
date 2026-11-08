@@ -18,7 +18,7 @@ import (
 const painsShown = 100
 
 var (
-	painStateKeys = map[string]string{"active": "pains.state.active", "mitigated": "pains.state.mitigated", "resolved": "pains.state.resolved", "obsolete": "pains.state.obsolete"}
+	painStateKeys = map[string]string{"active": "pains.state.active", "mitigated": "pains.state.mitigated", "accepted": "pains.state.accepted", "resolved": "pains.state.resolved", "obsolete": "pains.state.obsolete"}
 	painEventKeys = map[string]string{"created": "pains.event.created", "state": "pains.event.state", "corrected": "pains.event.corrected",
 		"link_added": "pains.event.link_added", "link_removed": "pains.event.link_removed"}
 	painEvidenceKeys = map[string]string{"commit": "requests.evidence.commit", "test": "requests.evidence.test", "file": "requests.evidence.file",
@@ -107,7 +107,7 @@ func (a *app) painsPage(w http.ResponseWriter, r *http.Request) {
 		}
 		byState[state] = append(byState[state], row)
 	}
-	for _, state := range []string{"active", "mitigated", "resolved"} {
+	for _, state := range []string{"active", "mitigated", "accepted", "resolved"} {
 		if rows := byState[state]; len(rows) > 0 {
 			v.Groups = append(v.Groups, painGroup{State: state, Label: label(l, painStateKeys, state), Rows: rows, Folded: state == "resolved"})
 		}

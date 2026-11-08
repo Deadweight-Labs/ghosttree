@@ -79,6 +79,7 @@ func (s *Store) ApplyRequestDistillation(sessionID int64, digest, promptVersion 
 	ts := now()
 	ref := "session:" + strconv.FormatInt(sessionID, 10)
 	created := 0
+	sessionAnchor := sessionAnchorTx(tx, sessionID)
 	for _, item := range items {
 		var chunkText string
 		if err := tx.QueryRow(`SELECT text FROM session_chunks WHERE session_id=? AND seq=?`,
@@ -116,6 +117,19 @@ func (s *Store) ApplyRequestDistillation(sessionID int64, digest, promptVersion 
 			// A distilled request belongs to the owner of the session it came from.
 			if err := recordRequestAuthorTx(tx, id, authorForWriteTx(tx, 0, "", "distilled", ref)); err != nil {
 				return 0, err
+			}
+			// Mit dem Stand der Quell-Session (REQ-597) bekommt der neue Eintrag sein
+			// Anlege-Ereignis, an dem der Anker hängt. Ohne Stand entsteht kein
+			// Ereignis, wie bisher.
+			if sessionAnchor != nil {
+				anchorID, err := insertAnchorTx(tx, sessionAnchor)
+				if err != nil {
+					return 0, err
+				}
+				if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at,anchor_id) VALUES(?,'request.created','',?,?,?)`,
+					id, item.Title, ts, anchorID); err != nil {
+					return 0, err
+				}
 			}
 			created++
 		}

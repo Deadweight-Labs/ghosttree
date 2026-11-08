@@ -750,7 +750,7 @@ func (a *app) reviewDecide(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "nothing to change", http.StatusConflict)
 		return
 	}
-	if err := a.store.UpdateKnowledgeBy(k.ID, plan.patch, personOf(r)); err != nil {
+	if err := a.store.UpdateKnowledgeFromWeb(k.ID, plan.patch, personOf(r)); err != nil {
 		http.Error(w, "could not save", http.StatusBadRequest)
 		return
 	}
@@ -814,7 +814,7 @@ func (a *app) reviewBulk(w http.ResponseWriter, r *http.Request) {
 		todo = append(todo, decision{k, plan})
 	}
 	for _, d := range todo {
-		if err := a.store.UpdateKnowledgeBy(d.k.ID, d.plan.patch, person); err != nil {
+		if err := a.store.UpdateKnowledgeFromWeb(d.k.ID, d.plan.patch, person); err != nil {
 			http.Error(w, "could not save", http.StatusBadRequest)
 			return
 		}
@@ -887,7 +887,7 @@ func (a *app) knowledgeEdit(w http.ResponseWriter, r *http.Request) {
 		patch["type"] = typ
 	}
 	if len(patch) > 0 {
-		if err := a.store.UpdateKnowledgeBy(k.ID, patch, personOf(r)); err != nil {
+		if err := a.store.UpdateKnowledgeFromWeb(k.ID, patch, personOf(r)); err != nil {
 			http.Error(w, "could not save", http.StatusBadRequest)
 			return
 		}

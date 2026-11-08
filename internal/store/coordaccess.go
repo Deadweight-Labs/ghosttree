@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
 )
 
 var (
@@ -1501,6 +1503,9 @@ func (a CoordAccess) CreateThread(thread Thread) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	if err := insertThreadEventTx(tx, id, ThreadEventOpened, a.Principal.Label, thread.Title, thread.GitAnchor); err != nil {
+		return 0, err
+	}
 	// A thread opened through the API (the MCP thread_open tool) lives in its
 	// project's room like one opened in the browser; without this row the room
 	// never listed it.
@@ -1989,10 +1994,13 @@ func (a CoordAccess) LinkThread(link ThreadLink) error {
 	return tx.Commit()
 }
 
-func (a CoordAccess) SetThreadState(threadID int64, state string) error {
+// SetThreadState ändert den Zustand. Der optionale Anker (REQ-597) ist der
+// Git-Stand des Schreibers, bei der Weboberfläche gitanchor.Web(); ein Aufruf, der
+// den Zustand nicht ändert, hält kein Ereignis fest.
+func (a CoordAccess) SetThreadState(threadID int64, state string, anchor ...*gitanchor.Anchor) error {
 	if a.Store != nil && a.Store.writer != nil {
-		return queueWrite(a.Store, []any{a.Principal, a.AgentExternalID, a.publicOnly, threadID, state}, func(d *Store, p []any) error {
-			return queuedCoordAccess(d, p).SetThreadState(p[3].(int64), p[4].(string))
+		return queueWrite(a.Store, []any{a.Principal, a.AgentExternalID, a.publicOnly, threadID, state, firstAnchor(anchor)}, func(d *Store, p []any) error {
+			return queuedCoordAccess(d, p).SetThreadState(p[3].(int64), p[4].(string), p[5].(*gitanchor.Anchor))
 		})
 	}
 	if state != ThreadOpen && state != ThreadResolved && state != ThreadDeferred {
@@ -2015,8 +2023,14 @@ func (a CoordAccess) SetThreadState(threadID int64, state string) error {
 	if state == ThreadResolved {
 		resolved = ts
 	}
-	if _, err := tx.Exec(`UPDATE threads SET state=?,resolved_at=?,updated_at=? WHERE id=? AND state<>?`, state, resolved, ts, threadID, state); err != nil {
+	res, err := tx.Exec(`UPDATE threads SET state=?,resolved_at=?,updated_at=? WHERE id=? AND state<>?`, state, resolved, ts, threadID, state)
+	if err != nil {
 		return err
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		if err := insertThreadEventTx(tx, threadID, ThreadEventState, a.Principal.Label, state, firstAnchor(anchor)); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }
@@ -2226,6 +2240,9 @@ func (a CoordAccess) PutThreadOutcome(outcome ThreadOutcome) error {
 		VALUES(?,?,?,?,?,?,?) ON CONFLICT(thread_id,kind,ref_id) DO UPDATE SET
 		state=excluded.state,note=excluded.note,decided_at=excluded.decided_at`,
 		outcome.ThreadID, outcome.Kind, outcome.RefID, state, outcome.Note, ts, decided); err != nil {
+		return err
+	}
+	if err := insertThreadEventTx(tx, outcome.ThreadID, ThreadEventOutcome, a.Principal.Label, outcomeEventData(outcome.Kind, outcome.RefID, state), outcome.GitAnchor); err != nil {
 		return err
 	}
 	return tx.Commit()

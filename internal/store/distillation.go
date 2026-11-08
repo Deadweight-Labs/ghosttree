@@ -5,8 +5,57 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 )
+
+// sessionAnchorTx liefert den Git-Stand einer Session, wie ihn ihre eigenen
+// Schreibzugriffe gemeldet haben (REQ-597): der jüngste Anker unter den
+// Einträgen, die diese Session selbst geschrieben hat (Entstehungskontext mit
+// ihrer Kennung). Ein Destillat entsteht auf dem Server, ohne Arbeitsverzeichnis;
+// das ist der einzige Stand, den die Quell-Session belegt. nil, wenn sie nie
+// etwas mit Anker geschrieben hat: dann bleibt das Destillat ohne, statt dass
+// einer geraten wird.
+func sessionAnchorTx(tx *sql.Tx, sessionID int64) *gitanchor.Anchor {
+	var external string
+	var account int64
+	if err := tx.QueryRow(`SELECT external_id, account_id FROM sessions WHERE id=?`, sessionID).Scan(&external, &account); err != nil || external == "" {
+		return nil
+	}
+	owner := instanceOwnerID(tx)
+	if account == 0 {
+		account = owner
+	}
+	// Die Kennung muss allein diesem Konto gehören. Der Server nimmt eine
+	// Session-Kennung im Header an, sobald irgendeine Session des Schreibers sie
+	// trägt; ein anderes Konto könnte so unter derselben Kennung (anderer
+	// Harness) verankert schreiben. Dann ist kein Anker der richtige.
+	var total, mine int
+	if err := tx.QueryRow(`SELECT COUNT(*), COALESCE(SUM(CASE WHEN (CASE WHEN account_id=0 THEN ? ELSE account_id END)=? THEN 1 ELSE 0 END),0)
+		FROM sessions WHERE external_id=?`, owner, account, external).Scan(&total, &mine); err != nil || total != mine {
+		return nil
+	}
+	var commit, branch, mergeBase string
+	var dirty int
+	err := tx.QueryRow(`SELECT a.commit_sha, a.branch, a.merge_base, a.dirty FROM (
+			SELECT anchor_id, origin_id FROM knowledge WHERE anchor_id IS NOT NULL AND origin_id IS NOT NULL
+			UNION ALL SELECT anchor_id, origin_id FROM request_activity WHERE anchor_id IS NOT NULL AND origin_id IS NOT NULL
+			UNION ALL SELECT anchor_id, origin_id FROM request_evidence WHERE anchor_id IS NOT NULL AND origin_id IS NOT NULL
+			UNION ALL SELECT anchor_id, origin_id FROM pain_events WHERE anchor_id IS NOT NULL AND origin_id IS NOT NULL
+			UNION ALL SELECT anchor_id, origin_id FROM coord_messages WHERE anchor_id IS NOT NULL AND origin_id IS NOT NULL
+			UNION ALL SELECT anchor_id, origin_id FROM ghost_files WHERE anchor_id IS NOT NULL AND origin_id IS NOT NULL
+			UNION ALL SELECT anchor_id, origin_id FROM thread_events WHERE anchor_id IS NOT NULL AND origin_id IS NOT NULL
+			UNION ALL SELECT anchor_id, origin_id FROM ideas WHERE anchor_id IS NOT NULL AND origin_id IS NOT NULL
+		) w
+		JOIN origin_contexts o ON o.id=w.origin_id
+		JOIN git_anchors a ON a.id=w.anchor_id
+		WHERE o.session_ref=?
+		ORDER BY a.captured_at DESC, a.id DESC LIMIT 1`, external).Scan(&commit, &branch, &mergeBase, &dirty)
+	if err != nil {
+		return nil
+	}
+	return &gitanchor.Anchor{Commit: commit, Branch: branch, MergeBase: mergeBase, Dirty: dirty != 0}
+}
 
 type SessionDistilledItem struct {
 	Type     string `json:"type"`
@@ -63,6 +112,9 @@ func (s *Store) ApplySessionDistillation(sessionID int64, digest, promptVersion 
 	}
 	ts := now()
 	inserted := 0
+	// Alle Funde dieses Laufs stammen aus einer Session und teilen ihren Stand,
+	// jeder Eintrag bekommt aber eine eigene Anker-Zeile.
+	sessionAnchor := sessionAnchorTx(tx, sessionID)
 	for _, item := range items {
 		itemScope := scope.DefaultAxes(item.Type, ax)
 		var chunkText string
@@ -90,8 +142,12 @@ func (s *Store) ApplySessionDistillation(sessionID int64, digest, promptVersion 
 		// observed_at starts at the run time and is corrected to the session's
 		// own start once the evidence row exists, a few lines down. No entry is
 		// left with an empty one even if a future path forgets the evidence.
-		res, err := tx.Exec(`INSERT INTO knowledge(type,title,body,project,branch,machine,confidence,status,origin,session_ref,observed_at,created_at,updated_at)
-			VALUES(?,?,?,?,?,?,'quarantined','active','distilled',?,?,?,?)`, item.Type, item.Title, item.Body, itemScope.Project, itemScope.Branch, itemScope.Machine, "session:"+strconv.FormatInt(sessionID, 10)+"#"+strconv.Itoa(item.ChunkSeq), ts, ts, ts)
+		anchorID, err := insertAnchorTx(tx, sessionAnchor)
+		if err != nil {
+			return 0, err
+		}
+		res, err := tx.Exec(`INSERT INTO knowledge(type,title,body,project,branch,machine,confidence,status,origin,session_ref,observed_at,created_at,updated_at,anchor_id)
+			VALUES(?,?,?,?,?,?,'quarantined','active','distilled',?,?,?,?,?)`, item.Type, item.Title, item.Body, itemScope.Project, itemScope.Branch, itemScope.Machine, "session:"+strconv.FormatInt(sessionID, 10)+"#"+strconv.Itoa(item.ChunkSeq), ts, ts, ts, anchorID)
 		if err != nil {
 			return 0, err
 		}

@@ -365,11 +365,11 @@ func (s *Store) AddCriterion(requestID int64, description, person string, anchor
 	if err != nil {
 		return requestdomain.Criterion{}, err
 	}
-	anchorID, err := insertAnchorTx(tx, firstAnchor(anchor))
+	anchorID, originID, err := insertWriteMetaTx(tx, firstAnchor(anchor), nil)
 	if err != nil {
 		return requestdomain.Criterion{}, err
 	}
-	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at,anchor_id) VALUES(?,'criterion.added',?,?,?,?)`, requestID, person, description, ts, anchorID); err != nil {
+	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at,anchor_id,origin_id) VALUES(?,'criterion.added',?,?,?,?,?)`, requestID, person, description, ts, anchorID, originID); err != nil {
 		return requestdomain.Criterion{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -514,11 +514,11 @@ func (s *Store) DropRequest(id int64, reason, person string, anchor ...*gitancho
 		}
 		return terminalRequestError(id, state)
 	}
-	anchorID, err := insertAnchorTx(tx, firstAnchor(anchor))
+	anchorID, originID, err := insertWriteMetaTx(tx, firstAnchor(anchor), nil)
 	if err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at,anchor_id) VALUES(?,'request.dropped',?,?,?,?)`, id, person, reason, ts, anchorID); err != nil {
+	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at,anchor_id,origin_id) VALUES(?,'request.dropped',?,?,?,?,?)`, id, person, reason, ts, anchorID, originID); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -586,11 +586,11 @@ func (s *Store) AddRequestRelation(requestID int64, relation requestdomain.Relat
 	if err != nil {
 		return requestdomain.Relation{}, err
 	}
-	anchorID, err := insertAnchorTx(tx, firstAnchor(anchor))
+	anchorID, originID, err := insertWriteMetaTx(tx, firstAnchor(anchor), nil)
 	if err != nil {
 		return requestdomain.Relation{}, err
 	}
-	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at,anchor_id) VALUES(?,'relation.added',?,?,?,?)`, requestID, person, relationAddedData(relation), ts, anchorID); err != nil {
+	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at,anchor_id,origin_id) VALUES(?,'relation.added',?,?,?,?,?)`, requestID, person, relationAddedData(relation), ts, anchorID, originID); err != nil {
 		return requestdomain.Relation{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -668,11 +668,11 @@ func (s *Store) StartRequestWork(requestID, sessionID int64, role, person string
 	if err != nil {
 		return requestdomain.Work{}, nil, err
 	}
-	anchorID, err := insertAnchorTx(tx, firstAnchor(anchor))
+	anchorID, originID, err := insertWriteMetaTx(tx, firstAnchor(anchor), nil)
 	if err != nil {
 		return requestdomain.Work{}, nil, err
 	}
-	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at,session_id,anchor_id) VALUES(?,'work.started',?,?,?,?,?)`, requestID, person, fmt.Sprintf("session:%d role:%s", sessionID, role), ts, sessionID, anchorID); err != nil {
+	if _, err := tx.Exec(`INSERT INTO request_activity(request_id,kind,person,data,created_at,session_id,anchor_id,origin_id) VALUES(?,'work.started',?,?,?,?,?,?)`, requestID, person, fmt.Sprintf("session:%d role:%s", sessionID, role), ts, sessionID, anchorID, originID); err != nil {
 		return requestdomain.Work{}, nil, err
 	}
 	if err := tx.Commit(); err != nil {

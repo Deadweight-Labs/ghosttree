@@ -66,6 +66,9 @@ type Evidence struct {
 	// Origin ist der Entstehungskontext des Nachweises (REQ-600), vom Server aus
 	// der Session des Clients gesetzt. Er wird gespeichert, nicht ausgeliefert.
 	Origin *originctx.Context `json:"-"`
+	// Via nennt den Weg, wenn es keinen Anker geben kann: "web" für einen Nachweis
+	// aus der Weboberfläche (REQ-597). Wird beim Lesen gesetzt.
+	Via string `json:"via,omitempty"`
 }
 
 type Work struct {
@@ -106,6 +109,9 @@ type Activity struct {
 	// GitAnchor ist der Git-Stand, an dem das Ereignis geschrieben wurde
 	// (REQ-597); nil bei Ereignissen ohne Anker.
 	GitAnchor *gitanchor.Anchor `json:"git_anchor,omitempty"`
+	// Via nennt den Weg, wenn es keinen Anker geben kann: "web" für ein Ereignis
+	// aus der Weboberfläche (REQ-597). Leer sonst.
+	Via string `json:"via,omitempty"`
 	// SessionID: die Session, auf die sich der Eintrag bezieht (0 = keine).
 	// Nie ausgeliefert; die Sicht des Betrachters entscheidet damit, ob sie
 	// den Eintrag zeigen darf.

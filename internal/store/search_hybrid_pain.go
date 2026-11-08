@@ -9,7 +9,7 @@ import (
 )
 
 // SearchPains lists pains of a project for a viewer. Without a state filter it
-// returns active and mitigated; "all" returns every state. With a query it is a
+// returns the open ones (active and mitigated); "all" returns every state. With a query it is a
 // hybrid search when an embedding server is configured and pains are switched on
 // for search (see SearchPainsWith).
 func (a *ProjectAccess) SearchPains(f pain.Filter) ([]pain.Pain, error) {
@@ -195,7 +195,7 @@ func (s *Store) painRows(f pain.Filter) ([]pain.Pain, error) {
 	}
 	args = append(args, limit)
 	rows, err := s.db.Query(`SELECT `+painCols+painFrom+` WHERE `+strings.Join(where, ` AND `)+
-		` ORDER BY `+order+`CASE p.state WHEN 'active' THEN 0 WHEN 'mitigated' THEN 1 WHEN 'resolved' THEN 2 ELSE 3 END, p.id LIMIT ?`, args...)
+		` ORDER BY `+order+`CASE p.state WHEN 'active' THEN 0 WHEN 'mitigated' THEN 1 WHEN 'accepted' THEN 2 WHEN 'resolved' THEN 3 ELSE 4 END, p.id LIMIT ?`, args...)
 	if err != nil {
 		return nil, err
 	}

@@ -106,6 +106,16 @@ type ghRelease struct {
 // LatestStable finds the newest published, non-prerelease release of repo
 // ("owner/name") through the GitHub release API at apiBase.
 func (s Source) LatestStable(ctx context.Context, apiBase, repo string) (Candidate, error) {
+	return s.LatestRelease(ctx, apiBase, repo, false)
+}
+
+// LatestRelease is LatestStable with the choice of ctx update --pre: with pre
+// the release candidates (tags like v0.1.0-rc.3, published as prereleases) are
+// candidates as well, and the newest version wins, so v0.1.0 beats
+// v0.1.0-rc.3. Other pre-release tags (-dev, -beta) stay out either way. The
+// checks in Fetch do not depend on the choice: a candidate is signed and its
+// checksum is compared exactly as for a final release.
+func (s Source) LatestRelease(ctx context.Context, apiBase, repo string, pre bool) (Candidate, error) {
 	b, err := s.get(ctx, strings.TrimSuffix(apiBase, "/")+"/repos/"+repo+"/releases?per_page=50", maxTextBytes)
 	if err != nil {
 		return Candidate{}, fmt.Errorf("release list: %w", err)
@@ -118,7 +128,10 @@ func (s Source) LatestStable(ctx context.Context, apiBase, repo string) (Candida
 	for i := range rels {
 		r := &rels[i]
 		v := strings.TrimPrefix(r.TagName, "v")
-		if r.Draft || r.Prerelease || version.Channel(v) != version.ChannelStable || strings.Contains(v, "-") {
+		if r.Draft || version.Channel(v) != version.ChannelStable {
+			continue
+		}
+		if !pre && (r.Prerelease || strings.Contains(v, "-")) {
 			continue
 		}
 		if best == nil || version.Compare(strings.TrimPrefix(best.TagName, "v"), v) == version.Newer {
@@ -126,7 +139,10 @@ func (s Source) LatestStable(ctx context.Context, apiBase, repo string) (Candida
 		}
 	}
 	if best == nil {
-		return Candidate{}, errors.New("no stable release published yet (release candidates are not installed by the stable channel)")
+		if pre {
+			return Candidate{}, errors.New("no release or release candidate published yet")
+		}
+		return Candidate{}, errors.New("no stable release published yet (release candidates are not installed by the stable channel; --pre includes them)")
 	}
 	v := strings.TrimPrefix(best.TagName, "v")
 	c := Candidate{Version: v, Tag: best.TagName, Archive: s.archiveName(v), Channel: version.ChannelStable,

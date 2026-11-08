@@ -15,9 +15,10 @@ import (
 const painUsage = `usage: ctx pain <command>
 
   add "title" [--body B] [--explanation E] [--motivates REQ-98|IDEA-3|#42|URL ...] [--project P]
-  list [--state active|mitigated|resolved|obsolete|all] [--request N] [--q text] [--project P]
+  list [--state active|mitigated|accepted|resolved|obsolete|all] [--request N] [--q text] [--project P]
   show <PAIN-n|n>
-  state <n> <mitigated|resolved|obsolete|active> [--remaining R] [--evidence commit:abc|test:T|request:98|decision:42|url:U|file:F|session:S] [--note N]
+  state <n> <mitigated|accepted|resolved|obsolete|active> [--remaining R] [--evidence commit:abc|test:T|request:98|decision:42|url:U|file:F|session:S] [--note N]
+        accepted = one lives with it on purpose (counts as closed); it needs --note with the reason
   edit <n> [--title T] [--body B] --reason R
   link <n> (--request N | --idea N | --knowledge ID | --ref "text or url")
   unlink <link-id> --reason R
@@ -60,6 +61,9 @@ func painDetailLines(stdout io.Writer, d pain.Detail) {
 	fmt.Fprintf(stdout, "%s [%s] %s\n", p.HumanID(), p.State, p.Title)
 	if p.Remaining != "" {
 		fmt.Fprintf(stdout, "remaining: %s\n", p.Remaining)
+	}
+	if p.AcceptedReason != "" {
+		fmt.Fprintf(stdout, "accepted because: %s\n", p.AcceptedReason)
 	}
 	if strings.TrimSpace(p.Body) != "" {
 		fmt.Fprintf(stdout, "\n%s\n", p.Body)
@@ -113,7 +117,7 @@ func cmdPain(args []string, stdout io.Writer) int {
 	if err != nil {
 		return writeRequestCLIError(stdout, jsonMode, 1, err)
 	}
-	c := client.New(cfg)
+	c := anchoredClient(cfg)
 	result := func(d pain.Detail, err error) int {
 		card := cliBuilder(cfg, d.Pain.Project).PainCard(d.Pain)
 		if err == nil && !jsonMode {
@@ -153,7 +157,7 @@ func cmdPain(args []string, stdout io.Writer) int {
 	case "list":
 		fs := flag.NewFlagSet("pain list", flag.ContinueOnError)
 		fs.SetOutput(stdout)
-		state := fs.String("state", "", "active, mitigated, resolved, obsolete or all")
+		state := fs.String("state", "", "active, mitigated, accepted, resolved, obsolete or all")
 		request := fs.String("request", "", "only pains that motivate this request")
 		q := fs.String("q", "", "words in title or text")
 		project := fs.String("project", "", "project; default: the current one")
@@ -192,6 +196,9 @@ func cmdPain(args []string, stdout io.Writer) int {
 			if p.State == pain.Mitigated {
 				fmt.Fprintf(stdout, "%-8s %-10s remaining: %s\n", "", "", p.Remaining)
 			}
+			if p.State == pain.Accepted {
+				fmt.Fprintf(stdout, "%-8s %-10s accepted because: %s\n", "", "", p.AcceptedReason)
+			}
 		}
 		return 0
 	case "show":
@@ -216,11 +223,16 @@ func cmdPain(args []string, stdout io.Writer) int {
 		fs.SetOutput(stdout)
 		remaining := fs.String("remaining", "", "what is still unsolved (mitigated)")
 		evidence := fs.String("evidence", "", "kind:ref")
-		note := fs.String("note", "", "why")
+		note := fs.String("note", "", "why (required for accepted, obsolete and back to active)")
+		reason := fs.String("reason", "", "same as --note")
 		if fs.Parse(flags) != nil {
 			return usageErr()
 		}
-		return result(c.SetPainState(id, pos[1], *remaining, parseEvidence(*evidence), *note, cliSessionID(c, cfg)))
+		why := *note
+		if why == "" {
+			why = *reason
+		}
+		return result(c.SetPainState(id, pos[1], *remaining, parseEvidence(*evidence), why, cliSessionID(c, cfg)))
 	case "edit":
 		pos, flags := splitLeading(rest)
 		if len(pos) != 1 {

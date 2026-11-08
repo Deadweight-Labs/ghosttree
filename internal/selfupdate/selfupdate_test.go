@@ -361,3 +361,39 @@ func TestBuildFromSourceBuildsTheDevBranch(t *testing.T) {
 }
 
 func timeAt(i int) time.Time { return time.Unix(1_700_000_000+int64(i)*100, 0) }
+
+func TestLatestReleaseWithPreTakesTheNewestIncludingCandidates(t *testing.T) {
+	f := newRelease(t, nil)
+	src := Source{HTTP: f.srv.Client(), GOOS: goos, GOARCH: goarch}
+	ctx := context.Background()
+	// The fake lists v1.3.0-rc.1 (prerelease, no assets), v1.1.0 and v1.2.0. The
+	// release candidate is newer than both, so with pre it is the pick, and
+	// without pre it stays out.
+	cand, err := src.LatestRelease(ctx, f.srv.URL, "Deadweight-Labs/ghosttree", true)
+	if cand.Version != "1.3.0-rc.1" || cand.Tag != "v1.3.0-rc.1" {
+		t.Fatalf("pre picked %+v (err %v)", cand, err)
+	}
+	if err == nil {
+		t.Fatalf("the candidate has no assets and must be reported as incomplete, not installed")
+	}
+	cand, err = src.LatestRelease(ctx, f.srv.URL, "Deadweight-Labs/ghosttree", false)
+	if err != nil || cand.Version != "1.2.0" {
+		t.Fatalf("without pre: %+v (err %v)", cand, err)
+	}
+}
+
+func TestLatestReleaseWithPreStillRefusesAnUnsignedCandidate(t *testing.T) {
+	var base string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/Deadweight-Labs/ghosttree/releases", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `[{"tag_name":"v0.1.0-rc.3","prerelease":true,"assets":[{"name":"ctx_0.1.0-rc.3_linux_amd64.tar.gz","browser_download_url":"%[1]s/a"},{"name":"checksums.txt","browser_download_url":"%[1]s/s"}]},{"tag_name":"v0.1.0-beta.1","prerelease":true,"assets":[]}]`, base)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	base = srv.URL
+	src := Source{HTTP: srv.Client(), GOOS: goos, GOARCH: goarch}
+	_, err := src.LatestRelease(context.Background(), srv.URL, "Deadweight-Labs/ghosttree", true)
+	if err == nil || !strings.Contains(err.Error(), "unsigned") {
+		t.Fatalf("err = %v, want the unsigned release refused", err)
+	}
+}

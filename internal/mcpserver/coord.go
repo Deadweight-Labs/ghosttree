@@ -222,8 +222,9 @@ func (s *Server) handleCoordSend(ctx context.Context, _ *mcp.CallToolRequest, in
 	// Bewusst nicht "delivered" oder "sent": gespeichert ist, was dieser
 	// Aufruf weiß. Ob ein anderer Agent das liest, hängt an dessen Harness
 	// und wird hier nicht behauptet (Spec §A7).
-	return coordText(fmt.Sprintf("stored as message %d in %s. Other agents see it when they read their inbox; "+
-		"whether a running session is interrupted for it depends on its harness.", id, key) + s.mentionNote(id, in.Body)), nil, nil
+	return s.withCard(coordText(fmt.Sprintf("stored as message %d in %s. Other agents see it when they read their inbox; "+
+		"whether a running session is interrupted for it depends on its harness.", id, key)+s.mentionNote(id, in.Body)),
+		s.builder().MessageCard(store.MessageHit{ID: id, RoomKey: key, Sender: sender, Body: in.Body})), nil, nil
 }
 
 // mentionNote says whom an @name in the body reached, so the sender can see
@@ -498,9 +499,10 @@ func (s *Server) handleCoordDM(ctx context.Context, _ *mcp.CallToolRequest, in C
 	if err != nil {
 		return nil, nil, err
 	}
-	return coordText(fmt.Sprintf("stored as message %d in a private %s room with %s. "+
+	return s.withCard(coordText(fmt.Sprintf("stored as message %d in a private %s room with %s. "+
 		"Nobody outside it can read this, including through search or summaries.",
-		id, kind, strings.Join(in.To, ", ")+" ("+key+")")), nil, nil
+		id, kind, strings.Join(in.To, ", ")+" ("+key+")")),
+		s.builder().MessageCard(store.MessageHit{ID: id, RoomKey: key, Sender: s.coordRef(), Body: in.Body})), nil, nil
 }
 
 func (s *Server) handleCoordDMRead(ctx context.Context, _ *mcp.CallToolRequest, in CoordDMReadInput) (*mcp.CallToolResult, any, error) {

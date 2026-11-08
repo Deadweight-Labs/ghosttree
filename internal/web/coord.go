@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
@@ -581,7 +582,7 @@ func (a *app) coordSetThreadState(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "thread is required", http.StatusBadRequest)
 		return
 	}
-	if err := a.browserCoord(r).SetThreadState(threadID, strings.TrimSpace(r.FormValue("state"))); err != nil {
+	if err := a.browserCoord(r).SetThreadState(threadID, strings.TrimSpace(r.FormValue("state")), gitanchor.Web()); err != nil {
 		coordHTTPError(l, w, err)
 		return
 	}

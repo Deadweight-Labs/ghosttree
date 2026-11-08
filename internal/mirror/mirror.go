@@ -237,7 +237,7 @@ func index(in Input, knowledgeCount int) string {
 			len(in.Threads), plural(len(in.Threads), "", "s"), open)
 	}
 	if len(in.Pains) > 0 {
-		fmt.Fprintf(&b, "- `pains/` — %d %s: problems recorded without a solution, by state (active, mitigated, resolved, obsolete), with what they motivate.\n",
+		fmt.Fprintf(&b, "- `pains/` — %d %s: problems recorded without a solution, by state (active, mitigated, accepted, resolved, obsolete), with what they motivate.\n",
 			len(in.Pains), plural(len(in.Pains), "pain", "pains"))
 	}
 	fmt.Fprintf(&b, "- `tree/` — descriptions for %d of %d paths in this repository, one file each.\n\n",
@@ -369,6 +369,9 @@ func painBody(v PainView) string {
 	fmt.Fprintf(&b, "%s | %s\n", scopeLabel(scope.Axes{Project: p.Project}), p.State)
 	if strings.TrimSpace(p.Remaining) != "" {
 		fmt.Fprintf(&b, "\nRemaining: %s\n", strings.TrimSpace(p.Remaining))
+	}
+	if strings.TrimSpace(p.AcceptedReason) != "" {
+		fmt.Fprintf(&b, "\nAccepted because: %s\n", strings.TrimSpace(p.AcceptedReason))
 	}
 	if body := strings.TrimRight(p.Body, "\n"); body != "" {
 		b.WriteString("\n" + body + "\n")

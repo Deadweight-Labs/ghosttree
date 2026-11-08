@@ -3,7 +3,9 @@ package main
 import (
 	"flag"
 	"fmt"
+	"github.com/Deadweight-Labs/ghosttree/internal/links"
 	"io"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -27,7 +29,7 @@ const searchUsage = `usage: ctx search [--project P] [--kind K] [--limit N] [--j
        ctx search --delete-preset ID
 
 The query is words and qualifiers, like GitHub:
-  is:open|closed|done|pain|idea|issue|knowledge|<state>  kind:  type:  repo:owner/name  branch:  commit:<7+ hex>
+  is:open|closed|done|pain|idea|issue|knowledge|message|session|<state>  kind:  type:  repo:owner/name  branch:  commit:<7+ hex>
   pr:12  pr:10..14  package:N  req:N  task:N  pain:N  idea:N  parent:N  blocks:N  author:  for:  (@me is you)
   label:name  -label:name  area:<path prefix>  topic:<name>  created:>2026-11-01  updated:<7d  since:  until:
   -qualifier negates, a,b means a or b, "..." groups. An unknown qualifier is an error.
@@ -39,7 +41,7 @@ func cmdSearch(args []string, stdout io.Writer) int {
 	fs := flag.NewFlagSet("search", flag.ContinueOnError)
 	fs.SetOutput(stdout)
 	project := fs.String("project", "", "project (remote or unique short name); default: the current one")
-	kind := fs.String("kind", "all", "knowledge, requests, pains, ideas, criteria, tasks, files or all")
+	kind := fs.String("kind", "all", "knowledge, requests, pains, ideas, criteria, tasks, files, sessions, messages or all")
 	limit := fs.Int("limit", 20, "hits per kind")
 	preset := fs.String("preset", "", "run a saved search by name")
 	presets := fs.Bool("presets", false, "list the saved searches")
@@ -108,9 +110,11 @@ func cmdSearch(args []string, stdout io.Writer) int {
 	case *save != "":
 		p, err := c.SavePreset(target, *scopeKind, *save, *description, lines)
 		if err != nil || jsonMode {
-			return writeRequestCLIResult(stdout, jsonMode, p, nil, err)
+			card := cliBuilder(cfg, target).PresetCard(p, nil)
+			return writeRequestCLIResultCard(stdout, jsonMode, p, &card, err)
 		}
 		fmt.Fprintf(stdout, "saved %s [%s]\n", p.Name, p.Scope)
+		cliCard(stdout, cliBuilder(cfg, target).PresetCard(p, nil))
 		return 0
 	case *deleteID != 0:
 		if err := c.DeletePreset(*deleteID); err != nil {
@@ -126,11 +130,20 @@ func cmdSearch(args []string, stdout io.Writer) int {
 			}
 		}
 		res, err := c.RunPreset(target, *preset, run, *limit)
+		var card *links.Card
+		if err == nil {
+			if cd, ok := links.PresetCardFor(c, cliBuilder(cfg, target), target, res.Preset.Name, run); ok {
+				card = &cd
+			}
+		}
 		if err != nil || jsonMode {
-			return writeRequestCLIResult(stdout, jsonMode, res, nil, err)
+			return writeRequestCLIResultCard(stdout, jsonMode, res, card, err)
 		}
 		fmt.Fprintf(stdout, "search %s: %s\n", res.Preset.Name, strings.Join(res.Queries, " | "))
 		fmt.Fprint(stdout, mcpserver.RenderQualifiedLinked(res.Result, cliBuilder(cfg, target)))
+		if card != nil {
+			cliCard(stdout, *card)
+		}
 		return 0
 	}
 	line := strings.TrimSpace(strings.Join(positional, " "))
@@ -144,7 +157,7 @@ func cmdSearch(args []string, stdout io.Writer) int {
 	}
 	ax := requestProjectAxes(cfg.Machine)
 	ax.Project = target
-	res, err := c.SearchAnchored(line, *kind, ax, *limit, false, client.AnchorFilter{})
+	res, err := c.SearchAnchored(line, *kind, ax, *limit, false, client.AnchorFilter{Agent: os.Getenv(agentIDEnv)})
 	if err != nil || jsonMode {
 		return writeRequestCLIResult(stdout, jsonMode, res, nil, err)
 	}

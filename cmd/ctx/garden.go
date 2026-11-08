@@ -467,6 +467,9 @@ func gardenDue(st gardenStore, project string, opts gardenOpts, stdout io.Writer
 		}
 		e := garden.Entry{ID: k.ID, Type: k.Type, Title: k.Title, Body: k.Body, ObservedAt: k.ObservedAt, CreatedAt: k.CreatedAt, UpdatedAt: k.UpdatedAt,
 			Regression: k.RegressionState}
+		if k.GitAnchor != nil {
+			e.AnchorCommit = k.GitAnchor.Commit
+		}
 		e.AskCover = e.Type == "pitfall" && e.Regression == "" && !garden.CoverProposed(withArchived, e)
 		entries = append(entries, e)
 		known[e.ID] = e

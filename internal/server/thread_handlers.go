@@ -45,6 +45,7 @@ func (a *api) createThread(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "project is required")
 		return
 	}
+	in.GitAnchor = anchorFromRequest(r)
 	id, err := access.CreateThread(in)
 	if err != nil {
 		if err == store.ErrCoordForbidden || err == store.ErrCoordNotFound {
@@ -206,7 +207,7 @@ func (a *api) setThreadState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if in.State != "" {
-		if err := access.SetThreadState(id, in.State); err != nil {
+		if err := access.SetThreadState(id, in.State, anchorFromRequest(r)); err != nil {
 			if err == store.ErrCoordForbidden || err == store.ErrCoordNotFound {
 				writeCoordAccessError(w, err)
 				return
@@ -362,6 +363,7 @@ func (a *api) putThreadOutcome(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.ThreadID = id
+	in.GitAnchor = anchorFromRequest(r)
 	if err := access.PutThreadOutcome(in); err != nil {
 		if err == store.ErrCoordForbidden || err == store.ErrCoordNotFound {
 			writeCoordAccessError(w, err)
@@ -428,6 +430,7 @@ func (a *api) createThreadByRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.access(r).Filtered()
+	in.GitAnchor = anchorFromRequest(r)
 	id, err := a.st.CreateThreadByRole(principalOf(r), in)
 	if err != nil {
 		if err == store.ErrCoordForbidden || err == store.ErrCoordNotFound {

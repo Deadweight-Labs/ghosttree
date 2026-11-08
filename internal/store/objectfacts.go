@@ -82,7 +82,7 @@ func chunked(ids []int64, fn func(part []int64) error) error {
 }
 
 // ObjectFacts liefert die Eigenschaften der Objekte einer Art (request, pain,
-// idea, knowledge, criterion, task), nach Objekt-Id. Ohne Zugriffsprüfung: der
+// idea, knowledge, criterion, task, message), nach Objekt-Id. Ohne Zugriffsprüfung: der
 // Aufrufer ruft es nur für Treffer, die der Betrachter schon lesen darf.
 func (s *Store) ObjectFacts(kind string, ids []int64) (map[int64]ObjectFacts, error) {
 	if s.reader != nil {
@@ -97,7 +97,7 @@ func (s *Store) ObjectFacts(kind string, ids []int64) (map[int64]ObjectFacts, er
 		return s.requestFacts(ids)
 	case "criterion", "task":
 		return s.derivedFacts(kind, ids)
-	case "pain", "idea", "knowledge":
+	case "pain", "idea", "knowledge", "message":
 		return s.plainFacts(kind, ids)
 	}
 	return nil, fmt.Errorf("no facts for %q", kind)
@@ -154,6 +154,9 @@ func (s *Store) plainFacts(kind string, ids []int64) (map[int64]ObjectFacts, err
 		table, ownerCol = "pain_events", "pain_id"
 	case "idea":
 		table = "ideas"
+	case "message":
+		// Raum-Nachrichten tragen Anker und Kontext, aber keine Labels.
+		table = "coord_messages"
 	}
 	err := chunked(ids, func(part []int64) error {
 		rows, err := s.db.Query(`SELECT t.`+ownerCol+`, t.id, a.commit_sha, a.branch, a.pr FROM `+table+` t
@@ -206,6 +209,9 @@ func (s *Store) plainFacts(kind string, ids []int64) (map[int64]ObjectFacts, err
 	})
 	if err != nil {
 		return nil, err
+	}
+	if kind == "message" {
+		return out, nil
 	}
 	if err := s.applyLabels(kind, ids, out); err != nil {
 		return nil, err

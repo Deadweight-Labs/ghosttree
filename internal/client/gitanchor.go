@@ -20,8 +20,9 @@ import (
 func (c *Client) SetAnchorSource(f func() gitanchor.Anchor) { c.anchor = f }
 
 // anchoredWrites sind die schreibenden Routen, deren Server-Handler einen Anker
-// speichern: Wissen, Ghost-Beschreibungen, Request-Fortschritt, Pains, Ideen und
-// Raum-Nachrichten (auch Antworten in Diskussionen). Die Liste steht hier und
+// speichern: Wissen, Ghost-Beschreibungen, Request-Fortschritt, Pains, Ideen,
+// Raum-Nachrichten (auch Antworten in Diskussionen) und Thread-Aktionen (Anlegen,
+// Zustand, Ergebnis). Die Liste steht hier und
 // nicht als "jedes POST", damit ein Schreibzugriff ohne Handler für den Anker
 // auch keine git-Aufrufe auslöst.
 var anchoredWrites = regexp.MustCompile(`^(` +
@@ -31,6 +32,8 @@ var anchoredWrites = regexp.MustCompile(`^(` +
 	`|POST /api/criteria/\d+/reopen` +
 	`|POST /api/pains/\d+/(state|links)` +
 	`|PATCH /api/pains/\d+` +
+	`|POST /api/threads` +
+	`|POST /api/threads/\d+/(state|outcomes)` +
 	`|POST /api/runbooks` +
 	`|POST /api/runbooks/\d+/runs` +
 	`|POST /api/runbook-proposals/\d+/decide` +
@@ -88,9 +91,15 @@ type AnchorFilter struct {
 	// Bereich. Er steht hier, damit es für die Suche eine einzige Filter-
 	// Struktur gibt, die eine Qualifier-Sprache später direkt füllen kann.
 	Origin OriginFilter
+	// Agent ist der registrierte Agent, in dessen Räumen die Suche Nachrichten
+	// lesen darf (agent_external_id). Leer: die Räume des Kontos.
+	Agent string
 }
 
 func (f AnchorFilter) apply(q url.Values) {
+	if f.Agent != "" {
+		q.Set("agent_external_id", f.Agent)
+	}
 	applyOrigin(q, f.Origin)
 	if f.Commit != "" {
 		q.Set("commit", f.Commit)

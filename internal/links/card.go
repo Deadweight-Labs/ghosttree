@@ -214,6 +214,8 @@ func (b Builder) PainCard(p pain.Pain) Card {
 	switch {
 	case p.State == "resolved":
 		c.Next = "none"
+	case p.State == "accepted":
+		c.Next = "none; accepted: " + p.AcceptedReason
 	case p.Remaining != "":
 		c.Next = "remaining: " + p.Remaining
 		c.Who = "agent"
@@ -308,6 +310,17 @@ func (b Builder) ThreadCard(t store.Thread, message int64) Card {
 	return c.Sanitized()
 }
 
+// MessageCard describes a message in a room: the start of its text, the room,
+// who said it. The link leads to the room.
+func (b Builder) MessageCard(m store.MessageHit) Card {
+	room := m.RoomLabel
+	if room == "" {
+		room = m.RoomKey
+	}
+	return Card{Kind: "Message", Ref: fmt.Sprintf("#%d", m.ID), Title: m.Body, Status: "in " + room, Who: m.Sender,
+		Next: "none", URL: b.RoomChat(m.RoomKey)}.Sanitized()
+}
+
 // SessionCard describes a session.
 func (b Builder) SessionCard(s store.Session) Card {
 	id := s.PublicID
@@ -367,4 +380,23 @@ func (b Builder) PresetCard(p store.SearchPreset, args map[string]string) Card {
 // SummaryOf reduces a runbook view to the line of the list, for its card.
 func SummaryOf(v runbook.View) runbook.Summary {
 	return runbook.Summary{ID: v.ID, Name: v.Name, Project: v.Project, Machine: v.Machine, Purpose: v.Spec.Purpose, Head: v.Head, ApprovedVersion: v.ApprovedVersion}
+}
+
+// PresetCardFor finds the saved search name among those the account sees in
+// project and describes it with the values the run was given. No card when it
+// cannot be found: a card needs the scope of the search for its address.
+func PresetCardFor(api interface {
+	ListPresets(project string) ([]store.SearchPreset, error)
+}, b Builder, project, name string, args map[string]string) (Card, bool) {
+	list, err := api.ListPresets(project)
+	if err != nil {
+		return Card{}, false
+	}
+	for _, p := range list {
+		if p.Name == name {
+			c := b.WithProject(project).PresetCard(p, args)
+			return c, c.URL != ""
+		}
+	}
+	return Card{}, false
 }

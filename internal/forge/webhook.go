@@ -51,6 +51,19 @@ type PullSync func(PullEvent) error
 // reopened, synchronize, edited, closed) an pulls. Ohne pulls wird das Ereignis
 // wie jedes unbekannte mit 204 beantwortet.
 func (g *GitHubApp) WebhookHandlerWithPulls(sync RepoSync, pulls PullSync, onError func(error)) http.Handler {
+	return g.WebhookHandlerWithRenames(sync, pulls, nil, onError)
+}
+
+// RepoRename nimmt die Umbenennung eines Repos entgegen (repository, action
+// renamed): from und to sind normalisierte Remotes. Sie läuft vor RepoSync, damit
+// das bestehende Projekt umzieht, bevor die Listenabgleichung den neuen Namen
+// sieht. Ob dabei etwas umgezogen ist, ist Sache des Empfängers; RepoSync
+// bekommt die Änderung in jedem Fall wie bisher als add und remove.
+type RepoRename func(installationID int64, from, to string) error
+
+// WebhookHandlerWithRenames ist WebhookHandlerWithPulls, dazu die Umbenennung an
+// rename. Ohne rename bleibt es bei add und remove, wie vor dieser Funktion.
+func (g *GitHubApp) WebhookHandlerWithRenames(sync RepoSync, pulls PullSync, rename RepoRename, onError func(error)) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", http.MethodPost)
@@ -78,6 +91,17 @@ func (g *GitHubApp) WebhookHandlerWithPulls(sync RepoSync, pulls PullSync, onErr
 			return
 		}
 		inst, add, remove := ParseRepoEvent(r.Header.Get("X-GitHub-Event"), body)
+		if rename != nil {
+			if rinst, from, to, ok := ParseRepoRename(r.Header.Get("X-GitHub-Event"), body); ok && rinst > 0 {
+				if err := rename(rinst, from, to); err != nil {
+					if onError != nil {
+						onError(err)
+					}
+					http.Error(w, "could not apply", http.StatusInternalServerError)
+					return
+				}
+			}
+		}
 		if inst > 0 && (len(add) > 0 || len(remove) > 0) {
 			if err := sync(inst, add, remove); err != nil {
 				if onError != nil {
@@ -160,6 +184,41 @@ func ParseRepoEvent(event string, body []byte) (installationID int64, add, remov
 		}
 	}
 	return p.Installation.ID, add, remove
+}
+
+// ParseRepoRename liest aus einem repository-Ereignis mit action renamed den
+// alten und den neuen Namen als normalisierte Remotes. ok ist false für alles
+// andere und für ein Ereignis, das den alten Namen nicht nennt.
+func ParseRepoRename(event string, body []byte) (installationID int64, from, to string, ok bool) {
+	if event != "repository" {
+		return 0, "", "", false
+	}
+	var p struct {
+		Action       string `json:"action"`
+		Installation struct {
+			ID int64 `json:"id"`
+		} `json:"installation"`
+		Repository webhookRepo `json:"repository"`
+		Changes    struct {
+			Repository struct {
+				Name struct {
+					From string `json:"from"`
+				} `json:"name"`
+			} `json:"repository"`
+		} `json:"changes"`
+	}
+	if json.Unmarshal(body, &p) != nil || p.Action != "renamed" {
+		return 0, "", "", false
+	}
+	old := p.Changes.Repository.Name.From
+	if old == "" || p.Repository.Owner.Login == "" {
+		return 0, "", "", false
+	}
+	from, to = remoteOf(p.Repository.Owner.Login+"/"+old), remoteOf(p.Repository.FullName)
+	if from == "" || to == "" || from == to {
+		return 0, "", "", false
+	}
+	return p.Installation.ID, from, to, true
 }
 
 // PullEvent ist ein pull_request-Ereignis in der Form, die der Store braucht.

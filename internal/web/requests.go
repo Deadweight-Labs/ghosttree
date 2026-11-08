@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/explain"
+	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/scope"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -850,7 +851,7 @@ func (a *app) requestAddCriterion(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid input", http.StatusBadRequest)
 		return
 	}
-	c, err := a.store.AddCriterion(detail.Request.ID, text, personOf(r))
+	c, err := a.store.AddCriterion(detail.Request.ID, text, personOf(r), gitanchor.Web())
 	if err != nil {
 		a.requestFail(w, r, detail.Request.ID, err)
 		return
@@ -889,7 +890,7 @@ func (a *app) requestResolve(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid input", http.StatusBadRequest)
 		return
 	}
-	if err := a.store.SetCriterionState(cid, state, requestdomain.Evidence{Kind: kind, Ref: ref, Person: personOf(r)}); err != nil {
+	if err := a.store.SetCriterionState(cid, state, requestdomain.Evidence{Kind: kind, Ref: ref, Person: personOf(r), GitAnchor: gitanchor.Web()}); err != nil {
 		a.requestFail(w, r, detail.Request.ID, err)
 		return
 	}
@@ -963,7 +964,7 @@ func (a *app) requestComplete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid input", http.StatusBadRequest)
 		return
 	}
-	if err := a.store.CompleteRequest(detail.Request.ID, requestdomain.Evidence{Kind: kind, Ref: ref, Person: personOf(r)}); err != nil {
+	if err := a.store.CompleteRequest(detail.Request.ID, requestdomain.Evidence{Kind: kind, Ref: ref, Person: personOf(r), GitAnchor: gitanchor.Web()}); err != nil {
 		a.requestFail(w, r, detail.Request.ID, err)
 		return
 	}
@@ -980,7 +981,7 @@ func (a *app) requestDrop(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid input", http.StatusBadRequest)
 		return
 	}
-	if err := a.store.DropRequest(detail.Request.ID, reason, personOf(r)); err != nil {
+	if err := a.store.DropRequest(detail.Request.ID, reason, personOf(r), gitanchor.Web()); err != nil {
 		a.requestFail(w, r, detail.Request.ID, err)
 		return
 	}

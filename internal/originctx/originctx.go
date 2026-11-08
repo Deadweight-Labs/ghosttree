@@ -51,6 +51,9 @@ func ValidSession(v string) bool {
 	return true
 }
 
+// ViaWeb kennzeichnet einen Eintrag der Weboberfläche (Context.Via).
+const ViaWeb = "web"
+
 // Arten eines berührten Pfads, von schwach nach stark.
 const (
 	KindRead  = "read"
@@ -90,6 +93,9 @@ type Context struct {
 	// CapturedAt setzt der Server beim Speichern (bei einem Nachtrag: der
 	// Zeitpunkt des Eintrags).
 	CapturedAt string `json:"captured_at,omitempty"`
+	// Via nennt den Weg des Eintrags, wenn er nicht über eine Agenten-Session lief:
+	// ViaWeb für die Bearbeitung in der Weboberfläche. Leer sonst.
+	Via string `json:"via,omitempty"`
 	// Backfilled: aus session_ref und path_activity nachgetragen, nicht beim
 	// Schreiben eingefroren.
 	Backfilled bool   `json:"backfilled,omitempty"`

@@ -85,7 +85,7 @@ func releaseServer(t *testing.T, tag string, signed bool, badSum bool) {
 		if signed {
 			assets = append(assets, map[string]string{"name": "checksums.txt.sigstore.json", "browser_download_url": base + "/a/sig"})
 		}
-		json.NewEncoder(w).Encode([]any{map[string]any{"tag_name": tag, "assets": assets}})
+		json.NewEncoder(w).Encode([]any{map[string]any{"tag_name": tag, "prerelease": strings.Contains(tag, "-"), "assets": assets}})
 	})
 	mux.HandleFunc("/a/checksums.txt", func(w http.ResponseWriter, r *http.Request) { fmt.Fprintf(w, "%s  %s\n", sum, name) })
 	mux.HandleFunc("/a/sig", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("{}")) })
@@ -330,5 +330,47 @@ func TestStatusWithAnOlderServerWithoutVersionRoute(t *testing.T) {
 	config.Save(config.Config{ServerURL: srv.URL, Token: "t", Machine: "m"})
 	if out, _ := runUpd("status"); !strings.Contains(out, "server unknown") {
 		t.Fatalf("\n%s", out)
+	}
+}
+
+func TestUpdatePreInstallsAReleaseCandidateAfterTheUsualChecks(t *testing.T) {
+	e := setupUpdate(t, "0.1.0-dev+1c48c74")
+	releaseServer(t, "v0.2.0-rc.1", true, false)
+
+	out, code := runUpd("update")
+	if code == 0 || readTarget(t, e) != "OLD" || !strings.Contains(out, "--pre") {
+		t.Fatalf("without --pre the candidate must stay out and the output must name --pre: code %d target %q\n%s", code, readTarget(t, e), out)
+	}
+
+	out, code = runUpd("update", "--pre")
+	if code != 0 || readTarget(t, e) != "NEWSTABLE" || !strings.Contains(out, "v0.2.0-rc.1") {
+		t.Fatalf("code %d target %q\n%s", code, readTarget(t, e), out)
+	}
+}
+
+func TestUpdatePreKeepsSignatureAndChecksumChecks(t *testing.T) {
+	e := setupUpdate(t, "0.1.0-dev+1c48c74")
+	releaseServer(t, "v0.2.0-rc.1", true, false)
+	e.verifyErr = errors.New("identity mismatch")
+	if out, code := runUpd("update", "--pre"); code == 0 || readTarget(t, e) != "OLD" {
+		t.Fatalf("rejected signature: code %d target %q\n%s", code, readTarget(t, e), out)
+	}
+	e.verifyErr = nil
+	releaseServer(t, "v0.2.0-rc.1", true, true)
+	if out, code := runUpd("update", "--pre"); code == 0 || readTarget(t, e) != "OLD" {
+		t.Fatalf("wrong checksum: code %d target %q\n%s", code, readTarget(t, e), out)
+	}
+	releaseServer(t, "v0.2.0-rc.1", false, false)
+	if out, code := runUpd("update", "--pre"); code == 0 || readTarget(t, e) != "OLD" {
+		t.Fatalf("no signature: code %d target %q\n%s", code, readTarget(t, e), out)
+	}
+}
+
+func TestUpdatePreIsOnlyForTheStableChannel(t *testing.T) {
+	e := setupUpdate(t, "0.1.0-dev+1c48c74")
+	for _, args := range [][]string{{"update", "--pre", "--channel", "dev"}, {"update", "--pre", "--source"}} {
+		if out, code := runUpd(args...); code != 2 || readTarget(t, e) != "OLD" {
+			t.Fatalf("%v: code %d\n%s", args, code, out)
+		}
 	}
 }
