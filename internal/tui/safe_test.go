@@ -49,19 +49,20 @@ func evilItems(items []Item) []Item {
 	return items
 }
 
-func (h hostileBackend) MyTasks(ctx context.Context) ([]Item, error) {
-	items, err := h.fakeBackend.MyTasks(ctx)
+// List puts bad into every row of every list, gives message rows a hostile
+// card of their own, and lets the project tasks fail with a hostile error.
+func (h hostileBackend) List(ctx context.Context, kind ListKind) ([]Item, error) {
+	switch kind {
+	case ListRoom, ListUnread:
+		c := links.Card{Kind: evil("Message"), Ref: evil("#1"), Title: evil("t"), Status: evil("s"), Next: evil("n"), Who: evil("w"), URL: evil("https://ghosttree.example.com/ui/room")}
+		return []Item{{Ref: evil("#1"), Title: evil("hallo"), Meta: evil("orchestrator"), Card: &c}}, nil
+	case ListProjectTasks:
+		return nil, errors.New(bad)
+	case ListSuggestions:
+		return evilItems([]Item{{Ref: "#9", Title: "s"}}), nil
+	}
+	items, err := h.fakeBackend.List(ctx, kind)
 	return evilItems(items), err
-}
-
-func (h hostileBackend) OpenRequests(ctx context.Context) ([]Item, error) {
-	items, err := h.fakeBackend.OpenRequests(ctx)
-	return evilItems(items), err
-}
-
-func (h hostileBackend) Messages(ctx context.Context) ([]Item, error) {
-	c := links.Card{Kind: evil("Message"), Ref: evil("#1"), Title: evil("t"), Status: evil("s"), Next: evil("n"), Who: evil("w"), URL: evil("https://ghosttree.example.com/ui/room")}
-	return []Item{{Ref: evil("#1"), Title: evil("hallo"), Meta: evil("orchestrator"), Card: &c}}, errors.New(bad)
 }
 
 func (h hostileBackend) Search(ctx context.Context, line string) ([]Item, error) {
@@ -146,10 +147,14 @@ func TestNoServerStringReachesTheTerminalUnfiltered(t *testing.T) {
 		m.be = h
 		m.local = h.Local()
 		m = runCmd(m, tea.Batch(m.loadHome()...), 0)
-		for i := 0; i < listCount; i++ {
-			m.section = i
-			noForeignControls(t, "home "+look.String(), m.View().Content)
+		for _, mode := range []int{modeProject, modeInbox} {
+			m.setMode(mode)
+			for i := range m.tabs() {
+				m.tab[mode] = i
+				noForeignControls(t, "home "+look.String(), m.View().Content)
+			}
 		}
+		m.setMode(modeProject)
 	}
 
 	m := ready(f, Options{}, 110, 44, darkBG)
@@ -158,13 +163,14 @@ func TestNoServerStringReachesTheTerminalUnfiltered(t *testing.T) {
 	m = runCmd(m, tea.Batch(m.loadHome()...), 0)
 
 	// a row with its own card, a resolved card, results
-	m.section = listMessages
+	m.setMode(modeProject)
+	m.tab[modeProject] = 3 // room messages
 	m = drive(m, key("enter"))
 	noForeignControls(t, "message card", m.View().Content)
 	m = drive(m, key("enter"))
 	noForeignControls(t, "flash after open", m.View().Content)
 	m = drive(m, key("esc"))
-	m.section = listTasks
+	m.tab[modeProject] = 0 // requests
 	m = drive(m, key("enter"))
 	noForeignControls(t, "card", m.View().Content)
 	m = drive(m, key("esc"))

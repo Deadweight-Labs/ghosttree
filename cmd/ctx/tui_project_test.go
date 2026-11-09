@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/Deadweight-Labs/ghosttree/internal/client"
@@ -111,7 +112,7 @@ func TestOpenRequestsWithoutProjectIsNoProjectNotEverything(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Chdir(t.TempDir())
-	_, err := newCLIBackend().OpenRequests(context.Background())
+	_, err := newCLIBackend().List(context.Background(), tui.ListRequests)
 	if problemOf(t, err) != tui.ProblemNoProject || calls != 0 {
 		t.Fatalf("err %v calls %d", err, calls)
 	}
@@ -120,9 +121,7 @@ func TestOpenRequestsWithoutProjectIsNoProjectNotEverything(t *testing.T) {
 func TestMessagesOfARoomThatDoesNotExistAreEmpty(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("HOME", t.TempDir())
-	var methods []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		methods = append(methods, r.Method+" "+r.URL.Path)
 		w.WriteHeader(http.StatusNotFound)
 		fmt.Fprint(w, `{"error":"coordination target not found"}`)
 	}))
@@ -130,16 +129,59 @@ func TestMessagesOfARoomThatDoesNotExistAreEmpty(t *testing.T) {
 	if err := config.Save(config.Config{ServerURL: srv.URL, Token: "t", Machine: "m"}); err != nil {
 		t.Fatal(err)
 	}
-	t.Chdir(t.TempDir())
-	items, err := newCLIBackend().Messages(context.Background())
+	dir := t.TempDir()
+	gitIn(t, dir, "init", "-q")
+	gitIn(t, dir, "remote", "add", "origin", "https://github.com/someone/side.git")
+	t.Chdir(dir)
+	items, err := newCLIBackend().List(context.Background(), tui.ListRoom)
 	if err != nil || len(items) != 0 {
 		t.Fatalf("items %v err %v", items, err)
 	}
-	// Reading the list must not join the room: joining is a write and
-	// would put an unknown repository into an organization.
+}
+
+// Nothing the TUI lists may write: a write in an unknown repository puts it
+// into an organization (PAIN-67). Every list of both modes is asked in a
+// repository the server does not know, and every request must be a GET.
+func TestEveryListOnlyReads(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	var mu sync.Mutex
+	var methods []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		methods = append(methods, r.Method+" "+r.URL.Path)
+		mu.Unlock()
+		switch r.URL.Path {
+		case "/api/projects":
+			fmt.Fprint(w, `[{"remote":"github.com/someone/side","org":"o"}]`)
+		case "/api/projects/writable", "/api/inbox", "/api/knowledge/pending", "/api/pains", "/api/tasks":
+			fmt.Fprint(w, `[]`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			fmt.Fprint(w, `{"error":"not found"}`)
+		}
+	}))
+	defer srv.Close()
+	if err := config.Save(config.Config{ServerURL: srv.URL, Token: "t", Machine: "m"}); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	gitIn(t, dir, "init", "-q")
+	gitIn(t, dir, "remote", "add", "origin", "https://github.com/someone/side.git")
+	t.Chdir(dir)
+	b := newCLIBackend()
+	for k := tui.ListRequests; k <= tui.ListSuggestions; k++ {
+		_, _ = b.List(context.Background(), k)
+	}
+	_, _ = b.CheckProject(context.Background(), "github.com/someone/side")
+	_, _ = b.Projects(context.Background())
+	_, _, _ = b.ProjectPreview(context.Background(), "github.com/someone/side")
+	if len(methods) == 0 {
+		t.Fatal("no request seen")
+	}
 	for _, m := range methods {
 		if !strings.HasPrefix(m, "GET ") {
-			t.Fatalf("the message list wrote: %v", methods)
+			t.Fatalf("a list wrote: %v", methods)
 		}
 	}
 }

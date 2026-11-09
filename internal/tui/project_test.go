@@ -3,6 +3,8 @@ package tui
 import (
 	"strings"
 	"testing"
+
+	tea "charm.land/bubbletea/v2"
 )
 
 // noRawHTTP fails when a status code or HTTP wording reaches the screen.
@@ -48,11 +50,10 @@ func TestFolderWithoutRemoteSaysWhatIsMissing(t *testing.T) {
 	if cmd := m.activateButton(btnClaim); cmd != nil || m.screen != ScreenHome {
 		t.Fatal("claim without remote did something")
 	}
-	// The request list says why it is empty instead of listing every project.
-	m.zone = zoneList
+	// Tab moves between the buttons; no project list appears.
 	m = drive(m, key("tab"))
-	if v := plainView(m); !strings.Contains(v, "kein Projekt in diesem Ordner") {
-		t.Fatalf("requests tab:\n%s", v)
+	if v := plainView(m); strings.Contains(v, "Requests") || strings.Contains(v, "REQ-619") {
+		t.Fatalf("project lists without a project:\n%s", v)
 	}
 	noRawHTTP(t, "no remote", plainView(m))
 }
@@ -64,10 +65,15 @@ func TestFolderWithoutGit(t *testing.T) {
 	if !strings.Contains(v, "kein Git-Repository") || !strings.Contains(v, "/home/robin/Downloads") {
 		t.Fatalf("view:\n%s", v)
 	}
-	if !strings.Contains(v, "TASK-133") {
-		t.Fatalf("own tasks should still show:\n%s", v)
+	if strings.Contains(v, "TASK-133") || strings.Contains(v, "Requests") {
+		t.Fatalf("the project mode without a project shows only the state:\n%s", v)
 	}
 	noRawHTTP(t, "no git", v)
+	// Own tasks wait in the inbox, one shift+tab away.
+	m = drive(m, tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
+	if v := plainView(m); !strings.Contains(v, "TASK-133") || !strings.Contains(v, "ghosttree") {
+		t.Fatalf("inbox:\n%s", v)
+	}
 }
 
 func TestProjectWithoutRightsSaysSo(t *testing.T) {
@@ -98,8 +104,9 @@ func TestEveryProblemHasWords(t *testing.T) {
 		ProblemSignedOut: "nicht angemeldet",
 		ProblemOther:     "konnte nicht geladen werden",
 	} {
-		m = drive(m, listMsg{which: listTasks, err: &ProblemError{Kind: kind}})
-		m.zone, m.section = zoneList, listTasks
+		m = drive(m, listMsg{which: ListRequests, err: &ProblemError{Kind: kind}})
+		m.setMode(modeProject)
+		m.tab[modeProject] = 0
 		if v := plainView(m); !strings.Contains(v, want) {
 			t.Errorf("kind %d: missing %q", kind, want)
 		}

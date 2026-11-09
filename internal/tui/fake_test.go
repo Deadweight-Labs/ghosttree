@@ -37,6 +37,59 @@ type fakeBackend struct {
 	recent    []string
 	dirs      map[string]Local // what Local looks like after ChangeDir
 	changedTo []string
+
+	suggestions []Item
+	inboxEmpty  bool
+	listed      []ListKind
+}
+
+// List answers like a project with a few requests, pains, tasks and room
+// messages, and an inbox across two projects. tasksErr stands for a project
+// the account has no right to and applies to every project list.
+func (f *fakeBackend) List(ctx context.Context, kind ListKind) ([]Item, error) {
+	f.mu.Lock()
+	f.listed = append(f.listed, kind)
+	err, empty := f.tasksErr, f.inboxEmpty
+	f.mu.Unlock()
+	if kind < ListMyTasks && err != nil {
+		return nil, err
+	}
+	if kind >= ListMyTasks && empty {
+		return []Item{}, nil
+	}
+	switch kind {
+	case ListRequests:
+		return f.OpenRequests(ctx)
+	case ListPains:
+		return []Item{
+			{Ref: "PAIN-66", Title: "Avatare fehlen ohne GitHub-Verknüpfung", Meta: "active"},
+			{Ref: "PAIN-65", Title: "Prod-DB ist 21 GB groß", Meta: "active"},
+		}, nil
+	case ListProjectTasks:
+		return []Item{
+			{Ref: "TASK-133", Title: "Mocks v2 der GitHub-artigen Oberfläche freigeben", Meta: "robin"},
+			{Ref: "TASK-136", Title: "Datenschutz-Seite festlegen", Meta: "robin"},
+		}, nil
+	case ListRoom:
+		return f.Messages(ctx)
+	case ListMyTasks:
+		return []Item{
+			{Ref: "TASK-133", Title: "Mocks v2 der GitHub-artigen Oberfläche freigeben", Meta: "ghosttree"},
+			{Ref: "TASK-12", Title: "Farben des Looks bestätigen", Meta: "design-system"},
+		}, nil
+	case ListQuestions:
+		c := links.Card{Kind: "Question", Ref: "#5120", Title: "Rollout von #200 freigeben?", Status: "approval", Who: "claude", URL: "https://ghosttree.example.com/ui/room/1"}
+		return []Item{
+			{Ref: "DEC-4", Title: "Avatar aus GitHub übernehmen?", Meta: "ghosttree"},
+			{Ref: "#5120", Title: "Rollout von #200 freigeben?", Meta: "ghosttree", Card: &c},
+		}, nil
+	case ListUnread:
+		c := links.Card{Kind: "Message", Ref: "#88", Title: "Look ist bereit zum Gegenlesen", URL: "https://ghosttree.example.com/ui/room/2"}
+		return []Item{{Ref: "#88", Title: "Look ist bereit zum Gegenlesen", Meta: "design-system · codex", Card: &c}}, nil
+	case ListSuggestions:
+		return f.suggestions, nil
+	}
+	return nil, nil
 }
 
 func newFake() *fakeBackend {

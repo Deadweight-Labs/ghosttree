@@ -39,10 +39,11 @@ const (
 
 // Options set up one run.
 type Options struct {
-	Look  LogoStyle
-	Still bool // draw the logo without animation
-	Plain bool // NO_COLOR: no colours at all
-	Lang  string
+	Look   LogoStyle
+	Switch SwitchStyle // how the mode switch is drawn
+	Still  bool        // draw the logo without animation
+	Plain  bool        // NO_COLOR: no colours at all
+	Lang   string
 	// Start is ScreenHome for `ctx`, ScreenLogin for `ctx login`.
 	Start Screen
 	// LoginServer and LoginMachine fill the login form; LoginDirect skips it.
@@ -62,13 +63,6 @@ type Options struct {
 func realTick(d time.Duration, msg tea.Msg) tea.Cmd {
 	return tea.Tick(d, func(time.Time) tea.Msg { return msg })
 }
-
-const (
-	listTasks = iota
-	listRequests
-	listMessages
-	listCount
-)
 
 // Timeouts for calls a person waits on: a slow server must look like an
 // absent one instead of freezing the screen.
@@ -99,10 +93,12 @@ type Model struct {
 	local  Local
 	server Server // the checked default server
 
-	search  textinput.Model
-	lists   [listCount]listState
-	section int
-	cursor  int
+	search textinput.Model
+	lists  [listKindCount]listState
+	mode   int    // modeProject or modeInbox
+	tab    [2]int // the open list of each mode
+	cursor int
+	splash bool // the big logo of the start, before the home
 
 	results       listState
 	resultsQuery  string
@@ -175,14 +171,14 @@ func New(be Backend, opt Options) Model {
 	m.screen = opt.Start
 	m.login = newLoginState(m.lang, opt.LoginServer, opt.LoginMachine, m.local)
 	if m.screen != ScreenLogin && m.local.Configured {
-		for i := range m.lists {
-			m.lists[i].loading = true
+		for k := range m.lists {
+			if ListKind(k) >= ListMyTasks || m.local.Project != "" {
+				m.lists[k].loading = true
+			}
 		}
 	}
-	if m.screen == ScreenHome && m.local.Configured && m.local.Project == "" {
-		m.zone = zoneButtons
-		m.moveButton(0)
-	}
+	m.splash = m.screen == ScreenHome && !opt.Still
+	m.setMode(modeProject)
 	if m.screen == ScreenLogin && opt.LoginDirect {
 		m.initCmd = m.startLogin()
 	}
@@ -229,7 +225,7 @@ type (
 	flashDoneMsg struct{ id int }
 	serverMsg    struct{ s Server }
 	listMsg      struct {
-		which int
+		which ListKind
 		items []Item
 		err   error
 	}
@@ -296,20 +292,14 @@ func (m *Model) loadHome() []tea.Cmd {
 	if c := m.checkProject(); c != nil {
 		cmds = append(cmds, c)
 	}
-	loaders := [listCount]func(context.Context) ([]Item, error){m.be.MyTasks, m.be.OpenRequests, m.be.Messages}
-	for i := range loaders {
-		i, f := i, loaders[i]
-		if i == listRequests && m.local.Project == "" {
-			// Without a project there are no "open requests of this
-			// repository"; asking anyway would list every project.
-			m.lists[i] = listState{err: &ProblemError{Kind: ProblemNoProject}, loaded: true}
+	for k := ListKind(0); k < listKindCount; k++ {
+		if k < ListMyTasks && m.local.Project == "" {
+			// Without a project the project mode shows only the "no
+			// project" state; asking anyway would list every project.
+			m.lists[k] = listState{err: &ProblemError{Kind: ProblemNoProject}, loaded: true}
 			continue
 		}
-		m.lists[i].loading = true
-		cmds = append(cmds, call(quickTimeout, func(ctx context.Context) tea.Msg {
-			items, err := f(ctx)
-			return listMsg{which: i, items: items, err: err}
-		}))
+		cmds = append(cmds, m.loadList(k))
 	}
 	return cmds
 }
@@ -318,11 +308,10 @@ func (m *Model) loadHome() []tea.Cmd {
 // home again, after a folder change or a new project.
 func (m *Model) reloadHome() []tea.Cmd {
 	m.proj = projectState{}
-	if m.local.Project == "" && m.local.Configured {
-		m.zone, m.button = zoneButtons, 0
-		m.moveButton(0)
-	}
-	return m.loadHome()
+	m.button = 0
+	cmds := m.loadHome()
+	m.setMode(m.mode)
+	return cmds
 }
 
 func (m *Model) setFlash(s string, bad bool) tea.Cmd {
@@ -379,7 +368,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case logoTickMsg:
-		if m.logo.done() {
+		if m.splash && m.logo.frame >= logoFrames+splashHold {
+			m.splash = false
+			return m, nil
+		}
+		if !m.splash && m.logo.done() {
 			return m, nil
 		}
 		m.logo.frame++
@@ -421,10 +414,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.proj = projectState{checked: true, known: msg.known, err: msg.err}
-		if m.noProject() && m.screen == ScreenHome && m.zone == zoneList && m.search.Value() == "" {
-			m.zone, m.button = zoneButtons, 0
-			m.moveButton(0)
-		}
+		m.setMode(m.mode)
 		return m, nil
 	case claimPlanMsg, claimDoneMsg:
 		return m.updateClaim(msg)
@@ -463,9 +453,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quitting = true
 			return m, tea.Quit
 		}
-		if msg.String() == "f2" {
+		if m.splash {
+			// A key ends the start picture and then counts as usual.
+			m.splash = false
+		}
+		switch msg.String() {
+		case "f2":
 			m.opt.Look = (m.opt.Look + 1) % 3
 			m.logo.style = m.opt.Look
+			return m, nil
+		case "f3":
+			m.opt.Switch = (m.opt.Switch + 1) % 2
 			return m, nil
 		}
 		switch m.screen {
@@ -542,40 +540,38 @@ func (m *Model) runSearch(line string) tea.Cmd {
 	})
 }
 
-func (m Model) currentList() []Item { return m.lists[m.section].items }
-
 func (m Model) keyHome(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	empty := strings.TrimSpace(m.search.Value()) == ""
-	if m.zone == zoneButtons && m.noProject() {
-		switch msg.String() {
-		case "left":
-			if empty {
-				m.moveButton(-1)
-				return m, nil
-			}
-		case "right":
-			if empty {
-				m.moveButton(1)
-				return m, nil
-			}
-		case "enter":
-			if empty {
-				return m, m.activateButton(m.button)
-			}
-		case "down", "ctrl+n":
-			m.zone = zoneList
-			return m, nil
-		case "tab":
-			m.zone, m.section, m.cursor = zoneList, 0, 0
-			return m, nil
-		case "shift+tab":
-			m.zone, m.section, m.cursor = zoneList, listCount-1, 0
+	buttons := m.homeZone() == zoneButtons
+	switch msg.String() {
+	case "shift+tab":
+		m.setMode(1 - m.mode)
+		return m, nil
+	case "tab":
+		if buttons {
+			m.moveButton(1)
 			return m, nil
 		}
-	} else if m.zone == zoneButtons {
-		m.zone = zoneList
-	}
-	switch msg.String() {
+		n := len(m.tabs())
+		m.tab[m.mode] = (m.tab[m.mode] + 1) % max(1, n)
+		m.cursor = 0
+		return m, nil
+	case "left", "right":
+		if !empty {
+			break
+		}
+		d := 1
+		if msg.String() == "left" {
+			d = -1
+		}
+		if buttons {
+			m.moveButton(d)
+			return m, nil
+		}
+		n := max(1, len(m.tabs()))
+		m.tab[m.mode] = (m.tab[m.mode] + d + n) % n
+		m.cursor = 0
+		return m, nil
 	case "esc":
 		if m.search.Value() != "" {
 			m.search.SetValue("")
@@ -591,34 +587,14 @@ func (m Model) keyHome(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, m.runSearch(v)
 		}
+		if buttons {
+			return m, m.activateButton(m.button)
+		}
 		if items := m.currentList(); m.cursor < len(items) {
 			return m, m.openItem(items[m.cursor])
 		}
 		return m, nil
-	case "tab":
-		if m.section == listCount-1 && m.noProject() {
-			m.zone = zoneButtons
-			m.moveButton(0)
-			return m, nil
-		}
-		m.section = (m.section + 1) % listCount
-		m.cursor = 0
-		return m, nil
-	case "shift+tab":
-		if m.section == 0 && m.noProject() {
-			m.zone = zoneButtons
-			m.moveButton(0)
-			return m, nil
-		}
-		m.section = (m.section + listCount - 1) % listCount
-		m.cursor = 0
-		return m, nil
 	case "up", "ctrl+p":
-		if m.cursor == 0 && m.noProject() {
-			m.zone = zoneButtons
-			m.moveButton(0)
-			return m, nil
-		}
 		return m.move(-1)
 	case "down", "ctrl+n":
 		return m.move(1)
@@ -630,7 +606,7 @@ func (m Model) keyHome(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.openLogin(m.server.URL, false)
 	case "ctrl+r":
 		m.local = m.be.Local()
-		return m, tea.Batch(m.loadHome()...)
+		return m, tea.Batch(m.reloadHome()...)
 	}
 	var cmd tea.Cmd
 	m.search, cmd = m.search.Update(msg)
@@ -702,11 +678,14 @@ func (m *Model) openURL(url string) tea.Cmd {
 
 func (m Model) click(a action) (tea.Model, tea.Cmd) {
 	switch a.kind {
-	case "section":
-		m.section, m.cursor = a.a, 0
+	case "mode":
+		m.setMode(a.a)
+		return m, nil
+	case "tab":
+		m.tab[m.mode], m.cursor = a.a, 0
 		return m, nil
 	case "item":
-		m.section, m.cursor = a.a, a.b
+		m.tab[m.mode], m.cursor = a.a, a.b
 		if items := m.currentList(); a.b < len(items) {
 			return m, m.openItem(items[a.b])
 		}
@@ -729,7 +708,7 @@ func (m Model) click(a action) (tea.Model, tea.Cmd) {
 	case "login.open":
 		return m, m.openURL(m.login.start.CompleteURL)
 	case "button":
-		m.zone, m.button = zoneButtons, a.a
+		m.button = a.a
 		return m, m.activateButton(a.a)
 	case "dir":
 		if a.a < len(m.dirs.recent.items) {
