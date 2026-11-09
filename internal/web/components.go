@@ -362,6 +362,8 @@ type composerView struct {
 	NoButtons bool
 	// Required makes the words a must; Tall gives the field the height of a document.
 	Required, Tall bool
+	// MaxLen is the longest text the field takes (characters, as the browser counts them); 0 leaves it open.
+	MaxLen int
 	// Compact leaves out the tabs and the toolbar: a reason of a line (the decision in the inbox).
 	Compact bool
 	// ModeName is the name of the status field of the form ("mode" when empty); Unset leaves the row

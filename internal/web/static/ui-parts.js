@@ -324,7 +324,22 @@
     const keep = () => { if (ta.value.trim()) draft.set(key, snapshot(false)); else draft.drop(key); };
     ta.addEventListener("input", keep);
     cx.addEventListener("change", keep);
-    form.addEventListener("submit", () => { if (ta.value.trim()) draft.set(key, snapshot(true)); });
+    // A second send of the same text (a double click) is held back: it would be refused, the text would come back
+    // into the field, and sending it again would write the comment twice. A form that a script takes over
+    // (it calls preventDefault) is left alone, and a page that comes back from the history can send again.
+    const sendBtn = $("[data-submit]", cx);
+    const reopen = () => { delete form.dataset.sending; if (sendBtn) sendBtn.disabled = false; form.removeAttribute("aria-busy"); };
+    window.addEventListener("pageshow", (e) => { if (e.persisted) reopen(); });
+    form.addEventListener("submit", (e) => {
+      if (form.dataset.sending) { e.preventDefault(); return; }
+      if (ta.value.trim()) draft.set(key, snapshot(true));
+      form.dataset.sending = "1";
+      setTimeout(() => {
+        if (e.defaultPrevented) { reopen(); return; }
+        form.setAttribute("aria-busy", "true");
+        if (sendBtn) sendBtn.disabled = true;
+      }, 0);
+    });
   }
 
   // Selects that show their choice in the button: label, check mark, hidden field.

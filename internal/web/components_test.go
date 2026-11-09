@@ -235,6 +235,12 @@ func TestComposerStatusRowOnlyWithAChoiceAndAskingWhenUnset(t *testing.T) {
 	if strings.Contains(one, `type="radio"`) || !strings.Contains(one, `<input type="hidden" name="mode" value="comment" data-mode-input>`) {
 		t.Errorf("a single state draws a row: %s", one)
 	}
+	// An unset choice with one option is still asked for: a radio with "required", not a preset hidden field.
+	lone := renderPart(t, langDE, "uicomposer", composerView{Action: "/ui/x", ModeName: "option", Unset: true, ModeLabel: "Wahl",
+		Modes: []composerMode{{Value: "A", Label: "A", Submit: "Entscheiden"}}})
+	if !strings.Contains(lone, `<input type="radio" name="option" value="A" data-mode-input required>`) || strings.Contains(lone, `type="hidden" name="option"`) || strings.Contains(lone, ` checked`) {
+		t.Errorf("a single option of an unset choice is preset or hidden: %s", lone)
+	}
 	two := renderPart(t, langDE, "uicomposer", composerView{Action: "/ui/x", ModeName: "option", Unset: true, Compact: true, NoHint: true, ModeLabel: "Wahl",
 		Modes: []composerMode{{Value: "A", Label: "A", Submit: "Entscheiden"}, {Value: "B", Label: "B", Submit: "Entscheiden"}}})
 	for _, want := range []string{`name="option" value="A" data-mode-input required`, `name="option" value="B" data-mode-input required`, ` data-unset`, `class="cx compact"`} {

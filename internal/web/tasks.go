@@ -137,6 +137,8 @@ func taskFailKey(code string) string {
 		return "tasks.result.secret"
 	case "changed":
 		return "tasks.result.changed"
+	case "too_long":
+		return "tasks.result.too_long"
 	}
 	return "tasks.result.failed"
 }

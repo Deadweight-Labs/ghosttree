@@ -743,6 +743,7 @@ var messages = map[string]string{
 	"cards.copied":                    "Copied",
 	"tasks.result.changed":            "Someone changed this already. Nothing was saved.",
 	"tasks.result.failed":             "Could not save.",
+	"tasks.result.too_long":           "The note is too long: 500 characters at most. Nothing was saved, your text is still in the field.",
 	"tasks.result.secret":             "That looks like a secret. Write where it lives, not the value.",
 	"tasks.kind.secret":               "Secret",
 	"tasks.kind.file":                 "File",
