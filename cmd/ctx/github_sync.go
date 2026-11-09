@@ -13,13 +13,14 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
-const githubUsage = `usage: ctx github sync-prs --db PATH [--project github.com/owner/repo]
+const githubUsage = `usage: ctx github sync-prs --db PATH [--project github.com/owner/repo] [--commits]
 
 Operator command, runs on the server against its database and needs no client
 configuration. It reads the pull requests of every branch whose entries still
 carry no PR number (through the GitHub App, which needs "Pull requests: read")
 and records them the way the webhook does: anchors get their PR number, packages
-are bound to their PR, merged PRs lift the branch descriptions.`
+are bound to their PR, merged PRs lift the branch descriptions. With --commits
+it also fetches the commits of every known pull request that has none stored.`
 
 // pullChange übersetzt ein pull_request-Ereignis in die Form des Stores.
 func pullChange(ev forge.PullEvent) store.PullRequestChange {
@@ -96,6 +97,7 @@ func cmdGithub(args []string, stdout io.Writer) int {
 	fs.SetOutput(stdout)
 	db := fs.String("db", "", "path of the server database")
 	project := fs.String("project", "", "only this project (default: all with an installation)")
+	withCommits := fs.Bool("commits", false, "also fetch the commits of every known pull request that has none stored yet")
 	if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 0 || *db == "" {
 		fmt.Fprintln(stdout, githubUsage)
 		return 2
@@ -111,7 +113,53 @@ func cmdGithub(args []string, stdout io.Writer) int {
 		return 1
 	}
 	defer st.Close()
-	return syncPulls(context.Background(), st, app, *project, stdout)
+	code := syncPulls(context.Background(), st, app, *project, stdout)
+	if *withCommits && code == 0 {
+		code = syncPullCommits(context.Background(), st, app, *project, stdout)
+	}
+	return code
+}
+
+// syncPullCommits holt die Commits aller bekannten PRs nach, zu denen noch keine
+// gespeichert sind. Ein Ratenlimit oder ein fehlendes Recht bricht ab; der
+// nächste Lauf macht dort weiter, wo dieser aufhörte.
+func syncPullCommits(ctx context.Context, st *store.Store, cl commitLister, project string, stdout io.Writer) int {
+	targets, err := st.PullSyncTargets(scope.NormalizeRemote(project))
+	if err != nil {
+		fmt.Fprintln(stdout, err)
+		return 1
+	}
+	var fetched, failed int
+	for _, t := range targets {
+		numbers, err := st.PullsWithoutCommits(t.Project)
+		if err != nil {
+			fmt.Fprintln(stdout, err)
+			return 1
+		}
+		for _, n := range numbers {
+			cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			_, cerr := recordPullCommits(cctx, st, cl, t.InstallationID, t.Project, n)
+			cancel()
+			switch {
+			case cerr == nil:
+				fetched++
+			case errors.Is(cerr, forge.ErrRateLimited):
+				fmt.Fprintf(stdout, "GitHub rate limit reached (%v); run the command again later\n", cerr)
+				return 1
+			case errors.Is(cerr, forge.ErrPermissionMissing):
+				fmt.Fprintln(stdout, "the GitHub App lacks \"Pull requests: read\"; commits were not fetched")
+				return 1
+			default:
+				failed++
+				fmt.Fprintf(stdout, "%s #%d: could not read the commits (%v)\n", t.Project, n, cerr)
+			}
+		}
+	}
+	fmt.Fprintf(stdout, "%d pull requests without stored commits fetched, %d failed\n", fetched, failed)
+	if failed > 0 {
+		return 1
+	}
+	return 0
 }
 
 // syncPulls holt die PR-Nummern für bestehende Branches nach. Fehlt das App-

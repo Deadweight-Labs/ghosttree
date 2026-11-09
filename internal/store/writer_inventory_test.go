@@ -298,6 +298,7 @@ var writerMethodClasses = map[string]string{
 	"RecordPullCommits":             "write",
 	"SaveAnswerOptions":             "write",
 	"PullSyncTargets":               "read",
+	"PullsWithoutCommits":           "read",
 	"GhostFilesUnder":               "read",
 	"GhostHistoryCount":             "read",
 	"GhostReviewsUnder":             "read",
