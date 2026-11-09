@@ -51,6 +51,11 @@ func setupUpdate(t *testing.T, clientVersion string) *updateEnv {
 		e.systemctl = append(e.systemctl, args)
 		return nil
 	}
+	// Kein echtes systemd: ohne Unit-Angabe gilt das aktualisierte ctx als das
+	// des Dienstes.
+	oldUnit := watchUnitState
+	t.Cleanup(func() { watchUnitState = oldUnit })
+	watchUnitState = func() unitState { return unitState{} }
 	return e
 }
 
@@ -371,6 +376,27 @@ func TestUpdatePreIsOnlyForTheStableChannel(t *testing.T) {
 	for _, args := range [][]string{{"update", "--pre", "--channel", "dev"}, {"update", "--pre", "--source"}} {
 		if out, code := runUpd(args...); code != 2 || readTarget(t, e) != "OLD" {
 			t.Fatalf("%v: code %d\n%s", args, code, out)
+		}
+	}
+}
+
+// Startet der Dienst ein anderes ctx als das gerade aktualisierte, bleibt er in
+// Ruhe: ein Neustart brächte das neue Binary nicht in Gang.
+func TestUpdateLeavesAWatchUnitOfAnotherCtxAlone(t *testing.T) {
+	e := setupUpdate(t, "0.1.0-dev")
+	other := filepath.Join(t.TempDir(), "ctx")
+	if err := os.WriteFile(other, []byte("OTHER"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	watchUnitState = func() unitState { return unitState{Active: true, ExecPath: other} }
+	releaseServer(t, "v0.2.0", true, false)
+	out, _ := runUpd("update")
+	if readTarget(t, e) != "NEWSTABLE" || !strings.Contains(out, "not this ctx; left alone") {
+		t.Fatalf("\n%s", out)
+	}
+	for _, call := range e.systemctl {
+		if len(call) > 0 && call[0] == "restart" {
+			t.Fatalf("restarted the unit of another ctx: %v", e.systemctl)
 		}
 	}
 }

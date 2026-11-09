@@ -44,6 +44,7 @@ type fakeRelease struct {
 	binary     string
 	listedSum  string // checksum to put in checksums.txt ("" = the real one)
 	withBundle bool
+	prefix     string // archive name prefix ("" = ctx)
 	hits       map[string]int
 }
 
@@ -54,7 +55,11 @@ func newRelease(t *testing.T, mod func(*fakeRelease)) *fakeRelease {
 	if mod != nil {
 		mod(f)
 	}
-	archiveName := fmt.Sprintf("ctx_1.2.0_%s_%s.tar.gz", goos, goarch)
+	prefix := f.prefix
+	if prefix == "" {
+		prefix = "ctx"
+	}
+	archiveName := fmt.Sprintf("%s_1.2.0_%s_%s.tar.gz", prefix, goos, goarch)
 	archive := tarball(t, f.binary)
 	mux := http.NewServeMux()
 	var base string
@@ -395,5 +400,31 @@ func TestLatestReleaseWithPreStillRefusesAnUnsignedCandidate(t *testing.T) {
 	_, err := src.LatestRelease(context.Background(), srv.URL, "Deadweight-Labs/ghosttree", true)
 	if err == nil || !strings.Contains(err.Error(), "unsigned") {
 		t.Fatalf("err = %v, want the unsigned release refused", err)
+	}
+}
+
+// Die GitHub-Releases benennt goreleaser nach dem Projekt: ghosttree_<v>_<os>_<arch>.
+// Mit dem Namen ctx_ fand der stable-Kanal das Archiv am Release v0.1.0-rc.3 nicht.
+func TestStableFindsTheReleaseArchiveNamedAfterTheProject(t *testing.T) {
+	f := newRelease(t, func(f *fakeRelease) { f.prefix = "ghosttree" })
+	dir, target := installedDir(t)
+	src := Source{HTTP: f.srv.Client(), GOOS: goos, GOARCH: goarch}
+	cand, err := src.LatestStable(context.Background(), f.srv.URL, "Deadweight-Labs/ghosttree")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := fmt.Sprintf("ghosttree_1.2.0_%s_%s.tar.gz", goos, goarch); cand.Archive != want {
+		t.Fatalf("archive %q, want %q", cand.Archive, want)
+	}
+	var calls []string
+	path, err := src.Fetch(context.Background(), cand, dir, okVerifier(&calls))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Install(target, path, "0.1.0-dev+abc"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(target); string(got) != f.binary {
+		t.Fatalf("installed %q", got)
 	}
 }

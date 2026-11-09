@@ -65,8 +65,16 @@ func (s Source) client() *http.Client {
 	return http.DefaultClient
 }
 
+// archiveName ist der Name der Archive, die scripts/build-dist.sh baut und der
+// Server unter /dist/ anbietet.
 func (s Source) archiveName(v string) string {
 	return fmt.Sprintf("ctx_%s_%s_%s.tar.gz", v, s.GOOS, s.GOARCH)
+}
+
+// releaseArchiveName ist der Name der Archive an einem GitHub-Release: goreleaser
+// benennt sie nach dem Projekt (.goreleaser.yaml, name_template).
+func (s Source) releaseArchiveName(v string) string {
+	return fmt.Sprintf("ghosttree_%s_%s_%s.tar.gz", v, s.GOOS, s.GOARCH)
 }
 
 func (s Source) get(ctx context.Context, u string, limit int64) ([]byte, error) {
@@ -149,8 +157,14 @@ func (s Source) LatestRelease(ctx context.Context, apiBase, repo string, pre boo
 		Where: "github.com/" + repo + " release " + best.TagName, signed: true, repoSlug: repo}
 	for _, a := range best.Assets {
 		switch a.Name {
+		case s.releaseArchiveName(v):
+			// GitHub-Releases (goreleaser, Projektname) heißen ghosttree_…; der
+			// Name geht vor, ein ctx_-Archiv gilt nur, wenn es keins gibt.
+			c.Archive, c.archURL = a.Name, a.URL
 		case c.Archive:
-			c.archURL = a.URL
+			if c.archURL == "" {
+				c.archURL = a.URL
+			}
 		case "checksums.txt":
 			c.sumsURL = a.URL
 		case "checksums.txt.sigstore.json":

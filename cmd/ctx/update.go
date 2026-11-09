@@ -190,7 +190,11 @@ func finishUpdate(stdout io.Writer, target, newPath, newVersion string) int {
 		return 1
 	}
 	fmt.Fprintf(stdout, "installed   %s (previous binary kept as %s)\n", ver.Label(newVersion), backup)
-	if systemctlUser("is-active", "--quiet", watchUnit) == nil {
+	if u := watchUnitState(); u.ExecPath != "" && !sameFile(u.ExecPath, target) {
+		// Der Dienst startet ein anderes ctx: ihn neu zu starten, brächte das
+		// gerade installierte nicht in Gang.
+		fmt.Fprintf(stdout, "watch       %s runs %s, not this ctx; left alone\n", watchUnit, u.ExecPath)
+	} else if systemctlUser("is-active", "--quiet", watchUnit) == nil {
 		if err := systemctlUser("restart", watchUnit); err != nil {
 			fmt.Fprintf(stdout, "watch       restart failed: %v; run 'systemctl --user restart %s'\n", err, watchUnit)
 		} else {

@@ -267,6 +267,10 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Fixed
 
+- `ctx update` on the stable channel finds the release archives, which
+  goreleaser names `ghosttree_<version>_<os>_<arch>.tar.gz`; it looked for
+  `ctx_…` and found nothing. It restarts the collector service only when the
+  service runs the binary that was just updated.
 - The collector service restarts after any exit (`Restart=always`, launchd
   `KeepAlive`). `ctx watch` exits cleanly on SIGTERM, so a collector stopped by
   anything other than the service manager stayed off and sessions stopped
