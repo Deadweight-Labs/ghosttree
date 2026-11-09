@@ -37,28 +37,6 @@ var (
 	knowledgeLevel = []string{"verified", "trusted", "staged"}
 )
 
-type bodyBlock struct {
-	Code bool
-	Text string
-	// Parts zerlegt einen Absatz an `Rückwärtsstrichen` in Text und Code.
-	Parts []inlinePart
-}
-
-type inlinePart struct {
-	Code bool
-	Text string
-}
-
-func inlineParts(text string) []inlinePart {
-	var out []inlinePart
-	for i, seg := range strings.Split(text, "`") {
-		if seg != "" {
-			out = append(out, inlinePart{Code: i%2 == 1, Text: seg})
-		}
-	}
-	return out
-}
-
 type KnowledgeRow struct {
 	ID, Href, Title, Project string
 	Type, TypeLabel          string
@@ -222,55 +200,17 @@ type knowledgeItemView struct {
 
 // ----------------------------------------------------------------- Textblöcke
 
-// bodyBlocks teilt einen Text in Absätze und Codeblöcke (```). max kürzt auf
-// so viele Zeichen und hängt "…" an (0 = nicht kürzen).
-func bodyBlocks(s string, limit int) []bodyBlock {
-	var out []bodyBlock
-	budget := limit
-	clipped := false
-	add := func(b bodyBlock) {
-		if clipped || strings.TrimSpace(b.Text) == "" {
-			return
-		}
-		if limit > 0 {
-			n := utf8.RuneCountInString(b.Text)
-			if n > budget {
-				b.Text = strings.TrimRight(string([]rune(b.Text)[:max(budget, 0)]), " \n") + "…"
-				clipped = true
-				b.Parts = inlineParts(b.Text)
-				out = append(out, b)
-				return
-			}
-			budget -= n
-		}
-		if !b.Code {
-			b.Parts = inlineParts(b.Text)
-		}
-		out = append(out, b)
-	}
-	for i, seg := range strings.Split(strings.ReplaceAll(s, "\r\n", "\n"), "```") {
-		if i%2 == 1 {
-			// Die erste Zeile eines Blocks ist die Sprache, wenn sie ein einzelnes Wort ist.
-			if head, rest, ok := strings.Cut(seg, "\n"); ok && !strings.ContainsAny(strings.TrimSpace(head), " \t") && len(strings.TrimSpace(head)) <= 16 {
-				seg = rest
-			}
-			add(bodyBlock{Code: true, Text: strings.Trim(seg, "\n")})
-			continue
-		}
-		for _, para := range strings.Split(seg, "\n\n") {
-			add(bodyBlock{Text: strings.TrimSpace(para)})
-		}
-	}
-	return out
-}
-
 // excerpt ist der erste Absatz, gekürzt; fehlt er, die erste Zeile Code.
 func excerpt(s string) string {
 	blocks := bodyBlocks(s, 0)
 	text := ""
 	for _, b := range blocks {
-		if !b.Code {
-			text = b.Text
+		if b.Kind == "" || b.Kind == "h" || b.Kind == "list" || b.Kind == "quote" {
+			lines := strings.Split(b.Text, "\n")
+			for i, l := range lines {
+				lines[i] = mdPlain(l)
+			}
+			text = strings.Join(lines, " ")
 			break
 		}
 	}

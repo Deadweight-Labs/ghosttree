@@ -12,7 +12,7 @@
 <input class="gfield" name="alt" maxlength="200" autocomplete="off" placeholder="{{t "workshop.img.alt"}}" aria-label="{{t "workshop.img.alt"}}">
 <button class="gbtn">{{mi "plus"}}{{t "workshop.img.add"}}</button></form>{{end}}</section>{{end}}
 {{if .HasImages}}<dialog class="ws-lb" id="ws-lb" aria-label="{{t "workshop.zoom_title"}}"><form method="dialog"><button class="ws-lb-x" aria-label="{{t "workshop.zoom_close"}}">{{mi "x"}}</button></form><img alt=""><p class="ws-lb-cap"></p></dialog>{{end}}
-{{if .Reason}}<div class="callout neu" role="note">{{mi "drop"}}<div><div class="k">{{t "ideas.dismissed_because"}}</div><div class="tt">{{.Reason}}</div></div></div>{{end}}
+{{if .Reason}}<div class="callout neu" role="note">{{mi "drop"}}<div><div class="k">{{t "ideas.dismissed_because"}}</div><div class="tt">{{md .Reason}}</div></div></div>{{end}}
 {{with .Workshop}}{{template "workshop" .}}{{end}}
 {{if .Items}}{{template "uitimeline" .Items}}{{end}}
 {{with .Composer}}{{template "uicomposer" .}}{{end}}

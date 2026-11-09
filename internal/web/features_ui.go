@@ -319,7 +319,7 @@ func (a *app) featureItems(l lang, pa *store.ProjectAccess, view *repoView, vers
 	var items []tlItem
 	for _, ver := range versions {
 		it := tlItem{ID: "version-" + strconv.Itoa(ver.Revision), Act: "feature.version", Who: ver.Person, Icon: "pencil",
-			Age: shortAgo(l, now, parseTime(ver.CreatedAt)), Body: template.HTML(html.EscapeString(ver.Message)),
+			Age: shortAgo(l, now, parseTime(ver.CreatedAt)), Body: mdText(ver.Message),
 			Git: anchorViewOf(pa, view.Project, ver.GitAnchor, originVia(ver.OriginContext))}
 		if ver.Revision <= 1 {
 			it.Icon, it.Head = "plus", template.HTML(html.EscapeString(l.msg("features.ev.created")))
@@ -338,7 +338,7 @@ func (a *app) featureItems(l lang, pa *store.ProjectAccess, view *repoView, vers
 	}
 	if f.State == feature.Retired {
 		items = append(items, tlItem{ID: "retired", Act: "feature.retired", Icon: "drop", Head: template.HTML(html.EscapeString(l.msg("features.ev.retired"))),
-			Age: shortAgo(l, now, parseTime(f.UpdatedAt)), Body: template.HTML(html.EscapeString(f.Reason))})
+			Age: shortAgo(l, now, parseTime(f.UpdatedAt)), Body: mdText(f.Reason)})
 	}
 	return items
 }

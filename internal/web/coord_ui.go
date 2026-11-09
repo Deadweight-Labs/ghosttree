@@ -1,7 +1,6 @@
 package web
 
 import (
-	"html"
 	"html/template"
 	"regexp"
 	"strings"
@@ -45,13 +44,10 @@ func (s coordSidebarView) private(kind string) []coordRoomView {
 // mentionPattern finds @name in a message; the name is what the composer completes.
 var mentionPattern = regexp.MustCompile(`(^|[\s(])(@[\p{L}\p{N}][\p{L}\p{N}._:-]*)`)
 
-// BodyHTML is the text of the message with every @mention as a chip. The text is
-// escaped first; only the chip is markup.
-func (m coordMessageView) BodyHTML() template.HTML {
-	esc := html.EscapeString(m.Body)
-	esc = mentionPattern.ReplaceAllString(esc, `$1<span class="mention">$2</span>`)
-	return template.HTML(esc)
-}
+// BodyHTML is the text of the message for the one Markdown renderer of the page
+// (ui-md.js), like a comment: the source in data-md, the blocks as plain text
+// until the script has drawn them.
+func (m coordMessageView) BodyHTML() template.HTML { return mdText(m.Body) }
 
 // coordComposer is the one input of a room or a thread: the composer of the new
 // look with two selects (to whom, what kind) beside the buttons.

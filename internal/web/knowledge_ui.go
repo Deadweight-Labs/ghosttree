@@ -229,7 +229,7 @@ func (a *app) fillKnowledgeItem(l lang, k store.Knowledge, v *knowledgeItemView)
 		if v.Closure.Title != "" {
 			head += ` <a href="` + html.EscapeString(v.Closure.Href) + `">` + html.EscapeString(v.Closure.Title) + `</a>`
 		}
-		v.Timeline = append(v.Timeline, tlItem{Who: v.Closure.By, Icon: "drop", Tone: "don", Head: template.HTML(head), Age: v.Closure.Age, Body: template.HTML(html.EscapeString(v.Closure.Reason))})
+		v.Timeline = append(v.Timeline, tlItem{Who: v.Closure.By, Icon: "drop", Tone: "don", Head: template.HTML(head), Age: v.Closure.Age, Body: mdText(v.Closure.Reason)})
 	}
 	if c.Person != "" {
 		v.Timeline = append(v.Timeline, tlItem{Who: c.Person, Icon: "book", Tone: "warn", Head: template.HTML(html.EscapeString(l.msg("knowledge.tl.created")) + sha), Age: c.Age})

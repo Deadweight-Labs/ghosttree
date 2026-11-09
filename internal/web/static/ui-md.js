@@ -1,13 +1,20 @@
-// Markdown preview of the composer. It builds DOM nodes (createElement,
+// The one Markdown renderer of the page: the preview of the composer, comments,
+// notes, reasons, descriptions, room messages and documents all come through
+// here. The server writes the source of a text into data-md (markdown.go) and the
+// blocks as plain HTML for a reader without the script; this script replaces
+// them with the same text as DOM nodes. It builds DOM nodes (createElement,
 // textContent) and never HTML from the text of a person, so nothing typed can
 // become markup or script. Links only to http(s) and relative addresses.
-// Supported: headings # to ###, bold, italic, code, code blocks, lists, task
-// lists, quotes, links, @mentions, REQ-n, PAIN-n, TASK-n, IDEA-n, DEC-n, FEAT-n
-// as pills (ui-pill.js) and #1970 as the pill of a knowledge entry.
+// Supported: headings # to ######, bold, italic, strikethrough, code, code
+// blocks, lists, task lists, quotes, tables, rules, links, bare addresses,
+// @mentions, REQ-n, PAIN-n, TASK-n, IDEA-n, DEC-n, FEAT-n as pills (ui-pill.js)
+// and #1970 as the pill of a knowledge entry once the server confirms it.
+// A box with data-md-anchors (the documents) gives its headings an address
+// "h-text" (a number after it counts up until it is free) and fills the nav
+// with data-toc with the outline.
 // Port of the accepted mock (git-native-v2, gh6.js).
 (function () {
   "use strict";
-  var SVGNS = "http://www.w3.org/2000/svg";
   function el(tag, cls, text) {
     var e = document.createElement(tag);
     if (cls) e.className = cls;
@@ -50,11 +57,32 @@
     return m;
   }
 
-  var ESC = "\\`*_[]()#>@-!";
+  var ESC = "\\`*_[]()#>@-!~|<+.";
   var RE_REF = /(REQ|PAIN|TASK|IDEA|DEC|FEAT)-(\d+)(?![\p{L}\p{N}_-])/uy;
   var RE_KN = /#(\d{1,15})(?![\p{L}\p{N}_-])/uy;
-  var RE_MENTION = /@[\p{L}\p{N}][\p{L}\p{N}_-]*/uy;
+  // A name may hold a dot or a colon between its words ("@claude:mainex"), never at its end.
+  var RE_MENTION = /@[\p{L}\p{N}][\p{L}\p{N}_-]*(?:[.:][\p{L}\p{N}][\p{L}\p{N}_-]*)*/uy;
   var RE_WORD = /[\p{L}\p{N}_]/u;
+  var RE_URL = /https?:\/\/[^\s<>"\\]+/iy;
+  var RE_AUTOLINK = /<(https?:\/\/[^\s<>"\\]+)>/iy;
+
+  // The end of a bare address: closing brackets only when it opened one, no
+  // sentence punctuation or emphasis marks.
+  function trimUrl(u) {
+    for (;;) {
+      var last = u.charAt(u.length - 1), open = last === ")" ? "(" : last === "]" ? "[" : "";
+      if (open && u.split(open).length >= u.split(last).length) break;
+      if (/[.,;:!?'*_~)\]}]/.test(last)) u = u.slice(0, -1); else break;
+    }
+    return u;
+  }
+  function link(url, parent) {
+    var a = el("a");
+    a.setAttribute("href", url);
+    if (/^https?:/i.test(url)) { a.target = "_blank"; a.rel = "noopener noreferrer"; }
+    parent.appendChild(a);
+    return a;
+  }
 
   function findRun(s, ch, k, from) {
     var idx = s.indexOf(ch, from);
@@ -131,6 +159,10 @@
         }
         buf += "**"; i += 2; continue;
       }
+      if (deep < 7 && c === "~" && src.charAt(i + 1) === "~" && src.charAt(i + 2) !== "~" && i + 2 < n && !/\s/.test(src.charAt(i + 2))) {
+        j = src.indexOf("~~", i + 2);
+        if (j > i + 2 && !/\s/.test(src.charAt(j - 1))) { sub("del", src.slice(i + 2, j)); i = j + 2; continue; }
+      }
       if (deep < 7 && (c === "*" || c === "_") && src.charAt(i + 1) !== c && i + 1 < n && !/\s/.test(src.charAt(i + 1)) &&
           (c === "*" || !prev || !RE_WORD.test(prev))) {
         j = findItalic(src, i + 1, c);
@@ -158,7 +190,22 @@
           }
         }
       }
-      if (c === "@" && !o.noLink && (!prev || !(RE_WORD.test(prev) || prev === "@" || prev === "." || prev === "/"))) {
+      if (c === "<" && !o.noLink) {
+        RE_AUTOLINK.lastIndex = i;
+        if ((m = RE_AUTOLINK.exec(src)) && safeUrl(m[1])) {
+          flush(); link(m[1], parent).appendChild(document.createTextNode(m[1])); i += m[0].length; continue;
+        }
+      }
+      if ((c === "h" || c === "H") && !o.noLink && (!prev || !RE_WORD.test(prev))) {
+        RE_URL.lastIndex = i;
+        if ((m = RE_URL.exec(src))) {
+          var bare = trimUrl(m[0]);
+          if (safeUrl(bare)) {
+            flush(); link(bare, parent).appendChild(document.createTextNode(bare)); i += bare.length; continue;
+          }
+        }
+      }
+      if (c === "@" && !o.noLink &&(!prev || !(RE_WORD.test(prev) || prev === "@" || prev === "." || prev === "/"))) {
         RE_MENTION.lastIndex = i;
         if ((m = RE_MENTION.exec(src))) { flush(); parent.appendChild(el("span", "mention", m[0])); i += m[0].length; continue; }
       }
@@ -176,13 +223,36 @@
   }
 
   var RE_FENCE = /^ {0,3}(`{3,})[ \t]*([\w+#.\-]*)[^`]*$/;
-  var RE_HEAD = /^ {0,3}(#{1,3})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/;
+  var RE_HEAD = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/;
   var RE_QUOTE = /^ {0,3}>/;
   var RE_ITEM = /^( *)([-*+]|\d{1,9}[.)])(?:[ \t]+(.*))?$/;
   var RE_TASK = /^\[([ xX])\](?:[ \t]+([\s\S]*))?$/;
+  var RE_RULE = /^ {0,3}([-*_])(?: *\1){2,} *$/;
+  var RE_SEP = /^ {0,3}\|? *:?-+:? *(?:\| *:?-+:? *)*\|? *$/;
+
+  // The cells of a table row; a \| is a bar in the text.
+  function cellsOf(l) {
+    l = l.trim();
+    if (l.charAt(0) === "|") l = l.slice(1);
+    if (l.charAt(l.length - 1) === "|" && l.charAt(l.length - 2) !== "\\") l = l.slice(0, -1);
+    var out = [], cur = "";
+    for (var k = 0; k < l.length; k++) {
+      if (l.charAt(k) === "\\" && l.charAt(k + 1) === "|") { cur += "|"; k++; }
+      else if (l.charAt(k) === "|") { out.push(cur.trim()); cur = ""; }
+      else cur += l.charAt(k);
+    }
+    out.push(cur.trim());
+    return out;
+  }
+  // A table starts at line i: a row with a bar and under it a separator line with as many cells.
+  function tableAt(lines, i) {
+    if (i + 1 >= lines.length) return false;
+    var a = lines[i], b = lines[i + 1];
+    return a.indexOf("|") >= 0 && b.indexOf("|") >= 0 && RE_SEP.test(b) && cellsOf(a).length === cellsOf(b).length;
+  }
 
   function interrupts(l) {
-    if (RE_FENCE.test(l) || RE_HEAD.test(l) || RE_QUOTE.test(l)) return true;
+    if (RE_FENCE.test(l) || RE_HEAD.test(l) || RE_QUOTE.test(l) || RE_RULE.test(l)) return true;
     var m = RE_ITEM.exec(l);
     return !!m && !!m[3] && (!/^\d/.test(m[2]) || /^1[.)]$/.test(m[2]));
   }
@@ -204,6 +274,7 @@
         if (nm && ind0 >= base && /^\d/.test(nm[2]) === ordered) { i = k; continue; }
         break;
       }
+      if (RE_RULE.test(ln) && indentOf(ln) < base + 2) break;
       var ind = indentOf(ln), m = RE_ITEM.exec(ln);
       if (m && ind < base + 2) {
         if (ind < base || /^\d/.test(m[2]) !== ordered) break;
@@ -237,6 +308,33 @@
     return i;
   }
 
+  // A table goes into a box of its own that scrolls sideways, so a wide one
+  // never makes the page scroll.
+  function parseTable(lines, i, out) {
+    var head = cellsOf(lines[i]), align = cellsOf(lines[i + 1]).map(function (c) {
+      var l = c.charAt(0) === ":", r = c.charAt(c.length - 1) === ":";
+      return l && r ? "c" : r ? "r" : "";
+    });
+    var wrap = el("div", "tbl"), table = el("table"), thead = el("thead"), tr = el("tr");
+    function cell(tag, text, k, row) {
+      var c = el(tag);
+      if (align[k]) c.className = "al-" + align[k];
+      inline(text, c, {});
+      row.appendChild(c);
+    }
+    head.forEach(function (t, k) { cell("th", t, k, tr); });
+    thead.appendChild(tr); table.appendChild(thead);
+    var body = el("tbody");
+    for (i += 2; i < lines.length && lines[i].trim() && lines[i].indexOf("|") >= 0; i++) {
+      var row = el("tr"), cs = cellsOf(lines[i]);
+      for (var k = 0; k < head.length; k++) cell("td", cs[k] || "", k, row);
+      body.appendChild(row);
+    }
+    if (body.firstChild) table.appendChild(body);
+    wrap.appendChild(table); out.appendChild(wrap);
+    return i;
+  }
+
   function blocks(lines, out, depth, words) {
     var i = 0;
     while (i < lines.length) {
@@ -256,6 +354,7 @@
         inline(m[2] || "", h, {});
         out.appendChild(h); i++; continue;
       }
+      if (RE_RULE.test(ln)) { out.appendChild(el("hr")); i++; continue; }
       if (RE_QUOTE.test(ln) && depth < 5) {
         var inner = [];
         while (i < lines.length && RE_QUOTE.test(lines[i])) { inner.push(lines[i].replace(/^ {0,3}> ?/, "")); i++; }
@@ -263,10 +362,11 @@
         blocks(inner, bq, depth + 1, words);
         out.appendChild(bq); continue;
       }
+      if (tableAt(lines, i)) { i = parseTable(lines, i, out); continue; }
       if (RE_ITEM.test(ln) && depth < 5) { i = parseList(lines, i, depth, out, words); continue; }
       var buf = [ln.replace(/^ +/, "").replace(/\s+$/, "")];
       i++;
-      while (i < lines.length && lines[i].trim() && !interrupts(lines[i])) { buf.push(lines[i].replace(/^ +/, "").replace(/\s+$/, "")); i++; }
+      while (i < lines.length && lines[i].trim() && !interrupts(lines[i]) && !tableAt(lines, i)) { buf.push(lines[i].replace(/^ +/, "").replace(/\s+$/, "")); i++; }
       var p = el("p");
       inline(buf.join("\n"), p, {});
       out.appendChild(p);
@@ -285,17 +385,102 @@
   }
   window.GTMarkdown = { render: render, safeUrl: safeUrl };
 
-  // A text the server wrote as plain paragraphs (a comment) carries its source in
-  // data-md; with the script it is shown as Markdown, without it stays as it is.
-  function upgrade() {
-    for (var box of document.querySelectorAll("[data-md]")) {
+  // The address of a heading: "h-" and its words, a number after it counts up
+  // until nothing on the page has it (markdown.go writes the same for a page
+  // without the script).
+  function anchorOf(text, used) {
+    var slug = text.toLowerCase().replace(/[^\p{L}\p{N}\s_-]+/gu, "").trim().replace(/[\s_-]+/g, "-") || "section";
+    var id = "h-" + slug, n = 2;
+    while (used[id] || document.getElementById(id)) id = "h-" + slug + "-" + n++;
+    used[id] = true;
+    return id;
+  }
+  // The headings of a rendered text get their address; the outline goes into the nav.
+  function anchors(box) {
+    var used = {}, heads = box.querySelectorAll("h1,h2,h3,h4,h5,h6"), nav = document.querySelector("[data-toc]");
+    for (var h of heads) h.id = anchorOf(h.textContent, used);
+    if (!nav) return;
+    var list = nav.querySelector("ol"), top = 6;
+    list.textContent = "";
+    for (var h1 of heads) top = Math.min(top, Number(h1.tagName.charAt(1)));
+    for (var h2 of heads) {
+      var li = el("li", "lv" + Math.min(3, Number(h2.tagName.charAt(1)) - top)), a = el("a", "", h2.textContent);
+      a.setAttribute("href", "#" + h2.id);
+      li.appendChild(a);
+      list.appendChild(li);
+    }
+    nav.hidden = heads.length < 2;
+  }
+
+  // A text the server wrote as plain blocks carries its source in data-md; with
+  // the script it is shown as Markdown, without it stays as it is.
+  function upgrade(root) {
+    var boxes = (root || document).querySelectorAll("[data-md]"), done = false;
+    for (var box of boxes) {
+      if (!document.contains(box)) continue;
       var src = box.getAttribute("data-md");
       box.removeAttribute("data-md");
       box.textContent = "";
       box.appendChild(render(src, {}));
+      if (box.hasAttribute("data-md-anchors")) {
+        anchors(box);
+        var t = location.hash.length > 1 && document.getElementById(decodeURIComponent(location.hash.slice(1)));
+        if (t) t.scrollIntoView();
+      }
+      done = true;
     }
-    if (window.GTCards) window.GTCards.scan(document);
-    if (window.GTRefs) window.GTRefs.resolve(document);
+    done = refify(root || document) || done;
+    if (!done) return;
+    if (window.GTCards) window.GTCards.scan(root || document);
+    if (window.GTRefs) window.GTRefs.resolve(root || document);
   }
-  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", upgrade); else upgrade();
+
+  // A text the page keeps as it is (the transcript of a session, with the hits of
+  // a search in it) is not Markdown, but the keys in it are still references:
+  // inside a box with data-refify every "REQ-5" in a text node becomes the pill.
+  var RE_KEYS = /(REQ|PAIN|TASK|IDEA|DEC|FEAT)-(\d+)(?![\p{L}\p{N}_-])/gu;
+  function refify(root) {
+    var found = false;
+    for (var box of root.querySelectorAll("[data-refify]")) {
+      box.removeAttribute("data-refify");
+      var walker = document.createTreeWalker(box, NodeFilter.SHOW_TEXT), nodes = [], t;
+      while ((t = walker.nextNode())) {
+        if (!t.parentNode.closest("a, pre, code, .ref")) nodes.push(t);
+      }
+      for (var node of nodes) {
+        var text = node.nodeValue, last = 0, m, frag = null;
+        RE_KEYS.lastIndex = 0;
+        while ((m = RE_KEYS.exec(text))) {
+          if (m.index > 0 && /[\p{L}\p{N}_-]/u.test(text.charAt(m.index - 1))) continue;
+          frag = frag || document.createDocumentFragment();
+          frag.appendChild(document.createTextNode(text.slice(last, m.index)));
+          frag.appendChild(pill(m[0]));
+          last = m.index + m[0].length;
+        }
+        if (!frag) continue;
+        frag.appendChild(document.createTextNode(text.slice(last)));
+        node.replaceWith(frag);
+        found = true;
+      }
+    }
+    return found;
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", function () { upgrade(); }); else upgrade();
+
+  // Text the page brings later (a room that refreshes, search results) is drawn the same way.
+  if (window.MutationObserver) {
+    var queued = false;
+    new MutationObserver(function (list) {
+      if (queued) return;
+      for (var m of list) {
+        for (var n of m.addedNodes) {
+          if (n.nodeType === 1 && (n.matches("[data-md],[data-refify]") || n.querySelector("[data-md],[data-refify]"))) {
+            queued = true;
+            requestAnimationFrame(function () { queued = false; upgrade(); });
+            return;
+          }
+        }
+      }
+    }).observe(document.documentElement, { childList: true, subtree: true });
+  }
 })();
