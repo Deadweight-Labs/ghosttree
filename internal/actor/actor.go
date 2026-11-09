@@ -8,6 +8,8 @@ package actor
 
 import (
 	"encoding/json"
+	"hash/fnv"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -21,8 +23,8 @@ const (
 
 // Entry kinds that carry an actor. Creation kinds name the object; Criterion
 // and RequestDone name who closed it, and a later closing replaces the earlier
-// one. A vote is keyed by the row of the voter's vote, which stays when the
-// vote changes.
+// one. A vote is keyed by VoteEntryID (decision and voter), which stays when
+// the vote changes.
 const (
 	Request     = "request"
 	Criterion   = "criterion"
@@ -285,4 +287,19 @@ func ModelAt(segs []Segment, at string) string {
 		}
 	}
 	return model
+}
+
+// VoteEntryID is the entry id of a vote stamp: a vote has no id of its own
+// (decision_votes is keyed by decision and voter), and its rowid may change
+// with a VACUUM. The id is a hash of both keys, positive and never 0.
+func VoteEntryID(decisionID int64, voterKey string) int64 {
+	h := fnv.New64a()
+	h.Write([]byte(strconv.FormatInt(decisionID, 10)))
+	h.Write([]byte{0})
+	h.Write([]byte(voterKey))
+	id := int64(h.Sum64() & 0x7fffffffffffffff)
+	if id == 0 {
+		id = 1
+	}
+	return id
 }

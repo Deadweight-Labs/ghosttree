@@ -123,7 +123,7 @@ func TestServerStampsTheActorOfEveryKind(t *testing.T) {
 		"subject": "idea", "id": i.ID, "question": "Welche Anzeige",
 		"variants": []map[string]any{{"title": "Name"}, {"title": "Name und Harness"}}}))
 	actorCall(t, f, "mia", s, 200, "POST", idPath("/api/decisions/%d/votes", dec.ID), map[string]any{"variant": "B", "reason": "sagt mehr"})
-	ids[actor.Vote] = f.st.VoteRowID(dec.ID, "person:3:agent")
+	ids[actor.Vote] = actor.VoteEntryID(dec.ID, "person:3:agent")
 	crit := d.Criteria[0].ID
 	actorCall(t, f, "mia", s, 200, "PATCH", idPath("/api/criteria/%d", crit), map[string]any{"state": "met", "evidence_kind": "test", "evidence_ref": "go test ./..."})
 	ids[actor.Criterion] = crit

@@ -618,19 +618,6 @@ func (s *Store) ReactionRowID(kind string, id int64, content string, account int
 	return row
 }
 
-// VoteRowID is the row of the vote with this key (VoterKey) on a decision, 0
-// if there is none.
-func (s *Store) VoteRowID(decisionID int64, voterKey string) int64 {
-	if s.reader != nil {
-		return s.reader.VoteRowID(decisionID, voterKey)
-	}
-	var row int64
-	if err := s.db.QueryRow(`SELECT rowid FROM decision_votes WHERE decision_id=? AND voter_key=?`, decisionID, voterKey).Scan(&row); err != nil {
-		return 0
-	}
-	return row
-}
-
 // ActorStats is the statistics over the projects this viewer may see in full:
 // one project when named (it must be readable), else every project with a role
 // or in one of the viewer's organisations. Guests of a project do not count it.
