@@ -109,7 +109,7 @@ func (a *app) runbooksPage(w http.ResponseWriter, r *http.Request) {
 				row.Sha = shortSha(sum.LastCommit)
 			}
 			if t := parseTime(sum.LastSuccessAt); !t.IsZero() {
-				row.LastAge = shortAge(l, now, t)
+				row.LastAge = shortAgo(l, now, t)
 			}
 			v.Rows = append(v.Rows, row)
 		}
@@ -186,7 +186,7 @@ func (a *app) runbookPage(w http.ResponseWriter, r *http.Request, remote, name s
 	}
 	if run := view.LastSuccess; run != nil {
 		v.LastRun, v.LastResult = "#"+strconv.FormatInt(run.ID, 10), run.Result
-		v.LastAge = shortAge(l, overviewNow().UTC(), parseTime(run.CreatedAt))
+		v.LastAge = shortAgo(l, overviewNow().UTC(), parseTime(run.CreatedAt))
 	}
 	for _, t := range view.Spec.Targets {
 		cmd := "ctx run " + view.Name + " --target " + t.Name

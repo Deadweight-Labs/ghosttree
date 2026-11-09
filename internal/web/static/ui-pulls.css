@@ -29,8 +29,6 @@
   & .tlx + .box.merge { margin-top: 16px; }
 
   /* checklist tab */
-  & .dstat { display: flex; flex-wrap: wrap; gap: 8px 24px; margin-bottom: 16px; padding: 12px 16px; background: var(--canvas-subtle); border: 1px solid var(--border-default); border-radius: 6px; color: var(--fg-muted); }
-  & .dstat b { margin-right: 4px; color: var(--fg-default); font-size: 16px; font-weight: 600; }
   & details.rq > summary { display: grid; grid-template-columns: 16px 56px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 8px 16px; min-height: 40px; cursor: pointer; list-style: none; background: var(--canvas-default); }
   & details.rq > summary::-webkit-details-marker { display: none; }
   & details.rq > summary:hover { background: var(--row-hover); }

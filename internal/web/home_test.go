@@ -187,7 +187,7 @@ func TestReviewBulkIsAllOrNothingAndChecksEveryEntry(t *testing.T) {
 		t.Errorf("rejected note = %s", got)
 	}
 	_, page := fetchPage(t, e.Lead, e.Base+"/ui/review?done=bulk_reject&n=1&source=gardener")
-	if !strings.Contains(page, "1 notes rejected") {
+	if !strings.Contains(page, "1 note rejected") {
 		t.Errorf("no result line after the bulk decision: %s", page)
 	}
 	if entryState(t, e.St, hidden) != "staged/active" {

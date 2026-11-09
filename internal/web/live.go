@@ -89,7 +89,7 @@ func (a *app) liveOf(pa *store.ProjectAccess, publicID string, started, now time
 			la.At = at
 			// Den Dateipfad sieht, wer auch Besitzer und Maschine sieht.
 			if sess.AccountID != 0 {
-				la.Last = l.msg("live.last_file", ellipsize(acts[0].Path, 80), shortAge(l, now, at))
+				la.Last = l.msg("live.last_file", ellipsize(acts[0].Path, 80), shortAgo(l, now, at))
 			}
 		}
 	}

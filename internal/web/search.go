@@ -162,6 +162,9 @@ func (a *app) planSearch(r *http.Request) *searchPlan {
 		lines = a.presetLines(l, r, pa, v, name)
 	} else {
 		v.Searched = utf8.RuneCountInString(q) >= minSearchRunes
+		if q != "" && !v.Searched {
+			v.Notice, v.NoticeKind = l.msg("search.min_chars", minSearchRunes), "note"
+		}
 	}
 	p := &searchPlan{l: l, pa: pa, v: v, guest: guest, project: project, now: overviewNow().UTC()}
 	p.href = func(k string) string {
@@ -198,7 +201,7 @@ func (a *app) planSearch(r *http.Request) *searchPlan {
 			continue
 		}
 		if un := sl.unsupportedKinds(); len(un) > 0 && v.Notice == "" {
-			v.Notice, v.NoticeKind = l.msg("search.err.kinds", strings.Join(un, ", ")), "note"
+			v.Notice, v.NoticeKind = l.msg("search.err.kinds", searchKindWords(l, un)), "note"
 		}
 		p.lines = append(p.lines, sl)
 		p.raw = append(p.raw, line)
@@ -603,4 +606,18 @@ func (a *app) searchPains(l lang, st *store.Store, pa *store.ProjectAccess, sl s
 		g.Hits = append(g.Hits, searchHit{Title: row.Title, Sub: lastSegment(row.Project) + " · " + label(l, painStateKeys, row.State), Href: painURL(row.ID), Date: o.Date, Stamp: o.Stamp, Area: o.Area})
 	}
 	return g
+}
+
+// searchKindWords names the kinds the page does not show, in the reader's language.
+var searchKindWordKeys = map[string]string{"feature": "search.kind_word.feature", "criterion": "search.kind_word.criterion", "file": "search.kind_word.file", "message": "search.kind_word.message"}
+
+func searchKindWords(l lang, kinds []string) string {
+	words := make([]string, 0, len(kinds))
+	for _, k := range kinds {
+		if key, ok := searchKindWordKeys[k]; ok {
+			k = l.msg(key)
+		}
+		words = append(words, k)
+	}
+	return strings.Join(words, ", ")
 }

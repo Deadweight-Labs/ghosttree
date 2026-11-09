@@ -314,6 +314,8 @@ func (a *app) issuesPage(w http.ResponseWriter, r *http.Request) {
 		if v.SaveQ == "" {
 			v.SaveQ = "is:issue is:open"
 		}
+		// A box of saved searches with neither a search nor a way to save one has nothing to show.
+		v.HasAside = len(v.Presets) > 0 || v.CanSave
 	}
 	v.New, v.NewMenu = issueNewMenu(v.Base, iq.Segment)
 	a.rowActors(l, v.Rows)

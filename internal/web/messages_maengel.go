@@ -32,11 +32,11 @@ var messagesMaengelDE = map[string]string{
 	"err.back_repo":          "Zurück zum Repo",
 	"agents.filter.active":   "%d aktiv",
 	"agents.filter.owner":    "Besitzer",
-	"agents.filter.machine":  "Rechner",
+	"agents.filter.machine":  "Maschine",
 	"agents.filter.repo":     "Repo",
 	"agents.filter.all":      "Alle",
-	"agents.search_org":      "Agenten, Rechner oder Issue suchen",
-	"agents.connect_machine": "Rechner verbinden",
+	"agents.search_org":      "Agenten, Maschinen oder Issues suchen",
+	"agents.connect_machine": "Maschine verbinden",
 }
 
 func init() {

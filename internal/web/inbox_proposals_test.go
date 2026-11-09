@@ -144,7 +144,7 @@ func TestTaskExplanationAndStepsShowInTheInboxRowAndOnTheHoverCard(t *testing.T)
 
 	// The hover card of the reference: the text and the first four steps, the rest counted.
 	card := regexp.MustCompile(`(?s)<template data-ref-card="TASK-` + itoa(long.ID) + `".*?</template>`).FindString(page)
-	for _, want := range []string{`<div class="pc-x"><span class="k">Kurz erklärt</span> Ohne die Verbindung`, `<ol class="pc-steps">`, `Einstellungen öffnen`, `Prüfen`, `1 weitere Schritte`} {
+	for _, want := range []string{`<div class="pc-x"><span class="k">Kurz erklärt</span> Ohne die Verbindung`, `<ol class="pc-steps">`, `Einstellungen öffnen`, `Prüfen`, `1 weiterer Schritt`} {
 		if !strings.Contains(card, want) {
 			t.Errorf("the card of the task lacks %q: %s", want, card)
 		}

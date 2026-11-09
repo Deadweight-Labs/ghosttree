@@ -19,7 +19,7 @@ func TestRunbooksListAndPageShowCommandsToCopyAndTheHandToAnAgent(t *testing.T) 
 		t.Fatal(err)
 	}
 	_, list := fetchPage(t, e.Owner, e.Base+"/ui/x/shell/runbooks")
-	for _, want := range []string{"rollout-prod", "Roll out the new version.", `href="/ui/x/shell/runbooks/rollout-prod"`, `data-list-filter=".rbrow"`, "1 runbooks"} {
+	for _, want := range []string{"rollout-prod", "Roll out the new version.", `href="/ui/x/shell/runbooks/rollout-prod"`, `data-list-filter=".rbrow"`, "1 runbook"} {
 		if !strings.Contains(list, want) {
 			t.Errorf("list lacks %q", want)
 		}

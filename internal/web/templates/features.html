@@ -12,7 +12,7 @@
 {{with .FeatureV}}<div class="dhead"><div class="dtitle"><h1>{{.Name}}<span class="n">#{{.ID}}</span></h1></div>
 <div class="dmeta"><span class="lb pillbig {{.Tone}}">{{mi "feature"}}{{.StateLabel}}</span>{{if .Person}}<span><span class="person">{{avatarOf .Person}}{{.Person}}</span> {{t "features.updated" .Age}}</span>{{end}}</div></div>
 <div class="dgrid"><div class="dmain">
-{{if .Reason}}<div class="callout" role="note">{{mi "drop"}}<div><div class="k">{{t "features.retired_because"}}</div><div class="tt">{{.Reason}}</div></div></div>{{end}}
+{{if .Reason}}<div class="callout neu" role="note">{{mi "drop"}}<div><div class="k">{{t "features.retired_because"}}</div><div class="tt">{{.Reason}}</div></div></div>{{end}}
 <div class="cmt">{{avatarX "xl" "" .Person "" false}}<div class="cbox"><div class="ch"><b>{{.Person}}</b><span>{{t "features.described_ch"}}</span><span class="sp"></span><span class="lb out">{{t "features.rev" .Revision}}</span></div>
 <div class="cb prose"><p class="fsum">{{.Summary}}</p>{{template "knbody" .Blocks}}</div></div></div>
 {{if .Limits}}<div class="box fsec"><div class="box-h"><span class="t">{{mi "tri"}} {{t "features.limits"}}</span></div><div class="box-r prose">{{template "knbody" .Limits}}</div></div>{{end}}

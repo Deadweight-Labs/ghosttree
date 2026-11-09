@@ -2,6 +2,7 @@ package web
 
 import (
 	"fmt"
+	"html"
 	"html/template"
 	"net/http"
 	"strings"
@@ -65,7 +66,32 @@ func (l lang) msg(key string, args ...any) string {
 	if len(args) == 0 {
 		return text
 	}
+	if one, ok := l.singular(key, args[0]); ok {
+		if !strings.Contains(one, "%") {
+			return one
+		}
+		text = one
+	}
 	return fmt.Sprintf(text, args...)
+}
+
+// singular is the text of key for exactly one thing, if the catalog has one under
+// key+"_one": "1 Token" instead of "1 Tokens". The first argument is the count.
+func (l lang) singular(key string, first any) (string, bool) {
+	switch n := first.(type) {
+	case int:
+		if n != 1 {
+			return "", false
+		}
+	case int64:
+		if n != 1 {
+			return "", false
+		}
+	default:
+		return "", false
+	}
+	text, ok := catalogs[l][key+"_one"]
+	return text, ok
 }
 
 var (
@@ -107,6 +133,10 @@ func parseTemplates(l lang) *template.Template {
 	return template.Must(template.New("").Funcs(template.FuncMap{
 		"t":   l.msg,
 		"ago": func(stamp string) template.HTML { return timeTag(l, stamp) },
+		// agot writes a sentence around a time: the text of key has %s where the time goes.
+		"agot": func(key, stamp string) template.HTML {
+			return template.HTML(fmt.Sprintf(html.EscapeString(l.msg(key)), timeTag(l, stamp)))
+		},
 		// dict builds a map for a partial that needs the page and one row.
 		"dict": func(kv ...any) map[string]any {
 			m := map[string]any{}

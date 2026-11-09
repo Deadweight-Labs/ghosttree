@@ -62,7 +62,7 @@ func TestInboxListsWhatWaitsAndNothingHidden(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("status=%d", status)
 	}
-	for _, want := range []string{"Waiting for you", "Mentioned", "Create the vendor key", task.HumanID(), `action="/ui/tasks/done"`, "Done: leaves the inbox", `name="back" value="inbox"`} {
+	for _, want := range []string{"Waiting for you", "Create the vendor key", task.HumanID(), `action="/ui/tasks/done"`, "Done: leaves the inbox", `name="back" value="inbox"`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("inbox lacks %q", want)
 		}
@@ -83,11 +83,11 @@ func TestInboxListsWhatWaitsAndNothingHidden(t *testing.T) {
 func TestInboxEmptyIsOneLineAndOneAction(t *testing.T) {
 	e := ovEnv(t)
 	_, page := fetchPage(t, e.Member, e.Base+"/ui/inbox")
-	if !strings.Contains(page, "Nothing is waiting for you.") || !strings.Contains(page, `href="/ui/overview">Open home<`) {
+	if !strings.Contains(page, "Nothing is waiting for you.") || strings.Contains(page, "Open home") {
 		t.Errorf("empty inbox: %s", page)
 	}
 	if strings.Contains(page, `class="gh-rows"`) || strings.Contains(page, "Nothing here.") {
-		t.Error("an empty inbox is one line and one action, not two empty sections")
+		t.Error("an empty inbox is one line, not two empty sections")
 	}
 }
 

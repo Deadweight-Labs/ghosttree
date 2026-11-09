@@ -246,11 +246,7 @@ func (a *app) homeAttention(r *http.Request, now time.Time) ([]forYouRow, error)
 			row.Mark, row.Action, row.rank, row.Tone = "handoff", l.msg("home.act.accept"), rankHandoff, ""
 		}
 		if !created.IsZero() {
-			if row.rank == rankBlocks {
-				row.Age = l.msg("home.waiting_since", shortAge(l, now, created))
-			} else {
-				row.Age = shortAgo(l, now, created)
-			}
+			row.Age = shortAgo(l, now, created)
 		}
 		rows = append(rows, row)
 	}
