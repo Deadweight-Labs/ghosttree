@@ -49,6 +49,8 @@ type ideaPageView struct {
 	Git *anchorView
 	// Reactions is the row under the wish.
 	Reactions *reactionsView
+	// Edit is the panel "Bearbeiten" (nil: the viewer may not correct the idea).
+	Edit *editPanel
 	// Workshop is the idea workshop (workshop.go); nil until someone worked the idea out.
 	Workshop *workshopView
 	// Images are the pictures on the idea itself (and on answers); CanAttach shows
@@ -57,6 +59,11 @@ type ideaPageView struct {
 	CanAttach bool
 	HasImages bool
 }
+
+// ideaCorrectFail names the text of a refused correction.
+var ideaCorrectFail = map[string]string{"title_required": "ideas.result.correct_title", "title_too_long": "ideas.result.correct_title", "title_invalid": "ideas.result.correct_title",
+	"body_too_long": "ideas.result.correct_body", "body_invalid": "ideas.result.correct_body", "nothing_to_change": "ideas.result.correct_nothing",
+	"idea_changed": "ideas.result.correct_changed", "correct_failed": "ideas.result.correct_failed", "correct_reason": "ideas.result.correct_reason"}
 
 var ideaStateTone = map[string]string{idea.Open: "p-ok", idea.Accepted: "p-done", idea.Dismissed: "p-mute"}
 
@@ -105,8 +112,9 @@ func (a *app) ideaInRepo(w http.ResponseWriter, r *http.Request, remote, id stri
 		}
 		v.Issues = append(v.Issues, f)
 	}
+	edits, _ := a.store.IdeaEditsOf(i.ID)
 	v.First = firstOf(l, v.Actor, firstNonEmpty(v.Actor.Label, v.Person), l.msg("ideas.wished"), v.Age, l.msg("issue.author"), "")
-	v.Items = mergeTimeline(a.ideaItems(l, ws, age), a.commentTimeline(r, l, pa, store.CommentOnIdea, i.ID, i.Person, view.Href+"/ideas/"+strconv.FormatInt(i.ID, 10), editingComment(r), age))
+	v.Items = mergeTimeline(a.ideaItems(l, ws, edits, age), a.commentTimeline(r, l, pa, store.CommentOnIdea, i.ID, i.Person, view.Href+"/ideas/"+strconv.FormatInt(i.ID, 10), editingComment(r), age))
 	if s, err := pa.Reactions(store.ReactOnIdea, i.ID); err == nil {
 		v.Reactions = a.reactionsFor(r, l, store.ReactOnIdea, i.ID, s)
 	}
@@ -126,6 +134,10 @@ func (a *app) ideaInRepo(w http.ResponseWriter, r *http.Request, remote, id stri
 			v.People = append(v.People, p)
 		}
 	}
+	if interactive(r) && pa.CheckIdea(i, store.ActEdit) == nil {
+		v.Edit = &editPanel{Open: r.URL.Query().Get("panel") == "edit", Close: view.Href + "/ideas/" + strconv.FormatInt(i.ID, 10),
+			Action: "/ui/ideas/" + strconv.FormatInt(i.ID, 10) + "/correct", Token: v.Token, Title: i.Title, Body: i.Body}
+	}
 	if interactive(r) {
 		v.Composer = a.ideaComposer(l, v, i.State, pa.CheckIdea(i, store.ActEdit) == nil, pa.Allow(remote, store.ResComment, store.ActCreate, store.Object{Own: true}))
 	}
@@ -134,6 +146,8 @@ func (a *app) ideaInRepo(w http.ResponseWriter, r *http.Request, remote, id stri
 		v.Result = commentResult(r, l)
 	case r.URL.Query().Get("fail") != "":
 		v.Result = &requestResult{Text: l.msg(ideaFailKey(r.URL.Query().Get("fail"))), Kind: "failed", Fail: true}
+	case r.URL.Query().Get("done") == "corrected":
+		v.Result = &requestResult{Text: l.msg("ideas.result.corrected"), Kind: "done"}
 	case r.URL.Query().Get("done") == "image":
 		v.Result = &requestResult{Text: l.msg("ideas.result.image"), Kind: "done"}
 	case r.URL.Query().Get("done") == "from_pain":
@@ -159,7 +173,7 @@ func peopleOf(ws store.IdeaWorkshop) []string {
 }
 
 // ideaItems are the workshop's work as entries of the timeline, oldest first.
-func (a *app) ideaItems(l lang, ws store.IdeaWorkshop, age func(string) string) []tlItem {
+func (a *app) ideaItems(l lang, ws store.IdeaWorkshop, edits []store.IdeaEdit, age func(string) string) []tlItem {
 	all := a.workshopDated(l, ws, age)
 	sentence := func(key string, args ...any) template.HTML {
 		return template.HTML(fmt.Sprintf(html.EscapeString(l.msg(key)), args...))
@@ -179,12 +193,90 @@ func (a *app) ideaItems(l lang, ws store.IdeaWorkshop, age func(string) string) 
 	for _, d := range ws.Decisions {
 		all = append(all, datedItem{d.CreatedAt, tlItem{ID: "decision-" + strconv.FormatInt(d.ID, 10), Act: "idea.decision", Who: d.Person, Icon: "chat", Head: sentence("ideas.ev.decision") + " " + longPill(l, "decision", d.ID, "#workshop"), Age: age(d.CreatedAt)}})
 	}
+	for n, e := range edits {
+		all = append(all, datedItem{e.CreatedAt, ideaEditItem(l, e, nextTitle(edits, n, ws.Idea.Title), age(e.CreatedAt))})
+	}
 	sort.SliceStable(all, func(i, j int) bool { return all[i].at < all[j].at })
 	items := make([]tlItem, len(all))
 	for i, d := range all {
 		items[i] = d.item
 	}
 	return items
+}
+
+// nextTitle is the title the idea had after correction n: what the next
+// correction found, or the title it has now.
+func nextTitle(edits []store.IdeaEdit, n int, current string) string {
+	if n+1 < len(edits) {
+		return edits[n+1].OldTitle
+	}
+	return current
+}
+
+// ideaEditItem is a correction as an entry: who said what changed, the old title
+// struck through before the new one, and the reason as the text under it.
+func ideaEditItem(l lang, e store.IdeaEdit, newTitle string, age string) tlItem {
+	key := "ideas.ev.corrected_body"
+	switch e.Changed {
+	case "title":
+		key = "ideas.ev.corrected_title"
+	case "title,body":
+		key = "ideas.ev.corrected_both"
+	}
+	body := ""
+	if strings.Contains(e.Changed, "title") {
+		body = `<div class="muted"><s>` + html.EscapeString(e.OldTitle) + `</s> → ` + html.EscapeString(newTitle) + `</div>`
+	}
+	body += string(mdText(e.Reason))
+	return tlItem{ID: "idea-edit-" + strconv.FormatInt(e.ID, 10), Act: "idea.corrected", Who: e.Person, Icon: "pencil",
+		Head: template.HTML(html.EscapeString(l.msg(key))), Age: age, Body: template.HTML(body), at: parseTime(e.CreatedAt)}
+}
+
+// ideaCorrect is POST /ui/ideas/{id}/correct: change the title or the text of an
+// idea, with the reason. Only what changed goes to the store; the rights are its.
+func (a *app) ideaCorrect(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	pa := a.access(r)
+	i, err := pa.IdeaView(id)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	back := repoHref(i.Project) + "/ideas/" + strconv.FormatInt(id, 10)
+	title, body, reason := strings.TrimSpace(r.FormValue("title")), lineBreaks(r.FormValue("body")), r.FormValue("reason")
+	for f, v := range map[string]string{"body": body, "reason": reason} {
+		if tooLong(v, maxFieldChars) {
+			a.tooLongForm(w, r, back+"?panel=edit#edit", f, v, maxFieldChars)
+			return
+		}
+	}
+	var newTitle, newBody *string
+	if title != i.Title {
+		newTitle = &title
+	}
+	if strings.TrimSpace(body) != i.Body {
+		newBody = &body
+	}
+	if _, err := pa.CorrectIdea(id, newTitle, newBody, reason, personOf(r)); err != nil {
+		if errors.Is(err, store.ErrAccessForbidden) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		if code := requestdomain.Code(err); code != "" {
+			if code == "reason_required" {
+				code = "correct_reason"
+			}
+			http.Redirect(w, r, back+"?fail="+url.QueryEscape(code)+"&panel=edit#edit", http.StatusSeeOther)
+			return
+		}
+		http.NotFound(w, r)
+		return
+	}
+	http.Redirect(w, r, back+"?done=corrected", http.StatusSeeOther)
 }
 
 // ideaComposer is the field at the foot: text alone is a comment; the status
@@ -292,6 +384,8 @@ func ideaFailKey(code string) string {
 		return "ideas.result.img_bad"
 	case "img_other":
 		return "ideas.result.img_other"
+	case "title_required", "title_too_long", "title_invalid", "body_too_long", "body_invalid", "nothing_to_change", "idea_changed", "correct_failed", "correct_reason":
+		return ideaCorrectFail[code]
 	}
 	return "ideas.result.failed"
 }

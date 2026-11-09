@@ -16,7 +16,7 @@ import (
 func TestThinkingIsOffUntilAsked(t *testing.T) {
 	e := seedSessions(t)
 	base := "/ui/sessions/" + e.pid["anna-project"]
-	_, page := e.get(t, e.Owner, base)
+	_, page := e.get(t, e.Owner, base+"?view=raw")
 	if strings.Contains(page, `<details class="think"`) {
 		t.Error("thinking blocks are shown by default")
 	}
@@ -83,7 +83,7 @@ func TestRenderingIsBoundedPerBlockAndPerPage(t *testing.T) {
 		t.Fatal(err)
 	}
 	sess, _ := e.St.SessionByID(id)
-	_, page := e.get(t, e.Owner, "/ui/sessions/"+sess.PublicID)
+	_, page := e.get(t, e.Owner, "/ui/sessions/"+sess.PublicID+"?view=raw")
 	if len(page) > 600<<10 {
 		t.Errorf("a 1 MB message renders %d bytes", len(page))
 	}
@@ -99,7 +99,7 @@ func TestRenderingIsBoundedPerBlockAndPerPage(t *testing.T) {
 		t.Fatal(err)
 	}
 	ls, _ := e.St.SessionByID(long)
-	_, page = e.get(t, e.Owner, "/ui/sessions/"+ls.PublicID)
+	_, page = e.get(t, e.Owner, "/ui/sessions/"+ls.PublicID+"?view=raw")
 	if n := strings.Count(page, `class="ol"`); n > 2010 {
 		t.Errorf("one output block renders %d lines", n)
 	}

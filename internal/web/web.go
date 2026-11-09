@@ -204,6 +204,7 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	a.handle(mux, "GET /ui/inbox", a.requirePerson(http.HandlerFunc(a.inboxPage)))
 	a.handle(mux, "POST /ui/issues/create", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.issueCreate))))))
 	a.handle(mux, "POST /ui/ideas/{id}/state", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.ideaState))))))
+	a.handle(mux, "POST /ui/ideas/{id}/correct", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.ideaCorrect))))))
 	a.handle(mux, "POST /ui/comments/{id}/edit", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.commentEdit))))))
 	a.handle(mux, "POST /ui/reactions", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.reactionToggle))))))
 	a.handle(mux, "POST /ui/comments/{id}/delete", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.commentDelete))))))
@@ -660,13 +661,15 @@ var webRoutes = map[string]webClass{
 	"POST /ui/orgs/rename":                  webAdmin,
 	"POST /ui/orgs/accept":                  webAccount,
 
-	"GET /ui/tasks":             webProject,
-	"POST /ui/tasks/done":       webAdmin,
-	"POST /ui/inbox/answer":     webAdmin,
-	"GET /ui/pains":             webProject,
-	"GET /ui/pains/{id}":        webProject,
-	"POST /ui/pains/{id}/state": webAdmin,
-	"POST /ui/pains/{id}/idea":  webAdmin,
+	"GET /ui/tasks":               webProject,
+	"POST /ui/tasks/done":         webAdmin,
+	"POST /ui/inbox/answer":       webAdmin,
+	"GET /ui/pains":               webProject,
+	"GET /ui/pains/{id}":          webProject,
+	"POST /ui/pains/{id}/state":   webAdmin,
+	"POST /ui/pains/{id}/idea":    webAdmin,
+	"POST /ui/pains/{id}/correct": webAdmin,
+	"POST /ui/ideas/{id}/correct": webProject,
 
 	"POST /ui/labels/create":      webAdmin,
 	"POST /ui/labels/{id}/update": webAdmin,

@@ -126,6 +126,7 @@ func (a *app) registerPainTaskPages(mux *http.ServeMux) {
 	a.handle(mux, "GET /ui/pains/{id}", a.requirePerson(http.HandlerFunc(a.painPage)))
 	a.handle(mux, "POST /ui/pains/{id}/state", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.painState))))))
 	a.handle(mux, "POST /ui/pains/{id}/idea", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.painIdea))))))
+	a.handle(mux, "POST /ui/pains/{id}/correct", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.painCorrect))))))
 }
 
 // taskFailKey maps the fail= value of a redirect to its message; anything else
