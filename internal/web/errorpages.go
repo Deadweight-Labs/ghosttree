@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"net/http"
 	"slices"
 	"strings"
@@ -25,20 +26,40 @@ type errorPageWriter struct {
 	http.ResponseWriter
 	a        *app
 	r        *http.Request
+	keep     *formKeep
 	code     int
 	captured bool
+	reject   string
+	body     bytes.Buffer
 }
 
+// rejectHeader is how a handler tells the wrapper why it said no, where the status
+// alone does not (a missing form token is 403 like a missing right).
+const rejectHeader = "X-Gt-Reject"
+
 func (w *errorPageWriter) WriteHeader(code int) {
-	if (code == http.StatusNotFound || code == http.StatusForbidden) && w.r.Method == http.MethodGet && strings.HasPrefix(w.Header().Get("Content-Type"), "text/plain") {
+	plain := strings.HasPrefix(w.Header().Get("Content-Type"), "text/plain")
+	switch {
+	case plain && (code == http.StatusNotFound || code == http.StatusForbidden) && w.r.Method == http.MethodGet:
 		w.code, w.captured = code, true
 		return
+	case plain && code >= http.StatusBadRequest && w.r.Method == http.MethodPost && formNavigation(w.r):
+		// A form the browser sent as a page change: the plain-text refusal becomes the
+		// page the form was on, or a page of its own, with what was typed (failForm).
+		w.code, w.captured = code, true
+		w.reject = w.Header().Get(rejectHeader)
+		w.Header().Del(rejectHeader)
+		return
 	}
+	w.Header().Del(rejectHeader)
 	w.ResponseWriter.WriteHeader(code)
 }
 
 func (w *errorPageWriter) Write(b []byte) (int, error) {
 	if w.captured {
+		if w.r.Method == http.MethodPost {
+			w.body.Write(b)
+		}
 		return len(b), nil
 	}
 	return w.ResponseWriter.Write(b)
@@ -59,6 +80,21 @@ func (w *errorPageWriter) finish() {
 		return
 	}
 	h := w.ResponseWriter.Header()
+	if w.r.Method == http.MethodPost {
+		for _, k := range []string{"Content-Type", "Content-Length", "X-Content-Type-Options"} {
+			h.Del(k)
+		}
+		r := w.r
+		if w.keep != nil && w.keep.values != nil {
+			r, _ = withFormKeep(r)
+			if k, ok := r.Context().Value(formKeepKey{}).(*formKeep); ok {
+				k.values = w.keep.values
+			}
+		}
+		text := formFailText(w.a.langFor(r), w.code, w.body.String(), w.reject)
+		w.a.failForm(w.ResponseWriter, r, w.code, text, "")
+		return
+	}
 	h.Del("Content-Type")
 	h.Del("X-Content-Type-Options")
 	h.Set("X-Content-Type-Options", "nosniff")

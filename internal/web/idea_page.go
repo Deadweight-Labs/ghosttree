@@ -133,21 +133,7 @@ func (a *app) ideaInRepo(w http.ResponseWriter, r *http.Request, remote, id stri
 	case commentResult(r, l) != nil:
 		v.Result = commentResult(r, l)
 	case r.URL.Query().Get("fail") != "":
-		v.Result = &requestResult{Text: l.msg("ideas.result.failed"), Kind: "failed", Fail: true}
-		switch r.URL.Query().Get("fail") {
-		case "reason_required":
-			v.Result.Text = l.msg("ideas.result.reason_required")
-		case "pain_link":
-			v.Result.Text = l.msg("ideas.result.pain_link")
-		case "img_none":
-			v.Result.Text = l.msg("ideas.result.img_none")
-		case "img_type":
-			v.Result.Text = l.msg("ideas.result.img_type")
-		case "img_size":
-			v.Result.Text = l.msg("ideas.result.img_size")
-		case "img_bad":
-			v.Result.Text = l.msg("ideas.result.img_bad")
-		}
+		v.Result = &requestResult{Text: l.msg(ideaFailKey(r.URL.Query().Get("fail"))), Kind: "failed", Fail: true}
 	case r.URL.Query().Get("done") == "image":
 		v.Result = &requestResult{Text: l.msg("ideas.result.image"), Kind: "done"}
 	case r.URL.Query().Get("done") == "from_pain":
@@ -241,11 +227,17 @@ func (a *app) ideaState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	to := r.FormValue("mode")
-	if !slices.Contains([]string{idea.Dismissed, idea.Open, "comment"}, to) || len(r.FormValue("reason")) > maxFieldBytes {
+	if !slices.Contains([]string{idea.Dismissed, idea.Open, "comment"}, to) {
 		http.Error(w, "invalid input", http.StatusBadRequest)
 		return
 	}
 	pa := a.access(r)
+	if v := r.FormValue("reason"); tooLong(v, maxFieldChars) && to != "comment" {
+		if view, verr := pa.IdeaView(id); verr == nil {
+			a.tooLongForm(w, r, repoHref(view.Project)+"/ideas/"+strconv.FormatInt(id, 10), "reason", v, maxFieldChars)
+			return
+		}
+	}
 	if to == "comment" {
 		c, err := pa.AddComment(store.CommentOnIdea, id, r.FormValue("reason"), a.commentActor(r))
 		if err != nil {
@@ -264,7 +256,7 @@ func (a *app) ideaState(w http.ResponseWriter, r *http.Request) {
 		}
 		if code := requestdomain.Code(err); code != "" {
 			if ideaView, verr := pa.IdeaView(id); verr == nil {
-				http.Redirect(w, r, repoHref(ideaView.Project)+"/ideas/"+strconv.FormatInt(id, 10)+"?fail="+url.QueryEscape(code), http.StatusSeeOther)
+				a.failFormTo(w, r, repoHref(ideaView.Project)+"/ideas/"+strconv.FormatInt(id, 10), http.StatusUnprocessableEntity, a.langFor(r).msg(ideaFailKey(code)), "reason")
 				return
 			}
 		}
@@ -280,4 +272,24 @@ func (a *app) ideaState(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	http.Redirect(w, r, repoHref(i.Project)+"/ideas/"+strconv.FormatInt(id, 10)+q, http.StatusSeeOther)
+}
+
+// ideaFailKey is the message of a refusal on an idea (the fail= value of a redirect
+// or the rule that refused the form).
+func ideaFailKey(code string) string {
+	switch code {
+	case "reason_required":
+		return "ideas.result.reason_required"
+	case "pain_link":
+		return "ideas.result.pain_link"
+	case "img_none":
+		return "ideas.result.img_none"
+	case "img_type":
+		return "ideas.result.img_type"
+	case "img_size":
+		return "ideas.result.img_size"
+	case "img_bad":
+		return "ideas.result.img_bad"
+	}
+	return "ideas.result.failed"
 }

@@ -11,11 +11,9 @@ import (
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
 )
 
-const maxDeviceForm = 4 << 10
-
 // limitBody begrenzt Formularkörper angemeldeter Seiten. requireCSRF liest den
 // Körper mit ParseForm, das ohne Grenze bis zu 10 MB annimmt.
-func limitBody(next http.Handler) http.Handler { return limitBodyN(maxDeviceForm, next) }
+func limitBody(next http.Handler) http.Handler { return limitBodyN(maxFormBody, next) }
 
 // limitBodyN ist limitBody mit eigener Grenze, für Formulare mit langem Text.
 func limitBodyN(limit int64, next http.Handler) http.Handler {

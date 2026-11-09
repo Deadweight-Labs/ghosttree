@@ -29,6 +29,8 @@ type app struct {
 	bootstrapFile string
 	registered    []string
 	cursorOnce    sync.Once
+	flashOnce     sync.Once
+	flashStore    *flashes // rejected form input, shown again once (formfail.go)
 	cursorSeal    *flowSealer
 	proxies       proxytrust.Set
 	publicOrigin  string // scheme://host of GHOSTTREE_PUBLIC_URL, or empty
@@ -56,6 +58,10 @@ type app struct {
 	logger        *slog.Logger // http_request lines and search failures; nil = slog.Default
 }
 type pageData struct {
+	// Flash is the note over the form a rejected form came back to; FormFailed is
+	// the page that shows it when the address of the form is not known.
+	Flash                                                      *flashNote
+	FormFailed                                                 *formFailedView
 	Title, NavSection, Person, CSRFToken, Error, Code, BackURL string
 	OIDC, Paste, NeedsName                                     bool
 	Admin, Approved, Interactive                               bool
@@ -219,7 +225,7 @@ func newApp(st *store.Store, opts ...Option) http.Handler {
 	}
 	a.handle(mux, "POST /ui/requests/{id}/close", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.requestClose))))))
 	a.handle(mux, "POST /ui/requests/{id}/move", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.requestMove))))))
-	a.handle(mux, "POST /ui/requests/{id}/correct", a.requirePerson(a.requireInteractive(limitBodyN(requestCorrectForm, a.requestFormTooLarge(a.requireCSRF(http.HandlerFunc(a.requestCorrect)))))))
+	a.handle(mux, "POST /ui/requests/{id}/correct", a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(http.HandlerFunc(a.requestCorrect))))))
 	for suffix, h := range map[string]http.HandlerFunc{"create": a.labelCreate, "{id}/update": a.labelUpdate, "{id}/delete": a.labelDelete} {
 		a.handle(mux, "POST /ui/labels/"+suffix, a.requirePerson(a.requireInteractive(limitBody(a.requireCSRF(h)))))
 	}
@@ -360,7 +366,42 @@ func (a *app) renderBrowser(w http.ResponseWriter, r *http.Request, name string,
 	case "profile":
 		data.NavSection = "profile"
 	}
-	a.renderPost(l, w, name, data, func(page []byte) []byte { return a.refCards(r, l, page) })
+	var note []byte
+	if r.Method == http.MethodGet {
+		if data.Flash = a.takeFlash(w, r); data.Flash != nil {
+			var banner bytes.Buffer
+			if err := l.page().ExecuteTemplate(&banner, "flashnote", data); err == nil {
+				note = banner.Bytes()
+			}
+		}
+	}
+	a.renderPost(l, w, name, data, func(page []byte) []byte { return putFlashNote(a.refCards(r, l, page), note) })
+}
+
+// putFlashNote puts the note of a rejected form at the top of the page content:
+// right after the opening of the first ".wrap" of the main area, else of the main
+// area itself. ui-flash.js moves it over the form it belongs to.
+func putFlashNote(page, note []byte) []byte {
+	if len(note) == 0 {
+		return page
+	}
+	at := bytes.Index(page, []byte("<main"))
+	if at < 0 {
+		return page
+	}
+	end := bytes.IndexByte(page[at:], '>')
+	if end < 0 {
+		return page
+	}
+	at += end + 1
+	const wrap = `<div class="wrap">`
+	if i := bytes.Index(page[at:min(len(page), at+400)], []byte(wrap)); i >= 0 {
+		at += i + len(wrap)
+	}
+	out := make([]byte, 0, len(page)+len(note))
+	out = append(out, page[:at]...)
+	out = append(out, note...)
+	return append(out, page[at:]...)
 }
 
 // sessionLinks nennt zu Sessionnummern aus Verweisen die Adresse in der

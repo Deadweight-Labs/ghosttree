@@ -13,3 +13,11 @@
 @media (max-width: 767px) {
   :is(.g2.err) .errbox { margin-top: 24px; }
 }
+
+/* A form that was not accepted and has no page to go back to (formfail.go): the note, what was typed, the way back. */
+:is(.g2.err) {
+  & .formfailed { max-width: 720px; margin: 24px auto 0; }
+  & .formfailed .pfield { margin-bottom: 16px; }
+  & .formfailed textarea { width: 100%; }
+  & .formfailed .erracts { justify-content: flex-start; margin-top: 0; }
+}

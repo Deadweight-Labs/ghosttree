@@ -24,8 +24,8 @@ func (a *app) painIdea(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	title, ok := cleanText(r.FormValue("title"), 200)
-	if !ok || title == "" || len(r.FormValue("body")) > maxFieldBytes {
-		http.Redirect(w, r, a.painHref(r, id)+"?fail=idea_invalid", http.StatusSeeOther)
+	if !ok || title == "" || tooLong(r.FormValue("body"), maxFieldChars) {
+		a.failFormTo(w, r, a.painHref(r, id), http.StatusUnprocessableEntity, a.langFor(r).msg(painFailKey("idea_invalid")), "title")
 		return
 	}
 	pa := a.access(r)

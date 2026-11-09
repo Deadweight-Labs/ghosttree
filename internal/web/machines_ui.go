@@ -404,7 +404,7 @@ func (a *app) machineManage(w http.ResponseWriter, r *http.Request, done string,
 		return
 	}
 	for _, f := range []string{"org", "role", "os_user", "path_prefix", "kind", "do"} {
-		if len(r.FormValue(f)) > maxFieldBytes {
+		if tooLong(r.FormValue(f), maxFieldChars) {
 			http.Error(w, "invalid input", http.StatusBadRequest)
 			return
 		}

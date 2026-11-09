@@ -72,8 +72,12 @@ func TestIssueComposerWritesACommentAndOnlyWhoMayComment(t *testing.T) {
 			t.Errorf("page lacks %q", want)
 		}
 	}
-	if resp := postForm(t, e, e.Owner, "/ui/requests/"+itoa(id)+"/close", url.Values{"mode": {"comment"}, "reason": {"  "}}); resp.StatusCode != http.StatusSeeOther || !strings.Contains(resp.Header.Get("Location"), "comment=empty") {
+	// An empty comment goes back to the page of the issue; the refusal is over the form
+	// and the form data is carried for the script (formfail.go).
+	if resp := postForm(t, e, asBrowser(e.Owner), "/ui/requests/"+itoa(id)+"/close", url.Values{"mode": {"comment"}, "reason": {"  "}}); resp.StatusCode != http.StatusSeeOther || strings.Contains(resp.Header.Get("Location"), "?") {
 		t.Errorf("empty comment -> %d %q", resp.StatusCode, resp.Header.Get("Location"))
+	} else if _, failed := followRefusal(t, e.Owner, e.Base, resp); !strings.Contains(failed, `class="callout is-danger"`) || !strings.Contains(failed, "A comment needs text.") || !strings.Contains(failed, `id="gt-flash"`) {
+		t.Errorf("the refusal is not shown over the form: %.300s", failed)
 	}
 	// A foreign project's issue is as unknown as a missing one.
 	other := rqMake(t, e.St, rqSpec{Title: "Hidden", Project: shellHiddenProject})

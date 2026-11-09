@@ -807,7 +807,6 @@ var messages = map[string]string{
 	"requests.done.completed":         "Completed.",
 	"requests.done.dropped":           "Dropped.",
 	"requests.toolarge.title":         "The text is too long",
-	"requests.toolarge.body":          "The correction was not saved because the form is larger than the server accepts. Shorten the text and try again.",
 	"requests.toolarge.back":          "Back to requests",
 	"requests.fail.open_criteria":     "Resolve the open criteria first.",
 	"requests.act.created":            "Created",

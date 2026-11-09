@@ -808,7 +808,6 @@ var messagesDE = map[string]string{
 	"requests.done.completed":         "Erledigt.",
 	"requests.done.dropped":           "Verworfen.",
 	"requests.toolarge.title":         "Der Text ist zu lang",
-	"requests.toolarge.body":          "Die Korrektur wurde nicht gespeichert, weil das Formular größer ist, als der Server annimmt. Kürz den Text und versuch es nochmal.",
 	"requests.toolarge.back":          "Zurück zu den Issues",
 	"requests.fail.open_criteria":     "Erfüll zuerst die offenen Kriterien.",
 	"requests.act.created":            "Angelegt",

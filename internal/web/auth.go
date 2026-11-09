@@ -103,7 +103,8 @@ func (a *app) requirePerson(next http.Handler) http.Handler {
 				r = r.WithContext(ctx)
 				a.rememberProject(w, r)
 				// A plain 404 or 403 of a page becomes a page in the shell.
-				ew := &errorPageWriter{ResponseWriter: w, a: a, r: r}
+				r, keep := withFormKeep(r)
+				ew := &errorPageWriter{ResponseWriter: w, a: a, r: r, keep: keep}
 				next.ServeHTTP(ew, r)
 				ew.finish()
 				return
@@ -164,9 +165,16 @@ func (a *app) csrfGate(next http.Handler, multipart bool) http.Handler {
 			} else {
 				err = r.ParseForm()
 			}
+			rememberForm(r)
+			var tooBig *http.MaxBytesError
+			if errors.As(err, &tooBig) {
+				a.formTooLarge(w, r)
+				return
+			}
 			if err != nil ||
 				subtle.ConstantTimeCompare([]byte(r.FormValue("csrf_token")), []byte(csrfOf(r))) != 1 ||
 				!a.sameOrigin(r) {
+				w.Header().Set(rejectHeader, "csrf")
 				http.Error(w, "forbidden", http.StatusForbidden)
 				return
 			}
