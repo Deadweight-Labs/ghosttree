@@ -46,7 +46,7 @@ type inboxRow struct {
 	RequestID int64
 	Live      liveAgent
 	// Cats are the filters the row belongs to ("direkt", "fragen", "aufgaben",
-	// "issues", "gaertner"). Href is where a click on the row leads.
+	// "issues"). Href is where a click on the row leads.
 	Cats []string
 	Href string
 	// In names the room a message came in ("Jonas in Release-Team"); Body is the
@@ -89,11 +89,11 @@ type inboxQuick struct{ Text, Person string }
 type inboxQuote struct{ Who, Text string }
 
 // inboxFilters are the filter chips in order; "alle" is every row.
-var inboxFilters = []string{"alle", "direkt", "fragen", "aufgaben", "issues", "gaertner"}
+var inboxFilters = []string{"alle", "direkt", "fragen", "aufgaben", "issues"}
 
 // inboxFilterKeys are the catalog keys of the chips.
 var inboxFilterKeys = map[string]string{"alle": "inbox.filter.alle", "direkt": "inbox.filter.direkt", "fragen": "inbox.filter.fragen",
-	"aufgaben": "inbox.filter.aufgaben", "issues": "inbox.filter.issues", "gaertner": "inbox.filter.gaertner"}
+	"aufgaben": "inbox.filter.aufgaben", "issues": "inbox.filter.issues"}
 
 // inboxFilterChip is one chip of the filter row.
 type inboxFilterChip struct {
@@ -408,8 +408,7 @@ func sortInboxRows(rows []inboxRow) {
 
 // inboxCats are the filters a waiting row belongs to: tasks to "aufgaben", and
 // to "issues" when they hang on one; questions, approvals and blockers to
-// "fragen"; a handoff or the knowledge proposals to "aufgaben"; the gardener's
-// note to "gaertner".
+// "fragen"; a handoff or the knowledge proposals to "aufgaben".
 func inboxCats(f forYouRow) []string {
 	var cats []string
 	switch {
@@ -420,8 +419,6 @@ func inboxCats(f forYouRow) []string {
 		}
 	case f.decisionID != 0:
 		cats = append(cats, "fragen")
-	case f.Mark == "garden":
-		cats = append(cats, "gaertner")
 	case f.attentionID != 0 && (f.Mark == "ask" || f.Mark == "approve" || f.Mark == "warn"):
 		cats = append(cats, "fragen")
 	default:

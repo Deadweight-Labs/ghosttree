@@ -3,7 +3,10 @@
 // an entry with an unset axis applies everywhere along that axis.
 package scope
 
-import "strings"
+import (
+	"strings"
+	"unicode"
+)
 
 type Axes struct {
 	Project string `json:"project,omitempty"`
@@ -63,16 +66,101 @@ func canonicalLineage(branch string, lineage []string) []string {
 
 // NormalizeRemote canonicalizes a git remote URL to host/owner/repo, lowercase.
 func NormalizeRemote(remote string) string {
-	r := strings.ToLower(strings.TrimSpace(remote))
-	r = strings.TrimSuffix(r, "/")
-	r = strings.TrimSuffix(r, ".git")
-	for _, p := range []string{"https://", "http://", "ssh://", "git://"} {
-		r = strings.TrimPrefix(r, p)
+	// Repeated until nothing changes, so normalizing twice is normalizing once:
+	// a gate and the store must see the same id. Each round strips repeated
+	// prefixes and suffixes and every colon at once, so two rounds settle any
+	// real remote; the cap keeps a hostile value linear.
+	r := remote
+	for i := 0; i < 8; i++ {
+		next := normalizeRemoteOnce(r)
+		if next == r {
+			break
+		}
+		r = next
 	}
-	r = strings.TrimPrefix(r, "git@")
-	r = strings.Replace(r, ":", "/", 1)
-	r = strings.TrimPrefix(r, "www.")
-	return strings.TrimSuffix(r, "/")
+	return r
+}
+
+func normalizeRemoteOnce(remote string) string {
+	r := trimRemoteTail(strings.ToLower(strings.TrimSpace(remote)))
+	url := false
+	for cut := true; cut; {
+		cut = false
+		for _, p := range []string{"https://", "http://", "ssh://", "git://"} {
+			if rest, ok := strings.CutPrefix(r, p); ok {
+				r, url, cut = rest, true, true
+			}
+		}
+	}
+	if url {
+		// A URL names its host as [user@]host[:port]: the user says only who
+		// connects, not which repository it is.
+		host, path, _ := strings.Cut(r, "/")
+		if i := strings.LastIndexByte(host, '@'); i >= 0 {
+			host = host[i+1:]
+		}
+		r = host
+		if path != "" {
+			r += "/" + path
+		}
+	} else {
+		// The scp form, user@host:path, has no port.
+		for strings.HasPrefix(r, "git@") {
+			r = r[len("git@"):]
+		}
+	}
+	// A port after the host: the standard ones (ssh, https, http, git) say
+	// only how to reach the repository and go; any other stays in the id,
+	// since another port can be another server. Every other colon separates
+	// like a slash (host:path, and anything a second round would rewrite).
+	first, rest, hasRest := strings.Cut(r, "/")
+	if h, port, ok := strings.Cut(first, ":"); ok && h != "" && allDigits(port) {
+		if standardPorts[port] {
+			first = h
+		} else {
+			first = h + ":" + port
+		}
+	} else {
+		first = strings.ReplaceAll(first, ":", "/")
+	}
+	r = first
+	if hasRest {
+		r += "/" + strings.ReplaceAll(rest, ":", "/")
+	}
+	for strings.HasPrefix(r, "www.") {
+		r = r[len("www."):]
+	}
+	// GitHub's ssh endpoint on port 443 is GitHub.
+	if rest, ok := strings.CutPrefix(r, "ssh.github.com"); ok && (rest == "" || rest[0] == '/') {
+		r = "github.com" + rest
+	}
+	return trimRemoteTail(r)
+}
+
+var standardPorts = map[string]bool{"22": true, "443": true, "80": true, "9418": true}
+
+// trimRemoteTail strips trailing slashes, ".git" and blanks, however often.
+func trimRemoteTail(r string) string {
+	for {
+		next := strings.TrimRightFunc(r, unicode.IsSpace)
+		next = strings.TrimSuffix(strings.TrimSuffix(next, "/"), ".git")
+		if next == r {
+			return r
+		}
+		r = next
+	}
+}
+
+func allDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // IsGlobal reports that nothing narrows this placement — the entry applies

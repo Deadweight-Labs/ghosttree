@@ -156,6 +156,7 @@ func (s *Store) AccountRoles(accountPrincipal string) (map[string]RoleInfo, bool
 	rows, err := s.db.QueryContext(s.ctx(), `SELECT p.remote, om.role, COALESCE(pm.role,''), COALESCE(pm.can_review,0),
 			EXISTS(SELECT 1 FROM shared_projects sp WHERE sp.project_id=p.id)
 			AND NOT EXISTS(SELECT 1 FROM org_guests og WHERE og.org_id=p.org_id AND og.account_id=om.account_id)
+			AND NOT EXISTS(SELECT 1 FROM persons ps WHERE ps.id=om.account_id AND ps.kind='service')
 		FROM projects p
 		JOIN org_members om ON om.org_id=p.org_id AND om.account_id=?
 		LEFT JOIN project_members pm ON pm.project_id=p.id AND pm.account_id=?`, id, id)
@@ -485,7 +486,8 @@ func (s *Store) ListProjectMembers(remote string) ([]ProjectMember, error) {
 	rows, err := s.db.QueryContext(s.ctx(), `SELECT o.account_id, p.name, o.role, COALESCE(m.role,''), COALESCE(m.can_review,0), COALESCE(m.granted_by,0), COALESCE(m.granted_at,'')
 		FROM org_members o JOIN persons p ON p.id=o.account_id
 		LEFT JOIN project_members m ON m.project_id=? AND m.account_id=o.account_id
-		WHERE o.org_id=? AND (o.role='owner' OR m.role IS NOT NULL OR (?=1 AND NOT EXISTS(SELECT 1 FROM org_guests og WHERE og.org_id=o.org_id AND og.account_id=o.account_id)))
+		WHERE o.org_id=? AND (o.role='owner' OR m.role IS NOT NULL OR (?=1 AND p.kind<>'service'
+			AND NOT EXISTS(SELECT 1 FROM org_guests og WHERE og.org_id=o.org_id AND og.account_id=o.account_id)))
 		ORDER BY p.name LIMIT ?`, pid, orgID, boolInt(projectSharedTx(s.db, pid)), maxListRows)
 	if err != nil {
 		return nil, err
@@ -629,7 +631,8 @@ func (s *Store) ProjectWriters(remote string) map[string]bool {
 		LEFT JOIN project_members pm ON pm.project_id=pr.id AND pm.account_id=p.id
 		WHERE pr.remote=? AND (om.role=? OR pm.role IN (?,?,?)
 			OR (pm.role IS NULL AND EXISTS(SELECT 1 FROM shared_projects sp WHERE sp.project_id=pr.id)
-				AND NOT EXISTS(SELECT 1 FROM org_guests og WHERE og.org_id=pr.org_id AND og.account_id=p.id)))`, remote, OrgOwner, RoleOwner, RoleLead, RoleMember)
+				AND NOT EXISTS(SELECT 1 FROM org_guests og WHERE og.org_id=pr.org_id AND og.account_id=p.id)
+				AND p.kind<>'service'))`, remote, OrgOwner, RoleOwner, RoleLead, RoleMember)
 	if err != nil {
 		return out
 	}

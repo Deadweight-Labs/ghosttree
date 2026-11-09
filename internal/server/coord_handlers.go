@@ -279,10 +279,12 @@ func (a *api) registerCoordAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Ein Projektraum gehört zu einem Projekt: eine fremde Remote gibt es für
-	// diesen Aufrufer nicht, eine unbekannte wird wie bei jedem Schreiben
-	// zugeordnet.
+	// diesen Aufrufer nicht. Eine unbekannte wird hier NICHT angelegt: dem Raum
+	// beizutreten (auch vor dem Lesen, ctx coord inbox) ist keine Arbeit am
+	// Projekt. Ein Projekt entsteht durch ausdrückliches Anlegen oder durch
+	// eine Session oder geschriebenen Inhalt (REQ-623, PAIN-67).
 	if project, ok := strings.CutPrefix(in.RoomKey, "project:"); ok {
-		if !a.gateProject(w, r, project) {
+		if !a.gateKnownProject(w, r, project) {
 			return
 		}
 		// Org-Mitgliedschaft allein genügt nicht: in den Projektraum kommt nur,

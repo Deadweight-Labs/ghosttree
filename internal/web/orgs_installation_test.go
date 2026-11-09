@@ -82,3 +82,47 @@ func TestInstallationFromTheCallbackIsCheckedAndStoredOnTheSource(t *testing.T) 
 		t.Fatal("the refreshed repo becomes a shared project")
 	}
 }
+
+// profilingProver also reads the GitHub organization's profile.
+type profilingProver struct {
+	fakeAppProver
+	profile forge.OrgProfile
+}
+
+func (p *profilingProver) OrgProfile(_ context.Context, _ int64, _ string) (forge.OrgProfile, error) {
+	return p.profile, nil
+}
+
+// Security review 4: connecting GitHub takes over the picture only; name and
+// address follow after the owner switches it on, and a member cannot.
+func TestNameAndAddressFollowGitHubOnlyAfterTheOwnerSwitchesItOn(t *testing.T) {
+	prover := &profilingProver{fakeAppProver: fakeAppProver{fakeProver: fakeProver{configured: true, accounts: []forge.Account{{
+		Login: "deadweight-labs", InstallationID: 5, Repos: []string{"github.com/deadweight-labs/a"}}}}},
+		profile: forge.OrgProfile{Login: "deadweight-labs", Name: "Deadweight Labs"}}
+	base, st, alice, anna := sharingWeb(t, prover)
+	org, _ := st.OrgByRef("alpha")
+	if _, err := st.ConnectSourceWithInstallation("person:1", org.ID, "github", "deadweight-labs", 5, nil); err != nil {
+		t.Fatal(err)
+	}
+	page := getOrgs(t, alice, base, "?org=alpha")
+	if !strings.Contains(page, `action="/ui/orgs/follow"`) || !strings.Contains(page, "Take from GitHub") {
+		t.Fatalf("no switch for the owner:\n%s", page)
+	}
+	if r := postOrg(t, anna, base, "/ui/orgs/follow", url.Values{"org": {"alpha"}, "follow": {"1"}}); strings.Contains(r.Header.Get("Location"), "notice=follow") {
+		t.Fatal("a member switched it on")
+	}
+	if got, _ := st.OrgByRef("alpha"); got.DisplaySource == "github" || got.Slug != "alpha" {
+		t.Fatalf("after the member: %+v", got)
+	}
+	r := postOrg(t, alice, base, "/ui/orgs/follow", url.Values{"org": {"alpha"}, "follow": {"1"}})
+	if !strings.Contains(r.Header.Get("Location"), "org=deadweight-labs") {
+		t.Fatalf("switched on: %q", r.Header.Get("Location"))
+	}
+	if got, _ := st.OrgByRef("deadweight-labs"); got.Name != "Deadweight Labs" || got.DisplaySource != "github" {
+		t.Fatalf("after switching on: %+v", got)
+	}
+	postOrg(t, alice, base, "/ui/orgs/follow", url.Values{"org": {"deadweight-labs"}, "follow": {"0"}})
+	if got, _ := st.OrgByRef("deadweight-labs"); got.DisplaySource != "user" {
+		t.Fatalf("after switching off: %+v", got)
+	}
+}

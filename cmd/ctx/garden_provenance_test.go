@@ -129,7 +129,7 @@ func newProvenanceFixture(t *testing.T) *provenanceFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.EnsureProject("person:1", provenanceProject); err != nil {
+	if _, err := claimInOrg(st, "person:1", provenanceProject); err != nil {
 		t.Fatal(err)
 	}
 	code, _, err := st.CreateInvitation("person:1", org.ID, "", store.OrgMember, 0)

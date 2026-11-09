@@ -84,7 +84,7 @@ func TestRoleAndOrgCommandsViaDB(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := st.EnsureProject("person:1", "github.com/dw/p"); err != nil {
+	if _, err := claimInOrg(st, "person:1", "github.com/dw/p"); err != nil {
 		t.Fatal(err)
 	}
 	st.Close()

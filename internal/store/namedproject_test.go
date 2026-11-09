@@ -44,8 +44,9 @@ func TestAMemberCreatesANamedProjectAndBecomesItsOwner(t *testing.T) {
 func TestANamedProjectNeedsAnOrganizationAndAValidName(t *testing.T) {
 	st := orgStore(t, "robin", "anna", "ben")
 	mustOrg(t, st, "person:1", "Alpha", "alpha")
-	if _, err := st.CreateNamedProject("person:2", "notes", ""); !errors.Is(err, ErrNoOrg) {
-		t.Errorf("no organization: %v", err)
+	// Without an organization the name goes to the person's own namespace.
+	if p, err := st.CreateNamedProject("person:2", "notes", ""); err != nil || p.Remote != "anna/notes" || p.OrgKind != OrgKindUser {
+		t.Errorf("own namespace: %+v %v", p, err)
 	}
 	if _, err := st.CreateNamedProject("person:2", "notes", "alpha"); !errors.Is(err, ErrNotOrgMember) {
 		t.Errorf("not a member of the named organization: %v", err)
@@ -84,7 +85,7 @@ func TestANamedProjectNameIsUniquePerOrganization(t *testing.T) {
 func TestANamedProjectIsNeverClaimedOrReassignedByAWrite(t *testing.T) {
 	st := orgStore(t, "robin")
 	mustOrg(t, st, "person:1", "Alpha", "alpha")
-	if _, err := st.CreateNamedProject("person:1", "infra", ""); err != nil {
+	if _, err := st.CreateNamedProject("person:1", "infra", "alpha"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.EnsureProject("person:1", "alpha/infra"); !errors.Is(err, ErrProjectNotFound) {
@@ -108,14 +109,18 @@ func TestANamedProjectIsNeverClaimedOrReassignedByAWrite(t *testing.T) {
 func TestHostlessTwoSegmentRemotesStayRemoteProjects(t *testing.T) {
 	st := orgStore(t, "robin", "anna")
 	mustOrg(t, st, "person:1", "Alpha", "alpha")
-	for _, raw := range []string{"ssh://gitserver/repo.git", "git@gitserver:repo.git", "localhost/repo"} {
+	// localhost names a checkout on this very machine, never a shared one.
+	if _, err := st.EnsureProject("person:1", "localhost/repo"); !errors.Is(err, ErrInvalidRemote) {
+		t.Errorf("localhost/repo: %v", err)
+	}
+	for _, raw := range []string{"ssh://gitserver/repo.git", "git@gitserver:repo.git"} {
 		id := scope.NormalizeRemote(raw)
-		if id != "gitserver/repo" && id != "localhost/repo" {
+		if id != "gitserver/repo" {
 			t.Fatalf("fixture: %q normalized to %q", raw, id)
 		}
-		p, err := st.EnsureProject("person:1", raw)
+		p, err := st.ClaimProject("person:1", raw, "")
 		if err != nil || p.Remote != id || p.Named {
-			t.Errorf("EnsureProject(%q) = %+v, %v; want an implicit remote project", raw, p, err)
+			t.Errorf("ClaimProject(%q) = %+v, %v; want a remote project", raw, p, err)
 		}
 		if again, err := st.ClaimProject("person:1", raw, "alpha"); err != nil || again.Remote != id {
 			t.Errorf("ClaimProject(%q) = %+v, %v", raw, again, err)
@@ -180,8 +185,8 @@ func TestAnOrganizationsNamespaceIsNotOpenToImplicitProjects(t *testing.T) {
 	}
 	// Other values are untouched: hosts with a dot and unrelated hostless names.
 	for _, id := range []string{"github.com/alpha/probe", "elsewhere/probe"} {
-		if p, err := st.EnsureProject("person:1", id); err != nil || p.Remote != id {
-			t.Errorf("EnsureProject(%s) = %+v, %v", id, p, err)
+		if _, err := st.EnsureProject("person:1", id); err != nil {
+			t.Errorf("EnsureProject(%s) refused: %v", id, err)
 		}
 	}
 }

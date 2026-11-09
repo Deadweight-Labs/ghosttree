@@ -146,9 +146,13 @@ func nearestExistingAncestor(path string) string {
 }
 
 // GitInfo derives the project and branch axes from a working directory.
-// Both are empty outside a repo or without an origin remote.
+// Both are empty outside a repo or without an origin remote; the project is
+// also empty for a throwaway remote (scope.IsThrowawayRemote).
 func GitInfo(cwd string) (project, branch string) {
-	if out, err := gitOut(cwd, "remote", "get-url", "origin"); err == nil {
+	if out, err := gitOut(cwd, "remote", "get-url", "origin"); err == nil && !scope.IsThrowawayRemote(out) {
+		// A throwaway remote (a local path, a temporary checkout, a test host)
+		// names no shared repository: the directory counts as one without a
+		// remote, so a test run never creates a project on the server.
 		project = scope.NormalizeRemote(out)
 	}
 	if out, err := gitOut(cwd, "rev-parse", "--abbrev-ref", "HEAD"); err == nil && out != "HEAD" {

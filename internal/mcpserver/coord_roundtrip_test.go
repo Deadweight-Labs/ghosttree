@@ -691,6 +691,8 @@ func TestPeersShowEffectiveRoles(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := text(t, res)
+	// Joining the room of an unknown remote creates no project (PAIN-67), so
+	// nobody holds a role there and the agents count as guests.
 	if !strings.Contains(got, "you: role guest") || !strings.Contains(got, "role guest") || !strings.Contains(got, "sess-codex") {
 		t.Fatalf("peers lack roles: %s", got)
 	}
@@ -726,7 +728,7 @@ func TestInboxShowsAuthority(t *testing.T) {
 	if _, err := st.CreateOrg("person:1", "Alpha", "alpha"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.EnsureProject("person:1", project); err != nil {
+	if _, err := claimInOrg(st, "person:1", project); err != nil {
 		t.Fatal(err)
 	}
 	room := store.RoomKeyForProject(project)

@@ -454,6 +454,7 @@ func TestAgentOwnershipSurvivesPersonRename(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 	token, _ := st.AddPerson("robin")
 	other, _ := st.AddPerson("philipp")
+	shareRemoteInTeam(t, st, "github.com/x/y", "person:2")
 	srv := httptest.NewServer(New(st))
 	t.Cleanup(srv.Close)
 	room := store.RoomKeyForProject("github.com/x/y")
@@ -579,6 +580,7 @@ func twoPersonServer(t *testing.T) (*httptest.Server, string, string) {
 	t.Cleanup(func() { st.Close() })
 	robin, _ := st.AddPerson("robin")
 	philipp, _ := st.AddPerson("philipp")
+	shareRemoteInTeam(t, st, "github.com/x/y", "person:2")
 	srv := httptest.NewServer(New(st))
 	t.Cleanup(srv.Close)
 	return srv, robin, philipp

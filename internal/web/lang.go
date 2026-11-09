@@ -114,6 +114,14 @@ func (l lang) date(t time.Time, withYear bool) string {
 	return s
 }
 
+// weekdayName is the short name of a weekday: "Mon" or "Mo".
+func (l lang) weekdayName(d time.Weekday) string {
+	if l != langDE {
+		return d.String()[:3]
+	}
+	return weekdaysDE[d]
+}
+
 // weekdayDate schreibt Wochentag und Datum: "Mon 2 Jan" bzw. "Mo 2. Jan".
 func (l lang) weekdayDate(t time.Time) string {
 	if l != langDE {

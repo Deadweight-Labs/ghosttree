@@ -12,6 +12,99 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Before you upgrade
 
+- Existing instances move to owners with `ctx db migrate-owners --db <path>`
+  (first `--dry-run`, then `--apply --backup <file>` with the server stopped;
+  `--apply` refuses while another process has the database open, and the
+  backup is the file as it was, taken before anything opens it).
+  It keeps what a connected organization's prefix covers in that
+  organization, gives everything else to the person who used it first,
+  archives throwaway remotes, and refuses (changing nothing) if anyone but a
+  service would lose access to a project. Whoever wrote anything under a
+  remote counts (sessions, knowledge, requests, documents and the other
+  entries); a remote several people wrote to stays where it is and is listed
+  as contested until the plan assigns it with `to`. Sessions without an
+  account go to the instance owner. A JSON plan (`--plan`) names the
+  exceptions by the ids projects have before the migration; running it again
+  with the same plan changes nothing.
+- A GitHub owner verified by GitHub has precedence over an unverified
+  namespace of the same name: linking a login (a person's namespace takes the
+  login as its address) or connecting an organization's GitHub source moves
+  an unverified namespace holding that name to `<name>-<n>`, without a
+  redirect, logged, and with a notice to its owners on the organizations
+  page. Former addresses reserve nothing against a verified owner, and no
+  namespace takes a name a verified login or connected source owns.
+- A verified GitHub account (`account_github.github_id`) belongs to one
+  account, by number and by login: on startup, a number or a login several
+  verified accounts share drops back to the login alone on all of them, and
+  linking it again moves it.
+- Organizations that exist before this version keep their name and address
+  when GitHub is connected: only the picture follows the GitHub organization.
+  An owner switches "Name and address: Take from GitHub" on in the settings
+  (Connected sources) to let both follow; `ctx db migrate-owners` sets it with
+  `"follow_github": true` in the plan and otherwise keeps them as set. Named
+  project ids from before a change of address (`<old slug>/<name>`) keep
+  working: the server reads and writes them as the project's current id.
+- `GHOSTTREE_HOOKS=off` switches every hook and `ctx watch` off, and makes
+  `ctx mcp` read only (every writing tool answers that nothing was written);
+  set it for the agents a test harness starts, so test runs never write to a
+  real server.
+- The gardener is a built-in feature: its account stays a service but is
+  listed neither among an organization's members nor under "Services"; it
+  shows on the Gardener tab.
+- The gardener has a schedule per organization and person, set by its owner in
+  the settings (Gardener: on or off, daily, weekdays or weekly at a time,
+  repositories, budget per run and per month, rules of automatic approval).
+  Point the gardener's timer at `ctx garden run-due --repos-dir <dir>
+  --state-file <file> -- <the flags of check-knowledge>` and run it hourly
+  (`--state-file` is required; each namespace's monthly budget is checked
+  before every repository); it asks the server what is due
+  and reports each run. `ctx garden check-knowledge` keeps working as before.
+- Projects now have owners as on GitHub. A write makes a remote a project
+  only where nothing is in doubt: the claimed prefix of a connected
+  organization the writer is a member of, or the writer's own GitHub login
+  verified by GitHub. Everything else stays unclaimed (each author sees the
+  own entries, sessions run without the project) until somebody claims it
+  explicitly with `ctx project claim`; that is refused as contested while
+  other accounts have entries under it, and the instance admin decides with
+  `ctx project claim --force --org`. A `github.com/<login>/...` repository
+  is claimed explicitly only by the verified owner of that login, a member of
+  the organization connected to its prefix, or the instance admin
+  (`not_github_owner`); the instance admin gives a known project another owner
+  in the web (Organizations page, "Ownership") or on the server with
+  `ctx project reassign <remote> --to <namespace|org> --db <path>`, logged on
+  both sides. Moving ownership never works over the API, not even with the
+  admin's token (`web_session_required` for `POST /api/projects/reassign` and
+  for `POST /api/projects/claim` with `force`); `ctx project claim --force`
+  needs `--db`. Guests never get a
+  project or a namespace of their own; people invited into a project as
+  members do get their own namespace. Projects in a person's namespace that an
+  organization's prefix covers later wait for a takeover (the owner agrees,
+  or the instance admin decides). "Organization for new projects" is gone: `ctx org default` and
+  `PUT /api/account/default-org` answer that it no longer exists, and
+  `ctx project create`/`claim` without `--org` use your own namespace. Existing
+  projects keep their owner until an operator migrates them.
+- When a remote becomes a project (or gets a new owner), entries others wrote
+  under it before (knowledge, requests, pains, ideas, documents by accounts
+  that are no owner or member of the new owner) are held back: their author
+  still sees them, the project's owners, leads and reviewers decide them under
+  "Held back" on the review page, each one readable on its own preview page
+  for them only; until then they reach no list, search,
+  context or mirror. `GET /api/projects/held` gives agents only the number,
+  releasing is web-only. Every change of owner (reassign, move, takeover, the
+  owner migration) holds again what the former owner's reviewers released.
+- Remote URLs lose the user and a standard port (22, 443, 80, 9418) when they
+  become a project id: `ssh://git@github.com:22/a/b` is `github.com/a/b`
+  (before, `github.com/22/a/b`); another port stays (`git.internal:2222/a/b`),
+  and `ssh.github.com` is `github.com`.
+- Local paths, file URLs, checkouts in temporary or cache folders of a machine
+  (`tmp`, `.cache`, `var/folders` as whole path segments, on a host without a
+  dot; on a forge such names are ordinary owners or repositories), reserved
+  test hosts (`.invalid`, `.test`, `.example`, `localhost`) and the reserved
+  test owners `example-nobody`, `e2e-collab` and `pitwall-lab` never become
+  projects. `ctx db migrate-owners` takes `"to": {"<prefix>": "<organization>"}`
+  as well: such remotes go to (or stay in) the organization, shared with its
+  members. Writes naming one are refused with `invalid_remote`; a session from
+  such a folder is stored without a project.
 - Some refusals now hold even without `GHOSTTREE_ENFORCE_ACCESS`: a guest
   writes nothing the role matrix does not give them (no knowledge edits, no
   runbooks, no runbook runs, no tasks), and approving knowledge needs the
@@ -417,6 +510,56 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
 
 ### Changed
 
+- Guests see their project only: no page of the organization (repositories,
+  people, services, agents, machines, rooms, gardener, settings), the
+  organization is not in their menu, and a machine shared with it shows them
+  no user and no paths. A member who holds nothing but guest roles counts as a
+  guest. An administrator's token page lists only the own tokens.
+- Every member of an organization (not a guest) creates projects in it, also
+  by an explicit `ctx project claim --org`; whoever is not an owner of the
+  organization becomes owner of the project.
+- The role is called "Owner" in German too (it said "Besitzer" in places).
+- Joining a project room (which `ctx coord inbox` does before it reads) no
+  longer creates a project for an unknown remote; only creating it, a session
+  or written content does.
+- "Create project from this folder" in the terminal interface offers the
+  owner rule first: the connected organization named like the remote's GitHub
+  owner, else your own namespace (claimed without `--org`), then other
+  organizations you own.
+- The gardener left the inbox: its proposals, runs and automatic approvals are
+  on a Gardener tab of the organization or person where it is switched on, for
+  those who may review them. Three narrow rules can approve on their own
+  (missing proof with a new proof, missing description, existing test); each
+  approval is logged with what it changed and can be undone. Corrections,
+  staleness, merges and contradictions always wait for a person.
+- The machines tab of an organization has two parts: machines of the
+  organization and machines people shared with it. Archived machines leave the
+  lists.
+- A person's own namespace has a page at `/ui/<handle>` with their
+  repositories (private, or shared with N collaborators), their machines and,
+  with GitHub linked, their picture. Its settings have no members and no
+  sources, and a personal project cannot be "shared with the org".
+- An organization connected to a GitHub organization shows its picture; once
+  an owner switches "Name and address: Take from GitHub" on, also its name and
+  its login as address. This happens on connecting, on "Read repos again" and
+  once a day (GitHub sends no webhook for it), until an owner renames the
+  organization by hand. A former address answers members with a redirect
+  (302); named projects move with the address.
+- Accounts have a kind, person or service (`ctx account set-kind --db`). A
+  service (the gardener, an operations runner) is listed under the new
+  Services tab of an organization instead of People, and it gets no role from
+  "shared with the org": it reads and writes only in projects that name it.
+  Guests do not see the Services tab.
+- A session in a repository you may not write to (someone else's, archived, a
+  throwaway checkout) is kept without its project instead of being refused.
+- A github.com remote under the linked GitHub login of a person belongs to that
+  person; no other account can occupy it first.
+- A moved organization slug stays reserved: its former named-project ids and
+  the slug itself cannot be taken over, and a personal namespace never blocks
+  hostless remotes of other people.
+- Founding an organization is no longer a tab in the settings of another one:
+  it is in the "+" menu (`/ui/orgs/new`). After connecting GitHub the settings
+  open at the connected sources.
 - Agent search (`context_search`, `ctx search`, `/api/search`) leaves out
   unconfirmed (staged) entries and the gardener's notes, as delivery already
   did, so they no longer crowd out the entries they are about. `is:staged`,
@@ -485,6 +628,10 @@ the pull request titles in `git log v0.1.0-rc.3..HEAD` name every change.
   per start, two minutes after the index backfill, a throttled background
   pass compares the line keys with the index keys (no transcript text is read)
   and indexes any line it finds missing (`session_index_gaps` in the log).
+- The repository list of an organization called projects shared with the
+  organization "Knowledge public" and the others "Knowledge private". Nothing
+  there is public: the labels now read "Shared with the org" and "Restricted",
+  and the filter is called "Visibility".
 - The knowledge, review, context and sessions pages of a repository showed
   guests and members without admin rights all projects instead of that
   repository (including machine entries of other people in log mode).

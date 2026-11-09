@@ -15,6 +15,17 @@ func TestNormalizeRemote(t *testing.T) {
 		"ssh://git@github.com/Example/sample-project.git":     "github.com/example/sample-project",
 		"git://github.com/Example/sample-project/":            "github.com/example/sample-project",
 		"github.com/example/sample-project":                   "github.com/example/sample-project",
+		// User and port only say how to reach the repository (review of REQ-623).
+		"ssh://git@github.com:22/Example/sample-project.git": "github.com/example/sample-project",
+		"https://github.com:443/Example/sample-project":      "github.com/example/sample-project",
+		"https://robin@gitlab.example.org/Group/repo.git":    "gitlab.example.org/group/repo",
+		// Only the standard ports go (third review, point 3); another port
+		// can be another server and stays.
+		"ssh://deploy@git.internal:2222/team/repo":            "git.internal:2222/team/repo",
+		"git://git.example.org:9418/team/repo":                "git.example.org/team/repo",
+		"http://git.example.org:80/team/repo":                 "git.example.org/team/repo",
+		"ssh://git@ssh.github.com:443/Example/sample-project": "github.com/example/sample-project",
+		"git@ssh.github.com:Example/sample-project.git":       "github.com/example/sample-project",
 	}
 	for in, want := range cases {
 		if got := NormalizeRemote(in); got != want {
@@ -118,4 +129,21 @@ func TestDefaultAxesDoesNotBindToABranch(t *testing.T) {
 	if got := DefaultAxes("pitfall", Axes{Machine: "m"}); !got.Same(Axes{Machine: "m"}) {
 		t.Errorf("no-project pitfall = %+v", got)
 	}
+}
+
+// Normalizing twice changes nothing: gates and the store must see the same id.
+func FuzzNormalizeRemoteIsIdempotent(f *testing.F) {
+	for _, seed := range []string{
+		"https://github.com:alice/repo", "ssh://git@github.com:22/a/b", "https://evil.com:abc/x",
+		"https://a@b@c/x", "https://https://x/y", "git@host:1/x", "ssh://u@h:/p", "https://h:/x",
+		"git://x:y:z/w", "https://github.com:443/a/b.git/", "  HTTP://WWW.X.ORG:8080/A/ ",
+	} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, in string) {
+		once := NormalizeRemote(in)
+		if twice := NormalizeRemote(once); twice != once {
+			t.Fatalf("NormalizeRemote(%q) = %q, again %q", in, once, twice)
+		}
+	})
 }

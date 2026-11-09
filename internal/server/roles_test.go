@@ -25,7 +25,7 @@ func roleAPI(t *testing.T) (orgFixture, string) {
 			t.Fatal(err)
 		}
 	}
-	p, err := f.st.EnsureProject("person:1", apiRoleProject)
+	p, err := claimInOrg(f.st, "person:1", apiRoleProject)
 	if err != nil {
 		t.Fatal(err)
 	}

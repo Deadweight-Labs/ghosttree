@@ -93,7 +93,7 @@ func newChannelEnvIn(t *testing.T, inProject bool) *channelEnv {
 		if _, err := st.CreateOrg("person:1", "Chan", "chan"); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := st.EnsureProject("person:1", project); err != nil {
+		if _, err := claimInOrg(st, "person:1", project); err != nil {
 			t.Fatal(err)
 		}
 		room = store.RoomKeyForProject(project)

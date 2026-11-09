@@ -344,7 +344,7 @@ func TestPainAndTasksThroughTheRuntimeWriter(t *testing.T) {
 	if _, err := s.AcceptInvitation("person:2", code); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.EnsureProject("person:1", roleProject); err != nil {
+	if _, err := claimInOrg(s, "person:1", roleProject); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.SetProjectRole("person:1", roleProject, "person:2", RoleMember, false, RoleViaAPI); err != nil {

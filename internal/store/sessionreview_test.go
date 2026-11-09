@@ -19,7 +19,7 @@ func newMixedRoleFixture(t *testing.T) *Store {
 	t.Helper()
 	st := accessFixture(t)
 	st.SetAccessMode(AccessMode{Enforce: true})
-	if _, err := st.EnsureProject("person:1", roleProjectB); err != nil {
+	if _, err := claimInOrg(st, "person:1", roleProjectB); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.SetProjectRole("person:1", roleProjectB, "person:5", RoleMember, false, RoleViaAPI); err != nil {

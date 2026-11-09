@@ -225,7 +225,7 @@ func TestClaimPlanNeedsARemoteAndClaimExplainsRefusals(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/orgs":
-			fmt.Fprint(w, `[{"id":1,"slug":"dwl","name":"Deadweight Labs","role":"owner","default":true}]`)
+			fmt.Fprint(w, `[{"id":1,"slug":"dwl","name":"Deadweight Labs","role":"owner"},{"id":2,"slug":"someone","name":"Someone Inc","role":"member"},{"id":3,"slug":"robin","name":"Robin","role":"owner","kind":"user","account_id":1},{"id":4,"slug":"visited","name":"Visited","role":"member","guest":true},{"id":5,"slug":"team","name":"Team","role":"member"}]`)
 		case "/api/projects/claim":
 			w.WriteHeader(http.StatusForbidden)
 			fmt.Fprint(w, `{"code":"not_org_owner","message":"only owners"}`)
@@ -247,7 +247,14 @@ func TestClaimPlanNeedsARemoteAndClaimExplainsRefusals(t *testing.T) {
 	gitIn(t, dir, "init", "-q")
 	gitIn(t, dir, "remote", "add", "origin", "git@github.com:someone/side.git")
 	plan, err := b.ClaimPlan(context.Background())
-	if err != nil || plan.Remote != "github.com/someone/side" || len(plan.Orgs) != 1 || !plan.Orgs[0].Default || plan.Orgs[0].Role != "owner" {
+	// REQ-623: the organization whose address is the remote's GitHub owner comes
+	// first, then the own namespace, then the other organizations the person is
+	// a member of (17 A); an organization where the person is only a guest is
+	// not offered (14 A).
+	if err != nil || plan.Remote != "github.com/someone/side" || len(plan.Orgs) != 4 ||
+		plan.Orgs[0].Slug != "someone" || !plan.Orgs[0].Default ||
+		!plan.Orgs[1].Own || plan.Orgs[1].Slug != "robin" || plan.Orgs[1].Default ||
+		plan.Orgs[2].Slug != "dwl" || plan.Orgs[3].Slug != "team" {
 		t.Fatalf("plan %+v err %v", plan, err)
 	}
 	if _, err := b.Claim(context.Background(), plan.Remote, "dwl"); !errors.As(err, &ce) || ce.Code != "not_org_owner" {

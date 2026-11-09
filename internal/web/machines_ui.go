@@ -177,6 +177,10 @@ func (a *app) machineInOrg(w http.ResponseWriter, r *http.Request) bool {
 
 // machineOfOrg: die Maschine gehört der Org oder ist an sie freigegeben.
 func machineOfOrg(m store.Machine, org store.Org) bool {
+	if org.IsUser() {
+		// A person's own machines: those the person owns, not an org's.
+		return m.OwnerOrg == "" && m.AccountID == "person:"+strconv.FormatInt(org.AccountID, 10)
+	}
 	if strings.EqualFold(m.OwnerOrg, org.Slug) {
 		return true
 	}
@@ -209,17 +213,26 @@ func (a *app) orgMachinesPage(w http.ResponseWriter, r *http.Request, org store.
 	l := a.langFor(r)
 	now := overviewNow().UTC()
 	base := "/ui/" + url.PathEscape(org.Slug) + "/machines/"
-	v := &orgMachinesView{}
+	v := &orgMachinesView{User: org.IsUser()}
 	for _, m := range a.orgMachines(r, org) {
 		row := uiRow{Icon: "server", Tone: "feat", StateLabel: l.msg("machine.title"), Title: m.Name, Href: base + url.PathEscape(m.Name),
 			Kind: label(l, machineRelationKeys, m.Relation), Age: shortAge(l, now, parseTime(m.LastSeen)), AgeTitle: l.dateTime(parseTime(m.LastSeen).Local()),
 			Person: m.Owner, Pill: ownerPill(l, m, org), PillTone: machineRelationTone[m.Relation]}
-		v.Rows = append(v.Rows, row)
+		// REQ-623: what the org owns, and apart from it what people share with it.
+		if org.IsUser() || strings.EqualFold(m.OwnerOrg, org.Slug) {
+			v.Own = append(v.Own, row)
+		} else {
+			v.Shared = append(v.Shared, row)
+		}
 	}
 	a.renderBrowser(w, r, "orgmachines", pageData{Title: l.msg("ui.org.tab.machines"), OrgName: org.Name, OrgBand: a.orgBandFor(r, org, "machines"), OrgMachinesV: v})
 }
 
-type orgMachinesView struct{ Rows []uiRow }
+// orgMachinesView: User is a person's page, which has only their own machines.
+type orgMachinesView struct {
+	Own, Shared []uiRow
+	User        bool
+}
 
 // ownerPill nennt, in welchem Verhältnis die Maschine zur Org steht.
 func ownerPill(l lang, m store.Machine, org store.Org) string {
@@ -248,8 +261,17 @@ func (a *app) machinePage(w http.ResponseWriter, r *http.Request, m store.Machin
 		v.OwnerOrgHref = "/ui/" + url.PathEscape(m.OwnerOrg)
 	}
 	for _, s := range m.Shares {
-		v.Shares = append(v.Shares, machineShareRow{Org: s.Org, OrgHref: "/ui/" + url.PathEscape(s.Org), Role: s.Role, RoleLabel: label(l, machineRoleKeys, s.Role),
-			OSUser: s.OSUser, PathPrefix: s.PathPrefix, By: s.GrantedBy, Age: shortAge(l, now, parseTime(s.CreatedAt))})
+		row := machineShareRow{Org: s.Org, OrgHref: "/ui/" + url.PathEscape(s.Org), Role: s.Role, RoleLabel: label(l, machineRoleKeys, s.Role),
+			OSUser: s.OSUser, PathPrefix: s.PathPrefix, By: s.GrantedBy, Age: shortAge(l, now, parseTime(s.CreatedAt))}
+		// The user and the paths on the machine are for those who manage it and
+		// for owners and members of the organization it is shared with, never
+		// for guests (14 A, #4376).
+		if !manage {
+			if o, err := a.store.OrgByRef(s.Org); err != nil || !orgInsider(a.store.OrgViewerKind(o.ID, browserPrincipal(r).ID)) {
+				row.OSUser, row.PathPrefix, row.By = "", "", ""
+			}
+		}
+		v.Shares = append(v.Shares, row)
 	}
 	orgs, _ := a.store.ListOrgs(browserPrincipal(r).ID)
 	shared := map[string]bool{strings.ToLower(m.OwnerOrg): true}
@@ -497,4 +519,9 @@ func machineEventDetail(l lang, e store.MachineEvent) string {
 		return l.msg("machine.entries") + " #" + num
 	}
 	return e.Detail
+}
+
+// orgInsider: an owner or member of an organization, not a guest.
+func orgInsider(kind string) bool {
+	return kind == store.OrgViewerOwner || kind == store.OrgViewerMember
 }
