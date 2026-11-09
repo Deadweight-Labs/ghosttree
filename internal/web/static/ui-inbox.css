@@ -62,5 +62,6 @@
   :is(.g2) {
     & .nrow .inreply { grid-column: 1 / -1; }
     & .ntools .ifilter { width: 100%; }
+    & .ntools .sp { display: none; }
   }
 }

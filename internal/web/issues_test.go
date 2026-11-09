@@ -91,6 +91,42 @@ func TestIssuesTabFiltersBySearchText(t *testing.T) {
 	}
 }
 
+// The numbers beside Open and Closed are what the list behind each tab shows for the
+// search, not the totals of the project: "0 Open" over "No hits".
+func TestIssueStateTabsCountWhatTheSearchFinds(t *testing.T) {
+	e := ovEnv(t)
+	rqMake(t, e.St, rqSpec{Title: "Alpha exporter", Type: "feature"})
+	rqMake(t, e.St, rqSpec{Title: "Beta crash", Type: "bug"})
+	done := rqMake(t, e.St, rqSpec{Title: "Gamma finished", Type: "bug"})
+	if err := e.St.CompleteRequest(done.Request.ID, requestdomain.Evidence{Kind: "test", Ref: "go test", Person: "alice"}); err != nil {
+		t.Fatal(err)
+	}
+	tabs := regexp.MustCompile(`<span class="n">([^<]+)</span> (Open|Closed)</span>`)
+	counts := func(q string) map[string]string {
+		t.Helper()
+		status, page := fetchPage(t, e.Owner, e.Base+"/ui/x/shell/issues?q="+url.QueryEscape(q))
+		if status != http.StatusOK {
+			t.Fatalf("q=%q status=%d", q, status)
+		}
+		out := map[string]string{}
+		for _, m := range tabs.FindAllStringSubmatch(page, -1) {
+			out[m[2]] = m[1]
+		}
+		return out
+	}
+	for q, want := range map[string]map[string]string{
+		"":                {"Open": "2", "Closed": "1"},
+		"type:bug":        {"Open": "1", "Closed": "1"},
+		"type:feature":    {"Open": "1", "Closed": "0"},
+		"zzzdoesnotexist": {"Open": "0", "Closed": "0"},
+	} {
+		got := counts(q)
+		if got["Open"] != want["Open"] || got["Closed"] != want["Closed"] {
+			t.Errorf("q=%q: tabs count %v, want %v", q, got, want)
+		}
+	}
+}
+
 func TestIssuesPainsSegmentUsesTheSameList(t *testing.T) {
 	e := ovEnv(t)
 	if _, err := tpOwner(e).CreatePain(store.CreatePainInput{Project: shellProject, Title: "Slow restart", Actor: pain.Actor{AccountID: 1, Person: "alice"}}); err != nil {
