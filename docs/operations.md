@@ -145,8 +145,8 @@ several host names. `ctx serve --help` lists both flags.
 ## Test runs never write to a real server
 
 Set `GHOSTTREE_HOOKS=off` (also `0` or `false`) for every agent a test harness
-starts. Every hook then exits at once without a server call, and `ctx watch`
-does not start. Independently of that, a remote that names no shared repository
+starts. Every hook then exits at once without a server call, `ctx watch`
+does not start, and `ctx mcp` only reads. Independently of that, a remote that names no shared repository
 (a local path, a `file://` URL, a checkout under a temporary or cache folder, or
 a host under `.invalid`, `.test`, `.example`, `localhost`) never becomes a
 project: the collector treats such a folder as one without a remote, and the
@@ -160,9 +160,11 @@ Owners switch the gardener on per organization or person in the settings
 month, and the rules of automatic approval. The gardener's sandboxed unit asks
 the server what is due and reports each run:
 
-    ctx garden run-due --repos-dir /path/to/checkouts --state-file /path/state.json \
-      --out-dir /path/reports -- --mode agent --propose --sessions 4 \
-      --per-session 30 --turns 60 --no-mcp --claude /path/claude --claude-dir /path/claude-home
+```sh
+ctx garden run-due --repos-dir /path/to/checkouts --state-file /path/state.json \
+  --out-dir /path/reports -- --mode agent --propose --sessions 4 \
+  --per-session 30 --turns 60 --no-mcp --claude /path/claude --claude-dir /path/claude-home
+```
 
 Run it from a timer every hour; most runs find nothing due. Each repository
 needs a checkout at `<repos-dir>/<owner>/<name>`. The automatic approvals run
