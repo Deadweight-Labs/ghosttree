@@ -47,8 +47,11 @@ CREATE TABLE IF NOT EXISTS session_models(
 `
 
 func ensureActors(db *sql.DB) error {
-	_, err := db.Exec(actorSchema)
-	return err
+	if _, err := db.Exec(actorSchema); err != nil {
+		return err
+	}
+	// via: wie ein Mensch handelte, web oder terminal (Selbstauskunft); additiv.
+	return ensureColumn(db, "entry_actors", "via", `TEXT NOT NULL DEFAULT ''`)
 }
 
 // EntryActor is the stored actor of one entry with what the reader derives:
@@ -87,7 +90,7 @@ func recordActorTx(tx txExec, kind string, id int64, a actordomain.Actor, at str
 	if !backfilled {
 		verb = "INSERT"
 		conflict = ` ON CONFLICT(kind,entry_id) DO UPDATE SET actor=excluded.actor, account_id=excluded.account_id, harness=excluded.harness,
-			machine=excluded.machine, session_id=excluded.session_id, session_ref=excluded.session_ref, at=excluded.at, backfilled=0`
+			machine=excluded.machine, session_id=excluded.session_id, session_ref=excluded.session_ref, at=excluded.at, backfilled=0, via=excluded.via`
 		if !actordomain.Replaces(kind) {
 			conflict += ` WHERE entry_actors.backfilled=1`
 		}
@@ -104,8 +107,12 @@ func recordActorTx(tx txExec, kind string, id int64, a actordomain.Actor, at str
 	if a.SessionID <= 0 && a.Kind == actordomain.Agent {
 		ref = strings.TrimSpace(a.SessionRef)
 	}
-	_, err := tx.Exec(verb+` INTO entry_actors(kind,entry_id,actor,account_id,harness,machine,session_id,session_ref,at,backfilled) VALUES(?,?,?,?,?,?,?,?,?,?)`+conflict,
-		kind, id, a.Kind, a.AccountID, strings.TrimSpace(a.Harness), strings.TrimSpace(a.Machine), session, ref, at, bf)
+	via := ""
+	if a.Kind == actordomain.Human && (a.Via == actordomain.ViaWeb || a.Via == actordomain.ViaTerminal) {
+		via = a.Via
+	}
+	_, err := tx.Exec(verb+` INTO entry_actors(kind,entry_id,actor,account_id,harness,machine,session_id,session_ref,at,backfilled,via) VALUES(?,?,?,?,?,?,?,?,?,?,?)`+conflict,
+		kind, id, a.Kind, a.AccountID, strings.TrimSpace(a.Harness), strings.TrimSpace(a.Machine), session, ref, at, bf, via)
 	return err
 }
 
@@ -118,7 +125,7 @@ func (s *Store) ActorsOf(kind string, ids []int64) (map[int64]EntryActor, error)
 	out := map[int64]EntryActor{}
 	sessions := map[int64]bool{}
 	err := chunked(dedupe(ids), func(part []int64) error {
-		rows, err := s.db.Query(`SELECT e.entry_id, e.actor, e.account_id, COALESCE(p.name,''), e.harness, e.machine, COALESCE(e.session_id,0), e.session_ref, e.at, e.backfilled
+		rows, err := s.db.Query(`SELECT e.entry_id, e.actor, e.account_id, COALESCE(p.name,''), e.harness, e.machine, COALESCE(e.session_id,0), e.session_ref, e.at, e.backfilled, e.via
 			FROM entry_actors e LEFT JOIN persons p ON p.id=e.account_id
 			WHERE e.kind=? AND e.entry_id IN (`+placeholders(len(part))+`)`, append([]any{kind}, factIDArgs(part)...)...)
 		if err != nil {
@@ -129,7 +136,7 @@ func (s *Store) ActorsOf(kind string, ids []int64) (map[int64]EntryActor, error)
 			var id int64
 			var ea EntryActor
 			var bf int
-			if err := rows.Scan(&id, &ea.Kind, &ea.AccountID, &ea.Person, &ea.Harness, &ea.Machine, &ea.SessionID, &ea.SessionRef, &ea.At, &bf); err != nil {
+			if err := rows.Scan(&id, &ea.Kind, &ea.AccountID, &ea.Person, &ea.Harness, &ea.Machine, &ea.SessionID, &ea.SessionRef, &ea.At, &bf, &ea.Via); err != nil {
 				return err
 			}
 			ea.Backfilled = bf == 1
@@ -290,7 +297,10 @@ func recordChunkModelsTx(tx txExec, rows []chunkRow) error {
 // ActorStat is one line of the statistics: a harness and a model, or the
 // people (Actor human), with what they did in the projects counted.
 type ActorStat struct {
-	Actor   string `json:"actor"`
+	Actor string `json:"actor"`
+	// Via separates people: web (verified by the session) and terminal
+	// (self-reported by the CLI); empty for agents and older stamps.
+	Via     string `json:"via,omitempty"`
 	Harness string `json:"harness,omitempty"`
 	Family  string `json:"family,omitempty"`
 	Model   string `json:"model,omitempty"`
@@ -429,15 +439,17 @@ func (s *Store) ActorStatHits(projects []string) ([]ActorStatHit, error) {
 func aggregateActorStats(hits []ActorStatHit) []ActorStat {
 	lines := map[string]*ActorStat{}
 	for _, h := range hits {
-		model, harness := "", ""
+		model, harness, via := "", "", ""
 		if h.Actor.Kind == actordomain.Agent {
 			harness = actordomain.HarnessKey(h.Actor.Harness)
 			model = h.Actor.Model
+		} else {
+			via = h.Actor.Via
 		}
-		key := h.Actor.Kind + "\x00" + harness + "\x00" + model
+		key := h.Actor.Kind + "\x00" + harness + "\x00" + model + "\x00" + via
 		st := lines[key]
 		if st == nil {
-			st = &ActorStat{Actor: h.Actor.Kind, Harness: harness, Model: model, ModelLabel: actordomain.ModelLabel(model)}
+			st = &ActorStat{Actor: h.Actor.Kind, Via: via, Harness: harness, Model: model, ModelLabel: actordomain.ModelLabel(model)}
 			if h.Actor.Kind == actordomain.Agent {
 				st.Family = actordomain.Family(harness)
 			}
@@ -480,7 +492,7 @@ func aggregateActorStats(hits []ActorStatHit) []ActorStat {
 func (s *Store) rawActorsOf(kind string, ids []int64) (map[int64]EntryActor, error) {
 	out := map[int64]EntryActor{}
 	err := chunked(ids, func(part []int64) error {
-		rows, err := s.db.Query(`SELECT entry_id, actor, account_id, harness, COALESCE(session_id,0), session_ref, at FROM entry_actors
+		rows, err := s.db.Query(`SELECT entry_id, actor, account_id, harness, COALESCE(session_id,0), session_ref, at, via FROM entry_actors
 			WHERE kind=? AND entry_id IN (`+placeholders(len(part))+`)`, append([]any{kind}, factIDArgs(part)...)...)
 		if err != nil {
 			return err
@@ -489,7 +501,7 @@ func (s *Store) rawActorsOf(kind string, ids []int64) (map[int64]EntryActor, err
 		for rows.Next() {
 			var id int64
 			var ea EntryActor
-			if err := rows.Scan(&id, &ea.Kind, &ea.AccountID, &ea.Harness, &ea.SessionID, &ea.SessionRef, &ea.At); err != nil {
+			if err := rows.Scan(&id, &ea.Kind, &ea.AccountID, &ea.Harness, &ea.SessionID, &ea.SessionRef, &ea.At, &ea.Via); err != nil {
 				return err
 			}
 			out[id] = ea

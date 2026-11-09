@@ -139,3 +139,24 @@ func TestAgentModelsPage(t *testing.T) {
 		t.Error("a guest sees the model statistics of the project")
 	}
 }
+
+// Ein Mensch im Terminal steht mit seinem Namen und dem Kennzeichen „terminal“,
+// in der Statistik als eigene Zeile.
+func TestTerminalPersonShowsAsSuch(t *testing.T) {
+	e, pa := listEnv(t)
+	d, err := pa.CreatePain(store.CreatePainInput{Project: shellProject, Title: "Typed by hand", Actor: pain.Actor{AccountID: 1, Person: "alice"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.St.RecordActor(actor.Pain, d.Pain.ID, actor.Actor{Kind: actor.Human, AccountID: 1, Via: actor.ViaTerminal}); err != nil {
+		t.Fatal(err)
+	}
+	_, page := fetchPage(t, e.Owner, e.Base+"/ui/x/shell/pains/"+strconv.FormatInt(d.Pain.ID, 10))
+	if !strings.Contains(page, `class="lb out botmark" title="self-reported by ctx in a terminal">terminal<`) || strings.Contains(page, "’s Claude") {
+		t.Error("the pain page does not mark the terminal person")
+	}
+	_, stats := fetchPage(t, e.Owner, e.Base+"/ui/agents/models")
+	if !strings.Contains(stats, "People (terminal)") {
+		t.Error("the models page has no line for people in the terminal")
+	}
+}

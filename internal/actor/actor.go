@@ -67,6 +67,9 @@ type Actor struct {
 	// SessionRef is the external id of the session when the server knows it
 	// from the request but the session is not uploaded yet.
 	SessionRef string `json:"-"`
+	// Via is how a person acted: ViaWeb or ViaTerminal (self-reported).
+	// Empty for agents and for stamps from before it was recorded.
+	Via string `json:"via,omitempty"`
 }
 
 // IsAgent and IsHuman read the kind.
@@ -303,3 +306,17 @@ func VoteEntryID(decisionID int64, voterKey string) int64 {
 	}
 	return id
 }
+
+// Ways a person acts. Web is an interactive web session and the only one the
+// server can verify. Terminal is ctx typed by a person in a terminal: the
+// client says so in ViaHeader, the server believes it only for a token call
+// without any agent session, and it stays a self-report. It grants no right:
+// whatever needs a person (human_only) still needs the web. An agent that
+// runs ctx itself can send the header too; the stamp then claims a person, and
+// nothing more follows from it.
+const (
+	ViaWeb      = "web"
+	ViaTerminal = "terminal"
+	// ViaHeader carries ViaTerminal from the CLI to the server.
+	ViaHeader = "X-Ghosttree-Via"
+)
