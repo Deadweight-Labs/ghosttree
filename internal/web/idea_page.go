@@ -28,9 +28,11 @@ import (
 type ideaFact struct{ Num, Title, Brief, Href string }
 
 type ideaPageView struct {
-	ID                      int64
-	Title, Person, Age      string
-	Actor                   actorView
+	ID                 int64
+	Title, Person, Age string
+	Actor              actorView
+	// First is the head of the bubble that opens the timeline.
+	First                   firstHead
 	State, StateLabel, Tone string
 	Blocks                  []bodyBlock
 	Reason                  string
@@ -103,6 +105,7 @@ func (a *app) ideaInRepo(w http.ResponseWriter, r *http.Request, remote, id stri
 		}
 		v.Issues = append(v.Issues, f)
 	}
+	v.First = firstOf(l, v.Actor, firstNonEmpty(v.Actor.Label, v.Person), l.msg("ideas.wished"), v.Age, l.msg("issue.author"), "")
 	v.Items = mergeTimeline(a.ideaItems(l, ws, age), a.commentTimeline(r, l, pa, store.CommentOnIdea, i.ID, i.Person, view.Href+"/ideas/"+strconv.FormatInt(i.ID, 10), editingComment(r), age))
 	if s, err := pa.Reactions(store.ReactOnIdea, i.ID); err == nil {
 		v.Reactions = a.reactionsFor(r, l, store.ReactOnIdea, i.ID, s)
@@ -188,7 +191,7 @@ func (a *app) ideaItems(l lang, ws store.IdeaWorkshop, age func(string) string) 
 		all = append(all, datedItem{t.CreatedAt, tlItem{ID: "text-concept-" + strconv.Itoa(t.Revision), Act: "idea.concept", Who: t.Person, Icon: "book", Head: sentence("ideas.ev.concept", t.Revision), Age: age(t.CreatedAt), Body: mdText(t.Message)}})
 	}
 	for _, d := range ws.Decisions {
-		all = append(all, datedItem{d.CreatedAt, tlItem{ID: "decision-" + strconv.FormatInt(d.ID, 10), Act: "idea.decision", Who: d.Person, Icon: "chat", Head: sentence("ideas.ev.decision"), Age: age(d.CreatedAt), Body: mdText(d.Question)}})
+		all = append(all, datedItem{d.CreatedAt, tlItem{ID: "decision-" + strconv.FormatInt(d.ID, 10), Act: "idea.decision", Who: d.Person, Icon: "chat", Head: sentence("ideas.ev.decision") + " " + longPill(l, "decision", d.ID, "#workshop"), Age: age(d.CreatedAt)}})
 	}
 	sort.SliceStable(all, func(i, j int) bool { return all[i].at < all[j].at })
 	items := make([]tlItem, len(all))

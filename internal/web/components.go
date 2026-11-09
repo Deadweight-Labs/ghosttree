@@ -189,6 +189,41 @@ type tlItem struct {
 	at      time.Time
 }
 
+// withActor makes the entry the work of the agent or person the stamp names:
+// the name the page writes, the avatar kind and the owner in its corner.
+func (it *tlItem) withActor(v actorView) {
+	if v.Label == "" {
+		return
+	}
+	it.Who, it.Kind, it.Owner = v.Label, v.Kind, v.Owner()
+}
+
+// firstHead is the head of the first object of a page: the one bubble that
+// opens the timeline of an issue, a pain, an idea, a task or a feature. Actor
+// says who made it (an agent with the mark of its owner, a person by name);
+// Who is the fallback name when no stamp is known.
+type firstHead struct {
+	Actor     actorView
+	Who       string
+	Verb      string
+	Age, Long string
+	Mark      string
+	EditHref  string
+	EditTip   string
+	// Git is the anchor the first object was written at (commit, pull request,
+	// branch); it stands at the right end of the head.
+	Git *anchorView
+}
+
+// firstOf is the head of the first object from what the page knows.
+func firstOf(l lang, av actorView, who, verb, age, mark, editHref string) firstHead {
+	h := firstHead{Actor: av, Who: who, Verb: verb, Age: age, Mark: mark, EditHref: editHref}
+	if editHref != "" {
+		h.EditTip = l.msg("issue.action.edit")
+	}
+	return h
+}
+
 // ---- Composer ----------------------------------------------------------------
 
 // composerMode is one choice of the mode select (the status of an issue, say):

@@ -58,6 +58,8 @@ type painView struct {
 	Token, Back   string
 	Result        *requestResult
 	Explain       *explainView
+	// First is the head of the bubble that opens the timeline.
+	First firstHead
 	// CanIdea shows the form "Create idea" (a solution idea this pain motivates).
 	CanIdea bool
 }
@@ -130,7 +132,21 @@ func (a *app) painPageIn(w http.ResponseWriter, r *http.Request, remote string) 
 	v.Viewer, v.StateTone = browserPrincipal(r).Label, painStateTone[p.State]
 	v.Base = repoHref(p.Project)
 	ago := func(at string) string { return shortAgo(l, now, parseTime(at)) }
-	v.Items = mergeTimeline(a.painItems(l, pa, p, detail.Events, ago), a.commentTimeline(r, l, pa, store.CommentOnPain, p.ID, p.Person, v.Base+"/pains/"+strconv.FormatInt(p.ID, 10), editingComment(r), ago))
+	comments := a.commentTimeline(r, l, pa, store.CommentOnPain, p.ID, p.Person, v.Base+"/pains/"+strconv.FormatInt(p.ID, 10), editingComment(r), ago)
+	events := withoutRepeatedPainNotes(detail.Events, comments)
+	var createdGit *anchorView
+	if v.hasFirst() {
+		// The head of the first object says who recorded the pain, and when.
+		for _, e := range events {
+			if e.Kind == "created" {
+				createdGit = anchorViewOf(pa, p.Project, e.GitAnchor, e.Via)
+			}
+		}
+		events = slices.DeleteFunc(events, func(e pain.Event) bool { return e.Kind == "created" })
+	}
+	v.First = firstOf(l, v.Actor, firstNonEmpty(v.Actor.Label, v.Person), l.msg("pains.recorded_ch"), v.Age, l.msg("issue.author"), "")
+	v.First.Git = createdGit
+	v.Items = mergeTimeline(a.painItems(l, pa, p, events, ago), comments)
 	seen := map[string]bool{}
 	for _, e := range detail.Events {
 		if e.Person != "" && !seen[e.Person] {
@@ -297,4 +313,43 @@ func painFailKey(code string) string {
 		return "pains.result.idea_invalid"
 	}
 	return "pains.result.failed"
+}
+
+// hasFirst says whether the page opens with the bubble of the pain's text.
+func (v *painView) hasFirst() bool { return len(v.Blocks) > 0 || v.Explain != nil }
+
+// withoutRepeatedPainNotes leaves the note out of a change of state when a
+// comment of the same person with the same text stands beside it: the status
+// select writes the words as the note and as a comment, and the timeline shows
+// them once, in the comment (the same rule as for an issue). A "Why" written
+// before the comment stays as the note.
+func withoutRepeatedPainNotes(events []pain.Event, comments []tlItem) []pain.Event {
+	out := slices.Clone(events)
+	for i, ev := range out {
+		note := strings.TrimSpace(ev.Note)
+		if note == "" {
+			continue
+		}
+		at := parseTime(ev.CreatedAt)
+		for _, c := range comments {
+			v := c.Comment
+			text := ""
+			if v != nil {
+				text = strings.TrimSpace(v.Raw)
+			}
+			if v == nil || v.Deleted || v.Who != ev.Person || text == "" || at.IsZero() || c.at.IsZero() {
+				continue
+			}
+			// The note is the comment alone, or "Why" with the comment after it
+			// (painStateNote); what stays is only what the comment does not say.
+			if note != text && !strings.HasSuffix(note, "\n\n"+text) {
+				continue
+			}
+			if d := c.at.Sub(at); d < sameMomentWithin && d > -sameMomentWithin {
+				out[i].Note = strings.TrimSpace(strings.TrimSuffix(note, text))
+				break
+			}
+		}
+	}
+	return out
 }

@@ -297,7 +297,13 @@ func mdBlocksOpt(blocks []bodyBlock, o mdOptions) template.HTML {
 }
 
 // mdText is the text of a person written for a page: one box of blocks.
-func mdText(s string) template.HTML { return mdBlocks(bodyBlocks(s, 0)) }
+func mdText(s string) template.HTML {
+	blocks := bodyBlocks(s, 0)
+	if len(blocks) == 0 {
+		return ""
+	}
+	return mdBlocks(blocks)
+}
 
 func partsHTML(parts []inlinePart) string {
 	var b strings.Builder

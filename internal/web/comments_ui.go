@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/Deadweight-Labs/ghosttree/internal/actor"
 	"github.com/Deadweight-Labs/ghosttree/internal/gitanchor"
 	requestdomain "github.com/Deadweight-Labs/ghosttree/internal/request"
 	"github.com/Deadweight-Labs/ghosttree/internal/store"
@@ -29,9 +30,11 @@ type commentVersionView struct {
 
 // commentView is the box of one comment in the timeline.
 type commentView struct {
-	ID                  int64
-	Anchor              string
-	Who, Head, Long     string
+	ID              int64
+	Anchor          string
+	Who, Head, Long string
+	// Actor is who wrote it: an agent with its mark, else the person (Who).
+	Actor               actorView
 	Author, Edited      bool
 	EditedAge, EditedAt string
 	Deleted             bool
@@ -70,10 +73,15 @@ func (a *app) commentTimeline(r *http.Request, l lang, pa *store.ProjectAccess, 
 		project = rv.Project
 	}
 	items := make([]tlItem, 0, len(list))
+	persons := map[int64]string{}
+	for _, c := range list {
+		persons[c.ID] = c.Person
+	}
+	actors := a.stampedActors(l, actor.Comment, persons)
 	for _, c := range list {
 		at := parseTime(c.CreatedAt)
 		v := &commentView{ID: c.ID, Anchor: "comment-" + strconv.FormatInt(c.ID, 10), Who: c.Person, Deleted: c.Deleted, DeletedBy: c.DeletedBy,
-			Author: c.Person != "" && c.Person == author, Token: token}
+			Author: c.Person != "" && c.Person == author, Token: token, Actor: actors[c.ID]}
 		v.Head = l.msg("comments.commented", age(c.CreatedAt))
 		v.Long = c.CreatedAt
 		if !c.Deleted {

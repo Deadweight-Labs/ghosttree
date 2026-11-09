@@ -109,24 +109,36 @@
   & .irow .rt .rt-live { display: inline-flex; align-items: center; }
   & .irow .rt .rt-live .gav { width: 24px; height: 24px; }
 
-  /* ---- Timeline: avatar on the line, small action icon beside the name ---- */
+  /* ---- Timeline: avatar on the line, small action icon beside the name ----
+     The line is drawn in pieces, one per entry, from the middle of its avatar to the middle of the next
+     one: it starts at the avatar of the first object, runs without a gap through every entry and ends at
+     the last avatar (nothing runs on towards the composer). Avatars and circles are opaque and lie on it. */
   & .tlx { position: relative; margin-top: 16px; }
+  & .tlx.tl0 { margin-top: 0; }
   & .tlx > .cmt { position: relative; }
-  /* One line for the whole timeline, so no gap opens between entries of different height */
-  & .tlx::before { content: ""; position: absolute; left: 19px; top: 20px; bottom: 20px; width: 2px; background: var(--border-default); }
+  & .tlx > .cmt::before { content: ""; position: absolute; z-index: 0; left: 19px; top: 0; bottom: -16px; width: 2px; background: var(--border-default); pointer-events: none; }
+  & .tlx > .cmt.tev::before { bottom: -12px; }
+  & .tlx > .cmt:first-child::before { top: 20px; }
+  & .tlx > .cmt.tev:first-child::before { top: 16px; }
+  & .tlx > .cmt:last-child::before { bottom: auto; height: 20px; }
+  & .tlx > .cmt.tev:last-child::before { height: 16px; }
+  & .tlx > .cmt:only-child::before { display: none; }
   & .tlx > .cmt > .gav, & .tlx .tav .gav { position: relative; z-index: 1; box-shadow: 0 0 0 3px var(--canvas-default); }
   & .tlx > .cmt > .gav.agent .own, & .tlx .tav .gav.agent .own { box-shadow: 0 0 0 2px var(--canvas-default); }
   & .cmt { display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: 16px; margin-bottom: 16px; scroll-margin-top: 16px; }
-  & .cmt.tev { gap: 8px; margin-bottom: 12px; }
+  & .cmt.tev { margin-bottom: 12px; }
   & .tev .tav { display: flex; justify-content: center; align-items: flex-start; height: 32px; }
-  & .tev .tav .bd { position: relative; z-index: 1; display: inline-flex; align-items: center; justify-content: center; box-sizing: content-box; width: 20px; height: 20px; margin-top: 2px; color: var(--fg-muted); background: var(--neutral-muted); border: 4px solid var(--canvas-default); border-radius: 50%; }
+  /* The circle of an entry without a person: its tint lies over the page colour, so the line never shows through. */
+  & .tev .tav .bd { --bdt: var(--neutral-muted); position: relative; z-index: 1; display: inline-flex; align-items: center; justify-content: center; box-sizing: content-box; width: 20px; height: 20px; margin-top: 2px; color: var(--fg-muted); background: linear-gradient(var(--bdt), var(--bdt)), var(--canvas-default); border: 4px solid var(--canvas-default); border-radius: 50%; }
   & .tev .tav .bd .i { width: 12px; height: 12px; }
-  & .tev .tav .bd.ok { background: var(--success-emphasis); color: #fff; }
-  & .tev .tav .bd.warn { background: var(--attention-subtle); color: var(--attention-fg); box-shadow: inset 0 0 0 1px var(--attention-muted); }
-  & .tev .tav .bd.acc { background: var(--accent-subtle); color: var(--accent-fg); box-shadow: inset 0 0 0 1px var(--accent-muted); }
-  & .tev .tav .bd.don { background: var(--done-emphasis); color: #fff; }
+  & .tev .tav .bd.ok { --bdt: var(--success-emphasis); color: #fff; }
+  & .tev .tav .bd.warn { --bdt: var(--attention-subtle); color: var(--attention-fg); box-shadow: inset 0 0 0 1px var(--attention-muted); }
+  & .tev .tav .bd.acc { --bdt: var(--accent-subtle); color: var(--accent-fg); box-shadow: inset 0 0 0 1px var(--accent-muted); }
+  & .tev .tav .bd.don { --bdt: var(--done-emphasis); color: #fff; }
   & .tev-m { min-width: 0; }
-  & .tev-h { display: block; min-height: 32px; padding: 4px 0; line-height: 24px; color: var(--fg-muted); font-size: 14px; }
+  & .tev-h { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 8px; min-height: 32px; padding: 4px 0; line-height: 24px; color: var(--fg-muted); font-size: 14px; }
+  & .tev-s { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+  & .tev-h .ganch { margin-left: auto; }
   & .tev-h b, & .tev-h .person { color: var(--fg-default); font-weight: 600; }
   & .tev-h .tm { margin-left: 6px; font-size: 12px; color: var(--fg-muted); }
   & .tev-h .chip { vertical-align: 1px; margin: 0 2px; }
@@ -137,7 +149,28 @@
   & .aic.warn { color: var(--attention-fg); }
   & .aic.acc { color: var(--accent-fg); }
   & .aic.don { color: var(--done-fg); }
-  & .tev .bd2 { margin-top: 2px; padding: 8px 12px; background: var(--canvas-default); border: 1px solid var(--border-default); border-radius: 6px; color: var(--fg-default); }
+  & .tev .bd2 { margin-top: 2px; padding: 8px 12px; min-width: 0; overflow-wrap: anywhere; background: var(--canvas-default); border: 1px solid var(--border-default); border-radius: 6px; color: var(--fg-default); }
+  /* One proof: the thing as a pill, the words about it as plain grey text that wraps with the line. */
+  & .pfx { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; max-width: 100%; min-width: 0; vertical-align: baseline; }
+  & .pnote { flex: 1 1 14ch; min-width: 0; font-size: 12px; line-height: 18px; font-weight: 400; color: var(--fg-muted); overflow-wrap: anywhere; }
+  & .pf > .pfx:has(.pnote) { flex: 1 1 260px; }
+  & .bd2 .pfx { display: flex; margin-top: 4px; }
+  & .bd2 .kn-body + .pfx, & .bd2 > .pfx:first-child { margin-top: 0; }
+
+  /* ---- First object: one bubble with one head; its sections are parted by thin lines ---- */
+  & .cmt.first .cbox > :not(.ch) + :not(.cf) { border-top: 1px solid var(--border-default); }
+  & .cmt.first .cbox > .ch + * { border-top: 0; }
+  & .cs-h { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; min-height: 40px; padding: 8px 16px; background: var(--canvas-subtle); border-bottom: 1px solid var(--border-muted); font-size: 14px; font-weight: 600; color: var(--fg-default); }
+  & .cs-h .i { color: var(--fg-muted); }
+  & .cs-h .sp { flex: 1; }
+  & .cs-h .cs-n { font-size: 12px; font-weight: 400; color: var(--fg-muted); }
+  & .cs-b { padding: 12px 16px; min-width: 0; overflow-wrap: anywhere; }
+  & .cs-b p { margin: 0; }
+  & .cs-b p + p { margin-top: 8px; }
+  & .cmt.first .ex { gap: 0; margin: 0; padding: 0; background: none; border: 0; border-radius: 0; }
+  & .cmt.first .ex-head { min-height: 40px; align-items: center; padding: 8px 16px; background: var(--canvas-subtle); border-bottom: 1px solid var(--border-muted); }
+  & .cmt.first .ex-text { padding: 12px 16px; }
+
   & .cmt.tev:target .tev-m { box-shadow: 0 0 0 2px var(--accent-emphasis); border-radius: 6px; background: var(--accent-subtle); }
   /* A full comment: box with an arrow towards the avatar */
   & .cbox { position: relative; border: 1px solid var(--border-default); border-radius: 6px; background: var(--canvas-default); min-width: 0; }
@@ -282,8 +315,9 @@
     & .cmt { grid-template-columns: minmax(0, 1fr); }
     & .cmt > .gav { display: none; }
     & .cbox::before { display: none; }
-    & .tlx::before { display: none; }
-    & .cmt.tev { grid-template-columns: 40px minmax(0, 1fr); gap: 8px; }
+    & .tlx > .cmt::before { display: none; }
+    & .tlx > .cmt.tev:has(+ .cmt.tev)::before { display: block; top: 0; bottom: -12px; height: auto; }
+    & .cmt.tev { grid-template-columns: 40px minmax(0, 1fr); gap: 16px; }
     & .cmt.tev > .gav { display: inline-flex; }
     & .cx-h .wtools, & .cx-hint { display: none; }
     & .cx-grid { grid-template-columns: minmax(0, 1fr); }
