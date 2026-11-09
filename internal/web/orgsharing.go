@@ -21,9 +21,10 @@ import (
 func WithSourceProver(p forge.Prover) Option { return func(a *app) { a.prover = p } }
 
 const (
-	sourceFlowTTL    = 10 * time.Minute
-	maxSourceFlows   = 200
-	sourcePathPrefix = "/ui/orgs/source/"
+	sourceFlowTTL            = 10 * time.Minute
+	maxSourceFlows           = 200
+	maxSourceFlowsPerAccount = 3
+	sourcePathPrefix         = "/ui/orgs/source/"
 )
 
 // flowLink ist der Zweck eines Ablaufs, der das GitHub-Konto des Menschen mit
@@ -79,9 +80,10 @@ func (f *sourceFlows) begin(fl sourceFlow) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.pruneLocked()
-	if len(f.flows) >= maxSourceFlows {
-		f.flows = map[string]sourceFlow{}
-	}
+	// One account cannot push out the flows of others: it keeps a few of its
+	// own, and a full table drops its oldest entry instead of all of them.
+	f.dropOldestLocked(func(v sourceFlow) bool { return v.account == fl.account }, maxSourceFlowsPerAccount)
+	f.dropOldestLocked(func(sourceFlow) bool { return true }, maxSourceFlows)
 	fl.until = f.now().Add(sourceFlowTTL)
 	f.flows[tok] = fl
 	return tok, nil
@@ -113,6 +115,27 @@ func (f *sourceFlows) put(tok string, fl sourceFlow) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.flows[tok] = fl
+}
+
+// dropOldestLocked removes the entries that expire first among those matching
+// keep until fewer than limit match.
+func (f *sourceFlows) dropOldestLocked(match func(sourceFlow) bool, limit int) {
+	for {
+		n, oldest, first := 0, "", time.Time{}
+		for k, v := range f.flows {
+			if !match(v) {
+				continue
+			}
+			n++
+			if oldest == "" || v.until.Before(first) {
+				oldest, first = k, v.until
+			}
+		}
+		if n < limit {
+			return
+		}
+		delete(f.flows, oldest)
+	}
 }
 
 func (f *sourceFlows) pruneLocked() {

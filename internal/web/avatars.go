@@ -398,6 +398,11 @@ func (a *app) avatarImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c := a.avatars
+	if _, linked := a.store.AccountGitHub("person:" + strconv.FormatInt(id, 10)); !linked {
+		// A picture saved while the link was being removed belongs to nobody.
+		http.NotFound(w, r)
+		return
+	}
 	e, ok := c.load(id)
 	if !ok || !c.fresh(e) {
 		// Not more often than a page would: the pause after a failure and the
